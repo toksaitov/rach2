@@ -725,9 +725,9 @@ The first root would not accept a login. Its `/root/.ssh/authorized_keys` came
 from `krffs/authorized_keys`, which had been given the public key of another
 development host by hand; the private key on this host was the demo pair, older
 than that file and no longer its match. The image was correct and the write was
-byte-identical both times; the credentials in it were simply not the ones the
-host held. Recovery was still reachable, because it is a separate partition
-sealed with the older key, and it was the only way back in.
+byte-identical both times; the credentials in it were not the ones this host
+held. Recovery was still reachable, because it is a separate partition
+sealed with the older key, and it was the only remaining way to log in.
 
 The repair is the mechanism the generator already has. The hand-placed key moved
 to `krffs/authorized_keys.extra`, `krffs/gen_demo_key.sh` recomposed

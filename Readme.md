@@ -81,7 +81,7 @@ ssh -i $KEY root@ADDRESS reboot
 ssh -i $KEY root@ADDRESS 'bootctl status && bootctl commit'
 ```
 
-`bootctl kernel` writes the candidate slot and arms one trial. The machine that comes back is either the new kernel, which `commit` then makes the default, or the fallback, which needs nothing done to it. A kernel that does not boot costs a reboot, not a disk.
+`bootctl kernel` writes the candidate slot and arms one trial. The machine that comes back is either the new kernel, which `commit` then makes the default, or the fallback, which needs nothing done to it. A kernel that does not boot costs one reboot and leaves the disk as it was.
 
 A root, from recovery:
 
@@ -103,7 +103,7 @@ ssh-keygen -y -f krffs/rach2_demo_ed25519 | cut -d' ' -f2
 cut -d' ' -f2 krffs/authorized_keys
 ```
 
-A root flashed with keys whose private halves are on another machine leaves recovery as the only way back in.
+A root flashed with keys whose private halves are on another machine can then be reached only from recovery.
 
 Recovery can also be selected at the GRUB menu by a person at the machine. It mounts nothing from the disk it repairs. [Milestone 25](dev-log/25-sealed/Readme.md#phase-g-recovery-and-whole-disk-reflash) designed both paths, and `make sealed-test` rehearses them in emulation.
 
