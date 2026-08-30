@@ -40,13 +40,15 @@ A controller is refused, with a record saying which, when its aperture is a 64-b
 
 | Limit | Value |
 |-------|-------|
-| Devices at once | 4 |
-| Endpoints per device | 4, of which the reporting one is an interrupt endpoint |
+| Device slots the controller is asked for | 4, of which slot zero is the controller's, so three devices |
+| Endpoint numbers reachable on a device | 0 to 3, which is seven directions; a boot device uses two |
 | Root ports reached | 16 |
 | Scratchpad pages given | 32 |
-| Keyboards and mice driven | one of each |
+| Keyboards and mice driven at once | as many as the slots hold, with one modifier state between them |
 
 Each is a table in the kernel image. A controller with more root ports than this is used as far as sixteen and says so; one that wants more scratchpad pages is refused with both numbers in the record.
+
+The modifier state is shared rather than one per keyboard. Two keyboards plugged in at once would share a shift: releasing it on either releases it for both. That is the cost of one input path, and it is the one place where the two keyboards are not independent.
 
 ## Boot protocol, and no report descriptors
 
@@ -66,7 +68,7 @@ A mouse report becomes a packet in the queue the PS/2 mouse fills, with the vert
 
 ## What is absent, and why
 
-* **Mass storage.** The next milestone. The interface is shaped for it: `endpoint_open` is generic over control, interrupt and bulk, so a class driver adds no controller code.
+* **Mass storage.** The next milestone. The interface is shaped for it: `endpoint_open` takes an interrupt or a bulk endpoint, and the control endpoint is made while the device is addressed, so a class driver adds no controller code.
 * **Hubs.** A device plugged into a hub is not seen. Both machines have enough root ports for a keyboard and a mouse.
 * **Report descriptors.** Above.
 * **Isochronous transfers.** Audio and video over USB. Nothing here reads them.
@@ -84,7 +86,7 @@ The mouse is read through the device Doom opens, by the bare name `mouse`. It op
 
 ## Verification
 
-`tests/run host` runs three of the four host tests that matter here. `xhci_hosttest` drives the driver against a model of a controller through `struct xhci_io`: the discovery, the D3 wake, the aperture and register-set bounds, the firmware handoff at once and slowly and never, the halt and reset with its ready wait and its Intel pause, the scratchpad request and its refusal, both context sizes, the rings and their wrap, the command ring and its abort, the ports, the debounce, and the device and endpoint commands. `usb_hosttest` walks descriptors no device would send, in buffers allocated to the exact length under AddressSanitizer. `hid_hosttest` hands the class driver reports and reads back what it gave the input layer: a key held, two keys at once, a modifier, an arrow, a rollover, a short report, and an unplug with a key still down.
+`tests/run host` runs the three host tests written for this stack. `xhci_hosttest` drives the driver against a model of a controller through `struct xhci_io`: the discovery, the D3 wake, the aperture and register-set bounds, the firmware handoff at once and slowly and never, the halt and reset with its ready wait and its Intel pause, the scratchpad request and its refusal, both context sizes, the rings and their wrap, the command ring and its abort, the ports, the debounce, and the device and endpoint commands. `usb_hosttest` walks descriptors no device would send, in buffers allocated to the exact length under AddressSanitizer. `hid_hosttest` hands the class driver reports and reads back what it gave the input layer: a key held, two keys at once, a modifier, an arrow, a rollover, a short report, and an unplug with a key still down.
 
 `tests/run usb` is seven boots against QEMU. Three of them take the 8042 away, because a key typed or a mouse moved on a machine that still has a PS/2 keyboard could have arrived by either road.
 

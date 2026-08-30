@@ -108,7 +108,7 @@ Options are whitespace-delimited. Flags match whole tokens, and the first `key=v
 | `rach2.trace=enosys` | Log each missing system-call number once per process. |
 | `rach2.board=name` | Select a named board power profile instead of automatic matching. |
 | `rach2.nosci` | Leave the matched board profile's system-control interrupt unmasked. |
-| `rach2.resetskip=N` | Skip the first N reset methods; the reset tests use this to exercise the fallbacks. |
+| `rach2.resetskip=N` | Skip the first N of the two software reset methods, so the ones after them can be shown to work alone; the last, the keyboard controller's pulse, always runs. `tests/run reset` boots each value. |
 
 With no address options, the network keeps its QEMU SLIRP defaults. See [networking](sys/network/Readme.md) for address validation, interfaces, protocols, and sockets. `rach2.diskdiag` is read-only on ordinary kernels; only the recovery build may write through the whole-disk window.
 
@@ -157,7 +157,7 @@ Two kinds of keyboard produce keystrokes: the PS/2 one on the 8042, and a USB on
 
 The same is true of the two mice: one queue, which a program reads through the `mouse` device, and no way for it to learn which kind of mouse moved.
 
-A scancode that did not come from a scancode-producing device is still a scancode. What that costs is the modifier state, which is one rather than one per keyboard: this kernel holds one keyboard at a time, and two would share a shift.
+A scancode that did not come from a scancode-producing device is still a scancode. What that costs is the modifier state, which is one rather than one per keyboard: this kernel drives one keyboard at a time in practice, and two plugged in at once would share a shift.
 
 The debug shell's prompts, menus and command output are not diagnostics.
 `console_putc`, `console_puts` and `console_printf` write to the screen and
@@ -224,7 +224,7 @@ The kernel currently supports:
 * RTL8139, Intel 82540EM (e1000), and RTL8168GU Ethernet devices.
 * Sound Blaster 16, Intel HDA, and the PC speaker.
 
-It does not implement UEFI, Multiboot2, USB, SMP, threads, swap, dynamic linking, IPv6, VESA graphics, or a file system other than KRFFS. The direct physical-memory limit is 32 MiB.
+It does not implement UEFI, Multiboot2, SMP, threads, swap, dynamic linking, IPv6, VESA graphics, or a file system other than KRFFS. USB is a keyboard and a mouse through xHCI and nothing else: no hubs, no mass storage, no booting from a USB disk. The direct physical-memory limit is 32 MiB.
 
 The ordinary process and descriptor limits are the fixed 16-slot tables described above, and what a program reaches is that size less what is already taken. A fork past the process table returns `EAGAIN`. An open past the sixteen descriptors, of which three are stdio, returns `EMFILE` at the fourteenth. A socket past the pool of sixteen returns `ENOMEM`, which takes two processes to reach because one runs out of descriptors first. A connection past the sixteen TCP control blocks, which a listener and seven connections to this machine fill, is refused with `ECONNREFUSED` rather than left to retransmit. `tests/run default` fills all four and requires the refusal, and for the first three the resource coming back.
 

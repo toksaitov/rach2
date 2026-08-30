@@ -8,14 +8,14 @@ This directory has two guest test sets, and [`system/`](system/Readme.md) holds 
 
 `tests/run NAME` is the entry point for every test suite. It reads `tests/registry`, one line per suite with three fields: the name, the external commands the suite needs at run time, and its tier. The make target is the name with `run-` in front, and the recipes are in [`tests/system/suites.mk`](system/Readme.md). Every name and every tool is checked before anything is built; an unknown name fails and prints the valid names. The runner then builds the product once and runs the named suites in a pool, holding each one's output and replaying it in registry order.
 
-`tests/run NAME NAME...` runs those suites at the same time. `tests/run all` runs all 59, and `tests/run core` runs the 21 in the core tier. `make test` runs `tests/run style`, then `tests/run host`, then `tests/run core`; `style` and `host` are the two verification suites every change must pass.
+`tests/run NAME NAME...` runs those suites at the same time. `tests/run all` runs all 60, and `tests/run core` runs the 21 in the core tier. `make test` runs `tests/run style`, then `tests/run host`, then `tests/run core`; `style` and `host` are the two verification suites every change must pass.
 
 ## Build and image layout
 
 From the repository root:
 
 ```sh
-make -C tests       # build the 70 root programs
+make -C tests       # build the 78 root programs
 make musl-programs  # build every tests/musl/*.c program
 make test-image     # build both sets and stage build/images/test.krffs
 ```
@@ -82,7 +82,7 @@ Programs that need another boot, disk, network exchange, or result contract have
 * `tests/run fault` runs `vmfault`, `vmro` and `winprobe`, which must be killed rather than served, and then runs a program that prints a token, which a kernel that took the fault with them could not do.
 * `tests/run socket` starts a host peer and runs `tcptest` and `udptest` against it.
 * `tests/run diskfull` fills a disk-backed root and requires `ENOSPC` rather than `EIO`.
-* `tests/run usb` runs `usbprobe` and `mouseprobe` against an xHCI controller with a keyboard and a mouse on it, at both device speeds, on machines with the PS/2 controller switched off so that a typed key or a moved mouse can only have come over USB.
+* `tests/run usb` runs `usbprobe` against an xHCI controller with a keyboard and a mouse on it, at both device speeds, and `mouseprobe` on a machine whose PS/2 controller is switched off, so that a moved mouse can only have come over USB. Its typing boots are switched off the same way.
 
 Every root program is run by some suite. The two exceptions are `idreport` and `suidhelper`, which exist to be invoked by another test.
 

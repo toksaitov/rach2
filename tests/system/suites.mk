@@ -23,7 +23,7 @@
 # read from the registry rather than written out again: `tests/run style`
 # already requires the registry and the targets in this file to name the same
 # suites, so a list derived from one cannot fall behind the other.
-.PHONY: prepare-all \
+.PHONY: prepare-all harness-kernel \
         $(addprefix run-,$(shell awk -F'|' '!/^#/ && NF > 1 { print $$1 }' tests/registry))
 
 # --- RAM-disk images. Each is built out of tree from a checked-in manifest
@@ -135,7 +135,7 @@ run-default: test-image $(RUNTESTS)
 # this built first, each suite's own target finds its work done and only boots
 # machines. The list is the union of what the `run-*` targets depend on, and
 # `tests/run` checks that it stays the union.
-prepare-all: $(DEMO_CREDS) $(BINFIND) $(DEADLINE) $(ELFCHECK) $(HARNESS) $(HOSTPEER) \
+prepare-all: harness-kernel $(DEMO_CREDS) $(BINFIND) $(DEADLINE) $(ELFCHECK) $(HARNESS) $(HOSTPEER) \
              $(MKFIXTURE) $(PCAPCHECK) $(PTYDRIVE) $(RUNTESTS) $(WAVCHECK) \
              busybox check-busybox check-dropbearmulti check-libc \
              check-pdpmake check-setid check-tcc ish krffs musl-programs \
@@ -963,7 +963,6 @@ run-diskdiag: rach2 rach2-metal rach2-metal-image $(HARNESS)
 # keyboard could have arrived by either road, and a check that passes either
 # way says nothing about the stack this milestone built.
 run-usb: rach2 tests krffs test-image $(HARNESS)
-	$(MAKE) -C rach2 COMPONENT=rach2-harness HARNESS=1
 	sh tests/system/suites/usb.sh $(HARNESS_KERNEL) $(TEST_IMAGE) $(HARNESS)
 # (see tests/system/suites/subset.sh).
 run-subset: rach2 tests krffs test-image $(HARNESS)
@@ -1079,8 +1078,16 @@ run-procfiles: $(DEMO_CREDS) rach2 tests utils krffs busybox os-real-image test-
 # probe, a killed probe whose dedicated marker must survive, and a the harness
 # run with no token, which has only the plain line to read.
 HARNESS_KERNEL = build/rach2-harness/kernel
-run-exitline: $(DEMO_CREDS) rach2 tests utils krffs busybox os-real-image test-image $(HARNESS)
+
+# The kernel built with the harness exit port, which two suites boot. It is
+# built by `prepare-all` and by nothing else: a suite that built it in its own
+# recipe would be a second `make` in `rach2/` while the pool was running, and
+# two of those in one directory write over each other's response file. That is
+# what this target exists to prevent, and what it cost to find out.
+harness-kernel:
 	$(MAKE) -C rach2 COMPONENT=rach2-harness HARNESS=1
+
+run-exitline: $(DEMO_CREDS) rach2 tests utils krffs busybox os-real-image test-image $(HARNESS)
 	sh tests/system/suites/exitline.sh build/rach2/kernel $(TEST_IMAGE) \
 	    $(OS_REAL_IMAGE) root "`cat krffs/rach2_demo_password`" \
 	    $(HARNESS_KERNEL)
