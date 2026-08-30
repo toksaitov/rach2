@@ -79,9 +79,6 @@ struct usb_device_state {
     int slot;
     uint32_t deadline;
     int closing_asked;
-    /* Whether this entry is held because the device on its port was refused,
-     * rather than being on its way to running. */
-    int refused;
     uint32_t short_by;
     int reporting;
     int dequeue_asked;
@@ -109,6 +106,23 @@ static struct usb_device_state devices[USB_MAX_DEVICES];
 /* Which device is being enumerated, or -1. Only one is, because the controller
  * takes one command at a time. */
 static int enumerating = -1;
+
+/*
+ * The ports whose device this kernel could not drive, one bit each.
+ *
+ * A refusal has to be remembered or the device is enumerated again the moment
+ * the port is looked at, which on a machine with a device of that kind is
+ * every tick until the slots run out. It must not be remembered in the device
+ * table: a notebook has several such devices soldered to it, and entries spent
+ * on them are entries a person's keyboard cannot have. So the port is
+ * remembered here, in a word, and the table stays for devices this kernel
+ * drives.
+ *
+ * A bit is cleared when its port says the device has gone, which is where
+ * unplugging one arrives, so a device that was refused once is tried again
+ * when it is plugged in again.
+ */
+static uint32_t port_refused;
 
 /* This module's own clock, advanced with the driver's. */
 static uint32_t core_ms;
@@ -238,17 +252,22 @@ static int expired(const struct usb_device_state *d)
 static void fail(struct usb_device_state *d, const char *why)
 {
     klog(KLOG_WARN, "usb", "device: port %d: %s", d->port + 1, why);
-    d->refused = 1;
     if (enumerating == (int)(d - devices)) {
         enumerating = -1;
     }
     hid_gone(d->slot);
+    /* The port is remembered, not the entry: a machine with several devices
+     * this kernel cannot drive would otherwise spend its whole table on them
+     * and have none left for what a person plugs in. */
+    if (d->port >= 0 && d->port < 32) {
+        port_refused |= (uint32_t)1u << d->port;
+    }
     if (d->slot > 0) {
         d->state = ST_CLOSING;
         d->deadline = core_ms + STEP_MS;
         return;
     }
-    d->state = ST_FAILED;
+    d->state = ST_FREE;
 }
 
 /**
@@ -278,7 +297,7 @@ static void step_closing(struct usb_device_state *d)
     enumerating = index;
 
     if (d->slot <= 0) {
-        d->state = d->refused ? ST_FAILED : ST_FREE;
+        d->state = ST_FREE;
         enumerating = -1;
         return;
     }
@@ -298,14 +317,7 @@ static void step_closing(struct usb_device_state *d)
         xhci_device_closed(d->slot);
         d->slot = 0;
         enumerating = -1;
-        /*
-         * A device this kernel could not drive keeps its entry, which keeps
-         * its port: the scan below adds a device only for a port no entry
-         * holds, so this is what stops a device being enumerated again every
-         * time the machine looks. It is let go when the port says the device
-         * has gone, which is where a person unplugging it arrives.
-         */
-        d->state = d->refused ? ST_FAILED : ST_FREE;
+        d->state = ST_FREE;
         return;
     }
     if (xhci_device_close(d->slot) == 0) {
@@ -791,18 +803,23 @@ void usb_core_step(uint32_t elapsed_ms)
                 enumerating = -1;
             }
             devices[i].closing_asked = 0;
-            devices[i].refused = 0;
             devices[i].state = devices[i].slot > 0 ? ST_CLOSING : ST_FREE;
             devices[i].deadline = core_ms + STEP_MS;
         }
     }
 
     /* A port that has a device and no state gets one. */
-    for (port = 0; port < ports && port < USB_MAX_DEVICES * 4; port++) {
+    for (port = 0; port < ports && port < 32; port++) {
         struct usb_port_status status;
         int known = 0;
 
         if (xhci_port_status(port, &status) != 0 || !status.connected) {
+            /* Nothing is there, so whatever was refused there is forgotten:
+             * the next thing plugged into that port is tried like any other. */
+            port_refused &= ~((uint32_t)1u << port);
+            continue;
+        }
+        if (port_refused & ((uint32_t)1u << port)) {
             continue;
         }
         for (i = 0; i < USB_MAX_DEVICES; i++) {
@@ -820,7 +837,6 @@ void usb_core_step(uint32_t elapsed_ms)
                 devices[i].slot = 0;
                 devices[i].ep_dci = 0;
                 devices[i].closing_asked = 0;
-                devices[i].refused = 0;
                 devices[i].interface.found = 0;
                 devices[i].deadline = core_ms + SETTLE_LIMIT_MS;
                 break;
@@ -840,6 +856,8 @@ void usb_core_step(uint32_t elapsed_ms)
 void usb_core_reset(void)
 {
     int i;
+
+    port_refused = 0;
 
     for (i = 0; i < USB_MAX_DEVICES; i++) {
         devices[i].state = ST_FREE;

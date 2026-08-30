@@ -144,6 +144,31 @@ else
     bad "a device that cannot be driven stopped the ones that can"
 fi
 
+# ---- 8: a device that cannot be driven does not consume the table. The
+#         notebook has three of them soldered to it, and while a refusal was
+#         remembered by holding a table entry, those three left one entry for
+#         everything a person plugs in: unplug once and the next scan gave that
+#         entry to another of them, after which nothing plugged in was ever
+#         enumerated again until the machine was rebooted. The hub here stands
+#         for those devices, and the mouse is unplugged and plugged back in the
+#         way a person does. The port it comes back on is not named: the
+#         emulator hands out the next free one, as a person moving a plug from
+#         one socket to another does. ----
+if run_harness --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
+    --qemu-arg=-device --qemu-arg=usb-hub,bus=xhci.0 \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
+    --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0,id=themouse \
+    --timeout 120 --steptmo 45 --ok "class 3 protocol 2, endpoint 1" \
+    "expect=usb: devices: 2 configured" \
+    "usb=del:themouse" "expect=: gone" \
+    "usb=add:usb-mouse,bus=xhci.0,id=themouse" \
+    "expect=class 3 protocol 2, endpoint 1" > /dev/null 2>&1; then
+    note "a device plugged in again after an unplug is enumerated again: OK"
+else
+    bad "a device plugged in again after an unplug was not enumerated"
+fi
+
 if [ "$fail" -ne 0 ]; then
     echo "usb-test: FAIL" >&2
     exit 1
