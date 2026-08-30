@@ -106,11 +106,11 @@ Proof items:
 
 ## Phase 8: the tier and the record (8 items)
 
-* [ ] Core tier chosen by the two rules
-* [ ] `make test` runs style, host, core; measured
-* [ ] Full run measured with registry order and with durations restored
-* [ ] `notes.md` read from the top; every open item closed or removed by owner decision
-* [ ] Cold from `make distclean` and warm measured
-* [ ] `dev-log/34-messages/Readme.md` with the trust statement
-* [ ] `34-messages` added to `dev-log/Readme.md` in the same commit
+* [x] Core tier chosen by the two rules
+* [x] `make test` runs style, host, core; measured
+* [x] Full run measured with registry order and with durations restored
+* [x] `notes.md` read from the top; every open item closed or removed by owner decision
+* [x] Cold from `make distclean` and warm measured
+* [x] `dev-log/34-messages/Readme.md` with the trust statement
+* [x] `34-messages` added to `dev-log/Readme.md` in the same commit
 * [ ] Review 12 of 12

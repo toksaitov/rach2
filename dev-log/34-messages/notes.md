@@ -660,3 +660,26 @@ All fixed:
   refused.
 
 Its four simplifications are taken: the model state no row used is gone.
+
+## Phase 8: the tier and the measurements, 2026-08-30
+
+The core tier is 21 system suites, chosen by the plan's two rules. Every
+subsystem is exercised: `default` carries 72 probes over processes, memory,
+descriptors, signals, /proc and the file system; `console` the terminal;
+`fault` the fault paths; `disk` and `disk-ahci` the two controllers; `persist`
+the writeback; `socket`, `dgram`, `netconsole` and `e1000` the network and its
+cards; `audio` the sound path; `subset` the device probes; `crash`, `reset`
+and `authority` the shutdown, restart and recovery paths; `grub` and `metal`
+the boot chain; `ssh` and `login` the userland; `diskfull` a full file system;
+and `runner` the runner itself. It takes 107 seconds. `procfiles` is left out
+because it takes 125 on its own, which is the tier's whole budget.
+
+`make test` is `style`, then `host`, then the tier: 172 seconds warm, 178 after
+a cold build. `tests/run all` is 471 seconds for 59 suites, six more than the
+53 it started with and the same wall clock, because the pool had room.
+
+The registry's order was restored to longest-first from the run that measured
+it, which the pool depends on: `account` at 407 seconds is first and `runner`
+at 7 is last.
+
+Cold from `make distclean`: 124 seconds. Warm: nothing to do.
