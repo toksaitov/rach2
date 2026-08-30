@@ -65,10 +65,16 @@ void klog_v(int level, const char *subsystem, const char *format, char **args);
 /**
  * Read out of the ring, oldest byte first.
  *
- * `offset` counts from the oldest byte still held, so a reader that walks
- * forward sees each record once. Returns the number of bytes copied, which is
- * zero at the end. The ring holds whole records only: a record that does not
- * fit evicts oldest records entire, so what comes back never begins mid-line.
+ * `offset` counts from the oldest byte still held. One call copies with the
+ * ring held still, so what comes back is one moment of it. Between two calls
+ * the ring can evict, and then the same offset names a later byte: a reader
+ * that walks it in pieces can miss a record or see one twice while the
+ * machine is busy printing. That is the same contract `/dev/bootlog` has
+ * today, and a reader that cannot accept it wants the whole ring in one call.
+ *
+ * Returns the number of bytes copied, which is zero at the end. The ring
+ * holds whole records only: a record that does not fit evicts oldest records
+ * entire, so what comes back never begins mid-line.
  */
 uint32_t klog_read(char *buf, uint32_t cap, uint32_t offset);
 

@@ -137,12 +137,18 @@ reaches them:
 | 1 | The 16 KiB ring | every level | Written first, so a failing port or wire cannot cost the machine its own copy. Whole records are evicted, so it never begins mid-line. |
 | 2 | The screen | `INFO` and above | Without the prefix and the timestamp, which a person in front of the machine does not need. Coloured by level. |
 | 3 | COM1 | every level | Through a transmit wait that gives up, so a wedged UART costs a bounded delay and not the machine. |
-| 4 | Netconsole | every level | Only when `rach2.netconsole` asked for it. |
+| 4 | Netconsole | every level | Offered every record, enabled or not: it holds what it cannot send yet and sends it when a device arrives, and the records worth having on the wire are the early ones. |
 
-A record is built whole before any destination sees it, so a reader never meets
-half a line and a record raised by an interrupt handler cannot appear inside
-one. A record too long for its 256-byte buffer ends in `...` before its
-newline.
+A record is built whole before any destination sees it, and a newline inside
+its text is kept as a space, so one record is one line and the ring can evict
+by finding the next newline. A record too long for its 256-byte buffer ends in
+`...` before that newline.
+
+The three destinations past the ring write byte by byte with interrupts as the
+caller had them, so a record raised by an interrupt handler in the middle of
+one being written out would put its bytes inside the other's line. Such a
+record goes to the ring, which is exact either way, and is not printed: one
+record in the log only is better than two shredded into each other.
 
 The debug shell's prompts, menus and command output are not diagnostics.
 `console_putc`, `console_puts` and `console_printf` write to the screen and

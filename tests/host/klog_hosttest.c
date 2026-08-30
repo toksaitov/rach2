@@ -61,8 +61,10 @@ static char order[64];
 static unsigned order_len;
 
 static int serial_wedged;       /* the port never becomes ready */
-static int net_on;              /* netconsole is enabled */
+static int net_on;              /* netconsole has a device to send through */
 static int reenter_from_screen; /* raise a record from inside delivery */
+static unsigned serial_offered; /* bytes handed to a port that took none */
+static unsigned ring_at_screen; /* the ring's size when the screen was written */
 static int irq_depth;
 static int irq_pairs;
 static int irq_unbalanced;
@@ -83,6 +85,10 @@ void k_putc(char c)
 {
     if (screen_calls++ == 0) {
         note('S');
+        /* Read here rather than after the call: it is the only place from
+           which the order of the ring and the screen can be seen, and the
+           order is what a failing destination depends on. */
+        ring_at_screen = klog_len();
     }
     if (screen_len < CAP) {
         screen[screen_len++] = c;
@@ -98,6 +104,7 @@ void serial_out(char c)
     if (serial_calls++ == 0) {
         note('U');
     }
+    serial_offered++;
     if (serial_wedged) {
         return; /* the transmit wait gave up */
     }
@@ -111,12 +118,16 @@ int netconsole_is_enabled(void)
     return net_on;
 }
 
+/* netconsole holds what it is given until it has a device, and sends it
+   then. `net_on` stands for having one: what is recorded is what netconsole
+   was handed, and what would reach the wire is what it was handed while
+   `net_on`. */
 void netconsole_putc(char c)
 {
     if (net_calls++ == 0) {
         note('N');
     }
-    if (net_len < CAP) {
+    if (net_on && net_len < CAP) {
         net[net_len++] = c;
     }
 }
@@ -160,6 +171,9 @@ static void reset(void)
 
     screen_len = serial_len = net_len = order_len = 0;
     screen_calls = serial_calls = net_calls = 0;
+    serial_offered = 0;
+    ring_at_screen = 0;
+    klog_delivering = 0;
     serial_wedged = 0;
     net_on = 0;
     reenter_from_screen = 0;
@@ -205,6 +219,37 @@ static int has(const char *hay, const char *needle)
         }
     }
     return 0;
+}
+
+/* One of the filler records above, rendered the way the logger renders it,
+   so the ring's contents can be predicted rather than described. */
+static unsigned render_fill(char *out, unsigned cap, int n)
+{
+    const char *head = "<7>[0.00] fill: record: ";
+    const char *tail = " of two thousand\n";
+    char digits[12];
+    unsigned len = 0, i;
+    int d = 0;
+
+    (void)cap;
+    while (head[len] != '\0') {
+        out[len] = head[len];
+        len++;
+    }
+    if (n == 0) {
+        digits[d++] = '0';
+    }
+    while (n > 0) {
+        digits[d++] = (char)('0' + n % 10);
+        n /= 10;
+    }
+    while (d > 0) {
+        out[len++] = digits[--d];
+    }
+    for (i = 0; tail[i] != '\0'; i++) {
+        out[len++] = tail[i];
+    }
+    return len;
 }
 
 static unsigned count_lines(const char *s)
@@ -304,6 +349,29 @@ int main(void)
     CHECK("and ends in exactly one newline", text[i - 1] == '\n' && text[i - 2] != '\n');
     CHECK("and is one record", count_lines(text) == 1);
 
+    /* One record is one line. A newline inside the text would be a second
+       delimiter, and the ring evicts by finding one: a record carrying its
+       own would be dropped in halves, leaving a tail with no header. */
+    reset();
+    {
+        char *args[1];
+
+        args[0] = (char *)"first\nsecond";
+        klog_v(KLOG_INFO, "nl", "text: %s", args);
+    }
+    ring_text(text, sizeof(text));
+    CHECK("a newline inside the text does not end the record", count_lines(text) == 1);
+    CHECK("and is kept as a space", streq(text, "<6>[0.00] nl: text: first second\n"));
+
+    /* A format that ends on its own percent sign. The formatter reads the
+       byte after a `%`, and the byte after the last one is past the end of
+       the string. */
+    reset();
+    klog(KLOG_INFO, "pct", "text: 100%");
+    ring_text(text, sizeof(text));
+    CHECK("a format ending in a percent sign stops there",
+          streq(text, "<6>[0.00] pct: text: 100%\n"));
+
     /* The level is what it was given, and out-of-range is clamped rather than
        written into the prefix, where a reader parses a single digit. */
     reset();
@@ -337,8 +405,14 @@ int main(void)
     net_on = 1;
     klog(KLOG_INFO, "i", "event: happened");
     net[net_len] = '\0';
-    CHECK("an enabled netconsole gets the whole record",
-          streq(net, "<6>[0.00] i: event: happened\n"));
+    CHECK("netconsole gets the whole record", streq(net, "<6>[0.00] i: event: happened\n"));
+    /* Before there is a device to send through, netconsole is still given the
+       record: it holds what it cannot send yet and sends it when a device
+       arrives, and the records worth having on the wire are the early ones. */
+    reset();
+    net_on = 0;
+    klog(KLOG_INFO, "early", "event: before the network");
+    CHECK("and is given records before it has a device", net_calls > 0);
 
     /* The order, and that a wedged port does not take the record with it. */
     reset();
@@ -348,9 +422,12 @@ int main(void)
     order[order_len] = '\0';
     CHECK("the screen is written before the serial port and the wire", streq(order, "SUN"));
     ring_text(text, sizeof(text));
+    CHECK("the ring already held the record when the screen was written",
+          klog_len() > 0 && ring_at_screen == klog_len());
     CHECK("a port that never drains does not cost the ring its copy",
           has(text, "order: check: the four in turn"));
     CHECK("and the wedged port wrote nothing", serial_len == 0);
+    CHECK("though every byte was offered to it", serial_offered == klog_len() + 1);
 
     /* Eviction: the ring drops whole records, so it never begins mid-line. */
     reset();
@@ -361,11 +438,45 @@ int main(void)
         klog_v(KLOG_DEBUG, "fill", "record: %d of two thousand", args);
     }
     CHECK("the ring holds no more than its size", klog_len() <= KLOG_RING_SIZE);
+    CHECK("and no less than it can, within one record", klog_len() > KLOG_RING_SIZE - 64);
     ring_text(text, sizeof(text));
     CHECK("what it holds begins at a record", text[0] == '<');
     CHECK("and ends at one", text[klog_len() - 1] == '\n');
     CHECK("the oldest records were dropped", !has(text, "record: 0 of"));
     CHECK("the newest was kept", has(text, "record: 1999 of"));
+    {
+        /* The ring holds the newest records and exactly those. The expected
+           text is rebuilt from the records themselves: a ring that cleared
+           itself on overflow, or dropped one record too many, holds whole
+           lines too and would pass every check above. */
+        char want[KLOG_RING_SIZE + 1];
+        char line[128];
+        unsigned wlen = 0;
+        int oldest = 1999;
+
+        while (oldest >= 0) {
+            unsigned n = render_fill(line, sizeof(line), oldest);
+
+            if (wlen + n > klog_len()) {
+                break;
+            }
+            wlen += n;
+            oldest--;
+        }
+        wlen = 0;
+        for (i = (unsigned)(oldest + 1); i < 2000; i++) {
+            unsigned n = render_fill(line, sizeof(line), (int)i);
+            unsigned j;
+
+            for (j = 0; j < n; j++) {
+                want[wlen++] = line[j];
+            }
+        }
+        want[wlen] = '\0';
+        CHECK("the ring holds exactly the newest records, byte for byte",
+              wlen == klog_len() && streq(text, want));
+    }
+
     {
         /* Every line in the ring is whole: a prefix, a subsystem, and a body.
            A ring that dropped bytes rather than records would leave one line
@@ -406,6 +517,7 @@ int main(void)
     /* A record raised from inside the delivery of another, which is what an
        interrupt handler that prints does. Neither may tear the other. */
     reset();
+    net_on = 1;
     reenter_from_screen = 1;
     klog(KLOG_INFO, "outer", "began: before the interrupt");
     ring_text(text, sizeof(text));
@@ -414,11 +526,24 @@ int main(void)
           has(text, "<3>[0.00] irq: landed: in the middle of another record\n"));
     CHECK("and so is the one it interrupted",
           has(text, "<6>[0.00] outer: began: before the interrupt\n"));
+    /* And the nested one went no further. Bytes from two records on one line
+       are worse than one record being in the log only, and on the screen the
+       shell may be part way through a terminal escape. */
+    screen[screen_len] = '\0';
+    CHECK("the nested record is not on the screen",
+          streq(screen, "outer: began: before the interrupt\n"));
+    serial[serial_len] = '\0';
+    CHECK("nor on the serial port",
+          streq(serial, "<6>[0.00] outer: began: before the interrupt\r\n"));
+    net[net_len] = '\0';
+    CHECK("nor on the wire", streq(net, "<6>[0.00] outer: began: before the interrupt\n"));
 
     /* The brackets: one build and one ring append per record, balanced. */
     reset();
     klog(KLOG_INFO, "b", "check: the brackets");
     CHECK("a record takes two brackets", irq_pairs == 2);
+    ring_text(text, sizeof(text));
+    CHECK("and a read takes one more", irq_pairs == 3);
     CHECK("and leaves none open", irq_depth == 0 && irq_unbalanced == 0);
 
     if (fails == 0) {

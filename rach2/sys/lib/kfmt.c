@@ -54,7 +54,13 @@ void k_vprintf(putc_fn_t putc_fn, const char *format, char **args)
                 break;
 
             case 0:
-                break;
+                /* The format ended on its `%`. The sign is written out, as
+                   any other conversion this does not know would be, and then
+                   this returns: leaving the switch instead would put the loop
+                   past the terminator, reading bytes that are not the
+                   string's. */
+                putc_fn('%');
+                return;
 
             case '%':
             default:

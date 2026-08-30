@@ -250,3 +250,53 @@ that writes to the wire, and a ring append with no interrupt bracket.
 
 No caller is converted yet beyond `k_panic`. That is phase 5, and the ledger
 for it is `messaging.md`.
+
+## Review 2 of 12, 2026-08-30
+
+Codex read the logger, the two files moved out from under it, `serial.c` and
+the host test. Its verdict was that the subsystem was not ready for callers,
+and it was right on four counts. All fixed:
+
+* A format ending in its own `%` read past the end of the string. `k_vprintf`
+  consumed the terminator looking for a conversion character and the loop then
+  read the byte after it. That defect is older than this milestone; the
+  formatter was moved here, not written here. It now writes the sign out and
+  stops.
+* `klog_read` walked the ring with no interrupt bracket, so an append could
+  evict and overwrite under a copy in progress. It takes the bracket now. What
+  cannot be fixed inside one call is that offsets shift between calls when the
+  ring evicts; that is the contract `/dev/bootlog` already has, and it is now
+  written down in `klog.h` for the reader phase 6 writes.
+* Records were dropped for netconsole while it had no device. That threw away
+  exactly the records worth having on the wire: netconsole holds what it
+  cannot send yet and sends it when a device arrives, which is what the serial
+  tap used to feed it. It is offered every record now.
+* A newline inside a record's text made a second delimiter, and the ring
+  evicts by finding one, so such a record would have been dropped in halves
+  and left a tail with no header. A newline in the text is kept as a space;
+  the record's own newline is written past the sink that does that.
+
+One design point it raised is now decided rather than left: the three
+destinations past the ring write byte by byte with interrupts as the caller
+had them, so a record raised by an interrupt handler could put its bytes
+inside another record's line, and on the screen inside a terminal escape the
+shell was part way through. A record raised while another is being delivered
+now goes to the ring and no further. One record in the log only is better than
+two shredded into each other, and the ring is exact either way.
+
+It also found the host test weaker than its own descriptions in eight places.
+The test now checks the exact truncation point and the exact fit beside it,
+that the ring already holds the record when the screen is written, that every
+byte is offered to a port that accepts none, the ring's contents byte for byte
+against the records that should be in it, that the ring is within one record
+of full, that a nested record reaches the ring and nothing else, that
+netconsole is offered records before it has a device, an interior newline, a
+format ending in `%`, and the reader's own bracket. 25 checks to 41.
+
+Proved by fifteen mutations of `klog.c` and `kfmt.c`, all caught.
+
+Two of its style points are taken: the function explanations are Doxygen
+blocks, and the reasoning that was in function bodies has moved into those
+blocks. The third, the `/* ---- section ---- */` markers, is left: the tree
+uses that form in `harness.c` and `runtests.c`, and `textcheck.sh`, which
+decides the dash rule, passes them.

@@ -49,19 +49,19 @@ Proof items:
 * [x] `console_*` with its private raw UART path
 * [x] Panic sequence: ring, screen, then bounded delivery
 * [x] Host test: formatter, truncation, prefix, timestamp, eviction at wrap, each filter, destination order under a wedged UART, `console_*` absent from the ring, no torn record from interrupt context
-* [ ] Review 2 of 12
+* [x] Review 2 of 12
 
 ## Phase 4: the oracles (10 items)
 
-* [ ] Boot self-tests emit one record each plus the summary
+* [x] Boot self-tests emit one record each plus the summary
 * [ ] Device probes emit unique `started` and `skipped` records
 * [x] `k_panic` converted
-* [ ] Harness: exit-or-killed report
+* [x] Harness: exit-or-killed report
 * [ ] Harness: bounded-interval level rejection
 * [ ] `subset` fixed, mutation proves it
-* [ ] `reset` fixed, mutation proves it
-* [ ] `addressed` fixed, mutation proves it
-* [ ] Self-test oracle fixed, mutation proves it
+* [x] `reset` fixed, mutation proves it
+* [x] `addressed` fixed, mutation proves it
+* [x] Self-test oracle fixed, mutation proves it
 * [ ] Review 3 of 12
 
 ## Phase 5: the migration (9 items)

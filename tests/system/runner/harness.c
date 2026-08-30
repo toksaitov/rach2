@@ -13,6 +13,10 @@
  *   harness --kernel K --initrd I [--net NETVAL] [--timeout S]
  *           [--never TEXT ...] [STEP ...]
  *
+ *   --must-exit fails the run unless QEMU ended by itself before the
+ *   deadline. It is what tells a machine that restarted or halted from one
+ *   that printed the line for it and then sat there.
+ *
  *   --never TEXT fails the run if TEXT ever appears on the serial console,
  *   however the run ends. It is how a probe that must be killed is checked:
  *   the line it prints when it was not killed is forbidden. It may be given
@@ -638,7 +642,7 @@ int main(int argc, char **argv)
     const char *steps[MAX_STEPS];
     int n_drives = 0, n_qemu = 0, n_steps = 0;
     double timeout = 60.0, grace = 3.0;
-    int no_debug_exit = 0;
+    int no_debug_exit = 0, must_exit = 0;
     /* Every --drive costs two words, so the command line is wider than
        the option arrays it is built from. */
     char *qemu[MAX_ARGS * 4];
@@ -646,6 +650,7 @@ int main(int argc, char **argv)
     int out_pipe[2], in_pipe[2];
     int step_failures = 0;
     int qemu_rc;
+    int self_exited = 0;
     const char *trace_path;
 
     if (argc == 2 && strcmp(argv[1], "--selftest") == 0)
@@ -697,6 +702,8 @@ int main(int argc, char **argv)
             grace = atof(argv[++i]);
         } else if (strcmp(arg, "--bootwait") == 0 && i + 1 < argc) {
             i++; /* accepted and unused, as in the Python harness */
+        } else if (strcmp(arg, "--must-exit") == 0) {
+            must_exit = 1;
         } else if (strcmp(arg, "--no-debug-exit") == 0) {
             no_debug_exit = 1;
         } else if (strncmp(arg, "--", 2) == 0) {
@@ -945,7 +952,24 @@ int main(int argc, char **argv)
     }
 
     pump(now() + grace);
+    /* `pump` returns as soon as the serial pipe reaches its end, which is
+       before the machine that closed it has finished going away, so the exit
+       is waited for here rather than read off that instant. Bounded by the
+       same grace period, so a machine that is not leaving still costs only
+       that. */
+    {
+        double until = now() + grace;
+
+        while (child_poll() < 0 && now() < until && now() < deadline) {
+            usleep(20000);
+        }
+    }
     qemu_rc = child_poll();
+    /* Whether the machine ended itself. A suite that boots a machine to make
+       it restart or halt has no other way to tell that from a machine that
+       printed the right line and then sat there: both leave the same log, and
+       the harness kills the second one at the deadline. */
+    self_exited = qemu_rc >= 0;
     if (qemu_rc < 0) {
         kill(child_pid, SIGTERM);
         usleep(400000);
@@ -971,6 +995,13 @@ int main(int argc, char **argv)
                     nevers[i]);
             return 1;
         }
+    }
+
+    if (must_exit && !self_exited) {
+        trace("decide must_exit self_exited=0");
+        fprintf(stderr, "HARNESS: the machine was still running at the "
+                "deadline and had to be killed\n");
+        return 1;
     }
 
     /* A serial-token check passes on the printed token alone, for a probe

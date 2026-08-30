@@ -1,6 +1,7 @@
 #include "vendor/multiboot.h"
 
 #include "sys/kio.h"
+#include "sys/klog.h"
 #include "sys/serial.h"
 #include "sys/syscall.h"
 #include "sys/module.h"
@@ -1951,93 +1952,67 @@ static int init_krffs_disk(void)
     return 0;
 }
 
+/* How many self-tests ran and how many failed, which the summary reports and
+   `tests/run default` reads. Counted rather than listed because two of the
+   checks below are inline blocks with detail of their own to report. */
+static int selftest_ran;
+static int selftest_failed;
+
+static void selftest_count(int passed)
+{
+    selftest_ran++;
+    if (!passed) {
+        selftest_failed++;
+    }
+}
+
+/**
+ * Record one self-test's outcome and count it.
+ *
+ * A failure is an `ERR` record, which is what the probe runner looks for: it
+ * refuses a boot with any error record between the first self-test record and
+ * the summary, so a kernel whose own checks fail cannot pass the suite.
+ */
+static void selftest_note(const char *name, int passed)
+{
+    selftest_count(passed);
+    if (passed) {
+        klog(KLOG_INFO, "selftest", "%s: passed", name);
+    } else {
+        klog(KLOG_ERR, "selftest", "%s: failed", name);
+    }
+}
+
 static void run_self_tests(void)
 {
-    k_puts("======= System Self-Test =======");
-    serial_printf("\n======= System Self-Test =======\n");
-    k_puts("");
+    selftest_ran = 0;
+    selftest_failed = 0;
+    klog(KLOG_INFO, "selftest", "started");
 
-    k_printf("  Memory allocation:  ");
-    serial_printf("  Memory allocation:  ");
-    if (test_memory()) {
-        set_fore_color(light_green);
-        k_puts("[PASS]");
-        serial_printf("[PASS]\n");
-    } else {
-        set_fore_color(light_red);
-        k_puts("[FAIL]");
-        serial_printf("[FAIL]\n");
-    }
-    set_fore_color(light_grey);
+    selftest_note("memory", test_memory());
+    selftest_note("strings", test_strings());
+    selftest_note("timer", test_timer());
 
-    k_printf("  String functions:   ");
-    serial_printf("  String functions:   ");
-    if (test_strings()) {
-        set_fore_color(light_green);
-        k_puts("[PASS]");
-        serial_printf("[PASS]\n");
-    } else {
-        set_fore_color(light_red);
-        k_puts("[FAIL]");
-        serial_printf("[FAIL]\n");
-    }
-    set_fore_color(light_grey);
-
-    k_printf("  Timer interrupts:   ");
-    serial_printf("  Timer interrupts:   ");
-    if (test_timer()) {
-        set_fore_color(light_green);
-        k_puts("[PASS]");
-        serial_printf("[PASS]\n");
-    } else {
-        set_fore_color(light_red);
-        k_puts("[FAIL]");
-        serial_printf("[FAIL]\n");
-    }
-    set_fore_color(light_grey);
-
-    k_printf("  Microsecond delay:  ");
-    serial_printf("  Microsecond delay:  ");
     {
         uint32_t measured_ms = 0;
+        int passed = test_udelay(&measured_ms);
 
-        if (test_udelay(&measured_ms)) {
-            set_fore_color(light_green);
-            k_printf("[PASS] (200 ms asked, %d ms seen)\n", (int)measured_ms);
-            serial_printf("[PASS] (200 ms asked, %d ms seen)\n", (int)measured_ms);
-        } else {
-            set_fore_color(light_red);
-            k_printf("[FAIL] (200 ms asked, %d ms seen)\n", (int)measured_ms);
-            serial_printf("[FAIL] (200 ms asked, %d ms seen)\n", (int)measured_ms);
-        }
+        selftest_count(passed);
+        klog(passed ? KLOG_INFO : KLOG_ERR, "selftest",
+             passed ? "udelay: passed: 200 ms asked, %d ms seen"
+                    : "udelay: failed: 200 ms asked, %d ms seen",
+             (int)measured_ms);
     }
-    set_fore_color(light_grey);
 
-    k_printf("  Paging enabled:     ");
-    serial_printf("  Paging enabled:     ");
-    set_fore_color(light_green);
-    k_puts("[PASS]");
-    serial_printf("[PASS]\n");
-    set_fore_color(light_grey);
+    /* Reaching this line at all is the check: the code is running from mapped
+       addresses through a page directory the kernel built. */
+    selftest_note("paging", 1);
+    selftest_note("syscall", test_syscall());
 
-    k_printf("  Syscall (int 0x80): ");
-    serial_printf("  Syscall (int 0x80): ");
-    if (test_syscall()) {
-        set_fore_color(light_green);
-        k_puts("[PASS]");
-        serial_printf("[PASS]\n");
-    } else {
-        set_fore_color(light_red);
-        k_puts("[FAIL]");
-        serial_printf("[FAIL]\n");
-    }
-    set_fore_color(light_grey);
-
-    k_printf("  Context switch:     ");
-    serial_printf("  Context switch:     ");
     {
         process_t *test_a = current_proc;
         process_t *test_b = alloc_process();
+
         if (test_b) {
             uintptr_t test_stack = mem_reserve(KERNEL_STACK_SIZE, true);
             test_b->kernel_stack = test_stack + KERNEL_STACK_SIZE;
@@ -2048,26 +2023,18 @@ static void run_self_tests(void)
             switch_count = 0;
             setup_process_stack(test_b, proc_b_entry);
 
-            switch_count = 10;  /* start at the limit so proc_b_entry's loop is skipped */
+            switch_count = 10; /* at the limit, so proc_b_entry's loop is skipped */
             switch_context(test_a, test_b);
 
             free_process(test_b);
-            set_fore_color(light_green);
-            k_puts("[PASS]");
-            serial_printf("[PASS]\n");
-        } else {
-            set_fore_color(light_red);
-            k_puts("[FAIL]");
-            serial_printf("[FAIL]\n");
         }
+        selftest_note("context switch", test_b != 0);
     }
-    set_fore_color(light_grey);
 
-    k_printf("  Round-robin sched:  ");
-    serial_printf("  Round-robin sched:  ");
     {
         process_t *pa, *pb;
         uintptr_t sa, sb;
+        int passed = 0;
 
         preempt_done = 0;
         preempt_count_a = 0;
@@ -2088,92 +2055,40 @@ static void run_self_tests(void)
             setup_process_stack(pb, preempt_proc_b);
 
             sched_enable();
-
             while (!preempt_done) {
                 __asm__ __volatile__("hlt");
             }
-
             sched_disable();
             free_process(pa);
             free_process(pb);
-
-            if (preempt_count_a > 0 && preempt_count_b > 0) {
-                set_fore_color(light_green);
-                k_printf(" [PASS] (A=%d B=%d)\n", preempt_count_a, preempt_count_b);
-                serial_printf(" [PASS] (A=%d B=%d)\n",
-                              preempt_count_a, preempt_count_b);
-            } else {
-                set_fore_color(light_red);
-                k_printf(" [FAIL] (A=%d B=%d)\n", preempt_count_a, preempt_count_b);
-                serial_printf(" [FAIL] (A=%d B=%d)\n",
-                              preempt_count_a, preempt_count_b);
-            }
-        } else {
-            set_fore_color(light_red);
-            k_puts("[FAIL]");
+            passed = preempt_count_a > 0 && preempt_count_b > 0;
         }
+        selftest_count(passed);
+        klog(passed ? KLOG_INFO : KLOG_ERR, "selftest",
+             passed ? "round robin: passed: a ran %d times, b %d"
+                    : "round robin: failed: a ran %d times, b %d",
+             preempt_count_a, preempt_count_b);
     }
-    set_fore_color(light_grey);
 
-    k_printf("  Memory isolation:   ");
-    serial_printf("  Memory isolation:   ");
-    if (test_isolation()) {
-        set_fore_color(light_green);
-        k_puts("[PASS]");
-        serial_printf("[PASS]\n");
-    } else {
-        set_fore_color(light_red);
-        k_puts("[FAIL]");
-        serial_printf("[FAIL]\n");
-    }
-    set_fore_color(light_grey);
+    selftest_note("memory isolation", test_isolation());
 
+    /* Only where there is a file system to write to and read a program out
+       of; a machine booted without one is not failing these. */
     if (krffs_fs) {
-        k_printf("  KRFFS write ops:    ");
-        serial_printf("  KRFFS write ops:    ");
-        if (test_krffs_write()) {
-            set_fore_color(light_green);
-            k_puts("[PASS]");
-            serial_printf("[PASS]\n");
-        } else {
-            set_fore_color(light_red);
-            k_puts("[FAIL]");
-            serial_printf("[FAIL]\n");
-        }
-        set_fore_color(light_grey);
-
-        k_printf("  ELF parse + load:   ");
-        serial_printf("  ELF parse + load:   ");
-        if (test_elf()) {
-            set_fore_color(light_green);
-            k_puts("[PASS]");
-            serial_printf("[PASS]\n");
-        } else {
-            set_fore_color(light_red);
-            k_puts("[FAIL]");
-            serial_printf("[FAIL]\n");
-        }
-        set_fore_color(light_grey);
+        selftest_note("krffs write", test_krffs_write());
+        selftest_note("elf load", test_elf());
     }
 
-    k_printf("  Page cache:         ");
-    serial_printf("  Page cache:         ");
-    if (test_pagecache()) {
-        set_fore_color(light_green);
-        k_puts("[PASS]");
-        serial_printf("[PASS]\n");
-    } else {
-        set_fore_color(light_red);
-        k_puts("[FAIL]");
-        serial_printf("[FAIL]\n");
-    }
-    set_fore_color(light_grey);
+    selftest_note("page cache", test_pagecache());
 
     test_display();
 
-    k_puts("");
-    k_puts("================================");
-    serial_printf("\n================================\n");
+    if (selftest_failed == 0) {
+        klog(KLOG_INFO, "selftest", "result: passed: %d", selftest_ran);
+    } else {
+        klog(KLOG_ERR, "selftest", "result: failed: %d of %d", selftest_failed,
+             selftest_ran);
+    }
 }
 
 static void process_command(const char *cmd)

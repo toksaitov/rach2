@@ -232,6 +232,51 @@ static int score_window(const unsigned char *window, size_t len, char *detail,
     return 0;
 }
 
+/* The offset of the first `head` in the buffer that is also followed by
+   `tail` on the same line, or -1. `tail` may be null, which asks for `head`
+   alone. Records are matched this way rather than whole because the level and
+   the timestamp between the two halves are not fixed text. */
+static long find_text(const unsigned char *hay, size_t len, const char *head,
+                      const char *tail)
+{
+    size_t hlen = strlen(head), at;
+
+    for (at = 0; at + hlen <= len; at++) {
+        if (memcmp(hay + at, head, hlen) != 0)
+            continue;
+        if (tail == (const char *) 0)
+            return (long) at;
+        {
+            size_t tlen = strlen(tail), p = at + hlen;
+
+            while (p + tlen <= len && hay[p] != '\n') {
+                if (memcmp(hay + p, tail, tlen) == 0)
+                    return (long) at;
+                p++;
+            }
+        }
+    }
+    return -1;
+}
+
+/* The offset of the first error or worse record between `from` and `to`, or
+   -1. A record's level is the digit its line begins with, so only a line
+   start counts: a probe that printed the text of a record inside its own
+   output cannot make one. */
+static long find_level_between(const unsigned char *hay, size_t from, size_t to)
+{
+    size_t at;
+
+    for (at = from; at + 3 < to; at++) {
+        if (at != 0 && hay[at - 1] != '\n')
+            continue;
+        if (hay[at] == '<' && hay[at + 2] == '>' &&
+            (hay[at + 1] == '2' || hay[at + 1] == '3'))
+            return (long) at;
+    }
+    return -1;
+}
+
 /* ---- the selftest ---- */
 
 static int selftest(void)
@@ -503,6 +548,8 @@ int main(int argc, char **argv)
     double clock_seen_at = 0;
     int clock_ok = 0;
     char clock_detail[128];
+    int selftest_ok = 0;
+    char selftest_detail[128];
 
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--selftest") == 0)
@@ -690,6 +737,45 @@ int main(int argc, char **argv)
         }
     }
 
+    /* The kernel's own checks. It runs a dozen of them at every boot and
+       reports each as a record; before this, nothing here read them, so a
+       boot whose checks all failed still passed the suite.
+
+       Two things are required. The summary must be there, which a boot that
+       stopped part way through the group would not have. And no error record
+       may appear between the group's first record and that summary, which is
+       where a failed check reports itself. The interval is what makes the
+       second check usable at all: the fault probes later in this run print
+       error records on purpose, and a rule over the whole log would refuse
+       every passing run. */
+    snprintf(selftest_detail, sizeof(selftest_detail),
+             "the kernel ran none");
+    {
+        long start = find_text(buf, buf_len, "<6>[", "] selftest: started");
+        long summary = -1;
+        long bad = -1;
+
+        if (start >= 0) {
+            summary = find_text(buf, buf_len, "] selftest: result: passed: ",
+                                (const char *) 0);
+            if (summary < 0) {
+                snprintf(selftest_detail, sizeof(selftest_detail),
+                         "no summary record");
+            } else {
+                bad = find_level_between(buf, (size_t) start,
+                                         (size_t) summary);
+                if (bad >= 0) {
+                    snprintf(selftest_detail, sizeof(selftest_detail),
+                             "a check reported an error");
+                } else {
+                    selftest_ok = 1;
+                    snprintf(selftest_detail, sizeof(selftest_detail),
+                             "the kernel's own checks");
+                }
+            }
+        }
+    }
+
     for (i = 0; i < n_results; i++) {
         if (!results[i].ok)
             fails++;
@@ -732,6 +818,10 @@ int main(int argc, char **argv)
 
     /* Reported beside the probes, not as one, so the count stays the count
        of probes. */
+    printf("  %-12s %-18s %s\n", "selftest", selftest_detail,
+           selftest_ok ? "PASS" : "FAIL");
+    if (!selftest_ok)
+        fails++;
     printf("  %-12s %-18s %s\n", "clock", clock_detail,
            clock_ok ? "PASS" : "FAIL");
     if (!clock_ok)

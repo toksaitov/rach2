@@ -51,8 +51,23 @@ static char *build_at;
 static uint32_t build_left;
 static uint32_t build_over;
 
+/**
+ * Take one byte of the record being built.
+ *
+ * A newline inside the text becomes a space, so that one record is one line.
+ * Everything downstream depends on that: the ring evicts by finding the next
+ * newline, and a record carrying one of its own would be evicted in halves,
+ * leaving a tail in the ring with no header on it. The record's own newline
+ * is appended past this, after the text is finished.
+ *
+ * A byte that does not fit is counted and dropped, not written; the caller
+ * marks the record as cut.
+ */
 static void build_putc(char c)
 {
+    if (c == '\n') {
+        c = ' ';
+    }
     if (build_left > 0) {
         *build_at++ = c;
         build_left--;
@@ -68,8 +83,12 @@ static void build_str(const char *s)
     }
 }
 
-/* An unsigned decimal, which the shared formatter has no conversion for and
-   which the two numbers in the prefix both are. */
+/**
+ * Write an unsigned decimal.
+ *
+ * The shared formatter has no conversion for one, and the two numbers in a
+ * record's prefix are both unsigned.
+ */
 static void build_u32(uint32_t v)
 {
     char digits[10];
@@ -95,14 +114,17 @@ static void build_u32(uint32_t v)
  * added later without the kernel changing what it writes. A record that did
  * not fit ends in `...` before its newline rather than simply stopping, so a
  * reader can tell a cut line from a short one.
+ *
+ * Four bytes are held back from the text: three for that mark and one for the
+ * newline every record ends with, whatever the format ended with. Trailing
+ * spaces are dropped first, which is where a format written with a newline of
+ * its own goes: `build_putc` has already turned it into one.
  */
 static void klog_build(struct klog_record *r, int level, const char *subsystem,
                        const char *format, char **args)
 {
     uint32_t ticks = kernel_ticks;
 
-    /* One byte is held back for the newline, which every record has whatever
-       the format said, and three more for the truncation mark. */
     build_at = r->text;
     build_left = KLOG_RECORD_MAX - 4;
     build_over = 0;
@@ -125,10 +147,7 @@ static void klog_build(struct klog_record *r, int level, const char *subsystem,
     build_putc(' ');
     k_vprintf(build_putc, format, args);
 
-    /* Whatever the format ended with, the record ends with exactly one
-       newline: a destination that framed records by the newline would
-       otherwise join two of them. */
-    while (build_at > r->text && build_at[-1] == '\n') {
+    while (build_at > r->text && build_at[-1] == ' ') {
         build_at--;
         build_left++;
     }
@@ -138,7 +157,9 @@ static void klog_build(struct klog_record *r, int level, const char *subsystem,
         build_putc('.');
         build_putc('.');
     }
-    build_putc('\n');
+    /* Written past the sink, which turns a newline into a space: this is the
+       one newline a record has, and it is the record's, not the text's. */
+    *build_at++ = '\n';
     r->len = (uint32_t)(build_at - r->text);
 }
 
@@ -149,9 +170,14 @@ static uint32_t ring_head;   /* where the next byte goes */
 static uint32_t ring_used;   /* bytes held */
 static uint32_t ring_oldest; /* where the oldest byte held sits */
 
-/* Drop whole records from the oldest end until `want` bytes are free. The
-   ring holds records and not bytes: a reader that was handed the tail of a
-   line it never saw the start of would report a subsystem that never spoke. */
+/**
+ * Drop whole records from the oldest end until `want` bytes are free.
+ *
+ * The ring holds records and not bytes: a reader handed the tail of a line it
+ * never saw the start of would report a subsystem that never spoke. Records
+ * carry no newline of their own but the one that ends them, so the next
+ * newline is the end of the oldest record.
+ */
 static void ring_evict(uint32_t want)
 {
     while (KLOG_RING_SIZE - ring_used < want && ring_used > 0) {
@@ -176,14 +202,18 @@ static void ring_evict(uint32_t want)
     }
 }
 
+/**
+ * Put one record into the ring, dropping as many old ones as it needs.
+ *
+ * A record longer than the whole ring is refused rather than held in part,
+ * which would leave the ring starting mid-line. It cannot happen while the
+ * record maximum is far below the ring size; it is refused rather than
+ * trusted.
+ */
 static void ring_append(const char *text, uint32_t n)
 {
     uint32_t i;
 
-    /* A record longer than the whole ring cannot be held and is not held in
-       part: the ring would then start mid-line, which is the one thing it
-       promises not to do. It cannot happen while the record maximum is far
-       below the ring size, and it is refused rather than trusted. */
     if (n > KLOG_RING_SIZE) {
         return;
     }
@@ -213,9 +243,11 @@ uint32_t klog_len(void)
 
 uint32_t klog_read(char *buf, uint32_t cap, uint32_t offset)
 {
+    uint32_t flags = kirq_save();
     uint32_t n = 0;
 
     if (buf == 0 || cap == 0 || offset >= ring_used) {
+        kirq_restore(flags);
         return 0;
     }
     while (n < cap && offset + n < ring_used) {
@@ -227,15 +259,19 @@ uint32_t klog_read(char *buf, uint32_t cap, uint32_t offset)
         buf[n] = ring[i];
         n++;
     }
+    kirq_restore(flags);
     return n;
 }
 
 /* ---- destination 2: the screen ---- */
 
-/* The level a person in front of the machine is shown, and the colour it is
-   shown in. Debug detail is for the log; a boot narrative is for the screen,
-   because on a machine with no serial port it is the only explanation there
-   is. */
+/**
+ * The colour a record is shown in.
+ *
+ * Debug detail is for the log; a boot narrative is for the screen, because on
+ * a machine with no serial port it is the only explanation there is, and the
+ * colour is what separates the two lines that matter from the rest.
+ */
 static display_color_t screen_color(int level)
 {
     if (level <= KLOG_ERR) {
@@ -247,13 +283,18 @@ static display_color_t screen_color(int level)
     return VGA_TEXT_DEFAULT_FG;
 }
 
+/**
+ * Show the record from its body on, without the priority and the timestamp.
+ *
+ * Those two are for a reader with a capture and a scrollback; a person
+ * watching a boot has neither, and every line would begin with the same eight
+ * characters of noise.
+ */
 static void dest_screen(const struct klog_record *r)
 {
     uint32_t i;
 
     set_fore_color(screen_color(r->level));
-    /* From `body`: the priority and the timestamp are for a reader with a
-       capture and a scrollback, and a person watching a boot has neither. */
     for (i = r->body; i < r->len; i++) {
         k_putc(r->text[i]);
     }
@@ -276,13 +317,20 @@ static void dest_serial(const struct klog_record *r)
 
 /* ---- destination 4: netconsole ---- */
 
+/**
+ * Offer the record to netconsole, enabled or not.
+ *
+ * Not conditional on `netconsole_is_enabled`, deliberately: netconsole holds
+ * what it is given before a device exists and sends it when one does, and the
+ * records worth having on the wire are exactly the early ones, from a boot
+ * that may not reach a shell. Skipping it until enabled would throw those
+ * away. A machine that was never asked for netconsole fills that bounded
+ * buffer once and drops the rest, which is what it did before.
+ */
 static void dest_net(const struct klog_record *r)
 {
     uint32_t i;
 
-    if (!netconsole_is_enabled()) {
-        return;
-    }
     for (i = 0; i < r->len; i++) {
         netconsole_putc(r->text[i]);
     }
@@ -310,11 +358,25 @@ static const struct klog_dest DESTS[] = {
 
 #define KLOG_N_DESTS ((int)(sizeof(DESTS) / sizeof(DESTS[0])))
 
+/* Set while a record is being written out; see `klog_v`. */
+static int klog_delivering;
+
+/**
+ * Build one record and offer it to the destinations that take its level.
+ *
+ * The build runs with interrupts off because the formatter writes through
+ * sink state that two callers cannot share. The destinations then run with
+ * interrupts as this was entered, so a record raised by an interrupt handler
+ * can arrive in the middle of one being written out. Such a record is put in
+ * the ring, which is exact either way, and not printed: its bytes inside
+ * another record's line, or inside a terminal escape the shell is part way
+ * through, are worse than one record being in the log only.
+ */
 void klog_v(int level, const char *subsystem, const char *format, char **args)
 {
     struct klog_record r;
     uint32_t flags;
-    int i;
+    int nested, i;
 
     if (level < KLOG_CRIT) {
         level = KLOG_CRIT;
@@ -322,17 +384,24 @@ void klog_v(int level, const char *subsystem, const char *format, char **args)
     if (level > KLOG_DEBUG) {
         level = KLOG_DEBUG;
     }
-    /* The build, and only the build: the sink's state is the one thing a
-       second caller would corrupt, and the destinations below take a record
-       that is already whole. */
     flags = kirq_save();
     klog_build(&r, level, subsystem, format, args);
+    nested = klog_delivering;
+    if (!nested) {
+        klog_delivering = 1;
+    }
     kirq_restore(flags);
 
     for (i = 0; i < KLOG_N_DESTS; i++) {
+        if (nested && DESTS[i].write != dest_ring) {
+            continue;
+        }
         if (level <= DESTS[i].takes_down_to) {
             DESTS[i].write(&r);
         }
+    }
+    if (!nested) {
+        klog_delivering = 0;
     }
 }
 
@@ -346,11 +415,11 @@ void klog(int level, const char *subsystem, const char *format, ...)
 
 /* ---- the console ---- */
 
-/*
- * The screen and the serial port, written byte by byte as they are given.
+/**
+ * Write one byte to the screen and the serial port, and nowhere else.
  *
- * This is the shell's terminal, so the bytes are passed through unchanged:
- * an escape sequence a line editor sent has to arrive as the sequence. The
+ * This is the shell's terminal, so the bytes are passed through unchanged: an
+ * escape sequence a line editor sent has to arrive as the sequence. The
  * newline is expanded to carriage return and newline for the serial side
  * alone, which is what a terminal on the other end of a wire expects.
  */
@@ -363,10 +432,14 @@ void console_putc(char c)
     serial_out(c);
 }
 
-/* The newline at the end is `k_puts`'s, which this stands in for wherever the
-   shell prints a line; a version without it would drop a newline at every one
-   of those calls and the difference would show as a scrambled screen rather
-   than as an error. `console_printf`, like `k_printf`, adds nothing. */
+/**
+ * Write a string and then a newline.
+ *
+ * The newline is `k_puts`'s, which this stands in for wherever the shell
+ * prints a line: a version without it would drop one at every such call, and
+ * the difference would show as a scrambled screen rather than as an error.
+ * `console_printf`, like `k_printf`, adds nothing.
+ */
 void console_puts(const char *str)
 {
     if (str == 0) {
