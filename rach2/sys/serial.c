@@ -1,5 +1,4 @@
 #include "serial.h"
-#include "bootlog.h"
 #include "kio.h"
 
 /* Serial port register offsets from base address */
@@ -24,9 +23,6 @@
  * makes every entry point a no-op instead.
  */
 static int _serial_port_exists = 0;
-
-/* Set by serial_set_tap; see the header for what a tap may do. */
-static void (*_serial_tap)(char c) = NULL;
 
 static int _serial_is_transmit_empty(void)
 {
@@ -85,11 +81,6 @@ void serial_init(void)
     outb(port + SERIAL_MODEM_CTRL, 0x0B);           /* DTR, RTS, OUT2 */
 }
 
-void serial_set_tap(void (*tap)(char c))
-{
-    _serial_tap = tap;
-}
-
 /*
  * How many times a transmit is polled before the byte is dropped.
  *
@@ -115,42 +106,6 @@ void serial_out(char c)
         }
     }
     outb(SERIAL_COM1 + SERIAL_DATA, c);
-}
-
-void serial_putc(char c)
-{
-    /* Kept whatever else is or is not there: a machine with no serial port and
-     * nobody capturing its netconsole still has its own log to hand out. */
-    bootlog_putc(c);
-    if (_serial_tap != NULL) {
-        _serial_tap(c);
-    }
-    serial_out(c);
-}
-
-/*
- * Translate LF to CR LF so a dumb terminal returns to column zero.
- */
-static void _serial_putc_crlf(char c)
-{
-    if (c == '\n')
-        serial_putc('\r');
-    serial_putc(c);
-}
-
-void serial_puts(const char *str)
-{
-    if (str == NULL)
-        return;
-    while (*str)
-        _serial_putc_crlf(*str++);
-}
-
-void serial_printf(const char *format, ...)
-{
-    char **args = (char **)&format;
-    ++args;
-    k_vprintf(_serial_putc_crlf, format, args);
 }
 
 int serial_data_available(void)

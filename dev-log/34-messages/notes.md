@@ -422,3 +422,34 @@ reset the kernel asked for, so `tests/run reset` cannot tell those apart from
 outside. The kernel prints a `CRIT` record for a kernel exception and the
 suite refuses that, so what is left is a triple fault that printed nothing.
 The suite says so where it is checked.
+
+## The migration and the cutover, 2026-08-30
+
+Every call in the kernel that printed is now either a record or a console
+call. 695 of them, read in six groups, each group's classification written
+down in `messaging.md` before any of it was converted.
+
+The cutover that followed removes the parallel paths the old arrangement
+needed:
+
+* `/dev/bootlog` serves the log's ring. `sys/bootlog.c` and its second copy of
+  everything printed are gone.
+* `serial_putc`, `serial_puts`, `serial_printf` and `serial_set_tap` are gone.
+  What reaches COM1 is decided by `klog` and the console calls; `serial_out`
+  is the only way out of the port and it does nothing but write a byte.
+* Netconsole is a destination of the log rather than a tap on the serial
+  stream. Console output no longer reaches the wire at all, which is checked:
+  the netconsole suite refuses the shell's prompt and banner in the capture,
+  and requires each expected text with the `] ` that ends a record's prefix,
+  so what it proves is a whole record reassembled from frames. Proved by
+  making `console_putc` write to netconsole: caught.
+* `tests/run procfiles` counts what `/dev/bootlog` holds on the machine: fifty
+  records and no console text.
+
+Fourteen suites read text that these conversions moved, and every one of them
+was found by running the suite rather than by reading it. Two were more than a
+text change: `sealed` and `install` rewrite the kernel's banner inside the
+built artifact to mark a kernel, and `binfind --replace` requires the mark to
+be the same length as what it replaces, so both marks were re-cut for the
+shorter text. `install` also counts the lines its `sed` changed on the machine,
+and there is one line to change now where there were two.

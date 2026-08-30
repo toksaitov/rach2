@@ -2756,7 +2756,6 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
      * the network device sends once it comes up. Nothing is transmitted until
      * then; this only starts collecting. */
     if (kcmdline_has("rach2.netconsole")) {
-        serial_set_tap(netconsole_putc);
     }
 
     k_cls();

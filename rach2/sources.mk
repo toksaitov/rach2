@@ -20,7 +20,6 @@ C_SRC = kernel.c \
         sys/isr.c \
         sys/pic.c \
         sys/board.c \
-        sys/bootlog.c \
         sys/pit.c \
         sys/rtc.c \
         sys/kbd.c \

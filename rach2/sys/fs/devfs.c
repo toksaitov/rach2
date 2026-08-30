@@ -12,7 +12,6 @@
 
 #include "../klog.h"
 #include "devfs.h"
-#include "../bootlog.h"
 #include "fd.h"
 #include "file.h"
 #include "../proc/process.h"
@@ -580,7 +579,7 @@ static int32_t dev_bootlog_read(fd_entry_t *e, char __user *buf, uint32_t count)
         if (want > sizeof(chunk)) {
             want = (uint32_t)sizeof(chunk);
         }
-        n = bootlog_read(chunk, want, e->ofd->offset + done);
+        n = klog_read(chunk, want, e->ofd->offset + done);
         if (n == 0) {
             break; /* the end of the log, the regular-file convention */
         }
@@ -974,7 +973,7 @@ int devfs_fd_log_size(struct fd_entry *e, uint32_t *size)
      * for a wider one. */
     if (dev->ops == &bootlog_ops) {
         if (size) {
-            *size = bootlog_len();
+            *size = klog_len();
         }
         return 1;
     }

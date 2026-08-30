@@ -9,43 +9,19 @@
 /** Detect and configure COM1 for debug output. */
 void serial_init(void);
 
-/*
- * Write a single character to the serial port. Spins until the transmit
- * holding register is empty, then sends. A no-op if no COM1 was detected.
- */
-void serial_putc(char c);
-
 /**
- * Write one byte to the port and nothing else.
+ * Write one byte to the port.
  *
- * No boot-log copy, no tap, and a transmit wait that gives up rather than
- * spinning for ever. It is what the log and the console write through: both
- * have their own copy of what they sent and neither may hang the machine on a
- * port that stopped draining. A machine with no COM1 discards the byte.
+ * The transmit wait gives up after a fixed number of polls rather than
+ * spinning for ever, so a UART that stopped draining costs a bounded delay
+ * per byte and not the machine. A machine with no COM1 discards the byte.
+ *
+ * This is the only way out of the port, and it has no formatting, no copy of
+ * what it sent, and no tap: what reaches the port is decided by `klog` and by
+ * the console calls beside it, which keep the machine's own copy in the log's
+ * ring. Nothing else writes here.
  */
 void serial_out(char c);
-
-/*
- * Repeat every character written here to `tap` as well, or stop repeating when
- * `tap` is NULL. The tap is offered the character before the port is checked,
- * so it still sees the stream on a machine that has no COM1, which is the case
- * it exists for; see network/netconsole.c, the only caller. It runs from
- * interrupt handlers and from the panic path, so it must not block, allocate,
- * or write to the serial port itself.
- */
-void serial_set_tap(void (*tap)(char c));
-
-/*
- * Write a null-terminated string to the serial port. Each LF is sent as
- * CR LF.
- */
-void serial_puts(const char *str);
-
-/*
- * Formatted output to the serial port. Supports %d (decimal), %x/%X (hex),
- * %s (string), and %% (literal percent).
- */
-void serial_printf(const char *format, ...);
 
 /*
  * Non-blocking check for received data. Returns non-zero if a byte is ready,

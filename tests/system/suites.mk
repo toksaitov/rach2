@@ -819,6 +819,12 @@ run-dhcp: $(DEMO_CREDS) rach2 utils busybox krffs os-real-image os-simple-image 
 # holds the frames to the header's contract and requires a line printed BEFORE
 # the network device came up, which is what proves the pre-transmit buffer was
 # carried rather than dropped.
+#
+# Each expected text carries the `] ` that ends a record's prefix, so what is
+# required is a whole record reassembled from the frames, not a fragment of
+# one. The two rejected texts are the shell's: a prompt and its banner are
+# console output, and netconsole carries the log to whoever is on the segment,
+# which a person typing at a prompt did not agree to.
 NETCONSOLE_PCAP = $(IMAGES_DIR)/netconsole$(NIC_TAG).pcap
 NETCONSOLE_STOP_PCAP = $(IMAGES_DIR)/netconsole-stop$(NIC_TAG).pcap
 run-netconsole: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
@@ -830,9 +836,11 @@ run-netconsole: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
 	    --append "rach2.netconsole" \
 	    --timeout 90 --ok "Type 'help'" "expect=Type 'help'" wait=3
 	$(PCAPCHECK) netconsole $(NETCONSOLE_PCAP) --min-frames 4 \
-	    --expect "Initializing system components" \
-	    --expect "net: ready:" \
-	    --expect "netconsole: broadcast"
+	    --expect "] boot: Initializing system components" \
+	    --expect "] net: ready:" \
+	    --expect "] netconsole: broadcast" \
+	    --reject "Type 'help'" \
+	    --reject "> "
 # And the other end of a netconsole session: the machine stopping. The card is
 # silenced on the way out, so where that happens decides what a remote reader
 # is told. The contract is that the goodbye line reaches the wire and nothing

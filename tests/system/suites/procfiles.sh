@@ -155,6 +155,8 @@ echo "procfiles-test: the three mounts each name their own source: OK"
   printf 'free > /tmp.free; echo FREE""-STATUS:$?; cat /tmp.free\n'; sleep 3;
   printf 'uptime > /tmp.up; echo UP""-STATUS:$?; cat /tmp.up\n'; sleep 4;
   printf 'dmesg > /tmp.dm; echo DM""ESG-STATUS:$?; sed -n "1s/^/DM""ESG-FIRST:/p" /tmp.dm\n'; sleep 4;
+  printf 'grep -c "^<[0-9]>\\[" /tmp.dm | sed s/^/DM""ESG-RECORDS:/\n'; sleep 2;
+  printf 'grep -c "Type .help." /tmp.dm | sed s/^/DM""ESG-CONSOLE:/\n'; sleep 2;
   printf 'dropbearmulti dropbear -R -g -p 22; echo SSH""D-UP\n'; sleep 10;
   printf 'route -n > /tmp.rt; echo RT""-STATUS:$?; cat /tmp.rt\n'; sleep 10;
   printf 'netstat -tn > /tmp.ns 2>/tmp.ns6; echo NS""-STATUS:$?; cat /tmp.ns; cat /tmp.ns6\n'; sleep 4;
@@ -322,6 +324,24 @@ if ! grep -q "^DMESG-FIRST:.*Rach2 Booting" "$PLAIN_LOG"; then
     exit 1
 fi
 echo "procfiles-test: dmesg prints the machine's own boot log: OK"
+
+# What the log holds, now that it is the kernel's records and not every byte
+# that crossed the serial port: whole records, and none of the shell's own
+# output. The counts are taken on the machine, so an empty file fails both.
+records="$(sed -n 's/^DMESG-RECORDS://p' "$PLAIN_LOG" | tr -d "\r" | head -1)"
+console="$(sed -n 's/^DMESG-CONSOLE://p' "$PLAIN_LOG" | tr -d "\r" | head -1)"
+case "$records" in
+    ''|*[!0-9]*) records=0 ;;
+esac
+if [ "$records" -lt 20 ]; then
+    echo "procfiles-test: FAIL: the boot log holds $records records" >&2
+    exit 1
+fi
+if [ "$console" != "0" ]; then
+    echo "procfiles-test: FAIL: the boot log holds the shell's own output" >&2
+    exit 1
+fi
+echo "procfiles-test: the boot log holds $records records and no console text: OK"
 
 # route: the machine's real state, not a plausible one. Under QEMU's user
 # network the address is 10.0.2.15 and the gateway 10.0.2.2, both of which this

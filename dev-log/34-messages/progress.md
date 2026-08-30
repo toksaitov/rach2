@@ -66,26 +66,26 @@ Proof items:
 
 ## Phase 5: the migration (9 items)
 
-* [ ] `messaging.md` built: every printing file listed by tool, then read in full, every call classified before conversion
-* [ ] Group 1: boot and shutdown in `kernel.c` (review 4)
-* [ ] Group 2: storage (review 5)
-* [ ] Group 3: memory and processes (review 6)
-* [ ] Group 4: interrupts, timers, rest of `sys/` (review 7)
-* [ ] Group 5: audio (review 8)
-* [ ] Group 6: network (review 9)
-* [ ] Debug shell converted to `console_*`
+* [x] `messaging.md` built: every printing file listed by tool, then read in full, every call classified before conversion
+* [x] Group 1: boot and shutdown in `kernel.c` (review 4)
+* [x] Group 2: storage (review 5)
+* [x] Group 3: memory and processes (review 6)
+* [x] Group 4: interrupts, timers, rest of `sys/` (review 7)
+* [x] Group 5: audio (review 8)
+* [x] Group 6: network (review 9)
+* [x] Debug shell converted to `console_*`
 * [ ] Each component's Readme updated in the converting commit
 
 ## Phase 6: the cutover (9 items)
 
-* [ ] Netconsole takes records from the logger
-* [ ] Serial tap and boot-log capture removed from `serial_putc`
-* [ ] `/dev/bootlog` serves the logger's ring
-* [ ] Full record rendered to ring, serial, netconsole; screen without prefix and timestamp
-* [ ] Legacy public print calls removed; byte writers private to their drivers
-* [ ] `pcapcheck` reassembles one complete record from a capture
-* [ ] Console keystrokes absent from a netconsole capture
-* [ ] `/dev/bootlog` holds records and no console text
+* [x] Netconsole takes records from the logger
+* [x] Serial tap and boot-log capture removed from `serial_putc`
+* [x] `/dev/bootlog` serves the logger's ring
+* [x] Full record rendered to ring, serial, netconsole; screen without prefix and timestamp
+* [x] Legacy public print calls removed; byte writers private to their drivers
+* [x] `pcapcheck` reassembles one complete record from a capture
+* [x] Console keystrokes absent from a netconsole capture
+* [x] `/dev/bootlog` holds records and no console text
 * [ ] Review 10 of 12
 
 ## Phase 7: the coverage (13 items)
