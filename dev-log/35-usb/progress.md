@@ -18,15 +18,15 @@ the commit that completes it.
 
 ## Phase 2: the interface and the model
 
-* [ ] `sys/usb/hcd.h`
-* [ ] `sys/usb/xhci.h` with `struct xhci_io`
-* [ ] the controller model in `tests/host/xhci_hosttest.c`
-* [ ] rows: discovery, D0, the aperture check
-* [ ] rows: handoff at once, slowly, never
-* [ ] rows: stop, reset, the one-millisecond pause, `CNR`
-* [ ] rows: the capability reads, both context sizes, `PAGESIZE` without 4 KiB
-* [ ] rows: scratchpad request of zero, of several, above the maximum
-* [ ] mutations: ownership wait, `CNR`, the pause, context size, the scratchpad
+* [x] `sys/usb/hcd.h`
+* [x] `sys/usb/xhci.h` with `struct xhci_io`
+* [x] the controller model in `tests/host/xhci_hosttest.c`
+* [x] rows: discovery, D0, the aperture check
+* [x] rows: handoff at once, slowly, never
+* [x] rows: stop, reset, the one-millisecond pause, `CNR`
+* [x] rows: the capability reads, both context sizes, `PAGESIZE` without 4 KiB
+* [x] rows: scratchpad request of zero, of several, above the maximum
+* [x] mutations: ownership wait, `CNR`, the pause, context size, the scratchpad
       array, the scratchpad maximum
 * [ ] review 1 of 6
 

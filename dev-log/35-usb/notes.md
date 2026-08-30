@@ -46,3 +46,50 @@ driver, and phase 5 adds the switch with the `subset` boot that checks it.
 Proof of the phase: with `-device qemu-xhci` the kernel records the controller;
 with no USB device on the command line it records `controller: none`. Both
 lines came from a real boot.
+
+## Phase 2
+
+`hcd.h` is the interface, `xhci.c` is bring-up as far as the controller's own
+reset, and `xhci_hosttest.c` drives it against a model. The driver is five
+steps a caller runs in order, each returning 0 or -1 with `xhci_error` set:
+discover, read the capabilities, take it from the firmware, halt and reset it,
+and give it its scratchpad pages.
+
+Two things the plan did not settle, decided here:
+
+* The capability registers are read before the firmware handoff, not after.
+  The handoff needs the extended capability list, whose head is a field of
+  `HCCPARAMS1`, so the order is forced. The header says so.
+* The mapped aperture is a fixed 64 KiB, and `xhci_read_caps` refuses a
+  controller whose ports, doorbells or runtime registers fall outside it. The
+  alternative was to size the BAR by writing all ones to it and reading the
+  mask back, which is the usual method and which disturbs a controller the
+  firmware may still be driving. Refusing what does not fit costs nothing and
+  touches nothing.
+
+`XHCI_MAX_SCRATCHPADS` is 32, which is 128 KiB of the kernel's own image. No
+controller met so far asks for any. If the notebook asks for more, phase 6
+raises the number rather than guesses now; the driver names both numbers when
+it refuses.
+
+The plan asked for a handoff row that answers slowly as well as ones that
+answer at once and never. The first version of the model had only the two, so
+a driver that asked for ownership and read the answer once would have passed;
+the model now takes a number of waits before the firmware gives up its claim,
+and the mutation below proves the row.
+
+Eight mutations, each applied from a script that restores the source under a
+trap and rebuilds before the verdict:
+
+* skip the ownership wait: caught by `firmware that never answers is refused`
+* ask for ownership once and read once: caught by `firmware that answers slowly
+  is waited for`
+* ignore the ready bit: caught by `a controller that never becomes ready is refused`
+* drop the reset pause: caught by `the reset pause is taken before it is read again`
+* assume 32-byte contexts: caught by `64-byte contexts are noticed`
+* skip the scratchpad array: caught by `with three pages`
+* read one half of the scratchpad count: caught by `and is both halves`
+* accept any scratchpad request: caught, by AddressSanitizer rather than by a
+  row. The mutation writes past the compiled array, which is what the refusal
+  exists to prevent, so the sanitizer reaching it first is the check working
+  through a different door. The row `and refused` fails in the same run.

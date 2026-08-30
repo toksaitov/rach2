@@ -12,6 +12,11 @@
  * the interface it reaches registers by. Each row drives one step of bring-up
  * and checks what that step returned and what it left in the registers, not
  * what it printed.
+ *
+ * The kernel's `uintptr_t` is 32 bits and this host's pointers are 64, so an
+ * address the driver stores for the controller is truncated here. The rows
+ * check such an address for being non-zero and page-aligned, and truncation
+ * changes neither.
  */
 
 extern int printf(const char *fmt, ...);
@@ -45,10 +50,12 @@ static uint32_t reg[REGS];
 #define O_USBSTS   0x04
 #define O_PAGESIZE 0x08
 
-#define USBCMD_RS    0x1u
-#define USBCMD_HCRST 0x2u
-#define USBSTS_HCH   0x1u
-#define USBSTS_CNR   0x800u
+/* The bits this model answers on, named apart from the driver's own names for
+   them: the driver is included at the end of this file and defines its own. */
+#define M_USBCMD_RS    0x1u
+#define M_USBCMD_HCRST 0x2u
+#define M_USBSTS_HCH   0x1u
+#define M_USBSTS_CNR   0x800u
 
 #define LEGSUP_BIOS_OWNED 0x00010000u
 #define LEGSUP_OS_OWNED   0x01000000u
@@ -57,6 +64,10 @@ static uint32_t reg[REGS];
 
 /* What this run's controller does, set before each row. */
 static int halts;
+/* How many waits the firmware takes before it gives the controller up, so a
+   row can have a driver that asks once and reads once fail where a driver
+   that waits passes. */
+static int handoff_delay;
 static int reset_completes;
 static int cnr_clears;
 static int handoff_answers;
@@ -89,26 +100,26 @@ static void model_w32(uint32_t off, uint32_t v)
     }
 
     if (off == OP(O_USBCMD)) {
-        if (v & USBCMD_HCRST) {
+        if (v & M_USBCMD_HCRST) {
             /* The reset bit clears itself when the controller has finished,
                and the controller is not ready until it says so. A model that
                cleared both at once would pass a driver that never looked at
                the ready bit. */
             awaiting_pause = 1;
             if (reset_completes) {
-                v &= ~USBCMD_HCRST;
+                v &= ~M_USBCMD_HCRST;
             }
             if (cnr_clears) {
-                reg[OP(O_USBSTS)] &= ~USBSTS_CNR;
+                reg[OP(O_USBSTS)] &= ~M_USBSTS_CNR;
             } else {
-                reg[OP(O_USBSTS)] |= USBSTS_CNR;
+                reg[OP(O_USBSTS)] |= M_USBSTS_CNR;
             }
         }
-        if (!(v & USBCMD_RS) && halts) {
-            reg[OP(O_USBSTS)] |= USBSTS_HCH;
+        if (!(v & M_USBCMD_RS) && halts) {
+            reg[OP(O_USBSTS)] |= M_USBSTS_HCH;
         }
-        if (v & USBCMD_RS) {
-            reg[OP(O_USBSTS)] &= ~USBSTS_HCH;
+        if (v & M_USBCMD_RS) {
+            reg[OP(O_USBSTS)] &= ~M_USBSTS_HCH;
         }
         reg[off] = v;
         return;
@@ -117,7 +128,7 @@ static void model_w32(uint32_t off, uint32_t v)
     if (off == XECP) {
         /* The firmware answers a request for ownership by giving up its own
            claim. One that never answers leaves its bit set. */
-        if ((v & LEGSUP_OS_OWNED) && handoff_answers) {
+        if ((v & LEGSUP_OS_OWNED) && handoff_answers && handoff_delay == 0) {
             v &= ~LEGSUP_BIOS_OWNED;
         } else if (v & LEGSUP_OS_OWNED) {
             v |= (reg[off] & LEGSUP_BIOS_OWNED);
@@ -143,6 +154,12 @@ static void model_udelay(uint32_t us)
 {
     if (awaiting_pause && us >= 1000u) {
         awaiting_pause = 0;
+    }
+    if (handoff_delay > 0) {
+        handoff_delay--;
+        if (handoff_delay == 0 && handoff_answers) {
+            reg[XECP] &= ~LEGSUP_BIOS_OWNED;
+        }
     }
 }
 
@@ -301,11 +318,12 @@ static void model_reset(void)
     reg[R_DBOFF] = DBOFF;
     reg[R_RTSOFF] = RTSOFF;
     reg[OP(O_PAGESIZE)] = 0x1u;
-    reg[OP(O_USBSTS)] = USBSTS_HCH;
+    reg[OP(O_USBSTS)] = M_USBSTS_HCH;
     reg[XECP] = 1u; /* the legacy capability, ending the list */
     reg[LEGCTL] = 0u;
 
     halts = 1;
+    handoff_delay = 0;
     reset_completes = 1;
     cnr_clears = 1;
     handoff_answers = 1;
@@ -406,6 +424,13 @@ int main(void)
 
     model_reset();
     reg[XECP] = 1u | LEGSUP_BIOS_OWNED;
+    handoff_delay = 200;
+    CHECK("the capability list is read", xhci_read_caps() == 0);
+    CHECK("firmware that answers slowly is waited for", xhci_own() == 0);
+    CHECK("and hands the controller over in the end", (reg[XECP] & LEGSUP_BIOS_OWNED) == 0);
+
+    model_reset();
+    reg[XECP] = 1u | LEGSUP_BIOS_OWNED;
     handoff_answers = 0;
     CHECK("the capability list is read", xhci_read_caps() == 0);
     CHECK("firmware that never answers is refused", xhci_own() != 0);
@@ -428,12 +453,12 @@ int main(void)
     CHECK("the capability registers are read first", xhci_read_caps() == 0);
     CHECK("a controller that halts and resets is taken", xhci_halt_reset() == 0);
     CHECK("the reset pause is taken before it is read again", read_too_early == 0);
-    CHECK("and it is left halted", (reg[OP(O_USBSTS)] & USBSTS_HCH) != 0);
+    CHECK("and it is left halted", (reg[OP(O_USBSTS)] & M_USBSTS_HCH) != 0);
 
     model_reset();
     halts = 0;
     CHECK("the capability registers are read", xhci_read_caps() == 0);
-    reg[OP(O_USBSTS)] &= ~USBSTS_HCH;
+    reg[OP(O_USBSTS)] &= ~M_USBSTS_HCH;
     CHECK("a controller that never halts is refused", xhci_halt_reset() != 0);
 
     model_reset();
