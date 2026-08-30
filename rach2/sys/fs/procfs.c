@@ -8,6 +8,7 @@
  * integer formatting (the kernel has no snprintf and avoids 64-bit division).
  */
 
+#include "../klog.h"
 #include "procfs.h"
 #include "synthfs.h"
 #include "fd.h"
@@ -1160,7 +1161,7 @@ int procfs_open(const struct vpath *vp, int flags)
         return len;
     }
     if (text.over) {
-        serial_printf("procfs: %s: text exceeds its %d-byte bound, refusing\n",
+        klog(KLOG_ERR, "procfs", "%s: text exceeds its %d-byte bound, refusing",
                       procfs_kind_name(vp), text.cap);
         return -EOVERFLOW;
     }

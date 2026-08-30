@@ -63,6 +63,49 @@ is for; the boot's is records. Every other file is a subsystem talking about
 itself, and almost all of it is `serial_printf`, which reaches the serial port
 and nothing else: no screen, no netconsole, no ring.
 
+## Group 2: storage (read 2026-08-30)
+
+`sys/block/ata.c`, `ahci.c`, `block.c`, `diskinfo.c`, `sys/fs/krffs.c`,
+`devfs.c`, `procfs.c`. Read in full; 43 calls. No test in the tree matches any
+of these texts, so none of them is a contract.
+
+The rule the reading settles, and which the rest of the migration follows: a
+call inside a function the debug shell invokes by name is console output, and
+everything else is a record. The shell calls `ahci_dump`, `ahci_selftest` and
+`krffs_list_files`; those three print for a person who typed a command, and
+they keep their exact text.
+
+| File | Line | What | Level |
+|------|------|------|-------|
+| ata.c | 78 | a command the disk policy refused | WARN |
+| ata.c | 375 | the disk that answered, at boot | INFO |
+| ahci.c | 323 | what is at 0:31.2 when nothing matched | DEBUG |
+| ahci.c | 333 | the controller's identity and window | DEBUG |
+| ahci.c | 477 | the firmware did not answer the handoff | WARN |
+| ahci.c | 514 | ports enabled in PCS | DEBUG |
+| ahci.c | 644 | a port whose device never became ready | WARN |
+| ahci.c | 650 | a port whose signature is not a disk | DEBUG |
+| ahci.c | 750 | a command the disk policy refused | WARN |
+| ahci.c | 924 | the reason bring-up failed | ERR |
+| ahci.c | 942 | the disk that answered, at boot | INFO |
+| ahci.c | 953-987 | `ahci_dump`, a shell command | console |
+| ahci.c | 998-1009 | `ahci_selftest`, a shell command | console |
+| block.c | 100-104 | skipped and started, for `tests/run subset` | INFO |
+| diskinfo.c | 268 | the disk `rach2.diskdiag` found | INFO |
+| devfs.c | 954 | no whole-disk window to publish | DEBUG |
+| devfs.c | 990 | boot partition too large | WARN |
+| devfs.c | 1009 | entry 0 has the root | WARN |
+| devfs.c | 1039 | no room for the loader gap | WARN |
+| procfs.c | 1163 | a text past its bound, refused | ERR |
+| krffs.c | 733-749 | `krffs_list_files`, a shell command | console |
+| krffs.c | 1208-1404 | a file an operation could not find | DEBUG |
+| krffs.c | 1664-1681 | an image that cannot be mounted | ERR |
+
 ## Status
 
-Not started. Phase 5 opens this file and reads each of these in full.
+Group 2 is read and converted: 28 calls became records and 15 became
+`console_printf`, which is every call in those seven files. `tests/run disk`,
+`disk-ahci`, `persist`, `persist-ahci`, `stress`, `stress-ahci`, `diskdiag` and
+`default` pass on it.
+
+Groups 1 and 3 to 6 are still to read.

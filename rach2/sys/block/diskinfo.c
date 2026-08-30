@@ -7,6 +7,7 @@
  * machine, so the shape matters more than the prose.
  */
 
+#include "../klog.h"
 #include "diskinfo.h"
 #include "block.h"
 #include "diskcmd.h"
@@ -265,7 +266,8 @@ int diskinfo_probe(int mounted)
     }
 
     devfs_disk_publish(block0, info.window_sectors);
-    serial_printf("disk: %s: %d sectors, model %s\n", info.driver, (uint32_t)info.sectors,
+    klog(KLOG_INFO, "disk", "%s: %d sectors, model %s", info.driver,
+         (uint32_t)info.sectors,
                   info.model);
     return 0;
 }

@@ -1,3 +1,4 @@
+#include "../klog.h"
 #include "block.h"
 #include "ata.h"
 #include "diskcmd.h"
@@ -75,7 +76,7 @@ static block_device_t ata_device;
 static int ata_command(uint8_t command)
 {
     if (!diskcmd_allowed(command)) {
-        serial_printf("ata: refused command 0x%X: %s\n", (unsigned)command,
+        klog(KLOG_WARN, "ata", "refused: command 0x%X: %s", (unsigned)command,
                       diskcmd_policy_banner);
         return 0;
     }
@@ -372,7 +373,7 @@ int ata_init(void)
     ata_device.drvdata = NULL;
     block0 = &ata_device;
 
-    serial_printf("ata: primary master: %d sectors, %d MiB\n",
+    klog(KLOG_INFO, "ata", "primary master: %d sectors, %d MiB",
                   (uint32_t) sector_count, (uint32_t) (sector_count / 2048));
     return 0;
 }

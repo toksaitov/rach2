@@ -353,3 +353,23 @@ record too. That is the argument for phase 5 in one line of output.
 missing from `/dev/bootlog`, which `tests/run metal` fetches over SSH. The
 serial destination feeds the boot log itself until phase 6 gives `/dev/bootlog`
 the ring.
+
+## Group 2 of the migration: storage, 2026-08-30
+
+Seven files, 43 calls, all read in place before any was converted. The reading
+settled the rule the rest of the migration follows: a call inside a function
+the debug shell invokes by name is console output; everything else is a
+record. The shell calls `ahci_dump`, `ahci_selftest` and `krffs_list_files`,
+and those three keep their exact text through `console_printf`. The other 28
+became records: DEBUG for bring-up detail nobody reads on a screen, WARN for a
+refused command or a port that did not come up, ERR for an image that cannot
+be mounted or a controller that cannot be used, INFO for the one line per
+device that says what answered.
+
+No test in the tree matches any of these texts, which was checked before the
+conversion rather than discovered by a failing suite.
+
+One of them was `%p`, which the kernel formatter has no conversion for: it
+printed the letter `p` and left the address unread, so every argument after it
+was read from the wrong stack slot. It is `%x` on the address now. Nothing
+noticed because the line only appears when a mount is refused.

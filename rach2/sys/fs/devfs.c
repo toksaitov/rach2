@@ -10,6 +10,7 @@
  * synthesize from this table.
  */
 
+#include "../klog.h"
 #include "devfs.h"
 #include "../bootlog.h"
 #include "fd.h"
@@ -951,7 +952,7 @@ void devfs_disk_withdraw(void)
 void devfs_disk_publish(struct block_device *whole, uint64_t window_sectors)
 {
     if (!whole || window_sectors == 0) {
-        serial_printf("devfs: no whole-disk window to publish\n");
+        klog(KLOG_DEBUG, "devfs", "no whole-disk window to publish");
         return;
     }
     disk0.whole = whole;
@@ -987,7 +988,8 @@ void devfs_bootpart_publish(struct block_device *backing, uint32_t start_lba, ui
      * name every byte of this particular window; the wider windows are what
      * _llseek exists for. Anything larger than the bound is a misbuilt disk. */
     if (sector_count == 0 || sector_count >= (0x80000000u / BLOCK_SECTOR_SIZE)) {
-        serial_printf("devfs: boot partition too large; /dev/bootpart absent\n");
+        klog(KLOG_WARN, "devfs",
+             "boot partition too large; /dev/bootpart absent");
         return;
     }
     block_partition_init(&bootpart.part, backing, start_lba, sector_count);
@@ -1006,7 +1008,8 @@ void devfs_bootpart_publish(struct block_device *backing, uint32_t start_lba, ui
 void devfs_bootpart_withdraw(void)
 {
     if (bootpart.present) {
-        serial_printf("devfs: entry 0 has the root; /dev/bootpart withdrawn\n");
+        klog(KLOG_WARN, "devfs",
+             "entry 0 has the root; /dev/bootpart withdrawn");
         bootpart.present = 0;
     }
 }
@@ -1036,7 +1039,8 @@ void devfs_grubcore_withdraw(void)
 void devfs_grubcore_publish(struct block_device *backing)
 {
     if (!backing || backing->sector_count < (uint64_t)MBR_GAP_END_LBA) {
-        serial_printf("devfs: no room for the boot loader gap; /dev/grubcore absent\n");
+        klog(KLOG_WARN, "devfs",
+             "no room for the boot loader gap; /dev/grubcore absent");
         return;
     }
     block_partition_init(&grubcore.part, backing, MBR_GAP_FIRST_LBA,

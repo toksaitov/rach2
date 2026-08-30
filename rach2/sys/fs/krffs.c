@@ -9,6 +9,7 @@
  * scheme described below).
  */
 
+#include "../klog.h"
 #include "krffs.h"
 
 #include "../rtc.h"
@@ -730,23 +731,23 @@ void krffs_list_files(void)
     uint32_t count = 0;
 
     if (!krffs_fs) {
-        serial_printf("KRFFS: No file system mounted\n");
+        console_printf("KRFFS: No file system mounted\n");
         return;
     }
 
-    serial_printf("KRFFS files:\n");
+    console_printf("KRFFS files:\n");
 
     node = krffs_fs->node;
     do {
         if (node->type == KRFFS_RESERVED_NODE && node->name[0] != '\0') {
-            serial_printf("  [%d] %s (%d bytes)\n",
+            console_printf("  [%d] %s (%d bytes)\n",
                          count, node->name, (uint32_t)node->data_size);
             count++;
         }
     } while ((node = krffs_get_next_node(krffs_fs, node)) != krffs_fs->node);
 
     if (count == 0) {
-        serial_printf("  (no files)\n");
+        console_printf("  (no files)\n");
     }
 }
 
@@ -1205,7 +1206,7 @@ int krffs_write(const char *path, const char *buffer, uint32_t size, uint32_t of
     }
     node = krffs_walk(krffs_fs, path);
     if (!node || node == krffs_fs->node || KRFFS_IS_DIR(node->mode)) {
-        serial_printf("KRFFS: File '%s' not found for write\n", path);
+        klog(KLOG_DEBUG, "krffs", "write: no such file: %s", path);
         return -1;
     }
     return krffs_write_node(&node, buffer, size, offset);
@@ -1235,7 +1236,7 @@ int krffs_truncate(const char *path, uint32_t new_size)
 
     node = krffs_walk(krffs_fs, path);
     if (!node || node == krffs_fs->node || KRFFS_IS_DIR(node->mode)) {
-        serial_printf("KRFFS: File '%s' not found for truncate\n", path);
+        klog(KLOG_DEBUG, "krffs", "truncate: no such file: %s", path);
         return -1;
     }
 
@@ -1243,7 +1244,7 @@ int krffs_truncate(const char *path, uint32_t new_size)
 
     node = krffs_resize_reserved_node(krffs_fs, node, new_size);
     if (!node) {
-        serial_printf("KRFFS: No space to resize file '%s'\n", path);
+        klog(KLOG_WARN, "krffs", "truncate: no space to resize: %s", path);
         return -1;
     }
 
@@ -1274,7 +1275,7 @@ int krffs_unlink(const char *path)
 
     node = krffs_walk(krffs_fs, path);
     if (!node || node == krffs_fs->node || KRFFS_IS_DIR(node->mode)) {
-        serial_printf("KRFFS: File '%s' not found for unlink\n", path);
+        klog(KLOG_DEBUG, "krffs", "unlink: no such file: %s", path);
         return -1;
     }
 
@@ -1401,7 +1402,7 @@ int krffs_rename(const char *old_path, const char *new_path)
 
     node = krffs_walk(krffs_fs, old_path);
     if (!node || node == krffs_fs->node) {
-        serial_printf("KRFFS: File '%s' not found for rename\n", old_path);
+        klog(KLOG_DEBUG, "krffs", "rename: no such file: %s", old_path);
         return -1;
     }
     /* A directory's id is mix(parent,name) and its children reference it, so a
@@ -1661,24 +1662,25 @@ int init_krffs(void *ramdisk_base, uint32_t ramdisk_size)
     krffs_node_t *root;
 
     if (!ramdisk_base || ramdisk_size < sizeof(krffs_node_t)) {
-        serial_printf("KRFFS: Invalid ramdisk (base=%p size=%d)\n",
-                     ramdisk_base, ramdisk_size);
+        klog(KLOG_ERR, "krffs", "mount: refused: no image at %x, %d bytes",
+             (unsigned)(uintptr_t)ramdisk_base, ramdisk_size);
         return -1;
     }
 
     root = (krffs_node_t *)ramdisk_base;
 
     if (root->magic != KRFFS_FILE_SYSTEM_MAGIC) {
-        serial_printf("KRFFS: Invalid magic 0x%X (expected 0x%X)\n",
-                     root->magic, KRFFS_FILE_SYSTEM_MAGIC);
+        klog(KLOG_ERR, "krffs", "mount: refused: magic 0x%X, expected 0x%X",
+             root->magic, KRFFS_FILE_SYSTEM_MAGIC);
         return -1;
     }
     if (root->type != KRFFS_ROOT_NODE) {
-        serial_printf("KRFFS: First node is not root (type=%d)\n", root->type);
+        klog(KLOG_ERR, "krffs",
+             "mount: refused: first node is type %d, not the root", root->type);
         return -1;
     }
     if (!krffs_chain_is_valid(root, ramdisk_size)) {
-        serial_printf("KRFFS: node chain is malformed; refusing to mount\n");
+        klog(KLOG_ERR, "krffs", "mount: refused: the node chain is malformed");
         return -1;
     }
 

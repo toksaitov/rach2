@@ -1,3 +1,4 @@
+#include "../klog.h"
 #include "ahci.h"
 #include "diskcmd.h"
 #include "diskinfo.h"
@@ -320,7 +321,8 @@ static int ahci_discover(void)
          * never visited it: the controller lives at function 2 of a
          * multi-function device, and reaching it depends on function 0
          * advertising its siblings. One direct read settles that in a line. */
-        serial_printf("ahci: no match; 0:31.2 reads %X:%X class %X:%X prog-if %X\n",
+        klog(KLOG_DEBUG, "ahci",
+             "no match: 0:31.2 reads %X:%X class %X:%X prog-if %X",
                       (unsigned)pci_read_config16(0, 31, 2, PCI_VENDOR_ID),
                       (unsigned)pci_read_config16(0, 31, 2, PCI_DEVICE_ID),
                       (unsigned)pci_read_config8(0, 31, 2, PCI_CLASS),
@@ -330,9 +332,10 @@ static int ahci_discover(void)
         return -1;
     }
 
-    serial_printf("ahci: %X:%X at %d:%d.%d, prog-if %X, BAR5 %X\n", (unsigned)dev.vendor_id,
-                  (unsigned)dev.device_id, (int)dev.bus, (int)dev.device, (int)dev.function,
-                  (unsigned)dev.prog_if, (unsigned)dev.bar[5]);
+    klog(KLOG_DEBUG, "ahci", "found: %X:%X at %d:%d.%d, prog-if %X, BAR5 %X",
+         (unsigned)dev.vendor_id, (unsigned)dev.device_id, (int)dev.bus,
+         (int)dev.device, (int)dev.function, (unsigned)dev.prog_if,
+         (unsigned)dev.bar[5]);
 
     /* ABAR is BAR5. Reject any BAR4 64-bit spill or invalid BAR5 type. */
     if (pci_bar_is_64bit(dev.bar[4]) || pci_bar_is_64bit(dev.bar[5]) ||
@@ -474,7 +477,8 @@ static int ahci_hba_own(void)
     if (ahci_read32(AHCI_CAP2) & AHCI_CAP2_BOH) {
         ahci_write32(AHCI_BOHC, ahci_read32(AHCI_BOHC) | AHCI_BOHC_OOS);
         if (ahci_wait_clear(AHCI_BOHC, AHCI_BOHC_BOS) != 0) {
-            serial_printf("ahci: the firmware did not answer the handoff; continuing\n");
+            klog(KLOG_WARN, "ahci",
+                 "handoff: the firmware did not answer; continuing");
         }
     }
 
@@ -511,8 +515,8 @@ static int ahci_hba_own(void)
         if ((pcs & ports) != ports) {
             pci_write_config16(ahci_pci.bus, ahci_pci.device, ahci_pci.function, AHCI_INTEL_PCS,
                                (uint16_t)(pcs | ports));
-            serial_printf("ahci: enabled ports %X in PCS (was %X)\n", (unsigned)ports,
-                          (unsigned)pcs);
+            klog(KLOG_DEBUG, "ahci", "pcs: enabled ports %X (was %X)",
+                 (unsigned)ports, (unsigned)pcs);
         }
     }
     return 0;
@@ -641,13 +645,15 @@ static int ahci_select_port(void)
          * reset and posted its first FIS; read before that it is all ones,
          * which is not a signature but a port that has not answered yet. */
         if (ahci_port_ready(p) != 0) {
-            serial_printf("ahci: port %d: the device never became ready; skipped\n", p);
+            klog(KLOG_WARN, "ahci",
+                 "port %d: the device never became ready; skipped", p);
             (void)ahci_port_stop(p);
             continue;
         }
         sig = ahci_read32(ahci_port_off(p, AHCI_PxSIG));
         if (sig != AHCI_SIG_ATA) {
-            serial_printf("ahci: port %d: signature %X is not a disk; skipped\n", p, sig);
+            klog(KLOG_DEBUG, "ahci",
+                 "port %d: signature %X is not a disk; skipped", p, sig);
             (void)ahci_port_stop(p);
             continue;
         }
@@ -747,7 +753,8 @@ static int ahci_run_command(uint8_t command, uint64_t lba, uint32_t count, volat
     /* The one place a command leaves this driver. A kernel built read-only
      * refuses here, whatever the caller believed it was doing. */
     if (!diskcmd_allowed(command)) {
-        serial_printf("ahci: refused command 0x%X: %s\n", (unsigned)command, diskcmd_policy_banner);
+        klog(KLOG_WARN, "ahci", "refused: command 0x%X: %s", (unsigned)command,
+             diskcmd_policy_banner);
         return -1;
     }
 
@@ -921,7 +928,7 @@ int ahci_init(void)
     ahci_detect_cache();
     if (ahci_discover() != 0 || ahci_hba_own() != 0 || ahci_quiesce_ports() != 0 ||
         ahci_select_port() != 0 || ahci_port_start() != 0 || ahci_identify() != 0) {
-        serial_printf("ahci: %s\n", ahci_err);
+        klog(KLOG_ERR, "ahci", "unusable: %s", ahci_err);
         /* The registers behind the refusal, into the log the machine hands
          * out afterwards (/dev/bootlog): one failed boot then leaves enough
          * to decide between every cause the investigation named, instead of
@@ -939,7 +946,8 @@ int ahci_init(void)
     ahci_device.drvdata = 0;
     block0 = &ahci_device;
 
-    serial_printf("ahci: port %d: %d sectors, %d MiB\n", ahci_port, (uint32_t)ahci_sector_count,
+    klog(KLOG_INFO, "ahci", "port %d: %d sectors, %d MiB", ahci_port,
+         (uint32_t)ahci_sector_count,
                   (uint32_t)(ahci_sector_count / 2048));
     return 0;
 }
@@ -950,7 +958,7 @@ void ahci_dump(void)
     int port;
 
     if (!ahci_base) {
-        serial_printf("ahci: not initialized\n");
+        console_printf("ahci: not initialized\n");
         return;
     }
 
@@ -958,16 +966,16 @@ void ahci_dump(void)
     ghc = ahci_read32(AHCI_GHC);
     pi = ahci_read32(AHCI_PI);
     vs = ahci_read32(AHCI_VS);
-    serial_printf("ahci: CAP=%X GHC=%X PI=%X VS=%X ports=%d active=%d\n", cap, ghc, pi, vs,
+    console_printf("ahci: CAP=%X GHC=%X PI=%X VS=%X ports=%d active=%d\n", cap, ghc, pi, vs,
                   (int)((cap & AHCI_CAP_NP_MASK) + 1), ahci_port);
     /* CAP2 says whether a handoff exists, BOHC how it went, and PCS whether
      * the Intel port PHYs are enabled at all; each is one of the named causes
      * of a machine that finds no disk, so the dump that decides between them
      * has to carry all three. */
-    serial_printf("ahci: CAP2=%X BOHC=%X PCS=%X\n", ahci_read32(AHCI_CAP2), ahci_read32(AHCI_BOHC),
+    console_printf("ahci: CAP2=%X BOHC=%X PCS=%X\n", ahci_read32(AHCI_CAP2), ahci_read32(AHCI_BOHC),
                   (unsigned)pci_read_config16(ahci_pci.bus, ahci_pci.device, ahci_pci.function,
                                               AHCI_INTEL_PCS));
-    serial_printf("ahci: dma cmdlist=%X fis=%X table=%X\n", (uint32_t)(uintptr_t)ahci_cmdlist,
+    console_printf("ahci: dma cmdlist=%X fis=%X table=%X\n", (uint32_t)(uintptr_t)ahci_cmdlist,
                   (uint32_t)(uintptr_t)ahci_recv_fis, (uint32_t)(uintptr_t)ahci_cmdtable);
 
     for (port = 0; port < 32; ++port) {
@@ -981,10 +989,10 @@ void ahci_dump(void)
         tfd = ahci_read32(ahci_port_off(port, AHCI_PxTFD));
         cmd = ahci_read32(ahci_port_off(port, AHCI_PxCMD));
         clb = ahci_read32(ahci_port_off(port, AHCI_PxCLB));
-        serial_printf("ahci:  port %d: SSTS=%X (DET=%d) "
+        console_printf("ahci:  port %d: SSTS=%X (DET=%d) "
                       "SIG=%X TFD=%X CMD=%X CLB=%X\n",
                       port, ssts, (int)(ssts & AHCI_DET_MASK), sig, tfd, cmd, clb);
-        serial_printf("ahci:  port %d: SCTL=%X SERR=%X\n", port,
+        console_printf("ahci:  port %d: SCTL=%X SERR=%X\n", port,
                       ahci_read32(ahci_port_off(port, AHCI_PxSCTL)),
                       ahci_read32(ahci_port_off(port, AHCI_PxSERR)));
     }
@@ -995,17 +1003,17 @@ void ahci_selftest(void)
     static uint8_t buf[BLOCK_SECTOR_SIZE] __attribute__((aligned(2)));
 
     if (!block0) {
-        serial_printf("ahci: selftest: not initialized\n");
+        console_printf("ahci: selftest: not initialized\n");
         return;
     }
     if (block0->read(block0, 0, 1, buf) != 0) {
-        serial_printf("ahci: selftest: lba 0 read failed\n");
+        console_printf("ahci: selftest: lba 0 read failed\n");
         return;
     }
-    serial_printf("ahci: lba 0 signature %X %X\n", (uint32_t)buf[510], (uint32_t)buf[511]);
+    console_printf("ahci: lba 0 signature %X %X\n", (uint32_t)buf[510], (uint32_t)buf[511]);
     if (buf[510] == 0x55 && buf[511] == 0xAA) {
-        serial_printf("ahci: selftest: MBR signature OK\n");
+        console_printf("ahci: selftest: MBR signature OK\n");
     } else {
-        serial_printf("ahci: selftest: MBR signature mismatch\n");
+        console_printf("ahci: selftest: MBR signature mismatch\n");
     }
 }
