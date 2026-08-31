@@ -143,17 +143,28 @@ static int steps_need_monitor(int argc, char **argv)
  * the monitor was listening is taken by nobody, and the step that depended on
  * it waits out its whole limit for something that never happened.
  */
+/* What the monitor said since the last command, prompt and echo included,
+ * so a command it refused can be reported with its reason. */
+static char monitor_reply[1024];
+static size_t monitor_reply_len;
+
 static int monitor_wait_prompt(int seconds)
 {
     time_t deadline = time(NULL) + seconds;
     char buf[512];
 
+    monitor_reply_len = 0;
+    monitor_reply[0] = '\0';
     while (time(NULL) <= deadline) {
         ssize_t n = recv(monitor_fd, buf, sizeof(buf) - 1, MSG_DONTWAIT);
 
         if (n > 0) {
             buf[n] = '\0';
-            if (strstr(buf, "(qemu)") != NULL) {
+            if (monitor_reply_len + (size_t)n < sizeof(monitor_reply)) {
+                memcpy(monitor_reply + monitor_reply_len, buf, (size_t)n + 1);
+                monitor_reply_len += (size_t)n;
+            }
+            if (strstr(monitor_reply, "(qemu)") != NULL) {
                 return 0;
             }
             continue;
@@ -199,7 +210,7 @@ static int monitor_open(void)
     }
     /* Its greeting ends in a prompt, and until that arrives it is not
      * listening. */
-    if (monitor_wait_prompt(10) != 0) {
+    if (monitor_wait_prompt(60) != 0) {
         printf("HARNESS: the monitor never gave a prompt\n");
         close(monitor_fd);
         monitor_fd = -1;
@@ -225,8 +236,22 @@ static int monitor_send(const char *command)
     /* The monitor acts on a command and then prompts again. Waiting for that
      * prompt is what makes the step ordered with respect to the machine: the
      * device is plugged in before the next step looks for it. */
-    if (monitor_wait_prompt(10) != 0) {
+    /* Sixty seconds, because a monitor starved by a loaded host answers
+     * late and a command that was acted on late must not be counted as one
+     * that was never acted on. */
+    if (monitor_wait_prompt(60) != 0) {
         printf("HARNESS: the monitor did not answer '%s'\n", command);
+        return -1;
+    }
+    /* A refused command answers with an error line before the prompt; the
+     * step that sent it fails with that line, not with a later expect that
+     * waits for a device that was never added or removed. */
+    if (strstr(monitor_reply, "Error") != NULL ||
+        strstr(monitor_reply, "error:") != NULL) {
+        char *nl = strchr(monitor_reply, '\n');
+
+        printf("HARNESS: the monitor refused '%s': %s\n", command,
+               nl != NULL ? nl + 1 : monitor_reply);
         return -1;
     }
     return 0;
