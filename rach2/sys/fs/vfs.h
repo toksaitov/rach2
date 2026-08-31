@@ -291,6 +291,15 @@ int vfs_do_mount(const char *source, const char *target, const char *type,
 int vfs_do_umount(const char *target);
 
 /**
+ * A description opened on `mnt`: the mount's reference count goes up; the
+ * node's hold is the one the resolution already took, moved rather than
+ * retaken. `vfs_desc_close` is the last close: release the handle, put the
+ * node, drop the reference.
+ */
+void vfs_desc_open(struct vfs_mount *mnt);
+void vfs_desc_close(struct vfs_mount *mnt, void *node, void *handle);
+
+/**
  * Repoint every reference to `from` on `mnt` to `to`: descriptions, working
  * directories, directory descriptors and covering mounts. KRFFS calls it
  * when a relocation moves a node.

@@ -1,4 +1,6 @@
 #include "fd.h"
+
+#include "vfs.h"
 #include "../lib/kstring.h"
 
 /*
@@ -29,6 +31,9 @@ static struct open_file *ofd_alloc(void)
             ofd_pool[i].offset       = 0;
             ofd_pool[i].raw_offset   = 0;
             ofd_pool[i].status_flags = 0;
+            ofd_pool[i].vmnt         = NULL;
+            ofd_pool[i].vnode        = NULL;
+            ofd_pool[i].fhandle      = NULL;
             return &ofd_pool[i];
         }
     }
@@ -52,6 +57,14 @@ void fd_ofd_unref(struct open_file *ofd)
 {
     if (ofd && ofd->refcount > 0) {
         ofd->refcount--;
+        if (ofd->refcount == 0 && ofd->vmnt) {
+            /* The description's last close: the file system's release, the
+             * node's put, and the mount's reference, all exactly once. */
+            vfs_desc_close(ofd->vmnt, ofd->vnode, ofd->fhandle);
+            ofd->vmnt = NULL;
+            ofd->vnode = NULL;
+            ofd->fhandle = NULL;
+        }
     }
 }
 

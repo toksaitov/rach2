@@ -71,6 +71,7 @@ typedef enum {
 struct krffs_node;
 struct socket;
 struct file_ops;
+struct vfs_mount;
 
 /*
  * Open-file description (OFD): the shared, refcounted state behind one or more
@@ -97,6 +98,14 @@ struct open_file {
     uint32_t offset;             /* Shared read/write offset */
     uint64_t raw_offset;         /* Shared offset for the raw disk windows */
     uint32_t status_flags;       /* Shared O_APPEND/O_NONBLOCK (OFD_* above) */
+    /* A description on a mounted file system holds its mount, its node, and
+     * the file system's per-open handle. The last unref releases all three
+     * (fd.c calls vfs_desc_close), which is what makes the file system's
+     * open and release counts match one to one with open(2) and the last
+     * close. NULL vmnt marks every other backing kind. */
+    struct vfs_mount *vmnt;
+    void *vnode;
+    void *fhandle;
 };
 
 /*

@@ -435,6 +435,25 @@ void vfs_ref_release(struct vfs_ref *r)
     }
 }
 
+void vfs_desc_open(struct vfs_mount *mnt)
+{
+    mnt->refs++;
+}
+
+void vfs_desc_close(struct vfs_mount *mnt, void *node, void *handle)
+{
+    struct vfs_ref r;
+
+    vfs_release(mnt, handle);
+    r.mnt = mnt;
+    r.node = node;
+    vfs_ref_put(&r);
+    if (mnt->refs == 0) {
+        k_panic("vfs: a description closed on a mount that had none");
+    }
+    mnt->refs--;
+}
+
 /* ---- repointing, for a KRFFS relocation ---- */
 
 void vfs_repoint(struct vfs_mount *mnt, void *from, void *to)
@@ -694,6 +713,44 @@ static int kfs_sync(struct vfs_mount *mnt)
     return pc_sync() == 0 ? 0 : -EIO;
 }
 
+/* Creation goes through the parent's canonical path, which is how the
+ * namespace half of KRFFS speaks today; the node comes back resolved. */
+static int kfs_create(struct vfs_mount *mnt, void *dir, const char *name,
+                      uint32_t mode, void **node)
+{
+    char path[256];
+    krffs_node_t *d = dir ? dir : krffs_fs->node;
+    krffs_node_t *n;
+    uint32_t dlen, nlen;
+
+    (void)mnt;
+    (void)mode; /* the caller stamps mode and owner under its own rules */
+    if (krffs_node_path(d, path, sizeof(path)) != 0) {
+        return -ENAMETOOLONG;
+    }
+    dlen = k_strlen(path);
+    nlen = k_strlen(name);
+    if (dlen == 0 || path[dlen - 1] != '/') {
+        if (dlen + 1 >= sizeof(path)) {
+            return -ENAMETOOLONG;
+        }
+        path[dlen++] = '/';
+    }
+    if (dlen + nlen + 1 > sizeof(path)) {
+        return -ENAMETOOLONG;
+    }
+    k_memcpy(path + dlen, name, nlen + 1);
+    if (krffs_create(path + (path[0] == '/')) != 0) {
+        return -ENOSPC;
+    }
+    n = krffs_child(d, name);
+    if (!n) {
+        return -EIO;
+    }
+    *node = n;
+    return 0;
+}
+
 static const struct vfs_ops krffs_ops = {
     kfs_lookup,
     0, /* lookup_rest */
@@ -708,7 +765,7 @@ static const struct vfs_ops krffs_ops = {
     0, /* truncate */
     0, /* fsync */
     0, /* readdir */
-    0, /* create */
+    kfs_create,
     0, /* unlink */
     0, /* mkdir */
     0, /* rmdir */

@@ -1510,13 +1510,9 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
 {
     fd_entry_t *entry;
     krffs_node_t *node;
+    struct vfs_ref ref;
     int fd;
-    struct vpath vp;
-
-    /* /dev and /proc are synthetic; classified in one place, never KRFFS. */
-    if (synth_classify(name, &vp) != VNODE_KRFFS) {
-        return synth_open(&vp, flags);
-    }
+    int rc;
 
     if (name[0] == 'f' && name[1] == 'b' && name[2] == '\0') {
         if (fb_owner_pid != 0 && fb_owner_pid != current_proc->pid) {
@@ -1564,126 +1560,120 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
         return fd;
     }
 
-    /* "/", ".", "..": the root directory (cwd is always "/" in KRFFS). */
-    if (name[0] == '\0' ||
-        (name[0] == '.' && name[1] == '\0') ||
-        (name[0] == '.' && name[1] == '.' && name[2] == '\0')) {
-        /* The root is a directory: it cannot be created exclusively, opened for
-         * writing, or truncated, the same as any other directory below. */
-        if ((flags & O_CREAT) && (flags & O_EXCL)) {
-            return -EEXIST;
-        }
-        if (((unsigned)flags & 3u) != 0 || (flags & O_TRUNC)) {
-            return -EISDIR;
-        }
-        fd = fd_alloc(&current_proc->fds);
-        if (fd < 0) {
-            return -EMFILE;
-        }
+    rc = vfs_resolve(0, name, 0, &ref, 0, 0);
+    if (rc == -ENOENT && (flags & O_CREAT)) {
+        /* The missing-file half of O_CREAT: hold the parent, check its
+         * write bit, create under the namespace lock, and stamp the new
+         * node with the caller's identity and masked mode. */
+        struct vfs_ref parent;
+        char leafname[VFS_NAME_MAX + 1];
+        void *made;
 
-        entry = &current_proc->fds.entries[fd];
-        entry->type = FD_TYPE_DIR;
-        entry->node = NULL;  /* NULL indicates root directory */
-        entry->ofd->offset = 0;
-        entry->flags = FD_FLAG_READ;
-        if (flags & O_CLOEXEC) {
-            entry->flags |= FD_FLAG_CLOEXEC; /* opendir("/") passes O_CLOEXEC */
+        rc = vfs_resolve(0, name, VFS_WALK_PARENT, &parent, leafname,
+                         sizeof(leafname));
+        if (rc != 0) {
+            return rc;
         }
+        if (vfs_synth_vpath(parent.mnt, parent.node)) {
+            vfs_ref_release(&parent);
+            return -EROFS; /* nothing is created under /dev or /proc */
+        }
+        rc = (int)cred_access_node((krffs_node_t *)parent.node, CRED_W, 0);
+        if (rc != 0) {
+            vfs_ref_release(&parent);
+            return rc;
+        }
+        vfs_ns_lock(parent.mnt);
+        rc = vfs_create(parent.mnt, parent.node, leafname, mode, &made);
+        vfs_ns_unlock(parent.mnt);
+        if (rc != 0) {
+            vfs_ref_release(&parent);
+            return rc;
+        }
+        krffs_stamp_new_node((krffs_node_t *)made, mode);
+        ref.mnt = parent.mnt;
+        ref.node = made; /* held by creation; the parent's hold goes back */
+        if (parent.mnt->type->ops->put) {
+            parent.mnt->type->ops->put(parent.mnt, parent.node);
+        }
+        node = made;
+    } else if (rc != 0) {
+        return rc;
+    } else {
+        const struct vpath *vp = vfs_synth_vpath(ref.mnt, ref.node);
 
-        return fd;
-    }
+        if (vp) {
+            struct vpath vpc = *vp;
 
-    /* Find the file in KRFFS. resolve_e distinguishes a missing component
-     * (-ENOENT) from a non-directory in the path (-ENOTDIR) so open() reports
-     * the Linux errno; only a genuine ENOENT continues to the O_CREAT path. */
-    {
-        int rerr = 0;
-        node = krffs_resolve_x(name, &rerr, cred_may_search);
-        if (!node) {
-            if (rerr == -ENOTDIR) {
-                return -ENOTDIR;
-            }
-            /* A denied ancestor is answered before O_CREAT is considered: the
-             * create path below reaches krffs_create, which walks the prefix
-             * unchecked, so a caller who may not search the directory could
-             * otherwise create inside it. */
-            if (rerr == -EACCES) {
-                return rerr;
-            }
-            if (flags & O_CREAT) {
-                int32_t rc = cred_parent_writable(name);
-                if (rc != 0) {
-                    return rc;
-                }
-                if (krffs_create(name) != 0) {
-                    return -ENOSPC;  /* Failed to create file */
-                }
-                node = krffs_resolve(name);
-                if (!node) {
-                    return -EIO;  /* Shouldn't happen, but check anyway */
-                }
-                krffs_stamp_new_node(node, mode);
-            } else {
-                return -ENOENT;  /* File not found and O_CREAT not set */
-            }
-        } else {
+            vfs_ref_release(&ref);
+            return synth_open(&vpc, flags);
+        }
+        node = ref.node;
+        {
             int is_dir = (node == krffs_fs->node) || KRFFS_IS_DIR(node->mode);
+
             /* O_CREAT|O_EXCL requires the file not already exist. */
             if ((flags & O_CREAT) && (flags & O_EXCL)) {
+                vfs_ref_release(&ref);
                 return -EEXIST;
             }
-            /* A directory cannot be opened for writing or truncated into a file
-             * (the access mode is the low two bits); O_DIRECTORY requires one.
-             */
+            /* A directory cannot be opened for writing or truncated into a
+             * file (the access mode is the low two bits); O_DIRECTORY
+             * requires one. */
             if (is_dir && (((unsigned)flags & 3u) != 0 || (flags & O_TRUNC))) {
+                vfs_ref_release(&ref);
                 return -EISDIR;
             }
             if (!is_dir && (flags & O_DIRECTORY)) {
+                vfs_ref_release(&ref);
                 return -ENOTDIR;
             }
-            /* The open itself is permission-checked: the access mode asks for
-             * read, write, or both, and truncation is a write. */
-            {
-                int want = 0;
-                unsigned acc = (unsigned) flags & 3u;
-                int32_t rc;
-                if (acc == 0) {
-                    want = CRED_R;
-                } else if (acc == 1) {
-                    want = CRED_W;
-                } else {
-                    want = CRED_R | CRED_W;
-                }
-                if (flags & O_TRUNC) {
-                    want |= CRED_W;
-                }
-                rc = cred_access_node(node, want, 0);
-                if (rc != 0) {
-                    return rc;
-                }
+        }
+        /* The open itself is permission-checked: the access mode asks for
+         * read, write, or both, and truncation is a write. */
+        {
+            int want;
+            unsigned acc = (unsigned) flags & 3u;
+            int32_t crc;
+
+            if (acc == 0) {
+                want = CRED_R;
+            } else if (acc == 1) {
+                want = CRED_W;
+            } else {
+                want = CRED_R | CRED_W;
             }
             if (flags & O_TRUNC) {
-                krffs_truncate(name, 0);
-                /* Applied through the node already in hand: a truncate to zero
-                 * only ever shrinks, and a shrink returns the same node. This
-                 * branch is already past the -EISDIR for the root and for any
-                 * directory, so only a regular file reaches it. */
-                if (!cred_privileged()) {
-                    cred_kill_setid(node);
-                }
+                want |= CRED_W;
+            }
+            crc = cred_access_node(node, want, 0);
+            if (crc != 0) {
+                vfs_ref_release(&ref);
+                return crc;
+            }
+        }
+        if (flags & O_TRUNC) {
+            krffs_truncate(name, 0);
+            /* Applied through the node already in hand: a truncate to zero
+             * only ever shrinks, and a shrink returns the same node. This
+             * branch is already past the -EISDIR for the root and for any
+             * directory, so only a regular file reaches it. */
+            if (!cred_privileged()) {
+                cred_kill_setid(node);
             }
         }
     }
 
     fd = fd_alloc(&current_proc->fds);
     if (fd < 0) {
+        vfs_ref_release(&ref);
         return -EMFILE;  /* No free fds */
     }
 
     /* Set up the fd entry. A directory opens as a FD_TYPE_DIR (its node is the
      * directory whose children getdents lists); a regular file as FD_TYPE_FILE.
      * A path that resolved to the root (e.g. "x/..") is the root directory,
-     * stored with a NULL node like the literal-root open above. */
+     * stored with a NULL node like a literal "/" open. */
     entry = &current_proc->fds.entries[fd];
     if (node == krffs_fs->node) {
         entry->type = FD_TYPE_DIR;
@@ -1693,6 +1683,19 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
         entry->node = node;
     }
     entry->ofd->offset = 0;
+
+    /* The description takes the resolution's hold and one reference on the
+     * mount; its last close gives all of it back through vfs_desc_close. */
+    rc = vfs_open_node(ref.mnt, node, flags, &entry->ofd->fhandle);
+    if (rc != 0) {
+        fd_free(&current_proc->fds, fd);
+        vfs_ref_release(&ref);
+        return rc;
+    }
+    entry->ofd->vmnt = ref.mnt;
+    entry->ofd->vnode = node;
+    vfs_desc_open(ref.mnt);
+    vfs_leave(ref.mnt);
 
     /* Access mode is the low two bits (O_RDONLY=0/O_WRONLY=1/O_RDWR=2); create,
      * trunc and cloexec live higher up, so mask before testing; the legacy
@@ -5893,12 +5896,9 @@ static int32_t sys_creat(isr_params_t *params)
 {
     const char __user *path = (const char __user *)params->ebx;
     uint32_t mode = params->ecx;
-    fd_entry_t *entry;
-    krffs_node_t *node;
     char pathbuf[256];
     const char *name;
     int len;
-    int fd;
 
     if (!current_proc || !path) {
         return -EFAULT;
@@ -5913,89 +5913,15 @@ static int32_t sys_creat(isr_params_t *params)
     if (name[0] == '/') {
         name++;
     }
-
     if (name[0] == '\0') {
         return -EINVAL; /* empty filename */
     }
 
-    /* A synthetic mount is read-only: never create/shadow under /dev or
-     * /proc. */
-    if (synth_is_synth(name)) {
-        return -EROFS;
-    }
-
-    if (!krffs_fs) {
-        return -ENOENT;
-    }
-
-    /* creat on an existing directory must fail with -EISDIR, not fall through
-     * to overwrite the directory node's mode and corrupt it into a file. A
-     * denied ancestor outranks both: the caller may not learn what is in there.
-     */
-    {
-        int rerr = 0;
-
-        node = krffs_resolve_x(name, &rerr, cred_may_search);
-        if (!node && rerr == -EACCES) {
-            return rerr;
-        }
-    }
-    if (node && (node == krffs_fs->node || KRFFS_IS_DIR(node->mode))) {
-        return -EISDIR;
-    }
-
-    /* Every refusal is decided, and the descriptor reserved, before anything
-     * destructive happens. The truncate below cannot be undone, so a later
-     * -EMFILE would report failure over a file already emptied. */
-    if (node) {
-        int32_t rc = cred_access_node(node, CRED_W, 0);
-        if (rc != 0) {
-            return rc; /* creat hands back a writable descriptor */
-        }
-    } else {
-        int32_t rc = cred_parent_writable(name);
-        if (rc != 0) {
-            return rc;
-        }
-    }
-
-    fd = fd_alloc(&current_proc->fds);
-    if (fd < 0) {
-        return -EMFILE;
-    }
-
-    if (node) {
-        /* creat(2) is open(O_WRONLY|O_CREAT|O_TRUNC): an existing file is
-         * truncated, which this did not do, so a shorter rewrite left the old
-         * tail readable behind it. The set-id clear rides that truncate. */
-        krffs_truncate(name, 0);
-        if (!cred_privileged()) {
-            cred_kill_setid(node);
-        }
-    } else {
-        if (krffs_create(name) != 0) {
-            fd_free(&current_proc->fds, fd);
-            return -ENOSPC;
-        }
-        node = krffs_resolve(name);
-        if (!node) {
-            fd_free(&current_proc->fds, fd);
-            return -EIO;
-        }
-        /* Only a genuinely new file is stamped: creat of an existing file
-         * keeps its owner and mode, so it can never take a file over. */
-        krffs_stamp_new_node(node, mode);
-    }
-
-    entry = &current_proc->fds.entries[fd];
-    entry->type = FD_TYPE_FILE;
-    entry->node = node;
-    entry->ofd->offset = 0;
-    /* creat is open(O_WRONLY|O_CREAT|O_TRUNC): write-only, so a caller with
-     * write but not read permission cannot read back through this fd. */
-    entry->flags = FD_FLAG_WRITE;
-
-    return fd;
+    /* creat(2) is open(O_WRONLY|O_CREAT|O_TRUNC), and it is exactly that
+     * call, so the two cannot drift: the EISDIR for a directory, the write
+     * check, the truncate with its set-id clear, and the stamp of a new
+     * node all happen where open does them. */
+    return do_open(name, 1 /* O_WRONLY */ | O_CREAT | O_TRUNC, mode);
 }
 
 /**
