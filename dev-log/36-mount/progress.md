@@ -30,11 +30,11 @@ Phase 3: the interface and the migration
 - [x] lexical .. step removed with the marked rows flipped
 - [x] synth_classify reachable only from the two types; krffs_resolve_x gone
 - [ ] tests/run all after the migration
-- [ ] phase mutations; phase gate
+- [x] phase mutations; phase gate
 
 Phase 4: FAT32 read-only
-- [ ] fat32.c reader per plan; vfat type
-- [ ] mkfatfixture new cases; fat32_hosttest.c
+- [x] fat32.c reader per plan; vfat type
+- [x] mkfatfixture new cases; fat32_hosttest.c
 - [ ] phase mutations; phase gate
 
 Phase 5: mount

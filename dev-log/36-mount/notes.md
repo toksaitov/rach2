@@ -99,3 +99,38 @@ the root answering EINVAL to `mkdir -p`, searchprobe pinning the lexical
 `..`, the drill leaning on creat refusing a device) are fixed above; usb
 failed only inside the parallel full run and passes alone, which is
 investigated before the phase closes.
+
+## Phase 4 record
+
+The driver reads through the buffer cache one block at a time, so the
+cache's hold rules are met by construction. Two decisions beyond the plan's
+text: a lookup matches the short alias as well as the long name, as vfat on
+Linux does, and the chain walk bounds the cluster index by the cluster
+count, because a looped directory whose clusters are full never reaches a
+zero entry and a per-call step count restarted from the node's hint would
+never see the loop. A chain that ends before the index is ENXIO inside the
+driver: a directory reads it as its end, a file as damage (EIO).
+
+mkfatfixture gained `--vfs`, `--dir-loop`, `--active-second` and
+`--unmasked`; every earlier case is byte for byte what it was, and mtools
+lists the `--vfs` volume as the builder meant it (an independent reader).
+
+Phase 4 mutations, proved once each through the restoring script (host
+compile per mutant, each run under the deadline tool so a hang fails):
+
+* refuse a valid FAT32 below 65525 clusters: caught (the small-volume row)
+* skip the chain bound: caught (the looped directory hangs, and the
+  deadline fails it)
+* ignore the long-name checksum: caught (the bad-checksum name appears)
+* read the first FAT whatever the active one: caught (the active-second
+  volume's file reads wrong)
+* accept a root cluster past the data region: caught (mount succeeds)
+* take an unmasked FAT entry at face value: caught (the unmasked chain
+  fails)
+* answer `..` with the directory itself: caught (the `..` rows)
+
+A full run started while phase 4 sources were being edited is void: the
+pooled targets rebuild the kernel from the working tree, so forty suites
+failed in a second each on a tree that did not compile. The full set runs
+only on a quiescent tree; the run owed after phase 3 comes with phase 4's
+gate.
