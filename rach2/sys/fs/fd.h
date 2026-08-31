@@ -106,6 +106,10 @@ struct open_file {
     struct vfs_mount *vmnt;
     void *vnode;
     void *fhandle;
+    /* The description lock: read, write and lseek hold the description for
+     * the length of the operation, so two sharers cannot ride one offset
+     * through a sleep. The wait queue lives beside the pool in fd.c. */
+    int busy;
 };
 
 /*
@@ -161,6 +165,15 @@ fd_entry_t *fd_get(fd_table_t *table, int fd);
  */
 void fd_ofd_ref(struct open_file *ofd);
 void fd_ofd_unref(struct open_file *ofd);
+
+/* The description lock (see `busy` above); the lock is uninterruptible and
+ * short: one file operation. */
+void fd_ofd_lock(struct open_file *ofd);
+void fd_ofd_unlock(struct open_file *ofd);
+
+/** Repoint every description field naming `from` at `to`, after a KRFFS
+ * relocation moved a node. Called by vfs_repoint, which owns the sweep. */
+void fd_ofd_repoint(void *from, void *to);
 
 /*
  * Return 1 if fd is allocated, 0 otherwise.

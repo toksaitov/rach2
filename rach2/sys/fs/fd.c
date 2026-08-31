@@ -14,6 +14,11 @@
 #define OFD_POOL_SIZE (16 * MAX_FDS)
 static struct open_file ofd_pool[OFD_POOL_SIZE];
 
+/* One wait queue per description, beside the pool rather than in fd.h,
+ * because the wait-queue header includes the process header and the process
+ * header includes fd.h. */
+static wait_queue_t ofd_wq[OFD_POOL_SIZE];
+
 /**
  * Allocate a fresh open-file description.
  *
@@ -34,6 +39,8 @@ static struct open_file *ofd_alloc(void)
             ofd_pool[i].vmnt         = NULL;
             ofd_pool[i].vnode        = NULL;
             ofd_pool[i].fhandle      = NULL;
+            ofd_pool[i].busy         = 0;
+            wait_queue_init(&ofd_wq[i]);
             return &ofd_pool[i];
         }
     }
@@ -53,6 +60,42 @@ void fd_ofd_ref(struct open_file *ofd)
  * The pool slot frees itself when the last reference goes: a refcount of 0
  * marks the slot reusable by `ofd_alloc`.
  */
+static int ofd_idle(void *arg)
+{
+    return ((struct open_file *)arg)->busy == 0;
+}
+
+void fd_ofd_lock(struct open_file *ofd)
+{
+    while (ofd->busy) {
+        wq_wait_event(&ofd_wq[ofd - ofd_pool], ofd_idle, ofd);
+    }
+    ofd->busy = 1;
+}
+
+void fd_ofd_unlock(struct open_file *ofd)
+{
+    ofd->busy = 0;
+    wq_wake_all(&ofd_wq[ofd - ofd_pool]);
+}
+
+void fd_ofd_repoint(void *from, void *to)
+{
+    int i;
+
+    for (i = 0; i < OFD_POOL_SIZE; i++) {
+        if (ofd_pool[i].refcount == 0) {
+            continue;
+        }
+        if (ofd_pool[i].vnode == from) {
+            ofd_pool[i].vnode = to;
+        }
+        if (ofd_pool[i].fhandle == from) {
+            ofd_pool[i].fhandle = to;
+        }
+    }
+}
+
 void fd_ofd_unref(struct open_file *ofd)
 {
     if (ofd && ofd->refcount > 0) {

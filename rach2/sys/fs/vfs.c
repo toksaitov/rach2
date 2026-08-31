@@ -486,6 +486,7 @@ void vfs_repoint(struct vfs_mount *mnt, void *from, void *to)
     if (mnt->root == from) {
         mnt->root = to;
     }
+    fd_ofd_repoint(from, to);
 }
 
 /* ---- the default-answer wrappers ---- */
@@ -565,13 +566,13 @@ void vfs_release(struct vfs_mount *mnt, void *handle)
     mnt->releases++;
 }
 
-int vfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t index,
+int vfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
                 struct vfs_dirent *ent)
 {
     if (!mnt->type->ops->readdir) {
         return -EINVAL;
     }
-    return mnt->type->ops->readdir(mnt, handle, index, ent);
+    return mnt->type->ops->readdir(mnt, handle, cursor, ent);
 }
 
 int vfs_create(struct vfs_mount *mnt, void *dir, const char *name,
@@ -713,6 +714,95 @@ static int kfs_sync(struct vfs_mount *mnt)
     return pc_sync() == 0 ? 0 : -EIO;
 }
 
+static int32_t kfs_read(struct vfs_mount *mnt, void *handle, void *buf,
+                        uint32_t count, uint64_t offset)
+{
+    int n;
+
+    (void)mnt;
+    n = krffs_read_node(handle, buf, count, (uint32_t)offset);
+    return n < 0 ? -EIO : n;
+}
+
+/* A grow can relocate the node; every holder, this writer's description
+ * included, is repointed before the byte count returns. */
+static int32_t kfs_write(struct vfs_mount *mnt, void *handle, const void *buf,
+                         uint32_t count, uint64_t offset)
+{
+    krffs_node_t *n = handle;
+    int written;
+
+    written = krffs_write_node(&n, buf, count, (uint32_t)offset);
+    if (written == KRFFS_ENOSPACE) {
+        return -ENOSPC;
+    }
+    if (written < 0) {
+        return -EIO;
+    }
+    if (n != (krffs_node_t *)handle) {
+        vfs_repoint(mnt, handle, n);
+    }
+    return written;
+}
+
+static int kfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
+{
+    char path[256];
+
+    (void)mnt;
+    if (krffs_node_path(handle, path, sizeof(path)) != 0) {
+        return -EIO;
+    }
+    if (krffs_truncate(path + (path[0] == '/'), (uint32_t)size) != 0) {
+        return -EIO;
+    }
+    return 0;
+}
+
+static int kfs_fsync(struct vfs_mount *mnt, void *handle)
+{
+    (void)mnt;
+    (void)handle;
+    return pc_sync() == 0 ? 0 : -EIO; /* the window flushes whole */
+}
+
+/* The cursor is the entry node's byte offset in the image plus one, so a
+ * deletion between calls never renumbers the survivors; the traversal
+ * visits nodes in ascending offsets, so the first match at or past the
+ * cursor is the next entry. */
+static int kfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
+                       struct vfs_dirent *ent)
+{
+    krffs_node_t *dirn = handle;
+    uint64_t dir_id =
+        (dirn == krffs_fs->node) ? (uint64_t)KRFFS_ROOT_ID : dirn->id;
+    krffs_node_t *node = krffs_fs->node;
+
+    (void)mnt;
+    do {
+        uint32_t node_off =
+            (uint32_t)((uintptr_t)node - (uintptr_t)krffs_fs->node);
+
+        /* An orphan keeps its parent id but has no name; a caller that
+         * cannot reach it by path must not see it in a listing either. */
+        if (node->type == KRFFS_RESERVED_NODE && node->parent_id == dir_id &&
+            node->name[0] != '\0' && node_off >= *cursor) {
+            uint32_t nlen = k_strlen((const char *)node->name);
+
+            if (nlen > VFS_NAME_MAX) {
+                nlen = VFS_NAME_MAX;
+            }
+            k_memcpy(ent->name, node->name, nlen);
+            ent->name[nlen] = '\0';
+            ent->ino = node->id;
+            ent->is_dir = KRFFS_IS_DIR(node->mode) ? 1 : 0;
+            *cursor = node_off + 1;
+            return 1;
+        }
+    } while ((node = krffs_get_next_node(krffs_fs, node)) != krffs_fs->node);
+    return 0;
+}
+
 /* Creation goes through the parent's canonical path, which is how the
  * namespace half of KRFFS speaks today; the node comes back resolved. */
 static int kfs_create(struct vfs_mount *mnt, void *dir, const char *name,
@@ -760,11 +850,11 @@ static const struct vfs_ops krffs_ops = {
     0, /* setattr: the migration moves it here family by family */
     0, /* open: the node is the handle */
     0, /* release */
-    0, /* read */
-    0, /* write */
-    0, /* truncate */
-    0, /* fsync */
-    0, /* readdir */
+    kfs_read,
+    kfs_write,
+    kfs_truncate,
+    kfs_fsync,
+    kfs_readdir,
     kfs_create,
     0, /* unlink */
     0, /* mkdir */

@@ -153,9 +153,12 @@ struct vfs_ops {
                      uint32_t count, uint64_t offset);
     int (*truncate)(struct vfs_mount *mnt, void *handle, uint64_t size);
     int (*fsync)(struct vfs_mount *mnt, void *handle);
-    /* Entry `index` of an open directory; 1 with the entry filled, 0 at the
-     * end, or a negative errno. */
-    int (*readdir)(struct vfs_mount *mnt, void *handle, uint32_t index,
+    /* One directory entry at `*cursor`, a position whose meaning belongs
+     * to the file system (an image offset, a directory-entry index); the
+     * call advances it past the entry it returns. A caller stores it
+     * between calls and never interprets it. 1 with the entry filled, 0 at
+     * the end, or a negative errno. */
+    int (*readdir)(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
                    struct vfs_dirent *ent);
     /* The namespace. `rename` is within one mount; the common layer answers
      * EXDEV across mounts. */
@@ -321,7 +324,7 @@ int vfs_setattr(struct vfs_mount *mnt, void *node, int what,
 int vfs_open_node(struct vfs_mount *mnt, void *node, int flags,
                   void **handle);
 void vfs_release(struct vfs_mount *mnt, void *handle);
-int vfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t index,
+int vfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
                 struct vfs_dirent *ent);
 int vfs_create(struct vfs_mount *mnt, void *dir, const char *name,
                uint32_t mode, void **node);

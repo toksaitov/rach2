@@ -53,6 +53,6 @@ phases; it lives outside the tree while phases run.
 
 ## Open items for phase 3
 
-* ftruncate(93) and truncate(92) are not in the syscall table; the family
-  that moves descriptor I/O decides whether to add ftruncate through the
-  vfs truncate operation, and vfsprobe gains the row when it exists.
+* ftruncate(93): added by the descriptor I/O family through the vfs
+  truncate operation, with a vfsprobe row. truncate(92) stays out; nothing
+  in the userland uses it.

@@ -35,6 +35,7 @@ typedef unsigned int size_t;
 #define SYS_RENAME     38
 #define SYS_MKDIR      39
 #define SYS_RMDIR      40
+#define SYS_FTRUNCATE  93
 #define SYS_FSYNC      118
 #define SYS_GETCWD     183
 #define SYS_STAT64     195
@@ -279,8 +280,14 @@ void _start(void)
         fail("fsync");
     }
     sys1(SYS_CLOSE, fd);
-    /* ftruncate is not implemented yet; O_TRUNC is the truncation that
-     * exists, and the family that moves it may add the syscall. */
+    fd = sys3(SYS_OPEN, (int)"/vp/d/f", O_RDWR, 0);
+    if (sys2(SYS_FTRUNCATE, fd, 1) != 0) {
+        fail("ftruncate to 1");
+    }
+    if (sys3(SYS_LSEEK, fd, 0, SEEK_END) != 1) {
+        fail("the ftruncated size reads back");
+    }
+    sys1(SYS_CLOSE, fd);
     fd = sys3(SYS_OPEN, (int)"/vp/d/f", O_WRONLY | O_TRUNC, 0);
     if (fd < 0) {
         fail("open with O_TRUNC");

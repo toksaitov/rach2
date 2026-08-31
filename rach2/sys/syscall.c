@@ -158,44 +158,18 @@ int fs_node_is_held(const krffs_node_t *node)
 
 
 /**
- * Repoint every descriptor on `from` at `to`, after a resize relocated the
- * file.
- *
- * The writer's own descriptor is updated by the write path; every other
- * holder would otherwise be left pointing at a node the allocator has
- * already freed. Without this the contract would read "a descriptor names
- * one file, unless another descriptor grows it", which is the same defect in
- * a second place.
- */
-static void fd_node_moved(const krffs_node_t *from, krffs_node_t *to)
-{
-    int p;
-    int i;
-
-    if (!from || from == to) {
-        return;
-    }
-    for (p = 0; p < MAX_PROCS; p++) {
-        if (proc_table[p].state == PROC_UNUSED) {
-            continue;
-        }
-        for (i = 0; i < MAX_FDS; i++) {
-            fd_entry_t *e = &proc_table[p].fds.entries[i];
-
-            if (e->type == FD_TYPE_FILE && e->node == from) {
-                e->node = to;
-            }
-        }
-    }
-}
-/**
- * Repoint every descriptor from one node to another, for callers outside this
+ * Repoint every holder from one node to another, for callers outside this
  * file. The debug shell writes through the file system directly, and a write
- * that grows a file past its extent relocates it.
+ * that grows a file past its extent relocates it; the sweep over
+ * descriptors, descriptions, working directories and mounts belongs to the
+ * VFS, which is the one place that knows every holder kind.
  */
 void fs_node_moved(const krffs_node_t *from, krffs_node_t *to)
 {
-    fd_node_moved(from, to);
+    if (!from || from == to) {
+        return;
+    }
+    vfs_repoint(vfs_root_mount(), (void *)(krffs_node_t *)from, to);
 }
 
 /**
@@ -716,60 +690,47 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
     }
 
     if (entry->type == FD_TYPE_FILE) {
-        int written;
+        struct open_file *ofd = entry->ofd;
+        int32_t written;
 
         if (!(entry->flags & FD_FLAG_WRITE)) {
             return -EBADF;  /* Not opened for writing */
         }
-
-        if (!entry->node) {
+        if (!ofd || !ofd->vmnt) {
             return -EBADF;
         }
-        if (fd_node_check(entry) != 0) {
-            return -EBADF;  /* the file was unlinked or relocated out from under us */
-        }
-
-        /* krffs_write reads the user buffer directly, so range-check AND fault
-         * its pages in first (as the socket path does) before stripping __user.
-         */
+        /* The file system reads the user buffer directly, so range-check AND
+         * fault its pages in first (as the socket path does) before stripping
+         * __user. */
         if (!user_buffer_ok((uint32_t)(__force uintptr_t)buf, count, 0)) {
             return -EFAULT;
         }
+        fd_ofd_lock(ofd);
         /* O_APPEND: every write lands at the current end of file, regardless of
          * any intervening seek (the POSIX append contract). The flag lives on
          * the shared open-file description. */
-        if (entry->ofd && (entry->ofd->status_flags & OFD_APPEND)) {
-            entry->ofd->offset = (uint32_t)entry->node->data_size;
-        }
+        if (ofd->status_flags & OFD_APPEND) {
+            struct vfs_stat vst;
 
-        /* Write via the node the descriptor already resolved (a subdir file's
-         * node->name is only its basename, so re-resolving by name would fail).
-         * krffs_write_node updates entry->node if a grow relocates the file. */
-        {
-            krffs_node_t *before = entry->node;
-
-            written = krffs_write_node(&entry->node, (const char __force *)buf,
-                                       count, entry->ofd->offset);
-            if (written == KRFFS_ENOSPACE) {
-                return -ENOSPC;
+            if (vfs_getattr(ofd->vmnt, ofd->vnode, &vst) == 0) {
+                ofd->offset = (uint32_t)vst.size;
             }
-            if (written < 0) {
-                return -EIO;
+        }
+        written = vfs_write(ofd->vmnt, ofd->fhandle, (const char __force *)buf,
+                            count, ofd->offset);
+        if (written > 0) {
+            /* Through the UPDATED node pointer: a grow relocates the file and
+             * the write repointed every holder, this descriptor included.
+             * Only a write that moved bytes disarms the set-id bits, and a
+             * privileged writer is exempt: that is the CAP_FSETID analogue,
+             * and without it any root process silently disarms /bin/su by
+             * rewriting it. */
+            if (!cred_privileged()) {
+                cred_kill_setid(entry->node);
             }
-            /* A grow relocates the file, and krffs_write_node updates only the
-             * writer's own descriptor; every other holder would be left on the
-             * node the allocator just freed. */
-            fd_node_moved(before, entry->node);
+            ofd->offset += (uint32_t)written;
         }
-        /* Through the UPDATED node pointer, since a grow relocates the file and
-         * a clear applied to the old one would write into freed space. Only a
-         * write that moved bytes disarms, and a privileged writer is exempt:
-         * that is the CAP_FSETID analogue, and without it any root process
-         * silently disarms /bin/su by rewriting it. */
-        if (written > 0 && !cred_privileged()) {
-            cred_kill_setid(entry->node);
-        }
-        entry->ofd->offset += (uint32_t)written;
+        fd_ofd_unlock(ofd);
         return written;
     }
 
@@ -793,6 +754,42 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
     }
 
     return -EBADF;
+}
+
+/**
+ * Truncate an open file to `length` (ftruncate(2)).
+ *
+ * EBX = fd, ECX = length. The descriptor must be a writable file on a
+ * mounted file system. A successful shrink or extend clears the set-id bits
+ * for an unprivileged caller, like a write.
+ */
+static int32_t sys_ftruncate(isr_params_t *params)
+{
+    int fd = (int)params->ebx;
+    uint32_t length = params->ecx;
+    fd_entry_t *entry;
+    int rc;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    entry = fd_get(&current_proc->fds, fd);
+    if (!entry || entry->type != FD_TYPE_FILE) {
+        return -EBADF;
+    }
+    if (!(entry->flags & FD_FLAG_WRITE)) {
+        return -EINVAL; /* ftruncate wants a writable descriptor */
+    }
+    if (!entry->ofd || !entry->ofd->vmnt) {
+        return -EBADF;
+    }
+    fd_ofd_lock(entry->ofd);
+    rc = vfs_truncate(entry->ofd->vmnt, entry->ofd->fhandle, length);
+    if (rc == 0 && !cred_privileged()) {
+        cred_kill_setid(entry->node);
+    }
+    fd_ofd_unlock(entry->ofd);
+    return rc;
 }
 
 /* write(2): EBX = fd, ECX = buf, EDX = count. */
@@ -1653,11 +1650,11 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
             }
         }
         if (flags & O_TRUNC) {
-            krffs_truncate(name, 0);
-            /* Applied through the node already in hand: a truncate to zero
-             * only ever shrinks, and a shrink returns the same node. This
-             * branch is already past the -EISDIR for the root and for any
-             * directory, so only a regular file reaches it. */
+            /* A truncate to zero only ever shrinks, and a shrink keeps the
+             * node where it is. This branch is already past the -EISDIR for
+             * the root and for any directory, so only a regular file
+             * reaches it. */
+            vfs_truncate(ref.mnt, node, 0);
             if (!cred_privileged()) {
                 cred_kill_setid(node);
             }
@@ -1820,8 +1817,15 @@ static int32_t sys_fsync(isr_params_t *params)
     if (!current_proc) {
         return -ESRCH;
     }
-    if (!fd_get(&current_proc->fds, fd)) {
-        return -EBADF;
+    {
+        fd_entry_t *e = fd_get(&current_proc->fds, fd);
+
+        if (!e) {
+            return -EBADF;
+        }
+        if (e->ofd && e->ofd->vmnt) {
+            return vfs_fsync(e->ofd->vmnt, e->ofd->fhandle);
+        }
     }
     if (pc_sync() != 0) {
         return -EIO;
@@ -2062,13 +2066,17 @@ static int32_t sys_lseek(isr_params_t *params)
         return -EBADF;
     }
 
-    if (!entry->node) {
+    if (!entry->ofd || !entry->ofd->vmnt) {
         return -EBADF;
     }
-    if (fd_node_check(entry) != 0) {
-        return -EBADF;  /* the file was unlinked or relocated out from under us */
+    {
+        struct vfs_stat vst;
+
+        if (vfs_getattr(entry->ofd->vmnt, entry->ofd->vnode, &vst) != 0) {
+            return -EBADF;
+        }
+        file_size = (uint32_t)vst.size;
     }
-    file_size = (uint32_t)entry->node->data_size;
 
     switch (whence) {
         case 0:  /* SEEK_SET */
@@ -2274,32 +2282,31 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
     }
 
     if (entry->type == FD_TYPE_FILE) {
-        int bytes_read;
+        struct open_file *ofd = entry->ofd;
+        int32_t bytes_read;
 
         if (!(entry->flags & FD_FLAG_READ)) {
             return -EBADF;  /* Not opened for reading */
         }
-
-        if (!entry->node) {
+        if (!ofd || !ofd->vmnt) {
             return -EBADF;
         }
-        if (fd_node_check(entry) != 0) {
-            return -EBADF;  /* the file was unlinked or relocated out from under us */
-        }
-
-        /* krffs_read writes straight into the user buffer, so range-check AND
-         * fault its pages in (write) before stripping the __user tag. */
+        /* The file system writes straight into the user buffer, so
+         * range-check AND fault its pages in (write) before stripping the
+         * __user tag. The description is held across the operation: with
+         * dup or fork sharing this offset, the second reader sleeps here
+         * rather than reading the same bytes while the first is in a
+         * request. */
         if (!user_buffer_ok((uint32_t)(__force uintptr_t)buf, count, 1)) {
             return -EFAULT;
         }
-        /* Read via the resolved node (see the write path); the descriptor's
-         * node->name is only the basename for a file in a subdirectory. */
-        bytes_read = krffs_read_node(entry->node, (char __force *)buf, count,
-                                     entry->ofd->offset);
-        if (bytes_read < 0) {
-            return -EIO;  /* krffs reports failure with a bare -1 */
+        fd_ofd_lock(ofd);
+        bytes_read = vfs_read(ofd->vmnt, ofd->fhandle, (char __force *)buf,
+                              count, ofd->offset);
+        if (bytes_read > 0) {
+            ofd->offset += (uint32_t)bytes_read;
         }
-        entry->ofd->offset += (uint32_t)bytes_read;
+        fd_ofd_unlock(ofd);
         return bytes_read;
     }
 
@@ -6709,12 +6716,9 @@ static int32_t sys_getdents64(isr_params_t *params)
     char *buf = (char *)params->ecx;
     uint32_t count = params->edx;
     fd_entry_t *entry;
-    krffs_node_t *node;
     uint32_t bytes_written = 0;
-    uint32_t target_index;
     uint32_t name_len;
     uint32_t rec_len;
-    uint64_t dir_id;
     struct linux_dirent64 *dirent;
 
     if (!current_proc || !buf || count == 0) {
@@ -6778,63 +6782,54 @@ static int32_t sys_getdents64(isr_params_t *params)
      * unspecified, and neither is reachable from the loop this exists for;
      * the previous count-based cursor failed the case that was reachable.
      */
-    target_index = entry->ofd->offset;
+    {
+        struct open_file *ofd = entry->ofd;
+        uint32_t cursor;
 
-    /* List only the children of THIS directory: entry->node is the directory
-     * (NULL == the root), so match nodes whose parent_id is its id. */
-    dir_id = entry->node ? entry->node->id : (uint64_t)KRFFS_ROOT_ID;
-
-    node = krffs_fs->node;
-    do {
-        /* Through uintptr_t, not as a pointer difference: a signed
-         * ptrdiff_t on a 32-bit kernel cannot represent a distance above 2 GiB,
-         * and a KRFFS image may be larger than that. Every node begins inside
-         * the filesystem's own extent, so the unsigned distance always fits. */
-        uint32_t node_off = (uint32_t)((uintptr_t)node - (uintptr_t)krffs_fs->node);
-
-        /* An orphan keeps its parent id but has no name, and a caller that
-         * cannot reach it by path must not see it in a listing either. */
-        if (node->type == KRFFS_RESERVED_NODE && node->parent_id == dir_id &&
-            node->name[0] != '\0') {
-            if (node_off >= target_index) {
-                /* Staging buffer for one record (a KRFFS name is at most
-                 * KRFFS_FILE_NAME_BUFFER_SIZE bytes, so this always fits). */
-                uint8_t recbuf[KRFFS_FILE_NAME_BUFFER_SIZE + 32];
-
-                name_len = k_strlen((const char *)node->name);
-                /* Fixed fields (19 bytes) + name + NUL, padded to 8-byte
-                 * align. */
-                rec_len = sizeof(uint64_t) + sizeof(int64_t) + sizeof(uint16_t) + sizeof(uint8_t) + name_len + 1;
-                rec_len = (rec_len + 7) & ~7;
-
-                if (bytes_written + rec_len > count) {
-                    if (bytes_written == 0) {
-                        return -EINVAL; /* buffer too small for even one entry */
-                    }
-                    break;
-                }
-
-                /* Build the record in kernel memory, then copy it out through
-                 * the helper (no raw write into user space). */
-                k_memset(recbuf, 0, rec_len);
-                dirent = (struct linux_dirent64 *)recbuf;
-                dirent->d_ino = node->id;                      /* the DJB hash is the inode */
-                dirent->d_off = (int64_t)(node_off + 1);       /* next position */
-                dirent->d_reclen = (uint16_t)rec_len;
-                dirent->d_type = KRFFS_IS_DIR(node->mode) ? DT_DIR : DT_REG;
-                k_memcpy(dirent->d_name, node->name, name_len + 1);
-
-                if (copy_to_user((void __user *)(buf + bytes_written),
-                                 recbuf, rec_len) != 0) {
-                    return (bytes_written > 0) ?
-                           (int32_t)bytes_written : -EFAULT;
-                }
-
-                bytes_written += rec_len;
-                entry->ofd->offset = node_off + 1;
-            }
+        if (!ofd || !ofd->vmnt) {
+            return -EBADF;
         }
-    } while ((node = krffs_get_next_node(krffs_fs, node)) != krffs_fs->node);
+        cursor = ofd->offset;
+        for (;;) {
+            struct vfs_dirent de;
+            uint8_t recbuf[VFS_NAME_MAX + 1 + 32];
+            int got = vfs_readdir(ofd->vmnt, ofd->fhandle, &cursor, &de);
+
+            if (got == 0) {
+                break;
+            }
+            if (got < 0) {
+                return (bytes_written > 0) ? (int32_t)bytes_written : got;
+            }
+            name_len = k_strlen(de.name);
+            /* Fixed fields (19 bytes) + name + NUL, padded to 8-byte
+             * align. */
+            rec_len = sizeof(uint64_t) + sizeof(int64_t) + sizeof(uint16_t) +
+                      sizeof(uint8_t) + name_len + 1;
+            rec_len = (rec_len + 7) & ~7;
+            if (bytes_written + rec_len > count) {
+                if (bytes_written == 0) {
+                    return -EINVAL; /* buffer too small for even one entry */
+                }
+                break; /* the uncommitted cursor re-reads this entry next */
+            }
+            /* Build the record in kernel memory, then copy it out through
+             * the helper (no raw write into user space). */
+            k_memset(recbuf, 0, rec_len);
+            dirent = (struct linux_dirent64 *)recbuf;
+            dirent->d_ino = de.ino;
+            dirent->d_off = (int64_t)cursor; /* next position */
+            dirent->d_reclen = (uint16_t)rec_len;
+            dirent->d_type = de.is_dir ? DT_DIR : DT_REG;
+            k_memcpy(dirent->d_name, de.name, name_len + 1);
+            if (copy_to_user((void __user *)(buf + bytes_written), recbuf,
+                             rec_len) != 0) {
+                return (bytes_written > 0) ? (int32_t)bytes_written : -EFAULT;
+            }
+            bytes_written += rec_len;
+            ofd->offset = cursor; /* committed with the record, not before */
+        }
+    }
 
     /* Nothing written after scanning every node is the end of the directory. A
      * buffer too small for even one record returned -EINVAL above, so zero
@@ -10900,6 +10895,7 @@ void init_syscall(void)
     _syscall_table[SYS_SYNC] = sys_sync;
     _syscall_table[SYS_REBOOT] = sys_reboot;
     _syscall_table[SYS_FSYNC] = sys_fsync;
+    _syscall_table[SYS_FTRUNCATE] = sys_ftruncate;
     _syscall_table[SYS_FDATASYNC] = sys_fsync;
     _syscall_table[SYS_LINK] = sys_link;
     _syscall_table[SYS_LINKAT] = sys_linkat;
