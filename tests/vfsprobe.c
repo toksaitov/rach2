@@ -9,14 +9,13 @@
  *
  * `PHYSICAL_DOTDOT` marks the rows whose correct answer changes when `..`
  * stops being lexical: through a missing or non-directory component a
- * lexical resolver succeeds and a physical one must not. It is 0 while the
- * tree resolves lexically and flips to 1 in the migration commit that
- * removes the lexical step.
+ * lexical resolver succeeds and a physical one must not. It flipped to 1
+ * in the migration commit that removed the lexical step.
  *
  * Prints "VFSPROBE OK". Freestanding; direct int 0x80.
  */
 
-#define PHYSICAL_DOTDOT 0
+#define PHYSICAL_DOTDOT 1
 
 typedef unsigned int size_t;
 

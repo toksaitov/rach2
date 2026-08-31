@@ -56,3 +56,23 @@ phases; it lives outside the tree while phases run.
 * ftruncate(93): added by the descriptor I/O family through the vfs
   truncate operation, with a vfsprobe row. truncate(92) stays out; nothing
   in the userland uses it.
+
+## Phase 3 sequencing notes
+
+* The lexical `..` step is gone; `..` resolves physically and the marked
+  vfsprobe rows flipped in the same commit. Namespace changes now answer
+  for mount points through `vfs_leaf_mount` (EEXIST for mkdir, EBUSY for
+  unlink, rmdir and rename), which is what keeps a KRFFS /dev from
+  shadowing the synthetic mount without a lexical guard.
+* The held working-directory reference (`cwd` pinning its mount) lands in
+  phase 5 with mount(2), where the reference count first has a mount that
+  can be unmounted and mountprobe proves the EBUSY. The canonical cwd
+  string stays for getcwd, as the plan says.
+* The open-per-description mutation waits for phase 5's unmount record,
+  which is the check that catches it.
+* creat(2) is now open(O_WRONLY|O_CREAT|O_TRUNC) and nothing else, so
+  creat on a device node succeeds as it does on Linux; the old creat refused
+  every synthetic path with EROFS. ISH implements `>` with creat, so a shell
+  redirect into /dev/null works now, and the drill's refusal boot observes
+  the write refusal (busybox cat's "write error") instead of ISH's failed
+  open.

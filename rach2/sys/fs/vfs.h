@@ -337,6 +337,15 @@ int vfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname,
 int vfs_link(struct vfs_mount *mnt, void *dir, const char *name, void *node);
 int vfs_statfs(struct vfs_mount *mnt, struct vfs_statfs *st);
 
+/**
+ * The mount whose root stands at `name` inside directory `node` of `mnt`,
+ * or NULL. This is how a namespace change sees a mount point the type's
+ * own lookup cannot know: mkdir answers EEXIST for it, unlink and rmdir
+ * and rename answer EBUSY.
+ */
+struct vfs_mount *vfs_leaf_mount(struct vfs_mount *mnt, void *node,
+                                 const char *name);
+
 /** The classification a synthetic node carries, or NULL when `mnt` is not
  * one of the two synthetic mounts. */
 struct vpath;

@@ -12,16 +12,17 @@
 #
 # Five boots of one disk. The first is the machine as it shipped, and it proves
 # the everyday kernel cannot write its own disk: `reflash` is refused, a shell
-# redirect into the device is refused, and the image is compared byte for byte
-# afterwards so the refusal is shown to have written nothing, not merely
-# to have printed something. Then the root's first sector is destroyed from the
-# host, with the machine stopped, and the second boot must fail to mount rather
-# than answer anything. The third arms the recovery entry in the environment
-# block and boots it: recovery comes up on partition 3, takes an address, and
-# answers SSH with nothing typed at the console. The whole root partition then
-# arrives through one `ssh` pipe, and the region is read back through the same
-# device and hashed on the machine against the hash the host computed. The last
-# boot is the ordinary entry again, which must mount and offer a login.
+# redirect into the device opens and its first write is refused, and the image
+# is compared byte for byte afterwards so the refusal is shown to have written
+# nothing, not merely to have printed something. Then the root's first sector
+# is destroyed from the host, with the machine stopped, and the second boot
+# must fail to mount rather than answer anything. The third arms the recovery
+# entry in the environment block and boots it: recovery comes up on partition
+# 3, takes an address, and answers SSH with nothing typed at the console. The
+# whole root partition then arrives through one `ssh` pipe, and the region is
+# read back through the same device and hashed on the machine against the hash
+# the host computed. The last boot is the ordinary entry again, which must
+# mount and offer a login.
 #
 # Usage: drill_test.sh <grub-disk> <root password> <ssh port>
 #
@@ -269,14 +270,14 @@ step "Password:" 1 "$ROOTPASSWORD"
 # typed at it would appear in the log whether or not anything happened.
 step "The ISH shell" 1 "reflash /dev/disk0 0 512 < /dev/zero"
 step "did not take the write" 1 "cat /etc/motd > /dev/disk0"
-step "cannot open a redirection" 1 "halt"
+step "write error" 1 "halt"
 boot_feed
-wait_count "cannot open a redirection" 1 300 || fail "the refusal boot never finished"
+wait_count "write error" 1 300 || fail "the refusal boot never finished"
 sleep 3
 cleanup_boot
 grep -aq "did not take the write" "$LOG" || \
     fail "reflash was not refused by the everyday kernel"
-grep -aq "cannot open a redirection" "$LOG" || \
+grep -aq "write error" "$LOG" || \
     fail "a shell redirect into the whole-disk device was not refused"
 # Both refused writes aimed at the first sector, and that is what is compared:
 # the machine mounted its root read-write on the way to the prompt, so the

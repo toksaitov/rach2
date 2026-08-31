@@ -194,6 +194,26 @@ static struct vfs_mount *mount_named(struct vfs_mount *mnt, void *node,
     return 0;
 }
 
+struct vfs_mount *vfs_leaf_mount(struct vfs_mount *mnt, void *node,
+                                 const char *name)
+{
+    void *found;
+    struct vfs_mount *m = mount_named(mnt, node, name);
+
+    if (m) {
+        return m;
+    }
+    if (!mnt->type->ops->lookup ||
+        mnt->type->ops->lookup(mnt, node, name, &found) != 0) {
+        return 0;
+    }
+    m = mount_covering(mnt, found);
+    if (mnt->type->ops->put) {
+        mnt->type->ops->put(mnt, found);
+    }
+    return m;
+}
+
 /* Replace the current place with another, moving the hold and the transient
  * count. Fails only when the new mount refuses entry. */
 static int walk_move(struct vfs_ref *cur, struct vfs_mount *mnt, void *node)

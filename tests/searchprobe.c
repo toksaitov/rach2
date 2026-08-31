@@ -46,9 +46,10 @@
  * the answer follows the directory that denies, not a decision cached
  * from the first walk.
  *
- * Two opens must keep working throughout. `/sp_denied/../sp_up.txt` resolves,
- * because `..` collapses lexically before resolution and the denied directory
- * is never entered; `/` resolves, because the root is always searchable.
+ * `..` is physical: `/sp_denied/../sp_up.txt` enters the denied directory
+ * before climbing out of it, so the walk is refused there, exactly as a
+ * spelling without the `..` would be. `/` keeps resolving, because the root
+ * is always searchable.
  * access(2) is charged by the real ids, so the denied child asks it twice,
  * once holding a real uid of 0 under an effective 1000 and once the other way
  * round, and the two answers must differ: that is the view a set-id program
@@ -589,10 +590,10 @@ static void denied_child(void)
     want_eq("denied: rename into the denied parent",
             syscall3(SYS_RENAME, (int)POUTSRC, (int)PLANDED, 0), -EACCES);
 
-    /* What the denial must not cost: `..` collapses lexically, so the denied
-     * directory is transited and never entered, and the root is searchable by
-     * everyone. */
-    want_ok("denied: open through a lexical ..", open_ro(UPWARD));
+    /* `..` is physical: the walk enters the denied directory before it can
+     * climb out, so the spelling is refused like any other entry. The root
+     * stays open to everyone. */
+    want_eq("denied: open through the denied directory's ..", open_ro(UPWARD), -EACCES);
     want_ok("denied: open the root", open_ro(ROOT));
     want_eq("denied: search the root", syscall3(SYS_ACCESS, (int)ROOT, X_OK, 0), 0);
 
@@ -764,7 +765,7 @@ void _start(void)
     want_eq("remove the outside source", syscall3(SYS_UNLINK, (int)OUTSRC, 0, 0), 0);
     want_eq("remove the second outside source", syscall3(SYS_UNLINK, (int)POUTSRC, 0, 0), 0);
     want_eq("remove the outside directory", syscall3(SYS_RMDIR, (int)OUTDIR, 0, 0), 0);
-    want_eq("remove the lexical-.. target", syscall3(SYS_UNLINK, (int)UPFILE, 0, 0), 0);
+    want_eq("remove the upward target", syscall3(SYS_UNLINK, (int)UPFILE, 0, 0), 0);
 
     puts_("SEARCHPROBE OK\n");
     syscall1(SYS_EXIT, 0);

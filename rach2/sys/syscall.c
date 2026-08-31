@@ -940,15 +940,9 @@ static int canonicalize_abs(char *path)
         if (clen == 1 && comp[0] == '.') {
             continue;
         }
-        if (clen == 2 && comp[0] == '.' && comp[1] == '.') {
-            while (out > 1 && path[out - 1] != '/') {
-                out--;
-            }
-            if (out > 1) {
-                out--; /* drop the separating '/' too */
-            }
-            continue;
-        }
+        /* `..` stays in the path: it is resolved physically by the walk,
+         * where a missing or unsearchable directory before it fails, so a
+         * spelling can no longer reach past what the caller may see. */
         if (out > 1) {
             path[out++] = '/';
         }
@@ -1365,18 +1359,6 @@ static int32_t synth_open(const struct vpath *vp, int flags)
     }
 }
 
-/**
- * True if `name` (absolute, leading '/' stripped) names a synthetic mount.
- *
- * A mutation (mkdir/rmdir/unlink/rename/...) targeting /dev or /proc must be
- * refused here, not passed to KRFFS: otherwise mkdir("/dev") would create a
- * real KRFFS directory that shadows the synthetic one.
- */
-static int synth_is_synth(const char *name)
-{
-    struct vpath vp;
-    return synth_classify(name, &vp) != VNODE_KRFFS;
-}
 
 /* Open a synthetic directory (/dev, /proc, /proc/<pid>, /proc/<pid>/fd). The
  * SYNTH_DIR_* priv encode/decode macros live in synthfs.h. */
@@ -5892,11 +5874,6 @@ static int32_t sys_unlink(isr_params_t *params)
         return -EINVAL; /* empty filename */
     }
 
-    /* A synthetic mount is read-only. */
-    if (synth_is_synth(name)) {
-        return -EROFS;
-    }
-
     {
         struct vfs_ref parent;
         char leaf[VFS_NAME_MAX + 1];
@@ -5908,6 +5885,14 @@ static int32_t sys_unlink(isr_params_t *params)
                          sizeof(leaf));
         if (rc != 0) {
             return rc;
+        }
+        if (vfs_synth_vpath(parent.mnt, parent.node)) {
+            vfs_ref_release(&parent);
+            return -EROFS; /* the synthetic mounts are read-only */
+        }
+        if (vfs_leaf_mount(parent.mnt, parent.node, leaf)) {
+            vfs_ref_release(&parent);
+            return -EBUSY; /* a mount point cannot be unlinked */
         }
         /* The directory's write bit is checked before the target is even
          * looked up: a caller with no write permission there must see
@@ -5974,8 +5959,8 @@ static int32_t sys_mkdir(isr_params_t *params)
     if (len < 0) {
         return len;
     }
-    if (synth_is_synth(pathbuf[0] == '/' ? pathbuf + 1 : pathbuf)) {
-        return -EROFS; /* cannot create under (or shadow) /dev or /proc */
+    if (pathbuf[0] == '/' && pathbuf[1] == '\0') {
+        return -EEXIST; /* the root exists; mkdir -p walks through here */
     }
     {
         struct vfs_ref parent;
@@ -5990,9 +5975,12 @@ static int32_t sys_mkdir(isr_params_t *params)
         }
         if (vfs_synth_vpath(parent.mnt, parent.node)) {
             vfs_ref_release(&parent);
-            return -EROFS;
+            return -EROFS; /* nothing is created under /dev or /proc */
         }
-        if (parent.mnt->type->ops->lookup(parent.mnt, parent.node, leaf,
+        /* A name a mount stands at exists, whatever the type's own lookup
+         * says: a KRFFS /dev would shadow the synthetic mount. */
+        if (vfs_leaf_mount(parent.mnt, parent.node, leaf) ||
+            parent.mnt->type->ops->lookup(parent.mnt, parent.node, leaf,
                                           &found) == 0) {
             vfs_ref_release(&parent);
             return -EEXIST;
@@ -6040,9 +6028,6 @@ static int32_t sys_rmdir(isr_params_t *params)
     if (len < 0) {
         return len;
     }
-    if (synth_is_synth(pathbuf[0] == '/' ? pathbuf + 1 : pathbuf)) {
-        return -EROFS; /* /dev and /proc are not removable */
-    }
     {
         struct vfs_ref parent;
         char leaf[VFS_NAME_MAX + 1];
@@ -6053,6 +6038,14 @@ static int32_t sys_rmdir(isr_params_t *params)
                          sizeof(leaf));
         if (rc != 0) {
             return rc;
+        }
+        if (vfs_synth_vpath(parent.mnt, parent.node)) {
+            vfs_ref_release(&parent);
+            return -EROFS; /* the synthetic mounts are read-only */
+        }
+        if (vfs_leaf_mount(parent.mnt, parent.node, leaf)) {
+            vfs_ref_release(&parent);
+            return -EBUSY; /* a mount point cannot be removed */
         }
         rc = parent.mnt->type->ops->lookup(parent.mnt, parent.node, leaf,
                                            &found);
@@ -6151,11 +6144,6 @@ static int32_t sys_rename(isr_params_t *params)
         return -EINVAL; /* empty filename, and either path naming the root */
     }
 
-    /* Neither end may be a synthetic mount. */
-    if (synth_is_synth(old_name) || synth_is_synth(new_name)) {
-        return -EROFS;
-    }
-
     /* A rename writes both directories: the entry leaves one and lands in
      * the other. Both write bits are checked before the source is even
      * looked up, as unlink orders it. */
@@ -6188,6 +6176,11 @@ static int32_t sys_rename(isr_params_t *params)
      * EXDEV, and a program falls back to copy and unlink. */
     if (opar.mnt != npar.mnt) {
         rc = -EXDEV;
+        goto out;
+    }
+    if (vfs_leaf_mount(opar.mnt, opar.node, oleaf) ||
+        vfs_leaf_mount(npar.mnt, npar.node, nleaf)) {
+        rc = -EBUSY; /* a mount point moves for no one */
         goto out;
     }
 
@@ -6322,17 +6315,16 @@ static int32_t sys_utimensat(isr_params_t *params)
         return 0; /* root timestamps are not modifiable; report success */
     }
 
-    /* A synthetic mount is read-only. */
-    if (synth_is_synth(name)) {
-        return -EROFS;
-    }
-
     {
         struct vfs_ref ref;
         int rc = vfs_resolve(0, name, 0, &ref, 0, 0);
 
         if (rc != 0) {
             return rc; /* missing, not-a-dir, or a denied ancestor */
+        }
+        if (vfs_synth_vpath(ref.mnt, ref.node)) {
+            vfs_ref_release(&ref);
+            return -EROFS; /* the synthetic mounts are read-only */
         }
         node = ref.node;
         /* The hold is a no-op for the root type and the times are stored
