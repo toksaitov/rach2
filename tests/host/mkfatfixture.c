@@ -21,7 +21,20 @@
  *     --bpb-sector-size --bpb-fat-oversized --bpb-root-out --bpb-overflow
  *     --no-grubenv --small-candidate --fragmented --bad-fallback
  *     --cfg-short --cluster8 --cluster8-past-end --menu-short --menu-odd
- *     --no-menu
+ *     --no-menu --vfs --active-second --unmasked --dir-loop
+ *
+ * `--vfs` is the volume the vfat driver's host test reads: the root's
+ * chain is fragmented and crosses a 4 KiB boundary, and it holds a deleted
+ * entry, long names (one across that boundary, one with a surrogate pair,
+ * one whose checksum is wrong and must fall back to its lower-cased short
+ * name, one over a short name starting in 0x05), a fragmented file and a
+ * subdirectory whose `..` is the root. `--active-second` turns mirroring
+ * off with the second FAT active and the first deliberately wrong;
+ * `--unmasked` sets the reserved high nibble of the kernel chain's
+ * entries, which a reader must mask before judging them. `--dir-loop` is
+ * the `--vfs` volume with /SUB's chain linked to itself, a directory that
+ * never ends. /SUB also holds two files with damaged chains, one running
+ * past the data region and one shorter than its size.
  *
  * `--cluster8` builds the same files at eight sectors per cluster instead
  * of one, which is the geometry the sealed 64 MiB boot partition needs and
@@ -81,6 +94,10 @@ static void w32(unsigned char *p, uint32_t v)
     p[1] = (unsigned char)(v >> 8);
     p[2] = (unsigned char)(v >> 16);
     p[3] = (unsigned char)(v >> 24);
+}
+static uint32_t le32_of(const unsigned char *p)
+{
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
 /* A minimal valid image: ELF32 ET_EXEC EM_386 with one PT_LOAD covering
@@ -142,6 +159,71 @@ static void lfn_at(unsigned char *p, unsigned order)
     for (i = 1; i < 11; i++)
         p[i] = 0x41;
     p[11] = 0x0F;
+}
+
+/* The checksum a long name carries for its short entry. */
+static unsigned char short_sum(const char *name11)
+{
+    unsigned char sum = 0;
+    int i;
+
+    for (i = 0; i < 11; i++)
+        sum = (unsigned char)(((sum & 1) ? 0x80 : 0) + (sum >> 1) + (unsigned char)name11[i]);
+    return sum;
+}
+
+/* One long-name entry: `order` (0x40 marks the last), the 13 UTF-16 units
+   at their scattered offsets, type 0, the checksum, a zero cluster. */
+static void lfn_entry(unsigned char *p, unsigned order, unsigned char sum, const unsigned *units)
+{
+    static const int at[13] = {1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30};
+    int i;
+
+    memset(p, 0, 32);
+    p[0] = (unsigned char)order;
+    p[11] = 0x0F;
+    p[13] = sum;
+    for (i = 0; i < 13; i++)
+        w16(p + at[i], units[i]);
+}
+
+/* Write `name` (UTF-16 units, `n` of them) as a long-name sequence before
+   the short entry `short11` at `p`; returns the entry count written. A
+   wrong checksum is written when `bad_sum` is set. The padding past the
+   terminator is 0xFFFF, as Windows writes it. */
+static int lfn_write(unsigned char *p, const unsigned *name, int n, const char *short11,
+                     int bad_sum)
+{
+    int entries = (n + 12) / 13;
+    unsigned char sum = short_sum(short11);
+    int e;
+
+    if (bad_sum)
+        sum = (unsigned char)(sum + 1);
+    for (e = entries; e >= 1; e--) {
+        unsigned units[13];
+        int i;
+
+        for (i = 0; i < 13; i++) {
+            int k = (e - 1) * 13 + i;
+
+            units[i] = k < n ? name[k] : (k == n ? 0 : 0xFFFF);
+        }
+        lfn_entry(p, (unsigned)e | (e == entries ? 0x40 : 0), sum, units);
+        p += 32;
+    }
+    return entries;
+}
+
+static int ascii_units(const char *s, unsigned *units)
+{
+    int n = 0;
+
+    while (s[n]) {
+        units[n] = (unsigned char)s[n];
+        n++;
+    }
+    return n;
 }
 
 static void link_cluster(unsigned long cluster, uint32_t value)
@@ -224,6 +306,8 @@ int main(int argc, char **argv)
     w32(bpb + 36, (uint32_t)fatsz);
     root = is("--bpb-root-out") ? clusters + 100 : ROOT;
     w32(bpb + 44, (uint32_t)root);
+    if (is("--active-second"))
+        w16(bpb + 40, 0x0081); /* mirroring off, the second FAT active */
     if (is("--bpb-overflow")) {
         /* A reserved count near the 16-bit edge: data_start arithmetic
            that adds without checking would wrap past the total. */
@@ -265,9 +349,38 @@ int main(int argc, char **argv)
     chain(cfg_first, 1, 0);
     chain(menu_first, menu_clusters, 0);
 
+    if (is("--vfs") || is("--dir-loop")) {
+        /* The root's chain jumps, and its third cluster starts a new 4 KiB
+           block; the data files sit above everything bootctl's cases
+           place. */
+        link_cluster(ROOT, 9);
+        link_cluster(9, 10);
+        link_cluster(10, EOC);
+        chain(5000, 2, 5010);
+        chain(5010, 1, 0);
+        chain(5020, 1, 0);
+        chain(5030, 1, 0);
+        chain(5031, 1, 0);
+        chain(5032, 1, 0);
+        chain(5033, 1, 0);
+        chain(5034, 1, 0);
+        chain(5040, 2, clusters + 500); /* OUTRANGE.BIN: the third link is out */
+        chain(5050, 1, 0);              /* SHORTCH.BIN: one cluster for three */
+        if (is("--dir-loop"))
+            link_cluster(5020, 5020);
+    }
+    if (is("--unmasked")) {
+        unsigned long c;
+
+        for (c = kernel_first; c < kernel_first + kernel_clusters; c++)
+            w32(fat + c * 4, le32_of(fat + c * 4) | 0xF0000000u);
+    }
+
     memcpy(fat2, fat, (size_t)FATSZ * SECTOR);
     if (is("--fats-differ"))
         w32(fat2 + (kernel_first + 7) * 4, EOC);
+    if (is("--active-second"))
+        w32(fat + (kernel_first + 3) * 4, 0); /* the first FAT lies */
     memcpy(img + (size_t)RESERVED * SECTOR, fat, (size_t)FATSZ * SECTOR);
     memcpy(img + (size_t)(RESERVED + FATSZ) * SECTOR, fat2, (size_t)FATSZ * SECTOR);
 
@@ -278,6 +391,81 @@ int main(int argc, char **argv)
     dirent_at(dir, "FIXTURE    ", 0x08, 0, 0);
     lfn_at(dir + 32, 0x41);
     dirent_at(dir + 64, "BOOT       ", 0x10, BOOTDIR, 0);
+
+    if (is("--vfs") || is("--dir-loop")) {
+        unsigned units[256];
+        unsigned char *p = dir + 96;
+        unsigned char *far;
+        int n, i;
+        static const char e5name[11] = {0x05, '5', 'F', 'I', 'L', 'E', ' ', ' ', 'T', 'X', 'T'};
+
+        p[0] = 0xE5; /* a deleted entry */
+        p += 32;
+        n = ascii_units("long name with spaces.txt", units);
+        p += 32 * lfn_write(p, units, n, "LONGNA~1TXT", 0);
+        dirent_at(p, "LONGNA~1TXT", 0x20, 5030, 27);
+        p += 32;
+        units[0] = 0xD83D; /* U+1F600 as a surrogate pair */
+        units[1] = 0xDE00;
+        n = 2 + ascii_units(".txt", units + 2);
+        p += 32 * lfn_write(p, units, n, "_~1     TXT", 0);
+        dirent_at(p, "_~1     TXT", 0x20, 5031, 5);
+        p += 32;
+        n = ascii_units("should-not-appear.txt", units);
+        p += 32 * lfn_write(p, units, n, "BADSUM  TXT", 1);
+        dirent_at(p, "BADSUM  TXT", 0x20, 5032, 6);
+        p[12] = 0x18; /* base and extension shown in lower case */
+        p += 32;
+        n = ascii_units("e5file.txt", units);
+        p += 32 * lfn_write(p, units, n, e5name, 0);
+        dirent_at(p, e5name, 0x20, 5033, 2);
+        p += 32;
+        dirent_at(p, "FRAG    BIN", 0x20, 5000, 1536);
+        p += 32;
+        dirent_at(p, "SUB        ", 0x10, 5020, 0);
+        /* Cluster 2 is full; the chain continues at cluster 9, where a
+           sixteen-entry long name fills the cluster and its short entry
+           lands in cluster 10, across the 4 KiB boundary. */
+        far = img + CLUSTER_OFF(9);
+        for (i = 0; i < 208; i++)
+            units[i] = (unsigned)('a' + (i % 26));
+        units[204] = '.';
+        units[205] = 't';
+        units[206] = 'x';
+        units[207] = 't';
+        lfn_write(far, units, 208, "LONGLO~1TXT", 0);
+        dirent_at(img + CLUSTER_OFF(10), "LONGLO~1TXT", 0x20, 5034, 8);
+        /* The files' bytes. */
+        memcpy(img + CLUSTER_OFF(5030), "the long-named file's bytes", 27);
+        memcpy(img + CLUSTER_OFF(5031), "smile", 5);
+        memcpy(img + CLUSTER_OFF(5032), "badsum", 6);
+        memcpy(img + CLUSTER_OFF(5033), "e5", 2);
+        for (i = 0; i < 1536; i++) {
+            unsigned long c = i < 1024 ? 5000 + (unsigned long)(i / 512) : 5010;
+
+            img[CLUSTER_OFF(c) + (size_t)(i % 512)] = (unsigned char)((i * 7) & 0xFF);
+        }
+        memcpy(img + CLUSTER_OFF(5034), "crossing", 8);
+        /* /SUB: the dot entries, `..` naming the root by zero, one file. */
+        dir = img + CLUSTER_OFF(5020);
+        dirent_at(dir, ".          ", 0x10, 5020, 0);
+        dirent_at(dir + 32, "..         ", 0x10, 0, 0);
+        dirent_at(dir + 64, "INNER   TXT", 0x20, 5031, 5);
+        dirent_at(dir + 96, "OUTRANGEBIN", 0x20, 5040, 1536);
+        dirent_at(dir + 128, "SHORTCH BIN", 0x20, 5050, 1536);
+        if (is("--dir-loop")) {
+            /* Every slot taken, so no zero entry ends the listing before
+               the chain comes round again. */
+            char name11[12];
+
+            for (i = 5; i < 16; i++) {
+                memcpy(name11, "F00        ", 12);
+                name11[1] = (char)('0' + i / 10);
+                name11[2] = (char)('0' + i % 10);
+                dirent_at(dir + 32 * i, name11, 0x20, 5031, 5);
+            }
+        }
+    }
 
     /* /BOOT: dot entries, the two kernel files, GRUB, and an extra
        subtree. */
