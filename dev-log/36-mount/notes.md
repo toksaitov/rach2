@@ -50,3 +50,9 @@ edit, touch, rebuild verified by the kernel mtime, one check, restore):
 
 The script is kept with the milestone record below for reuse in later
 phases; it lives outside the tree while phases run.
+
+## Open items for phase 3
+
+* ftruncate(93) and truncate(92) are not in the syscall table; the family
+  that moves descriptor I/O decides whether to add ftruncate through the
+  vfs truncate operation, and vfsprobe gains the row when it exists.
