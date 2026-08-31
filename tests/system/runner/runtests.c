@@ -57,7 +57,7 @@ static const char *const PROBES[] = {
     "errnoprobe", "vmprobe", "forkro", "cowprobe", "cowregrant",
     "usercopyfault",
     "forkleak", "fdstale", "dirgrow", "dirprobe", "unlinkdirprobe",
-    "pathcanon", "timeprobe",
+    "pathcanon", "vfsprobe", "timeprobe",
     "sigprobe", "credprobe", "ownprobe", "permprobe", "sockettest",
     /* The four limits: the process table, a process's descriptors, the
        socket pool and the frames. Each fills the thing, requires the refusal
