@@ -1,0 +1,19 @@
+# Milestone 36 notes
+
+## Phase 1 inventory
+
+Base: e0279eb on master, clean, 54 ahead of origin, never pushed.
+
+Call sites in syscall.c (grep, exact): krffs_resolve_x 20, krffs_resolve 6, krffs_read 5, krffs_stamp_new_node 4, krffs_fill_stat64 4, krffs_node_path 3, krffs_chown_node 3, krffs_chmod_node 3, then truncate/stamp/open/create 2 each and nine singles. synth_classify 14, synth_stat 10, procfs_resolve_pid 9, synth_is_synth 8, devfs_stat 4, synth_open_dir 3, the rest 1-2.
+
+Migration order (plan's, confirmed by the counts): lookup/stat/access first because resolve_x dominates; then open/creat/openat; then descriptor I/O; then namespace changes; then rename/link; then statfs/sync/chdir/getcwd/execve.
+
+Lexical `..` dependents to re-check at the flip commit: tests/pathcanon.c (creates /cx first, so verdicts hold under physical resolution; the shadow-prevention claim moves from spelling to resolved node), tests/dirprobe.c chdir "..", tests/dirtest.c root parent. No test found that sends `..` through a missing directory; vfsprobe adds those rows.
+
+Suite disk confirmed by hand: krffs/mkdisk.sh 64/48, then mkmbr --lba IMG 2048:98304:7f 100352:28672:0c, then mformat -i IMG@@51380224 -F; mcopy/mmd/mdir work, long name stored with alias ALONGF~1.TXT; the volume is FAT32 with 1-sector clusters and well under 65525 clusters, which exercises the recognition rule.
+
+Review units for the round after phase 5 (fixed now, max five at once): 1 block.h/block.c/request pool + lag device; 2 bcache.c + bcache_hosttest; 3 vfs.h/vfs.c + descriptor fields in fd.h/syscall.c; 4 fat32.c/h + fat32_hosttest + mkfatfixture; 5 mount/umount2 + claims + synthfs surface; 6 probes and suite (vfsprobe, mountprobe, lagprobe, mount.sh); 7 proofread of reader-facing docs and comments. Seven units, at most five concurrent, plus re-reviews only for contract changes.
+
+## Open items
+
+(none)
