@@ -72,7 +72,7 @@ The system does not depend on a host device path. The kernel probes its supporte
 
 Do the work directly. Reading a file, checking its claims against the code, and writing the final prose require one consistent judgement and voice. Do not delegate them for volume.
 
-Use delegation only for an independent opinion. Assign one reviewer to a diff. If a task genuinely needs more than one agent, state the fixed total before starting any of them. A delegated review may cover at most six files and run for at most ten minutes. Reviews of two and five files returned findings in eight and ten minutes; a review of twenty-six files and a procedure failed three times without a result.
+Use delegation only for an independent opinion: review and proofreading, never writing code, documents or tests. Assign one reviewer to a diff. At most five delegated units run at once and none starts another. A delegate that judges code runs on Codex or a model of Opus 5's strength or better; using a weaker model requires a written reason in the plan. If a task genuinely needs more than one agent, state the fixed total before starting any of them. A delegated review may cover at most six files and run for at most ten minutes. Reviews of two and five files returned findings in eight and ten minutes; a review of twenty-six files and a procedure failed three times without a result.
 
 Never report that a delegated job is running without reading its state in the same turn. Ask the reviewer to state the most serious findings first. Do not ask it to write or tee a file because its sandbox refuses that operation. Do not launch it where a tool timeout can kill its process group. Do not let an earlier result determine how many agents a later stage starts; one such run started two hundred agents, exhausted the session, and still required a manual review.
 
@@ -80,7 +80,7 @@ Never report that a delegated job is running without reading its state in the sa
 
 A test is proved by making it fail. Drive a mutation from a script that restores the source in a trap, because a mutation can hang the suite and outlive the command that applied it, leaving the tree mutated. Restoring the source is not enough on its own: a `cp` back does not make `make` rebuild, so several runs here re-tested a stale binary and reported PASS for a mutation that had never been compiled. Touch the file, or rebuild explicitly, before believing the result.
 
-Every change passes `tests/run style` and `tests/run host`, and a real boot plus the SSH capstone when it touches anything they exercise. Substantial work gets a harsh independent Codex review with every finding fixed before commit. The half of the register rule that a person decides is part of that review; `tools/verify/prosecheck.c` decides the other half before the review starts.
+A small change runs the test rows or the smallest suite that covers it. Each phase of a planned run ends with `tests/run style`, `tests/run host` and the affected subsystem suites, once; the full set runs on the milestone's final tree, and a real boot plus the SSH capstone when the work touches anything they exercise. A new or changed check is proved by its mutation when it is written, once. Substantial work gets a harsh independent Codex review at the boundaries the plan fixes, with every finding fixed before the milestone closes. The half of the register rule that a person decides is part of that review; `tools/verify/prosecheck.c` decides the other half before the review starts.
 
 ## Git
 

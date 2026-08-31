@@ -151,9 +151,10 @@ TexFAT, a second FAT and a second bitmap: read-only. Vendor entries: kept and ma
 
 ## Standing rules for the run
 
-* Work directly. The only delegation is an independent review, one reviewer per unit, at most six files, at most ten minutes. There are six review checkpoints, after phases 2, 3, 4, 5, 6 and 7, with the number of units fixed in phase 1, and one focused re-review for a fix that changes a contract.
+* Work directly. No delegate writes code, documents or tests; delegation is independent review and proofreading only, in units of at most six files and ten minutes, at most five running at once, none starting another, every delegate reporting findings while this agent makes every change, and every delegate on Codex or a model of Opus 5's strength or better, because a weaker model's judgement of code is worth less than the time it saves. The rounds are fixed: one gate round after phase 3, where the reader must hold before the writer starts, and one round before the sweep, plus one focused re-review for a fix that changed a contract; the units are listed when the round starts. Before any round, this agent reads the whole diff against the plan and the owning Readmes, checks bounds, error paths, lifetimes, locking, the build entries and redundant code, and assembles the test and mutation results, so that the round confirms rather than discovers.
 * Commit in scoped units in the house style, on the branch, no attribution, never push.
-* Every commit passes `tests/run style` and `tests/run host`. A commit that touches a subsystem runs that subsystem's suites singly. The whole set runs after phases 3 and 5 and at the end of phase 7.
+* Gates, chosen for the ten-core machine and a run that should not wait on itself: a small commit runs the rows or the smallest suite that covers it; each phase ends with `tests/run style`, `tests/run host` and the affected subsystem suites, once; a new or changed check is proved by its mutation when it is written, once, through the restoring script, and a passing mutation is not rerun; the full set runs once on the milestone's final tree and again only after a fix that changed an executable, the build or a test.
+* Before the review rounds, every document and comment the milestone touched is read against the register rule in `CLAUDE.md` and `prosecheck` runs; one review unit is a proofread of the reader-facing documents and comments, told to reject the banned terms and the contextual shorthand `CLAUDE.md` names, reversals and fragments written for effect, intentions given to code or hardware, vague verbs where a concrete one exists, body-narrating comments, headers that repeat Readmes, and documentation that records a phase instead of the contract.
 * A test is proved by making it fail. A mutation is driven from a script that restores the source in a trap and rebuilds before the verdict is believed.
 * A change that alters a contract rewrites the owning Readme in the same commit.
 * A change that makes something redundant removes it in the same commit. The tree after this milestone is not larger than the milestone's own additions.
@@ -205,13 +206,13 @@ Mutations: free a lost cluster, which the intact-bytes row must catch; rewrite t
 
 ### Phase 6: the suite
 
-`tests/run exfat` in full, and `tests/run all`. The checker on this host over every volume the suite and the matrix wrote.
+`tests/run exfat` in full. The checker on this host over every volume the suite and the matrix wrote.
 
 Proof: the suite passes, and so does everything else; the checker is clean.
 
 ### Phase 7: the record and the sweep
 
-As in milestones 36 and 37, and as large. The documents, every one listed above, read against the code, with a Codex read of the reader-facing ones. The code: nothing duplicated between the two drivers that `fatcommon.c` should hold; no helper with one caller. The build: every rule, manifest line, fixture and tool listed in `notes.md` with its reason; no `build_*.sh`; `guestcheck` and `tests/run selfbuild` pass. The tests: the tier decision measured; a boot that proves what another proves removed; the matrix and mutation scripts in `notes.md`; the full set twice with no machine left running, and `make test` timed against milestone 37. The record: `notes.md` closed line by line, `dev-log/38-exfat/Readme.md` with its trust statement, which names what only a stick and a Windows-written volume can prove, and the `dev-log/Readme.md` entry in the same commit. The tree is clean and nothing is pushed.
+As in milestones 36 and 37, and as large. The documents, every one listed above, read against the code, with a Codex read of the reader-facing ones. The code: nothing duplicated between the two drivers that `fatcommon.c` should hold; no helper with one caller. The build: every rule, manifest line, fixture and tool listed in `notes.md` with its reason; no `build_*.sh`; `guestcheck` and `tests/run selfbuild` pass. The tests: the tier decision measured; a boot that proves what another proves removed; the matrix and mutation scripts in `notes.md`; the full set once on the final tree with no machine left running, rerun only after a later fix, and `make test` timed against milestone 37. The record: `notes.md` closed line by line, `dev-log/38-exfat/Readme.md` with its trust statement, which names what only a stick and a Windows-written volume can prove, and the `dev-log/Readme.md` entry in the same commit. The tree is clean and nothing is pushed.
 
 ## Risks, in expected order
 

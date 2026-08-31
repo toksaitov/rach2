@@ -62,7 +62,7 @@ A difference is a check in `metal_accept.sh` that fails or a contract in a Readm
 
 * Work directly. A fix's review is the owning subsystem's, one reviewer per unit, at most six files, at most ten minutes; the number of review units is fixed in phase 1 as one per phase that finds a difference, and a phase that finds none has none.
 * Commit in scoped units in the house style, on the branch, no attribution, never push.
-* Every commit passes `tests/run style` and `tests/run host`, and a fix runs the owning subsystem's suites before it is installed on the machine.
+* A fix's commits run the rows they touch; a fix closes with `tests/run style`, `tests/run host` and the owning subsystem's suites, once, before its kernel is installed on the machine. Delegation follows the same rules as every milestone: review and proofreading only, at most five units at once, none starting another, on Codex or a model of Opus 5's strength or better.
 * The disk rule in `CLAUDE.md`, at every step, every time. Every disk write is presented with the machine's own values, approved by name, and hashed before and after.
 * Nothing is worked around in the acceptance script; nothing is deferred without the owner's recorded decision.
 
@@ -120,7 +120,7 @@ Proof: the machine builds its own kernel and runs it.
 
 ### Phase 9: the record and the sweep
 
-As in the milestones before. The documents: every Readme that said "proved on the machine in milestone 43" now says what was proved, `Readme.md`'s hardware status rewritten, "Updating the installed machine" current, and a Codex read of the reader-facing documents. The code: the acceptance script read for lines that prove what another proves; no workaround left in it. The build: nothing new, and anything a fix added listed in `notes.md` with its reason. The tests: every model row a difference added is named in the owning Readme; the full set twice with no machine left running, and `make test` timed against milestone 42. The record: `notes.md` closed line by line, `hardware.md` consolidated, `dev-log/43-machine/Readme.md` with its trust statement, which says what the machine proved that QEMU could not and what remains unproved on any hardware but this one, and the `dev-log/Readme.md` entry in the same commit. The tree is clean and nothing is pushed.
+As in the milestones before. The documents: every Readme that said "proved on the machine in milestone 43" now says what was proved, `Readme.md`'s hardware status rewritten, "Updating the installed machine" current, and a Codex read of the reader-facing documents. The code: the acceptance script read for lines that prove what another proves; no workaround left in it. The build: nothing new, and anything a fix added listed in `notes.md` with its reason. The tests: every model row a difference added is named in the owning Readme; the full set once with no machine left running, rerun only after a later fix, and `make test` timed against milestone 42. The record: `notes.md` closed line by line, `hardware.md` consolidated, `dev-log/43-machine/Readme.md` with its trust statement, which says what the machine proved that QEMU could not and what remains unproved on any hardware but this one, and the `dev-log/Readme.md` entry in the same commit. The tree is clean and nothing is pushed.
 
 ## Risks, in expected order
 
