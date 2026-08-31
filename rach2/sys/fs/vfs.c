@@ -869,6 +869,26 @@ static int kfs_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
     return krffs_rmdir(path) == 0 ? 0 : -ENOTEMPTY;
 }
 
+static int kfs_rename(struct vfs_mount *mnt, void *olddir,
+                      const char *oldname, void *newdir, const char *newname)
+{
+    char oldp[256];
+    char newp[256];
+    int rc;
+
+    (void)mnt;
+    rc = kfs_join(olddir, oldname, oldp, sizeof(oldp));
+    if (rc == 0) {
+        rc = kfs_join(newdir, newname, newp, sizeof(newp));
+    }
+    if (rc != 0) {
+        return rc;
+    }
+    return krffs_rename(oldp + (oldp[0] == '/'), newp + (newp[0] == '/')) == 0
+               ? 0
+               : -EIO;
+}
+
 /* Creation goes through the parent's canonical path, which is how the
  * namespace half of KRFFS speaks today; the node comes back resolved. */
 static int kfs_create(struct vfs_mount *mnt, void *dir, const char *name,
@@ -925,7 +945,7 @@ static const struct vfs_ops krffs_ops = {
     kfs_unlink,
     kfs_mkdir,
     kfs_rmdir,
-    0, /* rename */
+    kfs_rename,
     0, /* link: KRFFS has none */
     0, /* readlink: KRFFS has none */
     kfs_statfs,

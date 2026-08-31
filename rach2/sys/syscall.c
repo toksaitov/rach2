@@ -1246,39 +1246,6 @@ static int cred_may_search(krffs_node_t *dir)
     return (int) cred_access_node(dir, CRED_X, 0);
 }
 
-/**
- * Write permission on the directory holding path `name`: the right that
- * creating, unlinking, or renaming an entry needs. `name` is absolute with
- * the leading '/' stripped; a top-level name's parent is the root node.
- */
-static int32_t cred_parent_dir(const char *name, krffs_node_t **out)
-{
-    char parent[256];
-    krffs_node_t *dir;
-    int rerr = 0;
-    int last = -1;
-    int i;
-
-    for (i = 0; i < (int) sizeof(parent) && name[i] != '\0'; i++) {
-        if (name[i] == '/') {
-            last = i;
-        }
-    }
-    if (last < 0) {
-        dir = krffs_fs->node;
-    } else {
-        for (i = 0; i < last; i++) {
-            parent[i] = name[i];
-        }
-        parent[last] = '\0';
-        dir = krffs_resolve_x(parent, &rerr, cred_may_search);
-        if (!dir) {
-            return rerr;
-        }
-    }
-    *out = dir;
-    return cred_access_node(dir, CRED_W, 0);
-}
 
 
 /**
@@ -3887,30 +3854,6 @@ static int32_t krffs_chown_node(krffs_node_t *node, uint32_t uid, uint32_t gid)
     return 0;
 }
 
-/* Does an object exist at `name` (absolute, leading '/' stripped)? 0 if so,
- * else -ENOENT/-ENOTDIR, the same synthetic-vs-KRFFS resolution do_access
- * uses. link() resolves its source through this so a missing source is
- * reported as ENOENT before the "no hard links" -EPERM. */
-static int32_t path_exists(const char *name)
-{
-    struct vpath vp;
-    int rerr = 0;
-
-    if (name[0] == '\0') {
-        return 0; /* the root directory */
-    }
-    if (synth_classify(name, &vp) != VNODE_KRFFS) {
-        struct linux_stat64 s;
-        return synth_stat(&vp, &s, 0);
-    }
-    if (!krffs_fs) {
-        return -ENOENT;
-    }
-    if (!krffs_resolve_x(name, &rerr, cred_may_search)) {
-        return rerr;
-    }
-    return 0;
-}
 
 /**
  * chmod core for the chmod/chown family.
@@ -4226,10 +4169,18 @@ static int32_t sys_link(isr_params_t *params)
     if (name[0] == '/') {
         name++;
     }
-    rc = path_exists(name);
-    if (rc != 0) {
-        return rc;
+    {
+        struct vfs_ref ref;
+
+        rc = vfs_resolve(0, name, 0, &ref, 0, 0);
+        if (rc != 0) {
+            return rc;
+        }
+        vfs_ref_release(&ref);
     }
+    /* The source exists; no mounted file system here has hard links, so the
+     * answer is the type's: EPERM. The day a type implements `link`, this
+     * gains a parent walk and goes through vfs_link. */
     return -EPERM;
 }
 
@@ -4268,10 +4219,18 @@ static int32_t sys_linkat(isr_params_t *params)
     if (name[0] == '/') {
         name++;
     }
-    rc = path_exists(name);
-    if (rc != 0) {
-        return rc;
+    {
+        struct vfs_ref ref;
+
+        rc = vfs_resolve(0, name, 0, &ref, 0, 0);
+        if (rc != 0) {
+            return rc;
+        }
+        vfs_ref_release(&ref);
     }
+    /* The source exists; no mounted file system here has hard links, so the
+     * answer is the type's: EPERM. The day a type implements `link`, this
+     * gains a parent walk and goes through vfs_link. */
     return -EPERM;
 }
 
@@ -6177,11 +6136,17 @@ static int32_t sys_rename(isr_params_t *params)
     const char __user *new_path = (const char __user *)params->ecx;
     char old_buf[256];
     char new_buf[256];
+    char oleaf[VFS_NAME_MAX + 1];
+    char nleaf[VFS_NAME_MAX + 1];
     const char *old_name;
     const char *new_name;
-    krffs_node_t *old_dir = NULL;
-    krffs_node_t *new_dir = NULL;
+    struct vfs_ref opar;
+    struct vfs_ref npar;
+    krffs_node_t *node;
+    krffs_node_t *existing;
+    void *found;
     int len;
+    int32_t rc;
 
     if (!current_proc || !old_path || !new_path) {
         return -EFAULT;
@@ -6208,7 +6173,7 @@ static int32_t sys_rename(isr_params_t *params)
     }
 
     if (old_name[0] == '\0' || new_name[0] == '\0') {
-        return -EINVAL; /* empty filename */
+        return -EINVAL; /* empty filename, and either path naming the root */
     }
 
     /* Neither end may be a synthetic mount. */
@@ -6216,97 +6181,91 @@ static int32_t sys_rename(isr_params_t *params)
         return -EROFS;
     }
 
-    if (!krffs_fs) {
-        return -ENOENT;
+    /* A rename writes both directories: the entry leaves one and lands in
+     * the other. Both write bits are checked before the source is even
+     * looked up, as unlink orders it. */
+    rc = vfs_resolve(0, old_buf, VFS_WALK_PARENT, &opar, oleaf,
+                     sizeof(oleaf));
+    if (rc != 0) {
+        return rc;
+    }
+    rc = cred_access_node((krffs_node_t *)opar.node, CRED_W, 0);
+    if (rc != 0) {
+        vfs_ref_release(&opar);
+        return rc;
+    }
+    rc = vfs_resolve(0, new_buf, VFS_WALK_PARENT, &npar, nleaf,
+                     sizeof(nleaf));
+    if (rc != 0) {
+        vfs_ref_release(&opar);
+        return rc;
+    }
+    rc = cred_access_node((krffs_node_t *)npar.node, CRED_W, 0);
+    if (rc != 0) {
+        goto out;
+    }
+    if (vfs_synth_vpath(opar.mnt, opar.node) ||
+        vfs_synth_vpath(npar.mnt, npar.node)) {
+        rc = -EROFS;
+        goto out;
+    }
+    /* rename is within one mount; across two it is the common layer's
+     * EXDEV, and a program falls back to copy and unlink. */
+    if (opar.mnt != npar.mnt) {
+        rc = -EXDEV;
+        goto out;
     }
 
-    {
-        /* A rename writes both directories: the entry leaves one and lands in
-         * the other. */
-        int32_t rc = cred_parent_dir(old_name, &old_dir);
-        if (rc == 0) {
-            rc = cred_parent_dir(new_name, &new_dir);
-        }
+    rc = opar.mnt->type->ops->lookup(opar.mnt, opar.node, oleaf, &found);
+    if (rc != 0) {
+        goto out;
+    }
+    node = found;
+    /* The sticky rule on the SOURCE: taking the entry out of its directory
+     * is a removal, whatever it is called. */
+    rc = cred_sticky_ok((krffs_node_t *)opar.node, node);
+    if (rc != 0) {
+        goto out;
+    }
+    if (node == krffs_fs->node || KRFFS_IS_DIR(node->mode)) {
+        rc = -EPERM; /* a directory's children reference its id */
+        goto out;
+    }
+
+    existing = NULL;
+    if (npar.mnt->type->ops->lookup(npar.mnt, npar.node, nleaf, &found) ==
+        0) {
+        existing = found;
+    }
+    if (existing && existing != node) {
+        /* The sticky rule on the DESTINATION, which is the half whose
+         * omission leaves the attack open while a probe that only tries
+         * unlink goes green: renaming over an entry removes it just as
+         * surely. */
+        rc = cred_sticky_ok((krffs_node_t *)npar.node, existing);
         if (rc != 0) {
-            return rc;
+            goto out;
         }
-    }
-
-    {
-        krffs_node_t *node;
-        krffs_node_t *existing;
-        int rerr = 0;
-        int last = -1;
-        int i;
-
-        node = krffs_resolve_x(old_name, &rerr, cred_may_search);
-        if (!node) {
-            return rerr;
+        if (existing == krffs_fs->node || KRFFS_IS_DIR(existing->mode)) {
+            rc = -EISDIR;
+            goto out;
         }
-        /* The sticky rule on the SOURCE: taking the entry out of its directory
-         * is a removal, whatever it is called. */
-        rerr = cred_sticky_ok(old_dir, node);
-        if (rerr != 0) {
-            return rerr;
-        }
-        if (node == krffs_fs->node || KRFFS_IS_DIR(node->mode)) {
-            return -EPERM;
-        }
-
-        for (i = 0; new_name[i] != '\0'; i++) {
-            if (new_name[i] == '/') {
-                last = i;
-            }
-        }
-        if (new_name[last + 1] == '\0') {
-            return -EINVAL;
-        }
-        if (last >= 0) {
-            char parent[256];
-            krffs_node_t *dir;
-
-            for (i = 0; i < last; i++) {
-                parent[i] = new_name[i];
-            }
-            parent[last] = '\0';
-            dir = krffs_resolve_x(parent, &rerr, cred_may_search);
-            if (!dir) {
-                return rerr;
-            }
-            if (dir != krffs_fs->node && !KRFFS_IS_DIR(dir->mode)) {
-                return -ENOTDIR;
-            }
-        }
-
-        existing = krffs_resolve_x(new_name, &rerr, cred_may_search);
-        if (!existing && rerr == -EACCES) {
-            return rerr;
-        }
-        /* The sticky rule on the DESTINATION, which is the half whose omission
-         * leaves the attack open while a probe that only tries unlink goes
-         * green: renaming over an entry removes it just as surely, so a caller
-         * who may not delete another user's file in a sticky directory may not
-         * clobber it either. */
-        if (existing && existing != node) {
-            rerr = cred_sticky_ok(new_dir, existing);
-            if (rerr != 0) {
-                return rerr;
-            }
-        }
-        /* Orphan the destination the rename is about to replace, so a reader
-         * holding it keeps reading the file it opened whole. Last again, after
-         * every refusal above: otherwise a rename that then fails would have
-         * destroyed the very file it refused to touch. With no holder, leave it
-         * for krffs_rename to free exactly as before. */
-        if (existing && existing != node && fd_node_holders(existing, NULL) > 0) {
+        /* Orphan the destination the rename is about to replace, so a
+         * reader holding it keeps reading the file it opened whole. Last,
+         * after every refusal above: otherwise a rename that then fails
+         * would have destroyed the very file it refused to touch. With no
+         * holder, the file system frees it exactly as before. */
+        if (fd_node_holders(existing, NULL) > 0) {
             krffs_orphan_node(existing);
         }
-        if (existing && existing != node &&
-            (existing == krffs_fs->node || KRFFS_IS_DIR(existing->mode))) {
-            return -EISDIR;
-        }
     }
-    return krffs_rename(old_name, new_name) == 0 ? 0 : -EIO;
+    vfs_ns_lock(opar.mnt);
+    rc = vfs_rename(opar.mnt, opar.node, oleaf, npar.node, nleaf);
+    vfs_ns_unlock(opar.mnt);
+out:
+    vfs_ref_release(&npar);
+    vfs_ref_release(&opar);
+    return rc;
 }
 
 /*
