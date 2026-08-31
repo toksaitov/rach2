@@ -26,6 +26,7 @@
 #include "fs/krffs.h"
 #include "fs/devfs.h"
 #include "fs/synthfs.h"
+#include "fs/vfs.h"
 #include "fs/procfs.h"
 #include "mm/paging.h"
 #include "mm/pagecache.h"
@@ -1246,19 +1247,6 @@ static int32_t cred_access_node(const krffs_node_t *node, int want,
 static int cred_may_search(krffs_node_t *dir)
 {
     return (int) cred_access_node(dir, CRED_X, 0);
-}
-
-/**
- * As cred_may_search, but by real ids, for access(2).
- *
- * access(2) answers for the real user, so the prefix it walks must be
- * charged the same way as the target it reports on; charging the prefix by
- * the effective ids would let a set-id program report reachability its
- * caller does not have.
- */
-static int cred_may_search_real(krffs_node_t *dir)
-{
-    return (int) cred_access_node(dir, CRED_X, 1);
 }
 
 /**
@@ -3283,8 +3271,6 @@ static int32_t do_stat64(const char __user *path, struct linux_stat64 __user *st
 {
     struct linux_stat64 kst;
     char pathbuf[256];
-    const char *name;
-    krffs_node_t *node;
     int len;
 
     if (!current_proc || !path || !st) {
@@ -3299,53 +3285,37 @@ static int32_t do_stat64(const char __user *path, struct linux_stat64 __user *st
     /* Build the result in a kernel struct, then copy it out in one shot. */
     k_memset(&kst, 0, sizeof(kst));
 
-    if ((pathbuf[0] == '/' && pathbuf[1] == '\0') || pathbuf[0] == '\0') {
-        kst.st_mode = S_IFDIR | 0755;  /* drwxr-xr-x */
-        kst.st_nlink = 1;
-        kst.st_ino = 0;  /* Root inode is 0 */
-        kst.st_blksize = 4096;
-        /* The root is a real directory with real times: an entry created in it
-         * stamps them, which is how a program watching a directory sees it. */
-        stat64_root_times(&kst);
-        if (copy_to_user(st, &kst, sizeof(kst)) != 0) {
-            return -EFAULT;
-        }
-        return 0;
-    }
-
-    name = pathbuf;
-    if (name[0] == '/') {
-        name++;
-    }
-
-    /* /dev and /proc are synthetic. */
     {
-        struct vpath vp;
-        if (synth_classify(name, &vp) != VNODE_KRFFS) {
-            int32_t rc = synth_stat(&vp, &kst, follow);
-            if (rc != 0) {
-                return rc;
+        struct vfs_ref ref;
+        const struct vpath *vp;
+        int rc = vfs_resolve(0, pathbuf, 0, &ref, 0, 0);
+
+        if (rc != 0) {
+            return rc; /* missing, not-a-dir, or a denied ancestor */
+        }
+        vp = vfs_synth_vpath(ref.mnt, ref.node);
+        if (vp) {
+            int32_t src = synth_stat(vp, &kst, follow);
+
+            vfs_ref_release(&ref);
+            if (src != 0) {
+                return src;
             }
-            if (copy_to_user(st, &kst, sizeof(kst)) != 0) {
-                return -EFAULT;
-            }
-            return 0;
+        } else if ((krffs_node_t *)ref.node == krffs_fs->node) {
+            /* The root's identity is fixed: ino 0, 0755, and real times: an
+             * entry created in it stamps them, which is how a program
+             * watching a directory sees it. */
+            kst.st_mode = S_IFDIR | 0755;
+            kst.st_nlink = 1;
+            kst.st_ino = 0;
+            kst.st_blksize = 4096;
+            stat64_root_times(&kst);
+            vfs_ref_release(&ref);
+        } else {
+            krffs_fill_stat64(&kst, (krffs_node_t *)ref.node);
+            vfs_ref_release(&ref);
         }
     }
-
-    if (!krffs_fs) {
-        return -ENOENT;
-    }
-
-    {
-        int rerr = 0;
-        node = krffs_resolve_x(name, &rerr, cred_may_search);
-        if (!node) {
-            return rerr; /* missing, not-a-dir, or a denied ancestor */
-        }
-    }
-
-    krffs_fill_stat64(&kst, node);
 
     if (copy_to_user(st, &kst, sizeof(kst)) != 0) {
         return -EFAULT;
@@ -3758,14 +3728,28 @@ static int32_t sys_fstatat64(isr_params_t *params)
  */
 static int32_t do_access(const char *name, int mode)
 {
-    struct vpath vp;
+    struct vfs_ref ref;
+    const struct vpath *vp;
+    int32_t rc;
+    int werr;
 
     if (mode & ~(R_OK | W_OK | X_OK)) {
         return -EINVAL; /* undefined access-mode bits */
     }
-    if (name[0] != '\0' && synth_classify(name, &vp) != VNODE_KRFFS) {
+    /* access(2) is the one caller judged by the REAL ids: it exists so a
+     * set-id program can ask what its invoker could do. The walk charges
+     * search the same way, so a set-id program cannot report reachability
+     * its caller does not have. */
+    werr = vfs_resolve(0, name, VFS_WALK_REAL_IDS, &ref, 0, 0);
+    if (werr != 0) {
+        return werr;
+    }
+    vp = vfs_synth_vpath(ref.mnt, ref.node);
+    if (vp) {
         struct linux_stat64 s;
-        int32_t rc = synth_stat(&vp, &s, 1); /* access follows symlinks */
+
+        rc = synth_stat(vp, &s, 1); /* access follows symlinks */
+        vfs_ref_release(&ref);
         if (rc != 0) {
             return rc; /* -ENOENT / -ENOTDIR */
         }
@@ -3774,22 +3758,10 @@ static int32_t do_access(const char *name, int mode)
         return cred_access_bits(s.st_uid, s.st_gid, s.st_mode & 0777u,
                                 mode, 1);
     }
-    {
-        krffs_node_t *node;
-        int rerr = 0;
-        if (!krffs_fs) {
-            return -ENOENT;
-        }
-        node = (name[0] == '\0') ? krffs_fs->node
-                                 : krffs_resolve_x(name, &rerr, cred_may_search_real);
-        if (!node) {
-            return rerr;
-        }
-        /* access(2) is the one caller judged by the REAL ids: it exists so a
-         * set-id program can ask what its invoker could do. R_OK/W_OK/X_OK
-         * are the same octal digits the checker takes. */
-        return cred_access_node(node, mode, 1);
-    }
+    /* R_OK/W_OK/X_OK are the same octal digits the checker takes. */
+    rc = cred_access_node((krffs_node_t *)ref.node, mode, 1);
+    vfs_ref_release(&ref);
+    return rc;
 }
 
 static int32_t sys_access(isr_params_t *params)
