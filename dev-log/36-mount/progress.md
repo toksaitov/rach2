@@ -23,12 +23,12 @@ Phase 2: the block path
 - [x] phase gate: style, host, affected suites
 
 Phase 3: the interface and the migration
-- [ ] vfs.h/vfs.c: table, resolver, physical .., mount crossing by held node, states, locks
-- [ ] KRFFS ops; synthetic types with lookup_rest; description fields; description lock
-- [ ] vfsprobe written and green before the first family moves; lexical rows marked
-- [ ] families migrated one commit each: lookup/stat/access; open/creat/openat; read/write/lseek/getdents/truncate/fsync; unlink/mkdir/rmdir/chmod/chown/utimensat; rename/link; statfs/sync/chdir/getcwd/execve
-- [ ] lexical .. step removed with the marked rows flipped
-- [ ] synth_classify reachable only from the two types; krffs_resolve_x gone
+- [x] vfs.h/vfs.c: table, resolver, physical .., mount crossing by held node, states, locks
+- [x] KRFFS ops; synthetic types with lookup_rest; description fields; description lock
+- [x] vfsprobe written and green before the first family moves; lexical rows marked
+- [x] families migrated one commit each: lookup/stat/access; open/creat/openat; read/write/lseek/getdents/truncate/fsync; unlink/mkdir/rmdir/chmod/chown/utimensat; rename/link; statfs/sync/chdir/getcwd/execve
+- [x] lexical .. step removed with the marked rows flipped
+- [x] synth_classify reachable only from the two types; krffs_resolve_x gone
 - [ ] tests/run all after the migration
 - [ ] phase mutations; phase gate
 

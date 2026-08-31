@@ -76,3 +76,26 @@ phases; it lives outside the tree while phases run.
   redirect into /dev/null works now, and the drill's refusal boot observes
   the write refusal (busybox cat's "write error") instead of ISH's failed
   open.
+
+## Phase 3 record
+
+Phase 3 mutations, proved once each through the restoring script (the same
+shape as phase 2's):
+
+* /procx matched as /proc: caught by vfsprobe
+* search permission skipped: caught by searchprobe. The plan named the
+  authority suite, which never walks a denied directory; searchprobe in
+  the shared boot is the check that does.
+* `..` resolved lexically: caught by vfsprobe's marked rows
+* a description's path re-resolved on read: caught by vfsprobe
+* relocation repointing dropped: persist's growth check did not catch it,
+  so vfsprobe gained a row (a second description on a file a write
+  relocates must see the grown file); caught by that row
+* open per descriptor instead of per description: waits for phase 5's
+  unmount record, which is its check
+
+The full set ran on the migrated tree: the regressions it found (mkdir of
+the root answering EINVAL to `mkdir -p`, searchprobe pinning the lexical
+`..`, the drill leaning on creat refusing a device) are fixed above; usb
+failed only inside the parallel full run and passes alone, which is
+investigated before the phase closes.

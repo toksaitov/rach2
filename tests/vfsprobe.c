@@ -301,6 +301,43 @@ void _start(void)
     }
     sys1(SYS_CLOSE, fd);
 
+    /* ---- a relocated file keeps every description ---- */
+    /* Two descriptions on one file; a neighbour is placed right after it so
+       the growth cannot extend in place and the node moves. The second
+       description must follow the move: its size and its far bytes are the
+       new node's. */
+    fd = sys3(SYS_OPEN, (int)"/vp/d/grow", O_CREAT | O_RDWR, 0644);
+    if (fd < 0 || sys3(SYS_WRITE, fd, (int)"seed", 4) != 4) {
+        fail("create the file that will grow");
+    }
+    dfd = sys3(SYS_OPEN, (int)"/vp/d/wall", O_CREAT | O_RDWR, 0644);
+    if (dfd < 0 || sys3(SYS_WRITE, dfd, (int)iobuf, 512) != 512) {
+        fail("create the neighbour");
+    }
+    sys1(SYS_CLOSE, dfd);
+    dfd = sys3(SYS_OPEN, (int)"/vp/d/grow", O_RDONLY, 0);
+    if (dfd < 0) {
+        fail("the second description on the growing file");
+    }
+    for (rc = 0; rc < 128; rc++) {
+        iobuf[0] = (unsigned char)rc;
+        if (sys3(SYS_WRITE, fd, (int)iobuf, 512) != 512) {
+            fail("grow the file past its neighbour");
+        }
+    }
+    if (sys3(SYS_LSEEK, dfd, 0, SEEK_END) != 4 + 128 * 512) {
+        fail("the second description sees the grown size");
+    }
+    if (sys3(SYS_LSEEK, dfd, 4 + 127 * 512, SEEK_SET) < 0 ||
+        sys3(SYS_READ, dfd, (int)iobuf, 1) != 1 || iobuf[0] != 127) {
+        fail("the second description reads the moved bytes");
+    }
+    sys1(SYS_CLOSE, dfd);
+    sys1(SYS_CLOSE, fd);
+    if (sys1(SYS_UNLINK, (int)"/vp/d/grow") != 0 || sys1(SYS_UNLINK, (int)"/vp/d/wall") != 0) {
+        fail("remove the growth files");
+    }
+
     /* ---- directories ---- */
     dfd = sys3(SYS_OPEN, (int)"/vp/d", O_RDONLY, 0);
     rc = sys3(SYS_GETDENTS64, dfd, (int)iobuf, sizeof(iobuf));
