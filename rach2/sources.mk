@@ -33,6 +33,7 @@ C_SRC = kernel.c \
         sys/block/request.c \
         sys/block/lag.c \
         sys/fs/bcache.c \
+    sys/fs/vfs.c \
         sys/block/mbr.c \
         sys/block/ata.c \
         sys/block/diskcmd.c \

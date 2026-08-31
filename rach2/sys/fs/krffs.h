@@ -141,6 +141,9 @@ krffs_node_t *krffs_find_reserved_or_root_node_by_name(krffs_file_system_t *fs, 
  */
 typedef int (*krffs_search_fn)(krffs_node_t *dir);
 
+/** The child of `dir` named `name` (one walk step); NULL if absent. */
+krffs_node_t *krffs_child(krffs_node_t *dir, const char *name);
+
 /** Resolve `path` to its node, or NULL if absent. */
 krffs_node_t *krffs_resolve(const char *path);
 

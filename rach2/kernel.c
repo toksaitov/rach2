@@ -18,6 +18,7 @@
 #include "sys/diag.h"
 #include "sys/block/mbr.h"
 #include "sys/fs/devfs.h"
+#include "sys/fs/vfs.h"
 #include "sys/proc/process.h"
 #include "sys/tty/tty.h"
 #include "sys/tty/pty.h"
@@ -2908,6 +2909,7 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
 
         if (mounted == 0) {
             krffs_set_mount(source, options);
+            vfs_init();
             set_fore_color(light_green);
             klog(KLOG_INFO, "krffs", "mounted: %d files%s", krffs_count_files(),
                  via);

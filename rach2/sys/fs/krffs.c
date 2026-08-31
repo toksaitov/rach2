@@ -257,6 +257,25 @@ static krffs_node_t *krffs_find_child(krffs_file_system_t *fs, uint64_t dir_id,
 }
 
 /**
+ * The child of `dir` named `name`, one step of a walk, for the VFS lookup.
+ * `dir` NULL or the root node means the root directory. NULL when absent.
+ */
+krffs_node_t *krffs_child(krffs_node_t *dir, const char *name)
+{
+    uint64_t id;
+    uint32_t len = 0;
+
+    if (!krffs_fs) {
+        return NULL;
+    }
+    while (name[len] != '\0') {
+        len++;
+    }
+    id = (!dir || dir == krffs_fs->node) ? (uint64_t)KRFFS_ROOT_ID : dir->id;
+    return krffs_find_child(krffs_fs, id, name, len);
+}
+
+/**
  * Resolve `path` to its node, honoring '.' and '..'.
  *
  * "/" (or "") resolves to the root node (fs->node). A non-final component that

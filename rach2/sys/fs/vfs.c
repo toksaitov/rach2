@@ -1,0 +1,962 @@
+/*
+ * vfs.c: the mount table and the resolver. The contract is in vfs.h; what
+ * is here is the walk, one component at a time, the reference and transient
+ * counts, the per-mount namespace lock, the default-answer wrappers, and
+ * the glue that makes KRFFS and the two synthetic namespaces answer the
+ * operation interface.
+ */
+
+#include "vfs.h"
+
+#include "../klog.h"
+#include "../lib/kerrno.h"
+#include "../lib/kstring.h"
+#include "../mm/pagecache.h"
+#include "../panic.h"
+#include "../proc/process.h"
+#include "krffs.h"
+#include "synthfs.h"
+
+#define VFS_S_IFMT 0170000u
+#define VFS_S_IFDIR 0040000u
+#define VFS_S_IFREG 0100000u
+#define VFS_IS_DIR(mode) (((mode) & VFS_S_IFMT) == VFS_S_IFDIR)
+
+static struct vfs_mount mounts[VFS_MOUNTS];
+
+struct vfs_mount *vfs_mount_at(int idx)
+{
+    if (idx < 0 || idx >= VFS_MOUNTS || mounts[idx].state == VFS_FREE) {
+        return 0;
+    }
+    return &mounts[idx];
+}
+
+struct vfs_mount *vfs_root_mount(void)
+{
+    return &mounts[0];
+}
+
+/* ---- reference and transient counts ---- */
+
+void vfs_ref_hold(const struct vfs_ref *r)
+{
+    if (r->mnt->type->ops->hold) {
+        r->mnt->type->ops->hold(r->mnt, r->node);
+    }
+}
+
+void vfs_ref_put(struct vfs_ref *r)
+{
+    if (r->mnt && r->mnt->type->ops->put) {
+        r->mnt->type->ops->put(r->mnt, r->node);
+    }
+    r->mnt = 0;
+    r->node = 0;
+}
+
+int vfs_enter(struct vfs_mount *mnt)
+{
+    if (mnt->state != VFS_ACTIVE) {
+        return -EBUSY;
+    }
+    mnt->inprogress++;
+    return 0;
+}
+
+void vfs_leave(struct vfs_mount *mnt)
+{
+    if (mnt->inprogress == 0) {
+        k_panic("vfs: an operation left a mount it never entered");
+    }
+    mnt->inprogress--;
+    if (mnt->inprogress == 0 && mnt->state == VFS_UNMOUNTING) {
+        wq_wake_all(&mnt->ns_wq); /* the unmount drains on this queue */
+    }
+}
+
+/* ---- the namespace lock ---- */
+
+static int ns_free(void *arg)
+{
+    struct vfs_mount *mnt = arg;
+    return mnt->ns_holder == -1;
+}
+
+void vfs_ns_lock(struct vfs_mount *mnt)
+{
+    while (mnt->ns_holder != -1) {
+        wq_wait_event(&mnt->ns_wq, ns_free, mnt); /* EINTR: still wanted */
+    }
+    mnt->ns_holder = current_proc ? (int)current_proc->pid : 0;
+}
+
+void vfs_ns_unlock(struct vfs_mount *mnt)
+{
+    mnt->ns_holder = -1;
+    wq_wake_all(&mnt->ns_wq);
+}
+
+/* ---- the permission the resolver charges ---- */
+
+static int in_groups(uint32_t gid)
+{
+    uint32_t i;
+
+    for (i = 0; i < current_proc->ngroups; i++) {
+        if (current_proc->groups[i] == gid) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/*
+ * The classic nine-bit rule over the attributes the file system reports:
+ * one identity class is chosen and judged alone. `use_real` judges by the
+ * real ids, for access(2), the one call that asks who the process really
+ * is. The search bit is what walking a directory costs.
+ */
+static int may_search(struct vfs_mount *mnt, void *node, int use_real)
+{
+    struct vfs_stat st;
+    uint32_t uid, bits;
+    int rc;
+
+    if (!mnt->type->ops->getattr) {
+        return 0; /* a flat synthetic namespace is searchable */
+    }
+    rc = mnt->type->ops->getattr(mnt, node, &st);
+    if (rc != 0) {
+        return rc;
+    }
+    if (!VFS_IS_DIR(st.mode)) {
+        return -ENOTDIR;
+    }
+    if (!current_proc) {
+        return 0;
+    }
+    uid = use_real ? current_proc->ruid : current_proc->euid;
+    if (uid == 0) {
+        return 0;
+    }
+    if (uid == st.uid) {
+        bits = st.mode >> 6;
+    } else if ((use_real ? current_proc->rgid : current_proc->egid) == st.gid ||
+               in_groups(st.gid)) {
+        bits = st.mode >> 3;
+    } else {
+        bits = st.mode;
+    }
+    return (bits & 1u) ? 0 : -EACCES;
+}
+
+/* ---- the resolver ---- */
+
+/* The mount whose root replaces `node` when the walk arrives at it: a child
+ * of `mnt` covering that node. The two synthetic mounts cover no node; they
+ * are entered by name from the root directory, which is the second match
+ * arm. */
+static struct vfs_mount *mount_covering(struct vfs_mount *mnt, void *node)
+{
+    int i;
+
+    for (i = 1; i < VFS_MOUNTS; i++) {
+        if (mounts[i].state == VFS_ACTIVE && mounts[i].parent == mnt &&
+            mounts[i].covered && mounts[i].covered == node) {
+            return &mounts[i];
+        }
+    }
+    return 0;
+}
+
+static int streq(const char *a, const char *b)
+{
+    while (*a && *a == *b) {
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
+
+static struct vfs_mount *mount_named(struct vfs_mount *mnt, void *node,
+                                     const char *name)
+{
+    int i;
+
+    for (i = 1; i < VFS_MOUNTS; i++) {
+        if (mounts[i].state == VFS_ACTIVE && mounts[i].parent == mnt &&
+            !mounts[i].covered && node == mnt->root &&
+            streq(mounts[i].covered_path + 1, name)) {
+            return &mounts[i];
+        }
+    }
+    return 0;
+}
+
+/* Replace the current place with another, moving the hold and the transient
+ * count. Fails only when the new mount refuses entry. */
+static int walk_move(struct vfs_ref *cur, struct vfs_mount *mnt, void *node)
+{
+    struct vfs_ref next;
+
+    next.mnt = mnt;
+    next.node = node;
+    if (mnt != cur->mnt) {
+        if (vfs_enter(mnt) != 0) {
+            return -EBUSY;
+        }
+    }
+    vfs_ref_hold(&next);
+    if (mnt != cur->mnt) {
+        vfs_leave(cur->mnt);
+    }
+    vfs_ref_put(cur);
+    *cur = next;
+    return 0;
+}
+
+/**
+ * Resolve one path. See vfs.h for the whole contract; the shape here is a
+ * loop over components with four arms: `.`, `..`, a mount whose type takes
+ * the rest of the path in one call, and the ordinary lookup of one name,
+ * followed by the crossing onto any mount covering the result.
+ */
+int vfs_resolve(const struct vfs_ref *start, const char *path, int flags,
+                struct vfs_ref *out, char *leaf, uint32_t leafcap)
+{
+    struct vfs_ref cur;
+    const char *p = path;
+    const char *last_comp = 0;
+    int use_real = (flags & VFS_WALK_REAL_IDS) ? 1 : 0;
+    int rc;
+
+    if (!path || !out) {
+        return -EINVAL;
+    }
+    if (mounts[0].state != VFS_ACTIVE) {
+        return -ENOENT;
+    }
+
+    /* With WALK_PARENT the final component is the caller's, not walked. */
+    if (flags & VFS_WALK_PARENT) {
+        const char *end;
+
+        end = path + k_strlen(path);
+        while (end > path && end[-1] == '/') {
+            end--;
+        }
+        if (end == path) {
+            return -EINVAL; /* the root has no parent to hand out */
+        }
+        last_comp = end;
+        while (last_comp > path && last_comp[-1] != '/') {
+            last_comp--;
+        }
+        if ((uint32_t)(end - last_comp) + 1 > leafcap) {
+            return -ENAMETOOLONG;
+        }
+        k_memcpy(leaf, last_comp, (uint32_t)(end - last_comp));
+        leaf[end - last_comp] = '\0';
+    }
+
+    if (p[0] == '/' || !start) {
+        cur.mnt = &mounts[0];
+        cur.node = mounts[0].root;
+    } else {
+        cur = *start;
+    }
+    if (vfs_enter(cur.mnt) != 0) {
+        return -EBUSY;
+    }
+    vfs_ref_hold(&cur);
+
+    for (;;) {
+        char comp[VFS_NAME_MAX + 1];
+        uint32_t len;
+        void *found;
+        struct vfs_mount *m;
+
+        while (*p == '/') {
+            p++;
+        }
+        if (*p == '\0' || (last_comp && p >= last_comp)) {
+            break;
+        }
+
+        /* The rest-taking mounts: the whole remainder in one call, with a
+         * climb above their root returned here to continue at the parent. */
+        if (cur.mnt->type->ops->lookup_rest) {
+            const char *left = 0;
+            char restbuf[VFS_NAME_MAX + 1];
+            const char *rest = p;
+            struct vfs_mount *stay = cur.mnt;
+
+            /* With WALK_PARENT only the part before the leaf is walked. */
+            if (last_comp) {
+                uint32_t rlen = (uint32_t)(last_comp - p);
+
+                while (rlen > 0 && p[rlen - 1] == '/') {
+                    rlen--;
+                }
+                if (rlen == 0) {
+                    break; /* the parent is this mount's root */
+                }
+                if (rlen > VFS_NAME_MAX) {
+                    rc = -ENAMETOOLONG;
+                    goto out_err;
+                }
+                k_memcpy(restbuf, p, rlen);
+                restbuf[rlen] = '\0';
+                rest = restbuf;
+            }
+            rc = cur.mnt->type->ops->lookup_rest(cur.mnt, rest, &found, &left);
+            if (rc == VFS_CLIMB) {
+                struct vfs_mount *pm = cur.mnt->parent ? cur.mnt->parent
+                                                       : &mounts[0];
+                void *pnode = cur.mnt->covered ? cur.mnt->covered
+                                               : mounts[0].root;
+                if (rest == restbuf) {
+                    /* The climb consumed part of a bounded copy; continue
+                     * at the same offset of the real path. */
+                    p += left - restbuf;
+                } else {
+                    p = left;
+                }
+                rc = walk_move(&cur, pm, pnode);
+                if (rc != 0) {
+                    goto out_err;
+                }
+                continue;
+            }
+            if (rc != 0) {
+                goto out_err;
+            }
+            vfs_ref_put(&cur);
+            cur.mnt = stay; /* the put clears the ref; the mount stays */
+            cur.node = found;
+            break;
+        }
+
+        rc = may_search(cur.mnt, cur.node, use_real);
+        if (rc != 0) {
+            goto out_err;
+        }
+
+        len = 0;
+        while (p[len] != '\0' && p[len] != '/') {
+            len++;
+        }
+        if (len > VFS_NAME_MAX) {
+            rc = -ENAMETOOLONG;
+            goto out_err;
+        }
+        k_memcpy(comp, p, len);
+        comp[len] = '\0';
+        p += len;
+
+        if (comp[0] == '.' && comp[1] == '\0') {
+            continue;
+        }
+        if (comp[0] == '.' && comp[1] == '.' && comp[2] == '\0') {
+            if (cur.node == cur.mnt->root) {
+                if (cur.mnt == &mounts[0]) {
+                    continue; /* the root of the root is its own parent */
+                }
+                /* At a mount root: continue at the covered node (the two
+                 * nameless mounts hang off the root directory itself), and
+                 * re-run this same `..` there. */
+                p -= 2;
+                rc = walk_move(&cur, cur.mnt->parent,
+                               cur.mnt->covered ? cur.mnt->covered
+                                                : cur.mnt->parent->root);
+                if (rc != 0) {
+                    goto out_err;
+                }
+                continue;
+            }
+        }
+
+        /* The nameless mounts, entered by name from the root directory. */
+        m = mount_named(cur.mnt, cur.node, comp);
+        if (m) {
+            rc = walk_move(&cur, m, m->root);
+            if (rc != 0) {
+                goto out_err;
+            }
+            continue;
+        }
+
+        rc = cur.mnt->type->ops->lookup(cur.mnt, cur.node, comp, &found);
+        if (rc != 0) {
+            goto out_err;
+        }
+        {
+            struct vfs_mount *stay = cur.mnt;
+
+            vfs_ref_put(&cur);
+            cur.mnt = stay; /* the put clears the ref; the mount stays */
+            cur.node = found;
+        }
+
+        /* A directory covered by a mount is replaced by that mount's root
+         * before the walk continues. */
+        m = mount_covering(cur.mnt, cur.node);
+        if (m) {
+            rc = walk_move(&cur, m, m->root);
+            if (rc != 0) {
+                goto out_err;
+            }
+        }
+    }
+
+    if (flags & VFS_WALK_PARENT) {
+        rc = may_search(cur.mnt, cur.node, use_real);
+        if (rc != 0) {
+            goto out_err;
+        }
+    }
+    *out = cur;
+    return 0;
+
+out_err:
+    vfs_leave(cur.mnt);
+    vfs_ref_put(&cur);
+    return rc;
+}
+
+void vfs_ref_release(struct vfs_ref *r)
+{
+    struct vfs_mount *mnt = r->mnt;
+
+    vfs_ref_put(r);
+    if (mnt) {
+        vfs_leave(mnt);
+    }
+}
+
+/* ---- repointing, for a KRFFS relocation ---- */
+
+void vfs_repoint(struct vfs_mount *mnt, void *from, void *to)
+{
+    int i, j;
+
+    for (i = 0; i < MAX_PROCS; i++) {
+        process_t *pr = &proc_table[i];
+
+        if (pr->state == PROC_UNUSED) {
+            continue;
+        }
+        for (j = 0; j < MAX_FDS; j++) {
+            fd_entry_t *e = &pr->fds.entries[j];
+
+            if ((e->type == FD_TYPE_FILE || e->type == FD_TYPE_DIR) &&
+                (void *)e->node == from) {
+                e->node = to;
+            }
+        }
+    }
+    for (i = 0; i < VFS_MOUNTS; i++) {
+        if (mounts[i].state == VFS_FREE) {
+            continue;
+        }
+        if (mounts[i].parent == mnt && mounts[i].covered == from) {
+            mounts[i].covered = to;
+        }
+    }
+    if (mnt->root == from) {
+        mnt->root = to;
+    }
+}
+
+/* ---- the default-answer wrappers ---- */
+
+int32_t vfs_read(struct vfs_mount *mnt, void *handle, void *buf,
+                 uint32_t count, uint64_t offset)
+{
+    if (!mnt->type->ops->read) {
+        return -EINVAL;
+    }
+    return mnt->type->ops->read(mnt, handle, buf, count, offset);
+}
+
+int32_t vfs_write(struct vfs_mount *mnt, void *handle, const void *buf,
+                  uint32_t count, uint64_t offset)
+{
+    if ((mnt->flags & VFS_MS_RDONLY) || !mnt->type->ops->write) {
+        return -EROFS;
+    }
+    return mnt->type->ops->write(mnt, handle, buf, count, offset);
+}
+
+int vfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
+{
+    if ((mnt->flags & VFS_MS_RDONLY) || !mnt->type->ops->truncate) {
+        return -EROFS;
+    }
+    return mnt->type->ops->truncate(mnt, handle, size);
+}
+
+int vfs_fsync(struct vfs_mount *mnt, void *handle)
+{
+    if (!mnt->type->ops->fsync) {
+        return 0; /* nothing buffered is already stable */
+    }
+    return mnt->type->ops->fsync(mnt, handle);
+}
+
+int vfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
+{
+    if (!mnt->type->ops->getattr) {
+        return -EINVAL;
+    }
+    return mnt->type->ops->getattr(mnt, node, st);
+}
+
+int vfs_setattr(struct vfs_mount *mnt, void *node, int what,
+                const struct vfs_stat *st)
+{
+    if ((mnt->flags & VFS_MS_RDONLY) || !mnt->type->ops->setattr) {
+        return -EROFS;
+    }
+    return mnt->type->ops->setattr(mnt, node, what, st);
+}
+
+int vfs_open_node(struct vfs_mount *mnt, void *node, int flags, void **handle)
+{
+    int rc;
+
+    if (mnt->type->ops->open) {
+        rc = mnt->type->ops->open(mnt, node, flags, handle);
+        if (rc != 0) {
+            return rc;
+        }
+    } else {
+        *handle = node; /* a type that needs no per-open object */
+    }
+    mnt->opens++;
+    return 0;
+}
+
+void vfs_release(struct vfs_mount *mnt, void *handle)
+{
+    if (mnt->type->ops->release) {
+        mnt->type->ops->release(mnt, handle);
+    }
+    mnt->releases++;
+}
+
+int vfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t index,
+                struct vfs_dirent *ent)
+{
+    if (!mnt->type->ops->readdir) {
+        return -EINVAL;
+    }
+    return mnt->type->ops->readdir(mnt, handle, index, ent);
+}
+
+int vfs_create(struct vfs_mount *mnt, void *dir, const char *name,
+               uint32_t mode, void **node)
+{
+    if ((mnt->flags & VFS_MS_RDONLY) || !mnt->type->ops->create) {
+        return -EROFS;
+    }
+    return mnt->type->ops->create(mnt, dir, name, mode, node);
+}
+
+int vfs_unlink_name(struct vfs_mount *mnt, void *dir, const char *name)
+{
+    if ((mnt->flags & VFS_MS_RDONLY) || !mnt->type->ops->unlink) {
+        return -EROFS;
+    }
+    return mnt->type->ops->unlink(mnt, dir, name);
+}
+
+int vfs_mkdir(struct vfs_mount *mnt, void *dir, const char *name,
+              uint32_t mode)
+{
+    if ((mnt->flags & VFS_MS_RDONLY) || !mnt->type->ops->mkdir) {
+        return -EROFS;
+    }
+    return mnt->type->ops->mkdir(mnt, dir, name, mode);
+}
+
+int vfs_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
+{
+    if ((mnt->flags & VFS_MS_RDONLY) || !mnt->type->ops->rmdir) {
+        return -EROFS;
+    }
+    return mnt->type->ops->rmdir(mnt, dir, name);
+}
+
+int vfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname,
+               void *newdir, const char *newname)
+{
+    if ((mnt->flags & VFS_MS_RDONLY) || !mnt->type->ops->rename) {
+        return -EROFS;
+    }
+    return mnt->type->ops->rename(mnt, olddir, oldname, newdir, newname);
+}
+
+int vfs_link(struct vfs_mount *mnt, void *dir, const char *name, void *node)
+{
+    if (mnt->flags & VFS_MS_RDONLY) {
+        return -EROFS;
+    }
+    if (!mnt->type->ops->link) {
+        return -EPERM; /* a file system without links */
+    }
+    return mnt->type->ops->link(mnt, dir, name, node);
+}
+
+int vfs_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
+{
+    if (!mnt->type->ops->statfs) {
+        return -EINVAL;
+    }
+    return mnt->type->ops->statfs(mnt, st);
+}
+
+/* ==== the KRFFS type: the root, adapted onto the interface ==== */
+
+/* A node handle is the node's place in the mapped image; the root is
+ * `krffs_fs->node`. Hold and put are empty because a place is not a
+ * resource, which is the reason the type may leave them NULL. */
+
+static int kfs_lookup(struct vfs_mount *mnt, void *dir, const char *name,
+                      void **node)
+{
+    krffs_node_t *d = dir ? dir : krffs_fs->node;
+    krffs_node_t *n;
+
+    (void)mnt;
+    if (name[0] == '.' && name[1] == '\0') {
+        *node = d;
+        return 0;
+    }
+    if (name[0] == '.' && name[1] == '.' && name[2] == '\0') {
+        n = krffs_parent_node(d);
+        *node = n ? n : krffs_fs->node;
+        return 0;
+    }
+    n = krffs_child(d, name);
+    if (!n) {
+        return -ENOENT;
+    }
+    *node = n;
+    return 0;
+}
+
+static int kfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
+{
+    krffs_node_t *n = node;
+
+    (void)mnt;
+    k_memset(st, 0, sizeof(*st));
+    if (n == krffs_fs->node) {
+        /* The root's stored mode carries the dirty flag; it reads as the
+         * fixed identity stat reports. */
+        st->mode = VFS_S_IFDIR | 0755u;
+        st->ino = 1;
+        return 0;
+    }
+    st->mode = KRFFS_IS_DIR(n->mode)
+                   ? (VFS_S_IFDIR | (uint32_t)(n->mode & 07777u))
+                   : (VFS_S_IFREG | (uint32_t)(n->mode & 07777u));
+    st->uid = n->uid;
+    st->gid = n->gid;
+    st->nlink = 1;
+    st->ino = n->id;
+    st->size = n->data_size;
+    st->atime_sec = n->access_time.seconds;
+    st->atime_nsec = n->access_time.nanoseconds;
+    st->mtime_sec = n->modification_time.seconds;
+    st->mtime_nsec = n->modification_time.nanoseconds;
+    st->ctime_sec = n->attribute_change_time.seconds;
+    st->ctime_nsec = n->attribute_change_time.nanoseconds;
+    return 0;
+}
+
+static int kfs_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
+{
+    (void)mnt;
+    st->magic = 0x4B524646u; /* "KRFF" */
+    st->bsize = 1024;
+    st->blocks = krffs_total_bytes() / 1024u;
+    st->bfree = krffs_free_bytes() / 1024u;
+    st->namelen = KRFFS_FILE_NAME_BUFFER_SIZE - 1;
+    return 0;
+}
+
+static int kfs_sync(struct vfs_mount *mnt)
+{
+    (void)mnt;
+    return pc_sync() == 0 ? 0 : -EIO;
+}
+
+static const struct vfs_ops krffs_ops = {
+    kfs_lookup,
+    0, /* lookup_rest */
+    0, /* hold */
+    0, /* put */
+    kfs_getattr,
+    0, /* setattr: the migration moves it here family by family */
+    0, /* open: the node is the handle */
+    0, /* release */
+    0, /* read */
+    0, /* write */
+    0, /* truncate */
+    0, /* fsync */
+    0, /* readdir */
+    0, /* create */
+    0, /* unlink */
+    0, /* mkdir */
+    0, /* rmdir */
+    0, /* rename */
+    0, /* link: KRFFS has none */
+    0, /* readlink: KRFFS has none */
+    kfs_statfs,
+    kfs_sync,
+    0, /* prepare_unmount: the root is permanent */
+    0, /* unmount */
+};
+
+static int kfs_mount(struct vfs_mount *mnt, block_device_t *dev,
+                     uint32_t flags, const char *options)
+{
+    (void)dev;
+    (void)flags;
+    (void)options;
+    if (!krffs_fs) {
+        return -ENOENT;
+    }
+    mnt->root = krffs_fs->node;
+    return 0;
+}
+
+const struct vfs_type vfs_krffs_type = {"krffs", kfs_mount, &krffs_ops};
+
+/* ==== the two synthetic types ==== */
+
+/*
+ * A synthetic node is a classified path. The classification carries a
+ * device leaf name, which a value packed into the pointer cannot, so the
+ * nodes live in a small pool and hold/put count references into it. A
+ * synthetic node lives for the length of one syscall (the open that
+ * follows a resolution binds a device's own ops onto the descriptor), so
+ * the pool's sixteen slots are a comfortable roof, and an exhausted pool
+ * answers ENOMEM rather than corrupting anything.
+ */
+struct synth_node {
+    struct vpath vp;
+    int refs;
+};
+
+static struct synth_node synth_pool[16];
+
+static int synth_take(const struct vpath *vp, void **node)
+{
+    int i;
+
+    for (i = 0; i < 16; i++) {
+        if (synth_pool[i].refs == 0) {
+            synth_pool[i].vp = *vp;
+            synth_pool[i].refs = 1;
+            *node = &synth_pool[i];
+            return 0;
+        }
+    }
+    klog(KLOG_WARN, "vfs", "synthetic node pool exhausted");
+    return -ENOMEM;
+}
+
+static void synth_hold(struct vfs_mount *mnt, void *node)
+{
+    (void)mnt;
+    ((struct synth_node *)node)->refs++;
+}
+
+static void synth_put(struct vfs_mount *mnt, void *node)
+{
+    (void)mnt;
+    ((struct synth_node *)node)->refs--;
+}
+
+/**
+ * The rest of a path through a flat synthetic namespace, `..` inside it
+ * resolved lexically because the namespace is a table of spellings, not a
+ * tree. A `..` that would climb above the mount root returns `VFS_CLIMB`
+ * with `*left` at the remainder, and the resolver continues at the covered
+ * node. The full spelling (`prefix` + the canonical rest) goes through
+ * `synth_classify`, the same classification the namespaces always had.
+ */
+static int synth_rest(struct vfs_mount *mnt, const char *prefix,
+                      const char *rest, void **node, const char **left)
+{
+    char full[256];
+    struct vpath vp;
+    uint32_t out;
+    const char *p = rest;
+    int kind;
+
+    out = k_strlen(prefix);
+    k_memcpy(full, prefix, out);
+
+    while (*p) {
+        const char *comp;
+        uint32_t len = 0;
+
+        while (*p == '/') {
+            p++;
+        }
+        comp = p;
+        while (*p != '\0' && *p != '/') {
+            p++;
+        }
+        len = (uint32_t)(p - comp);
+        if (len == 0) {
+            break;
+        }
+        if (len == 1 && comp[0] == '.') {
+            continue;
+        }
+        if (len == 2 && comp[0] == '.' && comp[1] == '.') {
+            if (out <= k_strlen(prefix)) {
+                while (*p == '/') {
+                    p++;
+                }
+                *left = p;
+                return VFS_CLIMB;
+            }
+            while (out > 0 && full[out - 1] != '/') {
+                out--;
+            }
+            if (out > 0) {
+                out--;
+            }
+            continue;
+        }
+        if (out + 1 + len + 1 > sizeof(full)) {
+            return -ENAMETOOLONG;
+        }
+        full[out++] = '/';
+        k_memcpy(full + out, comp, len);
+        out += len;
+    }
+    full[out] = '\0';
+
+    kind = synth_classify(full, &vp);
+    if (kind == VNODE_ENOENT) {
+        return -ENOENT;
+    }
+    if (kind == VNODE_ENOTDIR) {
+        return -ENOTDIR;
+    }
+    (void)mnt;
+    return synth_take(&vp, node);
+}
+
+static int devfs_rest(struct vfs_mount *mnt, const char *rest, void **node,
+                      const char **left)
+{
+    return synth_rest(mnt, "dev", rest, node, left);
+}
+
+static int procfs_rest(struct vfs_mount *mnt, const char *rest, void **node,
+                       const char **left)
+{
+    return synth_rest(mnt, "proc", rest, node, left);
+}
+
+static const struct vfs_ops devfs_vops = {
+    0,          devfs_rest, synth_hold, synth_put, 0, 0, 0, 0, 0, 0, 0, 0,
+    0,          0,          0,          0,         0, 0, 0, 0, 0, 0, 0, 0,
+};
+
+static const struct vfs_ops procfs_vops = {
+    0,           procfs_rest, synth_hold, synth_put, 0, 0, 0, 0, 0, 0, 0, 0,
+    0,           0,           0,          0,         0, 0, 0, 0, 0, 0, 0, 0,
+};
+
+static int synth_mount_root(struct vfs_mount *mnt, block_device_t *dev,
+                            uint32_t flags, const char *options)
+{
+    struct vpath vp;
+
+    (void)dev;
+    (void)flags;
+    /* The mount root is the namespace's own directory, held for the life of
+     * the mount. */
+    synth_classify(options, &vp);
+    return synth_take(&vp, &mnt->root);
+}
+
+static int devfs_mount(struct vfs_mount *mnt, block_device_t *dev,
+                       uint32_t flags, const char *options)
+{
+    (void)options;
+    return synth_mount_root(mnt, dev, flags, "dev");
+}
+
+static int procfs_mount(struct vfs_mount *mnt, block_device_t *dev,
+                        uint32_t flags, const char *options)
+{
+    (void)options;
+    return synth_mount_root(mnt, dev, flags, "proc");
+}
+
+const struct vfs_type vfs_devfs_type = {"devfs", devfs_mount, &devfs_vops};
+const struct vfs_type vfs_procfs_type = {"proc", procfs_mount, &procfs_vops};
+
+/** The classification a synthetic node carries, or NULL when `mnt` is not
+ * one of the two synthetic mounts. The syscall layer's glue reads it. */
+const struct vpath *vfs_synth_vpath(struct vfs_mount *mnt, void *node)
+{
+    if (mnt->type != &vfs_devfs_type && mnt->type != &vfs_procfs_type) {
+        return 0;
+    }
+    return &((struct synth_node *)node)->vp;
+}
+
+/* ---- the permanent entries ---- */
+
+static void install(int idx, const struct vfs_type *type, const char *path,
+                    struct vfs_mount *parent)
+{
+    struct vfs_mount *m = &mounts[idx];
+
+    m->type = type;
+    m->dev = 0;
+    m->flags = 0;
+    m->parent = parent;
+    m->covered = 0;
+    k_strncpy(m->covered_path, path, sizeof(m->covered_path));
+    m->refs = 0;
+    m->inprogress = 0;
+    m->ns_holder = -1;
+    wait_queue_init(&m->ns_wq);
+    m->priv = 0;
+    m->opens = 0;
+    m->releases = 0;
+    if (type->mount(m, 0, 0, 0) != 0) {
+        k_panic("vfs: a permanent mount refused to construct");
+    }
+    m->state = VFS_ACTIVE;
+}
+
+void vfs_init(void)
+{
+    static int installed;
+
+    if (installed) {
+        /* A re-mount of the root (the debug shell can remount from the
+         * disk) replaces the image; the entry keeps its slot and takes the
+         * new root node. */
+        mounts[0].root = krffs_fs->node;
+        return;
+    }
+    installed = 1;
+    install(0, &vfs_krffs_type, "/", 0);
+    install(1, &vfs_devfs_type, "/dev", &mounts[0]);
+    install(2, &vfs_procfs_type, "/proc", &mounts[0]);
+}
