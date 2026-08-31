@@ -17,3 +17,36 @@ Review units for the round after phase 5 (fixed now, max five at once): 1 block.
 ## Open items
 
 (none)
+
+## Phase 2 record
+
+The lag device delivers every completion twice, two ticks apart, and the
+second copy claims an error; a kernel that believed the duplicate would fail
+a healthy request, which is what makes the generation check observable from
+a boot. The sleep boot logs the drops.
+
+The deadline boot first appeared to hang the machine. It did not: the
+harness drains serial only while steps run plus a short grace (3 s), and the
+deadline sequence ends about 13 s after its exec, so the output never
+reached the log. Suites that read a slow result must hold an expect step
+open across it; mount.sh's lag boots each end with expect=LAGPROBE OK.
+
+The fixture boot partition is 512 KiB; lagprobe's write row uses 256 KiB in.
+
+Phase 2 mutations, proved once each through the restoring script (backup,
+edit, touch, rebuild verified by the kernel mtime, one check, restore):
+
+* complete without waking the sleeper: caught by the sleep boot
+* free a timed-out slot at once: caught by the deadline boot (no late
+  completion line)
+* accept a stale generation: caught by the sleep boot (poisoned duplicate)
+* clear the fault-safe flag on AHCI: caught by tests/run disk-ahci (root
+  refused)
+* publish a node for an empty MBR entry: caught by the sleep boot
+  (/dev/disk0p3 open must fail)
+* fifth held buffer without panic: caught by bcache_hosttest
+* lower block while holding a higher one without panic: caught by
+  bcache_hosttest
+
+The script is kept with the milestone record below for reuse in later
+phases; it lives outside the tree while phases run.

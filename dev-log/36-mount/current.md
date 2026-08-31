@@ -1,4 +1,4 @@
-Phase 2, first item: BLOCK_FAULT_SAFE and the request object in block.h.
-Evidence gathered: phase 1 tables in notes.md and hardware.md.
-Next action: read rach2/sys/block/block.h and devfs.c's raw window transfer loop before writing the request pool.
-File being read when written: none.
+Phase 3, first item: vfs.h and the mount table.
+Evidence gathered: phase 2 complete; suites green; mutations proved (notes.md).
+Next action: reread the plan's phase 3 and interface sections, then write vfs.h.
+File being read when written: dev-log/36-mount/plan.md.

@@ -10,17 +10,17 @@ Phase 1: arrival and inventory
 - [x] Lenovo partition facts from milestones 25 and 35 recorded beside QEMU's
 
 Phase 2: the block path
-- [ ] BLOCK_FAULT_SAFE, deadline_ticks, submit, block_complete
-- [ ] request pool: 16 requests, one page each, states, generations, quarantine
-- [ ] block_request: polled path any context; sleeping path with copy in both directions, split at one page
-- [ ] disk root mount refuses a backing without the flag
-- [ ] bcache read half: get/release/sync/invalidate, hold limit 4, ascending order, short last block
-- [ ] lag device rach2.blocklag=N under partition nodes and /dev/bootpart, root on the real device
-- [ ] partition nodes /dev/disk0p1..p4, read-only, block published for nonempty MBR entries
-- [ ] raw windows moved onto block_request
-- [ ] bcache_hosttest.c rows; lagprobe raw-window half (sleep proof, deadline, slot reuse, bootpart write via lag)
-- [ ] phase mutations proved once each
-- [ ] phase gate: style, host, affected suites
+- [x] BLOCK_FAULT_SAFE, deadline_ticks, submit, block_complete
+- [x] request pool: 16 requests, one page each, states, generations, quarantine
+- [x] block_request: polled path any context; sleeping path with copy in both directions, split at one page
+- [x] disk root mount refuses a backing without the flag
+- [x] bcache read half: get/release/sync/invalidate, hold limit 4, ascending order, short last block
+- [x] lag device rach2.blocklag=N under partition nodes and /dev/bootpart, root on the real device
+- [x] partition nodes /dev/disk0p1..p4, read-only, block published for nonempty MBR entries
+- [x] raw windows moved onto block_request
+- [x] bcache_hosttest.c rows; lagprobe raw-window half (sleep proof, deadline, slot reuse, bootpart write via lag)
+- [x] phase mutations proved once each
+- [x] phase gate: style, host, affected suites
 
 Phase 3: the interface and the migration
 - [ ] vfs.h/vfs.c: table, resolver, physical .., mount crossing by held node, states, locks
