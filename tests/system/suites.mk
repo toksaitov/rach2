@@ -962,6 +962,13 @@ run-diskdiag: rach2 rach2-metal rach2-metal-image $(HARNESS)
 # away, because a key typed or a mouse moved on a machine that still has a PS/2
 # keyboard could have arrived by either road, and a check that passes either
 # way says nothing about the stack this milestone built.
+# `tests/run mount`: the mount milestone's suite. Phase 2 boots the lag device
+# and the partition nodes; later phases grow it. Its disk is the test disk
+# with a FAT32 partition added at 49 MiB by mkmbr and mtools.
+MOUNT_DISK = build/images/mount-test.disk
+run-mount: rach2 tests krffs $(MKFIXTURE) $(HARNESS)
+	sh tests/system/suites/mount.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(MOUNT_DISK)
+
 run-usb: rach2 tests krffs test-image $(HARNESS)
 	sh tests/system/suites/usb.sh $(HARNESS_KERNEL) $(TEST_IMAGE) $(HARNESS)
 # (see tests/system/suites/subset.sh).

@@ -73,7 +73,8 @@ static int backing_write(block_device_t *device, uint64_t lba, uint32_t count, c
     return 0;
 }
 
-static block_device_t backing = {512u, 1000u, backing_read, backing_write, 0};
+static block_device_t backing = {512u, 1000u, BLOCK_FAULT_SAFE, 0, backing_read, backing_write,
+                                 0,    0};
 
 int main(void)
 {
