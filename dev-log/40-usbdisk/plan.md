@@ -1,10 +1,10 @@
-# Milestone 39: the USB disk
+# Milestone 40: the USB disk
 
 ## The goal
 
 A flash drive plugged into a root port becomes a disk: enumerated by the USB core, driven by a mass-storage class driver over Bulk-Only Transport, published as a block device that sleeps its caller, with its partitions read from an MBR or a GUID partition table, mountable as FAT32 or exFAT through everything milestones 36 to 38 built, and safe to pull out at any moment. Then the kernel boots from a stick and mounts that stick's data partition, in QEMU and on the Lenovo G50-70, with the keyboard and mouse still working beside it.
 
-The milestone is complete when, in QEMU, a virtual stick appears, mounts, is written, is pulled while mounted at every stage of a transfer and gives `EIO` rather than a crash, is plugged back in and mounts again with nothing inherited, and a machine booted from a stick image mounts that same stick's second partition; and when, on the Lenovo, the owner's own stick, formatted on a Mac, mounts and lists, a file written to it by Rach2 reads back on the Mac, and the machine boots from a Rach2 stick and uses it. Hubs are milestone 40: everything here is on a root port, and the Lenovo's three sockets are three root ports since milestone 35 moved them.
+The milestone is complete when, in QEMU, a virtual stick appears, mounts, is written, is pulled while mounted at every stage of a transfer and gives `EIO` rather than a crash, is plugged back in and mounts again with nothing inherited, and a machine booted from a stick image mounts that same stick's second partition; and when, on the Lenovo, the owner's own stick, formatted on a Mac, mounts and lists, a file written to it by Rach2 reads back on the Mac, and the machine boots from a Rach2 stick and uses it. Hubs are milestone 41: everything here is on a root port, and the Lenovo's three sockets are three root ports since milestone 35 moved them.
 
 The milestone has two halves with a gate between them: the disk, with its removal and replug, through phase 5; and the stick image and the boot from it, from phase 6, which does not start until the first half is closed and reviewed. The first review of this plan asked for them to be separate milestones; they are separate halves of one instead, because the second is small and depends on nothing but the first.
 
@@ -16,7 +16,7 @@ This plan is the authority for the run. A conflict between this plan and the cur
 * The block path from milestones 36 and 37: `block_request` with a pool of sixteen requests of one page each, a write copied into the page before `submit` and a read copied out after, a device that provides `submit` instead of polled `read` and `write`, `block_complete(request, generation, status)`, a per-device deadline, the quarantine of a timed-out request, and the lag device as the only sleeping device so far. `wq_wait_event` re-checks its condition with interrupts off before every sleep, which is what makes it safe against a lost wakeup. `bcache_write` for metadata and write-back for data; a device whose write fails takes its mount read-only; `bcache_invalidate` refuses while a buffer is held.
 * Mounts, claims and the partition nodes from milestone 36: `/dev/disk0p1` to `p4` from the MBR, read-only raw windows that report themselves as character devices, claims by sector range, a mount that is `unmounting` refusing new work, and `umount2` refusing `EBUSY` while anything holds the mount. `bootctl` and `reflash` use those windows and their tests stat them.
 * The FAT32 and exFAT drivers, their dirty-volume checks, and the `update` process that syncs every thirty seconds.
-* The kernel is non-preemptive inside a syscall and has no kernel threads; AHCI polls with interrupts off; the HDA driver registers a legacy IRQ and notes that on real hardware legacy PCI interrupts may not arrive, which is why it also polls. There is no local APIC and no MSI support in this kernel.
+* The kernel is non-preemptive inside a syscall and has no kernel threads; AHCI polls with interrupts off. Since milestone 39 the xHCI controller delivers its interrupts by MSI into the one pump the timer also runs, and `rach2.nomsi` turns that off.
 * BusyBox in the os-real image has `blkid`, `findfs` and `mount LABEL=`, with `volume_id` for FAT, exFAT and ext; it finds devices by scanning `/dev` for block-device nodes and reads their first sectors.
 * QEMU: `-drive if=none,id=stick,format=raw,file=stick.img -device usb-storage,bus=xhci.0,drive=stick` attaches a stick; from the monitor, `drive_add 0 if=none,id=...,file=...` then `device_add usb-storage,bus=xhci.0,drive=...,id=...` plugs one in and `device_del` pulls it out; `bootindex` makes SeaBIOS boot from it.
 * Bulk-Only Transport: a 31-byte command block wrapper with the signature `USBC`, a tag, the transfer length, a direction flag, the LUN and a command of 1 to 16 bytes; a 13-byte status wrapper with `USBS`, the tag, the residue and a status of 0, 1 or 2, where 2 is a phase error; the class requests `Bulk-Only Mass Storage Reset` (0xFF) and `Get Max LUN` (0xFE, one byte, at most 15), both addressed to the interface's number; reset recovery as the reset request followed by clearing the halt on the IN and then the OUT endpoint; interface class 8, subclass 6 for the SCSI transparent set, protocol 0x50 for Bulk-Only and 0x62 for UAS.
@@ -54,7 +54,7 @@ Each stick is a `block_device` with `submit` and no fault-safe flag, a deadline 
 
 ### Waiting for a stick
 
-The sleeping side of `block_request` on a USB device does not wait for the timer alone. The drain is one function, `usb_pump`, that the timer calls once per tick and a waiting process calls in a loop; it runs with interrupts off for one bounded pass over the event ring and the device state machines, and it is the only place either context touches them. Submission runs inside the same critical section, so the timer never sees a half-published request. The process's loop is: pump; if the request is done, stop; if less than two milliseconds have passed since submission, pump again; otherwise `wq_wait_event` on the request's done flag, whose predicate is re-checked with interrupts off before the sleep, so a completion that lands between the check and the sleep is not lost, and the timer's pump wakes the sleeper. A full-speed or high-speed transfer of a page completes in well under a tick, so most requests finish inside their first two milliseconds and a sequential read runs at the bus's speed rather than at three ticks per request. Interrupt-driven completion would be better and is not this milestone: it needs a local APIC and MSI, which this kernel does not have, and the HDA driver's record says legacy PCI interrupts may not arrive on the notebook at all.
+The sleeping side of `block_request` on a USB device submits and sleeps on the request's done flag. Milestone 39 gave the controller its interrupt: the MSI handler runs the one pump, `usb_pump`, that the timer also runs every tick, with interrupts off inside it; the pump drains the event ring, advances the class driver's state machines, completes the request and wakes the sleeper through `wq_wake_all`. Submission runs inside the same critical section, so neither context sees a half-published request, and `wq_wait_event` re-checks the done flag with interrupts off before sleeping, so a completion that lands between the check and the sleep is not lost. A lost edge costs one tick, because the timer's pump is the fallback, and the counter milestone 39 added says how often that happened. With `rach2.nomsi` the timer is the only pump and a request completes at the next tick, which is slower and still correct.
 
 ## Decisions on naming and tables
 
@@ -76,7 +76,7 @@ Data written since the last sync is lost when a stick is pulled, at most thirty 
 
 ## Decisions on booting from a stick
 
-The firmware and GRUB load the kernel and the RAM root from the stick over the BIOS, which milestone 24 proved on the notebook. New is the image: `rach2-stick-image` is the metal hybrid ISO followed by an exFAT volume, with an MBR that keeps the hybrid's boot code and first entry, and gains a second entry of type `0x07` whose first sector is the volume's, at a 1 MiB boundary after the ISO, and whose length is the volume's; the volume is built by `mkexfatfixture` with `PartitionOffset` equal to that first sector and `VolumeLength` equal to that length, so the kernel's check of both fields passes. The image is MBR-only; if the ISO builder's hybrid form carries a GUID table, the stick image does not use it, because a GUID table written to a larger stick leaves its backup header short of the last sector. Phase 1 reads what `tools/image/mkiso.sh` produces and records it. The finished image, not its parts, is validated with the kernel's partition rules and booted under the BIOS in QEMU. The kernel booted from it enumerates the stick as a disk, `/dev/usb0p2` is the data partition, and `mount -t exfat /dev/usb0p2 /mnt` is the capstone. The root stays in RAM; a root on a stick is milestone 41's question.
+The firmware and GRUB load the kernel and the RAM root from the stick over the BIOS, which milestone 24 proved on the notebook. New is the image: `rach2-stick-image` is the metal hybrid ISO followed by an exFAT volume, with an MBR that keeps the hybrid's boot code and first entry, and gains a second entry of type `0x07` whose first sector is the volume's, at a 1 MiB boundary after the ISO, and whose length is the volume's; the volume is built by `mkexfatfixture` with `PartitionOffset` equal to that first sector and `VolumeLength` equal to that length, so the kernel's check of both fields passes. The image is MBR-only; if the ISO builder's hybrid form carries a GUID table, the stick image does not use it, because a GUID table written to a larger stick leaves its backup header short of the last sector. Phase 1 reads what `tools/image/mkiso.sh` produces and records it. The finished image, not its parts, is validated with the kernel's partition rules and booted under the BIOS in QEMU. The kernel booted from it enumerates the stick as a disk, `/dev/usb0p2` is the data partition, and `mount -t exfat /dev/usb0p2 /mnt` is the capstone. The root stays in RAM; a root on a stick is milestone 42's question.
 
 ## Memory and limits
 
@@ -93,11 +93,11 @@ The firmware and GRUB load the kernel and the RAM root from the stick over the B
 | Partitions per stick | 4, from an MBR or the first four used GPT entries |
 | GPT entry array read | 16 KiB, 128 entries |
 | Block size | 512 bytes; another size is refused by name |
-| Poll inside a request | 2 ms, then an atomic sleep |
+| Wait inside a request | an atomic sleep, woken by the controller's interrupt or by the timer's fallback pump |
 
 ## What stays out
 
-Hubs, and a stick behind one: milestone 40. Interrupt-driven completion: a milestone of its own, after a local APIC exists. Requests larger than a page and the throughput they buy: a later optimisation with its own review. `/proc/partitions` and block-device `stat` for `/dev/disk0`: not needed and not done. UAS, and Bulk-Only on a nonzero alternate setting: refused by name. Card readers with several media LUNs: the first ready direct-access LUN is taken and the rest are recorded, not served. `READ(16)` and drives over 2 TiB: refused by name. Ejecting a stick from software: no; a person pulls it. Booting the root from a stick: milestone 41.
+Hubs, and a stick behind one: milestone 41. Requests larger than a page and the throughput they buy: a later optimisation with its own review. `/proc/partitions` and block-device `stat` for `/dev/disk0`: not needed and not done. UAS, and Bulk-Only on a nonzero alternate setting: refused by name. Card readers with several media LUNs: the first ready direct-access LUN is taken and the rest are recorded, not served. `READ(16)` and drives over 2 TiB: refused by name. Ejecting a stick from software: no; a person pulls it. Booting the root from a stick: milestone 42.
 
 ## Decisions on tests and tooling
 
@@ -121,11 +121,11 @@ Hubs, and a stick behind one: milestone 40. Interrupt-driven completion: a miles
 * `Readme.md`: the system paragraph, the images, the hardware status.
 * `tools/Readme.md`: the stick image target.
 * `tests/Readme.md`, `tests/host/Readme.md`, `tests/system/Readme.md`.
-* `dev-log/39-usbdisk/Readme.md` and the `dev-log/Readme.md` entry, in phase 8.
+* `dev-log/40-usbdisk/Readme.md` and the `dev-log/Readme.md` entry, in phase 8.
 
 ## How the work is kept track of
 
-`progress.md`, `current.md`, `notes.md` and `hardware.md` beside this plan, as before, and the one-line report `M39: phase N of 8; X of Y items done; HEAD abc1234; tree clean|dirty`.
+`progress.md`, `current.md`, `notes.md` and `hardware.md` beside this plan, as before, and the one-line report `M40: phase N of 8; X of Y items done; HEAD abc1234; tree clean|dirty`.
 
 ## Standing rules for the run
 
@@ -189,20 +189,20 @@ Mutations: append the volume without its MBR entry; write `PartitionOffset` as z
 
 ### Phase 7: the machine
 
-The Lenovo, over SSH. Install the kernel through `bootctl` as the approved write and commit it. With the owner's stick plugged in: `/proc/usb`, `blkid`, a mount, a listing compared with what the Mac shows, a file written and synced, `umount`, and the stick read on the Mac with the file there. A pull while mounted, with the record showing the `EIO` and the unmount afterwards, and a replug. Then the Rach2 stick: the owner writes the stick image to a second stick or, with approval, the same one, boots the notebook from it, and the machine mounts its own second partition and writes to it; the stick is read on the Mac afterwards. The keyboard and mouse typed and moved throughout. `metal_accept.sh` gains the checks, run against the owner's stick.
+The Lenovo, over SSH. Install the kernel through `bootctl` as the approved write and commit it. With the owner's stick plugged in, in whichever table it has: `/proc/usb`, `blkid`, a mount, a listing compared with what the Mac shows, a file written and synced, `umount`, and the stick read on the Mac with the file there; then the owner reformats it once with the other table, GUID or MBR, and the same checks run again, so that the notebook has proved both readers on a real stick. A pull while mounted, with the record showing the `EIO` and the unmount afterwards, and a replug. Then the Rach2 stick: the owner writes the stick image to a second stick or, with approval, the same one, boots the notebook from it, and the machine mounts its own second partition and writes to it; the stick is read on the Mac afterwards. The keyboard and mouse typed and moved throughout. `metal_accept.sh` gains the checks, run against the owner's stick.
 
 Proof: the file crosses both ways; the boot from the stick reaches the shell and mounts; the hashes of the SSD's partitions match before and after.
 
 ### Phase 8: the record and the sweep
 
-As in the milestones before, and as large. The documents, every one listed above, read against the code, with a Codex read of the reader-facing ones. The code: no helper with one caller; the refusal-by-port logic and the device table's growth read again for what the larger table made unnecessary; the closing state read for what the old close left behind. The build: every rule, manifest line, fixture and tool listed in `notes.md` with its reason; no `build_*.sh`; `guestcheck` and `tests/run selfbuild` pass. The tests: the tier decision measured; a boot that proves what another proves removed; the mutation scripts in `notes.md`; the full set twice with no machine left running, and `make test` timed against milestone 38. The record: `notes.md` closed line by line, `dev-log/39-usbdisk/Readme.md` with its trust statement, and the `dev-log/Readme.md` entry in the same commit. The tree is clean and nothing is pushed.
+As in the milestones before, and as large. The documents, every one listed above, read against the code, with a Codex read of the reader-facing ones. The code: no helper with one caller; the refusal-by-port logic and the device table's growth read again for what the larger table made unnecessary; the closing state read for what the old close left behind. The build: every rule, manifest line, fixture and tool listed in `notes.md` with its reason; no `build_*.sh`; `guestcheck` and `tests/run selfbuild` pass. The tests: the tier decision measured; a boot that proves what another proves removed; the mutation scripts in `notes.md`; the full set twice with no machine left running, and `make test` timed against milestone 38. The record: `notes.md` closed line by line, `dev-log/40-usbdisk/Readme.md` with its trust statement, and the `dev-log/Readme.md` entry in the same commit. The tree is clean and nothing is pushed.
 
 ## Risks, in expected order
 
 * The owner's stick doing something the model does not. The field list above is the model's row list, and a stick that does something else is refused by name and recorded, then the model gains the row and the driver the case, in that order.
-* The pump shared by the timer and a process. One function, interrupts off inside it, submission inside it, and the atomic wait; the model's row that completes between the check and the sleep is the deterministic proof, and the stress row in `lagprobe` is the second.
+* The pump shared by the interrupt handler, the timer and a submitting process. One function, interrupts off inside it, submission inside it, and the atomic wait; the model's row that completes between the check and the sleep is the deterministic proof, and the stress row in `lagprobe` is the second.
 * Removal at the wrong moment. The model vanishes at every stage and the rows assert what is reclaimed and when; the teardown count is one number, and the probe reads it back through `/proc/usb` after a hundred plugs.
-* Throughput. Measured in QEMU in phase 5 and on the notebook in phase 7; the page-sized request is the ceiling of this milestone and the number is in the record.
+* Throughput. Measured in QEMU in phase 5 and on the notebook in phase 7, with MSI and with `rach2.nomsi`; the page-sized request is the ceiling of this milestone and the number is in the record.
 * The stick image. Phase 1 reads what the ISO builder produces before the layout is committed to, and the whole image is validated, not its parts.
 
 ## Recovery after a compaction
@@ -211,4 +211,4 @@ Read `AGENTS.md`, `CLAUDE.md`, this plan's decisions and the current phase, `pro
 
 ## The goal prompt
 
-`Run milestone 39, the USB disk, from dev-log/39-usbdisk/plan.md.`
+`Run milestone 40, the USB disk, from dev-log/40-usbdisk/plan.md.`

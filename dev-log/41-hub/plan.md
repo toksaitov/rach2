@@ -1,4 +1,4 @@
-# Milestone 40: hubs
+# Milestone 41: hubs
 
 ## The goal
 
@@ -10,7 +10,7 @@ This plan is the authority for the run. A conflict between this plan and the cur
 
 ## What the tree settles before this plan
 
-* `hcd.h` describes a device by `device_open(port, speed)`: a root port and a speed, nothing else. `xhci.c` builds a slot context with the route string zero and the root port number, and derives an endpoint's interval from the device's speed alone. The core scans the root ports, debounces a connection, resets the port through the controller, and keeps one command in flight for the whole stack. From milestone 39: a transfer carries a generation, a device has a closing state that must complete before anything of it is reused, the device table and the slot count are eight, endpoints go up to 15 in each direction, and a stick is a block device with an admission queue and a teardown count.
+* `hcd.h` describes a device by `device_open(port, speed)`: a root port and a speed, nothing else. `xhci.c` builds a slot context with the route string zero and the root port number, and derives an endpoint's interval from the device's speed alone. The core scans the root ports, debounces a connection, resets the port through the controller, and keeps one command in flight for the whole stack. From milestone 40: a transfer carries a generation, a device has a closing state that must complete before anything of it is reused, the device table and the slot count are eight, endpoints go up to 15 in each direction, and a stick is a block device with an admission queue and a teardown count.
 * The xHCI slot context has the fields a hub needs and this kernel has never written: the route string in bits 0 to 19 of the first word, four bits per tier for five tiers, each holding the port number on the hub above; the hub bit 26 and the multi-TT bit 25 of the first word; the number of downstream ports in bits 24 to 31 of the second word; the TT hub slot ID in bits 0 to 7, the TT port number in bits 8 to 15 and the TT think time in bits 16 to 17 of the third word. A low or full-speed device behind a high-speed hub is addressed with the slot and port of the hub that translates for it, and the controller then issues split transactions itself.
 * The hub class, from the USB 2.0 specification's chapter 11: a hub is class 9, with one interrupt IN endpoint whose report is a bitmap, bit 0 for the hub and bit N for port N; the hub descriptor, type `0x29`, gives the port count, the characteristics with the power-switching mode and the TT think time, the power-on-to-power-good time in 2 ms units, and the removable-device mask; the class requests are `GET_DESCRIPTOR` for that descriptor, `GET_PORT_STATUS` giving a status word and a change word, and `SET_PORT_FEATURE` and `CLEAR_PORT_FEATURE` with the selectors `PORT_RESET` 4, `PORT_POWER` 8, and the change selectors `C_PORT_CONNECTION` 16, `C_PORT_ENABLE` 17, `C_PORT_SUSPEND` 18, `C_PORT_OVER_CURRENT` 19 and `C_PORT_RESET` 20; the status word has connection in bit 0, enable in bit 1, reset in bit 4, power in bit 8, low speed in bit 9 and high speed in bit 10. A high-speed hub's protocol byte is 1 for one transaction translator shared by its ports or 2 for one per port, the latter selected by the interface's alternate setting 1. A port reset is at least 10 ms and a connection is debounced 100 ms, as on a root port. Phase 1 checks every one of those numbers against the specification's text before they are coded, since this bullet is written from memory.
 * A USB 3.0 hub is two hubs: a SuperSpeed hub with its own descriptor type `0x2A` on the USB 3 root port, and a high-speed hub with the descriptor above on the paired USB 2 root port. A device plugged into it that runs at SuperSpeed appears under the first; everything else appears under the second.
@@ -28,7 +28,7 @@ A port belongs to a root controller or to a hub, and the core's enumeration stat
 
 The core matches class 9 to the hub driver the way it matches class 3 to HID and class 8 to storage. Because a hub brings devices with it, enumeration of a hub's ports starts only after the hub itself is configured, and one device is enumerated at a time across the whole tree, as it is across the root ports, so the one command slot is never contended.
 
-When a hub is pulled, every device below it is pulled: the core closes them depth-first, children before their hub, each through milestone 39's closing state, so that a stick behind a pulled hub is torn down exactly as one on a root port, with `EIO` for its holders and reclamation at its count. When a hub is refused, or fails, its ports are never scanned.
+When a hub is pulled, every device below it is pulled: the core closes them depth-first, children before their hub, each through milestone 40's closing state, so that a stick behind a pulled hub is torn down exactly as one on a root port, with `EIO` for its holders and reclamation at its count. When a hub is refused, or fails, its ports are never scanned.
 
 The device table grows to twelve entries before anything else is written, from the notebook's own inventory: four soldered devices, a USB 3 hub's two halves, a keyboard, a mouse and a stick are nine, and a second stick or a second hub must still fit. Twelve is the constant, the tests fill it and refuse the thirteenth, and phase 6 records the notebook's count against it.
 
@@ -82,11 +82,11 @@ SuperSpeed hubs: refused by name, their high-speed half driven. Port suspend and
 * `rach2/Readme.md`: the supported hardware and the limits.
 * `Readme.md`: the hardware status.
 * `tests/Readme.md`, `tests/host/Readme.md`, `tests/system/Readme.md`.
-* `dev-log/40-hub/Readme.md` and the `dev-log/Readme.md` entry, in phase 7.
+* `dev-log/41-hub/Readme.md` and the `dev-log/Readme.md` entry, in phase 7.
 
 ## How the work is kept track of
 
-`progress.md`, `current.md`, `notes.md` and `hardware.md` beside this plan, as before, and the one-line report `M40: phase N of 7; X of Y items done; HEAD abc1234; tree clean|dirty`.
+`progress.md`, `current.md`, `notes.md` and `hardware.md` beside this plan, as before, and the one-line report `M41: phase N of 7; X of Y items done; HEAD abc1234; tree clean|dirty`.
 
 ## Standing rules for the run
 
@@ -97,7 +97,7 @@ SuperSpeed hubs: refused by name, their high-speed half driven. Port suspend and
 * A change that alters a contract rewrites the owning Readme in the same commit.
 * A change that makes something redundant removes it in the same commit. The tree after this milestone is not larger than the milestone's own additions.
 * Phases 2 to 5 wait on nothing outside the tree. Phase 6 does not start until the owner has a high-speed hub, a low-speed keyboard and a full-speed device to put behind it; that is its entry condition, and phase 1 asks for them so that they are there by the time the code is.
-* On the Lenovo, the writes are the kernel installation through `bootctl` and writes to the owner's stick, under milestone 39's rules. The SSD is not written beyond the kernel slot, and its partitions are hashed before and after.
+* On the Lenovo, the writes are the kernel installation through `bootctl` and writes to the owner's stick, under milestone 40's rules. The SSD is not written beyond the kernel slot, and its partitions are hashed before and after.
 * Nothing is deferred. A thing discovered mid-run goes into `notes.md` with the phase that will do it, and phase 7 closes every line or records the owner's decision to drop it.
 
 ## The phases
@@ -106,7 +106,7 @@ SuperSpeed hubs: refused by name, their high-speed half driven. Port suspend and
 
 Read `AGENTS.md`, `CLAUDE.md` and this plan in full. Require a clean tree and record `git log --oneline -12`. Create the four tracking files in the first commit. List the files each review checkpoint will cover and fix the units.
 
-Check every number in the hub-class bullet above against the USB 2.0 specification's chapter 11 and the xHCI specification's slot context, and record each with its section in `notes.md`; a number that was wrong is corrected there and in this plan's Readme later. Ask the owner for a USB 2.0 or 3.0 hub for phase 6, a cheap unpowered one being the harder and the better test, and record what the kernel of milestone 39 says when the hub is plugged in, which is a refusal by name.
+Check every number in the hub-class bullet above against the USB 2.0 specification's chapter 11 and the xHCI specification's slot context, and record each with its section in `notes.md`; a number that was wrong is corrected there and in this plan's Readme later. Ask the owner for a USB 2.0 or 3.0 hub for phase 6, a cheap unpowered one being the harder and the better test, and record what the kernel of milestone 40 says when the hub is plugged in, which is a refusal by name.
 
 Proof: the table in `notes.md` with every number sourced.
 
@@ -148,7 +148,7 @@ Proof: the three devices work through the hub in every socket; the record has th
 
 ### Phase 7: the record and the sweep
 
-As in the milestones before, and as large. The documents, every one listed above, read against the code, with a Codex read of the reader-facing ones. The code: the root-port path and the hub-port path read for what became one and should be one function; no helper with one caller. The build: every rule, manifest line, fixture and tool listed in `notes.md` with its reason; no `build_*.sh`; `guestcheck` and `tests/run selfbuild` pass. The tests: the tier decision measured; a boot that proves what another proves removed; the mutation scripts in `notes.md`; the full set twice with no machine left running, and `make test` timed against milestone 39. The record: `notes.md` closed line by line, `dev-log/40-hub/Readme.md` with its trust statement, which names the translator as the notebook's proof alone, and the `dev-log/Readme.md` entry in the same commit. The tree is clean and nothing is pushed.
+As in the milestones before, and as large. The documents, every one listed above, read against the code, with a Codex read of the reader-facing ones. The code: the root-port path and the hub-port path read for what became one and should be one function; no helper with one caller. The build: every rule, manifest line, fixture and tool listed in `notes.md` with its reason; no `build_*.sh`; `guestcheck` and `tests/run selfbuild` pass. The tests: the tier decision measured; a boot that proves what another proves removed; the mutation scripts in `notes.md`; the full set twice with no machine left running, and `make test` timed against milestone 40. The record: `notes.md` closed line by line, `dev-log/41-hub/Readme.md` with its trust statement, which names the translator as the notebook's proof alone, and the `dev-log/Readme.md` entry in the same commit. The tree is clean and nothing is pushed.
 
 ## Risks, in expected order
 
@@ -164,4 +164,4 @@ Read `AGENTS.md`, `CLAUDE.md`, this plan's decisions and the current phase, `pro
 
 ## The goal prompt
 
-`Run milestone 40, hubs, from dev-log/40-hub/plan.md.`
+`Run milestone 41, hubs, from dev-log/41-hub/plan.md.`

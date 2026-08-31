@@ -4,7 +4,7 @@
 
 The kernel reads and writes exFAT, the file system every flash drive above 32 GB and every SDXC card is sold with, on the buffer cache and under the write rules milestone 37 fixed for FAT32: metadata written through in dependency order, data written back, and a power cut between two completed sector writes leaving a volume the mount-time check calls consistent, with clusters at worst leaked and never shared, and no file that was reachable before the crash lost by the check afterwards; a crash inside a rename can leave a file nameless with its data intact, as on FAT32, and that is the one way a name is lost.
 
-What this milestone proves is the file-system logic and emulated persistence. It is complete when volumes formatted by `newfs_exfat` on this host and, where available, by `mkfs.exfat` mount and read correctly; when a volume written by Rach2 in QEMU passes `fsck_exfat` or `fsck.exfat` clean and reads back identically through the independent fixture reader; when a volume stopped after every sector write of a scripted sequence is consistent at every stop with every file that existed before the stop intact; and when the same volume survives a reboot. What it does not prove, and says so: volumes written by Windows, cameras and phones, and any real USB transport. Those arrive with the first stick in milestone 39, and the reader's every refusal is by name so that a new case there is a named case.
+What this milestone proves is the file-system logic and emulated persistence. It is complete when volumes formatted by `newfs_exfat` on this host and, where available, by `mkfs.exfat` mount and read correctly; when a volume written by Rach2 in QEMU passes `fsck_exfat` or `fsck.exfat` clean and reads back identically through the independent fixture reader; when a volume stopped after every sector write of a scripted sequence is consistent at every stop with every file that existed before the stop intact; and when the same volume survives a reboot. What it does not prove, and says so: volumes written by Windows, cameras and phones, and any real USB transport. Those arrive with the first stick in milestone 40, and the reader's every refusal is by name so that a new case there is a named case.
 
 The writer is not started until the reader has passed every external image the host can make. That gate is inside the milestone, in phase 3, and it is what keeps a reader that misreads a real volume from being built on.
 
@@ -121,7 +121,7 @@ Three repairs are made, each write a stop in the recursive matrix, in this order
 
 ## What stays out
 
-TexFAT, a second FAT and a second bitmap: read-only. Vendor entries: kept and marked, never made, never interpreted. Writing the backup boot region: never. Logical sectors other than 512 bytes: refused by name, and the Readme says which real media that is. A hardware proof and volumes from Windows, cameras and phones: milestone 39, on the first stick. A file above 4 GiB: the kernel's offset is 32 bits, milestone 36's decision, stated as a limit. Repair beyond the three safe cases: no.
+TexFAT, a second FAT and a second bitmap: read-only. Vendor entries: kept and marked, never made, never interpreted. Writing the backup boot region: never. Logical sectors other than 512 bytes: refused by name, and the Readme says which real media that is. A hardware proof and volumes from Windows, cameras and phones: milestone 40, on the first stick. A file above 4 GiB: the kernel's offset is 32 bits, milestone 36's decision, stated as a limit. Repair beyond the three safe cases: no.
 
 ## Decisions on tests and tooling
 
@@ -215,7 +215,7 @@ As in milestones 36 and 37, and as large. The documents, every one listed above,
 
 ## Risks, in expected order
 
-* An exFAT writer this driver has not seen. The fixture models the specification and `newfs_exfat` and `mkfs.exfat` are the external writers; the reader's refusals are by name so that a Windows, camera or phone volume in milestone 39 fails as a named case and not as silence.
+* An exFAT writer this driver has not seen. The fixture models the specification and `newfs_exfat` and `mkfs.exfat` are the external writers; the reader's refusals are by name so that a Windows, camera or phone volume in milestone 40 fails as a named case and not as silence.
 * The builder and its reader sharing a misreading. The external images and the external checker are the answer, and the gate is where they are required.
 * The checksum repair accepting a torn sector that happens to pass every other invariant. It is the same undetectable class FAT32 has, it is written down, and the external checker makes the same choice.
 * The up-case table streamed through the cache on a volume with a large compressed table being slow. It is correct, it is rare, and the record says which form the mount has.

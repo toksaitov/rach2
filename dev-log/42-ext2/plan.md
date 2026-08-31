@@ -1,4 +1,4 @@
-# Milestone 41: the ext2 root
+# Milestone 42: the ext2 root
 
 ## The goal
 
@@ -126,11 +126,11 @@ ext3's journal and ext4's extents, 64-bit block numbers, checksums, flexible gro
 * `vendor/e2fsprogs/Readme.md` is new, and `vendor/busybox/Readme.md` says why `e2fsck` is not BusyBox's.
 * `utils/Readme.md`: `bootctl config` with two roots, and recovery's `init` running `e2fsck`.
 * `tests/Readme.md`, `tests/host/Readme.md`, `tests/system/Readme.md`.
-* `dev-log/41-ext2/Readme.md` and the `dev-log/Readme.md` entry, in phase 8.
+* `dev-log/42-ext2/Readme.md` and the `dev-log/Readme.md` entry, in phase 8.
 
 ## How the work is kept track of
 
-`progress.md`, `current.md`, `notes.md` and `hardware.md` beside this plan, as before, and the one-line report `M41: phase N of 8; X of Y items done; HEAD abc1234; tree clean|dirty`.
+`progress.md`, `current.md`, `notes.md` and `hardware.md` beside this plan, as before, and the one-line report `M42: phase N of 8; X of Y items done; HEAD abc1234; tree clean|dirty`.
 
 ## Standing rules for the run
 
@@ -142,6 +142,7 @@ ext3's journal and ext4's extents, 64-bit block numbers, checksums, flexible gro
 * A change that makes something redundant removes it in the same commit. The tree after this milestone is not larger than the milestone's own additions, the port excepted, and the port stays under the limit phase 1 sets.
 * The vendored port follows the standing rules for ports: a pinned tarball, a hash, a build script behind a stamp, nothing of its output committed.
 * Phase 4 does not start until phase 3 is closed and reviewed; phase 6 does not start until phase 5 is.
+* The disk does not leave its bay, as `CLAUDE.md` says: the recovery stick from milestone 37 is booted and proved before any disk write, the boot menu file and the fourth partition's first sectors are saved on the host and on the stick, and recovery is the saved default until the write is verified.
 * On the Lenovo, the writes are the kernel installation through `bootctl`, the boot menu through `bootctl config`, and the ext2 image into the fourth partition through recovery, each presented and approved as `CLAUDE.md` requires. The KRFFS root and recovery partitions are hashed before and after and must match; the boot partition changes by design, and its change is recorded as the list of files `bootctl` wrote and their hashes, predicted before and compared after. If the fourth partition does not exist because milestone 37's owner refused it, the same proposal is made again here with milestone 37's procedure, the partition table saved and the new entry checked against the three others, and a second refusal closes the milestone on QEMU with the record saying so.
 * Nothing is deferred. A thing discovered mid-run goes into `notes.md` with the phase that will do it, and phase 8 closes every line or records the owner's decision to drop it.
 
@@ -195,13 +196,13 @@ Proof: every suite passes; `selfbuild` on ext2 builds the kernel twice in clean 
 
 ### Phase 7: the machine
 
-The Lenovo, over SSH, on mains power. Nothing is committed until the end. Save the boot menu file and the partition table on the host and on the recovery stick from milestone 39. Present the fourth partition's reflash with the ext2 image, from recovery, with the procedure and the safeguards of milestone 37's phase 6, and if the partition does not exist, present its creation first with that procedure. Then install the new kernel into the candidate slot through `bootctl`, leaving the old kernel and the KRFFS command line as the untouched fallback, and present the `bootctl config` file as a diff that puts `rach2.root=ext2` on the candidate entries only; write it. Trial boot. On the ext2 root: `bootctl status`, `tcc` builds a program, a file survives a reboot of the same trial, `df` shows the volume, SSH works, the keyboard, the mouse and a stick work as before. Then boot the fallback deliberately, which is the old kernel on the KRFFS root, show it comes up, and boot the candidate again. Only then `commit`. `metal_accept.sh` gains the checks.
+The Lenovo, over SSH, on mains power. Nothing is committed until the end. Save the boot menu file and the partition table on the host and on the recovery stick from milestone 40. Present the fourth partition's reflash with the ext2 image, from recovery, with the procedure and the safeguards of milestone 37's phase 6, and if the partition does not exist, present its creation first with that procedure. Then install the new kernel into the candidate slot through `bootctl`, leaving the old kernel and the KRFFS command line as the untouched fallback, and present the `bootctl config` file as a diff that puts `rach2.root=ext2` on the candidate entries only; write it. Trial boot. On the ext2 root: `bootctl status`, `tcc` builds a program, a file survives a reboot of the same trial, `df` shows the volume, SSH works, the keyboard, the mouse and a stick work as before. Then boot the fallback deliberately, which is the old kernel on the KRFFS root, show it comes up, and boot the candidate again. Only then `commit`. `metal_accept.sh` gains the checks.
 
 Proof: the machine runs on ext2 with the KRFFS root one menu entry away and proved; the KRFFS root and recovery partitions' hashes match before and after; the boot partition's change is the predicted list of files.
 
 ### Phase 8: the record and the sweep
 
-As in the milestones before, and as large. The documents, every one listed above, read against the code, with a Codex read of the reader-facing ones. The code: what the three file systems share read for what `fatcommon.c` and the VFS should hold; no helper with one caller; the KRFFS window path read for what is now only the RAM images' and said so. The build: every rule, manifest line, fixture and tool listed in `notes.md` with its reason; the port's script and stamp like the others', and its size against the limit; `guestcheck` and `tests/run selfbuild` pass on both roots. The tests: the tier decisions measured; a boot that proves what another proves removed; the matrix and mutation scripts in `notes.md`; the full set twice with no machine left running, and `make test` timed against milestone 40. The record: `notes.md` closed line by line, `dev-log/41-ext2/Readme.md` with its trust statement, and the `dev-log/Readme.md` entry in the same commit. The tree is clean and nothing is pushed.
+As in the milestones before, and as large. The documents, every one listed above, read against the code, with a Codex read of the reader-facing ones. The code: what the three file systems share read for what `fatcommon.c` and the VFS should hold; no helper with one caller; the KRFFS window path read for what is now only the RAM images' and said so. The build: every rule, manifest line, fixture and tool listed in `notes.md` with its reason; the port's script and stamp like the others', and its size against the limit; `guestcheck` and `tests/run selfbuild` pass on both roots. The tests: the tier decisions measured; a boot that proves what another proves removed; the matrix and mutation scripts in `notes.md`; the full set twice with no machine left running, and `make test` timed against milestone 41. The record: `notes.md` closed line by line, `dev-log/42-ext2/Readme.md` with its trust statement, and the `dev-log/Readme.md` entry in the same commit. The tree is clean and nothing is pushed.
 
 ## Risks, in expected order
 
@@ -218,4 +219,4 @@ Read `AGENTS.md`, `CLAUDE.md`, this plan's decisions and the current phase, `pro
 
 ## The goal prompt
 
-`Run milestone 41, the ext2 root, from dev-log/41-ext2/plan.md.`
+`Run milestone 42, the ext2 root, from dev-log/42-ext2/plan.md.`

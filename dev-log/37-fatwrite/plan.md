@@ -4,9 +4,9 @@
 
 FAT32 gains writing. Files are created, written, extended, truncated, renamed and removed, directories made and removed, with long names, both FATs, FSInfo and the dirty flag kept the way Windows and Linux keep them. The buffer cache gets the write rules milestone 36 left to the first writer, and with them the one property this milestone is for: a power cut at any point between two completed sector writes leaves a volume that a checker calls consistent, with clusters at worst leaked and never shared.
 
-The milestone is complete when a volume written by Rach2 in QEMU is read back identically by mtools and, where a host has it, passes `fsck.fat -n` clean; when a volume stopped after every one of the sector writes of a scripted sequence is consistent at every stop; when the same volume survives a reboot; and when a volume that something else left dirty is checked at mount and comes back writable. The hardware proof is a FAT32 partition of the Lenovo's own disk, if the owner approves creating it; if not, the hardware proof waits for the first USB stick in milestone 39 and this milestone closes on QEMU alone, and that is written here so that nobody has to decide it under pressure.
+The milestone is complete when a volume written by Rach2 in QEMU is read back identically by mtools and, where a host has it, passes `fsck.fat -n` clean; when a volume stopped after every one of the sector writes of a scripted sequence is consistent at every stop; when the same volume survives a reboot; and when a volume that something else left dirty is checked at mount and comes back writable. The hardware proof is a FAT32 partition of the Lenovo's own disk, if the owner approves creating it; if not, the hardware proof waits for the first USB stick in milestone 40 and this milestone closes on QEMU alone, and that is written here so that nobody has to decide it under pressure.
 
-exFAT is milestone 38, on the same cache and the same rules. It was in this plan's first draft and was taken out by review: a first ordered write path, a full FAT32 writer, and a second file system read and write are two milestones, and combining them made the failures of one indistinguishable from the other's. USB storage is milestone 39, hubs 40, ext2 41.
+exFAT is milestone 38, on the same cache and the same rules. It was in this plan's first draft and was taken out by review: a first ordered write path, a full FAT32 writer, and a second file system read and write are two milestones, and combining them made the failures of one indistinguishable from the other's. USB storage is milestone 40, hubs 40, ext2 41.
 
 This plan is the authority for the run. A conflict between this plan and the current tree is resolved by the decisions here; a conflict between this plan and `CLAUDE.md` is resolved by `CLAUDE.md`. The plan was revised twice after independent review. The first revision replaced the ordering model, the locking, the dirty-flag rules, the error rules, the mount-time check, the name rule and the hardware procedure. The second fixed the long-name write order, the empty-file extend, the mirror FAT after a crash, the order of the repairs themselves, the lock ownership, and the sequence on the machine.
 
@@ -120,7 +120,7 @@ A metadata write that fails moves the mount to read-only for the rest of its lif
 
 ## What stays out
 
-exFAT: milestone 38. USB storage, a drive pulled while mounted, request cancellation on disconnect and the cache invalidation that goes with it: milestone 39. Repair beyond the two safe cases: no; the Readme names the host tools. Access-time updates, `chown`, and modes beyond the read-only attribute: refused, because the volume cannot store them. `remount`: not planned. Symbolic and hard links: the format has none. A journal or read-after-write verification: not planned, and the guarantee is stated to their absence.
+exFAT: milestone 38. USB storage, a drive pulled while mounted, request cancellation on disconnect and the cache invalidation that goes with it: milestone 40. Repair beyond the two safe cases: no; the Readme names the host tools. Access-time updates, `chown`, and modes beyond the read-only attribute: refused, because the volume cannot store them. `remount`: not planned. Symbolic and hard links: the format has none. A journal or read-after-write verification: not planned, and the guarantee is stated to their absence.
 
 ## Decisions on tests and tooling
 
@@ -158,6 +158,7 @@ exFAT: milestone 38. USB storage, a drive pulled while mounted, request cancella
 * A test is proved by making it fail. A mutation is driven from a script that restores the source in a trap and rebuilds before the verdict is believed.
 * A change that alters a contract rewrites the owning Readme in the same commit.
 * A change that makes something redundant removes it in the same commit. The tree after this milestone is not larger than the milestone's own additions.
+* The disk does not leave its bay, as `CLAUDE.md` says: the recovery stick is booted and proved before any disk write, the sectors about to change are saved on the host and on the stick, and recovery is the saved default until the write is verified.
 * On the Lenovo, the writes are the kernel installation through `bootctl` and, only with the owner's approval given when the values are presented, the fourth partition through recovery. Every other write goes to that partition. The boot, root and recovery partitions are hashed before and after, and recovery is the saved default from before the first disk write until the last check passes.
 * Nothing is deferred. A thing discovered mid-run goes into `notes.md` with the phase that will do it, and phase 7 closes every line or records the owner's decision to drop it. The one decision this plan hands to the owner in advance is the partition, and both answers are already written.
 
@@ -223,7 +224,7 @@ As in milestone 36, and as large. The documents, every one listed above, read ag
 * The synchronous metadata cost on the lag device making the suite slow. Every write is one request; a create is about four. Measured in phase 5 and written into the tier decision.
 * The alias rule differing from Windows. It is this driver's own rule and says so; the recorded cases show where it agrees with mtools.
 * The mount-time check on a large dirty volume taking longer than a person expects. It reads the directory tree and the FAT once, and the record says it is running.
-* The Lenovo's fourth partition. Rehearsed on the sealed image, approved with live values, done with recovery as the default, with sector zero saved and restored on mismatch, and with the three partitions hashed before and after; a refusal costs the hardware write proof until milestone 39 and nothing else.
+* The Lenovo's fourth partition. Rehearsed on the sealed image, approved with live values, done with recovery as the default, with sector zero saved and restored on mismatch, and with the three partitions hashed before and after; a refusal costs the hardware write proof until milestone 40 and nothing else.
 
 ## Recovery after a compaction
 
