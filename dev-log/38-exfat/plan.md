@@ -160,7 +160,7 @@ TexFAT, a second FAT and a second bitmap: read-only. Vendor entries: kept and ma
 * A change that makes something redundant removes it in the same commit. The tree after this milestone is not larger than the milestone's own additions.
 * The writer does not start until phase 3's gate has passed on every external image the host can make.
 * Nothing touches the Lenovo in this milestone.
-* Nothing is deferred. A thing discovered mid-run goes into `notes.md` with the phase that will do it, and phase 7 closes every line or records the owner's decision to drop it.
+* Nothing is deferred and nothing is left as a note for the owner. A thing discovered mid-run, whether it belongs to this milestone or not, goes into `notes.md` with the phase that will fix it, and it is fixed in this milestone, before the review rounds, with Codex's opinion taken as one review unit where the call is close; the sweep closes with `notes.md` empty. The two things that are not deferrals: a check that needs the machine goes onto milestone 43's list by design, and a change that needs a disk write on the machine goes there with it. Everything else is finished here.
 
 ## The phases
 

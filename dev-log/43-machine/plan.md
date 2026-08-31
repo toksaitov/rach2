@@ -38,7 +38,7 @@ Once at the start: to put the machine on mains power with suspend off, plug in t
 
 ### What is fixed here and what is not
 
-A difference is a check in `metal_accept.sh` that fails or a contract in a Readme that the machine breaks. A measurement that comes out different from QEMU's, throughput above all, is evidence and is recorded, and it is a difference only when it crosses a threshold the owning plan stated, so that a session is not spent modelling a number nobody promised. A difference is fixed in the subsystem that owns it, with a row in that subsystem's host model that reproduces the machine's behaviour, and with its Readme changed if a contract changed; that is milestone 35's rule and it stands. A fix goes through the same reviews as the milestone that owns the code would have given it. Nothing is worked around in the acceptance script, and nothing is deferred: a difference this session cannot fix is recorded in `notes.md` with the owner's decision, which is either to fix it here or to leave the kernel with that limit stated in its Readme.
+A difference is a check in `metal_accept.sh` that fails or a contract in a Readme that the machine breaks. A measurement that comes out different from QEMU's, throughput above all, is evidence and is recorded, and it is a difference only when it crosses a threshold the owning plan stated, so that a session is not spent modelling a number nobody promised. A difference is fixed in the subsystem that owns it, with a row in that subsystem's host model that reproduces the machine's behaviour, and with its Readme changed if a contract changed; that is milestone 35's rule and it stands. A fix goes through the same reviews as the milestone that owns the code would have given it. Nothing is worked around in the acceptance script, and nothing is deferred: every difference is fixed in this milestone, with Codex's opinion taken where the call is close, and the one recorded exception is a limit of the hardware itself, stated in the owning Readme as what the machine is.
 
 ## Decisions on tests and tooling
 
@@ -64,7 +64,7 @@ A difference is a check in `metal_accept.sh` that fails or a contract in a Readm
 * Commit in scoped units in the house style, on the branch, no attribution, never push.
 * A fix's commits run the rows they touch; a fix closes with `tests/run style`, `tests/run host` and the owning subsystem's suites, once, before its kernel is installed on the machine. Delegation follows the same rules as every milestone: review and proofreading only, at most five units at once, none starting another, on Codex or a model of Opus 5's strength or better.
 * The disk rule in `CLAUDE.md`, at every step, every time. Every disk write is presented with the machine's own values, approved by name, and hashed before and after.
-* Nothing is worked around in the acceptance script; nothing is deferred without the owner's recorded decision.
+* Nothing is worked around in the acceptance script; nothing is deferred.
 
 ## The phases
 

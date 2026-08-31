@@ -144,7 +144,7 @@ ext3's journal and ext4's extents, 64-bit block numbers, checksums, flexible gro
 * The vendored port follows the standing rules for ports: a pinned tarball, a hash, a build script behind a stamp, nothing of its output committed.
 * Phase 4 does not start until phase 3 is closed and reviewed; phase 6 does not start until phase 5 is.
 * Nothing touches the Lenovo in this milestone. The root switch is written in phase 6 as the procedure milestone 43 presents to the owner and runs, under the disk rule in `CLAUDE.md`.
-* Nothing is deferred. A thing discovered mid-run goes into `notes.md` with the phase that will do it, and phase 7 closes every line or records the owner's decision to drop it.
+* Nothing is deferred and nothing is left as a note for the owner. A thing discovered mid-run, whether it belongs to this milestone or not, goes into `notes.md` with the phase that will fix it, and it is fixed in this milestone, before the review rounds, with Codex's opinion taken as one review unit where the call is close; the sweep closes with `notes.md` empty. The two things that are not deferrals: a check that needs the machine goes onto milestone 43's list by design, and a change that needs a disk write on the machine goes there with it. Everything else is finished here.
 
 ## The phases
 

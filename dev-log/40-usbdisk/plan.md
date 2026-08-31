@@ -138,7 +138,7 @@ Hubs, and a stick behind one: milestone 41. Requests larger than a page and the 
 * A change that makes something redundant removes it in the same commit. The tree after this milestone is not larger than the milestone's own additions.
 * Phase 6 does not start until phase 5 is closed and its review is done.
 * Nothing touches the Lenovo in this milestone. Milestone 43 asks the owner for the stick, formatted with a GUID table and then with an MBR, and runs the checks written into `metal_accept.sh` here.
-* Nothing is deferred. A thing discovered mid-run goes into `notes.md` with the phase that will do it, and phase 7 closes every line or records the owner's decision to drop it.
+* Nothing is deferred and nothing is left as a note for the owner. A thing discovered mid-run, whether it belongs to this milestone or not, goes into `notes.md` with the phase that will fix it, and it is fixed in this milestone, before the review rounds, with Codex's opinion taken as one review unit where the call is close; the sweep closes with `notes.md` empty. The two things that are not deferrals: a check that needs the machine goes onto milestone 43's list by design, and a change that needs a disk write on the machine goes there with it. Everything else is finished here.
 
 ## The phases
 
