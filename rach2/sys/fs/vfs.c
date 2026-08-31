@@ -803,6 +803,72 @@ static int kfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
     return 0;
 }
 
+/* The namespace operations go through the parent's canonical path, which
+ * is how the namespace half of KRFFS speaks today; a name is joined to the
+ * held directory and handed to the path call. */
+static int kfs_join(void *dir, const char *name, char *path, uint32_t cap)
+{
+    krffs_node_t *d = dir ? dir : krffs_fs->node;
+    uint32_t dlen, nlen;
+
+    if (krffs_node_path(d, path, cap) != 0) {
+        return -ENAMETOOLONG;
+    }
+    dlen = k_strlen(path);
+    nlen = k_strlen(name);
+    if (dlen == 0 || path[dlen - 1] != '/') {
+        if (dlen + 1 >= cap) {
+            return -ENAMETOOLONG;
+        }
+        path[dlen++] = '/';
+    }
+    if (dlen + nlen + 1 > cap) {
+        return -ENAMETOOLONG;
+    }
+    k_memcpy(path + dlen, name, nlen + 1);
+    return 0;
+}
+
+static int kfs_unlink(struct vfs_mount *mnt, void *dir, const char *name)
+{
+    char path[256];
+    int rc = kfs_join(dir, name, path, sizeof(path));
+
+    (void)mnt;
+    if (rc != 0) {
+        return rc;
+    }
+    return krffs_unlink(path + (path[0] == '/')) == 0 ? 0 : -EIO;
+}
+
+static int kfs_mkdir(struct vfs_mount *mnt, void *dir, const char *name,
+                     uint32_t mode)
+{
+    char path[256];
+    int rc = kfs_join(dir, name, path, sizeof(path));
+
+    (void)mnt;
+    (void)mode; /* the caller stamps mode and owner under its own rules */
+    if (rc != 0) {
+        return rc;
+    }
+    /* The parent is resolved and held, so the one failure left is space. */
+    return krffs_mkdir(path) == 0 ? 0 : -ENOSPC;
+}
+
+static int kfs_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
+{
+    char path[256];
+    int rc = kfs_join(dir, name, path, sizeof(path));
+
+    (void)mnt;
+    if (rc != 0) {
+        return rc;
+    }
+    /* The target is resolved and a directory, so what remains is emptiness. */
+    return krffs_rmdir(path) == 0 ? 0 : -ENOTEMPTY;
+}
+
 /* Creation goes through the parent's canonical path, which is how the
  * namespace half of KRFFS speaks today; the node comes back resolved. */
 static int kfs_create(struct vfs_mount *mnt, void *dir, const char *name,
@@ -856,9 +922,9 @@ static const struct vfs_ops krffs_ops = {
     kfs_fsync,
     kfs_readdir,
     kfs_create,
-    0, /* unlink */
-    0, /* mkdir */
-    0, /* rmdir */
+    kfs_unlink,
+    kfs_mkdir,
+    kfs_rmdir,
     0, /* rename */
     0, /* link: KRFFS has none */
     0, /* readlink: KRFFS has none */

@@ -1280,15 +1280,6 @@ static int32_t cred_parent_dir(const char *name, krffs_node_t **out)
     return cred_access_node(dir, CRED_W, 0);
 }
 
-/**
- * The write check on a path's parent directory, for the paths that create.
- */
-static int32_t cred_parent_writable(const char *name)
-{
-    krffs_node_t *dir = NULL;
-
-    return cred_parent_dir(name, &dir);
-}
 
 /**
  * The sticky rule on removing or renaming `victim` out of directory `dir`.
@@ -3934,15 +3925,19 @@ static int32_t path_exists(const char *name)
 static int32_t do_chmod(const char *name, uint32_t mode)
 {
     struct vpath vp;
+    const struct vpath *svp;
+    struct vfs_ref ref;
     krffs_node_t *node;
-    int rerr = 0;
+    int32_t rc;
 
-    if (name[0] != '\0' && synth_classify(name, &vp) != VNODE_KRFFS) {
-        struct linux_stat64 s;
-        int32_t rc = synth_stat(&vp, &s, 1);
-        if (rc != 0) {
-            return rc;
-        }
+    rc = vfs_resolve(0, name, 0, &ref, 0, 0);
+    if (rc != 0) {
+        return rc;
+    }
+    svp = vfs_synth_vpath(ref.mnt, ref.node);
+    if (svp) {
+        vp = *svp;
+        vfs_ref_release(&ref);
         if (vp.kind == VNODE_PTS) {
             struct pty *pt = pty_get(vp.pts_index);
             if (!pt) {
@@ -3956,28 +3951,28 @@ static int32_t do_chmod(const char *name, uint32_t mode)
         }
         return cred_privileged() ? 0 : -EPERM; /* fixed root-owned metadata */
     }
-    if (!krffs_fs) {
-        return -ENOENT;
-    }
-    node = (name[0] == '\0') ? krffs_fs->node : krffs_resolve_x(name, &rerr, cred_may_search);
-    if (!node) {
-        return rerr;
-    }
-    return krffs_chmod_node(node, mode);
+    node = ref.node;
+    rc = krffs_chmod_node(node, mode);
+    vfs_ref_release(&ref);
+    return rc;
 }
 
 static int32_t do_chown(const char *name, uint32_t uid, uint32_t gid)
 {
     struct vpath vp;
+    const struct vpath *svp;
+    struct vfs_ref ref;
     krffs_node_t *node;
-    int rerr = 0;
+    int32_t rc;
 
-    if (name[0] != '\0' && synth_classify(name, &vp) != VNODE_KRFFS) {
-        struct linux_stat64 s;
-        int32_t rc = synth_stat(&vp, &s, 1);
-        if (rc != 0) {
-            return rc;
-        }
+    rc = vfs_resolve(0, name, 0, &ref, 0, 0);
+    if (rc != 0) {
+        return rc;
+    }
+    svp = vfs_synth_vpath(ref.mnt, ref.node);
+    if (svp) {
+        vp = *svp;
+        vfs_ref_release(&ref);
         if (vp.kind == VNODE_PTS) {
             struct pty *pt = pty_get(vp.pts_index);
             int uid_changes;
@@ -4005,14 +4000,10 @@ static int32_t do_chown(const char *name, uint32_t uid, uint32_t gid)
         }
         return 0;
     }
-    if (!krffs_fs) {
-        return -ENOENT;
-    }
-    node = (name[0] == '\0') ? krffs_fs->node : krffs_resolve_x(name, &rerr, cred_may_search);
-    if (!node) {
-        return rerr;
-    }
-    return krffs_chown_node(node, uid, gid);
+    node = ref.node;
+    rc = krffs_chown_node(node, uid, gid);
+    vfs_ref_release(&ref);
+    return rc;
 }
 
 /* chmod(path, mode) and fchmodat(dirfd, path, mode[, flags]) share do_chmod. */
@@ -4079,9 +4070,6 @@ static int32_t sys_fchmod(isr_params_t *params)
     }
     if ((entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR) &&
         entry->node) {
-        if (fd_node_check(entry) != 0) {
-            return -EBADF;  /* never write mode through a stale (freed) node */
-        }
         return krffs_chmod_node(entry->node, mode);
     }
     if (entry->type == FD_TYPE_PTS) {
@@ -4166,9 +4154,6 @@ static int32_t sys_fchown(isr_params_t *params)
     }
     if ((entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR) &&
         entry->node) {
-        if (fd_node_check(entry) != 0) {
-            return -EBADF; /* never store through a stale (freed) node */
-        }
         return krffs_chown_node(entry->node, uid, gid);
     }
     if (entry->type == FD_TYPE_PTS) {
@@ -5978,51 +5963,59 @@ static int32_t sys_unlink(isr_params_t *params)
         return -EROFS;
     }
 
-    if (!krffs_fs) {
-        return -ENOENT;
-    }
-
     {
-        int32_t rc = cred_parent_writable(name);
-        if (rc != 0) {
-            return rc; /* removing an entry writes its directory */
-        }
-    }
-
-    {
+        struct vfs_ref parent;
+        char leaf[VFS_NAME_MAX + 1];
         krffs_node_t *node;
-        krffs_node_t *dir = NULL;
-        int rerr = 0;
+        void *found;
+        int32_t rc;
 
-        node = krffs_resolve_x(name, &rerr, cred_may_search);
-        if (!node) {
-            return rerr;
+        rc = vfs_resolve(0, pathbuf, VFS_WALK_PARENT, &parent, leaf,
+                         sizeof(leaf));
+        if (rc != 0) {
+            return rc;
         }
+        /* The directory's write bit is checked before the target is even
+         * looked up: a caller with no write permission there must see
+         * -EACCES, not learn whether the name exists. */
+        rc = cred_access_node((krffs_node_t *)parent.node, CRED_W, 0);
+        if (rc != 0) {
+            vfs_ref_release(&parent);
+            return rc;
+        }
+        rc = parent.mnt->type->ops->lookup(parent.mnt, parent.node, leaf,
+                                           &found);
+        if (rc != 0) {
+            vfs_ref_release(&parent);
+            return rc;
+        }
+        node = found;
         if (node == krffs_fs->node || KRFFS_IS_DIR(node->mode)) {
+            vfs_ref_release(&parent);
             return -EISDIR;
         }
-        /* After the directory's write check above, never before it: a caller
-         * with no write permission there must still see -EACCES. */
-        rerr = cred_parent_dir(name, &dir);
-        if (rerr != 0) {
-            return rerr;
-        }
-        rerr = cred_sticky_ok(dir, node);
-        if (rerr != 0) {
-            return rerr;
+        rc = cred_sticky_ok((krffs_node_t *)parent.node, node);
+        if (rc != 0) {
+            vfs_ref_release(&parent);
+            return rc;
         }
         /* The last decision, never the first: orphaning bypasses the refusals
-         * krffs_unlink would have made, so every one of them is decided above.
-         * With a holder the node stays live and nameless until the last close;
-         * with none it is freed now, because the release lives at that close
-         * and an unconditional orphan would leak an extent on every removal
-         * made while nothing happened to be reading. */
+         * the file system would have made, so every one of them is decided
+         * above. With a holder the node stays live and nameless until the
+         * last close; with none it is freed now, because the release lives
+         * at that close and an unconditional orphan would leak an extent on
+         * every removal made while nothing happened to be reading. */
         if (fd_node_holders(node, NULL) > 0) {
             krffs_unlink_held(node);
+            vfs_ref_release(&parent);
             return 0;
         }
+        vfs_ns_lock(parent.mnt);
+        rc = vfs_unlink_name(parent.mnt, parent.node, leaf);
+        vfs_ns_unlock(parent.mnt);
+        vfs_ref_release(&parent);
+        return rc;
     }
-    return krffs_unlink(name) == 0 ? 0 : -EIO;
 }
 
 /*
@@ -6051,28 +6044,43 @@ static int32_t sys_mkdir(isr_params_t *params)
         return -EROFS; /* cannot create under (or shadow) /dev or /proc */
     }
     {
-        int rerr = 0;
+        struct vfs_ref parent;
+        char leaf[VFS_NAME_MAX + 1];
+        void *found;
+        int32_t rc;
 
-        if (krffs_resolve_x(pathbuf, &rerr, cred_may_search)) {
+        rc = vfs_resolve(0, pathbuf, VFS_WALK_PARENT, &parent, leaf,
+                         sizeof(leaf));
+        if (rc != 0) {
+            return rc; /* a missing parent, or a denied ancestor */
+        }
+        if (vfs_synth_vpath(parent.mnt, parent.node)) {
+            vfs_ref_release(&parent);
+            return -EROFS;
+        }
+        if (parent.mnt->type->ops->lookup(parent.mnt, parent.node, leaf,
+                                          &found) == 0) {
+            vfs_ref_release(&parent);
             return -EEXIST;
         }
-        if (rerr == -EACCES) {
-            return rerr;
-        }
-    }
-    {
-        const char *name = (pathbuf[0] == '/') ? pathbuf + 1 : pathbuf;
-        int32_t rc = cred_parent_writable(name);
+        rc = cred_access_node((krffs_node_t *)parent.node, CRED_W, 0);
         if (rc != 0) {
+            vfs_ref_release(&parent);
             return rc;
         }
-    }
-    if (krffs_mkdir(pathbuf) != 0) {
-        return -ENOENT; /* a parent directory does not exist */
-    }
-    node = krffs_resolve(pathbuf);
-    if (node) {
-        krffs_stamp_new_node(node, params->ecx);
+        vfs_ns_lock(parent.mnt);
+        rc = vfs_mkdir(parent.mnt, parent.node, leaf, params->ecx);
+        vfs_ns_unlock(parent.mnt);
+        if (rc != 0) {
+            vfs_ref_release(&parent);
+            return rc;
+        }
+        if (parent.mnt->type->ops->lookup(parent.mnt, parent.node, leaf,
+                                          &found) == 0) {
+            node = found;
+            krffs_stamp_new_node(node, params->ecx);
+        }
+        vfs_ref_release(&parent);
     }
     return 0;
 }
@@ -6102,32 +6110,43 @@ static int32_t sys_rmdir(isr_params_t *params)
         return -EROFS; /* /dev and /proc are not removable */
     }
     {
-        int rerr = 0;
+        struct vfs_ref parent;
+        char leaf[VFS_NAME_MAX + 1];
+        void *found;
+        int32_t rc;
 
-        node = krffs_resolve_x(pathbuf, &rerr, cred_may_search);
-        if (!node) {
-            return rerr;
-        }
-    }
-    if (!KRFFS_IS_DIR(node->mode)) {
-        return -ENOTDIR;
-    }
-    {
-        const char *name = (pathbuf[0] == '/') ? pathbuf + 1 : pathbuf;
-        krffs_node_t *dir = NULL;
-        int32_t rc = cred_parent_dir(name, &dir);
-        if (rc != 0) {
-            return rc; /* removing an entry writes its directory */
-        }
-        rc = cred_sticky_ok(dir, node);
+        rc = vfs_resolve(0, pathbuf, VFS_WALK_PARENT, &parent, leaf,
+                         sizeof(leaf));
         if (rc != 0) {
             return rc;
         }
+        rc = parent.mnt->type->ops->lookup(parent.mnt, parent.node, leaf,
+                                           &found);
+        if (rc != 0) {
+            vfs_ref_release(&parent);
+            return rc;
+        }
+        node = found;
+        if (!KRFFS_IS_DIR(node->mode)) {
+            vfs_ref_release(&parent);
+            return -ENOTDIR;
+        }
+        rc = cred_access_node((krffs_node_t *)parent.node, CRED_W, 0);
+        if (rc != 0) {
+            vfs_ref_release(&parent);
+            return rc; /* removing an entry writes its directory */
+        }
+        rc = cred_sticky_ok((krffs_node_t *)parent.node, node);
+        if (rc != 0) {
+            vfs_ref_release(&parent);
+            return rc;
+        }
+        vfs_ns_lock(parent.mnt);
+        rc = vfs_rmdir(parent.mnt, parent.node, leaf);
+        vfs_ns_unlock(parent.mnt);
+        vfs_ref_release(&parent);
+        return rc;
     }
-    if (krffs_rmdir(pathbuf) != 0) {
-        return -ENOTEMPTY; /* still has children */
-    }
-    return 0;
 }
 
 /**
@@ -6374,15 +6393,19 @@ static int32_t sys_utimensat(isr_params_t *params)
         return -EROFS;
     }
 
-    if (!krffs_fs) {
-        return -ENOENT;
-    }
-
     {
-        int rerr = 0;
-        node = krffs_resolve_x(name, &rerr, cred_may_search);
-        if (!node) {
-            return rerr; /* missing, not-a-dir, or a denied ancestor */
+        struct vfs_ref ref;
+        int rc = vfs_resolve(0, name, 0, &ref, 0, 0);
+
+        if (rc != 0) {
+            return rc; /* missing, not-a-dir, or a denied ancestor */
+        }
+        node = ref.node;
+        /* The hold is a no-op for the root type and the times are stored
+         * before anything else can run, so the ref is returned here. */
+        vfs_ref_release(&ref);
+        if (node == krffs_fs->node) {
+            return 0; /* root timestamps are not modifiable; report success */
         }
     }
 
