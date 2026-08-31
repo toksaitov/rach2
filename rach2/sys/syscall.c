@@ -1234,17 +1234,6 @@ static int32_t cred_access_node(const krffs_node_t *node, int want,
     return cred_access_bits(node->uid, node->gid, mode, want, use_real);
 }
 
-/**
- * Whether the caller may search `dir`, by effective ids, for the path resolver.
- *
- * Installed as the resolver's `may_search` on every path a syscall resolves, so
- * traversing a directory costs its execute bit the way POSIX requires. It reads
- * `current_proc`, so it is only valid from syscall context.
- */
-static int cred_may_search(krffs_node_t *dir)
-{
-    return (int) cred_access_node(dir, CRED_X, 0);
-}
 
 
 
@@ -2710,55 +2699,57 @@ static int32_t sys_chdir(isr_params_t *params)
      * to a real pid, so later relative opens re-classify correctly); a
      * synthetic leaf is ENOTDIR, a missing one ENOENT. */
     {
-        struct vpath vp;
-        int kind = synth_classify(name, &vp);
-        if (kind != VNODE_KRFFS) {
+        struct vfs_ref ref;
+        const struct vpath *svp;
+        int32_t rc = vfs_resolve(0, pathbuf, 0, &ref, 0, 0);
+
+        if (rc != 0) {
+            return rc;
+        }
+        svp = vfs_synth_vpath(ref.mnt, ref.node);
+        if (svp) {
+            struct vpath vp = *svp;
             int rpid = 0;
-            if (kind == VNODE_PROC_PID || kind == VNODE_PROC_FD_DIR) {
+
+            vfs_ref_release(&ref);
+            if (vp.kind == VNODE_PROC_PID || vp.kind == VNODE_PROC_FD_DIR) {
                 rpid = procfs_resolve_pid(vp.pid);
                 if (rpid < 0) {
                     return -ENOENT;
                 }
             }
-            if (kind == VNODE_DEV_DIR || kind == VNODE_PTS_DIR ||
-                kind == VNODE_PROC_DIR || kind == VNODE_PROC_NET_DIR ||
-                kind == VNODE_PROC_PID ||
-                kind == VNODE_PROC_FD_DIR) {
-                synth_dir_path(kind, rpid, current_proc->cwd, sizeof(current_proc->cwd));
+            if (vp.kind == VNODE_DEV_DIR || vp.kind == VNODE_PTS_DIR ||
+                vp.kind == VNODE_PROC_DIR || vp.kind == VNODE_PROC_NET_DIR ||
+                vp.kind == VNODE_PROC_PID ||
+                vp.kind == VNODE_PROC_FD_DIR) {
+                synth_dir_path(vp.kind, rpid, current_proc->cwd,
+                               sizeof(current_proc->cwd));
                 return 0;
             }
-            return (kind == VNODE_ENOENT) ? -ENOENT : -ENOTDIR;
+            return -ENOTDIR; /* a synthetic leaf */
         }
-    }
-
-    if (!krffs_fs) {
-        return -ENOENT;
-    }
-    {
-        int rerr = 0;
-        node = krffs_resolve_x(name, &rerr, cred_may_search);
-        if (!node) {
-            return rerr;
+        node = ref.node;
+        /* The root node is always a directory even if its on-disk mode lacks
+         * the S_IFDIR bit (it is the filesystem anchor, not a mkdir'd node). A
+         * regular file as the final component is ENOTDIR. */
+        if (node != krffs_fs->node && !KRFFS_IS_DIR(node->mode)) {
+            vfs_ref_release(&ref);
+            return -ENOTDIR;
         }
-    }
-    /* The root node is always a directory even if its on-disk mode lacks the
-     * S_IFDIR bit (it is the filesystem anchor, not a mkdir'd node). A regular
-     * file as the final component is ENOTDIR. */
-    if (node != krffs_fs->node && !KRFFS_IS_DIR(node->mode)) {
-        return -ENOTDIR;
-    }
-    {
-        int32_t rc = cred_access_node(node, CRED_X, 0);
+        rc = cred_access_node(node, CRED_X, 0);
         if (rc != 0) {
+            vfs_ref_release(&ref);
             return rc; /* entering a directory is the search (x) right */
         }
-    }
-
-    /* Store the canonical absolute path (krffs_node_path follows real parent
-     * links, so any '.'/'..' in the request is collapsed). If it does not fit
-     * the fixed cwd buffer the cwd is left unchanged. */
-    if (krffs_node_path(node, current_proc->cwd, sizeof(current_proc->cwd)) != 0) {
-        return -ENAMETOOLONG;
+        /* Store the canonical absolute path (krffs_node_path follows real
+         * parent links, so any '.'/'..' in the request is collapsed). If it
+         * does not fit the fixed cwd buffer the cwd is left unchanged. */
+        if (krffs_node_path(node, current_proc->cwd,
+                            sizeof(current_proc->cwd)) != 0) {
+            vfs_ref_release(&ref);
+            return -ENAMETOOLONG;
+        }
+        vfs_ref_release(&ref);
     }
     return 0;
 }
@@ -3403,8 +3394,7 @@ static uint32_t statfs_magic_for_kind(int kind)
 static int32_t sys_statfs64(isr_params_t *params)
 {
     char pathbuf[256];
-    struct vpath vp;
-    int len, kind;
+    int len;
 
     if (!current_proc || !params->ebx || !params->edx) {
         return -EFAULT;
@@ -3419,19 +3409,23 @@ static int32_t sys_statfs64(isr_params_t *params)
     /* The path has to name something. Answering for a path that does not exist
      * would report a file system where there is no file, which is the one thing
      * a caller uses this call to find out. */
-    kind = synth_classify(pathbuf[0] == '/' ? pathbuf + 1 : pathbuf, &vp);
-    if (kind == VNODE_ENOENT) {
-        return -ENOENT;
+    {
+        struct vfs_ref ref;
+        const struct vpath *svp;
+        uint32_t magic = STATFS_MAGIC_KRFFS;
+        int rc = vfs_resolve(0, pathbuf, 0, &ref, 0, 0);
+
+        if (rc != 0) {
+            return rc;
+        }
+        svp = vfs_synth_vpath(ref.mnt, ref.node);
+        if (svp) {
+            magic = statfs_magic_for_kind(svp->kind);
+        }
+        vfs_ref_release(&ref);
+        return statfs_fill((struct linux_statfs64 __user *)params->edx,
+                           magic);
     }
-    if (kind == VNODE_ENOTDIR) {
-        return -ENOTDIR;
-    }
-    if (kind == VNODE_KRFFS && pathbuf[0] != '\0' &&
-        !(pathbuf[0] == '/' && pathbuf[1] == '\0') && krffs_resolve(pathbuf) == NULL) {
-        return -ENOENT;
-    }
-    return statfs_fill((struct linux_statfs64 __user *)params->edx,
-                       statfs_magic_for_kind(kind));
 }
 
 /**
@@ -3622,7 +3616,6 @@ static int32_t sys_fstatat64(isr_params_t *params)
     struct linux_stat64 __user *st = (struct linux_stat64 __user *)params->edx;
     struct linux_stat64 kst;
     char pathbuf[256];
-    const char *name;
     krffs_node_t *node;
     int len;
 
@@ -3641,37 +3634,29 @@ static int32_t sys_fstatat64(isr_params_t *params)
         kst.st_blksize = 4096;
         stat64_root_times(&kst);
     } else {
-        struct vpath vp;
-        name = pathbuf;
-        if (name[0] == '/') {
-            name++;
+        struct vfs_ref ref;
+        const struct vpath *svp;
+        int32_t rc = vfs_resolve(0, pathbuf, 0, &ref, 0, 0);
+
+        if (rc != 0) {
+            return rc;
         }
-        /* /dev and /proc are synthetic; classified before the KRFFS mount
-         * check, so they stat even on a kernel with no RAM disk.
-         * AT_SYMLINK_NOFOLLOW (lstat) reports the magic symlinks; otherwise
-         * they are followed. */
-        if (synth_classify(name, &vp) != VNODE_KRFFS) {
+        svp = vfs_synth_vpath(ref.mnt, ref.node);
+        if (svp) {
+            /* AT_SYMLINK_NOFOLLOW (lstat) reports the magic symlinks;
+             * otherwise they are followed. */
             int follow = !((int)params->esi & AT_SYMLINK_NOFOLLOW);
-            int32_t rc = synth_stat(&vp, &kst, follow);
+
+            rc = synth_stat(svp, &kst, follow);
+            vfs_ref_release(&ref);
             if (rc != 0) {
                 return rc;
             }
-            if (copy_to_user(st, &kst, sizeof(kst)) != 0) {
-                return -EFAULT;
-            }
-            return 0;
+        } else {
+            node = ref.node;
+            krffs_fill_stat64(&kst, node);
+            vfs_ref_release(&ref);
         }
-        if (!krffs_fs) {
-            return -ENOENT;
-        }
-        {
-            int rerr = 0;
-            node = krffs_resolve_x(name, &rerr, cred_may_search);
-            if (!node) {
-                return rerr;
-            }
-        }
-        krffs_fill_stat64(&kst, node);
     }
 
     if (copy_to_user(st, &kst, sizeof(kst)) != 0) {
@@ -4560,7 +4545,6 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
 {
     struct linux_stat kst;
     char pathbuf[256];
-    const char *name;
     krffs_node_t *node;
     int len;
 
@@ -4590,18 +4574,22 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
         return 0;
     }
 
-    name = pathbuf;
-    if (name[0] == '/') {
-        name++;
-    }
-
     /* /dev and /proc are synthetic. The old stat(2) ABI is a narrower struct,
      * so translate the synthetic stat64 result down into it. */
     {
-        struct vpath vp;
-        if (synth_classify(name, &vp) != VNODE_KRFFS) {
+        struct vfs_ref ref;
+        const struct vpath *svp;
+        int32_t rc = vfs_resolve(0, pathbuf, 0, &ref, 0, 0);
+
+        if (rc != 0) {
+            return rc; /* missing, not-a-dir, or a denied ancestor */
+        }
+        svp = vfs_synth_vpath(ref.mnt, ref.node);
+        if (svp) {
             struct linux_stat64 s64;
-            int32_t rc = synth_stat(&vp, &s64, follow);
+
+            rc = synth_stat(svp, &s64, follow);
+            vfs_ref_release(&ref);
             if (rc != 0) {
                 return rc;
             }
@@ -4617,18 +4605,8 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
             }
             return 0;
         }
-    }
-
-    if (!krffs_fs) {
-        return -ENOENT;
-    }
-
-    {
-        int rerr = 0;
-        node = krffs_resolve_x(name, &rerr, cred_may_search);
-        if (!node) {
-            return rerr; /* missing, not-a-dir, or a denied ancestor */
-        }
+        node = ref.node;
+        vfs_ref_release(&ref);
     }
 
     /* The type comes from the node, as it does in the stat64 path. This read
@@ -5208,38 +5186,32 @@ static int32_t sys_execve(isr_params_t *params)
         name++;
     }
 
-    /* The synthetic /dev and /proc mounts hold no executables. Classify the
-     * canonicalized path the way open does and refuse a synthetic-classified
-     * name, so execve sees the same mount boundary and cannot reach a KRFFS
-     * file that a hostile image placed below the synthetic prefix. */
+    /* The synthetic /dev and /proc mounts hold no executables: the walk
+     * arriving on one is refused, so execve sees the same mount boundary as
+     * open and cannot reach a file a hostile image placed below the
+     * synthetic prefix. */
     {
-        struct vpath vp;
-        if (synth_classify(name, &vp) != VNODE_KRFFS) {
+        struct vfs_ref xref;
+        krffs_node_t *prog;
+        int32_t rc;
+
+        rc = vfs_resolve(0, name, 0, &xref, 0, 0);
+        if (rc != 0) {
+            return rc; /* missing, not-a-dir, or a denied ancestor */
+        }
+        if (vfs_synth_vpath(xref.mnt, xref.node)) {
+            vfs_ref_release(&xref);
             return -EACCES;
         }
-    }
-
-    if (!krffs_fs) {
-        return -ENOENT;
-    }
-
-    {
-        int perr = 0;
-        /* Resolved before the existence probe below, not after: krffs_open
-         * walks with no predicate, so asking it first would answer -ENOENT for
-         * a missing program under a directory the caller may not search,
-         * telling that caller the name is absent. The denied ancestor outranks
-         * the question. */
-        krffs_node_t *prog = krffs_resolve_x(name, &perr, cred_may_search);
-        int32_t rc;
-        if (!prog) {
-            return perr;
+        /* MS_NOEXEC is enforced here, the one place exec decides. */
+        if (xref.mnt->flags & VFS_MS_NOEXEC) {
+            vfs_ref_release(&xref);
+            return -EACCES;
         }
-        if (krffs_open(name) != 0) {
-            return -ENOENT; /* the file does not exist */
-        }
+        prog = xref.node;
         rc = cred_access_node(prog, CRED_X, 0);
         if (rc != 0) {
+            vfs_ref_release(&xref);
             return rc; /* exec is the execute bit, for root too */
         }
         /* Capture the set-id facts while the node is at hand; they apply only
@@ -5260,8 +5232,14 @@ static int32_t sys_execve(isr_params_t *params)
         if ((prog->mode & KRFFS_MODE_SGID) && (prog->mode & 0010u)) {
             setid_mode |= KRFFS_MODE_SGID;
         }
+        /* MS_NOSUID: the bits are read and then ignored, which is the
+         * flag's whole meaning. */
+        if (xref.mnt->flags & VFS_MS_NOSUID) {
+            setid_mode = 0;
+        }
         file_uid   = prog->uid;
         file_gid   = prog->gid;
+        vfs_ref_release(&xref);
     }
 
     if (current_proc->cr3 == 0) {
@@ -5301,23 +5279,20 @@ static int32_t sys_execve(isr_params_t *params)
                 name++;
             }
             {
-                struct vpath vp;
-                if (synth_classify(name, &vp) != VNODE_KRFFS) {
-                    return -EACCES;
-                }
-            }
-            {
-                int perr = 0;
-                krffs_node_t *interp = krffs_resolve_x(name, &perr, cred_may_search);
+                struct vfs_ref iref;
                 int32_t rc;
 
-                if (!interp) {
-                    return perr;
+                rc = vfs_resolve(0, name, 0, &iref, 0, 0);
+                if (rc != 0) {
+                    return rc;
                 }
-                if (krffs_open(name) != 0) {
-                    return -ENOENT;
+                if (vfs_synth_vpath(iref.mnt, iref.node) ||
+                    (iref.mnt->flags & VFS_MS_NOEXEC)) {
+                    vfs_ref_release(&iref);
+                    return -EACCES;
                 }
-                rc = cred_access_node(interp, CRED_X, 0);
+                rc = cred_access_node((krffs_node_t *)iref.node, CRED_X, 0);
+                vfs_ref_release(&iref);
                 if (rc != 0) {
                     return rc;
                 }
