@@ -4,7 +4,7 @@
 
 The kernel gets a file-system interface: one mount table, one path resolver, and one set of operations that every file system implements, so that a second file system can be mounted beside the root and unmounted again. Under it goes the ordinary block path that every later milestone builds on: a disk request that is allowed to take time, and a fixed buffer cache. On top of it goes the first file system that uses that path, FAT32, read-only, mounted from a partition of an AHCI disk.
 
-The milestone is complete when `mount -t vfat /dev/disk0p2 /mnt` works from the BusyBox shell in QEMU and on the Lenovo G50-70, the mounted volume can be listed and read, `umount /mnt` refuses while a file on it is open and succeeds afterwards, and every suite that passed before the milestone still passes. Writing to FAT32, exFAT, USB storage, hubs and ext2 are the next four milestones and are not started here. The interfaces fixed here are the ones those four build on, so the plan spends its care on them rather than on the FAT driver.
+The milestone is complete when `mount -t vfat /dev/disk0p2 /mnt` works from the BusyBox shell in QEMU, the mounted volume can be listed and read, `umount /mnt` refuses while a file on it is open and succeeds afterwards, and every suite that passed before the milestone still passes. The Lenovo's part, read-only mounts of its two FAT32 partitions and the lag check through its shell, is written into `metal_accept.sh` here and run in milestone 43, which is the one milestone that touches the machine. Writing to FAT32, exFAT, USB storage, hubs and ext2 are the next four milestones and are not started here. The interfaces fixed here are the ones those four build on, so the plan spends its care on them rather than on the FAT driver.
 
 This plan is the authority for the run. A conflict between this plan and the current tree is resolved by the decisions here; a conflict between this plan and `CLAUDE.md` is resolved by `CLAUDE.md`. The plan was revised twice after independent review. The first revision corrected the request lifetime, the descriptor model, the mount identity, the FAT volume check and the proof of several tests. The second made `..` physical, gave directory descriptors and working directories a held node, added the reservation of a mount target and the quarantine of a timed-out request, split the unmount into a retryable and an irreversible half, and moved the buffer cache's write rules to the milestone that first writes.
 
@@ -194,7 +194,7 @@ Writing to FAT32, and therefore FSInfo, the second FAT, allocation, the dirty-vo
 * The suite's disk is `krffs/mkdisk.sh`'s test disk with a second partition added by `tools/image/mkmbr` and formatted and filled with mtools at its offset. The fixture script lives with the suite.
 * Every existing suite is the proof that the resolver changed nothing it should not have. `tests/run all` runs after phase 3 and after phase 5, not only at the end.
 * `tools/setup/doctor.sh` lists dosfstools as optional, for `fsck.fat` on a host that has it.
-* `tests/system/accept/metal_accept.sh` gains the partition nodes, a read-only mount of the boot partition, and the lag check done with the shell: a background loop counting while `dd` reads a partition through the lag.
+* `tests/system/accept/metal_accept.sh` gains the partition nodes, a read-only mount of the boot partition, and the lag check done with the shell: a background loop counting while `dd` reads a partition through the lag. Written here, run in milestone 43.
 
 ## Documentation
 
@@ -207,26 +207,26 @@ Writing to FAT32, and therefore FSInfo, the second FAT, allocation, the dirty-vo
 * `Readme.md`: the system paragraph.
 * `vendor/busybox/Readme.md`: `mount` and `umount` and what they read.
 * `tests/Readme.md`, `tests/host/Readme.md`, `tests/system/Readme.md`, `tools/Readme.md` where a tool changes, and `krffs/Readme.md` if `mkdisk.sh` changes.
-* `dev-log/36-mount/Readme.md` and the `dev-log/Readme.md` entry, in phase 7.
+* `dev-log/36-mount/Readme.md` and the `dev-log/Readme.md` entry, in phase 6.
 
-Phase 7 is the sweep: the documents, the code the migration left redundant, the build, the runner and the suites, each read for freshness and for weight, in that order.
+Phase 6 is the sweep: the documents, the code the migration left redundant, the build, the runner and the suites, each read for freshness and for weight, in that order.
 
 ## How the work is kept track of
 
 Four files beside this plan, all tracked, all committed at each checkpoint: `progress.md`, every item here as a checklist; `current.md`, the resume state only, replaced and never appended; `notes.md`, deviations, measurements, defects and decisions the plan left to the run; `hardware.md`, what QEMU and the Lenovo report about their disks and partitions.
 
-After every phase, every compaction recovery and every batch of commits, one line is reported: `M36: phase N of 7; X of Y items done; HEAD abc1234; tree clean|dirty`.
+After every phase, every compaction recovery and every batch of commits, one line is reported: `M36: phase N of 6; X of Y items done; HEAD abc1234; tree clean|dirty`.
 
 ## Standing rules for the run
 
-* Work directly. The only delegation is an independent review, one reviewer per unit, at most six files, at most ten minutes. There are six review checkpoints, after phases 2, 3, 4, 5, 6 and 7. Phase 1 lists the files each checkpoint will cover and fixes the number of units for the whole milestone from that list; a checkpoint whose diff exceeds six files is reviewed as several units, and a fix that changes a contract gets one focused re-review of the files it changed. No result of one review starts a review the list does not name.
+* Work directly. The only delegation is an independent review, one reviewer per unit, at most six files, at most ten minutes. There are five review checkpoints, after phases 2, 3, 4, 5 and 6. Phase 1 lists the files each checkpoint will cover and fixes the number of units for the whole milestone from that list; a checkpoint whose diff exceeds six files is reviewed as several units, and a fix that changes a contract gets one focused re-review of the files it changed. No result of one review starts a review the list does not name.
 * Commit in scoped units in the house style, on the branch, no attribution, never push.
-* Every commit passes `tests/run style` and `tests/run host`. A commit that touches a subsystem runs that subsystem's suites singly. The whole set runs after phases 3 and 5 and at the end of phase 7.
+* Every commit passes `tests/run style` and `tests/run host`. A commit that touches a subsystem runs that subsystem's suites singly. The whole set runs after phases 3 and 5 and at the end of phase 6.
 * A test is proved by making it fail. A mutation is driven from a script that restores the source in a trap and rebuilds before the verdict is believed.
 * A change that alters a contract rewrites the owning Readme in the same commit.
 * A change that makes something redundant removes it in the same commit: a helper with one caller left, a suite that another now covers, a Make rule a listed rule could serve, a document paragraph the code no longer matches. The tree after this milestone is not larger than the milestone's own additions.
-* The one write on the Lenovo is the kernel installation through `bootctl`, presented and approved as `CLAUDE.md` requires. Every mount there is read-only, the two FAT partitions are hashed after the installation and before the checks, and no `bootctl` command that writes runs between the two hashes.
-* Nothing is deferred. A thing discovered mid-run goes into `notes.md` with the phase that will do it, and phase 7 closes every line or records the owner's decision to drop it.
+* Nothing touches the Lenovo in this milestone. Its checks are written into `metal_accept.sh` and run in milestone 43.
+* Nothing is deferred. A thing discovered mid-run goes into `notes.md` with the phase that will do it, and phase 6 closes every line or records the owner's decision to drop it.
 
 ## The phases
 
@@ -234,7 +234,7 @@ After every phase, every compaction recovery and every batch of commits, one lin
 
 Read `AGENTS.md`, `CLAUDE.md` and this plan in full. Require a clean tree and record `git log --oneline -12`. Create the four tracking files in the first commit.
 
-Then measure what the refactor will touch: the call sites into KRFFS, devfs and procfs grouped by syscall family, written into `notes.md` as the migration order for phase 3, and the files each review checkpoint will cover, from which the number of review units is fixed. Find every test that depends on the lexical `..` answer and list it for the commit that changes it. Confirm that `tools/image/mkmbr` accepts a second entry and that mtools can format a partition at an offset, by building the suite's disk once by hand. Record what the Lenovo reports about its partitions over SSH into `hardware.md`.
+Then measure what the refactor will touch: the call sites into KRFFS, devfs and procfs grouped by syscall family, written into `notes.md` as the migration order for phase 3, and the files each review checkpoint will cover, from which the number of review units is fixed. Find every test that depends on the lexical `..` answer and list it for the commit that changes it. Confirm that `tools/image/mkmbr` accepts a second entry and that mtools can format a partition at an offset, by building the suite's disk once by hand. Record what milestones 25 and 35 recorded about the Lenovo's partitions into `hardware.md`, beside what QEMU reports.
 
 Proof: the tables in `notes.md` and `hardware.md`, and the suite's disk built and listed with `mdir`.
 
@@ -270,13 +270,7 @@ Proof: `tests/run mount` passes; `mount` in the os-real shell lists a volume tha
 
 Mutations: allow `umount2` with a description open in another process; allow a working directory inside an unmounted mount; accept `MNT_DETACH`; allow `rename` across mounts; allow `bootctl` to open `/dev/bootpart` for writing while the boot partition is mounted; allow a second mount over a claimed range; run a program from a `noexec` mount; let `rmdir` remove a target while a constructor sleeps; let two processes read one description without the lock, which the every-byte-once row must catch; drop the busy-buffer wait, which the counter row must catch. Each must fail exactly its check.
 
-### Phase 6: the machine
-
-The Lenovo, over SSH. Install the kernel through `bootctl` as the approved write, and commit it once it boots. Then hash `/dev/disk0p1` and `/dev/disk0p3`. Mount the boot partition read-only, list it, compare the candidate slot's bytes with the kernel that was installed, mount the recovery partition and list it, and unmount both. Boot once more with `rach2.blocklag=3` on the ordinary root and run the shell lag check against a real AHCI through `/dev/disk0p3`. Hash both partitions again; they must be identical to the first pair. `metal_accept.sh` gains the same checks. Whatever the machine does that QEMU did not goes into `notes.md` and is fixed, not worked around.
-
-Proof: the hashes match, the listing matches `bootctl status`, the lag check shows the counter advancing while `dd` waits, and the machine reboots normally with `bootctl` unaffected.
-
-### Phase 7: the record and the sweep
+### Phase 6: the record and the sweep
 
 This phase is as large as a build phase, and it is where the tree is left no heavier than the milestone needed. Milestones 30, 31, 34 and 35 each spent days cleaning what earlier milestones had left behind in the build, the runner, the suites and the documents; this phase exists so that the next milestone does not have to.
 
@@ -297,8 +291,8 @@ The record: `notes.md` read from the top and every line closed. `dev-log/36-moun
 * Description lifetime under `dup`, `fork`, close-on-exec, exit and failed opens. `ofdprobe` covers the sharing rules today and `mountprobe` combines them with `umount2`; the unmount record's counts are what say `open` and `release` paired.
 * KRFFS relocation. The repointing moves onto descriptions, working directories and mount entries and must still find every one, in every process. The `persist` growth check and the phase 3 mutation are what say it does.
 * The claim table and the single-writer rule disagreeing about who may write the boot partition. Both are checked in `mountprobe` and in the `install` suite, which runs `bootctl` and must still pass.
-* The busy rules, the quarantine and the description lock need a scheduler to prove. `lagprobe` is the proof, and the shell form of it runs on the Lenovo as well as in QEMU.
-* FAT volumes the fixtures do not cover. The os-real boot compares the kernel's listing and file bytes with mtools' on a volume mtools wrote and fragmented, and the Lenovo's boot partition was written by `mformat` and `bootctl`, so three writers' volumes are read before the milestone closes.
+* The busy rules, the quarantine and the description lock need a scheduler to prove. `lagprobe` is the proof, and the shell form of it is written for milestone 43.
+* FAT volumes the fixtures do not cover. The os-real boot compares the kernel's listing and file bytes with mtools' on a volume mtools wrote and fragmented, and the Lenovo's boot partition, written by `mformat` and `bootctl`, is the third writer's volume, read in milestone 43.
 
 ## Recovery after a compaction
 

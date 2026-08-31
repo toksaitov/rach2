@@ -4,9 +4,9 @@
 
 The kernel gets the classic Unix file system, ext2 as Linux defines it, on the buffer cache and under the write rules of milestones 37 and 38, and uses it as its root. A root on ext2 is not limited by the mapped window that bounds a KRFFS root to half a gigabyte, has owners, modes, hard links, symbolic links and device nodes on disk, and is read and checked by every Linux and by the e2fsprogs tools. KRFFS stays what it is: the file system of the RAM images, of the test image, of recovery and of the sealed disk's second partition, which remains a bootable root and the fallback for the new one.
 
-The milestone is complete when the os-real image exists as an ext2 volume built on the host and checked clean by `e2fsck`; when QEMU boots that volume as its root, builds the kernel on it through `tests/run selfbuild`, and survives a crash with the mount-time check and a repair by `e2fsck` from recovery; when a volume the kernel wrote is read back identically by `debugfs` and passes `e2fsck` clean; when symbolic links resolve through the walker that milestone 36 prepared for them; and when the Lenovo boots from an ext2 root on its own disk with the KRFFS root as its fallback, builds a program on it, and comes back after a reboot.
+The milestone is complete when the os-real image exists as an ext2 volume built on the host and checked clean by `e2fsck`; when QEMU boots that volume as its root, builds the kernel on it through `tests/run selfbuild`, and survives a crash with the mount-time check and a repair by `e2fsck` from recovery; when a volume the kernel wrote is read back identically by `debugfs` and passes `e2fsck` clean; when symbolic links resolve through the walker that milestone 36 prepared for them; The Lenovo's migration to an ext2 root, with the KRFFS root as its fallback, is milestone 43's, with the procedure written here.
 
-The milestone has three halves with a gate between each, which the first review asked to be three milestones: the staging tools, the checker's reader, the kernel's reader and the links, through phase 3; the writer, its crash matrix, the check and `e2fsck` in recovery, through phase 5; and the images, the suites and the machine, from phase 6. Each later part starts only when the one before it is closed and reviewed. They are one milestone because each depends on the one before and on nothing else, and the count of milestones has grown once already; if the run finds the gates are not enough, the owner can cut it at either gate with nothing lost.
+The milestone has three halves with a gate between each, which the first review asked to be three milestones: the staging tools, the checker's reader, the kernel's reader and the links, through phase 3; the writer, its crash matrix, the check and `e2fsck` in recovery, through phase 5; and the images and the suites, from phase 6. Each later part starts only when the one before it is closed and reviewed. They are one milestone because each depends on the one before and on nothing else, and the count of milestones has grown once already; if the run finds the gates are not enough, the owner can cut it at either gate with nothing lost.
 
 This plan is the authority for the run. A conflict between this plan and the current tree is resolved by the decisions here; a conflict between this plan and `CLAUDE.md` is resolved by `CLAUDE.md`. The plan was revised twice after independent review. The first revision withdrew a crash guarantee the format cannot give, changed the inode allocation order, made the check seed its structural blocks and validate orphans, restricted writable mounts to 4 KiB blocks, fixed the symbolic-link rule for `O_CREAT|O_EXCL`, cut the port to `e2fsck` in recovery, and rewrote the machine procedure so that nothing is committed before the fallback has been proved. The second stated the promise's scope, the reserved inodes, the inode-bitmap comparison, the check on the error bit, the rename rules for one inode and for descendants, the atomic image target, and four proofs.
 
@@ -111,7 +111,7 @@ ext3's journal and ext4's extents, 64-bit block numbers, checksums, flexible gro
 * `tests/run ext2` also asserts, from the boot log's order of records, that the partitions are scanned and the root mounted before the USB stack starts, and, in an ordinary build, that a write to a partition node fails and leaves the sector as it was.
 * `tools/setup/doctor.sh` and `preflight.sh` list e2fsprogs as required, find it on the path, under the Homebrew keg and under `/sbin`, and probe the options `mkext2.sh` uses.
 * Every mutation script in this milestone invalidates the stamp and the object it mutates and proves that the mutant reached the artifact that ran, because a stamp can make a rebuild reuse old output.
-* `tests/system/accept/metal_accept.sh` gains the ext2 root checks.
+* `tests/system/accept/metal_accept.sh` gains the ext2 root checks, written here and run in milestone 43.
 
 ## Documentation
 
@@ -126,25 +126,24 @@ ext3's journal and ext4's extents, 64-bit block numbers, checksums, flexible gro
 * `vendor/e2fsprogs/Readme.md` is new, and `vendor/busybox/Readme.md` says why `e2fsck` is not BusyBox's.
 * `utils/Readme.md`: `bootctl config` with two roots, and recovery's `init` running `e2fsck`.
 * `tests/Readme.md`, `tests/host/Readme.md`, `tests/system/Readme.md`.
-* `dev-log/42-ext2/Readme.md` and the `dev-log/Readme.md` entry, in phase 8.
+* `dev-log/42-ext2/Readme.md` and the `dev-log/Readme.md` entry, in phase 7.
 
 ## How the work is kept track of
 
-`progress.md`, `current.md`, `notes.md` and `hardware.md` beside this plan, as before, and the one-line report `M42: phase N of 8; X of Y items done; HEAD abc1234; tree clean|dirty`.
+`progress.md`, `current.md`, `notes.md` and `hardware.md` beside this plan, as before, and the one-line report `M42: phase N of 7; X of Y items done; HEAD abc1234; tree clean|dirty`.
 
 ## Standing rules for the run
 
-* Work directly. The only delegation is an independent review, one reviewer per unit, at most six files, at most ten minutes. There are seven review checkpoints, after phases 2 to 8, with the number of units fixed in phase 1, and one focused re-review for a fix that changes a contract.
+* Work directly. The only delegation is an independent review, one reviewer per unit, at most six files, at most ten minutes. There are six review checkpoints, after phases 2 to 7, with the number of units fixed in phase 1, and one focused re-review for a fix that changes a contract.
 * Commit in scoped units in the house style, on the branch, no attribution, never push.
-* Every commit passes `tests/run style` and `tests/run host`. A commit that touches a subsystem runs that subsystem's suites singly. The whole set runs after phases 4 and 6 and at the end of phase 8.
+* Every commit passes `tests/run style` and `tests/run host`. A commit that touches a subsystem runs that subsystem's suites singly. The whole set runs after phases 4 and 6 and at the end of phase 7.
 * A test is proved by making it fail. A mutation is driven from a script that restores the source in a trap, invalidates the stamps and objects it touched, rebuilds, and proves the mutant is in the artifact before the verdict is believed.
 * A change that alters a contract rewrites the owning Readme in the same commit.
 * A change that makes something redundant removes it in the same commit. The tree after this milestone is not larger than the milestone's own additions, the port excepted, and the port stays under the limit phase 1 sets.
 * The vendored port follows the standing rules for ports: a pinned tarball, a hash, a build script behind a stamp, nothing of its output committed.
 * Phase 4 does not start until phase 3 is closed and reviewed; phase 6 does not start until phase 5 is.
-* The disk does not leave its bay, as `CLAUDE.md` says: the recovery stick from milestone 37 is booted and proved before any disk write, the boot menu file and the fourth partition's first sectors are saved on the host and on the stick, and recovery is the saved default until the write is verified.
-* On the Lenovo, the writes are the kernel installation through `bootctl`, the boot menu through `bootctl config`, and the ext2 image into the fourth partition through recovery, each presented and approved as `CLAUDE.md` requires. The KRFFS root and recovery partitions are hashed before and after and must match; the boot partition changes by design, and its change is recorded as the list of files `bootctl` wrote and their hashes, predicted before and compared after. If the fourth partition does not exist because milestone 37's owner refused it, the same proposal is made again here with milestone 37's procedure, the partition table saved and the new entry checked against the three others, and a second refusal closes the milestone on QEMU with the record saying so.
-* Nothing is deferred. A thing discovered mid-run goes into `notes.md` with the phase that will do it, and phase 8 closes every line or records the owner's decision to drop it.
+* Nothing touches the Lenovo in this milestone. The root switch is written in phase 6 as the procedure milestone 43 presents to the owner and runs, under the disk rule in `CLAUDE.md`.
+* Nothing is deferred. A thing discovered mid-run goes into `notes.md` with the phase that will do it, and phase 7 closes every line or records the owner's decision to drop it.
 
 ## The phases
 
@@ -192,15 +191,9 @@ Mutations: mount a dirty root writable without the check; skip the structural se
 
 The fourth partition in `mkdisk_grub.sh`, the sealed image with both roots and the two command lines, `tests/run ext2` in full, the ext2 variants of `sealed`, `install`, `drill` and `selfbuild`, and `tests/run all`.
 
-Proof: every suite passes; `selfbuild` on ext2 builds the kernel twice in clean directories with identical hashes; the install-shaped rows assert both command lines and both mounted roots, the fallback trial, the preserved kernel and the restored menu.
+Proof: every suite passes; `selfbuild` on ext2 builds the kernel twice in clean directories with identical hashes; the install-shaped rows assert both command lines and both mounted roots, the fallback trial, the preserved kernel and the restored menu. Then the machine procedure is written into `hardware.md` for milestone 43: the fourth partition's reflash with the ext2 image, the `bootctl config` diff, the trial, the checks, the deliberate fallback, and the commit last, each with its safeguards.
 
-### Phase 7: the machine
-
-The Lenovo, over SSH, on mains power. Nothing is committed until the end. Save the boot menu file and the partition table on the host and on the recovery stick from milestone 40. Present the fourth partition's reflash with the ext2 image, from recovery, with the procedure and the safeguards of milestone 37's phase 6, and if the partition does not exist, present its creation first with that procedure. Then install the new kernel into the candidate slot through `bootctl`, leaving the old kernel and the KRFFS command line as the untouched fallback, and present the `bootctl config` file as a diff that puts `rach2.root=ext2` on the candidate entries only; write it. Trial boot. On the ext2 root: `bootctl status`, `tcc` builds a program, a file survives a reboot of the same trial, `df` shows the volume, SSH works, the keyboard, the mouse and a stick work as before. Then boot the fallback deliberately, which is the old kernel on the KRFFS root, show it comes up, and boot the candidate again. Only then `commit`. `metal_accept.sh` gains the checks.
-
-Proof: the machine runs on ext2 with the KRFFS root one menu entry away and proved; the KRFFS root and recovery partitions' hashes match before and after; the boot partition's change is the predicted list of files.
-
-### Phase 8: the record and the sweep
+### Phase 7: the record and the sweep
 
 As in the milestones before, and as large. The documents, every one listed above, read against the code, with a Codex read of the reader-facing ones. The code: what the three file systems share read for what `fatcommon.c` and the VFS should hold; no helper with one caller; the KRFFS window path read for what is now only the RAM images' and said so. The build: every rule, manifest line, fixture and tool listed in `notes.md` with its reason; the port's script and stamp like the others', and its size against the limit; `guestcheck` and `tests/run selfbuild` pass on both roots. The tests: the tier decisions measured; a boot that proves what another proves removed; the matrix and mutation scripts in `notes.md`; the full set twice with no machine left running, and `make test` timed against milestone 41. The record: `notes.md` closed line by line, `dev-log/42-ext2/Readme.md` with its trust statement, and the `dev-log/Readme.md` entry in the same commit. The tree is clean and nothing is pushed.
 
@@ -209,7 +202,7 @@ As in the milestones before, and as large. The documents, every one listed above
 * The order of writes having a stop the list does not name, where `e2fsck` discards something. Every stop is repaired on a copy and compared file by file; a lost file at any stop fails the matrix, and the list grows by that stop.
 * The walker's symbolic links reaching code that assumed a component is a name: every path-taking syscall goes through the one walker since milestone 36, and `vfsprobe` runs its link rows against every family with the per-operation rules.
 * The port of e2fsprogs. It is built and run in phase 1, before anything depends on it, and it is `e2fsck` alone.
-* The dirty root on the machine. It mounts read-only rather than risking a repair, recovery repairs it without needing the root, and the fallback root is one menu entry away and is booted on purpose before anything is committed.
+* The dirty root on the machine. It mounts read-only rather than risking a repair, recovery repairs it without needing the root, and the fallback root is one menu entry away and is booted on purpose in milestone 43 before anything is committed.
 * The fourth partition's absence or refusal. Both answers are written, and the milestone closes on QEMU with the record if the machine half cannot run.
 * The size. Three parts with two gates, each reviewed before the next begins, and the owner able to stop at either gate with a finished piece.
 

@@ -4,7 +4,7 @@
 
 A flash drive plugged into a root port becomes a disk: enumerated by the USB core, driven by a mass-storage class driver over Bulk-Only Transport, published as a block device that sleeps its caller, with its partitions read from an MBR or a GUID partition table, mountable as FAT32 or exFAT through everything milestones 36 to 38 built, and safe to pull out at any moment. Then the kernel boots from a stick and mounts that stick's data partition, in QEMU and on the Lenovo G50-70, with the keyboard and mouse still working beside it.
 
-The milestone is complete when, in QEMU, a virtual stick appears, mounts, is written, is pulled while mounted at every stage of a transfer and gives `EIO` rather than a crash, is plugged back in and mounts again with nothing inherited, and a machine booted from a stick image mounts that same stick's second partition; and when, on the Lenovo, the owner's own stick, formatted on a Mac, mounts and lists, a file written to it by Rach2 reads back on the Mac, and the machine boots from a Rach2 stick and uses it. Hubs are milestone 41: everything here is on a root port, and the Lenovo's three sockets are three root ports since milestone 35 moved them.
+The milestone is complete when, in QEMU, a virtual stick appears, mounts, is written, is pulled while mounted at every stage of a transfer and gives `EIO` rather than a crash, is plugged back in and mounts again with nothing inherited, and a machine booted from a stick image mounts that same stick's second partition. The Lenovo's part, the owner's stick in both table formats and the boot from a Rach2 stick, is written into `metal_accept.sh` here and run in milestone 43. Hubs are milestone 41: everything here is on a root port, and the Lenovo's three sockets are three root ports since milestone 35 moved them.
 
 The milestone has two halves with a gate between them: the disk, with its removal and replug, through phase 5; and the stick image and the boot from it, from phase 6, which does not start until the first half is closed and reviewed. The first review of this plan asked for them to be separate milestones; they are separate halves of one instead, because the second is small and depends on nothing but the first.
 
@@ -109,7 +109,7 @@ Hubs, and a stick behind one: milestone 41. Requests larger than a page and the 
 * `tests/system/suites/usbdisk.sh`, `tests/run usbdisk`, core tier: a stick image with an MBR holding a FAT32 and an exFAT partition, and a second with a GPT holding the same with the first used entry not at index zero; a superfloppy stick; `usb-storage` on `qemu-xhci` beside the keyboard and the mouse; the probe boots; the pull-and-replug boots through `device_del` and `device_add` with `drive_add` first, with the pull placed by the harness during a read; a BusyBox boot with `mount LABEL=`, `blkid`, `cp` and `umount`; a throughput line, megabytes per second for a 16 MiB read, recorded in `notes.md` as a measurement; and, after the gate, a boot from the stick image with `bootindex` that mounts its own second partition.
 * The harness learns `drive=add:` and `drive=del:` steps for the monitor's `drive_add` and `drive_del`, beside its `usb=` steps.
 * `tests/run usb` keeps passing with the larger tables, and `lagprobe`'s sleeping rows run against a stick as well as the lag device.
-* `tests/system/accept/metal_accept.sh` gains the stick checks.
+* `tests/system/accept/metal_accept.sh` gains the stick checks, written here and run in milestone 43.
 
 ## Documentation
 
@@ -121,23 +121,23 @@ Hubs, and a stick behind one: milestone 41. Requests larger than a page and the 
 * `Readme.md`: the system paragraph, the images, the hardware status.
 * `tools/Readme.md`: the stick image target.
 * `tests/Readme.md`, `tests/host/Readme.md`, `tests/system/Readme.md`.
-* `dev-log/40-usbdisk/Readme.md` and the `dev-log/Readme.md` entry, in phase 8.
+* `dev-log/40-usbdisk/Readme.md` and the `dev-log/Readme.md` entry, in phase 7.
 
 ## How the work is kept track of
 
-`progress.md`, `current.md`, `notes.md` and `hardware.md` beside this plan, as before, and the one-line report `M40: phase N of 8; X of Y items done; HEAD abc1234; tree clean|dirty`.
+`progress.md`, `current.md`, `notes.md` and `hardware.md` beside this plan, as before, and the one-line report `M40: phase N of 7; X of Y items done; HEAD abc1234; tree clean|dirty`.
 
 ## Standing rules for the run
 
-* Work directly. The only delegation is an independent review, one reviewer per unit, at most six files, at most ten minutes. There are seven review checkpoints, after phases 2, 3, 4, 5, 6, 7 and 8, with the number of units fixed in phase 1, and one focused re-review for a fix that changes a contract.
+* Work directly. The only delegation is an independent review, one reviewer per unit, at most six files, at most ten minutes. There are six review checkpoints, after phases 2, 3, 4, 5, 6 and 7, with the number of units fixed in phase 1, and one focused re-review for a fix that changes a contract.
 * Commit in scoped units in the house style, on the branch, no attribution, never push.
-* Every commit passes `tests/run style` and `tests/run host`. A commit that touches a subsystem runs that subsystem's suites singly. The whole set runs after phases 3 and 5 and at the end of phase 8.
+* Every commit passes `tests/run style` and `tests/run host`. A commit that touches a subsystem runs that subsystem's suites singly. The whole set runs after phases 3 and 5 and at the end of phase 7.
 * A test is proved by making it fail. A mutation is driven from a script that restores the source in a trap and rebuilds before the verdict is believed.
 * A change that alters a contract rewrites the owning Readme in the same commit.
 * A change that makes something redundant removes it in the same commit. The tree after this milestone is not larger than the milestone's own additions.
 * Phase 6 does not start until phase 5 is closed and its review is done.
-* On the Lenovo, the writes are the kernel installation through `bootctl` and writes to sticks. The owner's stick is written only after the owner has said which stick and that it may be written, with what the machine reports about it read back first: vendor, product, serial, size and partition table. The SSD is not written beyond the kernel slot, and its partitions are hashed before and after.
-* Nothing is deferred. A thing discovered mid-run goes into `notes.md` with the phase that will do it, and phase 8 closes every line or records the owner's decision to drop it.
+* Nothing touches the Lenovo in this milestone. Milestone 43 asks the owner for the stick, formatted with a GUID table and then with an MBR, and runs the checks written into `metal_accept.sh` here.
+* Nothing is deferred. A thing discovered mid-run goes into `notes.md` with the phase that will do it, and phase 7 closes every line or records the owner's decision to drop it.
 
 ## The phases
 
@@ -145,7 +145,7 @@ Hubs, and a stick behind one: milestone 41. Requests larger than a page and the 
 
 Read `AGENTS.md`, `CLAUDE.md` and this plan in full. Require a clean tree and record `git log --oneline -12`. Create the four tracking files in the first commit. List the files each review checkpoint will cover and fix the units.
 
-Ask the owner to format the stick on the Mac as exFAT with a GUID partition map, and to plug it into the notebook when convenient; when it is there, record what the kernel of milestone 38 says about it in `/proc/usb`, where the device is refused by name today and that line is the baseline, and what `diskutil` on the Mac says about the same stick. Nothing in phases 2 to 6 waits for that; the stick is phase 7's prerequisite, and phase 7 is the one phase that waits on the owner, for the stick and for the approvals its rules name. Build the two QEMU stick images and the superfloppy by hand once and read them with mtools and `mkexfatfixture --check`. Read what `tools/image/mkiso.sh` produces as a hybrid image, its MBR and whether it carries a GUID table, into `notes.md`.
+Nothing here waits on the owner; the stick is milestone 43's. Build the two QEMU stick images and the superfloppy by hand once and read them with mtools and `mkexfatfixture --check`. Read what `tools/image/mkiso.sh` produces as a hybrid image, its MBR and whether it carries a GUID table, into `notes.md`.
 
 Proof: the tables in `notes.md` and `hardware.md`.
 
@@ -153,7 +153,7 @@ Proof: the tables in `notes.md` and `hardware.md`.
 
 The transfer generation, the exposed closing state with its deadline, bulk endpoints, the endpoint numbers, the eight slots and devices. The new rows in `xhci_hosttest.c`. `tests/run usb` unchanged.
 
-Proof: the rows pass; the USB suite passes with the larger tables; the notebook's keyboard and mouse still work on the new kernel, over SSH and at the console.
+Proof: the rows pass; the USB suite passes with the larger tables.
 
 Mutations: deliver a completion with a stale generation; reuse a slot before its close completed; open a bulk endpoint with an interrupt type; refuse endpoint 8; let a ninth device in. Each must fail exactly its row.
 
@@ -187,13 +187,7 @@ Proof: the boot reaches the shell from the stick alone and mounts `/dev/usb0p2`.
 
 Mutations: append the volume without its MBR entry; write `PartitionOffset` as zero; overlap the entries. Each must fail exactly its check.
 
-### Phase 7: the machine
-
-The Lenovo, over SSH. Install the kernel through `bootctl` as the approved write and commit it. With the owner's stick plugged in, in whichever table it has: `/proc/usb`, `blkid`, a mount, a listing compared with what the Mac shows, a file written and synced, `umount`, and the stick read on the Mac with the file there; then the owner reformats it once with the other table, GUID or MBR, and the same checks run again, so that the notebook has proved both readers on a real stick. A pull while mounted, with the record showing the `EIO` and the unmount afterwards, and a replug. Then the Rach2 stick: the owner writes the stick image to a second stick or, with approval, the same one, boots the notebook from it, and the machine mounts its own second partition and writes to it; the stick is read on the Mac afterwards. The keyboard and mouse typed and moved throughout. `metal_accept.sh` gains the checks, run against the owner's stick.
-
-Proof: the file crosses both ways; the boot from the stick reaches the shell and mounts; the hashes of the SSD's partitions match before and after.
-
-### Phase 8: the record and the sweep
+### Phase 7: the record and the sweep
 
 As in the milestones before, and as large. The documents, every one listed above, read against the code, with a Codex read of the reader-facing ones. The code: no helper with one caller; the refusal-by-port logic and the device table's growth read again for what the larger table made unnecessary; the closing state read for what the old close left behind. The build: every rule, manifest line, fixture and tool listed in `notes.md` with its reason; no `build_*.sh`; `guestcheck` and `tests/run selfbuild` pass. The tests: the tier decision measured; a boot that proves what another proves removed; the mutation scripts in `notes.md`; the full set twice with no machine left running, and `make test` timed against milestone 38. The record: `notes.md` closed line by line, `dev-log/40-usbdisk/Readme.md` with its trust statement, and the `dev-log/Readme.md` entry in the same commit. The tree is clean and nothing is pushed.
 
@@ -202,7 +196,7 @@ As in the milestones before, and as large. The documents, every one listed above
 * The owner's stick doing something the model does not. The field list above is the model's row list, and a stick that does something else is refused by name and recorded, then the model gains the row and the driver the case, in that order.
 * The pump shared by the interrupt handler, the timer and a submitting process. One function, interrupts off inside it, submission inside it, and the atomic wait; the model's row that completes between the check and the sleep is the deterministic proof, and the stress row in `lagprobe` is the second.
 * Removal at the wrong moment. The model vanishes at every stage and the rows assert what is reclaimed and when; the teardown count is one number, and the probe reads it back through `/proc/usb` after a hundred plugs.
-* Throughput. Measured in QEMU in phase 5 and on the notebook in phase 7, with MSI and with `rach2.nomsi`; the page-sized request is the ceiling of this milestone and the number is in the record.
+* Throughput. Measured in QEMU in phase 5 and on the notebook in milestone 43, with MSI and with `rach2.nomsi`; the page-sized request is the ceiling of this milestone and the number is in the record.
 * The stick image. Phase 1 reads what the ISO builder produces before the layout is committed to, and the whole image is validated, not its parts.
 
 ## Recovery after a compaction

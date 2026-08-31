@@ -4,7 +4,7 @@
 
 FAT32 gains writing. Files are created, written, extended, truncated, renamed and removed, directories made and removed, with long names, both FATs, FSInfo and the dirty flag kept the way Windows and Linux keep them. The buffer cache gets the write rules milestone 36 left to the first writer, and with them the one property this milestone is for: a power cut at any point between two completed sector writes leaves a volume that a checker calls consistent, with clusters at worst leaked and never shared.
 
-The milestone is complete when a volume written by Rach2 in QEMU is read back identically by mtools and, where a host has it, passes `fsck.fat -n` clean; when a volume stopped after every one of the sector writes of a scripted sequence is consistent at every stop; when the same volume survives a reboot; and when a volume that something else left dirty is checked at mount and comes back writable. The hardware proof is a FAT32 partition of the Lenovo's own disk, if the owner approves creating it; if not, the hardware proof waits for the first USB stick in milestone 40 and this milestone closes on QEMU alone, and that is written here so that nobody has to decide it under pressure.
+The milestone is complete when a volume written by Rach2 in QEMU is read back identically by mtools and, where a host has it, passes `fsck.fat -n` clean; when a volume stopped after every one of the sector writes of a scripted sequence is consistent at every stop; when the same volume survives a reboot; and when a volume that something else left dirty is checked at mount and comes back writable. The hardware proof, on a FAT32 partition of the Lenovo's own disk, is milestone 43's: the procedure is written here in phase 1, rehearsed on the sealed disk image in QEMU in phase 5, and presented to the owner and run only there.
 
 exFAT is milestone 38, on the same cache and the same rules. It was in this plan's first draft and was taken out by review: a first ordered write path, a full FAT32 writer, and a second file system read and write are two milestones, and combining them made the failures of one indistinguishable from the other's. USB storage is milestone 40, hubs 40, ext2 41.
 
@@ -133,7 +133,7 @@ exFAT: milestone 38. USB storage, a drive pulled while mounted, request cancella
 * `tests/system/suites/fatwrite.sh`, `tests/run fatwrite`, core tier: a FAT32 partition on the suite's disk. A probe writes, renames, removes and reads through it; the machine reboots and reads it back; the host reads the volume with mtools and compares every file's bytes, and, where `fsck.fat` is installed, runs it with `-n` and requires clean. Then a crash boot: the harness kills the machine during a scripted write sequence, the machine boots again, the mount's check runs and the volume comes back writable with its repairs recorded. Then `rach2.blockfail=N`: a metadata write fails and the mount goes read-only with the record and `/proc/mounts` says so. Then a BusyBox boot: `cp`, `mv`, `rm`, `mkdir` and `cat` from the shell, with `df` before and after, and the `update` child seen in `ps`.
 * `rach2-recovery-iso` is a new image target beside `rach2-metal-iso`: the recovery kernel and its RAM image on the same El Torito hybrid image, so that a stick can boot the machine into `reflash` without the disk. It is built by the existing ISO builder with a different kernel and module and nothing else.
 * `tools/setup/doctor.sh` lists `dosfstools` as optional, and the suite says at its end whether it had the checker.
-* `tests/system/accept/metal_accept.sh` gains the write check on the scratch partition, run only when that partition exists.
+* `tests/system/accept/metal_accept.sh` gains the write check on the scratch partition, written here and run in milestone 43 once that partition exists.
 
 ## Documentation
 
@@ -144,23 +144,22 @@ exFAT: milestone 38. USB storage, a drive pulled while mounted, request cancella
 * `rach2/Readme.md`: the file systems the kernel writes, the boot options, the limits.
 * `Readme.md`: the system paragraph; the machine's scratch partition under "Updating the installed machine", if it exists.
 * `tests/Readme.md`, `tests/host/Readme.md`, `tests/system/Readme.md`, `tools/Readme.md` for the recovery ISO target, and `Readme.md`'s image list.
-* `dev-log/37-fatwrite/Readme.md` and the `dev-log/Readme.md` entry, in phase 7.
+* `dev-log/37-fatwrite/Readme.md` and the `dev-log/Readme.md` entry, in phase 6.
 
 ## How the work is kept track of
 
-`progress.md`, `current.md`, `notes.md` and `hardware.md` beside this plan, as in milestone 36, and the one-line report `M37: phase N of 7; X of Y items done; HEAD abc1234; tree clean|dirty` after every phase, recovery and batch of commits.
+`progress.md`, `current.md`, `notes.md` and `hardware.md` beside this plan, as in milestone 36, and the one-line report `M37: phase N of 6; X of Y items done; HEAD abc1234; tree clean|dirty` after every phase, recovery and batch of commits.
 
 ## Standing rules for the run
 
-* Work directly. The only delegation is an independent review, one reviewer per unit, at most six files, at most ten minutes. There are six review checkpoints, after phases 2, 3, 4, 5, 6 and 7, with the number of units fixed in phase 1 from the files each will cover, and one focused re-review for a fix that changes a contract.
+* Work directly. The only delegation is an independent review, one reviewer per unit, at most six files, at most ten minutes. There are five review checkpoints, after phases 2, 3, 4, 5 and 6, with the number of units fixed in phase 1 from the files each will cover, and one focused re-review for a fix that changes a contract.
 * Commit in scoped units in the house style, on the branch, no attribution, never push.
-* Every commit passes `tests/run style` and `tests/run host`. A commit that touches a subsystem runs that subsystem's suites singly. The whole set runs after phases 3 and 5 and at the end of phase 7.
+* Every commit passes `tests/run style` and `tests/run host`. A commit that touches a subsystem runs that subsystem's suites singly. The whole set runs after phases 3 and 5 and at the end of phase 6.
 * A test is proved by making it fail. A mutation is driven from a script that restores the source in a trap and rebuilds before the verdict is believed.
 * A change that alters a contract rewrites the owning Readme in the same commit.
 * A change that makes something redundant removes it in the same commit. The tree after this milestone is not larger than the milestone's own additions.
-* The disk does not leave its bay, as `CLAUDE.md` says: the recovery stick is booted and proved before any disk write, the sectors about to change are saved on the host and on the stick, and recovery is the saved default until the write is verified.
-* On the Lenovo, the writes are the kernel installation through `bootctl` and, only with the owner's approval given when the values are presented, the fourth partition through recovery. Every other write goes to that partition. The boot, root and recovery partitions are hashed before and after, and recovery is the saved default from before the first disk write until the last check passes.
-* Nothing is deferred. A thing discovered mid-run goes into `notes.md` with the phase that will do it, and phase 7 closes every line or records the owner's decision to drop it. The one decision this plan hands to the owner in advance is the partition, and both answers are already written.
+* Nothing touches the Lenovo in this milestone. The fourth partition's procedure is written in phase 1 under the disk rule in `CLAUDE.md`, rehearsed on the sealed disk image in phase 5, and run in milestone 43.
+* Nothing is deferred. A thing discovered mid-run goes into `notes.md` with the phase that will do it, and phase 6 closes every line or records the owner's decision to drop it. The one decision this plan hands to the owner in advance is the partition, and both answers are already written.
 
 ## The phases
 
@@ -168,7 +167,7 @@ exFAT: milestone 38. USB storage, a drive pulled while mounted, request cancella
 
 Read `AGENTS.md`, `CLAUDE.md` and this plan in full. Require a clean tree and record `git log --oneline -12`. Create the four tracking files in the first commit. List the files each review checkpoint will cover and fix the units.
 
-Give `mkfatfixture` its `--check` and its new fixtures, and prove `--check` against the malformed fixtures that already exist, so that the reader every later test relies on is trusted before the writer exists. Measure what mtools writes: format a volume, copy a lower-case name, a mixed-case name, a long name and a colliding pair into it, and record what `--check` shows, so that the name rule is compared with a second writer before it is coded. Write the proposal for the Lenovo's fourth partition into `hardware.md`: a 1 GiB FAT32 volume with 8 KiB clusters starting at the first 1 MiB boundary after the recovery partition, its MBR entry, and the exact procedure of phase 6.
+Give `mkfatfixture` its `--check` and its new fixtures, and prove `--check` against the malformed fixtures that already exist, so that the reader every later test relies on is trusted before the writer exists. Measure what mtools writes: format a volume, copy a lower-case name, a mixed-case name, a long name and a colliding pair into it, and record what `--check` shows, so that the name rule is compared with a second writer before it is coded. Write the proposal for the Lenovo's fourth partition into `hardware.md`: a 1 GiB FAT32 volume with 8 KiB clusters starting at the first 1 MiB boundary after the recovery partition, its MBR entry, and the exact procedure milestone 43 presents, with every safeguard the disk rule in `CLAUDE.md` requires.
 
 Proof: `--check` refuses every malformed fixture by name and accepts every good one; the tables in `notes.md` and `hardware.md`.
 
@@ -198,23 +197,13 @@ Mutations: write an alias that collides on the raw bytes; write a long name with
 
 ### Phase 5: the suite
 
-`tests/run fatwrite` in full: the probe, the reboot, the mtools comparison and the checker where present, the crash boot and its repair record, the `blockfail` boot, the BusyBox boot, and the `lagprobe` rows for two writers and for a writer and a sync. `tests/run all`.
+`tests/run fatwrite` in full: the probe, the reboot, the mtools comparison and the checker where present, the crash boot and its repair record, the `blockfail` boot, the BusyBox boot, and the `lagprobe` rows for two writers and for a writer and a sync. `tests/run all`. Then the rehearsal for milestone 43, on the sealed disk image in QEMU: the recovery ISO booted as a stick, the sector-zero edit, the image write, and every boot path of the sealed disk afterwards through `tests/run sealed`, so that the procedure has run once before it touches the machine.
 
 Proof: the suite passes, and so does everything else.
 
 Mutations: drop the mount's lock from `write`, which the two-writer row must catch; let the crash boot's mount skip the check, which the repair record must catch. Each must fail exactly its check.
 
-### Phase 6: the machine
-
-Rehearse first, on the sealed disk image in QEMU: the sector-zero edit, the image write, and all of the sealed disk's boot paths afterwards through `tests/run sealed`, so that the procedure has been run once before it touches the machine.
-
-Then the Lenovo, over SSH, on mains power with suspend off. Set recovery as the saved default before anything is written. Install the kernel through `bootctl` as the approved write, boot it once through `next_entry`, and commit it. Present the partition proposal from `hardware.md` with the values read from the machine at that moment: the disk's identity and size, its current four entries, the proposed entry, and the commands; and wait for an approval that names the disk. If refused, `notes.md` records it, the hardware half is a read-only mount as in milestone 36, the ordinary root becomes the saved default again, and the milestone closes on QEMU.
-
-If approved, one more thing comes first: a USB stick carrying the recovery kernel and its RAM image, built by a new `rach2-recovery-iso` target and written with `dd`, is booted on the machine and shown to reach `reflash`, so that a sector zero gone wrong can be restored without opening the case. Then: boot recovery from the disk; read sector zero and save it on the host and on that stick, with its hash; hash the boot, root and recovery partitions; on the host, produce the new sector zero by changing bytes 494 through 509 only, and verify that bytes 0 through 493 and 510 through 511 are identical to the original and that the entry's type, start, count, alignment, bound and non-overlap check against the live table; immediately before the write, read sector zero again and require its hash unchanged and the disk's identity the same; write it through `reflash` at offset zero, read it back, compare byte for byte, and on any mismatch write the saved original back at once; write an `mformat`-made image whose `BPB_HiddSec` equals the start sector and whose length fits the entry through `reflash` at the entry's offset, read the whole range back and compare its hash with the image; boot the ordinary root once through `next_entry`, with recovery still the default; run the write check through the shell and through `metal_accept.sh`: write, rename, remove, `sync`, reboot the same way, read back, pull the partition over SSH and read it with mtools and, where present, the checker. Hash the three partitions again; they must match. Only then does the ordinary root become the saved default again.
-
-Proof: the rehearsal passes every boot path; the three hashes match; the machine's volume reads back identically on the host.
-
-### Phase 7: the record and the sweep
+### Phase 6: the record and the sweep
 
 As in milestone 36, and as large. The documents, every one listed above, read against the code, with a Codex read of the reader-facing ones. The code: the read-only driver's refusals that the write path now handles removed rather than bypassed; no helper with one caller; the description-lock-only `write` path of milestone 36 gone, not shadowed. The build: every rule, manifest line, fixture and tool listed in `notes.md` with its reason; no `build_*.sh`; `guestcheck` and `tests/run selfbuild` pass. The tests: the tier decision measured; a boot that proves what another proves removed; the matrix and mutation scripts in `notes.md`; the full set twice with no machine left running, and `make test` timed against milestone 36. The record: `notes.md` closed line by line, `dev-log/37-fatwrite/Readme.md` with its trust statement, and the `dev-log/Readme.md` entry in the same commit. The tree is clean and nothing is pushed.
 
@@ -224,7 +213,7 @@ As in milestone 36, and as large. The documents, every one listed above, read ag
 * The synchronous metadata cost on the lag device making the suite slow. Every write is one request; a create is about four. Measured in phase 5 and written into the tier decision.
 * The alias rule differing from Windows. It is this driver's own rule and says so; the recorded cases show where it agrees with mtools.
 * The mount-time check on a large dirty volume taking longer than a person expects. It reads the directory tree and the FAT once, and the record says it is running.
-* The Lenovo's fourth partition. Rehearsed on the sealed image, approved with live values, done with recovery as the default, with sector zero saved and restored on mismatch, and with the three partitions hashed before and after; a refusal costs the hardware write proof until milestone 40 and nothing else.
+* The Lenovo's fourth partition, in milestone 43. Rehearsed here on the sealed image so that the procedure has run once before it touches the machine.
 
 ## Recovery after a compaction
 

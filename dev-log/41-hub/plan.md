@@ -4,7 +4,7 @@
 
 A USB hub works: a keyboard, a mouse and a stick plugged into one hub, in one socket of the Lenovo G50-70, are three devices this kernel drives, at their own speeds, including a low-speed keyboard behind a high-speed hub, which is the case the transaction translator exists for. The controller interface learns to describe a device by where it is in the tree and not only by a root port, the USB core learns that a port can belong to a hub, and a hub class driver learns to power, reset and watch its ports the way the root controller does its own.
 
-The milestone is complete when, in QEMU, devices behind the emulated hub enumerate and work and a device behind a hub can be pulled and replugged like one on a root port; and when, on the Lenovo, a real high-speed hub carries the owner's keyboard, mouse and stick at once, the keyboard types, the mouse moves, and the stick mounts, unmounts and is pulled safely. QEMU's hub is a USB 1.1 hub, so QEMU proves the tree, the route string and the hub protocol, and only the notebook proves the transaction translator; the plan says which proof is which.
+The milestone is complete when, in QEMU, devices behind the emulated hub enumerate and work and a device behind a hub can be pulled and replugged like one on a root port; QEMU's hub is a USB 1.1 hub, so QEMU proves the tree, the route string and the hub protocol, and only the notebook proves the transaction translator; that proof, a real high-speed hub carrying the owner's keyboard, mouse and stick at once, is written into `metal_accept.sh` here and run in milestone 43.
 
 This plan is the authority for the run. A conflict between this plan and the current tree is resolved by the decisions here; a conflict between this plan and `CLAUDE.md` is resolved by `CLAUDE.md`. The plan was revised once after independent review, which moved the think time to the hub's own context, made a connection change close the old subtree first, added the hub-level status, the power modes and the initial port scan, took back the promise about SuperSpeed sticks behind a USB 3 hub, raised the device table from the notebook's inventory, and named the notebook's fixtures.
 
@@ -30,7 +30,7 @@ The core matches class 9 to the hub driver the way it matches class 3 to HID and
 
 When a hub is pulled, every device below it is pulled: the core closes them depth-first, children before their hub, each through milestone 40's closing state, so that a stick behind a pulled hub is torn down exactly as one on a root port, with `EIO` for its holders and reclamation at its count. When a hub is refused, or fails, its ports are never scanned.
 
-The device table grows to twelve entries before anything else is written, from the notebook's own inventory: four soldered devices, a USB 3 hub's two halves, a keyboard, a mouse and a stick are nine, and a second stick or a second hub must still fit. Twelve is the constant, the tests fill it and refuse the thirteenth, and phase 6 records the notebook's count against it.
+The device table grows to twelve entries before anything else is written, from the notebook's own inventory: four soldered devices, a USB 3 hub's two halves, a keyboard, a mouse and a stick are nine, and a second stick or a second hub must still fit. Twelve is the constant, the tests fill it and refuse the thirteenth, and milestone 43 records the notebook's count against it.
 
 ## Decisions on the hub driver
 
@@ -73,7 +73,7 @@ SuperSpeed hubs: refused by name, their high-speed half driven. Port suspend and
 * `tests/host/hub_hosttest.c`: the hub driver against a model of a hub reached through the core's control and interrupt paths, the way the storage model reaches the class driver. Rows: the descriptor read and the port count passed on, with the think time given to the hub's slot and not to a child's, and a full-speed hub given none; ganged, per-port and unswitched power each handled; the power-good wait and the scan of every port after it, finding a device already present; a hub-status change on bit 0 read and cleared; a connection reported in the bitmap, its status read, its change cleared, and the core told; a connection change with the status still connected closing the old subtree before enumerating the new device; an over-current powered off, retried once, and left off; a reset that completes and one that never does; the speed read from the status bits for low, full and high; a disconnection closing the device below; a hub pulled with two devices below closing both children first; a multi-TT hub selecting its setting; a stalled change endpoint closing the hub; a hub with 20 ports publishing 15; and a hub a sixth tier down refused.
 * `tests/usbprobe.c` gains the tree: `/proc/usb` shows each device's location as `root port, hub port, ...`, and the probe checks a keyboard and a mouse behind the hub against it.
 * `tests/system/suites/usb.sh` gains boots with `usb-hub` on `qemu-xhci`: a keyboard and a mouse behind the hub typing and moving on a machine with no 8042, as the root-port boots do; a stick behind the hub mounted, written, pulled through `device_del` and replugged; the hub itself pulled with all three behind it, the stick's mount answering `EIO` and unmounting, the keyboard's held keys released; a hub behind a hub with a keyboard on it; and eight devices in the tree with a ninth refused by name.
-* `tests/system/accept/metal_accept.sh` gains the hub checks as named fixtures, each a line in the record: a low-speed keyboard behind a real high-speed hub typing; a full-speed device behind a full-speed hub behind that high-speed hub; a multi-TT hub's setting selected, if the owner's hub is one, and otherwise recorded as untested; a USB 3 hub in the blue socket with its SuperSpeed half refused and its high-speed half carrying the devices; and whether a SuperSpeed stick behind it appears at all. The translator's mutations in the controller test are rerun against the notebook: the malformed slot, port and think time must make the low-speed keyboard fail there, or the claim that the model proves them is narrowed in the Readme to the words alone.
+* `tests/system/accept/metal_accept.sh` gains the hub checks as named fixtures, each a line in the record: a low-speed keyboard behind a real high-speed hub typing; a full-speed device behind a full-speed hub behind that high-speed hub; a multi-TT hub's setting selected, if the owner's hub is one, and otherwise recorded as untested; a USB 3 hub in the blue socket with its SuperSpeed half refused and its high-speed half carrying the devices; and whether a SuperSpeed stick behind it appears at all. In milestone 43 the translator's mutations in the controller test are rerun against the notebook: the malformed slot, port and think time must make the low-speed keyboard fail there, or the claim that the model proves them is narrowed in the Readme to the words alone. All of it is written here and run there.
 
 ## Documentation
 
@@ -82,23 +82,22 @@ SuperSpeed hubs: refused by name, their high-speed half driven. Port suspend and
 * `rach2/Readme.md`: the supported hardware and the limits.
 * `Readme.md`: the hardware status.
 * `tests/Readme.md`, `tests/host/Readme.md`, `tests/system/Readme.md`.
-* `dev-log/41-hub/Readme.md` and the `dev-log/Readme.md` entry, in phase 7.
+* `dev-log/41-hub/Readme.md` and the `dev-log/Readme.md` entry, in phase 6.
 
 ## How the work is kept track of
 
-`progress.md`, `current.md`, `notes.md` and `hardware.md` beside this plan, as before, and the one-line report `M41: phase N of 7; X of Y items done; HEAD abc1234; tree clean|dirty`.
+`progress.md`, `current.md`, `notes.md` and `hardware.md` beside this plan, as before, and the one-line report `M41: phase N of 6; X of Y items done; HEAD abc1234; tree clean|dirty`.
 
 ## Standing rules for the run
 
-* Work directly. The only delegation is an independent review, one reviewer per unit, at most six files, at most ten minutes. There are six review checkpoints, after phases 2, 3, 4, 5, 6 and 7, with the number of units fixed in phase 1, and one focused re-review for a fix that changes a contract.
+* Work directly. The only delegation is an independent review, one reviewer per unit, at most six files, at most ten minutes. There are five review checkpoints, after phases 2, 3, 4, 5 and 6, with the number of units fixed in phase 1, and one focused re-review for a fix that changes a contract.
 * Commit in scoped units in the house style, on the branch, no attribution, never push.
-* Every commit passes `tests/run style` and `tests/run host`. A commit that touches a subsystem runs that subsystem's suites singly. The whole set runs after phases 3 and 5 and at the end of phase 7.
+* Every commit passes `tests/run style` and `tests/run host`. A commit that touches a subsystem runs that subsystem's suites singly. The whole set runs after phases 3 and 5 and at the end of phase 6.
 * A test is proved by making it fail. A mutation is driven from a script that restores the source in a trap and rebuilds before the verdict is believed.
 * A change that alters a contract rewrites the owning Readme in the same commit.
 * A change that makes something redundant removes it in the same commit. The tree after this milestone is not larger than the milestone's own additions.
-* Phases 2 to 5 wait on nothing outside the tree. Phase 6 does not start until the owner has a high-speed hub, a low-speed keyboard and a full-speed device to put behind it; that is its entry condition, and phase 1 asks for them so that they are there by the time the code is.
-* On the Lenovo, the writes are the kernel installation through `bootctl` and writes to the owner's stick, under milestone 40's rules. The SSD is not written beyond the kernel slot, and its partitions are hashed before and after.
-* Nothing is deferred. A thing discovered mid-run goes into `notes.md` with the phase that will do it, and phase 7 closes every line or records the owner's decision to drop it.
+* Nothing here waits on the owner and nothing touches the Lenovo. Milestone 43 asks for a high-speed hub, a low-speed keyboard and a full-speed device, and runs the checks written into `metal_accept.sh` here.
+* Nothing is deferred. A thing discovered mid-run goes into `notes.md` with the phase that will do it, and phase 6 closes every line or records the owner's decision to drop it.
 
 ## The phases
 
@@ -106,7 +105,7 @@ SuperSpeed hubs: refused by name, their high-speed half driven. Port suspend and
 
 Read `AGENTS.md`, `CLAUDE.md` and this plan in full. Require a clean tree and record `git log --oneline -12`. Create the four tracking files in the first commit. List the files each review checkpoint will cover and fix the units.
 
-Check every number in the hub-class bullet above against the USB 2.0 specification's chapter 11 and the xHCI specification's slot context, and record each with its section in `notes.md`; a number that was wrong is corrected there and in this plan's Readme later. Ask the owner for a USB 2.0 or 3.0 hub for phase 6, a cheap unpowered one being the harder and the better test, and record what the kernel of milestone 40 says when the hub is plugged in, which is a refusal by name.
+Check every number in the hub-class bullet above against the USB 2.0 specification's chapter 11 and the xHCI specification's slot context, and record each with its section in `notes.md`; a number that was wrong is corrected there and in this plan's Readme later. Write into `hardware.md` what milestone 43 needs: a USB 2.0 or 3.0 hub, a cheap unpowered one being the harder and the better test, a low-speed keyboard and a full-speed device to put behind it.
 
 Proof: the table in `notes.md` with every number sourced.
 
@@ -140,23 +139,17 @@ The `usb.sh` hub boots, `usbprobe`'s tree, the eight-device boot, and `tests/run
 
 Proof: the suite passes and so does everything else.
 
-### Phase 6: the machine
-
-The Lenovo, over SSH, with the owner's hub. Install the kernel through `bootctl` as the approved write and commit it. Plug the hub into each of the three sockets in turn with the keyboard, the mouse and the stick on it: `/proc/usb` with the tree, typing and moving at the console, the stick mounted and written and unmounted, the stick pulled while mounted with the record showing `EIO`, a device replugged behind the hub, and the hub itself pulled with everything on it and replugged. A low-speed keyboard behind the high-speed hub is the translator's proof, and the record says which hub and which socket. If the hub is a USB 3.0 one, its SuperSpeed half is shown refused by name in the blue socket and its high-speed half carrying the devices. The device count is recorded against the twelve. `metal_accept.sh` runs its named fixtures.
-
-Proof: the three devices work through the hub in every socket; the record has the translator's case; the SSD's hashes match.
-
-### Phase 7: the record and the sweep
+### Phase 6: the record and the sweep
 
 As in the milestones before, and as large. The documents, every one listed above, read against the code, with a Codex read of the reader-facing ones. The code: the root-port path and the hub-port path read for what became one and should be one function; no helper with one caller. The build: every rule, manifest line, fixture and tool listed in `notes.md` with its reason; no `build_*.sh`; `guestcheck` and `tests/run selfbuild` pass. The tests: the tier decision measured; a boot that proves what another proves removed; the mutation scripts in `notes.md`; the full set twice with no machine left running, and `make test` timed against milestone 40. The record: `notes.md` closed line by line, `dev-log/41-hub/Readme.md` with its trust statement, which names the translator as the notebook's proof alone, and the `dev-log/Readme.md` entry in the same commit. The tree is clean and nothing is pushed.
 
 ## Risks, in expected order
 
-* The translator fields wrong in a way only the notebook can show. The host model checks the words against the specification, phase 1 checks the numbers against the text, and phase 6 has a low-speed keyboard behind a high-speed hub, which is the one case that fails loudly if they are wrong.
+* The translator fields wrong in a way only the notebook can show. The host model checks the words against the specification, phase 1 checks the numbers against the text, and milestone 43 has a low-speed keyboard behind a high-speed hub, which is the one case that fails loudly if they are wrong.
 * A hub-class number in this plan wrong from memory. Phase 1 exists for that, and it precedes every line of code.
-* The device table too small for the notebook's tree. The inventory above says nine with one hub; twelve is the constant, the tests fill it, and phase 6 records the count.
+* The device table too small for the notebook's tree. The inventory above says nine with one hub; twelve is the constant, the tests fill it, and milestone 43 records the count.
 * The one command slot serialising a hub's bring-up into seconds. Measured and recorded; a hub with three devices is a few dozen control transfers, and the record says how long they took.
-* The owner having no hub. Phases 2 to 5 close without one; phase 6 waits, and the plan says so.
+* The owner having no hub. Nothing here needs one; milestone 43 does, and says so.
 
 ## Recovery after a compaction
 

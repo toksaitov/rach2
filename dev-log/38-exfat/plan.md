@@ -158,7 +158,7 @@ TexFAT, a second FAT and a second bitmap: read-only. Vendor entries: kept and ma
 * A change that alters a contract rewrites the owning Readme in the same commit.
 * A change that makes something redundant removes it in the same commit. The tree after this milestone is not larger than the milestone's own additions.
 * The writer does not start until phase 3's gate has passed on every external image the host can make.
-* Nothing writes the Lenovo in this milestone beyond the kernel installation through `bootctl`, which is presented and approved as `CLAUDE.md` requires; the machine's part is one boot of the new kernel with the FAT32 checks of milestone 37 rerun.
+* Nothing touches the Lenovo in this milestone.
 * Nothing is deferred. A thing discovered mid-run goes into `notes.md` with the phase that will do it, and phase 7 closes every line or records the owner's decision to drop it.
 
 ## The phases
@@ -205,9 +205,9 @@ Mutations: free a lost cluster, which the intact-bytes row must catch; rewrite t
 
 ### Phase 6: the suite
 
-`tests/run exfat` in full, and `tests/run all`. The checker on this host over every volume the suite and the matrix wrote. Then the Lenovo: the new kernel installed and committed, and milestone 37's FAT32 checks rerun on its scratch partition if it exists, to show that the shared code moved without loss; nothing else is written there.
+`tests/run exfat` in full, and `tests/run all`. The checker on this host over every volume the suite and the matrix wrote.
 
-Proof: the suite passes, and so does everything else; the checker is clean; the machine's FAT32 checks pass as they did.
+Proof: the suite passes, and so does everything else; the checker is clean.
 
 ### Phase 7: the record and the sweep
 

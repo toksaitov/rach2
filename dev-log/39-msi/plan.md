@@ -4,7 +4,7 @@
 
 The kernel receives interrupts from PCI devices through the local APIC and message-signalled interrupts, so that a completion on the xHCI controller wakes the process waiting for it at once instead of at the next timer tick, a keystroke on a USB keyboard reaches the terminal in microseconds instead of ten milliseconds, and the audio controller's interrupt arrives on the notebook, where its legacy line may never have. The PIC keeps what it has: the timer, the PS/2 keyboard and mouse, and the serial port, unchanged. No IOAPIC is programmed.
 
-The milestone is complete when, in QEMU and on the Lenovo G50-70, the xHCI controller delivers its interrupts by MSI and `/proc/stat` counts them; when a USB keystroke's latency, measured from the emulator's injection to the terminal's read, drops from tens of milliseconds to under one; when the timer's pump still runs and still catches a completion an interrupt missed; and when the HDA driver's stream interrupt arrives by MSI on both machines. Everything the USB and audio stacks did before still works with interrupts off, because the timer path stays, and `rach2.nomsi` on the boot line turns the new path off for a machine that cannot take it.
+The milestone is complete when, in QEMU, the xHCI controller delivers its interrupts by MSI and `/proc/stat` counts them; when a USB keystroke's latency, measured from the emulator's injection to the terminal's read, drops from tens of milliseconds to under one; when the timer's pump still runs and still catches a completion an interrupt missed; and when the HDA driver's stream interrupt arrives by MSI. Everything the USB and audio stacks did before still works with interrupts off, because the timer path stays, and `rach2.nomsi` on the boot line turns the new path off for a machine that cannot take it. The notebook's APIC and its two controllers are read and proved in milestone 43, which boots the kernel there with `rach2.nomsi` first; that boot line is what makes a machine that cannot take MSI cost one boot and nothing else.
 
 This milestone exists because the USB disk, milestone 40, was designed to poll from process context for want of interrupts, and every review of that design cost more than this milestone will. It is small on purpose.
 
@@ -68,7 +68,7 @@ The IOAPIC and the ACPI interrupt: not programmed; the ACPI SCI stays where `boa
 * `tests/host/xhci_hosttest.c` gains rows: `IMAN.IE` and `USBCMD.INTE` set when MSI is on and clear when it is off; the handler clears `IMAN.IP` before it drains and writes `ERDP` after; a completion that arrives while a sleeper is between its check and its sleep is not lost.
 * `tests/system/suites/usb.sh` gains: a boot where `/proc/interrupts` shows the xHCI vector counting as keys are typed; the typing and mouse boots run again with `rach2.nomsi` and pass; a latency boot where the harness stamps a key's injection and the guest stamps its arrival through the monitor's clock, required under one millisecond with MSI and recorded with `rach2.nomsi`; and a lost-edge boot, where a mutation that never clears `IMAN.IP` is what makes the timer's fallback pump the only path, and the machine still types, ten milliseconds late, which is the row that proves the fallback.
 * `tests/run audio` gains the interrupt count on the HDA vector.
-* `tests/system/accept/metal_accept.sh` gains `/proc/interrupts`.
+* `tests/system/accept/metal_accept.sh` gains `/proc/interrupts` and the boot-line diagnostic below, written here and run in milestone 43.
 
 ## Documentation
 
@@ -94,7 +94,7 @@ The IOAPIC and the ACPI interrupt: not programmed; the ACPI SCI stays where `boa
 * A test is proved by making it fail. A mutation is driven from a script that restores the source in a trap and rebuilds before the verdict is believed.
 * A change that alters a contract rewrites the owning Readme in the same commit.
 * A change that makes something redundant removes it in the same commit. The tree after this milestone is not larger than the milestone's own additions.
-* On the Lenovo, the one write is the kernel installation through `bootctl`, presented and approved as `CLAUDE.md` requires. A kernel whose interrupts misbehave there is the fallback slot's business, which is why the trial exists, and `rach2.nomsi` is the second way back.
+* Nothing touches the Lenovo in this milestone. Milestone 43 runs the diagnostic there before any kernel with MSI is installed, and boots that kernel with `rach2.nomsi` first.
 * Nothing is deferred. A thing discovered mid-run goes into `notes.md` with the phase that will do it, and phase 5 closes every line or records the owner's decision to drop it.
 
 ## The phases
@@ -103,9 +103,9 @@ The IOAPIC and the ACPI interrupt: not programmed; the ACPI SCI stays where `boa
 
 Read `AGENTS.md`, `CLAUDE.md` and this plan in full. Require a clean tree and record `git log --oneline -12`. Create the four tracking files in the first commit. List the files each review checkpoint will cover and fix the units.
 
-Record, in QEMU and on the Lenovo over SSH, what `cpuid` says about the APIC, what `IA32_APIC_BASE` holds, the APIC ID, the spurious register and the two `LINT` entries as the firmware left them, and the xHCI's and HDA's capability lists with their MSI and MSI-X offsets and their control words, through a boot-line diagnostic that reads and prints and changes nothing. Check every number in the two specification bullets above against the manuals and record each with its source.
+Record, in QEMU, what `cpuid` says about the APIC, what `IA32_APIC_BASE` holds, the APIC ID, the spurious register and the two `LINT` entries as the firmware left them, and the xHCI's and HDA's capability lists with their MSI and MSI-X offsets and their control words, through a boot-line diagnostic, `rach2.apicdiag`, that reads and prints and changes nothing; milestone 43 runs the same diagnostic on the Lenovo before anything else. Check every number in the two specification bullets above against the manuals and record each with its source.
 
-Proof: `hardware.md` with both machines side by side; the table in `notes.md`.
+Proof: `hardware.md` with QEMU's values and a column left for the Lenovo's; the table in `notes.md`.
 
 ### Phase 2: the APIC, the vectors and MSI
 
@@ -123,11 +123,11 @@ Proof: `/proc/interrupts` counts keystrokes; the latency is under a millisecond 
 
 Mutations: drain the ring before clearing `IMAN.IP`, which the lost-edge boot must catch as a hang the fallback hides and the counter reveals; skip the APIC end-of-interrupt, which the second keystroke must catch; wake without the predicate re-check, which the model's between-check-and-sleep row must catch; let the handler and the timer drain without interrupts off, which the model's reentrancy row must catch. Each must fail exactly its check.
 
-### Phase 4: HDA on MSI, and the machine
+### Phase 4: HDA on MSI
 
-HDA's MSI beside its legacy line, and the audio suite's count. Then the Lenovo, over SSH: install the kernel through `bootctl` as the approved write, and before committing, read `/proc/interrupts` with a USB keyboard typed on and audio played, record which path each device took, run the acceptance script, and boot once with `rach2.nomsi` to show the old path still works there. Then commit.
+HDA's MSI beside its legacy line, the audio suite's count, and `metal_accept.sh`'s lines for milestone 43: `/proc/interrupts` with a USB keyboard typed on and audio played, recording which path each device took.
 
-Proof: the notebook counts xHCI interrupts by MSI, the keyboard and mouse work, audio plays, and the record says whether HDA's interrupts arrive by MSI, by the legacy line, or by neither, which is itself the answer milestone 35's comment could not give.
+Proof: `tests/run audio` counts HDA interrupts by MSI in QEMU and passes with `rach2.nomsi`.
 
 ### Phase 5: the record and the sweep
 
@@ -135,10 +135,10 @@ As in the milestones before. The documents, every one listed above, read against
 
 ## Risks, in expected order
 
-* The notebook's firmware leaving the APIC in a state this plan does not expect. Phase 1 reads it before anything is written, and `rach2.nomsi` is the way to boot regardless.
+* The notebook's firmware leaving the APIC in a state this plan does not expect. Milestone 43 reads it with the diagnostic before anything is installed, and `rach2.nomsi` is the way to boot regardless.
 * A lost edge on real hardware. The timer's pump is the fallback and the counter says how often it was needed; a machine that needs it often is recorded, not worked around.
 * Two contexts in one pump. Interrupts are off inside it in both, the handler runs with them off by construction, and the model has the reentrancy row.
-* The PIC's interrupts stopping when the APIC is enabled, on a machine whose firmware did not set virtual-wire mode. Phase 1 reads the `LINT` entries; a machine that would need them set is recorded and boots with `rach2.nomsi` until a later milestone writes them.
+* The PIC's interrupts stopping when the APIC is enabled, on a machine whose firmware did not set virtual-wire mode. The diagnostic reads the `LINT` entries; a machine that would need them set is recorded in milestone 43 and boots with `rach2.nomsi` until a later milestone writes them.
 
 ## Recovery after a compaction
 
