@@ -17,13 +17,28 @@ typedef struct block_device block_device_t;
  * invoke them with interrupts off and without the scheduler running. `drvdata`
  * is the backend's private pointer.
  */
+struct block_request;
+
+/* The device completes a transfer by polling and may be used with interrupts
+ * off. ATA, AHCI and every partition view over them have it; a device that
+ * sleeps its caller does not, and the page-cache window refuses such a device
+ * as a backing store. */
+#define BLOCK_FAULT_SAFE 0x1u
+
 struct block_device {
     uint32_t sector_size;
     uint64_t sector_count;
+    uint32_t flags;          /* BLOCK_FAULT_SAFE, or nothing */
+    uint32_t deadline_ticks; /* sleeping path: give up after this many ticks;
+                              * 0 means the 5-second default */
     int (*read)(block_device_t *device, uint64_t lba, uint32_t count,
                 void *buffer);
     int (*write)(block_device_t *device, uint64_t lba, uint32_t count,
                  const void *buffer);
+    /* Start one request and return; the device reports the end through
+     * `block_complete`, from whatever context it completes in. Only a device
+     * without `BLOCK_FAULT_SAFE` has one. */
+    int (*submit)(block_device_t *device, struct block_request *request);
     void *drvdata;
 };
 
@@ -103,5 +118,72 @@ void block_partition_init(
          uint64_t start_lba,
          uint64_t sector_count
      );
+
+/* How a request stands. A request the caller gave up on is quarantined with
+ * its page until the device answers, late, so the answer has nowhere to land
+ * but a page nothing else owns. */
+#define BLOCK_REQ_FREE        0
+#define BLOCK_REQ_IN_FLIGHT   1
+#define BLOCK_REQ_DONE        2
+#define BLOCK_REQ_QUARANTINED 3
+
+/**
+ * One request on a sleeping device: at most a page, in the request's own page.
+ *
+ * A write is copied into the page before `submit` and a read is copied out
+ * after a successful completion, so a completion that arrives after the
+ * deadline finds the pool's page and a generation that no longer matches, and
+ * is dropped with a record instead of landing in memory the caller reused.
+ */
+struct block_request {
+    block_device_t *device;
+    int write;
+    uint64_t lba;
+    uint32_t count;        /* sectors, at most BLOCK_REQ_SECTORS */
+    uint8_t *page;         /* the pool's page for this slot */
+    int status;            /* 0 or -errno, valid once done */
+    volatile int state;    /* BLOCK_REQ_* */
+    uint32_t generation;   /* advanced when the slot is reused or abandoned */
+    uint32_t deadline;     /* tick at which the wait gives up */
+};
+
+#define BLOCK_REQ_SECTORS 8u
+
+/**
+ * Transfer `count` whole sectors, sleeping the caller when the device does.
+ *
+ * On a `BLOCK_FAULT_SAFE` device this calls the vtable and returns, from any
+ * context, at boot included. On a device with `submit` it runs from syscall
+ * context only, splits the transfer into requests of at most a page, and
+ * sleeps between `submit` and the completion or the device's deadline.
+ * Returns 0 or a negative errno; a deadline is `-EIO` with the slot
+ * quarantined.
+ */
+int block_request(block_device_t *device, int write, uint64_t lba,
+                  uint32_t count, void *buffer);
+
+/**
+ * A sleeping device reports one request's end.
+ *
+ * `generation` is the value the device captured at `submit`. A completion
+ * whose generation is not the request's current one is dropped with a record;
+ * one for a quarantined request frees the slot.
+ */
+void block_request_complete(struct block_request *request, uint32_t generation,
+                            int status);
+
+/** Advance the request deadlines; the timer calls it once per tick. */
+void block_request_tick(void);
+
+/**
+ * The lag test device: `rach2.blocklag=N` wraps the boot disk for the
+ * partition nodes and the mounts in a device without `BLOCK_FAULT_SAFE` whose
+ * requests complete N ticks later, from the timer. The root window keeps the
+ * real device. Returns `backing` unchanged when the option is absent.
+ */
+block_device_t *block_lag_wrap(block_device_t *backing);
+
+/** Complete lagged requests whose ticks have passed; the timer calls it. */
+void block_lag_tick(void);
 
 #endif

@@ -1,0 +1,219 @@
+/*
+ * request.c: the one entry every transfer takes, and the pool behind it.
+ *
+ * A polled device is called and done. A sleeping device is handed a request
+ * from a fixed pool, one per process, each with its own page: a write is
+ * copied into the page before submit and a read is copied out after, so a
+ * completion that arrives after the caller gave up has nowhere to land but a
+ * page nothing else owns. A timed-out slot is quarantined with its page until
+ * the device answers late, which is the price of never letting stale hardware
+ * output into reused memory.
+ */
+
+#include "block.h"
+
+#include "../klog.h"
+#include "../kio.h"
+#include "../lib/kerrno.h"
+#include "../lib/kstring.h"
+#include "../panic.h"
+#include "../proc/process.h"
+#include "../proc/wait_queue.h"
+
+#define REQ_POOL 16
+#define REQ_DEFAULT_DEADLINE 500u /* five seconds of 100 Hz ticks */
+
+static struct block_request pool[REQ_POOL];
+static uint8_t pool_pages[REQ_POOL][BLOCK_REQ_SECTORS * BLOCK_SECTOR_SIZE]
+    __attribute__((aligned(4096)));
+static wait_queue_t pool_wq; /* woken on any completion or freed slot */
+static volatile uint32_t req_ticks;
+static uint32_t quarantined_count;
+
+static uint32_t irq_save(void)
+{
+    uint32_t flags;
+    __asm__ __volatile__("pushfl; popl %0; cli" : "=r"(flags)::"memory");
+    return flags;
+}
+
+static void irq_restore(uint32_t flags)
+{
+    if (flags & 0x200) {
+        __asm__ __volatile__("sti");
+    }
+}
+
+/** A slot to submit with, or NULL when the pool is exhausted. */
+static struct block_request *req_take(block_device_t *device, int write,
+                                      uint64_t lba, uint32_t count)
+{
+    uint32_t flags = irq_save();
+    int i;
+
+    for (i = 0; i < REQ_POOL; i++) {
+        if (pool[i].state == BLOCK_REQ_FREE) {
+            struct block_request *r = &pool[i];
+
+            r->device = device;
+            r->write = write;
+            r->lba = lba;
+            r->count = count;
+            r->page = pool_pages[i];
+            r->status = -EIO;
+            r->state = BLOCK_REQ_IN_FLIGHT;
+            r->generation++;
+            r->deadline = req_ticks + (device->deadline_ticks
+                                           ? device->deadline_ticks
+                                           : REQ_DEFAULT_DEADLINE);
+            irq_restore(flags);
+            return r;
+        }
+    }
+    irq_restore(flags);
+    klog(KLOG_WARN, "block", "request pool exhausted: %d quarantined",
+         (int)quarantined_count);
+    return NULL;
+}
+
+static int req_done(void *arg)
+{
+    struct block_request *r = arg;
+    return r->state != BLOCK_REQ_IN_FLIGHT;
+}
+
+/**
+ * One request of at most a page on a sleeping device.
+ *
+ * Sleeps until the completion or the deadline. A signal does not end the
+ * wait: the device owns the page until it answers, so the wait is the
+ * uninterruptible kind, bounded by the deadline instead.
+ */
+static int req_run_one(block_device_t *device, int write, uint64_t lba,
+                       uint32_t count, uint8_t *buffer)
+{
+    struct block_request *r = req_take(device, write, lba, count);
+    uint32_t flags;
+    int status;
+
+    if (!r) {
+        return -EIO;
+    }
+    if (write) {
+        k_memcpy(r->page, buffer, count * BLOCK_SECTOR_SIZE);
+    }
+    if (device->submit(device, r) != 0) {
+        flags = irq_save();
+        r->state = BLOCK_REQ_FREE;
+        irq_restore(flags);
+        wq_wake_all(&pool_wq);
+        return -EIO;
+    }
+    for (;;) {
+        if (wq_wait_event(&pool_wq, req_done, r) == 0 && req_done(r)) {
+            break;
+        }
+        /* -EINTR, or a wake for another slot: keep waiting; the deadline
+         * tick is what ends a wait the device never answers. */
+        if (req_done(r)) {
+            break;
+        }
+    }
+    flags = irq_save();
+    if (r->state == BLOCK_REQ_QUARANTINED) {
+        irq_restore(flags);
+        return -EIO;
+    }
+    status = r->status;
+    if (status == 0 && !write) {
+        k_memcpy(buffer, r->page, count * BLOCK_SECTOR_SIZE);
+    }
+    r->state = BLOCK_REQ_FREE;
+    irq_restore(flags);
+    wq_wake_all(&pool_wq);
+    return status;
+}
+
+int block_request(block_device_t *device, int write, uint64_t lba,
+                  uint32_t count, void *buffer)
+{
+    uint8_t *bytes = buffer;
+    uint32_t eflags;
+
+    if (!device || count == 0 || lba >= device->sector_count ||
+        count > device->sector_count - lba) {
+        return -EIO;
+    }
+    if (device->flags & BLOCK_FAULT_SAFE) {
+        if (write) {
+            return device->write(device, lba, count, buffer);
+        }
+        return device->read(device, lba, count, buffer);
+    }
+    if (!device->submit) {
+        return -EIO;
+    }
+    __asm__ __volatile__("pushfl; popl %0" : "=r"(eflags));
+    if (!(eflags & 0x200) || !current_proc) {
+        k_panic("block: a sleeping device was reached outside syscall context");
+    }
+    while (count > 0) {
+        uint32_t chunk = count > BLOCK_REQ_SECTORS ? BLOCK_REQ_SECTORS : count;
+        int rc = req_run_one(device, write, lba, chunk, bytes);
+
+        if (rc != 0) {
+            return rc;
+        }
+        lba += chunk;
+        bytes += chunk * BLOCK_SECTOR_SIZE;
+        count -= chunk;
+    }
+    return 0;
+}
+
+void block_request_complete(struct block_request *request, uint32_t generation,
+                            int status)
+{
+    uint32_t flags = irq_save();
+
+    if (!request || request->generation != generation) {
+        irq_restore(flags);
+        klog(KLOG_WARN, "block", "completion dropped: stale generation");
+        return;
+    }
+    if (request->state == BLOCK_REQ_QUARANTINED) {
+        request->state = BLOCK_REQ_FREE;
+        quarantined_count--;
+        irq_restore(flags);
+        klog(KLOG_INFO, "block", "late completion: quarantined slot freed");
+        wq_wake_all(&pool_wq);
+        return;
+    }
+    if (request->state != BLOCK_REQ_IN_FLIGHT) {
+        irq_restore(flags);
+        return;
+    }
+    request->status = status;
+    request->state = BLOCK_REQ_DONE;
+    irq_restore(flags);
+    wq_wake_all(&pool_wq);
+}
+
+void block_request_tick(void)
+{
+    int i;
+
+    req_ticks++;
+    for (i = 0; i < REQ_POOL; i++) {
+        if (pool[i].state == BLOCK_REQ_IN_FLIGHT &&
+            (int32_t)(req_ticks - pool[i].deadline) >= 0) {
+            /* The caller is woken with EIO; the slot and its page wait for
+             * the device, which still owns them, and the generation stays,
+             * so the late completion matches and frees the slot. */
+            pool[i].state = BLOCK_REQ_QUARANTINED;
+            quarantined_count++;
+            klog(KLOG_WARN, "block", "request deadline: slot quarantined");
+            wq_wake_all(&pool_wq);
+        }
+    }
+}

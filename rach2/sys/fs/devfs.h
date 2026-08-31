@@ -54,6 +54,9 @@ uint32_t devfs_fd_mode(struct fd_entry *e);
  * window, which the boot partition is small enough for on any disk this
  * project builds. A larger one is not published.
  */
+struct mbr_part;
+/* Publish /dev/disk0p1..p4 from the four MBR entries over `backing`. */
+void devfs_parts_publish(struct block_device *backing, const struct mbr_part *entries);
 void devfs_bootpart_publish(struct block_device *backing, uint32_t start_lba,
                             uint32_t sector_count);
 

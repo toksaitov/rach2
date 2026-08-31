@@ -230,7 +230,7 @@ static int32_t raw_window_read(struct raw_window *w, fd_entry_t *e, char __user 
             chunk = RAW_BATCH_SECTORS;
         }
         raw_calls++;
-        if (part->read(part, (uint32_t)(lba + done), chunk, raw_batch) != 0) {
+        if (block_request(part, 0, lba + done, chunk, raw_batch) != 0) {
             break;
         }
         if (copy_to_user((void __user *)(buf + done * BLOCK_SECTOR_SIZE), raw_batch,
@@ -318,7 +318,7 @@ static int32_t raw_window_write(struct raw_window *w, fd_entry_t *e, const char 
             break;
         }
         raw_calls++;
-        if (part->write(part, (uint32_t)(lba + done), chunk, raw_batch) != 0) {
+        if (block_request(part, 1, lba + done, chunk, raw_batch) != 0) {
             break;
         }
         done += chunk;
@@ -333,6 +333,39 @@ static int32_t raw_window_write(struct raw_window *w, fd_entry_t *e, const char 
 static int32_t dev_bootpart_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     return raw_window_read(&bootpart, e, buf, count);
+}
+
+/* The four MBR partitions as read-only raw windows, `/dev/disk0p1` to `p4`.
+ * A write answers EPERM in every build: the writable windows exist under
+ * their own names, and a whole-disk write belongs to recovery. */
+static struct raw_window part_win[4];
+
+static int32_t dev_part_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+{
+    (void)e;
+    (void)buf;
+    (void)count;
+    return -EPERM;
+}
+
+static int32_t dev_part1_read(fd_entry_t *e, char __user *buf, uint32_t count)
+{
+    return raw_window_read(&part_win[0], e, buf, count);
+}
+
+static int32_t dev_part2_read(fd_entry_t *e, char __user *buf, uint32_t count)
+{
+    return raw_window_read(&part_win[1], e, buf, count);
+}
+
+static int32_t dev_part3_read(fd_entry_t *e, char __user *buf, uint32_t count)
+{
+    return raw_window_read(&part_win[2], e, buf, count);
+}
+
+static int32_t dev_part4_read(fd_entry_t *e, char __user *buf, uint32_t count)
+{
+    return raw_window_read(&part_win[3], e, buf, count);
 }
 
 static int32_t dev_bootpart_write(fd_entry_t *e, const char __user *buf, uint32_t count)
@@ -613,6 +646,10 @@ static const struct file_ops grubcore_ops = {dev_grubcore_read, dev_grubcore_wri
                                              dev_ioctl, dev_grubcore_close};
 static const struct file_ops bootpart_ops = {dev_bootpart_read, dev_bootpart_write, dev_poll,
                                              dev_ioctl, dev_bootpart_close};
+static const struct file_ops part1_ops = {dev_part1_read, dev_part_write, dev_poll, dev_ioctl, NULL};
+static const struct file_ops part2_ops = {dev_part2_read, dev_part_write, dev_poll, dev_ioctl, NULL};
+static const struct file_ops part3_ops = {dev_part3_read, dev_part_write, dev_poll, dev_ioctl, NULL};
+static const struct file_ops part4_ops = {dev_part4_read, dev_part_write, dev_poll, dev_ioctl, NULL};
 static const struct file_ops bootlog_ops = {dev_bootlog_read, dev_sink_write, dev_poll, dev_ioctl,
                                             NULL};
 static const struct file_ops disk0_ops = {dev_disk0_read, dev_disk0_write, dev_poll, dev_ioctl,
@@ -655,7 +692,11 @@ static const struct devfs_entry dev_table[] = {{"null", 1, 3, 1, 0666, &null_ops
                                                {"bootpart", 240, 0, 0, 0600, &bootpart_ops},
                                                {"disk0", 240, 1, 0, 0400, &disk0_ops},
                                                {"bootlog", 240, 2, 0, 0400, &bootlog_ops},
-                                               {"grubcore", 240, 3, 0, 0600, &grubcore_ops}};
+                                               {"grubcore", 240, 3, 0, 0600, &grubcore_ops},
+                                               {"disk0p1", 240, 4, 0, 0400, &part1_ops},
+                                               {"disk0p2", 240, 5, 0, 0400, &part2_ops},
+                                               {"disk0p3", 240, 6, 0, 0400, &part3_ops},
+                                               {"disk0p4", 240, 7, 0, 0400, &part4_ops}};
 
 #define DEVFS_NDEV ((int)(sizeof(dev_table) / sizeof(dev_table[0])))
 
@@ -670,6 +711,18 @@ static int devfs_entry_present(int i)
     }
     if (dev_table[i].ops == &disk0_ops) {
         return disk0.present;
+    }
+    if (dev_table[i].ops == &part1_ops) {
+        return part_win[0].present;
+    }
+    if (dev_table[i].ops == &part2_ops) {
+        return part_win[1].present;
+    }
+    if (dev_table[i].ops == &part3_ops) {
+        return part_win[2].present;
+    }
+    if (dev_table[i].ops == &part4_ops) {
+        return part_win[3].present;
     }
     return 1;
 }
@@ -1000,6 +1053,28 @@ int devfs_fd_log_size(struct fd_entry *e, uint32_t *size)
     return 0;
 }
 
+/**
+ * Publish `/dev/disk0pN` for every non-empty MBR entry, over `backing`.
+ *
+ * The nodes are read-only; `mount(2)` takes its source from them. With
+ * `rach2.blocklag` the backing is the lag device, so a read through a node
+ * sleeps, which is what the lag exists to prove.
+ */
+void devfs_parts_publish(struct block_device *backing, const struct mbr_part *entries)
+{
+    int i;
+
+    for (i = 0; i < 4; i++) {
+        if (entries[i].sector_count == 0) {
+            part_win[i].present = 0;
+            continue;
+        }
+        block_partition_init(&part_win[i].part, backing, entries[i].start_lba,
+                             entries[i].sector_count);
+        part_win[i].present = 1;
+    }
+}
+
 void devfs_bootpart_publish(struct block_device *backing, uint32_t start_lba, uint32_t sector_count)
 {
     /* The boot partition is 16 MiB on a test image and 64 MiB on the sealed
@@ -1075,7 +1150,10 @@ int devfs_fd_is_raw(struct fd_entry *e)
         return 0;
     }
     dev = (const struct devfs_entry *)e->priv;
-    return dev->ops == &bootpart_ops || dev->ops == &grubcore_ops || dev->ops == &disk0_ops;
+    return dev->ops == &bootpart_ops || dev->ops == &grubcore_ops ||
+           dev->ops == &disk0_ops || dev->ops == &part1_ops ||
+           dev->ops == &part2_ops || dev->ops == &part3_ops ||
+           dev->ops == &part4_ops;
 }
 
 int devfs_fd_raw_size(struct fd_entry *e, uint64_t *size)
@@ -1086,6 +1164,20 @@ int devfs_fd_raw_size(struct fd_entry *e, uint64_t *size)
         return 0;
     }
     dev = (const struct devfs_entry *)e->priv;
+    if (dev->ops == &part1_ops || dev->ops == &part2_ops ||
+        dev->ops == &part3_ops || dev->ops == &part4_ops) {
+        int idx = dev->ops == &part1_ops   ? 0
+                  : dev->ops == &part2_ops ? 1
+                  : dev->ops == &part3_ops ? 2
+                                           : 3;
+        if (!part_win[idx].present) {
+            return 0;
+        }
+        if (size) {
+            *size = part_win[idx].part.device.sector_count * BLOCK_SECTOR_SIZE;
+        }
+        return 1;
+    }
     if (dev->ops == &bootpart_ops && bootpart.present) {
         if (size) {
             *size = bootpart.part.device.sector_count * BLOCK_SECTOR_SIZE;

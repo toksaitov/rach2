@@ -368,6 +368,7 @@ int ata_init(void)
 
     ata_device.sector_size = BLOCK_SECTOR_SIZE;
     ata_device.sector_count = sector_count;
+    ata_device.flags = BLOCK_FAULT_SAFE;
     ata_device.read = ata_read;
     ata_device.write = ata_write;
     ata_device.drvdata = NULL;

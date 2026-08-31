@@ -181,6 +181,8 @@ static void timer_handler(isr_params_t *params)
      * this takes what the controller has left in its event ring and returns.
      * Nothing on this path waits on hardware. */
     usb_poll();
+    block_lag_tick();
+    block_request_tick();
     tty_console_poll();
 
     if (!current_proc || !current_proc->in_syscall) {
@@ -1727,7 +1729,17 @@ static void discover_boot_devices(void)
         klog(KLOG_WARN, "block", "entry 0 is not a boot partition; /dev/bootpart absent");
         return;
     }
-    devfs_bootpart_publish(block0, disc_parts[0].start_lba, disc_parts[0].sector_count);
+    devfs_bootpart_publish(block_lag_wrap(block0), disc_parts[0].start_lba, disc_parts[0].sector_count);
+}
+
+/* The partition nodes, over the lag device when `rach2.blocklag` asks for
+ * one; the root window keeps the real device underneath. */
+static void publish_partition_nodes(void)
+{
+    if (!disc_table_ok || !block0) {
+        return;
+    }
+    devfs_parts_publish(block_lag_wrap(block0), disc_parts);
 }
 
 /**
@@ -1809,6 +1821,14 @@ static int init_krffs_disk(void)
         return -1;
     }
     part_bytes = sector_count * BLOCK_SECTOR_SIZE;
+
+    /* The window faults with interrupts off and polls the device from that
+       context, so a device that completes later instead of answering now
+       cannot back it. */
+    if (!(block0->flags & BLOCK_FAULT_SAFE)) {
+        klog(KLOG_WARN, "krffs", "the device is not fault-safe; no root on it");
+        return -1;
+    }
 
     block_partition_init(&_krffs_disk_part, block0, start_lba, sector_count);
     pc_set_backing(krffs_disk_read, krffs_disk_write, part_bytes);
@@ -2160,6 +2180,7 @@ static void process_command(const char *cmd)
                 ahci_selftest();
             }
             discover_boot_devices();
+            publish_partition_nodes();
             if (kcmdline_has("rach2.diskdiag")) {
                 diskinfo_probe(_krffs_on_disk);
             }
@@ -2849,7 +2870,7 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     refuse_contradictory_boot_line();
 
     discover_boot_devices();
-
+    publish_partition_nodes();
 
     {
         int mounted = -1;

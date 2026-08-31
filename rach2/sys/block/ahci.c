@@ -990,6 +990,7 @@ int ahci_init(void)
 
     ahci_device.sector_size = BLOCK_SECTOR_SIZE;
     ahci_device.sector_count = ahci_sector_count;
+    ahci_device.flags = BLOCK_FAULT_SAFE;
     ahci_device.read = ahci_read;
     ahci_device.write = ahci_write;
     ahci_device.drvdata = 0;

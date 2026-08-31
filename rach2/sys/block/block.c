@@ -57,6 +57,21 @@ static int block_partition_write(
            );
 }
 
+/* Forward a sleeping request with the view's offset added. The backing device
+ * completes the same request object, so nothing needs mapping back. */
+static int block_partition_submit(block_device_t *device,
+                                  struct block_request *request)
+{
+    block_partition_t *partition = (block_partition_t *) device;
+
+    if (request->count == 0 || request->lba > device->sector_count ||
+        request->count > device->sector_count - request->lba) {
+        return -EIO;
+    }
+    request->lba += partition->start_lba;
+    return partition->backing->submit(partition->backing, request);
+}
+
 void block_partition_init(
          block_partition_t *partition,
          block_device_t *backing,
@@ -75,6 +90,9 @@ void block_partition_init(
     }
 
     partition->backing = backing;
+    partition->device.flags = backing->flags;
+    partition->device.deadline_ticks = backing->deadline_ticks;
+    partition->device.submit = backing->submit ? block_partition_submit : 0;
     partition->start_lba = start_lba;
 
     partition->device.sector_size = backing->sector_size;
