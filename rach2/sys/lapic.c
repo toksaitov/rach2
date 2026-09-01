@@ -35,6 +35,8 @@
 #define LAPIC_TPR     0x80
 #define LAPIC_EOI     0xB0
 #define LAPIC_SVR     0xF0
+#define LAPIC_ISR     0x100
+#define LAPIC_IRR     0x200
 #define LAPIC_LINT0   0x350
 #define LAPIC_LINT1   0x360
 
@@ -134,6 +136,30 @@ int lapic_init(void)
     klog(KLOG_INFO, "lapic", "ready: id %d, version 0x%x, base 0x%x", apic_id,
          apic_read(LAPIC_VERSION) & 0xFFu, base);
     return 0;
+}
+
+/**
+ * Whether `vector` is already waiting at this processor.
+ *
+ * A message the device has sent is latched in the request register until the
+ * processor takes it, and sits in the in-service register while its handler
+ * runs. Either says the interrupt was announced, which is what the USB stack
+ * asks before it counts an event as one no message was coming for: a
+ * processor inside another interrupt has its flag clear, and a message that
+ * arrived a moment earlier is waiting rather than lost.
+ *
+ * The two registers hold 256 bits each, sixteen to a 16-byte-spaced word.
+ */
+int lapic_pending(uint8_t vector)
+{
+    uint32_t word = ((uint32_t)vector / 32u) * 0x10u;
+    uint32_t bit = 1u << ((uint32_t)vector % 32u);
+
+    if (!ready) {
+        return 0;
+    }
+    return (apic_read(LAPIC_IRR + word) & bit) != 0 ||
+           (apic_read(LAPIC_ISR + word) & bit) != 0;
 }
 
 int lapic_ready(void)

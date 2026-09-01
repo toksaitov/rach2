@@ -57,6 +57,7 @@ static uint32_t reg[REGS];
    them: the driver is included at the end of this file and defines its own. */
 #define M_USBCMD_RS    0x1u
 #define M_USBCMD_HCRST 0x2u
+#define M_USBCMD_INTE  0x00000004u
 #define M_USBSTS_HCH   0x1u
 #define M_USBSTS_CNR   0x800u
 
@@ -159,9 +160,81 @@ static uint32_t model_r32(uint32_t off)
     return reg[off];
 }
 
+/*
+ * The interrupter, as a controller works it: an event sets the pending bit and
+ * the busy bit, and raises an interrupt only when the busy bit was clear and
+ * both enables are set. The busy bit is cleared by the driver writing it back
+ * as one, which is what makes a driver that writes it as zero stop hearing
+ * from its controller after the first event. Nothing else here models that,
+ * and no machine can be made to show it on demand.
+ */
+#define IR_BASE    (RTSOFF + 0x20u)
+#define M_IMAN     (IR_BASE + 0x00u)
+#define M_IMOD     (IR_BASE + 0x04u)
+#define M_ERDP     (IR_BASE + 0x18u)
+#define M_IMAN_IP  0x1u
+#define M_IMAN_IE  0x2u
+#define M_ERDP_EHB 0x8u
+
+static int model_busy;    /* the event-handler-busy bit */
+static int model_raises;  /* interrupts the controller has raised */
+static int msi_vector;    /* the vector its capability was given, or -1 */
+static int msi_refuses;   /* the device has no MSI capability */
+static int event_on_iman; /* post an event from inside the acknowledgement */
+
+static void post_event(uint32_t type, uint32_t code, uint32_t slot, uint32_t param0);
+
+/** What the controller does when it has written an event. */
+static void model_raise(void)
+{
+    int was_busy = model_busy;
+
+    model_busy = 1;
+    reg[M_IMAN] |= M_IMAN_IP;
+    if (was_busy) {
+        return; /* the driver has not said it is finished with the last one */
+    }
+    if (!(reg[M_IMAN] & M_IMAN_IE)) {
+        return;
+    }
+    if (!(reg[OP(O_USBCMD)] & M_USBCMD_INTE)) {
+        return;
+    }
+    if (msi_vector < 0) {
+        return;
+    }
+    model_raises++;
+}
+
 static void model_w32(uint32_t off, uint32_t v)
 {
     if (off >= REGS) {
+        return;
+    }
+
+    if (off == M_IMAN) {
+        uint32_t pending = reg[off] & M_IMAN_IP;
+
+        if (v & M_IMAN_IP) {
+            pending = 0; /* the pending bit is cleared by writing it as one */
+        }
+        reg[off] = pending | (v & M_IMAN_IE);
+        if (event_on_iman) {
+            /* An event written between the acknowledgement and the drain,
+               which is the window a handler that drained first would lose.
+               The numbers are the port-change event's, spelled here because
+               the driver's own names are defined further down this file. */
+            event_on_iman = 0;
+            post_event(34u, 1u, 0, 1u << 24);
+        }
+        return;
+    }
+
+    if (off == M_ERDP) {
+        if (v & M_ERDP_EHB) {
+            model_busy = 0; /* the driver is finished with what it was given */
+        }
+        reg[off] = v;
         return;
     }
 
@@ -354,6 +427,22 @@ uint8_t pci_find_capability(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t id)
     return (uint8_t)(id == 0x01 ? 0x70 : 0);
 }
 
+int pci_msi_enable(const pci_device_t *dev, uint8_t vector)
+{
+    (void)dev;
+    if (msi_refuses) {
+        return -1;
+    }
+    msi_vector = (int)vector;
+    return 0;
+}
+
+void pci_msi_disable(const pci_device_t *dev)
+{
+    (void)dev;
+    msi_vector = -1;
+}
+
 uint16_t pci_read_config16(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t off)
 {
     (void)bus;
@@ -459,6 +548,7 @@ static void post_event(uint32_t type, uint32_t code, uint32_t slot, uint32_t par
         model_event_write = 0;
         model_event_cycle ^= TRB_CYCLE;
     }
+    model_raise();
 }
 
 /* The command the driver last wrote, so a row can require the right one was
@@ -680,6 +770,11 @@ static void model_reset(void)
         pci_cfg[0xD8] = 0x1;
         pci_cfg[0xDC] = 0xF;
     }
+    model_busy = 0;
+    model_raises = 0;
+    msi_vector = -1;
+    msi_refuses = 0;
+    event_on_iman = 0;
     model_bar0 = 0xFEBF0004u; /* a 64-bit memory aperture */
     model_bar1 = 0;
     xhci_set_io(&model_io);
@@ -1379,6 +1474,103 @@ int main(void)
         ep.number = 9;
         CHECK("an endpoint beyond this kernel's table is refused", dci_of(&ep) == 0);
     }
+
+    /* ---- the interrupter ---- */
+
+    /* Turned on, it moderates nothing, both enables are set, and the device's
+       capability is programmed with the vector it was given. */
+    model_reset();
+    CHECK("the capability registers are read", xhci_read_caps() == 0);
+    CHECK("halted and reset", xhci_halt_reset() == 0);
+    CHECK("started", xhci_start() == 0);
+    CHECK("the interrupter is turned on", xhci_interrupts_enable(48) == 0);
+    CHECK("and says so", xhci_interrupts_on() == 1);
+    CHECK("the moderation interval is written to zero", reg[M_IMOD] == 0);
+    CHECK("the interrupter's own enable is set", (reg[M_IMAN] & M_IMAN_IE) != 0);
+    CHECK("and the controller's", (reg[OP(O_USBCMD)] & M_USBCMD_INTE) != 0);
+    CHECK("the device is told which vector to send", msi_vector == 48);
+
+    /* A device with no MSI capability leaves the controller as it was: a
+       controller with its interrupter on and nothing to send is a controller
+       whose events nobody hears. */
+    model_reset();
+    msi_refuses = 1;
+    CHECK("the capability registers are read", xhci_read_caps() == 0);
+    CHECK("halted and reset", xhci_halt_reset() == 0);
+    CHECK("started", xhci_start() == 0);
+    CHECK("a device that cannot send messages is refused", xhci_interrupts_enable(48) == -1);
+    CHECK("and says so", xhci_interrupts_on() == 0);
+    CHECK("with the interrupter's enable left clear", (reg[M_IMAN] & M_IMAN_IE) == 0);
+    CHECK("and the controller's", (reg[OP(O_USBCMD)] & M_USBCMD_INTE) == 0);
+
+    /* The acknowledgement: the pending bit written as one, the enable beside
+       it kept. A bare write of the pending bit clears the enable, and the
+       controller is silent from then on. */
+    model_reset();
+    CHECK("the capability registers are read", xhci_read_caps() == 0);
+    CHECK("halted and reset", xhci_halt_reset() == 0);
+    CHECK("started", xhci_start() == 0);
+    CHECK("the interrupter is turned on", xhci_interrupts_enable(48) == 0);
+    post_event(TRB_TYPE_PORT_CHANGE, TRB_COMPLETION_SUCCESS, 0, 1u << 24);
+    CHECK("an event raises an interrupt", model_raises == 1);
+    CHECK("which the controller records as pending", (reg[M_IMAN] & M_IMAN_IP) != 0);
+    xhci_interrupt_ack();
+    CHECK("the acknowledgement clears the pending bit", (reg[M_IMAN] & M_IMAN_IP) == 0);
+    CHECK("and leaves the enable beside it set", (reg[M_IMAN] & M_IMAN_IE) != 0);
+
+    /* The drain says the driver is finished with what it was given, and only
+       then does the controller raise another. This is the second event's row:
+       a dequeue pointer written with the busy bit as zero leaves the
+       controller believing the driver is still reading. */
+    CHECK("the drain takes the event", xhci_events() == 1);
+    CHECK("and writes the dequeue pointer with the busy bit", (reg[M_ERDP] & M_ERDP_EHB) != 0);
+    post_event(TRB_TYPE_PORT_CHANGE, TRB_COMPLETION_SUCCESS, 0, 1u << 24);
+    CHECK("so the next event raises an interrupt of its own", model_raises == 2);
+    CHECK("and it is taken", xhci_events() == 1);
+
+    /* A drain that finds nothing still says the driver is finished: the timer
+       pumps this controller too, and an event it took first leaves the
+       handler with nothing to drain and the busy bit still set. */
+    model_reset();
+    CHECK("the capability registers are read", xhci_read_caps() == 0);
+    CHECK("halted and reset", xhci_halt_reset() == 0);
+    CHECK("started", xhci_start() == 0);
+    CHECK("the interrupter is turned on", xhci_interrupts_enable(48) == 0);
+    post_event(TRB_TYPE_PORT_CHANGE, TRB_COMPLETION_SUCCESS, 0, 1u << 24);
+    CHECK("an event raises an interrupt", model_raises == 1);
+    CHECK("the timer's drain takes it", xhci_events() == 1);
+    xhci_interrupt_ack();
+    CHECK("the handler's drain finds nothing", xhci_events() == 0);
+    post_event(TRB_TYPE_PORT_CHANGE, TRB_COMPLETION_SUCCESS, 0, 1u << 24);
+    CHECK("and the controller still raises the next interrupt", model_raises == 2);
+
+    /* An event written between the acknowledgement and the drain is taken by
+       that same drain. The model writes it from inside the acknowledgement,
+       which is the window a handler that drained first would leave. */
+    model_reset();
+    CHECK("the capability registers are read", xhci_read_caps() == 0);
+    CHECK("halted and reset", xhci_halt_reset() == 0);
+    CHECK("started", xhci_start() == 0);
+    CHECK("the interrupter is turned on", xhci_interrupts_enable(48) == 0);
+    event_on_iman = 1;
+    CHECK("an event written during the acknowledgement is taken by the drain after it",
+          xhci_interrupt_take() == 1);
+
+    /* Turned off, the controller keeps running and says nothing. */
+    model_reset();
+    CHECK("the capability registers are read", xhci_read_caps() == 0);
+    CHECK("halted and reset", xhci_halt_reset() == 0);
+    CHECK("started", xhci_start() == 0);
+    CHECK("the interrupter is turned on", xhci_interrupts_enable(48) == 0);
+    xhci_interrupts_disable();
+    CHECK("turned off, the interrupter's enable is clear", (reg[M_IMAN] & M_IMAN_IE) == 0);
+    CHECK("and the controller's", (reg[OP(O_USBCMD)] & M_USBCMD_INTE) == 0);
+    CHECK("and the device is told to send nothing", msi_vector == -1);
+    CHECK("and it says so", xhci_interrupts_on() == 0);
+    model_raises = 0;
+    post_event(TRB_TYPE_PORT_CHANGE, TRB_COMPLETION_SUCCESS, 0, 1u << 24);
+    CHECK("an event after that raises nothing", model_raises == 0);
+    CHECK("and waits for a drain that is not an interrupt's", xhci_events() == 1);
 
     if (fails == 0) {
         printf("xhci_hosttest: OK\n");

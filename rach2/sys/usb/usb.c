@@ -17,8 +17,13 @@
 
 #include "usb.h"
 
+#include "../cmdline.h"
+#include "../isr.h"
 #include "../klog.h"
+#include "../lapic.h"
+#include "../lib/kirq.h"
 #include "../pci.h"
+#include "../pit.h"
 #include "../udelay.h"
 #include "core.h"
 #include "hcd.h"
@@ -145,6 +150,52 @@ static const char *speed_name(int speed)
  */
 static int usb_up;
 
+static void usb_interrupts_start(void);
+
+/*
+ * The vector the controller's messages arrive on. Vectors 48 to 63 are this
+ * kernel's message vectors; the xHCI takes the first of them and the audio
+ * controller the second.
+ */
+#define USB_MSI_VECTOR 48
+
+/* How many messages the controller has sent, how many times the timer's pump
+ * found work that a message should have brought, and after how many messages
+ * `rach2.msidrop` silences the controller. */
+static uint32_t usb_messages;
+static uint32_t usb_fallback;
+static uint32_t msi_drop_after;
+
+/* Whether the controller was ever put on messages. The fallback is counted
+ * against this and not against whether messages are arriving now: a
+ * controller silenced by `rach2.msidrop` is exactly the machine whose lost
+ * edges are being counted. */
+static int msi_started;
+
+/* Whether the controller had an interrupt raised for what the last pump
+ * drained. The pump sets it; `usb_poll` reads it. */
+static int pump_saw_pending;
+
+/* Whether a pump was found to have enabled interrupts, so the record is
+ * printed once and not every tick. */
+static int pump_enabled_interrupts;
+
+/* The stamps of one keystroke's path through this stack, in microseconds:
+ * where the handler entered, where the event was taken, and where the key
+ * reached the line discipline. `usb_stamp_read` prints them when a reader
+ * takes the byte. */
+static uint32_t stamp_entry;
+static uint32_t stamp_event;
+static uint32_t stamp_wake;
+static uint32_t wake_event;
+static uint32_t wake_entry;
+static int stamp_pending;
+static int stamp_by_msi;
+
+/* Whether the pump that is running was turned by the controller's message.
+ * The keystroke's stamp is taken inside it and takes its answer from here. */
+static int in_msi_pump;
+
 /**
  * Let time pass at boot, which is the one place in this stack where that is
  * allowed.
@@ -182,6 +233,95 @@ static void report_ports(void)
     }
     if (found == 0) {
         klog(KLOG_INFO, "usb", "port: nothing connected");
+    }
+}
+
+/*
+ * The one pump, and the two contexts that turn it.
+ *
+ * The controller's event ring is drained here and nowhere else. Whichever
+ * context turns it, the interrupt flag stays as that context found it: the
+ * handler already runs with interrupts off through its gate, the timer's
+ * handler does too, and this saves and restores rather than enabling on its
+ * way out. That is what keeps the two from ever being inside the ring at once
+ * on this one processor, and it is the rule the block layer's requests will
+ * rely on when they sleep on a completion.
+ */
+static uint32_t usb_eflags(void)
+{
+    uint32_t flags;
+
+    __asm__ __volatile__("pushf\n\t"
+                         "pop %0"
+                         : "=r"(flags));
+    return flags;
+}
+
+static int usb_pump(uint32_t elapsed_ms, int from_interrupt)
+{
+    uint32_t flags;
+    int taken;
+
+    flags = kirq_save();
+    xhci_advance(elapsed_ms);
+    /* The handler's drain acknowledges the interrupt first and in the same
+     * call; the timer's has nothing to acknowledge. */
+    taken = from_interrupt ? xhci_interrupt_take() : xhci_events();
+    if (taken > 0) {
+        stamp_event = pit_now_us();
+        /*
+         * Whether a message for this stack is already waiting at the
+         * processor. Asked here and not before the drain: the controller
+         * answers a doorbell written by the step above inside that same
+         * write, so an event can appear, and a message be sent for it, in the
+         * middle of this pump. The processor is what is asked and not the
+         * controller: the controller's pending bit is set whether or not a
+         * message was sent, and a message that was sent while this tick held
+         * the interrupt flag down is waiting in the processor's own request
+         * register.
+         */
+        pump_saw_pending = lapic_pending(USB_MSI_VECTOR);
+    }
+    usb_core_step(elapsed_ms);
+    /* The flag is read before it is put back: the pump must not have enabled
+     * interrupts, or the timer's context and the handler's would be inside
+     * the controller's ring at once on this one processor. Said once, since a
+     * pump that did this does it every tick. */
+    if ((usb_eflags() & 0x200u) != 0 && !pump_enabled_interrupts) {
+        pump_enabled_interrupts = 1;
+        klog(KLOG_ERR, "usb", "pump: interrupts were enabled inside it");
+    }
+    kirq_restore(flags);
+    return taken;
+}
+
+/**
+ * The controller's message: acknowledge it, pump, and return.
+ *
+ * The acknowledgement is the pump's first act when the pump was turned by a
+ * message, and no part of it when the timer turned it. An event the
+ * controller writes between the acknowledgement and the drain is taken by
+ * that same drain, which is why the two are one call in the driver.
+ *
+ * The router ends the interrupt at the APIC after this returns, and
+ * reschedules if a reader was woken.
+ */
+static void usb_msi_handler(isr_params_t *params)
+{
+    (void)params;
+
+    stamp_entry = pit_now_us();
+    usb_messages++;
+    in_msi_pump = 1;
+    (void)usb_pump(0, 1);
+    in_msi_pump = 0;
+    if (msi_drop_after != 0 && usb_messages >= msi_drop_after) {
+        /* rach2.msidrop=N: the machine loses its edges from here, and the
+         * timer's pump is all that is left. It is how the fallback is seen
+         * to work on a machine whose interrupts stop. */
+        xhci_interrupts_disable();
+        klog(KLOG_WARN, "usb", "msidrop: %d messages taken; the controller was silenced",
+             (int)usb_messages);
     }
 }
 
@@ -228,7 +368,49 @@ int usb_init(void)
         }
     }
     klog(KLOG_INFO, "usb", "devices: %d configured", usb_core_count());
+
+    /*
+     * The controller's own interrupt, last: everything above ran on the
+     * timer's pump, and a message that arrived while the rings were being
+     * built would have found a stack that was not ready for it. A machine
+     * that refuses stays exactly as it was, which is the kernel before this
+     * milestone.
+     */
+    usb_interrupts_start();
     return 0;
+}
+
+/**
+ * Take the controller's interrupts as messages, or leave it to the timer.
+ *
+ * `rach2.nomsi` and a processor whose APIC was refused both leave the
+ * interrupter off. `rach2.msidrop=N` silences the controller after N
+ * messages, which is how a machine that loses its edges is staged.
+ */
+static void usb_interrupts_start(void)
+{
+    char value[16];
+
+    if (kcmdline_value("rach2.msidrop", value, (unsigned int)sizeof(value))) {
+        uint32_t n = 0;
+        int i;
+
+        for (i = 0; value[i] >= '0' && value[i] <= '9' && i < 6; i++) {
+            n = n * 10u + (uint32_t)(value[i] - '0');
+        }
+        msi_drop_after = n;
+    }
+    if (!lapic_ready()) {
+        klog(KLOG_INFO, "usb", "interrupts: the timer pumps this controller");
+        return;
+    }
+    register_isr_handler(USB_MSI_VECTOR, usb_msi_handler, "xhci");
+    if (xhci_interrupts_enable(USB_MSI_VECTOR) != 0) {
+        klog(KLOG_INFO, "usb", "interrupts: the timer pumps this controller");
+        return;
+    }
+    msi_started = 1;
+    klog(KLOG_INFO, "usb", "interrupts: messages on vector %d", USB_MSI_VECTOR);
 }
 
 void usb_poll(void)
@@ -236,13 +418,76 @@ void usb_poll(void)
     if (!usb_up) {
         return;
     }
-    xhci_advance(10);
-    xhci_events();
-    usb_core_step(10);
+    pump_saw_pending = 0;
+    if (usb_pump(10, 0) > 0 && msi_started && !pump_saw_pending) {
+        /*
+         * The timer found work that no message was coming for. A message
+         * already raised at the controller, or already waiting at the
+         * processor, means the timer merely got there first while this tick
+         * held the interrupt flag down; that is a race and not a lost edge,
+         * and the count is of lost edges.
+         */
+        usb_fallback++;
+    }
+}
+
+uint32_t usb_fallback_count(void)
+{
+    return usb_fallback;
+}
+
+/**
+ * Note that a keystroke from this stack has reached the line discipline.
+ *
+ * The third of the four stamps the latency record prints. The fourth is
+ * taken where a reader takes the byte, which is the terminal's read.
+ */
+void usb_stamp_wake(void)
+{
+    stamp_wake = pit_now_us();
+    /* The other two are taken here as well, and not read again when the
+     * record is printed: the reader takes its byte with interrupts on, and a
+     * pump between the two would otherwise move the event this keystroke is
+     * measured from out from under it. */
+    wake_event = stamp_event;
+    wake_entry = stamp_entry;
+    stamp_by_msi = in_msi_pump;
+    stamp_pending = 1;
+}
+
+/**
+ * A reader took a byte: print the path this keystroke took, once.
+ *
+ * The numbers are microseconds from the event the controller wrote, which is
+ * where this stack's part of the path begins: the handler's entry, which
+ * comes before the event it was raised for and so reads as a negative number,
+ * and is zero when the timer's pump took the event instead; the line
+ * discipline; and the reader. The last of them is the only one that has
+ * anything but this kernel in it: a program that was still writing its last
+ * line when the key arrived reads it late, and that time is the program's.
+ *
+ * A byte that did not come from this stack prints nothing, since nothing is
+ * pending.
+ */
+void usb_stamp_read(void)
+{
+    uint32_t read_us;
+
+    if (!stamp_pending) {
+        return;
+    }
+    stamp_pending = 0;
+    read_us = pit_now_us();
+    klog(KLOG_INFO, "usb", "latency: msi %d, entry %d, wake %d, read %d, us from the event",
+         stamp_by_msi, stamp_by_msi ? (int)(wake_entry - wake_event) : 0,
+         (int)(stamp_wake - wake_event), (int)(read_us - wake_event));
 }
 
 void usb_stop(void)
 {
     usb_up = 0;
+    xhci_interrupts_disable();
     xhci_stop();
 }
+
+

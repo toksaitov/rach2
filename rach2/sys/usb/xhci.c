@@ -145,6 +145,13 @@ static volatile uint8_t *xhci_base;
 static struct xhci_caps caps;
 static const char *xhci_err = "not tried";
 
+/* Where the controller is on the bus, kept from the walk that found it: the
+ * MSI capability is programmed through configuration space, long after. */
+static pci_device_t xhci_pci;
+
+/* Whether the controller has been told to send its interrupts as messages. */
+static int msi_on;
+
 /*
  * The scratchpad pages a controller asks for, and the array of their
  * addresses. Static and page-aligned: the tables in this driver are fixed, so
@@ -321,6 +328,7 @@ int xhci_discover(void)
         return -1;
     }
 
+    xhci_pci = dev;
     power_up(&dev);
     take_ports(&dev);
     pci_enable_memory_space(&dev);
@@ -612,10 +620,15 @@ int xhci_scratchpads(void)
 
 /* Runtime registers, at `RTSOFF`. The first interrupter is 32 bytes in. */
 #define XHCI_IR0     0x20
+#define IR_IMAN      0x00
+#define IR_IMOD      0x04
 #define IR_ERSTSZ    0x08
 #define IR_ERSTBA    0x10
 #define IR_ERDP      0x18
 #define ERDP_HANDLER 0x8u /* write it back to say the events were taken */
+
+#define IMAN_IP 0x1u /* an interrupt is pending; written as one to clear it */
+#define IMAN_IE 0x2u /* the interrupter may raise one */
 
 /* Port status and control, one per port, sixteen bytes apart. */
 #define PORTSC_CCS   0x00000001u /* a device is connected */
@@ -1063,13 +1076,107 @@ int xhci_port_settled(int port)
     return past(port_connect_at[port] + PORT_DEBOUNCE_MS) ? 1 : 0;
 }
 
-void xhci_events(void)
+/**
+ * Turn the interrupter on and have the controller send `vector` as a message.
+ *
+ * In this order: the moderation interval to zero, because a controller whose
+ * firmware left an interval behind would hold an event back for as long as it
+ * says and this driver wants the event when it happens; the interrupter's own
+ * enable; the controller's; and the MSI capability last, so that nothing is
+ * sent before the two enables that make it meaningful.
+ *
+ * Returns 0 when the controller will send messages, -1 when it will not, in
+ * which case nothing here has been enabled and the timer stays the only pump.
+ */
+int xhci_interrupts_enable(uint8_t vector)
+{
+    msi_on = 0;
+    if (!xhci_running) {
+        return -1;
+    }
+    w32(caps.rtsoff + XHCI_IR0 + IR_IMOD, 0);
+    w32(caps.rtsoff + XHCI_IR0 + IR_IMAN,
+        r32(caps.rtsoff + XHCI_IR0 + IR_IMAN) | IMAN_IE);
+    op_w32(XHCI_USBCMD, op_r32(XHCI_USBCMD) | USBCMD_INTE);
+    if (pci_msi_enable(&xhci_pci, vector) != 0) {
+        w32(caps.rtsoff + XHCI_IR0 + IR_IMAN,
+            r32(caps.rtsoff + XHCI_IR0 + IR_IMAN) & ~IMAN_IE);
+        op_w32(XHCI_USBCMD, op_r32(XHCI_USBCMD) & ~USBCMD_INTE);
+        return -1;
+    }
+    msi_on = 1;
+    return 0;
+}
+
+/**
+ * Stop the messages, leaving the controller running and the timer to pump it.
+ *
+ * The interrupter's enable goes first and the capability after, so that no
+ * message can be raised between the two.
+ */
+void xhci_interrupts_disable(void)
+{
+    if (!msi_on) {
+        return;
+    }
+    w32(caps.rtsoff + XHCI_IR0 + IR_IMAN,
+        r32(caps.rtsoff + XHCI_IR0 + IR_IMAN) & ~IMAN_IE);
+    op_w32(XHCI_USBCMD, op_r32(XHCI_USBCMD) & ~USBCMD_INTE);
+    pci_msi_disable(&xhci_pci);
+    msi_on = 0;
+}
+
+int xhci_interrupts_on(void)
+{
+    return msi_on;
+}
+
+/**
+ * Acknowledge the interrupt at the controller.
+ *
+ * `IMAN.IP` is written as one to clear it, and the enable bit beside it is
+ * written back as it was read: a bare write of the pending bit would clear
+ * the enable with it and the controller would never raise another.
+ *
+ * This is the handler's and not the pump's. The timer calls the same pump
+ * every tick and has nothing to acknowledge.
+ */
+void xhci_interrupt_ack(void)
+{
+    uint32_t iman;
+
+    if (!xhci_running) {
+        return;
+    }
+    iman = r32(caps.rtsoff + XHCI_IR0 + IR_IMAN);
+    w32(caps.rtsoff + XHCI_IR0 + IR_IMAN, iman | IMAN_IP);
+}
+
+/**
+ * Take what an interrupt was raised for: acknowledge it, then drain.
+ *
+ * The two in one call because their order is the whole of it. An event the
+ * controller writes between the drain and the acknowledgement would have its
+ * pending bit cleared by that acknowledgement without having been read, and
+ * would then wait for the timer's pump with no message coming for it. The
+ * other way round there is no such window: whatever arrives after the
+ * acknowledgement is either in this drain or raises an interrupt of its own.
+ *
+ * Returns what the drain took.
+ */
+int xhci_interrupt_take(void)
+{
+    xhci_interrupt_ack();
+    return xhci_events();
+}
+
+int xhci_events(void)
 {
     uint32_t taken = 0;
     uint32_t *trb;
 
     if (!xhci_running) {
-        return;
+        return 0;
     }
 
     for (;;) {
@@ -1095,13 +1202,23 @@ void xhci_events(void)
 
     port_scan();
 
-    if (taken != 0) {
-        /* Tell the controller how far this driver has read, and that it may
-         * raise the next event. */
+    if (taken != 0 || msi_on) {
+        /*
+         * Tell the controller how far this driver has read, and that it may
+         * raise the next event.
+         *
+         * The write happens on an empty drain too whenever the interrupter is
+         * on, because the controller sets the event-handler-busy bit when it
+         * raises an interrupt and will raise no other until that bit is
+         * written back as one. A handler that drained nothing, because the
+         * timer's pump took the event first, would otherwise leave the bit
+         * set and the controller silent from then on.
+         */
         w32(caps.rtsoff + XHCI_IR0 + IR_ERDP,
             (uint32_t)(uintptr_t)trb_at(event_ring, event_index) | ERDP_HANDLER);
         w32(caps.rtsoff + XHCI_IR0 + IR_ERDP + 4, 0);
     }
+    return (int)taken;
 }
 
 int xhci_start(void)
@@ -1111,6 +1228,7 @@ int xhci_start(void)
     uint32_t polls;
 
     xhci_running = 0;
+    msi_on = 0; /* a controller being started has no interrupter yet */
     for (i = 0; i < XHCI_RING_TRBS * TRB_WORDS; i++) {
         cmd_ring[i] = 0;
         event_ring[i] = 0;

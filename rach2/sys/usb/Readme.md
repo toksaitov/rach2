@@ -20,11 +20,25 @@ It is also the only one that reaches a low-speed keyboard without a second mecha
 
 Addressing belongs to the controller rather than the core: xHCI's Address Device command replaces the `SET_ADDRESS` request, so the core asks the driver to address a device and never sends that request itself. A second controller whose bus really takes the request would send it inside its own `device_address`.
 
+## The two pumps, and the one ring
+
+The event ring is drained by one function, `usb_pump` in `usb.c`, and by nothing else. Two contexts turn it: the controller's own interrupt, which is a message on vector 48, and the 100 Hz timer, which turns it every tick whether or not a message came.
+
+Whichever turns it, the interrupt flag stays as that context found it. The handler runs from an interrupt gate and the timer's handler does too, and the pump saves and restores the flag rather than enabling interrupts on its way out. That is what keeps the two from being inside the ring at once on this one processor, and the pump says so at runtime: a pump that returns with the flag raised records `usb: pump: interrupts were enabled inside it`, once.
+
+The handler acknowledges the interrupt before it drains, and the two are one call in the driver (`xhci_interrupt_take`). An event the controller writes between a drain and an acknowledgement that came after it would have its pending bit cleared without having been read, and would wait for the timer with no message coming for it. The dequeue pointer is written back with the event-handler-busy bit as one, on an empty drain as well: the controller sets that bit when it raises an interrupt and raises no other until it is written back, so a handler that found the ring already drained by the timer would otherwise silence the controller for good.
+
+The timer is the fallback for a lost edge, so a missed message costs at most ten milliseconds and never a hang. How often it finds work that no message was coming for is counted and reported as `FBK` in `/proc/interrupts`. The question of whether a message was coming is put to the processor and not to the controller: a message already in the processor's own request register is one that this tick's interrupt flag is holding back, which is a race and not a lost edge.
+
+`rach2.nomsi` leaves the interrupter off and the timer is the only pump, which is this stack as it was before the local APIC existed. A controller with no MSI capability is the same case. `rach2.msidrop=N` silences the controller after N messages, which no hardware switch can do on demand, and is how the fallback is seen to work.
+
+The kernel stamps four points of a keystroke's path and prints them when a reader takes the byte: the handler's entry, the event the controller wrote, the key reaching the line discipline, and the read. The record is `usb: latency: msi 1, entry -5, wake 5, read 79, us from the event`. The last of the four holds whatever the reading program was doing when the key arrived; the first three are this kernel's own.
+
 ## Nothing waits
 
-The event ring is drained from the 100 Hz timer handler, which runs with interrupts off. Nothing on that path may wait: not a port reset, not a control transfer, not a command completion, not a millisecond delay. So `submit` queues work and returns, `poll` reports what finished, and enumeration is a state machine that advances at most one step per call. Each device has its own state and a deadline counted in milliseconds; a step that does not complete by its deadline fails the device and gives the slot back.
+Nothing on the pump's path may wait: not a port reset, not a control transfer, not a command completion, not a millisecond delay. So `submit` queues work and returns, `poll` reports what finished, and enumeration is a state machine that advances at most one step per call. Each device has its own state and a deadline counted in milliseconds; a step that does not complete by its deadline fails the device and gives the slot back.
 
-At boot the kernel waits while the timer drives that machine, so the devices present at reset are enumerated before the first process starts. The boot path does not drive it itself: two parties draining one event ring, one of them inside an interrupt of the other, is the defect this arrangement exists to prevent.
+At boot the kernel waits while the timer drives that machine, so the devices present at reset are enumerated before the first process starts. The boot path does not drive it itself: two parties draining one event ring, one of them inside an interrupt of the other, is the defect this arrangement exists to prevent. The controller's own interrupt is turned on last, after the devices present at reset are enumerated, so that no message arrives at a stack that is still building its rings.
 
 One command is in flight at a time, and one device is enumerated at a time. The controller has one command ring; a second device waits at its port, which costs a hundred milliseconds.
 
@@ -85,7 +99,7 @@ A mouse report becomes a packet in the queue the PS/2 mouse fills, with the vert
 * **Report descriptors.** Above.
 * **Isochronous transfers.** Audio and video over USB. Nothing here reads them.
 * **Typematic repeat.** A held key on a USB keyboard does not repeat. The PS/2 keyboard's repeat comes from its hardware; a USB host is supposed to make its own, and this one does not.
-* **Interrupts.** The controller is polled from the timer. A keystroke is up to ten milliseconds late, which is correct for a console and noticeable in a game.
+* **More than one interrupter.** The controller has one, on vector 48, and every event goes to it. Several would need several vectors and a rule for which endpoint answers on which.
 * **EHCI.** The companion controller is not driven and will not be. Taking its pins costs one register write. Driving it would cost a controller driver, a hub driver and split transactions, for an interface no machine made after about 2014 has.
 * **Booting from a USB disk.** The firmware loads the kernel; this stack starts afterwards.
 
@@ -105,9 +119,9 @@ It is not given back. Restoring the firmware's interrupt sources and its claim w
 
 ## Verification
 
-`tests/run host` runs the three host tests written for this stack. `xhci_hosttest` drives the driver against a model of a controller through `struct xhci_io`: the discovery, the D3 wake, the aperture and register-set bounds, the firmware handoff at once and slowly and never, the halt and reset with its ready wait and its Intel pause, the scratchpad request and its refusal, both context sizes, the rings and their wrap, the command ring and its abort, the ports, the debounce, and the device and endpoint commands. `usb_hosttest` walks descriptors no device would send, in buffers allocated to the exact length under AddressSanitizer. `hid_hosttest` hands the class driver reports and reads back what it gave the input layer: a key held, two keys at once, a modifier, an arrow, a rollover, a short report, and an unplug with a key still down.
+`tests/run host` runs the three host tests written for this stack. `xhci_hosttest` drives the driver against a model of a controller through `struct xhci_io`: the discovery, the D3 wake, the aperture and register-set bounds, the firmware handoff at once and slowly and never, the halt and reset with its ready wait and its Intel pause, the scratchpad request and its refusal, both context sizes, the rings and their wrap, the command ring and its abort, the ports, the debounce, the device and endpoint commands, and the interrupter: the moderation interval, the two enables, the acknowledgement that keeps the enable beside it, the dequeue pointer written with the busy bit so the next event raises an interrupt of its own, and an event written between the acknowledgement and the drain. `usb_hosttest` walks descriptors no device would send, in buffers allocated to the exact length under AddressSanitizer. `hid_hosttest` hands the class driver reports and reads back what it gave the input layer: a key held, two keys at once, a modifier, an arrow, a rollover, a short report, and an unplug with a key still down.
 
-`tests/run usb` is nine boots against QEMU. Three of them take the 8042 away, so that a key typed or a mouse moved on those machines can only have come over USB.
+`tests/run usb` is fifteen boots against QEMU. Most of them take the 8042 away, so that a key typed or a mouse moved on those machines can only have come over USB.
 
 * a high-speed keyboard and mouse are enumerated and listed in `/proc/usb`
 * the same at full speed, which is the speed a real keyboard uses
@@ -116,5 +130,11 @@ It is not given back. Restoring the firmware's interrupt sources and its claim w
 * a mouse moved through the monitor arrives at the mouse device, on both axes and in the right direction
 * a keyboard plugged in after the boot is enumerated, and one pulled out is taken down
 * with `rach2.nousb` the file is there and empty
+* the controller's messages arrive, are counted on vector 48 in `/proc/interrupts`, and the timer's pump finds none of their work
+* with `rach2.nomsi` there is no vector and no fallback, and the keyboard still types
+* a mouse moved over messages arrives at the mouse device
+* the four stages of a keystroke are recorded, the handler enters within a millisecond of its own event, and the reader runs on the wake rather than at the next tick
+* with `rach2.msidrop=3` the controller sends three messages and no more, and the machine goes on typing with the fallback count rising
+* with the APIC enabled the 8259's keyboard and timer still arrive, which the model in the host test cannot show
 
 `tests/run subset` boots with `rach2.nousb` and requires the probe to record that it was skipped. Every check added here was proved by a mutation that makes it fail.

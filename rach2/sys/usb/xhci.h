@@ -210,7 +210,39 @@ int xhci_command_done(struct usb_command_result *out);
  * completions and port changes are recorded for the pollers above; transfer
  * events belong to the next phase of this work.
  */
-void xhci_events(void);
+int xhci_events(void);
+
+/**
+ * Have the controller send its interrupts as messages on `vector`.
+ *
+ * The moderation interval is written to zero, both enables are set and the
+ * MSI capability is programmed last. 0 when the controller will send them,
+ * -1 when it will not, in which case nothing was enabled.
+ */
+int xhci_interrupts_enable(uint8_t vector);
+
+/** Stop the messages; the controller keeps running and the timer pumps it. */
+void xhci_interrupts_disable(void);
+
+/** Whether the controller is sending its interrupts as messages. */
+int xhci_interrupts_on(void);
+
+/**
+ * Acknowledge the interrupt at the controller, keeping the interrupter on.
+ *
+ * The handler's first act. A bare write of the pending bit would clear the
+ * enable beside it, and no later interrupt would be raised.
+ */
+void xhci_interrupt_ack(void);
+
+/**
+ * Acknowledge the interrupt and drain the ring, in that order.
+ *
+ * What a handler calls. An event written between a drain and an
+ * acknowledgement that came after it would be left unread with its pending
+ * bit cleared, which is why the two are one call. Returns what was drained.
+ */
+int xhci_interrupt_take(void);
 
 /** Advance the driver's own clock, in milliseconds. */
 void xhci_advance(uint32_t milliseconds);

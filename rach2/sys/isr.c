@@ -13,6 +13,15 @@
  */
 extern void terminate_current_process(int32_t signo);
 
+/*
+ * The scheduler, and the process this processor is inside. Declared here for
+ * the same reason as the kill above: a message vector that woke a reader has
+ * to let that reader run, and the trap core need not pull in the whole
+ * process header to ask which context it interrupted.
+ */
+extern void schedule(void);
+extern int proc_preemptible(void);
+
 /* Every interrupt this kernel has routed through `_irq_router`, which is what
  * /proc/stat's `intr` line reports. */
 static volatile uint32_t irq_count = 0;
@@ -242,6 +251,16 @@ void _irq_router(isr_params_t *params)
         }
         _dispatch(params);
         lapic_eoi();
+        /*
+         * A handler that woke a reader has to let it run, or the wake is
+         * worth nothing until the next tick and the message bought no
+         * latency at all. A process running kernel code inside its own
+         * system call is left alone, as the timer leaves it alone: its state
+         * is half changed and the call must finish.
+         */
+        if (proc_preemptible()) {
+            schedule();
+        }
         return;
     }
 

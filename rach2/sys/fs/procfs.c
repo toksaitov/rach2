@@ -18,6 +18,7 @@
 #include "devfs.h"
 #include "krffs.h"
 #include "../usb/core.h"
+#include "../usb/usb.h"
 #include "../tty/pty.h"
 #include "../io/poll.h"
 #include "../cmdline.h"
@@ -995,6 +996,12 @@ static int procfs_gen_interrupts(struct procfs_text *t)
     ap_str(t, "SPU:\t");
     ap_u32(t, lapic_spurious_count());
     ap_str(t, "\tspurious\n");
+    /* What the timer's pump found that a message should have brought. It is
+     * zero on a machine whose messages arrive, so a number here is a count of
+     * lost edges and not of work done. */
+    ap_str(t, "FBK:\t");
+    ap_u32(t, usb_fallback_count());
+    ap_str(t, "\tusb fallback\n");
     return t->over ? -1 : t->len;
 }
 

@@ -25,6 +25,11 @@ extern int printf(const char *fmt, ...);
 static unsigned char codes[MAX_CODES];
 static int n_codes;
 
+/* The stamp the input layer takes for the latency record, which this test
+   has no clock for and no interest in. */
+void usb_stamp_wake(void)
+{}
+
 void input_key(uint8_t scancode)
 {
     if (n_codes < MAX_CODES) {

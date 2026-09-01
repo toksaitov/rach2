@@ -1,6 +1,8 @@
 #ifndef _USB_H_
 #define _USB_H_
 
+#include "../lib/kint.h"
+
 /**
  * Record what USB host controllers this machine has.
  *
@@ -38,5 +40,29 @@ void usb_poll(void);
 
 /** Stop the controller before the machine halts or restarts. */
 void usb_stop(void);
+
+/**
+ * How many times the timer's pump found work a message should have brought.
+ *
+ * Zero on a machine whose messages arrive. `/proc/interrupts` reports it, and
+ * the suite that silences the controller on purpose requires it to rise.
+ */
+uint32_t usb_fallback_count(void);
+
+/**
+ * Note that a keystroke from this stack reached the line discipline.
+ *
+ * Called by the input layer. It is the third of the four stamps the latency
+ * record prints; the fourth is taken where a reader takes the byte.
+ */
+void usb_stamp_wake(void);
+
+/**
+ * A reader took a byte: print what path the last keystroke took, once.
+ *
+ * Called by the terminal's read, which is where a reader's first sight of the
+ * byte is. A byte that did not come from this stack prints nothing.
+ */
+void usb_stamp_read(void);
 
 #endif

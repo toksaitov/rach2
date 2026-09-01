@@ -47,6 +47,15 @@ int lapic_ready(void);
  */
 void lapic_repair_lint0(void);
 
+/**
+ * Whether `vector` is waiting at this processor or is being handled.
+ *
+ * A driver that pumps its device from both an interrupt and the timer asks
+ * this to tell a message that has not been taken yet from work that no
+ * message was coming for.
+ */
+int lapic_pending(uint8_t vector);
+
 /** The processor's APIC identity, the destination a message carries. */
 uint32_t lapic_id(void);
 

@@ -15,6 +15,8 @@
 
 #include "hid.h"
 
+#include "usb.h"
+
 #include "../input.h"
 #include "../klog.h"
 #include "core.h"
@@ -77,6 +79,10 @@ static void send_code(uint16_t code, int released)
         input_key(0xE0);
     }
     input_key((uint8_t)(released ? (byte | 0x80u) : byte));
+    /* The key is in the line discipline now, and whoever waited on it has
+     * been woken. The stamp is the third of the four the latency record
+     * prints. */
+    usb_stamp_wake();
 }
 
 /** Whether `usage` is in a report's six key slots. */

@@ -11,6 +11,8 @@
  */
 
 #include "tty.h"
+
+#include "../usb/usb.h"
 #include "../io/poll.h"
 #include "../serial.h"
 #include "../kio.h"
@@ -186,6 +188,7 @@ int tty_read(struct tty *t, unsigned char *kbuf, int count, int nonblock)
         if (tty_ready_cond(t)) {
             n = n_tty_read(&t->ldisc, kbuf, count);
             kirq_restore(flags);
+            usb_stamp_read();
             return n;
         }
         kirq_restore(flags);
@@ -207,6 +210,10 @@ int tty_read(struct tty *t, unsigned char *kbuf, int count, int nonblock)
         if (n_tty_readable(&t->ldisc)) {
             n = n_tty_read(&t->ldisc, kbuf, count);
             kirq_restore(flags);
+            /* Where a reader first has the byte, which is the last of the
+             * four stamps the USB latency record prints. A byte from
+             * anywhere else prints nothing. */
+            usb_stamp_read();
             return n;
         }
         kirq_restore(flags);
