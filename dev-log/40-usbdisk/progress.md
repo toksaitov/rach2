@@ -1,9 +1,9 @@
 # Milestone 40 progress
 
 Phase 1: arrival and inventory
-- [ ] the tracking files; the review checkpoints and their files
-- [ ] the two stick images and the superfloppy built by hand and read back
-- [ ] what mkiso.sh produces, its MBR and any GUID table, in notes.md
+- [x] the tracking files; the review checkpoints and their files
+- [x] the two stick images and the superfloppy built by hand and read back
+- [x] what mkiso.sh produces, its MBR and any GUID table, in notes.md
 
 Phase 2: the controller interface and the tables
 - [ ] the transfer generation, the exposed closing state and its deadline, bulk endpoints
