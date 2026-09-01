@@ -22,6 +22,15 @@
  *     --no-grubenv --small-candidate --fragmented --bad-fallback
  *     --cfg-short --cluster8 --cluster8-past-end --menu-short --menu-odd
  *     --no-menu --vfs --active-second --unmasked --dir-loop
+ *     --lost-chain --overlong-chain --bad-dotdot --dup-name --fsinfo
+ *     --fsinfo-wrong
+ *
+ * `mkfatfixture --check <image> [offset-sectors] [--list]` walks a volume
+ * instead of building one; see the check section below. The last six
+ * options are its fixtures: an allocated chain no entry names, a chain
+ * four clusters longer than its size, a `..` naming the wrong directory, a
+ * name twice in one directory, and FSInfo with the right or a wrong count
+ * and hint.
  *
  * `--vfs` is the volume the vfat driver's host test reads: the root's
  * chain is fragmented and crosses a 4 KiB boundary, and it holds a deleted
@@ -97,6 +106,11 @@ static void w32(unsigned char *p, uint32_t v)
     p[2] = (unsigned char)(v >> 16);
     p[3] = (unsigned char)(v >> 24);
 }
+static unsigned le16_of(const unsigned char *p)
+{
+    return (unsigned)p[0] | ((unsigned)p[1] << 8);
+}
+
 static uint32_t le32_of(const unsigned char *p)
 {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
@@ -149,18 +163,6 @@ static void dirent_at(unsigned char *p, const char *name11, unsigned attr, unsig
     w16(p + 20, (unsigned)(cluster >> 16));
     w16(p + 26, (unsigned)(cluster & 0xFFFF));
     w32(p + 28, size);
-}
-
-/* A long-name entry: attr 0x0F, otherwise arbitrary; the walk skips it. */
-static void lfn_at(unsigned char *p, unsigned order)
-{
-    int i;
-
-    memset(p, 0, 32);
-    p[0] = (unsigned char)order;
-    for (i = 1; i < 11; i++)
-        p[i] = 0x41;
-    p[11] = 0x0F;
 }
 
 /* The checksum a long name carries for its short entry. */
@@ -242,6 +244,450 @@ static void chain(unsigned long first, unsigned long count, unsigned long cross_
     link_cluster(first + count - 1, cross_to ? (uint32_t)cross_to : EOC);
 }
 
+/* ---- --check: an independent walk of a FAT32 volume ----
+ *
+ * The reader every write test relies on, separate from the kernel's driver
+ * and from mtools. It validates the boot sector field by field, compares the
+ * two FATs where mirroring is on, walks every chain the directory tree
+ * reaches with one owner per cluster, and reports each fault by the name
+ * it found it under: a loop, a cross-link, a chain outside the data region,
+ * a chain shorter or longer than its size, a `..` that is not the parent, a
+ * duplicate name, orphan long-name entries, lost clusters, a wrong FSInfo,
+ * and a dirty flag in either place. `--list` prints every entry it reaches
+ * beside the walk. The exit status is 0 with no finding and 1 otherwise. */
+
+struct chk {
+    unsigned char *img;
+    size_t bytes;
+    unsigned long spc, reserved, nfats, fatsz, root, data_start, clusters, active;
+    unsigned long fsinfo_sector;
+    unsigned char *fat;
+    unsigned short *owner; /* per cluster: 0 free, else the chain that reached it */
+    unsigned short chains;
+    int findings, files, dirs, list;
+};
+
+static void finding(struct chk *c, const char *text)
+{
+    printf("check: %s\n", text);
+    c->findings++;
+}
+
+static uint32_t chk_fat(const struct chk *c, unsigned long n)
+{
+    return le32_of(c->fat + n * 4) & 0x0FFFFFFFu;
+}
+
+static int chk_in_range(const struct chk *c, unsigned long n)
+{
+    return n >= 2 && n < c->clusters + 2;
+}
+
+static unsigned char *chk_cluster(const struct chk *c, unsigned long n)
+{
+    return c->img + ((size_t)c->data_start + (n - 2) * c->spc) * SECTOR;
+}
+
+/* The 8.3 entry as a name, lower-cased where the case bits say so. */
+static void chk_alias(const unsigned char *raw, char *out)
+{
+    int i, n = 0;
+
+    for (i = 0; i < 8 && raw[i] != ' '; i++) {
+        unsigned char ch = raw[i] == 0x05 ? 0xE5 : raw[i];
+
+        out[n++] = (char)((raw[12] & 0x08) && ch >= 'A' && ch <= 'Z' ? ch + 32 : ch);
+    }
+    if (raw[8] != ' ') {
+        out[n++] = '.';
+        for (i = 8; i < 11 && raw[i] != ' '; i++) {
+            unsigned char ch = raw[i];
+
+            out[n++] = (char)((raw[12] & 0x10) && ch >= 'A' && ch <= 'Z' ? ch + 32 : ch);
+        }
+    }
+    out[n] = '\0';
+}
+
+/* Walk the chain at `first`, marking each cluster with chain id `id`; the
+   count of clusters, with the faults reported under `name`. `expect` is the
+   count the size calls for, or -1 for a directory. */
+static long chk_walk(struct chk *c, unsigned long first, const char *name, long expect)
+{
+    unsigned long n = first;
+    long count = 0;
+    char text[300];
+
+    while (n != 0) {
+        uint32_t next;
+
+        if (!chk_in_range(c, n)) {
+            snprintf(text, sizeof(text), "out of range: %s", name);
+            finding(c, text);
+            return -1;
+        }
+        if (c->owner[n] == c->chains) {
+            snprintf(text, sizeof(text), "loop: %s", name);
+            finding(c, text);
+            return -1;
+        }
+        if (c->owner[n] != 0) {
+            snprintf(text, sizeof(text), "cross-link: %s", name);
+            finding(c, text);
+            return -1;
+        }
+        c->owner[n] = c->chains;
+        count++;
+        next = chk_fat(c, n);
+        if (next >= 0x0FFFFFF8u) {
+            break;
+        }
+        if (next == 0x0FFFFFF7u || next < 2) {
+            snprintf(text, sizeof(text), "chain ends in a %s entry: %s", next == 0 ? "free" : "bad",
+                     name);
+            finding(c, text);
+            return -1;
+        }
+        n = next;
+    }
+    if (expect >= 0 && count < expect) {
+        snprintf(text, sizeof(text), "short chain: %s", name);
+        finding(c, text);
+    } else if (expect >= 0 && count > expect) {
+        snprintf(text, sizeof(text), "surplus: %s (%ld clusters)", name, count - expect);
+        finding(c, text);
+    }
+    return count;
+}
+
+static unsigned char chk_sum(const unsigned char *name11)
+{
+    unsigned char sum = 0;
+    int i;
+
+    for (i = 0; i < 11; i++)
+        sum = (unsigned char)(((sum & 1) ? 0x80 : 0) + (sum >> 1) + name11[i]);
+    return sum;
+}
+
+#define CHK_MAX_ENTRIES 4096
+
+/* Read the directory whose chain starts at `first` (`parent` is its
+   parent's first cluster, 0 for the root), walking every entry's chain and
+   descending into subdirectories. */
+static void chk_dir(struct chk *c, unsigned long first, unsigned long parent, const char *path,
+                    int depth)
+{
+    unsigned long clusters_seen[CHK_MAX_ENTRIES / 16];
+    unsigned long n = first, nclusters = 0, i;
+    static unsigned char names[CHK_MAX_ENTRIES][11];
+    int nnames = 0, lfn_ok = 0, lfn_expect = 0, lfn_pending = 0;
+    unsigned char lfn_sum = 0;
+    char text[300], alias[16], child[300];
+    unsigned short id = ++c->chains;
+
+    if (depth > 32) {
+        snprintf(text, sizeof(text), "depth: %s", path);
+        finding(c, text);
+        return;
+    }
+    /* The directory's own chain, owned before its entries are read. */
+    while (n != 0) {
+        uint32_t next;
+
+        if (!chk_in_range(c, n)) {
+            snprintf(text, sizeof(text), "out of range: %s", path);
+            finding(c, text);
+            return;
+        }
+        if (c->owner[n] == id) {
+            snprintf(text, sizeof(text), "loop: %s", path);
+            finding(c, text);
+            return;
+        }
+        if (c->owner[n] != 0) {
+            snprintf(text, sizeof(text), "cross-link: %s", path);
+            finding(c, text);
+            return;
+        }
+        c->owner[n] = id;
+        if (nclusters < sizeof(clusters_seen) / sizeof(clusters_seen[0]))
+            clusters_seen[nclusters++] = n;
+        next = chk_fat(c, n);
+        if (next >= 0x0FFFFFF8u)
+            break;
+        if (next == 0x0FFFFFF7u || next < 2) {
+            snprintf(text, sizeof(text), "chain ends in a %s entry: %s", next == 0 ? "free" : "bad",
+                     path);
+            finding(c, text);
+            return;
+        }
+        n = next;
+    }
+    c->dirs++;
+    for (i = 0; i < nclusters; i++) {
+        unsigned char *cl = chk_cluster(c, clusters_seen[i]);
+        unsigned long e;
+
+        for (e = 0; e < c->spc * SECTOR / 32; e++) {
+            const unsigned char *raw = cl + e * 32;
+            unsigned long fc;
+            uint32_t size;
+            int is_dir, j;
+
+            if (raw[0] == 0)
+                return;
+            if (raw[0] == 0xE5) {
+                if (lfn_pending) {
+                    snprintf(text, sizeof(text),
+                             "orphan long-name entries before a free entry in %s", path);
+                    finding(c, text);
+                }
+                lfn_ok = 0;
+                lfn_pending = 0;
+                continue;
+            }
+            if (raw[11] == 0x0F) {
+                int seq = raw[0] & 0x1F;
+
+                lfn_pending++;
+                if (raw[0] & 0x40) {
+                    lfn_ok = seq >= 1 && (raw[0] & 0xA0) == 0;
+                    lfn_expect = seq;
+                    lfn_sum = raw[13];
+                } else if (!lfn_ok || seq != lfn_expect || (raw[0] & 0xE0) != 0 ||
+                           raw[13] != lfn_sum) {
+                    lfn_ok = 0;
+                }
+                if (lfn_ok)
+                    lfn_expect = seq - 1;
+                continue;
+            }
+            if (raw[11] & 0x08) {
+                lfn_ok = 0;
+                lfn_pending = 0;
+                continue; /* the volume label */
+            }
+            chk_alias(raw, alias);
+            if (lfn_pending && !(lfn_ok && lfn_expect == 0 && chk_sum(raw) == lfn_sum)) {
+                snprintf(text, sizeof(text), "orphan long-name entries before %s/%s", path, alias);
+                finding(c, text);
+            }
+            lfn_ok = 0;
+            lfn_expect = 0;
+            lfn_pending = 0;
+            fc = ((unsigned long)le16_of(raw + 20) << 16) | le16_of(raw + 26);
+            size = le32_of(raw + 28);
+            is_dir = (raw[11] & 0x10) != 0;
+            if (memcmp(raw, ".          ", 11) == 0) {
+                if (fc != first) {
+                    snprintf(text, sizeof(text), "bad .: %s", path);
+                    finding(c, text);
+                }
+                continue;
+            }
+            if (memcmp(raw, "..         ", 11) == 0) {
+                if (fc != parent) {
+                    snprintf(text, sizeof(text), "bad ..: %s", path);
+                    finding(c, text);
+                }
+                continue;
+            }
+            for (j = 0; j < nnames; j++) {
+                if (memcmp(names[j], raw, 11) == 0) {
+                    snprintf(text, sizeof(text), "duplicate name: %s in %s", alias, path);
+                    finding(c, text);
+                    break;
+                }
+            }
+            if (nnames < CHK_MAX_ENTRIES)
+                memcpy(names[nnames++], raw, 11);
+            snprintf(child, sizeof(child), "%s/%s", path, alias);
+            if (c->list)
+                printf("check: entry %s %s %lu %lu\n", child, is_dir ? "dir" : "file", fc,
+                       (unsigned long)size);
+            if (is_dir) {
+                if (fc == 0) {
+                    snprintf(text, sizeof(text), "directory with no cluster: %s", child);
+                    finding(c, text);
+                } else {
+                    chk_dir(c, fc, first == c->root ? 0 : first, child, depth + 1);
+                }
+            } else {
+                long expect = (long)((size + c->spc * SECTOR - 1) / (c->spc * SECTOR));
+
+                c->files++;
+                if (fc == 0) {
+                    if (size != 0) {
+                        snprintf(text, sizeof(text), "short chain: %s", child);
+                        finding(c, text);
+                    }
+                } else {
+                    c->chains++;
+                    chk_walk(c, fc, child, expect);
+                }
+            }
+        }
+    }
+}
+
+static int chk_bpb(struct chk *c)
+{
+    const unsigned char *b = c->img;
+    unsigned long total, fatsz16, root_entries, version, ext_flags;
+
+    if (c->bytes < 512 || b[510] != 0x55 || b[511] != 0xAA) {
+        finding(c, "bpb: boot-sector signature");
+        return -1;
+    }
+    fatsz16 = le16_of(b + 22);
+    root_entries = le16_of(b + 17);
+    version = le16_of(b + 42);
+    c->fatsz = le32_of(b + 36);
+    if (fatsz16 != 0 || c->fatsz == 0 || root_entries != 0 || version != 0) {
+        finding(c, "bpb: not a FAT32 volume");
+        return -1;
+    }
+    if (le16_of(b + 11) != 512) {
+        finding(c, "bpb: sector size");
+        return -1;
+    }
+    c->spc = b[13];
+    if (c->spc == 0 || c->spc > 64 || (c->spc & (c->spc - 1)) != 0) {
+        finding(c, "bpb: sectors per cluster");
+        return -1;
+    }
+    c->reserved = le16_of(b + 14);
+    c->nfats = b[16];
+    total = le16_of(b + 19);
+    if (total == 0)
+        total = le32_of(b + 32);
+    if (c->reserved == 0 || (c->nfats != 1 && c->nfats != 2) || total == 0 ||
+        (size_t)total * SECTOR > c->bytes || c->reserved >= total ||
+        c->fatsz > (total - c->reserved) / c->nfats) {
+        finding(c, "bpb: reserved sectors, FAT count, total sectors or FAT regions");
+        return -1;
+    }
+    c->data_start = c->reserved + c->nfats * c->fatsz;
+    c->clusters = (total - c->data_start) / c->spc;
+    if (c->clusters == 0 || c->fatsz * 128 < c->clusters + 2) {
+        finding(c, "bpb: data region or FAT size");
+        return -1;
+    }
+    c->root = le32_of(b + 44);
+    if (!chk_in_range(c, c->root)) {
+        finding(c, "bpb: root cluster");
+        return -1;
+    }
+    ext_flags = le16_of(b + 40);
+    c->active = (ext_flags & 0x80) ? (ext_flags & 0xF) : 0;
+    if (c->active >= c->nfats) {
+        finding(c, "bpb: active FAT");
+        return -1;
+    }
+    c->fsinfo_sector = le16_of(b + 48);
+    c->fat = c->img + (c->reserved + c->active * c->fatsz) * SECTOR;
+    if (!(ext_flags & 0x80) && c->nfats == 2) {
+        const unsigned char *other = c->img + (c->reserved + c->fatsz) * SECTOR;
+        unsigned long n, differ = 0;
+
+        for (n = 0; n < c->clusters + 2; n++)
+            if ((le32_of(c->fat + n * 4) & 0x0FFFFFFFu) != (le32_of(other + n * 4) & 0x0FFFFFFFu))
+                differ++;
+        if (differ) {
+            char text[80];
+
+            snprintf(text, sizeof(text), "mirrors differ: %lu entries", differ);
+            finding(c, text);
+        }
+    } else if (c->nfats == 2) {
+        printf("check: mirroring off, FAT %lu active\n", c->active);
+    }
+    return 0;
+}
+
+static int check_image(const char *path, unsigned long offset_sectors, int list)
+{
+    struct chk c;
+    FILE *f = fopen(path, "rb");
+    long len;
+    unsigned long n, lost = 0, first_lost = 0, freecount = 0;
+    char text[120];
+
+    memset(&c, 0, sizeof(c));
+    c.list = list;
+    if (f == NULL || fseek(f, 0, SEEK_END) != 0 || (len = ftell(f)) < 0) {
+        fprintf(stderr, "mkfatfixture: cannot read %s\n", path);
+        return 2;
+    }
+    if ((unsigned long)len < offset_sectors * SECTOR) {
+        fprintf(stderr, "mkfatfixture: offset past the end of %s\n", path);
+        return 2;
+    }
+    c.bytes = (size_t)len - offset_sectors * SECTOR;
+    c.img = malloc(c.bytes ? c.bytes : 1);
+    if (c.img == NULL || fseek(f, (long)(offset_sectors * SECTOR), SEEK_SET) != 0 ||
+        fread(c.img, 1, c.bytes, f) != c.bytes) {
+        fprintf(stderr, "mkfatfixture: cannot read %s\n", path);
+        return 2;
+    }
+    fclose(f);
+    if (chk_bpb(&c) != 0) {
+        printf("check: FAIL: %d finding(s)\n", c.findings);
+        return 1;
+    }
+    c.owner = calloc(c.clusters + 2, sizeof(unsigned short));
+    if (c.owner == NULL)
+        return 2;
+    if (!(chk_fat(&c, 1) & 0x08000000u))
+        finding(&c, "dirty: the FAT flag");
+    if (c.img[65] & 1)
+        finding(&c, "dirty: the boot-sector flag");
+    chk_dir(&c, c.root, 0, "", 0);
+    for (n = 2; n < c.clusters + 2; n++) {
+        uint32_t v = chk_fat(&c, n);
+
+        if (v == 0) {
+            freecount++;
+        } else if (v != 0x0FFFFFF7u && c.owner[n] == 0) {
+            if (lost == 0)
+                first_lost = n;
+            lost++;
+        }
+    }
+    if (lost) {
+        snprintf(text, sizeof(text), "lost: %lu clusters (first %lu)", lost, first_lost);
+        finding(&c, text);
+    }
+    if (c.fsinfo_sector != 0 && c.fsinfo_sector < c.reserved) {
+        const unsigned char *fi = c.img + c.fsinfo_sector * SECTOR;
+
+        if (le32_of(fi) != 0x41615252u || le32_of(fi + 484) != 0x61417272u ||
+            le32_of(fi + 508) != 0xAA550000u) {
+            finding(&c, "fsinfo: bad signature");
+        } else {
+            uint32_t said = le32_of(fi + 488), hint = le32_of(fi + 492);
+
+            if (said != 0xFFFFFFFFu && said != freecount) {
+                snprintf(text, sizeof(text), "fsinfo: free count %lu, FAT says %lu",
+                         (unsigned long)said, freecount);
+                finding(&c, text);
+            }
+            if (hint != 0xFFFFFFFFu && !chk_in_range(&c, hint)) {
+                snprintf(text, sizeof(text), "fsinfo: hint %lu out of range", (unsigned long)hint);
+                finding(&c, text);
+            }
+        }
+    }
+    if (c.findings == 0) {
+        printf("check: OK: %d files, %d directories, %lu free clusters\n", c.files, c.dirs,
+               freecount);
+        return 0;
+    }
+    printf("check: FAIL: %d finding(s)\n", c.findings);
+    return 1;
+}
+
 int main(int argc, char **argv)
 {
     unsigned long spc, cbytes, clusters, slot_clusters, kernel_clusters;
@@ -258,8 +704,21 @@ int main(int argc, char **argv)
     unsigned char env[1024];
     FILE *f;
 
+    if (argc >= 3 && strcmp(argv[1], "--check") == 0) {
+        unsigned long off = 0;
+        int list = 0, i;
+
+        for (i = 3; i < argc; i++) {
+            if (strcmp(argv[i], "--list") == 0)
+                list = 1;
+            else
+                off = strtoul(argv[i], NULL, 10);
+        }
+        return check_image(argv[2], off, list);
+    }
     if (argc < 2 || argc > 3) {
-        fprintf(stderr, "usage: mkfatfixture <out> [option]\n");
+        fprintf(stderr, "usage: mkfatfixture <out> [option] | mkfatfixture --check <image> "
+                        "[offset-sectors] [--list]\n");
         return 2;
     }
     if (argc == 3)
@@ -338,6 +797,8 @@ int main(int argc, char **argv)
         chain(kernel_first, kernel_clusters, clusters + 500);
     } else if (is("--short-chain")) {
         chain(kernel_first, kernel_clusters / 2, 0);
+    } else if (is("--overlong-chain")) {
+        chain(kernel_first, kernel_clusters + 4, 0);
     } else if (is("--cross-link")) {
         /* The candidate's chain ends inside the grub.cfg chain, its
            length still matching its size, so the shared cluster is the
@@ -350,6 +811,8 @@ int main(int argc, char **argv)
     chain(grubenv_first, env_clusters, 0);
     chain(cfg_first, 1, 0);
     chain(menu_first, menu_clusters, 0);
+    if (is("--lost-chain"))
+        chain(6000, 3, 0); /* allocated, with bytes below, and no entry names it */
 
     if (is("--vfs") || is("--dir-loop")) {
         /* The root's chain jumps, and its third cluster starts a new 4 KiB
@@ -386,13 +849,37 @@ int main(int argc, char **argv)
         w32(fat + (kernel_first + 3) * 4, 0); /* the first FAT lies */
     memcpy(img + (size_t)RESERVED * SECTOR, fat, (size_t)FATSZ * SECTOR);
     memcpy(img + (size_t)(RESERVED + FATSZ) * SECTOR, fat2, (size_t)FATSZ * SECTOR);
+    if (is("--fsinfo") || is("--fsinfo-wrong")) {
+        /* FSInfo in sector 1: the free count and the hint, right or wrong. */
+        unsigned char *fi = img + SECTOR;
+        unsigned long c, freecount = 0;
+
+        for (c = 2; c < clusters + 2; c++)
+            if ((le32_of(fat + c * 4) & 0x0FFFFFFFu) == 0)
+                freecount++;
+        w16(bpb + 48, 1);
+        w32(fi, 0x41615252u);
+        w32(fi + 484, 0x61417272u);
+        w32(fi + 488, is("--fsinfo-wrong") ? 12345u : (uint32_t)freecount);
+        w32(fi + 492, is("--fsinfo-wrong") ? 7u : (uint32_t)(menu_first + menu_clusters));
+        w32(fi + 508, 0xAA550000u);
+    }
 
 #define CLUSTER_OFF(c) ((size_t)(DATA_START + ((c) - 2) * spc) * SECTOR)
 
     /* The root: a volume label, a long-name sequence, then BOOT. */
     dir = img + CLUSTER_OFF(ROOT);
     dirent_at(dir, "FIXTURE    ", 0x08, 0, 0);
-    lfn_at(dir + 32, 0x41);
+    {
+        /* A long name for BOOT, valid so that a checker reading the volume
+           finds no orphan: the walk in bootslot skips it either way. */
+        unsigned units[13];
+        int i;
+
+        for (i = 0; i < 13; i++)
+            units[i] = i < 4 ? (unsigned)"boot"[i] : (i == 4 ? 0 : 0xFFFF);
+        lfn_entry(dir + 32, 0x41, short_sum("BOOT       "), units);
+    }
     dirent_at(dir + 64, "BOOT       ", 0x10, BOOTDIR, 0);
 
     if (is("--vfs") || is("--dir-loop")) {
@@ -549,7 +1036,7 @@ int main(int argc, char **argv)
     /* /BOOT/GRUB: dot entries, grub.cfg, and (unless absent) grubenv. */
     dir = img + CLUSTER_OFF(GRUBDIR);
     dirent_at(dir, ".          ", 0x10, GRUBDIR, 0);
-    dirent_at(dir + 32, "..         ", 0x10, BOOTDIR, 0);
+    dirent_at(dir + 32, "..         ", 0x10, is("--bad-dotdot") ? EXTRADIR : BOOTDIR, 0);
     dirent_at(dir + 64, "GRUB    CFG", 0x20, cfg_first, is("--cfg-short") ? 2000 : 40);
     if (!is("--no-grubenv"))
         dirent_at(dir + 96, "GRUBENV    ", 0x20, grubenv_first, 1024);
@@ -560,6 +1047,8 @@ int main(int argc, char **argv)
     dirent_at(dir, ".          ", 0x10, EXTRADIR, 0);
     dirent_at(dir + 32, "..         ", 0x10, BOOTDIR, 0);
     dirent_at(dir + 64, "EMPTY      ", 0x20, 0, 0);
+    if (is("--dup-name"))
+        dirent_at(dir + 96, "EMPTY      ", 0x20, 0, 0);
 
     /* File contents: the candidate slot has a valid padded kernel, the
        fallback a valid kernel, grubenv GRUB's block. */
@@ -590,6 +1079,8 @@ int main(int argc, char **argv)
     memcpy(img + CLUSTER_OFF(grubenv_first), env, sizeof(env));
     memset(img + CLUSTER_OFF(cfg_first), 'x', 40);
     memset(img + CLUSTER_OFF(menu_first), '#', MENU_BYTES);
+    if (is("--lost-chain"))
+        memset(img + CLUSTER_OFF(6000), 'L', 3 * cbytes);
 
     f = fopen(argv[1], "wb");
     if (f == NULL || fwrite(img, 1, (size_t)TOTAL * SECTOR, f) != (size_t)TOTAL * SECTOR ||
