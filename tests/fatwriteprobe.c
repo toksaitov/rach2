@@ -6,10 +6,10 @@
  * file inside, a renamed file, a removed file, and a file that is fsynced;
  * then it unmounts cleanly. `fatwriteprobe readback`, on the next boot,
  * mounts the volume and requires every byte and name; the host reads the
- * same volume with mtools and the check. `fatwriteprobe crash` writes two
- * hundred files and says so before it starts, which is where the suite
- * kills the machine; `fatwriteprobe repair` mounts what that left, which
- * runs the check, and counts what survived.
+ * same volume with mtools and the check. `fatwriteprobe crash` rewrites
+ * two hundred files until the machine is killed, and says so before it
+ * starts, which is where the suite kills it; `fatwriteprobe repair` mounts
+ * what that left, which runs the check, and counts what survived.
  *
  * Prints "FATWRITE OK (mode)" or "FATWRITE FAIL: reason". Freestanding;
  * int 0x80.
@@ -133,6 +133,7 @@ static void puts(const char *s)
 static void fail(const char *why) __attribute__((noreturn));
 static void fail(const char *why)
 {
+    sys3(SYS_WRITE, 1, (int)"FATWRITE FAIL: ", 15);
     puts(why);
     sys_exit(1);
 }
@@ -375,7 +376,9 @@ static void mode_crash(void)
         fail("the writable mount for the crash");
     }
     puts("FATWRITE WRITING");
-    for (i = 0; i < 200; i++) {
+    /* Rewritten until the machine is killed, so the kill lands inside a
+     * write sequence however long the harness waits. */
+    for (i = 0;; i = (i + 1) % 200) {
         name[0] = '/';
         name[1] = 'f';
         name[2] = 'w';
@@ -389,7 +392,6 @@ static void mode_crash(void)
             fail("a file of the crash sequence");
         }
     }
-    puts("FATWRITE FINISHED");
 }
 
 static void mode_repair(void)

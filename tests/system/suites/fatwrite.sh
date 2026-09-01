@@ -82,7 +82,7 @@ if run --append "rach2.rescue" --timeout 90 --steptmo 60 --ok "FATWRITE OK (repa
     "send=exec /fatwriteprobe repair" "expect=FATWRITE" > /dev/null 2>&1 \
     && grep -aq 'vfat: check: the volume was not unmounted cleanly' "$DISK.repair.log" \
     && grep -aq 'vfat: check: consistent' "$DISK.repair.log"; then
-    echo "fatwrite-test: the next mount checks the volume, repairs it and records that: OK"
+    echo "fatwrite-test: the next mount checks the volume and records the check: OK"
 else
     fail "the repair boot"
 fi
