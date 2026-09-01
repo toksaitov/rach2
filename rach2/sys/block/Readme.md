@@ -6,7 +6,7 @@ The block layer publishes one whole-disk device as `block0`. The legacy ATA driv
 
 A `block_device` reports a sector size, a 64-bit sector count, two transfer functions, and private driver data. Rach2 supports 512-byte sectors. A read or write moves a positive number of complete sectors and returns zero or a negative error. Requests that start at or past the device end, cross the end, or contain zero sectors fail.
 
-A device with the `BLOCK_FAULT_SAFE` flag completes its transfer functions by polling, without allocating or scheduling, and may be used with interrupts off. ATA, AHCI and every partition view over them have the flag. It is required by the page-cache window: a supervisor page fault enters through an interrupt gate with interrupts disabled, then may read or evict a 4096-byte page through the block device, so the window refuses a device without the flag as a backing store. A fill that cannot be completed causes an unrecoverable page-cache fault. A failed writeback remains dirty and is reported by `pc_sync`.
+A device with the `BLOCK_FAULT_SAFE` flag completes its transfer functions by polling, without allocating or scheduling, and may be used with interrupts off. ATA, AHCI and every partition view over them have the flag. It is required by the page-cache window: a supervisor page fault enters through an interrupt gate with interrupts disabled, then may read or evict a 4096-byte page through the block device, so the window requires the flag of its backing device. A fill that cannot be completed causes an unrecoverable page-cache fault. A failed writeback remains dirty and is reported by `pc_sync`.
 
 `block_ready` returns an existing `block0` or calls `block_probe`. A failed probe is not cached. `rach2.nodisk` prevents every probe. With `rach2.disk=ahci`, the kernel tries AHCI and then falls back to ATA. Without that option it tries ATA only.
 
@@ -18,13 +18,13 @@ A device with the `BLOCK_FAULT_SAFE` flag completes its transfer functions by po
 
 A request whose deadline passes answers `EIO` and is quarantined with its page until the device answers late; the late completion frees the slot and is recorded. Each slot has a generation, advanced when the slot is taken and when a late completion frees it, and a completion whose generation is not the slot's current one is dropped with a record. A transfer that finds no free slot answers `EIO`.
 
-`rach2.blocklag=N` wraps the boot disk in the lag device for the partition nodes and the mounts, while the root window keeps the real device. The wrapper has no `BLOCK_FAULT_SAFE` flag; it runs each transfer at submit time, polled, and delivers the completion `N` ticks later from the timer, twice, with the second copy carrying an error, so a kernel that accepted a stale generation would fail a healthy request. With `N` above the deadline it is a device that never answers in time, which is how the quarantine is exercised by `tests/run mount` without a mutation. `rach2.blockfail=N` beside it makes the Nth write through the wrapper fail with `EIO`, so the buffer cache's failure record and a mount going read-only can be seen in a boot.
+`rach2.blocklag=N` wraps the boot disk in the lag device for the partition nodes and the mounts, while the root window keeps the real device. The wrapper has no `BLOCK_FAULT_SAFE` flag; it runs each transfer at submit time, polled, and delivers the completion `N` ticks later from the timer, twice, with the second copy carrying an error, so a kernel that accepted a stale generation would fail a healthy request. With `N` above the deadline the request times out before its completion arrives, which is how the quarantine is exercised by `tests/run mount` without a mutation. `rach2.blockfail=N` beside it makes the Nth write through the wrapper fail with `EIO`, so the buffer cache's failure record and a mount going read-only can be seen in a boot.
 
 ## Partition discovery and the disk root
 
 Boot-device discovery reads sector zero once and parses the four MBR entries. The same parsed table is later used for the disk root, so the published raw windows and the mounted file system cannot be based on different reads of the table.
 
-`/dev/grubcore` covers LBA 1 through 2047. It is published when the disk reaches LBA 2047 and no non-empty partition overlaps that range. A partition in the gap suppresses `grubcore` only.
+`/dev/grubcore` covers LBA 1 through 2047. It is published when the disk has at least 2048 sectors and no non-empty partition overlaps that range. A partition in the gap suppresses `grubcore` only.
 
 `/dev/bootpart` uses MBR entry 0. The entry must:
 
@@ -46,7 +46,7 @@ The ATA interrupt line remains disabled. Status waits use a fixed iteration limi
 
 `ahci.c` finds the first PCI mass-storage controller in AHCI mode and maps BAR5 as its ABAR. Bring-up requests firmware ownership when supported, resets the HBA, applies the Intel PCS port-enable correction to the supported controller families, and disables HBA and port interrupts. It power-enables and COMRESETs each implemented port, then selects the first port whose link is present, whose device becomes ready, and whose signature is `0x00000101`.
 
-The driver uses one command slot, one Register Host-to-Device FIS, and one PRDT entry. `READ DMA EXT` and `WRITE DMA EXT` use a 48-bit LBA. One command may carry at most 8192 sectors, or 4 MiB. A write is followed by `FLUSH CACHE EXT`. Completion checks the fatal port status, task-file error bits, and the transferred byte count. A failed or timed-out command stops, clears, and restarts the port before returning an error.
+The driver uses one command slot, one Register Host-to-Device FIS, and one PRDT entry. `READ DMA EXT` and `WRITE DMA EXT` use a 48-bit LBA. One command transfers at most 8192 sectors, or 4 MiB. A write is followed by `FLUSH CACHE EXT`. Completion checks the fatal port status, task-file error bits, and the transferred byte count. A failed or timed-out command stops, clears, and restarts the port before returning an error.
 
 AHCI waits are measured with the 8254 counter through `k_udelay`: one second for HBA, link, and command waits, and five seconds for a device to finish COMRESET. The driver still busy-polls completion, so a transfer stalls the single CPU until it completes.
 
@@ -58,7 +58,7 @@ Rach2 has no AHCI interrupts, request queue, NCQ, hot-plug, port multiplier, or 
 
 The raw devices are synthetic character devices. Their open-file descriptions use a 64-bit offset, and `_llseek` can address the complete window. Reads and writes require a sector-aligned offset and a byte count divisible by 512. Reads at or past EOF return zero, and a read crossing EOF is shortened. A write that starts past or crosses the end returns `ENOSPC` before writing any sector.
 
-Every transfer uses a page-aligned 32 KiB staging buffer. The loop sends at most 64 sectors to the block device per call. If a later batch fails, the call returns the bytes from earlier completed batches. A failed write batch may have reached the disk in part because the block interface cannot report progress within one command. A zero-length write returns zero. Before EOF, a zero-length raw read returns `EIO` rather than zero.
+Every transfer uses a page-aligned 32 KiB staging buffer. The loop sends at most 64 sectors to the block device per call. If a later batch fails, the call returns the bytes from earlier completed batches. A failed write batch may have reached the disk in part because the block interface cannot report progress within one command. A zero-length write returns zero. A zero-length read returns zero before any device is called.
 
 Only one write-capable descriptor may be open across `/dev/bootpart`, `/dev/grubcore`, and `/dev/disk0`. Readers may remain open during a write. `/dev/grubcore` additionally permits only one open description at a time. Beside that rule is the claim table: a mount claims its partition's sector range on the backing disk from its constructor to its unmount, and while a range is claimed a write-capable open of a window over it answers `EBUSY`; while such a descriptor is open, a mount on the range answers `EBUSY`. Ranges are compared as ranges, so `/dev/bootpart` and `/dev/disk0p1` naming one partition exclude each other's writer.
 

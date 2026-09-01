@@ -191,7 +191,7 @@ The VGA text console keeps scrollback. `PageUp`, `PageDown`, `Home`, and `End` m
 | `sys/tables/`, `sys/isr*`, `sys/pic*`, `sys/pit*` | GDT, TSS, IDT, exception, interrupt, and timer setup. |
 | `sys/proc/` | Processes, scheduler, ELF loading, user images, signals, TLS, and wait queues. |
 | `sys/mm/` | Physical frames, paging, VMAs, user copies, module placement, and page cache. |
-| `sys/fs/` | The mount table and resolver, KRFFS, the buffer cache, read-only FAT32, descriptors, `/dev`, and `/proc`. |
+| `sys/fs/` | The mount table and resolver, KRFFS, the buffer cache, FAT32, descriptors, `/dev`, and `/proc`. |
 | `sys/ipc/`, `sys/io/`, `sys/tty/` | Pipes, readiness APIs, line discipline, job control, and pseudo-terminals. |
 | `sys/block/` | ATA, AHCI, the block request, MBR discovery, disk policy, partition and raw disk windows, and the lag test device. |
 | `sys/network/` | RTL8139, e1000, and RTL8168 drivers, IPv4 protocols, sockets, and netconsole. |

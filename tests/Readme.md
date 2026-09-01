@@ -2,20 +2,20 @@
 
 ![List of Rach2 Test Programs](https://raw.githubusercontent.com/rachmiroff/images/refs/heads/main/rach2/tests.png)
 
-This directory has two guest test sets, and [`system/`](system/Readme.md) holds the QEMU runners, suite scripts, capture checkers, fixtures, and acceptance procedure. The root contains 81 programs that usually make direct system calls. `musl/` contains 35 programs linked against the ported musl libc. The separate [host test suite](host/Readme.md) compiles selected kernel and tool code as native programs under AddressSanitizer and UndefinedBehaviorSanitizer.
+This directory has two guest test sets, and [`system/`](system/Readme.md) holds the QEMU runners, suite scripts, capture checkers, fixtures, and acceptance procedure. The root contains 82 programs that usually make direct system calls. `musl/` contains 35 programs linked against the ported musl libc. The separate [host test suite](host/Readme.md) compiles selected kernel and tool code as native programs under AddressSanitizer and UndefinedBehaviorSanitizer.
 
 ## The suite runner
 
-`tests/run NAME` is the entry point for every test suite. It reads `tests/registry`, one line per suite with three fields: the name, the external commands the suite needs at run time, and its tier. The make target is the name with `run-` in front, and the recipes are in [`tests/system/suites.mk`](system/Readme.md). Every name and every tool is checked before anything is built; an unknown name fails and prints the valid names. The runner then builds the product once and runs the named suites in a pool, holding each one's output and replaying it in the order the suites were named, which for `all` and `core` is the registry's. Three suites run outside the pool: `style` and `host` alone before it, because they rebuild the kernel and share a scratch directory, and `usb` alone after it, because QEMU's monitor stops answering `device_add` on a saturated host.
+`tests/run NAME` is the entry point for every test suite. It reads `tests/registry`, one line per suite with three fields: the name, the external commands the suite needs at run time, and its tier. The make target is the name with `run-` in front, and the recipes are in [`tests/system/suites.mk`](system/suites.mk). Every name and every tool is checked before anything is built; an unknown name fails and prints the valid names. The runner then builds the product once and runs the named suites in a pool, buffering each one's output and replaying it in the order the suites were named, which for `all` and `core` is the registry's. Three suites run outside the pool: `style` and `host` alone before it, because `style` rebuilds the kernel with its own flags and the two share a scratch directory, and `usb` alone after it, because QEMU's monitor stops answering `device_add` on a saturated host.
 
-`tests/run NAME NAME...` runs those suites at the same time. `tests/run all` runs all 61, and `tests/run core` runs the 23 in the core tier. `make test` runs `tests/run style`, then `tests/run host`, then `tests/run core`; `style` and `host` are the two verification suites every change must pass.
+`tests/run NAME NAME...` runs those suites at the same time. `tests/run all` runs all 63, and `tests/run core` runs the 24 in the core tier. `make test` runs `tests/run style`, then `tests/run host`, then `tests/run core`; `style` and `host` are the two verification suites every change must pass.
 
 ## Build and image layout
 
 From the repository root:
 
 ```sh
-make -C tests       # build the 81 root programs
+make -C tests       # build the 82 root programs
 make musl-programs  # build every tests/musl/*.c program
 make test-image     # build both sets and stage build/images/test.krffs
 ```
@@ -76,17 +76,17 @@ Programs that need another boot, disk, network exchange, or result contract have
 * `tests/run stress` and `tests/run stress-ahci` run `stressprobe` against a file system larger than physical memory.
 * `tests/run bootpart` and `tests/run authority` run the applicable `bootprobe` modes.
 * `tests/run cred-persist` runs `musl/creddisk` across three boots of one disk image.
-* `tests/run crash` runs `dirtyprobe`, stops QEMU without a clean unmount, and checks the image with `fsck.krffs`.
+* `tests/run crash` kills a machine without a clean unmount, halts one cleanly and powers one off, runs `dirtyprobe`, and checks each image with `fsck.krffs`.
 * `tests/run exitline` uses `vmfault` while checking which process-exit diagnostics are visible.
 * `tests/run console` types at the console for `stdintest` and `ttyprobe`, which block until something is typed, and checks the text they read back.
 * `tests/run fault` runs `vmfault`, `vmro` and `winprobe`, which must be killed rather than served, and then runs a program that prints a token, which a kernel that took the fault with them could not do.
 * `tests/run socket` starts a host peer and runs `tcptest` and `udptest` against it.
 * `tests/run diskfull` fills a disk-backed root and requires `ENOSPC` rather than `EIO`.
 * `tests/run fatwrite` runs `fatwriteprobe` in its write, read-back, crash and repair modes on a FAT32 partition, then BusyBox and `lagprobe writers` on the same volume.
-* `tests/run mount` runs `lagprobe` under the lag device (`rach2.blocklag=N`) in its sleep, deadline, write and mounted modes, `mountprobe` in its mount and claim modes, and BusyBox `mount` on os-real, on a disk whose second partition is a FAT32 volume written by mtools.
+* `tests/run mount` runs `lagprobe` under the lag device (`rach2.blocklag=N`) in its sleep, deadline, write, mounted, root and blockfail modes, `mountprobe` in its mount and claim modes, and BusyBox `mount` on os-real, on a disk whose second partition is a FAT32 volume written by mtools.
 * `tests/run usb` runs `usbprobe` against an xHCI controller with a keyboard and a mouse on it, at both device speeds, and `mouseprobe` on a machine whose PS/2 controller is switched off, so that a moved mouse can only have come over USB. Its typing boots are switched off the same way.
 
-Every root program is run by some suite. The two exceptions are `idreport` and `suidhelper`, which exist to be invoked by another test.
+Every root program is run by a suite or invoked by another test; `idreport` and `suidhelper` are the two that only another test invokes.
 
 These musl programs are likewise built and staged but absent from the default list and the dedicated mappings above:
 
@@ -95,7 +95,7 @@ budgetmusl catfile cowfork ctrlcmusl devtest hello mallocqsort ofdmusl
 pipemusl pollmusl ptymusl rngmusl sigmusl sockfillmusl tcpsendrecv ttymusl
 ```
 
-`tests/registry` lists every suite and `tests/system/suites.mk` holds their recipes. Several suites use the test image without running a program from these two lists.
+`tests/registry` lists every suite and `tests/system/suites.mk` defines their recipes. Several suites use the test image without running a program from these two lists.
 
 ## Manual runs
 
