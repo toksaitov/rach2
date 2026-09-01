@@ -86,7 +86,7 @@ void pci_write_config16(uint8_t bus, uint8_t device, uint8_t function, uint8_t o
 
     outl(PCI_CONFIG_ADDRESS, addr);
     old_val = inl(PCI_CONFIG_DATA);
-    new_val = (old_val & ~(0xFFFF << shift)) | ((uint32_t)value << shift);
+    new_val = (old_val & ~(0xFFFFu << shift)) | ((uint32_t)value << shift);
     outl(PCI_CONFIG_DATA, new_val);
 }
 
