@@ -46,6 +46,7 @@ typedef unsigned int size_t;
 #define SYS_NANOSLEEP  162
 #define SYS_KILL       37
 
+#define O_CREAT   0100
 #define O_RDONLY  0
 #define O_WRONLY  1
 #define O_CLOEXEC 02000000
@@ -264,8 +265,36 @@ static void rows_placing(void)
     if (sys2(SYS_MKDIR, (int)MNT, 0755) != 0) {
         fail("mkdir " MNT);
     }
-    if (do_mount(SRC, MNT, 0, 0) != 0 || sys2(SYS_UMOUNT2, (int)MNT, 0) != 0) {
-        fail("a writable mount is placed and taken away");
+    if (do_mount(SRC, MNT, 0, 0) != 0) {
+        fail("a writable mount is placed");
+    }
+    /* A directory descriptor on the mount follows a rename of its
+       directory: the type rebuilds the path from the volume. */
+    {
+        int rfd, xfd;
+
+        if (sys2(SYS_MKDIR, (int)MNT "/rdir", 0755) != 0) {
+            fail("mkdir on the writable mount");
+        }
+        rfd = sys3(SYS_OPEN, (int)MNT "/rdir", O_RDONLY, 0);
+        if (rfd < 0 || sys2(SYS_RENAME, (int)MNT "/rdir", (int)MNT "/rdir2") != 0) {
+            fail("open and rename a directory on the mount");
+        }
+        xfd = sys4(SYS_OPENAT, rfd, (int)"x", O_WRONLY | O_CREAT, 0644);
+        if (xfd < 0 || xstat(MNT "/rdir2/x") != 0) {
+            fail("a directory descriptor follows its directory's rename");
+        }
+        sys1(SYS_CLOSE, xfd);
+        sys1(SYS_CLOSE, rfd);
+        if (sys1(SYS_UNLINK, (int)MNT "/rdir2/x") != 0) {
+            fail("unlink on the writable mount");
+        }
+        if (sys1(SYS_RMDIR, (int)MNT "/rdir2") != 0) {
+            fail("unlink and rmdir on the writable mount");
+        }
+    }
+    if (sys2(SYS_UMOUNT2, (int)MNT, 0) != 0) {
+        fail("the writable mount is taken away");
     }
     if (do_mount(SRC, MNT, MS_RDONLY | MS_REMOUNT, 0) != -EINVAL ||
         do_mount(SRC, MNT, MS_RDONLY | MS_BIND, 0) != -EINVAL ||

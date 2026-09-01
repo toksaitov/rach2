@@ -88,14 +88,26 @@ static int ns_free(void *arg)
 
 void vfs_ns_lock(struct vfs_mount *mnt)
 {
-    while (mnt->ns_holder != -1) {
-        wq_wait_event_nointr(&mnt->ns_wq, ns_free, mnt); /* EINTR: still wanted */
+    int me = current_proc ? (int)current_proc->pid : 0;
+
+    if (mnt->ns_holder == me && mnt->ns_depth > 0) {
+        mnt->ns_depth++;
+        return;
     }
-    mnt->ns_holder = current_proc ? (int)current_proc->pid : 0;
+    while (mnt->ns_holder != -1) {
+        wq_wait_event_nointr(&mnt->ns_wq, ns_free, mnt);
+    }
+    mnt->ns_holder = me;
+    mnt->ns_depth = 1;
 }
 
 void vfs_ns_unlock(struct vfs_mount *mnt)
 {
+    if (mnt->ns_depth > 1) {
+        mnt->ns_depth--;
+        return;
+    }
+    mnt->ns_depth = 0;
     mnt->ns_holder = -1;
     wq_wake_all(&mnt->ns_wq);
 }
@@ -1026,6 +1038,7 @@ static const struct vfs_ops krffs_ops = {
     kfs_sync,
     0, /* prepare_unmount: the root is permanent */
     0, /* unmount */
+    0, /* path: KRFFS directories do not move */
 };
 
 static int kfs_mount(struct vfs_mount *mnt, block_device_t *dev,
@@ -1199,11 +1212,13 @@ static int synth_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 static const struct vfs_ops devfs_vops = {
     0,          devfs_rest, synth_hold, synth_put, synth_getattr, 0, 0, 0, 0, 0, 0, 0,
     0,          0,          0,          0,         0,             0, 0, 0, 0, 0, 0, 0,
+    0,
 };
 
 static const struct vfs_ops procfs_vops = {
     0,           procfs_rest, synth_hold, synth_put, synth_getattr, 0, 0, 0, 0, 0, 0, 0,
     0,           0,           0,          0,         0,             0, 0, 0, 0, 0, 0, 0,
+    0,
 };
 
 static int synth_mount_root(struct vfs_mount *mnt, block_device_t *dev,
@@ -1262,6 +1277,7 @@ static void install(int idx, const struct vfs_type *type, const char *path,
     m->refs = 0;
     m->inprogress = 0;
     m->ns_holder = -1;
+    m->ns_depth = 0;
     wait_queue_init(&m->ns_wq);
     m->priv = 0;
     m->opens = 0;
@@ -1438,6 +1454,7 @@ int vfs_do_mount(const char *source, const char *target, const char *type,
     m->parent = tref.mnt;
     m->covered = tref.node;
     m->ns_holder = -1;
+    m->ns_depth = 0;
     wait_queue_init(&m->ns_wq);
     m->claim = claim;
     k_strncpy(m->covered_path, tref.mnt == &mounts[0] ? canon : target,

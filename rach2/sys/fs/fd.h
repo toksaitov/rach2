@@ -111,9 +111,10 @@ struct open_file {
      * cannot use the offset while another sleeps in a disk request with it.
      * The wait queue is beside the pool in fd.c. */
     int busy;
-    /* A directory on a mount other than the root: its canonical path, which
-     * the `*at` calls resolve relative names against, or "" when the path
-     * did not fit and such a call answers ENAMETOOLONG. */
+    /* A directory on a mount other than the root whose type has no `path`
+     * operation: the canonical path it was opened by, which the `*at` calls
+     * resolve relative names against, or "" when the path did not fit and
+     * such a call answers ENAMETOOLONG. */
     char dirpath[64];
 };
 

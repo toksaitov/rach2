@@ -181,6 +181,10 @@ struct vfs_ops {
      * undone. The buffer cache is written between them. */
     int (*prepare_unmount)(struct vfs_mount *mnt);
     void (*unmount)(struct vfs_mount *mnt);
+    /* The canonical path of a directory node within the mount, for a
+     * directory descriptor's `*at` calls after a rename; NULL for a type
+     * whose directories do not move. 0, or -ENAMETOOLONG. */
+    int (*path)(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap);
 };
 
 /* One file-system kind: the name mount(2) and /proc/filesystems spell, the
@@ -210,6 +214,7 @@ struct vfs_mount {
     uint32_t refs;
     uint32_t inprogress;
     int ns_holder; /* pid holding the namespace lock, or -1 */
+    int ns_depth;  /* how many times the holder has taken it */
     wait_queue_t ns_wq;
     void *root; /* the mount's root node, held for the mount's life */
     void *priv;
@@ -297,7 +302,9 @@ int vfs_enter(struct vfs_mount *mnt);
 void vfs_leave(struct vfs_mount *mnt);
 
 /** The per-mount namespace lock, taken by every namespace change and by the
- * constructor and the unmount; sleeps until free. */
+ * constructor and the unmount; sleeps until free. The holder may take it
+ * again, since a type's own operations lock for the callers that arrive
+ * unlocked (`write`, `sync`, a last `put`) and are also called under it. */
 void vfs_ns_lock(struct vfs_mount *mnt);
 void vfs_ns_unlock(struct vfs_mount *mnt);
 

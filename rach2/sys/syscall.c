@@ -1134,10 +1134,33 @@ static int copy_path_at(char *pathbuf, uint32_t size, int dirfd,
     }
     dnode = entry->node; /* NULL marks the root directory */
     if (!dnode && entry->ofd && entry->ofd->vmnt && !mnt_is_root(entry->ofd->vmnt)) {
-        if (entry->ofd->dirpath[0] == '\0') {
-            return -ENAMETOOLONG;
+        struct vfs_mount *vm = entry->ofd->vmnt;
+
+        if (vm->type->ops->path) {
+            /* The type rebuilds the directory's path, so the descriptor
+             * follows a rename; the mount's own path goes in front. */
+            char inside[256];
+            uint32_t ml = k_strlen(vm->covered_path);
+            int r = vm->type->ops->path(vm, entry->ofd->vnode, inside, sizeof(inside));
+
+            if (r != 0) {
+                return r;
+            }
+            if (ml + k_strlen(inside) + 1 > sizeof(dirpath)) {
+                return -ENAMETOOLONG;
+            }
+            k_memcpy(dirpath, vm->covered_path, ml);
+            k_memcpy(dirpath + ml, inside[1] ? inside : "", k_strlen(inside) + 1);
+            if (dirpath[0] == '\0') {
+                dirpath[0] = '/';
+                dirpath[1] = '\0';
+            }
+        } else {
+            if (entry->ofd->dirpath[0] == '\0') {
+                return -ENAMETOOLONG;
+            }
+            k_memcpy(dirpath, entry->ofd->dirpath, k_strlen(entry->ofd->dirpath) + 1);
         }
-        k_memcpy(dirpath, entry->ofd->dirpath, k_strlen(entry->ofd->dirpath) + 1);
     } else if (dnode) {
         /* KRFFS nodes are not refcounted, so a directory fd can outlive its
          * node if the directory is rmdir'd. Reject a stale fd defensively: the
@@ -6866,6 +6889,7 @@ static int32_t sys_rename(isr_params_t *params)
         goto out;
     }
     if (!mnt_is_root(opar.mnt)) {
+        vfs_ns_lock(opar.mnt);
         rc = cred_remove_ref(&opar, oleaf);
         if (rc == 0) {
             rc = cred_remove_ref(&npar, nleaf);
@@ -6873,6 +6897,7 @@ static int32_t sys_rename(isr_params_t *params)
         if (rc == 0) {
             rc = vfs_rename(opar.mnt, opar.node, oleaf, npar.node, nleaf);
         }
+        vfs_ns_unlock(opar.mnt);
         goto out;
     }
 
