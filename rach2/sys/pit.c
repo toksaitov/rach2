@@ -51,7 +51,7 @@ static uint32_t sweep_us(void)
  * where in a period the machine is and says nothing about which period, and
  * two readings a whole period apart land in the same place; the tick counts
  * periods exactly but arrives when it arrives, which under QEMU is a
- * millisecond or two into the period it names. So a reading that finds the
+ * millisecond or two into the period it counts. So a reading that finds the
  * counter behind where the last reading left it counts the wrap itself, and
  * the tick counts one only when no reading beat it to it.
  */

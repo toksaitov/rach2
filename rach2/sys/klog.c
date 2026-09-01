@@ -404,7 +404,7 @@ static int klog_delivering;
  * A record from an interrupt handler cannot go out where it is raised: its
  * bytes would land inside the line the interrupted code is part way through.
  * It waits here and goes out when that line is finished, so what a machine
- * says on its port is what its ring holds. Without the queue such a record
+ * says on its port is what its ring has. Without the queue such a record
  * reached the ring only, and an event that happens while the machine is
  * printing was invisible to anything reading the port; that is how a USB
  * device could be unplugged with nothing said about it.
@@ -423,7 +423,7 @@ static int pending_lost;
 /**
  * Put a record at the end of the queue, or count it as lost.
  *
- * The caller holds interrupts off: this runs inside the same region that
+ * The caller has interrupts off: this runs inside the same region that
  * built the record and read `klog_delivering`.
  */
 static void pending_put(const struct klog_record *r)

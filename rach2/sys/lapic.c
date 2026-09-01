@@ -142,7 +142,7 @@ int lapic_init(void)
  * Whether `vector` is already waiting at this processor.
  *
  * A message the device has sent is latched in the request register until the
- * processor takes it, and sits in the in-service register while its handler
+ * processor takes it, and is in the in-service register while its handler
  * runs. Either says the interrupt was announced, which is what the USB stack
  * asks before it counts an event as one no message was coming for: a
  * processor inside another interrupt has its flag clear, and a message that

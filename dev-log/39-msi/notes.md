@@ -68,7 +68,7 @@ after the tick starts, whether the 8259's interrupts still arrive: 50 ms with
 no tick writes `LINT0` again and says so, and 50 ms more with no tick says
 that too. The mutation that masks `LINT0` behind the driver's back proves
 both halves: without the repair the machine never finishes its self-tests,
-with it the machine boots and the log carries the reason.
+with it the machine boots and the log says why.
 
 Vectors 48 to 63 have stubs, gates and a branch in `_irq_router` that ends
 the interrupt at the APIC after the handler chain. The APIC's spurious
@@ -117,7 +117,7 @@ and each of them changed the code:
 * The controller's own pending bit is not the question to ask when the timer's
   pump finds work: QEMU sets it whether or not a message was sent, and a
   message that was sent is waiting in the processor's request register while
-  this tick holds the interrupt flag down. `lapic_pending` asks the processor
+  this tick has interrupts off. `lapic_pending` asks the processor
   instead, and the fallback count is zero on a machine whose messages arrive
   and rises on one whose messages were silenced.
 * A wake is worth nothing if the woken reader does not run. The router
@@ -132,7 +132,7 @@ and each of them changed the code:
   the tick nor the counter can count them alone: the counter says nothing
   about which period a reading belongs to, and two readings a period apart
   land in the same place, while the tick arrives a millisecond or two into the
-  period it names, so a clock built on it steps backwards there. Whichever
+  period it counts, so a clock built on it steps backwards there. Whichever
   sees the wrap first counts it, and the other does not count it again. The
   self-test takes the shortest of eight measurements of one wait, because a
   serial line takes milliseconds to write a record, and then walks fifty

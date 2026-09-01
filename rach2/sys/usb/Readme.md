@@ -32,7 +32,7 @@ The timer is the fallback for a lost edge, so a missed message costs at most ten
 
 `rach2.nomsi` leaves the interrupter off and the timer is the only pump, which is this stack as it was before the local APIC existed. A controller with no MSI capability is the same case. `rach2.msidrop=N` silences the controller after N messages, which no hardware switch can do on demand, and is how the fallback is seen to work.
 
-The kernel stamps four points of a keystroke's path and prints them when a reader takes the byte: the handler's entry, the event the controller wrote, the key reaching the line discipline, and the read. The record is `usb: latency: msi 1, entry -5, wake 5, read 79, us from the event`. The last of the four holds whatever the reading program was doing when the key arrived; the first three are this kernel's own.
+The kernel stamps four points of a keystroke's path and prints them when a reader takes the byte: the handler's entry, the event the controller wrote, the key reaching the line discipline, and the read. The record is `usb: latency: msi 1, entry -5, wake 5, read 79, us from the event`. The last of the four includes whatever the reading program was doing when the key arrived; the first three are this kernel's own.
 
 ## Nothing waits
 

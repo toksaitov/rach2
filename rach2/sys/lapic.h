@@ -56,7 +56,7 @@ void lapic_repair_lint0(void);
  */
 int lapic_pending(uint8_t vector);
 
-/** The processor's APIC identity, the destination a message carries. */
+/** The processor's APIC identity, the destination in a message. */
 uint32_t lapic_id(void);
 
 /** End an interrupt that arrived by message. */

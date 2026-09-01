@@ -112,7 +112,7 @@ const char *isr_vector_name(int vector, int slot);
 /** Every interrupt routed since the boot. */
 uint32_t isr_interrupt_total(void);
 
-/** How many handlers a vector's chain holds. */
+/** How many handlers a vector's chain has. */
 #define ISR_MAX_VECTOR_HANDLERS 4
 
 /*
