@@ -376,6 +376,16 @@ void fat_now(uint16_t *date, uint16_t *time, uint8_t *tenth)
     *tenth = (uint8_t)(((rem % 60) % 2) * 100 + (uint32_t)nsec / 10000000u);
 }
 
+/* ---- identities ---- */
+
+uint64_t fat_inode(int is_dir, uint32_t first, uint32_t dir_cluster, uint32_t index)
+{
+    if (is_dir) {
+        return first;
+    }
+    return ((uint64_t)(dir_cluster + 1) << 32) | (uint64_t)(index + 1);
+}
+
 /* ---- the allocation hint ---- */
 
 uint32_t fat_hint_start(uint32_t hint, uint32_t cluster_count)

@@ -502,99 +502,126 @@ static uint16_t set_checksum(const uint8_t *entries, uint32_t count)
 
 /* The set whose file entry is at `index`: 1 with `set` filled when every
  * invariant holds, 0 when the set is passed over with `set->why` naming
- * the first fault (and `set->checksum_only` when the checksum is the
- * only one, which is what a stop inside a straddling change leaves and
- * the dirty-volume check repairs), or an error. `raw` is the file entry
- * already read. */
+ * the first fault (and `set->checksum_only` when the checksum is the only
+ * one, which is what a stop inside a straddling change leaves and the
+ * dirty-volume check repairs), or an error. `raw` is the file entry
+ * already read. The set is streamed entry by entry, so a set with the
+ * format's 255 secondaries costs no more memory than one with two. */
 static int set_read(struct ex_mount *em, struct ex_node *d, uint32_t index, const uint8_t *raw,
                     struct ex_set *set)
 {
-    uint8_t all[SET_MAX * 32];
     uint32_t secondaries = raw[1];
-    uint32_t k, got = 0, names = 0;
+    uint32_t k, got = 0, names = 0, nlen = 0, want_names = 0;
+    uint16_t sum = 0, stored_sum = le16(raw + 2);
+    uint8_t stream[32];
     uint16_t hash;
     const char *why = 0;
-    int checksum_bad;
+    int have_stream = 0;
     int rc;
 
     set->why = 0;
     set->checksum_only = 0;
-    k_memset(all, 0, sizeof(all));
-    if (secondaries < 2 || secondaries > SET_MAX - 1) {
+    set->index = index;
+    set->entries = secondaries + 1;
+    set->count = 0;
+    if (secondaries < 2) {
         why = "SecondaryCount";
-    } else {
-        k_memcpy(all, raw, 32);
-        for (k = 1; k <= secondaries && !why; k++) {
-            rc = dir_entry(em, d, index + k, all + k * 32);
+    }
+    for (k = 0; k <= secondaries && !why; k++) {
+        uint8_t e[32];
+        uint32_t b;
+
+        if (k == 0) {
+            k_memcpy(e, raw, 32);
+        } else {
+            rc = dir_entry(em, d, index + k, e);
             if (rc < 0) {
                 return rc;
             }
             if (rc == 0) {
                 why = "a set past the directory's end";
+                break;
             }
         }
-    }
-    if (!why && all[32] != 0xC0) {
-        why = "no stream extension second";
-    }
-    if (!why) {
-        const uint8_t *st = all + 32;
-        uint32_t nlen = st[3];
-        uint64_t length = le64(st + 24), valid = le64(st + 8);
-        uint32_t first = le32(st + 20);
-
-        /* Exactly ceil(NameLength / 15) name entries, consecutive, right
-         * after the stream; then benign secondaries only: a second stream
-         * or a critical secondary this driver does not know is a fault. */
-        for (k = 2; k <= secondaries && !why; k++) {
-            const uint8_t *ne = all + k * 32;
+        for (b = 0; b < 32; b++) {
+            if (k == 0 && (b == 2 || b == 3)) {
+                continue;
+            }
+            sum = (uint16_t)(((sum & 1) ? 0x8000 : 0) + (sum >> 1) + e[b]);
+        }
+        if (k == 0) {
+            continue;
+        }
+        /* Every entry of a set after its primary is an in-use secondary. */
+        if ((e[0] & 0xC0) != 0xC0) {
+            why = "an entry of the set that is not an in-use secondary";
+            break;
+        }
+        if (k == 1) {
+            if (e[0] != 0xC0) {
+                why = "no stream extension second";
+                break;
+            }
+            k_memcpy(stream, e, 32);
+            have_stream = 1;
+            nlen = e[3];
+            want_names = (nlen + 14) / 15;
+            if (nlen == 0 || nlen > FAT_NAME_UNITS) {
+                why = "NameLength";
+                break;
+            }
+            if (e[1] & 0xFC) {
+                why = "reserved GeneralSecondaryFlags bits";
+                break;
+            }
+            continue;
+        }
+        /* The name entries: exactly ceil(NameLength / 15), consecutive,
+         * right after the stream; then benign secondaries only. */
+        if (names < want_names) {
             uint32_t m;
 
-            if (names < (nlen + 14) / 15) {
-                if (ne[0] != 0xC1) {
-                    why = "name entries not consecutive after the stream";
+            if (e[0] != 0xC1) {
+                why = "name entries not consecutive after the stream";
+                break;
+            }
+            names++;
+            for (m = 0; m < 15; m++) {
+                uint16_t u = le16(e + 2 + m * 2);
+
+                if (got < nlen) {
+                    set->units[got++] = u;
+                } else if (u != 0) {
+                    why = "units past NameLength";
                     break;
                 }
-                names++;
-                for (m = 0; m < 15; m++) {
-                    uint16_t u = le16(ne + 2 + m * 2);
-
-                    if (got < nlen) {
-                        set->units[got++] = u;
-                    } else if (u != 0) {
-                        why = "units past NameLength";
-                    }
-                }
-            } else if (ne[0] == 0xC1 || ne[0] == 0xC0 || (ne[0] & 0xE0) == 0xC0) {
-                why = "a critical secondary after the name";
             }
+        } else if (!(e[0] & 0x20)) {
+            why = "a critical secondary after the name";
+            break;
         }
-        if (!why && (nlen == 0 || got != nlen)) {
-            why = "NameLength";
-        }
-        if (!why && (st[1] & 0xFC)) {
-            why = "reserved GeneralSecondaryFlags bits";
-        }
-        if (!why && valid > length) {
+    }
+    if (!why && (!have_stream || got != nlen)) {
+        why = "NameLength";
+    }
+    if (!why) {
+        uint64_t length = le64(stream + 24), valid = le64(stream + 8);
+        uint32_t first = le32(stream + 20);
+
+        if (valid > length) {
             why = "ValidDataLength past DataLength";
-        }
-        if (!why && (le16(all + 4) & ATTR_DIRECTORY) && (valid != length || length > 0x10000000u)) {
+        } else if ((le16(raw + 4) & ATTR_DIRECTORY) && (valid != length || length > 0x10000000u)) {
             why = "a directory's lengths"; /* equal, and at most 256 MiB */
-        }
-        if (!why && (st[1] & FLAG_NO_FAT_CHAIN) && length == 0) {
+        } else if ((stream[1] & FLAG_NO_FAT_CHAIN) && length == 0) {
             why = "NoFatChain with no length";
-        }
-        if (!why && !(st[1] & FLAG_ALLOC_POSSIBLE)) {
+        } else if (!(stream[1] & FLAG_ALLOC_POSSIBLE)) {
             why = "AllocationPossible clear";
-        }
-        if (!why && length != 0 && !in_heap(em, first)) {
+        } else if (length != 0 && !in_heap(em, first)) {
             why = "a first cluster outside the heap";
-        }
-        if (!why && length == 0 && first != 0) {
+        } else if (length == 0 && first != 0) {
             why = "a cluster with no length";
-        }
-        if (!why && (st[1] & FLAG_NO_FAT_CHAIN) && length != 0 &&
-            (uint64_t)first - 2 + clusters_of(em, length) > em->clusters) {
+        } else if ((stream[1] & FLAG_NO_FAT_CHAIN) && length != 0 &&
+                   (uint64_t)first - 2 + clusters_of(em, length) > em->clusters) {
             why = "a contiguous run past the heap";
         }
         if (!why) {
@@ -602,27 +629,24 @@ static int set_read(struct ex_mount *em, struct ex_node *d, uint32_t index, cons
             if (rc != 0) {
                 return rc;
             }
-            if (hash != le16(st + 4)) {
+            if (hash != le16(stream + 4)) {
                 why = "the name hash";
             }
         }
-        checksum_bad = set_checksum(all, secondaries + 1) != le16(all + 2);
-        if (!why && checksum_bad) {
-            why = "the set checksum";
-            set->checksum_only = 1;
-        }
-        if (!why) {
-            set->index = index;
-            set->entries = secondaries + 1;
-            k_memcpy(set->file, all, 32);
-            k_memcpy(set->stream, st, 32);
-            set->count = nlen;
-            return 1;
-        }
+    }
+    if (!why && sum != stored_sum) {
+        why = "the set checksum";
+        set->checksum_only = 1;
+    }
+    if (have_stream) {
+        k_memcpy(set->file, raw, 32);
+        k_memcpy(set->stream, stream, 32);
+        set->count = nlen;
+    }
+    if (!why) {
+        return 1;
     }
     set->why = why;
-    set->index = index;
-    set->entries = secondaries + 1;
     klog(KLOG_WARN, "exfat", "set skipped: %s (entry %d of directory cluster %d)", why, (int)index,
          (int)d->first);
     return 0;
@@ -874,14 +898,6 @@ static int64_t ex_epoch(uint32_t ts, uint8_t inc, uint8_t off, int64_t *nsec)
     return sec;
 }
 
-static uint64_t ex_ino(const struct ex_node *n)
-{
-    if (n->is_dir) {
-        return n->first;
-    }
-    return ((uint64_t)(n->dir_cluster + 1) << 32) | (uint64_t)(n->index + 1);
-}
-
 static int ex_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 {
     struct ex_mount *em = em_of(mnt);
@@ -896,7 +912,7 @@ static int ex_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     st->gid = em->gid;
     st->nlink = 1;
     st->size = n->length;
-    st->ino = ex_ino(n);
+    st->ino = fat_inode(n->is_dir, n->first, n->dir_cluster, n->index);
     st->mtime_sec = ex_epoch(n->mtime, n->m10, n->moff, &st->mtime_nsec);
     st->ctime_sec = ex_epoch(n->ctime, n->c10, n->coff, &st->ctime_nsec);
     st->atime_sec = ex_epoch(n->atime, 0, n->aoff, &st->atime_nsec);
@@ -1010,7 +1026,7 @@ static int ex_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor, str
         probe.first = le32(set.stream + 20);
         probe.dir_cluster = d->first == em->root ? 0 : d->first;
         probe.index = set.index;
-        ent->ino = ex_ino(&probe);
+        ent->ino = fat_inode(probe.is_dir, probe.first, probe.dir_cluster, probe.index);
     }
     return 1;
 }
@@ -1207,9 +1223,12 @@ static int upcase_check(struct ex_mount *em, uint32_t *sum)
     return 0;
 }
 
-static int ex_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags, const char *options)
+/* The constructor proper, on a slot already claimed: it sleeps in the
+ * cache and in the dirty-volume check, so the slot is taken before it
+ * runs and given back when it fails. */
+static int ex_mount_on(struct ex_mount *em, struct vfs_mount *mnt, block_device_t *dev,
+                       uint32_t flags, const char *options)
 {
-    struct ex_mount *em = 0;
     uint8_t b[512], b2[512];
     uint32_t main_sum, backup_sum, stored_main, stored_backup;
     uint32_t rev;
@@ -1223,16 +1242,6 @@ static int ex_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags, 
     int have_bitmap = 0, have_upcase = 0, second_bitmap = 0;
     int rc;
 
-    for (i = 0; i < EXFAT_MOUNTS; i++) {
-        if (!ex_mounts[i].used) {
-            em = &ex_mounts[i];
-            break;
-        }
-    }
-    if (!em) {
-        return -ENOMEM;
-    }
-    k_memset(em, 0, sizeof(*em));
     em->dev = dev;
     rc = fat_parse_options(options, &em->uid, &em->gid, &em->umask);
     if (rc != 0) {
@@ -1473,10 +1482,32 @@ static int ex_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags, 
     root->is_dir = 1;
     root->first = em->root;
     root->length = 0; /* the root's chain is followed to its end */
-    em->used = 1;
     mnt->priv = em;
     mnt->root = root;
     return 0;
+}
+
+static int ex_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags, const char *options)
+{
+    struct ex_mount *em = 0;
+    int i, rc;
+
+    for (i = 0; i < EXFAT_MOUNTS; i++) {
+        if (!ex_mounts[i].used) {
+            em = &ex_mounts[i];
+            break;
+        }
+    }
+    if (!em) {
+        return -ENOMEM;
+    }
+    k_memset(em, 0, sizeof(*em));
+    em->used = 1; /* claimed before the constructor sleeps */
+    rc = ex_mount_on(em, mnt, dev, flags, options);
+    if (rc != 0) {
+        em->used = 0;
+    }
+    return rc;
 }
 
 /* ---- writing ----
@@ -1676,6 +1707,20 @@ static int free_chain(struct ex_mount *em, uint32_t first, int nofat, uint64_t l
         c = next;
     }
     return 0;
+}
+
+/* Whether `n` clusters are free, counted once and kept: ENOSPC is decided
+ * before any write, the conversion of a contiguous chain included. */
+static int room_for(struct ex_mount *em, uint32_t n)
+{
+    if (!em->free_known) {
+        int rc = count_free(em);
+
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    return em->free_clusters < n ? -ENOSPC : 0;
 }
 
 /* A run of `n` clusters chained through the FAT and ended, disconnected
@@ -1983,11 +2028,31 @@ static int dir_frozen(struct ex_mount *em, struct ex_node *d)
 /* The directory grown by one zeroed cluster, chained; a contiguous
  * directory another writer made has its run written into the FAT and its
  * flag cleared first, so that the chain can be followed. */
+#define DIR_MAX_BYTES 0x10000000u /* 256 MiB, the format's limit on a directory */
+
 static int dir_grow(struct ex_mount *em, struct ex_node *d)
 {
     uint32_t tail, newc, unused;
     uint64_t have = clusters_of(em, d->length);
     int rc;
+
+    if (d->first == em->root) {
+        uint32_t c = d->first, steps = 0, next;
+
+        for (;;) {
+            if (fat_next(em, c, &next) != 0) {
+                return -EIO;
+            }
+            if (next == EX_EOC || ++steps > em->clusters) {
+                break;
+            }
+            c = next;
+        }
+        have = steps + 1;
+    }
+    if ((have + 1) * cluster_bytes(em) > DIR_MAX_BYTES) {
+        return -ENOSPC; /* a directory past what the format can name */
+    }
 
     if (d->nofat) {
         rc = chain_into_fat(em, d->first, d->length);
@@ -2356,7 +2421,29 @@ static int retire_chain(struct ex_mount *em, struct ex_node *d, const struct ex_
     uint32_t dir_cluster = d->first == em->root ? 0 : d->first;
     int is_dir = (le16(set->file + 4) & ATTR_DIRECTORY) != 0;
     uint32_t first = le32(set->stream + 20);
-    struct ex_node *n = node_find(em, is_dir, dir_cluster, set->index, first);
+    struct ex_node *n;
+    uint32_t k;
+
+    /* A vendor allocation names clusters of its own; they go with the set,
+     * whoever wrote it, or nothing would ever free them. */
+    for (k = 2; k < set->entries; k++) {
+        uint8_t e[32];
+        int rc = dir_entry(em, d, set->index + k, e);
+
+        if (rc < 0) {
+            return rc;
+        }
+        if (rc == 0) {
+            break;
+        }
+        if ((e[0] & 0x7F) == 0x61 && (e[1] & FLAG_ALLOC_POSSIBLE) && le32(e + 20) != 0) {
+            rc = free_chain(em, le32(e + 20), (e[1] & FLAG_NO_FAT_CHAIN) != 0, le64(e + 24));
+            if (rc != 0) {
+                return rc;
+            }
+        }
+    }
+    n = node_find(em, is_dir, dir_cluster, set->index, first);
 
     if (n) {
         n->refs--; /* node_find held it once more */
@@ -2588,12 +2675,29 @@ static int ex_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, v
         uint8_t hash_lo = em->setbuf[32 + 4], hash_hi = em->setbuf[32 + 5],
                 nlen = em->setbuf[32 + 3];
 
+        uint32_t k, src_names = 2 + (src.count + 14) / 15;
+
         k_memcpy(em->setbuf, src.file, 32);
         k_memcpy(em->setbuf + 32, src.stream, 32);
-        em->setbuf[1] = (uint8_t)(count - 1);
         em->setbuf[32 + 3] = nlen;
         em->setbuf[32 + 4] = hash_lo;
         em->setbuf[32 + 5] = hash_hi;
+        /* The benign secondaries the source carried, a vendor allocation
+         * among them, follow the new name entries. */
+        for (k = src_names; k < src.entries && count < 256; k++) {
+            uint8_t e[32];
+
+            rc = dir_entry(em, od, src.index + k, e);
+            if (rc < 0) {
+                return rc;
+            }
+            if (rc == 0) {
+                break;
+            }
+            k_memcpy(em->setbuf + count * 32, e, 32);
+            count++;
+        }
+        em->setbuf[1] = (uint8_t)(count - 1);
     }
     if (od_cluster == nd_cluster && !dst_exists && count == src.entries) {
         /* In place: the name entries first, then the file entry's sector. */
@@ -2739,11 +2843,13 @@ static int32_t ex_write(struct vfs_mount *mnt, void *handle, const void *buf, ui
     have = clusters_of(em, n->length);
     needed = clusters_of(em, end);
     if (needed > have) {
-        rc = chain_convert(em, n);
-        if (rc != 0) {
-            goto out;
+        rc = room_for(em, (uint32_t)(needed - have));
+        if (rc == 0) {
+            rc = chain_convert(em, n); /* nothing is written before the room is known */
         }
-        rc = alloc_run(em, (uint32_t)(needed - have), 1, &run_first, &run_last);
+        if (rc == 0) {
+            rc = alloc_run(em, (uint32_t)(needed - have), 1, &run_first, &run_last);
+        }
         if (rc != 0) {
             goto out;
         }
@@ -2762,11 +2868,9 @@ static int32_t ex_write(struct vfs_mount *mnt, void *handle, const void *buf, ui
         }
     }
     if (offset < have * cbytes) {
-        uint32_t part = (uint32_t)(have * cbytes - offset);
+        uint64_t room = have * cbytes - offset; /* up to 2^32 at the limit */
+        uint32_t part = room > count ? count : (uint32_t)room;
 
-        if (part > count) {
-            part = count;
-        }
         rc = put_file_bytes(em, n, offset, buf, part);
         if (rc == 0 && part < count) {
             struct ex_node run;
@@ -2855,7 +2959,10 @@ static int ex_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
         uint32_t run_first = 0, run_last = 0;
 
         if (keep > have) {
-            rc = chain_convert(em, n);
+            rc = room_for(em, (uint32_t)(keep - have));
+            if (rc == 0) {
+                rc = chain_convert(em, n); /* nothing is written before the room is known */
+            }
             if (rc == 0) {
                 rc = alloc_run(em, (uint32_t)(keep - have), 0, &run_first, &run_last);
             }
@@ -2977,8 +3084,12 @@ static int ex_setattr(struct vfs_mount *mnt, void *node, int what, const struct 
 
         fat_stamp(st->mtime_sec, &date, &time);
         n->mtime = ((uint32_t)date << 16) | time;
-        n->m10 =
-            (uint8_t)((uint32_t)st->mtime_nsec / 10000000u % 200u); /* nanoseconds fit 32 bits */
+        /* The stamp's field holds two seconds; the 10 ms count carries the
+         * odd second, which is what its range of 0 to 199 is for. */
+        n->m10 = (uint8_t)((uint32_t)st->mtime_nsec / 10000000u % 100u);
+        if (fat_epoch(date, time) == st->mtime_sec - 1) {
+            n->m10 = (uint8_t)(n->m10 + 100);
+        }
         n->moff = 0x80;
     }
     rc = node_publish(em, n);
@@ -3000,21 +3111,27 @@ static int write_boot_state(struct ex_mount *em, int dirty)
     uint32_t used = em->free_known ? em->clusters - em->free_clusters : 0;
     int rc;
 
-    flags[0] = (uint8_t)((em->active_fat & 1) | (dirty ? 2 : 0));
-    flags[1] = 0;
-    rc = ex_write_bytes(em, 106, flags, 2, 1);
+    /* The percent first, so that the write which clears the dirty bit is
+     * the last of the two: a stop between them leaves the volume dirty
+     * with a percent that is already right. */
+    if (em->free_known) {
+        uint32_t u = used, c = em->clusters;
+
+        while (c > 42949672u) { /* so that u * 100 stays inside 32 bits */
+            c >>= 1;
+            u >>= 1;
+        }
+        percent = c ? (uint8_t)(u * 100u / c) : 0;
+    } else {
+        percent = 0xFF; /* the specification's "not known" */
+    }
+    rc = ex_write_bytes(em, 112, &percent, 1, 1);
     if (rc != 0) {
         return rc;
     }
-    {
-        uint32_t per = em->clusters / 100u; /* 32-bit arithmetic: no libgcc */
-
-        percent = (uint8_t)(em->free_known && per ? used / per : 0xFF);
-        if (percent > 100) {
-            percent = 100;
-        }
-    }
-    return ex_write_bytes(em, 112, &percent, 1, 1);
+    flags[0] = (uint8_t)((em->active_fat & 1) | (dirty ? 2 : 0));
+    flags[1] = 0;
+    return ex_write_bytes(em, 106, flags, 2, 1);
 }
 
 static int ex_sync(struct vfs_mount *mnt)
@@ -3091,8 +3208,12 @@ struct check_state {
     uint32_t tail_prev[CHECK_TAILS], tail_first[CHECK_TAILS];
     int nsets;
     uint32_t set_dir[CHECK_SETS], set_index[CHECK_SETS];
+    uint64_t set_dir_length[CHECK_SETS];
+    uint8_t set_dir_nofat[CHECK_SETS];
     int norphans;
     uint32_t orphan_dir[CHECK_ORPHANS], orphan_index[CHECK_ORPHANS];
+    uint64_t orphan_dir_length[CHECK_ORPHANS];
+    uint8_t orphan_dir_nofat[CHECK_ORPHANS];
 };
 
 static uint16_t check_hashes[CHECK_NAMES];
@@ -3166,8 +3287,12 @@ static long check_chain(struct check_state *w, uint32_t first, int nofat, uint64
             w->why = "an unreadable FAT";
             return -1;
         }
-        if (next == EX_BAD || next == 0 || (next != EX_EOC && !in_heap(em, next))) {
+        if (next == EX_BAD || next == 0) {
             w->why = "a chain ending in a free or bad entry";
+            return -1;
+        }
+        if (next != EX_EOC && !in_heap(em, next)) {
+            w->why = "a chain outside the heap";
             return -1;
         }
         if ((uint32_t)count > em->clusters) {
@@ -3193,6 +3318,7 @@ static int check_dir(struct check_state *w, struct ex_node *d, uint32_t *resume,
 {
     struct ex_mount *em = w->em;
     uint32_t i = *resume;
+    int is_root = d->first == em->root;
 
     for (;;) {
         uint8_t raw[32];
@@ -3220,12 +3346,20 @@ static int check_dir(struct check_state *w, struct ex_node *d, uint32_t *resume,
             }
             w->orphan_dir[w->norphans] = d->first;
             w->orphan_index[w->norphans] = i;
+            w->orphan_dir_length[w->norphans] = d->length;
+            w->orphan_dir_nofat[w->norphans] = (uint8_t)d->nofat;
             w->norphans++;
             i++;
             continue;
         }
         if (raw[0] == 0x81 || raw[0] == 0x82 || raw[0] == 0x83 || raw[0] == 0xA0 ||
             raw[0] == 0xA1) {
+            /* The bitmap, the up-case table and the label belong to the
+             * root; in another directory they make it invalid. */
+            if (!is_root && raw[0] != 0xA0 && raw[0] != 0xA1) {
+                w->why = "a root-only critical entry in a subdirectory";
+                return -1;
+            }
             i++;
             continue;
         }
@@ -3251,6 +3385,8 @@ static int check_dir(struct check_state *w, struct ex_node *d, uint32_t *resume,
             }
             w->set_dir[w->nsets] = d->first;
             w->set_index[w->nsets] = i;
+            w->set_dir_length[w->nsets] = d->length;
+            w->set_dir_nofat[w->nsets] = (uint8_t)d->nofat;
             w->nsets++;
             set.checksum_only = 0;
             rc = set_load(em, d, i, &k);
@@ -3278,9 +3414,15 @@ static int check_dir(struct check_state *w, struct ex_node *d, uint32_t *resume,
                     int same = 0;
 
                     rc = dir_entry(em, d, check_hash_index[m], oraw);
-                    if (rc == 1 && set_read(em, d, check_hash_index[m], oraw, &other) == 1 &&
-                        other.count == set.count) {
-                        rc = units_match(em, other.units, set.units, set.count, &same);
+                    if (rc == 1) {
+                        int got = set_read(em, d, check_hash_index[m], oraw, &other);
+
+                        /* A set whose checksum alone fails is about to be
+                         * repaired: its name counts against this one. */
+                        if ((got == 1 || (got == 0 && other.checksum_only)) &&
+                            other.count == set.count) {
+                            rc = units_match(em, other.units, set.units, set.count, &same);
+                        }
                     }
                     if (rc < 0) {
                         w->why = "an unreadable set";
@@ -3422,6 +3564,8 @@ static int ex_check_volume(struct ex_mount *em)
         k_memset(&d, 0, sizeof(d));
         d.is_dir = 1;
         d.first = w.set_dir[i];
+        d.length = w.set_dir_length[i];
+        d.nofat = w.set_dir_nofat[i];
         rc = set_load(em, &d, w.set_index[i], &count);
         if (rc == 0) {
             rc = set_store(em, &d, w.set_index[i], count, 1);
@@ -3440,6 +3584,8 @@ static int ex_check_volume(struct ex_mount *em)
         k_memset(&d, 0, sizeof(d));
         d.is_dir = 1;
         d.first = w.orphan_dir[i];
+        d.length = w.orphan_dir_length[i];
+        d.nofat = w.orphan_dir_nofat[i];
         rc = dir_entry(em, &d, w.orphan_index[i], raw);
         if (rc == 1) {
             raw[0] &= 0x7F;

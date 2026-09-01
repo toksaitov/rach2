@@ -38,6 +38,12 @@ void fat_stamp(int64_t sec, uint16_t *date, uint16_t *time);
 /** The DOS date, time and hundredths of the present moment. */
 void fat_now(uint16_t *date, uint16_t *time, uint8_t *tenth);
 
+/** The inode number of an entry, the same policy for both types: a
+ * directory is its first cluster; a file is its directory's cluster (0 for
+ * the root) plus one in the high word and its entry index plus one in the
+ * low, so no two entries share a number. */
+uint64_t fat_inode(int is_dir, uint32_t first, uint32_t dir_cluster, uint32_t index);
+
 /** Where a first-fit search starts: the hint when it names a cluster of
  * the volume, else the first cluster. */
 uint32_t fat_hint_start(uint32_t hint, uint32_t cluster_count);

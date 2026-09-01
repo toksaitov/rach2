@@ -47,7 +47,7 @@ struct fat_node {
     int is_dir;
     uint32_t dir_cluster; /* the directory holding the entry; 0 for the root */
     uint32_t index;       /* entry index in that directory */
-    uint32_t first; /* first cluster; 0 for an empty file or the root */
+    uint32_t first;       /* first cluster; 0 for an empty file or the root */
     uint32_t size;
     uint16_t date, time, cdate, ctime, adate;
     uint8_t ctenth; /* creation time, hundredths of a second, 0 to 199 */
@@ -81,7 +81,7 @@ struct fat_mount {
     uint32_t fsinfo_sector; /* 0 when the volume has none */
     int mirrored;           /* every FAT write goes to both copies */
     int writable;
-    int dirty_set;          /* the dirty flag has been written for this mount */
+    int dirty_set; /* the dirty flag has been written for this mount */
     uint32_t alloc_hint;
     struct vfs_mount *mnt;
     struct fat_node nodes[FAT32_NODES];
@@ -395,7 +395,7 @@ struct fat_scan {
     uint32_t index;        /* its index in the directory */
     uint32_t start;        /* the index of the name's first entry: a long one, or `index` */
     char name[VFS_NAME_MAX + 1];
-    char alias[13];    /* the short name as shown, always */
+    char alias[13]; /* the short name as shown, always */
 };
 
 /**
@@ -544,7 +544,6 @@ static struct fat_node *node_for(struct fat_mount *fm, uint32_t dir_cluster,
     n->date = (uint16_t)le16(sc->ent.raw + 24);
     return n;
 }
-
 
 /* ---- writing ----
  *
@@ -1173,7 +1172,6 @@ static int fat_lookup(struct vfs_mount *mnt, void *dir, const char *name, void *
     uint32_t dir_cluster = d->first == fm->root_cluster ? 0 : d->first;
     uint32_t cursor = 0;
 
-
     if (name[0] == '.' && name[1] == '\0') {
         d->refs++;
         *node = d;
@@ -1206,17 +1204,6 @@ static int fat_lookup(struct vfs_mount *mnt, void *dir, const char *name, void *
     }
 }
 
-/* The inode number: a directory is its first cluster, below 2^28; a file is
- * its directory's cluster (0 for the root) plus one in the high word and
- * its entry index plus one in the low, so no two entries share a number. */
-static uint64_t fat_ino(int is_dir, uint32_t first, uint32_t dir_cluster, uint32_t index)
-{
-    if (is_dir) {
-        return first;
-    }
-    return ((uint64_t)(dir_cluster + 1) << 32) | (uint64_t)(index + 1);
-}
-
 static int fat_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 {
     struct fat_mount *fm = fm_of(mnt);
@@ -1234,7 +1221,7 @@ static int fat_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     st->gid = fm->gid;
     st->nlink = 1;
     st->size = n->size;
-    st->ino = fat_ino(n->is_dir, n->first, n->dir_cluster, n->index);
+    st->ino = fat_inode(n->is_dir, n->first, n->dir_cluster, n->index);
     st->mtime_sec = fat_epoch(n->date, n->time);
     {
         uint32_t tenth = n->ctenth > 199 ? 0 : n->ctenth; /* 0 to 199 by the format */
@@ -1331,8 +1318,8 @@ static int fat_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
         if (ent->is_dir && first == 0) {
             first = fm->root_cluster; /* `.` of the root, or `..` naming it */
         }
-        ent->ino = fat_ino(ent->is_dir, first,
-                           d->first == fm->root_cluster ? 0 : d->first, sc.index);
+        ent->ino =
+            fat_inode(ent->is_dir, first, d->first == fm->root_cluster ? 0 : d->first, sc.index);
     }
     return 1;
 }
@@ -1386,7 +1373,6 @@ static int fat_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
     st->namelen = VFS_NAME_MAX;
     return 0;
 }
-
 
 /* ---- the write operations, under the mount's namespace lock ---- */
 
@@ -2269,7 +2255,6 @@ static void fat_unmount(struct vfs_mount *mnt)
     mnt->root = 0;
 }
 
-
 static int k_memcmp_bytes(const uint8_t *a, const uint8_t *b, uint32_t n)
 {
     uint32_t i;
@@ -2300,8 +2285,8 @@ static int free_entry(struct fat_mount *fm, uint32_t dir_first, uint32_t index);
  * the volume is mounted read-only with a record naming it.
  */
 
-#define WALK_DEPTH 32
-#define WALK_TAILS 16 /* surplus tails recorded for the repair after the walk */
+#define WALK_DEPTH       32
+#define WALK_TAILS       16   /* surplus tails recorded for the repair after the walk */
 #define WALK_DIR_ENTRIES 4096 /* entries compared for a duplicate name */
 
 struct walk_state {
@@ -2589,7 +2574,8 @@ static int fat_check_volume(struct fat_mount *fm)
             goto done;
         }
         stack_first[depth] = sub;
-        stack_parent[depth] = stack_first[depth - 1] == fm->root_cluster ? 0 : stack_first[depth - 1];
+        stack_parent[depth] =
+            stack_first[depth - 1] == fm->root_cluster ? 0 : stack_first[depth - 1];
         stack_resume[depth] = 0;
         depth++;
     }
@@ -2662,8 +2648,6 @@ done:
     return 0;
 }
 
-
-
 static int refuse(const char *field)
 {
     klog(KLOG_WARN, "vfat", "refused: %s", field);
@@ -2673,27 +2657,18 @@ static int refuse(const char *field)
 /**
  * The volume check, field by field, before anything is published.
  */
-static int fat_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
-                     const char *options)
+/* The constructor proper, on a slot already claimed: it sleeps in the
+ * cache and in the dirty-volume check, so the slot is taken before it
+ * runs and given back when it fails. */
+static int fat_mount_on(struct fat_mount *fm, struct vfs_mount *mnt, block_device_t *dev,
+                        uint32_t flags, const char *options)
 {
-    struct fat_mount *fm = 0;
     uint8_t bpb[512];
     uint32_t bytes_per_sector, total, fatsz16, fatsz, root_entries;
     uint32_t ext_flags, version;
     struct fat_node *root;
-    int i;
     int rc;
 
-    for (i = 0; i < FAT32_MOUNTS; i++) {
-        if (!fat_mounts[i].used) {
-            fm = &fat_mounts[i];
-            break;
-        }
-    }
-    if (!fm) {
-        return -ENOMEM;
-    }
-    k_memset(fm, 0, sizeof(*fm));
     fm->dev = dev;
     rc = fat_parse_options(options, &fm->uid, &fm->gid, &fm->umask);
     if (rc != 0) {
@@ -2812,10 +2787,33 @@ static int fat_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
     root = node_take(fm);
     root->is_dir = 1;
     root->first = fm->root_cluster;
-    fm->used = 1;
     mnt->priv = fm;
     mnt->root = root;
     return 0;
+}
+
+static int fat_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
+                     const char *options)
+{
+    struct fat_mount *fm = 0;
+    int i, rc;
+
+    for (i = 0; i < FAT32_MOUNTS; i++) {
+        if (!fat_mounts[i].used) {
+            fm = &fat_mounts[i];
+            break;
+        }
+    }
+    if (!fm) {
+        return -ENOMEM;
+    }
+    k_memset(fm, 0, sizeof(*fm));
+    fm->used = 1; /* claimed before the constructor sleeps */
+    rc = fat_mount_on(fm, mnt, dev, flags, options);
+    if (rc != 0) {
+        fm->used = 0;
+    }
+    return rc;
 }
 
 /* The path of a directory node, rebuilt from the volume: the parent by the
@@ -2891,31 +2889,12 @@ static int fat_path(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
 }
 
 static const struct vfs_ops vfat_ops = {
-    fat_lookup,
-    0, /* lookup_rest */
-    fat_hold,
-    fat_put,
-    fat_getattr,
-    fat_setattr,
-    fat_open,
-    fat_release,
-    fat_read,
-    fat_write,
-    fat_truncate,
-    fat_fsync,
-    fat_readdir,
-    fat_create,
-    fat_unlink,
-    fat_mkdir,
-    fat_rmdir,
-    fat_rename,
-    0, /* link */
-    0, /* readlink */
-    fat_statfs,
-    fat_sync,
-    fat_prepare_unmount,
-    fat_unmount,
-    fat_path,
+    fat_lookup, 0, /* lookup_rest */
+    fat_hold,   fat_put,   fat_getattr,         fat_setattr, fat_open,    fat_release,
+    fat_read,   fat_write, fat_truncate,        fat_fsync,   fat_readdir, fat_create,
+    fat_unlink, fat_mkdir, fat_rmdir,           fat_rename,  0, /* link */
+    0,                                                          /* readlink */
+    fat_statfs, fat_sync,  fat_prepare_unmount, fat_unmount, fat_path,
 };
 
 const struct vfs_type vfs_vfat_type = {"vfat", fat_mount, &vfat_ops};
