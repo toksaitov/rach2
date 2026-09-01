@@ -89,7 +89,10 @@
 #define PROCFS_MAX_MOUNTS   256  /* the root, and the two synthetic mounts */
 #define PROCFS_MAX_USB      256  /* four devices, one line each */
 #define PROCFS_MAX_FILESYSTEMS 128 /* two nodev lines and four types */
-#define PROCFS_MAX_INTERRUPTS 1024 /* one line per vector taken, with its names, and the spurious count */
+/* Thirty-two vectors at most, each a line of its number, its count, which of
+   the two roads it arrives on, and up to four names of at most a dozen
+   characters, plus the two lines that belong to no vector. */
+#define PROCFS_MAX_INTERRUPTS 2304
 #define PROCFS_MAX_NETROUTE 512  /* a header and at most two routes */
 #define PROCFS_MAX_NETARP  1024  /* a header and the eight-entry cache */
 #define PROCFS_MAX_NETTCP  3072  /* a header and the sixteen-block pool */
@@ -126,6 +129,8 @@ typedef char procfs_bounds_fit[(PROCFS_MAX_BOOTLINE <= PROCFS_TEXT_MAX &&
                                 PROCFS_MAX_MEMINFO <= PROCFS_TEXT_MAX &&
                                 PROCFS_MAX_MOUNTS <= PROCFS_TEXT_MAX &&
                                 PROCFS_MAX_USB <= PROCFS_TEXT_MAX &&
+                                PROCFS_MAX_FILESYSTEMS <= PROCFS_TEXT_MAX &&
+                                PROCFS_MAX_INTERRUPTS <= PROCFS_TEXT_MAX &&
                                 PROCFS_MAX_NETROUTE <= PROCFS_TEXT_MAX &&
                                 PROCFS_MAX_NETARP <= PROCFS_TEXT_MAX &&
                                 PROCFS_MAX_NETTCP <= PROCFS_TEXT_MAX &&
