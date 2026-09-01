@@ -15,6 +15,7 @@
 #include "sys/mm/frame.h"
 #include "sys/mm/pagecache.h"
 #include "sys/mm/modlayout.h"
+#include "sys/apicdiag.h"
 #include "sys/diag.h"
 #include "sys/block/mbr.h"
 #include "sys/fs/devfs.h"
@@ -2737,6 +2738,10 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     if (kcmdline_has("rach2.diag")) {
         boot_diag_report();
     }
+
+    /* What the machine's firmware left in the APIC and in the two devices
+     * this kernel drives by message, read and printed, nothing written. */
+    apic_diag_report();
 
     __asm__ __volatile__("cli");
     init_pit(100);

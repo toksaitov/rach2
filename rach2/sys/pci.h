@@ -105,6 +105,8 @@ bool pci_find_device_by_id(uint16_t vendor_id, uint16_t device_id, pci_device_t 
  */
 #define PCI_STATUS_CAP_LIST 0x0010
 #define PCI_CAP_PTR 0x34
+#define PCI_CAP_ID_MSI 0x05
+#define PCI_CAP_ID_MSIX 0x11
 #define PCI_CAP_ID_PCIE 0x10
 #define PCIE_LINK_CONTROL 0x10 /* offset within the PCIe capability */
 #define PCIE_LINK_CTL_ASPM_MASK 0x0003

@@ -61,7 +61,8 @@ C_SRC = kernel.c \
         sys/mm/frame.c \
         sys/mm/pagecache.c \
         sys/mm/modlayout.c \
-        sys/diag.c \
+        sys/apicdiag.c \
+    sys/diag.c \
         sys/udelay.c \
         sys/proc/process.c \
         sys/proc/sched.c \
@@ -107,5 +108,6 @@ C_SRC = kernel.c \
         sys/lib/kfmt.c \
         sys/lib/kirq.c \
         sys/lib/kstd.c \
-        sys/lib/kstring.c \
+        sys/lib/kcpu.c \
+    sys/lib/kstring.c \
         sys/lib/krandom.c
