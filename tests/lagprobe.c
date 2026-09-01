@@ -483,6 +483,8 @@ static void check_written(const char *path, unsigned char fill)
     syscall1(SYS_CLOSE, fd);
 }
 
+static const char *writers_type = "vfat"; /* or the type the third argument names */
+
 static void run_writers(void)
 {
     int a, b, s;
@@ -490,7 +492,7 @@ static void run_writers(void)
     if (syscall2(SYS_MKDIR, (int)"/lw", 0755) != 0) {
         fail("mkdir /lw");
     }
-    if (sys5(SYS_MOUNT, (int)"/dev/disk0p2", (int)"/lw", (int)"vfat", 0, 0) != 0) {
+    if (sys5(SYS_MOUNT, (int)"/dev/disk0p2", (int)"/lw", (int)writers_type, 0, 0) != 0) {
         fail("the writable mount through the lag");
     }
     a = syscall1(SYS_FORK, 0);
@@ -679,6 +681,9 @@ void probe_main(unsigned int *sp)
     if (argc >= 2 && argv[1][0] == 'd') {
         run_deadline();
     } else if (argc >= 2 && argv[1][0] == 'w' && argv[1][5] == 'r') {
+        if (argc >= 3) {
+            writers_type = argv[2];
+        }
         run_writers();
     } else if (argc >= 2 && argv[1][0] == 'w') {
         run_write();

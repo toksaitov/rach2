@@ -138,6 +138,30 @@ static void fail(const char *why)
     sys_exit(1);
 }
 
+/* A failure with its number, for the boot's log. */
+static void fail_n(const char *why, int n) __attribute__((noreturn));
+static void fail_n(const char *why, int n)
+{
+    char digits[16];
+    int i = 15, neg = n < 0;
+    unsigned v = neg ? (unsigned)(-n) : (unsigned)n;
+
+    digits[i] = 0;
+    do {
+        digits[--i] = (char)('0' + v % 10);
+        v /= 10;
+    } while (v && i > 1);
+    if (neg) {
+        digits[--i] = '-';
+    }
+    sys3(SYS_WRITE, 1, (int)"FATWRITE FAIL: ", 15);
+    sys3(SYS_WRITE, 1, (int)why, (int)strlen(why));
+    sys3(SYS_WRITE, 1, (int)" (", 2);
+    sys3(SYS_WRITE, 1, (int)(digits + i), (int)strlen(digits + i));
+    puts(")");
+    sys_exit(1);
+}
+
 static int contains(const char *hay, const char *needle)
 {
     const char *h;
@@ -192,9 +216,13 @@ static int xstat(const char *path)
     return sys2(SYS_STAT64, (int)path, (int)st);
 }
 
+/* The type mounted: vfat unless the second argument names another, which
+ * is how the exfat suite runs the same modes on its volume. */
+static const char *fs_type = "vfat";
+
 static int do_mount(const char *src, const char *target, unsigned flags, const char *data)
 {
-    return sys5(SYS_MOUNT, (int)src, (int)target, (int)"vfat", (int)flags, (int)data);
+    return sys5(SYS_MOUNT, (int)src, (int)target, (int)fs_type, (int)flags, (int)data);
 }
 
 static void sleep_ms(int ms)
@@ -343,8 +371,8 @@ static void mode_readback(void)
     if (read_file(FW "/long name file.txt", back, sizeof(back)) != 4) {
         fail("the long name with its case folded");
     }
-    if (read_file(FW "/LONGNA~1.TXT", back, sizeof(back)) != 4) {
-        fail("the alias");
+    if (fs_type[0] == 'v' && read_file(FW "/LONGNA~1.TXT", back, sizeof(back)) != 4) {
+        fail("the alias"); /* FAT32's short alias; exFAT has none */
     }
     if (read_file(FW "/Sub Dir/inner.txt", back, sizeof(back)) != 5) {
         fail("the file in the directory");
@@ -388,8 +416,12 @@ static void mode_crash(void)
         name[6] = (char)('0' + (i / 10) % 10);
         name[7] = (char)('0' + i % 10);
         name[8] = 0;
-        if (write_file(name, pattern, 1024) != 0) {
-            fail("a file of the crash sequence");
+        {
+            int rc = write_file(name, pattern, 1024);
+
+            if (rc != 0) {
+                fail_n("a file of the crash sequence", rc);
+            }
         }
     }
 }
@@ -448,6 +480,9 @@ void probe_main(unsigned int *sp)
     char **argv = (char **)(sp + 1);
     char mode = argc >= 2 ? argv[1][0] : 'w';
 
+    if (argc >= 3) {
+        fs_type = argv[2];
+    }
     if (mode == 'r' && argv[1][1] == 'e' && argv[1][2] == 'p') {
         mode_repair();
     } else if (mode == 'r') {
