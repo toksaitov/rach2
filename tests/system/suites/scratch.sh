@@ -78,9 +78,11 @@ machine 'reflash 2>&1 | head -1' | grep -q 'usage\|reflash' || fail "reflash is 
 # ---- 1: save what will be overwritten ----
 machine 'dd if=/dev/disk0 bs=512 count=1 2>/dev/null' > "$WORK.sector0" || fail "reading sector 0"
 [ "$(wc -c < "$WORK.sector0" | tr -d ' ')" = "512" ] || fail "sector 0 is not 512 bytes"
-machine "dd if=/dev/disk0 bs=512 skip=$SCRATCH_SECTOR count=8 2>/dev/null" > "$WORK.before" \
-    || fail "reading the range to be overwritten"
-echo "scratch-test: sector 0 and the range about to be written are saved on the host: OK"
+machine "dd if=/dev/disk0 bs=512 skip=$SCRATCH_SECTOR count=$SCRATCH_SECTORS 2>/dev/null | gzip -c" \
+    > "$WORK.before.gz" || fail "reading the range to be overwritten"
+[ "$(gunzip -c "$WORK.before.gz" | wc -c | tr -d ' ')" = "$SCRATCH_BYTES" ] \
+    || fail "the saved range is not $SCRATCH_BYTES bytes"
+echo "scratch-test: sector 0 and every sector about to be written are saved on the host: OK"
 
 # ---- 2: the new sector 0 on the host: the saved one plus the fourth entry ----
 "$REPO/build/tools/image/mkmbr" --list "$WORK" > "$WORK.table" || fail "reading the table"
@@ -99,13 +101,27 @@ awk 'NR<=3' "$WORK.table" | cmp -s - "$WORK.table.new" || fail "the three entrie
 cmp -s -n 446 "$WORK.sector0" "$WORK.sector0.new" || fail "the boot code changed"
 echo "scratch-test: the new sector 0 keeps the code and the three entries and adds the fourth: OK"
 
-# ---- 3: write sector 0 and read it back ----
+# ---- 3: recovery is the saved boot default before any write ----
+PREV="$(machine 'bootctl env saved_entry' | sed -n 's/^bootctl: saved_entry: //p' | tr -d '\r')"
+[ -n "$PREV" ] || PREV=candidate
+OUT="$(machine 'bootctl env saved_entry recovery && bootctl env saved_entry' | tr -d '\r')"
+echo "$OUT" | grep -q 'saved_entry: recovery' || fail "recovery is not the saved boot default: $OUT"
+echo "scratch-test: recovery is the saved boot default before the first write: OK"
+
+# ---- 4: write sector 0, read it back, undo it from the saved copy, and
+#         write it again ----
 machine 'reflash /dev/disk0 0 512' < "$WORK.sector0.new" >/dev/null 2>&1 || fail "reflash of sector 0"
 machine 'dd if=/dev/disk0 bs=512 count=1 2>/dev/null' > "$WORK.sector0.back" || fail "reading sector 0 back"
 cmp -s "$WORK.sector0.new" "$WORK.sector0.back" || fail "sector 0 read back differs"
-echo "scratch-test: sector 0 written through reflash and read back identical: OK"
+machine 'reflash /dev/disk0 0 512' < "$WORK.sector0" >/dev/null 2>&1 || fail "reflash of the saved sector 0"
+machine 'dd if=/dev/disk0 bs=512 count=1 2>/dev/null' | cmp -s - "$WORK.sector0" \
+    || fail "the saved sector 0 did not put the table back"
+machine 'reflash /dev/disk0 0 512' < "$WORK.sector0.new" >/dev/null 2>&1 || fail "reflash of sector 0 again"
+machine 'dd if=/dev/disk0 bs=512 count=1 2>/dev/null' | cmp -s - "$WORK.sector0.new" \
+    || fail "sector 0 read back differs after the undo"
+echo "scratch-test: sector 0 written through reflash, read back identical, undone from the saved copy, written again: OK"
 
-# ---- 4: the volume, formatted on the host, checked, written, checked ----
+# ---- 5: the volume, formatted on the host, checked, written, checked ----
 rm -f "$WORK.vol"
 mformat -i "$WORK.vol" -C -F -T "$SCRATCH_SECTORS" -v SCRATCH :: || fail "mformat"
 "$CHECK" --check "$WORK.vol" >/dev/null || fail "the fresh volume does not pass the check"
@@ -118,7 +134,8 @@ stop
 "$CHECK" --check "$WORK" "$SCRATCH_SECTOR" >/dev/null || fail "the written volume does not pass the check at its offset"
 echo "scratch-test: the volume written through reflash passes the check on the disk: OK"
 
-# ---- 5: the ordinary system boots from the disk and writes the partition ----
+# ---- 6: the ordinary system boots from the disk, writes the partition,
+#         and puts the boot default back ----
 LOG="$WORK.system.log"
 qemu-system-i386 -cpu max -display none -rtc base=utc \
     -drive "file=$WORK,format=raw,if=none,id=drv0" \
@@ -132,10 +149,12 @@ wait_ssh || fail "the ordinary system did not answer SSH"
 machine 'ls /dev/disk0p4' | grep -q disk0p4 || fail "the fourth partition node is absent"
 OUT=$(machine 'mkdir -p /mnt && mount -t vfat /dev/disk0p4 /mnt && echo scratch written > /mnt/scratch.txt && umount /mnt && echo WROTE')
 [ "$OUT" = "WROTE" ] || fail "the system could not mount and write the partition: $OUT"
+OUT="$(machine "bootctl env saved_entry $PREV && bootctl env saved_entry" | tr -d '\r')"
+echo "$OUT" | grep -q "saved_entry: $PREV" || fail "the boot default did not go back to $PREV: $OUT"
 stop
-echo "scratch-test: the ordinary system mounts the new partition and writes it: OK"
+echo "scratch-test: the ordinary system mounts the new partition, writes it, and puts the boot default back to $PREV: OK"
 
-# ---- 6: what it wrote, read on the host ----
+# ---- 7: what it wrote, read on the host ----
 mcopy -i "$WORK@@$SCRATCH_OFFSET" ::/scratch.txt "$WORK.scratch.txt" >/dev/null 2>&1 || fail "mcopy from the partition"
 [ "$(cat "$WORK.scratch.txt")" = "scratch written" ] || fail "the file's bytes differ through mtools"
 "$CHECK" --check "$WORK" "$SCRATCH_SECTOR" >/dev/null || fail "the partition is not clean after the write"

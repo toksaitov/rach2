@@ -29,7 +29,10 @@ it, under the disk rule:
 2. Save what will be overwritten, on the host and on the stick: sector 0
    (`dd if=/dev/disk0 bs=512 count=1`), and the 2 GiB the partition will
    cover (a read of 4194304 sectors at 1290240; on the host as a file,
-   compared by sha256 with the stick's copy).
+   compared by sha256 with the stick's copy). The rehearsal saves the
+   host's copy of every sector; its stick is a read-only ISO, so the
+   stick's copy is milestone 43's to arrange: a writable second partition
+   on the USB stick, or a second stick.
 3. Build the new sector 0 on the host from the saved one: a sparse file of
    the disk's size whose first sector is the saved sector 0, then `mkmbr
    --lba` with the three existing entries copied from `mkmbr --list`
@@ -39,7 +42,9 @@ it, under the disk rule:
 4. Make recovery the saved boot default (`bootctl env saved_entry
    recovery`) before any write, as the root procedure does.
 5. Write sector 0: `reflash /dev/disk0 0 512` with the new sector; read
-   it back and compare with the host's bytes.
+   it back and compare with the host's bytes. Then write the saved sector
+   0 back, read it and compare, so the undo is shown to work before the
+   volume is written; then write the new sector again.
 6. Write the FAT32 volume: `mformat -C -F -T 4194304` into a host file,
    `--check` it, then `reflash /dev/disk0 660602880 2147483648` from it;
    read the first sectors back and `--check` them at the offset.
