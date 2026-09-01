@@ -17,6 +17,7 @@
 #include "../proc/wait_queue.h"
 #include "../rtc.h"
 #include "bcache.h"
+#include "fat32name.h"
 
 #define FAT_S_IFDIR 0040000u
 #define FAT_S_IFREG 0100000u
@@ -465,6 +466,7 @@ static void short_to_name(const uint8_t *raw, char *out)
 struct fat_scan {
     struct fat_dirent ent; /* the short entry */
     uint32_t index;        /* its index in the directory */
+    uint32_t start;        /* the index of the name's first entry: a long one, or `index` */
     char name[VFS_NAME_MAX + 1];
     char alias[13];    /* the short name as shown, always */
     int name_too_long; /* a long name past the component limit */
@@ -484,6 +486,7 @@ static int dir_scan(struct fat_mount *fm, struct fat_node *dir, uint32_t first, 
     int lfn_expect = 0; /* the ordinal the next entry must carry */
     uint8_t lfn_sum = 0;
     int lfn_ok = 0;
+    uint32_t lfn_start = 0;
 
     for (;;) {
         struct fat_dirent e;
@@ -515,6 +518,7 @@ static int dir_scan(struct fat_mount *fm, struct fat_node *dir, uint32_t first, 
                 lfn_count = 0;
                 lfn_expect = seq;
                 lfn_sum = e.raw[13];
+                lfn_start = idx;
                 lfn_ok = (seq >= 1 && seq <= LFN_MAX_ENTRIES && (ord & 0xA0) == 0);
             } else if (!lfn_ok || seq != lfn_expect || (ord & 0xE0) != 0) {
                 lfn_ok = 0;
@@ -535,9 +539,11 @@ static int dir_scan(struct fat_mount *fm, struct fat_node *dir, uint32_t first, 
         }
         out->ent = e;
         out->index = idx;
+        out->start = idx;
         out->name_too_long = 0;
         short_to_name(e.raw, out->alias);
         if (lfn_ok && lfn_expect == 0 && lfn_count > 0 && short_checksum(e.raw) == lfn_sum) {
+            out->start = lfn_start;
             int rc = units_to_utf8(units, (uint32_t)lfn_count * 13, out->name, sizeof(out->name));
 
             if (rc != 0) {
@@ -1022,13 +1028,14 @@ static int write_node_entry(struct fat_mount *fm, struct fat_node *n)
     return write_entry_raw(fm, n->dir_cluster, n->index, raw);
 }
 
-/* The index of a free entry in the directory at `first`, growing the
- * directory by one zeroed cluster, chained after the old tail, when every
- * entry is taken. */
-static int free_slot(struct fat_mount *fm, struct fat_node *dir, uint32_t first, uint32_t *index)
+/* The index of `count` free entries in a row in the directory at `first`,
+ * growing the directory by zeroed clusters, each chained after the old
+ * tail, when the entries are not there. */
+static int free_slots(struct fat_mount *fm, struct fat_node *dir, uint32_t first, uint32_t count,
+                      uint32_t *index)
 {
     uint32_t per_cluster = cluster_bytes(fm) / 32;
-    uint32_t i = 0;
+    uint32_t i = 0, run = 0, run_start = 0, total;
     uint32_t chain_first = first == 0 ? fm->root_cluster : first;
 
     for (;;) {
@@ -1042,16 +1049,28 @@ static int free_slot(struct fat_mount *fm, struct fat_node *dir, uint32_t first,
             break; /* the chain ended: grow it */
         }
         if (e.raw[0] == 0 || e.raw[0] == 0xE5) {
-            *index = i;
-            return 0;
+            if (run == 0) {
+                run_start = i;
+            }
+            run++;
+            if (run == count) {
+                *index = run_start;
+                return 0;
+            }
+        } else {
+            run = 0;
         }
         i++;
     }
-    {
+    total = i;
+    if (run == 0) {
+        run_start = i;
+    }
+    while (total - run_start < count) {
         uint32_t tail, newc, unused;
         int rc;
 
-        rc = chain_at(fm, 0, chain_first, (i - 1) / per_cluster, &tail);
+        rc = chain_at(fm, 0, chain_first, (total - 1) / per_cluster, &tail);
         if (rc != 0) {
             return rc == -ENXIO ? -EIO : rc;
         }
@@ -1067,85 +1086,101 @@ static int free_slot(struct fat_mount *fm, struct fat_node *dir, uint32_t first,
         if (dir) {
             dir->hint_cluster = 0;
         }
-        *index = i;
-        return 0;
+        total += per_cluster;
+    }
+    *index = run_start;
+    return 0;
+}
+
+/* A name prepared for the directory at `first`: checked, and either a short
+ * entry alone or long entries in front of an alias no entry of the
+ * directory uses. */
+struct new_name {
+    uint8_t name11[11];
+    uint8_t lower;
+    uint16_t units[FAT32_NAME_UNITS];
+    uint32_t count;   /* UTF-16 units, 0 for a short-only name */
+    uint32_t entries; /* long entries, 0 for a short-only name */
+};
+
+static int alias_taken(struct fat_mount *fm, struct fat_node *dir, uint32_t first,
+                       const uint8_t *name11, int *taken)
+{
+    uint32_t i;
+
+    *taken = 0;
+    for (i = 0;; i++) {
+        struct fat_dirent e;
+        int got = dir_entry(fm, dir, first, i, &e);
+
+        if (got < 0) {
+            return got;
+        }
+        if (got == 0 || e.raw[0] == 0) {
+            return 0;
+        }
+        if (e.raw[0] == 0xE5 || e.raw[11] == ATTR_LFN || (e.raw[11] & ATTR_VOLUME)) {
+            continue;
+        }
+        if (raw_eq(e.raw, name11)) {
+            *taken = 1;
+            return 0;
+        }
     }
 }
 
-/* A name as a short entry, which this phase requires of every name: at most
- * eight and three characters of the set FAT allows, each part all upper or
- * all lower case, recorded in the case bits as Windows NT does. Anything
- * else is EINVAL here; long names are the next phase's. */
-static int name_to_short(const char *name, uint8_t *name11, uint8_t *lower)
+static int prepare_name(struct fat_mount *fm, struct fat_node *dir, uint32_t first,
+                        const char *name, struct new_name *nn)
 {
-    static const char forbidden[] = "\"*+,/:;<=>?[\\]|";
-    int base = 0, ext = 0, in_ext = 0;
-    int base_upper = 0, base_lower = 0, ext_upper = 0, ext_lower = 0;
-    int i;
+    uint32_t n;
+    int rc = fat32_name_units(name, nn->units, &nn->count);
 
-    k_memset(name11, ' ', 11);
-    if (name[0] == '\0' || (name[0] == '.' && (name[1] == '\0' || (name[1] == '.' && name[2] == '\0')))) {
-        return -EINVAL;
+    if (rc != 0) {
+        return rc;
     }
-    for (i = 0; name[i]; i++) {
-        unsigned char c = (unsigned char)name[i];
-        int j;
+    if (fat32_name_short(name, nn->name11, &nn->lower)) {
+        nn->count = 0;
+        nn->entries = 0;
+        return 0;
+    }
+    nn->lower = 0;
+    nn->entries = fat32_long_entries(nn->count);
+    fat32_alias(name, nn->name11);
+    for (n = 1; n <= 999999; n++) {
+        int taken;
 
-        if (c < 0x20 || c > 0x7E) {
-            return -EINVAL;
+        fat32_alias_number(nn->name11, n);
+        rc = alias_taken(fm, dir, first, nn->name11, &taken);
+        if (rc != 0) {
+            return rc;
         }
-        for (j = 0; forbidden[j]; j++) {
-            if (c == (unsigned char)forbidden[j]) {
-                return -EINVAL;
-            }
-        }
-        if (c == '.') {
-            if (in_ext || base == 0) {
-                return -EINVAL;
-            }
-            in_ext = 1;
-            continue;
-        }
-        if (c == ' ') {
-            return -EINVAL; /* no spaces in a short name; long names are phase 4's */
-        }
-        if (c >= 'a' && c <= 'z') {
-            if (in_ext) {
-                ext_lower = 1;
-            } else {
-                base_lower = 1;
-            }
-            c = (unsigned char)(c - 32);
-        } else if (c >= 'A' && c <= 'Z') {
-            if (in_ext) {
-                ext_upper = 1;
-            } else {
-                base_upper = 1;
-            }
-        }
-        if (in_ext) {
-            if (ext >= 3) {
-                return -EINVAL;
-            }
-            name11[8 + ext++] = c;
-        } else {
-            if (base >= 8) {
-                return -EINVAL;
-            }
-            name11[base++] = c;
+        if (!taken) {
+            return 0;
         }
     }
-    if (base == 0 || (in_ext && ext == 0)) {
-        return -EINVAL; /* a trailing dot, or no base */
+    return -ENOSPC; /* a million names on one alias */
+}
+
+/* The entries of a name written in order: the long ones, highest ordinal
+ * first, then the short entry last, so no reader trusts them before the
+ * short entry is there. `raw` is the short entry. */
+static int write_name_entries(struct fat_mount *fm, uint32_t dir_first, uint32_t index,
+                              const struct new_name *nn, const uint8_t *raw)
+{
+    uint32_t ord;
+    uint8_t sum = fat32_short_sum(nn->name11);
+    int rc;
+
+    for (ord = nn->entries; ord >= 1; ord--) {
+        uint8_t lraw[32];
+
+        fat32_long_entry(lraw, ord, nn->entries, sum, nn->units, nn->count);
+        rc = write_entry_raw(fm, dir_first, index + (nn->entries - ord), lraw);
+        if (rc != 0) {
+            return rc;
+        }
     }
-    if ((base_upper && base_lower) || (ext_upper && ext_lower)) {
-        return -EINVAL;
-    }
-    if (name11[0] == 0xE5) {
-        name11[0] = 0x05;
-    }
-    *lower = (uint8_t)((base_lower ? 0x08 : 0) | (ext_lower ? 0x10 : 0));
-    return 0;
+    return write_entry_raw(fm, dir_first, index + nn->entries, raw);
 }
 
 /* The entry `name` names in the directory at `first`: 1 with the scan
@@ -1240,6 +1275,7 @@ static int fat_lookup(struct vfs_mount *mnt, void *dir, const char *name, void *
     uint32_t dir_cluster = d->first == fm->root_cluster ? 0 : d->first;
     uint32_t cursor = 0;
 
+
     if (name[0] == '.' && name[1] == '\0') {
         d->refs++;
         *node = d;
@@ -1329,6 +1365,9 @@ static int fat_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
      * does: FAT has no execute bit, and a program on a volume runs unless
      * the mount says noexec. */
     st->mode = (n->is_dir ? FAT_S_IFDIR : FAT_S_IFREG) | (0777u & ~fm->umask);
+    if (n->attr & ATTR_READ_ONLY) {
+        st->mode &= ~0222u; /* the one attribute a mode can hold */
+    }
     st->uid = fm->uid;
     st->gid = fm->gid;
     st->nlink = 1;
@@ -1754,6 +1793,98 @@ out:
     return rc;
 }
 
+/* A FAT stamp from an epoch, the inverse of `fat_epoch`, floored at 1980
+ * and capped at 2107. */
+static void fat_stamp(int64_t sec, uint16_t *date, uint16_t *time)
+{
+    uint32_t days, rem, year, month, day;
+    static const uint32_t length[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+
+    if (sec < 315532800) {
+        sec = 315532800;
+    }
+    if (sec > 4294967295LL) {
+        sec = 4294967295LL;
+    }
+    days = (uint32_t)sec / 86400u;
+    rem = (uint32_t)sec % 86400u;
+    for (year = 1970;; year++) {
+        uint32_t in_year = (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)) ? 366 : 365;
+
+        if (days < in_year) {
+            break;
+        }
+        days -= in_year;
+    }
+    for (month = 1; month <= 12; month++) {
+        uint32_t in_month = length[month - 1];
+
+        if (month == 2 && year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)) {
+            in_month = 29;
+        }
+        if (days < in_month) {
+            break;
+        }
+        days -= in_month;
+    }
+    day = days + 1;
+    if (year > 2107) {
+        year = 2107;
+    }
+    *date = (uint16_t)(((year - 1980) << 9) | (month << 5) | day);
+    *time = (uint16_t)(((rem / 3600) << 11) | (((rem / 60) % 60) << 5) | ((rem % 60) / 2));
+}
+
+/* The attributes the volume can store: the access and modification times,
+ * and the write bits as the read-only attribute. A mode change outside the
+ * write bits, an owner or a group is EPERM, as Linux's vfat answers. */
+static int fat_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_stat *st)
+{
+    struct fat_mount *fm = fm_of(mnt);
+    struct fat_node *n = node;
+    int rc;
+
+    if (what & (VFS_SET_UID | VFS_SET_GID)) {
+        return -EPERM;
+    }
+    if (what & VFS_SET_MODE) {
+        uint32_t base = 0777u & ~fm->umask;
+        uint32_t want = st->mode & 07777u;
+
+        if ((want & ~0222u) != (base & ~0222u)) {
+            return -EPERM;
+        }
+    }
+    if (n->is_dir && n->first == fm->root_cluster) {
+        return 0; /* the root has no entry of its own */
+    }
+    rc = begin_write(mnt, fm);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = mark_dirty(fm);
+    if (rc == 0) {
+        if (what & VFS_SET_MODE) {
+            if (st->mode & 0222u) {
+                n->attr = (uint8_t)(n->attr & ~ATTR_READ_ONLY);
+            } else {
+                n->attr |= ATTR_READ_ONLY;
+            }
+        }
+        if (what & VFS_SET_ATIME) {
+            uint16_t unused;
+
+            fat_stamp(st->atime_sec, &n->adate, &unused);
+        }
+        if (what & VFS_SET_MTIME) {
+            fat_stamp(st->mtime_sec, &n->date, &n->time);
+        }
+        rc = write_node_entry(fm, n);
+    }
+    vfs_ns_unlock(mnt);
+    return rc;
+}
+
 static int fat_fsync(struct vfs_mount *mnt, void *handle)
 {
     struct fat_mount *fm = fm_of(mnt);
@@ -1791,6 +1922,8 @@ static int fat_create(struct vfs_mount *mnt, void *dir, const char *name, uint32
     struct fat_node *d = dir ? dir : mnt->root;
     uint32_t dir_cluster = d->first == fm->root_cluster ? 0 : d->first;
     struct fat_node *n;
+    static struct new_name nn; /* one create at a time, under the lock */
+    uint8_t raw[32];
     uint32_t index;
     int rc;
 
@@ -1798,26 +1931,27 @@ static int fat_create(struct vfs_mount *mnt, void *dir, const char *name, uint32
     if (!fm->writable || (mnt->flags & VFS_MS_RDONLY)) {
         return -EROFS;
     }
+    rc = prepare_name(fm, d, d->first, name, &nn);
+    if (rc != 0) {
+        return rc;
+    }
     n = node_take(fm);
     if (!n) {
         return -ENOMEM;
     }
-    rc = name_to_short(name, n->name11, &n->lower);
-    if (rc != 0) {
-        n->used = 0;
-        return rc;
-    }
     rc = mark_dirty(fm);
     if (rc == 0) {
-        rc = free_slot(fm, d, d->first, &index);
+        rc = free_slots(fm, d, d->first, nn.entries + 1, &index);
     }
     if (rc != 0) {
         n->used = 0;
         return rc;
     }
+    k_memcpy(n->name11, nn.name11, 11);
+    n->lower = nn.lower;
     n->is_dir = 0;
     n->dir_cluster = dir_cluster;
-    n->index = index;
+    n->index = index + nn.entries;
     n->first = 0;
     n->size = 0;
     n->attr = 0x20;
@@ -1825,7 +1959,8 @@ static int fat_create(struct vfs_mount *mnt, void *dir, const char *name, uint32
     n->date = n->cdate;
     n->time = n->ctime;
     n->adate = n->cdate;
-    rc = write_node_entry(fm, n);
+    entry_of(n, raw);
+    rc = write_name_entries(fm, d->first, index, &nn, raw);
     if (rc != 0) {
         n->used = 0;
         return rc;
@@ -1845,6 +1980,26 @@ static int free_entry(struct fat_mount *fm, uint32_t dir_first, uint32_t index)
         return rc;
     }
     return fat_put_bytes(fm, off, &e5, 1, 1);
+}
+
+/* The entries of a name freed: the short entry first, then its long entries
+ * from the one nearest it back to the first, so a reader never trusts the
+ * long ones without the short one. */
+static int free_name_entries(struct fat_mount *fm, uint32_t dir_first, const struct fat_scan *sc)
+{
+    uint32_t i;
+    int rc = free_entry(fm, dir_first, sc->index);
+
+    if (rc != 0) {
+        return rc;
+    }
+    for (i = sc->index; i > sc->start; i--) {
+        rc = free_entry(fm, dir_first, i - 1);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    return 0;
 }
 
 /* The chain of an entry that is gone: freed now, or left to the node's last
@@ -1888,7 +2043,7 @@ static int fat_unlink(struct vfs_mount *mnt, void *dir, const char *name)
     }
     rc = mark_dirty(fm);
     if (rc == 0) {
-        rc = free_entry(fm, d->first, sc.index);
+        rc = free_name_entries(fm, d->first, &sc);
     }
     if (rc != 0) {
         return rc;
@@ -1902,6 +2057,7 @@ static int fat_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_
     struct fat_node *d = dir ? dir : mnt->root;
     uint32_t parent_cluster = d->first == fm->root_cluster ? 0 : d->first;
     struct fat_node n;
+    static struct new_name nn;
     uint32_t c, unused, index;
     uint8_t raw[64];
     int rc;
@@ -1911,10 +2067,12 @@ static int fat_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_
         return -EROFS;
     }
     k_memset(&n, 0, sizeof(n));
-    rc = name_to_short(name, n.name11, &n.lower);
+    rc = prepare_name(fm, d, d->first, name, &nn);
     if (rc != 0) {
         return rc;
     }
+    k_memcpy(n.name11, nn.name11, 11);
+    n.lower = nn.lower;
     rc = mark_dirty(fm);
     if (rc != 0) {
         return rc;
@@ -1942,12 +2100,13 @@ static int fat_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_
     put16(raw + 32 + 26, parent_cluster & 0xFFFFu);
     rc = fat_put_bytes(fm, cluster_offset(fm, c), raw, 64, 1);
     if (rc == 0) {
-        rc = free_slot(fm, d, d->first, &index);
+        rc = free_slots(fm, d, d->first, nn.entries + 1, &index);
     }
     if (rc == 0) {
         n.dir_cluster = parent_cluster;
-        n.index = index;
-        rc = write_node_entry(fm, &n);
+        n.index = index + nn.entries;
+        entry_of(&n, raw);
+        rc = write_name_entries(fm, d->first, index, &nn, raw);
     }
     if (rc != 0) {
         free_chain(fm, c);
@@ -1992,7 +2151,7 @@ static int fat_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
     }
     rc = mark_dirty(fm);
     if (rc == 0) {
-        rc = free_entry(fm, d->first, sc.index);
+        rc = free_name_entries(fm, d->first, &sc);
     }
     if (rc != 0) {
         return rc;
@@ -2018,16 +2177,12 @@ static int fat_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, 
     uint32_t nd_cluster = nd->first == fm->root_cluster ? 0 : nd->first;
     struct fat_scan src, dst;
     struct fat_node *moved;
-    uint8_t name11[11], lower;
+    static struct new_name nn;
     uint32_t index;
     int got, rc, is_dir, dst_exists;
 
     if (!fm->writable || (mnt->flags & VFS_MS_RDONLY)) {
         return -EROFS;
-    }
-    rc = name_to_short(newname, name11, &lower);
-    if (rc != 0) {
-        return rc;
     }
     got = find_entry(fm, od, od->first, oldname, &src);
     if (got < 0) {
@@ -2077,23 +2232,32 @@ static int fat_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, 
     if (rc != 0) {
         return rc;
     }
+    if (dst_exists) {
+        /* The destination's entries go first; the new name may then take
+         * its alias and its slots. */
+        rc = free_name_entries(fm, nd->first, &dst);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    rc = prepare_name(fm, nd, nd->first, newname, &nn);
+    if (rc != 0) {
+        return rc;
+    }
     moved = is_dir ? dir_node_at(fm, entry_first(src.ent.raw)) : node_at(fm, od_cluster, src.index);
-    if (od_cluster == nd_cluster && !dst_exists) {
-        /* In place: the one entry rewritten with the new name. */
-        k_memcpy(src.ent.raw, name11, 11);
-        src.ent.raw[12] = lower;
-        rc = write_entry_raw(fm, od->first, src.index, src.ent.raw);
+    if (od_cluster == nd_cluster && !dst_exists && src.index - src.start == nn.entries) {
+        /* In place: the same entries rewritten under the new name, long
+         * ones first and the short one last. */
+        k_memcpy(src.ent.raw, nn.name11, 11);
+        src.ent.raw[12] = nn.lower;
+        rc = write_name_entries(fm, od->first, src.start, &nn, src.ent.raw);
         if (rc == 0 && moved) {
-            k_memcpy(moved->name11, name11, 11);
-            moved->lower = lower;
+            k_memcpy(moved->name11, nn.name11, 11);
+            moved->lower = nn.lower;
         }
         return rc;
     }
     if (dst_exists) {
-        rc = free_entry(fm, nd->first, dst.index);
-        if (rc != 0) {
-            return rc;
-        }
         if (dst.ent.raw[11] & ATTR_DIRECTORY) {
             rc = free_chain(fm, entry_first(dst.ent.raw));
         } else {
@@ -2103,14 +2267,11 @@ static int fat_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, 
             return rc;
         }
     }
-    rc = free_slot(fm, nd, nd->first, &index);
+    rc = free_slots(fm, nd, nd->first, nn.entries + 1, &index);
     if (rc != 0) {
         return rc;
     }
-    if (od_cluster == nd_cluster && index == dst.index && dst_exists) {
-        /* the freed destination slot is the one found; fine */
-    }
-    rc = free_entry(fm, od->first, src.index);
+    rc = free_name_entries(fm, od->first, &src);
     if (rc != 0) {
         return rc;
     }
@@ -2128,22 +2289,18 @@ static int fat_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, 
             return rc;
         }
     }
-    if (od_cluster == nd_cluster && index > src.index) {
-        /* the source's slot is free now and lower: the free_slot answer
-         * stands, since a slot found is a slot free */
-    }
-    k_memcpy(src.ent.raw, name11, 11);
-    src.ent.raw[12] = lower;
-    rc = write_entry_raw(fm, nd->first, index, src.ent.raw);
+    k_memcpy(src.ent.raw, nn.name11, 11);
+    src.ent.raw[12] = nn.lower;
+    rc = write_name_entries(fm, nd->first, index, &nn, src.ent.raw);
     if (rc != 0) {
         return rc;
     }
     if (moved) {
-        k_memcpy(moved->name11, name11, 11);
-        moved->lower = lower;
+        k_memcpy(moved->name11, nn.name11, 11);
+        moved->lower = nn.lower;
         if (!is_dir) {
             moved->dir_cluster = nd_cluster;
-            moved->index = index;
+            moved->index = index + nn.entries;
         }
     }
     return 0;
@@ -2797,13 +2954,85 @@ static int fat_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
     return 0;
 }
 
+/* The path of a directory node, rebuilt from the volume: the parent by the
+ * `..` entry, the name by the entry in the parent whose first cluster is
+ * the child's, up to the root. What a directory descriptor's `*at` calls
+ * resolve against, so they follow a rename of the directory. */
+static int fat_path(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
+{
+    struct fat_mount *fm = fm_of(mnt);
+    struct fat_node *n = node;
+    uint32_t c = n->first;
+    uint32_t len = 0;
+    int depth;
+
+    if (!n->is_dir) {
+        return -ENOTDIR;
+    }
+    buf[0] = '\0';
+    for (depth = 0; c != fm->root_cluster && depth < WALK_DEPTH; depth++) {
+        struct fat_dirent dotdot;
+        uint32_t parent, cursor = 0;
+        struct fat_scan sc;
+        int found = 0;
+        int rc = fat_read_bytes(fm, cluster_offset(fm, c) + 32, dotdot.raw, 32);
+
+        if (rc != 0) {
+            return rc;
+        }
+        parent = entry_first(dotdot.raw);
+        if (parent == 0) {
+            parent = fm->root_cluster;
+        }
+        for (;;) {
+            int got = dir_scan(fm, 0, parent == fm->root_cluster ? 0 : parent, &cursor, &sc);
+
+            if (got < 0) {
+                return got;
+            }
+            if (got == 0) {
+                break;
+            }
+            if ((sc.ent.raw[11] & ATTR_DIRECTORY) && entry_first(sc.ent.raw) == c &&
+                !raw_eq(sc.ent.raw, (const uint8_t *)".          ") &&
+                !raw_eq(sc.ent.raw, (const uint8_t *)"..         ")) {
+                found = 1;
+                break;
+            }
+        }
+        if (!found) {
+            return -ENOENT;
+        }
+        {
+            uint32_t nl = k_strlen(sc.name);
+
+            if (len + nl + 1 >= cap) {
+                return -ENAMETOOLONG;
+            }
+            k_memmove(buf + nl + 1, buf, len + 1);
+            buf[0] = '/';
+            k_memcpy(buf + 1, sc.name, nl);
+            len += nl + 1;
+        }
+        c = parent;
+    }
+    if (depth == WALK_DEPTH) {
+        return -ENAMETOOLONG;
+    }
+    if (len == 0) {
+        buf[0] = '/';
+        buf[1] = '\0';
+    }
+    return 0;
+}
+
 static const struct vfs_ops vfat_ops = {
     fat_lookup,
     0, /* lookup_rest */
     fat_hold,
     fat_put,
     fat_getattr,
-    0, /* setattr */
+    fat_setattr,
     fat_open,
     fat_release,
     fat_read,
@@ -2822,6 +3051,7 @@ static const struct vfs_ops vfat_ops = {
     fat_sync,
     fat_prepare_unmount,
     fat_unmount,
+    fat_path,
 };
 
 const struct vfs_type vfs_vfat_type = {"vfat", fat_mount, &vfat_ops};

@@ -2,6 +2,7 @@
  * fat32_hosttest.c: the vfat driver over the buffer cache over an image.
  *
  * host-deps: rach2/sys/fs/fat32.c rach2/sys/fs/bcache.c
+ * host-deps: rach2/sys/fs/fat32name.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  *
  * The volumes are mkfatfixture's, built here on first use the way the
@@ -830,6 +831,51 @@ static int write_at(void *node, const void *buf, uint32_t n, uint64_t off)
 static unsigned char pattern[4096];
 static unsigned char back[8192];
 
+/* The names the sequences use, short or, in the matrix's second pass, long:
+   every kind of long name is among them, with entries spanning a sector. */
+static int long_names;
+
+static const char *nm(const char *shortname)
+{
+    static const char *const map[][2] = {
+        {"W1.TXT", "write one.txt"},
+        {"W2.TXT", "Write Two.txt"},
+        {"W3.TXT", "write three, a long name past one entry.txt"},
+        {"W6.TXT", "Grow In Place.txt"},
+        {"W4.TXT", "truncate me.txt"},
+        {"W5.TXT", "unlink me.txt"},
+        {"D1", "Dir One"},
+        {"D2", "Dir Two"},
+        {"R1.TXT", "rename one.txt"},
+        {"R2.TXT", "rename two.txt"},
+        {"R3.TXT", "rename three.txt"},
+        {"RD", "Rename Dir"},
+        {"RD2", "Rename Dir Two"},
+        {"O1.TXT", "over one.txt"},
+        {"O2.TXT", "over two.txt"},
+        {"MANY", "Many Files"},
+    };
+    unsigned i;
+
+    if (!long_names) {
+        return shortname;
+    }
+    for (i = 0; i < sizeof(map) / sizeof(map[0]); i++) {
+        if (streq(map[i][0], shortname)) {
+            return map[i][1];
+        }
+    }
+    return shortname;
+}
+
+static const char *nmf(int i)
+{
+    static char name[40];
+
+    snprintf(name, sizeof(name), long_names ? "file number %02d.txt" : "F%02d", i);
+    return name;
+}
+
 static void fill_pattern(void)
 {
     unsigned i;
@@ -843,7 +889,7 @@ static void fill_pattern(void)
    returns the first error. */
 static int seq_create_write(void)
 {
-    void *n = make_file(mnt.root, "W1.TXT");
+    void *n = make_file(mnt.root, nm("W1.TXT"));
     int rc;
 
     if (!n) {
@@ -856,7 +902,7 @@ static int seq_create_write(void)
 
 static int seq_extend(void)
 {
-    void *n = make_file(mnt.root, "W2.TXT");
+    void *n = make_file(mnt.root, nm("W2.TXT"));
     int rc;
 
     if (!n) {
@@ -872,7 +918,7 @@ static int seq_extend(void)
 
 static int seq_past_end(void)
 {
-    void *n = make_file(mnt.root, "W3.TXT");
+    void *n = make_file(mnt.root, nm("W3.TXT"));
     int rc;
 
     if (!n) {
@@ -890,7 +936,7 @@ static int seq_past_end(void)
    were on the disk as junk until the data reached it. */
 static int seq_grow_in_place(void)
 {
-    void *n = make_file(mnt.root, "W6.TXT");
+    void *n = make_file(mnt.root, nm("W6.TXT"));
     int rc;
 
     if (!n) {
@@ -908,23 +954,18 @@ static int seq_grow_in_place(void)
 static int seq_many_files(void)
 {
     void *d;
-    int i, rc = OPS->mkdir(&mnt, mnt.root, "MANY", 0755);
+    int i, rc = OPS->mkdir(&mnt, mnt.root, nm("MANY"), 0755);
 
     if (rc != 0) {
         return rc;
     }
-    if (OPS->lookup(&mnt, mnt.root, "MANY", &d) != 0) {
+    if (OPS->lookup(&mnt, mnt.root, nm("MANY"), &d) != 0) {
         return -1;
     }
     for (i = 0; i < 20 && rc == 0; i++) {
-        char name[8];
         void *n;
 
-        name[0] = 'F';
-        name[1] = (char)('0' + i / 10);
-        name[2] = (char)('0' + i % 10);
-        name[3] = '\0';
-        rc = OPS->create(&mnt, d, name, 0644, &n);
+        rc = OPS->create(&mnt, d, nmf(i), 0644, &n);
         if (rc == 0) {
             rc = write_at(n, "f", 1, 0);
             OPS->put(&mnt, n);
@@ -936,7 +977,7 @@ static int seq_many_files(void)
 
 static int seq_truncate(void)
 {
-    void *n = make_file(mnt.root, "W4.TXT");
+    void *n = make_file(mnt.root, nm("W4.TXT"));
     void *h;
     int rc;
 
@@ -960,7 +1001,7 @@ static int seq_truncate(void)
 
 static int seq_unlink(void)
 {
-    void *n = make_file(mnt.root, "W5.TXT");
+    void *n = make_file(mnt.root, nm("W5.TXT"));
     int rc;
 
     if (!n) {
@@ -969,7 +1010,7 @@ static int seq_unlink(void)
     rc = write_at(n, pattern, 1000, 0);
     OPS->put(&mnt, n);
     if (rc == 0) {
-        rc = OPS->unlink(&mnt, mnt.root, "W5.TXT");
+        rc = OPS->unlink(&mnt, mnt.root, nm("W5.TXT"));
     }
     return rc;
 }
@@ -977,28 +1018,28 @@ static int seq_unlink(void)
 static int seq_mkdir_rmdir(void)
 {
     void *d;
-    int rc = OPS->mkdir(&mnt, mnt.root, "D1", 0755);
+    int rc = OPS->mkdir(&mnt, mnt.root, nm("D1"), 0755);
 
     if (rc != 0) {
         return rc;
     }
-    if (OPS->lookup(&mnt, mnt.root, "D1", &d) != 0) {
+    if (OPS->lookup(&mnt, mnt.root, nm("D1"), &d) != 0) {
         return -1;
     }
-    rc = OPS->mkdir(&mnt, d, "D2", 0755);
+    rc = OPS->mkdir(&mnt, d, nm("D2"), 0755);
     if (rc == 0) {
-        rc = OPS->rmdir(&mnt, d, "D2");
+        rc = OPS->rmdir(&mnt, d, nm("D2"));
     }
     OPS->put(&mnt, d);
     if (rc == 0) {
-        rc = OPS->rmdir(&mnt, mnt.root, "D1");
+        rc = OPS->rmdir(&mnt, mnt.root, nm("D1"));
     }
     return rc;
 }
 
 static int seq_rename(void)
 {
-    void *n = make_file(mnt.root, "R1.TXT");
+    void *n = make_file(mnt.root, nm("R1.TXT"));
     void *boot;
     int rc;
 
@@ -1008,15 +1049,15 @@ static int seq_rename(void)
     rc = write_at(n, pattern, 700, 0);
     OPS->put(&mnt, n);
     if (rc == 0) {
-        rc = OPS->rename(&mnt, mnt.root, "R1.TXT", mnt.root, "R2.TXT");
+        rc = OPS->rename(&mnt, mnt.root, nm("R1.TXT"), mnt.root, nm("R2.TXT"));
     }
     if (rc == 0 && OPS->lookup(&mnt, mnt.root, "BOOT", &boot) == 0) {
-        rc = OPS->rename(&mnt, mnt.root, "R2.TXT", boot, "R3.TXT");
+        rc = OPS->rename(&mnt, mnt.root, nm("R2.TXT"), boot, nm("R3.TXT"));
         if (rc == 0) {
-            rc = OPS->mkdir(&mnt, mnt.root, "RD", 0755);
+            rc = OPS->mkdir(&mnt, mnt.root, nm("RD"), 0755);
         }
         if (rc == 0) {
-            rc = OPS->rename(&mnt, mnt.root, "RD", boot, "RD2");
+            rc = OPS->rename(&mnt, mnt.root, nm("RD"), boot, nm("RD2"));
         }
         OPS->put(&mnt, boot);
     }
@@ -1025,8 +1066,8 @@ static int seq_rename(void)
 
 static int seq_rename_over(void)
 {
-    void *a = make_file(mnt.root, "O1.TXT");
-    void *b = a ? make_file(mnt.root, "O2.TXT") : 0;
+    void *a = make_file(mnt.root, nm("O1.TXT"));
+    void *b = a ? make_file(mnt.root, nm("O2.TXT")) : 0;
     int rc = a && b ? 0 : -1;
 
     if (rc == 0) {
@@ -1042,7 +1083,7 @@ static int seq_rename_over(void)
         OPS->put(&mnt, b);
     }
     if (rc == 0) {
-        rc = OPS->rename(&mnt, mnt.root, "O1.TXT", mnt.root, "O2.TXT");
+        rc = OPS->rename(&mnt, mnt.root, nm("O1.TXT"), mnt.root, nm("O2.TXT"));
     }
     return rc;
 }
@@ -1087,11 +1128,16 @@ static void load_dump(void)
    zeros, never anything else. */
 static int oracle_ok(void)
 {
-    static const char *const names[] = {"/W1.TXT", "/W2.TXT", "/W3.TXT", "/W6.TXT", "/W4.TXT"};
+    static const char *const names[] = {"W1.TXT", "W2.TXT", "W3.TXT", "W6.TXT", "W4.TXT"};
     int f, i, err;
 
     for (f = 0; f < 5; f++) {
-        void *n = walk(names[f], &err);
+        void *n;
+
+        if (OPS->lookup(&mnt, mnt.root, nm(names[f]), &n) != 0) {
+            n = 0;
+            err = -ENOENT;
+        }
         int got, zeros = 1, written = 1;
 
         if (!n) {
@@ -1120,11 +1166,199 @@ static int oracle_ok(void)
             }
         }
         if (!written && !zeros) {
-            printf("fat32_hosttest: %s holds bytes nobody wrote (%d bytes)\n", names[f], got);
+            printf("fat32_hosttest: %s holds bytes nobody wrote (%d bytes)\n", nm(names[f]), got);
             return 0;
         }
     }
     return 1;
+}
+
+/* The check's listing of the dumped image, for the long names it shows. */
+static int run_check_list(char *out, unsigned long cap)
+{
+    char cmd[300], line[600];
+    void *f;
+    unsigned long n = 0;
+    int rc;
+
+    f = fopen(FIXDIR "/fat32_write.img", "wb");
+    if (!f || fwrite(image, 1, IMG_BYTES, f) != IMG_BYTES) {
+        exit(1);
+    }
+    fclose(f);
+    snprintf(cmd, sizeof(cmd), "%s/mkfatfixture --check %s/fat32_write.img --list", FIXDIR, FIXDIR);
+    f = popen(cmd, "r");
+    if (!f) {
+        exit(1);
+    }
+    out[0] = '\0';
+    while (fgets(line, sizeof(line), f) && n + strlen(line) < cap - 1) {
+        __builtin_memcpy(out + n, line, strlen(line) + 1);
+        n += strlen(line);
+    }
+    rc = pclose(f);
+    return rc == -1 ? -1 : (rc >> 8) & 0xff;
+}
+
+/* Long names of every kind, written and read back by name and by alias,
+   listed by the check and by mtools; the names refused; the attributes. */
+static void long_rows(void)
+{
+    struct vfs_stat st;
+    void *n, *h, *boot;
+    int err, i;
+    static char name[300];
+
+    fill_pattern();
+    load("--junk");
+    check(mount_rw("") == 0, "a writable mount for the long-name rows");
+    n = make_file(mnt.root, "Long Name One.txt");
+    check(n && write_at(n, pattern, 700, 0) == 0, "a long name with spaces and case is created");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    check(walk("/Long Name One.txt", &err) != 0, "and found by its long name");
+    n = walk("/long name one.txt", &err);
+    check(n != 0, "with case folded");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    n = walk("/LONGNA~1.TXT", &err);
+    check(n != 0 && read_all(n, back, sizeof(back)) == 700 &&
+              __builtin_memcmp(back, pattern, 700) == 0,
+          "and by its alias, reading the bytes written");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    check(make_file(mnt.root, "longname1.txt") != 0 && make_file(mnt.root, "longname2.txt") != 0,
+          "two names whose alias base is taken");
+    check(walk("/LONGNA~2.TXT", &err) != 0 && walk("/LONGNA~3.TXT", &err) != 0,
+          "take the next numbers, as mtools numbered them");
+    n = make_file(mnt.root, "Mixed.txt");
+    check(n != 0 && walk("/MIXED~1.TXT", &err) != 0, "a name of mixed case takes an alias");
+    n = make_file(mnt.root, "a.b.c");
+    check(n != 0 && walk("/AB~1.C", &err) != 0, "two dots take an alias");
+    n = make_file(mnt.root, "\xc3\xa9t\xc3\xa9.txt");
+    check(n != 0 && walk("/\xc3\xa9t\xc3\xa9.txt", &err) != 0 && walk("/_T_~1.TXT", &err) != 0,
+          "a name outside ASCII is stored in UTF-16 and read back");
+    for (i = 0; i < 200; i++) {
+        name[i] = (char)('a' + i % 26);
+    }
+    name[200] = '\0';
+    n = make_file(mnt.root, name);
+    check(n != 0 && write_at(n, "long", 4, 0) == 0,
+          "a name of two hundred characters, sixteen entries, is created");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    {
+        static char path[300];
+
+        path[0] = '/';
+        __builtin_memcpy(path + 1, name, 201);
+        n = walk(path, &err);
+        check(n != 0 && read_all(n, back, sizeof(back)) == 4, "and read back by it");
+        if (!n) {
+            printf("fat32_hosttest: the long name's lookup said %d\n", err);
+        }
+    }
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    check(OPS->create(&mnt, mnt.root, "bad:name.txt", 0644, &n) == -EINVAL &&
+              OPS->create(&mnt, mnt.root, "trailing.", 0644, &n) == -EINVAL &&
+              OPS->create(&mnt, mnt.root, "trailing ", 0644, &n) == -EINVAL &&
+              OPS->create(&mnt, mnt.root, "..", 0644, &n) == -EINVAL,
+          "a name FAT cannot store is EINVAL");
+    name[255] = 'a';
+    name[256] = '\0';
+    for (i = 200; i < 255; i++) {
+        name[i] = 'b';
+    }
+    check(OPS->create(&mnt, mnt.root, name, 0644, &n) == -ENAMETOOLONG,
+          "and one past 255 units is ENAMETOOLONG");
+    check_consistent("the volume is consistent with the long names on it", 1);
+    run_check_list(check_out, sizeof(check_out));
+    check(strstr(check_out, "long Long Name One.txt") != 0 &&
+              strstr(check_out, "long longname1.txt") != 0 &&
+              strstr(check_out, "long \xc3\xa9t\xc3\xa9.txt") != 0,
+          "the check lists the long names");
+
+    /* Renames with long names: in place at the same entry count, and moved
+       otherwise; the entries of a removed long name are freed. */
+    check(OPS->rename(&mnt, mnt.root, "Long Name One.txt", mnt.root, "Long Name Two.txt") == 0 &&
+              walk("/Long Name Two.txt", &err) != 0 && walk("/Long Name One.txt", &err) == 0,
+          "a long name renamed in place");
+    check(OPS->rename(&mnt, mnt.root, "Long Name Two.txt", mnt.root, "SHORT.TXT") == 0 &&
+              walk("/SHORT.TXT", &err) != 0,
+          "a long name renamed to a short one");
+    check(OPS->unlink(&mnt, mnt.root, "longname2.txt") == 0 && walk("/longname2.txt", &err) == 0,
+          "a long name unlinked");
+    check_consistent("the volume is consistent after the long renames and the unlink", 1);
+
+    /* A rename of an open file: the description writes at the new place. */
+    n = walk("/SHORT.TXT", &err);
+    boot = walk("/BOOT", &err);
+    check(n && boot && OPS->open(&mnt, n, 0, &h) == 0, "an open file to rename");
+    check(OPS->rename(&mnt, mnt.root, "SHORT.TXT", boot, "moved name.txt") == 0,
+          "renamed across directories while open");
+    check(OPS->write(&mnt, h, pattern, 900, 700) == 900, "and written through its description");
+    OPS->release(&mnt, h);
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    if (boot) {
+        OPS->put(&mnt, boot);
+    }
+    n = walk("/BOOT/moved name.txt", &err);
+    check(n && OPS->getattr(&mnt, n, &st) == 0 && st.size == 1600,
+          "the new name has the size the write gave it");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    check_consistent("the volume is consistent after the open file's rename", 1);
+
+    /* The attributes a volume can store. */
+    n = walk("/BOOT/moved name.txt", &err);
+    check(n != 0, "the file for the attribute rows");
+    if (n) {
+        st.mode = 0555;
+        check(OPS->setattr(&mnt, n, VFS_SET_MODE, &st) == 0 && OPS->getattr(&mnt, n, &st) == 0 &&
+                  (st.mode & 0777) == 0555,
+              "clearing the write bits sets the read-only attribute");
+        st.mode = 0755;
+        check(OPS->setattr(&mnt, n, VFS_SET_MODE, &st) == 0 && OPS->getattr(&mnt, n, &st) == 0 &&
+                  (st.mode & 0777) == 0755,
+              "and setting them clears it");
+        st.mode = 0700;
+        check(OPS->setattr(&mnt, n, VFS_SET_MODE, &st) == -EPERM,
+              "a mode change outside the write bits is EPERM");
+        st.uid = 5;
+        check(OPS->setattr(&mnt, n, VFS_SET_UID, &st) == -EPERM, "an owner change is EPERM");
+        st.mtime_sec = 946684800;
+        st.atime_sec = 1000000000;
+        check(OPS->setattr(&mnt, n, VFS_SET_MTIME | VFS_SET_ATIME, &st) == 0 &&
+                  OPS->getattr(&mnt, n, &st) == 0 && st.mtime_sec == 946684800 &&
+                  st.atime_sec == 1000000000 - 1000000000 % 86400,
+              "the times are stored to FAT's resolution");
+        OPS->put(&mnt, n);
+    }
+    check(OPS->prepare_unmount(&mnt) == 0, "the clean unmount");
+    unmount_image();
+    check_consistent("the volume is consistent and clean after the long-name rows", 0);
+    if (system("which mdir >/dev/null 2>&1") == 0) {
+        char cmd[300];
+
+        snprintf(cmd, sizeof(cmd),
+                 "mdir -i %s/fat32_write.img ::/BOOT 2>/dev/null | grep -q 'moved name.txt'",
+                 FIXDIR);
+        check(system(cmd) == 0, "mtools lists the long name this driver wrote");
+        snprintf(
+            cmd, sizeof(cmd),
+            "mdir -i %s/fat32_write.img ::/ 2>/dev/null | grep -q 'LONGNA~2 TXT.*longname1.txt'",
+            FIXDIR);
+        check(system(cmd) == 0, "and the alias this driver gave beside it");
+    }
 }
 
 /* A dirty volume at mount: clean, repaired, or refused. */
@@ -1350,10 +1584,6 @@ static void write_rows(void)
     check(OPS->rmdir(&mnt, mnt.root, "HELD") == 0, "and succeeds once it is put");
     check(OPS->rmdir(&mnt, mnt.root, "BOOT") == -ENOTEMPTY,
           "rmdir of a full directory is ENOTEMPTY");
-    check(OPS->create(&mnt, mnt.root, "bad name.txt", 0644, &n) == -EINVAL &&
-              OPS->create(&mnt, mnt.root, "Mixed.txt", 0644, &n) == -EINVAL &&
-              OPS->create(&mnt, mnt.root, "toolongname.txt", 0644, &n) == -EINVAL,
-          "a name that is not a short name is EINVAL in this phase");
 
     /* ENOSPC is decided before anything is written. */
     n = make_file(mnt.root, "BIG.BIN");
@@ -1402,11 +1632,10 @@ static void write_rows(void)
 
 /* The interruption matrix: every sequence stopped after each of its
    writes, the image judged by the walk. */
-static void matrix_rows(void)
+static void matrix_pass(void)
 {
     int i, k, total = 0;
 
-    fill_pattern();
     for (i = 0; i < (int)(sizeof(sequences) / sizeof(sequences[0])); i++) {
         int n;
 
@@ -1457,7 +1686,17 @@ static void matrix_rows(void)
             total++;
         }
     }
-    printf("fat32_hosttest: %d stops walked\n", total);
+    printf("fat32_hosttest: %d stops walked with %s names\n", total, long_names ? "long" : "short");
+}
+
+static void matrix_rows(void)
+{
+    fill_pattern();
+    long_names = 0;
+    matrix_pass();
+    long_names = 1;
+    matrix_pass();
+    long_names = 0;
 }
 
 static void pool_rows(void)
@@ -1554,6 +1793,7 @@ int main(void)
     malformed_rows();
     pool_rows();
     write_rows();
+    long_rows();
     dirty_rows();
     matrix_rows();
     if (fails == 0) {

@@ -35,6 +35,7 @@ C_SRC = kernel.c \
         sys/fs/bcache.c \
     sys/fs/vfs.c \
     sys/fs/fat32.c \
+    sys/fs/fat32name.c \
         sys/block/mbr.c \
         sys/block/ata.c \
         sys/block/diskcmd.c \

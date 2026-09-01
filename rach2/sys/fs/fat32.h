@@ -18,8 +18,10 @@
  * never names a free cluster. Data is written back. The dirty flag is set
  * in both places before the first metadata write of a mount and cleared by
  * a clean unmount; FSInfo is kept at sync and unmount. Every mutation runs
- * under the mount's namespace lock. Names are short names in this phase: a
- * name that does not fit 8.3 with each part in one case answers EINVAL.
+ * under the mount's namespace lock. A name is checked and stored by the
+ * rules in fat32name.h: short alone when it fits, long entries in front of
+ * an alias otherwise. A dirty volume is checked at mount and the states
+ * this driver's own order leaves are repaired; any other mounts read-only.
  *
  * A node is an entry in a fixed per-mount pool of `FAT32_NODES`, freed at its
  * last put; a lookup that finds the pool full answers ENOMEM. A directory's
