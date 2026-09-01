@@ -270,6 +270,7 @@ void bcache_device_gone(block_device_t *dev)
     int i;
     int failed = 0;
 
+    dev->flags |= BLOCK_GONE;
     for (i = 0; i < BCACHE_BUFFERS; i++) {
         if (bufs[i].dev != dev) {
             continue;

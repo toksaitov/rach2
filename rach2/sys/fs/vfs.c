@@ -1513,6 +1513,7 @@ int vfs_do_mount(const char *source, const char *target, const char *type,
  */
 int vfs_do_umount(const char *target)
 {
+    int gone;
     struct vfs_ref tref;
     struct vfs_mount *m;
     struct vfs_ref cov;
@@ -1544,7 +1545,12 @@ int vfs_do_umount(const char *target)
         return -EBUSY;
     }
     vfs_ns_lock(m);
-    if (m->type->ops->sync) {
+    /* A device that has gone takes nothing, so the three writes below are
+     * not attempted: each would fail, and an unmount that fails on a stick
+     * that is no longer there would leave the mount for good. What it held
+     * is let go of, and that is the whole of the unmount. */
+    gone = m->dev && (m->dev->flags & BLOCK_GONE);
+    if (!gone && m->type->ops->sync) {
         rc = m->type->ops->sync(m);
         if (rc != 0) {
             vfs_ns_unlock(m);
@@ -1552,7 +1558,7 @@ int vfs_do_umount(const char *target)
             return rc;
         }
     }
-    if (m->type->ops->prepare_unmount) {
+    if (!gone && m->type->ops->prepare_unmount) {
         rc = m->type->ops->prepare_unmount(m);
         if (rc != 0) {
             vfs_ns_unlock(m);
@@ -1560,7 +1566,7 @@ int vfs_do_umount(const char *target)
             return rc;
         }
     }
-    if (bcache_sync(m->dev) != 0) {
+    if (!gone && bcache_sync(m->dev) != 0) {
         vfs_ns_unlock(m);
         m->state = VFS_ACTIVE;
         return -EIO; /* nothing irreversible has happened yet */

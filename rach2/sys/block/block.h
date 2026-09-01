@@ -30,6 +30,10 @@ struct block_request;
 /* The medium refuses writes and says so: a stick with its switch across, or
  * a partition view over one. Every mount of it is read-only. */
 #define BLOCK_READ_ONLY 0x4u
+/* The device has gone: a stick pulled out. Nothing can reach it again, so an
+ * unmount writes nothing and only lets go of what it holds. Set by the cache
+ * when the disk layer tells it, cleared when the device is published again. */
+#define BLOCK_GONE 0x8u
 
 struct block_device {
     uint32_t sector_size;
