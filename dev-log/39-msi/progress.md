@@ -1,9 +1,9 @@
 # Milestone 39 progress
 
 Phase 1: arrival and inventory
-- [ ] the tracking files; the review checkpoints and their files
-- [ ] rach2.apicdiag: cpuid, IA32_APIC_BASE, the APIC page's registers, the two LINT entries, the xHCI's and HDA's capability lists
-- [ ] hardware.md with QEMU's values and a column for the Lenovo's; the table in notes.md; every specification number checked against the machine
+- [x] the tracking files; the review checkpoints and their files
+- [x] rach2.apicdiag: cpuid, IA32_APIC_BASE, the APIC page's registers, the two LINT entries, the xHCI's and HDA's capability lists
+- [x] hardware.md with QEMU's values and a column for the Lenovo's; the table in notes.md; every specification number checked against the machine
 
 Phase 2: the APIC, the vectors and MSI
 - [ ] lapic.c, the MSR helper, the sixteen stubs, the router's two ranges, rach2.nomsi
