@@ -54,6 +54,12 @@
  * out, and the next scan will pick it up again. */
 #define SETTLE_LIMIT_MS 5000u
 
+/* How long the controller has to give a slot back. It is five seconds and
+ * not one step, because the answer is a command like any other and a
+ * controller that is busy is not a controller that has failed; past it the
+ * entry is a tombstone. */
+#define CLOSE_LIMIT_MS 5000u
+
 /* Where a device is in its enumeration. */
 #define ST_FREE      0
 #define ST_SETTLING  1
@@ -72,6 +78,10 @@
 #define ST_FAILED    13
 #define ST_CLOSING   14
 #define ST_HALTED    16
+/* A device whose slot the controller never gave back. The entry is not free
+ * and never will be: the controller may still write into the rings and the
+ * context that slot names, so nothing of this device is reused. */
+#define ST_TOMBSTONE 17
 
 struct usb_device_state {
     int state;
@@ -313,7 +323,18 @@ static void step_closing(struct usb_device_state *d)
          * kernel cannot get back is one of four it has lost, and holding the
          * entry as well would lose a device table row too. */
         if (done != 1) {
-            klog(KLOG_WARN, "usb", "slot: %d was not given back", d->slot);
+            /*
+             * The controller never answered. Its slot, the rings under it and
+             * the context it names stay the controller's, because it may
+             * still write into them; the entry becomes a tombstone and this
+             * kernel is one device poorer until the machine restarts. Giving
+             * the slot back here and reusing the entry is what would hand the
+             * next device a ring the controller is still reading.
+             */
+            klog(KLOG_WARN, "usb", "slot: %d was not given back; the entry is lost", d->slot);
+            enumerating = -1;
+            d->state = ST_TOMBSTONE;
+            return;
         }
         xhci_device_closed(d->slot);
         d->slot = 0;
@@ -323,7 +344,7 @@ static void step_closing(struct usb_device_state *d)
     }
     if (xhci_device_close(d->slot) == 0) {
         d->closing_asked = 1;
-        d->deadline = core_ms + STEP_MS;
+        d->deadline = core_ms + CLOSE_LIMIT_MS;
     }
 }
 
@@ -792,7 +813,8 @@ void usb_core_step(uint32_t elapsed_ms)
     for (i = 0; i < USB_MAX_DEVICES; i++) {
         struct usb_port_status status;
 
-        if (devices[i].state == ST_FREE || devices[i].state == ST_CLOSING) {
+        if (devices[i].state == ST_FREE || devices[i].state == ST_CLOSING ||
+            devices[i].state == ST_TOMBSTONE) {
             continue;
         }
         if (xhci_port_status(devices[i].port, &status) != 0 || !status.connected) {
@@ -848,7 +870,8 @@ void usb_core_step(uint32_t elapsed_ms)
     for (i = 0; i < USB_MAX_DEVICES; i++) {
         if (devices[i].state == ST_RUNNING) {
             step_running(&devices[i]);
-        } else if (devices[i].state != ST_FREE && devices[i].state != ST_FAILED) {
+        } else if (devices[i].state != ST_FREE && devices[i].state != ST_FAILED &&
+                   devices[i].state != ST_TOMBSTONE) {
             step_device(&devices[i]);
         }
     }
@@ -875,7 +898,7 @@ int usb_core_idle(void)
 
     for (i = 0; i < USB_MAX_DEVICES; i++) {
         if (devices[i].state != ST_FREE && devices[i].state != ST_RUNNING &&
-            devices[i].state != ST_FAILED) {
+            devices[i].state != ST_FAILED && devices[i].state != ST_TOMBSTONE) {
             return 0;
         }
     }

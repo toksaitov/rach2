@@ -724,7 +724,10 @@ static uint32_t completion_tail;
  * three, which is index seven at the most, and refuses anything above that
  * rather than growing a table for devices it has no use for.
  */
-#define XHCI_MAX_DCI 8
+/* Endpoint numbers run to 15 in each direction, so a device context has 31
+ * endpoints and its index runs to 31; a stick picks its own numbers and the
+ * ones it picks are its business, not this driver's. */
+#define XHCI_MAX_DCI 32
 #define XHCI_EP_RING_TRBS 16
 
 /* Command and transfer block types this phase adds. */
@@ -772,6 +775,10 @@ struct xhci_slot {
      * was not moved; what was is the difference, and only this side knows the
      * number it started from. */
     uint32_t asked[XHCI_MAX_DCI];
+    /* What the caller called the transfer in flight on each endpoint. It
+     * goes back in the completion, so a caller that gave up on one can tell
+     * the answer to that from the answer to what it is waiting for now. */
+    uint32_t generation[XHCI_MAX_DCI];
 };
 
 static struct xhci_slot slots[XHCI_SLOTS + 1];
@@ -1026,6 +1033,9 @@ static void event_dispatch(const uint32_t *trb)
         c->length = (c->endpoint > 0 && c->endpoint < XHCI_MAX_DCI)
                         ? slots[c->device].asked[c->endpoint]
                         : 0;
+        c->generation = (c->endpoint > 0 && c->endpoint < XHCI_MAX_DCI)
+                            ? slots[c->device].generation[c->endpoint]
+                            : 0;
         if (code == TRB_COMPLETION_SUCCESS) {
             c->status = USB_XFER_OK;
         } else if (code == TRB_COMPLETION_SHORT) {
@@ -1590,7 +1600,7 @@ static uint32_t dci_of(const struct usb_endpoint *ep)
 {
     uint32_t dci;
 
-    if (ep->number < 0 || ep->number > 3) {
+    if (ep->number < 0 || ep->number > 15) {
         return 0;
     }
     if (ep->number == 0) {
@@ -1735,6 +1745,7 @@ int xhci_submit(int device, int endpoint, const struct usb_transfer *transfer)
     }
 
     s->asked[dci] = transfer->length;
+    s->generation[dci] = transfer->generation;
 
     if (transfer->setup != 0) {
         uint32_t setup_lo;

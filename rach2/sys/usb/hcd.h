@@ -80,6 +80,15 @@ struct usb_transfer {
     uint8_t *buffer;      /* NULL for a transfer with no data stage */
     uint32_t length;      /* bytes the buffer can hold */
     int direction;        /* `USB_DIR_IN` or `USB_DIR_OUT` for the data stage */
+    /*
+     * A number the caller chooses, given back in the completion. A device
+     * that can be pulled out in the middle of a transfer needs it: the
+     * caller gives up on a transfer at its deadline and reuses the buffer,
+     * and the completion that arrives afterwards names a generation the
+     * caller is no longer waiting for, which is how it is told from the one
+     * it wants. A caller with nothing to distinguish passes zero.
+     */
+    uint32_t generation;
 };
 
 /* How a transfer ended. `USB_XFER_STALLED` is separate from the other
@@ -106,6 +115,7 @@ struct usb_completion {
     uint32_t length;   /* bytes the transfer asked for */
     uint32_t residual; /* what the controller did not move, so length less this
                         * is what arrived */
+    uint32_t generation; /* what the transfer carried */
 };
 
 /*

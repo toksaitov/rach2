@@ -5,9 +5,19 @@ column is filled in milestone 43; nothing here touches it.
 
 ## The controller's tables
 
-| Table | Before | After | Bytes before | Bytes after |
-|-------|--------|-------|--------------|-------------|
-| (filled in phase 2) | | | | |
+Four slots and eight endpoint indexes before this milestone; eight slots and
+thirty-two indexes after it, which is fifteen endpoints in each direction and
+the number a stick picks its own from. The scratchpad is the controller's own
+demand and did not change: QEMU asks for none and the notebook for one.
+
+| Table | Before | After |
+|-------|--------|-------|
+| Device context base array | 40 | 72 |
+| Device contexts | 2560 | 18432 |
+| Input context | 576 | 2112 |
+| Endpoint rings | 10240 | 73728 |
+| Command and event rings | 8192 | 8192 |
+| Total | 21608 | 102536 |
 
 ## The stick images
 

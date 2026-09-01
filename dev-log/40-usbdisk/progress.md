@@ -6,9 +6,9 @@ Phase 1: arrival and inventory
 - [x] what mkiso.sh produces, its MBR and any GUID table, in notes.md
 
 Phase 2: the controller interface and the tables
-- [ ] the transfer generation, the exposed closing state and its deadline, bulk endpoints
-- [ ] endpoint numbers to 15, eight slots and devices, the tables measured
-- [ ] the xhci rows; tests/run usb unchanged
+- [x] the transfer generation, the closing state's deadline and its tombstone, bulk endpoints
+- [x] endpoint numbers to 15, eight slots and devices, the tables measured
+- [x] the xhci rows; tests/run usb unchanged
 
 Phase 3: the class driver
 - [ ] msc.c: the transport, bring-up, transfers, the error matrix, reset recovery

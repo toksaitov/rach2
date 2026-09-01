@@ -36,7 +36,7 @@
  * devices that could never be opened. Each ring is one page, which is 256
  * blocks of sixteen bytes.
  */
-#define XHCI_SLOTS     4
+#define XHCI_SLOTS     8
 #define XHCI_RING_TRBS 256
 
 /*

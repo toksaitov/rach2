@@ -63,6 +63,26 @@ area and holds zeros where a header would be. So the stick image of phase 6
 does not keep a first entry, because there is none; it writes the ISO's own
 entry and the exFAT volume's beside it.
 
+## Phase 2 record
+
+`usb_transfer` carries a generation and `usb_completion` gives it back; the
+controller keeps one per endpoint, which is enough because one transfer is in
+flight on an endpoint at a time. Endpoint numbers run to 15 in each
+direction, so the device context index runs to 31 and the tables grew with
+it; the sizes are in `hardware.md`. The slot count and the device table are
+eight.
+
+The close that never answers changed. It used to give the slot back and free
+the entry with a record, which hands the next device rings the controller may
+still be reading; now the entry becomes a tombstone, the slot is never given
+back, and the record says the entry is lost. Five seconds is the deadline,
+not one step, because the answer is a command like any other.
+
+The rows are proved by four mutations: the generation not kept, a bulk
+endpoint opened with an interrupt endpoint's context type, an endpoint above
+three refused, and a handle past the tables addressed, which the sanitizer
+stops at the read that the bound exists to prevent.
+
 ## Open items
 
 (none)

@@ -1471,8 +1471,169 @@ int main(void)
         CHECK("an in endpoint is odd", dci_of(&ep) == 3);
         ep.direction = USB_DIR_OUT;
         CHECK("an out endpoint is even", dci_of(&ep) == 2);
-        ep.number = 9;
-        CHECK("an endpoint beyond this kernel's table is refused", dci_of(&ep) == 0);
+        ep.number = 15;
+        ep.direction = USB_DIR_IN;
+        CHECK("the last endpoint a device may have is index 31", dci_of(&ep) == 31);
+        ep.number = 16;
+        CHECK("an endpoint number no device may have is refused", dci_of(&ep) == 0);
+        ep.number = 8;
+        ep.direction = USB_DIR_IN;
+        CHECK("an endpoint a stick might pick is reached", dci_of(&ep) == 17);
+    }
+
+    /* ---- bulk endpoints, the larger tables, and the generation ---- */
+
+    /*
+     * A stick's two endpoints are bulk, and a bulk endpoint's context type is
+     * 2 outward and 6 inward, against the interrupt endpoint's 3 and 7. The
+     * packet size is the descriptor's and not a number this driver knows: 64
+     * at full speed, 512 at high speed, 1024 at SuperSpeed.
+     */
+    model_reset();
+    CHECK("the capability registers are read", xhci_read_caps() == 0);
+    CHECK("halted and reset", xhci_halt_reset() == 0);
+    CHECK("started", xhci_start() == 0);
+    reg[M_PORTSC(0)] |= M_PORTSC_CCS | (3u << 10);
+    CHECK("a slot is asked for", xhci_device_open(0, USB_SPEED_HIGH) == 0);
+    xhci_events();
+    CHECK("the controller answers with one", xhci_command_done(&result) == 1);
+    CHECK("the device is addressed", xhci_device_address(1) == 0);
+    xhci_events();
+    CHECK("the controller answers", xhci_command_done(&result) == 1);
+    {
+        struct usb_endpoint ep;
+        uint32_t *entry;
+
+        ep.number = 2;
+        ep.direction = USB_DIR_OUT;
+        ep.type = USB_EP_BULK;
+        ep.max_packet = 512;
+        ep.interval = 0;
+        CHECK("a bulk out endpoint is opened", xhci_endpoint_open(1, &ep) == 0);
+        entry = (uint32_t *)(void *)&input_ctx[(dci_of(&ep) + 1u) * 64u];
+        CHECK("with the context type a bulk out endpoint has",
+              ((entry[1] >> 3) & 7u) == 2u);
+        CHECK("and the packet size the descriptor gave", (entry[1] >> 16) == 512u);
+        xhci_events();
+        CHECK("the controller answers", xhci_command_done(&result) == 1);
+
+        ep.direction = USB_DIR_IN;
+        CHECK("a bulk in endpoint is opened", xhci_endpoint_open(1, &ep) == 0);
+        entry = (uint32_t *)(void *)&input_ctx[(dci_of(&ep) + 1u) * 64u];
+        CHECK("with the context type a bulk in endpoint has",
+              ((entry[1] >> 3) & 7u) == 6u);
+        xhci_events();
+        CHECK("the controller answers", xhci_command_done(&result) == 1);
+
+        ep.number = 8;
+        ep.max_packet = 64;
+        CHECK("an endpoint numbered eight is opened, which a stick may pick",
+              xhci_endpoint_open(1, &ep) == 0);
+        entry = (uint32_t *)(void *)&input_ctx[(dci_of(&ep) + 1u) * 64u];
+        CHECK("at its own index", dci_of(&ep) == 17);
+        CHECK("with the packet size a full-speed endpoint has",
+              (entry[1] >> 16) == 64u);
+        xhci_events();
+        CHECK("the controller answers", xhci_command_done(&result) == 1);
+
+        ep.number = 1;
+        ep.direction = USB_DIR_IN;
+        ep.type = USB_EP_INTERRUPT;
+        ep.max_packet = 8;
+        ep.interval = 10;
+        CHECK("an interrupt endpoint beside them is opened", xhci_endpoint_open(1, &ep) == 0);
+        entry = (uint32_t *)(void *)&input_ctx[(dci_of(&ep) + 1u) * 64u];
+        CHECK("with the context type an interrupt in endpoint has",
+              ((entry[1] >> 3) & 7u) == 7u);
+        xhci_events();
+        CHECK("the controller answers", xhci_command_done(&result) == 1);
+    }
+
+    /* A transfer carries a number of the caller's, and the completion gives
+       it back: a caller that gave up on one at its deadline tells the answer
+       to that from the answer to what it is waiting for now. */
+    {
+        struct usb_transfer transfer;
+        struct usb_completion completion;
+        uint8_t buffer[8];
+
+        transfer.setup = 0;
+        transfer.buffer = buffer;
+        transfer.length = sizeof(buffer);
+        transfer.direction = USB_DIR_IN;
+        transfer.generation = 0x51;
+        CHECK("a transfer is queued with a generation", xhci_submit(1, 3, &transfer) == 0);
+        xhci_events();
+        CHECK("the completion is reported", xhci_poll(&completion) == 1);
+        CHECK("and carries the generation the transfer had", completion.generation == 0x51);
+
+        transfer.generation = 0x52;
+        CHECK("a second transfer is queued", xhci_submit(1, 3, &transfer) == 0);
+        xhci_events();
+        CHECK("its completion is reported", xhci_poll(&completion) == 1);
+        CHECK("with the second generation and not the first",
+              completion.generation == 0x52);
+    }
+
+    /* A completion for a device that has been closed is dropped: the slot may
+       already belong to the next device, and advancing that device's transfer
+       with this one's completion is the defect the drop exists for. */
+    {
+        struct usb_transfer transfer;
+        struct usb_completion completion;
+        uint8_t buffer[8];
+
+        transfer.setup = 0;
+        transfer.buffer = buffer;
+        transfer.length = sizeof(buffer);
+        transfer.direction = USB_DIR_IN;
+        transfer.generation = 0x53;
+        CHECK("a transfer is queued and answered", xhci_submit(1, 3, &transfer) == 0);
+        /* The controller has written the event; the device goes before the
+           driver reads it, which is what a stick pulled mid-transfer is. */
+        xhci_device_closed(1);
+        xhci_events();
+        CHECK("a completion for a device that has gone is dropped",
+              xhci_poll(&completion) == 0);
+    }
+
+    /* Every slot the tables hold, and one more. The notebook has four devices
+       soldered to it that this kernel refuses, so a keyboard, a mouse and two
+       sticks beside them is what eight is for. */
+    model_reset();
+    CHECK("the capability registers are read", xhci_read_caps() == 0);
+    CHECK("halted and reset", xhci_halt_reset() == 0);
+    CHECK("started", xhci_start() == 0);
+    {
+        int slot;
+
+        reg[M_PORTSC(0)] |= M_PORTSC_CCS | (3u << 10);
+        for (slot = 1; slot <= XHCI_SLOTS; slot++) {
+            CHECK("a slot is asked for", xhci_device_open(0, USB_SPEED_HIGH) == 0);
+            xhci_events();
+            CHECK("and given", xhci_command_done(&result) == 1 && result.device == slot);
+            CHECK("and it can be addressed", xhci_device_address(result.device) == 0);
+            xhci_events();
+            CHECK("the controller answers", xhci_command_done(&result) == 1);
+        }
+        /* The ninth. A controller with more slots than this kernel's tables
+           hold answers with a handle past their end, and everything that
+           takes a handle refuses it rather than writing past the tables. */
+        CHECK("a ninth slot is asked for", xhci_device_open(0, USB_SPEED_HIGH) == 0);
+        xhci_events();
+        CHECK("and the controller answers with a handle past the tables",
+              xhci_command_done(&result) == 1 && result.device == XHCI_SLOTS + 1);
+        CHECK("which cannot be addressed", xhci_device_address(result.device) != 0);
+        {
+            struct usb_endpoint ep;
+
+            ep.number = 1;
+            ep.direction = USB_DIR_IN;
+            ep.type = USB_EP_BULK;
+            ep.max_packet = 512;
+            ep.interval = 0;
+            CHECK("and takes no endpoint", xhci_endpoint_open(result.device, &ep) != 0);
+        }
     }
 
     /* ---- the interrupter ---- */
