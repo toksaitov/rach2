@@ -11,7 +11,8 @@
  * * `volumes`: the two volumes on the stick mount, read and unmount, and a
  *   raw read of `/dev/usb0` gives the table their partitions came from.
  * * `write`: a file written to the FAT volume, synced, unmounted, and read
- *   back after the volume is mounted again.
+ *   back after the volume is mounted again; the unmount must have flushed
+ *   the stick's own cache, which the stick's line in `/proc/usb` counts.
  * * `hold`: the volume is mounted, a file is opened and read in a loop, and
  *   `USBDISKPROBE HOLDING` is printed so the harness can pull the stick.
  *   The read that meets the pull answers `EIO`; so does a write; `umount2`
@@ -336,10 +337,40 @@ static void part_volumes(void)
     ok();
 }
 
+/** The number after `flushes ` on the stick's line of /proc/usb, or -1. */
+static int stick_flushes(void)
+{
+    int n = slurp("/proc/usb");
+    int at;
+
+    if (n <= 0) {
+        return -1;
+    }
+    for (at = 0; at + 8 < n; at++) {
+        if (text[at] == 'f' && text[at + 1] == 'l' && text[at + 2] == 'u' && text[at + 3] == 's' &&
+            text[at + 4] == 'h' && text[at + 5] == 'e' && text[at + 6] == 's' &&
+            text[at + 7] == ' ') {
+            int value = 0;
+            int i = at + 8;
+
+            if (text[i] < '0' || text[i] > '9') {
+                return -1;
+            }
+            while (text[i] >= '0' && text[i] <= '9') {
+                value = value * 10 + (text[i] - '0');
+                i++;
+            }
+            return value;
+        }
+    }
+    return -1;
+}
+
 static void part_write(void)
 {
     int fd;
     int n;
+    int flushes_before;
 
     if (mount_at("/dev/usb0p1", "vfat", 0) != 0) {
         fail("the FAT volume would not mount for writing");
@@ -356,8 +387,15 @@ static void part_write(void)
     }
     sys1(SYS_CLOSE, fd);
     sys1(SYS_SYNC, 0);
+    /* The unmount tells the stick to put its own cache on the medium, which
+       its line in /proc/usb counts. A volume whole on the wire is not yet
+       whole on the medium. */
+    flushes_before = stick_flushes();
     if (sys2(SYS_UMOUNT2, (int)MNT, 0) != 0) {
         fail("the volume would not unmount after the write");
+    }
+    if (flushes_before < 0 || stick_flushes() <= flushes_before) {
+        fail("the unmount did not flush the stick's cache");
     }
     if (mount_at("/dev/usb0p1", "vfat", MS_RDONLY) != 0) {
         fail("the volume would not mount again");

@@ -593,6 +593,8 @@ int usbdisk_describe(int n, char *out, int size)
              disks[n].state == DISK_CLOSING ? "closing"
              : disks[n].state == DISK_LIVE  ? "ready"
                                             : "reading");
+    at = put(out, size, at, " flushes ");
+    at = putnum(out, size, at, ident.flushes);
     if (ident.write_protect) {
         at = put(out, size, at, " ro");
     }

@@ -427,6 +427,15 @@ void kirq_restore(uint32_t flags)
     (void)flags;
 }
 
+/* The flushes the drivers count for /proc/disk; a stick's SYNCHRONIZE CACHE
+   is one of them. */
+static int flushes_counted;
+
+void block_count_flush(void)
+{
+    flushes_counted++;
+}
+
 /* The block layer's side, recorded rather than driven. */
 static struct {
     int completions;
@@ -518,6 +527,7 @@ static void model_reset(void)
     }
     arrivals = 0;
     departures = 0;
+    flushes_counted = 0;
 }
 
 static struct block_request *make_request(int write, uint64_t lba, uint32_t count,
@@ -889,6 +899,12 @@ int main(void)
             pump(1);
         }
         CHECK("and completes", block.completions == 1 && block.last_status == 0);
+        CHECK("and is counted with the disk's flushes", flushes_counted == 1);
+        {
+            struct msc_ident ident;
+
+            CHECK("and on the stick's own line", msc_ident(0, &ident) == 0 && ident.flushes == 1);
+        }
     }
 
     if (fails == 0) {

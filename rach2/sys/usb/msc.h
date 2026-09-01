@@ -32,6 +32,7 @@ struct msc_ident {
     char product[17];
     uint64_t blocks;
     uint32_t block_size;
+    uint32_t flushes; /* SYNCHRONIZE CACHE commands sent to it */
     int write_protect;
     int closing;
     int device;

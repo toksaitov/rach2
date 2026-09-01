@@ -172,6 +172,7 @@ struct msc_device {
      * because `scratch` is the next command's buffer as well. */
     char vendor[9];
     char product[17];
+    uint32_t flushes; /* SYNCHRONIZE CACHE commands sent, for /proc/usb */
     uint64_t blocks;
     uint32_t block_size;
     int write_protect;
@@ -576,6 +577,7 @@ int msc_ident(int index, struct msc_ident *out)
         out->product[i] = m->product[i];
     }
     out->blocks = m->blocks;
+    out->flushes = m->flushes;
     out->block_size = m->block_size;
     out->write_protect = m->write_protect;
     out->closing = m->closing;
@@ -826,6 +828,8 @@ static int send_synchronize(struct msc_device *m)
 
     cdb_clear(cdb, 10);
     cdb[0] = SCSI_SYNCHRONIZE;
+    m->flushes++;
+    block_count_flush(); /* reported by /proc/disk beside the disk's own */
     return command_begin(m, cdb, 10, 0, 0, 0);
 }
 
