@@ -74,4 +74,5 @@ reset|qemu-system-i386|core
 runner|-|core
 mount|qemu-system-i386,mformat,mcopy,mdir|core
 fatwrite|qemu-system-i386,mformat,mcopy,mdir,python3|core
+exfat|qemu-system-i386,python3|core
 scratch|qemu-system-i386,ssh,mformat,mcopy,xorriso,gzip|full

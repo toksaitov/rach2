@@ -166,6 +166,15 @@ else
     row "[----]" "dosfstools" "optional, for fsck.fat over tests/run fatwrite; $(hint dosfstools)"
 fi
 
+# exfatprogs (Linux) or the system's fsck_exfat (macOS) checks an exFAT
+# volume this kernel wrote (tests/run exfat runs it when it is there); the
+# suite's own reader judges the volume without it.
+if command -v fsck.exfat >/dev/null 2>&1 || command -v fsck_exfat >/dev/null 2>&1; then
+    row "[PASS]" "exfatprogs" "fsck.exfat or fsck_exfat present"
+else
+    row "[----]" "exfatprogs" "optional, for fsck.exfat over tests/run exfat; $(hint exfatprogs)"
+fi
+
 # FUSE mounts a KRFFS image on the host (make -C krffs mount); nothing in the
 # default build or the suites needs it. Checked via pkg-config, which is now
 # also optional for the same reason.

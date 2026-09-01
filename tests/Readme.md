@@ -83,6 +83,7 @@ Programs that need another boot, disk, network exchange, or result contract have
 * `tests/run socket` starts a host peer and runs `tcptest` and `udptest` against it.
 * `tests/run diskfull` fills a disk-backed root and requires `ENOSPC` rather than `EIO`.
 * `tests/run fatwrite` runs `fatwriteprobe` in its write, read-back, crash and repair modes on a FAT32 partition, then BusyBox and `lagprobe writers` on the same volume.
+* `tests/run exfat` runs the same probes on an exFAT partition, which their second argument names as the type, and judges the volume with `mkexfatfixture` and, where the host has one, `fsck_exfat` or `fsck.exfat`.
 * `tests/run mount` runs `lagprobe` under the lag device (`rach2.blocklag=N`) in its sleep, deadline, write, mounted, root and blockfail modes, `mountprobe` in its mount and claim modes, and BusyBox `mount` on os-real, on a disk whose second partition is a FAT32 volume written by mtools.
 * `tests/run usb` runs `usbprobe` against an xHCI controller with a keyboard and a mouse on it, at both device speeds, and `mouseprobe` on a machine whose PS/2 controller is switched off, so that a moved mouse can only have come over USB. Its typing boots are switched off the same way.
 

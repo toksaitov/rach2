@@ -96,6 +96,13 @@ MKFATFIXTURE = build/tests/host/mkfatfixture
 $(MKFATFIXTURE): tests/host/mkfatfixture.c
 	@mkdir -p $(dir $@)
 	cc -O2 -Wall -Wextra -o $@ $<
+# The exFAT builder and reader (tests/host/mkexfatfixture.c), for `tests/run
+# exfat`: it builds the empty volume the suite writes and walks and reads
+# what the kernel wrote.
+MKEXFATFIXTURE = build/tests/host/mkexfatfixture
+$(MKEXFATFIXTURE): tests/host/mkexfatfixture.c tests/host/exfat_upcase.inc
+	@mkdir -p $(dir $@)
+	cc -O2 -Wall -Wextra -o $@ $<
 # The host end of a connection (tests/system/runner/hostpeer.c): the live TCP
 # connection procfiles looks for in /proc/net/tcp, and the echo server the
 # socket suite sends to.
@@ -984,6 +991,15 @@ FATWRITE_DISK = $(IMAGES_DIR)/fatwrite-test.disk
 run-fatwrite: $(DEMO_CREDS) rach2 tests krffs os-real-image $(MKFATFIXTURE) $(HARNESS)
 	sh tests/system/suites/fatwrite.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(FATWRITE_DISK) \
 	    $(OS_REAL_IMAGE) "`cat krffs/rach2_demo_password`" $(MKFATFIXTURE)
+
+# `tests/run exfat`: exFAT written from a program, read back after a reboot,
+# judged by the host's reader and the external checker where the host has
+# one, taken through a crash and its repair, written from BusyBox, and
+# written by two processes under the lag.
+EXFAT_DISK = $(IMAGES_DIR)/exfat-test.disk
+run-exfat: $(DEMO_CREDS) rach2 tests krffs os-real-image $(MKEXFATFIXTURE) $(HARNESS)
+	sh tests/system/suites/exfat.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(EXFAT_DISK) \
+	    $(OS_REAL_IMAGE) "`cat krffs/rach2_demo_password`" $(MKEXFATFIXTURE)
 
 # `tests/run scratch`: milestone 43's fourth partition rehearsed on the sealed
 # image in QEMU, the recovery ISO booted as a stick and the procedure in
