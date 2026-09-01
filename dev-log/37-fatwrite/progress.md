@@ -32,6 +32,6 @@ Phase 5: the suite
 - [x] phase mutations; phase gate; review rounds
 
 Phase 6: the record and the sweep
-- [ ] docs read against code; prosecheck; the proofread unit; sweep of code/build/tests
-- [ ] notes.md closed empty; full set once on the final tree; make test timed
-- [ ] dev-log Readmes; tree clean
+- [x] docs read against code; prosecheck; the proofread unit; sweep of code/build/tests
+- [x] notes.md closed empty; full set once on the final tree; make test timed
+- [x] dev-log Readmes; tree clean

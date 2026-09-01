@@ -264,6 +264,213 @@ skipped).
 
 Times on this host: fatwrite 76 s, scratch 30 s, mount 103 s.
 
+## Phase 6 record
+
+The documents read against the code found: fat32.Readme.md said FSInfo
+is read by nothing, while the mount reads its hint; vfs.Readme.md still
+said the type is read-only, that a mount without `MS_RDONLY` is EROFS,
+that writing to vfat is absent, and that `tests/run mount` is eight boots;
+rach2/Readme.md's directory table said read-only FAT32; tests/Readme.md
+listed four of lagprobe's six modes; tests/host/Readme.md had no line for
+`fatname_hosttest` and none for the long-name rows. All corrected.
+
+The code sweep: the driver's `EROFS` returns are the six read-only checks
+(a mount option or a failed write) and no refusal of an unimplemented
+operation remains; the milestone 36 write path that held only the
+description is gone, since `write` reaches `fat_write` and its
+`begin_write` takes the mount's lock. Helpers with one caller that name a
+step were kept: `alloc_cluster`, `alias_taken`, `bit_test_set`,
+`walk_dir`, `rewrite_mirror`, `fat_check_volume` and `forbidden`, beside
+milestone 36's `node_for`, `put_utf8` and `parse_options`; none is a
+wrapper.
+
+The build, every addition and its reason:
+
+* `rach2/sources.mk`: `fat32name.c`, the name rules apart from the driver
+  so the host test reads them alone.
+* `utils/programs.mk` and the os-real, rach2-metal and rach2-recovery
+  manifests: `update`, the periodic sync; os-simple stages it through its
+  `exec-dir` line.
+* `tests/Makefile`: `fatwriteprobe`.
+* `tests/system/suites.mk`: `MKFATFIXTURE`, the one Make rule for the
+  fixture builder, because the suites walk a volume the kernel wrote; the
+  host tests keep compiling their own copy into their fixture directory,
+  as they did before this milestone, so `tests/run host` needs no Make
+  rule. `run-fatwrite` and `run-scratch`.
+* `tests/registry`: `fatwrite` in the core tier (76 s, six boots: within
+  the milestone 36 budget for a core suite) and `scratch` in the full
+  tier, since it boots the recovery ISO and the sealed system over SSH.
+* `Makefile` and `tools/image/mkiso.sh`: `rach2-recovery-iso`, the
+  stick's image, with `rach2.ip=none rach2.disk=ahci` on its boot line.
+* `tools/setup/doctor.sh`: the optional `dosfstools` row, for `fsck.fat`
+  as a second reader in the fatwrite suite.
+* `tests/system/accept/metal_accept.sh`: the scratch partition's write
+  check before the verdict, for milestone 43.
+* `tests/host/mkfatfixture.c`: `--check` and `--list`, and the fixtures
+  `--dirty`, `--dirty-surplus`, `--dirty-orphan`, `--dirty-mirror`,
+  `--dirty-cross`, `--fsinfo`, `--fsinfo-wrong`, `--overlong-chain`,
+  `--short-chain`, `--lost-chain`, `--cross-link`, `--dup-name`,
+  `--bad-dotdot`, `--dir-loop`, `--junk`, `--cfg-short`, `--no-grubenv`,
+  `--bpb-root-out` and `--bpb-fat-oversized`, each the subject of a
+  `fatcheck_hosttest` or `fat32_hosttest` row.
+
+No `build_*.sh` was added or run by hand. `guestcheck` runs in
+`tests/run style`; `tests/run selfbuild` ran on the final tree.
+
+The mutation scripts, each restoring its source in a trap and rebuilding
+before the verdict, in the session's scratch directory: mutate37p2.sh
+(the cache's three), mutate37p3.sh and mutate37p3b.sh (the writer's
+eight), mutate37p4.sh (names and attributes, five), mutate37p5.sh (the
+lock assertion and the crash boot's check, two) and mutate37p5b.sh (the
+review round's two rows). Twenty mutations in the phases and eight more from the review round, every one caught.
+
+## Phase 6 review round
+
+The plan's checkpoints named units A to D for phases 2 to 4, and the
+phase records show they did not run there; they ran in phase 6, two at a
+time, against the final tree, with unit E's and unit F's findings.
+
+Unit A (the cache's write half) found four things, all fixed:
+
+* `bcache_sync` passed over a dirty buffer another process held and
+  returned 0, so an unmount could finish with a write still in flight;
+  it waits for the holder now, and `vfs_do_umount` returns `EBUSY` when
+  the drop finds a buffer held or dirty instead of ignoring the answer.
+* A failed victim write cleared the holder without waking the waiters
+  for the buffer's old key; they are woken, and look again.
+* A dirty victim of another device was written outside that mount's
+  lock, and when the write failed the mount went read-only while a
+  writer could be inside an operation; the cache marks the device
+  (`BLOCK_WRITE_FAILED`) and refuses its next metadata write with
+  `EROFS`, so the operation stops at its next step, and the mark is
+  cleared when the unmount drops the device. The eviction itself stays
+  outside the lock: writing a data buffer's current bytes earlier than
+  the driver would is always within the order of writes, and the
+  evicting process holds nothing the victim's holder can wait for.
+* The host test's wait stub returned with the condition still false, so
+  a row that reached it hung instead of failing; the stub fails the run.
+
+The row "a device that failed a write takes no metadata write until it
+is dropped" came with the fix and was proved by mutate37p6.sh.
+
+Unit B (the writer's order of writes and its lock) found five things,
+all fixed:
+
+* The cluster count of a size near 4 GiB was computed as `(size +
+  cbytes - 1) / cbytes` and wrapped; it is `(size - 1) / cbytes + 1`.
+* A truncate that grew a file from nothing or from a cluster boundary
+  linked and published its zero-filled run without a sync, so a crash
+  after the entry write showed old disk bytes inside the new size; the
+  run is synced before the link. The matrix's oracle accepted the stale
+  bytes because they equalled the pattern; the truncate file's oracle
+  now expects zeros at its regrown size.
+* Rename freed the destination before `free_slots` could answer
+  `ENOSPC`, so a full directory lost the destination and kept the
+  source; the name and its room are decided with the destination in
+  place.
+* `alloc_run` discovered `ENOSPC` after writing part of a run, against
+  the Readme's promise; the free count decides before the first FAT
+  write, and the row counts the device's writes.
+* `fat_sync` tested the dirty flag before taking the lock, so a sync
+  could miss a first mutation whose flag writes were in flight; it
+  decides under the lock.
+
+Unit C (the check and its repairs, and the host checker) found six, five
+fixed and one recorded:
+
+* The walk freed a surplus tail when it found it, before the rest of
+  the tree was walked, so a tail that ran into a later entry's chain
+  was freed and that entry's clusters with it. The tail is walked and
+  marked like the rest of the chain and recorded (sixteen at most, more
+  is a refusal); the repairs run after the whole walk, when a tail
+  that another chain enters has already been refused as a cluster
+  reached twice. The fixture `--dirty-surplus-cross` builds the case;
+  the dirty rows require the refusal and the image untouched.
+* The bitmap was indexed by cluster number with a bound on the cluster
+  count, two short at the top; the bound counts the two.
+* The duplicate-name scan compared raw aliases and stopped at 4096
+  entries silently; past that it refuses now. Comparing folded long
+  names in the kernel was not done: it needs the names of every earlier
+  entry, which the walk's memory does not hold, and this driver never
+  writes two entries with one long name (a create checks under the
+  lock); the host checker compares them, since the host has the memory.
+* The host checker's duplicate-name storage was static across its
+  recursion and it read at most 256 clusters of a directory silently;
+  both are per call now, with a finding past the limits.
+* The cross-link fixture ran a later file into an earlier one, which
+  the old repair could not damage; the new fixture runs the earlier one
+  into the later.
+
+Unit D (names and attributes) found eight, seven fixed and one recorded:
+
+* A directory could be renamed into itself or under itself, cutting the
+  tree; the `..` chain of the destination is walked first (`EINVAL`).
+* A held directory kept its old entry location after a rename, so a
+  later `setattr` wrote the freed slot; the location follows.
+* A long name past the kernel's 255-byte component was listed by its
+  alias and refused by lookup with `ENAMETOOLONG`; the alias is its
+  name in both.
+* Writes and truncates stamped the creation hundredths along with the
+  modification time; the stamp leaves them alone, and the host clock
+  stub moves its hundredths so a row can see the difference.
+* The name converter enforced the unit limit but not the byte limit it
+  documents; a name of 256 bytes in 128 characters is `ENAMETOOLONG`.
+* Creation hundredths past 199 were believed; they read as zero.
+* `setattr` ignored a field it does not store (the size); it is `EPERM`.
+* A FAT date after 2106-02-07 is clipped by the kernel's 32-bit epoch;
+  recorded as the kernel's limit in the Readme, not changed.
+* The name test's checksum row compared a call with itself; it checks
+  221 for `BOOT`. A C89 fault (a declaration after a statement) and the
+  file's read-only header comment were corrected.
+
+The rows that came with the fixes were proved by mutate37p6b.sh,
+mutate37p6c.sh and mutate37p6d.sh: the tail freed on discovery, ENOSPC
+decided by writing, the run's zeros unsynced (which first escaped
+because the script looked for the wrong words in the log, and was
+rerun), the ancestry check dropped, the held directory's location kept,
+and the creation hundredths stamped. Eight review mutations in all,
+twenty-eight for the milestone.
+
+Unit F (the proofread of six reader-facing documents) found counts the
+tree had outgrown (42 host programs for 49, 81 root programs for 82, 61
+suites for 63, 23 core for 24, eight mount boots for nine, a 223-line
+runner), a wrong link, a claim about a zero-length raw read that the
+code contradicts, the FSInfo sentence again (read at every mount, not
+only a writable one; the other FAT read by the mirror check), and a
+list of register faults ("holds", "charges", "keep deadlock out", "sleeps
+its caller", "willingness") and dense sentences. All are corrected but
+two: the `xhci_hosttest` line in tests/host/Readme.md and the `usb.sh`
+line in tests/system/Readme.md, which list milestone 35's rows in one
+sentence each; splitting a list of rows into sentences adds nothing,
+and neither line is this milestone's contract.
+
+The full set on the final tree found three things, fixed before the
+rerun: the grub test image's manifest lacked the `update` line that
+os-real gained in phase 2, and the grub suite compares the two; a mount
+that went read-only after a failed write could no longer be unmounted,
+since its `prepare_unmount` wrote FSInfo and the flag through a cache
+that now refuses the failed device (the unmount leaves the volume as it
+is, marked dirty for the next mount's check); and the crash boot, which
+now runs until the kill, leaves lost clusters that the mount's check
+counts and leaves by contract, which the suite's later walks then
+refused (the repair step records the one lost line and the later walks
+accept exactly it).
+
+The rerun of the full set passed every suite but `raw`, milestone 33's
+raw-socket suite, which failed once more when run alone and then passed
+three times; the recipe kept no log, so eight boots by hand with logs
+caught one failure: "the machine can still reach the gateway". The
+kernel's ping answers its round-trip time in ticks, and the probe
+required exactly zero, so a reply later than ten milliseconds, which a
+loaded host gives now and then, failed the row. Both ping rows accept
+any non-negative answer and print it, and the recipe keeps the two
+boots' serial logs. Nothing in this milestone touches the network; the
+full set found a row of milestone 33's that had passed by timing.
+
+No boot proves what another proves: the six fatwrite boots each add a
+reboot, a crash, a repair, a shell or a second writer, and the scratch
+rehearsal is the only run of the fourth-partition procedure.
+
 ## Open items
 
 (none)
