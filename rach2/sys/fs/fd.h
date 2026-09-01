@@ -106,10 +106,15 @@ struct open_file {
     struct vfs_mount *vmnt;
     void *vnode;
     void *fhandle;
-    /* The description lock: read, write and lseek hold the description for
-     * the length of the operation, so two sharers cannot ride one offset
-     * through a sleep. The wait queue lives beside the pool in fd.c. */
+    /* The description lock: read, write, lseek, getdents64 and ftruncate
+     * hold the description for the length of the operation, so a sharer
+     * cannot use the offset while another sleeps in a disk request with it.
+     * The wait queue is beside the pool in fd.c. */
     int busy;
+    /* A directory on a mount other than the root: its canonical path, which
+     * the `*at` calls resolve relative names against, or "" when the path
+     * did not fit and such a call answers ENAMETOOLONG. */
+    char dirpath[64];
 };
 
 /*
@@ -145,6 +150,10 @@ void fd_init_stdio(fd_table_t *table);
  * full. */
 int fd_alloc(fd_table_t *table);
 
+/** 1 when `fd_alloc` would succeed, for a call that must know before it
+ * creates or truncates anything. */
+int fd_can_alloc(const fd_table_t *table);
+
 /** Reserve the lowest free descriptor >= minfd (the fcntl(F_DUPFD)
  * contract). */
 int fd_alloc_from(fd_table_t *table, int minfd);
@@ -152,32 +161,28 @@ int fd_alloc_from(fd_table_t *table, int minfd);
 /** Release a descriptor and its OFD reference; 0 ok, -1 if fd invalid. */
 int fd_free(fd_table_t *table, int fd);
 
-/*
- * Return the entry for fd, or NULL if fd is out of range or free.
- */
+/** The entry for fd, or NULL if fd is out of range or free. */
 fd_entry_t *fd_get(fd_table_t *table, int fd);
 
-/*
+/**
  * Add or drop a reference to an open-file description. dup/dup2/fork point a
  * new descriptor at an existing OFD and call fd_ofd_ref so the shared seek
- * offset outlives the original; fd_free calls fd_ofd_unref. (The OFD frees
- * itself back to the pool when its last reference goes.)
+ * offset outlives the original; fd_free calls fd_ofd_unref. The OFD frees
+ * itself back to the pool when its last reference goes.
  */
 void fd_ofd_ref(struct open_file *ofd);
 void fd_ofd_unref(struct open_file *ofd);
 
-/* The description lock (see `busy` above); the lock is uninterruptible and
+/** The description lock (see `busy` above); the lock is uninterruptible and
  * short: one file operation. */
 void fd_ofd_lock(struct open_file *ofd);
 void fd_ofd_unlock(struct open_file *ofd);
 
 /** Repoint every description field naming `from` at `to`, after a KRFFS
  * relocation moved a node. Called by vfs_repoint, which owns the sweep. */
-void fd_ofd_repoint(void *from, void *to);
+void fd_ofd_repoint(struct vfs_mount *mnt, void *from, void *to);
 
-/*
- * Return 1 if fd is allocated, 0 otherwise.
- */
+/** 1 if fd is allocated, 0 otherwise. */
 int fd_is_valid(fd_table_t *table, int fd);
 
 #endif /* _FD_H_ */

@@ -86,7 +86,7 @@ static void wq_dequeue(wait_queue_t *wq, process_t *p)
  * either ran before the test (and we saw the condition true) or after the
  * enqueue (and finds us queued). See the in-body notes for the idle path.
  */
-int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
+static int wq_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, int interruptible)
 {
     uint32_t flags;
     int rc;
@@ -101,7 +101,7 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
             rc = 0;
             break;
         }
-        if (signal_pending()) {
+        if (interruptible && signal_pending()) {
             rc = -EINTR;
             break;
         }
@@ -199,4 +199,14 @@ void wq_wake_all(wait_queue_t *wq)
         }
     }
     irq_restore(flags);
+}
+
+int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
+{
+    return wq_wait(wq, cond, arg, 1);
+}
+
+int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
+{
+    return wq_wait(wq, cond, arg, 0);
 }

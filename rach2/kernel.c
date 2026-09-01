@@ -255,8 +255,9 @@ void terminate_current_process(int32_t signo)
     reparent_children(pid);
 
     /* Same descriptor-table teardown sys_exit does, so a signal-killed process
-     * leaks no sockets or open-file descriptions. */
+     * leaks no sockets, open-file descriptions or working-directory holds. */
     release_fd_table(&current_proc->fds);
+    vfs_cwd_clear(current_proc);
 
     /* Switch off the dying address space BEFORE freeing its page directory:
      * free_page_directory refuses to free whatever is currently loaded in CR3,

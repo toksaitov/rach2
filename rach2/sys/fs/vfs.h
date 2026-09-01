@@ -244,9 +244,11 @@ void vfs_init(void);
 /**
  * Resolve `path` to a held node.
  *
- * `start` is where a relative path begins: NULL means the caller's working
- * directory (or the root mount's root for an absolute path); an `*at` call
- * passes its directory descriptor's place. On success `out` holds the node
+ * `start` is where the walk begins: with NULL it is the root of the root
+ * mount whether or not `path` begins with '/', because the syscall layer
+ * joins a relative path to the working directory's canonical spelling
+ * before resolving and strips the leading slash; an `*at` call may pass
+ * its directory descriptor's place instead. On success `out` holds the node
  * and the mount it lives on, and the caller owns the hold. With
  * `VFS_WALK_PARENT`, `out` is the held parent directory, and the final
  * component, which may not exist yet, is copied into `leaf` (of `leafcap`

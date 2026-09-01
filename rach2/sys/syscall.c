@@ -907,19 +907,11 @@ static int join_abs(char *pathbuf, uint32_t size, const char *base,
 }
 
 /**
- * Collapse '.', '..', and doubled slashes in the absolute path `path` in place.
- *
- * Resolution and the synthetic-mount classifier must see the same spelling
- * of a path, or a '..' that lexically lands on /dev or /proc could classify
- * as a real KRFFS path and shadow the synthetic mount (or a '..' transiting
- * a synthetic prefix would wrongly miss). Normalizing once, before
- * classification, removes that ambiguity. `path` must start with '/'. A '..'
- * at the root stays at the root. The output never grows, so the rewrite is
- * safe in place. Returns the new length.
- */
-/* Collapse `.` and `..` in an absolute path that a physical walk has just
+ * Collapse `.` and `..` in an absolute path that a physical walk has just
  * resolved, for the working directory's string: after the walk succeeded,
- * every `..` names the parent the walk climbed to. */
+ * every `..` names the parent the walk climbed to. `path` must start with
+ * '/'; the output never grows, so the rewrite is in place.
+ */
 static void collapse_dots(char *path)
 {
     int out = 1;
@@ -1087,6 +1079,7 @@ static int fd_node_check(fd_entry_t *entry)
  * must be an open directory (else -EBADF/-ENOTDIR). Same return contract as
  * copy_path_cwd.
  */
+static int mnt_is_root(const struct vfs_mount *mnt);
 static int copy_path_at(char *pathbuf, uint32_t size, int dirfd,
                         const char __user *upath)
 {
@@ -1140,7 +1133,12 @@ static int copy_path_at(char *pathbuf, uint32_t size, int dirfd,
         return -ENOTDIR;
     }
     dnode = entry->node; /* NULL marks the root directory */
-    if (dnode) {
+    if (!dnode && entry->ofd && entry->ofd->vmnt && !mnt_is_root(entry->ofd->vmnt)) {
+        if (entry->ofd->dirpath[0] == '\0') {
+            return -ENAMETOOLONG;
+        }
+        k_memcpy(dirpath, entry->ofd->dirpath, k_strlen(entry->ofd->dirpath) + 1);
+    } else if (dnode) {
         /* KRFFS nodes are not refcounted, so a directory fd can outlive its
          * node if the directory is rmdir'd. Reject a stale fd defensively: the
          * node must still be a live reserved node, and its reconstructed path
@@ -1483,15 +1481,6 @@ static int32_t synth_open_dir(const struct vpath *vp, int flags)
 }
 
 /**
- * Open core shared by open(5) and openat(295).
- *
- * `name` is a kernel-space path with any leading '/' already stripped; `flags`
- * are the Linux open flags and `mode` the permission bits to stamp on a file
- * created by O_CREAT (ignored otherwise). Resolves a device ("fb"/"mouse") or a
- * KRFFS path and installs a descriptor. Returns the fd or -errno. Opening "/"
- * opens the root directory for getdents64.
- */
-/**
  * Stamps a newly created KRFFS node with the creating process's identity:
  * owner and group from the effective ids, permission bits from `mode` with
  * the file-creation mask applied, the type bits kept. The V7 creation rule:
@@ -1505,6 +1494,15 @@ static void krffs_stamp_new_node(krffs_node_t *node, uint32_t mode)
                              (mode & 07777u & ~current_proc->umask));
 }
 
+/**
+ * Open core shared by open(5) and openat(295).
+ *
+ * `name` is a kernel-space path with any leading '/' already stripped; `flags`
+ * are the Linux open flags and `mode` the permission bits to stamp on a file
+ * created by O_CREAT (ignored otherwise). Resolves a device ("fb"/"mouse") or a
+ * KRFFS path and installs a descriptor. Returns the fd or -errno. Opening "/"
+ * opens the root directory for getdents64.
+ */
 static int32_t do_open(const char *name, int flags, uint32_t mode)
 {
     fd_entry_t *entry;
@@ -1559,6 +1557,9 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
         return fd;
     }
 
+    if (!fd_can_alloc(&current_proc->fds)) {
+        return -EMFILE; /* known before anything is created or truncated */
+    }
     rc = vfs_resolve(0, name, 0, &ref, 0, 0);
     if (rc == -ENOENT && (flags & O_CREAT)) {
         /* The missing-file half of O_CREAT: hold the parent, check its
@@ -1613,9 +1614,9 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
         }
         node = ref.node;
         if (!mnt_is_root(ref.mnt)) {
-            /* A node of another type: the checks from its attributes, and
-             * every write-side request refused by the mount's flags before
-             * anything else. */
+            /* A node of another type: the checks from its attributes in
+             * the order open(2) keeps (EEXIST, EISDIR, ENOTDIR), then the
+             * mount's EROFS for a write-side request, then permission. */
             struct vfs_stat vst;
             unsigned acc = (unsigned)flags & 3u;
             int want = acc == 0 ? CRED_R : (acc == 1 ? CRED_W : (CRED_R | CRED_W));
@@ -1706,7 +1707,11 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
              * node where it is. This branch is already past the -EISDIR for
              * the root and for any directory, so only a regular file
              * reaches it. */
-            vfs_truncate(ref.mnt, node, 0);
+            rc = vfs_truncate(ref.mnt, node, 0);
+            if (rc != 0) {
+                vfs_ref_release(&ref);
+                return rc;
+            }
             if (!cred_privileged()) {
                 cred_kill_setid(node);
             }
@@ -1731,9 +1736,19 @@ setup:
     if (!mnt_is_root(ref.mnt)) {
         struct vfs_stat vst;
 
-        vfs_getattr(ref.mnt, node, &vst);
+        rc = vfs_getattr(ref.mnt, node, &vst);
+        if (rc != 0) {
+            fd_free(&current_proc->fds, fd);
+            vfs_ref_release(&ref);
+            return rc;
+        }
         entry->type = (vst.mode & 0170000u) == 0040000u ? FD_TYPE_DIR : FD_TYPE_FILE;
         entry->node = NULL;
+        entry->ofd->dirpath[0] = '\0';
+        if (entry->type == FD_TYPE_DIR && k_strlen(name) + 1 < sizeof(entry->ofd->dirpath)) {
+            entry->ofd->dirpath[0] = '/';
+            k_memcpy(entry->ofd->dirpath + 1, name, k_strlen(name) + 1);
+        }
     } else if (node == krffs_fs->node) {
         entry->type = FD_TYPE_DIR;
         entry->node = NULL;
@@ -1791,6 +1806,7 @@ setup:
  */
 static int32_t sys_mount(isr_params_t *params)
 {
+    char tpath[256];
     char source[64];
     char target[256];
     char type[16];
@@ -1811,6 +1827,20 @@ static int32_t sys_mount(isr_params_t *params)
         return n;
     }
     n = strncpy_from_user(target, (const char __user *)params->ecx, sizeof(target));
+    if (n < 0) {
+        return n;
+    }
+    /* The target as an absolute canonical path: a relative one is joined
+     * to the working directory, as every other path-taking call does. */
+    if (target[0] == '/') {
+        k_memcpy(tpath, target, k_strlen(target) + 1);
+        n = canonicalize_abs(tpath);
+    } else {
+        n = join_abs(tpath, sizeof(tpath), current_proc->cwd, target, k_strlen(target));
+        if (n >= 0) {
+            n = canonicalize_abs(tpath);
+        }
+    }
     if (n < 0) {
         return n;
     }
@@ -1837,7 +1867,7 @@ static int32_t sys_mount(isr_params_t *params)
         }
         k_memcpy(target, joined, sizeof(target));
     }
-    return vfs_do_mount(source, target, type, params->esi, data);
+    return vfs_do_mount(source, tpath, type, params->esi, data);
 }
 
 /**
@@ -1847,6 +1877,7 @@ static int32_t sys_mount(isr_params_t *params)
  */
 static int32_t sys_umount2(isr_params_t *params)
 {
+    char tpath[256];
     char target[256];
     int n;
 
@@ -1866,6 +1897,20 @@ static int32_t sys_umount2(isr_params_t *params)
     if (n < 0) {
         return n;
     }
+    /* The target as an absolute canonical path: a relative one is joined
+     * to the working directory, as every other path-taking call does. */
+    if (target[0] == '/') {
+        k_memcpy(tpath, target, k_strlen(target) + 1);
+        n = canonicalize_abs(tpath);
+    } else {
+        n = join_abs(tpath, sizeof(tpath), current_proc->cwd, target, k_strlen(target));
+        if (n >= 0) {
+            n = canonicalize_abs(tpath);
+        }
+    }
+    if (n < 0) {
+        return n;
+    }
     if (target[0] != '/') {
         char joined[256];
         int r = join_abs(joined, sizeof(joined), current_proc->cwd, target,
@@ -1876,7 +1921,40 @@ static int32_t sys_umount2(isr_params_t *params)
         }
         k_memcpy(target, joined, sizeof(target));
     }
-    return vfs_do_umount(target);
+    return vfs_do_umount(tpath);
+}
+
+/**
+ * The removal rules for a directory on a type other than the root: write
+ * permission on the directory, and in a sticky directory the entry's owner,
+ * the directory's owner, or root. The root type keeps its own copy of the
+ * rule beside its node fields.
+ */
+static int cred_remove_ref(const struct vfs_ref *parent, const char *leaf)
+{
+    struct vfs_stat pst, est;
+    void *node;
+    int rc = cred_access_ref(parent, CRED_W, 0);
+
+    if (rc != 0 || cred_privileged()) {
+        return rc;
+    }
+    rc = vfs_getattr(parent->mnt, parent->node, &pst);
+    if (rc != 0 || !(pst.mode & 01000u) || pst.uid == current_proc->euid) {
+        return rc;
+    }
+    rc = parent->mnt->type->ops->lookup(parent->mnt, parent->node, leaf, &node);
+    if (rc != 0) {
+        return rc == -ENOENT ? 0 : rc; /* a name not there yet is not held by anyone */
+    }
+    rc = vfs_getattr(parent->mnt, node, &est);
+    if (parent->mnt->type->ops->put) {
+        parent->mnt->type->ops->put(parent->mnt, node);
+    }
+    if (rc != 0) {
+        return rc;
+    }
+    return est.uid == current_proc->euid ? 0 : -EPERM;
 }
 
 static int32_t sys_open(isr_params_t *params)
@@ -2228,11 +2306,14 @@ static int32_t sys_lseek(isr_params_t *params)
     if (!entry->ofd || !entry->ofd->vmnt) {
         return -EBADF;
     }
+    fd_ofd_lock(entry->ofd);
     {
         struct vfs_stat vst;
+        int rc = vfs_getattr(entry->ofd->vmnt, entry->ofd->vnode, &vst);
 
-        if (vfs_getattr(entry->ofd->vmnt, entry->ofd->vnode, &vst) != 0) {
-            return -EBADF;
+        if (rc != 0) {
+            fd_ofd_unlock(entry->ofd);
+            return rc;
         }
         file_size = (uint32_t)vst.size;
     }
@@ -2248,14 +2329,17 @@ static int32_t sys_lseek(isr_params_t *params)
             new_offset = (int32_t)file_size + offset;
             break;
         default:
-            return -EINVAL;
+            new_offset = -1;
+            break;
     }
 
     if (new_offset < 0) {
+        fd_ofd_unlock(entry->ofd);
         return -EINVAL;
     }
 
     entry->ofd->offset = (uint32_t)new_offset;
+    fd_ofd_unlock(entry->ofd);
     return new_offset;
 }
 
@@ -2904,6 +2988,7 @@ static int32_t sys_chdir(isr_params_t *params)
     if (name[0] == '\0') {
         current_proc->cwd[0] = '/';
         current_proc->cwd[1] = '\0';
+        vfs_cwd_clear(current_proc);
         return 0;
     }
 
@@ -2936,6 +3021,7 @@ static int32_t sys_chdir(isr_params_t *params)
                 vp.kind == VNODE_PROC_FD_DIR) {
                 synth_dir_path(vp.kind, rpid, current_proc->cwd,
                                sizeof(current_proc->cwd));
+                vfs_cwd_clear(current_proc);
                 return 0;
             }
             return -ENOTDIR; /* a synthetic leaf */
@@ -3200,7 +3286,7 @@ static void krffs_fill_stat64(struct linux_stat64 *kst, krffs_node_t *node)
 
 /* Fill a stat64 from an open descriptor (factored from sys_fstat64 so the magic
  * /proc/<pid>/fd/<n> symlinks can stat their target when followed). */
-static void fstat_fill(fd_entry_t *e, struct linux_stat64 *kst);
+static int32_t fstat_fill(fd_entry_t *e, struct linux_stat64 *kst);
 
 /*
  * Fill a stat64 for a synthetic (/dev or /proc) path. Devices report a
@@ -3792,7 +3878,7 @@ static int32_t sys_fstatfs64(isr_params_t *params)
  * reported here is that identity and is the same number the descriptor's
  * `/proc/<pid>/fd` link carries, so a program reading one can match the other.
  */
-static void fstat_fill(fd_entry_t *entry, struct linux_stat64 *kst)
+static int32_t fstat_fill(fd_entry_t *entry, struct linux_stat64 *kst)
 {
     k_memset(kst, 0, sizeof(*kst));
     stat64_boot_times(kst); /* a node with times of its own overwrites these */
@@ -3802,8 +3888,7 @@ static void fstat_fill(fd_entry_t *entry, struct linux_stat64 *kst)
 
         r.mnt = entry->ofd->vmnt;
         r.node = entry->ofd->vnode;
-        vfs_fill_stat64(kst, &r);
-        return;
+        return vfs_fill_stat64(kst, &r);
     }
     if (entry->type == FD_TYPE_DIR && entry->node == NULL) {
         kst->st_mode = S_IFDIR | 0755; /* the root directory */
@@ -3904,6 +3989,7 @@ static void fstat_fill(fd_entry_t *entry, struct linux_stat64 *kst)
         kst->st_nlink = 1;
         kst->st_blksize = 4096;
     }
+    return 0;
 }
 
 /*
@@ -3913,6 +3999,7 @@ static void fstat_fill(fd_entry_t *entry, struct linux_stat64 *kst)
  */
 static int32_t sys_fstat64(isr_params_t *params)
 {
+    int32_t rc;
     int fd = (int)params->ebx;
     struct linux_stat64 __user *st = (struct linux_stat64 __user *)params->ecx;
     struct linux_stat64 kst;
@@ -3925,7 +4012,10 @@ static int32_t sys_fstat64(isr_params_t *params)
     if (!entry) {
         return -EBADF;
     }
-    fstat_fill(entry, &kst);
+    rc = fstat_fill(entry, &kst);
+    if (rc != 0) {
+        return rc;
+    }
     if (copy_to_user(st, &kst, sizeof(kst)) != 0) {
         return -EFAULT;
     }
@@ -4224,8 +4314,17 @@ static int32_t do_chmod(const char *name, uint32_t mode)
     if (!mnt_is_root(ref.mnt)) {
         struct vfs_stat vst;
 
-        vst.mode = mode;
-        rc = vfs_setattr(ref.mnt, ref.node, VFS_SET_MODE, &vst);
+        rc = vfs_getattr(ref.mnt, ref.node, &vst);
+        if (rc == 0 && !cred_privileged() && current_proc->euid != vst.uid) {
+            rc = -EPERM;
+        }
+        if (rc == 0) {
+            if (!cred_privileged() && !cred_in_group(vst.gid)) {
+                mode &= ~02000u; /* set-gid on a group not one's own is dropped */
+            }
+            vst.mode = mode;
+            rc = vfs_setattr(ref.mnt, ref.node, VFS_SET_MODE, &vst);
+        }
         vfs_ref_release(&ref);
         return rc;
     }
@@ -4280,10 +4379,31 @@ static int32_t do_chown(const char *name, uint32_t uid, uint32_t gid)
     }
     if (!mnt_is_root(ref.mnt)) {
         struct vfs_stat vst;
+        int what = 0;
 
-        vst.uid = uid;
-        vst.gid = gid;
-        rc = vfs_setattr(ref.mnt, ref.node, VFS_SET_UID | VFS_SET_GID, &vst);
+        rc = vfs_getattr(ref.mnt, ref.node, &vst);
+        if (rc == 0 && !cred_privileged()) {
+            if (current_proc->euid != vst.uid ||
+                (uid != (uint32_t)-1 && uid != vst.uid) ||
+                (gid != (uint32_t)-1 && gid != vst.gid && !cred_in_group(gid))) {
+                rc = -EPERM;
+            }
+        }
+        if (rc == 0) {
+            if (uid != (uint32_t)-1 && uid != vst.uid) {
+                vst.uid = uid;
+                what |= VFS_SET_UID;
+            }
+            if (gid != (uint32_t)-1 && gid != vst.gid) {
+                vst.gid = gid;
+                what |= VFS_SET_GID;
+            }
+            if (what != 0 && (vst.mode & 06000u)) {
+                vst.mode &= ~06000u; /* an owner change clears the set-id bits, for root too */
+                what |= VFS_SET_MODE;
+            }
+            rc = what ? vfs_setattr(ref.mnt, ref.node, what, &vst) : 0;
+        }
         vfs_ref_release(&ref);
         return rc;
     }
@@ -5143,6 +5263,7 @@ static int exec_krffs_read(void *ctx, void *dst, uint32_t count, uint32_t off)
 struct exec_vfs_ctx {
     struct vfs_ref ref;
     void *handle;
+    int32_t err; /* the last failed read's errno, reported instead of ENOEXEC */
 };
 static struct exec_vfs_ctx exec_ctx;
 
@@ -5151,7 +5272,11 @@ static int exec_vfs_read(void *ctx, void *dst, uint32_t count, uint32_t off)
     struct exec_vfs_ctx *c = ctx;
     int32_t got = vfs_read(c->ref.mnt, c->handle, dst, count, off);
 
-    return got < 0 ? -1 : (int)got;
+    if (got < 0) {
+        c->err = got;
+        return -1;
+    }
+    return (int)got;
 }
 
 static void exec_vfs_done(void)
@@ -5249,6 +5374,7 @@ static void __attribute__((noreturn)) exec_fail_destroyed(void)
      * same teardown sys_exit and terminate do, so a failed-exec death leaks no
      * sockets or OFDs. */
     release_fd_table(&current_proc->fds);
+    vfs_cwd_clear(current_proc);
 
     /* A real /sbin/init whose exec failed is a fatal init death; halt BEFORE
      * schedule(), or a still-READY process would mask the panic and run on with
@@ -5633,12 +5759,16 @@ static int32_t sys_execve(isr_params_t *params)
                 return rc;
             }
             setid_mode = vst.mode & (KRFFS_MODE_SUID | KRFFS_MODE_SGID);
+            if (!(vst.mode & 010u)) {
+                setid_mode &= ~KRFFS_MODE_SGID; /* set-gid without group execute is mandatory locking */
+            }
             if (xref.mnt->flags & VFS_MS_NOSUID) {
                 setid_mode = 0;
             }
             file_uid = vst.uid;
             file_gid = vst.gid;
             exec_ctx.ref = xref; /* held until the image is loaded or refused */
+            exec_ctx.err = 0;
             rc = vfs_open_node(xref.mnt, xref.node, 0, &exec_ctx.handle);
             if (rc != 0) {
                 vfs_ref_release(&exec_ctx.ref);
@@ -5701,8 +5831,10 @@ checked:
              * interpreter by path, and the shebang reader is the root's. */
             if (exec_vfs_read(&exec_ctx, &ehdr, sizeof(ehdr), 0) != (int)sizeof(ehdr) ||
                 !elf_valid_exec(&ehdr, sizeof(ehdr))) {
+                int32_t why = exec_ctx.err ? exec_ctx.err : -ENOEXEC;
+
                 exec_vfs_done();
-                return -ENOEXEC;
+                return why;
             }
         } else if (exec_krffs_read((void *)name, &ehdr, sizeof(ehdr), 0) != (int)sizeof(ehdr) ||
             !elf_valid_exec(&ehdr, sizeof(ehdr))) {
@@ -5739,6 +5871,31 @@ checked:
                     vfs_ref_release(&iref);
                     return -EACCES;
                 }
+                if (!mnt_is_root(iref.mnt)) {
+                    /* An interpreter on another type loads through its
+                     * mount, as a program there does. */
+                    rc = cred_access_ref(&iref, CRED_X, 0);
+                    if (rc != 0) {
+                        vfs_ref_release(&iref);
+                        return rc;
+                    }
+                    exec_ctx.ref = iref;
+                    exec_ctx.err = 0;
+                    rc = vfs_open_node(iref.mnt, iref.node, 0, &exec_ctx.handle);
+                    if (rc != 0) {
+                        vfs_ref_release(&exec_ctx.ref);
+                        exec_ctx.ref.mnt = NULL;
+                        return rc;
+                    }
+                    if (exec_vfs_read(&exec_ctx, &ehdr, sizeof(ehdr), 0) != (int)sizeof(ehdr) ||
+                        !elf_valid_exec(&ehdr, sizeof(ehdr))) {
+                        int32_t why = exec_ctx.err ? exec_ctx.err : -ENOEXEC;
+
+                        exec_vfs_done();
+                        return why; /* one level only: an interpreter that is a script */
+                    }
+                    goto interpreter_checked;
+                }
                 rc = cred_access_node((krffs_node_t *)iref.node, CRED_X, 0);
                 vfs_ref_release(&iref);
                 if (rc != 0) {
@@ -5750,6 +5907,8 @@ checked:
                 /* One level only: an interpreter that is itself a script. */
                 return -ENOEXEC;
             }
+interpreter_checked:
+            ;
         }
     }
 
@@ -6271,8 +6430,8 @@ static int32_t sys_wait4(isr_params_t *params)
 
 /*
  * creat(2): EBX = path, ECX = mode. Returns an fd open for writing, or
- * -errno. An existing file is opened (and truncated by the caller's later
- * writes).
+ * -errno. An existing regular file is truncated to zero by the call; a
+ * directory, the root included, is EISDIR.
  */
 static int32_t sys_creat(isr_params_t *params)
 {
@@ -6295,10 +6454,6 @@ static int32_t sys_creat(isr_params_t *params)
     if (name[0] == '/') {
         name++;
     }
-    if (name[0] == '\0') {
-        return -EINVAL; /* empty filename */
-    }
-
     /* creat(2) is open(O_WRONLY|O_CREAT|O_TRUNC), and it is exactly that
      * call, so the two cannot drift: the EISDIR for a directory, the write
      * check, the truncate with its set-id clear, and the stamp of a new
@@ -6369,16 +6524,17 @@ static int32_t sys_unlink(isr_params_t *params)
             return -EBUSY; /* a mount point cannot be unlinked */
         }
         if (!mnt_is_root(parent.mnt)) {
-            /* Another type: its write-side operation, or the mount's EROFS. */
-            rc = vfs_unlink_name(parent.mnt, parent.node, leaf);
+            rc = cred_remove_ref(&parent, leaf);
+            if (rc == 0) {
+                rc = vfs_unlink_name(parent.mnt, parent.node, leaf);
+            }
             vfs_ref_release(&parent);
             return rc;
         }
         /* The directory's write bit is checked before the target is even
          * looked up: a caller with no write permission there must see
          * -EACCES, not learn whether the name exists. */
-        rc = mnt_is_root(parent.mnt) ? cred_access_node((krffs_node_t *)parent.node, CRED_W, 0)
-                                     : cred_access_ref(&parent, CRED_W, 0);
+        rc = cred_access_node((krffs_node_t *)parent.node, CRED_W, 0);
         if (rc != 0) {
             vfs_ref_release(&parent);
             return rc;
@@ -6460,14 +6616,23 @@ static int32_t sys_mkdir(isr_params_t *params)
         }
         /* A name a mount stands at exists, whatever the type's own lookup
          * says: a KRFFS /dev would shadow the synthetic mount. */
-        if (vfs_leaf_mount(parent.mnt, parent.node, leaf) ||
-            parent.mnt->type->ops->lookup(parent.mnt, parent.node, leaf,
+        if (vfs_leaf_mount(parent.mnt, parent.node, leaf)) {
+            vfs_ref_release(&parent);
+            return -EEXIST;
+        }
+        if (parent.mnt->type->ops->lookup(parent.mnt, parent.node, leaf,
                                           &found) == 0) {
+            if (parent.mnt->type->ops->put) {
+                parent.mnt->type->ops->put(parent.mnt, found);
+            }
             vfs_ref_release(&parent);
             return -EEXIST;
         }
         if (!mnt_is_root(parent.mnt)) {
-            rc = vfs_mkdir(parent.mnt, parent.node, leaf, params->ecx);
+            rc = cred_access_ref(&parent, CRED_W, 0);
+            if (rc == 0) {
+                rc = vfs_mkdir(parent.mnt, parent.node, leaf, params->ecx);
+            }
             vfs_ref_release(&parent);
             return rc;
         }
@@ -6534,8 +6699,10 @@ static int32_t sys_rmdir(isr_params_t *params)
             return -EBUSY; /* a mount point cannot be removed */
         }
         if (!mnt_is_root(parent.mnt)) {
-            /* Another type: its write-side operation, or the mount's EROFS. */
-            rc = vfs_rmdir(parent.mnt, parent.node, leaf);
+            rc = cred_remove_ref(&parent, leaf);
+            if (rc == 0) {
+                rc = vfs_rmdir(parent.mnt, parent.node, leaf);
+            }
             vfs_ref_release(&parent);
             return rc;
         }
@@ -6678,7 +6845,13 @@ static int32_t sys_rename(isr_params_t *params)
         goto out;
     }
     if (!mnt_is_root(opar.mnt)) {
-        rc = vfs_rename(opar.mnt, opar.node, oleaf, npar.node, nleaf);
+        rc = cred_remove_ref(&opar, oleaf);
+        if (rc == 0) {
+            rc = cred_remove_ref(&npar, nleaf);
+        }
+        if (rc == 0) {
+            rc = vfs_rename(opar.mnt, opar.node, oleaf, npar.node, nleaf);
+        }
         goto out;
     }
 
@@ -6826,9 +6999,37 @@ static int32_t sys_utimensat(isr_params_t *params)
         }
         if (!mnt_is_root(ref.mnt)) {
             struct vfs_stat vst;
+            int what = 0;
+            int now_both = times == NULL || (times[0].tv_nsec == UTIME_NOW &&
+                                             times[1].tv_nsec == UTIME_NOW);
 
-            k_memset(&vst, 0, sizeof(vst));
-            rc = vfs_setattr(ref.mnt, ref.node, VFS_SET_ATIME | VFS_SET_MTIME, &vst);
+            rc = vfs_getattr(ref.mnt, ref.node, &vst);
+            if (rc == 0 && times != NULL && times[0].tv_nsec == UTIME_OMIT &&
+                times[1].tv_nsec == UTIME_OMIT) {
+                vfs_ref_release(&ref);
+                return 0;
+            }
+            if (rc == 0 && !cred_privileged() && current_proc->euid != vst.uid) {
+                rc = now_both ? cred_access_ref(&ref, CRED_W, 0) : -EPERM;
+            }
+            if (rc == 0) {
+                get_current_time(&now_sec, &now_nsec);
+                if (times == NULL || times[0].tv_nsec != UTIME_OMIT) {
+                    int now = times == NULL || times[0].tv_nsec == UTIME_NOW;
+
+                    vst.atime_sec = now ? now_sec : times[0].tv_sec;
+                    vst.atime_nsec = now ? now_nsec : times[0].tv_nsec;
+                    what |= VFS_SET_ATIME;
+                }
+                if (times == NULL || times[1].tv_nsec != UTIME_OMIT) {
+                    int now = times == NULL || times[1].tv_nsec == UTIME_NOW;
+
+                    vst.mtime_sec = now ? now_sec : times[1].tv_sec;
+                    vst.mtime_nsec = now ? now_nsec : times[1].tv_nsec;
+                    what |= VFS_SET_MTIME;
+                }
+                rc = vfs_setattr(ref.mnt, ref.node, what, &vst);
+            }
             vfs_ref_release(&ref);
             return rc;
         }
@@ -7244,6 +7445,7 @@ static int32_t sys_getdents64(isr_params_t *params)
         if (!ofd || !ofd->vmnt) {
             return -EBADF;
         }
+        fd_ofd_lock(ofd);
         cursor = ofd->offset;
         for (;;) {
             struct vfs_dirent de;
@@ -7254,6 +7456,7 @@ static int32_t sys_getdents64(isr_params_t *params)
                 break;
             }
             if (got < 0) {
+                fd_ofd_unlock(ofd);
                 return (bytes_written > 0) ? (int32_t)bytes_written : got;
             }
             name_len = k_strlen(de.name);
@@ -7279,11 +7482,13 @@ static int32_t sys_getdents64(isr_params_t *params)
             k_memcpy(dirent->d_name, de.name, name_len + 1);
             if (copy_to_user((void __user *)(buf + bytes_written), recbuf,
                              rec_len) != 0) {
+                fd_ofd_unlock(ofd);
                 return (bytes_written > 0) ? (int32_t)bytes_written : -EFAULT;
             }
             bytes_written += rec_len;
             ofd->offset = cursor; /* committed with the record, not before */
         }
+        fd_ofd_unlock(ofd);
     }
 
     /* Nothing written after scanning every node is the end of the directory. A

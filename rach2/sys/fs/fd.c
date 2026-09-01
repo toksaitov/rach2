@@ -54,12 +54,6 @@ void fd_ofd_ref(struct open_file *ofd)
     }
 }
 
-/**
- * Drop one reference to an open-file description.
- *
- * The pool slot frees itself when the last reference goes: a refcount of 0
- * marks the slot reusable by `ofd_alloc`.
- */
 static int ofd_idle(void *arg)
 {
     return ((struct open_file *)arg)->busy == 0;
@@ -68,7 +62,7 @@ static int ofd_idle(void *arg)
 void fd_ofd_lock(struct open_file *ofd)
 {
     while (ofd->busy) {
-        wq_wait_event(&ofd_wq[ofd - ofd_pool], ofd_idle, ofd);
+        wq_wait_event_nointr(&ofd_wq[ofd - ofd_pool], ofd_idle, ofd);
     }
     ofd->busy = 1;
 }
@@ -79,12 +73,12 @@ void fd_ofd_unlock(struct open_file *ofd)
     wq_wake_all(&ofd_wq[ofd - ofd_pool]);
 }
 
-void fd_ofd_repoint(void *from, void *to)
+void fd_ofd_repoint(struct vfs_mount *mnt, void *from, void *to)
 {
     int i;
 
     for (i = 0; i < OFD_POOL_SIZE; i++) {
-        if (ofd_pool[i].refcount == 0) {
+        if (ofd_pool[i].refcount == 0 || ofd_pool[i].vmnt != mnt) {
             continue;
         }
         if (ofd_pool[i].vnode == from) {
@@ -96,17 +90,27 @@ void fd_ofd_repoint(void *from, void *to)
     }
 }
 
+/**
+ * Drop one reference to an open-file description.
+ *
+ * A refcount of 0 marks the slot reusable by `ofd_alloc`. The last drop of
+ * a description on a mounted file system is that file system's release,
+ * the node's put, and the mount's reference, all exactly once, run after
+ * the slot's fields are cleared so a slot retaken meanwhile is not touched.
+ */
 void fd_ofd_unref(struct open_file *ofd)
 {
     if (ofd && ofd->refcount > 0) {
         ofd->refcount--;
         if (ofd->refcount == 0 && ofd->vmnt) {
-            /* The description's last close: the file system's release, the
-             * node's put, and the mount's reference, all exactly once. */
-            vfs_desc_close(ofd->vmnt, ofd->vnode, ofd->fhandle);
+            struct vfs_mount *mnt = ofd->vmnt;
+            void *node = ofd->vnode;
+            void *handle = ofd->fhandle;
+
             ofd->vmnt = NULL;
             ofd->vnode = NULL;
             ofd->fhandle = NULL;
+            vfs_desc_close(mnt, node, handle);
         }
     }
 }
@@ -248,4 +252,16 @@ int fd_is_valid(fd_table_t *table, int fd)
     }
 
     return table->entries[fd].type != FD_TYPE_NONE;
+}
+
+int fd_can_alloc(const fd_table_t *table)
+{
+    int i;
+
+    for (i = 0; i < MAX_FDS; i++) {
+        if (table->entries[i].type == FD_TYPE_NONE) {
+            return 1;
+        }
+    }
+    return 0;
 }

@@ -42,6 +42,14 @@ void wait_queue_init(wait_queue_t *wq);
  * signal. */
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg);
 
+/**
+ * The same wait with a pending signal ignored, for a lock held by another
+ * process and for a device that owns the caller's page: an interruptible
+ * wait returns at once while a signal is pending, and a waiter that then
+ * retries never leaves the CPU to the holder it waits for.
+ */
+int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg);
+
 /*
  * Make every process currently blocked on wq runnable and empty the queue. Safe
  * to call from IRQ context (it disables interrupts around the walk); a woken

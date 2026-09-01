@@ -118,7 +118,7 @@ static int req_run_one(block_device_t *device, int write, uint64_t lba,
         return -EIO;
     }
     while (!req_done(&w)) {
-        wq_wait_event(&pool_wq, req_done, &w); /* EINTR: keep waiting */
+        wq_wait_event_nointr(&pool_wq, req_done, &w);
     }
     flags = irq_save();
     /* A quarantined slot, or one the late completion freed and another

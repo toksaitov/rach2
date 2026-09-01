@@ -89,7 +89,7 @@ static int ns_free(void *arg)
 void vfs_ns_lock(struct vfs_mount *mnt)
 {
     while (mnt->ns_holder != -1) {
-        wq_wait_event(&mnt->ns_wq, ns_free, mnt); /* EINTR: still wanted */
+        wq_wait_event_nointr(&mnt->ns_wq, ns_free, mnt); /* EINTR: still wanted */
     }
     mnt->ns_holder = current_proc ? (int)current_proc->pid : 0;
 }
@@ -165,9 +165,9 @@ static struct vfs_mount *mount_covering(struct vfs_mount *mnt, void *node)
     int i;
 
     for (i = 1; i < VFS_MOUNTS; i++) {
-        if (mounts[i].state == VFS_ACTIVE && mounts[i].parent == mnt &&
+        if (mounts[i].state != VFS_FREE && mounts[i].parent == mnt &&
             mounts[i].covered && mounts[i].covered == node) {
-            return &mounts[i];
+            return &mounts[i]; /* a transitional mount answers EBUSY on entry */
         }
     }
     return 0;
@@ -498,13 +498,18 @@ void vfs_repoint(struct vfs_mount *mnt, void *from, void *to)
         if (pr->state == PROC_UNUSED) {
             continue;
         }
-        for (j = 0; j < MAX_FDS; j++) {
-            fd_entry_t *e = &pr->fds.entries[j];
+        if (mnt == &mounts[0]) {
+            for (j = 0; j < MAX_FDS; j++) {
+                fd_entry_t *e = &pr->fds.entries[j];
 
-            if ((e->type == FD_TYPE_FILE || e->type == FD_TYPE_DIR) &&
-                (void *)e->node == from) {
-                e->node = to;
+                if ((e->type == FD_TYPE_FILE || e->type == FD_TYPE_DIR) &&
+                    (void *)e->node == from) {
+                    e->node = to;
+                }
             }
+        }
+        if (pr->cwd_mnt == mnt && pr->cwd_node == from) {
+            pr->cwd_node = to;
         }
     }
     for (i = 0; i < VFS_MOUNTS; i++) {
@@ -518,7 +523,7 @@ void vfs_repoint(struct vfs_mount *mnt, void *from, void *to)
     if (mnt->root == from) {
         mnt->root = to;
     }
-    fd_ofd_repoint(from, to);
+    fd_ofd_repoint(mnt, from, to);
 }
 
 /* ---- the default-answer wrappers ---- */
@@ -752,6 +757,9 @@ static int32_t kfs_read(struct vfs_mount *mnt, void *handle, void *buf,
     int n;
 
     (void)mnt;
+    if (offset > 0xFFFFFFFFu) {
+        return 0; /* past the end of any KRFFS file */
+    }
     n = krffs_read_node(handle, buf, count, (uint32_t)offset);
     return n < 0 ? -EIO : n;
 }
@@ -764,6 +772,9 @@ static int32_t kfs_write(struct vfs_mount *mnt, void *handle, const void *buf,
     krffs_node_t *n = handle;
     int written;
 
+    if (offset > 0xFFFFFFFFu || count > 0xFFFFFFFFu - offset) {
+        return -EFBIG;
+    }
     written = krffs_write_node(&n, buf, count, (uint32_t)offset);
     if (written == KRFFS_ENOSPACE) {
         return -ENOSPC;
@@ -777,16 +788,25 @@ static int32_t kfs_write(struct vfs_mount *mnt, void *handle, const void *buf,
     return written;
 }
 
+/* A grow can relocate the node, as in `kfs_write`; the path call reports
+ * only status, so the node is looked up again and every holder repointed. */
 static int kfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
 {
     char path[256];
+    krffs_node_t *n;
 
-    (void)mnt;
+    if (size > 0xFFFFFFFFu) {
+        return -EFBIG;
+    }
     if (krffs_node_path(handle, path, sizeof(path)) != 0) {
         return -EIO;
     }
     if (krffs_truncate(path + (path[0] == '/'), (uint32_t)size) != 0) {
         return -EIO;
+    }
+    n = krffs_resolve(path + (path[0] == '/'));
+    if (n && n != (krffs_node_t *)handle) {
+        vfs_repoint(mnt, handle, n);
     }
     return 0;
 }
@@ -835,9 +855,9 @@ static int kfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
     return 0;
 }
 
-/* The namespace operations go through the parent's canonical path, which
- * is how the namespace half of KRFFS speaks today; a name is joined to the
- * held directory and handed to the path call. */
+/* The namespace operations go through the parent's canonical path, since
+ * the namespace half of KRFFS takes paths; a name is joined to the held
+ * directory and handed to the path call. */
 static int kfs_join(void *dir, const char *name, char *path, uint32_t cap)
 {
     krffs_node_t *d = dir ? dir : krffs_fs->node;
@@ -921,37 +941,25 @@ static int kfs_rename(struct vfs_mount *mnt, void *olddir,
                : -EIO;
 }
 
-/* Creation goes through the parent's canonical path, which is how the
- * namespace half of KRFFS speaks today; the node comes back resolved. */
+/* Creation goes through the parent's canonical path like the other
+ * namespace operations; the node comes back resolved. */
 static int kfs_create(struct vfs_mount *mnt, void *dir, const char *name,
                       uint32_t mode, void **node)
 {
     char path[256];
-    krffs_node_t *d = dir ? dir : krffs_fs->node;
     krffs_node_t *n;
-    uint32_t dlen, nlen;
+    int rc;
 
     (void)mnt;
     (void)mode; /* the caller stamps mode and owner under its own rules */
-    if (krffs_node_path(d, path, sizeof(path)) != 0) {
-        return -ENAMETOOLONG;
+    rc = kfs_join(dir, name, path, sizeof(path));
+    if (rc != 0) {
+        return rc;
     }
-    dlen = k_strlen(path);
-    nlen = k_strlen(name);
-    if (dlen == 0 || path[dlen - 1] != '/') {
-        if (dlen + 1 >= sizeof(path)) {
-            return -ENAMETOOLONG;
-        }
-        path[dlen++] = '/';
-    }
-    if (dlen + nlen + 1 > sizeof(path)) {
-        return -ENAMETOOLONG;
-    }
-    k_memcpy(path + dlen, name, nlen + 1);
     if (krffs_create(path + (path[0] == '/')) != 0) {
         return -ENOSPC;
     }
-    n = krffs_child(d, name);
+    n = krffs_child(dir ? dir : krffs_fs->node, name);
     if (!n) {
         return -EIO;
     }
@@ -1031,7 +1039,7 @@ static int synth_take(const struct vpath *vp, void **node)
             return 0;
         }
     }
-    klog(KLOG_WARN, "vfs", "synthetic node pool exhausted");
+    klog(KLOG_WARN, "vfs", "synthetic node pool: exhausted");
     return -ENOMEM;
 }
 
@@ -1133,14 +1141,35 @@ static int procfs_rest(struct vfs_mount *mnt, const char *rest, void **node,
     return synth_rest(mnt, "proc", rest, node, left);
 }
 
+/* What the resolver needs of a synthetic node: whether it is a directory,
+ * and the mode the search rule reads (0755 under /dev, 0555 under /proc,
+ * both root's). The syscall layer reports the full attributes itself. */
+static int synth_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
+{
+    const struct synth_node *sn = node;
+    int kind = sn->vp.kind;
+    int is_dir = kind == VNODE_DEV_DIR || kind == VNODE_PTS_DIR ||
+                 kind == VNODE_PROC_DIR || kind == VNODE_PROC_NET_DIR ||
+                 kind == VNODE_PROC_PID || kind == VNODE_PROC_FD_DIR;
+
+    k_memset(st, 0, sizeof(*st));
+    if (is_dir) {
+        st->mode = VFS_S_IFDIR | (mnt == &mounts[1] ? 0755u : 0555u);
+    } else {
+        st->mode = VFS_S_IFREG | 0444u;
+    }
+    st->nlink = 1;
+    return 0;
+}
+
 static const struct vfs_ops devfs_vops = {
-    0,          devfs_rest, synth_hold, synth_put, 0, 0, 0, 0, 0, 0, 0, 0,
-    0,          0,          0,          0,         0, 0, 0, 0, 0, 0, 0, 0,
+    0,          devfs_rest, synth_hold, synth_put, synth_getattr, 0, 0, 0, 0, 0, 0, 0,
+    0,          0,          0,          0,         0,             0, 0, 0, 0, 0, 0, 0,
 };
 
 static const struct vfs_ops procfs_vops = {
-    0,           procfs_rest, synth_hold, synth_put, 0, 0, 0, 0, 0, 0, 0, 0,
-    0,           0,           0,          0,         0, 0, 0, 0, 0, 0, 0, 0,
+    0,           procfs_rest, synth_hold, synth_put, synth_getattr, 0, 0, 0, 0, 0, 0, 0,
+    0,           0,           0,          0,         0,             0, 0, 0, 0, 0, 0, 0,
 };
 
 static int synth_mount_root(struct vfs_mount *mnt, block_device_t *dev,
@@ -1268,9 +1297,11 @@ static int drained(void *arg)
 
 /**
  * mount(2): the order of work is resolve and hold the target, check its
- * path length, claim the source's range, take a slot as `mounting`, run
- * the constructor, publish. Every failure after the first step releases
- * what the steps before it took.
+ * path length and what it is, claim the source's range, take a slot as
+ * `mounting` under the parent's namespace lock so no namespace change runs
+ * between the covered check and the reservation, run the constructor,
+ * publish. Every failure after the first step releases what the steps
+ * before it took. A target on the root is recorded by its canonical path.
  */
 int vfs_do_mount(const char *source, const char *target, const char *type,
                  uint32_t flags, const char *options)
@@ -1281,6 +1312,7 @@ int vfs_do_mount(const char *source, const char *target, const char *type,
     struct vfs_mount *m = 0;
     block_device_t *dev, *backing;
     uint64_t first, count;
+    char canon[VFS_COVERED_PATH_MAX];
     int claim;
     int i;
     int rc;
@@ -1295,8 +1327,10 @@ int vfs_do_mount(const char *source, const char *target, const char *type,
     if (rc != 0) {
         return rc;
     }
-    /* The target: a directory on a mount that can host one, not the root
-     * of the root, not already covered. */
+    if (k_strlen(target) >= VFS_COVERED_PATH_MAX) {
+        vfs_ref_release(&tref);
+        return -ENAMETOOLONG;
+    }
     if (tref.mnt->type->ops->lookup_rest) {
         vfs_ref_release(&tref);
         return -EINVAL;
@@ -1305,17 +1339,29 @@ int vfs_do_mount(const char *source, const char *target, const char *type,
         vfs_ref_release(&tref);
         return -EINVAL;
     }
-    if (vfs_getattr(tref.mnt, tref.node, &st) != 0 || !VFS_IS_DIR(st.mode)) {
+    if (tref.node == tref.mnt->root) {
+        vfs_ref_release(&tref);
+        return -EBUSY; /* the root of a placed mount: a mount point already */
+    }
+    rc = vfs_getattr(tref.mnt, tref.node, &st);
+    if (rc != 0) {
+        vfs_ref_release(&tref);
+        return rc;
+    }
+    if (!VFS_IS_DIR(st.mode)) {
         vfs_ref_release(&tref);
         return -ENOTDIR;
     }
-    if (k_strlen(target) >= VFS_COVERED_PATH_MAX) {
+    if (tref.mnt == &mounts[0] &&
+        krffs_node_path(tref.node, canon, sizeof(canon)) != 0) {
         vfs_ref_release(&tref);
         return -ENAMETOOLONG;
     }
+    vfs_ns_lock(tref.mnt);
     for (i = 0; i < VFS_MOUNTS; i++) {
         if (mounts[i].state != VFS_FREE && mounts[i].covered == tref.node &&
             mounts[i].parent == tref.mnt) {
+            vfs_ns_unlock(tref.mnt);
             vfs_ref_release(&tref);
             return -EBUSY; /* covered, or reserved by a mount in progress */
         }
@@ -1324,11 +1370,13 @@ int vfs_do_mount(const char *source, const char *target, const char *type,
      * on the backing disk. */
     rc = devfs_window_of(source, &dev, &backing, &first, &count);
     if (rc != 0) {
+        vfs_ns_unlock(tref.mnt);
         vfs_ref_release(&tref);
         return rc;
     }
     claim = devfs_claim(backing, first, first + count - 1);
     if (claim < 0) {
+        vfs_ns_unlock(tref.mnt);
         vfs_ref_release(&tref);
         return claim;
     }
@@ -1340,6 +1388,7 @@ int vfs_do_mount(const char *source, const char *target, const char *type,
     }
     if (!m) {
         devfs_release_claim(claim);
+        vfs_ns_unlock(tref.mnt);
         vfs_ref_release(&tref);
         return -ENOMEM;
     }
@@ -1357,10 +1406,12 @@ int vfs_do_mount(const char *source, const char *target, const char *type,
     m->ns_holder = -1;
     wait_queue_init(&m->ns_wq);
     m->claim = claim;
-    k_strncpy(m->covered_path, target, sizeof(m->covered_path));
+    k_strncpy(m->covered_path, tref.mnt == &mounts[0] ? canon : target,
+              sizeof(m->covered_path));
     k_strncpy(m->source, source, sizeof(m->source));
     m->source[sizeof(m->source) - 1] = '\0';
     tref.mnt->refs++; /* a child mount is a reference on its parent */
+    vfs_ns_unlock(tref.mnt);
     vfs_leave(tref.mnt); /* the walk's count; the hold stays with the slot */
 
     vfs_ns_lock(m);
@@ -1378,8 +1429,8 @@ int vfs_do_mount(const char *source, const char *target, const char *type,
         return rc;
     }
     m->state = VFS_ACTIVE;
-    klog(KLOG_INFO, "vfs", "mounted %s on %s (%s%s)", source, target, t->name,
-         (flags & VFS_MS_RDONLY) ? ", read-only" : "");
+    klog(KLOG_INFO, "vfs", "mounted: %s on %s (%s%s)", source, m->covered_path,
+         t->name, (flags & VFS_MS_RDONLY) ? ", read-only" : "");
     return 0;
 }
 
@@ -1417,7 +1468,7 @@ int vfs_do_umount(const char *target)
     }
     m->state = VFS_UNMOUNTING;
     while (m->inprogress > 0) {
-        wq_wait_event(&m->ns_wq, drained, m); /* EINTR: keep draining */
+        wq_wait_event_nointr(&m->ns_wq, drained, m);
     }
     if (m->refs > 0) {
         m->state = VFS_ACTIVE;
@@ -1425,7 +1476,12 @@ int vfs_do_umount(const char *target)
     }
     vfs_ns_lock(m);
     if (m->type->ops->sync) {
-        m->type->ops->sync(m);
+        rc = m->type->ops->sync(m);
+        if (rc != 0) {
+            vfs_ns_unlock(m);
+            m->state = VFS_ACTIVE;
+            return rc;
+        }
     }
     if (m->type->ops->prepare_unmount) {
         rc = m->type->ops->prepare_unmount(m);
