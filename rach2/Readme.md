@@ -150,8 +150,13 @@ by finding the next newline. A record too long for its 256-byte buffer ends in
 The three destinations past the ring write byte by byte with interrupts as the
 caller had them, so a record raised by an interrupt handler in the middle of
 one being written out would put its bytes inside the other's line. Such a
-record goes to the ring, which is exact either way, and is not printed: one
-record in the log only is better than two shredded into each other.
+record goes to the ring where it is raised and waits in a queue of eight for
+the three past it; the delivery it interrupted writes the queue out, in order,
+once its own record is finished. A ninth record is dropped, and the count of
+what was dropped is printed when the queue is empty. Printing it where it was
+raised would shred two records into each other, and holding it in the ring
+alone would keep it off the port altogether, which is how a device could be
+unplugged while the machine was printing and nothing on the wire said so.
 
 ## Input
 

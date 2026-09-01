@@ -19,12 +19,13 @@
  * thing the kernel's own call builds.
  *
  * Two things are checked about interrupts, and one of them is checked
- * indirectly. That a re-entrant record does not tear the one being delivered
- * is checked outright, by re-entering from the screen recorder. That the
- * formatter's shared sink is protected is checked by counting the brackets:
- * one klog call takes exactly two, the build and the ring append, and they
- * balance. A host has no interrupts to land in the middle, so the count is
- * what stands in for the case that cannot be staged here.
+ * indirectly. That a re-entrant record does not tear the one being delivered,
+ * and is printed after it rather than lost, is checked outright by re-entering
+ * from the screen recorder. That the formatter's shared sink is protected is
+ * checked by counting the brackets: one klog call takes exactly three, the
+ * build, the ring append and the look at the queue, and they balance. A host
+ * has no interrupts to land in the middle, so the count is what stands in for
+ * the case that cannot be staged here.
  */
 
 /* The kernel headers define the fixed-width types themselves, so nothing from
@@ -63,6 +64,7 @@ static unsigned order_len;
 static int serial_wedged;       /* the port never becomes ready */
 static int net_on;              /* netconsole has a device to send through */
 static int reenter_from_screen; /* raise a record from inside delivery */
+static int reenter_times;       /* how many more to raise, one per byte */
 static unsigned serial_offered; /* bytes handed to a port that took none */
 static unsigned ring_at_screen; /* the ring's size when the screen was written */
 static int irq_depth;
@@ -96,6 +98,10 @@ void k_putc(char c)
     if (reenter_from_screen) {
         reenter_from_screen = 0;
         klog(KLOG_ERR, "irq", "landed: in the middle of another record");
+    }
+    if (reenter_times > 0) {
+        reenter_times--;
+        klog(KLOG_ERR, "irq", "landed: one of a burst");
     }
 }
 
@@ -177,6 +183,8 @@ static void reset(void)
     serial_wedged = 0;
     net_on = 0;
     reenter_from_screen = 0;
+    reenter_times = 0;
+    pending_head = pending_count = pending_lost = 0;
     irq_depth = irq_pairs = irq_unbalanced = 0;
     kernel_ticks = 0;
     ring_head = ring_used = ring_oldest = 0;
@@ -515,7 +523,10 @@ int main(void)
     CHECK("and expands the newline for a terminal", streq(serial, "shell> ls\r\n"));
 
     /* A record raised from inside the delivery of another, which is what an
-       interrupt handler that prints does. Neither may tear the other. */
+       interrupt handler that prints does. Neither may tear the other, and the
+       one raised from inside must still be printed: an unplugged device says
+       so once, and a machine that was writing at that moment would otherwise
+       never say it on its port. */
     reset();
     net_on = 1;
     reenter_from_screen = 1;
@@ -526,24 +537,51 @@ int main(void)
           has(text, "<3>[0.00] irq: landed: in the middle of another record\n"));
     CHECK("and so is the one it interrupted",
           has(text, "<6>[0.00] outer: began: before the interrupt\n"));
-    /* And the nested one went no further. Bytes from two records on one line
-       are worse than one record being in the log only, and on the screen the
-       shell may be part way through a terminal escape. */
+    /* Both reach the destinations past the ring, one whole line after the
+       other: the record raised from inside waits for the line it landed in. */
     screen[screen_len] = '\0';
-    CHECK("the nested record is not on the screen",
-          streq(screen, "outer: began: before the interrupt\n"));
+    CHECK("the screen has the record that was interrupted, then the one that "
+          "interrupted it",
+          streq(screen, "outer: began: before the interrupt\n"
+                        "irq: landed: in the middle of another record\n"));
     serial[serial_len] = '\0';
-    CHECK("nor on the serial port",
-          streq(serial, "<6>[0.00] outer: began: before the interrupt\r\n"));
+    CHECK("and so does the serial port",
+          streq(serial, "<6>[0.00] outer: began: before the interrupt\r\n"
+                        "<3>[0.00] irq: landed: in the middle of another record\r\n"));
     net[net_len] = '\0';
-    CHECK("nor on the wire", streq(net, "<6>[0.00] outer: began: before the interrupt\n"));
+    CHECK("and so does the wire",
+          streq(net, "<6>[0.00] outer: began: before the interrupt\n"
+                     "<3>[0.00] irq: landed: in the middle of another record\n"));
 
-    /* The brackets: one build and one ring append per record, balanced. */
+    /* More records raised from inside one delivery than the queue holds. The
+       eight it holds are printed in order and the ninth is counted, because a
+       log that loses records without saying so is worse than one that says
+       how many. */
+    reset();
+    reenter_times = 9;
+    klog(KLOG_INFO, "outer", "began: before the burst");
+    CHECK("the burst is spent", reenter_times == 0);
+    ring_text(text, sizeof(text));
+    CHECK("the ring has the record, the nine raised inside it, and the count",
+          count_lines(text) == 11);
+    CHECK("and the count says how many were dropped",
+          has(text, "<4>[0.00] klog: dropped: 1 record(s) the queue could not hold\n"));
+    screen[screen_len] = '\0';
+    CHECK("the screen has the record, eight of the burst, and the count",
+          count_lines(screen) == 10);
+    CHECK("the screen begins with the record that was interrupted",
+          has(screen, "outer: began: before the burst\n"
+                      "irq: landed: one of a burst\n"));
+    CHECK("and ends with the count",
+          has(screen, "klog: dropped: 1 record(s) the queue could not hold\n"));
+
+    /* The brackets: one build, one ring append, and one look at the queue per
+       record, balanced. */
     reset();
     klog(KLOG_INFO, "b", "check: the brackets");
-    CHECK("a record takes two brackets", irq_pairs == 2);
+    CHECK("a record takes three brackets", irq_pairs == 3);
     ring_text(text, sizeof(text));
-    CHECK("and a read takes one more", irq_pairs == 3);
+    CHECK("and a read takes one more", irq_pairs == 4);
     CHECK("and leaves none open", irq_depth == 0 && irq_unbalanced == 0);
 
     if (fails == 0) {

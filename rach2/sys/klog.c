@@ -10,7 +10,9 @@
  *
  * A record is formatted whole before any destination sees it. Two things follow
  * from that: a reader never meets half a line, and a record raised by an
- * interrupt handler cannot appear inside one raised by the code it interrupted.
+ * interrupt handler cannot appear inside one raised by the code it
+ * interrupted. It waits in a queue instead, and the delivery it interrupted
+ * writes it out when its own record is finished.
  * The formatter writes through a sink with state of its own, which is the one
  * thing here that two callers cannot share, so the formatting and the ring
  * append each run with interrupts off. Both are short and neither sleeps.
@@ -395,6 +397,96 @@ static const struct klog_dest DESTS[] = {
 /* Set while a record is being written out; see `klog_v`. */
 static int klog_delivering;
 
+/*
+ * The records raised while another was being written out, waiting for the
+ * destinations past the ring.
+ *
+ * A record from an interrupt handler cannot go out where it is raised: its
+ * bytes would land inside the line the interrupted code is part way through.
+ * It waits here and goes out when that line is finished, so what a machine
+ * says on its port is what its ring holds. Without the queue such a record
+ * reached the ring only, and an event that happens while the machine is
+ * printing was invisible to anything reading the port; that is how a USB
+ * device could be unplugged with nothing said about it.
+ *
+ * Eight is a burst of interrupts across one record. A ninth is counted and
+ * dropped, and the count is reported once the queue is empty, because a log
+ * that quietly loses records is worse than one that says how many.
+ */
+#define KLOG_PENDING_MAX 8
+
+static struct klog_record pending[KLOG_PENDING_MAX];
+static int pending_head;
+static int pending_count;
+static int pending_lost;
+
+/**
+ * Put a record at the end of the queue, or count it as lost.
+ *
+ * The caller holds interrupts off: this runs inside the same region that
+ * built the record and read `klog_delivering`.
+ */
+static void pending_put(const struct klog_record *r)
+{
+    if (pending_count >= KLOG_PENDING_MAX) {
+        pending_lost++;
+        return;
+    }
+    pending[(pending_head + pending_count) % KLOG_PENDING_MAX] = *r;
+    pending_count++;
+}
+
+/**
+ * Write the queued records to the destinations past the ring, in the order
+ * they were raised, and then let the next record be delivered directly.
+ *
+ * `klog_delivering` stays set for the whole drain, so a record raised by an
+ * interrupt during it joins the queue instead of the line being written. The
+ * flag is cleared with the queue empty and interrupts off, which leaves no
+ * moment where a record is waiting and nobody is coming for it.
+ */
+static void klog_drain(void)
+{
+    for (;;) {
+        struct klog_record r;
+        uint32_t flags;
+        int lost;
+        int i;
+
+        flags = kirq_save();
+        if (pending_count == 0) {
+            lost = pending_lost;
+            pending_lost = 0;
+            klog_delivering = 0;
+            kirq_restore(flags);
+            if (lost > 0) {
+                /* `klog_v` with the count in an array, and not `klog` with it
+                   as an argument: reaching a variadic call's arguments by
+                   walking the stack is true on i386 and not on the machine
+                   the host test compiles this file for. */
+                char *args[1];
+
+                args[0] = (char *)(long)lost;
+                klog_v(KLOG_WARN, "klog", "dropped: %d record(s) the queue could not hold", args);
+            }
+            return;
+        }
+        r = pending[pending_head];
+        pending_head = (pending_head + 1) % KLOG_PENDING_MAX;
+        pending_count--;
+        kirq_restore(flags);
+
+        for (i = 0; i < KLOG_N_DESTS; i++) {
+            if (DESTS[i].write == dest_ring) {
+                continue; /* the ring took it where it was raised */
+            }
+            if (r.level <= DESTS[i].takes_down_to) {
+                DESTS[i].write(&r);
+            }
+        }
+    }
+}
+
 
 /**
  * Build one record and offer it to the destinations that take its level.
@@ -402,10 +494,11 @@ static int klog_delivering;
  * The build runs with interrupts off because the formatter writes through
  * sink state that two callers cannot share. The destinations then run with
  * interrupts as this was entered, so a record raised by an interrupt handler
- * can arrive in the middle of one being written out. Such a record is put in
- * the ring, which is exact either way, and not printed: its bytes inside
- * another record's line, or inside a terminal escape the shell is part way
- * through, are worse than one record being in the log only.
+ * can arrive in the middle of one being written out. Such a record goes to
+ * the ring where it is raised and waits in the queue for the rest: its bytes
+ * inside another record's line, or inside a terminal escape the shell is part
+ * way through, would be worse than the wait. The delivery that interrupted it
+ * writes it out when its own record is finished.
  */
 void klog_v(int level, const char *subsystem, const char *format, char **args)
 {
@@ -422,7 +515,9 @@ void klog_v(int level, const char *subsystem, const char *format, char **args)
     flags = kirq_save();
     klog_build(&r, level, subsystem, format, args);
     nested = klog_delivering;
-    if (!nested) {
+    if (nested) {
+        pending_put(&r);
+    } else {
         klog_delivering = 1;
     }
     kirq_restore(flags);
@@ -436,7 +531,7 @@ void klog_v(int level, const char *subsystem, const char *format, char **args)
         }
     }
     if (!nested) {
-        klog_delivering = 0;
+        klog_drain();
     }
 }
 
