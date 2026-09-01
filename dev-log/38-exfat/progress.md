@@ -24,6 +24,6 @@ Phase 6: the suite
 - [x] tests/run exfat; the checker over every volume written
 
 Phase 7: the record and the sweep
-- [ ] docs read against code; prosecheck; the review round and the proofread; the sweep
-- [ ] notes.md closed empty; the full set once on the final tree; make test timed
-- [ ] dev-log Readmes; tree clean
+- [x] docs read against code; prosecheck; the review round and the proofread; the sweep
+- [x] notes.md closed empty; the full set once on the final tree; make test timed
+- [x] dev-log Readmes; tree clean

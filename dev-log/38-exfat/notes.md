@@ -421,6 +421,131 @@ Two mutations, through mutate38p6.sh: the free run taken past the
 directory's last cluster (caught by the rewrite row) and a mount that
 refuses to be writable (caught by the suite's write boot).
 
+## Phase 7 record
+
+The build, every addition and its reason:
+
+* `rach2/sources.mk`: `fatcommon.c`, what the two FAT drivers share, and
+  `exfat.c`, the type.
+* `tests/system/suites.mk`: `MKEXFATFIXTURE`, the one Make rule for the
+  exFAT builder and reader, since the suite builds the empty volume with
+  it and judges what the kernel wrote with it; `run-exfat`.
+* `tests/registry`: `exfat` in the core tier (61 s, six boots), needing
+  `qemu-system-i386` and `python3`; the external checker is optional and
+  the suite says which of the two ways it judged the volume.
+* `tools/setup/doctor.sh`: the optional `exfatprogs` row, for `fsck.exfat`
+  or `fsck_exfat` over `tests/run exfat`.
+
+No new manifest line, no `build_*.sh`, no fixture outside `build/`. The
+host tests compile `mkexfatfixture` into their fixture directory as the
+FAT32 tests compile theirs; the Make rule is the suites'.
+
+The code sweep: nothing in `exfat.c` duplicates `fat32.c` that
+`fatcommon.c` should hold. The on-disk shapes are each driver's own (the
+FAT entry, the directory entry, the set, the bitmap against the FAT),
+and the two checks share the walk bitmap and its lock but not their
+walks, since one follows FAT chains from directory entries and the other
+entry sets against a bitmap. Every helper with one caller names a step
+of it: `alloc_cluster` under `alloc_run`, `dir_grow` under `free_slots`,
+`upcase_walk` under `ex_upcase`, `check_dir` under `ex_check_volume`,
+`is_under` in the rename. `fat32name.c` keeps FAT32's short names and
+aliases, which exFAT has none of.
+
+The mutation scripts, each restoring its source in a trap and rebuilding
+before the verdict, in the session's scratch directory: mutate38p2.sh
+(the builder's four), mutate38p3.sh with two reruns (the reader's
+eleven), mutate38p4.sh with two reruns (the writer's thirteen),
+mutate38p5.sh with a rerun (the check's eight) and mutate38p6.sh (the
+suite's two). Thirty-eight in all; thirty-seven caught, and the one
+recorded under phase 4 that no row can tell apart.
+
+## The review round before the sweep
+
+Four units on Codex, run at once (the owner's cap of two is on Claude
+subagents, not Codex; CLAUDE.md says so since this milestone). Unit C
+read the writer, unit D the check, unit E the shared code and the suite,
+unit F the reader-facing documents. Twenty-six findings, every one fixed.
+
+Unit C (the writer), five:
+
+* `unlink` and `rename` left a vendor allocation's clusters allocated
+  with nothing naming them, and a rename dropped every benign secondary
+  the set carried; the clusters go with the set now, and the rename
+  copies the secondaries after the new name entries.
+* A directory could grow past the format's 256 MiB; `dir_grow` refuses.
+* `write_boot_state` wrote the flags before the percent in use, so a
+  stop between them left a clean volume with a stale percent; the
+  percent goes first and the dirty bit is cleared last. Its arithmetic
+  was `used / (clusters / 100)`, which is not the percentage; it scales
+  both down until `used * 100` fits 32 bits and then divides.
+* The room before an allocated run was computed in 32 bits, so a write
+  to a file at the 4 GiB limit took the wrong branch and answered EIO.
+* `ENOSPC` was decided after `chain_convert` had written the FAT of a
+  contiguous file; the room is decided before anything is written.
+
+Unit D (the check), nine:
+
+* A repair inside a contiguous directory of more than one cluster
+  followed the FAT, which a `NoFatChain` directory does not have; the
+  repair records carry the directory's chain kind and length.
+* A set whose `SecondaryCount` reached past its own entries could
+  swallow the next file's, and the repair then wrote that file's
+  entries inactive; every entry after the primary must be an in-use
+  secondary, which `set_read` now requires.
+* Two sleeping constructors could take the same mount slot, since
+  `used` was set only at the end; the slot is claimed before the
+  constructor runs and given back when it fails, in both drivers.
+* A duplicate name was missed when the earlier set was the one whose
+  checksum was about to be rewritten; such a set counts.
+* The 18-secondary limit refused sets the format allows; `set_read`
+  streams the set entry by entry and takes the format's 255.
+* An allocation bitmap, up-case table or label entry outside the root
+  was passed over; it is a fault.
+* The walk's name bound is cumulative along the path, not per
+  directory; the Readme says so, with the depth and the repair bounds.
+* The host reader was weaker than the kernel on the set grammar, the
+  depth and the name bound; it matches now.
+* Rows that could not fail: the fault rows read the reason the kernel
+  logged, the repair rows have a fixture carrying all three states at
+  once, the repair matrix reads the file whose checksum is rewritten,
+  and the free count is checked after the surplus repair.
+
+Unit E (the shared code and the suite), eight: the inode-number policy
+duplicated in both drivers, now `fat_inode` in `fatcommon.c`; exFAT's
+`setattr` losing an odd second, since the stamp's field holds two and
+the 10 ms count carries the odd one; `walk_clean` in both suites
+returning success when the checker crashed without a finding; the copy
+for the external checker and the listing whose exit statuses were
+swallowed; `lagprobe`'s `writers` dispatched by a byte at an index the
+argument might not have; and `prepare-all` missing the exFAT and FAT32
+fixture tools, so `tests/run core` built them inside the pool.
+
+Unit F (the documents), eleven: `vfs.Readme.md` still called exFAT
+read-only; the exFAT Readme's creation order, its vendor-entry
+sentence, its listing of a name past the component, its
+`ValidDataLength` claim, its "written in one go is contiguous", its
+file-size limit and its refusal fragments; the host Readme's count of
+programs and of malformed fixtures; the tests Readme's count of suites.
+The word "gate", which CLAUDE.md forbids for a set of checks, is out of
+the prose.
+
+Eight mutations for the round, through mutate38p7.sh: a set that
+swallows a primary, a repair that reads a contiguous directory through
+the FAT, a duplicate missed after a checksum-only set, a root-only
+entry accepted below the root, a vendor allocation left allocated, the
+old percentage, the room decided after the conversion, and the room
+narrowed to 32 bits. Seven caught. The eighth needs a file at the 4 GiB
+limit, which a 16 MiB fixture cannot hold; it is proved by reading, like
+the straddling set's write order in phase 4.
+
+## The full set
+
+All 64 suites pass on the final tree in 9 minutes 6 seconds, `make test`
+in 4 minutes 25 seconds, with no machine left running. The one suite
+that failed on the way, `selfbuild`, failed because it was run beside
+other suites and its work disk was rebuilt underneath it; the runner's
+pool assumes one run at a time. It passes in the full set.
+
 ## Open items
 
 (none)
