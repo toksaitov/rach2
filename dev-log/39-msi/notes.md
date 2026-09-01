@@ -269,6 +269,18 @@ register rule and repetition: three documents listed the same fourteen boots
 and two of the lists were already wrong, so the system tests' Readme owns the
 list now and the USB Readme refers to it.
 
+## The document the plan allowed for
+
+The plan said that if no document owned interrupts, `sys/interrupts.Readme.md`
+would be new and would say so. The nearest owning document turned out to be
+`rach2/Readme.md`, whose architecture section already had the IDT and the two
+controllers: it now has the two vector ranges, the APIC and what it is and is
+not used for, the refusals, the boot check, the fallback rule and the three
+boot options, and it points at the USB Readme for the pump and at the
+synthetic file systems' Readme for the two `/proc` files. A third document
+would have been a third copy of what the proofread had just finished taking
+down to one.
+
 ## Open items
 
 (none)
