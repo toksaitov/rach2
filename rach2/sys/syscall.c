@@ -3495,13 +3495,26 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
 static int32_t do_readlink(const char *name, char __user *ubuf, uint32_t bufsiz)
 {
     struct vpath vp;
+    struct vfs_ref ref;
+    const struct vpath *svp;
     char link[256]; /* fit a full fd-target path (the syscall path limit) */
     int n, pid, kind;
 
     if (!ubuf || bufsiz == 0) {
         return -EINVAL;
     }
-    kind = synth_classify(name, &vp);
+    kind = (int)vfs_resolve(0, name, 0, &ref, 0, 0);
+    if (kind != 0) {
+        return kind;
+    }
+    svp = vfs_synth_vpath(ref.mnt, ref.node);
+    if (!svp) {
+        vfs_ref_release(&ref);
+        return -EINVAL; /* nothing outside /proc is a link */
+    }
+    vp = *svp;
+    vfs_ref_release(&ref);
+    kind = vp.kind;
 
     if (kind == VNODE_PROC_PID && vp.pid == SYNTH_PID_SELF) {
         /* /proc/self is a symlink to the caller's numeric pid. */
@@ -3535,7 +3548,7 @@ static int32_t do_readlink(const char *name, char __user *ubuf, uint32_t bufsiz)
             return n;
         }
     } else {
-        return (kind == VNODE_ENOENT) ? -ENOENT : -EINVAL; /* not a symlink */
+        return -EINVAL; /* not a symlink */
     }
 
     if ((uint32_t)n > bufsiz) {
