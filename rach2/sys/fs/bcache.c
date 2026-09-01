@@ -131,18 +131,25 @@ struct bbuf *bcache_get(block_device_t *dev, uint64_t blk)
         klog(KLOG_WARN, "bcache", "no free buffer");
         return 0;
     }
-    victim->bytes = block_bytes(dev, blk);
-    if (block_request(dev, 0, blk * BCACHE_BLOCK_SECTORS,
-                      victim->bytes / BLOCK_SECTOR_SIZE, victim->data) != 0) {
-        victim->dev = 0;
-        return 0;
-    }
-    stat_fills++;
+    /* The buffer is keyed and held before the request, not after: the
+     * request may sleep, and a second process asking for the same block
+     * meanwhile must find this buffer busy and wait for it, not miss too
+     * and fill a second buffer with the same block. A fill that fails gives
+     * the buffer back and wakes whoever waited. */
     victim->dev = dev;
     victim->blk = blk;
     victim->dirty = 0;
     victim->failed = 0;
     victim->holder = caller_pid();
+    victim->bytes = block_bytes(dev, blk);
+    if (block_request(dev, 0, blk * BCACHE_BLOCK_SECTORS,
+                      victim->bytes / BLOCK_SECTOR_SIZE, victim->data) != 0) {
+        victim->dev = 0;
+        victim->holder = -1;
+        wq_wake_all(&victim->wq);
+        return 0;
+    }
+    stat_fills++;
     return victim;
 }
 
