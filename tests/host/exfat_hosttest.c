@@ -42,6 +42,10 @@ extern int memcmp(const void *a, const void *b, unsigned long n);
 extern void *memcpy(void *dst, const void *src, unsigned long n);
 extern void *memset(void *dst, int c, unsigned long n);
 extern long atol(const char *s);
+extern int strncmp(const char *a, const char *b, unsigned long n);
+extern unsigned long fwrite(const void *buf, unsigned long size, unsigned long n, void *f);
+extern void *popen(const char *cmd, const char *mode);
+extern int pclose(void *f);
 
 #define FIXDIR    "/tmp/rach2_verify"
 #define IMG_BYTES (65536u * 512u) /* 32 MiB: the fixture is 16, the external volume 16 */
@@ -128,12 +132,21 @@ static int img_read(block_device_t *d, uint64_t lba, uint32_t count, void *buf)
     return 0;
 }
 
+static int writes_made;
+static int stop_after = -1;
+
+/* Writes land in the image. `stop_after` is the interruption matrix's
+   crash: the writes after that many fail without touching the image. */
 static int img_write(block_device_t *d, uint64_t lba, uint32_t count, const void *buf)
 {
     (void)d;
     if (lba + count > image_sectors) {
         return -5;
     }
+    if (stop_after >= 0 && writes_made >= stop_after) {
+        return -5;
+    }
+    writes_made++;
     __builtin_memcpy(image + lba * 512, buf, count * 512);
     return 0;
 }
@@ -171,6 +184,7 @@ static int load_file(const char *path)
     if (!f) {
         return -1;
     }
+    stop_after = -1;
     bcache_sync(&dev);
     n = fread(image, 1, IMG_BYTES, f);
     fclose(f);
@@ -658,6 +672,660 @@ static void external_rows(void)
     unmount_image();
 }
 
+/* ---- the write rows ---- */
+
+static unsigned char pattern[8192];
+static char check_out[16384];
+static void fill_pattern(void)
+{
+    unsigned i;
+
+    for (i = 0; i < sizeof(pattern); i++) {
+        pattern[i] = (unsigned char)(i * 7 + 3);
+    }
+}
+
+/* Mount the loaded image writable; the constructor's rc. */
+static int mount_rw(void)
+{
+    __builtin_memset(&mnt, 0, sizeof(mnt));
+    mnt.type = &vfs_exfat_type;
+    mnt.dev = &dev;
+    mnt.flags = 0;
+    mnt.ns_holder = -1;
+    if (vfs_exfat_type.mount(&mnt, &dev, 0, "") != 0) {
+        return -1;
+    }
+    vfs_ns_lock(&mnt); /* the test stands in for the syscall layer */
+    return 0;
+}
+
+static void *make_file(void *dir, const char *name)
+{
+    void *n = 0;
+
+    if (OPS->create(&mnt, dir, name, 0644, &n) != 0) {
+        return 0;
+    }
+    return n;
+}
+
+static int write_at(void *node, const unsigned char *buf, uint32_t count, uint64_t off)
+{
+    void *h;
+    int32_t got;
+
+    if (OPS->open(&mnt, node, 0, &h) != 0) {
+        return -1;
+    }
+    got = OPS->write(&mnt, h, buf, count, off);
+    OPS->release(&mnt, h);
+    return got == (int32_t)count ? 0 : (got < 0 ? got : -1);
+}
+
+/* Dump the image and walk it with the host reader; the check's exit
+   status, its output in `out`. */
+static int run_check(char *out, unsigned long cap)
+{
+    char cmd[300], line[300];
+    void *f;
+    unsigned long n = 0;
+    int rc;
+
+    f = fopen(FIXDIR "/exfat_write.img", "wb");
+    if (!f || fwrite(image, 1, (unsigned long)image_sectors * 512, f) !=
+                  (unsigned long)image_sectors * 512) {
+        printf("exfat_hosttest: cannot dump the image\n");
+        exit(1);
+    }
+    fclose(f);
+    snprintf(cmd, sizeof(cmd), "%s/mkexfatfixture --check %s/exfat_write.img", FIXDIR, FIXDIR);
+    f = popen(cmd, "r");
+    if (!f) {
+        printf("exfat_hosttest: cannot run the check\n");
+        exit(1);
+    }
+    out[0] = '\0';
+    while (fgets(line, sizeof(line), f) && n + strlen(line) < cap - 1) {
+        memcpy(out + n, line, strlen(line) + 1);
+        n += strlen(line);
+    }
+    rc = pclose(f);
+    return rc == -1 ? -1 : (rc >> 8) & 0xff;
+}
+
+/* The image kept under a name, for the external checker run by hand. */
+static void dump_named(const char *kind, const char *name)
+{
+    char path[200];
+    void *f;
+
+    snprintf(path, sizeof(path), "%s/exfat_%s_%s.img", FIXDIR, kind, name);
+    f = fopen(path, "wb");
+    if (f) {
+        fwrite(image, 1, (unsigned long)image_sectors * 512, f);
+        fclose(f);
+    }
+}
+
+/* Read the crash state back from the dump: the cache's dirty buffers go
+   into the image the dump replaces, so nothing of them survives. */
+static void load_dump(void)
+{
+    stop_after = -1;
+    bcache_sync(&dev);
+    if (load_file(FIXDIR "/exfat_write.img") != 0) {
+        printf("exfat_hosttest: cannot read the dump back\n");
+        exit(1);
+    }
+}
+
+/* The findings the driver's own order may leave behind a stop, and no
+   other: lost clusters, orphan secondaries, a checksum-only set, a
+   surplus tail; the three the check repairs, and the one it counts. */
+static int findings_allowed(const char *out)
+{
+    static const char *const allowed[] = {"check: OK: ",
+                                          "check: FAIL: ",
+                                          "check: lost: ",
+                                          "check: orphan secondaries: ",
+                                          "check: checksum-only: ",
+                                          "check: surplus: "};
+    const char *p = out;
+
+    while (*p) {
+        const char *nl = strchr(p, '\n');
+        int ok = strncmp(p, "check: ", 7) != 0, a;
+
+        for (a = 0; a < 6 && !ok; a++) {
+            if (strncmp(p, allowed[a], strlen(allowed[a])) == 0) {
+                ok = 1;
+            }
+        }
+        if (!ok) {
+            return 0;
+        }
+        if (!nl) {
+            break;
+        }
+        p = nl + 1;
+    }
+    return 1;
+}
+
+/* ---- the sequences ---- */
+
+static int seq_create(void)
+{
+    void *n = make_file(mnt.root, "w one.txt");
+
+    if (!n) {
+        return -1;
+    }
+    if (write_at(n, (const unsigned char *)"hello", 5, 0) != 0) {
+        OPS->put(&mnt, n);
+        return -1;
+    }
+    OPS->put(&mnt, n);
+    return 0;
+}
+
+static int seq_extend(void)
+{
+    void *n = make_file(mnt.root, "w two.bin");
+    int rc;
+
+    if (!n) {
+        return -1;
+    }
+    rc = write_at(n, pattern, 2010, 0);
+    if (rc == 0) {
+        rc = write_at(n, pattern + 2010, 3000, 2010);
+    }
+    OPS->put(&mnt, n);
+    return rc;
+}
+
+static int seq_gap(void)
+{
+    void *n = make_file(mnt.root, "w three.bin");
+    int rc;
+
+    if (!n) {
+        return -1;
+    }
+    rc = write_at(n, pattern, 10, 0);
+    if (rc == 0) {
+        rc = write_at(n, pattern + 10, 5, 6000); /* zeros between, across a cluster */
+    }
+    OPS->put(&mnt, n);
+    return rc;
+}
+
+static int seq_truncate(void)
+{
+    void *n = make_file(mnt.root, "w four.txt");
+    void *h;
+    int rc;
+
+    if (!n) {
+        return -1;
+    }
+    rc = write_at(n, pattern, 6010, 0);
+    if (rc == 0 && OPS->open(&mnt, n, 0, &h) == 0) {
+        rc = OPS->truncate(&mnt, h, 700);
+        if (rc == 0) {
+            rc = OPS->truncate(&mnt, h, 0);
+        }
+        if (rc == 0) {
+            rc = OPS->truncate(&mnt, h, 5000);
+        }
+        OPS->release(&mnt, h);
+    }
+    OPS->put(&mnt, n);
+    return rc;
+}
+
+static int seq_unlink(void)
+{
+    void *n = make_file(mnt.root, "w five.txt");
+    void *h;
+    int rc;
+
+    if (!n) {
+        return -1;
+    }
+    rc = write_at(n, pattern, 100, 0);
+    if (rc == 0 && OPS->open(&mnt, n, 0, &h) == 0) {
+        rc = OPS->unlink(&mnt, mnt.root, "w five.txt");
+        if (rc == 0) {
+            rc = write_at(n, pattern, 4200, 0); /* through the description, held */
+        }
+        if (rc == 0) {
+            /* Another file written meanwhile must not take the held
+               file's clusters: its bytes are still its own afterwards. */
+            void *o = make_file(mnt.root, "w six.txt");
+
+            rc = o ? write_at(o, pattern + 100, 4200, 0) : -1;
+            if (o) {
+                OPS->put(&mnt, o);
+            }
+            if (rc == 0 &&
+                (read_all(n, back, sizeof(back)) != 4200 || memcmp(back, pattern, 4200) != 0)) {
+                rc = -1;
+            }
+        }
+        OPS->release(&mnt, h);
+    }
+    OPS->put(&mnt, n);
+    return rc;
+}
+
+static int seq_mkdir(void)
+{
+    void *d = 0, *n;
+    int rc = OPS->mkdir(&mnt, mnt.root, "Dir One", 0755);
+
+    if (rc != 0 || OPS->lookup(&mnt, mnt.root, "Dir One", &d) != 0) {
+        return -1;
+    }
+    n = make_file(d, "inner.txt");
+    rc = n ? write_at(n, pattern, 30, 0) : -1;
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    if (rc == 0 && OPS->rmdir(&mnt, mnt.root, "Dir One") != -ENOTEMPTY) {
+        rc = -1;
+    }
+    if (rc == 0) {
+        rc = OPS->unlink(&mnt, d, "inner.txt");
+    }
+    OPS->put(&mnt, d);
+    if (rc == 0) {
+        rc = OPS->rmdir(&mnt, mnt.root, "Dir One");
+    }
+    return rc;
+}
+
+static int seq_rename(void)
+{
+    void *n = make_file(mnt.root, "r1.txt");
+    void *d = 0, *o;
+    int rc;
+
+    if (!n) {
+        return -1;
+    }
+    rc = write_at(n, pattern, 40, 0);
+    OPS->put(&mnt, n);
+    if (rc == 0) {
+        rc = OPS->rename(&mnt, mnt.root, "r1.txt", mnt.root, "R1x.txt"); /* in place */
+    }
+    if (rc == 0 && OPS->lookup(&mnt, mnt.root, "dir", &d) != 0) {
+        rc = -1;
+    }
+    if (rc == 0) {
+        rc = OPS->rename(&mnt, mnt.root, "R1x.txt", d, "moved name.txt"); /* across */
+    }
+    if (rc == 0) {
+        o = make_file(mnt.root, "over.txt");
+        rc = o ? write_at(o, pattern + 100, 20, 0) : -1;
+        if (o) {
+            OPS->put(&mnt, o);
+        }
+    }
+    if (rc == 0) {
+        rc = OPS->rename(&mnt, d, "moved name.txt", mnt.root, "over.txt"); /* over a file */
+    }
+    if (d) {
+        OPS->put(&mnt, d);
+    }
+    return rc;
+}
+
+/* A write past the valid length of the fixture's valid.bin, whose bytes
+   past it are junk on the disk: the gap is zeroed before the length is
+   published. */
+static int seq_vdl(void)
+{
+    void *n;
+    int rc;
+
+    if (OPS->lookup(&mnt, mnt.root, "valid.bin", &n) != 0) {
+        return -1;
+    }
+    rc = write_at(n, pattern, 10, 7000);
+    OPS->put(&mnt, n);
+    return rc;
+}
+
+/* The fixture's contiguous hello.txt grows: its run into the FAT, the
+   flag cleared, then the chain joined to. */
+static int seq_nofat(void)
+{
+    void *n;
+    int rc;
+
+    if (OPS->lookup(&mnt, mnt.root, "hello.txt", &n) != 0) {
+        return -1;
+    }
+    rc = write_at(n, pattern, 5000, 12);
+    OPS->put(&mnt, n);
+    return rc;
+}
+
+/* The fixture's straddle.txt, whose file and stream entries lie in two
+   sectors: a change is two writes, the file entry's last. */
+static int seq_straddle(void)
+{
+    void *n;
+    struct vfs_stat st;
+    int rc;
+
+    if (OPS->lookup(&mnt, mnt.root, "straddle.txt", &n) != 0) {
+        return -1;
+    }
+    st.mode = 0555;
+    rc = OPS->setattr(&mnt, n, VFS_SET_MODE, &st);
+    if (rc == 0) {
+        rc = write_at(n, pattern, 100, 9); /* the lengths change too */
+    }
+    OPS->put(&mnt, n);
+    return rc;
+}
+
+static const struct {
+    const char *name;
+    int (*run)(void);
+} sequences[] = {
+    {"create", seq_create},     {"extend", seq_extend}, {"gap", seq_gap},
+    {"truncate", seq_truncate}, {"unlink", seq_unlink}, {"mkdir", seq_mkdir},
+    {"rename", seq_rename},     {"nofat", seq_nofat},   {"straddle", seq_straddle},
+    {"vdl", seq_vdl},
+};
+
+/* The content oracle: after a stop, every file a sequence wrote reads,
+   within its published length, the bytes written to it or zeros, and the
+   fixture's own files are intact and reachable. */
+static int oracle_ok(void)
+{
+    static const char *const names[] = {"w one.txt",  "w two.bin", "w three.bin",
+                                        "w four.txt", "over.txt",  "R1x.txt",
+                                        "r1.txt",     "w six.txt", "valid.bin"};
+    static const char *const fixed[] = {"chained.bin", "dir/sub/leaf.txt", "crossing.txt"};
+    int f, err;
+    long i;
+
+    for (f = 0; f < 9; f++) {
+        void *n = walk(names[f][0] == '/' ? names[f] : names[f], &err);
+        long got;
+        int zeros = 1, written = 1;
+        char path[64];
+
+        snprintf(path, sizeof(path), "/%s", names[f]);
+        n = walk(path, &err);
+        if (!n) {
+            continue;
+        }
+        got = read_all(n, back, sizeof(back));
+        OPS->put(&mnt, n);
+        if (got < 0) {
+            printf("exfat_hosttest: %s does not read (%ld)\n", names[f], got);
+            return 0;
+        }
+        for (i = 0; i < got; i++) {
+            unsigned char want;
+
+            if (f == 0) {
+                want = i < 5 ? (unsigned char)"hello"[i] : 0;
+            } else if (f == 2) {
+                want = i < 10 ? pattern[i] : (i >= 6000 ? pattern[10 + i - 6000] : 0);
+            } else if (f == 3 && got == 5000) {
+                want = 0; /* regrown from nothing after the truncate to zero */
+            } else if (f == 4 && got == 20) {
+                want = pattern[100 + i]; /* over.txt before the rename over it */
+            } else if (f == 7) {
+                want = pattern[100 + i];
+            } else if (f == 8) {
+                /* valid.bin: the fixture's bytes, zeros past 5000, and at
+                   7000 the ten bytes the vdl sequence writes, or zeros
+                   before it has. */
+                want = i < 5000 ? (unsigned char)(0x40 + i) : 0;
+                if (i >= 7000 && i < 7010 && back[i] == pattern[i - 7000]) {
+                    want = back[i];
+                }
+            } else {
+                want = pattern[i];
+            }
+            if (back[i] != want) {
+                written = 0;
+            }
+            if (back[i] != 0) {
+                zeros = 0;
+            }
+        }
+        if (!written && !zeros) {
+            printf("exfat_hosttest: %s holds bytes nobody wrote (%ld bytes)\n", names[f], got);
+            return 0;
+        }
+    }
+    for (f = 0; f < 3; f++) {
+        char path[64];
+        void *n;
+
+        snprintf(path, sizeof(path), "/%s", fixed[f]);
+        n = walk(path, &err);
+        if (!n || read_all(n, back, sizeof(back)) < 0) {
+            printf("exfat_hosttest: the fixture's %s is gone or unreadable after the stop\n",
+                   fixed[f]);
+            if (n) {
+                OPS->put(&mnt, n);
+            }
+            return 0;
+        }
+        OPS->put(&mnt, n);
+    }
+    return 1;
+}
+
+/* The volume walked clean, or with the findings a stop may leave. */
+static void check_consistent(const char *what, int allow_stop_states)
+{
+    int rc = run_check(check_out, sizeof(check_out));
+
+    if (allow_stop_states ? !findings_allowed(check_out) : rc != 0) {
+        check(0, what);
+        printf("exfat_hosttest: the check said:\n%s", check_out);
+    }
+}
+
+static void write_rows(void)
+{
+    unsigned i;
+    int err;
+    void *n;
+    struct vfs_stat st;
+
+    fill_pattern();
+    for (i = 0; i < sizeof(sequences) / sizeof(sequences[0]); i++) {
+        char what[120];
+
+        load("--junk");
+        check(mount_rw() == 0, "a writable mount for the write rows");
+        check(image[106] & 2, "the dirty bit is on the bytes from the mount");
+        snprintf(what, sizeof(what), "the '%s' sequence runs", sequences[i].name);
+        check(sequences[i].run() == 0, what);
+        check(oracle_ok(), "and its files read what was written");
+        check(OPS->prepare_unmount(&mnt) == 0, "its clean unmount");
+        unmount_image();
+        check(!(image[106] & 2), "and the dirty bit is off after");
+        snprintf(what, sizeof(what), "the volume is consistent after '%s'", sequences[i].name);
+        check_consistent(what, 0);
+        dump_named("seq", sequences[i].name);
+    }
+    /* What the sequences left, read through the reader mounted fresh. */
+    load("--junk");
+    check(mount_rw() == 0, "a writable mount for the read-back");
+    check(seq_extend() == 0 && seq_rename() == 0, "extend and rename again");
+    n = walk("/w two.bin", &err);
+    check(n && OPS->getattr(&mnt, n, &st) == 0 && st.size == 5010 &&
+              read_all(n, back, sizeof(back)) == 5010 && memcmp(back, pattern, 5010) == 0,
+          "the extended file reads its 5010 bytes across the cluster boundary");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    check(walk("/R1x.txt", &err) == 0 && walk("/dir/moved name.txt", &err) == 0,
+          "the renamed names are gone");
+    n = walk("/over.txt", &err);
+    check(n && read_all(n, back, sizeof(back)) == 40 && memcmp(back, pattern, 40) == 0,
+          "and the file renamed over another has the source's bytes");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    check(OPS->create(&mnt, mnt.root, "hello.txt", 0644, &n) == -EEXIST &&
+              OPS->create(&mnt, mnt.root, "HELLO.TXT", 0644, &n) == -EEXIST,
+          "a name that up-cases alike is one name: EEXIST");
+    check(OPS->prepare_unmount(&mnt) == 0, "the clean unmount");
+    unmount_image();
+    /* The placement rule: no set this driver makes has its file entry in a
+       sector's last slot, so its file and stream entries share a sector.
+       The fixture's own straddle.txt is one, on purpose; the rule is read
+       over the entries made here, past the fixture's end marker, in the
+       root's first two clusters. */
+    load("--junk");
+    {
+        uint32_t root_cluster, heap, spc, fat, second, first_new = 0, at_last = 0, made = 0;
+        unsigned char *c1, *c2;
+
+        root_cluster =
+            image[96] | (image[97] << 8) | (image[98] << 16) | ((uint32_t)image[99] << 24);
+        heap = image[88] | (image[89] << 8) | (image[90] << 16) | ((uint32_t)image[91] << 24);
+        fat = image[80] | (image[81] << 8) | (image[82] << 16) | ((uint32_t)image[83] << 24);
+        spc = image[109];
+        c1 = image + ((uint64_t)heap + ((uint64_t)(root_cluster - 2) << spc)) * 512;
+        while (first_new < 256 && (first_new < 128 ? c1[first_new * 32] : 0) != 0x00) {
+            first_new++;
+        }
+        check(mount_rw() == 0, "a writable mount for the placement rows");
+        for (i = 0; i < 20; i++) {
+            char name[24];
+
+            snprintf(name, sizeof(name), "place %02u.txt", i);
+            n = make_file(mnt.root, name);
+            if (n) {
+                made++;
+                OPS->put(&mnt, n);
+            }
+        }
+        check(OPS->prepare_unmount(&mnt) == 0, "the placement rows' unmount");
+        unmount_image();
+        /* The root's second cluster, through the FAT, once it exists. */
+        second = image[fat * 512 + root_cluster * 4] |
+                 (image[fat * 512 + root_cluster * 4 + 1] << 8) |
+                 (image[fat * 512 + root_cluster * 4 + 2] << 16) |
+                 ((uint32_t)image[fat * 512 + root_cluster * 4 + 3] << 24);
+        c2 = second >= 2 && second != 0xFFFFFFFFu
+                 ? image + ((uint64_t)heap + ((uint64_t)(second - 2) << spc)) * 512
+                 : 0;
+        for (i = first_new; i < 256; i++) {
+            const unsigned char *e = i < 128 ? c1 + i * 32 : (c2 ? c2 + (i - 128) * 32 : 0);
+
+            if (e && e[0] == 0x85 && i % 16 == 15) {
+                at_last++;
+            }
+        }
+        check(made == 20 && at_last == 0,
+              "twenty files created and no file entry of theirs in a sector's last slot");
+    }
+    /* The backup boot region is never written: not while the dirty bit is
+       on the main sector, and not by the clean unmount. */
+    load("--junk");
+    memcpy(back, image + 12 * 512, 12 * 512);
+    check(mount_rw() == 0 && seq_create() == 0 && memcmp(back, image + 12 * 512, 12 * 512) == 0,
+          "a mount and a write leave the backup boot region byte for byte");
+    check(OPS->prepare_unmount(&mnt) == 0 && memcmp(back, image + 12 * 512, 12 * 512) == 0,
+          "and so does the clean unmount");
+    unmount_image();
+    /* A frozen directory: the root holding a critical entry this driver
+       does not know refuses every change with EROFS. */
+    load("--unknown-critical");
+    check(mount_rw() == 0, "the volume with an unknown critical entry mounts writable");
+    check(OPS->create(&mnt, mnt.root, "x.txt", 0644, &n) == -EROFS &&
+              OPS->mkdir(&mnt, mnt.root, "d", 0755) == -EROFS,
+          "and its root is frozen: a create or a mkdir in it is EROFS");
+    n = walk("/dir", &err);
+    check(n && OPS->create(&mnt, n, "x.txt", 0644, &n) == 0,
+          "while a directory below it takes a file");
+    check(OPS->prepare_unmount(&mnt) == 0, "and the unmount is clean");
+    unmount_image();
+}
+
+/* Every sequence stopped after each of its writes; the image walked each
+   time, allowed only what the order of writes leaves behind, and the
+   crash state read for what was written. */
+static void matrix_pass(void)
+{
+    unsigned i;
+    int k, total = 0;
+
+    for (i = 0; i < sizeof(sequences) / sizeof(sequences[0]); i++) {
+        int n;
+
+        load("--junk");
+        stop_after = -1;
+        if (mount_rw() != 0) {
+            check(0, "the matrix's volume mounts");
+            return;
+        }
+        writes_made = 0; /* the mount's own dirty-bit write is not a stop */
+        sequences[i].run();
+        n = writes_made;
+        OPS->put(&mnt, mnt.root);
+        OPS->unmount(&mnt);
+        for (k = 1; k <= n; k++) {
+            char what[160];
+
+            load("--junk");
+            if (mount_rw() != 0) {
+                check(0, "the matrix's volume mounts again");
+                stop_after = -1;
+                return;
+            }
+            writes_made = 0;
+            stop_after = k;
+            sequences[i].run();
+            OPS->put(&mnt, mnt.root);
+            OPS->unmount(&mnt);
+            run_check(check_out, sizeof(check_out));
+            if (k == n - 1) {
+                dump_named("stop",
+                           sequences[i].name); /* one stop of each, for the external checker */
+            }
+            load_dump();
+            if (mount_image(VFS_MS_RDONLY, "") == 0) {
+                snprintf(what, sizeof(what),
+                         "'%s' stopped after write %d of %d reads only what was written",
+                         sequences[i].name, k, n);
+                check(oracle_ok(), what);
+                unmount_image();
+            } else {
+                snprintf(what, sizeof(what), "'%s' stopped after write %d of %d mounts",
+                         sequences[i].name, k, n);
+                check(0, what);
+            }
+            snprintf(what, sizeof(what),
+                     "'%s' stopped after write %d of %d leaves a consistent volume",
+                     sequences[i].name, k, n);
+            check(findings_allowed(check_out), what);
+            if (!findings_allowed(check_out)) {
+                printf("exfat_hosttest: the check said:\n%s", check_out);
+            }
+            total++;
+        }
+    }
+    printf("exfat_hosttest: %d stops walked\n", total);
+}
+
 int main(void)
 {
     proc_a.pid = 1;
@@ -666,6 +1334,8 @@ int main(void)
     well_formed_rows("--uncompressed-upcase", "the indexed up-case table");
     damaged_rows();
     external_rows();
+    write_rows();
+    matrix_pass();
     if (fails == 0) {
         printf("exfat_hosttest: OK\n");
         return 0;
