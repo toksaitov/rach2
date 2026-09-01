@@ -1,4 +1,4 @@
-Phase 2 done; phase 3 (the class driver) is next.
-Evidence gathered: eight slots and eight devices, endpoint numbers to 15 with bulk contexts, a generation carried through a transfer and back, a close that never answers leaving a tombstone; the xHCI rows pass and the USB suite is unchanged.
-Next action: msc.c with the transport, bring-up, transfers, the error matrix and reset recovery, the model with its vanishing, msc_hosttest.c in full, and the block device with its admission queue and atomic wait.
+Phase 3 is most of the way: the class driver, the block device and the host test are in and green.
+Evidence gathered: a QEMU stick enumerates and comes up as 131072 sectors of 512 bytes; msc_hosttest passes its rows against the device model; the USB suite passes three runs in a row with the larger tables.
+Next action: the phase 3 mutations from the plan, then phase 4 (the usbN nodes, /proc/usb's columns, gpt.c, removal and the replug).
 File being read when written: dev-log/40-usbdisk/plan.md, phase 3.

@@ -83,6 +83,50 @@ endpoint opened with an interrupt endpoint's context type, an endpoint above
 three refused, and a handle past the tables addressed, which the sanitizer
 stops at the read that the bound exists to prevent.
 
+## Phase 3 record, part one
+
+The core's walk of a configuration descriptor learned the second interface
+this kernel drives: class 8, subclass 6, protocol 0x50 on alternate setting
+zero, with the first bulk endpoint each way. A stick's two endpoints are two
+commands, so enumeration gained a state between them, and a stick reaches
+`ST_RUNNING` without the protocol request a keyboard takes.
+
+`sys/usb/msc.c` is the class driver: the three transfers of a command, the
+bring-up sequence, the transfers themselves, and the recovery the class
+defines. What the field taught is in the code and named there: the drive that
+fails `TEST UNIT READY` for a while, the one that stalls `Get Max LUN`, the
+one that reports its last block rather than a count, the promotional drive
+with a CD-ROM in front of its flash, and the reset that is recovery and never
+initialisation.
+
+The recovery's two clears go through `usb_core_clear_halt`, which takes the
+core's own turn at the controller's one command. A class driver that issued
+those commands itself would take the answer to somebody else's: the core
+shares the command ring out, and this is how a driver borrows it.
+
+A stick is a `block_device` with `submit`, `flush` and no fault-safe flag,
+an admission queue of sixteen so that two processes can each sleep in a
+request, and the block layer's own page, deadline and quarantine unchanged.
+`struct block_device` gained `flush` and a read-only flag; the four tests
+that build a device by position were written out member by member, so that
+the next member added is a compile error rather than a silent shift.
+
+`tests/host/msc_hosttest.c` drives the driver against a model of a
+Bulk-Only device: a stick that comes up at once, one that fails twelve tests
+first, one that never becomes ready, `Get Max LUN` stalled, a CD-ROM in
+front of the flash, an empty card slot, the two capacities that are refused,
+write protection with its refusal, a status wrapper naming another command
+with the reset and the two clears in order, a device pulled during the data
+stage, two requests admitted in order, and a flush.
+
+In QEMU a stick attached to the emulated controller is enumerated and brought
+up: `usbdisk: ready: device 1: lun 0, 131072 sectors of 512 bytes`, which is
+the 64 MiB image the phase-1 tables describe.
+
 ## Open items
 
-(none)
+* The phase 3 proof also asks for a raw read of the stick's first sector
+  through `/dev/usb0`. The node is phase 4's, so that half of the proof is
+  taken there, with the partition rows.
+
+
