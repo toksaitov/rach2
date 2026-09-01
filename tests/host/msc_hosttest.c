@@ -84,6 +84,7 @@ static struct {
     int cleared_in, cleared_out;
     int clear_order[8];
     int clears;
+    int capacity_lun; /* the unit whose capacity was asked for */
     unsigned char medium[MEDIUM_SECTORS * SECTOR];
 } dev;
 
@@ -203,7 +204,8 @@ static void scsi_data_in(unsigned char *buffer, uint32_t length)
             buffer[12] = 0x04; /* not ready, becoming ready */
         }
         return;
-    case 0x25: /* READ CAPACITY */
+    case 0x25:                      /* READ CAPACITY */
+        dev.capacity_lun = cmd.lun; /* which unit the driver settled on */
         wr32_be(&buffer[0], dev.last_block);
         wr32_be(&buffer[4], dev.block_size);
         return;
@@ -568,16 +570,20 @@ int main(void)
     dev.max_lun = 1;
     dev.lun_type[0] = 0x05; /* a CD-ROM */
     dev.lun_type[1] = 0x00;
+    dev.capacity_lun = -1;
     CHECK("a drive with a CD-ROM in front of its flash is taken",
           msc_attach(1, 0, EP_IN, EP_OUT) == 0);
-    CHECK("and comes up on the unit that is a disk", run_until_settled(200));
+    CHECK("and comes up", run_until_settled(200));
+    CHECK("on the unit that is a disk and not on the one that is not", dev.capacity_lun == 1);
 
     /* A card reader whose first slot is empty. */
     model_reset();
     dev.max_lun = 1;
     dev.lun_no_medium[0] = 1;
+    dev.capacity_lun = -1;
     CHECK("a reader with an empty slot is taken", msc_attach(1, 0, EP_IN, EP_OUT) == 0);
-    CHECK("and comes up on the slot that has a card", run_until_settled(200));
+    CHECK("and comes up", run_until_settled(200));
+    CHECK("on the slot that has a card", dev.capacity_lun == 1);
 
     /* The capacity rules. */
     model_reset();
@@ -676,6 +682,146 @@ int main(void)
         CHECK("each with its own sector",
               page_a[0] == dev.medium[SECTOR] && page_b[0] == dev.medium[2 * SECTOR]);
     }
+
+    /* A read whose data stage came up short is a failure: a block is whole
+       or it is not. */
+    model_reset();
+    CHECK("a stick is taken", msc_attach(1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("and comes up", run_until_settled(200));
+    {
+        struct block_request *r = make_request(0, 0, 1, page);
+        int i;
+
+        dev.residue = 64; /* the drive moved all but the last 64 bytes */
+        block.completions = 0;
+        CHECK("a read is taken", msc_block_device(0)->submit(msc_block_device(0), r) == 0);
+        for (i = 0; i < 40 && block.completions == 0; i++) {
+            pump(1);
+        }
+        CHECK("a read that came up short fails",
+              block.completions == 1 && block.last_status == -EIO);
+    }
+
+    /* A status wrapper that stalls once is read again; one that stalls twice
+       is reset recovery, because a device that will not give its status is a
+       device in a state this driver cannot reason about. */
+    model_reset();
+    CHECK("a stick is taken", msc_attach(1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("and comes up", run_until_settled(200));
+    {
+        struct block_request *r = make_request(0, 0, 1, page);
+        int i;
+
+        dev.stall_stage = 3;
+        dev.stall_times = 1;
+        block.completions = 0;
+        dev.resets = 0;
+        CHECK("a read is taken", msc_block_device(0)->submit(msc_block_device(0), r) == 0);
+        for (i = 0; i < 40 && block.completions == 0; i++) {
+            pump(1);
+        }
+        CHECK("a status wrapper that stalled once is read again and the read succeeds",
+              block.completions == 1 && block.last_status == 0);
+        CHECK("with no reset", dev.resets == 0);
+        CHECK("and the inward endpoint cleared once", dev.cleared_in == 1 && dev.cleared_out == 0);
+    }
+    {
+        struct block_request *r = make_request(0, 0, 1, page);
+        int i;
+
+        dev.stall_stage = 3;
+        dev.stall_times = 2;
+        block.completions = 0;
+        dev.resets = 0;
+        dev.clears = 0;
+        dev.cleared_in = 0;
+        dev.cleared_out = 0;
+        CHECK("another read is taken", msc_block_device(0)->submit(msc_block_device(0), r) == 0);
+        for (i = 0; i < 60 && block.completions == 0; i++) {
+            pump(1);
+        }
+        CHECK("a status wrapper that stalled twice fails the read",
+              block.completions == 1 && block.last_status == -EIO);
+        CHECK("and the device is reset", dev.resets == 1);
+    }
+
+    /* Every stage of one command goes out in the pass that answers the one
+       before it. A driver that advanced a stage a tick would take three
+       ticks for a read, and a request of eight sectors would cost thirty
+       milliseconds of nothing. */
+    model_reset();
+    CHECK("a stick is taken", msc_attach(1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("and comes up", run_until_settled(200));
+    {
+        struct block_request *r = make_request(0, 0, 1, page);
+        int turns = 0;
+
+        block.completions = 0;
+        CHECK("a read is taken", msc_block_device(0)->submit(msc_block_device(0), r) == 0);
+        while (turns < 20 && block.completions == 0) {
+            pump(1);
+            turns++;
+        }
+        CHECK("and its three stages take three passes of the pump", turns <= 3);
+    }
+
+    /* A completion for a command this driver gave up on: the block layer has
+       the slot back and its page may be another request's, so the answer is
+       dropped by the number the transfer carried. */
+    model_reset();
+    CHECK("a stick is taken", msc_attach(1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("and comes up", run_until_settled(200));
+    {
+        struct block_request *r = make_request(0, 0, 1, page);
+        struct usb_completion late;
+        int i;
+
+        dev.vanish_at = 2;
+        block.completions = 0;
+        CHECK("a read is taken", msc_block_device(0)->submit(msc_block_device(0), r) == 0);
+        for (i = 0; i < 40 && block.completions == 0; i++) {
+            pump(20000); /* past the driver's own deadline */
+        }
+        CHECK("the read fails at the deadline",
+              block.completions == 1 && block.last_status == -EIO);
+        /* A fresh request, and the abandoned transfer's answer arriving
+           while its first stage is in flight. Taken as this command's, it
+           would advance a stage that has not happened and the read would
+           come back with whatever the page held. */
+        dev.vanish_at = 0;
+        r = make_request(0, 3, 1, page);
+        page[0] = 0xEE;
+        block.completions = 0;
+        CHECK("a fresh read is taken", msc_block_device(0)->submit(msc_block_device(0), r) == 0);
+        late.device = 1;
+        late.endpoint = EP_IN;
+        /* The abandoned transfer fails, as one on a device that went away
+           does. Taken as this command's, it would send the device through
+           reset recovery and fail a read that has nothing wrong with it. */
+        late.status = USB_XFER_FAILED;
+        late.length = SECTOR;
+        late.residual = SECTOR;
+        late.generation = 1; /* whatever the abandoned transfer carried */
+        dev.resets = 0;
+        CHECK("the abandoned transfer's answer is taken by this driver",
+              msc_completion(&late) == 1);
+        CHECK("and moves nothing on", block.completions == 0);
+        CHECK("and sends the device through no recovery", dev.resets == 0);
+        for (i = 0; i < 40 && block.completions == 0; i++) {
+            pump(1);
+        }
+        CHECK("so the fresh read completes on its own answers",
+              block.completions == 1 && block.last_status == 0);
+        CHECK("with the sector it asked for", page[0] == dev.medium[3 * SECTOR]);
+    }
+
+    /* Nothing resets a drive while it is being brought up: there are drives
+       that stop answering for good when that is done to them. */
+    model_reset();
+    dev.lun_ready_after[0] = 4;
+    CHECK("a stick that takes a moment is taken", msc_attach(1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("and comes up", run_until_settled(2000));
+    CHECK("with no reset sent while it did", dev.resets == 0);
 
     /* The flush, and the two answers that are not failures. */
     model_reset();

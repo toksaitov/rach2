@@ -123,6 +123,19 @@ In QEMU a stick attached to the emulated controller is enumerated and brought
 up: `usbdisk: ready: device 1: lun 0, 131072 sectors of 512 bytes`, which is
 the 64 MiB image the phase-1 tables describe.
 
+Ten mutations prove the rows: the capacity taken as a count, a block size
+other than 512 accepted, a unit that is not a disk taken anyway, the two
+halts cleared the other way round, a stalled status wrapper retried without
+end, a short read taken for a whole one, a status wrapper naming another
+command accepted, a completion for an abandoned transfer taken as the answer
+to the one in flight, a second request overwriting the first, and a reset
+sent at initialisation. Each fails one named row and no other.
+
+Two of the plan's mutations belong to milestone 36's own rows and are not
+repeated here: the check of the done flag without interrupts off before
+sleeping, and a completion delivered into a slot the caller has given up on,
+which the request pool's quarantine already answers.
+
 ## Open items
 
 * The phase 3 proof also asks for a raw read of the stick's first sector

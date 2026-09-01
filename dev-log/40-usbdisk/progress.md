@@ -11,9 +11,9 @@ Phase 2: the controller interface and the tables
 - [x] the xhci rows; tests/run usb unchanged
 
 Phase 3: the class driver
-- [ ] msc.c: the transport, bring-up, transfers, the error matrix, reset recovery
-- [ ] the block device, the admission queue, the atomic wait
-- [ ] msc_hosttest.c in full; the stick read through /dev/usb0 in QEMU
+- [x] msc.c: the transport, bring-up, transfers, the error matrix, reset recovery
+- [x] the block device, the admission queue, the atomic wait
+- [x] msc_hosttest.c in full; the stick comes up in QEMU (the node is phase 4's)
 
 Phase 4: naming, tables and removal
 - [ ] the usbN nodes as block devices; /proc/usb's columns
