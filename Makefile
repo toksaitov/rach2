@@ -579,7 +579,7 @@ test:
 # image as GRUB multiboot modules, assembled natively with xorriso and the
 # pinned GRUB El Torito images (see tools/image/mkiso.sh). Output:
 # build/images/<image>.iso.
-isos: test-iso os-simple-iso os-real-iso rach2-metal-iso
+isos: test-iso os-simple-iso os-real-iso rach2-metal-iso rach2-recovery-iso
 test-iso: test-image
 	sh tools/image/mkiso.sh test
 os-simple-iso: os-simple-image
@@ -588,6 +588,8 @@ os-real-iso: os-real-image
 	sh tools/image/mkiso.sh os-real
 rach2-metal-iso: rach2-metal rach2-metal-image
 	sh tools/image/mkiso.sh rach2-metal
+rach2-recovery-iso: rach2-recovery rach2-recovery-image
+	sh tools/image/mkiso.sh rach2-recovery
 
 # The staged capstone binaries are the REAL prerequisites of the os-real image.
 # A stamp only proves its build RAN; the artifact can be deleted OR truncated

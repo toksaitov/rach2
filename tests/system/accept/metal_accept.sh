@@ -199,6 +199,20 @@ fi
 # ---- and that nothing on this machine has been refused a command ----
 note "(the saved boot log above is the whole of what this machine printed)"
 
+# ---- the scratch partition, once milestone 43 has made it: mounted for
+#      writing, a file written and read back, the mount taken away. Before
+#      that the node is absent and this is a note, not a failure. ----
+if run 'ls /dev/disk0p4 2>/dev/null' | grep -q disk0p4; then
+    OUT="$(run 'mkdir -p /mnt && mount -t vfat /dev/disk0p4 /mnt && echo accept > /mnt/accept.txt && cat /mnt/accept.txt && umount /mnt')"
+    if [ "$OUT" = "accept" ]; then
+        note "the scratch partition mounts for writing, takes a file and gives it back"
+    else
+        bad "the scratch partition did not take a write: $OUT"
+    fi
+else
+    note "no scratch partition yet (/dev/disk0p4 absent)"
+fi
+
 if [ "$fails" -gt 0 ]; then
     echo "metal-accept: FAIL ($fails)" >&2
     exit 1

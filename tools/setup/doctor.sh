@@ -157,6 +157,15 @@ opt xorriso      "make isos, the bootable ISO per image" xorriso
 opt docker       "vendor/grub regeneration (maintainer only)" docker
 opt git          "cloning and committing" git
 
+# dosfstools checks a FAT32 volume this kernel wrote (tests/run fatwrite runs
+# fsck.fat -n when it is there); the suite's own walk and mtools judge the
+# volume without it.
+if command -v fsck.fat >/dev/null 2>&1; then
+    row "[PASS]" "dosfstools" "fsck.fat present"
+else
+    row "[----]" "dosfstools" "optional, for fsck.fat over tests/run fatwrite; $(hint dosfstools)"
+fi
+
 # FUSE mounts a KRFFS image on the host (make -C krffs mount); nothing in the
 # default build or the suites needs it. Checked via pkg-config, which is now
 # also optional for the same reason.

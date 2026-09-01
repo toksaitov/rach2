@@ -20,9 +20,9 @@ set -e
 IMAGE="$1"
 # Allowlist the image name before it reaches the destructive rm -rf below.
 case "$IMAGE" in
-    test|os-simple|os-real|rach2-metal) ;;
+    test|os-simple|os-real|rach2-metal|rach2-recovery) ;;
     *)
-        echo "usage: mkiso.sh <test|os-simple|os-real|rach2-metal>" >&2
+        echo "usage: mkiso.sh <test|os-simple|os-real|rach2-metal|rach2-recovery>" >&2
         exit 2
         ;;
 esac
@@ -38,6 +38,12 @@ REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
 if [ "$IMAGE" = rach2-metal ]; then
     KERNEL="$REPO/build/rach2-metal/kernel"
     POLICY=read-only
+elif [ "$IMAGE" = rach2-recovery ]; then
+    # The recovery kernel and its RAM image on a stick: a machine boots it
+    # without its disk and reaches reflash. The disk policy is read-write,
+    # since writing the disk is what recovery is for.
+    KERNEL="$REPO/build/rach2-recovery/kernel"
+    POLICY=read-write
 else
     KERNEL="$REPO/build/rach2/kernel"
     POLICY=read-write
@@ -123,6 +129,12 @@ menuentry \"Rach2 (metal) - no network configuration\" {
 }
 "
     METAL_DEFAULT_ARGS="$METAL_NET"
+elif [ "$IMAGE" = rach2-recovery ]; then
+    # The stick takes an address from DHCP and answers SSH on it, which is
+    # how reflash is reached from a host beside the machine; the disk it
+    # repairs is behind an AHCI controller on the machine this is for.
+    METAL_ENTRIES=''
+    METAL_DEFAULT_ARGS='rach2.ip=none rach2.disk=ahci'
 else
     METAL_ENTRIES=''
     METAL_DEFAULT_ARGS=''
