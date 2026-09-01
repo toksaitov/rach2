@@ -440,7 +440,10 @@ void _start(void)
        delivery that consumed the datagram on the way to the sockets would
        fail here rather than pass quietly. */
     args[0] = GATEWAY_IP;
-    check(socketcall(SC_PING, args) == 0, "the kernel's own ping reached the gateway");
+    /* The ping answers its round-trip time in ticks: zero within one tick,
+       more on a slow host, and negative for a failure. */
+    n = socketcall(SC_PING, args);
+    check_n(n >= 0, "the kernel's own ping reached the gateway", n);
 
     n = wait_for_icmp(args, fd_a, frame_a, (int)sizeof(frame_a), ICMP_ECHO_REPLY, 2000);
     m = wait_for_icmp(args, fd_b, frame_b, (int)sizeof(frame_b), ICMP_ECHO_REPLY, 2000);
@@ -774,7 +777,8 @@ void _start(void)
            the property that matters: a machine whose pool is exhausted must
            not drop the session someone is already using. */
         args[0] = GATEWAY_IP;
-        check(socketcall(SC_PING, args) == 0, "the machine can still reach the gateway");
+        n = socketcall(SC_PING, args);
+        check_n(n >= 0, "the machine can still reach the gateway", n);
         n = wait_for_icmp(args, fd_a, frame_a, (int)sizeof(frame_a), ICMP_ECHO_REPLY, 2000);
         check(n > 0, "and a socket opened before the pool filled still receives");
 
