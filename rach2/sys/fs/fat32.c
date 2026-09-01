@@ -1506,8 +1506,11 @@ static int fat_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
     struct fat_mount *fm = fm_of(mnt);
 
     if (!fm->free_known) {
-        int rc = count_free(fm);
+        int rc;
 
+        vfs_ns_lock(mnt); /* the count and the first allocation exclude */
+        rc = count_free(fm);
+        vfs_ns_unlock(mnt);
         if (rc != 0) {
             return rc;
         }
@@ -1560,10 +1563,13 @@ static int dir_has_name(struct fat_mount *fm, struct fat_node *d, const char *na
  * truncate, fsync and sync. The namespace operations arrive locked. */
 static int begin_write(struct vfs_mount *mnt, struct fat_mount *fm)
 {
+    vfs_ns_lock(mnt);
+    /* Decided under the lock: a writer queued behind the one whose write
+     * failed finds the mount read-only, not the flags it saw before. */
     if (!fm->writable || (mnt->flags & VFS_MS_RDONLY)) {
+        vfs_ns_unlock(mnt);
         return -EROFS;
     }
-    vfs_ns_lock(mnt);
     return 0;
 }
 
