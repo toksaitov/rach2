@@ -24,7 +24,7 @@
  *     --no-menu --vfs --active-second --unmasked --dir-loop
  *     --lost-chain --overlong-chain --bad-dotdot --dup-name --fsinfo
  *     --fsinfo-wrong --junk --dirty --dirty-surplus --dirty-orphan
- *     --dirty-mirror --dirty-cross
+ *     --dirty-mirror --dirty-cross --dirty-surplus-cross
  *
  * `mkfatfixture --check <image> [offset-sectors] [--list]` walks a volume
  * instead of building one; see the check section below. The last six
@@ -376,7 +376,30 @@ static unsigned char chk_sum(const unsigned char *name11)
     return sum;
 }
 
-#define CHK_MAX_ENTRIES 4096
+#define CHK_MAX_ENTRIES      4096
+#define CHK_MAX_DIR_CLUSTERS 4096 /* clusters of one directory the check reads */
+
+struct chk_name {
+    unsigned char raw[11];
+    char name[520];
+};
+
+/* Equal with ASCII case folded, as the kernel's lookup compares names. */
+static int fold_eq(const char *a, const char *b)
+{
+    for (;; a++, b++) {
+        int x = (unsigned char)*a, y = (unsigned char)*b;
+
+        if (x >= 'A' && x <= 'Z')
+            x += 32;
+        if (y >= 'A' && y <= 'Z')
+            y += 32;
+        if (x != y)
+            return 0;
+        if (x == 0)
+            return 1;
+    }
+}
 
 /* The UTF-16 units of a long name as UTF-8, up to the terminator. */
 static void chk_long_name(const unsigned *units, unsigned count, char *out, size_t cap)
@@ -414,9 +437,11 @@ static void chk_long_name(const unsigned *units, unsigned count, char *out, size
 static void chk_dir(struct chk *c, unsigned long first, unsigned long parent, const char *path,
                     int depth)
 {
-    unsigned long clusters_seen[CHK_MAX_ENTRIES / 16];
+    /* Per call, since the walk recurses into a child before the parent's
+       later entries are compared. */
+    unsigned long *clusters_seen = malloc(sizeof(unsigned long) * CHK_MAX_DIR_CLUSTERS);
+    struct chk_name *names = malloc(sizeof(struct chk_name) * CHK_MAX_ENTRIES);
     unsigned long n = first, nclusters = 0, i;
-    static unsigned char names[CHK_MAX_ENTRIES][11];
     int nnames = 0, lfn_ok = 0, lfn_expect = 0, lfn_pending = 0;
     unsigned char lfn_sum = 0;
     unsigned lfn_units[20 * 13];
@@ -424,10 +449,14 @@ static void chk_dir(struct chk *c, unsigned long first, unsigned long parent, co
     char text[300], alias[16], child[300];
     unsigned short id = ++c->chains;
 
+    if (!clusters_seen || !names) {
+        finding(c, "out of memory");
+        goto out;
+    }
     if (depth > 32) {
         snprintf(text, sizeof(text), "depth: %s", path);
         finding(c, text);
-        return;
+        goto out;
     }
     /* The directory's own chain, owned before its entries are read. */
     while (n != 0) {
@@ -436,21 +465,25 @@ static void chk_dir(struct chk *c, unsigned long first, unsigned long parent, co
         if (!chk_in_range(c, n)) {
             snprintf(text, sizeof(text), "out of range: %s", path);
             finding(c, text);
-            return;
+            goto out;
         }
         if (c->owner[n] == id) {
             snprintf(text, sizeof(text), "loop: %s", path);
             finding(c, text);
-            return;
+            goto out;
         }
         if (c->owner[n] != 0) {
             snprintf(text, sizeof(text), "cross-link: %s", path);
             finding(c, text);
-            return;
+            goto out;
         }
         c->owner[n] = id;
-        if (nclusters < sizeof(clusters_seen) / sizeof(clusters_seen[0]))
-            clusters_seen[nclusters++] = n;
+        if (nclusters == CHK_MAX_DIR_CLUSTERS) {
+            snprintf(text, sizeof(text), "directory longer than the check reads: %s", path);
+            finding(c, text);
+            goto out;
+        }
+        clusters_seen[nclusters++] = n;
         next = chk_fat(c, n);
         if (next >= 0x0FFFFFF8u)
             break;
@@ -458,7 +491,7 @@ static void chk_dir(struct chk *c, unsigned long first, unsigned long parent, co
             snprintf(text, sizeof(text), "chain ends in a %s entry: %s", next == 0 ? "free" : "bad",
                      path);
             finding(c, text);
-            return;
+            goto out;
         }
         n = next;
     }
@@ -482,7 +515,7 @@ static void chk_dir(struct chk *c, unsigned long first, unsigned long parent, co
                 lfn_ok = 0;
                 lfn_pending = 0;
                 if (raw[0] == 0)
-                    return;
+                    goto out;
                 continue;
             }
             if (raw[11] == 0x0F) {
@@ -540,15 +573,27 @@ static void chk_dir(struct chk *c, unsigned long first, unsigned long parent, co
                 }
                 continue;
             }
+            /* A duplicate is the same alias, or the same name as the
+               kernel's lookup matches it: the long name if there is one,
+               else the alias, with ASCII case folded. */
             for (j = 0; j < nnames; j++) {
-                if (memcmp(names[j], raw, 11) == 0) {
+                if (memcmp(names[j].raw, raw, 11) == 0 ||
+                    fold_eq(names[j].name, longname[0] ? longname : alias)) {
                     snprintf(text, sizeof(text), "duplicate name: %s in %s", alias, path);
                     finding(c, text);
                     break;
                 }
             }
-            if (nnames < CHK_MAX_ENTRIES)
-                memcpy(names[nnames++], raw, 11);
+            if (nnames == CHK_MAX_ENTRIES) {
+                snprintf(text, sizeof(text),
+                         "directory with more entries than the check compares: %s", path);
+                finding(c, text);
+                goto out;
+            }
+            memcpy(names[nnames].raw, raw, 11);
+            snprintf(names[nnames].name, sizeof(names[nnames].name), "%s",
+                     longname[0] ? longname : alias);
+            nnames++;
             snprintf(child, sizeof(child), "%s/%s", path, alias);
             if (c->list)
                 printf("check: entry %s %s %lu %lu%s%s\n", child, is_dir ? "dir" : "file", fc,
@@ -576,6 +621,9 @@ static void chk_dir(struct chk *c, unsigned long first, unsigned long parent, co
             }
         }
     }
+out:
+    free(clusters_seen);
+    free(names);
 }
 
 static int chk_bpb(struct chk *c)
@@ -899,7 +947,7 @@ int main(int argc, char **argv)
     memcpy(img + (size_t)RESERVED * SECTOR, fat, (size_t)FATSZ * SECTOR);
     memcpy(img + (size_t)(RESERVED + FATSZ) * SECTOR, fat2, (size_t)FATSZ * SECTOR);
     if (is("--dirty") || is("--dirty-surplus") || is("--dirty-orphan") || is("--dirty-mirror") ||
-        is("--dirty-cross")) {
+        is("--dirty-cross") || is("--dirty-surplus-cross")) {
         /* The dirty flag in both places, over a volume the check must
            call clean, repair, or refuse. */
         w32(fat + 4, le32_of(fat + 4) & ~0x08000000u);
@@ -919,6 +967,15 @@ int main(int argc, char **argv)
     if (is("--dirty-mirror")) {
         /* The mirror lags the active FAT by one entry. */
         w32(fat2 + 7100 * 4, EOC);
+        memcpy(img + (size_t)(RESERVED + FATSZ) * SECTOR, fat2, (size_t)FATSZ * SECTOR);
+    }
+    if (is("--dirty-surplus-cross")) {
+        /* The fallback, walked first, runs past its size into GRUB.CFG's
+           chain: a surplus tail that is another file's clusters, which a
+           repair before the whole walk would free. */
+        chain(fallback_first, fallback_clusters, cfg_first);
+        memcpy(fat2, fat, (size_t)FATSZ * SECTOR);
+        memcpy(img + (size_t)RESERVED * SECTOR, fat, (size_t)FATSZ * SECTOR);
         memcpy(img + (size_t)(RESERVED + FATSZ) * SECTOR, fat2, (size_t)FATSZ * SECTOR);
     }
     if (is("--dirty-cross")) {

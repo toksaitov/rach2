@@ -78,6 +78,7 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 /* ---- the image as a block device ---- */
 
 static unsigned char image[IMG_BYTES];
+static unsigned char image_before[IMG_BYTES];
 static int reads_made;
 
 static int img_read(block_device_t *d, uint64_t lba, uint32_t count, void *buf)
@@ -1169,6 +1170,8 @@ static int oracle_ok(void)
                 want = i < 5 ? (unsigned char)"hello"[i] : 0;
             } else if (f == 2) {
                 want = i < 10 ? pattern[i] : (i >= 2000 ? pattern[10 + i - 2000] : 0);
+            } else if (f == 4 && got == 1500) {
+                want = 0; /* regrown from nothing after the truncate to zero */
             } else {
                 want = pattern[i];
             }
@@ -1354,6 +1357,17 @@ static void long_rows(void)
               "a mode change outside the write bits is EPERM");
         st.uid = 5;
         check(OPS->setattr(&mnt, n, VFS_SET_UID, &st) == -EPERM, "an owner change is EPERM");
+        st.size = 3;
+        check(OPS->setattr(&mnt, n, VFS_SET_SIZE, &st) == -EPERM,
+              "a field the call does not store is EPERM, not silence");
+        {
+            struct vfs_stat before;
+
+            check(OPS->getattr(&mnt, n, &before) == 0 && write_at(n, pattern, 100, 0) == 0 &&
+                      OPS->getattr(&mnt, n, &st) == 0 && st.ctime_sec == before.ctime_sec &&
+                      st.ctime_nsec == before.ctime_nsec,
+                  "a write leaves the creation time, hundredths included, alone");
+        }
         st.mtime_sec = 946684800;
         st.atime_sec = 1000000000;
         check(OPS->setattr(&mnt, n, VFS_SET_MTIME | VFS_SET_ATIME, &st) == 0 &&
@@ -1407,6 +1421,43 @@ static uint32_t free_in_fat(void)
     return n;
 }
 
+/* The directory tree under rename: not into itself, and a held directory
+   follows its move. */
+static void tree_rows(void)
+{
+    void *a = 0, *b = 0, *c = 0;
+    struct vfs_stat st;
+
+    load("--junk");
+    check(mount_rw("") == 0, "a writable mount for the tree rows");
+    check(OPS->mkdir(&mnt, mnt.root, "A", 0755) == 0 && OPS->lookup(&mnt, mnt.root, "A", &a) == 0 &&
+              OPS->mkdir(&mnt, a, "B", 0755) == 0 && OPS->lookup(&mnt, a, "B", &b) == 0,
+          "a tree A/B");
+    check(OPS->rename(&mnt, mnt.root, "A", b, "X") == -EINVAL,
+          "a directory renamed under itself is EINVAL");
+    check(OPS->rename(&mnt, mnt.root, "A", a, "X") == -EINVAL, "and into itself");
+    check(OPS->rename(&mnt, a, "B", mnt.root, "C") == 0, "a held directory is renamed away");
+    st.mode = 0555;
+    check(OPS->setattr(&mnt, b, VFS_SET_MODE, &st) == 0, "and set through its held node");
+    if (b) {
+        OPS->put(&mnt, b);
+    }
+    if (a) {
+        OPS->put(&mnt, a);
+    }
+    check(OPS->prepare_unmount(&mnt) == 0, "its clean unmount");
+    unmount_image();
+    check_consistent("and the tree walks clean", 0);
+    /* Read back from the disk, not from the node the rows held. */
+    check(mount_image("") == 0 && OPS->lookup(&mnt, mnt.root, "C", &c) == 0 &&
+              OPS->getattr(&mnt, c, &st) == 0 && (st.mode & 0222) == 0,
+          "which wrote the entry where it now is");
+    if (c) {
+        OPS->put(&mnt, c);
+    }
+    unmount_image();
+}
+
 static void dirty_rows(void)
 {
     void *n;
@@ -1454,14 +1505,29 @@ static void dirty_rows(void)
     check_consistent("and the mirrors agree", 0);
 
     load("--dirty-cross");
+    __builtin_memcpy(image_before, image, sizeof(image));
     check(mount_rw("") == 0 && (mnt.flags & VFS_MS_RDONLY),
           "a cross-linked volume mounts read-only");
+    check(__builtin_memcmp(image_before, image, sizeof(image)) == 0, "with the image untouched");
     n = walk("/BOOT/GRUB/GRUB.CFG", &err);
     check(n && read_all(n, back, sizeof(back)) == 40, "and still reads");
     if (n) {
         OPS->put(&mnt, n);
     }
     check(OPS->create(&mnt, mnt.root, "NO.TXT", 0644, &n) == -EROFS, "and refuses a write");
+    unmount_image();
+
+    load("--dirty-surplus-cross");
+    __builtin_memcpy(image_before, image, sizeof(image));
+    check(mount_rw("") == 0 && (mnt.flags & VFS_MS_RDONLY),
+          "a surplus tail that is another file's chain is a cross-link, not a repair");
+    check(__builtin_memcmp(image_before, image, sizeof(image)) == 0, "and the image is untouched");
+    n = walk("/BOOT/GRUB/GRUB.CFG", &err);
+    check(n && read_all(n, back, sizeof(back)) == 40 && back[0] == 'x',
+          "the file the tail ran into still reads");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
     unmount_image();
     check((image[65] & 1) == 1, "with its dirty flag left set");
 
@@ -1640,8 +1706,13 @@ static void write_rows(void)
     n = make_file(mnt.root, "BIG.BIN");
     check(OPS->statfs(&mnt, &sf) == 0, "the free count before a full write");
     check(n && write_at(n, big, sizeof(big), 0) == 0, "half a megabyte is written");
-    check(n && write_at(n, big, sizeof(big), 8 * 1024 * 1024) == -ENOSPC,
-          "a write past the volume's room is ENOSPC");
+    {
+        int before = writes_made;
+
+        check(n && write_at(n, big, sizeof(big), 8 * 1024 * 1024) == -ENOSPC &&
+                  writes_made == before,
+              "a write past the volume's room is ENOSPC, with no sector written");
+    }
     ok = n && OPS->getattr(&mnt, n, &st) == 0 && st.size == sizeof(big);
     check(ok, "and the file keeps the size it had");
     if (n) {
@@ -1826,8 +1897,12 @@ void vfs_ns_unlock(struct vfs_mount *mnt)
 
 void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
 {
+    static int calls;
+
     *seconds = 1583323200; /* 2020-03-04 12:00:00 */
-    *nanoseconds = 0;
+    /* The hundredths move from call to call, so a stamp that touches the
+       creation hundredths is seen. */
+    *nanoseconds = (int64_t)(++calls % 100) * 10000000;
 }
 
 void vfs_device_failed(block_device_t *dev, uint64_t lba, int rc)
@@ -1851,6 +1926,7 @@ int main(void)
     pool_rows();
     write_rows();
     long_rows();
+    tree_rows();
     dirty_rows();
     matrix_rows();
     if (fails == 0) {

@@ -80,6 +80,9 @@ int fat32_name_units(const char *name, uint16_t *units, uint32_t *count)
         }
         last = cp;
     }
+    if (i > 255) {
+        return -ENAMETOOLONG; /* the byte limit, beside the unit limit */
+    }
     if (last == '.' || last == ' ') {
         return -EINVAL;
     }

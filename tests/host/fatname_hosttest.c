@@ -63,6 +63,13 @@ int main(void)
     longname[255] = 'a';
     longname[256] = '\0';
     check(fat32_name_units(longname, units, &n) == -ENAMETOOLONG, "256 do not");
+    for (i = 0; i < 128; i++) {
+        longname[2 * i] = (char)0xc3; /* U+00E9, two bytes each */
+        longname[2 * i + 1] = (char)0xa9;
+    }
+    longname[256] = '\0';
+    check(fat32_name_units(longname, units, &n) == -ENAMETOOLONG,
+          "128 two-byte characters are 128 units and 256 bytes: too long");
     check(fat32_name_units("a/b", units, &n) == -EINVAL &&
               fat32_name_units("a:b", units, &n) == -EINVAL &&
               fat32_name_units("a\"b", units, &n) == -EINVAL &&
@@ -155,9 +162,8 @@ int main(void)
     fat32_long_entry(raw, 1, 2, sum, units, n);
     check(raw[0] == 0x01 && raw[1] == 'f' && raw[30] == 'r',
           "the first entry: thirteen units and no flag");
-    check(fat32_short_sum((const uint8_t *)"BOOT       ") ==
-              fat32_short_sum((const uint8_t *)"BOOT       "),
-          "the checksum is a function of the eleven bytes");
+    check(fat32_short_sum((const uint8_t *)"BOOT       ") == 221,
+          "the checksum of BOOT is 221, by the rotate-and-add rule");
 
     if (fails == 0) {
         printf("fatname_hosttest: OK\n");

@@ -1,7 +1,9 @@
 /*
- * fat32.c: the `vfat` type, read-only. The contract is in fat32.h; what is
- * here is the volume check, the FAT walk, the directory reader with its
- * long names, and the node pool that gives the VFS something to hold.
+ * fat32.c: the `vfat` type, read and written. The contract is in fat32.h
+ * and fat32.Readme.md; what is here is the volume check, the FAT walk, the
+ * directory reader with its long names, the node pool that gives the VFS
+ * something to hold, the writer with its order of writes, and the check
+ * of a volume that was not unmounted cleanly.
  *
  * Everything on the volume is reached through the buffer cache in 4 KiB
  * blocks, one buffer held at a time, so the cache's hold rules are met
@@ -471,7 +473,6 @@ struct fat_scan {
     uint32_t start;        /* the index of the name's first entry: a long one, or `index` */
     char name[VFS_NAME_MAX + 1];
     char alias[13];    /* the short name as shown, always */
-    int name_too_long; /* a long name past the component limit */
 };
 
 /**
@@ -542,14 +543,15 @@ static int dir_scan(struct fat_mount *fm, struct fat_node *dir, uint32_t first, 
         out->ent = e;
         out->index = idx;
         out->start = idx;
-        out->name_too_long = 0;
         short_to_name(e.raw, out->alias);
         if (lfn_ok && lfn_expect == 0 && lfn_count > 0 && short_checksum(e.raw) == lfn_sum) {
-            out->start = lfn_start;
-            int rc = units_to_utf8(units, (uint32_t)lfn_count * 13, out->name, sizeof(out->name));
+            int rc;
 
+            out->start = lfn_start;
+            rc = units_to_utf8(units, (uint32_t)lfn_count * 13, out->name, sizeof(out->name));
             if (rc != 0) {
-                out->name_too_long = rc == -ENAMETOOLONG;
+                /* A long name past the kernel's component limit is listed
+                 * and opened by its alias, which is then its name. */
                 short_to_name(e.raw, out->name);
             }
         } else {
@@ -858,6 +860,16 @@ static int alloc_run(struct fat_mount *fm, uint32_t n, int zero, uint32_t *first
     int rc = 0;
 
     *first = 0;
+    *last = 0;
+    if (!fm->free_known) {
+        rc = count_free(fm);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    if (fm->free_clusters < n) {
+        return -ENOSPC; /* decided before any FAT sector is written */
+    }
     for (i = 0; i < n && rc == 0; i++) {
         uint32_t c;
 
@@ -965,6 +977,15 @@ static void fat_now(uint16_t *date, uint16_t *time, uint8_t *tenth)
         nsec = 0;
     }
     *tenth = (uint8_t)(((rem % 60) % 2) * 100 + (uint32_t)nsec / 10000000u);
+}
+
+/* The modification stamp: the date and the two-second time; the creation
+ * hundredths belong to the creation time and are not touched. */
+static void stamp_mtime(struct fat_node *n)
+{
+    uint8_t tenth;
+
+    fat_now(&n->date, &n->time, &tenth);
 }
 
 /* The 32 bytes of a node's entry, from its fields. */
@@ -1297,9 +1318,6 @@ static int fat_lookup(struct vfs_mount *mnt, void *dir, const char *name, void *
         if (names_match(sc.name, name) || names_match(sc.alias, name)) {
             struct fat_node *n;
 
-            if (sc.name_too_long) {
-                return -ENAMETOOLONG;
-            }
             /* `..` names the parent by its first cluster, zero for the
              * root; `.` and `..` are not files in a directory. */
             n = node_for(fm, dir_cluster, &sc);
@@ -1376,8 +1394,12 @@ static int fat_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     st->size = n->size;
     st->ino = fat_ino(n->is_dir, n->first, n->dir_cluster, n->index);
     st->mtime_sec = fat_epoch(n->date, n->time);
-    st->ctime_sec = fat_epoch(n->cdate, n->ctime) + n->ctenth / 100;
-    st->ctime_nsec = (int64_t)(n->ctenth % 100) * 10000000;
+    {
+        uint32_t tenth = n->ctenth > 199 ? 0 : n->ctenth; /* 0 to 199 by the format */
+
+        st->ctime_sec = fat_epoch(n->cdate, n->ctime) + tenth / 100;
+        st->ctime_nsec = (int64_t)(tenth % 100) * 10000000;
+    }
     st->atime_sec = fat_epoch(n->adate, 0);
     return 0;
 }
@@ -1647,7 +1669,7 @@ static int32_t fat_write(struct vfs_mount *mnt, void *handle, const void *buf, u
         goto out;
     }
     end = offset + count;
-    have = (n->size + cbytes - 1) / cbytes;
+    have = n->size == 0 ? 0 : (n->size - 1) / cbytes + 1;
     needed = (uint32_t)(end - 1) / cbytes + 1; /* end fits 32 bits, checked above */
     if (needed > have) {
         rc = extend_chain(fm, n, have, needed, &run_first);
@@ -1708,7 +1730,7 @@ static int32_t fat_write(struct vfs_mount *mnt, void *handle, const void *buf, u
     if (end > n->size) {
         n->size = (uint32_t)end;
     }
-    fat_now(&n->date, &n->time, &n->ctenth);
+    stamp_mtime(n);
     rc = write_node_entry(fm, n);
     if (rc != 0) {
         goto out; /* the chain is joined; the size is the walk's surplus */
@@ -1748,7 +1770,7 @@ static int fat_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
     if (rc != 0) {
         goto out;
     }
-    have = (n->size + cbytes - 1) / cbytes;
+    have = n->size == 0 ? 0 : (n->size - 1) / cbytes + 1;
     keep = size == 0 ? 0 : (uint32_t)(size - 1) / cbytes + 1;
     if (size > n->size) {
         /* A grow is a write of zeros: new clusters, zeroed and joined,
@@ -1775,6 +1797,15 @@ static int fat_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
                 goto out;
             }
         }
+        if (run_first != 0) {
+            /* The run's zeros are on the disk before the link that
+             * publishes them, whether or not a gap was filled above. */
+            rc = bcache_sync(fm->dev);
+            if (rc != 0) {
+                free_chain(fm, run_first);
+                goto out;
+            }
+        }
         if (run_first != 0 && have > 0) {
             uint32_t tail;
 
@@ -1790,7 +1821,7 @@ static int fat_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
             n->first = run_first;
         }
         n->size = (uint32_t)size;
-        fat_now(&n->date, &n->time, &n->ctenth);
+        stamp_mtime(n);
         rc = write_node_entry(fm, n);
         n->hint_cluster = 0;
         goto out;
@@ -1805,7 +1836,7 @@ static int fat_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
         if (keep == 0) {
             n->first = 0;
         }
-        fat_now(&n->date, &n->time, &n->ctenth);
+        stamp_mtime(n);
         rc = write_node_entry(fm, n);
         if (rc != 0) {
             goto out;
@@ -1887,8 +1918,8 @@ static int fat_setattr(struct vfs_mount *mnt, void *node, int what, const struct
     struct fat_node *n = node;
     int rc;
 
-    if (what & (VFS_SET_UID | VFS_SET_GID)) {
-        return -EPERM;
+    if (what & ~(VFS_SET_MODE | VFS_SET_ATIME | VFS_SET_MTIME)) {
+        return -EPERM; /* the owner, the group, or a field this call does not store */
     }
     if (what & VFS_SET_MODE) {
         uint32_t base = 0777u & ~fm->umask;
@@ -1946,10 +1977,14 @@ static int fat_sync(struct vfs_mount *mnt)
     struct fat_mount *fm = fm_of(mnt);
     int rc;
 
-    if (!fm->writable || !fm->dirty_set) {
+    if (!fm->writable) {
         return 0;
     }
-    vfs_ns_lock(mnt);
+    vfs_ns_lock(mnt); /* a first mutation's flag writes may be in flight */
+    if (!fm->dirty_set) {
+        vfs_ns_unlock(mnt);
+        return 0;
+    }
     rc = bcache_sync(fm->dev);
     if (rc == 0) {
         rc = write_fsinfo(fm);
@@ -2218,6 +2253,29 @@ static int fat_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
     return free_chain(fm, first);
 }
 
+/* Whether the directory at cluster `dir` (0 for the root) is `anc` or lies
+ * under it, by the `..` chain up to the root. 1, 0, or a negative error. */
+static int is_under(struct fat_mount *fm, uint32_t dir, uint32_t anc)
+{
+    uint32_t steps = 0;
+
+    while (dir != 0 && steps++ < fm->cluster_count) {
+        struct fat_dirent e;
+
+        if (dir == anc) {
+            return 1;
+        }
+        if (dir_entry(fm, 0, dir, 1, &e) != 1 || !raw_eq(e.raw, (const uint8_t *)"..         ")) {
+            return -EIO;
+        }
+        dir = entry_first(e.raw);
+        if (dir == fm->root_cluster) {
+            dir = 0;
+        }
+    }
+    return 0;
+}
+
 /* Rename within one mount. In one directory the entry is rewritten in
  * place; otherwise the destination is freed if it exists, the source entry
  * is freed, a moved directory's `..` is rewritten, and the new entry is
@@ -2285,18 +2343,22 @@ static int fat_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, 
             }
         }
     }
+    if (is_dir && od_cluster != nd_cluster) {
+        rc = is_under(fm, nd_cluster, entry_first(src.ent.raw));
+        if (rc < 0) {
+            return rc;
+        }
+        if (rc) {
+            return -EINVAL; /* into itself or under itself */
+        }
+    }
     rc = mark_dirty(fm);
     if (rc != 0) {
         return rc;
     }
-    if (dst_exists) {
-        /* The destination's entries go first; the new name may then take
-         * its alias and its slots. */
-        rc = free_name_entries(fm, nd->first, &dst);
-        if (rc != 0) {
-            return rc;
-        }
-    }
+    /* The name and its room are decided with the destination still in
+     * place, so ENOSPC destroys nothing; the alias avoids the
+     * destination's, and its freed slots are simply free. */
     rc = prepare_name(fm, nd, nd->first, newname, &nn);
     if (rc != 0) {
         return rc;
@@ -2314,19 +2376,22 @@ static int fat_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, 
         }
         return rc;
     }
+    rc = free_slots(fm, nd, nd->first, nn.entries + 1, &index);
+    if (rc != 0) {
+        return rc;
+    }
     if (dst_exists) {
-        if (dst.ent.raw[11] & ATTR_DIRECTORY) {
-            rc = free_chain(fm, entry_first(dst.ent.raw));
-        } else {
-            rc = retire_chain(mnt, fm, nd_cluster, dst.index, entry_first(dst.ent.raw));
+        rc = free_name_entries(fm, nd->first, &dst);
+        if (rc == 0) {
+            if (dst.ent.raw[11] & ATTR_DIRECTORY) {
+                rc = free_chain(fm, entry_first(dst.ent.raw));
+            } else {
+                rc = retire_chain(mnt, fm, nd_cluster, dst.index, entry_first(dst.ent.raw));
+            }
         }
         if (rc != 0) {
             return rc;
         }
-    }
-    rc = free_slots(fm, nd, nd->first, nn.entries + 1, &index);
-    if (rc != 0) {
-        return rc;
     }
     rc = free_name_entries(fm, od->first, &src);
     if (rc != 0) {
@@ -2355,10 +2420,8 @@ static int fat_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, 
     if (moved) {
         k_memcpy(moved->name11, nn.name11, 11);
         moved->lower = nn.lower;
-        if (!is_dir) {
-            moved->dir_cluster = nd_cluster;
-            moved->index = index + nn.entries;
-        }
+        moved->dir_cluster = nd_cluster;
+        moved->index = index + nn.entries;
     }
     return 0;
 }
@@ -2436,6 +2499,7 @@ static int free_entry(struct fat_mount *fm, uint32_t dir_first, uint32_t index);
 
 #define WALK_CLUSTERS (1u << 20)
 #define WALK_DEPTH 32
+#define WALK_DIR_ENTRIES 4096 /* entries compared for a duplicate name */
 
 static uint8_t walk_bits[WALK_CLUSTERS / 8];
 static int walk_busy;
@@ -2458,16 +2522,25 @@ static int bit_test_set(uint32_t c)
     return 0;
 }
 
+#define WALK_TAILS 16
+
 struct walk_state {
     struct fat_mount *fm;
     int repaired;  /* repairs written */
     uint32_t lost; /* clusters marked used that nothing reaches */
     const char *why;
+    /* Surplus tails found by the walk, freed only after the whole tree is
+     * walked: a tail that a later entry's chain enters is a cross-link,
+     * and freeing it first would destroy that entry's clusters. */
+    int ntails;
+    uint32_t tail_prev[WALK_TAILS];
+    uint32_t tail_first[WALK_TAILS];
 };
 
 /* Walk the chain at `first` for the entry `name11`, marking clusters;
  * `expect` clusters for a file (-1 for a directory). Returns the count, or
- * -1 for a bad chain. A surplus tail is repaired here. */
+ * -1 for a bad chain. A surplus tail is walked and marked like the rest of
+ * the chain and recorded for the repair that follows the walk. */
 static long walk_chain(struct walk_state *w, uint32_t first, long expect)
 {
     struct fat_mount *fm = w->fm;
@@ -2488,20 +2561,15 @@ static long walk_chain(struct walk_state *w, uint32_t first, long expect)
             return -1;
         }
         count++;
-        if (expect >= 0 && count > expect) {
-            /* The surplus tail this driver's extend leaves behind a crash:
-             * the size's last cluster is ended first, then the tail freed. */
-            rc = fat_set(fm, prev, FAT_EOC_MIN);
-            if (rc == 0) {
-                rc = free_chain(fm, c);
-            }
-            if (rc != 0) {
-                w->why = "a repair write failed";
+        if (expect >= 0 && count == expect + 1) {
+            /* The surplus tail this driver's extend leaves behind a crash. */
+            if (w->ntails == WALK_TAILS) {
+                w->why = "more surplus tails than the walk repairs";
                 return -1;
             }
-            w->repaired++;
-            klog(KLOG_WARN, "vfat", "check: surplus tail freed");
-            return count - 1;
+            w->tail_prev[w->ntails] = prev;
+            w->tail_first[w->ntails] = c;
+            w->ntails++;
         }
         rc = fat_next(fm, c, &next);
         if (rc != 0) {
@@ -2623,7 +2691,11 @@ static int walk_dir(struct walk_state *w, uint32_t first, uint32_t parent, uint3
             /* The same name twice in one directory. */
             uint32_t k;
 
-            for (k = 0; k < i && k < 4096; k++) {
+            if (i >= WALK_DIR_ENTRIES) {
+                w->why = "a directory larger than the walk compares";
+                return -1;
+            }
+            for (k = 0; k < i; k++) {
                 struct fat_dirent o;
 
                 if (dir_entry(fm, 0, first, k, &o) != 1) {
@@ -2701,11 +2773,12 @@ static int fat_check_volume(struct fat_mount *fm)
     struct walk_state w;
     uint32_t stack_first[WALK_DEPTH], stack_parent[WALK_DEPTH], stack_resume[WALK_DEPTH];
     int depth = 0;
+    int i;
     uint32_t c;
 
     k_memset(&w, 0, sizeof(w));
     w.fm = fm;
-    if (fm->cluster_count > WALK_CLUSTERS) {
+    if (fm->cluster_count + 2 > WALK_CLUSTERS) {
         klog(KLOG_WARN, "vfat", "check: %d clusters is more than the walk covers; read-only",
              (int)fm->cluster_count);
         return 1;
@@ -2744,6 +2817,21 @@ static int fat_check_volume(struct fat_mount *fm)
         stack_resume[depth] = 0;
         depth++;
     }
+    /* The surplus tails, now that the walk has shown nothing else reaches
+     * them: the size's last cluster is ended first, then the tail freed. */
+    for (i = 0; i < w.ntails; i++) {
+        int rc = fat_set(fm, w.tail_prev[i], FAT_EOC_MIN);
+
+        if (rc == 0) {
+            rc = free_chain(fm, w.tail_first[i]);
+        }
+        if (rc != 0) {
+            w.why = "a repair write failed";
+            goto done;
+        }
+        w.repaired++;
+        klog(KLOG_WARN, "vfat", "check: surplus tail freed");
+    }
     {
         uint32_t freecount = 0;
 
@@ -2756,8 +2844,8 @@ static int fat_check_volume(struct fat_mount *fm)
                 goto done;
             }
             v = le32(raw) & FAT_MASK;
-            /* A marked cluster can be free: the first of a surplus tail is
-             * marked by the walk and then freed by its repair. */
+            /* A marked cluster can be free: a surplus tail is marked by the
+             * walk and then freed by its repair. */
             if (v == 0) {
                 freecount++;
             } else if (v != FAT_BAD && !(walk_bits[c >> 3] & (1u << (c & 7)))) {

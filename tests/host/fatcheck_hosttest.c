@@ -108,6 +108,7 @@ int main(void)
     row("--dirty-orphan", 1, "orphan long-name entries before the end in /BOOT/EXTRA");
     row("--dirty-mirror", 1, "mirrors differ: 1 entries");
     row("--dirty-cross", 1, "cross-link: ");
+    row("--dirty-surplus-cross", 1, "cross-link: ");
 
     if (fails == 0) {
         printf("fatcheck_hosttest: OK\n");
