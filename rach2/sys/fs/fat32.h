@@ -18,8 +18,10 @@
  * its last put; a lookup that finds the pool full answers ENOMEM. A
  * directory's identity is its first cluster; a file's is its directory's
  * cluster, its entry index, and a generation the pool advances when it
- * hands that entry out again. Every file reports the mount's `uid` and
- * `gid` and a mode from its `umask` option, the options Linux's vfat takes.
+ * hands that entry out again. Every entry reports the mount's `uid` and
+ * `gid` and the mode `0777` less its `umask` option (0755 under the
+ * default 022), the options Linux's vfat takes; FAT has no execute bit, so
+ * a program on a volume runs unless the mount is `noexec`.
  *
  * Names: a long name is kept when its entries check and its checksum
  * matches the short entry; otherwise the short name is shown, in lower

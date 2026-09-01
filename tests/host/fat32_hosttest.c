@@ -352,7 +352,7 @@ static void well_formed_rows(void)
     check(n != 0, "the empty file is found");
     check(n && read_all(n, buf, sizeof(buf)) == 0, "and reads as empty");
     if (n && OPS->getattr(&mnt, n, &st) == 0) {
-        check(st.size == 0 && (st.mode & 0777) == 0644 && st.uid == 7 && st.gid == 9,
+        check(st.size == 0 && (st.mode & 0777) == 0755 && st.uid == 7 && st.gid == 9,
               "a file reports the mount's owner and the umask's mode");
     }
     if (n) {

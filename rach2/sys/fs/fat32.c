@@ -646,8 +646,10 @@ static int fat_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     struct fat_node *n = node;
 
     k_memset(st, 0, sizeof(*st));
-    st->mode =
-        n->is_dir ? (FAT_S_IFDIR | (0777u & ~fm->umask)) : (FAT_S_IFREG | (0666u & ~fm->umask));
+    /* Every entry reports 0777 less the mount's umask, as vfat on Linux
+     * does: FAT has no execute bit, and a program on a volume runs unless
+     * the mount says noexec. */
+    st->mode = (n->is_dir ? FAT_S_IFDIR : FAT_S_IFREG) | (0777u & ~fm->umask);
     st->uid = fm->uid;
     st->gid = fm->gid;
     st->nlink = 1;
