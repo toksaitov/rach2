@@ -3,6 +3,7 @@
  * independent of the kernel's driver, the pair of mkfatfixture.c for FAT32.
  *
  *   mkexfatfixture --check IMAGE [OFFSET-SECTORS] [--list] [--dump]
+ *   mkexfatfixture --check IMAGE [OFFSET-SECTORS] --read PATH
  *
  * `--check` walks a volume: both boot regions and their checksums, the FAT,
  * the root's allocation bitmap and up-case table, every entry set the tree
@@ -13,7 +14,9 @@
  * the boot sector, the up-case and bitmap entries and the first file set as
  * hex beside the values the specification gives them, which is the record
  * `dev-log/38-exfat/notes.md` keeps of a volume another implementation
- * wrote. The builder half is phase 2's.
+ * wrote. `--read PATH` writes a file's bytes to stdout, which is how the
+ * suite reads on the host what the kernel wrote, since mtools does not
+ * read exFAT. The builder is the second half of this file.
  */
 
 #include <stdint.h>
@@ -897,12 +900,120 @@ static int load_objects(struct vol *v)
     return 0;
 }
 
+/* `--read PATH`: the bytes of the file at PATH, to ValidDataLength, on
+   stdout; through the FAT or contiguous as its stream says. 0, or 1 when
+   the path is not there. */
+static int read_path(struct vol *v, const char *path)
+{
+    uint32_t first = v->root;
+    uint64_t length = 0, valid = 0;
+    int nofat = 0, is_dir = 1;
+    const char *p = path;
+
+    while (*p) {
+        const char *slash;
+        unsigned long n;
+        char want[600];
+        uint32_t *cl;
+        unsigned ncl = 0, i, found = 0;
+        uint32_t c = first;
+        long nc;
+
+        while (*p == '/')
+            p++;
+        if (!*p)
+            break;
+        slash = strchr(p, '/');
+        n = slash ? (unsigned long)(slash - p) : strlen(p);
+        memcpy(want, p, n);
+        want[n] = 0;
+        p += n;
+        if (!is_dir)
+            return 1;
+        /* The directory's clusters. */
+        nc = nofat ? (long)((length + cluster_bytes(v) - 1) / cluster_bytes(v)) : 0;
+        if (!nofat) {
+            uint32_t x = first;
+            unsigned long steps = 0;
+
+            while (in_heap(v, x) && steps++ < v->clusters) {
+                nc++;
+                x = fat_entry(v, x);
+                if (x == 0xFFFFFFFFu)
+                    break;
+            }
+        }
+        cl = malloc(sizeof(uint32_t) * (size_t)(nc > 0 ? nc : 1));
+        if (!cl)
+            return 1;
+        while (ncl < (unsigned)nc) {
+            cl[ncl++] = c;
+            c = nofat ? c + 1 : fat_entry(v, c);
+        }
+        for (i = 0; !found; i++) {
+            const unsigned char *e = dir_entry(v, cl, ncl, i);
+            unsigned secondaries, k, nlen, got = 0;
+            uint16_t units[255];
+            char name[800];
+
+            if (!e || e[0] == 0x00)
+                break;
+            if (e[0] != 0x85)
+                continue;
+            secondaries = e[1];
+            if (secondaries < 2 || !dir_entry(v, cl, ncl, i + secondaries))
+                continue;
+            nlen = dir_entry(v, cl, ncl, i + 1)[3];
+            for (k = 2; k <= secondaries; k++) {
+                const unsigned char *ne = dir_entry(v, cl, ncl, i + k);
+                unsigned m;
+
+                if (ne[0] != 0xC1)
+                    continue;
+                for (m = 0; m < 15 && got < nlen; m++)
+                    units[got++] = rd16(ne + 2 + m * 2);
+            }
+            utf8_of(units, got, name, sizeof(name));
+            if (strcmp(name, want) == 0) {
+                const unsigned char *st = dir_entry(v, cl, ncl, i + 1);
+
+                found = 1;
+                is_dir = (rd16(e + 4) & 0x10) != 0;
+                first = rd32(st + 20);
+                length = rd64(st + 24);
+                valid = rd64(st + 8);
+                nofat = (st[1] & 0x02) != 0;
+            }
+            i += secondaries;
+        }
+        free(cl);
+        if (!found)
+            return 1;
+    }
+    if (is_dir)
+        return 1;
+    {
+        uint64_t done = 0;
+        uint32_t c = first;
+        unsigned long steps = 0;
+
+        while (done < valid && in_heap(v, c) && steps++ < v->clusters) {
+            uint64_t take = valid - done < cluster_bytes(v) ? valid - done : cluster_bytes(v);
+
+            fwrite(cluster(v, c), 1, (size_t)take, stdout);
+            done += take;
+            c = nofat ? c + 1 : fat_entry(v, c);
+        }
+    }
+    return 0;
+}
+
 static int check_main(int argc, char **argv)
 {
     struct vol v;
     FILE *f;
     uint64_t offset = 0;
-    const char *image = 0;
+    const char *image = 0, *read_what = 0;
     int i;
     long n;
     uint64_t c, allocated = 0, reached = 0;
@@ -912,6 +1023,8 @@ static int check_main(int argc, char **argv)
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--check") == 0)
             continue;
+        else if (strcmp(argv[i], "--read") == 0 && i + 1 < argc)
+            read_what = argv[++i];
         else if (strcmp(argv[i], "--list") == 0)
             v.list = 1;
         else if (strcmp(argv[i], "--dump") == 0)
@@ -942,6 +1055,9 @@ static int check_main(int argc, char **argv)
     if (check_boot(&v) != 0 || load_objects(&v) != 0) {
         printf("check: FAIL: %d finding(s)\n", v.findings);
         return 1;
+    }
+    if (read_what) {
+        return read_path(&v, read_what);
     }
     /* The system objects own their clusters first. */
     n = walk_chain(&v, v.bitmap_first, v.bitmap_length, 0, "(bitmap)");
@@ -1464,6 +1580,9 @@ static int build(const char *out, const char *opt)
     wr16(entry + 2, b_set_checksum(entry, 1)); /* a set of one entry */
     dw_put(&root, entry);
     free(table);
+    if (b_is(&b, "--empty")) {
+        goto finish; /* the system objects alone: a volume for the suite to write */
+    }
 
     /* hello.txt: twelve bytes, contiguous, NoFatChain. */
     c = b_alloc(&b, 1, 0);
@@ -1668,6 +1787,7 @@ static int build(const char *out, const char *opt)
         e[0] = 0x86;
         dw_put(&dir, e);
     }
+finish:
     if (b_is(&b, "--junk") || b.dirty) {
         /* Every free cluster holds bytes nobody wrote, so a size published
            before its data shows in the oracle. */
