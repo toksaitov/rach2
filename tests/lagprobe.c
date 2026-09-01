@@ -28,6 +28,9 @@
  * mounted volume fails, the mount goes read-only, /proc/mounts says so,
  * and the next write answers EROFS.
  *
+ * `lagprobe writers`: two children write files on the lagged volume while
+ * the parent syncs it; each file reads back as its own bytes.
+ *
  * Prints "LAGPROBE OK" or "LAGPROBE FAIL: reason". Freestanding; int 0x80.
  */
 
@@ -42,6 +45,7 @@ typedef unsigned int size_t;
 #define SYS_LSEEK        19
 #define SYS_KILL         37
 #define SYS_PIPE         42
+#define SYS_SYNC         36
 #define EIO              5
 #define EROFS            30
 #define O_CREAT          0100
@@ -421,6 +425,95 @@ static void run_blockfail(void)
     puts("LAGPROBE OK");
 }
 
+/* `lagprobe writers`, under the lag with the FAT32 partition mounted for
+   writing: two children each create a file and extend it eight times, and
+   the parent syncs the volume while they do; every write sleeps in the lag,
+   so the writers and the sync interleave at every request. Each file must
+   read back as its own bytes, whole, and the driver's assertion at every
+   mutation is what would have caught a write outside the lock. */
+#define WRITER_CHUNK  4096
+#define WRITER_ROUNDS 8
+
+static void writer(const char *path, unsigned char fill)
+{
+    static unsigned char chunk[WRITER_CHUNK];
+    int fd, i, r;
+
+    for (i = 0; i < WRITER_CHUNK; i++) {
+        chunk[i] = (unsigned char)(fill + i);
+    }
+    fd = syscall3(SYS_OPEN, (int)path, O_WRONLY | O_CREAT, 0644);
+    if (fd < 0) {
+        sys_exit(2);
+    }
+    for (r = 0; r < WRITER_ROUNDS; r++) {
+        if (syscall3(SYS_WRITE, fd, (int)chunk, WRITER_CHUNK) != WRITER_CHUNK) {
+            sys_exit(3);
+        }
+    }
+    syscall1(SYS_CLOSE, fd);
+    sys_exit(0);
+}
+
+static void check_written(const char *path, unsigned char fill)
+{
+    static unsigned char storage[WRITER_CHUNK];
+    unsigned char *buf = storage; /* read into through the pointer */
+    int fd = syscall3(SYS_OPEN, (int)path, O_RDONLY, 0);
+    int r, i;
+
+    if (fd < 0) {
+        fail("a writer's file is missing");
+    }
+    for (r = 0; r < WRITER_ROUNDS; r++) {
+        if (syscall3(SYS_READ, fd, (int)buf, WRITER_CHUNK) != WRITER_CHUNK) {
+            fail("a writer's file is short");
+        }
+        for (i = 0; i < WRITER_CHUNK; i++) {
+            if (buf[i] != (unsigned char)(fill + i)) {
+                fail("a writer's file holds another writer's bytes");
+            }
+        }
+    }
+    if (syscall3(SYS_READ, fd, (int)buf, 16) != 0) {
+        fail("a writer's file is long");
+    }
+    syscall1(SYS_CLOSE, fd);
+}
+
+static void run_writers(void)
+{
+    int a, b, s;
+
+    if (syscall2(SYS_MKDIR, (int)"/lw", 0755) != 0) {
+        fail("mkdir /lw");
+    }
+    if (sys5(SYS_MOUNT, (int)"/dev/disk0p2", (int)"/lw", (int)"vfat", 0, 0) != 0) {
+        fail("the writable mount through the lag");
+    }
+    a = syscall1(SYS_FORK, 0);
+    if (a == 0) {
+        writer("/lw/writer-a.bin", 0x11);
+    }
+    b = syscall1(SYS_FORK, 0);
+    if (b == 0) {
+        writer("/lw/writer-b.bin", 0x77);
+    }
+    for (s = 0; s < 20; s++) {
+        syscall1(SYS_SYNC, 0);
+        sleep_ms(30);
+    }
+    if (wait_status(a) != 0 || wait_status(b) != 0) {
+        fail("a writer failed");
+    }
+    check_written("/lw/writer-a.bin", 0x11);
+    check_written("/lw/writer-b.bin", 0x77);
+    if (syscall2(SYS_UMOUNT2, (int)"/lw", 0) != 0) {
+        fail("umount2 of the written volume");
+    }
+    puts("LAGPROBE OK");
+}
+
 #define PATTERN_SECTORS 128
 
 static unsigned char parent_marks[PATTERN_SECTORS];
@@ -581,6 +674,8 @@ void probe_main(unsigned int *sp)
 
     if (argc >= 2 && argv[1][0] == 'd') {
         run_deadline();
+    } else if (argc >= 2 && argv[1][0] == 'w' && argv[1][5] == 'r') {
+        run_writers();
     } else if (argc >= 2 && argv[1][0] == 'w') {
         run_write();
     } else if (argc >= 2 && argv[1][0] == 'm') {
