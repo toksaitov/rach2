@@ -1300,8 +1300,12 @@ int main(int argc, char **argv)
 
         trace("decide ok_seen=%d step_failures=%d exited=%d rc=%d", seen, step_failures,
               self_exited, qemu_rc);
-        if (self_exited && qemu_rc != 0) {
-            fprintf(stderr, "HARNESS: the machine exited with status %d\n", qemu_rc);
+        /* A machine that stopped on its own with an even status did not
+           stop through isa-debug-exit, whose codes are odd: QEMU itself
+           ended, so the token alone does not pass the run. */
+        if (self_exited && qemu_rc != 0 && (qemu_rc & 1) == 0) {
+            fprintf(stderr, "HARNESS: the machine exited with status %d, not through "
+                            "isa-debug-exit\n", qemu_rc);
             return 1;
         }
         if (seen && step_failures == 0) {

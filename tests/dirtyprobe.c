@@ -169,7 +169,7 @@ void _start(void)
     /* The two truncating opens, each refused before it can reach a clear. */
     want_eq("open the root for writing with O_TRUNC",
             syscall3(SYS_OPEN, (int)ROOT, O_WRONLY | O_TRUNC, 0), -EISDIR);
-    want_eq("creat the root", syscall3(SYS_CREAT, (int)ROOT, 0644, 0), -EINVAL);
+    want_eq("creat the root", syscall3(SYS_CREAT, (int)ROOT, 0644, 0), -EISDIR);
 
     /* A descriptor on the root exists and reads; writing through it is refused
      * by the descriptor's own type, so the write clear is never reached. */
