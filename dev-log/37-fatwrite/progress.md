@@ -22,9 +22,9 @@ Phase 3: the writer
 - [x] host sequences and the interruption matrix (short names); phase mutations; phase gate
 
 Phase 4: long names and attributes
-- [ ] long-name creation, the alias rule and its collision search, the name checks
-- [ ] setattr for times and the read-only attribute; the vfsprobe renamed-directory row
-- [ ] fatname_hosttest; the matrix with long names; phase mutations; phase gate
+- [x] long-name creation, the alias rule and its collision search, the name checks
+- [x] setattr for times and the read-only attribute; the vfsprobe renamed-directory row
+- [x] fatname_hosttest; the matrix with long names; phase mutations; phase gate
 
 Phase 5: the suite
 - [ ] tests/run fatwrite: probe, reboot, mtools comparison, checker where present, crash boot, blockfail boot, BusyBox boot, lagprobe rows

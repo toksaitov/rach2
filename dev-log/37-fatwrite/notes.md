@@ -140,6 +140,53 @@ guest one through the blockfail boot):
 * the mount kept writable after a failed write: caught by the blockfail
   boot (phase 2's deferred proof, closed here)
 
+## Phase 4 record
+
+Names live in `fat32name.c`, apart from the driver so the host test reads
+them alone: the UTF-8 to UTF-16 conversion and what it refuses, the
+Windows NT short rule with the case bits, the alias (this driver's own:
+six characters of the base, `~` and the smallest free number, three of the
+extension; a character outside the short set or outside ASCII as `_`), the
+checksum and the long entries. Long entries are written before their short
+entry and freed after it; a rename within one directory to a name of the
+same entry count rewrites in place. `setattr` stores the times and the
+write bits as the read-only attribute and answers EPERM for anything else.
+
+What the rows found:
+
+* The alias walked UTF-8 bytes, not characters: a three-byte character
+  became three underscores.
+* The plan's row for a directory descriptor after its directory's rename
+  cannot live in vfsprobe: KRFFS refuses directory renames by design. It
+  lives in mountprobe on the vfat mount, and needed a `path` operation in
+  the interface: a type whose directories can be renamed rebuilds a
+  directory's path from its `..` chain, and the `*at` calls use it, so the
+  descriptor follows the rename instead of keeping a stale spelling.
+* The rename syscall's generic arm ran the type's rename outside the
+  namespace lock; it is locked now.
+* The unmount deadlocked on its own namespace lock: `vfs_do_umount` holds
+  it while calling the type's `sync`, which locks for the `sync(2)` path
+  that arrives unlocked; a last `put` under a namespace change would do
+  the same. The lock is re-entrant by holder now, which vfs.Readme.md
+  says and why.
+* The probe's own output lines were lost from the serial capture between
+  kernel log lines during the hunt; the kernel's records were what showed
+  where the hang was.
+
+Phase 4 mutations, proved once each through mutate37p4.sh (host rows):
+
+* an alias that collides on the raw bytes: caught by the numbering row
+* long entries written without their checksum: caught by the lookup row
+* a trailing space accepted: caught by the name test
+* chmod changing an execute bit: caught by the attribute row
+* a rename losing the node's location: caught by the open-file rename row
+
+The plan's sixth, an `0xE5` first byte stored unescaped, is unreachable
+from a UTF-8 name: the byte is a lead byte of a three-byte character and
+never a name's first stored byte, and the alias maps a character outside
+ASCII to `_`. The escape stays in the code for a raw eleven-byte caller and
+is not proved by a mutation.
+
 ## Open items
 
 (none)
