@@ -125,6 +125,11 @@ int main(void)
     row("--dirty-wrong-name-length", 1, "name entries with units past NameLength");
     row("--dirty-loop", 1, "loop: /chained.bin");
     row("--dirty-hash-and-checksum", 1, "name hash");
+    row("--dirty-all", 1, "checksum-only: /hello.txt");
+    row("--swallow", 1, "an entry of a set that is not an in-use secondary");
+    row("--dirty-nofat-orphan", 1, "orphan secondaries: 2 in /Wide Dir");
+    row("--dirty-dup-checksum", 1, "duplicate name: /HELLO.txt");
+    row("--dirty-label-below", 0, "check: OK: "); /* the reader passes a label over */
 
     if (fails == 0) {
         printf("exfatcheck_hosttest: OK\n");

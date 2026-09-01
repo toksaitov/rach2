@@ -57,17 +57,17 @@ process_t *current_proc = &proc_a;
 
 /* The kernel's records go to the log the runner keeps, so a refusal or a
    skipped set names its reason there. */
-extern int vprintf(const char *fmt, __builtin_va_list ap);
+extern int vsnprintf(char *s, unsigned long n, const char *fmt, __builtin_va_list ap);
+static char last_klog[400];
 void klog(int level, const char *subsystem, const char *fmt, ...)
 {
     __builtin_va_list ap;
 
     (void)level;
-    printf("klog: %s: ", subsystem);
     __builtin_va_start(ap, fmt);
-    vprintf(fmt, ap);
+    vsnprintf(last_klog, sizeof(last_klog), fmt, ap);
     __builtin_va_end(ap);
-    printf("\n");
+    printf("klog: %s: %s\n", subsystem, last_klog);
 }
 void k_panic(const char *msg)
 {
@@ -1091,14 +1091,14 @@ static int rewrite_rows_run(void)
    fixture's own files are intact and reachable. */
 static int oracle_ok(void)
 {
-    static const char *const names[] = {"w one.txt",  "w two.bin", "w three.bin",
-                                        "w four.txt", "over.txt",  "R1x.txt",
-                                        "r1.txt",     "w six.txt", "valid.bin"};
+    static const char *const names[] = {"w one.txt", "w two.bin", "w three.bin", "w four.txt",
+                                        "over.txt",  "R1x.txt",   "r1.txt",      "w six.txt",
+                                        "valid.bin", "hello.txt", "straddle.txt"};
     static const char *const fixed[] = {"chained.bin", "dir/sub/leaf.txt", "crossing.txt"};
     int f, err;
     long i;
 
-    for (f = 0; f < 9; f++) {
+    for (f = 0; f < 11; f++) {
         void *n = walk(names[f][0] == '/' ? names[f] : names[f], &err);
         long got;
         int zeros = 1, written = 1;
@@ -1135,6 +1135,20 @@ static int oracle_ok(void)
                 want = i < 5000 ? (unsigned char)(0x40 + i) : 0;
                 if (i >= 7000 && i < 7010 && back[i] == pattern[i - 7000]) {
                     want = back[i];
+                }
+            } else if (f == 9) {
+                /* hello.txt: its twelve bytes, then what the nofat sequence
+                   writes past them, or zeros before it has. */
+                want = i < 12 ? (unsigned char)"hello exfat\n"[i] : pattern[i - 12];
+                if (i >= 12 && back[i] == 0) {
+                    want = 0;
+                }
+            } else if (f == 10) {
+                /* straddle.txt: its nine bytes, then the hundred the
+                   straddle sequence writes at 9, or zeros before it has. */
+                want = i < 9 ? (unsigned char)"straddle\n"[i] : pattern[i - 9];
+                if (i >= 9 && back[i] == 0) {
+                    want = 0;
                 }
             } else {
                 want = pattern[i];
@@ -1235,6 +1249,84 @@ static void write_rows(void)
     check(OPS->prepare_unmount(&mnt) == 0, "the rewrite rows' clean unmount");
     unmount_image();
     check_consistent("the volume is consistent after the rewrites", 0);
+    /* A vendor allocation's clusters go with its set, and the percent in
+       use on the disk is the bitmap's. */
+    load("--junk");
+    check(mount_rw() == 0, "a writable mount for the vendor and boot-state rows");
+    check(OPS->unlink(&mnt, mnt.root, "vendor.txt") == 0,
+          "the set with a vendor allocation is unlinked");
+    check(OPS->prepare_unmount(&mnt) == 0, "its clean unmount");
+    unmount_image();
+    check_consistent("and its vendor clusters are not left allocated", 0);
+
+    /* A contiguous file extended on a full volume: ENOSPC, and its stream
+       still says NoFatChain, since nothing was written. */
+    load("--junk");
+    check(mount_rw() == 0, "a writable mount for the ENOSPC rows");
+    {
+        void *big = make_file(mnt.root, "fill.bin");
+        int rc = 0;
+        uint64_t at = 0;
+
+        while (big && rc == 0 && at < 32u * 1024 * 1024) {
+            rc = write_at(big, pattern, 8192, at);
+            at += 8192;
+        }
+        /* The last clusters, one at a time, so that none is left free. */
+        rc = 0;
+        while (big && rc == 0) {
+            struct vfs_stat st2;
+
+            if (OPS->getattr(&mnt, big, &st2) != 0) {
+                break;
+            }
+            rc = write_at(big, pattern, 4096, st2.size);
+        }
+        check(big && rc == -ENOSPC, "the volume fills and answers ENOSPC");
+        if (big) {
+            OPS->put(&mnt, big);
+        }
+    }
+    n = walk("/hello.txt", &err);
+    check(n && write_at(n, pattern, 4096, 12) == -ENOSPC,
+          "a contiguous file cannot grow on a full volume");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    check(OPS->prepare_unmount(&mnt) == 0, "the full volume's clean unmount");
+    unmount_image();
+    {
+        char cmd[300], line[300];
+        void *pf;
+        int nofat_seen = 0;
+        uint32_t used = 0, c, heap, spc, clusters;
+        unsigned char *bitmap;
+
+        run_check(check_out, sizeof(check_out));
+        snprintf(cmd, sizeof(cmd), "%s/mkexfatfixture --check %s/exfat_write.img --list", FIXDIR,
+                 FIXDIR);
+        pf = popen(cmd, "r");
+        while (pf && fgets(line, sizeof(line), pf)) {
+            if (strstr(line, "/hello.txt") && strstr(line, "nofat")) {
+                nofat_seen = 1;
+            }
+        }
+        if (pf) {
+            pclose(pf);
+        }
+        check(nofat_seen, "and its stream still says NoFatChain: the refusal wrote nothing");
+        heap = image[88] | (image[89] << 8) | (image[90] << 16) | ((uint32_t)image[91] << 24);
+        spc = image[109];
+        clusters = image[92] | (image[93] << 8) | (image[94] << 16) | ((uint32_t)image[95] << 24);
+        bitmap = image + ((uint64_t)heap + (0u << spc)) * 512; /* the bitmap is cluster 2 */
+        for (c = 0; c < clusters; c++) {
+            if (bitmap[c / 8] & (1u << (c % 8))) {
+                used++;
+            }
+        }
+        check(image[112] == (unsigned char)(used * 100u / clusters),
+              "the percent in use on the disk is the bitmap's, rounded down");
+    }
     /* The placement rule: no set this driver makes has its file entry in a
        sector's last slot, so its file and stream entries share a sector.
        The fixture's own straddle.txt is one, on purpose; the rule is read
@@ -1392,17 +1484,21 @@ static void dirty_rows(void)
     int err;
     void *n;
     struct vfs_statfs sf;
-    static const char *const faults[] = {"--dirty-overlap",
-                                         "--dirty-short-stream",
-                                         "--dirty-reached-free",
-                                         "--dirty-wrong-name-length",
-                                         "--dirty-critical",
-                                         "--dirty-dup",
-                                         "--dirty-loop",
-                                         "--dirty-chain-out",
-                                         "--dirty-hash-and-checksum"};
+    /* Each fault and the reason the check must name for it. */
+    static const char *const faults[][2] = {
+        {"--dirty-overlap", "a cluster reached twice"},
+        {"--dirty-short-stream", "a stream shorter than its length"},
+        {"--dirty-reached-free", "a reached cluster whose bitmap bit is clear"},
+        {"--dirty-wrong-name-length", "units past NameLength"},
+        {"--dirty-critical", "a critical entry this driver does not know"},
+        {"--dirty-dup", "two names that up-case alike in one directory"},
+        {"--dirty-loop", "a cluster reached twice"}, /* the loop returns to a marked cluster */
+        {"--dirty-chain-out", "a chain outside the heap"},
+        {"--dirty-hash-and-checksum", "the name hash"},
+        {"--dirty-swallow", "an entry of the set that is not an in-use secondary"},
+        {"--dirty-label-below", "a root-only critical entry in a subdirectory"}};
     static const char *const repairs[] = {"--dirty-bad-set-checksum", "--dirty-orphan",
-                                          "--dirty-surplus"};
+                                          "--dirty-surplus", "--dirty-all"};
     unsigned f;
     int k;
 
@@ -1432,9 +1528,35 @@ static void dirty_rows(void)
     if (n) {
         OPS->put(&mnt, n);
     }
+    check(OPS->statfs(&mnt, &sf) == 0 && sf.bfree == 4064 - 21,
+          "and the freed cluster is free in the count the check left");
     check(OPS->prepare_unmount(&mnt) == 0, "its clean unmount");
     unmount_image();
     check_consistent("and the walk finds no surplus and no lost cluster", 0);
+
+    dirty_mount("--dirty-nofat-orphan", 0,
+                "orphans in the second cluster of a contiguous directory are freed");
+    check(OPS->prepare_unmount(&mnt) == 0, "its clean unmount");
+    unmount_image();
+    check_consistent("and the walk finds no orphan there", 0);
+
+    dirty_mount("--dirty-dup-checksum", 1,
+                "a duplicate name whose earlier set is checksum-only mounts read-only");
+    check(strstr(last_klog, "two names that up-case alike") != 0,
+          "and names the duplicate, not the checksum");
+    unmount_image();
+
+    dirty_mount("--dirty-all", 0, "the three repairable states at once mount writable");
+    check_bytes("/hello.txt", (const unsigned char *)"hello exfat\n", 12,
+                "the repaired set is reachable");
+    n = walk("/chained.bin", &err);
+    check(n && read_all(n, back, sizeof(back)) == 12288, "the file the tail hung off reads");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    check(OPS->prepare_unmount(&mnt) == 0, "its clean unmount");
+    unmount_image();
+    check_consistent("and the walk finds none of the three", 0);
 
     dirty_mount("--dirty-lost", 0, "a lost chain leaves the volume writable");
     check(OPS->statfs(&mnt, &sf) == 0 && sf.bfree == 4064 - 23, /* 21 of the fixture, 2 lost */
@@ -1451,10 +1573,15 @@ static void dirty_rows(void)
     }
 
     for (f = 0; f < sizeof(faults) / sizeof(faults[0]); f++) {
-        char what[160];
+        char what[200];
 
-        snprintf(what, sizeof(what), "%s mounts read-only with the fault named", faults[f]);
-        dirty_mount(faults[f], 1, what);
+        snprintf(what, sizeof(what), "%s mounts read-only", faults[f][0]);
+        dirty_mount(faults[f][0], 1, what);
+        snprintf(what, sizeof(what), "%s names its fault: %s", faults[f][0], faults[f][1]);
+        check(strstr(last_klog, faults[f][1]) != 0, what);
+        if (!strstr(last_klog, faults[f][1])) {
+            printf("exfat_hosttest: the check said instead: %s\n", last_klog);
+        }
         check(memcmp(image_before, image, (unsigned long)image_sectors * 512) == 0,
               "and the image is untouched");
         unmount_image();
@@ -1499,11 +1626,25 @@ static void dirty_rows(void)
                      "%s stopped after repair write %d of %d still reads its files", repairs[f], k,
                      nwrites);
             if (mount_image(VFS_MS_RDONLY, "") == 0) {
+                long got;
+
                 n = walk("/chained.bin", &err);
-                check(n && read_all(n, back, sizeof(back)) >= 4096, what);
+                got = n ? read_all(n, back, sizeof(back)) : -1;
                 if (n) {
                     OPS->put(&mnt, n);
                 }
+                /* The set the checksum repair rewrites reads once the
+                   repair is on the disk, and its bytes are never wrong. */
+                n = walk("/hello.txt", &err);
+                if (n) {
+                    long h = read_all(n, back, sizeof(back));
+
+                    if (h != 12 || memcmp(back, "hello exfat\n", 12) != 0) {
+                        got = -1;
+                    }
+                    OPS->put(&mnt, n);
+                }
+                check(got >= 4096, what);
                 unmount_image();
             } else {
                 check(0, what);

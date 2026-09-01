@@ -346,7 +346,7 @@ static void check_dir(struct vol *v, uint32_t first, uint64_t length, int nofat,
     long n;
     uint16_t (*upnames)[256] = malloc(sizeof(*upnames) * 4096);
 
-    if (depth > 32) {
+    if (depth >= 32) { /* the kernel's walk holds 32 levels */
         snprintf(text, sizeof(text), "depth: %s", path);
         finding(v, text);
         return;
@@ -449,6 +449,15 @@ static void check_dir(struct vol *v, uint32_t first, uint64_t length, int nofat,
             }
             stream = set + 32;
             nlen = stream[3];
+            /* Every entry after the primary is an in-use secondary. */
+            for (k = 1; k <= secondaries; k++) {
+                if ((set[k * 32] & 0xC0) != 0xC0) {
+                    snprintf(text, sizeof(text),
+                             "an entry of a set that is not an in-use secondary in %s", path);
+                    finding(v, text);
+                    break;
+                }
+            }
             /* The name entries: exactly ceil(NameLength / 15) of them,
                consecutive, right after the stream extension. */
             for (k = 2; k <= secondaries && k < 2 + (nlen + 14) / 15; k++) {
@@ -467,6 +476,11 @@ static void check_dir(struct vol *v, uint32_t first, uint64_t length, int nofat,
             for (; k <= secondaries; k++) {
                 if (set[k * 32] == 0xC1) {
                     snprintf(text, sizeof(text), "a name entry past the name in %s", path);
+                    finding(v, text);
+                    break;
+                }
+                if (!(set[k * 32] & 0x20)) {
+                    snprintf(text, sizeof(text), "a critical secondary after the name in %s", path);
                     finding(v, text);
                     break;
                 }
@@ -512,6 +526,11 @@ static void check_dir(struct vol *v, uint32_t first, uint64_t length, int nofat,
             utf8_of(units, nlen, name, sizeof(name));
             snprintf(child, sizeof(child), "%s/%s", path, name);
             /* Two names that up-case alike in one directory are one name. */
+            if (nnames == 4096) {
+                snprintf(text, sizeof(text),
+                         "a directory with more names than the check compares: %s", path);
+                finding(v, text);
+            }
             if (nnames < 4096) {
                 unsigned m, q;
 
@@ -1489,7 +1508,9 @@ static int build(const char *out, const char *opt)
     b.opt = opt;
     if (opt && strncmp(opt, "--dirty-", 8) == 0 && strcmp(opt, "--dirty-orphan") != 0 &&
         strcmp(opt, "--dirty-surplus") != 0 && strcmp(opt, "--dirty-lost") != 0 &&
-        strcmp(opt, "--dirty-dup") != 0 && strcmp(opt, "--dirty-critical") != 0) {
+        strcmp(opt, "--dirty-dup") != 0 && strcmp(opt, "--dirty-critical") != 0 &&
+        strcmp(opt, "--dirty-all") != 0 && strcmp(opt, "--dirty-nofat-orphan") != 0 &&
+        strcmp(opt, "--dirty-dup-checksum") != 0 && strcmp(opt, "--dirty-label-below") != 0) {
         /* --dirty-X: X's damage under the dirty bit, the state a crash of
            another writer leaves. */
         static char plain[64];
@@ -1772,12 +1793,90 @@ static int build(const char *out, const char *opt)
         fill(&b, lost, (uint64_t)b_cbytes(&b) * 2, 0x99);
         b.lost_first = lost;
     }
+    if (b_is(&b, "--dirty-all")) {
+        /* The three repairable states at once, so their order matters:
+           a set whose checksum alone fails, orphan secondaries, and a
+           chain one cluster past its length. */
+        unsigned char e[32];
+        unsigned char *hset = dw_slot(&root, b.hello_set);
+        uint32_t extra = b_alloc(&b, 1, 1);
+
+        wr16(hset + 2, rd16(hset + 2) + 1);
+        memset(e, 0, 32);
+        e[0] = 0xC1;
+        memcpy(e + 2, "o\0r\0p\0h\0", 8);
+        dw_put(&root, e);
+        dw_put(&root, e);
+        b_fat(&b, b.chained_first + 4, extra);
+    }
+    if (b_is(&b, "--swallow")) {
+        /* hello.txt's set enlarged to swallow the next file entry, its
+           checksum recomputed: a reader that counts entries without
+           checking each one would take the next file's entries for its
+           own benign secondaries. */
+        unsigned char *hset = dw_slot(&root, b.hello_set);
+        unsigned n0 = hset[1] + 1;
+
+        hset[1] = (unsigned char)(n0 + 3 - 1);
+        wr16(hset + 2, b_set_checksum(hset, n0 + 3));
+    }
+    if (b_is(&b, "--dirty-nofat-orphan")) {
+        /* A contiguous directory of two clusters with orphan secondaries
+           in its second: the repair must follow the run, not the FAT. */
+        uint32_t d2 = b_alloc(&b, 2, 0);
+        struct dw wide;
+        unsigned char e[32];
+        unsigned i2;
+
+        dw_init(&wide, &b, 1, d2);
+        wide.clusters[1] = d2 + 1; /* the run is contiguous: both clusters are its own */
+        wide.n = 2;
+        for (i2 = 0; i2 < 60;
+             i2++) { /* three entries each: past the first cluster, inside the two */
+            char name[24];
+
+            snprintf(name, sizeof(name), "wide%03u.txt", i2);
+            n = set_build(&b, set, name, 0, 0, 0, 0, 0, 0, 0);
+            dw_put_set(&wide, set, n);
+        }
+        memset(e, 0, 32);
+        e[0] = 0xC1;
+        memcpy(e + 2, "o\0r\0p\0h\0", 8);
+        dw_put(&wide, e);
+        dw_put(&wide, e);
+        n = set_build(&b, set, "Wide Dir", 1, d2, (uint64_t)b_cbytes(&b) * 2,
+                      (uint64_t)b_cbytes(&b) * 2, 1, 0, 0);
+        dw_put_set(&root, set, n);
+    }
+    if (b_is(&b, "--dirty-dup-checksum")) {
+        /* Two names that up-case alike, the earlier one's checksum wrong:
+           the duplicate must be found before the checksum is rewritten. */
+        unsigned char *hset = dw_slot(&root, b.hello_set);
+
+        wr16(hset + 2, rd16(hset + 2) + 1);
+        c = b_alloc(&b, 1, 0);
+        memcpy(b_cluster(&b, c), "twin\n", 5);
+        n = set_build(&b, set, "HELLO.txt", 0, c, 5, 5, 1, 0, 0);
+        dw_put_set(&root, set, n);
+    }
     if (b_is(&b, "--dirty-dup")) {
         /* A second set whose name up-cases like hello.txt's. */
         c = b_alloc(&b, 1, 0);
         memcpy(b_cluster(&b, c), "twin\n", 5);
         n = set_build(&b, set, "HELLO.txt", 0, c, 5, 5, 1, 0, 0);
         dw_put_set(&root, set, n);
+    }
+    if (b_is(&b, "--dirty-label-below")) {
+        /* A volume label, which belongs to the root, inside dir. */
+        unsigned char e[32];
+        unsigned k2;
+
+        memset(e, 0, 32);
+        e[0] = 0x83;
+        e[1] = 5;
+        for (k2 = 0; k2 < 5; k2++)
+            wr16(e + 2 + k2 * 2, (uint32_t)"BELOW"[k2]);
+        dw_put(&dir, e);
     }
     if (b_is(&b, "--dirty-critical")) {
         /* A critical primary this driver does not know, in dir. */
