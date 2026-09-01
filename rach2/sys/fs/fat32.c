@@ -2434,7 +2434,10 @@ static int fat_prepare_unmount(struct vfs_mount *mnt)
     struct fat_mount *fm = fm_of(mnt);
     int rc;
 
-    if (!fm->writable) {
+    /* A mount that went read-only after a failed write is unmounted with
+     * the volume left as it is, marked dirty for the next mount's check:
+     * the device takes no metadata write, and the data is the cache's. */
+    if (!fm->writable || (mnt->flags & VFS_MS_RDONLY)) {
         return 0;
     }
     rc = bcache_sync(fm->dev);
