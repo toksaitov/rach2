@@ -15,7 +15,7 @@ Phase 3: xHCI on MSI
 - [x] the xhci rows; the usb suite's new boots (the count, nomsi, the latency, the lost edge); the mutations
 
 Phase 4: HDA on MSI
-- [ ] HDA's MSI beside its legacy line; the audio suite's count; metal_accept.sh's lines for milestone 43
+- [x] HDA's MSI beside its legacy line; the audio suite's count; metal_accept.sh's lines for milestone 43
 
 Phase 5: the record and the sweep
 - [ ] docs read against code; prosecheck; the review round and the proofread; the sweep

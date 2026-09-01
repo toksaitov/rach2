@@ -151,6 +151,30 @@ against the wake; interrupts enabled inside the pump print the record the
 latency boot refuses; and a fallback counted without asking the processor
 fails the count `intrprobe` requires to be zero.
 
+## Phase 4 record
+
+`hda.c` asks for vector 49 through the same call and registers the handler it
+already had, keeping its legacy registration and the timer's servicing exactly
+as they were. The handler begins by asking the controller whether the
+interrupt is its own, so being called twice for one event costs a register
+read.
+
+The audio suite's boot now runs `intrprobe` after the notes and requires the
+count on vector 49 to have moved. Its mutation is the controller left on its
+legacy line: the notes still come out, which is the point of keeping that
+line, and the count is zero. A second mutation, the handler registered on a
+vector the device does not send, is not caught by any row and cannot be: the
+legacy line still delivers, which is the same behaviour the machine had
+before this milestone, and no row can tell the two apart without taking that
+line away.
+
+`metal_accept.sh` gained the interrupt record for milestone 43: every line of
+`/proc/interrupts`, the two vectors, the spurious and fallback counts, and
+what the boot log says the local APIC did. Two of them are failures rather
+than notes, and both are the kernel's own claims: a timer vector that has
+taken nothing, and a fallback count that has moved on a machine whose
+messages arrive.
+
 ## Open items
 
 (none)
