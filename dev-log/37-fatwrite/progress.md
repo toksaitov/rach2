@@ -1,12 +1,12 @@
 # Milestone 37 progress
 
 Phase 1: arrival and inventory
-- [ ] clean tree required; git log recorded in notes.md
-- [ ] tracking files created
-- [ ] review checkpoints and their files fixed
-- [ ] mkfatfixture --check and its new fixtures; --check proved against the malformed fixtures
-- [ ] what mtools writes measured and recorded (names, aliases, case)
-- [ ] the fourth partition's procedure written under the disk rule, in hardware.md
+- [x] clean tree required; git log recorded in notes.md
+- [x] tracking files created
+- [x] review checkpoints and their files fixed
+- [x] mkfatfixture --check and its new fixtures; --check proved against the malformed fixtures
+- [x] what mtools writes measured and recorded (names, aliases, case)
+- [x] the fourth partition's procedure written under the disk rule, in hardware.md
 
 Phase 2: the cache writes
 - [ ] bcache_write, the write rules, the failure record, the read-only transition

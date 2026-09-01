@@ -372,6 +372,36 @@ static unsigned char chk_sum(const unsigned char *name11)
 
 #define CHK_MAX_ENTRIES 4096
 
+/* The UTF-16 units of a long name as UTF-8, up to the terminator. */
+static void chk_long_name(const unsigned *units, unsigned count, char *out, size_t cap)
+{
+    unsigned i = 0;
+    size_t n = 0;
+
+    while (i < count && units[i] != 0 && n + 5 < cap) {
+        unsigned long cp = units[i++];
+
+        if (cp >= 0xD800 && cp < 0xDC00 && i < count && units[i] >= 0xDC00 && units[i] < 0xE000)
+            cp = 0x10000 + ((cp - 0xD800) << 10) + (units[i++] - 0xDC00);
+        if (cp < 0x80) {
+            out[n++] = (char)cp;
+        } else if (cp < 0x800) {
+            out[n++] = (char)(0xC0 | (cp >> 6));
+            out[n++] = (char)(0x80 | (cp & 0x3F));
+        } else if (cp < 0x10000) {
+            out[n++] = (char)(0xE0 | (cp >> 12));
+            out[n++] = (char)(0x80 | ((cp >> 6) & 0x3F));
+            out[n++] = (char)(0x80 | (cp & 0x3F));
+        } else {
+            out[n++] = (char)(0xF0 | (cp >> 18));
+            out[n++] = (char)(0x80 | ((cp >> 12) & 0x3F));
+            out[n++] = (char)(0x80 | ((cp >> 6) & 0x3F));
+            out[n++] = (char)(0x80 | (cp & 0x3F));
+        }
+    }
+    out[n] = '\0';
+}
+
 /* Read the directory whose chain starts at `first` (`parent` is its
    parent's first cluster, 0 for the root), walking every entry's chain and
    descending into subdirectories. */
@@ -383,6 +413,8 @@ static void chk_dir(struct chk *c, unsigned long first, unsigned long parent, co
     static unsigned char names[CHK_MAX_ENTRIES][11];
     int nnames = 0, lfn_ok = 0, lfn_expect = 0, lfn_pending = 0;
     unsigned char lfn_sum = 0;
+    unsigned lfn_units[20 * 13];
+    char longname[520];
     char text[300], alias[16], child[300];
     unsigned short id = ++c->chains;
 
@@ -459,8 +491,14 @@ static void chk_dir(struct chk *c, unsigned long first, unsigned long parent, co
                            raw[13] != lfn_sum) {
                     lfn_ok = 0;
                 }
-                if (lfn_ok)
+                if (lfn_ok) {
+                    static const int at[13] = {1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30};
+                    int k;
+
                     lfn_expect = seq - 1;
+                    for (k = 0; k < 13 && seq >= 1 && seq <= 20; k++)
+                        lfn_units[(seq - 1) * 13 + k] = le16_of(raw + at[k]);
+                }
                 continue;
             }
             if (raw[11] & 0x08) {
@@ -469,9 +507,12 @@ static void chk_dir(struct chk *c, unsigned long first, unsigned long parent, co
                 continue; /* the volume label */
             }
             chk_alias(raw, alias);
+            longname[0] = '\0';
             if (lfn_pending && !(lfn_ok && lfn_expect == 0 && chk_sum(raw) == lfn_sum)) {
                 snprintf(text, sizeof(text), "orphan long-name entries before %s/%s", path, alias);
                 finding(c, text);
+            } else if (lfn_pending) {
+                chk_long_name(lfn_units, (unsigned)lfn_pending * 13, longname, sizeof(longname));
             }
             lfn_ok = 0;
             lfn_expect = 0;
@@ -504,8 +545,8 @@ static void chk_dir(struct chk *c, unsigned long first, unsigned long parent, co
                 memcpy(names[nnames++], raw, 11);
             snprintf(child, sizeof(child), "%s/%s", path, alias);
             if (c->list)
-                printf("check: entry %s %s %lu %lu\n", child, is_dir ? "dir" : "file", fc,
-                       (unsigned long)size);
+                printf("check: entry %s %s %lu %lu%s%s\n", child, is_dir ? "dir" : "file", fc,
+                       (unsigned long)size, longname[0] ? " long " : "", longname);
             if (is_dir) {
                 if (fc == 0) {
                     snprintf(text, sizeof(text), "directory with no cluster: %s", child);
