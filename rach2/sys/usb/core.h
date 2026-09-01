@@ -91,6 +91,15 @@ void usb_core_step(uint32_t elapsed_ms);
 /** Start again from nothing: no devices, no ports being enumerated. */
 void usb_core_reset(void);
 
+/**
+ * Clear a halted endpoint for a class driver, through the core's own turn at
+ * the controller's one command.
+ *
+ * 1 when the endpoint is usable again, 0 while the controller has not
+ * answered, -1 when it refused or the device is not one the core has.
+ */
+int usb_core_clear_halt(int device, int endpoint);
+
 /** Whether nothing is part way through enumeration. */
 int usb_core_idle(void);
 

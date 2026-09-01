@@ -94,12 +94,23 @@
 #define MSC_STATE_REFUSED   8
 #define MSC_STATE_GONE      9
 
-/* Recovery, which is three commands of its own: the class reset, then the
- * halt cleared on the inward endpoint, then on the outward one. */
-#define RECOVER_NONE     0
-#define RECOVER_RESET    1
-#define RECOVER_CLEAR_IN 2
+/*
+ * Recovery, which the class defines as three things in this order: the reset
+ * request, the halt cleared on the inward endpoint, then on the outward one.
+ * A driver that cleared them the other way round leaves a device that
+ * answers nothing again.
+ *
+ * The two clears are commands the controller executes, and the controller
+ * takes one command at a time for the whole stack, so they go through the
+ * core's turn rather than being issued here.
+ */
+#define RECOVER_NONE      0
+#define RECOVER_RESET     1
+#define RECOVER_CLEAR_IN  2
 #define RECOVER_CLEAR_OUT 3
+/* The lighter recovery a stalled data or status stage takes: one endpoint
+ * cleared, and then the status wrapper read. */
+#define RECOVER_CLEAR_ONE 4
 
 /* How long any one transfer of a command may take, and how long a stick has
  * to become ready after it is plugged in. */
@@ -179,6 +190,8 @@ static struct msc_device sticks[MSC_MAX_DEVICES];
 static uint8_t setup_buffer[MSC_MAX_DEVICES][8];
 
 static struct block_request *queue_take(struct msc_device *m, int *flush);
+static int status_begin(struct msc_device *m);
+static void command_end(struct msc_device *m, int status);
 static void queue_drain(struct msc_device *m, int status);
 static void publish(struct msc_device *m);
 
@@ -357,6 +370,59 @@ static void recover_begin(struct msc_device *m, const char *why)
     m->deadline = MSC_STEP_MS;
 }
 
+/**
+ * Turn the recovery that is waiting on the controller's commands.
+ *
+ * Returns 1 while recovery is running, 0 when there is none.
+ */
+static int step_recovery(struct msc_device *m)
+{
+    int answer;
+
+    switch (m->recover) {
+    case RECOVER_NONE:
+        return 0;
+
+    case RECOVER_RESET:
+        return 1; /* the reset request's own completion moves this on */
+
+    case RECOVER_CLEAR_IN:
+        answer = usb_core_clear_halt(m->device, m->ep_in);
+        if (answer == 0) {
+            return 1;
+        }
+        m->recover = RECOVER_CLEAR_OUT;
+        m->deadline = MSC_STEP_MS;
+        return 1;
+
+    case RECOVER_CLEAR_OUT:
+        answer = usb_core_clear_halt(m->device, m->ep_out);
+        if (answer == 0) {
+            return 1;
+        }
+        m->recover = RECOVER_NONE;
+        /* Recovery is done and the command it was for is failed: the device
+         * is in a state to take the next one, and this one is lost. */
+        command_end(m, CSW_PHASE_ERROR);
+        return 1;
+
+    case RECOVER_CLEAR_ONE:
+        answer = usb_core_clear_halt(m->device, m->after_recover);
+        if (answer == 0) {
+            return 1;
+        }
+        m->recover = RECOVER_NONE;
+        if (answer < 0 || status_begin(m) != 0) {
+            command_end(m, CSW_PHASE_ERROR);
+        }
+        return 1;
+
+    default:
+        m->recover = RECOVER_NONE;
+        return 0;
+    }
+}
+
 /** The command ended, well or badly; whoever asked for it is told by state. */
 static void command_end(struct msc_device *m, int status)
 {
@@ -458,25 +524,16 @@ int msc_completion(const struct usb_completion *completion)
         return 1;
     }
 
-    if (m->recover != RECOVER_NONE) {
-        if (completion->status != USB_XFER_OK && completion->status != USB_XFER_SHORT) {
-            /* A recovery stage that itself failed leaves the stick alone: it
-             * is closed by whoever owns it. */
-            m->recover = RECOVER_NONE;
-            command_end(m, CSW_PHASE_ERROR);
-            return 1;
-        }
-        if (m->recover == RECOVER_RESET) {
-            if (xhci_endpoint_reset(m->device, m->ep_in) == 0) {
-                m->recover = RECOVER_CLEAR_IN;
-                m->deadline = MSC_STEP_MS;
-            } else {
-                m->recover = RECOVER_NONE;
-                command_end(m, CSW_PHASE_ERROR);
-            }
-            return 1;
-        }
+    if (m->recover == RECOVER_RESET) {
+        /* The reset request has answered, well or badly; either way the two
+         * clears follow, because an endpoint left halted is an endpoint that
+         * carries nothing again. */
+        m->recover = RECOVER_CLEAR_IN;
+        m->deadline = MSC_STEP_MS;
         return 1;
+    }
+    if (m->recover != RECOVER_NONE) {
+        return 1; /* the clears are commands, and `msc_step` turns them */
     }
 
     switch (m->stage) {
@@ -515,13 +572,9 @@ int msc_completion(const struct usb_completion *completion)
             /* A halted data endpoint is cleared and the status wrapper read:
              * the stick still has one to give, and it says how much of the
              * transfer it did. */
-            if (xhci_endpoint_reset(m->device, m->data_in ? m->ep_in : m->ep_out) == 0) {
-                m->recover = RECOVER_CLEAR_OUT;
-                m->after_recover = STAGE_CSW;
-                m->deadline = MSC_STEP_MS;
-                return 1;
-            }
-            recover_begin(m, "a halted data endpoint would not be cleared");
+            m->recover = RECOVER_CLEAR_ONE;
+            m->after_recover = m->data_in ? m->ep_in : m->ep_out;
+            m->deadline = MSC_STEP_MS;
             return 1;
         }
         if (completion->status != USB_XFER_OK && completion->status != USB_XFER_SHORT) {
@@ -541,13 +594,9 @@ int msc_completion(const struct usb_completion *completion)
                 return 1;
             }
             m->retried = 1;
-            if (xhci_endpoint_reset(m->device, m->ep_in) == 0) {
-                m->recover = RECOVER_CLEAR_OUT;
-                m->after_recover = STAGE_CSW;
-                m->deadline = MSC_STEP_MS;
-                return 1;
-            }
-            recover_begin(m, "a halted status endpoint would not be cleared");
+            m->recover = RECOVER_CLEAR_ONE;
+            m->after_recover = m->ep_in;
+            m->deadline = MSC_STEP_MS;
             return 1;
         }
         if (completion->status != USB_XFER_OK && completion->status != USB_XFER_SHORT) {
@@ -907,6 +956,19 @@ void msc_step(uint32_t elapsed_ms)
         }
         if (m->state == MSC_STATE_TEST && m->stage == STAGE_IDLE) {
             m->ready_left = (m->ready_left > elapsed_ms) ? m->ready_left - elapsed_ms : 0;
+        }
+        if (step_recovery(m)) {
+            /* The deadline still runs while recovery does: a controller that
+             * never answers a clear must not leave the stick here for ever. */
+            m->deadline = (m->deadline > elapsed_ms) ? m->deadline - elapsed_ms : 0;
+            if (m->deadline == 0) {
+                klog(KLOG_WARN, "usbdisk", "device %d: recovery never finished", m->device);
+                m->recover = RECOVER_NONE;
+                m->stage = STAGE_IDLE;
+                m->tag++;
+                request_end(m, -EIO);
+            }
+            continue;
         }
         if (m->stage == STAGE_DONE) {
             step_command_done(m);

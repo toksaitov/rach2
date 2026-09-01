@@ -1013,6 +1013,59 @@ void usb_core_reset(void)
     core_ms = 0;
 }
 
+/**
+ * Clear a halted endpoint on a device the core enumerated, for its class
+ * driver.
+ *
+ * The controller takes one command at a time and the core is what shares it
+ * out, so a class driver that issued its own would take the answer to
+ * somebody else's. This takes the same turn enumeration takes and reports
+ * the command the way the core reads it: 1 when the endpoint is usable
+ * again, 0 while the controller has not answered, and -1 when it refused or
+ * never did.
+ */
+int usb_core_clear_halt(int device, int endpoint)
+{
+    int i;
+
+    for (i = 0; i < USB_MAX_DEVICES; i++) {
+        struct usb_device_state *d = &devices[i];
+        struct usb_command_result result;
+        int answer;
+
+        if (d->state == ST_FREE || d->slot != device) {
+            continue;
+        }
+        if (enumerating >= 0 && enumerating != i) {
+            return 0; /* another device has the command ring */
+        }
+        enumerating = i;
+        if (!d->closing_asked) {
+            if (xhci_endpoint_reset(device, endpoint) != 0) {
+                enumerating = -1;
+                return -1;
+            }
+            d->closing_asked = 1;
+            d->deadline = core_ms + STEP_MS;
+            return 0;
+        }
+        answer = command_result(d, &result);
+        if (answer == 0) {
+            return 0;
+        }
+        d->closing_asked = 0;
+        enumerating = -1;
+        if (answer < 0) {
+            return -1;
+        }
+        /* The ring is pointed at the block the driver will write next, or
+         * the endpoint is usable and empty and nothing more is needed. */
+        (void)xhci_endpoint_dequeue(device, endpoint);
+        return 1;
+    }
+    return -1;
+}
+
 int usb_core_idle(void)
 {
     int i;
