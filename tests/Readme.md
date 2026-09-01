@@ -2,11 +2,11 @@
 
 ![List of Rach2 Test Programs](https://raw.githubusercontent.com/rachmiroff/images/refs/heads/main/rach2/tests.png)
 
-This directory has two guest test sets, and [`system/`](system/Readme.md) holds the QEMU runners, suite scripts, capture checkers, fixtures, and acceptance procedure. The root contains 80 programs that usually make direct system calls. `musl/` contains 35 programs linked against the ported musl libc. The separate [host test suite](host/Readme.md) compiles selected kernel and tool code as native programs under AddressSanitizer and UndefinedBehaviorSanitizer.
+This directory has two guest test sets, and [`system/`](system/Readme.md) holds the QEMU runners, suite scripts, capture checkers, fixtures, and acceptance procedure. The root contains 81 programs that usually make direct system calls. `musl/` contains 35 programs linked against the ported musl libc. The separate [host test suite](host/Readme.md) compiles selected kernel and tool code as native programs under AddressSanitizer and UndefinedBehaviorSanitizer.
 
 ## The suite runner
 
-`tests/run NAME` is the entry point for every test suite. It reads `tests/registry`, one line per suite with three fields: the name, the external commands the suite needs at run time, and its tier. The make target is the name with `run-` in front, and the recipes are in [`tests/system/suites.mk`](system/Readme.md). Every name and every tool is checked before anything is built; an unknown name fails and prints the valid names. The runner then builds the product once and runs the named suites in a pool, holding each one's output and replaying it in registry order. Three suites run outside the pool: `style` and `host` alone before it, because they rebuild the kernel and share a scratch directory, and `usb` alone after it, because QEMU's monitor stops answering `device_add` on a saturated host.
+`tests/run NAME` is the entry point for every test suite. It reads `tests/registry`, one line per suite with three fields: the name, the external commands the suite needs at run time, and its tier. The make target is the name with `run-` in front, and the recipes are in [`tests/system/suites.mk`](system/Readme.md). Every name and every tool is checked before anything is built; an unknown name fails and prints the valid names. The runner then builds the product once and runs the named suites in a pool, holding each one's output and replaying it in the order the suites were named, which for `all` and `core` is the registry's. Three suites run outside the pool: `style` and `host` alone before it, because they rebuild the kernel and share a scratch directory, and `usb` alone after it, because QEMU's monitor stops answering `device_add` on a saturated host.
 
 `tests/run NAME NAME...` runs those suites at the same time. `tests/run all` runs all 61, and `tests/run core` runs the 23 in the core tier. `make test` runs `tests/run style`, then `tests/run host`, then `tests/run core`; `style` and `host` are the two verification suites every change must pass.
 
@@ -15,7 +15,7 @@ This directory has two guest test sets, and [`system/`](system/Readme.md) holds 
 From the repository root:
 
 ```sh
-make -C tests       # build the 78 root programs
+make -C tests       # build the 81 root programs
 make musl-programs  # build every tests/musl/*.c program
 make test-image     # build both sets and stage build/images/test.krffs
 ```

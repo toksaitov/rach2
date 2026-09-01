@@ -67,9 +67,11 @@ else
 fi
 
 # ---- 3: the root mounts through the real device while the partitions are on
-#         the lag: the boot reaches its shell at all is the proof ----
+#         the lag, and /proc/mounts names the partition as the root ----
 if run --append "rach2.blocklag=3 rach2.fsdisk rach2.rescue" \
-    --timeout 90 --ok "Type 'help'" > /dev/null 2>&1; then
+    --timeout 90 --ok "LAGPROBE OK" --never "LAGPROBE FAIL" \
+    "expect=Type 'help'" "send=exec /lagprobe root" \
+    "expect=LAGPROBE" > /dev/null 2>&1; then
     echo "mount-test: the root is on the real device beside the lag: OK"
 else
     fail "the root-beside-lag boot"
@@ -108,7 +110,7 @@ else
 fi
 # The unmount record: every open matched by a release, on every unmount.
 if grep -a 'unmounted /mnt' "$DISK.mountprobe.log" | \
-    awk '{ if ($5 != $7) bad = 1 } END { exit bad ? 1 : 0 }'; then
+    awk 'BEGIN { bad = 1 } { bad = ($5 != $7 || $5 !~ /^[0-9]+$/) ? 1 : 0 } END { exit bad }'; then
     echo "mount-test: every unmount record has opens equal to releases: OK"
 else
     fail "an unmount record's opens and releases differ"
@@ -159,7 +161,7 @@ if "$HARNESS" --kernel "$KERNEL" --initrd "$OSREAL" \
     "expect=LISTDONE" "send=cat /mnt/hello.txt; cksum /mnt/hello /mnt/again.bin /mnt/hello.txt; echo SUMS\"\"DONE" \
     "expect=SUMSDONE" "send=sleep 5 < /mnt/hello.txt & umount /mnt; echo UMOUNT\"\"RC=\$?" \
     "expect=UMOUNTRC=1" wait=6 "send=umount /mnt && echo UN\"\"MOUNTED" \
-    "expect=UNMOUNTED" "send=grep -c vfat /proc/mounts; echo BB\"\"DONE" \
+    "expect=UNMOUNTED" "send=[ \"\$(grep -c vfat /proc/mounts)\" = 0 ] && echo BB\"\"DONE" \
     "expect=BBDONE" > /dev/null 2>&1; then
     echo "mount-test: BusyBox mounts, lists, reads and unmounts: OK"
 else

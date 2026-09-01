@@ -1298,7 +1298,12 @@ int main(int argc, char **argv)
     if (ok != NULL) {
         int seen = contains(buf, buf_len, ok);
 
-        trace("decide ok_seen=%d step_failures=%d", seen, step_failures);
+        trace("decide ok_seen=%d step_failures=%d exited=%d rc=%d", seen, step_failures,
+              self_exited, qemu_rc);
+        if (self_exited && qemu_rc != 0) {
+            fprintf(stderr, "HARNESS: the machine exited with status %d\n", qemu_rc);
+            return 1;
+        }
         if (seen && step_failures == 0) {
             fprintf(stderr, "HARNESS: saw '%s'\n", ok);
             return 0;

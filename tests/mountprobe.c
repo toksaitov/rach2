@@ -44,24 +44,27 @@ typedef unsigned int size_t;
 #define SYS_STATFS64   268
 #define SYS_OPENAT     295
 #define SYS_NANOSLEEP  162
+#define SYS_KILL       37
 
 #define O_RDONLY  0
 #define O_WRONLY  1
 #define O_CLOEXEC 02000000
 #define F_DUPFD   0
 
-#define MS_RDONLY  1
-#define MS_NOSUID  2
-#define MS_NOEXEC  8
-#define MS_REMOUNT 32
-#define MS_BIND    4096
-#define MS_MOVE    8192
-#define MNT_FORCE  1
-#define MNT_DETACH 2
+#define MS_RDONLY       1
+#define MS_NOSUID       2
+#define MS_NOEXEC       8
+#define MS_REMOUNT      32
+#define MS_BIND         4096
+#define MS_MOVE         8192
+#define UMOUNT_NOFOLLOW 8
+#define MNT_FORCE       1
+#define MNT_DETACH      2
 
 #define EPERM        1
 #define ENOENT       2
 #define EACCES       13
+#define EMFILE       24
 #define EBUSY        16
 #define EXDEV        18
 #define ENOTDIR      20
@@ -284,7 +287,8 @@ static void rows_placing(void)
     if (do_mount(SRC, MNT, MS_RDONLY, 0) != 0) {
         fail("the read-only mount");
     }
-    if (do_mount(SRC, MNT, MS_RDONLY, 0) != -EBUSY) {
+    /* Another source, so the EBUSY can only be the target's. */
+    if (do_mount("/dev/disk0p1", MNT, MS_RDONLY, 0) != -EBUSY) {
         fail("a second mount on the same target is EBUSY");
     }
     if (do_mount(SRC, "/mnt2", MS_RDONLY, 0) != -ENOENT) {
@@ -457,26 +461,37 @@ static void rows_lifetime(void)
     }
 
     /* A close-on-exec descriptor is dropped by execve: the child holds the
-       only description, execs `hello` from the root, and the mount is free
-       once the child has exited. */
+       only description and execs `stdintest`, which blocks on the console
+       and stays alive; the mount is busy until the exec and free after it,
+       while the child still runs, which is what shows execve did it. */
     pid = sys1(SYS_FORK, 0);
     if (pid == 0) {
         char *av[2];
 
-        av[0] = (char *)"/hello";
+        av[0] = (char *)"/stdintest";
         av[1] = 0;
         fd = sys3(SYS_OPEN, (int)MNT "/hello.txt", O_RDONLY | O_CLOEXEC, 0);
         if (fd < 0) {
             sys_exit(7);
         }
-        sys3(SYS_EXECVE, (int)"/hello", (int)av, (int)av + 4);
+        sys3(SYS_EXECVE, (int)"/stdintest", (int)av, (int)av + 4);
         sys_exit(8);
     }
-    if ((wait_status(pid) & 0xff00) != 0) {
-        fail("the exec child");
-    }
-    if (sys2(SYS_UMOUNT2, (int)MNT, 0) != 0) {
-        fail("umount2 after the close-on-exec descriptor was dropped by execve");
+    {
+        int tries;
+
+        for (tries = 0; tries < 300; tries++) {
+            if (sys2(SYS_UMOUNT2, (int)MNT, 0) == 0) {
+                break;
+            }
+            sleep_ms(10);
+        }
+        if (tries == 300) {
+            fail("umount2 after the close-on-exec descriptor was dropped by execve");
+        }
+        if (sys2(SYS_KILL, pid, 9) != 0 || (wait_status(pid) & 0x7f) != 9) {
+            fail("the exec child was not alive across the unmount");
+        }
     }
     if (do_mount(SRC, MNT, MS_RDONLY, 0) != 0) {
         fail("the mount once more");
@@ -515,10 +530,12 @@ static void rows_flags(void)
         fail("the mount for the flag rows");
     }
     if (sys2(SYS_UMOUNT2, (int)MNT, MNT_DETACH) != -EINVAL ||
-        sys2(SYS_UMOUNT2, (int)MNT, MNT_FORCE) != -EINVAL) {
-        fail("MNT_DETACH and MNT_FORCE are EINVAL");
+        sys2(SYS_UMOUNT2, (int)MNT, MNT_FORCE) != -EINVAL ||
+        sys2(SYS_UMOUNT2, (int)MNT, UMOUNT_NOFOLLOW) != -EINVAL) {
+        fail("MNT_DETACH, MNT_FORCE and UMOUNT_NOFOLLOW are EINVAL");
     }
-    if (sys2(SYS_UMOUNT2, (int)"/proc", 0) != -EBUSY || sys2(SYS_UMOUNT2, (int)"/", 0) != -EBUSY) {
+    if (sys2(SYS_UMOUNT2, (int)"/proc", 0) != -EBUSY ||
+        sys2(SYS_UMOUNT2, (int)"/dev", 0) != -EBUSY || sys2(SYS_UMOUNT2, (int)"/", 0) != -EBUSY) {
         fail("the permanent mounts are EBUSY");
     }
     /* Unprivileged: mount and umount2 are root's. */
@@ -600,6 +617,10 @@ static void rows_flags(void)
             fail("a long target is ENAMETOOLONG");
         }
         sys1(SYS_RMDIR, (int)longname);
+        /* The source is still free to mount: the refusal claimed nothing. */
+        if (do_mount(SRC, "/mnt2", MS_RDONLY, 0) != 0 || sys2(SYS_UMOUNT2, (int)"/mnt2", 0) != 0) {
+            fail("the source mounts after the refused long target");
+        }
     }
 }
 
@@ -652,6 +673,64 @@ static void rows_claim(void)
     sys_exit(0);
 }
 
+/* The unmount record counts descriptions, not descriptors: one open and
+   three duplicates, then a duplication that fails on a full table, end in
+   a record of one open and one release, read back from the kernel log. */
+static void rows_record(void)
+{
+    static char log[16384 + 1];
+    int fd, d, filler[16], nfill = 0, i, n;
+    static const char want[] = "unmounted " MNT ": 1 opens, 1 releases";
+
+    if (do_mount(SRC, MNT, MS_RDONLY, 0) != 0) {
+        fail("the mount for the record row");
+    }
+    fd = sys3(SYS_OPEN, (int)MNT "/hello.txt", O_RDONLY, 0);
+    if (fd < 0) {
+        fail("open for the record row");
+    }
+    if (sys1(SYS_DUP, fd) < 0 || sys2(SYS_DUP2, fd, 13) != 13 ||
+        sys3(SYS_FCNTL, fd, F_DUPFD, 3) < 3) {
+        fail("the duplicates for the record row");
+    }
+    while (nfill < 16 && (d = sys3(SYS_OPEN, (int)"/dev/null", O_RDONLY, 0)) >= 0) {
+        filler[nfill++] = d;
+    }
+    if (sys1(SYS_DUP, fd) != -EMFILE) {
+        fail("dup on a full table is EMFILE");
+    }
+    for (i = 0; i < nfill; i++) {
+        sys1(SYS_CLOSE, filler[i]);
+    }
+    for (i = 3; i < 16; i++) {
+        sys1(SYS_CLOSE, i);
+    }
+    if (sys2(SYS_UMOUNT2, (int)MNT, 0) != 0) {
+        fail("umount2 for the record row");
+    }
+    fd = sys3(SYS_OPEN, (int)"/dev/bootlog", O_RDONLY, 0);
+    if (fd < 0) {
+        fail("open /dev/bootlog");
+    }
+    n = sys3(SYS_READ, fd, (int)log, (int)sizeof(log) - 1);
+    sys1(SYS_CLOSE, fd);
+    if (n <= 0) {
+        fail("read /dev/bootlog");
+    }
+    log[n] = 0;
+    for (i = 0; i + (int)sizeof(want) - 1 <= n; i++) {
+        int j = 0;
+
+        while (want[j] && log[i + j] == want[j]) {
+            j++;
+        }
+        if (!want[j]) {
+            return;
+        }
+    }
+    fail("the unmount record does not say 1 opens, 1 releases");
+}
+
 void probe_main(unsigned int *sp)
 {
     int argc = (int)sp[0];
@@ -666,6 +745,7 @@ void probe_main(unsigned int *sp)
     rows_proc();
     rows_lifetime();
     rows_flags();
+    rows_record();
     sys1(SYS_RMDIR, (int)"/mnt2");
     sys1(SYS_RMDIR, (int)MNT);
     puts("MOUNTPROBE OK");

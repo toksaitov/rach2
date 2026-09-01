@@ -20,6 +20,10 @@
  * and the whole-disk writer, on the real disk under the lag, is refused over
  * the mounted range.
  *
+ * `lagprobe root`, under the lag with the root on the disk: /proc/mounts
+ * names a disk partition as the root's source, so the boot did not fall
+ * back to the RAM image.
+ *
  * Prints "LAGPROBE OK" or "LAGPROBE FAIL: reason". Freestanding; int 0x80.
  */
 
@@ -34,7 +38,7 @@ typedef unsigned int size_t;
 #define SYS_LSEEK        19
 #define SYS_KILL         37
 #define SYS_PIPE         42
-#define EIO 5
+#define EIO              5
 #define SYS_GETTIMEOFDAY 78
 
 #define O_RDONLY 0
@@ -332,6 +336,31 @@ static int disk_counter(const char *label)
     return -1;
 }
 
+/* `lagprobe root`, under `rach2.fsdisk rach2.blocklag=N`: the root is the
+   disk's KRFFS partition, read through the real device, which /proc/mounts
+   says by naming the partition as the root's source. */
+static void run_root(void)
+{
+    static char text[512];
+    int fd = syscall3(SYS_OPEN, (int)"/proc/mounts", O_RDONLY, 0);
+    int n;
+
+    if (fd < 0) {
+        fail("open /proc/mounts");
+    }
+    n = syscall3(SYS_READ, fd, (int)text, (int)sizeof(text) - 1);
+    syscall1(SYS_CLOSE, fd);
+    if (n <= 0) {
+        fail("read /proc/mounts");
+    }
+    text[n] = 0;
+    if (text[0] != '/' || text[1] != 'd' || text[2] != 'e' || text[3] != 'v' || text[4] != '/' ||
+        text[5] != 'd' || text[6] != 'i' || text[7] != 's' || text[8] != 'k') {
+        fail("the root's source is not a disk partition");
+    }
+    puts("LAGPROBE OK");
+}
+
 #define PATTERN_SECTORS 128
 
 static unsigned char parent_marks[PATTERN_SECTORS];
@@ -436,7 +465,8 @@ static void run_mounted(void)
     pid = syscall1(SYS_FORK, 0);
     if (pid == 0) {
         mark_sectors(fd, child_marks);
-        if (syscall3(SYS_WRITE, pipe_fds[1], (int)child_marks, PATTERN_SECTORS) != PATTERN_SECTORS) {
+        if (syscall3(SYS_WRITE, pipe_fds[1], (int)child_marks, PATTERN_SECTORS) !=
+            PATTERN_SECTORS) {
             sys_exit(5);
         }
         sys_exit(0);
@@ -495,6 +525,8 @@ void probe_main(unsigned int *sp)
         run_write();
     } else if (argc >= 2 && argv[1][0] == 'm') {
         run_mounted();
+    } else if (argc >= 2 && argv[1][0] == 'r') {
+        run_root();
     } else {
         run_sleep();
     }

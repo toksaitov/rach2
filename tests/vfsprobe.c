@@ -24,7 +24,6 @@ typedef unsigned int size_t;
 #define SYS_WRITE      4
 #define SYS_OPEN       5
 #define SYS_CLOSE      6
-#define SYS_CREAT      8
 #define SYS_LINK       9
 #define SYS_UNLINK     10
 #define SYS_CHDIR      12
@@ -38,8 +37,6 @@ typedef unsigned int size_t;
 #define SYS_FSYNC      118
 #define SYS_GETCWD     183
 #define SYS_STAT64     195
-#define SYS_LSTAT64    196
-#define SYS_FSTAT64    197
 #define SYS_GETDENTS64 220
 #define SYS_STATFS64   268
 #define SYS_OPENAT     295
@@ -124,12 +121,46 @@ static void fail(const char *why)
     sys_exit(1);
 }
 
+static unsigned char stbuf[104];
+
 static int xstat(const char *path)
 {
-    char st[104];
+    stbuf[0] = 0;
+    return sys2(SYS_STAT64, (int)path, (int)stbuf);
+}
 
-    st[0] = 0;
-    return sys2(SYS_STAT64, (int)path, (int)st);
+/* A field of the last stat64: the mode at 16, the mtime at 72, the 64-bit
+   inode's low word at 88, in the i386 layout. */
+static unsigned st_field(int off)
+{
+    unsigned v;
+
+    __builtin_memcpy(&v, stbuf + off, 4);
+    return v;
+}
+
+static int dirents_contain(const unsigned char *b, int n, const char *name)
+{
+    int off = 0;
+
+    while (off + 19 < n) {
+        unsigned short reclen;
+        const char *dn = (const char *)b + off + 19;
+        int i = 0;
+
+        __builtin_memcpy(&reclen, b + off + 16, 2);
+        while (name[i] && dn[i] == name[i]) {
+            i++;
+        }
+        if (!name[i] && !dn[i]) {
+            return 1;
+        }
+        if (reclen == 0) {
+            break;
+        }
+        off += reclen;
+    }
+    return 0;
 }
 
 static unsigned char iobuf[512];
@@ -196,6 +227,27 @@ void _start(void)
     }
     if (xstat("/proc") != 0 || xstat("/dev") != 0) {
         fail("the synthetic roots stat");
+    }
+    /* The doubled slashes are spelled in pieces: the source convention
+       forbids the two-slash comment marker anywhere. */
+    if (xstat("/"
+              "/vp/"
+              "/d/"
+              "/f") != 0 ||
+        xstat("/vp/./d/./f") != 0 || xstat("/vp/d/../d/f") != 0) {
+        fail("repeated slashes, dot and dot-dot through a directory");
+    }
+    {
+        unsigned root_ino;
+
+        if (xstat("/") != 0) {
+            fail("stat of the root");
+        }
+        root_ino = st_field(88);
+        if (xstat("/..") != 0 || st_field(88) != root_ino || xstat("/vp/..") != 0 ||
+            st_field(88) != root_ino) {
+            fail("dot-dot at the root is the root");
+        }
     }
     if (!stat_marked_missing_dotdot()) {
         fail("dot-dot through a missing directory (marked row)");
@@ -296,7 +348,8 @@ void _start(void)
     }
     sys1(SYS_CLOSE, fd);
     fd = sys3(SYS_OPEN, (int)"/vp/d/f", O_RDONLY, 0);
-    if (sys3(SYS_READ, fd, (int)iobuf, 8) != 3) {
+    if (sys3(SYS_READ, fd, (int)iobuf, 8) != 3 || iobuf[0] != 'a' || iobuf[1] != 'b' ||
+        iobuf[2] != 'c') {
         fail("the truncated file reads back what was refilled");
     }
     sys1(SYS_CLOSE, fd);
@@ -341,8 +394,8 @@ void _start(void)
     /* ---- directories ---- */
     dfd = sys3(SYS_OPEN, (int)"/vp/d", O_RDONLY, 0);
     rc = sys3(SYS_GETDENTS64, dfd, (int)iobuf, sizeof(iobuf));
-    if (rc <= 0) {
-        fail("getdents64 lists the directory");
+    if (rc <= 0 || !dirents_contain(iobuf, rc, "f")) {
+        fail("getdents64 lists the directory's file");
     }
     sys1(SYS_CLOSE, dfd);
     if (sys2(SYS_MKDIR, (int)"/vp/d", 0755) != -EEXIST) {
@@ -359,11 +412,24 @@ void _start(void)
     }
 
     /* ---- attributes ---- */
-    if (sys2(SYS_CHMOD, (int)"/vp/d/f", 0640) != 0) {
-        fail("chmod");
+    if (sys2(SYS_CHMOD, (int)"/vp/d/f", 0640) != 0 || xstat("/vp/d/f") != 0 ||
+        (st_field(16) & 0777) != 0640) {
+        fail("chmod sets the mode stat reports");
     }
     if (sys4(SYS_UTIMENSAT, AT_FDCWD, (int)"/vp/d/f", 0, 0) != 0) {
         fail("utimensat with the current time");
+    }
+    {
+        int ts[4];
+
+        ts[0] = 1000000000; /* atime */
+        ts[1] = 0;
+        ts[2] = 1234567890; /* mtime */
+        ts[3] = 0;
+        if (sys4(SYS_UTIMENSAT, AT_FDCWD, (int)"/vp/d/f", (int)ts, 0) != 0 ||
+            xstat("/vp/d/f") != 0 || st_field(72) != 1234567890u) {
+            fail("utimensat sets the time stat reports");
+        }
     }
 
     /* ---- links ---- */
@@ -386,8 +452,8 @@ void _start(void)
         fail("chdir");
     }
     if (sys2(SYS_GETCWD, (int)cwd, sizeof(cwd)) <= 0 || cwd[0] != '/' || cwd[1] != 'v' ||
-        cwd[4] != 'd') {
-        fail("getcwd reports the directory");
+        cwd[2] != 'p' || cwd[3] != '/' || cwd[4] != 'd' || cwd[5] != 0) {
+        fail("getcwd reports /vp/d");
     }
     fd = sys3(SYS_OPEN, (int)"f", O_RDONLY, 0);
     if (fd < 0) {
