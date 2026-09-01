@@ -1536,6 +1536,26 @@ static void assert_locked(struct vfs_mount *mnt)
     }
 }
 
+/* Whether `name` is in `d`, by long name or alias as the lookup matches:
+ * 1, 0, or a negative error. Decided under the lock, so a create that
+ * waited behind another's sees what it made. */
+static int dir_has_name(struct fat_mount *fm, struct fat_node *d, const char *name)
+{
+    uint32_t cursor = 0;
+
+    for (;;) {
+        struct fat_scan sc;
+        int got = dir_scan(fm, d, d->first, &cursor, &sc);
+
+        if (got <= 0) {
+            return got;
+        }
+        if (names_match(sc.name, name) || names_match(sc.alias, name)) {
+            return 1;
+        }
+    }
+}
+
 /* The mount's lock for an operation the common layer does not lock: write,
  * truncate, fsync and sync. The namespace operations arrive locked. */
 static int begin_write(struct vfs_mount *mnt, struct fat_mount *fm)
@@ -1950,6 +1970,10 @@ static int fat_create(struct vfs_mount *mnt, void *dir, const char *name, uint32
         return -EROFS;
     }
     assert_locked(mnt);
+    rc = dir_has_name(fm, d, name);
+    if (rc != 0) {
+        return rc > 0 ? -EEXIST : rc;
+    }
     rc = prepare_name(fm, d, d->first, name, &nn);
     if (rc != 0) {
         return rc;
@@ -2087,6 +2111,10 @@ static int fat_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_
         return -EROFS;
     }
     assert_locked(mnt);
+    rc = dir_has_name(fm, d, name);
+    if (rc != 0) {
+        return rc > 0 ? -EEXIST : rc;
+    }
     k_memset(&n, 0, sizeof(n));
     rc = prepare_name(fm, d, d->first, name, &nn);
     if (rc != 0) {

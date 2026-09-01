@@ -1284,6 +1284,11 @@ static void long_rows(void)
               OPS->create(&mnt, mnt.root, "trailing ", 0644, &n) == -EINVAL &&
               OPS->create(&mnt, mnt.root, "..", 0644, &n) == -EINVAL,
           "a name FAT cannot store is EINVAL");
+    check(OPS->create(&mnt, mnt.root, "twice.txt", 0644, &n) == 0 &&
+              OPS->create(&mnt, mnt.root, "twice.txt", 0644, &n) == -EEXIST &&
+              OPS->mkdir(&mnt, mnt.root, "twice.txt", 0755) == -EEXIST,
+          "a second create or a mkdir of an existing name is EEXIST");
+    OPS->put(&mnt, n);
     name[255] = 'a';
     name[256] = '\0';
     for (i = 200; i < 255; i++) {

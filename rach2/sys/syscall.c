@@ -1583,6 +1583,7 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
     if (!fd_can_alloc(&current_proc->fds)) {
         return -EMFILE; /* known before anything is created or truncated */
     }
+again:
     rc = vfs_resolve(0, name, 0, &ref, 0, 0);
     if (rc == -ENOENT && (flags & O_CREAT)) {
         /* The missing-file half of O_CREAT: hold the parent, check its
@@ -1615,6 +1616,11 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
         vfs_ns_lock(parent.mnt);
         rc = vfs_create(parent.mnt, parent.node, leafname, mode, &made);
         vfs_ns_unlock(parent.mnt);
+        if (rc == -EEXIST && !(flags & O_EXCL)) {
+            /* Another creator held the lock first: open what it made. */
+            vfs_ref_release(&parent);
+            goto again;
+        }
         if (rc != 0) {
             vfs_ref_release(&parent);
             return rc;
