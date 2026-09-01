@@ -15,11 +15,11 @@ Phase 2: the cache writes
 - [x] bcache_hosttest write rows; phase mutations; phase gate
 
 Phase 3: the writer
-- [ ] the lock, allocation, the free count
-- [ ] the order of writes for every operation; the dirty flag and FSInfo; both FATs
-- [ ] the node pool's rename update and deferred reclamation
-- [ ] the mount-time check and its two repairs; EROFS refusal removed
-- [ ] host sequences and the interruption matrix (short names); phase mutations; phase gate
+- [x] the lock, allocation, the free count
+- [x] the order of writes for every operation; the dirty flag and FSInfo; both FATs
+- [x] the node pool's rename update and deferred reclamation
+- [x] the mount-time check and its two repairs; EROFS refusal removed
+- [x] host sequences and the interruption matrix (short names); phase mutations; phase gate
 
 Phase 4: long names and attributes
 - [ ] long-name creation, the alias rule and its collision search, the name checks

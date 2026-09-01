@@ -93,6 +93,53 @@ touch, rebuild, one check, restore):
 * the updater's interval passing without a sync: caught by the by-hand
   boot (the file is not on the disk)
 
+## Phase 3 record
+
+The writer: FAT entries written through to the active copy and then the
+mirror, allocation first-fit from the hint with the run given back on a
+failure, the dirty flag in both places before the first metadata write,
+FSInfo at sync and unmount, every mutation under the mount's namespace
+lock, and the order of writes fat32.Readme.md gives. Short names only;
+long names are phase 4's. The mount-time check walks a dirty volume under
+a shared bitmap and repairs a surplus tail, orphan long-name entries and a
+lagging mirror; anything else mounts read-only with a record.
+
+What the rows found:
+
+* A write through the description of an unlinked file rewrote its freed
+  entry, so a later create found the name twice; an unlinked node writes
+  no entry now.
+* A failed run allocation left its partial chain behind (2842 lost
+  clusters after ENOSPC); the run is given back on failure.
+* The matrix carried dirty buffers from one stop into the next fixture;
+  the loader empties the cache first.
+* Directory growth zero-filled the new cluster for writeback, so the link
+  could reach the disk before the zeros: found by the unzeroed-cluster
+  mutation, which escaped until a sequence grew a directory over a
+  junk-filled fixture. Directory clusters are written through now.
+* The syscall layer still refused open(O_CREAT) on any type but the root
+  (a milestone 36 stop); it creates on a writable type after the parent's
+  write check.
+* The kernel log formatter has no `%u`; the sector numbers printed as `u`.
+* mtools refuses a boot sector with zero heads and sectors per track; the
+  fixture builder writes a geometry now.
+
+Phase 3 mutations, proved once each through mutate37p3.sh and
+mutate37p3b.sh (restoring scripts; host rows through tests/run host, the
+guest one through the blockfail boot):
+
+* the entry written before the chain is joined: caught by the matrix
+* the chain freed before the entry: caught by the matrix
+* the size grown before the data is synced: caught by the content oracle
+* a directory grown with an unzeroed cluster: caught by the matrix (with
+  the growth sequence and the junk fixture)
+* only the active FAT written on a mirrored volume: caught by the clean
+  unmount's walk
+* the FSInfo count trusted: caught by the wrong-FSInfo row
+* the dirty flag never set: caught by the first-write row
+* the mount kept writable after a failed write: caught by the blockfail
+  boot (phase 2's deferred proof, closed here)
+
 ## Open items
 
-* The blockfail boot and its mutation: phase 3, with the first writer.
+(none)

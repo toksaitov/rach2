@@ -1,4 +1,4 @@
-Phase 2 done; phase 3 (the writer) is next.
-Evidence gathered: the cache's write rows green; three mutations caught; the updater boot by hand (ps shows update, a file reaches the disk in forty seconds with no sync call); gate green (style, host, default, mount, persist, ssh, metal).
-Next action: the mount's lock over every mutation, allocation and the free count, the order of writes, the dirty flag and FSInfo, both FATs, the node pool's rename update and deferred reclamation, the mount-time check and its repairs.
-File being read when written: dev-log/37-fatwrite/plan.md, phase 3.
+Phase 3 done; phase 4 (long names and attributes) is next.
+Evidence gathered: nine write sequences, the open-file cases, ENOSPC, the clean unmount, mtools, 291 interruption stops with the content oracle, the dirty-volume rows; nine mutations caught; gate green (style, host, default, mount with the blockfail boot).
+Next action: long-name creation with the alias rule and its collision search, the name checks, setattr for times and the read-only attribute, fatname_hosttest, the matrix with long names.
+File being read when written: dev-log/37-fatwrite/plan.md, phase 4.
