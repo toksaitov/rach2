@@ -2433,11 +2433,9 @@ static int walk_dir(struct walk_state *w, uint32_t first, uint32_t parent, uint3
         }
         if (fc != 0) {
             uint32_t cb = cluster_bytes(fm);
+            /* A size of zero with a cluster expects none: all surplus. */
             long expect = (long)(le32(e.raw + 28) == 0 ? 0 : (le32(e.raw + 28) - 1) / cb + 1);
 
-            if (expect == 0) {
-                expect = 0; /* a size of zero with a cluster: all surplus */
-            }
             if (walk_chain(w, fc, expect) < 0) {
                 return -1;
             }
