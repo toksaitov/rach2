@@ -385,7 +385,6 @@ static int32_t dev_part4_read(fd_entry_t *e, char __user *buf, uint32_t count)
     return raw_window_read(&part_win[3], e, buf, count);
 }
 
-
 /*
  * The sticks: `/dev/usb0` is the whole medium and `/dev/usb0p1` to `p4` are
  * what its partition table describes, and the same for `usb1`.
@@ -401,7 +400,7 @@ static int32_t dev_part4_read(fd_entry_t *e, char __user *buf, uint32_t count)
  * A stick that is pulled hides its nodes at once, so nothing new can open
  * them, and keeps its windows until the last hold on them is released.
  */
-#define USB_WINDOWS (GPT_PART_COUNT + 1)
+#define USB_WINDOWS    (GPT_PART_COUNT + 1)
 #define USB_MINOR_BASE 16
 
 static struct raw_window usb_win[USBDISK_MAX][USB_WINDOWS];
@@ -420,6 +419,67 @@ static struct raw_window *usb_window(const struct devfs_entry *dev)
     return &usb_win[n][k];
 }
 
+/**
+ * Read any byte range from a stick's window.
+ *
+ * The disk's windows take whole sectors only, because their readers are the
+ * reflash tools and a partial sector there is a mistake. A stick's nodes are
+ * read by `blkid`, whose probers ask for the size of a superblock structure
+ * at whatever offset it lives, and a block device node on Linux answers
+ * that. So the covering sectors are read into the staging buffer and the
+ * bytes asked for are copied out of it, one batch at a time; the end is a
+ * short read, as a regular file's is.
+ */
+static int32_t raw_window_read_bytes(struct raw_window *w, fd_entry_t *e, char __user *buf,
+                                     uint32_t count)
+{
+    block_device_t *part = &w->part.device;
+    uint64_t off = e->ofd->raw_offset;
+    uint64_t total = part->sector_count * BLOCK_SECTOR_SIZE;
+    uint32_t done = 0;
+    int rc = 0;
+
+    if (off >= total) {
+        return 0;
+    }
+    if ((uint64_t)count > total - off) {
+        count = (uint32_t)(total - off);
+    }
+    while (done < count) {
+        uint64_t at = off + done;
+        uint64_t lba = at / BLOCK_SECTOR_SIZE;
+        uint32_t skip = (uint32_t)(at % BLOCK_SECTOR_SIZE);
+        uint32_t left = count - done;
+        uint32_t sectors = (skip + left + BLOCK_SECTOR_SIZE - 1u) / BLOCK_SECTOR_SIZE;
+        uint32_t take;
+
+        if (sectors > RAW_BATCH_SECTORS) {
+            sectors = RAW_BATCH_SECTORS;
+        }
+        take = sectors * BLOCK_SECTOR_SIZE - skip;
+        if (take > left) {
+            take = left;
+        }
+        raw_calls++;
+        rc = block_request(part, 0, lba, sectors, raw_batch);
+        if (rc != 0) {
+            break;
+        }
+        if (copy_to_user((void __user *)(buf + done), raw_batch + skip, take) != 0) {
+            if (done == 0) {
+                return -EFAULT;
+            }
+            break;
+        }
+        done += take;
+    }
+    if (done == 0) {
+        return rc;
+    }
+    e->ofd->raw_offset = off + done;
+    return (int32_t)done;
+}
+
 static int32_t dev_usb_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     const struct devfs_entry *dev = (const struct devfs_entry *)e->priv;
@@ -428,7 +488,7 @@ static int32_t dev_usb_read(fd_entry_t *e, char __user *buf, uint32_t count)
     if (!w || !w->present) {
         return -EIO; /* the stick was pulled out from under the reader */
     }
-    return raw_window_read(w, e, buf, count);
+    return raw_window_read_bytes(w, e, buf, count);
 }
 
 /* A stick is written through a file system on it. The nodes are the view a
@@ -513,8 +573,7 @@ static void dev_bootpart_close(fd_entry_t *e)
     raw_close(e);
 }
 
-static const struct file_ops usbwin_ops = {dev_usb_read, dev_usb_write, dev_poll, dev_ioctl,
-                                           NULL};
+static const struct file_ops usbwin_ops = {dev_usb_read, dev_usb_write, dev_poll, dev_ioctl, NULL};
 static const struct file_ops null_ops = {dev_eof_read, dev_sink_write, dev_poll, dev_ioctl, NULL};
 static const struct file_ops zero_ops = {dev_zero_read, dev_sink_write, dev_poll, dev_ioctl, NULL};
 static const struct file_ops full_ops = {dev_zero_read, dev_full_write, dev_poll, dev_ioctl, NULL};
@@ -722,10 +781,14 @@ static const struct file_ops grubcore_ops = {dev_grubcore_read, dev_grubcore_wri
                                              dev_ioctl, dev_grubcore_close};
 static const struct file_ops bootpart_ops = {dev_bootpart_read, dev_bootpart_write, dev_poll,
                                              dev_ioctl, dev_bootpart_close};
-static const struct file_ops part1_ops = {dev_part1_read, dev_part_write, dev_poll, dev_ioctl, NULL};
-static const struct file_ops part2_ops = {dev_part2_read, dev_part_write, dev_poll, dev_ioctl, NULL};
-static const struct file_ops part3_ops = {dev_part3_read, dev_part_write, dev_poll, dev_ioctl, NULL};
-static const struct file_ops part4_ops = {dev_part4_read, dev_part_write, dev_poll, dev_ioctl, NULL};
+static const struct file_ops part1_ops = {dev_part1_read, dev_part_write, dev_poll, dev_ioctl,
+                                          NULL};
+static const struct file_ops part2_ops = {dev_part2_read, dev_part_write, dev_poll, dev_ioctl,
+                                          NULL};
+static const struct file_ops part3_ops = {dev_part3_read, dev_part_write, dev_poll, dev_ioctl,
+                                          NULL};
+static const struct file_ops part4_ops = {dev_part4_read, dev_part_write, dev_poll, dev_ioctl,
+                                          NULL};
 static const struct file_ops *const part_ops[4] = {&part1_ops, &part2_ops, &part3_ops, &part4_ops};
 
 static const struct file_ops bootlog_ops = {dev_bootlog_read, dev_sink_write, dev_poll, dev_ioctl,
@@ -884,8 +947,8 @@ static struct claim claims[DEVFS_CLAIMS];
 static block_device_t *raw_writer_backing;
 static uint64_t raw_writer_first, raw_writer_last;
 
-static int ranges_cross(block_device_t *a, uint64_t af, uint64_t al,
-                        block_device_t *b, uint64_t bf, uint64_t bl)
+static int ranges_cross(block_device_t *a, uint64_t af, uint64_t al, block_device_t *b, uint64_t bf,
+                        uint64_t bl)
 {
     return a == b && af <= bl && bf <= al;
 }
@@ -895,14 +958,12 @@ int devfs_claim(block_device_t *backing, uint64_t first, uint64_t last)
     int i;
 
     if (raw_writer_held &&
-        ranges_cross(backing, first, last, raw_writer_backing, raw_writer_first,
-                     raw_writer_last)) {
+        ranges_cross(backing, first, last, raw_writer_backing, raw_writer_first, raw_writer_last)) {
         return -EBUSY;
     }
     for (i = 0; i < DEVFS_CLAIMS; i++) {
-        if (claims[i].used &&
-            ranges_cross(backing, first, last, claims[i].backing, claims[i].first,
-                         claims[i].last)) {
+        if (claims[i].used && ranges_cross(backing, first, last, claims[i].backing, claims[i].first,
+                                           claims[i].last)) {
             return -EBUSY;
         }
     }
@@ -930,9 +991,8 @@ static int claimed(block_device_t *backing, uint64_t first, uint64_t last)
     int i;
 
     for (i = 0; i < DEVFS_CLAIMS; i++) {
-        if (claims[i].used &&
-            ranges_cross(backing, first, last, claims[i].backing, claims[i].first,
-                         claims[i].last)) {
+        if (claims[i].used && ranges_cross(backing, first, last, claims[i].backing, claims[i].first,
+                                           claims[i].last)) {
             return 1;
         }
     }
@@ -940,8 +1000,8 @@ static int claimed(block_device_t *backing, uint64_t first, uint64_t last)
 }
 
 /* The range of a raw window on its backing disk, for the claim rules. */
-static int window_range(const struct devfs_entry *dev, block_device_t **backing,
-                        uint64_t *first, uint64_t *last)
+static int window_range(const struct devfs_entry *dev, block_device_t **backing, uint64_t *first,
+                        uint64_t *last)
 {
     struct raw_window *w = 0;
     int i;
@@ -975,15 +1035,14 @@ static int window_range(const struct devfs_entry *dev, block_device_t **backing,
     return 0;
 }
 
-int devfs_window_of(const char *path, block_device_t **view,
-                    block_device_t **backing, uint64_t *first, uint64_t *count)
+int devfs_window_of(const char *path, block_device_t **view, block_device_t **backing,
+                    uint64_t *first, uint64_t *count)
 {
     const struct devfs_entry *dev;
     struct raw_window *w = 0;
     int i;
 
-    if (path[0] != '/' || path[1] != 'd' || path[2] != 'e' || path[3] != 'v' ||
-        path[4] != '/') {
+    if (path[0] != '/' || path[1] != 'd' || path[2] != 'e' || path[3] != 'v' || path[4] != '/') {
         return -EINVAL;
     }
     dev = devfs_find(path + 5);
@@ -1352,8 +1411,7 @@ void devfs_bootpart_publish(struct block_device *backing, uint32_t start_lba, ui
      * name every byte of this particular window; the wider windows are what
      * _llseek exists for. Anything larger than the bound is a misbuilt disk. */
     if (sector_count == 0 || sector_count >= (0x80000000u / BLOCK_SECTOR_SIZE)) {
-        klog(KLOG_WARN, "devfs",
-             "boot partition too large; /dev/bootpart absent");
+        klog(KLOG_WARN, "devfs", "boot partition too large; /dev/bootpart absent");
         return;
     }
     block_partition_init(&bootpart.part, backing, start_lba, sector_count);
@@ -1372,8 +1430,7 @@ void devfs_bootpart_publish(struct block_device *backing, uint32_t start_lba, ui
 void devfs_bootpart_withdraw(void)
 {
     if (bootpart.present) {
-        klog(KLOG_WARN, "devfs",
-             "entry 0 has the root; /dev/bootpart withdrawn");
+        klog(KLOG_WARN, "devfs", "entry 0 has the root; /dev/bootpart withdrawn");
         bootpart.present = 0;
     }
 }
@@ -1403,8 +1460,7 @@ void devfs_grubcore_withdraw(void)
 void devfs_grubcore_publish(struct block_device *backing)
 {
     if (!backing || backing->sector_count < (uint64_t)MBR_GAP_END_LBA) {
-        klog(KLOG_WARN, "devfs",
-             "no room for the boot loader gap; /dev/grubcore absent");
+        klog(KLOG_WARN, "devfs", "no room for the boot loader gap; /dev/grubcore absent");
         return;
     }
     block_partition_init(&grubcore.part, backing, MBR_GAP_FIRST_LBA,
@@ -1530,9 +1586,8 @@ int devfs_fd_is_raw(struct fd_entry *e)
         return 0;
     }
     dev = (const struct devfs_entry *)e->priv;
-    return dev->ops == &bootpart_ops || dev->ops == &grubcore_ops ||
-           dev->ops == &disk0_ops || dev->ops == &part1_ops ||
-           dev->ops == &part2_ops || dev->ops == &part3_ops ||
+    return dev->ops == &bootpart_ops || dev->ops == &grubcore_ops || dev->ops == &disk0_ops ||
+           dev->ops == &part1_ops || dev->ops == &part2_ops || dev->ops == &part3_ops ||
            dev->ops == &part4_ops || dev->ops == &usbwin_ops;
 }
 
@@ -1555,8 +1610,8 @@ int devfs_fd_raw_size(struct fd_entry *e, uint64_t *size)
         }
         return 1;
     }
-    if (dev->ops == &part1_ops || dev->ops == &part2_ops ||
-        dev->ops == &part3_ops || dev->ops == &part4_ops) {
+    if (dev->ops == &part1_ops || dev->ops == &part2_ops || dev->ops == &part3_ops ||
+        dev->ops == &part4_ops) {
         int idx = dev->ops == &part1_ops   ? 0
                   : dev->ops == &part2_ops ? 1
                   : dev->ops == &part3_ops ? 2
