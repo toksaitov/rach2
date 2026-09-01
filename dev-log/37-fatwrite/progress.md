@@ -27,9 +27,9 @@ Phase 4: long names and attributes
 - [x] fatname_hosttest; the matrix with long names; phase mutations; phase gate
 
 Phase 5: the suite
-- [ ] tests/run fatwrite: probe, reboot, mtools comparison, checker where present, crash boot, blockfail boot, BusyBox boot, lagprobe rows
-- [ ] the milestone 43 rehearsal on the sealed disk image; rach2-recovery-iso
-- [ ] phase mutations; phase gate; review rounds
+- [x] tests/run fatwrite: probe, reboot, mtools comparison, checker where present, crash boot, blockfail boot, BusyBox boot, lagprobe rows
+- [x] the milestone 43 rehearsal on the sealed disk image; rach2-recovery-iso
+- [x] phase mutations; phase gate; review rounds
 
 Phase 6: the record and the sweep
 - [ ] docs read against code; prosecheck; the proofread unit; sweep of code/build/tests

@@ -187,6 +187,83 @@ never a name's first stored byte, and the alias maps a character outside
 ASCII to `_`. The escape stays in the code for a raw eleven-byte caller and
 is not proved by a mutation.
 
+## Phase 5 record
+
+`tests/run fatwrite` is six boots on a disk whose second partition is a
+FAT32 volume: `fatwriteprobe` writes a tree, a second boot reads it back,
+the host's walk and mtools judge the volume (and `fsck.fat` where the host
+has it), a boot is killed while writing, the next mount repairs the volume
+and the probe checks the record, BusyBox writes through the shell, and two
+`lagprobe` writers run under the lag device. `tests/run scratch` (full
+tier) rehearses milestone 43's fourth partition on the sealed disk image:
+the recovery ISO boots as the stick, `reflash` rewrites sector 0 with the
+partition and then the volume, and the ordinary system mounts and writes
+it. `rach2-recovery-iso` is the stick's image, with `rach2.disk=ahci` on
+its boot line because the machine's disk is on the AHCI controller.
+
+What the rows found:
+
+* The suite passed the boot fixture tool where the volume check was
+  wanted; `MKFATFIXTURE` builds `mkfatfixture` for the suites.
+* FSInfo's free count was stale after a crash, since the check repaired
+  the volume and left the count the crash had written; the check counts
+  free clusters as it walks and rewrites FSInfo, and the unmount counts
+  when the mount never learned the number.
+* The assertion of the mount's lock found the generic unlink, mkdir and
+  rmdir arms unlocked, as phase 4 had found rename; all four lock now.
+  The host test stands in for the syscall layer and holds the lock
+  across its rows.
+* `lagprobe` took `write` for `writers`, since the two names share five
+  letters; the mount suite's bootpart boot found it.
+* The recovery stick had no `/dev/disk0` until its boot line named the
+  AHCI controller.
+* `cppcheck`: locals named `x` and `y` shadow the console cursor globals
+  that `vga_text.h` declares.
+
+Phase 5 mutations, proved once each through mutate37p5.sh (restoring
+script; one boot by hand, one full suite):
+
+* `begin_write` without the lock: caught by the assertion in the writers
+  boot (the panic is in the serial log)
+* the crash boot's mount skipping the check: caught by the suite's repair
+  step
+
+Review unit E (Codex, the phase's diff over six files, ten minutes) found
+seven things, all fixed before the phase closed:
+
+* `begin_write` decided read-only before taking the lock, so a writer
+  queued behind the one whose write failed went on writing; the check is
+  under the lock now.
+* The mkdir and open arms looked the name up before the lock, and the
+  driver did not look again, so two creators could make the name twice;
+  create and mkdir refuse an existing name under the lock (EEXIST), and
+  an open that loses the race opens what the winner made.
+* The check's count skipped every cluster the walk had marked, and the
+  first cluster of a freed surplus tail is marked, so FSInfo was one
+  short per repair; the count reads the entry whether marked or not.
+* The rehearsal saved eight sectors of the range, never set the boot
+  default and never rehearsed the undo; it saves every sector, makes
+  recovery the saved default before the first write, writes the saved
+  sector 0 back and reads it before the volume is written, and puts the
+  default back at the end. The stick's own copy cannot be rehearsed
+  from a read-only ISO; hardware.md says what milestone 43 arranges.
+* The first `statfs` counted the FAT outside the lock, racing the first
+  allocation; it counts under the lock.
+* The probe's `fail` never printed `FATWRITE FAIL`, so the suite's
+  `--never` rows could not fire, and a crash sequence of two hundred
+  files could finish inside the harness's grace; the token is printed and
+  the sequence runs until the kill.
+* The writers row ignored `sync`'s result and claimed to prove the sync's
+  turn under the lock, which it cannot observe; it checks the result and
+  its comment says what it proves.
+
+Two rows came with the fixes and were proved by mutate37p5b.sh: a second
+create of a name is EEXIST (caught with the check dropped), and the free
+count after a surplus repair is the FAT's (caught with the marked cluster
+skipped).
+
+Times on this host: fatwrite 76 s, scratch 30 s, mount 103 s.
+
 ## Open items
 
 (none)
