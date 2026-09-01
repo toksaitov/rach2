@@ -165,10 +165,13 @@ void kirq_restore(uint32_t flags)
     (void)flags;
 }
 
+/* A request of the device still in the pool: in flight, or quarantined
+   with a page the device may yet write into. */
+static block_device_t *request_held_by;
+
 int block_device_holds(block_device_t *device)
 {
-    (void)device;
-    return 0;
+    return device == request_held_by ? 1 : 0;
 }
 
 /* ---- the device nodes ---- */
@@ -452,6 +455,7 @@ static void model_reset(void)
         cache_holds[i] = 0;
         gone_told[i] = 0;
     }
+    request_held_by = 0;
     pending = 0;
     reading = -1;
     pending_live = 0;
@@ -635,6 +639,10 @@ int main(void)
     passes();
     CHECK("nor while a buffer is held on it", released[0] == 0);
     cache_holds[0] = 0;
+    request_held_by = &view[0][0];
+    passes();
+    CHECK("nor while a request of its is quarantined", released[0] == 0);
+    request_held_by = 0;
     usbdisk_service(); /* the syscall entry's half, which does the same */
     CHECK("the last release reclaims it", released[0] == 1 && node[0].withdrawn);
     CHECK("and the cache is not told a second time", gone_told[0] == 1);

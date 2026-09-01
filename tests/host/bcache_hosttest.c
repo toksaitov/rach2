@@ -29,6 +29,7 @@
  */
 
 #include "../../rach2/sys/fs/bcache.h"
+#include "../../rach2/sys/lib/kerrno.h"
 #include "../../rach2/sys/proc/process.h"
 
 extern int printf(const char *fmt, ...);
@@ -230,7 +231,7 @@ static void dirty_it(void *arg)
 
 int main(void)
 {
-    struct bbuf *b, *c;
+    struct bbuf *b, *c, *d;
     unsigned i;
 
     for (i = 0; i < sizeof(image_small); i++) {
@@ -439,6 +440,32 @@ int main(void)
     bcache_release(c);
     current_proc = &proc_a;
     bcache_release(b);
+
+    /* A device that has gone. A clean buffer nobody holds is dropped at
+       once; a dirty one records the device failed and is dropped, since
+       nothing will ever write it; one a process holds is kept, marked, and
+       dropped at its release, because a buffer cannot be reused under its
+       holder. */
+    bcache_invalidate(&fake);
+    failed_dev = 0;
+    b = bcache_get(&fake, 1);
+    bcache_release(b);
+    c = bcache_get(&fake, 2);
+    bcache_dirty(c);
+    bcache_release(c);
+    d = bcache_get(&fake, 3);
+    check(bcache_device_holds(&fake) == 1, "one buffer of the device is held");
+    bcache_device_gone(&fake);
+    check(fake.flags & BLOCK_GONE, "the device is marked gone");
+    check(failed_dev == &fake, "a dirty buffer recorded the device as failed");
+    check(bcache_device_holds(&fake) == 1, "the held buffer is still held");
+    check(d->dev == &fake && d->discard, "and is marked to be dropped at its release");
+    check(bcache_invalidate(&fake) == -EBUSY, "the device cannot be dropped while it is held");
+    bcache_release(d);
+    check(d->dev == 0 && !d->discard, "the release drops the held buffer");
+    check(bcache_device_holds(&fake) == 0, "and nothing of the device is held");
+    check(bcache_invalidate(&fake) == 0, "and the device can be dropped: nothing dirty is left");
+    fake.flags &= ~BLOCK_GONE;
 
     check(waited_on_host == 0, "no row reached the sleeping wait");
 
