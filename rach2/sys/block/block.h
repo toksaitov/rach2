@@ -180,6 +180,18 @@ int block_request(block_device_t *device, int write, uint64_t lba,
                   uint32_t count, void *buffer);
 
 /**
+ * Put what the device holds in a cache of its own on the medium.
+ *
+ * Sleeps the caller like `block_request` does, and from syscall context
+ * only. A device with no `flush` has nothing of its own to flush and this
+ * answers 0 at once; a stick's flush is `SYNCHRONIZE CACHE`, and the mounts
+ * call this after the buffer cache has written back, at an unmount, a sync
+ * and an fsync, because a volume whole on the wire is not yet whole on the
+ * medium.
+ */
+int block_flush(block_device_t *device);
+
+/**
  * Start a read of at most a page without waiting for it.
  *
  * For a caller that cannot sleep: the disk layer reads a stick's partition

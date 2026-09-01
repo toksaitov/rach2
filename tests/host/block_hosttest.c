@@ -73,8 +73,19 @@ static int backing_write(block_device_t *device, uint64_t lba, uint32_t count, c
     return 0;
 }
 
-static block_device_t backing = {512u, 1000u, BLOCK_FAULT_SAFE, 0, backing_read, backing_write, 0,
-                                 0,    0};
+static uint32_t backing_flushes;
+static struct block_request *flushed_with;
+
+static int backing_flush(block_device_t *device, struct block_request *request)
+{
+    (void)device;
+    flushed_with = request;
+    ++backing_flushes;
+    return 0;
+}
+
+static block_device_t backing = {512u,          1000u, BLOCK_FAULT_SAFE, 0, backing_read,
+                                 backing_write, 0,     backing_flush,    0};
 
 block_device_t *block_lag_backing(block_device_t *dev)
 {
@@ -95,6 +106,15 @@ int main(void)
     backing_reads = 0;
     CHECK(part.device.read(&part.device, 10u, 5u, buf) == 0);
     CHECK(backing_reads == 1u && last_lba == 110u && last_count == 5u);
+    /* A flush has no range to translate; the view hands it on with the
+       request the block layer will be told the end through. */
+    {
+        struct block_request flush_req;
+
+        CHECK(part.device.flush != 0);
+        CHECK(part.device.flush(&part.device, &flush_req) == 0);
+        CHECK(backing_flushes == 1u && flushed_with == &flush_req);
+    }
 
     /* The last sector, and a run ending exactly at the end, are in range. */
     CHECK(part.device.read(&part.device, 199u, 1u, buf) == 0);

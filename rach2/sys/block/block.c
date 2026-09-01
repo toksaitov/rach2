@@ -15,54 +15,38 @@ block_device_t *block0 = 0;
  * Forwards a partition-relative read to the backing device, with the partition
  * offset added and the range checked against the partition's length.
  */
-static int block_partition_read(
-               block_device_t *device,
-               uint64_t lba,
-               uint32_t count,
-               void *buffer
-           )
+static int block_partition_read(block_device_t *device, uint64_t lba, uint32_t count, void *buffer)
 {
-    block_partition_t *partition = (block_partition_t *) device;
+    block_partition_t *partition = (block_partition_t *)device;
 
-    if (count == 0 || lba > device->sector_count ||
-        count > device->sector_count - lba) {
+    if (count == 0 || lba > device->sector_count || count > device->sector_count - lba) {
         return -EIO;
     }
 
-    return partition->backing->read(
-               partition->backing, partition->start_lba + lba, count, buffer
-           );
+    return partition->backing->read(partition->backing, partition->start_lba + lba, count, buffer);
 }
 
 /**
  * Forwards a partition-relative write to the backing device, with the partition
  * offset added and the range checked against the partition's length.
  */
-static int block_partition_write(
-               block_device_t *device,
-               uint64_t lba,
-               uint32_t count,
-               const void *buffer
-           )
+static int block_partition_write(block_device_t *device, uint64_t lba, uint32_t count,
+                                 const void *buffer)
 {
-    block_partition_t *partition = (block_partition_t *) device;
+    block_partition_t *partition = (block_partition_t *)device;
 
-    if (count == 0 || lba > device->sector_count ||
-        count > device->sector_count - lba) {
+    if (count == 0 || lba > device->sector_count || count > device->sector_count - lba) {
         return -EIO;
     }
 
-    return partition->backing->write(
-               partition->backing, partition->start_lba + lba, count, buffer
-           );
+    return partition->backing->write(partition->backing, partition->start_lba + lba, count, buffer);
 }
 
 /* Forward a sleeping request with the view's offset added. The backing device
  * completes the same request object, so nothing needs mapping back. */
-static int block_partition_submit(block_device_t *device,
-                                  struct block_request *request)
+static int block_partition_submit(block_device_t *device, struct block_request *request)
 {
-    block_partition_t *partition = (block_partition_t *) device;
+    block_partition_t *partition = (block_partition_t *)device;
 
     if (request->count == 0 || request->lba > device->sector_count ||
         request->count > device->sector_count - request->lba) {
@@ -72,12 +56,15 @@ static int block_partition_submit(block_device_t *device,
     return partition->backing->submit(partition->backing, request);
 }
 
-void block_partition_init(
-         block_partition_t *partition,
-         block_device_t *backing,
-         uint64_t start_lba,
-         uint64_t sector_count
-     )
+static int block_partition_flush(block_device_t *device, struct block_request *request)
+{
+    block_partition_t *partition = (block_partition_t *)device;
+
+    return partition->backing->flush(partition->backing, request);
+}
+
+void block_partition_init(block_partition_t *partition, block_device_t *backing, uint64_t start_lba,
+                          uint64_t sector_count)
 {
     /* Clamp the view to what the backing device actually has, so a forwarded
        `start_lba + lba` can never run past it or overflow. A start beyond the
@@ -93,6 +80,7 @@ void block_partition_init(
     partition->device.flags = backing->flags;
     partition->device.deadline_ticks = backing->deadline_ticks;
     partition->device.submit = backing->submit ? block_partition_submit : 0;
+    partition->device.flush = backing->flush ? block_partition_flush : 0;
     partition->start_lba = start_lba;
 
     partition->device.sector_size = backing->sector_size;
@@ -167,8 +155,7 @@ block_device_t *block_physical(block_device_t *dev)
     for (;;) {
         block_device_t *under = block_lag_backing(dev);
 
-        if (!under && dev && dev->drvdata &&
-            dev == &((block_partition_t *)dev->drvdata)->device) {
+        if (!under && dev && dev->drvdata && dev == &((block_partition_t *)dev->drvdata)->device) {
             under = ((block_partition_t *)dev->drvdata)->backing;
         }
         if (!under) {

@@ -172,6 +172,49 @@ int block_request(block_device_t *device, int write, uint64_t lba, uint32_t coun
     return 0;
 }
 
+int block_flush(block_device_t *device)
+{
+    struct block_request *r;
+    struct req_wait w;
+    uint32_t flags;
+    int status;
+    uint32_t eflags;
+
+    if (!device || !device->flush) {
+        return 0; /* nothing of its own to flush: what was written is on it */
+    }
+    __asm__ __volatile__("pushfl; popl %0" : "=r"(eflags));
+    if (!(eflags & 0x200) || !current_proc || !current_proc->in_syscall) {
+        k_panic("block: a sleeping device was reached outside syscall context");
+    }
+    r = req_take(device, 1, 0, 1);
+    if (!r) {
+        return -EIO;
+    }
+    w.r = r;
+    w.generation = r->generation;
+    if (device->flush(device, r) != 0) {
+        flags = irq_save();
+        r->state = BLOCK_REQ_FREE;
+        irq_restore(flags);
+        wq_wake_all(&pool_wq);
+        return -EIO;
+    }
+    while (!req_done(&w)) {
+        wq_wait_event_nointr(&pool_wq, req_done, &w);
+    }
+    flags = irq_save();
+    if (r->state == BLOCK_REQ_QUARANTINED || r->generation != w.generation) {
+        irq_restore(flags);
+        return -EIO;
+    }
+    status = r->status;
+    r->state = BLOCK_REQ_FREE;
+    irq_restore(flags);
+    wq_wake_all(&pool_wq);
+    return status;
+}
+
 struct block_request *block_request_begin(block_device_t *device, uint64_t lba, uint32_t count,
                                           uint32_t *generation)
 {
