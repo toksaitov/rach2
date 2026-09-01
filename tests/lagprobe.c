@@ -427,10 +427,12 @@ static void run_blockfail(void)
 
 /* `lagprobe writers`, under the lag with the FAT32 partition mounted for
    writing: two children each create a file and extend it eight times, and
-   the parent syncs the volume while they do; every write sleeps in the lag,
-   so the writers and the sync interleave at every request. Each file must
-   read back as its own bytes, whole, and the driver's assertion at every
-   mutation is what would have caught a write outside the lock. */
+   the parent syncs the volume twenty times while they do; every write
+   sleeps in the lag, so the requests interleave. Each file must read back
+   as its own bytes, whole, every sync must return 0, and the volume must
+   unmount clean. The sync's turn under the lock is not observable from
+   here: the driver's assertion at every mutation is what catches a write
+   outside it. */
 #define WRITER_CHUNK  4096
 #define WRITER_ROUNDS 8
 
@@ -500,7 +502,9 @@ static void run_writers(void)
         writer("/lw/writer-b.bin", 0x77);
     }
     for (s = 0; s < 20; s++) {
-        syscall1(SYS_SYNC, 0);
+        if (syscall1(SYS_SYNC, 0) != 0) {
+            fail("sync during the writers");
+        }
         sleep_ms(30);
     }
     if (wait_status(a) != 0 || wait_status(b) != 0) {
