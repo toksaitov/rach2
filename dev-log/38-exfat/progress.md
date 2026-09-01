@@ -10,8 +10,8 @@ Phase 2: the fixture and the reader
 - [x] fsck_exfat clean on the well-formed volumes; four builder mutations
 
 Phase 3: the reader in the kernel, and the gate
-- [ ] exfat.c for reading; the exfat type; exfat_hosttest.c's read rows
-- [ ] the external images mount and list their manifests (the gate); eleven mutations; the gate review round
+- [x] exfat.c for reading; the exfat type; exfat_hosttest.c's read rows
+- [x] the external images mount and list their manifests (the gate); eleven mutations; the gate review round
 
 Phase 4: the writer
 - [ ] the dirty bit, allocation, the order of writes, the set protocols, NoFatChain, ValidDataLength, every mutating operation

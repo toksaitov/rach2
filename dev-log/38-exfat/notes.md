@@ -129,6 +129,132 @@ the bitmap from cluster 0, the up-case checksum over the expanded
 mappings, the name hash over the name as written. The builder's sums are
 separate functions from the reader's for that reason.
 
+## Phase 3 record
+
+`exfat.c` reads: the volume check over both boot regions with the
+two-region rule, the root's objects, the up-case table in its three forms
+(held at most 16 KiB, uncompressed indexed through the cache, compressed
+streamed through the cache), sets and their invariants, names through the
+table, chains with and without the FAT, timestamps with the UTC offset,
+`readdir`, `lookup`, `read`, `statfs`, and the `exfat` type in the table
+beside `vfat`. What the rows found:
+
+* The recommended up-case table's compressed form ends with a `0xFFFF`
+  that is the mapping of U+FFFF to itself, not a run marker; the check
+  read it as a marker with no count and refused the table. A trailing
+  `0xFFFF` is a mapping, in the kernel and in the host reader alike.
+* A read of a damaged chain gives the sound bytes and then `EIO`; the
+  rows first asked for the sound count from one call, which the driver
+  answers and then refuses on the next.
+* `--short-stream` on a contiguous file walked into the next file's
+  cluster, since a `NoFatChain` run has no end but its length; the
+  variant damages the FAT-chained file instead, and `--chain-out`,
+  `--loop` and `--short-stream` all read to the fault and answer `EIO`.
+* The host test buffer was smaller than `pattern.bin` on the gate.
+* The host test's `klog` stub prints the kernel's records into the
+  runner's log, so a refusal or a skipped set names its reason there.
+
+The gate: the volume `newfs_exfat` made and the host's driver filled (six
+files, a subdirectory, a non-ASCII name, a name of four entries, a
+102400-byte pattern) mounts and lists every manifest entry with its bytes
+and its modification time, read through the UTC offset the host wrote.
+`mkexfat_external.sh` makes that volume on every run of the host suite
+where `hdiutil` and `newfs_exfat` exist, and the test says "skipped"
+where they do not; `mkfs.exfat` is not on this host.
+
+## The gate review round
+
+Unit A (the fixture builder and its reader; Codex, ten minutes) found
+what the specification requires and the builder or the reader missed;
+all fixed:
+
+* The volume GUID entry is a set of one and carries the set checksum;
+  the builder wrote zero, and the reader now checks it.
+* `PercentInUse` is the heap's percentage rounded down, or 0xFF; the
+  builder wrote 1.
+* The bitmap and the up-case table are FAT chains, not extents; the
+  reader read them as contiguous bytes and now follows the FAT, and
+  guards the entries' clusters before use.
+* Every word of a checksum sector repeats the checksum; the reader read
+  the first. The jump bytes, the reserved bytes, the revision, the
+  extended boot sectors' signatures and FAT entries 0 and 1 were not
+  checked; they are.
+* A set may have up to 255 secondaries with vendor entries; the reader
+  refused more than 18. The name entries must be consecutive right after
+  the stream; the reserved flag bits zero; a directory's two lengths
+  equal; the first 128 up-case mappings the mandatory ones; bytes past
+  the table's last mapping a fault; a second up-case entry a fault.
+* `--truncated-upcase-run` removed the last mapping, not a run's count;
+  it cuts the table after a run's marker now.
+* Undefined behaviour: a short image read before its size was known, a
+  volume length whose product could overflow, an up-case pointer formed
+  before its cluster was checked, and 16-bit chain ids that wrap; all
+  four are gone.
+
+Unit B (the kernel reader; Codex, twenty-four minutes, past the ten the
+plan allows, and recorded as such: its job went to the background and
+its output was read from the file it named) found fifteen things,
+fourteen fixed and one kept:
+
+* The constructor validated the main boot sector's fields before the
+  backup was considered, and a fallback copied five fields; it reads
+  both regions and their checksums first, takes every field but the
+  flags from the region it trusts, and validates those.
+* An unrecognised critical primary in the root makes the volume invalid
+  by the specification; the plan's decision to read as far as possible
+  and freeze the directory for writing stands, and is recorded here as
+  the deviation it is.
+* The bitmap and the up-case table are read through the FAT, as above.
+* A rejected set was passed over one entry at a time, so an entry inside
+  it could be read as a primary; it is passed over whole.
+* A cluster naming itself is `EIO`; a longer loop within a file's length
+  repeats its clusters and is the check's to find, which the Readme now
+  says (the bound on steps cannot see it).
+* `clusters_of` could wrap at the format's 64-bit limit; it divides by
+  shift and adds the remainder's bit.
+* The jump bytes, a volume length of at least 1 MiB, and every word of a
+  checksum sector are checked.
+* The set grammar: name entries consecutive after the stream, benign
+  secondaries only after them, a second stream or an unknown critical
+  secondary a fault, reserved flag bits zero, a directory's lengths equal
+  and at most 256 MiB, `NoFatChain` with a length.
+* A 128 KiB table with run markers is compressed, not uncompressed; the
+  form is decided by content, and the mandatory first 128 mappings are
+  checked.
+* The parent walk kept only a directory's first cluster; it keeps the
+  chain kind and the length per level.
+* The root's chain leaving the heap or looping is refused.
+* The bitmap is the one of the active FAT; a second of the active FAT's,
+  or a second up-case table, is refused; the other FAT's keeps the mount
+  read-only as before.
+* A listed name past the component is cut at whole characters and
+  always terminated.
+* U+007F is a legal character; the shared check forbade it.
+
+Rows that came with the fixes: a name outside ASCII found by its upper
+case through the table; a main region that fails and whose root differs
+read from the backup; a zoned timestamp with hundredths; `--zoned` in
+the fixture; the `..` row's pointer initialised.
+
+The plan's eleven reader mutations, through mutate38p3.sh and its two
+reruns (a restoring script that compiles the host test as the runner
+does, under the runner's `deadline`): skip the boot checksum; use the
+main region when it fails; accept a backup that disagrees; skip the set
+checksum; trust a false name hash; up-case ASCII only; index a compressed
+table directly; read a NoFatChain stream through the FAT; treat the tail
+past ValidDataLength as data; apply an invalid UTC offset; accept a short
+FAT. Every one caught. Three needed a row the first rows lacked: the
+false hash was invisible to lookup, which compares hashes itself, so the
+skipped rows now require the set absent from the listing too; the
+compressed table indexed directly gave the right answer for every
+character up to U+0586, where the stored table's first run begins, so
+the fixture has a name with U+1E01, the first case-mapped unit a run
+moves; and the valid length of `valid.bin` now spans two clusters, so a
+NoFatChain stream read through the FAT fails on the fixture and not only
+on the gate. The tail mutant's first form looped rather than failed (a
+read of zero bytes at the valid length never advanced), which the
+watchdog ended; its second form reads the disk and fails the row.
+
 ## Open items
 
 (none)
