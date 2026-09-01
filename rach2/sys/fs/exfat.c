@@ -14,6 +14,8 @@
 #include "../lib/kstring.h"
 #include "bcache.h"
 #include "fatcommon.h"
+#include "../panic.h"
+#include "../proc/process.h"
 
 #define EX_S_IFDIR 0040000u
 #define EX_S_IFREG 0100000u
@@ -44,10 +46,13 @@ struct ex_node {
     uint16_t attr;
     uint32_t ctime, mtime, atime; /* the timestamp fields as stored */
     uint8_t c10, m10, coff, moff, aoff;
-    int unlinked;
+    int unlinked; /* the set is gone; the clusters go at the last put */
+    int scanned;  /* a directory read to its end for a critical entry it cannot hold */
     uint32_t hint_index;
     uint32_t hint_cluster;
 };
+
+#define EXFAT_FROZEN 16 /* directories found holding an unknown critical entry */
 
 struct ex_mount {
     int used;
@@ -69,6 +74,11 @@ struct ex_mount {
     uint8_t upcase_stored[UPCASE_HELD];
     int free_known;
     uint32_t free_clusters;
+    uint32_t alloc_hint;
+    int dirty_set; /* VolumeDirty is on the disk for this mount */
+    uint32_t frozen[EXFAT_FROZEN];
+    int nfrozen;
+    uint8_t setbuf[256 * 32]; /* one set, other writers' up to 255 secondaries */
     struct ex_node nodes[EXFAT_NODES];
 };
 
@@ -266,15 +276,26 @@ static void ex_hold(struct vfs_mount *mnt, void *node)
     ((struct ex_node *)node)->refs++;
 }
 
+static int free_chain(struct ex_mount *em, uint32_t first, int nofat, uint64_t length);
+static int write_boot_state(struct ex_mount *em, int dirty);
+
 static void ex_put(struct vfs_mount *mnt, void *node)
 {
     struct ex_node *n = node;
 
-    (void)mnt;
     if (n->refs > 0) {
         n->refs--;
     }
     if (n->refs == 0) {
+        /* An unlinked file's clusters go when its last holder does; the
+         * set went at the unlink, so a crash here leaks them. */
+        if (n->unlinked && n->first != 0) {
+            struct ex_mount *em = mnt->priv;
+
+            vfs_ns_lock(mnt);
+            free_chain(em, n->first, n->nofat, n->length);
+            vfs_ns_unlock(mnt);
+        }
         n->used = 0;
     }
 }
@@ -727,16 +748,16 @@ static int units_match(struct ex_mount *em, const uint16_t *a, const uint16_t *b
     uint32_t i;
 
     for (i = 0; i < n; i++) {
-        uint16_t x, y;
-        int rc = ex_upcase(em, a[i], &x);
+        uint16_t ua, ub;
+        int rc = ex_upcase(em, a[i], &ua);
 
         if (rc == 0) {
-            rc = ex_upcase(em, b[i], &y);
+            rc = ex_upcase(em, b[i], &ub);
         }
         if (rc != 0) {
             return rc;
         }
-        if (x != y) {
+        if (ua != ub) {
             *same = 0;
             return 0;
         }
@@ -1411,33 +1432,1704 @@ static int ex_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags, 
          em->upcase_form == 0   ? "held"
          : em->upcase_form == 1 ? "uncompressed, indexed through the cache"
                                 : "streamed through the cache");
+    em->mnt = mnt;
+    em->alloc_hint = 2;
+    if (em->writable) {
+        /* VolumeDirty on the disk for the writable life of the mount, as
+         * Linux does; the clean unmount clears it last. */
+        rc = write_boot_state(em, 1);
+        if (rc != 0) {
+            return rc;
+        }
+        em->dirty_set = 1;
+    }
     root = node_take(em);
     root->is_dir = 1;
     root->first = em->root;
     root->length = 0; /* the root's chain is followed to its end */
     em->used = 1;
-    em->mnt = mnt;
     mnt->priv = em;
     mnt->root = root;
     return 0;
 }
 
+/* ---- writing ----
+ *
+ * The order of writes is exfat.Readme.md's: a cluster's bitmap bit is set
+ * and its chain written before any entry refers to it; data is written
+ * and synced before a length is published; a set is unpublished before its
+ * clusters are freed, and the clusters of a node a description holds go
+ * at its last put. A set is made or unmade by the in-use bit of its file
+ * entry, written last with the checksum over the whole; a change to the
+ * file and stream entries is one sector write when they share a sector,
+ * and every set this driver makes has them in one. Every metadata write
+ * is `bcache_write`.
+ */
+
+static void assert_locked(struct vfs_mount *mnt)
+{
+    int me = current_proc ? (int)current_proc->pid : 0;
+
+    if (mnt->ns_holder != me || mnt->ns_depth == 0) {
+        k_panic("exfat: a mutation outside the mount's lock");
+    }
+}
+
+/* The mount's lock for an operation the common layer does not lock, and
+ * the read-only decision under it. */
+static int begin_write(struct vfs_mount *mnt, struct ex_mount *em)
+{
+    vfs_ns_lock(mnt);
+    if (!em->writable || (mnt->flags & VFS_MS_RDONLY)) {
+        vfs_ns_unlock(mnt);
+        return -EROFS;
+    }
+    return 0;
+}
+
+static int ex_write_bytes(struct ex_mount *em, uint64_t off, const void *src, uint32_t len,
+                          int through)
+{
+    const uint8_t *in = src;
+
+    while (len > 0) {
+        uint64_t blk = off / BCACHE_BLOCK_BYTES;
+        uint32_t at = (uint32_t)(off % BCACHE_BLOCK_BYTES);
+        uint32_t take = BCACHE_BLOCK_BYTES - at;
+        struct bbuf *b;
+        int rc = 0;
+
+        if (take > len) {
+            take = len;
+        }
+        b = bcache_get(em->dev, blk);
+        if (!b) {
+            return -EIO;
+        }
+        if (at + take > b->bytes) {
+            bcache_release(b);
+            return -EIO;
+        }
+        if (in) {
+            k_memcpy(b->data + at, in, take);
+            in += take;
+        } else {
+            k_memset(b->data + at, 0, take);
+        }
+        if (through) {
+            rc = bcache_write(b);
+        } else {
+            bcache_dirty(b);
+        }
+        bcache_release(b);
+        if (rc != 0) {
+            return rc;
+        }
+        off += take;
+        len -= take;
+    }
+    return 0;
+}
+
+/* The FAT entry of `c`, written through. */
+static int fat_set(struct ex_mount *em, uint32_t c, uint32_t value)
+{
+    uint8_t raw[4];
+    uint64_t off =
+        ((uint64_t)em->fat_offset + (uint64_t)em->active_fat * em->fat_length) * BLOCK_SECTOR_SIZE +
+        (uint64_t)c * 4;
+
+    raw[0] = (uint8_t)value;
+    raw[1] = (uint8_t)(value >> 8);
+    raw[2] = (uint8_t)(value >> 16);
+    raw[3] = (uint8_t)(value >> 24);
+    return ex_write_bytes(em, off, raw, 4, 1);
+}
+
+/* The bitmap bit of `c`, written through by way of the bitmap's chain. */
+static int bit_set(struct ex_mount *em, uint32_t c, int on)
+{
+    uint8_t byte;
+    uint32_t cl;
+    uint64_t at = (uint64_t)(c - 2) / 8;
+    int rc = chain_at(em, 0, em->bitmap_first, 0, 0, (uint32_t)(at >> (9 + em->spc_shift)), &cl);
+
+    if (rc != 0) {
+        return rc == -ENXIO ? -EIO : rc;
+    }
+    rc = ex_read_bytes(em, cluster_offset(em, cl) + (at & (cluster_bytes(em) - 1)), &byte, 1);
+    if (rc != 0) {
+        return rc;
+    }
+    if (on) {
+        byte |= (uint8_t)(1u << ((c - 2) % 8));
+    } else {
+        byte &= (uint8_t)~(1u << ((c - 2) % 8));
+    }
+    return ex_write_bytes(em, cluster_offset(em, cl) + (at & (cluster_bytes(em) - 1)), &byte, 1, 1);
+}
+
+/* One free cluster, first-fit from the hint with one wrap, its bit set. */
+static int alloc_cluster(struct ex_mount *em, uint32_t *out)
+{
+    uint32_t start, c, tried = 0;
+    int rc;
+
+    if (!em->free_known) {
+        rc = count_free(em);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    if (em->free_clusters == 0) {
+        return -ENOSPC;
+    }
+    start = fat_hint_start(em->alloc_hint, em->clusters);
+    c = start;
+    while (tried < em->clusters) {
+        uint8_t byte;
+
+        rc = object_read(em, em->bitmap_first, (uint64_t)(c - 2) / 8, &byte, 1);
+        if (rc != 0) {
+            return rc;
+        }
+        if (!(byte & (1u << ((c - 2) % 8)))) {
+            rc = bit_set(em, c, 1);
+            if (rc != 0) {
+                return rc;
+            }
+            em->free_clusters--;
+            em->alloc_hint = fat_hint_next(c, em->clusters);
+            *out = c;
+            return 0;
+        }
+        tried++;
+        c = fat_hint_next(c, em->clusters);
+    }
+    return -ENOSPC;
+}
+
+static int free_chain(struct ex_mount *em, uint32_t first, int nofat, uint64_t length)
+{
+    uint32_t c = first;
+    uint32_t steps = 0;
+    uint64_t have = nofat ? clusters_of(em, length) : 0;
+    int rc;
+
+    while (in_heap(em, c) && steps < em->clusters) {
+        uint32_t next = 0;
+
+        if (nofat) {
+            if (steps >= have) {
+                break;
+            }
+            next = c + 1;
+        } else {
+            rc = fat_next(em, c, &next);
+            if (rc != 0) {
+                return rc;
+            }
+        }
+        rc = bit_set(em, c, 0);
+        if (rc == 0 && !nofat) {
+            rc = fat_set(em, c, 0);
+        }
+        if (rc != 0) {
+            return rc;
+        }
+        if (em->free_known) {
+            em->free_clusters++;
+        }
+        if (c < em->alloc_hint) {
+            em->alloc_hint = c;
+        }
+        steps++;
+        if (!nofat && (next == EX_EOC || next == c)) {
+            break;
+        }
+        c = next;
+    }
+    return 0;
+}
+
+/* A run of `n` clusters chained through the FAT and ended, disconnected
+ * from everything; `zero` 1 fills them with zeros for writeback, 2 writes
+ * the zeros through, 0 leaves their bytes. ENOSPC is decided before any
+ * write; a failure gives back what was taken. */
+static int alloc_run(struct ex_mount *em, uint32_t n, int zero, uint32_t *first, uint32_t *last)
+{
+    uint32_t prev = 0, i;
+    int rc = 0;
+
+    *first = 0;
+    *last = 0;
+    if (!em->free_known) {
+        rc = count_free(em);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    if (em->free_clusters < n) {
+        return -ENOSPC;
+    }
+    for (i = 0; i < n; i++) {
+        uint32_t c;
+
+        rc = alloc_cluster(em, &c);
+        if (rc != 0) {
+            break;
+        }
+        if (zero) {
+            rc = ex_write_bytes(em, cluster_offset(em, c), 0, cluster_bytes(em), zero == 2);
+        }
+        if (rc == 0) {
+            rc = fat_set(em, c, EX_EOC);
+        }
+        if (rc == 0 && prev != 0) {
+            rc = fat_set(em, prev, c);
+        }
+        if (rc != 0) {
+            bit_set(em, c, 0);
+            em->free_clusters++;
+            break;
+        }
+        if (prev == 0) {
+            *first = c;
+        }
+        prev = c;
+    }
+    if (rc != 0 && *first != 0) {
+        free_chain(em, *first, 0, 0);
+        *first = 0;
+    }
+    *last = prev;
+    return rc;
+}
+
+/* A contiguous chain written into the FAT, so that the flag can be
+ * cleared and the chain grown: the run's entries, ended. */
+static int chain_into_fat(struct ex_mount *em, uint32_t first, uint64_t length)
+{
+    uint64_t n = clusters_of(em, length), i;
+
+    for (i = 0; i < n; i++) {
+        int rc = fat_set(em, (uint32_t)(first + i), i + 1 < n ? (uint32_t)(first + i + 1) : EX_EOC);
+
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    return 0;
+}
+
+/* ---- directory entries and sets ---- */
+
+static int dir_write(struct ex_mount *em, struct ex_node *d, uint32_t index, const uint8_t *raw,
+                     uint32_t count)
+{
+    uint32_t per = cluster_bytes(em) / 32;
+
+    while (count > 0) {
+        uint32_t c;
+        uint32_t take = per - index % per;
+        int rc = chain_at(em, d, d->first, d->nofat, d->length, index / per, &c);
+
+        if (rc != 0) {
+            return rc == -ENXIO ? -EIO : rc;
+        }
+        if (take > count) {
+            take = count;
+        }
+        rc = ex_write_bytes(em, cluster_offset(em, c) + (uint64_t)(index % per) * 32, raw,
+                            take * 32, 1);
+        if (rc != 0) {
+            return rc;
+        }
+        raw += take * 32;
+        index += take;
+        count -= take;
+    }
+    return 0;
+}
+
+static uint32_t ex_stamp_now(uint8_t *tenth)
+{
+    uint16_t date, time;
+
+    fat_now(&date, &time, tenth);
+    return ((uint32_t)date << 16) | time;
+}
+
+static int node_publish(struct ex_mount *em, struct ex_node *n);
+
+/* The set at `index` of `d` loaded into the mount's buffer: its entry
+ * count, or an error; the count is SecondaryCount + 1 as stored. */
+static int set_load(struct ex_mount *em, struct ex_node *d, uint32_t index, uint32_t *count)
+{
+    uint32_t k, n;
+    int rc = dir_entry(em, d, index, em->setbuf);
+
+    if (rc <= 0) {
+        return rc == 0 ? -EIO : rc;
+    }
+    n = (uint32_t)em->setbuf[1] + 1;
+    if (n > 256) {
+        return -EIO;
+    }
+    for (k = 1; k < n; k++) {
+        rc = dir_entry(em, d, index + k, em->setbuf + k * 32);
+        if (rc <= 0) {
+            return rc == 0 ? -EIO : rc;
+        }
+    }
+    *count = n;
+    return 0;
+}
+
+/* The set in the buffer written to `index` of `d`: the entries outside
+ * the file entry's sector first, then that sector, whose file entry
+ * carries the checksum and, when `publish`, the in-use bit. The file and
+ * stream entries share a sector in every set this driver makes; on one
+ * that straddles, the stream's sector goes first and the file entry's
+ * last, the state between being a checksum the check repairs. */
+static int set_store(struct ex_mount *em, struct ex_node *d, uint32_t index, uint32_t count,
+                     int publish)
+{
+    uint32_t per_sector = BLOCK_SECTOR_SIZE / 32;
+    uint32_t file_sector = index / per_sector;
+    uint32_t k;
+    int rc;
+
+    /* The checksum is over the published set, so an inactive file entry
+     * written now matches once its in-use bit is set later. */
+    em->setbuf[0] |= 0x80;
+    {
+        uint16_t sum = set_checksum(em->setbuf, count);
+
+        em->setbuf[2] = (uint8_t)sum;
+        em->setbuf[3] = (uint8_t)(sum >> 8);
+    }
+    if (!publish) {
+        em->setbuf[0] &= 0x7F;
+    }
+    /* Entries past the file entry's sector, last first. */
+    for (k = count; k-- > 1;) {
+        if ((index + k) / per_sector != file_sector) {
+            rc = dir_write(em, d, index + k, em->setbuf + k * 32, 1);
+            if (rc != 0) {
+                return rc;
+            }
+        }
+    }
+    /* The file entry's sector: everything of the set in it, in one write. */
+    for (k = 1; k < count && (index + k) / per_sector == file_sector; k++) {
+    }
+    return dir_write(em, d, index, em->setbuf, k);
+}
+
+/* A change to a node's file and stream entries: the lengths, the first
+ * cluster, the flags, the attributes and the times, from the node. */
+static int node_publish(struct ex_mount *em, struct ex_node *n)
+{
+    struct ex_node d;
+    uint32_t count;
+    uint8_t *f, *st;
+    int rc;
+
+    if (n->is_dir && n->first == em->root) {
+        return 0; /* the root has no entry */
+    }
+    if (n->unlinked) {
+        return 0; /* the set is gone; the clusters are the description's until its last put */
+    }
+    k_memset(&d, 0, sizeof(d));
+    d.is_dir = 1;
+    d.first = n->dir_cluster == 0 ? em->root : n->dir_cluster;
+    if (n->dir_cluster != 0) {
+        struct ex_node *pd = node_find(em, 1, 0, 0, n->dir_cluster);
+
+        if (pd) {
+            d.nofat = pd->nofat;
+            d.length = pd->length;
+            pd->refs--;
+        } else {
+            rc = find_dir(em, em->mnt->root, n->dir_cluster, &pd);
+            if (rc != 0) {
+                return rc;
+            }
+            d.nofat = pd->nofat;
+            d.length = pd->length;
+            ex_put(em->mnt, pd);
+        }
+    }
+    rc = set_load(em, &d, n->index, &count);
+    if (rc != 0) {
+        return rc;
+    }
+    f = em->setbuf;
+    st = em->setbuf + 32;
+    f[4] = (uint8_t)n->attr;
+    f[5] = (uint8_t)(n->attr >> 8);
+    f[8] = (uint8_t)n->ctime;
+    f[9] = (uint8_t)(n->ctime >> 8);
+    f[10] = (uint8_t)(n->ctime >> 16);
+    f[11] = (uint8_t)(n->ctime >> 24);
+    f[12] = (uint8_t)n->mtime;
+    f[13] = (uint8_t)(n->mtime >> 8);
+    f[14] = (uint8_t)(n->mtime >> 16);
+    f[15] = (uint8_t)(n->mtime >> 24);
+    f[16] = (uint8_t)n->atime;
+    f[17] = (uint8_t)(n->atime >> 8);
+    f[18] = (uint8_t)(n->atime >> 16);
+    f[19] = (uint8_t)(n->atime >> 24);
+    f[20] = n->c10;
+    f[21] = n->m10;
+    f[22] = n->coff;
+    f[23] = n->moff;
+    f[24] = n->aoff;
+    st[1] = (uint8_t)(FLAG_ALLOC_POSSIBLE | (n->nofat ? FLAG_NO_FAT_CHAIN : 0));
+    {
+        uint64_t v = n->valid, l = n->length;
+        uint32_t i;
+
+        for (i = 0; i < 8; i++) {
+            st[8 + i] = (uint8_t)(v >> (8 * i));
+            st[24 + i] = (uint8_t)(l >> (8 * i));
+        }
+        st[20] = (uint8_t)n->first;
+        st[21] = (uint8_t)(n->first >> 8);
+        st[22] = (uint8_t)(n->first >> 16);
+        st[23] = (uint8_t)(n->first >> 24);
+    }
+    return set_store(em, &d, n->index, count, 1);
+}
+
+/* A directory that was read to its end once per mount before its first
+ * change: one holding a critical entry this driver does not know is
+ * frozen, and every change inside it answers EROFS with a record. */
+static int dir_frozen(struct ex_mount *em, struct ex_node *d)
+{
+    int i;
+    uint32_t idx = 0;
+
+    for (i = 0; i < em->nfrozen; i++) {
+        if (em->frozen[i] == d->first) {
+            return 1;
+        }
+    }
+    if (d->scanned) {
+        return 0;
+    }
+    for (;;) {
+        uint8_t raw[32];
+        int rc = dir_entry(em, d, idx, raw);
+        int bad = 0;
+
+        if (rc < 0) {
+            return rc;
+        }
+        if (rc == 0 || raw[0] == 0x00) {
+            break;
+        }
+        if (raw[0] & 0x80) {
+            if (!(raw[0] & 0x40)) {
+                /* a primary: critical when bit 5 is clear */
+                bad = !(raw[0] & 0x20) && raw[0] != 0x81 && raw[0] != 0x82 && raw[0] != 0x83 &&
+                      raw[0] != 0x85;
+            } else {
+                bad = !(raw[0] & 0x20) && raw[0] != 0xC0 && raw[0] != 0xC1;
+            }
+        }
+        if (bad) {
+            klog(KLOG_WARN, "exfat", "directory cluster %d frozen: critical entry 0x%x at %d",
+                 (int)d->first, raw[0], (int)idx);
+            if (em->nfrozen < EXFAT_FROZEN) {
+                em->frozen[em->nfrozen++] = d->first;
+            }
+            return 1;
+        }
+        idx++;
+    }
+    d->scanned = 1;
+    return 0;
+}
+
+/* The directory grown by one zeroed cluster, chained; a contiguous
+ * directory another writer made has its run written into the FAT and its
+ * flag cleared first, so that the chain can be followed. */
+static int dir_grow(struct ex_mount *em, struct ex_node *d)
+{
+    uint32_t tail, newc, unused;
+    uint64_t have = clusters_of(em, d->length);
+    int rc;
+
+    if (d->nofat) {
+        rc = chain_into_fat(em, d->first, d->length);
+        if (rc != 0) {
+            return rc;
+        }
+        d->nofat = 0;
+        rc = node_publish(em, d);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    if (d->first == em->root) {
+        /* The root's chain is followed to its end: no length to keep. */
+        uint32_t c = d->first, steps = 0, next;
+
+        for (;;) {
+            rc = fat_next(em, c, &next);
+            if (rc != 0) {
+                return rc;
+            }
+            if (next == EX_EOC || ++steps > em->clusters) {
+                break;
+            }
+            c = next;
+        }
+        tail = c;
+    } else {
+        rc = chain_at(em, d, d->first, 0, 0, (uint32_t)(have - 1), &tail);
+        if (rc != 0) {
+            return rc == -ENXIO ? -EIO : rc;
+        }
+    }
+    rc = alloc_run(em, 1, 2, &newc, &unused);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = fat_set(em, tail, newc);
+    if (rc != 0) {
+        free_chain(em, newc, 0, 0);
+        return rc;
+    }
+    d->hint_cluster = 0;
+    if (d->first != em->root) {
+        d->length += cluster_bytes(em);
+        d->valid = d->length;
+        rc = node_publish(em, d);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    return 0;
+}
+
+/* `count` free slots in a row in `d`, growing it; a run that would put the
+ * file entry in a sector's last slot starts in the next sector, an
+ * inactive entry filling that slot, so the file and stream entries share
+ * a sector. */
+static int free_slots(struct ex_mount *em, struct ex_node *d, uint32_t count, uint32_t *index)
+{
+    uint32_t per_sector = BLOCK_SECTOR_SIZE / 32;
+    uint32_t i = 0, run = 0, run_start = 0;
+    int end_seen = 0;
+    uint8_t raw[32];
+
+    raw[0] = 0;
+    for (;;) {
+        int rc;
+
+        if (!end_seen) {
+            rc = dir_entry(em, d, i, raw);
+            if (rc < 0) {
+                return rc;
+            }
+            if (rc == 0) {
+                rc = dir_grow(em, d);
+                if (rc != 0) {
+                    return rc;
+                }
+                continue;
+            }
+            if (raw[0] == 0x00) {
+                end_seen = 1;
+            }
+        }
+        if (end_seen || !(raw[0] & 0x80)) {
+            if (run == 0) {
+                if (i % per_sector == per_sector - 1) {
+                    /* The last slot of a sector: an inactive entry fills it
+                     * unless it is the end marker, which the set keeps. */
+                    if (!end_seen) {
+                        uint8_t filler[32];
+
+                        k_memset(filler, 0, sizeof(filler));
+                        filler[0] = 0x05;
+                        rc = dir_write(em, d, i, filler, 1);
+                        if (rc != 0) {
+                            return rc;
+                        }
+                    }
+                    i++;
+                    continue;
+                }
+                run_start = i;
+            }
+            run++;
+            if (run == count) {
+                *index = run_start;
+                return 0;
+            }
+        } else {
+            run = 0;
+        }
+        i++;
+    }
+}
+
+/* The set for a new name in the mount's buffer: file entry, stream, names.
+ * Its entry count, or an error for a name FAT cannot hold. */
+static int set_build(struct ex_mount *em, const char *name, int is_dir, uint32_t first,
+                     uint64_t length, uint32_t *count)
+{
+    uint16_t units[FAT_NAME_UNITS];
+    uint32_t n, k, i, entries;
+    uint16_t hash;
+    uint8_t *f = em->setbuf, *st = em->setbuf + 32;
+    uint8_t tenth;
+    uint32_t now;
+    int rc = fat_name_units(name, units, &n);
+
+    if (rc != 0) {
+        return rc;
+    }
+    rc = name_hash(em, units, n, &hash);
+    if (rc != 0) {
+        return rc;
+    }
+    entries = 2 + (n + 14) / 15;
+    k_memset(em->setbuf, 0, entries * 32);
+    now = ex_stamp_now(&tenth);
+    f[0] = 0x85;
+    f[1] = (uint8_t)(entries - 1);
+    f[4] = (uint8_t)(is_dir ? ATTR_DIRECTORY : 0x20);
+    for (i = 0; i < 4; i++) {
+        f[8 + i] = f[12 + i] = f[16 + i] = (uint8_t)(now >> (8 * i));
+    }
+    f[20] = f[21] = tenth;
+    f[22] = f[23] = f[24] = 0x80; /* UTC, the offset valid and zero */
+    st[0] = 0xC0;
+    st[1] = FLAG_ALLOC_POSSIBLE;
+    st[3] = (uint8_t)n;
+    st[4] = (uint8_t)hash;
+    st[5] = (uint8_t)(hash >> 8);
+    for (i = 0; i < 8; i++) {
+        st[8 + i] = st[24 + i] = (uint8_t)(length >> (8 * i));
+    }
+    st[20] = (uint8_t)first;
+    st[21] = (uint8_t)(first >> 8);
+    st[22] = (uint8_t)(first >> 16);
+    st[23] = (uint8_t)(first >> 24);
+    for (i = 0; i < (n + 14) / 15; i++) {
+        uint8_t *ne = em->setbuf + (2 + i) * 32;
+
+        ne[0] = 0xC1;
+        for (k = 0; k < 15 && i * 15 + k < n; k++) {
+            ne[2 + k * 2] = (uint8_t)units[i * 15 + k];
+            ne[3 + k * 2] = (uint8_t)(units[i * 15 + k] >> 8);
+        }
+    }
+    *count = entries;
+    return 0;
+}
+
+/* The set with `name` in `d`, found as lookup finds it: 1 with the set,
+ * 0, or an error. */
+static int find_set(struct ex_mount *em, struct ex_node *d, const char *name, struct ex_set *set)
+{
+    uint16_t units[FAT_NAME_UNITS];
+    uint32_t n, cursor = 0;
+    uint16_t hash;
+    int rc = fat_name_units(name, units, &n);
+
+    if (rc != 0) {
+        return rc == -EINVAL ? 0 : rc;
+    }
+    rc = name_hash(em, units, n, &hash);
+    if (rc != 0) {
+        return rc;
+    }
+    for (;;) {
+        int same;
+
+        rc = dir_scan(em, d, &cursor, set);
+        if (rc <= 0) {
+            return rc;
+        }
+        if (set->count != n || le16(set->stream + 4) != hash) {
+            continue;
+        }
+        rc = units_match(em, set->units, units, n, &same);
+        if (rc != 0) {
+            return rc;
+        }
+        if (same) {
+            return 1;
+        }
+    }
+}
+
+/* A set unpublished: the file entry inactive first, the barrier, then
+ * the secondaries inactive. */
+static int set_retire(struct ex_mount *em, struct ex_node *d, uint32_t index, uint32_t count)
+{
+    uint32_t k;
+    uint8_t raw[32];
+    int rc = dir_entry(em, d, index, raw);
+
+    if (rc <= 0) {
+        return rc == 0 ? -EIO : rc;
+    }
+    raw[0] &= 0x7F;
+    rc = dir_write(em, d, index, raw, 1);
+    if (rc != 0) {
+        return rc;
+    }
+    for (k = 1; k < count; k++) {
+        rc = dir_entry(em, d, index + k, raw);
+        if (rc <= 0) {
+            return rc == 0 ? -EIO : rc;
+        }
+        raw[0] &= 0x7F;
+        rc = dir_write(em, d, index + k, raw, 1);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    return 0;
+}
+
+static int writable_dir(struct vfs_mount *mnt, struct ex_mount *em, struct ex_node *d)
+{
+    int rc;
+
+    if (!em->writable || (mnt->flags & VFS_MS_RDONLY)) {
+        return -EROFS;
+    }
+    assert_locked(mnt);
+    rc = dir_frozen(em, d);
+    if (rc < 0) {
+        return rc;
+    }
+    return rc ? -EROFS : 0;
+}
+
+/* Whether `d` holds an in-use file entry. */
+static int dir_has_entries(struct ex_mount *em, struct ex_node *d, int *has)
+{
+    uint32_t i = 0;
+
+    for (;;) {
+        uint8_t raw[32];
+        int rc = dir_entry(em, d, i, raw);
+
+        if (rc < 0) {
+            return rc;
+        }
+        if (rc == 0 || raw[0] == 0x00) {
+            *has = 0;
+            return 0;
+        }
+        if (raw[0] == 0x85) {
+            *has = 1;
+            return 0;
+        }
+        i++;
+    }
+}
+
+/* ---- the mutating operations ---- */
+
+static int ex_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode, void **node)
+{
+    struct ex_mount *em = em_of(mnt);
+    struct ex_node *d = dir ? dir : mnt->root;
+    struct ex_set set;
+    uint32_t count, index;
+    struct ex_node *n;
+    int rc = writable_dir(mnt, em, d);
+
+    (void)mode;
+    if (rc != 0) {
+        return rc;
+    }
+    rc = find_set(em, d, name, &set);
+    if (rc < 0) {
+        return rc;
+    }
+    if (rc == 1) {
+        return -EEXIST;
+    }
+    rc = set_build(em, name, 0, 0, 0, &count);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = free_slots(em, d, count, &index);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = set_store(em, d, index, count, 1);
+    if (rc != 0) {
+        return rc;
+    }
+    k_memcpy(set.file, em->setbuf, 32);
+    k_memcpy(set.stream, em->setbuf + 32, 32);
+    set.index = index;
+    set.entries = count;
+    n = node_for(em, d, &set);
+    if (!n) {
+        return -ENOMEM;
+    }
+    *node = n;
+    return 0;
+}
+
+static int ex_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode)
+{
+    struct ex_mount *em = em_of(mnt);
+    struct ex_node *d = dir ? dir : mnt->root;
+    struct ex_set set;
+    uint32_t count, index, c, unused;
+    int rc = writable_dir(mnt, em, d);
+
+    (void)mode;
+    if (rc != 0) {
+        return rc;
+    }
+    rc = find_set(em, d, name, &set);
+    if (rc < 0) {
+        return rc;
+    }
+    if (rc == 1) {
+        return -EEXIST;
+    }
+    /* The cluster first, zeroed through and ended, then the set naming it
+     * last, so a crash between leaks the cluster and names nothing. */
+    rc = alloc_run(em, 1, 2, &c, &unused);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = set_build(em, name, 1, c, cluster_bytes(em), &count);
+    if (rc == 0) {
+        rc = free_slots(em, d, count, &index);
+    }
+    if (rc == 0) {
+        rc = set_store(em, d, index, count, 1);
+    }
+    if (rc != 0) {
+        free_chain(em, c, 0, 0);
+    }
+    return rc;
+}
+
+/* The chain of a set that is going: kept for a description that holds
+ * the node, freed at its last put; freed now otherwise. */
+static int retire_chain(struct ex_mount *em, struct ex_node *d, const struct ex_set *set)
+{
+    uint32_t dir_cluster = d->first == em->root ? 0 : d->first;
+    int is_dir = (le16(set->file + 4) & ATTR_DIRECTORY) != 0;
+    uint32_t first = le32(set->stream + 20);
+    struct ex_node *n = node_find(em, is_dir, dir_cluster, set->index, first);
+
+    if (n) {
+        n->refs--; /* node_find held it once more */
+        if (n->refs > 0) {
+            n->unlinked = 1;
+            return 0;
+        }
+        n->used = 0;
+    }
+    return first ? free_chain(em, first, (set->stream[1] & FLAG_NO_FAT_CHAIN) != 0,
+                              le64(set->stream + 24))
+                 : 0;
+}
+
+static int ex_unlink(struct vfs_mount *mnt, void *dir, const char *name)
+{
+    struct ex_mount *em = em_of(mnt);
+    struct ex_node *d = dir ? dir : mnt->root;
+    struct ex_set set;
+    int rc = writable_dir(mnt, em, d);
+
+    if (rc != 0) {
+        return rc;
+    }
+    rc = find_set(em, d, name, &set);
+    if (rc < 0) {
+        return rc;
+    }
+    if (rc == 0) {
+        return -ENOENT;
+    }
+    if (le16(set.file + 4) & ATTR_DIRECTORY) {
+        return -EISDIR;
+    }
+    rc = set_retire(em, d, set.index, set.entries);
+    if (rc != 0) {
+        return rc;
+    }
+    return retire_chain(em, d, &set);
+}
+
+static int ex_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
+{
+    struct ex_mount *em = em_of(mnt);
+    struct ex_node *d = dir ? dir : mnt->root;
+    struct ex_set set;
+    struct ex_node sub, *held;
+    int has, rc = writable_dir(mnt, em, d);
+
+    if (rc != 0) {
+        return rc;
+    }
+    rc = find_set(em, d, name, &set);
+    if (rc < 0) {
+        return rc;
+    }
+    if (rc == 0) {
+        return -ENOENT;
+    }
+    if (!(le16(set.file + 4) & ATTR_DIRECTORY)) {
+        return -ENOTDIR;
+    }
+    k_memset(&sub, 0, sizeof(sub));
+    sub.is_dir = 1;
+    sub.first = le32(set.stream + 20);
+    sub.length = le64(set.stream + 24);
+    sub.nofat = (set.stream[1] & FLAG_NO_FAT_CHAIN) != 0;
+    rc = dir_has_entries(em, &sub, &has);
+    if (rc != 0) {
+        return rc;
+    }
+    if (has) {
+        return -ENOTEMPTY;
+    }
+    held = node_find(em, 1, 0, 0, sub.first);
+    if (held) {
+        held->refs--;
+        if (held->refs > 0) {
+            return -EBUSY; /* a description or a working directory */
+        }
+    }
+    rc = dir_frozen(em, &sub);
+    if (rc < 0) {
+        return rc;
+    }
+    if (rc) {
+        return -EROFS; /* a frozen directory is not removed */
+    }
+    rc = set_retire(em, d, set.index, set.entries);
+    if (rc != 0) {
+        return rc;
+    }
+    return retire_chain(em, d, &set);
+}
+
+/* Whether the directory at `dir` (0 for the root) is `anc` or lies under
+ * it, by the parents the nodes remember and the tree otherwise. */
+static int is_under(struct ex_mount *em, uint32_t dir, uint32_t anc)
+{
+    uint32_t steps = 0;
+
+    while (dir != 0 && steps++ < em->clusters) {
+        struct ex_node *n;
+        uint32_t parent;
+
+        if (dir == anc) {
+            return 1;
+        }
+        n = node_find(em, 1, 0, 0, dir);
+        if (!n) {
+            int rc = find_dir(em, em->mnt->root, dir, &n);
+
+            if (rc != 0) {
+                return rc;
+            }
+        }
+        parent = n->parent;
+        ex_put(em->mnt, n);
+        dir = parent;
+    }
+    return 0;
+}
+
+static int ex_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *newdir,
+                     const char *newname)
+{
+    struct ex_mount *em = em_of(mnt);
+    struct ex_node *od = olddir ? olddir : mnt->root;
+    struct ex_node *nd = newdir ? newdir : mnt->root;
+    uint32_t od_cluster = od->first == em->root ? 0 : od->first;
+    uint32_t nd_cluster = nd->first == em->root ? 0 : nd->first;
+    struct ex_set src, dst;
+    struct ex_node *moved;
+    uint32_t count, index;
+    int is_dir, dst_exists, rc = writable_dir(mnt, em, od);
+
+    if (rc == 0 && nd != od) {
+        rc = writable_dir(mnt, em, nd);
+    }
+    if (rc != 0) {
+        return rc;
+    }
+    rc = find_set(em, od, oldname, &src);
+    if (rc < 0) {
+        return rc;
+    }
+    if (rc == 0) {
+        return -ENOENT;
+    }
+    is_dir = (le16(src.file + 4) & ATTR_DIRECTORY) != 0;
+    rc = find_set(em, nd, newname, &dst);
+    if (rc < 0) {
+        return rc;
+    }
+    dst_exists = rc == 1;
+    if (dst_exists) {
+        int dst_dir = (le16(dst.file + 4) & ATTR_DIRECTORY) != 0;
+
+        if (od_cluster == nd_cluster && dst.index == src.index) {
+            return 0; /* the same set under a spelling of its own name */
+        }
+        if (is_dir && !dst_dir) {
+            return -ENOTDIR;
+        }
+        if (!is_dir && dst_dir) {
+            return -EISDIR;
+        }
+        if (dst_dir) {
+            struct ex_node sub, *held;
+            int has;
+
+            k_memset(&sub, 0, sizeof(sub));
+            sub.is_dir = 1;
+            sub.first = le32(dst.stream + 20);
+            sub.length = le64(dst.stream + 24);
+            sub.nofat = (dst.stream[1] & FLAG_NO_FAT_CHAIN) != 0;
+            rc = dir_has_entries(em, &sub, &has);
+            if (rc != 0) {
+                return rc;
+            }
+            if (has) {
+                return -ENOTEMPTY;
+            }
+            held = node_find(em, 1, 0, 0, sub.first);
+            if (held) {
+                held->refs--;
+                if (held->refs > 0) {
+                    return -EBUSY;
+                }
+            }
+        }
+    }
+    if (is_dir) {
+        struct ex_node sub;
+
+        k_memset(&sub, 0, sizeof(sub));
+        sub.is_dir = 1;
+        sub.first = le32(src.stream + 20);
+        sub.length = le64(src.stream + 24);
+        sub.nofat = (src.stream[1] & FLAG_NO_FAT_CHAIN) != 0;
+        rc = dir_frozen(em, &sub);
+        if (rc < 0) {
+            return rc;
+        }
+        if (rc) {
+            return -EROFS; /* a frozen directory is not renamed */
+        }
+        if (od_cluster != nd_cluster) {
+            rc = is_under(em, nd_cluster, sub.first);
+            if (rc < 0) {
+                return rc;
+            }
+            if (rc) {
+                return -EINVAL;
+            }
+        }
+    }
+    moved = node_find(em, is_dir, od_cluster, src.index, le32(src.stream + 20));
+    if (moved) {
+        moved->refs--;
+    }
+    /* The new set in the buffer: the source's file and stream entries
+     * under the new name, so the times, the chain and the flags stay. */
+    rc = set_build(em, newname, is_dir, 0, 0, &count);
+    if (rc != 0) {
+        return rc;
+    }
+    {
+        uint8_t hash_lo = em->setbuf[32 + 4], hash_hi = em->setbuf[32 + 5],
+                nlen = em->setbuf[32 + 3];
+
+        k_memcpy(em->setbuf, src.file, 32);
+        k_memcpy(em->setbuf + 32, src.stream, 32);
+        em->setbuf[1] = (uint8_t)(count - 1);
+        em->setbuf[32 + 3] = nlen;
+        em->setbuf[32 + 4] = hash_lo;
+        em->setbuf[32 + 5] = hash_hi;
+    }
+    if (od_cluster == nd_cluster && !dst_exists && count == src.entries) {
+        /* In place: the name entries first, then the file entry's sector. */
+        rc = set_store(em, od, src.index, count, 1);
+        if (rc == 0 && moved) {
+            moved->index = src.index;
+        }
+        return rc;
+    }
+    /* Elsewhere: the room first, so ENOSPC destroys nothing; the new set
+     * written with an inactive file entry; a replaced destination and the
+     * source unpublished; the new file entry published last. */
+    rc = free_slots(em, nd, count, &index);
+    if (rc != 0) {
+        return rc;
+    }
+    if (dst_exists && dst.index >= index && dst.index < index + count) {
+        return -EIO; /* the room found lies inside the destination's set */
+    }
+    rc = set_store(em, nd, index, count, 0);
+    if (rc != 0) {
+        return rc;
+    }
+    if (dst_exists) {
+        rc = set_retire(em, nd, dst.index, dst.entries);
+        if (rc == 0) {
+            rc = retire_chain(em, nd, &dst);
+        }
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    rc = set_retire(em, od, src.index, src.entries);
+    if (rc != 0) {
+        return rc;
+    }
+    {
+        uint8_t raw[32];
+
+        k_memcpy(raw, em->setbuf, 32);
+        raw[0] = 0x85;
+        rc = dir_write(em, nd, index, raw, 1);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    if (moved) {
+        moved->dir_cluster = nd_cluster;
+        moved->index = index;
+        if (is_dir) {
+            moved->parent = nd_cluster;
+        }
+    }
+    return 0;
+}
+
+/* Bytes of a file: `count` from `buf` (zeros for NULL) at `off`, through
+ * the chain, for writeback. */
+static int put_file_bytes(struct ex_mount *em, struct ex_node *n, uint64_t off, const uint8_t *buf,
+                          uint32_t count)
+{
+    uint32_t cbytes = cluster_bytes(em);
+
+    while (count > 0) {
+        uint32_t in = (uint32_t)(off & (cbytes - 1));
+        uint32_t take = cbytes - in;
+        uint32_t c;
+        int rc;
+
+        if (take > count) {
+            take = count;
+        }
+        rc = chain_at(em, n, n->first, n->nofat, n->length, (uint32_t)(off >> (9 + em->spc_shift)),
+                      &c);
+        if (rc != 0) {
+            return rc == -ENXIO ? -EIO : rc;
+        }
+        rc = ex_write_bytes(em, cluster_offset(em, c) + in, buf, take, 0);
+        if (rc != 0) {
+            return rc;
+        }
+        if (buf) {
+            buf += take;
+        }
+        off += take;
+        count -= take;
+    }
+    return 0;
+}
+
+/* A contiguous file about to grow: its run into the FAT, the flag
+ * cleared and published, then the chain can be joined to. */
+static int chain_convert(struct ex_mount *em, struct ex_node *n)
+{
+    int rc;
+
+    if (!n->nofat || n->first == 0) {
+        n->nofat = 0;
+        return 0;
+    }
+    rc = chain_into_fat(em, n->first, n->length);
+    if (rc != 0) {
+        return rc;
+    }
+    n->nofat = 0;
+    return node_publish(em, n);
+}
+
+static void stamp_mtime(struct ex_node *n)
+{
+    uint8_t tenth;
+
+    n->mtime = ex_stamp_now(&tenth);
+    n->m10 = tenth;
+    n->moff = 0x80;
+}
+
+static int32_t ex_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,
+                        uint64_t offset)
+{
+    struct ex_mount *em = em_of(mnt);
+    struct ex_node *n = handle;
+    uint32_t cbytes = cluster_bytes(em);
+    uint64_t have, needed, end;
+    uint32_t run_first = 0, run_last = 0;
+    int rc;
+
+    if (n->is_dir) {
+        return -EISDIR;
+    }
+    if (count == 0) {
+        return 0;
+    }
+    if (offset >= 0xFFFFFFFFu || count > 0xFFFFFFFFu - offset) {
+        return -EFBIG; /* the kernel's file offset is 32 bits */
+    }
+    rc = begin_write(mnt, em);
+    if (rc != 0) {
+        return rc;
+    }
+    assert_locked(mnt);
+    end = offset + count;
+    have = clusters_of(em, n->length);
+    needed = clusters_of(em, end);
+    if (needed > have) {
+        rc = chain_convert(em, n);
+        if (rc != 0) {
+            goto out;
+        }
+        rc = alloc_run(em, (uint32_t)(needed - have), 1, &run_first, &run_last);
+        if (rc != 0) {
+            goto out;
+        }
+    }
+    /* A write past the valid length zero-fills the gap in the old clusters
+     * first, including the part inside the last one; the run's zeros are
+     * its own fill. */
+    if (offset > n->valid && have > 0) {
+        uint64_t gap_end = have * cbytes < offset ? have * cbytes : offset;
+
+        if (gap_end > n->valid) {
+            rc = put_file_bytes(em, n, n->valid, 0, (uint32_t)(gap_end - n->valid));
+            if (rc != 0) {
+                goto undo;
+            }
+        }
+    }
+    if (offset < have * cbytes) {
+        uint32_t part = (uint32_t)(have * cbytes - offset);
+
+        if (part > count) {
+            part = count;
+        }
+        rc = put_file_bytes(em, n, offset, buf, part);
+        if (rc == 0 && part < count) {
+            struct ex_node run;
+
+            k_memset(&run, 0, sizeof(run));
+            run.first = run_first;
+            run.length = (uint64_t)(needed - have) * cbytes;
+            rc = put_file_bytes(em, &run, offset + part - have * cbytes,
+                                (const uint8_t *)buf + part, count - part);
+        }
+    } else {
+        struct ex_node run;
+
+        k_memset(&run, 0, sizeof(run));
+        run.first = run_first;
+        run.length = (uint64_t)(needed - have) * cbytes;
+        rc = put_file_bytes(em, &run, offset - have * cbytes, buf, count);
+    }
+    if (rc != 0) {
+        goto undo;
+    }
+    rc = bcache_sync(em->dev); /* the data and the zeros reach the disk first */
+    if (rc != 0) {
+        goto undo;
+    }
+    if (run_first != 0 && have > 0) {
+        uint32_t tail;
+
+        rc = chain_at(em, n, n->first, 0, 0, (uint32_t)(have - 1), &tail);
+        if (rc == 0) {
+            rc = fat_set(em, tail, run_first);
+        }
+        if (rc != 0) {
+            goto undo;
+        }
+    } else if (run_first != 0) {
+        n->first = run_first; /* published with the lengths below */
+    }
+    if (end > n->length) {
+        n->length = end;
+    }
+    if (end > n->valid) {
+        n->valid = end;
+    }
+    stamp_mtime(n);
+    rc = node_publish(em, n);
+    if (rc != 0) {
+        goto out; /* the chain is joined; the length is the walk's surplus */
+    }
+    n->hint_cluster = 0;
+    vfs_ns_unlock(mnt);
+    return (int32_t)count;
+undo:
+    if (run_first != 0) {
+        free_chain(em, run_first, 0, 0);
+    }
+out:
+    vfs_ns_unlock(mnt);
+    return rc;
+}
+
+static int ex_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
+{
+    struct ex_mount *em = em_of(mnt);
+    struct ex_node *n = handle;
+    uint32_t cbytes = cluster_bytes(em);
+    uint64_t have, keep;
+    int rc;
+
+    if (n->is_dir) {
+        return -EISDIR;
+    }
+    if (size > 0xFFFFFFFFu) {
+        return -EFBIG;
+    }
+    rc = begin_write(mnt, em);
+    if (rc != 0) {
+        return rc;
+    }
+    assert_locked(mnt);
+    have = clusters_of(em, n->length);
+    keep = clusters_of(em, size);
+    if (size > n->length) {
+        /* A grow: new clusters, chained, unzeroed, since the valid length
+         * stays where it was and the new range reads as zeros. */
+        uint32_t run_first = 0, run_last = 0;
+
+        if (keep > have) {
+            rc = chain_convert(em, n);
+            if (rc == 0) {
+                rc = alloc_run(em, (uint32_t)(keep - have), 0, &run_first, &run_last);
+            }
+            if (rc != 0) {
+                goto out;
+            }
+            if (have > 0) {
+                uint32_t tail;
+
+                rc = chain_at(em, n, n->first, 0, 0, (uint32_t)(have - 1), &tail);
+                if (rc == 0) {
+                    rc = fat_set(em, tail, run_first);
+                }
+                if (rc != 0) {
+                    free_chain(em, run_first, 0, 0);
+                    goto out;
+                }
+            } else {
+                n->first = run_first;
+            }
+        }
+        n->length = size;
+        stamp_mtime(n);
+        rc = node_publish(em, n);
+        n->hint_cluster = 0;
+        goto out;
+    }
+    /* A shrink: the lengths first, the retained tail ended, the detached
+     * tail freed last. */
+    {
+        uint32_t cut_first = 0, tail = 0;
+        int was_nofat = n->nofat;
+        uint64_t old_length = n->length;
+
+        if (keep < have) {
+            if (keep > 0) {
+                rc = chain_at(em, n, n->first, n->nofat, n->length, (uint32_t)keep, &cut_first);
+                if (rc == 0 && !n->nofat) {
+                    rc = chain_at(em, n, n->first, 0, 0, (uint32_t)(keep - 1), &tail);
+                }
+                if (rc != 0) {
+                    goto out;
+                }
+            } else {
+                cut_first = n->first;
+            }
+        }
+        n->length = size;
+        if (n->valid > size) {
+            n->valid = size;
+        }
+        if (keep == 0) {
+            n->first = 0;
+            n->nofat = 0;
+        }
+        stamp_mtime(n);
+        rc = node_publish(em, n);
+        if (rc != 0) {
+            goto out;
+        }
+        n->hint_cluster = 0;
+        if (keep < have) {
+            if (keep > 0 && !was_nofat) {
+                rc = fat_set(em, tail, EX_EOC);
+                if (rc != 0) {
+                    goto out;
+                }
+            }
+            rc = free_chain(em, cut_first, was_nofat, was_nofat ? (have - keep) * cbytes : 0);
+        }
+        (void)old_length;
+    }
+out:
+    vfs_ns_unlock(mnt);
+    return rc;
+}
+
+static int ex_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_stat *st)
+{
+    struct ex_mount *em = em_of(mnt);
+    struct ex_node *n = node;
+    int rc;
+
+    if (what & ~(VFS_SET_MODE | VFS_SET_ATIME | VFS_SET_MTIME)) {
+        return -EPERM;
+    }
+    if (what & VFS_SET_MODE) {
+        uint32_t base = 0777u & ~em->umask;
+        uint32_t want = st->mode & 07777u;
+
+        if ((want & ~0222u) != (base & ~0222u)) {
+            return -EPERM;
+        }
+    }
+    if (n->is_dir && n->first == em->root) {
+        return 0;
+    }
+    rc = begin_write(mnt, em);
+    if (rc != 0) {
+        return rc;
+    }
+    assert_locked(mnt);
+    if (what & VFS_SET_MODE) {
+        if (st->mode & 0222u) {
+            n->attr = (uint16_t)(n->attr & ~ATTR_READ_ONLY);
+        } else {
+            n->attr |= ATTR_READ_ONLY;
+        }
+    }
+    if (what & VFS_SET_ATIME) {
+        uint16_t date, time;
+
+        fat_stamp(st->atime_sec, &date, &time);
+        n->atime = ((uint32_t)date << 16) | time;
+        n->aoff = 0x80;
+    }
+    if (what & VFS_SET_MTIME) {
+        uint16_t date, time;
+
+        fat_stamp(st->mtime_sec, &date, &time);
+        n->mtime = ((uint32_t)date << 16) | time;
+        n->m10 =
+            (uint8_t)((uint32_t)st->mtime_nsec / 10000000u % 200u); /* nanoseconds fit 32 bits */
+        n->moff = 0x80;
+    }
+    rc = node_publish(em, n);
+    vfs_ns_unlock(mnt);
+    return rc;
+}
+
+static int ex_fsync(struct vfs_mount *mnt, void *handle)
+{
+    (void)handle;
+    return bcache_sync(em_of(mnt)->dev);
+}
+
+/* The main boot sector's flags and percent in use, written through; the
+ * backup region is never written, and the checksum skips these bytes. */
+static int write_boot_state(struct ex_mount *em, int dirty)
+{
+    uint8_t flags[2], percent;
+    uint32_t used = em->free_known ? em->clusters - em->free_clusters : 0;
+    int rc;
+
+    flags[0] = (uint8_t)((em->active_fat & 1) | (dirty ? 2 : 0));
+    flags[1] = 0;
+    rc = ex_write_bytes(em, 106, flags, 2, 1);
+    if (rc != 0) {
+        return rc;
+    }
+    {
+        uint32_t per = em->clusters / 100u; /* 32-bit arithmetic: no libgcc */
+
+        percent = (uint8_t)(em->free_known && per ? used / per : 0xFF);
+        if (percent > 100) {
+            percent = 100;
+        }
+    }
+    return ex_write_bytes(em, 112, &percent, 1, 1);
+}
+
+static int ex_sync(struct vfs_mount *mnt)
+{
+    struct ex_mount *em = em_of(mnt);
+    int rc;
+
+    if (!em->writable) {
+        return 0;
+    }
+    vfs_ns_lock(mnt);
+    if (!em->dirty_set) {
+        vfs_ns_unlock(mnt);
+        return 0;
+    }
+    rc = bcache_sync(em->dev);
+    if (rc == 0) {
+        rc = write_boot_state(em, 1);
+    }
+    vfs_ns_unlock(mnt);
+    return rc;
+}
+
+/* The clean unmount: every dirty buffer written, the percent in use, then
+ * the dirty bit cleared last. A failure leaves the volume marked dirty
+ * and the mount where it was. */
+static int ex_prepare_unmount(struct vfs_mount *mnt)
+{
+    struct ex_mount *em = em_of(mnt);
+    int rc;
+
+    if (!em->writable || (mnt->flags & VFS_MS_RDONLY) || !em->dirty_set) {
+        return 0;
+    }
+    rc = bcache_sync(em->dev);
+    if (rc == 0) {
+        rc = write_boot_state(em, 0);
+    }
+    if (rc != 0) {
+        return rc;
+    }
+    em->dirty_set = 0;
+    return 0;
+}
+
+/* The path of a directory node within the mount, from the parents the
+ * nodes remember and the names their sets carry, up to the root. */
+static int ex_path(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
+{
+    struct ex_mount *em = em_of(mnt);
+    struct ex_node *n = node;
+    uint32_t cluster = n->first;
+    char rev[VFS_NAME_MAX * 2 + 2];
+    uint32_t len = 0, steps = 0;
+
+    if (cap < 2) {
+        return -ENAMETOOLONG;
+    }
+    buf[0] = '\0';
+    while (cluster != em->root && steps++ < 64) {
+        struct ex_node *cur = node_find(em, 1, 0, 0, cluster);
+        struct ex_node parent;
+        struct ex_set set;
+        uint32_t cursor = 0, parent_cluster;
+        int rc, found = 0;
+
+        if (!cur) {
+            rc = find_dir(em, mnt->root, cluster, &cur);
+            if (rc != 0) {
+                return rc;
+            }
+        }
+        parent_cluster = cur->parent;
+        ex_put(mnt, cur);
+        k_memset(&parent, 0, sizeof(parent));
+        parent.is_dir = 1;
+        parent.first = parent_cluster == 0 ? em->root : parent_cluster;
+        if (parent_cluster != 0) {
+            struct ex_node *pn = node_find(em, 1, 0, 0, parent_cluster);
+
+            if (!pn) {
+                rc = find_dir(em, mnt->root, parent_cluster, &pn);
+                if (rc != 0) {
+                    return rc;
+                }
+            }
+            parent.nofat = pn->nofat;
+            parent.length = pn->length;
+            ex_put(mnt, pn);
+        }
+        for (;;) {
+            rc = dir_scan(em, &parent, &cursor, &set);
+            if (rc <= 0) {
+                break;
+            }
+            if ((le16(set.file + 4) & ATTR_DIRECTORY) && le32(set.stream + 20) == cluster) {
+                found = 1;
+                break;
+            }
+        }
+        if (rc < 0) {
+            return rc;
+        }
+        if (!found) {
+            return -ENOENT;
+        }
+        rc = fat_units_utf8(set.units, set.count, rev, sizeof(rev));
+        if (rc != 0) {
+            return rc;
+        }
+        {
+            uint32_t l = k_strlen(rev);
+            char tmp[VFS_NAME_MAX * 2 + 2];
+
+            if (len + l + 1 >= cap) {
+                return -ENAMETOOLONG;
+            }
+            k_strncpy(tmp, buf, sizeof(tmp));
+            k_memcpy(buf, "/", 1);
+            k_memcpy(buf + 1, rev, l);
+            k_memcpy(buf + 1 + l, tmp, len);
+            len += l + 1;
+            buf[len] = '\0';
+        }
+        cluster = parent_cluster == 0 ? em->root : parent_cluster;
+    }
+    if (len == 0) {
+        buf[0] = '/';
+        buf[1] = '\0';
+    }
+    return 0;
+}
+
 static const struct vfs_ops exfat_ops = {
-    ex_lookup,  0,                         /* lookup_rest */
-    ex_hold,    ex_put,     ex_getattr, 0, /* setattr */
-    ex_open,    ex_release, ex_read,    0, /* write */
-    0,                                     /* truncate */
-    0,                                     /* fsync */
-    ex_readdir, 0,                         /* create */
-    0,                                     /* unlink */
-    0,                                     /* mkdir */
-    0,                                     /* rmdir */
-    0,                                     /* rename */
-    0,                                     /* link */
-    0,                                     /* readlink */
-    ex_statfs,  0,                         /* sync */
-    0,                                     /* prepare_unmount */
-    ex_unmount, 0,                         /* path */
+    ex_lookup, 0, /* lookup_rest */
+    ex_hold,   ex_put,   ex_getattr,         ex_setattr, ex_open,    ex_release,
+    ex_read,   ex_write, ex_truncate,        ex_fsync,   ex_readdir, ex_create,
+    ex_unlink, ex_mkdir, ex_rmdir,           ex_rename,  0, /* link */
+    0,                                                      /* readlink */
+    ex_statfs, ex_sync,  ex_prepare_unmount, ex_unmount, ex_path,
 };
 
 const struct vfs_type vfs_exfat_type = {"exfat", ex_mount, &exfat_ops};
