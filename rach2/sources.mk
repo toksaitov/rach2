@@ -39,6 +39,7 @@ C_SRC = kernel.c \
     sys/fs/fatcommon.c \
     sys/fs/exfat.c \
         sys/block/mbr.c \
+        sys/block/gpt.c \
         sys/block/ata.c \
         sys/block/diskcmd.c \
         sys/block/recovery.c \
