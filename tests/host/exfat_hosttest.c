@@ -1326,6 +1326,144 @@ static void matrix_pass(void)
     printf("exfat_hosttest: %d stops walked\n", total);
 }
 
+/* ---- the dirty rows ---- */
+
+static unsigned char image_before[IMG_BYTES];
+
+/* A volume under the dirty bit mounted writable: the check runs, repairs
+   or refuses. `want_ro` says which; `what` names the row. */
+static void dirty_mount(const char *opt, int want_ro, const char *what)
+{
+    load(opt);
+    memcpy(image_before, image, (unsigned long)image_sectors * 512);
+    check(mount_rw() == 0 && ((mnt.flags & VFS_MS_RDONLY) != 0) == want_ro, what);
+}
+
+static void dirty_rows(void)
+{
+    int err;
+    void *n;
+    struct vfs_statfs sf;
+    static const char *const faults[] = {"--dirty-overlap",
+                                         "--dirty-short-stream",
+                                         "--dirty-reached-free",
+                                         "--dirty-wrong-name-length",
+                                         "--dirty-critical",
+                                         "--dirty-dup",
+                                         "--dirty-loop",
+                                         "--dirty-chain-out",
+                                         "--dirty-hash-and-checksum"};
+    static const char *const repairs[] = {"--dirty-bad-set-checksum", "--dirty-orphan",
+                                          "--dirty-surplus"};
+    unsigned f;
+    int k;
+
+    dirty_mount("--dirty", 0, "a dirty volume with a clean tree mounts writable");
+    check(image[106] & 2, "with its bit still set");
+    check(OPS->prepare_unmount(&mnt) == 0, "its clean unmount");
+    unmount_image();
+    check(!(image[106] & 2), "and the bit clears only then");
+    check_consistent("the clean tree is clean after", 0);
+
+    dirty_mount("--dirty-bad-set-checksum", 0,
+                "a set failing only its checksum is repaired and the volume mounts writable");
+    check_bytes("/hello.txt", (const unsigned char *)"hello exfat\n", 12,
+                "and the file is reachable");
+    check(OPS->prepare_unmount(&mnt) == 0, "its clean unmount");
+    unmount_image();
+    check_consistent("and the walk finds the checksum right", 0);
+
+    dirty_mount("--dirty-orphan", 0, "orphan secondaries are freed and the volume mounts writable");
+    check(OPS->prepare_unmount(&mnt) == 0, "its clean unmount");
+    unmount_image();
+    check_consistent("and the walk finds no orphan", 0);
+
+    dirty_mount("--dirty-surplus", 0, "a surplus tail is freed and the volume mounts writable");
+    n = walk("/chained.bin", &err);
+    check(n && read_all(n, back, sizeof(back)) == 12288, "the file the tail hung off reads");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    check(OPS->prepare_unmount(&mnt) == 0, "its clean unmount");
+    unmount_image();
+    check_consistent("and the walk finds no surplus and no lost cluster", 0);
+
+    dirty_mount("--dirty-lost", 0, "a lost chain leaves the volume writable");
+    check(OPS->statfs(&mnt, &sf) == 0 && sf.bfree == 4064 - 23, /* 21 of the fixture, 2 lost */
+          "with the chain counted as allocated");
+    check(OPS->prepare_unmount(&mnt) == 0, "its clean unmount");
+    unmount_image();
+    check(memcmp(image_before + 512, image + 512, (unsigned long)image_sectors * 512 - 512) == 0,
+          "and nothing but the boot state written: the chain's bytes are intact");
+    {
+        int rc = run_check(check_out, sizeof(check_out));
+
+        check(rc != 0 && strstr(check_out, "lost: 2 cluster(s)") && findings_allowed(check_out),
+              "which the walk counts as lost and nothing else");
+    }
+
+    for (f = 0; f < sizeof(faults) / sizeof(faults[0]); f++) {
+        char what[160];
+
+        snprintf(what, sizeof(what), "%s mounts read-only with the fault named", faults[f]);
+        dirty_mount(faults[f], 1, what);
+        check(memcmp(image_before, image, (unsigned long)image_sectors * 512) == 0,
+              "and the image is untouched");
+        unmount_image();
+    }
+
+    /* The recursive matrix: each repair's write a stop; the state left is
+       one the walk allows, the files reachable. */
+    for (f = 0; f < sizeof(repairs) / sizeof(repairs[0]); f++) {
+        int nwrites;
+
+        load(repairs[f]);
+        stop_after = -1;
+        writes_made = 0;
+        if (mount_rw() != 0) {
+            check(0, "the repair matrix's volume mounts");
+            return;
+        }
+        nwrites = writes_made;
+        OPS->put(&mnt, mnt.root);
+        OPS->unmount(&mnt);
+        for (k = 1; k < nwrites; k++) {
+            char what[160];
+
+            load(repairs[f]);
+            writes_made = 0;
+            stop_after = k;
+            (void)mount_rw(); /* the check's write fails at the stop: read-only, or refused */
+            if (mnt.root) {
+                OPS->put(&mnt, mnt.root);
+                OPS->unmount(&mnt);
+            }
+            run_check(check_out, sizeof(check_out));
+            load_dump();
+            snprintf(what, sizeof(what),
+                     "%s stopped after repair write %d of %d leaves a state the walk allows",
+                     repairs[f], k, nwrites);
+            check(findings_allowed(check_out), what);
+            if (!findings_allowed(check_out)) {
+                printf("exfat_hosttest: the check said:\n%s", check_out);
+            }
+            snprintf(what, sizeof(what),
+                     "%s stopped after repair write %d of %d still reads its files", repairs[f], k,
+                     nwrites);
+            if (mount_image(VFS_MS_RDONLY, "") == 0) {
+                n = walk("/chained.bin", &err);
+                check(n && read_all(n, back, sizeof(back)) >= 4096, what);
+                if (n) {
+                    OPS->put(&mnt, n);
+                }
+                unmount_image();
+            } else {
+                check(0, what);
+            }
+        }
+    }
+}
+
 int main(void)
 {
     proc_a.pid = 1;
@@ -1336,6 +1474,7 @@ int main(void)
     external_rows();
     write_rows();
     matrix_pass();
+    dirty_rows();
     if (fails == 0) {
         printf("exfat_hosttest: OK\n");
         return 0;
