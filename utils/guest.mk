@@ -45,6 +45,9 @@ httpd: httpd.c
 	$(UCC) $(UFLAGS) -o httpd httpd.c
 halt: halt.c
 	$(UCC) $(UFLAGS) -o halt halt.c
+
+update: update.c
+	$(UCC) $(UFLAGS) -o update update.c
 sudo: sudo.c
 	$(UCC) $(UFLAGS) -o sudo sudo.c
 ping: $(SRC_ping) $(HDR_ping)

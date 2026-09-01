@@ -95,6 +95,8 @@ tree 0644 /src/ish ish
 # after the identity drop.
 dir 0755 /sbin
 file 0755 /sbin/init build/utils/sbin/init-login
+# The periodic sync init keeps running: sleep thirty seconds, sync(2), for ever.
+file 0755 /bin/update build/utils/update
 
 # bootctl puts a machine-built kernel into the boot partition's
 # candidate slot as a one-boot trial (dev-log/23-install/plan.md). It is

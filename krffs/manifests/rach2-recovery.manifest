@@ -39,6 +39,8 @@ file 0755 /bin/dropbearmulti build/vendor/dropbear/dropbearmulti
 
 dir 0755 /sbin
 file 0755 /sbin/init build/utils/sbin/init-metal
+# The periodic sync init keeps running: sleep thirty seconds, sync(2), for ever.
+file 0755 /bin/update build/utils/update
 
 dir 0755 /etc
 dir 0700 /etc/dropbear

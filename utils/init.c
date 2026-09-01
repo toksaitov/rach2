@@ -382,9 +382,32 @@ static void clear_var_run(void)
     closedir(d);
 }
 
+/**
+ * Start the periodic sync (`/bin/update`), which sleeps thirty seconds and
+ * calls sync(2) for ever, so written data reaches the disk without anyone
+ * asking. Returns its pid, or -1 when the fork failed.
+ */
+static pid_t spawn_update(void)
+{
+    pid_t pid = fork();
+
+    if (pid != 0) {
+        return pid;
+    }
+    {
+        char *argv[2];
+
+        argv[0] = (char *)"update";
+        argv[1] = 0;
+        execve("/bin/update", argv, environ);
+        _exit(127);
+    }
+}
+
 int main(void)
 {
     pid_t shell = -1;
+    pid_t updater = -1;
     time_t spawned = 0;
 #ifdef INIT_METAL
     pid_t sshd = -1;
@@ -416,6 +439,9 @@ int main(void)
                 continue;
             }
             spawned = time(0);
+        }
+        if (updater < 0) {
+            updater = spawn_update(); /* a failed fork is retried next round */
         }
 
 #ifdef INIT_METAL
@@ -454,6 +480,11 @@ int main(void)
         reaped = waitpid(-1, &status, WUNTRACED);
         if (reaped > 0 && WIFSTOPPED(status)) {
             kill(reaped, SIGCONT);
+            continue;
+        }
+        if (reaped > 0 && reaped == updater) {
+            updater = -1; /* respawned next round, after a pause below */
+            sleep(1);
             continue;
         }
 #ifdef INIT_METAL

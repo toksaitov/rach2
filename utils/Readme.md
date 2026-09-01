@@ -67,7 +67,7 @@ The selected output directory contains three builds of `init.c`:
 * `init-login` starts only `/bin/login`. It contains no shell fallback.
 * `init-metal` has the same console login and also configures userland networking when the boot line has `rach2.ip=none`, then supervises foreground Dropbear.
 
-All three clear one level of `/var/run` at boot, reap orphaned children, continue stopped children, respawn the console session, and translate `SIGUSR1`, `SIGUSR2`, and `SIGTERM` into halt, poweroff, and restart. A strict init that cannot exec `/bin/login` retries after a delay. Booting with `rach2.rescue` enters the kernel debug shell instead.
+All three clear one level of `/var/run` at boot, start `/bin/update` and keep it running, reap orphaned children, continue stopped children, respawn the console session, and translate `SIGUSR1`, `SIGUSR2`, and `SIGTERM` into halt, poweroff, and restart. `update` is the periodic sync: it sleeps thirty seconds and calls `sync(2)`, for ever, so data written back through the buffer cache reaches the disk within that time whether or not a program asks. A strict init that cannot exec `/bin/login` retries after a delay. Booting with `rach2.rescue` enters the kernel debug shell instead.
 
 The remaining account and system programs are:
 
