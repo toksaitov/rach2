@@ -89,6 +89,12 @@ $(PCAPCHECK): tests/system/checkers/pcapcheck.c
 $(MKFIXTURE): tests/system/fixtures/mkfixture.c
 	@mkdir -p $(dir $@)
 	cc -O2 -Wall -Wextra -o $@ $<
+# The FAT32 fixture builder and its volume check (tests/host/mkfatfixture.c):
+# the suites walk a volume the kernel wrote with `--check`.
+MKFATFIXTURE = build/tests/host/mkfatfixture
+$(MKFATFIXTURE): tests/host/mkfatfixture.c
+	@mkdir -p $(dir $@)
+	cc -O2 -Wall -Wextra -o $@ $<
 # The host end of a connection (tests/system/runner/hostpeer.c): the live TCP
 # connection procfiles looks for in /proc/net/tcp, and the echo server the
 # socket suite sends to.
@@ -969,6 +975,14 @@ MOUNT_DISK = build/images/mount-test.disk
 run-mount: $(DEMO_CREDS) rach2 tests krffs os-real-image $(MKFIXTURE) $(HARNESS)
 	sh tests/system/suites/mount.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(MOUNT_DISK) \
 	    $(OS_REAL_IMAGE) "`cat krffs/rach2_demo_password`"
+
+# `tests/run fatwrite`: FAT32 written from a program, read back after a
+# reboot, judged by the host's walk and mtools, taken through a crash and its
+# repair, written from BusyBox, and written by two processes under the lag.
+FATWRITE_DISK = $(IMAGES_DIR)/fatwrite-test.disk
+run-fatwrite: $(DEMO_CREDS) rach2 tests krffs os-real-image $(MKFATFIXTURE) $(HARNESS)
+	sh tests/system/suites/fatwrite.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(FATWRITE_DISK) \
+	    $(OS_REAL_IMAGE) "`cat krffs/rach2_demo_password`" $(MKFATFIXTURE)
 
 run-usb: rach2 tests krffs test-image $(HARNESS)
 	sh tests/system/suites/usb.sh $(HARNESS_KERNEL) $(TEST_IMAGE) $(HARNESS)
