@@ -17,6 +17,7 @@
 #include "bcache.h"
 #include "devfs.h"
 #include "fat32.h"
+#include "exfat.h"
 #include "krffs.h"
 #include "synthfs.h"
 
@@ -1311,7 +1312,7 @@ void vfs_init(void)
 
 /* The types mount(2) accepts, by the name it spells; the permanent three
  * are not here because nothing mounts them by name. */
-static const struct vfs_type *const mount_types[] = {&vfs_vfat_type, 0, 0, 0};
+static const struct vfs_type *const mount_types[] = {&vfs_vfat_type, &vfs_exfat_type, 0, 0};
 
 static const struct vfs_type *type_named(const char *name)
 {

@@ -38,7 +38,7 @@ Additional targets build persistent disks, GRUB images, metal images, and recove
 
 The [kernel](rach2/Readme.md) boots through Multiboot1 and runs static ELF32 programs in ring 3. It implements preemptive processes, paged address spaces, files, pipes, terminals, signals, and sockets through a Linux i386-style system call interface. The kernel Readme indexes the subsystem documents.
 
-[KRFFS](rach2/sys/fs/Readme.md) is the native hierarchical file system. The kernel can mount it directly from a RAM module or from an ATA or AHCI disk through a write-back page cache, and a program with root's privilege can mount a FAT32 partition of the same disk with `mount(2)`, for reading and writing ([the VFS](rach2/sys/fs/vfs.Readme.md)). The [KRFFS host tools](krffs/Readme.md) build, inspect, repair, and mount its images.
+[KRFFS](rach2/sys/fs/Readme.md) is the native hierarchical file system. The kernel can mount it directly from a RAM module or from an ATA or AHCI disk through a write-back page cache, and a program with root's privilege can mount a FAT32 partition of the same disk with `mount(2)`, for reading and writing, and an exFAT partition for reading ([the VFS](rach2/sys/fs/vfs.Readme.md)). The [KRFFS host tools](krffs/Readme.md) build, inspect, repair, and mount its images.
 
 The [network stack](rach2/sys/network/Readme.md) implements Ethernet, ARP, IPv4, ICMP, UDP, and TCP for RTL8139, Intel 82540EM, and RTL8168GU devices. The two userlands include DHCP and DNS clients, ping, netcat, and a small HTTP server; `os-real` also runs Dropbear SSH.
 
