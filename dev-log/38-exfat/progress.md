@@ -14,8 +14,8 @@ Phase 3: the reader in the kernel, and the gate
 - [x] the external images mount and list their manifests (the gate); eleven mutations; the gate review round
 
 Phase 4: the writer
-- [ ] the dirty bit, allocation, the order of writes, the set protocols, NoFatChain, ValidDataLength, every mutating operation
-- [ ] the write rows and the interruption matrix with the content oracle; the mutations
+- [x] the dirty bit, allocation, the order of writes, the set protocols, NoFatChain, ValidDataLength, every mutating operation
+- [x] the write rows and the interruption matrix with the content oracle; the mutations
 
 Phase 5: the dirty-volume check
 - [ ] the seeded walk, the bitmap comparison, the three repairs, the recursive matrix, the dirty rows; the mutations

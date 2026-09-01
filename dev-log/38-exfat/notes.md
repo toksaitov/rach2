@@ -255,6 +255,85 @@ on the gate. The tail mutant's first form looped rather than failed (a
 read of zero bytes at the valid length never advanced), which the
 watchdog ended; its second form reads the disk and fails the row.
 
+## Phase 4 record
+
+The writer: the dirty bit written to the main boot sector when a
+writable mount is constructed and cleared last by the clean unmount;
+allocation first-fit in the bitmap from the hint, `ENOSPC` before any
+write; the order of writes with the bitmap in the FAT's place; the set
+protocols (secondaries first, the file entry last with the checksum over
+the published set; a new set's file and stream entries in one sector,
+an inactive filler where the run would end a sector; a straddling set's
+two writes, stream first); `NoFatChain` conversion before a contiguous
+file or directory grows; `ValidDataLength` in every transition; every
+mutating operation with the reclamation at the last put; frozen
+directories; `path` for directory descriptors. What the rows found:
+
+* A write through a description of an unlinked file republished its
+  retired set; an unlinked node publishes nothing.
+* A cross-directory rename computed the new set's checksum over the
+  inactive file entry it wrote first, so the entry it published last did
+  not match; the checksum is over the published set, and the in-use bit
+  is cleared in the written bytes alone.
+* The matrix counted the mount's own dirty-bit write as a stop; the
+  count starts after the mount.
+* The state between a chain's join and the length's publish is a surplus
+  tail, one of the three repairs the check makes; the host reader names
+  it and the matrix allows it, beside lost clusters, orphan secondaries
+  and a checksum-only set.
+
+The host reader classifies what a stop leaves: an in-use secondary
+outside a set is an orphan (counted per directory), a set whose only
+fault is its checksum is "checksum-only", and a FAT chain longer than
+its length is a surplus. `--junk` fills every free cluster with bytes
+nobody wrote, so the oracle sees a length published before its data.
+
+The matrix: ten sequences (create, extend across a cluster, a gap of
+zeros across a cluster, truncate down to nothing and up again, unlink
+held and written through while another file is written, mkdir with a
+file and rmdir, rename in place, across and over, the fixture's
+contiguous file grown through the conversion, a change to the fixture's
+straddling set, a write past another writer's valid length over junk),
+137 stops, each walked by the reader and read by the oracle with the
+fixture's own files intact. Two rows read the disk for what the matrix
+cannot see: no file entry of a set this driver makes in a sector's last
+slot (over the root's first two clusters, past the fixture's entries),
+and the backup boot region byte for byte while the dirty bit is on and
+after the clean unmount.
+
+`fsck_exfat` on this host over what the rows left (one image per
+sequence after its clean unmount, and one per sequence stopped before
+its last write): every clean volume "appears to be OK"; every stop gets
+the diagnosis its state implies, read without modifying (a bitmap to
+repair for lost clusters, a chain with too many clusters for its size
+for a surplus, unexpected secondary entries for orphans, an incorrect
+checksum for the straddling set's half-written change), and after the
+checker repairs a copy, both it and `--check` call the copy clean.
+
+The plan's thirteen writer mutations, through mutate38p4.sh and its
+reruns: publish a file entry before its name entries; write a
+straddling set's file entry before its stream; place a new set across a
+sector boundary; change a frozen directory; clear NoFatChain before the
+run is in the FAT; raise ValidDataLength over an unzeroed gap; preserve
+ValidDataLength through a shrink; allocate without setting the bitmap
+bit; free a held node's clusters at unlink; free bitmap bits before the
+file entry is inactive; hash a name without up-casing it; write the
+flags into the backup boot sector; set the dirty bit at the first write
+instead of at mount. Twelve caught. The second cannot be: under a 4 KiB
+block cache a straddling set's two sectors lie in one block, and a stop
+between the two writes of either order leaves a set whose checksum
+alone fails, which the check repairs to a consistent volume, with the
+change in one order and without it in the other; the two are
+legitimate outcomes of a crash and no row can prefer one. The
+convention stands (the stream's sector first, the file entry's last)
+and is proved by reading `set_store`. Four needed a row the matrix
+could not provide: the placement rule read from the root's raw entries;
+the gap zeroed inside another writer's file with junk past its valid
+length (`valid.bin`, the vdl sequence); a held unlinked file's clusters
+not reused by a file written meanwhile; and the backup region compared
+while the dirty bit is on, since the clean unmount put the mutant's
+byte back before the first form of the row looked.
+
 ## Open items
 
 (none)
