@@ -9,10 +9,10 @@ Phase 1: arrival and inventory
 - [x] the fourth partition's procedure written under the disk rule, in hardware.md
 
 Phase 2: the cache writes
-- [ ] bcache_write, the write rules, the failure record, the read-only transition
-- [ ] fsync and sync through the mounts; the update child in init
-- [ ] the fault injector in the host fake device; rach2.blockfail
-- [ ] bcache_hosttest write rows; phase mutations; phase gate
+- [x] bcache_write, the write rules, the failure record, the read-only transition
+- [x] fsync and sync through the mounts; the update child in init
+- [x] the fault injector in the host fake device; rach2.blockfail
+- [x] bcache_hosttest write rows; phase mutations; phase gate
 
 Phase 3: the writer
 - [ ] the lock, allocation, the free count

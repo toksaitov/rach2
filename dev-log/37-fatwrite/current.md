@@ -1,4 +1,4 @@
-Phase 1 done; phase 2 (the cache writes) is next.
-Evidence gathered: fatcheck_hosttest green over every fixture; the mtools table and the partition procedure recorded.
-Next action: bcache_write, the write rules, the failure record and the read-only transition, fsync and sync through the mounts, the init updater, the fault injector, rach2.blockfail.
-File being read when written: dev-log/37-fatwrite/plan.md, phase 2.
+Phase 2 done; phase 3 (the writer) is next.
+Evidence gathered: the cache's write rows green; three mutations caught; the updater boot by hand (ps shows update, a file reaches the disk in forty seconds with no sync call); gate green (style, host, default, mount, persist, ssh, metal).
+Next action: the mount's lock over every mutation, allocation and the free count, the order of writes, the dirty flag and FSInfo, both FATs, the node pool's rename update and deferred reclamation, the mount-time check and its repairs.
+File being read when written: dev-log/37-fatwrite/plan.md, phase 3.
