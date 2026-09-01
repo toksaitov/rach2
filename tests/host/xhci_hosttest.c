@@ -1511,8 +1511,7 @@ int main(void)
         ep.interval = 0;
         CHECK("a bulk out endpoint is opened", xhci_endpoint_open(1, &ep) == 0);
         entry = (uint32_t *)(void *)&input_ctx[(dci_of(&ep) + 1u) * 64u];
-        CHECK("with the context type a bulk out endpoint has",
-              ((entry[1] >> 3) & 7u) == 2u);
+        CHECK("with the context type a bulk out endpoint has", ((entry[1] >> 3) & 7u) == 2u);
         CHECK("and the packet size the descriptor gave", (entry[1] >> 16) == 512u);
         xhci_events();
         CHECK("the controller answers", xhci_command_done(&result) == 1);
@@ -1520,8 +1519,7 @@ int main(void)
         ep.direction = USB_DIR_IN;
         CHECK("a bulk in endpoint is opened", xhci_endpoint_open(1, &ep) == 0);
         entry = (uint32_t *)(void *)&input_ctx[(dci_of(&ep) + 1u) * 64u];
-        CHECK("with the context type a bulk in endpoint has",
-              ((entry[1] >> 3) & 7u) == 6u);
+        CHECK("with the context type a bulk in endpoint has", ((entry[1] >> 3) & 7u) == 6u);
         xhci_events();
         CHECK("the controller answers", xhci_command_done(&result) == 1);
 
@@ -1531,8 +1529,7 @@ int main(void)
               xhci_endpoint_open(1, &ep) == 0);
         entry = (uint32_t *)(void *)&input_ctx[(dci_of(&ep) + 1u) * 64u];
         CHECK("at its own index", dci_of(&ep) == 17);
-        CHECK("with the packet size a full-speed endpoint has",
-              (entry[1] >> 16) == 64u);
+        CHECK("with the packet size a full-speed endpoint has", (entry[1] >> 16) == 64u);
         xhci_events();
         CHECK("the controller answers", xhci_command_done(&result) == 1);
 
@@ -1543,8 +1540,7 @@ int main(void)
         ep.interval = 10;
         CHECK("an interrupt endpoint beside them is opened", xhci_endpoint_open(1, &ep) == 0);
         entry = (uint32_t *)(void *)&input_ctx[(dci_of(&ep) + 1u) * 64u];
-        CHECK("with the context type an interrupt in endpoint has",
-              ((entry[1] >> 3) & 7u) == 7u);
+        CHECK("with the context type an interrupt in endpoint has", ((entry[1] >> 3) & 7u) == 7u);
         xhci_events();
         CHECK("the controller answers", xhci_command_done(&result) == 1);
     }
@@ -1571,8 +1567,7 @@ int main(void)
         CHECK("a second transfer is queued", xhci_submit(1, 3, &transfer) == 0);
         xhci_events();
         CHECK("its completion is reported", xhci_poll(&completion) == 1);
-        CHECK("with the second generation and not the first",
-              completion.generation == 0x52);
+        CHECK("with the second generation and not the first", completion.generation == 0x52);
     }
 
     /* A completion for a device that has been closed is dropped: the slot may
@@ -1593,8 +1588,7 @@ int main(void)
            driver reads it, which is what a stick pulled mid-transfer is. */
         xhci_device_closed(1);
         xhci_events();
-        CHECK("a completion for a device that has gone is dropped",
-              xhci_poll(&completion) == 0);
+        CHECK("a completion for a device that has gone is dropped", xhci_poll(&completion) == 0);
     }
 
     /* Every slot the tables hold, and one more. The notebook has four devices
