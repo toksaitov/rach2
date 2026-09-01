@@ -1,4 +1,4 @@
-Phase 3, first item: vfs.h and the mount table.
-Evidence gathered: phase 2 complete; suites green; mutations proved (notes.md).
-Next action: reread the plan's phase 3 and interface sections, then write vfs.h.
-File being read when written: dev-log/36-mount/plan.md.
+Phase 5 done; the review round is next, then phase 6.
+Evidence gathered: mount suite green (eight boots), ten mutations caught, the phase gate green.
+Next action: launch the review units from notes.md (at most five at once), fix every finding, then the sweep.
+File being read when written: dev-log/36-mount/notes.md.

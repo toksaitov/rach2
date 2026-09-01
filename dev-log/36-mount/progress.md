@@ -38,10 +38,10 @@ Phase 4: FAT32 read-only
 - [ ] phase mutations; phase gate
 
 Phase 5: mount
-- [ ] mount/umount2, flags enforced, order of work, claims, /proc/mounts, /proc/filesystems
-- [ ] mountprobe, lagprobe mounted half, vfsprobe through a mount
-- [ ] suites/mount.sh, tests/run mount in core tier; BusyBox boot; mdir/mcopy comparison
-- [ ] phase mutations; phase gate
+- [x] mount/umount2, flags enforced, order of work, claims, /proc/mounts, /proc/filesystems
+- [x] mountprobe, lagprobe mounted half, vfsprobe through a mount
+- [x] suites/mount.sh, tests/run mount in core tier; BusyBox boot; mdir/mcopy comparison
+- [x] phase mutations; phase gate
 - [ ] review round: whole diff in parallel units (max 5), proofread unit, re-review only for contract changes
 
 Phase 6: the record and the sweep

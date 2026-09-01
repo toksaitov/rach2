@@ -134,3 +134,58 @@ pooled targets rebuild the kernel from the working tree, so forty suites
 failed in a second each on a tree that did not compile. The full set runs
 only on a quiescent tree; the run owed after phase 3 comes with phase 4's
 gate.
+
+## Phase 5 record
+
+What the rows found, and what was decided:
+
+* The suite's FAT volume must be formatted to its partition's size
+  (`mformat -T 28672`); mtools otherwise sizes the volume to the rest of
+  the image and the driver refuses total sectors past the partition.
+* The boot-fixture disk's partition is a byte pattern, not a FAT volume, so
+  the claim boot uses the suite's disk with its MBR entries swapped: entry
+  0, the boot partition, is the FAT volume, and /dev/bootpart and
+  /dev/disk0p1 name one range under two names, which is what the claims
+  compare.
+* vfat entries report 0777 less the umask, as vfat on Linux does; the plan's
+  "0644 for files" would have made nothing on a volume executable, and the
+  noexec row (a mode that would allow it) needs the Linux rule.
+* The busy-buffer row found a cache defect: a buffer was keyed and held
+  only after its fill, so two concurrent misses for one block both filled,
+  two buffers for one block. The buffer is now claimed before the request.
+* /proc/disk prints the cache counters whatever the disk's state, since a
+  mount can be on any device the cache reads.
+* The common layer learnt a second type: stat, access, open, chdir, chmod,
+  chown, utimensat, the namespace changes, statfs and execve read a node on
+  a mount that is not the root through its getattr and answer through the
+  vfs wrappers; the root's nodes keep their KRFFS fast paths. execve loads
+  an ELF image on another type through the mount; a script there answers
+  ENOEXEC, because the shebang reader is the root's.
+* The "vfsprobe through a mount" rows live in mountprobe: the read-only
+  mount refuses the write-side rows, and the read-side rows (ENOENT,
+  ENOTDIR, `..` out of the mount and back, openat through a directory
+  descriptor, statfs) run there.
+* fcntl is syscall 221 and setuid 213 on this kernel; the 16-bit numbers
+  are not implemented, which mountprobe learnt the hard way.
+* The mutation "open per descriptor instead of per description" is proved
+  here through the unmount record (mount.sh's awk over the records).
+
+Phase 5 mutations, proved once each through the restoring script (kernel
+rebuilt per mutant, verified by its mtime, one boot each):
+
+* umount2 with a description open in another process: caught by mountprobe
+* a working directory inside an unmounted mount: caught by mountprobe
+* MNT_DETACH accepted: caught by mountprobe
+* rename across mounts: caught by mountprobe
+* the raw writer opened over a mounted range: caught by the claim boot
+* a second mount over a claimed range: caught by mountprobe
+* a program run from a noexec mount: caught by mountprobe
+* rmdir of a target while the constructor sleeps: caught by the lag mounted
+  boot
+* two processes reading one description without the lock: caught by the
+  every-byte-once row of the lag mounted boot
+* the busy-buffer wait dropped: caught by the counter row of the lag
+  mounted boot
+
+The phase gate: style, host, default, authority, bootpart, diskdiag,
+procfiles and mount green on the tree before the commits.
