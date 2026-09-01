@@ -334,6 +334,55 @@ not reused by a file written meanwhile; and the backup region compared
 while the dirty bit is on, since the clean unmount put the mutant's
 byte back before the first form of the row looked.
 
+## Phase 5 record
+
+The check: the seeded walk (the root's chain, the bitmap's, the up-case
+table's) under the bitmap the FAT drivers share, every set checked as
+the reader checks it with a checksum-only failure told apart from a
+fault, chains marked against the volume's bitmap both ways, the three
+repairs after the whole walk (a set's checksum rewritten, orphan
+secondaries written inactive, surplus tails detached at the last cluster
+the length justifies and then freed), the lost count left, and the free
+count taken from the bitmap after. What the rows found:
+
+* The walk re-read a parent's sets after a subdirectory to rebuild its
+  name table, and marked the child's chain twice; the names of the path's
+  directories are segments of one table, the parent's kept while the
+  child walks.
+* The root's chain, which no entry gives a length, was walked as a
+  chain of length zero and its first cluster recorded as surplus, which
+  the repair would have freed; a chain with no length is followed to its
+  end and never surplus.
+* `fsck_exfat` and this check agree on the states a stop leaves: the
+  bitmap to repair (lost), a chain too long for its size (surplus),
+  unexpected secondary entries (orphans), an incorrect set checksum.
+
+Twelve dirty fixtures: `--dirty` over a clean tree, `--dirty-X` for every
+damage X under the dirty bit, and the pure states `--dirty-orphan`,
+`--dirty-surplus`, `--dirty-lost`, `--dirty-dup`, `--dirty-critical` and
+`--dirty-hash-and-checksum`. The rows: a clean tree mounts writable with
+the bit still set, cleared only by the clean unmount; the three
+repairable states mount writable, repaired with the record, the files
+reachable and the walk clean after; a lost chain mounts writable with
+the count, nothing but the boot state written, its bytes intact; nine
+faults mount read-only with the fault named and the image untouched.
+The recursive matrix stops the check after each of its repair writes
+and requires a state the walk allows and the files readable.
+
+The plan's eight check mutations, through mutate38p5.sh and its rerun
+(a reflowed anchor stopped the first run after five): free a lost
+cluster; rewrite the checksum of a set that also fails its name hash;
+treat a checksum-only failure as a fault; free a surplus tail before
+detaching it; skip the reached-but-free comparison; walk without seeding
+the system objects; treat a bad in-use set as skippable; skip the
+up-case comparison for duplicate names. Every one caught by its row: the
+lost chain's bytes and the boot-state-only comparison, the
+hash-and-checksum fixture mounting read-only, the checksum-only fixture
+mounting writable, the surplus fixture's repair matrix (a freed tail
+still linked is a reached cluster whose bit is clear), the reached-free,
+overlap, wrong-name-length and duplicate-name fixtures mounting
+read-only.
+
 ## Open items
 
 (none)

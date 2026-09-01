@@ -18,7 +18,7 @@ Phase 4: the writer
 - [x] the write rows and the interruption matrix with the content oracle; the mutations
 
 Phase 5: the dirty-volume check
-- [ ] the seeded walk, the bitmap comparison, the three repairs, the recursive matrix, the dirty rows; the mutations
+- [x] the seeded walk, the bitmap comparison, the three repairs, the recursive matrix, the dirty rows; the mutations
 
 Phase 6: the suite
 - [ ] tests/run exfat; the checker over every volume written

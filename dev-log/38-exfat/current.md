@@ -1,4 +1,4 @@
-Phase 4 done; phase 5 (the dirty-volume check) is next.
-Evidence gathered: ten sequences, 137 matrix stops walked and read; fsck_exfat's expected answer on every volume the rows left and clean after repairing a copy; twelve of thirteen mutations caught, the thirteenth recorded as one no row can tell; host and style green.
-Next action: the seeded walk for exFAT under the shared bitmap, the bitmap comparison both ways, the three repairs (a checksum-only set, orphan secondaries, surplus tails) and the lost count, the recursive matrix over the repairs, the dirty rows and their fixtures.
-File being read when written: dev-log/38-exfat/plan.md, phase 5.
+Phase 5 done; phase 6 (the suite) is next.
+Evidence gathered: twelve dirty fixtures and their rows, the repair matrix, eight mutations caught; host and style green.
+Next action: tests/run exfat: an exFAT partition on the suite's disk built empty by mkexfatfixture, fatwriteprobe and lagprobe's writers mode given the type, the host reader's --list and --read in mtools' place, fsck_exfat or fsck.exfat where the host has one, BusyBox through the shell; then the checker over every volume the suite wrote.
+File being read when written: dev-log/38-exfat/plan.md, phase 6.
