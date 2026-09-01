@@ -1,0 +1,73 @@
+# Mounts and the VFS
+
+`vfs.h` and `vfs.c` are the mount table, the resolver, and the operation interface every mounted file system answers. Three types are permanent: KRFFS at the root, answered by the adapter at the end of `vfs.c`; and `/dev` and `/proc`, answered by `synthfs.c`. `vfat` (`fat32.c`, [fat32.Readme.md](fat32.Readme.md)) is the one type `mount(2)` places. A mounted file system reads its disk through the buffer cache (`bcache.h`), which reads through the block request described in [block/Readme.md](../block/Readme.md).
+
+## The mount table
+
+The table has eight entries. Entry zero is the root; entries one and two are `/dev` and `/proc`. The three are permanent, and `umount2` on any of them answers `EBUSY`. The other five are placed by `mount(2)` and removed by `umount2(2)`.
+
+A mount point is a node, not a name. The directory a mount covers is held through the parent's `hold` for the mount's life, so it cannot be reached under another spelling, it is what `..` at the mount root climbs to, and it answers `EBUSY` to `unlink`, `rmdir` and `rename` while the mount exists; `mkdir` of that name is `EEXIST`. The entry records the target as `mount(2)` spelled it (63 bytes at most; `ENAMETOOLONG` past that) and the source, for `/proc/mounts` and for the unmount record.
+
+An entry is free, mounting, active or unmounting. Only an active mount takes new work; the two transitional states answer `EBUSY`. A namespace change sees a mounting entry as a mount point already, so a directory cannot be removed or renamed while a constructor sleeps on its device.
+
+## The resolver
+
+Every path-taking syscall calls `vfs_resolve`, which walks one component at a time: one name in one directory on one mount, after the caller's search permission on that directory has been checked in the common layer, once, for every type. `..` is physical: at a mount root it continues at the parent's covered directory, at the root of the root it stays, and anywhere else it is a `lookup` of `..`. A path that names a missing or unsearchable directory before its `..` fails, as on Linux. The spelling `/x/../proc` reaches `/proc` through `/x` when `/x` is a searchable directory and fails otherwise; neither answer bypasses anything.
+
+The resolver crosses into a mount only while the mount is active. `/dev` and `/proc` are reached by name from the root directory, because the root file system has no node for them; nothing else is reached by name.
+
+A resolution returns a `vfs_ref`: the mount and a held node, with the mount's in-progress count taken, so the mount cannot unmount while the caller uses the node. The caller ends with `vfs_ref_release`. `VFS_WALK_PARENT` stops before the last component and returns the held parent with the leaf name copied out, which is where `create`, `unlink`, `mkdir`, `rmdir` and `rename` start; `VFS_WALK_REAL_IDS` charges search permission by the real ids, for `access(2)`.
+
+The two synthetic types are the one exception to component lookup. A type with `lookup_rest` instead of `lookup` is handed the rest of the path in one call, because its namespace is a flat table classified by string. A `..` in that remainder that would climb above the mount root answers `VFS_CLIMB` with the unconsumed remainder, and the resolver continues at the covered directory. Such a type cannot host a mount point; `mount(2)` on a target under `/dev` or `/proc` answers `EINVAL`.
+
+## The operations
+
+`struct vfs_ops` is one set of operations per type. `struct vfs_type` is the name `mount(2)` and `/proc/filesystems` spell, the constructor, and that set. A node handle is the type's own: a place in the image for KRFFS, a pool entry for vfat, a classified path for the synthetic types. Whoever receives a node from `lookup`, `create` or the mount's root owns one hold on it and puts it back; descriptions, working directories and covering mounts keep theirs for as long as they refer to the node.
+
+`open` runs once per successful `open(2)` and `release` once at the description's last close. The handle is the per-open object; a type that needs none returns its node. Every type counts opens and releases, and the record written at unmount, `vfs: unmounted TARGET: N opens, N releases`, reports both. `read`, `write` and `truncate` take the handle and a 64-bit offset. `readdir` fills one entry at a cursor whose meaning is the type's (an image offset for KRFFS, an entry index for vfat) and advances the cursor past it; the caller stores the cursor between calls and does not interpret it. `rename` is within one mount; the common layer answers `EXDEV` across two. `prepare_unmount` writes the volume's last metadata into cache buffers and dismantles nothing, so it can be repeated or abandoned; `unmount` frees the private state and is not undone; the cache is written between them.
+
+An operation a type does not implement is a NULL pointer, and the wrapper in `vfs.c` answers for it: `EROFS` for the write-side operations (`write`, `truncate`, `setattr`, `create`, `unlink`, `mkdir`, `rmdir`, `rename`, `link`), `EPERM` for `link` on a writable type that has no links, `EINVAL` for `read`, `getattr`, `readdir` and `statfs`, and success for `fsync`. A read-only mount answers `EROFS` to every write-side wrapper whatever the type implements.
+
+## Descriptions and the working directory
+
+An open-file description on a mounted file system holds its mount, its node and the handle (`fd.h`). `read`, `write`, `lseek` and `ftruncate` hold the description for the length of the operation, so two processes sharing one description cannot both read one offset while one of them sleeps in a disk request, and every byte of a file read through a shared description is handed out once. A process whose working directory is inside a mount placed by `mount(2)` holds that mount; the permanent three need no such hold and take none. A child mount holds its parent. The mount's reference count is its descriptions, working directories and child mounts, and it is what `umount2` reports as busy.
+
+When KRFFS relocates a node, `vfs_repoint` moves every reference to it: descriptions, working directories, directory descriptors and covering mounts.
+
+## Locks
+
+The order is fixed and checked: the mount table, then a mount's namespace lock, then a description, then cache buffers in ascending block order. A process holding one may take only what comes after it. The namespace lock is taken by every namespace change on the mount, by the constructor, and by the unmount. The kernel does not preempt inside a syscall, so a second process meets a held lock only while the holder sleeps in a disk request.
+
+## mount and umount2
+
+Both syscalls require effective uid 0; an unprivileged caller gets `EPERM`.
+
+`mount(source, target, type, flags, data)`: `type` names a type in the table, which holds `vfat`, read-only; a mount without `MS_RDONLY` answers `EROFS`, which BusyBox retries read-only. An unknown type is `ENODEV`. `source` must be a partition window under `/dev` (`/dev/disk0p1` to `/dev/disk0p4`, or `/dev/bootpart`): another device is `EINVAL`, a missing one `ENOENT`, a window not published `ENXIO`. `target` must be an existing directory on a mount that can host one: not `/` and not under `/dev` or `/proc` (`EINVAL`), a directory (`ENOTDIR`), not already a mount point or reserved by a mount in progress (`EBUSY`), with a path of at most 63 bytes (`ENAMETOOLONG`).
+
+The order of work is: resolve and hold the target; check it; claim the source's sectors; take a table slot as `mounting`, which holds the covered directory and counts on the parent; run the constructor under the namespace lock; publish. Every failure after the first step releases what the steps before it took. A source overlapping a claimed range, or one with a write-capable raw descriptor open over it, is `EBUSY`; no free slot, or a full pool in the type, is `ENOMEM`; a volume the constructor refuses is `EINVAL`, with the field named in the kernel log.
+
+`MS_RDONLY`, `MS_NOSUID` and `MS_NOEXEC` are enforced: `execve` answers `EACCES` on a `noexec` mount and ignores the set-id bits on a `nosuid` one. `MS_NODEV`, `MS_NOATIME`, `MS_NODIRATIME`, `MS_RELATIME` and `MS_SILENT` are recorded and shown in `/proc/mounts`. `MS_REMOUNT`, `MS_BIND`, `MS_MOVE` and any other flag answer `EINVAL`. `data` is the type's option string, and an option the type does not know answers `EINVAL`.
+
+`umount2(target, flags)`: `flags` must be zero (`MNT_FORCE`, `MNT_DETACH` and `UMOUNT_NOFOLLOW` are `EINVAL`), and `target` must be the root of a mount (`EINVAL`). The mount goes to `unmounting`, which refuses new descriptions, working directories and operations with `EBUSY`; the operations in progress drain; then the mount is busy (`EBUSY`) while any description, working directory or child mount refers to it, in any process. After that the type syncs and prepares, the cache writes the device's dirty buffers (a failure returns the mount to `active` with `EIO`, and nothing irreversible has happened), the cache drops the device's buffers, the type's `unmount` runs, and the covered directory and the claim are released. The record `vfs: unmounted TARGET: N opens, N releases` goes to the kernel log.
+
+## Claims
+
+A claim is a sector range on the backing disk, held from the mount's constructor to its unmount. The table of eight is in `devfs.c`, beside the raw windows' single-writer rule. Ranges are compared as ranges and never as device pointers, because `/dev/bootpart` and `/dev/disk0p1` can describe one range. While a range is claimed, a second mount overlapping it and a write-capable open of a raw window over it answer `EBUSY`; while such a descriptor is open, a mount on the range answers `EBUSY`. This is how a mounted boot partition and `bootctl` exclude each other.
+
+## The buffer cache
+
+`bcache.c` is the fixed cache under the mounted file systems, with the operations from Lions' commentary: get a block and hold it, release it, mark it dirty, write a device's dirty buffers, drop a device's buffers at unmount. There are 64 buffers of 4 KiB, a block being eight sectors; the last block of a device whose sector count is not a multiple of eight is read and written as the sectors that exist. A buffer is keyed and held before its fill, so two misses for one block fill it once. The victim is the least recently released buffer.
+
+A held buffer is busy. A second process reaching it sleeps on the buffer's queue and is woken at release; the wait is counted in `/proc/disk`. Two checked rules keep deadlock out: a process holds at most four buffers, and while it holds any it may take only a higher block on the same device, or any block on a device it holds nothing on. `bcache_get` panics on a violation, so a file system that breaks the rule fails in the host test. `bcache_dirty` and `bcache_sync` exist and nothing writes through them yet; the write rules are proved against the first file system that writes.
+
+## Limits
+
+Eight mounts, five of them placeable. A target path of 63 bytes and a name of 255. Sixteen synthetic nodes, each living for the length of one syscall. Eight claims. A vfat pool of 32 nodes per mount and four mounts. Sixty-four cache buffers, four held per process. Sixteen request slots of eight sectors and a deadline of five seconds, in `../block/`.
+
+## What is absent
+
+`MS_BIND`, `MS_MOVE`, `MS_REMOUNT`, `MNT_DETACH` and `MNT_FORCE`; a mount point under `/dev` or `/proc`; mounting a KRFFS or a RAM image through `mount(2)`, since the root is placed by the boot path and nothing else needs one; symbolic links outside `/proc`; access-time updates. Writing to vfat, ext2, and a USB disk as a source are the later milestones' work.
+
+## Verification
+
+`vfsprobe` runs in the default boot: the errno every path form answers, physical `..` through a missing or non-directory component, what a description keeps across unlink, rename and relocation, `ftruncate`, and the statfs identities. `tests/run mount` is eight boots on a disk whose second partition is a FAT32 volume: the partition nodes and a read sleeping through the lag device; a device that never answers in time; the root beside a lagged partition; a write copied into the request page before the device sleeps; `mountprobe`, which is `mount(2)` and `umount2(2)` from a program with the flags, the busy answers, the claims and the `/proc` files, plus an awk over the unmount records; the mounted half of `lagprobe`, where a rmdir of the target during a sleeping constructor, a busy-buffer wait and a shared description are observed; the boot partition mounted read-only refusing the raw writer; and BusyBox on os-real mounting, listing, reading and unmounting the volume, with the listing compared against mtools. `tests/run host` runs `bcache_hosttest` and `fat32_hosttest` ([tests/host/Readme.md](../../../tests/host/Readme.md)).

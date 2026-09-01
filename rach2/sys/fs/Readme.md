@@ -2,7 +2,7 @@
 
 KRFFS is the kernel's writable file system. It stores a hierarchical namespace in one contiguous region and uses a first-fit extent allocator. The same code can address a RAM module directly, a RAM module through the page-cache window, or a partition on an ATA or AHCI disk.
 
-`krffs.c` and `krffs.h` implement the on-disk format, allocator, namespace, and file data operations. `fd.c` and `fd.h` implement descriptor tables and shared open-file descriptions. The syscall-facing path, permission, descriptor, and metadata rules are in `../syscall.c`. The kernel-generated `/dev` and `/proc` namespaces are described in `synthfs.Readme.md`; the cache and disk drivers are described in `../mm/Readme.md` and `../block/Readme.md`.
+`krffs.c` and `krffs.h` implement the on-disk format, allocator, namespace, and file data operations. `fd.c` and `fd.h` implement descriptor tables and shared open-file descriptions. The syscall-facing permission, descriptor, and metadata rules are in `../syscall.c`. The mount table and the resolver every path goes through are described in [vfs.Readme.md](vfs.Readme.md), the kernel-generated `/dev` and `/proc` namespaces in [synthfs.Readme.md](synthfs.Readme.md), the read-only FAT32 type in [fat32.Readme.md](fat32.Readme.md), and the page cache and disk drivers in `../mm/Readme.md` and `../block/Readme.md`.
 
 ## On-disk layout
 
@@ -26,9 +26,9 @@ A write that cannot grow the file separates its two reasons. No free extent larg
 
 ## Paths and directories
 
-Every path-taking syscall resolves through the mount table's resolver (`vfs.h`). The walk takes one component at a time: a lookup of one name in one directory on one mount, after the caller's search permission on that directory has been checked once, in the common layer, for every file system. `..` is physical: at a mount root it continues at the parent's covered directory, at the root of the root mount it stays, and anywhere else it is a lookup of `..`; a path that names a missing or unsearchable directory before its `..` fails, as it does on Linux. A mount point is a node, not a name, so a spelling such as `/x/../proc` reaches `/proc` through `/x` if `/x` is a searchable directory and fails otherwise; neither answer bypasses anything. `/dev` and `/proc` are the one exception to component lookup: their types take the rest of the path in one call, because their namespaces are flat tables.
+Every path-taking syscall resolves through the mount table's resolver, one component at a time, with `..` resolved physically ([vfs.Readme.md](vfs.Readme.md)). KRFFS answers each step with one lookup of `(parent_id, name)`; its `..` is the node whose ID is the directory's `parent_id`, and the root's `..` is the root.
 
-Each process starts with `cwd` set to `/` and inherits it across `fork`. Relative paths resolve against that string; a working directory inside a mount placed by `mount(2)` also holds that mount, so it cannot be unmounted from under it. `openat` and the other implemented `*at` calls accept `AT_FDCWD`, an absolute path, or a real directory descriptor. A directory descriptor is resolved back to its current absolute name before use; it is not a capability that bypasses ancestor permissions.
+Each process starts with `cwd` set to `/` and inherits it across `fork`. Relative paths resolve against that string; a working directory inside a mount placed by `mount(2)` also holds that mount. `openat` and the other implemented `*at` calls accept `AT_FDCWD`, an absolute path, or a real directory descriptor. A directory descriptor is resolved back to its current absolute name before use; it is not a capability that bypasses ancestor permissions.
 
 Path resolution checks execute permission on every directory entered. Ordinary calls use effective IDs. `access` and `faccessat` use real IDs for both the prefixes and the target. The target's own read, write, or execute permission is checked separately by the operation that needs it.
 
@@ -78,15 +78,7 @@ A disk mount sets the root node's dirty bit and writes it through before it repa
 
 ## mount and umount2
 
-The mount table (`vfs.h`) holds eight entries. Entry zero is the root above; entries one and two are `/dev` and `/proc`. The three are permanent: `umount2` on any of them answers `EBUSY`. The rest are placed by `mount(2)` and removed by `umount2(2)`, both root's; an unprivileged caller gets `EPERM`.
-
-`mount(source, target, type, flags, data)`: `type` names a type in the table, which holds `vfat` in this milestone, read-only (`fat32.h`); a mount without `MS_RDONLY` answers `EROFS`, which is what BusyBox retries read-only. `source` must be a partition window under `/dev` (`/dev/disk0p1` to `p4`, or `/dev/bootpart`); anything else is `EINVAL`. `target` must be an existing directory on a mount that can host one, not `/`, not on `/dev` or `/proc` (`EINVAL`), not already a mount point (`EBUSY`), with a path of at most 63 bytes (`ENAMETOOLONG`). The order of work is: resolve and hold the target, check its path, claim the source's sectors, take a table slot as `mounting`, run the constructor, publish. Every failure after the first step releases what the steps before it took. `MS_RDONLY`, `MS_NOSUID` and `MS_NOEXEC` are enforced (`execve` answers `EACCES` on a `noexec` mount and ignores the set-id bits on a `nosuid` one); `MS_NODEV`, the atime flags and `MS_SILENT` are recorded; `MS_REMOUNT`, `MS_BIND`, `MS_MOVE` and any other flag answer `EINVAL`. `data` is the type's option string; `vfat` takes `umask=`, `uid=`, `gid=` and `ro`, and an option it does not know answers `EINVAL`.
-
-`umount2(target, flags)`: `flags` must be zero (`MNT_FORCE`, `MNT_DETACH` and `UMOUNT_NOFOLLOW` are `EINVAL`), and `target` must be a mount point (`EINVAL`). The mount goes to `unmounting`, which refuses new descriptions, working directories and operations with `EBUSY`; the operations in progress drain; then the mount is busy (`EBUSY`) while any open-file description, working directory or child mount refers to it, in any process. After that the file system syncs, the buffer cache writes and drops the device's buffers, the type's `unmount` runs, and the covered directory and the claim are released. The record `vfs: unmounted TARGET: N opens, N releases` is written to the kernel log.
-
-A claim is a sector range on the backing disk, compared as a range and never as a device pointer, because `/dev/bootpart` and a partition node can describe one range. While a range is claimed, a second mount overlapping it and a write-capable open of a raw window over it answer `EBUSY`; while such a descriptor is open, a mount on the range answers `EBUSY`. The claim table sits beside the raw windows' single-writer rule in `devfs.c`.
-
-A directory that is a mount point answers `EBUSY` to `unlink`, `rmdir` and `rename` while the mount exists, and `mkdir` of a name a mount stands at is `EEXIST`. `rename` across two mounts is `EXDEV`. `/proc/mounts` lists the root, `/dev`, `/proc` and then every mount placed, one line each in the six-field `getmntent` form with the flags as words; `/proc/filesystems` lists `nodev devfs`, `nodev proc` and every type `mount(2)` accepts. KRFFS is not listed there, because the root is not mounted through `mount(2)`.
+The root is placed by the boot path and cannot be unmounted. `mount(2)` and `umount2(2)`, the mount table, the claims on a mounted partition's sectors, and the buffer cache the mounted types read through are described in [vfs.Readme.md](vfs.Readme.md).
 
 ## Tests
 

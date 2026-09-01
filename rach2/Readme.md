@@ -190,9 +190,9 @@ The VGA text console keeps scrollback. `PageUp`, `PageDown`, `Home`, and `End` m
 | `sys/tables/`, `sys/isr*`, `sys/pic*`, `sys/pit*` | GDT, TSS, IDT, exception, interrupt, and timer setup. |
 | `sys/proc/` | Processes, scheduler, ELF loading, user images, signals, TLS, and wait queues. |
 | `sys/mm/` | Physical frames, paging, VMAs, user copies, module placement, and page cache. |
-| `sys/fs/` | KRFFS, descriptors, `/dev`, and `/proc`. |
+| `sys/fs/` | The mount table and resolver, KRFFS, the buffer cache, read-only FAT32, descriptors, `/dev`, and `/proc`. |
 | `sys/ipc/`, `sys/io/`, `sys/tty/` | Pipes, readiness APIs, line discipline, job control, and pseudo-terminals. |
-| `sys/block/` | ATA, AHCI, MBR discovery, disk policy, and raw disk windows. |
+| `sys/block/` | ATA, AHCI, the block request, MBR discovery, disk policy, partition and raw disk windows, and the lag test device. |
 | `sys/network/` | RTL8139, e1000, and RTL8168 drivers, IPv4 protocols, sockets, and netconsole. |
 | `sys/display/`, `sys/audio/`, `sys/kbd*`, `sys/mouse*`, `sys/speaker*` | VGA, audio, and PS/2 input drivers. |
 | `sys/board*`, `sys/power*`, `sys/pci*`, `sys/rtc*`, `sys/serial*` | Platform discovery, shutdown, PCI, clock, and COM1. |
@@ -207,7 +207,7 @@ Subsystem references:
 * [Signals](sys/proc/signal.Readme.md)
 * [Thread-local storage](sys/proc/tls.Readme.md)
 * [Random generator](sys/lib/krandom.Readme.md)
-* [KRFFS](sys/fs/Readme.md) and [synthetic files](sys/fs/synthfs.Readme.md)
+* [Mounts and the VFS](sys/fs/vfs.Readme.md), [KRFFS](sys/fs/Readme.md), [FAT32](sys/fs/fat32.Readme.md), and [synthetic files](sys/fs/synthfs.Readme.md)
 * [Pipes](sys/ipc/Readme.md) and [I/O multiplexing](sys/io/Readme.md)
 * [Block storage](sys/block/Readme.md)
 * [Networking](sys/network/Readme.md)
@@ -225,7 +225,7 @@ The kernel currently supports:
 * RTL8139, Intel 82540EM (e1000), and RTL8168GU Ethernet devices.
 * Sound Blaster 16, Intel HDA, and the PC speaker.
 
-It does not implement UEFI, Multiboot2, SMP, threads, swap, dynamic linking, IPv6, VESA graphics, or a file system other than KRFFS. USB is a keyboard and a mouse through xHCI and nothing else: no hubs, no mass storage, no booting from a USB disk. The direct physical-memory limit is 32 MiB.
+It does not implement UEFI, Multiboot2, SMP, threads, swap, dynamic linking, IPv6, VESA graphics, or a writable file system other than KRFFS; FAT32 partitions mount read-only through `mount(2)`. USB is a keyboard and a mouse through xHCI and nothing else: no hubs, no mass storage, no booting from a USB disk. The direct physical-memory limit is 32 MiB.
 
 The ordinary process and descriptor limits are the fixed 16-slot tables described above, and what a program reaches is that size less what is already taken. A fork past the process table returns `EAGAIN`. An open past the sixteen descriptors, of which three are stdio, returns `EMFILE` at the fourteenth. A socket past the pool of sixteen returns `ENOMEM`, which takes two processes to reach because one runs out of descriptors first. A connection past the sixteen TCP control blocks, which a listener and seven connections to this machine fill, is refused with `ECONNREFUSED` rather than left to retransmit. `tests/run default` fills all four and requires the refusal, and for the first three the resource coming back.
 

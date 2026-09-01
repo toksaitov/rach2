@@ -32,18 +32,18 @@ make test-image     # build both sets and stage build/images/test.krffs
 tests/run default
 ```
 
-This suite builds the test image and runs `tests/system/runner/runtests.c` with a 300-second run limit and a 60-second limit for each program. The runner boots one headless QEMU machine with `-cpu max`, waits for the debug shell, and runs the 72 entries in its `PROBES` list in order. It is the first suite in the core tier, so `make test` runs it too.
+This suite builds the test image and runs `tests/system/runner/runtests.c` with a 300-second run limit and a 60-second limit for each program. The runner boots one headless QEMU machine with `-cpu max`, waits for the debug shell, and runs the 73 entries in its `PROBES` list in order. It is the first suite in the core tier, so `make test` runs it too.
 
 The runner scores the kernel diagnostic that returns control to the debug shell. Exit status 0 passes. A nonzero status, signal, absent return diagnostic, timeout, early QEMU exit, or program skipped after an earlier hang fails. A program's own success text is not the verdict. After `musl/clockmusl`, the runner also compares the guest epoch with the host clock and permits a 30-second difference.
 
-The 56 root programs in the default suite are:
+The 57 root programs in the default suite are:
 
 ```text
 hello filetest forktest shelltest dirtest stattest touchtest rmtest mvtest
 lstest dup2test auxvprobe tlsprobe errnoprobe vmprobe forkro cowprobe
 cowregrant usercopyfault forkleak fdstale dirgrow dirprobe unlinkdirprobe
-pathcanon timeprobe sigprobe credprobe ownprobe permprobe sockettest procfull
-fdfull sockfull tcbfull oomprobe dnstest trapprobe ofdprobe waitprobe
+pathcanon vfsprobe timeprobe sigprobe credprobe ownprobe permprobe sockettest
+procfull fdfull sockfull tcbfull oomprobe dnstest trapprobe ofdprobe waitprobe
 pipeprobe pollprobe devprobe jobprobe miscprobe ptyprobe rngprobe orphanprobe
 loopprobe procprobe suidprobe sudoprobe modeprobe rebootprobe searchprobe
 stickyprobe
@@ -53,8 +53,8 @@ The 16 musl programs in the default suite are:
 
 ```text
 authmusl permmusl suidmusl pwauthmusl passwdmusl addusermusl loginmusl
-readvmusl timemusl clockmusl statmusl stampmusl execargmusl spawnmusl
-vmamusl ishmusl
+readvmusl timemusl clockmusl statmusl stampmusl execargmusl spawnmusl vmamusl
+ishmusl
 ```
 
 `tests/run addressed` does not repeat this list. It boots with `rach2.ip=10.0.2.77/24 rach2.gateway=10.0.2.2`, runs `pingtest` alone, and requires the capture to show that address as the source of the machine's packets and of its ARP requests.
@@ -82,6 +82,7 @@ Programs that need another boot, disk, network exchange, or result contract have
 * `tests/run fault` runs `vmfault`, `vmro` and `winprobe`, which must be killed rather than served, and then runs a program that prints a token, which a kernel that took the fault with them could not do.
 * `tests/run socket` starts a host peer and runs `tcptest` and `udptest` against it.
 * `tests/run diskfull` fills a disk-backed root and requires `ENOSPC` rather than `EIO`.
+* `tests/run mount` runs `lagprobe` under the lag device (`rach2.blocklag=N`) in its sleep, deadline, write and mounted modes, `mountprobe` in its mount and claim modes, and BusyBox `mount` on os-real, on a disk whose second partition is a FAT32 volume written by mtools.
 * `tests/run usb` runs `usbprobe` against an xHCI controller with a keyboard and a mouse on it, at both device speeds, and `mouseprobe` on a machine whose PS/2 controller is switched off, so that a moved mouse can only have come over USB. Its typing boots are switched off the same way.
 
 Every root program is run by some suite. The two exceptions are `idreport` and `suidhelper`, which exist to be invoked by another test.

@@ -4,11 +4,11 @@ Rach2 generates `/dev` and `/proc` from kernel state. Neither tree is stored in 
 
 ## Path routing
 
-The syscall layer joins relative paths to the current directory or a directory descriptor, then removes repeated slashes, `.` components, and `..` components. It strips the leading slash before calling `synth_classify`. Paths outside `/dev` and `/proc` continue to KRFFS. An unknown path below either synthetic mount returns `ENOENT` or `ENOTDIR`; it cannot reach a KRFFS node hidden below the same prefix.
+`/dev` and `/proc` are the two synthetic entries of the mount table ([vfs.Readme.md](vfs.Readme.md)). The resolver reaches them by name from the root directory, since the root file system has no node for them, and hands each the rest of the path in one call, which `synth_classify` turns into a `vpath`: a device, a proc file, a directory, or `ENOENT` or `ENOTDIR`. A `..` in that rest that would climb above the mount answers `VFS_CLIMB` and the resolver continues at the root directory. A KRFFS directory named `dev` or `proc` cannot shadow either mount and cannot be created (`EEXIST`).
 
-Synthetic directories can be opened and used by `chdir` and the `*at` calls. For example, `openat` can open `null` relative to an fd for `/dev`. Directory descriptors and the current working directory store canonical synthetic paths, with `/proc/self` resolved to the numeric pid when necessary.
+Synthetic directories can be opened and used by `chdir` and the `*at` calls. For example, `openat` can open `null` relative to an fd for `/dev`. Directory descriptors and the current working directory store canonical synthetic paths, with `/proc/self` resolved to the numeric pid when necessary. A synthetic node lives for the length of one syscall in a pool of sixteen; the open that follows a resolution binds the device's own operations onto the descriptor.
 
-The namespace is fixed. Creation, removal, rename, and timestamp operations below `/dev` or `/proc` return `EROFS`, and `execve` returns `EACCES`. A KRFFS root listing does not add `dev` or `proc`; programs must address those mount paths explicitly. `/dev` enumeration lists the device registry but does not list its accessible `pts` subdirectory.
+The namespace is fixed. Creation, removal, rename, and timestamp operations below `/dev` or `/proc` return `EROFS`, `execve` returns `EACCES`, and neither can host a mount point (`mount(2)` answers `EINVAL`). A KRFFS root listing does not add `dev` or `proc`; programs must address those mount paths explicitly. `/dev` enumeration lists the device registry but does not list its accessible `pts` subdirectory.
 
 ## devfs
 
@@ -28,6 +28,7 @@ The namespace is fixed. Creation, removal, rename, and timestamp operations belo
 | `/dev/disk0` | 240:1 | 0400 | Exposes the diagnostic whole-disk window after a diagnostic probe. |
 | `/dev/bootlog` | 240:2 | 0400 | Reads the kernel log's 16 KiB ring from its oldest retained record. |
 | `/dev/grubcore` | 240:3 | 0600 | Exposes LBA 1 through 2047 when the MBR leaves that range unused. |
+| `/dev/disk0p1` to `/dev/disk0p4` | 240:4 to 240:7 | 0400 | One read-only window per nonempty MBR entry, the source `mount(2)` takes. |
 
 `null`, `zero`, and `full` seek to offset zero. Random devices, terminals, and pty endpoints are streams and return `ESPIPE`. `/dev/bootlog` uses an ordinary offset and supports seeks relative to the current ring length. All synthetic nodes use stable timestamps from the RTC reading taken during startup, or zero when no RTC reading was accepted.
 
@@ -64,11 +65,12 @@ Only one open-file description may hold write access across the three raw window
 `/proc` has mode 0555 and file-system id 6. Directories have mode 0555, ordinary files have mode 0444, `/proc/disk` has mode 0400, and magic links have mode 0777. Its root listing contains these global entries before the live numeric pid directories:
 
 * `/proc/cmdline` is the captured kernel command line followed by a newline.
-* `/proc/disk` is the disk diagnostic record and live command counters. The path always exists. Before a diagnostic probe it reports `state not-asked`; only `/dev/disk0` is conditional on the probe. Opening this file requires root.
+* `/proc/disk` is the disk diagnostic record, the live command counters, and the buffer cache's three counters. The path always exists. Before a diagnostic probe it reports `state not-asked`; only `/dev/disk0` is conditional on the probe. Opening this file requires root.
 * `/proc/uptime` reports total and idle delivered 100 Hz ticks as seconds with two decimal places.
 * `/proc/stat` reports busy ticks in the system column, idle ticks, the boot epoch, processes created since boot, and current runnable and blocked counts. Untracked counters are zero.
 * `/proc/meminfo` reports the physical frame pool. Buffers, cache, and swap fields are zero.
-* `/proc/mounts` reports the recorded KRFFS root source and options, followed by devfs and procfs rows.
+* `/proc/mounts` reports the recorded KRFFS root source and options, the devfs and procfs rows, and then every mount placed by `mount(2)`, in the six-field `getmntent` form with the flags as words.
+* `/proc/filesystems` lists `nodev devfs`, `nodev proc`, and every type `mount(2)` accepts. KRFFS is absent because the root is not placed through `mount(2)`.
 * `/proc/net` contains `dev`, `route`, `arp`, and `tcp`. There is no `tcp6` because the kernel has no IPv6 stack.
 * `/proc/self` is a magic symlink to the caller's numeric pid.
 

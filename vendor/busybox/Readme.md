@@ -55,7 +55,7 @@ The generated applet table and `config-main` are the authority for what ships; t
 * `ifconfig`, `route`, `ifup`, `ifdown`, and `udhcpc` are enabled. `FEATURE_IFUPDOWN_IP` is disabled, so ifupdown uses the ifconfig and route backend.
 * IPv4 `arping` and `traceroute` are enabled. Both require root for their packet or raw socket. `ping` is disabled so `/bin/ping`, the unprivileged project program, remains the command ash finds. IPv6 ping and traceroute are disabled because Rach2 has no IPv6 stack.
 * The `dmesg` applet is disabled. The image supplies `/bin/dmesg`, which reads `/dev/bootlog`; Rach2 has no Linux `klogctl` ring.
-* `free`, `uptime`, and `df` are enabled and work with the current `sysinfo`, proc, and `statfs64` implementations. `mount` and `umount` are selected but fail because their syscalls are not implemented.
+* `free`, `uptime`, and `df` are enabled and work with the current `sysinfo`, proc, and `statfs64` implementations. `mount -t vfat -o ro /dev/disk0pN DIR` and `umount DIR` work through `mount(2)` and `umount2(2)`; `mount` without arguments and `df` read `/proc/mounts`, and `mount` without `-t` reads `/proc/filesystems` for the types to try. A writable mount is answered with `EROFS` and BusyBox retries it read-only, as it does on Linux.
 * SHA-1 and SHA-256 hardware acceleration are disabled. The kernel neither enables nor preserves XMM state, so the accelerated x86 routines cannot run safely.
 * `cryptpw`, `mkpasswd`, and `httpd -m` are enabled, with SHA-512 as the default password algorithm. An implicit BusyBox salt is derived from pid and monotonic time and bypasses the kernel's trusted random source. Supply an explicit salt when a reproducible or externally generated credential is required.
 
