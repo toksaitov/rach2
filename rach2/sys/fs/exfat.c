@@ -278,6 +278,7 @@ static void ex_hold(struct vfs_mount *mnt, void *node)
 
 static int free_chain(struct ex_mount *em, uint32_t first, int nofat, uint64_t length);
 static int write_boot_state(struct ex_mount *em, int dirty);
+static int ex_check_volume(struct ex_mount *em);
 
 static void ex_put(struct vfs_mount *mnt, void *node)
 {
@@ -477,6 +478,8 @@ static int dir_entry(struct ex_mount *em, struct ex_node *d, uint32_t index, uin
 struct ex_set {
     uint32_t index;   /* of the file entry */
     uint32_t entries; /* the whole set */
+    const char *why;  /* why the set was passed over, or NULL */
+    int checksum_only;
     uint8_t file[32];
     uint8_t stream[32];
     uint16_t units[255];
@@ -498,8 +501,11 @@ static uint16_t set_checksum(const uint8_t *entries, uint32_t count)
 }
 
 /* The set whose file entry is at `index`: 1 with `set` filled when every
- * invariant holds, 0 when the set is skipped with a record naming why, or
- * an error. `raw` is the file entry already read. */
+ * invariant holds, 0 when the set is passed over with `set->why` naming
+ * the first fault (and `set->checksum_only` when the checksum is the
+ * only one, which is what a stop inside a straddling change leaves and
+ * the dirty-volume check repairs), or an error. `raw` is the file entry
+ * already read. */
 static int set_read(struct ex_mount *em, struct ex_node *d, uint32_t index, const uint8_t *raw,
                     struct ex_set *set)
 {
@@ -508,8 +514,11 @@ static int set_read(struct ex_mount *em, struct ex_node *d, uint32_t index, cons
     uint32_t k, got = 0, names = 0;
     uint16_t hash;
     const char *why = 0;
+    int checksum_bad;
     int rc;
 
+    set->why = 0;
+    set->checksum_only = 0;
     k_memset(all, 0, sizeof(all));
     if (secondaries < 2 || secondaries > SET_MAX - 1) {
         why = "SecondaryCount";
@@ -527,9 +536,6 @@ static int set_read(struct ex_mount *em, struct ex_node *d, uint32_t index, cons
     }
     if (!why && all[32] != 0xC0) {
         why = "no stream extension second";
-    }
-    if (!why && set_checksum(all, secondaries + 1) != le16(all + 2)) {
-        why = "the set checksum";
     }
     if (!why) {
         const uint8_t *st = all + 32;
@@ -600,6 +606,11 @@ static int set_read(struct ex_mount *em, struct ex_node *d, uint32_t index, cons
                 why = "the name hash";
             }
         }
+        checksum_bad = set_checksum(all, secondaries + 1) != le16(all + 2);
+        if (!why && checksum_bad) {
+            why = "the set checksum";
+            set->checksum_only = 1;
+        }
         if (!why) {
             set->index = index;
             set->entries = secondaries + 1;
@@ -609,6 +620,9 @@ static int set_read(struct ex_mount *em, struct ex_node *d, uint32_t index, cons
             return 1;
         }
     }
+    set->why = why;
+    set->index = index;
+    set->entries = secondaries + 1;
     klog(KLOG_WARN, "exfat", "set skipped: %s (entry %d of directory cluster %d)", why, (int)index,
          (int)d->first);
     return 0;
@@ -1434,6 +1448,18 @@ static int ex_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags, 
                                 : "streamed through the cache");
     em->mnt = mnt;
     em->alloc_hint = 2;
+    if (em->writable && (le16(b + 106) & 2)) {
+        /* Not unmounted cleanly: checked and repaired before the mount is
+         * published, or read-only with the fault named. */
+        rc = ex_check_volume(em);
+        if (rc < 0) {
+            return rc;
+        }
+        if (rc > 0) {
+            em->writable = 0;
+            mnt->flags |= VFS_MS_RDONLY;
+        }
+    }
     if (em->writable) {
         /* VolumeDirty on the disk for the writable life of the mount, as
          * Linux does; the clean unmount clears it last. */
@@ -3033,6 +3059,445 @@ static int ex_prepare_unmount(struct vfs_mount *mnt)
     }
     em->dirty_set = 0;
     return 0;
+}
+
+/* ---- the check of a dirty volume at mount ----
+ *
+ * A volume whose dirty bit is set was written by something that did not
+ * unmount it. Before a writable mount is published the tree is walked
+ * under the bitmap the FAT drivers share, one walk at a time, seeded with
+ * the root's chain, the bitmap's and the up-case table's; every set the
+ * tree reaches is checked as the reader checks it and its chain marked.
+ * Three states this driver's own order leaves behind a crash are repaired,
+ * each a metadata write, in an order a second crash cannot make worse: a
+ * set failing only its checksum has it rewritten, orphan secondaries are
+ * written inactive, and a surplus tail is detached at the last cluster the
+ * length justifies and then freed. A cluster allocated that nothing
+ * reaches is counted and left. Anything else mounts read-only with the
+ * first fault named.
+ */
+
+#define CHECK_DEPTH   32
+#define CHECK_TAILS   16
+#define CHECK_SETS    16   /* checksum-only sets recorded for the rewrite */
+#define CHECK_ORPHANS 64   /* orphan secondaries recorded, per volume */
+#define CHECK_NAMES   4096 /* names of one directory compared for a duplicate */
+
+struct check_state {
+    struct ex_mount *em;
+    const char *why;
+    int repaired;
+    uint32_t lost;
+    int ntails;
+    uint32_t tail_prev[CHECK_TAILS], tail_first[CHECK_TAILS];
+    int nsets;
+    uint32_t set_dir[CHECK_SETS], set_index[CHECK_SETS];
+    int norphans;
+    uint32_t orphan_dir[CHECK_ORPHANS], orphan_index[CHECK_ORPHANS];
+};
+
+static uint16_t check_hashes[CHECK_NAMES];
+static uint32_t check_hash_index[CHECK_NAMES];
+
+/* Mark cluster `c`: a fault when it was marked already or its bitmap bit
+ * is clear. */
+static int check_mark(struct check_state *w, uint32_t c)
+{
+    uint8_t byte;
+    int rc;
+
+    if (!in_heap(w->em, c)) {
+        w->why = "a chain outside the heap";
+        return -1;
+    }
+    if (fat_walk_test_set(c)) {
+        w->why = "a cluster reached twice";
+        return -1;
+    }
+    rc = object_read(w->em, w->em->bitmap_first, (uint64_t)(c - 2) / 8, &byte, 1);
+    if (rc != 0) {
+        w->why = "an unreadable bitmap";
+        return -1;
+    }
+    if (!(byte & (1u << ((c - 2) % 8)))) {
+        w->why = "a reached cluster whose bitmap bit is clear";
+        return -1;
+    }
+    return 0;
+}
+
+/* A chain marked: `length` bytes from `first`, contiguous or through the
+ * FAT; a FAT chain longer than the length is recorded as a surplus tail
+ * and walked to its end; one shorter is a fault. The cluster count, or -1. */
+static long check_chain(struct check_state *w, uint32_t first, int nofat, uint64_t length)
+{
+    struct ex_mount *em = w->em;
+    uint64_t need = clusters_of(em, length);
+    uint32_t c = first, prev = 0;
+    long count = 0;
+
+    if (nofat) {
+        uint64_t i;
+
+        for (i = 0; i < need; i++) {
+            if (check_mark(w, (uint32_t)(first + i)) != 0) {
+                return -1;
+            }
+        }
+        return (long)need;
+    }
+    while (c != EX_EOC) {
+        uint32_t next;
+
+        if (check_mark(w, c) != 0) {
+            return -1;
+        }
+        count++;
+        /* The root's chain has no length: followed to its end, no surplus. */
+        if (length != 0 && (uint64_t)count == need + 1) {
+            if (w->ntails == CHECK_TAILS) {
+                w->why = "more surplus tails than the walk repairs";
+                return -1;
+            }
+            w->tail_prev[w->ntails] = prev;
+            w->tail_first[w->ntails] = c;
+            w->ntails++;
+        }
+        if (fat_next(em, c, &next) != 0) {
+            w->why = "an unreadable FAT";
+            return -1;
+        }
+        if (next == EX_BAD || next == 0 || (next != EX_EOC && !in_heap(em, next))) {
+            w->why = "a chain ending in a free or bad entry";
+            return -1;
+        }
+        if ((uint32_t)count > em->clusters) {
+            w->why = "a loop";
+            return -1;
+        }
+        prev = c;
+        c = next;
+    }
+    if (length != 0 && (uint64_t)count < need) {
+        w->why = "a stream shorter than its length";
+        return -1;
+    }
+    return count;
+}
+
+/* One directory walked from `*resume`: its sets checked, chains marked,
+ * orphans and checksum-only sets recorded, names compared. 1 with a
+ * subdirectory in `*sub` and `*sub_length`/`*sub_nofat` to descend into,
+ * 0 at the end, -1 for a fault. */
+static int check_dir(struct check_state *w, struct ex_node *d, uint32_t *resume, uint32_t *sub,
+                     uint64_t *sub_length, int *sub_nofat, uint32_t base, uint32_t *nnames)
+{
+    struct ex_mount *em = w->em;
+    uint32_t i = *resume;
+
+    for (;;) {
+        uint8_t raw[32];
+        struct ex_set set;
+        int rc = dir_entry(em, d, i, raw);
+        uint32_t k;
+
+        if (rc < 0) {
+            w->why = "an unreadable directory";
+            return -1;
+        }
+        if (rc == 0 || raw[0] == 0x00) {
+            *resume = i;
+            return 0;
+        }
+        if (!(raw[0] & 0x80)) {
+            i++;
+            continue;
+        }
+        if (raw[0] & 0x40) {
+            /* An in-use secondary outside a set: an orphan, freed later. */
+            if (w->norphans == CHECK_ORPHANS) {
+                w->why = "more orphan secondaries than the walk repairs";
+                return -1;
+            }
+            w->orphan_dir[w->norphans] = d->first;
+            w->orphan_index[w->norphans] = i;
+            w->norphans++;
+            i++;
+            continue;
+        }
+        if (raw[0] == 0x81 || raw[0] == 0x82 || raw[0] == 0x83 || raw[0] == 0xA0 ||
+            raw[0] == 0xA1) {
+            i++;
+            continue;
+        }
+        if (raw[0] != 0x85) {
+            w->why = "a critical entry this driver does not know";
+            return -1;
+        }
+        rc = set_read(em, d, i, raw, &set);
+        if (rc < 0) {
+            w->why = "an unreadable set";
+            return -1;
+        }
+        if (rc == 0) {
+            if (!set.checksum_only) {
+                w->why = set.why;
+                return -1;
+            }
+            /* Its checksum will be rewritten; read it again for the walk
+             * with the checksum taken as right. */
+            if (w->nsets == CHECK_SETS) {
+                w->why = "more sets to rewrite than the walk repairs";
+                return -1;
+            }
+            w->set_dir[w->nsets] = d->first;
+            w->set_index[w->nsets] = i;
+            w->nsets++;
+            set.checksum_only = 0;
+            rc = set_load(em, d, i, &k);
+            if (rc != 0) {
+                w->why = "an unreadable set";
+                return -1;
+            }
+            k_memcpy(set.file, em->setbuf, 32);
+            k_memcpy(set.stream, em->setbuf + 32, 32);
+            set.entries = k;
+            set.count = set.stream[3];
+            for (k = 0; k < set.count; k++) {
+                set.units[k] = le16(em->setbuf + (2 + k / 15) * 32 + 2 + (k % 15) * 2);
+            }
+        }
+        /* Two names that up-case alike in one directory are one name. */
+        {
+            uint16_t hash = le16(set.stream + 4);
+            uint32_t m;
+
+            for (m = base; m < base + *nnames; m++) {
+                if (check_hashes[m] == hash) {
+                    struct ex_set other;
+                    uint8_t oraw[32];
+                    int same = 0;
+
+                    rc = dir_entry(em, d, check_hash_index[m], oraw);
+                    if (rc == 1 && set_read(em, d, check_hash_index[m], oraw, &other) == 1 &&
+                        other.count == set.count) {
+                        rc = units_match(em, other.units, set.units, set.count, &same);
+                    }
+                    if (rc < 0) {
+                        w->why = "an unreadable set";
+                        return -1;
+                    }
+                    if (same) {
+                        w->why = "two names that up-case alike in one directory";
+                        return -1;
+                    }
+                }
+            }
+            if (base + *nnames == CHECK_NAMES) {
+                w->why = "a directory larger than the walk compares";
+                return -1;
+            }
+            check_hashes[base + *nnames] = hash;
+            check_hash_index[base + *nnames] = i;
+            (*nnames)++;
+        }
+        /* The set's chains: the stream's, and a vendor allocation's. */
+        {
+            uint32_t first = le32(set.stream + 20);
+            uint64_t length = le64(set.stream + 24);
+            int nofat = (set.stream[1] & FLAG_NO_FAT_CHAIN) != 0;
+            int is_dir = (le16(set.file + 4) & ATTR_DIRECTORY) != 0;
+
+            for (k = 2; k < set.entries; k++) {
+                uint8_t ve[32];
+
+                if (dir_entry(em, d, i + k, ve) != 1) {
+                    w->why = "an unreadable set";
+                    return -1;
+                }
+                if (ve[0] == 0xE1 && (ve[1] & FLAG_ALLOC_POSSIBLE) && le32(ve + 20) != 0) {
+                    if (check_chain(w, le32(ve + 20), (ve[1] & FLAG_NO_FAT_CHAIN) != 0,
+                                    le64(ve + 24)) < 0) {
+                        return -1;
+                    }
+                }
+            }
+            if (is_dir) {
+                if (first == 0) {
+                    w->why = "a directory with no cluster";
+                    return -1;
+                }
+                if (check_chain(w, first, nofat, length) < 0) {
+                    return -1;
+                }
+                *resume = i + set.entries;
+                *sub = first;
+                *sub_length = length;
+                *sub_nofat = nofat;
+                return 1;
+            }
+            if (first != 0 && check_chain(w, first, nofat, length) < 0) {
+                return -1;
+            }
+        }
+        i += set.entries;
+    }
+}
+
+/* 0 when the volume is consistent or was repaired, 1 when it mounts
+ * read-only with the fault named, or a negative error. */
+static int ex_check_volume(struct ex_mount *em)
+{
+    struct check_state w;
+    uint32_t stack_first[CHECK_DEPTH], stack_resume[CHECK_DEPTH], stack_names[CHECK_DEPTH],
+        stack_base[CHECK_DEPTH];
+    uint64_t stack_length[CHECK_DEPTH];
+    uint8_t stack_nofat[CHECK_DEPTH];
+    int depth = 0, i, rc = 0;
+    uint32_t c;
+    uint64_t allocated = 0;
+
+    k_memset(&w, 0, sizeof(w));
+    w.em = em;
+    if (em->clusters + 2 > FAT_WALK_CLUSTERS) {
+        klog(KLOG_WARN, "exfat", "check: %d clusters is more than the walk covers; read-only",
+             (int)em->clusters);
+        return 1;
+    }
+    fat_walk_acquire(em->clusters);
+    klog(KLOG_INFO, "exfat", "check: the volume was not unmounted cleanly; checking");
+    /* The system objects first: the root's chain, the bitmap's, the
+     * up-case table's, disjoint and allocated. */
+    if (check_chain(&w, em->root, 0, 0) < 0 ||
+        check_chain(&w, em->bitmap_first, 0, em->bitmap_length) < 0 ||
+        check_chain(&w, em->upcase_first, 0, em->upcase_length) < 0) {
+        goto done;
+    }
+    stack_first[0] = em->root;
+    stack_resume[0] = 0;
+    stack_length[0] = 0;
+    stack_nofat[0] = 0;
+    stack_names[0] = 0;
+    stack_base[0] = 0;
+    depth = 1;
+    while (depth > 0) {
+        struct ex_node d;
+        uint32_t sub = 0;
+        uint64_t sub_length = 0;
+        int sub_nofat = 0, got;
+
+        k_memset(&d, 0, sizeof(d));
+        d.is_dir = 1;
+        d.first = stack_first[depth - 1];
+        d.length = stack_length[depth - 1];
+        d.nofat = stack_nofat[depth - 1];
+        got = check_dir(&w, &d, &stack_resume[depth - 1], &sub, &sub_length, &sub_nofat,
+                        stack_base[depth - 1], &stack_names[depth - 1]);
+        if (got < 0) {
+            goto done;
+        }
+        if (got == 0) {
+            depth--;
+            continue;
+        }
+        if (depth == CHECK_DEPTH) {
+            w.why = "a directory tree deeper than the walk";
+            goto done;
+        }
+        /* A subdirectory's names take the segment after its parent's, so
+         * the parent's stand when the walk returns. */
+        stack_first[depth] = sub;
+        stack_resume[depth] = 0;
+        stack_length[depth] = sub_length;
+        stack_nofat[depth] = sub_nofat;
+        stack_base[depth] = stack_base[depth - 1] + stack_names[depth - 1];
+        stack_names[depth] = 0;
+        depth++;
+    }
+    /* The repairs, now that the whole tree is walked: checksums first,
+     * then orphans, then the surplus tails, detached before freed. */
+    for (i = 0; i < w.nsets; i++) {
+        struct ex_node d;
+        uint32_t count;
+
+        k_memset(&d, 0, sizeof(d));
+        d.is_dir = 1;
+        d.first = w.set_dir[i];
+        rc = set_load(em, &d, w.set_index[i], &count);
+        if (rc == 0) {
+            rc = set_store(em, &d, w.set_index[i], count, 1);
+        }
+        if (rc != 0) {
+            w.why = "a repair write failed";
+            goto done;
+        }
+        w.repaired++;
+        klog(KLOG_WARN, "exfat", "check: a set's checksum rewritten");
+    }
+    for (i = 0; i < w.norphans; i++) {
+        struct ex_node d;
+        uint8_t raw[32];
+
+        k_memset(&d, 0, sizeof(d));
+        d.is_dir = 1;
+        d.first = w.orphan_dir[i];
+        rc = dir_entry(em, &d, w.orphan_index[i], raw);
+        if (rc == 1) {
+            raw[0] &= 0x7F;
+            rc = dir_write(em, &d, w.orphan_index[i], raw, 1);
+        }
+        if (rc != 1 && rc != 0) {
+            w.why = "a repair write failed";
+            goto done;
+        }
+        w.repaired++;
+    }
+    if (w.norphans) {
+        klog(KLOG_WARN, "exfat", "check: %d orphan secondaries freed", w.norphans);
+    }
+    for (i = 0; i < w.ntails; i++) {
+        rc = fat_set(em, w.tail_prev[i], EX_EOC);
+        if (rc == 0) {
+            rc = free_chain(em, w.tail_first[i], 0, 0);
+        }
+        if (rc != 0) {
+            w.why = "a repair write failed";
+            goto done;
+        }
+        w.repaired++;
+        klog(KLOG_WARN, "exfat", "check: surplus tail freed");
+    }
+    /* The bitmap against the walk: a bit set that nothing reached is lost
+     * and left; the tails just freed are marked and free, which is right. */
+    for (c = 2; c < em->clusters + 2; c++) {
+        uint8_t byte;
+
+        rc = object_read(em, em->bitmap_first, (uint64_t)(c - 2) / 8, &byte, 1);
+        if (rc != 0) {
+            w.why = "an unreadable bitmap";
+            goto done;
+        }
+        if (byte & (1u << ((c - 2) % 8))) {
+            allocated++;
+            if (!fat_walk_marked(c)) {
+                w.lost++;
+            }
+        }
+    }
+    em->free_clusters = em->clusters - (uint32_t)allocated;
+    em->free_known = 1;
+    if (w.lost) {
+        klog(KLOG_WARN, "exfat", "check: %d lost cluster(s) left for a host tool", (int)w.lost);
+    }
+    klog(KLOG_INFO, "exfat", "check: consistent, %d repair(s)", w.repaired);
+    rc = 0;
+done:
+    fat_walk_release();
+    if (w.why) {
+        klog(KLOG_WARN, "exfat", "check: %s; read-only", w.why);
+        return 1;
+    }
+    return rc;
 }
 
 /* The path of a directory node within the mount, from the parents the
