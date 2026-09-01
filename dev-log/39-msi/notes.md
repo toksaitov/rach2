@@ -281,6 +281,16 @@ synthetic file systems' Readme for the two `/proc` files. A third document
 would have been a third copy of what the proofread had just finished taking
 down to one.
 
+## The final tree
+
+`tests/run all` on the closing tree: 63 of the 64 suites pass in one run, and
+`selfbuild` fails there and passes on its own in 250 s. It clobbers its own
+work disk when it runs beside the others, which is a property of the runner
+and not of this milestone; milestone 38 recorded the same thing. `make test`
+is 5 minutes 6 seconds against milestone 38's 4 minutes 25, and the six new
+USB boots, the audio suite's two probe reads, the clock self-test's 66 ms and
+the extra commands in `procfiles` are where the difference went.
+
 ## Open items
 
 (none)

@@ -18,6 +18,6 @@ Phase 4: HDA on MSI
 - [x] HDA's MSI beside its legacy line; the audio suite's count; metal_accept.sh's lines for milestone 43
 
 Phase 5: the record and the sweep
-- [ ] docs read against code; prosecheck; the review round and the proofread; the sweep
-- [ ] notes.md closed empty; the full set once on the final tree; make test timed
-- [ ] dev-log Readmes; tree clean
+- [x] docs read against code; prosecheck; the review round and the proofread; the sweep
+- [x] notes.md closed empty; the full set once on the final tree; make test timed
+- [x] dev-log Readmes; tree clean
