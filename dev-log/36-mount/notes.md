@@ -189,3 +189,91 @@ rebuilt per mutant, verified by its mtime, one boot each):
 
 The phase gate: style, host, default, authority, bootpart, diskdiag,
 procfiles and mount green on the tree before the commits.
+
+## Review round
+
+Seven units were fixed before phase 5 closed; the owner then capped
+concurrent delegation at two (CLAUDE.md, Agents), so the round ran five,
+then two, then two. Unit 3 (the VFS, five files) ran past its ten minutes
+without a result and was re-run as 3a (the resolver and the operations) and
+3b (mounts, descriptions, the working directory); the original later
+returned a result as well, which was read with the two. Unit 7 (the
+proofread) fell into Codex's background without a result and is re-run on
+the final documents in phase 6. Eight units returned findings; every
+finding was fixed or is recorded here with its reason.
+
+What the round found, by unit, and what changed:
+
+* Block path: a late completion freed a quarantined slot that a timed-out
+  caller could still touch (a request is now owned by its generation, which
+  the late completion advances); claims compared device pointers and so did
+  not see /dev/disk0 and a lagged partition as one disk (`block_physical`
+  reaches the disk under any view); the sleeping path did not require a
+  syscall (it does); /dev/disk0 read the device directly (it goes through
+  `block_request`); the lag device transferred into the request page at
+  submit, so a copy-out before the completion was invisible (a read is
+  staged and the page scrubbed until the completion is delivered); the
+  deadline row accepted any error and the write row had no timing (the raw
+  read reports the request's errno, the rows require EIO and the lag's
+  time); the shared-description row summed bytes (each sector of a numbered
+  file must reach exactly one of two readers).
+* Buffer cache: the hold rule allowed a two-device cycle (a process holds
+  buffers of one device at a time); sync skipped a buffer whose write had
+  failed and reported success (it retries and returns the first errno); a
+  block number could wrap the sector arithmetic; a release or dirty mark by
+  a non-holder was accepted (both panic); the recycled-buffer retry
+  recursed; the release stamp comparison wrapped. The host test gained rows
+  for each, and a writeback row.
+* The VFS: a mounting or unmounting mount was invisible to the resolver
+  instead of EBUSY; truncate did not repoint a relocated node; repoint
+  missed the working directory and did not qualify by mount; 64-bit
+  offsets were narrowed silently (EFBIG past 32 bits); the synthetic types
+  had no getattr, so `/dev/null/x` was EROFS and not ENOTDIR; mount(2)
+  checked the length after the kind, lost getattr's errno, recorded the
+  spelling and not the canonical path, reserved its slot outside the
+  parent's namespace lock, and ignored a sync failure at unmount; a mount
+  on the root of a placed mount reached the constructor; the header
+  claimed a cwd start the layer never used (the layer joins relative paths
+  itself; the header says so now); every lock wait spun on a pending
+  signal (`wq_wait_event_nointr`); the working directory's hold leaked on
+  chdir("/"), a synthetic chdir, a signal death and a failed exec.
+* The syscall layer: open created or truncated before the descriptor table
+  was checked (checked first); lseek and getdents64 ran without the
+  description lock; the generic namespace, chmod, chown, utimensat and
+  exec arms skipped the permission policy the root type keeps (parent
+  write bit, sticky rule, owner rule, set-id clear, group-execute for
+  set-gid); errors from getattr, fstat and a failed image read were
+  rewritten; mkdir leaked the found node on EEXIST; an interpreter on
+  another mount was cast to a KRFFS node (it loads through its mount).
+* vfat: reserved FAT values could be followed (the cluster bound keeps
+  them out); long names with a reserved ordinal bit, a wrong attribute
+  byte, a unit past the terminator or an unpaired surrogate were accepted
+  (each falls back to the alias); inode numbers collided (a file's is its
+  directory's cluster and index in two words); `..` listed with inode 0;
+  option values overflowed and umask took decimal digits; the creation
+  hundredths were dropped and out-of-range date fields silently mapped.
+  The fixture gained the four names, a stamped file and a directory of
+  forty files; the host test patches the boot sector field by field and
+  requires the field named in the log.
+* Probes and suite: rows that passed for a weaker reason were rewritten
+  (a second mount on a target proved with another source, the long target
+  followed by a mount that must succeed, the close-on-exec row with a
+  child that stays alive, the record row reading `1 opens, 1 releases`
+  from /dev/bootlog after three duplicates and a failed one, the
+  root-beside-lag boot reading /proc/mounts, the BusyBox row requiring
+  zero vfat lines); the harness fails a machine that exits with a nonzero
+  status even after the token; the unmount-record awk requires a record.
+
+Recorded and not changed: a reader asleep inside a KRFFS operation while a
+writer relocates the node cannot happen, because the root is on a
+fault-safe device and KRFFS never sleeps; the type operations `put` and
+`release` do not sleep, which the vfs.h contract now states.
+
+Mutations proved after the block-path fixes, through mutate36r1.sh (the
+same shape as the phase scripts): claims compared on the view instead of
+the disk (caught by the lag mounted boot, whose row opens /dev/disk0 for
+writing under diskdiag); a read copied out at submit and not at the
+completion (caught by the write boot); the deadline answering EPERM (caught
+by the deadline boot); the description lock dropped (caught by the
+every-sector-once row); the lag delivering at once (caught by the sleep
+boot's timing under a ten-tick lag).
