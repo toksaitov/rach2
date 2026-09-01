@@ -22,7 +22,7 @@
 #define FAT_EOC_MIN      0x0FFFFFF8u
 #define FAT_BAD          0x0FFFFFF7u
 #define FAT_MASK         0x0FFFFFFFu
-#define FAT_MAX_CLUSTERS 0x0FFFFFF5u
+#define FAT_MAX_CLUSTERS 0x0FFFFFEEu /* so no cluster number reaches the reserved 0x0FFFFFF0 */
 
 #define ATTR_READ_ONLY 0x01
 #define ATTR_HIDDEN    0x02
@@ -39,10 +39,10 @@ struct fat_node {
     int is_dir;
     uint32_t dir_cluster; /* the directory holding the entry; 0 for the root */
     uint32_t index;       /* entry index in that directory */
-    uint32_t gen;
     uint32_t first; /* first cluster; 0 for an empty file or the root */
     uint32_t size;
     uint16_t date, time, cdate, ctime, adate;
+    uint8_t ctenth; /* creation time, hundredths of a second, 0 to 199 */
     /* The last cluster reached by a read, so a sequential read walks the
      * chain once rather than from the start on every call. */
     uint32_t hint_index;
@@ -64,7 +64,6 @@ struct fat_mount {
     uint32_t uid, gid, umask;
     int free_known;
     uint32_t free_clusters;
-    uint32_t gen;
     struct fat_node nodes[FAT32_NODES];
 };
 
@@ -161,7 +160,7 @@ static int fat_next(struct fat_mount *fm, uint32_t cluster, uint32_t *next)
  * The cluster `index` clusters into the chain starting at `first`, walked
  * with the cluster count as the bound so a loop ends in EIO; a chain that
  * ends before the index answers ENXIO, which a directory reads as its end
- * and a file as damage. `node` may carry a hint from the last walk, which
+ * and a file as damage. `node` may keep a hint from the last walk, which
  * is used when it is behind the target and updated on the way out.
  */
 static int chain_at(struct fat_mount *fm, struct fat_node *node, uint32_t first, uint32_t index,
@@ -213,7 +212,6 @@ static struct fat_node *node_take(struct fat_mount *fm)
             k_memset(&fm->nodes[i], 0, sizeof(fm->nodes[i]));
             fm->nodes[i].used = 1;
             fm->nodes[i].refs = 1;
-            fm->nodes[i].gen = ++fm->gen;
             return &fm->nodes[i];
         }
     }
@@ -355,7 +353,9 @@ static void lfn_units(const uint8_t *raw, uint16_t *units)
 
 /**
  * Render UTF-16 `units` (terminated by 0 or by `count`) as UTF-8 into
- * `out`; 0 on success, -ENAMETOOLONG when it does not fit the component.
+ * `out`; 0 on success, -ENAMETOOLONG when it does not fit the component,
+ * -EINVAL for a name no writer produces: an unpaired surrogate, or a unit
+ * after the terminator that is not the 0xFFFF padding.
  */
 static int units_to_utf8(const uint16_t *units, uint32_t count, char *out, uint32_t cap)
 {
@@ -366,15 +366,25 @@ static int units_to_utf8(const uint16_t *units, uint32_t count, char *out, uint3
         uint32_t cp = units[i++];
         int w;
 
-        if (cp >= 0xD800 && cp < 0xDC00 && i < count && units[i] >= 0xDC00 && units[i] < 0xE000) {
+        if (cp >= 0xD800 && cp < 0xDC00) {
+            if (i >= count || units[i] < 0xDC00 || units[i] >= 0xE000) {
+                return -EINVAL;
+            }
             cp = 0x10000 + ((cp - 0xD800) << 10) + (units[i] - 0xDC00);
             i++;
+        } else if (cp >= 0xDC00 && cp < 0xE000) {
+            return -EINVAL;
         }
         w = put_utf8(cp, out + n, cap - 1 - n);
         if (w == 0) {
             return -ENAMETOOLONG;
         }
         n += (uint32_t)w;
+    }
+    for (i++; i < count; i++) {
+        if (units[i] != 0xFFFF) {
+            return -EINVAL;
+        }
     }
     out[n] = '\0';
     return 0;
@@ -463,7 +473,7 @@ static int dir_scan(struct fat_mount *fm, struct fat_node *dir, uint32_t first, 
             continue; /* deleted */
         }
         attr = e.raw[11];
-        if ((attr & 0x3F) == ATTR_LFN) {
+        if (attr == ATTR_LFN) {
             uint8_t ord = e.raw[0];
             int seq = ord & 0x1F;
 
@@ -475,8 +485,8 @@ static int dir_scan(struct fat_mount *fm, struct fat_node *dir, uint32_t first, 
                 lfn_count = 0;
                 lfn_expect = seq;
                 lfn_sum = e.raw[13];
-                lfn_ok = (seq >= 1 && seq <= LFN_MAX_ENTRIES);
-            } else if (!lfn_ok || seq != lfn_expect) {
+                lfn_ok = (seq >= 1 && seq <= LFN_MAX_ENTRIES && (ord & 0xA0) == 0);
+            } else if (!lfn_ok || seq != lfn_expect || (ord & 0xE0) != 0) {
                 lfn_ok = 0;
             }
             if (lfn_ok && (e.raw[12] != 0 || le16(e.raw + 26) != 0 || e.raw[13] != lfn_sum)) {
@@ -498,8 +508,10 @@ static int dir_scan(struct fat_mount *fm, struct fat_node *dir, uint32_t first, 
         out->name_too_long = 0;
         short_to_name(e.raw, out->alias);
         if (lfn_ok && lfn_expect == 0 && lfn_count > 0 && short_checksum(e.raw) == lfn_sum) {
-            if (units_to_utf8(units, (uint32_t)lfn_count * 13, out->name, sizeof(out->name)) != 0) {
-                out->name_too_long = 1;
+            int rc = units_to_utf8(units, (uint32_t)lfn_count * 13, out->name, sizeof(out->name));
+
+            if (rc != 0) {
+                out->name_too_long = rc == -ENAMETOOLONG;
                 short_to_name(e.raw, out->name);
             }
         } else {
@@ -558,6 +570,7 @@ static struct fat_node *node_for(struct fat_mount *fm, uint32_t dir_cluster,
     n->index = sc->index;
     n->first = first;
     n->size = is_dir ? 0 : le32(sc->ent.raw + 28);
+    n->ctenth = sc->ent.raw[13];
     n->ctime = (uint16_t)le16(sc->ent.raw + 14);
     n->cdate = (uint16_t)le16(sc->ent.raw + 16);
     n->adate = (uint16_t)le16(sc->ent.raw + 18);
@@ -615,8 +628,20 @@ static int fat_lookup(struct vfs_mount *mnt, void *dir, const char *name, void *
     }
 }
 
+/* The inode number: a directory is its first cluster, below 2^28; a file is
+ * its directory's cluster (0 for the root) plus one in the high word and
+ * its entry index plus one in the low, so no two entries share a number. */
+static uint64_t fat_ino(int is_dir, uint32_t first, uint32_t dir_cluster, uint32_t index)
+{
+    if (is_dir) {
+        return first;
+    }
+    return ((uint64_t)(dir_cluster + 1) << 32) | (uint64_t)(index + 1);
+}
+
 /* FAT keeps local time with no zone; it is read as UTC. Days count from
- * 1980-01-01 through the Gregorian rule, in 32-bit arithmetic. */
+ * 1980-01-01 through the Gregorian rule, in 32-bit arithmetic. A field out
+ * of its range reads as 1980-01-01, as an unset stamp does. */
 static int64_t fat_epoch(uint16_t date, uint16_t time)
 {
     uint32_t year = 1980 + (date >> 9);
@@ -625,9 +650,16 @@ static int64_t fat_epoch(uint16_t date, uint16_t time)
     uint32_t days = 0;
     uint32_t y;
     static const uint32_t before[12] = {0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334};
+    static const uint32_t length[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    int leap;
 
     if (month < 1 || month > 12 || day < 1) {
         return 315532800; /* 1980-01-01: an unset or broken stamp */
+    }
+    leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    if (day > length[month - 1] + (month == 2 && leap ? 1u : 0u) || (time >> 11) > 23 ||
+        ((time >> 5) & 0x3F) > 59 || (time & 0x1F) > 29) {
+        return 315532800;
     }
     for (y = 1970; y < year; y++) {
         days += (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)) ? 366 : 365;
@@ -654,11 +686,10 @@ static int fat_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     st->gid = fm->gid;
     st->nlink = 1;
     st->size = n->size;
-    /* The inode is the entry's place: its directory's cluster and index,
-     * or the directory's own first cluster. */
-    st->ino = n->is_dir ? (uint64_t)n->first : ((uint64_t)n->dir_cluster << 16) + n->index + 1;
+    st->ino = fat_ino(n->is_dir, n->first, n->dir_cluster, n->index);
     st->mtime_sec = fat_epoch(n->date, n->time);
-    st->ctime_sec = fat_epoch(n->cdate, n->ctime);
+    st->ctime_sec = fat_epoch(n->cdate, n->ctime) + n->ctenth / 100;
+    st->ctime_nsec = (int64_t)(n->ctenth % 100) * 10000000;
     st->atime_sec = fat_epoch(n->adate, 0);
     return 0;
 }
@@ -742,9 +773,15 @@ static int fat_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
     k_strncpy(ent->name, sc.name, sizeof(ent->name));
     ent->name[sizeof(ent->name) - 1] = '\0';
     ent->is_dir = (sc.ent.raw[11] & ATTR_DIRECTORY) ? 1 : 0;
-    ent->ino = ent->is_dir
-                   ? (uint64_t)entry_first(sc.ent.raw)
-                   : ((uint64_t)(d->first == fm->root_cluster ? 0 : d->first) << 16) + sc.index + 1;
+    {
+        uint32_t first = entry_first(sc.ent.raw);
+
+        if (ent->is_dir && first == 0) {
+            first = fm->root_cluster; /* `.` of the root, or `..` naming it */
+        }
+        ent->ino = fat_ino(ent->is_dir, first,
+                           d->first == fm->root_cluster ? 0 : d->first, sc.index);
+    }
     return 1;
 }
 
@@ -822,7 +859,7 @@ static int key_is(const char *key, const char *end, const char *word)
 }
 
 /* `umask=`, `uid=` and `gid=` are the options Linux's vfat takes and
- * BusyBox passes through; `ro` is the flag spelled as data. Anything else
+ * BusyBox passes through; `ro` is the flag given as data. Anything else
  * is refused. */
 static int parse_options(struct fat_mount *fm, const char *options)
 {
@@ -838,17 +875,25 @@ static int parse_options(struct fat_mount *fm, const char *options)
         int base = 10;
         int digits = 0;
 
+        int has_value = 0;
+
         while (*p && *p != ',' && *p != '=') {
             p++;
         }
         keyend = p;
         if (*p == '=') {
             p++;
+            has_value = 1;
             if (key_is(key, keyend, "umask")) {
                 base = 8;
             }
-            while (*p >= '0' && *p <= '9') {
-                value = value * (uint32_t)base + (uint32_t)(*p - '0');
+            while (*p >= '0' && *p < '0' + base) {
+                uint32_t digit = (uint32_t)(*p - '0');
+
+                if (value > (0xFFFFFFFFu - digit) / (uint32_t)base) {
+                    return -EINVAL; /* past 32 bits */
+                }
+                value = value * (uint32_t)base + digit;
                 p++;
                 digits++;
             }
@@ -856,8 +901,8 @@ static int parse_options(struct fat_mount *fm, const char *options)
         if (*p != '\0' && *p != ',') {
             return -EINVAL;
         }
-        if (key_is(key, keyend, "ro")) {
-            /* the mount flag in another spelling */
+        if (key_is(key, keyend, "ro") && !has_value) {
+            /* the mount flag given as data */
         } else if (key_is(key, keyend, "umask") && digits) {
             fm->umask = value & 0777u;
         } else if (key_is(key, keyend, "uid") && digits) {
@@ -897,7 +942,7 @@ static int fat_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
     int rc;
 
     if (!(flags & VFS_MS_RDONLY)) {
-        return -EROFS; /* this milestone reads; a writable mount waits */
+        return -EROFS; /* nothing writes a volume yet */
     }
     for (i = 0; i < FAT32_MOUNTS; i++) {
         if (!fat_mounts[i].used) {

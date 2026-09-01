@@ -28,7 +28,9 @@
  * entry, long names (one across that boundary, one with a surrogate pair,
  * one whose checksum is wrong and must fall back to its lower-cased short
  * name, one over a short name starting in 0x05), a fragmented file and a
- * subdirectory whose `..` is the root. `--active-second` turns mirroring
+ * subdirectory whose `..` is the root, four long names no writer produces
+ * (each shown by its alias), a file with every time field set, and a
+ * directory of forty files. `--active-second` turns mirroring
  * off with the second FAT active and the first deliberately wrong;
  * `--unmasked` sets the reserved high nibble of the kernel chain's
  * entries, which a reader must mask before judging them. `--dir-loop` is
@@ -366,6 +368,7 @@ int main(int argc, char **argv)
         chain(5034, 1, 0);
         chain(5040, 2, clusters + 500); /* OUTRANGE.BIN: the third link is out */
         chain(5050, 1, 0);              /* SHORTCH.BIN: one cluster for three */
+        chain(5060, 3, 0);              /* /MANY: forty-two entries */
         if (is("--dir-loop"))
             link_cluster(5020, 5020);
     }
@@ -435,6 +438,63 @@ int main(int argc, char **argv)
         units[207] = 't';
         lfn_write(far, units, 208, "LONGLO~1TXT", 0);
         dirent_at(img + CLUSTER_OFF(10), "LONGLO~1TXT", 0x20, 5034, 8);
+        /* Cluster 10 continues with long names no writer produces, each
+           of which a reader must show by its short alias: a reserved bit
+           in the ordinal, a wrong attribute byte, a unit after the
+           terminator that is not padding, and an unpaired surrogate. */
+        p = img + CLUSTER_OFF(10) + 32;
+        n = ascii_units("badord.txt", units);
+        lfn_write(p, units, n, "BADORD  TXT", 0);
+        p[0] |= 0x80;
+        p += 32;
+        dirent_at(p, "BADORD  TXT", 0x20, 5031, 5);
+        p += 32;
+        n = ascii_units("badattr.txt", units);
+        lfn_write(p, units, n, "BADATTR TXT", 0);
+        p[11] = 0x4F;
+        p += 32;
+        dirent_at(p, "BADATTR TXT", 0x20, 5031, 5);
+        p += 32;
+        n = ascii_units("badpad.txt", units);
+        lfn_write(p, units, n, "BADPAD  TXT", 0);
+        w16(p + 28, 0x0041); /* unit 11, past the terminator at unit 10 */
+        p += 32;
+        dirent_at(p, "BADPAD  TXT", 0x20, 5031, 5);
+        p += 32;
+        units[0] = 0xD83D; /* a high surrogate with no low one after it */
+        n = 1 + ascii_units("lone.txt", units + 1);
+        lfn_write(p, units, n, "LONE    TXT", 0);
+        p += 32;
+        dirent_at(p, "LONE    TXT", 0x20, 5031, 5);
+        p += 32;
+        /* A file with every time field set: created 2020-03-04 12:00:00
+           plus 150 hundredths, modified 1999-12-31 23:59:58; and one whose
+           date names month 13. */
+        dirent_at(p, "STAMP   TXT", 0x20, 5031, 5);
+        p[13] = 150;
+        w16(p + 14, (12u << 11) | (0u << 5) | 0u);
+        w16(p + 16, (40u << 9) | (3u << 5) | 4u);
+        w16(p + 22, (23u << 11) | (59u << 5) | 29u);
+        w16(p + 24, (19u << 9) | (12u << 5) | 31u);
+        p += 32;
+        dirent_at(p, "BADDATE TXT", 0x20, 5031, 5);
+        w16(p + 24, (19u << 9) | (13u << 5) | 1u);
+        p += 32;
+        dirent_at(p, "MANY       ", 0x10, 5060, 0);
+        /* /MANY: forty files, each a node of its own, for the pool row. */
+        {
+            unsigned char *m = img + CLUSTER_OFF(5060);
+            char name11[12];
+
+            dirent_at(m, ".          ", 0x10, 5060, 0);
+            dirent_at(m + 32, "..         ", 0x10, 0, 0);
+            for (i = 0; i < 40; i++) {
+                memcpy(name11, "M00        ", 12);
+                name11[1] = (char)('0' + i / 10);
+                name11[2] = (char)('0' + i % 10);
+                dirent_at(m + 64 + 32 * i, name11, 0x20, 5031, 5);
+            }
+        }
         /* The files' bytes. */
         memcpy(img + CLUSTER_OFF(5030), "the long-named file's bytes", 27);
         memcpy(img + CLUSTER_OFF(5031), "smile", 5);
