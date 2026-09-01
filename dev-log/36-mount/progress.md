@@ -29,22 +29,22 @@ Phase 3: the interface and the migration
 - [x] families migrated one commit each: lookup/stat/access; open/creat/openat; read/write/lseek/getdents/truncate/fsync; unlink/mkdir/rmdir/chmod/chown/utimensat; rename/link; statfs/sync/chdir/getcwd/execve
 - [x] lexical .. step removed with the marked rows flipped
 - [x] synth_classify reachable only from the two types; krffs_resolve_x gone
-- [ ] tests/run all after the migration
+- [x] tests/run all after the migration (with the phase 4 gate)
 - [x] phase mutations; phase gate
 
 Phase 4: FAT32 read-only
 - [x] fat32.c reader per plan; vfat type
 - [x] mkfatfixture new cases; fat32_hosttest.c
-- [ ] phase mutations; phase gate
+- [x] phase mutations; phase gate
 
 Phase 5: mount
 - [x] mount/umount2, flags enforced, order of work, claims, /proc/mounts, /proc/filesystems
 - [x] mountprobe, lagprobe mounted half, vfsprobe through a mount
 - [x] suites/mount.sh, tests/run mount in core tier; BusyBox boot; mdir/mcopy comparison
 - [x] phase mutations; phase gate
-- [ ] review round: whole diff in parallel units (max 5), proofread unit, re-review only for contract changes
+- [x] review round: seven units fixed, run five then two at a time after the owner's cap; unit 3 split; every finding fixed or recorded
 
 Phase 6: the record and the sweep
-- [ ] docs written and read against code; prosecheck; sweep of code/build/tests
+- [x] docs written and read against code; prosecheck; sweep of code/build/tests
 - [ ] notes.md closed empty; full set once on the final tree; make test timed
 - [ ] dev-log Readmes; tree clean
