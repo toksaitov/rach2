@@ -338,9 +338,10 @@ static void check_dir(struct vol *v, uint32_t first, uint64_t length, int nofat,
 {
     char text[400], child[300], name[800];
     uint32_t *cl;
-    unsigned ncl = 0, i, orphans = 0;
+    unsigned ncl = 0, i, orphans = 0, nnames = 0;
     uint32_t c = first;
     long n;
+    uint16_t (*upnames)[256] = malloc(sizeof(*upnames) * 4096);
 
     if (depth > 32) {
         snprintf(text, sizeof(text), "depth: %s", path);
@@ -351,8 +352,10 @@ static void check_dir(struct vol *v, uint32_t first, uint64_t length, int nofat,
     if (n < 0)
         return;
     cl = malloc(sizeof(uint32_t) * (size_t)n);
-    if (!cl) {
+    if (!cl || !upnames) {
         finding(v, "out of memory");
+        free(cl);
+        free(upnames);
         return;
     }
     while (ncl < (unsigned)n) {
@@ -505,6 +508,25 @@ static void check_dir(struct vol *v, uint32_t first, uint64_t length, int nofat,
             }
             utf8_of(units, nlen, name, sizeof(name));
             snprintf(child, sizeof(child), "%s/%s", path, name);
+            /* Two names that up-case alike in one directory are one name. */
+            if (nnames < 4096) {
+                unsigned m, q;
+
+                for (q = 0; q < nlen; q++)
+                    upnames[nnames][q] = v->upcase[units[q]];
+                upnames[nnames][nlen] = 0;
+                for (m = 0; m < nnames; m++) {
+                    for (q = 0; q <= nlen; q++)
+                        if (upnames[m][q] != upnames[nnames][q])
+                            break;
+                    if (q > nlen) {
+                        snprintf(text, sizeof(text), "duplicate name: %s", child);
+                        finding(v, text);
+                        break;
+                    }
+                }
+                nnames++;
+            }
             if (checksum_bad) {
                 /* Every other invariant held: the state a stop between the
                    two writes of a straddling change leaves, which the check
@@ -585,6 +607,7 @@ static void check_dir(struct vol *v, uint32_t first, uint64_t length, int nofat,
         finding(v, text);
     }
     free(cl);
+    free(upnames);
 }
 
 /* ---- the boot regions and the root's objects ---- */
@@ -984,8 +1007,9 @@ struct build {
     const char *opt;
     /* Where the shapes went, for the variants that damage them. */
     uint32_t hello_set, chained_set, valid_set, chained_first;
-    uint32_t bitmap_entry, upcase_entry;
+    uint32_t bitmap_entry, upcase_entry, lost_first;
     unsigned percent; /* the heap's percent in use, rounded down */
+    int dirty;        /* VolumeDirty set over the tree */
 };
 
 /* The builder's own sums, apart from the reader's, so that a mutation in
@@ -1313,7 +1337,7 @@ static void boot_write(struct build *b, uint64_t first)
     wr32(s0 + 96, first == 0 && b_is(b, "--main-bad-root") ? b->root + 1 : b->root);
     wr32(s0 + 100, 0x12345678u);
     wr16(s0 + 104, 0x0100);
-    wr16(s0 + 106, (b_is(b, "--dirty") ? 2u : 0u) | (b_is(b, "--media-failure") ? 4u : 0u));
+    wr16(s0 + 106, (b->dirty ? 2u : 0u) | (b_is(b, "--media-failure") ? 4u : 0u));
     s0[108] = (unsigned char)b->bps_shift;
     s0[109] = (unsigned char)b->spc_shift;
     s0[110] = 1;
@@ -1347,6 +1371,19 @@ static int build(const char *out, const char *opt)
 
     memset(&b, 0, sizeof(b));
     b.opt = opt;
+    if (opt && strncmp(opt, "--dirty-", 8) == 0 && strcmp(opt, "--dirty-orphan") != 0 &&
+        strcmp(opt, "--dirty-surplus") != 0 && strcmp(opt, "--dirty-lost") != 0 &&
+        strcmp(opt, "--dirty-dup") != 0 && strcmp(opt, "--dirty-critical") != 0) {
+        /* --dirty-X: X's damage under the dirty bit, the state a crash of
+           another writer leaves. */
+        static char plain[64];
+
+        snprintf(plain, sizeof(plain), "--%s", opt + 8);
+        b.opt = plain;
+        b.dirty = 1;
+    }
+    if (opt && strncmp(opt, "--dirty", 7) == 0)
+        b.dirty = 1;
     b.bps_shift = b_is(&b, "--sector-4k") ? 12 : B_BPS_SHIFT;
     b.spc_shift = b_is(&b, "--sector-4k") ? 0 : B_SPC_SHIFT;
     b.sectors = B_SECTORS >> (b.bps_shift - B_BPS_SHIFT);
@@ -1543,6 +1580,9 @@ static int build(const char *out, const char *opt)
             wr16(hello + 32 + 4, rd16(hello + 32 + 4) + 1);
             resum_hello = 1;
         }
+        if (b_is(&b, "--hash-and-checksum")) {
+            wr16(hello + 32 + 4, rd16(hello + 32 + 4) + 1); /* the checksum left wrong too */
+        }
         if (b_is(&b, "--vdl-past-dl")) {
             wr64(valid + 32 + 8, rd64(valid + 32 + 24) + 1);
             resum_valid = 1;
@@ -1588,7 +1628,47 @@ static int build(const char *out, const char *opt)
                 used++;
         b.percent = (unsigned)((uint64_t)used * 100 / b.clusters);
     }
-    if (b_is(&b, "--junk")) {
+    if (b_is(&b, "--dirty-orphan")) {
+        /* Two in-use name entries with no primary before them, at the
+           root's end: what a stop before a file entry's write leaves. */
+        unsigned char e[32];
+
+        memset(e, 0, 32);
+        e[0] = 0xC1;
+        memcpy(e + 2, "o\0r\0p\0h\0", 8);
+        dw_put(&root, e);
+        dw_put(&root, e);
+    }
+    if (b_is(&b, "--dirty-surplus")) {
+        /* chained.bin's FAT chain runs one cluster past its length. */
+        uint32_t extra = b_alloc(&b, 1, 1);
+
+        b_fat(&b, b.chained_first + 4, extra); /* its third cluster, two gaps on */
+    }
+    if (b_is(&b, "--dirty-lost")) {
+        /* A chain of two clusters, allocated and chained, that no set
+           names: its bytes are the only copy and the check leaves them. */
+        uint32_t lost = b_alloc(&b, 2, 1);
+
+        fill(&b, lost, (uint64_t)b_cbytes(&b) * 2, 0x99);
+        b.lost_first = lost;
+    }
+    if (b_is(&b, "--dirty-dup")) {
+        /* A second set whose name up-cases like hello.txt's. */
+        c = b_alloc(&b, 1, 0);
+        memcpy(b_cluster(&b, c), "twin\n", 5);
+        n = set_build(&b, set, "HELLO.txt", 0, c, 5, 5, 1, 0, 0);
+        dw_put_set(&root, set, n);
+    }
+    if (b_is(&b, "--dirty-critical")) {
+        /* A critical primary this driver does not know, in dir. */
+        unsigned char e[32];
+
+        memset(e, 0, 32);
+        e[0] = 0x86;
+        dw_put(&dir, e);
+    }
+    if (b_is(&b, "--junk") || b.dirty) {
         /* Every free cluster holds bytes nobody wrote, so a size published
            before its data shows in the oracle. */
         for (c = 2; c < b.clusters + 2; c++)

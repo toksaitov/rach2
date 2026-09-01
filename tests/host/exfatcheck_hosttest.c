@@ -111,6 +111,21 @@ int main(void)
     row("--surplus", 1, "surplus: /chained.bin (2 clusters)");
     row("--overlap", 1, "cross-link: /hello.txt");
 
+    /* The states a crash leaves under the dirty bit: the check's repairs
+       and its faults, each named. */
+    row("--dirty-bad-set-checksum", 1, "checksum-only: /hello.txt");
+    row("--dirty-orphan", 1, "orphan secondaries: 2 in /");
+    row("--dirty-surplus", 1, "surplus: /chained.bin (1 clusters)");
+    row("--dirty-lost", 1, "lost: 2 cluster(s)");
+    row("--dirty-dup", 1, "duplicate name: /HELLO.txt");
+    row("--dirty-critical", 1, "unknown primary entry 0x86 in /dir");
+    row("--dirty-overlap", 1, "cross-link: /hello.txt");
+    row("--dirty-short-stream", 1, "short chain: /chained.bin");
+    row("--dirty-reached-free", 1, "cluster free in the bitmap: /hello.txt");
+    row("--dirty-wrong-name-length", 1, "name entries with units past NameLength");
+    row("--dirty-loop", 1, "loop: /chained.bin");
+    row("--dirty-hash-and-checksum", 1, "name hash");
+
     if (fails == 0) {
         printf("exfatcheck_hosttest: OK\n");
         return 0;
