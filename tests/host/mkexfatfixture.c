@@ -338,7 +338,7 @@ static void check_dir(struct vol *v, uint32_t first, uint64_t length, int nofat,
 {
     char text[400], child[300], name[800];
     uint32_t *cl;
-    unsigned ncl = 0, i;
+    unsigned ncl = 0, i, orphans = 0;
     uint32_t c = first;
     long n;
 
@@ -363,6 +363,7 @@ static void check_dir(struct vol *v, uint32_t first, uint64_t length, int nofat,
     for (i = 0;; i++) {
         const unsigned char *e = dir_entry(v, cl, ncl, i);
         unsigned type, secondaries, k, nlen, got = 0;
+        int checksum_bad = 0;
         uint16_t units[255];
         const unsigned char *stream = 0;
         uint16_t sum;
@@ -399,6 +400,12 @@ static void check_dir(struct vol *v, uint32_t first, uint64_t length, int nofat,
         if (type == 0x83 || type == 0xA1) {
             continue; /* the label, TexFAT padding: primaries with no set to walk */
         }
+        if (type & 0x40) {
+            /* An in-use secondary outside a set: what a stop before a
+               file entry's write leaves, and the check frees. */
+            orphans++;
+            continue;
+        }
         if (type != 0x85) {
             snprintf(text, sizeof(text), "unknown primary entry 0x%02x in %s", type, path);
             finding(v, text);
@@ -427,13 +434,7 @@ static void check_dir(struct vol *v, uint32_t first, uint64_t length, int nofat,
             for (k = 0; k <= secondaries; k++)
                 memcpy(set + k * 32, dir_entry(v, cl, ncl, i + k), 32);
             sum = set_checksum(set, secondaries + 1);
-            if (sum != rd16(set + 2)) {
-                snprintf(text, sizeof(text), "set checksum %04x, stored %04x, in %s", sum,
-                         rd16(set + 2), path);
-                finding(v, text);
-                i += secondaries;
-                continue;
-            }
+            checksum_bad = sum != rd16(set + 2);
             if (set[32] != 0xC0) {
                 snprintf(text, sizeof(text), "set without a stream extension second in %s", path);
                 finding(v, text);
@@ -504,6 +505,14 @@ static void check_dir(struct vol *v, uint32_t first, uint64_t length, int nofat,
             }
             utf8_of(units, nlen, name, sizeof(name));
             snprintf(child, sizeof(child), "%s/%s", path, name);
+            if (checksum_bad) {
+                /* Every other invariant held: the state a stop between the
+                   two writes of a straddling change leaves, which the check
+                   repairs by rewriting the checksum. */
+                snprintf(text, sizeof(text), "checksum-only: %s (stored %04x, computed %04x)",
+                         child, rd16(set + 2), sum);
+                finding(v, text);
+            }
             if (v->dump && !v->first_set_dumped && !(rd16(set + 4) & 0x10)) {
                 char ct[64], mt[64], at[64];
 
@@ -570,6 +579,10 @@ static void check_dir(struct vol *v, uint32_t first, uint64_t length, int nofat,
             }
             i += secondaries;
         }
+    }
+    if (orphans) {
+        snprintf(text, sizeof(text), "orphan secondaries: %u in %s", orphans, path[0] ? path : "/");
+        finding(v, text);
     }
     free(cl);
 }
@@ -1574,6 +1587,13 @@ static int build(const char *out, const char *opt)
             if (b_cluster(&b, 2)[(c - 2) / 8] & (1u << ((c - 2) % 8)))
                 used++;
         b.percent = (unsigned)((uint64_t)used * 100 / b.clusters);
+    }
+    if (b_is(&b, "--junk")) {
+        /* Every free cluster holds bytes nobody wrote, so a size published
+           before its data shows in the oracle. */
+        for (c = 2; c < b.clusters + 2; c++)
+            if (!(b_cluster(&b, 2)[(c - 2) / 8] & (1u << ((c - 2) % 8))))
+                memset(b_cluster(&b, c), 0xEE, b_cbytes(&b));
     }
     boot_write(&b, 0);
     boot_write(&b, 12);

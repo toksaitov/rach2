@@ -95,7 +95,8 @@ int main(void)
     row("--truncated-upcase-run", 1, "up-case table expands to");
     row("--second-bitmap", 1, "a second bitmap entry");
     row("--unknown-critical", 1, "unknown primary entry 0x86");
-    row("--bad-set-checksum", 1, "set checksum");
+    row("--bad-set-checksum", 1, "checksum-only: /hello.txt");
+    row("--junk", 0, "check: OK: ");
     row("--wrong-secondary-count", 1, "set with 1 secondaries");
     row("--wrong-name-length", 1, "name entries with units past NameLength 8");
     row("--false-hash", 1, "name hash");
