@@ -732,6 +732,13 @@ static void pool_rows(void)
     unmount_image();
 }
 
+void vfs_device_failed(block_device_t *dev, uint64_t lba, int rc)
+{
+    (void)dev;
+    (void)lba;
+    (void)rc;
+}
+
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     return wq_wait_event(wq, cond, arg);

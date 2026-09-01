@@ -557,9 +557,43 @@ int vfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
 int vfs_fsync(struct vfs_mount *mnt, void *handle)
 {
     if (!mnt->type->ops->fsync) {
-        return 0; /* nothing buffered is already stable */
+        return mnt->dev ? bcache_sync(mnt->dev) : 0;
     }
     return mnt->type->ops->fsync(mnt, handle);
+}
+
+void vfs_device_failed(block_device_t *dev, uint64_t lba, int rc)
+{
+    int i;
+
+    for (i = 0; i < VFS_MOUNTS; i++) {
+        if (mounts[i].state == VFS_FREE || mounts[i].dev != dev ||
+            (mounts[i].flags & VFS_MS_RDONLY)) {
+            continue;
+        }
+        mounts[i].flags |= VFS_MS_RDONLY;
+        klog(KLOG_WARN, "vfs", "read-only: %s: write of sector %u failed (%d)",
+             mounts[i].covered_path, (unsigned)lba, rc);
+    }
+}
+
+int vfs_sync_all(void)
+{
+    int i;
+
+    for (i = 0; i < VFS_MOUNTS; i++) {
+        struct vfs_mount *m = &mounts[i];
+
+        if (m->state != VFS_ACTIVE || !m->dev || vfs_enter(m) != 0) {
+            continue;
+        }
+        if (m->type->ops->sync) {
+            m->type->ops->sync(m);
+        }
+        bcache_sync(m->dev);
+        vfs_leave(m);
+    }
+    return 0;
 }
 
 int vfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)

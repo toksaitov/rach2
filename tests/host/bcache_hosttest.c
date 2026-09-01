@@ -12,9 +12,14 @@
  * every buffer of the device after, the hold rules and the ownership of a
  * release ending in a panic, a short last block, a block past the device and
  * a block number that would wrap the sector arithmetic both returning
- * nothing, and sync writing dirty buffers in ascending order and keeping a
- * buffer dirty across a failed write until a later call writes it. The
- * busy-buffer wait needs a scheduler and is the guest's row, not this one's.
+ * nothing, sync writing dirty buffers in ascending order and keeping a
+ * buffer dirty across a failed write until a later call writes it, a
+ * write-through reaching the device before it returns and in call order, a
+ * dirty victim written before its buffer is reused, a failed write recorded
+ * against the device and its sector with the buffer kept dirty and not
+ * reused, and a torn or dropped write the device reports as success, which
+ * the cache cannot see and the volume walk must judge. The busy-buffer wait
+ * needs a scheduler and is the guest's row, not this one's.
  *
  * No hosted headers: the kernel headers define the fixed-width types, and
  * the libc calls used here are declared by hand the way the other host
@@ -109,6 +114,20 @@ static int reads_made, fail_reads, fail_writes;
 static unsigned last_count;
 static uint64_t writes_lba[8];
 static int writes_made;
+/* The fault injector: report success and write nothing at write number
+   `drop_at`; write only `tear_bytes` at write number `tear_at`. */
+static int drop_at = -1, tear_at = -1, tear_bytes;
+/* What the cache recorded against the device. */
+static block_device_t *failed_dev;
+static uint64_t failed_lba;
+static int failed_rc;
+
+void vfs_device_failed(block_device_t *dev, uint64_t lba, int rc)
+{
+    failed_dev = dev;
+    failed_lba = lba;
+    failed_rc = rc;
+}
 
 static int fake_read(block_device_t *d, uint64_t lba, uint32_t count, void *buf)
 {
@@ -130,6 +149,13 @@ static int fake_write(block_device_t *d, uint64_t lba, uint32_t count, const voi
         writes_lba[writes_made] = lba;
     }
     writes_made++;
+    if (writes_made == drop_at) {
+        return 0; /* the device says yes and keeps nothing */
+    }
+    if (writes_made == tear_at) {
+        __builtin_memcpy((unsigned char *)d->drvdata + lba * 512, buf, (size_t)tear_bytes);
+        return 0;
+    }
     __builtin_memcpy((unsigned char *)d->drvdata + lba * 512, buf, count * 512);
     return 0;
 }
@@ -178,6 +204,10 @@ static void panic_row(void (*fn)(void *), void *arg, const char *text, const cha
 static void get_fake(void *arg)
 {
     bcache_get(&fake, *(uint64_t *)arg);
+}
+static void write_it(void *arg)
+{
+    bcache_write(arg);
 }
 static void get_other(void *arg)
 {
@@ -263,6 +293,78 @@ int main(void)
     check(image_small[2 * 4096] == 0xAB, "with the buffer's bytes");
     check(bcache_sync(&fake) == 0 && writes_made == 2, "and nothing is dirty after");
     check(bcache_invalidate(&fake) == 0, "so invalidation succeeds");
+
+    /* Write-through: bcache_write reaches the device before it returns,
+       in call order, and leaves the buffer clean. */
+    writes_made = 0;
+    b = bcache_get(&fake, 6);
+    b->data[7] = 0x5A;
+    check(bcache_write(b) == 0 && writes_made == 1 && writes_lba[0] == 48 && !b->dirty,
+          "a write-through reaches the device before it returns");
+    check(image_small[6 * 4096 + 7] == 0x5A, "with the buffer's bytes");
+    bcache_release(b);
+    c = bcache_get(&fake, 7);
+    check(bcache_write(c) == 0 && writes_made == 2 && writes_lba[1] == 56,
+          "and a second one follows it in call order");
+    current_proc = &proc_b;
+    panic_row(write_it, c, "does not hold",
+              "a write-through by a process that does not hold the buffer panics");
+    current_proc = &proc_a;
+    bcache_release(c);
+
+    /* A dirty victim is written before its buffer is reused: one dirty
+       buffer, then every buffer taken by the big device. */
+    b = bcache_get(&fake, 8);
+    b->data[0] = 0x77;
+    bcache_dirty(b);
+    bcache_release(b);
+    writes_made = 0;
+    for (i = 0; i < BCACHE_BUFFERS; i++) {
+        c = bcache_get(&other, i);
+        bcache_release(c);
+    }
+    check(writes_made == 1 && writes_lba[0] == 64 && image_small[8 * 4096] == 0x77,
+          "a dirty victim is written before its buffer is reused");
+
+    /* A failed write is recorded against the device: the mounts on it go
+       read-only through vfs_device_failed, and the buffer stays dirty until
+       a later sync writes it. */
+    b = bcache_get(&fake, 9);
+    b->data[0] = 0x66;
+    bcache_dirty(b);
+    bcache_release(b);
+    fail_writes = 1;
+    failed_dev = 0;
+    check(bcache_sync(&fake) == -5 && failed_dev == &fake && failed_lba == 72 && failed_rc == -5,
+          "a failed writeback is recorded against the device and its sector");
+    writes_made = 0;
+    for (i = 0; i < BCACHE_BUFFERS; i++) {
+        c = bcache_get(&other, i);
+        bcache_release(c);
+    }
+    b = bcache_get(&fake, 9);
+    check(b->dirty && b->data[0] == 0x66, "a dirty buffer whose write fails is not reused");
+    bcache_release(b);
+    fail_writes = 0;
+    check(bcache_sync(&fake) == 0 && image_small[9 * 4096] == 0x66, "and a later sync writes it");
+
+    /* The edge of the guarantee: a torn write and a dropped write are
+       reported as success by the device, so the cache cannot know; what
+       the disk holds afterwards is for the walk to judge. */
+    b = bcache_get(&fake, 10);
+    __builtin_memset(b->data, 0x99, 4096);
+    tear_at = writes_made + 1;
+    tear_bytes = 512;
+    check(bcache_write(b) == 0, "a torn write is reported as success");
+    check(image_small[10 * 4096] == 0x99 && image_small[10 * 4096 + 512] == 81,
+          "and leaves the prefix new and the rest old on the device");
+    tear_at = -1;
+    drop_at = writes_made + 1;
+    __builtin_memset(b->data, 0x88, 4096);
+    check(bcache_write(b) == 0 && image_small[10 * 4096] == 0x99,
+          "a dropped write leaves the device as it was");
+    drop_at = -1;
+    bcache_release(b);
 
     /* Replacement is least recently released: fill every buffer from `other`,
        refresh block 0, and the next miss must evict other:1 exactly. */

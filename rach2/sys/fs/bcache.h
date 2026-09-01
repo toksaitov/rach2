@@ -13,9 +13,15 @@
  * whose sector count is not a multiple of eight is read and written as the
  * sectors that exist.
  *
- * Nothing writes through the cache yet: `bcache_dirty` and `bcache_sync`
- * exist for the first file system that writes, and the host test proves what
- * they do.
+ * Writes: metadata is written through and data is written back. A file
+ * system writes a metadata buffer with `bcache_write`, which reaches the
+ * device before it returns, so the order in which a driver writes metadata
+ * is the order in which it reaches the disk. Data goes through
+ * `bcache_dirty` and reaches the disk at eviction, at `fsync`, at `sync`,
+ * and through the periodic sync process. A dirty victim is written before
+ * its buffer is reused. A write that fails, by either path, is recorded
+ * against the device through `vfs_device_failed`: the mounts on it go
+ * read-only, and the buffer stays dirty for a later sync to try again.
  *
  * A held buffer is busy. The kernel does not preempt inside a syscall, so a
  * second process reaches a busy buffer only while the holder is asleep in a
@@ -53,8 +59,12 @@ struct bbuf *bcache_get(block_device_t *dev, uint64_t blk);
 /** Let a held buffer go and wake whoever waits for it. */
 void bcache_release(struct bbuf *b);
 
-/** Mark a held buffer for writeback. Milestone 37 is the first caller. */
+/** Mark a held buffer for writeback. */
 void bcache_dirty(struct bbuf *b);
+
+/** Write a held buffer through to the device now; 0 with the buffer clean,
+ * or the write's -errno with it dirty and the failure recorded. */
+int bcache_write(struct bbuf *b);
 
 /** Write `dev`'s dirty buffers in ascending block order; 0, or the first
  * write's -errno with that buffer and the rest still dirty for the next

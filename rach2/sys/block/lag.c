@@ -7,7 +7,9 @@
  * real device. It exists so the sleeping path is proved by a device that
  * behaves and by one that does not, before a USB disk exists: with N above
  * the deadline it is a device that never answers in time, which is how the
- * quarantine is exercised without a mutation.
+ * quarantine is exercised without a mutation. `rach2.blockfail=N` beside it
+ * makes the Nth write through the wrapper fail with EIO, which is how a
+ * mount is seen to go read-only.
  */
 
 #include "block.h"
@@ -38,6 +40,8 @@ static block_device_t *lag_backing;
 static struct lag_entry queue[LAG_QUEUE];
 static uint32_t lag_ticks;
 static uint32_t lag_delay;
+static uint32_t fail_write_at; /* rach2.blockfail=N: the Nth write answers EIO */
+static uint32_t writes_seen;
 
 static int lag_submit(block_device_t *device, struct block_request *request)
 {
@@ -50,7 +54,9 @@ static int lag_submit(block_device_t *device, struct block_request *request)
              * the answer is held back. The timer must not touch the disk:
              * a polled ATA read inside the tick handler waits on a clock
              * that cannot advance there. */
-            if (request->write) {
+            if (request->write && fail_write_at && ++writes_seen == fail_write_at) {
+                queue[i].status = -EIO; /* the write the boot option fails */
+            } else if (request->write) {
                 queue[i].status = lag_backing->write(lag_backing, request->lba,
                                                      request->count,
                                                      request->page);
@@ -134,6 +140,12 @@ block_device_t *block_lag_wrap(block_device_t *backing)
     }
     lag_backing = backing;
     lag_delay = n;
+    if (kcmdline_value("rach2.blockfail", value, sizeof(value))) {
+        for (i = 0; value[i] >= '0' && value[i] <= '9'; i++) {
+            fail_write_at = fail_write_at * 10u + (uint32_t)(value[i] - '0');
+        }
+        klog(KLOG_INFO, "block", "lag: write %d fails", (int)fail_write_at);
+    }
     lag_device = *backing;
     lag_device.flags &= ~BLOCK_FAULT_SAFE;
     lag_device.read = 0;

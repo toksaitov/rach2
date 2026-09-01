@@ -311,6 +311,17 @@ int vfs_do_mount(const char *source, const char *target, const char *type,
 int vfs_do_umount(const char *target);
 
 /**
+ * A write to `dev` failed at `lba` with `rc`: every mount on the device goes
+ * read-only for the rest of its life, with a record in the kernel log. The
+ * buffer cache calls it for a failed write-through or writeback.
+ */
+void vfs_device_failed(block_device_t *dev, uint64_t lba, int rc);
+
+/** sync(2)'s half for the mounts: every active mount's `sync`, then the
+ * cache's dirty buffers for its device. Always 0, as sync(2) is. */
+int vfs_sync_all(void);
+
+/**
  * A description opened on `mnt`: the mount's reference count goes up; the
  * node's hold is the one the resolution already took, moved rather than
  * retaken. `vfs_desc_close` is the last close: release the handle, put the

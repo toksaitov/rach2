@@ -2073,13 +2073,17 @@ static int32_t sys_fsync(isr_params_t *params)
 /**
  * Flush all buffered file-system writes to stable storage (sync(2)).
  *
- * Takes no argument. Writes back every dirty page of the disk-backed window via
- * `pc_sync` (a no-op when KRFFS is the RAM module). Like Linux's sync(2), it
- * returns 0 even if a writeback failed; the dirty pages stay for a later retry.
+ * Takes no argument. Every active mount's `sync` runs and the buffer cache
+ * writes its dirty buffers, then every dirty page of the disk-backed window
+ * goes back via `pc_sync` (a no-op when KRFFS is the RAM module). Like
+ * Linux's sync(2), it returns 0 even if a writeback failed; what failed
+ * stays dirty for a later call, and a mount whose device failed a write is
+ * read-only from then on.
  */
 static int32_t sys_sync(isr_params_t *params)
 {
     (void) params;
+    vfs_sync_all();
     pc_sync();
     return 0;
 }

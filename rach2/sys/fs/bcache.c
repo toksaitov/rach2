@@ -7,6 +7,8 @@
 
 #include "bcache.h"
 
+#include "vfs.h"
+
 #include "../klog.h"
 #include "../lib/kerrno.h"
 #include "../panic.h"
@@ -71,6 +73,23 @@ static int busy_gone(void *arg)
     return b->holder == -1;
 }
 
+/* One buffer to the device; a failure is recorded against the device and
+ * leaves the buffer dirty. */
+static int write_buffer(struct bbuf *b)
+{
+    int rc = block_request(b->dev, 1, b->blk * BCACHE_BLOCK_SECTORS,
+                           b->bytes / BLOCK_SECTOR_SIZE, b->data);
+
+    if (rc != 0) {
+        klog(KLOG_WARN, "bcache", "write: sector %u failed (%d), kept dirty",
+             (unsigned)(b->blk * BCACHE_BLOCK_SECTORS), rc);
+        vfs_device_failed(b->dev, b->blk * BCACHE_BLOCK_SECTORS, rc);
+        return rc;
+    }
+    b->dirty = 0;
+    return 0;
+}
+
 /** The valid byte count of block `blk`: whole, or the device's short tail. */
 static uint32_t block_bytes(block_device_t *dev, uint64_t blk)
 {
@@ -86,8 +105,12 @@ static uint32_t block_bytes(block_device_t *dev, uint64_t blk)
 struct bbuf *bcache_get(block_device_t *dev, uint64_t blk)
 {
     struct bbuf *victim = 0;
+    unsigned char tried[BCACHE_BUFFERS];
     int i;
 
+    for (i = 0; i < BCACHE_BUFFERS; i++) {
+        tried[i] = 0;
+    }
     if (!initialized) {
         bcache_init();
     }
@@ -112,21 +135,36 @@ again:
         }
     }
 
-    for (i = 0; i < BCACHE_BUFFERS; i++) {
-        if (bufs[i].holder != -1 || bufs[i].dirty) {
-            continue;
+    /* The least recently released unheld buffer, a dirty one written first;
+     * a buffer whose write fails stays dirty and is passed over this time. */
+    for (;;) {
+        victim = 0;
+        for (i = 0; i < BCACHE_BUFFERS; i++) {
+            if (bufs[i].holder != -1 || tried[i]) {
+                continue;
+            }
+            if (!bufs[i].dev) {
+                victim = &bufs[i];
+                break;
+            }
+            if (!victim || (int32_t)(bufs[i].stamp - victim->stamp) < 0) {
+                victim = &bufs[i];
+            }
         }
-        if (!bufs[i].dev) {
-            victim = &bufs[i];
+        if (!victim) {
+            klog(KLOG_WARN, "bcache", "get: no free buffer");
+            return 0;
+        }
+        if (!victim->dirty) {
             break;
         }
-        if (!victim || (int32_t)(bufs[i].stamp - victim->stamp) < 0) {
-            victim = &bufs[i];
+        victim->holder = caller_pid(); /* held for the write, as a sync would */
+        if (write_buffer(victim) == 0) {
+            victim->holder = -1;
+            break;
         }
-    }
-    if (!victim) {
-        klog(KLOG_WARN, "bcache", "get: no free buffer");
-        return 0;
+        victim->holder = -1;
+        tried[victim - bufs] = 1;
     }
     /* Keyed and held before the request sleeps, so a second process asking
      * for this block waits for this buffer instead of filling a second one. */
@@ -166,6 +204,16 @@ void bcache_dirty(struct bbuf *b)
     b->dirty = 1;
 }
 
+int bcache_write(struct bbuf *b)
+{
+    if (!b || b->holder != caller_pid()) {
+        k_panic("bcache: hold rule: a write by a process that does not hold the buffer");
+        return -EIO;
+    }
+    b->dirty = 1;
+    return write_buffer(b);
+}
+
 int bcache_sync(block_device_t *dev)
 {
     struct bbuf *last = 0;
@@ -176,7 +224,7 @@ int bcache_sync(block_device_t *dev)
         int i;
 
         for (i = 0; i < BCACHE_BUFFERS; i++) {
-            if (bufs[i].dev == dev && bufs[i].dirty &&
+            if (bufs[i].dev == dev && bufs[i].dirty && bufs[i].holder == -1 &&
                 (!last || bufs[i].blk > last->blk) &&
                 (!next || bufs[i].blk < next->blk)) {
                 next = &bufs[i];
@@ -185,13 +233,13 @@ int bcache_sync(block_device_t *dev)
         if (!next) {
             return 0;
         }
-        rc = block_request(dev, 1, next->blk * BCACHE_BLOCK_SECTORS,
-                           next->bytes / BLOCK_SECTOR_SIZE, next->data);
+        next->holder = caller_pid(); /* held across the request's sleep */
+        rc = write_buffer(next);
+        next->holder = -1;
+        wq_wake_all(&next->wq);
         if (rc != 0) {
-            klog(KLOG_WARN, "bcache", "sync: write failed, kept dirty");
             return rc;
         }
-        next->dirty = 0;
         last = next;
     }
 }
