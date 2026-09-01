@@ -14,6 +14,8 @@
 #include "../klog.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
+#include "../panic.h"
+#include "../proc/process.h"
 #include "../proc/wait_queue.h"
 #include "../rtc.h"
 #include "bcache.h"
@@ -1521,6 +1523,19 @@ static int fat_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
 
 /* ---- the write operations, under the mount's namespace lock ---- */
 
+/* Every mutation of the volume runs under the mount's namespace lock, and
+ * says so: the lock is what keeps two writers, or a writer and a sync, from
+ * interleaving across the sleeps the writes make. A caller without it is a
+ * defect, found on the first mutation and not by a race. */
+static void assert_locked(struct vfs_mount *mnt)
+{
+    int me = current_proc ? (int)current_proc->pid : 0;
+
+    if (mnt->ns_holder != me || mnt->ns_depth == 0) {
+        k_panic("vfat: a mutation outside the mount's lock");
+    }
+}
+
 /* The mount's lock for an operation the common layer does not lock: write,
  * truncate, fsync and sync. The namespace operations arrive locked. */
 static int begin_write(struct vfs_mount *mnt, struct fat_mount *fm)
@@ -1600,6 +1615,7 @@ static int32_t fat_write(struct vfs_mount *mnt, void *handle, const void *buf, u
     if (rc != 0) {
         return rc;
     }
+    assert_locked(mnt);
     rc = mark_dirty(fm);
     if (rc != 0) {
         goto out;
@@ -1701,6 +1717,7 @@ static int fat_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
     if (rc != 0) {
         return rc;
     }
+    assert_locked(mnt);
     rc = mark_dirty(fm);
     if (rc != 0) {
         goto out;
@@ -1862,6 +1879,7 @@ static int fat_setattr(struct vfs_mount *mnt, void *node, int what, const struct
     if (rc != 0) {
         return rc;
     }
+    assert_locked(mnt);
     rc = mark_dirty(fm);
     if (rc == 0) {
         if (what & VFS_SET_MODE) {
@@ -1931,6 +1949,7 @@ static int fat_create(struct vfs_mount *mnt, void *dir, const char *name, uint32
     if (!fm->writable || (mnt->flags & VFS_MS_RDONLY)) {
         return -EROFS;
     }
+    assert_locked(mnt);
     rc = prepare_name(fm, d, d->first, name, &nn);
     if (rc != 0) {
         return rc;
@@ -2031,6 +2050,7 @@ static int fat_unlink(struct vfs_mount *mnt, void *dir, const char *name)
     if (!fm->writable || (mnt->flags & VFS_MS_RDONLY)) {
         return -EROFS;
     }
+    assert_locked(mnt);
     got = find_entry(fm, d, d->first, name, &sc);
     if (got < 0) {
         return got;
@@ -2066,6 +2086,7 @@ static int fat_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_
     if (!fm->writable || (mnt->flags & VFS_MS_RDONLY)) {
         return -EROFS;
     }
+    assert_locked(mnt);
     k_memset(&n, 0, sizeof(n));
     rc = prepare_name(fm, d, d->first, name, &nn);
     if (rc != 0) {
@@ -2127,6 +2148,7 @@ static int fat_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
     if (!fm->writable || (mnt->flags & VFS_MS_RDONLY)) {
         return -EROFS;
     }
+    assert_locked(mnt);
     got = find_entry(fm, d, d->first, name, &sc);
     if (got < 0) {
         return got;
@@ -2184,6 +2206,7 @@ static int fat_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, 
     if (!fm->writable || (mnt->flags & VFS_MS_RDONLY)) {
         return -EROFS;
     }
+    assert_locked(mnt);
     got = find_entry(fm, od, od->first, oldname, &src);
     if (got < 0) {
         return got;
@@ -2318,8 +2341,11 @@ static int fat_prepare_unmount(struct vfs_mount *mnt)
         return 0;
     }
     rc = bcache_sync(fm->dev);
+    if (rc == 0 && !fm->free_known && fm->fsinfo_sector != 0) {
+        rc = count_free(fm); /* so the count written is exact */
+    }
     if (rc == 0) {
-        rc = write_fsinfo(fm); /* the count the driver knows, when it knows one */
+        rc = write_fsinfo(fm);
     }
     if (rc == 0 && fm->dirty_set) {
         rc = fat_flag(fm, 0);

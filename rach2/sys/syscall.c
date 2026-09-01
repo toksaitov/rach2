@@ -6568,10 +6568,12 @@ static int32_t sys_unlink(isr_params_t *params)
             return -EBUSY; /* a mount point cannot be unlinked */
         }
         if (!mnt_is_root(parent.mnt)) {
+            vfs_ns_lock(parent.mnt);
             rc = cred_remove_ref(&parent, leaf);
             if (rc == 0) {
                 rc = vfs_unlink_name(parent.mnt, parent.node, leaf);
             }
+            vfs_ns_unlock(parent.mnt);
             vfs_ref_release(&parent);
             return rc;
         }
@@ -6675,7 +6677,9 @@ static int32_t sys_mkdir(isr_params_t *params)
         if (!mnt_is_root(parent.mnt)) {
             rc = cred_access_ref(&parent, CRED_W, 0);
             if (rc == 0) {
+                vfs_ns_lock(parent.mnt);
                 rc = vfs_mkdir(parent.mnt, parent.node, leaf, params->ecx);
+                vfs_ns_unlock(parent.mnt);
             }
             vfs_ref_release(&parent);
             return rc;
@@ -6743,10 +6747,12 @@ static int32_t sys_rmdir(isr_params_t *params)
             return -EBUSY; /* a mount point cannot be removed */
         }
         if (!mnt_is_root(parent.mnt)) {
+            vfs_ns_lock(parent.mnt);
             rc = cred_remove_ref(&parent, leaf);
             if (rc == 0) {
                 rc = vfs_rmdir(parent.mnt, parent.node, leaf);
             }
+            vfs_ns_unlock(parent.mnt);
             vfs_ref_release(&parent);
             return rc;
         }

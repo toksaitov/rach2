@@ -182,11 +182,18 @@ static struct vfs_mount mnt;
 /* Mount the loaded image read-only with `options`; the constructor's rc. */
 static int mount_image(const char *options)
 {
+    int rc;
+
     __builtin_memset(&mnt, 0, sizeof(mnt));
     mnt.type = &vfs_vfat_type;
     mnt.dev = &dev;
     mnt.flags = VFS_MS_RDONLY;
-    return vfs_vfat_type.mount(&mnt, &dev, VFS_MS_RDONLY, options);
+    mnt.ns_holder = -1;
+    rc = vfs_vfat_type.mount(&mnt, &dev, VFS_MS_RDONLY, options);
+    if (rc == 0) {
+        vfs_ns_lock(&mnt); /* the test stands in for the syscall layer */
+    }
+    return rc;
 }
 
 static void unmount_image(void)
@@ -713,11 +720,18 @@ extern unsigned long strlen(const char *s);
 
 static int mount_rw(const char *options)
 {
+    int rc;
+
     __builtin_memset(&mnt, 0, sizeof(mnt));
     mnt.type = &vfs_vfat_type;
     mnt.dev = &dev;
     mnt.flags = 0;
-    return vfs_vfat_type.mount(&mnt, &dev, 0, options);
+    mnt.ns_holder = -1;
+    rc = vfs_vfat_type.mount(&mnt, &dev, 0, options);
+    if (rc == 0) {
+        vfs_ns_lock(&mnt);
+    }
+    return rc;
 }
 
 /* The image to a file and the check over it; its output in `out`. */
@@ -1755,15 +1769,21 @@ static void pool_rows(void)
 
 static int ns_locked;
 
+/* The lock as the kernel keeps it: re-entrant by holder, and what the
+   driver's assertion at every mutation reads. The rows call the namespace
+   operations the way the common layer does, with the lock held. */
 void vfs_ns_lock(struct vfs_mount *mnt)
 {
-    (void)mnt;
+    mnt->ns_holder = (int)current_proc->pid;
+    mnt->ns_depth++;
     ns_locked++;
 }
 
 void vfs_ns_unlock(struct vfs_mount *mnt)
 {
-    (void)mnt;
+    if (--mnt->ns_depth == 0) {
+        mnt->ns_holder = -1;
+    }
     ns_locked--;
 }
 
