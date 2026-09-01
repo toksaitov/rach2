@@ -4,7 +4,7 @@
 #
 # Fifteen boots, because what has to be proved differs in each.
 #
-# The machine has no 8042 in the three boots that type a key or move a mouse.
+# The machine has no 8042 in the eight boots that type a key or move a mouse.
 # That is the whole point of the option: with a PS/2 keyboard and mouse
 # present, a typed key or a moved mouse could have arrived by either road, and
 # a check that passes either way says nothing about the one this milestone
@@ -171,7 +171,7 @@ else
     bad "a device plugged in again after an unplug was not enumerated"
 fi
 
-# ---- 10: the controller's own interrupt. The keys are typed on the USB
+# ---- 9: the controller's own interrupt. The keys are typed on the USB
 #          keyboard, so every one of them is a message, and the probe reads
 #          the counts out of /proc/interrupts on the machine: the controller's
 #          vector has counted, and the timer's pump has found nothing that a
@@ -182,45 +182,53 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-machine --qemu-arg=pc,i8042=off \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci,msi=on \
     --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
-    --timeout 120 --steptmo 45 --ok "INTRPROBE OK" \
+    --timeout 120 --steptmo 45 --ok "INTRPROBE OK" --never "INTRPROBE FAIL" \
     "expect=Type 'help'" wait=2 key=h key=e key=l key=p key=ret \
-    "expect=Available commands" "send=exec /intrprobe" > /dev/null 2>&1; then
+    "expect=Available commands" "send=exec /intrprobe" "expect=INTRPROBE OK" \
+    > /dev/null 2>&1; then
     note "the controller's messages arrive and are counted: OK"
 else
     bad "the controller's messages did not arrive, or the timer found their work"
 fi
 
-# ---- 11: the same machine with `rach2.nomsi`, which is the kernel as it was
+# ---- 10: the same machine with `rach2.nomsi`, which is the kernel as it was
 #          before this milestone: no vector, no fallback, and a keyboard that
 #          still types. ----
 if run_harness --qemu-arg=-cpu --qemu-arg=max --append "rach2.nomsi" \
     --qemu-arg=-machine --qemu-arg=pc,i8042=off \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci,msi=on \
     --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
-    --timeout 120 --steptmo 45 --ok "INTRPROBE OK" \
+    --timeout 120 --steptmo 45 --ok "INTRPROBE OK" --never "INTRPROBE FAIL" \
     "expect=Type 'help'" wait=2 key=h key=e key=l key=p key=ret \
-    "expect=Available commands" "send=exec /intrprobe" > /dev/null 2>&1; then
+    "expect=Available commands" "send=exec /intrprobe" "expect=INTRPROBE OK" \
+    > /dev/null 2>&1; then
     note "with rach2.nomsi the timer pumps the controller and typing still works: OK"
 else
     bad "with rach2.nomsi the machine did not type, or took a message anyway"
 fi
 
-# ---- 12: a mouse over messages, since a mouse and a keyboard are two
+# ---- 11: a mouse over messages, since a mouse and a keyboard are two
 #          different endpoints and the mouse is the one whose reports arrive
-#          without anybody asking. ----
+#          without anybody asking. What is asked of this boot is the count and
+#          not the movement, which boot 4 already proves: a mouse whose
+#          messages never arrive is still read by the timer's pump, so a check
+#          on the movement alone would pass either way. `mouseprobe` is not run
+#          here because it stops the machine when it has its movement, and
+#          nothing could be read afterwards. ----
 if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-machine --qemu-arg=pc,i8042=off \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci,msi=on \
     --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0 \
-    --timeout 90 --ok "MOUSEPROBE OK" \
-    "expect=Type 'help'" wait=2 "send=exec /mouseprobe" wait=1 \
-    mouse=20,-8,0 > /dev/null 2>&1; then
-    note "a mouse moved over messages arrives at /dev/mouse: OK"
+    --timeout 120 --steptmo 45 --ok "INTRPROBE OK" --never "INTRPROBE FAIL" \
+    "expect=Type 'help'" wait=2 \
+    mouse=20,-8,0 mouse=-12,6,0 mouse=8,8,1 wait=1 \
+    "send=exec /intrprobe" "expect=INTRPROBE OK" > /dev/null 2>&1; then
+    note "a mouse moved over messages has its reports counted on the vector: OK"
 else
-    bad "a mouse moved over messages did not arrive at /dev/mouse"
+    bad "a mouse moved over messages had no reports counted on the vector"
 fi
 
-# ---- 13: the stages, recorded. The kernel stamps the controller's event, the
+# ---- 12: the stages, recorded. The kernel stamps the controller's event, the
 #          handler's entry, the keystroke reaching the line discipline and the
 #          reader taking it, and prints them from the read. The handler's
 #          entry is required to be within a millisecond of the event it was
@@ -239,22 +247,27 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --timeout 120 --steptmo 45 --ok "KEYLAT OK" \
     "expect=Type 'help'" wait=2 "send=exec /keylatprobe" wait=2 key=ret \
     > /dev/null 2>&1; then
-    if ! grep -q "usb: latency: msi 1" "$LAT_LOG"; then
+    if ! grep -q "usb: latency:" "$LAT_LOG"; then
+        bad "the keystroke's path was not recorded at all"
+    elif ! grep -q "usb: latency: msi 1" "$LAT_LOG"; then
         bad "the keystroke was not brought by a message"
     elif ! awk '/usb: latency: msi 1/ {
-                    entry = 0; wake = 0; read = 0;
+                    fields = 0;
                     for (i = 1; i <= NF; i++) {
-                        if ($i == "entry") { entry = $(i + 1) + 0; }
-                        if ($i == "wake") { wake = $(i + 1) + 0; }
-                        if ($i == "read") { read = $(i + 1) + 0; }
+                        if ($i == "entry") { entry = $(i + 1) + 0; fields++; }
+                        if ($i == "wake") { wake = $(i + 1) + 0; fields++; }
+                        if ($i == "read") { read = $(i + 1) + 0; fields++; }
                     }
+                    if (fields != 3) { short_record = 1; }
                     if (entry < 0) { entry = -entry; }
                     if (entry > 1000) { late = 1; }
+                    if (read < wake) { backwards = 1; }
                     if (read - wake > 2000) { slow = 1; }
                     seen = 1;
                 }
-                END { exit !(seen && !late && !slow) }' "$LAT_LOG"; then
-        bad "the handler entered late, or the reader waited for a tick"
+                END { exit !(seen && !short_record && !late && !backwards && !slow) }' \
+            "$LAT_LOG"; then
+        bad "the record is short, or the handler entered late, or the reader waited for a tick"
     else
         note "the four stages are recorded, the handler enters at its event and the reader runs on the wake: OK"
         grep "usb: latency" "$LAT_LOG" | sed 's/^/usb-test:   /'
@@ -265,9 +278,11 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
 else
     bad "the latency boot did not read its line"
 fi
-rm -f "$LAT_LOG"
+# The log is kept when something failed, since it is the only account of what
+# the machine did.
+[ "$fail" -eq 0 ] && rm -f "$LAT_LOG"
 
-# ---- 14: a machine that loses its edges. `rach2.msidrop=N` silences the
+# ---- 13: a machine that loses its edges. `rach2.msidrop=N` silences the
 #          controller after N messages, which no hardware switch can do on
 #          demand, and the machine must go on typing on the timer's pump
 #          alone with the count of what it found rising. ----
@@ -275,23 +290,25 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max --append "rach2.msidrop=3" \
     --qemu-arg=-machine --qemu-arg=pc,i8042=off \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci,msi=on \
     --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
-    --timeout 120 --steptmo 45 --ok "INTRPROBE OK" \
+    --timeout 120 --steptmo 45 --ok "INTRPROBE OK" --never "INTRPROBE FAIL" \
     "expect=Type 'help'" wait=2 key=h key=e key=l key=p key=ret \
-    "expect=Available commands" "send=exec /intrprobe" > /dev/null 2>&1; then
+    "expect=Available commands" "send=exec /intrprobe" "expect=INTRPROBE OK" \
+    > /dev/null 2>&1; then
     note "a machine whose messages stop keeps typing on the timer's pump: OK"
 else
     bad "a machine whose messages stop did not keep typing, or counted nothing"
 fi
 
-# ---- 15: the 8259's own interrupts, with the APIC between them and the
+# ---- 14: the 8259's own interrupts, with the APIC between them and the
 #          processor. The model in the host test cannot prove this: it takes a
 #          machine with a PS/2 keyboard, whose keystroke arrives on the
 #          virtual-wire path, and a timer whose vector must be counting. ----
 if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci,msi=on \
-    --timeout 120 --steptmo 45 --ok "INTRPROBE OK" \
+    --timeout 120 --steptmo 45 --ok "INTRPROBE OK" --never "INTRPROBE FAIL" \
     "expect=Type 'help'" wait=2 key=h key=e key=l key=p key=ret \
-    "expect=Available commands" "send=exec /intrprobe" > /dev/null 2>&1; then
+    "expect=Available commands" "send=exec /intrprobe" "expect=INTRPROBE OK" \
+    > /dev/null 2>&1; then
     note "with the APIC enabled the 8259's keyboard and timer still arrive: OK"
 else
     bad "with the APIC enabled the 8259's interrupts did not arrive"

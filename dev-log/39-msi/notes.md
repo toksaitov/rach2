@@ -175,6 +175,100 @@ than notes, and both are the kernel's own claims: a timer vector that has
 taken nothing, and a fallback count that has moved on a machine whose
 messages arrive.
 
+## The review round
+
+Four units read the milestone. The Codex path could not return its findings
+to this session: the forwarder is allowed one call and cannot poll, and
+`/codex:status` and `/codex:result` are the owner's to run, so the units ran
+on Claude at Opus's strength instead, which the policy allows. One Codex unit
+did come back through its forwarder and its findings are folded in below.
+
+Unit A, the APIC and the vectors, found two defects that would have shown on
+the Lenovo and not here:
+
+* `LINT0` was written before the spurious register's software enable. A
+  processor whose APIC is software disabled holds every local-vector entry
+  masked and ignores a write that would unmask one, so on a machine whose
+  firmware left the APIC disabled the unmask would have been dropped and the
+  8259's interrupts would have stopped the moment the APIC came up. QEMU's
+  firmware leaves `LINT0` already right, so the driver never wrote it there
+  and the fault could not appear. The write order is now the software enable
+  first, and the host test's model holds the mask bit set while the APIC is
+  disabled, which is what makes its order row mean anything.
+* The reschedule on the way out of a message vector asked whether the
+  interrupted process was running, which let it preempt kernel code inside a
+  system call whose own bookkeeping was half done: `schedule` itself sets a
+  process READY and then runs on with interrupts on, and `sys_exit` marks a
+  process a zombie before it signals its parent. A message taken in either
+  window would have stranded a process for the life of the boot. The question
+  is now the one the plan gave: the interrupted context is in user mode, or
+  it is not inside a system call.
+
+It also found rows that would pass with the code broken (a refusal row that
+checked one register instead of requiring no write at all, a `LINT0` row that
+could not tell a write from the firmware's own value, and no row at all for
+`lapic_pending`), a base above 4 GiB that was truncated rather than refused,
+and a spurious-register write that cleared the bits beside the vector. All
+are fixed.
+
+Unit B, MSI on a device and the xHCI, found:
+
+* Configuration space is reached through one address register that every
+  access shares, and this milestone put an interrupt handler on that path for
+  the first time: `rach2.msidrop` silences the controller from inside the
+  handler. Every access now runs with interrupts off.
+* `pci_write_config16` was a read of the dword and a write of it back, so
+  writing the command word wrote the status word beside it, and the status
+  word's faults are cleared by writing them as one. It is one `outw` at the
+  data port the register's own offset selects.
+* The vector's own mask register was never written, so a device left with
+  this vector masked would have been programmed, enabled and silent; a
+  capability near the end of configuration space could have had its registers
+  wrap onto the identity registers at offset zero. Both are handled and both
+  have rows.
+* The two interrupter enables were set before the device's capability was
+  programmed, which left a device whose firmware had it enabled free to send
+  from a stale address. The capability goes first now.
+* The acknowledgement written when the interrupter was enabled cleared a
+  pending bit that was not this driver's to clear, `msi_on` was set after the
+  device was armed, and the latency stamps could be read while a message was
+  landing between two of the reads. Each is fixed, and the record now says it
+  measures from the drain that took the event, which is the first moment this
+  stack knows the event exists; the controller stamps nothing.
+* Three host rows proved nothing: the empty-drain row reached its state by a
+  sequence that cleared the busy bit first, the moderation-interval row began
+  with the register already zero, and the MSI rows began with the device
+  already disabled. Each now starts from the state a firmware would leave.
+
+Six mutations were added with the fixes: the vector's mask left set, a
+capability past the end followed, a halfword write taken as a dword, an
+access taken with interrupts on, the drain that finds nothing not writing the
+dequeue pointer, and the old `LINT0` order. Each fails one named row.
+
+Unit C, the suites, found three checks that could not fail for the reason
+they existed: the boot for a mouse over messages was the older mouse boot
+with `msi=on` added and nothing else, so the timer's pump would have carried
+it; the audio count required a number rather than a rise across the notes;
+and `/proc/stat`'s line was compared against the timer's alone, which a file
+reporting the timer and nothing else would pass. It also found that
+`keylatprobe` never checked its `fork`, so a machine where the child could
+not be made would have reported the easy number, and that `intrprobe`'s
+buffer was smaller than the file's own worst case and its reader could not
+tell a truncated file from a whole one. All are fixed: the mouse boot reads
+the count after the movements, the audio suite reads the file before and
+after, `/proc/stat` is compared against the sum of the vectors' own lines,
+and both probes fail rather than report.
+
+Unit D, the proofread, returned thirty-eight corrections. Nine were claims
+the code does not support, of which the worst was the milestone's own Readme
+stating the write order backwards, and the others were an `intr` line
+described as the vectors' total when it counts the spurious vector too, four
+refusals where there are six, a latency measured from a moment this kernel
+cannot know, and the MSI order as it was before the review. The rest were the
+register rule and repetition: three documents listed the same fourteen boots
+and two of the lists were already wrong, so the system tests' Readme owns the
+list now and the USB Readme refers to it.
+
 ## Open items
 
 (none)

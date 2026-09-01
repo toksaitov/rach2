@@ -201,11 +201,11 @@ fi
 #      APIC came up at all, whether the two controllers took their message
 #      vectors or stayed on their legacy lines, and whether the 8259's own
 #      interrupts still arrive with the APIC between them and the processor.
-#      Every line is a note: a machine whose firmware leaves it on legacy
-#      lines is not broken, and what it did is the record this milestone is
-#      for. Two things would be failures, and both are the kernel's own
-#      claims: a timer that has taken nothing, and a fallback count that has
-#      moved on a machine whose messages arrive. ----
+#      Almost every line is a note: a machine whose firmware leaves it on
+#      legacy lines is not broken, and what it did is the record this
+#      milestone is for. One thing is a failure, and it is the kernel's own
+#      claim: a timer vector that has taken nothing, which would mean the
+#      8259's interrupts stopped when the APIC came up. ----
 INTR="$(run 'cat /proc/interrupts 2>/dev/null')"
 if [ -z "$INTR" ]; then
     bad "/proc/interrupts is not there; this kernel predates it"
@@ -217,9 +217,10 @@ else
     fallback="$(echo "$INTR" | awk -F'\t' '$1 == "FBK:" { print $2 }')"
     spurious="$(echo "$INTR" | awk -F'\t' '$1 == "SPU:" { print $2 }')"
 
+    # A vector that has taken nothing has no line at all, so an empty answer
+    # here is the failure and there is no zero to test for.
     case "$timer" in
-        ''|*[!0-9]*) bad "the timer's vector has no count, so the 8259's interrupts are not arriving" ;;
-        0) bad "the timer's vector has taken nothing with the APIC enabled" ;;
+        ''|*[!0-9]*) bad "the timer's vector has no line, so the 8259's interrupts are not arriving" ;;
         *) note "interrupts: the timer has taken $timer, so the 8259's road is open" ;;
     esac
     note "interrupts: usb vector ${usb_vector:-none}, audio vector ${audio_vector:-none}"

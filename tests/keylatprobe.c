@@ -67,6 +67,14 @@ void _start(void)
     int n;
 
     child = syscall3(SYS_FORK, 0, 0, 0);
+    if (child < 0) {
+        /* Without the child there is nothing on the processor to be taken off
+           it, and the number this program exists to produce would be the easy
+           one. Better to fail than to report a fast read that proves
+           nothing. */
+        puts("KEYLAT FAIL: no child could be forked\n");
+        sys_exit(1);
+    }
     if (child == 0) {
         /* The processor's other tenant: it never sleeps, so the reader can
            only run if something takes the processor away from it. */
@@ -76,8 +84,9 @@ void _start(void)
     }
 
     n = syscall3(SYS_READ, STDIN_FILENO, (int)(size_t)line, (int)sizeof(line));
-    if (child > 0) {
-        syscall3(SYS_KILL, child, SIGKILL, 0);
+    if (syscall3(SYS_KILL, child, SIGKILL, 0) != 0) {
+        puts("KEYLAT FAIL: the child would not be killed\n");
+        sys_exit(1);
     }
 
     if (n <= 0) {

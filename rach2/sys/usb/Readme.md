@@ -20,15 +20,15 @@ It is also the only one that reaches a low-speed keyboard without a second mecha
 
 Addressing belongs to the controller rather than the core: xHCI's Address Device command replaces the `SET_ADDRESS` request, so the core asks the driver to address a device and never sends that request itself. A second controller whose bus really takes the request would send it inside its own `device_address`.
 
-## The two pumps, and the one ring
+## The one pump, and the two contexts
 
 The event ring is drained by one function, `usb_pump` in `usb.c`, and by nothing else. Two contexts turn it: the controller's own interrupt, which is a message on vector 48, and the 100 Hz timer, which turns it every tick whether or not a message came.
 
-Whichever turns it, the interrupt flag stays as that context found it. The handler runs from an interrupt gate and the timer's handler does too, and the pump saves and restores the flag rather than enabling interrupts on its way out. That is what keeps the two from being inside the ring at once on this one processor, and the pump says so at runtime: a pump that returns with the flag raised records `usb: pump: interrupts were enabled inside it`, once.
+Whichever turns it, the interrupt flag stays as that context found it. The handler runs from an interrupt gate and the timer's handler does too, and the pump saves and restores the flag rather than enabling interrupts on its way out. That is what keeps the two from being inside the ring at once on this one processor. A pump that returns with the flag raised records `usb: pump: interrupts were enabled inside it`, once.
 
-The handler acknowledges the interrupt before it drains, and the two are one call in the driver (`xhci_interrupt_take`). An event the controller writes between a drain and an acknowledgement that came after it would have its pending bit cleared without having been read, and would wait for the timer with no message coming for it. The dequeue pointer is written back with the event-handler-busy bit as one, on an empty drain as well: the controller sets that bit when it raises an interrupt and raises no other until it is written back, so a handler that found the ring already drained by the timer would otherwise silence the controller for good.
+The handler acknowledges the interrupt before it drains, and the two are one call in the driver (`xhci_interrupt_take`). In the other order, an acknowledgement after the drain would clear the pending bit of an event written in between, and that event would wait for the timer with no message coming for it. The dequeue pointer is written back with the event-handler-busy bit as one, and while the interrupter is on it is written on an empty drain as well: the controller sets that bit when it raises an interrupt and raises no other until it is written back, so a handler that found the ring already drained by the timer would otherwise silence the controller for good.
 
-The timer is the fallback for a lost edge, so a missed message costs at most ten milliseconds and never a hang. How often it finds work that no message was coming for is counted and reported as `FBK` in `/proc/interrupts`. The question of whether a message was coming is put to the processor and not to the controller: the controller's own pending bit is set whether or not a message went out, while a message already in the processor's request register is one this tick's interrupt flag is holding back, which is a race and not a lost edge. It is asked once after the drain and once at the end of the pump, because the event reaches memory before the message reaches the processor. Under the emulator the count is zero; on hardware a small count beside the vector's own is that same race.
+The timer is the fallback for a lost edge, so a missed message costs at most ten milliseconds and never a hang. How often it finds work that no message was coming for is counted and reported as `FBK` in `/proc/interrupts`. Whether a message was coming is asked of the processor rather than of the controller: the controller's own pending bit is set whether or not a message went out, while a message in the processor's request or in-service register is one this tick's interrupt flag has held back, which is a race rather than a lost edge. It is asked once after the drain and once at the end of the pump, because the event reaches memory before the message reaches the processor. Under the emulator the count is zero; on hardware a small count beside the vector's own is that same race.
 
 `rach2.nomsi` leaves the interrupter off and the timer is the only pump, which is this stack as it was before the local APIC existed. A controller with no MSI capability is the same case. `rach2.msidrop=N` silences the controller after N messages, which no hardware switch can do on demand, and is how the fallback is seen to work.
 
@@ -121,20 +121,6 @@ It is not given back. Restoring the firmware's interrupt sources and its claim w
 
 `tests/run host` runs the three host tests written for this stack. `xhci_hosttest` drives the driver against a model of a controller through `struct xhci_io`: the discovery, the D3 wake, the aperture and register-set bounds, the firmware handoff at once and slowly and never, the halt and reset with its ready wait and its Intel pause, the scratchpad request and its refusal, both context sizes, the rings and their wrap, the command ring and its abort, the ports, the debounce, the device and endpoint commands, and the interrupter: the moderation interval, the two enables, the acknowledgement that keeps the enable beside it, the dequeue pointer written with the busy bit so the next event raises an interrupt of its own, and an event written between the acknowledgement and the drain. `usb_hosttest` walks descriptors no device would send, in buffers allocated to the exact length under AddressSanitizer. `hid_hosttest` hands the class driver reports and reads back what it gave the input layer: a key held, two keys at once, a modifier, an arrow, a rollover, a short report, and an unplug with a key still down.
 
-`tests/run usb` is fifteen boots against QEMU. Most of them take the 8042 away, so that a key typed or a mouse moved on those machines can only have come over USB.
-
-* a high-speed keyboard and mouse are enumerated and listed in `/proc/usb`
-* the same at full speed, which is the speed a real keyboard uses
-* a key typed through the emulator's monitor reaches the debug shell
-* and is read by a program through the terminal
-* a mouse moved through the monitor arrives at the mouse device, on both axes and in the right direction
-* a keyboard plugged in after the boot is enumerated, and one pulled out is taken down
-* with `rach2.nousb` the file is there and empty
-* the controller's messages arrive, are counted on vector 48 in `/proc/interrupts`, and the timer's pump finds none of their work
-* with `rach2.nomsi` there is no vector and no fallback, and the keyboard still types
-* a mouse moved over messages arrives at the mouse device
-* the four stages of a keystroke are recorded, the handler enters within a millisecond of its own event, and the reader runs on the wake rather than at the next tick
-* with `rach2.msidrop=3` the controller sends three messages and no more, and the machine goes on typing with the fallback count rising
-* with the APIC enabled the 8259's keyboard and timer still arrive, which the model in the host test cannot show
+`tests/run usb` is fourteen boots against QEMU, listed one by one in [the system tests' Readme](../../../tests/system/Readme.md). Eight of them take the 8042 away, so that a key typed or a mouse moved on those machines can only have come over USB. What they prove about this stack is that a keyboard and a mouse are enumerated at both device speeds and read through both the shell's buffer and the terminal, that a device plugged in or pulled out after the boot is taken up and taken down, that a device this kernel cannot drive is refused once and costs the others nothing, and that the controller's messages arrive and are counted while the timer's pump stays behind them.
 
 `tests/run subset` boots with `rach2.nousb` and requires the probe to record that it was skipped. Every check added here was proved by a mutation that makes it fail.

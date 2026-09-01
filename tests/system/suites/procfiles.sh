@@ -437,16 +437,25 @@ fi
 echo "procfiles-test: /proc/interrupts counts the timer's vector and names it: OK"
 
 # /proc/stat's intr line, which said zero on every machine before the counts
-# existed. It is every routed vector, so it cannot be below the timer's own.
+# existed. It is every interrupt the kernel has routed, so it cannot be below
+# the sum of the per-vector counts printed a moment earlier in the same boot.
+# Comparing it against the timer's line alone would pass for a file that
+# reported the timer and nothing else.
 intr=$(sed -n 's/^INTR:intr \([0-9][0-9]*\).*/\1/p' "$PLAIN_LOG" | head -1)
 if [ -z "$intr" ]; then
     echo "procfiles-test: FAIL: /proc/stat has no intr line" >&2
     exit 1
 fi
-if [ "$intr" -lt "$pit_count" ]; then
-    echo "procfiles-test: FAIL: /proc/stat reports $intr interrupts, fewer than" >&2
-    echo "procfiles-test: the $pit_count the timer alone has taken" >&2
+vector_sum=$(awk -F"\t" '$1 ~ /^[0-9]+:$/ { total += $2 + 0 } END { print total + 0 }' "$PLAIN_LOG")
+if [ "$vector_sum" -lt "$pit_count" ]; then
+    echo "procfiles-test: FAIL: the per-vector counts sum to $vector_sum, below the" >&2
+    echo "procfiles-test: $pit_count the timer's own line reports" >&2
     exit 1
 fi
-echo "procfiles-test: /proc/stat counts every interrupt the machine has taken: OK"
+if [ "$intr" -lt "$vector_sum" ]; then
+    echo "procfiles-test: FAIL: /proc/stat reports $intr interrupts, fewer than the" >&2
+    echo "procfiles-test: $vector_sum the vectors' own lines add up to" >&2
+    exit 1
+fi
+echo "procfiles-test: /proc/stat counts at least what the vectors' lines add up to ($intr against $vector_sum): OK"
 echo "procfiles-test: PASS"

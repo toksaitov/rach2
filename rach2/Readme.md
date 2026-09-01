@@ -28,7 +28,7 @@ The metal and recovery kernels use separate component names and object trees. A 
 
 The Multiboot header and entry point are in `loader.s`; `link.ld` places the GNU-linked image at physical address `0x00100000`. The kernel uses a flat GDT with ring-0 and ring-3 code and data segments, a TSS, and a per-process `%gs` TLS segment. The IDT contains the 32 CPU exceptions, the 16 remapped 8259 PIC interrupts at vectors 32 to 47, 16 vectors at 48 to 63 for messages from PCI devices, the local APIC's spurious vector at 255, and the user-callable system-call gate at vector `0x80`. The PIT runs at 100 Hz.
 
-The local APIC is enabled at boot because a message from a PCI device is a write to its page. Nothing else uses it: the timer stays the PIT, and the 8259 pair still delivers the keyboard, the mouse and the disks through `LINT0` as an external interrupt, which is the state firmware leaves and which `sys/lapic.c` restores if it finds anything else. A processor without an APIC, without the model-specific registers, or in x2APIC mode is refused by name in the log, and so is a machine booted with `rach2.nomsi`; the kernel then has no message vectors. `/proc/interrupts` says which vectors have taken interrupts, how many, and under what names, and `/proc/stat`'s `intr` line is their total. The xHCI takes its interrupts as messages on vector 48 when the APIC is enabled and its capability allows; the timer pumps it every tick as well, as the fallback for a lost message. See [USB](sys/usb/Readme.md). The HDA audio controller takes vector 49 the same way and keeps its legacy line and its timer servicing beside it, so a machine whose messages do not arrive plays exactly as it did before.
+The local APIC is enabled at boot because a message from a PCI device is a write to its page. Nothing else uses it: the timer stays the PIT, and the 8259 pair still delivers the keyboard, the mouse and the disks through `LINT0` as an external interrupt, which is the state firmware leaves and which `sys/lapic.c` restores if it finds anything else. `sys/lapic.c` refuses by name, and the kernel then has no message vectors: a processor with no APIC, one without the model-specific registers, one in x2APIC mode, an APIC base this kernel cannot reach or map, and a machine booted with `rach2.nomsi`. Straight after the tick starts, the boot checks that the 8259's interrupts still arrive; `lapic: timer: no tick in 50 ms; writing lint0 again` says they did not and that `LINT0` was written a second time, and a line after it says whether that worked. `/proc/interrupts` says which vectors have taken interrupts and under what names (see [synthetic file systems](sys/fs/synthfs.Readme.md)), and `/proc/stat`'s `intr` line is every interrupt the kernel has routed. The xHCI takes its interrupts as messages on vector 48 when the APIC is enabled and its capability allows, with the timer pumping it every tick as the fallback for a lost message; see [USB](sys/usb/Readme.md). The HDA audio controller takes vector 49 the same way and keeps its legacy line and its timer servicing beside it, so a machine whose messages do not arrive plays exactly as it did before.
 
 The managed physical-RAM window ends at 32 MiB; selected device MMIO can be identity-mapped above it. The kernel sizes its frame allocator from the Multiboot memory map within the RAM limit. It has 16 process slots and 16 file descriptors per process. User address spaces have demand-paged VMAs, copy-on-write fork, a growing stack, and shared supervisor-only kernel mappings. See [memory management](sys/mm/Readme.md).
 
@@ -108,7 +108,7 @@ Options are whitespace-delimited. Flags match whole tokens, and the first `key=v
 | `rach2.nomouse` | Skip the PS/2 mouse probe. |
 | `rach2.nonet` | Skip network-device discovery. |
 | `rach2.diag` | Print the boot diagnostic report again at the end and wait for input. |
-| `rach2.apicdiag` | Print what the machine's firmware left in the local APIC and what MSI capabilities the xHCI and HDA controllers have. It reads and writes nothing. |
+| `rach2.apicdiag` | Print what the machine's firmware left in the local APIC and what MSI capabilities the xHCI and HDA controllers have. It changes nothing. |
 | `rach2.nomsi` | Leave the local APIC alone and take every interrupt through the 8259 pair. |
 | `rach2.msidrop=N` | Test option: silence the USB controller's messages after N of them, so the timer's fallback pump can be seen to keep the machine working. |
 | `rach2.nousb` | Skip the USB stack: no controller is taken, and nothing is enumerated. |
@@ -121,47 +121,28 @@ With no address options, the network keeps its QEMU SLIRP defaults. See [network
 
 ## Messages
 
-The kernel has two ways of saying something, and which one a message uses is a
-decision about who it is for.
+The kernel writes diagnostics with `klog` and the debug shell's own output with `console_putc` and its two relatives. Which of the two a message uses is decided by who it is for.
 
-A diagnostic is a record. `klog(level, subsystem, format, ...)` builds one whole
-line and offers it to four destinations in a fixed order:
+A diagnostic is a record. `klog(level, subsystem, format, ...)` builds one whole line and offers it to four destinations in a fixed order:
 
 ```text
 <3>[12.34] ahci: command: timed out on port 0
 ```
 
-The angle brackets hold the level, the brackets hold uptime in seconds and
-hundredths, and the rest is the `subsystem: event: detail` shape every message
-in this tree uses. The prefix is the form BusyBox's `klogd` reads, so a userland
-log reader can be added later without the kernel changing what it writes.
+The angle brackets give the level and the square brackets the uptime in seconds and hundredths; the rest is the `subsystem: event: detail` shape every message in this tree uses. The prefix is the form BusyBox's `klogd` reads, so a userland log reader can be added later without the kernel changing what it writes.
 
-The five levels are syslog's numbers: `KLOG_CRIT` 2, `KLOG_ERR` 3, `KLOG_WARN`
-4, `KLOG_INFO` 6 and `KLOG_DEBUG` 7. The destinations, in the order a record
-reaches them:
+The five levels are syslog's numbers: `KLOG_CRIT` 2, `KLOG_ERR` 3, `KLOG_WARN` 4, `KLOG_INFO` 6 and `KLOG_DEBUG` 7. The destinations, in the order a record reaches them:
 
 | Order | Destination | Takes | Notes |
 |-------|-------------|-------|-------|
 | 1 | The 16 KiB ring | every level | Written first, so a failing port or wire cannot cost the machine its own copy. Whole records are evicted, so it never begins mid-line. |
-| 2 | The screen | `INFO` and above | Without the prefix and the timestamp, which a person in front of the machine does not need. Coloured by level. |
+| 2 | The screen | `INFO` and more urgent | Without the prefix and the timestamp, which a person in front of the machine does not need. Coloured by level. |
 | 3 | COM1 | every level | Through a transmit wait that gives up, so a wedged UART costs a bounded delay and not the machine. |
-| 4 | Netconsole | every level | Offered every record, enabled or not: it holds what it cannot send yet and sends it when a device arrives, and the records worth having on the wire are the early ones. |
+| 4 | Netconsole | every level | Offered every record, enabled or not: it keeps what it cannot send yet and sends it when a device arrives, and the records worth having on the wire are the early ones. |
 
-A record is built whole before any destination sees it, and a newline inside
-its text is kept as a space, so one record is one line and the ring can evict
-by finding the next newline. A record too long for its 256-byte buffer ends in
-`...` before that newline.
+A record is built whole before any destination sees it, and a newline inside its text is kept as a space, so one record is one line and the ring can evict by finding the next newline. A record too long for its 256-byte buffer ends in `...` before that newline.
 
-The three destinations past the ring write byte by byte with interrupts as the
-caller had them, so a record raised by an interrupt handler in the middle of
-one being written out would put its bytes inside the other's line. Such a
-record goes to the ring where it is raised and waits in a queue of eight for
-the three past it; the delivery it interrupted writes the queue out, in order,
-once its own record is finished. A ninth record is dropped, and the count of
-what was dropped is printed when the queue is empty. Printing it where it was
-raised would shred two records into each other, and holding it in the ring
-alone would keep it off the port altogether, which is how a device could be
-unplugged while the machine was printing and nothing on the wire said so.
+The three destinations past the ring write byte by byte with interrupts as the caller had them, so a record raised by an interrupt handler in the middle of one being written out would put its bytes inside the other's line. Such a record goes to the ring where it is raised and waits in a queue of eight for the three past it; the delivery it interrupted writes the queue out, in order, once its own record is finished. A ninth record is dropped, and the count of what was dropped is printed when the queue is empty. Keeping it in the ring alone would keep it off the port, which is how a device could be unplugged while the machine was printing and nothing on the wire said so.
 
 ## Input
 

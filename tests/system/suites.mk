@@ -257,11 +257,12 @@ run-console: rach2 tests krffs test-image $(HARNESS)
 # was asked to play, not what came out; QEMU's wav backend writes every sample
 # the guest produced, so the notes can be measured afterwards from outside.
 # The PC-speaker fallback cannot play samples, so the boot names an Intel HDA
-# controller and a codec for it to find. Afterwards the probe reads
-# `/proc/interrupts` on the machine and the count on the audio controller's
-# message vector must have moved: the notes came out either way, and this is
-# what says they came out on the interrupt this milestone gave it rather than
-# on the timer's servicing beside it.
+# controller and a codec for it to find. The probe reads `/proc/interrupts` on
+# the machine before the notes and again after them, and the count on the
+# audio controller's message vector must have grown between the two: the notes
+# come out either way, since the timer services the stream as well, and the
+# difference is what says the interrupt this milestone gave it is the one that
+# fed them.
 AUDIO_WAV = $(IMAGES_DIR)/audio-scale.wav
 AUDIO_LOG = $(IMAGES_DIR)/audio-scale.log
 run-audio: rach2 tests krffs test-image $(HARNESS) $(WAVCHECK)
@@ -272,19 +273,20 @@ run-audio: rach2 tests krffs test-image $(HARNESS) $(WAVCHECK)
 	    --qemu-arg=-device --qemu-arg=hda-duplex,audiodev=au0 \
 	    --qemu-arg=-audiodev --qemu-arg=wav,id=au0,path=$(AUDIO_WAV) \
 	    --log $(AUDIO_LOG) \
-	    --timeout 120 --ok "INTRPROBE OK" \
-	    "expect=Type 'help'" "send=audio test scale 2000" "expect=Done." wait=3 \
+	    --timeout 120 --ok "INTRPROBE OK" --never "INTRPROBE FAIL" \
+	    "expect=Type 'help'" "send=exec /intrprobe" "expect=INTRPROBE OK" \
+	    "send=audio test scale 2000" "expect=Done." wait=3 \
 	    "send=exec /intrprobe" "expect=INTRPROBE OK"
 	$(WAVCHECK) scale $(AUDIO_WAV) 262 294 330 349 392
 	@awk '/INTRPROBE READ/ { \
 	        for (i = 1; i <= NF; i++) { \
-	            if ($$i == "audio") { n = $$(i + 1) + 0; seen = 1; } \
+	            if ($$i == "audio") { seen++; if (seen == 1) { before = $$(i + 1) + 0; } else { after = $$(i + 1) + 0; } } \
 	        } \
 	    } \
 	    END { \
-	        if (!seen) { print "audio-test: the probe never read /proc/interrupts" > "/dev/stderr"; exit 1; } \
-	        if (n <= 0) { print "audio-test: the audio controller sent no messages while it played" > "/dev/stderr"; exit 1; } \
-	        print "audio-test: the audio controller took " n " interrupts on its message vector: OK"; \
+	        if (seen < 2) { print "audio-test: the probe did not read /proc/interrupts twice" > "/dev/stderr"; exit 1; } \
+	        if (after <= before) { print "audio-test: the audio controller sent no message while it played (" before " then " after ")" > "/dev/stderr"; exit 1; } \
+	        print "audio-test: the audio controller took " after - before " interrupts on its message vector while it played: OK"; \
 	    }' $(AUDIO_LOG)
 # `tests/run diskfull`: a file system with no room left. The probe writes until
 # the write is refused, requires `ENOSPC` rather than the `EIO` this kernel used

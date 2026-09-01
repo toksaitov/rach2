@@ -43,7 +43,11 @@ typedef unsigned int size_t;
 #define USB_VECTOR   "48:"
 #define AUDIO_VECTOR "49:"
 
-static char text[2048];
+/* Larger than the file's own worst case, which `PROCFS_MAX_INTERRUPTS` in
+   the kernel fixes at 2304 bytes: a read that filled this buffer would be a
+   file cut in the middle of a line, and a count cut in the middle of its
+   digits reads as a smaller number that a check might accept. */
+static char text[4096];
 static char cmdline[512];
 
 static int syscall3(int n, int a, int b, int c)
@@ -242,13 +246,17 @@ static int option_value(const char *key)
 
 void _start(void)
 {
-    int vector, audio, fallback, drop, devices;
+    int vector, audio, fallback, drop, devices, n;
 
     if (slurp("/proc/cmdline", cmdline, (int)sizeof(cmdline)) < 0) {
         fail("/proc/cmdline would not open");
     }
-    if (slurp("/proc/interrupts", text, (int)sizeof(text)) < 0) {
+    n = slurp("/proc/interrupts", text, (int)sizeof(text));
+    if (n < 0) {
         fail("/proc/interrupts would not open");
+    }
+    if (n >= (int)sizeof(text) - 1) {
+        fail("/proc/interrupts filled this program's buffer, so it was cut");
     }
     if (count_for("32:", text) <= 0) {
         fail("the timer's vector has taken no interrupts");
@@ -259,6 +267,9 @@ void _start(void)
     if (fallback < 0) {
         fail("there is no fallback line");
     }
+    /* `rach2.msidrop=0` and a value that is not a number are both the kernel's
+       "not asked", since it acts on the option only when the count is not
+       zero, so both fall to the ordinary case below. */
     drop = option_value("rach2.msidrop=");
     devices = usb_devices();
 
@@ -298,7 +309,7 @@ void _start(void)
         }
     } else {
         /*
-         * Four is the least this boot can honestly have taken: the keys typed
+         * Four is the least this boot can have taken: the keys typed
          * before it ran are five, and each of them is at least one message.
          * One message and no more is what a kernel that never ends the
          * interrupt at the processor takes, and the machine goes on typing on
