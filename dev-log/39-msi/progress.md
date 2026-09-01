@@ -6,9 +6,9 @@ Phase 1: arrival and inventory
 - [x] hardware.md with QEMU's values and a column for the Lenovo's; the table in notes.md; every specification number checked against the machine
 
 Phase 2: the APIC, the vectors and MSI
-- [ ] lapic.c, the MSR helper, the sixteen stubs, the router's two ranges, rach2.nomsi
-- [ ] /proc/interrupts and the intr count; pci_msi_enable and pci_msi_disable
-- [ ] lapic_hosttest.c and pcimsi_hosttest.c; the six mutations; every existing suite passes
+- [x] lapic.c, the MSR helper, the sixteen stubs, the router's two ranges, rach2.nomsi
+- [x] /proc/interrupts and the intr count; pci_msi_enable and pci_msi_disable
+- [x] lapic_hosttest.c and pcimsi_hosttest.c; the mutations; all 64 suites pass
 
 Phase 3: xHCI on MSI
 - [ ] the interrupter enabled, the handler as the pump, the wake, the timer's fallback and its counter

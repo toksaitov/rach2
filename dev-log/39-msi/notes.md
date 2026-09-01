@@ -59,6 +59,41 @@ The readings are in `hardware.md`. What they changed:
   cost a page fault at the address that argument held. The first draft
   of the report used `%08x` and `%02x`; they are gone.
 
+## Phase 2 record
+
+`sys/lapic.c` enables the APIC and refuses by name; `rach2.nomsi` is one of
+the refusals. `LINT0` is written as an unmasked external interrupt when the
+firmware left anything else there, and the boot asks the timer, straight
+after the tick starts, whether the 8259's interrupts still arrive: 50 ms with
+no tick writes `LINT0` again and says so, and 50 ms more with no tick says
+that too. The mutation that masks `LINT0` behind the driver's back proves
+both halves: without the repair the machine never finishes its self-tests,
+with it the machine boots and the log carries the reason.
+
+Vectors 48 to 63 have stubs, gates and a branch in `_irq_router` that ends
+the interrupt at the APIC after the handler chain. The APIC's spurious
+vector, 255, has a stub and a gate of its own; without them a spurious
+interrupt would be a general-protection fault.
+
+`register_isr_handler` and `set_isr_handler` take the name the handler is
+known by, because `/proc/interrupts` is worth little without it: the file has
+one line per vector that has taken an interrupt, with the count, `PIC` or
+`MSI`, and the names on that line. `/proc/stat`'s `intr` line is the total.
+The `procfiles` suite reads both on the machine and checks the timer's line
+against a count it takes from the same boot; three mutations (the name
+dropped, the total left at zero, the per-vector count never incremented)
+each fail exactly one of those rows.
+
+A defect this phase found and fixed, outside the milestone's own work: a
+record raised by an interrupt handler while another record was being written
+out went to the ring and no further. The USB suite's replug row failed about
+a third of the time because `usb: device: port N: gone` is raised from the
+timer interrupt, and the machine is printing its self-tests at that moment.
+`klog` now queues such a record and the delivery it interrupted writes it out
+when its own line is finished. Ten unplugs in a row are now seen; before the
+fix, four of ten were not. This is why phase 2 took longer than the plan
+allowed for it.
+
 ## Open items
 
 (none)
