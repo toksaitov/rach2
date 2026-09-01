@@ -73,7 +73,7 @@ void devfs_grubcore_publish(struct block_device *backing);
  * The partition window `path` names (`/dev/bootpart` or `/dev/disk0pN`):
  * the view a mount reads through, the backing disk, and the sector range
  * on it. EINVAL for a device that is not a partition window, ENOENT for no
- * such device, ENXIO for a window not published.
+ * such device, which a window not published is as well.
  */
 int devfs_window_of(const char *path, struct block_device **view,
                     struct block_device **backing, uint64_t *first,

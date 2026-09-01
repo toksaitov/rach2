@@ -22,7 +22,7 @@ Allocation scans for the first free extent large enough for the header and reque
 
 Growth first consumes an adjacent free extent. Otherwise it allocates a new extent, copies the node and its data, and frees the old extent. The write path then repoints every regular-file descriptor in every process from the old node to the new one. Sparse growth through write or truncate zero-fills the gap. A short remainder that cannot hold a header stays in the allocated extent.
 
-A write that cannot grow the file separates its two reasons. No free extent large enough returns `KRFFS_ENOSPACE`, which the write syscall reports as `ENOSPC`; a rejected argument returns `KRFFS_EBAD` and `EIO`. A caller can therefore tell a full file system from a failed write, which one shared -1 did not allow.
+A write that cannot grow the file separates its two reasons. No free extent large enough returns `KRFFS_ENOSPACE`, which the write syscall reports as `ENOSPC`; a rejected argument returns `KRFFS_EBAD` and `EIO`. A caller can therefore tell a full file system from a failed write.
 
 ## Paths and directories
 

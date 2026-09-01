@@ -8,11 +8,11 @@ The BIOS parameter block in sector 0, the active file allocation table, and the 
 
 ## The volume check
 
-The constructor reads sector 0 and checks it field by field before the mount is published. A volume that fails is refused with `EINVAL`, and the kernel log names the field: `vfat: refused: FIELD`. In order: the boot-sector signature; the FAT32 recognition rule, which is Linux's (a zero 16-bit FAT size, a nonzero 32-bit one, no root-directory entries, FAT version zero), whatever the cluster count, because the 65525-cluster threshold is a formatting rule and volumes below it exist; a sector size of 512; sectors per cluster a power of two from 1 to 64; a nonzero reserved count; one or two FATs; a total sector count that fits the partition; FAT regions that fit before the data region; a nonempty data region whose cluster count fits a 28-bit FAT; a FAT large enough to cover the clusters; a root cluster inside the data region; and an active FAT the volume has. With mirroring on, the first FAT is read; with it off, the one the flags name.
+The constructor reads sector 0 and checks it field by field before the mount is published. A volume that fails is refused with `EINVAL`, and the kernel log reports the field: `vfat: refused: FIELD`. In order: the boot-sector signature; the FAT32 recognition rule, which is Linux's (a zero 16-bit FAT size, a nonzero 32-bit one, no root-directory entries, FAT version zero), whatever the cluster count, because the 65525-cluster threshold is a formatting rule and volumes below it exist; a sector size of 512; sectors per cluster a power of two from 1 to 64; a nonzero reserved count; one or two FATs; a total sector count that fits the partition; FAT regions that fit before the data region; a nonempty data region whose cluster count fits a 28-bit FAT; a FAT large enough to cover the clusters; a root cluster inside the data region; and an active FAT the volume has. With mirroring on, the first FAT is read; with it off, the FAT selected by the flags.
 
 ## Directories and names
 
-A directory is read at 32-byte entry offsets, which is what `getdents64` reports as the position. A long name is kept when its entries are in sequence and their checksum matches the short entry that follows; otherwise the short name is shown, in lower case where the reserved byte says so, with the `0x05` lead byte restored and a byte above `0x7F` shown as `?`. Deleted entries, volume labels and orphaned long-name fragments are skipped. Lookup folds ASCII case and matches the long name or the short alias, as Linux's vfat does; a non-ASCII name matches exactly. `.` and `..` are answered by the directory's own entries, and `..` of a subdirectory of the root is the root, whose entry stores cluster zero.
+A directory is read at 32-byte entry offsets, which is what `getdents64` reports as the position. A long name is kept when its entries are in sequence and their checksum matches the short entry that follows; otherwise the short name is shown, in lower case where the reserved byte says so, with the `0x05` lead byte restored and a byte above `0x7F` shown as `?`. Deleted entries, volume labels and orphaned long-name fragments are skipped. Lookup folds ASCII case and matches the long name or the short alias, as Linux's vfat does; a non-ASCII name matches exactly. `.` is the directory itself, and `..` is resolved from the directory's own entry, with cluster zero mapped to the root.
 
 ## Chains and bounds
 
@@ -20,7 +20,7 @@ A FAT entry is masked to 28 bits. The walk to cluster `n` of a chain is bounded 
 
 ## Nodes and identities
 
-A node is an entry in a fixed per-mount pool of 32, freed at its last put; a lookup that finds the pool full answers `ENOMEM` and logs it. A directory's identity is its first cluster, so two lookups of one directory share a node. A file's identity is its directory's cluster, its entry index and a generation the pool advances when it hands that entry out again, so a description outlives no entry it did not open. The inode number reported is that identity.
+A node is an entry in a fixed per-mount pool of 32, freed at its last put; a lookup that finds the pool full answers `ENOMEM` and logs it. A directory's identity is its first cluster, so two lookups of one directory share a node. A file's identity is its directory's cluster and its entry index. The inode number is built from the identity: a directory's is its cluster, and a file's has its directory's cluster plus one in the high word and its index plus one in the low, so no two entries share a number.
 
 ## Times and modes
 

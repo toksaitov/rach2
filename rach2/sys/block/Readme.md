@@ -16,7 +16,7 @@ A device with the `BLOCK_FAULT_SAFE` flag completes its transfer functions by po
 
 `block_request` transfers whole sectors and sleeps the caller when the device does. On a `BLOCK_FAULT_SAFE` device it calls the transfer function and returns, from any context, at boot included. A device without the flag has `submit` instead: `submit` starts one request and returns, and the device reports the end through `block_request_complete` from whatever context it completes in. Such a device is used from syscall context only. The transfer is split into requests of at most eight sectors, each taken from a pool of sixteen with its own page; a write is copied into the page before `submit` and a read is copied out after a successful completion, so no device writes into memory the caller may have reused. The caller sleeps between `submit` and the completion or the device's deadline, five seconds unless the device sets `deadline_ticks`; the timer advances the deadlines once per tick.
 
-A request whose deadline passes answers `EIO` and is quarantined with its page until the device answers late; the late completion frees the slot and is recorded. Each slot has a generation, advanced when it is reused or abandoned, and a completion whose generation is not the request's current one is dropped with a record. A pool with no free slot sleeps the caller until one is freed.
+A request whose deadline passes answers `EIO` and is quarantined with its page until the device answers late; the late completion frees the slot and is recorded. Each slot has a generation, advanced when the slot is taken and when a late completion frees it, and a completion whose generation is not the slot's current one is dropped with a record. A transfer that finds no free slot answers `EIO`.
 
 `rach2.blocklag=N` wraps the boot disk in the lag device for the partition nodes and the mounts, while the root window keeps the real device. The wrapper has no `BLOCK_FAULT_SAFE` flag; it runs each transfer at submit time, polled, and delivers the completion `N` ticks later from the timer, twice, with the second copy carrying an error, so a kernel that accepted a stale generation would fail a healthy request. With `N` above the deadline it is a device that never answers in time, which is how the quarantine is exercised by `tests/run mount` without a mutation.
 
@@ -38,7 +38,7 @@ The disk-root path examines the first sector of each non-empty partition and mou
 
 ## ATA
 
-`ata.c` probes the primary legacy channel at ports `0x1f0` and `0x3f6`, selects its master device, and issues `IDENTIFY`. The driver uses LBA28 PIO, so it publishes at most 2^28 sectors (128 GiB). One command carries at most 256 sectors. Each sector has its own `BSY` and `DRQ` handshake.
+`ata.c` probes the primary legacy channel at ports `0x1f0` and `0x3f6`, selects its master device, and issues `IDENTIFY`. The driver uses LBA28 PIO, so it publishes at most 2^28 sectors (128 GiB). One command transfers at most 256 sectors. Each sector has its own `BSY` and `DRQ` handshake.
 
 The ATA interrupt line remains disabled. Status waits use a fixed iteration limit because the timer interrupt cannot advance while a page fault has interrupts disabled. Each successful write command is followed by `FLUSH CACHE`. The command counter records both the data command and the flush.
 
@@ -60,7 +60,7 @@ The raw devices are synthetic character devices. Their open-file descriptions us
 
 Every transfer uses a page-aligned 32 KiB staging buffer. The loop sends at most 64 sectors to the block device per call. If a later batch fails, the call returns the bytes from earlier completed batches. A failed write batch may have reached the disk in part because the block interface cannot report progress within one command. A zero-length write returns zero. Before EOF, a zero-length raw read returns `EIO` rather than zero.
 
-Only one write-capable descriptor may be open across `/dev/bootpart`, `/dev/grubcore`, and `/dev/disk0`. Readers may remain open during a write. `/dev/grubcore` additionally permits only one open description at a time. Beside that rule is the claim table: a mount holds its partition's sector range on the backing disk from its constructor to its unmount, and while a range is claimed a write-capable open of a window over it answers `EBUSY`; while such a descriptor is open, a mount on the range answers `EBUSY`. Ranges are compared as ranges, so `/dev/bootpart` and `/dev/disk0p1` naming one partition exclude each other's writer.
+Only one write-capable descriptor may be open across `/dev/bootpart`, `/dev/grubcore`, and `/dev/disk0`. Readers may remain open during a write. `/dev/grubcore` additionally permits only one open description at a time. Beside that rule is the claim table: a mount claims its partition's sector range on the backing disk from its constructor to its unmount, and while a range is claimed a write-capable open of a window over it answers `EBUSY`; while such a descriptor is open, a mount on the range answers `EBUSY`. Ranges are compared as ranges, so `/dev/bootpart` and `/dev/disk0p1` naming one partition exclude each other's writer.
 
 The devices have these publication and permission rules:
 

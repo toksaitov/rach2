@@ -8,12 +8,12 @@
  * vfs: the mount table, the resolver, and the operation interface every
  * mounted file system answers.
  *
- * The table holds eight mounts. Entry zero is the root; entries one and two
+ * The table has eight entries. Entry zero is the root; entries one and two
  * are the two synthetic namespaces, /dev and /proc. The three are permanent:
  * umount2 on any of them answers EBUSY. The rest are placed by mount(2) and
  * removed by umount2.
  *
- * A mount point is a node, not a name. The covered directory is held through
+ * A mount point is the covered directory's node. It is held through
  * the parent file system's `hold`, so it cannot be reached under another
  * spelling, it is what the resolver climbs back to for `..` at a mount root,
  * and it answers EBUSY to unlink, rmdir and rename while the mount exists.
@@ -35,9 +35,8 @@
  *
  * An operation a file system does not implement is a NULL pointer, and the
  * common layer answers the standard error for it: EROFS for a write-side
- * operation on a read-only mount, EPERM for `link`, EINVAL for `readlink`
- * on something that is not a link. Milestones 37 and 40 fill the pointers
- * in rather than change the contract.
+ * operation, EPERM for `link` on a writable mount whose type has no links,
+ * EINVAL for `readlink` on something that is not a link.
  *
  * Lock order, fixed and checked: the mount table, then a mount's namespace
  * lock, then a description, then cache buffers in ascending block order.
@@ -57,9 +56,9 @@
 
 /* The mount(2) flags this kernel honours or records, with Linux's values.
  * MS_RDONLY, MS_NOSUID and MS_NOEXEC are enforced in the common layer;
- * MS_NODEV is recorded and matters first for ext2; the atime group and
- * MS_SILENT are recorded because nothing here updates access times. Any
- * other flag answers EINVAL. */
+ * MS_NODEV is recorded and not enforced, since no type here has device
+ * nodes; the atime group and MS_SILENT are recorded because nothing here
+ * updates access times. Any other flag answers EINVAL. */
 #define VFS_MS_RDONLY 0x0001u
 #define VFS_MS_NOSUID 0x0002u
 #define VFS_MS_NODEV 0x0004u
@@ -75,7 +74,7 @@
 struct vfs_mount;
 
 /* What getattr reports and setattr changes. Times are seconds and
- * nanoseconds; `mode` carries the S_IF type bits. */
+ * nanoseconds; `mode` includes the S_IF type bits. */
 struct vfs_stat {
     uint32_t mode;
     uint32_t uid;
@@ -117,12 +116,12 @@ struct vfs_statfs {
 };
 
 /*
- * The operations, one set per type. A node handle is the file system's own:
- * a place in the image for KRFFS, a pool entry for FAT32, a packed value for
- * the synthetic types. Whoever receives a node from `lookup`, `create` or
- * the mount's root owns one hold on it and must `put` it; open-file
- * descriptions, working directories and covering mounts hold theirs for as
- * long as they refer to it. For a type with empty `hold` and `put` the
+ * The operations, one set per type. A node handle is the file system's own: a
+ * place in the image for KRFFS, a pool entry for FAT32, a pooled classified
+ * path for the synthetic types. Whoever receives a node from `lookup`,
+ * `create` or the mount's root owns one hold on it and must `put` it; open-
+ * file descriptions, working directories and covering mounts hold theirs for
+ * as long as they refer to it. For a type with empty `hold` and `put` the
  * pointers may be NULL.
  */
 struct vfs_ops {
@@ -248,8 +247,8 @@ void vfs_init(void);
  * mount whether or not `path` begins with '/', because the syscall layer
  * joins a relative path to the working directory's canonical spelling
  * before resolving and strips the leading slash; an `*at` call may pass
- * its directory descriptor's place instead. On success `out` holds the node
- * and the mount it lives on, and the caller owns the hold. With
+ * its directory descriptor's place instead. On success `out` receives the
+ * node and the mount it lives on, and the caller owns the hold. With
  * `VFS_WALK_PARENT`, `out` is the held parent directory, and the final
  * component, which may not exist yet, is copied into `leaf` (of `leafcap`
  * bytes; ENAMETOOLONG if it does not fit).
@@ -364,7 +363,7 @@ int vfs_statfs(struct vfs_mount *mnt, struct vfs_statfs *st);
 struct vfs_mount *vfs_leaf_mount(struct vfs_mount *mnt, void *node,
                                  const char *name);
 
-/** The classification a synthetic node carries, or NULL when `mnt` is not
+/** The classification stored in a synthetic node, or NULL when `mnt` is not
  * one of the two synthetic mounts. */
 struct vpath;
 const struct vpath *vfs_synth_vpath(struct vfs_mount *mnt, void *node);

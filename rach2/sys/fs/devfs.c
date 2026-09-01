@@ -904,7 +904,7 @@ int devfs_window_of(const char *path, block_device_t **view,
         return -EINVAL; /* not a partition window */
     }
     if (!w->present) {
-        return -ENXIO;
+        return -ENOENT; /* devfs_find lists only published nodes */
     }
     *view = &w->part.device;
     *backing = block_physical(w->part.backing);
