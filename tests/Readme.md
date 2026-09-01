@@ -8,7 +8,7 @@ This directory has two guest test sets, and [`system/`](system/Readme.md) holds 
 
 `tests/run NAME` is the entry point for every test suite. It reads `tests/registry`, one line per suite with three fields: the name, the external commands the suite needs at run time, and its tier. The make target is the name with `run-` in front, and the recipes are in [`tests/system/suites.mk`](system/suites.mk). Every name and every tool is checked before anything is built; an unknown name fails and prints the valid names. The runner then builds the product once and runs the named suites in a pool, buffering each one's output and replaying it in the order the suites were named, which for `all` and `core` is the registry's. Three suites run outside the pool: `style` and `host` alone before it, because `style` rebuilds the kernel with its own flags and the two share a scratch directory, and `usb` alone after it, because QEMU's monitor stops answering `device_add` on a saturated host.
 
-`tests/run NAME NAME...` runs those suites at the same time. `tests/run all` runs all 63, and `tests/run core` runs the 24 in the core tier. `make test` runs `tests/run style`, then `tests/run host`, then `tests/run core`; `style` and `host` are the two verification suites every change must pass.
+`tests/run NAME NAME...` runs those suites at the same time. `tests/run all` runs all 64, and `tests/run core` runs the 25 in the core tier. `make test` runs `tests/run style`, then `tests/run host`, then `tests/run core`; `style` and `host` are the two verification suites every change must pass.
 
 ## Build and image layout
 

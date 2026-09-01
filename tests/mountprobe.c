@@ -417,7 +417,8 @@ static void rows_proc(void)
         fail("/proc/mounts names the mount");
     }
     read_text("/proc/filesystems");
-    if (!contains((const char *)buf, "nodev\tproc") || !contains((const char *)buf, "\tvfat")) {
+    if (!contains((const char *)buf, "nodev\tproc") || !contains((const char *)buf, "\tvfat") ||
+        !contains((const char *)buf, "\texfat")) {
         fail("/proc/filesystems names the types");
     }
 }

@@ -31,6 +31,9 @@ run() {
 LOST=""
 walk_clean() {
     "$MKFIX" --check "$DISK" $PART > "$DISK.check" 2>&1 && return 0
+    # A reader that crashed or found nothing to say is a failure of its own:
+    # its last line names the count of findings.
+    grep -q '^check: FAIL: ' "$DISK.check" || { cat "$DISK.check" >&2; fail "the reader did not walk the volume"; }
     if grep '^check:' "$DISK.check" | grep -v '^check: FAIL:' \
         | grep -vxF "${LOST:-no such line}" | grep -q .; then
         cat "$DISK.check" >&2
@@ -49,7 +52,8 @@ walk_repaired() {
 # mount's check counts and leaves, so the checker is expected to find them,
 # and a copy it repairs must then be clean.
 external_check() {
-    dd if="$DISK" of="$DISK.vol" bs=512 skip=$PART count=$SECTORS 2>/dev/null
+    dd if="$DISK" of="$DISK.vol" bs=512 skip=$PART count=$SECTORS 2>/dev/null \
+        || fail "copying the volume for the external checker"
     if command -v fsck_exfat >/dev/null 2>&1 && command -v hdiutil >/dev/null 2>&1; then
         DEV=$(hdiutil attach -nomount -imagekey diskimage-class=CRawDiskImage "$DISK.vol" 2>/dev/null \
             | awk 'NR == 1 {print $1}')
@@ -99,7 +103,9 @@ import sys
 b = open(sys.argv[1], 'rb').read()
 sys.exit(0 if len(b) == 65536 and all(b[i] == ((i * 31 + 7) & 0xFF) for i in range(65536)) else 1)
 PY
-"$MKFIX" --check "$DISK" $PART --list 2>/dev/null | python3 -c '
+"$MKFIX" --check "$DISK" $PART --list > "$DISK.listing" 2>/dev/null
+grep -q '^check: ' "$DISK.listing" || fail "the host reader did not list the volume"
+python3 -c '
 import sys
 for line in sys.stdin:
     if not line.startswith("check: entry "):
@@ -108,7 +114,7 @@ for line in sys.stdin:
     if f[-1] == "nofat":
         f = f[:-1]
     print(" ".join(f[:-3]))
-' > "$DISK.names"
+' < "$DISK.listing" > "$DISK.names"
 for name in "/pattern.bin" "/Long Name File.txt" "/Sub Dir" "/renamed.txt" "/synced.txt"; do
     grep -qxF "$name" "$DISK.names" || fail "the host reader does not list $name"
 done

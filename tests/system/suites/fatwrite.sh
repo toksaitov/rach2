@@ -29,6 +29,10 @@ run() {
 LOST=""
 walk_clean() {
     "$MKFIXTURE" --check "$DISK" 100352 > "$DISK.check" 2>&1 && return 0
+    # A checker that crashed or found nothing to say is a failure of its own:
+    # its last line names the count of findings.
+    grep -q '^check: FAIL: ' "$DISK.check" \
+        || { cat "$DISK.check" >&2; fail "the checker did not walk the volume"; }
     if grep '^check:' "$DISK.check" | grep -v '^check: FAIL:\|^check: dirty:' \
         | grep -vxF "${LOST:-no such line}" | grep -q .; then
         cat "$DISK.check" >&2
