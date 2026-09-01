@@ -16,10 +16,11 @@ Phase 3: the class driver
 - [x] msc_hosttest.c in full; the stick comes up in QEMU (the node is phase 4's)
 
 Phase 4: naming, tables and removal
-- [ ] the usbN nodes as block devices; /proc/usb's columns
-- [ ] gpt.c and gpt_hosttest.c; the superfloppy
-- [ ] removal, the teardown count, the held-buffer rule, the replug
-- [ ] the harness drive= steps and usbdiskprobe
+- [x] the usbN nodes as block devices; /proc/usb's columns
+- [x] gpt.c and gpt_hosttest.c; the superfloppy
+- [x] removal, the teardown count, the held-buffer rule, the replug
+- [ ] the harness drive= steps and usbdiskprobe (the probe is written; the
+      harness steps, the suite and phase 4's mutations are not)
 
 Phase 5: the suite
 - [ ] tests/run usbdisk without the boot from the stick; the throughput line
