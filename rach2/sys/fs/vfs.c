@@ -1547,7 +1547,11 @@ int vfs_do_umount(const char *target)
         m->state = VFS_ACTIVE;
         return -EIO; /* nothing irreversible has happened yet */
     }
-    bcache_invalidate(m->dev);
+    if (bcache_invalidate(m->dev) != 0) {
+        vfs_ns_unlock(m);
+        m->state = VFS_ACTIVE;
+        return -EBUSY; /* a buffer of the device is still held or dirty */
+    }
     klog(KLOG_INFO, "vfs", "unmounted %s: %d opens, %d releases",
          m->covered_path, (int)m->opens, (int)m->releases);
     if (m->type->ops->put) {

@@ -95,8 +95,10 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     (void)wq;
     (void)cond;
     (void)arg;
+    /* No row may sleep: one process runs here, so a wait would never end. */
     waited_on_host = 1;
-    return -1;
+    printf("bcache_hosttest: FAIL: a row reached the sleeping wait\n");
+    exit(1);
 }
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
@@ -347,6 +349,14 @@ int main(void)
     bcache_release(b);
     fail_writes = 0;
     check(bcache_sync(&fake) == 0 && image_small[9 * 4096] == 0x66, "and a later sync writes it");
+    b = bcache_get(&fake, 3);
+    check(bcache_write(b) == -30,
+          "a device that failed a write takes no metadata write until it is dropped");
+    bcache_release(b);
+    check(bcache_invalidate(&fake) == 0, "the device is dropped clean");
+    b = bcache_get(&fake, 3);
+    check(bcache_write(b) == 0, "and the next mount's first metadata write goes through");
+    bcache_release(b);
 
     /* The edge of the guarantee: a torn write and a dropped write are
        reported as success by the device, so the cache cannot know; what

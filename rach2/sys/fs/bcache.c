@@ -83,6 +83,7 @@ static int write_buffer(struct bbuf *b)
     if (rc != 0) {
         klog(KLOG_WARN, "bcache", "write: sector %d failed (%d), kept dirty",
              (int)(b->blk * BCACHE_BLOCK_SECTORS), rc);
+        b->dev->flags |= BLOCK_WRITE_FAILED;
         vfs_device_failed(b->dev, b->blk * BCACHE_BLOCK_SECTORS, rc);
         return rc;
     }
@@ -161,9 +162,11 @@ again:
         victim->holder = caller_pid(); /* held for the write, as a sync would */
         if (write_buffer(victim) == 0) {
             victim->holder = -1;
+            wq_wake_all(&victim->wq);
             break;
         }
         victim->holder = -1;
+        wq_wake_all(&victim->wq); /* a waiter for its old key looks again */
         tried[victim - bufs] = 1;
     }
     /* Keyed and held before the request sleeps, so a second process asking
@@ -210,6 +213,11 @@ int bcache_write(struct bbuf *b)
         k_panic("bcache: hold rule: a write by a process that does not hold the buffer");
         return -EIO;
     }
+    /* An operation in progress when the device failed stops at its next
+     * metadata write, so the read-only transition is not written across. */
+    if (b->dev->flags & BLOCK_WRITE_FAILED) {
+        return -EROFS;
+    }
     b->dirty = 1;
     return write_buffer(b);
 }
@@ -224,14 +232,19 @@ int bcache_sync(block_device_t *dev)
         int i;
 
         for (i = 0; i < BCACHE_BUFFERS; i++) {
-            if (bufs[i].dev == dev && bufs[i].dirty && bufs[i].holder == -1 &&
-                (!last || bufs[i].blk > last->blk) &&
+            if (bufs[i].dev == dev && bufs[i].dirty && (!last || bufs[i].blk > last->blk) &&
                 (!next || bufs[i].blk < next->blk)) {
                 next = &bufs[i];
             }
         }
         if (!next) {
             return 0;
+        }
+        /* A held dirty buffer is waited for, not passed over: a sync that
+         * returned over one would report clean what is still in flight. */
+        if (next->holder != -1) {
+            wq_wait_event_nointr(&next->wq, busy_gone, next);
+            continue;
         }
         next->holder = caller_pid(); /* held across the request's sleep */
         rc = write_buffer(next);
@@ -258,5 +271,6 @@ int bcache_invalidate(block_device_t *dev)
             bufs[i].dev = 0;
         }
     }
+    dev->flags &= ~BLOCK_WRITE_FAILED; /* the next mount starts clean */
     return 0;
 }

@@ -24,6 +24,9 @@ struct block_request;
  * sleeps its caller does not, and the page-cache window refuses such a device
  * as a backing store. */
 #define BLOCK_FAULT_SAFE 0x1u
+/* Set by the buffer cache when a write to the device failed; cleared when
+ * the cache drops the device at unmount. */
+#define BLOCK_WRITE_FAILED 0x2u
 
 struct block_device {
     uint32_t sector_size;
