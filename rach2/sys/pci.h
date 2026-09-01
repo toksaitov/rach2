@@ -125,6 +125,7 @@ uint8_t pci_find_capability(uint8_t bus, uint8_t device, uint8_t function, uint8
 #define PCI_MSI_ENABLE 0x0001u
 #define PCI_MSI_MULTIPLE_ENABLE 0x0070u
 #define PCI_MSI_64BIT 0x0080u
+#define PCI_MSI_PER_VECTOR    0x0100u /* the device can mask its own vectors */
 #define PCI_MSIX_ENABLE 0x8000u
 #define PCI_MSI_ADDRESS_BASE 0xFEE00000u
 

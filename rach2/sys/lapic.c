@@ -9,8 +9,9 @@
  * The 8259's interrupts reach the processor through `LINT0` as an external
  * interrupt, the state firmware calls virtual wire. Enabling the APIC with
  * `LINT0` masked would silence the timer and the keyboard, so this driver
- * reads that entry and writes the unmasked external-interrupt value when it
- * finds anything else. `LINT1` is left as the firmware set it.
+ * reads that entry after the APIC is enabled and writes the unmasked
+ * external-interrupt value when it finds anything else. `LINT1` is left as
+ * the firmware set it.
  *
  * A processor without an APIC, without the model-specific registers, in
  * x2APIC mode, or with its registers somewhere other than the page this
@@ -41,6 +42,7 @@
 #define LAPIC_LINT1   0x360
 
 #define LVT_MASKED          (1u << 16)
+#define LVT_DELIVERY_MASK   (7u << 8)
 #define LVT_DELIVERY_EXTINT (7u << 8)
 #define SVR_SOFTWARE_ENABLE 0x100u
 #define SPURIOUS_VECTOR     0xFFu
@@ -85,10 +87,11 @@ static int refuse(const char *why)
 /**
  * Enable the local APIC, or refuse with the reason named.
  *
- * The order matters: the task priority goes to zero and `LINT0` is made an
- * unmasked external-interrupt entry before the spurious register's software
- * enable, so that no interrupt is blocked or lost in between. 0 when the
- * APIC is ready to receive messages, -1 when it is not.
+ * The order matters, and it is the opposite of what it looks like it should
+ * be: the software enable goes first, because a processor whose APIC is
+ * software disabled holds every local-vector entry masked and ignores a write
+ * that would unmask one. The task priority and `LINT0` are written after it.
+ * 0 when the APIC is ready to receive messages, -1 when it is not.
  */
 int lapic_init(void)
 {
@@ -109,6 +112,12 @@ int lapic_init(void)
     if ((lo & APIC_BASE_X2APIC) != 0) {
         return refuse("x2apic mode, whose registers this driver does not read");
     }
+    if (hi != 0) {
+        /* The upper half of the base is not zero, so the registers are above
+         * 4 GiB and this kernel's addresses do not reach them. Taking the low
+         * half would map some other device's page. */
+        return refuse("an apic base above 4 gib");
+    }
     base = lo & 0xFFFFF000u;
     if (base == 0) {
         return refuse("no apic base address");
@@ -124,16 +133,27 @@ int lapic_init(void)
         kcpu_wrmsr(IA32_APIC_BASE, lo | APIC_BASE_ENABLE, hi);
     }
     apic_id = apic_read(LAPIC_ID) >> 24;
+
+    /*
+     * The software enable comes first, and the local-vector entries after it.
+     * While the spurious register's bit 8 is clear the processor holds the
+     * mask bit of every entry set and ignores a write that would reset one
+     * (SDM, the local APIC's state after it has been software disabled), so
+     * an unmasked `LINT0` written before this line would be dropped and the
+     * 8259's interrupts would stop at the processor the moment the APIC came
+     * up. The vector and the enable are written into the register as read, so
+     * that whatever else the firmware set there is kept.
+     */
+    apic_write(LAPIC_SVR, (apic_read(LAPIC_SVR) & ~0xFFu) | SVR_SOFTWARE_ENABLE | SPURIOUS_VECTOR);
     apic_write(LAPIC_TPR, 0);
     lint0 = apic_read(LAPIC_LINT0);
-    if ((lint0 & LVT_MASKED) != 0 || (lint0 & (7u << 8)) != LVT_DELIVERY_EXTINT) {
+    if ((lint0 & LVT_MASKED) != 0 || (lint0 & LVT_DELIVERY_MASK) != LVT_DELIVERY_EXTINT) {
         /* Without this the 8259's interrupts stop at the processor. */
         apic_write(LAPIC_LINT0, LVT_DELIVERY_EXTINT);
         klog(KLOG_WARN, "lapic", "lint0 was 0x%x; set to an unmasked external interrupt", lint0);
     }
-    apic_write(LAPIC_SVR, SVR_SOFTWARE_ENABLE | SPURIOUS_VECTOR);
     ready = 1;
-    klog(KLOG_INFO, "lapic", "ready: id %d, version 0x%x, base 0x%x", apic_id,
+    klog(KLOG_INFO, "lapic", "ready: id %d, version 0x%x, base 0x%x", (int)apic_id,
          apic_read(LAPIC_VERSION) & 0xFFu, base);
     return 0;
 }

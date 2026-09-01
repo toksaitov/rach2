@@ -176,6 +176,11 @@ static int msi_started;
  * drained. The pump sets it; `usb_poll` reads it. */
 static int pump_saw_pending;
 
+/* Whether the pump that is running drained anything. The keystroke's stamps
+ * are only worth printing when it did: the numbers are measured from the
+ * event, and a pump that took none has no event of its own. */
+static int pump_took;
+
 /* Whether a pump was found to have enabled interrupts, so the record is
  * printed once and not every tick. */
 static int pump_enabled_interrupts;
@@ -253,7 +258,9 @@ static uint32_t usb_eflags(void)
 
     __asm__ __volatile__("pushf\n\t"
                          "pop %0"
-                         : "=r"(flags));
+                         : "=r"(flags)
+                         :
+                         : "memory");
     return flags;
 }
 
@@ -267,6 +274,7 @@ static int usb_pump(uint32_t elapsed_ms, int from_interrupt)
     /* The handler's drain acknowledges the interrupt first and in the same
      * call; the timer's has nothing to acknowledge. */
     taken = from_interrupt ? xhci_interrupt_take() : xhci_events();
+    pump_took = taken > 0;
     if (taken > 0) {
         stamp_event = pit_now_us();
         /*
@@ -283,6 +291,17 @@ static int usb_pump(uint32_t elapsed_ms, int from_interrupt)
         pump_saw_pending = lapic_pending(USB_MSI_VECTOR);
     }
     usb_core_step(elapsed_ms);
+    if (taken > 0 && !pump_saw_pending) {
+        /*
+         * Asked once more at the end of the pump. The controller writes the
+         * event and sends the message as two transactions, and the second
+         * can still be on its way to the processor while the first is
+         * already in memory; the work of the pump is time enough for it to
+         * arrive, and without this the record would count a race as an edge
+         * that was lost.
+         */
+        pump_saw_pending = lapic_pending(USB_MSI_VECTOR);
+    }
     /* The flag is read before it is put back: the pump must not have enabled
      * interrupts, or the timer's context and the handler's would be inside
      * the controller's ring at once on this one processor. Said once, since a
@@ -395,7 +414,7 @@ static void usb_interrupts_start(void)
         uint32_t n = 0;
         int i;
 
-        for (i = 0; value[i] >= '0' && value[i] <= '9' && i < 6; i++) {
+        for (i = 0; i < 6 && value[i] >= '0' && value[i] <= '9'; i++) {
             n = n * 10u + (uint32_t)(value[i] - '0');
         }
         msi_drop_after = n;
@@ -444,11 +463,19 @@ uint32_t usb_fallback_count(void)
  */
 void usb_stamp_wake(void)
 {
+    if (!pump_took) {
+        /* This pump drained nothing, so the report it is delivering came
+         * from an earlier one and there is no event here to measure from.
+         * Saying nothing is better than printing a number whose base is
+         * several milliseconds old. */
+        stamp_pending = 0;
+        return;
+    }
     stamp_wake = pit_now_us();
-    /* The other two are taken here as well, and not read again when the
-     * record is printed: the reader takes its byte with interrupts on, and a
-     * pump between the two would otherwise move the event this keystroke is
-     * measured from out from under it. */
+    /* The other two are copied here, so that the record printed at the read
+     * is one keystroke's throughout. `usb_stamp_read` takes all three back
+     * with interrupts off, since a message landing between its own reads
+     * would otherwise leave it printing two keystrokes at once. */
     wake_event = stamp_event;
     wake_entry = stamp_entry;
     stamp_by_msi = in_msi_pump;
@@ -458,29 +485,50 @@ void usb_stamp_wake(void)
 /**
  * A reader took a byte: print the path this keystroke took, once.
  *
- * The numbers are microseconds from the event the controller wrote, which is
- * where this stack's part of the path begins: the handler's entry, which
- * comes before the event it was raised for and so reads as a negative number,
- * and is zero when the timer's pump took the event instead; the line
- * discipline; and the reader. The last of them is the only one that has
- * anything but this kernel in it: a program that was still writing its last
- * line when the key arrived reads it late, and that time is the program's.
+ * The numbers are microseconds from the drain that took the event, which is
+ * the first moment this stack knows the event exists; the controller stamps
+ * nothing, so the time it wrote the event is not a number any of this can
+ * report. The handler's entry comes before that drain and so reads as a
+ * negative number, and is zero when the timer's pump took the event instead.
+ * Then the line discipline, and then the reader, which is the only one of
+ * them with anything but this kernel in it: a program that was still writing
+ * its last line when the key arrived reads it late, and that time is the
+ * program's.
  *
- * A byte that did not come from this stack prints nothing, since nothing is
- * pending.
+ * A byte that did not come from this stack prints nothing, and neither does
+ * one taken so long after the wake that it cannot be the keystroke's. When
+ * several keys arrive before a reader takes any of them, the record is the
+ * last of them, since there is one set of stamps and not one per byte.
  */
 void usb_stamp_read(void)
 {
+    uint32_t flags;
     uint32_t read_us;
+    uint32_t event, entry, wake;
+    int by_msi;
 
+    flags = kirq_save();
     if (!stamp_pending) {
+        kirq_restore(flags);
         return;
     }
     stamp_pending = 0;
     read_us = pit_now_us();
-    klog(KLOG_INFO, "usb", "latency: msi %d, entry %d, wake %d, read %d, us from the event",
-         stamp_by_msi, stamp_by_msi ? (int)(wake_entry - wake_event) : 0,
-         (int)(stamp_wake - wake_event), (int)(read_us - wake_event));
+    event = wake_event;
+    entry = wake_entry;
+    wake = stamp_wake;
+    by_msi = stamp_by_msi;
+    kirq_restore(flags);
+
+    /* A byte taken more than two ticks after the keystroke reached the line
+     * discipline is not that keystroke's: it is a byte from somewhere else,
+     * or one that sat as type-ahead, and the reader's number would say
+     * nothing about this path. */
+    if (read_us - wake > 20000u) {
+        return;
+    }
+    klog(KLOG_INFO, "usb", "latency: msi %d, entry %d, wake %d, read %d, us from the drain",
+         by_msi, by_msi ? (int)(entry - event) : 0, (int)(wake - event), (int)(read_us - event));
 }
 
 void usb_stop(void)

@@ -14,24 +14,18 @@ process_t proc_table[MAX_PROCS];
 process_t *current_proc = NULL;
 
 /**
- * Whether another process may be scheduled on the way out of an interrupt.
+ * Whether this processor is inside a user process's system call.
  *
  * Asked by the interrupt router, which reschedules after a message vector so
- * that a reader woken by it runs without waiting for the next tick.
- *
- * A user process interrupted in user mode may be preempted, and so may the
- * idle loop and a kernel thread. A process running kernel code inside its own
- * system call may not: its state is half changed and the call must finish. A
- * process blocked inside one is a different thing again. It is not running,
- * it is waiting, and the processor is in its context only because nothing
- * else was runnable; switching away from it is what makes the wake worth
- * anything, and it is what the timer's tick would do a few milliseconds
- * later in any case.
+ * that a reader woken by it runs without waiting for the next tick, and must
+ * not do so inside a system call: `sys_exit` and `schedule` itself both run
+ * with interrupts on while their own bookkeeping is half done, and a switch
+ * taken there strands the process they were in the middle of moving. The idle
+ * loop and a kernel thread answer no, as they do for the timer.
  */
-int proc_preemptible(void)
+int proc_in_syscall(void)
 {
-    return current_proc == NULL || current_proc->in_syscall == 0 ||
-           current_proc->state != PROC_RUNNING;
+    return current_proc != NULL && current_proc->in_syscall != 0;
 }
 
 /* The pid of init, owned by kernel.c; reparent_children adopts orphans onto

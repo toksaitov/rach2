@@ -1483,9 +1483,13 @@ int main(void)
     CHECK("the capability registers are read", xhci_read_caps() == 0);
     CHECK("halted and reset", xhci_halt_reset() == 0);
     CHECK("started", xhci_start() == 0);
+    reg[M_IMOD] = 0x0FA0u;   /* a firmware that left four milliseconds there */
+    reg[M_IMAN] = M_IMAN_IP; /* and an interrupt of its own still pending */
     CHECK("the interrupter is turned on", xhci_interrupts_enable(48) == 0);
     CHECK("and says so", xhci_interrupts_on() == 1);
-    CHECK("the moderation interval is written to zero", reg[M_IMOD] == 0);
+    CHECK("the moderation interval a firmware left is written to zero", reg[M_IMOD] == 0);
+    CHECK("and the pending bit is left where it was, not acknowledged here",
+          (reg[M_IMAN] & M_IMAN_IP) != 0);
     CHECK("the interrupter's own enable is set", (reg[M_IMAN] & M_IMAN_IE) != 0);
     CHECK("and the controller's", (reg[OP(O_USBCMD)] & M_USBCMD_INTE) != 0);
     CHECK("the device is told which vector to send", msi_vector == 48);
@@ -1528,21 +1532,27 @@ int main(void)
     CHECK("so the next event raises an interrupt of its own", model_raises == 2);
     CHECK("and it is taken", xhci_events() == 1);
 
-    /* A drain that finds nothing still says the driver is finished: the timer
-       pumps this controller too, and an event it took first leaves the
-       handler with nothing to drain and the busy bit still set. */
+    /*
+     * A drain that finds nothing still says the driver is finished. The
+     * controller sets the busy bit when it raises an interrupt and raises no
+     * other until the driver writes it back, and the timer's pump can take
+     * the event before the handler's message is delivered, which leaves the
+     * handler with an empty ring and the bit still set. The model is put
+     * straight into that state: the busy bit set with nothing in the ring,
+     * which no sequence of its own can produce, because the timer's drain
+     * would have cleared the bit itself.
+     */
     model_reset();
     CHECK("the capability registers are read", xhci_read_caps() == 0);
     CHECK("halted and reset", xhci_halt_reset() == 0);
     CHECK("started", xhci_start() == 0);
     CHECK("the interrupter is turned on", xhci_interrupts_enable(48) == 0);
+    model_busy = 1;
+    model_raises = 0;
+    CHECK("the handler's drain finds nothing", xhci_interrupt_take() == 0);
+    CHECK("and still says the driver is finished with what it was given", model_busy == 0);
     post_event(TRB_TYPE_PORT_CHANGE, TRB_COMPLETION_SUCCESS, 0, 1u << 24);
-    CHECK("an event raises an interrupt", model_raises == 1);
-    CHECK("the timer's drain takes it", xhci_events() == 1);
-    xhci_interrupt_ack();
-    CHECK("the handler's drain finds nothing", xhci_events() == 0);
-    post_event(TRB_TYPE_PORT_CHANGE, TRB_COMPLETION_SUCCESS, 0, 1u << 24);
-    CHECK("and the controller still raises the next interrupt", model_raises == 2);
+    CHECK("so the controller raises the next interrupt", model_raises == 1);
 
     /* An event written between the acknowledgement and the drain is taken by
        that same drain. The model writes it from inside the acknowledgement,

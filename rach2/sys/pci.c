@@ -1,12 +1,21 @@
 /*
  * PCI bus enumeration via configuration mechanism #1: write the target
  * address to port 0xCF8, then read or write the data at port 0xCFC.
+ *
+ * The address port is one register that every access shares, so an access
+ * taken apart in the middle by another one reads or writes whatever the
+ * second selected. Until this milestone configuration space had one caller,
+ * the boot, and no interrupt handler touched it; now the USB handler can
+ * silence its controller from inside an interrupt. Every access below is
+ * therefore taken with interrupts off, which is two instructions on a path
+ * that already costs two port writes.
  */
 
 #include "klog.h"
 #include "lapic.h"
 #include "pci.h"
 #include "kio.h"
+#include "lib/kirq.h"
 
 #define PCI_CONFIG_ADDRESS 0xCF8
 #define PCI_CONFIG_DATA    0xCFC
@@ -33,8 +42,13 @@ static uint32_t pci_config_address(uint8_t bus, uint8_t device, uint8_t function
 uint32_t pci_read_config32(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset)
 {
     uint32_t addr = pci_config_address(bus, device, function, offset);
+    uint32_t flags = kirq_save();
+    uint32_t value;
+
     outl(PCI_CONFIG_ADDRESS, addr);
-    return inl(PCI_CONFIG_DATA);
+    value = inl(PCI_CONFIG_DATA);
+    kirq_restore(flags);
+    return value;
 }
 
 /**
@@ -68,28 +82,32 @@ void pci_write_config32(uint8_t bus, uint8_t device, uint8_t function, uint8_t o
                         uint32_t value)
 {
     uint32_t addr = pci_config_address(bus, device, function, offset);
+    uint32_t flags = kirq_save();
+
     outl(PCI_CONFIG_ADDRESS, addr);
     outl(PCI_CONFIG_DATA, value);
+    kirq_restore(flags);
 }
 
 /**
  * Write a 16-bit word to configuration space.
  *
- * The hardware path is dword wide, so read the aligned dword, splice the
- * new half into the position selected by bit 1 of the offset, and write
- * it back.
+ * The data port takes an access of the width the register has, at the port
+ * offset the register's own address selects, so a halfword write is one
+ * `outw` at `0xCFC` or `0xCFE`. It is not a read of the dword and a write of
+ * it back: the other half of the dword holding the command word is the
+ * status word, whose bits are cleared by writing them as one, and writing it
+ * back would clear every fault the bus had latched there.
  */
 void pci_write_config16(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset,
                         uint16_t value)
 {
     uint32_t addr = pci_config_address(bus, device, function, offset & ~3);
-    uint32_t old_val, new_val;
-    int shift = (offset & 2) * 8;
+    uint32_t flags = kirq_save();
 
     outl(PCI_CONFIG_ADDRESS, addr);
-    old_val = inl(PCI_CONFIG_DATA);
-    new_val = (old_val & ~(0xFFFFu << shift)) | ((uint32_t)value << shift);
-    outl(PCI_CONFIG_DATA, new_val);
+    outw((uint16_t)(PCI_CONFIG_DATA + (offset & 2)), value);
+    kirq_restore(flags);
 }
 
 /**
@@ -478,9 +496,12 @@ bool pci_find_bridge_for_bus(uint8_t bus, pci_device_t *out)
  * written last. The address is the local APIC's, with the processor's
  * identity in bits 12 to 19, and the data is the vector.
  *
- * A device with no MSI capability is refused by name, and so is a device
- * whose capability says it needs more than one vector. Returns 0 when the
- * device will send messages on `vector`, -1 otherwise.
+ * A device with no MSI capability is refused by name, and so is one whose
+ * capability would run past the end of its configuration space. A device
+ * that offers several vectors is not refused: it is told to use one, which
+ * is what clearing the count of vectors to use does. The caller must already
+ * have made the device a bus master, since a message is a memory write.
+ * Returns 0 when the device will send messages on `vector`, -1 otherwise.
  */
 int pci_msi_enable(const pci_device_t *dev, uint8_t vector)
 {
@@ -488,6 +509,7 @@ int pci_msi_enable(const pci_device_t *dev, uint8_t vector)
     uint8_t msix = pci_find_capability(dev->bus, dev->device, dev->function, PCI_CAP_ID_MSIX);
     uint16_t control;
     uint32_t address;
+    unsigned int last;
 
     if (cap == 0) {
         klog(KLOG_WARN, "pci", "msi: %x:%x.%d has no msi capability", dev->bus, dev->device,
@@ -495,12 +517,33 @@ int pci_msi_enable(const pci_device_t *dev, uint8_t vector)
         return -1;
     }
     control = pci_read_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2));
-    pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2),
-                       (uint16_t)(control & ~PCI_MSI_ENABLE));
+
+    /*
+     * The last byte of this capability, which decides whether it fits in the
+     * 256 bytes an offset can name: a 64-bit capability with per-vector
+     * masking runs to `cap + 23`. A capability that would run past the end is
+     * refused rather than followed around the wrap, where the writes would
+     * land on the identity registers at offset zero.
+     */
+    last = (unsigned int)cap + ((control & PCI_MSI_64BIT) ? 12u : 8u) + 1u;
+    if ((control & PCI_MSI_PER_VECTOR) != 0) {
+        last = (unsigned int)cap + ((control & PCI_MSI_64BIT) ? 16u : 12u) + 3u;
+    }
+    if (last > 0xFFu) {
+        klog(KLOG_WARN, "pci", "msi: %x:%x.%d has a capability that runs past the end of its space",
+             dev->bus, dev->device, dev->function);
+        return -1;
+    }
+
+    /* Nothing may be sent while the address and the data are being written,
+       so the enable bit goes down first and the count of vectors with it. */
+    control = (uint16_t)(control & ~(PCI_MSI_ENABLE | PCI_MSI_MULTIPLE_ENABLE));
+    pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2), control);
     if (msix != 0) {
         uint16_t mxc = pci_read_config16(dev->bus, dev->device, dev->function, (uint8_t)(msix + 2));
 
         if ((mxc & PCI_MSIX_ENABLE) != 0) {
+            /* MSI beside an enabled MSI-X is undefined by the specification. */
             pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(msix + 2),
                                (uint16_t)(mxc & ~PCI_MSIX_ENABLE));
         }
@@ -513,12 +556,22 @@ int pci_msi_enable(const pci_device_t *dev, uint8_t vector)
     } else {
         pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 8), vector);
     }
-    /* One vector: bits 4 to 6 of the control word, every other bit as read. */
-    control = (uint16_t)(control & ~PCI_MSI_MULTIPLE_ENABLE);
-    pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2), control);
+    if ((control & PCI_MSI_PER_VECTOR) != 0) {
+        /*
+         * A device that can mask its own vectors may have been left with
+         * this one masked, in which case it would be programmed, enabled and
+         * silent. The mask register is at the end of the capability, past the
+         * data, and its low bit is this one vector.
+         */
+        uint8_t mask_at = (uint8_t)(cap + ((control & PCI_MSI_64BIT) ? 16u : 12u));
+
+        pci_write_config32(dev->bus, dev->device, dev->function, mask_at, 0);
+    }
+    /* And the enable bit last, when everything it acts on is written. */
     pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2),
                        (uint16_t)(control | PCI_MSI_ENABLE));
-    klog(KLOG_INFO, "pci", "msi: %x:%x.%d on vector %d", dev->bus, dev->device, dev->function, vector);
+    klog(KLOG_INFO, "pci", "msi: %x:%x.%d on vector %d", dev->bus, dev->device, dev->function,
+         vector);
     return 0;
 }
 

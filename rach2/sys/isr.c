@@ -14,13 +14,13 @@
 extern void terminate_current_process(int32_t signo);
 
 /*
- * The scheduler, and the process this processor is inside. Declared here for
- * the same reason as the kill above: a message vector that woke a reader has
- * to let that reader run, and the trap core need not pull in the whole
- * process header to ask which context it interrupted.
+ * The scheduler, and whether this processor is inside a system call.
+ * Declared here for the same reason as the kill above: a message vector that
+ * woke a reader has to let that reader run, and the trap core need not pull
+ * in the whole process header to ask which context it interrupted.
  */
 extern void schedule(void);
-extern int proc_preemptible(void);
+extern int proc_in_syscall(void);
 
 /* Every interrupt this kernel has routed through `_irq_router`, which is what
  * /proc/stat's `intr` line reports. */
@@ -241,10 +241,16 @@ void _irq_router(isr_params_t *params)
 #endif
 
     if (params->vector >= 48) {
-        /* A message from a PCI device: the 8259 has no line to acknowledge,
-         * and the APIC's end-of-interrupt comes after the handler chain,
-         * because an edge-triggered message re-raised in between would be
-         * lost if the interrupt were ended first. */
+        /*
+         * A message from a PCI device: the 8259 has no line to acknowledge,
+         * and the APIC's end-of-interrupt comes after the handler chain.
+         * Nothing is lost either way, since a second message sets the
+         * processor's request bit whether or not this one is still in
+         * service and is taken when this returns. Ending it after the chain
+         * keeps the two halves of one interrupt in one place, and costs the
+         * vectors below it the time the chain runs, which is bounded by the
+         * handlers this kernel installs.
+         */
         if (params->vector == 255) {
             lapic_spurious(); /* the APIC's own, which needs no end */
             return;
@@ -254,11 +260,16 @@ void _irq_router(isr_params_t *params)
         /*
          * A handler that woke a reader has to let it run, or the wake is
          * worth nothing until the next tick and the message bought no
-         * latency at all. A process running kernel code inside its own
-         * system call is left alone, as the timer leaves it alone: its state
-         * is half changed and the call must finish.
+         * latency at all. Two contexts may be left: one interrupted in user
+         * mode, which has no kernel state of its own to be half way through,
+         * and one that is not inside a system call, which is the idle loop
+         * or a kernel thread and is what the timer already preempts. Kernel
+         * code inside a system call is never preempted here: the exit path
+         * and the scheduler itself both run with interrupts on while their
+         * own bookkeeping is half done, and a switch taken there strands the
+         * process whose state they were in the middle of changing.
          */
-        if (proc_preemptible()) {
+        if ((params->cs & 3u) == 3u || !proc_in_syscall()) {
             schedule();
         }
         return;

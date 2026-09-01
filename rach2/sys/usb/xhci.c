@@ -1079,32 +1079,46 @@ int xhci_port_settled(int port)
 /**
  * Turn the interrupter on and have the controller send `vector` as a message.
  *
- * In this order: the moderation interval to zero, because a controller whose
- * firmware left an interval behind would hold an event back for as long as it
- * says and this driver wants the event when it happens; the interrupter's own
- * enable; the controller's; and the MSI capability last, so that nothing is
- * sent before the two enables that make it meaningful.
+ * In this order: the device's MSI capability, which is where the address and
+ * the vector are written and which ends with the device's own enable; the
+ * moderation interval to zero, because a controller whose firmware left an
+ * interval behind would hold an event back for as long as it says and this
+ * driver wants the event when it happens; the interrupter's own enable; and
+ * the controller's last. Nothing can be raised until the last two, so the
+ * capability is written while the controller is quiet.
  *
  * Returns 0 when the controller will send messages, -1 when it will not, in
  * which case nothing here has been enabled and the timer stays the only pump.
  */
 int xhci_interrupts_enable(uint8_t vector)
 {
+    uint32_t iman;
+
     msi_on = 0;
     if (!xhci_running) {
         return -1;
     }
-    w32(caps.rtsoff + XHCI_IR0 + IR_IMOD, 0);
-    w32(caps.rtsoff + XHCI_IR0 + IR_IMAN,
-        r32(caps.rtsoff + XHCI_IR0 + IR_IMAN) | IMAN_IE);
-    op_w32(XHCI_USBCMD, op_r32(XHCI_USBCMD) | USBCMD_INTE);
+    /*
+     * The device's capability first, and the two enables after it. A
+     * controller whose firmware left MSI enabled with an address of its own
+     * would otherwise be free to send one, on the strength of enables this
+     * function had just set, to wherever that stale address points. With the
+     * interrupter's enable still clear nothing can be raised while the
+     * capability is written.
+     */
     if (pci_msi_enable(&xhci_pci, vector) != 0) {
-        w32(caps.rtsoff + XHCI_IR0 + IR_IMAN,
-            r32(caps.rtsoff + XHCI_IR0 + IR_IMAN) & ~IMAN_IE);
-        op_w32(XHCI_USBCMD, op_r32(XHCI_USBCMD) & ~USBCMD_INTE);
         return -1;
     }
+    /* The controller answers a doorbell inside the write that rings it, so
+     * everything below is in place before the last enable. */
     msi_on = 1;
+    w32(caps.rtsoff + XHCI_IR0 + IR_IMOD, 0);
+    iman = r32(caps.rtsoff + XHCI_IR0 + IR_IMAN);
+    /* The pending bit is written back as zero: it is cleared by writing it
+     * as one, and an interrupt already pending is not this function's to
+     * acknowledge. */
+    w32(caps.rtsoff + XHCI_IR0 + IR_IMAN, (iman & ~IMAN_IP) | IMAN_IE);
+    op_w32(XHCI_USBCMD, op_r32(XHCI_USBCMD) | USBCMD_INTE);
     return 0;
 }
 
@@ -1116,14 +1130,16 @@ int xhci_interrupts_enable(uint8_t vector)
  */
 void xhci_interrupts_disable(void)
 {
+    uint32_t iman;
+
     if (!msi_on) {
         return;
     }
-    w32(caps.rtsoff + XHCI_IR0 + IR_IMAN,
-        r32(caps.rtsoff + XHCI_IR0 + IR_IMAN) & ~IMAN_IE);
+    msi_on = 0;
+    iman = r32(caps.rtsoff + XHCI_IR0 + IR_IMAN);
+    w32(caps.rtsoff + XHCI_IR0 + IR_IMAN, iman & ~(IMAN_IE | IMAN_IP));
     op_w32(XHCI_USBCMD, op_r32(XHCI_USBCMD) & ~USBCMD_INTE);
     pci_msi_disable(&xhci_pci);
-    msi_on = 0;
 }
 
 int xhci_interrupts_on(void)

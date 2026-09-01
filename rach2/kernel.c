@@ -2827,12 +2827,13 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
      * this kernel drives by message, read and printed, nothing written. */
     apic_diag_report();
 
-    /* The local APIC, so that a device can be told to send its interrupts
-     * as messages. A machine that refuses leaves every device on its
-     * legacy line, which is the kernel as it was. */
-    lapic_init();
-
     __asm__ __volatile__("cli");
+    /* The local APIC, so that a device can be told to send its interrupts as
+     * messages. A machine that refuses leaves every device on its legacy
+     * line, which is the kernel as it was. Interrupts are off across it: it
+     * moves the road the 8259's interrupts take to the processor, and there
+     * is no reason to have one arrive in the middle of the move. */
+    lapic_init();
     init_pit(100);
     set_isr_handler(32, &timer_handler, "pit"); /* install the timer handler on IRQ0 */
     __asm__ __volatile__("sti");

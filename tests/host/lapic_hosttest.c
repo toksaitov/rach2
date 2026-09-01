@@ -39,8 +39,19 @@ static unsigned int model_read(unsigned int reg)
     return apic_page[reg / 4];
 }
 
+/*
+ * The one rule of this model that is not a plain store: a processor whose
+ * APIC is software disabled holds the mask bit of every local-vector entry
+ * set and ignores a write that would reset one, so a driver that wrote
+ * `LINT0` before the software enable would find it masked afterwards and the
+ * 8259's interrupts would stop at the processor. Without this rule here the
+ * order rows below would pass for a driver that does exactly that.
+ */
 static void model_write(unsigned int reg, unsigned int value)
 {
+    if ((reg == 0x350 || reg == 0x360) && (apic_page[0xF0 / 4] & 0x100u) == 0) {
+        value |= 0x10000u; /* the mask bit stays set */
+    }
     apic_page[reg / 4] = value;
     if (writes < 64) {
         write_order[writes++] = reg;
@@ -54,8 +65,6 @@ static int has_apic, has_msr;
 static int nomsi;
 static int wrmsr_calls;
 static unsigned int wrmsr_lo;
-static int svr_written_after_lint0;
-static int lint0_write_seen;
 
 int kcpu_apic_present(void)
 {
@@ -158,8 +167,6 @@ static void reset_model(unsigned int lint0)
     has_msr = 1;
     nomsi = 0;
     wrmsr_calls = 0;
-    svr_written_after_lint0 = 0;
-    lint0_write_seen = 0;
 }
 
 int main(void)
@@ -171,7 +178,17 @@ int main(void)
     check(lapic_ready(), "and reports itself ready");
     check(lapic_id() == 3, "the identity comes from bits 24 and up");
     check(apic_page[0x80 / 4] == 0, "the task priority is cleared");
-    check(apic_page[0x350 / 4] == 0x8700, "LINT0 is left as the firmware set it");
+    {
+        int touched = 0, i;
+
+        for (i = 0; i < writes; i++) {
+            if (write_order[i] == 0x350) {
+                touched = 1;
+            }
+        }
+        check(!touched, "LINT0 is not written when the firmware left it right");
+    }
+    check(apic_page[0x350 / 4] == 0x8700, "and it still has the firmware's value");
     check(apic_page[0x360 / 4] == 0x8400, "LINT1 is left alone");
     check(apic_page[0xF0 / 4] == (0x100u | 0xFFu),
           "the spurious register is enabled with vector 255");
@@ -204,31 +221,70 @@ int main(void)
     reset_model(0x8700);
     has_apic = 0;
     check(lapic_init() == -1 && !lapic_ready(), "a processor without an APIC is refused");
-    check(apic_page[0x80 / 4] == 0x20 && apic_page[0xF0 / 4] == 0, "and nothing is written");
+    check(writes == 0, "and nothing is written to it at all");
 
     reset_model(0x8700);
     has_msr = 0;
     check(lapic_init() == -1, "a processor without the model-specific registers is refused");
-    check(apic_page[0xF0 / 4] == 0, "and nothing is written");
+    check(writes == 0 && wrmsr_calls == 0, "and neither its page nor its register is written");
 
     reset_model(0x8700);
     apic_base_lo |= 1u << 10;
     check(lapic_init() == -1, "x2APIC mode is refused");
-    check(apic_page[0xF0 / 4] == 0, "and nothing is written");
+    check(writes == 0, "and nothing is written");
+
+    reset_model(0x8700);
+    apic_base_hi = 1;
+    check(lapic_init() == -1, "a base above 4 GiB is refused");
+    check(writes == 0, "and nothing is written");
+
+    reset_model(0x8700);
+    apic_base_lo = 1u << 11; /* enabled, and no address at all */
+    check(lapic_init() == -1, "a register with no base address in it is refused");
+    check(writes == 0, "and nothing is written");
 
     reset_model(0x8700);
     nomsi = 1;
     check(lapic_init() == -1, "rach2.nomsi refuses");
-    check(apic_page[0xF0 / 4] == 0, "and nothing is written");
+    check(writes == 0, "and nothing is written");
+    apic_page[0xB0 / 4] = 0x1234;
+    lapic_eoi();
+    check(apic_page[0xB0 / 4] == 0x1234,
+          "and an end-of-interrupt on a refused APIC writes nothing");
 
-    /* The order: the task priority and LINT0 before the software enable. */
+    /* Whether a vector is waiting at the processor, which is the question the
+       USB stack puts before it counts an edge as lost. Vector 48 is bit 16 of
+       the word at 0x210, and the registers are sixteen bytes apart. */
+    reset_model(0x8700);
+    (void)lapic_init();
+    apic_page[0x210 / 4] = 0;
+    apic_page[0x110 / 4] = 0;
+    check(!lapic_pending(48), "a vector nothing has raised is not waiting");
+    apic_page[0x210 / 4] = 1u << 16;
+    check(lapic_pending(48), "a vector in the request register is waiting");
+    check(!lapic_pending(49), "and its neighbour is not");
+    apic_page[0x210 / 4] = 0;
+    apic_page[0x110 / 4] = 1u << 16;
+    check(lapic_pending(48), "a vector being handled counts as waiting too");
+    apic_page[0x110 / 4] = 0;
+    apic_page[0x200 / 4] = 0xFFFFFFFFu; /* vectors 0 to 31, a different word */
+    check(!lapic_pending(48), "a vector in another word is not this one");
+    apic_page[0x200 / 4] = 0;
+    reset_model(0x8700);
+    has_apic = 0;
+    (void)lapic_init();
+    apic_page[0x210 / 4] = 1u << 16;
+    check(!lapic_pending(48), "and a refused APIC answers no rather than reading its page");
+
+    /* The order: the software enable first, and the local-vector entries
+       after it, because the processor ignores an unmask before it. */
     reset_model(0x10700);
     (void)lapic_init();
     {
         int tpr_at = -1, lint0_at = -1, svr_at = -1, i;
 
         /* The first write of each: a second write of the spurious register
-           later would hide an enable that came too early. */
+           later would hide an enable that came too late. */
         for (i = 0; i < writes; i++) {
             if (write_order[i] == 0x80 && tpr_at < 0) {
                 tpr_at = i;
@@ -240,8 +296,8 @@ int main(void)
                 svr_at = i;
             }
         }
-        check(tpr_at >= 0 && lint0_at >= 0 && svr_at >= 0 && tpr_at < svr_at && lint0_at < svr_at,
-              "the task priority and LINT0 are written before the software enable");
+        check(tpr_at >= 0 && lint0_at >= 0 && svr_at >= 0 && svr_at < tpr_at && svr_at < lint0_at,
+              "the software enable is written before the task priority and LINT0");
     }
 
     /* The repair the boot asks for when the timer stops after the APIC is
@@ -249,10 +305,10 @@ int main(void)
     reset_model(0x8700);
     (void)lapic_init();
     apic_page[0x350 / 4] = 0x10700; /* masked behind the driver's back */
-    apic_page[0xF0 / 4] = 0;
+    writes = 0;
     lapic_repair_lint0();
     check(apic_page[0x350 / 4] == (7u << 8), "the repair writes LINT0 as an external interrupt");
-    check(apic_page[0xF0 / 4] == 0, "and writes nothing else");
+    check(writes == 1 && write_order[0] == 0x350, "and writes that and nothing else");
 
     reset_model(0x8700);
     has_apic = 0;
@@ -271,8 +327,6 @@ int main(void)
         lapic_spurious();
         check(lapic_spurious_count() == before + 2, "the spurious handler counts");
     }
-    (void)svr_written_after_lint0;
-    (void)lint0_write_seen;
 
     if (fails == 0) {
         printf("lapic_hosttest: OK\n");

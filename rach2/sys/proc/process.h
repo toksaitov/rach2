@@ -123,8 +123,8 @@ extern process_t proc_table[MAX_PROCS];
 /* Currently running process. */
 extern process_t *current_proc;
 
-/** Whether another process may be scheduled on the way out of an interrupt. */
-int proc_preemptible(void);
+/** Whether this processor is inside a user process's system call. */
+int proc_in_syscall(void);
 
 /** Reset the process table to its boot state and verify the PCB layout. */
 void init_proc(void);
