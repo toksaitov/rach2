@@ -19,11 +19,12 @@ Phase 4: naming, tables and removal
 - [x] the usbN nodes as block devices; /proc/usb's columns
 - [x] gpt.c and gpt_hosttest.c; the superfloppy
 - [x] removal, the teardown count, the held-buffer rule, the replug
-- [ ] the harness drive= steps and usbdiskprobe (the probe is written; the
-      harness steps, the suite and phase 4's mutations are not)
+- [x] the harness drive= steps and usbdiskprobe
+- [ ] phase 4's mutations
 
 Phase 5: the suite
-- [ ] tests/run usbdisk without the boot from the stick; the throughput line
+- [x] tests/run usbdisk without the boot from the stick; the throughput line
+
 - [ ] tests/run all; the gate review of the disk half
 
 Phase 6: the stick image

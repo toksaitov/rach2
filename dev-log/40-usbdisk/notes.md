@@ -145,10 +145,19 @@ in the array they lie. `gpt_hosttest.c` drives it against tables no disk would
 carry.
 
 `usbdisk.c` is the layer between the class driver and `/dev`. A stick that
-comes up is given the lowest free number of two; the reading of its table
-happens in a syscall, not in the pump, because a transfer to a stick sleeps
-its caller and the pump runs in an interrupt. `usbdisk_service` is called from
-the syscall entry and returns at once when there is nothing to do.
+comes up is given the lowest free number of two. Its table is read from the
+pump without sleeping: `block_request_begin` starts one request of at most a
+page and `block_request_ended` asks after it on the passes that follow, so
+the reading is a state machine over the first sector, the GUID header and
+the array a page at a time. The first design read the table at the syscall
+entry, where a process can sleep; the suite's replug boot showed a stick
+plugged in while the debug shell was idle waited sixty seconds for its
+table, because no process entered the kernel until the harness gave up on
+the step. Publishing the nodes and reclaiming a stick still wait for a
+moment when no process is inside a syscall, which is either the syscall
+entry or a pump pass that interrupted user mode or the idle machine; on one
+processor a syscall is not preempted, so such a pass finds every kernel
+structure at rest.
 
 The teardown count is computed rather than kept: the mounts on the stick's
 five views and what is open on them, the descriptions on its nodes counted by
@@ -187,17 +196,54 @@ phase 4 was proved against:
     build/tests/host/mkexfatfixture exfat.img
     dd if=exfat.img of=stick-mbr.img bs=512 seek=67584 conv=notrunc
 
+The suite found four more things, each fixed where it was found.
+
+* An unmount of a mount whose stick has gone failed with `EIO`, because the
+  unmount syncs, prepares and writes the cache back before it lets go, and
+  each of those reaches a device that is not there. `BLOCK_GONE` is set on
+  the stick's views by `bcache_device_gone`, and an unmount of such a device
+  writes nothing and only lets go of what it held.
+* The emulator drops a stick's medium with the device it was under, so a
+  replug through the monitor is `drive_add` and then `device_add`; the
+  harness gained `drive=add:` and `drive=del:` for it, as the plan said.
+* With the controller's messages on, the first read of 16 MiB failed at once
+  with `usbdisk: recovery: the command wrapper was refused`, every time, and
+  never on the timer's pump. `msc_block_submit` ran in process context with
+  interrupts on, and the emulator completes a transfer inside the doorbell
+  write, so the interrupt for a wrapper arrived before `command_begin` had
+  recorded the stage that sent it; the pump then read an idle stick with a
+  completion for it, and the next wrapper went out into the middle of the
+  command. The two process-context entries, `submit` and `flush`, now run
+  with interrupts masked, which is the plan's "submission inside the pump"
+  rule. The host test cannot see this: its model completes nothing until it
+  is stepped.
+* BusyBox's `blkid` found no volume on the stick. Two causes. The FAT32
+  fixture had 64496 clusters, fewer than the 65525 a FAT32 volume must have;
+  the kernel mounts it, but `blkid` judges by the cluster count, takes it for
+  FAT16 and reads the label from the FAT16 field, which is empty. The
+  fixtures' FAT32 partition is now 48 MiB. And the exFAT prober asks for the
+  120 bytes of its superblock structure, which the whole-sector rule of the
+  disk's windows refused, and a refused read marks the device unusable for
+  every prober after it. The stick's nodes read any byte range, as a block
+  device node on Linux does; the disk's windows keep their rule.
+
+Throughput, 16 MiB read through `/dev/usb0` in 32 KiB pieces, measured in
+QEMU on this host: 49648 KB/s over 330 ms with the controller's messages,
+and 133 KB/s over 122880 ms on the timer's pump alone, which is exactly
+three ten-millisecond ticks for each page-sized request: the wrapper, the
+data and the status each wait for a tick. The suite's throughput boot runs
+with messages; the timer measurement is this record's, because a boot that
+takes two minutes is not one the core tier can hold.
+
+`tests/run usbdisk` is eight boots and takes 103 s alone, which is inside
+the core tier's rule; it runs alone after the pool like `tests/run usb`,
+because both plug devices in and out through the monitor.
+
 ## Open items
 
 * The phase 3 proof also asks for a raw read of the stick's first sector
   through `/dev/usb0`. That is `usbdiskprobe volumes`, which reads the table
   back and passes.
-* `usbdisk.c`'s scan reports an unpartitioned volume as `mbr` with no
-  partitions, since an exFAT boot sector carries the same `0x55AA` an MBR
-  does and its four entries read as empty. The behaviour is right and the
-  record is not: the log line should say `one volume`, which is what
-  `volume_boot_sector` is there to decide.
-* Phase 4's remaining work: the harness `drive=add:`/`drive=del:` steps, the
-  suite, and the eight mutations the plan names.
+* Phase 4's mutations are not run yet.
 
 
