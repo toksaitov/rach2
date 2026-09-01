@@ -19,6 +19,7 @@
 #include "krffs.h"
 #include "../usb/core.h"
 #include "../usb/usb.h"
+#include "../block/usbdisk.h"
 #include "../tty/pty.h"
 #include "../io/poll.h"
 #include "../cmdline.h"
@@ -87,7 +88,9 @@
 #define PROCFS_MAX_STATSYS  256  /* the cpu lines, btime, and the counters */
 #define PROCFS_MAX_MEMINFO  256  /* seven sized lines */
 #define PROCFS_MAX_MOUNTS   256  /* the root, and the two synthetic mounts */
-#define PROCFS_MAX_USB      256  /* four devices, one line each */
+/* Four devices and two sticks, one line each, and the line that counts the
+ * names. A stick's line has two names a drive chose the text of. */
+#define PROCFS_MAX_USB      576
 #define PROCFS_MAX_FILESYSTEMS 128 /* two nodev lines and four types */
 /* Thirty-two vectors at most, each a line of its number, its count, which of
    the two roads it arrives on, and up to four names of at most a dozen
@@ -891,10 +894,14 @@ static int procfs_gen_meminfo(struct procfs_text *t)
  * Render /proc/usb.
  *
  * One line per device the USB stack has configured: the root port it is on,
- * its speed, what it says it is, and the class it was driven as. A machine
- * with no controller, or one booted without USB, has this file and it is
- * empty, which is a different answer from the file not being there and is the
- * one a program that opens it can act on.
+ * its speed, what it says it is, and the class it was driven as. Then one
+ * line per stick that is a disk, naming its node, what the drive says it
+ * is, its size and whether it is still there, and, on a machine that has had
+ * a stick, a last line with how many names are free and how many sticks have
+ * been given up since boot. A machine with no controller, or one booted
+ * without USB, has this file and it is empty, which is a different answer
+ * from the file not being there and is the one a program that opens it can
+ * act on.
  */
 static int procfs_gen_usb(struct procfs_text *t)
 {
@@ -908,6 +915,26 @@ static int procfs_gen_usb(struct procfs_text *t)
         for (j = 0; j < n; j++) {
             ap_ch(t, line[j]);
         }
+    }
+    for (i = 0; i < USBDISK_MAX; i++) {
+        int n = usbdisk_describe(i, line, (int)sizeof(line));
+        int j;
+
+        for (j = 0; j < n; j++) {
+            ap_ch(t, line[j]);
+        }
+    }
+    /* The counting line is written only by a machine that has had a stick,
+     * so a boot with no controller, or one with a controller and nothing
+     * plugged into it, has this file empty as it always had. A reader that
+     * finds no such line has every name free and nothing given up, which is
+     * what a machine that never had a stick has. */
+    if (usbdisk_free() != USBDISK_MAX || usbdisk_teardowns() != 0) {
+        ap_str(t, "disks ");
+        ap_u32(t, (uint32_t)usbdisk_free());
+        ap_str(t, " free ");
+        ap_u32(t, usbdisk_teardowns());
+        ap_str(t, " reclaimed\n");
     }
     return t->over ? -1 : t->len;
 }

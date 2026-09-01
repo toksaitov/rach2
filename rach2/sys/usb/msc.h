@@ -21,6 +21,23 @@
 #define MSC_MAX_DEVICES 2
 
 /**
+ * What a stick says it is, for `/proc/usb` and the disk layer.
+ *
+ * The two names are SCSI's, from INQUIRY, trimmed of the spaces the standard
+ * pads them with. `closing` is a stick that has gone whose slot something
+ * still holds.
+ */
+struct msc_ident {
+    char vendor[9];
+    char product[17];
+    uint64_t blocks;
+    uint32_t block_size;
+    int write_protect;
+    int closing;
+    int device;
+};
+
+/**
  * Take a device the core has enumerated as Bulk-Only mass storage.
  *
  * `device` is the controller's handle, `interface` the interface number the
@@ -60,9 +77,26 @@ int msc_completion(const struct usb_completion *completion);
 /** How many sticks are ready to serve requests. */
 int msc_count(void);
 
+/** Whether slot `index` holds a stick that is serving requests. */
+int msc_ready(int index);
+
+/** What slot `index` holds; -1 when the slot is free. */
+int msc_ident(int index, struct msc_ident *out);
+
 /**
- * The block device of the stick in slot `index`, or null when that slot has
- * none ready. The device layer publishes the nodes from these.
+ * Free a slot whose stick has gone and whose device nothing holds.
+ *
+ * The disk layer calls it and nothing else does: a slot freed while a mount,
+ * a description or a held buffer still points at its block device would hand
+ * those pointers to the next stick plugged in.
+ */
+void msc_release(int index);
+
+/**
+ * The block device of the stick in slot `index`, or null when the slot is
+ * free. A device whose stick has gone answers every request with `EIO`; the
+ * pointer stays valid until the slot is released, because a mount and a held
+ * buffer still name it.
  */
 struct block_device *msc_block_device(int index);
 

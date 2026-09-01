@@ -26,6 +26,7 @@
 #include "msc.h"
 
 #include "../block/block.h"
+#include "../block/usbdisk.h"
 #include "../klog.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
@@ -134,6 +135,10 @@
 
 struct msc_device {
     int used;
+    /* The stick has gone and the slot is not free: something still holds the
+     * block device, so neither the slot nor anything in it may be reused
+     * until the disk layer says the last hold is gone. */
+    int closing;
     int device;    /* the controller's handle */
     int interface; /* for the two class requests */
     int ep_in;
@@ -162,7 +167,10 @@ struct msc_device {
     int sense_key;
     int retried;
 
-    /* What the stick is, once it is up. */
+    /* What the stick is, once it is up. INQUIRY's two strings are kept
+     * because `scratch` is the next command's buffer as well. */
+    char vendor[9];
+    char product[17];
     uint64_t blocks;
     uint32_t block_size;
     int write_protect;
@@ -200,11 +208,39 @@ static struct msc_device *by_device(int device)
     int i;
 
     for (i = 0; i < MSC_MAX_DEVICES; i++) {
-        if (sticks[i].used && sticks[i].device == device) {
+        if (sticks[i].used && !sticks[i].closing && sticks[i].device == device) {
             return &sticks[i];
         }
     }
     return 0;
+}
+
+/**
+ * Copy a fixed-width SCSI string out, trimmed of its trailing spaces.
+ *
+ * INQUIRY pads its two names with spaces to their full width, and a name
+ * printed with the padding lines up with nothing. `out` has room for
+ * `width` characters and the terminator.
+ */
+static void take_string(char *out, const uint8_t *in, int width)
+{
+    int i;
+    int end = 0;
+
+    for (i = 0; i < width; i++) {
+        char c = (char)in[i];
+
+        /* A stick may put anything in these bytes; what cannot be printed is
+         * not passed on to a reader of /proc/usb. */
+        if (c < 0x20 || c > 0x7E) {
+            c = ' ';
+        }
+        out[i] = c;
+        if (c != ' ') {
+            end = i + 1;
+        }
+    }
+    out[end] = '\0';
 }
 
 /** Build a setup packet in the stick's own buffer. */
@@ -488,8 +524,65 @@ void msc_detach(int device)
     queue_drain(m, -EIO);
     m->state = MSC_STATE_GONE;
     m->stage = STAGE_IDLE;
-    m->used = 0;
+    /* The slot stays taken. Its block device is what a mount, a description
+     * and a held buffer point at, and a second stick given this slot would
+     * be given their pointers with it; the disk layer frees the slot when
+     * the last of those has gone. */
+    m->closing = 1;
     klog(KLOG_INFO, "usbdisk", "gone: device %d", device);
+    usbdisk_left((int)(m - sticks));
+}
+
+/**
+ * Free a slot whose device nothing holds any more.
+ *
+ * Called by the disk layer and by nothing else: it is the one place that
+ * knows the teardown count reached zero.
+ */
+void msc_release(int index)
+{
+    if (index < 0 || index >= MSC_MAX_DEVICES) {
+        return;
+    }
+    if (!sticks[index].closing) {
+        return;
+    }
+    k_memset(&sticks[index], 0, sizeof(sticks[index]));
+}
+
+int msc_ready(int index)
+{
+    if (index < 0 || index >= MSC_MAX_DEVICES) {
+        return 0;
+    }
+    return sticks[index].used && !sticks[index].closing &&
+           sticks[index].state == MSC_STATE_READY;
+}
+
+int msc_ident(int index, struct msc_ident *out)
+{
+    struct msc_device *m;
+    int i;
+
+    if (index < 0 || index >= MSC_MAX_DEVICES || out == 0) {
+        return -1;
+    }
+    m = &sticks[index];
+    if (!m->used) {
+        return -1;
+    }
+    for (i = 0; i < (int)sizeof(out->vendor); i++) {
+        out->vendor[i] = m->vendor[i];
+    }
+    for (i = 0; i < (int)sizeof(out->product); i++) {
+        out->product[i] = m->product[i];
+    }
+    out->blocks = m->blocks;
+    out->block_size = m->block_size;
+    out->write_protect = m->write_protect;
+    out->closing = m->closing;
+    out->device = m->device;
+    return 0;
 }
 
 int msc_count(void)
@@ -774,6 +867,7 @@ static void ready(struct msc_device *m)
     klog(KLOG_INFO, "usbdisk", "ready: device %d: lun %d, %d sectors of %d bytes%s", m->device,
          m->lun, (int)m->blocks, (int)m->block_size,
          m->write_protect ? ", write protected" : "");
+    usbdisk_arrived((int)(m - sticks));
 }
 
 /**
@@ -808,6 +902,8 @@ static void step_command_done(struct msc_device *m)
             next_lun(m, "it is not a disk");
             return;
         }
+        take_string(m->vendor, &m->scratch[8], 8);
+        take_string(m->product, &m->scratch[16], 16);
         m->state = MSC_STATE_TEST;
         return;
 
@@ -1130,7 +1226,7 @@ block_device_t *msc_block_device(int index)
     if (index < 0 || index >= MSC_MAX_DEVICES) {
         return 0;
     }
-    if (!sticks[index].used || sticks[index].state != MSC_STATE_READY) {
+    if (!sticks[index].used) {
         return 0;
     }
     return &sticks[index].block;

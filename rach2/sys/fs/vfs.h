@@ -324,6 +324,14 @@ int vfs_do_umount(const char *target);
  */
 void vfs_device_failed(block_device_t *dev, uint64_t lba, int rc);
 
+/**
+ * How many holds the mounts on `dev` account for: one for each mount, and
+ * one for each description, working directory, covering mount and operation
+ * in flight on it. Zero when nothing is mounted from the device, which is
+ * what lets a stick nobody opened be reclaimed the moment it is pulled.
+ */
+int vfs_device_holds(block_device_t *dev);
+
 /** sync(2)'s half for the mounts: every active mount's `sync`, then the
  * cache's dirty buffers for its device. Always 0, as sync(2) is. */
 int vfs_sync_all(void);

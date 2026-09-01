@@ -61,6 +61,31 @@ void devfs_bootpart_publish(struct block_device *backing, uint32_t start_lba,
                             uint32_t sector_count);
 
 /**
+ * Publish the stick numbered `n`: `/dev/usbN` over the whole medium and
+ * `/dev/usbNp1` upward over the `count` partitions in `parts`.
+ *
+ * The nodes report themselves as block devices, which is what a label scan
+ * looks for; they are read-only, because a stick is written through a file
+ * system mounted on it.
+ */
+struct gpt_part;
+void devfs_usb_publish(int n, struct block_device *whole, const struct gpt_part *parts, int count);
+
+/** Take the stick's nodes out of `/dev`, keeping the windows a mount and an
+ * open description still read through. */
+void devfs_usb_hide(int n);
+
+/** Take the stick's windows back, once nothing holds them. */
+void devfs_usb_withdraw(int n);
+
+/** Window `k` of the stick numbered `n`: 0 is the whole medium and 1 to 4 are
+ * its partitions. Null when that window is not published. */
+struct block_device *devfs_usb_view(int n, int k);
+
+/** How many descriptions are open on the stick's nodes. */
+int devfs_usb_opens(int n);
+
+/**
  * Publish /dev/grubcore over the post-MBR gap of `backing`.
  *
  * The window is LBA 1 through 2047, a constant of the disk layout rather than

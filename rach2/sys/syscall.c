@@ -27,6 +27,7 @@
 #include "fs/devfs.h"
 #include "fs/synthfs.h"
 #include "fs/vfs.h"
+#include "block/usbdisk.h"
 #include "fs/procfs.h"
 #include "mm/paging.h"
 #include "mm/pagecache.h"
@@ -11481,6 +11482,13 @@ static void _syscall_handler(isr_params_t *params)
      * long syscalls (e.g. Doom's framebuffer writes); preemption stays disabled
      * via in_syscall above. The stub no longer does sti; iret restores IF. */
     __asm__ __volatile__("sti");
+
+    /* A stick that arrived or was pulled out was learned in an interrupt,
+     * where nothing may sleep; reading its partition table and reclaiming
+     * what it held both do. This is the first place after that where a
+     * process is running, so the work is done here. It returns at once when
+     * there is none. */
+    usbdisk_service();
 
     if (syscall_num < SYSCALL_TABLE_SIZE && _syscall_table[syscall_num]) {
         ret = _syscall_table[syscall_num](params);

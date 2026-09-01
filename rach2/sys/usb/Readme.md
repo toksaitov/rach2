@@ -16,6 +16,7 @@ It is also the only one that reaches a low-speed keyboard without a second mecha
 | `xhci.c` | The controller: registers, rings, contexts, commands, transfers. |
 | `core.c` | Devices, descriptors, the enumeration state machine, class matching. |
 | `hid.c` | The boot-protocol keyboard and mouse. |
+| `msc.c` | The flash drive, over Bulk-Only Transport. |
 | `usb.c` | The inventory, the bring-up, and the stack's turn from the timer. |
 
 Addressing belongs to the controller rather than the core: xHCI's Address Device command replaces the `SET_ADDRESS` request, so the core asks the driver to address a device and never sends that request itself. A second controller whose bus really takes the request would send it inside its own `device_address`.
@@ -66,11 +67,12 @@ It is remembered by port, in a word of bits, and not by holding an entry in the 
 
 | Limit | Value |
 |-------|-------|
-| Device slots the controller is asked for | 4, of which slot zero is the controller's, so three devices |
-| Endpoint numbers reachable on a device | 0 to 3, which is seven directions; a boot device uses two |
+| Device slots the controller is asked for | 8, of which slot zero is the controller's, so seven devices |
+| Endpoint numbers reachable on a device | 0 to 15, which is thirty-one directions; a boot device uses two and a stick two |
 | Root ports reached | 16 |
 | Scratchpad pages given | 32 |
 | Keyboards and mice driven at once | as many as the slots hold, with one modifier state between them |
+| Flash drives driven at once | 2, which is what the two device names hold |
 
 Each is a table in the kernel image. A controller with more root ports than this is used as far as sixteen and says so; one that requires more scratchpad pages is refused with both numbers in the record.
 
@@ -92,9 +94,20 @@ A device that goes releases everything it was holding. The release that would ha
 
 A mouse report becomes a packet in the queue the PS/2 mouse fills, with the vertical movement turned over: a USB mouse's Y grows downward and that queue's grows upward.
 
+## Mass storage
+
+A flash drive is a SCSI target reached through two bulk endpoints. Every command is three transfers: a 31-byte command block wrapper out, the data in or out when there is any, and a 13-byte status wrapper in. `msc.c` is a state machine over those three, stepped from the same pump the timer and the interrupt share, with one command in flight per stick.
+
+Bring-up asks the stick what it is before it is believed. `Get Max LUN`, which a stick may stall, and a stall is one unit and not a failure; `INQUIRY`, which must report a direct-access disk, and whose two names are kept for `/proc/usb`; `TEST UNIT READY` until it answers, with `REQUEST SENSE` after each failure, since a drive will not take the next command until it has been asked why the last one failed, and a unit that says it has no medium is passed over for the next; `READ CAPACITY(10)`, whose field is the address of the last block and not a count, and whose `0xFFFFFFFF` means a medium larger than a ten-byte read can address, which is refused; and `MODE SENSE(6)`, whose write-protect bit makes every mount of the stick read-only and whose refusal is the ordinary answer of a drive with nothing to report.
+
+Every way a command can end has one answer. A wrapper the stick will not take, a data stage that stalls, a status that does not arrive or arrives with the wrong tag or the wrong signature, and a phase error each lead to a recovery whose order the specification fixes: the class reset, then the halt cleared on the inward endpoint, then on the outward one. A check condition is followed by `REQUEST SENSE`, and what the sense says decides whether the command is worth one retry. The stick's clearing of a halt goes through the core, because the controller takes one command at a time for the whole stack.
+
+The block device the stick is published as has `submit` and `flush` and not `read` and `write`: a transfer to a stick sleeps its caller, so it cannot be used at boot or with interrupts off, and the block layer's sleeping path is what drives it. Requests are admitted in the order they arrived and served one at a time, since two processes can each be asleep inside a request on the one stick; a flush waits its turn like a read, which is what puts it after every write before it. `flush` is `SYNCHRONIZE CACHE`, and a stick that answers `ILLEGAL REQUEST` is a stick with no cache rather than a failure.
+
+A stick that is pulled out is a port that says so, which the core already sees. The transfer in flight is abandoned by its generation and its request is failed, every request waiting is failed, and every later one is refused, so a process asleep in a read returns with `EIO` rather than waiting for a device that will not answer. The slot is not freed then: its block device is what a mount, an open description and a held buffer all point at, and a stick plugged in afterwards would be handed those pointers with the slot. The disk layer counts what still holds the stick and frees the slot when the count reaches zero; [`block/Readme.md`](../block/Readme.md) has that count and what it covers.
+
 ## What is absent, and why
 
-* **Mass storage.** The next milestone. The interface is shaped for it: `endpoint_open` takes an interrupt or a bulk endpoint, and the control endpoint is made while the device is addressed, so a class driver adds no controller code.
 * **Hubs.** A device plugged into a hub is not seen. Both machines have enough root ports for a keyboard and a mouse.
 * **Report descriptors.** Above.
 * **Isochronous transfers.** Audio and video over USB. Nothing here reads them.
@@ -105,7 +118,7 @@ A mouse report becomes a packet in the queue the PS/2 mouse fills, with the vert
 
 ## The guest's view
 
-`/proc/usb` has one line per configured device: the port, the speed, the identifiers, the class and the protocol. A machine with no controller, or one booted with `rach2.nousb`, has the file and it is empty, which is a different answer from the file not being there.
+`/proc/usb` has one line per configured device: the port, the speed, the identifiers, the class and the protocol. A machine that has had a stick has more: a line per stick, with its node name, the two names `INQUIRY` gave, its size, its partitions and whether it is ready or closing, and a last line counting the free names and the sticks given up. A machine that never had one writes neither, so a machine with no controller, or one booted with `rach2.nousb`, has the file and it is empty, which is a different answer from the file not being there. A program that counts devices counts the lines that begin with `port`.
 
 The mouse is read through the device Doom opens, by the bare name `mouse`. It opens when a mouse of either kind exists.
 
@@ -119,7 +132,7 @@ It is not given back. Restoring the firmware's interrupt sources and its claim w
 
 ## Verification
 
-`tests/run host` runs the three host tests written for this stack. `xhci_hosttest` drives the driver against a model of a controller through `struct xhci_io`: the discovery, the D3 wake, the aperture and register-set bounds, the firmware handoff at once and slowly and never, the halt and reset with its ready wait and its Intel pause, the scratchpad request and its refusal, both context sizes, the rings and their wrap, the command ring and its abort, the ports, the debounce, the device and endpoint commands, and the interrupter: the moderation interval, the two enables, the acknowledgement that keeps the enable beside it, the dequeue pointer written with the busy bit so the next event raises an interrupt of its own, and an event written between the acknowledgement and the drain. `usb_hosttest` walks descriptors no device would send, in buffers allocated to the exact length under AddressSanitizer. `hid_hosttest` hands the class driver reports and reads back what it gave the input layer: a key held, two keys at once, a modifier, an arrow, a rollover, a short report, and an unplug with a key still down.
+`tests/run host` runs the four host tests written for this stack. `xhci_hosttest` drives the driver against a model of a controller through `struct xhci_io`: the discovery, the D3 wake, the aperture and register-set bounds, the firmware handoff at once and slowly and never, the halt and reset with its ready wait and its Intel pause, the scratchpad request and its refusal, both context sizes, the rings and their wrap, the command ring and its abort, the ports, the debounce, the device and endpoint commands, and the interrupter: the moderation interval, the two enables, the acknowledgement that keeps the enable beside it, the dequeue pointer written with the busy bit so the next event raises an interrupt of its own, and an event written between the acknowledgement and the drain. `usb_hosttest` walks descriptors no device would send, in buffers allocated to the exact length under AddressSanitizer. `hid_hosttest` hands the class driver reports and reads back what it gave the input layer: a key held, two keys at once, a modifier, an arrow, a rollover, a short report, and an unplug with a key still down. `msc_hosttest` drives the storage driver against a model of a Bulk-Only device that can be told to vanish at any stage: the bring-up in each of its forms, every row of the error matrix, the reads and the writes, the flush and its three answers, the admission queue and its order, a completion delivered between the waiting side's check and its sleep, and a stick pulled out at each stage, which fails every request it had and keeps its slot until the disk layer gives it back.
 
 `tests/run usb` is fourteen boots against QEMU, listed one by one in [the system tests' Readme](../../../tests/system/Readme.md). Eight of them take the 8042 away, so that a key typed or a mouse moved on those machines can only have come over USB. What they prove about this stack is that a keyboard and a mouse are enumerated at both device speeds and read through both the shell's buffer and the terminal, that a device plugged in or pulled out after the boot is taken up and taken down, that a device this kernel cannot drive is refused once and costs the others nothing, and that the controller's messages arrive and are counted while the timer's pump stays behind them.
 

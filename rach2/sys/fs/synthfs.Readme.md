@@ -29,12 +29,16 @@ The namespace is fixed. Creation, removal, rename, and timestamp operations belo
 | `/dev/bootlog` | 240:2 | 0400 | Reads the kernel log's 16 KiB ring from its oldest retained record. |
 | `/dev/grubcore` | 240:3 | 0600 | Exposes LBA 1 through 2047 when the MBR leaves that range unused. |
 | `/dev/disk0p1` to `/dev/disk0p4` | 240:4 to 240:7 | 0400 | One read-only window per nonempty MBR entry, the source `mount(2)` takes. |
+| `/dev/usb0` and `/dev/usb1` | 240:16, 240:21 | 0400 | The whole medium of a stick, present while that stick is. |
+| `/dev/usb0p1` to `/dev/usb1p4` | 240:17 to 240:25 | 0400 | One window per partition the stick's table describes. |
 
 `null`, `zero`, and `full` seek to offset zero. Random devices, terminals, and pty endpoints are streams and return `ESPIPE`. `/dev/bootlog` uses an ordinary offset and supports seeks relative to the current ring length. All synthetic nodes use stable timestamps from the RTC reading taken during startup, or zero when no RTC reading was accepted.
 
 The pty pool has 16 pairs. Opening `/dev/ptmx` allocates a locked pair; `TIOCSPTLCK` must unlock it before `/dev/pts/N` can open. An allocated slave appears in `/dev/pts`, has device number 136:N, and starts with the opener's effective uid and gid and mode 0620. `chmod` and `chown` may change that slave for a login session. The slave uses the normal terminal discipline. Master writes become slave input, while slave output and echo enter a 4096-byte master ring. The pair is released after both endpoints close.
 
-`/proc/usb` has one line per USB device the kernel has configured: the root port, the speed, the vendor and product identifiers, and the class and protocol it was driven as. A machine with no USB controller, or one booted with `rach2.nousb`, has the file and it is empty. That is a different answer from the file not being there, and it is the one a program that opens it can act on.
+`/proc/usb` has one line per USB device the kernel has configured: the root port, the speed, the vendor and product identifiers, and the class and protocol it was driven as. A machine that has had a stick has more. Each stick that is a disk adds a line naming its node, the two names the drive gave to `INQUIRY`, its size in sectors, how many partitions were published, and whether it is ready or closing, with the holds left on it when it is closing; and a last line, `disks N free M reclaimed`, gives how many of the two names are free and how many sticks have been given up since boot. A machine that never had a stick writes neither, so a machine with no USB controller, or one booted with `rach2.nousb`, has the file and it is empty. That is a different answer from the file not being there, and it is the one a program that opens it can act on. A program that counts devices counts the lines that begin with `port`.
+
+The stick nodes are block devices in `stat`, and the disk's windows are character devices. That is what `blkid`, `findfs` and `mount LABEL=` walk `/dev` for, so a volume on a stick is found by its label rather than by the order the sticks were plugged in. The nodes are read-only: a stick is written through a file system mounted on it.
 
 `/dev/bootlog` is always present. It hands out the kernel log's ring, which holds records and not console text: whole records are dropped from the oldest end to make room, so what comes back never begins mid-line. The os-real `dmesg` script reads this device because Rach2 has no `klogctl` interface.
 

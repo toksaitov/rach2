@@ -185,6 +185,15 @@ int block_request(block_device_t *device, int write, uint64_t lba,
 void block_request_complete(struct block_request *request, uint32_t generation,
                             int status);
 
+/**
+ * How many of the pool's slots are still the device's: in flight, or
+ * quarantined with a page the device may yet write into.
+ *
+ * A device whose driver has gone cannot be freed while either exists, since
+ * a late completion names the slot and the slot names the device.
+ */
+int block_device_holds(block_device_t *device);
+
 /** Advance the request deadlines; the timer calls it once per tick. */
 void block_request_tick(void);
 

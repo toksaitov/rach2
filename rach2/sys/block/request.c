@@ -204,6 +204,24 @@ void block_request_complete(struct block_request *request, uint32_t generation,
     wq_wake_all(&pool_wq);
 }
 
+int block_device_holds(block_device_t *device)
+{
+    int i;
+    int held = 0;
+    uint32_t flags = irq_save();
+
+    for (i = 0; i < REQ_POOL; i++) {
+        if (pool[i].device != device) {
+            continue;
+        }
+        if (pool[i].state == BLOCK_REQ_IN_FLIGHT || pool[i].state == BLOCK_REQ_QUARANTINED) {
+            held++;
+        }
+    }
+    irq_restore(flags);
+    return held;
+}
+
 void block_request_tick(void)
 {
     int i;

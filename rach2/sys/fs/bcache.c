@@ -195,6 +195,14 @@ void bcache_release(struct bbuf *b)
     }
     b->holder = -1;
     b->stamp = ++clock_stamp;
+    if (b->discard) {
+        /* The device went while this was held. Nothing in it is worth
+         * keeping and the device it names may be freed the moment the last
+         * hold goes, so the buffer is emptied here and not later. */
+        b->dev = 0;
+        b->dirty = 0;
+        b->discard = 0;
+    }
     wq_wake_all(&b->wq);
 }
 
@@ -255,6 +263,44 @@ int bcache_sync(block_device_t *dev)
         }
         last = next;
     }
+}
+
+void bcache_device_gone(block_device_t *dev)
+{
+    int i;
+    int failed = 0;
+
+    for (i = 0; i < BCACHE_BUFFERS; i++) {
+        if (bufs[i].dev != dev) {
+            continue;
+        }
+        if (bufs[i].dirty) {
+            if (!failed) {
+                vfs_device_failed(dev, bufs[i].blk * BCACHE_BLOCK_SECTORS, -EIO);
+                failed = 1;
+            }
+            bufs[i].dirty = 0;
+        }
+        if (bufs[i].holder != -1) {
+            bufs[i].discard = 1;
+            continue;
+        }
+        bufs[i].dev = 0;
+        bufs[i].discard = 0;
+    }
+}
+
+int bcache_device_holds(block_device_t *dev)
+{
+    int i;
+    int held = 0;
+
+    for (i = 0; i < BCACHE_BUFFERS; i++) {
+        if (bufs[i].dev == dev && bufs[i].holder != -1) {
+            held++;
+        }
+    }
+    return held;
 }
 
 int bcache_invalidate(block_device_t *dev)

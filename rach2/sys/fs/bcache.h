@@ -46,6 +46,10 @@ struct bbuf {
                             * on a short last block */
     uint32_t bytes;        /* valid bytes: a whole block, or the short tail */
     int dirty;
+    /* The device has gone while this buffer was held: it is dropped at the
+     * release rather than at the removal, because a buffer cannot be reused
+     * under the process that holds it. */
+    int discard;
     int holder;            /* pid holding it, or -1 */
     uint32_t stamp;        /* last release, for least-recently-released */
     wait_queue_t wq;       /* who waits for the hold to end */
@@ -73,6 +77,22 @@ int bcache_sync(block_device_t *dev);
 
 /** Drop `dev`'s buffers at unmount; -EBUSY while any is held or dirty. */
 int bcache_invalidate(block_device_t *dev);
+
+/**
+ * The device has gone: deal with every buffer that names it.
+ *
+ * A clean buffer nobody holds is dropped at once. A dirty one has nowhere
+ * left to be written, so the device is recorded as failed, which takes its
+ * mounts read-only, and the buffer is dropped rather than kept dirty
+ * forever, since an unmount waits for the dirty ones to go. One a process
+ * holds is marked to be dropped at its release, because the holder is asleep
+ * in a request that is about to fail and its buffer must not be handed to
+ * anyone else in the meantime.
+ */
+void bcache_device_gone(block_device_t *dev);
+
+/** How many of `dev`'s buffers are held right now. */
+int bcache_device_holds(block_device_t *dev);
 
 /* Counters for /proc/disk: reads served from the cache, reads from the
  * device, and waits for a busy buffer. */

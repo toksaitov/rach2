@@ -202,26 +202,36 @@ static int count_for(const char *label, const char *file)
 /**
  * How many USB devices this machine has configured.
  *
- * `/proc/usb` has one line per device and is empty on a machine with none,
- * which is the difference between a boot that must have taken messages and
- * one that had nothing to send them.
+ * `/proc/usb` has one line per device, which begins with the port it is on,
+ * and is empty on a machine with none; that difference is what tells a boot
+ * that must have taken messages from one that had nothing to send them. The
+ * file also has a line per stick that is a disk and a line counting the
+ * names, so the count is of the lines that begin with `port` and not of the
+ * lines.
  */
 static int usb_devices(void)
 {
     static char list[1024];
     int n = slurp("/proc/usb", list, (int)sizeof(list));
-    int lines = 0;
-    int i;
+    int devices = 0;
+    int at = 0;
 
     if (n <= 0) {
         return 0;
     }
-    for (i = 0; i < n; i++) {
-        if (list[i] == '\n') {
-            lines++;
+    while (at < n) {
+        int end = at;
+
+        while (end < n && list[end] != '\n') {
+            end++;
         }
+        if (end - at > 5 && list[at] == 'p' && list[at + 1] == 'o' && list[at + 2] == 'r' &&
+            list[at + 3] == 't' && list[at + 4] == ' ') {
+            devices++;
+        }
+        at = end + 1;
     }
-    return lines;
+    return devices;
 }
 
 /** The number after `key` on the boot line, or -1 when it is not there. */

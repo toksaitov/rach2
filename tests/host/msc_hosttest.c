@@ -395,6 +395,27 @@ int usb_core_clear_halt(int device, int endpoint)
     return 1;
 }
 
+/*
+ * The disk layer's side. The class driver tells it that a stick is up and
+ * that one has gone; here the two are counted, because the rows check that
+ * a stick that never became ready is never announced and that one that goes
+ * is announced exactly once.
+ */
+static int arrivals;
+static int departures;
+
+void usbdisk_arrived(int slot)
+{
+    (void)slot;
+    arrivals++;
+}
+
+void usbdisk_left(int slot)
+{
+    (void)slot;
+    departures++;
+}
+
 /* The block layer's side, recorded rather than driven. */
 static struct {
     int completions;
@@ -475,10 +496,17 @@ static void model_reset(void)
     block.last_status = 0;
     block.last = 0;
 
-    /* The driver's own state, which is static and outlives a row. */
+    /* The driver's own state, which is static and outlives a row. A stick
+     * that goes leaves its slot taken until the disk layer says nothing
+     * holds it, so the reset does what that layer would. */
     for (i = 0; i < MSC_MAX_DEVICES; i++) {
         msc_detach(1 + i);
     }
+    for (i = 0; i < MSC_MAX_DEVICES; i++) {
+        msc_release(i);
+    }
+    arrivals = 0;
+    departures = 0;
 }
 
 static struct block_request *make_request(int write, uint64_t lba, uint32_t count,
@@ -555,7 +583,8 @@ int main(void)
     dev.lun_ready_after[0] = 100000;
     CHECK("a stick that never becomes ready is taken", msc_attach(1, 0, EP_IN, EP_OUT) == 0);
     CHECK("and is not brought up", run_until_settled(30000) == 0);
-    CHECK("and has no block device", msc_block_device(0) == 0);
+    CHECK("and serves nothing", !msc_ready(0));
+    CHECK("and the disk layer is never told of it", arrivals == 0);
 
     /* Get Max LUN stalled, which most sticks do, is one logical unit. */
     model_reset();
@@ -647,7 +676,19 @@ int main(void)
         msc_detach(1);
         CHECK("the read is failed when the stick goes",
               block.completions == 1 && block.last_status == -EIO);
-        CHECK("and the stick is gone", msc_count() == 0 && msc_block_device(0) == 0);
+        CHECK("and the stick stops serving", msc_count() == 0 && !msc_ready(0));
+        CHECK("the disk layer is told once", departures == 1);
+        /* The slot is not free yet. A mount, a description and a held buffer
+         * all point at this block device, and a second stick given this slot
+         * would be given their pointers with it. */
+        CHECK("its device is kept until the disk layer releases it", msc_block_device(0) != 0);
+        CHECK("and refuses what it is asked for",
+              msc_block_device(0)->submit(msc_block_device(0), r) == -EIO);
+        CHECK("a second stick is given a different slot",
+              msc_attach(2, 0, EP_IN, EP_OUT) == 0 && msc_block_device(1) != 0 &&
+                  msc_block_device(1) != msc_block_device(0));
+        msc_release(0);
+        CHECK("the slot goes back when the last hold does", msc_block_device(0) == 0);
     }
 
     /* Two requests, admitted in the order they arrived. */

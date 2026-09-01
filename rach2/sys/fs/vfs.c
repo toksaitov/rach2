@@ -590,6 +590,23 @@ void vfs_device_failed(block_device_t *dev, uint64_t lba, int rc)
     }
 }
 
+int vfs_device_holds(block_device_t *dev)
+{
+    int i;
+    int held = 0;
+
+    for (i = 0; i < VFS_MOUNTS; i++) {
+        if (mounts[i].state == VFS_FREE || mounts[i].dev != dev) {
+            continue;
+        }
+        /* The mount itself is one hold, and each description, working
+         * directory, covering mount and operation in flight on it is
+         * another; the last of them is what an unmount waits for. */
+        held += 1 + (int)mounts[i].refs + (int)mounts[i].inprogress;
+    }
+    return held;
+}
+
 int vfs_sync_all(void)
 {
     int i;
