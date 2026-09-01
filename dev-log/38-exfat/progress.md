@@ -1,9 +1,9 @@
 # Milestone 38 progress
 
 Phase 1: arrival and the shared code
-- [ ] the tracking files; the inventory; the review checkpoints and their files
-- [ ] fatcommon.c: the name conversion, the timestamps, the walk bitmap and its lock, the first-fit search; every FAT32 test unchanged
-- [ ] one newfs_exfat volume read by the first form of mkexfatfixture --check and recorded in notes.md
+- [x] the tracking files; the inventory; the review checkpoints and their files
+- [x] fatcommon.c: the name conversion, the timestamps, the walk bitmap and its lock, the first-fit search; every FAT32 test unchanged
+- [x] one newfs_exfat volume read by the first form of mkexfatfixture --check and recorded in notes.md
 
 Phase 2: the fixture and the reader
 - [ ] mkexfatfixture.c in full with --check and its self-test
