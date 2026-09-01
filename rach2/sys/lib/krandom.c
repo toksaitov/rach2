@@ -180,14 +180,7 @@ extern void outb(uint16_t port, uint8_t val);
 extern uint8_t inb(uint16_t port);
 extern volatile uint32_t kernel_ticks;
 
-/** Execute CPUID for `leaf`, sub-leaf 0, into *a, *b, *c, *d (EAX, EBX,
- * ECX, EDX). */
-static void cpuid(uint32_t leaf, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d)
-{
-    __asm__ __volatile__("cpuid"
-                         : "=a"(*a), "=b"(*b), "=c"(*c), "=d"(*d)
-                         : "a"(leaf), "c"(0));
-}
+#include "kcpu.h"
 
 /**
  * Draw one true-hardware entropy word with RDSEED.
@@ -260,16 +253,16 @@ static int hw_key(uint32_t key[8])
 {
     uint32_t a, b, c, d, max_leaf;
 
-    cpuid(0, &max_leaf, &b, &c, &d);
+    kcpu_id(0, &max_leaf, &b, &c, &d);
 
     if (max_leaf >= 7) {
-        cpuid(7, &a, &b, &c, &d);
+        kcpu_id(7, &a, &b, &c, &d);
         if ((b & (1u << 18)) && collect_key(rdseed32, key)) {
             return KRANDOM_SRC_RDSEED;
         }
     }
     if (max_leaf >= 1) {
-        cpuid(1, &a, &b, &c, &d);
+        kcpu_id(1, &a, &b, &c, &d);
         if ((c & (1u << 30)) && collect_key(rdrand32, key)) {
             return KRANDOM_SRC_RDRAND;
         }

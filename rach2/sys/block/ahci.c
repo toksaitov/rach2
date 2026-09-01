@@ -1,4 +1,5 @@
 #include "../klog.h"
+#include "../lib/kcpu.h"
 #include "ahci.h"
 #include "diskcmd.h"
 #include "diskinfo.h"
@@ -279,11 +280,10 @@ static uint32_t ahci_clflush_size = 64;
 static void ahci_detect_cache(void)
 {
 #if defined(__i386__) || defined(__x86_64__)
-    uint32_t eax, ebx, ecx, edx;
+    uint32_t eax = 0, ebx = 0, ecx = 0, edx = 0;
     uint32_t sz;
 
-    eax = 1;
-    __asm__ __volatile__("cpuid" : "+a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx) : : "memory");
+    kcpu_id(1, &eax, &ebx, &ecx, &edx);
 
     ahci_have_clflush = ((edx & (1u << 19)) != 0);
     sz = ((ebx >> 8) & 0xFFu) * 8u;

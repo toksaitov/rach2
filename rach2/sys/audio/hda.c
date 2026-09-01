@@ -12,6 +12,7 @@
 #include "../serial.h"
 #include "../isr.h"
 #include "../lapic.h"
+#include "../lib/kcpu.h"
 #include "../pci.h"
 #include "../lib/kstd.h"
 #include "../lib/kstring.h"
@@ -223,15 +224,11 @@ static uint32_t hda_clflush_size = 64;
  */
 static void hda_cpu_detect_cache(void)
 {
-    uint32_t eax, ebx, ecx, edx;
+    uint32_t eax = 0, ebx = 0, ecx = 0, edx = 0;
     uint32_t sz;
 
     /* CPUID leaf 1: feature flags + CLFLUSH line size. */
-    eax = 1;
-    __asm__ __volatile__("cpuid"
-                         : "+a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
-                         :
-                         : "memory");
+    kcpu_id(1, &eax, &ebx, &ecx, &edx);
 
     hda_have_clflush = ((edx & (1u << 19)) != 0);
     sz = ((ebx >> 8) & 0xFFu) * 8u;
