@@ -2751,17 +2751,16 @@ static int fat_check_volume(struct fat_mount *fm)
             uint32_t v;
             uint8_t raw[4];
 
-            if (walk_bits[c >> 3] & (1u << (c & 7))) {
-                continue;
-            }
             if (fat_read_bytes(fm, fat_offset(fm, fm->active_fat, c), raw, 4) != 0) {
                 w.why = "an unreadable FAT";
                 goto done;
             }
             v = le32(raw) & FAT_MASK;
+            /* A marked cluster can be free: the first of a surplus tail is
+             * marked by the walk and then freed by its repair. */
             if (v == 0) {
                 freecount++;
-            } else if (v != FAT_BAD) {
+            } else if (v != FAT_BAD && !(walk_bits[c >> 3] & (1u << (c & 7)))) {
                 w.lost++;
             }
         }

@@ -1381,6 +1381,32 @@ static void long_rows(void)
 }
 
 /* A dirty volume at mount: clean, repaired, or refused. */
+/* The free entries of the active FAT, read from the image: the driver's
+ * count after a check must agree with the disk. */
+static uint32_t free_in_fat(void)
+{
+    uint32_t bps = image[11] | ((uint32_t)image[12] << 8);
+    uint32_t reserved = image[14] | ((uint32_t)image[15] << 8);
+    uint32_t fat = reserved * bps;
+    struct vfs_statfs sf;
+    uint32_t c;
+    uint32_t n = 0;
+
+    if (OPS->statfs(&mnt, &sf) != 0) {
+        return 0xffffffffu;
+    }
+    for (c = 2; c < sf.blocks + 2; c++) {
+        uint32_t off = fat + c * 4;
+        uint32_t v = image[off] | ((uint32_t)image[off + 1] << 8) |
+                     ((uint32_t)image[off + 2] << 16) | ((uint32_t)image[off + 3] << 24);
+
+        if ((v & 0x0fffffffu) == 0) {
+            n++;
+        }
+    }
+    return n;
+}
+
 static void dirty_rows(void)
 {
     void *n;
@@ -1397,6 +1423,12 @@ static void dirty_rows(void)
     load("--dirty-surplus");
     check(mount_rw("") == 0 && !(mnt.flags & VFS_MS_RDONLY),
           "a surplus tail is repaired and the volume mounts writable");
+    {
+        struct vfs_statfs sf;
+
+        check(OPS->statfs(&mnt, &sf) == 0 && sf.bfree == free_in_fat(),
+              "the free count after the repair is the FAT's, freed tail included");
+    }
     n = walk("/BOOT/GRUB/GRUB.CFG", &err);
     check(n && read_all(n, back, sizeof(back)) == 40 && back[0] == 'x',
           "the file the tail hung off reads");
