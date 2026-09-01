@@ -29,16 +29,17 @@
 #include "../block/usbdisk.h"
 #include "../klog.h"
 #include "../lib/kerrno.h"
+#include "../lib/kirq.h"
 #include "../lib/kstring.h"
 #include "core.h"
 #include "hcd.h"
 #include "xhci.h"
 
 /* The two class requests, addressed to the interface. */
-#define MSC_REQ_RESET    0xFF
-#define MSC_REQ_MAX_LUN  0xFE
-#define TYPE_CLASS_OUT   0x21
-#define TYPE_CLASS_IN    0xA1
+#define MSC_REQ_RESET   0xFF
+#define MSC_REQ_MAX_LUN 0xFE
+#define TYPE_CLASS_OUT  0x21
+#define TYPE_CLASS_IN   0xA1
 
 /* The wrappers. Both are little-endian on the wire, which is the byte order
  * this machine already has, so they are built and read field by field. */
@@ -68,32 +69,32 @@
 #define SCSI_TYPE_DISK 0x00
 
 /* Sense keys, of which this driver acts on three and records the rest. */
-#define SENSE_NOT_READY     0x02
-#define SENSE_MEDIUM_ERROR  0x03
-#define SENSE_ILLEGAL_REQ   0x05
+#define SENSE_NOT_READY      0x02
+#define SENSE_MEDIUM_ERROR   0x03
+#define SENSE_ILLEGAL_REQ    0x05
 #define SENSE_UNIT_ATTENTION 0x06
 
 /* The stages of one command. */
-#define STAGE_IDLE   0
-#define STAGE_CBW    1
-#define STAGE_DATA   2
-#define STAGE_CSW    3
-#define STAGE_DONE   4
+#define STAGE_IDLE  0
+#define STAGE_CBW   1
+#define STAGE_DATA  2
+#define STAGE_CSW   3
+#define STAGE_DONE  4
 /* A class request on the control endpoint, which is one transfer and not a
  * wrapper: `Get Max LUN` and the reset are the two. */
-#define STAGE_CLASS  5
+#define STAGE_CLASS 5
 
 /* What the driver is doing with the stick as a whole. */
-#define MSC_STATE_FREE      0
-#define MSC_STATE_MAX_LUN   1
-#define MSC_STATE_INQUIRY   2
-#define MSC_STATE_TEST      3
-#define MSC_STATE_SENSE     4
-#define MSC_STATE_CAPACITY  5
-#define MSC_STATE_MODE      6
-#define MSC_STATE_READY     7
-#define MSC_STATE_REFUSED   8
-#define MSC_STATE_GONE      9
+#define MSC_STATE_FREE     0
+#define MSC_STATE_MAX_LUN  1
+#define MSC_STATE_INQUIRY  2
+#define MSC_STATE_TEST     3
+#define MSC_STATE_SENSE    4
+#define MSC_STATE_CAPACITY 5
+#define MSC_STATE_MODE     6
+#define MSC_STATE_READY    7
+#define MSC_STATE_REFUSED  8
+#define MSC_STATE_GONE     9
 
 /*
  * Recovery, which the class defines as three things in this order: the reset
@@ -115,8 +116,8 @@
 
 /* How long any one transfer of a command may take, and how long a stick has
  * to become ready after it is plugged in. */
-#define MSC_STEP_MS  10000u
-#define MSC_READY_MS 10000u
+#define MSC_STEP_MS     10000u
+#define MSC_READY_MS    10000u
 #define MSC_TEST_GAP_MS 100u
 
 /* The most this driver moves in one command, which is the block layer's
@@ -148,7 +149,7 @@ struct msc_device {
     int stage;
     int lun;
     int max_lun;
-    int recover;      /* one of the `RECOVER_` values */
+    int recover;       /* one of the `RECOVER_` values */
     int after_recover; /* the state to answer the caller with when it ends */
     uint32_t tag;
     uint32_t deadline;
@@ -261,8 +262,7 @@ static void setup_fill(struct msc_device *m, int type, int request, int value, i
 
 static uint32_t read32(const uint8_t *p)
 {
-    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) |
-           ((uint32_t)p[3] << 24);
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
 static void write32(uint8_t *p, uint32_t v)
@@ -275,8 +275,7 @@ static void write32(uint8_t *p, uint32_t v)
 
 static uint32_t read32_be(const uint8_t *p)
 {
-    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) |
-           (uint32_t)p[3];
+    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3];
 }
 
 static void write32_be(uint8_t *p, uint32_t v)
@@ -555,8 +554,7 @@ int msc_ready(int index)
     if (index < 0 || index >= MSC_MAX_DEVICES) {
         return 0;
     }
-    return sticks[index].used && !sticks[index].closing &&
-           sticks[index].state == MSC_STATE_READY;
+    return sticks[index].used && !sticks[index].closing && sticks[index].state == MSC_STATE_READY;
 }
 
 int msc_ident(int index, struct msc_ident *out)
@@ -612,8 +610,8 @@ int msc_completion(const struct usb_completion *completion)
     if (completion->generation != m->tag) {
         /* A completion for a command this driver has given up on. Its buffer
          * may already be another request's, so it is dropped and recorded. */
-        klog(KLOG_DEBUG, "usbdisk", "late: device %d: a completion for tag %d",
-             m->device, (int)completion->generation);
+        klog(KLOG_DEBUG, "usbdisk", "late: device %d: a completion for tag %d", m->device,
+             (int)completion->generation);
         return 1;
     }
 
@@ -633,8 +631,7 @@ int msc_completion(const struct usb_completion *completion)
     case STAGE_CLASS:
         /* A class request is one transfer. A stall is an answer of its own:
          * a drive that will not say how many logical units it has, has one. */
-        command_end(m, (completion->status == USB_XFER_OK ||
-                        completion->status == USB_XFER_SHORT)
+        command_end(m, (completion->status == USB_XFER_OK || completion->status == USB_XFER_SHORT)
                            ? CSW_GOOD
                            : CSW_FAILED);
         m->residue = completion->residual;
@@ -865,8 +862,7 @@ static void ready(struct msc_device *m)
     m->state = MSC_STATE_READY;
     m->stage = STAGE_IDLE;
     klog(KLOG_INFO, "usbdisk", "ready: device %d: lun %d, %d sectors of %d bytes%s", m->device,
-         m->lun, (int)m->blocks, (int)m->block_size,
-         m->write_protect ? ", write protected" : "");
+         m->lun, (int)m->blocks, (int)m->block_size, m->write_protect ? ", write protected" : "");
     usbdisk_arrived((int)(m - sticks));
 }
 
@@ -1152,6 +1148,8 @@ static void queue_drain(struct msc_device *m, int status)
 static int msc_block_submit(block_device_t *device, struct block_request *request)
 {
     struct msc_device *m = (struct msc_device *)device->drvdata;
+    uint32_t flags;
+    int rc = 0;
 
     if (m == 0 || !m->used || m->state != MSC_STATE_READY) {
         return -EIO;
@@ -1162,19 +1160,25 @@ static int msc_block_submit(block_device_t *device, struct block_request *reques
     if (request->lba + request->count > m->blocks) {
         return -EIO;
     }
+    /* This is the one entry from a process, and everything else that
+     * touches the stick runs in the pump with interrupts off. The emulator
+     * completes a transfer inside the doorbell write, so the interrupt for
+     * a wrapper can arrive before the stage that sent it has been recorded;
+     * the pump then reads a stick that is idle with a completion for it,
+     * and the next wrapper goes out into the middle of the command. */
+    flags = kirq_save();
     if (m->request == 0 && m->stage == STAGE_IDLE) {
         m->request = request;
         m->flushing = 0;
         if (send_read_write(m, request) != 0) {
             m->request = 0;
-            return -EIO;
+            rc = -EIO;
         }
-        return 0;
+    } else if (queue_put(m, request, 0) != 0) {
+        rc = -EIO;
     }
-    if (queue_put(m, request, 0) != 0) {
-        return -EIO;
-    }
-    return 0;
+    kirq_restore(flags);
+    return rc;
 }
 
 /**
@@ -1187,24 +1191,26 @@ static int msc_block_submit(block_device_t *device, struct block_request *reques
 static int msc_block_flush(block_device_t *device, struct block_request *request)
 {
     struct msc_device *m = (struct msc_device *)device->drvdata;
+    uint32_t flags;
+    int rc = 0;
 
     if (m == 0 || !m->used || m->state != MSC_STATE_READY) {
         return -EIO;
     }
+    flags = kirq_save(); /* as in `msc_block_submit` */
     if (m->request == 0 && m->stage == STAGE_IDLE) {
         m->request = request;
         m->flushing = 1;
         if (send_synchronize(m) != 0) {
             m->request = 0;
             m->flushing = 0;
-            return -EIO;
+            rc = -EIO;
         }
-        return 0;
+    } else if (queue_put(m, request, 1) != 0) {
+        rc = -EIO;
     }
-    if (queue_put(m, request, 1) != 0) {
-        return -EIO;
-    }
-    return 0;
+    kirq_restore(flags);
+    return rc;
 }
 
 /** Publish this stick to the block layer. */

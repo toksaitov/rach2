@@ -416,6 +416,17 @@ void usbdisk_left(int slot)
     departures++;
 }
 
+/* The interrupt flag, which the model has no use for: a row runs alone. */
+uint32_t kirq_save(void)
+{
+    return 0;
+}
+
+void kirq_restore(uint32_t flags)
+{
+    (void)flags;
+}
+
 /* The block layer's side, recorded rather than driven. */
 static struct {
     int completions;
