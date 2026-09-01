@@ -143,28 +143,32 @@ static int steps_need_monitor(int argc, char **argv)
  * the monitor was listening is taken by nobody, and the step that depended on
  * it waits out its whole limit for something that never happened.
  */
-/* What the monitor said since the last command, prompt and echo included,
- * so a command it refused can be reported with its reason. */
-static char monitor_reply[1024];
-static size_t monitor_reply_len;
+/* The chunk in which the monitor complained since the last command, if it
+ * did, so a refused command can be reported with its reason. The monitor
+ * echoes a command with a redraw of the line per character, which is far
+ * more text than the reply itself, so only a chunk that carries an error
+ * word is kept and every chunk is scanned for the prompt on its own. */
+static char monitor_reply[512];
+static int monitor_refused;
 
 static int monitor_wait_prompt(int seconds)
 {
     time_t deadline = time(NULL) + seconds;
     char buf[512];
 
-    monitor_reply_len = 0;
     monitor_reply[0] = '\0';
+    monitor_refused = 0;
     while (time(NULL) <= deadline) {
         ssize_t n = recv(monitor_fd, buf, sizeof(buf) - 1, MSG_DONTWAIT);
 
         if (n > 0) {
             buf[n] = '\0';
-            if (monitor_reply_len + (size_t)n < sizeof(monitor_reply)) {
-                memcpy(monitor_reply + monitor_reply_len, buf, (size_t)n + 1);
-                monitor_reply_len += (size_t)n;
+            if (!monitor_refused &&
+                (strstr(buf, "Error") != NULL || strstr(buf, "error:") != NULL)) {
+                memcpy(monitor_reply, buf, (size_t)n + 1);
+                monitor_refused = 1;
             }
-            if (strstr(monitor_reply, "(qemu)") != NULL) {
+            if (strstr(buf, "(qemu)") != NULL) {
                 return 0;
             }
             continue;
@@ -246,12 +250,8 @@ static int monitor_send(const char *command)
     /* A refused command answers with an error line before the prompt; the
      * step that sent it fails with that line, not with a later expect that
      * waits for a device that was never added or removed. */
-    if (strstr(monitor_reply, "Error") != NULL ||
-        strstr(monitor_reply, "error:") != NULL) {
-        char *nl = strchr(monitor_reply, '\n');
-
-        printf("HARNESS: the monitor refused '%s': %s\n", command,
-               nl != NULL ? nl + 1 : monitor_reply);
+    if (monitor_refused) {
+        printf("HARNESS: the monitor refused '%s': %s\n", command, monitor_reply);
         return -1;
     }
     return 0;
