@@ -257,18 +257,35 @@ run-console: rach2 tests krffs test-image $(HARNESS)
 # was asked to play, not what came out; QEMU's wav backend writes every sample
 # the guest produced, so the notes can be measured afterwards from outside.
 # The PC-speaker fallback cannot play samples, so the boot names an Intel HDA
-# controller and a codec for it to find.
+# controller and a codec for it to find. Afterwards the probe reads
+# `/proc/interrupts` on the machine and the count on the audio controller's
+# message vector must have moved: the notes came out either way, and this is
+# what says they came out on the interrupt this milestone gave it rather than
+# on the timer's servicing beside it.
 AUDIO_WAV = $(IMAGES_DIR)/audio-scale.wav
+AUDIO_LOG = $(IMAGES_DIR)/audio-scale.log
 run-audio: rach2 tests krffs test-image $(HARNESS) $(WAVCHECK)
-	@rm -f $(AUDIO_WAV)
+	@rm -f $(AUDIO_WAV) $(AUDIO_LOG)
 	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
 	    --qemu-arg=-cpu --qemu-arg=max \
 	    --qemu-arg=-device --qemu-arg=intel-hda \
 	    --qemu-arg=-device --qemu-arg=hda-duplex,audiodev=au0 \
 	    --qemu-arg=-audiodev --qemu-arg=wav,id=au0,path=$(AUDIO_WAV) \
-	    --timeout 120 --ok "Done." \
-	    "expect=Type 'help'" "send=audio test scale 2000" "expect=Done." wait=3
+	    --log $(AUDIO_LOG) \
+	    --timeout 120 --ok "INTRPROBE OK" \
+	    "expect=Type 'help'" "send=audio test scale 2000" "expect=Done." wait=3 \
+	    "send=exec /intrprobe" "expect=INTRPROBE OK"
 	$(WAVCHECK) scale $(AUDIO_WAV) 262 294 330 349 392
+	@awk '/INTRPROBE READ/ { \
+	        for (i = 1; i <= NF; i++) { \
+	            if ($$i == "audio") { n = $$(i + 1) + 0; seen = 1; } \
+	        } \
+	    } \
+	    END { \
+	        if (!seen) { print "audio-test: the probe never read /proc/interrupts" > "/dev/stderr"; exit 1; } \
+	        if (n <= 0) { print "audio-test: the audio controller sent no messages while it played" > "/dev/stderr"; exit 1; } \
+	        print "audio-test: the audio controller took " n " interrupts on its message vector: OK"; \
+	    }' $(AUDIO_LOG)
 # `tests/run diskfull`: a file system with no room left. The probe writes until
 # the write is refused, requires `ENOSPC` rather than the `EIO` this kernel used
 # to return for a full disk, removes the file and writes again. It has a boot of

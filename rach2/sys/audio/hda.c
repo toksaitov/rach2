@@ -11,6 +11,8 @@
 #include "../kio.h"
 #include "../serial.h"
 #include "../isr.h"
+#include "../lapic.h"
+#include "../pci.h"
 #include "../lib/kstd.h"
 #include "../lib/kstring.h"
 #include "../mm/paging.h"
@@ -28,6 +30,13 @@
 
 /* PCI device info */
 static pci_device_t hda_pci;
+
+/*
+ * The vector this controller's messages arrive on. Vectors 48 to 63 are the
+ * kernel's message vectors; the xHCI takes the first and this takes the
+ * second.
+ */
+#define HDA_MSI_VECTOR 49
 static volatile uint8_t *hda_base = NULL;
 
 /* Controller capabilities */
@@ -1692,6 +1701,20 @@ static int hda_init(void)
 
         /* INTCTL: global interrupt enable plus our output stream's bit. */
         hda_write32(HDA_INTCTL, 0x80000000 | (1 << output_stream_index));
+    }
+
+    /*
+     * And the same handler on a message vector, where the machine has an
+     * APIC and the controller a capability for it. The legacy registration
+     * above and the timer's servicing stay exactly as they were: a machine
+     * whose messages do not arrive is no worse than it was, and the handler
+     * begins by asking the controller whether the interrupt is its own, so
+     * being called twice for one event costs a register read.
+     */
+    if (lapic_ready() && pci_msi_enable(&hda_pci, HDA_MSI_VECTOR) == 0) {
+        register_isr_handler(HDA_MSI_VECTOR, hda_irq_handler, "hda");
+        hda_write32(HDA_INTCTL, 0x80000000 | (1 << output_stream_index));
+        klog(KLOG_INFO, "audio", "interrupts: messages on vector %d", HDA_MSI_VECTOR);
     }
 
     hda_build_boot_status();

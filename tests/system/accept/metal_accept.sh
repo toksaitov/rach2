@@ -196,6 +196,49 @@ else
     bad "the boot log has no usb inventory; this kernel predates it"
 fi
 
+# ---- which interrupts this machine takes, and by which road. Written here
+#      and run in milestone 43: on this notebook the question is whether the
+#      APIC came up at all, whether the two controllers took their message
+#      vectors or stayed on their legacy lines, and whether the 8259's own
+#      interrupts still arrive with the APIC between them and the processor.
+#      Every line is a note: a machine whose firmware leaves it on legacy
+#      lines is not broken, and what it did is the record this milestone is
+#      for. Two things would be failures, and both are the kernel's own
+#      claims: a timer that has taken nothing, and a fallback count that has
+#      moved on a machine whose messages arrive. ----
+INTR="$(run 'cat /proc/interrupts 2>/dev/null')"
+if [ -z "$INTR" ]; then
+    bad "/proc/interrupts is not there; this kernel predates it"
+else
+    echo "$INTR" | while read -r line; do note "interrupts: $line"; done
+    timer="$(echo "$INTR" | awk -F'\t' '$1 == "32:" { print $2 }')"
+    usb_vector="$(echo "$INTR" | awk -F'\t' '$1 == "48:" { print $2 }')"
+    audio_vector="$(echo "$INTR" | awk -F'\t' '$1 == "49:" { print $2 }')"
+    fallback="$(echo "$INTR" | awk -F'\t' '$1 == "FBK:" { print $2 }')"
+    spurious="$(echo "$INTR" | awk -F'\t' '$1 == "SPU:" { print $2 }')"
+
+    case "$timer" in
+        ''|*[!0-9]*) bad "the timer's vector has no count, so the 8259's interrupts are not arriving" ;;
+        0) bad "the timer's vector has taken nothing with the APIC enabled" ;;
+        *) note "interrupts: the timer has taken $timer, so the 8259's road is open" ;;
+    esac
+    note "interrupts: usb vector ${usb_vector:-none}, audio vector ${audio_vector:-none}"
+    note "interrupts: spurious ${spurious:-none}, usb fallback ${fallback:-none}"
+    if [ -n "$usb_vector" ] && [ "${fallback:-0}" != "0" ]; then
+        bad "the USB controller sends messages and the timer's pump still found their work $fallback times"
+    fi
+    if grep -q 'lapic: refused:' "$BOOTLOG_OUT" 2>/dev/null; then
+        note "interrupts: $(grep -m1 'lapic: refused:' "$BOOTLOG_OUT" | sed 's/^.*lapic: /lapic: /')"
+    elif grep -q 'lapic: ready:' "$BOOTLOG_OUT" 2>/dev/null; then
+        note "interrupts: $(grep -m1 'lapic: ready:' "$BOOTLOG_OUT" | sed 's/^.*lapic: /lapic: /')"
+    else
+        bad "the boot log says nothing about the local APIC; this kernel predates it"
+    fi
+    if grep -q 'lapic: timer:' "$BOOTLOG_OUT" 2>/dev/null; then
+        bad "the timer stopped when the APIC was enabled: $(grep -m1 'lapic: timer:' "$BOOTLOG_OUT")"
+    fi
+fi
+
 # ---- and that nothing on this machine has been refused a command ----
 note "(the saved boot log above is the whole of what this machine printed)"
 

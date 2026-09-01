@@ -38,8 +38,10 @@ typedef unsigned int size_t;
 
 #define O_RDONLY 0
 
-/* The vector the xHCI's messages arrive on, which the kernel fixes at 48. */
-#define USB_VECTOR "48:"
+/* The vectors the two drivers' messages arrive on, which the kernel fixes at
+   48 for the USB controller and 49 for the audio controller. */
+#define USB_VECTOR   "48:"
+#define AUDIO_VECTOR "49:"
 
 static char text[2048];
 static char cmdline[512];
@@ -240,7 +242,7 @@ static int option_value(const char *key)
 
 void _start(void)
 {
-    int vector, fallback, drop, devices;
+    int vector, audio, fallback, drop, devices;
 
     if (slurp("/proc/cmdline", cmdline, (int)sizeof(cmdline)) < 0) {
         fail("/proc/cmdline would not open");
@@ -252,6 +254,7 @@ void _start(void)
         fail("the timer's vector has taken no interrupts");
     }
     vector = count_for(USB_VECTOR, text);
+    audio = count_for(AUDIO_VECTOR, text);
     fallback = count_for("FBK:", text);
     if (fallback < 0) {
         fail("there is no fallback line");
@@ -261,8 +264,13 @@ void _start(void)
 
     /* What the file said, before anything is required of it: a run that fails
        is worth more when the numbers it failed on are in the log. */
+    /* The audio controller's vector is printed and not judged: whether it
+       has taken anything depends on whether this boot played a sound, which
+       is the audio suite's business and not this program's. */
     puts("INTRPROBE READ vector ");
     putnum(vector);
+    puts(", audio ");
+    putnum(audio);
     puts(", fallback ");
     putnum(fallback);
     puts("\n");
@@ -306,6 +314,8 @@ void _start(void)
 
     puts("INTRPROBE OK vector ");
     putnum(vector);
+    puts(", audio ");
+    putnum(audio);
     puts(", fallback ");
     putnum(fallback);
     puts("\n");
