@@ -1,4 +1,4 @@
-Phase 2 done; phase 3 (xHCI on MSI) is next.
-Evidence gathered: the APIC comes up in QEMU as `lapic: ready: id 0, version 0x14, base 0xfee00000`; the timer check after it finds the tick still arriving; /proc/interrupts counts vector 32 and names it pit; /proc/stat's intr line moves; all 64 suites pass on the phase 2 tree in 9:05.
-Next action: the xHCI's interrupter and its handler as the pump, the wake, the timer's fallback and its counter, then the usb suite's new boots and the xhci rows.
-File being read when written: dev-log/39-msi/plan.md, phase 3.
+Phase 3 done; phase 4 (HDA on MSI) is next.
+Evidence gathered: the xHCI takes its interrupts as messages on vector 48; ten of them for five keys typed, with the timer's pump finding none of their work; `rach2.nomsi` and a machine with no MSI capability keep the timer as the only pump; `rach2.msidrop=3` silences the controller and the machine goes on typing with the fallback count rising; the handler enters within a millisecond of its own event and the reader runs on the wake rather than at the next tick.
+Next action: HDA's MSI on vector 49 beside its legacy line and its timer servicing, the audio suite's count, and metal_accept.sh's lines for milestone 43.
+File being read when written: dev-log/39-msi/plan.md, phase 4.

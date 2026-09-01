@@ -11,8 +11,8 @@ Phase 2: the APIC, the vectors and MSI
 - [x] lapic_hosttest.c and pcimsi_hosttest.c; the mutations; all 64 suites pass
 
 Phase 3: xHCI on MSI
-- [ ] the interrupter enabled, the handler as the pump, the wake, the timer's fallback and its counter
-- [ ] the xhci rows; the usb suite's new boots (the count, nomsi, the latency, the lost edge); the mutations
+- [x] the interrupter enabled, the handler as the pump, the wake, the timer's fallback and its counter
+- [x] the xhci rows; the usb suite's new boots (the count, nomsi, the latency, the lost edge); the mutations
 
 Phase 4: HDA on MSI
 - [ ] HDA's MSI beside its legacy line; the audio suite's count; metal_accept.sh's lines for milestone 43

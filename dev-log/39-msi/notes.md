@@ -94,6 +94,63 @@ when its own line is finished. Ten unplugs in a row are now seen; before the
 fix, four of ten were not. This is why phase 2 took longer than the plan
 allowed for it.
 
+## Phase 3 record
+
+The controller's interrupter is enabled last in `usb_init`, after the devices
+present at reset are enumerated, and `pci_msi_enable` gives it vector 48.
+`usb_pump` is the one drain, turned by the handler and by the timer, with the
+interrupt flag left as each context found it; the pump records once, at
+runtime, if it ever returns with the flag raised.
+
+Five things were learned at the machine rather than from the specification,
+and each of them changed the code:
+
+* QEMU's controller raises no further interrupt while the event-handler-busy
+  bit is set, and the driver wrote the dequeue pointer only when its drain had
+  taken something. A handler that found the ring already drained by the timer
+  left that bit set and the controller went silent after one message. The
+  write happens on an empty drain too whenever the interrupter is on.
+* The acknowledgement and the drain are one call in the driver
+  (`xhci_interrupt_take`), because that is the only way a host row can catch
+  the order being reversed. With the drain first, an event written in between
+  has its pending bit cleared without having been read.
+* The controller's own pending bit is not the question to ask when the timer's
+  pump finds work: QEMU sets it whether or not a message was sent, and a
+  message that was sent is waiting in the processor's request register while
+  this tick holds the interrupt flag down. `lapic_pending` asks the processor
+  instead, and the fallback count is zero on a machine whose messages arrive
+  and rises on one whose messages were silenced.
+* A wake is worth nothing if the woken reader does not run. The router
+  reschedules on the way out of a message vector unless it interrupted a
+  process that is running inside its own system call; a process blocked inside
+  one is not running, and switching away from it is the point. `keylatprobe`
+  forks a child that spins in user mode, because without another runnable
+  process the reader is the context the message interrupted and the reschedule
+  cannot be seen to matter.
+* The kernel had no clock finer than the 10 ms tick. `pit_now_us` reads where
+  the 8254's counter is inside its period and counts the periods, and neither
+  the tick nor the counter can count them alone: the counter says nothing
+  about which period a reading belongs to, and two readings a period apart
+  land in the same place, while the tick arrives a millisecond or two into the
+  period it names, so a clock built on it steps backwards there. Whichever
+  sees the wrap first counts it, and the other does not count it again. The
+  self-test takes the shortest of eight measurements of one wait, because a
+  serial line takes milliseconds to write a record, and then walks fifty
+  milliseconds a millisecond at a time with the tick measuring the same
+  interval beside it. Three mutations fail it: the half of the period
+  ignored, the tick counting a period a reading already counted, and a
+  reading never counting a wrap.
+
+The seven mutations the plan asks for each fail exactly one row: the bare
+acknowledgement and the dequeue pointer without the busy bit fail
+`xhci_hosttest`'s interrupter rows; the reversed order fails its injected
+event; no end-of-interrupt at the APIC leaves the controller one message
+instead of one per key, which `intrprobe` requires; no reschedule leaves the
+reader waiting the better part of a tick, which the latency row requires
+against the wake; interrupts enabled inside the pump print the record the
+latency boot refuses; and a fallback counted without asking the processor
+fails the count `intrprobe` requires to be zero.
+
 ## Open items
 
 (none)
