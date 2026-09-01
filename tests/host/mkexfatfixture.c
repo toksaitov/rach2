@@ -34,10 +34,10 @@ struct vol {
     uint32_t bitmap_first, upcase_first;
     uint64_t bitmap_length, upcase_length;
     uint16_t *upcase; /* 65536 mappings */
-    unsigned short *owner;
-    unsigned short chains;
+    uint32_t *owner;
+    uint32_t chains;
     int findings, files, dirs, list, dump, first_set_dumped;
-    unsigned bitmap_index; /* the entry the bitmap was taken from */
+    unsigned bitmap_index, upcase_index; /* the entries the objects were taken from */
 };
 
 static uint16_t rd16(const unsigned char *p)
@@ -171,6 +171,26 @@ static uint32_t decompress_upcase(const unsigned char *stored, uint64_t length, 
     return u;
 }
 
+/* The stored bytes a table's first 65536 mappings take. */
+static uint64_t upcase_consumed(const unsigned char *stored, uint64_t length)
+{
+    uint64_t at = 0;
+    uint32_t u = 0;
+
+    while (at + 1 < length && u < 65536) {
+        uint16_t w = rd16(stored + at);
+
+        at += 2;
+        if (w == 0xFFFF && at + 1 < length) {
+            u += rd16(stored + at);
+            at += 2;
+        } else {
+            u++;
+        }
+    }
+    return at;
+}
+
 static void utf8_of(const uint16_t *units, unsigned n, char *out, size_t cap)
 {
     size_t o = 0;
@@ -232,7 +252,7 @@ static void check_dir(struct vol *v, uint32_t first, uint64_t length, int nofat,
 static long walk_chain(struct vol *v, uint32_t first, uint64_t length, int nofat, const char *path)
 {
     char text[400];
-    unsigned short id = ++v->chains;
+    uint32_t id = ++v->chains;
     uint32_t c = first;
     long count = 0;
     uint64_t need = (length + cluster_bytes(v) - 1) / cluster_bytes(v);
@@ -360,10 +380,24 @@ static void check_dir(struct vol *v, uint32_t first, uint64_t length, int nofat,
             continue;
         }
         if (type == 0x82) {
+            if (i > v->upcase_index) {
+                snprintf(text, sizeof(text), "a second up-case table entry in %s", path);
+                finding(v, text);
+            }
             continue;
         }
-        if (type == 0x83 || type == 0xA0 || type == 0xA1) {
-            continue; /* the label, the GUID, TexFAT padding: primaries with no set to walk */
+        if (type == 0xA0) {
+            /* A benign primary with no secondaries is a set of one, with
+               the set checksum over its own bytes. */
+            if (e[1] != 0 || set_checksum(e, 1) != rd16(e + 2)) {
+                snprintf(text, sizeof(text),
+                         "GUID entry with a bad SecondaryCount or checksum in %s", path);
+                finding(v, text);
+            }
+            continue;
+        }
+        if (type == 0x83 || type == 0xA1) {
+            continue; /* the label, TexFAT padding: primaries with no set to walk */
         }
         if (type != 0x85) {
             snprintf(text, sizeof(text), "unknown primary entry 0x%02x in %s", type, path);
@@ -371,7 +405,7 @@ static void check_dir(struct vol *v, uint32_t first, uint64_t length, int nofat,
             continue;
         }
         secondaries = e[1];
-        if (secondaries < 2 || secondaries > 18) {
+        if (secondaries < 2) {
             snprintf(text, sizeof(text), "set with %u secondaries in %s", secondaries, path);
             finding(v, text);
             continue;
@@ -388,7 +422,7 @@ static void check_dir(struct vol *v, uint32_t first, uint64_t length, int nofat,
         /* The set is read entry by entry, since the clusters need not be
            adjacent. */
         {
-            unsigned char set[19 * 32];
+            static unsigned char set[256 * 32];
 
             for (k = 0; k <= secondaries; k++)
                 memcpy(set + k * 32, dir_entry(v, cl, ncl, i + k), 32);
@@ -408,14 +442,31 @@ static void check_dir(struct vol *v, uint32_t first, uint64_t length, int nofat,
             }
             stream = set + 32;
             nlen = stream[3];
-            for (k = 2; k <= secondaries; k++) {
+            /* The name entries: exactly ceil(NameLength / 15) of them,
+               consecutive, right after the stream extension. */
+            for (k = 2; k <= secondaries && k < 2 + (nlen + 14) / 15; k++) {
                 const unsigned char *ne = set + k * 32;
                 unsigned m;
 
-                if (ne[0] != 0xC1)
-                    continue;
+                if (ne[0] != 0xC1) {
+                    snprintf(text, sizeof(text),
+                             "name entries not consecutive after the stream in %s", path);
+                    finding(v, text);
+                    break;
+                }
                 for (m = 0; m < 15 && got < nlen && got < 255; m++)
                     units[got++] = rd16(ne + 2 + m * 2);
+            }
+            for (; k <= secondaries; k++) {
+                if (set[k * 32] == 0xC1) {
+                    snprintf(text, sizeof(text), "a name entry past the name in %s", path);
+                    finding(v, text);
+                    break;
+                }
+            }
+            if (stream[1] & 0xFC) {
+                snprintf(text, sizeof(text), "reserved GeneralSecondaryFlags bits set in %s", path);
+                finding(v, text);
             }
             if (got != nlen || nlen == 0) {
                 snprintf(text, sizeof(text), "name of %u units in entries for %u in %s", nlen, got,
@@ -488,8 +539,10 @@ static void check_dir(struct vol *v, uint32_t first, uint64_t length, int nofat,
                 if (v->list)
                     printf("check: entry %s %s %u %llu%s\n", child, is_dir ? "dir" : "file", fc,
                            (unsigned long long)dl, nofat_child ? " nofat" : "");
-                if (vdl > dl) {
-                    snprintf(text, sizeof(text), "valid length past the length: %s", child);
+                if (vdl > dl || (is_dir && vdl != dl)) {
+                    snprintf(text, sizeof(text),
+                             "valid length past the length, or a directory's short of it: %s",
+                             child);
                     finding(v, text);
                 }
                 if (!possible) {
@@ -530,8 +583,26 @@ static int check_boot(struct vol *v)
     uint64_t stored, computed;
     unsigned i;
 
+    if (v->bytes < 24 * SECTOR) {
+        finding(v, "boot: an image shorter than the two boot regions");
+        return -1;
+    }
     if (memcmp(b + 3, "EXFAT   ", 8) != 0) {
         finding(v, "boot: not an exFAT boot sector");
+        return -1;
+    }
+    if (b[0] != 0xEB || b[1] != 0x76 || b[2] != 0x90) {
+        finding(v, "boot: JumpBoot");
+        return -1;
+    }
+    for (i = 113; i < 120; i++) {
+        if (b[i] != 0) {
+            finding(v, "boot: Reserved is not zero");
+            return -1;
+        }
+    }
+    if (rd16(b + 104) != 0x0100) {
+        finding(v, "boot: FileSystemRevision is not 1.00");
         return -1;
     }
     for (i = 11; i < 64; i++) {
@@ -560,9 +631,16 @@ static int check_boot(struct vol *v)
     v->root = rd32(b + 96);
     v->flags = rd16(b + 106);
     v->active_fat = v->flags & 1;
-    if (v->length * bytes_per_sector(v) > v->bytes) {
-        finding(v, "boot: volume length past the image");
+    if (v->length > v->bytes / bytes_per_sector(v) || v->length < 24) {
+        finding(v, "boot: volume length past the image, or shorter than the boot regions");
         return -1;
+    }
+    for (i = 1; i <= 8; i++) {
+        if (rd32(sector(v, i) + bytes_per_sector(v) - 4) != 0xAA550000u ||
+            rd32(sector(v, 12 + i) + bytes_per_sector(v) - 4) != 0xAA550000u) {
+            finding(v, "boot: an extended boot sector without its signature");
+            return -1;
+        }
     }
     if (v->fat_offset < 24 ||
         (uint64_t)v->fat_offset + (uint64_t)v->fat_length * v->nfats > v->heap_offset) {
@@ -588,6 +666,13 @@ static int check_boot(struct vol *v)
     if (v->flags & 4) {
         finding(v, "boot: media failure flagged");
     }
+    for (i = 4; i < bytes_per_sector(v); i += 4) {
+        if (rd32(sector(v, 11) + i) != rd32(sector(v, 11)) ||
+            rd32(sector(v, 23) + i) != rd32(sector(v, 23))) {
+            finding(v, "boot: a checksum sector whose words do not repeat");
+            break;
+        }
+    }
     computed = boot_checksum(v, 0);
     stored = rd32(sector(v, 11));
     if (computed != stored) {
@@ -610,6 +695,9 @@ static int check_boot(struct vol *v)
             break;
         }
     }
+    if (fat_entry(v, 0) != 0xFFFFFFF8u || fat_entry(v, 1) != 0xFFFFFFFFu) {
+        finding(v, "the FAT's first two entries");
+    }
     if (v->dump) {
         printf(
             "dump: boot: FileSystemName %.8s; VolumeLength %llu; FatOffset %u; FatLength %u; "
@@ -626,6 +714,33 @@ static int check_boot(struct vol *v)
     return 0;
 }
 
+/* The bytes of a system object, whose clusters the FAT chains: `length`
+   bytes from `first`, bounded; the count copied, or -1 for a chain that
+   ends, leaves the heap or loops. */
+static long read_object(const struct vol *v, uint32_t first, uint64_t length, unsigned char *out)
+{
+    uint32_t c = first;
+    uint64_t done = 0;
+    unsigned long steps = 0;
+
+    while (done < length) {
+        uint64_t take = length - done < cluster_bytes(v) ? length - done : cluster_bytes(v);
+        uint32_t next;
+
+        if (!in_heap(v, c) || steps++ > v->clusters)
+            return -1;
+        memcpy(out + done, cluster(v, c), (size_t)take);
+        done += take;
+        if (done >= length)
+            break;
+        next = fat_entry(v, c);
+        if (next == 0xFFFFFFFFu)
+            return -1; /* the chain ends before the length */
+        c = next;
+    }
+    return (long)done;
+}
+
 /* The bitmap and the up-case table, found in the root before anything is
    walked; the root's own clusters are read through the FAT. */
 static int load_objects(struct vol *v)
@@ -638,7 +753,7 @@ static int load_objects(struct vol *v)
 
     v->bitmap = calloc(v->clusters, 1);
     v->upcase = malloc(65536 * sizeof(uint16_t));
-    v->owner = calloc((size_t)v->clusters + 2, sizeof(unsigned short));
+    v->owner = calloc((size_t)v->clusters + 2, sizeof(uint32_t));
     if (!v->bitmap || !v->upcase || !v->owner) {
         finding(v, "out of memory");
         return -1;
@@ -661,19 +776,24 @@ static int load_objects(struct vol *v)
                     printf("dump: bitmap entry: type %02x flags %02x FirstCluster %u DataLength "
                            "%llu\n",
                            e[0], e[1], v->bitmap_first, (unsigned long long)v->bitmap_length);
-            } else if (e[0] == 0x82) {
+            } else if (e[0] == 0x82 && v->upcase_first == 0) {
                 v->upcase_first = rd32(e + 20);
                 v->upcase_length = rd64(e + 24);
+                v->upcase_index = k;
                 if (v->dump)
                     printf("dump: up-case entry: type %02x TableChecksum %08x FirstCluster %u "
                            "DataLength %llu\n",
                            e[0], rd32(e + 4), v->upcase_first,
                            (unsigned long long)v->upcase_length);
-                stored = cluster(v, v->upcase_first);
-                if (!in_heap(v, v->upcase_first) ||
-                    (v->upcase_first - 2 +
-                     (v->upcase_length + cluster_bytes(v) - 1) / cluster_bytes(v)) > v->clusters) {
-                    finding(v, "up-case table outside the heap");
+                if (!in_heap(v, v->upcase_first) || v->upcase_length < 2 ||
+                    v->upcase_length > 131072 || (v->upcase_length & 1)) {
+                    finding(v, "up-case table outside the heap or of an impossible length");
+                    return -1;
+                }
+                stored = malloc((size_t)v->upcase_length);
+                if (!stored || read_object(v, v->upcase_first, v->upcase_length, stored) < 0) {
+                    finding(v, "up-case table's chain does not cover its length");
+                    free(stored);
                     return -1;
                 }
                 if (table_checksum(stored, v->upcase_length) != rd32(e + 4)) {
@@ -683,6 +803,7 @@ static int load_objects(struct vol *v)
                 }
                 {
                     uint32_t u = decompress_upcase(stored, v->upcase_length, v->upcase);
+                    uint32_t m;
 
                     if (u != 65536) {
                         snprintf(text, sizeof(text), "up-case table expands to %u mappings", u);
@@ -691,6 +812,19 @@ static int load_objects(struct vol *v)
                             v->upcase[u] = (uint16_t)u;
                             u++;
                         }
+                    } else if (upcase_consumed(stored, v->upcase_length) != v->upcase_length) {
+                        finding(v, "up-case table with bytes past its last mapping");
+                    }
+                    /* The mandatory mappings: the first 128 code points are
+                       themselves, but a to z are A to Z. */
+                    for (m = 0; m < 128; m++) {
+                        uint16_t want = (uint16_t)(m >= 'a' && m <= 'z' ? m - 32 : m);
+
+                        if (v->upcase[m] != want) {
+                            finding(
+                                v, "up-case table without the mandatory mappings of the first 128");
+                            break;
+                        }
                     }
                     if (v->dump)
                         printf("dump: up-case: %llu stored bytes, 'a' maps to %04x, U+00E9 to "
@@ -698,6 +832,7 @@ static int load_objects(struct vol *v)
                                (unsigned long long)v->upcase_length, v->upcase['a'],
                                v->upcase[0xE9], v->upcase[0xFF]);
                 }
+                free(stored);
             }
         }
         next = fat_entry(v, c);
@@ -714,9 +849,15 @@ static int load_objects(struct vol *v)
         finding(v, "bitmap entry outside the heap or too short");
         return -1;
     }
-    stored = cluster(v, v->bitmap_first);
+    stored = malloc((size_t)need);
+    if (!stored || read_object(v, v->bitmap_first, need, stored) < 0) {
+        finding(v, "bitmap's chain does not cover its length");
+        free(stored);
+        return -1;
+    }
     for (i = 0; i < v->clusters; i++)
         v->bitmap[i] = (stored[i / 8] >> (i % 8)) & 1;
+    free(stored);
     return 0;
 }
 
@@ -831,6 +972,7 @@ struct build {
     /* Where the shapes went, for the variants that damage them. */
     uint32_t hello_set, chained_set, valid_set, chained_first;
     uint32_t bitmap_entry, upcase_entry;
+    unsigned percent; /* the heap's percent in use, rounded down */
 };
 
 /* The builder's own sums, apart from the reader's, so that a mutation in
@@ -1038,7 +1180,11 @@ static unsigned set_build(struct build *b, unsigned char *set, const char *name,
     wr32(e + 8, b_stamp());
     wr32(e + 12, b_stamp());
     wr32(e + 16, b_stamp());
-    e[22] = e[23] = e[24] = (unsigned char)(b_is(b, "--no-utc") ? 0x00 : 0x80);
+    /* --no-utc: a count, no valid bit; --zoned: +6 hours, valid, 0.34 s. */
+    e[22] = e[23] = e[24] = (unsigned char)(b_is(b, "--no-utc")  ? 0x18
+                                            : b_is(b, "--zoned") ? 0x98
+                                                                 : 0x80);
+    e[20] = e[21] = (unsigned char)(b_is(b, "--zoned") ? 34 : 0);
     e = set + 32;
     e[0] = 0xC0;
     e[1] = (unsigned char)(0x01 | (nofat ? 0x02 : 0x00)); /* AllocationPossible shall be 1 */
@@ -1151,7 +1297,7 @@ static void boot_write(struct build *b, uint64_t first)
     wr32(s0 + 84, b_is(b, "--short-fat") ? b->fat_length - 1 : b->fat_length);
     wr32(s0 + 88, b->heap_offset);
     wr32(s0 + 92, b->clusters - (first != 0 && b_is(b, "--regions-disagree") ? 1u : 0u));
-    wr32(s0 + 96, b->root);
+    wr32(s0 + 96, first == 0 && b_is(b, "--main-bad-root") ? b->root + 1 : b->root);
     wr32(s0 + 100, 0x12345678u);
     wr16(s0 + 104, 0x0100);
     wr16(s0 + 106, (b_is(b, "--dirty") ? 2u : 0u) | (b_is(b, "--media-failure") ? 4u : 0u));
@@ -1159,7 +1305,7 @@ static void boot_write(struct build *b, uint64_t first)
     s0[109] = (unsigned char)b->spc_shift;
     s0[110] = 1;
     s0[111] = 0x80;
-    s0[112] = 1;
+    s0[112] = (unsigned char)b->percent;
     wr16(s0 + 510, 0xAA55);
     for (i = 1; i <= 8; i++)
         wr32(b_sector(b, first + i) + b_bps(b) - 4, 0xAA550000u);
@@ -1169,7 +1315,7 @@ static void boot_write(struct build *b, uint64_t first)
             continue;
         sum = ((sum & 1) ? 0x80000000u : 0) + (sum >> 1) + s0[i];
     }
-    if ((first == 0 && b_is(b, "--bad-main-checksum")) ||
+    if ((first == 0 && (b_is(b, "--bad-main-checksum") || b_is(b, "--main-bad-root"))) ||
         (first != 0 && b_is(b, "--bad-backup-checksum")))
         sum++;
     for (i = 0; i < b_bps(b); i += 4)
@@ -1208,8 +1354,20 @@ static int build(const char *out, const char *opt)
     c = b_alloc(&b, (uint32_t)((bitmap_len + b_cbytes(&b) - 1) / b_cbytes(&b)), 1);
     table = malloc(140000);
     table_len = upcase_bytes(&b, table, 140000);
-    if (b_is(&b, "--truncated-upcase-run"))
-        table_len -= 2; /* the last run's count is gone */
+    if (b_is(&b, "--truncated-upcase-run")) {
+        /* The table ends after a run's 0xFFFF marker, its count gone. */
+        uint64_t at = 0, last_marker = 0;
+
+        while (at + 3 < table_len) {
+            if (rd16(table + at) == 0xFFFF) {
+                last_marker = at;
+                at += 4;
+            } else {
+                at += 2;
+            }
+        }
+        table_len = last_marker + 2;
+    }
     c = b_alloc(&b, (uint32_t)((table_len + b_cbytes(&b) - 1) / b_cbytes(&b)), 1);
     memcpy(b_cluster(&b, c), table, (size_t)table_len);
     b.root = b_alloc(&b, 1, 1);
@@ -1253,6 +1411,7 @@ static int build(const char *out, const char *opt)
     entry[0] = 0xA0;
     for (i = 0; i < 16; i++)
         entry[6 + i] = (unsigned char)(0x10 + i);
+    wr16(entry + 2, b_set_checksum(entry, 1)); /* a set of one entry */
     dw_put(&root, entry);
     free(table);
 
@@ -1278,14 +1437,26 @@ static int build(const char *out, const char *opt)
     /* valid.bin: two clusters, 3000 bytes valid, junk past them. */
     c = b_alloc(&b, 2, 0);
     fill(&b, c, (uint64_t)b_cbytes(&b) * 2, 0x40);
-    memset(b_cluster(&b, c) + 3000, 0xEE, (size_t)b_cbytes(&b) * 2 - 3000);
-    n = set_build(&b, set, "valid.bin", 0, c, (uint64_t)b_cbytes(&b) * 2, 3000, 1, 0, 0);
+    memset(b_cluster(&b, c) + 5000, 0xEE, (size_t)b_cbytes(&b) * 2 - 5000);
+    n = set_build(&b, set, "valid.bin", 0, c, (uint64_t)b_cbytes(&b) * 2, 5000, 1, 0, 0);
     b.valid_set = dw_put_set(&root, set, n);
     /* A name of four entries, crossing the first sector's end. */
     c = b_alloc(&b, 1, 0);
     memcpy(b_cluster(&b, c), "x", 1);
     n = set_build(&b, set, "A long name of some fifty characters for four entries.txt", 0, c, 1, 1,
                   1, 0, 0);
+    dw_put_set(&root, set, n);
+    /* caf\xc3\xa9.txt: a name outside ASCII, folded by the table alone. */
+    c = b_alloc(&b, 1, 0);
+    memcpy(b_cluster(&b, c), "cafe\n", 5);
+    n = set_build(&b, set, "caf\xc3\xa9.txt", 0, c, 5, 5, 1, 0, 0);
+    dw_put_set(&root, set, n);
+    /* \xe1\xb8\x81.txt (U+1E01, a with a ring below): the first case-mapped
+       unit past the stored table's first run, so its mapping is not at
+       its own index in the compressed form. */
+    c = b_alloc(&b, 1, 0);
+    memcpy(b_cluster(&b, c), "ring\n", 5);
+    n = set_build(&b, set, "\xe1\xb8\x81.txt", 0, c, 5, 5, 1, 0, 0);
     dw_put_set(&root, set, n);
     /* vendor.txt: a set with a vendor extension and a vendor allocation. */
     c = b_alloc(&b, 1, 0);
@@ -1395,6 +1566,14 @@ static int build(const char *out, const char *opt)
             wr16(chained + 2, b_set_checksum(chained, chained[1] + 1));
         if (resum_valid)
             wr16(valid + 2, b_set_checksum(valid, valid[1] + 1));
+    }
+    {
+        uint32_t used = 0;
+
+        for (c = 2; c < b.clusters + 2; c++)
+            if (b_cluster(&b, 2)[(c - 2) / 8] & (1u << ((c - 2) % 8)))
+                used++;
+        b.percent = (unsigned)((uint64_t)used * 100 / b.clusters);
     }
     boot_write(&b, 0);
     boot_write(&b, 12);

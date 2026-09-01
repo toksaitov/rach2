@@ -79,10 +79,12 @@ int main(void)
     row("--uncompressed-upcase", 0, "check: OK: ");
     row("--sector-4k", 0, "check: OK: ");
     row("--no-utc", 0, "check: OK: ");
+    row("--zoned", 0, "check: OK: ");
     row("--dirty", 0, ", dirty");
 
     /* Each malformed one breaks one rule and is named for it. */
     row("--bad-main-checksum", 1, "boot: main checksum");
+    row("--main-bad-root", 1, "boot: main checksum");
     row("--bad-backup-checksum", 1, "boot: backup checksum");
     row("--regions-disagree", 1, "boot: the backup boot sector differs");
     row("--short-fat", 1, "boot: a FAT shorter than the clusters");
@@ -97,7 +99,8 @@ int main(void)
     row("--wrong-secondary-count", 1, "set with 1 secondaries");
     row("--wrong-name-length", 1, "name entries with units past NameLength 8");
     row("--false-hash", 1, "name hash");
-    row("--vdl-past-dl", 1, "valid length past the length: /valid.bin");
+    row("--vdl-past-dl", 1,
+        "valid length past the length, or a directory's short of it: /valid.bin");
     row("--alloc-impossible", 1, "stream without AllocationPossible: /hello.txt");
     row("--chain-out", 1, "out of range: /chained.bin");
     row("--loop", 1, "loop: /chained.bin");
