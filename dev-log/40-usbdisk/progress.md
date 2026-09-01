@@ -20,7 +20,7 @@ Phase 4: naming, tables and removal
 - [x] gpt.c and gpt_hosttest.c; the superfloppy
 - [x] removal, the teardown count, the held-buffer rule, the replug
 - [x] the harness drive= steps and usbdiskprobe
-- [ ] phase 4's mutations
+- [x] phase 4's mutations
 
 Phase 5: the suite
 - [x] tests/run usbdisk without the boot from the stick; the throughput line

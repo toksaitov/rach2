@@ -239,11 +239,46 @@ takes two minutes is not one the core tier can hold.
 the core tier's rule; it runs alone after the pool like `tests/run usb`,
 because both plug devices in and out through the monitor.
 
+Nothing called a stick's `flush` until phase 4's mutations were laid out:
+the class driver had `SYNCHRONIZE CACHE` and the block device had the
+member, and no mount asked for it. `block_flush` sleeps its caller the way
+`block_request` does, a partition view forwards it, and an unmount, a sync
+and an fsync each call it after the cache has written back. A stick counts
+the flushes sent to it on its line of `/proc/usb`, and the probe's write
+part requires the unmount to have added one; `/proc/disk` counts them too,
+but a machine booted from the RAM disk with no disk has no `/proc/disk`
+counters at all.
+
+Phase 4's eight mutations, each applied by a script that restores the source
+under a trap and touches it so the rebuild is real, each failing exactly the
+row named and no other:
+
+* the entry array's checksum not checked: `a damaged entry array publishes
+  nothing`, usbdisk_hosttest;
+* a pulled stick still served: `and refuses what it is asked for`,
+  msc_hosttest;
+* the description count left out of the holds: `a stick with a description
+  open is not reclaimed`, usbdisk_hosttest;
+* the request count left out: `nor while a request of its is quarantined`,
+  usbdisk_hosttest;
+* a held buffer dropped at the removal instead of at its release: `the held
+  buffer is still held`, bcache_hosttest;
+* the class driver's slot freed at the departure: `its device is kept until
+  the disk layer releases it`, msc_hosttest;
+* the stick nodes reported as character devices: `the MBR stick boot`,
+  tests/run usbdisk, at the probe's `/dev/usb0 is not a block device`;
+* the flush skipped at the unmount: `the write boot`, tests/run usbdisk, at
+  the probe's `the unmount did not flush the stick's cache`.
+
+The seventh was first written in a form that did not compile, an unused
+parameter under `-Werror`, and the script reported it as escaped; a mutation
+that does not build proves nothing, and the script now keeps the run's
+output so that case is told apart.
+
 ## Open items
 
 * The phase 3 proof also asks for a raw read of the stick's first sector
   through `/dev/usb0`. That is `usbdiskprobe volumes`, which reads the table
   back and passes.
-* Phase 4's mutations are not run yet.
 
 
