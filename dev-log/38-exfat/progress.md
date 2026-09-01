@@ -21,7 +21,7 @@ Phase 5: the dirty-volume check
 - [x] the seeded walk, the bitmap comparison, the three repairs, the recursive matrix, the dirty rows; the mutations
 
 Phase 6: the suite
-- [ ] tests/run exfat; the checker over every volume written
+- [x] tests/run exfat; the checker over every volume written
 
 Phase 7: the record and the sweep
 - [ ] docs read against code; prosecheck; the review round and the proofread; the sweep

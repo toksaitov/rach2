@@ -383,6 +383,44 @@ still linked is a reached cluster whose bit is clear), the reached-free,
 overlap, wrong-name-length and duplicate-name fixtures mounting
 read-only.
 
+## Phase 6 record
+
+`tests/run exfat` is six boots on a disk whose second partition is an
+exFAT volume `mkexfatfixture --empty` builds: the same probes the FAT32
+suite uses, which now take the type as their second argument, and the
+host's own reader in mtools' place, since mtools cannot read exFAT
+(`--check`, `--list`, and `--read PATH`, which writes a file's bytes to
+stdout). `fsck_exfat` on this host judges the volume after the write
+boot and at the end. The registry row is core, the doctor lists
+`exfatprogs` as optional beside `dosfstools`.
+
+The suite found two defects in the writer that the host rows had not:
+
+* The filler that keeps a set's file and stream entries in one sector
+  skipped the slot when it held the directory's end marker, so the set
+  went in across the boundary and a later scan stopped at the marker
+  before it; BusyBox's `mv` could not find the file it had just copied.
+  The slot is filled whether or not it holds the marker, and the zeros
+  past the set are the marker then.
+* `free_slots` stopped reading entries once it saw the end marker and
+  counted free slots past the directory's last allocated cluster, so a
+  create at entry 256 of the root wrote outside the chain and answered
+  `EIO`. It reads every entry and grows the directory when the chain
+  ends, whether or not the marker was seen. The row that catches it
+  makes and remakes two hundred files twice over, which grows the root
+  across its clusters; the matrix cannot, since it stops after each of
+  the hundreds of writes.
+
+The external checker's two answers are both in the suite: after the
+write boot it must call the volume clean, and at the end, where the
+crash boot left lost clusters the mount's check counted and left, it
+must find them and call a copy it repairs clean. Which of the two the
+last step takes depends on where the kill landed; both were seen.
+
+Two mutations, through mutate38p6.sh: the free run taken past the
+directory's last cluster (caught by the rewrite row) and a mount that
+refuses to be writable (caught by the suite's write boot).
+
 ## Open items
 
 (none)
