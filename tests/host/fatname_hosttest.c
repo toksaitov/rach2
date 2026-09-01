@@ -1,7 +1,8 @@
 /*
  * fatname_hosttest.c: the FAT32 name rules of fat32name.c alone.
  *
- * host-deps: rach2/sys/fs/fat32name.c
+ * host-deps: rach2/sys/fs/fat32name.c rach2/sys/fs/fatcommon.c
+ * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  *
  * The conversion from UTF-8 to UTF-16 and what it refuses, the 8.3 rule
  * with its case bits, the alias and its numbering, the checksum and the
@@ -12,6 +13,8 @@
 
 #include "../../rach2/sys/fs/fat32name.h"
 #include "../../rach2/sys/lib/kerrno.h"
+#include "../../rach2/sys/proc/wait_queue.h"
+#include "../../rach2/sys/rtc.h"
 
 extern int printf(const char *fmt, ...);
 
@@ -37,8 +40,35 @@ static int eq11(const uint8_t *a, const char *b)
     return 1;
 }
 
-static uint16_t units[FAT32_NAME_UNITS];
+static uint16_t units[FAT_NAME_UNITS];
 static uint8_t name11[11];
+
+/* ---- what fatcommon.c needs of the kernel: the walk's lock and the clock,
+   which the name rows never reach ---- */
+void wait_queue_init(wait_queue_t *wq)
+{
+    __builtin_memset(wq, 0, sizeof(*wq));
+}
+void wq_wake_all(wait_queue_t *wq)
+{
+    (void)wq;
+}
+int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
+{
+    (void)wq;
+    (void)cond;
+    (void)arg;
+    return -1;
+}
+int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
+{
+    return wq_wait_event(wq, cond, arg);
+}
+void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
+{
+    *seconds = 1583323200;
+    *nanoseconds = 0;
+}
 
 int main(void)
 {
@@ -48,51 +78,50 @@ int main(void)
     int i;
 
     /* The conversion and what it refuses. */
-    check(fat32_name_units("hello.c", units, &n) == 0 && n == 7 && units[0] == 'h',
+    check(fat_name_units("hello.c", units, &n) == 0 && n == 7 && units[0] == 'h',
           "an ASCII name converts");
-    check(fat32_name_units("\xc3\xa9.txt", units, &n) == 0 && n == 5 && units[0] == 0xE9,
+    check(fat_name_units("\xc3\xa9.txt", units, &n) == 0 && n == 5 && units[0] == 0xE9,
           "a two-byte character is one unit");
-    check(fat32_name_units("\xf0\x9f\x98\x80.txt", units, &n) == 0 && n == 6 &&
-              units[0] == 0xD83D && units[1] == 0xDE00,
+    check(fat_name_units("\xf0\x9f\x98\x80.txt", units, &n) == 0 && n == 6 && units[0] == 0xD83D &&
+              units[1] == 0xDE00,
           "a character past the BMP is a surrogate pair");
     for (i = 0; i < 255; i++) {
         longname[i] = 'a';
     }
     longname[255] = '\0';
-    check(fat32_name_units(longname, units, &n) == 0 && n == 255, "255 characters fit");
+    check(fat_name_units(longname, units, &n) == 0 && n == 255, "255 characters fit");
     longname[255] = 'a';
     longname[256] = '\0';
-    check(fat32_name_units(longname, units, &n) == -ENAMETOOLONG, "256 do not");
+    check(fat_name_units(longname, units, &n) == -ENAMETOOLONG, "256 do not");
     for (i = 0; i < 128; i++) {
         longname[2 * i] = (char)0xc3; /* U+00E9, two bytes each */
         longname[2 * i + 1] = (char)0xa9;
     }
     longname[256] = '\0';
-    check(fat32_name_units(longname, units, &n) == -ENAMETOOLONG,
+    check(fat_name_units(longname, units, &n) == -ENAMETOOLONG,
           "128 two-byte characters are 128 units and 256 bytes: too long");
-    check(fat32_name_units("a/b", units, &n) == -EINVAL &&
-              fat32_name_units("a:b", units, &n) == -EINVAL &&
-              fat32_name_units("a\"b", units, &n) == -EINVAL &&
-              fat32_name_units("a?b", units, &n) == -EINVAL &&
-              fat32_name_units("a*b", units, &n) == -EINVAL &&
-              fat32_name_units("a|b", units, &n) == -EINVAL &&
-              fat32_name_units("a<b", units, &n) == -EINVAL &&
-              fat32_name_units("a\\b", units, &n) == -EINVAL &&
-              fat32_name_units("a\tb", units, &n) == -EINVAL,
+    check(fat_name_units("a/b", units, &n) == -EINVAL &&
+              fat_name_units("a:b", units, &n) == -EINVAL &&
+              fat_name_units("a\"b", units, &n) == -EINVAL &&
+              fat_name_units("a?b", units, &n) == -EINVAL &&
+              fat_name_units("a*b", units, &n) == -EINVAL &&
+              fat_name_units("a|b", units, &n) == -EINVAL &&
+              fat_name_units("a<b", units, &n) == -EINVAL &&
+              fat_name_units("a\\b", units, &n) == -EINVAL &&
+              fat_name_units("a\tb", units, &n) == -EINVAL,
           "the characters FAT forbids are EINVAL");
-    check(fat32_name_units("name.", units, &n) == -EINVAL &&
-              fat32_name_units("name ", units, &n) == -EINVAL,
+    check(fat_name_units("name.", units, &n) == -EINVAL &&
+              fat_name_units("name ", units, &n) == -EINVAL,
           "a trailing dot or space is EINVAL");
-    check(fat32_name_units(".", units, &n) == -EINVAL &&
-              fat32_name_units("..", units, &n) == -EINVAL &&
-              fat32_name_units("", units, &n) == -EINVAL,
+    check(fat_name_units(".", units, &n) == -EINVAL && fat_name_units("..", units, &n) == -EINVAL &&
+              fat_name_units("", units, &n) == -EINVAL,
           "the dot names and the empty name are EINVAL");
-    check(fat32_name_units("\xc3", units, &n) == -EINVAL &&
-              fat32_name_units("\xff", units, &n) == -EINVAL &&
-              fat32_name_units("\xc0\x80", units, &n) == -EINVAL &&
-              fat32_name_units("\xed\xa0\x80", units, &n) == -EINVAL,
+    check(fat_name_units("\xc3", units, &n) == -EINVAL &&
+              fat_name_units("\xff", units, &n) == -EINVAL &&
+              fat_name_units("\xc0\x80", units, &n) == -EINVAL &&
+              fat_name_units("\xed\xa0\x80", units, &n) == -EINVAL,
           "malformed, overlong and surrogate UTF-8 are EINVAL");
-    check(fat32_name_units(".hidden", units, &n) == 0 && fat32_name_units("a b", units, &n) == 0,
+    check(fat_name_units(".hidden", units, &n) == 0 && fat_name_units("a b", units, &n) == 0,
           "a leading dot and an inner space are names");
 
     /* The 8.3 rule and the case bits, against what mtools wrote. */
@@ -143,7 +172,7 @@ int main(void)
     check(eq11(name11, "L~999999TXT"), "six digits leave one");
 
     /* The checksum and the long entries. */
-    check(fat32_name_units("long name.txt", units, &n) == 0 && fat32_long_entries(n) == 1 &&
+    check(fat_name_units("long name.txt", units, &n) == 0 && fat32_long_entries(n) == 1 &&
               fat32_long_entries(14) == 2 && fat32_long_entries(26) == 2 &&
               fat32_long_entries(27) == 3,
           "thirteen units per long entry");
@@ -154,7 +183,7 @@ int main(void)
               raw[28] == 'x' && raw[30] == 't',
           "one entry of exactly thirteen units: the last flag, the checksum, the units, no "
           "terminator");
-    check(fat32_name_units("fourteen chars", units, &n) == 0 && n == 14, "a fourteen-unit name");
+    check(fat_name_units("fourteen chars", units, &n) == 0 && n == 14, "a fourteen-unit name");
     fat32_long_entry(raw, 2, 2, sum, units, n);
     check(raw[0] == 0x42 && raw[1] == 's' && raw[3] == 0 && raw[5] == 0xFF && raw[6] == 0xFF &&
               raw[30] == 0xFF,

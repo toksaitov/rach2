@@ -22,6 +22,7 @@
 #include "../rtc.h"
 #include "bcache.h"
 #include "fat32name.h"
+#include "fatcommon.h"
 
 #define FAT_S_IFDIR 0040000u
 #define FAT_S_IFREG 0100000u
@@ -812,7 +813,7 @@ static int alloc_cluster(struct fat_mount *fm, uint32_t *out)
     if (fm->free_clusters == 0) {
         return -ENOSPC;
     }
-    start = fm->alloc_hint >= 2 && fm->alloc_hint < fm->cluster_count + 2 ? fm->alloc_hint : 2;
+    start = fat_hint_start(fm->alloc_hint, fm->cluster_count);
     c = start;
     while (tried < fm->cluster_count) {
         uint32_t v;
@@ -832,7 +833,7 @@ static int alloc_cluster(struct fat_mount *fm, uint32_t *out)
                     return rc;
                 }
                 fm->free_clusters--;
-                fm->alloc_hint = c + 1 < fm->cluster_count + 2 ? c + 1 : 2;
+                fm->alloc_hint = fat_hint_next(c, fm->cluster_count);
                 *out = c;
                 return 0;
             }
@@ -840,7 +841,7 @@ static int alloc_cluster(struct fat_mount *fm, uint32_t *out)
             return rc;
         }
         tried++;
-        c = c + 1 < fm->cluster_count + 2 ? c + 1 : 2;
+        c = fat_hint_next(c, fm->cluster_count);
     }
     return -ENOSPC;
 }
@@ -929,54 +930,6 @@ static int free_chain(struct fat_mount *fm, uint32_t first)
         steps++;
     }
     return 0;
-}
-
-/* The clock as a FAT stamp: local time read as UTC, two-second resolution
- * in `time`, hundredths of the odd second in `tenth`. */
-static void fat_now(uint16_t *date, uint16_t *time, uint8_t *tenth)
-{
-    int64_t sec, nsec;
-    uint32_t days, rem, year, month, day;
-    static const uint32_t length[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
-
-    rtc_realtime(&sec, &nsec);
-    if (sec < 315532800) {
-        sec = 315532800; /* before 1980: the stamp floors at the epoch FAT has */
-    }
-    if (sec > 4294967295LL) {
-        sec = 4294967295LL; /* the year 2106, past FAT's own 2107 */
-    }
-    days = (uint32_t)sec / 86400u; /* 32-bit: the kernel has no 64-bit division */
-    rem = (uint32_t)sec % 86400u;
-    for (year = 1970;; year++) {
-        uint32_t in_year = (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)) ? 366 : 365;
-
-        if (days < in_year) {
-            break;
-        }
-        days -= in_year;
-    }
-    for (month = 1; month <= 12; month++) {
-        uint32_t in_month = length[month - 1];
-
-        if (month == 2 && year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)) {
-            in_month = 29;
-        }
-        if (days < in_month) {
-            break;
-        }
-        days -= in_month;
-    }
-    day = days + 1;
-    if (year > 2107) {
-        year = 2107;
-    }
-    *date = (uint16_t)(((year - 1980) << 9) | (month << 5) | day);
-    *time = (uint16_t)(((rem / 3600) << 11) | (((rem / 60) % 60) << 5) | ((rem % 60) / 2));
-    if (nsec < 0 || nsec >= 1000000000) {
-        nsec = 0;
-    }
-    *tenth = (uint8_t)(((rem % 60) % 2) * 100 + (uint32_t)nsec / 10000000u);
 }
 
 /* The modification stamp: the date and the two-second time; the creation
@@ -1121,7 +1074,7 @@ static int free_slots(struct fat_mount *fm, struct fat_node *dir, uint32_t first
 struct new_name {
     uint8_t name11[11];
     uint8_t lower;
-    uint16_t units[FAT32_NAME_UNITS];
+    uint16_t units[FAT_NAME_UNITS];
     uint32_t count;   /* UTF-16 units, 0 for a short-only name */
     uint32_t entries; /* long entries, 0 for a short-only name */
 };
@@ -1156,7 +1109,7 @@ static int prepare_name(struct fat_mount *fm, struct fat_node *dir, uint32_t fir
                         const char *name, struct new_name *nn)
 {
     uint32_t n;
-    int rc = fat32_name_units(name, nn->units, &nn->count);
+    int rc = fat_name_units(name, nn->units, &nn->count);
 
     if (rc != 0) {
         return rc;
@@ -1340,39 +1293,6 @@ static uint64_t fat_ino(int is_dir, uint32_t first, uint32_t dir_cluster, uint32
         return first;
     }
     return ((uint64_t)(dir_cluster + 1) << 32) | (uint64_t)(index + 1);
-}
-
-/* FAT keeps local time with no zone; it is read as UTC. Days count from
- * 1980-01-01 through the Gregorian rule, in 32-bit arithmetic. A field out
- * of its range reads as 1980-01-01, as an unset stamp does. */
-static int64_t fat_epoch(uint16_t date, uint16_t time)
-{
-    uint32_t year = 1980 + (date >> 9);
-    uint32_t month = (date >> 5) & 0xF;
-    uint32_t day = date & 0x1F;
-    uint32_t days = 0;
-    uint32_t yr;
-    static const uint32_t before[12] = {0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334};
-    static const uint32_t length[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
-    int leap;
-
-    if (month < 1 || month > 12 || day < 1) {
-        return 315532800; /* 1980-01-01: an unset or broken stamp */
-    }
-    leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
-    if (day > length[month - 1] + (month == 2 && leap ? 1u : 0u) || (time >> 11) > 23 ||
-        ((time >> 5) & 0x3F) > 59 || (time & 0x1F) > 29) {
-        return 315532800;
-    }
-    for (yr = 1970; yr < year; yr++) {
-        days += (yr % 4 == 0 && (yr % 100 != 0 || yr % 400 == 0)) ? 366 : 365;
-    }
-    days += before[month - 1] + day - 1;
-    if (month > 2 && year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)) {
-        days++;
-    }
-    return (int64_t)days * 86400 + (int64_t)(time >> 11) * 3600 +
-           (int64_t)((time >> 5) & 0x3F) * 60 + (int64_t)(time & 0x1F) * 2;
 }
 
 static int fat_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
@@ -1865,48 +1785,6 @@ static int fat_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
 out:
     vfs_ns_unlock(mnt);
     return rc;
-}
-
-/* A FAT stamp from an epoch, the inverse of `fat_epoch`, floored at 1980
- * and capped at 2107. */
-static void fat_stamp(int64_t sec, uint16_t *date, uint16_t *time)
-{
-    uint32_t days, rem, year, month, day;
-    static const uint32_t length[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
-
-    if (sec < 315532800) {
-        sec = 315532800;
-    }
-    if (sec > 4294967295LL) {
-        sec = 4294967295LL;
-    }
-    days = (uint32_t)sec / 86400u;
-    rem = (uint32_t)sec % 86400u;
-    for (year = 1970;; year++) {
-        uint32_t in_year = (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)) ? 366 : 365;
-
-        if (days < in_year) {
-            break;
-        }
-        days -= in_year;
-    }
-    for (month = 1; month <= 12; month++) {
-        uint32_t in_month = length[month - 1];
-
-        if (month == 2 && year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)) {
-            in_month = 29;
-        }
-        if (days < in_month) {
-            break;
-        }
-        days -= in_month;
-    }
-    day = days + 1;
-    if (year > 2107) {
-        year = 2107;
-    }
-    *date = (uint16_t)(((year - 1980) << 9) | (month << 5) | day);
-    *time = (uint16_t)(((rem / 3600) << 11) | (((rem / 60) % 60) << 5) | ((rem % 60) / 2));
 }
 
 /* The attributes the volume can store: the access and modification times,
@@ -2500,32 +2378,9 @@ static int free_entry(struct fat_mount *fm, uint32_t dir_first, uint32_t index);
  * the volume is mounted read-only with a record naming it.
  */
 
-#define WALK_CLUSTERS (1u << 20)
 #define WALK_DEPTH 32
+#define WALK_TAILS 16 /* surplus tails recorded for the repair after the walk */
 #define WALK_DIR_ENTRIES 4096 /* entries compared for a duplicate name */
-
-static uint8_t walk_bits[WALK_CLUSTERS / 8];
-static int walk_busy;
-static wait_queue_t walk_wq;
-
-static int walk_idle(void *arg)
-{
-    (void)arg;
-    return !walk_busy;
-}
-
-static int bit_test_set(uint32_t c)
-{
-    uint8_t m = (uint8_t)(1u << (c & 7));
-
-    if (walk_bits[c >> 3] & m) {
-        return 1;
-    }
-    walk_bits[c >> 3] |= m;
-    return 0;
-}
-
-#define WALK_TAILS 16
 
 struct walk_state {
     struct fat_mount *fm;
@@ -2559,7 +2414,7 @@ static long walk_chain(struct walk_state *w, uint32_t first, long expect)
             w->why = "a chain outside the volume";
             return -1;
         }
-        if (bit_test_set(c)) {
+        if (fat_walk_test_set(c)) {
             w->why = "a cluster reached twice";
             return -1;
         }
@@ -2781,16 +2636,12 @@ static int fat_check_volume(struct fat_mount *fm)
 
     k_memset(&w, 0, sizeof(w));
     w.fm = fm;
-    if (fm->cluster_count + 2 > WALK_CLUSTERS) {
+    if (fm->cluster_count + 2 > FAT_WALK_CLUSTERS) {
         klog(KLOG_WARN, "vfat", "check: %d clusters is more than the walk covers; read-only",
              (int)fm->cluster_count);
         return 1;
     }
-    while (walk_busy) {
-        wq_wait_event_nointr(&walk_wq, walk_idle, 0);
-    }
-    walk_busy = 1;
-    k_memset(walk_bits, 0, (fm->cluster_count + 2 + 7) / 8);
+    fat_walk_acquire(fm->cluster_count);
     klog(KLOG_INFO, "vfat", "check: the volume was not unmounted cleanly; checking");
     if (walk_chain(&w, fm->root_cluster, -1) < 0) {
         goto done;
@@ -2851,7 +2702,7 @@ static int fat_check_volume(struct fat_mount *fm)
              * walk and then freed by its repair. */
             if (v == 0) {
                 freecount++;
-            } else if (v != FAT_BAD && !(walk_bits[c >> 3] & (1u << (c & 7)))) {
+            } else if (v != FAT_BAD && !fat_walk_marked(c)) {
                 w.lost++;
             }
         }
@@ -2880,8 +2731,7 @@ static int fat_check_volume(struct fat_mount *fm)
         }
     }
 done:
-    walk_busy = 0;
-    wq_wake_all(&walk_wq);
+    fat_walk_release();
     if (w.why) {
         klog(KLOG_WARN, "vfat", "check: %s; mounted read-only", w.why);
         return 1;
@@ -3080,7 +2930,7 @@ static int fat_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
         } else {
             uint32_t hint = le32(fi + 492);
 
-            fm->alloc_hint = hint >= 2 && hint < fm->cluster_count + 2 ? hint : 2;
+            fm->alloc_hint = fat_hint_start(hint, fm->cluster_count);
         }
     }
     if (fm->alloc_hint < 2) {

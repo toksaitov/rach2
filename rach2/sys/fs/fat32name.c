@@ -3,92 +3,9 @@
  */
 
 #include "fat32name.h"
+#include "fatcommon.h"
 
 #include "../lib/kerrno.h"
-
-static int forbidden(uint32_t cp)
-{
-    static const char set[] = "\"*/:<>?\\|";
-    int i;
-
-    if (cp < 0x20 || cp == 0x7F) {
-        return 1;
-    }
-    for (i = 0; set[i]; i++) {
-        if (cp == (uint32_t)(unsigned char)set[i]) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
-int fat32_name_units(const char *name, uint16_t *units, uint32_t *count)
-{
-    uint32_t n = 0;
-    uint32_t i = 0;
-    uint32_t last = 0;
-
-    if (name[0] == '\0' || (name[0] == '.' && (name[1] == '\0' || (name[1] == '.' && name[2] == '\0')))) {
-        return -EINVAL;
-    }
-    while (name[i]) {
-        uint32_t c = (unsigned char)name[i];
-        uint32_t cp, extra, k;
-
-        if (c < 0x80) {
-            cp = c;
-            extra = 0;
-        } else if ((c & 0xE0) == 0xC0) {
-            cp = c & 0x1F;
-            extra = 1;
-        } else if ((c & 0xF0) == 0xE0) {
-            cp = c & 0x0F;
-            extra = 2;
-        } else if ((c & 0xF8) == 0xF0) {
-            cp = c & 0x07;
-            extra = 3;
-        } else {
-            return -EINVAL;
-        }
-        for (k = 0; k < extra; k++) {
-            uint32_t cc = (unsigned char)name[i + 1 + k];
-
-            if ((cc & 0xC0) != 0x80) {
-                return -EINVAL;
-            }
-            cp = (cp << 6) | (cc & 0x3F);
-        }
-        i += 1 + extra;
-        if ((extra == 1 && cp < 0x80) || (extra == 2 && cp < 0x800) || (extra == 3 && cp < 0x10000) ||
-            cp > 0x10FFFF || (cp >= 0xD800 && cp < 0xE000)) {
-            return -EINVAL;
-        }
-        if (forbidden(cp)) {
-            return -EINVAL;
-        }
-        if (cp >= 0x10000) {
-            if (n + 2 > FAT32_NAME_UNITS) {
-                return -ENAMETOOLONG;
-            }
-            units[n++] = (uint16_t)(0xD800 + ((cp - 0x10000) >> 10));
-            units[n++] = (uint16_t)(0xDC00 + ((cp - 0x10000) & 0x3FF));
-        } else {
-            if (n + 1 > FAT32_NAME_UNITS) {
-                return -ENAMETOOLONG;
-            }
-            units[n++] = (uint16_t)cp;
-        }
-        last = cp;
-    }
-    if (i > 255) {
-        return -ENAMETOOLONG; /* the byte limit, beside the unit limit */
-    }
-    if (last == '.' || last == ' ') {
-        return -EINVAL;
-    }
-    *count = n;
-    return 0;
-}
 
 /* The characters a short name may hold besides letters and digits. */
 static int short_char(uint32_t c)

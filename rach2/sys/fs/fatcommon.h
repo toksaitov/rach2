@@ -1,0 +1,53 @@
+#ifndef _FATCOMMON_H_
+#define _FATCOMMON_H_
+
+#include "../lib/kint.h"
+
+/*
+ * fatcommon: what the FAT32 and exFAT drivers both need and neither owns.
+ * The check and conversion of a name, the DOS timestamp bit fields, the
+ * first-fit allocation hint, and the dirty-volume walk's bitmap with its
+ * lock. Everything on disk stays with its driver.
+ */
+
+#define FAT_NAME_UNITS 255
+
+/** UTF-8 to UTF-16, checked: 0 with `units` and `*count` filled, -EINVAL
+ * for a name FAT cannot store (a forbidden character, a trailing dot or
+ * space, `.` or `..`, or malformed UTF-8), -ENAMETOOLONG past 255 units
+ * or 255 bytes. */
+int fat_name_units(const char *name, uint16_t *units, uint32_t *count);
+
+/** The epoch second of a DOS date and time, read as UTC; a field out of
+ * range reads as 1980-01-01. */
+int64_t fat_epoch(uint16_t date, uint16_t time);
+
+/** The DOS date and time of an epoch second, floored at 1980 and capped at
+ * 2107; the time is rounded down to two seconds. */
+void fat_stamp(int64_t sec, uint16_t *date, uint16_t *time);
+
+/** The DOS date, time and hundredths of the present moment. */
+void fat_now(uint16_t *date, uint16_t *time, uint8_t *tenth);
+
+/** Where a first-fit search starts: the hint when it names a cluster of
+ * the volume, else the first cluster. */
+uint32_t fat_hint_start(uint32_t hint, uint32_t cluster_count);
+
+/** The cluster after `c`, wrapping to the first past the last. */
+uint32_t fat_hint_next(uint32_t c, uint32_t cluster_count);
+
+/** The one bitmap the dirty-volume walks share: 2^20 bits, one walk at a
+ * time. `fat_walk_acquire` waits for the bitmap and clears the bits of
+ * cluster numbers up to `cluster_count + 1`; `fat_walk_release` gives it
+ * back. */
+#define FAT_WALK_CLUSTERS (1u << 20)
+void fat_walk_acquire(uint32_t cluster_count);
+void fat_walk_release(void);
+
+/** Mark cluster `c`: 1 if it was marked already, else 0. */
+int fat_walk_test_set(uint32_t c);
+
+/** Whether cluster `c` is marked. */
+int fat_walk_marked(uint32_t c);
+
+#endif /* _FATCOMMON_H_ */

@@ -2,14 +2,14 @@
 #define _FAT32NAME_H_
 
 #include "../lib/kint.h"
+#include "fatcommon.h"
 
 /*
  * fat32name: the names a FAT32 volume stores, apart from the driver so the
- * host test reads them alone.
+ * host test reads them alone. The check and conversion of a name are the
+ * two drivers' and live in fatcommon.h; what is here is FAT32's own.
  *
- * A name is checked before anything is written: at most 255 bytes of UTF-8
- * converted to at most 255 UTF-16 units, none of the characters FAT forbids,
- * no trailing dot or space, and neither `.` nor `..`. A name that fits 8.3
+ * A name that fits 8.3
  * with each of its two parts all upper or all lower case is stored as a
  * short entry alone, the lower-case parts recorded in the case bits, which
  * is the Windows NT rule and what mtools writes. Any other name is stored in
@@ -19,12 +19,6 @@
  * is the smallest that no entry of the directory uses, on the raw eleven
  * bytes. The rule is this driver's own and is not claimed to match Windows.
  */
-
-#define FAT32_NAME_UNITS 255
-
-/** UTF-8 to UTF-16, checked: 0 with `units` and `*count` filled, -EINVAL
- * for a name FAT cannot store, -ENAMETOOLONG past 255 units. */
-int fat32_name_units(const char *name, uint16_t *units, uint32_t *count);
 
 /** Whether `name` (already checked) is stored short alone: 1 with `name11`
  * and the case bits filled, 0 when long entries are needed. */
