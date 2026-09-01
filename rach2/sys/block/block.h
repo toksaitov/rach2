@@ -27,6 +27,9 @@ struct block_request;
 /* Set by the buffer cache when a write to the device failed; cleared when
  * the cache drops the device at unmount. */
 #define BLOCK_WRITE_FAILED 0x2u
+/* The medium refuses writes and says so: a stick with its switch across, or
+ * a partition view over one. Every mount of it is read-only. */
+#define BLOCK_READ_ONLY 0x4u
 
 struct block_device {
     uint32_t sector_size;
@@ -39,9 +42,15 @@ struct block_device {
     int (*write)(block_device_t *device, uint64_t lba, uint32_t count,
                  const void *buffer);
     /* Start one request and return; the device reports the end through
-     * `block_complete`, from whatever context it completes in. Only a device
-     * without `BLOCK_FAULT_SAFE` has one. */
+     * `block_request_complete`, from whatever context it completes in. Only a
+     * device without `BLOCK_FAULT_SAFE` has one. */
     int (*submit)(block_device_t *device, struct block_request *request);
+    /* Put what the device holds in a cache of its own on the medium, and
+     * report the end the same way a transfer does. A device with nothing of
+     * its own to flush has none of this, and the caller takes that for done.
+     * A stick has one, because its cache is the reason a volume can be whole
+     * on the wire and not on the medium. */
+    int (*flush)(block_device_t *device, struct block_request *request);
     void *drvdata;
 };
 

@@ -30,17 +30,37 @@
 #define USB_PROTOCOL_KBD    1
 #define USB_PROTOCOL_MOUSE  2
 
+/* Mass storage, of which this kernel drives the one transport that every
+ * flash drive has: the SCSI transparent command set over Bulk-Only. The
+ * other protocol byte a stick may carry, 0x62, is UAS, which is a different
+ * transport and is refused by name. */
+#define USB_CLASS_STORAGE      8
+#define USB_SUBCLASS_SCSI      6
+#define USB_PROTOCOL_BULK_ONLY 0x50
+#define USB_PROTOCOL_UAS       0x62
+
+/* Which driver an interface belongs to. */
+#define USB_KIND_NONE    0
+#define USB_KIND_HID     1
+#define USB_KIND_STORAGE 2
+
 /** What the configuration descriptor said about the interface this kernel can
  *  drive, and about the endpoint it reports on. */
 struct usb_interface_info {
     int found;         /* whether such an interface was there at all */
-    int number;        /* the interface's number, for SET_PROTOCOL later */
+    int kind;          /* one of the `USB_KIND_` values */
+    int number;        /* the interface's number, for SET_PROTOCOL and the
+                        * class requests a stick's transport is made of */
     int class_code;    /* its class, subclass and protocol */
     int subclass;
     int protocol;
-    int ep_number;     /* the interrupt IN endpoint it reports on */
+    int ep_number;     /* the interrupt IN endpoint a keyboard reports on, or
+                        * the bulk IN endpoint a stick answers on */
     int ep_max_packet;
     int ep_interval;
+    /* A stick's second endpoint. Zero on an interface that has one. */
+    int ep_out_number;
+    int ep_out_max_packet;
     int config_value;  /* the configuration this interface belongs to */
 };
 

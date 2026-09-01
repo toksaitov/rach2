@@ -23,6 +23,7 @@
 #include "../input.h"
 #include "../klog.h"
 #include "hid.h"
+#include "msc.h"
 #include "xhci.h"
 
 /* The standard requests this kernel sends, and the descriptor types it asks
@@ -42,6 +43,7 @@
 
 /* The endpoint descriptor's attribute and address fields. */
 #define EP_ATTR_TYPE_MASK 0x3
+#define EP_ATTR_BULK      2
 #define EP_ATTR_INTERRUPT 3
 #define EP_ADDR_IN        0x80
 
@@ -72,6 +74,8 @@
 #define ST_CONFIG9   8
 #define ST_CONFIGALL 9
 #define ST_OPEN_EP   10
+/* A stick has two endpoints and the controller takes one command each. */
+#define ST_OPEN_EP2  18
 #define ST_SET_CONFIG 11
 #define ST_PROTOCOL  15
 #define ST_RUNNING   12
@@ -109,6 +113,7 @@ struct usb_device_state {
     uint16_t product;
     int ep0_packet;
     int ep_dci;
+    int ep_out_dci; /* a stick's outward endpoint; zero on a device with one */
     struct usb_interface_info interface;
 };
 
@@ -142,8 +147,10 @@ void usb_parse_config(const uint8_t *buffer, int length, struct usb_interface_in
 {
     int offset = 0;
     int in_boot_interface = 0;
+    int in_storage_interface = 0;
 
     out->found = 0;
+    out->kind = USB_KIND_NONE;
     out->number = 0;
     out->class_code = 0;
     out->subclass = 0;
@@ -151,6 +158,8 @@ void usb_parse_config(const uint8_t *buffer, int length, struct usb_interface_in
     out->ep_number = 0;
     out->ep_max_packet = 0;
     out->ep_interval = 0;
+    out->ep_out_number = 0;
+    out->ep_out_max_packet = 0;
     out->config_value = 0;
 
     if (buffer == 0 || length < 9) {
@@ -167,6 +176,7 @@ void usb_parse_config(const uint8_t *buffer, int length, struct usb_interface_in
     while (offset + 2 <= length) {
         int size = buffer[offset];
         int type = buffer[offset + 1];
+        int in_storage_interface_now;
 
         /* A descriptor shorter than its header, or longer than what arrived,
          * ends the walk. Either would otherwise be read past the buffer, and
@@ -180,17 +190,30 @@ void usb_parse_config(const uint8_t *buffer, int length, struct usb_interface_in
              * SET_INTERFACE, so a device is left on setting zero whatever
              * else it offers, and taking an endpoint from another setting
              * would be taking one that is not there. The protocol has to be
-             * one of the two the boot report layouts are defined for. */
+             * one of the two the boot report layouts are defined for, or the
+             * one transport every flash drive carries. */
             in_boot_interface = (buffer[offset + 3] == 0 &&
                                  buffer[offset + 5] == USB_CLASS_HID &&
                                  buffer[offset + 6] == USB_SUBCLASS_BOOT &&
                                  (buffer[offset + 7] == USB_PROTOCOL_KBD ||
                                   buffer[offset + 7] == USB_PROTOCOL_MOUSE));
-            if (in_boot_interface && !out->found) {
+            in_storage_interface_now = (buffer[offset + 3] == 0 &&
+                                        buffer[offset + 5] == USB_CLASS_STORAGE &&
+                                        buffer[offset + 6] == USB_SUBCLASS_SCSI &&
+                                        buffer[offset + 7] == USB_PROTOCOL_BULK_ONLY);
+            in_storage_interface = in_storage_interface_now;
+            if ((in_boot_interface || in_storage_interface_now) && !out->found &&
+                out->kind == USB_KIND_NONE) {
+                out->kind = in_boot_interface ? USB_KIND_HID : USB_KIND_STORAGE;
                 out->number = buffer[offset + 2];
                 out->class_code = buffer[offset + 5];
                 out->subclass = buffer[offset + 6];
                 out->protocol = buffer[offset + 7];
+            } else if (in_storage_interface_now && out->kind != USB_KIND_STORAGE) {
+                /* A storage interface behind an interface of another kind
+                 * this kernel already took: it is not this device's driver's
+                 * to have, and the endpoints below belong to nobody. */
+                in_storage_interface = 0;
             }
         } else if (type == DESC_ENDPOINT && size >= 7 && in_boot_interface && !out->found) {
             int address = buffer[offset + 2];
@@ -202,6 +225,24 @@ void usb_parse_config(const uint8_t *buffer, int length, struct usb_interface_in
                 out->ep_max_packet = buffer[offset + 4] | (buffer[offset + 5] << 8);
                 out->ep_interval = buffer[offset + 6];
                 out->found = 1;
+            }
+        } else if (type == DESC_ENDPOINT && size >= 7 && in_storage_interface && !out->found) {
+            int address = buffer[offset + 2];
+            int attributes = buffer[offset + 3];
+
+            /* A stick answers on one bulk endpoint each way, and this kernel
+             * takes the first of each. The numbers are the device's own. */
+            if ((attributes & EP_ATTR_TYPE_MASK) == EP_ATTR_BULK && (address & 0xF) != 0) {
+                if ((address & EP_ADDR_IN) && out->ep_number == 0) {
+                    out->ep_number = address & 0xF;
+                    out->ep_max_packet = buffer[offset + 4] | (buffer[offset + 5] << 8);
+                } else if (!(address & EP_ADDR_IN) && out->ep_out_number == 0) {
+                    out->ep_out_number = address & 0xF;
+                    out->ep_out_max_packet = buffer[offset + 4] | (buffer[offset + 5] << 8);
+                }
+                if (out->ep_number != 0 && out->ep_out_number != 0) {
+                    out->found = 1;
+                }
             }
         }
 
@@ -265,6 +306,9 @@ static void fail(struct usb_device_state *d, const char *why)
     klog(KLOG_WARN, "usb", "device: port %d: %s", d->port + 1, why);
     if (enumerating == (int)(d - devices)) {
         enumerating = -1;
+    }
+    if (d->interface.kind == USB_KIND_STORAGE) {
+        msc_detach(d->slot);
     }
     hid_gone(d->slot);
     /* The port is remembered, not the entry: a machine with several devices
@@ -400,8 +444,16 @@ static int command_result(struct usb_device_state *d, struct usb_command_result 
  */
 static void step_running(struct usb_device_state *d)
 {
-    int kind = d->interface.protocol == USB_PROTOCOL_KBD ? HID_KEYBOARD : HID_MOUSE;
-    int length = d->interface.ep_max_packet;
+    int kind;
+    int length;
+
+    if (d->interface.kind == USB_KIND_STORAGE) {
+        /* A stick answers when it is asked and not before, so there is no
+         * transfer to keep outstanding on it. Its own driver steps it. */
+        return;
+    }
+    kind = d->interface.protocol == USB_PROTOCOL_KBD ? HID_KEYBOARD : HID_MOUSE;
+    length = d->interface.ep_max_packet;
 
     if (length > (int)sizeof(d->report)) {
         length = (int)sizeof(d->report);
@@ -689,10 +741,12 @@ static void step_device(struct usb_device_state *d)
 
             endpoint.number = d->interface.ep_number;
             endpoint.direction = USB_DIR_IN;
-            endpoint.type = USB_EP_INTERRUPT;
+            endpoint.type = (d->interface.kind == USB_KIND_STORAGE) ? USB_EP_BULK
+                                                                    : USB_EP_INTERRUPT;
             endpoint.max_packet = d->interface.ep_max_packet;
             endpoint.interval = d->interface.ep_interval;
             d->ep_dci = d->interface.ep_number * 2 + 1;
+            d->ep_out_dci = 0;
             if (xhci_endpoint_open(d->slot, &endpoint) != 0) {
                 if (!expired(d)) {
                     return;
@@ -714,9 +768,48 @@ static void step_device(struct usb_device_state *d)
             fail(d, "the controller would not configure its endpoint");
             return;
         }
+        if (d->interface.kind == USB_KIND_STORAGE) {
+            struct usb_endpoint endpoint;
+
+            /* The second of the two a stick answers on. It is a command of
+             * its own, so it is a state of its own. */
+            endpoint.number = d->interface.ep_out_number;
+            endpoint.direction = USB_DIR_OUT;
+            endpoint.type = USB_EP_BULK;
+            endpoint.max_packet = d->interface.ep_out_max_packet;
+            endpoint.interval = 0;
+            d->ep_out_dci = d->interface.ep_out_number * 2;
+            if (xhci_endpoint_open(d->slot, &endpoint) != 0) {
+                if (!expired(d)) {
+                    return;
+                }
+                fail(d, "its second endpoint could not be opened");
+                return;
+            }
+            d->state = ST_OPEN_EP2;
+            arm(d);
+            return;
+        }
         /* The endpoint exists and has bandwidth before the device is told to
          * use the configuration it belongs to, which is the order the
          * controller requires. */
+        if (control_out(d, 0x00, REQ_SET_CONFIGURATION, d->interface.config_value, 0) != 0) {
+            fail(d, "it could not be told its configuration");
+            return;
+        }
+        d->state = ST_SET_CONFIG;
+        arm(d);
+        return;
+
+    case ST_OPEN_EP2:
+        answer = command_result(d, &result);
+        if (answer == 0) {
+            return;
+        }
+        if (answer < 0) {
+            fail(d, "the controller would not configure its second endpoint");
+            return;
+        }
         if (control_out(d, 0x00, REQ_SET_CONFIGURATION, d->interface.config_value, 0) != 0) {
             fail(d, "it could not be told its configuration");
             return;
@@ -732,6 +825,22 @@ static void step_device(struct usb_device_state *d)
         }
         if (answer < 0) {
             fail(d, "it refused its configuration");
+            return;
+        }
+        if (d->interface.kind == USB_KIND_STORAGE) {
+            /* A stick has no protocol to be put into: its transport is the
+             * class requests and the two bulk endpoints, and the class driver
+             * takes it from here. */
+            if (msc_attach(d->slot, d->interface.number, d->ep_dci, d->ep_out_dci) != 0) {
+                fail(d, "this kernel drives no more sticks at once");
+                return;
+            }
+            d->state = ST_RUNNING;
+            d->reporting = 0;
+            enumerating = -1;
+            klog(KLOG_INFO, "usb", "device: port %d: %x:%x, class %d protocol %d, endpoints %d and %d",
+                 d->port + 1, (int)d->vendor, (int)d->product, d->interface.class_code,
+                 d->interface.protocol, d->interface.ep_number, d->interface.ep_out_number);
             return;
         }
         /* The device is configured; now it is told to report in the protocol
@@ -791,6 +900,9 @@ void usb_core_step(uint32_t elapsed_ms)
         struct usb_completion completion;
 
         while (xhci_poll(&completion)) {
+            if (msc_completion(&completion)) {
+                continue; /* a stick's, and its driver has taken it */
+            }
             for (i = 0; i < USB_MAX_DEVICES; i++) {
                 if (devices[i].state == ST_FREE || devices[i].slot != completion.device) {
                     continue;
@@ -820,7 +932,11 @@ void usb_core_step(uint32_t elapsed_ms)
         if (xhci_port_status(devices[i].port, &status) != 0 || !status.connected) {
             if (devices[i].state == ST_RUNNING) {
                 klog(KLOG_INFO, "usb", "device: port %d: gone", devices[i].port + 1);
-                hid_gone(devices[i].slot);
+                if (devices[i].interface.kind == USB_KIND_STORAGE) {
+                    msc_detach(devices[i].slot);
+                } else {
+                    hid_gone(devices[i].slot);
+                }
             }
             if (enumerating == i) {
                 enumerating = -1;
@@ -875,6 +991,11 @@ void usb_core_step(uint32_t elapsed_ms)
             step_device(&devices[i]);
         }
     }
+
+    /* And the sticks, after the completions above have been handed out: a
+     * command's next stage goes out in the same pass as the answer to the
+     * one before it. */
+    msc_step(elapsed_ms);
 }
 
 void usb_core_reset(void)

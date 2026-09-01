@@ -117,6 +117,34 @@ int xhci_submit(int device, int endpoint, const struct usb_transfer *transfer)
     return -1;
 }
 
+/* The class driver the core hands a stick to. This test drives the core's
+   own walk of the descriptors and its enumeration, not that driver, so the
+   stubs record what they were told and nothing more. */
+int msc_attach(int device, int interface, int ep_in, int ep_out)
+{
+    (void)device;
+    (void)interface;
+    (void)ep_in;
+    (void)ep_out;
+    return 0;
+}
+
+void msc_detach(int device)
+{
+    (void)device;
+}
+
+void msc_step(uint32_t elapsed_ms)
+{
+    (void)elapsed_ms;
+}
+
+int msc_completion(const struct usb_completion *completion)
+{
+    (void)completion;
+    return 0;
+}
+
 int xhci_poll(struct usb_completion *out)
 {
     (void)out;

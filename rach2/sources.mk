@@ -87,6 +87,7 @@ C_SRC = kernel.c \
         sys/usb/xhci.c \
         sys/usb/core.c \
         sys/usb/hid.c \
+        sys/usb/msc.c \
         sys/network/netconf.c \
         sys/network/netif.c \
         sys/network/netconsole.c \

@@ -162,10 +162,28 @@ static int fake_write(block_device_t *d, uint64_t lba, uint32_t count, const voi
     return 0;
 }
 
-static block_device_t fake = {512, FAKE_SECTORS, BLOCK_FAULT_SAFE, 0, fake_read, fake_write,
-                              0,   image_small};
-static block_device_t other = {512,        BIG_SECTORS, BLOCK_FAULT_SAFE, 0, fake_read,
-                               fake_write, 0,           image_big};
+/* The members in order: the sector size, the count, the flags, the deadline,
+   the two polled calls, the two a sleeping device has, and the driver's own
+   pointer. Written out rather than left to position, so that a member added
+   to the structure is a compile error here and not a silent shift. */
+static block_device_t fake = {512,
+                              FAKE_SECTORS,
+                              BLOCK_FAULT_SAFE,
+                              0,
+                              fake_read,
+                              fake_write,
+                              0,
+                              0,
+                              image_small};
+static block_device_t other = {512,
+                               BIG_SECTORS,
+                               BLOCK_FAULT_SAFE,
+                               0,
+                               fake_read,
+                               fake_write,
+                               0,
+                               0,
+                               image_big};
 
 int block_request(block_device_t *device, int write, uint64_t lba, uint32_t count, void *data)
 {
