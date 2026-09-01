@@ -561,16 +561,16 @@ static int dir_scan(struct fat_mount *fm, struct fat_node *dir, uint32_t first, 
 static int names_match(const char *a, const char *b)
 {
     while (*a && *b) {
-        unsigned char x = (unsigned char)*a++;
-        unsigned char y = (unsigned char)*b++;
+        unsigned char ca = (unsigned char)*a++;
+        unsigned char cb = (unsigned char)*b++;
 
-        if (x >= 'A' && x <= 'Z') {
-            x = (unsigned char)(x + 32);
+        if (ca >= 'A' && ca <= 'Z') {
+            ca = (unsigned char)(ca + 32);
         }
-        if (y >= 'A' && y <= 'Z') {
-            y = (unsigned char)(y + 32);
+        if (cb >= 'A' && cb <= 'Z') {
+            cb = (unsigned char)(cb + 32);
         }
-        if (x != y) {
+        if (ca != cb) {
             return 0;
         }
     }
@@ -1331,7 +1331,7 @@ static int64_t fat_epoch(uint16_t date, uint16_t time)
     uint32_t month = (date >> 5) & 0xF;
     uint32_t day = date & 0x1F;
     uint32_t days = 0;
-    uint32_t y;
+    uint32_t yr;
     static const uint32_t before[12] = {0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334};
     static const uint32_t length[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
     int leap;
@@ -1344,8 +1344,8 @@ static int64_t fat_epoch(uint16_t date, uint16_t time)
         ((time >> 5) & 0x3F) > 59 || (time & 0x1F) > 29) {
         return 315532800;
     }
-    for (y = 1970; y < year; y++) {
-        days += (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)) ? 366 : 365;
+    for (yr = 1970; yr < year; yr++) {
+        days += (yr % 4 == 0 && (yr % 100 != 0 || yr % 400 == 0)) ? 366 : 365;
     }
     days += before[month - 1] + day - 1;
     if (month > 2 && year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)) {
