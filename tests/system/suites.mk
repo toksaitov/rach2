@@ -966,8 +966,9 @@ run-diskdiag: rach2 rach2-metal rach2-metal-image $(HARNESS)
 # and the partition nodes; later phases grow it. Its disk is the test disk
 # with a FAT32 partition added at 49 MiB by mkmbr and mtools.
 MOUNT_DISK = build/images/mount-test.disk
-run-mount: rach2 tests krffs $(MKFIXTURE) $(HARNESS)
-	sh tests/system/suites/mount.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(MOUNT_DISK)
+run-mount: $(DEMO_CREDS) rach2 tests krffs os-real-image $(MKFIXTURE) $(HARNESS)
+	sh tests/system/suites/mount.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(MOUNT_DISK) \
+	    $(OS_REAL_IMAGE) "`cat krffs/rach2_demo_password`"
 
 run-usb: rach2 tests krffs test-image $(HARNESS)
 	sh tests/system/suites/usb.sh $(HARNESS_KERNEL) $(TEST_IMAGE) $(HARNESS)

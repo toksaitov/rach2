@@ -71,6 +71,20 @@ void klog(int level, const char *subsystem, const char *format, ...)
     (void)format;
 }
 
+/* The record prints the buffer cache's counters; here there is no cache. */
+uint64_t bcache_stat_hits(void)
+{
+    return 0;
+}
+uint64_t bcache_stat_fills(void)
+{
+    return 0;
+}
+uint64_t bcache_stat_waits(void)
+{
+    return 0;
+}
+
 /* The build policy diskinfo_format prints; both values are exercised. */
 static int policy_now = DISKCMD_READ_WRITE;
 
@@ -200,17 +214,17 @@ int main(void)
     d.state = DISKINFO_NOT_ASKED;
     d.driver = "none";
     diskinfo_format(&d, buf, (int)sizeof(buf));
-    CHECK(strcmp(buf, "state not-asked\ndriver none\npolicy read-write\n") == 0,
+    CHECK(strcmp(buf, "state not-asked\ndriver none\npolicy read-write\ncache-hits 0\ncache-fills 0\ncache-waits 0\n") == 0,
           "a kernel that was never asked says so and stops there");
 
     d.state = DISKINFO_NO_DEVICE;
     diskinfo_format(&d, buf, (int)sizeof(buf));
-    CHECK(strcmp(buf, "state no-device\ndriver none\npolicy read-write\n") == 0,
+    CHECK(strcmp(buf, "state no-device\ndriver none\npolicy read-write\ncache-hits 0\ncache-fills 0\ncache-waits 0\n") == 0,
           "a kernel that asked and got nothing says a different thing");
 
     policy_now = DISKCMD_READ_ONLY;
     diskinfo_format(&d, buf, (int)sizeof(buf));
-    CHECK(strcmp(buf, "state no-device\ndriver none\npolicy read-only\n") == 0,
+    CHECK(strcmp(buf, "state no-device\ndriver none\npolicy read-only\ncache-hits 0\ncache-fills 0\ncache-waits 0\n") == 0,
           "the file names the build policy the kernel is running");
     policy_now = DISKCMD_READ_WRITE;
 
@@ -254,7 +268,7 @@ int main(void)
     {
         static const char *want[] = {"state present\n",
                                      "driver ahci\n",
-                                     "policy read-write\n",
+                                     "policy read-write\ncache-hits 0\ncache-fills 0\ncache-waits 0\n",
                                      "port 0\n",
                                      "mounted 0\n",
                                      "sector-size 512\n",
