@@ -109,7 +109,7 @@ static uint64_t clusters_of(const struct ex_mount *em, uint64_t bytes)
 {
     uint32_t shift = 9 + em->spc_shift;
 
-    return (bytes + (((uint64_t)1 << shift) - 1)) >> shift;
+    return (bytes >> shift) + ((bytes & (((uint64_t)1 << shift) - 1)) != 0 ? 1 : 0);
 }
 
 static int in_heap(const struct ex_mount *em, uint32_t c)
@@ -168,7 +168,9 @@ static int fat_next(struct ex_mount *em, uint32_t c, uint32_t *next)
 /* Cluster `index` of a chain: `first + index` for a contiguous one, and
  * through the FAT otherwise, from the node's last position when it helps.
  * -ENXIO past the chain's end, -EIO for a chain that leaves the heap, a
- * bad or free entry, or a loop. */
+ * bad or free entry, or a cluster that names itself. A longer loop within
+ * a file's length repeats its clusters; the dirty-volume check is what
+ * finds it, as on FAT32. */
 static int chain_at(struct ex_mount *em, struct ex_node *n, uint32_t first, int nofat,
                     uint64_t length, uint32_t index, uint32_t *cluster)
 {
@@ -205,7 +207,7 @@ static int chain_at(struct ex_mount *em, struct ex_node *n, uint32_t first, int 
         if (next == EX_EOC) {
             return -ENXIO;
         }
-        if (next == EX_BAD || !in_heap(em, next)) {
+        if (next == EX_BAD || !in_heap(em, next) || next == c) {
             return -EIO;
         }
         if (++steps > em->clusters) {
@@ -277,6 +279,40 @@ static void ex_put(struct vfs_mount *mnt, void *node)
     }
 }
 
+/* ---- the system objects ---- */
+
+/* `len` bytes at `off` of a system object whose clusters the FAT chains:
+ * the bitmap and the up-case table, whose entries have no flags and so no
+ * NoFatChain. */
+static int object_read(struct ex_mount *em, uint32_t first, uint64_t off, void *dst, uint32_t len)
+{
+    uint8_t *out = dst;
+    uint32_t cbytes = cluster_bytes(em);
+
+    while (len > 0) {
+        uint32_t in = (uint32_t)(off & (cbytes - 1));
+        uint32_t take = cbytes - in;
+        uint32_t c;
+        int rc;
+
+        if (take > len) {
+            take = len;
+        }
+        rc = chain_at(em, 0, first, 0, 0, (uint32_t)(off >> (9 + em->spc_shift)), &c);
+        if (rc != 0) {
+            return rc == -ENXIO ? -EIO : rc;
+        }
+        rc = ex_read_bytes(em, cluster_offset(em, c) + in, out, take);
+        if (rc != 0) {
+            return rc;
+        }
+        out += take;
+        off += take;
+        len -= take;
+    }
+    return 0;
+}
+
 /* ---- the up-case table ---- */
 
 /* The stored table read two bytes at a time, from the mount's held copy
@@ -303,8 +339,7 @@ static int upcase_next(struct upcase_reader *r, uint16_t *w)
         if (r->em->upcase_form == 0) {
             k_memcpy(r->chunk, r->em->upcase_stored + next, take);
         } else {
-            int rc = ex_read_bytes(r->em, cluster_offset(r->em, r->em->upcase_first) + next,
-                                   r->chunk, take);
+            int rc = object_read(r->em, r->em->upcase_first, next, r->chunk, take);
 
             if (rc != 0) {
                 return rc;
@@ -363,8 +398,7 @@ static int ex_upcase(struct ex_mount *em, uint16_t unit, uint16_t *out)
 {
     if (em->upcase_form == 1) {
         uint8_t raw[2];
-        int rc =
-            ex_read_bytes(em, cluster_offset(em, em->upcase_first) + (uint64_t)unit * 2, raw, 2);
+        int rc = object_read(em, em->upcase_first, (uint64_t)unit * 2, raw, 2);
 
         if (rc != 0) {
             return rc;
@@ -482,29 +516,46 @@ static int set_read(struct ex_mount *em, struct ex_node *d, uint32_t index, cons
         uint64_t length = le64(st + 24), valid = le64(st + 8);
         uint32_t first = le32(st + 20);
 
-        for (k = 2; k <= secondaries; k++) {
+        /* Exactly ceil(NameLength / 15) name entries, consecutive, right
+         * after the stream; then benign secondaries only: a second stream
+         * or a critical secondary this driver does not know is a fault. */
+        for (k = 2; k <= secondaries && !why; k++) {
             const uint8_t *ne = all + k * 32;
             uint32_t m;
 
-            if (ne[0] != 0xC1) {
-                continue;
-            }
-            names++;
-            for (m = 0; m < 15; m++) {
-                uint16_t u = le16(ne + 2 + m * 2);
-
-                if (got < nlen) {
-                    set->units[got++] = u;
-                } else if (u != 0) {
-                    why = "units past NameLength";
+            if (names < (nlen + 14) / 15) {
+                if (ne[0] != 0xC1) {
+                    why = "name entries not consecutive after the stream";
+                    break;
                 }
+                names++;
+                for (m = 0; m < 15; m++) {
+                    uint16_t u = le16(ne + 2 + m * 2);
+
+                    if (got < nlen) {
+                        set->units[got++] = u;
+                    } else if (u != 0) {
+                        why = "units past NameLength";
+                    }
+                }
+            } else if (ne[0] == 0xC1 || ne[0] == 0xC0 || (ne[0] & 0xE0) == 0xC0) {
+                why = "a critical secondary after the name";
             }
         }
-        if (!why && (nlen == 0 || got != nlen || names != (nlen + 14) / 15)) {
+        if (!why && (nlen == 0 || got != nlen)) {
             why = "NameLength";
+        }
+        if (!why && (st[1] & 0xFC)) {
+            why = "reserved GeneralSecondaryFlags bits";
         }
         if (!why && valid > length) {
             why = "ValidDataLength past DataLength";
+        }
+        if (!why && (le16(all + 4) & ATTR_DIRECTORY) && (valid != length || length > 0x10000000u)) {
+            why = "a directory's lengths"; /* equal, and at most 256 MiB */
+        }
+        if (!why && (st[1] & FLAG_NO_FAT_CHAIN) && length == 0) {
+            why = "NoFatChain with no length";
         }
         if (!why && !(st[1] & FLAG_ALLOC_POSSIBLE)) {
             why = "AllocationPossible clear";
@@ -567,7 +618,9 @@ static int dir_scan(struct ex_mount *em, struct ex_node *d, uint32_t *cursor, st
             return rc;
         }
         if (rc == 0) {
-            (*cursor)++;
+            /* The rejected set is passed over as one unit, so nothing
+             * inside it is read as a primary entry of its own. */
+            *cursor += raw[1] >= 2 ? (uint32_t)raw[1] + 1 : 1;
             continue;
         }
         *cursor += set->entries;
@@ -618,10 +671,14 @@ static struct ex_node *node_for(struct ex_mount *em, struct ex_node *d, const st
 static int find_dir(struct ex_mount *em, struct ex_node *root, uint32_t first, struct ex_node **out)
 {
     uint32_t stack_first[32], stack_cursor[32];
+    uint64_t stack_length[32];
+    uint8_t stack_nofat[32];
     int depth = 1;
 
     stack_first[0] = root->first;
     stack_cursor[0] = 0;
+    stack_length[0] = 0;
+    stack_nofat[0] = 0;
     while (depth > 0) {
         struct ex_node d;
         struct ex_set set;
@@ -630,6 +687,8 @@ static int find_dir(struct ex_mount *em, struct ex_node *root, uint32_t first, s
         k_memset(&d, 0, sizeof(d));
         d.is_dir = 1;
         d.first = stack_first[depth - 1];
+        d.length = stack_length[depth - 1];
+        d.nofat = stack_nofat[depth - 1];
         rc = dir_scan(em, &d, &stack_cursor[depth - 1], &set);
         if (rc < 0) {
             return rc;
@@ -653,6 +712,8 @@ static int find_dir(struct ex_mount *em, struct ex_node *root, uint32_t first, s
             if (depth < 32 && sub != 0) {
                 stack_first[depth] = sub;
                 stack_cursor[depth] = 0;
+                stack_length[depth] = le64(set.stream + 24);
+                stack_nofat[depth] = (set.stream[1] & FLAG_NO_FAT_CHAIN) != 0;
                 depth++;
             }
         }
@@ -891,12 +952,19 @@ static int ex_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor, str
     }
     rc = fat_units_utf8(set.units, set.count, ent->name, sizeof(ent->name));
     if (rc == -ENAMETOOLONG) {
-        /* A name past the kernel's component: shown by its first bytes, and
-         * unreachable by path, as the Readme says. */
-        set.count = 60;
-        (void)fat_units_utf8(set.units, set.count, ent->name, sizeof(ent->name));
-    } else if (rc != 0) {
+        /* A name past the kernel's component: shown by as many of its
+         * first units as fit, whole characters only, and unreachable by
+         * path, as the Readme says. */
+        uint32_t keep = 60;
+
+        if (set.units[keep - 1] >= 0xD800 && set.units[keep - 1] < 0xDC00) {
+            keep--;
+        }
+        rc = fat_units_utf8(set.units, keep, ent->name, sizeof(ent->name));
+    }
+    if (rc != 0) {
         k_strncpy(ent->name, "?", sizeof(ent->name));
+        ent->name[sizeof(ent->name) - 1] = '\0';
     }
     ent->is_dir = (le16(set.file + 4) & ATTR_DIRECTORY) != 0;
     {
@@ -915,7 +983,6 @@ static int ex_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor, str
 /* Free clusters are the bitmap's zero bits, counted once and kept. */
 static int count_free(struct ex_mount *em)
 {
-    uint64_t off = cluster_offset(em, em->bitmap_first);
     uint32_t c = 0, free_count = 0;
 
     while (c < em->clusters) {
@@ -927,7 +994,7 @@ static int count_free(struct ex_mount *em)
         if (take > sizeof(raw)) {
             take = sizeof(raw);
         }
-        rc = ex_read_bytes(em, off + c / 8, raw, take);
+        rc = object_read(em, em->bitmap_first, c / 8, raw, take);
         if (rc != 0) {
             return rc;
         }
@@ -1003,6 +1070,27 @@ static int boot_checksum(struct ex_mount *em, uint64_t first, uint32_t *sum)
     return 0;
 }
 
+/* The stored boot checksum at sector `n`: every 32-bit word of the sector
+ * repeats it, or the sector is not a checksum sector. */
+static int checksum_sector(struct ex_mount *em, uint64_t n, uint32_t *sum)
+{
+    uint8_t raw[512];
+    uint32_t i;
+    int rc = ex_read_bytes(em, n * BLOCK_SECTOR_SIZE, raw, sizeof(raw));
+
+    if (rc != 0) {
+        return rc;
+    }
+    *sum = le32(raw);
+    for (i = 4; i < sizeof(raw); i += 4) {
+        if (le32(raw + i) != *sum) {
+            *sum ^= 0x80000000u; /* words that differ match nothing */
+            return 0;
+        }
+    }
+    return 0;
+}
+
 /* The up-case table checked from its stored bytes: the checksum over them,
  * and the runs expanding to exactly 65536 mappings with no zero-length,
  * truncated or overlong run. Fills the held form when it fits. 0 with the
@@ -1010,9 +1098,8 @@ static int boot_checksum(struct ex_mount *em, uint64_t first, uint32_t *sum)
 static int upcase_check(struct ex_mount *em, uint32_t *sum)
 {
     uint64_t at = 0;
-    uint32_t s = 0, u = 0;
+    uint32_t s = 0, u = 0, markers = 0, m;
     int have_pending = 0;
-    uint64_t off = cluster_offset(em, em->upcase_first);
 
     if (em->upcase_length < 2 || em->upcase_length > 131072 || (em->upcase_length & 1)) {
         return -1;
@@ -1022,7 +1109,7 @@ static int upcase_check(struct ex_mount *em, uint32_t *sum)
         uint32_t take = em->upcase_length - at < sizeof(chunk) ? (uint32_t)(em->upcase_length - at)
                                                                : (uint32_t)sizeof(chunk);
         uint32_t i;
-        int rc = ex_read_bytes(em, off + at, chunk, take);
+        int rc = object_read(em, em->upcase_first, at, chunk, take);
 
         if (rc != 0) {
             return rc;
@@ -1044,6 +1131,7 @@ static int upcase_check(struct ex_mount *em, uint32_t *sum)
                 have_pending = 0;
             } else if (w == 0xFFFF) {
                 have_pending = 1;
+                markers++;
             } else {
                 if (u >= 65536) {
                     return -1;
@@ -1062,7 +1150,24 @@ static int upcase_check(struct ex_mount *em, uint32_t *sum)
     if (u != 65536) {
         return -1; /* a truncated run, or a table short or long of the units */
     }
-    em->upcase_form = em->upcase_length <= UPCASE_HELD ? 0 : (em->upcase_length == 131072 ? 1 : 2);
+    if (have_pending) {
+        markers--; /* the last unit was a mapping after all */
+    }
+    /* Uncompressed is a table of 65536 explicit units and no run marker;
+     * a compressed table of the same size is walked, not indexed. */
+    em->upcase_form = em->upcase_length <= UPCASE_HELD
+                          ? 0
+                          : (em->upcase_length == 131072 && markers == 0 ? 1 : 2);
+    /* The mandatory mappings: the first 128 code points are themselves,
+     * but a to z are A to Z. */
+    for (m = 0; m < 128; m++) {
+        uint16_t got;
+
+        if (ex_upcase(em, (uint16_t)m, &got) != 0 ||
+            got != (m >= 'a' && m <= 'z' ? (uint16_t)(m - 32) : (uint16_t)m)) {
+            return -1;
+        }
+    }
     *sum = s;
     return 0;
 }
@@ -1099,13 +1204,60 @@ static int ex_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags, 
         return rc;
     }
     rc = ex_read_bytes(em, 0, b, sizeof(b));
+    if (rc == 0) {
+        rc = ex_read_bytes(em, 12 * BLOCK_SECTOR_SIZE, b2, sizeof(b2));
+    }
+    if (rc == 0) {
+        rc = boot_checksum(em, 0, &main_sum);
+    }
+    if (rc == 0) {
+        rc = boot_checksum(em, 12, &backup_sum);
+    }
+    if (rc == 0) {
+        rc = checksum_sector(em, 11, &stored_main);
+    }
+    if (rc == 0) {
+        rc = checksum_sector(em, 23, &stored_backup);
+    }
     if (rc != 0) {
         return rc;
+    }
+    /* Both boot regions, always, before any field is trusted. */
+    main_ok = main_sum == stored_main;
+    backup_ok = backup_sum == stored_backup;
+    for (i = 0; i < 512; i++) {
+        if (i == 106 || i == 107 || i == 112) {
+            continue;
+        }
+        if (b[i] != b2[i]) {
+            agree = 0;
+            break;
+        }
+    }
+    if (!main_ok && !backup_ok) {
+        return refused("BootChecksum");
+    }
+    if (!main_ok) {
+        /* The backup describes the volume from here on, but the flags
+         * are the main's: the backup's are stale by the specification. */
+        readonly_why = "the main boot region fails its checksum; read from the backup";
+        for (i = 0; i < 512; i++) {
+            if (i != 106 && i != 107 && i != 112) {
+                b[i] = b2[i];
+            }
+        }
+    } else if (!backup_ok) {
+        readonly_why = "the backup boot region fails its checksum";
+    } else if (!agree) {
+        readonly_why = "the two boot regions disagree";
     }
     for (i = 0; i < 8; i++) {
         if (b[3 + i] != (uint8_t)"EXFAT   "[i]) {
             return refused("FileSystemName");
         }
+    }
+    if (b[0] != 0xEB || b[1] != 0x76 || b[2] != 0x90) {
+        return refused("JumpBoot");
     }
     for (i = 11; i < 64; i++) {
         if (b[i] != 0) {
@@ -1136,8 +1288,8 @@ static int ex_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags, 
     em->clusters = le32(b + 92);
     em->root = le32(b + 96);
     em->active_fat = le16(b + 106) & 1;
-    if (em->volume_length > dev->sector_count || em->volume_length < 24 + 1) {
-        return refused("VolumeLength");
+    if (em->volume_length > dev->sector_count || em->volume_length < 2048) {
+        return refused("VolumeLength"); /* at least 1 MiB by the specification */
     }
     if (em->fat_offset < 24 || em->fat_offset >= em->volume_length) {
         return refused("FatOffset");
@@ -1161,67 +1313,22 @@ static int ex_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags, 
     if (em->active_fat >= b[110]) {
         return refused("VolumeFlags");
     }
-    /* Both boot regions, always. */
-    rc = boot_checksum(em, 0, &main_sum);
-    if (rc == 0) {
-        rc = boot_checksum(em, 12, &backup_sum);
-    }
-    if (rc == 0) {
-        rc = ex_read_bytes(em, 11 * BLOCK_SECTOR_SIZE, b2, 4);
-        stored_main = le32(b2);
-    }
-    if (rc == 0) {
-        rc = ex_read_bytes(em, 23 * BLOCK_SECTOR_SIZE, b2, 4);
-        stored_backup = le32(b2);
-    }
-    if (rc == 0) {
-        rc = ex_read_bytes(em, 12 * BLOCK_SECTOR_SIZE, b2, sizeof(b2));
-    }
-    if (rc != 0) {
-        return rc;
-    }
-    main_ok = main_sum == stored_main;
-    backup_ok = backup_sum == stored_backup;
-    for (i = 0; i < 512; i++) {
-        if (i == 106 || i == 107 || i == 112) {
-            continue;
-        }
-        if (b[i] != b2[i]) {
-            agree = 0;
-            break;
-        }
-    }
-    if (!main_ok && !backup_ok) {
-        return refused("BootChecksum");
-    }
-    if (!main_ok) {
-        readonly_why = "the main boot region fails its checksum; read from the backup";
-        if (!agree) {
-            /* The backup describes the volume from here on. */
-            k_memcpy(b, b2, sizeof(b));
-            em->fat_offset = le32(b + 80);
-            em->fat_length = le32(b + 84);
-            em->heap_offset = le32(b + 88);
-            em->clusters = le32(b + 92);
-            em->root = le32(b + 96);
-        }
-    } else if (!backup_ok) {
-        readonly_why = "the backup boot region fails its checksum";
-    } else if (!agree) {
-        readonly_why = "the two boot regions disagree";
-    } else if (b[110] == 2) {
+    if (!readonly_why && b[110] == 2) {
         readonly_why = "two FATs (TexFAT)";
-    } else if (le16(b + 106) & 4) {
+    } else if (!readonly_why && (le16(b + 106) & 4)) {
         readonly_why = "MediaFailure is set";
     }
-    /* The root's objects: one bitmap, one up-case table. */
+    /* The root's objects: the bitmap of the active FAT, one up-case table. */
     per = cluster_bytes(em) / 32;
     c = em->root;
-    while (in_heap(em, c) && steps++ < em->clusters) {
+    for (;;) {
         uint32_t k;
         uint32_t next;
         int end = 0;
 
+        if (!in_heap(em, c) || steps++ >= em->clusters) {
+            return refused("the root's chain");
+        }
         for (k = 0; k < per && !end; k++) {
             uint8_t e[32];
 
@@ -1232,14 +1339,19 @@ static int ex_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags, 
             if (e[0] == 0x00) {
                 end = 1;
             } else if (e[0] == 0x81) {
-                if (have_bitmap || (e[1] & 1)) {
-                    second_bitmap = 1;
+                if ((e[1] & 1) != em->active_fat) {
+                    second_bitmap = 1; /* the other FAT's, which only TexFAT has */
+                } else if (have_bitmap) {
+                    return refused("a second allocation bitmap of the active FAT");
                 } else {
                     have_bitmap = 1;
                     em->bitmap_first = le32(e + 20);
                     em->bitmap_length = le64(e + 24);
                 }
-            } else if (e[0] == 0x82 && !have_upcase) {
+            } else if (e[0] == 0x82) {
+                if (have_upcase) {
+                    return refused("a second up-case table");
+                }
                 have_upcase = 1;
                 em->upcase_first = le32(e + 20);
                 em->upcase_length = le64(e + 24);

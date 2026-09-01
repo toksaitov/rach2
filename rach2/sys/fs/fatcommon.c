@@ -18,7 +18,7 @@ static int forbidden(uint32_t cp)
     static const char set[] = "\"*/:<>?\\|";
     int i;
 
-    if (cp < 0x20 || cp == 0x7F) {
+    if (cp < 0x20) {
         return 1;
     }
     for (i = 0; set[i]; i++) {

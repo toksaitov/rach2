@@ -395,12 +395,13 @@ static void well_formed_rows(const char *opt, const char *what_form)
     if (n) {
         OPS->put(&mnt, n);
     }
-    for (i = 0; i < 3000; i++) {
+    for (i = 0; i < 5000; i++) {
         want[i] = (unsigned char)(0x40 + i);
     }
-    memset(want + 3000, 0, 8192 - 3000);
+    memset(want + 5000, 0, 8192 - 5000);
     check_bytes("/valid.bin", want, 8192,
-                "valid.bin reads its 3000 valid bytes and zeros past them, not the junk");
+                "valid.bin reads its 5000 valid bytes, across its two clusters, and zeros past "
+                "them, not the junk");
     n = walk("/empty", &err);
     check(n && OPS->getattr(&mnt, n, &st) == 0 && st.size == 0 &&
               read_all(n, back, sizeof(back)) == 0,
@@ -412,6 +413,14 @@ static void well_formed_rows(const char *opt, const char *what_form)
                 (const unsigned char *)"x", 1, "the name of four entries is found and read");
     check_bytes("/a LONG NAME OF SOME FIFTY characters for four ENTRIES.txt",
                 (const unsigned char *)"x", 1, "and by another case, through the up-case table");
+    check_bytes("/caf\xc3\xa9.txt", (const unsigned char *)"cafe\n", 5,
+                "a name outside ASCII reads");
+    check_bytes("/CAF\xc3\x89.TXT", (const unsigned char *)"cafe\n", 5,
+                "and by its upper case, which only the table knows, outside ASCII");
+    check_bytes("/\xe1\xb8\x81.txt", (const unsigned char *)"ring\n", 5,
+                "a name past the table's first run reads");
+    check_bytes("/\xe1\xb8\x80.txt", (const unsigned char *)"ring\n", 5,
+                "and by its upper case, whose mapping a run has moved from its own index");
     check_bytes("/vendor.txt", (const unsigned char *)"vendor\n", 7,
                 "the set with vendor entries reads");
     check_bytes("/straddle.txt", (const unsigned char *)"straddle\n", 9,
@@ -424,7 +433,7 @@ static void well_formed_rows(const char *opt, const char *what_form)
     check(n && OPS->getattr(&mnt, n, &st) == 0 && (st.mode & 0170000) == 0040000,
           "sub's .. is dir");
     if (n) {
-        void *up;
+        void *up = 0;
 
         check(OPS->lookup(&mnt, n, "..", &up) == 0 && up == mnt.root, "and dir's .. is the root");
         if (up) {
@@ -465,10 +474,12 @@ static void readonly_row(const char *opt, const char *what)
 static void skipped_row(const char *opt, const char *path, const char *what)
 {
     int err;
+    char names[4096];
 
     load(opt);
     check(mount_image(VFS_MS_RDONLY, "") == 0, "the volume with a bad set mounts");
-    check(walk(path, &err) == 0 && err == -ENOENT, what);
+    listing(mnt.root, names, sizeof(names));
+    check(walk(path, &err) == 0 && err == -ENOENT && !strstr(names, path + 1), what);
     check_bytes("/straddle.txt", (const unsigned char *)"straddle\n", 9,
                 "and the sets after it read");
     unmount_image();
@@ -488,6 +499,9 @@ static void damaged_rows(void)
     refused_row("--sector-4k", "a 4 KiB logical sector is refused by name");
     readonly_row("--bad-main-checksum",
                  "a bad main boot checksum with a good backup mounts read-only");
+    readonly_row(
+        "--main-bad-root",
+        "a main region that fails and whose root differs is read from the backup, read-only");
     readonly_row("--bad-backup-checksum", "a bad backup checksum mounts read-only");
     readonly_row("--regions-disagree", "two regions that disagree mount read-only");
     readonly_row("--media-failure", "MediaFailure mounts read-only");
@@ -542,6 +556,16 @@ static void damaged_rows(void)
     unmount_image();
     load("--dirty");
     check(mount_image(VFS_MS_RDONLY, "") == 0, "the dirty bit over a clean tree mounts read-only");
+    unmount_image();
+    load("--zoned");
+    check(mount_image(VFS_MS_RDONLY, "") == 0, "timestamps with a zone mount");
+    n = walk("/hello.txt", &err);
+    check(n && OPS->getattr(&mnt, n, &st) == 0 && st.mtime_sec == 1788264000 - 6 * 3600 &&
+              st.mtime_nsec == 340000000 && st.ctime_nsec == 340000000,
+          "and a field of 12:00 at +6 hours with 34 hundredths is 06:00:00.34 UTC");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
     unmount_image();
     load("");
     check(mount_image(VFS_MS_RDONLY, "umask=077,uid=7,gid=9") == 0, "the mount options are taken");
