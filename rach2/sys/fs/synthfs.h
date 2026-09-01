@@ -41,6 +41,7 @@ enum vnode_kind {
     VNODE_PROC_NET_ROUTE, /* /proc/net/route: the on-link subnet and gateway */
     VNODE_PROC_NET_ARP, /* /proc/net/arp: the address cache */
     VNODE_PROC_NET_TCP, /* /proc/net/tcp: the connection pool */
+    VNODE_PROC_FILESYSTEMS, /* /proc/filesystems: what mount(2) accepts */
     VNODE_ENOENT,       /* under a synthetic mount, but no such entry */
     VNODE_ENOTDIR       /* under a synthetic mount, a non-dir used as a directory */
 };
@@ -59,6 +60,7 @@ enum vnode_kind {
 #define SYNTH_PROC_NETARP   11
 #define SYNTH_PROC_NETTCP   12
 #define SYNTH_PROC_USB      13
+#define SYNTH_PROC_FILESYSTEMS 14
 
 /* PID sentinel meaning "the calling process" (/proc/self), resolved by the
  * glue. */

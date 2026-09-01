@@ -69,6 +69,24 @@ void devfs_bootpart_publish(struct block_device *backing, uint32_t start_lba,
  */
 void devfs_grubcore_publish(struct block_device *backing);
 
+/**
+ * The partition window `path` names (`/dev/bootpart` or `/dev/disk0pN`):
+ * the view a mount reads through, the backing disk, and the sector range
+ * on it. EINVAL for a device that is not a partition window, ENOENT for no
+ * such device, ENXIO for a window not published.
+ */
+int devfs_window_of(const char *path, struct block_device **view,
+                    struct block_device **backing, uint64_t *first,
+                    uint64_t *count);
+
+/**
+ * Claim `[first, last]` on `backing` for a mount; the claim's index, or
+ * -EBUSY while an overlapping claim or a write-capable raw descriptor over
+ * the range exists. A claim is released by index.
+ */
+int devfs_claim(struct block_device *backing, uint64_t first, uint64_t last);
+void devfs_release_claim(int claim);
+
 /** Withdraw /dev/bootpart; a no-op when it was never published. */
 void devfs_bootpart_withdraw(void);
 

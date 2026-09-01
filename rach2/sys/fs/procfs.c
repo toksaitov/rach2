@@ -20,6 +20,7 @@
 #include "../io/poll.h"
 #include "../cmdline.h"
 #include "../block/diskinfo.h"
+#include "vfs.h"
 #include "../network/ethernet/ethernet.h"
 #include "../network/driver/netdev.h"
 #include "../network/arp/arp.h"
@@ -50,6 +51,7 @@
 #define PROCFS_INO_MEMINFO 0x107u
 #define PROCFS_INO_MOUNTS  0x108u
 #define PROCFS_INO_USB     0x10Cu
+#define PROCFS_INO_FILESYSTEMS 0x10Du
 #define PROCFS_INO_NETROUTE 0x109u
 #define PROCFS_INO_NETARP  0x10Au
 #define PROCFS_INO_NETTCP  0x10Bu
@@ -73,7 +75,7 @@
 /* Per-file bounds. Each is the file's own worst case, and each is checked
    against the buffer below at compile time. */
 #define PROCFS_MAX_BOOTLINE 320  /* the 256-byte boot line, a newline, slack */
-#define PROCFS_MAX_DISK     640  /* diskinfo_format's widest record */
+#define PROCFS_MAX_DISK     768  /* diskinfo_format's widest record */
 #define PROCFS_MAX_NETDEV   512  /* two header lines and one interface */
 #define PROCFS_MAX_PIDSTAT  256  /* one line of small fields plus comm */
 #define PROCFS_MAX_PIDCMD    64  /* comm and its terminator */
@@ -82,6 +84,7 @@
 #define PROCFS_MAX_MEMINFO  256  /* seven sized lines */
 #define PROCFS_MAX_MOUNTS   256  /* the root, and the two synthetic mounts */
 #define PROCFS_MAX_USB      256  /* four devices, one line each */
+#define PROCFS_MAX_FILESYSTEMS 128 /* two nodev lines and four types */
 #define PROCFS_MAX_NETROUTE 512  /* a header and at most two routes */
 #define PROCFS_MAX_NETARP  1024  /* a header and the eight-entry cache */
 #define PROCFS_MAX_NETTCP  3072  /* a header and the sixteen-block pool */
@@ -159,6 +162,9 @@ static const char *procfs_kind_name(const struct vpath *vp)
     }
     if (vp->kind == VNODE_PROC_USB) {
         return "/proc/usb";
+    }
+    if (vp->kind == VNODE_PROC_FILESYSTEMS) {
+        return "/proc/filesystems";
     }
     if (vp->kind == VNODE_PROC_NET_ROUTE) {
         return "/proc/net/route";
@@ -588,6 +594,11 @@ uint32_t procfs_ino_usb(void)
     return PROCFS_INO_USB;
 }
 
+uint32_t procfs_ino_filesystems(void)
+{
+    return PROCFS_INO_FILESYSTEMS;
+}
+
 uint32_t procfs_ino_netroute(void)
 {
     return PROCFS_INO_NETROUTE;
@@ -648,6 +659,9 @@ uint32_t procfs_fd_ino(struct fd_entry *e)
     }
     if (pf->origin_file == SYNTH_PROC_USB) {
         return PROCFS_INO_USB;
+    }
+    if (pf->origin_file == SYNTH_PROC_FILESYSTEMS) {
+        return PROCFS_INO_FILESYSTEMS;
     }
     return procfs_ino_pid(pf->origin_pid);
 }
@@ -876,13 +890,71 @@ static int procfs_gen_usb(struct procfs_text *t)
 
 static int procfs_gen_mounts(struct procfs_text *t)
 {
+    int i;
+
     ap_str(t, krffs_mount_source());
     ap_str(t, " / krffs ");
     ap_str(t, krffs_mount_options());
     ap_str(t, " 0 0\n");
     ap_str(t, "devfs /dev devfs rw,relatime 0 0\n");
     ap_str(t, "proc /proc proc rw,relatime 0 0\n");
-    return t->len;
+    /* Then every mount mount(2) placed, in table order: its source as the
+     * caller spelled it, its target, its type, and the flags as words. */
+    for (i = 3; i < VFS_MOUNTS; i++) {
+        struct vfs_mount *m = vfs_mount_at(i);
+
+        if (!m || m->state != VFS_ACTIVE) {
+            continue;
+        }
+        ap_str(t, m->source);
+        ap_ch(t, ' ');
+        ap_str(t, m->covered_path);
+        ap_ch(t, ' ');
+        ap_str(t, m->type->name);
+        ap_ch(t, ' ');
+        ap_str(t, (m->flags & VFS_MS_RDONLY) ? "ro" : "rw");
+        if (m->flags & VFS_MS_NOSUID) {
+            ap_str(t, ",nosuid");
+        }
+        if (m->flags & VFS_MS_NODEV) {
+            ap_str(t, ",nodev");
+        }
+        if (m->flags & VFS_MS_NOEXEC) {
+            ap_str(t, ",noexec");
+        }
+        if (m->flags & VFS_MS_NOATIME) {
+            ap_str(t, ",noatime");
+        }
+        if (m->flags & VFS_MS_NODIRATIME) {
+            ap_str(t, ",nodiratime");
+        }
+        if (m->flags & VFS_MS_RELATIME) {
+            ap_str(t, ",relatime");
+        }
+        ap_str(t, " 0 0\n");
+    }
+    return t->over ? -1 : t->len;
+}
+
+/* /proc/filesystems: `nodev` for the two synthetic namespaces, then every
+ * type mount(2) accepts. KRFFS is not listed, because the root is not
+ * mounted through mount(2) and cannot be while it lives in the window. */
+static int procfs_gen_filesystems(struct procfs_text *t)
+{
+    int i;
+
+    ap_str(t, "nodev\tdevfs\n");
+    ap_str(t, "nodev\tproc\n");
+    for (i = 0; i < 4; i++) {
+        const struct vfs_type *ty = vfs_type_at(i);
+
+        if (ty) {
+            ap_ch(t, '\t');
+            ap_str(t, ty->name);
+            ap_ch(t, '\n');
+        }
+    }
+    return t->over ? -1 : t->len;
 }
 
 /*
@@ -1127,6 +1199,7 @@ int procfs_open(const struct vpath *vp, int flags)
         vp->kind != VNODE_PROC_NET_DEV && vp->kind != VNODE_PROC_UPTIME &&
         vp->kind != VNODE_PROC_STAT_SYS && vp->kind != VNODE_PROC_MEMINFO &&
         vp->kind != VNODE_PROC_MOUNTS && vp->kind != VNODE_PROC_USB &&
+        vp->kind != VNODE_PROC_FILESYSTEMS &&
         vp->kind != VNODE_PROC_NET_ROUTE &&
         vp->kind != VNODE_PROC_NET_ARP && vp->kind != VNODE_PROC_NET_TCP) {
         pid = procfs_resolve_pid(vp->pid);
@@ -1185,6 +1258,9 @@ int procfs_open(const struct vpath *vp, int flags)
     } else if (vp->kind == VNODE_PROC_USB) {
         procfs_text_init(&text, f->data, PROCFS_MAX_USB);
         len = procfs_gen_usb(&text);
+    } else if (vp->kind == VNODE_PROC_FILESYSTEMS) {
+        procfs_text_init(&text, f->data, PROCFS_MAX_FILESYSTEMS);
+        len = procfs_gen_filesystems(&text);
     } else if (vp->kind == VNODE_PROC_NET_ROUTE) {
         procfs_text_init(&text, f->data, PROCFS_MAX_NETROUTE);
         len = procfs_gen_netroute(&text);
@@ -1228,6 +1304,8 @@ int procfs_open(const struct vpath *vp, int flags)
         f->origin_file = SYNTH_PROC_MOUNTS;
     } else if (vp->kind == VNODE_PROC_USB) {
         f->origin_file = SYNTH_PROC_USB;
+    } else if (vp->kind == VNODE_PROC_FILESYSTEMS) {
+        f->origin_file = SYNTH_PROC_FILESYSTEMS;
     } else if (vp->kind == VNODE_PROC_NET_ROUTE) {
         f->origin_file = SYNTH_PROC_NETROUTE;
     } else if (vp->kind == VNODE_PROC_NET_ARP) {

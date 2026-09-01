@@ -11,6 +11,7 @@
 #include "diskinfo.h"
 #include "block.h"
 #include "diskcmd.h"
+#include "../fs/bcache.h"
 #include "../fs/devfs.h"
 #include "../serial.h"
 
@@ -141,6 +142,17 @@ int diskinfo_format(const struct diskinfo *d, char *buf, int cap)
     put(buf, &n, cap, d->driver ? d->driver : "none");
     put(buf, &n, cap, "\npolicy ");
     put(buf, &n, cap, diskcmd_policy() == DISKCMD_READ_ONLY ? "read-only\n" : "read-write\n");
+    /* The buffer cache under the mounted file systems: reads served from a
+     * buffer, reads that filled one, and waits for a buffer another process
+     * held. Printed whatever the disk's state, since a mount can be on any
+     * device the cache reads. */
+    put(buf, &n, cap, "cache-hits ");
+    put_dec(buf, &n, cap, bcache_stat_hits());
+    put(buf, &n, cap, "\ncache-fills ");
+    put_dec(buf, &n, cap, bcache_stat_fills());
+    put(buf, &n, cap, "\ncache-waits ");
+    put_dec(buf, &n, cap, bcache_stat_waits());
+    put(buf, &n, cap, "\n");
 
     if (d->state != DISKINFO_PRESENT) {
         buf[n] = '\0';

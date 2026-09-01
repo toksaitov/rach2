@@ -443,6 +443,7 @@ static int32_t sys_exit(isr_params_t *params)
 
     if (current_proc) {
         release_fd_table(&current_proc->fds);
+        vfs_cwd_clear(current_proc);
     }
 
     if (debug_shell_is_home) {
@@ -916,6 +917,51 @@ static int join_abs(char *pathbuf, uint32_t size, const char *base,
  * at the root stays at the root. The output never grows, so the rewrite is
  * safe in place. Returns the new length.
  */
+/* Collapse `.` and `..` in an absolute path that a physical walk has just
+ * resolved, for the working directory's string: after the walk succeeded,
+ * every `..` names the parent the walk climbed to. */
+static void collapse_dots(char *path)
+{
+    int out = 1;
+    const char *p = path + 1;
+
+    while (*p) {
+        const char *comp;
+        int clen, i;
+
+        while (*p == '/') {
+            p++;
+        }
+        if (!*p) {
+            break;
+        }
+        comp = p;
+        while (*p && *p != '/') {
+            p++;
+        }
+        clen = (int)(p - comp);
+        if (clen == 1 && comp[0] == '.') {
+            continue;
+        }
+        if (clen == 2 && comp[0] == '.' && comp[1] == '.') {
+            while (out > 1 && path[out - 1] != '/') {
+                out--;
+            }
+            if (out > 1) {
+                out--;
+            }
+            continue;
+        }
+        if (out > 1) {
+            path[out++] = '/';
+        }
+        for (i = 0; i < clen; i++) {
+            path[out++] = comp[i];
+        }
+    }
+    path[out] = '\0';
+}
+
 static int canonicalize_abs(char *path)
 {
     int out = 1; /* path[0] is '/'; out is the current length */
@@ -1208,6 +1254,32 @@ static int32_t cred_access_bits(uint32_t owner, uint32_t group, uint32_t mode,
     return ((uint32_t) want & ~bits & 7u) ? -EACCES : 0;
 }
 
+/* Whether `mnt` is the root: its nodes are KRFFS's, read directly; a node on
+ * any other mount is read through the type's getattr. */
+static int mnt_is_root(const struct vfs_mount *mnt)
+{
+    return mnt == vfs_root_mount();
+}
+
+/**
+ * The permission check over a node of any type, from the attributes its
+ * file system reports: the same nine-bit rule as cred_access_node, plus
+ * the execute rule for a regular file.
+ */
+static int32_t cred_access_ref(const struct vfs_ref *r, int want, int use_real)
+{
+    struct vfs_stat st;
+    int rc = vfs_getattr(r->mnt, r->node, &st);
+
+    if (rc != 0) {
+        return rc;
+    }
+    if ((want & CRED_X) && (st.mode & 0170000u) != 0040000u && !(st.mode & 0111u)) {
+        return -EACCES;
+    }
+    return cred_access_bits(st.uid, st.gid, st.mode & 0777u, want, use_real);
+}
+
 /**
  * The permission check over a KRFFS node. The root directory reads as 0755,
  * the fixed identity stat reports (its stored mode has the dirty-mount
@@ -1331,6 +1403,7 @@ static int32_t synth_open(const struct vpath *vp, int flags)
         case VNODE_PROC_MEMINFO:
         case VNODE_PROC_MOUNTS:
         case VNODE_PROC_USB:
+        case VNODE_PROC_FILESYSTEMS:
         case VNODE_PROC_NET_ROUTE:
         case VNODE_PROC_NET_ARP:
         case VNODE_PROC_NET_TCP:
@@ -1504,6 +1577,10 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
             vfs_ref_release(&parent);
             return -EROFS; /* nothing is created under /dev or /proc */
         }
+        if (!mnt_is_root(parent.mnt)) {
+            vfs_ref_release(&parent);
+            return -EROFS; /* no other type creates in this milestone */
+        }
         rc = (int)cred_access_node((krffs_node_t *)parent.node, CRED_W, 0);
         if (rc != 0) {
             vfs_ref_release(&parent);
@@ -1535,6 +1612,52 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
             return synth_open(&vpc, flags);
         }
         node = ref.node;
+        if (!mnt_is_root(ref.mnt)) {
+            /* A node of another type: the checks from its attributes, and
+             * every write-side request refused by the mount's flags before
+             * anything else. */
+            struct vfs_stat vst;
+            unsigned acc = (unsigned)flags & 3u;
+            int want = acc == 0 ? CRED_R : (acc == 1 ? CRED_W : (CRED_R | CRED_W));
+
+            rc = vfs_getattr(ref.mnt, node, &vst);
+            if (rc != 0) {
+                vfs_ref_release(&ref);
+                return rc;
+            }
+            if ((flags & O_CREAT) && (flags & O_EXCL)) {
+                vfs_ref_release(&ref);
+                return -EEXIST;
+            }
+            if ((vst.mode & 0170000u) == 0040000u && (acc != 0 || (flags & O_TRUNC))) {
+                vfs_ref_release(&ref);
+                return -EISDIR;
+            }
+            if ((vst.mode & 0170000u) != 0040000u && (flags & O_DIRECTORY)) {
+                vfs_ref_release(&ref);
+                return -ENOTDIR;
+            }
+            if ((acc != 0 || (flags & O_TRUNC)) && (ref.mnt->flags & VFS_MS_RDONLY)) {
+                vfs_ref_release(&ref);
+                return -EROFS;
+            }
+            if (flags & O_TRUNC) {
+                want |= CRED_W;
+            }
+            rc = (int)cred_access_ref(&ref, want, 0);
+            if (rc != 0) {
+                vfs_ref_release(&ref);
+                return rc;
+            }
+            if (flags & O_TRUNC) {
+                rc = vfs_truncate(ref.mnt, node, 0);
+                if (rc != 0) {
+                    vfs_ref_release(&ref);
+                    return rc;
+                }
+            }
+            goto setup;
+        }
         {
             int is_dir = (node == krffs_fs->node) || KRFFS_IS_DIR(node->mode);
 
@@ -1590,6 +1713,7 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
         }
     }
 
+setup:
     fd = fd_alloc(&current_proc->fds);
     if (fd < 0) {
         vfs_ref_release(&ref);
@@ -1599,9 +1723,18 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
     /* Set up the fd entry. A directory opens as a FD_TYPE_DIR (its node is the
      * directory whose children getdents lists); a regular file as FD_TYPE_FILE.
      * A path that resolved to the root (e.g. "x/..") is the root directory,
-     * stored with a NULL node like a literal "/" open. */
+     * stored with a NULL node like a literal "/" open. A node of another
+     * type keeps `node` NULL: the description's own fields name it, and
+     * the KRFFS-only paths (the holder rule, the set-id clear) have nothing
+     * to do with it. */
     entry = &current_proc->fds.entries[fd];
-    if (node == krffs_fs->node) {
+    if (!mnt_is_root(ref.mnt)) {
+        struct vfs_stat vst;
+
+        vfs_getattr(ref.mnt, node, &vst);
+        entry->type = (vst.mode & 0170000u) == 0040000u ? FD_TYPE_DIR : FD_TYPE_FILE;
+        entry->node = NULL;
+    } else if (node == krffs_fs->node) {
         entry->type = FD_TYPE_DIR;
         entry->node = NULL;
     } else {
@@ -1647,6 +1780,103 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
     }
 
     return fd;
+}
+
+/**
+ * mount(2): EBX = source, ECX = target, EDX = type, ESI = flags, EDI = data.
+ *
+ * Effective uid 0 is required. The strings are copied here; the order of
+ * work and every other refusal are the VFS's (vfs_do_mount). `data` may be
+ * NULL, which is an empty option string.
+ */
+static int32_t sys_mount(isr_params_t *params)
+{
+    char source[64];
+    char target[256];
+    char type[16];
+    char data[128];
+    int n;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    if (!cred_privileged()) {
+        return -EPERM;
+    }
+    if (!params->ebx || !params->ecx || !params->edx) {
+        return -EFAULT;
+    }
+    n = strncpy_from_user(source, (const char __user *)params->ebx, sizeof(source));
+    if (n < 0) {
+        return n;
+    }
+    n = strncpy_from_user(target, (const char __user *)params->ecx, sizeof(target));
+    if (n < 0) {
+        return n;
+    }
+    n = strncpy_from_user(type, (const char __user *)params->edx, sizeof(type));
+    if (n < 0) {
+        return n;
+    }
+    data[0] = '\0';
+    if (params->edi) {
+        n = strncpy_from_user(data, (const char __user *)params->edi, sizeof(data));
+        if (n < 0) {
+            return n;
+        }
+    }
+    if (target[0] != '/') {
+        /* A relative target is joined to the working directory the way
+         * every other path is. */
+        char joined[256];
+        int r = join_abs(joined, sizeof(joined), current_proc->cwd, target,
+                         (uint32_t)k_strlen(target));
+
+        if (r < 0) {
+            return r;
+        }
+        k_memcpy(target, joined, sizeof(target));
+    }
+    return vfs_do_mount(source, target, type, params->esi, data);
+}
+
+/**
+ * umount2(2): EBX = target, ECX = flags. Effective uid 0 is required, and
+ * the flags must be zero: MNT_FORCE, MNT_DETACH and UMOUNT_NOFOLLOW are
+ * promises this kernel cannot keep and answer EINVAL.
+ */
+static int32_t sys_umount2(isr_params_t *params)
+{
+    char target[256];
+    int n;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    if (!cred_privileged()) {
+        return -EPERM;
+    }
+    if (params->ecx != 0) {
+        return -EINVAL;
+    }
+    if (!params->ebx) {
+        return -EFAULT;
+    }
+    n = strncpy_from_user(target, (const char __user *)params->ebx, sizeof(target));
+    if (n < 0) {
+        return n;
+    }
+    if (target[0] != '/') {
+        char joined[256];
+        int r = join_abs(joined, sizeof(joined), current_proc->cwd, target,
+                         (uint32_t)k_strlen(target));
+
+        if (r < 0) {
+            return r;
+        }
+        k_memcpy(target, joined, sizeof(target));
+    }
+    return vfs_do_umount(target);
 }
 
 static int32_t sys_open(isr_params_t *params)
@@ -2711,6 +2941,33 @@ static int32_t sys_chdir(isr_params_t *params)
             return -ENOTDIR; /* a synthetic leaf */
         }
         node = ref.node;
+        if (!mnt_is_root(ref.mnt)) {
+            /* A directory on another type: its attributes decide, and the
+             * canonical string is the request with `.` and `..` collapsed,
+             * which the physical walk that just succeeded makes exact. */
+            struct vfs_stat vst;
+
+            rc = vfs_getattr(ref.mnt, node, &vst);
+            if (rc == 0 && (vst.mode & 0170000u) != 0040000u) {
+                rc = -ENOTDIR;
+            }
+            if (rc == 0) {
+                rc = (int)cred_access_ref(&ref, CRED_X, 0);
+            }
+            if (rc != 0) {
+                vfs_ref_release(&ref);
+                return rc;
+            }
+            if (k_strlen(pathbuf) + 1 > sizeof(current_proc->cwd)) {
+                vfs_ref_release(&ref);
+                return -ENAMETOOLONG;
+            }
+            k_strncpy(current_proc->cwd, pathbuf, sizeof(current_proc->cwd));
+            collapse_dots(current_proc->cwd);
+            vfs_cwd_set(current_proc, ref.mnt, ref.node);
+            vfs_ref_release(&ref);
+            return 0;
+        }
         /* The root node is always a directory even if its on-disk mode lacks
          * the S_IFDIR bit (it is the filesystem anchor, not a mkdir'd node). A
          * regular file as the final component is ENOTDIR. */
@@ -2731,6 +2988,7 @@ static int32_t sys_chdir(isr_params_t *params)
             vfs_ref_release(&ref);
             return -ENAMETOOLONG;
         }
+        vfs_cwd_set(current_proc, ref.mnt, ref.node);
         vfs_ref_release(&ref);
     }
     return 0;
@@ -2881,6 +3139,43 @@ static void stat64_root_times(struct linux_stat64 *kst)
  * Shared by stat64/fstat64/fstatat64. Reports S_IFDIR for directories and
  * S_IFREG for regular files; the node id is the inode number.
  */
+/* A stat64 for a node on a mount that is not the root, from its getattr:
+ * the mount's index is the device, so a program telling files apart by
+ * (st_dev, st_ino) sees two mounts as two devices. */
+static int32_t vfs_fill_stat64(struct linux_stat64 *kst, const struct vfs_ref *r)
+{
+    struct vfs_stat st;
+    int rc = vfs_getattr(r->mnt, r->node, &st);
+    int i;
+
+    if (rc != 0) {
+        return rc;
+    }
+    k_memset(kst, 0, sizeof(*kst));
+    for (i = 0; i < VFS_MOUNTS; i++) {
+        if (vfs_mount_at(i) == r->mnt) {
+            kst->st_dev = (unsigned long long)(0x10u + (unsigned)i);
+        }
+    }
+    kst->st_mode = st.mode;
+    kst->st_nlink = st.nlink;
+    kst->st_uid = st.uid;
+    kst->st_gid = st.gid;
+    kst->st_rdev = st.rdev;
+    kst->st_size = (long long)st.size;
+    kst->st_blksize = 4096;
+    kst->st_blocks = (long long)((st.size + 511) / 512);
+    kst->st_ino = st.ino;
+    kst->__st_ino = (unsigned long)st.ino;
+    kst->st_atime = (long)st.atime_sec;
+    kst->st_atime_nsec = (unsigned long)st.atime_nsec;
+    kst->st_mtime = (long)st.mtime_sec;
+    kst->st_mtime_nsec = (unsigned long)st.mtime_nsec;
+    kst->st_ctime = (long)st.ctime_sec;
+    kst->st_ctime_nsec = (unsigned long)st.ctime_nsec;
+    return 0;
+}
+
 static void krffs_fill_stat64(struct linux_stat64 *kst, krffs_node_t *node)
 {
     k_memset(kst, 0, sizeof(*kst));
@@ -2993,6 +3288,11 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
             kst->st_dev = PROCFS_FSID;
             kst->st_mode = S_IFREG | 0444;
             kst->st_ino = procfs_ino_usb();
+            return 0;
+        case VNODE_PROC_FILESYSTEMS:
+            kst->st_dev = PROCFS_FSID;
+            kst->st_mode = S_IFREG | 0444;
+            kst->st_ino = procfs_ino_filesystems();
             return 0;
         case VNODE_PROC_NET_ROUTE:
             kst->st_dev = PROCFS_FSID;
@@ -3242,6 +3542,12 @@ static int32_t do_stat64(const char __user *path, struct linux_stat64 __user *st
             if (src != 0) {
                 return src;
             }
+        } else if (!mnt_is_root(ref.mnt)) {
+            rc = vfs_fill_stat64(&kst, &ref);
+            vfs_ref_release(&ref);
+            if (rc != 0) {
+                return rc;
+            }
         } else if ((krffs_node_t *)ref.node == krffs_fs->node) {
             /* The root's identity is fixed: ino 0, 0755, and real times: an
              * entry created in it stamps them, which is how a program
@@ -3353,6 +3659,30 @@ static int32_t statfs_fill(struct linux_statfs64 __user *out, uint32_t magic)
     return 0;
 }
 
+/** A statfs64 from a mount's own statfs: the numbers vfat reports. */
+static int32_t statfs_fill_mount(struct linux_statfs64 __user *out, struct vfs_mount *m)
+{
+    struct linux_statfs64 st;
+    struct vfs_statfs vs;
+    int rc = vfs_statfs(m, &vs);
+
+    if (rc != 0) {
+        return rc;
+    }
+    k_memset(&st, 0, sizeof(st));
+    st.f_type = vs.magic;
+    st.f_bsize = vs.bsize;
+    st.f_frsize = vs.bsize;
+    st.f_blocks = vs.blocks;
+    st.f_bfree = vs.bfree;
+    st.f_bavail = vs.bfree;
+    st.f_namelen = vs.namelen;
+    if (copy_to_user(out, &st, sizeof(st)) != 0) {
+        return -EFAULT;
+    }
+    return 0;
+}
+
 /** Which of the three mounts a classified path belongs to. */
 static uint32_t statfs_magic_for_kind(int kind)
 {
@@ -3403,6 +3733,11 @@ static int32_t sys_statfs64(isr_params_t *params)
         svp = vfs_synth_vpath(ref.mnt, ref.node);
         if (svp) {
             magic = statfs_magic_for_kind(svp->kind);
+        } else if (!mnt_is_root(ref.mnt)) {
+            struct vfs_mount *m = ref.mnt;
+
+            vfs_ref_release(&ref);
+            return statfs_fill_mount((struct linux_statfs64 __user *)params->edx, m);
         }
         vfs_ref_release(&ref);
         return statfs_fill((struct linux_statfs64 __user *)params->edx,
@@ -3442,6 +3777,9 @@ static int32_t sys_fstatfs64(isr_params_t *params)
     if (e->type != FD_TYPE_FILE && e->type != FD_TYPE_DIR) {
         return -ENOSYS;
     }
+    if (e->ofd && e->ofd->vmnt && !mnt_is_root(e->ofd->vmnt)) {
+        return statfs_fill_mount((struct linux_statfs64 __user *)params->edx, e->ofd->vmnt);
+    }
     return statfs_fill((struct linux_statfs64 __user *)params->edx, STATFS_MAGIC_KRFFS);
 }
 
@@ -3458,6 +3796,15 @@ static void fstat_fill(fd_entry_t *entry, struct linux_stat64 *kst)
 {
     k_memset(kst, 0, sizeof(*kst));
     stat64_boot_times(kst); /* a node with times of its own overwrites these */
+    if ((entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR) && entry->ofd &&
+        entry->ofd->vmnt && !mnt_is_root(entry->ofd->vmnt)) {
+        struct vfs_ref r;
+
+        r.mnt = entry->ofd->vmnt;
+        r.node = entry->ofd->vnode;
+        vfs_fill_stat64(kst, &r);
+        return;
+    }
     if (entry->type == FD_TYPE_DIR && entry->node == NULL) {
         kst->st_mode = S_IFDIR | 0755; /* the root directory */
         kst->st_nlink = 1;
@@ -3634,6 +3981,12 @@ static int32_t sys_fstatat64(isr_params_t *params)
             if (rc != 0) {
                 return rc;
             }
+        } else if (!mnt_is_root(ref.mnt)) {
+            rc = vfs_fill_stat64(&kst, &ref);
+            vfs_ref_release(&ref);
+            if (rc != 0) {
+                return rc;
+            }
         } else {
             node = ref.node;
             krffs_fill_stat64(&kst, node);
@@ -3694,7 +4047,14 @@ static int32_t do_access(const char *name, int mode)
                                 mode, 1);
     }
     /* R_OK/W_OK/X_OK are the same octal digits the checker takes. */
-    rc = cred_access_node((krffs_node_t *)ref.node, mode, 1);
+    if (!mnt_is_root(ref.mnt)) {
+        rc = cred_access_ref(&ref, mode, 1);
+        if (rc == 0 && (mode & W_OK) && (ref.mnt->flags & VFS_MS_RDONLY)) {
+            rc = -EROFS; /* access(2) reports the mount's refusal too */
+        }
+    } else {
+        rc = cred_access_node((krffs_node_t *)ref.node, mode, 1);
+    }
     vfs_ref_release(&ref);
     return rc;
 }
@@ -3861,6 +4221,14 @@ static int32_t do_chmod(const char *name, uint32_t mode)
         }
         return cred_privileged() ? 0 : -EPERM; /* fixed root-owned metadata */
     }
+    if (!mnt_is_root(ref.mnt)) {
+        struct vfs_stat vst;
+
+        vst.mode = mode;
+        rc = vfs_setattr(ref.mnt, ref.node, VFS_SET_MODE, &vst);
+        vfs_ref_release(&ref);
+        return rc;
+    }
     node = ref.node;
     rc = krffs_chmod_node(node, mode);
     vfs_ref_release(&ref);
@@ -3909,6 +4277,15 @@ static int32_t do_chown(const char *name, uint32_t uid, uint32_t gid)
             return -EPERM;
         }
         return 0;
+    }
+    if (!mnt_is_root(ref.mnt)) {
+        struct vfs_stat vst;
+
+        vst.uid = uid;
+        vst.gid = gid;
+        rc = vfs_setattr(ref.mnt, ref.node, VFS_SET_UID | VFS_SET_GID, &vst);
+        vfs_ref_release(&ref);
+        return rc;
     }
     node = ref.node;
     rc = krffs_chown_node(node, uid, gid);
@@ -4587,6 +4964,29 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
             }
             return 0;
         }
+        if (!mnt_is_root(ref.mnt)) {
+            struct linux_stat64 s64;
+
+            rc = vfs_fill_stat64(&s64, &ref);
+            vfs_ref_release(&ref);
+            if (rc != 0) {
+                return rc;
+            }
+            kst.st_mode = (unsigned short)s64.st_mode;
+            kst.st_nlink = (unsigned short)s64.st_nlink;
+            kst.st_dev = (unsigned long)s64.st_dev;
+            kst.st_ino = (unsigned long)s64.st_ino;
+            kst.st_uid = (unsigned short)s64.st_uid;
+            kst.st_gid = (unsigned short)s64.st_gid;
+            kst.st_size = (unsigned long)s64.st_size;
+            kst.st_blksize = (unsigned long)s64.st_blksize;
+            kst.st_blocks = (unsigned long)s64.st_blocks;
+            stat_times_from_stat64(&kst, &s64);
+            if (copy_to_user(st, &kst, sizeof(kst)) != 0) {
+                return -EFAULT;
+            }
+            return 0;
+        }
         node = ref.node;
         vfs_ref_release(&ref);
     }
@@ -4734,6 +5134,34 @@ static void close_cloexec_fds(void)
 static int exec_krffs_read(void *ctx, void *dst, uint32_t count, uint32_t off)
 {
     return krffs_read((const char *)ctx, (char *)dst, count, off);
+}
+
+/* A program on a mount that is not the root is read through the mount: the
+ * node held from the resolution, opened once for the load and released
+ * after it. One exec runs at a time (see the argument buffers below), so
+ * the context is static. */
+struct exec_vfs_ctx {
+    struct vfs_ref ref;
+    void *handle;
+};
+static struct exec_vfs_ctx exec_ctx;
+
+static int exec_vfs_read(void *ctx, void *dst, uint32_t count, uint32_t off)
+{
+    struct exec_vfs_ctx *c = ctx;
+    int32_t got = vfs_read(c->ref.mnt, c->handle, dst, count, off);
+
+    return got < 0 ? -1 : (int)got;
+}
+
+static void exec_vfs_done(void)
+{
+    if (exec_ctx.ref.mnt) {
+        vfs_release(exec_ctx.ref.mnt, exec_ctx.handle);
+        vfs_ref_release(&exec_ctx.ref);
+        exec_ctx.ref.mnt = NULL;
+        exec_ctx.handle = NULL;
+    }
 }
 
 /*
@@ -5190,6 +5618,35 @@ static int32_t sys_execve(isr_params_t *params)
             vfs_ref_release(&xref);
             return -EACCES;
         }
+        if (!mnt_is_root(xref.mnt)) {
+            /* A program on another type: its attributes decide the execute
+             * right and the set-id facts; the image is read through the
+             * mount below. */
+            struct vfs_stat vst;
+
+            rc = (int)cred_access_ref(&xref, CRED_X, 0);
+            if (rc == 0) {
+                rc = vfs_getattr(xref.mnt, xref.node, &vst);
+            }
+            if (rc != 0) {
+                vfs_ref_release(&xref);
+                return rc;
+            }
+            setid_mode = vst.mode & (KRFFS_MODE_SUID | KRFFS_MODE_SGID);
+            if (xref.mnt->flags & VFS_MS_NOSUID) {
+                setid_mode = 0;
+            }
+            file_uid = vst.uid;
+            file_gid = vst.gid;
+            exec_ctx.ref = xref; /* held until the image is loaded or refused */
+            rc = vfs_open_node(xref.mnt, xref.node, 0, &exec_ctx.handle);
+            if (rc != 0) {
+                vfs_ref_release(&exec_ctx.ref);
+                exec_ctx.ref.mnt = NULL;
+                return rc;
+            }
+            goto checked;
+        }
         prog = xref.node;
         rc = cred_access_node(prog, CRED_X, 0);
         if (rc != 0) {
@@ -5223,6 +5680,7 @@ static int32_t sys_execve(isr_params_t *params)
         file_gid   = prog->gid;
         vfs_ref_release(&xref);
     }
+checked:
 
     if (current_proc->cr3 == 0) {
         proc_dir = _kernel_dir;
@@ -5238,7 +5696,15 @@ static int32_t sys_execve(isr_params_t *params)
     {
         Elf32_Ehdr ehdr;
 
-        if (exec_krffs_read((void *)name, &ehdr, sizeof(ehdr), 0) != (int)sizeof(ehdr) ||
+        if (exec_ctx.ref.mnt) {
+            /* On another type only an ELF image runs: a script names an
+             * interpreter by path, and the shebang reader is the root's. */
+            if (exec_vfs_read(&exec_ctx, &ehdr, sizeof(ehdr), 0) != (int)sizeof(ehdr) ||
+                !elf_valid_exec(&ehdr, sizeof(ehdr))) {
+                exec_vfs_done();
+                return -ENOEXEC;
+            }
+        } else if (exec_krffs_read((void *)name, &ehdr, sizeof(ehdr), 0) != (int)sizeof(ehdr) ||
             !elf_valid_exec(&ehdr, sizeof(ehdr))) {
             int32_t sb = exec_shebang(&argc);
 
@@ -5348,9 +5814,13 @@ static int32_t sys_execve(isr_params_t *params)
      * returning into a destroyed address space. */
     free_user_pages(proc_dir);
 
-    if (elf_load_image(exec_krffs_read, (void *)name, proc_dir, &img) != 0) {
+    if (elf_load_image(exec_ctx.ref.mnt ? exec_vfs_read : exec_krffs_read,
+                       exec_ctx.ref.mnt ? (void *)&exec_ctx : (void *)name, proc_dir,
+                       &img) != 0) {
+        exec_vfs_done();
         exec_fail_destroyed();
     }
+    exec_vfs_done();
     entry_point = img.entry;
 
     stack_phys = alloc_user_page(proc_dir, USER_STACK_BASE);
@@ -5528,6 +5998,10 @@ static int32_t sys_fork(isr_params_t *params)
     child->ngroups = parent->ngroups;
     k_memcpy(child->groups, parent->groups, sizeof(child->groups));
     k_memcpy(child->comm, parent->comm, sizeof(child->comm));
+    /* The working directory's hold on its mount is the child's too. */
+    child->cwd_mnt = NULL;
+    child->cwd_node = NULL;
+    vfs_cwd_set(child, parent->cwd_mnt, parent->cwd_node);
 
     /* Inherit the parent's TLS base: the child's copied trapframe keeps the
      * parent's %gs selector, and its address space is a copy at the same
@@ -5894,10 +6368,17 @@ static int32_t sys_unlink(isr_params_t *params)
             vfs_ref_release(&parent);
             return -EBUSY; /* a mount point cannot be unlinked */
         }
+        if (!mnt_is_root(parent.mnt)) {
+            /* Another type: its write-side operation, or the mount's EROFS. */
+            rc = vfs_unlink_name(parent.mnt, parent.node, leaf);
+            vfs_ref_release(&parent);
+            return rc;
+        }
         /* The directory's write bit is checked before the target is even
          * looked up: a caller with no write permission there must see
          * -EACCES, not learn whether the name exists. */
-        rc = cred_access_node((krffs_node_t *)parent.node, CRED_W, 0);
+        rc = mnt_is_root(parent.mnt) ? cred_access_node((krffs_node_t *)parent.node, CRED_W, 0)
+                                     : cred_access_ref(&parent, CRED_W, 0);
         if (rc != 0) {
             vfs_ref_release(&parent);
             return rc;
@@ -5985,6 +6466,11 @@ static int32_t sys_mkdir(isr_params_t *params)
             vfs_ref_release(&parent);
             return -EEXIST;
         }
+        if (!mnt_is_root(parent.mnt)) {
+            rc = vfs_mkdir(parent.mnt, parent.node, leaf, params->ecx);
+            vfs_ref_release(&parent);
+            return rc;
+        }
         rc = cred_access_node((krffs_node_t *)parent.node, CRED_W, 0);
         if (rc != 0) {
             vfs_ref_release(&parent);
@@ -6046,6 +6532,12 @@ static int32_t sys_rmdir(isr_params_t *params)
         if (vfs_leaf_mount(parent.mnt, parent.node, leaf)) {
             vfs_ref_release(&parent);
             return -EBUSY; /* a mount point cannot be removed */
+        }
+        if (!mnt_is_root(parent.mnt)) {
+            /* Another type: its write-side operation, or the mount's EROFS. */
+            rc = vfs_rmdir(parent.mnt, parent.node, leaf);
+            vfs_ref_release(&parent);
+            return rc;
         }
         rc = parent.mnt->type->ops->lookup(parent.mnt, parent.node, leaf,
                                            &found);
@@ -6152,7 +6644,8 @@ static int32_t sys_rename(isr_params_t *params)
     if (rc != 0) {
         return rc;
     }
-    rc = cred_access_node((krffs_node_t *)opar.node, CRED_W, 0);
+    rc = mnt_is_root(opar.mnt) ? cred_access_node((krffs_node_t *)opar.node, CRED_W, 0)
+                               : cred_access_ref(&opar, CRED_W, 0);
     if (rc != 0) {
         vfs_ref_release(&opar);
         return rc;
@@ -6163,7 +6656,8 @@ static int32_t sys_rename(isr_params_t *params)
         vfs_ref_release(&opar);
         return rc;
     }
-    rc = cred_access_node((krffs_node_t *)npar.node, CRED_W, 0);
+    rc = mnt_is_root(npar.mnt) ? cred_access_node((krffs_node_t *)npar.node, CRED_W, 0)
+                               : cred_access_ref(&npar, CRED_W, 0);
     if (rc != 0) {
         goto out;
     }
@@ -6181,6 +6675,10 @@ static int32_t sys_rename(isr_params_t *params)
     if (vfs_leaf_mount(opar.mnt, opar.node, oleaf) ||
         vfs_leaf_mount(npar.mnt, npar.node, nleaf)) {
         rc = -EBUSY; /* a mount point moves for no one */
+        goto out;
+    }
+    if (!mnt_is_root(opar.mnt)) {
+        rc = vfs_rename(opar.mnt, opar.node, oleaf, npar.node, nleaf);
         goto out;
     }
 
@@ -6325,6 +6823,14 @@ static int32_t sys_utimensat(isr_params_t *params)
         if (vfs_synth_vpath(ref.mnt, ref.node)) {
             vfs_ref_release(&ref);
             return -EROFS; /* the synthetic mounts are read-only */
+        }
+        if (!mnt_is_root(ref.mnt)) {
+            struct vfs_stat vst;
+
+            k_memset(&vst, 0, sizeof(vst));
+            rc = vfs_setattr(ref.mnt, ref.node, VFS_SET_ATIME | VFS_SET_MTIME, &vst);
+            vfs_ref_release(&ref);
+            return rc;
         }
         node = ref.node;
         /* The hold is a no-op for the root type and the times are stored
@@ -10845,6 +11351,8 @@ void init_syscall(void)
     _syscall_table[SYS_REBOOT] = sys_reboot;
     _syscall_table[SYS_FSYNC] = sys_fsync;
     _syscall_table[SYS_FTRUNCATE] = sys_ftruncate;
+    _syscall_table[SYS_MOUNT] = sys_mount;
+    _syscall_table[SYS_UMOUNT2] = sys_umount2;
     _syscall_table[SYS_FDATASYNC] = sys_fsync;
     _syscall_table[SYS_LINK] = sys_link;
     _syscall_table[SYS_LINKAT] = sys_linkat;

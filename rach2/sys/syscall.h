@@ -27,6 +27,8 @@
 #define SYS_EXECVE  11
 #define SYS_CHDIR   12
 #define SYS_LSEEK   19
+#define SYS_MOUNT   21
+#define SYS_UMOUNT2 52
 #define SYS_FTRUNCATE 93
 #define SYS_MKDIR   39
 #define SYS_RMDIR   40

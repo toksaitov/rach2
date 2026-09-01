@@ -14,6 +14,9 @@
 #include "../mm/pagecache.h"
 #include "../panic.h"
 #include "../proc/process.h"
+#include "bcache.h"
+#include "devfs.h"
+#include "fat32.h"
 #include "krffs.h"
 #include "synthfs.h"
 
@@ -199,6 +202,7 @@ struct vfs_mount *vfs_leaf_mount(struct vfs_mount *mnt, void *node,
 {
     void *found;
     struct vfs_mount *m = mount_named(mnt, node, name);
+    int i;
 
     if (m) {
         return m;
@@ -207,7 +211,15 @@ struct vfs_mount *vfs_leaf_mount(struct vfs_mount *mnt, void *node,
         mnt->type->ops->lookup(mnt, node, name, &found) != 0) {
         return 0;
     }
-    m = mount_covering(mnt, found);
+    /* Any slot that holds the node covers it for a namespace change: one
+     * still mounting, whose constructor may be asleep, as much as an
+     * active one. The resolver crosses only into active mounts. */
+    for (i = 1; i < VFS_MOUNTS; i++) {
+        if (mounts[i].state != VFS_FREE && mounts[i].parent == mnt &&
+            mounts[i].covered == found) {
+            m = &mounts[i];
+        }
+    }
     if (mnt->type->ops->put) {
         mnt->type->ops->put(mnt, found);
     }
@@ -1191,6 +1203,8 @@ static void install(int idx, const struct vfs_type *type, const char *path,
     m->priv = 0;
     m->opens = 0;
     m->releases = 0;
+    m->claim = -1;
+    m->source[0] = '\0';
     if (type->mount(m, 0, 0, 0) != 0) {
         k_panic("vfs: a permanent mount refused to construct");
     }
@@ -1212,4 +1226,264 @@ void vfs_init(void)
     install(0, &vfs_krffs_type, "/", 0);
     install(1, &vfs_devfs_type, "/dev", &mounts[0]);
     install(2, &vfs_procfs_type, "/proc", &mounts[0]);
+}
+
+/* ==== mount(2) and umount2(2) ==== */
+
+/* The types mount(2) accepts, by the name it spells; the permanent three
+ * are not here because nothing mounts them by name. */
+static const struct vfs_type *const mount_types[] = {&vfs_vfat_type, 0, 0, 0};
+
+static const struct vfs_type *type_named(const char *name)
+{
+    int i;
+
+    for (i = 0; i < 4; i++) {
+        if (mount_types[i] && streq(mount_types[i]->name, name)) {
+            return mount_types[i];
+        }
+    }
+    return 0;
+}
+
+const struct vfs_type *vfs_type_at(int idx)
+{
+    if (idx < 0 || idx >= 4) {
+        return 0;
+    }
+    return mount_types[idx];
+}
+
+/* The flags mount(2) may carry here: honoured or recorded ones. Anything
+ * else is EINVAL, MS_REMOUNT, MS_BIND and MS_MOVE first among them. */
+#define VFS_MS_KNOWN                                                          \
+    (VFS_MS_RDONLY | VFS_MS_NOSUID | VFS_MS_NODEV | VFS_MS_NOEXEC |            \
+     VFS_MS_NOATIME | VFS_MS_NODIRATIME | VFS_MS_SILENT | VFS_MS_RELATIME)
+
+static int drained(void *arg)
+{
+    struct vfs_mount *mnt = arg;
+    return mnt->inprogress == 0;
+}
+
+/**
+ * mount(2): the order of work is resolve and hold the target, check its
+ * path length, claim the source's range, take a slot as `mounting`, run
+ * the constructor, publish. Every failure after the first step releases
+ * what the steps before it took.
+ */
+int vfs_do_mount(const char *source, const char *target, const char *type,
+                 uint32_t flags, const char *options)
+{
+    const struct vfs_type *t = type_named(type);
+    struct vfs_ref tref;
+    struct vfs_stat st;
+    struct vfs_mount *m = 0;
+    block_device_t *dev, *backing;
+    uint64_t first, count;
+    int claim;
+    int i;
+    int rc;
+
+    if (!t) {
+        return -ENODEV;
+    }
+    if (flags & ~VFS_MS_KNOWN) {
+        return -EINVAL;
+    }
+    rc = vfs_resolve(0, target, 0, &tref, 0, 0);
+    if (rc != 0) {
+        return rc;
+    }
+    /* The target: a directory on a mount that can host one, not the root
+     * of the root, not already covered. */
+    if (tref.mnt->type->ops->lookup_rest) {
+        vfs_ref_release(&tref);
+        return -EINVAL;
+    }
+    if (tref.mnt == &mounts[0] && tref.node == mounts[0].root) {
+        vfs_ref_release(&tref);
+        return -EINVAL;
+    }
+    if (vfs_getattr(tref.mnt, tref.node, &st) != 0 || !VFS_IS_DIR(st.mode)) {
+        vfs_ref_release(&tref);
+        return -ENOTDIR;
+    }
+    if (k_strlen(target) >= VFS_COVERED_PATH_MAX) {
+        vfs_ref_release(&tref);
+        return -ENAMETOOLONG;
+    }
+    for (i = 0; i < VFS_MOUNTS; i++) {
+        if (mounts[i].state != VFS_FREE && mounts[i].covered == tref.node &&
+            mounts[i].parent == tref.mnt) {
+            vfs_ref_release(&tref);
+            return -EBUSY; /* covered, or reserved by a mount in progress */
+        }
+    }
+    /* The source: a partition window under /dev, claimed as a sector range
+     * on the backing disk. */
+    rc = devfs_window_of(source, &dev, &backing, &first, &count);
+    if (rc != 0) {
+        vfs_ref_release(&tref);
+        return rc;
+    }
+    claim = devfs_claim(backing, first, first + count - 1);
+    if (claim < 0) {
+        vfs_ref_release(&tref);
+        return claim;
+    }
+    for (i = 3; i < VFS_MOUNTS; i++) {
+        if (mounts[i].state == VFS_FREE) {
+            m = &mounts[i];
+            break;
+        }
+    }
+    if (!m) {
+        devfs_release_claim(claim);
+        vfs_ref_release(&tref);
+        return -ENOMEM;
+    }
+    /* The slot is taken before the constructor runs, because with a
+     * sleeping device the constructor sleeps and another process could
+     * remove or rename the target under it; the covered node is held and
+     * the parent counted. */
+    k_memset(m, 0, sizeof(*m));
+    m->type = t;
+    m->dev = dev;
+    m->flags = flags;
+    m->state = VFS_MOUNTING;
+    m->parent = tref.mnt;
+    m->covered = tref.node;
+    m->ns_holder = -1;
+    wait_queue_init(&m->ns_wq);
+    m->claim = claim;
+    k_strncpy(m->covered_path, target, sizeof(m->covered_path));
+    k_strncpy(m->source, source, sizeof(m->source));
+    m->source[sizeof(m->source) - 1] = '\0';
+    tref.mnt->refs++; /* a child mount is a reference on its parent */
+    vfs_leave(tref.mnt); /* the walk's count; the hold stays with the slot */
+
+    vfs_ns_lock(m);
+    rc = t->mount(m, dev, flags, options);
+    vfs_ns_unlock(m);
+    if (rc != 0) {
+        struct vfs_ref cov;
+
+        cov.mnt = m->parent;
+        cov.node = m->covered;
+        m->parent->refs--;
+        vfs_ref_put(&cov);
+        devfs_release_claim(claim);
+        m->state = VFS_FREE;
+        return rc;
+    }
+    m->state = VFS_ACTIVE;
+    klog(KLOG_INFO, "vfs", "mounted %s on %s (%s%s)", source, target, t->name,
+         (flags & VFS_MS_RDONLY) ? ", read-only" : "");
+    return 0;
+}
+
+/**
+ * umount2(2): the mount goes to `unmounting`, which refuses new work; the
+ * in-progress count drains; the reference count is checked; sync and
+ * prepare_unmount; the cache's dirty buffers are written, a failure here
+ * returning the mount to `active`; the cache drops the device's buffers;
+ * unmount; the covered node is released; the claim is released; the entry
+ * clears.
+ */
+int vfs_do_umount(const char *target)
+{
+    struct vfs_ref tref;
+    struct vfs_mount *m;
+    struct vfs_ref cov;
+    int rc;
+
+    rc = vfs_resolve(0, target, 0, &tref, 0, 0);
+    if (rc != 0) {
+        return rc;
+    }
+    m = tref.mnt;
+    if (tref.node != m->root) {
+        vfs_ref_release(&tref);
+        return -EINVAL; /* not a mount point */
+    }
+    if (m == &mounts[0] || m == &mounts[1] || m == &mounts[2]) {
+        vfs_ref_release(&tref);
+        return -EBUSY; /* the permanent three */
+    }
+    vfs_ref_release(&tref);
+    if (m->state != VFS_ACTIVE) {
+        return -EBUSY;
+    }
+    m->state = VFS_UNMOUNTING;
+    while (m->inprogress > 0) {
+        wq_wait_event(&m->ns_wq, drained, m); /* EINTR: keep draining */
+    }
+    if (m->refs > 0) {
+        m->state = VFS_ACTIVE;
+        return -EBUSY;
+    }
+    vfs_ns_lock(m);
+    if (m->type->ops->sync) {
+        m->type->ops->sync(m);
+    }
+    if (m->type->ops->prepare_unmount) {
+        rc = m->type->ops->prepare_unmount(m);
+        if (rc != 0) {
+            vfs_ns_unlock(m);
+            m->state = VFS_ACTIVE;
+            return rc;
+        }
+    }
+    if (bcache_sync(m->dev) != 0) {
+        vfs_ns_unlock(m);
+        m->state = VFS_ACTIVE;
+        return -EIO; /* nothing irreversible has happened yet */
+    }
+    bcache_invalidate(m->dev);
+    klog(KLOG_INFO, "vfs", "unmounted %s: %d opens, %d releases",
+         m->covered_path, (int)m->opens, (int)m->releases);
+    if (m->type->ops->put) {
+        m->type->ops->put(m, m->root);
+    }
+    m->type->ops->unmount(m);
+    vfs_ns_unlock(m);
+    cov.mnt = m->parent;
+    cov.node = m->covered;
+    m->parent->refs--;
+    vfs_ref_put(&cov);
+    devfs_release_claim(m->claim);
+    m->state = VFS_FREE;
+    return 0;
+}
+
+/* ---- the working directory's hold on its mount ---- */
+
+void vfs_cwd_set(struct process *p, struct vfs_mount *mnt, void *node)
+{
+    vfs_cwd_clear(p);
+    if (!mnt || mnt == &mounts[0] || mnt == &mounts[1] || mnt == &mounts[2]) {
+        return; /* the permanent mounts need no pin */
+    }
+    p->cwd_mnt = mnt;
+    p->cwd_node = node;
+    if (mnt->type->ops->hold) {
+        mnt->type->ops->hold(mnt, node);
+    }
+    mnt->refs++;
+}
+
+void vfs_cwd_clear(struct process *p)
+{
+    struct vfs_ref r;
+
+    if (!p->cwd_mnt) {
+        return;
+    }
+    r.mnt = p->cwd_mnt;
+    r.node = p->cwd_node;
+    p->cwd_mnt->refs--;
+    p->cwd_mnt = 0;
+    p->cwd_node = 0;
+    vfs_ref_put(&r);
 }

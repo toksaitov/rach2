@@ -217,6 +217,8 @@ struct vfs_mount {
     /* What the unmount record reports: every open matched by a release. */
     uint32_t opens;
     uint32_t releases;
+    int claim;        /* the devfs claim on the source's sectors, or -1 */
+    char source[32];  /* the source as mount(2) spelled it, for /proc/mounts */
 };
 
 /* A held place: one node on one mount. The resolver returns these; whoever
@@ -270,6 +272,20 @@ struct vfs_mount *vfs_mount_at(int idx);
 
 /** The three permanent entries, for the syscall layer's direct needs. */
 struct vfs_mount *vfs_root_mount(void);
+
+/** The type mount(2) accepts at index `idx` of four, or NULL; the order
+ * /proc/filesystems lists them in. */
+const struct vfs_type *vfs_type_at(int idx);
+
+/**
+ * The working directory's hold on its mount: a process whose directory is
+ * inside a mount counts as a reference on it, so the mount cannot be
+ * unmounted from under it. The permanent mounts need no pin and take none.
+ * `vfs_cwd_set` replaces the previous hold; `vfs_cwd_clear` drops it.
+ */
+struct process;
+void vfs_cwd_set(struct process *p, struct vfs_mount *mnt, void *node);
+void vfs_cwd_clear(struct process *p);
 
 /**
  * Count one operation in progress on `mnt`; refused with -EBUSY unless the

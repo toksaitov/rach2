@@ -47,6 +47,8 @@ typedef struct cpu_regs cpu_regs_t;
 #define NGROUPS_MAX 8
 
 /* Process Control Block (PCB). */
+struct vfs_mount;
+
 struct process {
     uint32_t pid;           /* Process ID */
     proc_state_t state;     /* Current state */
@@ -107,6 +109,10 @@ struct process {
      * the process and not to a remembered pid, which a later process reusing
      * that pid would silence. */
     uint32_t vma_reported;
+    /* The working directory's hold on a mount that can be unmounted: the
+     * mount and the held node, or NULL on a permanent mount (vfs_cwd_set). */
+    struct vfs_mount *cwd_mnt;
+    void *cwd_node;
 };
 
 typedef struct process process_t;

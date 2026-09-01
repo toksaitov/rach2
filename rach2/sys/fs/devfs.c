@@ -187,7 +187,6 @@ static struct raw_window bootpart;
  */
 static struct raw_window grubcore;
 
-
 /**
  * Read whole sectors from a bounded raw window.
  *
@@ -650,6 +649,8 @@ static const struct file_ops part1_ops = {dev_part1_read, dev_part_write, dev_po
 static const struct file_ops part2_ops = {dev_part2_read, dev_part_write, dev_poll, dev_ioctl, NULL};
 static const struct file_ops part3_ops = {dev_part3_read, dev_part_write, dev_poll, dev_ioctl, NULL};
 static const struct file_ops part4_ops = {dev_part4_read, dev_part_write, dev_poll, dev_ioctl, NULL};
+static const struct file_ops *const part_ops[4] = {&part1_ops, &part2_ops, &part3_ops, &part4_ops};
+
 static const struct file_ops bootlog_ops = {dev_bootlog_read, dev_sink_write, dev_poll, dev_ioctl,
                                             NULL};
 static const struct file_ops disk0_ops = {dev_disk0_read, dev_disk0_write, dev_poll, dev_ioctl,
@@ -755,6 +756,158 @@ static const struct devfs_entry *devfs_find(const char *name)
     return NULL;
 }
 
+/*
+ * Claims: a mounted volume's sector range on the backing disk, compared as
+ * ranges and never as device pointers, because three names can describe
+ * one range. While a range is claimed a second overlapping mount answers
+ * EBUSY, and so does a write-capable open of a raw window over it; while
+ * such a descriptor is open, a claim on its range answers EBUSY. The table
+ * sits beside the single-writer rule because the two are one question:
+ * who may write these sectors.
+ */
+struct claim {
+    int used;
+    block_device_t *backing;
+    uint64_t first;
+    uint64_t last;
+};
+
+#define DEVFS_CLAIMS 8
+
+static struct claim claims[DEVFS_CLAIMS];
+
+/* The range the raw writer holds while `raw_writer_held`. */
+static block_device_t *raw_writer_backing;
+static uint64_t raw_writer_first, raw_writer_last;
+
+static int ranges_cross(block_device_t *a, uint64_t af, uint64_t al,
+                        block_device_t *b, uint64_t bf, uint64_t bl)
+{
+    return a == b && af <= bl && bf <= al;
+}
+
+int devfs_claim(block_device_t *backing, uint64_t first, uint64_t last)
+{
+    int i;
+
+    if (raw_writer_held &&
+        ranges_cross(backing, first, last, raw_writer_backing, raw_writer_first,
+                     raw_writer_last)) {
+        return -EBUSY;
+    }
+    for (i = 0; i < DEVFS_CLAIMS; i++) {
+        if (claims[i].used &&
+            ranges_cross(backing, first, last, claims[i].backing, claims[i].first,
+                         claims[i].last)) {
+            return -EBUSY;
+        }
+    }
+    for (i = 0; i < DEVFS_CLAIMS; i++) {
+        if (!claims[i].used) {
+            claims[i].used = 1;
+            claims[i].backing = backing;
+            claims[i].first = first;
+            claims[i].last = last;
+            return i;
+        }
+    }
+    return -ENOMEM;
+}
+
+void devfs_release_claim(int claim)
+{
+    if (claim >= 0 && claim < DEVFS_CLAIMS) {
+        claims[claim].used = 0;
+    }
+}
+
+static int claimed(block_device_t *backing, uint64_t first, uint64_t last)
+{
+    int i;
+
+    for (i = 0; i < DEVFS_CLAIMS; i++) {
+        if (claims[i].used &&
+            ranges_cross(backing, first, last, claims[i].backing, claims[i].first,
+                         claims[i].last)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* The range of a raw window on its backing disk, for the claim rules. */
+static int window_range(const struct devfs_entry *dev, block_device_t **backing,
+                        uint64_t *first, uint64_t *last)
+{
+    struct raw_window *w = 0;
+    int i;
+
+    if (dev->ops == &disk0_ops) {
+        if (!disk0.present) {
+            return -ENXIO;
+        }
+        *backing = disk0.whole;
+        *first = 0;
+        *last = disk0.window_sectors - 1;
+        return 0;
+    }
+    if (dev->ops == &bootpart_ops) {
+        w = &bootpart;
+    } else if (dev->ops == &grubcore_ops) {
+        w = &grubcore;
+    } else {
+        for (i = 0; i < 4; i++) {
+            if (dev->ops == part_ops[i]) {
+                w = &part_win[i];
+            }
+        }
+    }
+    if (!w || !w->present) {
+        return -ENXIO;
+    }
+    *backing = w->part.backing;
+    *first = w->part.start_lba;
+    *last = w->part.start_lba + w->part.device.sector_count - 1;
+    return 0;
+}
+
+int devfs_window_of(const char *path, block_device_t **view,
+                    block_device_t **backing, uint64_t *first, uint64_t *count)
+{
+    const struct devfs_entry *dev;
+    struct raw_window *w = 0;
+    int i;
+
+    if (path[0] != '/' || path[1] != 'd' || path[2] != 'e' || path[3] != 'v' ||
+        path[4] != '/') {
+        return -EINVAL;
+    }
+    dev = devfs_find(path + 5);
+    if (!dev) {
+        return -ENOENT;
+    }
+    if (dev->ops == &bootpart_ops) {
+        w = &bootpart;
+    } else {
+        for (i = 0; i < 4; i++) {
+            if (dev->ops == part_ops[i]) {
+                w = &part_win[i];
+            }
+        }
+    }
+    if (!w) {
+        return -EINVAL; /* not a partition window */
+    }
+    if (!w->present) {
+        return -ENXIO;
+    }
+    *view = &w->part.device;
+    *backing = w->part.backing;
+    *first = w->part.start_lba;
+    *count = w->part.device.sector_count;
+    return 0;
+}
+
 /**
  * Open a /dev leaf by name and return its descriptor.
  *
@@ -827,6 +980,16 @@ int devfs_open(const char *name, int flags)
         (dev->ops == &disk0_ops || dev->ops == &bootpart_ops || dev->ops == &grubcore_ops)) {
         return -EBUSY;
     }
+    if ((flags & 3) != 0 &&
+        (dev->ops == &disk0_ops || dev->ops == &bootpart_ops || dev->ops == &grubcore_ops)) {
+        block_device_t *backing;
+        uint64_t first, last;
+
+        /* A mounted volume's sectors are nobody else's to write. */
+        if (window_range(dev, &backing, &first, &last) == 0 && claimed(backing, first, last)) {
+            return -EBUSY;
+        }
+    }
 
     fd = fd_alloc(&current_proc->fds);
     if (fd < 0) {
@@ -868,6 +1031,7 @@ int devfs_open(const char *name, int flags)
     if ((e->flags & FD_FLAG_WRITE) &&
         (dev->ops == &disk0_ops || dev->ops == &bootpart_ops || dev->ops == &grubcore_ops)) {
         raw_writer_held = 1;
+        window_range(dev, &raw_writer_backing, &raw_writer_first, &raw_writer_last);
     }
 
     return fd;

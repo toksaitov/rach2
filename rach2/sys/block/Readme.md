@@ -76,7 +76,7 @@ The command and flush counters cover attempts issued since boot. `/proc/disk` re
 
 ## Disk information
 
-`/proc/disk` is always a resolvable read-only procfs file. Before `diskinfo_probe` it reports `state not-asked`, the driver name recorded by any earlier probe, and the compiled driver policy. A requested probe reports `no-device` when no disk answers.
+`/proc/disk` is always a resolvable read-only procfs file. Before `diskinfo_probe` it reports `state not-asked`, the driver name recorded by any earlier probe, the compiled driver policy, and the buffer cache's three counters (`cache-hits`, `cache-fills`, `cache-waits`: reads served from a buffer, reads that filled one, and waits for a buffer another process held), which are printed whatever the disk's state because a mount can be on any device the cache reads. A requested probe reports `no-device` when no disk answers.
 
 For a present disk, `diskinfo_probe` adopts `block0`, reads sector zero, and publishes `/dev/disk0`. The report includes the driver, AHCI port, mount state, sanitized ATA model, serial and firmware strings, sector and window sizes, MBR signature and disk id, four partition entries, and the live raw-call, command, and flush counters. Opening `/proc/disk` generates a snapshot and issues no disk command.
 

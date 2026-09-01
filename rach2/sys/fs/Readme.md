@@ -26,9 +26,9 @@ A write that cannot grow the file separates its two reasons. No free extent larg
 
 ## Paths and directories
 
-The syscall layer converts every pathname to an absolute canonical form before it selects KRFFS or a synthetic namespace. It removes repeated slashes, `.` components, and lexical `..` components; `..` at the root remains at the root. This prevents an alternate spelling such as `/x/../proc` from bypassing the synthetic namespace.
+Every path-taking syscall resolves through the mount table's resolver (`vfs.h`). The walk takes one component at a time: a lookup of one name in one directory on one mount, after the caller's search permission on that directory has been checked once, in the common layer, for every file system. `..` is physical: at a mount root it continues at the parent's covered directory, at the root of the root mount it stays, and anywhere else it is a lookup of `..`; a path that names a missing or unsearchable directory before its `..` fails, as it does on Linux. A mount point is a node, not a name, so a spelling such as `/x/../proc` reaches `/proc` through `/x` if `/x` is a searchable directory and fails otherwise; neither answer bypasses anything. `/dev` and `/proc` are the one exception to component lookup: their types take the rest of the path in one call, because their namespaces are flat tables.
 
-Each process starts with `cwd` set to `/` and inherits it across `fork`. Relative paths resolve against that string. `openat` and the other implemented `*at` calls accept `AT_FDCWD`, an absolute path, or a real directory descriptor. A directory descriptor is resolved back to its current absolute name before use; it is not a capability that bypasses ancestor permissions.
+Each process starts with `cwd` set to `/` and inherits it across `fork`. Relative paths resolve against that string; a working directory inside a mount placed by `mount(2)` also holds that mount, so it cannot be unmounted from under it. `openat` and the other implemented `*at` calls accept `AT_FDCWD`, an absolute path, or a real directory descriptor. A directory descriptor is resolved back to its current absolute name before use; it is not a capability that bypasses ancestor permissions.
 
 Path resolution checks execute permission on every directory entered. Ordinary calls use effective IDs. `access` and `faccessat` use real IDs for both the prefixes and the target. The target's own read, write, or execute permission is checked separately by the operation that needs it.
 
@@ -39,6 +39,8 @@ KRFFS has no hard links or symlink nodes. `link` and `linkat` validate their arg
 ## Descriptor state and lifetime
 
 Each process has 16 descriptor slots. The global open-file-description pool has 256 entries, enough for 16 processes with 16 distinct descriptions each. An open-file description contains the shared 32-bit file offset, a separate 64-bit offset for raw disk windows, the `O_APPEND` and `O_NONBLOCK` status flags, and a reference count.
+
+A description on a mounted file system also holds its mount, its node, and the file system's per-open handle; the file system's `open` runs once per successful `open(2)` and its `release` once at the last close, and the record written at unmount says both counts. `read`, `write`, `lseek` and `ftruncate` hold the description for the length of the operation, so two processes sharing one description cannot both read the same offset while one sleeps in a disk request.
 
 `dup`, `dup2`, `dup3`, `F_DUPFD`, `F_DUPFD_CLOEXEC`, and `fork` share the open-file description. A seek, append setting, nonblocking setting, or read through one duplicate is visible through the others. `FD_CLOEXEC` is per descriptor. Ordinary duplication clears it on the new descriptor; `dup3(O_CLOEXEC)` and `F_DUPFD_CLOEXEC` set it. A successful `execve` closes marked descriptors.
 
@@ -73,6 +75,18 @@ The window starts at `0xD0000000`. Its span ends at the lowest device-memory BAR
 A disk mount sets the root node's dirty bit and writes it through before it repairs any orphan. It then reclaims all nameless reserved nodes, whether or not the previous dirty bit was set. Clean shutdown first flushes all dirty data, then clears the bit and flushes again. `sync` alone does not clear it. The root dirty bit shares the stored position of setuid, so permission and mode paths exclude the root by identity.
 
 `krffs/mkdisk.sh` limits a generated disk partition to the 512 MiB window cap. The actual kernel limit may be smaller when a device BAR shortens the window. The host KRFFS tools also accept standalone regions up to 4095 MiB; that larger host limit does not make such a region mountable through the kernel window.
+
+## mount and umount2
+
+The mount table (`vfs.h`) holds eight entries. Entry zero is the root above; entries one and two are `/dev` and `/proc`. The three are permanent: `umount2` on any of them answers `EBUSY`. The rest are placed by `mount(2)` and removed by `umount2(2)`, both root's; an unprivileged caller gets `EPERM`.
+
+`mount(source, target, type, flags, data)`: `type` names a type in the table, which holds `vfat` in this milestone, read-only (`fat32.h`); a mount without `MS_RDONLY` answers `EROFS`, which is what BusyBox retries read-only. `source` must be a partition window under `/dev` (`/dev/disk0p1` to `p4`, or `/dev/bootpart`); anything else is `EINVAL`. `target` must be an existing directory on a mount that can host one, not `/`, not on `/dev` or `/proc` (`EINVAL`), not already a mount point (`EBUSY`), with a path of at most 63 bytes (`ENAMETOOLONG`). The order of work is: resolve and hold the target, check its path, claim the source's sectors, take a table slot as `mounting`, run the constructor, publish. Every failure after the first step releases what the steps before it took. `MS_RDONLY`, `MS_NOSUID` and `MS_NOEXEC` are enforced (`execve` answers `EACCES` on a `noexec` mount and ignores the set-id bits on a `nosuid` one); `MS_NODEV`, the atime flags and `MS_SILENT` are recorded; `MS_REMOUNT`, `MS_BIND`, `MS_MOVE` and any other flag answer `EINVAL`. `data` is the type's option string; `vfat` takes `umask=`, `uid=`, `gid=` and `ro`, and an option it does not know answers `EINVAL`.
+
+`umount2(target, flags)`: `flags` must be zero (`MNT_FORCE`, `MNT_DETACH` and `UMOUNT_NOFOLLOW` are `EINVAL`), and `target` must be a mount point (`EINVAL`). The mount goes to `unmounting`, which refuses new descriptions, working directories and operations with `EBUSY`; the operations in progress drain; then the mount is busy (`EBUSY`) while any open-file description, working directory or child mount refers to it, in any process. After that the file system syncs, the buffer cache writes and drops the device's buffers, the type's `unmount` runs, and the covered directory and the claim are released. The record `vfs: unmounted TARGET: N opens, N releases` is written to the kernel log.
+
+A claim is a sector range on the backing disk, compared as a range and never as a device pointer, because `/dev/bootpart` and a partition node can describe one range. While a range is claimed, a second mount overlapping it and a write-capable open of a raw window over it answer `EBUSY`; while such a descriptor is open, a mount on the range answers `EBUSY`. The claim table sits beside the raw windows' single-writer rule in `devfs.c`.
+
+A directory that is a mount point answers `EBUSY` to `unlink`, `rmdir` and `rename` while the mount exists, and `mkdir` of a name a mount stands at is `EEXIST`. `rename` across two mounts is `EXDEV`. `/proc/mounts` lists the root, `/dev`, `/proc` and then every mount placed, one line each in the six-field `getmntent` form with the flags as words; `/proc/filesystems` lists `nodev devfs`, `nodev proc` and every type `mount(2)` accepts. KRFFS is not listed there, because the root is not mounted through `mount(2)`.
 
 ## Tests
 
