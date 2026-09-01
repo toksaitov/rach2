@@ -6,8 +6,8 @@ Phase 1: arrival and the shared code
 - [x] one newfs_exfat volume read by the first form of mkexfatfixture --check and recorded in notes.md
 
 Phase 2: the fixture and the reader
-- [ ] mkexfatfixture.c in full with --check and its self-test
-- [ ] fsck_exfat clean on the well-formed volumes; four builder mutations
+- [x] mkexfatfixture.c in full with --check and its self-test
+- [x] fsck_exfat clean on the well-formed volumes; four builder mutations
 
 Phase 3: the reader in the kernel, and the gate
 - [ ] exfat.c for reading; the exfat type; exfat_hosttest.c's read rows

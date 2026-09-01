@@ -101,6 +101,34 @@ the name entry, type c1, flags 00, `hello.txt` in UTF-16. Every file the
 host wrote is contiguous with `NoFatChain` set; the directory `Sub Dir`
 too. Nothing in the volume is dirty after the detach.
 
+## Phase 2 record
+
+`mkexfatfixture` builds the well-formed volume and thirty variants;
+`exfatcheck_hosttest` proves the reader on every one. `fsck_exfat` calls
+the well-formed volume and its four readable variants clean (the 4 KiB
+logical sector cannot be attached as a 512-byte device node, so that one
+is proved by the reader alone). What it found on the way:
+
+* The bitmap and the up-case table are chained through the FAT: their
+  entries carry no `NoFatChain`, so the FAT is where their chains live,
+  and `fsck_exfat` refuses a volume whose FAT has none. The builder
+  chains them and the reader follows the FAT for them, as `fsck_exfat`
+  does.
+* A stream extension's `AllocationPossible` shall be 1, the
+  specification says (7.6.2), and `fsck_exfat` reports "no stream
+  allocation" for a stream with it clear; the plan's decision to clear it
+  on a stream with no clusters is corrected here, before the writer:
+  every stream this driver writes has it set, with `FirstCluster` 0 for
+  no clusters, and the reader refuses a stream without it.
+* `newfs_exfat` writes every file contiguous with `NoFatChain`; the
+  builder's `chained.bin` is the FAT-chained case no host volume showed.
+
+Four builder mutations, each caught by the well-formed row through
+mutate38p2.sh and mutate38p2b.sh: the set checksum over its own bytes,
+the bitmap from cluster 0, the up-case checksum over the expanded
+mappings, the name hash over the name as written. The builder's sums are
+separate functions from the reader's for that reason.
+
 ## Open items
 
 (none)
