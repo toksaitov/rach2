@@ -27,6 +27,7 @@ extern int access(const char *path, int mode);
 extern void exit(int status);
 extern void *fopen(const char *path, const char *mode);
 extern unsigned long fread(void *buf, unsigned long size, unsigned long n, void *f);
+extern unsigned long fwrite(const void *buf, unsigned long size, unsigned long n, void *f);
 extern int fclose(void *f);
 
 #define FIXDIR    "/tmp/rach2_verify"
@@ -89,13 +90,21 @@ static int img_read(block_device_t *d, uint64_t lba, uint32_t count, void *buf)
     return 0;
 }
 
+/* Writes land in the image. `stop_after` is the interruption matrix's
+   crash: the writes after that many fail without touching the image, which
+   leaves it exactly as a machine stopped after the Nth write would. */
+static int writes_made;
+static int stop_after = -1;
+
 static int img_write(block_device_t *d, uint64_t lba, uint32_t count, const void *buf)
 {
     (void)d;
-    (void)lba;
-    (void)count;
-    (void)buf;
-    return -5; /* the driver must never write */
+    if (stop_after >= 0 && writes_made >= stop_after) {
+        return -5;
+    }
+    writes_made++;
+    __builtin_memcpy(image + lba * 512, buf, count * 512);
+    return 0;
 }
 
 static block_device_t dev = {512, 8192u, BLOCK_FAULT_SAFE, 0, img_read, img_write, 0, 0};
@@ -129,17 +138,22 @@ static int streq(const char *a, const char *b)
     return *a == *b;
 }
 
+static int builder_built;
+
 /** Build the named fixture and load it into the image. */
 static void load(const char *opt)
 {
     char cmd[256];
     void *f;
 
-    /* Built on every run, so an edited builder is the one that runs. */
-    snprintf(cmd, sizeof(cmd), "cc -O2 -o %s/mkfatfixture tests/host/mkfatfixture.c", FIXDIR);
-    if (system(cmd) != 0) {
-        printf("fat32_hosttest: cannot build the fixture builder\n");
-        exit(1);
+    /* Built once per run, so an edited builder is the one that runs. */
+    if (!builder_built) {
+        snprintf(cmd, sizeof(cmd), "cc -O2 -o %s/mkfatfixture tests/host/mkfatfixture.c", FIXDIR);
+        if (system(cmd) != 0) {
+            printf("fat32_hosttest: cannot build the fixture builder\n");
+            exit(1);
+        }
+        builder_built = 1;
     }
     snprintf(cmd, sizeof(cmd), "%s/mkfatfixture %s/fat32_case.img %s", FIXDIR, FIXDIR, opt);
     if (system(cmd) != 0) {
@@ -675,7 +689,566 @@ static void malformed_rows(void)
         }
         check(rc1 == 0 && rc2 == -EINVAL, "an unknown option is EINVAL");
     }
-    check(vfs_vfat_type.mount(&mnt, &dev, 0, "") == -EROFS, "a writable mount is EROFS");
+    check(vfs_vfat_type.mount(&mnt, &dev, 0, "") == 0, "a writable mount is accepted");
+    unmount_image();
+}
+
+/* ---- the write half ---- */
+
+extern int system(const char *cmd);
+extern void *popen(const char *cmd, const char *mode);
+extern int pclose(void *f);
+extern char *fgets(char *s, int n, void *f);
+extern char *strstr(const char *hay, const char *needle);
+extern int strncmp(const char *a, const char *b, unsigned long n);
+extern unsigned long strlen(const char *s);
+
+static int mount_rw(const char *options)
+{
+    __builtin_memset(&mnt, 0, sizeof(mnt));
+    mnt.type = &vfs_vfat_type;
+    mnt.dev = &dev;
+    mnt.flags = 0;
+    return vfs_vfat_type.mount(&mnt, &dev, 0, options);
+}
+
+/* The image to a file and the check over it; its output in `out`. */
+static int run_check(char *out, unsigned long cap)
+{
+    char cmd[300], line[300];
+    void *f;
+    unsigned long n = 0;
+    int rc;
+
+    f = fopen(FIXDIR "/fat32_write.img", "wb");
+    if (!f || fwrite(image, 1, IMG_BYTES, f) != IMG_BYTES) {
+        printf("fat32_hosttest: cannot dump the image\n");
+        exit(1);
+    }
+    fclose(f);
+    snprintf(cmd, sizeof(cmd), "%s/mkfatfixture --check %s/fat32_write.img", FIXDIR, FIXDIR);
+    f = popen(cmd, "r");
+    if (!f) {
+        printf("fat32_hosttest: cannot run the check\n");
+        exit(1);
+    }
+    out[0] = '\0';
+    while (fgets(line, sizeof(line), f) && n + strlen(line) < cap - 1) {
+        __builtin_memcpy(out + n, line, strlen(line) + 1);
+        n += strlen(line);
+    }
+    rc = pclose(f);
+    return rc == -1 ? -1 : (rc >> 8) & 0xff;
+}
+
+/* The findings the driver's own order may leave behind a crash, and the
+   dirty flag of a mounted volume; anything else is a fault. */
+static int findings_allowed(const char *out)
+{
+    const char *p = out;
+
+    while (*p) {
+        const char *nl = strstr(p, "\n");
+        unsigned long len = nl ? (unsigned long)(nl - p) : strlen(p);
+
+        if (strncmp(p, "check: OK: ", 11) != 0 && strncmp(p, "check: FAIL: ", 13) != 0 &&
+            strncmp(p, "check: dirty: ", 14) != 0 && strncmp(p, "check: lost: ", 13) != 0 &&
+            strncmp(p, "check: surplus: ", 16) != 0 &&
+            strncmp(p, "check: orphan long-name", 23) != 0 &&
+            strncmp(p, "check: mirrors differ", 21) != 0 &&
+            strncmp(p, "check: fsinfo: ", 15) != 0) {
+            return 0;
+        }
+        p += len + (nl ? 1 : 0);
+    }
+    return 1;
+}
+
+static char check_out[16384];
+
+/* The volume is consistent: no finding at all (`mounted` allows the dirty
+   flag's two lines). */
+static void check_consistent(const char *what, int mounted)
+{
+    int rc = run_check(check_out, sizeof(check_out));
+    int ok;
+
+    if (mounted) {
+        const char *p = check_out;
+
+        ok = 1;
+        while (*p) {
+            const char *nl = strstr(p, "\n");
+
+            /* A mounted volume is dirty by design, and its FSInfo lags
+               until a sync or the unmount writes it. */
+            if (strncmp(p, "check: OK: ", 11) != 0 && strncmp(p, "check: FAIL: ", 13) != 0 &&
+                strncmp(p, "check: dirty: ", 14) != 0 && strncmp(p, "check: fsinfo: ", 15) != 0) {
+                ok = 0;
+            }
+            p += nl ? (unsigned long)(nl - p) + 1 : strlen(p);
+        }
+    } else {
+        ok = rc == 0;
+    }
+    check(ok, what);
+    if (!ok) {
+        printf("fat32_hosttest: the check said:\n%s", check_out);
+    }
+}
+
+static void *make_file(void *dir, const char *name)
+{
+    void *n = 0;
+
+    if (OPS->create(&mnt, dir, name, 0644, &n) != 0) {
+        return 0;
+    }
+    return n;
+}
+
+static int write_at(void *node, const void *buf, uint32_t n, uint64_t off)
+{
+    void *h;
+    int32_t got;
+
+    if (OPS->open(&mnt, node, 0, &h) != 0) {
+        return -1;
+    }
+    got = OPS->write(&mnt, h, buf, n, off);
+    OPS->release(&mnt, h);
+    return got == (int32_t)n ? 0 : (got < 0 ? got : -1);
+}
+
+static unsigned char pattern[4096];
+static unsigned char back[8192];
+
+static void fill_pattern(void)
+{
+    unsigned i;
+
+    for (i = 0; i < sizeof(pattern); i++) {
+        pattern[i] = (unsigned char)((i * 13 + 7) & 0xFF);
+    }
+}
+
+/* The sequences of the matrix: each stands alone on a fresh volume and
+   returns the first error. */
+static int seq_create_write(void)
+{
+    void *n = make_file(mnt.root, "W1.TXT");
+    int rc;
+
+    if (!n) {
+        return -1;
+    }
+    rc = write_at(n, "hello", 5, 0);
+    OPS->put(&mnt, n);
+    return rc;
+}
+
+static int seq_extend(void)
+{
+    void *n = make_file(mnt.root, "W2.TXT");
+    int rc;
+
+    if (!n) {
+        return -1;
+    }
+    rc = write_at(n, pattern, 600, 0);
+    if (rc == 0) {
+        rc = write_at(n, pattern + 600, 600, 600);
+    }
+    OPS->put(&mnt, n);
+    return rc;
+}
+
+static int seq_past_end(void)
+{
+    void *n = make_file(mnt.root, "W3.TXT");
+    int rc;
+
+    if (!n) {
+        return -1;
+    }
+    rc = write_at(n, pattern, 10, 0);
+    if (rc == 0) {
+        rc = write_at(n, pattern + 10, 10, 2000);
+    }
+    OPS->put(&mnt, n);
+    return rc;
+}
+
+static int seq_truncate(void)
+{
+    void *n = make_file(mnt.root, "W4.TXT");
+    void *h;
+    int rc;
+
+    if (!n) {
+        return -1;
+    }
+    rc = write_at(n, pattern, 2010, 0);
+    if (rc == 0 && OPS->open(&mnt, n, 0, &h) == 0) {
+        rc = OPS->truncate(&mnt, h, 700);
+        if (rc == 0) {
+            rc = OPS->truncate(&mnt, h, 0);
+        }
+        if (rc == 0) {
+            rc = OPS->truncate(&mnt, h, 1500);
+        }
+        OPS->release(&mnt, h);
+    }
+    OPS->put(&mnt, n);
+    return rc;
+}
+
+static int seq_unlink(void)
+{
+    void *n = make_file(mnt.root, "W5.TXT");
+    int rc;
+
+    if (!n) {
+        return -1;
+    }
+    rc = write_at(n, pattern, 1000, 0);
+    OPS->put(&mnt, n);
+    if (rc == 0) {
+        rc = OPS->unlink(&mnt, mnt.root, "W5.TXT");
+    }
+    return rc;
+}
+
+static int seq_mkdir_rmdir(void)
+{
+    void *d;
+    int rc = OPS->mkdir(&mnt, mnt.root, "D1", 0755);
+
+    if (rc != 0) {
+        return rc;
+    }
+    if (OPS->lookup(&mnt, mnt.root, "D1", &d) != 0) {
+        return -1;
+    }
+    rc = OPS->mkdir(&mnt, d, "D2", 0755);
+    if (rc == 0) {
+        rc = OPS->rmdir(&mnt, d, "D2");
+    }
+    OPS->put(&mnt, d);
+    if (rc == 0) {
+        rc = OPS->rmdir(&mnt, mnt.root, "D1");
+    }
+    return rc;
+}
+
+static int seq_rename(void)
+{
+    void *n = make_file(mnt.root, "R1.TXT");
+    void *boot;
+    int rc;
+
+    if (!n) {
+        return -1;
+    }
+    rc = write_at(n, pattern, 700, 0);
+    OPS->put(&mnt, n);
+    if (rc == 0) {
+        rc = OPS->rename(&mnt, mnt.root, "R1.TXT", mnt.root, "R2.TXT");
+    }
+    if (rc == 0 && OPS->lookup(&mnt, mnt.root, "BOOT", &boot) == 0) {
+        rc = OPS->rename(&mnt, mnt.root, "R2.TXT", boot, "R3.TXT");
+        if (rc == 0) {
+            rc = OPS->mkdir(&mnt, mnt.root, "RD", 0755);
+        }
+        if (rc == 0) {
+            rc = OPS->rename(&mnt, mnt.root, "RD", boot, "RD2");
+        }
+        OPS->put(&mnt, boot);
+    }
+    return rc;
+}
+
+static int seq_rename_over(void)
+{
+    void *a = make_file(mnt.root, "O1.TXT");
+    void *b = a ? make_file(mnt.root, "O2.TXT") : 0;
+    int rc = a && b ? 0 : -1;
+
+    if (rc == 0) {
+        rc = write_at(a, "one", 3, 0);
+    }
+    if (rc == 0) {
+        rc = write_at(b, "two", 3, 0);
+    }
+    if (a) {
+        OPS->put(&mnt, a);
+    }
+    if (b) {
+        OPS->put(&mnt, b);
+    }
+    if (rc == 0) {
+        rc = OPS->rename(&mnt, mnt.root, "O1.TXT", mnt.root, "O2.TXT");
+    }
+    return rc;
+}
+
+struct sequence {
+    const char *name;
+    int (*run)(void);
+};
+
+static const struct sequence sequences[] = {
+    {"create and write", seq_create_write},
+    {"extend across a cluster", seq_extend},
+    {"write past the end", seq_past_end},
+    {"truncate", seq_truncate},
+    {"unlink", seq_unlink},
+    {"mkdir and rmdir", seq_mkdir_rmdir},
+    {"rename", seq_rename},
+    {"rename over", seq_rename_over},
+};
+
+static void write_rows(void)
+{
+    struct vfs_stat st;
+    struct vfs_statfs sf, sf2;
+    void *n, *h, *d, *up, *boot;
+    int err, i, ok;
+    static unsigned char big[512 * 1024];
+
+    fill_pattern();
+    load("--fsinfo");
+    check(mount_rw("") == 0, "a writable mount of the FSInfo volume");
+    check(image[65] == 0, "the boot-sector dirty flag is clear before the first write");
+
+    /* Each sequence in turn, the volume consistent after every one. */
+    for (i = 0; i < (int)(sizeof(sequences) / sizeof(sequences[0])); i++) {
+        char what[120];
+
+        snprintf(what, sizeof(what), "the sequence '%s' runs", sequences[i].name);
+        check(sequences[i].run() == 0, what);
+        snprintf(what, sizeof(what), "the volume is consistent after '%s'", sequences[i].name);
+        check_consistent(what, 1);
+    }
+    check((image[65] & 1) == 1, "the boot-sector dirty flag is set by the first write");
+
+    /* What the sequences left. */
+    n = walk("/W1.TXT", &err);
+    check(n && read_all(n, back, sizeof(back)) == 5 && __builtin_memcmp(back, "hello", 5) == 0,
+          "the created file reads back");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    n = walk("/W2.TXT", &err);
+    check(n && read_all(n, back, sizeof(back)) == 1200 &&
+              __builtin_memcmp(back, pattern, 1200) == 0,
+          "the file extended across a cluster reads back");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    check(walk("/R1.TXT", &err) == 0 && walk("/R2.TXT", &err) == 0,
+          "the renamed file is gone from its old names");
+    n = walk("/W3.TXT", &err);
+    ok = n && read_all(n, back, sizeof(back)) == 2010 && __builtin_memcmp(back, pattern, 10) == 0 &&
+         __builtin_memcmp(back + 2000, pattern + 10, 10) == 0;
+    for (i = 10; ok && i < 2000; i++) {
+        if (back[i] != 0) {
+            ok = 0;
+        }
+    }
+    check(ok, "a write past the end reads zeros between");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    n = walk("/W4.TXT", &err);
+    ok = n && OPS->getattr(&mnt, n, &st) == 0 && st.size == 1500 &&
+         read_all(n, back, sizeof(back)) == 1500;
+    for (i = 0; ok && i < 1500; i++) {
+        if (back[i] != 0) {
+            ok = 0;
+        }
+    }
+    check(ok, "a file truncated to zero and grown reads zeros");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    check(walk("/W5.TXT", &err) == 0 && err == -ENOENT, "the unlinked file is gone");
+    check(walk("/D1", &err) == 0 && err == -ENOENT, "the removed directory is gone");
+    n = walk("/BOOT/R3.TXT", &err);
+    check(n && read_all(n, back, sizeof(back)) == 700 && __builtin_memcmp(back, pattern, 700) == 0,
+          "the file renamed across directories reads back");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    d = walk("/BOOT/RD2", &err);
+    boot = walk("/BOOT", &err);
+    check(d && boot && OPS->lookup(&mnt, d, "..", &up) == 0 && up == boot,
+          "the moved directory's .. is its new parent");
+    if (d && boot) {
+        OPS->put(&mnt, up);
+    }
+    if (d) {
+        OPS->put(&mnt, d);
+    }
+    if (boot) {
+        OPS->put(&mnt, boot);
+    }
+    n = walk("/O2.TXT", &err);
+    check(n && read_all(n, back, sizeof(back)) == 3 && __builtin_memcmp(back, "one", 3) == 0,
+          "a rename over a file replaces it");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    check(walk("/O1.TXT", &err) == 0, "and the source name is gone");
+
+    /* The open-file cases. */
+    n = make_file(mnt.root, "OPEN.TXT");
+    check(n && write_at(n, "open", 4, 0) == 0 && OPS->open(&mnt, n, 0, &h) == 0, "an open file");
+    check(OPS->statfs(&mnt, &sf) == 0, "the free count before an unlink");
+    check(OPS->unlink(&mnt, mnt.root, "OPEN.TXT") == 0, "unlink of the open file");
+    check(walk("/OPEN.TXT", &err) == 0, "which no lookup finds");
+    check(OPS->read(&mnt, h, back, 4, 0) == 4 && __builtin_memcmp(back, "open", 4) == 0,
+          "while the description still reads it");
+    check(OPS->write(&mnt, h, "more", 4, 4) == 4 && OPS->read(&mnt, h, back, 8, 0) == 8,
+          "and writes it");
+    check(OPS->statfs(&mnt, &sf2) == 0 && sf2.bfree == sf.bfree,
+          "its clusters stay until the last close");
+    OPS->release(&mnt, h);
+    OPS->put(&mnt, n);
+    check(OPS->statfs(&mnt, &sf2) == 0 && sf2.bfree == sf.bfree + 1, "and go at the last close");
+    check_consistent("the volume is consistent after the unlinked file's last close", 1);
+
+    n = walk("/O2.TXT", &err);
+    check(n && OPS->open(&mnt, n, 0, &h) == 0, "a description on a file about to be replaced");
+    d = make_file(mnt.root, "O3.TXT");
+    check(d && write_at(d, "three", 5, 0) == 0, "the replacing file");
+    if (d) {
+        OPS->put(&mnt, d);
+    }
+    check(OPS->rename(&mnt, mnt.root, "O3.TXT", mnt.root, "O2.TXT") == 0,
+          "rename over the open file");
+    check(OPS->read(&mnt, h, back, 3, 0) == 3 && __builtin_memcmp(back, "one", 3) == 0,
+          "the old description keeps the file it opened");
+    OPS->release(&mnt, h);
+    OPS->put(&mnt, n);
+    n = walk("/O2.TXT", &err);
+    check(n && read_all(n, back, sizeof(back)) == 5 && __builtin_memcmp(back, "three", 5) == 0,
+          "and the name reads the new file");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    check_consistent("the volume is consistent after the replacing rename", 1);
+
+    check(OPS->mkdir(&mnt, mnt.root, "HELD", 0755) == 0, "a directory to hold");
+    d = walk("/HELD", &err);
+    check(d && OPS->rmdir(&mnt, mnt.root, "HELD") == -EBUSY, "rmdir of a held directory is EBUSY");
+    if (d) {
+        OPS->put(&mnt, d);
+    }
+    check(OPS->rmdir(&mnt, mnt.root, "HELD") == 0, "and succeeds once it is put");
+    check(OPS->rmdir(&mnt, mnt.root, "BOOT") == -ENOTEMPTY,
+          "rmdir of a full directory is ENOTEMPTY");
+    check(OPS->create(&mnt, mnt.root, "bad name.txt", 0644, &n) == -EINVAL &&
+              OPS->create(&mnt, mnt.root, "Mixed.txt", 0644, &n) == -EINVAL &&
+              OPS->create(&mnt, mnt.root, "toolongname.txt", 0644, &n) == -EINVAL,
+          "a name that is not a short name is EINVAL in this phase");
+
+    /* ENOSPC is decided before anything is written. */
+    n = make_file(mnt.root, "BIG.BIN");
+    check(OPS->statfs(&mnt, &sf) == 0, "the free count before a full write");
+    check(n && write_at(n, big, sizeof(big), 0) == 0, "half a megabyte is written");
+    check(n && write_at(n, big, sizeof(big), 8 * 1024 * 1024) == -ENOSPC,
+          "a write past the volume's room is ENOSPC");
+    ok = n && OPS->getattr(&mnt, n, &st) == 0 && st.size == sizeof(big);
+    check(ok, "and the file keeps the size it had");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    check(OPS->statfs(&mnt, &sf2) == 0 && sf2.bfree + sizeof(big) / 512 == sf.bfree,
+          "the free count is what the successful write took");
+    check_consistent("the volume is consistent after ENOSPC", 1);
+
+    /* The clean unmount clears the flags and writes FSInfo, and mtools
+       reads what was written. */
+    check(OPS->prepare_unmount(&mnt) == 0, "prepare_unmount");
+    check((image[65] & 1) == 0, "the boot-sector dirty flag is clear after it");
+    unmount_image();
+    check_consistent("the volume is consistent and clean after the unmount", 0);
+    if (system("which mcopy >/dev/null 2>&1") == 0) {
+        char cmd[300];
+        void *f;
+        unsigned long got;
+
+        snprintf(cmd, sizeof(cmd),
+                 "mcopy -i %s/fat32_write.img ::/BOOT/R3.TXT %s/fat32_mtools.out >/dev/null 2>&1",
+                 FIXDIR, FIXDIR);
+        check(system(cmd) == 0, "mtools copies a file this driver wrote");
+        f = fopen(FIXDIR "/fat32_mtools.out", "rb");
+        got = f ? fread(back, 1, sizeof(back), f) : 0;
+        if (f) {
+            fclose(f);
+        }
+        check(got == 700 && __builtin_memcmp(back, pattern, 700) == 0,
+              "with the bytes this driver wrote");
+        snprintf(cmd, sizeof(cmd), "mdir -i %s/fat32_write.img ::/BOOT 2>/dev/null | grep -q RD2",
+                 FIXDIR);
+        check(system(cmd) == 0, "and lists the directory this driver moved");
+    } else {
+        printf("fat32_hosttest: mtools absent, its comparison skipped\n");
+    }
+}
+
+/* The interruption matrix: every sequence stopped after each of its
+   writes, the image judged by the walk. */
+static void matrix_rows(void)
+{
+    int i, k, total = 0;
+
+    fill_pattern();
+    for (i = 0; i < (int)(sizeof(sequences) / sizeof(sequences[0])); i++) {
+        int n;
+
+        load("--fsinfo");
+        stop_after = -1;
+        writes_made = 0;
+        if (mount_rw("") != 0) {
+            check(0, "the matrix's volume mounts");
+            return;
+        }
+        sequences[i].run();
+        n = writes_made;
+        OPS->put(&mnt, mnt.root);
+        OPS->unmount(&mnt);
+        for (k = 1; k <= n; k++) {
+            char what[160];
+
+            load("--fsinfo");
+            writes_made = 0;
+            stop_after = k;
+            if (mount_rw("") != 0) {
+                check(0, "the matrix's volume mounts again");
+                stop_after = -1;
+                return;
+            }
+            sequences[i].run();
+            OPS->put(&mnt, mnt.root);
+            OPS->unmount(&mnt);
+            run_check(check_out, sizeof(check_out));
+            /* The buffers the failed writes left dirty are flushed into the
+               image that the next load replaces, so nothing crosses over. */
+            stop_after = -1;
+            bcache_sync(&dev);
+            snprintf(what, sizeof(what),
+                     "'%s' stopped after write %d of %d leaves a consistent volume",
+                     sequences[i].name, k, n);
+            check(findings_allowed(check_out), what);
+            if (!findings_allowed(check_out)) {
+                printf("fat32_hosttest: the check said:\n%s", check_out);
+            }
+            total++;
+        }
+    }
+    printf("fat32_hosttest: %d stops walked\n", total);
 }
 
 static void pool_rows(void)
@@ -732,6 +1305,26 @@ static void pool_rows(void)
     unmount_image();
 }
 
+static int ns_locked;
+
+void vfs_ns_lock(struct vfs_mount *mnt)
+{
+    (void)mnt;
+    ns_locked++;
+}
+
+void vfs_ns_unlock(struct vfs_mount *mnt)
+{
+    (void)mnt;
+    ns_locked--;
+}
+
+void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
+{
+    *seconds = 1583323200; /* 2020-03-04 12:00:00 */
+    *nanoseconds = 0;
+}
+
 void vfs_device_failed(block_device_t *dev, uint64_t lba, int rc)
 {
     (void)dev;
@@ -751,6 +1344,8 @@ int main(void)
     small_and_active_rows();
     malformed_rows();
     pool_rows();
+    write_rows();
+    matrix_rows();
     if (fails == 0) {
         printf("fat32_hosttest: OK\n");
     }

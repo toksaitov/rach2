@@ -804,6 +804,8 @@ int main(int argc, char **argv)
     bpb[16] = 2;
     w16(bpb + 19, TOTAL);
     bpb[21] = 0xF8;
+    w16(bpb + 24, 32); /* a geometry, which mtools requires to be nonzero */
+    w16(bpb + 26, 4);
     fatsz = is("--bpb-fat-oversized") ? 0x40000 : FATSZ;
     w32(bpb + 36, (uint32_t)fatsz);
     root = is("--bpb-root-out") ? clusters + 100 : ROOT;

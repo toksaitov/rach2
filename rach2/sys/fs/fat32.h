@@ -4,15 +4,22 @@
 #include "vfs.h"
 
 /*
- * fat32: the `vfat` type, read-only in this milestone.
+ * fat32: the `vfat` type.
  *
  * The constructor checks the BPB field by field before the mount is
  * published and refuses a volume with a record naming the field; what it
  * accepts is FAT32 as Linux recognises it (a zero 16-bit FAT size, a
  * nonzero 32-bit one, no root entries, FAT version zero), whatever the
- * cluster count. Every write-side operation is NULL, and a mount without
- * `MS_RDONLY` answers EROFS, which is what a write-protected medium answers
- * on Linux.
+ * cluster count.
+ *
+ * Writing: every metadata write goes through the cache synchronously, in
+ * the order fat32.Readme.md gives for each operation, so a crash between
+ * two writes may leak clusters and never cross-links them, and an entry
+ * never names a free cluster. Data is written back. The dirty flag is set
+ * in both places before the first metadata write of a mount and cleared by
+ * a clean unmount; FSInfo is kept at sync and unmount. Every mutation runs
+ * under the mount's namespace lock. Names are short names in this phase: a
+ * name that does not fit 8.3 with each part in one case answers EINVAL.
  *
  * A node is an entry in a fixed per-mount pool of `FAT32_NODES`, freed at its
  * last put; a lookup that finds the pool full answers ENOMEM. A directory's

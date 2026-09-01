@@ -36,7 +36,7 @@ When KRFFS relocates a node, `vfs_repoint` moves every reference to it: descript
 
 ## Locks
 
-The order is fixed and checked: the mount table, then a mount's namespace lock, then a description, then cache buffers in ascending block order. A process holding one may take only what comes after it. The namespace lock is taken by every namespace change on the mount, by the constructor, and by the unmount. The kernel does not preempt inside a syscall, so a second process meets a held lock only while the holder sleeps in a disk request. Every wait for a lock, a busy buffer or a request is uninterruptible: a pending signal would otherwise end the wait at once, and a waiter that retries without sleeping never gives the CPU to the holder. A type's `put` and `release` do not sleep.
+The order is fixed and checked: the mount table, then a mount's namespace lock, then a description, then cache buffers in ascending block order. A process holding one may take only what comes after it. The namespace lock is taken by every namespace change on the mount, by the constructor, and by the unmount; a type that writes takes it itself for `write`, `truncate`, `fsync` and `sync`, so every mutation of a volume runs under one lock. The kernel does not preempt inside a syscall, so a second process meets a held lock only while the holder sleeps in a disk request. Every wait for a lock, a busy buffer or a request is uninterruptible: a pending signal would otherwise end the wait at once, and a waiter that retries without sleeping never gives the CPU to the holder. A type's `put` and `release` do not sleep.
 
 ## mount and umount2
 

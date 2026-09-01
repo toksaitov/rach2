@@ -226,7 +226,7 @@ The kernel currently supports:
 * RTL8139, Intel 82540EM (e1000), and RTL8168GU Ethernet devices.
 * Sound Blaster 16, Intel HDA, and the PC speaker.
 
-It does not implement UEFI, Multiboot2, SMP, threads, swap, dynamic linking, IPv6, VESA graphics, or a writable file system other than KRFFS; FAT32 partitions mount read-only through `mount(2)`. USB is a keyboard and a mouse through xHCI and nothing else: no hubs, no mass storage, no booting from a USB disk. The direct physical-memory limit is 32 MiB.
+It does not implement UEFI, Multiboot2, SMP, threads, swap, dynamic linking, IPv6, or VESA graphics. FAT32 partitions mount through `mount(2)`, read and written. USB is a keyboard and a mouse through xHCI and nothing else: no hubs, no mass storage, no booting from a USB disk. The direct physical-memory limit is 32 MiB.
 
 The ordinary process and descriptor limits are the fixed 16-slot tables described above, and what a program reaches is that size less what is already taken. A fork past the process table returns `EAGAIN`. An open past the sixteen descriptors, of which three are stdio, returns `EMFILE` at the fourteenth. A socket past the pool of sixteen returns `ENOMEM`, which takes two processes to reach because one runs out of descriptors first. A connection past the sixteen TCP control blocks, which a listener and seven connections to this machine fill, is refused with `ECONNREFUSED` rather than left to retransmit. `tests/run default` fills all four and requires the refusal, and for the first three the resource coming back.
 
