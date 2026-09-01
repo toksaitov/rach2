@@ -2684,20 +2684,34 @@ static int fat_check_volume(struct fat_mount *fm)
         stack_resume[depth] = 0;
         depth++;
     }
-    for (c = 2; c < fm->cluster_count + 2; c++) {
-        uint32_t v;
-        uint8_t raw[4];
+    {
+        uint32_t freecount = 0;
 
-        if (walk_bits[c >> 3] & (1u << (c & 7))) {
-            continue;
+        for (c = 2; c < fm->cluster_count + 2; c++) {
+            uint32_t v;
+            uint8_t raw[4];
+
+            if (walk_bits[c >> 3] & (1u << (c & 7))) {
+                continue;
+            }
+            if (fat_read_bytes(fm, fat_offset(fm, fm->active_fat, c), raw, 4) != 0) {
+                w.why = "an unreadable FAT";
+                goto done;
+            }
+            v = le32(raw) & FAT_MASK;
+            if (v == 0) {
+                freecount++;
+            } else if (v != FAT_BAD) {
+                w.lost++;
+            }
         }
-        if (fat_read_bytes(fm, fat_offset(fm, fm->active_fat, c), raw, 4) != 0) {
-            w.why = "an unreadable FAT";
+        /* The count the walk found is the count FSInfo says from now on;
+         * a crash leaves the sector's count where the last sync put it. */
+        fm->free_clusters = freecount;
+        fm->free_known = 1;
+        if (write_fsinfo(fm) != 0) {
+            w.why = "a repair write failed";
             goto done;
-        }
-        v = le32(raw) & FAT_MASK;
-        if (v != 0 && v != FAT_BAD) {
-            w.lost++;
         }
     }
     if (w.lost) {
