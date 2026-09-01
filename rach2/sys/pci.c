@@ -3,6 +3,8 @@
  * address to port 0xCF8, then read or write the data at port 0xCFC.
  */
 
+#include "klog.h"
+#include "lapic.h"
 #include "pci.h"
 #include "kio.h"
 
@@ -463,4 +465,76 @@ bool pci_find_bridge_for_bus(uint8_t bus, pci_device_t *out)
         }
     }
     return false;
+}
+
+/**
+ * Program one message-signalled interrupt on `dev` and enable it.
+ *
+ * The order is the one the PCI specification requires and no other: the
+ * enable bit is cleared first, in case firmware left it set; an MSI-X
+ * capability is disabled, because a device with both enabled is undefined;
+ * the address and the data are written while the mechanism is off; the
+ * count of vectors the device may use is set to one; and the enable bit is
+ * written last. The address is the local APIC's, with the processor's
+ * identity in bits 12 to 19, and the data is the vector.
+ *
+ * A device with no MSI capability is refused by name, and so is a device
+ * whose capability says it needs more than one vector. Returns 0 when the
+ * device will send messages on `vector`, -1 otherwise.
+ */
+int pci_msi_enable(const pci_device_t *dev, uint8_t vector)
+{
+    uint8_t cap = pci_find_capability(dev->bus, dev->device, dev->function, PCI_CAP_ID_MSI);
+    uint8_t msix = pci_find_capability(dev->bus, dev->device, dev->function, PCI_CAP_ID_MSIX);
+    uint16_t control;
+    uint32_t address;
+
+    if (cap == 0) {
+        klog(KLOG_WARN, "pci", "msi: %x:%x.%d has no msi capability", dev->bus, dev->device,
+             dev->function);
+        return -1;
+    }
+    control = pci_read_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2));
+    pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2),
+                       (uint16_t)(control & ~PCI_MSI_ENABLE));
+    if (msix != 0) {
+        uint16_t mxc = pci_read_config16(dev->bus, dev->device, dev->function, (uint8_t)(msix + 2));
+
+        if ((mxc & PCI_MSIX_ENABLE) != 0) {
+            pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(msix + 2),
+                               (uint16_t)(mxc & ~PCI_MSIX_ENABLE));
+        }
+    }
+    address = PCI_MSI_ADDRESS_BASE | (lapic_id() << 12);
+    pci_write_config32(dev->bus, dev->device, dev->function, (uint8_t)(cap + 4), address);
+    if ((control & PCI_MSI_64BIT) != 0) {
+        pci_write_config32(dev->bus, dev->device, dev->function, (uint8_t)(cap + 8), 0);
+        pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 12), vector);
+    } else {
+        pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 8), vector);
+    }
+    /* One vector: bits 4 to 6 of the control word, every other bit as read. */
+    control = (uint16_t)(control & ~PCI_MSI_MULTIPLE_ENABLE);
+    pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2), control);
+    pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2),
+                       (uint16_t)(control | PCI_MSI_ENABLE));
+    klog(KLOG_INFO, "pci", "msi: %x:%x.%d on vector %d", dev->bus, dev->device, dev->function, vector);
+    return 0;
+}
+
+/**
+ * Stop `dev` from sending messages, leaving its address and data as they
+ * are. A device with no MSI capability is left alone.
+ */
+void pci_msi_disable(const pci_device_t *dev)
+{
+    uint8_t cap = pci_find_capability(dev->bus, dev->device, dev->function, PCI_CAP_ID_MSI);
+    uint16_t control;
+
+    if (cap == 0) {
+        return;
+    }
+    control = pci_read_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2));
+    pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2),
+                       (uint16_t)(control & ~PCI_MSI_ENABLE));
 }

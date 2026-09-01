@@ -119,6 +119,22 @@ bool pci_find_device_by_id(uint16_t vendor_id, uint16_t device_id, pci_device_t 
  */
 uint8_t pci_find_capability(uint8_t bus, uint8_t device, uint8_t function, uint8_t cap_id);
 
+/* The MSI capability's control word, and the address a message is written
+ * to: the local APIC's page, with the destination processor in bits 12 to
+ * 19 and the vector in the data. */
+#define PCI_MSI_ENABLE 0x0001u
+#define PCI_MSI_MULTIPLE_ENABLE 0x0070u
+#define PCI_MSI_64BIT 0x0080u
+#define PCI_MSIX_ENABLE 0x8000u
+#define PCI_MSI_ADDRESS_BASE 0xFEE00000u
+
+/** Program one message on `dev` and enable it: 0, or -1 with the reason in
+ * the log. The local APIC must be ready. */
+int pci_msi_enable(const pci_device_t *dev, uint8_t vector);
+
+/** Stop `dev` from sending messages. */
+void pci_msi_disable(const pci_device_t *dev);
+
 /**
  * Find the bridge whose secondary bus is `bus`, filling `out`; true if found.
  *
