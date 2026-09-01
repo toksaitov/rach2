@@ -134,6 +134,9 @@ void msc_detach(int device)
     (void)device;
 }
 
+void usbdisk_step(void)
+{}
+
 void msc_step(uint32_t elapsed_ms)
 {
     (void)elapsed_ms;

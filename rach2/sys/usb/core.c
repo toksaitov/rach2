@@ -24,6 +24,7 @@
 #include "../klog.h"
 #include "hid.h"
 #include "msc.h"
+#include "../block/usbdisk.h"
 #include "xhci.h"
 
 /* The standard requests this kernel sends, and the descriptor types it asks
@@ -996,6 +997,7 @@ void usb_core_step(uint32_t elapsed_ms)
      * command's next stage goes out in the same pass as the answer to the
      * one before it. */
     msc_step(elapsed_ms);
+    usbdisk_step();
 }
 
 void usb_core_reset(void)

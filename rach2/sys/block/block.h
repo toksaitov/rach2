@@ -176,6 +176,28 @@ int block_request(block_device_t *device, int write, uint64_t lba,
                   uint32_t count, void *buffer);
 
 /**
+ * Start a read of at most a page without waiting for it.
+ *
+ * For a caller that cannot sleep: the disk layer reads a stick's partition
+ * table from the pump, where there is no process to put to sleep. The
+ * request is the pool's slot, and `generation` is what the caller asks
+ * after it with. Returns NULL when the pool is exhausted or the device
+ * refused the request.
+ */
+struct block_request *block_request_begin(block_device_t *device, uint64_t lba, uint32_t count,
+                                          uint32_t *generation);
+
+/**
+ * Whether a request begun with `block_request_begin` has ended.
+ *
+ * Returns 0 while it is in flight. Otherwise 1, with `status` the result
+ * and, for a read that succeeded, its sectors copied into `buffer`; the slot
+ * is freed. A request past its deadline is quarantined by the tick and ends
+ * here with `EIO`, and its slot stays the device's until the late completion.
+ */
+int block_request_ended(struct block_request *r, uint32_t generation, void *buffer, int *status);
+
+/**
  * A sleeping device reports one request's end.
  *
  * `generation` is the value the device captured at `submit`. A completion

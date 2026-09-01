@@ -10,9 +10,14 @@
  * slot all go back, so a stick plugged and pulled a hundred times exhausts
  * nothing.
  *
- * The reading happens in a syscall, not in the pump. A transfer to a stick
- * sleeps its caller, and the pump runs in an interrupt; the pump therefore
- * records what happened and the next process into the kernel does the work.
+ * The table is read from the pump, where there is no process to put to
+ * sleep, so it is read the way the pump does everything: one request is
+ * started, and asked after on the passes that follow. Publishing the nodes
+ * and reclaiming a stick touch what a process inside a syscall may be
+ * reading, so those wait for a pass on which no process is inside the
+ * kernel, or for the next syscall entry, whichever comes first. On this one
+ * processor a syscall is not preempted, so a pass that finds no process in
+ * one finds every kernel structure at rest.
  */
 
 #include "usbdisk.h"
@@ -22,7 +27,8 @@
 #include "../fs/vfs.h"
 #include "../klog.h"
 #include "../lib/kerrno.h"
-#include "../lib/kstring.h"
+#include "../lib/kirq.h"
+#include "../proc/process.h"
 #include "../usb/msc.h"
 #include "block.h"
 #include "gpt.h"
@@ -30,10 +36,17 @@
 
 /* What a numbered stick is doing. A number is free in NONE and taken in
  * every other state. */
-#define DISK_NONE    0
-#define DISK_ARRIVED 1 /* up, and its table not read yet */
-#define DISK_LIVE    2 /* published */
-#define DISK_CLOSING 3 /* gone; the holds are being waited out */
+#define DISK_NONE     0
+#define DISK_ARRIVED  1 /* up, and its table not read yet */
+#define DISK_SCANNING 2 /* its table being read */
+#define DISK_SCANNED  3 /* its table in hand, its nodes not published yet */
+#define DISK_LIVE     4 /* published */
+#define DISK_CLOSING  5 /* gone; the holds are being waited out */
+
+/* Where the reading of a table stands. */
+#define SCAN_SECTOR0 0
+#define SCAN_HEADER  1
+#define SCAN_ARRAY   2
 
 struct usbdisk {
     int state;
@@ -42,25 +55,38 @@ struct usbdisk {
     int refused; /* how many table entries were passed over */
     int marked;  /* the cache has been told the device has gone */
     uint64_t sectors;
+
+    /* The reading of the table. */
+    int scan;
+    struct block_request *request;
+    uint32_t generation;
+    uint32_t array_lba;
+    uint32_t array_sectors;
+    uint32_t array_read;
+    uint32_t array_bytes;
+    uint32_t array_crc;
+    uint32_t entry_count;
+    uint32_t entry_size;
+    uint64_t first_usable;
+    uint64_t last_usable;
+    const char *table;
+    struct gpt_part found[GPT_PART_COUNT];
+    int taken;
 };
 
 static struct usbdisk disks[USBDISK_MAX];
 static uint32_t teardowns;
 
-/* Set by the pump, read by the syscall entry. The work behind an arrival and
- * a departure both sleep, so neither is done where it is learned. */
+/* Set when a stick is waiting to be published or reclaimed; read by the
+ * syscall entry and by the pump. */
 static volatile int pending;
 
-/* One scan at a time. The service runs from a syscall and sleeps inside a
- * transfer, so a second process can enter it while the first is asleep in
- * the middle of a table; the second must not read into the same buffers. */
-static int scanning;
-
-/* The sector and the entry array a scan reads through. Both are here rather
- * than on the stack because a kernel stack is four pages and the array is
- * sixteen kilobytes, and because only one scan runs at a time. */
+/* One table is read at a time, through these two buffers. The array is
+ * sixteen kilobytes, which is not for a stack, and the second stick waits
+ * for the first rather than needing a second pair. */
+static int reading = -1;
 static uint8_t scan_sector[BLOCK_SECTOR_SIZE];
-static uint8_t scan_array[GPT_MAX_ARRAY_BYTES];
+static uint8_t table_array[GPT_MAX_ARRAY_BYTES];
 
 void usbdisk_arrived(int slot)
 {
@@ -75,13 +101,15 @@ void usbdisk_arrived(int slot)
         klog(KLOG_WARN, "usbdisk", "refused: slot %d: every name is taken", slot);
         return;
     }
-    disks[n].state = DISK_ARRIVED;
     disks[n].slot = slot;
     disks[n].parts = 0;
     disks[n].refused = 0;
     disks[n].marked = 0;
     disks[n].sectors = 0;
-    pending = 1;
+    disks[n].request = 0;
+    disks[n].taken = 0;
+    disks[n].table = "none";
+    disks[n].state = DISK_ARRIVED;
 }
 
 void usbdisk_left(int slot)
@@ -137,23 +165,11 @@ int usbdisk_holds(int n)
     return held;
 }
 
-/**
- * Read `count` sectors at `lba` from the stick into `into`.
- *
- * Every read here is a table, so a failure is not retried: a stick that
- * cannot give its first sector has nothing this layer can publish, and the
- * whole node is left for a reader to make of what it will.
- */
-static int scan_read(block_device_t *dev, uint64_t lba, uint32_t count, uint8_t *into)
-{
-    return block_request(dev, 0, lba, count, into);
-}
-
 /** Whether `sector` looks like the boot sector of a volume with no table. */
 static int volume_boot_sector(const uint8_t *sector)
 {
     if (sector[0] == 0xEB || sector[0] == 0xE9) {
-        return 1; /* a jump instruction, which every FAT boot sector opens with */
+        return 1; /* a jump, which every FAT boot sector opens with */
     }
     return sector[3] == 'E' && sector[4] == 'X' && sector[5] == 'F' && sector[6] == 'A' &&
            sector[7] == 'T';
@@ -211,98 +227,223 @@ static int take_mbr(const struct mbr_part *entries, uint64_t sectors,
     return taken;
 }
 
-/**
- * Read a GUID table and take what it publishes.
- *
- * The header is judged before anything it says is used, and the entry array
- * is read whole and checked against the checksum in the header before a
- * single entry is looked at. An array is at most sixteen kilobytes, so
- * reading it whole costs one transfer of thirty-two sectors, and reading it
- * four entries at a time would take a table whose fifth entry is rubbish for
- * a table that is sound.
- */
-static int take_gpt(block_device_t *dev, uint64_t sectors, struct gpt_part parts[GPT_PART_COUNT],
-                    int *refused)
+/** Start reading `count` sectors at `lba` of the stick numbered `n`. */
+static int scan_begin(int n, uint64_t lba, uint32_t count)
 {
-    uint32_t count;
-    uint32_t entry_size;
-    uint32_t bytes;
-    uint32_t array_sectors;
+    block_device_t *dev = msc_block_device(disks[n].slot);
 
-    if (scan_read(dev, 1, 1, scan_sector) != 0) {
-        klog(KLOG_WARN, "usbdisk", "its guid header could not be read");
-        return 0;
+    if (dev == 0) {
+        return -1;
     }
-    if (gpt_header_ok(scan_sector, 1, sectors) != 0) {
-        klog(KLOG_WARN, "usbdisk", "its guid header is not sound; no partitions published");
-        return 0;
-    }
-    count = gpt_entry_count(scan_sector);
-    entry_size = gpt_entry_size(scan_sector);
-    bytes = count * entry_size; /* bounded by the header check */
-    array_sectors = (bytes + BLOCK_SECTOR_SIZE - 1u) / BLOCK_SECTOR_SIZE;
-    {
-        uint64_t array_lba = gpt_array_lba(scan_sector);
-        uint32_t stored = gpt_array_crc(scan_sector);
-        uint64_t first_usable = gpt_first_usable(scan_sector);
-        uint64_t last_usable = gpt_last_usable(scan_sector);
+    disks[n].request = block_request_begin(dev, lba, count, &disks[n].generation);
+    return disks[n].request == 0 ? -1 : 0;
+}
 
-        if (array_lba + array_sectors > sectors) {
-            klog(KLOG_WARN, "usbdisk", "its entry array runs past the medium");
-            return 0;
-        }
-        if (scan_read(dev, array_lba, array_sectors, scan_array) != 0) {
-            klog(KLOG_WARN, "usbdisk", "its entry array could not be read");
-            return 0;
-        }
-        if (gpt_crc32(scan_array, bytes) != stored) {
-            klog(KLOG_WARN, "usbdisk", "its entry array does not match its checksum");
-            return 0;
-        }
-        return gpt_parse_entries(scan_array, count, entry_size, first_usable, last_usable, parts,
-                                 refused);
+/** The table is in hand, or could not be read: let the stick be published. */
+static void scan_end(int n)
+{
+    reading = -1;
+    disks[n].request = 0;
+    if (disks[n].state == DISK_SCANNING) {
+        disks[n].state = DISK_SCANNED;
+        pending = 1;
     }
 }
 
-/** Read the table of the stick numbered `n` and publish what it describes. */
-static void scan(int n)
+/** Judge the first sector and decide what to read next, if anything. */
+static void scan_sector0(int n)
 {
-    block_device_t *dev = msc_block_device(disks[n].slot);
-    struct gpt_part parts[GPT_PART_COUNT];
+    struct usbdisk *d = &disks[n];
     struct mbr_part entries[MBR_PART_COUNT];
-    const char *table = "none";
-    int taken = 0;
-    int refused = 0;
-    int i;
 
-    if (dev == 0 || !msc_ready(disks[n].slot)) {
-        disks[n].state = DISK_CLOSING;
+    if (gpt_protective(scan_sector)) {
+        d->table = "guid";
+        d->scan = SCAN_HEADER;
+        if (scan_begin(n, 1, 1) != 0) {
+            klog(KLOG_WARN, "usbdisk", "usb%d: its guid header could not be asked for", n);
+            scan_end(n);
+        }
         return;
     }
-    for (i = 0; i < GPT_PART_COUNT; i++) {
-        parts[i].start_lba = 0;
-        parts[i].sector_count = 0;
-    }
-    disks[n].sectors = dev->sector_count;
-
-    if (scan_read(dev, 0, 1, scan_sector) != 0) {
-        klog(KLOG_WARN, "usbdisk", "usb%d: its first sector could not be read", n);
-    } else if (gpt_protective(scan_sector)) {
-        table = "guid";
-        taken = take_gpt(dev, dev->sector_count, parts, &refused);
-    } else if (mbr_parse(scan_sector, entries) == 0) {
-        table = "mbr";
-        taken = take_mbr(entries, dev->sector_count, parts, &refused);
+    if (mbr_parse(scan_sector, entries) == 0) {
+        /* A volume with no table has the same signature an MBR has, with
+         * four empty entries where the table would be; what tells the two
+         * apart is the boot sector in front of them. */
+        d->taken = take_mbr(entries, d->sectors, d->found, &d->refused);
+        d->table = (d->taken == 0 && volume_boot_sector(scan_sector)) ? "one volume" : "mbr";
     } else if (volume_boot_sector(scan_sector)) {
-        table = "one volume";
+        d->table = "one volume";
+    }
+    scan_end(n);
+}
+
+/**
+ * Judge the GUID header and start on the array.
+ *
+ * The header is judged before anything it says is used, and the product of
+ * the count and the size it gives is bounded there, because that product is
+ * what the array is read by. The array is read whole, a page at a time, and
+ * only checked and looked at once all of it is in hand.
+ */
+static void scan_header(int n)
+{
+    struct usbdisk *d = &disks[n];
+    uint64_t array_lba;
+
+    if (gpt_header_ok(scan_sector, 1, d->sectors) != 0) {
+        klog(KLOG_WARN, "usbdisk", "usb%d: its guid header is not sound; no partitions published",
+             n);
+        scan_end(n);
+        return;
+    }
+    d->entry_count = gpt_entry_count(scan_sector);
+    d->entry_size = gpt_entry_size(scan_sector);
+    /* The product is bounded by the header check. */
+    d->array_bytes = d->entry_count * d->entry_size;
+    d->array_sectors = (d->array_bytes + BLOCK_SECTOR_SIZE - 1u) / BLOCK_SECTOR_SIZE;
+    d->array_crc = gpt_array_crc(scan_sector);
+    d->first_usable = gpt_first_usable(scan_sector);
+    d->last_usable = gpt_last_usable(scan_sector);
+    array_lba = gpt_array_lba(scan_sector);
+    if (array_lba + d->array_sectors > d->sectors || array_lba > 0xFFFFFFFFu) {
+        klog(KLOG_WARN, "usbdisk", "usb%d: its entry array runs past the medium", n);
+        scan_end(n);
+        return;
+    }
+    d->array_lba = (uint32_t)array_lba;
+    d->array_read = 0;
+    d->scan = SCAN_ARRAY;
+    if (scan_begin(n, d->array_lba,
+                   d->array_sectors < BLOCK_REQ_SECTORS ? d->array_sectors : BLOCK_REQ_SECTORS) !=
+        0) {
+        klog(KLOG_WARN, "usbdisk", "usb%d: its entry array could not be asked for", n);
+        scan_end(n);
+    }
+}
+
+/** One more page of the array is in; take the next, or judge the whole. */
+static void scan_array(int n, uint32_t got)
+{
+    struct usbdisk *d = &disks[n];
+    uint32_t left;
+
+    d->array_read += got;
+    left = d->array_sectors - d->array_read;
+    if (left != 0) {
+        if (scan_begin(n, d->array_lba + d->array_read,
+                       left < BLOCK_REQ_SECTORS ? left : BLOCK_REQ_SECTORS) != 0) {
+            klog(KLOG_WARN, "usbdisk", "usb%d: its entry array could not be asked for", n);
+            scan_end(n);
+        }
+        return;
+    }
+    if (gpt_crc32(table_array, d->array_bytes) != d->array_crc) {
+        klog(KLOG_WARN, "usbdisk", "usb%d: its entry array does not match its checksum", n);
+        scan_end(n);
+        return;
+    }
+    d->taken = gpt_parse_entries(table_array, d->entry_count, d->entry_size, d->first_usable,
+                                 d->last_usable, d->found, &d->refused);
+    scan_end(n);
+}
+
+/**
+ * Advance the table being read by one step, if its request has ended.
+ *
+ * A stick that went while its table was being read has its request failed
+ * by the class driver; the answer is taken here and dropped, so the slot goes
+ * back to the pool, and the stick goes on to be reclaimed like any other.
+ */
+static void scan_advance(void)
+{
+    int n;
+    struct usbdisk *d;
+    int status;
+    uint32_t got;
+
+    if (reading < 0) {
+        for (n = 0; n < USBDISK_MAX; n++) {
+            if (disks[n].state == DISK_ARRIVED) {
+                block_device_t *dev = msc_block_device(disks[n].slot);
+
+                if (dev == 0 || !msc_ready(disks[n].slot)) {
+                    disks[n].state = DISK_CLOSING;
+                    pending = 1;
+                    continue;
+                }
+                d = &disks[n];
+                d->sectors = dev->sector_count;
+                d->scan = SCAN_SECTOR0;
+                d->state = DISK_SCANNING;
+                reading = n;
+                if (scan_begin(n, 0, 1) != 0) {
+                    klog(KLOG_WARN, "usbdisk", "usb%d: its first sector could not be asked for", n);
+                    scan_end(n);
+                }
+                return;
+            }
+        }
+        return;
     }
 
-    devfs_usb_publish(n, dev, parts, taken);
-    disks[n].parts = taken;
-    disks[n].refused = refused;
-    disks[n].state = DISK_LIVE;
-    klog(KLOG_INFO, "usbdisk", "usb%d: %s: %d sectors, %d partitions, %d passed over", n, table,
-         (int)dev->sector_count, taken, refused);
+    n = reading;
+    d = &disks[n];
+    if (d->request == 0) {
+        scan_end(n);
+        return;
+    }
+    got = d->request->count;
+    if (!block_request_ended(d->request, d->generation,
+                             d->scan == SCAN_ARRAY ? table_array + d->array_read * BLOCK_SECTOR_SIZE
+                                                   : scan_sector,
+                             &status)) {
+        return;
+    }
+    d->request = 0;
+    if (d->state != DISK_SCANNING) {
+        scan_end(n); /* it went while being read; nothing of it is published */
+        return;
+    }
+    if (status != 0) {
+        klog(KLOG_WARN, "usbdisk", "usb%d: a sector of its table could not be read", n);
+        scan_end(n);
+        return;
+    }
+    switch (d->scan) {
+    case SCAN_SECTOR0:
+        scan_sector0(n);
+        return;
+    case SCAN_HEADER:
+        scan_header(n);
+        return;
+    default:
+        scan_array(n, got);
+        return;
+    }
+}
+
+/** Publish the stick numbered `n` from the table read for it. */
+static void publish(int n)
+{
+    struct usbdisk *d = &disks[n];
+    block_device_t *dev = msc_block_device(d->slot);
+    uint32_t flags;
+
+    if (dev == 0) {
+        d->state = DISK_CLOSING;
+        return;
+    }
+    devfs_usb_publish(n, dev, d->found, d->taken);
+    d->parts = d->taken;
+    /* The stick may have gone between the reading and this; a departure
+     * arrives from the pump and must not be written over. */
+    flags = kirq_save();
+    if (d->state == DISK_SCANNED) {
+        d->state = DISK_LIVE;
+    }
+    kirq_restore(flags);
+    klog(KLOG_INFO, "usbdisk", "usb%d: %s: %d sectors, %d partitions, %d passed over", n, d->table,
+         (int)d->sectors, d->taken, d->refused);
 }
 
 /**
@@ -343,18 +484,23 @@ static void reclaim(int n)
     klog(KLOG_INFO, "usbdisk", "usb%d: reclaimed", n);
 }
 
-void usbdisk_service(void)
+/**
+ * Publish what has been read and reclaim what nothing holds.
+ *
+ * Runs only where no process is inside a syscall: from the syscall entry,
+ * before the dispatch, or from the pump on a pass that interrupted user
+ * mode or the idle machine. The counts it takes are exact there, because a
+ * process is only ever asleep at a point where everything it holds has been
+ * recorded.
+ */
+static void settle(void)
 {
     int n;
     int left = 0;
 
-    if (!pending || scanning) {
-        return;
-    }
-    scanning = 1;
     for (n = 0; n < USBDISK_MAX; n++) {
-        if (disks[n].state == DISK_ARRIVED) {
-            scan(n);
+        if (disks[n].state == DISK_SCANNED) {
+            publish(n);
         }
     }
     for (n = 0; n < USBDISK_MAX; n++) {
@@ -364,16 +510,30 @@ void usbdisk_service(void)
         if (!disks[n].marked) {
             close_down(n);
         }
-        if (usbdisk_holds(n) == 0) {
-            reclaim(n);
-        } else {
+        /* A read of its table still out is a hold of its own: the answer
+         * lands in the pool's page and names the device. */
+        if (reading == n || usbdisk_holds(n) != 0) {
             left++;
+            continue;
         }
+        reclaim(n);
     }
-    scanning = 0;
-    /* A stick still held is looked at again on the next syscall, which is
-     * where the release that frees it will have happened. */
     pending = left != 0;
+}
+
+void usbdisk_step(void)
+{
+    scan_advance();
+    if (pending && !proc_in_syscall()) {
+        settle();
+    }
+}
+
+void usbdisk_service(void)
+{
+    if (pending) {
+        settle();
+    }
 }
 
 /** Append a string, bounded, and answer where the next one goes. */
@@ -429,7 +589,10 @@ int usbdisk_describe(int n, char *out, int size)
     at = put(out, size, at, " sectors ");
     at = putnum(out, size, at, (uint32_t)disks[n].parts);
     at = put(out, size, at, " parts ");
-    at = put(out, size, at, disks[n].state == DISK_CLOSING ? "closing" : "ready");
+    at = put(out, size, at,
+             disks[n].state == DISK_CLOSING ? "closing"
+             : disks[n].state == DISK_LIVE  ? "ready"
+                                            : "reading");
     if (ident.write_protect) {
         at = put(out, size, at, " ro");
     }

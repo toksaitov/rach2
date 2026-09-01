@@ -19,7 +19,7 @@
 #include "../proc/process.h"
 #include "../proc/wait_queue.h"
 
-#define REQ_POOL 16
+#define REQ_POOL             16
 #define REQ_DEFAULT_DEADLINE 500u /* five seconds of 100 Hz ticks */
 
 static struct block_request pool[REQ_POOL];
@@ -44,8 +44,8 @@ static void irq_restore(uint32_t flags)
 }
 
 /** A slot to submit with, or NULL when the pool is exhausted. */
-static struct block_request *req_take(block_device_t *device, int write,
-                                      uint64_t lba, uint32_t count)
+static struct block_request *req_take(block_device_t *device, int write, uint64_t lba,
+                                      uint32_t count)
 {
     uint32_t flags = irq_save();
     int i;
@@ -62,16 +62,14 @@ static struct block_request *req_take(block_device_t *device, int write,
             r->status = -EIO;
             r->state = BLOCK_REQ_IN_FLIGHT;
             r->generation++;
-            r->deadline = req_ticks + (device->deadline_ticks
-                                           ? device->deadline_ticks
-                                           : REQ_DEFAULT_DEADLINE);
+            r->deadline = req_ticks +
+                          (device->deadline_ticks ? device->deadline_ticks : REQ_DEFAULT_DEADLINE);
             irq_restore(flags);
             return r;
         }
     }
     irq_restore(flags);
-    klog(KLOG_WARN, "block", "request pool exhausted: %d quarantined",
-         (int)quarantined_count);
+    klog(KLOG_WARN, "block", "request pool exhausted: %d quarantined", (int)quarantined_count);
     return NULL;
 }
 
@@ -94,8 +92,8 @@ static int req_done(void *arg)
  * wait: the device owns the page until it answers, so the wait is the
  * uninterruptible kind, bounded by the deadline instead.
  */
-static int req_run_one(block_device_t *device, int write, uint64_t lba,
-                       uint32_t count, uint8_t *buffer)
+static int req_run_one(block_device_t *device, int write, uint64_t lba, uint32_t count,
+                       uint8_t *buffer)
 {
     struct block_request *r = req_take(device, write, lba, count);
     struct req_wait w;
@@ -138,8 +136,7 @@ static int req_run_one(block_device_t *device, int write, uint64_t lba,
     return status;
 }
 
-int block_request(block_device_t *device, int write, uint64_t lba,
-                  uint32_t count, void *buffer)
+int block_request(block_device_t *device, int write, uint64_t lba, uint32_t count, void *buffer)
 {
     uint8_t *bytes = buffer;
     uint32_t eflags;
@@ -175,8 +172,58 @@ int block_request(block_device_t *device, int write, uint64_t lba,
     return 0;
 }
 
-void block_request_complete(struct block_request *request, uint32_t generation,
-                            int status)
+struct block_request *block_request_begin(block_device_t *device, uint64_t lba, uint32_t count,
+                                          uint32_t *generation)
+{
+    struct block_request *r;
+    uint32_t flags;
+
+    if (!device || !device->submit || count == 0 || count > BLOCK_REQ_SECTORS ||
+        lba >= device->sector_count || count > device->sector_count - lba) {
+        return NULL;
+    }
+    r = req_take(device, 0, lba, count);
+    if (!r) {
+        return NULL;
+    }
+    *generation = r->generation;
+    if (device->submit(device, r) != 0) {
+        flags = irq_save();
+        r->state = BLOCK_REQ_FREE;
+        irq_restore(flags);
+        wq_wake_all(&pool_wq);
+        return NULL;
+    }
+    return r;
+}
+
+int block_request_ended(struct block_request *r, uint32_t generation, void *buffer, int *status)
+{
+    uint32_t flags = irq_save();
+
+    if (r->state == BLOCK_REQ_IN_FLIGHT && r->generation == generation) {
+        irq_restore(flags);
+        return 0;
+    }
+    /* Quarantined, or freed by a late completion and taken by another
+     * caller: the request is not ours to touch any more, and the slot is
+     * the pool's to free. */
+    if (r->state != BLOCK_REQ_DONE || r->generation != generation) {
+        irq_restore(flags);
+        *status = -EIO;
+        return 1;
+    }
+    *status = r->status;
+    if (r->status == 0) {
+        k_memcpy(buffer, r->page, r->count * BLOCK_SECTOR_SIZE);
+    }
+    r->state = BLOCK_REQ_FREE;
+    irq_restore(flags);
+    wq_wake_all(&pool_wq);
+    return 1;
+}
+
+void block_request_complete(struct block_request *request, uint32_t generation, int status)
 {
     uint32_t flags = irq_save();
 
@@ -228,8 +275,7 @@ void block_request_tick(void)
 
     req_ticks++;
     for (i = 0; i < REQ_POOL; i++) {
-        if (pool[i].state == BLOCK_REQ_IN_FLIGHT &&
-            (int32_t)(req_ticks - pool[i].deadline) >= 0) {
+        if (pool[i].state == BLOCK_REQ_IN_FLIGHT && (int32_t)(req_ticks - pool[i].deadline) >= 0) {
             /* The caller is woken with EIO; the slot and its page wait for
              * the device, which still owns them. The generation stays so the
              * late completion matches, and moves on when it frees the slot. */

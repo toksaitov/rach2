@@ -96,31 +96,73 @@ int msc_ident(int index, struct msc_ident *out)
     return 0;
 }
 
-/* ---- the block interface ---- */
+/* ---- the block interface ----
+ *
+ * The layer reads without sleeping: it begins a request and asks after it
+ * on later passes. The model answers on the pass after the one that began
+ * it, so every step of the reading is a separate pass, the way it is on the
+ * machine. */
 
-int block_request(block_device_t *device, int write, uint64_t lba, uint32_t count, void *buffer)
+static struct block_request pending_req;
+static int pending_live;
+static int pending_failed;
+static uint32_t generations;
+
+struct block_request *block_request_begin(block_device_t *device, uint64_t lba, uint32_t count,
+                                          uint32_t *generation)
+{
+    (void)device;
+    if (pending_live || count == 0 || count > BLOCK_REQ_SECTORS || lba + count > DISK_SECTORS) {
+        return 0;
+    }
+    pending_req.lba = lba;
+    pending_req.count = count;
+    pending_req.generation = ++generations;
+    pending_live = 1;
+    pending_failed = 0;
+    *generation = pending_req.generation;
+    return &pending_req;
+}
+
+int block_request_ended(struct block_request *r, uint32_t generation, void *buffer, int *status)
 {
     unsigned char *out = (unsigned char *)buffer;
     uint32_t i;
 
-    (void)device;
-    if (write) {
-        return -1;
+    if (r != &pending_req || generation != pending_req.generation || !pending_live) {
+        *status = -1;
+        return 1;
     }
-    if (lba + count > DISK_SECTORS) {
-        return -1;
-    }
-    for (i = 0; i < count; i++) {
+    pending_live = 0;
+    for (i = 0; i < r->count; i++) {
         uint32_t j;
 
-        if (unreadable >= 0 && (uint64_t)unreadable == lba + i) {
-            return -1;
+        if (unreadable >= 0 && (uint64_t)unreadable == r->lba + i) {
+            *status = -1;
+            return 1;
         }
         for (j = 0; j < SECTOR; j++) {
-            out[i * SECTOR + j] = medium[(lba + i) * SECTOR + j];
+            out[i * SECTOR + j] = medium[(r->lba + i) * SECTOR + j];
         }
     }
+    *status = 0;
+    return 1;
+}
+
+/* No process is ever inside a syscall here, so every pass may settle. */
+int proc_in_syscall(void)
+{
     return 0;
+}
+
+uint32_t kirq_save(void)
+{
+    return 0;
+}
+
+void kirq_restore(uint32_t flags)
+{
+    (void)flags;
 }
 
 int block_device_holds(block_device_t *device)
@@ -401,6 +443,7 @@ static void model_reset(void)
     for (i = 0; i < USBDISK_MAX; i++) {
         disks[i].state = DISK_NONE;
         disks[i].marked = 0;
+        disks[i].request = 0;
         node[i].published = 0;
         node[i].hidden = 0;
         node[i].withdrawn = 0;
@@ -410,15 +453,26 @@ static void model_reset(void)
         gone_told[i] = 0;
     }
     pending = 0;
-    scanning = 0;
+    reading = -1;
+    pending_live = 0;
     wipe();
+}
+
+/** Run the pump's passes until the layer has nothing left to do. */
+static void passes(void)
+{
+    int i;
+
+    for (i = 0; i < 64; i++) {
+        usbdisk_step();
+    }
 }
 
 /** Bring the stick in slot `slot` up and let the layer read its table. */
 static void arrive(int slot)
 {
     usbdisk_arrived(slot);
-    usbdisk_service();
+    passes();
 }
 
 int main(void)
@@ -553,7 +607,7 @@ int main(void)
     CHECK("two sticks take two numbers", node[0].published && node[1].published);
     CHECK("and no number is left", usbdisk_free() == 0);
     usbdisk_left(0);
-    usbdisk_service();
+    passes();
     CHECK("a stick nobody held is reclaimed at once", !node[0].published && node[0].withdrawn);
     CHECK("its slot goes back to the class driver", released[0] == 1);
     CHECK("the cache is told it has gone", gone_told[0] > 0);
@@ -569,19 +623,19 @@ int main(void)
     arrive(0);
     opens[0] = 1;
     usbdisk_left(0);
-    usbdisk_service();
+    passes();
     CHECK("a stick with a description open is not reclaimed", released[0] == 0);
     CHECK("its nodes are hidden at once", node[0].hidden);
     CHECK("and its windows are kept", node[0].published);
     CHECK("the cache is told once", gone_told[0] > 0);
-    usbdisk_service();
+    passes();
     CHECK("and it is still not reclaimed while the hold is there", released[0] == 0);
     opens[0] = 0;
     cache_holds[0] = 1;
-    usbdisk_service();
+    passes();
     CHECK("nor while a buffer is held on it", released[0] == 0);
     cache_holds[0] = 0;
-    usbdisk_service();
+    usbdisk_service(); /* the syscall entry's half, which does the same */
     CHECK("the last release reclaims it", released[0] == 1 && node[0].withdrawn);
     CHECK("and the cache is not told a second time", gone_told[0] == 1);
 
@@ -590,9 +644,27 @@ int main(void)
     mbr_signature();
     usbdisk_arrived(0);
     stick_ready_flag[0] = 0;
-    usbdisk_service();
+    passes();
     CHECK("a stick that goes before its table is read is not published", !node[0].published);
     CHECK("and is reclaimed", released[0] == 1);
+
+    /* A stick pulled in the middle of its table: the read out for it is
+       failed by the class driver and taken back here, and nothing of the
+       stick is published. */
+    model_reset();
+    gpt_protective_mbr();
+    gpt_entry(0, 40u, 100u);
+    gpt_header();
+    usbdisk_arrived(0);
+    usbdisk_step(); /* the first sector asked for */
+    usbdisk_step(); /* answered; the header asked for */
+    CHECK("the table is being read", disks[0].state == DISK_SCANNING);
+    usbdisk_left(0);
+    stick_ready_flag[0] = 0;
+    passes();
+    CHECK("a stick that goes while its table is read is not published", !node[0].published);
+    CHECK("and is reclaimed once its read has come back", released[0] == 1);
+    CHECK("and the next stick can be read", reading == -1);
 
     printf("usbdisk_hosttest: %s\n", failures == 0 ? "all rows pass" : "rows failed");
     return failures == 0 ? 0 : 1;

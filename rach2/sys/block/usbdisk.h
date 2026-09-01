@@ -7,11 +7,12 @@
  * usbdisk: a stick that has finished bring-up, made into a disk.
  *
  * The class driver reports a stick from the pump, where nothing may sleep,
- * and reading a partition table is a transfer that sleeps its caller. So
- * arrival and departure are recorded here and the work is done by the next
- * process to enter a syscall, through `usbdisk_service`. That is also where
- * a stick that has gone is reclaimed, because the count of what still holds
- * it can only fall while a process runs.
+ * so the partition table is read the way the pump does everything: one
+ * request started, and asked after on the passes that follow, until the
+ * table is in hand. Publishing the nodes and reclaiming a stick that has
+ * gone touch what a process in a syscall may be reading, so those two wait
+ * for a pass on which no process is inside the kernel, or for the next
+ * syscall entry, whichever comes first.
  *
  * A stick is `/dev/usbN`, with `N` the lowest free number when it arrives,
  * and its partitions are `/dev/usbNp1` to `p4`. The number and the class
@@ -30,12 +31,17 @@ void usbdisk_arrived(int slot);
 void usbdisk_left(int slot);
 
 /**
- * Do what an arrival or a departure asked for: read a table and publish the
- * nodes, or reclaim what a stick that has gone no longer holds.
+ * One pass from the pump: advance the table being read, and publish or
+ * reclaim when no process is inside the kernel.
+ */
+void usbdisk_step(void);
+
+/**
+ * Publish and reclaim what is waiting for a process context.
  *
  * The syscall entry calls it before every dispatch. It returns at once when
- * there is nothing to do, and it may sleep when there is, which is why it is
- * called from there and not from the pump.
+ * there is nothing to do and never sleeps: the reading is the pump's, and
+ * what is left is bookkeeping.
  */
 void usbdisk_service(void);
 
