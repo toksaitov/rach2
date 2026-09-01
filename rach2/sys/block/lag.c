@@ -12,6 +12,8 @@
 
 #include "block.h"
 
+#include "../lib/kstring.h"
+
 #include "../cmdline.h"
 #include "../klog.h"
 #include "../lib/kerrno.h"
@@ -25,6 +27,10 @@ struct lag_entry {
     int status;
     int delivered;
     int used;
+    /* A read lands here at submit and is copied into the request's page
+     * only when the completion is delivered, so a kernel that copied out
+     * before the completion would read what the page held before. */
+    uint8_t staged[BLOCK_REQ_SECTORS * BLOCK_SECTOR_SIZE];
 };
 
 static block_device_t lag_device;
@@ -49,9 +55,12 @@ static int lag_submit(block_device_t *device, struct block_request *request)
                                                      request->count,
                                                      request->page);
             } else {
+                /* The page is scrubbed so a copy-out before the completion
+                 * returns this and not what the page held before. */
+                k_memset(request->page, 0xEE, request->count * BLOCK_SECTOR_SIZE);
                 queue[i].status = lag_backing->read(lag_backing, request->lba,
                                                     request->count,
-                                                    request->page);
+                                                    queue[i].staged);
             }
             queue[i].request = request;
             queue[i].generation = request->generation;
@@ -88,12 +97,20 @@ void block_lag_tick(void)
         if (!e->delivered) {
             e->delivered = 1;
             e->due = lag_ticks + 2;
+            if (!r->write && e->status == 0) {
+                k_memcpy(r->page, e->staged, r->count * BLOCK_SECTOR_SIZE);
+            }
             block_request_complete(r, e->generation, e->status);
             continue;
         }
         e->used = 0;
         block_request_complete(r, e->generation, -EIO);
     }
+}
+
+block_device_t *block_lag_backing(block_device_t *dev)
+{
+    return dev == &lag_device ? lag_backing : 0;
 }
 
 block_device_t *block_lag_wrap(block_device_t *backing)

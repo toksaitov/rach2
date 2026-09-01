@@ -30,6 +30,11 @@ mcopy -i "$DISK"@@51380224 "$REPO/build/tests/hello" ::/hello || fail "mcopy hel
 mcopy -i "$DISK"@@51380224 "${DISK}.hello" ::/gone.txt || fail "mcopy gone"
 mdel -i "$DISK"@@51380224 ::/gone.txt || fail "mdel"
 mcopy -i "$DISK"@@51380224 "$REPO/build/tests/hello" ::/again.bin || fail "mcopy again"
+# 128 sectors, each 128 copies of its own number and a dot, so a reader can
+# tell which sector it was given.
+awk 'BEGIN { for (i = 0; i < 128; i++) for (j = 0; j < 128; j++) printf "%03d.", i }' \
+    > "${DISK}.pattern" || fail "pattern"
+mcopy -i "$DISK"@@51380224 "${DISK}.pattern" ::/pattern.bin || fail "mcopy pattern"
 
 run() {
     "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
@@ -39,7 +44,7 @@ run() {
 
 # ---- 1: the partition nodes appear with the sizes the MBR gives, and a read
 #         through one, on the lag, sleeps the reader while its sibling runs ----
-if run --append "rach2.blocklag=3 rach2.rescue" \
+if run --append "rach2.blocklag=10 rach2.rescue" \
     --timeout 90 --ok "LAGPROBE OK" --never "LAGPROBE FAIL" \
     "expect=Type 'help'" "send=exec /lagprobe sleep" \
     "expect=LAGPROBE OK" > /dev/null 2>&1; then
@@ -81,7 +86,7 @@ sh "$REPO/krffs/mkdisk.sh" "$REPO/krffs/manifests/disk-test.manifest" "$BOOTDISK
 if "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
     --qemu-arg=-cpu --qemu-arg=max \
     --drive "file=$BOOTDISK,format=raw,if=ide,index=0,media=disk" \
-    --append "rach2.blocklag=3 rach2.rescue" \
+    --append "rach2.blocklag=10 rach2.rescue" \
     --timeout 90 --ok "LAGPROBE OK" --never "LAGPROBE FAIL" \
     "expect=Type 'help'" "send=exec /lagprobe write" \
     "expect=LAGPROBE OK" > /dev/null 2>&1; then
@@ -109,8 +114,9 @@ else
     fail "an unmount record's opens and releases differ"
 fi
 
-# ---- 6: the mounted half of the lag probe ----
-if run --append "rach2.blocklag=3 rach2.rescue" \
+# ---- 6: the mounted half of the lag probe; diskdiag publishes /dev/disk0 on
+#         the real disk while the partitions are on the lag ----
+if run --append "rach2.blocklag=3 rach2.diskdiag rach2.rescue" \
     --timeout 120 --steptmo 60 --ok "LAGPROBE OK" --never "LAGPROBE FAIL" \
     "expect=Type 'help'" "send=exec /lagprobe mounted" \
     "expect=LAGPROBE" > /dev/null 2>&1; then

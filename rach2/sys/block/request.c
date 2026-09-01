@@ -4,10 +4,9 @@
  * A polled device is called and done. A sleeping device is handed a request
  * from a fixed pool, one per process, each with its own page: a write is
  * copied into the page before submit and a read is copied out after, so a
- * completion that arrives after the caller gave up has nowhere to land but a
- * page nothing else owns. A timed-out slot is quarantined with its page until
- * the device answers late, which is the price of never letting stale hardware
- * output into reused memory.
+ * completion that arrives after the caller gave up lands in a page nothing
+ * else owns. A timed-out slot is quarantined with its page until the device
+ * answers late, so a late answer never reaches memory that has been reused.
  */
 
 #include "block.h"
@@ -76,10 +75,16 @@ static struct block_request *req_take(block_device_t *device, int write,
     return NULL;
 }
 
+/* What one caller waits for: its own request, by slot and generation. */
+struct req_wait {
+    struct block_request *r;
+    uint32_t generation;
+};
+
 static int req_done(void *arg)
 {
-    struct block_request *r = arg;
-    return r->state != BLOCK_REQ_IN_FLIGHT;
+    const struct req_wait *w = arg;
+    return w->r->state != BLOCK_REQ_IN_FLIGHT || w->r->generation != w->generation;
 }
 
 /**
@@ -93,12 +98,15 @@ static int req_run_one(block_device_t *device, int write, uint64_t lba,
                        uint32_t count, uint8_t *buffer)
 {
     struct block_request *r = req_take(device, write, lba, count);
+    struct req_wait w;
     uint32_t flags;
     int status;
 
     if (!r) {
         return -EIO;
     }
+    w.r = r;
+    w.generation = r->generation;
     if (write) {
         k_memcpy(r->page, buffer, count * BLOCK_SECTOR_SIZE);
     }
@@ -109,18 +117,14 @@ static int req_run_one(block_device_t *device, int write, uint64_t lba,
         wq_wake_all(&pool_wq);
         return -EIO;
     }
-    for (;;) {
-        if (wq_wait_event(&pool_wq, req_done, r) == 0 && req_done(r)) {
-            break;
-        }
-        /* -EINTR, or a wake for another slot: keep waiting; the deadline
-         * tick is what ends a wait the device never answers. */
-        if (req_done(r)) {
-            break;
-        }
+    while (!req_done(&w)) {
+        wq_wait_event(&pool_wq, req_done, &w); /* EINTR: keep waiting */
     }
     flags = irq_save();
-    if (r->state == BLOCK_REQ_QUARANTINED) {
+    /* A quarantined slot, or one the late completion freed and another
+     * caller took (the generation moved on): the request is not ours to
+     * touch any more. */
+    if (r->state == BLOCK_REQ_QUARANTINED || r->generation != w.generation) {
         irq_restore(flags);
         return -EIO;
     }
@@ -154,7 +158,7 @@ int block_request(block_device_t *device, int write, uint64_t lba,
         return -EIO;
     }
     __asm__ __volatile__("pushfl; popl %0" : "=r"(eflags));
-    if (!(eflags & 0x200) || !current_proc) {
+    if (!(eflags & 0x200) || !current_proc || !current_proc->in_syscall) {
         k_panic("block: a sleeping device was reached outside syscall context");
     }
     while (count > 0) {
@@ -182,6 +186,7 @@ void block_request_complete(struct block_request *request, uint32_t generation,
         return;
     }
     if (request->state == BLOCK_REQ_QUARANTINED) {
+        request->generation++; /* the caller that gave up must not match */
         request->state = BLOCK_REQ_FREE;
         quarantined_count--;
         irq_restore(flags);
@@ -208,8 +213,8 @@ void block_request_tick(void)
         if (pool[i].state == BLOCK_REQ_IN_FLIGHT &&
             (int32_t)(req_ticks - pool[i].deadline) >= 0) {
             /* The caller is woken with EIO; the slot and its page wait for
-             * the device, which still owns them, and the generation stays,
-             * so the late completion matches and frees the slot. */
+             * the device, which still owns them. The generation stays so the
+             * late completion matches, and moves on when it frees the slot. */
             pool[i].state = BLOCK_REQ_QUARANTINED;
             quarantined_count++;
             klog(KLOG_WARN, "block", "request deadline: slot quarantined");

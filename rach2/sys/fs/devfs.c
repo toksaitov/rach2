@@ -206,6 +206,7 @@ static int32_t raw_window_read(struct raw_window *w, fd_entry_t *e, char __user 
     uint64_t total = part->sector_count;
     uint64_t lba;
     uint32_t want, done;
+    int rc = 0;
 
     if (!w->present) {
         return -ENXIO;
@@ -229,7 +230,8 @@ static int32_t raw_window_read(struct raw_window *w, fd_entry_t *e, char __user 
             chunk = RAW_BATCH_SECTORS;
         }
         raw_calls++;
-        if (block_request(part, 0, lba + done, chunk, raw_batch) != 0) {
+        rc = block_request(part, 0, lba + done, chunk, raw_batch);
+        if (rc != 0) {
             break;
         }
         if (copy_to_user((void __user *)(buf + done * BLOCK_SECTOR_SIZE), raw_batch,
@@ -242,7 +244,7 @@ static int32_t raw_window_read(struct raw_window *w, fd_entry_t *e, char __user 
         done += chunk;
     }
     if (done == 0) {
-        return -EIO;
+        return rc; /* the request's own errno: EIO, or what the device said */
     }
     e->ofd->raw_offset = off + (uint64_t)done * BLOCK_SECTOR_SIZE;
     return (int32_t)(done * BLOCK_SECTOR_SIZE);
@@ -395,9 +397,9 @@ static int32_t dev_grubcore_write(fd_entry_t *e, const char __user *buf, uint32_
  * `/dev/bootpart` is a partition inside it and `/dev/grubcore` is the gap
  * before the first one, so a whole-disk write and a kernel install address the
  * same sectors by different names. One reservation covers all three, and the
- * second writer is refused, not serialized. Readers are not counted: a
- * read alongside a write returns a torn region, which is the reader's business,
- * and hashing a region after a write is what a repair does.
+ * second writer gets EBUSY rather than a turn. Readers are not counted: a read
+ * alongside a write may return a torn region, and a repair hashes the region
+ * after its write has completed.
  */
 static int raw_writer_held;
 
@@ -498,7 +500,7 @@ static int32_t dev_disk0_read(fd_entry_t *e, char __user *buf, uint32_t count)
             chunk = RAW_BATCH_SECTORS;
         }
         raw_calls++;
-        if (dev->read(dev, lba + done, chunk, raw_batch) != 0) {
+        if (block_request(dev, 0, lba + done, chunk, raw_batch) != 0) {
             break;
         }
         if (copy_to_user((void __user *)(buf + done * BLOCK_SECTOR_SIZE), raw_batch,
@@ -569,7 +571,7 @@ static int32_t dev_disk0_write(fd_entry_t *e, const char __user *buf, uint32_t c
             break;
         }
         raw_calls++;
-        if (dev->write(dev, lba + done, chunk, raw_batch) != 0) {
+        if (block_request(dev, 1, lba + done, chunk, raw_batch) != 0) {
             break;
         }
         done += chunk;
@@ -757,13 +759,16 @@ static const struct devfs_entry *devfs_find(const char *name)
 }
 
 /*
- * Claims: a mounted volume's sector range on the backing disk, compared as
- * ranges and never as device pointers, because three names can describe
- * one range. While a range is claimed a second overlapping mount answers
+ * Claims: a mounted volume's sector range on the physical disk. Two ranges
+ * are compared on the device `block_physical` reaches, never on the view
+ * they were named through, because /dev/bootpart, /dev/disk0p1 and
+ * /dev/disk0 can all describe one range, and under the lag device the
+ * partition views and the whole-disk window are on different wrappers of
+ * one disk. While a range is claimed a second overlapping mount answers
  * EBUSY, and so does a write-capable open of a raw window over it; while
  * such a descriptor is open, a claim on its range answers EBUSY. The table
- * sits beside the single-writer rule because the two are one question:
- * who may write these sectors.
+ * is defined beside the single-writer rule because both decide who may
+ * write a range of sectors.
  */
 struct claim {
     int used;
@@ -846,7 +851,7 @@ static int window_range(const struct devfs_entry *dev, block_device_t **backing,
         if (!disk0.present) {
             return -ENXIO;
         }
-        *backing = disk0.whole;
+        *backing = block_physical(disk0.whole);
         *first = 0;
         *last = disk0.window_sectors - 1;
         return 0;
@@ -865,7 +870,7 @@ static int window_range(const struct devfs_entry *dev, block_device_t **backing,
     if (!w || !w->present) {
         return -ENXIO;
     }
-    *backing = w->part.backing;
+    *backing = block_physical(w->part.backing);
     *first = w->part.start_lba;
     *last = w->part.start_lba + w->part.device.sector_count - 1;
     return 0;
@@ -902,7 +907,7 @@ int devfs_window_of(const char *path, block_device_t **view,
         return -ENXIO;
     }
     *view = &w->part.device;
-    *backing = w->part.backing;
+    *backing = block_physical(w->part.backing);
     *first = w->part.start_lba;
     *count = w->part.device.sector_count;
     return 0;

@@ -161,3 +161,19 @@ uint64_t block_flushes(void)
 {
     return flush_count;
 }
+
+block_device_t *block_physical(block_device_t *dev)
+{
+    for (;;) {
+        block_device_t *under = block_lag_backing(dev);
+
+        if (!under && dev && dev->drvdata &&
+            dev == &((block_partition_t *)dev->drvdata)->device) {
+            under = ((block_partition_t *)dev->drvdata)->backing;
+        }
+        if (!under) {
+            return dev;
+        }
+        dev = under;
+    }
+}

@@ -67,10 +67,9 @@ int block_probe(void);
  * either. This answers from `block0` when a disk has already answered, so a
  * working controller is never reset a second time.
  *
- * A failure is deliberately not remembered. Caching one would mean a controller
- * that did not answer at boot could never be asked again, and the rescue
- * shell's whole purpose is to ask a machine questions after it has failed to
- * start normally.
+ * A failure is not remembered: a controller that did not answer at boot can
+ * be probed again from the rescue shell, which exists to inspect a machine
+ * after a failed start.
  *
  * @return 0 when a device answered and `block0` is set, -1 when none did.
  */
@@ -132,8 +131,10 @@ void block_partition_init(
  *
  * A write is copied into the page before `submit` and a read is copied out
  * after a successful completion, so a completion that arrives after the
- * deadline finds the pool's page and a generation that no longer matches, and
- * is dropped with a record instead of landing in memory the caller reused.
+ * deadline lands in the pool's page and not in memory the caller reused. The
+ * slot is quarantined until then; the late completion frees it and advances
+ * the generation, and a completion whose generation does not match the slot's
+ * is dropped with a record.
  */
 struct block_request {
     block_device_t *device;
@@ -185,5 +186,15 @@ block_device_t *block_lag_wrap(block_device_t *backing);
 
 /** Complete lagged requests whose ticks have passed; the timer calls it. */
 void block_lag_tick(void);
+
+/** The disk the lag device wraps, or NULL when `dev` is not the lag device. */
+block_device_t *block_lag_backing(block_device_t *dev);
+
+/**
+ * The disk under `dev`: a partition view's backing, the lag device's disk,
+ * repeated until a device that wraps nothing. Two ranges on one disk are
+ * compared on this device, whatever views they were named through.
+ */
+block_device_t *block_physical(block_device_t *dev);
 
 #endif

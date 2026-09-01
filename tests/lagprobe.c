@@ -15,8 +15,10 @@
  * `lagprobe mounted`, under a lag with the FAT32 partition on
  * /dev/disk0p2: the mounted half. A child's rmdir of the target while the
  * mount sleeps in its constructor is EBUSY; two children reading one cold
- * block make the cache count a busy-buffer wait; and one description shared
- * through fork hands every byte of a file out once between the two readers.
+ * block make the cache count a busy-buffer wait; one description shared
+ * through fork gives each sector of a file to exactly one of the two readers;
+ * and the whole-disk writer, on the real disk under the lag, is refused over
+ * the mounted range.
  *
  * Prints "LAGPROBE OK" or "LAGPROBE FAIL: reason". Freestanding; int 0x80.
  */
@@ -32,6 +34,7 @@ typedef unsigned int size_t;
 #define SYS_LSEEK        19
 #define SYS_KILL         37
 #define SYS_PIPE         42
+#define EIO 5
 #define SYS_GETTIMEOFDAY 78
 
 #define O_RDONLY 0
@@ -101,14 +104,14 @@ static unsigned now_ms(void)
 
 static unsigned char sector_buf[64 * 1024];
 
-/* One read of `len` bytes from the start of /dev/disk0p1; bytes or -1. */
+/* One read of `len` bytes from the start of /dev/disk0p1; bytes or -errno. */
 static int read_part(unsigned len)
 {
     int fd = syscall3(SYS_OPEN, (int)(size_t)"/dev/disk0p1", O_RDONLY, 0);
     int r;
 
     if (fd < 0) {
-        return -1;
+        return fd;
     }
     r = syscall3(SYS_READ, fd, (int)(size_t)sector_buf, (int)len);
     syscall1(SYS_CLOSE, fd);
@@ -161,8 +164,8 @@ static void run_sleep(void)
     elapsed = now_ms() - start;
     got = syscall3(SYS_READ, fds[0], (int)(size_t)sector_buf, 64);
     syscall2(SYS_KILL, pid, 9);
-    /* 16 page requests, 3 ticks each: at least ~240 ms in requests alone. */
-    if (elapsed < 100u) {
+    /* 16 page requests, 10 ticks each: 1.6 s in the lag alone. */
+    if (elapsed < 1200u) {
         fail("the read did not take the lag");
     }
     if (got < 5) {
@@ -171,22 +174,31 @@ static void run_sleep(void)
     puts("LAGPROBE OK");
 }
 
+/* The lag is 700 ticks, the deadline 500: each read must fail with EIO
+ * after the deadline and before the lag would have answered. */
 static void run_deadline(void)
 {
     unsigned start = now_ms();
+    unsigned elapsed;
 
-    if (read_part(512) >= 0) {
-        fail("a read succeeded past the deadline");
+    if (read_part(512) != -EIO) {
+        fail("the first read past the deadline was not EIO");
     }
-    if (now_ms() - start > 8000u) {
-        fail("the deadline took longer than the deadline");
+    elapsed = now_ms() - start;
+    if (elapsed < 5000u || elapsed > 6900u) {
+        fail("the first read did not end at the deadline");
     }
     /* Let the late completion land and free the quarantined slot. */
     start = now_ms();
     while (now_ms() - start < 3000u) {
     }
-    if (read_part(512) >= 0) {
-        fail("a second read succeeded past the deadline");
+    start = now_ms();
+    if (read_part(512) != -EIO) {
+        fail("the second read past the deadline was not EIO");
+    }
+    elapsed = now_ms() - start;
+    if (elapsed < 5000u || elapsed > 6900u) {
+        fail("the second read did not end at the deadline");
     }
     puts("LAGPROBE OK");
 }
@@ -200,6 +212,7 @@ static void run_write(void)
     int fd = syscall3(SYS_OPEN, (int)(size_t)"/dev/bootpart", O_RDWR, 0);
     unsigned char *pattern = sector_buf;
     unsigned char *back = sector_buf + 512;
+    unsigned start;
     int i;
 
     if (fd < 0) {
@@ -211,14 +224,22 @@ static void run_write(void)
     for (i = 0; i < 512; i++) {
         pattern[i] = (unsigned char)(0xa5 ^ i);
     }
+    start = now_ms();
     if (syscall3(SYS_WRITE, fd, (int)(size_t)pattern, 512) != 512) {
         fail("the write through the lag");
+    }
+    if (now_ms() - start < 80u) {
+        fail("the write did not take the lag");
     }
     if (syscall3(SYS_LSEEK, fd, 262144, 0) != 262144) {
         fail("seek back");
     }
+    start = now_ms();
     if (syscall3(SYS_READ, fd, (int)(size_t)back, 512) != 512) {
         fail("the read back");
+    }
+    if (now_ms() - start < 80u) {
+        fail("the read back did not take the lag");
     }
     for (i = 0; i < 512; i++) {
         if (back[i] != pattern[i]) {
@@ -311,6 +332,44 @@ static int disk_counter(const char *label)
     return -1;
 }
 
+#define PATTERN_SECTORS 128
+
+static unsigned char parent_marks[PATTERN_SECTORS];
+static unsigned char child_marks[PATTERN_SECTORS];
+static int pipe_fds[2];
+
+/* Read `fd` one sector at a time to the end and mark each sector received
+   in `marks`; a sector whose 128 fields do not all say the same number, or
+   a number out of range, or a short read, fails the probe. */
+static void mark_sectors(int fd, unsigned char *marks)
+{
+    int n, i, v;
+
+    while ((n = syscall3(SYS_READ, fd, (int)sector_buf, 512)) > 0) {
+        if (n != 512) {
+            fail("a short read of pattern.bin");
+        }
+        v = (sector_buf[0] - '0') * 100 + (sector_buf[1] - '0') * 10 + (sector_buf[2] - '0');
+        if (v < 0 || v >= PATTERN_SECTORS) {
+            fail("a sector of pattern.bin names no sector");
+        }
+        for (i = 0; i < 512; i += 4) {
+            if (sector_buf[i] != sector_buf[0] || sector_buf[i + 1] != sector_buf[1] ||
+                sector_buf[i + 2] != sector_buf[2] || sector_buf[i + 3] != '.') {
+                fail("a sector of pattern.bin is torn");
+            }
+        }
+        marks[v]++;
+        /* The reader that finishes a sector keeps the CPU and would take
+           the description again before the other wakes; a tick's sleep
+           lets the two alternate, which is what the marks then show. */
+        sleep_ms(10);
+    }
+    if (n < 0) {
+        fail("a read of pattern.bin failed");
+    }
+}
+
 static void run_mounted(void)
 {
     int pid, pid2, fd, before, after;
@@ -358,39 +417,56 @@ static void run_mounted(void)
         fail("no busy-buffer wait was counted");
     }
 
-    /* One description shared through fork: each side reads chunks until
-       the end and reports its byte count; the two counts sum to the file's
-       size, so no byte was read twice and none was skipped. */
-    fd = syscall3(SYS_OPEN, (int)"/lm/hello", O_RDONLY, 0);
+    /* One description shared through fork: each side reads one sector at
+       a time until the end and marks which sectors it received, by the
+       number every sector of pattern.bin carries in each of its 128 fields;
+       the child's marks come back through a pipe, and every sector must
+       be marked by exactly one of the two. */
+    fd = syscall3(SYS_OPEN, (int)"/lm/pattern.bin", O_RDONLY, 0);
     if (fd < 0) {
         fail("open the shared file");
     }
     hello_bytes = syscall3(SYS_LSEEK, fd, 0, 2);
-    if (hello_bytes <= 0 || syscall3(SYS_LSEEK, fd, 0, 0) != 0) {
+    if (hello_bytes != PATTERN_SECTORS * 512 || syscall3(SYS_LSEEK, fd, 0, 0) != 0) {
         fail("the shared file's size");
+    }
+    if (syscall1(SYS_PIPE, (int)pipe_fds) != 0) {
+        fail("pipe");
     }
     pid = syscall1(SYS_FORK, 0);
     if (pid == 0) {
-        int mine = 0;
-        int n;
-
-        while ((n = syscall3(SYS_READ, fd, (int)sector_buf, 512)) > 0) {
-            mine += n;
+        mark_sectors(fd, child_marks);
+        if (syscall3(SYS_WRITE, pipe_fds[1], (int)child_marks, PATTERN_SECTORS) != PATTERN_SECTORS) {
+            sys_exit(5);
         }
-        sys_exit(mine / 512);
+        sys_exit(0);
     }
-    total = 0;
-    {
-        int n;
-
-        while ((n = syscall3(SYS_READ, fd, (int)sector_buf, 512)) > 0) {
-            total += n;
-        }
+    mark_sectors(fd, parent_marks);
+    if (wait_status(pid) != 0) {
+        fail("the child reader");
     }
-    total += (wait_status(pid) >> 8) * 512;
+    if (syscall3(SYS_READ, pipe_fds[0], (int)child_marks, PATTERN_SECTORS) != PATTERN_SECTORS) {
+        fail("the child's marks");
+    }
     syscall1(SYS_CLOSE, fd);
-    if (total != hello_bytes) {
-        fail("the shared description did not hand out every byte once");
+    syscall1(SYS_CLOSE, pipe_fds[0]);
+    syscall1(SYS_CLOSE, pipe_fds[1]);
+    total = 0;
+    for (fd = 0; fd < PATTERN_SECTORS; fd++) {
+        if (parent_marks[fd] + child_marks[fd] != 1) {
+            fail("a sector was read twice or not at all through the shared description");
+        }
+        total += parent_marks[fd];
+    }
+    if (total == 0 || total == PATTERN_SECTORS) {
+        fail(total == 0 ? "the parent read nothing through the shared description"
+                        : "the child read nothing through the shared description");
+    }
+
+    /* The whole-disk window is on the real disk and the mount is on the lag
+       wrapper over it; the claim must compare the disk under both. */
+    if (syscall3(SYS_OPEN, (int)"/dev/disk0", O_RDWR, 0) != -EBUSY) {
+        fail("a whole-disk writer opened over a mounted range");
     }
 
     if (syscall2(SYS_UMOUNT2, (int)"/lm", 0) != 0) {
