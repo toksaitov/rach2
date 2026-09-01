@@ -23,4 +23,12 @@ void init_pit(uint32_t frequency);
  */
 extern uint32_t pit_reload;
 
+/**
+ * Microseconds since the boot, read from the tick and the counter under it.
+ *
+ * For measuring an interval shorter than the 10 ms tick, which is what the
+ * USB interrupt path is. It wraps after about 71 minutes.
+ */
+uint32_t pit_now_us(void);
+
 #endif

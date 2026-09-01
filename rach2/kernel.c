@@ -125,6 +125,7 @@ static bool test_strings(void);
 static void test_display(void);
 static bool test_timer(void);
 static bool test_udelay(uint32_t *measured_ms);
+static bool test_clock(uint32_t *measured_us);
 static bool test_syscall(void);
 static bool test_usermode(void);
 static void test_switch(void);
@@ -159,6 +160,9 @@ static void timer_handler(isr_params_t *params)
     (void) params;
 
     ++kernel_ticks;
+    /* Read once a tick so the microsecond clock sees every wrap of the
+       counter it follows; see `pit_now_us`. */
+    (void)pit_now_us();
     if (++kernel_second_ticks >= 100) {
         kernel_second_ticks = 0;
         ++kernel_uptime_seconds;
@@ -554,6 +558,42 @@ static bool test_udelay(uint32_t *measured_ms)
     elapsed = kernel_ticks - start;
     *measured_ms = elapsed * 10;
     return elapsed >= 15 && elapsed <= 35;
+}
+
+/**
+ * The microsecond clock against the wait that is measured a different way.
+ *
+ * `pit_now_us` counts the periods of the 8254's counter and reads where it is
+ * inside one, and `k_udelay` measures that same counter by its drop. Two
+ * milliseconds is longer than one sweep, so a reading that lost which half of
+ * the period it was in shows here as an interval five milliseconds out. The
+ * clock must also not run backwards or run away across the twenty
+ * milliseconds the second wait covers.
+ */
+static bool test_clock(uint32_t *measured_us)
+{
+    uint32_t start = pit_now_us();
+    uint32_t mid, end;
+    int i;
+
+    k_udelay(2000);
+    mid = pit_now_us();
+    *measured_us = mid - start;
+    if (mid < start || mid - start < 1500 || mid - start > 3500) {
+        return false;
+    }
+    /* Twenty more milliseconds, which is two of the tick's periods and four
+       of the counter's sweeps: a reading that lost a wrap steps backwards
+       here, and one that counted a wrap twice runs away. */
+    for (i = 0; i < 20; i++) {
+        end = pit_now_us();
+        if (end < mid || end - mid > 3000) {
+            return false;
+        }
+        k_udelay(1000);
+        mid = end;
+    }
+    return true;
 }
 
 static bool test_syscall(void)
@@ -1950,6 +1990,17 @@ static void run_self_tests(void)
              passed ? "udelay: passed: 200 ms asked, %d ms seen"
                     : "udelay: failed: 200 ms asked, %d ms seen",
              (int)measured_ms);
+    }
+
+    {
+        uint32_t measured_us = 0;
+        int passed = test_clock(&measured_us);
+
+        selftest_count(passed);
+        klog(passed ? KLOG_INFO : KLOG_ERR, "selftest",
+             passed ? "clock: passed: 2000 us asked, %d us seen"
+                    : "clock: failed: 2000 us asked, %d us seen",
+             (int)measured_us);
     }
 
     /* Reaching this line at all is the check: the code is running from mapped
