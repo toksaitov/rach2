@@ -98,6 +98,159 @@ int fat_name_units(const char *name, uint16_t *units, uint32_t *count)
     return 0;
 }
 
+/* ---- names as UTF-8 ---- */
+
+/* One UTF-16 code unit sequence into UTF-8; returns bytes written, 0 when
+ * `cap` cannot hold it. Surrogate pairs arrive as two units. */
+static int put_utf8(uint32_t cp, char *out, uint32_t cap)
+{
+    if (cp < 0x80) {
+        if (cap < 1) {
+            return 0;
+        }
+        out[0] = (char)cp;
+        return 1;
+    }
+    if (cp < 0x800) {
+        if (cap < 2) {
+            return 0;
+        }
+        out[0] = (char)(0xC0 | (cp >> 6));
+        out[1] = (char)(0x80 | (cp & 0x3F));
+        return 2;
+    }
+    if (cp < 0x10000) {
+        if (cap < 3) {
+            return 0;
+        }
+        out[0] = (char)(0xE0 | (cp >> 12));
+        out[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        out[2] = (char)(0x80 | (cp & 0x3F));
+        return 3;
+    }
+    if (cap < 4) {
+        return 0;
+    }
+    out[0] = (char)(0xF0 | (cp >> 18));
+    out[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+    out[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
+    out[3] = (char)(0x80 | (cp & 0x3F));
+    return 4;
+}
+
+/**
+ * Render UTF-16 `units` (terminated by 0 or by `count`) as UTF-8 into
+ * `out`; 0 on success, -ENAMETOOLONG when it does not fit the component,
+ * -EINVAL for a name no writer produces: an unpaired surrogate, or a unit
+ * after the terminator that is not the 0xFFFF padding.
+ */
+int fat_units_utf8(const uint16_t *units, uint32_t count, char *out, uint32_t cap)
+{
+    uint32_t i = 0;
+    uint32_t n = 0;
+
+    while (i < count && units[i] != 0) {
+        uint32_t cp = units[i++];
+        int w;
+
+        if (cp >= 0xD800 && cp < 0xDC00) {
+            if (i >= count || units[i] < 0xDC00 || units[i] >= 0xE000) {
+                return -EINVAL;
+            }
+            cp = 0x10000 + ((cp - 0xD800) << 10) + (units[i] - 0xDC00);
+            i++;
+        } else if (cp >= 0xDC00 && cp < 0xE000) {
+            return -EINVAL;
+        }
+        w = put_utf8(cp, out + n, cap - 1 - n);
+        if (w == 0) {
+            return -ENAMETOOLONG;
+        }
+        n += (uint32_t)w;
+    }
+    for (i++; i < count; i++) {
+        if (units[i] != 0xFFFF) {
+            return -EINVAL;
+        }
+    }
+    out[n] = '\0';
+    return 0;
+}
+
+/* ---- the mount options ---- */
+
+/* ---- the constructor ---- */
+
+static int key_is(const char *key, const char *end, const char *word)
+{
+    while (key < end && *word && *key == *word) {
+        key++;
+        word++;
+    }
+    return key == end && *word == '\0';
+}
+/* `umask=`, `uid=` and `gid=` are the options Linux's vfat takes and
+ * BusyBox passes through; `ro` is the flag given as data. Anything else
+ * is refused. */
+int fat_parse_options(const char *options, uint32_t *uid, uint32_t *gid, uint32_t *umask)
+{
+    const char *p = options ? options : "";
+
+    *umask = 022;
+    *uid = 0;
+    *gid = 0;
+    while (*p) {
+        const char *key = p;
+        const char *keyend;
+        uint32_t value = 0;
+        int base = 10;
+        int digits = 0;
+
+        int has_value = 0;
+
+        while (*p && *p != ',' && *p != '=') {
+            p++;
+        }
+        keyend = p;
+        if (*p == '=') {
+            p++;
+            has_value = 1;
+            if (key_is(key, keyend, "umask")) {
+                base = 8;
+            }
+            while (*p >= '0' && *p < '0' + base) {
+                uint32_t digit = (uint32_t)(*p - '0');
+
+                if (value > (0xFFFFFFFFu - digit) / (uint32_t)base) {
+                    return -EINVAL; /* past 32 bits */
+                }
+                value = value * (uint32_t)base + digit;
+                p++;
+                digits++;
+            }
+        }
+        if (*p != '\0' && *p != ',') {
+            return -EINVAL;
+        }
+        if (key_is(key, keyend, "ro") && !has_value) {
+            /* the mount flag given as data */
+        } else if (key_is(key, keyend, "umask") && digits) {
+            *umask = value & 0777u;
+        } else if (key_is(key, keyend, "uid") && digits) {
+            *uid = value;
+        } else if (key_is(key, keyend, "gid") && digits) {
+            *gid = value;
+        } else if (p == key) {
+            /* an empty item, as in a trailing comma */
+        } else {
+            return -EINVAL;
+        }
+        if (*p == ',') {
+            p++;
+        }
+    }
+    return 0;
+}
 /* ---- timestamps ---- */
 
 /* FAT keeps local time with no zone; it is read as UTC. Days count from

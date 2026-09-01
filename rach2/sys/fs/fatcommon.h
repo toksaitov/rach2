@@ -18,6 +18,15 @@
  * or 255 bytes. */
 int fat_name_units(const char *name, uint16_t *units, uint32_t *count);
 
+/** UTF-16 `units` (terminated by 0 or by `count`) as UTF-8 in `out`: 0,
+ * -ENAMETOOLONG when it does not fit `cap`, -EINVAL for an unpaired
+ * surrogate or a unit after the terminator that is not 0xFFFF padding. */
+int fat_units_utf8(const uint16_t *units, uint32_t count, char *out, uint32_t cap);
+
+/** The mount options both types take: `umask=`, `uid=`, `gid=` and `ro`;
+ * 0 with the three filled (022, 0, 0 when absent), -EINVAL otherwise. */
+int fat_parse_options(const char *options, uint32_t *uid, uint32_t *gid, uint32_t *umask);
+
 /** The epoch second of a DOS date and time, read as UTC; a field out of
  * range reads as 1980-01-01. */
 int64_t fat_epoch(uint16_t date, uint16_t time);
