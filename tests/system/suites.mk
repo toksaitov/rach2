@@ -542,13 +542,13 @@ run-raw: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(PCAPCHECK) $
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --qemu-arg=-object \
 	    --qemu-arg=filter-dump,id=rw0,netdev=net0,file=$(RAW_PCAP) \
-	    --timeout 200 --ok "RAWPROBE OK" \
+	    --timeout 200 --ok "RAWPROBE OK" --log $(IMAGES_DIR)/raw-test.rawprobe.log \
 	    "expect=Type 'help'" "send=exec /rawprobe" wait=60
 	$(PCAPCHECK) rawwire $(RAW_PCAP)
 	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --append "rach2.ip=10.0.2.15/24" \
-	    --timeout 200 --ok "RAWPROBE OK" \
+	    --timeout 200 --ok "RAWPROBE OK" --log $(IMAGES_DIR)/raw-test.static.log \
 	    "expect=Type 'help'" "send=exec /rawprobe" wait=30
 	# And the program the socket was built for. The ping first is not a flourish: a
 	# datagram for an address whose hardware address is not known yet is dropped
