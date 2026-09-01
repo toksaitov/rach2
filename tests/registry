@@ -61,6 +61,7 @@ disk-q35|qemu-system-i386|full
 diskpolicy|qemu-system-i386|full
 console|qemu-system-i386|core
 usb|qemu-system-i386|core
+usbdisk|qemu-system-i386,mformat,mcopy,mtype|core
 style|cppcheck,shellcheck,clang-format|full
 socket|qemu-system-i386|core
 audio|qemu-system-i386|core

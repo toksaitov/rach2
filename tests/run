@@ -161,7 +161,7 @@ prepare() {
 }
 
 # `style` rebuilds the kernel with its own flags and shares a scratch directory
-# with `host`, so those two run alone, before the pool. `usb` plugs devices in
+# with `host`, so those two run alone, before the pool. `usb` and `usbdisk` plug devices in
 # and out through QEMU's monitor, and on a host saturated by the pool that
 # monitor stops answering `device_add` for a minute or more while the machine
 # runs on; the suite passes every time on its own, so it runs alone, after
@@ -171,7 +171,7 @@ run_set() {
     for suite in $1; do
         case "$suite" in
             style|host) serial="$serial $suite" ;;
-            usb)        lone="$lone $suite" ;;
+            usb|usbdisk) lone="$lone $suite" ;;
             *)          pooled="$pooled $suite" ;;
         esac
     done

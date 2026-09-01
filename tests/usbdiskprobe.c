@@ -21,6 +21,10 @@
  * * `free`: the number of free names `/proc/usb` reports, printed, so the
  *   harness can compare it across a run of plugs and pulls.
  * * `super`: a stick with no partition table mounts through `/dev/usb0`.
+ * * `throughput`: 16 MiB read from `/dev/usb0` in 32 KiB pieces, timed by
+ *   the monotonic clock and printed as `USBDISKPROBE THROUGHPUT N KB/s`.
+ *   The number is recorded, not judged: it is what this milestone's
+ *   page-sized request gives under the emulator.
  *
  * Prints "USBDISKPROBE OK" or "USBDISKPROBE FAIL: reason". Freestanding;
  * direct int 0x80.
@@ -28,19 +32,22 @@
 
 typedef unsigned int size_t;
 
-#define SYS_EXIT      1
-#define SYS_READ      3
-#define SYS_WRITE     4
-#define SYS_OPEN      5
-#define SYS_CLOSE     6
-#define SYS_UNLINK    10
-#define SYS_MOUNT     21
-#define SYS_MKDIR     39
-#define SYS_UMOUNT2   52
-#define SYS_SYNC      36
-#define SYS_FSYNC     118
-#define SYS_STAT64    195
-#define SYS_NANOSLEEP 162
+#define SYS_EXIT          1
+#define SYS_READ          3
+#define SYS_WRITE         4
+#define SYS_OPEN          5
+#define SYS_CLOSE         6
+#define SYS_UNLINK        10
+#define SYS_MOUNT         21
+#define SYS_MKDIR         39
+#define SYS_UMOUNT2       52
+#define SYS_SYNC          36
+#define SYS_FSYNC         118
+#define SYS_STAT64        195
+#define SYS_NANOSLEEP     162
+#define SYS_CLOCK_GETTIME 265
+
+#define CLOCK_MONOTONIC 1
 
 #define O_RDONLY 0
 #define O_WRONLY 1
@@ -456,6 +463,44 @@ static void part_free(void)
     ok();
 }
 
+static char big[32768];
+
+static void part_throughput(void)
+{
+    struct {
+        int sec;
+        int nsec;
+    } before, after;
+    int fd = sys3(SYS_OPEN, (int)"/dev/usb0", O_RDONLY, 0);
+    int total = 0;
+    int ms;
+
+    if (fd < 0) {
+        fail("/dev/usb0 would not open");
+    }
+    sys2(SYS_CLOCK_GETTIME, CLOCK_MONOTONIC, (int)&before);
+    while (total < 16 * 1024 * 1024) {
+        int n = sys3(SYS_READ, fd, (int)big, (int)sizeof(big));
+
+        if (n <= 0) {
+            fail("a read of /dev/usb0 failed before 16 MiB");
+        }
+        total += n;
+    }
+    sys2(SYS_CLOCK_GETTIME, CLOCK_MONOTONIC, (int)&after);
+    sys1(SYS_CLOSE, fd);
+    ms = (after.sec - before.sec) * 1000 + (after.nsec - before.nsec) / 1000000;
+    if (ms <= 0) {
+        ms = 1;
+    }
+    put("USBDISKPROBE THROUGHPUT ");
+    putnum((int)((16 * 1024 * 1000) / ms));
+    put(" KB/s over ");
+    putnum(ms);
+    put(" ms\n");
+    ok();
+}
+
 static void part_super(void)
 {
     if (mount_at("/dev/usb0", "exfat", MS_RDONLY) != 0) {
@@ -501,6 +546,9 @@ void probe_main(unsigned int *sp)
     }
     if (same(what, "super")) {
         part_super();
+    }
+    if (same(what, "throughput")) {
+        part_throughput();
     }
     fail("no such part");
 }

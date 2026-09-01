@@ -1020,6 +1020,27 @@ run-exfat: $(DEMO_CREDS) rach2 tests krffs os-real-image $(MKEXFATFIXTURE) $(HAR
 	sh tests/system/suites/exfat.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(EXFAT_DISK) \
 	    $(OS_REAL_IMAGE) "`cat krffs/rach2_demo_password`" $(MKEXFATFIXTURE)
 
+# The GUID table writer (tools/image/mkgpt.c), for `tests/run usbdisk`: the
+# tree had no writer and the suite needs a table to read.
+MKGPT = build/tools/image/mkgpt
+$(MKGPT): tools/image/mkgpt.c
+	@mkdir -p $(dir $@)
+	cc -O2 -Wall -Wextra -o $@ $<
+# The MBR writer, which krffs/mkdisk.sh builds on demand as well; named here
+# so a suite that runs before any disk image was made still has it.
+MKMBR = build/tools/image/mkmbr
+$(MKMBR): tools/image/mkmbr.c
+	@mkdir -p $(dir $@)
+	cc -O2 -o $@ $<
+# `tests/run usbdisk`: a flash drive as a disk. Three sticks built on the
+# host, an MBR one, a GUID one and one with no table; the nodes, the mounts,
+# a write, the pull from under a mount and the replug, ten plugs and pulls
+# of a stick nobody opened, BusyBox mounting by label, and a throughput line.
+USBDISK_DIR = $(IMAGES_DIR)/usbdisk
+run-usbdisk: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(MKEXFATFIXTURE) $(MKGPT) $(MKMBR) $(HARNESS)
+	sh tests/system/suites/usbdisk.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(USBDISK_DIR) \
+	    $(OS_REAL_IMAGE) "`cat krffs/rach2_demo_password`" $(MKEXFATFIXTURE)
+
 # `tests/run scratch`: milestone 43's fourth partition rehearsed on the sealed
 # image in QEMU, the recovery ISO booted as a stick and the procedure in
 # dev-log/37-fatwrite/hardware.md run over SSH.

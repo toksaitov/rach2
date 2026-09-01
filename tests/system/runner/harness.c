@@ -128,7 +128,7 @@ static int steps_need_monitor(int argc, char **argv)
 
     for (i = 1; i < argc; i++) {
         if (strncmp(argv[i], "key=", 4) == 0 || strncmp(argv[i], "mouse=", 6) == 0 ||
-            strncmp(argv[i], "usb=", 4) == 0) {
+            strncmp(argv[i], "usb=", 4) == 0 || strncmp(argv[i], "drive=", 6) == 0) {
             return 1;
         }
     }
@@ -1126,6 +1126,25 @@ int main(int argc, char **argv)
             char command[192];
 
             snprintf(command, sizeof(command), "device_del %s", step + 8);
+            if (monitor_send(command) != 0) {
+                step_failures++;
+            }
+        } else if (strncmp(step, "drive=add:", 10) == 0) {
+            /* A stick plugged in after the boot is two things to the
+             * monitor: the medium, made with `drive_add`, and the device
+             * over it, made with `usb=add:` naming the drive. Pulling the
+             * device out leaves the medium, so a replug is `usb=add:` alone
+             * and a fresh medium is another `drive=add:`. */
+            char command[192];
+
+            snprintf(command, sizeof(command), "drive_add 0 %s", step + 10);
+            if (monitor_send(command) != 0) {
+                step_failures++;
+            }
+        } else if (strncmp(step, "drive=del:", 10) == 0) {
+            char command[192];
+
+            snprintf(command, sizeof(command), "drive_del %s", step + 10);
             if (monitor_send(command) != 0) {
                 step_failures++;
             }
