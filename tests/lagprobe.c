@@ -24,6 +24,10 @@
  * names a disk partition as the root's source, so the boot did not fall
  * back to the RAM image.
  *
+ * `lagprobe blockfail`, under `rach2.blockfail=3`: the first write to a
+ * mounted volume fails, the mount goes read-only, /proc/mounts says so,
+ * and the next write answers EROFS.
+ *
  * Prints "LAGPROBE OK" or "LAGPROBE FAIL: reason". Freestanding; int 0x80.
  */
 
@@ -39,9 +43,12 @@ typedef unsigned int size_t;
 #define SYS_KILL         37
 #define SYS_PIPE         42
 #define EIO              5
+#define EROFS            30
+#define O_CREAT          0100
 #define SYS_GETTIMEOFDAY 78
 
 #define O_RDONLY 0
+#define O_WRONLY 1
 #define O_RDWR   2
 
 static int syscall1(int n, int a)
@@ -361,6 +368,59 @@ static void run_root(void)
     puts("LAGPROBE OK");
 }
 
+/* `lagprobe blockfail`, under `rach2.blocklag=3 rach2.blockfail=3`: the
+   third write through the lag fails, which is inside the first write to
+   the mounted volume; the mount goes read-only with a record, /proc/mounts
+   says `ro`, and the next write answers EROFS. */
+static void run_blockfail(void)
+{
+    static char text[1024];
+    int fd, n, i, ro = 0;
+
+    if (syscall2(SYS_MKDIR, (int)"/lb", 0755) != 0) {
+        fail("mkdir /lb");
+    }
+    if (sys5(SYS_MOUNT, (int)"/dev/disk0p2", (int)"/lb", (int)"vfat", 0, 0) != 0) {
+        fail("the writable mount through the lag");
+    }
+    fd = syscall3(SYS_OPEN, (int)"/lb/FAIL.TXT", O_WRONLY | O_CREAT, 0644);
+    if (fd >= 0) {
+        syscall1(SYS_CLOSE, fd);
+        fail("the first write to the volume did not fail");
+    }
+    fd = syscall3(SYS_OPEN, (int)"/proc/mounts", O_RDONLY, 0);
+    n = fd < 0 ? -1 : syscall3(SYS_READ, fd, (int)text, (int)sizeof(text) - 1);
+    syscall1(SYS_CLOSE, fd);
+    if (n <= 0) {
+        fail("read /proc/mounts");
+        return;
+    }
+    text[n] = 0;
+    for (i = 0; i + 8 < n; i++) {
+        if (text[i] == '/' && text[i + 1] == 'l' && text[i + 2] == 'b' && text[i + 3] == ' ') {
+            int j = i + 4;
+
+            while (j + 3 < n && text[j] != '\n') {
+                if (text[j] == ' ' && text[j + 1] == 'r' && text[j + 2] == 'o' &&
+                    (text[j + 3] == ',' || text[j + 3] == ' ')) {
+                    ro = 1;
+                }
+                j++;
+            }
+        }
+    }
+    if (!ro) {
+        fail("the mount whose device failed a write is not read-only in /proc/mounts");
+    }
+    if (syscall3(SYS_OPEN, (int)"/lb/AGAIN.TXT", O_WRONLY | O_CREAT, 0644) != -EROFS) {
+        fail("a write after the failure is not EROFS");
+    }
+    if (syscall2(SYS_UMOUNT2, (int)"/lb", 0) != 0) {
+        fail("umount2 of the read-only mount");
+    }
+    puts("LAGPROBE OK");
+}
+
 #define PATTERN_SECTORS 128
 
 static unsigned char parent_marks[PATTERN_SECTORS];
@@ -527,6 +587,8 @@ void probe_main(unsigned int *sp)
         run_mounted();
     } else if (argc >= 2 && argv[1][0] == 'r') {
         run_root();
+    } else if (argc >= 2 && argv[1][0] == 'b') {
+        run_blockfail();
     } else {
         run_sleep();
     }

@@ -2,8 +2,8 @@
  * mount(2) and umount2(2) on a FAT32 partition, and the lifetime of a mount.
  *
  * The suite's disk has a FAT32 volume on /dev/disk0p2 holding `hello.txt`
- * and a copy of the `hello` program. The rows: a writable mount is refused
- * with EROFS and a read-only one is placed; the files on it stat, open,
+ * and a copy of the `hello` program. The rows: a writable mount is placed
+ * and taken away, then a read-only one is placed; the files on it stat, open,
  * read and list, and its statfs is vfat's; a program on a `noexec` mount is
  * refused with EACCES though its mode allows it; a mount is busy while any
  * description on it lives, in this process or a forked one, through `dup`,
@@ -264,8 +264,8 @@ static void rows_placing(void)
     if (sys2(SYS_MKDIR, (int)MNT, 0755) != 0) {
         fail("mkdir " MNT);
     }
-    if (do_mount(SRC, MNT, 0, 0) != -EROFS) {
-        fail("a writable mount is EROFS");
+    if (do_mount(SRC, MNT, 0, 0) != 0 || sys2(SYS_UMOUNT2, (int)MNT, 0) != 0) {
+        fail("a writable mount is placed and taken away");
     }
     if (do_mount(SRC, MNT, MS_RDONLY | MS_REMOUNT, 0) != -EINVAL ||
         do_mount(SRC, MNT, MS_RDONLY | MS_BIND, 0) != -EINVAL ||

@@ -191,4 +191,16 @@ for name in hello again.bin hello.txt; do
 done
 echo "mount-test: every file's bytes are what mcopy reads: OK"
 
+# ---- 9: a write to the volume that the device fails: the mount goes
+#         read-only with a record, and stays so ----
+if run --append "rach2.blocklag=3 rach2.blockfail=3 rach2.rescue" \
+    --timeout 90 --steptmo 60 --ok "LAGPROBE OK" --never "LAGPROBE FAIL" \
+    --log "$DISK.blockfail.log" \
+    "expect=Type 'help'" "send=exec /lagprobe blockfail" \
+    "expect=LAGPROBE" > /dev/null 2>&1 && grep -aq 'vfs: read-only: /lb' "$DISK.blockfail.log"; then
+    echo "mount-test: a failed write puts the mount read-only with a record: OK"
+else
+    fail "the blockfail boot"
+fi
+
 echo "mount-test: PASS"
