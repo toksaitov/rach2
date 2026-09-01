@@ -1044,6 +1044,48 @@ static const struct {
     {"vdl", seq_vdl},
 };
 
+/* Files made and remade: what a program rewriting a set of files does, the
+   set found, truncated and written again, many times over. Not in the
+   matrix, which would stop after each of its hundreds of writes. */
+static int rewrite_rows_run(void)
+{
+    unsigned i, round;
+
+    for (round = 0; round < 2; round++) {
+        for (i = 0; i < 200; i++) {
+            char name[16];
+            void *n, *h;
+            int rc;
+
+            snprintf(name, sizeof(name), "f%03u", i);
+            if (OPS->lookup(&mnt, mnt.root, name, &n) != 0) {
+                int crc = OPS->create(&mnt, mnt.root, name, 0644, &n);
+
+                if (crc != 0) {
+                    printf("exfat_hosttest: rewrite: create %s failed in round %u (%d)\n", name,
+                           round, crc);
+                    return -1;
+                }
+            }
+            if (OPS->open(&mnt, n, 0, &h) != 0) {
+                OPS->put(&mnt, n);
+                return -1;
+            }
+            rc = OPS->truncate(&mnt, h, 0);
+            if (rc == 0) {
+                rc = OPS->write(&mnt, h, pattern, 1024, 0) == 1024 ? 0 : -1;
+            }
+            OPS->release(&mnt, h);
+            OPS->put(&mnt, n);
+            if (rc != 0) {
+                printf("exfat_hosttest: rewrite: %s failed in round %u (%d)\n", name, round, rc);
+                return -1;
+            }
+        }
+    }
+    return 0;
+}
+
 /* The content oracle: after a stop, every file a sequence wrote reads,
    within its published length, the bytes written to it or zeros, and the
    fixture's own files are intact and reachable. */
@@ -1187,6 +1229,12 @@ static void write_rows(void)
           "a name that up-cases alike is one name: EEXIST");
     check(OPS->prepare_unmount(&mnt) == 0, "the clean unmount");
     unmount_image();
+    load("--junk");
+    check(mount_rw() == 0, "a writable mount for the rewrite rows");
+    check(rewrite_rows_run() == 0, "two hundred files made and remade twice over");
+    check(OPS->prepare_unmount(&mnt) == 0, "the rewrite rows' clean unmount");
+    unmount_image();
+    check_consistent("the volume is consistent after the rewrites", 0);
     /* The placement rule: no set this driver makes has its file entry in a
        sector's last slot, so its file and stream entries share a sector.
        The fixture's own straddle.txt is one, on purpose; the rule is read

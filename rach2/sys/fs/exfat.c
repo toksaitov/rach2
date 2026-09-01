@@ -2055,38 +2055,37 @@ static int free_slots(struct ex_mount *em, struct ex_node *d, uint32_t count, ui
 
     raw[0] = 0;
     for (;;) {
-        int rc;
+        int rc = dir_entry(em, d, i, raw);
 
-        if (!end_seen) {
-            rc = dir_entry(em, d, i, raw);
-            if (rc < 0) {
+        if (rc < 0) {
+            return rc;
+        }
+        if (rc == 0) {
+            /* The chain ends here, whether or not the end marker was seen:
+             * the run must lie in clusters the directory has. */
+            rc = dir_grow(em, d);
+            if (rc != 0) {
                 return rc;
             }
-            if (rc == 0) {
-                rc = dir_grow(em, d);
-                if (rc != 0) {
-                    return rc;
-                }
-                continue;
-            }
-            if (raw[0] == 0x00) {
-                end_seen = 1;
-            }
+            continue;
+        }
+        if (raw[0] == 0x00) {
+            end_seen = 1; /* every entry from here on is free */
         }
         if (end_seen || !(raw[0] & 0x80)) {
             if (run == 0) {
                 if (i % per_sector == per_sector - 1) {
-                    /* The last slot of a sector: an inactive entry fills it
-                     * unless it is the end marker, which the set keeps. */
-                    if (!end_seen) {
-                        uint8_t filler[32];
+                    /* The last slot of a sector: an inactive entry fills it,
+                     * the end marker included, since a scan stops at the
+                     * marker and the set past it would be unseen; the
+                     * zeros past the set are the marker then. */
+                    uint8_t filler[32];
 
-                        k_memset(filler, 0, sizeof(filler));
-                        filler[0] = 0x05;
-                        rc = dir_write(em, d, i, filler, 1);
-                        if (rc != 0) {
-                            return rc;
-                        }
+                    k_memset(filler, 0, sizeof(filler));
+                    filler[0] = 0x05;
+                    rc = dir_write(em, d, i, filler, 1);
+                    if (rc != 0) {
+                        return rc;
                     }
                     i++;
                     continue;
