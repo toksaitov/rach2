@@ -81,6 +81,28 @@ void init_idt(void)
     _idt_set_desciptor(46, (uintptr_t) &irq14, 0x08, 0x8E);
     _idt_set_desciptor(47, (uintptr_t) &irq15, 0x08, 0x8E);
 
+    /* Vectors 48 to 63 carry messages from PCI devices. */
+    _idt_set_desciptor(48, (uintptr_t) &msi0, 0x08, 0x8E);
+    _idt_set_desciptor(49, (uintptr_t) &msi1, 0x08, 0x8E);
+    _idt_set_desciptor(50, (uintptr_t) &msi2, 0x08, 0x8E);
+    _idt_set_desciptor(51, (uintptr_t) &msi3, 0x08, 0x8E);
+    _idt_set_desciptor(52, (uintptr_t) &msi4, 0x08, 0x8E);
+    _idt_set_desciptor(53, (uintptr_t) &msi5, 0x08, 0x8E);
+    _idt_set_desciptor(54, (uintptr_t) &msi6, 0x08, 0x8E);
+    _idt_set_desciptor(55, (uintptr_t) &msi7, 0x08, 0x8E);
+    _idt_set_desciptor(56, (uintptr_t) &msi8, 0x08, 0x8E);
+    _idt_set_desciptor(57, (uintptr_t) &msi9, 0x08, 0x8E);
+    _idt_set_desciptor(58, (uintptr_t) &msi10, 0x08, 0x8E);
+    _idt_set_desciptor(59, (uintptr_t) &msi11, 0x08, 0x8E);
+    _idt_set_desciptor(60, (uintptr_t) &msi12, 0x08, 0x8E);
+    _idt_set_desciptor(61, (uintptr_t) &msi13, 0x08, 0x8E);
+    _idt_set_desciptor(62, (uintptr_t) &msi14, 0x08, 0x8E);
+    _idt_set_desciptor(63, (uintptr_t) &msi15, 0x08, 0x8E);
+
+    /* The vector the APIC raises for an interrupt that went away. Without a
+       descriptor it would be a general-protection fault instead. */
+    _idt_set_desciptor(255, (uintptr_t) &spurious_isr, 0x08, 0x8E);
+
     /* 0xEE: DPL=3 gate so user mode can invoke int 0x80. */
     _idt_set_desciptor(128, (uintptr_t) &isr128, 0x08, 0xEE);
 

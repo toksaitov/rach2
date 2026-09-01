@@ -341,7 +341,7 @@ int init_mouse(void)
         return -1;
     }
 
-    register_isr_handler(44, mouse_irq_handler);
+    register_isr_handler(44, mouse_irq_handler, "mouse");
 
     mouse_initialized = true;
 

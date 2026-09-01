@@ -243,7 +243,7 @@ unsigned int map_mmio(unsigned int phys, unsigned int size)
 static unsigned char isr_vector_registered;
 static int isr_handler_registered;
 
-void register_isr_handler(uint8_t vector, isr_handler_t handler)
+void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *name)
 {
     isr_vector_registered = vector;
     isr_handler_registered = handler != 0;

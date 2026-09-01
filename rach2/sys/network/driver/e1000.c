@@ -484,7 +484,7 @@ static int e1000_init(void)
      * described. */
     pci_enable_bus_master(&e1000_pci);
 
-    register_isr_handler((uint8_t)(32 + e1000_pci.irq), e1000_irq);
+    register_isr_handler((uint8_t)(32 + e1000_pci.irq), e1000_irq, "e1000");
     io->w32(E1000_IMS, E1000_INT_MASK);
 
     io->w32(E1000_RCTL, E1000_RCTL_EN | E1000_RCTL_BAM | E1000_RCTL_SZ_2048 | E1000_RCTL_SECRC);

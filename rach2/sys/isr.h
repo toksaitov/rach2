@@ -82,6 +82,39 @@ extern void irq13(void);
 extern void irq14(void);
 extern void irq15(void);
 
+/* The sixteen message-signalled vectors, 48 through 63. */
+extern void msi0(void);
+extern void msi1(void);
+extern void msi2(void);
+extern void msi3(void);
+extern void msi4(void);
+extern void msi5(void);
+extern void msi6(void);
+extern void msi7(void);
+extern void msi8(void);
+extern void msi9(void);
+extern void msi10(void);
+extern void msi11(void);
+extern void msi12(void);
+extern void msi13(void);
+extern void msi14(void);
+extern void msi15(void);
+
+/* The vector the APIC raises for an interrupt that went away. */
+extern void spurious_isr(void);
+
+/** The count of interrupts taken on a vector from 32 to 63. */
+uint32_t isr_vector_count(int vector);
+
+/** The name registered in `slot` of `vector`'s chain, or null past the last. */
+const char *isr_vector_name(int vector, int slot);
+
+/** Every interrupt routed since the boot. */
+uint32_t isr_interrupt_total(void);
+
+/** How many handlers a vector's chain holds. */
+#define ISR_MAX_VECTOR_HANDLERS 4
+
 /*
  * Syscall interrupt handler (int 0x80)
  */
@@ -91,9 +124,9 @@ extern void isr128(void);
 void init_isr(void);
 
 /** Append `handler` to a vector's chain. */
-void register_isr_handler(uint8_t vector, isr_handler_t handler);
+void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *name);
 
 /** Replace a vector's entire chain with a single `handler`. */
-void set_isr_handler(uint8_t vector, isr_handler_t handler);
+void set_isr_handler(uint8_t vector, isr_handler_t handler, const char *name);
 
 #endif

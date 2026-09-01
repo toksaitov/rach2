@@ -1688,7 +1688,7 @@ static int hda_init(void)
     hda_probe_log("OK\n");
 
     if (hda_pci.irq > 0 && hda_pci.irq < 16) {
-        register_isr_handler(32 + hda_pci.irq, hda_irq_handler);
+        register_isr_handler(32 + hda_pci.irq, hda_irq_handler, "hda");
 
         /* INTCTL: global interrupt enable plus our output stream's bit. */
         hda_write32(HDA_INTCTL, 0x80000000 | (1 << output_stream_index));

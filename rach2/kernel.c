@@ -15,6 +15,7 @@
 #include "sys/mm/frame.h"
 #include "sys/mm/pagecache.h"
 #include "sys/mm/modlayout.h"
+#include "sys/lapic.h"
 #include "sys/apicdiag.h"
 #include "sys/diag.h"
 #include "sys/block/mbr.h"
@@ -2743,10 +2744,41 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
      * this kernel drives by message, read and printed, nothing written. */
     apic_diag_report();
 
+    /* The local APIC, so that a device can be told to send its interrupts
+     * as messages. A machine that refuses leaves every device on its
+     * legacy line, which is the kernel as it was. */
+    lapic_init();
+
     __asm__ __volatile__("cli");
     init_pit(100);
-    set_isr_handler(32, &timer_handler); /* install the timer handler on IRQ0 */
+    set_isr_handler(32, &timer_handler, "pit"); /* install the timer handler on IRQ0 */
     __asm__ __volatile__("sti");
+
+    /*
+     * The 8259's interrupts now reach the processor through the APIC's
+     * `LINT0`, so the first thing the timer is asked is whether it still
+     * arrives. A masked entry would otherwise show as a machine that boots
+     * and never ticks, with nothing said about why. The wait is measured
+     * against the 8254's own counter, which needs no interrupt.
+     */
+    if (lapic_ready()) {
+        uint32_t before = kernel_ticks;
+        int ms;
+
+        for (ms = 0; ms < 50 && kernel_ticks == before; ms++) {
+            k_udelay(1000);
+        }
+        if (kernel_ticks == before) {
+            klog(KLOG_ERR, "lapic", "timer: no tick in 50 ms; writing lint0 again");
+            lapic_repair_lint0();
+            for (ms = 0; ms < 50 && kernel_ticks == before; ms++) {
+                k_udelay(1000);
+            }
+            if (kernel_ticks == before) {
+                klog(KLOG_ERR, "lapic", "timer: still no tick; the 8259's interrupts are not arriving");
+            }
+        }
+    }
     klog(KLOG_INFO, "boot", "timer: ready");
 
 
@@ -2792,7 +2824,7 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
         }
     }
 
-    set_isr_handler(33, &keyboard_handler); /* install the IRQ 1 keyboard handler */
+    set_isr_handler(33, &keyboard_handler, "kbd"); /* install the IRQ 1 keyboard handler */
     pic_unmask_irq(1); /* now safe to take keyboard interrupts (masked since init_pic) */
     tty_console_init(); /* console_tty: VGA + serial, line discipline for fds 0/1/2 */
     klog(KLOG_INFO, "boot", "keyboard: ready");

@@ -67,10 +67,11 @@ Only one open-file description may hold write access across the three raw window
 * `/proc/cmdline` is the captured kernel command line followed by a newline.
 * `/proc/disk` is the disk diagnostic record, the live command counters, and the buffer cache's three counters. The path always exists. Before a diagnostic probe it reports `state not-asked`; only `/dev/disk0` is conditional on the probe. Opening this file requires root.
 * `/proc/uptime` reports total and idle delivered 100 Hz ticks as seconds with two decimal places.
-* `/proc/stat` reports busy ticks in the system column, idle ticks, the boot epoch, processes created since boot, and current runnable and blocked counts. Untracked counters are zero.
+* `/proc/stat` reports busy ticks in the system column, idle ticks, the boot epoch, processes created since boot, and current runnable and blocked counts. Its `intr` line is every interrupt the kernel has routed. Untracked counters are zero.
 * `/proc/meminfo` reports the physical frame pool. Buffers, cache, and swap fields are zero.
 * `/proc/mounts` reports the recorded KRFFS root source and options, the devfs and procfs rows, and then every mount placed by `mount(2)`, in the six-field `getmntent` form with the flags as words.
 * `/proc/filesystems` lists `nodev devfs`, `nodev proc`, and every type `mount(2)` accepts. KRFFS is absent because the root is not placed through `mount(2)`.
+* `/proc/interrupts` has one line per vector that has taken an interrupt: the vector, its count, `PIC` for the sixteen the 8259 pair delivers or `MSI` for the sixteen a PCI device sends as a message, and the names the handlers on it registered under, separated by commas where a line is shared. A vector that has taken nothing has no line. The last line, `SPU`, is the count of spurious interrupts the local APIC has raised.
 * `/proc/net` contains `dev`, `route`, `arp`, and `tcp`. There is no `tcp6` because the kernel has no IPv6 stack.
 * `/proc/self` is a magic symlink to the caller's numeric pid.
 

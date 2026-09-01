@@ -431,6 +431,135 @@ irq15:
     pushl $47
     jmp irq_common_handler
 
+
+# Message-signalled interrupt stubs, vectors 48 through 63. A message has no
+# line to acknowledge at the 8259; the router sends the local APIC its
+# end-of-interrupt instead, after the handler chain.
+
+.globl msi0
+msi0:
+    cli
+    pushl $0
+    pushl $48
+    jmp irq_common_handler
+
+.globl msi1
+msi1:
+    cli
+    pushl $0
+    pushl $49
+    jmp irq_common_handler
+
+.globl msi2
+msi2:
+    cli
+    pushl $0
+    pushl $50
+    jmp irq_common_handler
+
+.globl msi3
+msi3:
+    cli
+    pushl $0
+    pushl $51
+    jmp irq_common_handler
+
+.globl msi4
+msi4:
+    cli
+    pushl $0
+    pushl $52
+    jmp irq_common_handler
+
+.globl msi5
+msi5:
+    cli
+    pushl $0
+    pushl $53
+    jmp irq_common_handler
+
+.globl msi6
+msi6:
+    cli
+    pushl $0
+    pushl $54
+    jmp irq_common_handler
+
+.globl msi7
+msi7:
+    cli
+    pushl $0
+    pushl $55
+    jmp irq_common_handler
+
+.globl msi8
+msi8:
+    cli
+    pushl $0
+    pushl $56
+    jmp irq_common_handler
+
+.globl msi9
+msi9:
+    cli
+    pushl $0
+    pushl $57
+    jmp irq_common_handler
+
+.globl msi10
+msi10:
+    cli
+    pushl $0
+    pushl $58
+    jmp irq_common_handler
+
+.globl msi11
+msi11:
+    cli
+    pushl $0
+    pushl $59
+    jmp irq_common_handler
+
+.globl msi12
+msi12:
+    cli
+    pushl $0
+    pushl $60
+    jmp irq_common_handler
+
+.globl msi13
+msi13:
+    cli
+    pushl $0
+    pushl $61
+    jmp irq_common_handler
+
+.globl msi14
+msi14:
+    cli
+    pushl $0
+    pushl $62
+    jmp irq_common_handler
+
+.globl msi15
+msi15:
+    cli
+    pushl $0
+    pushl $63
+    jmp irq_common_handler
+
+
+# The APIC's spurious vector, 255. It is raised when an interrupt the APIC was
+# about to deliver went away, needs no end-of-interrupt, and has no device
+# behind it; the router counts it and returns.
+
+.globl spurious_isr
+spurious_isr:
+    cli
+    pushl $0
+    pushl $255
+    jmp irq_common_handler
+
 # Common IRQ handler
 .globl irq_common_handler
 irq_common_handler:

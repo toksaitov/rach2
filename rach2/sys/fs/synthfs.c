@@ -268,6 +268,10 @@ int synth_classify(const char *path, struct vpath *vp)
             vp->kind = (n == 2) ? VNODE_PROC_MEMINFO : VNODE_ENOTDIR;
             return vp->kind;
         }
+        if (comp_eq(c[1], "interrupts")) {
+            vp->kind = (n == 2) ? VNODE_PROC_INTERRUPTS : VNODE_ENOTDIR;
+            return vp->kind;
+        }
         if (comp_eq(c[1], "mounts")) {
             vp->kind = (n == 2) ? VNODE_PROC_MOUNTS : VNODE_ENOTDIR;
             return vp->kind;

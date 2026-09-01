@@ -9,6 +9,8 @@
  */
 
 #include "../klog.h"
+#include "../isr.h"
+#include "../lapic.h"
 #include "procfs.h"
 #include "synthfs.h"
 #include "fd.h"
@@ -52,6 +54,7 @@
 #define PROCFS_INO_MOUNTS  0x108u
 #define PROCFS_INO_USB     0x10Cu
 #define PROCFS_INO_FILESYSTEMS 0x10Du
+#define PROCFS_INO_INTERRUPTS 0x10Eu
 #define PROCFS_INO_NETROUTE 0x109u
 #define PROCFS_INO_NETARP  0x10Au
 #define PROCFS_INO_NETTCP  0x10Bu
@@ -85,6 +88,7 @@
 #define PROCFS_MAX_MOUNTS   256  /* the root, and the two synthetic mounts */
 #define PROCFS_MAX_USB      256  /* four devices, one line each */
 #define PROCFS_MAX_FILESYSTEMS 128 /* two nodev lines and four types */
+#define PROCFS_MAX_INTERRUPTS 1024 /* one line per vector taken, with its names, and the spurious count */
 #define PROCFS_MAX_NETROUTE 512  /* a header and at most two routes */
 #define PROCFS_MAX_NETARP  1024  /* a header and the eight-entry cache */
 #define PROCFS_MAX_NETTCP  3072  /* a header and the sixteen-block pool */
@@ -162,6 +166,9 @@ static const char *procfs_kind_name(const struct vpath *vp)
     }
     if (vp->kind == VNODE_PROC_USB) {
         return "/proc/usb";
+    }
+    if (vp->kind == VNODE_PROC_INTERRUPTS) {
+        return "/proc/interrupts";
     }
     if (vp->kind == VNODE_PROC_FILESYSTEMS) {
         return "/proc/filesystems";
@@ -599,6 +606,12 @@ uint32_t procfs_ino_filesystems(void)
     return PROCFS_INO_FILESYSTEMS;
 }
 
+uint32_t procfs_ino_interrupts(void)
+{
+    return PROCFS_INO_INTERRUPTS;
+}
+
+
 uint32_t procfs_ino_netroute(void)
 {
     return PROCFS_INO_NETROUTE;
@@ -662,6 +675,9 @@ uint32_t procfs_fd_ino(struct fd_entry *e)
     }
     if (pf->origin_file == SYNTH_PROC_FILESYSTEMS) {
         return PROCFS_INO_FILESYSTEMS;
+    }
+    if (pf->origin_file == SYNTH_PROC_INTERRUPTS) {
+        return PROCFS_INO_INTERRUPTS;
     }
     return procfs_ino_pid(pf->origin_pid);
 }
@@ -798,7 +814,9 @@ static int procfs_gen_statsys(struct procfs_text *t)
     ap_ch(t, ' ');
     ap_u32(t, idle);
     ap_str(t, " 0 0 0 0 0 0\n");
-    ap_str(t, "intr 0\n");
+    ap_str(t, "intr ");
+    ap_u32(t, isr_interrupt_total());
+    ap_ch(t, '\n');
     ap_str(t, "ctxt 0\n");
     ap_str(t, "btime ");
     ap_u32(t, (uint32_t)rtc_boot_epoch());
@@ -939,6 +957,47 @@ static int procfs_gen_mounts(struct procfs_text *t)
 /* /proc/filesystems: `nodev` for the two synthetic namespaces, then every
  * type mount(2) accepts. KRFFS is not listed, because the root is not
  * mounted through mount(2) and cannot be while it lives in the window. */
+/* /proc/interrupts: one line per vector that has taken an interrupt, the
+ * vector, its count and where it comes from, then the counts the APIC's
+ * spurious vector and the timer's fallback pump keep. */
+static int procfs_gen_interrupts(struct procfs_text *t)
+{
+    int v;
+
+    for (v = 32; v < 64; v++) {
+        uint32_t n = isr_vector_count(v);
+        int slot;
+        int named = 0;
+
+        if (n == 0) {
+            continue;
+        }
+        ap_u32(t, (uint32_t)v);
+        ap_str(t, ":\t");
+        ap_u32(t, n);
+        ap_str(t, v < 48 ? "\tPIC\t" : "\tMSI\t");
+        for (slot = 0; slot < ISR_MAX_VECTOR_HANDLERS; slot++) {
+            const char *name = isr_vector_name(v, slot);
+
+            if (name == 0) {
+                continue;
+            }
+            if (named++) {
+                ap_str(t, ", "); /* two devices on one line are two names */
+            }
+            ap_str(t, name);
+        }
+        if (!named) {
+            ap_str(t, "none");
+        }
+        ap_ch(t, '\n');
+    }
+    ap_str(t, "SPU:\t");
+    ap_u32(t, lapic_spurious_count());
+    ap_str(t, "\tspurious\n");
+    return t->over ? -1 : t->len;
+}
+
 static int procfs_gen_filesystems(struct procfs_text *t)
 {
     int i;
@@ -1199,7 +1258,7 @@ int procfs_open(const struct vpath *vp, int flags)
         vp->kind != VNODE_PROC_NET_DEV && vp->kind != VNODE_PROC_UPTIME &&
         vp->kind != VNODE_PROC_STAT_SYS && vp->kind != VNODE_PROC_MEMINFO &&
         vp->kind != VNODE_PROC_MOUNTS && vp->kind != VNODE_PROC_USB &&
-        vp->kind != VNODE_PROC_FILESYSTEMS &&
+        vp->kind != VNODE_PROC_FILESYSTEMS && vp->kind != VNODE_PROC_INTERRUPTS &&
         vp->kind != VNODE_PROC_NET_ROUTE &&
         vp->kind != VNODE_PROC_NET_ARP && vp->kind != VNODE_PROC_NET_TCP) {
         pid = procfs_resolve_pid(vp->pid);
@@ -1258,6 +1317,9 @@ int procfs_open(const struct vpath *vp, int flags)
     } else if (vp->kind == VNODE_PROC_USB) {
         procfs_text_init(&text, f->data, PROCFS_MAX_USB);
         len = procfs_gen_usb(&text);
+    } else if (vp->kind == VNODE_PROC_INTERRUPTS) {
+        procfs_text_init(&text, f->data, PROCFS_MAX_INTERRUPTS);
+        len = procfs_gen_interrupts(&text);
     } else if (vp->kind == VNODE_PROC_FILESYSTEMS) {
         procfs_text_init(&text, f->data, PROCFS_MAX_FILESYSTEMS);
         len = procfs_gen_filesystems(&text);
@@ -1304,6 +1366,8 @@ int procfs_open(const struct vpath *vp, int flags)
         f->origin_file = SYNTH_PROC_MOUNTS;
     } else if (vp->kind == VNODE_PROC_USB) {
         f->origin_file = SYNTH_PROC_USB;
+    } else if (vp->kind == VNODE_PROC_INTERRUPTS) {
+        f->origin_file = SYNTH_PROC_INTERRUPTS;
     } else if (vp->kind == VNODE_PROC_FILESYSTEMS) {
         f->origin_file = SYNTH_PROC_FILESYSTEMS;
     } else if (vp->kind == VNODE_PROC_NET_ROUTE) {

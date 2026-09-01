@@ -422,7 +422,7 @@ static int sb16_init(void)
         return -1;
     }
 
-    register_isr_handler(SB16_IRQ_VECTOR, sb16_irq_handler);
+    register_isr_handler(SB16_IRQ_VECTOR, sb16_irq_handler, "sb16");
 
     mixer_write(MIXER_RESET, 0);
 

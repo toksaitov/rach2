@@ -162,7 +162,9 @@ echo "procfiles-test: the three mounts each name their own source: OK"
   printf 'netstat -tn > /tmp.ns 2>/tmp.ns6; echo NS""-STATUS:$?; cat /tmp.ns; cat /tmp.ns6\n'; sleep 4;
   printf 'arp -n > /tmp.arp; echo AR""P-STATUS:$?; cat /tmp.arp\n'; sleep 3;
   printf 'ifconfig eth0 > /tmp.if; echo IF""-STATUS:$?; cat /tmp.if\n'; sleep 3;
-  printf 'cat /proc/net/dev > /tmp.nd; echo ND""-STATUS:$?; cat /tmp.nd\n'; sleep 6 ) \
+  printf 'cat /proc/net/dev > /tmp.nd; echo ND""-STATUS:$?; cat /tmp.nd\n'; sleep 4;
+  printf 'cat /proc/interrupts > /tmp.ir; echo IR""-STATUS:$?; cat /tmp.ir\n'; sleep 4;
+  printf 'grep "^intr" /proc/stat | sed s/^/IN""TR:/\n'; sleep 4 ) \
     | qemu-system-i386 -cpu max -display none \
     -kernel "$KERNEL" -initrd "$REAL" \
     -net nic,model=rtl8139 -net "user,hostfwd=tcp::$FWD_PORT-:22" \
@@ -187,7 +189,7 @@ QPID=$!
 ( sleep 42; "$REPO/build/tests/system/hostpeer" hold "$FWD_PORT" 40 ) \
     >/dev/null 2>&1 &
 PEER_PID=$!
-if ! wait_serial "$REAL.applets.log" "ND-STATUS:" 240; then
+if ! wait_serial "$REAL.applets.log" "INTR:intr" 240; then
     stop
     echo "procfiles-test: FAIL: the applet run never finished" >&2
     exit 1
@@ -204,7 +206,7 @@ tr -d '\r' <"$REAL.applets.log" >"$PLAIN_LOG"
 # Each applet's own exit status, captured before anything reads its output. An
 # applet that printed a plausible row and then failed passed the earlier version
 # of this test, which looked only at the text.
-for pair in "PS:ps" "DF:df" "FREE:free" "UP:uptime" "ND:cat" "IF:ifconfig" \
+for pair in "PS:ps" "DF:df" "FREE:free" "UP:uptime" "ND:cat" "IR:cat" "IF:ifconfig" \
             "DMESG:dmesg" "RT:route" "ARP:arp" "NS:netstat"; do
     token="${pair%%:*}"
     word="${pair#*:}"
@@ -401,4 +403,50 @@ if ! grep -qiE "tcp6|can't open .*/proc/net/tcp6" "$PLAIN_LOG"; then
     exit 1
 fi
 echo "procfiles-test: netstat names the IPv6 family it cannot find: OK"
+
+# /proc/interrupts: the timer's own line, which every boot has. The count is
+# read from the machine and must be a number that has moved, the controller
+# column says which of the two paths the vector arrives on, and the name is the
+# one the handler registered: a file that printed the vector and the count
+# alone would pass a check on either of them by itself.
+pit_row=$(awk -F"\t" '$1 == "32:" { print $2 "|" $3 "|" $4; exit }' "$PLAIN_LOG")
+if [ -z "$pit_row" ]; then
+    echo "procfiles-test: FAIL: /proc/interrupts has no line for vector 32" >&2
+    grep -A6 "IR-STATUS" "$PLAIN_LOG" | head -8 >&2
+    exit 1
+fi
+pit_count="${pit_row%%|*}"
+pit_rest="${pit_row#*|}"
+pit_path="${pit_rest%%|*}"
+pit_name="${pit_rest#*|}"
+case "$pit_count" in
+    ''|*[!0-9]*)
+        echo "procfiles-test: FAIL: vector 32's count is not a number: $pit_row" >&2
+        exit 1 ;;
+esac
+if [ "$pit_count" -lt 100 ]; then
+    echo "procfiles-test: FAIL: the timer has ticked $pit_count times on a" >&2
+    echo "procfiles-test: machine that has been up for seconds" >&2
+    exit 1
+fi
+if [ "$pit_path" != "PIC" ] || [ "$pit_name" != "pit" ]; then
+    echo "procfiles-test: FAIL: vector 32 is '$pit_path' handled by '$pit_name'," >&2
+    echo "procfiles-test: not the timer on the 8259 pair" >&2
+    exit 1
+fi
+echo "procfiles-test: /proc/interrupts counts the timer's vector and names it: OK"
+
+# /proc/stat's intr line, which said zero on every machine before the counts
+# existed. It is every routed vector, so it cannot be below the timer's own.
+intr=$(sed -n 's/^INTR:intr \([0-9][0-9]*\).*/\1/p' "$PLAIN_LOG" | head -1)
+if [ -z "$intr" ]; then
+    echo "procfiles-test: FAIL: /proc/stat has no intr line" >&2
+    exit 1
+fi
+if [ "$intr" -lt "$pit_count" ]; then
+    echo "procfiles-test: FAIL: /proc/stat reports $intr interrupts, fewer than" >&2
+    echo "procfiles-test: the $pit_count the timer alone has taken" >&2
+    exit 1
+fi
+echo "procfiles-test: /proc/stat counts every interrupt the machine has taken: OK"
 echo "procfiles-test: PASS"

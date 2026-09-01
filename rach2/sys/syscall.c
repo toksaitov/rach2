@@ -1425,6 +1425,7 @@ static int32_t synth_open(const struct vpath *vp, int flags)
         case VNODE_PROC_MOUNTS:
         case VNODE_PROC_USB:
         case VNODE_PROC_FILESYSTEMS:
+        case VNODE_PROC_INTERRUPTS:
         case VNODE_PROC_NET_ROUTE:
         case VNODE_PROC_NET_ARP:
         case VNODE_PROC_NET_TCP:
@@ -3416,6 +3417,11 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
             kst->st_dev = PROCFS_FSID;
             kst->st_mode = S_IFREG | 0444;
             kst->st_ino = procfs_ino_filesystems();
+            return 0;
+        case VNODE_PROC_INTERRUPTS:
+            kst->st_dev = PROCFS_FSID;
+            kst->st_mode = S_IFREG | 0444;
+            kst->st_ino = procfs_ino_interrupts();
             return 0;
         case VNODE_PROC_NET_ROUTE:
             kst->st_dev = PROCFS_FSID;
@@ -11644,5 +11650,5 @@ void init_syscall(void)
 
     _trace_enosys = kcmdline_has("rach2.trace=enosys");
 
-    register_isr_handler(SYSCALL_VECTOR, _syscall_handler);
+    register_isr_handler(SYSCALL_VECTOR, _syscall_handler, "syscall");
 }

@@ -223,7 +223,7 @@ void init_paging(size_t usable_frames)
      */
     _user_frames_start = mem_reserved_ptr / PAGE_SIZE;
 
-    register_isr_handler(14, &_page_fault_handler);
+    register_isr_handler(14, &_page_fault_handler, "page fault");
 
     _load_page_dir(_curr_dir);
 }

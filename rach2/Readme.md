@@ -26,7 +26,9 @@ The metal and recovery kernels use separate component names and object trees. A 
 
 ## Architecture
 
-The Multiboot header and entry point are in `loader.s`; `link.ld` places the GNU-linked image at physical address `0x00100000`. The kernel uses a flat GDT with ring-0 and ring-3 code and data segments, a TSS, and a per-process `%gs` TLS segment. The IDT contains the 32 CPU exceptions, the 16 remapped 8259 PIC interrupts, and the user-callable system-call gate at vector `0x80`. The PIT runs at 100 Hz.
+The Multiboot header and entry point are in `loader.s`; `link.ld` places the GNU-linked image at physical address `0x00100000`. The kernel uses a flat GDT with ring-0 and ring-3 code and data segments, a TSS, and a per-process `%gs` TLS segment. The IDT contains the 32 CPU exceptions, the 16 remapped 8259 PIC interrupts at vectors 32 to 47, 16 vectors at 48 to 63 for messages from PCI devices, the local APIC's spurious vector at 255, and the user-callable system-call gate at vector `0x80`. The PIT runs at 100 Hz.
+
+The local APIC is enabled at boot because a message from a PCI device is a write to its page. Nothing else uses it: the timer stays the PIT, and the 8259 pair still delivers the keyboard, the mouse and the disks through `LINT0` as an external interrupt, which is the state firmware leaves and which `sys/lapic.c` restores if it finds anything else. A processor without an APIC, without the model-specific registers, or in x2APIC mode is refused by name in the log, and so is a machine booted with `rach2.nomsi`; the kernel then has no message vectors. `/proc/interrupts` says which vectors have taken interrupts, how many, and under what names, and `/proc/stat`'s `intr` line is their total.
 
 The managed physical-RAM window ends at 32 MiB; selected device MMIO can be identity-mapped above it. The kernel sizes its frame allocator from the Multiboot memory map within the RAM limit. It has 16 process slots and 16 file descriptors per process. User address spaces have demand-paged VMAs, copy-on-write fork, a growing stack, and shared supervisor-only kernel mappings. See [memory management](sys/mm/Readme.md).
 
@@ -106,6 +108,8 @@ Options are whitespace-delimited. Flags match whole tokens, and the first `key=v
 | `rach2.nomouse` | Skip the PS/2 mouse probe. |
 | `rach2.nonet` | Skip network-device discovery. |
 | `rach2.diag` | Print the boot diagnostic report again at the end and wait for input. |
+| `rach2.apicdiag` | Print what the machine's firmware left in the local APIC and what MSI capabilities the xHCI and HDA controllers have. It reads and writes nothing. |
+| `rach2.nomsi` | Leave the local APIC alone and take every interrupt through the 8259 pair. |
 | `rach2.nousb` | Skip the USB stack: no controller is taken, and nothing is enumerated. |
 | `rach2.trace=enosys` | Log each missing system-call number once per process. |
 | `rach2.board=name` | Select a named board power profile instead of automatic matching. |

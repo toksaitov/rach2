@@ -62,6 +62,7 @@ C_SRC = kernel.c \
         sys/mm/pagecache.c \
         sys/mm/modlayout.c \
         sys/apicdiag.c \
+    sys/lapic.c \
     sys/diag.c \
         sys/udelay.c \
         sys/proc/process.c \
