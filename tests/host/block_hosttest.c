@@ -76,6 +76,12 @@ static int backing_write(block_device_t *device, uint64_t lba, uint32_t count, c
 static block_device_t backing = {512u, 1000u, BLOCK_FAULT_SAFE, 0, backing_read, backing_write,
                                  0,    0};
 
+block_device_t *block_lag_backing(block_device_t *dev)
+{
+    (void)dev;
+    return 0;
+}
+
 int main(void)
 {
     block_partition_t part;

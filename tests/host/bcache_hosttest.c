@@ -6,11 +6,15 @@
  * The fake device is polled and fault-safe, backed by a memory image whose
  * every sector holds its own number. `block_request` is stubbed to call the
  * device directly: the request pool is i386 code and the guest's row. The
- * rows are the read half's contract: hits and misses, the least-recently-
- * released victim named exactly, a failed read answered with no buffer,
- * invalidation refused while held, the two hold rules refused by panic, a
- * short last block, and a block past the device refused. The busy-buffer
- * wait needs a scheduler and is the guest's row, not this one's.
+ * rows are the cache's contract: hits and misses, the least-recently-
+ * released victim named exactly, a failed read returning no buffer,
+ * invalidation returning EBUSY while a buffer is held or dirty and dropping
+ * every buffer of the device after, the hold rules and the ownership of a
+ * release ending in a panic, a short last block, a block past the device and
+ * a block number that would wrap the sector arithmetic both returning
+ * nothing, and sync writing dirty buffers in ascending order and keeping a
+ * buffer dirty across a failed write until a later call writes it. The
+ * busy-buffer wait needs a scheduler and is the guest's row, not this one's.
  *
  * No hosted headers: the kernel headers define the fixed-width types, and
  * the libc calls used here are declared by hand the way the other host
@@ -89,6 +93,10 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     waited_on_host = 1;
     return -1;
 }
+int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
+{
+    return wq_wait_event(wq, cond, arg);
+}
 
 /* ---- the fake device ---- */
 
@@ -97,8 +105,10 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 
 static unsigned char image_small[FAKE_SECTORS * 512];
 static unsigned char image_big[BIG_SECTORS * 512];
-static int reads_made, fail_reads;
+static int reads_made, fail_reads, fail_writes;
 static unsigned last_count;
+static uint64_t writes_lba[8];
+static int writes_made;
 
 static int fake_read(block_device_t *d, uint64_t lba, uint32_t count, void *buf)
 {
@@ -113,6 +123,13 @@ static int fake_read(block_device_t *d, uint64_t lba, uint32_t count, void *buf)
 
 static int fake_write(block_device_t *d, uint64_t lba, uint32_t count, const void *buf)
 {
+    if (fail_writes) {
+        return -5;
+    }
+    if (writes_made < 8) {
+        writes_lba[writes_made] = lba;
+    }
+    writes_made++;
     __builtin_memcpy((unsigned char *)d->drvdata + lba * 512, buf, count * 512);
     return 0;
 }
@@ -138,24 +155,41 @@ static void check(int ok, const char *what)
 {
     if (!ok) {
         fails++;
-        printf("FAIL: %s\n", what);
+        printf("bcache_hosttest: FAIL: %s\n", what);
     }
 }
 
-/* Run `blk` through bcache_get in a child that expects a panic whose text
- * contains `text`; the parent turns the exit status into a row. */
-static void panic_row(uint64_t blk, const char *text, const char *what)
+/* Run `fn(arg)` in a child that expects a panic whose text contains `text`;
+ * the parent turns the exit status into a row. */
+static void panic_row(void (*fn)(void *), void *arg, const char *text, const char *what)
 {
     int pid = fork();
     int status = 0;
 
     if (pid == 0) {
         expect_panic = text;
-        bcache_get(&fake, blk);
+        fn(arg);
         _exit(44); /* no panic came */
     }
     check(pid > 0 && waitpid(pid, &status, 0) == pid, "the panic child ran");
     check((status & 0x7f) == 0 && ((status >> 8) & 0xff) == 42, what);
+}
+
+static void get_fake(void *arg)
+{
+    bcache_get(&fake, *(uint64_t *)arg);
+}
+static void get_other(void *arg)
+{
+    bcache_get(&other, *(uint64_t *)arg);
+}
+static void release_it(void *arg)
+{
+    bcache_release(arg);
+}
+static void dirty_it(void *arg)
+{
+    bcache_dirty(arg);
 }
 
 int main(void)
@@ -187,20 +221,48 @@ int main(void)
     check(last_count == 4, "read as the sectors that exist");
     bcache_release(b);
 
-    check(bcache_get(&fake, 13) == 0, "a block past the device is refused");
+    check(bcache_get(&fake, 13) == 0, "a block past the device returns nothing");
+    check(bcache_get(&fake, (uint64_t)1 << 61) == 0,
+          "a block number that would wrap the sector arithmetic returns nothing");
 
     fail_reads = 1;
     check(bcache_get(&other, 3) == 0, "a failed read returns no buffer");
     fail_reads = 0;
 
     b = bcache_get(&fake, 5);
-    check(bcache_invalidate(&fake) == -16, "invalidation refuses while held");
+    check(bcache_invalidate(&fake) == -16, "invalidation is EBUSY while a buffer is held");
     bcache_release(b);
     check(bcache_invalidate(&fake) == 0, "and drops the device's buffers after");
     reads_made = 0;
     b = bcache_get(&fake, 5);
-    check(reads_made == 1, "so the next get reads the device again");
     bcache_release(b);
+    b = bcache_get(&fake, 0);
+    bcache_release(b);
+    b = bcache_get(&fake, 12);
+    bcache_release(b);
+    check(reads_made == 3, "so every block of the device is read again");
+
+    /* Writeback: a dirty buffer is written at sync in ascending block order,
+       is kept dirty across a failed write, and blocks invalidation until it
+       is written. */
+    b = bcache_get(&fake, 9);
+    bcache_dirty(b);
+    bcache_release(b);
+    b = bcache_get(&fake, 2);
+    b->data[0] = 0xAB;
+    bcache_dirty(b);
+    bcache_release(b);
+    check(bcache_invalidate(&fake) == -16, "invalidation is EBUSY while a buffer is dirty");
+    fail_writes = 1;
+    check(bcache_sync(&fake) == -5, "a failed write returns the device's errno");
+    fail_writes = 0;
+    writes_made = 0;
+    check(bcache_sync(&fake) == 0, "the next sync writes");
+    check(writes_made == 2 && writes_lba[0] == 16 && writes_lba[1] == 72,
+          "both dirty buffers, lowest block first");
+    check(image_small[2 * 4096] == 0xAB, "with the buffer's bytes");
+    check(bcache_sync(&fake) == 0 && writes_made == 2, "and nothing is dirty after");
+    check(bcache_invalidate(&fake) == 0, "so invalidation succeeds");
 
     /* Replacement is least recently released: fill every buffer from `other`,
        refresh block 0, and the next miss must evict other:1 exactly. */
@@ -213,7 +275,7 @@ int main(void)
     bcache_release(b);
     reads_made = 0;
     b = bcache_get(&fake, 5);
-    check(b != 0 && reads_made == 1, "a full cache still answers a miss");
+    check(b != 0 && reads_made == 1, "a full cache still serves a miss");
     bcache_release(b);
     b = bcache_get(&other, 0);
     check(b != 0 && reads_made == 1, "the refreshed block survived");
@@ -223,20 +285,33 @@ int main(void)
     bcache_release(b);
 
     /* The hold rules end in a panic, observed from a forked child. */
-    b = bcache_get(&fake, 3);
-    panic_row(2, "lower or equal", "a lower block while holding a higher one panics");
-    bcache_release(b);
-
     {
-        struct bbuf *held[BCACHE_HOLD_MAX];
+        uint64_t two = 2, three = 3, nine = 9;
 
-        for (i = 0; i < BCACHE_HOLD_MAX; i++) {
-            held[i] = bcache_get(&fake, i);
-            check(held[i] != 0, "a buffer within the hold limit");
-        }
-        panic_row(9, "limit", "a fifth held buffer panics");
-        for (i = 0; i < BCACHE_HOLD_MAX; i++) {
-            bcache_release(held[i]);
+        b = bcache_get(&fake, 3);
+        panic_row(get_fake, &two, "not above", "a lower block while holding a higher one panics");
+        panic_row(get_fake, &three, "not above", "the held block taken again panics");
+        panic_row(get_other, &two, "second device",
+                  "a block on another device while holding one panics");
+        current_proc = &proc_b;
+        panic_row(release_it, b, "does not hold",
+                  "a release by a process that does not hold the buffer panics");
+        panic_row(dirty_it, b, "does not hold",
+                  "a dirty mark by a process that does not hold the buffer panics");
+        current_proc = &proc_a;
+        bcache_release(b);
+
+        {
+            struct bbuf *held[BCACHE_HOLD_MAX];
+
+            for (i = 0; i < BCACHE_HOLD_MAX; i++) {
+                held[i] = bcache_get(&fake, i);
+                check(held[i] != 0, "a buffer within the hold limit");
+            }
+            panic_row(get_fake, &nine, "fifth", "a fifth held buffer panics");
+            for (i = 0; i < BCACHE_HOLD_MAX; i++) {
+                bcache_release(held[i]);
+            }
         }
     }
 

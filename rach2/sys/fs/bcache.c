@@ -53,12 +53,15 @@ static void check_hold_rules(block_device_t *dev, uint64_t blk)
             continue;
         }
         held++;
-        if (bufs[i].dev == dev && bufs[i].blk >= blk) {
-            k_panic("bcache: a lower or equal block taken while holding a higher one");
+        if (bufs[i].dev != dev) {
+            k_panic("bcache: hold rule: a block on a second device taken while holding one");
+        }
+        if (bufs[i].blk >= blk) {
+            k_panic("bcache: hold rule: a block taken that is not above every held block");
         }
     }
     if (held >= BCACHE_HOLD_MAX) {
-        k_panic("bcache: a process held more buffers than the limit");
+        k_panic("bcache: hold rule: a fifth buffer taken");
     }
 }
 
@@ -88,33 +91,27 @@ struct bbuf *bcache_get(block_device_t *dev, uint64_t blk)
     if (!initialized) {
         bcache_init();
     }
-    if (!dev || blk * BCACHE_BLOCK_SECTORS >= dev->sector_count) {
+    if (!dev || blk >= (dev->sector_count + BCACHE_BLOCK_SECTORS - 1) / BCACHE_BLOCK_SECTORS) {
         return 0;
     }
     check_hold_rules(dev, blk);
 
+again:
     for (i = 0; i < BCACHE_BUFFERS; i++) {
         if (bufs[i].dev == dev && bufs[i].blk == blk) {
             while (bufs[i].holder != -1) {
                 stat_waits++;
-                if (wq_wait_event(&bufs[i].wq, busy_gone, &bufs[i]) != 0 &&
-                    bufs[i].holder != -1) {
-                    continue; /* EINTR: the buffer is still the goal */
-                }
+                wq_wait_event_nointr(&bufs[i].wq, busy_gone, &bufs[i]);
             }
-            /* The release may have invalidated or repurposed it. */
             if (bufs[i].dev == dev && bufs[i].blk == blk) {
                 bufs[i].holder = caller_pid();
                 stat_hits++;
                 return &bufs[i];
             }
-            return bcache_get(dev, blk);
+            goto again; /* the release invalidated or repurposed it */
         }
     }
 
-    /* A miss: the oldest unheld clean buffer is refilled. Dirty victims are
-     * milestone 37's rule; nothing dirties a buffer yet, and one that is
-     * dirty anyway is skipped rather than lost. */
     for (i = 0; i < BCACHE_BUFFERS; i++) {
         if (bufs[i].holder != -1 || bufs[i].dirty) {
             continue;
@@ -123,23 +120,19 @@ struct bbuf *bcache_get(block_device_t *dev, uint64_t blk)
             victim = &bufs[i];
             break;
         }
-        if (!victim || bufs[i].stamp < victim->stamp) {
+        if (!victim || (int32_t)(bufs[i].stamp - victim->stamp) < 0) {
             victim = &bufs[i];
         }
     }
     if (!victim) {
-        klog(KLOG_WARN, "bcache", "no free buffer");
+        klog(KLOG_WARN, "bcache", "get: no free buffer");
         return 0;
     }
-    /* The buffer is keyed and held before the request, not after: the
-     * request may sleep, and a second process asking for the same block
-     * meanwhile must find this buffer busy and wait for it, not miss too
-     * and fill a second buffer with the same block. A fill that fails gives
-     * the buffer back and wakes whoever waited. */
+    /* Keyed and held before the request sleeps, so a second process asking
+     * for this block waits for this buffer instead of filling a second one. */
     victim->dev = dev;
     victim->blk = blk;
     victim->dirty = 0;
-    victim->failed = 0;
     victim->holder = caller_pid();
     victim->bytes = block_bytes(dev, blk);
     if (block_request(dev, 0, blk * BCACHE_BLOCK_SECTORS,
@@ -155,7 +148,8 @@ struct bbuf *bcache_get(block_device_t *dev, uint64_t blk)
 
 void bcache_release(struct bbuf *b)
 {
-    if (!b || b->holder == -1) {
+    if (!b || b->holder != caller_pid()) {
+        k_panic("bcache: hold rule: a release by a process that does not hold the buffer");
         return;
     }
     b->holder = -1;
@@ -165,47 +159,41 @@ void bcache_release(struct bbuf *b)
 
 void bcache_dirty(struct bbuf *b)
 {
-    if (b && b->holder != -1) {
-        b->dirty = 1;
+    if (!b || b->holder != caller_pid()) {
+        k_panic("bcache: hold rule: a dirty mark by a process that does not hold the buffer");
+        return;
     }
+    b->dirty = 1;
 }
 
 int bcache_sync(block_device_t *dev)
 {
-    int rc = 0;
-    int wrote;
+    struct bbuf *last = 0;
 
-    /* Ascending block order, restarted after each write so the scan stays a
-     * plain table walk; among data buffers the order carries no meaning, but
-     * a deterministic order is what the tests can see. */
-    do {
+    for (;;) {
         struct bbuf *next = 0;
+        int rc;
         int i;
 
-        wrote = 0;
         for (i = 0; i < BCACHE_BUFFERS; i++) {
-            if (bufs[i].dev == dev && bufs[i].dirty && !bufs[i].failed &&
+            if (bufs[i].dev == dev && bufs[i].dirty &&
+                (!last || bufs[i].blk > last->blk) &&
                 (!next || bufs[i].blk < next->blk)) {
                 next = &bufs[i];
             }
         }
-        if (next) {
-            if (block_request(dev, 1, next->blk * BCACHE_BLOCK_SECTORS,
-                              next->bytes / BLOCK_SECTOR_SIZE,
-                              next->data) == 0) {
-                next->dirty = 0;
-                wrote = 1;
-            } else {
-                next->failed = 1;
-                if (rc == 0) {
-                    rc = -EIO;
-                }
-                klog(KLOG_WARN, "bcache", "writeback failed; kept dirty");
-                wrote = 1; /* keep scanning past it via `failed` */
-            }
+        if (!next) {
+            return 0;
         }
-    } while (wrote);
-    return rc;
+        rc = block_request(dev, 1, next->blk * BCACHE_BLOCK_SECTORS,
+                           next->bytes / BLOCK_SECTOR_SIZE, next->data);
+        if (rc != 0) {
+            klog(KLOG_WARN, "bcache", "sync: write failed, kept dirty");
+            return rc;
+        }
+        next->dirty = 0;
+        last = next;
+    }
 }
 
 int bcache_invalidate(block_device_t *dev)

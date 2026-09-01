@@ -13,18 +13,19 @@
  * whose sector count is not a multiple of eight is read and written as the
  * sectors that exist.
  *
- * This milestone reads through the cache. `bcache_dirty` and `bcache_sync`
- * exist and are called by nothing; the write rules are milestone 37's, proved
- * against the first file system that writes.
+ * Nothing writes through the cache yet: `bcache_dirty` and `bcache_sync`
+ * exist for the first file system that writes, and the host test proves what
+ * they do.
  *
  * A held buffer is busy. The kernel does not preempt inside a syscall, so a
  * second process reaches a busy buffer only while the holder is asleep in a
  * request; the second sleeps on the buffer's queue and is woken at release.
  * Deadlock is kept out by two checked rules: a process holds at most
  * `BCACHE_HOLD_MAX` buffers, and while it holds any it may take only a higher
- * block on the same device, or any block on a device it holds nothing on.
- * `bcache_get` panics on a violation, so a file system that breaks the rule
- * learns in the host test rather than on a machine.
+ * block on the same device. A release or a dirty mark by a process that does
+ * not hold the buffer is a defect too. `bcache_get`, `bcache_release` and
+ * `bcache_dirty` panic on a violation, so a file system that breaks a rule
+ * fails in the host test and not on a machine.
  */
 
 #define BCACHE_BUFFERS 64
@@ -39,7 +40,6 @@ struct bbuf {
                             * on a short last block */
     uint32_t bytes;        /* valid bytes: a whole block, or the short tail */
     int dirty;
-    int failed;            /* a write of this buffer failed; kept dirty */
     int holder;            /* pid holding it, or -1 */
     uint32_t stamp;        /* last release, for least-recently-released */
     wait_queue_t wq;       /* who waits for the hold to end */
@@ -56,7 +56,9 @@ void bcache_release(struct bbuf *b);
 /** Mark a held buffer for writeback. Milestone 37 is the first caller. */
 void bcache_dirty(struct bbuf *b);
 
-/** Write `dev`'s dirty buffers in ascending block order; 0 or first -errno. */
+/** Write `dev`'s dirty buffers in ascending block order; 0, or the first
+ * write's -errno with that buffer and the rest still dirty for the next
+ * call. */
 int bcache_sync(block_device_t *dev);
 
 /** Drop `dev`'s buffers at unmount; -EBUSY while any is held or dirty. */
