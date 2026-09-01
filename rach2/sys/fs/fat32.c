@@ -14,6 +14,7 @@
 #include "../klog.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
+#include "../proc/wait_queue.h"
 #include "../rtc.h"
 #include "bcache.h"
 
@@ -835,8 +836,11 @@ static int alloc_cluster(struct fat_mount *fm, uint32_t *out)
 }
 
 /* A run of `n` clusters chained together and ended, disconnected from
- * everything, zero-filled when `zero`; `*first` and `*last` name its ends.
- * A failure frees what was taken. */
+ * everything; `*first` and `*last` name its ends. `zero` 1 fills them with
+ * zeros for writeback, which a file's data sync makes stable before the
+ * run is joined; `zero` 2 writes the zeros through, for a directory
+ * cluster, which is joined without a sync of its own. A failure frees what
+ * was taken. */
 static int free_chain(struct fat_mount *fm, uint32_t first);
 
 static int alloc_run(struct fat_mount *fm, uint32_t n, int zero, uint32_t *first, uint32_t *last)
@@ -854,7 +858,7 @@ static int alloc_run(struct fat_mount *fm, uint32_t n, int zero, uint32_t *first
             break;
         }
         if (zero) {
-            rc = fat_put_bytes(fm, cluster_offset(fm, c), 0, cluster_bytes(fm), 0);
+            rc = fat_put_bytes(fm, cluster_offset(fm, c), 0, cluster_bytes(fm), zero == 2);
         }
         if (rc == 0 && prev != 0) {
             rc = fat_set(fm, prev, c);
@@ -1051,7 +1055,7 @@ static int free_slot(struct fat_mount *fm, struct fat_node *dir, uint32_t first,
         if (rc != 0) {
             return rc == -ENXIO ? -EIO : rc;
         }
-        rc = alloc_run(fm, 1, 1, &newc, &unused);
+        rc = alloc_run(fm, 1, 2, &newc, &unused);
         if (rc != 0) {
             return rc;
         }
@@ -1917,7 +1921,7 @@ static int fat_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_
     }
     /* The cluster, zeroed and ended, with `.` and `..`, then the parent's
      * entry last; a crash before it leaks the cluster. */
-    rc = alloc_run(fm, 1, 1, &c, &unused);
+    rc = alloc_run(fm, 1, 2, &c, &unused);
     if (rc != 0) {
         return rc;
     }
@@ -2153,18 +2157,20 @@ static int fat_prepare_unmount(struct vfs_mount *mnt)
     struct fat_mount *fm = fm_of(mnt);
     int rc;
 
-    if (!fm->writable || !fm->dirty_set) {
+    if (!fm->writable) {
         return 0;
     }
     rc = bcache_sync(fm->dev);
     if (rc == 0) {
-        rc = write_fsinfo(fm);
+        rc = write_fsinfo(fm); /* the count the driver knows, when it knows one */
     }
-    if (rc == 0) {
+    if (rc == 0 && fm->dirty_set) {
         rc = fat_flag(fm, 0);
     }
     if (rc != 0) {
-        fat_flag(fm, 1); /* whatever was cleared goes back to dirty */
+        if (fm->dirty_set) {
+            fat_flag(fm, 1); /* whatever was cleared goes back to dirty */
+        }
         return rc;
     }
     fm->dirty_set = 0;
@@ -2178,6 +2184,391 @@ static void fat_unmount(struct vfs_mount *mnt)
     fm->used = 0;
     mnt->priv = 0;
     mnt->root = 0;
+}
+
+
+static int k_memcmp_bytes(const uint8_t *a, const uint8_t *b, uint32_t n)
+{
+    uint32_t i;
+
+    for (i = 0; i < n; i++) {
+        if (a[i] != b[i]) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int free_entry(struct fat_mount *fm, uint32_t dir_first, uint32_t index);
+
+/* ---- the check of a dirty volume at mount ----
+ *
+ * A volume whose dirty flag is set was written by something that did not
+ * unmount it. Before the mount is published the directory tree is walked
+ * under one bitmap of 2^20 clusters, shared by every mount and used by one
+ * walk at a time. The four states this driver's own order leaves behind a
+ * crash are found and three of them repaired, each repair a metadata write
+ * in an order a second crash cannot make worse: a surplus tail is ended at
+ * the size's last cluster and then freed, orphan long-name entries are
+ * freed, and a lagging mirror is rewritten from the active FAT. A lost
+ * cluster is reported and left. Anything else (a cross-link, a loop, a
+ * chain outside the volume or shorter than its size, a wrong `.` or `..`,
+ * a name twice in one directory) is a state this driver never leaves, and
+ * the volume is mounted read-only with a record naming it.
+ */
+
+#define WALK_CLUSTERS (1u << 20)
+#define WALK_DEPTH 32
+
+static uint8_t walk_bits[WALK_CLUSTERS / 8];
+static int walk_busy;
+static wait_queue_t walk_wq;
+
+static int walk_idle(void *arg)
+{
+    (void)arg;
+    return !walk_busy;
+}
+
+static int bit_test_set(uint32_t c)
+{
+    uint8_t m = (uint8_t)(1u << (c & 7));
+
+    if (walk_bits[c >> 3] & m) {
+        return 1;
+    }
+    walk_bits[c >> 3] |= m;
+    return 0;
+}
+
+struct walk_state {
+    struct fat_mount *fm;
+    int repaired;  /* repairs written */
+    uint32_t lost; /* clusters marked used that nothing reaches */
+    const char *why;
+};
+
+/* Walk the chain at `first` for the entry `name11`, marking clusters;
+ * `expect` clusters for a file (-1 for a directory). Returns the count, or
+ * -1 for a bad chain. A surplus tail is repaired here. */
+static long walk_chain(struct walk_state *w, uint32_t first, long expect)
+{
+    struct fat_mount *fm = w->fm;
+    uint32_t c = first;
+    uint32_t prev = 0;
+    long count = 0;
+
+    while (c != 0) {
+        uint32_t next;
+        int rc;
+
+        if (c < 2 || c >= fm->cluster_count + 2) {
+            w->why = "a chain outside the volume";
+            return -1;
+        }
+        if (bit_test_set(c)) {
+            w->why = "a cluster reached twice";
+            return -1;
+        }
+        count++;
+        if (expect >= 0 && count > expect) {
+            /* The surplus tail this driver's extend leaves behind a crash:
+             * the size's last cluster is ended first, then the tail freed. */
+            rc = fat_set(fm, prev, FAT_EOC_MIN);
+            if (rc == 0) {
+                rc = free_chain(fm, c);
+            }
+            if (rc != 0) {
+                w->why = "a repair write failed";
+                return -1;
+            }
+            w->repaired++;
+            klog(KLOG_WARN, "vfat", "check: surplus tail freed");
+            return count - 1;
+        }
+        rc = fat_next(fm, c, &next);
+        if (rc != 0) {
+            w->why = "a chain ending in a bad or free entry";
+            return -1;
+        }
+        prev = c;
+        c = next;
+    }
+    if (expect >= 0 && count < expect) {
+        w->why = "a chain shorter than its size";
+        return -1;
+    }
+    return count;
+}
+
+/* One directory: its entries checked, its files' chains walked, its
+ * subdirectories returned one at a time through `sub` with `*resume` at
+ * the entry after them, so the walk keeps its own small stack. */
+static int walk_dir(struct walk_state *w, uint32_t first, uint32_t parent, uint32_t *resume,
+                    uint32_t *sub)
+{
+    struct fat_mount *fm = w->fm;
+    uint32_t i = *resume;
+    uint32_t lfn_start = 0;
+    int lfn_ok = 0, lfn_expect = 0, lfn_pending = 0;
+    uint8_t lfn_sum = 0;
+
+    *sub = 0;
+    for (;; i++) {
+        struct fat_dirent e;
+        int got = dir_entry(fm, 0, first, i, &e);
+        uint32_t fc;
+        int is_dir;
+
+        if (got < 0) {
+            w->why = "an unreadable directory";
+            return -1;
+        }
+        if (got == 0 || e.raw[0] == 0 || e.raw[0] == 0xE5) {
+            if (lfn_pending) {
+                /* Long-name entries with no short entry after them: what a
+                 * crash in the middle of a name leaves; freed, last first. */
+                uint32_t k;
+
+                for (k = i; k > lfn_start; k--) {
+                    if (free_entry(fm, first, k - 1) != 0) {
+                        w->why = "a repair write failed";
+                        return -1;
+                    }
+                }
+                w->repaired++;
+                klog(KLOG_WARN, "vfat", "check: orphan long-name entries freed");
+            }
+            lfn_ok = 0;
+            lfn_pending = 0;
+            if (got == 0 || e.raw[0] == 0) {
+                *resume = i;
+                return 0;
+            }
+            continue;
+        }
+        if (e.raw[11] == ATTR_LFN) {
+            int seq = e.raw[0] & 0x1F;
+
+            if (!lfn_pending) {
+                lfn_start = i;
+            }
+            lfn_pending++;
+            if (e.raw[0] & 0x40) {
+                lfn_ok = seq >= 1 && (e.raw[0] & 0xA0) == 0;
+                lfn_expect = seq;
+                lfn_sum = e.raw[13];
+            } else if (!lfn_ok || seq != lfn_expect || (e.raw[0] & 0xE0) != 0 ||
+                       e.raw[13] != lfn_sum) {
+                lfn_ok = 0;
+            }
+            if (lfn_ok) {
+                lfn_expect = seq - 1;
+            }
+            continue;
+        }
+        if (e.raw[11] & ATTR_VOLUME) {
+            lfn_ok = 0;
+            lfn_pending = 0;
+            continue;
+        }
+        if (lfn_pending && !(lfn_ok && lfn_expect == 0 && short_checksum(e.raw) == lfn_sum)) {
+            uint32_t k;
+
+            for (k = i; k > lfn_start; k--) {
+                if (free_entry(fm, first, k - 1) != 0) {
+                    w->why = "a repair write failed";
+                    return -1;
+                }
+            }
+            w->repaired++;
+            klog(KLOG_WARN, "vfat", "check: orphan long-name entries freed");
+        }
+        lfn_ok = 0;
+        lfn_pending = 0;
+        fc = entry_first(e.raw);
+        is_dir = (e.raw[11] & ATTR_DIRECTORY) != 0;
+        if (raw_eq(e.raw, (const uint8_t *)".          ")) {
+            if (fc != first) {
+                w->why = "a directory whose . is not itself";
+                return -1;
+            }
+            continue;
+        }
+        if (raw_eq(e.raw, (const uint8_t *)"..         ")) {
+            if (fc != parent) {
+                w->why = "a directory whose .. is not its parent";
+                return -1;
+            }
+            continue;
+        }
+        {
+            /* The same name twice in one directory. */
+            uint32_t k;
+
+            for (k = 0; k < i && k < 4096; k++) {
+                struct fat_dirent o;
+
+                if (dir_entry(fm, 0, first, k, &o) != 1) {
+                    break;
+                }
+                if (o.raw[0] != 0xE5 && o.raw[11] != ATTR_LFN && !(o.raw[11] & ATTR_VOLUME) &&
+                    raw_eq(o.raw, e.raw)) {
+                    w->why = "a name twice in one directory";
+                    return -1;
+                }
+            }
+        }
+        if (is_dir) {
+            if (fc == 0) {
+                w->why = "a directory with no cluster";
+                return -1;
+            }
+            if (walk_chain(w, fc, -1) < 0) {
+                return -1;
+            }
+            *resume = i + 1;
+            *sub = fc;
+            return 1;
+        }
+        if (fc != 0) {
+            uint32_t cb = cluster_bytes(fm);
+            long expect = (long)(le32(e.raw + 28) == 0 ? 0 : (le32(e.raw + 28) - 1) / cb + 1);
+
+            if (expect == 0) {
+                expect = 0; /* a size of zero with a cluster: all surplus */
+            }
+            if (walk_chain(w, fc, expect) < 0) {
+                return -1;
+            }
+        } else if (le32(e.raw + 28) != 0) {
+            w->why = "a size with no chain";
+            return -1;
+        }
+    }
+}
+
+/* The mirror rewritten from the active FAT, one cache block at a time. */
+static int rewrite_mirror(struct fat_mount *fm)
+{
+    uint32_t other = fm->active_fat == 0 ? 1 : 0;
+    uint64_t bytes = (uint64_t)fm->fatsz * BLOCK_SECTOR_SIZE;
+    uint64_t at = 0;
+    int differ = 0;
+
+    while (at < bytes) {
+        uint8_t a[512], b[512];
+        uint32_t take = bytes - at < 512 ? (uint32_t)(bytes - at) : 512;
+        int rc = fat_read_bytes(fm, fat_offset(fm, fm->active_fat, 0) + at, a, take);
+
+        if (rc == 0) {
+            rc = fat_read_bytes(fm, fat_offset(fm, other, 0) + at, b, take);
+        }
+        if (rc != 0) {
+            return rc;
+        }
+        if (k_memcmp_bytes(a, b, take) != 0) {
+            differ = 1;
+            rc = fat_put_bytes(fm, fat_offset(fm, other, 0) + at, a, take, 1);
+            if (rc != 0) {
+                return rc;
+            }
+        }
+        at += take;
+    }
+    return differ;
+}
+
+/* The check itself: the walk, the lost count, the mirror; 0 with the
+ * volume consistent or repaired, 1 with it bad. */
+static int fat_check_volume(struct fat_mount *fm)
+{
+    struct walk_state w;
+    uint32_t stack_first[WALK_DEPTH], stack_parent[WALK_DEPTH], stack_resume[WALK_DEPTH];
+    int depth = 0;
+    uint32_t c;
+
+    k_memset(&w, 0, sizeof(w));
+    w.fm = fm;
+    if (fm->cluster_count > WALK_CLUSTERS) {
+        klog(KLOG_WARN, "vfat", "check: %d clusters is more than the walk covers; read-only",
+             (int)fm->cluster_count);
+        return 1;
+    }
+    while (walk_busy) {
+        wq_wait_event_nointr(&walk_wq, walk_idle, 0);
+    }
+    walk_busy = 1;
+    k_memset(walk_bits, 0, (fm->cluster_count + 2 + 7) / 8);
+    klog(KLOG_INFO, "vfat", "check: the volume was not unmounted cleanly; checking");
+    if (walk_chain(&w, fm->root_cluster, -1) < 0) {
+        goto done;
+    }
+    stack_first[0] = fm->root_cluster;
+    stack_parent[0] = 0;
+    stack_resume[0] = 0;
+    depth = 1;
+    while (depth > 0) {
+        uint32_t sub;
+        int got = walk_dir(&w, stack_first[depth - 1], stack_parent[depth - 1],
+                           &stack_resume[depth - 1], &sub);
+
+        if (got < 0) {
+            goto done;
+        }
+        if (got == 0) {
+            depth--;
+            continue;
+        }
+        if (depth == WALK_DEPTH) {
+            w.why = "a directory tree deeper than the walk";
+            goto done;
+        }
+        stack_first[depth] = sub;
+        stack_parent[depth] = stack_first[depth - 1] == fm->root_cluster ? 0 : stack_first[depth - 1];
+        stack_resume[depth] = 0;
+        depth++;
+    }
+    for (c = 2; c < fm->cluster_count + 2; c++) {
+        uint32_t v;
+        uint8_t raw[4];
+
+        if (walk_bits[c >> 3] & (1u << (c & 7))) {
+            continue;
+        }
+        if (fat_read_bytes(fm, fat_offset(fm, fm->active_fat, c), raw, 4) != 0) {
+            w.why = "an unreadable FAT";
+            goto done;
+        }
+        v = le32(raw) & FAT_MASK;
+        if (v != 0 && v != FAT_BAD) {
+            w.lost++;
+        }
+    }
+    if (w.lost) {
+        klog(KLOG_WARN, "vfat", "check: %d lost cluster(s) left for a host tool", (int)w.lost);
+    }
+    if (fm->mirrored && fm->nfats == 2) {
+        int rc = rewrite_mirror(fm);
+
+        if (rc < 0) {
+            w.why = "a repair write failed";
+            goto done;
+        }
+        if (rc == 1) {
+            w.repaired++;
+            klog(KLOG_WARN, "vfat", "check: the mirror FAT rewritten from the active one");
+        }
+    }
+done:
+    walk_busy = 0;
+    wq_wake_all(&walk_wq);
+    if (w.why) {
+        klog(KLOG_WARN, "vfat", "check: %s; mounted read-only", w.why);
+        return 1;
+    }
+    klog(KLOG_INFO, "vfat", "check: consistent, %d repair(s)", w.repaired);
+    return 0;
 }
 
 /* ---- the constructor ---- */
@@ -2378,6 +2769,26 @@ static int fat_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
     }
     fm->writable = (flags & VFS_MS_RDONLY) == 0;
     fm->mnt = mnt;
+    {
+        uint8_t raw[4];
+        uint8_t byte;
+        int dirty;
+
+        rc = fat_read_bytes(fm, fat_offset(fm, fm->active_fat, 1), raw, 4);
+        if (rc == 0) {
+            rc = fat_read_bytes(fm, 65, &byte, 1);
+        }
+        if (rc != 0) {
+            return rc;
+        }
+        dirty = !(le32(raw) & 0x08000000u) || (byte & 1);
+        if (dirty && fm->writable && fat_check_volume(fm) != 0) {
+            fm->writable = 0;
+            mnt->flags |= VFS_MS_RDONLY;
+        } else if (dirty && fm->writable) {
+            fm->dirty_set = 1; /* already on the disk; the clean unmount clears it */
+        }
+    }
 
     root = node_take(fm);
     root->is_dir = 1;

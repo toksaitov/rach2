@@ -572,8 +572,8 @@ void vfs_device_failed(block_device_t *dev, uint64_t lba, int rc)
             continue;
         }
         mounts[i].flags |= VFS_MS_RDONLY;
-        klog(KLOG_WARN, "vfs", "read-only: %s: write of sector %u failed (%d)",
-             mounts[i].covered_path, (unsigned)lba, rc);
+        klog(KLOG_WARN, "vfs", "read-only: %s: write of sector %d failed (%d)",
+             mounts[i].covered_path, (int)lba, rc);
     }
 }
 

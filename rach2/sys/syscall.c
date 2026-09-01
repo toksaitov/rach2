@@ -1578,11 +1578,13 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
             vfs_ref_release(&parent);
             return -EROFS; /* nothing is created under /dev or /proc */
         }
-        if (!mnt_is_root(parent.mnt)) {
-            vfs_ref_release(&parent);
-            return -EROFS; /* no other type creates in this milestone */
+        if (mnt_is_root(parent.mnt)) {
+            rc = (int)cred_access_node((krffs_node_t *)parent.node, CRED_W, 0);
+        } else if (parent.mnt->flags & VFS_MS_RDONLY) {
+            rc = -EROFS;
+        } else {
+            rc = (int)cred_access_ref(&parent, CRED_W, 0);
         }
-        rc = (int)cred_access_node((krffs_node_t *)parent.node, CRED_W, 0);
         if (rc != 0) {
             vfs_ref_release(&parent);
             return rc;
@@ -1594,7 +1596,9 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
             vfs_ref_release(&parent);
             return rc;
         }
-        krffs_stamp_new_node((krffs_node_t *)made, mode);
+        if (mnt_is_root(parent.mnt)) {
+            krffs_stamp_new_node((krffs_node_t *)made, mode);
+        }
         ref.mnt = parent.mnt;
         ref.node = made; /* held by creation; the parent's hold goes back */
         if (parent.mnt->type->ops->put) {

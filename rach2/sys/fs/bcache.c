@@ -81,8 +81,8 @@ static int write_buffer(struct bbuf *b)
                            b->bytes / BLOCK_SECTOR_SIZE, b->data);
 
     if (rc != 0) {
-        klog(KLOG_WARN, "bcache", "write: sector %u failed (%d), kept dirty",
-             (unsigned)(b->blk * BCACHE_BLOCK_SECTORS), rc);
+        klog(KLOG_WARN, "bcache", "write: sector %d failed (%d), kept dirty",
+             (int)(b->blk * BCACHE_BLOCK_SECTORS), rc);
         vfs_device_failed(b->dev, b->blk * BCACHE_BLOCK_SECTORS, rc);
         return rc;
     }

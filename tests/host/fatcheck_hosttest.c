@@ -101,6 +101,13 @@ int main(void)
     row("--vfs", 1, "short chain: /SUB/SHORTCH.BIN");
     row("--vfs", 1, "orphan long-name entries before /badsum.txt");
     row("--dir-loop", 1, "loop: /SUB");
+    row("--junk", 0, "check: OK: ");
+    row("--dirty", 1, "dirty: the FAT flag");
+    row("--dirty", 1, "dirty: the boot-sector flag");
+    row("--dirty-surplus", 1, "surplus: /BOOT/GRUB/GRUB.CFG (2 clusters)");
+    row("--dirty-orphan", 1, "orphan long-name entries before the end in /BOOT/EXTRA");
+    row("--dirty-mirror", 1, "mirrors differ: 1 entries");
+    row("--dirty-cross", 1, "cross-link: ");
 
     if (fails == 0) {
         printf("fatcheck_hosttest: OK\n");

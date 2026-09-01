@@ -23,14 +23,20 @@
  *     --cfg-short --cluster8 --cluster8-past-end --menu-short --menu-odd
  *     --no-menu --vfs --active-second --unmasked --dir-loop
  *     --lost-chain --overlong-chain --bad-dotdot --dup-name --fsinfo
- *     --fsinfo-wrong
+ *     --fsinfo-wrong --junk --dirty --dirty-surplus --dirty-orphan
+ *     --dirty-mirror --dirty-cross
  *
  * `mkfatfixture --check <image> [offset-sectors] [--list]` walks a volume
  * instead of building one; see the check section below. The last six
  * options are its fixtures: an allocated chain no entry names, a chain
  * four clusters longer than its size, a `..` naming the wrong directory, a
  * name twice in one directory, and FSInfo with the right or a wrong count
- * and hint.
+ * and hint. `--junk` is the FSInfo volume with every free cluster full of
+ * bytes that would read as entries, for the writer's tests. The `--dirty`
+ * family carries the dirty flag over a clean volume, a chain two clusters
+ * past its size, orphan long-name entries, a mirror one entry behind, and
+ * a cross-link, which is what the mount-time check must accept, repair, or
+ * refuse.
  *
  * `--vfs` is the volume the vfat driver's host test reads: the root's
  * chain is fragmented and crosses a 4 KiB boundary, and it holds a deleted
@@ -467,16 +473,16 @@ static void chk_dir(struct chk *c, unsigned long first, unsigned long parent, co
             uint32_t size;
             int is_dir, j;
 
-            if (raw[0] == 0)
-                return;
-            if (raw[0] == 0xE5) {
+            if (raw[0] == 0 || raw[0] == 0xE5) {
                 if (lfn_pending) {
-                    snprintf(text, sizeof(text),
-                             "orphan long-name entries before a free entry in %s", path);
+                    snprintf(text, sizeof(text), "orphan long-name entries before %s in %s",
+                             raw[0] == 0 ? "the end" : "a free entry", path[0] ? path : "/");
                     finding(c, text);
                 }
                 lfn_ok = 0;
                 lfn_pending = 0;
+                if (raw[0] == 0)
+                    return;
                 continue;
             }
             if (raw[11] == 0x0F) {
@@ -892,7 +898,37 @@ int main(int argc, char **argv)
         w32(fat + (kernel_first + 3) * 4, 0); /* the first FAT lies */
     memcpy(img + (size_t)RESERVED * SECTOR, fat, (size_t)FATSZ * SECTOR);
     memcpy(img + (size_t)(RESERVED + FATSZ) * SECTOR, fat2, (size_t)FATSZ * SECTOR);
-    if (is("--fsinfo") || is("--fsinfo-wrong")) {
+    if (is("--dirty") || is("--dirty-surplus") || is("--dirty-orphan") || is("--dirty-mirror") ||
+        is("--dirty-cross")) {
+        /* The dirty flag in both places, over a volume the check must
+           call clean, repair, or refuse. */
+        w32(fat + 4, le32_of(fat + 4) & ~0x08000000u);
+        w32(fat2 + 4, le32_of(fat2 + 4) & ~0x08000000u);
+        bpb[65] |= 1;
+        memcpy(img + (size_t)RESERVED * SECTOR, fat, (size_t)FATSZ * SECTOR);
+        memcpy(img + (size_t)(RESERVED + FATSZ) * SECTOR, fat2, (size_t)FATSZ * SECTOR);
+    }
+    if (is("--dirty-surplus")) {
+        /* /BOOT/GRUB/GRUB.CFG's chain runs two clusters past its size. */
+        chain(cfg_first, 1, 7000);
+        chain(7000, 2, 0);
+        memcpy(fat2, fat, (size_t)FATSZ * SECTOR);
+        memcpy(img + (size_t)RESERVED * SECTOR, fat, (size_t)FATSZ * SECTOR);
+        memcpy(img + (size_t)(RESERVED + FATSZ) * SECTOR, fat2, (size_t)FATSZ * SECTOR);
+    }
+    if (is("--dirty-mirror")) {
+        /* The mirror lags the active FAT by one entry. */
+        w32(fat2 + 7100 * 4, EOC);
+        memcpy(img + (size_t)(RESERVED + FATSZ) * SECTOR, fat2, (size_t)FATSZ * SECTOR);
+    }
+    if (is("--dirty-cross")) {
+        /* /BOOT/GRUB/GRUB.CFG's chain continues into the fallback's. */
+        chain(cfg_first, 1, fallback_first);
+        memcpy(fat2, fat, (size_t)FATSZ * SECTOR);
+        memcpy(img + (size_t)RESERVED * SECTOR, fat, (size_t)FATSZ * SECTOR);
+        memcpy(img + (size_t)(RESERVED + FATSZ) * SECTOR, fat2, (size_t)FATSZ * SECTOR);
+    }
+    if (is("--fsinfo") || is("--fsinfo-wrong") || is("--junk")) {
         /* FSInfo in sector 1: the free count and the hint, right or wrong. */
         unsigned char *fi = img + SECTOR;
         unsigned long c, freecount = 0;
@@ -909,6 +945,16 @@ int main(int argc, char **argv)
     }
 
 #define CLUSTER_OFF(c) ((size_t)(DATA_START + ((c) - 2) * spc) * SECTOR)
+
+    if (is("--junk")) {
+        /* Every free cluster full of bytes that would read as entries, so a
+           directory grown without zeroing shows. */
+        unsigned long c;
+
+        for (c = 2; c < clusters + 2; c++)
+            if ((le32_of(fat + c * 4) & 0x0FFFFFFFu) == 0)
+                memset(img + CLUSTER_OFF(c), 0xE1, cbytes); /* not a label, not a directory */
+    }
 
     /* The root: a volume label, a long-name sequence, then BOOT. */
     dir = img + CLUSTER_OFF(ROOT);
@@ -1092,6 +1138,17 @@ int main(int argc, char **argv)
     dirent_at(dir + 64, "EMPTY      ", 0x20, 0, 0);
     if (is("--dup-name"))
         dirent_at(dir + 96, "EMPTY      ", 0x20, 0, 0);
+    if (is("--dirty-orphan")) {
+        /* Two long-name entries with no short entry after them: what a
+           crash in the middle of a name leaves. */
+        unsigned units[13];
+        int i;
+
+        for (i = 0; i < 13; i++)
+            units[i] = i < 6 ? (unsigned)"orphan"[i] : (i == 6 ? 0 : 0xFFFF);
+        lfn_entry(dir + 96, 0x42, 0x11, units);
+        lfn_entry(dir + 128, 0x01, 0x11, units);
+    }
 
     /* File contents: the candidate slot has a valid padded kernel, the
        fallback a valid kernel, grubenv GRUB's block. */

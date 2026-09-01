@@ -160,13 +160,20 @@ static void load(const char *opt)
         printf("fat32_hosttest: fixture builder failed for %s\n", opt);
         exit(1);
     }
+    /* Whatever the cache still holds of the previous image goes into that
+       image before it is replaced, so the cache empties. */
+    stop_after = -1;
+    bcache_sync(&dev);
     f = fopen(FIXDIR "/fat32_case.img", "rb");
     if (!f || fread(image, 1, IMG_BYTES, f) != IMG_BYTES) {
         printf("fat32_hosttest: fixture did not load\n");
         exit(1);
     }
     fclose(f);
-    bcache_invalidate(&dev);
+    if (bcache_invalidate(&dev) != 0) {
+        printf("fat32_hosttest: the cache did not empty for a new fixture\n");
+        exit(1);
+    }
 }
 
 static struct vfs_mount mnt;
@@ -879,6 +886,54 @@ static int seq_past_end(void)
     return rc;
 }
 
+/* Two writes into one cluster: the second grows the size over bytes that
+   were on the disk as junk until the data reached it. */
+static int seq_grow_in_place(void)
+{
+    void *n = make_file(mnt.root, "W6.TXT");
+    int rc;
+
+    if (!n) {
+        return -1;
+    }
+    rc = write_at(n, pattern, 100, 0);
+    if (rc == 0) {
+        rc = write_at(n, pattern + 100, 100, 100);
+    }
+    OPS->put(&mnt, n);
+    return rc;
+}
+
+/* Twenty files in a new directory, which grows past its first cluster. */
+static int seq_many_files(void)
+{
+    void *d;
+    int i, rc = OPS->mkdir(&mnt, mnt.root, "MANY", 0755);
+
+    if (rc != 0) {
+        return rc;
+    }
+    if (OPS->lookup(&mnt, mnt.root, "MANY", &d) != 0) {
+        return -1;
+    }
+    for (i = 0; i < 20 && rc == 0; i++) {
+        char name[8];
+        void *n;
+
+        name[0] = 'F';
+        name[1] = (char)('0' + i / 10);
+        name[2] = (char)('0' + i % 10);
+        name[3] = '\0';
+        rc = OPS->create(&mnt, d, name, 0644, &n);
+        if (rc == 0) {
+            rc = write_at(n, "f", 1, 0);
+            OPS->put(&mnt, n);
+        }
+    }
+    OPS->put(&mnt, d);
+    return rc;
+}
+
 static int seq_truncate(void)
 {
     void *n = make_file(mnt.root, "W4.TXT");
@@ -1001,12 +1056,142 @@ static const struct sequence sequences[] = {
     {"create and write", seq_create_write},
     {"extend across a cluster", seq_extend},
     {"write past the end", seq_past_end},
+    {"grow in place", seq_grow_in_place},
     {"truncate", seq_truncate},
     {"unlink", seq_unlink},
     {"mkdir and rmdir", seq_mkdir_rmdir},
     {"rename", seq_rename},
     {"rename over", seq_rename_over},
+    {"many files", seq_many_files},
 };
+
+/* Read the crash state back from the dump: the cache's dirty buffers go
+   into the image the dump replaces, so nothing of them survives. */
+static void load_dump(void)
+{
+    void *f;
+
+    stop_after = -1;
+    bcache_sync(&dev);
+    f = fopen(FIXDIR "/fat32_write.img", "rb");
+    if (!f || fread(image, 1, IMG_BYTES, f) != IMG_BYTES) {
+        printf("fat32_hosttest: cannot read the dump back\n");
+        exit(1);
+    }
+    fclose(f);
+    bcache_invalidate(&dev);
+}
+
+/* The content oracle: after a stop, every file a data sequence writes
+   reads, within its published size, either the bytes written to it or
+   zeros, never anything else. */
+static int oracle_ok(void)
+{
+    static const char *const names[] = {"/W1.TXT", "/W2.TXT", "/W3.TXT", "/W6.TXT", "/W4.TXT"};
+    int f, i, err;
+
+    for (f = 0; f < 5; f++) {
+        void *n = walk(names[f], &err);
+        int got, zeros = 1, written = 1;
+
+        if (!n) {
+            continue;
+        }
+        got = read_all(n, back, sizeof(back));
+        OPS->put(&mnt, n);
+        if (got < 0) {
+            return 0;
+        }
+        for (i = 0; i < got; i++) {
+            unsigned char want;
+
+            if (f == 0) {
+                want = i < 5 ? (unsigned char)"hello"[i] : 0;
+            } else if (f == 2) {
+                want = i < 10 ? pattern[i] : (i >= 2000 ? pattern[10 + i - 2000] : 0);
+            } else {
+                want = pattern[i];
+            }
+            if (back[i] != want) {
+                written = 0;
+            }
+            if (back[i] != 0) {
+                zeros = 0;
+            }
+        }
+        if (!written && !zeros) {
+            printf("fat32_hosttest: %s holds bytes nobody wrote (%d bytes)\n", names[f], got);
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* A dirty volume at mount: clean, repaired, or refused. */
+static void dirty_rows(void)
+{
+    void *n;
+    int err;
+
+    load("--dirty");
+    check(mount_rw("") == 0 && !(mnt.flags & VFS_MS_RDONLY),
+          "a dirty but consistent volume mounts writable");
+    check(OPS->prepare_unmount(&mnt) == 0 && (image[65] & 1) == 0,
+          "and its clean unmount clears the flag");
+    unmount_image();
+    check_consistent("after which the walk calls it clean", 0);
+
+    load("--dirty-surplus");
+    check(mount_rw("") == 0 && !(mnt.flags & VFS_MS_RDONLY),
+          "a surplus tail is repaired and the volume mounts writable");
+    n = walk("/BOOT/GRUB/GRUB.CFG", &err);
+    check(n && read_all(n, back, sizeof(back)) == 40 && back[0] == 'x',
+          "the file the tail hung off reads");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    check(OPS->prepare_unmount(&mnt) == 0, "its clean unmount");
+    unmount_image();
+    check_consistent("and the walk finds no surplus and no lost cluster", 0);
+
+    load("--dirty-orphan");
+    check(mount_rw("") == 0 && !(mnt.flags & VFS_MS_RDONLY),
+          "orphan long-name entries are freed and the volume mounts writable");
+    check(OPS->prepare_unmount(&mnt) == 0, "its clean unmount");
+    unmount_image();
+    check_consistent("and the walk finds no orphan", 0);
+
+    load("--dirty-mirror");
+    check(mount_rw("") == 0 && !(mnt.flags & VFS_MS_RDONLY),
+          "a lagging mirror is rewritten and the volume mounts writable");
+    check(OPS->prepare_unmount(&mnt) == 0, "its clean unmount");
+    unmount_image();
+    check_consistent("and the mirrors agree", 0);
+
+    load("--dirty-cross");
+    check(mount_rw("") == 0 && (mnt.flags & VFS_MS_RDONLY),
+          "a cross-linked volume mounts read-only");
+    n = walk("/BOOT/GRUB/GRUB.CFG", &err);
+    check(n && read_all(n, back, sizeof(back)) == 40, "and still reads");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    check(OPS->create(&mnt, mnt.root, "NO.TXT", 0644, &n) == -EROFS, "and refuses a write");
+    unmount_image();
+    check((image[65] & 1) == 1, "with its dirty flag left set");
+
+    /* FSInfo's count is not trusted: the driver counts the FAT. */
+    load("--fsinfo-wrong");
+    {
+        struct vfs_statfs sf;
+
+        check(mount_rw("") == 0 && OPS->statfs(&mnt, &sf) == 0 && sf.bfree != 12345,
+              "a wrong FSInfo count is not what statfs reports");
+        check(OPS->prepare_unmount(&mnt) == 0, "the clean unmount rewrites FSInfo");
+        unmount_image();
+        check_consistent("and the walk finds the count right", 0);
+    }
+}
 
 static void write_rows(void)
 {
@@ -1017,7 +1202,7 @@ static void write_rows(void)
     static unsigned char big[512 * 1024];
 
     fill_pattern();
-    load("--fsinfo");
+    load("--junk");
     check(mount_rw("") == 0, "a writable mount of the FSInfo volume");
     check(image[65] == 0, "the boot-sector dirty flag is clear before the first write");
 
@@ -1073,7 +1258,24 @@ static void write_rows(void)
         OPS->put(&mnt, n);
     }
     check(walk("/W5.TXT", &err) == 0 && err == -ENOENT, "the unlinked file is gone");
+    n = walk("/W6.TXT", &err);
+    check(n && read_all(n, back, sizeof(back)) == 200 && __builtin_memcmp(back, pattern, 200) == 0,
+          "the file grown in place reads back");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
     check(walk("/D1", &err) == 0 && err == -ENOENT, "the removed directory is gone");
+    {
+        int seen, count;
+
+        d = walk("/MANY", &err);
+        ino_count = 0;
+        count = d ? list_dir(d, "F19", &seen) : -1;
+        check(count == 22 && seen, "the directory grown past its cluster lists its twenty files");
+        if (d) {
+            OPS->put(&mnt, d);
+        }
+    }
     n = walk("/BOOT/R3.TXT", &err);
     check(n && read_all(n, back, sizeof(back)) == 700 && __builtin_memcmp(back, pattern, 700) == 0,
           "the file renamed across directories reads back");
@@ -1208,7 +1410,7 @@ static void matrix_rows(void)
     for (i = 0; i < (int)(sizeof(sequences) / sizeof(sequences[0])); i++) {
         int n;
 
-        load("--fsinfo");
+        load("--junk");
         stop_after = -1;
         writes_made = 0;
         if (mount_rw("") != 0) {
@@ -1222,7 +1424,7 @@ static void matrix_rows(void)
         for (k = 1; k <= n; k++) {
             char what[160];
 
-            load("--fsinfo");
+            load("--junk");
             writes_made = 0;
             stop_after = k;
             if (mount_rw("") != 0) {
@@ -1234,10 +1436,17 @@ static void matrix_rows(void)
             OPS->put(&mnt, mnt.root);
             OPS->unmount(&mnt);
             run_check(check_out, sizeof(check_out));
-            /* The buffers the failed writes left dirty are flushed into the
-               image that the next load replaces, so nothing crosses over. */
-            stop_after = -1;
-            bcache_sync(&dev);
+            load_dump();
+            if (i < 5) {
+                /* The content oracle over the crash state, read-only. */
+                if (mount_image("") == 0) {
+                    snprintf(what, sizeof(what),
+                             "'%s' stopped after write %d of %d reads only what was written",
+                             sequences[i].name, k, n);
+                    check(oracle_ok(), what);
+                    unmount_image();
+                }
+            }
             snprintf(what, sizeof(what),
                      "'%s' stopped after write %d of %d leaves a consistent volume",
                      sequences[i].name, k, n);
@@ -1345,6 +1554,7 @@ int main(void)
     malformed_rows();
     pool_rows();
     write_rows();
+    dirty_rows();
     matrix_rows();
     if (fails == 0) {
         printf("fat32_hosttest: OK\n");
