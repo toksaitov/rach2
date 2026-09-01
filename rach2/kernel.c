@@ -160,9 +160,9 @@ static void timer_handler(isr_params_t *params)
     (void) params;
 
     ++kernel_ticks;
-    /* Read once a tick so the microsecond clock sees every wrap of the
-       counter it follows; see `pit_now_us`. */
-    (void)pit_now_us();
+    /* The microsecond clock's periods are this tick's to count; see
+       `pit_now_us`. */
+    pit_tick_clock();
     if (++kernel_second_ticks >= 100) {
         kernel_second_ticks = 0;
         ++kernel_uptime_seconds;
@@ -564,34 +564,66 @@ static bool test_udelay(uint32_t *measured_ms)
  * The microsecond clock against the wait that is measured a different way.
  *
  * `pit_now_us` counts the periods of the 8254's counter and reads where it is
- * inside one, and `k_udelay` measures that same counter by its drop. Two
- * milliseconds is longer than one sweep, so a reading that lost which half of
- * the period it was in shows here as an interval five milliseconds out. The
- * clock must also not run backwards or run away across the twenty
- * milliseconds the second wait covers.
+ * inside one; `k_udelay` measures that same counter by its drop. The wait is
+ * taken eight times and the shortest of them is the reading: an interrupt in
+ * the middle of one can only add to it, and this machine writes whole lines
+ * to a serial port at eighty-seven microseconds a byte.
+ *
+ * Then twenty milliseconds are walked in single milliseconds, which is two of
+ * the tick's periods and four of the counter's sweeps. A reading that lost
+ * which half of the period it was in, or that did not count a wrap, steps
+ * backwards there.
  */
 static bool test_clock(uint32_t *measured_us)
 {
-    uint32_t start = pit_now_us();
-    uint32_t mid, end;
+    uint32_t best = 0xFFFFFFFFu;
+    uint32_t previous;
     int i;
 
-    k_udelay(2000);
-    mid = pit_now_us();
-    *measured_us = mid - start;
-    if (mid < start || mid - start < 1500 || mid - start > 3500) {
+    for (i = 0; i < 8; i++) {
+        uint32_t start = pit_now_us();
+        uint32_t seen;
+
+        k_udelay(2000);
+        seen = pit_now_us() - start;
+        if (seen < best) {
+            best = seen;
+        }
+    }
+    *measured_us = best;
+    if (best < 1500 || best > 3500) {
         return false;
     }
-    /* Twenty more milliseconds, which is two of the tick's periods and four
-       of the counter's sweeps: a reading that lost a wrap steps backwards
-       here, and one that counted a wrap twice runs away. */
-    for (i = 0; i < 20; i++) {
-        end = pit_now_us();
-        if (end < mid || end - mid > 3000) {
+
+    /*
+     * Fifty milliseconds walked in single milliseconds, with the clock read
+     * at every step: five of the tick's periods and ten of the counter's
+     * sweeps. A reading that steps backwards fails here. So does one that
+     * runs fast, because the same fifty milliseconds are measured by the tick
+     * beside it, and a clock that counted a sweep as a period, or counted a
+     * period twice, would put twice the time in between.
+     */
+    {
+        uint32_t ticks_before = kernel_ticks;
+        uint32_t clock_before = pit_now_us();
+        uint32_t by_clock, by_tick;
+
+        previous = clock_before;
+        for (i = 0; i < 50; i++) {
+            uint32_t now = pit_now_us();
+
+            if (now < previous) {
+                return false;
+            }
+            previous = now;
+            k_udelay(1000);
+        }
+        by_clock = pit_now_us() - clock_before;
+        by_tick = (kernel_ticks - ticks_before) * 10000u;
+        if (by_tick == 0 || by_clock < by_tick - by_tick / 4u ||
+            by_clock > by_tick + by_tick / 4u) {
             return false;
         }
-        k_udelay(1000);
-        mid = end;
     }
     return true;
 }

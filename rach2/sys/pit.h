@@ -31,4 +31,13 @@ extern uint32_t pit_reload;
  */
 uint32_t pit_now_us(void);
 
+/**
+ * Count one period of the counter, from the timer handler and nowhere else.
+ *
+ * `pit_now_us` takes its periods from the tick, because two readings a whole
+ * period apart are at the same place in the counter's sweep and the wrap
+ * between them cannot be seen.
+ */
+void pit_tick_clock(void);
+
 #endif
