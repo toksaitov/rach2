@@ -1023,10 +1023,6 @@ static void event_dispatch(const uint32_t *trb)
     if (type == TRB_TYPE_TRANSFER_EVENT) {
         struct usb_completion *c = &completions[completion_head % XHCI_COMPLETIONS];
 
-        if (completion_head - completion_tail >= XHCI_COMPLETIONS) {
-            klog(KLOG_WARN, "usb", "transfer: a completion was dropped");
-            return;
-        }
         c->device = (int)((trb[3] >> TRB_SLOT_SHIFT) & 0xFFu);
         c->endpoint = (int)((trb[3] >> 16) & 0x1Fu);
         if (c->device <= 0 || c->device > XHCI_SLOTS || !slots[c->device].used) {
@@ -1221,6 +1217,13 @@ int xhci_events(void)
          * is written. Read it first, then the rest, and let nothing move
          * across that point. */
         xhci_barrier();
+        if (((trb[3] >> TRB_TYPE_SHIFT) & TRB_TYPE_MASK) == TRB_TYPE_TRANSFER_EVENT &&
+            completion_head - completion_tail >= XHCI_COMPLETIONS) {
+            /* The completion queue is full. The event stays on the ring for
+             * the next pass, unread; dropping it would leave whoever queued
+             * that transfer waiting for an answer that never comes. */
+            break;
+        }
         event_dispatch(trb);
         taken++;
         event_index++;

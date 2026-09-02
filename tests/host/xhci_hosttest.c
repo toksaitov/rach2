@@ -1753,6 +1753,28 @@ int main(void)
         CHECK("with the second generation and not the first", completion.generation == 0x52);
     }
 
+    /* More transfer events than the completion queue holds: the drain stops
+       at the queue's end and the rest wait on the event ring for the next
+       pass. A drain that dropped the ninth would leave the transfer it
+       answered outstanding forever, which for a hub's change endpoint is a
+       hub that never reports again. */
+    {
+        struct usb_completion completion;
+        int i;
+        int got = 0;
+
+        for (i = 0; i < 9; i++) {
+            post_event(TRB_TYPE_TRANSFER_EVENT, TRB_COMPLETION_SUCCESS, 1, 0);
+        }
+        CHECK("a drain of nine transfer events takes eight", xhci_events() == 8);
+        while (xhci_poll(&completion) == 1) {
+            got++;
+        }
+        CHECK("and eight are polled", got == 8);
+        CHECK("the ninth is taken by the next drain", xhci_events() == 1);
+        CHECK("and polled then", xhci_poll(&completion) == 1);
+    }
+
     /* A completion for a device that has been closed is dropped: the slot may
        already belong to the next device, and advancing that device's transfer
        with this one's completion is the defect the drop exists for. */
