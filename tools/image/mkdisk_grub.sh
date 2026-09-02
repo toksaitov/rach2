@@ -119,7 +119,14 @@ SLOT_BYTES=2097152
 MENU_BYTES=8192
 # One spare MiB so the last partition ends before the device edge (parted
 # rejects a partition that ends exactly at the device size).
-DISK_MB=$((GAP_MB + BOOT_MB + KRFFS_MB + RECOVERY_MB + EXT2_MB + 1))
+# The ext2 partition begins after the spare MiB, where the installed machine's
+# fourth partition already begins, so the sealed image and the machine agree
+# on its offset; a second spare MiB then ends the disk.
+EXT2_START_MB=$((GAP_MB + BOOT_MB + KRFFS_MB + RECOVERY_MB + 1))
+DISK_MB=$((EXT2_START_MB + EXT2_MB + 1))
+if [ "$EXT2_MB" -le 0 ]; then
+    DISK_MB=$((GAP_MB + BOOT_MB + KRFFS_MB + RECOVERY_MB + 1))
+fi
 
 if [ ! -f "$KERNEL" ]; then
     echo "mkdisk_grub: kernel not built ($KERNEL); run 'make' first" >&2
@@ -456,7 +463,7 @@ if [ "$EXT2_MB" -gt 0 ]; then
     "$MKMBR" "$OUT.new" "${GAP_MB}:${BOOT_MB}:0c:boot" \
         "$((GAP_MB + BOOT_MB)):${KRFFS_MB}:83" \
         "$((GAP_MB + BOOT_MB + KRFFS_MB)):${RECOVERY_MB}:0c" \
-        "$((GAP_MB + BOOT_MB + KRFFS_MB + RECOVERY_MB)):${EXT2_MB}:83"
+        "${EXT2_START_MB}:${EXT2_MB}:83"
 elif [ "$RECOVERY_MB" -gt 0 ]; then
     "$MKMBR" "$OUT.new" "${GAP_MB}:${BOOT_MB}:0c:boot" \
         "$((GAP_MB + BOOT_MB)):${KRFFS_MB}:83" \
@@ -622,7 +629,7 @@ if [ "$EXT2_MB" -gt 0 ]; then
         exit 1
     fi
     dd if="$EXT2_IMAGE" of="$OUT.new" bs=1048576 \
-        seek=$((GAP_MB + BOOT_MB + KRFFS_MB + RECOVERY_MB)) conv=notrunc 2>/dev/null
+        seek="$EXT2_START_MB" conv=notrunc 2>/dev/null
 fi
 rm -rf "$TMPD"
 mv "$OUT.new" "$OUT"

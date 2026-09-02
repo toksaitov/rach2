@@ -8,11 +8,12 @@ artifact.
 ## What milestone 43 needs
 
 The sealed disk gains a fourth partition, the metal-disk manifest as an
-ext2 volume of 1 GiB, and its candidate entries carry `rach2.root=ext2`
-while the fallback entries keep `rach2.root=disk`. On the Lenovo the
-fourth partition already exists: milestone 37's 2 GiB FAT32 scratch
-partition at sector 1290240, which this procedure overwrites with the
-ext2 image, and the boot partition's `grub.cfg` gains the two roots. The
+ext2 volume of 1 GiB at sector 1290240, and its candidate entries carry
+`rach2.root=ext2` while the fallback entries keep `rach2.root=disk`. On
+the Lenovo the fourth partition already exists at that same sector:
+milestone 37's 2 GiB FAT32 scratch partition, which this procedure
+overwrites with the ext2 image, and the boot partition's `grub.cfg` gains
+the two roots. The
 KRFFS root on partition 2 is not touched, and is what the machine falls
 back to at every step.
 
