@@ -1011,6 +1011,13 @@ run-fatwrite: $(DEMO_CREDS) rach2 tests krffs os-real-image $(MKFATFIXTURE) $(HA
 	sh tests/system/suites/fatwrite.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(FATWRITE_DISK) \
 	    $(OS_REAL_IMAGE) "`cat krffs/rach2_demo_password`" $(MKFATFIXTURE)
 
+# `tests/run ext2`: the ext2 driver booted over a fixture disk the host's
+# mke2fs wrote, with the walker's link rows on the mounted volume.
+EXT2_DISK = $(IMAGES_DIR)/ext2-test.disk
+run-ext2: $(DEMO_CREDS) rach2 tests krffs test-image $(HARNESS) build/tools/image/mkmbr
+	sh tests/system/suites/ext2.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(EXT2_DISK) \
+	    build/tools/image/mkmbr
+
 # `tests/run exfat`: exFAT written from a program, read back after a reboot,
 # judged by the host's reader and the external checker where the host has
 # one, taken through a crash and its repair, written from BusyBox, and
