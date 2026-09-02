@@ -1484,26 +1484,8 @@ int usb_core_describe(int index, char *out, int size)
         break;
     }
 
-    /* The location as a path: the root port, then the port on each hub
-     * down to the device, separated by dots. */
-    {
-        int chain[USB_TREE_TIERS + 1];
-        int depth = 0;
-        const struct usb_device_state *at_dev = d;
-        int k;
-
-        while (at_dev != 0 && depth <= USB_TREE_TIERS) {
-            chain[depth++] = at_dev->port + 1;
-            at_dev = at_dev->owner >= 0 ? &devices[at_dev->owner] : 0;
-        }
-        at = put_str(out, size, at, "port ");
-        for (k = depth - 1; k >= 0; k--) {
-            at = put_num(out, size, at, (uint32_t)chain[k], 10);
-            if (k > 0) {
-                at = put_str(out, size, at, ".");
-            }
-        }
-    }
+    at = put_str(out, size, at, "port ");
+    at = put_str(out, size, at, path_of(d)); /* the root port, then each hub's port */
     at = put_str(out, size, at, " ");
     at = put_str(out, size, at, speed);
     at = put_str(out, size, at, " ");
