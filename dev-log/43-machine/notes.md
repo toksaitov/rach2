@@ -163,3 +163,7 @@ reserved sectors, two FATs, 523261 free clusters, checked by
 `73387be9570663858f4b7b6ba282a5cb16374ee9fa34374fec2136e14a6a5563`.
 It goes to the machine gzipped, through `reflash`, as the Readme's root
 procedure does.
+
+Approval, 2026-09-03: the owner approved `/dev/disk0` on the Lenovo by
+name for both writes, the fourth entry in sector zero and the FAT32
+volume into its range, after the table above was shown.
