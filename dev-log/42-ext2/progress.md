@@ -30,6 +30,6 @@ Phase 6: the images and the suites
 - [x] hardware.md: the machine procedure for milestone 43
 
 Phase 7: the record and the sweep
-- [ ] the documents read against the code; the review round
-- [ ] the sweep; the full set; make test timed
-- [ ] dev-log Readme and the index entry; tree clean
+- [x] the documents read against the code; the review round
+- [x] the sweep; the full set; make test timed
+- [x] dev-log Readme and the index entry; tree clean

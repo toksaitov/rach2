@@ -635,9 +635,150 @@ limit with room; the check itself runs in a fraction of a second. The
 machine procedure for milestone 43 is in `hardware.md`, step by step
 with its safeguards, and is what the sealed suite's ext2 phase rehearses.
 
-## Open items
+### The review round at the close
 
-* The sweep: the image rules take `utils` and the ports as
-  order-only prerequisites, so a rebuilt `init-metal` did not rebuild the
-  recovery image and a stale image booted twice this phase; the images
-  should depend on the binaries their manifests stage.
+Four Codex units again, each started as a background job of the plugin
+and read from its job record, after unit B's first three attempts
+returned nothing: the review skill's question about running in the
+background left one thread hanging, a diff taken after the commits was
+empty, and a foreground run was killed at the tool's ten minutes; a
+Claude reviewer was started in its place and stopped when the owner
+asked for Codex, which the memory now records. Unit B, the root commit,
+nine findings, all fixed. The recovery build's partition writers stood
+outside the single-writer rule and the claims: `raw_write_window` puts
+them under both, with a close that releases the writer. A write or a
+truncation on a file of another type kept its set-id bits:
+`vfs_kill_setid` drops them through the type's attributes, from `write`,
+`ftruncate` and `O_TRUNC`. `fchmod` and `fchown` on such a descriptor
+changed nothing and said so to nobody: both take the rules their path
+forms keep. The root read the partition through the lag wrapper the
+tests put the nodes on, which would sleep outside any process: the root
+is a partition of the real disk, as KRFFS's is, and boots under
+`rach2.blocklag=1`. `raw_window_write` kept the staging buffer when its
+first batch failed: released before the error. A directory reached
+through a link recorded what was typed: a type with a `path` operation
+names the directory it arrived at, and a root of another type pins the
+working directory as any other mount does. `open` and `mkdir` on another
+type ignored `umask`: masked. `stat("/")`, `chdir("/")` and
+`utimensat("/")` answered for KRFFS whatever the root was: those three
+answers are KRFFS's alone now and an ext2 root's `/` is its inode.
+`/proc/PID/fd/N` said `/` for every file of another type: a descriptor
+keeps the path it was opened by, when it fits, and reports it.
+
+Unit D, the tests, eleven findings; ten fixed and one recorded. The
+suite's readback rows matched the terminal's echo of the command: they
+echo a marker with the contents now. The link-count repairs and the
+check's count faults were allowed at every stop: a sequence says whether
+its order writes a count apart from its entry, and only there is a count
+allowed. A created file, directory or link could vanish at any stop: the
+sequences mark the write that commits the name, and the name must stand
+after it. The junk volume's build ignored `debugfs`'s status and was
+never looked at: the status is checked and a free block past the tree
+must hold junk. The recovery write row wrote a sector's own bytes back:
+it writes a marked sector into the second partition, reads it back and
+restores it. `e2fsck -p` on the sealed suite's host copy was allowed any
+status: two or less. The drill's partition wipe truncated an odd offset
+to 1 KiB: 512-byte units. The metal acceptance left its file: removed,
+and its comment says a readback through the cache is not the disk. Two
+instances of the host test shared one fixture directory: an exclusive
+lock file, waited for and removed at exit. The finding recorded and not
+changed: the matrix stops between block requests, not between the eight
+sectors of one; a torn block is a repair `e2fsck` makes and the Readme
+says so.
+
+Unit A, the whole driver, seventeen findings, all fixed. A write whose
+final store failed returned its count: any failure is the error, since
+bytes no size covers are not written. The node pool was taken outside
+any lock while a load slept in the cache, so two lookups could take one
+entry, and a put could free an entry a mutation held a pointer into:
+`node_for` and `ext2_put` run under the mount's lock now, which the
+mutations already hold, and the entry is marked taken before the load
+sleeps. The working directory on an ext2 root was not held, which unit
+B's fix of `vfs_cwd_set` had already closed. A rename that could not
+write its new entry left the count it raised; `mkdir` left the parent's:
+both lower it. A directory's growth could allocate a pointer block and
+then find no block for the entry: `ENOSPC` is decided from the block and
+the pointer levels the index can need before either is taken, and a
+file's write reserves those levels instead of four. A new inode kept the
+words `inode_store` does not write from the slot's last occupant: the
+image is zeroed first. A pointer or an entry found wrong while reading
+returned `EIO` and left the valid bit to be set at unmount: `mark_error`
+sets the error bit and writes it, from the two pointer checks, the entry
+check and a free that failed at the last put. The check accepted a
+pointer block whose range lay past the size: a pointer block past the
+size is a fault, one the writer's order leaves at the stops where the
+level is named before the size, which the fourth judge allows. The
+allocator never returned to the part of the hint's group before the
+hint: it does, last. The constructor judged the last group's free counts
+against a whole group: against its size. A short symbolic link with a
+block was fast to the reader and the free and slow to the check: a link
+with `i_blocks` is slow everywhere. The check ignored the entry's type
+byte: it must be the inode's. And `create`, `symlink` and a directory's
+move across parents left a parent's times: written.
+
+Unit F, the documents against the code, eight findings, all fixed in the
+prose. The update procedure chained the mount table, the slot report and
+the commit in one command, which would commit a root the check mounted
+read-only: the commit is its own command after a person reads the two
+reports, and the Readme says why `bootctl` cannot decide it. `utils`
+said `bootctl config` cannot move a root: a staged menu is GRUB script
+and a valid one can direct a boot; what the fixed entries survive is a
+damaged one. A failed kernel trial "leaves the disk as it was": it leaves
+the machine on the fallback with the candidate slot rewritten. A flash
+drive "safe to pull out at any moment": pulled, its mount goes and its
+descriptors answer `EIO`, and what was synced and unmounted is on it. An
+orderly stop "leaves the valid bit set": when the mount was writable,
+its error bit clear and the writes succeeded. `ENOSPC` "before any
+bitmap is written": true of a file's write and a directory's growth, and
+a namespace operation may write the inode bitmap first and then undo it.
+"The check repairs nothing": nothing but the free counts. And the
+summaries said a dirty root is checked: when it would otherwise be
+writable.
+
+The full set on the closing tree found one suite that could no longer
+pass: `tests/run scratch`, milestone 37's rehearsal of a FAT32 scratch
+partition as the sealed disk's fourth entry, which read the table for
+three entries and added its own. The fourth entry is the ext2 root now,
+by this milestone's plan, and its rehearsal is the sealed suite's ext2
+phases and the procedure in `hardware.md`; the suite is retired with its
+registry line, its rule and its Readme entry, and the FAT32 writer keeps
+its proofs in `fatwrite`, `mount` and the flash-drive rows.
+
+### The full set and make test
+
+The full set on the closing tree ran 69 suites and passed 65. The four:
+`scratch`, retired above; `subset`, whose boots named the five probes in
+the boot's old order, with USB before the disk, and which name them in
+the new order now; `sealed`, whose new phase died under `set -e` at
+`e2fsck -p`'s repaired status of 1, read inside a test now; and
+`runner`, the runner's own self-test, which failed 18 of 25 checks
+because `tests/run` has sourced `e2fsprogs_path.sh` unconditionally
+since phase 1 and the self-test drives a tree with no `tools` directory,
+and no run since phase 1 had included it until the full set; the runner
+sources the script only where the tree has it. Rerun alone on the final
+tree: `sealed` passed in 473 s, `runner` in 7 s, `subset` in 59 s, and
+`style` with the registry as it is. `make test` on the final tree took
+8 minutes 26 seconds against milestone 41's 8 minutes 12 seconds, the
+ext2 suite's 46 seconds being the core tier's addition, with `mount`'s
+lag-sleep boot failing in the pool and passing alone in 103 s, the flake
+milestone 40 recorded; the run before the last fixes took 8 minutes 41
+seconds and failed `subset` and `runner`.
+
+### The sweep
+
+The image rules took `utils` and the ports as order-only prerequisites,
+so a rebuilt `init-metal` did not rebuild the recovery image and a stale
+image booted twice in phase 5: `krffs/manifest_deps.sh` prints the host
+paths a manifest stages and every image rule takes them as
+prerequisites. The ext2 driver's three helpers with one caller, the pool
+search, the device number and the freed inode's image, were folded into
+their callers; the named steps with a header comment each stay. The
+sealed disk's fourth partition moved to 630 MiB, where the Lenovo's
+already begins, so the two agree on the offset the procedure uses.
+`Readme.md` gained the ext2 root under System, Images, Limits and the
+hardware status, and "Updating the installed machine" gained the ext2
+root's reflash from recovery with its offset; `rach2/sys/fs/Readme.md`
+says what KRFFS is for now; `tests/Readme.md`, `utils/Readme.md` and
+`tools/Readme.md` took their sentences. `metal_accept.sh` gained the ext2
+root section for milestone 43 and its scratch section became a note
+once the fourth partition is the root. No open item remains.
