@@ -61,7 +61,7 @@ Rach2 has no dynamic linker, so guest executables are static. [TinyCC](vendor/tc
 
 ## Limits
 
-The kernel manages at most 32 MiB of physical RAM. Its fixed tables allow 16 processes and 16 descriptors per process. Programs are static, KRFFS is the only native file system, and the network stack implements IPv4 only. USB is a keyboard, a mouse and a flash drive on a root port through xHCI: no hubs, and two flash drives at once. Rach2 does not implement UEFI, SMP, threads, swap, dynamic linking, IPv6, or VESA graphics. The [kernel limits](rach2/Readme.md#hardware-and-limits) are the current authority.
+The kernel manages at most 32 MiB of physical RAM. Its fixed tables allow 16 processes and 16 descriptors per process. Programs are static, KRFFS is the only native file system, and the network stack implements IPv4 only. USB is keyboards, mice and flash drives through xHCI, on root ports and behind hubs, twelve devices and two hubs at once. Rach2 does not implement UEFI, SMP, threads, swap, dynamic linking, IPv6, or VESA graphics. The [kernel limits](rach2/Readme.md#hardware-and-limits) are the current authority.
 
 ## Hardware status
 

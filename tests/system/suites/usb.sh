@@ -21,6 +21,7 @@ set -u
 KERNEL=$1
 IMAGE=$2
 HARNESS=$3
+REPO=$(cd "$(dirname "$0")/../../.." && pwd)
 
 fail=0
 note() { echo "usb-test: $1"; }
@@ -28,6 +29,12 @@ bad() { echo "usb-test: $1" >&2; fail=1; }
 
 run_harness() {
     "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" "$@"
+}
+# The harness kernel ends the machine when its first process exits, which is
+# right for a boot that runs one probe; a probe run in parts needs the
+# ordinary kernel and its debug shell between the parts.
+run_shell() {
+    "$HARNESS" --kernel "$REPO/build/rach2/kernel" --initrd "$IMAGE" "$@"
 }
 
 # ---- 1: a keyboard and a mouse at high speed are enumerated, and the guest
@@ -312,6 +319,130 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     note "with the APIC enabled the 8259's keyboard and timer still arrive: OK"
 else
     bad "with the APIC enabled the 8259's interrupts did not arrive"
+fi
+
+# ---- 15: a keyboard and a mouse behind a hub are enumerated at their
+#          location, listed with their path, and the keyboard types on a
+#          machine with no 8042 ----
+if run_harness --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-machine --qemu-arg=pc,i8042=off \
+    --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
+    --qemu-arg=-device --qemu-arg=usb-hub,bus=xhci.0,port=1,id=hub \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0,port=1.2 \
+    --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0,port=1.3 \
+    --append "rach2.hubtree" \
+    --timeout 120 --steptmo 45 --ok "USBPROBE OK" --never "USBPROBE FAIL" \
+    "expect=Type 'help'" wait=2 key=h key=e key=l key=p key=ret \
+    "expect=Available commands" "send=exec /usbprobe" "expect=USBPROBE OK" \
+    > /dev/null 2>&1; then
+    note "a keyboard and a mouse behind a hub are listed with their path and the keyboard types: OK"
+else
+    bad "the keyboard and mouse behind a hub"
+fi
+
+# ---- 16: a stick behind the hub mounts, takes a write, is pulled from under
+#          a mount through the monitor, and plugged back in mounts again ----
+STICK="$IMAGE.hubstick.img"
+if [ -f "$REPO/build/images/usbdisk/stick-mbr.img" ]; then
+    cp "$REPO/build/images/usbdisk/stick-mbr.img" "$STICK"
+else
+    dd if=/dev/zero of="$STICK" bs=1048576 count=80 2>/dev/null
+    "$REPO/build/tools/image/mkmbr" --lba "$STICK" 2048:98304:0c > /dev/null
+    mformat -i "$STICK"@@1048576 -F -T 98304 -v STICKFAT ::
+    echo "hello from the stick" > "$STICK.hello"
+    mcopy -i "$STICK"@@1048576 "$STICK.hello" ::/hello.txt
+    awk 'BEGIN { for (i = 0; i < 128; i++) for (j = 0; j < 128; j++) printf "%03d.", i }' \
+        > "$STICK.pattern"
+    mcopy -i "$STICK"@@1048576 "$STICK.pattern" ::/pattern.bin
+fi
+if run_shell --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
+    --qemu-arg=-device --qemu-arg=usb-hub,bus=xhci.0,port=1,id=hub \
+    --drive "if=none,id=stick,format=raw,file=$STICK" \
+    --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,port=1.4,drive=stick,id=st0 \
+    --timeout 180 --steptmo 60 --ok "USBDISKPROBE OK" --never "USBDISKPROBE FAIL" \
+    --log "$IMAGE.hubstick.log" \
+    "expect=Type 'help'" "send=exec /usbdiskprobe write" "expect=USBDISKPROBE OK" \
+    "expect=Type 'help'" "send=exec /usbdiskprobe hold" "expect=USBDISKPROBE HOLDING" \
+    wait=1 "usb=del:st0" "expect=USBDISKPROBE OK" \
+    "expect=Type 'help'" \
+    "drive=add:if=none,id=again,format=raw,file=$STICK" \
+    "usb=add:usb-storage,bus=xhci.0,port=1.4,drive=again,id=st1" "expect=usbdisk: usb0: mbr" \
+    "send=exec /usbdiskprobe replug" "expect=USBDISKPROBE OK" > /dev/null 2>&1; then
+    note "a stick behind the hub is written, pulled from under a mount and mounts again: OK"
+else
+    bad "the stick behind the hub"
+fi
+
+# ---- 17: the hub pulled with all three behind it: the stick's mount answers
+#          EIO and unmounts once its file is closed, and every device below
+#          the hub goes before the hub does ----
+if run_shell --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
+    --qemu-arg=-device --qemu-arg=usb-hub,bus=xhci.0,port=1,id=hub \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0,port=1.2 \
+    --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0,port=1.3 \
+    --drive "if=none,id=stick,format=raw,file=$STICK" \
+    --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,port=1.4,drive=stick,id=st0 \
+    --timeout 180 --steptmo 60 --ok "USBDISKPROBE OK" --never "USBDISKPROBE FAIL" \
+    --log "$IMAGE.hubpull.log" \
+    "expect=Type 'help'" "send=exec /usbdiskprobe hold" "expect=USBDISKPROBE HOLDING" \
+    wait=1 "usb=del:hub" "expect=USBDISKPROBE OK" > /dev/null 2>&1; then
+    note "the hub pulled with three devices behind it: the stick's mount answers EIO and unmounts: OK"
+else
+    bad "the hub pulled with three devices behind it"
+fi
+if [ "$(grep -ac 'usb: device: port [0-9]*\.[0-9]*: gone' "$IMAGE.hubpull.log")" = 3 ] && \
+   grep -a 'gone' "$IMAGE.hubpull.log" | tail -1 | grep -aq 'port [0-9]*: gone'; then
+    note "and the three below went before the hub: OK"
+else
+    bad "the devices below the hub did not all go before it"
+fi
+
+# ---- 18: a hub behind a hub, with a keyboard on the second, typing ----
+if run_harness --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-machine --qemu-arg=pc,i8042=off \
+    --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
+    --qemu-arg=-device --qemu-arg=usb-hub,bus=xhci.0,port=1,id=hub \
+    --qemu-arg=-device --qemu-arg=usb-hub,bus=xhci.0,port=1.1,id=hub2 \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0,port=1.1.2 \
+    --timeout 120 --steptmo 45 --ok "Available commands" --log "$IMAGE.hubhub.log" \
+    "expect=Type 'help'" wait=3 key=h key=e key=l key=p key=ret \
+    "expect=Available commands" > /dev/null 2>&1 && \
+   grep -aq 'usb: device: port [0-9]*\.1\.2: 627:1, class 3 protocol 1' "$IMAGE.hubhub.log"; then
+    note "a keyboard behind a hub behind a hub is at its path and types: OK"
+else
+    bad "the hub behind a hub"
+fi
+
+# ---- 19: the device table filled: two hubs and eleven devices are twelve
+#          entries, and the thirteenth is refused by name ----
+if run_harness --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
+    --qemu-arg=-device --qemu-arg=usb-hub,bus=xhci.0,port=1,id=hub \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0,port=1.1 \
+    --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0,port=1.2 \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0,port=1.3 \
+    --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0,port=1.4 \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0,port=1.5 \
+    --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0,port=1.6 \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0,port=1.7 \
+    --qemu-arg=-device --qemu-arg=usb-hub,bus=xhci.0,port=1.8,id=hub2 \
+    --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0,port=1.8.1 \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0,port=1.8.2 \
+    --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0,port=1.8.3 \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0,port=1.8.4 \
+    --timeout 120 --steptmo 60 --ok "the device table is full" --log "$IMAGE.hubfull.log" \
+    "expect=the device table is full" wait=2 "send=help" "expect=Available commands" \
+    > /dev/null 2>&1; then
+    note "twelve devices fill the table and the thirteenth is refused by name: OK"
+else
+    bad "the device table boot"
+fi
+if [ "$(grep -ac 'usb: device: port [0-9.]*: .*class' "$IMAGE.hubfull.log")" = 12 ]; then
+    note "and twelve were configured: OK"
+else
+    bad "twelve devices were not configured"
 fi
 
 if [ "$fail" -ne 0 ]; then

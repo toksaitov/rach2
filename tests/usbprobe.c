@@ -132,7 +132,8 @@ static int count_in_log(const char *needle)
 }
 
 /** Whether the boot line switched USB off. */
-static int switched_off(void)
+/** Whether the boot line has `word` on it. */
+static int cmdline_has(const char *word)
 {
     static char line[256];
     int fd;
@@ -149,11 +150,42 @@ static int switched_off(void)
         return 0;
     }
     line[n] = '\0';
-    for (i = 0; i + 11 <= n; i++) {
-        if (line[i] == 'r' && line[i + 1] == 'a' && line[i + 2] == 'c' && line[i + 3] == 'h' &&
-            line[i + 4] == '2' && line[i + 5] == '.' && line[i + 6] == 'n' && line[i + 7] == 'o' &&
-            line[i + 8] == 'u' && line[i + 9] == 's' && line[i + 10] == 'b') {
+    for (i = 0; i < n; i++) {
+        int k = 0;
+
+        while (word[k] && i + k < n && line[i + k] == word[k]) {
+            k++;
+        }
+        if (word[k] == '\0') {
             return 1;
+        }
+    }
+    return 0;
+}
+
+static int switched_off(void)
+{
+    return cmdline_has("rach2.nousb");
+}
+
+/* Whether the line at `i` names a device behind a hub: its port is a path
+   with a dot in it, `port 5.2`, rather than a root port alone. */
+static int behind_hub(int i, int end)
+{
+    int k;
+
+    for (k = i; k + 5 < end; k++) {
+        if (text[k] == 'p' && text[k + 1] == 'o' && text[k + 2] == 'r' && text[k + 3] == 't' &&
+            text[k + 4] == ' ') {
+            int j = k + 5;
+
+            while (j < end && text[j] != ' ') {
+                if (text[j] == '.') {
+                    return 1;
+                }
+                j++;
+            }
+            return 0;
         }
     }
     return 0;
@@ -259,6 +291,26 @@ void _start(void)
     }
     if (!contains("class 3 protocol 2", len)) {
         fail("no mouse is listed");
+    }
+    /* On a boot that put them behind a hub, the boot line says so, and the
+       keyboard's and the mouse's lines must give a path and not a root port:
+       a device behind a hub that was listed on a root port would be a tree
+       the kernel had lost. */
+    if (cmdline_has("rach2.hubtree")) {
+        for (i = 0; i < len; i = line_end(i, len) + 1) {
+            int end = line_end(i, len);
+
+            if (end == i) {
+                continue;
+            }
+            if ((within("class 3 protocol 1", i, end) || within("class 3 protocol 2", i, end)) &&
+                !behind_hub(i, end)) {
+                fail("a device behind the hub is listed on a root port");
+            }
+        }
+        if (!contains("class 9 ", len)) {
+            fail("the hub itself is not listed");
+        }
     }
 
     /*

@@ -221,13 +221,13 @@ The kernel currently supports:
 
 * Multiboot1 through QEMU's direct kernel loader or GRUB BIOS boot.
 * VGA text mode and Mode 13h graphics.
-* PS/2 keyboard and mouse input, and USB keyboards, mice and flash drives through xHCI.
+* PS/2 keyboard and mouse input, and USB keyboards, mice and flash drives through xHCI, on a root port or behind a hub.
 * COM1 serial input and output.
 * Polled ATA PIO and AHCI disk access with MBR partition discovery.
 * RTL8139, Intel 82540EM (e1000), and RTL8168GU Ethernet devices.
 * Sound Blaster 16, Intel HDA, and the PC speaker.
 
-It does not implement UEFI, Multiboot2, SMP, threads, swap, dynamic linking, IPv6, or VESA graphics. FAT32 partitions mount through `mount(2)`, read and written; exFAT partitions mount and are read. USB is a keyboard, a mouse and a flash drive on a root port through xHCI: no hubs, so a device behind one is not seen, and two flash drives at once. A machine boots from the stick image through its firmware and GRUB, and the root stays in RAM. The direct physical-memory limit is 32 MiB.
+It does not implement UEFI, Multiboot2, SMP, threads, swap, dynamic linking, IPv6, or VESA graphics. FAT32 partitions mount through `mount(2)`, read and written; exFAT partitions mount and are read. USB is keyboards, mice and flash drives through xHCI, on root ports and behind hubs to five tiers, twelve devices and two hubs at once; a SuperSpeed hub is refused and its high-speed half driven, and the transaction translator for a slow device behind a high-speed hub is the controller's, proved only on the notebook. A machine boots from the stick image through its firmware and GRUB, and the root stays in RAM. The direct physical-memory limit is 32 MiB.
 
 The ordinary process and descriptor limits are the fixed 16-slot tables described above, and what a program reaches is that size less what is already taken. A fork past the process table returns `EAGAIN`. An open past the sixteen descriptors, of which three are stdio, returns `EMFILE` at the fourteenth. A socket past the pool of sixteen returns `ENOMEM`, which takes two processes to reach because one runs out of descriptors first. A connection past the sixteen TCP control blocks, which a listener and seven connections to this machine fill, is refused with `ECONNREFUSED` rather than left to retransmit. `tests/run default` fills all four and requires the refusal, and for the first three the resource coming back.
 
