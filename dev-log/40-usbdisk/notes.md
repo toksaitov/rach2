@@ -275,6 +275,82 @@ parameter under `-Werror`, and the script reported it as escaped; a mutation
 that does not build proves nothing, and the script now keeps the run's
 output so that case is told apart.
 
+## Phase 5 record
+
+`tests/run all` on the tree at the end of phase 4: all 65 suites passed.
+
+The gate review of the disk half was two Claude reviewers at Opus strength,
+six files each, run at once: the disk layer with the request pool, the cache
+and the mounts; and the class driver with the GUID reader, the suite, the
+probe and the disk layer's host test. Codex was not used: a Codex unit's
+result cannot be read back from this session, which milestone 39 found and
+recorded. Every finding was fixed before phase 6, and the fixes that change
+what a test can see were each proved by a mutation.
+
+The class driver:
+
+* A check condition on a read or a write was reported as success. The retry
+  path sent `REQUEST SENSE` and then judged the request by the sense
+  command's own status wrapper, which is good. The sense is now read: a
+  medium error fails the request, a unit attention has the command sent once
+  more, and a `SYNCHRONIZE CACHE` answered with `ILLEGAL REQUEST` is a stick
+  with no cache. The status wrapper's arm also cleared the retry flag before
+  the arm that read it. Rows: the medium error, the unit attention retried
+  once and failed the second time, the flush's three answers.
+* A transfer that never answered had its request completed at the deadline
+  with the controller still owning the transfer and the page, which the
+  block layer gives to the next request. The request is no longer completed
+  at the deadline: recovery is begun, its clearing of the endpoints takes
+  the transfer back, and the request fails when recovery ends, late, which
+  the pool's quarantine is for. Row: a vanished data stage, not completed
+  before or at the deadline, a reset seen, then `EIO`.
+* After a timeout the pass ended before the queue was dispatched, so a
+  request submitted from a process in that window went out ahead of the
+  ones waiting. The queue is dispatched at the end of every pass.
+* Tags restarted at one on each attach while completions are matched by the
+  controller's device handle. Tags now go up across every stick and every
+  attach. Row: a second stick on the same handle starts past the first's.
+* A flush was counted when its command was formed; it is counted when the
+  stick answers it.
+
+The disk layer and the cache:
+
+* A held buffer marked for discard by a device that went, then dropped by a
+  failed fill or reused after a writeback, kept the mark; the next user of
+  that buffer, on a sound device, had its dirty block thrown away at its
+  release. The mark is cleared where every buffer changes hands. Two rows,
+  one per path, with the fake device pulling itself in the middle of a read
+  and of a write.
+* `settle` wrote `pending` from what its own pass had seen, and a stick that
+  finished its table or went while it ran was written over and never
+  published or reclaimed. The last word is decided from the states with
+  interrupts off.
+* A stick pulled during bring-up was never named, so nothing released the
+  class driver's slot; two such pulls took both slots for the life of the
+  machine. `usbdisk_left` releases the slot of a stick that was never named.
+  Row and mutation.
+* The read of a stick's table goes to the whole device and not a view, and
+  a quarantined one was not in the teardown count. It is.
+* The staging buffer of the raw windows was one buffer for everyone, safe
+  while every window was over a device that polls; a stick's window sleeps
+  inside its request with the sectors in that buffer. A transfer takes the
+  buffer first and a second process sleeps until it is given back. No row:
+  the interleaving needs two processes asleep in the kernel, which is the
+  guest's; recorded here instead.
+* The header's claim that publishing runs "where no process is inside a
+  syscall" was wrong as written; what holds is that a syscall is not
+  preempted and a sleeping process has recorded what it holds. The comments
+  say that now.
+
+The GUID reader bounds the whole array against the device in the header
+check, not only its first sector; row and mutation. The probe's hold part
+used a negative errno as a descriptor on one path in 128; its volumes part
+now checks the table's entries and not only the signature; its report part
+fails on a name count it could not read.
+
+Two of the reviewers' prose findings were recast, and the second reviewer's
+note that the model cannot see the submit race is recorded under phase 4.
+
 ## Open items
 
 * The phase 3 proof also asks for a raw read of the stick's first sector

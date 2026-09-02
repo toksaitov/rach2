@@ -25,7 +25,7 @@ Phase 4: naming, tables and removal
 Phase 5: the suite
 - [x] tests/run usbdisk without the boot from the stick; the throughput line
 
-- [ ] tests/run all; the gate review of the disk half
+- [x] tests/run all; the gate review of the disk half
 
 Phase 6: the stick image
 - [ ] rach2-stick-image, validated whole

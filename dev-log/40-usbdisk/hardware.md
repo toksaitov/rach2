@@ -23,9 +23,26 @@ demand and did not change: QEMU asks for none and the notebook for one.
 
 | Image | Size | Table | Partitions | Read back by |
 |-------|------|-------|------------|--------------|
-| MBR stick | 64 MiB | MBR | 0x0C at 2048 for 65536, 0x07 at 67584 for 32768 | `mdir`, `mkexfatfixture --check` |
-| GUID stick | 64 MiB | protective 0xEE and a GUID table, first used entry at index 6 | the same two volumes | `mdir`, `mkexfatfixture --check` |
+| MBR stick | 80 MiB | MBR | 0x0C at 2048 for 98304, 0x07 at 100352 for 32768 | `mdir`, `mkexfatfixture --check` |
+| GUID stick | 80 MiB | protective 0xEE and a GUID table, first used entry at index 6 | the same two volumes | `mdir`, `mkexfatfixture --check` |
 | Superfloppy | 16 MiB | none | one exFAT volume from sector 0 | `mkexfatfixture --check` |
+
+The FAT32 partition was 32 MiB in phase 1 and is 48 MiB in the suite: a
+FAT32 volume must have at least 65525 clusters, and a 32 MiB one made by
+`mformat` has 64496, which BusyBox's `blkid` takes for FAT16.
+
+## Throughput
+
+A 16 MiB read through `/dev/usb0` in 32 KiB pieces, timed by the machine's
+own clock. The Lenovo's column is milestone 43's.
+
+| Pump | QEMU on this host | Lenovo G50-70 |
+|------|-------------------|---------------|
+| The controller's messages | 49648 KB/s, 330 ms | |
+| The timer alone (`rach2.nomsi`) | 133 KB/s, 122880 ms | |
+
+On the timer alone each page-sized request costs three ticks, one for each
+of the wrapper, the data and the status.
 
 ## The hybrid ISO
 
