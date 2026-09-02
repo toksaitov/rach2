@@ -1,10 +1,10 @@
 # Milestone 42 progress
 
 Phase 1: arrival, the tools and the port
-- [ ] the tracking files; the review units
-- [ ] e2fsprogs required on the host: preflight, doctor, the Readme
-- [ ] one ext2 image by hand; every number in the ext2 bullet sourced in notes.md
-- [ ] e2fsprogs built against musl; e2fsck in a recovery boot; the size and RAM limit
+- [x] the tracking files; the review units
+- [x] e2fsprogs required on the host: preflight, doctor, the Readme
+- [x] one ext2 image by hand; every number in the ext2 bullet sourced in notes.md
+- [x] e2fsprogs built against musl; e2fsck in a recovery boot; the size and RAM limit
 
 Phase 2: the staging tools and the checker's reader
 - [ ] stageimage.krffs --tree; mkext2.sh with its profile and its gates

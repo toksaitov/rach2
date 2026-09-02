@@ -13,7 +13,8 @@ and the commit last, each with its safeguards.
 
 | Measure | Value |
 |---------|-------|
-| `e2fsck` static binary | phase 1 |
-| Recovery image growth | phase 1 |
-| RAM at boot in recovery | phase 1 |
-| The limit | phase 1 |
+| `e2fsck` static binary, stripped | 673672 bytes |
+| Recovery image | a fixed 4 MiB, with room |
+| Free RAM in recovery at rest, 32 MiB managed | 16412 kB |
+| `e2fsck -fn` on a 64 MiB volume, peak | 800 kB |
+| The limit | 737280 bytes for the binary; 8 MiB at the peak on the 1 GiB image, measured in phase 6 |
