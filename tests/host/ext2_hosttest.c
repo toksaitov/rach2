@@ -6,12 +6,12 @@
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  *
  * The volumes are built here from a staged tree by the host's mke2fs on the
- * profile mkext2.sh writes, with debugfs adding what a host tree cannot
- * carry: device nodes in both encodings and a size past the kernel's
- * offset. Every file reads back against the tree, and every node against
+ * profile mkext2.sh writes, and debugfs adds device nodes in both encodings
+ * and a size past the kernel's offset, which a host tree does not have.
+ * Every file reads back against the tree, and every node against
  * setidcheck's reader, which shares nothing with this driver. A 1 KiB
- * volume carries a sparse file through every level of indirection and
- * mounts read-only by name, as a dir_index volume does; an unknown
+ * volume has a sparse file with a byte behind each level of indirection
+ * and mounts read-only by name, as a dir_index volume does; an unknown
  * incompatible feature refuses the mount. No hosted headers: the kernel
  * headers define the fixed-width types.
  */
@@ -50,17 +50,22 @@ void k_panic(const char *s)
     exit(3);
 }
 
+/* The last record, and the last one at warning level, which is where the
+   driver puts a refusal or a read-only reason. */
 static char last_log[160];
+static char last_warn[160];
 extern int vsnprintf(char *s, unsigned long n, const char *fmt, __builtin_va_list ap);
 void klog(int level, const char *sys, const char *fmt, ...)
 {
     __builtin_va_list ap;
 
-    (void)level;
     (void)sys;
     __builtin_va_start(ap, fmt);
     vsnprintf(last_log, sizeof(last_log), fmt, ap);
     __builtin_va_end(ap);
+    if (level == 4) {
+        __builtin_memcpy(last_warn, last_log, sizeof(last_warn));
+    }
 }
 
 void wait_queue_init(wait_queue_t *wq)
@@ -121,7 +126,7 @@ static int img_write(block_device_t *d, uint64_t lba, uint32_t count, const void
     (void)lba;
     (void)count;
     (void)buf;
-    return -5; /* the reader writes nothing */
+    return -5;
 }
 
 static block_device_t dev = {512, 0, BLOCK_FAULT_SAFE, 0, img_read, img_write, 0, 0, 0};
@@ -369,7 +374,7 @@ static void against_reader(const char *img)
     "sparse_super,large_file,filetype,^dir_index,^resize_inode,^ext_attr,^has_journal," \
     "^extent,^64bit,^flex_bg,^metadata_csum,^huge_file,^dir_nlink,^extra_isize"
 
-/* The staged tree: what a manifest could carry and what it could not. */
+/* The staged tree. */
 static void build_tree(void)
 {
     run("rm -rf " FIXDIR "; mkdir -p " FIXDIR "/tree/dir/sub " FIXDIR "/tree/many");
@@ -385,10 +390,10 @@ static void build_tree(void)
         "printf 'end' >> " FIXDIR "/tree/sparse");
     run("i=0; while [ $i -lt 300 ]; do printf 'x' > " FIXDIR
         "/tree/many/file$i.txt; i=$((i+1)); done");
-    /* A sparse file whose bytes sit past each pointer level at 1 KiB
-       blocks: direct to 12 KiB, indirect to 268 KiB, double to 64 MiB. It
-       has a tree of its own, since a 70 MB file is not one a manifest
-       stages and the guard's reader refuses it. */
+    /* A sparse file with one byte behind each pointer level at 1 KiB
+       blocks, where the direct blocks end at 12 KiB, the indirect at
+       268 KiB and the double-indirect at 64 MiB. It has a tree of its own,
+       since the guard's reader refuses a 70 MB file. */
     run("mkdir -p " FIXDIR "/levels; "
         "dd if=/dev/zero of=" FIXDIR "/levels/levels bs=1 count=0 seek=70000000 2>/dev/null; "
         "printf 'A' | dd of=" FIXDIR "/levels/levels bs=1 seek=0 conv=notrunc 2>/dev/null; "
@@ -443,7 +448,6 @@ static void read_rows(const char *img, uint64_t bytes, const char *what, int on_
     same_as_tree("/hello.link", what);
     same_as_tree("/sparse", what);
 
-    /* Attributes as debugfs set them, and a hard link's count. */
     n = walk("/hello.txt", &err);
     check(n && OPS->getattr(&mnt, n, &st) == 0 && st.mode == 0104755 && st.uid == 7 &&
               st.gid == 9 && st.nlink == 2 && st.size == 6,
@@ -470,7 +474,6 @@ static void read_rows(const char *img, uint64_t bytes, const char *what, int on_
         OPS->put(&mnt, n);
     }
 
-    /* Links: the short one in the inode, the long one in a block. */
     n = walk("/fast", &err);
     check(n && OPS->getattr(&mnt, n, &st) == 0 && (st.mode & 0170000) == 0120000 &&
               OPS->readlink(&mnt, n, linkbuf, sizeof(linkbuf)) == 9 && streq(linkbuf, "hello.txt"),
@@ -488,9 +491,9 @@ static void read_rows(const char *img, uint64_t bytes, const char *what, int on_
         OPS->put(&mnt, n);
     }
 
-    /* Devices: the numbers from either encoding, and no open. debugfs
-       writes the old encoding only, so the new one, major 300 and minor
-       70000 as 0x11112c70 in the second word, is written by field. */
+    /* debugfs writes the old device encoding only, so the new one, major
+       300 and minor 70000 as 0x11112c70 in the second word, is written by
+       field. */
     n = walk("/cold", &err);
     check(n && OPS->getattr(&mnt, n, &st) == 0 && (st.mode & 0170000) == 0020000 &&
               st.rdev == ((4u << 8) | 5u),
@@ -519,7 +522,6 @@ static void read_rows(const char *img, uint64_t bytes, const char *what, int on_
         OPS->put(&mnt, n);
     }
 
-    /* A directory across several blocks lists every entry once. */
     n = walk("/many", &err);
     if (n) {
         void *h;
@@ -546,7 +548,6 @@ static void read_rows(const char *img, uint64_t bytes, const char *what, int on_
     check(walk("/many/file300.txt", &err) == 0 && err == -ENOENT, "a name that is not there");
     check(walk("/hello.txt/x", &err) == 0 && err == -ENOTDIR, "a file is not a directory");
 
-    /* A hole reads as zeros and the bytes after it as written. */
     n = walk("/sparse", &err);
     if (n) {
         int got = read_at(n, abuf, 16, 4999990);
@@ -577,7 +578,8 @@ static void levels_rows(const char *img, uint64_t bytes)
 
     use_image(img, bytes);
     check(mount_image() == 0, "the 1 KiB volume mounts");
-    check((mnt.flags & VFS_MS_RDONLY) != 0 && memcmp(last_log, "mounted:", 8) == 0,
+    check((mnt.flags & VFS_MS_RDONLY) != 0 &&
+              memcmp(last_warn, "mounted read-only: a block size below 4096", 42) == 0,
           "and read-only, since a block below 4096 cannot be written in order");
     if (!mnt.root) {
         return;
@@ -619,19 +621,19 @@ static void refusal_rows(void)
     uint64_t bytes;
     void *n;
     int err;
+    char linkbuf[300];
 
-    /* dir_index: read-only by name. */
     bytes = build_image(img, 4096, 128,
                         "sparse_super,large_file,filetype,dir_index,^resize_inode,"
                         "^ext_attr,^has_journal,^extent,^64bit,^flex_bg,"
                         "^metadata_csum,^huge_file,^dir_nlink,^extra_isize",
                         16, "tree");
     use_image(img, bytes);
-    check(mount_image() == 0 && (mnt.flags & VFS_MS_RDONLY) != 0,
-          "a dir_index volume mounts read-only");
+    check(mount_image() == 0 && (mnt.flags & VFS_MS_RDONLY) != 0 &&
+              memcmp(last_warn, "mounted read-only: dir_index", 28) == 0,
+          "a dir_index volume mounts read-only by name");
     unmount_image();
 
-    /* An unknown incompatible feature: refused, and the bit named. */
     bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
     b[0] = 0x42;
     b[1] = 0;
@@ -640,20 +642,18 @@ static void refusal_rows(void)
     poke(img, 1024 + 96, b, 4);
     use_image(img, bytes);
     check(mount_image() == -EINVAL &&
-              memcmp(last_log, "refused: incompatible feature 0x40", 34) == 0,
+              memcmp(last_warn, "refused: incompatible feature 0x40", 34) == 0,
           "an unknown incompatible feature refuses the mount by name");
 
-    /* An unknown read-only-compatible feature: read-only by name. */
     bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
     b[0] = 0x0b; /* sparse_super, large_file and huge_file */
     poke(img, 1024 + 100, b, 4);
     use_image(img, bytes);
-    check(mount_image() == 0 && (mnt.flags & VFS_MS_RDONLY) != 0,
-          "an unknown read-only-compatible feature mounts read-only");
+    check(mount_image() == 0 && (mnt.flags & VFS_MS_RDONLY) != 0 &&
+              memcmp(last_warn, "mounted read-only: unknown read-only", 36) == 0,
+          "an unknown read-only-compatible feature mounts read-only by name");
     unmount_image();
 
-    /* A size past the kernel's offset: EOVERFLOW at stat and open, and
-       the inode as it was. */
     bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
     run(". tools/setup/e2fsprogs_path.sh; debugfs -w -R 'set_inode_field /dir/big.bin size "
         "5000000000' " FIXDIR "/mut.ext2 >/dev/null 2>&1");
@@ -672,8 +672,6 @@ static void refusal_rows(void)
     same_as_tree("/hello.txt", "the rest of the volume reads");
     unmount_image();
 
-    /* A block number past the volume in a pointer: the read fails and
-       nothing else does. */
     bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
     run(". tools/setup/e2fsprogs_path.sh; debugfs -w -R 'set_inode_field /hello.txt block[0] "
         "9999999' " FIXDIR "/mut.ext2 >/dev/null 2>&1");
@@ -688,7 +686,6 @@ static void refusal_rows(void)
     same_as_tree("/dir/sub/deep.txt", "the rest of the volume reads");
     unmount_image();
 
-    /* A pointer into the descriptors, block 1: the same. */
     bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
     run(". tools/setup/e2fsprogs_path.sh; debugfs -w -R 'set_inode_field /hello.txt block[0] "
         "1' " FIXDIR "/mut.ext2 >/dev/null 2>&1");
@@ -696,12 +693,12 @@ static void refusal_rows(void)
     check(mount_image() == 0, "the volume with the pointer into a table mounts");
     n = walk("/hello.txt", &err);
     if (n) {
-        check(read_at(n, abuf, 16, 0) == -EIO, "a block inside the descriptors fails the read");
+        check(read_at(n, abuf, 16, 0) == -EIO && memcmp(last_warn, "inode ", 6) == 0,
+              "a block inside the descriptors fails the read by name");
         OPS->put(&mnt, n);
     }
     unmount_image();
 
-    /* A pointer into the inode table, whose first block dumpe2fs names. */
     bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
     {
         char line[256];
@@ -734,8 +731,8 @@ static void refusal_rows(void)
             check(mount_image() == 0, "the volume with the pointer into the inode table mounts");
             n = walk("/hello.txt", &err);
             if (n) {
-                check(read_at(n, abuf, 16, 0) == -EIO,
-                      "a block inside the inode table fails the read");
+                check(read_at(n, abuf, 16, 0) == -EIO && memcmp(last_warn, "inode ", 6) == 0,
+                      "a block inside the inode table fails the read by name");
                 OPS->put(&mnt, n);
             }
             unmount_image();
@@ -744,7 +741,6 @@ static void refusal_rows(void)
         }
     }
 
-    /* A directory entry whose rec_len runs past its block. */
     bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
     use_image(img, bytes);
     check(mount_image() == 0, "the volume mounts before its root is damaged");
@@ -783,31 +779,198 @@ static void refusal_rows(void)
             use_image(img, bytes);
             check(mount_image() == 0, "the volume with the malformed entry mounts");
             check(walk("/hello.txt", &err) == 0 && err == -EIO &&
-                      memcmp(last_log, "directory 2: entry at 0 is malformed", 36) == 0,
+                      memcmp(last_warn, "directory 2: entry at 0 is malformed", 36) == 0,
                   "a malformed entry fails the lookup by name");
+            unmount_image();
+            /* The third entry, the first after . and .., naming an inode
+               past the count. */
+            bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
+            b[0] = 0xff;
+            b[1] = 0xff;
+            b[2] = 0xff;
+            b[3] = 0x0f;
+            poke(img, (long)root_block * 4096 + 24, b, 4);
+            use_image(img, bytes);
+            check(mount_image() == 0, "the volume with the entry past the count mounts");
+            check(walk("/zzz", &err) == 0 && err == -EIO &&
+                      memcmp(last_warn, "directory 2: entry at 24 is malformed", 37) == 0,
+                  "an entry naming an inode past the count is malformed by name");
             unmount_image();
         } else {
             check(0, "the root's block was found for the malformed-entry row");
         }
     }
 
-    /* A dirty volume: read-only by name until the check of phase 5. */
     bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
     b[0] = 0;
     b[1] = 0;
     poke(img, 1024 + 58, b, 2);
     use_image(img, bytes);
-    check(mount_image() == 0 && (mnt.flags & VFS_MS_RDONLY) != 0,
-          "a volume whose valid bit is clear mounts read-only");
+    check(mount_image() == 0 && (mnt.flags & VFS_MS_RDONLY) != 0 &&
+              memcmp(last_warn, "mounted read-only: not unmounted cleanly", 40) == 0,
+          "a volume whose valid bit is clear mounts read-only by name");
     unmount_image();
 
-    /* No magic at all. */
+    /* A revision 0 volume, without filetype: readdir reads each inode. */
+    bytes = build_image(img, 4096, 128,
+                        "^sparse_super,^large_file,^filetype,^dir_index,^resize_inode,"
+                        "^ext_attr,^has_journal,^extent,^64bit,^flex_bg,"
+                        "^metadata_csum,^huge_file,^dir_nlink,^extra_isize",
+                        16, "tree");
+    run(". tools/setup/e2fsprogs_path.sh; debugfs -w -R 'ssv rev_level 0' " FIXDIR
+        "/mut.ext2 >/dev/null 2>&1");
+    use_image(img, bytes);
+    check(mount_image() == 0, "a revision 0 volume mounts");
+    same_as_tree("/hello.txt", "a revision 0 volume reads");
+    n = walk("/dir", &err);
+    if (n) {
+        void *h;
+        uint32_t cursor = 0;
+        int got, dirs = 0, files = 0;
+        struct vfs_dirent de;
+
+        if (OPS->open(&mnt, n, 0, &h) == 0) {
+            while ((got = OPS->readdir(&mnt, h, &cursor, &de)) == 1) {
+                if (streq(de.name, "sub")) {
+                    dirs += de.is_dir;
+                } else if (streq(de.name, "big.bin")) {
+                    files += !de.is_dir;
+                }
+            }
+            OPS->release(&mnt, h);
+            check(got == 0 && dirs == 1 && files == 1,
+                  "without filetype, readdir tells a directory from a file by its inode");
+        }
+        OPS->put(&mnt, n);
+    }
+    unmount_image();
+
+    /* A directory whose size ends inside its first entry. */
+    bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
+    run(". tools/setup/e2fsprogs_path.sh; debugfs -w -R 'set_inode_field /dir size 1' " FIXDIR
+        "/mut.ext2 >/dev/null 2>&1");
+    use_image(img, bytes);
+    check(mount_image() == 0, "the volume with the short directory mounts");
+    check(walk("/dir/sub", &err) == 0 && err == -EIO && memcmp(last_warn, "directory ", 10) == 0,
+          "an entry past the directory's size is malformed by name");
+    unmount_image();
+
+    /* A slow link of 1021 bytes, and one whose block is missing. */
+    bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
+    run("t=$(printf 'a%.0s' $(seq 1 1021)); ln -s \"$t\" " FIXDIR "/tree/long1021; "
+        ". tools/setup/e2fsprogs_path.sh; rm -f " FIXDIR "/mut.ext2; : > " FIXDIR "/mut.ext2; "
+        "E2FSPROGS_FAKE_TIME=1 mke2fs -q -F -t ext2 -b 4096 -I 128 -O " PROFILE " -d " FIXDIR
+        "/tree " FIXDIR "/mut.ext2 16M >/dev/null 2>&1; rm -f " FIXDIR "/tree/long1021");
+    use_image(img, bytes);
+    check(mount_image() == 0, "the volume with the long link mounts");
+    n = walk("/long1021", &err);
+    if (n) {
+        static char big[2048];
+
+        check(OPS->readlink(&mnt, n, big, sizeof(big)) == 1021 && big[0] == 'a' && big[1020] == 'a',
+              "a slow link of 1021 bytes is read from its block");
+        OPS->put(&mnt, n);
+    } else {
+        check(0, "the long link is in the volume");
+    }
+    unmount_image();
+    bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
+    run(". tools/setup/e2fsprogs_path.sh; debugfs -w -R 'set_inode_field /slow block[0] 0' " FIXDIR
+        "/mut.ext2 >/dev/null 2>&1");
+    use_image(img, bytes);
+    check(mount_image() == 0, "the volume with the blockless slow link mounts");
+    n = walk("/slow", &err);
+    if (n) {
+        check(OPS->readlink(&mnt, n, linkbuf, sizeof(linkbuf)) == -EIO,
+              "a slow link without a block answers EIO");
+        OPS->put(&mnt, n);
+    }
+    unmount_image();
+
+    /* A group whose free count is past its size, and tables placed where
+       a group's tables cannot be. */
+    bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
+    run(". tools/setup/e2fsprogs_path.sh; debugfs -w -R 'set_bg 0 free_blocks_count 65535' " FIXDIR
+        "/mut.ext2 >/dev/null 2>&1");
+    use_image(img, bytes);
+    check(mount_image() == -EINVAL && streq(last_warn, "refused: group free count"),
+          "a free count past the group is refused by name");
+    bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
+    run(". tools/setup/e2fsprogs_path.sh; debugfs -w -R 'set_bg 0 block_bitmap 1' " FIXDIR
+        "/mut.ext2 >/dev/null 2>&1");
+    use_image(img, bytes);
+    check(mount_image() == -EINVAL && streq(last_warn, "refused: group descriptor"),
+          "a bitmap on the descriptors' block is refused by name");
+    bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
+    run(". tools/setup/e2fsprogs_path.sh; debugfs -w -R 'set_bg 0 inode_table 0' " FIXDIR
+        "/mut.ext2 >/dev/null 2>&1");
+    use_image(img, bytes);
+    check(mount_image() == -EINVAL && streq(last_warn, "refused: group descriptor"),
+          "an inode table at block zero is refused by name");
+
+    /* Sixty-four nodes held, and the sixty-fifth refused. */
+    bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
+    use_image(img, bytes);
+    check(mount_image() == 0, "the volume mounts for the pool row");
+    if (mnt.root) {
+        void *held[EXT2_NODES];
+        int took = 0, i;
+        void *many = walk("/many", &err);
+
+        for (i = 0; many && i < EXT2_NODES; i++) {
+            char name[32];
+            void *node;
+
+            snprintf(name, sizeof(name), "file%d.txt", i);
+            if (OPS->lookup(&mnt, many, name, &node) != 0) {
+                break;
+            }
+            held[took++] = node;
+        }
+        /* The root and /many are held too, so the pool fills two short of
+           the count. */
+        check(took == EXT2_NODES - 2,
+              "the pool holds sixty-two files beside the root and their directory");
+        if (many) {
+            void *node;
+
+            check(OPS->lookup(&mnt, many, "file63.txt", &node) == -ENOMEM,
+                  "the sixty-fifth node answers ENOMEM");
+            for (i = 0; i < took; i++) {
+                OPS->put(&mnt, held[i]);
+            }
+            check(OPS->lookup(&mnt, many, "file63.txt", &node) == 0,
+                  "and is found once one is put");
+            OPS->put(&mnt, node);
+            OPS->put(&mnt, many);
+        }
+    }
+    unmount_image();
+
+    /* A size of 0xffffffff, the last the kernel's offset holds. */
+    bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
+    run(". tools/setup/e2fsprogs_path.sh; debugfs -w -R 'set_inode_field /sparse size "
+        "4294967295' " FIXDIR "/mut.ext2 >/dev/null 2>&1");
+    use_image(img, bytes);
+    check(mount_image() == 0, "the volume with the largest file mounts");
+    n = walk("/sparse", &err);
+    if (n) {
+        struct vfs_stat st;
+
+        check(OPS->getattr(&mnt, n, &st) == 0 && st.size == 4294967295ull,
+              "a size of 4 GiB less one is reported");
+        check(read_at(n, abuf, 16, 4294967290ull) == 5 && abuf[0] == 0 && abuf[4] == 0,
+              "and its last five bytes read as the hole they are");
+        OPS->put(&mnt, n);
+    }
+    unmount_image();
+
     bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
     b[0] = 0;
     b[1] = 0;
     poke(img, 1024 + 56, b, 2);
     use_image(img, bytes);
-    check(mount_image() == -EINVAL && streq(last_log, "refused: magic"), "no magic is refused");
+    check(mount_image() == -EINVAL && streq(last_warn, "refused: magic"), "no magic is refused");
 }
 
 int main(void)

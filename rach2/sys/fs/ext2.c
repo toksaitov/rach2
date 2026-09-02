@@ -54,6 +54,7 @@
 #define EXT2_FT_MAX 7u
 
 #define PATH_DEPTH 64 /* directories climbed by `ext2_path` before ENAMETOOLONG */
+#define BCACHE_BLOCK_SHIFT 12 /* log2 of BCACHE_BLOCK_BYTES */
 
 /* One held inode. `too_big` marks a size past the kernel's offset. */
 struct ext2_node {
@@ -116,8 +117,8 @@ static int read_bytes(struct ext2_mount *em, uint64_t off, void *dst, uint32_t l
     uint8_t *out = dst;
 
     while (len > 0) {
-        uint64_t blk = off / BCACHE_BLOCK_BYTES;
-        uint32_t in = (uint32_t)(off % BCACHE_BLOCK_BYTES);
+        uint64_t blk = off >> BCACHE_BLOCK_SHIFT;
+        uint32_t in = (uint32_t)off & (BCACHE_BLOCK_BYTES - 1);
         uint32_t take = BCACHE_BLOCK_BYTES - in;
         struct bbuf *b;
 
@@ -130,7 +131,7 @@ static int read_bytes(struct ext2_mount *em, uint64_t off, void *dst, uint32_t l
         }
         if (in + take > b->bytes) {
             bcache_release(b);
-            return -EIO; /* past the device's short last block */
+            return -EIO;
         }
         k_memcpy(out, b->data + in, take);
         bcache_release(b);
@@ -177,10 +178,10 @@ static uint32_t inode_table_blocks(const struct ext2_mount *em)
 }
 
 /**
- * Whether a data pointer may name block `b`: inside the volume, past the
- * boot block, and not a superblock, a descriptor table, a bitmap or an
- * inode table. A pointer that names one of those is a fault the walk
- * refuses, since reading it as data would read the volume's own tables.
+ * Whether block `b` may hold data: inside the volume, past the boot block,
+ * and not a superblock, a descriptor table, a bitmap or an inode table.
+ * The constructor requires each group's tables to lie in that group, so
+ * the group of `b` is the one whose descriptor is consulted.
  */
 static int data_block_ok(const struct ext2_mount *em, uint32_t b)
 {
@@ -248,8 +249,6 @@ static int inode_load(struct ext2_mount *em, uint32_t ino, struct ext2_node *n)
     }
     n->too_big = 0;
     if ((n->mode & S_IFMT_) == S_IFREG_) {
-        /* The high word of the size, with `large_file`; a file the kernel's
-         * 32-bit offset cannot reach is marked and left as it is. */
         uint32_t high = le32(raw + 108);
 
         n->size |= (uint64_t)high << 32;
@@ -332,9 +331,9 @@ static void ext2_put(struct vfs_mount *mnt, void *node)
 /* ---- block mapping ---- */
 
 /**
- * The block that holds byte `index * block_size` of `n`: 0 for a hole, or
- * the pointer through the direct, indirect, double and triple levels, each
- * pointer block checked before it is read.
+ * Block `index` of `n`'s data: 0 for a hole, or the pointer through the
+ * direct, indirect, double and triple levels, each pointer block checked
+ * before it is read.
  */
 static int block_at(struct ext2_mount *em, const struct ext2_node *n, uint32_t index,
                     uint32_t *out)
@@ -465,7 +464,8 @@ static int dir_scan(struct ext2_mount *em, const struct ext2_node *d, uint32_t *
     sc->name_len = head[6];
     sc->type = head[7];
     if (sc->rec_len < 8 || sc->rec_len % 4 != 0 || in + sc->rec_len > em->block_size ||
-        sc->name_len + 8 > sc->rec_len) {
+        (uint64_t)at + sc->rec_len > d->size || sc->name_len + 8 > sc->rec_len ||
+        sc->ino > em->inodes) {
         klog(KLOG_WARN, "ext2", "directory %d: entry at %d is malformed", (int)d->ino, (int)at);
         return -EIO;
     }
@@ -589,7 +589,7 @@ static int ext2_open(struct vfs_mount *mnt, void *node, int flags, void **handle
         return -EOVERFLOW;
     }
     if (type == S_IFCHR_ || type == S_IFBLK_) {
-        return -EACCES; /* a device on a volume is not a device; /dev has those */
+        return -EACCES;
     }
     n->refs++;
     *handle = node;
@@ -650,9 +650,12 @@ static int ext2_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
             ent->is_dir = sc.type == EXT2_FT_DIR;
         } else {
             struct ext2_node probe;
+            int rc = inode_load(em, sc.ino, &probe);
 
-            ent->is_dir = inode_load(em, sc.ino, &probe) == 0 &&
-                          (probe.mode & S_IFMT_) == S_IFDIR_;
+            if (rc != 0) {
+                return rc;
+            }
+            ent->is_dir = (probe.mode & S_IFMT_) == S_IFDIR_;
         }
         return 1;
     }
@@ -672,8 +675,8 @@ static int ext2_readlink(struct vfs_mount *mnt, void *node, char *buf, uint32_t 
     if ((n->mode & S_IFMT_) != S_IFLNK_) {
         return -EINVAL;
     }
-    if (n->size >= em->block_size || n->size > EXT2_NAME_MAX * 4) {
-        return -EIO; /* longer than a block: not a link this format writes */
+    if (n->size >= em->block_size) {
+        return -EIO;
     }
     len = (uint32_t)n->size;
     if (len + 1 > cap) {
@@ -686,8 +689,12 @@ static int ext2_readlink(struct vfs_mount *mnt, void *node, char *buf, uint32_t 
             buf[i] = (char)((n->block[i / 4] >> ((i % 4) * 8)) & 0xFFu);
         }
     } else {
-        int rc = read_data(em, n, 0, buf, len);
+        int rc;
 
+        if (n->block[0] == 0) {
+            return -EIO;
+        }
+        rc = read_data(em, n, 0, buf, len);
         if (rc != 0) {
             return rc;
         }
@@ -887,6 +894,9 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
     if ((uint64_t)em->groups * em->ipg < em->inodes) {
         return refuse("inodes past the groups");
     }
+    if ((uint64_t)em->first_data + 1 + gd_blocks(em) > em->blocks) {
+        return refuse("descriptor table past the volume");
+    }
     unknown = em->incompat & ~EXT2_INCOMPAT_FILETYPE;
     if (unknown != 0) {
         klog(KLOG_WARN, "ext2", "refused: incompatible feature 0x%x", (int)unknown);
@@ -912,10 +922,26 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
     for (g = 0; g < em->groups; g++) {
         const uint8_t *gd = em->gd + g * 32;
         uint32_t bb = le32(gd + 0), ib = le32(gd + 4), it = le32(gd + 8);
+        uint32_t lo = em->first_data + g * em->bpg;
+        uint32_t hi = lo + em->bpg;
+        uint32_t tables = inode_table_blocks(em);
 
-        if (bb >= em->blocks || ib >= em->blocks || it >= em->blocks ||
-            it + inode_table_blocks(em) > em->blocks) {
+        /* Each group's two bitmaps and inode table lie in that group, past
+         * its superblock copy and descriptors when it has them, and apart
+         * from each other; that is where `data_block_ok` looks for them. */
+        if (hi > em->blocks) {
+            hi = em->blocks;
+        }
+        if (has_super(em, g)) {
+            lo += 1 + gd_blocks(em);
+        }
+        if (bb < lo || bb >= hi || ib < lo || ib >= hi || it < lo || tables == 0 ||
+            (uint64_t)it + tables > hi || bb == ib || (bb >= it && bb < it + tables) ||
+            (ib >= it && ib < it + tables)) {
             return refuse("group descriptor");
+        }
+        if (le16(gd + 12) > em->bpg || le16(gd + 14) > em->ipg) {
+            return refuse("group free count");
         }
         em->free_blocks += le16(gd + 12);
         em->free_inodes += le16(gd + 14);
@@ -931,8 +957,10 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
     em->writable = readonly_why == 0 && !(flags & VFS_MS_RDONLY);
     if (readonly_why) {
         klog(KLOG_WARN, "ext2", "mounted read-only: %s", readonly_why);
-        mnt->flags |= VFS_MS_RDONLY;
     }
+    /* The driver has no writer yet; every mount is read-only. */
+    em->writable = 0;
+    mnt->flags |= VFS_MS_RDONLY;
     mnt->priv = em;
     mnt->root = root;
     klog(KLOG_INFO, "ext2", "mounted: %d blocks of %d, %d inodes, %d groups%s", (int)em->blocks,
