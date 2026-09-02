@@ -38,6 +38,16 @@ not change.
 | Lenovo G50-70 | 4 | a USB 3 hub is 2 entries | 3 | 9 of 12 |
 | QEMU | 0 | 1 | 3 | 4 of 12 |
 
+## Bring-up
+
+| Machine | The hub itself | A keyboard behind it | A stick behind it |
+|---------|----------------|----------------------|-------------------|
+| QEMU | 0.31 s | 0.68 s | 0.83 s ready |
+| Lenovo G50-70 | | | |
+
+Each device behind a hub is a few dozen control transfers through the one
+command turn; the times are from the boot's records.
+
 ## The tree under QEMU
 
 `usb-hub` on `qemu-xhci` is a full-speed hub with eight ports; devices
