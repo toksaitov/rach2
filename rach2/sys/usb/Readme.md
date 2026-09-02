@@ -17,6 +17,7 @@ It is also the only one that reaches a low-speed keyboard without a second mecha
 | `core.c` | Devices, descriptors, the enumeration state machine, class matching. |
 | `hid.c` | The boot-protocol keyboard and mouse. |
 | `msc.c` | The flash drive, over Bulk-Only Transport. |
+| `hub.c` | The hub: its descriptor, its ports' power, and the port operations for the devices below it. |
 | `usb.c` | The inventory, the bring-up, and the stack's turn from the timer. |
 
 Addressing belongs to the controller rather than the core: xHCI's Address Device command replaces the `SET_ADDRESS` request, so the core asks the driver to address a device and never sends that request itself. A second controller whose bus really takes the request would send it inside its own `device_address`.
@@ -75,6 +76,8 @@ It is remembered by port, in a word of bits, and not by holding an entry in the 
 | Scratchpad pages given | 32 |
 | Keyboards and mice driven at once | as many as the slots hold, with one modifier state between them |
 | Flash drives driven at once | 2, the size of the class driver's table and of the disk layer's names |
+| Hubs driven at once | 2, each with up to 15 ports used |
+| Tree depth | 5 hub tiers, the route string's |
 | Requests waiting on one stick | 16, the request pool's own size |
 | A stick's request deadline | ten seconds, in the block layer and in the driver alike |
 
@@ -110,9 +113,19 @@ The block device the stick is published as has `submit` and `flush` and not `rea
 
 A stick that is pulled out is a port that says so, which the core already sees. The transfer in flight is abandoned by its generation and its request is failed, every request waiting is failed, and every later one is refused, so a process asleep in a read returns with `EIO` rather than waiting for a device that will not answer. The slot is not freed then: its block device is what a mount, an open description and a held buffer all point at, and a stick plugged in afterwards would be handed those pointers with the slot. The disk layer counts what still holds the stick and frees the slot when the count reaches zero; [`block/Readme.md`](../block/Readme.md) has that count and what it covers.
 
+## Hubs
+
+A port belongs to the root controller or to a hub, and the core's enumeration does not care which: a device record holds the operations its port answers to, status, settled, reset begun and reset done, which go to the controller for a root port and to the hub driver for a hub port. The debounce, the reset, the addressing and the descriptors are the same code for both. A device below a hub is opened at a location built from the hub's: the hub's route with the port, numbered from one, in the nibble of its tier, one tier deeper; a port above 15 and a sixth tier are refused by name. One device is enumerated at a time across the whole tree, as across the root ports, since the controller takes one command at a time.
+
+The core matches class 9 to the hub driver as it matches class 3 to HID and class 8 to storage. `hub.c` reads the hub descriptor, tells the controller through the core's command turn that the slot is a hub with so many ports and, for a high-speed hub, whether it translates per port and its think time, powers the ports the way the descriptor says the hub switches them, one request on a ganged hub, one per port on an individually switched one, none on a hub that cannot switch, waits the power-good time, and then reads every port's status once, so that a device already plugged in when the hub arrived is found. A hub with more than 15 ports has its first 15 used and says so; a hub that will not give its descriptor, will not power a port, or stops answering is refused by name. A port reset behind a hub is `SET_PORT_FEATURE(PORT_RESET)`, the status read every 20 ms until the reset bit clears with the port enabled, and `C_PORT_RESET` cleared; a reset that has not ended in 500 ms fails the device, and the port is remembered as refused on the hub until its device leaves. The speed comes from the status word's two bits.
+
+A low or full-speed device below a high-speed hub carries the nearest high-speed hub above it as its translator, with the port on that hub that leads to it, which holds through a full-speed hub between them; the controller issues the split transactions and this kernel writes none. QEMU's hub is a full-speed hub with no translator, so the translator's words are checked by the host test and proved only by the notebook.
+
+When a hub is pulled, or a hub reports a port's connection gone, everything below goes first: each device's class driver is told, its entry closes through the same closing state as a device on a root port, and the hub's own slot is given back only when nothing below it is still on its way out. A connection change is a change of identity: what was on the port is closed before what is there now is looked at. Two hubs are driven at once, each with its refusal bitmap. A SuperSpeed hub, protocol 3, is refused by name; its high-speed half is another device and is driven.
+
 ## What is absent, and why
 
-* **Hubs.** A device plugged into a hub is not seen. Both machines have enough root ports for a keyboard and a mouse.
+* **Hubs behind hubs on the notebook, and SuperSpeed hubs.** A hub below a hub is driven as far as the tree goes, five tiers; a SuperSpeed hub is not.
 * **Report descriptors.** Above.
 * **Isochronous transfers.** Audio and video over USB. Nothing here reads them.
 * **Typematic repeat.** A held key on a USB keyboard does not repeat. The PS/2 keyboard's repeat comes from its hardware; a USB host is supposed to make its own, and this one does not.

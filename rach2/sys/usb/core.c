@@ -358,6 +358,37 @@ static int expired(const struct usb_device_state *d)
 static void subtree_gone(int hub);
 
 /**
+ * A device's place as a path, `5` for root port 5 and `5.2` for port 2 of a
+ * hub on it, in a buffer that the next call overwrites: it is for one record.
+ */
+static const char *path_of(const struct usb_device_state *d)
+{
+    static char text[USB_TREE_TIERS * 3 + 4];
+    int chain[USB_TREE_TIERS + 1];
+    int depth = 0;
+    int at = 0;
+    int k;
+
+    while (d != 0 && depth <= USB_TREE_TIERS) {
+        chain[depth++] = d->port + 1;
+        d = d->owner >= 0 ? &devices[d->owner] : 0;
+    }
+    for (k = depth - 1; k >= 0; k--) {
+        int n = chain[k];
+
+        if (n >= 10) {
+            text[at++] = (char)('0' + n / 10);
+        }
+        text[at++] = (char)('0' + n % 10);
+        if (k > 0) {
+            text[at++] = '.';
+        }
+    }
+    text[at] = '\0';
+    return text;
+}
+
+/**
  * Take one device down: its class driver told, and its entry closing if the
  * controller gave it a slot, free otherwise.
  */
@@ -368,8 +399,10 @@ static void device_gone(int i)
     if (d->state == ST_FREE || d->state == ST_CLOSING || d->state == ST_TOMBSTONE) {
         return;
     }
+    /* Whatever is below a hub goes before the hub does. */
+    subtree_gone(i);
     if (d->state == ST_RUNNING) {
-        klog(KLOG_INFO, "usb", "device: port %d: gone", d->port + 1);
+        klog(KLOG_INFO, "usb", "device: port %s: gone", path_of(d));
         if (d->interface.kind == USB_KIND_STORAGE) {
             msc_detach(d->slot);
         } else if (d->interface.kind == USB_KIND_HUB) {
@@ -378,8 +411,6 @@ static void device_gone(int i)
             hid_gone(d->slot);
         }
     }
-    /* Whatever is below a hub goes before the hub does. */
-    subtree_gone(i);
     if (enumerating == i) {
         enumerating = -1;
     }
@@ -470,7 +501,7 @@ static int subtree_closing(int hub)
 /** Give up on a device, with the reason. */
 static void fail(struct usb_device_state *d, const char *why)
 {
-    klog(KLOG_WARN, "usb", "device: port %d: %s", d->port + 1, why);
+    klog(KLOG_WARN, "usb", "device: port %s: %s", path_of(d), why);
     if (enumerating == (int)(d - devices)) {
         enumerating = -1;
     }
@@ -1029,7 +1060,7 @@ static void step_device(struct usb_device_state *d)
             d->reporting = 0;
             enumerating = -1;
             klog(KLOG_INFO, "usb",
-                 "device: port %d: %x:%x, class %d protocol %d, endpoints %d and %d", d->port + 1,
+                 "device: port %s: %x:%x, class %d protocol %d, endpoints %d and %d", path_of(d),
                  (int)d->vendor, (int)d->product, d->interface.class_code, d->interface.protocol,
                  d->interface.ep_number, d->interface.ep_out_number);
             return;
@@ -1047,7 +1078,7 @@ static void step_device(struct usb_device_state *d)
             d->refused = 0;
             enumerating = -1;
             klog(KLOG_INFO, "usb",
-                 "device: port %d: %x:%x, class %d protocol %d, endpoint %d, a hub", d->port + 1,
+                 "device: port %s: %x:%x, class %d protocol %d, endpoint %d, a hub", path_of(d),
                  (int)d->vendor, (int)d->product, d->interface.class_code, d->interface.protocol,
                  d->interface.ep_number);
             return;
@@ -1081,8 +1112,8 @@ static void step_device(struct usb_device_state *d)
              * on USB. */
             input_mouse_found();
         }
-        klog(KLOG_INFO, "usb", "device: port %d: %x:%x, class %d protocol %d, endpoint %d",
-             d->port + 1, (int)d->vendor, (int)d->product, d->interface.class_code,
+        klog(KLOG_INFO, "usb", "device: port %s: %x:%x, class %d protocol %d, endpoint %d",
+             path_of(d), (int)d->vendor, (int)d->product, d->interface.class_code,
              d->interface.protocol, d->interface.ep_number);
         return;
 
@@ -1134,6 +1165,46 @@ void usb_core_hub_port(int hub, int port, int connected)
     if (connected) {
         device_arrive(hub, port);
     }
+}
+
+int usb_core_hub_tell(int index, int ports, int multi_tt, int think_time)
+{
+    struct usb_device_state *d;
+    struct usb_command_result result;
+    int answer;
+
+    if (index < 0 || index >= USB_MAX_DEVICES || devices[index].state != ST_RUNNING) {
+        return -1;
+    }
+    d = &devices[index];
+    if (enumerating >= 0 && enumerating != index) {
+        return 0; /* another device has the command ring */
+    }
+    enumerating = index;
+    if (!d->closing_asked) {
+        if (xhci_device_hub(d->slot, ports, multi_tt, think_time) != 0) {
+            enumerating = -1;
+            return -1;
+        }
+        d->closing_asked = 1; /* the one command flag a running device has */
+        d->deadline = core_ms + STEP_MS;
+        return 0;
+    }
+    answer = command_result(d, &result);
+    if (answer == 0) {
+        return 0;
+    }
+    d->closing_asked = 0;
+    enumerating = -1;
+    return answer < 0 ? -1 : 1;
+}
+
+void usb_core_hub_failed(int index, const char *why)
+{
+    if (index < 0 || index >= USB_MAX_DEVICES || devices[index].state != ST_RUNNING) {
+        return;
+    }
+    fail(&devices[index], why);
 }
 
 int usb_core_location(int index, struct usb_location *out)

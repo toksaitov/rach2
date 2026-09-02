@@ -123,6 +123,17 @@ struct usb_port_ops {
 void usb_core_hub_port(int hub, int port, int connected);
 
 /**
+ * Tell the controller, for the hub driver, that the device at `index` is a
+ * hub, through the one command turn the stack has. Returns 0 while the turn
+ * is another device's or the command is in flight, 1 when it finished, -1
+ * when it was refused or failed.
+ */
+int usb_core_hub_tell(int index, int ports, int multi_tt, int think_time);
+
+/** The hub driver gives up the hub at `index`, with the reason. */
+void usb_core_hub_failed(int index, const char *why);
+
+/**
  * The location of a device, by its index: the hub driver passes it on to the
  * controller for the hub's own words. Returns -1 for an index that names no
  * device.
