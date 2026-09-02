@@ -268,5 +268,85 @@ link followed; the last component followed under `O_NOFOLLOW`; and a
 dangling link followed under `O_CREAT|O_EXCL`. The last three fail
 `ext2probe`'s rows through `tests/run ext2`, the rest `ext2_hosttest`'s.
 
+### The review round after phase 3
+
+Three Codex units through the rescue agent, each moved to a background
+job by the agent's ten-minute limit and read from the job's output: unit
+A over the driver, its header, its Readme and its host test; the walker
+and the syscalls first as one unit, which returned nothing in ten
+minutes, then as two, the walker's link arm and the link syscalls with
+the probe. Every finding was confirmed and fixed, and each fix that a row
+can see has one.
+
+Unit A, the driver, eight findings. The constructor read the descriptor
+table without proving it lay inside the volume and accepted a table at
+block zero, so a one-block volume could mount with a root inode read from
+the boot block; and `data_block_ok` consulted the descriptor of the
+candidate block's own group, which a descriptor placing its bitmap in
+another group defeated. The constructor now requires the table inside the
+volume and each group's two bitmaps and inode table inside that group,
+past its superblock copy and descriptors, apart from each other and past
+block zero, which is the placement the per-group lookup assumes. A
+directory entry was checked against its block and not the directory's
+size, and `readdir` returned an inode number past the count, or, without
+`filetype`, took a failed inode load as a file; both are malformed
+entries now, and a failed load is the error. A slow link was refused past
+1020 bytes, which the format allows to a block less one, and a slow link
+without a block read sixty zeros. Group free counts were summed
+unbounded; each is now at most its group's size or the mount is refused
+by name. The mount reported itself writable with no writer; every mount
+is read-only until phase 4. The cache split used a 64-bit division by a
+constant, which the compiler lowers but the rule forbids; it is a shift
+and a mask. The host test gained a row for each, with the read-only
+reasons, the refusals and the failures checked against the warning
+record, which a `last_warn` copy in the test's `klog` keeps, since the
+mount's own record overwrote the last line; and a revision 0 volume, a
+directory whose size ends inside its first entry, an entry naming an
+inode past the count, a 1021-byte link, a blockless slow link, a free
+count past the group, tables where a group's cannot be, sixty-two held
+nodes with the next refused, and a size of 4 GiB less one.
+
+Unit B1, the walker, six findings. The link arm called `getattr` and
+`put` without checking that the type has them, and a `getattr` error was
+read as "not a link"; the arm runs only on a type with both, puts through
+a helper that tolerates a missing `put`, and fails the walk on the error.
+The splice added a slash after the target with nothing to follow it, so a
+511-byte target answered `ENAMETOOLONG` one byte early; the slash joins
+only a non-empty rest. The header promised a common-layer `EPERM` for a
+type without `symlink` and no wrapper existed; `vfs_symlink` is the
+wrapper, beside `vfs_link`, and `do_symlink` calls it. The ordering of
+the link check before the covering-mount check is safe because a mount
+covers a directory, which the comment now says. The prose it quoted is
+recast.
+
+Unit B2, the syscalls, six findings. `open` with `O_CREAT` through a
+dangling link resolved the link's own parent, created the link's name,
+answered `EEXIST` and went round again forever; it now resolves the name
+without following, and when that is a link it reads the target, puts the
+link's directory in front of a relative one, and starts over on that
+path within the resolver's bound of forty. The `/proc` links reached
+`synth_open` before the `ELOOP` and `EEXIST` checks; they take the same
+two answers through `synth_is_link`. `readlink`'s kernel buffer and the
+`symlink` wrappers' target buffers were 256 bytes, so a 300-byte target
+failed both; they are the resolver's 512. `do_link` answered `EPERM` for
+a KRFFS source before resolving the destination, so a cross-mount link
+never reached `EXDEV`; the order is Linux's, another mount, then a
+directory or a type without links, then a read-only mount. `fstatat64`
+and `utimensat` accepted any flag; each answers `EINVAL` outside its
+set. Five stale comments went with them, one claiming `link` always
+answers `EPERM`. The probe gained the rows the unit named: `O_CREAT`
+through a dangling link on the read-only volume answering `EROFS` and not
+looping, `O_CREAT|O_EXCL` on a link with a target, a one-byte and an
+empty `readlink` buffer with a sentinel past the byte, a 300-byte target,
+`fstatat64` with and without `AT_SYMLINK_NOFOLLOW` and with an invalid
+flag, `utimensat` with an invalid flag, the old `stat` and `lstat`, a
+hard link across mounts, and `/proc/self` and `/proc/self/fd/1` under the
+two open flags. What the unit noted and this milestone leaves: an
+ordinary `open` of `/proc/self/fd/N` answers `ENOENT` rather than
+reopening the descriptor, which is procfs's contract from milestone 31
+and not the walker's; it is written in `synthfs.Readme.md` as it is.
+
+## Open items
+
 * Phase 5: the partition nodes report their size, so that `e2fsck -p`
   does not abort on a size of zero.

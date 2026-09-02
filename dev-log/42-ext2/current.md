@@ -1,6 +1,7 @@
-Phase 1 is open: arrival, the tools and the port.
-Evidence gathered: milestone 41 closed at cbf7d80 on a clean tree;
-e2fsprogs 1.47.4 is installed under the Homebrew keg.
-Next action: preflight, doctor and the Readmes name e2fsprogs; one ext2
-image by hand; the numbers sourced; the port built once.
-File being read when written: dev-log/42-ext2/plan.md, phase 1.
+Phase 3 is closed and reviewed; phase 4, the writer, is next.
+Evidence gathered: ext2_hosttest and tests/run ext2 pass with the three
+Codex units' findings fixed and each fix's mutation caught; style, host
+and default pass.
+Next action: the writer in ext2.c, the order of writes, the write rows
+and the interruption matrix with its three judges.
+File being read when written: dev-log/42-ext2/plan.md, phase 4.
