@@ -61,6 +61,8 @@ The generated applet table and `config-main` are the authority for what ships; t
 
 The main binary contains `adduser`, `deluser`, `addgroup`, `delgroup`, and `chpasswd`. BusyBox serializes each file through `F_SETLK`, but Rach2 grants advisory locks without recording conflicts, and these programs do not use `/etc/.pwlock`. Concurrent BusyBox and project credential writers can therefore lose one update. Avoid concurrent account changes.
 
+BusyBox has no `e2fsck`, which is why the checker the recovery image stages is e2fsprogs' own; [`vendor/e2fsprogs/Readme.md`](../e2fsprogs/Readme.md) has that port.
+
 ## Set-id binary
 
 The second generated table contains exactly `login`, `passwd`, and `su`. It contains no shell or other applet. The set-id config keeps static linking and 64-bit file offsets, disables individual applet binaries, and compiles out `FEATURE_SUID_CONFIG`.

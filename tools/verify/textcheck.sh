@@ -33,8 +33,8 @@ findings=$(mktemp)
 trap 'rm -f "$findings"' EXIT INT TERM
 
 # Find in-house files under the source roots. The vendored extracted trees and
-# their built output (vendor/musl/install and the
-# vendor/*/{musl,busybox,dropbear}-* trees) are pruned; the out-of-tree build/
+# their built output (vendor/musl/install and the extracted musl, busybox,
+# dropbear, tcc, pdpmake and e2fsprogs trees) are pruned; the out-of-tree build/
 # at the repo root is not a search root, so it is never descended into.
 # ports/doom and the dev-log records are not roots, so they are skipped. The
 # caller appends the name filter and -print.
@@ -46,6 +46,7 @@ prune_find() {
         -path 'vendor/tcc/tcc-*' -prune -o \
         -path 'vendor/pdpmake/pdpmake-*' -prune -o \
         -path 'vendor/dropbear/dropbear-*' -prune -o \
+        -path 'vendor/e2fsprogs/e2fsprogs-*' -prune -o \
         "$@" 2>/dev/null
 }
 
@@ -57,7 +58,7 @@ md_files() {
 # Shell, make, the two extensionless muslgcc wrappers, and the shell scripts
 # this project ships inside its images, which end in .script, not .sh.
 script_files() {
-    ls ./Makefile vendor/busybox/muslgcc vendor/dropbear/muslgcc 2>/dev/null
+    ls ./Makefile vendor/busybox/muslgcc vendor/dropbear/muslgcc vendor/e2fsprogs/muslgcc 2>/dev/null
     prune_find '(' -name '*.sh' -o -name '*.mk' -o -name '*.script' \
                    -o -name 'Makefile' ')' -print
 }

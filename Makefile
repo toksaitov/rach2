@@ -38,6 +38,7 @@ BUSYBOX_STAMP  = vendor/busybox/.stamp
 DROPBEAR_STAMP = vendor/dropbear/.stamp
 TCC_STAMP      = vendor/tcc/.stamp
 PDPMAKE_STAMP  = vendor/pdpmake/.stamp
+E2FSPROGS_STAMP = vendor/e2fsprogs/.stamp
 
 # The staged capstone binaries the build_*.sh scripts produce, out of tree under
 # build/vendor/ (mirroring their vendor/<name>/ sources). A routine `make clean`
@@ -49,6 +50,7 @@ BUSYBOX_SUID_BIN = build/vendor/busybox/busybox-suid
 DROPBEAR_BIN = build/vendor/dropbear/dropbearmulti
 TCC_BIN      = build/vendor/tcc/tcc
 PDPMAKE_BIN  = build/vendor/pdpmake/make
+E2FSCK_BIN   = build/vendor/e2fsprogs/e2fsck
 
 # The pinned vendored source tarballs: the exact names the build_*.sh scripts
 # verify by sha256. Used as stamp prerequisites (not a $(wildcard), which would
@@ -60,6 +62,8 @@ DROPBEAR_TARBALL = vendor/dropbear/dropbear-2022.83.tar.bz2
 TCC_TARBALL      = vendor/tcc/tcc-0.9.27.tar.bz2
 PDPMAKE_TARBALL  = vendor/pdpmake/pdpmake-2.0.4.tgz
 PDPMAKE_PATCHES  = vendor/pdpmake/patches/0001-platform-macros.patch
+E2FSPROGS_TARBALL = vendor/e2fsprogs/e2fsprogs-1.47.4.tar.gz
+E2FSPROGS_PATCHES = vendor/e2fsprogs/patches/series $(wildcard vendor/e2fsprogs/patches/*.patch)
 
 # The two musl artifacts consumers depend on, both derived from the tarball name
 # so the pinned version is written once: the installed static libc the
@@ -90,9 +94,9 @@ MKDISK          = krffs/mkdisk.sh
         rach2-sealed-disk rach2-recovery rach2-recovery-image \
         isos test-iso os-simple-iso os-real-iso rach2-metal-iso \
         check-busybox check-setid check-dropbearmulti check-libc check-tcc \
-        check-pdpmake \
+        check-pdpmake check-e2fsck \
         run-style run-host run-default \
-        musl busybox dropbear tcc pdpmake $(BASE_DIRS) $(FULL_DIRS)
+        musl busybox dropbear tcc pdpmake e2fsprogs $(BASE_DIRS) $(FULL_DIRS)
 
 # Default: everything reusable. The three RAM images pull in the kernel, the
 # host tools, the guest programs, the vendored userland, and Doom through their
@@ -112,7 +116,8 @@ preflight:
 	@./tools/setup/preflight.sh
 
 all images $(BASE_DIRS) $(FULL_DIRS): | preflight
-$(LIBC_STAMP) $(BUSYBOX_STAMP) $(DROPBEAR_STAMP) $(TCC_STAMP) $(PDPMAKE_STAMP): | preflight
+$(LIBC_STAMP) $(BUSYBOX_STAMP) $(DROPBEAR_STAMP) $(TCC_STAMP) $(PDPMAKE_STAMP) \
+    $(E2FSPROGS_STAMP): | preflight
 
 # Friendly aliases for the third-party stamps.
 musl: $(LIBC_STAMP)
@@ -120,6 +125,7 @@ busybox: $(BUSYBOX_STAMP)
 dropbear: $(DROPBEAR_STAMP)
 tcc: $(TCC_STAMP)
 pdpmake: $(PDPMAKE_STAMP)
+e2fsprogs: $(E2FSPROGS_STAMP)
 
 # --- third-party stamp rules. Each removes BOTH the stamp and the expected
 #     artifact up front, runs its build script, requires a non-empty
@@ -187,6 +193,15 @@ $(PDPMAKE_STAMP): vendor/pdpmake/build_pdpmake.sh $(PDPMAKE_PATCHES) \
 	@test -s $(PDPMAKE_BIN) || { echo "pdpmake: build produced no $(PDPMAKE_BIN)" >&2; exit 1; }
 	@touch $@
 
+# e2fsprogs, of which the recovery image stages e2fsck alone. The patch
+# manifest is a prerequisite as Dropbear's is below.
+$(E2FSPROGS_STAMP): vendor/e2fsprogs/build_e2fsprogs.sh vendor/e2fsprogs/muslgcc \
+                    $(E2FSPROGS_PATCHES) $(E2FSPROGS_TARBALL) $(LIBC_STAMP)
+	@rm -f $@ $(E2FSCK_BIN)
+	+@t0=$$(date +%s); ./vendor/e2fsprogs/build_e2fsprogs.sh && echo "e2fsprogs: result: built in $$(($$(date +%s)-t0))s"
+	@test -s $(E2FSCK_BIN) || { echo "e2fsprogs: build produced no $(E2FSCK_BIN)" >&2; exit 1; }
+	@touch $@
+
 # The patch manifest is a prerequisite for the reason musl's is: the script
 # applies what patches/series names, so a series edit or a patch edit must
 # invalidate the stamp.
@@ -226,6 +241,7 @@ _ := $(shell [ ! -f $(BUSYBOX_STAMP) ] || \
         for f in $(BUSYBOX_OUTPUTS); do [ -e "$$f" ] || { rm -f $(BUSYBOX_STAMP); break; }; done)
 _ := $(shell [ ! -f $(DROPBEAR_STAMP) ] || [ -s $(DROPBEAR_BIN) ] || rm -f $(DROPBEAR_STAMP))
 _ := $(shell [ ! -f $(PDPMAKE_STAMP) ] || [ -s $(PDPMAKE_BIN) ] || rm -f $(PDPMAKE_STAMP))
+_ := $(shell [ ! -f $(E2FSPROGS_STAMP) ] || [ -s $(E2FSCK_BIN) ] || rm -f $(E2FSPROGS_STAMP))
 
 # The tree lists above test existence only, because musl installs several
 # legitimately empty headers. The binaries that can never be empty also get a
@@ -244,6 +260,7 @@ endif
 $(BUSYBOX_OUTPUTS): $(BUSYBOX_STAMP)
 $(DROPBEAR_BIN): $(DROPBEAR_STAMP)
 $(PDPMAKE_BIN): $(PDPMAKE_STAMP)
+$(E2FSCK_BIN): $(E2FSPROGS_STAMP)
 
 # --- component files the root graph names. Each gets an explicit delegation
 #     rule to its sub-make: without one, a deleted kernel beside its surviving
@@ -461,7 +478,7 @@ rach2-metal-image: $(METAL_IMAGE)
 # metal profile plus the two programs that repair a disk, and it mounts nothing
 # from the disk it is repairing, which is what lets it rewrite that disk's root.
 RECOVERY_IMAGE = $(IMAGES_DIR)/rach2-recovery.krffs
-$(RECOVERY_IMAGE): $(DEMO_CREDS) krffs/manifests/rach2-recovery.manifest $(IMAGE_TOOLS) | preflight krffs rach2 rach2-recovery utils check-busybox check-setid check-dropbearmulti
+$(RECOVERY_IMAGE): $(DEMO_CREDS) krffs/manifests/rach2-recovery.manifest $(IMAGE_TOOLS) | preflight krffs rach2 rach2-recovery utils check-busybox check-setid check-dropbearmulti check-e2fsck
 	$(MKIMAGE) krffs/manifests/rach2-recovery.manifest $@ 4
 
 rach2-recovery-image: $(RECOVERY_IMAGE)
@@ -612,6 +629,19 @@ check-pdpmake: $(PDPMAKE_STAMP) $(PDPMAKE_BIN) $(ELFCHECK)
 	    exit 1; }
 	@$(ELFCHECK) $(PDPMAKE_BIN)
 
+# The port's size limit, set in milestone 42 from the first build, 673672
+# bytes stripped, with a tenth of headroom: a configure that let a library
+# or a program back in would be caught here and not in the recovery image.
+E2FSCK_LIMIT = 737280
+check-e2fsck: $(E2FSPROGS_STAMP) $(E2FSCK_BIN) $(ELFCHECK)
+	@test -s $(E2FSCK_BIN) || { \
+	    echo "e2fsprogs: $(E2FSCK_BIN) missing or empty; rm vendor/e2fsprogs/.stamp and rebuild (make e2fsprogs)" >&2; \
+	    exit 1; }
+	@$(ELFCHECK) $(E2FSCK_BIN)
+	@size=$$(wc -c < $(E2FSCK_BIN) | tr -d ' '); test "$$size" -le $(E2FSCK_LIMIT) || { \
+	    echo "e2fsprogs: e2fsck is $$size bytes, over the $(E2FSCK_LIMIT) limit vendor/e2fsprogs/Readme.md sets" >&2; \
+	    exit 1; }
+
 check-tcc: $(TCC_STAMP) $(TCC_OUTPUTS) $(BINFIND) $(ELFCHECK)
 	@for f in $(TCC_BIN) build/vendor/tcc/libtcc1.a \
 	          build/vendor/tcc/include/stdarg.h \
@@ -698,12 +728,12 @@ clean:
 # next build would skip the work and fail at the check instead.
 distclean: clean
 	rm -f $(LIBC_STAMP) $(BUSYBOX_STAMP) $(DROPBEAR_STAMP) $(TCC_STAMP) \
-	      $(PDPMAKE_STAMP) vendor/musl/.outputs vendor/tcc/.outputs \
+	      $(PDPMAKE_STAMP) $(E2FSPROGS_STAMP) vendor/musl/.outputs vendor/tcc/.outputs \
 	      vendor/tcc/.validated vendor/pdpmake/.validated
 	rm -rf vendor/musl/install \
 	       $(LIBC_TARBALL:.tar.gz=) $(BUSYBOX_TARBALL:.tar.bz2=) \
 	       $(DROPBEAR_TARBALL:.tar.bz2=) $(TCC_TARBALL:.tar.bz2=) \
-	       $(PDPMAKE_TARBALL:.tgz=)
+	       $(PDPMAKE_TARBALL:.tgz=) $(E2FSPROGS_TARBALL:.tar.gz=)
 	rm -rf build
 
 

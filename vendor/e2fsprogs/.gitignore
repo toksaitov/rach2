@@ -1,0 +1,5 @@
+# Extracted e2fsprogs source + build output (rebuilt by build_e2fsprogs.sh).
+e2fsprogs-1.47.4/
+
+# Build stamp (mk top-level orchestration)
+.stamp

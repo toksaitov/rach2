@@ -38,6 +38,11 @@ file 0755 /bin/bootctl build/utils/sbin/bootctl
 file 0755 /bin/dropbearmulti build/vendor/dropbear/dropbearmulti
 
 dir 0755 /sbin
+# The ext2 checker, for the day the machine's own root was not unmounted:
+# `init` here runs it on every ext2 partition before it starts anything else,
+# and it can be run by hand over SSH. It is the one program of e2fsprogs this
+# system stages, because checking is the one use recovery has for it.
+file 0755 /sbin/e2fsck build/vendor/e2fsprogs/e2fsck
 file 0755 /sbin/init build/utils/sbin/init-metal
 # The periodic sync init keeps running: sleep thirty seconds, sync(2), for ever.
 file 0755 /bin/update build/utils/update
