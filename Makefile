@@ -76,6 +76,7 @@ IMAGES_DIR      = build/images
 TEST_IMAGE      = $(IMAGES_DIR)/test.krffs
 OS_SIMPLE_IMAGE = $(IMAGES_DIR)/os-simple.krffs
 OS_REAL_IMAGE   = $(IMAGES_DIR)/os-real.krffs
+OS_REAL_EXT2    = $(IMAGES_DIR)/os-real.ext2
 METAL_IMAGE     = $(IMAGES_DIR)/rach2-metal.krffs
 OS_REAL_DISK    = $(IMAGES_DIR)/os-real.disk
 MKIMAGE         = krffs/mkimage.sh
@@ -380,11 +381,12 @@ utils: $(LIBC_STAMP)
 #     images that carry it. The component sub-makes are order-only: they
 #     refresh their outputs first, and the recorded inputs decide staleness. ---
 
-images: test-image os-simple-image os-real-image
+images: test-image os-simple-image os-real-image os-real-ext2
 
 test-image: $(TEST_IMAGE)
 os-simple-image: $(OS_SIMPLE_IMAGE)
 os-real-image: $(OS_REAL_IMAGE)
+os-real-ext2: $(OS_REAL_EXT2)
 
 # The demo credentials, as file targets. Both generators are idempotent and do
 # nothing when their output is there, which was enough while one thing ran at a
@@ -432,6 +434,16 @@ $(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(IMAGE_TOO
 # real.
 $(OS_REAL_IMAGE): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	$(MKIMAGE) krffs/manifests/os-real.manifest $@ 16
+
+# The same manifest as an ext2 volume, the sealed disk's fourth partition and
+# the root `rach2.root=ext2` mounts: 1 GiB, the partition's size, sparse on
+# the host. tools/image/mkext2.sh stages it through stageimage's tree mode,
+# formats it with the host's mke2fs on the one profile the driver writes,
+# sets the owners with debugfs, and passes it through e2fsck and the set-id
+# guard's own ext2 reader before it is named. The prerequisites are the KRFFS
+# image's, so the two are built from one tree.
+$(OS_REAL_EXT2): $(DEMO_CREDS) krffs/manifests/os-real.manifest tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+	sh tools/image/mkext2.sh krffs/manifests/os-real.manifest $@ 1024
 
 # The metal image: what the Lenovo G50-70 boots from a USB stick. A RAM-only
 # machine (the kernel has no USB driver, so the module GRUB loads is the whole

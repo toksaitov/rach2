@@ -1234,6 +1234,8 @@ struct node {
     uint64_t size, previous_node_size, data_size, parent_id;
     size_t offset;
     char *path; /* filled by node_paths for reserved nodes */
+    unsigned char *data; /* an ext2 file's bytes, read from its blocks */
+    size_t data_len;
 };
 
 struct image {
@@ -1275,6 +1277,7 @@ static int img_fail(struct image *im, const char *fmt, ...)
    onto one path, which is how a set-id node hides behind a sibling. */
 static int unpack_node(struct image *im, size_t offset, struct node *n)
 {
+    memset(n, 0, sizeof(*n));
     const unsigned char *p = im->region + offset;
     int i;
 
@@ -1519,11 +1522,30 @@ static void image_free(struct image *im)
 {
     int i;
 
-    for (i = 0; i < im->n_nodes; i++)
+    for (i = 0; i < im->n_nodes; i++) {
         free(im->nodes[i].path);
+        free(im->nodes[i].data);
+    }
     free(im->nodes);
     free(im->region);
     memset(im, 0, sizeof(*im));
+}
+
+/* A node's bytes: an ext2 node's own copy, a KRFFS node's place in the
+   region. */
+static const unsigned char *node_bytes(const struct image *im,
+                                       const struct node *n, size_t *len)
+{
+    if (n->data != NULL) {
+        *len = n->data_len;
+        return n->data;
+    }
+    if (n->offset + NODE_SIZE + n->data_size > im->size) {
+        *len = 0;
+        return NULL;
+    }
+    *len = (size_t) n->data_size;
+    return im->region + n->offset + NODE_SIZE;
 }
 
 static const struct node *path_find(const struct image *im, const char *path)
@@ -1593,11 +1615,519 @@ static int trusted_text_matches(const struct image *im, const char *path,
     if (n == NULL)
         return -1;
     bytes = unescape(want, &want_len);
-    same = n->data_size == want_len &&
-        n->offset + NODE_SIZE + want_len <= im->size &&
-        memcmp(im->region + n->offset + NODE_SIZE, bytes, want_len) == 0;
+    {
+        size_t have_len;
+        const unsigned char *have = node_bytes(im, n, &have_len);
+
+        same = have_len == want_len &&
+            (want_len == 0 || memcmp(have, bytes, want_len) == 0);
+    }
     free(bytes);
     return same;
+}
+
+
+/* ---- the ext2 reader ----
+
+   A small read-only reader of its own, sharing nothing with the kernel's
+   driver, for the one profile tools/image/mkext2.sh writes: revision 1,
+   4 KiB blocks, 128-byte inodes, and the features filetype, sparse_super
+   and large_file with no other. It fails closed: any other feature, any
+   block outside the volume or inside its structural blocks, any malformed
+   directory entry and any inode it cannot place refuses the image, so that
+   an image this checker cannot read is one the build rejects. It lists
+   every node reached from the root with its type, owner, group, mode and
+   set-id bits, follows every directory to its end, and lists a second name
+   for one inode as a node of its own, which is how a hard link to a set-id
+   file meets the policy as an undeclared set-id path. */
+
+#define EXT2_MAGIC 0xEF53u
+#define EXT2_BLOCK 4096u
+#define EXT2_INODE 128u
+#define EXT2_FIRST_INO 11u
+#define EXT2_FT_MAX 7u
+
+struct ext2 {
+    FILE *f;
+    long base;
+    uint64_t size;
+    unsigned long blocks, inodes, bpg, ipg, groups;
+    unsigned char *gd;          /* the group descriptors, 32 bytes each */
+    unsigned char *structural;  /* one byte per block: 1 if a table's */
+    unsigned char *seen_dir;    /* one byte per inode: a directory reached */
+    unsigned char *seen_file;   /* one byte per inode: a file reached */
+    char err[512];
+};
+
+static int ext2_fail(struct ext2 *fs, const char *fmt, ...)
+{
+    va_list ap;
+
+    va_start(ap, fmt);
+    vsnprintf(fs->err, sizeof(fs->err), fmt, ap);
+    va_end(ap);
+    return -1;
+}
+
+static int ext2_read(struct ext2 *fs, uint64_t at, void *buf, size_t len)
+{
+    if (at + len > fs->size)
+        return ext2_fail(fs, "a read at %llu of %lu bytes runs past the "
+                         "%llu-byte volume", (unsigned long long) at,
+                         (unsigned long) len, (unsigned long long) fs->size);
+    if (fseek(fs->f, fs->base + (long) at, SEEK_SET) != 0 ||
+        fread(buf, 1, len, fs->f) != len)
+        return ext2_fail(fs, "short read at %llu", (unsigned long long) at);
+    return 0;
+}
+
+/* A block a pointer names: inside the volume and not one of the tables. */
+static int ext2_data_block(struct ext2 *fs, unsigned long b,
+                           unsigned char *buf, const char *what)
+{
+    if (b == 0 || b >= fs->blocks)
+        return ext2_fail(fs, "%s names block %lu, outside the %lu-block "
+                         "volume", what, b, fs->blocks);
+    if (fs->structural[b])
+        return ext2_fail(fs, "%s names block %lu, which is a bitmap, a "
+                         "table or a superblock", what, b);
+    return ext2_read(fs, (uint64_t) b * EXT2_BLOCK, buf, EXT2_BLOCK);
+}
+
+static int ext2_open(struct ext2 *fs, const char *path, long offset,
+                     long size)
+{
+    unsigned char sb[1024];
+    struct stat st;
+    unsigned long g, i;
+    unsigned long compat, incompat, ro_compat;
+
+    memset(fs, 0, sizeof(*fs));
+    if (stat(path, &st) != 0)
+        return ext2_fail(fs, "%s", strerror(errno));
+    if (offset < 0 || offset > st.st_size)
+        return ext2_fail(fs, "offset %ld is past the end of the %lld-byte "
+                         "file", offset, (long long) st.st_size);
+    if (size == 0)
+        size = (long) (st.st_size - offset);
+    if (size <= 0 || offset + size > st.st_size)
+        return ext2_fail(fs, "region (offset %ld, size %ld) does not fit "
+                         "in the %lld-byte file", offset, size,
+                         (long long) st.st_size);
+    fs->f = fopen(path, "rb");
+    if (fs->f == NULL)
+        return ext2_fail(fs, "%s", strerror(errno));
+    fs->base = offset;
+    fs->size = (uint64_t) size;
+    if (ext2_read(fs, 1024, sb, sizeof(sb)) != 0)
+        return -1;
+    if (rd16(sb + 56) != EXT2_MAGIC)
+        return ext2_fail(fs, "no ext2 magic at byte 1080");
+    if (rd32(sb + 76) != 1)
+        return ext2_fail(fs, "revision %lu; the profile is revision 1",
+                         rd32(sb + 76));
+    if (rd32(sb + 24) != 2)
+        return ext2_fail(fs, "block size %lu; the profile is 4096",
+                         1024ul << rd32(sb + 24));
+    if (rd16(sb + 88) != EXT2_INODE)
+        return ext2_fail(fs, "inode size %u; the profile is 128",
+                         rd16(sb + 88));
+    compat = rd32(sb + 92);
+    incompat = rd32(sb + 96);
+    ro_compat = rd32(sb + 100);
+    if (compat != 0 || incompat != 0x2 || ro_compat != 0x3)
+        return ext2_fail(fs, "features %#lx/%#lx/%#lx (compatible, "
+                         "incompatible, read-only); the profile is "
+                         "0/0x2/0x3, filetype, sparse_super and large_file "
+                         "alone", compat, incompat, ro_compat);
+    if (rd32(sb + 84) != EXT2_FIRST_INO)
+        return ext2_fail(fs, "first inode %lu; the profile is 11",
+                         rd32(sb + 84));
+    fs->inodes = rd32(sb + 0);
+    fs->blocks = rd32(sb + 4);
+    fs->bpg = rd32(sb + 32);
+    fs->ipg = rd32(sb + 40);
+    if (rd32(sb + 20) != 0)
+        return ext2_fail(fs, "first data block %lu; at 4096-byte blocks "
+                         "it is 0", rd32(sb + 20));
+    if (fs->blocks == 0 || fs->bpg == 0 || fs->ipg == 0 ||
+        fs->inodes == 0 || fs->ipg > fs->inodes ||
+        (uint64_t) fs->blocks * EXT2_BLOCK > fs->size)
+        return ext2_fail(fs, "%lu blocks, %lu per group, %lu inodes, %lu "
+                         "per group do not describe the %llu-byte region",
+                         fs->blocks, fs->bpg, fs->inodes, fs->ipg,
+                         (unsigned long long) fs->size);
+    fs->groups = (fs->blocks + fs->bpg - 1) / fs->bpg;
+    if (fs->groups * fs->ipg < fs->inodes)
+        return ext2_fail(fs, "%lu inodes do not fit %lu groups of %lu",
+                         fs->inodes, fs->groups, fs->ipg);
+    fs->gd = xmalloc(fs->groups * 32);
+    if (ext2_read(fs, EXT2_BLOCK, fs->gd, fs->groups * 32) != 0)
+        return -1;
+    fs->structural = xmalloc(fs->blocks);
+    memset(fs->structural, 0, fs->blocks);
+    fs->seen_dir = xmalloc(fs->inodes + 1);
+    memset(fs->seen_dir, 0, fs->inodes + 1);
+    fs->seen_file = xmalloc(fs->inodes + 1);
+    memset(fs->seen_file, 0, fs->inodes + 1);
+    /* The superblock and the descriptors, in group 0 and in every backup
+       sparse_super keeps (groups 0, 1 and the powers of 3, 5 and 7), and
+       each group's two bitmaps and inode table. */
+    fs->structural[0] = 1;
+    fs->structural[1] = 1;
+    for (g = 0; g < fs->groups; g++) {
+        unsigned long bb = rd32(fs->gd + g * 32 + 0);
+        unsigned long ib = rd32(fs->gd + g * 32 + 4);
+        unsigned long it = rd32(fs->gd + g * 32 + 8);
+        unsigned long it_blocks = (fs->ipg * EXT2_INODE + EXT2_BLOCK - 1) /
+                                  EXT2_BLOCK;
+        unsigned long p;
+
+        if (bb >= fs->blocks || ib >= fs->blocks || it >= fs->blocks ||
+            it + it_blocks > fs->blocks)
+            return ext2_fail(fs, "group %lu names tables outside the "
+                             "volume", g);
+        fs->structural[bb] = 1;
+        fs->structural[ib] = 1;
+        for (i = 0; i < it_blocks; i++)
+            fs->structural[it + i] = 1;
+        p = g;
+        if (g == 0 || g == 1)
+            p = 1;
+        else {
+            while (p % 3 == 0)
+                p /= 3;
+            while (p % 5 == 0)
+                p /= 5;
+            while (p % 7 == 0)
+                p /= 7;
+        }
+        if (p == 1) {
+            unsigned long first = g * fs->bpg;
+            unsigned long gd_blocks = (fs->groups * 32 + EXT2_BLOCK - 1) /
+                                      EXT2_BLOCK;
+
+            for (i = 0; i <= gd_blocks && first + i < fs->blocks; i++)
+                fs->structural[first + i] = 1;
+        }
+    }
+    return 0;
+}
+
+static void ext2_close(struct ext2 *fs)
+{
+    if (fs->f != NULL)
+        fclose(fs->f);
+    free(fs->gd);
+    free(fs->structural);
+    free(fs->seen_dir);
+    free(fs->seen_file);
+    fs->f = NULL;
+    fs->gd = NULL;
+    fs->structural = fs->seen_dir = fs->seen_file = NULL;
+}
+
+/* The 128 bytes of inode `ino`, placed through its group's table. */
+static int ext2_inode(struct ext2 *fs, unsigned long ino, unsigned char *out)
+{
+    unsigned long g, index, table;
+
+    if (ino == 0 || ino > fs->inodes)
+        return ext2_fail(fs, "inode %lu cannot be placed in %lu inodes",
+                         ino, fs->inodes);
+    g = (ino - 1) / fs->ipg;
+    index = (ino - 1) % fs->ipg;
+    table = rd32(fs->gd + g * 32 + 8);
+    return ext2_read(fs, (uint64_t) table * EXT2_BLOCK +
+                     (uint64_t) index * EXT2_INODE, out, EXT2_INODE);
+}
+
+/* Every block of an inode's data in order, through the three levels of
+   pointers, each handed to `take` with its index; a hole is handed as a
+   zero block. Stops at `count` blocks, the size's. */
+struct ext2_blocks {
+    struct ext2 *fs;
+    unsigned long count, done;
+    int (*take)(void *ctx, unsigned long index, const unsigned char *block);
+    void *ctx;
+};
+
+static int ext2_take_pointer(struct ext2_blocks *w, unsigned long b,
+                             int level, const char *what)
+{
+    unsigned char buf[EXT2_BLOCK];
+    unsigned long i;
+
+    if (w->done >= w->count)
+        return 0;
+    if (b == 0) {
+        /* A hole: a block of zeros at this level's every position. */
+        unsigned long span = 1;
+
+        for (i = 0; i < (unsigned long) level; i++)
+            span *= EXT2_BLOCK / 4;
+        memset(buf, 0, sizeof(buf));
+        for (i = 0; i < span && w->done < w->count; i++, w->done++)
+            if (w->take(w->ctx, w->done, buf) != 0)
+                return -1;
+        return 0;
+    }
+    if (ext2_data_block(w->fs, b, buf, what) != 0)
+        return -1;
+    if (level == 0) {
+        if (w->take(w->ctx, w->done, buf) != 0)
+            return -1;
+        w->done++;
+        return 0;
+    }
+    for (i = 0; i < EXT2_BLOCK / 4 && w->done < w->count; i++)
+        if (ext2_take_pointer(w, rd32(buf + i * 4), level - 1, what) != 0)
+            return -1;
+    return 0;
+}
+
+static int ext2_walk_blocks(struct ext2 *fs, const unsigned char *inode,
+                            unsigned long count, const char *what,
+                            int (*take)(void *, unsigned long,
+                                        const unsigned char *),
+                            void *ctx)
+{
+    struct ext2_blocks w;
+    int i;
+
+    w.fs = fs;
+    w.count = count;
+    w.done = 0;
+    w.take = take;
+    w.ctx = ctx;
+    for (i = 0; i < 12 && w.done < w.count; i++)
+        if (ext2_take_pointer(&w, rd32(inode + 40 + i * 4), 0, what) != 0)
+            return -1;
+    for (i = 0; i < 3 && w.done < w.count; i++)
+        if (ext2_take_pointer(&w, rd32(inode + 40 + (12 + i) * 4), i + 1,
+                              what) != 0)
+            return -1;
+    return 0;
+}
+
+struct ext2_copy {
+    unsigned char *out;
+    uint64_t len;
+};
+
+static int ext2_copy_block(void *ctx, unsigned long index,
+                           const unsigned char *block)
+{
+    struct ext2_copy *c = ctx;
+    uint64_t at = (uint64_t) index * EXT2_BLOCK;
+    size_t n = c->len - at < EXT2_BLOCK ? (size_t) (c->len - at) : EXT2_BLOCK;
+
+    memcpy(c->out + at, block, n);
+    return 0;
+}
+
+static void ext2_push(struct image *im, const char *path, unsigned long mode,
+                      unsigned long uid, unsigned long gid, uint64_t size,
+                      unsigned long ino, unsigned char *data, size_t len)
+{
+    struct node *n;
+
+    im->nodes = realloc(im->nodes,
+                        (size_t) (im->n_nodes + 1) * sizeof(*im->nodes));
+    if (im->nodes == NULL)
+        exit(2);
+    n = &im->nodes[im->n_nodes++];
+    memset(n, 0, sizeof(*n));
+    n->type = NODE_RESERVED;
+    n->id = ino;
+    n->mode = mode;
+    n->uid = uid;
+    n->gid = gid;
+    n->size = size;
+    n->data_size = size;
+    n->path = xstrdup(path);
+    n->data = data;
+    n->data_len = len;
+}
+
+struct ext2_dir {
+    struct ext2 *fs;
+    struct image *im;
+    const char *path;
+    unsigned long ino, parent;
+    int failed;
+};
+
+static int ext2_dir_block(void *ctx, unsigned long index,
+                          const unsigned char *block);
+
+/* One node reached at `path` through `ino`: recorded, and a directory
+   walked. */
+static int ext2_reach(struct ext2 *fs, struct image *im, const char *path,
+                      unsigned long ino, unsigned long parent, unsigned ft)
+{
+    unsigned char inode[EXT2_INODE];
+    unsigned long mode, uid, gid, type;
+    uint64_t size;
+
+    if (ext2_inode(fs, ino, inode) != 0)
+        return -1;
+    mode = rd16(inode + 0);
+    uid = rd16(inode + 2) | (unsigned long) rd16(inode + 120) << 16;
+    gid = rd16(inode + 24) | (unsigned long) rd16(inode + 122) << 16;
+    size = rd32(inode + 4);
+    type = mode & 0170000;
+    if (rd16(inode + 26) == 0)
+        return ext2_fail(fs, "%s: inode %lu has no links yet a name", path,
+                         ino);
+    if (type == 0100000)
+        size |= (uint64_t) rd32(inode + 108) << 32;
+    /* The entry's type must be the inode's: filetype is in the profile so
+       that a reader may trust it, and one that lies is malformed. */
+    if ((type == 0040000 && ft != 2) || (type == 0100000 && ft != 1) ||
+        (type == 0120000 && ft != 7) || (type == 0020000 && ft != 3) ||
+        (type == 0060000 && ft != 4) || (type == 0010000 && ft != 5) ||
+        (type == 0140000 && ft != 6))
+        return ext2_fail(fs, "%s: entry type %u does not match inode %lu's "
+                         "mode %#lo", path, ft, ino, mode);
+    if (type == 0040000) {
+        struct ext2_dir d;
+
+        if (fs->seen_dir[ino])
+            return ext2_fail(fs, "%s: directory inode %lu reached twice",
+                             path, ino);
+        fs->seen_dir[ino] = 1;
+        if (size == 0 || size % EXT2_BLOCK != 0)
+            return ext2_fail(fs, "%s: directory size %llu is not whole "
+                             "blocks", path, (unsigned long long) size);
+        if (strcmp(path, "/") != 0)
+            ext2_push(im, path, mode, uid, gid, size, ino, NULL, 0);
+        d.fs = fs;
+        d.im = im;
+        d.path = path;
+        d.ino = ino;
+        d.parent = parent;
+        d.failed = 0;
+        if (ext2_walk_blocks(fs, inode, (unsigned long) (size / EXT2_BLOCK),
+                             path, ext2_dir_block, &d) != 0 || d.failed)
+            return -1;
+        return 0;
+    }
+    if (type == 0100000) {
+        struct ext2_copy c;
+
+        if (size > 64u * 1024 * 1024)
+            return ext2_fail(fs, "%s: %llu bytes is larger than any staged "
+                             "file", path, (unsigned long long) size);
+        c.len = size;
+        c.out = xmalloc((size_t) size + 1);
+        if (ext2_walk_blocks(fs, inode,
+                             (unsigned long) ((size + EXT2_BLOCK - 1) /
+                                              EXT2_BLOCK),
+                             path, ext2_copy_block, &c) != 0) {
+            free(c.out);
+            return -1;
+        }
+        fs->seen_file[ino] = 1;
+        ext2_push(im, path, mode, uid, gid, size, ino, c.out, (size_t) size);
+        return 0;
+    }
+    /* Anything else is a node the manifests never stage; it is listed so
+       that the policy sees it, with no bytes. */
+    ext2_push(im, path, mode, uid, gid, size, ino, NULL, 0);
+    return 0;
+}
+
+static int ext2_dir_block(void *ctx, unsigned long index,
+                          const unsigned char *block)
+{
+    struct ext2_dir *d = ctx;
+    unsigned long at = 0;
+
+    while (at < EXT2_BLOCK) {
+        unsigned long ino = rd32(block + at);
+        unsigned rec = rd16(block + at + 4);
+        unsigned name_len = block[at + 6];
+        unsigned ft = block[at + 7];
+        char name[256];
+        char child[1024];
+
+        if (rec < 8 || rec % 4 != 0 || at + rec > EXT2_BLOCK ||
+            name_len + 8 > rec) {
+            d->failed = 1;
+            return ext2_fail(d->fs, "%s: entry at block %lu offset %lu is "
+                             "malformed (rec_len %u, name_len %u)", d->path,
+                             index, at, rec, name_len);
+        }
+        if (ino != 0) {
+            unsigned i;
+
+            if (name_len == 0) {
+                d->failed = 1;
+                return ext2_fail(d->fs, "%s: an entry with no name", d->path);
+            }
+            for (i = 0; i < name_len; i++)
+                if (block[at + 8 + i] == '/' || block[at + 8 + i] == '\0') {
+                    d->failed = 1;
+                    return ext2_fail(d->fs, "%s: an entry's name holds a "
+                                     "slash or a nul", d->path);
+                }
+            memcpy(name, block + at + 8, name_len);
+            name[name_len] = '\0';
+            if (ft > EXT2_FT_MAX) {
+                d->failed = 1;
+                return ext2_fail(d->fs, "%s/%s: entry type %u", d->path,
+                                 name, ft);
+            }
+            if (strcmp(name, ".") == 0) {
+                if (ino != d->ino) {
+                    d->failed = 1;
+                    return ext2_fail(d->fs, "%s: . is inode %lu, not %lu",
+                                     d->path, ino, d->ino);
+                }
+            } else if (strcmp(name, "..") == 0) {
+                if (ino != d->parent) {
+                    d->failed = 1;
+                    return ext2_fail(d->fs, "%s: .. is inode %lu, not the "
+                                     "parent %lu", d->path, ino, d->parent);
+                }
+            } else {
+                if (snprintf(child, sizeof(child), "%s/%s",
+                             strcmp(d->path, "/") == 0 ? "" : d->path,
+                             name) >= (int) sizeof(child)) {
+                    d->failed = 1;
+                    return ext2_fail(d->fs, "%s/%s: path too long", d->path,
+                                     name);
+                }
+                if (ext2_reach(d->fs, d->im, child, ino, d->ino, ft) != 0) {
+                    d->failed = 1;
+                    return -1;
+                }
+            }
+        }
+        at += rec;
+    }
+    return 0;
+}
+
+/* Read an ext2 image into the node table check_image judges. */
+static int read_ext2(struct image *im, const char *path, long offset,
+                     long size)
+{
+    struct ext2 fs;
+    int rc;
+
+    memset(im, 0, sizeof(*im));
+    if (ext2_open(&fs, path, offset, size) != 0) {
+        img_fail(im, "%s", fs.err);
+        ext2_close(&fs);
+        return -1;
+    }
+    rc = ext2_reach(&fs, im, "/", 2, 2, 2);
+    if (rc != 0)
+        img_fail(im, "%s", fs.err);
+    ext2_close(&fs);
+    return rc;
 }
 
 static void sysroot_checks(const struct allow *allow, const struct image *im,
@@ -1608,9 +2138,9 @@ static void sysroot_checks(const struct allow *allow, const struct image *im,
    0004000, the setuid bit's own place, and the root is the one node that
    has it. Fills `summary` (empty on a walk failure). */
 static void check_image(const char *image, const char *manifest,
-                        long offset, long size, const struct allow *allow,
-                        struct list *problems, char *summary,
-                        size_t summary_len)
+                        long offset, long size, int ext2,
+                        const struct allow *allow, struct list *problems,
+                        char *summary, size_t summary_len)
 {
     const char *iname = base_name(image);
     char *stem = manifest_stem(manifest);
@@ -1635,8 +2165,9 @@ static void check_image(const char *image, const char *manifest,
         free(stem);
         return;
     }
-    if (read_region(&im, image, offset, size) != 0 ||
-        walk_nodes(&im) != 0 || node_paths(&im) != 0) {
+    if (ext2 ? read_ext2(&im, image, offset, size) != 0
+             : (read_region(&im, image, offset, size) != 0 ||
+                walk_nodes(&im) != 0 || node_paths(&im) != 0)) {
         addf(problems, "%s: %s", iname, im.err);
         image_free(&im);
         free(stem);
@@ -1886,10 +2417,12 @@ static void staged_headers(const struct image *im, struct hset *files,
             continue;
         if (n->mode & 040000)
             hset_add(dirs, n->path, n->mode & PERMBITS, NULL, NULL, 0);
-        else
-            hset_add(files, n->path, n->mode & PERMBITS, NULL,
-                     im->region + n->offset + NODE_SIZE,
-                     (size_t) n->data_size);
+        else {
+            size_t len;
+            const unsigned char *bytes = node_bytes(im, n, &len);
+
+            hset_add(files, n->path, n->mode & PERMBITS, NULL, bytes, len);
+        }
     }
 }
 
@@ -2508,6 +3041,7 @@ int main(int argc, char **argv)
     const char *image = NULL, *manifest = NULL, *applets = NULL;
     long offset = 0, size = 0;
     int i, do_selftest = 0, do_applets = 0, do_free = 0, do_nodes = 0;
+    int ext2 = 0;
     struct list manifests = { NULL, 0, 0 };
 
     for (i = 1; i < argc; i++) {
@@ -2523,6 +3057,10 @@ int main(int argc, char **argv)
             do_nodes = 1;
         else if (strcmp(argv[i], "--image") == 0 && i + 1 < argc)
             image = argv[++i];
+        else if (strcmp(argv[i], "--ext2") == 0 && i + 1 < argc) {
+            image = argv[++i];
+            ext2 = 1;
+        }
         else if (strcmp(argv[i], "--manifest") == 0 && i + 1 < argc)
             manifest = argv[++i];
         else if (strcmp(argv[i], "--offset") == 0 && i + 1 < argc) {
@@ -2581,8 +3119,26 @@ int main(int argc, char **argv)
         struct image im;
 
         if (image == NULL) {
-            fprintf(stderr, "check-setid: --nodes needs --image\n");
+            fprintf(stderr, "check-setid: --nodes needs --image or --ext2\n");
             return 2;
+        }
+        if (ext2) {
+            /* One line per node reached: path, mode with its type, owner,
+               group, size and inode, in the walk's order. */
+            if (read_ext2(&im, image, offset, size) != 0) {
+                fprintf(stderr, "check-setid: %s: %s\n", base_name(image),
+                        im.err);
+                return 1;
+            }
+            for (i = 0; i < im.n_nodes; i++) {
+                const struct node *nd = &im.nodes[i];
+
+                printf("%s %lo %lu %lu %llu %llu\n", nd->path, nd->mode,
+                       nd->uid, nd->gid, (unsigned long long) nd->size,
+                       (unsigned long long) nd->id);
+            }
+            image_free(&im);
+            return 0;
         }
         if (read_region(&im, image, offset, size) != 0 ||
             walk_nodes(&im) != 0 || node_paths(&im) != 0) {
@@ -2645,7 +3201,7 @@ int main(int argc, char **argv)
                     "does, not where the file does\n");
             return 2;
         }
-        check_image(image, manifest, offset, size, allow, &problems,
+        check_image(image, manifest, offset, size, ext2, allow, &problems,
                     summary, sizeof(summary));
         if (problems.n > 0)
             return report(&problems);
@@ -2992,7 +3548,7 @@ static void st_image(const struct allow *img_allow, const char *name,
         exit(2);
     fwrite(region, 1, cut > 0 ? (size_t) cut : region_len, f);
     fclose(f);
-    check_image(image, manifest, 0, 0, img_allow, &got, summary,
+    check_image(image, manifest, 0, 0, 0, img_allow, &got, summary,
                 sizeof(summary));
     st_case(name, &got, want_ok, fragment);
 }
@@ -3022,6 +3578,319 @@ static void fake_add(struct fake_fs *fs, const char *path,
     fs->nodes[fs->n].path = (char *) path;
     fs->nodes[fs->n].mode = mode;
     fs->n++;
+}
+
+
+/* ---- the ext2 fixtures: built by the host's mke2fs and debugfs ----
+
+   The reader is judged against the tools that wrote the volume, so the
+   fixtures are what mkext2.sh makes and not a second writer: a tree of
+   the inventory fixture's nodes, formatted on the profile, its owners set
+   by debugfs, and then copies with one thing changed, by debugfs where
+   debugfs can and by a byte where it cannot. */
+
+static int st_run(const char *command)
+{
+    int rc = system(command);
+
+    return rc == 0 ? 0 : -1;
+}
+
+static void st_rm_tree(const char *path)
+{
+    DIR *dir = opendir(path);
+    struct dirent *ent;
+
+    if (dir != NULL) {
+        while ((ent = readdir(dir)) != NULL) {
+            char child[1024];
+            struct stat st;
+
+            if (strcmp(ent->d_name, ".") == 0 ||
+                strcmp(ent->d_name, "..") == 0)
+                continue;
+            snprintf(child, sizeof(child), "%s/%s", path, ent->d_name);
+            if (lstat(child, &st) == 0 && S_ISDIR(st.st_mode))
+                st_rm_tree(child);
+            else
+                unlink(child);
+        }
+        closedir(dir);
+    }
+    rmdir(path);
+}
+
+static int st_write_file(const char *path, const char *text)
+{
+    FILE *f = fopen(path, "wb");
+
+    if (f == NULL)
+        return -1;
+    fputs(text, f);
+    return fclose(f);
+}
+
+/* The clean fixture volume at `out`, or -1 when the host tools are not
+   there or refuse. */
+static int st_ext2_fixture(const char *out)
+{
+    char tree[512], cmd[4096], script[512];
+
+    snprintf(tree, sizeof(tree), "%s/ext2tree", st_tmp);
+    st_rm_tree(tree);
+    if (mkdir(tree, 0755) != 0)
+        return -1;
+    snprintf(cmd, sizeof(cmd), "%s/bin", tree);
+    if (mkdir(cmd, 0755) != 0)
+        return -1;
+    snprintf(cmd, sizeof(cmd), "%s/bin/su", tree);
+    if (st_write_file(cmd, "su\n") != 0)
+        return -1;
+    snprintf(cmd, sizeof(cmd), "%s/bin/busybox", tree);
+    if (st_write_file(cmd, "busybox\n") != 0)
+        return -1;
+    snprintf(cmd, sizeof(cmd), "%s/hello.txt", tree);
+    if (st_write_file(cmd, "hello\n") != 0)
+        return -1;
+    snprintf(script, sizeof(script), "%s/owners.debugfs", st_tmp);
+    if (st_write_file(script,
+                      "set_inode_field /bin mode 040755\n"
+                      "set_inode_field /bin uid 0\n"
+                      "set_inode_field /bin gid 0\n"
+                      "set_inode_field /bin/su mode 0104755\n"
+                      "set_inode_field /bin/su uid 0\n"
+                      "set_inode_field /bin/su gid 0\n"
+                      "set_inode_field /bin/busybox mode 0100755\n"
+                      "set_inode_field /bin/busybox uid 0\n"
+                      "set_inode_field /bin/busybox gid 0\n"
+                      "set_inode_field /hello.txt mode 0100644\n"
+                      "set_inode_field /hello.txt uid 0\n"
+                      "set_inode_field /hello.txt gid 0\n") != 0)
+        return -1;
+    unlink(out);
+    snprintf(cmd, sizeof(cmd),
+             ". tools/setup/e2fsprogs_path.sh 2>/dev/null || true; "
+             ": > '%s' && E2FSPROGS_FAKE_TIME=1 mke2fs -q -F -t ext2 -b 4096 "
+             "-I 128 -O sparse_super,large_file,filetype,^dir_index,"
+             "^resize_inode,^ext_attr,^has_journal,^extent,^64bit,^flex_bg,"
+             "^metadata_csum,^huge_file,^dir_nlink,^extra_isize -d '%s' "
+             "'%s' 8M >/dev/null 2>&1 && debugfs -w -f '%s' '%s' "
+             ">/dev/null 2>&1", out, tree, out, script, out);
+    if (st_run(cmd) != 0)
+        return -1;
+    st_rm_tree(tree);
+    unlink(script);
+    return 0;
+}
+
+/* A copy of the clean fixture with a debugfs command applied. */
+static int st_ext2_copy(const char *clean, const char *out,
+                        const char *command)
+{
+    char cmd[4096];
+
+    snprintf(cmd, sizeof(cmd),
+             ". tools/setup/e2fsprogs_path.sh 2>/dev/null || true; "
+             "cp '%s' '%s' && debugfs -w -R '%s' '%s' >/dev/null 2>&1",
+             clean, out, command, out);
+    return st_run(cmd);
+}
+
+/* A copy of the clean fixture with `len` bytes written at `at`. */
+static int st_ext2_poke(const char *clean, const char *out, long at,
+                        const unsigned char *bytes, size_t len)
+{
+    FILE *in = fopen(clean, "rb");
+    FILE *o = fopen(out, "wb");
+    unsigned char buf[65536];
+    size_t n;
+
+    if (in == NULL || o == NULL)
+        return -1;
+    while ((n = fread(buf, 1, sizeof(buf), in)) > 0)
+        if (fwrite(buf, 1, n, o) != n)
+            return -1;
+    fclose(in);
+    if (fseek(o, at, SEEK_SET) != 0 || fwrite(bytes, 1, len, o) != len)
+        return -1;
+    return fclose(o);
+}
+
+/* Where an inode's 128 bytes are in the clean fixture, and where a
+   directory's block is, read through the reader's own placement. */
+static long st_ext2_inode_at(const char *image, unsigned long ino)
+{
+    struct ext2 fs;
+    unsigned long g, index, table;
+    long at;
+
+    if (ext2_open(&fs, image, 0, 0) != 0) {
+        ext2_close(&fs);
+        return -1;
+    }
+    g = (ino - 1) / fs.ipg;
+    index = (ino - 1) % fs.ipg;
+    table = rd32(fs.gd + g * 32 + 8);
+    at = (long) (table * EXT2_BLOCK + index * EXT2_INODE);
+    ext2_close(&fs);
+    return at;
+}
+
+static unsigned long st_ext2_inode_of(const char *image, const char *path)
+{
+    struct image im;
+    const struct node *n;
+    unsigned long ino = 0;
+
+    if (read_ext2(&im, image, 0, 0) == 0 && (n = path_find(&im, path)) != NULL)
+        ino = (unsigned long) n->id;
+    image_free(&im);
+    return ino;
+}
+
+static void st_ext2_case(const struct allow *img_allow, const char *name,
+                         const char *image, int want_ok,
+                         const char *fragment)
+{
+    char manifest[512], summary[256];
+    struct list got = { NULL, 0, 0 };
+
+    snprintf(manifest, sizeof(manifest), "%s/img-fixture.manifest", st_tmp);
+    check_image(image, manifest, 0, 0, 1, img_allow, &got, summary,
+                sizeof(summary));
+    st_case(name, &got, want_ok, fragment);
+}
+
+static void st_ext2_rows(const struct allow *img_allow)
+{
+    char clean[512], mut[512];
+    struct list got = { NULL, 0, 0 };
+
+    snprintf(clean, sizeof(clean), "%s/img-fixture.ext2", st_tmp);
+    snprintf(mut, sizeof(mut), "%s/img-mutant.ext2", st_tmp);
+    if (st_ext2_fixture(clean) != 0) {
+        addf(&got, "the ext2 fixture could not be built; mke2fs and "
+             "debugfs are required host tools");
+        st_case("the ext2 fixture is built by the host's e2fsprogs", &got,
+                1, "");
+        return;
+    }
+
+    /* The reader against debugfs: every node, as debugfs lists it. */
+    {
+        struct image im;
+        const struct node *n;
+        int ok = read_ext2(&im, clean, 0, 0) == 0;
+
+        if (ok) {
+            n = path_find(&im, "/bin/su");
+            ok = n != NULL && n->mode == 0104755 && n->uid == 0 &&
+                 n->gid == 0 && n->data_len == 3 &&
+                 memcmp(n->data, "su\n", 3) == 0;
+        }
+        if (ok) {
+            n = path_find(&im, "/bin");
+            ok = n != NULL && n->mode == 040755;
+        }
+        if (ok) {
+            n = path_find(&im, "/hello.txt");
+            ok = n != NULL && n->mode == 0100644 && n->data_len == 6;
+        }
+        if (ok)
+            ok = im.n_nodes == 5 && path_find(&im, "/lost+found") != NULL;
+        if (!ok)
+            addf(&got, "%s", im.err[0] ? im.err : "a node is not as debugfs "
+                 "wrote it");
+        st_case("the reader lists the fixture as debugfs wrote it", &got, 1,
+                "");
+        image_free(&im);
+    }
+    st_ext2_case(img_allow, "a clean ext2 fixture", clean, 1, "");
+
+    /* The policy rows, each a debugfs edit of a copy. */
+    if (st_ext2_copy(clean, mut, "set_inode_field /bin/su uid 5") == 0)
+        st_ext2_case(img_allow, "ext2: a set-id file at the wrong owner",
+                     mut, 0, "allowlist declares 04755:0:0");
+    if (st_ext2_copy(clean, mut, "set_inode_field /bin/su gid 7") == 0)
+        st_ext2_case(img_allow, "ext2: a set-id file at the wrong group",
+                     mut, 0, "allowlist declares 04755:0:0");
+    if (st_ext2_copy(clean, mut, "set_inode_field /bin/su mode 0106755") == 0)
+        st_ext2_case(img_allow, "ext2: a set-id bit added", mut, 0,
+                     "allowlist declares 04755:0:0");
+    if (st_ext2_copy(clean, mut, "set_inode_field /bin/su mode 0100755") == 0)
+        st_ext2_case(img_allow, "ext2: a set-id bit removed", mut, 0,
+                     "no such set-id node");
+    if (st_ext2_copy(clean, mut,
+                     "set_inode_field /bin/busybox mode 0104755") == 0)
+        st_ext2_case(img_allow, "ext2: a set-id inode the manifest does "
+                     "not name", mut, 0, "does not declare it");
+    if (st_ext2_copy(clean, mut, "link /bin/su /bin/su2") == 0)
+        st_ext2_case(img_allow, "ext2: a hard link to a set-id file", mut,
+                     0, "/bin/su2 is staged set-id");
+
+    /* The refusals, each a byte the tools would not write. */
+    {
+        unsigned char b[4];
+        long at;
+        unsigned long ino;
+
+        /* An incompatible feature outside the profile: extents. */
+        b[0] = 0x42; b[1] = 0; b[2] = 0; b[3] = 0;
+        if (st_ext2_poke(clean, mut, 1024 + 96, b, 4) == 0)
+            st_ext2_case(img_allow, "ext2: a feature outside the profile",
+                         mut, 0, "the profile is 0/0x2/0x3");
+        /* A block past the volume in the set-id file's first pointer. */
+        ino = st_ext2_inode_of(clean, "/bin/su");
+        at = ino ? st_ext2_inode_at(clean, ino) : -1;
+        b[0] = 0xff; b[1] = 0xff; b[2] = 0xff; b[3] = 0x7f;
+        if (at > 0 && st_ext2_poke(clean, mut, at + 40, b, 4) == 0)
+            st_ext2_case(img_allow, "ext2: a block outside the volume", mut,
+                         0, "outside the");
+        /* A pointer into the inode table. */
+        at = ino ? st_ext2_inode_at(clean, ino) : -1;
+        if (at > 0) {
+            unsigned long table = (unsigned long) at / EXT2_BLOCK;
+
+            b[0] = (unsigned char) table;
+            b[1] = (unsigned char) (table >> 8);
+            b[2] = (unsigned char) (table >> 16);
+            b[3] = (unsigned char) (table >> 24);
+            if (st_ext2_poke(clean, mut, at + 40, b, 4) == 0)
+                st_ext2_case(img_allow, "ext2: a block inside a table", mut,
+                             0, "which is a bitmap, a table or a superblock");
+        }
+        /* A malformed entry: the root directory's first entry with a
+           rec_len of 6. */
+        ino = 2;
+        at = st_ext2_inode_at(clean, ino);
+        if (at > 0) {
+            unsigned char inode[EXT2_INODE];
+            FILE *f = fopen(clean, "rb");
+            unsigned long block = 0;
+
+            if (f != NULL && fseek(f, at, SEEK_SET) == 0 &&
+                fread(inode, 1, sizeof(inode), f) == sizeof(inode))
+                block = rd32(inode + 40);
+            if (f != NULL)
+                fclose(f);
+            b[0] = 6; b[1] = 0;
+            if (block != 0 &&
+                st_ext2_poke(clean, mut, (long) (block * EXT2_BLOCK + 4), b,
+                             2) == 0)
+                st_ext2_case(img_allow, "ext2: a malformed directory entry",
+                             mut, 0, "is malformed");
+            /* An inode the reader cannot place: the third entry's number,
+               the first after . and .., past the count. */
+            b[0] = 0xff; b[1] = 0xff; b[2] = 0xff; b[3] = 0x0f;
+            if (block != 0 &&
+                st_ext2_poke(clean, mut, (long) (block * EXT2_BLOCK + 24), b,
+                             4) == 0)
+                st_ext2_case(img_allow, "ext2: an inode that cannot be placed",
+                             mut, 0, "cannot be placed");
+        }
+    }
+    unlink(clean);
+    unlink(mut);
 }
 
 static int selftest(struct allow *allow)
@@ -3668,6 +4537,7 @@ static int selftest(struct allow *allow)
         fixture(3, &n, NULL, 0, region);
         st_image(&img_allow, "an unprivileged file missing", "img-fixture",
                  region, IMG_TOTAL, 0, 0, "present and unprivileged");
+        st_ext2_rows(&img_allow);
         n = IMG_NODES[3];
         n.mode = 0777;
         fixture(3, &n, NULL, 0, region);
