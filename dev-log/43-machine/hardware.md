@@ -67,3 +67,39 @@ files are the sizes `bootctl status` reports for its slots. A 4 MiB
 transfer over SSH from the host and a 500 MiB read of the root partition
 both completed with the interrupt count moving only on the timer and the
 xHCI, since the disk and the network are polled paths.
+
+## Phase 1: the interrupts
+
+`/proc/interrupts` on the final kernel, read over SSH before and after a
+console session in which the owner logged in on the USB keyboard, ran
+Doom with the shareware IWAD for more than ten seconds, moved the mouse,
+and quit. Two boots: the committed candidate line, and a trial with
+`rach2.nomsi rach2.blocklag=30` staged through the menu file.
+
+| Vector | With messages, before | after | With `rach2.nomsi`, after |
+|--------|-----------------------|-------|---------------------------|
+| 32, the timer | 36982 | 46362 | 93393 |
+| 33, the 8042 keyboard | 1 | 11 | 280 |
+| 39, IRQ 7, no driver | absent | absent | 57 |
+| 42, the HDA on its legacy line | absent | absent | 1319 |
+| 44, the 8042 mouse | 1 | 1 | absent |
+| 48, the xHCI by message | 753 | 2914 | absent |
+| 49, the HDA by message | absent | 845 | absent |
+| spurious | 0 | 0 | 0 |
+| usb fallback | 0 | 0 | 0 |
+
+With messages the xHCI and the HDA count on their vectors and the
+timer's pump finds nothing. With `rach2.nomsi` the xHCI is pumped by the
+timer and the HDA takes its legacy line, IRQ 10; vector 39 is IRQ 7,
+which both controllers name as their legacy line in configuration space
+and which the 8259 also raises as its spurious interrupt, and the 57 it
+took have no driver. Both boots typed and played. Under
+`rach2.blocklag=30` every request through the lag device leaves the
+`block: completion dropped: stale generation` record the device exists
+to provoke, which the owner saw on the console before Doom; it is the
+test device's own record and not the machine's.
+
+The 4 MiB transfer over SSH from the host and the 500 MiB read of the
+root partition, on the first boot: `/proc/stat`'s `intr` moved from
+14711 to 16072 across the transfer, the timer's share; the network and
+the disk are polled paths and neither has a vector.
