@@ -290,6 +290,9 @@ static void part_report(void)
     if (!contains(text, " sectors ")) {
         fail("/proc/usb gives the stick no size");
     }
+    if (free_names() < 0) {
+        fail("/proc/usb does not count the names");
+    }
     put("USBDISKPROBE FREE ");
     putnum(free_names());
     put("\n");
@@ -333,6 +336,17 @@ static void part_volumes(void)
     }
     if ((unsigned char)text[510] != 0x55 || (unsigned char)text[511] != 0xAA) {
         fail("the first sector of /dev/usb0 is not a table");
+    }
+    /* And it is the table the two partitions came from: either the MBR with
+       the FAT32 and exFAT entries the fixture wrote, or the protective entry
+       a GUID table sits behind, which is the other fixture. */
+    {
+        unsigned char type0 = (unsigned char)text[446 + 4];
+        unsigned char type1 = (unsigned char)text[446 + 16 + 4];
+
+        if (!((type0 == 0x0C && type1 == 0x07) || type0 == 0xEE)) {
+            fail("the table on /dev/usb0 is not the one the partitions came from");
+        }
     }
     ok();
 }
@@ -426,9 +440,10 @@ static void part_hold(void)
     }
     puts("USBDISKPROBE HOLDING");
 
-    /* Read until the stick is pulled out from under the reader. Every read
-       starts at the beginning, so the file is read again and again rather
-       than ending; a read that meets the pull is the one this waits for. */
+    /* Read until the stick is pulled out from under the reader: the file is
+       opened again at its end, so it is read over and over, and the read
+       that is in flight when the stick is pulled is the one that must
+       answer EIO. */
     while (reads < 20000) {
         int n = sys3(SYS_READ, fd, (int)buf, (int)sizeof(buf));
 
@@ -445,12 +460,19 @@ static void part_hold(void)
                the file is opened again. */
             sys1(SYS_CLOSE, fd);
             fd = sys3(SYS_OPEN, (int)MNT "/pattern.bin", O_RDONLY, 0);
-            if (fd == -EIO) {
+            if (fd < 0) {
+                /* The pull landed between the close and the open; the read
+                   that meets it is made on a descriptor opened before the
+                   pull, which the shell's own copy of the directory gives. */
+                if (fd != -EIO) {
+                    fail("the file would not open again, and not for EIO");
+                }
+                fd = sys3(SYS_OPEN, (int)MNT, O_RDONLY, 0);
+                if (fd < 0) {
+                    fail("the mount point would not open after the pull");
+                }
                 gone = 1;
                 break;
-            }
-            if (fd < 0) {
-                fail("the file would not open again");
             }
         }
         sleep_ms(1);
@@ -460,6 +482,9 @@ static void part_hold(void)
     }
     if (sys3(SYS_READ, fd, (int)buf, (int)sizeof(buf)) != -EIO) {
         fail("a read after the pull did not answer EIO");
+    }
+    if (sys3(SYS_OPEN, (int)MNT "/hello.txt", O_RDONLY, 0) != -EIO) {
+        fail("an open on the pulled stick's mount did not answer EIO");
     }
     if (sys2(SYS_UMOUNT2, (int)MNT, 0) != -EBUSY) {
         fail("the mount unmounted with a description still open on it");
