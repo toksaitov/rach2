@@ -268,19 +268,6 @@ static int inode_load(struct ext2_mount *em, uint32_t ino, struct ext2_node *n)
 
 /* ---- the node pool ---- */
 
-static struct ext2_node *node_find(struct ext2_mount *em, uint32_t ino)
-{
-    int i;
-
-    for (i = 0; i < EXT2_NODES; i++) {
-        if (em->nodes[i].used && em->nodes[i].ino == ino) {
-            em->nodes[i].refs++;
-            return &em->nodes[i];
-        }
-    }
-    return 0;
-}
-
 /**
  * The node for inode `ino`, held once more if it is in the pool and loaded
  * into a free entry otherwise; NULL with `*rc` set when the pool is full or
@@ -288,12 +275,15 @@ static struct ext2_node *node_find(struct ext2_mount *em, uint32_t ino)
  */
 static struct ext2_node *node_for(struct ext2_mount *em, uint32_t ino, int *rc)
 {
-    struct ext2_node *n = node_find(em, ino);
+    struct ext2_node *n = 0;
     int i;
 
     *rc = 0;
-    if (n) {
-        return n;
+    for (i = 0; i < EXT2_NODES; i++) {
+        if (em->nodes[i].used && em->nodes[i].ino == ino) {
+            em->nodes[i].refs++;
+            return &em->nodes[i];
+        }
     }
     for (i = 0; i < EXT2_NODES; i++) {
         if (!em->nodes[i].used) {
@@ -555,22 +545,6 @@ static int ext2_lookup(struct vfs_mount *mnt, void *dir, const char *name, void 
 
 /* A device's numbers: the old encoding in the first pointer, the new one in
  * the second when the first is zero, packed as the kernel's `rdev`. */
-static uint32_t device_rdev(const struct ext2_node *n)
-{
-    uint32_t major, minor;
-
-    if (n->block[0] != 0) {
-        major = (n->block[0] >> 8) & 0xFFu;
-        minor = n->block[0] & 0xFFu;
-    } else {
-        uint32_t v = n->block[1];
-
-        major = (v >> 8) & 0xFFFu;
-        minor = (v & 0xFFu) | ((v >> 12) & 0xFFF00u);
-    }
-    return (major << 8) | (minor & 0xFFu) | ((minor & 0xFFF00u) << 12);
-}
-
 static int ext2_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 {
     struct ext2_node *n = node;
@@ -587,7 +561,20 @@ static int ext2_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     st->size = n->size;
     st->ino = n->ino;
     if ((n->mode & S_IFMT_) == S_IFCHR_ || (n->mode & S_IFMT_) == S_IFBLK_) {
-        st->rdev = device_rdev(n);
+        /* The old encoding in the first pointer word, major and minor a
+         * byte each; the new one in the second, 12 and 20 bits. */
+        uint32_t major, minor;
+
+        if (n->block[0] != 0) {
+            major = (n->block[0] >> 8) & 0xFFu;
+            minor = n->block[0] & 0xFFu;
+        } else {
+            uint32_t v = n->block[1];
+
+            major = (v >> 8) & 0xFFFu;
+            minor = (v & 0xFFu) | ((v >> 12) & 0xFFF00u);
+        }
+        st->rdev = (major << 8) | (minor & 0xFFu) | ((minor & 0xFFF00u) << 12);
     }
     st->atime_sec = n->atime;
     st->mtime_sec = n->mtime;
@@ -1011,16 +998,6 @@ static int inode_store(struct ext2_mount *em, const struct ext2_node *n)
     LE16_PUT(raw + 120, (n->uid >> 16) & 0xFFFFu);
     LE16_PUT(raw + 122, (n->gid >> 16) & 0xFFFFu);
     return write_bytes(em, at, raw, sizeof(raw), 1);
-}
-
-/* An inode written zeroed with its deletion time: the first step of a free. */
-static int inode_store_freed(struct ext2_mount *em, uint32_t ino)
-{
-    uint8_t raw[128];
-
-    k_memset(raw, 0, sizeof(raw));
-    LE32_PUT(raw + 20, now_seconds()); /* i_dtime */
-    return write_bytes(em, inode_offset(em, ino), raw, sizeof(raw), 1);
 }
 
 /* The primary descriptor of group `g`, written through. */
@@ -1824,7 +1801,15 @@ static int release_inode(struct ext2_mount *em, struct ext2_node *n)
             return rc;
         }
     }
-    rc = inode_store_freed(em, n->ino);
+    {
+        /* The inode written zeroed with its deletion time, the first step
+         * of a free, before its bit is cleared. */
+        uint8_t raw[128];
+
+        k_memset(raw, 0, sizeof(raw));
+        LE32_PUT(raw + 20, now_seconds()); /* i_dtime */
+        rc = write_bytes(em, inode_offset(em, n->ino), raw, sizeof(raw), 1);
+    }
     if (rc != 0) {
         return rc;
     }
