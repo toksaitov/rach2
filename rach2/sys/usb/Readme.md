@@ -21,6 +21,8 @@ It is also the only one that reaches a low-speed keyboard without a second mecha
 
 Addressing belongs to the controller rather than the core: xHCI's Address Device command replaces the `SET_ADDRESS` request, so the core asks the driver to address a device and never sends that request itself. A second controller whose bus really takes the request would send it inside its own `device_address`.
 
+A device is opened at a location, `struct usb_location` in `hcd.h`: the root port it is under, how many hubs are above it, the route string, and, for a low or full-speed device below a high-speed hub, the handle and port of the hub that translates for it and whether that hub translates per port. The core fills it in and the controller writes it into the slot context, the route string in the first word's low twenty bits, four for each tier, the port on the nearest hub lowest; the controller refuses a depth past five tiers and a route with bits above its depth, since a port above 15 does not fit a nibble and a device addressed by a wrong port is one the controller would talk to at random. `device_hub` tells the controller that a device is a hub with so many ports, and for a high-speed hub whether it translates per port and its think time, which go into the hub's own slot context through the evaluate command; a device below such a hub carries the hub's slot and port in its own third word and the multi-TT bit, and the controller then issues the split transactions itself, so this kernel writes none. The host test checks the words against the specification; whether a controller schedules from them is the notebook's proof.
+
 ## The one pump, and the two contexts
 
 The event ring is drained by one function, `usb_pump` in `usb.c`, and by nothing else. Two contexts turn it: the controller's own interrupt, which is a message on vector 48, and the 100 Hz timer, which turns it every tick whether or not a message came.
@@ -67,7 +69,7 @@ It is remembered by port, in a word of bits, and not by holding an entry in the 
 
 | Limit | Value |
 |-------|-------|
-| Device slots the controller is asked for | 8, of which slot zero is the controller's, so seven devices |
+| Device slots the controller is asked for | 12, numbered from one, so twelve devices; the notebook's four soldered devices, a USB 3 hub's two halves, a keyboard, a mouse and a stick are nine |
 | Endpoint numbers reachable on a device | 0 to 15, which is thirty-one directions; a boot device uses two and a stick two |
 | Root ports reached | 16 |
 | Scratchpad pages given | 32 |

@@ -16,6 +16,21 @@ column is filled in milestone 43; nothing here touches it.
   milestone 40 behind it as the high-speed device.
 * Optionally a second hub, to put one behind the other.
 
+## The controller's tables
+
+Eight slots before this milestone, twelve after it, from the notebook's own
+inventory with headroom. The scratchpad is the controller's demand and did
+not change.
+
+| Table | Before | After |
+|-------|--------|-------|
+| Device context base array | 72 | 104 |
+| Device contexts | 18432 | 26624 |
+| Input context | 2112 | 2112 |
+| Endpoint rings | 73728 | 106496 |
+| Command and event rings | 8192 | 8192 |
+| Total | 102536 | 143528 |
+
 ## The device table
 
 | Machine | Soldered devices refused | Hubs | Keyboard, mouse, stick | Total |
