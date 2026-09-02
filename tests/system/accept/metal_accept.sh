@@ -309,6 +309,44 @@ else
     fi
 fi
 
+# ---- a hub, when one is plugged in. Written in milestone 41 and run in
+#      milestone 43 with the owner's hub: what the hub said it is, which
+#      devices came up behind it and at what path, a low-speed device behind
+#      a high-speed hub, the translator per port if the hub has them, and a
+#      SuperSpeed hub's two halves. Each is a line in the record; a machine
+#      with no hub is a note. ----
+HUBLINES="$(grep 'usb: hub:' "$BOOTLOG_OUT" 2>/dev/null | sed 's/^.*usb: hub: /hub: /' || true)"
+USBLIST="$(run 'cat /proc/usb 2>/dev/null')"
+if [ -z "$HUBLINES" ] && ! echo "$USBLIST" | grep -q 'class 9 '; then
+    note "no hub is plugged in"
+else
+    echo "$HUBLINES" | while read -r line; do note "$line"; done
+    echo "$USBLIST" | grep 'class 9 ' | while read -r line; do note "hub: $line"; done
+    if echo "$USBLIST" | grep -q '^port [0-9]*\.[0-9]'; then
+        echo "$USBLIST" | grep '^port [0-9]*\.[0-9]' | while read -r line; do note "behind a hub: $line"; done
+    else
+        bad "a hub is there and nothing behind it came up"
+    fi
+    if echo "$USBLIST" | grep '^port [0-9]*\.[0-9]' | grep -q ' low '; then
+        note "hub: a low-speed device behind a hub is driven, which is the translator's case"
+    else
+        note "hub: no low-speed device behind a hub; the translator is untested on this run"
+    fi
+    if grep -q 'refused a translator per port' "$BOOTLOG_OUT" 2>/dev/null; then
+        note "hub: one translator per port was refused; one is used"
+    elif echo "$HUBLINES" | grep -q 'think time'; then
+        note "hub: the think time is in the record above; a translator per port is selected when the hub offers one"
+    fi
+    if grep -q 'SuperSpeed hub' "$BOOTLOG_OUT" 2>/dev/null; then
+        note "hub: a SuperSpeed hub was refused by name; its high-speed half is the one driven"
+        if echo "$USBLIST" | grep '^port [0-9]*\.[0-9]' | grep -q ' super '; then
+            bad "hub: a SuperSpeed device appeared behind a hub, which this kernel does not drive there"
+        else
+            note "hub: no SuperSpeed device appeared behind it"
+        fi
+    fi
+fi
+
 if [ "$fails" -gt 0 ]; then
     echo "metal-accept: FAIL ($fails)" >&2
     exit 1

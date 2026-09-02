@@ -130,9 +130,10 @@ qemu-system-i386 -cpu max -display none -kernel "$KERNEL" \
     -append "rach2.ip=$GUEST_IP/24 rach2.gateway=$GUEST_GW rach2.netconsole rach2.diskdiag" \
     -netdev "user,id=n0,net=$GUEST_NET,host=$GUEST_GW,hostfwd=tcp::$PORT-$GUEST_IP:22" \
     -device rtl8139,netdev=n0 \
-    -device qemu-xhci,id=xhci -device usb-kbd,bus=xhci.0 \
+    -device qemu-xhci,id=xhci -device usb-hub,bus=xhci.0,port=1 \
+    -device usb-kbd,bus=xhci.0,port=1.2 \
     -drive "if=none,id=stick,format=raw,file=$STICK" \
-    -device usb-storage,bus=xhci.0,drive=stick \
+    -device usb-storage,bus=xhci.0,port=1.3,drive=stick \
     -serial stdio < /dev/null > "$LOG" 2>&1 &
 QPID=$!
 
@@ -270,6 +271,11 @@ if echo "$ACCEPT" | grep -q 'stick: the volume ACCEPT mounts by its label'; then
     echo "metal-test: and its stick section found the stick, wrote it and flushed it: OK"
 else
     fail "the acceptance script's stick section did not run against the stick"
+fi
+if echo "$ACCEPT" | grep -q 'behind a hub: port' && echo "$ACCEPT" | grep -q 'hub: device [0-9]*: [0-9]* ports'; then
+    echo "metal-test: and its hub section found the hub and the two devices behind it: OK"
+else
+    fail "the acceptance script's hub section did not run against the hub"
 fi
 
 cleanup_boot
