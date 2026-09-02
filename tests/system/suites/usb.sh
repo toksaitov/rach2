@@ -250,7 +250,7 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-machine --qemu-arg=pc,i8042=off \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci,msi=on \
     --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
-    --log "$LAT_LOG" \
+    --append "rach2.usblatency" --log "$LAT_LOG" \
     --timeout 120 --steptmo 45 --ok "KEYLAT OK" \
     "expect=Type 'help'" wait=2 "send=exec /keylatprobe" wait=2 key=ret \
     > /dev/null 2>&1; then
@@ -289,7 +289,22 @@ fi
 # the machine did.
 [ "$fail" -eq 0 ] && rm -f "$LAT_LOG"
 
-# ---- 13: a machine that loses its edges. `rach2.msidrop=N` silences the
+# ---- 13: the same keystroke without `rach2.usblatency`: the probe reads its
+#          key as before and nothing is printed, since on a console the record
+#          is a line for every key typed. ----
+if run_harness --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-machine --qemu-arg=pc,i8042=off \
+    --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci,msi=on \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
+    --timeout 120 --steptmo 45 --ok "KEYLAT OK" --never "usb: latency:" \
+    "expect=Type 'help'" wait=2 "send=exec /keylatprobe" wait=2 key=ret \
+    > /dev/null 2>&1; then
+    note "without rach2.usblatency the key is read and no path is printed: OK"
+else
+    bad "without rach2.usblatency the key was not read, or its path was printed"
+fi
+
+# ---- 14: a machine that loses its edges. `rach2.msidrop=N` silences the
 #          controller after N messages, which no hardware switch can do on
 #          demand, and the machine must go on typing on the timer's pump
 #          alone with the count of what it found rising. ----
@@ -306,7 +321,7 @@ else
     bad "a machine whose messages stop did not keep typing, or counted nothing"
 fi
 
-# ---- 14: the 8259's own interrupts, with the APIC between them and the
+# ---- 15: the 8259's own interrupts, with the APIC between them and the
 #          processor. The model in the host test cannot prove this: it takes a
 #          machine with a PS/2 keyboard, whose keystroke arrives on the
 #          virtual-wire path, and a timer whose vector must be counting. ----
@@ -321,7 +336,7 @@ else
     bad "with the APIC enabled the 8259's interrupts did not arrive"
 fi
 
-# ---- 15: a keyboard and a mouse behind a hub are enumerated at their
+# ---- 16: a keyboard and a mouse behind a hub are enumerated at their
 #          location, listed with their path, and the keyboard types on a
 #          machine with no 8042 ----
 if run_harness --qemu-arg=-cpu --qemu-arg=max \
@@ -340,7 +355,7 @@ else
     bad "the keyboard and mouse behind a hub"
 fi
 
-# ---- 16: a stick behind the hub mounts, takes a write, is pulled from under
+# ---- 17: a stick behind the hub mounts, takes a write, is pulled from under
 #          a mount through the monitor, and plugged back in mounts again ----
 STICK="$IMAGE.hubstick.img"
 if [ -f "$REPO/build/images/usbdisk/stick-mbr.img" ]; then
@@ -374,7 +389,7 @@ else
     bad "the stick behind the hub"
 fi
 
-# ---- 17: the hub pulled with all three behind it: the stick's mount answers
+# ---- 18: the hub pulled with all three behind it: the stick's mount answers
 #          EIO and unmounts once its file is closed, and every device below
 #          the hub goes before the hub does ----
 if run_shell --qemu-arg=-cpu --qemu-arg=max \
@@ -405,7 +420,7 @@ else
     bad "the four slots were not all given back"
 fi
 
-# ---- 18: a hub behind a hub, with a keyboard on the second, typing ----
+# ---- 19: a hub behind a hub, with a keyboard on the second, typing ----
 if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-machine --qemu-arg=pc,i8042=off \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
@@ -421,7 +436,7 @@ else
     bad "the hub behind a hub"
 fi
 
-# ---- 19: the device table filled: two hubs and eleven devices are twelve
+# ---- 20: the device table filled: two hubs and eleven devices are twelve
 #          entries, and the thirteenth is refused by name ----
 if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \

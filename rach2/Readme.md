@@ -124,6 +124,7 @@ Options are whitespace-delimited. Flags match whole tokens, and the first `key=v
 | `rach2.diag` | Print the boot diagnostic report again at the end and wait for input. |
 | `rach2.apicdiag` | Print what the machine's firmware left in the local APIC and what MSI capabilities the xHCI and HDA controllers have. It changes nothing. |
 | `rach2.nomsi` | Leave the local APIC alone and take every interrupt through the 8259 pair. |
+| `rach2.usblatency` | Print the four stamps of every USB keystroke's path when a reader takes it. |
 | `rach2.msidrop=N` | Test option: silence the USB controller's messages after N of them, so the timer's fallback pump can be seen to keep the machine working. |
 | `rach2.nousb` | Skip the USB stack: no controller is taken, and nothing is enumerated. |
 | `rach2.trace=enosys` | Log each missing system-call number once per process. |

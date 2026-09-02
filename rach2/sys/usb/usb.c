@@ -126,6 +126,75 @@ void usb_report_controllers(void)
  * holds and short enough not to be noticed. */
 #define USB_ENUMERATE_MS 400u
 
+/*
+ * Whether the stack is up. The timer calls `usb_poll` from the first tick of
+ * the boot, and there is nothing to poll until a controller has been found and
+ * started.
+ */
+static int usb_up;
+
+static void usb_interrupts_start(void);
+
+/*
+ * The vector the controller's messages arrive on. Vectors 48 to 63 are this
+ * kernel's message vectors; the xHCI takes the first of them and the audio
+ * controller the second.
+ */
+#define USB_MSI_VECTOR 48
+
+/* How many messages the controller has sent, how many times the timer's pump
+ * found work that a message should have brought, and after how many messages
+ * `rach2.msidrop` silences the controller. */
+static uint32_t usb_messages;
+static uint32_t usb_fallback;
+static uint32_t msi_drop_after;
+
+/* Whether the controller was ever put on messages. The fallback is counted
+ * against this and not against whether messages are arriving now: a
+ * controller silenced by `rach2.msidrop` is exactly the machine whose lost
+ * edges are being counted. */
+static int msi_started;
+
+/* Whether the controller had an interrupt raised for what the last pump
+ * drained. The pump sets it; `usb_poll` reads it. */
+static int pump_saw_pending;
+
+/* Whether the pump that is running drained anything. The keystroke's stamps
+ * are only worth printing when it did: the numbers are measured from the
+ * event, and a pump that took none has no event of its own. */
+static int pump_took;
+
+/* Whether a pump was found to have enabled interrupts, so the record is
+ * printed once and not every tick. */
+static int pump_enabled_interrupts;
+
+/* The stamps of one keystroke's path through this stack, in microseconds:
+ * where the handler entered, where the event was taken, and where the key
+ * reached the line discipline. `usb_stamp_read` prints them when a reader
+ * takes the byte. */
+/* The record is printed only with `rach2.usblatency` on the boot line: on
+ * a console it is a line per keystroke, and the stamps are taken either way. */
+static int stamp_record;
+static uint32_t stamp_entry;
+static uint32_t stamp_event;
+static uint32_t stamp_wake;
+static uint32_t wake_event;
+static uint32_t wake_entry;
+static int stamp_pending;
+static int stamp_by_msi;
+
+/* Whether the pump that is running was turned by the controller's message.
+ * The keystroke's stamp is taken inside it and takes its answer from here. */
+static int in_msi_pump;
+
+/**
+ * Let time pass at boot, which is the one place in this stack where that is
+ * allowed.
+ *
+ * It waits and nothing more. The timer is already draining the controller and
+ * stepping the devices, and a second party doing the same from here would be
+ * two drains of one ring, one of them inside an interrupt of the other.
+ */
 /** The name of a speed, for the record. */
 static const char *speed_name(int speed)
 {
@@ -410,6 +479,7 @@ static void usb_interrupts_start(void)
 {
     char value[16];
 
+    stamp_record = kcmdline_has("rach2.usblatency");
     if (kcmdline_value("rach2.msidrop", value, (unsigned int)sizeof(value))) {
         uint32_t n = 0;
         int i;
@@ -496,7 +566,9 @@ void usb_stamp_wake(void)
  * program's.
  *
  * A byte that did not come from this stack prints nothing, and neither does
- * one taken so long after the wake that it cannot be the keystroke's. When
+ * one taken so long after the wake that it cannot be the keystroke's. Without
+ * `rach2.usblatency` on the boot line nothing is printed at all: on a machine
+ * with a console the record is a line for every key typed. When
  * several keys arrive before a reader takes any of them, the record is the
  * last of them, since there is one set of stamps and not one per byte.
  */
@@ -508,7 +580,8 @@ void usb_stamp_read(void)
     int by_msi;
 
     flags = kirq_save();
-    if (!stamp_pending) {
+    if (!stamp_pending || !stamp_record) {
+        stamp_pending = 0;
         kirq_restore(flags);
         return;
     }
