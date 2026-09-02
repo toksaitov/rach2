@@ -167,3 +167,46 @@ procedure does.
 Approval, 2026-09-03: the owner approved `/dev/disk0` on the Lenovo by
 name for both writes, the fourth entry in sector zero and the FAT32
 volume into its range, after the table above was shown.
+
+The copy of the 2 GiB the fourth partition covers was cut to what the
+write changes. The FAT32 image is zero past its first 8232 sectors, the
+32 reserved sectors, the two FATs of 4096 sectors and the root cluster,
+which a byte scan of the image showed; a free cluster's content is not
+part of a FAT volume, and the driver zero-fills clusters it allocates.
+So the write became `reflash /dev/disk0 660602880 4214784`, and the
+sectors it overwrites are inside the first 16 MiB of the range, saved as
+`saved/region-head-16MiB-before.bin` on the host, SHA-256
+`2c1c569a332417e6bc29e1042ba7c6b386cadf984e1d5f170ef0bf6aa1aa15ce`, and
+as the head of `region-before.bin` on the stick, which the machine's
+`dd` through the FAT driver had reached 954 MB of when it was stopped;
+the machine hashed both heads and the disk's to the same value. The
+full copy through the driver ran at 0.65 MB/s at first and 0.17 MB/s
+after 900 MB; the raw rate of the stick is phase 3's to measure, and
+whether the fall is the stick's flash or the writer's ordered flushes
+is decided there.
+
+The writes, 2026-09-03 from the stick's recovery: recovery made the
+saved default; the new sector zero written, read back as `a02966c9...`;
+the saved sector written back and read as `f00ee34d...`; the new one
+written again and read as `a02966c9...`. The metadata written in 13 s
+and read back as `07c73b27...`, the image head's own hash. The volume
+with a zero tail passes `mkfatfixture --check`.
+
+The trial of the ordinary root: `bootctl trial candidate` from the
+stick's recovery is refused, since that boot line has no slot, so the
+saved default booted recovery from partition 3 (an older recovery
+kernel, with its own host key) and the trial was armed there. The
+candidate booted with `/dev/disk0p4`; the volume mounted for writing,
+took a file, a rename, a removal, a 4 MB copy and `sync`, was unmounted
+and mounted again with the file and the copy intact, and the
+acceptance script's scratch line passed. Its head pulled to the host
+lists with `mdir` and checks clean with three files. The boot
+partition's kernel bytes, fallback and `grub.cfg` hash as before the
+step, the recovery partition hashes as before, and the KRFFS root, the
+live root, differs by its own use. The saved default is the candidate
+again.
+
+Noted for phase 6: the acceptance script's stick section wrote to the
+recovery stick's ISO partition and failed; the script must leave a
+recovery stick alone. The script's scratch line left `accept.txt` on
+the volume; fixed in 9b7bf52.

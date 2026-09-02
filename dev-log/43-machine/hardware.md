@@ -103,3 +103,19 @@ The 4 MiB transfer over SSH from the host and the 500 MiB read of the
 root partition, on the first boot: `/proc/stat`'s `intr` moved from
 14711 to 16072 across the transfer, the timer's share; the network and
 the disk are polled paths and neither has a vector.
+
+## Phase 2: the fourth partition
+
+| Reading | Value |
+|---------|-------|
+| Sector zero before | `f00ee34d3209ae7bd079155c3d48e4fd1be9a8003a3f3897d327e4aaa7145e8d` |
+| Sector zero after | `a02966c9f463e19a2441eb8c983ddc83b9a06649b95ad4c1335a86b609946698`, ten bytes changed, all in entry 4 |
+| Entry 4 | type 0x0C, sector 1290240, 4194304 sectors |
+| The range's head before | `2c1c569a332417e6bc29e1042ba7c6b386cadf984e1d5f170ef0bf6aa1aa15ce`, 16 MiB |
+| The volume's metadata written | 4214784 bytes, `07c73b270404e9612536bcc5ae2cdf736ef3d4544475d7a08ac35dc4777a5a17` |
+| Write time through `reflash` | 13 s |
+| Recovery partition after | `5bbc9904f9f70806e4ce296e182049ee64904e120584673574408df700ff5299`, unchanged |
+| Boot partition's files after | kernel bytes `70ec5e83...`, fallback `fff0988b...`, `grub.cfg` `17e032aa...`, all as before |
+| A file copy of 4 MB through the mount | intact across unmount and mount |
+| The stick copy through the FAT driver | 0.65 MB/s falling to 0.17 MB/s by 900 MB |
+| The recovery stick | the recovery ISO with an 8 GiB FAT32 second partition, booted at the BIOS menu; recovery from partition 3 has an older kernel and its own host key |

@@ -8,9 +8,9 @@ Phase 1: arrival and the first install
 - [x] three differences fixed with their rows; the review round
 
 Phase 2: the fourth partition and FAT32
-- [ ] the recovery stick written and booted; reflash shown to read sector zero
-- [ ] the fourth entry approved and written under the disk rule; restored and rewritten
-- [ ] the FAT32 volume written and hashed back; the milestone 37 lines; the three hashes
+- [x] the recovery stick written and booted; reflash shown to read sector zero
+- [x] the fourth entry approved and written under the disk rule; restored and rewritten
+- [x] the FAT32 volume written and hashed back; the milestone 37 lines; the three hashes
 
 Phase 3: the stick on a root port
 - [ ] exFAT with a GUID table, then an MBR, in every socket; the pull and the replug
