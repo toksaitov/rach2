@@ -64,3 +64,21 @@ kernel manages 32 MiB, so a large IWAD pages through the disk. The
 owner wants this looked at: a WAD larger than the RAM the kernel manages
 is a limit to state or a change to plan, after this milestone. Recorded
 in `hardware.md`; not fixed here.
+3. The boot log named a high-speed hub "a full-speed device" at its root
+   port. A USB 2 port's speed field is valid only once the port is
+   enabled, after its reset; the record now says a low-speed device by
+   its pull-up and, for the rest, that the reset tells full from high
+   speed. File: `rach2/sys/usb/usb.c`.
+
+### Open
+
+* On the trial boot with `rach2.nomsi rach2.blocklag=30`, the first SSH
+  session's `bootctl status` was killed at 112.83 s: three `vm: user
+  page: no free frames in 8192` records and `vm: fault: killing pid 28:
+  bad write at 0x8124224 (err 0x7)`, with `MemFree` at 18952 kB read a
+  minute later and every later command, the same `bootctl status`
+  included, running with no fault. The same boot line on the sealed disk
+  in QEMU with 32 MiB shows nothing of the kind. Something held every
+  user frame for a moment at the first login under the lag. To be found
+  in phase 7, from the allocator's side: which pool the message counts
+  and what filled it.
