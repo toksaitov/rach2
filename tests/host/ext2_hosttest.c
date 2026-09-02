@@ -95,11 +95,17 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 }
 void vfs_ns_lock(struct vfs_mount *mnt)
 {
-    (void)mnt;
+    mnt->ns_holder = (int)current_proc->pid;
+    mnt->ns_depth++;
 }
 void vfs_ns_unlock(struct vfs_mount *mnt)
 {
-    (void)mnt;
+    if (mnt->ns_depth > 0) {
+        mnt->ns_depth--;
+    }
+    if (mnt->ns_depth == 0) {
+        mnt->ns_holder = -1;
+    }
 }
 
 /* ---- the image file as a block device ---- */
@@ -120,13 +126,33 @@ static int img_read(block_device_t *d, uint64_t lba, uint32_t count, void *buf)
     return 0;
 }
 
+/* Writes land in the image file. `stop_after` is the interruption matrix's
+   crash: the writes after that many fail without touching the image, which
+   leaves it exactly as a machine stopped after the Nth write would. */
+static int writes_made;
+static int stop_after = -1;
+
 static int img_write(block_device_t *d, uint64_t lba, uint32_t count, const void *buf)
 {
     (void)d;
-    (void)lba;
-    (void)count;
-    (void)buf;
-    return -5;
+    if (lba + count > image_sectors) {
+        return -5;
+    }
+    if (stop_after >= 0 && writes_made >= stop_after) {
+        return -5;
+    }
+    writes_made++;
+    if (fseek(image, (long)(lba * 512), SEEK_SET_) != 0 ||
+        fwrite(buf, 1, count * 512, image) != count * 512) {
+        return -5;
+    }
+    return 0;
+}
+
+void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
+{
+    *seconds = 1000000000;
+    *nanoseconds = 0;
 }
 
 static block_device_t dev = {512, 0, BLOCK_FAULT_SAFE, 0, img_read, img_write, 0, 0, 0};
@@ -168,7 +194,7 @@ static void use_image(const char *path, uint64_t bytes)
         bcache_sync(&dev);
         fclose(image);
     }
-    image = fopen(path, "rb");
+    image = fopen(path, "r+b");
     if (!image) {
         printf("ext2_hosttest: %s did not open\n", path);
         exit(1);
@@ -973,6 +999,1151 @@ static void refusal_rows(void)
     check(mount_image() == -EINVAL && streq(last_warn, "refused: magic"), "no magic is refused");
 }
 
+/* ---- the writer's rows ---- */
+
+static int mount_rw(void)
+{
+    int rc;
+
+    __builtin_memset(&mnt, 0, sizeof(mnt));
+    mnt.type = &vfs_ext2_type;
+    mnt.dev = &dev;
+    mnt.flags = 0;
+    mnt.ns_holder = -1;
+    rc = vfs_ext2_type.mount(&mnt, &dev, 0, "");
+    if (rc == 0) {
+        vfs_ns_lock(&mnt); /* the test stands in for the syscall layer */
+    }
+    return rc;
+}
+
+/* The mount's own unmount, through prepare and the cache's sync. */
+static int unmount_rw(void)
+{
+    int rc = 0;
+
+    if (mnt.root) {
+        rc = OPS->prepare_unmount(&mnt);
+        if (rc == 0) {
+            rc = bcache_sync(&dev);
+        }
+        OPS->put(&mnt, mnt.root);
+        OPS->unmount(&mnt);
+        mnt.root = 0;
+    }
+    return rc;
+}
+
+static void *dir_of(const char *path, int *err)
+{
+    return walk(path, err);
+}
+
+/* Create `name` under `dir` and return it held. */
+static void *make_file(void *dir, const char *name, int *rc)
+{
+    void *n = 0;
+
+    *rc = OPS->create(&mnt, dir, name, 0644, &n);
+    return *rc == 0 ? n : 0;
+}
+
+static int write_at(void *node, const void *buf, uint32_t len, uint64_t off)
+{
+    void *h;
+    int32_t got;
+    int rc = OPS->open(&mnt, node, 1, &h);
+
+    if (rc != 0) {
+        return rc;
+    }
+    got = OPS->write(&mnt, h, buf, len, off);
+    OPS->release(&mnt, h);
+    return got < 0 ? got : (got == (int32_t)len ? 0 : -1);
+}
+
+/* The bytes of a file in the image against `want`. */
+static int file_is(const char *path, const unsigned char *want, uint32_t len)
+{
+    int err, got;
+    void *n = walk(path, &err);
+
+    if (!n) {
+        return 0;
+    }
+    got = read_at(n, abuf, sizeof(abuf), 0);
+    OPS->put(&mnt, n);
+    if (got != (int)len) {
+        printf("  %s: %d bytes, %u wanted\n", path, got, (unsigned)len);
+        return 0;
+    }
+    if (len != 0 && memcmp(abuf, want, len) != 0) {
+        uint32_t i = 0;
+
+        while (i < len && abuf[i] == want[i]) {
+            i++;
+        }
+        printf("  %s: byte %u is %d, %d wanted\n", path, (unsigned)i, abuf[i], want[i]);
+        return 0;
+    }
+    return 1;
+}
+
+static unsigned char pattern[300000];
+
+static void fill_pattern(void)
+{
+    unsigned i;
+
+    for (i = 0; i < sizeof(pattern); i++) {
+        pattern[i] = (unsigned char)((i * 31 + 7) & 0xFF);
+    }
+}
+
+/* The three judges of a finished sequence: e2fsck -fn clean, the guard's
+   reader walking every node, and debugfs listing the root. */
+static int e2fsck_clean(const char *img)
+{
+    char cmd[512];
+
+    snprintf(cmd, sizeof(cmd),
+             ". tools/setup/e2fsprogs_path.sh; e2fsck -fn %s > " FIXDIR "/fsck.out 2>&1", img);
+    return system(cmd) == 0;
+}
+
+/* e2fsck -fn's exit status: 0 clean, 4 with faults left, 8 when it could
+   not run. */
+static int e2fsck_status(const char *img)
+{
+    char cmd[512];
+    int rc;
+
+    snprintf(cmd, sizeof(cmd),
+             ". tools/setup/e2fsprogs_path.sh; e2fsck -fn %s > " FIXDIR "/fsck.out 2>&1", img);
+    rc = system(cmd);
+    /* Each question e2fsck asked, with the message before a bare one. */
+    system(
+        "awk '/[?] no$/ { if ($0 ~ /^(Fix|Clear|Allocate|Salvage|Connect to .lost.found)[?] no$/) "
+        "print prev; else print $0 } /./ { prev = $0 }' " FIXDIR "/fsck.out > " FIXDIR
+        "/findings.txt");
+    return (rc >> 8) & 0xFF;
+}
+
+/* The repairs the order of writes allows at a stop: counts, bitmaps, a
+   size or block count behind its pointers, an orphan, and the topology of
+   a directory moved between parents. `#` in a pattern is a run of digits;
+   anything else e2fsck asks about is a state the order does not allow. */
+static const char *const allowed_findings[] = {
+    "Free inodes count wrong",
+    "Free blocks count wrong",
+    "Directories count wrong",
+    "Block bitmap differences",
+    "Inode bitmap differences",
+    "Inode #, i_size is",
+    "Inode #, i_blocks is",
+    "Inode # ref count is",
+    "Deleted inode # has zero dtime",
+    "Unattached inode #",
+    "Unattached zero-length inode #",
+    "Unconnected directory inode #",
+    "'..' in ",
+    "Entry '",
+};
+
+static int matches_pattern(const char *line, const char *pat)
+{
+    while (*pat) {
+        if (*pat == '#') {
+            if (*line < '0' || *line > '9') {
+                return 0;
+            }
+            while (*line >= '0' && *line <= '9') {
+                line++;
+            }
+            pat++;
+        } else {
+            if (*line != *pat) {
+                return 0;
+            }
+            line++;
+            pat++;
+        }
+    }
+    return 1;
+}
+
+static int findings_allowed(void)
+{
+    void *f = fopen(FIXDIR "/findings.txt", "r");
+    char line[512];
+    int ok = 1;
+
+    if (!f) {
+        return 0;
+    }
+    while (fgets(line, sizeof(line), f)) {
+        unsigned k;
+        int any = 0;
+
+        for (k = 0; k < sizeof(allowed_findings) / sizeof(allowed_findings[0]); k++) {
+            if (matches_pattern(line, allowed_findings[k])) {
+                any = 1;
+            }
+        }
+        if (!any) {
+            printf("  a repair the order of writes does not allow: %s", line);
+            ok = 0;
+        }
+    }
+    fclose(f);
+    return ok;
+}
+
+static int reader_walks(const char *img)
+{
+    char cmd[512];
+
+    snprintf(cmd, sizeof(cmd),
+             "build/tools/inspect/setidcheck --nodes --ext2 %s > " FIXDIR "/nodes.txt 2>&1", img);
+    return system(cmd) == 0;
+}
+
+static int debugfs_lists(const char *img, const char *dir, const char *name)
+{
+    char cmd[600];
+
+    snprintf(
+        cmd, sizeof(cmd),
+        ". tools/setup/e2fsprogs_path.sh; debugfs -R 'ls -l %s' %s 2>/dev/null | grep -q ' %s$'",
+        dir, img, name);
+    return system(cmd) == 0;
+}
+
+/* The sequences, each on a fresh volume; a sequence returns 0 and leaves
+   the volume as its oracle describes. A sequence that renames or links a
+   file that already has a name records the write count at which that
+   operation begins, so that the matrix can require a name at every stop
+   after it. */
+static int op_mark = -1;
+static const char wimg[] = FIXDIR "/w.ext2";
+static uint64_t wbytes;
+
+static int seq_create_write(void)
+{
+    int rc;
+    void *n = make_file(mnt.root, "new.txt", &rc);
+
+    if (!n) {
+        return rc;
+    }
+    rc = write_at(n, pattern, 100, 0);
+    if (rc == 0) {
+        rc = write_at(n, pattern, 10000, 100);
+    }
+    OPS->put(&mnt, n);
+    return rc;
+}
+
+/* Across the twelve direct blocks into the indirect, and further. */
+static int seq_extend(void)
+{
+    int rc;
+    void *n = make_file(mnt.root, "big.bin", &rc);
+
+    if (!n) {
+        return rc;
+    }
+    rc = write_at(n, pattern, 40000, 0);
+    if (rc == 0) {
+        rc = write_at(n, pattern + 40000, 20000, 40000);
+    }
+    if (rc == 0) {
+        rc = write_at(n, pattern + 60000, 40000, 60000);
+    }
+    OPS->put(&mnt, n);
+    return rc;
+}
+
+static int seq_past_end(void)
+{
+    int rc;
+    void *n = make_file(mnt.root, "holey.bin", &rc);
+
+    if (!n) {
+        return rc;
+    }
+    rc = write_at(n, pattern, 16, 100000);
+    OPS->put(&mnt, n);
+    return rc;
+}
+
+static int seq_truncate(void)
+{
+    int rc;
+    void *n = make_file(mnt.root, "cut.bin", &rc);
+    void *h;
+
+    if (!n) {
+        return rc;
+    }
+    rc = write_at(n, pattern, 40000, 0);
+    if (rc == 0) {
+        rc = OPS->open(&mnt, n, 1, &h);
+        if (rc == 0) {
+            rc = OPS->truncate(&mnt, h, 5000);
+            if (rc == 0) {
+                rc = OPS->truncate(&mnt, h, 7000);
+            }
+            OPS->release(&mnt, h);
+        }
+    }
+    OPS->put(&mnt, n);
+    return rc;
+}
+
+static int seq_unlink(void)
+{
+    int rc;
+    void *n = make_file(mnt.root, "gone.txt", &rc);
+
+    if (!n) {
+        return rc;
+    }
+    rc = write_at(n, pattern, 12000, 0);
+    OPS->put(&mnt, n);
+    if (rc == 0) {
+        rc = OPS->unlink(&mnt, mnt.root, "gone.txt");
+    }
+    return rc;
+}
+
+static int seq_mkdir_rmdir(void)
+{
+    int rc = OPS->mkdir(&mnt, mnt.root, "newdir", 0755);
+    int err;
+    void *d;
+
+    if (rc != 0) {
+        return rc;
+    }
+    d = walk("/newdir", &err);
+    if (!d) {
+        return err;
+    }
+    rc = OPS->mkdir(&mnt, d, "inner", 0700);
+    OPS->put(&mnt, d);
+    if (rc == 0) {
+        rc = OPS->mkdir(&mnt, mnt.root, "olddir", 0755);
+    }
+    if (rc == 0) {
+        rc = OPS->rmdir(&mnt, mnt.root, "olddir");
+    }
+    return rc;
+}
+
+static int seq_rename(void)
+{
+    int rc;
+    void *n = make_file(mnt.root, "from.txt", &rc);
+    void *d;
+    int err;
+
+    if (!n) {
+        return rc;
+    }
+    rc = write_at(n, pattern, 3000, 0);
+    OPS->put(&mnt, n);
+    op_mark = writes_made;
+    if (rc == 0) {
+        rc = OPS->rename(&mnt, mnt.root, "from.txt", mnt.root, "to.txt");
+    }
+    if (rc == 0) {
+        d = walk("/dir", &err);
+        if (!d) {
+            return err;
+        }
+        rc = OPS->rename(&mnt, mnt.root, "to.txt", d, "moved.txt");
+        OPS->put(&mnt, d);
+    }
+    return rc;
+}
+
+static int seq_rename_over(void)
+{
+    int rc;
+    void *n = make_file(mnt.root, "src.txt", &rc);
+
+    if (!n) {
+        return rc;
+    }
+    rc = write_at(n, pattern, 2000, 0);
+    OPS->put(&mnt, n);
+    if (rc == 0) {
+        n = make_file(mnt.root, "victim.txt", &rc);
+        if (!n) {
+            return rc;
+        }
+        rc = write_at(n, pattern + 100, 9000, 0);
+        OPS->put(&mnt, n);
+    }
+    op_mark = writes_made;
+    if (rc == 0) {
+        rc = OPS->rename(&mnt, mnt.root, "src.txt", mnt.root, "victim.txt");
+    }
+    return rc;
+}
+
+static int seq_rename_dir(void)
+{
+    int rc = OPS->mkdir(&mnt, mnt.root, "mover", 0755);
+    void *d, *sub;
+    int err;
+
+    if (rc != 0) {
+        return rc;
+    }
+    d = walk("/mover", &err);
+    if (!d) {
+        return err;
+    }
+    {
+        void *n = make_file(d, "inside.txt", &rc);
+
+        if (n) {
+            rc = write_at(n, pattern, 500, 0);
+            OPS->put(&mnt, n);
+        }
+    }
+    OPS->put(&mnt, d);
+    if (rc != 0) {
+        return rc;
+    }
+    /* Into another parent, and then over an empty directory. */
+    sub = walk("/dir/sub", &err);
+    if (!sub) {
+        return err;
+    }
+    op_mark = writes_made;
+    rc = OPS->rename(&mnt, mnt.root, "mover", sub, "moved");
+    if (rc == 0) {
+        rc = OPS->mkdir(&mnt, mnt.root, "empty", 0755);
+    }
+    if (rc == 0) {
+        rc = OPS->rename(&mnt, sub, "moved", mnt.root, "empty");
+    }
+    OPS->put(&mnt, sub);
+    return rc;
+}
+
+static int seq_link(void)
+{
+    int rc;
+    void *n = make_file(mnt.root, "one.txt", &rc);
+
+    if (!n) {
+        return rc;
+    }
+    rc = write_at(n, pattern, 700, 0);
+    op_mark = writes_made;
+    if (rc == 0) {
+        rc = OPS->link(&mnt, mnt.root, "two.txt", n);
+    }
+    OPS->put(&mnt, n);
+    if (rc == 0) {
+        rc = OPS->unlink(&mnt, mnt.root, "one.txt");
+    }
+    return rc;
+}
+
+static int seq_symlink(void)
+{
+    static char longtarget[200];
+    int rc, i;
+
+    for (i = 0; i < 199; i++) {
+        longtarget[i] = 't';
+    }
+    longtarget[199] = '\0';
+    rc = OPS->symlink(&mnt, mnt.root, "quick", "hello.txt");
+    if (rc == 0) {
+        rc = OPS->symlink(&mnt, mnt.root, "lengthy", longtarget);
+    }
+    return rc;
+}
+
+/* A file unlinked while open, written through, and closed. */
+static int seq_open_unlinked(void)
+{
+    int rc;
+    void *n = make_file(mnt.root, "temp.txt", &rc);
+    void *h;
+
+    if (!n) {
+        return rc;
+    }
+    rc = OPS->open(&mnt, n, 1, &h);
+    if (rc == 0) {
+        rc = OPS->unlink(&mnt, mnt.root, "temp.txt");
+        if (rc == 0) {
+            rc = write_at(n, pattern, 8000, 0);
+        }
+        if (rc == 0) {
+            int got = read_at(n, abuf, 8000, 0);
+
+            rc = got == 8000 && memcmp(abuf, pattern, 8000) == 0 ? 0 : -1;
+        }
+        OPS->release(&mnt, h);
+    }
+    OPS->put(&mnt, n);
+    return rc;
+}
+
+/* Three hundred files, which grows the root across blocks, then half
+   removed. */
+static int seq_many(void)
+{
+    int i, rc = 0;
+
+    for (i = 0; i < 300 && rc == 0; i++) {
+        char name[32];
+        void *n;
+
+        snprintf(name, sizeof(name), "m%d.txt", i);
+        n = make_file(mnt.root, name, &rc);
+        if (n) {
+            rc = write_at(n, pattern, 10, 0);
+            OPS->put(&mnt, n);
+        }
+    }
+    for (i = 0; i < 300 && rc == 0; i += 2) {
+        char name[32];
+
+        snprintf(name, sizeof(name), "m%d.txt", i);
+        rc = OPS->unlink(&mnt, mnt.root, name);
+    }
+    return rc;
+}
+
+struct sequence {
+    const char *name;
+    int (*run)(void);
+};
+
+static const struct sequence sequences[] = {
+    {"create and write", seq_create_write},
+    {"extend through the pointer levels", seq_extend},
+    {"write past the end", seq_past_end},
+    {"truncate", seq_truncate},
+    {"unlink", seq_unlink},
+    {"mkdir and rmdir", seq_mkdir_rmdir},
+    {"rename", seq_rename},
+    {"rename over a file", seq_rename_over},
+    {"rename a directory across parents and over an empty one", seq_rename_dir},
+    {"link", seq_link},
+    {"symlink", seq_symlink},
+    {"an open unlinked file", seq_open_unlinked},
+    {"many files", seq_many},
+};
+
+/* What each finished sequence leaves: the files it made with their bytes,
+   the names that must be gone, and the base files untouched. */
+static int base_intact(void)
+{
+    unsigned char want[8];
+
+    __builtin_memcpy(want, "hello\n", 6);
+    return file_is("/hello.txt", want, 6) &&
+           file_is("/dir/sub/deep.txt", (const unsigned char *)"deep\n", 5);
+}
+
+static int oracle_after(int i)
+{
+    int err;
+    void *n;
+    struct vfs_stat st;
+
+    if (!base_intact()) {
+        return 0;
+    }
+    switch (i) {
+    case 0:
+        return file_is("/new.txt", pattern, 100) == 0 ? 0 : 1;
+    case 1:
+        return file_is("/big.bin", pattern, 100000);
+    case 2: {
+        unsigned char want[100016];
+
+        __builtin_memset(want, 0, 100000);
+        __builtin_memcpy(want + 100000, pattern, 16);
+        return file_is("/holey.bin", want, 100016);
+    }
+    case 3: {
+        unsigned char want[7000];
+
+        __builtin_memcpy(want, pattern, 5000);
+        __builtin_memset(want + 5000, 0, 2000);
+        return file_is("/cut.bin", want, 7000);
+    }
+    case 4:
+        return walk("/gone.txt", &err) == 0 && err == -ENOENT;
+    case 5:
+        n = walk("/newdir/inner", &err);
+        if (!n) {
+            return 0;
+        }
+        OPS->put(&mnt, n);
+        return walk("/olddir", &err) == 0 && err == -ENOENT;
+    case 6:
+        return file_is("/dir/moved.txt", pattern, 3000) && walk("/from.txt", &err) == 0 &&
+               walk("/to.txt", &err) == 0;
+    case 7:
+        return file_is("/victim.txt", pattern, 2000) && walk("/src.txt", &err) == 0;
+    case 8:
+        return file_is("/empty/inside.txt", pattern, 500) && walk("/mover", &err) == 0 &&
+               walk("/dir/sub/moved", &err) == 0;
+    case 9:
+        n = walk("/two.txt", &err);
+        if (!n || OPS->getattr(&mnt, n, &st) != 0 || st.nlink != 1) {
+            if (n) {
+                OPS->put(&mnt, n);
+            }
+            return 0;
+        }
+        OPS->put(&mnt, n);
+        return file_is("/two.txt", pattern, 700) && walk("/one.txt", &err) == 0;
+    case 10: {
+        char buf[300];
+
+        n = walk("/quick", &err);
+        if (!n) {
+            return 0;
+        }
+        err = OPS->readlink(&mnt, n, buf, sizeof(buf));
+        OPS->put(&mnt, n);
+        if (err != 9 || memcmp(buf, "hello.txt", 9) != 0) {
+            return 0;
+        }
+        n = walk("/lengthy", &err);
+        if (!n) {
+            return 0;
+        }
+        err = OPS->readlink(&mnt, n, buf, sizeof(buf));
+        OPS->put(&mnt, n);
+        return err == 199 && buf[0] == 't' && buf[198] == 't';
+    }
+    case 11:
+        return walk("/temp.txt", &err) == 0 && err == -ENOENT;
+    case 12:
+        return file_is("/m1.txt", pattern, 10) && file_is("/m299.txt", pattern, 10) &&
+               walk("/m0.txt", &err) == 0 && walk("/m298.txt", &err) == 0;
+    default:
+        return 0;
+    }
+}
+
+/* A sequence's own case 0 above compares only the first hundred bytes;
+   the whole file is 10100 bytes of the pattern from the start, twice. */
+static int oracle_create_write(void)
+{
+    unsigned char want[10100];
+
+    __builtin_memcpy(want, pattern, 100);
+    __builtin_memcpy(want + 100, pattern, 10000);
+    return file_is("/new.txt", want, 10100);
+}
+
+static void write_rows(void)
+{
+    int i;
+
+    fill_pattern();
+    for (i = 0; i < (int)(sizeof(sequences) / sizeof(sequences[0])); i++) {
+        char what[200];
+        int rc;
+
+        wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
+        use_image(wimg, wbytes);
+        stop_after = -1;
+        writes_made = 0;
+        rc = mount_rw();
+        snprintf(what, sizeof(what), "'%s': the volume mounts for writing", sequences[i].name);
+        check(rc == 0 && (mnt.flags & VFS_MS_RDONLY) == 0, what);
+        if (rc != 0) {
+            continue;
+        }
+        rc = sequences[i].run();
+        snprintf(what, sizeof(what), "'%s' runs", sequences[i].name);
+        check(rc == 0, what);
+        if (rc != 0) {
+            printf("  rc %d\n", rc);
+        }
+        snprintf(what, sizeof(what), "'%s' reads back through the driver", sequences[i].name);
+        check(i == 0 ? oracle_create_write() : oracle_after(i), what);
+        rc = unmount_rw();
+        snprintf(what, sizeof(what), "'%s' unmounts", sequences[i].name);
+        check(rc == 0, what);
+        snprintf(what, sizeof(what), "'%s' leaves a volume e2fsck calls clean", sequences[i].name);
+        check(e2fsck_clean(wimg), what);
+        if (!e2fsck_clean(wimg)) {
+            system("head -20 " FIXDIR "/fsck.out");
+        }
+        snprintf(what, sizeof(what), "'%s' leaves a volume the reader walks", sequences[i].name);
+        check(reader_walks(wimg), what);
+        /* And on the next mount: the valid bit back, every byte the same. */
+        use_image(wimg, wbytes);
+        check(mount_image() == 0 && (mnt.flags & VFS_MS_RDONLY) == 0,
+              "the next mount finds the volume clean and writable");
+        snprintf(what, sizeof(what), "'%s' reads back after a remount", sequences[i].name);
+        check(i == 0 ? oracle_create_write() : oracle_after(i), what);
+        unmount_image();
+    }
+    /* The superblock's counts and state: the valid bit cleared by the
+       mount, the counts untouched by a sequence, both written at unmount. */
+    wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
+    use_image(wimg, wbytes);
+    if (mount_rw() == 0) {
+        unsigned char sb[16], sb2[16];
+
+        host_read(wimg, sb, 16, 1024 + 12); /* the counts and, at 1082, the state */
+        check((host_read(wimg, sb2, 2, 1024 + 58) == 2) && (sb2[0] & 1) == 0,
+              "a mount for writing clears the valid bit before it is published");
+        seq_create_write();
+        seq_mkdir_rmdir();
+        host_read(wimg, sb2, 16, 1024 + 12);
+        check(memcmp(sb, sb2, 8) == 0,
+              "a sequence leaves the superblock's free counts as they were");
+        OPS->sync(&mnt);
+        host_read(wimg, sb2, 16, 1024 + 12);
+        check(memcmp(sb, sb2, 8) != 0, "a sync writes the counts");
+        unmount_rw();
+        host_read(wimg, sb2, 2, 1024 + 58);
+        check((sb2[0] & 1) == 1, "an unmount sets the valid bit again");
+    }
+
+    /* debugfs lists what this driver wrote. */
+    wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
+    use_image(wimg, wbytes);
+    if (mount_rw() == 0) {
+        seq_create_write();
+        seq_mkdir_rmdir();
+        seq_symlink();
+        unmount_rw();
+        check(debugfs_lists(wimg, "/", "new.txt") && debugfs_lists(wimg, "/newdir", "inner") &&
+                  debugfs_lists(wimg, "/", "quick"),
+              "debugfs lists the file, the directory and the link this driver wrote");
+    }
+}
+
+/* The refusals the writer must decide before it writes anything: a name
+   of 256 bytes, a write past the kernel's offset, the reserved blocks
+   refused to a caller who is not root, and the volume byte for byte as
+   it was after each. */
+static unsigned char snap[1 << 24];
+
+static int image_equals_snap(const char *img, uint64_t bytes)
+{
+    void *f = fopen(img, "rb");
+    uint64_t at = 0;
+
+    if (!f) {
+        return 0;
+    }
+    while (at < bytes) {
+        unsigned long take = bytes - at < 65536 ? (unsigned long)(bytes - at) : 65536;
+
+        if (fread(bbuf, 1, take, f) != take || memcmp(bbuf, snap + at, take) != 0) {
+            fclose(f);
+            return 0;
+        }
+        at += take;
+    }
+    fclose(f);
+    return 1;
+}
+
+static void snapshot(const char *img, uint64_t bytes)
+{
+    void *f = fopen(img, "rb");
+
+    if (f) {
+        fread(snap, 1, (unsigned long)bytes, f);
+        fclose(f);
+    }
+}
+
+static void refusal_write_rows(void)
+{
+    char name[300];
+    int i, rc, err;
+    void *n;
+    void *h;
+
+    wbytes = build_image(wimg, 4096, 128, PROFILE, 4, "tree");
+    use_image(wimg, wbytes);
+    check(mount_rw() == 0, "the small volume mounts for writing");
+    if (!mnt.root) {
+        return;
+    }
+    bcache_sync(&dev);
+    snapshot(wimg, wbytes);
+    for (i = 0; i < 256; i++) {
+        name[i] = 'n';
+    }
+    name[256] = '\0';
+    rc = OPS->create(&mnt, mnt.root, name, 0644, &n);
+    check(rc == -ENAMETOOLONG, "a name of 256 bytes answers ENAMETOOLONG");
+    bcache_sync(&dev);
+    check(image_equals_snap(wimg, wbytes), "and the volume is as it was");
+    name[255] = '\0';
+    n = make_file(mnt.root, name, &rc);
+    check(n != 0, "a name of 255 bytes is made");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    n = walk("/hello.txt", &err);
+    if (n) {
+        bcache_sync(&dev);
+        snapshot(wimg, wbytes);
+        check(write_at(n, pattern, 1, 0xFFFFFFFFull) == -EFBIG,
+              "a write past the kernel's offset answers EFBIG");
+        bcache_sync(&dev);
+        check(image_equals_snap(wimg, wbytes), "and the volume is as it was");
+        OPS->put(&mnt, n);
+    }
+    /* The reserved blocks: a caller who is not root stops short of them,
+       and root does not. */
+    proc_a.euid = 1000;
+    n = make_file(mnt.root, "filler.bin", &rc);
+    if (n) {
+        uint64_t off = 0;
+        int last = 0;
+
+        while (off < 8u * 1024 * 1024) {
+            last = write_at(n, pattern, 4096, off);
+            if (last != 0) {
+                break;
+            }
+            off += 4096;
+        }
+        check(last == -ENOSPC, "a caller who is not root answers ENOSPC at the reserve");
+        proc_a.euid = 0;
+        rc = write_at(n, pattern, 4096, off);
+        if (rc != 0) {
+            printf("  root's write: %d (%s)\n", rc, last_warn);
+        }
+        check(rc == 0, "and root writes into it");
+        OPS->put(&mnt, n);
+    }
+    proc_a.euid = 0;
+    /* The sixty-fourth node held and the sixty-fifth refused, over a
+       file each. */
+    {
+        void *held[EXT2_NODES];
+        int took = 0;
+
+        for (i = 0; i < EXT2_NODES; i++) {
+            char nm[32];
+
+            snprintf(nm, sizeof(nm), "p%d.txt", i);
+            n = make_file(mnt.root, nm, &rc);
+            if (!n) {
+                break;
+            }
+            held[took++] = n;
+        }
+        check(took == EXT2_NODES - 1 && rc == -ENOMEM,
+              "the sixty-fourth node is the root's neighbour and the next answers ENOMEM");
+        for (i = 0; i < took; i++) {
+            OPS->put(&mnt, held[i]);
+        }
+    }
+    rc = OPS->open(&mnt, mnt.root, 0, &h);
+    if (rc == 0) {
+        OPS->release(&mnt, h);
+    }
+    check(unmount_rw() == 0, "the small volume unmounts");
+    check(e2fsck_clean(wimg), "and e2fsck calls it clean");
+}
+
+/* ---- the interruption matrix ---- */
+
+/* The matrix's volume: the fixture with every free block full of bytes
+   that would read as data, so that a size published over bytes not yet
+   synced reads junk and not the zeros a fresh image has. */
+static uint64_t build_junk_image(void)
+{
+    static uint64_t bytes;
+
+    if (bytes == 0) {
+        char cmd[700];
+
+        bytes = build_image(FIXDIR "/junk.ext2", 4096, 128, PROFILE, 16, "tree");
+        snprintf(
+            cmd, sizeof(cmd),
+            ". tools/setup/e2fsprogs_path.sh; head -c 14000000 /dev/urandom > " FIXDIR "/junk.bin; "
+            "debugfs -w -R 'write " FIXDIR "/junk.bin junk' " FIXDIR "/junk.ext2 >/dev/null 2>&1; "
+            "debugfs -w -R 'rm junk' " FIXDIR "/junk.ext2 >/dev/null 2>&1");
+        system(cmd);
+    }
+    system("cp " FIXDIR "/junk.ext2 " FIXDIR "/w.ext2");
+    return bytes;
+}
+
+/* A crashed sequence's file, when present, reads either the bytes it had
+   before the sequence or the bytes it was to have after it, with a zero
+   wherever a byte was not yet synced; anything else is junk that a size
+   was published over. */
+static int crash_bytes_ok(const char *path, const unsigned char *before, uint32_t blen,
+                          const unsigned char *after, uint32_t alen)
+{
+    int err, got;
+    void *n = walk(path, &err);
+    uint32_t i;
+    int as_before = 1, as_after = 1;
+
+    if (!n) {
+        return 1; /* absent is a state before the name was written */
+    }
+    got = read_at(n, abuf, sizeof(abuf), 0);
+    OPS->put(&mnt, n);
+    if (got < 0) {
+        return 0;
+    }
+    if (before == 0 || (uint32_t)got != blen) {
+        as_before = 0;
+    }
+    for (i = 0; as_before && i < (uint32_t)got; i++) {
+        if (abuf[i] != before[i]) {
+            as_before = 0;
+        }
+    }
+    if ((uint32_t)got > alen) {
+        as_after = 0;
+    }
+    for (i = 0; as_after && i < (uint32_t)got; i++) {
+        if (abuf[i] != after[i] && abuf[i] != 0) {
+            as_after = 0;
+        }
+    }
+    if (!as_before && !as_after) {
+        printf("  %s: %d bytes that are neither before nor after\n", path, got);
+    }
+    return as_before || as_after;
+}
+
+static int crash_ok(int i)
+{
+    static unsigned char want[300000];
+
+    switch (i) {
+    case 0:
+        __builtin_memcpy(want, pattern, 100);
+        __builtin_memcpy(want + 100, pattern, 10000);
+        return crash_bytes_ok("/new.txt", 0, 0, want, 10100);
+    case 1:
+        return crash_bytes_ok("/big.bin", 0, 0, pattern, 100000);
+    case 2:
+        __builtin_memset(want, 0, 100000);
+        __builtin_memcpy(want + 100000, pattern, 16);
+        return crash_bytes_ok("/holey.bin", 0, 0, want, 100016);
+    case 3:
+        /* Written to 40000, cut to 5000, grown to 7000: the long form
+           is a state too. */
+        __builtin_memcpy(want, pattern, 5000);
+        __builtin_memset(want + 5000, 0, 2000);
+        return crash_bytes_ok("/cut.bin", pattern, 40000, want, 7000);
+    case 4:
+        return crash_bytes_ok("/gone.txt", 0, 0, pattern, 12000);
+    case 6:
+        return crash_bytes_ok("/from.txt", 0, 0, pattern, 3000) &&
+               crash_bytes_ok("/to.txt", 0, 0, pattern, 3000) &&
+               crash_bytes_ok("/dir/moved.txt", 0, 0, pattern, 3000);
+    case 7:
+        return crash_bytes_ok("/src.txt", 0, 0, pattern, 2000) &&
+               crash_bytes_ok("/victim.txt", pattern + 100, 9000, pattern, 2000);
+    case 8:
+        return crash_bytes_ok("/mover/inside.txt", 0, 0, pattern, 500) &&
+               crash_bytes_ok("/dir/sub/moved/inside.txt", 0, 0, pattern, 500) &&
+               crash_bytes_ok("/empty/inside.txt", 0, 0, pattern, 500);
+    case 9:
+        return crash_bytes_ok("/one.txt", 0, 0, pattern, 700) &&
+               crash_bytes_ok("/two.txt", 0, 0, pattern, 700);
+    case 11:
+        return crash_bytes_ok("/temp.txt", 0, 0, pattern, 8000);
+    default:
+        return 1;
+    }
+}
+
+/* Whether the sequence's moved or linked file is reachable by any of its
+   names on the mounted volume. */
+static int names_present(int i)
+{
+    int err;
+
+    switch (i) {
+    case 6:
+        return walk("/from.txt", &err) || walk("/to.txt", &err) || walk("/dir/moved.txt", &err);
+    case 7:
+        return walk("/src.txt", &err) || walk("/victim.txt", &err);
+    case 8:
+        return walk("/mover/inside.txt", &err) || walk("/dir/sub/moved/inside.txt", &err) ||
+               walk("/empty/inside.txt", &err);
+    case 9:
+        return walk("/one.txt", &err) || walk("/two.txt", &err);
+    default:
+        return 0;
+    }
+}
+
+/* The judges of a stop: the volume mounts and every base file reads;
+   e2fsck -fn runs, clean or with faults it names; e2fsck -fy on a copy
+   repairs it, and the repaired copy mounts with every base file intact
+   and the sequence's files, where present, readable. */
+static int repaired_ok(const char *img, uint64_t bytes, int i, int stop, int named_before)
+{
+    char cmd[700];
+    int rc;
+
+    snprintf(cmd, sizeof(cmd),
+             ". tools/setup/e2fsprogs_path.sh; cp %s " FIXDIR "/repair.ext2 && e2fsck -fy " FIXDIR
+             "/repair.ext2 > " FIXDIR "/repair.out 2>&1; s=$?; test $s -le 2",
+             img);
+    if (system(cmd) != 0) {
+        printf("  e2fsck -fy could not repair '%s' stopped after write %d\n", sequences[i].name,
+               stop);
+        return 0;
+    }
+    use_image(FIXDIR "/repair.ext2", bytes);
+    rc = mount_image();
+    if (rc != 0) {
+        return 0;
+    }
+    rc = base_intact();
+    /* A file reachable by a name in the crash state keeps a name after the
+       repair: what the order of writes promises for rename and link. */
+    if (rc && named_before && !names_present(i)) {
+        printf("  '%s' stopped after write %d: the file lost every name\n", sequences[i].name,
+               stop);
+        rc = 0;
+    }
+    unmount_image();
+    return rc;
+}
+
+static void matrix_rows(void)
+{
+    int i, k, total = 0;
+
+    for (i = 0; i < (int)(sizeof(sequences) / sizeof(sequences[0])); i++) {
+        int n, mark;
+
+        if (i == 12) {
+            continue; /* many files: thousands of stops; the others cover its writes */
+        }
+        wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
+        use_image(wimg, wbytes);
+        stop_after = -1;
+        if (mount_rw() != 0) {
+            check(0, "the matrix's volume mounts");
+            return;
+        }
+        writes_made = 0; /* the mount's own writes are not the sequence's */
+        op_mark = -1;
+        sequences[i].run();
+        n = writes_made;
+        mark = op_mark;
+        unmount_rw();
+        for (k = 1; k <= n; k++) {
+            char what[200];
+            int status, named_before = 0;
+
+            wbytes = build_junk_image();
+            use_image(wimg, wbytes);
+            stop_after = -1;
+            if (mount_rw() != 0) {
+                printf("  stop %d of '%s': %s\n", k, sequences[i].name, last_warn);
+                check(0, "the matrix's volume mounts again");
+                return;
+            }
+            writes_made = 0;
+            stop_after = k;
+            sequences[i].run();
+            /* The machine stops: what the cache still holds is dropped as
+               a gone device's buffers are, so the image is the crash state
+               and nothing unsynced reaches it. */
+            OPS->put(&mnt, mnt.root);
+            OPS->unmount(&mnt);
+            mnt.root = 0;
+            bcache_device_gone(&dev);
+            dev.flags = BLOCK_FAULT_SAFE;
+            stop_after = -1;
+            /* Judge one: the volume mounts, the base files read, and the
+               sequence's files read only what was written or zeros. */
+            use_image(wimg, wbytes);
+            snprintf(what, sizeof(what),
+                     "'%s' stopped after write %d of %d mounts and reads its base",
+                     sequences[i].name, k, n);
+            if (mount_image() == 0) {
+                check(base_intact(), what);
+                snprintf(what, sizeof(what),
+                         "'%s' stopped after write %d of %d reads only what was written or zeros",
+                         sequences[i].name, k, n);
+                check(crash_ok(i), what);
+                named_before = names_present(i);
+                if (mark >= 0 && k > mark) {
+                    /* Past the start of the rename or link, the file has a
+                       name at every stop: what the order of writes is for. */
+                    snprintf(what, sizeof(what),
+                             "'%s' stopped after write %d of %d keeps a name for its file",
+                             sequences[i].name, k, n);
+                    check(named_before, what);
+                    named_before = 1;
+                }
+                unmount_image();
+            } else {
+                check(0, what);
+            }
+            /* Judge two: e2fsck names the state, clean or repairable. */
+            status = e2fsck_status(wimg);
+            snprintf(what, sizeof(what),
+                     "'%s' stopped after write %d of %d is a state e2fsck can judge",
+                     sequences[i].name, k, n);
+            if (status != 0 && status != 4) {
+                printf("  e2fsck -fn exited %d:\n", status);
+                system("head -14 " FIXDIR "/fsck.out");
+            }
+            check((status == 0 || status == 4) && findings_allowed(), what);
+            /* Judge three: repaired on a copy, nothing outside the operation
+               lost. */
+            snprintf(what, sizeof(what),
+                     "'%s' stopped after write %d of %d repairs with its base intact",
+                     sequences[i].name, k, n);
+            check(repaired_ok(wimg, wbytes, i, k, named_before), what);
+            total++;
+        }
+    }
+    printf("ext2_hosttest: %d stops walked\n", total);
+    /* The comparison looks: a base file's block corrupted in a repaired
+       copy fails it. */
+    wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
+    {
+        char cmd[512];
+
+        snprintf(cmd, sizeof(cmd),
+                 ". tools/setup/e2fsprogs_path.sh; debugfs -w -R 'write /dev/null hello.txt' %s "
+                 ">/dev/null 2>&1; "
+                 "debugfs -w -R 'set_inode_field /hello.txt size 5' %s >/dev/null 2>&1",
+                 wimg, wimg);
+        system(cmd);
+    }
+    use_image(wimg, wbytes);
+    if (mount_image() == 0) {
+        check(!base_intact(), "a base file changed under the repair is seen by the comparison");
+        unmount_image();
+    }
+}
+
 int main(void)
 {
     uint64_t bytes;
@@ -998,6 +2169,9 @@ int main(void)
     bytes = build_image(FIXDIR "/d.ext2", 1024, 128, PROFILE, 96, "levels");
     levels_rows(FIXDIR "/d.ext2", bytes);
     refusal_rows();
+    write_rows();
+    refusal_write_rows();
+    matrix_rows();
 
     if (image) {
         fclose(image);
