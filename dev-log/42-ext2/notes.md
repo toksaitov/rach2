@@ -585,13 +585,59 @@ directories, so an older `e2fsck` earlier on the path could pair with a
 newer `mke2fs`: the first directory with all three goes first. Unit B is
 recorded below.
 
+## Phase 6 record
+
+`mkdisk_grub.sh` takes `RACH2_DISK_EXT2_MB` and `RACH2_DISK_EXT2_IMAGE`
+and lays the image on a fourth partition of type 83 after the recovery
+one, which it requires; the candidate entries' root token is substituted
+with `ext2` when the partition is there and stays `disk` otherwise, the
+fallback entries keep `disk`, and the recovery entries are untouched. The
+sealed disk has the metal-disk manifest as an ext2 volume of 1 GiB there,
+1654 MiB in all, from a new image target beside the KRFFS one. A four
+partition disk built by hand from os-simple booted its candidate through
+GRUB on `/dev/disk0p4` at the first try.
+
+The variants: `selfbuild-ext2` sets `SELFBUILD_ROOT=ext2` on a disk the
+rule assembles from a 48 MiB os-real ext2 volume at LBA 2048, the space
+read by `debugfs stats` and the built kernel by `debugfs dump`, with
+`e2fsck -fn` required consistent after the synced stop; it passed in
+264 s at the first run, two clean kernel builds on the ext2 root.
+`install-ext2` builds the disk with the os-real system at 96 MiB on the
+fourth partition; its first run failed at the repair, because the kernel
+built on the candidate lives on the ext2 root and the fallback's KRFFS
+root has no such file: with `INSTALL_ROOT=ext2` the repair step mounts
+the ext2 partition with `mount -t ext2` and installs from there, which is
+what a person at the fallback would do, and the second run passed in
+171 s. `drill-ext2` sets `DRILL_ROOT=ext2`: the root is the last type 83
+entry, the boot that must fail says `no ext2 partition`, the saved
+default stays the candidate through the repair, and two things differed
+from the KRFFS drill. The everyday kernel's whole-disk window would not
+open for writing at all, `EBUSY`, because the mounted root's claim covers
+the range, so the refusal the drill records is the claim's and not the
+build rule's; and a zeroed first sector does not destroy an ext2 volume,
+whose identity is the superblock in the third and fourth sectors, so the
+drill zeroes those. The sealed suite gained the assertion of both command
+lines and both mounted roots, the phase that makes the ext2 root missing,
+faulty and dirty under an armed trial and shows each boot after falling
+back to KRFFS with nothing armed, recovery's `init` repairing it and the
+candidate committed again, and the KRFFS root's destruction now armed for
+the fallback entry, since the saved default is the candidate on the other
+root; its first run failed in its first phase because the new assertion
+reused the variable the candidate extent is read from, a plain mistake
+fixed by naming the second result, and its second in the new phase
+because a consumed trial reads `next_entry: empty` and not `absent`. The
+third run passed in 476 s, every phase of it; `drill-ext2` passed in
+151 s at its third run. Style passes on the tree.
+
+The peak of `e2fsck -fn` over the 1 GiB os-real image, in a 64 MiB
+recovery machine, is 1776 kB by the fall in `MemFree`, under the 8 MiB
+limit with room; the check itself runs in a fraction of a second. The
+machine procedure for milestone 43 is in `hardware.md`, step by step
+with its safeguards, and is what the sealed suite's ext2 phase rehearses.
+
 ## Open items
 
-* Phase 6: a missing, a corrupt and a dirty candidate root each falling
-  back to KRFFS is proved on the sealed disk with the fourth partition,
-  since the trial mechanism needs the GRUB disk; phase 5 proved every
-  other line of its proof.
-* Phase 6 or the sweep: the image rules take `utils` and the ports as
+* The sweep: the image rules take `utils` and the ports as
   order-only prerequisites, so a rebuilt `init-metal` did not rebuild the
   recovery image and a stale image booted twice this phase; the images
   should depend on the binaries their manifests stage.

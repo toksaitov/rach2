@@ -25,9 +25,9 @@ Phase 5: the check, the root and recovery
 - [x] e2fsck in recovery run by its init; the crash boot, the drills and the repair
 
 Phase 6: the images and the suites
-- [ ] the fourth partition; the sealed image with both roots and the two command lines
-- [ ] tests/run ext2; the ext2 variants of sealed, install, drill and selfbuild
-- [ ] hardware.md: the machine procedure for milestone 43
+- [x] the fourth partition; the sealed image with both roots and the two command lines
+- [x] tests/run ext2; the ext2 variants of sealed, install, drill and selfbuild
+- [x] hardware.md: the machine procedure for milestone 43
 
 Phase 7: the record and the sweep
 - [ ] the documents read against the code; the review round
