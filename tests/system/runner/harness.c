@@ -854,6 +854,7 @@ static int too_many(const char *what, int limit)
 int main(int argc, char **argv)
 {
     const char *kernel = NULL, *initrd = NULL, *append = NULL;
+    int bios = 0;
     const char *net = "user,id=net0", *device = "rtl8139,netdev=net0";
     const char *log = NULL, *ok = NULL;
     const char *nevers[MAX_ARGS];
@@ -928,6 +929,11 @@ int main(int argc, char **argv)
             i++; /* accepted and unused, as in the Python harness */
         } else if (strcmp(arg, "--must-exit") == 0) {
             must_exit = 1;
+        } else if (strcmp(arg, "--bios") == 0) {
+            /* No kernel is given to the emulator: its firmware boots whatever
+             * the drives and devices hold, in the order their `bootindex`
+             * says, which is how a machine boots from a stick. */
+            bios = 1;
         } else if (strcmp(arg, "--no-debug-exit") == 0) {
             no_debug_exit = 1;
         } else if (strncmp(arg, "--", 2) == 0) {
@@ -960,8 +966,8 @@ int main(int argc, char **argv)
             }
         }
     }
-    if (kernel == NULL) {
-        fprintf(stderr, "harness: --kernel is required\n");
+    if (kernel == NULL && !bios) {
+        fprintf(stderr, "harness: --kernel is required, or --bios to boot from the drives\n");
         return 2;
     }
 
@@ -974,8 +980,10 @@ int main(int argc, char **argv)
     }
 
     qemu[nq++] = (char *)"qemu-system-i386";
-    qemu[nq++] = (char *)"-kernel";
-    qemu[nq++] = (char *)kernel;
+    if (!bios) {
+        qemu[nq++] = (char *)"-kernel";
+        qemu[nq++] = (char *)kernel;
+    }
     qemu[nq++] = (char *)"-serial";
     qemu[nq++] = (char *)"stdio";
     qemu[nq++] = (char *)"-display";
@@ -992,11 +1000,11 @@ int main(int argc, char **argv)
     qemu[nq++] = (char *)net;
     qemu[nq++] = (char *)"-device";
     qemu[nq++] = (char *)device;
-    if (initrd != NULL) {
+    if (initrd != NULL && !bios) {
         qemu[nq++] = (char *)"-initrd";
         qemu[nq++] = (char *)initrd;
     }
-    if (append != NULL) {
+    if (append != NULL && !bios) {
         qemu[nq++] = (char *)"-append";
         qemu[nq++] = (char *)append;
     }
@@ -1323,8 +1331,10 @@ int main(int argc, char **argv)
            stop through isa-debug-exit, whose codes are odd: QEMU itself
            ended, so the token alone does not pass the run. */
         if (self_exited && qemu_rc != 0 && (qemu_rc & 1) == 0) {
-            fprintf(stderr, "HARNESS: the machine exited with status %d, not through "
-                            "isa-debug-exit\n", qemu_rc);
+            fprintf(stderr,
+                    "HARNESS: the machine exited with status %d, not through "
+                    "isa-debug-exit\n",
+                    qemu_rc);
             return 1;
         }
         if (seen && step_failures == 0) {
