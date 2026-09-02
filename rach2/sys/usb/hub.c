@@ -77,6 +77,9 @@
 #define HUB_RESET_POLL_MS         20u
 #define HUB_RESET_MS              500u
 #define HUB_POWER_MAX_MS          500u
+/* A hub may say its power is good in 0 ms; a port read that soon after its
+ * power request reports nothing connected. 100 ms is the floor Linux uses. */
+#define HUB_POWER_MIN_MS          100u
 #define HUB_OVER_CURRENT_RETRY_MS 1000u
 
 /* What the hub as a whole is doing. */
@@ -147,6 +150,7 @@ struct hub {
     int think_time;
     int multi_tt;
     uint32_t power_good_ms;
+    int wait_fresh; /* the wait was set this tick; the tick is not counted */
     uint32_t wait_ms;
     int at;      /* the port being powered or scanned, numbered from one */
     int request; /* what the transfer in flight is for, or REQ_NONE */
@@ -308,20 +312,26 @@ static int take_descriptor(struct hub *h, int length)
     h->lpsm = h->data[3] & 3;
     h->think_time = (h->data[3] >> 5) & 3;
     h->power_good_ms = (uint32_t)h->data[5] * 2u;
+    if (h->power_good_ms < HUB_POWER_MIN_MS) {
+        h->power_good_ms = HUB_POWER_MIN_MS;
+    }
     if (h->power_good_ms > HUB_POWER_MAX_MS) {
         h->power_good_ms = HUB_POWER_MAX_MS;
     }
     return 0;
 }
 
-/** Start powering the next port, or say there is none left. */
+/**
+ * Start powering the next port, or say there is none left.
+ *
+ * Every port gets its own request whether the descriptor says the ports
+ * switch together or one by one: a hub that says together may still power
+ * only the port named, and the extra requests cost a ganged hub nothing.
+ */
 static int power_next(struct hub *h)
 {
     if (h->lpsm == LPSM_NONE || h->lpsm > LPSM_INDIVIDUAL) {
         return 0; /* a hub that cannot switch has its ports on already */
-    }
-    if (h->lpsm == LPSM_GANGED && h->at > 1) {
-        return 0; /* one request powered them all */
     }
     if (h->at > h->ports) {
         return 0;
@@ -530,6 +540,7 @@ static void answered(struct hub *h, const struct usb_completion *c)
         if (!power_next(h)) {
             h->state = HUB_POWER_WAIT;
             h->wait_ms = h->power_good_ms;
+            h->wait_fresh = 1;
         }
         return;
     case REQ_PORT_STATUS:
@@ -657,10 +668,17 @@ static void step_hub(struct hub *h, uint32_t elapsed_ms)
         if (!power_next(h)) {
             h->state = HUB_POWER_WAIT;
             h->wait_ms = h->power_good_ms;
+            h->wait_fresh = 1;
         }
         return;
     }
     case HUB_POWER_WAIT:
+        /* The tick that set the wait is not counted against it, so the
+         * power-good time is a minimum and not a minimum less one tick. */
+        if (h->wait_fresh) {
+            h->wait_fresh = 0;
+            return;
+        }
         h->wait_ms = (h->wait_ms > elapsed_ms) ? h->wait_ms - elapsed_ms : 0;
         if (h->wait_ms != 0) {
             return;

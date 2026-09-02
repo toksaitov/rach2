@@ -862,19 +862,39 @@ int main(void)
         CHECK("/proc/usb gives the keyboard's location as 1.2", found);
     }
 
-    /* Power: ganged is one request, per port is one each, and the first
-       port is not looked at before the power-good time has passed. */
+    /* Power: one request per port whether the hub says ganged or per port,
+       and the first port is not looked at before the power-good time has
+       passed. */
     model_reset();
     model.hub_lpsm = 0;
-    model.hub_pwrgood = 50; /* 100 ms */
+    model.hub_pwrgood = 100; /* 200 ms */
     pump(2000);
-    CHECK("a ganged hub is powered with one request", model.power_requests == 1);
+    CHECK("a ganged hub is powered port by port too", model.power_requests == 8);
     CHECK("and no port is read before the power-good time",
-          model.first_status_ms >= model.last_power_ms + 100u);
+          model.first_status_ms >= model.last_power_ms + 200u);
     model_reset();
     model.hub_lpsm = 1;
     pump(2000);
     CHECK("a per-port hub is powered port by port", model.power_requests == 8);
+
+    /* The Lenovo's hub, 35d6:2510: it says ganged and power good in 0 ms,
+       and a power request on port 1 leaves ports 2 to 4 unpowered, so a
+       keyboard on port 3 was never seen. Every port powered by its own
+       request, and the read of the ports not before 100 ms. */
+    model_reset();
+    model.hub_lpsm = 0;
+    model.hub_pwrgood = 0;
+    model.hub_ports = 4;
+    model.port_powered_off[0] = model.port_powered_off[1] = 1;
+    model.port_powered_off[2] = model.port_powered_off[3] = 1;
+    model.port_kind[2] = KIND_KBD;
+    model.port_speed[2] = USB_SPEED_LOW;
+    pump(2000);
+    CHECK("a hub that powers only the port named has every port asked for",
+          model.power_requests == 4 && model.power_ons == 4);
+    CHECK("its keyboard on port 3 is enumerated", slot_of_kind(KIND_KBD) != 0);
+    CHECK("and with power good in 0 ms no port is read before 100 ms",
+          model.first_status_ms >= model.last_power_ms + 100u);
 
     /* A high-speed hub with one translator per port and a think time of two:
        the hub's slot gets both, and a low-speed keyboard below it carries
