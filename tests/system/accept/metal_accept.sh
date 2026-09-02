@@ -288,6 +288,7 @@ else
     if run 'cat /proc/cmdline' | grep -q 'rach2.blocklag='; then
         # 64 KiB in eight-sector requests is sixteen sleeps of N ticks each;
         # a loop that counted nothing meanwhile is a reader that never slept.
+        # shellcheck disable=SC2016
         OUT="$(run 'rm -f /tmp/accept-lag; (dd if=/dev/disk0p1 of=/dev/null bs=65536 count=1 2>/dev/null; touch /tmp/accept-lag) & i=0; while [ ! -f /tmp/accept-lag ]; do i=$((i + 1)); done; rm -f /tmp/accept-lag; echo $i')"
         case "$OUT" in
             ''|*[!0-9]*) bad "partitions: the lag check gave no count: $OUT" ;;
