@@ -1,0 +1,27 @@
+# Milestone 41 progress
+
+Phase 1: arrival and inventory
+- [x] the tracking files; the review units
+- [x] every number in the hub-class bullet checked and sourced in notes.md
+- [x] hardware.md: what milestone 43 needs
+
+Phase 2: the location
+- [ ] usb_location, device_open on it, device_hub, the route string and its depth
+- [ ] the slot-context words in xhci.c; every caller passing a root location
+- [ ] the location rows in xhci_hosttest.c; usb and usbdisk unchanged
+
+Phase 3: the core on a tree
+- [ ] the port vtable, the hub-port operations, the depth-first close
+- [ ] the per-hub refusal bitmap; class 9 matched
+- [ ] the hub model and hub_hosttest.c's enumeration and close rows
+
+Phase 4: the hub driver
+- [ ] hub.c in full; the rest of hub_hosttest.c
+
+Phase 5: the suite
+- [ ] the usb.sh hub boots, usbprobe's tree, the eight-device boot
+
+Phase 6: the record and the sweep
+- [ ] the documents read against the code; the review round
+- [ ] the sweep; the full set; make test timed
+- [ ] dev-log Readme and the index entry; tree clean
