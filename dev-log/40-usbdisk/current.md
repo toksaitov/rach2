@@ -1,9 +1,6 @@
-Phase 6 is closed; phase 7, the record and the sweep, is next.
-Evidence gathered: build/images/rach2-stick.img is built and judged whole by
-stickcheck and mkexfatfixture; tests/run usbdisk passes nine boots in 119 s,
-the last a firmware boot from the image that mounts /dev/usb0p2; the three
-image mutations each fail their check.
-Next action: phase 7: the documents read against the code, prosecheck, the
-review round (Codex tried again through its rescue agent), the sweep, the
-full set on the final tree, make test timed, the dev-log Readme and index.
-File being read when written: dev-log/40-usbdisk/plan.md, phase 7.
+Milestone 40 is closed.
+Evidence gathered: all 65 suites pass in one pass on the closing tree; make
+test is 7:06 against 5:06; twenty-six mutations each fail their row; two
+Claude gate reviews and two Codex closing units, every finding fixed.
+Next action: milestone 41, hubs, from dev-log/41-hub/plan.md, phase 1.
+File being read when written: dev-log/41-hub/plan.md.

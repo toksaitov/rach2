@@ -430,6 +430,16 @@ member takes longer than two minutes on its own, and this one is at that
 line. The 60 s churn boot is the row to move to a full-tier suite if the
 tier must shrink.
 
+The full set on the closing tree: all 65 suites passed in one pass,
+`selfbuild` among them, and no machine was left running. Two earlier full
+runs on this milestone's trees each failed one suite in the pool, `tests/run
+mount` at its lag-sleep boot after 25 s, and that suite passed alone and in a
+pool of four every time it was rerun, and passed in the final run; the row is
+one reader asleep in a lagged request while a sibling counts, which nothing
+in this milestone changed except the raw windows' staging exclusion, and
+that is never contended there. The boot had no log of its own; it keeps one
+now, so the next failure names the check that failed instead of the boot.
+
 Not caught, and cannot be: the staging buffer's exclusion needs two
 processes asleep in the kernel at once, which the guest can arrange and no
 row drives; and the emulator's completion inside the doorbell write is a
