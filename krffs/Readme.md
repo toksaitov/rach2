@@ -67,6 +67,8 @@ tree          MODE GUEST_DIR HOST_DIR
 
 Staged nodes use the fixed time one second after the Unix epoch, and the root is forced to uid 0 and gid 0. These rules and sorted bulk walks make repeated staging reproducible. The image scripts run the set-id guard (`tools/inspect/setidcheck.c`) on both the manifest and the completed image before publishing it.
 
+`stageimage.krffs MANIFEST --tree DIR` materialises the manifest into a host directory instead of an image: one host file or directory per node, every node at the fixed staged instant, and one line `node MODE UID GID PATH` on standard output for each, with the POSIX type bits in the mode. The directory must not exist, so that nothing a previous run left can end up in an image. `tools/image/mkext2.sh` hands the directory to `mke2fs` and the lines to `debugfs`, which sets the owners and the set-id bits a build that is not root cannot put on a host file.
+
 `mkimage.sh MANIFEST OUTPUT [SIZE_MB]` creates a whole-file RAM image. The default size is 10 MiB. It builds a temporary file, runs `mkfs.krffs` and `stageimage.krffs`, checks it, and renames it over the output only after every step succeeds.
 
 `mkdisk.sh MANIFEST OUTPUT [DISK_MB] [PARTITION_MB]` creates a disk file with an MBR and one KRFFS partition of type `0x7f` at LBA 2048. The defaults are a 64 MiB disk and a 48 MiB partition. The partition may not exceed the kernel's 512 MiB mount window. This script also builds through a temporary file and publishes only a checked image.

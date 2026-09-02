@@ -409,6 +409,144 @@ static bool is_synthetic_path(const char *path)
  * whether it is declared before or after something is placed inside). Returns
  * false on any failure.
  */
+/*
+ * The tree mode, `stageimage MANIFEST --tree DIR`: the manifest is
+ * materialised into a host directory instead of an image, one host file or
+ * directory per node, and one line `node MODE UID GID PATH` is printed on
+ * standard output for each, with the POSIX type bits in the mode.
+ * tools/image/mkext2.sh hands the directory to mke2fs and the lines to
+ * debugfs, which sets the owners and the set-id bits a build that is not
+ * root cannot put on a host file. Every node gets the fixed staged instant
+ * as its times, one second after the epoch, so that one manifest makes one
+ * image.
+ */
+static const char *tree_root;
+static unsigned long tree_nodes;
+
+static bool tree_mkdir_p(const char *host_path)
+{
+    char buf[1024];
+    size_t i;
+
+    if (strlen(host_path) >= sizeof(buf)) {
+        return false;
+    }
+    strcpy(buf, host_path);
+    for (i = 1; buf[i] != '\0'; i++) {
+        if (buf[i] == '/') {
+            buf[i] = '\0';
+            if (mkdir(buf, 0755) != 0 && errno != EEXIST) {
+                return false;
+            }
+            buf[i] = '/';
+        }
+    }
+    return mkdir(buf, 0755) == 0 || errno == EEXIST;
+}
+
+static void tree_note(uint16_t mode, uint32_t uid, uint32_t gid, const char *path)
+{
+    printf("node 0%o %lu %lu %s\n", (unsigned) mode, (unsigned long) uid,
+           (unsigned long) gid, path);
+    tree_nodes++;
+}
+
+static bool tree_dir(const char *path, uint16_t mode, uint32_t uid, uint32_t gid)
+{
+    char host[1024];
+
+    if (snprintf(host, sizeof(host), "%s%s", tree_root, path) >= (int) sizeof(host) ||
+        !tree_mkdir_p(host)) {
+        fprintf(stderr, "stageimage: cannot make '%s%s'.\n", tree_root, path);
+
+        return false;
+    }
+    tree_note((uint16_t) (S_IFDIR | mode), uid, gid, path);
+
+    return true;
+}
+
+static bool tree_file(const char *path, uint16_t mode, uint32_t uid, uint32_t gid,
+                      const char *data, uint64_t data_size)
+{
+    char host[1024];
+    char *slash;
+    FILE *out;
+
+    if (snprintf(host, sizeof(host), "%s%s", tree_root, path) >= (int) sizeof(host)) {
+        fprintf(stderr, "stageimage: path too long '%s'.\n", path);
+
+        return false;
+    }
+    slash =
+        strrchr(host, '/');
+    *slash =
+        '\0';
+    if (!tree_mkdir_p(host)) {
+        fprintf(stderr, "stageimage: cannot make '%s'.\n", host);
+
+        return false;
+    }
+    *slash =
+        '/';
+    /* A name already there is the same path staged twice, as in an image. */
+    if (access(host, F_OK) == 0) {
+        fprintf(stderr, "stageimage: '%s' is staged more than once.\n", path);
+
+        return false;
+    }
+    out =
+        fopen(host, "wb");
+    if (out == NULL || (data_size != 0 && fwrite(data, 1, (size_t) data_size, out) != data_size) ||
+        fclose(out) != 0) {
+        fprintf(stderr, "stageimage: cannot write '%s'.\n", host);
+
+        return false;
+    }
+    tree_note((uint16_t) (S_IFREG | mode), uid, gid, path);
+
+    return true;
+}
+
+/* The fixed instant on every node, directories last, since writing a file
+ * moves its directory's time. */
+static bool tree_stamp(const char *host_path)
+{
+    DIR *d;
+    struct dirent *e;
+    struct stat st;
+    struct timespec times[2];
+    bool ok = true;
+
+    times[0].tv_sec = 1;
+    times[0].tv_nsec = 0;
+    times[1] = times[0];
+    if (lstat(host_path, &st) != 0) {
+        return false;
+    }
+    if (S_ISDIR(st.st_mode)) {
+        d = opendir(host_path);
+        if (d == NULL) {
+            return false;
+        }
+        while ((e = readdir(d)) != NULL) {
+            char child[1024];
+
+            if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) {
+                continue;
+            }
+            if (snprintf(child, sizeof(child), "%s/%s", host_path,
+                         e->d_name) >= (int) sizeof(child) ||
+                !tree_stamp(child)) {
+                ok = false;
+            }
+        }
+        closedir(d);
+    }
+
+    return ok && utimensat(AT_FDCWD, host_path, times, 0) == 0;
+}
+
 static bool stage_dir(struct krffs_file_system *file_system, const char *path,
                       uint16_t mode, uint32_t uid, uint32_t gid)
 {
@@ -430,6 +568,9 @@ static bool stage_dir(struct krffs_file_system *file_system, const char *path,
         fprintf(stderr, "stageimage: '%s' is under a kernel-synthetic namespace.\n", path);
 
         return false;
+    }
+    if (tree_root != NULL) {
+        return tree_dir(path, mode, uid, gid);
     }
 
     name =
@@ -499,6 +640,9 @@ static bool stage_file(
         fprintf(stderr, "stageimage: '%s' is under a kernel-synthetic namespace.\n", path);
 
         return false;
+    }
+    if (tree_root != NULL) {
+        return tree_file(path, mode, uid, gid, data, data_size);
     }
 
     name =
@@ -778,6 +922,25 @@ static bool stage_dir_if_absent(struct krffs_file_system *file_system,
 
     if (strcmp(path, "/") == 0) {
         return true;
+    }
+    if (tree_root != NULL) {
+        char host[1024];
+        struct stat st;
+
+        if (snprintf(host, sizeof(host), "%s%s", tree_root, path) >= (int) sizeof(host)) {
+            return false;
+        }
+        if (lstat(host, &st) == 0) {
+            if (!S_ISDIR(st.st_mode)) {
+                fprintf(stderr, "stageimage: '%s' already exists as a non-directory.\n", path);
+
+                return false;
+            }
+
+            return true; /* somebody else declared it; it is theirs */
+        }
+
+        return stage_dir(file_system, path, mode, uid, gid);
     }
     name =
         split_path(path, path_buf, sizeof(path_buf), dir_buf, sizeof(dir_buf));
@@ -1129,14 +1292,31 @@ int main(int argc, char **argv)
     char line[2048];
     uint64_t free_after;
 
-    if (argc < 3 || argv[1][0] == '-' || argv[2][0] == '-') {
+    if (argc == 4 && strcmp(argv[2], "--tree") == 0 && argv[1][0] != '-') {
+        /* A fresh directory, so that nothing a previous run left can end up
+           in an image; mke2fs takes whatever is there. */
+        if (mkdir(argv[3], 0755) != 0) {
+            fprintf(stderr, "stageimage: cannot make '%s' (it must not exist): %s.\n",
+                    argv[3], strerror(errno));
+
+            return EXIT_FAILURE;
+        }
+        tree_root =
+            argv[3];
+    } else if (argc < 3 || argv[1][0] == '-' || argv[2][0] == '-') {
         fprintf(
             stderr,
-            "Usage: %s <manifest> <image> [--offset BYTES --size BYTES]\n",
+            "Usage: %s <manifest> <image> [--offset BYTES --size BYTES]\n"
+            "       %s <manifest> --tree <directory>\n",
+            argc >= 1 ? argv[0] : "stageimage.krffs",
             argc >= 1 ? argv[0] : "stageimage.krffs"
         );
 
         return EXIT_FAILURE;
+    }
+
+    if (tree_root != NULL) {
+        goto stage;
     }
 
     if ((file_descriptor = PLATFORM_PREFIX(open(argv[2], O_RDWR))) == -1) {
@@ -1224,6 +1404,7 @@ int main(int argc, char **argv)
     }
     krffs_sync_mapping(file_system.node, sizeof(*file_system.node));
 
+stage:
     manifest =
         fopen(argv[1], "r");
     if (manifest == NULL) {
@@ -1264,7 +1445,16 @@ int main(int argc, char **argv)
 
     fclose(manifest);
 
-    if (exit_status == EXIT_SUCCESS) {
+    if (exit_status == EXIT_SUCCESS && tree_root != NULL) {
+        if (!tree_stamp(tree_root)) {
+            fprintf(stderr, "stageimage: cannot set the times under '%s'.\n", tree_root);
+            exit_status =
+                EXIT_FAILURE;
+        } else {
+            printf("stageimage: materialised '%s' from '%s' (%lu nodes).\n", tree_root, argv[1],
+                   tree_nodes);
+        }
+    } else if (exit_status == EXIT_SUCCESS) {
         free_after =
             total_free_space(&file_system);
         printf(
