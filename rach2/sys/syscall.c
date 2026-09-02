@@ -870,6 +870,7 @@ static int32_t sys_writev(isr_params_t *params)
 #define O_TRUNC    01000
 #define O_NONBLOCK 04000    /* a would-block operation returns -EAGAIN */
 #define O_DIRECTORY 0200000 /* the target must be a directory (else -ENOTDIR) */
+#define O_NOFOLLOW 0400000  /* a symbolic link at the end answers -ELOOP */
 #define O_CLOEXEC  02000000 /* close-on-exec: the fd is dropped across execve */
 
 /* Special dir fd for the openat family: resolve relative to the current dir. */
@@ -1586,7 +1587,14 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
         return -EMFILE; /* known before anything is created or truncated */
     }
 again:
-    rc = vfs_resolve(0, name, 0, &ref, 0, 0);
+    /* A link at the end is followed, unless O_NOFOLLOW asks for the link,
+     * which open cannot open, or O_CREAT|O_EXCL asks that nothing be there,
+     * which a link, dangling or not, is. */
+    rc = vfs_resolve(0, name,
+                     ((flags & O_NOFOLLOW) || ((flags & O_CREAT) && (flags & O_EXCL)))
+                         ? VFS_WALK_NOFOLLOW
+                         : 0,
+                     &ref, 0, 0);
     if (rc == -ENOENT && (flags & O_CREAT)) {
         /* The missing-file half of O_CREAT: hold the parent, check its
          * write bit, create under the namespace lock, and stamp the new
@@ -1664,6 +1672,10 @@ again:
             if ((flags & O_CREAT) && (flags & O_EXCL)) {
                 vfs_ref_release(&ref);
                 return -EEXIST;
+            }
+            if ((vst.mode & 0170000u) == 0120000u) {
+                vfs_ref_release(&ref);
+                return -ELOOP; /* the link itself, under O_NOFOLLOW */
             }
             if ((vst.mode & 0170000u) == 0040000u && (acc != 0 || (flags & O_TRUNC))) {
                 vfs_ref_release(&ref);
@@ -3547,14 +3559,30 @@ static int32_t do_readlink(const char *name, char __user *ubuf, uint32_t bufsiz)
     if (!ubuf || bufsiz == 0) {
         return -EINVAL;
     }
-    kind = (int)vfs_resolve(0, name, 0, &ref, 0, 0);
+    kind = (int)vfs_resolve(0, name, VFS_WALK_NOFOLLOW, &ref, 0, 0);
     if (kind != 0) {
         return kind;
     }
     svp = vfs_synth_vpath(ref.mnt, ref.node);
     if (!svp) {
+        /* A link on a mounted type: its target from the type, copied out
+         * without the terminator, as readlink(2) does. */
+        if (!ref.mnt->type->ops->readlink) {
+            vfs_ref_release(&ref);
+            return -EINVAL;
+        }
+        n = ref.mnt->type->ops->readlink(ref.mnt, ref.node, link, sizeof(link));
         vfs_ref_release(&ref);
-        return -EINVAL; /* nothing outside /proc is a link */
+        if (n < 0) {
+            return n;
+        }
+        if ((uint32_t)n > bufsiz) {
+            n = (int)bufsiz;
+        }
+        if (copy_to_user(ubuf, link, (uint32_t)n) != 0) {
+            return -EFAULT;
+        }
+        return n;
     }
     vp = *svp;
     vfs_ref_release(&ref);
@@ -3672,7 +3700,7 @@ static int32_t do_stat64(const char __user *path, struct linux_stat64 __user *st
     {
         struct vfs_ref ref;
         const struct vpath *vp;
-        int rc = vfs_resolve(0, pathbuf, 0, &ref, 0, 0);
+        int rc = vfs_resolve(0, pathbuf, follow ? 0 : VFS_WALK_NOFOLLOW, &ref, 0, 0);
 
         if (rc != 0) {
             return rc; /* missing, not-a-dir, or a denied ancestor */
@@ -4112,7 +4140,9 @@ static int32_t sys_fstatat64(isr_params_t *params)
     } else {
         struct vfs_ref ref;
         const struct vpath *svp;
-        int32_t rc = vfs_resolve(0, pathbuf, 0, &ref, 0, 0);
+        int32_t rc = vfs_resolve(0, pathbuf,
+                                 ((int)params->esi & AT_SYMLINK_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0,
+                                 &ref, 0, 0);
 
         if (rc != 0) {
             return rc;
@@ -4661,6 +4691,135 @@ static int32_t sys_fchown(isr_params_t *params)
  * final) and, on EPERM/EACCES, falls back to writing the key directly to the
  * final path.
  */
+/*
+ * A hard link: the source resolved as itself unless `follow`, a directory
+ * refused with EPERM, another mount with EXDEV, and the new name made by
+ * the type under the namespace lock; a type without links answers EPERM,
+ * and KRFFS, the root, is one.
+ */
+static int32_t do_link(const char *oldname, const char *newname, int follow)
+{
+    struct vfs_ref src, parent;
+    struct vfs_stat st;
+    char leaf[VFS_NAME_MAX + 1];
+    int32_t rc;
+
+    rc = vfs_resolve(0, oldname, follow ? 0 : VFS_WALK_NOFOLLOW, &src, 0, 0);
+    if (rc != 0) {
+        return rc;
+    }
+    if (vfs_synth_vpath(src.mnt, src.node) || mnt_is_root(src.mnt)) {
+        vfs_ref_release(&src);
+        return -EPERM;
+    }
+    rc = vfs_getattr(src.mnt, src.node, &st);
+    if (rc == 0 && (st.mode & 0170000u) == 0040000u) {
+        rc = -EPERM;
+    }
+    if (rc != 0) {
+        vfs_ref_release(&src);
+        return rc;
+    }
+    rc = vfs_resolve(0, newname, VFS_WALK_PARENT, &parent, leaf, sizeof(leaf));
+    if (rc != 0) {
+        vfs_ref_release(&src);
+        return rc;
+    }
+    if (parent.mnt != src.mnt) {
+        rc = -EXDEV;
+    } else if (parent.mnt->flags & VFS_MS_RDONLY) {
+        rc = -EROFS;
+    } else {
+        rc = (int32_t)cred_access_ref(&parent, CRED_W, 0);
+    }
+    if (rc == 0) {
+        vfs_ns_lock(parent.mnt);
+        rc = vfs_link(parent.mnt, parent.node, leaf, src.node);
+        vfs_ns_unlock(parent.mnt);
+    }
+    vfs_ref_release(&parent);
+    vfs_ref_release(&src);
+    return rc;
+}
+
+/*
+ * A symbolic link `newname` to `target`, made by the type under the
+ * namespace lock; a type without them answers EPERM.
+ */
+static int32_t do_symlink(const char *target, const char *newname)
+{
+    struct vfs_ref parent;
+    char leaf[VFS_NAME_MAX + 1];
+    int32_t rc;
+
+    if (target[0] == '\0') {
+        return -ENOENT; /* an empty target, as Linux answers */
+    }
+    rc = vfs_resolve(0, newname, VFS_WALK_PARENT, &parent, leaf, sizeof(leaf));
+    if (rc != 0) {
+        return rc;
+    }
+    if (vfs_synth_vpath(parent.mnt, parent.node) || (parent.mnt->flags & VFS_MS_RDONLY)) {
+        rc = -EROFS;
+    } else if (mnt_is_root(parent.mnt) || !parent.mnt->type->ops->symlink) {
+        rc = -EPERM;
+    } else {
+        rc = (int32_t)cred_access_ref(&parent, CRED_W, 0);
+    }
+    if (rc == 0) {
+        vfs_ns_lock(parent.mnt);
+        rc = parent.mnt->type->ops->symlink(parent.mnt, parent.node, leaf, target);
+        vfs_ns_unlock(parent.mnt);
+    }
+    vfs_ref_release(&parent);
+    return rc;
+}
+
+static int32_t sys_symlink(isr_params_t *params)
+{
+    const char __user *utarget = (const char __user *)params->ebx;
+    const char __user *unew = (const char __user *)params->ecx;
+    char target[256];
+    char newbuf[256];
+    int len;
+
+    if (!current_proc || !utarget || !unew) {
+        return -EFAULT;
+    }
+    len = strncpy_from_user(target, utarget, sizeof(target));
+    if (len < 0) {
+        return len;
+    }
+    len = copy_path_cwd(newbuf, sizeof(newbuf), unew);
+    if (len < 0) {
+        return len;
+    }
+    return do_symlink(target, newbuf[0] == '/' ? newbuf + 1 : newbuf);
+}
+
+static int32_t sys_symlinkat(isr_params_t *params)
+{
+    const char __user *utarget = (const char __user *)params->ebx;
+    int newdirfd = (int)params->ecx;
+    const char __user *unew = (const char __user *)params->edx;
+    char target[256];
+    char newbuf[256];
+    int len;
+
+    if (!current_proc || !utarget || !unew) {
+        return -EFAULT;
+    }
+    len = strncpy_from_user(target, utarget, sizeof(target));
+    if (len < 0) {
+        return len;
+    }
+    len = copy_path_at(newbuf, sizeof(newbuf), newdirfd, unew);
+    if (len < 0) {
+        return len;
+    }
+    return do_symlink(target, newbuf[0] == '/' ? newbuf + 1 : newbuf);
+}
+
 static int32_t sys_link(isr_params_t *params)
 {
     const char __user *uold = (const char __user *) params->ebx;
@@ -4690,19 +4849,8 @@ static int32_t sys_link(isr_params_t *params)
     if (name[0] == '/') {
         name++;
     }
-    {
-        struct vfs_ref ref;
-
-        rc = vfs_resolve(0, name, 0, &ref, 0, 0);
-        if (rc != 0) {
-            return rc;
-        }
-        vfs_ref_release(&ref);
-    }
-    /* The source exists; no mounted file system here has hard links, so the
-     * answer is the type's: EPERM. The day a type implements `link`, this
-     * gains a parent walk and goes through vfs_link. */
-    return -EPERM;
+    rc = do_link(name, newbuf[0] == '/' ? newbuf + 1 : newbuf, 0);
+    return rc;
 }
 
 static int32_t sys_linkat(isr_params_t *params)
@@ -4740,19 +4888,8 @@ static int32_t sys_linkat(isr_params_t *params)
     if (name[0] == '/') {
         name++;
     }
-    {
-        struct vfs_ref ref;
-
-        rc = vfs_resolve(0, name, 0, &ref, 0, 0);
-        if (rc != 0) {
-            return rc;
-        }
-        vfs_ref_release(&ref);
-    }
-    /* The source exists; no mounted file system here has hard links, so the
-     * answer is the type's: EPERM. The day a type implements `link`, this
-     * gains a parent walk and goes through vfs_link. */
-    return -EPERM;
+    rc = do_link(name, newbuf[0] == '/' ? newbuf + 1 : newbuf, (flags & AT_SYMLINK_FOLLOW) != 0);
+    return rc;
 }
 
 /*
@@ -5115,7 +5252,7 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
     {
         struct vfs_ref ref;
         const struct vpath *svp;
-        int32_t rc = vfs_resolve(0, pathbuf, 0, &ref, 0, 0);
+        int32_t rc = vfs_resolve(0, pathbuf, follow ? 0 : VFS_WALK_NOFOLLOW, &ref, 0, 0);
 
         if (rc != 0) {
             return rc; /* missing, not-a-dir, or a denied ancestor */
@@ -7016,7 +7153,7 @@ static int32_t sys_utimensat(isr_params_t *params)
     const char __user *user_path = (const char __user *)params->ecx;
     struct kernel_timespec __user *user_times =
         (struct kernel_timespec __user *)params->edx;
-    /* int flags = (int)params->esi; */
+    int flags = (int)params->esi;
     char pathbuf[256];
     struct kernel_timespec ktimes[2];
     const struct kernel_timespec *times = NULL;
@@ -7053,7 +7190,8 @@ static int32_t sys_utimensat(isr_params_t *params)
 
     {
         struct vfs_ref ref;
-        int rc = vfs_resolve(0, name, 0, &ref, 0, 0);
+        int rc = vfs_resolve(0, name, (flags & AT_SYMLINK_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0,
+                             &ref, 0, 0);
 
         if (rc != 0) {
             return rc; /* missing, not-a-dir, or a denied ancestor */
@@ -11633,6 +11771,8 @@ void init_syscall(void)
     _syscall_table[SYS_FDATASYNC] = sys_fsync;
     _syscall_table[SYS_LINK] = sys_link;
     _syscall_table[SYS_LINKAT] = sys_linkat;
+    _syscall_table[SYS_SYMLINK] = sys_symlink;
+    _syscall_table[SYS_SYMLINKAT] = sys_symlinkat;
     /* Only the *32 id forms are wired: musl remaps the whole legacy 16-bit
      * family to them on i386, and the 16-bit ABI's narrower ids and 0xFFFF
      * keep-sentinel differ, so serving those numbers with 32-bit semantics

@@ -185,6 +185,10 @@ struct vfs_ops {
      * directory descriptor's `*at` calls after a rename; NULL for a type
      * whose directories do not move. 0, or -ENAMETOOLONG. */
     int (*path)(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap);
+    /* A symbolic link `name` in `dir` to `target`; NULL on a type without
+     * them, which the common layer answers with EPERM. */
+    int (*symlink)(struct vfs_mount *mnt, void *dir, const char *name,
+                   const char *target);
 };
 
 /* One file-system kind: the name mount(2) and /proc/filesystems spell, the
@@ -235,9 +239,17 @@ struct vfs_ref {
 /* Resolver flags. WALK_PARENT stops before the last component and returns
  * the held parent directory with the leaf name copied out, which is what
  * create, unlink, mkdir, rmdir and rename start from. WALK_REAL_IDS charges
- * search permission by the real ids, for access(2). */
+ * search permission by the real ids, for access(2). WALK_NOFOLLOW leaves a
+ * symbolic link at the last component as the link, for lstat, readlink,
+ * unlink, rename, link and an open with O_NOFOLLOW or O_CREAT|O_EXCL; a
+ * link earlier in the path is always followed. */
 #define VFS_WALK_PARENT 0x1
 #define VFS_WALK_REAL_IDS 0x2
+#define VFS_WALK_NOFOLLOW 0x4
+/* Symbolic links followed along one path before ELOOP. */
+#define VFS_LINK_MAX 40
+/* The longest path a followed link may make: the target and the rest. */
+#define VFS_WALK_PATH_MAX 512
 
 /**
  * Install the three permanent mounts. Called once the root file system is

@@ -2895,6 +2895,7 @@ static const struct vfs_ops vfat_ops = {
     fat_unlink, fat_mkdir, fat_rmdir,           fat_rename,  0, /* link */
     0,                                                          /* readlink */
     fat_statfs, fat_sync,  fat_prepare_unmount, fat_unmount, fat_path,
+    0, /* symlink */
 };
 
 const struct vfs_type vfs_vfat_type = {"vfat", fat_mount, &vfat_ops};

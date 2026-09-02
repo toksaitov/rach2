@@ -18,6 +18,7 @@
 #include "devfs.h"
 #include "fat32.h"
 #include "exfat.h"
+#include "ext2.h"
 #include "krffs.h"
 #include "synthfs.h"
 
@@ -269,6 +270,8 @@ int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct
     const char *p = path;
     const char *last_comp = 0;
     int use_real = (flags & VFS_WALK_REAL_IDS) ? 1 : 0;
+    int links = 0;
+    char linkpath[VFS_WALK_PATH_MAX];
     int rc;
 
     if (!path || !out) {
@@ -427,6 +430,74 @@ int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct
         rc = cur.mnt->type->ops->lookup(cur.mnt, cur.node, comp, &found);
         if (rc != 0) {
             goto out_err;
+        }
+        /* A symbolic link, on a type that has them: followed when more of
+         * the path comes after it, or at the last component unless the
+         * caller asked for the link itself. Its target replaces the
+         * component, an absolute target restarts at the root, and the walk
+         * goes on from the directory the link was found in. */
+        if (cur.mnt->type->ops->readlink) {
+            struct vfs_stat lst;
+            const char *rest = p;
+            int more;
+
+            while (*rest == '/') {
+                rest++;
+            }
+            more = *rest != '\0';
+            if (cur.mnt->type->ops->getattr(cur.mnt, found, &lst) == 0 &&
+                (lst.mode & 0170000u) == 0120000u && (more || !(flags & VFS_WALK_NOFOLLOW))) {
+                char target[VFS_WALK_PATH_MAX];
+                int tlen;
+                uint32_t rlen = (uint32_t)k_strlen(rest);
+
+                if (++links > VFS_LINK_MAX) {
+                    cur.mnt->type->ops->put(cur.mnt, found);
+                    rc = -ELOOP;
+                    goto out_err;
+                }
+                tlen = cur.mnt->type->ops->readlink(cur.mnt, found, target, sizeof(target));
+                cur.mnt->type->ops->put(cur.mnt, found);
+                if (tlen < 0) {
+                    rc = tlen;
+                    goto out_err;
+                }
+                if (tlen == 0) {
+                    rc = -ENOENT; /* an empty target names nothing */
+                    goto out_err;
+                }
+                if ((uint32_t)tlen + 1 + rlen + 1 > sizeof(linkpath)) {
+                    rc = -ENAMETOOLONG;
+                    goto out_err;
+                }
+                /* The rest may already be inside `linkpath`, from a link
+                 * followed before this one, so it moves before the target
+                 * is written over it. */
+                k_memmove(linkpath + tlen + 1, rest, rlen + 1);
+                k_memcpy(linkpath, target, (uint32_t)tlen);
+                linkpath[tlen] = '/';
+                if (last_comp) {
+                    /* The leaf the caller wants is still the last
+                     * component, now inside the spliced path. */
+                    const char *end = linkpath + k_strlen(linkpath);
+
+                    while (end > linkpath && end[-1] == '/') {
+                        end--;
+                    }
+                    last_comp = end;
+                    while (last_comp > linkpath && last_comp[-1] != '/') {
+                        last_comp--;
+                    }
+                }
+                p = linkpath;
+                if (target[0] == '/') {
+                    rc = walk_move(&cur, &mounts[0], mounts[0].root);
+                    if (rc != 0) {
+                        goto out_err;
+                    }
+                }
+                continue;
+            }
         }
         {
             struct vfs_mount *stay = cur.mnt;
@@ -1035,6 +1106,7 @@ static const struct vfs_ops krffs_ops = {
     kfs_statfs,  kfs_sync,    0, /* prepare_unmount: the root is permanent */
     0,                           /* unmount */
     0,                           /* path: KRFFS directories do not move */
+    0, /* symlink */
 };
 
 static int kfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
@@ -1208,6 +1280,7 @@ static const struct vfs_ops devfs_vops = {
     0, 0,          0,          0,         0,
     0, 0,          0,          0,         0,
     0, 0,          0,          0,         0,
+    0, /* symlink */
 };
 
 static const struct vfs_ops procfs_vops = {
@@ -1216,6 +1289,7 @@ static const struct vfs_ops procfs_vops = {
     0, 0,           0,          0,         0,
     0, 0,           0,          0,         0,
     0, 0,           0,          0,         0,
+    0, /* symlink */
 };
 
 static int synth_mount_root(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
@@ -1308,7 +1382,7 @@ void vfs_init(void)
 
 /* The types mount(2) accepts, by the name it spells; the permanent three
  * are not here because nothing mounts them by name. */
-static const struct vfs_type *const mount_types[] = {&vfs_vfat_type, &vfs_exfat_type, 0, 0};
+static const struct vfs_type *const mount_types[] = {&vfs_vfat_type, &vfs_exfat_type, &vfs_ext2_type, 0};
 
 static const struct vfs_type *type_named(const char *name)
 {

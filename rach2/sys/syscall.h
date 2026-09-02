@@ -118,9 +118,11 @@
 
 /* Stop the machine, after the same flush sync(2) does. Root only. */
 #define SYS_REBOOT      88
-/* KRFFS has no hard links; link/linkat return -EPERM (dropbear falls back). */
+/* Hard and symbolic links: real on ext2, EPERM on the other types. */
 #define SYS_LINK        9
 #define SYS_LINKAT      303
+#define SYS_SYMLINK     83
+#define SYS_SYMLINKAT   304
 /* The 2-/3-arg privilege drop and restore a login server uses (seteuid).
  * musl remaps the whole legacy 16-bit id family to the *32 forms on i386
  * (src/internal/syscall.h), so only the *32 numbers are wired; the 16-bit
