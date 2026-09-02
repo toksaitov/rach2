@@ -60,9 +60,18 @@ int xhci_port_reset_done(int port)
     return -1;
 }
 
-int xhci_device_open(int port, int speed)
+int xhci_device_hub(int device, int ports, int multi_tt, int think_time)
 {
-    (void)port;
+    (void)device;
+    (void)ports;
+    (void)multi_tt;
+    (void)think_time;
+    return 0;
+}
+
+int xhci_device_open(const struct usb_location *where, int speed)
+{
+    (void)where;
     (void)speed;
     return -1;
 }

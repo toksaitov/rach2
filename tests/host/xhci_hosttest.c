@@ -780,8 +780,23 @@ static void model_reset(void)
     xhci_set_io(&model_io);
 }
 
+/* A device on a root port, with no hub above it. */
+static struct usb_location root_at(int port)
+{
+    struct usb_location where;
+
+    where.root_port = port;
+    where.depth = 0;
+    where.route = 0;
+    where.tt_device = 0;
+    where.tt_port = 0;
+    where.tt_multi = 0;
+    return where;
+}
+
 int main(void)
 {
+    struct usb_location root0 = root_at(0);
     const struct xhci_caps *c;
     struct usb_port_status status;
     struct usb_command_result result;
@@ -1244,7 +1259,17 @@ int main(void)
     CHECK("halted and reset", xhci_halt_reset() == 0);
     CHECK("started", xhci_start() == 0);
     reg[M_PORTSC(0)] |= M_PORTSC_CCS | (3u << 10);
-    CHECK("a slot is asked for", xhci_device_open(0, USB_SPEED_HIGH) == 0);
+    {
+        struct usb_location where;
+
+        where.root_port = 0;
+        where.depth = 0;
+        where.route = 0;
+        where.tt_device = 0;
+        where.tt_port = 0;
+        where.tt_multi = 0;
+        CHECK("a slot is asked for", xhci_device_open(&where, USB_SPEED_HIGH) == 0);
+    }
     CHECK("with the command that asks", last_command_type == TRB_TYPE_ENABLE_SLOT);
     xhci_events();
     CHECK("and the controller answers with one", xhci_command_done(&result) == 1);
@@ -1255,6 +1280,164 @@ int main(void)
     CHECK("its context is where the controller will look", dcbaa[1] != 0);
     xhci_events();
     CHECK("the controller answers", xhci_command_done(&result) == 1);
+
+    /* Where a device is: the route string, the root port, the hub's own
+       words, and the translator's for a device below a high-speed hub. The
+       words are what the specification says; whether a controller schedules
+       from them is the notebook's proof. */
+    {
+        struct usb_location where;
+        const uint32_t *slot = (const uint32_t *)(const void *)&input_ctx[64];
+        int hub_slot;
+        int hs_hub;
+
+        where.root_port = 2;
+        where.depth = 1;
+        where.route = 0x3;
+        where.tt_device = 0;
+        where.tt_port = 0;
+        where.tt_multi = 0;
+        reg[M_PORTSC(2)] |= M_PORTSC_CCS | (3u << 10);
+        CHECK("a device on port 3 of a hub on root port 2 is asked for",
+              xhci_device_open(&where, USB_SPEED_HIGH) == 0);
+        xhci_events();
+        CHECK("and given a slot", xhci_command_done(&result) == 1 && result.device == 2);
+        CHECK("and addressed", xhci_device_address(2) == 0);
+        CHECK("with the route string 0x3", (slot[0] & 0xFFFFFu) == 0x3u);
+        CHECK("and the root port 2 in the second word", ((slot[1] >> 16) & 0xFFu) == 3u);
+        CHECK("and no hub, translator or multi-TT bits",
+              (slot[0] & ((1u << 25) | (1u << 26))) == 0 && slot[2] == 0);
+        xhci_events();
+        xhci_command_done(&result);
+
+        where.root_port = 0;
+        where.depth = 2;
+        where.route = 0x23;
+        CHECK("a device two tiers down is asked for",
+              xhci_device_open(&where, USB_SPEED_FULL) == 0);
+        xhci_events();
+        xhci_command_done(&result);
+        CHECK("and addressed with both nibbles",
+              xhci_device_address(result.device) == 0 && (slot[0] & 0xFFFFFu) == 0x23u);
+        xhci_events();
+        xhci_command_done(&result);
+
+        where.depth = 5;
+        where.route = 0xF3333u;
+        CHECK("a device on the fifth tier is accepted",
+              xhci_device_open(&where, USB_SPEED_FULL) == 0);
+        xhci_events();
+        xhci_command_done(&result);
+        where.depth = 6;
+        where.route = 0x1F3333u;
+        CHECK("and one on a sixth tier is refused", xhci_device_open(&where, USB_SPEED_FULL) != 0);
+        where.depth = 1;
+        where.route = 0x13;
+        CHECK("as is a route with bits above its depth",
+              xhci_device_open(&where, USB_SPEED_FULL) != 0);
+        where.depth = 1;
+        where.route = 0xF;
+        CHECK("port 15 of a hub fits the nibble", xhci_device_open(&where, USB_SPEED_LOW) == 0);
+        xhci_events();
+        xhci_command_done(&result);
+        CHECK("and is written as it is",
+              xhci_device_address(result.device) == 0 && (slot[0] & 0xFu) == 0xFu);
+        xhci_events();
+        xhci_command_done(&result);
+
+        /* A hub: its own slot context gains the hub bit and its port count,
+           through the evaluate command, and a high-speed hub with one
+           translator per port gains the multi-TT bit and its think time. */
+        where.depth = 0;
+        where.route = 0;
+        CHECK("a hub on a root port is asked for", xhci_device_open(&where, USB_SPEED_HIGH) == 0);
+        xhci_events();
+        xhci_command_done(&result);
+        hub_slot = result.device;
+        CHECK("and addressed", xhci_device_address(hub_slot) == 0);
+        xhci_events();
+        xhci_command_done(&result);
+        CHECK("a full-speed hub is told its four ports", xhci_device_hub(hub_slot, 4, 0, 0) == 0);
+        CHECK("through the evaluate command", last_command_type == TRB_TYPE_EVALUATE_CTX);
+        CHECK("adding the slot context alone",
+              ((const uint32_t *)(const void *)&input_ctx[0])[1] == 0x1u);
+        CHECK("with the hub bit and the count",
+              (slot[0] & (1u << 26)) != 0 && ((slot[1] >> 24) & 0xFFu) == 4u);
+        CHECK("and nothing about translators", (slot[0] & (1u << 25)) == 0 && slot[2] == 0);
+        xhci_events();
+        xhci_command_done(&result);
+        CHECK("a high-speed hub with a translator per port is told so",
+              xhci_device_hub(hub_slot, 7, 1, 2) == 0);
+        CHECK("with the multi-TT bit and its think time in its own third word",
+              (slot[0] & (1u << 25)) != 0 && ((slot[2] >> 16) & 3u) == 2u &&
+                  ((slot[1] >> 24) & 0xFFu) == 7u);
+        CHECK("and a think time above 3 refused", xhci_device_hub(hub_slot, 7, 1, 4) != 0);
+        xhci_events();
+        xhci_command_done(&result);
+        hs_hub = hub_slot;
+
+        /* A low-speed device below that hub carries the hub's slot and port
+           in its third word and the multi-TT bit, and nothing of the think
+           time, which is the hub's alone. */
+        where.depth = 1;
+        where.route = 0x2;
+        where.tt_device = hs_hub;
+        where.tt_port = 2;
+        where.tt_multi = 1;
+        CHECK("a low-speed device below a high-speed hub is asked for",
+              xhci_device_open(&where, USB_SPEED_LOW) == 0);
+        xhci_events();
+        xhci_command_done(&result);
+        CHECK("and addressed with the translator's slot and port",
+              xhci_device_address(result.device) == 0 && (slot[2] & 0xFFu) == (uint32_t)hs_hub &&
+                  ((slot[2] >> 8) & 0xFFu) == 2u && ((slot[2] >> 16) & 3u) == 0u);
+        CHECK("and the multi-TT bit of the hub it is under", (slot[0] & (1u << 25)) != 0);
+        CHECK("and no hub bit of its own", (slot[0] & (1u << 26)) == 0);
+        xhci_events();
+        xhci_command_done(&result);
+
+        /* A full-speed device below a full-speed hub below that high-speed
+           hub uses the high-speed hub as its translator: what the location
+           names is what is written, two tiers down. */
+        where.depth = 2;
+        where.route = 0x12;
+        where.tt_device = hs_hub;
+        where.tt_port = 2;
+        where.tt_multi = 1;
+        CHECK("a device below a full-speed hub below the high-speed one is asked for",
+              xhci_device_open(&where, USB_SPEED_FULL) == 0);
+        xhci_events();
+        xhci_command_done(&result);
+        CHECK("and carries the high-speed hub as its translator",
+              xhci_device_address(result.device) == 0 && (slot[2] & 0xFFu) == (uint32_t)hs_hub &&
+                  (slot[0] & 0xFFFFFu) == 0x12u);
+        xhci_events();
+        xhci_command_done(&result);
+    }
+
+    /* Devices, endpoints and the recovery a halted one needs, again on a
+       fresh controller. */
+    model_reset();
+    CHECK("the capability registers are read", xhci_read_caps() == 0);
+    CHECK("halted and reset", xhci_halt_reset() == 0);
+    CHECK("started", xhci_start() == 0);
+    reg[M_PORTSC(0)] |= M_PORTSC_CCS | (3u << 10);
+    {
+        struct usb_location where;
+
+        where.root_port = 0;
+        where.depth = 0;
+        where.route = 0;
+        where.tt_device = 0;
+        where.tt_port = 0;
+        where.tt_multi = 0;
+        CHECK("a slot is asked for", xhci_device_open(&where, USB_SPEED_HIGH) == 0);
+        xhci_events();
+        xhci_command_done(&result);
+        CHECK("the device is addressed", xhci_device_address(1) == 0);
+        xhci_events();
+        xhci_command_done(&result);
+    }
 
     {
         struct usb_endpoint ep;
@@ -1346,7 +1529,7 @@ int main(void)
         CHECK("halted and reset", xhci_halt_reset() == 0);
         CHECK("started", xhci_start() == 0);
         reg[M_PORTSC(0)] |= M_PORTSC_CCS | (3u << 10);
-        CHECK("a slot is asked for", xhci_device_open(0, USB_SPEED_HIGH) == 0);
+        CHECK("a slot is asked for", xhci_device_open(&root0, USB_SPEED_HIGH) == 0);
         xhci_events();
         CHECK("the controller gives one", xhci_command_done(&result) == 1);
         CHECK("the device is addressed", xhci_device_address(1) == 0);
@@ -1494,7 +1677,7 @@ int main(void)
     CHECK("halted and reset", xhci_halt_reset() == 0);
     CHECK("started", xhci_start() == 0);
     reg[M_PORTSC(0)] |= M_PORTSC_CCS | (3u << 10);
-    CHECK("a slot is asked for", xhci_device_open(0, USB_SPEED_HIGH) == 0);
+    CHECK("a slot is asked for", xhci_device_open(&root0, USB_SPEED_HIGH) == 0);
     xhci_events();
     CHECK("the controller answers with one", xhci_command_done(&result) == 1);
     CHECK("the device is addressed", xhci_device_address(1) == 0);
@@ -1603,17 +1786,18 @@ int main(void)
 
         reg[M_PORTSC(0)] |= M_PORTSC_CCS | (3u << 10);
         for (slot = 1; slot <= XHCI_SLOTS; slot++) {
-            CHECK("a slot is asked for", xhci_device_open(0, USB_SPEED_HIGH) == 0);
+            CHECK("a slot is asked for", xhci_device_open(&root0, USB_SPEED_HIGH) == 0);
             xhci_events();
             CHECK("and given", xhci_command_done(&result) == 1 && result.device == slot);
             CHECK("and it can be addressed", xhci_device_address(result.device) == 0);
             xhci_events();
             CHECK("the controller answers", xhci_command_done(&result) == 1);
         }
-        /* The ninth. A controller with more slots than this kernel's tables
+        /* The thirteenth. A controller with more slots than this kernel's
+           tables
            hold answers with a handle past their end, and everything that
            takes a handle refuses it rather than writing past the tables. */
-        CHECK("a ninth slot is asked for", xhci_device_open(0, USB_SPEED_HIGH) == 0);
+        CHECK("a thirteenth slot is asked for", xhci_device_open(&root0, USB_SPEED_HIGH) == 0);
         xhci_events();
         CHECK("and the controller answers with a handle past the tables",
               xhci_command_done(&result) == 1 && result.device == XHCI_SLOTS + 1);

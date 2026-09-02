@@ -62,11 +62,11 @@ struct usb_port_status {
 
 /** An endpoint as the class driver describes it, before it exists. */
 struct usb_endpoint {
-    int number;      /* 0 to 15, from the endpoint descriptor */
-    int direction;   /* `USB_DIR_IN` or `USB_DIR_OUT` */
-    int type;        /* one of the `USB_EP_` values */
-    int max_packet;  /* from the endpoint descriptor */
-    int interval;    /* the descriptor's `bInterval`, unconverted */
+    int number;     /* 0 to 15, from the endpoint descriptor */
+    int direction;  /* `USB_DIR_IN` or `USB_DIR_OUT` */
+    int type;       /* one of the `USB_EP_` values */
+    int max_packet; /* from the endpoint descriptor */
+    int interval;   /* the descriptor's `bInterval`, unconverted */
 };
 
 /*
@@ -109,13 +109,42 @@ struct usb_command_result {
 
 /** What `poll` reports about a transfer that finished. */
 struct usb_completion {
-    int device;      /* the device handle the transfer was submitted for */
-    int endpoint;    /* the endpoint handle */
-    int status;        /* one of the `USB_XFER_` values */
-    uint32_t length;   /* bytes the transfer asked for */
-    uint32_t residual; /* what the controller did not move, so length less this
-                        * is what arrived */
+    int device;          /* the device handle the transfer was submitted for */
+    int endpoint;        /* the endpoint handle */
+    int status;          /* one of the `USB_XFER_` values */
+    uint32_t length;     /* bytes the transfer asked for */
+    uint32_t residual;   /* what the controller did not move, so length less this
+                          * is what arrived */
     uint32_t generation; /* what the transfer carried */
+};
+
+/* How deep a tree goes below the root: the route string has four bits for
+ * each hub tier, five tiers in twenty bits, and a port number above 15 does
+ * not fit a nibble. Both are the specification's limits and the field's. */
+#define USB_TREE_TIERS   5
+#define USB_HUB_PORT_MAX 15
+
+/*
+ * Where a device is in the tree.
+ *
+ * `root_port` is the controller's port the device is under, numbered from
+ * zero, whatever hubs are between. `depth` is how many hubs are above the
+ * device, zero on a root port. `route` is the route string the controller
+ * writes into the slot context: the port on the nearest hub in the lowest
+ * four bits, numbered from one, and each hub above in the next four. A low
+ * or full-speed device below a high-speed hub carries the handle of the
+ * nearest high-speed hub above it in `tt_device`, the port on that hub in
+ * `tt_port`, and whether that hub has one translator per port in
+ * `tt_multi`; every other device carries zeros there. The core fills it in
+ * and the controller reads it.
+ */
+struct usb_location {
+    int root_port;
+    int depth;
+    uint32_t route;
+    int tt_device;
+    int tt_port;
+    int tt_multi;
 };
 
 /*
@@ -142,15 +171,24 @@ struct usb_hcd {
     int (*port_reset_done)(int port);
 
     /*
-     * Ask the controller for a device handle for a device on a reset port.
-     * Issues one command; `command_done` reports the handle. Returns 0 when
-     * the command was issued, negative when no slot or no command ring was
-     * free.
+     * Ask the controller for a device handle for a device at `where`, on a
+     * reset port. Issues one command; `command_done` reports the handle.
+     * Returns 0 when the command was issued, negative when no slot or no
+     * command ring was free, or when the location cannot be written.
      */
-    int (*device_open)(int port, int speed);
+    int (*device_open)(const struct usb_location *where, int speed);
 
     /** Give the device an address and its default control endpoint. */
     int (*device_address)(int device);
+
+    /**
+     * Tell the controller that `device` is a hub with `ports` downstream
+     * ports. A high-speed hub says whether it has one transaction translator
+     * for every port (`multi_tt`) and its think time, 0 to 3 for 8, 16, 24
+     * and 32 full-speed bit times; a full-speed hub passes zeros for both.
+     * Issues one command.
+     */
+    int (*device_hub)(int device, int ports, int multi_tt, int think_time);
 
     /** Release a device handle and everything the controller holds for it. */
     void (*device_close)(int device);

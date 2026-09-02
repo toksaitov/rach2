@@ -36,7 +36,7 @@
  * devices that could never be opened. Each ring is one page, which is 256
  * blocks of sixteen bytes.
  */
-#define XHCI_SLOTS     8
+#define XHCI_SLOTS     12
 #define XHCI_RING_TRBS 256
 
 /*
@@ -248,17 +248,26 @@ int xhci_interrupt_take(void);
 void xhci_advance(uint32_t milliseconds);
 
 /**
- * Ask the controller for a slot for a device on a reset port.
+ * Ask the controller for a slot for a device at `where`, on a reset port.
  *
  * Issues one command; `xhci_command_done` reports the slot, which is the
- * device handle everything below uses. The port and speed are remembered
+ * device handle everything below uses. The location and speed are remembered
  * against the command, because which slot it will be is the controller's to
- * decide and it does not say until the command answers.
+ * decide and it does not say until the command answers. A location deeper
+ * than five tiers, or whose route has bits above its depth, is refused.
  */
-int xhci_device_open(int port, int speed);
+int xhci_device_open(const struct usb_location *where, int speed);
 
 /** Address a device and give it its default control endpoint. */
 int xhci_device_address(int device);
+
+/**
+ * Tell the controller that a device is a hub: the hub bit and its port
+ * count, and for a high-speed hub whether it translates per port and its
+ * think time, all in the hub's own slot context, through the evaluate
+ * command. Issues one command.
+ */
+int xhci_device_hub(int device, int ports, int multi_tt, int think_time);
 
 /**
  * Tell the controller the real size of a device's control endpoint.

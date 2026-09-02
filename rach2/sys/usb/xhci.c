@@ -58,9 +58,9 @@
 
 /* The legacy support capability: who owns the controller, and the interrupts
  * the firmware was using to keep that ownership useful. */
-#define LEGSUP_BIOS_OWNED 0x00010000u
-#define LEGSUP_OS_OWNED   0x01000000u
-#define LEGCTLSTS         0x04
+#define LEGSUP_BIOS_OWNED     0x00010000u
+#define LEGSUP_OS_OWNED       0x01000000u
+#define LEGCTLSTS             0x04
 /* Every system-management interrupt enable in the control register, and the
  * three write-one-to-clear status bits above them. Ownership is taken by
  * clearing the first group and clearing the second, which is what stops the
@@ -121,7 +121,7 @@
  * more ports than this is used as far as this many and says so, which is
  * better than refusing it and better than writing past the table.
  */
-#define XHCI_MAX_PORTS 16
+#define XHCI_MAX_PORTS   16
 
 /*
  * A compiler barrier. The controller reads what this driver writes and writes
@@ -344,9 +344,8 @@ int xhci_discover(void)
     }
     xhci_base = (volatile uint8_t *)mapped;
 
-    klog(KLOG_DEBUG, "usb", "found: %x:%x at %d:%d.%d, aperture 0x%X",
-         (int)dev.vendor_id, (int)dev.device_id, (int)dev.bus, (int)dev.device,
-         (int)dev.function, base);
+    klog(KLOG_DEBUG, "usb", "found: %x:%x at %d:%d.%d, aperture 0x%X", (int)dev.vendor_id,
+         (int)dev.device_id, (int)dev.bus, (int)dev.device, (int)dev.function, base);
     xhci_err = "none";
     return 0;
 }
@@ -378,8 +377,8 @@ int xhci_own(void)
             legacy_offset = offset;
             legacy_saved_sup = entry;
             legacy_saved_ctl = r32(offset + LEGCTLSTS);
-            klog(KLOG_DEBUG, "usb", "handoff: legsup 0x%X legctl 0x%X before",
-                 legacy_saved_sup, legacy_saved_ctl);
+            klog(KLOG_DEBUG, "usb", "handoff: legsup 0x%X legctl 0x%X before", legacy_saved_sup,
+                 legacy_saved_ctl);
 
             if (!(entry & LEGSUP_BIOS_OWNED)) {
                 /* Nobody else holds it. Say so and take the interrupts off
@@ -530,8 +529,8 @@ int xhci_read_caps(void)
      * registers. What must fit is the end of each set, not its start. */
     doorbells_end = caps.dboff + (caps.max_slots + 1u) * 4u;
     runtime_end = caps.rtsoff + 0x20u + caps.max_intrs * 0x20u;
-    if (ports_end > XHCI_MAP_SIZE || doorbells_end > XHCI_MAP_SIZE ||
-        runtime_end > XHCI_MAP_SIZE || caps.dboff == 0 || caps.rtsoff == 0) {
+    if (ports_end > XHCI_MAP_SIZE || doorbells_end > XHCI_MAP_SIZE || runtime_end > XHCI_MAP_SIZE ||
+        caps.dboff == 0 || caps.rtsoff == 0) {
         xhci_err = "the controller's registers do not fit the mapped aperture";
         return -1;
     }
@@ -592,11 +591,11 @@ int xhci_scratchpads(void)
  * that value when it wraps past the end of its ring, so a block the other side
  * has not reached yet always reads as the wrong cycle.
  */
-#define TRB_WORDS 4
-#define TRB_CYCLE 0x1u
+#define TRB_WORDS      4
+#define TRB_CYCLE      0x1u
 #define TRB_TYPE_SHIFT 10
-#define TRB_TYPE_MASK 0x3Fu
-#define TRB_TOGGLE 0x2u /* on a Link block: toggle the cycle here */
+#define TRB_TYPE_MASK  0x3Fu
+#define TRB_TOGGLE     0x2u /* on a Link block: toggle the cycle here */
 #define TRB_SLOT_SHIFT 24
 
 #define TRB_TYPE_LINK             6
@@ -631,25 +630,24 @@ int xhci_scratchpads(void)
 #define IMAN_IE 0x2u /* the interrupter may raise one */
 
 /* Port status and control, one per port, sixteen bytes apart. */
-#define PORTSC_CCS   0x00000001u /* a device is connected */
-#define PORTSC_PED   0x00000002u /* the port is enabled; write-one-to-CLEAR */
-#define PORTSC_PR    0x00000010u /* reset the port */
-#define PORTSC_PP    0x00000200u /* the port has power */
+#define PORTSC_CCS         0x00000001u /* a device is connected */
+#define PORTSC_PED         0x00000002u /* the port is enabled; write-one-to-CLEAR */
+#define PORTSC_PR          0x00000010u /* reset the port */
+#define PORTSC_PP          0x00000200u /* the port has power */
 #define PORTSC_SPEED_SHIFT 10
 #define PORTSC_SPEED_MASK  0xFu
 /* Every change bit, all of them write-one-to-clear. A write that does not mask
  * these off clears whichever of them happened to be set, and the connect this
  * driver had not noticed yet is gone. */
-#define PORTSC_CHANGES 0x00FE0000u
-#define PORTSC_CSC     0x00020000u
-#define PORTSC_PRC     0x00200000u
+#define PORTSC_CHANGES     0x00FE0000u
+#define PORTSC_CSC         0x00020000u
+#define PORTSC_PRC         0x00200000u
 
 /* How long a port is given to settle after a connect, and to finish a reset.
  * The debounce is the interval the USB specification requires between seeing a
  * connect and driving a reset. */
 #define PORT_DEBOUNCE_MS 100u
 #define PORT_RESET_MS    500u
-
 
 /* How long a command may take before the ring is taken back from the
  * controller. Nothing this driver issues is slow; a command still running
@@ -666,17 +664,16 @@ static uint32_t event_ring[XHCI_RING_TRBS * TRB_WORDS] __attribute__((aligned(64
 static uint64_t dcbaa[XHCI_SLOTS + 1] __attribute__((aligned(64)));
 static uint32_t erst[4] __attribute__((aligned(64)));
 
-static uint32_t cmd_enqueue;  /* the block this driver writes next */
-static uint32_t cmd_cycle;    /* the cycle value it writes */
-static uint32_t event_index;  /* the block it reads next */
-static uint32_t event_cycle;  /* the cycle value it expects there */
+static uint32_t cmd_enqueue; /* the block this driver writes next */
+static uint32_t cmd_cycle;   /* the cycle value it writes */
+static uint32_t event_index; /* the block it reads next */
+static uint32_t event_cycle; /* the cycle value it expects there */
 
 /* The command in flight, if any, and what it ended as. */
 /* Whether the controller is running. Nothing may be read from its event ring
  * before it is, and the timer calls into this driver from the first tick of
  * the boot, long before there is a controller to ask. */
 static int xhci_running;
-
 
 static int command_running;
 static int command_finished;
@@ -727,7 +724,7 @@ static uint32_t completion_tail;
 /* Endpoint numbers run to 15 in each direction, so a device context has 31
  * endpoints and its index runs to 31; a stick picks its own numbers and the
  * ones it picks are its business, not this driver's. */
-#define XHCI_MAX_DCI 32
+#define XHCI_MAX_DCI      32
 #define XHCI_EP_RING_TRBS 16
 
 /* Command and transfer block types this phase adds. */
@@ -743,12 +740,12 @@ static uint32_t completion_tail;
 #define TRB_TYPE_RESET_EP       14
 #define TRB_TYPE_SET_TR_DEQUEUE 16
 
-#define TRB_IOC 0x20u  /* raise an event when this block is done */
-#define TRB_IDT 0x40u  /* the parameter is the data, not a pointer to it */
-#define TRB_DIR_IN 0x10000u
+#define TRB_IOC         0x20u /* raise an event when this block is done */
+#define TRB_IDT         0x40u /* the parameter is the data, not a pointer to it */
+#define TRB_DIR_IN      0x10000u
 #define TRB_TRT_NO_DATA 0u
-#define TRB_TRT_OUT (2u << 16)
-#define TRB_TRT_IN  (3u << 16)
+#define TRB_TRT_OUT     (2u << 16)
+#define TRB_TRT_IN      (3u << 16)
 
 /* Completion codes this driver tells apart from every other refusal. */
 #define TRB_COMPLETION_SHORT 13
@@ -766,8 +763,14 @@ static uint32_t ep_ring[XHCI_SLOTS + 1][XHCI_MAX_DCI][XHCI_EP_RING_TRBS * TRB_WO
 
 struct xhci_slot {
     int used;
-    int port;  /* the root port it is on, numbered from zero */
+    int port;  /* the root port it is under, numbered from zero */
     int speed; /* as the port reported it */
+    struct usb_location where;
+    /* What the device is when it is a hub: its port count, and for a
+     * high-speed hub its translators, which go in its own slot context. */
+    int hub_ports;
+    int hub_multi_tt;
+    int hub_think_time;
     uint32_t enqueue[XHCI_MAX_DCI];
     uint32_t cycle[XHCI_MAX_DCI];
     uint8_t open[XHCI_MAX_DCI];
@@ -788,6 +791,7 @@ static struct xhci_slot slots[XHCI_SLOTS + 1];
  * slot will describe is held here in the meantime. */
 static int pending_port;
 static int pending_speed;
+static struct usb_location pending_where;
 
 void xhci_advance(uint32_t milliseconds)
 {
@@ -930,7 +934,7 @@ int xhci_command_issue(uint32_t type, uint64_t parameter, uint32_t slot)
     command_finished = 0;
     command_type = type;
     command_deadline = now_ms + COMMAND_MS;
-    xhci_barrier(); /* the block is written before the controller is told */
+    xhci_barrier();     /* the block is written before the controller is told */
     w32(caps.dboff, 0); /* doorbell zero: the command ring */
     return 0;
 }
@@ -987,19 +991,22 @@ static void event_dispatch(const uint32_t *trb)
         command_result.code = (int)code;
         command_result.device = (int)((trb[3] >> TRB_SLOT_SHIFT) & 0xFFu);
         if (code != TRB_COMPLETION_SUCCESS) {
-            klog(KLOG_DEBUG, "usb", "command: slot %d refused with code %d",
-                 command_result.device, (int)code);
+            klog(KLOG_DEBUG, "usb", "command: slot %d refused with code %d", command_result.device,
+                 (int)code);
         }
         /* A slot the controller has just given out is recorded here, because
          * this is where its number arrives. */
         if (command_type == TRB_TYPE_ENABLE_SLOT && command_result.status == USB_XFER_OK &&
-            command_result.device > 0 && command_result.device <= XHCI_SLOTS &&
-            pending_port >= 0) {
+            command_result.device > 0 && command_result.device <= XHCI_SLOTS && pending_port >= 0) {
             struct xhci_slot *s = &slots[command_result.device];
 
             s->used = 1;
             s->port = pending_port;
             s->speed = pending_speed;
+            s->where = pending_where;
+            s->hub_ports = 0;
+            s->hub_multi_tt = 0;
+            s->hub_think_time = 0;
             pending_port = -1;
         }
         return;
@@ -1392,8 +1399,6 @@ void xhci_stop(void)
     klog(KLOG_INFO, "usb", "stop: the controller is halted");
 }
 
-
-
 /** A context entry, whose size the controller decides. */
 static uint32_t *context_entry(uint8_t *base, uint32_t index)
 {
@@ -1467,17 +1472,85 @@ static uint32_t interval_for(int speed, int b_interval)
     return value;
 }
 
-int xhci_device_open(int port, int speed)
+int xhci_device_open(const struct usb_location *where, int speed)
 {
-    if (port < 0 || (uint32_t)port >= caps.max_ports) {
+    if (where == 0 || where->root_port < 0 || (uint32_t)where->root_port >= caps.max_ports) {
+        return -1;
+    }
+    /* The route string has four bits for each tier and five tiers; a route
+     * with bits above its depth was built for a port that does not fit a
+     * nibble, and a device addressed by a wrong port is one the controller
+     * would talk to at random. */
+    if (where->depth < 0 || where->depth > USB_TREE_TIERS) {
+        return -1;
+    }
+    if ((where->route >> (4 * where->depth)) != 0) {
+        return -1;
+    }
+    if (where->tt_device < 0 || where->tt_device > XHCI_SLOTS || where->tt_port < 0 ||
+        where->tt_port > 255) {
         return -1;
     }
     /* The slot the controller gives back is the handle. Which one it will be
-     * is not known until the command answers, so the port and speed are held
-     * against the command rather than a slot. */
-    pending_port = port;
+     * is not known until the command answers, so the location and speed are
+     * held against the command rather than a slot. */
+    pending_port = where->root_port;
     pending_speed = speed;
+    pending_where = *where;
     return xhci_command_issue(TRB_TYPE_ENABLE_SLOT, 0, 0);
+}
+
+/**
+ * The three words of a slot context that say where a device is and what it
+ * is, written the same way by every command that carries the slot context.
+ *
+ * Word 0: the route string in bits 0 to 19, the speed in 20 to 23, the
+ * multi-TT bit 25, the hub bit 26, and the index of the last endpoint
+ * context in 27 to 31. Word 1: the root port in bits 16 to 23 and a hub's
+ * port count in 24 to 31. Word 2: for a low or full-speed device below a
+ * high-speed hub, the translating hub's slot in bits 0 to 7 and its port in
+ * 8 to 15; for a high-speed hub, its think time in bits 16 and 17. The
+ * multi-TT bit is set on a hub that translates per port, and on a device
+ * below such a hub.
+ */
+static void slot_words(const struct xhci_slot *s, uint32_t *slot, uint32_t last_ctx)
+{
+    uint32_t multi = (s->hub_multi_tt || s->where.tt_multi) ? 1u : 0u;
+
+    slot[0] = (last_ctx << 27) | ((uint32_t)s->speed << 20) | (multi << 25) |
+              ((s->hub_ports != 0 ? 1u : 0u) << 26) | (s->where.route & 0xFFFFFu);
+    slot[1] = ((uint32_t)(s->port + 1) << 16) | ((uint32_t)s->hub_ports << 24);
+    slot[2] = ((uint32_t)s->where.tt_device & 0xFFu) | (((uint32_t)s->where.tt_port & 0xFFu) << 8) |
+              (((uint32_t)s->hub_think_time & 3u) << 16);
+}
+
+int xhci_device_hub(int device, int ports, int multi_tt, int think_time)
+{
+    uint32_t *control;
+    uint32_t *slot;
+    struct xhci_slot *s;
+    uint32_t i;
+
+    if (device <= 0 || device > XHCI_SLOTS || !slots[device].used || xhci_command_busy()) {
+        return -1;
+    }
+    if (ports < 1 || ports > 255 || think_time < 0 || think_time > 3) {
+        return -1;
+    }
+    s = &slots[device];
+    s->hub_ports = ports;
+    s->hub_multi_tt = multi_tt ? 1 : 0;
+    s->hub_think_time = think_time;
+    for (i = 0; i <= XHCI_MAX_DCI; i++) {
+        context_clear(input_ctx, i);
+    }
+    control = context_entry(input_ctx, 0);
+    control[1] = 0x1u; /* the slot context alone */
+    slot = context_entry(input_ctx, 1);
+    slot_words(s, slot, 1u);
+    xhci_barrier();
+    return xhci_command_issue(TRB_TYPE_EVALUATE_CTX, (uint64_t)(uintptr_t)input_ctx,
+                              (uint32_t)device);
 }
 
 /**
@@ -1511,8 +1584,7 @@ int xhci_device_address(int device)
     control[1] = 0x3u; /* the slot context and endpoint zero */
 
     slot = context_entry(input_ctx, 1);
-    slot[0] = ((uint32_t)1u << 27) | ((uint32_t)s->speed << 20);
-    slot[1] = ((uint32_t)(s->port + 1) << 16);
+    slot_words(s, slot, 1u);
 
     ep0 = context_entry(input_ctx, 2);
     ep0[1] = (4u << 3) | (3u << 1) | (default_packet_size(s->speed) << 16);
@@ -1635,8 +1707,7 @@ int xhci_endpoint_open(int device, const struct usb_endpoint *ep)
     /* The slot context goes with every configure, and its highest used index
      * has to name this endpoint or the controller will not schedule it. */
     slot = context_entry(input_ctx, 1);
-    slot[0] = (dci << 27) | ((uint32_t)s->speed << 20);
-    slot[1] = ((uint32_t)(s->port + 1) << 16);
+    slot_words(s, slot, dci);
 
     type = (ep->type == USB_EP_INTERRUPT) ? (ep->direction == USB_DIR_IN ? 7u : 3u)
                                           : (ep->direction == USB_DIR_IN ? 6u : 2u);
@@ -1659,8 +1730,7 @@ int xhci_endpoint_open(int device, const struct usb_endpoint *ep)
     s->cycle[dci] = TRB_CYCLE;
     s->open[dci] = 1;
     xhci_barrier();
-    return xhci_command_issue(TRB_TYPE_CONFIG_EP, (uint64_t)(uintptr_t)input_ctx,
-                              (uint32_t)device);
+    return xhci_command_issue(TRB_TYPE_CONFIG_EP, (uint64_t)(uintptr_t)input_ctx, (uint32_t)device);
 }
 
 void xhci_endpoint_close(int device, int endpoint)
@@ -1682,8 +1752,7 @@ int xhci_endpoint_reset(int device, int endpoint)
      * then pointed at where this driver will write next. Both are commands;
      * this issues the first and the caller issues the second when it
      * finishes. */
-    return xhci_command_issue(TRB_TYPE_RESET_EP, 0,
-                              (uint32_t)device | ((uint32_t)endpoint << 16));
+    return xhci_command_issue(TRB_TYPE_RESET_EP, 0, (uint32_t)device | ((uint32_t)endpoint << 16));
 }
 
 int xhci_endpoint_dequeue(int device, int endpoint)
@@ -1784,10 +1853,10 @@ int xhci_submit(int device, int endpoint, const struct usb_transfer *transfer)
         /* The status stage goes the other way from the data, and carries the
          * event, so one transfer is one completion however many blocks it
          * took. */
-        ring_put(device, dci, 0, 0, 0,
-                 (TRB_TYPE_STATUS << TRB_TYPE_SHIFT) |
-                     ((transfer->length != 0 && transfer->direction == USB_DIR_IN) ? 0u
-                                                                                  : TRB_DIR_IN));
+        ring_put(
+            device, dci, 0, 0, 0,
+            (TRB_TYPE_STATUS << TRB_TYPE_SHIFT) |
+                ((transfer->length != 0 && transfer->direction == USB_DIR_IN) ? 0u : TRB_DIR_IN));
     } else {
         ring_put(device, dci, (uint32_t)(uintptr_t)transfer->buffer, 0, transfer->length,
                  (TRB_TYPE_NORMAL << TRB_TYPE_SHIFT) | TRB_IOC);
