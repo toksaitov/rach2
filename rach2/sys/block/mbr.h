@@ -37,6 +37,28 @@ struct mbr_part {
  */
 int mbr_parse(const uint8_t *sector, struct mbr_part parts[MBR_PART_COUNT]);
 
+/** One partition taken for publishing: the half-open sector range it covers. */
+struct mbr_range {
+    uint64_t start_lba;
+    uint64_t sector_count;
+};
+
+/**
+ * Take the entries of a parsed table that can be published on a medium of
+ * `disk_sectors` sectors.
+ *
+ * `mbr_parse` reads the four entries as they are stored and judges none of
+ * them, because what makes an entry publishable is the medium it is on. An
+ * entry that is empty is skipped; one that starts at the table's own
+ * sector, runs past the medium, or overlaps one already taken is passed
+ * over with the rest still read, and how many were passed over is put in
+ * `refused` when it is not null. Returns how many were taken, in table
+ * order. The kernel publishes a stick's partitions from these, and the
+ * host's image check applies the same rule.
+ */
+int mbr_take(const struct mbr_part parts[MBR_PART_COUNT], uint64_t disk_sectors,
+             struct mbr_range taken[MBR_PART_COUNT], int *refused);
+
 /**
  * Judge whether entry 0 is an acceptable boot partition beside the mounted
  * KRFFS partition at `krffs_index`.
@@ -48,8 +70,8 @@ int mbr_parse(const uint8_t *sector, struct mbr_part parts[MBR_PART_COUNT]);
  *
  * @return 0 (the accepted entry's index) or -1.
  */
-int mbr_bootpart_pick(const struct mbr_part parts[MBR_PART_COUNT],
-                      int krffs_index, uint64_t disk_sectors);
+int mbr_bootpart_pick(const struct mbr_part parts[MBR_PART_COUNT], int krffs_index,
+                      uint64_t disk_sectors);
 
 /**
  * Judge entry 0 as a boot partition with no mounted root to compare against.

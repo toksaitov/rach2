@@ -199,5 +199,34 @@ int main(void)
         t[0].sector_count = 131072;
     }
 
+    /* The publishable entries on a medium: an entry at sector zero, one past
+       the medium and one overlapping an earlier one are passed over with the
+       rest still taken, and how many were passed over is reported. */
+    {
+        struct mbr_part four[MBR_PART_COUNT];
+        struct mbr_range taken[MBR_PART_COUNT];
+        int refused = -1;
+
+        four[0].type = 0x0c;
+        four[0].start_lba = 2048;
+        four[0].sector_count = 4096;
+        four[1].type = 0x07;
+        four[1].start_lba = 0; /* the table's own sector */
+        four[1].sector_count = 100;
+        four[2].type = 0x83;
+        four[2].start_lba = 3000; /* over the first */
+        four[2].sector_count = 100;
+        four[3].type = 0x83;
+        four[3].start_lba = 8000;
+        four[3].sector_count = 4096; /* past a 10000-sector medium */
+        CHECK(mbr_take(four, 10000, taken, &refused) == 1);
+        CHECK(taken[0].start_lba == 2048 && taken[0].sector_count == 4096);
+        CHECK(refused == 3);
+        four[0].type = 0;
+        four[3].sector_count = 2000;
+        CHECK(mbr_take(four, 10000, taken, &refused) == 2);
+        CHECK(taken[0].start_lba == 3000 && taken[1].start_lba == 8000 && refused == 1);
+    }
+
     return fails;
 }

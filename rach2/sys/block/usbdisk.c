@@ -188,58 +188,6 @@ static int volume_boot_sector(const uint8_t *sector)
            sector[7] == 'T';
 }
 
-/**
- * Take the MBR entries that can be published.
- *
- * `mbr_parse` reads the four entries as they are stored and judges none of
- * them, because what makes an entry publishable is the medium it is on. An
- * entry that is empty, that runs past the stick, or that overlaps one
- * already taken is passed over with the rest still read, and how many were
- * passed over is reported.
- */
-static int take_mbr(const struct mbr_part *entries, uint64_t sectors,
-                    struct gpt_part parts[GPT_PART_COUNT], int *refused)
-{
-    int i;
-    int taken = 0;
-    int passed_over = 0;
-
-    for (i = 0; i < GPT_PART_COUNT; i++) {
-        parts[i].start_lba = 0;
-        parts[i].sector_count = 0;
-    }
-    for (i = 0; i < MBR_PART_COUNT; i++) {
-        uint64_t first = entries[i].start_lba;
-        uint64_t count = entries[i].sector_count;
-        int j;
-        int overlaps = 0;
-
-        if (entries[i].type == 0 || count == 0) {
-            continue;
-        }
-        if (first == 0 || first + count > sectors) {
-            passed_over++;
-            continue;
-        }
-        for (j = 0; j < taken; j++) {
-            uint64_t other = parts[j].start_lba;
-
-            if (first < other + parts[j].sector_count && other < first + count) {
-                overlaps = 1;
-            }
-        }
-        if (overlaps) {
-            passed_over++;
-            continue;
-        }
-        parts[taken].start_lba = first;
-        parts[taken].sector_count = count;
-        taken++;
-    }
-    *refused = passed_over;
-    return taken;
-}
-
 /** Start reading `count` sectors at `lba` of the stick numbered `n`. */
 static int scan_begin(int n, uint64_t lba, uint32_t count)
 {
@@ -282,7 +230,14 @@ static void scan_sector0(int n)
         /* A volume with no table has the same signature an MBR has, with
          * four empty entries where the table would be; what tells the two
          * apart is the boot sector in front of them. */
-        d->taken = take_mbr(entries, d->sectors, d->found, &d->refused);
+        struct mbr_range ranges[MBR_PART_COUNT];
+        int k;
+
+        d->taken = mbr_take(entries, d->sectors, ranges, &d->refused);
+        for (k = 0; k < GPT_PART_COUNT; k++) {
+            d->found[k].start_lba = ranges[k].start_lba;
+            d->found[k].sector_count = ranges[k].sector_count;
+        }
         d->table = (d->taken == 0 && volume_boot_sector(scan_sector)) ? "one volume" : "mbr";
     } else if (volume_boot_sector(scan_sector)) {
         d->table = "one volume";

@@ -11,8 +11,7 @@
 /** Read a little-endian 32-bit field from an unaligned table entry. */
 static uint32_t le32(const uint8_t *p)
 {
-    return (uint32_t) p[0] | ((uint32_t) p[1] << 8) |
-           ((uint32_t) p[2] << 16) | ((uint32_t) p[3] << 24);
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
 int mbr_parse(const uint8_t *sector, struct mbr_part parts[MBR_PART_COUNT])
@@ -32,11 +31,56 @@ int mbr_parse(const uint8_t *sector, struct mbr_part parts[MBR_PART_COUNT])
     return 0;
 }
 
+int mbr_take(const struct mbr_part parts[MBR_PART_COUNT], uint64_t disk_sectors,
+             struct mbr_range taken[MBR_PART_COUNT], int *refused)
+{
+    int i;
+    int count = 0;
+    int passed_over = 0;
+
+    for (i = 0; i < MBR_PART_COUNT; i++) {
+        taken[i].start_lba = 0;
+        taken[i].sector_count = 0;
+    }
+    for (i = 0; i < MBR_PART_COUNT; i++) {
+        uint64_t first = parts[i].start_lba;
+        uint64_t length = parts[i].sector_count;
+        int j;
+        int overlaps = 0;
+
+        if (parts[i].type == 0 || length == 0) {
+            continue;
+        }
+        if (first == 0 || first + length > disk_sectors) {
+            passed_over++;
+            continue;
+        }
+        for (j = 0; j < count; j++) {
+            uint64_t other = taken[j].start_lba;
+
+            if (first < other + taken[j].sector_count && other < first + length) {
+                overlaps = 1;
+            }
+        }
+        if (overlaps) {
+            passed_over++;
+            continue;
+        }
+        taken[count].start_lba = first;
+        taken[count].sector_count = length;
+        count++;
+    }
+    if (refused != 0) {
+        *refused = passed_over;
+    }
+    return count;
+}
+
 /** Whether the half-open sector ranges of `a` and `b` share any sector. */
 static int ranges_overlap(const struct mbr_part *a, const struct mbr_part *b)
 {
-    uint64_t a_end = (uint64_t) a->start_lba + a->sector_count;
-    uint64_t b_end = (uint64_t) b->start_lba + b->sector_count;
+    uint64_t a_end = (uint64_t)a->start_lba + a->sector_count;
+    uint64_t b_end = (uint64_t)b->start_lba + b->sector_count;
 
     return a->start_lba < b_end && b->start_lba < a_end;
 }
@@ -75,8 +119,8 @@ int mbr_bootpart_ok(const struct mbr_part parts[MBR_PART_COUNT], uint64_t disk_s
     if (p->start_lba < MBR_GAP_END_LBA) {
         return -1;
     }
-    if ((uint64_t) p->start_lba >= disk_sectors ||
-        (uint64_t) p->sector_count > disk_sectors - p->start_lba) {
+    if ((uint64_t)p->start_lba >= disk_sectors ||
+        (uint64_t)p->sector_count > disk_sectors - p->start_lba) {
         return -1;
     }
     for (i = 1; i < MBR_PART_COUNT; i++) {
@@ -90,8 +134,8 @@ int mbr_bootpart_ok(const struct mbr_part parts[MBR_PART_COUNT], uint64_t disk_s
     return 0;
 }
 
-int mbr_bootpart_pick(const struct mbr_part parts[MBR_PART_COUNT],
-                      int krffs_index, uint64_t disk_sectors)
+int mbr_bootpart_pick(const struct mbr_part parts[MBR_PART_COUNT], int krffs_index,
+                      uint64_t disk_sectors)
 {
     if (krffs_index < 0 || krffs_index >= MBR_PART_COUNT || krffs_index == 0) {
         return -1;
