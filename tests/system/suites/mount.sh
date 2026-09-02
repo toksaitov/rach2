@@ -45,7 +45,7 @@ run() {
 # ---- 1: the partition nodes appear with the sizes the MBR gives, and a read
 #         through one, on the lag, sleeps the reader while its sibling runs ----
 if run --append "rach2.blocklag=10 rach2.rescue" \
-    --timeout 90 --ok "LAGPROBE OK" --never "LAGPROBE FAIL" \
+    --timeout 90 --ok "LAGPROBE OK" --never "LAGPROBE FAIL" --log "$DISK.sleep.log" \
     "expect=Type 'help'" "send=exec /lagprobe sleep" \
     "expect=LAGPROBE OK" > /dev/null 2>&1; then
     echo "mount-test: the lag reader sleeps while its sibling counts: OK"
