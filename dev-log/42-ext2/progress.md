@@ -17,7 +17,7 @@ Phase 3: the reader in the kernel and the links
 
 Phase 4: the writer
 - [ ] allocation and the order of writes; rename; the held inode; the valid bit
-- [ ] the write rows and the interruption matrix with its three judges
+- [x] the write rows and the interruption matrix with its three judges
 
 Phase 5: the check, the root and recovery
 - [ ] the mount-time check and the error bit

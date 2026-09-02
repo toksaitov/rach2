@@ -346,6 +346,92 @@ ordinary `open` of `/proc/self/fd/N` answers `ENOENT` rather than
 reopening the descriptor, which is procfs's contract from milestone 31
 and not the walker's; it is written in `synthfs.Readme.md` as it is.
 
+## Phase 4 record
+
+The writer is the second half of `ext2.c`: `write_bytes` through or
+back, `inode_store` rewriting the fields the driver keeps into the 128
+bytes read back and zeroing `i_dtime`, `inode_store_freed`, the bitmaps
+through `bit_get` and `bit_put`, the descriptors through `gd_store` and
+the superblock's counts and state through `sb_store`; `block_alloc`
+first-fit from the block after the last given out, wrapping once, with
+the reserve refused below root, and `inode_alloc` from the parent's group
+on; `map_alloc` through the three pointer levels with a pointer block
+zeroed and written before its pointer, and `punch` from the end with each
+pointer cleared before its block is freed; the directory writes `dir_add`,
+`dir_remove_at`, `dir_set_dotdot`, `dir_is_empty` and `is_below`; and
+the operations, `setattr`, `write`, `truncate`, `fsync`, `create`,
+`unlink`, `mkdir`, `rmdir`, `link`, `symlink`, `rename`, `sync` and
+`prepare_unmount`, with `put` freeing an unlinked inode at its last hold.
+The mount clears the valid bit before it is published.
+
+What the rows found while the writer was written, each fixed with the
+row that showed it: the entry split wrote the shortened old header before
+the new entry, and `e2fsck -n` refuses to judge a directory with bytes no
+entry covers, so the new entry goes into the slack first; a partial write
+into a block just given out left the rest of the block as the junk it
+held, seen only once the matrix's free blocks were filled with junk, so
+a fresh block is zeroed before the bytes land; a truncation left the tail
+of the last block kept as it was, so a later growth read old bytes, and
+the tail is zeroed; the byte-writing macros evaluated their value twice,
+so a count read from the bytes being written lost its high byte at every
+wrap of the low one, which showed as a group with no free blocks beside
+a superblock with 256, and each macro takes its value once; a reused
+inode kept the deletion time of the one freed there, which `e2fsck`
+reports as in use with dtime set, and a live inode is stored with none;
+and `mkdir` wrote the directory's inode before its block, so a stop
+between left a zero-length directory, and the inode follows the block.
+The test's lock stubs record the holder, since the writer asserts the
+lock as the FAT driver does, and its entry buffer had room for 255 name
+bytes and none for their padding.
+
+The matrix walks 439 stops of twelve sequences, the many-files sequence
+left out for its thousands of writes, on a volume whose free blocks hold
+14 MB of random bytes freed by `debugfs`, built once and copied for each
+stop, and judges each three ways. The host suite ends a test at sixty
+seconds; the first form of the matrix took 127 s, formatting the junk
+volume at every stop, and 63 s with the copy, so the sequences write
+less, 100000 bytes for the extension and 40000 for the truncation, which
+keeps every pointer level and every kind of stop, and the test takes
+24 s. The writer's first link into the kernel failed on `__udivdi3`
+again, seven divisions of a 64-bit offset or size by the block size;
+each is a shift or a mask now.
+
+The crash state was first taken by syncing the cache into the image
+after the stop, which put the unsynced data on the disk and let the
+mutation that writes the size before the sync escape; the stop now drops
+the cache as `bcache_device_gone` drops a gone device's buffers, and the
+true crash state then showed one more fault: a truncation's zeroed tail
+was written back, so a growth over it published bytes the disk still
+held, and a growth syncs the device before it writes the size. The
+kinds of finding `e2fsck -fn` reported over every stop of the finished
+driver were collected and are the allowed list: free counts, bitmap
+differences, `i_size` and `i_blocks` behind their pointers, a reference
+count, a deleted inode without a deletion time, an unattached inode or
+directory, and `..` or an entry naming the wrong directory during a
+directory's move; nothing else appeared, and nothing else is allowed. A
+renamed or linked file must be reachable by a name at every stop past the
+operation's start, which each sequence marks by the write count at which
+it calls the operation, and must keep a name after the repair; a repair
+whose base file was changed underneath fails the comparison.
+
+The plan's eight mutations: an inode named before it is written, which
+judge two catches at the stop where the name points at an inode never
+stored (`Entry ... has deleted/unused inode`, not an allowed kind); the
+size before the data sync, which the junk oracle catches once the crash
+state is a true one; a held inode freed at unlink, which fails the open
+unlinked file's row and `e2fsck`; the old entry removed before the new
+one in a rename, which fails the row requiring a name at every stop past
+the operation; the superblock counts written on every allocation, which
+the counts row catches; and the valid bit never cleared, which the mount
+row catches. Two are recorded as not separable by any judge, as the hub
+milestone recorded one: an inode allocated before it is zeroed at free,
+because every allocation here writes the inode whole before it is named,
+so a stale pointer cannot survive into a live inode and the two orders
+leave the same states; and the size grown before the pointers, because a
+size over a block the pointers do not yet name reads as a hole, which is
+zeros, and the oracle allows zeros for bytes not yet synced. The order in
+the code is the plan's in both cases.
+
 ## Open items
 
 * Phase 5: the partition nodes report their size, so that `e2fsck -p`
