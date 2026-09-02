@@ -44,6 +44,21 @@ own clock. The Lenovo's column is milestone 43's.
 On the timer alone each page-sized request costs three ticks, one for each
 of the wrapper, the data and the status.
 
+## The stick image
+
+`build/images/rach2-stick.img`, 45056 sectors: the metal hybrid ISO, 11732
+sectors, with the volume at the next 1 MiB boundary.
+
+| Entry | Type | Start | Sectors |
+|-------|------|-------|---------|
+| 0 | 0x17 | 1 | 11731 |
+| 1 | 0x07 | 12288 | 32768 |
+
+The volume's `PartitionOffset` is 12288 and its `VolumeLength` 32768. Under
+QEMU the firmware boots it from `usb-storage` on the xHCI with `bootindex`,
+GRUB loads the metal kernel and its RAM root, and the kernel names the stick
+`usb0` with two partitions. The Lenovo's boot from it is milestone 43's.
+
 ## The hybrid ISO
 
 | Field | What `mkiso.sh` produces |

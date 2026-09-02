@@ -1,8 +1,9 @@
-Phase 5 is closed: the full set passed and the gate review's findings are fixed and proved.
-Evidence gathered: tests/run all passed 65 suites before the review; after the
-fixes, host, style, usbdisk, metal, usb, mount, exfat and fatwrite pass, and
-eight mutations of the fixes each fail their row.
-Next action: phase 6, the stick image: mkexfatfixture gains --offset, a
-harness boot without -kernel, tools/image/mkstick.sh and rach2-stick-image,
-validated whole, and the boot from it that mounts /dev/usb0p2.
-File being read when written: dev-log/40-usbdisk/plan.md, phase 6.
+Phase 6 is closed; phase 7, the record and the sweep, is next.
+Evidence gathered: build/images/rach2-stick.img is built and judged whole by
+stickcheck and mkexfatfixture; tests/run usbdisk passes nine boots in 119 s,
+the last a firmware boot from the image that mounts /dev/usb0p2; the three
+image mutations each fail their check.
+Next action: phase 7: the documents read against the code, prosecheck, the
+review round (Codex tried again through its rescue agent), the sweep, the
+full set on the final tree, make test timed, the dev-log Readme and index.
+File being read when written: dev-log/40-usbdisk/plan.md, phase 7.

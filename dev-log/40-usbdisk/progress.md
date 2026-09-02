@@ -28,8 +28,8 @@ Phase 5: the suite
 - [x] tests/run all; the gate review of the disk half
 
 Phase 6: the stick image
-- [ ] rach2-stick-image, validated whole
-- [ ] the boot from it that mounts its own second partition
+- [x] rach2-stick-image, validated whole
+- [x] the boot from it that mounts its own second partition
 
 Phase 7: the record and the sweep
 - [ ] the documents read against the code; prosecheck; the review round

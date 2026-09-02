@@ -351,6 +351,43 @@ fails on a name count it could not read.
 Two of the reviewers' prose findings were recast, and the second reviewer's
 note that the model cannot see the submit race is recorded under phase 4.
 
+## Phase 6 record
+
+`mkexfatfixture --offset=N` writes `PartitionOffset` into a volume built for
+sector N of a larger medium. `tools/image/mkstick.sh` builds the stick image:
+the metal hybrid ISO kept whole with its boot code, padded to the next 1 MiB
+boundary, the 16 MiB volume placed there, and two MBR entries written into
+the 64 table bytes by `mkmbr`, the ISO's from sector 1 of type 0x17 and the
+volume's of type 0x07. The ISO's hybrid MBR has no entries of its own, so
+nothing was kept from it but the code, and an entry cannot start at sector 0
+under the kernel's rule, so the ISO's starts at 1.
+
+`tools/image/stickcheck.c` judges the finished image with the kernel's own
+rule: `mbr_take` moved from `usbdisk.c` into `mbr.c` as a pure function for
+it, with rows in `mbr_hosttest`. The check requires boot code and the
+signature in sector 0, exactly two partitions with none passed over, the
+volume as the second at its start and length on a 1 MiB boundary, the ISO's
+entry ending before it, the volume's boot sector exFAT's with
+`PartitionOffset` and `VolumeLength` equal to the entry's, and the image
+ending where the volume ends; then `mkexfatfixture --check` walks the
+volume. The kernel itself checks `VolumeLength` against the partition and
+not `PartitionOffset`, which the plan's phrase "the kernel's check of both
+fields" overstated; the checker holds both.
+
+The harness gained `--bios`: no kernel is given to the emulator, and its
+firmware boots the drives by `bootindex`. The suite's ninth boot is the
+stick image on `usb-storage` on the xHCI: GRUB loads the metal kernel and
+its RAM root off the stick, the kernel names the stick `usb0` with two
+partitions, the machine logs in and mounts `/dev/usb0p2` as exFAT, lists it
+and unmounts it. The suite takes 119 s alone.
+
+The three mutations: the volume appended without its entry, `does not give
+exactly two partitions`; `PartitionOffset` left zero, `PartitionOffset is
+not its start`; the entries overlapping, `the kernel would pass an entry
+over`. The third could not go through `mkstick.sh`, since `mkmbr` refuses
+overlapping entries itself, so it was written into the image's table bytes
+and the checker run on that; each fails exactly its check.
+
 ## Open items
 
 * The phase 3 proof also asks for a raw read of the stick's first sector
