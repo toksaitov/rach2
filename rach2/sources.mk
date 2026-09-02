@@ -38,6 +38,7 @@ C_SRC = kernel.c \
     sys/fs/fat32name.c \
     sys/fs/fatcommon.c \
     sys/fs/exfat.c \
+    sys/fs/ext2.c \
         sys/block/mbr.c \
         sys/block/gpt.c \
         sys/block/usbdisk.c \
