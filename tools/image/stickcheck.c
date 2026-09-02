@@ -98,6 +98,11 @@ int main(int argc, char **argv)
     if (count != 2) {
         return fail("the table does not give exactly two partitions");
     }
+    /* `mbr_take` packs what it takes, so the two must be the first two
+     * entries for the type read from an entry to be the range's own. */
+    if (parts[0].type == 0 || parts[1].type == 0 || parts[2].type != 0 || parts[3].type != 0) {
+        return fail("the two partitions are not the table's first two entries");
+    }
     if (parts[1].type != 0x07 || taken[1].start_lba != start || taken[1].sector_count != length) {
         return fail("the second entry is not the volume at the start and length given");
     }

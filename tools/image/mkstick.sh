@@ -29,6 +29,8 @@ iso_sectors=$(( (iso_bytes + 511) / 512 ))
 # The volume starts at the first 1 MiB boundary at or after the ISO's end.
 start=$(( ((iso_sectors + MIB_SECTORS - 1) / MIB_SECTORS) * MIB_SECTORS ))
 
+# A failure at any step leaves neither the half-built image nor the volume.
+trap 'rm -f "$OUT.new" "$OUT.vol"' EXIT
 rm -f "$OUT.new"
 cp "$ISO" "$OUT.new"
 # Pad to the volume's start, then place the volume.
@@ -42,4 +44,5 @@ rm -f "$OUT.vol"
 "$CHECK" "$OUT.new" "$start" "$VOLUME_SECTORS"
 "$MKFIX" --check "$OUT.new" "$start" > /dev/null
 mv "$OUT.new" "$OUT"
+trap - EXIT
 echo "mkstick: $OUT: iso $iso_sectors sectors, volume at $start for $VOLUME_SECTORS"
