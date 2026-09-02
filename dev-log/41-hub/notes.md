@@ -90,6 +90,37 @@ implementations read: they clamp a port above 15 to 15 in the route string,
 and the plan refuses such a device by name, which is kept, because a device
 addressed by a wrong port is a device the controller talks to at random.
 
+## Phase 2 record
+
+`struct usb_location` in `hcd.h` is the tree address: the root port, the
+depth, the route string, and the translating hub's handle, port and per-port
+flag for a low or full-speed device below a high-speed hub. `device_open`
+takes it, `device_hub` is new, and one function in `xhci.c`, `slot_words`,
+writes the three location words of the slot context for every command that
+carries it, which is what keeps the address, configure and evaluate commands
+from disagreeing. The controller refuses a depth past five tiers, a route
+with bits above its depth, and a think time above 3. `XHCI_SLOTS` and
+`USB_MAX_DEVICES` are twelve; the tables' sizes are in `hardware.md`.
+
+Twelve rows in `xhci_hosttest`: the route string and root port of a device
+one and two tiers down, the fifth tier accepted and a sixth refused, a route
+with bits above its depth refused, port 15, a full-speed hub's word and a
+high-speed multi-TT hub's, a low-speed device below it with the translator's
+slot and port and the multi-TT bit, a device below a full-speed hub below
+the high-speed one carrying the high-speed hub at its own port, and the
+thirteenth device refused at its addressing. `tests/run usb` and `tests/run
+usbdisk` pass unchanged.
+
+Four mutations, each caught: the route written a tier up, `with the route
+string 0x3`; the hub bit forgotten, `with the hub bit and the count`; the
+translator's port written as the device's own, `and carries the high-speed
+hub as its translator, at the hub's port`; a sixth tier accepted, `and one
+on a sixth tier is refused`. The third was first caught by the root-port
+row and not the one named, because for a device directly below a hub the
+route's low nibble and the translator's port are the same number; the row
+two tiers down, whose translator port is the hub's port the full-speed hub
+sits on, is the one that can tell, and it had that port wrong.
+
 ## Open items
 
 * None yet.

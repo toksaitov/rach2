@@ -1400,17 +1400,17 @@ int main(void)
            hub uses the high-speed hub as its translator: what the location
            names is what is written, two tiers down. */
         where.depth = 2;
-        where.route = 0x12;
+        where.route = 0x12; /* port 2 of a full-speed hub on port 1 of the high-speed one */
         where.tt_device = hs_hub;
-        where.tt_port = 2;
+        where.tt_port = 1; /* the high-speed hub's port, not the device's own */
         where.tt_multi = 1;
         CHECK("a device below a full-speed hub below the high-speed one is asked for",
               xhci_device_open(&where, USB_SPEED_FULL) == 0);
         xhci_events();
         xhci_command_done(&result);
-        CHECK("and carries the high-speed hub as its translator",
+        CHECK("and carries the high-speed hub as its translator, at the hub's port",
               xhci_device_address(result.device) == 0 && (slot[2] & 0xFFu) == (uint32_t)hs_hub &&
-                  (slot[0] & 0xFFFFFu) == 0x12u);
+                  ((slot[2] >> 8) & 0xFFu) == 1u && (slot[0] & 0xFFFFFu) == 0x12u);
         xhci_events();
         xhci_command_done(&result);
     }

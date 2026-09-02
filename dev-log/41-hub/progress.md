@@ -6,9 +6,9 @@ Phase 1: arrival and inventory
 - [x] hardware.md: what milestone 43 needs
 
 Phase 2: the location
-- [ ] usb_location, device_open on it, device_hub, the route string and its depth
-- [ ] the slot-context words in xhci.c; every caller passing a root location
-- [ ] the location rows in xhci_hosttest.c; usb and usbdisk unchanged
+- [x] usb_location, device_open on it, device_hub, the route string and its depth
+- [x] the slot-context words in xhci.c; every caller passing a root location
+- [x] the location rows in xhci_hosttest.c; usb and usbdisk unchanged
 
 Phase 3: the core on a tree
 - [ ] the port vtable, the hub-port operations, the depth-first close
