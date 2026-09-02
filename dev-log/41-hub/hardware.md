@@ -43,10 +43,21 @@ not change.
 | Machine | The hub itself | A keyboard behind it | A stick behind it |
 |---------|----------------|----------------------|-------------------|
 | QEMU | 0.31 s | 0.68 s | 0.83 s ready |
-| Lenovo G50-70 | | | |
+| Lenovo G50-70 | 0.95 s, most of it a soldered device on port 7 that never answered for its configuration | 0.17 s after the hub, the mouse 0.13 s | milestone 43, phase 4 |
 
 Each device behind a hub is a few dozen control transfers through the one
 command turn; the times are from the boot's records.
+
+## The owner's hub
+
+35d6:2510, four ports, one transaction translator, think time 1, power
+switching declared ganged, power good declared 0 ms. After one power
+request it reported port 1 powered and ports 2 to 4 not, which is the
+Powered-off state the specification leaves a port in until it has a
+request of its own; the driver now powers every port itself and waits at
+least 100 ms. Behind it on the Lenovo a low-speed keyboard and a
+low-speed mouse enumerate at every port, type and move at the console
+and in Doom, and come and go when moved between ports.
 
 ## The tree under QEMU
 

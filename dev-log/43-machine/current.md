@@ -1,7 +1,8 @@
-Milestone 43, phase 1: arrival and the first install.
-Evidence gathered: SSH answers at 192.168.0.106; the machine boots the
-candidate slot on the KRFFS root with an older kernel; the boot partition
-is being pulled to the host for its hashes and its menu.
-Next action: the APIC diagnostic through a trial boot, then the final
-kernel through bootctl with rach2.nomsi first.
+Milestone 43, phase 1 closing: the review's seven findings fixed, the
+suites rerunning on the closing tree.
+Evidence gathered: the machine runs the phase 1 kernel, committed, on
+the plain candidate line; the hub carries the keyboard and mouse; the
+interrupt counts under both pumps are in hardware.md.
+Next action: phase 2, the recovery stick written to the SanDisk on the
+host and booted at the BIOS menu; then the fourth partition's proposal.
 File being read when written: none.

@@ -82,3 +82,43 @@ in `hardware.md`; not fixed here.
   user frame for a moment at the first login under the lag. To be found
   in phase 7, from the allocator's side: which pool the message counts
   and what filled it.
+
+### The review round after phase 1
+
+One Codex unit over the four commits (f3d4abe, 40e7055, 8dccf4b,
+1b7aafd), seven findings, all fixed in the phase:
+
+1. The lag check accepted any count and ran `touch` after a failed
+   `dd`. It now requires the read to succeed, the count to be nonzero,
+   and the read to take at least 16N ticks by the machine's clock for
+   `rach2.blocklag=N`; a mutation forcing N=30 on a plain boot fails it
+   at 17 ticks.
+2. `bPwrOn2PwrGood` can say 510 ms; the clamp was 500. Now 510.
+3. A hub with no power switching had its wait lengthened by a tick,
+   since the tick that set the wait from `HUB_TELL` had not been counted
+   yet. The fresh-tick rule now applies only to a wait set by a
+   completion.
+4. The boot partition row never checked that the mount was read-only.
+   It reads `/proc/mounts` now.
+5. Missing partition nodes were a note on a machine with a slot report.
+   A machine whose `bootctl status` answers owes `disk0p1` to `disk0p3`.
+6. The usb suite's header said fifteen boots and eight without the 8042;
+   the Readmes said twenty and eleven; the script has twenty-one
+   invocations. All three now say twenty-one and eleven.
+7. The explanation of the ganged hub misstated 11.11.1: one request
+   energises the gang, and every other port stays in Powered-off until
+   it has a request of its own. The comment and the Readme say that.
+
+Checked and not a finding: the flag guard and boot 13 discriminate; the
+Lenovo rows fail against the old code; per-port and unswitched hubs keep
+their behaviour; the awk and shell are POSIX and BusyBox's; no prose
+violation.
+
+Open from this phase: the acceptance script's disk section fails the
+installed system (`policy read-write`, the root mounted), since it was
+written for the stick boot; phase 6 runs the script from the installed
+root and owns that line. The frame exhaustion under the lagged boot,
+above, gained facts: `bootctl status` holds about 9 MB while it runs,
+under `rach2.blocklag=30` it runs for minutes, and two of them at once
+exhaust the user frames; the first kill at 112.83 s had no second
+`bootctl` and is still unexplained.

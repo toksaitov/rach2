@@ -1,10 +1,11 @@
 # Milestone 43 progress
 
 Phase 1: arrival and the first install
-- [ ] the tracking files; the machine's state recorded; the partition hashes
-- [ ] the APIC diagnostic run and its column filled
-- [ ] the final kernel installed through bootctl, trialled with rach2.nomsi, then without, and committed
-- [ ] the interrupt counts under both pumps; the disk and network transfers; the milestone 36 lines
+- [x] the tracking files; the machine's state recorded; the partition hashes
+- [x] the APIC diagnostic run and its column filled
+- [x] the final kernel installed through bootctl, trialled with rach2.nomsi, then without, and committed
+- [x] the interrupt counts under both pumps; the disk and network transfers; the milestone 36 lines
+- [x] three differences fixed with their rows; the review round
 
 Phase 2: the fourth partition and FAT32
 - [ ] the recovery stick written and booted; reflash shown to read sector zero
