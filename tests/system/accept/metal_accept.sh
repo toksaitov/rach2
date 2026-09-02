@@ -250,10 +250,41 @@ fi
 # ---- and that nothing on this machine has been refused a command ----
 note "(the saved boot log above is the whole of what this machine printed)"
 
-# ---- the scratch partition, once milestone 43 has made it: mounted for
-#      writing, a file written and read back, the mount taken away. Before
-#      that the node is absent and this is a note, not a failure. ----
-if run 'ls /dev/disk0p4 2>/dev/null' | grep -q disk0p4; then
+# ---- the ext2 root, once milestone 43 has made it: the candidate's command
+#      line names it, the mount table has it writable on the fourth partition,
+#      the boot came from the candidate slot, the boot log shows no check, and
+#      the volume takes a write that survives a sync. Before that the command
+#      line says rach2.root=disk and this is a note, not a failure. ----
+if run 'cat /proc/cmdline' | grep -q 'rach2.root=ext2'; then
+    OUT="$(run 'cat /proc/mounts')"
+    case "$OUT" in
+        *"/dev/disk0p4 / ext2 rw,relatime"*) note "the ext2 root is mounted writable from /dev/disk0p4" ;;
+        *) bad "the ext2 root is not the mounted root: $OUT" ;;
+    esac
+    OUT="$(run 'bootctl status')"
+    case "$OUT" in
+        *"booted: candidate"*) note "the ext2 root boot came from the candidate slot" ;;
+        *) bad "the ext2 root boot did not come from the candidate slot: $OUT" ;;
+    esac
+    if [ -s "$BOOTLOG_OUT" ] && grep -q "ext2: check" "$BOOTLOG_OUT"; then
+        bad "the ext2 root was checked at this boot; it was not unmounted the time before"
+    fi
+    OUT="$(run 'echo accept > /root/accept.txt && sync && cat /root/accept.txt')"
+    if [ "$OUT" = "accept" ]; then
+        note "the ext2 root takes a file and gives it back"
+    else
+        bad "the ext2 root did not take a write: $OUT"
+    fi
+else
+    note "the root is not ext2 yet (rach2.root=ext2 absent from the command line)"
+fi
+
+# ---- the scratch partition, before milestone 43 makes the fourth partition
+#      the ext2 root: mounted for writing, a file written and read back, the
+#      mount taken away. Absent, or ext2 already, this is a note. ----
+if run 'cat /proc/cmdline' | grep -q 'rach2.root=ext2'; then
+    note "the fourth partition is the ext2 root now; no scratch partition"
+elif run 'ls /dev/disk0p4 2>/dev/null' | grep -q disk0p4; then
     OUT="$(run 'mkdir -p /mnt && mount -t vfat /dev/disk0p4 /mnt && echo accept > /mnt/accept.txt && cat /mnt/accept.txt && umount /mnt')"
     if [ "$OUT" = "accept" ]; then
         note "the scratch partition mounts for writing, takes a file and gives it back"
