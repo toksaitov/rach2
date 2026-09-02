@@ -1389,21 +1389,59 @@ static void install(int idx, const struct vfs_type *type, const char *path,
     m->state = VFS_ACTIVE;
 }
 
+static int root_installed;
+
+int vfs_root_mounted(void)
+{
+    return mounts[0].state == VFS_ACTIVE;
+}
+
 void vfs_init(void)
 {
-    static int installed;
-
-    if (installed) {
+    if (root_installed) {
         /* A re-mount of the root (the debug shell can remount from the
          * disk) replaces the image; the entry keeps its slot and takes the
-         * new root node. */
-        mounts[0].root = krffs_fs->node;
+         * new root node. An ext2 root is not replaced. */
+        if (mounts[0].type == &vfs_krffs_type) {
+            mounts[0].root = krffs_fs->node;
+        }
         return;
     }
-    installed = 1;
+    root_installed = 1;
     install(0, &vfs_krffs_type, "/", 0);
     install(1, &vfs_devfs_type, "/dev", &mounts[0]);
     install(2, &vfs_procfs_type, "/proc", &mounts[0]);
+}
+
+int vfs_init_root(const struct vfs_type *type, struct block_device *dev, const char *source,
+                  int claim)
+{
+    struct vfs_mount *m = &mounts[0];
+    int rc;
+
+    if (root_installed) {
+        return -EBUSY;
+    }
+    k_memset(m, 0, sizeof(*m));
+    m->type = type;
+    m->dev = dev;
+    m->state = VFS_MOUNTING;
+    m->ns_holder = -1;
+    wait_queue_init(&m->ns_wq);
+    m->claim = claim;
+    k_strncpy(m->covered_path, "/", sizeof(m->covered_path));
+    k_strncpy(m->source, source, sizeof(m->source));
+    m->source[sizeof(m->source) - 1] = '\0';
+    rc = type->mount(m, dev, 0, 0);
+    if (rc != 0) {
+        k_memset(m, 0, sizeof(*m));
+        return rc;
+    }
+    m->state = VFS_ACTIVE;
+    root_installed = 1;
+    install(1, &vfs_devfs_type, "/dev", &mounts[0]);
+    install(2, &vfs_procfs_type, "/proc", &mounts[0]);
+    return 0;
 }
 
 /* ==== mount(2) and umount2(2) ==== */
@@ -1501,7 +1539,8 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
         vfs_ref_release(&tref);
         return -ENOTDIR;
     }
-    if (tref.mnt == &mounts[0] && krffs_node_path(tref.node, canon, sizeof(canon)) != 0) {
+    if (tref.mnt == &mounts[0] && mounts[0].type == &vfs_krffs_type &&
+        krffs_node_path(tref.node, canon, sizeof(canon)) != 0) {
         vfs_ref_release(&tref);
         return -ENAMETOOLONG;
     }
@@ -1555,7 +1594,9 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
     m->ns_depth = 0;
     wait_queue_init(&m->ns_wq);
     m->claim = claim;
-    k_strncpy(m->covered_path, tref.mnt == &mounts[0] ? canon : target, sizeof(m->covered_path));
+    k_strncpy(m->covered_path,
+              tref.mnt == &mounts[0] && mounts[0].type == &vfs_krffs_type ? canon : target,
+              sizeof(m->covered_path));
     k_strncpy(m->source, source, sizeof(m->source));
     m->source[sizeof(m->source) - 1] = '\0';
     tref.mnt->refs++; /* a child mount is a reference on its parent */

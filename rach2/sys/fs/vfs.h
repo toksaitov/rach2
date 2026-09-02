@@ -292,6 +292,20 @@ struct vfs_mount *vfs_mount_at(int idx);
 /** The three permanent entries, for the syscall layer's direct needs. */
 struct vfs_mount *vfs_root_mount(void);
 
+/** Whether a root is installed at entry zero, of any type. */
+int vfs_root_mounted(void);
+
+/**
+ * Install a root of another type at entry zero before any process runs,
+ * with `/dev` and `/proc` over it as `vfs_init` places them: the ext2 root,
+ * from a partition window the kernel found itself. `claim` is the window's
+ * claim on its disk, kept with the entry so that `mount(2)` refuses the
+ * same partition. Returns the constructor's result; after a refusal nothing
+ * is installed. `EBUSY` once a root is installed.
+ */
+int vfs_init_root(const struct vfs_type *type, struct block_device *dev, const char *source,
+                  int claim);
+
 /** The type mount(2) accepts at index `idx` of four, or NULL; the order
  * /proc/filesystems lists them in. */
 const struct vfs_type *vfs_type_at(int idx);

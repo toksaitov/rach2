@@ -943,9 +943,18 @@ static int procfs_gen_mounts(struct procfs_text *t)
 {
     int i;
 
-    ap_str(t, krffs_mount_source());
-    ap_str(t, " / krffs ");
-    ap_str(t, krffs_mount_options());
+    if (vfs_root_mount()->type == &vfs_krffs_type) {
+        ap_str(t, krffs_mount_source());
+        ap_str(t, " / krffs ");
+        ap_str(t, krffs_mount_options());
+    } else {
+        const struct vfs_mount *root = vfs_root_mount();
+
+        ap_str(t, root->source);
+        ap_str(t, " / ");
+        ap_str(t, root->type->name);
+        ap_str(t, (root->flags & VFS_MS_RDONLY) ? " ro,relatime" : " rw,relatime");
+    }
     ap_str(t, " 0 0\n");
     ap_str(t, "devfs /dev devfs rw,relatime 0 0\n");
     ap_str(t, "proc /proc proc rw,relatime 0 0\n");

@@ -54,7 +54,7 @@ The order of work is: resolve and hold the target; check it; under the parent's 
 
 ## Claims
 
-A claim is a sector range on the backing disk, held from the mount's constructor to its unmount. The table of eight is in `devfs.c`, beside the raw windows' single-writer rule. Ranges are compared as ranges and never as device pointers, because `/dev/bootpart` and `/dev/disk0p1` can describe one range. While a range is claimed, a second mount overlapping it and a write-capable open of a raw window over it answer `EBUSY`; while such a descriptor is open, a mount on the range answers `EBUSY`. This is how a mounted boot partition and `bootctl` exclude each other.
+The root is entry zero: KRFFS through `vfs_init`, or a type with a device through `vfs_init_root`, which `rach2.root=ext2` uses for the partition the kernel found itself, with the window's claim kept in the entry; either way `/dev` and `/proc` are installed over it, and the syscall layer takes its KRFFS-specific paths only when entry zero is KRFFS. A claim is a sector range on the backing disk, held from the mount's constructor to its unmount. The table of eight is in `devfs.c`, beside the raw windows' single-writer rule. Ranges are compared as ranges and never as device pointers, because `/dev/bootpart` and `/dev/disk0p1` can describe one range. While a range is claimed, a second mount overlapping it and a write-capable open of a raw window over it answer `EBUSY`; while such a descriptor is open, a mount on the range answers `EBUSY`. This is how a mounted boot partition and `bootctl` exclude each other.
 
 ## The buffer cache
 

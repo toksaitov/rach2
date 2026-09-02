@@ -1280,9 +1280,12 @@ static int32_t cred_access_bits(uint32_t owner, uint32_t group, uint32_t mode,
 
 /* Whether `mnt` is the root: its nodes are KRFFS's, read directly; a node on
  * any other mount is read through the type's getattr. */
+/* Whether `mnt` is the KRFFS root, whose nodes take the KRFFS-specific
+ * paths below; an ext2 root is entry zero as well and goes the way of every
+ * other type. */
 static int mnt_is_root(const struct vfs_mount *mnt)
 {
-    return mnt == vfs_root_mount();
+    return mnt == vfs_root_mount() && mnt->type == &vfs_krffs_type;
 }
 
 /**
@@ -4977,6 +4980,7 @@ static int32_t sys__llseek(isr_params_t *params)
     int whence = (int)params->edi;
     fd_entry_t *entry;
     long long off, new_off;
+    uint64_t size;
 
     if (!current_proc) {
         return -ESRCH;
@@ -5056,11 +5060,25 @@ static int32_t sys__llseek(isr_params_t *params)
     if (entry && (entry->type == FD_TYPE_CONSOLE || entry->type == FD_TYPE_MOUSE)) {
         return -ESPIPE;
     }
-    if (!entry || entry->type != FD_TYPE_FILE || !entry->node) {
+    if (!entry || entry->type != FD_TYPE_FILE || !entry->ofd) {
         return -EBADF;
     }
-    if (fd_node_check(entry) != 0) {
-        return -EBADF;  /* the file was unlinked or relocated out from under us */
+    if (entry->node) {
+        if (fd_node_check(entry) != 0) {
+            return -EBADF; /* the file was unlinked or relocated out from under us */
+        }
+        size = entry->node->data_size;
+    } else if (entry->ofd->vmnt) {
+        /* A file of another type: its size from its own file system. */
+        struct vfs_stat vst;
+        int rc = vfs_getattr(entry->ofd->vmnt, entry->ofd->vnode, &vst);
+
+        if (rc != 0) {
+            return rc;
+        }
+        size = vst.size;
+    } else {
+        return -EBADF;
     }
 
     off = (long long)(((uint64_t)offset_high << 32) | (uint64_t)offset_low);
@@ -5072,7 +5090,7 @@ static int32_t sys__llseek(isr_params_t *params)
             new_off = (long long)entry->ofd->offset + off;
             break;
         case 2: /* SEEK_END */
-            new_off = (long long)entry->node->data_size + off;
+            new_off = (long long)size + off;
             break;
         default:
             return -EINVAL;
@@ -5706,12 +5724,15 @@ static void __attribute__((noreturn)) exec_fail_destroyed(void)
  * end of, and nothing here needs one.
  *
  * `_exec_path_buf` and `_exec_argv_bufs` are rewritten in place on success.
+ * The script is read through `read` over `ctx`: the root's reader by path,
+ * or the mount's over an open handle.
  *
  * @param argc the argument count, updated when the vector grows.
  * @return 1 when rewritten, 0 when the file is not a script, or a negative
  *         errno for one whose first line names nothing.
  */
-static int32_t exec_shebang(int *argc)
+static int32_t exec_shebang(int *argc, int (*read)(void *, void *, uint32_t, uint32_t),
+                            void *ctx)
 {
     char *interp;
     char *arg = NULL;
@@ -5722,8 +5743,7 @@ static int32_t exec_shebang(int *argc)
     int count;
     char *rebuilt[EXEC_MAX_ENTRIES + 1];
 
-    n = exec_krffs_read((void *)(_exec_path_buf + (_exec_path_buf[0] == '/' ? 1 : 0)),
-                        _exec_shebang_line, EXEC_SHEBANG_MAX, 0);
+    n = read(ctx, _exec_shebang_line, EXEC_SHEBANG_MAX, 0);
     if (n < 3 || _exec_shebang_line[0] != '#' || _exec_shebang_line[1] != '!') {
         return 0;
     }
@@ -6086,19 +6106,30 @@ checked:
     {
         Elf32_Ehdr ehdr;
 
+        int script = 0;
+
         if (exec_ctx.ref.mnt) {
-            /* On another type only an ELF image runs: a script names an
-             * interpreter by path, and the shebang reader is the root's. */
+            /* On another type the image is read through its mount; a
+             * script there is read the same way, and its interpreter is
+             * resolved below as any program is. */
             if (exec_vfs_read(&exec_ctx, &ehdr, sizeof(ehdr), 0) != (int)sizeof(ehdr) ||
                 !elf_valid_exec(&ehdr, sizeof(ehdr))) {
-                int32_t why = exec_ctx.err ? exec_ctx.err : -ENOEXEC;
+                int32_t sb = exec_ctx.err ? exec_ctx.err
+                                          : exec_shebang(&argc, exec_vfs_read, &exec_ctx);
 
                 exec_vfs_done();
-                return why;
+                if (sb < 0) {
+                    return sb;
+                }
+                if (sb == 0) {
+                    return -ENOEXEC;
+                }
+                script = 1;
             }
         } else if (exec_krffs_read((void *)name, &ehdr, sizeof(ehdr), 0) != (int)sizeof(ehdr) ||
             !elf_valid_exec(&ehdr, sizeof(ehdr))) {
-            int32_t sb = exec_shebang(&argc);
+            int32_t sb = exec_shebang(&argc, exec_krffs_read,
+                                      (void *)(_exec_path_buf + (_exec_path_buf[0] == '/' ? 1 : 0)));
 
             if (sb < 0) {
                 return sb;
@@ -6106,6 +6137,9 @@ checked:
             if (sb == 0) {
                 return -ENOEXEC;
             }
+            script = 1;
+        }
+        if (script) {
             /* A set-id script runs as its invoker. The interpreter is what
              * actually runs, it is not set-id, and honouring the script's bits
              * is a hole Unix closed long ago: the interpreter can be made to
@@ -6851,7 +6885,7 @@ static int32_t sys_mkdir(isr_params_t *params)
     if (!current_proc || !upath) {
         return -EFAULT;
     }
-    if (!krffs_fs) {
+    if (!vfs_root_mounted()) {
         return -ENOENT;
     }
     len = copy_path_cwd(pathbuf, sizeof(pathbuf), upath);
@@ -6936,7 +6970,7 @@ static int32_t sys_rmdir(isr_params_t *params)
     if (!current_proc || !upath) {
         return -EFAULT;
     }
-    if (!krffs_fs) {
+    if (!vfs_root_mounted()) {
         return -ENOENT;
     }
     len = copy_path_cwd(pathbuf, sizeof(pathbuf), upath);
@@ -7677,7 +7711,7 @@ static int32_t sys_getdents64(isr_params_t *params)
         return -ENOTDIR;
     }
 
-    if (!krffs_fs) {
+    if (!vfs_root_mounted()) {
         return -EIO;
     }
     if (fd_node_check(entry) != 0) {

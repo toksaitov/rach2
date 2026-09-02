@@ -25,6 +25,7 @@
 #include "../block/block.h"
 #include "../block/gpt.h"
 #include "../block/usbdisk.h"
+#include "../block/recovery.h"
 #include "../serial.h"
 
 /* Linux O_* bits devfs_open honours (the rest are irrelevant to a char
@@ -116,12 +117,36 @@ static short dev_poll(fd_entry_t *e, short events, struct wait_queue **wq)
     return (short)(events & (POLLIN | POLLOUT));
 }
 
+/*
+ * The size of a raw window, which is what a checker asks a block device
+ * before it reads it: `BLKGETSIZE64` is `_IOR(0x12, 114, size_t)`, which is
+ * 0x80041272 with musl's 32-bit `size_t` and 0x80081272 from a 64-bit
+ * header, and both take eight bytes; `BLKGETSIZE` is the sector count in
+ * an unsigned long. Everything else is not a terminal.
+ */
 static int32_t dev_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
 {
-    (void)e;
-    (void)request;
-    (void)arg;
-    return -ENOTTY; /* these are not terminals */
+    uint64_t size;
+
+    if (request == 0x80041272u || request == 0x80081272u) {
+        if (!devfs_fd_raw_size(e, &size)) {
+            return -ENOTTY;
+        }
+        return copy_to_user((void __user *)arg, &size, sizeof(size)) != 0 ? -EFAULT : 0;
+    }
+    if (request == 0x1260u) {
+        uint32_t sectors;
+
+        if (!devfs_fd_raw_size(e, &size)) {
+            return -ENOTTY;
+        }
+        if ((size >> 9) > 0xFFFFFFFFu) {
+            return -EFBIG;
+        }
+        sectors = (uint32_t)(size >> 9);
+        return copy_to_user((void __user *)arg, &sectors, sizeof(sectors)) != 0 ? -EFAULT : 0;
+    }
+    return -ENOTTY;
 }
 
 /*
@@ -390,18 +415,14 @@ static int32_t dev_bootpart_read(fd_entry_t *e, char __user *buf, uint32_t count
     return raw_window_read(&bootpart, e, buf, count);
 }
 
-/* The four MBR partitions as read-only raw windows, `/dev/disk0p1` to `p4`.
- * A write answers EPERM in every build: the writable windows exist under
- * their own names, and a whole-disk write belongs to recovery. */
+/* The four MBR partitions as raw windows, `/dev/disk0p1` to `p4`. A write
+ * answers EPERM in every build but recovery: the writable windows exist
+ * under their own names, and a whole-disk write belongs to recovery. The
+ * recovery build writes them, under the same authority as `/dev/disk0`,
+ * because `e2fsck` repairs a partition through its node. */
 static struct raw_window part_win[4];
 
-static int32_t dev_part_write(fd_entry_t *e, const char __user *buf, uint32_t count)
-{
-    (void)e;
-    (void)buf;
-    (void)count;
-    return -EPERM;
-}
+static int32_t dev_part_write(fd_entry_t *e, const char __user *buf, uint32_t count);
 
 static int32_t dev_part1_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
@@ -831,6 +852,23 @@ static const struct file_ops part3_ops = {dev_part3_read, dev_part_write, dev_po
 static const struct file_ops part4_ops = {dev_part4_read, dev_part_write, dev_poll, dev_ioctl,
                                           NULL};
 static const struct file_ops *const part_ops[4] = {&part1_ops, &part2_ops, &part3_ops, &part4_ops};
+
+static int32_t dev_part_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+{
+    const struct devfs_entry *dev;
+    int i;
+
+    if (!recovery_publishes_disk() || !e || !e->priv) {
+        return -EPERM;
+    }
+    dev = (const struct devfs_entry *)e->priv;
+    for (i = 0; i < 4; i++) {
+        if (dev->ops == part_ops[i]) {
+            return raw_window_write(&part_win[i], e, buf, count);
+        }
+    }
+    return -EPERM;
+}
 
 static const struct file_ops bootlog_ops = {dev_bootlog_read, dev_sink_write, dev_poll, dev_ioctl,
                                             NULL};

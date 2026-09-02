@@ -21,6 +21,7 @@
 #include "sys/block/mbr.h"
 #include "sys/fs/devfs.h"
 #include "sys/fs/vfs.h"
+#include "sys/fs/ext2.h"
 #include "sys/proc/process.h"
 #include "sys/tty/tty.h"
 #include "sys/tty/pty.h"
@@ -1181,6 +1182,32 @@ static int exec_krffs_read(void *ctx, void *dst, uint32_t count, uint32_t off)
  * Enters user mode and does not return; on any setup failure it prints a
  * diagnostic and returns to the caller.
  */
+/* The program the boot or the debug shell runs, read through the root's
+ * mount when that root is not KRFFS: the node held from the resolution and
+ * opened once for the load. One such exec runs at a time. */
+static struct boot_exec_ctx {
+    struct vfs_ref ref;
+    void *handle;
+} boot_ctx;
+
+static int boot_vfs_read(void *ctx, void *dst, uint32_t count, uint32_t off)
+{
+    struct boot_exec_ctx *c = ctx;
+    int32_t got = vfs_read(c->ref.mnt, c->handle, dst, count, off);
+
+    return got < 0 ? -1 : (int)got;
+}
+
+static void boot_exec_done(void)
+{
+    if (boot_ctx.ref.mnt) {
+        vfs_release(boot_ctx.ref.mnt, boot_ctx.handle);
+        vfs_ref_release(&boot_ctx.ref);
+        boot_ctx.ref.mnt = 0;
+        boot_ctx.handle = 0;
+    }
+}
+
 static void exec_program(int argc, char *argv[])
 {
     const char *path;
@@ -1202,28 +1229,50 @@ static void exec_program(int argc, char *argv[])
 
     path = argv[0];
 
-    if (!krffs_fs) {
+    if (!vfs_root_mounted()) {
         console_puts("exec: No file system mounted");
         return;
     }
 
-    if (krffs_open(path) != 0) {
-        console_printf("exec: File not found: %s\n", path);
-        return;
+    /* The program is read through the root's mount when the root is not
+     * KRFFS, held and open until the segments are in; on KRFFS it is
+     * streamed by path as before. */
+    boot_ctx.ref.mnt = 0;
+    if (vfs_root_mount()->type == &vfs_krffs_type) {
+        if (krffs_open(path) != 0) {
+            console_printf("exec: File not found: %s\n", path);
+            return;
+        }
+    } else {
+        if (vfs_resolve(0, path, 0, &boot_ctx.ref, 0, 0) != 0) {
+            console_printf("exec: File not found: %s\n", path);
+            return;
+        }
+        if (vfs_open_node(boot_ctx.ref.mnt, boot_ctx.ref.node, 0, &boot_ctx.handle) != 0) {
+            vfs_ref_release(&boot_ctx.ref);
+            boot_ctx.ref.mnt = 0;
+            console_printf("exec: File did not open: %s\n", path);
+            return;
+        }
     }
 
     user_dir = clone_page_directory();
     if (!user_dir) {
+        boot_exec_done();
         console_puts("exec: Failed to clone page directory");
         return;
     }
 
-    /* Stream the segments straight from KRFFS (no whole-file buffer, so the
-     * binary size is unbounded); img records entry and auxv metadata. */
-    if (elf_load_image(exec_krffs_read, (void *)path, user_dir, &img) != 0) {
+    /* Stream the segments straight from the file (no whole-file buffer, so
+     * the binary size is unbounded); img records entry and auxv metadata. */
+    if (elf_load_image(boot_ctx.ref.mnt ? boot_vfs_read : exec_krffs_read,
+                       boot_ctx.ref.mnt ? (void *)&boot_ctx : (void *)path, user_dir,
+                       &img) != 0) {
+        boot_exec_done();
         console_puts("exec: Failed to load ELF segments");
         return;
     }
+    boot_exec_done();
     entry_point = img.entry;
 
     user_stack_vaddr = USER_STACK_BASE;
@@ -1327,7 +1376,7 @@ static void exec_program(int argc, char *argv[])
  */
 static void refuse_unmounted_root(void)
 {
-    if (krffs_fs) {
+    if (vfs_root_mounted()) {
         return;
     }
 
@@ -1365,7 +1414,8 @@ static void refuse_unmounted_root(void)
 static void refuse_contradictory_boot_line(void)
 {
     int skipping_disk = kcmdline_has("rach2.nodisk");
-    int root_on_disk = kcmdline_has("rach2.fsdisk") || kcmdline_has("rach2.root=disk");
+    int root_on_disk = kcmdline_has("rach2.fsdisk") || kcmdline_has("rach2.root=disk") ||
+                       kcmdline_has("rach2.root=ext2");
     int wants_rescue = kcmdline_has("rach2.rescue") || kcmdline_has("init=rescue");
 
     if (!skipping_disk || !root_on_disk || wants_rescue) {
@@ -1426,15 +1476,20 @@ static void boot_init_process(void)
     static const char *const init_path = "/sbin/init";
     char *init_argv[2];
 
-    if (!krffs_fs) {
-        klog(KLOG_WARN, "boot", "no RAM disk; falling back to the debug shell");
+    if (!vfs_root_mounted()) {
+        klog(KLOG_WARN, "boot", "no root; falling back to the debug shell");
         return;
     }
 
-    if (krffs_open(init_path) != 0) {
-        klog(KLOG_WARN, "boot",
-             "no /sbin/init in the RAM disk; falling back to the debug shell");
-        return;
+    {
+        struct vfs_ref ref;
+
+        if (vfs_resolve(0, init_path, 0, &ref, 0, 0) != 0) {
+            klog(KLOG_WARN, "boot",
+                 "no /sbin/init in the root; falling back to the debug shell");
+            return;
+        }
+        vfs_ref_release(&ref);
     }
 
     k_cls();
@@ -1715,6 +1770,17 @@ void kernel_shutdown(int how)
         if (krffs_disk_mark_clean() == 0) {
             klog(KLOG_INFO, "shutdown", "clean unmount: dirty-mount flag cleared");
         }
+    } else if (vfs_root_mounted() && vfs_root_mount()->type != &vfs_krffs_type) {
+        /* A root of another type is unmounted as mount(2)'s are: its
+         * buffers written and its valid bit set, so the next mount does not
+         * check it. */
+        struct vfs_mount *root = vfs_root_mount();
+
+        if (root->type->ops->prepare_unmount && root->type->ops->prepare_unmount(root) != 0) {
+            klog(KLOG_WARN, "shutdown", "root: the unmount failed; the next mount checks it");
+        } else {
+            klog(KLOG_INFO, "shutdown", "root: unmounted");
+        }
     } else if (pc_sync() != 0) {
         klog(KLOG_WARN, "shutdown", "page cache flush failed");
     } else {
@@ -1822,6 +1888,78 @@ static void publish_partition_nodes(void)
         return;
     }
     devfs_parts_publish(block_lag_wrap(block0), disc_parts);
+}
+
+static uint32_t sb_le32(const uint8_t *p)
+{
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) |
+           ((uint32_t)p[3] << 24);
+}
+
+/**
+ * Mounts an ext2 root from the disk as entry zero of the mount table: the
+ * first partition in MBR order whose superblock has the magic and a
+ * feature set the driver can mount at all. The check at mount decides
+ * whether that root is writable; a later partition is never tried in its
+ * place. The window is claimed as `mount(2)` claims one, so the same
+ * partition cannot be mounted twice. Returns 0 mounted, -1 otherwise, the
+ * reason logged under `ext2: root`.
+ */
+static int init_ext2_root(void)
+{
+    static uint8_t sb[BLOCK_SECTOR_SIZE * 2];
+    int i;
+
+    if (block_ready() != 0 || !block0 || !disc_table_ok) {
+        klog(KLOG_ERR, "ext2", "root: no boot disk with a partition table");
+        return -1;
+    }
+    for (i = 0; i < MBR_PART_COUNT; i++) {
+        char path[] = "/dev/disk0p1";
+        struct block_device *view, *backing;
+        uint64_t first, count;
+        uint32_t rev, incompat;
+        int claim, rc;
+
+        path[11] = (char)('1' + i);
+        if (disc_parts[i].sector_count < 4 ||
+            block0->read(block0, disc_parts[i].start_lba + 2, 2, sb) != 0) {
+            continue;
+        }
+        if (sb[56] != 0x53 || sb[57] != 0xEF) {
+            continue;
+        }
+        rev = sb_le32(sb + 76);
+        incompat = rev >= 1 ? sb_le32(sb + 96) : 0;
+        if (rev > 1 || (incompat & ~0x2u) != 0 || sb_le32(sb + 24) > 2) {
+            klog(KLOG_WARN, "ext2", "root: %s has the magic and features this driver "
+                                    "does not mount", path);
+            continue;
+        }
+        rc = devfs_window_of(path, &view, &backing, &first, &count);
+        if (rc != 0) {
+            klog(KLOG_ERR, "ext2", "root: %s is not published", path);
+            return -1;
+        }
+        claim = devfs_claim(backing, first, first + count - 1);
+        if (claim < 0) {
+            klog(KLOG_ERR, "ext2", "root: %s is claimed", path);
+            return -1;
+        }
+        rc = vfs_init_root(&vfs_ext2_type, view, path, claim);
+        if (rc != 0) {
+            devfs_release_claim(claim);
+            klog(KLOG_ERR, "ext2", "root: %s refused", path);
+            return -1;
+        }
+        set_fore_color(light_green);
+        klog(KLOG_INFO, "ext2", "root: %s%s", path,
+             (vfs_root_mount()->flags & VFS_MS_RDONLY) ? ", read-only" : "");
+        set_fore_color(light_grey);
+        return 0;
+    }
+    klog(KLOG_ERR, "ext2", "root: no ext2 partition on the disk");
+    return -1;
 }
 
 /**
@@ -2931,13 +3069,6 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
         }
     }
 
-    if (kcmdline_has("rach2.nousb")) {
-        klog(KLOG_INFO, "usb", "skipped: rach2.nousb");
-    } else {
-        klog(KLOG_INFO, "usb", "started");
-        usb_report_controllers();
-        usb_init();
-    }
 
     init_syscall();
     klog(KLOG_INFO, "boot", "syscall: ready");
@@ -3003,6 +3134,7 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
 
     {
         int mounted = -1;
+        int root_ext2 = 0;
         const char *via = "";
 
         /* rach2.fsdisk (or rach2.root=disk) mounts KRFFS from the real disk
@@ -3015,7 +3147,14 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
         const char *source = "none";
         const char *options = "ro";
 
-        if (kcmdline_has("rach2.fsdisk") || kcmdline_has("rach2.root=disk")) {
+        if (kcmdline_has("rach2.root=ext2")) {
+            /* Reported by name inside, mounted or refused; the KRFFS
+             * module is not tried in its place, so a candidate root that
+             * does not come up leaves nothing mounted and the trial falls
+             * back to the entry that does. */
+            mounted = init_ext2_root();
+            root_ext2 = 1;
+        } else if (kcmdline_has("rach2.fsdisk") || kcmdline_has("rach2.root=disk")) {
             mounted = init_krffs_disk();
             via = " (disk)";
             source = "/dev/disk0";
@@ -3035,7 +3174,9 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
             }
         }
 
-        if (mounted == 0) {
+        if (root_ext2) {
+            /* reported above */
+        } else if (mounted == 0) {
             krffs_set_mount(source, options);
             vfs_init();
             set_fore_color(light_green);
@@ -3052,6 +3193,17 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
         }
     }
     set_fore_color(light_grey);
+
+    /* The USB stack comes up after the root: a root is on the disk the
+     * block layer found, never on a stick, and `rach2.root=ext2` scans the
+     * partitions before any USB device exists to be scanned. */
+    if (kcmdline_has("rach2.nousb")) {
+        klog(KLOG_INFO, "usb", "skipped: rach2.nousb");
+    } else {
+        klog(KLOG_INFO, "usb", "started");
+        usb_report_controllers();
+        usb_init();
+    }
 
     /* The disk diagnostic, asked for by name. It probes a disk only if the
      * mount above did not, publishes /proc/disk and /dev/disk0, and issues

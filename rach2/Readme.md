@@ -38,11 +38,14 @@ Each boot initializes the architecture, memory, timer, RTC, entropy, input, proc
 
 ## Root selection
 
-The kernel accepts one KRFFS root:
+The kernel accepts one root:
 
 * With no root option, it mounts the first Multiboot module in place. Changes affect the boot-time copy and disappear when the machine stops.
 * `rach2.fsdisk` and `rach2.root=disk` scan the attached disk's MBR and mount its KRFFS partition through the write-back page cache.
 * `rach2.fswindow` mounts the Multiboot module through the page-cache window. This is a development path for the cache rather than a persistent disk.
+* `rach2.root=ext2` scans the attached disk's MBR for the first ext2 partition the driver can mount and mounts it as the root through the buffer cache, checked first when it was not unmounted, as [ext2.Readme.md](sys/fs/ext2.Readme.md) describes. The KRFFS module is not tried in its place.
+
+The root is mounted before the USB stack starts, so a root is on the disk the block layer found and never on a stick. An orderly stop unmounts an ext2 root with its valid bit set.
 
 A boot with no mounted root halts unless `rach2.rescue` was requested. The kernel also halts before mounting when `rach2.nodisk` is combined with a disk root, unless rescue mode was requested, because skipping the disk would otherwise expose an unauthenticated shell after the root failed to mount.
 
@@ -104,6 +107,7 @@ Options are whitespace-delimited. Flags match whole tokens, and the first `key=v
 |--------|--------|
 | `rach2.rescue` or `init=rescue` | Skip `/sbin/init` and enter the kernel debug shell. |
 | `rach2.fsdisk` or `rach2.root=disk` | Mount KRFFS from the disk selected by the block layer. |
+| `rach2.root=ext2` | Mount the first ext2 partition of that disk as the root. |
 | `rach2.fswindow` | Mount the Multiboot KRFFS module through the page-cache window. |
 | `rach2.disk=ahci` | Try AHCI before ATA; fall back to ATA if no AHCI disk answers. |
 | `rach2.diskdiag` | Probe the disk and publish the `/dev/disk0` whole-disk window. `/proc/disk` always exists and records the result. |
