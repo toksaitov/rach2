@@ -388,10 +388,49 @@ over`. The third could not go through `mkstick.sh`, since `mkmbr` refuses
 overlapping entries itself, so it was written into the image's table bytes
 and the checker run on that; each fails exactly its check.
 
+## Phase 7 record
+
+The documents were read against the code: the USB Readme's storage section
+gained the sense handling, the late failure after recovery, the tags and
+the masked submit; the tests Readme names the stick suite and its probe;
+the core's closing comment said a lost slot was "one of four" from before
+the table grew, and a one-caller helper in `stickcheck` was inlined. The
+device table's refusal-by-port bits stay: the notebook's four soldered
+undrivable devices, a keyboard, a mouse and two sticks fill the eight
+entries exactly, so a refusal held as an entry would still cost a plug.
+
+The review round at the close was two Codex units through the Codex rescue
+agent, which does return a report where the earlier route did not; each ran
+about eight to thirteen minutes. The document unit read the four
+reader-facing Readmes against the code and found the block Readme still
+saying the table is read in a syscall, which phase 4 had changed; the USB
+Readme saying every command is three transfers, that every stall leads to
+the full recovery, and that a timed-out request waits for recovery when the
+pool's own ten-second deadline wakes the caller first with the page kept
+quarantined; a dozen contracts the documents left out, among them the
+bring-up's three limits, the queue depth, the `reading` state and the `ro`
+mark on the stick's line, `sync(2)`'s error policy and `EROFS` on a mount
+that went read-only; and nine phrases that gave hardware or data a will.
+All are rewritten. The suite unit found the acceptance script's header still
+saying it writes nothing, its label put unquoted into a remote command, and
+a `grep` that ended the script under `set -e` when no stick was plugged in;
+the image checker pairing an entry's type with another entry's range, since
+`mbr_take` packs what it takes; a hold row whose pull could land in the
+probe's sleep rather than in a read, which now reads the whole node with no
+cache in front of it and no sleep, and tests a write after the pull as well;
+a `findfs` check that a `blkid` line could satisfy; and a builder with no
+cleanup trap. All are fixed, and the suite, the metal rehearsal, the host
+tests and the style checks pass after them.
+
+Not caught, and cannot be: the staging buffer's exclusion needs two
+processes asleep in the kernel at once, which the guest can arrange and no
+row drives; and the emulator's completion inside the doorbell write is a
+race the class driver's model cannot make, since it completes nothing until
+it is stepped.
+
 ## Open items
 
-* The phase 3 proof also asks for a raw read of the stick's first sector
-  through `/dev/usb0`. That is `usbdiskprobe volumes`, which reads the table
-  back and passes.
+* None. The phase 3 proof's raw read of the stick's first sector is
+  `usbdiskprobe volumes`, which reads the table back and passes.
 
 
