@@ -38,11 +38,11 @@ Additional targets build persistent disks, GRUB images, metal images, and recove
 
 The [kernel](rach2/Readme.md) boots through Multiboot1 and runs static ELF32 programs in ring 3. It implements preemptive processes, paged address spaces, files, pipes, terminals, signals, and sockets through a Linux i386-style system call interface. The kernel Readme indexes the subsystem documents.
 
-[KRFFS](rach2/sys/fs/Readme.md) is the native hierarchical file system, the RAM images' and the fallback root's. The kernel can mount it directly from a RAM module or from an ATA or AHCI disk through a write-back page cache, or boot an [ext2](rach2/sys/fs/ext2.Readme.md) partition as its root, read and written through the buffer cache, checked at mount when it was not unmounted and repaired by `e2fsck` from the recovery system; a program with root's privilege can mount a FAT32 partition of the same disk with `mount(2)`, for reading and writing, an ext2 partition the same way, and an exFAT partition for reading ([the VFS](rach2/sys/fs/vfs.Readme.md)). The [KRFFS host tools](krffs/Readme.md) build, inspect, repair, and mount its images.
+[KRFFS](rach2/sys/fs/Readme.md) is the native hierarchical file system, the RAM images' and the fallback root's. The kernel can mount it directly from a RAM module or from an ATA or AHCI disk through a write-back page cache, or boot an [ext2](rach2/sys/fs/ext2.Readme.md) partition as its root, read and written through the buffer cache, checked before a writable mount when it was not unmounted and repaired by `e2fsck` from the recovery system; a program with root's privilege can mount a FAT32 partition of the same disk with `mount(2)`, for reading and writing, an ext2 partition the same way, and an exFAT partition for reading ([the VFS](rach2/sys/fs/vfs.Readme.md)). The [KRFFS host tools](krffs/Readme.md) build, inspect, repair, and mount its images.
 
 The [network stack](rach2/sys/network/Readme.md) implements Ethernet, ARP, IPv4, ICMP, UDP, and TCP for RTL8139, Intel 82540EM, and RTL8168GU devices. The two userlands include DHCP and DNS clients, ping, netcat, and a small HTTP server; `os-real` also runs Dropbear SSH.
 
-Kernel drivers support VGA text and mode 13h graphics, PS/2 keyboard and mouse input, USB keyboards, mice and flash drives through an xHCI controller, on root ports and behind USB 2.0 hubs, COM1, Sound Blaster 16, Intel HD Audio, and the PC speaker. A flash drive is `/dev/usbN` with its partitions from an MBR or a GUID table, mountable by label from the shell, and safe to pull out at any moment. The [Doom port](ports/doom/Readme.md) uses the graphics, input, and audio interfaces. Its IWAD game data is supplied separately and is not committed.
+Kernel drivers support VGA text and mode 13h graphics, PS/2 keyboard and mouse input, USB keyboards, mice and flash drives through an xHCI controller, on root ports and behind USB 2.0 hubs, COM1, Sound Blaster 16, Intel HD Audio, and the PC speaker. A flash drive is `/dev/usbN` with its partitions from an MBR or a GUID table, mountable by label from the shell; pulled out at any moment, its mount goes and its descriptors answer `EIO`, and what was synced and unmounted before is on it. The [Doom port](ports/doom/Readme.md) uses the graphics, input, and audio interfaces. Its IWAD game data is supplied separately and is not committed.
 
 ## Building on Rach2
 
@@ -81,7 +81,7 @@ ssh -i $KEY root@ADDRESS reboot
 ssh -i $KEY root@ADDRESS 'bootctl status && bootctl commit'
 ```
 
-`bootctl kernel` writes the candidate slot and arms one trial. The machine that comes back is either the new kernel, which `commit` then makes the default, or the fallback, which needs nothing done to it. A kernel that does not boot costs one reboot and leaves the disk as it was.
+`bootctl kernel` writes the candidate slot and arms one trial. The machine that comes back is either the new kernel, which `commit` then makes the default, or the fallback, which needs nothing done to it. A kernel that does not boot costs one reboot and leaves the machine on the fallback: the candidate slot holds the new kernel and the saved default is the fallback until a later install or commit changes them.
 
 A root, from recovery:
 
@@ -102,10 +102,12 @@ The ext2 root, from recovery, the same way with its own offsets, and checked the
 gzip -c build/images/rach2-metal-disk.ext2 | ssh -i $KEY root@ADDRESS 'gunzip | reflash /dev/disk0 660602880 1073741824'
 ssh -i $KEY root@ADDRESS 'e2fsck -fn /dev/disk0p4'
 ssh -i $KEY root@ADDRESS 'bootctl env saved_entry fallback && bootctl trial candidate' && ssh -i $KEY root@ADDRESS reboot
-ssh -i $KEY root@ADDRESS 'cat /proc/mounts && bootctl status && bootctl commit'
+ssh -i $KEY root@ADDRESS 'cat /proc/mounts && bootctl status'
+# only when the root line reads /dev/disk0p4 / ext2 rw,relatime and the boot is the candidate:
+ssh -i $KEY root@ADDRESS 'bootctl commit'
 ```
 
-The candidate entries boot the ext2 root and the fallback entries the KRFFS one, so the trial is what a root that does not come up falls back from: the boot after it is the fallback with nothing armed, and `commit` is a person's decision after the candidate has answered SSH. A root that mounts read-only because its check found a fault is repaired by recovery's `init`, which runs `e2fsck -p` on every ext2 partition before it starts anything, and by hand from there with `e2fsck -y /dev/disk0p4`.
+The candidate entries boot the ext2 root and the fallback entries the KRFFS one, so the trial is what a root that does not come up falls back from: the boot after it is the fallback with nothing armed. `commit` is a person's decision after reading the mount table and the slot report, because `bootctl` checks the slot and the command line and not the mount: a root the check mounted read-only answers SSH too, and committing it would make a read-only system the default. A root that mounts read-only because its check found a fault is repaired by recovery's `init`, which runs `e2fsck -p` on every ext2 partition before it starts anything, and by hand from there with `e2fsck -y /dev/disk0p4`.
 
 Check the credentials before flashing a root. The image trusts `krffs/authorized_keys`, which `krffs/gen_demo_key.sh` composes from the demo public key and an optional `krffs/authorized_keys.extra` belonging to whoever works on the machine. The private key used to log in must be the pair of one of those, and a copy carried between hosts can be older than the file it is meant to match:
 

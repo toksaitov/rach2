@@ -83,7 +83,7 @@ The remaining account and system programs are:
 
 ## Boot and recovery programs
 
-The sealed disk's candidate entries boot the ext2 root on the fourth partition and its fallback entries the KRFFS root; both live in the fixed half of `grub.cfg`, which `bootctl` never writes, so `bootctl config` cannot move a root, and `bootctl trial candidate` after `bootctl env saved_entry fallback` is how a new root is tried with the old one a reboot away.
+The sealed disk's candidate entries boot the ext2 root on the fourth partition and its fallback entries the KRFFS root; both live in the fixed half of `grub.cfg`, which `bootctl` never writes, so they survive a staged menu that is absent, torn or wrong. A staged menu is GRUB script and a valid one can direct a boot, root included, which is the authority `bootctl kernel` already has. `bootctl trial candidate` after `bootctl env saved_entry fallback` is how a new root is tried with the old one a reboot away.
 
 `bootctl` accepts these exact forms:
 

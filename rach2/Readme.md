@@ -43,9 +43,9 @@ The kernel accepts one root:
 * With no root option, it mounts the first Multiboot module in place. Changes affect the boot-time copy and disappear when the machine stops.
 * `rach2.fsdisk` and `rach2.root=disk` scan the attached disk's MBR and mount its KRFFS partition through the write-back page cache.
 * `rach2.fswindow` mounts the Multiboot module through the page-cache window. This is a development path for the cache rather than a persistent disk.
-* `rach2.root=ext2` scans the attached disk's MBR for the first ext2 partition the driver can mount and mounts it as the root through the buffer cache, checked first when it was not unmounted, as [ext2.Readme.md](sys/fs/ext2.Readme.md) describes. The KRFFS module is not tried in its place.
+* `rach2.root=ext2` scans the attached disk's MBR for the first ext2 partition the driver can mount and mounts it as the root through the buffer cache, checked before a writable mount when it was not unmounted, as [ext2.Readme.md](sys/fs/ext2.Readme.md) describes. The KRFFS module is not tried in its place.
 
-The root is mounted before the USB stack starts, so a root is on the disk the block layer found and never on a stick. An orderly stop unmounts an ext2 root with its valid bit set.
+The root is mounted before the USB stack starts, so a root is on the disk the block layer found and never on a stick. An orderly stop writes an ext2 root's buffers and sets its valid bit when the mount was writable, its error bit clear and those writes succeeded; otherwise the next mount checks it.
 
 A boot with no mounted root halts unless `rach2.rescue` was requested. The kernel also halts before mounting when `rach2.nodisk` is combined with a disk root, unless rescue mode was requested, because skipping the disk would otherwise expose an unauthenticated shell after the root failed to mount.
 
