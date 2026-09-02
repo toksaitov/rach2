@@ -1032,14 +1032,27 @@ MKMBR = build/tools/image/mkmbr
 $(MKMBR): tools/image/mkmbr.c
 	@mkdir -p $(dir $@)
 	cc -O2 -o $@ $<
+# The stick image's judge (tools/image/stickcheck.c), linked with the
+# kernel's own MBR reader so the rules it applies are the kernel's.
+STICKCHECK = build/tools/image/stickcheck
+$(STICKCHECK): tools/image/stickcheck.c rach2/sys/block/mbr.c rach2/sys/block/mbr.h
+	@mkdir -p $(dir $@)
+	cc -O2 -Wall -Wextra -I rach2/sys -I rach2/sys/lib -o $@ tools/image/stickcheck.c rach2/sys/block/mbr.c
+# The stick image (tools/image/mkstick.sh): the metal hybrid ISO followed by
+# an exFAT volume, judged whole by stickcheck and walked by mkexfatfixture.
+STICK_IMAGE = $(IMAGES_DIR)/rach2-stick.img
+rach2-stick-image: $(STICK_IMAGE)
+$(STICK_IMAGE): build/images/rach2-metal.iso tools/image/mkstick.sh $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK)
+	sh tools/image/mkstick.sh build/images/rach2-metal.iso $@ $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK)
+build/images/rach2-metal.iso: rach2-metal-iso
 # `tests/run usbdisk`: a flash drive as a disk. Three sticks built on the
 # host, an MBR one, a GUID one and one with no table; the nodes, the mounts,
 # a write, the pull from under a mount and the replug, ten plugs and pulls
 # of a stick nobody opened, BusyBox mounting by label, and a throughput line.
 USBDISK_DIR = $(IMAGES_DIR)/usbdisk
-run-usbdisk: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(MKEXFATFIXTURE) $(MKGPT) $(MKMBR) $(HARNESS)
+run-usbdisk: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(MKEXFATFIXTURE) $(MKGPT) $(MKMBR) $(HARNESS) $(STICK_IMAGE)
 	sh tests/system/suites/usbdisk.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(USBDISK_DIR) \
-	    $(OS_REAL_IMAGE) "`cat krffs/rach2_demo_password`" $(MKEXFATFIXTURE)
+	    $(OS_REAL_IMAGE) "`cat krffs/rach2_demo_password`" $(MKEXFATFIXTURE) $(STICK_IMAGE)
 
 # `tests/run scratch`: milestone 43's fourth partition rehearsed on the sealed
 # image in QEMU, the recovery ISO booted as a stick and the procedure in
