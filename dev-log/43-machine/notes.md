@@ -36,4 +36,31 @@ and recovery is no longer the saved default.
 
 ## Differences
 
-None found yet.
+### Phase 1
+
+1. Every USB keystroke printed milestone 39's latency record to the
+   console. The record was unconditional; it now prints only with
+   `rach2.usblatency` on the boot line. The usb suite's latency boot
+   asks for the flag, and its typing boot fails on a record without it.
+   Files: `rach2/sys/usb/usb.c`, `tests/system/suites/usb.sh`,
+   `rach2/sys/usb/Readme.md`, `rach2/Readme.md`.
+2. The owner's hub, 35d6:2510, carried nothing: a keyboard and a mouse
+   plugged into it were never seen. A diagnostic kernel, booted as a
+   trial and not committed, read the hub's descriptor: power switching
+   ganged, power good in 0 ms. After the one ganged power request the
+   scan ran at once and found port 1 powered and ports 2 to 4 not, so
+   nothing plugged into those ports could raise a change. The driver now
+   powers every port with its own request whatever the mode says, and
+   waits at least 100 ms for power, the floor Linux uses. The host model
+   has the hub's row: ganged, 0 ms, a port powered only by its own
+   request, a keyboard on port 3. Files: `rach2/sys/usb/hub.c`,
+   `tests/host/hub_hosttest.c`, `rach2/sys/usb/Readme.md`.
+
+### Not a difference
+
+Doom with the 28 MB Freedoom IWAD is slow and its sound breaks up on the
+machine; with the 4 MB shareware IWAD it plays as it did before. The
+kernel manages 32 MiB, so a large IWAD pages through the disk. The
+owner wants this looked at: a WAD larger than the RAM the kernel manages
+is a limit to state or a change to plan, after this milestone. Recorded
+in `hardware.md`; not fixed here.
