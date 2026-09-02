@@ -30,7 +30,7 @@ Image targets only build artifacts. The run scripts and test targets start QEMU.
 
 * `test` contains the guest probes and their fixtures.
 * `os-simple` uses the project's own init, login, ISH shell, and utilities.
-* `os-real` uses BusyBox and Dropbear and includes TinyCC, pdpmake, the musl development files, and the project sources under `/src`.
+* `os-real` uses BusyBox and Dropbear and includes TinyCC, pdpmake, the musl development files, and the project sources under `/src`. `make os-real-ext2` builds the same manifest as an ext2 volume, `build/images/os-real.ext2`, which the kernel boots from a disk partition with `rach2.root=ext2`.
 
 Additional targets build persistent disks, GRUB images, metal images, and recovery images. `make rach2-stick-image` builds `build/images/rach2-stick.img`, the metal ISO followed by an exFAT volume, which a machine boots from a USB socket and then mounts as `/dev/usb0p2`. The root Makefile names them. The [kernel Readme](rach2/Readme.md) describes the boot paths and disk authority.
 
@@ -38,7 +38,7 @@ Additional targets build persistent disks, GRUB images, metal images, and recove
 
 The [kernel](rach2/Readme.md) boots through Multiboot1 and runs static ELF32 programs in ring 3. It implements preemptive processes, paged address spaces, files, pipes, terminals, signals, and sockets through a Linux i386-style system call interface. The kernel Readme indexes the subsystem documents.
 
-[KRFFS](rach2/sys/fs/Readme.md) is the native hierarchical file system. The kernel can mount it directly from a RAM module or from an ATA or AHCI disk through a write-back page cache, and a program with root's privilege can mount a FAT32 partition of the same disk with `mount(2)`, for reading and writing, and an exFAT partition for reading ([the VFS](rach2/sys/fs/vfs.Readme.md)). The [KRFFS host tools](krffs/Readme.md) build, inspect, repair, and mount its images.
+[KRFFS](rach2/sys/fs/Readme.md) is the native hierarchical file system, the RAM images' and the fallback root's. The kernel can mount it directly from a RAM module or from an ATA or AHCI disk through a write-back page cache, or boot an [ext2](rach2/sys/fs/ext2.Readme.md) partition as its root, read and written through the buffer cache, checked at mount when it was not unmounted and repaired by `e2fsck` from the recovery system; a program with root's privilege can mount a FAT32 partition of the same disk with `mount(2)`, for reading and writing, an ext2 partition the same way, and an exFAT partition for reading ([the VFS](rach2/sys/fs/vfs.Readme.md)). The [KRFFS host tools](krffs/Readme.md) build, inspect, repair, and mount its images.
 
 The [network stack](rach2/sys/network/Readme.md) implements Ethernet, ARP, IPv4, ICMP, UDP, and TCP for RTL8139, Intel 82540EM, and RTL8168GU devices. The two userlands include DHCP and DNS clients, ping, netcat, and a small HTTP server; `os-real` also runs Dropbear SSH.
 
@@ -61,11 +61,11 @@ Rach2 has no dynamic linker, so guest executables are static. [TinyCC](vendor/tc
 
 ## Limits
 
-The kernel manages at most 32 MiB of physical RAM. Its fixed tables allow 16 processes and 16 descriptors per process. Programs are static, KRFFS is the only native file system, and the network stack implements IPv4 only. USB is keyboards, mice and flash drives through xHCI, on root ports and behind hubs, with twelve table entries shared by every device, hubs included, and two hubs at once. Rach2 does not implement UEFI, SMP, threads, swap, dynamic linking, IPv6, or VESA graphics. The [kernel limits](rach2/Readme.md#hardware-and-limits) are the current authority.
+The kernel manages at most 32 MiB of physical RAM. Its fixed tables allow 16 processes and 16 descriptors per process. Programs are static, a root is KRFFS or ext2, and the network stack implements IPv4 only. USB is keyboards, mice and flash drives through xHCI, on root ports and behind hubs, with twelve table entries shared by every device, hubs included, and two hubs at once. Rach2 does not implement UEFI, SMP, threads, swap, dynamic linking, IPv6, or VESA graphics. The [kernel limits](rach2/Readme.md#hardware-and-limits) are the current authority.
 
 ## Hardware status
 
-QEMU is the primary development and test environment. Rach2 also runs on a Lenovo G50-70 from a sealed SSD installed in the laptop's SATA bay. The laptop boots the complete `os-real` system from an AHCI-backed KRFFS root. RTL8168GU networking and keyed SSH work, file system changes persist across reboots, and both an in-system update and a recovery reflash have completed successfully. A USB keyboard and a USB mouse work in any of the laptop's three sockets, in the shell and in Doom, once the kernel routes the chipset's USB2 pins to the single xHCI controller this machine has. A flash drive as a disk, and the boot from the stick image, are proved under QEMU in [milestone 40](dev-log/40-usbdisk/Readme.md) and are run on the laptop in milestone 43. [Milestone 25](dev-log/25-sealed/Readme.md#later-laptop-installation) and [milestone 35](dev-log/35-usb/Readme.md) record the hardware results.
+QEMU is the primary development and test environment. Rach2 also runs on a Lenovo G50-70 from a sealed SSD installed in the laptop's SATA bay. The laptop boots the complete `os-real` system from an AHCI-backed KRFFS root; the ext2 root on its fourth partition, with the KRFFS root as the fallback, is milestone 43's, rehearsed in emulation by `tests/run sealed` and written step by step in `dev-log/42-ext2/hardware.md`. RTL8168GU networking and keyed SSH work, file system changes persist across reboots, and both an in-system update and a recovery reflash have completed successfully. A USB keyboard and a USB mouse work in any of the laptop's three sockets, in the shell and in Doom, once the kernel routes the chipset's USB2 pins to the single xHCI controller this machine has. A flash drive as a disk, and the boot from the stick image, are proved under QEMU in [milestone 40](dev-log/40-usbdisk/Readme.md) and are run on the laptop in milestone 43. [Milestone 25](dev-log/25-sealed/Readme.md#later-laptop-installation) and [milestone 35](dev-log/35-usb/Readme.md) record the hardware results.
 
 ## Updating the installed machine
 
@@ -94,7 +94,18 @@ ssh -i $KEY root@ADDRESS 'dd if=/dev/disk0 bs=512 skip=133120 count=1024000 | sh
 ssh -i $KEY root@ADDRESS 'bootctl env saved_entry candidate' && ssh -i $KEY root@ADDRESS reboot
 ```
 
-Recovery is made the saved default before the write and put back after it, so a write cut in half returns to the system that can finish it rather than to the half-written root. The offsets are the sealed layout that `make rach2-sealed-disk` fixes: a 1 MiB gap, a 64 MiB FAT boot partition, the 500 MiB KRFFS root at byte 68157440, and a 64 MiB recovery partition. Compare the hash the machine reports with `shasum -a 256 root.img` on the host before rebooting.
+Recovery is made the saved default before the write and put back after it, so a write cut in half returns to the system that can finish it rather than to the half-written root. The offsets are the sealed layout that `make rach2-sealed-disk` fixes: a 1 MiB gap, a 64 MiB FAT boot partition, the 500 MiB KRFFS root at byte 68157440, a 64 MiB recovery partition, a spare MiB, and the 1 GiB ext2 root at byte 660602880, sector 1290240. Compare the hash the machine reports with `shasum -a 256 root.img` on the host before rebooting.
+
+The ext2 root, from recovery, the same way with its own offsets, and checked there before anything boots it:
+
+```sh
+gzip -c build/images/rach2-metal-disk.ext2 | ssh -i $KEY root@ADDRESS 'gunzip | reflash /dev/disk0 660602880 1073741824'
+ssh -i $KEY root@ADDRESS 'e2fsck -fn /dev/disk0p4'
+ssh -i $KEY root@ADDRESS 'bootctl env saved_entry fallback && bootctl trial candidate' && ssh -i $KEY root@ADDRESS reboot
+ssh -i $KEY root@ADDRESS 'cat /proc/mounts && bootctl status && bootctl commit'
+```
+
+The candidate entries boot the ext2 root and the fallback entries the KRFFS one, so the trial is what a root that does not come up falls back from: the boot after it is the fallback with nothing armed, and `commit` is a person's decision after the candidate has answered SSH. A root that mounts read-only because its check found a fault is repaired by recovery's `init`, which runs `e2fsck -p` on every ext2 partition before it starts anything, and by hand from there with `e2fsck -y /dev/disk0p4`.
 
 Check the credentials before flashing a root. The image trusts `krffs/authorized_keys`, which `krffs/gen_demo_key.sh` composes from the demo public key and an optional `krffs/authorized_keys.extra` belonging to whoever works on the machine. The private key used to log in must be the pair of one of those, and a copy carried between hosts can be older than the file it is meant to match:
 

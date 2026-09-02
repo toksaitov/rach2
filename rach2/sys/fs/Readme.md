@@ -1,6 +1,6 @@
 # KRFFS and file descriptors
 
-KRFFS is the kernel's writable file system. It stores a hierarchical namespace in one contiguous region and uses a first-fit extent allocator. The same code can address a RAM module directly, a RAM module through the page-cache window, or a partition on an ATA or AHCI disk.
+KRFFS is the kernel's own writable file system: the RAM images' and the fallback root's, since the everyday root on a disk is an ext2 partition ([ext2.Readme.md](ext2.Readme.md)). It stores a hierarchical namespace in one contiguous region and uses a first-fit extent allocator. The same code can address a RAM module directly, a RAM module through the page-cache window, or a partition on an ATA or AHCI disk.
 
 `krffs.c` and `krffs.h` implement the on-disk format, allocator, namespace, and file data operations. `fd.c` and `fd.h` implement descriptor tables and shared open-file descriptions. The syscall-facing permission, descriptor, and metadata rules are in `../syscall.c`. The mount table and the resolver every path goes through are described in [vfs.Readme.md](vfs.Readme.md), the kernel-generated `/dev` and `/proc` namespaces in [synthfs.Readme.md](synthfs.Readme.md), the read-only FAT32 type in [fat32.Readme.md](fat32.Readme.md), and the page cache and disk drivers in `../mm/Readme.md` and `../block/Readme.md`.
 
