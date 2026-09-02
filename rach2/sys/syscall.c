@@ -579,6 +579,7 @@ static int fd_node_check(fd_entry_t *entry);
  * credential model below. */
 static int cred_privileged(void);
 static void cred_kill_setid(krffs_node_t *node);
+static void vfs_kill_setid(struct vfs_mount *mnt, void *node);
 
 /**
  * Write `count` bytes of user buffer `buf` to descriptor `fd`.
@@ -728,7 +729,11 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
              * and without it any root process silently disarms /bin/su by
              * rewriting it. */
             if (!cred_privileged()) {
-                cred_kill_setid(entry->node);
+                if (entry->node) {
+                    cred_kill_setid(entry->node);
+                } else {
+                    vfs_kill_setid(ofd->vmnt, ofd->vnode);
+                }
             }
             ofd->offset += (uint32_t)written;
         }
@@ -788,7 +793,11 @@ static int32_t sys_ftruncate(isr_params_t *params)
     fd_ofd_lock(entry->ofd);
     rc = vfs_truncate(entry->ofd->vmnt, entry->ofd->fhandle, length);
     if (rc == 0 && !cred_privileged()) {
-        cred_kill_setid(entry->node);
+        if (entry->node) {
+            cred_kill_setid(entry->node);
+        } else {
+            vfs_kill_setid(entry->ofd->vmnt, entry->ofd->vnode);
+        }
     }
     fd_ofd_unlock(entry->ofd);
     return rc;
@@ -1221,6 +1230,29 @@ static void cred_kill_setid(krffs_node_t *node)
     if (node->mode & 0010u) {
         node->mode &= (uint16_t) ~KRFFS_MODE_SGID;
     }
+}
+
+/**
+ * The same rule for a file of another type, through its attributes: a
+ * write or a truncation by a caller without the privilege drops the set-id
+ * bits, so that a program a group may modify cannot keep root's identity.
+ * A directory keeps its bits, as on Linux.
+ */
+static void vfs_kill_setid(struct vfs_mount *mnt, void *node)
+{
+    struct vfs_stat vst;
+
+    if (!mnt || !node || vfs_getattr(mnt, node, &vst) != 0) {
+        return;
+    }
+    if ((vst.mode & 0170000u) == 0040000u || !(vst.mode & 06000u)) {
+        return;
+    }
+    vst.mode &= ~04000u;
+    if (vst.mode & 0010u) {
+        vst.mode &= ~02000u;
+    }
+    (void)vfs_setattr(mnt, node, VFS_SET_MODE, &vst);
 }
 
 /** Non-zero when `gid` is in the caller's supplementary list. */
@@ -1676,7 +1708,9 @@ again:
             return rc;
         }
         vfs_ns_lock(parent.mnt);
-        rc = vfs_create(parent.mnt, parent.node, leafname, mode, &made);
+        rc = vfs_create(parent.mnt, parent.node, leafname,
+                        mnt_is_root(parent.mnt) ? mode : (mode & 07777u & ~current_proc->umask),
+                        &made);
         vfs_ns_unlock(parent.mnt);
         if (rc == -EEXIST && !(flags & O_EXCL)) {
             /* Another creator held the lock first: open what it made. */
@@ -1761,6 +1795,9 @@ again:
             }
             if (flags & O_TRUNC) {
                 rc = vfs_truncate(ref.mnt, node, 0);
+                if (rc == 0 && !cred_privileged()) {
+                    vfs_kill_setid(ref.mnt, node);
+                }
                 if (rc != 0) {
                     vfs_ref_release(&ref);
                     return rc;
@@ -1854,7 +1891,7 @@ setup:
         entry->type = (vst.mode & 0170000u) == 0040000u ? FD_TYPE_DIR : FD_TYPE_FILE;
         entry->node = NULL;
         entry->ofd->dirpath[0] = '\0';
-        if (entry->type == FD_TYPE_DIR && k_strlen(name) + 1 < sizeof(entry->ofd->dirpath)) {
+        if (k_strlen(name) + 1 < sizeof(entry->ofd->dirpath)) {
             entry->ofd->dirpath[0] = '/';
             k_memcpy(entry->ofd->dirpath + 1, name, k_strlen(name) + 1);
         }
@@ -3098,7 +3135,7 @@ static int32_t sys_chdir(isr_params_t *params)
     if (name[0] == '/') {
         name++;
     }
-    if (name[0] == '\0') {
+    if (name[0] == '\0' && vfs_root_mount()->type == &vfs_krffs_type) {
         current_proc->cwd[0] = '/';
         current_proc->cwd[1] = '\0';
         vfs_cwd_clear(current_proc);
@@ -3163,6 +3200,29 @@ static int32_t sys_chdir(isr_params_t *params)
             }
             k_strncpy(current_proc->cwd, pathbuf, sizeof(current_proc->cwd));
             collapse_dots(current_proc->cwd);
+            /* A type that can name its directories names this one, so a
+             * walk through a link records where it arrived and not what
+             * was typed. */
+            if (ref.mnt->type->ops->path) {
+                char inside[256];
+
+                if (ref.mnt->type->ops->path(ref.mnt, ref.node, inside, sizeof(inside)) == 0 &&
+                    k_strlen(ref.mnt->covered_path) + k_strlen(inside) + 1 <=
+                        sizeof(current_proc->cwd)) {
+                    const char *mp = ref.mnt->covered_path;
+                    uint32_t ml = k_strlen(mp);
+
+                    if (ml == 1 && mp[0] == '/') {
+                        ml = 0;
+                    }
+                    k_memcpy(current_proc->cwd, mp, ml);
+                    k_memcpy(current_proc->cwd + ml, inside, k_strlen(inside) + 1);
+                    if (current_proc->cwd[0] == '\0') {
+                        current_proc->cwd[0] = '/';
+                        current_proc->cwd[1] = '\0';
+                    }
+                }
+            }
             vfs_cwd_set(current_proc, ref.mnt, ref.node);
             vfs_ref_release(&ref);
             return 0;
@@ -4204,8 +4264,8 @@ static int32_t sys_fstatat64(isr_params_t *params)
     }
 
     k_memset(&kst, 0, sizeof(kst));
-    if (pathbuf[0] == '/' && pathbuf[1] == '\0') {
-        kst.st_mode = S_IFDIR | 0755; /* the root directory */
+    if (pathbuf[0] == '/' && pathbuf[1] == '\0' && vfs_root_mount()->type == &vfs_krffs_type) {
+        kst.st_mode = S_IFDIR | 0755; /* the KRFFS root directory */
         kst.st_nlink = 1;
         kst.st_blksize = 4096;
         stat64_root_times(&kst);
@@ -4643,6 +4703,24 @@ static int32_t sys_fchmod(isr_params_t *params)
         entry->node) {
         return krffs_chmod_node(entry->node, mode);
     }
+    if ((entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR) && entry->ofd &&
+        entry->ofd->vmnt && entry->ofd->vnode) {
+        /* A node of another type, by the rules chmod(2) keeps for one. */
+        struct vfs_stat vst;
+        int rc = vfs_getattr(entry->ofd->vmnt, entry->ofd->vnode, &vst);
+
+        if (rc == 0 && !cred_privileged() && current_proc->euid != vst.uid) {
+            rc = -EPERM;
+        }
+        if (rc == 0) {
+            if (!cred_privileged() && !cred_in_group(vst.gid)) {
+                mode &= ~02000u;
+            }
+            vst.mode = mode;
+            rc = vfs_setattr(entry->ofd->vmnt, entry->ofd->vnode, VFS_SET_MODE, &vst);
+        }
+        return rc;
+    }
     if (entry->type == FD_TYPE_PTS) {
         struct pty *pt = pty_get(pty_slave_index(entry));
         if (!pt) {
@@ -4726,6 +4804,36 @@ static int32_t sys_fchown(isr_params_t *params)
     if ((entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR) &&
         entry->node) {
         return krffs_chown_node(entry->node, uid, gid);
+    }
+    if ((entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR) && entry->ofd &&
+        entry->ofd->vmnt && entry->ofd->vnode) {
+        /* A node of another type, by the rules chown(2) keeps for one. */
+        struct vfs_stat vst;
+        int what = 0;
+        int rc = vfs_getattr(entry->ofd->vmnt, entry->ofd->vnode, &vst);
+
+        if (rc == 0 && !cred_privileged()) {
+            if (current_proc->euid != vst.uid || (uid != (uint32_t)-1 && uid != vst.uid) ||
+                (gid != (uint32_t)-1 && gid != vst.gid && !cred_in_group(gid))) {
+                rc = -EPERM;
+            }
+        }
+        if (rc == 0) {
+            if (uid != (uint32_t)-1 && uid != vst.uid) {
+                vst.uid = uid;
+                what |= VFS_SET_UID;
+            }
+            if (gid != (uint32_t)-1 && gid != vst.gid) {
+                vst.gid = gid;
+                what |= VFS_SET_GID;
+            }
+            if (what != 0 && (vst.mode & 06000u)) {
+                vst.mode &= ~06000u;
+                what |= VFS_SET_MODE;
+            }
+            rc = what ? vfs_setattr(entry->ofd->vmnt, entry->ofd->vnode, what, &vst) : 0;
+        }
+        return rc;
     }
     if (entry->type == FD_TYPE_PTS) {
         struct pty *pt = pty_get(pty_slave_index(entry));
@@ -6928,7 +7036,8 @@ static int32_t sys_mkdir(isr_params_t *params)
             rc = cred_access_ref(&parent, CRED_W, 0);
             if (rc == 0) {
                 vfs_ns_lock(parent.mnt);
-                rc = vfs_mkdir(parent.mnt, parent.node, leaf, params->ecx);
+                rc = vfs_mkdir(parent.mnt, parent.node, leaf,
+                               params->ecx & 07777u & ~current_proc->umask);
                 vfs_ns_unlock(parent.mnt);
             }
             vfs_ref_release(&parent);
@@ -7288,8 +7397,8 @@ static int32_t sys_utimensat(isr_params_t *params)
         name++;
     }
 
-    if (name[0] == '\0') {
-        return 0; /* root timestamps are not modifiable; report success */
+    if (name[0] == '\0' && vfs_root_mount()->type == &vfs_krffs_type) {
+        return 0; /* the KRFFS root's timestamps are not modifiable; report success */
     }
 
     {

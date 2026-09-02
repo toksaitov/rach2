@@ -1724,8 +1724,9 @@ int vfs_do_umount(const char *target)
 void vfs_cwd_set(struct process *p, struct vfs_mount *mnt, void *node)
 {
     vfs_cwd_clear(p);
-    if (!mnt || mnt == &mounts[0] || mnt == &mounts[1] || mnt == &mounts[2]) {
-        return; /* the permanent mounts need no pin */
+    if (!mnt || mnt == &mounts[1] || mnt == &mounts[2] ||
+        (mnt == &mounts[0] && mnt->type == &vfs_krffs_type)) {
+        return; /* the permanent mounts need no pin, but a root of another type does */
     }
     p->cwd_mnt = mnt;
     p->cwd_node = node;

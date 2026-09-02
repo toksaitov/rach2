@@ -479,6 +479,8 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
                 } else {
                     ap_ch(t, '/'); /* unresolvable or stale */
                 }
+            } else if (e->ofd && e->ofd->vmnt && e->ofd->dirpath[0]) {
+                ap_str(t, e->ofd->dirpath); /* a node of another type, by the path it was opened by */
             } else {
                 ap_ch(t, '/'); /* the root directory, or a stale fd */
             }

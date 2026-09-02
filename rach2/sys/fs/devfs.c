@@ -402,10 +402,10 @@ static int32_t raw_window_write(struct raw_window *w, fd_entry_t *e, const char 
         }
         done += chunk;
     }
+    raw_batch_put();
     if (done == 0) {
         return -EIO;
     }
-    raw_batch_put();
     e->ofd->raw_offset = off + (uint64_t)done * BLOCK_SECTOR_SIZE;
     return (int32_t)(done * BLOCK_SECTOR_SIZE);
 }
@@ -635,6 +635,11 @@ static void dev_bootpart_close(fd_entry_t *e)
     raw_close(e);
 }
 
+static void dev_part_close(fd_entry_t *e)
+{
+    raw_close(e);
+}
+
 static const struct file_ops usbwin_ops = {dev_usb_read, dev_usb_write, dev_poll, dev_ioctl, NULL};
 static const struct file_ops null_ops = {dev_eof_read, dev_sink_write, dev_poll, dev_ioctl, NULL};
 static const struct file_ops zero_ops = {dev_zero_read, dev_sink_write, dev_poll, dev_ioctl, NULL};
@@ -844,14 +849,16 @@ static const struct file_ops grubcore_ops = {dev_grubcore_read, dev_grubcore_wri
 static const struct file_ops bootpart_ops = {dev_bootpart_read, dev_bootpart_write, dev_poll,
                                              dev_ioctl, dev_bootpart_close};
 static const struct file_ops part1_ops = {dev_part1_read, dev_part_write, dev_poll, dev_ioctl,
-                                          NULL};
+                                          dev_part_close};
 static const struct file_ops part2_ops = {dev_part2_read, dev_part_write, dev_poll, dev_ioctl,
-                                          NULL};
+                                          dev_part_close};
 static const struct file_ops part3_ops = {dev_part3_read, dev_part_write, dev_poll, dev_ioctl,
-                                          NULL};
+                                          dev_part_close};
 static const struct file_ops part4_ops = {dev_part4_read, dev_part_write, dev_poll, dev_ioctl,
-                                          NULL};
+                                          dev_part_close};
 static const struct file_ops *const part_ops[4] = {&part1_ops, &part2_ops, &part3_ops, &part4_ops};
+
+static int raw_write_window(const struct devfs_entry *dev);
 
 static int32_t dev_part_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
@@ -874,6 +881,23 @@ static const struct file_ops bootlog_ops = {dev_bootlog_read, dev_sink_write, de
                                             NULL};
 static const struct file_ops disk0_ops = {dev_disk0_read, dev_disk0_write, dev_poll, dev_ioctl,
                                           dev_disk0_close};
+
+/* Whether `dev` is a raw window a write may reach: the whole disk and the
+ * two boot windows in every build, the partitions in the recovery build. */
+static int raw_write_window(const struct devfs_entry *dev)
+{
+    int i;
+
+    if (dev->ops == &disk0_ops || dev->ops == &bootpart_ops || dev->ops == &grubcore_ops) {
+        return 1;
+    }
+    for (i = 0; i < 4; i++) {
+        if (dev->ops == part_ops[i]) {
+            return recovery_publishes_disk();
+        }
+    }
+    return 0;
+}
 
 /*
  * The registry. major/minor are the real Linux mem-device numbers (major 1) so
@@ -1220,12 +1244,13 @@ int devfs_open(const char *name, int flags)
     if (dev->ops == &grubcore_ops && grubcore_held) {
         return -EBUSY;
     }
-    if ((flags & 3) != 0 && raw_writer_held &&
-        (dev->ops == &disk0_ops || dev->ops == &bootpart_ops || dev->ops == &grubcore_ops)) {
+    /* The raw windows that take a write, under one writer at a time and
+     * the claims: the whole disk, the two boot windows, and in the recovery
+     * build the four partitions. */
+    if ((flags & 3) != 0 && raw_writer_held && raw_write_window(dev)) {
         return -EBUSY;
     }
-    if ((flags & 3) != 0 &&
-        (dev->ops == &disk0_ops || dev->ops == &bootpart_ops || dev->ops == &grubcore_ops)) {
+    if ((flags & 3) != 0 && raw_write_window(dev)) {
         block_device_t *backing;
         uint64_t first, last;
 
@@ -1272,8 +1297,7 @@ int devfs_open(const char *name, int flags)
     if (dev->ops == &grubcore_ops) {
         grubcore_held = 1;
     }
-    if ((e->flags & FD_FLAG_WRITE) &&
-        (dev->ops == &disk0_ops || dev->ops == &bootpart_ops || dev->ops == &grubcore_ops)) {
+    if ((e->flags & FD_FLAG_WRITE) && raw_write_window(dev)) {
         raw_writer_held = 1;
         window_range(dev, &raw_writer_backing, &raw_writer_first, &raw_writer_last);
     }

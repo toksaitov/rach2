@@ -1905,6 +1905,8 @@ static uint32_t sb_le32(const uint8_t *p)
  * partition cannot be mounted twice. Returns 0 mounted, -1 otherwise, the
  * reason logged under `ext2: root`.
  */
+static block_partition_t _ext2_root_part;
+
 static int init_ext2_root(void)
 {
     static uint8_t sb[BLOCK_SECTOR_SIZE * 2];
@@ -1946,7 +1948,13 @@ static int init_ext2_root(void)
             klog(KLOG_ERR, "ext2", "root: %s is claimed", path);
             return -1;
         }
-        rc = vfs_init_root(&vfs_ext2_type, view, path, claim);
+        /* The root reads the real disk, as the KRFFS root does: the
+         * partition nodes are on the lag wrapper for the tests, and a root
+         * that slept behind it would sleep outside any process. */
+        (void)view;
+        block_partition_init(&_ext2_root_part, block0, disc_parts[i].start_lba,
+                             disc_parts[i].sector_count);
+        rc = vfs_init_root(&vfs_ext2_type, &_ext2_root_part.device, path, claim);
         if (rc != 0) {
             devfs_release_claim(claim);
             klog(KLOG_ERR, "ext2", "root: %s refused", path);
