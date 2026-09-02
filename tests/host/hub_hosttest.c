@@ -132,7 +132,29 @@ static struct {
     int port_in_reset[MODEL_PORTS];
     int port_reset_reads[MODEL_PORTS];
     int port_enabled[MODEL_PORTS];
+    unsigned int port_change[MODEL_PORTS]; /* the change word */
+    int port_over_current[MODEL_PORTS];
+    int port_powered_off[MODEL_PORTS];
+    unsigned int hub_status;
+    unsigned int hub_change;
+    int alt_refuse;   /* SET_INTERFACE is stalled */
+    int change_stall; /* the change endpoint answers with a stall */
+    /* The transfer outstanding on the change endpoint. */
+    int change_device;
+    unsigned char *change_buffer;
+    uint32_t change_length;
+    uint32_t change_generation;
+    unsigned int change_bits; /* what the next bitmap says */
     /* What was seen. */
+    int change_submits;
+    int cleared_feature[32];
+    int cleared_port[32];
+    int clears;
+    int hub_status_reads;
+    int hub_clears;
+    int power_offs;
+    int power_ons;
+    int alt_set;
     int power_requests;
     int status_reads;
     uint32_t first_status_ms;
@@ -372,9 +394,12 @@ static void hub_config_fill(void)
 
 static unsigned int port_status_word(int port)
 {
-    unsigned int status = 0x0100; /* powered */
+    unsigned int status = model.port_powered_off[port - 1] ? 0 : 0x0100; /* powered */
 
-    if (model.port_kind[port - 1] != KIND_NONE) {
+    if (model.port_over_current[port - 1]) {
+        status |= 0x0008;
+    }
+    if (model.port_kind[port - 1] != KIND_NONE && !model.port_powered_off[port - 1]) {
         status |= 0x0001;
         if (model.port_enabled[port - 1]) {
             status |= 0x0002;
@@ -391,6 +416,29 @@ static unsigned int port_status_word(int port)
     return status;
 }
 
+/** Answer the outstanding change transfer with the bits that changed. */
+static void model_report_changes(void)
+{
+    if (model.change_device == 0 || model.change_buffer == 0) {
+        return;
+    }
+    model.change_buffer[0] = (unsigned char)(model.change_bits & 0xFF);
+    if (model.change_length > 1) {
+        model.change_buffer[1] = (unsigned char)((model.change_bits >> 8) & 0xFF);
+    }
+    answer(model.change_device, 3, USB_XFER_OK, model.change_length, 0, model.change_generation);
+    model.change_device = 0;
+    model.change_bits = 0;
+}
+
+/** A change on port `port` (0 for the hub itself): set the bit and report it
+ * if the hub driver's transfer is out. */
+static void model_change(int port)
+{
+    model.change_bits |= 1u << port;
+    model_report_changes();
+}
+
 int xhci_submit(int device, int endpoint, const struct usb_transfer *transfer)
 {
     const unsigned char *setup = transfer->setup;
@@ -403,6 +451,21 @@ int xhci_submit(int device, int endpoint, const struct usb_transfer *transfer)
     }
     kind = slot_of[device].kind;
     if (endpoint != 1) {
+        if (kind == KIND_HUB) {
+            /* The change endpoint: answered when something changes. */
+            model.change_submits++;
+            model.change_device = device;
+            model.change_buffer = buf;
+            model.change_length = transfer->length;
+            model.change_generation = transfer->generation;
+            if (model.change_stall) {
+                answer(device, endpoint, USB_XFER_STALLED, transfer->length, transfer->length,
+                       transfer->generation);
+                model.change_device = 0;
+            } else if (model.change_bits != 0) {
+                model_report_changes();
+            }
+        }
         return 0; /* a report transfer stays out; nothing here types */
     }
     for (i = 0; i < transfer->length && buf != 0; i++) {
@@ -451,6 +514,15 @@ int xhci_submit(int device, int endpoint, const struct usb_transfer *transfer)
         answer(device, 1, USB_XFER_OK, 0, 0, transfer->generation);
         return 0;
     }
+    if (setup[0] == 0x01 && setup[1] == 11) { /* SET_INTERFACE */
+        if (model.alt_refuse) {
+            answer(device, 1, USB_XFER_STALLED, 0, 0, transfer->generation);
+            return 0;
+        }
+        model.alt_set = setup[2];
+        answer(device, 1, USB_XFER_OK, 0, 0, transfer->generation);
+        return 0;
+    }
     if (kind != KIND_HUB) {
         answer(device, 1, USB_XFER_STALLED, transfer->length, transfer->length,
                transfer->generation);
@@ -476,6 +548,21 @@ int xhci_submit(int device, int endpoint, const struct usb_transfer *transfer)
                transfer->length > 9 ? transfer->length - 9 : 0, transfer->generation);
         return 0;
     }
+    if (setup[0] == 0xA0 && setup[1] == 0) { /* GET_STATUS of the hub */
+        model.hub_status_reads++;
+        buf[0] = (unsigned char)(model.hub_status & 0xFF);
+        buf[1] = (unsigned char)(model.hub_status >> 8);
+        buf[2] = (unsigned char)(model.hub_change & 0xFF);
+        buf[3] = (unsigned char)(model.hub_change >> 8);
+        answer(device, 1, USB_XFER_OK, 4, 0, transfer->generation);
+        return 0;
+    }
+    if (setup[0] == 0x20 && setup[1] == 1) { /* CLEAR_FEATURE of the hub */
+        model.hub_clears++;
+        model.hub_change &= ~(1u << setup[2]);
+        answer(device, 1, USB_XFER_OK, 0, 0, transfer->generation);
+        return 0;
+    }
     if (setup[0] == 0xA3 && setup[1] == 0) { /* GET_PORT_STATUS */
         int port = setup[4];
         unsigned int status;
@@ -493,13 +580,14 @@ int xhci_submit(int device, int endpoint, const struct usb_transfer *transfer)
             if (model.port_reset_reads[port - 1] >= 2) {
                 model.port_in_reset[port - 1] = 0;
                 model.port_enabled[port - 1] = 1;
+                model.port_change[port - 1] |= 16u; /* C_PORT_RESET, owed a clear */
             }
         }
         status = port_status_word(port);
         buf[0] = (unsigned char)(status & 0xFF);
         buf[1] = (unsigned char)(status >> 8);
-        buf[2] = 0;
-        buf[3] = 0;
+        buf[2] = (unsigned char)(model.port_change[port - 1] & 0xFF);
+        buf[3] = (unsigned char)(model.port_change[port - 1] >> 8);
         answer(device, 1, USB_XFER_OK, 4, 0, transfer->generation);
         return 0;
     }
@@ -510,7 +598,17 @@ int xhci_submit(int device, int endpoint, const struct usb_transfer *transfer)
         if (feature == 8) {
             model.power_requests++;
             model.last_power_ms = model.now_ms;
+            if (port >= 1 && port <= MODEL_PORTS && model.port_powered_off[port - 1]) {
+                model.port_powered_off[port - 1] = 0;
+                model.power_ons++;
+            }
         } else if (feature == 4 && port >= 1 && port <= MODEL_PORTS) {
+            /* A reset change never acknowledged: the hub refuses another
+               reset on that port, as a hub that keeps its change bit does. */
+            if (model.port_change[port - 1] & 16u) {
+                answer(device, 1, USB_XFER_STALLED, 0, 0, transfer->generation);
+                return 0;
+            }
             model.reset_requests++;
             model.port_in_reset[port - 1] = 1;
             model.port_reset_reads[port - 1] = 0;
@@ -519,8 +617,23 @@ int xhci_submit(int device, int endpoint, const struct usb_transfer *transfer)
         return 0;
     }
     if (setup[0] == 0x23 && setup[1] == 1) { /* CLEAR_PORT_FEATURE */
-        if (setup[2] == 20) {
+        int feature = setup[2];
+        int port = setup[4];
+
+        if (feature == 20) {
             model.reset_clears++;
+        }
+        if (model.clears < 32) {
+            model.cleared_feature[model.clears] = feature;
+            model.cleared_port[model.clears] = port;
+        }
+        model.clears++;
+        if (feature >= 16 && feature <= 20 && port >= 1 && port <= MODEL_PORTS) {
+            model.port_change[port - 1] &= ~(1u << (feature - 16));
+        }
+        if (feature == 8 && port >= 1 && port <= MODEL_PORTS) {
+            model.power_offs++;
+            model.port_powered_off[port - 1] = 1;
         }
         answer(device, 1, USB_XFER_OK, 0, 0, transfer->generation);
         return 0;
@@ -613,6 +726,19 @@ static int running_count(void)
         }
     }
     return n;
+}
+
+/** Whether the hub was asked to clear `feature` on `port` since the reset. */
+static int cleared(int feature, int port)
+{
+    int i;
+
+    for (i = 0; i < model.clears && i < 32; i++) {
+        if (model.cleared_feature[i] == feature && model.cleared_port[i] == port) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 static int contains(const char *hay, const char *needle)
@@ -782,6 +908,118 @@ int main(void)
     CHECK("the two children before the hub",
           closes == 3 && close_order[0] != hub && close_order[1] != hub && close_order[2] == hub);
     CHECK("and nothing is left running", running_count() == 0);
+
+    /* The change endpoint: a transfer always out, resubmitted at each
+       answer; a keyboard plugged in after the hub is up is reported, its
+       status read, its connection change acknowledged with the right
+       feature, and the core told; pulled again, it goes. */
+    model_reset();
+    pump(2000);
+    hub = slot_of_kind(KIND_HUB);
+    CHECK("the change endpoint is read once the hub is up", model.change_submits == 1);
+    model.port_kind[3] = KIND_KBD;
+    model.port_change[3] |= 1u; /* C_PORT_CONNECTION */
+    model_change(4);
+    pump(2000);
+    kbd = slot_of_kind(KIND_KBD);
+    CHECK("a keyboard plugged into port 4 after the hub is up is enumerated",
+          kbd != 0 && slot_of[kbd].where.route == 0x4u);
+    CHECK("its connection change acknowledged with C_PORT_CONNECTION on port 4", cleared(16, 4));
+    CHECK("and the change transfer put out again", model.change_submits == 2);
+    model.port_kind[3] = KIND_NONE;
+    model.port_change[3] |= 1u;
+    model_change(4);
+    pump(1000);
+    CHECK("pulling it is reported and it goes", hid_gone_count == 1 && hid_gone_slot[0] == kbd);
+    CHECK("with the transfer out a third time", model.change_submits == 3);
+
+    /* The hub's own status on bit 0: read, and its change cleared. */
+    model.hub_status = 0x0001; /* local power lost */
+    model.hub_change = 0x0001;
+    model_change(0);
+    pump(500);
+    CHECK("a hub-status change is read and its local-power change cleared",
+          model.hub_status_reads == 1 && model.hub_clears == 1 && model.hub_change == 0);
+
+    /* A swap: a connection change with the status still connected closes the
+       old device before the new one is enumerated. */
+    model_reset();
+    model.port_kind[1] = KIND_KBD;
+    pump(2000);
+    kbd = slot_of_kind(KIND_KBD);
+    CHECK("a keyboard is running on port 2", kbd != 0);
+    model.port_change[1] |= 1u;
+    model_change(2);
+    pump(2000);
+    CHECK("a connection change with the device still there closes the old device",
+          closes == 1 && close_order[0] == kbd);
+    CHECK("before a new one is enumerated in its place",
+          slots_given == 3 && slot_of[3].kind == KIND_KBD && slot_of[3].open);
+
+    /* An enable lost is recorded and the device below closed and tried
+     * again. */
+    model_reset();
+    model.port_kind[1] = KIND_KBD;
+    pump(2000);
+    kbd = slot_of_kind(KIND_KBD);
+    model.port_enabled[1] = 0;
+    model.port_change[1] |= 2u; /* C_PORT_ENABLE */
+    model_change(2);
+    pump(2000);
+    CHECK("an enable lost closes the device below", closes >= 1 && close_order[0] == kbd);
+    CHECK("and clears C_PORT_ENABLE", cleared(17, 2));
+
+    /* Over-current: the port powered off and its device closed, powered on
+       again once after a second, and left off when it recurs. */
+    model_reset();
+    model.port_kind[1] = KIND_KBD;
+    pump(2000);
+    kbd = slot_of_kind(KIND_KBD);
+    model.port_over_current[1] = 1;
+    model.port_change[1] |= 8u; /* C_PORT_OVER_CURRENT */
+    model_change(2);
+    pump(500);
+    CHECK("an over-current powers the port off", model.power_offs == 1);
+    CHECK("and closes the device below", closes == 1 && close_order[0] == kbd);
+    CHECK("and clears the over-current change", cleared(19, 2));
+    CHECK("and does not power it on at once", model.power_ons == 0);
+    model.port_over_current[1] = 0;
+    pump(1500);
+    CHECK("the port is powered on again after a second", model.power_ons == 1);
+    model.port_over_current[1] = 1;
+    model.port_change[1] |= 8u;
+    model_change(2);
+    pump(3000);
+    CHECK("an over-current again leaves the port off",
+          model.power_offs == 2 && model.power_ons == 1);
+
+    /* A multi-TT hub selects its alternate setting; one that refuses is
+       driven with one translator. */
+    model_reset();
+    model.root_speed = USB_SPEED_HIGH;
+    model.hub_protocol = 2;
+    pump(2000);
+    CHECK("a multi-TT hub has its setting 1 selected", model.alt_set == 1);
+    CHECK("and is told as multi-TT", model.hub_told_multi == 1);
+    model_reset();
+    model.root_speed = USB_SPEED_HIGH;
+    model.hub_protocol = 2;
+    model.alt_refuse = 1;
+    pump(2000);
+    CHECK("a hub that refuses the setting is told with one translator",
+          model.hub_told && model.hub_told_multi == 0);
+
+    /* A stalled change endpoint closes the hub with its children. */
+    model_reset();
+    model.port_kind[1] = KIND_KBD;
+    pump(2000);
+    CHECK("the keyboard behind the hub is running", running_count() == 2);
+    model.change_stall = 1;
+    model.port_change[1] |= 1u;
+    model_change(2);
+    pump(2000);
+    CHECK("a change endpoint that stalls closes the hub and what is below it",
+          closes == 2 && running_count() == 0);
 
     /* A hub that will not give its descriptor is refused by name. */
     model_reset();
