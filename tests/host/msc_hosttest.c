@@ -77,10 +77,14 @@ static struct {
     int bad_status; /* a status byte outside 0 to 2 */
     int phase_error;
     int short_status;
-    int residue_over; /* a residue larger than the transfer */
-    int residue;      /* a residue this many bytes on the next command */
-    int vanish_at;    /* the stage at which the device stops answering */
-    int resets;       /* class resets seen */
+    int residue_over;  /* a residue larger than the transfer */
+    int residue;       /* a residue this many bytes on the next command */
+    int vanish_at;     /* the stage at which the device stops answering */
+    int sense_key;     /* what the next REQUEST SENSE answers with, or 0 */
+    int failed;        /* a command failed and its sense is owed */
+    int senses;        /* REQUEST SENSE commands seen */
+    uint32_t last_tag; /* the tag of the last wrapper taken */
+    int resets;        /* class resets seen */
     int cleared_in, cleared_out;
     int clear_order[8];
     int clears;
@@ -192,17 +196,24 @@ static void scsi_data_in(unsigned char *buffer, uint32_t length)
         buffer[4] = 31;
         return;
     case 0x03: /* REQUEST SENSE */
+        dev.senses++;
         buffer[0] = 0x70;
         if (dev.lun_no_medium[cmd.lun]) {
             buffer[2] = 0x02;  /* not ready */
             buffer[12] = 0x3A; /* medium not present */
-        } else if (dev.fail_next_data) {
+        } else if (dev.sense_key != 0) {
+            buffer[2] = (unsigned char)dev.sense_key;
+        } else if (dev.sync_illegal && dev.failed) {
+            buffer[2] = 0x05; /* illegal request: no cache to synchronize */
+            buffer[12] = 0x20;
+        } else if (dev.failed) {
             buffer[2] = 0x03; /* medium error */
             buffer[12] = 0x11;
         } else {
             buffer[2] = 0x02;
             buffer[12] = 0x04; /* not ready, becoming ready */
         }
+        dev.failed = 0;
         return;
     case 0x25:                      /* READ CAPACITY */
         dev.capacity_lun = cmd.lun; /* which unit the driver settled on */
@@ -260,10 +271,19 @@ static int scsi_status(void)
         }
         return dev.tests_seen[cmd.lun] > dev.lun_ready_after[cmd.lun] ? 0 : 1;
     case 0x35: /* SYNCHRONIZE CACHE */
-        return (dev.sync_illegal || dev.sync_fails) ? 1 : 0;
+        if (dev.sync_illegal || dev.sync_fails) {
+            dev.failed = 1;
+            return 1;
+        }
+        return 0;
     case 0x28:
     case 0x2A:
-        return dev.fail_next_data ? 1 : 0;
+        if (dev.fail_next_data > 0) {
+            dev.fail_next_data--;
+            dev.failed = 1;
+            return 1;
+        }
+        return 0;
     default:
         return 0;
     }
@@ -322,6 +342,7 @@ int xhci_submit(int device, int endpoint, const struct usb_transfer *transfer)
         }
         cmd.have_cbw = 1;
         cmd.tag = rd32(&w[4]);
+        dev.last_tag = cmd.tag;
         cmd.length = rd32(&w[8]);
         cmd.data_in = (w[12] & 0x80) != 0;
         cmd.lun = w[13];
@@ -511,6 +532,10 @@ static void model_reset(void)
     for (i = 0; i < (int)sizeof(dev.medium); i++) {
         dev.medium[i] = (unsigned char)(i & 0xFF);
     }
+    dev.sense_key = 0;
+    dev.failed = 0;
+    dev.senses = 0;
+    dev.last_tag = 0;
     wire.pending = 0;
     block.completions = 0;
     block.last_status = 0;
@@ -905,6 +930,141 @@ int main(void)
 
             CHECK("and on the stick's own line", msc_ident(0, &ident) == 0 && ident.flushes == 1);
         }
+    }
+
+    /* A check condition is asked about with REQUEST SENSE, and what the
+       sense says decides the request: a medium error fails it, a unit
+       attention has the command sent once more. */
+    model_reset();
+    CHECK("a stick is taken", msc_attach(1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("and comes up", run_until_settled(200));
+    {
+        struct block_request *r = make_request(0, 0, 1, page);
+        int i;
+
+        block.completions = 0;
+        dev.fail_next_data = 1;
+        CHECK("a read is taken", msc_block_device(0)->submit(msc_block_device(0), r) == 0);
+        for (i = 0; i < 40 && block.completions == 0; i++) {
+            pump(1);
+        }
+        CHECK("a read the stick fails with a medium error is failed",
+              block.completions == 1 && block.last_status == -EIO);
+        CHECK("after one REQUEST SENSE", dev.senses == 1);
+    }
+    model_reset();
+    CHECK("a stick is taken", msc_attach(1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("and comes up", run_until_settled(200));
+    {
+        struct block_request *r = make_request(0, 3, 1, page);
+        int i;
+
+        for (i = 0; i < SECTOR; i++) {
+            page[i] = 0;
+        }
+        block.completions = 0;
+        dev.fail_next_data = 1;
+        dev.sense_key = 0x06; /* unit attention */
+        CHECK("a read is taken", msc_block_device(0)->submit(msc_block_device(0), r) == 0);
+        for (i = 0; i < 40 && block.completions == 0; i++) {
+            pump(1);
+        }
+        CHECK("a read answered with a unit attention is sent again and succeeds",
+              block.completions == 1 && block.last_status == 0);
+        CHECK("with the sector from the second attempt",
+              page[5] == dev.medium[3 * SECTOR + 5] && dev.senses == 1);
+        block.completions = 0;
+        dev.fail_next_data = 2;
+        r = make_request(0, 0, 1, page);
+        CHECK("a read is taken", msc_block_device(0)->submit(msc_block_device(0), r) == 0);
+        for (i = 0; i < 40 && block.completions == 0; i++) {
+            pump(1);
+        }
+        CHECK("and a unit attention on the second attempt fails it",
+              block.completions == 1 && block.last_status == -EIO && dev.senses == 3);
+    }
+
+    /* The flush's three answers. */
+    model_reset();
+    CHECK("a stick is taken", msc_attach(1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("and comes up", run_until_settled(200));
+    {
+        struct block_request *r = make_request(0, 0, 0, page);
+        struct msc_ident ident;
+        int i;
+
+        block.completions = 0;
+        dev.sync_illegal = 1;
+        CHECK("a flush is taken", msc_block_device(0)->flush(msc_block_device(0), r) == 0);
+        for (i = 0; i < 40 && block.completions == 0; i++) {
+            pump(1);
+        }
+        CHECK("a flush the stick calls an illegal request is not a failure",
+              block.completions == 1 && block.last_status == 0 && dev.senses == 1);
+        CHECK("and is counted", msc_ident(0, &ident) == 0 && ident.flushes == 1);
+        dev.sync_illegal = 0;
+        dev.sync_fails = 1;
+        block.completions = 0;
+        CHECK("a flush is taken", msc_block_device(0)->flush(msc_block_device(0), r) == 0);
+        for (i = 0; i < 40 && block.completions == 0; i++) {
+            pump(1);
+        }
+        CHECK("a flush the stick fails is failed",
+              block.completions == 1 && block.last_status == -EIO);
+        CHECK("and is not counted", msc_ident(0, &ident) == 0 && ident.flushes == 1);
+    }
+
+    /* A transfer that never answers: the request is not completed at the
+       deadline, since the controller still owns its page; recovery is
+       attempted first, and the request fails when that ends. */
+    model_reset();
+    CHECK("a stick is taken", msc_attach(1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("and comes up", run_until_settled(200));
+    {
+        struct block_request *r = make_request(0, 0, 1, page);
+        int i;
+
+        block.completions = 0;
+        dev.resets = 0;
+        dev.vanish_at = 2; /* the data stage is never answered */
+        CHECK("a read is taken", msc_block_device(0)->submit(msc_block_device(0), r) == 0);
+        for (i = 0; i < 900; i++) {
+            pump(10);
+        }
+        CHECK("a transfer that never answers is not completed before its deadline",
+              block.completions == 0);
+        dev.vanish_at = 0;
+        for (i = 0; i < 300 && block.completions == 0; i++) {
+            pump(10);
+        }
+        CHECK("and not at its deadline either, before recovery is attempted", dev.resets == 1);
+        CHECK("and the request is failed when recovery ends",
+              block.completions == 1 && block.last_status == -EIO);
+    }
+
+    /* Tags go up across sticks and attaches, so a completion left over from
+       a stick that was pulled cannot match the next stick's command. */
+    model_reset();
+    CHECK("a stick is taken", msc_attach(1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("and comes up", run_until_settled(200));
+    {
+        uint32_t first_tag;
+        struct block_request *r = make_request(0, 0, 1, page);
+        int i;
+
+        block.completions = 0;
+        CHECK("a read is taken", msc_block_device(0)->submit(msc_block_device(0), r) == 0);
+        for (i = 0; i < 40 && block.completions == 0; i++) {
+            pump(1);
+        }
+        first_tag = dev.last_tag;
+        msc_detach(1);
+        msc_release(0);
+        dev.attached = 1;
+        CHECK("a second stick is taken on the same handle", msc_attach(1, 0, EP_IN, EP_OUT) == 0);
+        CHECK("and comes up", run_until_settled(200));
+        CHECK("and its first command's tag is past every tag the first stick used",
+              dev.last_tag > first_tag);
     }
 
     if (fails == 0) {

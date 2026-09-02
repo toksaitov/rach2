@@ -69,10 +69,12 @@
 #define SCSI_TYPE_DISK 0x00
 
 /* Sense keys, of which this driver acts on three and records the rest. */
-#define SENSE_NOT_READY      0x02
-#define SENSE_MEDIUM_ERROR   0x03
-#define SENSE_ILLEGAL_REQ    0x05
-#define SENSE_UNIT_ATTENTION 0x06
+#define SENSE_NOT_READY       0x02
+#define SENSE_ILLEGAL_REQUEST 0x05
+#define SENSE_UNIT_ATTENTION  0x06
+#define SENSE_MEDIUM_ERROR    0x03
+#define SENSE_ILLEGAL_REQ     0x05
+#define SENSE_UNIT_ATTENTION  0x06
 
 /* The stages of one command. */
 #define STAGE_IDLE  0
@@ -150,7 +152,7 @@ struct msc_device {
     int lun;
     int max_lun;
     int recover;       /* one of the `RECOVER_` values */
-    int after_recover; /* the state to answer the caller with when it ends */
+    int after_recover; /* the one endpoint a single clear is for */
     uint32_t tag;
     uint32_t deadline;
     uint32_t ready_left; /* milliseconds left for the stick to become ready */
@@ -166,7 +168,8 @@ struct msc_device {
     uint32_t residue;
     int status; /* the status byte of the wrapper that ended the command */
     int sense_key;
-    int retried;
+    int retried; /* the request in flight has been sent a second time */
+    int sensing; /* the command in flight is the REQUEST SENSE for the request */
 
     /* What the stick is, once it is up. INQUIRY's two strings are kept
      * because `scratch` is the next command's buffer as well. */
@@ -193,6 +196,12 @@ struct msc_device {
 };
 
 static struct msc_device sticks[MSC_MAX_DEVICES];
+
+/* The tag of the last command sent to any stick. Tags go up across every
+ * stick and every attach, so a completion left over from a stick that was
+ * pulled cannot match a command of the stick plugged in after it on the
+ * same controller handle. */
+static uint32_t tag_seed;
 
 /* The one buffer a control transfer's setup packet is built in. One command
  * is in flight per stick and the class requests are part of that command, so
@@ -303,7 +312,7 @@ static int command_begin(struct msc_device *m, const uint8_t *cdb, int cdb_lengt
     if (cdb_length < 1 || cdb_length > 16) {
         return -1;
     }
-    m->tag++;
+    m->tag = ++tag_seed;
     for (i = 0; i < CBW_BYTES; i++) {
         m->cbw[i] = 0;
     }
@@ -720,7 +729,6 @@ int msc_completion(const struct usb_completion *completion)
             recover_begin(m, "the status wrapper claimed more residue than the transfer had");
             return 1;
         }
-        m->retried = 0;
         command_end(m, m->csw[12]);
         return 1;
 
@@ -741,7 +749,8 @@ static int class_request_in(struct msc_device *m, int request, uint8_t *data, in
     transfer.buffer = data;
     transfer.length = (uint32_t)length;
     transfer.direction = USB_DIR_IN;
-    transfer.generation = ++m->tag;
+    m->tag = ++tag_seed;
+    transfer.generation = m->tag;
     if (xhci_submit(m->device, 1, &transfer) != 0) {
         return -1;
     }
@@ -828,8 +837,6 @@ static int send_synchronize(struct msc_device *m)
 
     cdb_clear(cdb, 10);
     cdb[0] = SCSI_SYNCHRONIZE;
-    m->flushes++;
-    block_count_flush(); /* reported by /proc/disk beside the disk's own */
     return command_begin(m, cdb, 10, 0, 0, 0);
 }
 
@@ -868,6 +875,22 @@ static void ready(struct msc_device *m)
     klog(KLOG_INFO, "usbdisk", "ready: device %d: lun %d, %d sectors of %d bytes%s", m->device,
          m->lun, (int)m->blocks, (int)m->block_size, m->write_protect ? ", write protected" : "");
     usbdisk_arrived((int)(m - sticks));
+}
+
+/**
+ * Finish the request being served with `status`, and count a flush that
+ * reached the medium.
+ */
+static void serve_end(struct msc_device *m, int status)
+{
+    if (status == 0 && m->flushing) {
+        m->flushes++;
+        block_count_flush(); /* reported by /proc/disk beside the disk's own */
+    }
+    m->flushing = 0;
+    m->retried = 0;
+    m->sensing = 0;
+    request_end(m, status);
 }
 
 /**
@@ -963,27 +986,43 @@ static void step_command_done(struct msc_device *m)
         return;
 
     case MSC_STATE_READY:
-        if (m->request != 0) {
-            struct block_request *r = m->request;
-            int failed = status != CSW_GOOD || (m->residue != 0 && !m->flushing);
+        if (m->request == 0) {
+            return;
+        }
+        if (m->sensing) {
+            /* The answer to the REQUEST SENSE sent for the request. A stick
+             * with no cache answers a SYNCHRONIZE CACHE with ILLEGAL
+             * REQUEST, which is not a failure; a UNIT ATTENTION is the stick
+             * saying it was reset or its medium changed, and the command is
+             * sent once more; anything else fails the request. */
+            int key = (status == CSW_GOOD && m->residue == 0) ? (m->scratch[2] & 0x0F) : -1;
 
-            if (failed && status == CSW_FAILED && !m->retried) {
-                /* A check condition: the sense says whether this is worth
-                 * one retry. The sense itself is a command, so the retry
-                 * runs from the answer to it. */
+            m->sensing = 0;
+            m->sense_key = key < 0 ? 0 : key;
+            if (key == SENSE_ILLEGAL_REQUEST && m->flushing) {
+                serve_end(m, 0);
+                return;
+            }
+            if (key == SENSE_UNIT_ATTENTION && !m->retried) {
                 m->retried = 1;
-                m->state = MSC_STATE_READY;
-                if (send_request_sense(m) == 0) {
-                    m->stage = STAGE_CBW;
+                if ((m->flushing ? send_synchronize(m) : send_read_write(m, m->request)) == 0) {
                     return;
                 }
             }
-            m->flushing = 0;
-            m->retried = 0;
-            (void)r;
-            request_end(m, failed ? -EIO : 0);
+            serve_end(m, -EIO);
             return;
         }
+        if (status == CSW_FAILED) {
+            /* A check condition: the sense says what it was, and the stick
+             * will not take the next command until it has been asked. */
+            m->sensing = 1;
+            if (send_request_sense(m) == 0) {
+                return;
+            }
+            serve_end(m, -EIO);
+            return;
+        }
+        serve_end(m, (status == CSW_GOOD && (m->residue == 0 || m->flushing)) ? 0 : -EIO);
         return;
 
     default:
@@ -1037,6 +1076,29 @@ static void step_idle(struct msc_device *m)
     }
 }
 
+/**
+ * A transfer of the command in flight never answered.
+ *
+ * The controller still owns the transfer and the page it points at, which is
+ * the block layer's and goes to the next request the moment this one is
+ * completed. So the request is not completed here. Recovery is begun
+ * instead, and its clearing of the two endpoints takes the transfer back
+ * from the controller; the request is failed when recovery ends, late,
+ * which is what the block layer's quarantine is for. A stick that stops
+ * answering while it is being brought up is refused.
+ */
+static void step_timeout(struct msc_device *m)
+{
+    klog(KLOG_WARN, "usbdisk", "device %d: a transfer never answered", m->device);
+    m->tag = ++tag_seed; /* whatever arrives late is not this command's */
+    if (m->state != MSC_STATE_READY) {
+        m->stage = STAGE_IDLE;
+        refuse(m, "it stopped answering while it was being brought up");
+        return;
+    }
+    recover_begin(m, "a transfer never answered");
+}
+
 void msc_step(uint32_t elapsed_ms)
 {
     int i;
@@ -1061,39 +1123,36 @@ void msc_step(uint32_t elapsed_ms)
                 klog(KLOG_WARN, "usbdisk", "device %d: recovery never finished", m->device);
                 m->recover = RECOVER_NONE;
                 m->stage = STAGE_IDLE;
-                m->tag++;
-                request_end(m, -EIO);
+                m->tag = ++tag_seed;
+                serve_end(m, -EIO);
             }
-            continue;
+        } else {
+            if (m->stage == STAGE_DONE) {
+                step_command_done(m);
+            }
+            if (m->stage != STAGE_IDLE) {
+                m->deadline = (m->deadline > elapsed_ms) ? m->deadline - elapsed_ms : 0;
+                if (m->deadline == 0) {
+                    step_timeout(m);
+                }
+            } else {
+                step_idle(m);
+            }
         }
-        if (m->stage == STAGE_DONE) {
-            step_command_done(m);
-        }
-        if (m->stage == STAGE_IDLE && m->request == 0 && m->state == MSC_STATE_READY &&
-            m->queue_count != 0) {
+        /* The next request waiting, once the stick is idle: after a command
+         * ended, and after a timeout as well, so that nothing submitted from
+         * a process in the meantime goes out ahead of it. */
+        if (m->stage == STAGE_IDLE && m->recover == RECOVER_NONE && m->request == 0 &&
+            m->state == MSC_STATE_READY && m->queue_count != 0) {
             int flush = 0;
             struct block_request *next = queue_take(m, &flush);
 
             m->request = next;
             m->flushing = flush;
             if ((flush ? send_synchronize(m) : send_read_write(m, next)) != 0) {
-                request_end(m, -EIO);
+                serve_end(m, -EIO);
             }
         }
-        if (m->stage != STAGE_IDLE) {
-            m->deadline = (m->deadline > elapsed_ms) ? m->deadline - elapsed_ms : 0;
-            if (m->deadline == 0) {
-                klog(KLOG_WARN, "usbdisk", "device %d: a transfer never answered", m->device);
-                m->tag++; /* whatever arrives late is not this command's */
-                m->stage = STAGE_IDLE;
-                request_end(m, -EIO);
-                if (m->state != MSC_STATE_READY) {
-                    refuse(m, "it stopped answering while it was being brought up");
-                }
-            }
-            continue;
-        }
-        step_idle(m);
     }
 }
 
