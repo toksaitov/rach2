@@ -257,20 +257,37 @@ note "(the saved boot log above is the whole of what this machine printed)"
 #      the lag check through the shell: a read through the lag device sleeps
 #      its reader while a loop in another shell keeps counting, which is the
 #      scheduler's part of the block path and the thing no host test can
-#      show. A machine with no partition nodes is not broken; this is a note
-#      there. ----
+#      show. A machine with no slot report has no sealed disk and this is a
+#      note there; a machine whose bootctl answers has the sealed layout and
+#      owes its three partitions. ----
 NODES="$(run 'ls /dev 2>/dev/null' | grep '^disk0p[1-4]$' | tr '\n' ' ')"
+SLOTS="$(run 'bootctl status 2>/dev/null')"
 if [ -z "$NODES" ]; then
-    note "partitions: no partition nodes (no disk, or an empty table)"
+    if [ -n "$SLOTS" ]; then
+        bad "partitions: bootctl reports slots and there are no partition nodes"
+    else
+        note "partitions: no partition nodes (no disk, or an empty table)"
+    fi
 else
     note "partitions: $NODES"
-    OUT="$(run 'mkdir -p /mnt/accept-boot && mount -r -t vfat /dev/disk0p1 /mnt/accept-boot && ls -l /mnt/accept-boot/boot /mnt/accept-boot/boot/grub; umount /mnt/accept-boot; rmdir /mnt/accept-boot')"
+    if [ -n "$SLOTS" ]; then
+        for want in disk0p1 disk0p2 disk0p3; do
+            case " $NODES " in
+                *" $want "*) ;;
+                *) bad "partitions: the sealed layout has $want and this machine does not" ;;
+            esac
+        done
+    fi
+    OUT="$(run 'mkdir -p /mnt/accept-boot && mount -r -t vfat /dev/disk0p1 /mnt/accept-boot && grep "^/dev/disk0p1 /mnt/accept-boot vfat ro" /proc/mounts && ls -l /mnt/accept-boot/boot /mnt/accept-boot/boot/grub; umount /mnt/accept-boot; rmdir /mnt/accept-boot')"
     if [ -z "$OUT" ]; then
         note "partitions: /dev/disk0p1 is not a FAT volume this kernel mounts"
     else
+        case "$OUT" in
+            "/dev/disk0p1 /mnt/accept-boot vfat ro"*) note "partitions: /dev/disk0p1 mounted read-only, as asked" ;;
+            *) bad "partitions: /dev/disk0p1 mounted, but /proc/mounts does not say read-only" ;;
+        esac
         # The listing's sizes against the slot report: the same bytes read
         # through two paths, the FAT driver and bootslot's own walk.
-        SLOTS="$(run 'bootctl status 2>/dev/null')"
         for name in kernel fallback boot.cfg grubenv; do
             size="$(echo "$OUT" | awk -v n="$name" '$NF == n { print $5 }')"
             case "$name" in
@@ -285,19 +302,35 @@ else
             fi
         done
     fi
-    if run 'cat /proc/cmdline' | grep -q 'rach2.blocklag='; then
-        # 64 KiB in eight-sector requests is sixteen sleeps of N ticks each;
-        # a loop that counted nothing meanwhile is a reader that never slept.
-        # shellcheck disable=SC2016
-        OUT="$(run 'rm -f /tmp/accept-lag; (dd if=/dev/disk0p1 of=/dev/null bs=65536 count=1 2>/dev/null; touch /tmp/accept-lag) & i=0; while [ ! -f /tmp/accept-lag ]; do i=$((i + 1)); done; rm -f /tmp/accept-lag; echo $i')"
-        case "$OUT" in
-            ''|*[!0-9]*) bad "partitions: the lag check gave no count: $OUT" ;;
-            0) bad "partitions: the shell counted nothing while the read slept through the lag" ;;
-            *) note "partitions: the shell counted to $OUT while a 64 KiB read slept through the lag" ;;
-        esac
-    else
-        note "partitions: the lag check needs rach2.blocklag=N on the boot line"
-    fi
+    LAGN="$(run 'cat /proc/cmdline' | tr ' ' '\n' | sed -n 's/^rach2.blocklag=//p' | head -1)"
+    case "$LAGN" in
+        ''|*[!0-9]*)
+            note "partitions: the lag check needs rach2.blocklag=N on the boot line"
+            ;;
+        *)
+            # 64 KiB in eight-sector requests is sixteen sleeps of N ticks
+            # each, so the read takes at least 16N ticks by the machine's own
+            # clock; a loop that counted nothing meanwhile is a reader that
+            # never slept, and a read that failed is said so and not counted.
+            # shellcheck disable=SC2016
+            OUT="$(run 'rm -f /tmp/accept-lag-ok /tmp/accept-lag-bad; t0=$(cut -d" " -f1 /proc/uptime); (if dd if=/dev/disk0p1 of=/dev/null bs=65536 count=1 2>/dev/null; then touch /tmp/accept-lag-ok; else touch /tmp/accept-lag-bad; fi) & i=0; while [ ! -f /tmp/accept-lag-ok ] && [ ! -f /tmp/accept-lag-bad ]; do i=$((i + 1)); done; t1=$(cut -d" " -f1 /proc/uptime); if [ -f /tmp/accept-lag-ok ]; then echo "ok $i $t0 $t1"; else echo "bad $i $t0 $t1"; fi; rm -f /tmp/accept-lag-ok /tmp/accept-lag-bad')"
+            # shellcheck disable=SC2086
+            set -- $OUT
+            if [ "$1" != "ok" ]; then
+                bad "partitions: the read through the lag failed or gave no answer: $OUT"
+            else
+                count="$2"
+                ticks="$(awk -v a="$3" -v b="$4" 'BEGIN { printf "%d", (b - a) * 100 + 0.5 }')"
+                if [ "$count" = "0" ]; then
+                    bad "partitions: the shell counted nothing while the read slept through the lag"
+                elif [ "$ticks" -lt $((16 * LAGN)) ]; then
+                    bad "partitions: the 64 KiB read took $ticks ticks, under the $((16 * LAGN)) the lag of $LAGN owes"
+                else
+                    note "partitions: the shell counted to $count while a 64 KiB read slept $ticks ticks through the lag of $LAGN"
+                fi
+            fi
+            ;;
+    esac
 fi
 
 # ---- the ext2 root, once milestone 43 has made it: the candidate's command
