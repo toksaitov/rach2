@@ -17,7 +17,7 @@
 /* How many devices this kernel holds at once. The tables are fixed, like every
  * other table in this kernel, and four is more than the machines here have
  * room for on their root ports without a hub. */
-#define USB_MAX_DEVICES 8
+#define USB_MAX_DEVICES 12
 
 /* The largest descriptor this kernel reads. A configuration descriptor with
  * one interface and one endpoint is 25 bytes; a device with several interfaces

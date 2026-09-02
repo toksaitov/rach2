@@ -29,14 +29,14 @@
 
 /* The standard requests this kernel sends, and the descriptor types it asks
  * for. Everything else a device offers is left alone. */
-#define REQ_GET_DESCRIPTOR   6
+#define REQ_GET_DESCRIPTOR    6
 #define REQ_SET_CONFIGURATION 9
 /* The class request that puts a human-interface device in boot protocol,
  * whose two report layouts are fixed and need no describing. */
-#define REQ_SET_PROTOCOL 11
-#define TYPE_TO_INTERFACE 0x21
-#define DESC_DEVICE 1
-#define DESC_CONFIG 2
+#define REQ_SET_PROTOCOL      11
+#define TYPE_TO_INTERFACE     0x21
+#define DESC_DEVICE           1
+#define DESC_CONFIG           2
 
 /* Descriptor types as they appear inside a configuration. */
 #define DESC_INTERFACE 4
@@ -64,29 +64,29 @@
 #define CLOSE_LIMIT_MS 5000u
 
 /* Where a device is in its enumeration. */
-#define ST_FREE      0
-#define ST_SETTLING  1
-#define ST_RESETTING 2
-#define ST_SLOT      3
-#define ST_ADDRESS   4
-#define ST_DESC8     5
-#define ST_PACKET    6
-#define ST_DESC18    7
-#define ST_CONFIG9   8
-#define ST_CONFIGALL 9
-#define ST_OPEN_EP   10
+#define ST_FREE       0
+#define ST_SETTLING   1
+#define ST_RESETTING  2
+#define ST_SLOT       3
+#define ST_ADDRESS    4
+#define ST_DESC8      5
+#define ST_PACKET     6
+#define ST_DESC18     7
+#define ST_CONFIG9    8
+#define ST_CONFIGALL  9
+#define ST_OPEN_EP    10
 /* A stick has two endpoints and the controller takes one command each. */
-#define ST_OPEN_EP2  18
+#define ST_OPEN_EP2   18
 #define ST_SET_CONFIG 11
-#define ST_PROTOCOL  15
-#define ST_RUNNING   12
-#define ST_FAILED    13
-#define ST_CLOSING   14
-#define ST_HALTED    16
+#define ST_PROTOCOL   15
+#define ST_RUNNING    12
+#define ST_FAILED     13
+#define ST_CLOSING    14
+#define ST_HALTED     16
 /* A device whose slot the controller never gave back. The entry is not free
  * and never will be: the controller may still write into the rings and the
  * context that slot names, so nothing of this device is reused. */
-#define ST_TOMBSTONE 17
+#define ST_TOMBSTONE  17
 
 struct usb_device_state {
     int state;
@@ -193,15 +193,14 @@ void usb_parse_config(const uint8_t *buffer, int length, struct usb_interface_in
              * would be taking one that is not there. The protocol has to be
              * one of the two the boot report layouts are defined for, or the
              * one transport every flash drive carries. */
-            in_boot_interface = (buffer[offset + 3] == 0 &&
-                                 buffer[offset + 5] == USB_CLASS_HID &&
+            in_boot_interface = (buffer[offset + 3] == 0 && buffer[offset + 5] == USB_CLASS_HID &&
                                  buffer[offset + 6] == USB_SUBCLASS_BOOT &&
                                  (buffer[offset + 7] == USB_PROTOCOL_KBD ||
                                   buffer[offset + 7] == USB_PROTOCOL_MOUSE));
-            in_storage_interface_now = (buffer[offset + 3] == 0 &&
-                                        buffer[offset + 5] == USB_CLASS_STORAGE &&
-                                        buffer[offset + 6] == USB_SUBCLASS_SCSI &&
-                                        buffer[offset + 7] == USB_PROTOCOL_BULK_ONLY);
+            in_storage_interface_now =
+                (buffer[offset + 3] == 0 && buffer[offset + 5] == USB_CLASS_STORAGE &&
+                 buffer[offset + 6] == USB_SUBCLASS_SCSI &&
+                 buffer[offset + 7] == USB_PROTOCOL_BULK_ONLY);
             in_storage_interface = in_storage_interface_now;
             if ((in_boot_interface || in_storage_interface_now) && !out->found &&
                 out->kind == USB_KIND_NONE) {
@@ -567,16 +566,26 @@ static void step_device(struct usb_device_state *d)
             }
             d->speed = status.speed;
         }
-        if (xhci_device_open(d->port, d->speed) != 0) {
-            /* The controller takes one command at a time, and another device
-             * may have one in flight; this is a turn to wait, not a refusal.
-             * The deadline armed when the reset began is what ends the
-             * waiting. */
-            if (!expired(d)) {
+        {
+            struct usb_location where;
+
+            where.root_port = d->port;
+            where.depth = 0;
+            where.route = 0;
+            where.tt_device = 0;
+            where.tt_port = 0;
+            where.tt_multi = 0;
+            if (xhci_device_open(&where, d->speed) != 0) {
+                /* The controller takes one command at a time, and another
+                 * device may have one in flight; this is a turn to wait, not
+                 * a refusal. The deadline armed when the reset began is what
+                 * ends the waiting. */
+                if (!expired(d)) {
+                    return;
+                }
+                fail(d, "no slot could be asked for");
                 return;
             }
-            fail(d, "no slot could be asked for");
-            return;
         }
         d->state = ST_SLOT;
         arm(d);
@@ -742,8 +751,8 @@ static void step_device(struct usb_device_state *d)
 
             endpoint.number = d->interface.ep_number;
             endpoint.direction = USB_DIR_IN;
-            endpoint.type = (d->interface.kind == USB_KIND_STORAGE) ? USB_EP_BULK
-                                                                    : USB_EP_INTERRUPT;
+            endpoint.type =
+                (d->interface.kind == USB_KIND_STORAGE) ? USB_EP_BULK : USB_EP_INTERRUPT;
             endpoint.max_packet = d->interface.ep_max_packet;
             endpoint.interval = d->interface.ep_interval;
             d->ep_dci = d->interface.ep_number * 2 + 1;
@@ -839,9 +848,10 @@ static void step_device(struct usb_device_state *d)
             d->state = ST_RUNNING;
             d->reporting = 0;
             enumerating = -1;
-            klog(KLOG_INFO, "usb", "device: port %d: %x:%x, class %d protocol %d, endpoints %d and %d",
-                 d->port + 1, (int)d->vendor, (int)d->product, d->interface.class_code,
-                 d->interface.protocol, d->interface.ep_number, d->interface.ep_out_number);
+            klog(KLOG_INFO, "usb",
+                 "device: port %d: %x:%x, class %d protocol %d, endpoints %d and %d", d->port + 1,
+                 (int)d->vendor, (int)d->product, d->interface.class_code, d->interface.protocol,
+                 d->interface.ep_number, d->interface.ep_out_number);
             return;
         }
         /* The device is configured; now it is told to report in the protocol
