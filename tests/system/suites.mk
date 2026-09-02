@@ -142,7 +142,7 @@ $(PTYDRIVE): tests/system/runner/ptydrive.c
 # `tests/run default` both land here; the registry in tests/registry names it.
 run-default: test-image $(RUNTESTS)
 	$(RUNTESTS) $(NIC_DEV) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
-	    --timeout 300 --steptmo 60
+	    --timeout 300 --steptmo 60 --log $(TEST_IMAGE).default.log
 # Everything every suite needs, in one target, so `tests/run all` can build once
 # through one Make and then run the suites at the same time. Two suites each
 # invoking their own build would be two Makes against one `build/` tree; with
