@@ -196,6 +196,73 @@ static pid_t spawn_shell(void)
 
 #ifdef INIT_METAL
 /**
+ * Check every ext2 partition before anything runs from the disk, on the
+ * recovery system, which is the system that carries `/sbin/e2fsck` and
+ * whose root needs nothing from the disk; an image without the program
+ * skips this. The partitions are the four MBR entries the kernel
+ * publishes as nodes. A partition is an ext2 one by the magic at byte
+ * 1080 of it. A fork that fails is retried a few times a second apart,
+ * as the shell's is, because a check skipped is a repair not made.
+ * `e2fsck -p` repairs what needs no question and leaves the rest for a
+ * person; its status is the record, on the console and so in the boot
+ * log: 0 clean, 1 repaired, 2 repaired and a reboot wanted, 4 left with
+ * faults, 8 an error. The magic is at byte 56 of the superblock, which
+ * starts at byte 1024 of the partition.
+ */
+static void check_ext2_partitions(void)
+{
+    static const char *const nodes[] = {"/dev/disk0p1", "/dev/disk0p2", "/dev/disk0p3",
+                                        "/dev/disk0p4"};
+    unsigned i;
+
+    if (access("/sbin/e2fsck", X_OK) != 0) {
+        return;
+    }
+    for (i = 0; i < sizeof(nodes) / sizeof(nodes[0]); i++) {
+        unsigned char sector[512]; /* a raw window reads whole sectors */
+        int fd = open(nodes[i], O_RDONLY);
+        pid_t pid;
+        int status = 0, tries;
+
+        if (fd < 0) {
+            continue;
+        }
+        if (lseek(fd, 1024, SEEK_SET) != 1024 ||
+            read(fd, sector, sizeof(sector)) != (ssize_t)sizeof(sector) || sector[56] != 0x53 ||
+            sector[57] != 0xEF) {
+            close(fd);
+            continue;
+        }
+        close(fd);
+        for (tries = 0; (pid = fork()) < 0 && tries < 5; tries++) {
+            sleep(1);
+        }
+        if (pid == 0) {
+            char *argv[4];
+
+            argv[0] = (char *)"e2fsck";
+            argv[1] = (char *)"-p";
+            argv[2] = (char *)nodes[i];
+            argv[3] = 0;
+            execve("/sbin/e2fsck", argv, environ);
+            _exit(127);
+        }
+        if (pid < 0) {
+            fprintf(stderr, "init: e2fsck: %s: fork failed\n", nodes[i]);
+            continue;
+        }
+        while (waitpid(pid, &status, 0) < 0) {
+            if (errno != EINTR) {
+                status = 8 << 8; /* not waited for: reported as e2fsck's own error */
+                break;
+            }
+        }
+        fprintf(stderr, "init: e2fsck: %s: status %d\n", nodes[i],
+                WIFEXITED(status) ? WEXITSTATUS(status) : 8);
+    }
+}
+
+/**
  * Whether the boot line handed the network to userland.
  *
  * `rach2.ip=none` means the kernel came up with the device probed and IPv4
@@ -423,6 +490,9 @@ int main(void)
     signal(SIGTERM, shutdown_handler);
 
     clear_var_run();
+#ifdef INIT_METAL
+    check_ext2_partitions();
+#endif
 
     for (;;) {
         int status;

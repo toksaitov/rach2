@@ -65,7 +65,7 @@ The selected output directory contains three builds of `init.c`:
 
 * `init-shell` starts `/bin/sh`, then `/ish`, without authentication.
 * `init-login` starts only `/bin/login`. It contains no shell fallback.
-* `init-metal` has the same console login and also configures userland networking when the boot line has `rach2.ip=none`, then supervises foreground Dropbear.
+* `init-metal` has the same console login and also configures userland networking when the boot line has `rach2.ip=none`, then supervises foreground Dropbear. Where the image carries `/sbin/e2fsck`, which the recovery image does, it first runs `e2fsck -p` on each of the four MBR partition nodes whose superblock has the ext2 magic, retrying a failed fork a few times and records `init: e2fsck: /dev/disk0pN: status S` on the console, before anything else starts: 0 clean, 1 repaired, 4 left with faults for a person, 8 an error.
 
 All three clear one level of `/var/run` at boot, start `/bin/update` and keep it running, reap orphaned children, continue stopped children, respawn the console session, and translate `SIGUSR1`, `SIGUSR2`, and `SIGTERM` into halt, poweroff, and restart. `update` is the periodic sync: it sleeps thirty seconds and calls `sync(2)`, for ever, so data written back through the buffer cache reaches the disk within that time whether or not a program asks. A strict init that cannot exec `/bin/login` retries after a delay. Booting with `rach2.rescue` enters the kernel debug shell instead.
 

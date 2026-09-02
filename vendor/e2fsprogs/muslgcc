@@ -17,11 +17,11 @@ for a in "$@"; do
   esac
 done
 case "$MODE" in
-  compile) exec "$GCC" -m32 -isystem "$PREFIX/include" "$@" ;;
+  compile) exec "$GCC" -m32 -D__rach2__ -isystem "$PREFIX/include" "$@" ;;
   partial) exec "$GCC" -m32 -isystem "$PREFIX/include" -nostdlib "$@" ;;
   *)
     LIBGCC=$("$GCC" -print-libgcc-file-name)
-    exec "$GCC" -m32 -isystem "$PREFIX/include" -nostdlib -nostartfiles -static \
+    exec "$GCC" -m32 -D__rach2__ -isystem "$PREFIX/include" -nostdlib -nostartfiles -static \
          -L "$PREFIX/lib" \
          "$PREFIX/lib/crt1.o" "$PREFIX/lib/crti.o" "$@" \
          "$PREFIX/lib/libc.a" "$LIBGCC" "$PREFIX/lib/crtn.o" ;;

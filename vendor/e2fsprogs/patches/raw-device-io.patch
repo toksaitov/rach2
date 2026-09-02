@@ -1,0 +1,37 @@
+The kernel's partition nodes are raw windows: whole 512-byte sectors at
+sector-aligned offsets, and BLKGETSIZE and BLKGETSIZE64 for the size. The
+compiler behind muslgcc is i686-elf-gcc and defines no operating-system
+macro, so the wrapper defines __rach2__, and this patch takes it in the two
+places the library decides how to reach a device: getsize.c defines the two
+size requests, which it otherwise does only under __linux__, and without
+them sizes a device by reading single bytes at offsets; unix_io.c aligns
+every read and write to 512 bytes through its bounce buffer, as it does for
+Cygwin, so the superblock's changed bytes are written as whole sectors.
+
+--- a/lib/ext2fs/getsize.c
++++ b/lib/ext2fs/getsize.c
+@@ -48,11 +48,11 @@
+ #endif
+ #include <ctype.h>
+ 
+-#if defined(__linux__) && defined(_IO) && !defined(BLKGETSIZE)
++#if (defined(__linux__) || defined(__rach2__)) && defined(_IO) && !defined(BLKGETSIZE)
+ #define BLKGETSIZE _IO(0x12,96)	/* return device size */
+ #endif
+ 
+-#if defined(__linux__) && defined(_IOR) && !defined(BLKGETSIZE64)
++#if (defined(__linux__) || defined(__rach2__)) && defined(_IOR) && !defined(BLKGETSIZE64)
+ #define BLKGETSIZE64 _IOR(0x12,114,size_t)	/* return device size in bytes (u64 *arg) */
+ #endif
+ 
+--- a/lib/ext2fs/unix_io.c
++++ b/lib/ext2fs/unix_io.c
+@@ -967,7 +967,7 @@
+ 		}
+ 	}
+ 
+-#if defined(__CYGWIN__)
++#if defined(__CYGWIN__) || defined(__rach2__)
+ 	/*
+ 	 * Some operating systems require that the buffers be aligned,
+ 	 * regardless of O_DIRECT

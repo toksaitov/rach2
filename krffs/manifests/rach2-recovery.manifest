@@ -39,7 +39,7 @@ file 0755 /bin/dropbearmulti build/vendor/dropbear/dropbearmulti
 
 dir 0755 /sbin
 # The ext2 checker, for the day the machine's own root was not unmounted:
-# `init` here runs it on every ext2 partition before it starts anything else,
+# `init` here runs it on each partition node with the ext2 magic before anything else,
 # and it can be run by hand over SSH. It is the one program of e2fsprogs this
 # system stages, because checking is the one use recovery has for it.
 file 0755 /sbin/e2fsck build/vendor/e2fsprogs/e2fsck
@@ -51,6 +51,9 @@ dir 0755 /etc
 dir 0700 /etc/dropbear
 text 0644 /etc/motd Rach2 recovery. This machine mounts nothing from the disk it is repairing: /dev/disk0 is the whole drive and reflash writes it.\n
 text 0644 /etc/hostname rach2\n
+# An empty mount table: e2fsck reads it to see whether its device is mounted,
+# and complains on every run when the file is missing.
+text 0644 /etc/mtab \n
 text 0644 /etc/passwd root:x:0:0:root:/root:/bin/sh\ntest:x:1000:1000:test:/home/test:/bin/sh\n
 file 0600 /etc/shadow krffs/shadow
 text 0644 /etc/group root:x:0:\ntest:x:1000:\n
