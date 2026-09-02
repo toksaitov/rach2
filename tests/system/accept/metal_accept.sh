@@ -370,7 +370,7 @@ fi
 if run 'cat /proc/cmdline' | grep -q 'rach2.root=ext2'; then
     note "the fourth partition is the ext2 root now; no scratch partition"
 elif run 'ls /dev/disk0p4 2>/dev/null' | grep -q disk0p4; then
-    OUT="$(run 'mkdir -p /mnt && mount -t vfat /dev/disk0p4 /mnt && echo accept > /mnt/accept.txt && cat /mnt/accept.txt && umount /mnt')"
+    OUT="$(run 'mkdir -p /mnt && mount -t vfat /dev/disk0p4 /mnt && echo accept > /mnt/accept.txt && cat /mnt/accept.txt; rm -f /mnt/accept.txt; umount /mnt')"
     if [ "$OUT" = "accept" ]; then
         note "the scratch partition mounts for writing, takes a file and gives it back"
     else
