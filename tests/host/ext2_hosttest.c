@@ -2,7 +2,7 @@
  * ext2_hosttest.c: the ext2 driver over the buffer cache over images the
  * host's mke2fs made.
  *
- * host-deps: rach2/sys/fs/ext2.c rach2/sys/fs/bcache.c
+ * host-deps: rach2/sys/fs/ext2.c rach2/sys/fs/bcache.c rach2/sys/fs/fatcommon.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  *
  * The volumes are built here from a staged tree by the host's mke2fs on the
@@ -30,6 +30,9 @@ extern unsigned long fread(void *buf, unsigned long size, unsigned long n, void 
 extern unsigned long fwrite(const void *buf, unsigned long size, unsigned long n, void *f);
 extern int fclose(void *f);
 extern char *fgets(char *s, int n, void *f);
+extern char *strstr(const char *s, const char *needle);
+extern unsigned long strlen(const char *s);
+extern long atol(const char *s);
 extern long strtol(const char *s, char **end, int base);
 extern unsigned long strtoul(const char *s, char **end, int base);
 extern int strcmp(const char *a, const char *b);
@@ -54,6 +57,7 @@ void k_panic(const char *s)
    driver puts a refusal or a read-only reason. */
 static char last_log[160];
 static char last_warn[160];
+static char last_check[160]; /* the check's own record, before the read-only reason */
 extern int vsnprintf(char *s, unsigned long n, const char *fmt, __builtin_va_list ap);
 void klog(int level, const char *sys, const char *fmt, ...)
 {
@@ -65,6 +69,9 @@ void klog(int level, const char *sys, const char *fmt, ...)
     __builtin_va_end(ap);
     if (level == 4) {
         __builtin_memcpy(last_warn, last_log, sizeof(last_warn));
+    }
+    if (memcmp(last_log, "check: ", 7) == 0) {
+        __builtin_memcpy(last_check, last_log, sizeof(last_check));
     }
 }
 
@@ -210,17 +217,28 @@ static void use_image(const char *path, uint64_t bytes)
 static struct vfs_mount mnt;
 #define OPS (vfs_ext2_type.ops)
 
-static int mount_image(void)
+static int mount_flags(uint32_t flags)
 {
     int rc;
 
     __builtin_memset(&mnt, 0, sizeof(mnt));
     mnt.type = &vfs_ext2_type;
     mnt.dev = &dev;
-    mnt.flags = 0;
+    mnt.flags = flags;
     mnt.ns_holder = -1;
-    rc = vfs_ext2_type.mount(&mnt, &dev, 0, "");
+    rc = vfs_ext2_type.mount(&mnt, &dev, flags, "");
     return rc;
+}
+
+static int mount_image(void)
+{
+    return mount_flags(0);
+}
+
+/* A read-only mount: no check, nothing written, the crash state as it is. */
+static int mount_ro(void)
+{
+    return mount_flags(VFS_MS_RDONLY);
 }
 
 static void unmount_image(void)
@@ -832,9 +850,9 @@ static void refusal_rows(void)
     b[1] = 0;
     poke(img, 1024 + 58, b, 2);
     use_image(img, bytes);
-    check(mount_image() == 0 && (mnt.flags & VFS_MS_RDONLY) != 0 &&
-              memcmp(last_warn, "mounted read-only: not unmounted cleanly", 40) == 0,
-          "a volume whose valid bit is clear mounts read-only by name");
+    last_check[0] = 0;
+    check(mount_ro() == 0 && (mnt.flags & VFS_MS_RDONLY) != 0 && last_check[0] == 0,
+          "a volume whose valid bit is clear is not checked for a read-only mount");
     unmount_image();
 
     /* A revision 0 volume, without filetype: readdir reads each inode. */
@@ -1975,6 +1993,64 @@ static int crash_ok(int i)
     }
 }
 
+/* A copy of `src` at `dst`, here rather than through cp: the matrix makes
+   one per stop. */
+static int copy_file(const char *src, const char *dst)
+{
+    void *in = fopen(src, "rb");
+    void *out = in ? fopen(dst, "wb") : 0;
+    unsigned long got;
+    int ok = out != 0;
+
+    while (ok && (got = fread(abuf, 1, sizeof(abuf), in)) > 0) {
+        ok = fwrite(abuf, 1, got, out) == got;
+    }
+    if (in) {
+        fclose(in);
+    }
+    if (out) {
+        fclose(out);
+    }
+    return ok;
+}
+
+/* The check over a copy of the crash state: a writable mount, or a
+   read-only one whose fault is what the order writes in more than one
+   step: a link count after its entry, a size and an i_blocks after the
+   pointers, and a directory's two entries and its `..` across a move. */
+static int check_accepts(const char *img, uint64_t bytes)
+{
+    static const char *const counts[] = {
+        "a link count that does not match its names",
+        "a directory link count that does not match its entries",
+        "named twice with one link",
+        "a block past the size",
+        "i_blocks that does not match its pointers",
+        "a directory with two parents",
+        "a second entry that is not the parent",
+    };
+    int ok, i;
+
+    if (!copy_file(img, FIXDIR "/check.ext2")) {
+        return 0;
+    }
+    use_image(FIXDIR "/check.ext2", bytes);
+    last_check[0] = 0;
+    if (mount_image() != 0) {
+        printf("  the check refused the stop: %s\n", last_warn);
+        return 0;
+    }
+    ok = (mnt.flags & VFS_MS_RDONLY) == 0;
+    for (i = 0; !ok && i < 7; i++) {
+        ok = strstr(last_check, counts[i]) != 0;
+    }
+    if (!ok) {
+        printf("  the check found: %s\n", last_check);
+    }
+    unmount_image();
+    return ok;
+}
+
 /* Whether the sequence's moved or linked file is reachable by any of its
    names on the mounted volume. */
 static int names_present(int i)
@@ -2031,6 +2107,250 @@ static int repaired_ok(const char *img, uint64_t bytes, int i, int stop, int nam
     return rc;
 }
 
+/* ---- the dirty-volume rows ---- */
+
+/* Run debugfs -w over `img` with the requests in `script`, one per line. */
+static int debugfs_script(const char *img, const char *script)
+{
+    char cmd[512];
+    void *f = fopen(FIXDIR "/dbg.cmd", "wb");
+
+    if (!f) {
+        return 0;
+    }
+    fwrite(script, 1, strlen(script), f);
+    fclose(f);
+    snprintf(cmd, sizeof(cmd),
+             ". tools/setup/e2fsprogs_path.sh; debugfs -w -f " FIXDIR "/dbg.cmd %s >/dev/null 2>&1",
+             img);
+    return run(cmd);
+}
+
+/* The number after `key` in debugfs's answer to `request`, or -1. */
+static long debugfs_number(const char *img, const char *request, const char *key)
+{
+    char cmd[512], line[512];
+    void *f;
+    long v = -1;
+
+    snprintf(cmd, sizeof(cmd),
+             ". tools/setup/e2fsprogs_path.sh; debugfs -R '%s' %s 2>/dev/null > " FIXDIR "/dbg.out",
+             request, img);
+    if (!run(cmd)) {
+        return -1;
+    }
+    f = fopen(FIXDIR "/dbg.out", "rb");
+    if (!f) {
+        return -1;
+    }
+    while (fgets(line, sizeof(line), f)) {
+        char *at = strstr(line, key);
+
+        if (at && at[strlen(key)] >= '0' && at[strlen(key)] <= '9') {
+            v = atol(at + strlen(key));
+            break;
+        }
+    }
+    fclose(f);
+    return v;
+}
+
+/* The superblock's state field on disk. */
+static int disk_state(const char *img)
+{
+    unsigned char b[2];
+
+    if (host_read(img, b, 2, 1024 + 58) != 2) {
+        return -1;
+    }
+    return b[0] | (b[1] << 8);
+}
+
+/* Write `/fill` until the volume is full; 0 when ENOSPC ended it. */
+static int fill_volume(void)
+{
+    int rc;
+    void *n = make_file(mnt.root, "fill", &rc);
+    uint64_t off = 0;
+
+    if (!n) {
+        return rc;
+    }
+    for (;;) {
+        rc = write_at(n, pattern, 4096, off);
+        if (rc != 0) {
+            break;
+        }
+        off += 4096;
+    }
+    OPS->put(&mnt, n);
+    return rc == -ENOSPC ? 0 : rc;
+}
+
+/* A fresh tree volume with its valid bit clear and `script` applied. */
+static uint64_t dirty_image(const char *img, const char *script)
+{
+    uint64_t bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
+    char cmd[1024];
+
+    snprintf(cmd, sizeof(cmd), "ssv state 0\n%s", script);
+    if (!debugfs_script(img, cmd)) {
+        printf("ext2_hosttest: debugfs failed on %s\n", img);
+        exit(1);
+    }
+    return bytes;
+}
+
+/* A dirty volume that must mount read-only with `fault` named by the check. */
+static void fault_row(const char *img, const char *script, const char *fault, const char *what)
+{
+    uint64_t bytes = dirty_image(img, script);
+    int rc;
+
+    use_image(img, bytes);
+    last_check[0] = 0;
+    rc = mount_rw();
+    if (rc != 0 || (mnt.flags & VFS_MS_RDONLY) == 0 || !strstr(last_check, fault)) {
+        printf("  mount %d, flags 0x%x, check: %s\n", rc, (unsigned)mnt.flags, last_check);
+        check(0, what);
+    } else {
+        void *n = make_file(mnt.root, "new", &rc);
+
+        check(n == 0 && rc == -EROFS && (disk_state(img) & 2) != 0,
+              "and refuses a create with EROFS, the error bit set on disk");
+        check(1, what);
+    }
+    if (rc == 0 || mnt.root) {
+        unmount_rw();
+    }
+}
+
+static void dirty_rows(void)
+{
+    const char *img = FIXDIR "/dirty.ext2";
+    uint64_t bytes;
+    unsigned char b[4];
+    char script[256];
+    long blk, ino, table, root_block;
+    struct vfs_statfs st;
+    int rc;
+
+    /* A consistent volume with its valid bit clear: checked, writable,
+       valid again at unmount. */
+    bytes = dirty_image(img, "");
+    use_image(img, bytes);
+    last_check[0] = 0;
+    check(mount_rw() == 0 && (mnt.flags & VFS_MS_RDONLY) == 0 && streq(last_check, "check: clean"),
+          "a consistent volume whose valid bit is clear is checked and mounts writable");
+    rc = unmount_rw();
+    check(rc == 0 && disk_state(img) == 1 && e2fsck_clean(img),
+          "and its unmount marks it valid again");
+
+    /* The counts are recounted, not believed. */
+    bytes = dirty_image(img, "ssv free_blocks_count 1\nssv free_inodes_count 1\n"
+                             "set_bg 0 free_blocks_count 1\nset_bg 0 free_inodes_count 1\n");
+    use_image(img, bytes);
+    check(mount_rw() == 0 && OPS->statfs(&mnt, &st) == 0 && st.bfree > 1000,
+          "a dirty volume's free counts are recounted from the bitmaps");
+    check(unmount_rw() == 0 && e2fsck_clean(img), "and written back, so e2fsck finds them right");
+
+    /* A lost block is kept, out of the allocator's reach, and the error
+       bit says so until e2fsck has run. */
+    bytes = dirty_image(img, "setb 4000\n");
+    use_image(img, bytes);
+    last_check[0] = 0;
+    check(mount_rw() == 0 && (mnt.flags & VFS_MS_RDONLY) == 0 &&
+              strstr(last_check, "1 lost blocks, 0 orphan inodes") != 0,
+          "a lost block mounts writable with the block counted");
+    check(fill_volume() == 0 && unmount_rw() == 0 && disk_state(img) == 2 &&
+              e2fsck_status(img) == 4 && run("grep -q -- '-(4000)\\|-4000' " FIXDIR "/fsck.out"),
+          "and filling the volume leaves it lost: the error bit set, e2fsck still owed it");
+    use_image(img, bytes);
+    last_check[0] = 0;
+    check(mount_rw() == 0 && strstr(last_check, "1 lost blocks") != 0 && unmount_rw() == 0 &&
+              disk_state(img) == 2,
+          "the error bit survives a mount and an unmount");
+    snprintf(script, sizeof(script),
+             ". tools/setup/e2fsprogs_path.sh; e2fsck -fp %s >/dev/null 2>&1; test $? -eq 1", img);
+    check(run(script), "e2fsck -p repairs it");
+    use_image(img, bytes);
+    last_check[0] = 0;
+    check(mount_rw() == 0 && (mnt.flags & VFS_MS_RDONLY) == 0 && last_check[0] == 0 &&
+              unmount_rw() == 0 && disk_state(img) == 1,
+          "and the repaired volume mounts without a check and unmounts valid");
+
+    /* An orphan with its blocks is kept whole. */
+    bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
+    ino = debugfs_number(img, "stat /dir/big.bin", "Inode: ");
+    blk = debugfs_number(img, "blocks /dir/big.bin", "");
+    bytes = dirty_image(img, "unlink /dir/big.bin\n");
+    use_image(img, bytes);
+    last_check[0] = 0;
+    check(ino > 0 && blk > 0 && mount_rw() == 0 && (mnt.flags & VFS_MS_RDONLY) == 0 &&
+              strstr(last_check, "0 lost blocks, 1 orphan inodes") != 0,
+          "an orphan inode mounts writable with the orphan counted");
+    snprintf(script, sizeof(script),
+             "grep -q 'Unattached inode %ld' " FIXDIR "/fsck.out && ! grep -q 'Multiply' " FIXDIR
+             "/fsck.out",
+             ino);
+    check(fill_volume() == 0 && unmount_rw() == 0 && e2fsck_status(img) == 4 && run(script),
+          "and filling the volume leaves the orphan and its blocks to e2fsck");
+
+    /* The faults, each read-only by name. */
+    bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
+    blk = debugfs_number(img, "blocks /hello.txt", "");
+    snprintf(script, sizeof(script), "unlink /hello.txt\nunlink /hello.link\nfreeb %ld\n", blk);
+    fault_row(img, script, "a used block the bitmap calls free",
+              "an orphan whose block the bitmap calls free mounts read-only");
+    if (host_read(img, b, 4, 4096 + 8) == 4) {
+        table = b[0] | (b[1] << 8) | (b[2] << 16) | ((long)b[3] << 24);
+        snprintf(script, sizeof(script), "sif /dir/big.bin block[0] %ld\n", table);
+        fault_row(img, script, "a block claimed twice",
+                  "a file pointing into the inode table mounts read-only");
+    } else {
+        check(0, "the descriptor read for the inode-table row");
+    }
+    fault_row(img, "freei /dir/big.bin\n", "a reached inode the bitmap calls free",
+              "a reached inode whose bit is clear mounts read-only");
+    fault_row(img, "sif /dir/big.bin links_count 3\n", "a link count that does not match its names",
+              "a link count above its names mounts read-only");
+    fault_row(img, "sif /dir links_count 9\n",
+              "a directory link count that does not match its entries",
+              "a directory count above its entries mounts read-only");
+    fault_row(img, "link /dir/sub /many/twice\nsif /many links_count 3\n",
+              "a directory with two parents", "a directory named twice mounts read-only");
+    fault_row(img, "sif /dir/big.bin size 100\n", "a block past the size",
+              "a size behind its pointers mounts read-only");
+    fault_row(img, "sif /dir/big.bin i_blocks 8\n", "i_blocks that does not match its pointers",
+              "an i_blocks behind its pointers mounts read-only");
+    bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
+    root_block = debugfs_number(img, "blocks /", "");
+    if (root_block > 0) {
+        b[0] = 6;
+        b[1] = 0;
+        bytes = dirty_image(img, "");
+        poke(img, root_block * 4096 + 4, b, 2);
+        use_image(img, bytes);
+        last_check[0] = 0;
+        check(mount_rw() == 0 && (mnt.flags & VFS_MS_RDONLY) != 0 &&
+                  strstr(last_check, "an entry of the wrong form") != 0,
+              "an entry of the wrong form mounts read-only");
+        unmount_rw();
+    } else {
+        check(0, "the root's block for the entry-form row");
+    }
+
+    /* A read-only mount asks for no check and writes nothing. */
+    bytes = dirty_image(img, "setb 4000\n");
+    snapshot(img, bytes);
+    use_image(img, bytes);
+    last_check[0] = 0;
+    check(mount_ro() == 0 && last_check[0] == 0,
+          "a read-only mount of a dirty volume is not checked");
+    unmount_image();
+    check(image_equals_snap(img, bytes), "and writes nothing");
+}
+
 static void matrix_rows(void)
 {
     int i, k, total = 0;
@@ -2084,7 +2404,7 @@ static void matrix_rows(void)
             snprintf(what, sizeof(what),
                      "'%s' stopped after write %d of %d mounts and reads its base",
                      sequences[i].name, k, n);
-            if (mount_image() == 0) {
+            if (mount_ro() == 0) {
                 check(base_intact(), what);
                 snprintf(what, sizeof(what),
                          "'%s' stopped after write %d of %d reads only what was written or zeros",
@@ -2120,6 +2440,15 @@ static void matrix_rows(void)
                      "'%s' stopped after write %d of %d repairs with its base intact",
                      sequences[i].name, k, n);
             check(repaired_ok(wimg, wbytes, i, k, named_before), what);
+            /* Judge four: the mount-time check accepts the stop, on a copy:
+               writable with what the order leaves kept, or read-only on a
+               fault the order leaves between two of its writes, a count
+               behind its pointers or its entry, a directory between its
+               two parents. */
+            snprintf(what, sizeof(what),
+                     "'%s' stopped after write %d of %d passes the check or fails it on a count",
+                     sequences[i].name, k, n);
+            check(check_accepts(wimg, wbytes), what);
             total++;
         }
     }
@@ -2171,6 +2500,7 @@ int main(void)
     refusal_rows();
     write_rows();
     refusal_write_rows();
+    dirty_rows();
     matrix_rows();
 
     if (image) {

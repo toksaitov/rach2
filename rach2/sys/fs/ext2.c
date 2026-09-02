@@ -30,6 +30,7 @@
 #include "../proc/process.h"
 #include "../rtc.h"
 #include "bcache.h"
+#include "fatcommon.h"
 
 #define EXT2_SUPER_MAGIC 0xEF53u
 #define EXT2_ROOT_INO 2u
@@ -2659,6 +2660,535 @@ static int ext2_rename(struct vfs_mount *mnt, void *olddir, const char *oldname,
 
 /* ---- the mount ---- */
 
+/* ---- the mount-time check ---- */
+
+/*
+ * A volume whose valid bit is clear was not unmounted, and one whose error
+ * bit is set was found wanting by an earlier mount. Either is checked
+ * before it is written, under the walk lock and the shared bitmap the FAT
+ * drivers use: the structural blocks are seeded into the bitmap, the tree
+ * is walked from the root and every block every reached inode names is
+ * marked, the inodes the inode bitmap calls used but the walk did not
+ * reach are scanned as orphans, and the bitmaps are compared with the
+ * marks. Nothing is repaired. Lost blocks and orphans are counted and
+ * kept, held out of the allocator by the bits they still have, and the
+ * error bit is set so that the volume is not marked clean again before
+ * `e2fsck` has run. A fault mounts the volume read-only with the first one
+ * named: a block claimed twice or out of range, an inode whose pointers do
+ * not match its size or its `i_blocks`, a directory with two parents or
+ * without its parent, an entry of the wrong form, a link count that does
+ * not match the entries, a used block or a reached inode the bitmap calls
+ * free. The group descriptors' free counts are recomputed from the bitmaps
+ * and not believed, because a crash leaves them stale.
+ *
+ * The walk keeps its state here rather than on the stack: the node of each
+ * directory level, the hard links met with their expected and found
+ * counts, the reached-inode set and one bitmap block. A volume with more
+ * inodes than the set, more blocks than the shared bitmap, a directory
+ * deeper than the levels or more hard-linked files than the table mounts
+ * read-only when dirty and says which limit.
+ */
+#define EXT2_CHECK_INODES (1u << 20)
+#define EXT2_CHECK_DEPTH 32
+#define EXT2_CHECK_LINKS 512
+
+struct ext2_link {
+    uint32_t ino;
+    uint32_t expect, found;
+};
+
+struct ext2_check {
+    struct ext2_mount *em;
+    const char *fault;
+    uint32_t fault_ino;
+    uint32_t lost, orphans, links;
+    struct ext2_link link[EXT2_CHECK_LINKS];
+    struct ext2_node node[EXT2_CHECK_DEPTH];
+    uint8_t seen[EXT2_CHECK_INODES / 8];
+    uint8_t bitmap[4096];
+};
+
+static struct ext2_check ext2_check_state; /* one check at a time, under the walk lock */
+
+static int check_fault(struct ext2_check *c, uint32_t ino, const char *why)
+{
+    if (!c->fault) {
+        c->fault = why;
+        c->fault_ino = ino;
+    }
+    return -EIO;
+}
+
+static int seen_test(const struct ext2_check *c, uint32_t ino)
+{
+    return (c->seen[(ino - 1) >> 3] >> ((ino - 1) & 7)) & 1;
+}
+
+static void seen_set(struct ext2_check *c, uint32_t ino)
+{
+    c->seen[(ino - 1) >> 3] |= (uint8_t)(1u << ((ino - 1) & 7));
+}
+
+/* Mark a block an inode names; a second mark is a cross-link. */
+static int check_mark(struct ext2_check *c, uint32_t ino, uint32_t b)
+{
+    const struct ext2_mount *em = c->em;
+
+    if (b == 0 || b < em->first_data || b >= em->blocks) {
+        return check_fault(c, ino, "a block out of range");
+    }
+    if (fat_walk_test_set(b)) {
+        return check_fault(c, ino, "a block claimed twice");
+    }
+    return 0;
+}
+
+/*
+ * Mark what a pointer block at `level` names, `index` being the file block
+ * index its first entry stands for; `count` gains every block, data and
+ * pointer, and `last` the highest index named.
+ */
+static int check_level(struct ext2_check *c, uint32_t ino, uint32_t b, int level, uint32_t index,
+                       uint32_t *count, uint32_t *last)
+{
+    struct ext2_mount *em = c->em;
+    uint32_t per = em->block_size / 4;
+    uint32_t span = 1, j;
+    int i, rc;
+
+    rc = check_mark(c, ino, b);
+    if (rc != 0) {
+        return rc;
+    }
+    (*count)++;
+    for (i = 1; i < level; i++) {
+        span *= per;
+    }
+    for (j = 0; j < per; j++) {
+        uint8_t raw[4];
+        uint32_t p;
+
+        rc = read_bytes(em, (uint64_t)b * em->block_size + j * 4, raw, 4);
+        if (rc != 0) {
+            return rc;
+        }
+        p = le32(raw);
+        if (p == 0) {
+            continue;
+        }
+        if (level == 1) {
+            rc = check_mark(c, ino, p);
+            if (rc != 0) {
+                return rc;
+            }
+            (*count)++;
+            *last = index + j;
+        } else {
+            rc = check_level(c, ino, p, level - 1, index + j * span, count, last);
+            if (rc != 0) {
+                return rc;
+            }
+        }
+    }
+    return 0;
+}
+
+/*
+ * Mark every block `n` names and check them against its size and its
+ * `i_blocks`. A fast symbolic link, a device, a pipe and a socket keep
+ * none; `as_data` treats the inode as a file whatever its mode, for the
+ * reserved inodes.
+ */
+static int check_blocks(struct ext2_check *c, const struct ext2_node *n, int as_data)
+{
+    const struct ext2_mount *em = c->em;
+    uint32_t type = n->mode & S_IFMT_;
+    uint32_t per = em->block_size / 4;
+    uint32_t count = 0, last = 0, limit, i;
+    int named = 0, rc;
+
+    if (!as_data && type != S_IFREG_ && type != S_IFDIR_ &&
+        (type != S_IFLNK_ || n->blocks == 0)) {
+        if (n->blocks != 0) {
+            return check_fault(c, n->ino, "blocks on an inode that keeps none");
+        }
+        return 0;
+    }
+    for (i = 0; i < EXT2_NDIR; i++) {
+        if (n->block[i] == 0) {
+            continue;
+        }
+        rc = check_mark(c, n->ino, n->block[i]);
+        if (rc != 0) {
+            return rc;
+        }
+        count++;
+        last = i;
+        named = 1;
+    }
+    for (i = 0; i < 3; i++) {
+        uint32_t base = EXT2_NDIR + (i >= 1 ? per : 0) + (i >= 2 ? per * per : 0);
+
+        if (n->block[EXT2_NDIR + i] == 0) {
+            continue;
+        }
+        rc = check_level(c, n->ino, n->block[EXT2_NDIR + i], (int)i + 1, base, &count, &last);
+        if (rc != 0) {
+            return rc;
+        }
+        named = 1;
+    }
+    if (n->blocks != count * (em->block_size / 512)) {
+        return check_fault(c, n->ino, "i_blocks that does not match its pointers");
+    }
+    limit = (uint32_t)((n->size + em->block_size - 1) >> em->block_shift);
+    if (named && last >= limit) {
+        return check_fault(c, n->ino, "a block past the size");
+    }
+    return 0;
+}
+
+static int check_dir(struct ext2_check *c, uint32_t ino, uint32_t parent, int depth);
+
+/*
+ * One entry's inode, reached from directory `dir`: a directory is walked
+ * once and a second reach is a second parent; a file is marked once and a
+ * second name counts toward its link count.
+ */
+static int check_child(struct ext2_check *c, uint32_t ino, uint32_t dir, int depth,
+                       uint32_t *subdirs)
+{
+    struct ext2_mount *em = c->em;
+    struct ext2_node *n;
+    uint32_t type, i;
+    int rc;
+
+    if (ino > em->inodes) {
+        return check_fault(c, dir, "an entry naming an inode past the count");
+    }
+    if (depth >= EXT2_CHECK_DEPTH) {
+        return check_fault(c, ino, "a directory deeper than the check walks");
+    }
+    n = &c->node[depth];
+    rc = inode_load(em, ino, n);
+    if (rc != 0) {
+        return rc;
+    }
+    type = n->mode & S_IFMT_;
+    if (type == S_IFDIR_) {
+        if (seen_test(c, ino)) {
+            return check_fault(c, ino, "a directory with two parents");
+        }
+        seen_set(c, ino);
+        (*subdirs)++;
+        return check_dir(c, ino, dir, depth);
+    }
+    if (seen_test(c, ino)) {
+        for (i = 0; i < c->links; i++) {
+            if (c->link[i].ino == ino) {
+                c->link[i].found++;
+                return 0;
+            }
+        }
+        return check_fault(c, ino, "named twice with one link");
+    }
+    seen_set(c, ino);
+    if (type == 0) {
+        return check_fault(c, ino, "an entry naming a free inode");
+    }
+    rc = check_blocks(c, n, 0);
+    if (rc != 0) {
+        return rc;
+    }
+    if (n->nlink != 1) {
+        if (c->links >= EXT2_CHECK_LINKS) {
+            return check_fault(c, ino, "more hard links than the check's table");
+        }
+        c->link[c->links].ino = ino;
+        c->link[c->links].expect = n->nlink;
+        c->link[c->links].found = 1;
+        c->links++;
+    }
+    return 0;
+}
+
+/*
+ * Walk directory `ino`, loaded at `c->node[depth]`: its blocks, every
+ * entry's form, `.` and `..` in their places, each other entry's inode,
+ * and its link count against two plus its subdirectories.
+ */
+static int check_dir(struct ext2_check *c, uint32_t ino, uint32_t parent, int depth)
+{
+    struct ext2_mount *em = c->em;
+    const struct ext2_node *n = &c->node[depth];
+    uint32_t nblocks, i, subdirs = 0, entry = 0;
+    int rc;
+
+    rc = check_blocks(c, n, 0);
+    if (rc != 0) {
+        return rc;
+    }
+    if (n->size == 0 || (n->size & (em->block_size - 1)) != 0 || n->too_big) {
+        return check_fault(c, ino, "a directory size that is not whole blocks");
+    }
+    nblocks = (uint32_t)(n->size >> em->block_shift);
+    for (i = 0; i < nblocks; i++) {
+        uint32_t b, off = 0;
+
+        rc = block_at(em, n, i, &b);
+        if (rc != 0) {
+            return rc;
+        }
+        if (b == 0) {
+            return check_fault(c, ino, "a hole in a directory");
+        }
+        while (off < em->block_size) {
+            uint8_t raw[10];
+            uint64_t at = (uint64_t)b * em->block_size + off;
+            uint32_t eino, rec, nlen;
+
+            rc = read_bytes(em, at, raw, 8);
+            if (rc != 0) {
+                return rc;
+            }
+            eino = le32(raw);
+            rec = le16(raw + 4);
+            nlen = raw[6];
+            if (rec < 8 || (rec & 3) != 0 || off + rec > em->block_size || nlen + 8 > rec) {
+                return check_fault(c, ino, "an entry of the wrong form");
+            }
+            if (entry < 2) {
+                rc = read_bytes(em, at + 8, raw + 8, nlen < 2 ? nlen : 2);
+                if (rc != 0) {
+                    return rc;
+                }
+            }
+            if (entry == 0) {
+                if (eino != ino || nlen != 1 || raw[8] != '.') {
+                    return check_fault(c, ino, "a first entry that is not .");
+                }
+            } else if (entry == 1) {
+                if (eino != parent || nlen != 2 || raw[8] != '.' || raw[9] != '.') {
+                    return check_fault(c, ino, "a second entry that is not the parent");
+                }
+            } else if (eino != 0) {
+                if (nlen == 0) {
+                    return check_fault(c, ino, "an entry with an empty name");
+                }
+                rc = check_child(c, eino, ino, depth + 1, &subdirs);
+                if (rc != 0) {
+                    return rc;
+                }
+            }
+            entry++;
+            off += rec;
+        }
+    }
+    if (entry < 2) {
+        return check_fault(c, ino, "a directory without . and ..");
+    }
+    if (n->nlink != 2 + subdirs) {
+        return check_fault(c, ino, "a directory link count that does not match its entries");
+    }
+    return 0;
+}
+
+/*
+ * The inode scan and the bitmap compare, group by group: an orphan is an
+ * inode the bitmap calls used that the walk did not reach, its blocks
+ * marked so that nothing else may claim them; one whose link count is
+ * zero is a deleted inode whose bit was not yet cleared, counted with
+ * them because `e2fsck` is owed the bit, its pointers not read because
+ * they mean nothing, as `e2fsck` reads it; a used block the walk did not
+ * mark is lost; the free counts are recounted into the descriptors.
+ */
+static int check_bitmaps(struct ext2_check *c)
+{
+    struct ext2_mount *em = c->em;
+    uint32_t g, i;
+    int rc;
+
+    em->free_inodes = 0;
+    em->free_blocks = 0;
+    for (g = 0; g < em->groups; g++) {
+        uint8_t *gd = em->gd + g * 32;
+        uint32_t free = 0;
+
+        rc = read_bytes(em, (uint64_t)le32(gd + 4) * em->block_size, c->bitmap, em->block_size);
+        if (rc != 0) {
+            return rc;
+        }
+        for (i = 0; i < em->ipg; i++) {
+            uint32_t ino = g * em->ipg + i + 1;
+            int used = (c->bitmap[i >> 3] >> (i & 7)) & 1;
+
+            if (ino > em->inodes) {
+                break;
+            }
+            if (!used) {
+                free++;
+                if (seen_test(c, ino)) {
+                    return check_fault(c, ino, "a reached inode the bitmap calls free");
+                }
+                continue;
+            }
+            if (seen_test(c, ino) || ino < em->first_ino) {
+                continue;
+            }
+            rc = inode_load(em, ino, &c->node[0]);
+            if (rc != 0) {
+                return rc;
+            }
+            c->orphans++;
+            if (c->node[0].nlink == 0) {
+                continue; /* deleted, as e2fsck reads it: counted, its pointers not read */
+            }
+            rc = check_blocks(c, &c->node[0], 0);
+            if (rc != 0) {
+                return rc;
+            }
+        }
+        LE16_PUT(gd + 14, free);
+        em->free_inodes += free;
+    }
+    for (g = 0; g < em->groups; g++) {
+        uint8_t *gd = em->gd + g * 32;
+        uint32_t lo = em->first_data + g * em->bpg;
+        uint32_t free = 0;
+
+        rc = read_bytes(em, (uint64_t)le32(gd + 0) * em->block_size, c->bitmap, em->block_size);
+        if (rc != 0) {
+            return rc;
+        }
+        for (i = 0; i < em->bpg && lo + i < em->blocks; i++) {
+            int used = (c->bitmap[i >> 3] >> (i & 7)) & 1;
+            int marked = fat_walk_marked(lo + i);
+
+            if (!used) {
+                free++;
+                if (marked) {
+                    return check_fault(c, 0, "a used block the bitmap calls free");
+                }
+            } else if (!marked) {
+                c->lost++;
+            }
+        }
+        LE16_PUT(gd + 12, free);
+        em->free_blocks += free;
+    }
+    return 0;
+}
+
+/*
+ * The check over a dirty volume, run once at mount before the mount is
+ * published. Returns 0 with the volume writable, 1 with `*why` naming why
+ * it must stay read-only, or a negative errno when the device failed. The
+ * superblock's error bit and the descriptors' counts are written here
+ * when there is something to record; the counts stay in memory when the
+ * volume is read-only.
+ */
+static int ext2_check_volume(struct ext2_mount *em, const char **why)
+{
+    struct ext2_check *c = &ext2_check_state;
+    uint64_t free_blocks = em->free_blocks, free_inodes = em->free_inodes;
+    uint32_t g, ino;
+    int rc;
+
+    if (em->blocks + 2 > FAT_WALK_CLUSTERS) {
+        *why = "not unmounted cleanly and more blocks than the check's bitmap";
+        return 1;
+    }
+    if (em->inodes > EXT2_CHECK_INODES) {
+        *why = "not unmounted cleanly and more inodes than the check's set";
+        return 1;
+    }
+    fat_walk_acquire(em->blocks);
+    c->em = em;
+    c->fault = 0;
+    c->fault_ino = 0;
+    c->lost = c->orphans = c->links = 0;
+    k_memset(c->seen, 0, (em->inodes + 7) / 8);
+    for (g = 0; g < em->groups; g++) {
+        const uint8_t *gd = em->gd + g * 32;
+        uint32_t lo = em->first_data + g * em->bpg, b;
+
+        if (has_super(em, g)) {
+            for (b = lo; b <= lo + gd_blocks(em); b++) {
+                fat_walk_test_set(b);
+            }
+        }
+        fat_walk_test_set(le32(gd + 0));
+        fat_walk_test_set(le32(gd + 4));
+        for (b = 0; b < inode_table_blocks(em); b++) {
+            fat_walk_test_set(le32(gd + 8) + b);
+        }
+    }
+    rc = 0;
+    for (ino = 1; ino < em->first_ino && rc == 0; ino++) {
+        seen_set(c, ino);
+        if (ino == EXT2_ROOT_INO) {
+            continue;
+        }
+        rc = inode_load(em, ino, &c->node[0]);
+        if (rc == 0 && c->node[0].blocks != 0) {
+            rc = check_blocks(c, &c->node[0], 1);
+        }
+    }
+    if (rc == 0) {
+        seen_set(c, EXT2_ROOT_INO); /* not below first_ino on every volume */
+        rc = inode_load(em, EXT2_ROOT_INO, &c->node[0]);
+    }
+    if (rc == 0) {
+        rc = check_dir(c, EXT2_ROOT_INO, EXT2_ROOT_INO, 0);
+    }
+    for (g = 0; g < c->links && rc == 0; g++) {
+        if (c->link[g].expect != c->link[g].found) {
+            rc = check_fault(c, c->link[g].ino, "a link count that does not match its names");
+        }
+    }
+    if (rc == 0) {
+        rc = check_bitmaps(c);
+    }
+    fat_walk_release();
+    if (rc != 0 && !c->fault) {
+        return rc;
+    }
+    if (c->fault) {
+        /* The counts as the disk has them, since the recount may have
+         * stopped part way and only the error bit is written here. */
+        em->free_blocks = free_blocks;
+        em->free_inodes = free_inodes;
+        rc = read_bytes(em, (uint64_t)(em->first_data + 1) * em->block_size, em->gd,
+                        em->groups * 32);
+        if (rc != 0) {
+            return rc;
+        }
+        klog(KLOG_WARN, "ext2", "check: inode %d: %s", (int)c->fault_ino, c->fault);
+        em->state |= EXT2_ERROR_FS;
+        rc = sb_store(em);
+        if (rc != 0) {
+            return rc;
+        }
+        *why = "the check found a fault";
+        return 1;
+    }
+    for (g = 0; g < em->groups; g++) {
+        rc = gd_store(em, g);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    if (c->lost != 0 || c->orphans != 0) {
+        klog(KLOG_WARN, "ext2", "check: %d lost blocks, %d orphan inodes, kept for e2fsck",
+             (int)c->lost, (int)c->orphans);
+        em->state |= EXT2_ERROR_FS;
+    } else {
+        klog(KLOG_INFO, "ext2", "check: clean");
+    }
+    rc = sb_store(em);
+    return rc;
+}
+
 static int refuse(const char *field)
 {
     klog(KLOG_WARN, "ext2", "refused: %s", field);
@@ -2754,8 +3284,6 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
         readonly_why = "dir_index would be left stale by this writer";
     } else if (em->block_size != 4096) {
         readonly_why = "a block size below 4096 cannot be written in order";
-    } else if (!(em->state & EXT2_VALID_FS) || (em->state & EXT2_ERROR_FS)) {
-        readonly_why = "not unmounted cleanly";
     }
     rc = read_bytes(em, (uint64_t)(em->first_data + 1) * em->block_size, em->gd,
                     em->groups * 32);
@@ -2798,6 +3326,14 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
     if ((root->mode & S_IFMT_) != S_IFDIR_) {
         ext2_put(mnt, root);
         return refuse("root inode");
+    }
+    if (!readonly_why && !(flags & VFS_MS_RDONLY) &&
+        (!(em->state & EXT2_VALID_FS) || (em->state & EXT2_ERROR_FS))) {
+        rc = ext2_check_volume(em, &readonly_why);
+        if (rc < 0) {
+            ext2_put(mnt, root);
+            return rc;
+        }
     }
     em->writable = readonly_why == 0 && !(flags & VFS_MS_RDONLY);
     if (readonly_why) {
