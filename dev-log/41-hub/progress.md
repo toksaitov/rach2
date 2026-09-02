@@ -22,6 +22,6 @@ Phase 5: the suite
 - [x] the usb.sh hub boots, usbprobe's tree, the twelve-device boot
 
 Phase 6: the record and the sweep
-- [ ] the documents read against the code; the review round
+- [x] the documents read against the code; the review round
 - [ ] the sweep; the full set; make test timed
 - [ ] dev-log Readme and the index entry; tree clean

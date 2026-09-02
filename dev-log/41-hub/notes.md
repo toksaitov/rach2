@@ -268,6 +268,105 @@ translator's case, a translator per port refused or selected, and a
 SuperSpeed hub's two halves; the metal rehearsal puts its keyboard and its
 stick behind a hub, and the section finds them.
 
+## Phase 6 record
+
+The review round ran as two Codex units through the rescue agent, both
+returning a report: unit D over the four reader-facing documents in ten
+minutes, and units A to C folded into one unit over the driver, the core,
+the controller's words, the host tests, the suite and the acceptance
+script in twelve. Nothing was delegated to Claude.
+
+The documents unit found seven claims the code contradicted, seven
+contracts the documents left out and eight sentences in the private
+register. Two of the contradictions were defects in the code and not in
+the prose:
+
+* A high-speed hub that stalls `SET_INTERFACE 1` was set to one translator
+  in its own slot, but `location_of` gave every device below it the
+  multi-TT bit from the hub's protocol byte, so the hub's slot and its
+  children's disagreed. The device record now keeps what the hub was told,
+  `hub_multi`, written in `usb_core_hub_tell`, and the children read that.
+  Row: a low-speed keyboard below a hub that refused the setting is opened
+  with one translator.
+* An over-current present when a hub was first scanned was recorded as
+  status and nothing else; the power-off, the retry and the record ran
+  only from a status read the change endpoint prompted. `over_current` is
+  one function called from both. Row: an over-current at the first scan
+  powers the port off and the port is powered on again after a second.
+
+The other five were prose: the route string's nibble order was stated
+backwards, the port on the hub nearest the root is lowest, which is the
+specification's order and what the code writes; five tiers was the field's
+capacity and not the tree the driver drives, which is two hubs; the change
+transfer is not outstanding while an acknowledgement or a status read is;
+twelve slots is a ceiling the controller may lower; and a port above
+fifteen cannot reach the location code, since the driver uses fifteen
+ports at most. The omissions are written in: the table shared by every
+kind of entry, the entry lost after a Disable Slot the controller does not
+answer, the hub interface the parser accepts, the 500 ms ceiling on the
+power-good wait, the hub driver in the source map, and hubs in the top
+Readme's device list. The register faults were recast with a concrete
+subject.
+
+The code unit reported nine findings, every one confirmed against the
+code:
+
+1. A device pulled while its Enable Slot was in flight freed its entry at
+   once, and the slot the command then answered with was the controller's
+   with no entry to give it back. `device_gone` now marks an entry
+   `abandoned` when it owns the command turn and leaves it closing;
+   `step_closing` takes the command's answer first, keeps a slot an Enable
+   Slot answered with, and closes it. Row: the slot is given back and the
+   entry freed, and the next keyboard enumerates.
+2. The same pull released the command turn while the command was still
+   running, and `step_closing` retried Disable Slot forever without ever
+   calling `xhci_command_done`, which is where the controller's deadline
+   and the abort are. The abandoned entry keeps the turn and calls it, so
+   the abort runs; a Disable Slot that cannot be issued within five
+   seconds makes a tombstone with a record, as an unanswered one does.
+   Proved by the row above through the model's held command.
+3. A control completion taken in the same pump as a disconnection stayed in
+   the entry and was consumed by the next device given that entry.
+   `device_arrive` and `device_gone` clear both pending completions. No
+   row: the model answers a request in the pump after it is queued, and a
+   row that timed an answer against a disconnection would be a second
+   model; recorded here as fixed by inspection.
+4. The controller drained its whole event ring into an eight-entry
+   completion queue and dropped the ninth transfer event, which for a hub's
+   change endpoint left `change_out` set forever. The drain now stops at a
+   full queue and the event waits on the ring for the next pass. Row in
+   `xhci_hosttest`: nine transfer events, eight taken, the ninth taken by
+   the next drain.
+5. A device behind a hub that found the table full was logged and never
+   looked at again, since a hub's ports were scanned once and then only on
+   a change. The pump scans every running hub's ports as it scans the root
+   ports, arriving any connected port with no entry. Row: a hub and eleven
+   keyboards fill the table, one is pulled, the twelfth takes its entry.
+   The suite's table boot then failed, because the rescan recorded the
+   refusal on every pass, a hundred lines a second; a port waiting for an
+   entry is now recorded once, on the root's bitmap or the hub's, and the
+   row requires one record, with a mutation that records every pass.
+6. The multi-TT fallback, above.
+7. The power-on retry after an over-current ignored its answer, so a port
+   whose retry stalled was neither on nor marked off. A refused retry marks
+   the port off with a record. Row: the retry is asked once and refused,
+   the port is asked nothing more, and nothing is enumerated on it, which
+   the mutation showed as the core enumerating the stale connection.
+8. The hub-pull rows counted `xhci_device_close` calls and the suite
+   counted `gone` records, both printed before Disable Slot completes, so
+   an entry left closing forever would have passed. The model counts
+   `xhci_device_closed` and the row requires three and every entry free;
+   the core records `slot: N: given back` and the suite requires four such
+   lines and no lost entry.
+9. The acceptance script took a hub that was recognised and then failed
+   its descriptor as no hub. It also reads the `a hub` device record, and
+   a hub seen there but absent from `/proc/usb` is a failure with the
+   record quoted.
+
+Seven mutations, one per row above, each caught by exactly its row after
+the seventh row was strengthened: its first form checked only the power
+requests, which a port left on also makes none of.
+
 ## Open items
 
-* None yet.
+* None.
