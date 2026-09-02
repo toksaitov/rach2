@@ -122,3 +122,45 @@ above, gained facts: `bootctl status` holds about 9 MB while it runs,
 under `rach2.blocklag=30` it runs for minutes, and two of them at once
 exhaust the user frames; the first kill at 112.83 s had no second
 `bootctl` and is still unexplained.
+
+## Phase 2 record
+
+The recovery stick: `build/images/rach2-recovery-stick.img`, the
+recovery ISO (SHA-256 `533b85ca...`) with two MBR entries written by
+`mkmbr`, the ISO area as type 0x17 and an 8 GiB FAT32 partition at
+sector 32768 as type 0x0C, formatted on the mac mini with `newfs_msdos`.
+The owner approved the SanDisk by name and wrote it with `dd` on
+2026-09-03. The notebook booted it at the BIOS menu; recovery took
+192.168.0.106 by DHCP with its own host key, listed `/dev/disk0` with
+three partition nodes and the stick as `usb0` with two, and mounted the
+stick's second partition writable at `/mnt/save`.
+
+Sector zero, read from `/dev/disk0` in recovery: SHA-256
+`f00ee34d3209ae7bd079155c3d48e4fd1be9a8003a3f3897d327e4aaa7145e8d`,
+saved as `saved/sector0-before.bin` here and on the stick. Its table:
+entry 1 type 0x0C at byte 1048576 for 67108864; entry 2 type 0x83 at
+68157440 for 524288000; entry 3 type 0x0C at 592445440 for 67108864;
+entry 4 empty. Milestone 36's `hardware.md` recorded entry 2 as 0x7f;
+the machine says 0x83, and the kernel finds the KRFFS root by its
+content and not by the type.
+
+The new sector zero, `saved/sector0-new.bin`: the saved one with only
+the sixteen bytes of entry 4 changed, to type 0x0C at sector 1290240 for
+4194304 sectors, `00feffff0cfeffff00b0130000004000`; SHA-256
+`a02966c9f463e19a2441eb8c983ddc83b9a06649b95ad4c1335a86b609946698`.
+`mkmbr --list` reads the four entries as intended and the first 494
+bytes and the signature are byte for byte the saved sector's.
+
+The 2 GiB the partition will cover, sectors 1290240 to 5484543, is not
+empty: it hashes to
+`6c42495130749784052d2fb6566afc0923cb8cbf24fa35357f7c2a851c6ed06d`.
+Its copy is written to the stick by the machine at about 0.6 MB/s and
+then read from the stick on the mac mini for the host's copy, since the
+same copy over SSH ran at 0.4 MB/s.
+
+The FAT32 volume: `mformat -C -F -T 4194304`, 8-sector clusters, 32
+reserved sectors, two FATs, 523261 free clusters, checked by
+`mkfatfixture --check`; SHA-256
+`73387be9570663858f4b7b6ba282a5cb16374ee9fa34374fec2136e14a6a5563`.
+It goes to the machine gzipped, through `reflash`, as the Readme's root
+procedure does.
