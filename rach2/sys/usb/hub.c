@@ -334,6 +334,28 @@ static int power_next(struct hub *h)
     return 1;
 }
 
+/** Answer an over-current on a port: power it off and close what is
+ * below, then power it on again once after a second, and leave it off with
+ * a record when it recurs. Called from the first scan when the status
+ * already shows the fault, and from a status read the change endpoint
+ * prompted. */
+static void over_current(struct hub *h, int port)
+{
+    struct hub_port *p = &h->port[port - 1];
+
+    klog(KLOG_WARN, "usb", "hub: device %d port %d: over-current; powered off", h->device, port);
+    usb_core_hub_port(h->index, port - 1, 0);
+    if (p->over_current_tries == 0) {
+        p->over_current_tries = 1;
+        p->power_on_ms = HUB_OVER_CURRENT_RETRY_MS;
+    } else {
+        p->off = 1;
+        klog(KLOG_WARN, "usb", "hub: device %d port %d: over-current again; left off", h->device,
+             port);
+    }
+    p->to_clear |= POWER_OFF_BIT;
+}
+
 /**
  * A port's status has just been read: record it, and for a change reported
  * on the change endpoint, act on each change bit and acknowledge it.
@@ -342,9 +364,8 @@ static int power_next(struct hub *h)
  * now: the core closes what was below the port before a device that is
  * there is looked at. An enable lost is recorded and the device below
  * closed; the core enumerates again if the connection is still there. An
- * over-current has the port powered off and its subtree closed, then
- * powered on again once after a second, and left off with a record if it
- * recurs.
+ * over-current, found by the first scan or reported later, is answered by
+ * `over_current`.
  */
 static void port_read(struct hub *h, int port)
 {
@@ -366,7 +387,9 @@ static void port_read(struct hub *h, int port)
          * connections a second time and each device would arrive twice. */
         p->to_clear = change & (C_PORT_CONNECTION_BIT | C_PORT_ENABLE_BIT | C_PORT_SUSPEND_BIT |
                                 C_PORT_OVER_CURRENT_BIT | C_PORT_RESET_BIT);
-        if (now) {
+        if (status & PORT_STAT_OVER_CURRENT) {
+            over_current(h, port);
+        } else if (now) {
             usb_core_hub_port(h->index, port - 1, 1);
         }
         return;
@@ -379,18 +402,7 @@ static void port_read(struct hub *h, int port)
                             C_PORT_OVER_CURRENT_BIT | C_PORT_RESET_BIT);
     if (change & C_PORT_OVER_CURRENT_BIT) {
         if (status & PORT_STAT_OVER_CURRENT) {
-            klog(KLOG_WARN, "usb", "hub: device %d port %d: over-current; powered off", h->device,
-                 port);
-            usb_core_hub_port(h->index, port - 1, 0);
-            if (p->over_current_tries == 0) {
-                p->over_current_tries = 1;
-                p->power_on_ms = HUB_OVER_CURRENT_RETRY_MS;
-            } else {
-                p->off = 1;
-                klog(KLOG_WARN, "usb", "hub: device %d port %d: over-current again; left off",
-                     h->device, port);
-            }
-            p->to_clear |= POWER_OFF_BIT;
+            over_current(h, port);
         }
     } else if (change & C_PORT_CONNECTION_BIT) {
         p->connect_ms = hub_ms;
@@ -496,9 +508,17 @@ static void answered(struct hub *h, const struct usb_completion *c)
             }
         }
         return;
+    case REQ_POWER_ON:
+        if (!ok) {
+            /* The one retry after an over-current could not be made; the
+             * port stays off, as it would after a second over-current. */
+            h->port[port - 1].off = 1;
+            klog(KLOG_WARN, "usb", "hub: device %d port %d: could not be powered on again; left off",
+                 h->device, port);
+        }
+        return;
     case REQ_HUB_CLEAR:
     case REQ_POWER_OFF:
-    case REQ_POWER_ON:
     case REQ_CHANGE_CLEAR:
         return;
     case REQ_POWER:
@@ -690,7 +710,7 @@ static void step_hub(struct hub *h, uint32_t elapsed_ms)
                 h->change_reading = 0;
             }
         }
-        /* The report itself, always outstanding. */
+        /* The report itself, out again once the last answer is acted on. */
         if (!h->change_out && change_submit(h) != 0) {
             give_up(h, "its change endpoint could not be read");
             return;

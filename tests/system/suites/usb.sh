@@ -398,6 +398,12 @@ if [ "$(grep -ac 'usb: device: port [0-9]*\.[0-9]*: gone' "$IMAGE.hubpull.log")"
 else
     bad "the devices below the hub did not all go before it"
 fi
+if [ "$(grep -ac 'usb: slot: [0-9]*: given back' "$IMAGE.hubpull.log")" = 4 ] && \
+   ! grep -aq 'the entry is lost' "$IMAGE.hubpull.log"; then
+    note "and all four slots were given back: OK"
+else
+    bad "the four slots were not all given back"
+fi
 
 # ---- 18: a hub behind a hub, with a keyboard on the second, typing ----
 if run_harness --qemu-arg=-cpu --qemu-arg=max \

@@ -316,9 +316,12 @@ fi
 #      SuperSpeed hub's two halves. Each is a line in the record; a machine
 #      with no hub is a note. ----
 HUBLINES="$(grep 'usb: hub:' "$BOOTLOG_OUT" 2>/dev/null | sed 's/^.*usb: hub: /hub: /' || true)"
+HUBSEEN="$(grep 'usb: device: .*, a hub' "$BOOTLOG_OUT" 2>/dev/null || true)"
 USBLIST="$(run 'cat /proc/usb 2>/dev/null')"
-if [ -z "$HUBLINES" ] && ! echo "$USBLIST" | grep -q 'class 9 '; then
+if [ -z "$HUBLINES" ] && [ -z "$HUBSEEN" ] && ! echo "$USBLIST" | grep -q 'class 9 '; then
     note "no hub is plugged in"
+elif [ -n "$HUBSEEN" ] && ! echo "$USBLIST" | grep -q 'class 9 '; then
+    bad "a hub was seen and then went away: $HUBSEEN"
 else
     echo "$HUBLINES" | while read -r line; do note "$line"; done
     echo "$USBLIST" | grep 'class 9 ' | while read -r line; do note "hub: $line"; done

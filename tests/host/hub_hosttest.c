@@ -41,11 +41,20 @@ extern int printf(const char *fmt, ...);
 
 /* ---- the kernel calls the two files reach ---- */
 
+static int full_records; /* records of a device refused for want of an entry */
+
 void klog(int level, const char *subsystem, const char *format, ...)
 {
+    const char *full = "device: port %s.%d: refused: the device table is full";
+    int i;
+
     (void)level;
     (void)subsystem;
-    (void)format;
+    for (i = 0; format[i] != 0 && format[i] == full[i]; i++) {
+    }
+    if (format[i] == 0 && full[i] == 0) {
+        full_records++;
+    }
 }
 
 void *k_memset(void *ptr, char c, size_t n)
@@ -137,8 +146,11 @@ static struct {
     int port_powered_off[MODEL_PORTS];
     unsigned int hub_status;
     unsigned int hub_change;
-    int alt_refuse;   /* SET_INTERFACE is stalled */
-    int change_stall; /* the change endpoint answers with a stall */
+    int alt_refuse;      /* SET_INTERFACE is stalled */
+    int power_on_refuse; /* SET_FEATURE(PORT_POWER) on a port that is off is stalled */
+    int pull_on_open;    /* the next device opened is pulled while its Enable Slot is out */
+    int hold_commands;   /* no command answers while set */
+    int change_stall;    /* the change endpoint answers with a stall */
     /* The transfer outstanding on the change endpoint. */
     int change_device;
     unsigned char *change_buffer;
@@ -181,12 +193,15 @@ static int slots_given;
 
 static int close_order[16];
 static int closes;
+static int closed_done; /* slots the core took back through `xhci_device_closed` */
 
 /* The command in flight and the completions waiting. */
 static int command_pending;
 static struct usb_command_result command_result_pending;
 static struct usb_completion done[32];
 static int done_head, done_tail;
+
+static void model_change(int port);
 
 static void answer(int device, int endpoint, int status, uint32_t length, uint32_t residual,
                    uint32_t generation)
@@ -258,7 +273,7 @@ static void command_ok(int device)
 
 int xhci_command_done(struct usb_command_result *out)
 {
-    if (!command_pending) {
+    if (!command_pending || model.hold_commands) {
         return 0;
     }
     command_pending = 0;
@@ -298,6 +313,15 @@ int xhci_device_open(const struct usb_location *where, int speed)
     slot_of[n].kind = kind_at(where, &slot_of[n].speed);
     slot_of[n].open = 1;
     command_ok(n);
+    if (model.pull_on_open && where->depth == 1) {
+        int port = (int)(where->route & 0xFu);
+
+        model.pull_on_open = 0;
+        model.hold_commands = 1;
+        model.port_kind[port - 1] = KIND_NONE;
+        model.port_change[port - 1] |= 1u;
+        model_change(port);
+    }
     return 0;
 }
 
@@ -346,6 +370,7 @@ int xhci_device_close(int device)
 void xhci_device_closed(int device)
 {
     (void)device;
+    closed_done++;
 }
 
 int xhci_endpoint_reset(int device, int endpoint)
@@ -600,6 +625,10 @@ int xhci_submit(int device, int endpoint, const struct usb_transfer *transfer)
             model.power_requests++;
             model.last_power_ms = model.now_ms;
             if (port >= 1 && port <= MODEL_PORTS && model.port_powered_off[port - 1]) {
+                if (model.power_on_refuse) {
+                    answer(device, 1, USB_XFER_STALLED, 0, 0, transfer->generation);
+                    return 0;
+                }
                 model.port_powered_off[port - 1] = 0;
                 model.power_ons++;
             }
@@ -671,6 +700,8 @@ static void model_reset(void)
     }
     slots_given = 0;
     closes = 0;
+    closed_done = 0;
+    full_records = 0;
     hid_gone_count = 0;
     command_pending = 0;
     done_head = 0;
@@ -716,6 +747,19 @@ static int slot_of_kind(int kind)
     return 0;
 }
 
+/** The slot of the open device whose route is `route`, or 0. */
+static int slot_at_route(uint32_t route)
+{
+    int n;
+
+    for (n = 1; n <= slots_given; n++) {
+        if (slot_of[n].open && slot_of[n].where.depth == 1 && slot_of[n].where.route == route) {
+            return n;
+        }
+    }
+    return 0;
+}
+
 static int running_count(void)
 {
     int i;
@@ -723,6 +767,19 @@ static int running_count(void)
 
     for (i = 0; i < USB_MAX_DEVICES; i++) {
         if (devices[i].state == ST_RUNNING) {
+            n++;
+        }
+    }
+    return n;
+}
+
+static int free_count(void)
+{
+    int i;
+    int n = 0;
+
+    for (i = 0; i < USB_MAX_DEVICES; i++) {
+        if (devices[i].state == ST_FREE) {
             n++;
         }
     }
@@ -766,6 +823,7 @@ int main(void)
     char line[96];
     int hub;
     int kbd;
+    int port;
 
     printf("hub_hosttest: the hub driver and the tree\n");
 
@@ -909,6 +967,8 @@ int main(void)
     CHECK("the two children before the hub",
           closes == 3 && close_order[0] != hub && close_order[1] != hub && close_order[2] == hub);
     CHECK("and nothing is left running", running_count() == 0);
+    CHECK("every slot was given back and every entry freed",
+          closed_done == 3 && free_count() == USB_MAX_DEVICES);
 
     /* The change endpoint: a transfer always out, resubmitted at each
        answer; a keyboard plugged in after the hub is up is reported, its
@@ -994,6 +1054,66 @@ int main(void)
     CHECK("an over-current again leaves the port off",
           model.power_offs == 2 && model.power_ons == 1);
 
+    /* A device pulled while its Enable Slot is in flight: the slot the
+       controller answers with is taken and given back, and the command turn
+       is released, so the next device enumerates. */
+    model_reset();
+    pump(2000);
+    model.pull_on_open = 1;
+    model.port_kind[1] = KIND_KBD;
+    model.port_change[1] |= 1u;
+    model_change(2);
+    pump(300);
+    CHECK("the keyboard's Enable Slot is out and the keyboard is gone",
+          model.hold_commands == 1 && model.port_kind[1] == KIND_NONE);
+    model.hold_commands = 0;
+    pump(1000);
+    CHECK("the slot it answered with is given back", closed_done == 1 && closes == 1);
+    CHECK("and its entry is free", free_count() == USB_MAX_DEVICES - 1);
+    model.port_kind[2] = KIND_KBD;
+    model.port_change[2] |= 1u;
+    model_change(3);
+    pump(2000);
+    CHECK("and the next keyboard enumerates", running_count() == 2);
+
+    /* A device behind a hub that found the table full is enumerated once an
+       entry comes free, as one on a root port is. */
+    model_reset();
+    model.hub_ports = 15;
+    for (port = 0; port < 12; port++) {
+        model.port_kind[port] = KIND_KBD;
+    }
+    pump(8000);
+    CHECK("a hub and eleven keyboards fill the table", running_count() == 12 && free_count() == 0);
+    CHECK("the twelfth keyboard's refusal is recorded once", full_records == 1);
+    model.port_kind[0] = KIND_NONE;
+    model.port_change[0] |= 1u;
+    model_change(1);
+    pump(4000);
+    CHECK("when one is pulled, the twelfth keyboard takes its entry",
+          running_count() == 12 && slot_at_route(12) != 0);
+
+    /* The power-on retry after an over-current refused: the port is left
+       off and not asked again. */
+    model_reset();
+    model.port_kind[1] = KIND_KBD;
+    pump(2000);
+    model.power_on_refuse = 1;
+    model.port_over_current[1] = 1;
+    model.port_change[1] |= 8u;
+    model_change(2);
+    pump(500);
+    CHECK("an over-current powers the port off", model.power_offs == 1);
+    model.port_over_current[1] = 0;
+    port = model.power_requests;
+    kbd = model.reset_requests;
+    pump(1500);
+    CHECK("the power-on after a second is asked once and refused",
+          model.power_requests == port + 1 && model.power_ons == 0);
+    pump(3000);
+    CHECK("and the port is left off", model.power_requests == port + 1 && model.power_ons == 0);
+    CHECK("with nothing enumerated on it", running_count() == 1 && model.reset_requests == kbd);
+
     /* A multi-TT hub selects its alternate setting; one that refuses is
        driven with one translator. */
     model_reset();
@@ -1009,6 +1129,29 @@ int main(void)
     pump(2000);
     CHECK("a hub that refuses the setting is told with one translator",
           model.hub_told && model.hub_told_multi == 0);
+    model_reset();
+    model.root_speed = USB_SPEED_HIGH;
+    model.hub_protocol = 2;
+    model.alt_refuse = 1;
+    model.port_kind[2] = KIND_KBD;
+    model.port_speed[2] = USB_SPEED_LOW;
+    pump(2000);
+    kbd = slot_of_kind(KIND_KBD);
+    CHECK("and a low-speed device below it is opened with one translator too",
+          kbd != 0 && slot_of[kbd].where.tt_multi == 0);
+
+    /* An over-current already present when the hub is first scanned is
+       answered as a reported one is: the port powered off, powered on
+       again after a second, and its device enumerated then. */
+    model_reset();
+    model.port_kind[1] = KIND_KBD;
+    model.port_over_current[1] = 1;
+    pump(500);
+    CHECK("an over-current at the first scan powers the port off",
+          model.power_offs == 1 && slot_of_kind(KIND_KBD) == 0);
+    model.port_over_current[1] = 0;
+    pump(1500);
+    CHECK("and the port is powered on again after a second", model.power_ons == 1);
 
     /* A stalled change endpoint closes the hub with its children. */
     model_reset();

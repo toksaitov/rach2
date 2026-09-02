@@ -100,10 +100,21 @@ struct usb_device_state {
     int owner;
     struct usb_location where;
     /* For a hub: the ports whose device this kernel could not drive, one bit
-     * each, kept as the root's are. */
+     * each, kept as the root's are, and the ports whose device is waiting
+     * for a table entry, recorded once and tried on every pass. */
     uint32_t refused;
+    uint32_t unentered;
+    /* For a hub: whether it was told to translate per port, which its
+     * descendants' translator words repeat; the interface's protocol says
+     * what the hub offers, and this says what was accepted. */
+    int hub_multi;
     uint32_t deadline;
     int closing_asked;
+    /* Set when the device left with a command of its own in flight: the
+     * answer is taken before the entry closes, because an Enable Slot that
+     * answers after its device has gone would leave the slot the
+     * controller's with no entry to give it back. */
+    int abandoned;
     uint32_t short_by;
     int reporting;
     int dequeue_asked;
@@ -180,6 +191,7 @@ static int enumerating = -1;
  * when it is plugged in again.
  */
 static uint32_t port_refused;
+static uint32_t port_unentered; /* root ports waiting for a table entry */
 
 /* This module's own clock, advanced with the driver's. */
 static uint32_t core_ms;
@@ -411,10 +423,17 @@ static void device_gone(int i)
             hid_gone(d->slot);
         }
     }
-    if (enumerating == i) {
-        enumerating = -1;
-    }
+    d->have_control = 0;
+    d->have_report = 0;
     d->closing_asked = 0;
+    if (enumerating == i) {
+        /* The command turn is kept until the command that may be in flight
+         * has answered or been given up on; `step_closing` takes it. */
+        d->abandoned = 1;
+        d->state = ST_CLOSING;
+        d->deadline = core_ms + CLOSE_LIMIT_MS;
+        return;
+    }
     d->state = d->slot > 0 ? ST_CLOSING : ST_FREE;
     d->deadline = core_ms + STEP_MS;
 }
@@ -474,7 +493,7 @@ static int location_of(const struct usb_device_state *d, struct usb_location *ou
                 if (above->speed == USB_SPEED_HIGH) {
                     out->tt_device = above->slot;
                     out->tt_port = at->port + 1;
-                    out->tt_multi = above->interface.protocol == USB_PROTOCOL_HUB_MULTI;
+                    out->tt_multi = above->hub_multi;
                     break;
                 }
                 at = above;
@@ -561,6 +580,18 @@ static void step_closing(struct usb_device_state *d)
     }
     enumerating = index;
 
+    if (d->abandoned) {
+        int done = xhci_command_done(&result);
+
+        if (done == 0) {
+            return; /* the controller gives up on it at its own deadline */
+        }
+        if (done == 1 && d->slot == 0 && result.device > 0) {
+            d->slot = result.device; /* an Enable Slot answered after the pull */
+        }
+        d->abandoned = 0;
+        d->deadline = core_ms + CLOSE_LIMIT_MS;
+    }
     if (d->slot <= 0) {
         d->state = ST_FREE;
         enumerating = -1;
@@ -590,6 +621,7 @@ static void step_closing(struct usb_device_state *d)
             d->state = ST_TOMBSTONE;
             return;
         }
+        klog(KLOG_INFO, "usb", "slot: %d: given back", d->slot);
         xhci_device_closed(d->slot);
         d->slot = 0;
         enumerating = -1;
@@ -599,6 +631,12 @@ static void step_closing(struct usb_device_state *d)
     if (xhci_device_close(d->slot) == 0) {
         d->closing_asked = 1;
         d->deadline = core_ms + CLOSE_LIMIT_MS;
+    } else if (expired(d)) {
+        /* The ring never came back from the abort, so nothing can be asked;
+         * the entry is lost as one whose Disable Slot went unanswered is. */
+        klog(KLOG_WARN, "usb", "slot: %d could not be asked back; the entry is lost", d->slot);
+        enumerating = -1;
+        d->state = ST_TOMBSTONE;
     }
 }
 
@@ -1076,6 +1114,8 @@ static void step_device(struct usb_device_state *d)
             d->state = ST_RUNNING;
             d->reporting = 0;
             d->refused = 0;
+            d->unentered = 0;
+            d->hub_multi = 0;
             enumerating = -1;
             klog(KLOG_INFO, "usb",
                  "device: port %s: %x:%x, class %d protocol %d, endpoint %d, a hub", path_of(d),
@@ -1136,17 +1176,31 @@ static void device_arrive(int owner, int port)
             devices[i].slot = 0;
             devices[i].ep_dci = 0;
             devices[i].closing_asked = 0;
+            devices[i].abandoned = 0;
+            devices[i].have_control = 0;
+            devices[i].have_report = 0;
             devices[i].refused = 0;
+            devices[i].unentered = 0;
             devices[i].interface.found = 0;
             devices[i].interface.kind = USB_KIND_NONE;
             devices[i].deadline = core_ms + SETTLE_LIMIT_MS;
+            if (owner >= 0) {
+                devices[owner].unentered &= ~((uint32_t)1u << port);
+            } else {
+                port_unentered &= ~((uint32_t)1u << port);
+            }
             return;
         }
     }
+    /* The port is tried again on every pass; the record is made once. */
     if (owner >= 0) {
-        klog(KLOG_WARN, "usb", "device: port %s.%d: refused: the device table is full",
-             path_of(&devices[owner]), port + 1);
-    } else {
+        if (!(devices[owner].unentered & ((uint32_t)1u << port))) {
+            devices[owner].unentered |= (uint32_t)1u << port;
+            klog(KLOG_WARN, "usb", "device: port %s.%d: refused: the device table is full",
+                 path_of(&devices[owner]), port + 1);
+        }
+    } else if (!(port_unentered & ((uint32_t)1u << port))) {
+        port_unentered |= (uint32_t)1u << port;
         klog(KLOG_WARN, "usb", "device: port %d: refused: the device table is full", port + 1);
     }
 }
@@ -1187,6 +1241,7 @@ int usb_core_hub_tell(int index, int ports, int multi_tt, int think_time)
     }
     enumerating = index;
     if (!d->closing_asked) {
+        d->hub_multi = multi_tt;
         if (xhci_device_hub(d->slot, ports, multi_tt, think_time) != 0) {
             enumerating = -1;
             return -1;
@@ -1286,6 +1341,7 @@ void usb_core_step(uint32_t elapsed_ms)
             /* Nothing is there, so whatever was refused there is forgotten:
              * the next thing plugged into that port is tried like any other. */
             port_refused &= ~((uint32_t)1u << port);
+            port_unentered &= ~((uint32_t)1u << port);
             continue;
         }
         if (port_refused & ((uint32_t)1u << port)) {
@@ -1300,6 +1356,40 @@ void usb_core_step(uint32_t elapsed_ms)
             continue;
         }
         device_arrive(-1, port);
+    }
+
+    /* The same for the ports of every hub that is up. The hub driver reports
+     * a connection once, when it scans or when the port's change bit says
+     * so; a device that found the table full then would otherwise stay
+     * plugged in and unknown after an entry came free. */
+    for (i = 0; i < USB_MAX_DEVICES; i++) {
+        struct usb_device_state *hub = &devices[i];
+
+        if (hub->state != ST_RUNNING || hub->interface.kind != USB_KIND_HUB) {
+            continue;
+        }
+        for (port = 0; port < USB_HUB_PORT_MAX; port++) {
+            struct usb_port_status status;
+            int j;
+            int known = 0;
+
+            if (hub_port_status(i, port, &status) != 0 || !status.connected) {
+                hub->refused &= ~((uint32_t)1u << port);
+                hub->unentered &= ~((uint32_t)1u << port);
+                continue;
+            }
+            if (hub->refused & ((uint32_t)1u << port)) {
+                continue;
+            }
+            for (j = 0; j < USB_MAX_DEVICES; j++) {
+                if (devices[j].state != ST_FREE && devices[j].owner == i && devices[j].port == port) {
+                    known = 1;
+                }
+            }
+            if (!known) {
+                device_arrive(i, port);
+            }
+        }
     }
 
     for (i = 0; i < USB_MAX_DEVICES; i++) {
@@ -1330,6 +1420,7 @@ void usb_core_reset(void)
     int i;
 
     port_refused = 0;
+    port_unentered = 0;
 
     for (i = 0; i < USB_MAX_DEVICES; i++) {
         devices[i].state = ST_FREE;
