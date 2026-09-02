@@ -413,7 +413,7 @@ musl-programs: $(LIBC_STAMP)
 
 # The test image: the freestanding syscall probes plus the musl integration
 # programs. `make test` boots it and asserts every probe's success token.
-$(TEST_IMAGE): $(DEMO_CREDS) krffs/manifests/test.manifest $(IMAGE_TOOLS) | preflight krffs rach2 tests musl-programs utils ish
+$(TEST_IMAGE): $(DEMO_CREDS) krffs/manifests/test.manifest $(shell sh krffs/manifest_deps.sh krffs/manifests/test.manifest) $(IMAGE_TOOLS) | preflight krffs rach2 tests musl-programs utils ish
 	$(MKIMAGE) krffs/manifests/test.manifest $@ 10
 
 # The os-simple image: a small Unix built out of this project's own code. init
@@ -421,7 +421,7 @@ $(TEST_IMAGE): $(DEMO_CREDS) krffs/manifests/test.manifest $(IMAGE_TOOLS) | pref
 # gen_demo_password.sh mints them when krffs/shadow is absent and does nothing
 # when it is there, and it is the same file os-real stages, so one password
 # opens either image.
-$(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(IMAGE_TOOLS) | preflight krffs rach2 ish utils
+$(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(shell sh krffs/manifest_deps.sh krffs/manifests/os-simple.manifest) $(IMAGE_TOOLS) | preflight krffs rach2 ish utils
 	$(MKIMAGE) krffs/manifests/os-simple.manifest $@ 10
 
 # The os-real image: a real Unix-like environment (busybox shell + coreutils,
@@ -432,7 +432,7 @@ $(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(IMAGE_TOO
 # login keys and gen_demo_password.sh the account passwords and /etc/shadow,
 # each when absent; the check targets ensure the busybox/dropbear binaries are
 # real.
-$(OS_REAL_IMAGE): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+$(OS_REAL_IMAGE): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(shell sh krffs/manifest_deps.sh krffs/manifests/os-real.manifest) $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	$(MKIMAGE) krffs/manifests/os-real.manifest $@ 16
 
 # The same manifest as an ext2 volume, the sealed disk's fourth partition and
@@ -442,7 +442,7 @@ $(OS_REAL_IMAGE): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(IMAGE_TOOLS) 
 # sets the owners with debugfs, and passes it through e2fsck and the set-id
 # guard's own ext2 reader before it is named. The prerequisites are the KRFFS
 # image's, so the two are built from one tree.
-$(OS_REAL_EXT2): $(DEMO_CREDS) krffs/manifests/os-real.manifest tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+$(OS_REAL_EXT2): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(shell sh krffs/manifest_deps.sh krffs/manifests/os-real.manifest) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	sh tools/image/mkext2.sh krffs/manifests/os-real.manifest $@ 1024
 
 # The metal image: what the Lenovo G50-70 boots from a USB stick. A RAM-only
@@ -481,7 +481,7 @@ rach2-recovery: krffs rach2
 # $(TEST_IMAGE) above already uses. As a phony target this rebuilt the image on
 # every invocation, so three suites that merely boot it each restaged it, and
 # two of them running at once restaged it under each other.
-$(METAL_IMAGE): $(DEMO_CREDS) krffs/manifests/rach2-metal.manifest $(IMAGE_TOOLS) | preflight krffs rach2 rach2-metal utils check-busybox check-setid check-dropbearmulti
+$(METAL_IMAGE): $(DEMO_CREDS) krffs/manifests/rach2-metal.manifest $(shell sh krffs/manifest_deps.sh krffs/manifests/rach2-metal.manifest) $(IMAGE_TOOLS) | preflight krffs rach2 rach2-metal utils check-busybox check-setid check-dropbearmulti
 	$(MKIMAGE) krffs/manifests/rach2-metal.manifest $@ 4
 
 rach2-metal-image: $(METAL_IMAGE)
@@ -490,7 +490,7 @@ rach2-metal-image: $(METAL_IMAGE)
 # metal profile plus the two programs that repair a disk, and it mounts nothing
 # from the disk it is repairing, which is what lets it rewrite that disk's root.
 RECOVERY_IMAGE = $(IMAGES_DIR)/rach2-recovery.krffs
-$(RECOVERY_IMAGE): $(DEMO_CREDS) krffs/manifests/rach2-recovery.manifest $(IMAGE_TOOLS) | preflight krffs rach2 rach2-recovery utils check-busybox check-setid check-dropbearmulti check-e2fsck
+$(RECOVERY_IMAGE): $(DEMO_CREDS) krffs/manifests/rach2-recovery.manifest $(shell sh krffs/manifest_deps.sh krffs/manifests/rach2-recovery.manifest) $(IMAGE_TOOLS) | preflight krffs rach2 rach2-recovery utils check-busybox check-setid check-dropbearmulti check-e2fsck
 	$(MKIMAGE) krffs/manifests/rach2-recovery.manifest $@ 4
 
 rach2-recovery-image: $(RECOVERY_IMAGE)
@@ -530,11 +530,12 @@ rach2-metal-grub-disk: krffs rach2 utils check-busybox check-tcc check-pdpmake c
 # FAT32 boot partition at 4 KiB clusters (one sector per cluster puts a 64 MiB
 # volume past both of bootslot's bounds), a 500 MiB root, and a 64 MiB recovery
 # partition whose kernel and RAM image GRUB can reach when partition 1 cannot be
-# read at all. The fourth partition is the ext2 root, 1 GiB, the same manifest
+# read at all. The fourth partition is the ext2 root, 1 GiB at 630 MiB, where
+# the installed machine's fourth partition already begins, the same manifest
 # as an ext2 volume, which the candidate entries boot while the fallback
 # entries keep the KRFFS root, so a candidate root that does not come up falls
-# back through the trial to a system that does. The image is 1654 MiB,
-# 3387392 sectors.
+# back through the trial to a system that does. The image is 1655 MiB,
+# 3389440 sectors.
 #
 # The address is `rach2.ip=none`: this machine is carried between buildings and
 # takes whatever the network there gives it, through `ifup -a` and udhcpc, which
@@ -561,7 +562,7 @@ SEALED_GATEWAY ?= 192.168.0.1
 SEALED_IP = $(SEALED_ADDRESS)/$(SEALED_PREFIX)
 SEALED_DISK = build/images/rach2-sealed.disk
 SEALED_EXT2 = build/images/rach2-metal-disk.ext2
-$(SEALED_EXT2): $(DEMO_CREDS) krffs/manifests/rach2-metal-disk.manifest tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+$(SEALED_EXT2): $(DEMO_CREDS) krffs/manifests/rach2-metal-disk.manifest $(shell sh krffs/manifest_deps.sh krffs/manifests/rach2-metal-disk.manifest) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	sh tools/image/mkext2.sh krffs/manifests/rach2-metal-disk.manifest $@ 1024
 # The alias builds everything the disk is made of, then asks for the disk
 # itself. The two are separate because the components are phony targets, which

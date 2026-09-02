@@ -437,7 +437,7 @@ run-install: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpma
 # while the fallback keeps the KRFFS root. The kernel is built on the ext2
 # root and installed from it, and the fallback boots are the KRFFS root.
 OS_REAL_SMALL_EXT2 = $(IMAGES_DIR)/os-real-small.ext2
-$(OS_REAL_SMALL_EXT2): $(DEMO_CREDS) krffs/manifests/os-real.manifest tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+$(OS_REAL_SMALL_EXT2): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(shell sh krffs/manifest_deps.sh krffs/manifests/os-real.manifest) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	sh tools/image/mkext2.sh krffs/manifests/os-real.manifest $@ 96
 INSTALL_EXT2_DISK = $(IMAGES_DIR)/install-ext2-test.disk
 run-install-ext2: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(BINFIND) rach2-recovery $(RECOVERY_IMAGE) $(OS_REAL_SMALL_EXT2)
@@ -496,7 +496,7 @@ run-drill: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krffs c
 # write, that is destroyed, that recovery rewrites through the pipe, and that
 # the last boot mounts again.
 OS_SIMPLE_EXT2 = $(IMAGES_DIR)/os-simple.ext2
-$(OS_SIMPLE_EXT2): $(DEMO_CREDS) krffs/manifests/os-simple.manifest tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-setid
+$(OS_SIMPLE_EXT2): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(shell sh krffs/manifest_deps.sh krffs/manifests/os-simple.manifest) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-setid
 	sh tools/image/mkext2.sh krffs/manifests/os-simple.manifest $@ 16
 DRILL_EXT2_DISK = $(IMAGES_DIR)/drill-ext2-test.disk
 DRILL_EXT2_PORT = 2300
@@ -1187,7 +1187,7 @@ run-selfbuild: $(DEMO_CREDS) rach2 utils krffs test-image check-busybox check-tc
 # builds are the most the ext2 root is read and written in one sitting.
 SELFBUILD_EXT2_VOL = $(IMAGES_DIR)/selfbuild-ext2.vol
 SELFBUILD_EXT2_DISK = $(IMAGES_DIR)/selfbuild-ext2-test.disk
-$(SELFBUILD_EXT2_VOL): $(DEMO_CREDS) krffs/manifests/os-real.manifest tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+$(SELFBUILD_EXT2_VOL): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(shell sh krffs/manifest_deps.sh krffs/manifests/os-real.manifest) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	sh tools/image/mkext2.sh krffs/manifests/os-real.manifest $@ 48
 run-selfbuild-ext2: $(DEMO_CREDS) rach2 utils krffs test-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(ELFCHECK) $(RUNTESTS) $(SELFBUILD_EXT2_VOL) build/tools/image/mkmbr
 	@mkdir -p $(IMAGES_DIR)
