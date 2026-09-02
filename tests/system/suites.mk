@@ -1014,9 +1014,11 @@ run-fatwrite: $(DEMO_CREDS) rach2 tests krffs os-real-image $(MKFATFIXTURE) $(HA
 # `tests/run ext2`: the ext2 driver booted over a fixture disk the host's
 # mke2fs wrote, with the walker's link rows on the mounted volume.
 EXT2_DISK = $(IMAGES_DIR)/ext2-test.disk
-run-ext2: $(DEMO_CREDS) rach2 tests krffs test-image $(HARNESS) build/tools/image/mkmbr
+run-ext2: $(DEMO_CREDS) rach2 tests krffs test-image $(HARNESS) build/tools/image/mkmbr \
+          utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom \
+          rach2-recovery $(RECOVERY_IMAGE)
 	sh tests/system/suites/ext2.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(EXT2_DISK) \
-	    build/tools/image/mkmbr
+	    build/tools/image/mkmbr $(RECOVERY_KERNEL) $(RECOVERY_IMAGE)
 
 # `tests/run exfat`: exFAT written from a program, read back after a reboot,
 # judged by the host's reader and the external checker where the host has
