@@ -530,7 +530,11 @@ rach2-metal-grub-disk: krffs rach2 utils check-busybox check-tcc check-pdpmake c
 # FAT32 boot partition at 4 KiB clusters (one sector per cluster puts a 64 MiB
 # volume past both of bootslot's bounds), a 500 MiB root, and a 64 MiB recovery
 # partition whose kernel and RAM image GRUB can reach when partition 1 cannot be
-# read at all. The image is 630 MiB, 1290240 sectors.
+# read at all. The fourth partition is the ext2 root, 1 GiB, the same manifest
+# as an ext2 volume, which the candidate entries boot while the fallback
+# entries keep the KRFFS root, so a candidate root that does not come up falls
+# back through the trial to a system that does. The image is 1654 MiB,
+# 3387392 sectors.
 #
 # The address is `rach2.ip=none`: this machine is carried between buildings and
 # takes whatever the network there gives it, through `ifup -a` and udhcpc, which
@@ -556,6 +560,9 @@ SEALED_PREFIX ?= 24
 SEALED_GATEWAY ?= 192.168.0.1
 SEALED_IP = $(SEALED_ADDRESS)/$(SEALED_PREFIX)
 SEALED_DISK = build/images/rach2-sealed.disk
+SEALED_EXT2 = build/images/rach2-metal-disk.ext2
+$(SEALED_EXT2): $(DEMO_CREDS) krffs/manifests/rach2-metal-disk.manifest tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+	sh tools/image/mkext2.sh krffs/manifests/rach2-metal-disk.manifest $@ 1024
 # The alias builds everything the disk is made of, then asks for the disk
 # itself. The two are separate because the components are phony targets, which
 # are always out of date, and a disk that named them directly was rebuilt on
@@ -563,7 +570,7 @@ SEALED_DISK = build/images/rach2-sealed.disk
 rach2-sealed-disk: krffs rach2 utils rach2-recovery rach2-recovery-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(CFGCHECK)
 	@$(MAKE) --no-print-directory $(SEALED_DISK)
 
-$(SEALED_DISK): build/rach2/kernel $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) \
+$(SEALED_DISK): build/rach2/kernel $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(SEALED_EXT2) \
                 krffs/manifests/rach2-metal-disk.manifest krffs/rescue-static.script \
                 tools/image/mkdisk_grub.sh $(CFGCHECK)
 	@$(CFGCHECK) sealednet $(SEALED_ADDRESS) $(SEALED_PREFIX) \
@@ -578,6 +585,8 @@ $(SEALED_DISK): build/rach2/kernel $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) \
 	RACH2_DISK_STATIC_APPEND="rach2.ip=$(SEALED_IP) rach2.gateway=$(SEALED_GATEWAY)" \
 	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
 	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
+	RACH2_DISK_EXT2_MB=1024 \
+	RACH2_DISK_EXT2_IMAGE=$(SEALED_EXT2) \
 	    sh tools/image/mkdisk_grub.sh build/rach2/kernel $(SEALED_DISK)
 
 

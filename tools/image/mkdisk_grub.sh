@@ -3,9 +3,14 @@
 #
 # mkdisk_grub.sh: build a BIOS-bootable disk image with kernel slots.
 #
-# The disk has two MBR partitions, or three when a recovery partition is asked
-# for: partition 1 is a FAT32 boot file system holding GRUB and two kernels,
-# partition 2 is a KRFFS image, and partition 3, when RACH2_DISK_RECOVERY_MB is
+# The disk has two MBR partitions, three when a recovery partition is asked
+# for, and four when an ext2 root is: partition 1 is a FAT32 boot file system
+# holding GRUB and two kernels, partition 2 is a KRFFS image, partition 4, when
+# RACH2_DISK_EXT2_MB is set, is the ext2 image RACH2_DISK_EXT2_IMAGE names,
+# which the candidate entries then boot as their root (rach2.root=ext2) while
+# the fallback entries keep the KRFFS one (rach2.root=disk), so that a
+# candidate root that does not come up falls back through the trial to a
+# system that does, and partition 3, when RACH2_DISK_RECOVERY_MB is
 # nonzero, is an empty FAT32 volume for the recovery kernel and its RAM image.
 #
 # GRUB's boot.img goes in the MBR and core.img in the post-MBR gap (partition 1
@@ -73,6 +78,22 @@ CLUSTER="${RACH2_DISK_CLUSTER:-}"
 RECOVERY_MB="${RACH2_DISK_RECOVERY_MB:-0}"
 RECOVERY_KERNEL="${RACH2_DISK_RECOVERY_KERNEL:-}"
 RECOVERY_IMAGE="${RACH2_DISK_RECOVERY_IMAGE:-}"
+# The fourth partition: an ext2 root image, at most EXT2_MB in size, and the
+# candidate entries' root when it is there.
+EXT2_MB="${RACH2_DISK_EXT2_MB:-0}"
+EXT2_IMAGE="${RACH2_DISK_EXT2_IMAGE:-}"
+if [ "$EXT2_MB" -gt 0 ] && [ "$RECOVERY_MB" -le 0 ]; then
+    echo "mkdisk_grub: the ext2 partition is the fourth; RACH2_DISK_RECOVERY_MB must be set with it" >&2
+    exit 1
+fi
+if [ "$EXT2_MB" -gt 0 ] && [ ! -f "$EXT2_IMAGE" ]; then
+    echo "mkdisk_grub: RACH2_DISK_EXT2_IMAGE names no file ($EXT2_IMAGE)" >&2
+    exit 1
+fi
+CANDIDATE_ROOT=disk
+if [ "$EXT2_MB" -gt 0 ]; then
+    CANDIDATE_ROOT=ext2
+fi
 
 # The FAT half of this disk used to differ between two builds of one tree, in
 # two places that have nothing to do with its contents: mformat picks a random
@@ -98,7 +119,7 @@ SLOT_BYTES=2097152
 MENU_BYTES=8192
 # One spare MiB so the last partition ends before the device edge (parted
 # rejects a partition that ends exactly at the device size).
-DISK_MB=$((GAP_MB + BOOT_MB + KRFFS_MB + RECOVERY_MB + 1))
+DISK_MB=$((GAP_MB + BOOT_MB + KRFFS_MB + RECOVERY_MB + EXT2_MB + 1))
 
 if [ ! -f "$KERNEL" ]; then
     echo "mkdisk_grub: kernel not built ($KERNEL); run 'make' first" >&2
@@ -182,7 +203,7 @@ load_env
 
 menuentry "Rach2" --id candidate {
     set root=(hd0,msdos1)
-    multiboot /boot/kernel rach2.root=disk rach2.slot=candidate RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
+    multiboot /boot/kernel rach2.root=RACH2_CANDIDATE_ROOT rach2.slot=candidate RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
     boot
 }
 
@@ -194,7 +215,7 @@ menuentry "Rach2 (fallback kernel)" --id fallback {
 
 menuentry "Rach2 (static address)" --id candidate-static {
     set root=(hd0,msdos1)
-    multiboot /boot/kernel rach2.root=disk rach2.slot=candidate RACH2_APPEND_TOKENS RACH2_STATIC_TOKENS
+    multiboot /boot/kernel rach2.root=RACH2_CANDIDATE_ROOT rach2.slot=candidate RACH2_APPEND_TOKENS RACH2_STATIC_TOKENS
     boot
 }
 
@@ -363,6 +384,7 @@ if [ -n "$RECOVERY_KERNEL" ] && [ -n "$RECOVERY_IMAGE" ]; then
 fi
 sed -e "s|RACH2_STATIC_TOKENS|$(sedq "$STATIC_APPEND")|" \
     -e "s|RACH2_DHCP_TOKENS|$(sedq "$DHCP_APPEND")|" \
+    -e "s|RACH2_CANDIDATE_ROOT|$CANDIDATE_ROOT|" \
     -e "s|RACH2_RECOVERY_STATIC_TITLE|$(sedq "$RECOVERY_STATIC_TITLE")|" \
     -e "s|RACH2_RECOVERY_TITLE|$(sedq "$RECOVERY_TITLE")|" \
     -e "s|RACH2_APPEND_TOKENS|$(sedq "$EXTRA_APPEND")|" \
@@ -430,7 +452,12 @@ export MTOOLS_SKIP_CHECK=1
 export TZ=UTC
 
 dd if=/dev/zero of="$OUT.new" bs=1048576 count="$DISK_MB" 2>/dev/null
-if [ "$RECOVERY_MB" -gt 0 ]; then
+if [ "$EXT2_MB" -gt 0 ]; then
+    "$MKMBR" "$OUT.new" "${GAP_MB}:${BOOT_MB}:0c:boot" \
+        "$((GAP_MB + BOOT_MB)):${KRFFS_MB}:83" \
+        "$((GAP_MB + BOOT_MB + KRFFS_MB)):${RECOVERY_MB}:0c" \
+        "$((GAP_MB + BOOT_MB + KRFFS_MB + RECOVERY_MB)):${EXT2_MB}:83"
+elif [ "$RECOVERY_MB" -gt 0 ]; then
     "$MKMBR" "$OUT.new" "${GAP_MB}:${BOOT_MB}:0c:boot" \
         "$((GAP_MB + BOOT_MB)):${KRFFS_MB}:83" \
         "$((GAP_MB + BOOT_MB + KRFFS_MB)):${RECOVERY_MB}:0c"
@@ -585,6 +612,17 @@ if [ "$RECOVERY_MB" -gt 0 ]; then
     mcopy -i "$TMPD/p3.img" "$RECOVERY_CFG" ::/boot/grub/recovery.cfg
     dd if="$TMPD/p3.img" of="$OUT.new" bs=1048576 \
         seek=$((GAP_MB + BOOT_MB + KRFFS_MB)) conv=notrunc 2>/dev/null
+fi
+# Partition 4, when asked for: the ext2 root image, which must fit.
+if [ "$EXT2_MB" -gt 0 ]; then
+    EXT2_BYTES=$(wc -c < "$EXT2_IMAGE" | tr -d ' ')
+    if [ "$EXT2_BYTES" -gt $((EXT2_MB * 1048576)) ]; then
+        echo "mkdisk_grub: the ext2 image is $EXT2_BYTES bytes and partition 4 has $((EXT2_MB * 1048576))" >&2
+        rm -f "$OUT.new"
+        exit 1
+    fi
+    dd if="$EXT2_IMAGE" of="$OUT.new" bs=1048576 \
+        seek=$((GAP_MB + BOOT_MB + KRFFS_MB + RECOVERY_MB)) conv=notrunc 2>/dev/null
 fi
 rm -rf "$TMPD"
 mv "$OUT.new" "$OUT"
