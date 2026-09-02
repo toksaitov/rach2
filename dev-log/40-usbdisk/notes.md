@@ -422,6 +422,14 @@ a `findfs` check that a `blkid` line could satisfy; and a builder with no
 cleanup trap. All are fixed, and the suite, the metal rehearsal, the host
 tests and the style checks pass after them.
 
+`make test` on the closing tree is 7 minutes 6 seconds against milestone
+39's 5 minutes 6. The two minutes are `tests/run usbdisk`, 120 s, which runs
+alone after the pool as `tests/run usb` does, because both plug devices in
+and out through the emulator's monitor; the registry's rule is that no core
+member takes longer than two minutes on its own, and this one is at that
+line. The 60 s churn boot is the row to move to a full-tier suite if the
+tier must shrink.
+
 Not caught, and cannot be: the staging buffer's exclusion needs two
 processes asleep in the kernel at once, which the guest can arrange and no
 row drives; and the emulator's completion inside the doorbell write is a

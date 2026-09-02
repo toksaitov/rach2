@@ -36,4 +36,6 @@ In the cache, a buffer marked for discard by a device that went, and then droppe
 
 `tests/run usbdisk` is nine boots: the MBR stick, the GUID stick with its first used entry at index six, the stick with no table, a write read back after a remount and off the image by mtools, the stick pulled from under a mount with a file open and plugged back in, ten plugs and pulls of a stick nobody opened, BusyBox mounting by label, the throughput line, and the stick image booted by the firmware with no kernel given to the emulator, where the machine mounts its own second partition. `tests/run metal` rehearses the acceptance script's stick section against a stick.
 
+`make test` is 7 minutes 6 seconds against milestone 39's 5 minutes 6, the two minutes being the stick suite run alone after the pool.
+
 Every check added here was proved by a mutation that makes it fail: ten for the class driver in phase 3, eight for the naming and removal in phase 4, five for the review's fixes in phase 5, three for the image in phase 6, each failing exactly its row. Two are recorded as not caught and cannot be: the staging buffer's exclusion needs two processes asleep in the kernel, and the emulator's completion inside the doorbell write is a race the model cannot make.
