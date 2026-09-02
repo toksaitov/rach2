@@ -25,10 +25,10 @@
 #define USB_DESC_MAX 64
 
 /* The classes this kernel knows by number. */
-#define USB_CLASS_HID       3
-#define USB_SUBCLASS_BOOT   1
-#define USB_PROTOCOL_KBD    1
-#define USB_PROTOCOL_MOUSE  2
+#define USB_CLASS_HID      3
+#define USB_SUBCLASS_BOOT  1
+#define USB_PROTOCOL_KBD   1
+#define USB_PROTOCOL_MOUSE 2
 
 /* Mass storage, of which this kernel drives the one transport that every
  * flash drive has: the SCSI transparent command set over Bulk-Only. The
@@ -43,25 +43,36 @@
 #define USB_KIND_NONE    0
 #define USB_KIND_HID     1
 #define USB_KIND_STORAGE 2
+#define USB_KIND_HUB     3
+
+/* The hub class, from the USB 2.0 specification's chapter 11: class 9, and
+ * a protocol that says what translates for the devices below it. */
+#define USB_CLASS_HUB           9
+#define USB_PROTOCOL_HUB_FS     0 /* full speed, or high speed with no translator */
+#define USB_PROTOCOL_HUB_ONE_TT 1
+#define USB_PROTOCOL_HUB_MULTI  2
+#define USB_PROTOCOL_HUB_SUPER  3
 
 /** What the configuration descriptor said about the interface this kernel can
  *  drive, and about the endpoint it reports on. */
 struct usb_interface_info {
-    int found;         /* whether such an interface was there at all */
-    int kind;          /* one of the `USB_KIND_` values */
-    int number;        /* the interface's number, for SET_PROTOCOL and the
-                        * class requests a stick's transport is made of */
-    int class_code;    /* its class, subclass and protocol */
+    int found;        /* whether such an interface was there at all */
+    int refused_kind; /* an interface this kernel names when it refuses it:
+                       * a SuperSpeed hub */
+    int kind;         /* one of the `USB_KIND_` values */
+    int number;       /* the interface's number, for SET_PROTOCOL and the
+                       * class requests a stick's transport is made of */
+    int class_code;   /* its class, subclass and protocol */
     int subclass;
     int protocol;
-    int ep_number;     /* the interrupt IN endpoint a keyboard reports on, or
-                        * the bulk IN endpoint a stick answers on */
+    int ep_number; /* the interrupt IN endpoint a keyboard reports on, or
+                    * the bulk IN endpoint a stick answers on */
     int ep_max_packet;
     int ep_interval;
     /* A stick's second endpoint. Zero on an interface that has one. */
     int ep_out_number;
     int ep_out_max_packet;
-    int config_value;  /* the configuration this interface belongs to */
+    int config_value; /* the configuration this interface belongs to */
 };
 
 /**
@@ -87,6 +98,36 @@ void usb_parse_config(const uint8_t *buffer, int length, struct usb_interface_in
  * timer. The caller knows how long its turn is and this module does not.
  */
 void usb_core_step(uint32_t elapsed_ms);
+
+/*
+ * A port belongs to the root controller or to a hub, and the enumeration
+ * state machine does not care which: a device record holds the operations
+ * its port answers to. `owner` is the hub's device index for a hub port and
+ * unused for a root port; `port` is numbered from zero in both cases, and
+ * the hub's operations add one when they talk to the hub.
+ */
+struct usb_port_ops {
+    int (*status)(int owner, int port, struct usb_port_status *out);
+    int (*settled)(int owner, int port);
+    int (*reset_begin)(int owner, int port);
+    int (*reset_done)(int owner, int port);
+};
+
+/**
+ * A hub reports what is on one of its ports: `connected` says whether a
+ * device is there now. A connection change is a change of identity: what
+ * was below the port is closed first, depth-first, whatever the status says
+ * now, and only then is a device that is there debounced and enumerated.
+ * `hub` is the hub's device index, `port` numbered from zero.
+ */
+void usb_core_hub_port(int hub, int port, int connected);
+
+/**
+ * The location of a device, by its index: the hub driver passes it on to the
+ * controller for the hub's own words. Returns -1 for an index that names no
+ * device.
+ */
+int usb_core_location(int index, struct usb_location *out);
 
 /** Start again from nothing: no devices, no ports being enumerated. */
 void usb_core_reset(void);

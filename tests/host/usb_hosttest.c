@@ -18,6 +18,7 @@ extern void *malloc(unsigned long size);
 extern void free(void *p);
 
 #include "../../rach2/sys/usb/core.h"
+#include "../../rach2/sys/usb/hub.h"
 
 /* ---- what the core reaches for outside itself ---- */
 
@@ -141,6 +142,61 @@ int msc_attach(int device, int interface, int ep_in, int ep_out)
 void msc_detach(int device)
 {
     (void)device;
+}
+
+int hub_attach(int index, int device, int interface, int protocol, int ep_dci)
+{
+    (void)index;
+    (void)device;
+    (void)interface;
+    (void)protocol;
+    (void)ep_dci;
+    return -1;
+}
+
+void hub_detach(int index)
+{
+    (void)index;
+}
+
+void hub_step(uint32_t elapsed_ms)
+{
+    (void)elapsed_ms;
+}
+
+int hub_completion(const struct usb_completion *completion)
+{
+    (void)completion;
+    return 0;
+}
+
+int hub_port_status(int owner, int port, struct usb_port_status *out)
+{
+    (void)owner;
+    (void)port;
+    out->connected = 0;
+    return -1;
+}
+
+int hub_port_settled(int owner, int port)
+{
+    (void)owner;
+    (void)port;
+    return 0;
+}
+
+int hub_port_reset_begin(int owner, int port)
+{
+    (void)owner;
+    (void)port;
+    return -1;
+}
+
+int hub_port_reset_done(int owner, int port)
+{
+    (void)owner;
+    (void)port;
+    return -1;
 }
 
 void usbdisk_step(void)

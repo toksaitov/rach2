@@ -23,6 +23,7 @@
 #include "../input.h"
 #include "../klog.h"
 #include "hid.h"
+#include "hub.h"
 #include "msc.h"
 #include "../block/usbdisk.h"
 #include "xhci.h"
@@ -90,9 +91,17 @@
 
 struct usb_device_state {
     int state;
-    int port;
+    int port; /* on the root controller or on the hub, numbered from zero */
     int speed;
     int slot;
+    /* Where the device is: its port's operations, the hub it is under or -1
+     * on a root port, and the location the controller was given. */
+    const struct usb_port_ops *ops;
+    int owner;
+    struct usb_location where;
+    /* For a hub: the ports whose device this kernel could not drive, one bit
+     * each, kept as the root's are. */
+    uint32_t refused;
     uint32_t deadline;
     int closing_asked;
     uint32_t short_by;
@@ -119,6 +128,37 @@ struct usb_device_state {
 };
 
 static struct usb_device_state devices[USB_MAX_DEVICES];
+
+/* A root port's operations are the controller's; `owner` is not used. */
+static int root_status(int owner, int port, struct usb_port_status *out)
+{
+    (void)owner;
+    return xhci_port_status(port, out);
+}
+
+static int root_settled(int owner, int port)
+{
+    (void)owner;
+    return xhci_port_settled(port);
+}
+
+static int root_reset_begin(int owner, int port)
+{
+    (void)owner;
+    return xhci_port_reset_begin(port);
+}
+
+static int root_reset_done(int owner, int port)
+{
+    (void)owner;
+    return xhci_port_reset_done(port);
+}
+
+static const struct usb_port_ops root_ops = {root_status, root_settled, root_reset_begin,
+                                             root_reset_done};
+
+static const struct usb_port_ops hub_ops = {hub_port_status, hub_port_settled, hub_port_reset_begin,
+                                            hub_port_reset_done};
 
 /* Which device is being enumerated, or -1. Only one is, because the controller
  * takes one command at a time. */
@@ -149,8 +189,10 @@ void usb_parse_config(const uint8_t *buffer, int length, struct usb_interface_in
     int offset = 0;
     int in_boot_interface = 0;
     int in_storage_interface = 0;
+    int in_hub_interface = 0;
 
     out->found = 0;
+    out->refused_kind = 0;
     out->kind = USB_KIND_NONE;
     out->number = 0;
     out->class_code = 0;
@@ -202,9 +244,21 @@ void usb_parse_config(const uint8_t *buffer, int length, struct usb_interface_in
                  buffer[offset + 6] == USB_SUBCLASS_SCSI &&
                  buffer[offset + 7] == USB_PROTOCOL_BULK_ONLY);
             in_storage_interface = in_storage_interface_now;
-            if ((in_boot_interface || in_storage_interface_now) && !out->found &&
-                out->kind == USB_KIND_NONE) {
-                out->kind = in_boot_interface ? USB_KIND_HID : USB_KIND_STORAGE;
+            /* A hub: class 9 on its setting zero, with a protocol that says
+             * what translates below it. A SuperSpeed hub, protocol 3, has a
+             * port status layout of its own and is refused by name; its
+             * high-speed half is another device and is driven. */
+            in_hub_interface = (buffer[offset + 3] == 0 && buffer[offset + 5] == USB_CLASS_HUB &&
+                                buffer[offset + 7] <= USB_PROTOCOL_HUB_MULTI);
+            if (buffer[offset + 3] == 0 && buffer[offset + 5] == USB_CLASS_HUB &&
+                buffer[offset + 7] == USB_PROTOCOL_HUB_SUPER && !out->found) {
+                out->refused_kind = USB_PROTOCOL_HUB_SUPER;
+            }
+            if ((in_boot_interface || in_storage_interface_now || in_hub_interface) &&
+                !out->found && out->kind == USB_KIND_NONE) {
+                out->kind = in_boot_interface  ? USB_KIND_HID
+                            : in_hub_interface ? USB_KIND_HUB
+                                               : USB_KIND_STORAGE;
                 out->number = buffer[offset + 2];
                 out->class_code = buffer[offset + 5];
                 out->subclass = buffer[offset + 6];
@@ -215,7 +269,8 @@ void usb_parse_config(const uint8_t *buffer, int length, struct usb_interface_in
                  * to have, and the endpoints below belong to nobody. */
                 in_storage_interface = 0;
             }
-        } else if (type == DESC_ENDPOINT && size >= 7 && in_boot_interface && !out->found) {
+        } else if (type == DESC_ENDPOINT && size >= 7 && (in_boot_interface || in_hub_interface) &&
+                   !out->found) {
             int address = buffer[offset + 2];
             int attributes = buffer[offset + 3];
 
@@ -300,6 +355,118 @@ static int expired(const struct usb_device_state *d)
     return (int32_t)(core_ms - d->deadline) >= 0;
 }
 
+static void subtree_gone(int hub);
+
+/**
+ * Take one device down: its class driver told, and its entry closing if the
+ * controller gave it a slot, free otherwise.
+ */
+static void device_gone(int i)
+{
+    struct usb_device_state *d = &devices[i];
+
+    if (d->state == ST_FREE || d->state == ST_CLOSING || d->state == ST_TOMBSTONE) {
+        return;
+    }
+    if (d->state == ST_RUNNING) {
+        klog(KLOG_INFO, "usb", "device: port %d: gone", d->port + 1);
+        if (d->interface.kind == USB_KIND_STORAGE) {
+            msc_detach(d->slot);
+        } else if (d->interface.kind == USB_KIND_HUB) {
+            hub_detach(i);
+        } else {
+            hid_gone(d->slot);
+        }
+    }
+    /* Whatever is below a hub goes before the hub does. */
+    subtree_gone(i);
+    if (enumerating == i) {
+        enumerating = -1;
+    }
+    d->closing_asked = 0;
+    d->state = d->slot > 0 ? ST_CLOSING : ST_FREE;
+    d->deadline = core_ms + STEP_MS;
+}
+
+/** Every device under hub `hub`, depth-first: children before their hub. */
+static void subtree_gone(int hub)
+{
+    int i;
+
+    for (i = 0; i < USB_MAX_DEVICES; i++) {
+        if (devices[i].owner == hub && devices[i].state != ST_FREE) {
+            device_gone(i);
+        }
+    }
+}
+
+/**
+ * Where a device is, from where its hub is.
+ *
+ * A root port's device has depth zero and an empty route. A device on port
+ * P of a hub has the hub's route with P, numbered from one, in the nibble of
+ * its tier, and a depth one more; a port above 15 does not fit the nibble
+ * and is refused, as is a sixth tier. A low or full-speed device below a
+ * high-speed hub carries the nearest high-speed hub above it as its
+ * translator, with the port on that hub that leads to it, which is the
+ * specification's rule for a full-speed hub between them as well.
+ */
+static int location_of(const struct usb_device_state *d, struct usb_location *out)
+{
+    out->tt_device = 0;
+    out->tt_port = 0;
+    out->tt_multi = 0;
+    if (d->owner < 0) {
+        out->root_port = d->port;
+        out->depth = 0;
+        out->route = 0;
+        return 0;
+    }
+    {
+        const struct usb_device_state *hub = &devices[d->owner];
+        int tier = hub->where.depth;
+
+        if (d->port + 1 > USB_HUB_PORT_MAX || tier >= USB_TREE_TIERS) {
+            return -1;
+        }
+        out->root_port = hub->where.root_port;
+        out->depth = tier + 1;
+        out->route = hub->where.route | ((uint32_t)(d->port + 1) << (4 * tier));
+        if (d->speed == USB_SPEED_LOW || d->speed == USB_SPEED_FULL) {
+            /* Up the tree to the nearest high-speed hub; the port carried is
+             * the one on that hub that the path to this device goes through. */
+            const struct usb_device_state *at = d;
+
+            while (at->owner >= 0) {
+                const struct usb_device_state *above = &devices[at->owner];
+
+                if (above->speed == USB_SPEED_HIGH) {
+                    out->tt_device = above->slot;
+                    out->tt_port = at->port + 1;
+                    out->tt_multi = above->interface.protocol == USB_PROTOCOL_HUB_MULTI;
+                    break;
+                }
+                at = above;
+            }
+        }
+    }
+    return 0;
+}
+
+/** Whether anything below hub `hub` is still on its way out. */
+static int subtree_closing(int hub)
+{
+    int i;
+
+    for (i = 0; i < USB_MAX_DEVICES; i++) {
+        if (devices[i].owner == hub && devices[i].state != ST_FREE &&
+            devices[i].state != ST_TOMBSTONE) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /** Give up on a device, with the reason. */
 static void fail(struct usb_device_state *d, const char *why)
 {
@@ -310,12 +477,21 @@ static void fail(struct usb_device_state *d, const char *why)
     if (d->interface.kind == USB_KIND_STORAGE) {
         msc_detach(d->slot);
     }
+    if (d->interface.kind == USB_KIND_HUB) {
+        hub_detach((int)(d - devices));
+        subtree_gone((int)(d - devices));
+    }
     hid_gone(d->slot);
     /* The port is remembered, not the entry: a machine with several devices
      * this kernel cannot drive would otherwise spend its whole table on them
-     * and have none left for what a person plugs in. */
+     * and have none left for what a person plugs in. A hub's ports are
+     * remembered on the hub's own record. */
     if (d->port >= 0 && d->port < 32) {
-        port_refused |= (uint32_t)1u << d->port;
+        if (d->owner >= 0) {
+            devices[d->owner].refused |= (uint32_t)1u << d->port;
+        } else {
+            port_refused |= (uint32_t)1u << d->port;
+        }
     }
     if (d->slot > 0) {
         d->state = ST_CLOSING;
@@ -346,6 +522,9 @@ static void step_closing(struct usb_device_state *d)
      * answer to another device's Disable Slot, and would take the slot being
      * given back as the slot it had just been given.
      */
+    if (d->interface.kind == USB_KIND_HUB && subtree_closing(index)) {
+        return; /* children before their hub */
+    }
     if (enumerating >= 0 && enumerating != index) {
         return;
     }
@@ -444,6 +623,9 @@ static int command_result(struct usb_device_state *d, struct usb_command_result 
  */
 static void step_running(struct usb_device_state *d)
 {
+    if (d->interface.kind == USB_KIND_HUB) {
+        return; /* the hub driver reads its own change endpoint */
+    }
     int kind;
     int length;
 
@@ -527,7 +709,7 @@ static void step_device(struct usb_device_state *d)
         return;
 
     case ST_SETTLING:
-        if (!xhci_port_settled(d->port)) {
+        if (!d->ops->settled(d->owner, d->port)) {
             /* A connect that never settles is a port that keeps bouncing, or
              * a device pulled out again. Either way this entry is not held for
              * ever. */
@@ -540,7 +722,7 @@ static void step_device(struct usb_device_state *d)
             return; /* another device has the command ring */
         }
         enumerating = index;
-        if (xhci_port_reset_begin(d->port) != 0) {
+        if (d->ops->reset_begin(d->owner, d->port) != 0) {
             fail(d, "the port would not begin a reset");
             return;
         }
@@ -549,7 +731,7 @@ static void step_device(struct usb_device_state *d)
         return;
 
     case ST_RESETTING:
-        answer = xhci_port_reset_done(d->port);
+        answer = d->ops->reset_done(d->owner, d->port);
         if (answer == 0) {
             return;
         }
@@ -560,22 +742,18 @@ static void step_device(struct usb_device_state *d)
         {
             struct usb_port_status status;
 
-            if (xhci_port_status(d->port, &status) != 0 || !status.connected) {
+            if (d->ops->status(d->owner, d->port, &status) != 0 || !status.connected) {
                 fail(d, "the device left during its reset");
                 return;
             }
             d->speed = status.speed;
         }
         {
-            struct usb_location where;
-
-            where.root_port = d->port;
-            where.depth = 0;
-            where.route = 0;
-            where.tt_device = 0;
-            where.tt_port = 0;
-            where.tt_multi = 0;
-            if (xhci_device_open(&where, d->speed) != 0) {
+            if (location_of(d, &d->where) != 0) {
+                fail(d, "it is deeper in the tree than a route string can say");
+                return;
+            }
+            if (xhci_device_open(&d->where, d->speed) != 0) {
                 /* The controller takes one command at a time, and another
                  * device may have one in flight; this is a turn to wait, not
                  * a refusal. The deadline armed when the reset began is what
@@ -743,7 +921,9 @@ static void step_device(struct usb_device_state *d)
          * is walked only as far as it answered. */
         usb_parse_config(d->buffer, (int)(d->config_length - d->short_by), &d->interface);
         if (!d->interface.found) {
-            fail(d, "it offers no interface this kernel can drive");
+            fail(d, d->interface.refused_kind == USB_PROTOCOL_HUB_SUPER
+                        ? "it is a SuperSpeed hub, which this kernel does not drive"
+                        : "it offers no interface this kernel can drive");
             return;
         }
         {
@@ -854,6 +1034,24 @@ static void step_device(struct usb_device_state *d)
                  d->interface.ep_number, d->interface.ep_out_number);
             return;
         }
+        if (d->interface.kind == USB_KIND_HUB) {
+            /* A hub has no protocol to be put into either: its class driver
+             * reads its descriptor and powers its ports from here. */
+            if (hub_attach((int)(d - devices), d->slot, d->interface.number, d->interface.protocol,
+                           d->ep_dci) != 0) {
+                fail(d, "this kernel drives no more hubs at once");
+                return;
+            }
+            d->state = ST_RUNNING;
+            d->reporting = 0;
+            d->refused = 0;
+            enumerating = -1;
+            klog(KLOG_INFO, "usb",
+                 "device: port %d: %x:%x, class %d protocol %d, endpoint %d, a hub", d->port + 1,
+                 (int)d->vendor, (int)d->product, d->interface.class_code, d->interface.protocol,
+                 d->interface.ep_number);
+            return;
+        }
         /* The device is configured; now it is told to report in the protocol
          * this kernel reads. A device that refuses is left configured and
          * unread rather than driven in a language nothing here parses. */
@@ -893,6 +1091,60 @@ static void step_device(struct usb_device_state *d)
     }
 }
 
+/** Give a device that has appeared on a port its entry, if one is free. */
+static void device_arrive(int owner, int port)
+{
+    int i;
+
+    for (i = 0; i < USB_MAX_DEVICES; i++) {
+        if (devices[i].state == ST_FREE) {
+            devices[i].state = ST_SETTLING;
+            devices[i].owner = owner;
+            devices[i].ops = owner < 0 ? &root_ops : &hub_ops;
+            devices[i].port = port;
+            devices[i].slot = 0;
+            devices[i].ep_dci = 0;
+            devices[i].closing_asked = 0;
+            devices[i].refused = 0;
+            devices[i].interface.found = 0;
+            devices[i].interface.kind = USB_KIND_NONE;
+            devices[i].deadline = core_ms + SETTLE_LIMIT_MS;
+            return;
+        }
+    }
+    klog(KLOG_WARN, "usb", "device: port %d: refused: the device table is full", port + 1);
+}
+
+void usb_core_hub_port(int hub, int port, int connected)
+{
+    int i;
+
+    if (hub < 0 || hub >= USB_MAX_DEVICES || devices[hub].state != ST_RUNNING || port < 0 ||
+        port >= 32) {
+        return;
+    }
+    /* Whatever was on the port goes first, whether or not something is there
+     * now: a device swapped for another between two looks is two devices. */
+    for (i = 0; i < USB_MAX_DEVICES; i++) {
+        if (devices[i].owner == hub && devices[i].port == port && devices[i].state != ST_FREE) {
+            device_gone(i);
+        }
+    }
+    devices[hub].refused &= ~((uint32_t)1u << port);
+    if (connected) {
+        device_arrive(hub, port);
+    }
+}
+
+int usb_core_location(int index, struct usb_location *out)
+{
+    if (index < 0 || index >= USB_MAX_DEVICES || devices[index].state == ST_FREE) {
+        return -1;
+    }
+    *out = devices[index].where;
+    return 0;
+}
+
 void usb_core_step(uint32_t elapsed_ms)
 {
     int ports = xhci_ports();
@@ -913,6 +1165,9 @@ void usb_core_step(uint32_t elapsed_ms)
         while (xhci_poll(&completion)) {
             if (msc_completion(&completion)) {
                 continue; /* a stick's, and its driver has taken it */
+            }
+            if (hub_completion(&completion)) {
+                continue;
             }
             for (i = 0; i < USB_MAX_DEVICES; i++) {
                 if (devices[i].state == ST_FREE || devices[i].slot != completion.device) {
@@ -940,21 +1195,9 @@ void usb_core_step(uint32_t elapsed_ms)
             devices[i].state == ST_TOMBSTONE) {
             continue;
         }
-        if (xhci_port_status(devices[i].port, &status) != 0 || !status.connected) {
-            if (devices[i].state == ST_RUNNING) {
-                klog(KLOG_INFO, "usb", "device: port %d: gone", devices[i].port + 1);
-                if (devices[i].interface.kind == USB_KIND_STORAGE) {
-                    msc_detach(devices[i].slot);
-                } else {
-                    hid_gone(devices[i].slot);
-                }
-            }
-            if (enumerating == i) {
-                enumerating = -1;
-            }
-            devices[i].closing_asked = 0;
-            devices[i].state = devices[i].slot > 0 ? ST_CLOSING : ST_FREE;
-            devices[i].deadline = core_ms + STEP_MS;
+        if (devices[i].ops->status(devices[i].owner, devices[i].port, &status) != 0 ||
+            !status.connected) {
+            device_gone(i);
         }
     }
 
@@ -973,25 +1216,14 @@ void usb_core_step(uint32_t elapsed_ms)
             continue;
         }
         for (i = 0; i < USB_MAX_DEVICES; i++) {
-            if (devices[i].state != ST_FREE && devices[i].port == port) {
+            if (devices[i].state != ST_FREE && devices[i].owner < 0 && devices[i].port == port) {
                 known = 1;
             }
         }
         if (known) {
             continue;
         }
-        for (i = 0; i < USB_MAX_DEVICES; i++) {
-            if (devices[i].state == ST_FREE) {
-                devices[i].state = ST_SETTLING;
-                devices[i].port = port;
-                devices[i].slot = 0;
-                devices[i].ep_dci = 0;
-                devices[i].closing_asked = 0;
-                devices[i].interface.found = 0;
-                devices[i].deadline = core_ms + SETTLE_LIMIT_MS;
-                break;
-            }
-        }
+        device_arrive(-1, port);
     }
 
     for (i = 0; i < USB_MAX_DEVICES; i++) {
@@ -1007,11 +1239,18 @@ void usb_core_step(uint32_t elapsed_ms)
      * command's next stage goes out in the same pass as the answer to the
      * one before it. */
     msc_step(elapsed_ms);
+    hub_step(elapsed_ms);
     usbdisk_step();
 }
 
 void usb_core_reset(void)
 {
+    int k;
+
+    for (k = 0; k < USB_MAX_DEVICES; k++) {
+        devices[k].owner = -1;
+        devices[k].ops = &root_ops;
+    }
     int i;
 
     port_refused = 0;
@@ -1169,8 +1408,26 @@ int usb_core_describe(int index, char *out, int size)
         break;
     }
 
-    at = put_str(out, size, at, "port ");
-    at = put_num(out, size, at, (uint32_t)(d->port + 1), 10);
+    /* The location as a path: the root port, then the port on each hub
+     * down to the device, separated by dots. */
+    {
+        int chain[USB_TREE_TIERS + 1];
+        int depth = 0;
+        const struct usb_device_state *at_dev = d;
+        int k;
+
+        while (at_dev != 0 && depth <= USB_TREE_TIERS) {
+            chain[depth++] = at_dev->port + 1;
+            at_dev = at_dev->owner >= 0 ? &devices[at_dev->owner] : 0;
+        }
+        at = put_str(out, size, at, "port ");
+        for (k = depth - 1; k >= 0; k--) {
+            at = put_num(out, size, at, (uint32_t)chain[k], 10);
+            if (k > 0) {
+                at = put_str(out, size, at, ".");
+            }
+        }
+    }
     at = put_str(out, size, at, " ");
     at = put_str(out, size, at, speed);
     at = put_str(out, size, at, " ");
