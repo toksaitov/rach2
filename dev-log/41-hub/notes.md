@@ -238,6 +238,36 @@ second from the hub's own enumeration: the hub at 0.31 s, its keyboard at
 0.68 s; each device behind it is a few dozen control transfers through the
 one command turn.
 
+## Phase 5 record
+
+`tests/run usb` gained five boots: a keyboard and a mouse behind QEMU's hub
+listed with their path by `usbprobe`, which under `rach2.hubtree` requires
+the keyboard's and the mouse's lines to give a path and not a root port,
+and the keyboard typing with no 8042; a stick behind the hub written,
+pulled from under a mount through the monitor and plugged back in; the hub
+pulled with all three behind it, the stick's mount answering `EIO` and
+unmounting, and the log showing each device below going before the hub; a
+keyboard behind a hub behind a hub at its path, typing; and two hubs with
+eleven devices filling the twelve-entry table, the thirteenth refused by
+name with its path. The plan's eight-device boot became this one, since the
+table is twelve.
+
+The suite found two things. The hub reports a device present at its first
+scan and then reports the same connection again through the change
+endpoint, because the connection change bit set at power-on is still set;
+every device behind a hub arrived twice, which cost the last entries of a
+full table and nothing while it had room. The first scan now acknowledges
+the change bits it finds, and the change endpoint is read only once they
+are. And a probe run in parts cannot run on the harness kernel, which ends
+the machine when its first process exits; the two boots that run one use
+the ordinary kernel and its debug shell, as the stick suite does.
+
+`metal_accept.sh` gained the hub section: what the hub said it is, the
+devices behind it by path, a low-speed device behind a hub as the
+translator's case, a translator per port refused or selected, and a
+SuperSpeed hub's two halves; the metal rehearsal puts its keyboard and its
+stick behind a hub, and the section finds them.
+
 ## Open items
 
 * None yet.

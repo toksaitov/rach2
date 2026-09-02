@@ -1,7 +1,7 @@
-Phase 4 is closed; phase 5, the suite, is next.
-Evidence gathered: hub_hosttest passes every row; seven mutations caught; a
-keyboard plugged into QEMU's hub after the boot enumerates, leaves and comes
-back, and a stick behind the hub mounts.
-Next action: the usb.sh hub boots, usbprobe's tree, the device-table boot,
-and the acceptance script's hub fixtures.
-File being read when written: dev-log/41-hub/plan.md, phase 5.
+Phase 5 is closed; phase 6, the record and the sweep, is next.
+Evidence gathered: tests/run usb passes nineteen boots, usbdisk and metal
+pass, the host tests pass.
+Next action: the sweep, the documents read against the code, the Codex
+round, the full set on the final tree, make test timed, the record and the
+index entry.
+File being read when written: dev-log/41-hub/plan.md, phase 6.

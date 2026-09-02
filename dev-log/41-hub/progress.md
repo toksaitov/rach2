@@ -19,7 +19,7 @@ Phase 4: the hub driver
 - [x] hub.c in full; the rest of hub_hosttest.c
 
 Phase 5: the suite
-- [ ] the usb.sh hub boots, usbprobe's tree, the eight-device boot
+- [x] the usb.sh hub boots, usbprobe's tree, the twelve-device boot
 
 Phase 6: the record and the sweep
 - [ ] the documents read against the code; the review round
