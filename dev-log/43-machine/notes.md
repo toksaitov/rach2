@@ -141,8 +141,7 @@ saved as `saved/sector0-before.bin` here and on the stick. Its table:
 entry 1 type 0x0C at byte 1048576 for 67108864; entry 2 type 0x83 at
 68157440 for 524288000; entry 3 type 0x0C at 592445440 for 67108864;
 entry 4 empty. Milestone 36's `hardware.md` recorded entry 2 as 0x7f;
-the machine says 0x83, and the kernel finds the KRFFS root by its
-content and not by the type.
+the machine and `mkdisk_grub.sh` say 0x83, and that record is corrected.
 
 The new sector zero, `saved/sector0-new.bin`: the saved one with only
 the sixteen bytes of entry 4 changed, to type 0x0C at sector 1290240 for
