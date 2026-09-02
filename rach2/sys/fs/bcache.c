@@ -15,15 +15,23 @@
 #include "../proc/process.h"
 
 static struct bbuf bufs[BCACHE_BUFFERS];
-static uint8_t pages[BCACHE_BUFFERS][BCACHE_BLOCK_BYTES]
-    __attribute__((aligned(4096)));
+static uint8_t pages[BCACHE_BUFFERS][BCACHE_BLOCK_BYTES] __attribute__((aligned(4096)));
 static uint32_t clock_stamp;
 static int initialized;
 static uint64_t stat_hits, stat_fills, stat_waits;
 
-uint64_t bcache_stat_hits(void) { return stat_hits; }
-uint64_t bcache_stat_fills(void) { return stat_fills; }
-uint64_t bcache_stat_waits(void) { return stat_waits; }
+uint64_t bcache_stat_hits(void)
+{
+    return stat_hits;
+}
+uint64_t bcache_stat_fills(void)
+{
+    return stat_fills;
+}
+uint64_t bcache_stat_waits(void)
+{
+    return stat_waits;
+}
 
 static void bcache_init(void)
 {
@@ -77,8 +85,8 @@ static int busy_gone(void *arg)
  * leaves the buffer dirty. */
 static int write_buffer(struct bbuf *b)
 {
-    int rc = block_request(b->dev, 1, b->blk * BCACHE_BLOCK_SECTORS,
-                           b->bytes / BLOCK_SECTOR_SIZE, b->data);
+    int rc = block_request(b->dev, 1, b->blk * BCACHE_BLOCK_SECTORS, b->bytes / BLOCK_SECTOR_SIZE,
+                           b->data);
 
     if (rc != 0) {
         klog(KLOG_WARN, "bcache", "write: sector %d failed (%d), kept dirty",
@@ -174,10 +182,14 @@ again:
     victim->dev = dev;
     victim->blk = blk;
     victim->dirty = 0;
+    /* A mark left by a device that went while this buffer was held for a
+     * fill or a writeback: every buffer changes hands here, so this is the
+     * one place the mark must go. */
+    victim->discard = 0;
     victim->holder = caller_pid();
     victim->bytes = block_bytes(dev, blk);
-    if (block_request(dev, 0, blk * BCACHE_BLOCK_SECTORS,
-                      victim->bytes / BLOCK_SECTOR_SIZE, victim->data) != 0) {
+    if (block_request(dev, 0, blk * BCACHE_BLOCK_SECTORS, victim->bytes / BLOCK_SECTOR_SIZE,
+                      victim->data) != 0) {
         victim->dev = 0;
         victim->holder = -1;
         wq_wake_all(&victim->wq);

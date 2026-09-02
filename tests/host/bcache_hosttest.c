@@ -114,6 +114,11 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 static unsigned char image_small[FAKE_SECTORS * 512];
 static unsigned char image_big[BIG_SECTORS * 512];
 static int reads_made, fail_reads, fail_writes;
+/* The device is pulled in the middle of this read: the cache is told it has
+   gone while the buffer being filled is held, and the read then fails. */
+static int gone_during_read;
+/* And in the middle of this write of a dirty victim, which is held for it. */
+static int gone_during_write;
 static unsigned last_count;
 static uint64_t writes_lba[8];
 static int writes_made;
@@ -134,6 +139,11 @@ void vfs_device_failed(block_device_t *dev, uint64_t lba, int rc)
 
 static int fake_read(block_device_t *d, uint64_t lba, uint32_t count, void *buf)
 {
+    if (gone_during_read) {
+        gone_during_read = 0;
+        bcache_device_gone(d);
+        return -5;
+    }
     reads_made++;
     last_count = count;
     if (fail_reads) {
@@ -147,6 +157,10 @@ static int fake_write(block_device_t *d, uint64_t lba, uint32_t count, const voi
 {
     if (fail_writes) {
         return -5;
+    }
+    if (gone_during_write) {
+        gone_during_write = 0;
+        bcache_device_gone(d);
     }
     if (writes_made < 8) {
         writes_lba[writes_made] = lba;
@@ -466,6 +480,46 @@ int main(void)
     check(bcache_device_holds(&fake) == 0, "and nothing of the device is held");
     check(bcache_invalidate(&fake) == 0, "and the device can be dropped: nothing dirty is left");
     fake.flags &= ~BLOCK_GONE;
+
+    /* A device that goes in the middle of a fill: the buffer being filled is
+       held, so it is marked to be dropped; the fill then fails and drops it
+       without a release. The mark must go with it, or the next user of that
+       buffer, on a device that never went anywhere, has its dirty block
+       thrown away at its release. */
+    bcache_invalidate(&fake);
+    bcache_invalidate(&other);
+    gone_during_read = 1;
+    check(bcache_get(&fake, 4) == 0, "a fill on a device that goes in the middle of it fails");
+    fake.flags &= ~BLOCK_GONE;
+    b = bcache_get(&other, 3);
+    check(b != 0, "the next fill on a sound device takes a buffer");
+    bcache_dirty(b);
+    bcache_release(b);
+    check(b->dev == &other && b->dirty, "and its dirty block is kept at the release");
+    bcache_sync(&other);
+    bcache_invalidate(&other);
+
+    /* The other way a held buffer changes hands without a release: a dirty
+       victim is written back inside a fill for another device, held for the
+       write, and the device goes during it. The victim is then given to the
+       other device with the mark still on it, unless the reuse clears it;
+       every dirty block of the other device must reach it at a sync. */
+    bcache_invalidate(&fake);
+    b = bcache_get(&fake, 8);
+    bcache_dirty(b);
+    bcache_release(b);
+    gone_during_write = 1;
+    for (i = 0; i < BCACHE_BUFFERS; i++) {
+        c = bcache_get(&other, i);
+        bcache_dirty(c);
+        bcache_release(c);
+    }
+    fake.flags &= ~BLOCK_GONE;
+    writes_made = 0;
+    bcache_sync(&other);
+    check(writes_made == BCACHE_BUFFERS,
+          "a buffer reused after its device went during a writeback keeps its next dirty block");
+    bcache_invalidate(&other);
 
     check(waited_on_host == 0, "no row reached the sleeping wait");
 
