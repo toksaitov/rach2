@@ -35,21 +35,33 @@
 #define REQ_SET_FEATURE     3
 #define REQ_GET_DESCRIPTOR  6
 #define DESC_HUB            0x29
+#define REQ_SET_INTERFACE   11
+#define TYPE_STD_INTERFACE  0x01
+
+/* The hub's own status word and change word (Table 11-19 and 11-20), and
+ * the two hub features (Table 11-17). */
+#define HUB_STAT_LOCAL_POWER  0x0001
+#define HUB_STAT_OVER_CURRENT 0x0002
+#define C_HUB_LOCAL_POWER     0
+#define C_HUB_OVER_CURRENT    1
 
 /* The port feature selectors (Table 11-17). */
-#define PORT_RESET        4
-#define PORT_POWER        8
-#define C_PORT_CONNECTION 16
-#define C_PORT_ENABLE     17
-#define C_PORT_RESET      20
+#define PORT_RESET          4
+#define PORT_POWER          8
+#define C_PORT_CONNECTION   16
+#define C_PORT_ENABLE       17
+#define C_PORT_RESET        20
+#define C_PORT_SUSPEND      18
+#define C_PORT_OVER_CURRENT 19
 
 /* The port status word (Table 11-21). */
-#define PORT_STAT_CONNECTION 0x0001
-#define PORT_STAT_ENABLE     0x0002
-#define PORT_STAT_RESET      0x0010
-#define PORT_STAT_POWER      0x0100
-#define PORT_STAT_LOW_SPEED  0x0200
-#define PORT_STAT_HIGH_SPEED 0x0400
+#define PORT_STAT_CONNECTION   0x0001
+#define PORT_STAT_ENABLE       0x0002
+#define PORT_STAT_OVER_CURRENT 0x0008
+#define PORT_STAT_RESET        0x0010
+#define PORT_STAT_POWER        0x0100
+#define PORT_STAT_LOW_SPEED    0x0200
+#define PORT_STAT_HIGH_SPEED   0x0400
 
 /* The power switching modes of wHubCharacteristics (Table 11-13). */
 #define LPSM_GANGED     0
@@ -60,11 +72,12 @@
  * before it is settled, how often a port in reset is asked, and how long a
  * reset may take, all in milliseconds. The debounce and the reset floor are
  * the specification's; the reset ceiling is this driver's. */
-#define HUB_REQUEST_MS    500u
-#define HUB_DEBOUNCE_MS   100u
-#define HUB_RESET_POLL_MS 20u
-#define HUB_RESET_MS      500u
-#define HUB_POWER_MAX_MS  500u
+#define HUB_REQUEST_MS            500u
+#define HUB_DEBOUNCE_MS           100u
+#define HUB_RESET_POLL_MS         20u
+#define HUB_RESET_MS              500u
+#define HUB_POWER_MAX_MS          500u
+#define HUB_OVER_CURRENT_RETRY_MS 1000u
 
 /* What the hub as a whole is doing. */
 #define HUB_DESCRIPTOR 1 /* its descriptor asked for */
@@ -73,6 +86,7 @@
 #define HUB_POWER_WAIT 4 /* the power-good time */
 #define HUB_SCAN       5 /* each port's status read once */
 #define HUB_RUNNING    6
+#define HUB_SETTING    7 /* a multi-TT hub's setting selected */
 
 /* What a port is doing, for the core's reset. */
 #define RESET_NONE   0
@@ -84,21 +98,40 @@
 #define RESET_FAILED 6
 
 /* What the request in flight was for. */
-#define REQ_NONE        0
-#define REQ_DESCRIPTOR  1
-#define REQ_POWER       2
-#define REQ_PORT_STATUS 3
-#define REQ_PORT_RESET  4
-#define REQ_CLEAR       5
+#define REQ_NONE         0
+#define REQ_DESCRIPTOR   1
+#define REQ_POWER        2
+#define REQ_PORT_STATUS  3
+#define REQ_PORT_RESET   4
+#define REQ_CLEAR        5
+#define REQ_SETTING      6
+#define REQ_HUB_STATUS   7
+#define REQ_HUB_CLEAR    8
+#define REQ_CHANGE_CLEAR 9 /* one port change bit acknowledged */
+#define REQ_POWER_OFF    10
+#define REQ_POWER_ON     11
+
+/* The change bits as bits of the change word, and one more of this driver's
+ * own for a power-off owed to an over-current. */
+#define C_PORT_CONNECTION_BIT   0x0001
+#define C_PORT_ENABLE_BIT       0x0002
+#define C_PORT_SUSPEND_BIT      0x0004
+#define C_PORT_OVER_CURRENT_BIT 0x0008
+#define C_PORT_RESET_BIT        0x0010
+#define POWER_OFF_BIT           0x8000
 
 struct hub_port {
     uint16_t status;
     uint16_t change;
-    int known;           /* the status has been read at least once */
-    uint32_t connect_ms; /* when the connection was first seen */
-    int reset;           /* one of the RESET_ values */
-    uint32_t reset_ms;   /* how long the reset has run */
-    uint32_t poll_ms;    /* until the next status read in a reset */
+    int known;              /* the status has been read at least once */
+    uint32_t connect_ms;    /* when the connection was first seen */
+    int reset;              /* one of the RESET_ values */
+    uint32_t reset_ms;      /* how long the reset has run */
+    uint32_t poll_ms;       /* until the next status read in a reset */
+    uint16_t to_clear;      /* the change bits acknowledged one by one */
+    int over_current_tries; /* how many times the port was powered on again */
+    uint32_t power_on_ms;   /* until the port is powered on again, or 0 */
+    int off;                /* left powered off after over-current recurred */
 };
 
 struct hub {
@@ -122,6 +155,14 @@ struct hub {
     uint32_t request_ms;
     uint8_t setup[8];
     uint8_t data[16];
+    /* The change endpoint: the transfer outstanding on it, the bitmap it
+     * answers with, and the ports whose bits arrived and are not yet dealt
+     * with, bit 0 being the hub itself. */
+    int change_out;
+    uint32_t change_tag;
+    uint8_t bitmap[2];
+    uint32_t changes;
+    int change_reading; /* the port whose status is being read for a change */
     struct hub_port port[USB_HUB_PORT_MAX];
 };
 
@@ -167,6 +208,25 @@ static int request(struct hub *h, int type, int req, int value, int index, int l
     h->request = what;
     h->request_port = port;
     h->request_ms = 0;
+    return 0;
+}
+
+/** Keep a transfer on the change endpoint; its bitmap is the hub's report. */
+static int change_submit(struct hub *h)
+{
+    struct usb_transfer transfer;
+    uint32_t length = (uint32_t)(h->ports + 1 + 7) / 8u;
+
+    transfer.setup = 0;
+    transfer.buffer = h->bitmap;
+    transfer.length = length > sizeof(h->bitmap) ? (uint32_t)sizeof(h->bitmap) : length;
+    transfer.direction = USB_DIR_IN;
+    h->change_tag = ++tag_seed;
+    transfer.generation = h->change_tag;
+    if (xhci_submit(h->device, h->ep_dci, &transfer) != 0) {
+        return -1;
+    }
+    h->change_out = 1;
     return 0;
 }
 
@@ -274,7 +334,18 @@ static int power_next(struct hub *h)
     return 1;
 }
 
-/** A port's status has just been read: record it and tell the core. */
+/**
+ * A port's status has just been read: record it, and for a change reported
+ * on the change endpoint, act on each change bit and acknowledge it.
+ *
+ * A connection change is a change of identity whatever the status says
+ * now: the core closes what was below the port before a device that is
+ * there is looked at. An enable lost is recorded and the device below
+ * closed; the core enumerates again if the connection is still there. An
+ * over-current has the port powered off and its subtree closed, then
+ * powered on again once after a second, and left off with a record if it
+ * recurs.
+ */
 static void port_read(struct hub *h, int port)
 {
     struct hub_port *p = &h->port[port - 1];
@@ -289,9 +360,77 @@ static void port_read(struct hub *h, int port)
         p->connect_ms = hub_ms;
     }
     p->known = 1;
-    if (h->state == HUB_SCAN && now) {
+    if (h->state == HUB_SCAN) {
+        if (now) {
+            usb_core_hub_port(h->index, port - 1, 1);
+        }
+        return;
+    }
+    if (h->change_reading != port) {
+        return; /* a read for a reset, which its own arm judges */
+    }
+    h->change_reading = 0;
+    p->to_clear = change & (C_PORT_CONNECTION_BIT | C_PORT_ENABLE_BIT | C_PORT_SUSPEND_BIT |
+                            C_PORT_OVER_CURRENT_BIT | C_PORT_RESET_BIT);
+    if (change & C_PORT_OVER_CURRENT_BIT) {
+        if (status & PORT_STAT_OVER_CURRENT) {
+            klog(KLOG_WARN, "usb", "hub: device %d port %d: over-current; powered off", h->device,
+                 port);
+            usb_core_hub_port(h->index, port - 1, 0);
+            if (p->over_current_tries == 0) {
+                p->over_current_tries = 1;
+                p->power_on_ms = HUB_OVER_CURRENT_RETRY_MS;
+            } else {
+                p->off = 1;
+                klog(KLOG_WARN, "usb", "hub: device %d port %d: over-current again; left off",
+                     h->device, port);
+            }
+            p->to_clear |= POWER_OFF_BIT;
+        }
+    } else if (change & C_PORT_CONNECTION_BIT) {
+        p->connect_ms = hub_ms;
+        usb_core_hub_port(h->index, port - 1, now);
+    } else if ((change & C_PORT_ENABLE_BIT) && !(status & PORT_STAT_ENABLE) && now &&
+               p->reset == RESET_NONE) {
+        klog(KLOG_WARN, "usb", "hub: device %d port %d: enable lost", h->device, port);
+        usb_core_hub_port(h->index, port - 1, 0);
+        p->connect_ms = hub_ms;
         usb_core_hub_port(h->index, port - 1, 1);
     }
+}
+
+/** Acknowledge the next change bit owed on a port; 1 when a request went
+ * out. */
+static int clear_next(struct hub *h, int port)
+{
+    struct hub_port *p = &h->port[port - 1];
+    int feature;
+
+    if (p->to_clear & POWER_OFF_BIT) {
+        p->to_clear &= (uint16_t)~POWER_OFF_BIT;
+        return request(h, TYPE_CLASS_PORT_OUT, REQ_CLEAR_FEATURE, PORT_POWER, port, 0,
+                       REQ_POWER_OFF, port) == 0;
+    }
+    if (p->to_clear & C_PORT_CONNECTION_BIT) {
+        feature = C_PORT_CONNECTION;
+        p->to_clear &= (uint16_t)~C_PORT_CONNECTION_BIT;
+    } else if (p->to_clear & C_PORT_ENABLE_BIT) {
+        feature = C_PORT_ENABLE;
+        p->to_clear &= (uint16_t)~C_PORT_ENABLE_BIT;
+    } else if (p->to_clear & C_PORT_SUSPEND_BIT) {
+        feature = C_PORT_SUSPEND;
+        p->to_clear &= (uint16_t)~C_PORT_SUSPEND_BIT;
+    } else if (p->to_clear & C_PORT_OVER_CURRENT_BIT) {
+        feature = C_PORT_OVER_CURRENT;
+        p->to_clear &= (uint16_t)~C_PORT_OVER_CURRENT_BIT;
+    } else if (p->to_clear & C_PORT_RESET_BIT) {
+        feature = C_PORT_RESET;
+        p->to_clear &= (uint16_t)~C_PORT_RESET_BIT;
+    } else {
+        return 0;
+    }
+    return request(h, TYPE_CLASS_PORT_OUT, REQ_CLEAR_FEATURE, feature, port, 0, REQ_CHANGE_CLEAR,
+                   port) == 0;
 }
 
 /** The answer to the request in flight. */
@@ -309,7 +448,53 @@ static void answered(struct hub *h, const struct usb_completion *c)
             give_up(h, "it did not give a hub descriptor");
             return;
         }
+        if (h->multi_tt) {
+            /* One translator per port is the interface's alternate setting
+             * 1; a hub that refuses it is driven with one translator. */
+            if (request(h, TYPE_STD_INTERFACE, REQ_SET_INTERFACE, 1, h->interface, 0, REQ_SETTING,
+                        0) != 0) {
+                h->multi_tt = 0;
+                h->state = HUB_TELL;
+                return;
+            }
+            h->state = HUB_SETTING;
+            return;
+        }
         h->state = HUB_TELL;
+        return;
+    case REQ_SETTING:
+        if (!ok) {
+            klog(KLOG_INFO, "usb", "hub: device %d refused a translator per port; one is used",
+                 h->device);
+            h->multi_tt = 0;
+        }
+        h->state = HUB_TELL;
+        return;
+    case REQ_HUB_STATUS:
+        if (ok && got >= 4) {
+            uint16_t status = (uint16_t)(h->data[0] | (h->data[1] << 8));
+            uint16_t change = (uint16_t)(h->data[2] | (h->data[3] << 8));
+
+            if (change & HUB_STAT_LOCAL_POWER) {
+                klog(KLOG_WARN, "usb", "hub: device %d: local power %s", h->device,
+                     (status & HUB_STAT_LOCAL_POWER) ? "lost" : "back");
+                (void)request(h, TYPE_CLASS_HUB_OUT, REQ_CLEAR_FEATURE, C_HUB_LOCAL_POWER, 0, 0,
+                              REQ_HUB_CLEAR, 0);
+                return;
+            }
+            if (change & HUB_STAT_OVER_CURRENT) {
+                klog(KLOG_WARN, "usb", "hub: device %d: over-current %s", h->device,
+                     (status & HUB_STAT_OVER_CURRENT) ? "reported" : "cleared");
+                (void)request(h, TYPE_CLASS_HUB_OUT, REQ_CLEAR_FEATURE, C_HUB_OVER_CURRENT, 0, 0,
+                              REQ_HUB_CLEAR, 0);
+                return;
+            }
+        }
+        return;
+    case REQ_HUB_CLEAR:
+    case REQ_POWER_OFF:
+    case REQ_POWER_ON:
+    case REQ_CHANGE_CLEAR:
         return;
     case REQ_POWER:
         if (!ok) {
@@ -340,6 +525,9 @@ static void answered(struct hub *h, const struct usb_completion *c)
                 h->state = HUB_RUNNING;
                 klog(KLOG_INFO, "usb", "hub: device %d: %d ports, power mode %d, think time %d",
                      h->device, h->ports, h->lpsm, h->think_time);
+                if (change_submit(h) != 0) {
+                    give_up(h, "its change endpoint could not be read");
+                }
             } else if (port_status_read(h, h->at) != 0) {
                 give_up(h, "a port's status could not be asked for");
             }
@@ -392,6 +580,18 @@ int hub_completion(const struct usb_completion *completion)
 
         if (!h->used || h->device != completion->device) {
             continue;
+        }
+        if (completion->endpoint == h->ep_dci) {
+            if (completion->generation != h->change_tag) {
+                return 1;
+            }
+            h->change_out = 0;
+            if (completion->status != USB_XFER_OK && completion->status != USB_XFER_SHORT) {
+                give_up(h, "its change endpoint stopped answering");
+                return 1;
+            }
+            h->changes |= (uint32_t)h->bitmap[0] | ((uint32_t)h->bitmap[1] << 8);
+            return 1;
         }
         if (completion->endpoint != 1 || h->request == REQ_NONE) {
             return 0;
@@ -448,6 +648,49 @@ static void step_hub(struct hub *h, uint32_t elapsed_ms)
         }
         return;
     case HUB_RUNNING:
+        /* A change bit owed an acknowledgement, and a port powered off for
+         * over-current owed its power back. */
+        for (i = 0; i < h->ports; i++) {
+            struct hub_port *p = &h->port[i];
+
+            if (p->to_clear != 0) {
+                if (clear_next(h, i + 1)) {
+                    return;
+                }
+            }
+            if (p->power_on_ms != 0) {
+                p->power_on_ms = (p->power_on_ms > elapsed_ms) ? p->power_on_ms - elapsed_ms : 0;
+                if (p->power_on_ms == 0) {
+                    if (request(h, TYPE_CLASS_PORT_OUT, REQ_SET_FEATURE, PORT_POWER, i + 1, 0,
+                                REQ_POWER_ON, i + 1) == 0) {
+                        return;
+                    }
+                }
+            }
+        }
+        /* The changes the bitmap reported: the hub's own status for bit 0,
+         * a port's status for its bit, one read at a time. */
+        if (h->changes & 1u) {
+            h->changes &= ~1u;
+            if (request(h, TYPE_CLASS_HUB_IN, REQ_GET_STATUS, 0, 0, 4, REQ_HUB_STATUS, 0) == 0) {
+                return;
+            }
+        }
+        for (i = 0; i < h->ports; i++) {
+            if (h->changes & ((uint32_t)1u << (i + 1))) {
+                h->changes &= ~((uint32_t)1u << (i + 1));
+                h->change_reading = i + 1;
+                if (port_status_read(h, i + 1) == 0) {
+                    return;
+                }
+                h->change_reading = 0;
+            }
+        }
+        /* The report itself, always outstanding. */
+        if (!h->change_out && change_submit(h) != 0) {
+            give_up(h, "its change endpoint could not be read");
+            return;
+        }
         /* The resets the core asked for, one request at a time. */
         for (i = 0; i < h->ports; i++) {
             struct hub_port *p = &h->port[i];
@@ -514,7 +757,7 @@ int hub_port_status(int owner, int port, struct usb_port_status *out)
     if (!p->known) {
         return -1;
     }
-    out->connected = (p->status & PORT_STAT_CONNECTION) != 0;
+    out->connected = (p->status & PORT_STAT_CONNECTION) != 0 && !p->off && p->power_on_ms == 0;
     out->enabled = (p->status & PORT_STAT_ENABLE) != 0;
     out->changed = p->change != 0;
     out->speed = (p->status & PORT_STAT_LOW_SPEED)    ? USB_SPEED_LOW
