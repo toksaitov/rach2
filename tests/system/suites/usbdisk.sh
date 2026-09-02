@@ -19,6 +19,10 @@
 # Usage: usbdisk.sh KERNEL IMAGE HARNESS DIR OSREAL PASSWORD MKEXFATFIXTURE \
 #        STICKIMAGE
 set -u
+if [ $# -ne 8 ]; then
+    echo "usage: usbdisk.sh KERNEL IMAGE HARNESS DIR OSREAL PASSWORD MKEXFATFIXTURE STICKIMAGE" >&2
+    exit 2
+fi
 KERNEL=$1; IMAGE=$2; HARNESS=$3; DIR=$4; OSREAL=$5; PASSWORD=$6; MKFIX=$7; STICKIMAGE=$8
 REPO=$(cd "$(dirname "$0")/../../.." && pwd)
 MKMBR="$REPO/build/tools/image/mkmbr"
@@ -204,7 +208,7 @@ if "$HARNESS" --kernel "$KERNEL" --initrd "$OSREAL" \
     --timeout 240 --steptmo 60 --ok "BBDONE" --log "$LOG" \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
     "expect=# " "send=blkid; echo BLK\"\"DONE" \
-    "expect=BLKDONE" "send=findfs LABEL=STICKFAT; findfs LABEL=FIXTURE; echo FIND\"\"DONE" \
+    "expect=BLKDONE" "send=echo FOUND1=\$(findfs LABEL=STICKFAT); echo FOUND2=\$(findfs LABEL=FIXTURE); echo FIND\"\"DONE" \
     "expect=FINDDONE" "send=mkdir -p /mnt && mount -t vfat LABEL=STICKFAT /mnt && echo MOUNT\"\"ED" \
     "expect=MOUNTED" "send=cp /mnt/hello.txt /tmp/h && cat /tmp/h; echo COPY\"\"DONE" \
     "expect=COPYDONE" "send=umount /mnt && echo BB\"\"DONE" \
@@ -213,15 +217,20 @@ if "$HARNESS" --kernel "$KERNEL" --initrd "$OSREAL" \
 else
     fail "the BusyBox boot"
 fi
-if grep -a '^/dev/usb0p1' "$LOG" | grep -aq 'STICKFAT'; then
-    note "findfs named /dev/usb0p1 for the label: OK"
+if grep -aq '^FOUND1=/dev/usb0p1' "$LOG"; then
+    note "findfs named /dev/usb0p1 for the FAT32 label: OK"
 else
-    fail "findfs did not name the partition for its label"
+    fail "findfs did not name the FAT32 partition for its label"
 fi
-if grep -a '^/dev/usb0p2' "$LOG" | grep -aq 'FIXTURE'; then
-    note "blkid found the exFAT volume on /dev/usb0p2 too: OK"
+if grep -aq '^FOUND2=/dev/usb0p2' "$LOG"; then
+    note "and /dev/usb0p2 for the exFAT label, whose prober reads part of a sector: OK"
 else
-    fail "blkid did not find the exFAT volume, whose prober reads part of a sector"
+    fail "findfs did not name the exFAT partition for its label"
+fi
+if grep -a '^/dev/usb0p1:' "$LOG" | grep -aq 'STICKFAT'; then
+    note "blkid listed the FAT32 label: OK"
+else
+    fail "blkid did not list the FAT32 label"
 fi
 if grep -aq 'hello from the stick' "$LOG"; then
     note "the copied file has the stick's text: OK"

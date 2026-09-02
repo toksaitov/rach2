@@ -13,10 +13,13 @@
  * * `write`: a file written to the FAT volume, synced, unmounted, and read
  *   back after the volume is mounted again; the unmount must have flushed
  *   the stick's own cache, which the stick's line in `/proc/usb` counts.
- * * `hold`: the volume is mounted, a file is opened and read in a loop, and
- *   `USBDISKPROBE HOLDING` is printed so the harness can pull the stick.
- *   The read that meets the pull answers `EIO`; so does a write; `umount2`
- *   is `EBUSY` while the file is open and succeeds once it is closed.
+ * * `hold`: the volume is mounted, a file is opened on it for reading and
+ *   one for writing, `USBDISKPROBE HOLDING` is printed so the harness can
+ *   pull the stick, and the whole node is read in a loop, which has no cache
+ *   in front of it, so the process is inside a request on the stick when
+ *   the stick goes. That read answers `EIO`; so do a read and a write of
+ *   the mounted files and an open on the mount; `umount2` is `EBUSY` while
+ *   the files are open and succeeds once they are closed.
  * * `replug`: the volume mounts again and the file is still there, on a
  *   stick that inherits nothing from the one before it.
  * * `free`: the number of free names `/proc/usb` reports, printed, so the
@@ -427,6 +430,8 @@ static void part_write(void)
 static void part_hold(void)
 {
     int fd;
+    int raw;
+    int rw;
     int reads = 0;
     int gone = 0;
     char buf[512];
@@ -438,14 +443,21 @@ static void part_hold(void)
     if (fd < 0) {
         fail("the file on the volume would not open");
     }
+    rw = sys3(SYS_OPEN, (int)MNT "/held.txt", O_RDWR | O_CREAT, 0644);
+    if (rw < 0) {
+        fail("a file for writing would not be created on the volume");
+    }
+    /* The reads that meet the pull go to the whole node, which has no cache
+       in front of it: every one of them is a request on the stick, so the
+       process is inside such a request when the stick goes. The file stays
+       open on the mount meanwhile, which is what the unmount must refuse. */
+    raw = sys3(SYS_OPEN, (int)"/dev/usb0p1", O_RDONLY, 0);
+    if (raw < 0) {
+        fail("/dev/usb0p1 would not open");
+    }
     puts("USBDISKPROBE HOLDING");
-
-    /* Read until the stick is pulled out from under the reader: the file is
-       opened again at its end, so it is read over and over, and the read
-       that is in flight when the stick is pulled is the one that must
-       answer EIO. */
-    while (reads < 20000) {
-        int n = sys3(SYS_READ, fd, (int)buf, (int)sizeof(buf));
+    while (reads < 2000000) {
+        int n = sys3(SYS_READ, raw, (int)buf, (int)sizeof(buf));
 
         reads++;
         if (n == -EIO) {
@@ -453,35 +465,25 @@ static void part_hold(void)
             break;
         }
         if (n < 0) {
-            fail("a read on the mounted stick failed with something other than EIO");
+            fail("a read of the stick failed with something other than EIO");
         }
         if (n == 0) {
-            /* Back to the beginning: the descriptor cannot seek here, so
-               the file is opened again. */
-            sys1(SYS_CLOSE, fd);
-            fd = sys3(SYS_OPEN, (int)MNT "/pattern.bin", O_RDONLY, 0);
-            if (fd < 0) {
-                /* The pull landed between the close and the open; the read
-                   that meets it is made on a descriptor opened before the
-                   pull, which the shell's own copy of the directory gives. */
-                if (fd != -EIO) {
-                    fail("the file would not open again, and not for EIO");
-                }
-                fd = sys3(SYS_OPEN, (int)MNT, O_RDONLY, 0);
-                if (fd < 0) {
-                    fail("the mount point would not open after the pull");
-                }
-                gone = 1;
+            sys1(SYS_CLOSE, raw);
+            raw = sys3(SYS_OPEN, (int)"/dev/usb0p1", O_RDONLY, 0);
+            if (raw < 0) {
+                gone = 1; /* the node went with the stick */
                 break;
             }
         }
-        sleep_ms(1);
     }
     if (!gone) {
         fail("the stick was never pulled out");
     }
     if (sys3(SYS_READ, fd, (int)buf, (int)sizeof(buf)) != -EIO) {
-        fail("a read after the pull did not answer EIO");
+        fail("a read of the mounted file after the pull did not answer EIO");
+    }
+    if (sys3(SYS_WRITE, rw, (int)"gone\n", 5) != -EIO) {
+        fail("a write to the mounted file after the pull did not answer EIO");
     }
     if (sys3(SYS_OPEN, (int)MNT "/hello.txt", O_RDONLY, 0) != -EIO) {
         fail("an open on the pulled stick's mount did not answer EIO");
@@ -490,8 +492,12 @@ static void part_hold(void)
         fail("the mount unmounted with a description still open on it");
     }
     sys1(SYS_CLOSE, fd);
+    sys1(SYS_CLOSE, rw);
+    if (raw >= 0) {
+        sys1(SYS_CLOSE, raw);
+    }
     if (sys2(SYS_UMOUNT2, (int)MNT, 0) != 0) {
-        fail("the mount would not unmount after its file was closed");
+        fail("the mount would not unmount after its files were closed");
     }
     ok();
 }
