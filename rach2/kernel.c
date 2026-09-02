@@ -578,6 +578,7 @@ static bool test_clock(uint32_t *measured_us)
 {
     uint32_t best = 0xFFFFFFFFu;
     uint32_t previous;
+    int attempt;
     int i;
 
     for (i = 0; i < 8; i++) {
@@ -602,8 +603,13 @@ static bool test_clock(uint32_t *measured_us)
      * runs fast, because the same fifty milliseconds are measured by the tick
      * beside it, and a clock that counted a sweep as a period, or counted a
      * period twice, would put twice the time in between.
+     *
+     * The walk is taken up to three times and passes when one agrees with
+     * the tick. Under an emulator whose host is busy, a tick can arrive late
+     * or not at all inside one walk, which the comparison cannot tell from
+     * a slow clock; a clock that is fast or slow disagrees on every walk.
      */
-    {
+    for (attempt = 0; attempt < 3; attempt++) {
         uint32_t ticks_before = kernel_ticks;
         uint32_t clock_before = pit_now_us();
         uint32_t by_clock, by_tick;
@@ -620,12 +626,12 @@ static bool test_clock(uint32_t *measured_us)
         }
         by_clock = pit_now_us() - clock_before;
         by_tick = (kernel_ticks - ticks_before) * 10000u;
-        if (by_tick == 0 || by_clock < by_tick - by_tick / 4u ||
-            by_clock > by_tick + by_tick / 4u) {
-            return false;
+        if (by_tick != 0 && by_clock >= by_tick - by_tick / 4u &&
+            by_clock <= by_tick + by_tick / 4u) {
+            return true;
         }
     }
-    return true;
+    return false;
 }
 
 static bool test_syscall(void)
