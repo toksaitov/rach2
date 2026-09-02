@@ -367,6 +367,49 @@ Seven mutations, one per row above, each caught by exactly its row after
 the seventh row was strengthened: its first form checked only the power
 requests, which a port left on also makes none of.
 
+### The full set
+
+The first full run on the closing tree passed 64 of 65 suites and failed
+`tests/run default` at the `selftest` probe with `no summary record`, and
+so did the `make test` that followed, three times over, while the suite
+passed alone nine times, under `tests/run usb` beside it and under
+twenty-four busy host processes. The default boot had no transcript; it
+keeps one now, `build/images/test.krffs.default.log`, and the first run
+with it showed the cause. The kernel's clock check failed its second half,
+fifty milliseconds walked by the counter against the ticks beside it,
+within a quarter: under a host busy with a pool of machines the emulator
+delivers a tick late or drops one, which that comparison cannot tell from
+a slow clock. The summary the kernel then prints is `result: failed: 1 of
+13`, an error record, and the runner looked for the summary at the
+information level only, so a failed group was reported as one that never
+finished.
+
+Two fixes, each proved. The walk is taken up to three times and passes
+when one agrees with the tick; a clock that is fast or slow disagrees on
+every walk, which the mutation that never counts a wrap shows through
+`tests/run default`, and the mutation that fails the comparison outright
+shows the runner now reading the failed summary as `failed: 1 of 13`. The
+runner's reading of the group is one function, `score_kernel_selftest`,
+with six cases in `runtests --selftest`: a passing group, a failed
+summary at its level, a group that never finished, an error record inside
+the group, a count that disagrees with the records, and no group; the
+lookup at the error level removed fails the second case with the old
+message. The timestamp's width is no longer assumed in the detail.
+
+The second full run passed every suite but `host`, which this agent's own
+process kill ended while it ran, and its `make test` failed `default` as
+above, `mount` at its BusyBox boot and `usb` at the latency row; both
+passed alone afterwards.
+
+The full set on the tree with the two fixes passed 64 of 65 suites and no
+machine was left running; `tests/run mount` failed its lag-sleep boot
+after 25 s in the pool, the failure milestone 40 recorded twice on its
+trees, and passed alone at once, as it did there; nothing this milestone
+changed runs in that boot. `make test` on the closing tree passed all 26
+suites in 8 minutes 12 seconds against milestone 40's 7 minutes 6 seconds;
+the difference is the four hub boots in `tests/run usb`, the hub rows in
+`hub_hosttest` and the three walks of the clock check.
+
 ## Open items
 
 * None.

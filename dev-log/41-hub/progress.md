@@ -23,5 +23,5 @@ Phase 5: the suite
 
 Phase 6: the record and the sweep
 - [x] the documents read against the code; the review round
-- [ ] the sweep; the full set; make test timed
-- [ ] dev-log Readme and the index entry; tree clean
+- [x] the sweep; the full set; make test timed
+- [x] dev-log Readme and the index entry; tree clean
