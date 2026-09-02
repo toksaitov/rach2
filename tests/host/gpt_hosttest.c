@@ -213,6 +213,14 @@ int main(void)
     CHECK("a usable range that runs past the device is refused",
           gpt_header_ok(header, 1, DISK_SECTORS) != 0);
 
+    /* The array's first sector on the device and its last one past it. */
+    build_header(1, DISK_SECTORS - 1u, 2);
+    wr64(header + 72, DISK_SECTORS - 8u); /* 128 entries need 32 sectors */
+    wr32(header + 16, 0);
+    wr32(header + 16, gpt_crc32(header, 92));
+    CHECK("an entry array that runs past the device is refused",
+          gpt_header_ok(header, 1, DISK_SECTORS) != 0);
+
     /* Entries the array holds and this reader will not publish. */
     clear_array();
     put_entry(0, 2048, 4095);

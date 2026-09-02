@@ -10,9 +10,9 @@
  * A protective MBR of type 0xEE at entry zero says the table is here rather
  * than there; the header is at sector 1, and the entry array wherever the
  * header says. Both the header and the whole array are covered by a CRC32,
- * and this reader checks both before it believes a single field, because an
- * array read four entries at a time would take a table whose fifth entry is
- * rubbish for a table that is sound.
+ * and both are checked before a single field is used, because an array read
+ * four entries at a time would take a table whose fifth entry is rubbish
+ * for a table that is sound.
  *
  * The reader is split the way `mbr.c` is: the parsing is pure, so the host
  * test drives it against tables no disk would carry, and the reading of
@@ -40,7 +40,9 @@ int gpt_protective(const uint8_t *sector);
  * over it, where it says it is, and what it says about its entry array.
  *
  * `my_lba` is the sector the header was read from, and `disk_sectors` the
- * size of the device. Returns 0 when the header is sound, -1 otherwise.
+ * size of the device, or 0 when it is not known; with it known, the usable
+ * range and the whole of the entry array must lie on the device. Returns 0
+ * when the header is sound, -1 otherwise.
  */
 int gpt_header_ok(const uint8_t *header, uint64_t my_lba, uint64_t disk_sectors);
 
@@ -62,7 +64,9 @@ uint64_t gpt_last_usable(const uint8_t *header);
  * the header gives, and no overlap with an entry already taken; an entry
  * that fails is passed over with the rest still read, because a table with
  * one bad entry is not a table with no partitions. Returns how many were
- * published, and how many were passed over in `refused` when it is not null.
+ * published, and in `refused`, when it is not null, how many used entries
+ * were not: the ones that failed a check, and the sound ones beyond the
+ * four this kernel publishes.
  */
 int gpt_parse_entries(const uint8_t *array, uint32_t count, uint32_t entry_size,
                       uint64_t first_usable, uint64_t last_usable,

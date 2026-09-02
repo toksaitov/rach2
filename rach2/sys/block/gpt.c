@@ -1,5 +1,5 @@
 /*
- * gpt.c: the GUID partition table, read and judged before it is believed.
+ * gpt.c: the GUID partition table, checked before any of it is used.
  *
  * Everything here is checked arithmetic on numbers a device supplied. A
  * table says where its own entry array is, how many entries it has and how
@@ -14,6 +14,8 @@
  */
 
 #include "gpt.h"
+
+#include "block.h"
 
 #define GPT_SIGNATURE_0 0x20494645u /* "EFI " */
 #define GPT_SIGNATURE_1 0x54524150u /* "PART" */
@@ -171,6 +173,11 @@ int gpt_header_ok(const uint8_t *header, uint64_t my_lba, uint64_t disk_sectors)
         return -1;
     }
     if (array_lba == 0 || (disk_sectors != 0 && array_lba >= disk_sectors)) {
+        return -1;
+    }
+    /* The array itself must be on the medium, not only its first sector. */
+    if (disk_sectors != 0 && (uint64_t)((entry_size * count + BLOCK_SECTOR_SIZE - 1u) /
+                                        BLOCK_SECTOR_SIZE) > disk_sectors - array_lba) {
         return -1;
     }
     return 0;
