@@ -92,7 +92,7 @@ echo "ext2-test: the ordinary build refuses a write to a partition node: OK"
 # ---- 3: the machine was killed: the dirty root is checked, then unmounted ----
 [ "$(p1_state)" = "0" ] || fail "the killed machine left the valid bit set"
 boot_root "$ROOT.dirty.log" --ok "Goodbye" \
-    "send=cat /root/first" "expect=first" \
+    "send=echo GOT=\$(cat /root/first)" "expect=GOT=first" \
     "send=cat /proc/mounts" "expect=/dev/disk0p1 / ext2 rw,relatime 0 0" \
     "send=poweroff" "expect=Goodbye" || fail "the boot after the kill"
 grep -aq 'ext2: check: clean' "$ROOT.dirty.log" || fail "the check's record"
@@ -137,8 +137,8 @@ echo "ext2-test: a fault mounts the root read-only with the fault named: OK"
     --drive "file=$ROOT,format=raw,if=ide,index=0,media=disk" \
     --timeout 150 --steptmo 40 --ok "RECDONE" --log "$ROOT.recovery.log" \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" "expect=~ #" \
-    "send=dd if=/dev/disk0p2 of=/tmp/s bs=512 count=1 && dd if=/tmp/s of=/dev/disk0p2 bs=512 count=1 && echo BACK\"\"OK" \
-    "expect=BACKOK" "send=echo REC\"\"DONE" "expect=RECDONE" > /dev/null 2>&1 || fail "the recovery boot"
+    "send=dd if=/dev/disk0p2 of=/tmp/s bs=512 count=1 skip=16383 && printf 'rach2 wrote this sector%%s' '' | dd of=/tmp/w bs=512 count=1 conv=sync 2>/dev/null && dd if=/tmp/w of=/dev/disk0p2 bs=512 count=1 seek=16383 && dd if=/dev/disk0p2 bs=512 count=1 skip=16383 | head -c 23 && dd if=/tmp/s of=/dev/disk0p2 bs=512 count=1 seek=16383 && echo BACK\"\"OK" \
+    "expect=rach2 wrote this sector" "expect=BACKOK" "send=echo REC\"\"DONE" "expect=RECDONE" > /dev/null 2>&1 || fail "the recovery boot"
 grep -aq 'init: e2fsck: /dev/disk0p1: status 1' "$ROOT.recovery.log" || fail "e2fsck's repair of the root"
 grep -aq 'init: e2fsck: /dev/disk0p2: status 0' "$ROOT.recovery.log" || fail "e2fsck's pass over the second partition"
 p1_out; e2fsck -fn "$VOL" > "$ROOT.fsck3.log" 2>&1 || fail "e2fsck after recovery"
@@ -148,7 +148,7 @@ echo "ext2-test: recovery's init runs e2fsck -p on every ext2 partition and its 
 # ---- 7: the repaired root boots clean ----
 boot_root "$ROOT.clean.log" --ok "Goodbye" \
     "send=cat /proc/mounts" "expect=/dev/disk0p1 / ext2 rw,relatime 0 0" \
-    "send=cat /root/again" "expect=again" \
+    "send=echo GOT=\$(cat /root/again)" "expect=GOT=again" \
     "send=poweroff" "expect=Goodbye" || fail "the clean boot"
 grep -aq 'ext2: check' "$ROOT.clean.log" && fail "the repaired root was checked"
 echo "ext2-test: the repaired root boots without a check: OK"

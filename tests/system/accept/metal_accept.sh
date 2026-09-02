@@ -269,7 +269,9 @@ if run 'cat /proc/cmdline' | grep -q 'rach2.root=ext2'; then
     if [ -s "$BOOTLOG_OUT" ] && grep -q "ext2: check" "$BOOTLOG_OUT"; then
         bad "the ext2 root was checked at this boot; it was not unmounted the time before"
     fi
-    OUT="$(run 'echo accept > /root/accept.txt && sync && cat /root/accept.txt')"
+    # Read back through the same cache: that the bytes reached the disk is
+    # what the procedure's reboot after a write shows, not this call.
+    OUT="$(run 'echo accept > /root/accept.txt && sync && cat /root/accept.txt; rm -f /root/accept.txt')"
     if [ "$OUT" = "accept" ]; then
         note "the ext2 root takes a file and gives it back"
     else

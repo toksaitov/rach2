@@ -256,8 +256,8 @@ wipe_partition() {
     at="$("$REPO/build/tools/image/mkmbr" --list "$1" |
         awk -v want="$2" '$1 == want { print $3; exit }')"
     [ -n "$at" ] || fail "the disk has no partition $2"
-    dd if=/dev/zero of="$1" bs=1024 seek=$((at / 1024)) \
-        count=$(($3 / 1024)) conv=notrunc status=none
+    dd if=/dev/zero of="$1" bs=512 seek=$((at / 512)) \
+        count=$(($3 / 512)) conv=notrunc status=none
 }
 
 # The image that will be streamed back in: the root as it was built, taken from

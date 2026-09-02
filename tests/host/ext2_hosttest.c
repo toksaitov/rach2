@@ -36,6 +36,11 @@ extern long atol(const char *s);
 extern long strtol(const char *s, char **end, int base);
 extern unsigned long strtoul(const char *s, char **end, int base);
 extern int strcmp(const char *a, const char *b);
+extern int open(const char *path, int flags, ...);
+extern int close(int fd);
+extern int unlink(const char *path);
+extern unsigned sleep(unsigned seconds);
+extern int atexit(void (*fn)(void));
 extern int memcmp(const void *a, const void *b, unsigned long n);
 extern void *memset(void *s, int c, unsigned long n);
 
@@ -1190,7 +1195,9 @@ static int matches_pattern(const char *line, const char *pat)
     return 1;
 }
 
-static int findings_allowed(void)
+/* The findings a sequence's stops may leave: the allowed kinds, and a link
+   count only where the sequence writes one apart from its entry. */
+static int findings_allowed(int counts)
 {
     void *f = fopen(FIXDIR "/findings.txt", "r");
     char line[512];
@@ -1204,7 +1211,8 @@ static int findings_allowed(void)
         int any = 0;
 
         for (k = 0; k < sizeof(allowed_findings) / sizeof(allowed_findings[0]); k++) {
-            if (matches_pattern(line, allowed_findings[k])) {
+            if (matches_pattern(line, allowed_findings[k]) &&
+                (counts || !matches_pattern(line, "Inode # ref count is"))) {
                 any = 1;
             }
         }
@@ -1254,6 +1262,7 @@ static int seq_create_write(void)
     if (!n) {
         return rc;
     }
+    op_mark = writes_made; /* the name is committed: it stays at every stop after */
     rc = write_at(n, pattern, 100, 0);
     if (rc == 0) {
         rc = write_at(n, pattern, 10000, 100);
@@ -1344,6 +1353,7 @@ static int seq_mkdir_rmdir(void)
     if (rc != 0) {
         return rc;
     }
+    op_mark = writes_made;
     d = walk("/newdir", &err);
     if (!d) {
         return err;
@@ -1484,6 +1494,7 @@ static int seq_symlink(void)
     longtarget[199] = '\0';
     rc = OPS->symlink(&mnt, mnt.root, "quick", "hello.txt");
     if (rc == 0) {
+        op_mark = writes_made;
         rc = OPS->symlink(&mnt, mnt.root, "lengthy", longtarget);
     }
     return rc;
@@ -1542,25 +1553,28 @@ static int seq_many(void)
     return rc;
 }
 
+/* `counts` marks a sequence whose order writes a link count apart from the
+   entry it counts: only there may a stop leave a count wrong. */
 struct sequence {
     const char *name;
     int (*run)(void);
+    int counts;
 };
 
 static const struct sequence sequences[] = {
-    {"create and write", seq_create_write},
-    {"extend through the pointer levels", seq_extend},
-    {"write past the end", seq_past_end},
-    {"truncate", seq_truncate},
-    {"unlink", seq_unlink},
-    {"mkdir and rmdir", seq_mkdir_rmdir},
-    {"rename", seq_rename},
-    {"rename over a file", seq_rename_over},
-    {"rename a directory across parents and over an empty one", seq_rename_dir},
-    {"link", seq_link},
-    {"symlink", seq_symlink},
-    {"an open unlinked file", seq_open_unlinked},
-    {"many files", seq_many},
+    {"create and write", seq_create_write, 0},
+    {"extend through the pointer levels", seq_extend, 0},
+    {"write past the end", seq_past_end, 0},
+    {"truncate", seq_truncate, 0},
+    {"unlink", seq_unlink, 0},
+    {"mkdir and rmdir", seq_mkdir_rmdir, 1},
+    {"rename", seq_rename, 1},
+    {"rename over a file", seq_rename_over, 1},
+    {"rename a directory across parents and over an empty one", seq_rename_dir, 1},
+    {"link", seq_link, 1},
+    {"symlink", seq_symlink, 0},
+    {"an open unlinked file", seq_open_unlinked, 0},
+    {"many files", seq_many, 0},
 };
 
 /* What each finished sequence leaves: the files it made with their bytes,
@@ -1888,6 +1902,8 @@ static void refusal_write_rows(void)
 /* The matrix's volume: the fixture with every free block full of bytes
    that would read as data, so that a size published over bytes not yet
    synced reads junk and not the zeros a fresh image has. */
+static int copy_file(const char *src, const char *dst);
+
 static uint64_t build_junk_image(void)
 {
     static uint64_t bytes;
@@ -1895,15 +1911,40 @@ static uint64_t build_junk_image(void)
     if (bytes == 0) {
         char cmd[700];
 
+        unsigned char probe[64];
+        int i, nonzero = 0;
+
         bytes = build_image(FIXDIR "/junk.ext2", 4096, 128, PROFILE, 16, "tree");
-        snprintf(
-            cmd, sizeof(cmd),
-            ". tools/setup/e2fsprogs_path.sh; head -c 14000000 /dev/urandom > " FIXDIR "/junk.bin; "
-            "debugfs -w -R 'write " FIXDIR "/junk.bin junk' " FIXDIR "/junk.ext2 >/dev/null 2>&1; "
-            "debugfs -w -R 'rm junk' " FIXDIR "/junk.ext2 >/dev/null 2>&1");
-        system(cmd);
+        snprintf(cmd, sizeof(cmd),
+                 ". tools/setup/e2fsprogs_path.sh; head -c 14000000 /dev/urandom > " FIXDIR
+                 "/junk.bin && "
+                 "debugfs -w -R 'write " FIXDIR "/junk.bin junk' " FIXDIR
+                 "/junk.ext2 >/dev/null 2>&1 && "
+                 "debugfs -w -R 'rm junk' " FIXDIR "/junk.ext2 >/dev/null 2>&1");
+        if (!run(cmd)) {
+            printf("ext2_hosttest: the junk volume did not build\n");
+            exit(1);
+        }
+        /* A free block well past the tree must hold the junk, or the matrix
+           would run over zeros and its oracle would accept a size published
+           before its data. */
+        if (host_read(FIXDIR "/junk.ext2", probe, sizeof(probe), 3500L * 4096) !=
+            (long)sizeof(probe)) {
+            printf("ext2_hosttest: the junk volume did not read\n");
+            exit(1);
+        }
+        for (i = 0; i < (int)sizeof(probe); i++) {
+            nonzero |= probe[i] != 0;
+        }
+        if (!nonzero) {
+            printf("ext2_hosttest: the junk volume's free blocks are zeros\n");
+            exit(1);
+        }
     }
-    system("cp " FIXDIR "/junk.ext2 " FIXDIR "/w.ext2");
+    if (!copy_file(FIXDIR "/junk.ext2", FIXDIR "/w.ext2")) {
+        printf("ext2_hosttest: the junk volume did not copy\n");
+        exit(1);
+    }
     return bytes;
 }
 
@@ -2018,16 +2059,19 @@ static int copy_file(const char *src, const char *dst)
    read-only one whose fault is what the order writes in more than one
    step: a link count after its entry, a size and an i_blocks after the
    pointers, and a directory's two entries and its `..` across a move. */
-static int check_accepts(const char *img, uint64_t bytes)
+static int check_accepts(const char *img, uint64_t bytes, int counts_written)
 {
     static const char *const counts[] = {
         "a link count that does not match its names",
         "a directory link count that does not match its entries",
         "named twice with one link",
-        "a block past the size",
-        "i_blocks that does not match its pointers",
         "a directory with two parents",
         "a second entry that is not the parent",
+    };
+    static const char *const sizes[] = {
+        "a block past the size",
+        "a pointer block past the size",
+        "i_blocks that does not match its pointers",
     };
     int ok, i;
 
@@ -2041,7 +2085,10 @@ static int check_accepts(const char *img, uint64_t bytes)
         return 0;
     }
     ok = (mnt.flags & VFS_MS_RDONLY) == 0;
-    for (i = 0; !ok && i < 7; i++) {
+    for (i = 0; !ok && i < 3; i++) {
+        ok = strstr(last_check, sizes[i]) != 0;
+    }
+    for (i = 0; !ok && counts_written && i < 5; i++) {
         ok = strstr(last_check, counts[i]) != 0;
     }
     if (!ok) {
@@ -2058,6 +2105,12 @@ static int names_present(int i)
     int err;
 
     switch (i) {
+    case 0:
+        return walk("/new.txt", &err) != 0;
+    case 5:
+        return walk("/newdir", &err) != 0;
+    case 10:
+        return walk("/quick", &err) != 0;
     case 6:
         return walk("/from.txt", &err) || walk("/to.txt", &err) || walk("/dir/moved.txt", &err);
     case 7:
@@ -2319,7 +2372,7 @@ static void dirty_rows(void)
               "a directory count above its entries mounts read-only");
     fault_row(img, "link /dir/sub /many/twice\nsif /many links_count 3\n",
               "a directory with two parents", "a directory named twice mounts read-only");
-    fault_row(img, "sif /dir/big.bin size 100\n", "a block past the size",
+    fault_row(img, "sif /dir/big.bin size 100\n", "past the size",
               "a size behind its pointers mounts read-only");
     fault_row(img, "sif /dir/big.bin i_blocks 8\n", "i_blocks that does not match its pointers",
               "an i_blocks behind its pointers mounts read-only");
@@ -2412,8 +2465,9 @@ static void matrix_rows(void)
                 check(crash_ok(i), what);
                 named_before = names_present(i);
                 if (mark >= 0 && k > mark) {
-                    /* Past the start of the rename or link, the file has a
-                       name at every stop: what the order of writes is for. */
+                    /* Past the start of the rename or link, or the commit of
+                       a new name, the file has a name at every stop: what
+                       the order of writes is for. */
                     snprintf(what, sizeof(what),
                              "'%s' stopped after write %d of %d keeps a name for its file",
                              sequences[i].name, k, n);
@@ -2433,7 +2487,7 @@ static void matrix_rows(void)
                 printf("  e2fsck -fn exited %d:\n", status);
                 system("head -14 " FIXDIR "/fsck.out");
             }
-            check((status == 0 || status == 4) && findings_allowed(), what);
+            check((status == 0 || status == 4) && findings_allowed(sequences[i].counts), what);
             /* Judge three: repaired on a copy, nothing outside the operation
                lost. */
             snprintf(what, sizeof(what),
@@ -2448,7 +2502,7 @@ static void matrix_rows(void)
             snprintf(what, sizeof(what),
                      "'%s' stopped after write %d of %d passes the check or fails it on a count",
                      sequences[i].name, k, n);
-            check(check_accepts(wimg, wbytes), what);
+            check(check_accepts(wimg, wbytes, sequences[i].counts), what);
             total++;
         }
     }
@@ -2473,10 +2527,39 @@ static void matrix_rows(void)
     }
 }
 
+/* One instance at a time over the fixture directory, which is one name for
+   every run: the lock is a file made exclusively, removed at exit. */
+static void unlock_fixtures(void)
+{
+    unlink(FIXDIR ".lock");
+}
+
+static void lock_fixtures(void)
+{
+    int i, fd;
+
+    for (i = 0; i < 600; i++) {
+        fd = open(FIXDIR ".lock", 0x0200 | 0x0800 | 0x0001, 0644); /* O_CREAT|O_EXCL|O_WRONLY */
+        if (fd >= 0) {
+            close(fd);
+            atexit(unlock_fixtures);
+            return;
+        }
+        sleep(1);
+    }
+    printf("ext2_hosttest: another instance holds " FIXDIR ".lock\n");
+    exit(1);
+}
+
 int main(void)
 {
     uint64_t bytes;
 
+    if (!run("mkdir -p /tmp/rach2_verify")) {
+        printf("ext2_hosttest: /tmp/rach2_verify did not appear\n");
+        return 1;
+    }
+    lock_fixtures();
     if (!run("mkdir -p " FIXDIR) ||
         !run(". tools/setup/e2fsprogs_path.sh; command -v mke2fs >/dev/null")) {
         printf("ext2_hosttest: mke2fs is not on the path; e2fsprogs is a required host tool\n");
