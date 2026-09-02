@@ -61,6 +61,16 @@ RESCUE=1 ./run.sh               # kernel with no root, kernel debug shell
 ./run.sh test                   # init-less test image, kernel debug shell
 ```
 
+The stick image boots through the emulator's firmware with no kernel given, the way a machine boots from a USB socket:
+
+```sh
+qemu-system-i386 -cpu max -device qemu-xhci,id=xhci \
+    -drive if=none,id=stick,format=raw,file=../build/images/rach2-stick.img \
+    -device usb-storage,bus=xhci.0,drive=stick,bootindex=0
+```
+
+GRUB loads the metal kernel and its RAM root off the stick, the kernel names the stick `usb0`, and `mount -t exfat /dev/usb0p2 /mnt` mounts the stick's own second partition.
+
 `run.sh` defaults to `-cpu max`, the PC speaker, an RTL8139 device, and QEMU's SLIRP network. Its second argument selects `speaker`, `sb16`, or `hda`. `CPU` overrides the CPU model, `NIC` selects `rtl8139` or `e1000`, and `NET_HOSTFWD` replaces the default `8080` to guest port `80` forwarding rule. `NET=off` omits the script's explicit network options; QEMU then supplies its default e1000 and SLIRP network, which the kernel drives.
 
 For a persistent disk root:
@@ -184,13 +194,13 @@ The VGA text console keeps scrollback. `PageUp`, `PageDown`, `Home`, and `End` m
 | `sys/mm/` | Physical frames, paging, VMAs, user copies, module placement, and page cache. |
 | `sys/fs/` | The mount table and resolver, KRFFS, the buffer cache, FAT32, exFAT, descriptors, `/dev`, and `/proc`. |
 | `sys/ipc/`, `sys/io/`, `sys/tty/` | Pipes, readiness APIs, line discipline, job control, and pseudo-terminals. |
-| `sys/block/` | ATA, AHCI, the block request, MBR discovery, disk policy, partition and raw disk windows, and the lag test device. |
+| `sys/block/` | ATA, AHCI, the block request, MBR and GUID tables, the stick as a disk, disk policy, partition and raw disk windows, and the lag test device. |
 | `sys/network/` | RTL8139, e1000, and RTL8168 drivers, IPv4 protocols, sockets, and netconsole. |
 | `sys/display/`, `sys/audio/`, `sys/kbd*`, `sys/mouse*`, `sys/speaker*` | VGA, audio, and PS/2 input drivers. |
 | `sys/board*`, `sys/power*`, `sys/pci*`, `sys/rtc*`, `sys/serial*` | Platform discovery, shutdown, PCI, clock, and COM1. |
 | `sys/klog*` | The kernel log: one record, four destinations, and the debug shell's own console calls. |
 | `sys/input.c` | Where a keystroke goes, whichever keyboard produced it. |
-| `sys/usb/` | The xHCI controller, the device core, and the boot-protocol keyboard and mouse. |
+| `sys/usb/` | The xHCI controller, the device core, the boot-protocol keyboard and mouse, and the mass-storage class driver. |
 | `sys/lib/` | Freestanding integer, string, character, signal, user-ABI, text formatting, interrupt bracket, and random support. |
 
 Subsystem references:
@@ -211,13 +221,13 @@ The kernel currently supports:
 
 * Multiboot1 through QEMU's direct kernel loader or GRUB BIOS boot.
 * VGA text mode and Mode 13h graphics.
-* PS/2 keyboard and mouse input, and USB keyboards and mice through xHCI.
+* PS/2 keyboard and mouse input, and USB keyboards, mice and flash drives through xHCI.
 * COM1 serial input and output.
 * Polled ATA PIO and AHCI disk access with MBR partition discovery.
 * RTL8139, Intel 82540EM (e1000), and RTL8168GU Ethernet devices.
 * Sound Blaster 16, Intel HDA, and the PC speaker.
 
-It does not implement UEFI, Multiboot2, SMP, threads, swap, dynamic linking, IPv6, or VESA graphics. FAT32 partitions mount through `mount(2)`, read and written; exFAT partitions mount and are read. USB is a keyboard and a mouse through xHCI and nothing else: no hubs, no mass storage, no booting from a USB disk. The direct physical-memory limit is 32 MiB.
+It does not implement UEFI, Multiboot2, SMP, threads, swap, dynamic linking, IPv6, or VESA graphics. FAT32 partitions mount through `mount(2)`, read and written; exFAT partitions mount and are read. USB is a keyboard, a mouse and a flash drive on a root port through xHCI: no hubs, so a device behind one is not seen, and two flash drives at once. A machine boots from the stick image through its firmware and GRUB, and the root stays in RAM. The direct physical-memory limit is 32 MiB.
 
 The ordinary process and descriptor limits are the fixed 16-slot tables described above, and what a program reaches is that size less what is already taken. A fork past the process table returns `EAGAIN`. An open past the sixteen descriptors, of which three are stdio, returns `EMFILE` at the fourteenth. A socket past the pool of sixteen returns `ENOMEM`, which takes two processes to reach because one runs out of descriptors first. A connection past the sixteen TCP control blocks, which a listener and seven connections to this machine fill, is refused with `ECONNREFUSED` rather than left to retransmit. `tests/run default` fills all four and requires the refusal, and for the first three the resource coming back.
 
