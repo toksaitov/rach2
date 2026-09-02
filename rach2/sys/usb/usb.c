@@ -195,89 +195,6 @@ static int in_msi_pump;
  * stepping the devices, and a second party doing the same from here would be
  * two drains of one ring, one of them inside an interrupt of the other.
  */
-/** The name of a speed, for the record. */
-static const char *speed_name(int speed)
-{
-    switch (speed) {
-    case USB_SPEED_FULL:
-        return "full";
-    case USB_SPEED_LOW:
-        return "low";
-    case USB_SPEED_HIGH:
-        return "high";
-    case USB_SPEED_SUPER:
-        return "super";
-    default:
-        return "unknown";
-    }
-}
-
-/*
- * Whether the stack is up. The timer calls `usb_poll` from the first tick of
- * the boot, and there is nothing to poll until a controller has been found and
- * started.
- */
-static int usb_up;
-
-static void usb_interrupts_start(void);
-
-/*
- * The vector the controller's messages arrive on. Vectors 48 to 63 are this
- * kernel's message vectors; the xHCI takes the first of them and the audio
- * controller the second.
- */
-#define USB_MSI_VECTOR 48
-
-/* How many messages the controller has sent, how many times the timer's pump
- * found work that a message should have brought, and after how many messages
- * `rach2.msidrop` silences the controller. */
-static uint32_t usb_messages;
-static uint32_t usb_fallback;
-static uint32_t msi_drop_after;
-
-/* Whether the controller was ever put on messages. The fallback is counted
- * against this and not against whether messages are arriving now: a
- * controller silenced by `rach2.msidrop` is exactly the machine whose lost
- * edges are being counted. */
-static int msi_started;
-
-/* Whether the controller had an interrupt raised for what the last pump
- * drained. The pump sets it; `usb_poll` reads it. */
-static int pump_saw_pending;
-
-/* Whether the pump that is running drained anything. The keystroke's stamps
- * are only worth printing when it did: the numbers are measured from the
- * event, and a pump that took none has no event of its own. */
-static int pump_took;
-
-/* Whether a pump was found to have enabled interrupts, so the record is
- * printed once and not every tick. */
-static int pump_enabled_interrupts;
-
-/* The stamps of one keystroke's path through this stack, in microseconds:
- * where the handler entered, where the event was taken, and where the key
- * reached the line discipline. `usb_stamp_read` prints them when a reader
- * takes the byte. */
-static uint32_t stamp_entry;
-static uint32_t stamp_event;
-static uint32_t stamp_wake;
-static uint32_t wake_event;
-static uint32_t wake_entry;
-static int stamp_pending;
-static int stamp_by_msi;
-
-/* Whether the pump that is running was turned by the controller's message.
- * The keystroke's stamp is taken inside it and takes its answer from here. */
-static int in_msi_pump;
-
-/**
- * Let time pass at boot, which is the one place in this stack where that is
- * allowed.
- *
- * It waits and nothing more. The timer is already draining the controller and
- * stepping the devices, and a second party doing the same from here would be
- * two drains of one ring, one of them inside an interrupt of the other.
- */
 static void usb_wait(uint32_t milliseconds)
 {
     uint32_t ms;
@@ -287,7 +204,14 @@ static void usb_wait(uint32_t milliseconds)
     }
 }
 
-/** Record what is on each root port. */
+/**
+ * Record what is on each root port.
+ *
+ * A USB 2 port's speed field is valid only once the port is enabled, which
+ * is after its reset; before that a low-speed device is told by its own
+ * pull-up and a full- and a high-speed one read alike. The record says so,
+ * and the device's own line later carries the speed the reset settled.
+ */
 static void report_ports(void)
 {
     struct usb_port_status status;
@@ -300,8 +224,12 @@ static void report_ports(void)
             continue;
         }
         if (status.connected) {
-            klog(KLOG_INFO, "usb", "port: %d: a %s-speed device", port + 1,
-                 speed_name(status.speed));
+            if (status.speed == USB_SPEED_LOW) {
+                klog(KLOG_INFO, "usb", "port: %d: a low-speed device", port + 1);
+            } else {
+                klog(KLOG_INFO, "usb", "port: %d: a device; its reset tells full from high speed",
+                     port + 1);
+            }
             found++;
         }
     }
