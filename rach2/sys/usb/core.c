@@ -365,7 +365,7 @@ static void step_closing(struct usb_device_state *d)
         }
         /* Either the controller gave the slot back or it never answered. The
          * second is recorded; the entry goes either way, because a slot this
-         * kernel cannot get back is one of four it has lost, and holding the
+         * kernel cannot get back is one of seven it has lost, and holding the
          * entry as well would lose a device table row too. */
         if (done != 1) {
             /*

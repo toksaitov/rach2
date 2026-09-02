@@ -44,18 +44,6 @@ static int fail(const char *what)
     return 1;
 }
 
-static int same(const unsigned char *a, const char *b, int n)
-{
-    int i;
-
-    for (i = 0; i < n; i++) {
-        if (a[i] != (unsigned char)b[i]) {
-            return 0;
-        }
-    }
-    return 1;
-}
-
 static unsigned long long rd64(const unsigned char *p)
 {
     unsigned long long v = 0;
@@ -126,8 +114,15 @@ int main(int argc, char **argv)
         read(fd, boot, SECTOR) != (long)SECTOR) {
         return fail("the volume's boot sector would not read");
     }
-    if (!same(boot + 3, "EXFAT   ", 8)) {
-        return fail("the volume's boot sector is not exFAT's");
+    {
+        const char *name = "EXFAT   ";
+        int i;
+
+        for (i = 0; i < 8; i++) {
+            if (boot[3 + i] != (unsigned char)name[i]) {
+                return fail("the volume's boot sector is not exFAT's");
+            }
+        }
     }
     if (rd64(boot + 64) != start) {
         return fail("the volume's PartitionOffset is not its start on the image");
