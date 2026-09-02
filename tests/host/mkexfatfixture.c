@@ -1133,6 +1133,9 @@ static int check_main(int argc, char **argv)
 #define B_FIRST_FILE 6u
 
 struct build {
+    /* PartitionOffset, the volume's first sector on the medium it is placed
+       on, given as `--offset=N`; zero for a volume image of its own. */
+    uint64_t partition_offset;
     unsigned char *img;
     uint64_t sectors;
     unsigned bps_shift, spc_shift;
@@ -1463,7 +1466,7 @@ static void boot_write(struct build *b, uint64_t first)
     s0[1] = 0x76;
     s0[2] = 0x90;
     memcpy(s0 + 3, "EXFAT   ", 8);
-    wr64(s0 + 64, 0);
+    wr64(s0 + 64, b->partition_offset);
     wr64(s0 + 72, b->sectors);
     wr32(s0 + 80, b_is(b, "--fat-in-boot") ? 12u : b->fat_offset);
     wr32(s0 + 84, b_is(b, "--short-fat") ? b->fat_length - 1 : b->fat_length);
@@ -1506,6 +1509,10 @@ static int build(const char *out, const char *opt)
 
     memset(&b, 0, sizeof(b));
     b.opt = opt;
+    if (opt && strncmp(opt, "--offset=", 9) == 0) {
+        b.partition_offset = strtoull(opt + 9, 0, 10);
+        b.opt = 0; /* no other option travels with it */
+    }
     if (opt && strncmp(opt, "--dirty-", 8) == 0 && strcmp(opt, "--dirty-orphan") != 0 &&
         strcmp(opt, "--dirty-surplus") != 0 && strcmp(opt, "--dirty-lost") != 0 &&
         strcmp(opt, "--dirty-dup") != 0 && strcmp(opt, "--dirty-critical") != 0 &&
@@ -1915,8 +1922,8 @@ int main(int argc, char **argv)
             return check_main(argc, argv);
     }
     if (argc < 2 || argc > 3) {
-        fprintf(stderr, "usage: mkexfatfixture IMAGE [OPTION] | --check IMAGE [OFFSET-SECTORS] "
-                        "[--list] [--dump]\n");
+        fprintf(stderr, "usage: mkexfatfixture IMAGE [OPTION | --offset=SECTORS] | --check IMAGE "
+                        "[OFFSET-SECTORS] [--list] [--dump]\n");
         return 2;
     }
     return build(argv[1], argc == 3 ? argv[2] : 0);
