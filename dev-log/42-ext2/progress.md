@@ -7,8 +7,8 @@ Phase 1: arrival, the tools and the port
 - [x] e2fsprogs built against musl; e2fsck in a recovery boot; the size and RAM limit
 
 Phase 2: the staging tools and the checker's reader
-- [ ] stageimage.krffs --tree; mkext2.sh with its profile and its gates
-- [ ] setidcheck's ext2 reader and its rows; the os-real ext2 image as a target
+- [x] stageimage.krffs --tree; mkext2.sh with its profile and its gates
+- [x] setidcheck's ext2 reader and its rows; the os-real ext2 image as a target
 
 Phase 3: the reader in the kernel and the links
 - [ ] ext2.c reading; the feature rules; the offset limit

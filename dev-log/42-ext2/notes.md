@@ -142,6 +142,64 @@ question aborts the run. Phase 5, where the recovery build's partition
 nodes become writable, gives them a size as well, and the row that runs
 `e2fsck -p` from recovery's `init` is what requires it.
 
+## Phase 2 record
+
+`stageimage.krffs MANIFEST --tree DIR` is the tree mode: the four stage
+functions branch at their top into a host file or directory under `DIR`,
+every node is printed as `node MODE UID GID PATH` with the POSIX type
+bits, the directory must not exist beforehand, and every node gets the
+fixed staged instant, directories last. On the os-real manifest it
+materialises 633 nodes, four fewer than the throwaway script of phase 1,
+which did not skip dotfiles as `tree` does; the difference is
+`src/rach2/.gdbinit`, which the image should not carry.
+
+`tools/image/mkext2.sh` is the image build: the tree, `mke2fs` on the
+profile with `E2FSPROGS_FAKE_TIME=1` and a fixed identifier, the
+superblock read back at bytes 1080, 1100, 1048, 1112, 1116, 1120 and 1124
+and refused outside the profile, the `debugfs` script from the node lines
+with the type bits kept, `e2fsck -fn`, the manifest sweep, and the guard's
+ext2 reader; the rename comes last. `make os-real-ext2` builds
+`build/images/os-real.ext2`, 1 GiB, 19 MiB on disk, in under a second
+after the tree. The 128-byte inode deprecation line `mke2fs` prints is
+filtered, since the profile is deliberate.
+
+`setidcheck` gained the reader: `ext2_open` refuses anything but revision
+1, 4096-byte blocks, 128-byte inodes, first inode 11, first data block 0
+and the three feature words 0, 0x2 and 0x3 exactly; it marks the
+superblock and descriptor copies in every `sparse_super` group and each
+group's two bitmaps and inode table as structural, and a data pointer
+into any of them, or past the volume, is a refusal. `ext2_reach` walks
+from inode 2 with a visited set for directories, checks `.` and `..`,
+each entry's `rec_len`, name and type against the inode's mode, and lists
+every path as a node of the same table `check_image` judges, so the policy
+half is one function for both formats; a regular file's bytes are copied
+through the three pointer levels for the trusted-text and sysroot checks,
+which read them through `node_bytes` now. A second name for one inode is
+a second node, which is how a hard link to a set-id file is an undeclared
+set-id path. `--ext2 FILE --manifest PATH` and `--nodes --ext2 FILE` are
+the entry points.
+
+The self-test builds its ext2 fixtures with the host's `mke2fs` and
+`debugfs`, the inventory fixture's four nodes on the profile, and has
+thirteen ext2 rows: the reader lists the fixture as `debugfs` wrote it,
+mode, owner, bytes and `lost+found`; the clean fixture passes; a set-id
+file at the wrong owner, at the wrong group, with a bit added, with its
+bit removed, an inode the manifest does not name, and a hard link to a
+set-id file each fail with the policy's own message; and a feature outside
+the profile, a block outside the volume, a block inside the inode table,
+a malformed entry with a `rec_len` of 6, and an entry naming inode
+268435455 each refuse the image by name. The last row first poked the
+root's first entry, which is `.`, and was refused as a wrong `.` instead;
+it pokes the third entry. `check-setid: selftest: 122 cases PASS`.
+
+The two script mutations: `mkext2.sh` without its `debugfs` step fails
+the guard with every node at the build's own uid, and with `dir_index`
+on it stops at the superblock with `compatible features 32, not 0`.
+
+The first reader crashed the self-test: the KRFFS walk's node was never
+zeroed, so the `data` pointer the ext2 nodes own was garbage there and
+`image_free` freed it. `unpack_node` zeroes its node now.
+
 ## Open items
 
 * Phase 5: the partition nodes report their size, so that `e2fsck -p`
