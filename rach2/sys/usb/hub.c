@@ -361,6 +361,11 @@ static void port_read(struct hub *h, int port)
     }
     p->known = 1;
     if (h->state == HUB_SCAN) {
+        /* The change bits found by the first scan are acknowledged before
+         * the change endpoint is read, or the hub would report the same
+         * connections a second time and each device would arrive twice. */
+        p->to_clear = change & (C_PORT_CONNECTION_BIT | C_PORT_ENABLE_BIT | C_PORT_SUSPEND_BIT |
+                                C_PORT_OVER_CURRENT_BIT | C_PORT_RESET_BIT);
         if (now) {
             usb_core_hub_port(h->index, port - 1, 1);
         }
@@ -525,9 +530,8 @@ static void answered(struct hub *h, const struct usb_completion *c)
                 h->state = HUB_RUNNING;
                 klog(KLOG_INFO, "usb", "hub: device %d: %d ports, power mode %d, think time %d",
                      h->device, h->ports, h->lpsm, h->think_time);
-                if (change_submit(h) != 0) {
-                    give_up(h, "its change endpoint could not be read");
-                }
+                /* The running arm reads the change endpoint once every
+                 * change bit the scan found has been acknowledged. */
             } else if (port_status_read(h, h->at) != 0) {
                 give_up(h, "a port's status could not be asked for");
             }

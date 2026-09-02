@@ -1143,7 +1143,12 @@ static void device_arrive(int owner, int port)
             return;
         }
     }
-    klog(KLOG_WARN, "usb", "device: port %d: refused: the device table is full", port + 1);
+    if (owner >= 0) {
+        klog(KLOG_WARN, "usb", "device: port %s.%d: refused: the device table is full",
+             path_of(&devices[owner]), port + 1);
+    } else {
+        klog(KLOG_WARN, "usb", "device: port %d: refused: the device table is full", port + 1);
+    }
 }
 
 void usb_core_hub_port(int hub, int port, int connected)
