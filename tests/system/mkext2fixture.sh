@@ -29,6 +29,7 @@ ln -s hello.txt "$TREE/fast"
 ln -s /e2/hello.txt "$TREE/abs"
 ln -s sub "$TREE/dirlink"
 ln -s nowhere "$TREE/dangling"
+ln -s "$(printf 'x%.0s' $(seq 1 300))" "$TREE/long300"
 # A chain of forty links ending at a file, and one of forty-one.
 i=1
 while [ "$i" -lt 40 ]; do ln -s "c$((i + 1))" "$TREE/c$i"; i=$((i + 1)); done

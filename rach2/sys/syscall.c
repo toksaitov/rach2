@@ -878,6 +878,7 @@ static int32_t sys_writev(isr_params_t *params)
 #define AT_SYMLINK_NOFOLLOW 0x100
 #define AT_SYMLINK_FOLLOW 0x400 /* linkat: follow a symlink source */
 #define AT_EMPTY_PATH 0x1000    /* *at: operate on the dirfd itself */
+#define AT_NO_AUTOMOUNT 0x800   /* fstatat: accepted and meaningless here */
 
 /**
  * Join base + '/' + rel into pathbuf as an absolute path.
@@ -1526,14 +1527,21 @@ static void krffs_stamp_new_node(krffs_node_t *node, uint32_t mode)
  * `name` is a kernel-space path with any leading '/' already stripped; `flags`
  * are the Linux open flags and `mode` the permission bits to stamp on a file
  * created by O_CREAT (ignored otherwise). Resolves a device ("fb"/"mouse") or a
- * KRFFS path and installs a descriptor. Returns the fd or -errno. Opening "/"
- * opens the root directory for getdents64.
+ * path on any mounted type and installs a descriptor. Returns the fd or
+ * -errno. Opening "/" opens the root directory for getdents64. A symbolic
+ * link at the end is followed, and one whose target is missing is what
+ * O_CREAT creates, as on Linux, unless O_NOFOLLOW, which answers ELOOP, or
+ * O_CREAT|O_EXCL, which answers EEXIST for the link.
  */
+static int synth_is_link(const struct vpath *vp);
+
 static int32_t do_open(const char *name, int flags, uint32_t mode)
 {
     fd_entry_t *entry;
     krffs_node_t *node;
     struct vfs_ref ref;
+    char through[VFS_WALK_PATH_MAX]; /* the path a dangling link's target makes */
+    int followed = 0;
     int fd;
     int rc;
 
@@ -1587,9 +1595,6 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
         return -EMFILE; /* known before anything is created or truncated */
     }
 again:
-    /* A link at the end is followed, unless O_NOFOLLOW asks for the link,
-     * which open cannot open, or O_CREAT|O_EXCL asks that nothing be there,
-     * which a link, dangling or not, is. */
     rc = vfs_resolve(0, name,
                      ((flags & O_NOFOLLOW) || ((flags & O_CREAT) && (flags & O_EXCL)))
                          ? VFS_WALK_NOFOLLOW
@@ -1598,11 +1603,55 @@ again:
     if (rc == -ENOENT && (flags & O_CREAT)) {
         /* The missing-file half of O_CREAT: hold the parent, check its
          * write bit, create under the namespace lock, and stamp the new
-         * node with the caller's identity and masked mode. */
+         * node with the caller's identity and masked mode. When the name
+         * is a link whose target is missing, the target is what is
+         * created: the walk continues on the target's path, the link's
+         * directory in front of a relative one, within the same bound of
+         * forty links the resolver keeps. */
         struct vfs_ref parent;
         char leafname[VFS_NAME_MAX + 1];
         void *made;
+        struct vfs_ref linkref;
 
+        if (vfs_resolve(0, name, VFS_WALK_NOFOLLOW, &linkref, 0, 0) == 0) {
+            struct vfs_stat lst;
+            int is_link = !vfs_synth_vpath(linkref.mnt, linkref.node) &&
+                          linkref.mnt->type->ops->readlink &&
+                          vfs_getattr(linkref.mnt, linkref.node, &lst) == 0 &&
+                          (lst.mode & 0170000u) == 0120000u;
+
+            if (is_link) {
+                char target[VFS_WALK_PATH_MAX];
+                int tlen = linkref.mnt->type->ops->readlink(linkref.mnt, linkref.node, target,
+                                                            sizeof(target));
+                uint32_t dlen = 0;
+
+                vfs_ref_release(&linkref);
+                if (tlen < 0) {
+                    return tlen;
+                }
+                if (++followed > VFS_LINK_MAX) {
+                    return -ELOOP;
+                }
+                if (target[0] != '/') {
+                    /* The link's own directory, then the target. */
+                    dlen = (uint32_t)k_strlen(name);
+                    while (dlen > 0 && name[dlen - 1] != '/') {
+                        dlen--;
+                    }
+                    if (dlen + (uint32_t)tlen + 1 > sizeof(through)) {
+                        return -ENAMETOOLONG;
+                    }
+                    k_memmove(through, name, dlen);
+                    k_memcpy(through + dlen, target, (uint32_t)tlen + 1);
+                } else {
+                    k_memcpy(through, target + 1, (uint32_t)tlen);
+                }
+                name = through;
+                goto again;
+            }
+            vfs_ref_release(&linkref);
+        }
         rc = vfs_resolve(0, name, VFS_WALK_PARENT, &parent, leafname,
                          sizeof(leafname));
         if (rc != 0) {
@@ -1653,6 +1702,16 @@ again:
             struct vpath vpc = *vp;
 
             vfs_ref_release(&ref);
+            /* The /proc links, /proc/self and the descriptor links, are
+             * links too: the same two answers as on a mounted type. */
+            if (synth_is_link(&vpc)) {
+                if (flags & O_NOFOLLOW) {
+                    return -ELOOP;
+                }
+                if ((flags & O_CREAT) && (flags & O_EXCL)) {
+                    return -EEXIST;
+                }
+            }
             return synth_open(&vpc, flags);
         }
         node = ref.node;
@@ -3542,8 +3601,9 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
 /**
  * readlink core (readlink(2)/readlinkat(2)).
  *
- * The only symlinks Rach2 has are /proc/self and the /proc/<pid>/fd/<n>
- * magic links (which ttyname reads). The result is the byte count and is NOT
+ * The links are /proc/self, the /proc/<pid>/fd/<n> magic links (which
+ * ttyname reads), and the symbolic links of a mounted type that has them,
+ * read through the type. The result is the byte count and is NOT
  * NUL-terminated (the readlink contract; musl appends its own terminator and
  * treats a full buffer as truncation). `name` is the path, leading '/'
  * stripped.
@@ -3553,7 +3613,7 @@ static int32_t do_readlink(const char *name, char __user *ubuf, uint32_t bufsiz)
     struct vpath vp;
     struct vfs_ref ref;
     const struct vpath *svp;
-    char link[256]; /* fit a full fd-target path (the syscall path limit) */
+    char link[VFS_WALK_PATH_MAX]; /* a target up to the resolver's own bound */
     int n, pid, kind;
 
     if (!ubuf || bufsiz == 0) {
@@ -3679,6 +3739,14 @@ static int32_t sys_readlinkat(isr_params_t *params)
     return do_readlink(name, ubuf, bufsiz);
 }
 
+/* Whether a synthetic node is one of /proc's links, by its unfollowed mode. */
+static int synth_is_link(const struct vpath *vp)
+{
+    struct linux_stat64 lst;
+
+    return synth_stat(vp, &lst, 0) == 0 && (lst.st_mode & 0170000u) == 0120000u;
+}
+
 static int32_t do_stat64(const char __user *path, struct linux_stat64 __user *st, int follow)
 {
     struct linux_stat64 kst;
@@ -3744,8 +3812,9 @@ static int32_t do_stat64(const char __user *path, struct linux_stat64 __user *st
 
 /* stat64(195) follows symlinks; lstat64(196) does not. On i386 musl maps its
  * stat()/lstat() onto these (via the statx -> *stat64 fallback), so lstat()
- * only works once 196 exists. The follow flag matters only for the /proc magic
- * links. */
+ * only works once 196 exists. The follow flag decides whether a symbolic
+ * link at the end, on /proc or on a mounted type, is the result or its
+ * target. */
 static int32_t sys_stat64(isr_params_t *params)
 {
     return do_stat64((const char __user *)params->ebx,
@@ -4140,9 +4209,14 @@ static int32_t sys_fstatat64(isr_params_t *params)
     } else {
         struct vfs_ref ref;
         const struct vpath *svp;
-        int32_t rc = vfs_resolve(0, pathbuf,
-                                 ((int)params->esi & AT_SYMLINK_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0,
-                                 &ref, 0, 0);
+        int32_t rc;
+
+        if ((int)params->esi & ~(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH | AT_NO_AUTOMOUNT)) {
+            return -EINVAL;
+        }
+        rc = vfs_resolve(0, pathbuf,
+                         ((int)params->esi & AT_SYMLINK_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0, &ref, 0,
+                         0);
 
         if (rc != 0) {
             return rc;
@@ -4680,7 +4754,8 @@ static int32_t sys_fchown(isr_params_t *params)
 }
 
 /**
- * link(2): always -EPERM (KRFFS has no hard links).
+ * link(2): a hard link through `do_link`, real on a type with links and
+ * -EPERM on KRFFS.
  *
  * KRFFS stores exactly one name per node (no link count, no shared data), so
  * the call returns -EPERM, the POSIX errno for "the filesystem does not
@@ -4708,25 +4783,19 @@ static int32_t do_link(const char *oldname, const char *newname, int follow)
     if (rc != 0) {
         return rc;
     }
-    if (vfs_synth_vpath(src.mnt, src.node) || mnt_is_root(src.mnt)) {
-        vfs_ref_release(&src);
-        return -EPERM;
-    }
-    rc = vfs_getattr(src.mnt, src.node, &st);
-    if (rc == 0 && (st.mode & 0170000u) == 0040000u) {
-        rc = -EPERM;
-    }
-    if (rc != 0) {
-        vfs_ref_release(&src);
-        return rc;
-    }
     rc = vfs_resolve(0, newname, VFS_WALK_PARENT, &parent, leaf, sizeof(leaf));
     if (rc != 0) {
         vfs_ref_release(&src);
         return rc;
     }
+    /* Linux's order: another mount, then a directory or a type without
+     * links, then a read-only mount, then the parent's write bit. */
     if (parent.mnt != src.mnt) {
         rc = -EXDEV;
+    } else if (vfs_synth_vpath(src.mnt, src.node) || mnt_is_root(src.mnt)) {
+        rc = -EPERM;
+    } else if (vfs_getattr(src.mnt, src.node, &st) == 0 && (st.mode & 0170000u) == 0040000u) {
+        rc = -EPERM;
     } else if (parent.mnt->flags & VFS_MS_RDONLY) {
         rc = -EROFS;
     } else {
@@ -4768,7 +4837,7 @@ static int32_t do_symlink(const char *target, const char *newname)
     }
     if (rc == 0) {
         vfs_ns_lock(parent.mnt);
-        rc = parent.mnt->type->ops->symlink(parent.mnt, parent.node, leaf, target);
+        rc = vfs_symlink(parent.mnt, parent.node, leaf, target);
         vfs_ns_unlock(parent.mnt);
     }
     vfs_ref_release(&parent);
@@ -4779,7 +4848,7 @@ static int32_t sys_symlink(isr_params_t *params)
 {
     const char __user *utarget = (const char __user *)params->ebx;
     const char __user *unew = (const char __user *)params->ecx;
-    char target[256];
+    char target[VFS_WALK_PATH_MAX];
     char newbuf[256];
     int len;
 
@@ -4802,7 +4871,7 @@ static int32_t sys_symlinkat(isr_params_t *params)
     const char __user *utarget = (const char __user *)params->ebx;
     int newdirfd = (int)params->ecx;
     const char __user *unew = (const char __user *)params->edx;
-    char target[256];
+    char target[VFS_WALK_PATH_MAX];
     char newbuf[256];
     int len;
 
@@ -5305,10 +5374,7 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
         vfs_ref_release(&ref);
     }
 
-    /* The type comes from the node, as it does in the stat64 path. This read
-     * S_IFREG for everything, so a directory stated through the old ABI came
-     * back a regular file; musl reaches this only when statx and fstatat64 are
-     * both unavailable, which is why it went unnoticed. */
+    /* The type comes from the node, as it does in the stat64 path. */
     kst.st_mode = (unsigned short)((KRFFS_IS_DIR(node->mode) ? S_IFDIR : S_IFREG) |
                                    (node->mode & 07777));
     kst.st_nlink = 1;                              /* Always 1 for KRFFS */
@@ -7156,6 +7222,10 @@ static int32_t sys_utimensat(isr_params_t *params)
     int flags = (int)params->esi;
     char pathbuf[256];
     struct kernel_timespec ktimes[2];
+
+    if (flags & ~AT_SYMLINK_NOFOLLOW) {
+        return -EINVAL;
+    }
     const struct kernel_timespec *times = NULL;
     const char *name;
     krffs_node_t *node;

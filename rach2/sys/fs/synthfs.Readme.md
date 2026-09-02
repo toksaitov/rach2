@@ -87,7 +87,7 @@ Each live `/proc/<pid>` directory contains `stat`, `cmdline`, and `fd`:
 * `cmdline` contains one NUL-terminated argument: the stored program basename. The kernel retains no full argument vector. The basename is limited to 15 bytes, is inherited by `fork`, and is replaced by `execve`.
 * `fd` lists the process's open descriptors as magic links. Targets include KRFFS paths, `/dev` paths, pty endpoints, synthetic directories, `pipe:[inode]`, and `socket:[inode]`.
 
-Following `/proc/self` produces the numeric pid directory. Following `/proc/<pid>/fd/N` produces the target descriptor's stat identity; `lstat` sees the link itself. This is the identity check used by musl's `ttyname` implementation.
+Following `/proc/self` produces the numeric pid directory. Following `/proc/<pid>/fd/N` produces the target descriptor's stat identity; `lstat` sees the link itself. This is the identity check used by musl's `ttyname` implementation. `open` of `/proc/<pid>/fd/N` answers `ENOENT`: the link is not reopened as the descriptor it names. Under `O_NOFOLLOW` either link answers `ELOOP`, and under `O_CREAT|O_EXCL` it answers `EEXIST`, as a link on a mounted type does.
 
 ## Snapshot lifetime
 

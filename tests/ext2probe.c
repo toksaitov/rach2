@@ -16,19 +16,27 @@
 
 typedef unsigned int size_t;
 
-#define SYS_EXIT     1
-#define SYS_READ     3
-#define SYS_WRITE    4
-#define SYS_OPEN     5
-#define SYS_CLOSE    6
-#define SYS_LINK     9
-#define SYS_MOUNT    21
-#define SYS_MKDIR    39
-#define SYS_UMOUNT2  52
-#define SYS_SYMLINK  83
-#define SYS_READLINK 85
-#define SYS_STAT64   195
-#define SYS_LSTAT64  196
+#define SYS_EXIT      1
+#define SYS_READ      3
+#define SYS_WRITE     4
+#define SYS_OPEN      5
+#define SYS_CLOSE     6
+#define SYS_LINK      9
+#define SYS_MOUNT     21
+#define SYS_MKDIR     39
+#define SYS_UMOUNT2   52
+#define SYS_SYMLINK   83
+#define SYS_READLINK  85
+#define SYS_STAT64    195
+#define SYS_LSTAT64   196
+#define SYS_STAT      106
+#define SYS_LSTAT     107
+#define SYS_FSTATAT64 300
+#define SYS_UTIMENSAT 320
+
+#define AT_FDCWD            (-100)
+#define AT_SYMLINK_NOFOLLOW 0x100
+#define AT_SYMLINK_FOLLOW   0x400
 
 #define O_RDONLY   0
 #define O_WRONLY   1
@@ -41,6 +49,8 @@ typedef unsigned int size_t;
 #define EPERM  1
 #define ENOENT 2
 #define EEXIST 17
+#define EXDEV  18
+#define EINVAL 22
 #define EROFS  30
 #define ELOOP  40
 
@@ -62,6 +72,13 @@ static int sys3(int n, int a, int b, int c)
 {
     int r;
     __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
+    return r;
+}
+
+static int sys4(int n, int a, int b, int c, int d)
+{
+    int r;
+    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c), "S"(d) : "memory");
     return r;
 }
 
@@ -190,6 +207,14 @@ static void expect_open(const char *path, int flags, int want, const char *what)
     }
 }
 
+/* The mode word of the stat64 buffer. */
+static int st_mode(void)
+{
+    return (int)(st[16] | (st[17] << 8) | (st[18] << 16) | (st[19] << 24));
+}
+
+static char big[512];
+
 static void links_rows(void)
 {
     char buf[64];
@@ -223,7 +248,8 @@ static void links_rows(void)
     if (n != -ELOOP) {
         fail_with("a chain of forty-one links answers ELOOP", n);
     }
-    /* O_NOFOLLOW asks for the link, which open cannot open. */
+    /* Under O_NOFOLLOW a link at the end is the result, and open cannot
+       open a link. */
     expect_open("/e2/fast", O_RDONLY | O_NOFOLLOW, ELOOP, "O_NOFOLLOW on a link answers ELOOP");
     expect_open("/e2/hello.txt", O_RDONLY | O_NOFOLLOW, 0, "O_NOFOLLOW on a file opens it");
     /* O_CREAT|O_EXCL on a dangling link: the link is there. */
@@ -261,7 +287,7 @@ static void links_rows(void)
     if (n != -20) {
         fail_with("a link in the middle of a path is followed to its file", n);
     }
-    /* Hard links: the count, and a directory refused. */
+    /* The hard-link rows a read-only volume can answer. */
     if (stat_nlink("/e2/hello.txt") != 2 || stat_nlink("/e2/hello.link") != 2) {
         fail("a hard link's count is two on both names");
     }
@@ -277,6 +303,58 @@ static void links_rows(void)
     if (sys2(SYS_SYMLINK, (int)"x", (int)"/newlink") != -EPERM) {
         fail("a symbolic link on the KRFFS root answers EPERM");
     }
+    if (sys2(SYS_LINK, (int)"/e2/hello.txt", (int)"/another") != -EXDEV) {
+        fail("a hard link across mounts answers EXDEV");
+    }
+    /* O_CREAT through a dangling link is the target's creation, which the
+       read-only mount refuses; it must answer and not loop. */
+    expect_open("/e2/dangling", O_WRONLY | O_CREAT, EROFS,
+                "O_CREAT through a dangling link creates the target, refused read-only");
+    expect_open("/e2/fast", O_WRONLY | O_CREAT | O_EXCL, EEXIST,
+                "O_CREAT|O_EXCL on a link with a target answers EEXIST");
+    /* readlink: a short buffer, an empty one, no terminator, a long target. */
+    buf[1] = 'Z';
+    n = sys3(SYS_READLINK, (int)"/e2/fast", (int)buf, 1);
+    if (n != 1 || buf[0] != 'h' || ((volatile char *)buf)[1] != 'Z') {
+        fail_with("readlink into a one-byte buffer gives one byte and no terminator", n);
+    }
+    n = sys3(SYS_READLINK, (int)"/e2/fast", (int)buf, 0);
+    if (n != -EINVAL) {
+        fail_with("readlink into an empty buffer answers EINVAL", n);
+    }
+    n = sys3(SYS_READLINK, (int)"/e2/long300", (int)big, sizeof(big));
+    if (n != 300 || big[0] != 'x' || big[299] != 'x') {
+        fail_with("readlink gives a 300-byte target", n);
+    }
+    /* fstatat64 with and without AT_SYMLINK_NOFOLLOW, and an invalid flag. */
+    if (sys4(SYS_FSTATAT64, AT_FDCWD, (int)"/e2/fast", (int)st, AT_SYMLINK_NOFOLLOW) != 0 ||
+        (st_mode() & 0170000) != 0120000) {
+        fail("fstatat64 with AT_SYMLINK_NOFOLLOW reports the link");
+    }
+    if (sys4(SYS_FSTATAT64, AT_FDCWD, (int)"/e2/fast", (int)st, 0) != 0 ||
+        (st_mode() & 0170000) != 0100000) {
+        fail("fstatat64 without it reports the target");
+    }
+    if (sys4(SYS_FSTATAT64, AT_FDCWD, (int)"/e2/fast", (int)st, AT_SYMLINK_FOLLOW) != -EINVAL) {
+        fail("fstatat64 with AT_SYMLINK_FOLLOW answers EINVAL");
+    }
+    if (sys4(SYS_UTIMENSAT, AT_FDCWD, (int)"/e2/fast", 0, AT_SYMLINK_FOLLOW) != -EINVAL) {
+        fail("utimensat with AT_SYMLINK_FOLLOW answers EINVAL");
+    }
+    /* The old stat and lstat, whose mode is a 16-bit word at offset 8. */
+    if (sys2(SYS_LSTAT, (int)"/e2/fast", (int)st) != 0 ||
+        ((st[8] | (st[9] << 8)) & 0170000) != 0120000) {
+        fail("the old lstat reports the link");
+    }
+    if (sys2(SYS_STAT, (int)"/e2/fast", (int)st) != 0 ||
+        ((st[8] | (st[9] << 8)) & 0170000) != 0100000) {
+        fail("the old stat reports the target");
+    }
+    /* The links of /proc answer the same two ways. */
+    expect_open("/proc/self", O_RDONLY | O_NOFOLLOW, ELOOP,
+                "/proc/self under O_NOFOLLOW answers ELOOP");
+    expect_open("/proc/self/fd/1", O_WRONLY | O_CREAT | O_EXCL, EEXIST,
+                "/proc/self/fd/1 under O_CREAT|O_EXCL answers EEXIST");
 }
 
 __asm__(".global _start\n"
