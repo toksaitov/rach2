@@ -55,8 +55,9 @@ run_one "rach2.nousb" usb \
 
 # All four at once, which is what a person types when the boot stops and they
 # do not yet know which probe did it. Every probe must be skipped and the
-# machine must still reach a shell. The four are named in the order the boot
-# prints them, because each `expect` reads on from where the last one matched.
+# machine must still reach a shell. The five are named in the order the boot
+# prints them, the USB stack after the root since milestone 42, because each
+# `expect` reads on from where the last one matched.
 if ! "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
         --qemu-arg=-cpu --qemu-arg=max \
         --append "rach2.noaudio rach2.nomouse rach2.nonet rach2.nodisk rach2.nousb" \
@@ -64,9 +65,9 @@ if ! "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
         --never "audio: started" --never "mouse: started" \
         --never "net: started" --never "block: started" --never "usb: started" \
         "expect=mouse: skipped: rach2.nomouse" \
-        "expect=usb: skipped: rach2.nousb" \
         "expect=audio: skipped: rach2.noaudio" \
         "expect=block: skipped: rach2.nodisk" \
+        "expect=usb: skipped: rach2.nousb" \
         "expect=net: skipped: rach2.nonet" \
         "expect=Type 'help'" >/dev/null 2>&1; then
     echo "subset-test: FAIL: with every device switched off the machine did" >&2
@@ -81,8 +82,8 @@ if ! "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
         --qemu-arg=-cpu --qemu-arg=max \
         --timeout 90 --ok "Type 'help'" \
         --never "skipped: rach2.no" \
-        "expect=mouse: started" "expect=usb: started" "expect=audio: started" \
-        "expect=block: started" "expect=net: started" \
+        "expect=mouse: started" "expect=audio: started" "expect=block: started" \
+        "expect=usb: started" "expect=net: started" \
         "expect=Type 'help'" >/dev/null 2>&1; then
     echo "subset-test: FAIL: an ordinary boot did not run all five probes" >&2
     exit 1

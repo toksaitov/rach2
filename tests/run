@@ -17,7 +17,8 @@ set -u
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 # e2fsprogs, where a package manager keeps it off the path; the suites that
 # name mke2fs or e2fsck find them where the build does.
-. "$REPO/tools/setup/e2fsprogs_path.sh"
+# Where the tree has it; the runner's own self-test drives a tree that does not.
+[ -f "$REPO/tools/setup/e2fsprogs_path.sh" ] && . "$REPO/tools/setup/e2fsprogs_path.sh"
 REGISTRY="$REPO/tests/registry"
 [ -f "$REGISTRY" ] || { echo "run: missing $REGISTRY" >&2; exit 1; }
 
