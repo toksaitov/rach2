@@ -250,6 +250,55 @@ fi
 # ---- and that nothing on this machine has been refused a command ----
 note "(the saved boot log above is the whole of what this machine printed)"
 
+# ---- the partitions as mounts. Written for milestone 36 and run in milestone
+#      43: the partition nodes the MBR gives this machine, the boot partition
+#      mounted read-only through the shell with its files the sizes bootctl
+#      reports for its slots, and, when the boot line has rach2.blocklag=N,
+#      the lag check through the shell: a read through the lag device sleeps
+#      its reader while a loop in another shell keeps counting, which is the
+#      scheduler's part of the block path and the thing no host test can
+#      show. A machine with no partition nodes is not broken; this is a note
+#      there. ----
+NODES="$(run 'ls /dev 2>/dev/null' | grep '^disk0p[1-4]$' | tr '\n' ' ')"
+if [ -z "$NODES" ]; then
+    note "partitions: no partition nodes (no disk, or an empty table)"
+else
+    note "partitions: $NODES"
+    OUT="$(run 'mkdir -p /mnt/accept-boot && mount -r -t vfat /dev/disk0p1 /mnt/accept-boot && ls -l /mnt/accept-boot/boot /mnt/accept-boot/boot/grub; umount /mnt/accept-boot; rmdir /mnt/accept-boot')"
+    if [ -z "$OUT" ]; then
+        note "partitions: /dev/disk0p1 is not a FAT volume this kernel mounts"
+    else
+        # The listing's sizes against the slot report: the same bytes read
+        # through two paths, the FAT driver and bootslot's own walk.
+        SLOTS="$(run 'bootctl status 2>/dev/null')"
+        for name in kernel fallback boot.cfg grubenv; do
+            size="$(echo "$OUT" | awk -v n="$name" '$NF == n { print $5 }')"
+            case "$name" in
+                kernel) key=candidate ;;
+                *) key="$name" ;;
+            esac
+            said="$(echo "$SLOTS" | awk -F'[ ,]+' -v n="$key" '$2 == n":" { for (i = 1; i <= NF; i++) if ($(i+1) == "bytes") print $i }')"
+            if [ -n "$size" ] && [ "$size" = "$said" ]; then
+                note "partitions: /boot/$name is $size bytes on the mount and in the slot report"
+            else
+                bad "partitions: /boot/$name is [$size] bytes on the mount and [$said] in the slot report"
+            fi
+        done
+    fi
+    if run 'cat /proc/cmdline' | grep -q 'rach2.blocklag='; then
+        # 64 KiB in eight-sector requests is sixteen sleeps of N ticks each;
+        # a loop that counted nothing meanwhile is a reader that never slept.
+        OUT="$(run 'rm -f /tmp/accept-lag; (dd if=/dev/disk0p1 of=/dev/null bs=65536 count=1 2>/dev/null; touch /tmp/accept-lag) & i=0; while [ ! -f /tmp/accept-lag ]; do i=$((i + 1)); done; rm -f /tmp/accept-lag; echo $i')"
+        case "$OUT" in
+            ''|*[!0-9]*) bad "partitions: the lag check gave no count: $OUT" ;;
+            0) bad "partitions: the shell counted nothing while the read slept through the lag" ;;
+            *) note "partitions: the shell counted to $OUT while a 64 KiB read slept through the lag" ;;
+        esac
+    else
+        note "partitions: the lag check needs rach2.blocklag=N on the boot line"
+    fi
+fi
+
 # ---- the ext2 root, once milestone 43 has made it: the candidate's command
 #      line names it, the mount table has it writable on the fourth partition,
 #      the boot came from the candidate slot, the boot log shows no check, and
