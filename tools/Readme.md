@@ -5,9 +5,11 @@ The scripts under `tools/` are grouped by role: `setup/` prepares and reports on
 ## Machine setup
 
 To build and boot Rach2 a machine needs GNU Make, a host C compiler, the
-`i686-elf` freestanding cross toolchain, QEMU, `ssh-keygen`, and the POSIX
-text utilities. To pass `tests/run style` it also needs cppcheck, ShellCheck,
-and clang-format. The six suites that build a GRUB disk need mtools; a plain
+`i686-elf` freestanding cross toolchain, QEMU, `ssh-keygen`, e2fsprogs 1.43
+or later, and the POSIX text utilities. The build finds `mke2fs`, `debugfs`
+and `e2fsck` on the path, under the Homebrew keg, which is never linked, or
+under `/sbin` and `/usr/sbin`, where Debian keeps them. To pass `tests/run
+style` it also needs cppcheck, ShellCheck, and clang-format. The six suites that build a GRUB disk need mtools; a plain
 `make` builds the three RAM images and reaches none of it. Nothing is fetched
 during a build: the five vendored projects are pinned tarballs already in the
 tree.
@@ -26,7 +28,7 @@ installer prints, because it does not put `brew` on the path itself.
         https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
     eval "$(/opt/homebrew/bin/brew shellenv)"
 
-    brew install i686-elf-gcc i686-elf-binutils qemu mtools \
+    brew install i686-elf-gcc i686-elf-binutils qemu mtools e2fsprogs \
                  cppcheck shellcheck clang-format
 
 `ssh-keygen` ships with macOS. `xorriso` builds the optional ISOs
@@ -37,7 +39,7 @@ mount` mount an image on the host; neither is needed to build or test.
 
 The archive has everything except the cross toolchain.
 
-    sudo apt install build-essential curl qemu-system-x86 mtools \
+    sudo apt install build-essential curl qemu-system-x86 mtools e2fsprogs \
                      openssh-client cppcheck shellcheck clang-format
 
 `xorriso` builds the optional ISOs, and `pkg-config` with `libfuse-dev` lets
@@ -84,6 +86,9 @@ prefix works; one built for another target does not.
   cache hit and repeats its compile probes only when the environment changed.
   A missing tool fails the build, named, before compilation. `--report`
   prints one line per tool without caching.
+* `setup/e2fsprogs_path.sh` is the one place the three e2fsprogs programs are
+  looked for off the path, sourced by `preflight.sh`, `doctor.sh` and
+  `image/mkext2.sh`.
 * `setup/doctor.sh` is the wider machine report, in four tiers: what a build
   and run need, which is everything `preflight.sh` requires plus QEMU; the
   three tools `tests/run style` refuses to start without; the four mtools

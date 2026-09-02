@@ -23,15 +23,24 @@ STAMP="$REPO/build/.preflight"
 SELF="$REPO/tools/setup/preflight.sh"
 
 # The tools the default build needs. Suites declare their own runtime tools
-# in tests/registry; QEMU is a suite tool, not a build tool.
+# in tests/registry; QEMU is a suite tool, not a build tool. The three
+# e2fsprogs programs build and check the ext2 root image: mke2fs writes it,
+# debugfs sets the owners a build that is not root cannot, e2fsck checks it.
 TOOLS="make cc i686-elf-gcc i686-elf-ld i686-elf-ar i686-elf-strip \
-       i686-elf-objcopy awk sed tar gzip bzip2 patch ssh-keygen"
+       i686-elf-objcopy awk sed tar gzip bzip2 patch ssh-keygen \
+       mke2fs debugfs e2fsck"
+
+# Where e2fsprogs is found when it is not on the path: the Homebrew keg, which
+# does not link it, and the administrator's directories Debian keeps it in.
+# tools/image/mkext2.sh looks in the same places.
+. "$(dirname "$0")/e2fsprogs_path.sh"
 
 hint() {
     case "$1" in
         i686-elf-*) echo "brew install i686-elf-gcc i686-elf-binutils, or see tools/Readme.md" ;;
         cc)         echo "install Xcode Command Line Tools or a C compiler package" ;;
         ssh-keygen) echo "install the OpenSSH client package" ;;
+        mke2fs|debugfs|e2fsck) echo "brew install e2fsprogs, or apt install e2fsprogs" ;;
         *)          echo "install it with your package manager" ;;
     esac
 }
@@ -80,6 +89,13 @@ probe() {
     if ! i686-elf-gcc -m32 -ffreestanding -c -o "$work/t.o" "$work/t.c" 2>"$work/err"; then
         echo "preflight: i686-elf-gcc cannot compile a freestanding object:" >&2
         sed 's/^/  /' "$work/err" >&2
+        return 1
+    fi
+    # mke2fs must take the options mkext2.sh gives it: a source directory and
+    # a named feature set. An e2fsprogs old enough to lack -d would build no
+    # image and fail later with less to say.
+    if ! mke2fs 2>&1 | grep -q -- '-d root-directory'; then
+        echo "preflight: mke2fs does not take -d; e2fsprogs 1.43 or later is needed" >&2
         return 1
     fi
     [ -n "$report" ] && echo "preflight: result: host and cross compile probes passed"

@@ -35,6 +35,7 @@ hint() {
     openssh)  [ "$MAC" = 1 ] && echo "preinstalled with macOS (or brew install openssh)" \
                              || echo "apt install openssh-client" ;;
     mtools)   [ "$MAC" = 1 ] && echo "brew install mtools" || echo "apt install mtools" ;;
+    e2fsprogs) [ "$MAC" = 1 ] && echo "brew install e2fsprogs" || echo "apt install e2fsprogs" ;;
     xorriso)  [ "$MAC" = 1 ] && echo "brew install xorriso" || echo "apt install xorriso" ;;
     docker)   [ "$MAC" = 1 ] && echo "brew install --cask docker (Docker Desktop)" \
                              || echo "apt install docker.io" ;;
@@ -137,6 +138,27 @@ keygen_dir=
 
 echo
 echo "Required to verify (tests/run style refuses to run without these):"
+# e2fsprogs builds and checks the ext2 root image at every build: the three
+# programs, found where preflight.sh finds them, and mke2fs probed for the
+# -d option the image build needs, which e2fsprogs before 1.43 lacks.
+. "$(dirname "$0")/e2fsprogs_path.sh"
+for t in mke2fs debugfs e2fsck; do
+    # -V rather than --version: debugfs takes an unknown option as none and
+    # opens its prompt on standard input, which is a hang under a script.
+    if command -v "$t" >/dev/null 2>&1 && "$t" -V >/dev/null 2>&1 </dev/null; then
+        row "[PASS]" "$t" "$(command -v "$t")"
+    else
+        row "[MISSING]" "$t" "$(hint e2fsprogs)"
+        missing=$((missing + 1))
+    fi
+done
+if mke2fs 2>&1 | grep -q -- '-d root-directory'; then
+    row "[PASS]" "mke2fs -d" "$(mke2fs -V 2>&1 | head -1)"
+else
+    row "[MISSING]" "mke2fs -d" "e2fsprogs 1.43 or later; $(hint e2fsprogs)"
+    missing=$((missing + 1))
+fi
+
 req cppcheck     cppcheck
 req shellcheck   shellcheck
 req clang-format clang-format
