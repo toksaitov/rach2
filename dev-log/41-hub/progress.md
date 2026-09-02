@@ -16,7 +16,7 @@ Phase 3: the core on a tree
 - [x] the hub model and hub_hosttest.c's enumeration and close rows
 
 Phase 4: the hub driver
-- [ ] hub.c in full; the rest of hub_hosttest.c
+- [x] hub.c in full; the rest of hub_hosttest.c
 
 Phase 5: the suite
 - [ ] the usb.sh hub boots, usbprobe's tree, the eight-device boot

@@ -1,8 +1,7 @@
-Phase 3 is closed; phase 4, the hub driver in full, is next.
-Evidence gathered: hub_hosttest passes every row; usb and usbdisk pass; a
-keyboard behind QEMU's hub enumerates at port 5.2 and closes before the hub;
-three of four mutations caught, the fourth recorded as uncatchable.
-Next action: the change endpoint and its bitmap, the hub-level status, port
-changes with the old subtree closed first, enable lost, over-current, the
-multi-TT setting, and the failure cases, with their rows.
-File being read when written: dev-log/41-hub/plan.md, phase 4.
+Phase 4 is closed; phase 5, the suite, is next.
+Evidence gathered: hub_hosttest passes every row; seven mutations caught; a
+keyboard plugged into QEMU's hub after the boot enumerates, leaves and comes
+back, and a stick behind the hub mounts.
+Next action: the usb.sh hub boots, usbprobe's tree, the device-table boot,
+and the acceptance script's hub fixtures.
+File being read when written: dev-log/41-hub/plan.md, phase 5.

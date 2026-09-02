@@ -180,6 +180,64 @@ The first attempt at the second mutation did not build, an unused static
 function under `-Werror`, and the script read a stale log as an escape; it
 now reports a build that failed as such.
 
+## Phase 4 record
+
+The change endpoint: one transfer always outstanding, of `(ports + 1 + 7) /
+8` bytes, put out again at each answer; its bitmap goes into a word of
+pending changes, bit 0 the hub and bit N port N, and the running arm deals
+with them one request at a time, the hub's own status for bit 0 with its
+local-power and over-current changes cleared, and a port's status for its
+bit with every change bit acknowledged by its own `CLEAR_PORT_FEATURE`. A
+connection change tells the core, which closes the old subtree first. An
+enable lost closes the device and tells the core the connection is there
+again. An over-current powers the port off, closes the device, powers on
+once after a second, and leaves the port off with a record on a second
+over-current; a port left off or waiting for its power reports no
+connection. A multi-TT hub has `SET_INTERFACE` alternate 1 sent before the
+controller is told, and one that refuses it is told with one translator. A
+stalled change endpoint, or a request unanswered for half a second, gives
+the hub up with its subtree.
+
+In QEMU, with `usb-hub` and a mouse behind it, a keyboard plugged into hub
+port 3 after the boot enumerates at `port 5.3`, its pull records `port 5.3:
+gone`, and a keyboard plugged in again enumerates again; a stick behind the
+hub passes `usbdiskprobe volumes`.
+
+The model gained the change endpoint, the hub's status, port change words,
+power off and on, `SET_INTERFACE`, a stalled change endpoint, and the rule
+that a reset change never acknowledged refuses the next reset on that port.
+Rows: the transfer out once the hub is up and out again after each answer,
+a keyboard plugged in after the hub is up enumerated with its connection
+change cleared on its port, pulled and gone, the hub's local-power change
+read and cleared, a connection change with the device still there closing
+the old before the new, an enable lost closing the device and clearing its
+change, an over-current powering off and closing, on again after a second,
+and left off when it recurs, a multi-TT hub's setting selected and told,
+one that refuses told with one translator, and a stalled change endpoint
+closing the hub with its child.
+
+Mutations, each caught: the power-good wait skipped, `no port is read
+before the power-good time`; the scan after it skipped, `the keyboard on
+port 2 is found and enumerated`; the wrong change bit cleared, `acknowledged
+with C_PORT_CONNECTION on port 4`; the speed read from the wrong bit, `at
+low speed, read from the status word`, once the row read the speed the core
+opened the device with rather than the model's own; the change transfer put
+out only once, `with the transfer out a third time`; `C_PORT_RESET` never
+cleared, caught by `its port was reset through the hub and the reset change
+cleared` and not by the second connection the plan named, because the
+driver also acknowledges a stale reset change through the change path; a
+connection change enumerated without closing what was there, `a connection
+change with the device still there closes the old device`. The think time
+written into a child's location is the controller test's row from phase 2,
+since the location has no such field. Two mutations first failed to build,
+an unused variable and an unused function; both were re-made in a form that
+builds.
+
+A hub with three devices behind it comes up under QEMU in about half a
+second from the hub's own enumeration: the hub at 0.31 s, its keyboard at
+0.68 s; each device behind it is a few dozen control transfers through the
+one command turn.
+
 ## Open items
 
 * None yet.
