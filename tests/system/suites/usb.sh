@@ -2,9 +2,9 @@
 #
 # usb.sh: the USB stack, from a port to a keystroke.
 #
-# Fifteen boots, because what has to be proved differs in each.
+# Twenty-one boots, because what has to be proved differs in each.
 #
-# The machine has no 8042 in the eight boots that type a key or move a mouse.
+# The machine has no 8042 in the eleven boots that type a key or move a mouse.
 # That is the whole point of the option: with a PS/2 keyboard and mouse
 # present, a typed key or a moved mouse could have arrived by either road, and
 # a check that passes either way says nothing about the one this milestone
