@@ -339,6 +339,99 @@ static long find_level_between(const unsigned char *hay, size_t from, size_t to)
     return -1;
 }
 
+/**
+ * Score the kernel's own checks: 1 when the group passed, with the count
+ * in `detail`, 0 with the reason in `detail` otherwise. The kernel runs a
+ * dozen of them at every boot and reports each as a record.
+ *
+ * Two things are required. The summary must be there, which a boot that
+ * stopped part way through the group would not have. And no error record
+ * may appear between the group's first record and that summary, which is
+ * where a failed check reports itself. The interval is what makes the
+ * second check usable at all: the fault probes later in this run print
+ * error records on purpose, and a rule over the whole log would refuse
+ * every passing run.
+ */
+static int score_kernel_selftest(const unsigned char *buf, size_t buf_len,
+                                 char *detail, size_t size)
+{
+    int ok = 0;
+
+    snprintf(detail, size,
+             "the kernel ran none");
+    {
+        long start = find_text(buf, buf_len, 0, "<6>[", "] selftest: started");
+        long summary = -1;
+        long bad = -1;
+
+        if (start >= 0) {
+            /* A summary that says failed is an error record, so it is looked
+               for at that level as well as at the level a passing one has. */
+            long said = find_text(buf, buf_len, (size_t) start, "<6>[",
+                                  "] selftest: result: ");
+
+            if (said < 0)
+                said = find_text(buf, buf_len, (size_t) start, "<3>[",
+                                 "] selftest: result: ");
+
+            summary = find_text(buf, buf_len, (size_t) start, "<6>[",
+                                "] selftest: result: passed: ");
+            if (summary < 0) {
+                /* The summary the kernel printed, if it printed one: "failed:
+                   2 of 12" says which run this was, and "no summary record"
+                   says the group did not finish. */
+                if (said >= 0) {
+                    /* Past the timestamp, whose width is not fixed. */
+                    const char *from = strstr((const char *) buf + said,
+                                              "] selftest: result: ") +
+                                       strlen("] selftest: result: ");
+                    size_t n = 0;
+
+                    while (from[n] != '\0' && from[n] != '\n' && from[n] != '\r' &&
+                           n + 1 < size)
+                        n++;
+                    snprintf(detail, size,
+                             "%.*s", (int) n, from);
+                } else {
+                    snprintf(detail, size,
+                             "no summary record");
+                }
+            } else {
+                const char *count_at = (const char *) buf + summary;
+                long said;
+
+                /* The count is the last field of the summary, so it is read
+                   from the text rather than counted from the offset: the
+                   timestamp between the two halves is not a fixed width. */
+                while (*count_at != '\n' &&
+                       memcmp(count_at, "passed: ", 8) != 0)
+                    count_at++;
+                said = strtol(count_at + 8, (char **) 0, 10);
+                long held = count_records(buf, (size_t) start,
+                                          (size_t) summary, "] selftest: ");
+
+                bad = find_level_between(buf, (size_t) start,
+                                         (size_t) summary);
+                if (bad >= 0) {
+                    snprintf(detail, size,
+                             "a check reported an error");
+                } else if (said + 1 != held) {
+                    /* One record per check, and one for the group's start.
+                       A kernel that printed the summary without running the
+                       checks, or that lost some of them, disagrees here. */
+                    snprintf(detail, size,
+                             "%ld checks said, %ld records", said, held - 1);
+                } else {
+                    ok = 1;
+                    snprintf(detail, size,
+                             "%ld of the kernel's own", said);
+                }
+            }
+        }
+    }
+    return ok;
+}
+
 /* ---- the selftest ---- */
 
 static int selftest(void)
@@ -448,6 +541,63 @@ static int selftest(void)
             }
         }
         n += scan_n;
+    }
+    /* The kernel's own checks, read from a transcript: the summary at its
+       level, passed or failed, the count against the records, and an error
+       record inside the group. */
+    {
+        static const struct {
+            const char *name;
+            const char *log;
+            const char *want_detail;
+            int want_ok;
+        } groups[] = {
+            { "a passing group",
+              "<6>[0.26] selftest: started\n"
+              "<6>[0.27] selftest: memory: passed\n"
+              "<6>[0.28] selftest: timer: passed\n"
+              "<6>[1.11] selftest: result: passed: 2\n", "2 of the kernel's own",
+              1 },
+            { "a failing group's summary is an error record",
+              "<6>[0.51] selftest: started\n"
+              "<6>[0.53] selftest: memory: passed\n"
+              "<3>[0.93] selftest: clock: failed: 2000 us asked, 2001 us seen\n"
+              "<3>[10.84] selftest: result: failed: 1 of 2\n", "failed: 1 of 2",
+              0 },
+            { "a group that never finished",
+              "<6>[0.26] selftest: started\n"
+              "<6>[0.27] selftest: memory: passed\n", "no summary record", 0 },
+            { "an error record inside a passing group",
+              "<6>[0.26] selftest: started\n"
+              "<3>[0.27] pit: lost a period\n"
+              "<6>[0.28] selftest: memory: passed\n"
+              "<6>[1.11] selftest: result: passed: 1\n",
+              "a check reported an error", 0 },
+            { "a summary that counts more than it ran",
+              "<6>[0.26] selftest: started\n"
+              "<6>[0.28] selftest: memory: passed\n"
+              "<6>[1.11] selftest: result: passed: 3\n", "3 checks said, 1 records",
+              0 },
+            { "no group at all", "boot\n", "the kernel ran none", 0 }
+        };
+        int k, group_n = (int) (sizeof(groups) / sizeof(groups[0]));
+
+        for (k = 0; k < group_n; k++) {
+            char detail[128];
+            int ok = score_kernel_selftest((const unsigned char *) groups[k].log,
+                                           strlen(groups[k].log), detail,
+                                           sizeof(detail));
+
+            if (ok != groups[k].want_ok ||
+                strcmp(detail, groups[k].want_detail) != 0) {
+                printf("  FAIL: %s: expected ('%s', %s), got ('%s', %s)\n",
+                       groups[k].name, groups[k].want_detail,
+                       groups[k].want_ok ? "True" : "False", detail,
+                       ok ? "True" : "False");
+                bad++;
+            }
+        }
+        n += group_n;
     }
     if (bad) {
         printf("runtests: selftest: %d of %d cases failed\n", bad, n);
@@ -808,81 +958,8 @@ int main(int argc, char **argv)
         }
     }
 
-    /* The kernel's own checks. It runs a dozen of them at every boot and
-       reports each as a record; before this, nothing here read them, so a
-       boot whose checks all failed still passed the suite.
-
-       Two things are required. The summary must be there, which a boot that
-       stopped part way through the group would not have. And no error record
-       may appear between the group's first record and that summary, which is
-       where a failed check reports itself. The interval is what makes the
-       second check usable at all: the fault probes later in this run print
-       error records on purpose, and a rule over the whole log would refuse
-       every passing run. */
-    snprintf(selftest_detail, sizeof(selftest_detail),
-             "the kernel ran none");
-    {
-        long start = find_text(buf, buf_len, 0, "<6>[", "] selftest: started");
-        long summary = -1;
-        long bad = -1;
-
-        if (start >= 0) {
-            long said = find_text(buf, buf_len, (size_t) start, "<6>[",
-                                  "] selftest: result: ");
-
-            summary = find_text(buf, buf_len, (size_t) start, "<6>[",
-                                "] selftest: result: passed: ");
-            if (summary < 0) {
-                /* The summary the kernel printed, if it printed one: "failed:
-                   2 of 12" says which run this was, and "no summary record"
-                   says the group did not finish. */
-                if (said >= 0) {
-                    const char *from = (const char *) buf + said +
-                                       strlen("<6>[0.00] selftest: ");
-                    size_t n = 0;
-
-                    while (from[n] != '\0' && from[n] != '\n' && from[n] != '\r' &&
-                           n + 1 < sizeof(selftest_detail))
-                        n++;
-                    snprintf(selftest_detail, sizeof(selftest_detail),
-                             "%.*s", (int) n, from);
-                } else {
-                    snprintf(selftest_detail, sizeof(selftest_detail),
-                             "no summary record");
-                }
-            } else {
-                const char *count_at = (const char *) buf + summary;
-                long said;
-
-                /* The count is the last field of the summary, so it is read
-                   from the text rather than counted from the offset: the
-                   timestamp between the two halves is not a fixed width. */
-                while (*count_at != '\n' &&
-                       memcmp(count_at, "passed: ", 8) != 0)
-                    count_at++;
-                said = strtol(count_at + 8, (char **) 0, 10);
-                long held = count_records(buf, (size_t) start,
-                                          (size_t) summary, "] selftest: ");
-
-                bad = find_level_between(buf, (size_t) start,
-                                         (size_t) summary);
-                if (bad >= 0) {
-                    snprintf(selftest_detail, sizeof(selftest_detail),
-                             "a check reported an error");
-                } else if (said + 1 != held) {
-                    /* One record per check, and one for the group's start.
-                       A kernel that printed the summary without running the
-                       checks, or that lost some of them, disagrees here. */
-                    snprintf(selftest_detail, sizeof(selftest_detail),
-                             "%ld checks said, %ld records", said, held - 1);
-                } else {
-                    selftest_ok = 1;
-                    snprintf(selftest_detail, sizeof(selftest_detail),
-                             "%ld of the kernel's own", said);
-                }
-            }
-        }
-    }
+    selftest_ok = score_kernel_selftest(buf, buf_len, selftest_detail,
+                                        sizeof(selftest_detail));
 
     for (i = 0; i < n_results; i++) {
         if (!results[i].ok)
