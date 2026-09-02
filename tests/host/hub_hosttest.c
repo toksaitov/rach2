@@ -172,7 +172,8 @@ static struct {
 /* The slots: what is on each, and where it was opened. */
 static struct {
     int kind;
-    int speed;
+    int speed;        /* what the model has there */
+    int opened_speed; /* what the core opened it with, from the status word */
     struct usb_location where;
     int open;
 } slot_of[16];
@@ -293,7 +294,7 @@ int xhci_device_open(const struct usb_location *where, int speed)
     }
     n = ++slots_given;
     slot_of[n].where = *where;
-    slot_of[n].speed = speed;
+    slot_of[n].opened_speed = speed;
     slot_of[n].kind = kind_at(where, &slot_of[n].speed);
     slot_of[n].open = 1;
     command_ok(n);
@@ -833,7 +834,7 @@ int main(void)
           model.hub_told_multi == 1 && model.hub_told_think == 2);
     CHECK("a low-speed keyboard below it is enumerated", kbd != 0);
     CHECK("at low speed, read from the status word",
-          kbd != 0 && slot_of[kbd].speed == USB_SPEED_LOW);
+          kbd != 0 && slot_of[kbd].opened_speed == USB_SPEED_LOW);
     CHECK("carrying the hub as its translator at port 3, per port",
           kbd != 0 && slot_of[kbd].where.tt_device == hub && slot_of[kbd].where.tt_port == 3 &&
               slot_of[kbd].where.tt_multi == 1);
