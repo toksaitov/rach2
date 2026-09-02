@@ -263,6 +263,44 @@ else
     note "no scratch partition yet (/dev/disk0p4 absent)"
 fi
 
+# ---- a flash drive, when one is plugged in. Written in milestone 40 and run
+#      in milestone 43 with the owner's stick, formatted with a GUID table and
+#      then with an MBR: the kernel names it, reports it as a block device,
+#      BusyBox finds its volume by label, and the volume takes a file and
+#      gives it back after an unmount that flushed the stick's own cache. A
+#      machine with nothing plugged in is a note, not a failure. The pull from
+#      under a mount and the boot from a Rach2 stick need a person in the
+#      room and are in dev-log/40-usbdisk/hardware.md. ----
+USBLINE="$(run 'cat /proc/usb 2>/dev/null' | grep '^usb0 ')"
+if [ -z "$USBLINE" ]; then
+    note "no flash drive is plugged in (/proc/usb names no usb0)"
+else
+    note "stick: $USBLINE"
+    case "$(run 'ls -l /dev/usb0 2>/dev/null')" in
+        b*) note "stick: /dev/usb0 is a block device" ;;
+        *)  bad "stick: /dev/usb0 is not a block device, so a label scan cannot find it" ;;
+    esac
+    run 'blkid 2>/dev/null' | grep '^/dev/usb0' | while read -r line; do note "stick: $line"; done
+    LABEL="$(run 'blkid 2>/dev/null' | grep '^/dev/usb0' | sed -n 's/.*LABEL="\([^"]*\)".*/\1/p' | head -1)"
+    if [ -z "$LABEL" ]; then
+        bad "stick: no volume with a label was found on it"
+    else
+        before="$(echo "$USBLINE" | sed -n 's/.*flushes \([0-9]*\).*/\1/p')"
+        OUT="$(run "mkdir -p /mnt && mount LABEL=$LABEL /mnt && echo accept > /mnt/accept.txt && cat /mnt/accept.txt && umount /mnt")"
+        after="$(run 'cat /proc/usb 2>/dev/null' | grep '^usb0 ' | sed -n 's/.*flushes \([0-9]*\).*/\1/p')"
+        if [ "$OUT" = "accept" ]; then
+            note "stick: the volume $LABEL mounts by its label, takes a file and gives it back"
+        else
+            bad "stick: the volume $LABEL did not take a write: $OUT"
+        fi
+        if [ -n "$before" ] && [ -n "$after" ] && [ "$after" -gt "$before" ]; then
+            note "stick: the unmount flushed its cache ($before to $after)"
+        else
+            bad "stick: the unmount did not flush its cache (${before:-?} to ${after:-?})"
+        fi
+    fi
+fi
+
 if [ "$fails" -gt 0 ]; then
     echo "metal-accept: FAIL ($fails)" >&2
     exit 1

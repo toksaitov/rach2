@@ -115,12 +115,24 @@ cp "$IMAGE" "$WORK"
 GUEST_NET="192.168.90.0/24"
 GUEST_IP="192.168.90.15"
 GUEST_GW="192.168.90.2"
+# A flash drive beside the keyboard, so the acceptance script's stick section
+# is rehearsed here and not first on the notebook: 48 MiB, one FAT32 volume
+# labelled ACCEPT, which the script finds by that label and writes to. The
+# read-only disk policy is the disk drivers' allowlist and a stick is written
+# through its own driver, so the write is taken on this kernel as it would be
+# on the installed one.
+STICK="$WORK.stick"
+dd if=/dev/zero of="$STICK" bs=1048576 count=50 2>/dev/null || fail "the stick image"
+"$REPO/build/tools/image/mkmbr" --lba "$STICK" 2048:98304:0c > /dev/null || fail "mkmbr for the stick"
+mformat -i "$STICK"@@1048576 -F -T 98304 -v ACCEPT :: || fail "mformat for the stick"
 qemu-system-i386 -cpu max -display none -kernel "$KERNEL" \
     -initrd "$WORK" \
     -append "rach2.ip=$GUEST_IP/24 rach2.gateway=$GUEST_GW rach2.netconsole rach2.diskdiag" \
     -netdev "user,id=n0,net=$GUEST_NET,host=$GUEST_GW,hostfwd=tcp::$PORT-$GUEST_IP:22" \
     -device rtl8139,netdev=n0 \
     -device qemu-xhci,id=xhci -device usb-kbd,bus=xhci.0 \
+    -drive "if=none,id=stick,format=raw,file=$STICK" \
+    -device usb-storage,bus=xhci.0,drive=stick \
     -serial stdio < /dev/null > "$LOG" 2>&1 &
 QPID=$!
 
@@ -248,10 +260,17 @@ echo "metal-test: the machine handed over its own boot log, from the first line:
 # The acceptance script itself, rehearsed here so it is not being debugged on
 # the laptop. Its baseline comparisons are against a drive this machine does
 # not have, which it reports, not fails on.
-if ! sh "$REPO/tests/system/accept/metal_accept.sh" 127.0.0.1 "$PORT" >/dev/null 2>&1; then
+ACCEPT="$(sh "$REPO/tests/system/accept/metal_accept.sh" 127.0.0.1 "$PORT" 2>&1)"
+if ! echo "$ACCEPT" | grep -q '^metal-accept: PASS'; then
+    echo "$ACCEPT" | grep 'FAIL' >&2
     fail "the acceptance script did not pass against the rehearsal machine"
 fi
 echo "metal-test: the acceptance script runs clean against the rehearsal machine: OK"
+if echo "$ACCEPT" | grep -q 'stick: the volume ACCEPT mounts by its label'; then
+    echo "metal-test: and its stick section found the stick, wrote it and flushed it: OK"
+else
+    fail "the acceptance script's stick section did not run against the stick"
+fi
 
 cleanup_boot
 echo "metal-test: PASS"

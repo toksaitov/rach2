@@ -68,7 +68,7 @@ audio|qemu-system-i386|core
 netconsole|qemu-system-i386|core
 netconsole-e1000|qemu-system-i386|full
 crash|qemu-system-i386|core
-metal|qemu-system-i386,ssh|core
+metal|qemu-system-i386,ssh,mformat|core
 diskfull|qemu-system-i386|core
 fault|qemu-system-i386|core
 reset|qemu-system-i386|core
