@@ -16,9 +16,10 @@
 # under a mount is the case the removal code exists for and cannot be
 # arranged from inside the machine.
 #
-# Usage: usbdisk.sh KERNEL IMAGE HARNESS DIR OSREAL PASSWORD MKEXFATFIXTURE
+# Usage: usbdisk.sh KERNEL IMAGE HARNESS DIR OSREAL PASSWORD MKEXFATFIXTURE \
+#        STICKIMAGE
 set -u
-KERNEL=$1; IMAGE=$2; HARNESS=$3; DIR=$4; OSREAL=$5; PASSWORD=$6; MKFIX=$7
+KERNEL=$1; IMAGE=$2; HARNESS=$3; DIR=$4; OSREAL=$5; PASSWORD=$6; MKFIX=$7; STICKIMAGE=$8
 REPO=$(cd "$(dirname "$0")/../../.." && pwd)
 MKMBR="$REPO/build/tools/image/mkmbr"
 MKGPT="$REPO/build/tools/image/mkgpt"
@@ -253,6 +254,42 @@ if [ "$(grep -ac 'usbdisk: recovery' "$LOG")" = 0 ]; then
     note "and no command needed recovery on the way: OK"
 else
     fail "a command needed recovery during the read"
+fi
+
+# ---- 9: the stick image booted by the firmware, with no kernel given to the
+#         emulator: GRUB loads the metal kernel and its RAM root off the
+#         stick, the stick comes up as the machine's own disk, and the
+#         machine mounts the stick's second partition and reads a file from
+#         it. The image is copied first, since the volume is written by the
+#         mount's dirty flag and the built image is the record. ----
+cp "$STICKIMAGE" "$DIR/stick-boot.img" || fail "the stick image"
+LOG="$DIR/stickboot.log"
+if "$HARNESS" --bios \
+    --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
+    --drive "if=none,id=stick,format=raw,file=$DIR/stick-boot.img" \
+    --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=stick,bootindex=0 \
+    --timeout 240 --steptmo 120 --ok "STICKDONE" --log "$LOG" \
+    "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
+    "expect=# " "send=cat /proc/usb | grep ^usb0; echo USB\"\"DONE" \
+    "expect=USBDONE" "send=mkdir -p /mnt && mount -t exfat /dev/usb0p2 /mnt && echo MOUNT\"\"ED" \
+    "expect=MOUNTED" "send=ls /mnt | head -3; grep exfat /proc/mounts; echo LIST\"\"DONE" \
+    "expect=LISTDONE" "send=umount /mnt && echo STICK\"\"DONE" \
+    "expect=STICKDONE" > /dev/null 2>&1; then
+    note "the machine booted from the stick image mounts the stick's second partition: OK"
+else
+    fail "the boot from the stick image"
+fi
+if grep -aq 'usbdisk: usb0: mbr: 45056 sectors, 2 partitions' "$LOG"; then
+    note "and the stick it booted from is its usb0 with two partitions: OK"
+else
+    fail "the booted machine did not name its own stick"
+fi
+if grep -aq '/dev/usb0p2 /mnt exfat' "$LOG"; then
+    note "and /proc/mounts named the stick's second partition: OK"
+else
+    fail "/proc/mounts did not name the stick's partition"
 fi
 
 note "PASS"
