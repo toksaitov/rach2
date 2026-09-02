@@ -33,21 +33,21 @@
 #include "fatcommon.h"
 
 #define EXT2_SUPER_MAGIC 0xEF53u
-#define EXT2_ROOT_INO 2u
-#define EXT2_NDIR 12u
-#define EXT2_NBLOCKS 15u
-#define EXT2_NAME_MAX 255u
-#define EXT2_FAST_LINK 60u /* the bytes of `i_block` a fast link lives in */
+#define EXT2_ROOT_INO    2u
+#define EXT2_NDIR        12u
+#define EXT2_NBLOCKS     15u
+#define EXT2_NAME_MAX    255u
+#define EXT2_FAST_LINK   60u /* the bytes of `i_block` a fast link lives in */
 
-#define EXT2_COMPAT_DIR_INDEX 0x0020u
-#define EXT2_RO_SPARSE_SUPER 0x0001u
-#define EXT2_RO_LARGE_FILE 0x0002u
+#define EXT2_COMPAT_DIR_INDEX  0x0020u
+#define EXT2_RO_SPARSE_SUPER   0x0001u
+#define EXT2_RO_LARGE_FILE     0x0002u
 #define EXT2_INCOMPAT_FILETYPE 0x0002u
 
 #define EXT2_VALID_FS 0x0001u
 #define EXT2_ERROR_FS 0x0002u
 
-#define S_IFMT_ 0170000u
+#define S_IFMT_  0170000u
 #define S_IFREG_ 0100000u
 #define S_IFDIR_ 0040000u
 #define S_IFLNK_ 0120000u
@@ -57,7 +57,7 @@
 #define EXT2_FT_DIR 2u
 #define EXT2_FT_MAX 7u
 
-#define PATH_DEPTH 64 /* directories climbed by `ext2_path` before ENAMETOOLONG */
+#define PATH_DEPTH         64 /* directories climbed by `ext2_path` before ENAMETOOLONG */
 #define BCACHE_BLOCK_SHIFT 12 /* log2 of BCACHE_BLOCK_BYTES */
 
 /* One held inode. `too_big` marks a size past the kernel's offset. */
@@ -88,7 +88,7 @@ struct ext2_mount {
     uint32_t state;
     int writable;
     uint64_t free_blocks, free_inodes;
-    int valid_cleared; /* the superblock's valid bit was cleared by this mount */
+    int valid_cleared;   /* the superblock's valid bit was cleared by this mount */
     uint32_t alloc_hint; /* the block after the last one given out */
     uint8_t gd[EXT2_GROUPS * 32];
     struct ext2_node nodes[EXT2_NODES];
@@ -278,10 +278,14 @@ static struct ext2_node *node_for(struct ext2_mount *em, uint32_t ino, int *rc)
     struct ext2_node *n = 0;
     int i;
 
+    /* Under the mount's lock, because the load sleeps in the cache and a
+     * second lookup meanwhile must find the entry taken, not take it too. */
+    vfs_ns_lock(em->mnt);
     *rc = 0;
     for (i = 0; i < EXT2_NODES; i++) {
         if (em->nodes[i].used && em->nodes[i].ino == ino) {
             em->nodes[i].refs++;
+            vfs_ns_unlock(em->mnt);
             return &em->nodes[i];
         }
     }
@@ -294,15 +298,20 @@ static struct ext2_node *node_for(struct ext2_mount *em, uint32_t ino, int *rc)
     if (!n) {
         klog(KLOG_WARN, "ext2", "node pool full");
         *rc = -ENOMEM;
+        vfs_ns_unlock(em->mnt);
         return 0;
     }
     k_memset(n, 0, sizeof(*n));
+    n->used = 1; /* taken before the load sleeps */
+    n->ino = ino;
     *rc = inode_load(em, ino, n);
     if (*rc != 0) {
+        n->used = 0;
+        vfs_ns_unlock(em->mnt);
         return 0;
     }
-    n->used = 1;
     n->refs = 1;
+    vfs_ns_unlock(em->mnt);
     return n;
 }
 
@@ -315,24 +324,30 @@ static void ext2_hold(struct vfs_mount *mnt, void *node)
 static int release_inode(struct ext2_mount *em, struct ext2_node *n);
 static int sb_store(struct ext2_mount *em);
 
+static void mark_error(struct ext2_mount *em);
+
 static void ext2_put(struct vfs_mount *mnt, void *node)
 {
     struct ext2_node *n = node;
 
+    /* Under the mount's lock, so that a mutation holding a pointer into
+     * the pool across a sleep finds the entry as it left it. */
+    vfs_ns_lock(mnt);
     if (n->refs > 0) {
         n->refs--;
     }
     if (n->refs == 0) {
         /* An unlinked inode keeps its blocks until its last holder goes,
          * which is what makes an open unlinked file work; a crash before
-         * this leaves an orphan for e2fsck. */
-        if (n->unlinked && em_of(mnt)->writable) {
-            vfs_ns_lock(mnt);
-            release_inode(em_of(mnt), n);
-            vfs_ns_unlock(mnt);
+         * this leaves an orphan for e2fsck, and so does a free that fails,
+         * which the error bit then hands to it. */
+        if (n->unlinked && em_of(mnt)->writable && release_inode(em_of(mnt), n) != 0) {
+            klog(KLOG_WARN, "ext2", "inode %d: not freed at its last put", (int)n->ino);
+            mark_error(em_of(mnt));
         }
         n->used = 0;
     }
+    vfs_ns_unlock(mnt);
 }
 
 /* ---- block mapping ---- */
@@ -342,8 +357,7 @@ static void ext2_put(struct vfs_mount *mnt, void *node)
  * direct, indirect, double and triple levels, each pointer block checked
  * before it is read.
  */
-static int block_at(struct ext2_mount *em, const struct ext2_node *n, uint32_t index,
-                    uint32_t *out)
+static int block_at(struct ext2_mount *em, const struct ext2_node *n, uint32_t index, uint32_t *out)
 {
     uint32_t per = em->block_size / 4;
     uint32_t b;
@@ -379,6 +393,7 @@ static int block_at(struct ext2_mount *em, const struct ext2_node *n, uint32_t i
             if (!data_block_ok(em, b)) {
                 klog(KLOG_WARN, "ext2", "inode %d: pointer block %d is out of range", (int)n->ino,
                      (int)b);
+                mark_error(em);
                 return -EIO;
             }
             rc = read_bytes(em, (uint64_t)b * em->block_size + (uint64_t)(rest / div) * 4, ptr, 4);
@@ -392,6 +407,7 @@ static int block_at(struct ext2_mount *em, const struct ext2_node *n, uint32_t i
     }
     if (b != 0 && !data_block_ok(em, b)) {
         klog(KLOG_WARN, "ext2", "inode %d: block %d is out of range", (int)n->ino, (int)b);
+        mark_error(em);
         return -EIO;
     }
     *out = b;
@@ -474,6 +490,7 @@ static int dir_scan(struct ext2_mount *em, const struct ext2_node *d, uint32_t *
         (uint64_t)at + sc->rec_len > d->size || sc->name_len + 8 > sc->rec_len ||
         sc->ino > em->inodes) {
         klog(KLOG_WARN, "ext2", "directory %d: entry at %d is malformed", (int)d->ino, (int)at);
+        mark_error(em);
         return -EIO;
     }
     if (sc->ino != 0) {
@@ -686,9 +703,12 @@ static int ext2_readlink(struct vfs_mount *mnt, void *node, char *buf, uint32_t 
     if (len + 1 > cap) {
         return -ENAMETOOLONG;
     }
-    if (len < EXT2_FAST_LINK) {
+    if (n->blocks == 0) {
         uint32_t i;
 
+        if (len >= EXT2_FAST_LINK) {
+            return -EIO; /* the pointer words hold at most 59 bytes */
+        }
         for (i = 0; i < len; i++) {
             buf[i] = (char)((n->block[i / 4] >> ((i % 4) * 8)) & 0xFFu);
         }
@@ -850,7 +870,6 @@ static int ext2_path(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
     return 0;
 }
 
-
 /* ---- the writer ---- */
 
 /*
@@ -870,19 +889,19 @@ static int ext2_path(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
 /* The value is taken once: a count read from the bytes being written, as
  * `le16(gd + 12) - 1`, would otherwise be read again after its low byte
  * changed. */
-#define LE16_PUT(p, v)                                                                             \
-    do {                                                                                           \
-        uint32_t put_ = (v);                                                                       \
-        (p)[0] = (uint8_t)(put_ & 0xFFu);                                                          \
-        (p)[1] = (uint8_t)((put_ >> 8) & 0xFFu);                                                   \
+#define LE16_PUT(p, v)                           \
+    do {                                         \
+        uint32_t put_ = (v);                     \
+        (p)[0] = (uint8_t)(put_ & 0xFFu);        \
+        (p)[1] = (uint8_t)((put_ >> 8) & 0xFFu); \
     } while (0)
-#define LE32_PUT(p, v)                                                                             \
-    do {                                                                                           \
-        uint32_t put_ = (v);                                                                       \
-        (p)[0] = (uint8_t)(put_ & 0xFFu);                                                          \
-        (p)[1] = (uint8_t)((put_ >> 8) & 0xFFu);                                                   \
-        (p)[2] = (uint8_t)((put_ >> 16) & 0xFFu);                                                  \
-        (p)[3] = (uint8_t)((put_ >> 24) & 0xFFu);                                                  \
+#define LE32_PUT(p, v)                            \
+    do {                                          \
+        uint32_t put_ = (v);                      \
+        (p)[0] = (uint8_t)(put_ & 0xFFu);         \
+        (p)[1] = (uint8_t)((put_ >> 8) & 0xFFu);  \
+        (p)[2] = (uint8_t)((put_ >> 16) & 0xFFu); \
+        (p)[3] = (uint8_t)((put_ >> 24) & 0xFFu); \
     } while (0)
 
 static uint32_t now_seconds(void)
@@ -898,8 +917,7 @@ static uint32_t now_seconds(void)
 
 /* Copy `len` bytes at byte offset `off` of the volume from `src`, or zeros
  * with `src` NULL; through to the device when `sync`, else written back. */
-static int write_bytes(struct ext2_mount *em, uint64_t off, const void *src, uint32_t len,
-                       int sync)
+static int write_bytes(struct ext2_mount *em, uint64_t off, const void *src, uint32_t len, int sync)
 {
     const uint8_t *in = src;
 
@@ -1008,6 +1026,20 @@ static int gd_store(struct ext2_mount *em, uint32_t g)
     return write_bytes(em, at, em->gd + g * 32, 32, 1);
 }
 
+/* A fault met while reading: the error bit set and written when the mount
+ * writes, so that an orderly unmount does not mark the volume valid and the
+ * next mount checks it. */
+static void mark_error(struct ext2_mount *em)
+{
+    if (em->state & EXT2_ERROR_FS) {
+        return;
+    }
+    em->state |= EXT2_ERROR_FS;
+    if (em->writable) {
+        (void)sb_store(em);
+    }
+}
+
 /* The superblock's free counts and its state, written through. */
 static int sb_store(struct ext2_mount *em)
 {
@@ -1054,6 +1086,25 @@ static int bit_put(struct ext2_mount *em, uint32_t bitmap_block, uint32_t index,
     return write_bytes(em, at, &byte, 1, 1);
 }
 
+/* The pointer blocks a file block index can need at most: none below the
+ * direct blocks, one per level of indirection above them. */
+static uint32_t pointer_levels(const struct ext2_mount *em, uint32_t index)
+{
+    uint32_t per = em->block_size / 4;
+
+    if (index < EXT2_NDIR) {
+        return 0;
+    }
+    index -= EXT2_NDIR;
+    if (index < per) {
+        return 1;
+    }
+    if (index < per + per * per) {
+        return 2;
+    }
+    return 3;
+}
+
 /* Whether the caller may take from the reserved blocks. */
 static int may_use_reserved(void)
 {
@@ -1071,8 +1122,7 @@ static int block_alloc(struct ext2_mount *em, uint32_t hint, uint32_t *out)
     uint32_t g0, g, tried;
     uint32_t start_in;
 
-    if (em->free_blocks == 0 ||
-        (!may_use_reserved() && em->free_blocks <= em->r_blocks)) {
+    if (em->free_blocks == 0 || (!may_use_reserved() && em->free_blocks <= em->r_blocks)) {
         return -ENOSPC;
     }
     if (hint < em->first_data || hint >= em->blocks) {
@@ -1080,8 +1130,10 @@ static int block_alloc(struct ext2_mount *em, uint32_t hint, uint32_t *out)
     }
     g0 = (hint - em->first_data) / em->bpg;
     start_in = (hint - em->first_data) % em->bpg;
-    for (tried = 0; tried < em->groups; tried++) {
-        uint32_t i, count, base, bitmap;
+    /* Every group from the hint's on, wrapping, and last the part of the
+     * hint's group before the hint. */
+    for (tried = 0; tried <= em->groups; tried++) {
+        uint32_t i, count, base, bitmap, from;
         uint8_t *gd;
 
         g = (g0 + tried) % em->groups;
@@ -1089,11 +1141,14 @@ static int block_alloc(struct ext2_mount *em, uint32_t hint, uint32_t *out)
         base = em->first_data + g * em->bpg;
         count = em->blocks - base < em->bpg ? em->blocks - base : em->bpg;
         bitmap = le32(gd + 0);
+        from = tried == 0 ? start_in : 0;
+        if (tried == em->groups) {
+            count = start_in < count ? start_in : count;
+        }
         if (le16(gd + 12) == 0) {
-            start_in = 0;
             continue;
         }
-        for (i = tried == 0 ? start_in : 0; i < count; i++) {
+        for (i = from; i < count; i++) {
             int used, rc;
 
             rc = bit_get(em, bitmap, i, &used);
@@ -1117,7 +1172,6 @@ static int block_alloc(struct ext2_mount *em, uint32_t hint, uint32_t *out)
             *out = base + i;
             return 0;
         }
-        start_in = 0;
     }
     return -ENOSPC;
 }
@@ -1236,9 +1290,8 @@ static int inode_bit_free(struct ext2_mount *em, uint32_t ino, int was_dir)
  * children are all gone goes the same way. `n->blocks` is kept current;
  * the caller stores the inode.
  */
-static int punch_level(struct ext2_mount *em, struct ext2_node *n, uint32_t *slot,
-                       uint64_t slot_at, int level, uint32_t base, uint32_t keep,
-                       int *emptied)
+static int punch_level(struct ext2_mount *em, struct ext2_node *n, uint32_t *slot, uint64_t slot_at,
+                       int level, uint32_t base, uint32_t keep, int *emptied)
 {
     uint32_t b = *slot;
     uint32_t per = em->block_size / 4;
@@ -1335,8 +1388,7 @@ static int punch(struct ext2_mount *em, struct ext2_node *n, uint32_t keep)
             lspan *= per;
         }
         if (lbase + lspan > keep && n->block[EXT2_NDIR + level - 1] != 0) {
-            rc = punch_level(em, n, &n->block[EXT2_NDIR + level - 1], 0, level, lbase, keep,
-                             &gone);
+            rc = punch_level(em, n, &n->block[EXT2_NDIR + level - 1], 0, level, lbase, keep, &gone);
             if (rc != 0) {
                 return rc;
             }
@@ -1483,18 +1535,18 @@ static uint32_t dirent_len(uint32_t name_len)
 static uint32_t ftype_of(uint32_t mode)
 {
     switch (mode & S_IFMT_) {
-        case S_IFREG_:
-            return 1;
-        case S_IFDIR_:
-            return 2;
-        case S_IFCHR_:
-            return 3;
-        case S_IFBLK_:
-            return 4;
-        case S_IFLNK_:
-            return 7;
-        default:
-            return 0;
+    case S_IFREG_:
+        return 1;
+    case S_IFDIR_:
+        return 2;
+    case S_IFCHR_:
+        return 3;
+    case S_IFBLK_:
+        return 4;
+    case S_IFLNK_:
+        return 7;
+    default:
+        return 0;
     }
 }
 
@@ -1619,6 +1671,13 @@ static int dir_add(struct ext2_mount *em, struct ext2_node *d, const char *name,
 
         if (d->size + em->block_size > 0xFFFFFFFFu) {
             return -EFBIG;
+        }
+        /* ENOSPC before any block is taken: the block and the pointer
+         * blocks its index can need. */
+        if (1 + pointer_levels(em, index) > em->free_blocks ||
+            (!may_use_reserved() &&
+             em->free_blocks - (1 + pointer_levels(em, index)) < em->r_blocks)) {
+            return -ENOSPC;
         }
         rc = map_alloc(em, d, index, &b, &fresh);
         if (rc != 0) {
@@ -1795,7 +1854,7 @@ static int release_inode(struct ext2_mount *em, struct ext2_node *n)
     int rc;
 
     if ((n->mode & S_IFMT_) == S_IFREG_ || was_dir ||
-        ((n->mode & S_IFMT_) == S_IFLNK_ && n->size >= EXT2_FAST_LINK)) {
+        ((n->mode & S_IFMT_) == S_IFLNK_ && n->blocks != 0)) {
         rc = punch(em, n, 0);
         if (rc != 0) {
             return rc;
@@ -1850,6 +1909,14 @@ static int inode_new(struct ext2_mount *em, uint32_t parent_ino, uint32_t mode, 
     n->gid = current_proc ? current_proc->egid : 0;
     n->nlink = (mode & S_IFMT_) == S_IFDIR_ ? 2 : 1;
     n->atime = n->mtime = n->ctime = now_seconds();
+    /* The image zeroed first: a freed inode's slot keeps what it had, and
+     * `inode_store` writes only the fields this driver keeps. */
+    rc = write_bytes(em, inode_offset(em, ino), 0, 128, 1);
+    if (rc != 0) {
+        n->used = 0;
+        inode_bit_free(em, ino, (mode & S_IFMT_) == S_IFDIR_);
+        return rc;
+    }
     if (store) {
         rc = inode_store(em, n);
         if (rc != 0) {
@@ -2016,7 +2083,7 @@ static int32_t ext2_write(struct vfs_mount *mnt, void *handle, const void *buf, 
             }
         }
         if (need > 0) {
-            need += 3 + (last - first) / (em->block_size / 4) + 1;
+            need += pointer_levels(em, last) + (last - first) / (em->block_size / 4);
         }
         if (need > em->free_blocks ||
             (!may_use_reserved() && need > 0 && em->free_blocks - need < em->r_blocks)) {
@@ -2069,10 +2136,9 @@ static int32_t ext2_write(struct vfs_mount *mnt, void *handle, const void *buf, 
     rc = inode_store(em, n);
 out:
     vfs_ns_unlock(mnt);
-    if (rc != 0) {
-        return done > 0 && rc != -EROFS ? (int32_t)done : rc;
-    }
-    return (int32_t)count;
+    /* Bytes in the cache that no size covers are not written: a failure
+     * anywhere is the error, never a count. */
+    return rc != 0 ? rc : (int32_t)count;
 }
 
 static int ext2_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode,
@@ -2110,6 +2176,11 @@ static int ext2_create(struct vfs_mount *mnt, void *dir, const char *name, uint3
         release_inode(em, n);
         n->used = 0;
         return rc;
+    }
+    d->mtime = d->ctime = now_seconds();
+    rc = inode_store(em, d);
+    if (rc != 0) {
+        mark_error(em); /* the entry is there; the times are what is missing */
     }
     *node = n;
     return 0;
@@ -2238,6 +2309,10 @@ static int ext2_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32
     }
     if (rc == 0) {
         rc = dir_add(em, d, name, n->ino, 2);
+        if (rc != 0) {
+            d->nlink--; /* the count raised for an entry that was not written */
+            (void)inode_store(em, d);
+        }
     }
     if (rc != 0) {
         n->nlink = 0;
@@ -2407,6 +2482,10 @@ static int ext2_symlink(struct vfs_mount *mnt, void *dir, const char *name, cons
     if (rc == 0) {
         rc = dir_add(em, d, name, n->ino, 7);
     }
+    if (rc == 0) {
+        d->mtime = d->ctime = now_seconds();
+        rc = inode_store(em, d);
+    }
     if (rc != 0) {
         n->nlink = 0;
         release_inode(em, n);
@@ -2553,6 +2632,7 @@ static int ext2_rename(struct vfs_mount *mnt, void *olddir, const char *oldname,
                 return rc;
             }
             nd->nlink++;
+            nd->mtime = nd->ctime = now_seconds();
             rc = inode_store(em, nd);
             if (rc != 0) {
                 return rc;
@@ -2618,6 +2698,8 @@ static int ext2_rename(struct vfs_mount *mnt, void *olddir, const char *oldname,
     } else {
         rc = dir_add(em, nd, newname, n->ino, ftype_of(n->mode));
         if (rc != 0) {
+            n->nlink--; /* the count raised for a name that was not written */
+            (void)inode_store(em, n);
             return rc;
         }
     }
@@ -2674,8 +2756,8 @@ static int ext2_rename(struct vfs_mount *mnt, void *olddir, const char *oldname,
  * read-only when dirty and says which limit.
  */
 #define EXT2_CHECK_INODES (1u << 20)
-#define EXT2_CHECK_DEPTH 32
-#define EXT2_CHECK_LINKS 512
+#define EXT2_CHECK_DEPTH  32
+#define EXT2_CHECK_LINKS  512
 
 struct ext2_link {
     uint32_t ino;
@@ -2734,13 +2816,16 @@ static int check_mark(struct ext2_check *c, uint32_t ino, uint32_t b)
  * pointer, and `last` the highest index named.
  */
 static int check_level(struct ext2_check *c, uint32_t ino, uint32_t b, int level, uint32_t index,
-                       uint32_t *count, uint32_t *last)
+                       uint32_t limit, uint32_t *count, uint32_t *last)
 {
     struct ext2_mount *em = c->em;
     uint32_t per = em->block_size / 4;
     uint32_t span = 1, j;
     int i, rc;
 
+    if (index >= limit) {
+        return check_fault(c, ino, "a pointer block past the size");
+    }
     rc = check_mark(c, ino, b);
     if (rc != 0) {
         return rc;
@@ -2769,7 +2854,7 @@ static int check_level(struct ext2_check *c, uint32_t ino, uint32_t b, int level
             (*count)++;
             *last = index + j;
         } else {
-            rc = check_level(c, ino, p, level - 1, index + j * span, count, last);
+            rc = check_level(c, ino, p, level - 1, index + j * span, limit, count, last);
             if (rc != 0) {
                 return rc;
             }
@@ -2792,8 +2877,8 @@ static int check_blocks(struct ext2_check *c, const struct ext2_node *n, int as_
     uint32_t count = 0, last = 0, limit, i;
     int named = 0, rc;
 
-    if (!as_data && type != S_IFREG_ && type != S_IFDIR_ &&
-        (type != S_IFLNK_ || n->blocks == 0)) {
+    limit = (uint32_t)((n->size + em->block_size - 1) >> em->block_shift);
+    if (!as_data && type != S_IFREG_ && type != S_IFDIR_ && (type != S_IFLNK_ || n->blocks == 0)) {
         if (n->blocks != 0) {
             return check_fault(c, n->ino, "blocks on an inode that keeps none");
         }
@@ -2817,7 +2902,8 @@ static int check_blocks(struct ext2_check *c, const struct ext2_node *n, int as_
         if (n->block[EXT2_NDIR + i] == 0) {
             continue;
         }
-        rc = check_level(c, n->ino, n->block[EXT2_NDIR + i], (int)i + 1, base, &count, &last);
+        rc =
+            check_level(c, n->ino, n->block[EXT2_NDIR + i], (int)i + 1, base, limit, &count, &last);
         if (rc != 0) {
             return rc;
         }
@@ -2826,7 +2912,6 @@ static int check_blocks(struct ext2_check *c, const struct ext2_node *n, int as_
     if (n->blocks != count * (em->block_size / 512)) {
         return check_fault(c, n->ino, "i_blocks that does not match its pointers");
     }
-    limit = (uint32_t)((n->size + em->block_size - 1) >> em->block_shift);
     if (named && last >= limit) {
         return check_fault(c, n->ino, "a block past the size");
     }
@@ -2840,7 +2925,7 @@ static int check_dir(struct ext2_check *c, uint32_t ino, uint32_t parent, int de
  * once and a second reach is a second parent; a file is marked once and a
  * second name counts toward its link count.
  */
-static int check_child(struct ext2_check *c, uint32_t ino, uint32_t dir, int depth,
+static int check_child(struct ext2_check *c, uint32_t ino, uint32_t dir, uint32_t ft, int depth,
                        uint32_t *subdirs)
 {
     struct ext2_mount *em = c->em;
@@ -2860,6 +2945,11 @@ static int check_child(struct ext2_check *c, uint32_t ino, uint32_t dir, int dep
         return rc;
     }
     type = n->mode & S_IFMT_;
+    /* The entry's type byte, where the volume keeps one, names the inode's
+     * kind; `readdir` believes it, so the check must. */
+    if ((em->incompat & EXT2_INCOMPAT_FILETYPE) && ft != 0 && (ft > 7 || ft != ftype_of(n->mode))) {
+        return check_fault(c, ino, "an entry type that does not match its inode");
+    }
     if (type == S_IFDIR_) {
         if (seen_test(c, ino)) {
             return check_fault(c, ino, "a directory with two parents");
@@ -2960,7 +3050,7 @@ static int check_dir(struct ext2_check *c, uint32_t ino, uint32_t parent, int de
                 if (nlen == 0) {
                     return check_fault(c, ino, "an entry with an empty name");
                 }
-                rc = check_child(c, eino, ino, depth + 1, &subdirs);
+                rc = check_child(c, eino, ino, raw[7], depth + 1, &subdirs);
                 if (rc != 0) {
                     return rc;
                 }
@@ -3270,8 +3360,7 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
     } else if (em->block_size != 4096) {
         readonly_why = "a block size below 4096 cannot be written in order";
     }
-    rc = read_bytes(em, (uint64_t)(em->first_data + 1) * em->block_size, em->gd,
-                    em->groups * 32);
+    rc = read_bytes(em, (uint64_t)(em->first_data + 1) * em->block_size, em->gd, em->groups * 32);
     if (rc != 0) {
         return rc;
     }
@@ -3298,7 +3387,9 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
             (ib >= it && ib < it + tables)) {
             return refuse("group descriptor");
         }
-        if (le16(gd + 12) > em->bpg || le16(gd + 14) > em->ipg) {
+        /* Against the group's own size: the last group is often short. */
+        if (le16(gd + 12) > hi - (em->first_data + g * em->bpg) ||
+            le16(gd + 14) > (g == em->groups - 1 ? em->inodes - g * em->ipg : em->ipg)) {
             return refuse("group free count");
         }
         em->free_blocks += le16(gd + 12);
@@ -3340,8 +3431,7 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
     mnt->priv = em;
     mnt->root = root;
     klog(KLOG_INFO, "ext2", "mounted: %d blocks of %d, %d inodes, %d groups%s", (int)em->blocks,
-         (int)em->block_size, (int)em->inodes, (int)em->groups,
-         em->writable ? "" : ", read-only");
+         (int)em->block_size, (int)em->inodes, (int)em->groups, em->writable ? "" : ", read-only");
     return 0;
 }
 
@@ -3371,11 +3461,11 @@ static int ext2_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags
 }
 
 static const struct vfs_ops ext2_ops = {
-    ext2_lookup,  0, /* lookup_rest */
-    ext2_hold,    ext2_put,      ext2_getattr,  ext2_setattr, ext2_open,   ext2_release,
-    ext2_read,    ext2_write,    ext2_truncate, ext2_fsync,   ext2_readdir, ext2_create,
-    ext2_unlink,  ext2_mkdir,    ext2_rmdir,    ext2_rename,  ext2_link,   ext2_readlink,
-    ext2_statfs,  ext2_sync,     ext2_prepare_unmount, ext2_unmount, ext2_path, ext2_symlink,
+    ext2_lookup, 0, /* lookup_rest */
+    ext2_hold,   ext2_put,   ext2_getattr,         ext2_setattr, ext2_open,    ext2_release,
+    ext2_read,   ext2_write, ext2_truncate,        ext2_fsync,   ext2_readdir, ext2_create,
+    ext2_unlink, ext2_mkdir, ext2_rmdir,           ext2_rename,  ext2_link,    ext2_readlink,
+    ext2_statfs, ext2_sync,  ext2_prepare_unmount, ext2_unmount, ext2_path,    ext2_symlink,
 };
 
 const struct vfs_type vfs_ext2_type = {"ext2", ext2_mount, &ext2_ops};
