@@ -76,7 +76,7 @@
 #define HUB_DEBOUNCE_MS           100u
 #define HUB_RESET_POLL_MS         20u
 #define HUB_RESET_MS              500u
-#define HUB_POWER_MAX_MS          500u
+#define HUB_POWER_MAX_MS          510u /* the descriptor's byte of 2 ms units at 255 */
 /* A hub may say its power is good in 0 ms; a port read that soon after its
  * power request reports nothing connected. 100 ms is the floor Linux uses. */
 #define HUB_POWER_MIN_MS          100u
@@ -325,8 +325,11 @@ static int take_descriptor(struct hub *h, int length)
  * Start powering the next port, or say there is none left.
  *
  * Every port gets its own request whether the descriptor says the ports
- * switch together or one by one: a hub that says together may still power
- * only the port named, and the extra requests cost a ganged hub nothing.
+ * switch together or one by one. On a ganged hub one request energises the
+ * gang, but the specification (11.11.1) leaves every other port in its
+ * Powered-off state until that port gets a request of its own, and the
+ * owner's hub reported exactly that: after one request, port 1 powered and
+ * ports 2 to 4 not.
  */
 static int power_next(struct hub *h)
 {
@@ -666,15 +669,17 @@ static void step_hub(struct hub *h, uint32_t elapsed_ms)
         h->state = HUB_POWER;
         h->at = 1;
         if (!power_next(h)) {
+            /* No request to wait for: this tick's time has not been
+             * counted yet, so the wait starts on the next one as it is. */
             h->state = HUB_POWER_WAIT;
             h->wait_ms = h->power_good_ms;
-            h->wait_fresh = 1;
         }
         return;
     }
     case HUB_POWER_WAIT:
-        /* The tick that set the wait is not counted against it, so the
-         * power-good time is a minimum and not a minimum less one tick. */
+        /* A wait set by a completion inside a tick does not count that
+         * tick, so the power-good time is a minimum and not a minimum less
+         * one tick. */
         if (h->wait_fresh) {
             h->wait_fresh = 0;
             return;
