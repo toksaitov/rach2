@@ -248,7 +248,8 @@ struct vfs_ref {
 #define VFS_WALK_NOFOLLOW 0x4
 /* Symbolic links followed along one path before ELOOP. */
 #define VFS_LINK_MAX 40
-/* The longest path a followed link may make: the target and the rest. */
+/* The buffer a followed link's target and the rest of the path are joined
+ * in, terminator included: 511 bytes of path, ENAMETOOLONG past that. */
 #define VFS_WALK_PATH_MAX 512
 
 /**
@@ -390,6 +391,9 @@ int vfs_rmdir(struct vfs_mount *mnt, void *dir, const char *name);
 int vfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname,
                void *newdir, const char *newname);
 int vfs_link(struct vfs_mount *mnt, void *dir, const char *name, void *node);
+/** A symbolic link `name` in `dir` to `target`: EROFS on a read-only mount,
+ * EPERM on a type without the operation. */
+int vfs_symlink(struct vfs_mount *mnt, void *dir, const char *name, const char *target);
 int vfs_statfs(struct vfs_mount *mnt, struct vfs_statfs *st);
 
 /**

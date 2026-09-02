@@ -237,6 +237,14 @@ struct vfs_mount *vfs_leaf_mount(struct vfs_mount *mnt, void *node, const char *
 
 /* Replace the current place with another, moving the hold and the transient
  * count. Fails only when the new mount refuses entry. */
+/* Put a node a lookup returned, on a type that counts holds. */
+static void node_put(struct vfs_mount *mnt, void *node)
+{
+    if (mnt->type->ops->put) {
+        mnt->type->ops->put(mnt, node);
+    }
+}
+
 static int walk_move(struct vfs_ref *cur, struct vfs_mount *mnt, void *node)
 {
     struct vfs_ref next;
@@ -258,10 +266,11 @@ static int walk_move(struct vfs_ref *cur, struct vfs_mount *mnt, void *node)
 }
 
 /**
- * Resolve one path. See vfs.h for the whole contract; the shape here is a
- * loop over components with four arms: `.`, `..`, a mount whose type takes
- * the rest of the path in one call, and the ordinary lookup of one name,
- * followed by the crossing onto any mount covering the result.
+ * Resolve one path. See vfs.h for the whole contract. The loop takes one
+ * component at a time and handles four cases: `.`, `..`, a mount whose type
+ * takes the rest of the path in one call, and the ordinary lookup of one
+ * name, after which a symbolic link is followed and a covering mount is
+ * crossed.
  */
 int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct vfs_ref *out,
                 char *leaf, uint32_t leafcap)
@@ -431,12 +440,13 @@ int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct
         if (rc != 0) {
             goto out_err;
         }
-        /* A symbolic link, on a type that has them: followed when more of
-         * the path comes after it, or at the last component unless the
-         * caller asked for the link itself. Its target replaces the
-         * component, an absolute target restarts at the root, and the walk
-         * goes on from the directory the link was found in. */
-        if (cur.mnt->type->ops->readlink) {
+        /* On a type with symbolic links, a component that is one is
+         * followed when more of the path comes after it, and at the last
+         * component unless the caller passed VFS_WALK_NOFOLLOW. Its target
+         * replaces the component, an absolute target restarts at the root,
+         * and the walk goes on from the directory the link was found in. A
+         * mount covers a directory, so a link is never a covered node. */
+        if (cur.mnt->type->ops->readlink && cur.mnt->type->ops->getattr) {
             struct vfs_stat lst;
             const char *rest = p;
             int more;
@@ -445,19 +455,24 @@ int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct
                 rest++;
             }
             more = *rest != '\0';
-            if (cur.mnt->type->ops->getattr(cur.mnt, found, &lst) == 0 &&
-                (lst.mode & 0170000u) == 0120000u && (more || !(flags & VFS_WALK_NOFOLLOW))) {
+            rc = cur.mnt->type->ops->getattr(cur.mnt, found, &lst);
+            if (rc != 0) {
+                node_put(cur.mnt, found);
+                goto out_err;
+            }
+            if ((lst.mode & 0170000u) == 0120000u && (more || !(flags & VFS_WALK_NOFOLLOW))) {
                 char target[VFS_WALK_PATH_MAX];
                 int tlen;
                 uint32_t rlen = (uint32_t)k_strlen(rest);
+                uint32_t join = rlen != 0 ? 1u : 0u;
 
                 if (++links > VFS_LINK_MAX) {
-                    cur.mnt->type->ops->put(cur.mnt, found);
+                    node_put(cur.mnt, found);
                     rc = -ELOOP;
                     goto out_err;
                 }
                 tlen = cur.mnt->type->ops->readlink(cur.mnt, found, target, sizeof(target));
-                cur.mnt->type->ops->put(cur.mnt, found);
+                node_put(cur.mnt, found);
                 if (tlen < 0) {
                     rc = tlen;
                     goto out_err;
@@ -466,19 +481,21 @@ int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct
                     rc = -ENOENT; /* an empty target names nothing */
                     goto out_err;
                 }
-                if ((uint32_t)tlen + 1 + rlen + 1 > sizeof(linkpath)) {
+                if ((uint32_t)tlen + join + rlen + 1 > sizeof(linkpath)) {
                     rc = -ENAMETOOLONG;
                     goto out_err;
                 }
                 /* The rest may already be inside `linkpath`, from a link
                  * followed before this one, so it moves before the target
                  * is written over it. */
-                k_memmove(linkpath + tlen + 1, rest, rlen + 1);
+                k_memmove(linkpath + tlen + join, rest, rlen + 1);
                 k_memcpy(linkpath, target, (uint32_t)tlen);
-                linkpath[tlen] = '/';
+                if (join) {
+                    linkpath[tlen] = '/';
+                }
                 if (last_comp) {
-                    /* The leaf the caller wants is still the last
-                     * component, now inside the spliced path. */
+                    /* The leaf returned to the caller is the last component
+                     * of the spliced path. */
                     const char *end = linkpath + k_strlen(linkpath);
 
                     while (end > linkpath && end[-1] == '/') {
@@ -795,6 +812,17 @@ int vfs_link(struct vfs_mount *mnt, void *dir, const char *name, void *node)
         return -EPERM; /* a file system without links */
     }
     return mnt->type->ops->link(mnt, dir, name, node);
+}
+
+int vfs_symlink(struct vfs_mount *mnt, void *dir, const char *name, const char *target)
+{
+    if (mnt->flags & VFS_MS_RDONLY) {
+        return -EROFS;
+    }
+    if (!mnt->type->ops->symlink) {
+        return -EPERM;
+    }
+    return mnt->type->ops->symlink(mnt, dir, name, target);
 }
 
 int vfs_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
