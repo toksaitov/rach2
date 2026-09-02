@@ -200,7 +200,73 @@ The first reader crashed the self-test: the KRFFS walk's node was never
 zeroed, so the `data` pointer the ext2 nodes own was garbage there and
 `image_free` freed it. `unpack_node` zeroes its node now.
 
-## Open items
+## Phase 3 record
+
+`sys/fs/ext2.c` is the reader: revision 0 and 1, block sizes 1024 to 4096,
+inode sizes 128 and 256, the three feature words against the sets, the
+descriptors read once into a table of 128 groups, a node pool of 64, and
+every pointer checked by `data_block_ok` against the volume and the
+structural blocks, every inode number against the count, every entry
+against its block. `block_at` walks the three pointer levels with a hole
+as zero; `read_data` copies through the cache; `ext2_path` rebuilds a
+directory's path through `..`. The kernel has no libgcc, so the byte
+offset is split by a shift and a mask and not by a division: the first
+link of the kernel failed on `__udivdi3`, which the host test, built with
+a host compiler, had not shown. `klog` has no `%u`; the records use `%d`.
+
+The walker follows links: after a lookup on a type with `readlink`, one
+`getattr` says whether the node is a link, and if more path follows, or
+the caller did not pass `VFS_WALK_NOFOLLOW`, the target replaces the
+component in a buffer of the walker's own, an absolute target restarts at
+the root, the rest continues from the directory the link was found in,
+and the forty-first link is `ELOOP`. The first form copied the rest after
+the target into the same buffer the rest already lived in; a chain of two
+links then read `hello.txt/o`, which `ext2probe` reported as `ENOTDIR` on
+`c39`, and the rest moves before the target is written. `symlink` is a
+new operation at the end of `vfs_ops`, so every positional table gained a
+slot. The syscalls: `readlink` through the type, `lstat` and `fstatat64`
+with `AT_SYMLINK_NOFOLLOW` and `utimensat` with it leaving the link,
+`open` leaving it under `O_NOFOLLOW`, which then answers `ELOOP`, and
+under `O_CREAT|O_EXCL`, which answers `EEXIST`; `link` and `linkat`
+through `do_link`, the source as itself unless `AT_SYMLINK_FOLLOW`, a
+directory `EPERM`, another mount `EXDEV`, a read-only mount `EROFS`;
+`symlink` and `symlinkat`, numbers 83 and 304, through `do_symlink`, with
+`EROFS` before `EPERM` so that a read-only ext2 mount answers as Linux
+does.
+
+`ext2_hosttest` builds its volumes with the host's `mke2fs` from a tree
+it stages, at 4 KiB blocks with 128- and 256-byte inodes, at 2 KiB, and at
+1 KiB for a 70 MB sparse file with a byte behind each pointer level; the
+image is a file the block device reads through `fseek`, so a sparse
+fixture costs nothing. `debugfs` adds device nodes in the old encoding;
+its `mknod` refuses a major above 255, so the new encoding is written by
+field, `block[1]` as 0x11112c70 for 300 and 70000. A size past the
+kernel's offset is `set_inode_field size 5000000000`, the 64-bit field.
+The guard's reader judges the profile volume only, since it refuses the
+others by design. `tests/run ext2` is new, with `mkext2fixture.sh`
+writing a disk whose first partition is the fixture, `ext2probe links`
+mounting it read-only and running the walker's rows, and `tests/run`
+sourcing `e2fsprogs_path.sh` so that the registry's `mke2fs` is found
+where the build finds it. The probe first booted as the stale copy in the
+test image, because `run-ext2` did not name `test-image`; it does. A
+freestanding probe enters at `_start` and reads its arguments off the
+stack, as the others do.
+
+The ten mutations the plan names, each caught by its row: an unknown
+incompatible feature ignored; `dir_index` mounted writable; a slow link
+read from the inode, which in its first form read the pointer words past
+their end and crashed the sanitised test instead of failing the row, so
+the mutation clamps the link to fifty-nine bytes of the inode and the row
+fails on its bytes; a device number from the first pointer alone; a
+`rec_len` trusted past its block, whose first form removed the term and
+did not build for an unused variable, so it loosens the bound instead; a
+block inside the inode table, which first escaped because the row poked
+block 1, the descriptors, guarded by another check, so the test gained a
+row that reads the table's first block from `dumpe2fs` and pokes that,
+beside the descriptor row; a file past the offset opened; a forty-first
+link followed; the last component followed under `O_NOFOLLOW`; and a
+dangling link followed under `O_CREAT|O_EXCL`. The last three fail
+`ext2probe`'s rows through `tests/run ext2`, the rest `ext2_hosttest`'s.
 
 * Phase 5: the partition nodes report their size, so that `e2fsck -p`
   does not abort on a size of zero.

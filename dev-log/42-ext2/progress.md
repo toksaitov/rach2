@@ -11,9 +11,9 @@ Phase 2: the staging tools and the checker's reader
 - [x] setidcheck's ext2 reader and its rows; the os-real ext2 image as a target
 
 Phase 3: the reader in the kernel and the links
-- [ ] ext2.c reading; the feature rules; the offset limit
-- [ ] symbolic links in the walker; symlink, symlinkat, readlinkat, link, linkat
-- [ ] the read rows of ext2_hosttest.c; the vfsprobe rows
+- [x] ext2.c reading; the feature rules; the offset limit
+- [x] symbolic links in the walker; symlink, symlinkat, readlinkat, link, linkat
+- [x] the read rows of ext2_hosttest.c; the link rows of ext2probe
 
 Phase 4: the writer
 - [ ] allocation and the order of writes; rename; the held inode; the valid bit
