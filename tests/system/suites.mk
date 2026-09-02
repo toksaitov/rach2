@@ -432,6 +432,24 @@ run-install: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpma
 	sh tools/image/mkdisk_grub.sh build/rach2/kernel $(INSTALL_TEST_DISK)
 	sh tests/system/suites/install.sh $(INSTALL_TEST_DISK) \
 	    "`cat krffs/rach2_demo_password`"
+# `tests/run install-ext2`: the same suite on a disk whose candidate entries
+# boot an ext2 root on the fourth partition, the os-real system at 96 MiB,
+# while the fallback keeps the KRFFS root. The kernel is built on the ext2
+# root and installed from it, and the fallback boots are the KRFFS root.
+OS_REAL_SMALL_EXT2 = $(IMAGES_DIR)/os-real-small.ext2
+$(OS_REAL_SMALL_EXT2): $(DEMO_CREDS) krffs/manifests/os-real.manifest tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+	sh tools/image/mkext2.sh krffs/manifests/os-real.manifest $@ 96
+INSTALL_EXT2_DISK = $(IMAGES_DIR)/install-ext2-test.disk
+run-install-ext2: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(BINFIND) rach2-recovery $(RECOVERY_IMAGE) $(OS_REAL_SMALL_EXT2)
+	@mkdir -p $(IMAGES_DIR)
+	RACH2_DISK_RECOVERY_MB=8 \
+	RACH2_DISK_EXT2_MB=96 \
+	RACH2_DISK_EXT2_IMAGE=$(OS_REAL_SMALL_EXT2) \
+	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
+	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
+	    sh tools/image/mkdisk_grub.sh build/rach2/kernel $(INSTALL_EXT2_DISK)
+	INSTALL_ROOT=ext2 sh tests/system/suites/install.sh $(INSTALL_EXT2_DISK) \
+	    "`cat krffs/rach2_demo_password`"
 # `tests/run sealed`: the disk that goes into the laptop, operated the way it
 # will be operated once it is in there. Two runs of one artifact on separate
 # copies: a fault run that walks the whole life of the machine over SSH (a
@@ -473,6 +491,29 @@ run-drill: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krffs c
 	    sh tools/image/mkdisk_grub.sh build/rach2/kernel $(DRILL_DISK)
 	sh tests/system/suites/drill.sh $(DRILL_DISK) \
 	    "`cat krffs/rach2_demo_password`" $(DRILL_PORT)
+# `tests/run drill-ext2`: the drill with the ext2 root on the fourth partition
+# as the candidate's root: it is the root the everyday kernel must refuse to
+# write, that is destroyed, that recovery rewrites through the pipe, and that
+# the last boot mounts again.
+OS_SIMPLE_EXT2 = $(IMAGES_DIR)/os-simple.ext2
+$(OS_SIMPLE_EXT2): $(DEMO_CREDS) krffs/manifests/os-simple.manifest tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-setid
+	sh tools/image/mkext2.sh krffs/manifests/os-simple.manifest $@ 16
+DRILL_EXT2_DISK = $(IMAGES_DIR)/drill-ext2-test.disk
+DRILL_EXT2_PORT = 2300
+run-drill-ext2: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krffs check-setid $(BINFIND) $(HARNESS) $(OS_SIMPLE_EXT2)
+	@mkdir -p $(IMAGES_DIR)
+	RACH2_DISK_MANIFEST=krffs/manifests/os-simple.manifest \
+	RACH2_DISK_KRFFS_MB=16 \
+	RACH2_DISK_RECOVERY_MB=8 \
+	RACH2_DISK_EXT2_MB=16 \
+	RACH2_DISK_EXT2_IMAGE=$(OS_SIMPLE_EXT2) \
+	RACH2_DISK_APPEND="rach2.diskdiag" \
+	RACH2_DISK_DHCP_APPEND="rach2.ip=none" \
+	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
+	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
+	    sh tools/image/mkdisk_grub.sh build/rach2/kernel $(DRILL_EXT2_DISK)
+	DRILL_ROOT=ext2 sh tests/system/suites/drill.sh $(DRILL_EXT2_DISK) \
+	    "`cat krffs/rach2_demo_password`" $(DRILL_EXT2_PORT)
 # `tests/run persist`: fsync durability across a reboot. Builds a disk holding
 # persistprobe, boots it twice against the SAME image: the first boot writes and
 # fsyncs /persist.txt, the second reads it back. The second boot passes only if
@@ -1138,6 +1179,22 @@ run-selfbuild: $(DEMO_CREDS) rach2 utils krffs test-image check-busybox check-tc
 	@mkdir -p $(IMAGES_DIR)
 	$(MKDISK) krffs/manifests/os-real.manifest $(SELFBUILD_DISK) 64 48
 	sh tests/system/suites/selfbuild.sh build/rach2/kernel $(SELFBUILD_DISK) \
+	    "`cat krffs/rach2_test_password`" "`cat krffs/rach2_demo_password`"
+# `tests/run selfbuild-ext2`: the self-build on an ext2 root, the os-real
+# system at 48 MiB on a partition at LBA 2048 as the KRFFS disk has it, booted
+# with rach2.root=ext2; the suite reads the volume back with debugfs and
+# e2fsck must find it consistent after the synced stop. Two clean kernel
+# builds are the most the ext2 root is read and written in one sitting.
+SELFBUILD_EXT2_VOL = $(IMAGES_DIR)/selfbuild-ext2.vol
+SELFBUILD_EXT2_DISK = $(IMAGES_DIR)/selfbuild-ext2-test.disk
+$(SELFBUILD_EXT2_VOL): $(DEMO_CREDS) krffs/manifests/os-real.manifest tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+	sh tools/image/mkext2.sh krffs/manifests/os-real.manifest $@ 48
+run-selfbuild-ext2: $(DEMO_CREDS) rach2 utils krffs test-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(ELFCHECK) $(RUNTESTS) $(SELFBUILD_EXT2_VOL) build/tools/image/mkmbr
+	@mkdir -p $(IMAGES_DIR)
+	{ dd if=/dev/zero bs=1048576 count=1 2>/dev/null; cat $(SELFBUILD_EXT2_VOL); \
+	  dd if=/dev/zero bs=1048576 count=15 2>/dev/null; } > $(SELFBUILD_EXT2_DISK)
+	build/tools/image/mkmbr --lba $(SELFBUILD_EXT2_DISK) 2048:98304:83 > /dev/null
+	SELFBUILD_ROOT=ext2 sh tests/system/suites/selfbuild.sh build/rach2/kernel $(SELFBUILD_EXT2_DISK) \
 	    "`cat krffs/rach2_test_password`" "`cat krffs/rach2_demo_password`"
 # `tests/run ssh`: the SSH capstone with nobody at the keyboard. Boots os-real
 # from a disk with the port forwarded, starts dropbear from the console session

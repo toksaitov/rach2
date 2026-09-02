@@ -30,6 +30,12 @@
 #
 # Usage: selfbuild_test.sh <kernel> <disk> <test password> <root password>
 #
+# With SELFBUILD_ROOT=ext2 in the environment the disk's partition is an ext2
+# volume, booted with rach2.root=ext2, its free space read by debugfs and the
+# built kernel extracted by debugfs; the guest's steps are the same, which is
+# the point: two clean builds of the kernel are the most an ext2 root gets
+# read and written in one sitting.
+#
 
 set -e
 
@@ -46,9 +52,16 @@ if [ -z "$KERNEL" ] || [ -z "$DISK" ] || [ -z "$TESTPASSWORD" ] ||
     exit 2
 fi
 
-# The 48 MB KRFFS partition sits at LBA 2048 (krffs/mkdisk.sh).
+# The 48 MB partition sits at LBA 2048 (krffs/mkdisk.sh, or the ext2 disk
+# the suite's rule assembles the same way).
 PART_OFFSET=1048576
 PART_SIZE=50331648
+ROOT_TYPE="${SELFBUILD_ROOT:-krffs}"
+case "$ROOT_TYPE" in
+    krffs) ROOT_TOKEN="rach2.fsdisk" ;;
+    ext2) ROOT_TOKEN="rach2.root=ext2"; . "$REPO/tools/setup/e2fsprogs_path.sh" ;;
+    *) echo "selfbuild_test.sh: SELFBUILD_ROOT is krffs or ext2" >&2; exit 2 ;;
+esac
 
 # Two clean kernel builds: the copied source tree, the objects, the response
 # file and the kernel, with margin. Computed once here, not discovered
@@ -88,7 +101,7 @@ cleanup_boot() {
 
 cleanup() {
     cleanup_boot
-    rm -f "$WORK" "$LOG" "$FEED" "$STEPS" "$KEXTRACT"
+    rm -f "$WORK" "$WORK.p1" "$LOG" "$FEED" "$STEPS" "$KEXTRACT"
 }
 
 trap 'cleanup' EXIT
@@ -135,7 +148,7 @@ boot_steps() {
     rm -f "$FEED"
     mkfifo "$FEED"
     qemu-system-i386 -cpu max -display none -kernel "$KERNEL" \
-        -append "rach2.fsdisk" -rtc base=utc \
+        -append "$ROOT_TOKEN" -rtc base=utc \
         -drive "file=$WORK,format=raw,if=ide,index=0,media=disk" \
         -serial stdio < "$FEED" > "$LOG" 2>&1 &
     QPID=$!
@@ -166,8 +179,13 @@ rm -f "$WORK"
 cp "$DISK" "$WORK"
 
 # The space preflight, on the host, over the copy the guest will write.
-FREE_BYTES="$(build/tools/inspect/setidcheck --free --image "$WORK" \
-    --offset "$PART_OFFSET" --size "$PART_SIZE")"
+if [ "$ROOT_TYPE" = ext2 ]; then
+    dd if="$WORK" bs=1048576 skip=1 count=48 2>/dev/null > "$WORK.p1"
+    FREE_BYTES="$(debugfs -R stats "$WORK.p1" 2>/dev/null | awk '/^Free blocks:/ { print $3 * 4096 }')"
+else
+    FREE_BYTES="$(build/tools/inspect/setidcheck --free --image "$WORK" \
+        --offset "$PART_OFFSET" --size "$PART_SIZE")"
+fi
 if [ -z "$FREE_BYTES" ] || [ "$FREE_BYTES" -lt "$NEED_BYTES" ]; then
     fail "the disk has $FREE_BYTES free bytes and two kernel builds need $NEED_BYTES"
 fi
@@ -307,7 +325,17 @@ sha256_of() {
     "$REPO/build/tools/verify/sha256" "$1" | awk '{print $1}'
 }
 
-if ! build/krffs/readfile.krffs "$WORK" /home/test/kernel.selfbuilt \
+if [ "$ROOT_TYPE" = ext2 ]; then
+    # The machine was synced and then stopped, so the volume is dirty and
+    # must be consistent: e2fsck's forced check finds nothing to repair.
+    dd if="$WORK" bs=1048576 skip=1 count=48 2>/dev/null > "$WORK.p1"
+    e2fsck -fn "$WORK.p1" > "$DISK.fsck.log" 2>&1 || \
+        fail "the volume the machine built on is not consistent after the synced stop"
+    if ! debugfs -R "dump /home/test/kernel.selfbuilt $KEXTRACT" "$WORK.p1" > /dev/null 2>&1 ||
+       [ ! -s "$KEXTRACT" ]; then
+        fail "the built kernel could not be extracted from the disk copy"
+    fi
+elif ! build/krffs/readfile.krffs "$WORK" /home/test/kernel.selfbuilt \
         "$KEXTRACT" --offset "$PART_OFFSET" --size "$PART_SIZE"; then
     fail "the built kernel could not be extracted from the disk copy"
 fi

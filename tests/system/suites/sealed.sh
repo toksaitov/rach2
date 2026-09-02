@@ -12,13 +12,17 @@
 #
 # Two runs of one artifact, on separate copies.
 #
-# The fault run walks the whole life of the machine: it comes up and answers a
-# key login; a new kernel arrives over the same connection, is installed as a
-# one-boot trial, proves itself by a marker in its own boot, and is committed; a
-# candidate destroyed from the host is caught by the fallback and repaired from
-# the machine that fell back; a menu is staged and then truncated from the host,
-# which the stub must survive; the boot loader is replaced with a marked core
-# and put back; and finally the root is destroyed with the machine stopped and
+# The fault run walks the whole life of the machine: it comes up on the ext2
+# root the candidate entries carry and answers a key login; a new kernel
+# arrives over the same connection, is installed as a one-boot trial, proves
+# itself by a marker in its own boot, and is committed; a candidate destroyed
+# from the host is caught by the fallback, which is the KRFFS root, and
+# repaired from the machine that fell back; the ext2 root is made missing,
+# faulty and dirty in turn under an armed trial and each falls back to the
+# KRFFS root, after which recovery repairs it and the candidate is committed
+# again; a menu is staged and then truncated from the host, which the stub
+# must survive; the boot loader is replaced with a marked core and put back;
+# and finally the KRFFS root is destroyed with the machine stopped and
 # rewritten from recovery through an ssh pipe, after which the machine boots
 # from what arrived.
 #
@@ -65,7 +69,7 @@ cleanup_boot() {
 
 cleanup() {
     cleanup_boot
-    rm -f "$WORK" "$KNOWN" "$ROOTIMG" "$MARKED" "$CORE" "$DISK".log*
+    rm -f "$WORK" "$WORK.sb" "$KNOWN" "$ROOTIMG" "$MARKED" "$CORE" "$DISK.ext2.img" "$DISK".log*
 }
 
 trap 'cleanup' EXIT
@@ -264,6 +268,20 @@ EXTENTS="$("$REPO/build/tools/image/mkmbr" --list "$WORK" |
 BOOT_LBA="$(echo "$EXTENTS" | cut -d' ' -f1)"
 ROOT_LBA="$(echo "$EXTENTS" | cut -d' ' -f2)"
 ROOT_SECTORS="$(echo "$EXTENTS" | cut -d' ' -f3)"
+# The ext2 root, found by its magic the way the kernel finds it: the first
+# partition whose superblock, at byte 1024, has 0xEF53 at byte 56.
+EXT2_LBA="$("$REPO/build/tools/image/mkmbr" --list "$WORK" |
+    while read -r idx type start size; do
+        [ -n "$idx" ] || continue
+        magic="$(dd if="$WORK" bs=512 skip=$((start / 512 + 2)) count=1 \
+            status=none | od -An -tx1 -j 56 -N 2 | tr -d ' ')"
+        if [ "$magic" = "53ef" ]; then
+            echo $((start / 512))
+            break
+        fi
+    done)"
+[ -n "$EXT2_LBA" ] || fail "no partition on the artifact has an ext2 root"
+EXT2_OFF=$((EXT2_LBA * 512))
 if [ -z "$ROOT_LBA" ] || [ "$ROOT_LBA" -eq 0 ]; then
     fail "the artifact's partition table names no root"
 fi
@@ -297,6 +315,20 @@ case "$OUT" in
     *"booted: candidate"*) ;;
     *) fail "the first boot did not come from the candidate slot: $OUT" ;;
 esac
+# The candidate's root is the ext2 partition, by its own command line and by
+# the mount table; the fallback's is proved KRFFS when the fallback boots.
+ROOTS="$(machine 'cat /proc/cmdline; cat /proc/mounts' || true)"
+case "$ROOTS" in
+    *"rach2.root=ext2"*) ;;
+    *) fail "the candidate's command line does not name the ext2 root: $ROOTS" ;;
+esac
+case "$ROOTS" in
+    *"/dev/disk0p4 / ext2 rw,relatime"*) ;;
+    *) fail "the candidate did not mount the ext2 root writable: $ROOTS" ;;
+esac
+if grep -aq "ext2: check" "$LOG"; then
+    fail "a freshly built ext2 root was checked at its first boot"
+fi
 # Where the candidate slot is, from the machine's own report of it, so what is
 # destroyed later is the slot the machine would boot, not a number
 # computed here.
@@ -370,6 +402,15 @@ case "$OUT" in
     *"booted: fallback"*) ;;
     *) fail "the machine did not come up on the fallback: $OUT" ;;
 esac
+ROOTS="$(machine 'cat /proc/cmdline; cat /proc/mounts' || true)"
+case "$ROOTS" in
+    *"rach2.root=disk"*) ;;
+    *) fail "the fallback's command line does not name the KRFFS root: $ROOTS" ;;
+esac
+case "$ROOTS" in
+    *"/dev/disk0 / krffs"*) ;;
+    *) fail "the fallback did not mount the KRFFS root: $ROOTS" ;;
+esac
 
 # The repair is the same install, from the machine that fell back.
 machine 'cat > /tmp/kernel' < "$MARKED" > /dev/null 2>&1 || fail "the repair kernel did not arrive"
@@ -390,6 +431,125 @@ case "$OUT" in
     *) fail "the repaired candidate could not be committed: $OUT" ;;
 esac
 stop_machine
+
+phase "the ext2 root missing, faulty and dirty, each falling back"
+# The trial is what makes a root that does not come up recoverable without a
+# person: the saved default goes back to the fallback and the candidate is
+# armed for one boot, as an installer leaves a machine; the candidate's root
+# is then damaged from the host with the machine stopped, and the boot after
+# the damaged one must be the fallback, with the KRFFS root, and nothing
+# armed. Three damages: the superblock gone, so no ext2 partition is found
+# and the kernel halts with nothing mounted; a reached inode the bitmap
+# calls free, a fault, so the root mounts read-only; and the valid bit alone
+# clear, so the root is checked and mounts. None is committed, since nothing
+# commits a candidate but a person. The superblock is kept from the host copy
+# and put back before the next damage.
+dd if="$WORK" of="$WORK.sb" bs=512 skip=$((EXT2_LBA + 2)) count=2 status=none
+arm_candidate_trial() {
+    cold_boot "$1"
+    OUT="$(machine 'bootctl env saved_entry fallback && bootctl trial candidate && bootctl status' || true)"
+    case "$OUT" in
+        *"next_entry: candidate"*) ;;
+        *) fail "the candidate trial could not be armed: $OUT" ;;
+    esac
+    stop_machine
+}
+fell_back() {
+    cold_boot "$1"
+    OUT="$(machine 'bootctl status; cat /proc/mounts' || true)"
+    case "$OUT" in
+        *"booted: fallback"*) ;;
+        *) fail "the boot after a $2 candidate root was not the fallback: $OUT" ;;
+    esac
+    case "$OUT" in
+        *"next_entry: absent"*|*"next_entry: empty"*) ;;
+        *) fail "the trial was still armed after a $2 candidate root: $OUT" ;;
+    esac
+    case "$OUT" in
+        *"/dev/disk0 / krffs"*) ;;
+        *) fail "the fallback after a $2 candidate root did not mount KRFFS: $OUT" ;;
+    esac
+    stop_machine
+}
+# Missing: the superblock zeroed. The kernel finds no ext2 partition, mounts
+# nothing and halts, which is the state the trial exists for.
+arm_candidate_trial arm-missing
+dd if=/dev/zero of="$WORK" bs=512 seek=$((EXT2_LBA + 2)) count=2 conv=notrunc status=none
+cold_watch missing "ext2: root: no ext2 partition on the disk"
+if grep -aq "rach2 login:" "$LOG"; then
+    fail "a candidate whose ext2 root is missing still reached a login"
+fi
+cleanup_boot
+fell_back after-missing missing
+dd if="$WORK.sb" of="$WORK" bs=512 seek=$((EXT2_LBA + 2)) count=2 conv=notrunc status=none
+# Faulty: a reached inode's bit cleared, with the valid bit clear so that the
+# check runs. The root mounts read-only with the fault named; the machine
+# may reach a login on it, and it is not committed.
+. "$REPO/tools/setup/e2fsprogs_path.sh"
+EXT2_SECTORS="$("$REPO/build/tools/image/mkmbr" --list "$WORK" |
+    awk -v lba="$EXT2_OFF" '$3 == lba { print $4 / 512; exit }')"
+[ -n "$EXT2_SECTORS" ] || fail "the ext2 partition's size could not be read from the table"
+EXT2IMG="$DISK.ext2.img"
+dd if="$WORK" of="$EXT2IMG" bs=512 skip="$EXT2_LBA" count="$EXT2_SECTORS" status=none
+debugfs -w -R 'freei /etc/hostname' "$EXT2IMG" > /dev/null 2>&1
+debugfs -w -R 'ssv state 0' "$EXT2IMG" > /dev/null 2>&1
+arm_candidate_trial arm-faulty
+dd if="$EXT2IMG" of="$WORK" bs=512 seek="$EXT2_LBA" conv=notrunc status=none
+cold_watch faulty "ext2: mounted read-only: the check found a fault"
+grep -aq "ext2: check: inode [0-9]*: a reached inode the bitmap calls free" "$LOG" || \
+    fail "the faulty root's fault was not named"
+cleanup_boot
+fell_back after-faulty faulty
+# Dirty: the valid bit clear over a consistent volume. The check passes and
+# the root mounts writable; still nothing commits it.
+dd if="$WORK" of="$EXT2IMG" bs=512 skip="$EXT2_LBA" count="$EXT2_SECTORS" status=none
+e2fsck -fp "$EXT2IMG" > /dev/null 2>&1 || true
+debugfs -w -R 'ssv state 0' "$EXT2IMG" > /dev/null 2>&1
+arm_candidate_trial arm-dirty
+dd if="$EXT2IMG" of="$WORK" bs=512 seek="$EXT2_LBA" conv=notrunc status=none
+cold_watch dirty "rach2 login:"
+grep -aq "ext2: check: clean" "$LOG" || fail "the dirty root was not checked clean"
+cleanup_boot
+fell_back after-dirty dirty
+# The repair and the return: recovery's init checks every ext2 partition, and
+# the candidate, tried once more, comes up clean and is committed, which is
+# the state the run continues in.
+cold_boot arm-recovery
+OUT="$(machine 'bootctl trial recovery && bootctl status' || true)"
+case "$OUT" in
+    *"next_entry: recovery"*) ;;
+    *) fail "recovery could not be armed for the repair: $OUT" ;;
+esac
+stop_machine
+cold_boot repair
+grep -aq "init: e2fsck: /dev/disk0p4: status [01]" "$LOG" || \
+    fail "recovery's init did not check the ext2 root"
+OUT="$(machine 'bootctl trial candidate && bootctl status' || true)"
+case "$OUT" in
+    *"next_entry: candidate"*) ;;
+    *) fail "the candidate could not be armed after the repair: $OUT" ;;
+esac
+stop_machine
+cold_boot repaired
+if grep -aq "ext2: check" "$LOG"; then
+    fail "the repaired ext2 root was checked again"
+fi
+OUT="$(machine 'bootctl status; cat /proc/mounts' || true)"
+case "$OUT" in
+    *"booted: candidate"*) ;;
+    *) fail "the repaired candidate did not boot: $OUT" ;;
+esac
+case "$OUT" in
+    *"/dev/disk0p4 / ext2 rw,relatime"*) ;;
+    *) fail "the repaired candidate did not mount the ext2 root writable: $OUT" ;;
+esac
+OUT="$(machine 'bootctl commit' || true)"
+case "$OUT" in
+    *"committed: the candidate is the saved default"*) ;;
+    *) fail "the repaired candidate could not be committed: $OUT" ;;
+esac
+stop_machine
+rm -f "$WORK.sb" "$EXT2IMG"
 
 phase "a staged menu, and a torn one"
 cold_boot menu
@@ -474,44 +634,48 @@ esac
 stop_machine
 
 phase "the root destroyed, and rewritten from recovery"
-# The root's first sector, destroyed with the machine stopped, and the recovery
-# entry armed the way an operator arms it from the console: this is the one
-# damage that leaves the machine with no way in of its own.
+# Armed the way `grub-editenv` arms it: one key set and every other line kept.
+# Writing the block from nothing would drop the saved default with it, and the
+# machine would come back on the fallback for a reason that had nothing to do
+# with the repair.
+arm_next() {
+    ENV_AT="$("$REPO/build/tools/inspect/binfind" --offset \
+        '# GRUB Environment Block' "$WORK")" || \
+        fail "the disk has no environment block"
+    {
+        printf '# GRUB Environment Block\n'
+        printf '# WARNING: Do not edit this file by tools other than grub-editenv!!!\n'
+        # Every variable the block already holds except next_entry, which this
+        # is about to set: the '#' fill is stripped from each line, the two
+        # header comments and any empty line dropped.
+        dd if="$WORK" bs=1 skip="$ENV_AT" count=1024 status=none |
+            sed 's/#*$//' |
+            grep -a -v -e '^#' -e '^$' -e '^next_entry='
+        printf 'next_entry=%s\n' "$1"
+    } > "$WORK.env"
+    n="$(wc -c < "$WORK.env" | tr -d ' ')"
+    dd if=/dev/zero bs=1 count=$((1024 - n)) 2>/dev/null | tr '\0' '#' \
+        >> "$WORK.env"
+    dd if="$WORK.env" of="$WORK" bs=1 seek="$ENV_AT" conv=notrunc status=none
+    rm -f "$WORK.env"
+}
+# The KRFFS root's first sector, destroyed with the machine stopped, and the
+# recovery entry armed the way an operator arms it from the console: this is
+# the one damage that leaves the fallback with no way in of its own.
 dd if=/dev/zero of="$WORK" bs=512 seek=$((ROOT_OFF / 512)) count=1 \
     conv=notrunc status=none
-# The damage is proved before it is repaired: the ordinary entry must fail to
-# mount and offer nothing, which is the state an operator would find the machine
-# in. Booting straight into recovery would prove the repair without ever showing
-# that anything was broken.
+# The damage is proved before it is repaired: the fallback entry, armed for
+# one boot since the saved default is the candidate on the other root, must
+# fail to mount and offer nothing, which is the state an operator would find
+# the machine in. Booting straight into recovery would prove the repair
+# without ever showing that anything was broken.
+arm_next fallback
 cold_watch broken "no KRFFS partition on the disk"
 if grep -aq "rach2 login:" "$LOG"; then
     fail "a machine whose root is destroyed still reached a login"
 fi
 cleanup_boot
-
-# Armed the way `grub-editenv` arms it: one key set and every other line kept.
-# Writing the block from nothing would drop the saved default with it, and the
-# machine would come back on the fallback for a reason that had nothing to do
-# with the repair.
-ENV_AT="$("$REPO/build/tools/inspect/binfind" --offset \
-    '# GRUB Environment Block' "$WORK")" || \
-    fail "the disk has no environment block"
-{
-    printf '# GRUB Environment Block\n'
-    printf '# WARNING: Do not edit this file by tools other than grub-editenv!!!\n'
-    # Every variable the block already holds except next_entry, which this
-    # is about to set: the '#' fill is stripped from each line, the two
-    # header comments and any empty line dropped.
-    dd if="$WORK" bs=1 skip="$ENV_AT" count=1024 status=none |
-        sed 's/#*$//' |
-        grep -a -v -e '^#' -e '^$' -e '^next_entry='
-    printf 'next_entry=recovery\n'
-} > "$WORK.env"
-n="$(wc -c < "$WORK.env" | tr -d ' ')"
-dd if=/dev/zero bs=1 count=$((1024 - n)) 2>/dev/null | tr '\0' '#' \
-    >> "$WORK.env"
-dd if="$WORK.env" of="$WORK" bs=1 seek="$ENV_AT" conv=notrunc status=none
-rm -f "$WORK.env"
+arm_next recovery
 
 cold_boot recovery
 grep -aq "modules: found" "$LOG" || fail "the armed entry did not load the recovery image"
@@ -578,5 +742,5 @@ esac
 stop_machine
 
 phase ""
-echo "sealed-test: the sealed artifact came up on AHCI and answered a key login; a kernel sent down that connection was installed, tried and committed; a destroyed candidate was caught by the fallback and repaired from it; a staged menu reached the machine and a torn one left it booting; the boot loader was replaced with a marked core and then with another in the other tail, and the machine booted each; the root was destroyed and rewritten from recovery through one pipe, hashing identically on the platter; and a control copy did all of the ordinary work with no fallback and no recovery anywhere: OK"
+echo "sealed-test: the sealed artifact came up on AHCI on its ext2 root and answered a key login; a kernel sent down that connection was installed, tried and committed; a destroyed candidate was caught by the fallback on the KRFFS root and repaired from it; the ext2 root made missing, faulty and dirty under an armed trial each fell back, recovery's init repaired it and the candidate was committed again; a staged menu reached the machine and a torn one left it booting; the boot loader was replaced with a marked core and then with another in the other tail, and the machine booted each; the KRFFS root was destroyed and rewritten from recovery through one pipe, hashing identically on the platter; and a control copy did all of the ordinary work with no fallback and no recovery anywhere: OK"
 echo "sealed-test: PASS"

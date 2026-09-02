@@ -20,6 +20,9 @@ selfbuild|qemu-system-i386,mformat,mmd,mcopy,mshowfat|full
 install|qemu-system-i386,mformat,mmd,mcopy,mshowfat|full
 menu|qemu-system-i386,mformat,mmd,mcopy,mshowfat|full
 drill|qemu-system-i386,ssh,mformat,mmd,mcopy,mshowfat|full
+install-ext2|qemu-system-i386,mformat,mmd,mcopy,mshowfat,mke2fs,debugfs,e2fsck|full
+drill-ext2|qemu-system-i386,ssh,mformat,mmd,mcopy,mshowfat,mke2fs,debugfs,e2fsck|full
+selfbuild-ext2|qemu-system-i386,mformat,mmd,mcopy,mshowfat,mke2fs,debugfs,e2fsck|full
 raw|qemu-system-i386|full
 raw-e1000|qemu-system-i386|full
 netif|qemu-system-i386|full

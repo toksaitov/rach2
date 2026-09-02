@@ -44,6 +44,17 @@ REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 DISK="$1"
 ROOTPASSWORD="$2"
 
+# With INSTALL_ROOT=ext2 the candidate entries boot the ext2 root on the
+# fourth partition and the fallback boots the KRFFS one, so the kernel built
+# on the candidate is not on the fallback's root: the repair mounts the ext2
+# partition and installs from there, which is what a person at the fallback
+# would do.
+if [ "${INSTALL_ROOT:-krffs}" = ext2 ]; then
+    REPAIR_CD="busybox mkdir -p /mnt && busybox mount -t ext2 /dev/disk0p4 /mnt && cd /mnt/src/rach2"
+else
+    REPAIR_CD="cd /src/rach2"
+fi
+
 if [ -z "$DISK" ] || [ -z "$ROOTPASSWORD" ]; then
     echo "usage: install_test.sh <grub-disk> <root password>" >&2
     exit 2
@@ -262,7 +273,7 @@ run_pass() {
     step "rach2 login:" 2 "root"
     step "Password:" 2 "$ROOTPASSWORD"
     step "Password:" 2 "busybox grep -o 'rach2.slot=[a-z]*' /proc/cmdline | busybox sed s/slot/slotD${P}/"
-    step "rach2.slotD${P}=fallback" 1 "cd /src/rach2 && bootctl kernel kernel && echo REPAIR\"\"${P}OK"
+    step "rach2.slotD${P}=fallback" 1 "$REPAIR_CD && bootctl kernel kernel && echo REPAIR\"\"${P}OK"
     step "REPAIR${P}OK" 1 "echo PRERB${P}C; reboot -f"
     step "rach2 login:" 3 "root"
     step "Password:" 3 "$ROOTPASSWORD"
