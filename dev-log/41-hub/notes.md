@@ -121,6 +121,65 @@ route's low nibble and the translator's port are the same number; the row
 two tiers down, whose translator port is the hub's port the full-speed hub
 sits on, is the one that can tell, and it had that port wrong.
 
+## Phase 3 record
+
+The core's port operations are a vtable on the device record, `usb_port_ops`
+in `core.h`: status, settled, reset begun and reset done, the controller's
+for a root port and the hub driver's for a hub port. A device's location is
+built from its hub's by `location_of`, which refuses a port above 15 and a
+sixth tier, and which finds the translator for a low or full-speed device by
+walking up to the nearest high-speed hub. The hub is class 9 with protocol 0,
+1 or 2; protocol 3 is refused as a SuperSpeed hub by name. A hub's ports are
+refused on the hub's own bitmap. `device_gone` closes a device's subtree
+before the device, and a closing hub waits for its subtree before it asks
+for its slot back. Records name a device by its path, `5.2` for port 2 of
+the hub on root port 5.
+
+`hub.c` brings a hub up from the pump: the descriptor, the controller told
+through a command turn the core gives it (`usb_core_hub_tell`, made on the
+pattern of the halt clear), the ports powered as the descriptor's mode says,
+the power-good time, and every port's status read once, reporting a
+connection to the core with `usb_core_hub_port`. A reset behind a hub is
+asked for by the core and run by the driver, `SET_PORT_FEATURE(PORT_RESET)`,
+the status read every 20 ms, and `C_PORT_RESET` cleared. The change
+endpoint is phase 4's.
+
+In QEMU, `usb-hub` on `qemu-xhci` with `usb-kbd` on its port 2 gives
+`usb: device: port 5: 409:55aa, class 9 protocol 0, endpoint 1, a hub`,
+`usb: hub: device 1: 8 ports, power mode 2, think time 0`, and the keyboard
+at `port 5.2`; pulling the hub records `port 5.2: gone` before `port 5:
+gone`.
+
+`hub_hosttest` includes the core and the hub driver over a model of a tree:
+the controller stubs give a slot for a location and the model answers on it
+as what sits there. Rows: the descriptor read and eight ports told, a
+full-speed hub told nothing of translators, unswitched, ganged and per-port
+power, no port read before the power-good time, the keyboard on port 2 found
+by the scan and enumerated at route 2 one tier down with its port reset
+through the hub, `/proc/usb` giving `port 1.2`, a multi-TT high-speed hub's
+slot told its translators and think time and a low-speed keyboard below it
+carrying the hub at port 3, twenty ports told as fifteen, a reset that never
+ends refusing the device with the port remembered on the hub until its
+device leaves, a disconnection reported by the hub closing the device below,
+a hub pulled with two devices below closing both children before itself,
+and a hub that will not give its descriptor closed.
+
+`tests/run usb` used QEMU's hub as its stand-in for a device this kernel
+cannot drive; the hub is driven now, so the stand-in is `usb-tablet`, a HID
+device with no boot protocol, which is refused with the same record.
+
+Mutations: the ports scanned before the hub is configured, caught by `its
+descriptor is read and its eight ports told to the controller`; a hub closed
+before its children, caught by `the two children before the hub`; two
+devices enumerated at once across the tree, caught; a pulled hub's child
+kept in the table, not caught, and it cannot be: the child also leaves
+through its port status, which answers nothing once the hub driver is
+detached, so the check is met by the second road. The explicit close of the
+subtree is kept for the order of the records, children before their hub.
+The first attempt at the second mutation did not build, an unused static
+function under `-Werror`, and the script read a stale log as an escape; it
+now reports a build that failed as such.
+
 ## Open items
 
 * None yet.

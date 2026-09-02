@@ -11,9 +11,9 @@ Phase 2: the location
 - [x] the location rows in xhci_hosttest.c; usb and usbdisk unchanged
 
 Phase 3: the core on a tree
-- [ ] the port vtable, the hub-port operations, the depth-first close
-- [ ] the per-hub refusal bitmap; class 9 matched
-- [ ] the hub model and hub_hosttest.c's enumeration and close rows
+- [x] the port vtable, the hub-port operations, the depth-first close
+- [x] the per-hub refusal bitmap; class 9 matched
+- [x] the hub model and hub_hosttest.c's enumeration and close rows
 
 Phase 4: the hub driver
 - [ ] hub.c in full; the rest of hub_hosttest.c
