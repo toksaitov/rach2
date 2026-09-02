@@ -185,6 +185,38 @@ static uint8_t raw_batch[RAW_BATCH_SECTORS * BLOCK_SECTOR_SIZE] __attribute__((a
  * thousand driver calls and a million. */
 static uint64_t raw_calls;
 
+/*
+ * Who has the staging buffer. It was one buffer for everyone while every
+ * raw window was over a device that polls: a syscall is not preempted, so
+ * a transfer began and ended with no other process running. A stick's
+ * window sleeps inside its request with the sectors in this buffer, and a
+ * second process reading any raw window would fill it under the sleeper.
+ * So a transfer takes the buffer first and gives it back after the copy,
+ * and a second process sleeps until then.
+ */
+static int raw_batch_holder = -1;
+static wait_queue_t raw_batch_wq;
+
+static int raw_batch_free(void *arg)
+{
+    (void)arg;
+    return raw_batch_holder == -1;
+}
+
+static void raw_batch_take(void)
+{
+    while (raw_batch_holder != -1) {
+        wq_wait_event_nointr(&raw_batch_wq, raw_batch_free, 0);
+    }
+    raw_batch_holder = current_proc ? (int)current_proc->pid : 0;
+}
+
+static void raw_batch_put(void)
+{
+    raw_batch_holder = -1;
+    wq_wake_all(&raw_batch_wq);
+}
+
 uint64_t devfs_raw_calls(void)
 {
     return raw_calls;
@@ -239,6 +271,7 @@ static int32_t raw_window_read(struct raw_window *w, fd_entry_t *e, char __user 
         want = (uint32_t)(total - lba);
     }
     done = 0;
+    raw_batch_take();
     while (done < want) {
         uint32_t chunk = want - done;
 
@@ -253,12 +286,14 @@ static int32_t raw_window_read(struct raw_window *w, fd_entry_t *e, char __user 
         if (copy_to_user((void __user *)(buf + done * BLOCK_SECTOR_SIZE), raw_batch,
                          chunk * BLOCK_SECTOR_SIZE) != 0) {
             if (done == 0) {
+                raw_batch_put();
                 return -EFAULT;
             }
             break;
         }
         done += chunk;
     }
+    raw_batch_put();
     if (done == 0) {
         return rc; /* the request's own errno: EIO, or what the device said */
     }
@@ -321,6 +356,7 @@ static int32_t raw_window_write(struct raw_window *w, fd_entry_t *e, const char 
         return -ENOSPC;
     }
     done = 0;
+    raw_batch_take();
     while (done < want) {
         uint32_t chunk = want - done;
 
@@ -330,6 +366,7 @@ static int32_t raw_window_write(struct raw_window *w, fd_entry_t *e, const char 
         if (copy_from_user(raw_batch, (const void __user *)(buf + done * BLOCK_SECTOR_SIZE),
                            chunk * BLOCK_SECTOR_SIZE) != 0) {
             if (done == 0) {
+                raw_batch_put();
                 return -EFAULT;
             }
             break;
@@ -343,6 +380,7 @@ static int32_t raw_window_write(struct raw_window *w, fd_entry_t *e, const char 
     if (done == 0) {
         return -EIO;
     }
+    raw_batch_put();
     e->ofd->raw_offset = off + (uint64_t)done * BLOCK_SECTOR_SIZE;
     return (int32_t)(done * BLOCK_SECTOR_SIZE);
 }
@@ -391,8 +429,8 @@ static int32_t dev_part4_read(fd_entry_t *e, char __user *buf, uint32_t count)
  *
  * These are raw windows like the disk's, with two differences. They report
  * themselves as block devices in `stat`, because that is what BusyBox's
- * `blkid`, `findfs` and `mount LABEL=` scan `/dev` for, and a stick found by
- * its label is worth more than a stick found by the order it was plugged in;
+ * `blkid`, `findfs` and `mount LABEL=` scan `/dev` for, and a stick is then
+ * found by its label rather than by the order the sticks were plugged in;
  * and there is one shared vtable rather than one per node, with the entry's
  * minor saying which window it is, because ten of these would otherwise be
  * ten pairs of identical functions.
@@ -445,6 +483,7 @@ static int32_t raw_window_read_bytes(struct raw_window *w, fd_entry_t *e, char _
     if ((uint64_t)count > total - off) {
         count = (uint32_t)(total - off);
     }
+    raw_batch_take();
     while (done < count) {
         uint64_t at = off + done;
         uint64_t lba = at / BLOCK_SECTOR_SIZE;
@@ -467,12 +506,14 @@ static int32_t raw_window_read_bytes(struct raw_window *w, fd_entry_t *e, char _
         }
         if (copy_to_user((void __user *)(buf + done), raw_batch + skip, take) != 0) {
             if (done == 0) {
+                raw_batch_put();
                 return -EFAULT;
             }
             break;
         }
         done += take;
     }
+    raw_batch_put();
     if (done == 0) {
         return rc;
     }
