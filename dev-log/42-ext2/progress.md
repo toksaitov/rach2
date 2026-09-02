@@ -16,13 +16,13 @@ Phase 3: the reader in the kernel and the links
 - [x] the read rows of ext2_hosttest.c; the link rows of ext2probe
 
 Phase 4: the writer
-- [ ] allocation and the order of writes; rename; the held inode; the valid bit
+- [x] allocation and the order of writes; rename; the held inode; the valid bit
 - [x] the write rows and the interruption matrix with its three judges
 
 Phase 5: the check, the root and recovery
-- [ ] the mount-time check and the error bit
-- [ ] rach2.root=ext2; the boot order; recovery's writable partition nodes
-- [ ] e2fsck in recovery run by its init; the crash boot, the drills and the repair
+- [x] the mount-time check and the error bit
+- [x] rach2.root=ext2; the boot order; recovery's writable partition nodes
+- [x] e2fsck in recovery run by its init; the crash boot, the drills and the repair
 
 Phase 6: the images and the suites
 - [ ] the fourth partition; the sealed image with both roots and the two command lines

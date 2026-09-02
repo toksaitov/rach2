@@ -432,7 +432,166 @@ size over a block the pointers do not yet name reads as a hole, which is
 zeros, and the oracle allows zeros for bytes not yet synced. The order in
 the code is the plan's in both cases.
 
+## Phase 5 record
+
+The check is one block of `ext2.c` before the constructor: `check_mark`
+over the walk bitmap the FAT drivers share, raised from 2^20 to 2^22
+bits, `check_level` through the pointer levels reading each pointer word
+through the cache, `check_blocks` against the size and `i_blocks`,
+`check_child` and `check_dir` over the tree with the reached set and the
+hard-link table, `check_bitmaps` for the orphan scan, the compare and the
+recount, and `ext2_check_volume` seeding, walking, comparing, and writing
+the descriptors and the superblock's error bit. The state is one static
+`struct ext2_check` of 143 KiB: the reached set of 2^20 bits, thirty-two
+nodes for the directory levels, 512 link records and one bitmap block;
+the kernel stack is 16 KiB, so the levels could not live on it. The
+bitmap's growth is 384 KiB of BSS. The constructor runs the check when
+the valid bit is clear or the error bit set and the mount was not asked
+for read-only; a read-only mount of a dirty volume is not checked and
+writes nothing, which the rows prove by a snapshot.
+
+The host test's fourth judge, which mounts a copy of every stop with the
+check, decided two rules. A slot the junk fixture had freed with its
+pointers intact, and our own allocation's bit set before the inode is
+written, both look like an orphan with stale pointers; `e2fsck` reads an
+in-bitmap inode with a zero link count as deleted and validates nothing
+of it, and the check now does the same, counting it and marking no block.
+And the writer's order leaves states the check must call faults: a link
+count behind its entry, a size and an `i_blocks` behind the pointers, and
+a directory between its two parents in a move. Those mount read-only,
+which is the plan's rule, and the judge allows exactly those seven
+records and no other at a stop. The matrix runs in 47 s with the fourth
+judge, under the 60 s watchdog, after the per-stop copy moved from `cp`
+to a loop in the test.
+
+The root: `vfs_init_root` installs a type with a device at entry zero
+with `/dev` and `/proc` over it; `init_ext2_root` in `kernel.c` scans the
+MBR entries for the magic and the feature words, takes the window and its
+claim as `mount(2)` does, and mounts. Three ties to KRFFS had to give
+way: `mnt_is_root` in the syscall layer now means the KRFFS root, so an
+ext2 root goes the way of every other type; `refuse_unmounted_root`,
+`boot_init_process` and the debug shell's `exec_program` read the root
+through the VFS, the program held and opened through the mount as
+`execve` does; and `mkdir`, `rmdir` and `getdents` asked `krffs_fs` for
+a root and now ask the mount table. Two faults outside the plan came out
+of the first boots. `_llseek`, which is musl's `lseek` on i386, answered
+`EBADF` for any file of another type, since it read the size from the
+KRFFS node alone; a shell on the ext2 root died at its first command
+saving its history. It was there for FAT mounts too and nothing had
+seeked a file on one from a shell. And `execve` refused a script on a
+mount of another type by design, with the shebang reader the root's;
+`exec_shebang` now takes its reader, so a script on the ext2 root runs
+its interpreter. The USB stack moved after the root mount, past the
+scheduler and the audio probe, with the usb suite passing after the move.
+`kernel_shutdown` runs the root's `prepare_unmount`, so `poweroff` leaves
+the valid bit set and `e2fsck -fn` clean, and `/proc/mounts` reports the
+root from the mount's own source and flags.
+
+Recovery: `init-metal` runs `e2fsck -p` over `/dev/disk0p1` to `p4`
+where the image has `/sbin/e2fsck`, reading the magic through a whole
+sector because a raw window takes no other read, and records the status.
+The partition nodes write in the recovery build alone, through
+`raw_window_write` under `recovery_publishes_disk`, and every raw window
+answers `BLKGETSIZE64` under both request numbers and `BLKGETSIZE`. The
+port then failed twice on the machine before it repaired anything. The
+compiler behind `muslgcc` is `i686-elf-gcc` and defines no `__linux__`,
+so `getsize.c` compiled without the size requests and sized the device by
+single-byte reads, which the window refuses, and reported zero blocks;
+then `closefs.c` wrote the superblock's changed bytes alone and the
+window refused those. Both are one patch, `raw-device-io.patch`, taken
+under a `__rach2__` the wrapper now defines: the requests, and the
+512-byte alignment `unix_io.c` already applies for Cygwin. `e2fsck` is
+673864 bytes after it, 192 more, under the 737280 limit. The recovery
+manifest stages an empty `/etc/mtab`, which silences a warning on every
+run. `e2fsck -p` repairs bitmaps and counts without a question and leaves
+an unattached inode with data to a person, exit 4; the suite's writable
+dirty row is a lost block for that reason and the host test keeps the
+orphan rows, and the Readme says what `-p` leaves.
+
+The ext2 suite boots the root disk six times in 45 s: the mount and its
+order, the kill, the checked boot and the clean poweroff, the lost block,
+the fault, recovery's repair with a partition write there, the clean boot
+after. Style, host, ext2, usb, mount, fatwrite, exfat and default pass
+on the tree, 98, 144, 102, 76, 62 and 103 s for the six.
+
+The plan's six mutations, each caught by its row: the dirty root
+mounted writable without the check, by the inode-table fixture; the
+inode-table seed skipped, by the same fixture; the orphan scan skipped,
+by the orphan whose block the bitmap calls free; the error bit cleared at
+unmount, by the row that mounts and unmounts a lost block twice; a
+non-recovery build writing a partition node, by the suite's `EPERM` row,
+which got its own verdict for that; and the USB stack started before the
+partition scan, by the boot-order row. The first batch judged the host
+rows from the suite's summary instead of the host test's own log and
+called three of them escaped; the second batch read the log.
+
+### The review round after phase 5
+
+Four Codex rescue units in parallel, review-only: A, the check, over
+`ext2.c`, `ext2.h`, the Readme, `fatcommon.[ch]` and the host test's dirty
+rows; B, the root in the kernel, over the phase's diff of `kernel.c`,
+`vfs.[ch]`, `syscall.c`, `devfs.c` and `procfs.c`; C, the tools; E, the
+port and recovery. Each ran past the ten-minute foreground window and
+finished in the background, twelve to fifteen minutes, its report in the
+task's output file.
+
+Unit A, four findings. The root inode was never put in the reached set
+itself, only through the reserved-inode loop, so a volume with
+`s_first_ino` of 2 whose root bit was clear passed the compare: fixed by
+marking the root before the walk. The fault path wrote the superblock
+with counts the recount had reached part way: fixed by restoring the
+counts the mount summed and rereading the descriptors before the error
+bit is written, which the Readme now states. A deleted inode was counted
+as an orphan against the comment's word "skipped": the count is right,
+since `e2fsck` is owed the bit, and the comment and the Readme now say
+counted and not read. The shared walk lock's plain test and set is not
+atomic between two preempted callers: the kernel runs one CPU and does
+not preempt a syscall, which is the rule every mount-time check here has
+run under since FAT32's; recorded, not changed. Unit E, three findings.
+`init` checks four nodes and the Readme said every partition: an MBR has
+four entries and the kernel publishes four nodes, so the prose now says
+so. A failed fork skipped the partition for good: retried five times a
+second apart, as the shell's is. A `waitpid` failure other than `EINTR`
+read an uninitialised status: initialised, and reported as 8.
+
+Unit C, the tools, ten findings, the harshest round of the milestone,
+every one fixed. `setidcheck`'s reader wrote two structural marks into a
+one-byte table when the superblock said one block, and read an entry's
+header past its block after a `rec_len` of 4092: a volume of fewer than
+eight blocks is refused, and the header's room is checked before it is
+read. The root was kept out of the node table, an inheritance from
+KRFFS's root mode word, so a set-gid root passed the policy: the root is
+a node now, with a selftest row. A declared set-id path was compared by
+permission bits alone, so a set-id symbolic link under `/bin/su` passed
+as the program: a declared entry must be a regular file, with a row that
+`debugfs` builds from `rm`, `symlink` and a mode, for which the selftest's
+copy helper takes several commands. `mkext2.sh` used fixed intermediate
+names beside the output and discarded `mke2fs`'s and `debugfs`'s exit
+statuses behind `grep`: every intermediate lives in a `mktemp` directory
+of the run's own and both statuses are checked. Its claim of one image
+per manifest was false twice over: `mke2fs` draws a directory hash seed
+at random even with `dir_index` off, and copies each staged file's change
+time from the host, which no builder can set; the seed is fixed with `-E
+hash_seed` and `debugfs` sets every node's `ctime`, and two builds of the
+os-real manifest now compare equal byte for byte. `stageimage --tree`
+noted only the nodes the manifest named, so a directory a path passed
+through kept the builder's identity and umask in the image: every
+directory it creates is noted, root's and 0755. It checked a name with
+`access` and then opened it, and stamped times through a link: the file
+is created with `O_EXCL | O_NOFOLLOW` and the stamp uses
+`AT_SYMLINK_NOFOLLOW`. A manifest whose read failed staged as a success:
+`ferror` and `fclose` are checked. And `e2fsprogs_path.sh` appended
+directories, so an older `e2fsck` earlier on the path could pair with a
+newer `mke2fs`: the first directory with all three goes first. Unit B is
+recorded below.
+
 ## Open items
 
-* Phase 5: the partition nodes report their size, so that `e2fsck -p`
-  does not abort on a size of zero.
+* Phase 6: a missing, a corrupt and a dirty candidate root each falling
+  back to KRFFS is proved on the sealed disk with the fourth partition,
+  since the trial mechanism needs the GRUB disk; phase 5 proved every
+  other line of its proof.
+* Phase 6 or the sweep: the image rules take `utils` and the ports as
+  order-only prerequisites, so a rebuilt `init-metal` did not rebuild the
+  recovery image and a stale image booted twice this phase; the images
+  should depend on the binaries their manifests stage.
