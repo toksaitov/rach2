@@ -150,9 +150,9 @@ fi
 #         remembered by holding a table entry, those three left one entry for
 #         everything a person plugs in: unplug once and the next scan gave that
 #         entry to another of them, after which nothing plugged in was ever
-#         enumerated again until the machine was rebooted. The tablet here stands
-#         for those devices, and the mouse is unplugged and plugged back in the
-#         way a person does. The port it comes back on is not named: the
+#         enumerated again until the machine was rebooted. The tablet here
+#         stands for those devices, and the mouse is unplugged and plugged
+#         back in the way a person does. The port it comes back on is not named: the
 #         emulator hands out the next free one, as a person moving a plug from
 #         one socket to another does. ----
 if run_harness --qemu-arg=-cpu --qemu-arg=max \
