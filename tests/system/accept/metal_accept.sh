@@ -12,9 +12,10 @@
 #
 # It is written to be run against the laptop from the development host once SSH
 # answers, and it is run against QEMU first so that the script itself is not
-# being debugged on the machine it is meant to measure. Everything it does is a
-# read: it mounts nothing, writes nothing, and issues no command the read-only
-# build's allowlist would refuse.
+# being debugged on the machine it is meant to measure. Nearly everything it
+# does is a read, and it issues no command the read-only build's allowlist
+# would refuse; the two exceptions, a file written to the scratch partition
+# and one to a plugged-in stick, are each read back, removed and unmounted.
 #
 # Its output is a record, not a verdict on everything. Where a baseline exists
 # (dev-log/24-metal/baseline.md, what Windows measured before Rach2 existed on
@@ -271,7 +272,7 @@ fi
 #      machine with nothing plugged in is a note, not a failure. The pull from
 #      under a mount and the boot from a Rach2 stick need a person in the
 #      room and are in dev-log/40-usbdisk/hardware.md. ----
-USBLINE="$(run 'cat /proc/usb 2>/dev/null' | grep '^usb0 ')"
+USBLINE="$(run 'cat /proc/usb 2>/dev/null' | grep '^usb0 ' || true)"
 if [ -z "$USBLINE" ]; then
     note "no flash drive is plugged in (/proc/usb names no usb0)"
 else
@@ -281,13 +282,20 @@ else
         *)  bad "stick: /dev/usb0 is not a block device, so a label scan cannot find it" ;;
     esac
     run 'blkid 2>/dev/null' | grep '^/dev/usb0' | while read -r line; do note "stick: $line"; done
-    LABEL="$(run 'blkid 2>/dev/null' | grep '^/dev/usb0' | sed -n 's/.*LABEL="\([^"]*\)".*/\1/p' | head -1)"
+    LABEL="$(run 'blkid 2>/dev/null' | grep '^/dev/usb0' | sed -n 's/.*LABEL="\([^"]*\)".*/\1/p' | head -1 || true)"
+    # The label is the stick's own text and goes into a shell command on the
+    # machine, so only a label of letters, digits, `_` and `-` is used.
+    case "$LABEL" in
+        *[!A-Za-z0-9_-]*) bad "stick: the label has a character this script will not put in a command: $LABEL"; LABEL="" ;;
+    esac
     if [ -z "$LABEL" ]; then
-        bad "stick: no volume with a label was found on it"
+        bad "stick: no volume with a plain label was found on it"
     else
         before="$(echo "$USBLINE" | sed -n 's/.*flushes \([0-9]*\).*/\1/p')"
-        OUT="$(run "mkdir -p /mnt && mount LABEL=$LABEL /mnt && echo accept > /mnt/accept.txt && cat /mnt/accept.txt && umount /mnt")"
-        after="$(run 'cat /proc/usb 2>/dev/null' | grep '^usb0 ' | sed -n 's/.*flushes \([0-9]*\).*/\1/p')"
+        # The unmount runs whether or not the write and the read back did, so
+        # a failure leaves neither a file nor a mount behind on the stick.
+        OUT="$(run "mkdir -p /mnt && mount 'LABEL=$LABEL' /mnt && { echo accept > /mnt/accept.txt && cat /mnt/accept.txt; rm -f /mnt/accept.txt; umount /mnt; }")"
+        after="$(run 'cat /proc/usb 2>/dev/null' | grep '^usb0 ' | sed -n 's/.*flushes \([0-9]*\).*/\1/p' || true)"
         if [ "$OUT" = "accept" ]; then
             note "stick: the volume $LABEL mounts by its label, takes a file and gives it back"
         else
