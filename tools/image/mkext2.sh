@@ -49,25 +49,34 @@ done
 cd "$REPO"
 mkdir -p "$(dirname "$OUT")"
 
-TMP="$OUT.new"
-TREE="$OUT.tree"
-NODES="$OUT.nodes"
-SCRIPT="$OUT.debugfs"
-trap 'rm -rf "$TMP" "$TREE" "$NODES" "$SCRIPT"' EXIT INT TERM
-rm -rf "$TMP" "$TREE" "$NODES" "$SCRIPT"
+# Every intermediate lives in a directory of this run's own, so that two
+# builds of one output never share a path and nothing here follows a name
+# somebody else made; the image reaches its name by one rename at the end.
+WORK=$(mktemp -d "$(dirname "$OUT")/.mkext2.XXXXXX") || exit 1
+TMP="$WORK/image"
+TREE="$WORK/tree"
+NODES="$WORK/nodes"
+SCRIPT="$WORK/debugfs"
+FSCK="$WORK/fsck.log"
+MKLOG="$WORK/mke2fs.log"
+trap 'rm -rf "$WORK"' EXIT INT TERM
 
 "$STAGEIMAGE" "$MANIFEST" --tree "$TREE" > "$NODES"
 
 # The profile: revision 1, 4 KiB blocks, 128-byte inodes, and exactly the
 # three features the driver writes, with every other feature mke2fs's
-# configuration file might add named and switched off. The times and the
-# identifier are fixed, so that one manifest makes one image.
+# configuration file might add named and switched off. The times, the
+# identifier and the directory hash seed, which mke2fs draws at random even
+# with dir_index off, are fixed, so that one manifest makes one image.
 PROFILE="sparse_super,large_file,filetype,^dir_index,^resize_inode,^ext_attr,^has_journal,^extent,^64bit,^flex_bg,^metadata_csum,^huge_file,^dir_nlink,^extra_isize"
-rm -f "$TMP"
 : > "$TMP"
 E2FSPROGS_FAKE_TIME=1 mke2fs -q -F -t ext2 -b 4096 -I 128 -O "$PROFILE" \
+    -E hash_seed=52616368-3200-4578-7432-000000000002 \
     -U 52616368-3200-4578-7432-000000000001 -L rach2 -d "$TREE" "$TMP" "${SIZE}M" \
-    2>&1 | grep -v '128-byte inodes cannot handle dates beyond 2038' || true
+    > "$MKLOG" 2>&1
+MKSTATUS=$?
+grep -v '128-byte inodes cannot handle dates beyond 2038' "$MKLOG" >&2 || true
+[ "$MKSTATUS" -eq 0 ] || { echo "mkext2: mke2fs failed with status $MKSTATUS" >&2; exit 1; }
 
 # Read the superblock back: the magic, the revision, the block size, the
 # inode size and the three feature words must be the profile's, whatever
@@ -83,21 +92,25 @@ sb16() { od -A n -t u2 -j "$((1024 + $1))" -N 2 "$TMP" | tr -d ' '; }
 [ "$(sb 100)" = "3" ] || { echo "mkext2: read-only features $(sb 100), not sparse_super and large_file" >&2; exit 1; }
 
 # The owners, modes and set-id bits from the manifest, one debugfs command
-# each, with the type bits kept: `mode` is the whole i_mode.
+# each, with the type bits kept: `mode` is the whole i_mode. The change
+# time as well, which mke2fs copies from the staged tree and no builder can
+# set there, so that one manifest makes one image.
 awk '$1 == "node" {
     printf "set_inode_field %s mode %s\n", $5, $2;
     printf "set_inode_field %s uid %s\n", $5, $3;
     printf "set_inode_field %s gid %s\n", $5, $4;
+    printf "set_inode_field %s ctime @1\n", $5;
 }' "$NODES" > "$SCRIPT"
-if debugfs -w -f "$SCRIPT" "$TMP" 2>&1 | grep -v '^debugfs' | grep -q .; then
-    echo "mkext2: debugfs refused a command:" >&2
-    debugfs -w -f "$SCRIPT" "$TMP" 2>&1 | grep -v '^debugfs' | head -3 >&2
+debugfs -w -f "$SCRIPT" "$TMP" > "$WORK/debugfs.log" 2>&1
+DBSTATUS=$?
+if [ "$DBSTATUS" -ne 0 ] || grep -v '^debugfs' "$WORK/debugfs.log" | grep -q .; then
+    echo "mkext2: debugfs refused a command (status $DBSTATUS):" >&2
+    grep -v '^debugfs' "$WORK/debugfs.log" | head -3 >&2
     exit 1
 fi
 
 # The two gates: structure, then policy.
-e2fsck -fn "$TMP" > "$OUT.fsck.log" 2>&1 || { cat "$OUT.fsck.log" >&2; rm -f "$OUT.fsck.log"; exit 1; }
-rm -f "$OUT.fsck.log"
+e2fsck -fn "$TMP" > "$FSCK" 2>&1 || { cat "$FSCK" >&2; exit 1; }
 if [ ! -x "$SETIDCHECK" ] || [ "$REPO/tools/inspect/setidcheck.c" -nt "$SETIDCHECK" ]; then
     mkdir -p "${SETIDCHECK%/*}"
     cc -O2 -o "$SETIDCHECK" "$REPO/tools/inspect/setidcheck.c" || exit 1

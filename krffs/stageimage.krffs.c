@@ -423,10 +423,22 @@ static bool is_synthetic_path(const char *path)
 static const char *tree_root;
 static unsigned long tree_nodes;
 
-static bool tree_mkdir_p(const char *host_path)
+static void tree_note(uint16_t mode, uint32_t uid, uint32_t gid, const char *path)
+{
+    printf("node 0%o %lu %lu %s\n", (unsigned) mode, (unsigned long) uid,
+           (unsigned long) gid, path);
+    tree_nodes++;
+}
+
+/* Make `host_path` and its missing parents. A directory the manifest did
+ * not name but a path passes through is a node too, root's and 0755, and is
+ * noted so that the image does not keep the builder's identity and umask
+ * on it; the last component is noted when `note_last`, which a caller
+ * naming the directory itself leaves to its own note. */
+static bool tree_mkdir_p(const char *host_path, bool note_last)
 {
     char buf[1024];
-    size_t i;
+    size_t i, skip = strlen(tree_root);
 
     if (strlen(host_path) >= sizeof(buf)) {
         return false;
@@ -435,20 +447,23 @@ static bool tree_mkdir_p(const char *host_path)
     for (i = 1; buf[i] != '\0'; i++) {
         if (buf[i] == '/') {
             buf[i] = '\0';
-            if (mkdir(buf, 0755) != 0 && errno != EEXIST) {
+            if (mkdir(buf, 0755) == 0) {
+                if (i > skip) {
+                    tree_note((uint16_t) (S_IFDIR | 0755), 0, 0, buf + skip);
+                }
+            } else if (errno != EEXIST) {
                 return false;
             }
             buf[i] = '/';
         }
     }
-    return mkdir(buf, 0755) == 0 || errno == EEXIST;
-}
-
-static void tree_note(uint16_t mode, uint32_t uid, uint32_t gid, const char *path)
-{
-    printf("node 0%o %lu %lu %s\n", (unsigned) mode, (unsigned long) uid,
-           (unsigned long) gid, path);
-    tree_nodes++;
+    if (mkdir(buf, 0755) == 0) {
+        if (note_last && strlen(buf) > skip) {
+            tree_note((uint16_t) (S_IFDIR | 0755), 0, 0, buf + skip);
+        }
+        return true;
+    }
+    return errno == EEXIST;
 }
 
 static bool tree_dir(const char *path, uint16_t mode, uint32_t uid, uint32_t gid)
@@ -456,7 +471,7 @@ static bool tree_dir(const char *path, uint16_t mode, uint32_t uid, uint32_t gid
     char host[1024];
 
     if (snprintf(host, sizeof(host), "%s%s", tree_root, path) >= (int) sizeof(host) ||
-        !tree_mkdir_p(host)) {
+        !tree_mkdir_p(host, false)) {
         fprintf(stderr, "stageimage: cannot make '%s%s'.\n", tree_root, path);
 
         return false;
@@ -472,6 +487,7 @@ static bool tree_file(const char *path, uint16_t mode, uint32_t uid, uint32_t gi
     char host[1024];
     char *slash;
     FILE *out;
+    int fd;
 
     if (snprintf(host, sizeof(host), "%s%s", tree_root, path) >= (int) sizeof(host)) {
         fprintf(stderr, "stageimage: path too long '%s'.\n", path);
@@ -482,21 +498,24 @@ static bool tree_file(const char *path, uint16_t mode, uint32_t uid, uint32_t gi
         strrchr(host, '/');
     *slash =
         '\0';
-    if (!tree_mkdir_p(host)) {
+    if (!tree_mkdir_p(host, true)) {
         fprintf(stderr, "stageimage: cannot make '%s'.\n", host);
 
         return false;
     }
     *slash =
         '/';
-    /* A name already there is the same path staged twice, as in an image. */
-    if (access(host, F_OK) == 0) {
+    /* A name already there is the same path staged twice, as in an image;
+       the exclusive create decides that in one step, and follows no link. */
+    fd =
+        open(host, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0644);
+    if (fd < 0 && errno == EEXIST) {
         fprintf(stderr, "stageimage: '%s' is staged more than once.\n", path);
 
         return false;
     }
     out =
-        fopen(host, "wb");
+        fd < 0 ? NULL : fdopen(fd, "wb");
     if (out == NULL || (data_size != 0 && fwrite(data, 1, (size_t) data_size, out) != data_size) ||
         fclose(out) != 0) {
         fprintf(stderr, "stageimage: cannot write '%s'.\n", host);
@@ -544,7 +563,7 @@ static bool tree_stamp(const char *host_path)
         closedir(d);
     }
 
-    return ok && utimensat(AT_FDCWD, host_path, times, 0) == 0;
+    return ok && utimensat(AT_FDCWD, host_path, times, AT_SYMLINK_NOFOLLOW) == 0;
 }
 
 static bool stage_dir(struct krffs_file_system *file_system, const char *path,
@@ -1443,7 +1462,17 @@ stage:
         }
     }
 
-    fclose(manifest);
+    /* An end that was not the end of the file is a read that failed. */
+    if (exit_status == EXIT_SUCCESS && ferror(manifest)) {
+        fprintf(stderr, "stageimage: cannot read manifest '%s'.\n", argv[1]);
+        exit_status =
+            EXIT_FAILURE;
+    }
+    if (fclose(manifest) != 0 && exit_status == EXIT_SUCCESS) {
+        fprintf(stderr, "stageimage: cannot close manifest '%s'.\n", argv[1]);
+        exit_status =
+            EXIT_FAILURE;
+    }
 
     if (exit_status == EXIT_SUCCESS && tree_root != NULL) {
         if (!tree_stamp(tree_root)) {

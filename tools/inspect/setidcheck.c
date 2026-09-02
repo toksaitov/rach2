@@ -1757,6 +1757,9 @@ static int ext2_open(struct ext2 *fs, const char *path, long offset,
                          "per group do not describe the %llu-byte region",
                          fs->blocks, fs->bpg, fs->inodes, fs->ipg,
                          (unsigned long long) fs->size);
+    if (fs->blocks < 8)
+        return ext2_fail(fs, "%lu blocks are fewer than one group's "
+                         "structure", fs->blocks);
     fs->groups = (fs->blocks + fs->bpg - 1) / fs->bpg;
     if (fs->groups * fs->ipg < fs->inodes)
         return ext2_fail(fs, "%lu inodes do not fit %lu groups of %lu",
@@ -2000,8 +2003,9 @@ static int ext2_reach(struct ext2 *fs, struct image *im, const char *path,
         if (size == 0 || size % EXT2_BLOCK != 0)
             return ext2_fail(fs, "%s: directory size %llu is not whole "
                              "blocks", path, (unsigned long long) size);
-        if (strcmp(path, "/") != 0)
-            ext2_push(im, path, mode, uid, gid, size, ino, NULL, 0);
+        /* The root is a node here, unlike KRFFS's, whose root mode word
+           carries the dirty bit: the policy must see set-id bits on it. */
+        ext2_push(im, path, mode, uid, gid, size, ino, NULL, 0);
         d.fs = fs;
         d.im = im;
         d.path = path;
@@ -2045,13 +2049,20 @@ static int ext2_dir_block(void *ctx, unsigned long index,
     unsigned long at = 0;
 
     while (at < EXT2_BLOCK) {
-        unsigned long ino = rd32(block + at);
-        unsigned rec = rd16(block + at + 4);
-        unsigned name_len = block[at + 6];
-        unsigned ft = block[at + 7];
+        unsigned long ino;
+        unsigned rec, name_len, ft;
         char name[256];
         char child[1024];
 
+        if (at + 8 > EXT2_BLOCK) {
+            d->failed = 1;
+            return ext2_fail(d->fs, "%s: entry at block %lu offset %lu has "
+                             "no room for its header", d->path, index, at);
+        }
+        ino = rd32(block + at);
+        rec = rd16(block + at + 4);
+        name_len = block[at + 6];
+        ft = block[at + 7];
         if (rec < 8 || rec % 4 != 0 || at + rec > EXT2_BLOCK ||
             name_len + 8 > rec) {
             d->failed = 1;
@@ -2210,6 +2221,14 @@ static void check_image(const char *image, const char *manifest,
             addf(problems, "%s: %s is staged set-id (%s) and the %s "
                  "allowlist does not declare it", iname, sn->path,
                  fmt_entry(mode, sn->uid, sn->gid), stem);
+            continue;
+        }
+        /* A declared entry is a program: a set-id link or device under
+           its name is not the file the declaration was about. */
+        if ((sn->mode & 0170000u) != 0 && (sn->mode & 0170000u) != 0100000u) {
+            addf(problems, "%s: %s is staged set-id but is not a regular "
+                 "file (type 0%lo)", iname, sn->path,
+                 (unsigned long) (sn->mode & 0170000u));
             continue;
         }
         if (mode != decl->mode || sn->uid != decl->uid ||
@@ -3684,15 +3703,18 @@ static int st_ext2_fixture(const char *out)
 }
 
 /* A copy of the clean fixture with a debugfs command applied. */
+/* A copy of the clean fixture with debugfs's `commands` applied, one per
+   line, through a request file. */
 static int st_ext2_copy(const char *clean, const char *out,
-                        const char *command)
+                        const char *commands)
 {
     char cmd[4096];
 
     snprintf(cmd, sizeof(cmd),
              ". tools/setup/e2fsprogs_path.sh 2>/dev/null || true; "
-             "cp '%s' '%s' && debugfs -w -R '%s' '%s' >/dev/null 2>&1",
-             clean, out, command, out);
+             "cp '%s' '%s' && printf '%%s\\n' '%s' > '%s.cmd' && "
+             "debugfs -w -f '%s.cmd' '%s' >/dev/null 2>&1",
+             clean, out, commands, out, out, out);
     return st_run(cmd);
 }
 
@@ -3796,8 +3818,12 @@ static void st_ext2_rows(const struct allow *img_allow)
             n = path_find(&im, "/hello.txt");
             ok = n != NULL && n->mode == 0100644 && n->data_len == 6;
         }
+        if (ok) {
+            n = path_find(&im, "/");
+            ok = n != NULL && n->mode == 040755;
+        }
         if (ok)
-            ok = im.n_nodes == 5 && path_find(&im, "/lost+found") != NULL;
+            ok = im.n_nodes == 6 && path_find(&im, "/lost+found") != NULL;
         if (!ok)
             addf(&got, "%s", im.err[0] ? im.err : "a node is not as debugfs "
                  "wrote it");
@@ -3827,6 +3853,13 @@ static void st_ext2_rows(const struct allow *img_allow)
     if (st_ext2_copy(clean, mut, "link /bin/su /bin/su2") == 0)
         st_ext2_case(img_allow, "ext2: a hard link to a set-id file", mut,
                      0, "/bin/su2 is staged set-id");
+    if (st_ext2_copy(clean, mut, "set_inode_field / mode 042755") == 0)
+        st_ext2_case(img_allow, "ext2: a set-gid root directory", mut, 0,
+                     "/ is staged set-id");
+    if (st_ext2_copy(clean, mut, "rm /bin/su\nsymlink /bin/su busybox\n"
+                     "set_inode_field /bin/su mode 0124755") == 0)
+        st_ext2_case(img_allow, "ext2: a set-id inode that is not a "
+                     "regular file", mut, 0, "is not a regular file");
 
     /* The refusals, each a byte the tools would not write. */
     {
