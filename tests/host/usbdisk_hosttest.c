@@ -90,6 +90,7 @@ int msc_ident(int index, struct msc_ident *out)
     out->product[1] = 0;
     out->blocks = DISK_SECTORS;
     out->block_size = SECTOR;
+    out->flushes = 0;
     out->write_protect = 0;
     out->closing = 0;
     out->device = index + 1;
@@ -655,6 +656,15 @@ int main(void)
     passes();
     CHECK("a stick that goes before its table is read is not published", !node[0].published);
     CHECK("and is reclaimed", released[0] == 1);
+
+    /* A stick that goes before it was ever up was never named here, and
+       nothing holds it: the class driver's slot goes back at once, or a
+       stick plugged and pulled during bring-up twice would take both slots
+       for the life of the machine. */
+    model_reset();
+    usbdisk_left(1);
+    CHECK("a stick that goes before it is up has its slot released at once", released[1] == 1);
+    CHECK("and no name was taken for it", usbdisk_free() == USBDISK_MAX);
 
     /* A stick pulled in the middle of its table: the read out for it is
        failed by the class driver and taken back here, and nothing of the

@@ -7,17 +7,18 @@
  * as the whole node alone. A stick that has gone stops being served and its
  * cache buffers are dealt with. And a stick that has gone and that nothing
  * holds any more is reclaimed: its number, its nodes and the class driver's
- * slot all go back, so a stick plugged and pulled a hundred times exhausts
- * nothing.
+ * slot all go back.
  *
  * The table is read from the pump, where there is no process to put to
  * sleep, so it is read the way the pump does everything: one request is
  * started, and asked after on the passes that follow. Publishing the nodes
- * and reclaiming a stick touch what a process inside a syscall may be
- * reading, so those wait for a pass on which no process is inside the
- * kernel, or for the next syscall entry, whichever comes first. On this one
- * processor a syscall is not preempted, so a pass that finds no process in
- * one finds every kernel structure at rest.
+ * and reclaiming a stick touch what a process inside a syscall may be in
+ * the middle of changing, so those run at a syscall entry, before the
+ * dispatch, or on a pump pass that did not interrupt a syscall. On this one
+ * processor a syscall is not preempted, so no count is half updated at
+ * either moment; and a process only ever sleeps at a point where each thing
+ * it holds has already been recorded in a count `usbdisk_holds` reads, so
+ * the processes asleep inside syscalls are counted exactly.
  */
 
 #include "usbdisk.h"
@@ -115,13 +116,22 @@ void usbdisk_arrived(int slot)
 void usbdisk_left(int slot)
 {
     int n;
+    int named = 0;
 
     for (n = 0; n < USBDISK_MAX; n++) {
-        if (disks[n].state != DISK_NONE && disks[n].state != DISK_CLOSING &&
-            disks[n].slot == slot) {
-            disks[n].state = DISK_CLOSING;
-            pending = 1;
+        if (disks[n].state != DISK_NONE && disks[n].slot == slot) {
+            named = 1;
+            if (disks[n].state != DISK_CLOSING) {
+                disks[n].state = DISK_CLOSING;
+                pending = 1;
+            }
         }
+    }
+    /* A stick that went before it was up was never named: nothing holds it,
+     * and the class driver's slot goes back here, or it would be held for
+     * the life of the machine. */
+    if (!named) {
+        msc_release(slot);
     }
 }
 
@@ -152,6 +162,9 @@ int usbdisk_holds(int n)
         return 0;
     }
     held += devfs_usb_opens(n);
+    /* The table is read through the whole device, not a view; a read of
+     * it quarantined by the pool still has the device's page. */
+    held += block_device_holds(msc_block_device(disks[n].slot));
     for (k = 0; k <= GPT_PART_COUNT; k++) {
         block_device_t *view = devfs_usb_view(n, k);
 
@@ -305,8 +318,8 @@ static void scan_header(int n)
     d->first_usable = gpt_first_usable(scan_sector);
     d->last_usable = gpt_last_usable(scan_sector);
     array_lba = gpt_array_lba(scan_sector);
-    if (array_lba + d->array_sectors > d->sectors || array_lba > 0xFFFFFFFFu) {
-        klog(KLOG_WARN, "usbdisk", "usb%d: its entry array runs past the medium", n);
+    if (array_lba > 0xFFFFFFFFu) {
+        klog(KLOG_WARN, "usbdisk", "usb%d: its entry array is past a ten-byte read", n);
         scan_end(n);
         return;
     }
@@ -487,16 +500,17 @@ static void reclaim(int n)
 /**
  * Publish what has been read and reclaim what nothing holds.
  *
- * Runs only where no process is inside a syscall: from the syscall entry,
- * before the dispatch, or from the pump on a pass that interrupted user
- * mode or the idle machine. The counts it takes are exact there, because a
- * process is only ever asleep at a point where everything it holds has been
- * recorded.
+ * Runs at the syscall entry, before the dispatch, or from the pump on a
+ * pass that did not interrupt a syscall. No count is half updated at either
+ * moment, since a syscall is not preempted, and a process asleep inside one
+ * is at a point where everything it holds has been recorded in a count
+ * `usbdisk_holds` reads.
  */
 static void settle(void)
 {
     int n;
-    int left = 0;
+    int left;
+    uint32_t flags;
 
     for (n = 0; n < USBDISK_MAX; n++) {
         if (disks[n].state == DISK_SCANNED) {
@@ -510,15 +524,26 @@ static void settle(void)
         if (!disks[n].marked) {
             close_down(n);
         }
-        /* A read of its table still out is a hold of its own: the answer
-         * lands in the pool's page and names the device. */
+        /* A read of its table still out is a hold of its own: the completion
+         * is addressed to that pool slot, and the slot records the device. */
         if (reading == n || usbdisk_holds(n) != 0) {
-            left++;
             continue;
         }
         reclaim(n);
     }
+    /* Whether anything is still waiting is decided with interrupts off and
+     * from the states themselves, not from what this pass saw: a stick can
+     * finish its table or go while this runs, and its `pending` must not be
+     * written over. */
+    flags = kirq_save();
+    left = 0;
+    for (n = 0; n < USBDISK_MAX; n++) {
+        if (disks[n].state == DISK_SCANNED || disks[n].state == DISK_CLOSING) {
+            left++;
+        }
+    }
     pending = left != 0;
+    kirq_restore(flags);
 }
 
 void usbdisk_step(void)

@@ -10,9 +10,11 @@
  * so the partition table is read the way the pump does everything: one
  * request started, and asked after on the passes that follow, until the
  * table is in hand. Publishing the nodes and reclaiming a stick that has
- * gone touch what a process in a syscall may be reading, so those two wait
- * for a pass on which no process is inside the kernel, or for the next
- * syscall entry, whichever comes first.
+ * gone touch what a process in a syscall may be changing, so those two run
+ * at a syscall entry or on a pump pass that did not interrupt a syscall,
+ * whichever comes first; the counts they read are exact there, because a
+ * syscall is not preempted and a sleeping process has recorded what it
+ * holds.
  *
  * A stick is `/dev/usbN`, with `N` the lowest free number when it arrives,
  * and its partitions are `/dev/usbNp1` to `p4`. The number and the class
@@ -48,8 +50,8 @@ void usbdisk_service(void);
 /**
  * How many holds are left on the stick numbered `n`: its mounts and what is
  * open on them, the descriptions on its nodes, its requests in flight or
- * quarantined, and the cache buffers held on it. Zero is a stick that can be
- * reclaimed.
+ * quarantined, on the whole device and on each view, and the cache buffers
+ * held on it. Zero is a stick that can be reclaimed.
  */
 int usbdisk_holds(int n);
 
