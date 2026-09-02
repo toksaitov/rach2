@@ -503,8 +503,12 @@ fell_back after-faulty faulty
 # Dirty: the valid bit clear over a consistent volume. The check passes and
 # the root mounts writable; still nothing commits it.
 dd if="$WORK" of="$EXT2IMG" bs=512 skip="$EXT2_LBA" count="$EXT2_SECTORS" status=none
-e2fsck -fp "$EXT2IMG" > /dev/null 2>&1
-fsck_status=$?
+# Under set -e the status is read inside the test: 0 clean, 1 or 2 repaired.
+if e2fsck -fp "$EXT2IMG" > /dev/null 2>&1; then
+    fsck_status=0
+else
+    fsck_status=$?
+fi
 [ "$fsck_status" -le 2 ] || fail "e2fsck -p on the host copy exited $fsck_status"
 debugfs -w -R 'ssv state 0' "$EXT2IMG" > /dev/null 2>&1
 arm_candidate_trial arm-dirty
