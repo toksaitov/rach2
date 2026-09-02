@@ -26,6 +26,9 @@
 #include "../klog.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
+#include "../panic.h"
+#include "../proc/process.h"
+#include "../rtc.h"
 #include "bcache.h"
 
 #define EXT2_SUPER_MAGIC 0xEF53u
@@ -69,6 +72,7 @@ struct ext2_node {
     uint32_t block[EXT2_NBLOCKS];
     uint32_t atime, mtime, ctime;
     int too_big;
+    int unlinked; /* no name left; the inode and its blocks go at the last put */
 };
 
 struct ext2_mount {
@@ -83,6 +87,8 @@ struct ext2_mount {
     uint32_t state;
     int writable;
     uint64_t free_blocks, free_inodes;
+    int valid_cleared; /* the superblock's valid bit was cleared by this mount */
+    uint32_t alloc_hint; /* the block after the last one given out */
     uint8_t gd[EXT2_GROUPS * 32];
     struct ext2_node nodes[EXT2_NODES];
 };
@@ -315,15 +321,25 @@ static void ext2_hold(struct vfs_mount *mnt, void *node)
     ((struct ext2_node *)node)->refs++;
 }
 
+static int release_inode(struct ext2_mount *em, struct ext2_node *n);
+static int sb_store(struct ext2_mount *em);
+
 static void ext2_put(struct vfs_mount *mnt, void *node)
 {
     struct ext2_node *n = node;
 
-    (void)mnt;
     if (n->refs > 0) {
         n->refs--;
     }
     if (n->refs == 0) {
+        /* An unlinked inode keeps its blocks until its last holder goes,
+         * which is what makes an open unlinked file work; a crash before
+         * this leaves an orphan for e2fsck. */
+        if (n->unlinked && em_of(mnt)->writable) {
+            vfs_ns_lock(mnt);
+            release_inode(em_of(mnt), n);
+            vfs_ns_unlock(mnt);
+        }
         n->used = 0;
     }
 }
@@ -715,15 +731,49 @@ static int ext2_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
     return 0;
 }
 
+/* The superblock's free counts are summaries the descriptors hold exactly,
+ * written at sync and at unmount. */
 static int ext2_sync(struct vfs_mount *mnt)
 {
-    (void)mnt;
-    return 0;
+    struct ext2_mount *em = em_of(mnt);
+    int rc;
+
+    if (!em->writable || (mnt->flags & VFS_MS_RDONLY)) {
+        return 0;
+    }
+    vfs_ns_lock(mnt);
+    rc = bcache_sync(em->dev);
+    if (rc == 0) {
+        rc = sb_store(em);
+    }
+    vfs_ns_unlock(mnt);
+    return rc;
 }
 
+/* The valid bit set again, once everything has reached the disk and only
+ * when the error bit is clear; a mount that went read-only after a failed
+ * write leaves the volume as it is, for the next mount's check. */
 static int ext2_prepare_unmount(struct vfs_mount *mnt)
 {
-    (void)mnt;
+    struct ext2_mount *em = em_of(mnt);
+    int rc;
+
+    if (!em->writable || (mnt->flags & VFS_MS_RDONLY)) {
+        return 0;
+    }
+    rc = bcache_sync(em->dev);
+    if (rc != 0) {
+        return rc;
+    }
+    if (em->valid_cleared && !(em->state & EXT2_ERROR_FS)) {
+        em->state |= EXT2_VALID_FS;
+    }
+    rc = sb_store(em);
+    if (rc != 0) {
+        em->state &= ~EXT2_VALID_FS;
+        return rc;
+    }
+    em->valid_cleared = 0;
     return 0;
 }
 
@@ -810,6 +860,1801 @@ static int ext2_path(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
         buf[1] = '\0';
     }
     return 0;
+}
+
+
+/* ---- the writer ---- */
+
+/*
+ * Every metadata write goes through `bcache_write` in the order below, and
+ * a file's bytes go through `bcache_dirty` and are synced before a size
+ * that covers them is written. The rules, from `ext2.Readme.md`: an inode
+ * is freed by writing it zeroed with its deletion time before its bitmap
+ * bit clears, and allocated by setting its bit before it is written and
+ * named; a block is allocated in its bitmap before a pointer names it, a
+ * pointer block is written before the pointer to it, and `i_blocks` goes
+ * with the pointers and `i_size` last; an entry is removed before the link
+ * count drops; a truncation shrinks the size first, then clears pointers
+ * from the end, then frees blocks; a directory grows by a zeroed block
+ * chained before the size covers it.
+ */
+
+/* The value is taken once: a count read from the bytes being written, as
+ * `le16(gd + 12) - 1`, would otherwise be read again after its low byte
+ * changed. */
+#define LE16_PUT(p, v)                                                                             \
+    do {                                                                                           \
+        uint32_t put_ = (v);                                                                       \
+        (p)[0] = (uint8_t)(put_ & 0xFFu);                                                          \
+        (p)[1] = (uint8_t)((put_ >> 8) & 0xFFu);                                                   \
+    } while (0)
+#define LE32_PUT(p, v)                                                                             \
+    do {                                                                                           \
+        uint32_t put_ = (v);                                                                       \
+        (p)[0] = (uint8_t)(put_ & 0xFFu);                                                          \
+        (p)[1] = (uint8_t)((put_ >> 8) & 0xFFu);                                                   \
+        (p)[2] = (uint8_t)((put_ >> 16) & 0xFFu);                                                  \
+        (p)[3] = (uint8_t)((put_ >> 24) & 0xFFu);                                                  \
+    } while (0)
+
+static uint32_t now_seconds(void)
+{
+    int64_t sec = 0, nsec = 0;
+
+    rtc_realtime(&sec, &nsec);
+    if (sec < 0 || sec > 0x7FFFFFFF) {
+        return 0;
+    }
+    return (uint32_t)sec;
+}
+
+/* Copy `len` bytes at byte offset `off` of the volume from `src`, or zeros
+ * with `src` NULL; through to the device when `sync`, else written back. */
+static int write_bytes(struct ext2_mount *em, uint64_t off, const void *src, uint32_t len,
+                       int sync)
+{
+    const uint8_t *in = src;
+
+    while (len > 0) {
+        uint64_t blk = off >> BCACHE_BLOCK_SHIFT;
+        uint32_t at = (uint32_t)off & (BCACHE_BLOCK_BYTES - 1);
+        uint32_t take = BCACHE_BLOCK_BYTES - at;
+        struct bbuf *b;
+        int rc = 0;
+
+        if (take > len) {
+            take = len;
+        }
+        b = bcache_get(em->dev, blk);
+        if (!b) {
+            return -EIO;
+        }
+        if (at + take > b->bytes) {
+            bcache_release(b);
+            return -EIO;
+        }
+        if (in) {
+            k_memcpy(b->data + at, in, take);
+            in += take;
+        } else {
+            k_memset(b->data + at, 0, take);
+        }
+        if (sync) {
+            rc = bcache_write(b);
+        } else {
+            bcache_dirty(b);
+        }
+        bcache_release(b);
+        if (rc != 0) {
+            return rc;
+        }
+        off += take;
+        len -= take;
+    }
+    return 0;
+}
+
+static int assert_writable(struct vfs_mount *mnt, struct ext2_mount *em)
+{
+    if (!em->writable || (mnt->flags & VFS_MS_RDONLY)) {
+        return -EROFS;
+    }
+    return 0;
+}
+
+static void assert_locked(struct vfs_mount *mnt)
+{
+    int me = current_proc ? (int)current_proc->pid : 0;
+
+    if (mnt->ns_holder != me || mnt->ns_depth == 0) {
+        k_panic("ext2: a mutation outside the mount's lock");
+    }
+}
+
+static uint64_t inode_offset(const struct ext2_mount *em, uint32_t ino)
+{
+    uint32_t g = (ino - 1) / em->ipg;
+    uint32_t index = (ino - 1) % em->ipg;
+    uint32_t table = le32(em->gd + g * 32 + 8);
+
+    return (uint64_t)table * em->block_size + (uint64_t)index * em->inode_size;
+}
+
+/**
+ * Write inode `n` through: the fields this driver keeps, into the 128
+ * bytes read back first so that what it does not keep stays as it was.
+ */
+static int inode_store(struct ext2_mount *em, const struct ext2_node *n)
+{
+    uint8_t raw[128];
+    uint64_t at = inode_offset(em, n->ino);
+    int i, rc;
+
+    rc = read_bytes(em, at, raw, sizeof(raw));
+    if (rc != 0) {
+        return rc;
+    }
+    LE16_PUT(raw + 0, n->mode);
+    LE16_PUT(raw + 2, n->uid & 0xFFFFu);
+    LE32_PUT(raw + 4, (uint32_t)n->size);
+    LE32_PUT(raw + 8, n->atime);
+    LE32_PUT(raw + 12, n->ctime);
+    LE32_PUT(raw + 16, n->mtime);
+    LE32_PUT(raw + 20, 0); /* i_dtime: a live inode has none, whatever it had */
+    LE16_PUT(raw + 24, n->gid & 0xFFFFu);
+    LE16_PUT(raw + 26, n->nlink);
+    LE32_PUT(raw + 28, n->blocks);
+    for (i = 0; i < (int)EXT2_NBLOCKS; i++) {
+        LE32_PUT(raw + 40 + i * 4, n->block[i]);
+    }
+    LE16_PUT(raw + 120, (n->uid >> 16) & 0xFFFFu);
+    LE16_PUT(raw + 122, (n->gid >> 16) & 0xFFFFu);
+    return write_bytes(em, at, raw, sizeof(raw), 1);
+}
+
+/* An inode written zeroed with its deletion time: the first step of a free. */
+static int inode_store_freed(struct ext2_mount *em, uint32_t ino)
+{
+    uint8_t raw[128];
+
+    k_memset(raw, 0, sizeof(raw));
+    LE32_PUT(raw + 20, now_seconds()); /* i_dtime */
+    return write_bytes(em, inode_offset(em, ino), raw, sizeof(raw), 1);
+}
+
+/* The primary descriptor of group `g`, written through. */
+static int gd_store(struct ext2_mount *em, uint32_t g)
+{
+    uint64_t at = (uint64_t)(em->first_data + 1) * em->block_size + (uint64_t)g * 32;
+
+    return write_bytes(em, at, em->gd + g * 32, 32, 1);
+}
+
+/* The superblock's free counts and its state, written through. */
+static int sb_store(struct ext2_mount *em)
+{
+    uint8_t raw[8];
+    int rc;
+
+    LE32_PUT(raw, (uint32_t)em->free_blocks);
+    LE32_PUT(raw + 4, (uint32_t)em->free_inodes);
+    rc = write_bytes(em, 1024 + 12, raw, 8, 1);
+    if (rc != 0) {
+        return rc;
+    }
+    LE16_PUT(raw, em->state);
+    return write_bytes(em, 1024 + 58, raw, 2, 1);
+}
+
+/* One bit of a bitmap block, read or written through. */
+static int bit_get(struct ext2_mount *em, uint32_t bitmap_block, uint32_t index, int *out)
+{
+    uint8_t byte;
+    int rc = read_bytes(em, (uint64_t)bitmap_block * em->block_size + index / 8, &byte, 1);
+
+    if (rc != 0) {
+        return rc;
+    }
+    *out = (byte >> (index % 8)) & 1;
+    return 0;
+}
+
+static int bit_put(struct ext2_mount *em, uint32_t bitmap_block, uint32_t index, int value)
+{
+    uint64_t at = (uint64_t)bitmap_block * em->block_size + index / 8;
+    uint8_t byte;
+    int rc = read_bytes(em, at, &byte, 1);
+
+    if (rc != 0) {
+        return rc;
+    }
+    if (value) {
+        byte = (uint8_t)(byte | (1u << (index % 8)));
+    } else {
+        byte = (uint8_t)(byte & ~(1u << (index % 8)));
+    }
+    return write_bytes(em, at, &byte, 1, 1);
+}
+
+/* Whether the caller may take from the reserved blocks. */
+static int may_use_reserved(void)
+{
+    return current_proc && current_proc->euid == 0;
+}
+
+/**
+ * Allocate one block, first-fit from `hint` and wrapping once through every
+ * group: the bit is set and the group's count lowered before the block is
+ * returned, so that no pointer ever names a free block. ENOSPC when none is
+ * free, or when only the root's reserve is and the caller is not root.
+ */
+static int block_alloc(struct ext2_mount *em, uint32_t hint, uint32_t *out)
+{
+    uint32_t g0, g, tried;
+    uint32_t start_in;
+
+    if (em->free_blocks == 0 ||
+        (!may_use_reserved() && em->free_blocks <= em->r_blocks)) {
+        return -ENOSPC;
+    }
+    if (hint < em->first_data || hint >= em->blocks) {
+        hint = em->first_data;
+    }
+    g0 = (hint - em->first_data) / em->bpg;
+    start_in = (hint - em->first_data) % em->bpg;
+    for (tried = 0; tried < em->groups; tried++) {
+        uint32_t i, count, base, bitmap;
+        uint8_t *gd;
+
+        g = (g0 + tried) % em->groups;
+        gd = em->gd + g * 32;
+        base = em->first_data + g * em->bpg;
+        count = em->blocks - base < em->bpg ? em->blocks - base : em->bpg;
+        bitmap = le32(gd + 0);
+        if (le16(gd + 12) == 0) {
+            start_in = 0;
+            continue;
+        }
+        for (i = tried == 0 ? start_in : 0; i < count; i++) {
+            int used, rc;
+
+            rc = bit_get(em, bitmap, i, &used);
+            if (rc != 0) {
+                return rc;
+            }
+            if (used) {
+                continue;
+            }
+            rc = bit_put(em, bitmap, i, 1);
+            if (rc != 0) {
+                return rc;
+            }
+            LE16_PUT(gd + 12, le16(gd + 12) - 1);
+            rc = gd_store(em, g);
+            if (rc != 0) {
+                return rc;
+            }
+            em->free_blocks--;
+            em->alloc_hint = base + i + 1;
+            *out = base + i;
+            return 0;
+        }
+        start_in = 0;
+    }
+    return -ENOSPC;
+}
+
+static int block_free(struct ext2_mount *em, uint32_t b)
+{
+    uint32_t g, i;
+    uint8_t *gd;
+    int rc;
+
+    if (!data_block_ok(em, b)) {
+        klog(KLOG_WARN, "ext2", "free of block %d, which is out of range", (int)b);
+        return -EIO;
+    }
+    g = (b - em->first_data) / em->bpg;
+    i = (b - em->first_data) % em->bpg;
+    gd = em->gd + g * 32;
+    rc = bit_put(em, le32(gd + 0), i, 0);
+    if (rc != 0) {
+        return rc;
+    }
+    LE16_PUT(gd + 12, le16(gd + 12) + 1);
+    rc = gd_store(em, g);
+    if (rc != 0) {
+        return rc;
+    }
+    em->free_blocks++;
+    return 0;
+}
+
+/**
+ * Allocate an inode in `parent`'s group when it has one free, else in the
+ * first group that has; the bit is set and the counts lowered before the
+ * number is returned, and the caller writes the inode initialised and
+ * names it, in that order.
+ */
+static int inode_alloc(struct ext2_mount *em, uint32_t parent_ino, int is_dir, uint32_t *out)
+{
+    uint32_t g0 = (parent_ino - 1) / em->ipg;
+    uint32_t tried;
+
+    if (em->free_inodes == 0) {
+        return -ENOSPC;
+    }
+    for (tried = 0; tried < em->groups; tried++) {
+        uint32_t g = (g0 + tried) % em->groups;
+        uint8_t *gd = em->gd + g * 32;
+        uint32_t i;
+
+        if (le16(gd + 14) == 0) {
+            continue;
+        }
+        for (i = 0; i < em->ipg; i++) {
+            uint32_t ino = g * em->ipg + i + 1;
+            int used, rc;
+
+            if (ino < em->first_ino || ino > em->inodes) {
+                continue;
+            }
+            rc = bit_get(em, le32(gd + 4), i, &used);
+            if (rc != 0) {
+                return rc;
+            }
+            if (used) {
+                continue;
+            }
+            rc = bit_put(em, le32(gd + 4), i, 1);
+            if (rc != 0) {
+                return rc;
+            }
+            LE16_PUT(gd + 14, le16(gd + 14) - 1);
+            if (is_dir) {
+                LE16_PUT(gd + 16, le16(gd + 16) + 1);
+            }
+            rc = gd_store(em, g);
+            if (rc != 0) {
+                return rc;
+            }
+            em->free_inodes--;
+            *out = ino;
+            return 0;
+        }
+    }
+    return -ENOSPC;
+}
+
+/* The bit and the counts of inode `ino` cleared, after the inode itself
+ * was written freed. */
+static int inode_bit_free(struct ext2_mount *em, uint32_t ino, int was_dir)
+{
+    uint32_t g = (ino - 1) / em->ipg;
+    uint32_t i = (ino - 1) % em->ipg;
+    uint8_t *gd = em->gd + g * 32;
+    int rc = bit_put(em, le32(gd + 4), i, 0);
+
+    if (rc != 0) {
+        return rc;
+    }
+    LE16_PUT(gd + 14, le16(gd + 14) + 1);
+    if (was_dir && le16(gd + 16) > 0) {
+        LE16_PUT(gd + 16, le16(gd + 16) - 1);
+    }
+    rc = gd_store(em, g);
+    if (rc != 0) {
+        return rc;
+    }
+    em->free_inodes++;
+    return 0;
+}
+
+/* ---- the block map, written ---- */
+
+/**
+ * Free the blocks `keep` and after of `n`, from the end: each pointer is
+ * cleared, written through, and its block freed, and a pointer block whose
+ * children are all gone goes the same way. `n->blocks` is kept current;
+ * the caller stores the inode.
+ */
+static int punch_level(struct ext2_mount *em, struct ext2_node *n, uint32_t *slot,
+                       uint64_t slot_at, int level, uint32_t base, uint32_t keep,
+                       int *emptied)
+{
+    uint32_t b = *slot;
+    uint32_t per = em->block_size / 4;
+    uint32_t span = 1;
+    uint32_t sectors = em->block_size / 512;
+    int i, rc;
+
+    *emptied = 0;
+    if (b == 0) {
+        *emptied = 1;
+        return 0;
+    }
+    for (i = 0; i < level; i++) {
+        span *= per;
+    }
+    if (level > 0) {
+        int all_gone = 1;
+        uint32_t k;
+
+        if (!data_block_ok(em, b)) {
+            return -EIO;
+        }
+        for (k = per; k > 0; k--) {
+            uint32_t child_base = base + (k - 1) * (span / per);
+            uint8_t ptr[4];
+            uint32_t child;
+            uint64_t at = (uint64_t)b * em->block_size + (uint64_t)(k - 1) * 4;
+            int gone;
+
+            if (child_base + span / per <= keep) {
+                all_gone = 0;
+                break; /* everything below this slot stays */
+            }
+            rc = read_bytes(em, at, ptr, 4);
+            if (rc != 0) {
+                return rc;
+            }
+            child = le32(ptr);
+            if (child == 0) {
+                continue;
+            }
+            rc = punch_level(em, n, &child, at, level - 1, child_base, keep, &gone);
+            if (rc != 0) {
+                return rc;
+            }
+            if (!gone) {
+                all_gone = 0;
+                break;
+            }
+        }
+        if (!all_gone) {
+            return 0;
+        }
+    }
+    /* This block goes: the pointer to it cleared and written first. */
+    *slot = 0;
+    if (slot_at != 0) {
+        uint8_t zero[4] = {0, 0, 0, 0};
+
+        rc = write_bytes(em, slot_at, zero, 4, 1);
+        if (rc != 0) {
+            return rc;
+        }
+    } else {
+        rc = inode_store(em, n);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    rc = block_free(em, b);
+    if (rc != 0) {
+        return rc;
+    }
+    if (n->blocks >= sectors) {
+        n->blocks -= sectors;
+    }
+    *emptied = 1;
+    return 0;
+}
+
+static int punch(struct ext2_mount *em, struct ext2_node *n, uint32_t keep)
+{
+    uint32_t per = em->block_size / 4;
+    uint32_t base = EXT2_NDIR;
+    uint32_t span = per;
+    int level, i, rc, gone;
+
+    for (level = 3; level >= 1; level--) {
+        uint32_t lbase = EXT2_NDIR, lspan = per;
+        int l;
+
+        for (l = 1; l < level; l++) {
+            lbase += lspan;
+            lspan *= per;
+        }
+        if (lbase + lspan > keep && n->block[EXT2_NDIR + level - 1] != 0) {
+            rc = punch_level(em, n, &n->block[EXT2_NDIR + level - 1], 0, level, lbase, keep,
+                             &gone);
+            if (rc != 0) {
+                return rc;
+            }
+        }
+    }
+    (void)base;
+    (void)span;
+    for (i = (int)EXT2_NDIR - 1; i >= (int)keep && i >= 0; i--) {
+        if (n->block[i] != 0) {
+            rc = punch_level(em, n, &n->block[i], 0, 0, (uint32_t)i, keep, &gone);
+            if (rc != 0) {
+                return rc;
+            }
+        }
+    }
+    return 0;
+}
+
+/**
+ * The block for data index `index`, allocated when missing: a missing
+ * pointer block is allocated, zeroed and written before the pointer to it
+ * is, and a data block's pointer is written after the block is in the
+ * bitmap. `n->blocks` and the inode's own pointers change in memory; the
+ * caller stores the inode with them.
+ */
+static int map_alloc(struct ext2_mount *em, struct ext2_node *n, uint32_t index, uint32_t *out,
+                     int *fresh)
+{
+    uint32_t per = em->block_size / 4;
+    uint32_t sectors = em->block_size / 512;
+    uint32_t *slot;
+    uint64_t slot_at = 0; /* 0: the slot is in the inode */
+    uint32_t hint = em->alloc_hint;
+    int level, rc;
+
+    *fresh = 0;
+    if (index < EXT2_NDIR) {
+        slot = &n->block[index];
+    } else {
+        uint32_t span = per;
+        uint32_t rest;
+
+        index -= EXT2_NDIR;
+        for (level = 1; level <= 3; level++) {
+            if (index < span) {
+                break;
+            }
+            index -= span;
+            span *= per;
+        }
+        if (level > 3) {
+            return -EFBIG;
+        }
+        slot = &n->block[EXT2_NDIR + level - 1];
+        rest = index;
+        while (level > 0) {
+            uint32_t div = 1, b;
+            uint8_t ptr[4];
+            int i;
+
+            for (i = 1; i < level; i++) {
+                div *= per;
+            }
+            if (*slot == 0) {
+                rc = block_alloc(em, hint, &b);
+                if (rc != 0) {
+                    return rc;
+                }
+                rc = write_bytes(em, (uint64_t)b * em->block_size, 0, em->block_size, 1);
+                if (rc != 0) {
+                    return rc;
+                }
+                n->blocks += sectors;
+                if (slot_at != 0) {
+                    uint8_t raw[4];
+
+                    LE32_PUT(raw, b);
+                    rc = write_bytes(em, slot_at, raw, 4, 1);
+                    if (rc != 0) {
+                        return rc;
+                    }
+                } else {
+                    *slot = b;
+                    rc = inode_store(em, n);
+                    if (rc != 0) {
+                        return rc;
+                    }
+                }
+                *slot = b;
+                hint = b + 1;
+            }
+            b = *slot;
+            if (!data_block_ok(em, b)) {
+                return -EIO;
+            }
+            slot_at = (uint64_t)b * em->block_size + (uint64_t)(rest / div) * 4;
+            rc = read_bytes(em, slot_at, ptr, 4);
+            if (rc != 0) {
+                return rc;
+            }
+            {
+                static uint32_t held; /* the slot's value, read from the block */
+
+                held = le32(ptr);
+                slot = &held;
+            }
+            rest %= div;
+            level--;
+        }
+    }
+    if (*slot == 0) {
+        uint32_t b;
+
+        rc = block_alloc(em, hint, &b);
+        if (rc != 0) {
+            return rc;
+        }
+        n->blocks += sectors;
+        if (slot_at != 0) {
+            uint8_t raw[4];
+
+            LE32_PUT(raw, b);
+            rc = write_bytes(em, slot_at, raw, 4, 1);
+            if (rc != 0) {
+                return rc;
+            }
+        }
+        *slot = b;
+        *fresh = 1;
+    } else if (!data_block_ok(em, *slot)) {
+        return -EIO;
+    }
+    *out = *slot;
+    return 0;
+}
+
+/* ---- directories, written ---- */
+
+static uint32_t dirent_len(uint32_t name_len)
+{
+    return (8 + name_len + 3) & ~3u;
+}
+
+static uint32_t ftype_of(uint32_t mode)
+{
+    switch (mode & S_IFMT_) {
+        case S_IFREG_:
+            return 1;
+        case S_IFDIR_:
+            return 2;
+        case S_IFCHR_:
+            return 3;
+        case S_IFBLK_:
+            return 4;
+        case S_IFLNK_:
+            return 7;
+        default:
+            return 0;
+    }
+}
+
+/* Find `name` in `d`: 1 with the entry's position and its predecessor's in
+ * the same block (or the position itself when it is first), 0 when absent. */
+static int dir_find(struct ext2_mount *em, const struct ext2_node *d, const char *name,
+                    uint32_t *at, uint32_t *prev_at, struct ext2_scan *sc)
+{
+    uint32_t cursor = 0, prev = 0;
+
+    for (;;) {
+        uint32_t here = cursor;
+        int got = dir_scan(em, d, &cursor, sc);
+
+        if (got <= 0) {
+            return got;
+        }
+        if (here % em->block_size == 0) {
+            prev = here;
+        }
+        if (sc->ino != 0 && names_equal(sc->name, name)) {
+            *at = here;
+            *prev_at = prev;
+            return 1;
+        }
+        prev = here;
+    }
+}
+
+/* The block of directory `d` holding byte `at`, through its map. */
+static int dir_block_at(struct ext2_mount *em, const struct ext2_node *d, uint32_t at,
+                        uint64_t *off)
+{
+    uint32_t b;
+    int rc = block_at(em, d, at / em->block_size, &b);
+
+    if (rc != 0) {
+        return rc;
+    }
+    if (b == 0) {
+        return -EIO;
+    }
+    *off = (uint64_t)b * em->block_size + at % em->block_size;
+    return 0;
+}
+
+/* Write one entry's header and name at `off`. */
+static int dirent_write(struct ext2_mount *em, uint64_t off, uint32_t ino, uint32_t rec_len,
+                        const char *name, uint32_t name_len, uint32_t ftype)
+{
+    uint8_t raw[8 + EXT2_NAME_MAX + 4]; /* the header, the name and its padding */
+    uint32_t len = dirent_len(name_len);
+
+    k_memset(raw, 0, sizeof(raw));
+    LE32_PUT(raw, ino);
+    LE16_PUT(raw + 4, rec_len);
+    raw[6] = (uint8_t)name_len;
+    raw[7] = (uint8_t)((em->incompat & EXT2_INCOMPAT_FILETYPE) ? ftype : 0);
+    k_memcpy(raw + 8, name, name_len);
+    return write_bytes(em, off, raw, len, 1);
+}
+
+/**
+ * Add `name` naming `ino` to directory `d`: in the first entry with room
+ * behind its name, split; else in a new block, zeroed with one empty entry
+ * spanning it, allocated, chained with `i_blocks`, and covered by the size
+ * last. The entry itself is the last write.
+ */
+static int dir_add(struct ext2_mount *em, struct ext2_node *d, const char *name, uint32_t ino,
+                   uint32_t ftype)
+{
+    uint32_t name_len = (uint32_t)k_strlen(name);
+    uint32_t need = dirent_len(name_len);
+    uint32_t cursor = 0;
+    struct ext2_scan sc;
+    int rc, fresh;
+
+    if (name_len == 0 || name_len > EXT2_NAME_MAX) {
+        return -ENAMETOOLONG;
+    }
+    for (;;) {
+        uint32_t here = cursor;
+        uint32_t used, room;
+        uint64_t off;
+        int got = dir_scan(em, d, &cursor, &sc);
+
+        if (got < 0) {
+            return got;
+        }
+        if (got == 0) {
+            break;
+        }
+        used = sc.ino == 0 ? 0 : dirent_len(sc.name_len);
+        room = sc.rec_len - used;
+        if (room < need) {
+            continue;
+        }
+        rc = dir_block_at(em, d, here, &off);
+        if (rc != 0) {
+            return rc;
+        }
+        if (used == 0) {
+            return dirent_write(em, off, ino, sc.rec_len, name, name_len, ftype);
+        }
+        /* Split: the new entry is written into the slack behind the old
+         * name first, where the old record still covers it, and then the
+         * old header is shortened to end where the new one begins. A stop
+         * between the two leaves the old entry spanning its record and the
+         * new one unreachable, which is the volume as it was. */
+        rc = dirent_write(em, off + used, ino, room, name, name_len, ftype);
+        if (rc != 0) {
+            return rc;
+        }
+        return dirent_write(em, off, sc.ino, used, sc.name, sc.name_len, sc.type);
+    }
+    /* A new block. */
+    {
+        uint32_t index = (uint32_t)(d->size >> em->block_shift);
+        uint32_t b;
+        uint64_t off;
+        uint8_t head[8];
+
+        if (d->size + em->block_size > 0xFFFFFFFFu) {
+            return -EFBIG;
+        }
+        rc = map_alloc(em, d, index, &b, &fresh);
+        if (rc != 0) {
+            return rc;
+        }
+        off = (uint64_t)b * em->block_size;
+        rc = write_bytes(em, off, 0, em->block_size, 0);
+        if (rc != 0) {
+            return rc;
+        }
+        LE32_PUT(head, 0);
+        LE16_PUT(head + 4, em->block_size);
+        head[6] = 0;
+        head[7] = 0;
+        rc = write_bytes(em, off, head, 8, 1);
+        if (rc != 0) {
+            return rc;
+        }
+        d->size += em->block_size;
+        d->mtime = d->ctime = now_seconds();
+        rc = inode_store(em, d);
+        if (rc != 0) {
+            return rc;
+        }
+        return dirent_write(em, off, ino, em->block_size, name, name_len, ftype);
+    }
+}
+
+/* Remove the entry at `at` in `d`: the first in its block has its inode
+ * cleared, any other is merged into its predecessor's record. */
+static int dir_remove_at(struct ext2_mount *em, struct ext2_node *d, uint32_t at, uint32_t prev_at,
+                         const struct ext2_scan *sc)
+{
+    uint64_t off;
+    int rc;
+
+    if (at % em->block_size == 0) {
+        uint8_t zero[4] = {0, 0, 0, 0};
+
+        rc = dir_block_at(em, d, at, &off);
+        if (rc != 0) {
+            return rc;
+        }
+        return write_bytes(em, off, zero, 4, 1);
+    } else {
+        struct ext2_scan ps;
+        uint32_t cursor = prev_at;
+        uint8_t raw[2];
+        int got = dir_scan(em, d, &cursor, &ps);
+
+        if (got <= 0) {
+            return got < 0 ? got : -EIO;
+        }
+        rc = dir_block_at(em, d, prev_at, &off);
+        if (rc != 0) {
+            return rc;
+        }
+        LE16_PUT(raw, ps.rec_len + sc->rec_len);
+        return write_bytes(em, off + 4, raw, 2, 1);
+    }
+}
+
+/* Whether a directory has nothing but `.` and `..`. */
+static int dir_is_empty(struct ext2_mount *em, const struct ext2_node *d, int *empty)
+{
+    uint32_t cursor = 0;
+    struct ext2_scan sc;
+
+    *empty = 1;
+    for (;;) {
+        int got = dir_scan(em, d, &cursor, &sc);
+
+        if (got < 0) {
+            return got;
+        }
+        if (got == 0) {
+            return 0;
+        }
+        if (sc.ino != 0 && !names_equal(sc.name, ".") && !names_equal(sc.name, "..")) {
+            *empty = 0;
+            return 0;
+        }
+    }
+}
+
+/* Rewrite the inode `..` names in directory `d`, its second entry. */
+static int dir_set_dotdot(struct ext2_mount *em, const struct ext2_node *d, uint32_t parent)
+{
+    uint32_t cursor = 0;
+    struct ext2_scan sc;
+    uint8_t raw[4];
+    uint64_t off;
+    int rc;
+
+    for (;;) {
+        uint32_t here = cursor;
+        int got = dir_scan(em, d, &cursor, &sc);
+
+        if (got <= 0) {
+            return got < 0 ? got : -EIO;
+        }
+        if (sc.ino != 0 && names_equal(sc.name, "..")) {
+            rc = dir_block_at(em, d, here, &off);
+            if (rc != 0) {
+                return rc;
+            }
+            LE32_PUT(raw, parent);
+            return write_bytes(em, off, raw, 4, 1);
+        }
+    }
+}
+
+/* Whether inode `ino` is `ancestor` or below it, by `..` from `ino`. */
+static int is_below(struct ext2_mount *em, uint32_t ino, uint32_t ancestor, int *below)
+{
+    int depth;
+
+    *below = 0;
+    for (depth = 0; depth < PATH_DEPTH; depth++) {
+        struct ext2_node cur;
+        struct ext2_scan sc;
+        uint32_t cursor = 0;
+        int rc;
+
+        if (ino == ancestor) {
+            *below = 1;
+            return 0;
+        }
+        if (ino == EXT2_ROOT_INO) {
+            return 0;
+        }
+        rc = inode_load(em, ino, &cur);
+        if (rc != 0) {
+            return rc;
+        }
+        for (;;) {
+            int got = dir_scan(em, &cur, &cursor, &sc);
+
+            if (got < 0) {
+                return got;
+            }
+            if (got == 0) {
+                return -EIO;
+            }
+            if (sc.ino != 0 && names_equal(sc.name, "..")) {
+                break;
+            }
+        }
+        ino = sc.ino;
+    }
+    return -ELOOP;
+}
+
+/* A node in the pool for `ino` with holds on it, or NULL. */
+static struct ext2_node *node_held(struct ext2_mount *em, uint32_t ino)
+{
+    int i;
+
+    for (i = 0; i < EXT2_NODES; i++) {
+        if (em->nodes[i].used && em->nodes[i].ino == ino && em->nodes[i].refs > 0) {
+            return &em->nodes[i];
+        }
+    }
+    return 0;
+}
+
+/**
+ * Free an inode that has no name and no holder: its blocks from the end,
+ * then the inode written freed, then its bit and count.
+ */
+static int release_inode(struct ext2_mount *em, struct ext2_node *n)
+{
+    int was_dir = (n->mode & S_IFMT_) == S_IFDIR_;
+    int rc;
+
+    if ((n->mode & S_IFMT_) == S_IFREG_ || was_dir ||
+        ((n->mode & S_IFMT_) == S_IFLNK_ && n->size >= EXT2_FAST_LINK)) {
+        rc = punch(em, n, 0);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    rc = inode_store_freed(em, n->ino);
+    if (rc != 0) {
+        return rc;
+    }
+    n->unlinked = 0;
+    return inode_bit_free(em, n->ino, was_dir);
+}
+
+/* A new inode, allocated, written initialised and held in the pool; the
+ * caller names it. */
+static int inode_new(struct ext2_mount *em, uint32_t parent_ino, uint32_t mode, int store,
+                     struct ext2_node **out)
+{
+    uint32_t ino;
+    struct ext2_node *n;
+    int rc, i;
+
+    rc = inode_alloc(em, parent_ino, (mode & S_IFMT_) == S_IFDIR_, &ino);
+    if (rc != 0) {
+        return rc;
+    }
+    for (i = 0; i < EXT2_NODES; i++) {
+        if (!em->nodes[i].used) {
+            break;
+        }
+    }
+    if (i == EXT2_NODES) {
+        inode_bit_free(em, ino, (mode & S_IFMT_) == S_IFDIR_);
+        klog(KLOG_WARN, "ext2", "node pool full");
+        return -ENOMEM;
+    }
+    n = &em->nodes[i];
+    k_memset(n, 0, sizeof(*n));
+    n->used = 1;
+    n->refs = 1;
+    n->ino = ino;
+    n->mode = mode;
+    n->uid = current_proc ? current_proc->euid : 0;
+    n->gid = current_proc ? current_proc->egid : 0;
+    n->nlink = (mode & S_IFMT_) == S_IFDIR_ ? 2 : 1;
+    n->atime = n->mtime = n->ctime = now_seconds();
+    if (store) {
+        rc = inode_store(em, n);
+        if (rc != 0) {
+            n->used = 0;
+            inode_bit_free(em, ino, (mode & S_IFMT_) == S_IFDIR_);
+            return rc;
+        }
+    }
+    *out = n;
+    return 0;
+}
+
+/* ---- the operations ---- */
+
+static int ext2_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_stat *st)
+{
+    struct ext2_mount *em = em_of(mnt);
+    struct ext2_node *n = node;
+    int rc;
+
+    rc = assert_writable(mnt, em);
+    if (rc != 0) {
+        return rc;
+    }
+    if (n->too_big) {
+        return -EOVERFLOW;
+    }
+    vfs_ns_lock(mnt);
+    if (what & VFS_SET_MODE) {
+        n->mode = (n->mode & S_IFMT_) | (st->mode & 07777u);
+    }
+    if (what & VFS_SET_UID) {
+        n->uid = st->uid;
+    }
+    if (what & VFS_SET_GID) {
+        n->gid = st->gid;
+    }
+    if (what & VFS_SET_ATIME) {
+        n->atime = (uint32_t)st->atime_sec;
+    }
+    if (what & VFS_SET_MTIME) {
+        n->mtime = (uint32_t)st->mtime_sec;
+    }
+    n->ctime = now_seconds();
+    rc = inode_store(em, n);
+    vfs_ns_unlock(mnt);
+    return rc;
+}
+
+static int ext2_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
+{
+    struct ext2_mount *em = em_of(mnt);
+    struct ext2_node *n = handle;
+    int rc;
+
+    if ((n->mode & S_IFMT_) != S_IFREG_) {
+        return -EINVAL;
+    }
+    rc = assert_writable(mnt, em);
+    if (rc != 0) {
+        return rc;
+    }
+    if (n->too_big) {
+        return -EOVERFLOW;
+    }
+    if (size > 0xFFFFFFFFu) {
+        return -EFBIG;
+    }
+    vfs_ns_lock(mnt);
+    assert_locked(mnt);
+    if (size < n->size) {
+        uint32_t keep = (uint32_t)((size + em->block_size - 1) >> em->block_shift);
+
+        /* The smaller size first, then the pointers from the end, then the
+         * blocks; a stop between leaves blocks past the end. The tail of
+         * the last block kept is zeroed, so that a later growth over it
+         * reads zeros and not what was there. */
+        n->size = size;
+        n->mtime = n->ctime = now_seconds();
+        rc = inode_store(em, n);
+        if (rc == 0 && ((uint32_t)size & (em->block_size - 1)) != 0) {
+            uint32_t b;
+
+            rc = block_at(em, n, (uint32_t)(size >> em->block_shift), &b);
+            if (rc == 0 && b != 0) {
+                uint32_t in = (uint32_t)size & (em->block_size - 1);
+
+                rc = write_bytes(em, (uint64_t)b * em->block_size + in, 0, em->block_size - in, 0);
+            }
+        }
+        if (rc == 0) {
+            rc = punch(em, n, keep);
+        }
+        if (rc == 0) {
+            rc = inode_store(em, n);
+        }
+    } else if (size > n->size) {
+        /* The gap is a hole; the zeroed tail of the last block, if a
+         * shrink left one unsynced, reaches the disk before the size
+         * covers it. */
+        rc = bcache_sync(em->dev);
+        if (rc == 0) {
+            n->size = size;
+            n->mtime = n->ctime = now_seconds();
+            rc = inode_store(em, n);
+        }
+    }
+    vfs_ns_unlock(mnt);
+    return rc;
+}
+
+static int ext2_fsync(struct vfs_mount *mnt, void *handle)
+{
+    (void)handle;
+    return bcache_sync(em_of(mnt)->dev);
+}
+
+static int32_t ext2_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,
+                          uint64_t offset)
+{
+    struct ext2_mount *em = em_of(mnt);
+    struct ext2_node *n = handle;
+    const uint8_t *in = buf;
+    uint64_t end;
+    uint32_t done = 0;
+    int rc, fresh;
+
+    if ((n->mode & S_IFMT_) == S_IFDIR_) {
+        return -EISDIR;
+    }
+    if (count == 0) {
+        return 0;
+    }
+    if (offset >= 0xFFFFFFFFu || count > 0xFFFFFFFFu - offset) {
+        return -EFBIG;
+    }
+    rc = assert_writable(mnt, em);
+    if (rc != 0) {
+        return rc;
+    }
+    if (n->too_big) {
+        return -EOVERFLOW;
+    }
+    end = offset + count;
+    vfs_ns_lock(mnt);
+    assert_locked(mnt);
+    /* ENOSPC before anything is written: the blocks the range needs that
+     * the file does not have, and at most one pointer block per level. */
+    {
+        uint32_t first = (uint32_t)(offset >> em->block_shift);
+        uint32_t last = (uint32_t)((end - 1) >> em->block_shift);
+        uint64_t need = 0;
+        uint32_t i;
+
+        for (i = first; i <= last && need <= em->free_blocks + 3; i++) {
+            uint32_t b;
+
+            rc = block_at(em, n, i, &b);
+            if (rc != 0) {
+                goto out;
+            }
+            if (b == 0) {
+                need++;
+            }
+        }
+        if (need > 0) {
+            need += 3 + (last - first) / (em->block_size / 4) + 1;
+        }
+        if (need > em->free_blocks ||
+            (!may_use_reserved() && need > 0 && em->free_blocks - need < em->r_blocks)) {
+            rc = -ENOSPC;
+            goto out;
+        }
+    }
+    /* The bytes: each block allocated as it is reached, its pointer
+     * written after the block is in the bitmap, the data written back. */
+    while (done < count) {
+        uint32_t at = (uint32_t)(offset + done);
+        uint32_t in_block = at % em->block_size;
+        uint32_t take = em->block_size - in_block;
+        uint32_t b;
+
+        if (take > count - done) {
+            take = count - done;
+        }
+        rc = map_alloc(em, n, at / em->block_size, &b, &fresh);
+        if (rc != 0) {
+            goto out;
+        }
+        /* A block just given out holds whatever was freed there; the part
+         * this write does not cover is zeroed before the bytes land. */
+        if (fresh && take != em->block_size) {
+            rc = write_bytes(em, (uint64_t)b * em->block_size, 0, em->block_size, 0);
+            if (rc != 0) {
+                goto out;
+            }
+        }
+        rc = write_bytes(em, (uint64_t)b * em->block_size + in_block, in + done, take, 0);
+        if (rc != 0) {
+            goto out;
+        }
+        done += take;
+    }
+    /* The pointers and i_blocks, then the data synced, then the size. */
+    rc = inode_store(em, n);
+    if (rc != 0) {
+        goto out;
+    }
+    if (end > n->size) {
+        rc = bcache_sync(em->dev);
+        if (rc != 0) {
+            goto out;
+        }
+        n->size = end;
+    }
+    n->mtime = n->ctime = now_seconds();
+    rc = inode_store(em, n);
+out:
+    vfs_ns_unlock(mnt);
+    if (rc != 0) {
+        return done > 0 && rc != -EROFS ? (int32_t)done : rc;
+    }
+    return (int32_t)count;
+}
+
+static int ext2_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode,
+                       void **node)
+{
+    struct ext2_mount *em = em_of(mnt);
+    struct ext2_node *d = dir ? dir : mnt->root;
+    struct ext2_node *n;
+    struct ext2_scan sc;
+    uint32_t at, prev;
+    int rc;
+
+    rc = assert_writable(mnt, em);
+    if (rc != 0) {
+        return rc;
+    }
+    assert_locked(mnt);
+    if (k_strlen(name) > EXT2_NAME_MAX) {
+        return -ENAMETOOLONG;
+    }
+    rc = dir_find(em, d, name, &at, &prev, &sc);
+    if (rc < 0) {
+        return rc;
+    }
+    if (rc == 1) {
+        return -EEXIST;
+    }
+    rc = inode_new(em, d->ino, S_IFREG_ | (mode & 07777u), 1, &n);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = dir_add(em, d, name, n->ino, 1);
+    if (rc != 0) {
+        n->nlink = 0;
+        release_inode(em, n);
+        n->used = 0;
+        return rc;
+    }
+    *node = n;
+    return 0;
+}
+
+static int ext2_unlink(struct vfs_mount *mnt, void *dir, const char *name)
+{
+    struct ext2_mount *em = em_of(mnt);
+    struct ext2_node *d = dir ? dir : mnt->root;
+    struct ext2_node loaded;
+    struct ext2_node *n;
+    struct ext2_scan sc;
+    uint32_t at, prev;
+    int rc;
+
+    rc = assert_writable(mnt, em);
+    if (rc != 0) {
+        return rc;
+    }
+    assert_locked(mnt);
+    rc = dir_find(em, d, name, &at, &prev, &sc);
+    if (rc < 0) {
+        return rc;
+    }
+    if (rc == 0) {
+        return -ENOENT;
+    }
+    n = node_held(em, sc.ino);
+    if (!n) {
+        rc = inode_load(em, sc.ino, &loaded);
+        if (rc != 0) {
+            return rc;
+        }
+        n = &loaded;
+    }
+    if ((n->mode & S_IFMT_) == S_IFDIR_) {
+        return -EISDIR;
+    }
+    /* The entry first, then the count; the inode goes with its last name
+     * when nothing holds it, and at the last put otherwise. */
+    rc = dir_remove_at(em, d, at, prev, &sc);
+    if (rc != 0) {
+        return rc;
+    }
+    d->mtime = d->ctime = now_seconds();
+    rc = inode_store(em, d);
+    if (rc != 0) {
+        return rc;
+    }
+    if (n->nlink > 0) {
+        n->nlink--;
+    }
+    n->ctime = now_seconds();
+    if (n->nlink == 0) {
+        if (n == &loaded) {
+            return release_inode(em, n);
+        }
+        n->unlinked = 1;
+        return inode_store(em, n); /* the count of zero, for an orphan's sake */
+    }
+    return inode_store(em, n);
+}
+
+static int ext2_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode)
+{
+    struct ext2_mount *em = em_of(mnt);
+    struct ext2_node *d = dir ? dir : mnt->root;
+    struct ext2_node *n;
+    struct ext2_scan sc;
+    uint32_t at, prev, b;
+    uint8_t head[24];
+    int rc, fresh;
+
+    rc = assert_writable(mnt, em);
+    if (rc != 0) {
+        return rc;
+    }
+    assert_locked(mnt);
+    if (k_strlen(name) > EXT2_NAME_MAX) {
+        return -ENAMETOOLONG;
+    }
+    rc = dir_find(em, d, name, &at, &prev, &sc);
+    if (rc < 0) {
+        return rc;
+    }
+    if (rc == 1) {
+        return -EEXIST;
+    }
+    if (d->nlink >= 65000) {
+        return -EMLINK;
+    }
+    rc = inode_new(em, d->ino, S_IFDIR_ | (mode & 07777u), 0, &n);
+    if (rc != 0) {
+        return rc;
+    }
+    /* The new directory's block with . and .., then its inode with a count
+     * of two, the parent's count, and the parent's entry last; a stop
+     * before the inode leaves a set bit with nothing behind it. */
+    rc = map_alloc(em, n, 0, &b, &fresh);
+    if (rc == 0) {
+        rc = write_bytes(em, (uint64_t)b * em->block_size, 0, em->block_size, 0);
+    }
+    if (rc == 0) {
+        k_memset(head, 0, sizeof(head));
+        LE32_PUT(head, n->ino);
+        LE16_PUT(head + 4, 12);
+        head[6] = 1;
+        head[7] = (em->incompat & EXT2_INCOMPAT_FILETYPE) ? 2 : 0;
+        head[8] = '.';
+        LE32_PUT(head + 12, d->ino);
+        LE16_PUT(head + 16, em->block_size - 12);
+        head[18] = 2;
+        head[19] = head[7];
+        head[20] = '.';
+        head[21] = '.';
+        rc = write_bytes(em, (uint64_t)b * em->block_size, head, 24, 1);
+    }
+    if (rc == 0) {
+        n->size = em->block_size;
+        rc = inode_store(em, n);
+    }
+    if (rc == 0) {
+        d->nlink++;
+        d->mtime = d->ctime = now_seconds();
+        rc = inode_store(em, d);
+    }
+    if (rc == 0) {
+        rc = dir_add(em, d, name, n->ino, 2);
+    }
+    if (rc != 0) {
+        n->nlink = 0;
+        release_inode(em, n);
+    }
+    n->used = 0;
+    return rc;
+}
+
+static int ext2_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
+{
+    struct ext2_mount *em = em_of(mnt);
+    struct ext2_node *d = dir ? dir : mnt->root;
+    struct ext2_node loaded;
+    struct ext2_scan sc;
+    uint32_t at, prev;
+    int rc, empty;
+
+    rc = assert_writable(mnt, em);
+    if (rc != 0) {
+        return rc;
+    }
+    assert_locked(mnt);
+    rc = dir_find(em, d, name, &at, &prev, &sc);
+    if (rc < 0) {
+        return rc;
+    }
+    if (rc == 0) {
+        return -ENOENT;
+    }
+    rc = inode_load(em, sc.ino, &loaded);
+    if (rc != 0) {
+        return rc;
+    }
+    if ((loaded.mode & S_IFMT_) != S_IFDIR_) {
+        return -ENOTDIR;
+    }
+    rc = dir_is_empty(em, &loaded, &empty);
+    if (rc != 0) {
+        return rc;
+    }
+    if (!empty) {
+        return -ENOTEMPTY;
+    }
+    if (node_held(em, sc.ino)) {
+        return -EBUSY; /* a description or a working directory is in it */
+    }
+    rc = dir_remove_at(em, d, at, prev, &sc);
+    if (rc != 0) {
+        return rc;
+    }
+    if (d->nlink > 2) {
+        d->nlink--;
+    }
+    d->mtime = d->ctime = now_seconds();
+    rc = inode_store(em, d);
+    if (rc != 0) {
+        return rc;
+    }
+    loaded.nlink = 0;
+    return release_inode(em, &loaded);
+}
+
+static int ext2_link(struct vfs_mount *mnt, void *dir, const char *name, void *node)
+{
+    struct ext2_mount *em = em_of(mnt);
+    struct ext2_node *d = dir ? dir : mnt->root;
+    struct ext2_node *n = node;
+    struct ext2_scan sc;
+    uint32_t at, prev;
+    int rc;
+
+    rc = assert_writable(mnt, em);
+    if (rc != 0) {
+        return rc;
+    }
+    assert_locked(mnt);
+    if ((n->mode & S_IFMT_) == S_IFDIR_) {
+        return -EPERM;
+    }
+    if (n->nlink >= 65000) {
+        return -EMLINK;
+    }
+    if (k_strlen(name) > EXT2_NAME_MAX) {
+        return -ENAMETOOLONG;
+    }
+    rc = dir_find(em, d, name, &at, &prev, &sc);
+    if (rc < 0) {
+        return rc;
+    }
+    if (rc == 1) {
+        return -EEXIST;
+    }
+    /* The count first, then the name: a stop between is a count one too
+     * high, which is a count repair. */
+    n->nlink++;
+    n->ctime = now_seconds();
+    rc = inode_store(em, n);
+    if (rc != 0) {
+        n->nlink--;
+        return rc;
+    }
+    rc = dir_add(em, d, name, n->ino, ftype_of(n->mode));
+    if (rc != 0) {
+        n->nlink--;
+        inode_store(em, n);
+        return rc;
+    }
+    d->mtime = d->ctime = now_seconds();
+    return inode_store(em, d);
+}
+
+static int ext2_symlink(struct vfs_mount *mnt, void *dir, const char *name, const char *target)
+{
+    struct ext2_mount *em = em_of(mnt);
+    struct ext2_node *d = dir ? dir : mnt->root;
+    struct ext2_node *n;
+    struct ext2_scan sc;
+    uint32_t at, prev;
+    uint32_t tlen = (uint32_t)k_strlen(target);
+    int rc;
+
+    rc = assert_writable(mnt, em);
+    if (rc != 0) {
+        return rc;
+    }
+    assert_locked(mnt);
+    if (k_strlen(name) > EXT2_NAME_MAX) {
+        return -ENAMETOOLONG;
+    }
+    if (tlen == 0 || tlen >= em->block_size) {
+        return -ENAMETOOLONG;
+    }
+    rc = dir_find(em, d, name, &at, &prev, &sc);
+    if (rc < 0) {
+        return rc;
+    }
+    if (rc == 1) {
+        return -EEXIST;
+    }
+    rc = inode_new(em, d->ino, S_IFLNK_ | 0777u, 0, &n);
+    if (rc != 0) {
+        return rc;
+    }
+    if (tlen < EXT2_FAST_LINK) {
+        uint32_t i;
+
+        for (i = 0; i < tlen; i++) {
+            n->block[i / 4] |= (uint32_t)(uint8_t)target[i] << ((i % 4) * 8);
+        }
+    } else {
+        uint32_t b;
+        int fresh;
+
+        rc = map_alloc(em, n, 0, &b, &fresh);
+        if (rc == 0) {
+            rc = write_bytes(em, (uint64_t)b * em->block_size, 0, em->block_size, 0);
+        }
+        if (rc == 0) {
+            rc = write_bytes(em, (uint64_t)b * em->block_size, target, tlen, 1);
+        }
+    }
+    if (rc == 0) {
+        n->size = tlen;
+        rc = inode_store(em, n);
+    }
+    if (rc == 0) {
+        rc = dir_add(em, d, name, n->ino, 7);
+    }
+    if (rc != 0) {
+        n->nlink = 0;
+        release_inode(em, n);
+    }
+    n->used = 0;
+    return rc;
+}
+
+/**
+ * Rename within the mount. A file: the count raised, the new entry written,
+ * the old entry removed, the count lowered, so that the file has a name at
+ * every stop. A destination file is replaced by rewriting its entry to
+ * the source's inode, after which the victim loses a count and goes as an
+ * unlink's does. A directory moves by a new entry, its `..` rewritten,
+ * the new parent's count raised, the old entry removed and the old
+ * parent's count lowered; a destination directory must be empty and
+ * goes first, as rmdir's does; a directory may not move into itself.
+ */
+static int ext2_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *newdir,
+                       const char *newname)
+{
+    struct ext2_mount *em = em_of(mnt);
+    struct ext2_node *od = olddir ? olddir : mnt->root;
+    struct ext2_node *nd = newdir ? newdir : mnt->root;
+    struct ext2_node loaded, victim_loaded;
+    struct ext2_node *n, *victim = 0;
+    struct ext2_scan osc, nsc;
+    uint32_t oat, oprev, nat, nprev;
+    int rc, have_new, is_dir;
+
+    rc = assert_writable(mnt, em);
+    if (rc != 0) {
+        return rc;
+    }
+    assert_locked(mnt);
+    if (k_strlen(newname) > EXT2_NAME_MAX) {
+        return -ENAMETOOLONG;
+    }
+    rc = dir_find(em, od, oldname, &oat, &oprev, &osc);
+    if (rc < 0) {
+        return rc;
+    }
+    if (rc == 0) {
+        return -ENOENT;
+    }
+    have_new = dir_find(em, nd, newname, &nat, &nprev, &nsc);
+    if (have_new < 0) {
+        return have_new;
+    }
+    if (have_new && nsc.ino == osc.ino) {
+        return 0; /* two names for one file: nothing changes */
+    }
+    n = node_held(em, osc.ino);
+    if (!n) {
+        rc = inode_load(em, osc.ino, &loaded);
+        if (rc != 0) {
+            return rc;
+        }
+        n = &loaded;
+    }
+    is_dir = (n->mode & S_IFMT_) == S_IFDIR_;
+    if (have_new) {
+        int victim_dir;
+
+        victim = node_held(em, nsc.ino);
+        if (!victim) {
+            rc = inode_load(em, nsc.ino, &victim_loaded);
+            if (rc != 0) {
+                return rc;
+            }
+            victim = &victim_loaded;
+        }
+        victim_dir = (victim->mode & S_IFMT_) == S_IFDIR_;
+        if (victim_dir && !is_dir) {
+            return -EISDIR;
+        }
+        if (!victim_dir && is_dir) {
+            return -ENOTDIR;
+        }
+        if (victim_dir) {
+            int empty;
+
+            rc = dir_is_empty(em, victim, &empty);
+            if (rc != 0) {
+                return rc;
+            }
+            if (!empty) {
+                return -ENOTEMPTY;
+            }
+            if (victim != &victim_loaded) {
+                return -EBUSY;
+            }
+        }
+    }
+    if (is_dir && od != nd) {
+        int below;
+
+        rc = is_below(em, nd->ino, n->ino, &below);
+        if (rc != 0) {
+            return rc;
+        }
+        if (below) {
+            return -EINVAL;
+        }
+        if (nd->nlink >= 65000) {
+            return -EMLINK;
+        }
+    }
+    if (is_dir) {
+        /* A directory: the destination removed as rmdir's would be, the new
+         * entry written, `..` rewritten, the new parent's count raised, the
+         * old entry removed and the old parent's count lowered. */
+        if (have_new) {
+            rc = dir_remove_at(em, nd, nat, nprev, &nsc);
+            if (rc != 0) {
+                return rc;
+            }
+            if (nd->nlink > 2) {
+                nd->nlink--;
+            }
+            rc = inode_store(em, nd);
+            if (rc != 0) {
+                return rc;
+            }
+            victim_loaded.nlink = 0;
+            rc = release_inode(em, &victim_loaded);
+            if (rc != 0) {
+                return rc;
+            }
+            /* The old entry's position may have moved with the removal
+             * when the two names share a directory. */
+            rc = dir_find(em, od, oldname, &oat, &oprev, &osc);
+            if (rc <= 0) {
+                return rc < 0 ? rc : -ENOENT;
+            }
+        }
+        rc = dir_add(em, nd, newname, n->ino, 2);
+        if (rc != 0) {
+            return rc;
+        }
+        if (od != nd) {
+            rc = dir_set_dotdot(em, n, nd->ino);
+            if (rc != 0) {
+                return rc;
+            }
+            nd->nlink++;
+            rc = inode_store(em, nd);
+            if (rc != 0) {
+                return rc;
+            }
+        }
+        rc = dir_find(em, od, oldname, &oat, &oprev, &osc);
+        if (rc <= 0) {
+            return rc < 0 ? rc : -ENOENT;
+        }
+        rc = dir_remove_at(em, od, oat, oprev, &osc);
+        if (rc != 0) {
+            return rc;
+        }
+        if (od != nd && od->nlink > 2) {
+            od->nlink--;
+        }
+        od->mtime = od->ctime = now_seconds();
+        return inode_store(em, od);
+    }
+    /* A file: the count raised, the new entry written or rewritten, the
+     * victim let go, the old entry removed, the count lowered. */
+    n->nlink++;
+    n->ctime = now_seconds();
+    rc = inode_store(em, n);
+    if (rc != 0) {
+        n->nlink--;
+        return rc;
+    }
+    if (have_new) {
+        uint64_t off;
+        uint8_t raw[4];
+
+        rc = dir_block_at(em, nd, nat, &off);
+        if (rc == 0) {
+            LE32_PUT(raw, n->ino);
+            rc = write_bytes(em, off, raw, 4, 1);
+        }
+        if (rc == 0 && (em->incompat & EXT2_INCOMPAT_FILETYPE)) {
+            uint8_t ft = (uint8_t)ftype_of(n->mode);
+
+            rc = write_bytes(em, off + 7, &ft, 1, 1);
+        }
+        if (rc != 0) {
+            return rc;
+        }
+        if (victim->nlink > 0) {
+            victim->nlink--;
+        }
+        victim->ctime = now_seconds();
+        if (victim->nlink == 0) {
+            if (victim == &victim_loaded) {
+                rc = release_inode(em, victim);
+            } else {
+                victim->unlinked = 1;
+                rc = inode_store(em, victim);
+            }
+        } else {
+            rc = inode_store(em, victim);
+        }
+        if (rc != 0) {
+            return rc;
+        }
+    } else {
+        rc = dir_add(em, nd, newname, n->ino, ftype_of(n->mode));
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    rc = dir_find(em, od, oldname, &oat, &oprev, &osc);
+    if (rc <= 0) {
+        return rc < 0 ? rc : -ENOENT;
+    }
+    rc = dir_remove_at(em, od, oat, oprev, &osc);
+    if (rc != 0) {
+        return rc;
+    }
+    n->nlink--;
+    rc = inode_store(em, n);
+    if (rc != 0) {
+        return rc;
+    }
+    od->mtime = od->ctime = now_seconds();
+    rc = inode_store(em, od);
+    if (rc == 0 && od != nd) {
+        nd->mtime = nd->ctime = od->mtime;
+        rc = inode_store(em, nd);
+    }
+    return rc;
 }
 
 /* ---- the mount ---- */
@@ -957,10 +2802,20 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
     em->writable = readonly_why == 0 && !(flags & VFS_MS_RDONLY);
     if (readonly_why) {
         klog(KLOG_WARN, "ext2", "mounted read-only: %s", readonly_why);
+        mnt->flags |= VFS_MS_RDONLY;
     }
-    /* The driver has no writer yet; every mount is read-only. */
-    em->writable = 0;
-    mnt->flags |= VFS_MS_RDONLY;
+    em->alloc_hint = em->first_data;
+    if (em->writable) {
+        /* The valid bit cleared before the mount is published, so that a
+         * volume this mount leaves behind is one the next mount checks. */
+        em->state &= ~EXT2_VALID_FS;
+        rc = sb_store(em);
+        if (rc != 0) {
+            ext2_put(mnt, root);
+            return rc;
+        }
+        em->valid_cleared = 1;
+    }
     mnt->priv = em;
     mnt->root = root;
     klog(KLOG_INFO, "ext2", "mounted: %d blocks of %d, %d inodes, %d groups%s", (int)em->blocks,
@@ -995,19 +2850,11 @@ static int ext2_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags
 }
 
 static const struct vfs_ops ext2_ops = {
-    ext2_lookup, 0, /* lookup_rest */
-    ext2_hold,   ext2_put, ext2_getattr, 0, /* setattr */
-    ext2_open,   ext2_release, ext2_read, 0, /* write */
-    0,                                     /* truncate */
-    0,                                     /* fsync */
-    ext2_readdir, 0,                       /* create */
-    0,                                     /* unlink */
-    0,                                     /* mkdir */
-    0,                                     /* rmdir */
-    0,                                     /* rename */
-    0,                                     /* link */
-    ext2_readlink, ext2_statfs, ext2_sync, ext2_prepare_unmount, ext2_unmount, ext2_path,
-    0, /* symlink */
+    ext2_lookup,  0, /* lookup_rest */
+    ext2_hold,    ext2_put,      ext2_getattr,  ext2_setattr, ext2_open,   ext2_release,
+    ext2_read,    ext2_write,    ext2_truncate, ext2_fsync,   ext2_readdir, ext2_create,
+    ext2_unlink,  ext2_mkdir,    ext2_rmdir,    ext2_rename,  ext2_link,   ext2_readlink,
+    ext2_statfs,  ext2_sync,     ext2_prepare_unmount, ext2_unmount, ext2_path, ext2_symlink,
 };
 
 const struct vfs_type vfs_ext2_type = {"ext2", ext2_mount, &ext2_ops};
