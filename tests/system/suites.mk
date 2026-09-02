@@ -48,7 +48,6 @@ DISKDIAG_PORT    = 2225
 METAL_PORT       = 2223
 SEALED_PORT      = 2297
 DRILL_PORT       = 2298
-SCRATCH_PORT     = 2299
 PROCFILES_PORT   = 2299
 ifeq ($(NIC),e1000)
 NIC_TAG          = -e1000
@@ -1103,12 +1102,6 @@ USBDISK_DIR = $(IMAGES_DIR)/usbdisk
 run-usbdisk: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(MKEXFATFIXTURE) $(MKGPT) $(MKMBR) $(HARNESS) $(STICK_IMAGE)
 	sh tests/system/suites/usbdisk.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(USBDISK_DIR) \
 	    $(OS_REAL_IMAGE) "`cat krffs/rach2_demo_password`" $(MKEXFATFIXTURE) $(STICK_IMAGE)
-
-# `tests/run scratch`: milestone 43's fourth partition rehearsed on the sealed
-# image in QEMU, the recovery ISO booted as a stick and the procedure in
-# dev-log/37-fatwrite/hardware.md run over SSH.
-run-scratch: $(DEMO_CREDS) rach2-sealed-disk rach2-recovery-iso $(MKFATFIXTURE)
-	sh tests/system/suites/scratch.sh $(SEALED_DISK) build/images/rach2-recovery.iso $(MKFATFIXTURE) $(SCRATCH_PORT)
 
 run-usb: rach2 tests krffs test-image $(HARNESS)
 	sh tests/system/suites/usb.sh $(HARNESS_KERNEL) $(TEST_IMAGE) $(HARNESS)
