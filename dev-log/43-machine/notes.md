@@ -56,6 +56,12 @@ and recovery is no longer the saved default.
    request, a keyboard on port 3. Files: `rach2/sys/usb/hub.c`,
    `tests/host/hub_hosttest.c`, `rach2/sys/usb/Readme.md`.
 
+3. The boot log named a high-speed hub "a full-speed device" at its root
+   port. A USB 2 port's speed field is valid only once the port is
+   enabled, after its reset; the record now says a low-speed device by
+   its pull-up and, for the rest, that the reset tells full from high
+   speed. File: `rach2/sys/usb/usb.c`.
+
 ### Phase 3
 
 * Under `rach2.nomsi` the stick is eighty times slower than under MSI:
@@ -296,6 +302,14 @@ and recovery is no longer the saved default.
   emulated stick still answers its class reset. Open: the panic's
   record, when it recurs under the capture.
 
+### Not a difference
+
+`tests/run core` on 2026-09-04 failed the mount suite in 25 s while
+six suites ran in the pool; alone it passes in 104 s, as it did every
+other time today. A pooled boot that lost a step to the host's load,
+not the driver; if it recurs, the suite's step timeouts under the pool
+are the thing to look at.
+
 The first ext2 root written in phase 5 was `build/images/os-real.ext2`,
 the plain image whose init starts no network and no SSH server, and the
 trial boot came up on ext2 at the console with no address and no
@@ -311,12 +325,6 @@ chain longer than its size. The volume was mounted and Spotlight was
 writing that file. `diskutil verifyVolume`, which unmounts first, found
 the volume clean before and after that run, and the kernel never opened
 the file.
-
-3. The boot log named a high-speed hub "a full-speed device" at its root
-   port. A USB 2 port's speed field is valid only once the port is
-   enabled, after its reset; the record now says a low-speed device by
-   its pull-up and, for the rest, that the reset tells full from high
-   speed. File: `rach2/sys/usb/usb.c`.
 
 ### Open
 
