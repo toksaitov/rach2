@@ -239,7 +239,18 @@ and recovery is no longer the saved default.
   nine, so the recovery is proved by its rows and not yet by the
   machine.
 
-### Not a difference
+* The stick behind the SuperSpeed hub in the blue socket stopped
+  answering after 33 MB of a 64 MiB FAT32 write at 1.3 MB/s: `usbdisk:
+  device 8: a transfer never answered`, then `recovery never finished`
+  for the mass-storage reset, every ten seconds since, with the buffer
+  cache keeping the one dirty FAT sector and retrying it each time; the
+  volume went read-only and the unmount answered `EIO`. The hub reports
+  the port connected and the link up, so no warm reset is asked for; the
+  same write on a high-speed root port completed in phase 5. To find in
+  phase 7: whether a replug revives the stick, whether the failure is
+  the SuperSpeed link's or the stick's, and whether a device whose
+  transport recovery fails should be reset through its port by the
+  driver, as a replug does by hand.
 
 The first ext2 root written in phase 5 was `build/images/os-real.ext2`,
 the plain image whose init starts no network and no SSH server, and the
