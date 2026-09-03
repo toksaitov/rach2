@@ -45,7 +45,7 @@ The sound module issues `AUDIO_GET_INFO` on the console descriptor. If SB16 or H
 
 SB16 consumes the requested format directly. HDA converts it to the codec's selected sample rate, sample width, and channel count. The kernel audio subsystem selects the hardware and converts formats.
 
-Music uses the WAD's `GENMIDI` instruments and the local MUS and MIDI readers. The Nuked OPL3 emulator generates stereo 16-bit samples at 49,716 Hz. The mixer reduces those samples to its 11,025 Hz mono stream before sending the combined bytes to the kernel.
+Music uses the WAD's `GENMIDI` instruments and the local MUS and MIDI readers. The OPL player plays track 0 of a MIDI file only, which is the whole of a converted MUS lump and the tempo track of a format 1 MIDI file; Freedoom ships format 1 files, so with it the player reaches the end of the track at once, restarts the song, and sounds no note while the loop takes the processor. Milestone 43 found this on the notebook and it is not yet fixed. The Nuked OPL3 emulator generates stereo 16-bit samples at 49,716 Hz. The mixer reduces those samples to its 11,025 Hz mono stream before sending the combined bytes to the kernel.
 
 If no PCM driver is available, sound effects use the WAD's `DP` lumps and `KIOCSOUND` to drive the PC speaker. This fallback does not play synthesized music.
 

@@ -10,7 +10,7 @@ The kernel identity-maps `[0, HARD_MEMORY_LIMIT)` as supervisor-writable pages. 
 
 Before reserving module memory, `modlayout.c` rejects an empty or backwards range, a module past 32 MiB, a module overlapping the kernel, or two overlapping modules. The rejection includes the module number and physical range.
 
-`alloc_user_page` scans upward from the end of the boot reservations. Page-cache frames are reserved from the top of the pool downward. User frames return to the pool when their reference count reaches zero; page directories and private page tables use separate free lists.
+`alloc_user_page` scans upward from the end of the boot reservations. Page-cache frames are reserved from the top of the pool downward. When no frame is free the record says who holds the pool: the boot's reservations, the kernel's frames from the top, the user frames between with the shared ones counted apart, and the process that asked. User frames return to the pool when their reference count reaches zero; page directories and private page tables use separate free lists.
 
 ## Page tables and address spaces
 
