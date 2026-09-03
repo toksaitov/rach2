@@ -668,6 +668,23 @@ static int transfer_result(struct usb_device_state *d)
     return expired(d) ? -1 : 0;
 }
 
+/**
+ * Why the control transfer `transfer_result` just failed, for a record.
+ *
+ * The completion is still in `d->control` after the result was taken; a
+ * device whose deadline passed has none.
+ */
+static const char *transfer_why(const struct usb_device_state *d)
+{
+    if (expired(d)) {
+        return "no answer within the step's 500 ms";
+    }
+    if (d->control.status == USB_XFER_STALLED) {
+        return "it stalled the request";
+    }
+    return "the transfer failed";
+}
+
 /** The command this device is waiting for, with the same three answers. */
 static int command_result(struct usb_device_state *d, struct usb_command_result *out)
 {
@@ -1083,6 +1100,8 @@ static void step_device(struct usb_device_state *d)
             return;
         }
         if (answer < 0) {
+            klog(KLOG_WARN, "usb", "device: port %s: configuration: %s", path_of(d),
+                 transfer_why(d));
             fail(d, "it refused its configuration");
             return;
         }
