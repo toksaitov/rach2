@@ -97,6 +97,26 @@ and recovery is no longer the saved default.
   image accepts the key at once under QEMU. Phase 7 reproduces it on
   the machine with `dropbear -v` on the console.
 
+### Phase 4
+
+* In the blue socket the owner's USB 3.0 hub shows two devices, the
+  high-speed hub on port 2 and the SuperSpeed hub on port 10, and the
+  stick, a USB 3 device, attaches to the SuperSpeed half and is absent.
+  The keyboard and mouse, USB 2 devices, are on the high-speed half and
+  work. Milestone 41 recorded the SuperSpeed hub as not driven; this is
+  the consequence for a stick behind it, and phase 7 writes it into the
+  USB Readme as a limit: a USB 3 stick behind a USB 3.0 hub in the blue
+  socket is not seen, and a black socket sees it.
+
+* The stick on the hub when the machine boots is refused: `usb:
+  device: port 1.1: it refused its configuration` at 1.95 s, 0.66 s
+  after the hub's descriptor, on two boots in port 1, with the keyboard
+  and mouse on the same hub enumerated at 1.99 s and 2.03 s. The same
+  stick on a root port at boot enumerated at 1.41 s, and plugged into
+  the hub after the boot it enumerated in every socket. Phase 7 finds
+  what the stick answers to `SET_CONFIGURATION` that early behind the
+  hub, and whether the core should retry a refused configuration once.
+
 ### Not a difference
 
 `fsck_exfat -n` run by the owner on the mounted data stick reported

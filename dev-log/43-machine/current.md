@@ -1,11 +1,10 @@
-Milestone 43, phase 4: the hub.
-Evidence gathered: phase 3 closed; the exFAT volume proved in three
-sockets with a GUID table and an MBR, the pull under a mount, the rates
-with MSI and nomsi, the stick image booted from the firmware; five
-differences recorded under "Phase 3" in notes.md for phase 7. The stick
-now carries the stick image, whose 16 MiB exFAT second volume is the
-data stick for phase 4. The notebook runs the phase 1 kernel from its
-disk, saved default candidate.
-Next action: the hub with the keyboard, the mouse and the stick on it in
-the first socket; /proc/usb with the tree.
+Milestone 43, phase 5: the ext2 root.
+Evidence gathered: phase 4 closed; the hub proved in three sockets with
+the keyboard, the mouse and the stick, the pulls, the translator's
+mutation caught by the controller, the tree's kernel 0e2d1d11...
+installed and committed; two differences recorded under "Phase 4" in
+notes.md. The stick carries the stick image.
+Next action: the recovery stick image rebuilt from the tree with the
+ext2 image beside it on its second partition, written on the Mac;
+booted on the notebook and shown to reach reflash.
 File being read when written: none.

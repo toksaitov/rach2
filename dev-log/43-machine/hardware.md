@@ -166,3 +166,45 @@ fixture's files, took a file and `sync`, and unmounted with two flushes.
 The file that boot wrote reads on the Mac from the stick's second
 partition, and `diskutil verifyVolume` finds that volume clean. The
 notebook then booted its disk again as the candidate.
+
+## Phase 4: the hub
+
+The owner's hub is a USB 3.0 hub: its high-speed half is the 35d6:2510
+with four ports, and in the blue socket its SuperSpeed half, 35d6:3510
+protocol 0, appears on port 10 and is refused with `it did not give a
+hub descriptor`. The keyboard (46d:c34b) and the mouse (46d:c077)
+are low-speed devices; behind the high-speed hub they run through the
+controller's transaction translator, which QEMU does not model.
+
+| Socket | Port | Tree | Keys and mouse | Stick behind the hub |
+|--------|------|------|----------------|----------------------|
+| Right side, black | 1 | hub high; 1.1 stick high; 1.3 keyboard low; 1.4 mouse low | work, Doom played | mounts, takes a file, raw read 8.3 MB/s |
+| Left side, black | 3 | the same tree on port 3 | work, Doom played | mounts, takes a file, raw read 8.2 MB/s |
+| Left side, blue | 2 and 10 | hub high on port 2 with the keyboard and mouse; the SuperSpeed half on port 10 refused | work, Doom played | absent: the stick attaches to the SuperSpeed half, which this kernel does not drive |
+
+In port 1: the stick pulled from the hub under a mount answered `EIO`,
+unmounted with rc 0 and was reclaimed while the keyboard and mouse
+stayed up; plugged back it was a new device with its volume found; the
+hub pulled with all three on it gave four slots back, and plugged back
+it enumerated all three within 0.35 s of its own record, after which
+the keys, the mouse and the stick's mount worked. The owner's 1 TB
+JMicron 152d:578 disk, plugged in by mistake for forty seconds, was
+found, reported 1953525168 sectors, and given back on its pull.
+
+The translator proof, 2026-09-03, with the owner's approval of the two
+kernel installs on `/dev/disk0` through `bootctl`: a kernel whose slot
+context omits the translator's slot and port, `15069d72...`, installed
+and trial-booted with the hub in port 1. The controller answered the
+Address Device command for the keyboard and the mouse with code 4, a
+parameter error, and `/proc/usb` showed the hub alone; QEMU's full-speed
+hub cannot show this. Then the kernel the tree at a604e04 builds,
+`0e2d1d11...`, 1386668 bytes, installed, trial-booted with the keyboard
+and mouse enumerated behind the hub, and committed as the saved
+default. On both boots the stick on the hub at boot time refused its
+configuration; see the phase 4 differences.
+The stick pulled from the hub and plugged back on the committed kernel
+enumerated at 285 s, mounted and took a file. The device count against
+the twelve entries: the hub, the keyboard, the mouse and the stick are
+four, and the owner's disk made a fifth for a minute; no more devices
+are available here, so the table's limit is not reached on this
+hardware.
