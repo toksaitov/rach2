@@ -301,8 +301,13 @@ the file.
   counts the whole pool of 8192 frames: the boot's reservations, the
   kernel's frames from the top, the page cache's at most 1024 among
   them, and the user frames between. The record now says how many of
-  each and which process asked (phase 7); the lag boot is rerun on the
-  machine in the install round to read it.
+  each and which process asked (phase 7). Rerun in the install round
+  with `e9246422...`: `rach2.blocklag=30` on the ext2 root and on the
+  KRFFS root, `bootctl status` from the first SSH login each time, and
+  neither boot lost a frame, MemFree 19 MB before and after. The
+  original boot also had `rach2.nomsi`, under which every USB transfer
+  then took the timer's pump. Not reproduced; the record stands for
+  the next occurrence.
 
 ### The review round after phase 1
 
