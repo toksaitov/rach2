@@ -231,8 +231,8 @@ and recovery is no longer the saved default.
   player iterates every track with its own wait and generates up to
   the nearest event; on the machine Freedoom then runs at 58 frames a
   second, the longest 60 ms, the emulator 0.5 s per 30 s in 2604 calls
-  for 1.48 million samples after 2255 events, and the owner hears the
-  music. Owed: a host row over a two-track MIDI fixture, which needs
+  for 1.48 million samples after 2255 events, and the owner played it:
+  smooth, the music playing, no sound trouble. Owed: a host row over a two-track MIDI fixture, which needs
   the player compiled on the host with a `GENMIDI` lump the tree does
   not carry; the machine's report is the proof so far, and the old
   player's report with the same WAD is the mutation's. Freedoom is on the notebook as
