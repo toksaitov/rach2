@@ -11,12 +11,15 @@
  * time waited, and each port's status read once so that a device already
  * plugged in when the hub arrived is found.
  *
- * A SuperSpeed hub, protocol 3, is the same machine with the USB 3
- * differences: its descriptor is the USB 3 one, it is told its depth in the
- * tree before its ports are used, its port status words have no speed bits
- * because everything below it is SuperSpeed and no translator because
- * nothing below it is slow, and its ports report three changes USB 2 has no
- * feature numbers for. The USB 3.0 hub in the notebook's blue socket is two
+ * A SuperSpeed hub is the same machine with the USB 3 differences. It is
+ * known by its speed, since the specification puts its protocol 3 in the
+ * device descriptor and leaves the interface's at zero: its descriptor is
+ * the USB 3 one, it is told its depth in the tree before its ports are
+ * used, its port status words have no speed bits because everything below
+ * it is SuperSpeed and no translator because nothing below it is slow, its
+ * ports report three changes USB 2 has no feature numbers for, and a port
+ * whose link has fallen to SS.Inactive is given a warm reset and what is on
+ * it enumerated again. The USB 3.0 hub in the notebook's blue socket is two
  * devices, this one and a high-speed hub for the USB 2 devices.
  *
  * Everything the hub is asked is a control transfer on its endpoint zero,
@@ -57,6 +60,7 @@
 
 /* The port feature selectors (Table 11-17). */
 #define PORT_RESET          4
+#define BH_PORT_RESET       28 /* USB 3: a warm reset, for a link that fell inactive */
 #define PORT_POWER          8
 #define C_PORT_CONNECTION   16
 #define C_PORT_ENABLE       17
@@ -75,6 +79,9 @@
 #define PORT_STAT_POWER        0x0100
 #define PORT_STAT_LOW_SPEED    0x0200
 #define PORT_STAT_HIGH_SPEED   0x0400
+/* USB 3: bits 5 to 8 of the status word are the link state. */
+#define PORT_LINK_STATE(status) (((status) >> 5) & 0xFu)
+#define LINK_SS_INACTIVE       6
 
 /* The power switching modes of wHubCharacteristics (Table 11-13). */
 #define LPSM_GANGED     0
@@ -128,6 +135,7 @@
 #define REQ_POWER_OFF    10
 #define REQ_POWER_ON     11
 #define REQ_DEPTH        12
+#define REQ_WARM_RESET   13
 
 /* The change bits as bits of the change word, and one more of this driver's
  * own for a power-off owed to an over-current. */
@@ -153,6 +161,7 @@ struct hub_port {
     int over_current_tries; /* how many times the port was powered on again */
     uint32_t power_on_ms;   /* until the port is powered on again, or 0 */
     int off;                /* left powered off after over-current recurred */
+    int warm;               /* a warm reset asked for after a link error */
 };
 
 struct hub {
@@ -267,7 +276,8 @@ static void give_up(struct hub *h, const char *why)
     usb_core_hub_failed(index, why);
 }
 
-int hub_attach(int index, int device, int interface, int protocol, int ep_dci, int depth)
+int hub_attach(int index, int device, int interface, int protocol, int ep_dci, int depth,
+               int super)
 {
     int i;
     struct hub *h = 0;
@@ -291,7 +301,7 @@ int hub_attach(int index, int device, int interface, int protocol, int ep_dci, i
     h->protocol = protocol;
     h->ep_dci = ep_dci;
     h->multi_tt = protocol == USB_PROTOCOL_HUB_MULTI;
-    h->super = protocol == USB_PROTOCOL_HUB_SUPER;
+    h->super = super;
     h->depth = depth;
     h->state = HUB_DESCRIPTOR;
     if (request(h, TYPE_CLASS_HUB_IN, REQ_GET_DESCRIPTOR, (h->super ? DESC_HUB_SS : DESC_HUB) << 8,
@@ -455,6 +465,26 @@ static void port_read(struct hub *h, int port)
     } else if (change & C_PORT_CONNECTION_BIT) {
         p->connect_ms = hub_ms;
         usb_core_hub_port(h->index, port - 1, now);
+    } else if (h->super && (change & (C_PORT_LINK_STATE_BIT | C_PORT_CONFIG_ERROR_BIT)) && now &&
+               PORT_LINK_STATE(status) == LINK_SS_INACTIVE && !p->warm) {
+        /* USB 3.0 10.3.1.4: a link in SS.Inactive stays there until a warm
+         * reset. The device below cannot transfer, so it is closed and the
+         * reset asked for; the port reports no connection until the reset
+         * has ended, and then the core enumerates what is there. */
+        klog(KLOG_WARN, "usb", "hub: device %d port %d: link inactive; warm reset", h->device,
+             port);
+        usb_core_hub_port(h->index, port - 1, 0);
+        p->warm = 1;
+        if (request(h, TYPE_CLASS_PORT_OUT, REQ_SET_FEATURE, BH_PORT_RESET, port, 0,
+                    REQ_WARM_RESET, port) != 0) {
+            p->warm = 0;
+        }
+    } else if (h->super && p->warm && (change & C_BH_PORT_RESET_BIT)) {
+        /* The port reports connected again from here, after its debounce,
+         * and the core's pass finds it with no entry and enumerates what is
+         * there; the driver arrives nothing itself. */
+        p->warm = 0;
+        p->connect_ms = hub_ms;
     } else if ((change & C_PORT_ENABLE_BIT) && !(status & PORT_STAT_ENABLE) && now &&
                p->reset == RESET_NONE) {
         klog(KLOG_WARN, "usb", "hub: device %d port %d: enable lost", h->device, port);
@@ -561,6 +591,13 @@ static void answered(struct hub *h, const struct usb_completion *c)
             return;
         }
         h->state = HUB_TELL;
+        return;
+    case REQ_WARM_RESET:
+        if (!ok) {
+            h->port[port - 1].warm = 0;
+            klog(KLOG_WARN, "usb", "hub: device %d port %d: the warm reset was refused", h->device,
+                 port);
+        }
         return;
     case REQ_HUB_STATUS:
         if (ok && got >= 4) {
@@ -866,7 +903,8 @@ int hub_port_status(int owner, int port, struct usb_port_status *out)
     if (!p->known) {
         return -1;
     }
-    out->connected = (p->status & PORT_STAT_CONNECTION) != 0 && !p->off && p->power_on_ms == 0;
+    out->connected = (p->status & PORT_STAT_CONNECTION) != 0 && !p->off && p->power_on_ms == 0 &&
+                     !p->warm;
     out->enabled = (p->status & PORT_STAT_ENABLE) != 0;
     out->changed = p->change != 0;
     /* A SuperSpeed hub's ports carry SuperSpeed devices and nothing else;

@@ -178,9 +178,12 @@ static struct {
     int hub_told_think;
     int hub_told_slot;
     int hub_told;
-    int hub_depth_sets;        /* SET_HUB_DEPTH requests, a SuperSpeed hub's */
-    int hub_depth;             /* the depth the last one carried */
-    int hub_depth_before_tell; /* the depth arrived before the controller was told */
+    int hub_depth_refuse;       /* SET_HUB_DEPTH is stalled */
+    int port_link[MODEL_PORTS]; /* USB 3: the link state, 0 for U0, 6 for SS.Inactive */
+    int warm_resets;            /* SET_PORT_FEATURE(BH_PORT_RESET) requests */
+    int hub_depth_sets;         /* SET_HUB_DEPTH requests, a SuperSpeed hub's */
+    int hub_depth;              /* the depth the last one carried */
+    int hub_depth_before_tell;  /* the depth arrived before the controller was told */
     uint32_t now_ms;
 } model;
 
@@ -404,19 +407,30 @@ static const unsigned char keyboard_config[] = {
     7, 5,  0x81, 3, 8, 0, 10            /* endpoint 1, in, interrupt */
 };
 
-static unsigned char hub_config[25];
+static unsigned char hub_config[31];
 
+/* A USB 2 hub's configuration, or a SuperSpeed hub's: the interface's
+ * protocol is the translator kind for USB 2 and zero for USB 3, whose 3 is
+ * in the device descriptor; a SuperSpeed hub's status endpoint takes two
+ * bytes at interval 8 and is followed by its companion descriptor. */
 static void hub_config_fill(void)
 {
-    unsigned char c[25] = {
-        9, 2, 25,   0, 1, 1, 0, 0xE0, 0, /* configuration, value 1 */
-        9, 4, 0,    0, 1, 9, 0, 0,    0, /* interface: hub, protocol below */
-        7, 5, 0x81, 3, 1, 0, 12          /* endpoint 1, in, interrupt */
+    unsigned char c[31] = {
+        9, 2,    25,   0, 1, 1, 0,  0xE0, 0, /* configuration, value 1 */
+        9, 4,    0,    0, 1, 9, 0,  0,    0, /* interface: hub, protocol below */
+        7, 5,    0x81, 3, 1, 0, 12,          /* endpoint 1, in, interrupt */
+        6, 0x30, 0,    0, 0, 0               /* the SuperSpeed companion */
     };
     int i;
 
-    c[16] = (unsigned char)model.hub_protocol;
-    for (i = 0; i < 25; i++) {
+    if (model.hub_protocol == 3) {
+        c[2] = 31;
+        c[22] = 2;
+        c[24] = 8;
+    }
+
+    c[16] = (unsigned char)(model.hub_protocol == 3 ? 0 : model.hub_protocol);
+    for (i = 0; i < 31; i++) {
         hub_config[i] = c[i];
     }
 }
@@ -444,6 +458,9 @@ static unsigned int port_status_word(int port)
     }
     if (model.port_in_reset[port - 1]) {
         status |= 0x0010;
+    }
+    if (model.hub_protocol == 3) {
+        status |= (unsigned int)(model.port_link[port - 1] & 0xF) << 5;
     }
     return status;
 }
@@ -511,7 +528,11 @@ int xhci_submit(int device, int endpoint, const struct usb_transfer *transfer)
         if (type == 1) {
             buf[0] = 18;
             buf[1] = 1;
-            buf[7] = 64;
+            if (kind == KIND_HUB) {
+                buf[4] = 9; /* a hub's class, and a SuperSpeed hub's protocol 3 */
+                buf[6] = (unsigned char)(model.hub_protocol == 3 ? 3 : 0);
+            }
+            buf[7] = (unsigned char)(kind == KIND_HUB && model.hub_protocol == 3 ? 9 : 64);
             buf[8] = 0x09;
             buf[9] = 0x04; /* vendor 0x0409 */
             buf[10] = kind == KIND_HUB ? 0xAA : 0x01;
@@ -520,11 +541,12 @@ int xhci_submit(int device, int endpoint, const struct usb_transfer *transfer)
             have = 18;
         } else if (type == 2) {
             const unsigned char *cfg = kind == KIND_HUB ? hub_config : keyboard_config;
-            uint32_t len = kind == KIND_HUB ? 25u : (uint32_t)sizeof(keyboard_config);
+            uint32_t len = (uint32_t)sizeof(keyboard_config);
 
             if (kind == KIND_HUB) {
                 hub_config_fill();
                 cfg = hub_config;
+                len = hub_config[2];
             }
             for (i = 0; i < len && i < want; i++) {
                 buf[i] = cfg[i];
@@ -591,8 +613,9 @@ int xhci_submit(int device, int endpoint, const struct usb_transfer *transfer)
         if (!model.hub_told) {
             model.hub_depth_before_tell = 1;
         }
-        answer(device, 1, model.hub_protocol == 3 ? USB_XFER_OK : USB_XFER_STALLED, 0, 0,
-               transfer->generation);
+        answer(device, 1,
+               model.hub_protocol == 3 && !model.hub_depth_refuse ? USB_XFER_OK : USB_XFER_STALLED,
+               0, 0, transfer->generation);
         return 0;
     }
     if (setup[0] == 0xA0 && setup[1] == 6 && setup[3] == 0x29) {
@@ -672,6 +695,16 @@ int xhci_submit(int device, int endpoint, const struct usb_transfer *transfer)
                 model.port_powered_off[port - 1] = 0;
                 model.power_ons++;
             }
+        } else if (feature == 28 && port >= 1 && port <= MODEL_PORTS) {
+            /* A warm reset: the link comes back to U0 and the port reports
+               both reset changes. */
+            model.warm_resets++;
+            model.port_link[port - 1] = 0;
+            model.port_enabled[port - 1] = 1;
+            model.port_change[port - 1] |= 0x30u;
+            answer(device, 1, USB_XFER_OK, 0, 0, transfer->generation);
+            model_change(port);
+            return 0;
         } else if (feature == 4 && port >= 1 && port <= MODEL_PORTS) {
             /* A reset change never acknowledged: the hub refuses another
                reset on that port, as a hub that keeps its change bit does. */
@@ -1000,23 +1033,55 @@ int main(void)
     CHECK("and a route of 2", kbd != 0 && slot_of[kbd].where.route == 0x2u);
     CHECK("its port was reset through the hub and the reset change cleared",
           model.reset_requests >= 1 && model.reset_clears >= 1);
+    /* A configuration error reported with the link still up is
+       acknowledged with its feature and nothing else happens. */
     model.clears = 0;
-    model.port_change[1] |= 0x40u; /* a link state change on port 2 */
+    model.port_change[1] |= 0x80u;
     model_change(2);
     pump(200);
+    CHECK("a configuration error change is acknowledged with USB 3's feature 26", cleared(26, 2));
+    CHECK("with no warm reset while the link is up", model.warm_resets == 0);
+    CHECK("and the device below still running", running_count() == 2);
+    /* The link falls to SS.Inactive: the device below is closed, the port
+       gets a warm reset, both reset changes are acknowledged with their
+       features, and the device is enumerated again on the link that came
+       back. */
+    model.clears = 0;
     {
-        int i, found = 0;
+        int given = slots_given;
 
-        for (i = 0; i < model.clears && i < 32; i++) {
-            if (model.cleared_feature[i] == 25 && model.cleared_port[i] == 2) {
-                found = 1;
-            }
-        }
-        CHECK("a link state change is acknowledged with USB 3's feature 25", found);
+        model.port_link[1] = 6;
+        model.port_change[1] |= 0x40u;
+        model_change(2);
+        pump(3000);
+        CHECK("a link state change is acknowledged with USB 3's feature 25", cleared(25, 2));
+        CHECK("a link in SS.Inactive gets a warm reset", model.warm_resets == 1);
+        CHECK("whose end is acknowledged with USB 3's feature 29", cleared(29, 2));
+        CHECK("and the device below is enumerated again on the link that came back",
+              slots_given == given + 1 && slot_of_kind(KIND_KBD) != 0 && running_count() == 2);
     }
-    CHECK("and the device below is still running", running_count() == 2);
 
-    /* A SuperSpeed hub that will not take its depth is closed. */
+    /* A device pulled in the middle of its reset through the hub, a reset
+       the hub never finishes, gives the enumeration turn back: a keyboard
+       plugged into another port afterwards is enumerated. */
+    model_reset();
+    model.port_kind[1] = KIND_KBD;
+    model.port_reset_never[1] = 1;
+    pump(600);
+    CHECK("a device whose reset never ends is not running", running_count() == 1);
+    model.port_kind[1] = KIND_NONE;
+    model.port_change[1] |= 1u; /* a connection change: it left */
+    model_change(2);
+    pump(600);
+    model.port_kind[3] = KIND_KBD;
+    model.port_change[3] |= 1u;
+    model_change(4);
+    pump(2000);
+    CHECK("a device pulled during its reset through the hub gives the turn back",
+          slot_of_kind(KIND_KBD) != 0 && running_count() == 2);
+
+    /* A SuperSpeed hub that will not give its descriptor is closed before
+       any depth is sent; one that refuses its depth is closed too. */
     model_reset();
     model.root_speed = USB_SPEED_SUPER;
     model.hub_protocol = 3;
@@ -1024,6 +1089,13 @@ int main(void)
     pump(2000);
     CHECK("a SuperSpeed hub that will not give its descriptor is closed",
           running_count() == 0 && model.hub_depth_sets == 0);
+    model_reset();
+    model.root_speed = USB_SPEED_SUPER;
+    model.hub_protocol = 3;
+    model.hub_depth_refuse = 1;
+    pump(2000);
+    CHECK("a SuperSpeed hub that refuses its depth is closed",
+          running_count() == 0 && model.hub_depth_sets == 1 && model.hub_told == 0);
 
     /* A hub with twenty ports publishes fifteen. */
     model_reset();

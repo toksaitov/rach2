@@ -256,8 +256,8 @@ void usb_parse_config(const uint8_t *buffer, int length, struct usb_interface_in
                  buffer[offset + 7] == USB_PROTOCOL_BULK_ONLY);
             in_storage_interface = in_storage_interface_now;
             /* A hub: class 9 on its setting zero, with a protocol that says
-             * what translates below it, or that it is a SuperSpeed hub,
-             * which the hub driver drives by USB 3's rules. */
+             * what translates below it; a SuperSpeed hub's interface says
+             * zero, and its speed is what names it. */
             in_hub_interface = (buffer[offset + 3] == 0 && buffer[offset + 5] == USB_CLASS_HUB &&
                                 buffer[offset + 7] <= USB_PROTOCOL_HUB_SUPER);
             if ((in_boot_interface || in_storage_interface_now || in_hub_interface) &&
@@ -420,7 +420,12 @@ static void device_gone(int i)
     d->have_control = 0;
     d->have_report = 0;
     d->closing_asked = 0;
-    if (enumerating == i) {
+    if (enumerating == i && d->state == ST_RESETTING) {
+        /* The turn was taken for the port's reset, which is the hub's or
+         * the controller's port and not a command; no answer is owed, and
+         * a wait for one would hold every later device's enumeration. */
+        enumerating = -1;
+    } else if (enumerating == i) {
         /* The command turn is kept until the command that may be in flight
          * has answered or been given up on; `step_closing` takes it. */
         d->abandoned = 1;
@@ -1117,8 +1122,11 @@ static void step_device(struct usb_device_state *d)
         if (d->interface.kind == USB_KIND_HUB) {
             /* A hub has no protocol to be put into either: its class driver
              * reads its descriptor and powers its ports from here. */
+            /* A SuperSpeed hub is known by its speed: the specification puts
+             * its protocol 3 in the device descriptor and leaves the
+             * interface's at zero. */
             if (hub_attach((int)(d - devices), d->slot, d->interface.number, d->interface.protocol,
-                           d->ep_dci, d->where.depth) != 0) {
+                           d->ep_dci, d->where.depth, d->speed == USB_SPEED_SUPER) != 0) {
                 fail(d, "this kernel drives no more hubs at once");
                 return;
             }
