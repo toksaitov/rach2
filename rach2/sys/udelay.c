@@ -25,6 +25,7 @@
 
 #include "udelay.h"
 #include "kio.h"
+#include "lib/kirq.h"
 #include "pit.h"
 
 /* The 8254's input frequency. Where the counter wraps is `pit_reload`, which
@@ -48,14 +49,27 @@
  */
 #define PIT_WINDOW_USEC 1000u
 
-/** Sample channel 0's current count without disturbing it. */
+/**
+ * Sample channel 0's current count without disturbing it.
+ *
+ * The latch and the two reads are one operation and run with interrupts
+ * off. The tick's clock and the USB handler's stamps latch this counter too,
+ * and a handler that ran between the latch here and the reads would consume
+ * the latch, leaving the reads to return the live count a byte at a time:
+ * a low byte from before a borrow and a high byte from after it reads as a
+ * count below the last sample by a whole 256, the drop is overcounted by
+ * that much, and the wait ends early. The notebook showed a 2 ms wait
+ * measured at 1.36 ms, about six such tears.
+ */
 static uint16_t pit_count(void)
 {
+    uint32_t flags = kirq_save();
     uint8_t lo, hi;
 
     outb(0x43, 0x00); /* latch channel 0 */
     lo = inb(0x40);
     hi = inb(0x40);
+    kirq_restore(flags);
     return (uint16_t) ((uint16_t) lo | ((uint16_t) hi << 8));
 }
 
