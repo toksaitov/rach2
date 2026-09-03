@@ -107,7 +107,34 @@ ssh -i $KEY root@ADDRESS 'cat /proc/mounts && bootctl status'
 ssh -i $KEY root@ADDRESS 'bootctl commit'
 ```
 
-The candidate entries boot the ext2 root and the fallback entries the KRFFS one, so the trial is what a root that does not come up falls back from: the boot after it is the fallback with nothing armed. `commit` is a person's decision after reading the mount table and the slot report, because `bootctl` checks the slot and the command line and not the mount: a root the check mounted read-only answers SSH too, and committing it would make a read-only system the default. A root that mounts read-only because its check found a fault is repaired by recovery's `init`, which runs `e2fsck -p` on every ext2 partition before it starts anything, and by hand from there with `e2fsck -y /dev/disk0p4`.
+The candidate entries boot the ext2 root and the fallback entries the KRFFS one, so the trial is what a root that does not come up falls back from: the boot after it is the fallback with nothing armed. `commit` is a person's decision after reading the mount table and the slot report, because `bootctl` checks the slot and the command line and not the mount: a root the check mounted read-only answers SSH too, and committing it would make a read-only system the default. A root that mounts read-only because its check found a fault is repaired by recovery's `init`, which runs `e2fsck -p` on every ext2 partition before it starts anything, and by hand from there with `e2fsck -y /dev/disk0p4`. The recovery on the laptop's own third partition is milestone 37's and has no `e2fsck`; the recovery stick's has it, until the partition is rewritten from `build/images/rach2-recovery.krffs`.
+
+### Working the machine from the host
+
+What the sessions of milestone 43 learned, so that nobody derives it again:
+
+* Every root has an SSH host key of its own, generated at boot for the RAM roots, so a fresh known-hosts file per system is the rule: `ssh -i krffs/rach2_demo_ed25519 -o UserKnownHostsFile=/tmp/k-NAME -o StrictHostKeyChecking=accept-new root@192.168.0.106`. The ordinary and recovery roots take their address from DHCP, 192.168.0.106 on the owner's network; a boot from the metal stick takes the fixed 192.168.0.105. Root logs in by key only; `su` from the `test` account with the demo password is the other way in. There is no sftp server: copy a file with `ssh ... 'cat > /tmp/f' < f`, and back with `ssh ... 'cat /tmp/f' > f`.
+* `/dev/disk0`, the raw window, exists only with `rach2.diskdiag` on the boot line and is writable only in the recovery kernel. Every partition read or write goes through recovery: `bootctl trial recovery && reboot` from the running root boots the disk's recovery entry, which is a RAM root with `reflash`; `bootctl env saved_entry recovery` makes it the default for the length of a repair. A recovery booted from the stick has no `rach2.slot=` on its line and refuses `bootctl trial` and `bootctl env`; arm trials from the disk's recovery entry or from the root.
+* A one-boot command line that the fixed menu does not offer, such as `rach2.nomsi` or `rach2.blocklag=30`, is a staged menu file: `bootctl config FILE` puts it in `/boot/boot.cfg`, where GRUB sources it before its own next-entry handling, and a file that consumes the trial itself boots exactly once. The form that works, with the root's own line and the extra tokens at its end:
+
+  ```
+  if [ "${next_entry}" = "candidate" ]; then
+      set next_entry=
+      save_env next_entry
+      set root=(hd0,msdos1)
+      multiboot /boot/kernel rach2.root=ext2 rach2.slot=candidate rach2.disk=ahci rach2.netconsole rach2.ip=none rach2.nomsi
+      boot
+  fi
+  ```
+
+  Stage it, `bootctl trial candidate`, reboot; afterwards stage a file holding one comment line so the slot is empty again.
+* The boot partition and the recovery partition are FAT volumes rewritten whole: read the partition from recovery into a file on the host (`dd if=/dev/disk0 bs=512 skip=START count=SECTORS` over ssh), keep that file as the saved copy, put the new file into a copy with `mcopy -o -i COPY.img NEWFILE ::/boot/NAME`, and `gzip -c COPY.img | ssh ... 'gunzip | reflash /dev/disk0 BYTE SIZE'`, then hash the partition back. The boot partition is sector 2048 for 131072 sectors, byte 1048576; the recovery partition sector 1157120 for 131072, byte 592445440; the ext2 root sector 1290240 for 4194304, byte 660602880. A saved copy also goes on the stick's save volume, mounted on the machine as the stick's second partition; a 64 MiB copy through the FAT driver there takes minutes, so `gzip` it first.
+* The disk rule in `CLAUDE.md` applies to every write that is not `bootctl kernel`: the recovery stick booted and shown to reach `reflash`, the sectors saved on the host and on the stick, recovery the saved default until the write is verified, and the owner's approval naming the device at the time.
+* The recovery stick is `build/images/rach2-recovery-stick.img` written to the whole stick on the Mac, its 8 GiB second partition then formatted with `newfs_msdos -F 32 -v RACH2SAVE`; the data stick for a test is the same stick formatted on the Mac with `diskutil eraseDisk ExFAT NAME GPT` or `MBR`; the boot test is `build/images/rach2-stick.img` written the same way. The owner chooses the stick at the BIOS boot menu and takes the first GRUB entry.
+* `reboot` and `reboot -f` both unmount the ext2 root cleanly; only a power cut leaves it dirty for the check. `poweroff` turns the machine off; `halt` takes no `-p`.
+* The acceptance script is `sh tests/system/accept/metal_accept.sh 192.168.0.106 22`, run from the host with the hub, the keyboard, the mouse and a stick plugged in; it writes its known-hosts file under `build/images/`.
+* The kernel's log goes out on the wire as broadcast frames of ethertype `0x88b5` when `rach2.netconsole` is on the line; `sudo tcpdump -i en0 -U 'ether proto 0x88b5' -w FILE` on the Mac keeps it, which is the only record of a panic, since the screen shows one line and the boot log dies with the machine.
+* `/proc/usb`, `/proc/interrupts`, `/proc/disk`, `/proc/meminfo` and `dmesg` are the machine's own readings; `bootctl status` reports the slots and the saved and next entries.
 
 Check the credentials before flashing a root. The image trusts `krffs/authorized_keys`, which `krffs/gen_demo_key.sh` composes from the demo public key and an optional `krffs/authorized_keys.extra` belonging to whoever works on the machine. The private key used to log in must be the pair of one of those, and a copy carried between hosts can be older than the file it is meant to match:
 
