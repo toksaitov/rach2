@@ -231,3 +231,11 @@ from the disk's recovery entry, which the owner reached by typing
 `bootctl trial recovery && reboot` at the console. The disk's recovery
 partition is milestone 37's and has no `e2fsck`; the stick's recovery
 has it.
+
+The crash test, 2026-09-03: a loop appending a line and rewriting a
+1 MiB file seven times a second on the ext2 root, and the owner held the
+power button until the machine was off. The next boot recorded
+`ext2: check: clean` at 0.46 s before the mount, mounted the root
+read-write, and the log file had its 140 lines up to the cut. At the
+console on the ext2 root the keyboard, the mouse and Doom work as on the
+KRFFS root.

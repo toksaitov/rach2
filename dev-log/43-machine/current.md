@@ -1,10 +1,11 @@
-Milestone 43, phase 5: the ext2 root.
-Evidence gathered: phase 4 closed; the hub proved in three sockets with
-the keyboard, the mouse and the stick, the pulls, the translator's
-mutation caught by the controller, the tree's kernel 0e2d1d11...
-installed and committed; two differences recorded under "Phase 4" in
-notes.md. The stick carries the stick image.
-Next action: the recovery stick image rebuilt from the tree with the
-ext2 image beside it on its second partition, written on the Mac;
-booted on the notebook and shown to reach reflash.
+Milestone 43, phase 6: the acceptance script end to end.
+Evidence gathered: phase 5 closed; the machine runs the tree's kernel
+0e2d1d11... on the ext2 root as the saved default with the KRFFS root
+the fallback, proved by a trial, a deliberate fallback, a commit and a
+power cut; one difference recorded under "Phase 5" in notes.md. The
+stick carries the recovery image with the RACH2SAVE partition holding
+the saved copies.
+Next action: fix the script's disk section for the installed system,
+its choice of the stick's volume, and its use of the first disk slot;
+rehearse with tests/run metal; run it against the machine.
 File being read when written: none.
