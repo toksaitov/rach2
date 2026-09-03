@@ -64,11 +64,19 @@ and recovery is no longer the saved default.
   `/proc/interrupts` shows no line interrupt for the controller and a
   fallback count of zero, so every stage of every transfer waits for
   the next 10 ms tick. A 32 KiB read costs about 310 ms, which is some
-  thirty ticks; how the driver's stages add up to that many is phase
-  7's to count. QEMU hides this because its controller completes a transfer before the
-  tick that started it returns. To decide in phase 7: whether nomsi is
-  a diagnostic mode that may be slow, said so in the USB Readme, or
-  whether the pump should drain again after it queues work.
+  thirty ticks. Fixed in phase 7: with messages off the controller
+  raises its interrupts on the PCI line the firmware routed for it, IRQ
+  7 on the notebook and IRQ 11 under QEMU, where it shares the line
+  with the network card; the acknowledgement clears the status
+  register's event bit as well as the pending bit, since the line is
+  level-triggered, and the pump's test for an interrupt already raised
+  reads the 8259's request register on that path. Under QEMU the 16 MiB
+  read that took two minutes on the timer's pump takes 340 ms on the
+  line. Rows: the usb suite's nomsi boot requires the line's count and
+  no fallback; the controller's host test has the line's enables, the
+  event bit's clearing and a device that names no line. Mutations: the
+  line refused by name fails the boot; the event bit left set fails the
+  host row.
 * The clock self-test fails on some boots of the machine and passes
   on others: 2018 us on the MSI boot of this phase, 1361 us on the
   nomsi boot, 2019 us and a pass in phase 1. The failure record does
