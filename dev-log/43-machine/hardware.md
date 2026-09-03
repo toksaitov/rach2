@@ -257,3 +257,19 @@ run passes every line on the machine, and `tests/run metal` passes the
 same script against QEMU. The first run is the proof of the three
 changed checks: each failed before its change on the case it now
 accepts.
+
+## Phase 7: the install round
+
+The tree's kernel installed through `bootctl` twice on 2026-09-04 with
+the owner's approval, `65053b03...` and then `a4304a7c...` with two
+fixes the round found, each trial-booted on the ext2 root and
+committed; all eleven self-tests pass on both boots, the clock's among
+them, and the stick on the hub at boot enumerates under the five-second
+configuration window where it had timed out at half a second.
+
+| Check | Reading |
+|-------|---------|
+| The hub in the blue socket | port 2 the high-speed half with the keyboard and mouse; port 10 the SuperSpeed hub, protocol 0, think time 0; the stick at 10.2, super |
+| The stick behind the SuperSpeed hub | mounts, takes a file, raw read 22.2 MB/s, unmounts with two flushes |
+| The pull under a mount | the hub reports the link fallen inactive, then the disconnection; the read answers `EIO`, `umount` returns 0, the disk is reclaimed |
+| The replug | on the first kernel not seen, since the warm reset the link report asked for never ended on the empty port; on `a4304a7c...` enumerated in 0.3 s, mounted and read |

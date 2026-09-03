@@ -145,18 +145,27 @@ and recovery is no longer the saved default.
   that was never issued, and every later device waited with it. Fixed
   in the core with its own row. Mutations for the round: SuperSpeed
   taken from the interface protocol, no warm reset, the configuration
-  error bit not acknowledged, the turn kept; each caught. QEMU has no
-  SuperSpeed hub, so the stick behind the hub in the blue socket is
-  the machine's proof, in the next install round.
+  error bit not acknowledged, the turn kept; each caught. Proved on the
+  machine in the install round: the stick behind the hub in the blue
+  socket enumerates as a SuperSpeed device on the USB 3 hub, mounts,
+  reads at 22 MB/s and survives a pull. The pull showed one more case:
+  the hub reports the link fallen inactive before the disconnection, so
+  the warm reset asked for never ended on the empty port and the replug
+  was not seen. A connection change now ends a warm reset, with a row
+  of its own, and the replug is enumerated in 0.3 s.
 
 * The stick on the hub when the machine boots is refused: `usb:
   device: port 1.1: it refused its configuration` at 1.95 s, 0.66 s
   after the hub's descriptor, on two boots in port 1, with the keyboard
   and mouse on the same hub enumerated at 1.99 s and 2.03 s. The same
   stick on a root port at boot enumerated at 1.41 s, and plugged into
-  the hub after the boot it enumerated in every socket. Phase 7 finds
-  what the stick answers to `SET_CONFIGURATION` that early behind the
-  hub, and whether the core should retry a refused configuration once.
+  the hub after the boot it enumerated in every socket. Found in phase
+  7 once the record said how the transfer ended: no answer within the
+  step's 500 ms, a timeout and not a stall, the stick's controller
+  still starting its flash. The configuration request now gets five
+  seconds, as the Linux driver allows it; row in the hub host test, a
+  device answering after 1.5 s; mutation, the half second back. On the
+  machine the stick on the hub at boot enumerates.
 
 * Writes through the FAT32 driver to the stick's 8 GiB save volume are
   slow and get slower: 0.65 MB/s falling to 0.17 MB/s by 900 MB in
