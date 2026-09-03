@@ -1120,11 +1120,18 @@ void msc_step(uint32_t elapsed_ms)
              * never answers a clear must not leave the stick here for ever. */
             m->deadline = (m->deadline > elapsed_ms) ? m->deadline - elapsed_ms : 0;
             if (m->deadline == 0) {
-                klog(KLOG_WARN, "usbdisk", "device %d: recovery never finished", m->device);
+                int device = m->device;
+
+                klog(KLOG_WARN, "usbdisk", "device %d: recovery never finished", device);
                 m->recover = RECOVER_NONE;
                 m->stage = STAGE_IDLE;
                 m->tag = ++tag_seed;
                 serve_end(m, -EIO);
+                /* The transport is dead on a device the hub still shows
+                 * connected; the core resets its port and enumerates it
+                 * again, as a replug would. This entry is detached by the
+                 * core's close. */
+                usb_core_device_drop(device, "its transport stopped answering");
             }
         } else {
             if (m->stage == STAGE_DONE) {

@@ -85,6 +85,7 @@ static struct {
     int senses;        /* REQUEST SENSE commands seen */
     uint32_t last_tag; /* the tag of the last wrapper taken */
     int resets;        /* class resets seen */
+    int reset_never;   /* the class reset is never answered */
     int cleared_in, cleared_out;
     int clear_order[8];
     int clears;
@@ -325,6 +326,9 @@ int xhci_submit(int device, int endpoint, const struct usb_transfer *transfer)
         }
         if (setup != 0 && setup[1] == 0xFF) { /* the class reset */
             dev.resets++;
+            if (dev.reset_never) {
+                return 0; /* submitted, and nothing ever answers it */
+            }
             answer(endpoint, USB_XFER_OK, 0, 0, transfer->generation);
             return 0;
         }
@@ -401,6 +405,15 @@ int xhci_submit(int device, int endpoint, const struct usb_transfer *transfer)
  * says the inward one first, and a driver that cleared them the other way
  * round leaves a device that answers nothing again.
  */
+static int drops; /* devices handed back to the core */
+
+void usb_core_device_drop(int device, const char *why)
+{
+    (void)device;
+    (void)why;
+    drops++;
+}
+
 int usb_core_clear_halt(int device, int endpoint)
 {
     (void)device;
@@ -1040,6 +1053,33 @@ int main(void)
         CHECK("and not at its deadline either, before recovery is attempted", dev.resets == 1);
         CHECK("and the request is failed when recovery ends",
               block.completions == 1 && block.last_status == -EIO);
+    }
+
+    /* A transfer that never answers, and a class reset that never answers
+       either: the request fails at the recovery's deadline and the stick is
+       handed back to the core, which enumerates its port again as a replug
+       would; the entry goes with the core's close. */
+    model_reset();
+    drops = 0;
+    CHECK("a stick is taken", msc_attach(1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("and comes up", run_until_settled(200));
+    {
+        struct block_request *r = make_request(0, 0, 1, page);
+        int i;
+
+        block.completions = 0;
+        dev.resets = 0;
+        dev.vanish_at = 2;   /* the data stage is never answered */
+        dev.reset_never = 1; /* nor the class reset that follows */
+        CHECK("a read is taken", msc_block_device(0)->submit(msc_block_device(0), r) == 0);
+        for (i = 0; i < 3000 && block.completions == 0; i++) {
+            pump(10);
+        }
+        CHECK("a recovery that never answers fails the request",
+              dev.resets == 1 && block.completions == 1 && block.last_status == -EIO);
+        CHECK("and hands the stick back to the core for its port to be reset", drops == 1);
+        dev.vanish_at = 0;
+        dev.reset_never = 0;
     }
 
     /* Tags go up across sticks and attaches, so a completion left over from

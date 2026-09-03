@@ -150,6 +150,17 @@ void usb_core_reset(void);
  */
 int usb_core_clear_halt(int device, int endpoint);
 
+/**
+ * Give up a running device whose class driver cannot reach it any more.
+ *
+ * The device is closed as if it had left; its port still shows a
+ * connection, so the next pass enumerates it again through a port reset,
+ * which is what a replug by hand does. `why` goes in the record. A stick
+ * that stopped answering behind the notebook's SuperSpeed hub, with the hub
+ * reporting its link up, was the case.
+ */
+void usb_core_device_drop(int device, const char *why);
+
 /** Whether nothing is part way through enumeration. */
 int usb_core_idle(void);
 

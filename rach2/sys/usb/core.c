@@ -1238,6 +1238,20 @@ static void device_arrive(int owner, int port)
     }
 }
 
+void usb_core_device_drop(int device, const char *why)
+{
+    int i;
+
+    for (i = 0; i < USB_MAX_DEVICES; i++) {
+        if (devices[i].state == ST_RUNNING && devices[i].slot == device) {
+            klog(KLOG_WARN, "usb", "device: port %s: %s; its port is enumerated again",
+                 path_of(&devices[i]), why);
+            device_gone(i);
+            return;
+        }
+    }
+}
+
 void usb_core_hub_port(int hub, int port, int connected)
 {
     int i;
