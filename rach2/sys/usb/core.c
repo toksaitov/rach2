@@ -52,6 +52,11 @@
 /* How long any one step of enumeration may take. A device that has not
  * answered by then is not going to. */
 #define STEP_MS 500u
+/* The configuration request alone gets five seconds: a stick's controller is
+ * still starting its flash when the request arrives at boot, and the
+ * notebook's stick behind the hub answered it after the half second every
+ * other step gets. Five seconds is what the Linux driver allows it. */
+#define CONFIG_MS 5000u
 
 /* How long a connect is given to settle before the entry holding it is let go.
  * A contact that is still bouncing after this is a device being pushed in and
@@ -676,7 +681,7 @@ static int transfer_result(struct usb_device_state *d)
 static const char *transfer_why(const struct usb_device_state *d)
 {
     if (expired(d)) {
-        return "no answer within the step's 500 ms";
+        return "no answer within the step's time";
     }
     if (d->control.status == USB_XFER_STALLED) {
         return "it stalled the request";
@@ -1071,7 +1076,7 @@ static void step_device(struct usb_device_state *d)
             return;
         }
         d->state = ST_SET_CONFIG;
-        arm(d);
+        d->deadline = core_ms + CONFIG_MS;
         return;
 
     case ST_OPEN_EP2:
@@ -1088,7 +1093,7 @@ static void step_device(struct usb_device_state *d)
             return;
         }
         d->state = ST_SET_CONFIG;
-        arm(d);
+        d->deadline = core_ms + CONFIG_MS;
         return;
 
     case ST_SET_CONFIG:

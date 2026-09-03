@@ -40,7 +40,7 @@ With `rach2.usblatency` on the boot line the kernel stamps four points of a keys
 
 ## Nothing waits
 
-Nothing on the pump's path may wait: not a port reset, not a control transfer, not a command completion, not a millisecond delay. So `submit` queues work and returns, `poll` reports what finished, and enumeration is a state machine that advances at most one step per call. Each device has its own state and a deadline counted in milliseconds; a step that does not complete by its deadline fails the device and gives the slot back.
+Nothing on the pump's path may wait: not a port reset, not a control transfer, not a command completion, not a millisecond delay. So `submit` queues work and returns, `poll` reports what finished, and enumeration is a state machine that advances at most one step per call. Each device has its own state and a deadline counted in milliseconds; a step that does not complete by its deadline fails the device and gives the slot back. Every step gets half a second except the configuration request, which gets five, as the Linux driver allows it: the notebook's stick behind the hub, present at boot, answered it after the half second while its flash started.
 
 At boot the kernel waits while the timer drives that machine, so the devices present at reset are enumerated before the first process starts. The boot path does not drive it itself: two parties draining one event ring, one of them inside an interrupt of the other, is the defect this arrangement exists to prevent. The controller's own interrupt is turned on last, after the devices present at reset are enumerated, so that no message arrives at a stack that is still building its rings.
 

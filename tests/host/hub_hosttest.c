@@ -178,6 +178,10 @@ static struct {
     int hub_told_think;
     int hub_told_slot;
     int hub_told;
+    int config_delay_ms; /* SET_CONFIGURATION is answered this late */
+    int config_due_ms;   /* when the delayed answer is owed, or 0 */
+    int config_device;
+    uint32_t config_generation;
     int hub_depth_refuse;       /* SET_HUB_DEPTH is stalled */
     int port_link[MODEL_PORTS]; /* USB 3: the link state, 0 for U0, 6 for SS.Inactive */
     int warm_resets;            /* SET_PORT_FEATURE(BH_PORT_RESET) requests */
@@ -561,6 +565,14 @@ int xhci_submit(int device, int endpoint, const struct usb_transfer *transfer)
         return 0;
     }
     if (setup[0] == 0x00 && (setup[1] == 9)) { /* SET_CONFIGURATION */
+        if (model.config_delay_ms > 0 && kind != KIND_HUB) {
+            /* A stick starting its flash: the answer comes later, from the
+               pump, or never within the step's time. */
+            model.config_due_ms = (int)model.now_ms + model.config_delay_ms;
+            model.config_device = device;
+            model.config_generation = transfer->generation;
+            return 0;
+        }
         answer(device, 1, USB_XFER_OK, 0, 0, transfer->generation);
         return 0;
     }
@@ -814,6 +826,10 @@ static void pump(uint32_t ms)
 
     for (t = 0; t < ms; t += 10) {
         model.now_ms += 10;
+        if (model.config_due_ms > 0 && (int)model.now_ms >= model.config_due_ms) {
+            model.config_due_ms = 0;
+            answer(model.config_device, 1, USB_XFER_OK, 0, 0, model.config_generation);
+        }
         usb_core_step(10);
     }
 }
@@ -1060,6 +1076,16 @@ int main(void)
         CHECK("and the device below is enumerated again on the link that came back",
               slots_given == given + 1 && slot_of_kind(KIND_KBD) != 0 && running_count() == 2);
     }
+
+    /* A device that answers its configuration request late, as the
+       notebook's stick behind the hub does at boot while its flash starts,
+       is configured when the answer comes within five seconds. */
+    model_reset();
+    model.port_kind[1] = KIND_KBD;
+    model.config_delay_ms = 1500;
+    pump(4000);
+    CHECK("a device that answers its configuration after 1.5 s is enumerated",
+          slot_of_kind(KIND_KBD) != 0 && running_count() == 2);
 
     /* A device pulled in the middle of its reset through the hub, a reset
        the hub never finishes, gives the enumeration turn back: a keyboard
