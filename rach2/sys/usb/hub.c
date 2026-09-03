@@ -463,6 +463,10 @@ static void port_read(struct hub *h, int port)
             over_current(h, port);
         }
     } else if (change & C_PORT_CONNECTION_BIT) {
+        /* A connection change ends a warm reset: a pull reports the link
+         * falling inactive a moment before it reports the disconnection,
+         * and a warm reset on an empty port never reports its end. */
+        p->warm = 0;
         p->connect_ms = hub_ms;
         usb_core_hub_port(h->index, port - 1, now);
     } else if (h->super && (change & (C_PORT_LINK_STATE_BIT | C_PORT_CONFIG_ERROR_BIT)) && now &&

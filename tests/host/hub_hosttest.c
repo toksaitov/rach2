@@ -709,8 +709,12 @@ int xhci_submit(int device, int endpoint, const struct usb_transfer *transfer)
             }
         } else if (feature == 28 && port >= 1 && port <= MODEL_PORTS) {
             /* A warm reset: the link comes back to U0 and the port reports
-               both reset changes. */
+               both reset changes; on an empty port nothing is reported. */
             model.warm_resets++;
+            if (model.port_kind[port - 1] == KIND_NONE) {
+                answer(device, 1, USB_XFER_OK, 0, 0, transfer->generation);
+                return 0;
+            }
             model.port_link[port - 1] = 0;
             model.port_enabled[port - 1] = 1;
             model.port_change[port - 1] |= 0x30u;
@@ -1104,6 +1108,37 @@ int main(void)
     model_change(4);
     pump(2000);
     CHECK("a device pulled during its reset through the hub gives the turn back",
+          slot_of_kind(KIND_KBD) != 0 && running_count() == 2);
+
+    /* A pull as the notebook's hub reports it: the link falls inactive
+       first, with the device still shown connected, and the disconnection
+       follows while the warm reset that answered the first report is out.
+       The connection change ends the warm reset, and the device plugged
+       back in is enumerated. */
+    model_reset();
+    model.root_speed = USB_SPEED_SUPER;
+    model.hub_protocol = 3;
+    model.hub_lpsm = 1;
+    model.port_kind[1] = KIND_KBD;
+    model.port_speed[1] = USB_SPEED_SUPER;
+    pump(2000);
+    CHECK("the device behind the SuperSpeed hub is running", running_count() == 2);
+    model.port_link[1] = 6;
+    model.port_change[1] |= 0x40u;
+    model_change(2);
+    pump(30);
+    CHECK("the link falling inactive asks for a warm reset", model.warm_resets == 1);
+    model.port_kind[1] = KIND_NONE;
+    model.port_change[1] |= 1u;
+    model_change(2);
+    pump(500);
+    CHECK("and the pull closes the device", running_count() == 1);
+    model.port_kind[1] = KIND_KBD;
+    model.port_link[1] = 0;
+    model.port_change[1] |= 1u;
+    model_change(2);
+    pump(2000);
+    CHECK("the device plugged back in after a pull under a warm reset is enumerated",
           slot_of_kind(KIND_KBD) != 0 && running_count() == 2);
 
     /* A SuperSpeed hub that will not give its descriptor is closed before
