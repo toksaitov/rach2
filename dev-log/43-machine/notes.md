@@ -216,6 +216,29 @@ and recovery is no longer the saved default.
   partition 3, by the Readme's procedure, with its saved copy; until
   then the stick is the recovery with `e2fsck`.
 
+* Found in the install round, with the hub in the blue socket: one boot
+  in four came up with no USB device at all, one message interrupt
+  taken and every later command refused. The state record added for it
+  showed the controller running, an Address Device command in flight
+  for the soldered device on port 7 that never completed, the event
+  ring quiet with the driver and the controller agreed on its position,
+  and no abort: the device that issued the command was given up on at
+  its half second, the driver aborted a command only when someone
+  still waited for it, and the command left running held the ring
+  against every device after it; the hub's tell timed out, its subtree
+  was closed, the closes could not be issued and their entries were
+  lost after half a second. Fixed in phase 7: a command past its
+  second is aborted from the pump's clock whether or not anyone waits,
+  a device takes the enumeration turn only when the ring is free, and
+  a close waits for the ring rather than a deadline. Rows: the
+  controller's host test aborts a command nobody waits for by the
+  clock; the hub host test issues nothing on a ring holding a command.
+  Mutations: the clock's abort removed, the free check removed; each
+  caught. Nine boots in a row came up whole afterwards, against three
+  failures in twelve before; the hang itself did not recur in those
+  nine, so the recovery is proved by its rows and not yet by the
+  machine.
+
 ### Not a difference
 
 The first ext2 root written in phase 5 was `build/images/os-real.ext2`,
