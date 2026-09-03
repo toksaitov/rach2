@@ -65,7 +65,7 @@ The kernel manages at most 32 MiB of physical RAM. Its fixed tables allow 16 pro
 
 ## Hardware status
 
-QEMU is the primary development and test environment. Rach2 also runs on a Lenovo G50-70 from a sealed SSD installed in the laptop's SATA bay. The laptop boots the complete `os-real` system from an AHCI-backed KRFFS root; the ext2 root on its fourth partition, with the KRFFS root as the fallback, is milestone 43's, rehearsed in emulation by `tests/run sealed` and written step by step in `dev-log/42-ext2/hardware.md`. RTL8168GU networking and keyed SSH work, file system changes persist across reboots, and both an in-system update and a recovery reflash have completed successfully. A USB keyboard and a USB mouse work in any of the laptop's three sockets, in the shell and in Doom, once the kernel routes the chipset's USB2 pins to the single xHCI controller this machine has. A flash drive as a disk, and the boot from the stick image, are proved under QEMU in [milestone 40](dev-log/40-usbdisk/Readme.md) and are run on the laptop in milestone 43. [Milestone 25](dev-log/25-sealed/Readme.md#later-laptop-installation) and [milestone 35](dev-log/35-usb/Readme.md) record the hardware results.
+QEMU is the primary development and test environment. Rach2 also runs on a Lenovo G50-70 from a sealed SSD installed in the laptop's SATA bay. Since milestone 43 the laptop boots the complete `os-real` system from the ext2 root on its fourth partition, with the KRFFS root on its second as the fallback one menu entry away, both through the AHCI controller; the move was rehearsed in emulation by `tests/run sealed` and is recorded step by step in `dev-log/43-machine/hardware.md`. RTL8168GU networking and keyed SSH work, file system changes persist across reboots and a power cut, and a kernel install through `bootctl`, a root written through `reflash` and the boot menu rewritten have each completed on the machine. A USB keyboard and a USB mouse work in any of the laptop's three sockets, in the shell and in Doom, on a root port and behind the owner's USB 3.0 hub, whose SuperSpeed half is driven too; the owner's flash drive works in both partition-table formats on every socket and behind the hub, and the laptop boots from the stick image. `dev-log/43-machine/notes.md` lists what the machine showed that the emulator had not, with what was fixed and what is still open. [Milestone 25](dev-log/25-sealed/Readme.md#later-laptop-installation) and [milestone 35](dev-log/35-usb/Readme.md) record the earlier hardware results.
 
 ## Updating the installed machine
 
@@ -75,7 +75,7 @@ A kernel, from the ordinary system:
 
 ```sh
 KEY=krffs/rach2_demo_ed25519
-scp -i $KEY build/rach2/kernel root@ADDRESS:/tmp/kernel
+ssh -i $KEY root@ADDRESS 'cat > /tmp/kernel' < build/rach2/kernel   # the machine has no sftp server, so scp does not work
 ssh -i $KEY root@ADDRESS 'bootctl kernel /tmp/kernel'
 ssh -i $KEY root@ADDRESS reboot
 ssh -i $KEY root@ADDRESS 'bootctl status && bootctl commit'
