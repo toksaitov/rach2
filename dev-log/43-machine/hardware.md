@@ -280,3 +280,9 @@ write to the stick's RACH2SAVE volume behind the SuperSpeed hub ran at
 through the same driver ran at 0.65 MB/s falling to 0.17 MB/s. One such
 write of 64 MiB stopped at 33 MB with the stick silent, recorded under
 the phase 7 differences; the next completed.
+
+| Left side, blue, `rach2.nomsi`, on the line | 10.2 | super | 21.1 MB/s | 2.3 MB/s | |
+
+The nomsi row above is `e9246422...` with the controller's PCI line:
+`usb: interrupts: the line, irq 7 on vector 39`, 48361 interrupts on
+that vector in the minute the reads took, no fallback.

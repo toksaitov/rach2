@@ -76,7 +76,10 @@ and recovery is no longer the saved default.
   no fallback; the controller's host test has the line's enables, the
   event bit's clearing and a device that names no line. Mutations: the
   line refused by name fails the boot; the event bit left set fails the
-  host row.
+  host row. On the machine, a `rach2.nomsi` trial of `e9246422...`
+  took its interrupts on IRQ 7, vector 39, 48361 of them in a minute,
+  and read the stick behind the SuperSpeed hub at 21.1 MB/s where the
+  timer's pump alone had read it at 103 KB/s.
 * The clock self-test fails on some boots of the machine and passes
   on others: 2018 us on the MSI boot of this phase, 1361 us on the
   nomsi boot, 1492 us on the first ext2 boot, 2019 us and a pass in
