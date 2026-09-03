@@ -246,11 +246,22 @@ and recovery is no longer the saved default.
   cache keeping the one dirty FAT sector and retrying it each time; the
   volume went read-only and the unmount answered `EIO`. The hub reports
   the port connected and the link up, so no warm reset is asked for; the
-  same write on a high-speed root port completed in phase 5. To find in
-  phase 7: whether a replug revives the stick, whether the failure is
-  the SuperSpeed link's or the stick's, and whether a device whose
-  transport recovery fails should be reset through its port by the
-  driver, as a replug does by hand.
+  same write on a high-speed root port completed in phase 5. The pull
+  that followed, with the volume still mounted read-only and its dirty
+  sector retried every ten seconds, ended in `panic: stopped:
+  Unrecoverable error: page fault while in kernel mode` on the screen,
+  with no log kept; the Mac now captures the machine's netconsole
+  frames so the next one keeps its record. Done in phase 7: a stick
+  whose transport recovery never answers is handed back to the core,
+  which closes it and enumerates its port again through a port reset,
+  as the replug does by hand; row in the storage host test, a class
+  reset never answered; mutation, the hand-back removed, caught. Three
+  more 64 MiB writes behind the SuperSpeed hub then completed at
+  2.2 MB/s without the stick going silent, so neither the silence nor
+  the panic could be provoked again; under QEMU a throttled stick
+  reproduces every record up to the pull and survives it, since the
+  emulated stick still answers its class reset. Open: the panic's
+  record, when it recurs under the capture.
 
 The first ext2 root written in phase 5 was `build/images/os-real.ext2`,
 the plain image whose init starts no network and no SSH server, and the
