@@ -236,6 +236,9 @@ int xhci_interrupts_enable_line(void);
 /** Stop the interrupts; the controller keeps running and the timer pumps it. */
 void xhci_interrupts_disable(void);
 
+/** Record the controller's registers and the command in flight, once. */
+void xhci_state_record(void);
+
 /** Whether the controller is raising its interrupts, by message or line. */
 int xhci_interrupts_on(void);
 

@@ -944,6 +944,28 @@ int xhci_command_issue(uint32_t type, uint64_t parameter, uint32_t slot)
     return 0;
 }
 
+/**
+ * Record the controller's state once per boot, at the first failure the core
+ * reports after bring-up: the status and command ring registers, the
+ * interrupter's, and the driver's own view of the command in flight. A boot
+ * that lost its devices says here whether the controller halted, stopped its
+ * ring, or was simply not asked.
+ */
+void xhci_state_record(void)
+{
+    static int recorded;
+
+    if (recorded || !xhci_running) {
+        return;
+    }
+    recorded = 1;
+    klog(KLOG_WARN, "usb",
+         "state: usbsts %x crcr %x iman %x erdp %x; command running %d finished %d aborting %d type %d; events at %d cycle %d",
+         op_r32(XHCI_USBSTS), op_r32(XHCI_CRCR), r32(caps.rtsoff + XHCI_IR0 + IR_IMAN),
+         r32(caps.rtsoff + XHCI_IR0 + IR_ERDP), command_running, command_finished,
+         command_aborting, (int)command_type, (int)event_index, (int)event_cycle);
+}
+
 int xhci_command_done(struct usb_command_result *out)
 {
     if (!command_running && !command_finished) {

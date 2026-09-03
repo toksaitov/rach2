@@ -525,6 +525,9 @@ static int subtree_closing(int hub)
 static void fail(struct usb_device_state *d, const char *why)
 {
     klog(KLOG_WARN, "usb", "device: port %s: %s", path_of(d), why);
+    if (xhci_interrupts_on()) {
+        xhci_state_record(); /* once, at the first failure after bring-up */
+    }
     if (enumerating == (int)(d - devices)) {
         enumerating = -1;
     }
