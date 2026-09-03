@@ -6,6 +6,7 @@
  */
 
 #include "bcache.h"
+#include "../lib/kstring.h"
 
 #include "vfs.h"
 
@@ -111,7 +112,26 @@ static uint32_t block_bytes(block_device_t *dev, uint64_t blk)
     return (uint32_t)left * BLOCK_SECTOR_SIZE;
 }
 
+static struct bbuf *get(block_device_t *dev, uint64_t blk, int blank);
+
 struct bbuf *bcache_get(block_device_t *dev, uint64_t blk)
+{
+    return get(dev, blk, 0);
+}
+
+struct bbuf *bcache_get_blank(block_device_t *dev, uint64_t blk)
+{
+    return get(dev, blk, 1);
+}
+
+/*
+ * The two gets. A cached block is returned as it is either way; a miss is
+ * filled from the device, or, for the blank get, zeroed without a read: a
+ * caller about to write the whole block, or wanting zeros in it, would only
+ * throw the device's bytes away, and on a stick the read costs as much as
+ * the write that follows it.
+ */
+static struct bbuf *get(block_device_t *dev, uint64_t blk, int blank)
 {
     struct bbuf *victim = 0;
     unsigned char tried[BCACHE_BUFFERS];
@@ -188,6 +208,10 @@ again:
     victim->discard = 0;
     victim->holder = caller_pid();
     victim->bytes = block_bytes(dev, blk);
+    if (blank) {
+        k_memset(victim->data, 0, victim->bytes);
+        return victim;
+    }
     if (block_request(dev, 0, blk * BCACHE_BLOCK_SECTORS, victim->bytes / BLOCK_SECTOR_SIZE,
                       victim->data) != 0) {
         victim->dev = 0;

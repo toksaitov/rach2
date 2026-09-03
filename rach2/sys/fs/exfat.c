@@ -1559,7 +1559,9 @@ static int ex_write_bytes(struct ex_mount *em, uint64_t off, const void *src, ui
         if (take > len) {
             take = len;
         }
-        b = bcache_get(em->dev, blk);
+        /* A whole block is not read first: its bytes are about to be
+           replaced, and the zeros of a blank buffer are the zero fill. */
+        b = take == BCACHE_BLOCK_BYTES ? bcache_get_blank(em->dev, blk) : bcache_get(em->dev, blk);
         if (!b) {
             return -EIO;
         }

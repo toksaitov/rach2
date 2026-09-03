@@ -1,7 +1,8 @@
 /*
  * bcache_hosttest.c: the buffer cache against a fake block device.
  *
- * host-deps: rach2/sys/fs/bcache.c
+ * host-deps: rach2/sys/fs/bcache.c rach2/sys/lib/kstring.c
+ * host-deps: rach2/sys/lib/kctypes.c
  *
  * The fake device is polled and fault-safe, backed by a memory image whose
  * every sector holds its own number. `block_request` is stubbed to call the
@@ -266,6 +267,21 @@ int main(void)
     check(b != 0 && reads_made == 1, "a second get is a hit, not a read");
     check(bcache_stat_hits() == 1, "and the hit is counted");
     bcache_release(b);
+
+    /* The blank get: a miss costs no read and reads as zeros; a cached block
+       is returned as it is, bytes and all. */
+    reads_made = 0;
+    b = bcache_get_blank(&fake, 5);
+    check(b != 0 && reads_made == 0, "a blank get of an uncached block makes no read");
+    check(b && b->data[0] == 0 && b->data[4095] == 0, "and the buffer is zeros");
+    check(b && b->bytes == 4096, "with the block's whole length");
+    bcache_release(b);
+    b = bcache_get_blank(&fake, 0);
+    check(b != 0 && reads_made == 0 && b->data[513] == 1,
+          "a blank get of a cached block returns its bytes");
+    bcache_release(b);
+    bcache_invalidate(&fake);
+    reads_made = 0;
 
     b = bcache_get(&fake, 12);
     check(b != 0 && b->bytes == 4 * 512, "the short last block is its tail");

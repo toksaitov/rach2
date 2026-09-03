@@ -60,6 +60,16 @@ struct bbuf {
  * buffer. */
 struct bbuf *bcache_get(block_device_t *dev, uint64_t blk);
 
+/**
+ * Find block `blk` of `dev`, or take a buffer for it zeroed without a read.
+ *
+ * For a block the caller will write whole, or wants zeros in: the device's
+ * bytes would be thrown away, and on a stick the read costs what the write
+ * does. A cached block is returned as it is. Held, or NULL on an unwritable
+ * full cache.
+ */
+struct bbuf *bcache_get_blank(block_device_t *dev, uint64_t blk);
+
 /** Let a held buffer go and wake whoever waits for it. */
 void bcache_release(struct bbuf *b);
 
