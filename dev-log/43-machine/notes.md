@@ -185,11 +185,18 @@ and recovery is no longer the saved default.
   struggles to render; with the 4 MB shareware IWAD it plays as it did
   before. The kernel manages 32 MiB, so a large IWAD pages through the
   disk, and the owner decided on 2026-09-03 that this is work of the
-  milestone: phase 7 measures the page cache's behaviour under Doom's
-  read pattern on the machine, finds why the sound thread starves while
-  the reader pages, and fixes what is the kernel's, with a row; what is
-  the memory limit's is stated in the Doom port's Readme with the
-  number.
+  milestone. Found in phase 7, under QEMU with the Freedoom WAD: the
+  port's zone, where a level's lumps live, was 6 MiB from a fixed 8 MiB
+  heap in its own crt0, while the kernel's brk heap went unused; the
+  heap now grows through brk and the zone is sized from MemFree less
+  8 MiB, 12 MiB on a 32 MiB machine, with `tests/run doom` as its row
+  and the fixed heap as its mutation. The disk traffic did not move
+  with it, 3843 commands in 25 s of the demo loop against 3957, about
+  0.6 MB/s of level loading that an SSD serves without effort, so the
+  machine's slowness is not the reads: what remains to measure on the
+  machine is the frame time with the large levels and the OPL3 music
+  emulator, since the sound is fed from the game loop and a slow frame
+  starves it. That measurement is the install round's.
 
 ### Phase 5
 
