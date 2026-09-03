@@ -104,20 +104,35 @@ fi
 walk_repaired "the volume is not consistent after the repair"
 echo "fatwrite-test: the host's walk finds the repaired volume consistent, lost clusters aside: OK"
 
-# ---- 5: BusyBox writes through the volume ----
+# ---- 5: BusyBox writes through the volume; and a 4 MiB write costs the
+#         disk a bounded number of commands. The FAT entries of a run are
+#         written through one block at a time: 4 MiB is 8192 clusters of
+#         512 bytes on this volume, whose entries fill eight 4 KiB FAT
+#         blocks per copy, beside 1024 data blocks written and, since the
+#         cache fills a block before it is zeroed, read once each; the count
+#         here is under 4000. An entry written through on its own costs
+#         16384 commands more. The removal frees the chain the same way. ----
 LOG="$DISK.busybox.log"
 if "$HARNESS" --kernel "$KERNEL" --initrd "$OSREAL" \
-    --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-cpu --qemu-arg=max --append "rach2.diskdiag" \
     --drive "file=$DISK,format=raw,if=ide,index=0,media=disk" \
     --timeout 240 --steptmo 60 --ok "BBDONE" --log "$LOG" \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
     "expect=# " "send=mkdir /mnt && mount -t vfat /dev/disk0p2 /mnt && echo MOUNT\"\"ED" \
     "expect=MOUNTED" "send=cp /bin/busybox /mnt/bb && mkdir /mnt/d && mv /mnt/bb '/mnt/d/Busy Box' && echo hi > /mnt/d/h.txt && rm /mnt/renamed.txt && cmp '/mnt/d/Busy Box' /bin/busybox && echo SAME\"\"BYTES" \
-    "expect=SAMEBYTES" "send=umount /mnt && echo UN\"\"MOUNTED" \
+    "expect=SAMEBYTES" "send=A=\$(sed -n 's/^disk-commands //p' /proc/disk); dd if=/dev/zero of=/mnt/big.bin bs=64k count=64 2>/dev/null; sync; B=\$(sed -n 's/^disk-commands //p' /proc/disk); rm /mnt/big.bin; sync; C=\$(sed -n 's/^disk-commands //p' /proc/disk); echo COMMANDS \$((B-A)) \$((C-B)); echo COUNT\"\"ED" \
+    "expect=COUNTED" "send=umount /mnt && echo UN\"\"MOUNTED" \
     "expect=UNMOUNTED" "send=echo BB\"\"DONE" "expect=BBDONE" > /dev/null 2>&1; then
     echo "fatwrite-test: BusyBox copies, moves, writes and removes on the volume: OK"
 else
     fail "the BusyBox boot"
+fi
+WROTE="$(grep -a '^COMMANDS [0-9]' "$LOG" | tail -1 | tr -d '\r' | awk '{print $2}')"
+FREED="$(grep -a '^COMMANDS [0-9]' "$LOG" | tail -1 | tr -d '\r' | awk '{print $3}')"
+if [ -n "$WROTE" ] && [ "$WROTE" -gt 0 ] && [ "$WROTE" -lt 5000 ] && [ -n "$FREED" ] && [ "$FREED" -lt 256 ]; then
+    echo "fatwrite-test: a 4 MiB write costs the disk $WROTE commands and its removal $FREED, the FAT written by blocks: OK"
+else
+    fail "a 4 MiB write cost the disk ${WROTE:-?} commands and its removal ${FREED:-?}; the FAT is written an entry at a time"
 fi
 walk_clean "the volume is not consistent after BusyBox"
 mcopy -i "$VOL" "::/d/Busy Box" "$DISK.bb" >/dev/null 2>&1 || fail "mcopy of the copied program"

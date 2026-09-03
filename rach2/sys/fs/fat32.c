@@ -597,7 +597,9 @@ static int fat_put_bytes(struct fat_mount *fm, uint64_t off, const void *src, ui
         if (take > len) {
             take = len;
         }
-        b = bcache_get(fm->dev, blk);
+        /* A whole block is not read first: its bytes are about to be
+           replaced, and the zeros of a blank buffer are the zero fill. */
+        b = take == BCACHE_BLOCK_BYTES ? bcache_get_blank(fm->dev, blk) : bcache_get(fm->dev, blk);
         if (!b) {
             return -EIO;
         }
@@ -632,32 +634,117 @@ static uint64_t fat_offset(const struct fat_mount *fm, uint32_t copy, uint32_t c
            (uint64_t)cluster * 4;
 }
 
-/* One FAT entry, its reserved high nibble kept, written through to the
- * active FAT first and then to the mirror when mirroring is on. */
-static int fat_set(struct fat_mount *fm, uint32_t cluster, uint32_t value)
+/* The FAT copies an entry is written to: the active FAT first, then the
+ * mirror when mirroring is on. */
+static int fat_copies(const struct fat_mount *fm, uint32_t *copies)
 {
-    uint32_t copies[2];
-    int ncopies = 0;
+    int n = 0;
+
+    copies[n++] = fm->active_fat;
+    if (fm->mirrored && fm->nfats == 2) {
+        copies[n++] = fm->active_fat == 0 ? 1 : 0;
+    }
+    return n;
+}
+
+/*
+ * A batch of FAT entries written through one block at a time.
+ *
+ * A run of clusters allocated or freed together touches one FAT entry per
+ * cluster, and with each entry written through on its own a 64 KiB append
+ * on 4 KiB clusters cost some sixty-four synchronous writes before its
+ * data, which on the notebook's stick was a writer at 0.65 MB/s beside a
+ * stick that takes 8 MB/s. The batch sets the entries dirty in the cache
+ * and writes a block through when the next entry lands in another block of
+ * that copy, and at the end; each copy has its own block, since the mirror's
+ * blocks do not line up with the active FAT's. The order rule holds as it
+ * did: a run is whole on the disk, chained and ended, before anything names
+ * it, because its batch is flushed before the caller goes on.
+ */
+struct fat_batch {
+    int64_t blk[2]; /* the block of the last entry set in each copy, or -1 */
+};
+
+static void fat_batch_begin(struct fat_batch *batch)
+{
+    batch->blk[0] = -1;
+    batch->blk[1] = -1;
+}
+
+static int fat_flush_block(struct fat_mount *fm, uint64_t blk)
+{
+    struct bbuf *b = bcache_get(fm->dev, blk);
+    int rc;
+
+    if (!b) {
+        return -EIO;
+    }
+    rc = bcache_write(b);
+    bcache_release(b);
+    return rc;
+}
+
+static int fat_batch_flush(struct fat_mount *fm, struct fat_batch *batch)
+{
     int i;
 
-    copies[ncopies++] = fm->active_fat;
-    if (fm->mirrored && fm->nfats == 2) {
-        copies[ncopies++] = fm->active_fat == 0 ? 1 : 0;
-    }
-    for (i = 0; i < ncopies; i++) {
-        uint8_t raw[4];
-        int rc = fat_read_bytes(fm, fat_offset(fm, copies[i], cluster), raw, 4);
+    for (i = 0; i < 2; i++) {
+        if (batch->blk[i] >= 0) {
+            int rc = fat_flush_block(fm, (uint64_t)batch->blk[i]);
 
+            batch->blk[i] = -1;
+            if (rc != 0) {
+                return rc;
+            }
+        }
+    }
+    return 0;
+}
+
+/* One FAT entry, its reserved high nibble kept, set in every copy: dirty
+ * in `batch`, or written through at once when there is none. */
+static int fat_batch_set(struct fat_mount *fm, struct fat_batch *batch, uint32_t cluster,
+                         uint32_t value)
+{
+    uint32_t copies[2];
+    int ncopies = fat_copies(fm, copies);
+    int i;
+
+    for (i = 0; i < ncopies; i++) {
+        uint64_t off = fat_offset(fm, copies[i], cluster);
+        uint8_t raw[4];
+        int rc;
+
+        if (batch) {
+            int64_t blk = (int64_t)(off / BCACHE_BLOCK_BYTES);
+
+            if (batch->blk[i] >= 0 && batch->blk[i] != blk) {
+                rc = fat_flush_block(fm, (uint64_t)batch->blk[i]);
+                batch->blk[i] = -1;
+                if (rc != 0) {
+                    return rc;
+                }
+            }
+            batch->blk[i] = blk;
+        }
+        rc = fat_read_bytes(fm, off, raw, 4);
         if (rc != 0) {
             return rc;
         }
         put32(raw, (le32(raw) & ~FAT_MASK) | (value & FAT_MASK));
-        rc = fat_put_bytes(fm, fat_offset(fm, copies[i], cluster), raw, 4, 1);
+        rc = fat_put_bytes(fm, off, raw, 4, batch == 0);
         if (rc != 0) {
             return rc;
         }
     }
     return 0;
+}
+
+/* One FAT entry written through to the active FAT first and then to the
+ * mirror when mirroring is on. */
+static int fat_set(struct fat_mount *fm, uint32_t cluster, uint32_t value)
+{
+    return fat_batch_set(fm, 0, cluster, value);
 }
 
 /* The dirty flag, in both places, written before the first metadata change
@@ -719,7 +806,7 @@ static int write_fsinfo(struct fat_mount *fm)
 
 /* One free cluster, first-fit from the hint and wrapping once, marked as
  * the end of a chain. ENOSPC is decided before anything is written. */
-static int alloc_cluster(struct fat_mount *fm, uint32_t *out)
+static int alloc_cluster(struct fat_mount *fm, struct fat_batch *batch, uint32_t *out)
 {
     uint32_t start, c;
     uint32_t tried = 0;
@@ -749,7 +836,7 @@ static int alloc_cluster(struct fat_mount *fm, uint32_t *out)
                 return rc;
             }
             if (v == 0) {
-                rc = fat_set(fm, c, FAT_EOC_MIN);
+                rc = fat_batch_set(fm, batch, c, FAT_EOC_MIN);
                 if (rc != 0) {
                     return rc;
                 }
@@ -777,6 +864,7 @@ static int free_chain(struct fat_mount *fm, uint32_t first);
 
 static int alloc_run(struct fat_mount *fm, uint32_t n, int zero, uint32_t *first, uint32_t *last)
 {
+    struct fat_batch batch;
     uint32_t prev = 0;
     uint32_t i;
     int rc = 0;
@@ -792,10 +880,11 @@ static int alloc_run(struct fat_mount *fm, uint32_t n, int zero, uint32_t *first
     if (fm->free_clusters < n) {
         return -ENOSPC; /* decided before any FAT sector is written */
     }
+    fat_batch_begin(&batch);
     for (i = 0; i < n && rc == 0; i++) {
         uint32_t c;
 
-        rc = alloc_cluster(fm, &c);
+        rc = alloc_cluster(fm, &batch, &c);
         if (rc != 0) {
             break;
         }
@@ -803,10 +892,10 @@ static int alloc_run(struct fat_mount *fm, uint32_t n, int zero, uint32_t *first
             rc = fat_put_bytes(fm, cluster_offset(fm, c), 0, cluster_bytes(fm), zero == 2);
         }
         if (rc == 0 && prev != 0) {
-            rc = fat_set(fm, prev, c);
+            rc = fat_batch_set(fm, &batch, prev, c);
         }
         if (rc != 0) {
-            fat_set(fm, c, 0);
+            fat_batch_set(fm, &batch, c, 0);
             fm->free_clusters++;
             break;
         }
@@ -814,6 +903,11 @@ static int alloc_run(struct fat_mount *fm, uint32_t n, int zero, uint32_t *first
             *first = c;
         }
         prev = c;
+    }
+    if (rc == 0) {
+        rc = fat_batch_flush(fm, &batch); /* the run is on the disk, whole */
+    } else {
+        fat_batch_flush(fm, &batch);
     }
     if (rc != 0 && *first != 0) {
         free_chain(fm, *first); /* what was taken goes back */
@@ -827,9 +921,11 @@ static int alloc_run(struct fat_mount *fm, uint32_t n, int zero, uint32_t *first
  * loops is freed as far as it was sound. */
 static int free_chain(struct fat_mount *fm, uint32_t first)
 {
+    struct fat_batch batch;
     uint32_t c = first;
     uint32_t steps = 0;
 
+    fat_batch_begin(&batch);
     while (c >= 2 && c < fm->cluster_count + 2 && steps < fm->cluster_count) {
         uint32_t next;
         int rc = fat_next(fm, c, &next);
@@ -837,8 +933,9 @@ static int free_chain(struct fat_mount *fm, uint32_t first)
         if (rc != 0) {
             next = 0;
         }
-        rc = fat_set(fm, c, 0);
+        rc = fat_batch_set(fm, &batch, c, 0);
         if (rc != 0) {
+            fat_batch_flush(fm, &batch);
             return rc;
         }
         if (fm->free_known) {
@@ -850,7 +947,7 @@ static int free_chain(struct fat_mount *fm, uint32_t first)
         c = next;
         steps++;
     }
-    return 0;
+    return fat_batch_flush(fm, &batch);
 }
 
 /* The modification stamp: the date and the two-second time; the creation
