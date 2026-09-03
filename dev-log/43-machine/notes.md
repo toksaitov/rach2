@@ -131,8 +131,23 @@ and recovery is no longer the saved default.
   eleven checks and a hub that refuses its descriptor. Mutations: the
   depth not sent, the USB 2 descriptor asked, the speed read from the
   status bits, the link state change not acknowledged; each caught by
-  its row. QEMU has no SuperSpeed hub, so the stick behind the hub in
-  the blue socket is the machine's proof, in the next install round.
+  its row. A Codex review of the commit found the detection wrong:
+  USB 3.0 10.13.1 puts a SuperSpeed hub's protocol 3 in the device
+  descriptor and leaves the interface's at zero, which is what the
+  notebook's log showed for port 10, so the driver would have asked the
+  USB 2 descriptor of the real hub and closed it. The hub is now known
+  by its speed. The review also found no warm reset for a link fallen
+  to SS.Inactive, a host model shaped like a USB 2 device, a row that
+  proved one of the three change bits, and a depth-refused row that
+  refused the descriptor instead; all five fixed, with the warm reset's
+  row exposing a core defect beside it: a device pulled during its
+  reset through a hub kept the enumeration turn waiting for a command
+  that was never issued, and every later device waited with it. Fixed
+  in the core with its own row. Mutations for the round: SuperSpeed
+  taken from the interface protocol, no warm reset, the configuration
+  error bit not acknowledged, the turn kept; each caught. QEMU has no
+  SuperSpeed hub, so the stick behind the hub in the blue socket is
+  the machine's proof, in the next install round.
 
 * The stick on the hub when the machine boots is refused: `usb:
   device: port 1.1: it refused its configuration` at 1.95 s, 0.66 s
