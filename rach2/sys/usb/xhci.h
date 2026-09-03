@@ -221,10 +221,22 @@ int xhci_events(void);
  */
 int xhci_interrupts_enable(uint8_t vector);
 
-/** Stop the messages; the controller keeps running and the timer pumps it. */
+/** The IRQ of the controller's PCI line, or -1 when it names none. */
+int xhci_line_irq(void);
+
+/**
+ * Have the controller raise its interrupts on its PCI line instead.
+ *
+ * The legacy path, for a machine with `rach2.nomsi` or without a usable
+ * APIC. Returns the line's IRQ, or -1 when the controller names none, in
+ * which case nothing was enabled.
+ */
+int xhci_interrupts_enable_line(void);
+
+/** Stop the interrupts; the controller keeps running and the timer pumps it. */
 void xhci_interrupts_disable(void);
 
-/** Whether the controller is sending its interrupts as messages. */
+/** Whether the controller is raising its interrupts, by message or line. */
 int xhci_interrupts_on(void);
 
 /**

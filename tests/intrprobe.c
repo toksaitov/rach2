@@ -10,9 +10,11 @@
  *   controller's vector has taken at least one interrupt per key typed
  *   before this ran, and the timer's pump has found none of the work they
  *   carry, so the fallback count is zero.
- * * With `rach2.nomsi`: the vector has no line at all, since a vector that
- *   has taken nothing is not listed, and the fallback count is zero because
- *   nothing was ever on messages.
+ * * With `rach2.nomsi`: the message vector has no line at all, since a
+ *   vector that has taken nothing is not listed; the controller's PCI line,
+ *   listed as `PIC` with the controller's name, has taken at least one
+ *   interrupt per key typed; and the fallback count is zero because the
+ *   line brought the work.
  * * With `rach2.msidrop=N`: the controller was silenced after N messages, so
  *   the vector's count is exactly N and the timer's pump has been finding
  *   the work since, which is what the fallback count is for.
@@ -254,9 +256,81 @@ static int option_value(const char *key)
     return value;
 }
 
+/*
+ * The count on the line the file lists as KIND with NAME, whatever its
+ * vector: `39:\t57\tPIC\txhci` is the controller's PCI line on the notebook
+ * and vector 43 is the emulator's. -1 when no line has both.
+ */
+static int count_for_named(const char *kind, const char *name, const char *file)
+{
+    int i = 0;
+
+    while (file[i] != '\0') {
+        int start = i;
+        int k = start;
+
+        while (file[k] >= '0' && file[k] <= '9') {
+            k++;
+        }
+        if (k > start && file[k] == ':') {
+            int j;
+            const char *fields[3];
+            int f = 0;
+
+            k++;
+            for (j = k; file[j] != '\0' && file[j] != '\n'; j++) {
+                if (file[j] == '\t' && f < 3) {
+                    fields[f++] = file + j + 1;
+                }
+            }
+            /* The names are one per device on the line, `rtl8139, xhci`
+               where the emulator puts both on IRQ 11; the name asked for
+               must be one of them whole. */
+            if (f == 3 && find(fields[1], kind) == 0 && fields[1][strlen(kind)] == '\t') {
+                const char *names = fields[2];
+                int m = (int)strlen(name);
+                int found = 0;
+
+                while (*names != '\0' && *names != '\n') {
+                    if (find(names, name) == 0 &&
+                        (names[m] == ',' || names[m] == '\n' || names[m] == '\0')) {
+                        found = 1;
+                        break;
+                    }
+                    while (*names != '\0' && *names != '\n' && *names != ' ') {
+                        names++;
+                    }
+                    while (*names == ' ') {
+                        names++;
+                    }
+                }
+                if (found) {
+                    int value = 0;
+
+                    while (fields[0][0] == ' ') {
+                        fields[0]++;
+                    }
+                    while (fields[0][0] >= '0' && fields[0][0] <= '9') {
+                        value = value * 10 + (fields[0][0] - '0');
+                        fields[0]++;
+                    }
+                    return value;
+                }
+            }
+        }
+        while (file[i] != '\0' && file[i] != '\n') {
+            i++;
+        }
+        if (file[i] == '\n') {
+            i++;
+        }
+    }
+    return -1;
+}
+
 void _start(void)
 {
-    int vector, audio, fallback, drop, devices, n;
+    int vector, audio, fallback, drop, devices, n, line;
 
     if (slurp("/proc/cmdline", cmdline, (int)sizeof(cmdline)) < 0) {
         fail("/proc/cmdline would not open");
@@ -273,6 +347,7 @@ void _start(void)
     }
     vector = count_for(USB_VECTOR, text);
     audio = count_for(AUDIO_VECTOR, text);
+    line = count_for_named("PIC", "xhci", text);
     fallback = count_for("FBK:", text);
     if (fallback < 0) {
         fail("there is no fallback line");
@@ -294,11 +369,16 @@ void _start(void)
     putnum(audio);
     puts(", fallback ");
     putnum(fallback);
+    puts(", line ");
+    putnum(line);
     puts("\n");
 
     if (find(cmdline, "rach2.nomsi") >= 0) {
         if (vector >= 0) {
             fail("a machine with no messages has a line for the controller's vector");
+        }
+        if (devices > 0 && line < 4) {
+            fail("the controller's PCI line took fewer interrupts than the keys typed");
         }
         if (fallback != 0) {
             fail("a machine with no messages counted a lost edge");

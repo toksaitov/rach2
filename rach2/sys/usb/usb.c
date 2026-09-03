@@ -18,6 +18,7 @@
 #include "usb.h"
 
 #include "../cmdline.h"
+#include "../pic.h"
 #include "../isr.h"
 #include "../klog.h"
 #include "../lapic.h"
@@ -155,6 +156,12 @@ static uint32_t msi_drop_after;
  * edges are being counted. */
 static int msi_started;
 
+/* The IRQ of the controller's PCI line when that is the path taken, or -1
+ * on messages: it decides which request register `interrupt_pending` reads. */
+static int line_irq = -1;
+
+static int interrupt_pending(void);
+
 /* Whether the controller had an interrupt raised for what the last pump
  * drained. The pump sets it; `usb_poll` reads it. */
 static int pump_saw_pending;
@@ -285,7 +292,7 @@ static int usb_pump(uint32_t elapsed_ms, int from_interrupt)
          * the interrupt flag down is waiting in the processor's own request
          * register.
          */
-        pump_saw_pending = lapic_pending(USB_MSI_VECTOR);
+        pump_saw_pending = interrupt_pending();
     }
     usb_core_step(elapsed_ms);
     if (taken > 0 && !pump_saw_pending) {
@@ -297,7 +304,7 @@ static int usb_pump(uint32_t elapsed_ms, int from_interrupt)
          * arrive, and without this the record would count a race as an edge
          * that was lost.
          */
-        pump_saw_pending = lapic_pending(USB_MSI_VECTOR);
+        pump_saw_pending = interrupt_pending();
     }
     /* The flag is read before it is put back: the pump must not have enabled
      * interrupts, or the timer's context and the handler's would be inside
@@ -322,6 +329,21 @@ static int usb_pump(uint32_t elapsed_ms, int from_interrupt)
  * The router ends the interrupt at the APIC after this returns, and
  * reschedules if a reader was woken.
  */
+/**
+ * Whether an interrupt for this stack is raised and not yet taken.
+ *
+ * The processor's request register on messages; the 8259's on the line.
+ * Neither is the controller's own pending bit, which is set whether or not
+ * anything was sent.
+ */
+static int interrupt_pending(void)
+{
+    if (line_irq >= 0) {
+        return pic_irq_pending((uint8_t)line_irq);
+    }
+    return lapic_pending(USB_MSI_VECTOR);
+}
+
 static void usb_msi_handler(isr_params_t *params)
 {
     (void)params;
@@ -397,15 +419,21 @@ int usb_init(void)
 }
 
 /**
- * Take the controller's interrupts as messages, or leave it to the timer.
+ * Take the controller's interrupts as messages, or on its line, or leave it
+ * to the timer.
  *
- * `rach2.nomsi` and a processor whose APIC was refused both leave the
- * interrupter off. `rach2.msidrop=N` silences the controller after N
- * messages, which is how a machine that loses its edges is staged.
+ * `rach2.nomsi` and a processor whose APIC was refused both leave messages
+ * off; the controller then raises its interrupts on the PCI line the
+ * firmware routed for it, through the 8259, which is the stack every machine
+ * had before the local APIC existed and a path eighty times faster than the
+ * timer's pump alone for a stick. A controller that names no line is left
+ * to the timer. `rach2.msidrop=N` silences the controller after N messages,
+ * which is how a machine that loses its edges is staged.
  */
 static void usb_interrupts_start(void)
 {
     char value[16];
+    int irq;
 
     stamp_record = kcmdline_has("rach2.usblatency");
     if (kcmdline_value("rach2.msidrop", value, (unsigned int)sizeof(value))) {
@@ -417,17 +445,27 @@ static void usb_interrupts_start(void)
         }
         msi_drop_after = n;
     }
-    if (!lapic_ready()) {
-        klog(KLOG_INFO, "usb", "interrupts: the timer pumps this controller");
-        return;
+    if (lapic_ready()) {
+        register_isr_handler(USB_MSI_VECTOR, usb_msi_handler, "xhci");
+        if (xhci_interrupts_enable(USB_MSI_VECTOR) == 0) {
+            msi_started = 1;
+            klog(KLOG_INFO, "usb", "interrupts: messages on vector %d", USB_MSI_VECTOR);
+            return;
+        }
     }
-    register_isr_handler(USB_MSI_VECTOR, usb_msi_handler, "xhci");
-    if (xhci_interrupts_enable(USB_MSI_VECTOR) != 0) {
-        klog(KLOG_INFO, "usb", "interrupts: the timer pumps this controller");
-        return;
+    irq = xhci_line_irq();
+    if (irq > 0) {
+        /* The handler before the enable: a level line the firmware left
+           asserted would otherwise be dispatched to nobody. */
+        register_isr_handler((uint8_t)(32 + irq), usb_msi_handler, "xhci");
+        if (xhci_interrupts_enable_line() == irq) {
+            msi_started = 1;
+            line_irq = irq;
+            klog(KLOG_INFO, "usb", "interrupts: the line, irq %d on vector %d", irq, 32 + irq);
+            return;
+        }
     }
-    msi_started = 1;
-    klog(KLOG_INFO, "usb", "interrupts: messages on vector %d", USB_MSI_VECTOR);
+    klog(KLOG_INFO, "usb", "interrupts: the timer pumps this controller");
 }
 
 void usb_poll(void)

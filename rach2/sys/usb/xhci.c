@@ -47,6 +47,7 @@
 #define USBCMD_INTE  0x00000004u
 
 #define USBSTS_HCH 0x00000001u
+#define USBSTS_EINT 0x00000008u /* an event interrupt; written as one to clear it */
 #define USBSTS_CNR 0x00000800u
 
 /*
@@ -151,6 +152,10 @@ static pci_device_t xhci_pci;
 
 /* Whether the controller has been told to send its interrupts as messages. */
 static int msi_on;
+
+/* Whether the controller raises its interrupts on its PCI line, the legacy
+ * path taken when messages are off or unavailable. */
+static int line_on;
 
 /*
  * The scratchpad pages a controller asks for, and the array of their
@@ -1136,28 +1141,75 @@ int xhci_interrupts_enable(uint8_t vector)
 }
 
 /**
- * Stop the messages, leaving the controller running and the timer to pump it.
+ * The IRQ of the controller's PCI line, 1 to 15, or -1 when it names none.
+ */
+int xhci_line_irq(void)
+{
+    if (!xhci_running || xhci_pci.irq < 1 || xhci_pci.irq > 15) {
+        return -1;
+    }
+    return (int)xhci_pci.irq;
+}
+
+/**
+ * Have the controller raise its interrupts on its PCI line.
+ *
+ * The path a machine takes with `rach2.nomsi`, or one whose processor has no
+ * usable APIC: the line the firmware routed for the controller, named in its
+ * configuration space, through the 8259. The line is level-triggered and
+ * stays asserted until the handler clears `USBSTS.EINT` and `IMAN.IP`, which
+ * `xhci_interrupt_ack` does for both paths. The Interrupt Disable bit of
+ * the command register is cleared here, since firmware that set MSI up
+ * leaves it set.
+ *
+ * Returns the line's IRQ, 1 to 15, or -1 when the controller is not running
+ * or names no line, in which case nothing was enabled.
+ */
+int xhci_interrupts_enable_line(void)
+{
+    uint32_t iman;
+
+    line_on = 0;
+    if (!xhci_running || xhci_pci.irq < 1 || xhci_pci.irq > 15) {
+        return -1;
+    }
+    pci_enable_interrupts(&xhci_pci);
+    line_on = 1;
+    w32(caps.rtsoff + XHCI_IR0 + IR_IMOD, 0);
+    iman = r32(caps.rtsoff + XHCI_IR0 + IR_IMAN);
+    w32(caps.rtsoff + XHCI_IR0 + IR_IMAN, (iman & ~IMAN_IP) | IMAN_IE);
+    op_w32(XHCI_USBCMD, op_r32(XHCI_USBCMD) | USBCMD_INTE);
+    return (int)xhci_pci.irq;
+}
+
+/**
+ * Stop the interrupts, leaving the controller running and the timer to pump
+ * it.
  *
  * The interrupter's enable goes first and the capability after, so that no
- * message can be raised between the two.
+ * message can be raised between the two. A controller on its line needs only
+ * the enables cleared.
  */
 void xhci_interrupts_disable(void)
 {
     uint32_t iman;
 
-    if (!msi_on) {
+    if (!msi_on && !line_on) {
         return;
     }
-    msi_on = 0;
     iman = r32(caps.rtsoff + XHCI_IR0 + IR_IMAN);
     w32(caps.rtsoff + XHCI_IR0 + IR_IMAN, iman & ~(IMAN_IE | IMAN_IP));
     op_w32(XHCI_USBCMD, op_r32(XHCI_USBCMD) & ~USBCMD_INTE);
-    pci_msi_disable(&xhci_pci);
+    if (msi_on) {
+        pci_msi_disable(&xhci_pci);
+    }
+    msi_on = 0;
+    line_on = 0;
 }
 
 int xhci_interrupts_on(void)
 {
-    return msi_on;
+    return msi_on || line_on;
 }
 
 /**
@@ -1179,6 +1231,9 @@ void xhci_interrupt_ack(void)
     }
     iman = r32(caps.rtsoff + XHCI_IR0 + IR_IMAN);
     w32(caps.rtsoff + XHCI_IR0 + IR_IMAN, iman | IMAN_IP);
+    /* The status register's event bit holds the line asserted; the other
+       bits in it are cleared by a one as well, and a zero leaves them. */
+    op_w32(XHCI_USBSTS, USBSTS_EINT);
 }
 
 /**

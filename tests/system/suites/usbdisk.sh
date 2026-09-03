@@ -240,10 +240,10 @@ fi
 
 # ---- 8: throughput, recorded and not judged: a 16 MiB read of /dev/usb0
 #         timed by the machine's own clock, with the controller's messages
-#         on, which is the ordinary machine. On the timer's pump alone the
-#         same read takes two minutes, three ticks a page, and that number
-#         is in the milestone's notes rather than in a boot the core tier
-#         waits for. ----
+#         on, which is the ordinary machine. On the timer's pump alone, with
+#         neither messages nor the controller's line, the same read takes
+#         two minutes, three ticks a page; the line, which `rach2.nomsi`
+#         boots take, reads at the same rate as messages. ----
 LOG="$DIR/throughput.log"
 if "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
     --qemu-arg=-cpu --qemu-arg=max \

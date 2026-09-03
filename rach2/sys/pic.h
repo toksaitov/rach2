@@ -10,6 +10,16 @@ void init_pic(void);
 void pic_unmask_irq(uint8_t irq);
 
 /**
+ * Whether IRQ line `irq` (0..15) is raised and not yet dispatched.
+ *
+ * Read from the 8259's request register, which is what a message's arrival
+ * is read from at the APIC: a line raised while the interrupt flag was held
+ * down is waiting here, and a pump that drained its work is not looking at
+ * a lost edge.
+ */
+int pic_irq_pending(uint8_t irq);
+
+/**
  * Mask IRQ line `irq` (0..15), master or slave.
  *
  * For a line this kernel has no handler for and that a device may assert

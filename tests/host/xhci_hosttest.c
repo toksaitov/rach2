@@ -60,6 +60,7 @@ static uint32_t reg[REGS];
 #define M_USBCMD_INTE  0x00000004u
 #define M_USBSTS_HCH   0x1u
 #define M_USBSTS_CNR   0x800u
+#define M_USBSTS_EINT  0x8u
 
 #define LEGSUP_BIOS_OWNED 0x00010000u
 #define LEGSUP_OS_OWNED   0x01000000u
@@ -180,6 +181,8 @@ static int model_busy;    /* the event-handler-busy bit */
 static int model_raises;  /* interrupts the controller has raised */
 static int msi_vector;    /* the vector its capability was given, or -1 */
 static int msi_refuses;   /* the device has no MSI capability */
+static int model_irq;     /* the line the firmware routed, in configuration space */
+static int intx_enabled;  /* the command register's interrupt disable bit cleared */
 static int event_on_iman; /* post an event from inside the acknowledgement */
 
 static void post_event(uint32_t type, uint32_t code, uint32_t slot, uint32_t param0);
@@ -191,6 +194,7 @@ static void model_raise(void)
 
     model_busy = 1;
     reg[M_IMAN] |= M_IMAN_IP;
+    reg[OP(O_USBSTS)] |= M_USBSTS_EINT;
     if (was_busy) {
         return; /* the driver has not said it is finished with the last one */
     }
@@ -200,7 +204,7 @@ static void model_raise(void)
     if (!(reg[OP(O_USBCMD)] & M_USBCMD_INTE)) {
         return;
     }
-    if (msi_vector < 0) {
+    if (msi_vector < 0 && !intx_enabled) {
         return;
     }
     model_raises++;
@@ -227,6 +231,13 @@ static void model_w32(uint32_t off, uint32_t v)
             event_on_iman = 0;
             post_event(34u, 1u, 0, 1u << 24);
         }
+        return;
+    }
+
+    if (off == OP(O_USBSTS)) {
+        /* The event bit is cleared by writing it as one; the rest of the
+           register is the controller's to set. */
+        reg[off] &= ~(v & M_USBSTS_EINT);
         return;
     }
 
@@ -401,6 +412,7 @@ bool pci_find_device_skip(uint8_t cls, uint8_t sub, pci_device_t *skip, pci_devi
     out->prog_if = model_progif;
     out->bar[0] = model_bar0;
     out->bar[1] = model_bar1;
+    out->irq = (uint8_t)model_irq;
     return 1;
 }
 
@@ -441,6 +453,12 @@ void pci_msi_disable(const pci_device_t *dev)
 {
     (void)dev;
     msi_vector = -1;
+}
+
+void pci_enable_interrupts(pci_device_t *dev)
+{
+    (void)dev;
+    intx_enabled = 1;
 }
 
 uint16_t pci_read_config16(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t off)
@@ -774,6 +792,8 @@ static void model_reset(void)
     model_raises = 0;
     msi_vector = -1;
     msi_refuses = 0;
+    model_irq = 7;
+    intx_enabled = 0;
     event_on_iman = 0;
     model_bar0 = 0xFEBF0004u; /* a 64-bit memory aperture */
     model_bar1 = 0;
@@ -1867,6 +1887,41 @@ int main(void)
     CHECK("and says so", xhci_interrupts_on() == 0);
     CHECK("with the interrupter's enable left clear", (reg[M_IMAN] & M_IMAN_IE) == 0);
     CHECK("and the controller's", (reg[OP(O_USBCMD)] & M_USBCMD_INTE) == 0);
+
+    /* The line: the same device raises its interrupts on the PCI line the
+       firmware routed for it, IRQ 7 on the notebook. The command register's
+       interrupt disable bit is cleared, both enables are set, and an event
+       asserts the line through the status register's event bit, which the
+       acknowledgement clears together with the pending bit; a level line
+       left with either set is taken forever. */
+    CHECK("the line is named", xhci_line_irq() == 7);
+    CHECK("the controller is put on its line", xhci_interrupts_enable_line() == 7);
+    CHECK("and says so", xhci_interrupts_on() == 1);
+    CHECK("the interrupt disable bit is cleared", intx_enabled == 1);
+    CHECK("the interrupter's enable is set", (reg[M_IMAN] & M_IMAN_IE) != 0);
+    CHECK("and the controller's", (reg[OP(O_USBCMD)] & M_USBCMD_INTE) != 0);
+    post_event(TRB_TYPE_PORT_CHANGE, TRB_COMPLETION_SUCCESS, 0, 1u << 24);
+    CHECK("an event raises an interrupt on the line", model_raises == 1);
+    CHECK("and sets the status register's event bit", (reg[OP(O_USBSTS)] & M_USBSTS_EINT) != 0);
+    xhci_interrupt_ack();
+    CHECK("the acknowledgement clears the pending bit", (reg[M_IMAN] & M_IMAN_IP) == 0);
+    CHECK("and the event bit", (reg[OP(O_USBSTS)] & M_USBSTS_EINT) == 0);
+    CHECK("and leaves the enable set", (reg[M_IMAN] & M_IMAN_IE) != 0);
+    xhci_interrupts_disable();
+    CHECK("stopped, the controller is off its line", xhci_interrupts_on() == 0);
+    CHECK("with the interrupter's enable clear", (reg[M_IMAN] & M_IMAN_IE) == 0);
+
+    /* A device that names no line is left to the timer. */
+    model_reset();
+    msi_refuses = 1;
+    model_irq = 0;
+    CHECK("the controller is found again", xhci_discover() == 0);
+    CHECK("the capability registers are read", xhci_read_caps() == 0);
+    CHECK("halted and reset", xhci_halt_reset() == 0);
+    CHECK("started", xhci_start() == 0);
+    CHECK("a device with no line names none", xhci_line_irq() == -1);
+    CHECK("and is not put on one", xhci_interrupts_enable_line() == -1);
+    CHECK("with the interrupter's enable left clear", (reg[M_IMAN] & M_IMAN_IE) == 0);
 
     /* The acknowledgement: the pending bit written as one, the enable beside
        it kept. A bare write of the pending bit clears the enable, and the

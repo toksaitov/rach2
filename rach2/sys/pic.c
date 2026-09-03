@@ -54,6 +54,22 @@ void pic_unmask_irq(uint8_t irq)
     outb(0x21, mask);
 }
 
+int pic_irq_pending(uint8_t irq)
+{
+    uint16_t port = irq < 8 ? 0x20 : 0xA0;
+    uint8_t bit = (uint8_t)(irq & 7);
+    uint8_t irr;
+
+    if (irq > 15) {
+        return 0;
+    }
+    /* OCW3 selects the request register for the next read of the command
+       port; the selection stays until the next OCW3. */
+    outb(port, 0x0A);
+    irr = inb(port);
+    return (irr >> bit) & 1;
+}
+
 /**
  * Mask one PIC line, on whichever of the two controllers has it.
  *

@@ -198,9 +198,9 @@ else
     bad "the controller's messages did not arrive, or the timer found their work"
 fi
 
-# ---- 10: the same machine with `rach2.nomsi`, which is the kernel as it was
-#          before this milestone: no vector, no fallback, and a keyboard that
-#          still types. ----
+# ---- 10: the same machine with `rach2.nomsi`: no message vector, the
+#          controller's PCI line counting at least one interrupt per key, no
+#          fallback, and a keyboard that still types. ----
 if run_harness --qemu-arg=-cpu --qemu-arg=max --append "rach2.nomsi" \
     --qemu-arg=-machine --qemu-arg=pc,i8042=off \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci,msi=on \
@@ -209,9 +209,9 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max --append "rach2.nomsi" \
     "expect=Type 'help'" wait=2 key=h key=e key=l key=p key=ret \
     "expect=Available commands" "send=exec /intrprobe" "expect=INTRPROBE OK" \
     > /dev/null 2>&1; then
-    note "with rach2.nomsi the timer pumps the controller and typing still works: OK"
+    note "with rach2.nomsi the controller's line carries its interrupts and typing still works: OK"
 else
-    bad "with rach2.nomsi the machine did not type, or took a message anyway"
+    bad "with rach2.nomsi the machine did not type, took a message anyway, or its line took none"
 fi
 
 # ---- 11: a mouse over messages, since a mouse and a keyboard are two
