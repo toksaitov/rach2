@@ -1229,11 +1229,15 @@ void xhci_interrupt_ack(void)
     if (!xhci_running) {
         return;
     }
+    if (line_on) {
+        /* The status register's event bit holds the line asserted, and
+           5.4.2 has it cleared before any pending bit; the other bits in
+           the register are cleared by a one as well, and a zero leaves
+           them. A controller on messages is left alone here. */
+        op_w32(XHCI_USBSTS, USBSTS_EINT);
+    }
     iman = r32(caps.rtsoff + XHCI_IR0 + IR_IMAN);
     w32(caps.rtsoff + XHCI_IR0 + IR_IMAN, iman | IMAN_IP);
-    /* The status register's event bit holds the line asserted; the other
-       bits in it are cleared by a one as well, and a zero leaves them. */
-    op_w32(XHCI_USBSTS, USBSTS_EINT);
 }
 
 /**
