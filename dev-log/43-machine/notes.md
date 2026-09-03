@@ -79,10 +79,18 @@ and recovery is no longer the saved default.
   host row.
 * The clock self-test fails on some boots of the machine and passes
   on others: 2018 us on the MSI boot of this phase, 1361 us on the
-  nomsi boot, 2019 us and a pass in phase 1. The failure record does
-  not say which of the three checks failed. Phase 7 makes it say, and
-  finds why the shortest of eight 2 ms waits measured 1361 us with MSI
-  off.
+  nomsi boot, 1492 us on the first ext2 boot, 2019 us and a pass in
+  phase 1. Fixed in phase 7: the wait's sample of the 8254 latched the
+  counter and read it with interrupts enabled, and a handler that
+  latches the counter itself, the tick's clock or the USB handler's
+  stamps, between the latch and the reads consumed the latch, so the
+  reads came back live and torn across a borrow, 256 below the truth;
+  the wait overcounted the drop by that much and ended early, about six
+  tears in the 639 us the nomsi boot was short. The sample now runs with
+  interrupts off. Row: `udelay_hosttest`, a model of channel 0 with a
+  handler that consumes a latch left open at a read with interrupts on;
+  mutation, the interrupts left on, caught by two rows. The self-test's
+  record now names the check that failed and the last walk's readings.
 * The acceptance script's stick section read the line of `usb0` only.
   The machine gave the data stick `usb1` when the recovery stick's slot
   had not been reclaimed yet, and `usb0` after the slot came back. Fixed
@@ -129,9 +137,23 @@ and recovery is no longer the saved default.
   slow and get slower: 0.65 MB/s falling to 0.17 MB/s by 900 MB in
   phase 2, and about 0.05 MB/s for a 64 MiB copy in phase 5 with a
   second writer beside it. The same stick reads raw at 8.4 MB/s and
-  takes exFAT writes at 2.1 MB/s, so it is the FAT32 writer: its
-  flushes per write, or its walk of a 16353-sector FAT, are phase 7's
-  to measure under the lag device and fix with a row.
+  takes exFAT writes at 2.1 MB/s. Measured under QEMU: a 4 MiB FAT32
+  write ran at 1.2 MB/s against exFAT's 8.5 MB/s with one flush, so
+  it was the writer's requests and not the stick's cache: every cluster
+  of a run cost a write-through of its FAT entry in each copy and
+  another to chain it, sixty-four synchronous writes per 64 KiB append
+  on 4 KiB clusters, and a removal the same per cluster. Fixed in phase
+  7: the entries of a run allocated or freed together are set in the
+  cache and written through one FAT block at a time, per copy, with the
+  run whole on the disk before anything names it; and a block a writer
+  replaces whole is taken from the cache blank instead of read first.
+  Under QEMU the write is 2.9 MB/s and the disk commands of a 4 MiB
+  write fell from 69265 to 3857, of its removal from 32821 to 53. Rows:
+  the fatwrite suite's BusyBox boot bounds both counts; the cache's
+  host test has the blank get. Mutations: an entry written through on
+  its own fails the bound; a blank get that reads fails three rows. The
+  fall over the file's length is measured on the machine in the next
+  install round.
 
 * Doom with the 28 MB Freedoom IWAD is slow and its sound breaks up
   on the machine, bits of sound between silences whenever the game
