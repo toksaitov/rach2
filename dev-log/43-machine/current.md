@@ -1,16 +1,39 @@
-Milestone 43, phase 7: the differences.
-Evidence gathered: fixed and committed with rows and mutations, on the
-host: the xHCI's PCI line under nomsi, the wait's torn 8254 sample
-behind the clock failures, the FAT32 run's entries written by block and
-the blank cache buffer, the SuperSpeed hub with its review round and
-the core's turn defect beside it, the Doom port's zone and heap, and
-records that say why: the clock self-test, the configuration refusal,
-the frame pool. The machine still runs 0e2d1d11... on the ext2 root.
-Next action: with the owner's approval, install the tree's kernel and
-image through bootctl, trial, commit; then on the machine: the stick
-behind the hub in the blue socket, the nomsi stick rate, a long FAT32
-write to the save volume, the stick on the hub at boot, root's key on a
-stick boot with a second dropbear logging to its terminal, the lag
-boot's frames, Doom with the Freedoom WAD timed, and the recovery
-partition's update; then the RTC set to UTC by the owner.
+Milestone 43, phase 7: the differences. Handoff written 2026-09-04 for
+a session that may be picked up by Codex; read notes.md's Phase 1 to
+Phase 5 differences and Open items for what is fixed and what is not.
+
+The machine: the Lenovo runs kernel e9246422... (commit bb3f628's tree)
+on the ext2 root as the saved default, installed and committed through
+bootctl with the owner's approval; the KRFFS root is the fallback. The
+hub with the keyboard, the mouse and the recovery stick is in the blue
+socket. The stick carries the recovery image with the RACH2SAVE volume
+holding saved copies. Freedoom is /doom1.wad on the machine and the
+shareware WAD /shareware.wad; the tree stages the shareware one, so
+swap them back at the end. The ordinary kernel publishes no raw disk
+window without rach2.diskdiag, so partition reads go through recovery
+(bootctl trial recovery; mr2.sh in the scratch dir reaches it). The Mac
+captures the machine's netconsole frames with tcpdump on en0 into the
+scratch dir's netconsole.pcap, so a panic keeps its record. The BIOS
+clock is still local time; the owner sets it to UTC when at the BIOS.
+
+Fixed on the host and installed, each with a row and a mutation: the
+xHCI's PCI line under nomsi (21 MB/s on the machine); the wait's torn
+8254 sample behind the clock failures; the FAT32 run's entries by
+block and the blank cache buffer (2.2 MB/s on the machine); the
+SuperSpeed hub after a Codex review, proved with the stick behind it;
+a warm reset ended by a connection change; the configuration request
+given five seconds; a command past its deadline aborted from the
+clock and the turn taken only on a free ring (the boot that lost every
+USB device); a silent stick handed back for a port reset; the Doom
+zone from free memory through brk.
+
+Open, in order: the Doom MIDI delta-time fault (see notes, the Doom
+item); the panic at a pull of a silent stick, awaiting its record; the
+recovery partition without e2fsck, a write of partition 3 (byte
+592445440, 67108864 bytes) from recovery with a saved copy, needing
+the owner's approval; root's SSH key refused after a stick boot, to
+reproduce with a second dropbear started with -E from a test-account
+su session; the RTC. Then phase 8, tests/run selfbuild on the machine
+and the kernel it builds installed; phase 9, the record and the sweep,
+with a Codex review per phase and the full test set once.
 File being read when written: none.

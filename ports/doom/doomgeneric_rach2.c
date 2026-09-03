@@ -12,6 +12,7 @@
 #include "i_video.h"
 
 #include <stdint.h>
+extern int printf(const char *fmt, ...);
 #include <stddef.h>
 
 /* Syscall wrappers (defined in crt0.c) */
@@ -267,6 +268,61 @@ static void size_zone(void)
     }
 }
 
+/*
+ * Where the time goes: frames drawn and the longest gap between two, and
+ * the microseconds spent in the music emulator and the mixer, reported on
+ * one line when the game quits and the text screen is back. The notebook
+ * plays a 28 MB WAD slowly with the sound breaking up, and this says
+ * whether the frame or the sound is the cost.
+ */
+static uint32_t frames, longest_frame_ms, last_frame_ms, first_frame_ms;
+static uint32_t spent_us[5]; /* the music emulator, the mixer; its calls, samples, events */
+
+uint32_t DG_NowUs(void)
+{
+    struct timeval tv;
+
+    gettimeofday(&tv, NULL);
+    return (uint32_t)tv.tv_sec * 1000000u + (uint32_t)tv.tv_usec;
+}
+
+void DG_TimeSpent(int what, uint32_t us)
+{
+    if (what >= 0 && what < 5) {
+        spent_us[what] += us;
+    }
+}
+
+static uint32_t reported_ms;
+
+static void report(void)
+{
+    uint32_t span_ms = last_frame_ms - first_frame_ms;
+
+    printf("doom: %u frames in %u ms, the longest %u ms; music emulator %u ms in %u calls for %u samples after %u events, mixer %u ms; zone %d MiB\n",
+           (unsigned)frames, (unsigned)span_ms, (unsigned)longest_frame_ms,
+           (unsigned)(spent_us[0] / 1000u), (unsigned)spent_us[2], (unsigned)spent_us[3],
+           (unsigned)spent_us[4], (unsigned)(spent_us[1] / 1000u), DG_zone_mib);
+}
+
+static void count_frame(void)
+{
+    uint32_t now = DG_GetTicksMs();
+
+    if (frames == 0) {
+        first_frame_ms = now;
+        reported_ms = now;
+    } else if (now - last_frame_ms > longest_frame_ms) {
+        longest_frame_ms = now - last_frame_ms;
+    }
+    last_frame_ms = now;
+    frames++;
+    if (now - reported_ms >= 10000u) {
+        reported_ms = now;
+        report(); /* every ten seconds as well, for a log read from outside */
+    }
+}
+
 void DG_Init(void)
 {
     struct timeval tv;
@@ -335,6 +391,8 @@ void DG_DrawFrame(void)
 
     write(fb_fd, screen_buffer, SCREEN_WIDTH * SCREEN_HEIGHT);
 #endif
+
+    count_frame();
 
     /* Poll input after each frame */
     poll_keyboard();
@@ -421,6 +479,7 @@ void DG_Shutdown(void)
         close(fb_fd);
         fb_fd = -1;
     }
+    report(); /* after the text screen is back, so the line stays visible */
 }
 
 /*

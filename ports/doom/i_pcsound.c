@@ -67,6 +67,8 @@ struct audio_write_params {
 
 /* Get current time in ms */
 extern uint32_t DG_GetTicksMs(void);
+extern uint32_t DG_NowUs(void);
+extern void DG_TimeSpent(int what, uint32_t us);
 
 /* Sound state */
 static boolean pcsound_initialized = false;
@@ -309,6 +311,7 @@ static void PCSoundUpdate(void)
         int sample_sum;
         int active_count;
         int opl_idx_start, opl_idx_end, k;
+        uint32_t mix_t0;
 
         now_ms = DG_GetTicksMs();
         if (last_audio_ms == 0) {
@@ -355,12 +358,16 @@ static void PCSoundUpdate(void)
             }
 
             if (opl_music_initialized && opl_samples_needed > 0) {
+                uint32_t t0 = DG_NowUs();
+
                 OPLMusic_GenerateSamples(opl_buffer, opl_samples_needed);
+                DG_TimeSpent(0, DG_NowUs() - t0);
             } else {
                 opl_samples_needed = 0;
             }
 
             /* Mix all active channels into the buffer */
+            mix_t0 = DG_NowUs();
             for (j = 0; j < (int)chunk; j++) {
                 sample_sum = 0;
                 active_count = 0;
@@ -425,6 +432,7 @@ static void PCSoundUpdate(void)
             /* Write mixed buffer to audio device */
             {
                 uint32_t off = 0;
+                DG_TimeSpent(1, DG_NowUs() - mix_t0);
                 while (off < chunk) {
                     int w;
                     wp.buffer = mix_buffer + off;

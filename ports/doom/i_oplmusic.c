@@ -17,6 +17,7 @@
 #include "midifile.h"
 #include "opl3.h"
 #include "i_oplmusic.h"
+extern void DG_TimeSpent(int what, uint32_t n);
 
 // OPL3 configuration
 #define OPL_NUM_VOICES 9
@@ -1051,6 +1052,7 @@ int OPLMusic_GenerateSamples(int16_t *buffer, int num_samples)
             {
                 ProcessEvent(event);
                 events_this_iteration++;
+                DG_TimeSpent(4, 1);
 
                 // End of track?
                 if (event->event_type == MIDI_EVENT_META
@@ -1107,6 +1109,8 @@ int OPLMusic_GenerateSamples(int16_t *buffer, int num_samples)
 
         // Generate OPL3 samples
         OPL3_GenerateStream(&opl_chip, buffer + samples_generated * 2, samples_to_generate);
+        DG_TimeSpent(2, 1);
+        DG_TimeSpent(3, (uint32_t)samples_to_generate);
 
         samples_generated += samples_to_generate;
         if (samples_until_next_event > 0)

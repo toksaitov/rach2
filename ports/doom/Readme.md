@@ -92,7 +92,7 @@ cd /
 doom
 ```
 
-The port discards its incoming argument vector and always passes `-iwad doom1.wad` to the engine. That path is relative, while the manifest stages `/doom1.wad`. Starting in another directory fails to find the WAD and prints `IWAD file 'doom1.wad' not found!`.
+The port prints one line every ten seconds and once more when it quits, after the text screen is back: `doom: N frames in M ms, the longest L ms; music emulator E ms in C calls for S samples after V events, mixer X ms; zone Z MiB`. It is how the notebook's slowness with a 28 MB WAD was traced to the music path. The port discards its incoming argument vector and always passes `-iwad doom1.wad` to the engine. That path is relative, while the manifest stages `/doom1.wad`. Starting in another directory fails to find the WAD and prints `IWAD file 'doom1.wad' not found!`.
 
 The same binary can use the kernel HDA driver on supported hardware. Hardware boot and disk-image procedures are described in the root and kernel Readmes.
 
