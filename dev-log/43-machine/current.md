@@ -38,13 +38,17 @@ clock and the turn taken only on a free ring (the boot that lost every
 USB device); a silent stick handed back for a port reset; the Doom
 zone from free memory through brk.
 
-Open, in order: the Doom MIDI delta-time fault (see notes, the Doom
-item); the panic at a pull of a silent stick, awaiting its record; the
-recovery partition without e2fsck, a write of partition 3 (byte
-592445440, 67108864 bytes) from recovery with a saved copy, needing
-the owner's approval; root's SSH key refused after a stick boot, to
-reproduce with a second dropbear started with -E from a test-account
-su session; the RTC. Then phase 8, tests/run selfbuild on the machine
-and the kernel it builds installed; phase 9, the record and the sweep,
-with a Codex review per phase and the full test set once.
+Open, in order: the Doom port's host row over a two-track MIDI
+fixture (the multi-track player is in and proved on the machine); the
+panic at a pull of a silent stick, awaiting its record from the
+netconsole capture; the recovery partition without e2fsck, a write of
+partition 3 (byte 592445440, 67108864 bytes) from recovery with a saved
+copy, needing the owner's approval; root's SSH key refused after a
+stick boot, to reproduce with a second dropbear started with -E from a
+test-account su session; the RTC set to UTC by the owner; the shareware
+WAD put back as /doom1.wad on the machine (the machine's /bin/doom is
+the multi-track build, ahead of the ext2 image the tree last wrote).
+Then phase 8, tests/run selfbuild on the machine and the kernel it
+builds installed; phase 9, the record and the sweep, with a Codex
+review per phase and the full test set once.
 File being read when written: none.
