@@ -273,3 +273,10 @@ configuration window where it had timed out at half a second.
 | The stick behind the SuperSpeed hub | mounts, takes a file, raw read 22.2 MB/s, unmounts with two flushes |
 | The pull under a mount | the hub reports the link fallen inactive, then the disconnection; the read answers `EIO`, `umount` returns 0, the disk is reclaimed |
 | The replug | on the first kernel not seen, since the warm reset the link report asked for never ended on the empty port; on `a4304a7c...` enumerated in 0.3 s, mounted and read |
+
+The FAT32 writer on the machine, `a4304a7c...` and later: a 64 MiB
+write to the stick's RACH2SAVE volume behind the SuperSpeed hub ran at
+2.2 MB/s and its removal took under a second, where phase 2's copy
+through the same driver ran at 0.65 MB/s falling to 0.17 MB/s. One such
+write of 64 MiB stopped at 33 MB with the stick silent, recorded under
+the phase 7 differences; the next completed.
