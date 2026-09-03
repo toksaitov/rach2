@@ -13,27 +13,36 @@ Phase 2: the fourth partition and FAT32
 - [x] the FAT32 volume written and hashed back; the milestone 37 lines; the three hashes
 
 Phase 3: the stick on a root port
-- [ ] exFAT with a GUID table, then an MBR, in every socket; the pull and the replug
-- [ ] the milestone 38 checks with the real writer; the throughput under both pumps
-- [ ] the stick image booted from the BIOS menu
+- [x] exFAT with a GUID table, then an MBR, in every socket; the pull and the replug
+- [x] the milestone 38 checks with the real writer; the throughput under both pumps
+- [x] the stick image booted from the BIOS menu
 
 Phase 4: the hub
-- [ ] the three devices behind the hub in every socket; the translator's case
-- [ ] the pull of the stick, of a device, and of the hub; the device count
+- [x] the three devices behind the hub in every socket; the translator's case
+- [x] the pull of the stick, of a device, and of the hub; the device count
 
 Phase 5: the ext2 root
-- [ ] the recovery stick rewritten and booted; the saved copies refreshed
-- [ ] the ext2 image and the menu approved and written; the trial; the fallback; the commit
-- [ ] the crash test and the check's record
+- [x] the recovery stick rewritten and booted; the saved copies refreshed
+- [x] the ext2 image and the menu approved and written; the trial; the fallback; the commit
+- [x] the crash test and the check's record
 
 Phase 6: the acceptance script end to end
-- [ ] metal_accept.sh in full on the machine; tests/run metal against QEMU
+- [x] metal_accept.sh in full on the machine; tests/run metal against QEMU
 
 Phase 7: the differences
-- [ ] every difference fixed in its subsystem with a model row; the fixed kernel installed
+- [x] the xHCI's PCI line under nomsi; the wait's torn 8254 sample; the FAT32 run by block and the blank buffer
+- [x] the SuperSpeed hub with its review round; the configuration request's five seconds
+- [x] the command aborted from the clock and the turn on a free ring; the silent stick handed back
+- [x] the Doom zone from free memory; the port's timing report; the cause found (single-track MIDI)
+- [ ] the Doom port playing every track of a format 1 MIDI, with a host row; rerun on the machine
+- [ ] the panic at a pull of a silent stick, when its record arrives through the capture
+- [ ] the recovery partition rewritten with e2fsck, from recovery with a saved copy, with approval
+- [ ] root's SSH key refused after a stick boot, reproduced with a second dropbear
+- [ ] the RTC set to UTC by the owner and stated in the Readme
+- [ ] the shareware WAD put back as /doom1.wad on the machine
 
 Phase 8: the machine's own build
-- [ ] tests/run selfbuild on the machine; its kernel installed and committed
+- [ ] tests/run selfbuild on the machine; the kernel it builds installed and committed
 
 Phase 9: the record and the sweep
-- [ ] the documents; the full set; make test timed; the record and the index entry
+- [ ] the Readmes, the acceptance script read, the full test set, notes.md closed, 43-machine/Readme.md, the dev-log entry

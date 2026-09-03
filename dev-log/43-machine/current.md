@@ -10,11 +10,20 @@ socket. The stick carries the recovery image with the RACH2SAVE volume
 holding saved copies. Freedoom is /doom1.wad on the machine and the
 shareware WAD /shareware.wad; the tree stages the shareware one, so
 swap them back at the end. The ordinary kernel publishes no raw disk
-window without rach2.diskdiag, so partition reads go through recovery
-(bootctl trial recovery; mr2.sh in the scratch dir reaches it). The Mac
-captures the machine's netconsole frames with tcpdump on en0 into the
-scratch dir's netconsole.pcap, so a panic keeps its record. The BIOS
-clock is still local time; the owner sets it to UTC when at the BIOS.
+window without rach2.diskdiag, so partition reads and writes go through
+recovery: `bootctl trial recovery && reboot` from the machine, which
+boots the disk's recovery entry, a RAM root at the same address with
+its own SSH host key each boot. Reach every system as
+`ssh -i krffs/rach2_demo_ed25519 root@192.168.0.106` with
+`-o UserKnownHostsFile=/tmp/k -o StrictHostKeyChecking=accept-new`,
+since each root has a host key of its own; a stick boot takes
+192.168.0.105. The owner's sudo on the mac mini reads its password from
+/Users/toksaitov/Desktop/p.txt with `sudo -S -p ''`. A capture of the
+machine's netconsole frames, `tcpdump -i en0 -U 'ether proto 0x88b5'`
+on the Mac, was running when this was written and is not part of the
+tree; start one before the next machine round so a panic keeps its
+record. The BIOS clock is still local time; the owner sets it to UTC
+when at the BIOS.
 
 Fixed on the host and installed, each with a row and a mutation: the
 xHCI's PCI line under nomsi (21 MB/s on the machine); the wait's torn
