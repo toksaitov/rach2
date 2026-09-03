@@ -185,6 +185,7 @@ static struct {
     int hub_depth_refuse;       /* SET_HUB_DEPTH is stalled */
     int port_link[MODEL_PORTS]; /* USB 3: the link state, 0 for U0, 6 for SS.Inactive */
     int warm_resets;            /* SET_PORT_FEATURE(BH_PORT_RESET) requests */
+    int double_issues;          /* commands issued while one was pending */
     int hub_depth_sets;         /* SET_HUB_DEPTH requests, a SuperSpeed hub's */
     int hub_depth;              /* the depth the last one carried */
     int hub_depth_before_tell;  /* the depth arrived before the controller was told */
@@ -276,6 +277,9 @@ int xhci_command_busy(void)
 
 static void command_ok(int device)
 {
+    if (command_pending) {
+        model.double_issues++; /* a command issued on a ring holding one */
+    }
     command_pending = 1;
     command_result_pending.device = device;
     command_result_pending.status = USB_XFER_OK;
@@ -348,14 +352,18 @@ int xhci_device_packet_size(int device, int max_packet)
     return 0;
 }
 
+int xhci_command_free(void)
+{
+    return !command_pending;
+}
+
 int xhci_interrupts_on(void)
 {
     return 0; /* the model's controller sends no interrupts of its own */
 }
 
 void xhci_state_record(void)
-{
-}
+{}
 
 int xhci_device_hub(int device, int ports, int multi_tt, int think_time)
 {
@@ -1089,6 +1097,24 @@ int main(void)
         CHECK("and the device below is enumerated again on the link that came back",
               slots_given == given + 1 && slot_of_kind(KIND_KBD) != 0 && running_count() == 2);
     }
+
+    /* A ring holding a command nobody answers: the device that issued it
+       gives up at its deadline, and the next device does not take the turn
+       and issue on the held ring; nothing is issued twice. */
+    model_reset();
+    pump(2000);
+    CHECK("the hub is up with nothing below it", running_count() == 1);
+    model.hold_commands = 1;
+    model.port_kind[1] = KIND_KBD;
+    model.port_change[1] |= 1u;
+    model_change(2);
+    pump(300);
+    model.port_kind[3] = KIND_KBD;
+    model.port_change[3] |= 1u;
+    model_change(4);
+    pump(3000);
+    CHECK("no command is issued on a ring that holds one", model.double_issues == 0);
+    model.hold_commands = 0;
 
     /* A device that answers its configuration request late, as the
        notebook's stick behind the hub does at boot while its flash starts,

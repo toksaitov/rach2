@@ -1153,6 +1153,22 @@ int main(void)
     CHECK("and while the controller still holds the ring nothing is issued on it",
           xhci_command_issue(TRB_TYPE_NOOP_COMMAND, 0, 0) != 0);
 
+    /* A command nobody waits for is aborted by the clock alone: the device
+       that issued it was given up on at its own deadline, and the ring must
+       not stay held for every device after it. */
+    model_reset();
+    command_completes = 0;
+    CHECK("the capability registers are read", xhci_read_caps() == 0);
+    CHECK("halted and reset", xhci_halt_reset() == 0);
+    CHECK("started", xhci_start() == 0);
+    CHECK("a command is issued", xhci_command_issue(TRB_TYPE_NOOP_COMMAND, 0, 0) == 0);
+    CHECK("and the ring is not free while it runs", xhci_command_free() == 0);
+    xhci_advance(1100);
+    command_completes = 1;
+    CHECK("past its deadline the clock alone has it aborted and the ring free",
+          xhci_command_free() == 1);
+    CHECK("and the next command is issued", xhci_command_issue(TRB_TYPE_NOOP_COMMAND, 0, 0) == 0);
+
     /* A completion that names a block the driver is not waiting on belongs to
        a command already abandoned, and must not answer the one in flight. */
     model_reset();

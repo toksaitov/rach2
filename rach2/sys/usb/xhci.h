@@ -236,6 +236,14 @@ int xhci_interrupts_enable_line(void);
 /** Stop the interrupts; the controller keeps running and the timer pumps it. */
 void xhci_interrupts_disable(void);
 
+/**
+ * Whether a command can be issued now: none is running and no abort is
+ * still waiting for the controller to stop the ring. The core takes the
+ * enumeration turn only when this says so, so a command it then issues is
+ * never refused for a ring another device left busy.
+ */
+int xhci_command_free(void);
+
 /** Record the controller's registers and the command in flight, once. */
 void xhci_state_record(void);
 

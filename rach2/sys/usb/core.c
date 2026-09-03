@@ -585,6 +585,9 @@ static void step_closing(struct usb_device_state *d)
     if (enumerating >= 0 && enumerating != index) {
         return;
     }
+    if (enumerating != index && !d->abandoned && !xhci_command_free()) {
+        return; /* the Disable Slot waits for the ring, not for a deadline */
+    }
     enumerating = index;
 
     if (d->abandoned) {
@@ -813,6 +816,9 @@ static void step_device(struct usb_device_state *d)
         }
         if (enumerating >= 0 && enumerating != index) {
             return; /* another device has the command ring */
+        }
+        if (!xhci_command_free()) {
+            return; /* a command another device left is still on it */
         }
         enumerating = index;
         if (d->ops->reset_begin(d->owner, d->port) != 0) {
@@ -1265,6 +1271,9 @@ int usb_core_hub_tell(int index, int ports, int multi_tt, int think_time)
     d = &devices[index];
     if (enumerating >= 0 && enumerating != index) {
         return 0; /* another device has the command ring */
+    }
+    if (enumerating != index && !xhci_command_free()) {
+        return 0; /* a command another device left is still on it */
     }
     enumerating = index;
     if (!d->closing_asked) {

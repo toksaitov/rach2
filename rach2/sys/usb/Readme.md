@@ -44,7 +44,7 @@ Nothing on the pump's path may wait: not a port reset, not a control transfer, n
 
 At boot the kernel waits while the timer drives that machine, so the devices present at reset are enumerated before the first process starts. The boot path does not drive it itself: two parties draining one event ring, one of them inside an interrupt of the other, is the defect this arrangement exists to prevent. The controller's own interrupt is turned on last, after the devices present at reset are enumerated, so that no message arrives at a stack that is still building its rings.
 
-One command is in flight at a time, and one device is enumerated at a time. The controller has one command ring; a second device waits at its port, which costs a hundred milliseconds.
+One command is in flight at a time, and one device is enumerated at a time. The controller has one command ring; a second device waits at its port, which costs a hundred milliseconds. A device takes the turn only when the ring is free, and a command past its second is aborted from the pump's clock whether or not the device that issued it still waits: the notebook's soldered port 7 once never answered an Address Device, the device was given up on at its half second, and the command left running held the ring against every device after it until the boot had lost them all.
 
 The only waits in the driver are in bring-up, which runs once: the reset, the firmware handoff, and the fixed millisecond an Intel controller needs after its reset is asserted before its registers may be read again.
 

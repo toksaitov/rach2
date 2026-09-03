@@ -798,9 +798,20 @@ static int pending_port;
 static int pending_speed;
 static struct usb_location pending_where;
 
+static void command_abort(void);
+
 void xhci_advance(uint32_t milliseconds)
 {
     now_ms += milliseconds;
+    /* A command past its deadline is aborted whether or not anyone still
+     * waits for it: the device that issued it may have been given up on at
+     * its own, shorter deadline, and a command left running holds the ring
+     * against every device after it. The notebook lost every USB device on
+     * one boot in four that way, to an Address Device its soldered port 7
+     * never answered. */
+    if (command_running && past(command_deadline)) {
+        command_abort();
+    }
 }
 
 /** A word of a block in a ring. */
@@ -984,17 +995,35 @@ int xhci_command_done(struct usb_command_result *out)
         return command_result.status == USB_XFER_OK ? 1 : -1;
     }
     if (past(command_deadline)) {
-        /* Ask for the ring back. The controller stops it and says so by
-         * clearing the running bit; until then nothing may be issued, and any
-         * completion that arrives belongs to the command being abandoned. */
-        op_w32(XHCI_CRCR, CRCR_CA);
-        op_w32(XHCI_CRCR + 4, 0);
-        command_running = 0;
-        command_aborting = 1;
-        klog(KLOG_ERR, "usb", "command: no answer; the ring was asked back");
+        command_abort();
         return -1;
     }
     return 0;
+}
+
+/**
+ * Ask for the ring back. The controller stops it and says so by clearing
+ * the running bit; until then nothing may be issued, and any completion
+ * that arrives belongs to the command being abandoned.
+ */
+static void command_abort(void)
+{
+    op_w32(XHCI_CRCR, CRCR_CA);
+    op_w32(XHCI_CRCR + 4, 0);
+    command_running = 0;
+    command_aborting = 1;
+    klog(KLOG_ERR, "usb", "command: no answer; the ring was asked back");
+}
+
+int xhci_command_free(void)
+{
+    if (!xhci_running || command_running) {
+        return 0;
+    }
+    if (command_aborting && (op_r32(XHCI_CRCR) & CRCR_CRR)) {
+        return 0; /* the controller has not stopped the ring yet */
+    }
+    return 1;
 }
 
 /**
