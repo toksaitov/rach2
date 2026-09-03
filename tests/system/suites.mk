@@ -1148,6 +1148,13 @@ run-account: $(DEMO_CREDS) rach2 utils krffs busybox ish check-tcc check-pdpmake
 # compiler wants and this kernel lacks is named on the console rather than
 # turning into a mysterious failure.
 TCC_TEST_DISK = $(IMAGES_DIR)/tcc-test.disk
+# `tests/run doom`: the Doom port's zone on a disk root, sized from the
+# machine's free memory through a heap that grows with brk; one boot.
+DOOM_TEST_DISK = $(IMAGES_DIR)/doom-test.disk
+run-doom: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(HARNESS)
+	$(MKDISK) krffs/manifests/os-real.manifest $(DOOM_TEST_DISK) 64 48
+	sh tests/system/suites/doom.sh build/rach2/kernel $(DOOM_TEST_DISK) $(HARNESS) \
+	    "`cat krffs/rach2_demo_password`"
 run-tcc: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	$(MKDISK) krffs/manifests/os-real.manifest $(TCC_TEST_DISK) 64 48
 	sh tests/system/suites/tcc.sh build/rach2/kernel $(TCC_TEST_DISK) \

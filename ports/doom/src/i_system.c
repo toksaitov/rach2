@@ -55,8 +55,12 @@
 #include <CoreFoundation/CFUserNotification.h>
 #endif
 
-#define DEFAULT_RAM 6 /* MiB */
+#define DEFAULT_RAM 16 /* MiB, as upstream; the platform may lower it */
 #define MIN_RAM     6  /* MiB */
+
+/* The zone the platform asks for from what the machine has free, in MiB, or
+   zero when it does not know. Set by DG_Init before this runs. */
+int DG_zone_mib;
 
 
 typedef struct atexit_listentry_s atexit_listentry_t;
@@ -153,6 +157,10 @@ byte *I_ZoneBase (int *size)
     {
         default_ram = DEFAULT_RAM;
         min_ram = MIN_RAM;
+        if (DG_zone_mib >= min_ram && DG_zone_mib < default_ram)
+        {
+            default_ram = DG_zone_mib;
+        }
     }
 
     zonemem = AutoAllocMemory(size, default_ram, min_ram);

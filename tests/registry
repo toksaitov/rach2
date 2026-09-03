@@ -31,6 +31,7 @@ stress|qemu-system-i386|full
 stress-ahci|qemu-system-i386|full
 procfiles|qemu-system-i386|full
 tcc|qemu-system-i386|full
+doom|qemu-system-i386|full
 bootpart|qemu-system-i386|full
 default-e1000|qemu-system-i386|full
 default|qemu-system-i386|core

@@ -228,9 +228,50 @@ static void poll_mouse(void)
  * DG_Init - Initialize the platform
  * Opens framebuffer device (switches to VGA Mode 13h) and mouse device
  */
+/*
+ * The zone this machine can hold: MemFree from /proc/meminfo less 8 MiB
+ * for the rest of the game and whatever else runs, in MiB. Zero when the
+ * file cannot be read, which leaves the engine's default. The engine takes
+ * it as the zone when it is under the default and at least the minimum,
+ * so a 32 MiB machine gets a zone of some 12 MiB and no more than it has,
+ * where an overcommitted zone would be a game killed at its first fault
+ * for a frame the kernel does not have.
+ */
+extern int DG_zone_mib;
+
+static void size_zone(void)
+{
+    char buf[512];
+    int fd, n, i;
+
+    fd = open("/proc/meminfo", 0);
+    if (fd < 0) {
+        return;
+    }
+    n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n <= 0) {
+        return;
+    }
+    buf[n] = '\0';
+    for (i = 0; i + 8 < n; i++) {
+        if (memcmp(buf + i, "MemFree:", 8) == 0) {
+            int kb = atoi(buf + i + 8);
+            int mib = kb / 1024 - 8;
+
+            if (mib > 0) {
+                DG_zone_mib = mib;
+            }
+            return;
+        }
+    }
+}
+
 void DG_Init(void)
 {
     struct timeval tv;
+
+    size_zone();
 
     /* Open framebuffer device - this switches to Mode 13h */
     fb_fd = open("fb", O_RDWR);

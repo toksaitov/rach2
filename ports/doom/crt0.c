@@ -15,6 +15,7 @@
 #define SYS_OPEN        5
 #define SYS_CLOSE       6
 #define SYS_LSEEK       19
+#define SYS_BRK         45
 #define SYS_IOCTL       54
 #define SYS_GETTIMEOFDAY 78
 
@@ -786,11 +787,27 @@ int putchar(int c)
 }
 
 /*
- * Simple heap allocator (bump allocator)
- * Doom needs malloc/free for dynamic memory.
+ * The heap: a bump allocator over the process's brk range, grown 64 KiB at
+ * a time as it is used. The kernel reserves the addresses at brk and gives
+ * a page its frame at first touch, so the zone Doom takes at start is as
+ * large as I_ZoneBase asks for and costs frames only as the game fills it.
+ * A fixed array here was 8 MiB, which held a 6 MiB zone and no more; the
+ * zone is what keeps a level's lumps in memory, and with a 28 MB WAD a
+ * 6 MiB zone reread the disk all game long.
  */
-static char _heap[8 * 1024 * 1024];  /* 8 MB heap - Doom needs 6 MB for zone */
-static size_t _heap_used = 0;
+static char *_heap_break;   /* the end of what brk has given, or NULL */
+static char *_heap_next;    /* the next byte to hand out */
+
+static char *sys_brk(char *addr)
+{
+    char *ret;
+    __asm__ __volatile__ (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(SYS_BRK), "b"(addr)
+    );
+    return ret;
+}
 
 void *malloc(size_t size)
 {
@@ -799,12 +816,27 @@ void *malloc(size_t size)
     /* Align to 8 bytes */
     size = (size + 7) & ~7;
 
-    if (_heap_used + size > sizeof(_heap)) {
-        return NULL;
+    if (_heap_break == NULL) {
+        _heap_break = sys_brk(NULL);
+        _heap_next = _heap_break;
+        if (_heap_break == NULL) {
+            return NULL;
+        }
+    }
+    if (size > (size_t)(_heap_break - _heap_next)) {
+        size_t need = size - (size_t)(_heap_break - _heap_next);
+        size_t grow = (need + 65535u) & ~(size_t)65535u;
+        char *want = _heap_break + grow;
+
+        /* brk answers with the old break when it refuses. */
+        if (sys_brk(want) != want) {
+            return NULL;
+        }
+        _heap_break = want;
     }
 
-    ptr = &_heap[_heap_used];
-    _heap_used += size;
+    ptr = _heap_next;
+    _heap_next += size;
     return ptr;
 }
 

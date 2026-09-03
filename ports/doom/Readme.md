@@ -14,7 +14,7 @@ make ports/doom
 
 The component Makefile uses `i686-elf-gcc` with GNU99, freestanding static i386 flags, local replacement headers, and a fixed text address of `0x08048000`. Header dependencies rebuild the affected objects. The output is `build/ports/doom/doom`.
 
-The build contains `crt0.c`, six local platform and audio sources, and the 80 engine sources named by `DOOM_SRC`. `crt0.c` supplies `_start`, eight Linux i386-compatible syscall wrappers, the file interface used by the engine, a small libc subset, and a fixed 8 MiB bump heap. `free` does not reclaim memory.
+The build contains `crt0.c`, six local platform and audio sources, and the 80 engine sources named by `DOOM_SRC`. `crt0.c` supplies `_start`, nine Linux i386-compatible syscall wrappers, the file interface used by the engine, a small libc subset, and a bump heap over the process's `brk` range, grown 64 KiB at a time. `free` does not reclaim memory. The engine's zone, where a level's lumps live, is sized at start from `MemFree` in `/proc/meminfo` less 8 MiB, at least 6 MiB and at most the engine's 16 MiB default, so a 32 MiB machine gets some 12 MiB; `-mb N` overrides it. A zone too small for the WAD rereads the disk all game long, which is what a 28 MB IWAD did with the 6 MiB zone of the fixed heap this replaced.
 
 Run `make -C ports/doom clean` only when the component output must be removed. Ordinary rebuilds do not need it.
 
