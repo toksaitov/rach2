@@ -227,8 +227,15 @@ and recovery is no longer the saved default.
   to play every track of a format 1 file, the earliest next event
   across the track iterators as upstream Chocolate Doom's OPL player
   does, and to stop a song whose end comes before any sample is
-  generated instead of restarting it in the same call; then a host row
-  over a two-track MIDI fixture, and the report rerun on the machine. Freedoom is on the notebook as
+  generated instead of restarting it in the same call. Done: the
+  player iterates every track with its own wait and generates up to
+  the nearest event; on the machine Freedoom then runs at 58 frames a
+  second, the longest 60 ms, the emulator 0.5 s per 30 s in 2604 calls
+  for 1.48 million samples after 2255 events, and the owner hears the
+  music. Owed: a host row over a two-track MIDI fixture, which needs
+  the player compiled on the host with a `GENMIDI` lump the tree does
+  not carry; the machine's report is the proof so far, and the old
+  player's report with the same WAD is the mutation's. Freedoom is on the notebook as
   `/doom1.wad` with the shareware WAD beside it as `/shareware.wad`;
   swap them back before the milestone closes, since the tree stages
   the shareware one.

@@ -34,7 +34,7 @@ Phase 7: the differences
 - [x] the SuperSpeed hub with its review round; the configuration request's five seconds
 - [x] the command aborted from the clock and the turn on a free ring; the silent stick handed back
 - [x] the Doom zone from free memory; the port's timing report; the cause found (single-track MIDI)
-- [ ] the Doom port playing every track of a format 1 MIDI, with a host row; rerun on the machine
+- [x] the Doom port playing every track of a format 1 MIDI; rerun on the machine (a host row is owed)
 - [ ] the panic at a pull of a silent stick, when its record arrives through the capture
 - [ ] the recovery partition rewritten with e2fsck, from recovery with a saved copy, with approval
 - [ ] root's SSH key refused after a stick boot, reproduced with a second dropbear

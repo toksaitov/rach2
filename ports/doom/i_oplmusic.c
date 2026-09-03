@@ -221,15 +221,22 @@ static int voice_alloced_num;
 // Channels
 static opl_channel_data_t channels[16];
 
-// Current song
+// Current song. A format 1 MIDI file, which is what Freedoom ships, has
+// its tempo on track 0 and its notes on the tracks after it, so every
+// track is iterated, each with its own wait in samples until its next
+// event; a MUS lump converts to one track and is the same case with one
+// iterator.
+#define MAX_TRACKS 32
 static midi_file_t *current_file = NULL;
-static midi_track_iter_t *track_iter = NULL;
+static midi_track_iter_t *tracks[MAX_TRACKS];
+static uint32_t track_wait[MAX_TRACKS]; /* samples until the track's next event */
+static boolean track_done[MAX_TRACKS];  /* the track reached its end */
+static int num_tracks = 0;
 static boolean song_looping = false;
 
 // Timing
 static uint32_t sample_rate;
 static uint32_t samples_per_tick;
-static uint32_t samples_until_next_event;
 static uint32_t ticks_per_beat;
 static uint32_t us_per_beat;
 
@@ -766,22 +773,22 @@ static void ProcessEvent(midi_event_t *event)
 }
 
 // Schedule next event
-static void ScheduleNextEvent(void)
+static void ScheduleTrack(int i)
 {
     unsigned int delta_time;
 
-    if (track_iter == NULL)
+    if (tracks[i] == NULL)
     {
+        track_done[i] = true;
         return;
     }
 
-    delta_time = MIDI_GetDeltaTime(track_iter);
-    samples_until_next_event = delta_time * samples_per_tick;
-
-    if (samples_until_next_event == 0 && delta_time > 0)
+    delta_time = MIDI_GetDeltaTime(tracks[i]);
+    track_wait[i] = delta_time * samples_per_tick;
+    if (track_wait[i] == 0 && delta_time > 0)
     {
         /* Prevent a stuck scheduler if samples_per_tick underflowed. */
-        samples_until_next_event = 1;
+        track_wait[i] = 1;
     }
 }
 
@@ -790,17 +797,20 @@ static void RestartSong(void)
 {
     int i;
 
-    if (track_iter != NULL)
+    for (i = 0; i < num_tracks; i++)
     {
-        MIDI_RestartIterator(track_iter);
+        if (tracks[i] != NULL)
+        {
+            MIDI_RestartIterator(tracks[i]);
+        }
+        track_done[i] = false;
+        ScheduleTrack(i);
     }
 
     for (i = 0; i < 16; i++)
     {
         InitChannel(&channels[i]);
     }
-
-    ScheduleNextEvent();
 }
 
 // Initialize
@@ -902,10 +912,23 @@ void OPLMusic_PlaySong(void *handle, boolean looping)
     current_file = handle;
     song_looping = looping;
 
-    // Get track iterator (we only support single-track type 0 MIDI)
-    track_iter = MIDI_IterateTrack(current_file, 0);
+    // One iterator per track: track 0 alone is a MUS lump's whole song and
+    // a format 1 file's tempo track with no notes.
+    num_tracks = (int)MIDI_NumTracks(current_file);
+    if (num_tracks > MAX_TRACKS)
+    {
+        num_tracks = MAX_TRACKS;
+    }
+    {
+        int i;
 
-    if (track_iter == NULL)
+        for (i = 0; i < num_tracks; i++)
+        {
+            tracks[i] = MIDI_IterateTrack(current_file, (unsigned int)i);
+            track_done[i] = tracks[i] == NULL;
+        }
+    }
+    if (num_tracks == 0 || tracks[0] == NULL)
     {
         return;
     }
@@ -937,7 +960,14 @@ void OPLMusic_PlaySong(void *handle, boolean looping)
     // Initialize voices
     InitVoices();
 
-    ScheduleNextEvent();
+    {
+        int i;
+
+        for (i = 0; i < num_tracks; i++)
+        {
+            ScheduleTrack(i);
+        }
+    }
 
     music_playing = true;
     music_paused = false;
@@ -959,10 +989,18 @@ void OPLMusic_StopSong(void)
         ReleaseVoice(0);
     }
 
-    if (track_iter != NULL)
     {
-        MIDI_FreeIterator(track_iter);
-        track_iter = NULL;
+        int i;
+
+        for (i = 0; i < num_tracks; i++)
+        {
+            if (tracks[i] != NULL)
+            {
+                MIDI_FreeIterator(tracks[i]);
+                tracks[i] = NULL;
+            }
+        }
+        num_tracks = 0;
     }
 
     current_file = NULL;
@@ -1034,7 +1072,7 @@ int OPLMusic_GenerateSamples(int16_t *buffer, int num_samples)
     }
 
     /* If no track or not playing, generate silence */
-    if (track_iter == NULL || !music_playing || music_paused)
+    if (num_tracks == 0 || !music_playing || music_paused)
     {
         memset(buffer, 0, num_samples * 2 * sizeof(int16_t));
         return num_samples;
@@ -1042,80 +1080,112 @@ int OPLMusic_GenerateSamples(int16_t *buffer, int num_samples)
 
     while (samples_generated < num_samples)
     {
-        // Process pending events (limit to prevent all-at-once firing)
-        int events_this_iteration = 0;
-        #define MAX_EVENTS_PER_ITERATION 1024
+        int i;
+        int alive = 0;
+        uint32_t min_wait = 0xFFFFFFFFu;
+        int restarted = 0;
 
-        while (samples_until_next_event == 0 && track_iter != NULL)
+        for (i = 0; i < num_tracks; i++)
         {
-            if (MIDI_GetNextEvent(track_iter, &event))
-            {
-                ProcessEvent(event);
-                events_this_iteration++;
-                DG_TimeSpent(4, 1);
+            /* Every event of this track that is due now, with a cap so that
+               a track of thousands of simultaneous events yields a sample. */
+            int events_this_iteration = 0;
+            #define MAX_EVENTS_PER_ITERATION 1024
 
-                // End of track?
+            while (!track_done[i] && track_wait[i] == 0)
+            {
+                if (!MIDI_GetNextEvent(tracks[i], &event))
+                {
+                    track_done[i] = true;
+                    break;
+                }
+                ProcessEvent(event);
+                DG_TimeSpent(4, 1);
                 if (event->event_type == MIDI_EVENT_META
                  && event->data.meta.type == MIDI_META_END_OF_TRACK)
                 {
-                    if (song_looping)
-                    {
-                        RestartSong();
-                    }
-                    else
-                    {
-                        music_playing = false;
-                        // Fill rest with silence
-                        memset(buffer + samples_generated * 2, 0,
-                               (num_samples - samples_generated) * 2 * sizeof(int16_t));
-                        return num_samples;
-                    }
-                }
-                else
-                {
-                    ScheduleNextEvent();
-                }
-
-                if (events_this_iteration >= MAX_EVENTS_PER_ITERATION
-                 && samples_until_next_event == 0)
-                {
-                    samples_until_next_event = 1;
+                    track_done[i] = true;
                     break;
                 }
+                ScheduleTrack(i);
+                if (++events_this_iteration >= MAX_EVENTS_PER_ITERATION && track_wait[i] == 0)
+                {
+                    track_wait[i] = 1;
+                }
             }
-            else
+            if (!track_done[i])
             {
-                // No more events
-                if (song_looping)
+                alive = 1;
+                if (track_wait[i] < min_wait)
                 {
-                    RestartSong();
-                }
-                else
-                {
-                    music_playing = false;
-                    memset(buffer + samples_generated * 2, 0,
-                           (num_samples - samples_generated) * 2 * sizeof(int16_t));
-                    return num_samples;
+                    min_wait = track_wait[i];
                 }
             }
         }
 
-        // Generate samples until next event
-        samples_to_generate = num_samples - samples_generated;
-        if (samples_until_next_event > 0 && samples_until_next_event < (unsigned int)samples_to_generate)
+        if (!alive)
         {
-            samples_to_generate = samples_until_next_event;
+            /* Every track has ended. A looping song starts again, once per
+               call: a song that ends before it yields a sample is empty,
+               and restarting it in the same call would spin for ever. */
+            if (song_looping && !restarted && samples_generated > 0)
+            {
+                restarted = 1;
+                RestartSong();
+                continue;
+            }
+            if (song_looping && samples_generated == 0)
+            {
+                RestartSong();
+                /* Fall through to generate what the restarted tracks wait
+                   for; if nothing waits, the song is empty and stops. */
+                alive = 0;
+                min_wait = 0xFFFFFFFFu;
+                for (i = 0; i < num_tracks; i++)
+                {
+                    if (!track_done[i] && track_wait[i] > 0)
+                    {
+                        alive = 1;
+                        if (track_wait[i] < min_wait)
+                        {
+                            min_wait = track_wait[i];
+                        }
+                    }
+                }
+            }
+            if (!alive)
+            {
+                music_playing = false;
+                memset(buffer + samples_generated * 2, 0,
+                       (num_samples - samples_generated) * 2 * sizeof(int16_t));
+                return num_samples;
+            }
         }
 
-        // Generate OPL3 samples
+        // Generate samples until the nearest event on any track
+        samples_to_generate = num_samples - samples_generated;
+        if (min_wait < (uint32_t)samples_to_generate)
+        {
+            samples_to_generate = (int)min_wait;
+        }
+        if (samples_to_generate <= 0)
+        {
+            samples_to_generate = 1;
+        }
+
         OPL3_GenerateStream(&opl_chip, buffer + samples_generated * 2, samples_to_generate);
         DG_TimeSpent(2, 1);
         DG_TimeSpent(3, (uint32_t)samples_to_generate);
 
         samples_generated += samples_to_generate;
-        if (samples_until_next_event > 0)
+        for (i = 0; i < num_tracks; i++)
         {
-            samples_until_next_event -= samples_to_generate;
+            if (!track_done[i])
+            {
+                track_wait[i] = track_wait[i] > (uint32_t)samples_to_generate
+                                    ? track_wait[i] - (uint32_t)samples_to_generate
+                                    : 0;
+            }
         }
     }
 
