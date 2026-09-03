@@ -205,10 +205,26 @@ and recovery is no longer the saved default.
   and the fixed heap as its mutation. The disk traffic did not move
   with it, 3843 commands in 25 s of the demo loop against 3957, about
   0.6 MB/s of level loading that an SSD serves without effort, so the
-  machine's slowness is not the reads: what remains to measure on the
-  machine is the frame time with the large levels and the OPL3 music
-  emulator, since the sound is fed from the game loop and a slow frame
-  starves it. That measurement is the install round's.
+  machine is not the reads. Measured on the machine in the install
+  round with a report the port now prints every ten seconds: with
+  Freedoom, one frame a second, the longest 970 ms, and the music
+  emulator taking 14.4 s of every 20.8 s in 365130 calls for 365130
+  samples after 374 million events; with the shareware WAD, sixty
+  frames a second and the emulator 0.27 s of 20 s. Freedoom's 41 music
+  lumps are MIDI (`MThd`) where the shareware's 13 are MUS, and for
+  the MIDI ones every event comes back from the port's reader with a
+  delta time of zero: `OPLMusic_GenerateSamples` then processes its
+  1024-event cap, emits one sample, and repeats, which is the whole
+  slowness and the broken sound. The fault is in the MIDI path,
+  `ports/doom/midifile.c` and the scheduling in `i_oplmusic.c`
+  (`ScheduleNextEvent`, `samples_per_tick`), not in the emulator or
+  the kernel. Not yet fixed: the next step is to read one of
+  Freedoom's lumps through the reader on the host and see where the
+  delta times are lost, fix it, add a host row over a MIDI lump, and
+  rerun the report on the machine. Freedoom is on the notebook as
+  `/doom1.wad` with the shareware WAD beside it as `/shareware.wad`;
+  swap them back before the milestone closes, since the tree stages
+  the shareware one.
 
 ### Phase 5
 
