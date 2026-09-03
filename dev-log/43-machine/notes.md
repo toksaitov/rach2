@@ -218,10 +218,17 @@ and recovery is no longer the saved default.
   slowness and the broken sound. The fault is in the MIDI path,
   `ports/doom/midifile.c` and the scheduling in `i_oplmusic.c`
   (`ScheduleNextEvent`, `samples_per_tick`), not in the emulator or
-  the kernel. Not yet fixed: the next step is to read one of
-  Freedoom's lumps through the reader on the host and see where the
-  delta times are lost, fix it, add a host row over a MIDI lump, and
-  rerun the report on the machine. Freedoom is on the notebook as
+  the kernel. The cause, from the player's code: `i_oplmusic.c` plays
+  track 0 only (`MIDI_IterateTrack(current_file, 0)`), and a format 1
+  MIDI file's track 0 is its tempo track with no notes, so the player
+  reaches the end of track at once, restarts the song, and reaches it
+  again, all at delta zero; the 374 million events are those restarts.
+  A MUS lump converts to one track and plays. Not yet fixed. The fix is
+  to play every track of a format 1 file, the earliest next event
+  across the track iterators as upstream Chocolate Doom's OPL player
+  does, and to stop a song whose end comes before any sample is
+  generated instead of restarting it in the same call; then a host row
+  over a two-track MIDI fixture, and the report rerun on the machine. Freedoom is on the notebook as
   `/doom1.wad` with the shareware WAD beside it as `/shareware.wad`;
   swap them back before the milestone closes, since the tree stages
   the shareware one.
