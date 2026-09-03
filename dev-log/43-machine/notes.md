@@ -117,6 +117,25 @@ and recovery is no longer the saved default.
   what the stick answers to `SET_CONFIGURATION` that early behind the
   hub, and whether the core should retry a refused configuration once.
 
+* Writes through the FAT32 driver to the stick's 8 GiB save volume are
+  slow and get slower: 0.65 MB/s falling to 0.17 MB/s by 900 MB in
+  phase 2, and about 0.05 MB/s for a 64 MiB copy in phase 5 with a
+  second writer beside it. The same stick reads raw at 8.4 MB/s and
+  takes exFAT writes at 2.1 MB/s, so it is the FAT32 writer: its
+  flushes per write, or its walk of a 16353-sector FAT, are phase 7's
+  to measure under the lag device and fix with a row.
+
+* Doom with the 28 MB Freedoom IWAD is slow and its sound breaks up
+  on the machine, bits of sound between silences whenever the game
+  struggles to render; with the 4 MB shareware IWAD it plays as it did
+  before. The kernel manages 32 MiB, so a large IWAD pages through the
+  disk, and the owner decided on 2026-09-03 that this is work of the
+  milestone: phase 7 measures the page cache's behaviour under Doom's
+  read pattern on the machine, finds why the sound thread starves while
+  the reader pages, and fixes what is the kernel's, with a row; what is
+  the memory limit's is stated in the Doom port's Readme with the
+  number.
+
 ### Not a difference
 
 `fsck_exfat -n` run by the owner on the mounted data stick reported
@@ -126,12 +145,6 @@ writing that file. `diskutil verifyVolume`, which unmounts first, found
 the volume clean before and after that run, and the kernel never opened
 the file.
 
-Doom with the 28 MB Freedoom IWAD is slow and its sound breaks up on the
-machine; with the 4 MB shareware IWAD it plays as it did before. The
-kernel manages 32 MiB, so a large IWAD pages through the disk. The
-owner wants this looked at: a WAD larger than the RAM the kernel manages
-is a limit to state or a change to plan, after this milestone. Recorded
-in `hardware.md`; not fixed here.
 3. The boot log named a high-speed hub "a full-speed device" at its root
    port. A USB 2 port's speed field is valid only once the port is
    enabled, after its reset; the record now says a low-speed device by
