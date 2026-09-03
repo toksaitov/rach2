@@ -208,3 +208,26 @@ the twelve entries: the hub, the keyboard, the mouse and the stick are
 four, and the owner's disk made a fifth for a minute; no more devices
 are available here, so the table's limit is not reached on this
 hardware.
+
+## Phase 5: the ext2 root
+
+| Step | Reading |
+|------|---------|
+| The recovery stick | `rach2-recovery-stick.img`, `f530085a...`, written on the Mac and read back; RACH2SAVE formatted with `newfs_msdos`; booted at the firmware menu with `reflash` and `e2fsck` in its root |
+| The fourth partition's head before | `e173865850166dda...`, 16 MiB, saved on the host and the stick |
+| The ext2 root written | `rach2-metal-disk.ext2`, `d7045c2a...`, 1073741824 bytes at 660602880, in 224 s through `gzip`, `ssh` and `reflash`; read back with the same hash |
+| The boot partition before | `37897384b0495f05...`, 64 MiB, saved on the host and the stick; the stick copy took 45 minutes through the FAT32 driver |
+| The boot partition after | `e802b7b7...`: `grub.cfg` with `rach2.root=ext2` on the two candidate entries, 7693 bytes of the image changed, written in 15 s and read back |
+| The recovery partition | `5bbc9904...` before and after both writes |
+| The trial | armed from the disk's recovery entry; `/proc/cmdline` has `rach2.root=ext2`, `/proc/mounts` has `/dev/disk0p4 / ext2 rw,relatime`, 23 MB used of 1 GiB, SSH answers |
+| On the candidate | `tcc -static` builds and runs a program; a file survives `reboot -f`, which unmounts cleanly on this kernel, so no check ran; `bootctl status` reports the slot |
+| The fallback | `bootctl trial fallback` booted the KRFFS root, `/dev/disk0 / krffs`, without the ext2 file; `bootctl trial candidate` booted ext2 again with it |
+| The commit | `bootctl commit` from the candidate: the saved default is the candidate |
+
+The first ext2 root written was the wrong image, `os-real.ext2` with the
+plain init; its trial booted to the console with no network and no SSH
+server, and the root was written again with `rach2-metal-disk.ext2`
+from the disk's recovery entry, which the owner reached by typing
+`bootctl trial recovery && reboot` at the console. The disk's recovery
+partition is milestone 37's and has no `e2fsck`; the stick's recovery
+has it.

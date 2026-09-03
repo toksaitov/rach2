@@ -136,7 +136,25 @@ and recovery is no longer the saved default.
   the memory limit's is stated in the Doom port's Readme with the
   number.
 
+### Phase 5
+
+* The disk's recovery partition, written in milestone 37, has no
+  `e2fsck`; the tree's recovery image has had it since milestone 42.
+  The plan's repair of a dirty root from recovery works from the stick
+  only. Phase 7 presents the write of the current recovery image into
+  partition 3, by the Readme's procedure, with its saved copy; until
+  then the stick is the recovery with `e2fsck`.
+
 ### Not a difference
+
+The first ext2 root written in phase 5 was `build/images/os-real.ext2`,
+the plain image whose init starts no network and no SSH server, and the
+trial boot came up on ext2 at the console with no address and no
+server. The Readme's "Updating the installed machine" names the right
+image, `build/images/rach2-metal-disk.ext2`, built from the metal-disk
+manifest with the metal init; the session read the Makefile instead of
+the Readme. The root was written again with the right image. Nothing in
+the tree was wrong.
 
 `fsck_exfat -n` run by the owner on the mounted data stick reported
 the Mac's own Spotlight index file, `live.0.indexPostings`, with a
