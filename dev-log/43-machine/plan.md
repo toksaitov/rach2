@@ -110,7 +110,9 @@ Proof: every line passes on the machine and in QEMU.
 
 Every difference the session found, listed in `notes.md` with the phase that found it, is fixed in its subsystem with its model row and its Readme, reviewed, its suites run, and the fixed kernel installed and the phase's lines rerun on the machine. A difference the owner decided to leave is written into the owning Readme as a limit.
 
-Proof: `notes.md` has no open difference; every subsystem's suites pass; the machine runs the last kernel.
+The owner decided on 2026-09-03 that the stick in the blue socket, alone and behind the hub, is not a limit but work of this milestone. Alone in the blue socket the stick already works, as a SuperSpeed device on a root port. Behind the hub it does not, because the hub in that socket is two hubs, and the stick attaches to the SuperSpeed one, which the kernel refuses. So this phase adds the SuperSpeed hub to the hub driver: its descriptor, which is the USB 3 hub descriptor and not the USB 2 one; its port status words, whose speed and link fields differ; its port power, reset and change handling, which the core drives through the same vtable; and the controller's slot context for a device below it, whose route string is the same and whose translator fields are empty. A SuperSpeed device behind it is enumerated at its speed, and the record names the hub's two halves and which devices sit on which. The host test gains rows for the USB 3 descriptor, the status words and the tree, each proved by a mutation; QEMU's hub cannot prove it, so the machine does, with the stick behind the hub in the blue socket mounted and written and pulled.
+
+Proof: `notes.md` has no open difference; every subsystem's suites pass; the machine runs the last kernel; the stick behind the hub in the blue socket mounts and takes a file.
 
 ### Phase 8: the machine's own build
 

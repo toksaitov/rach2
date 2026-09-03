@@ -104,9 +104,9 @@ and recovery is no longer the saved default.
   stick, a USB 3 device, attaches to the SuperSpeed half and is absent.
   The keyboard and mouse, USB 2 devices, are on the high-speed half and
   work. Milestone 41 recorded the SuperSpeed hub as not driven; this is
-  the consequence for a stick behind it, and phase 7 writes it into the
-  USB Readme as a limit: a USB 3 stick behind a USB 3.0 hub in the blue
-  socket is not seen, and a black socket sees it.
+  the consequence for a stick behind it. The owner decided on
+  2026-09-03 that this is work of the milestone and not a limit: phase
+  7 drives the SuperSpeed hub, as the plan now says.
 
 * The stick on the hub when the machine boots is refused: `usb:
   device: port 1.1: it refused its configuration` at 1.95 s, 0.66 s
