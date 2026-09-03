@@ -126,7 +126,8 @@ static bool test_strings(void);
 static void test_display(void);
 static bool test_timer(void);
 static bool test_udelay(uint32_t *measured_ms);
-static bool test_clock(uint32_t *measured_us);
+static bool test_clock(uint32_t *measured_us, const char **why, uint32_t *walk_clock,
+                       uint32_t *walk_tick);
 static bool test_syscall(void);
 static bool test_usermode(void);
 static void test_switch(void);
@@ -575,12 +576,17 @@ static bool test_udelay(uint32_t *measured_ms)
  * which half of the period it was in, or that did not count a wrap, steps
  * backwards there.
  */
-static bool test_clock(uint32_t *measured_us)
+static bool test_clock(uint32_t *measured_us, const char **why, uint32_t *walk_clock,
+                       uint32_t *walk_tick)
 {
     uint32_t best = 0xFFFFFFFFu;
     uint32_t previous;
     int attempt;
     int i;
+
+    *why = "";
+    *walk_clock = 0;
+    *walk_tick = 0;
 
     for (i = 0; i < 8; i++) {
         uint32_t start = pit_now_us();
@@ -594,6 +600,7 @@ static bool test_clock(uint32_t *measured_us)
     }
     *measured_us = best;
     if (best < 1500 || best > 3500) {
+        *why = "the shortest of eight 2 ms waits is outside 1500 to 3500 us";
         return false;
     }
 
@@ -620,6 +627,7 @@ static bool test_clock(uint32_t *measured_us)
             uint32_t now = pit_now_us();
 
             if (now < previous) {
+                *why = "the clock stepped backwards inside a walk";
                 return false;
             }
             previous = now;
@@ -627,11 +635,14 @@ static bool test_clock(uint32_t *measured_us)
         }
         by_clock = pit_now_us() - clock_before;
         by_tick = (kernel_ticks - ticks_before) * 10000u;
+        *walk_clock = by_clock;
+        *walk_tick = by_tick;
         if (by_tick != 0 && by_clock >= by_tick - by_tick / 4u &&
             by_clock <= by_tick + by_tick / 4u) {
             return true;
         }
     }
+    *why = "three walks each disagreed with the tick by more than a quarter";
     return false;
 }
 
@@ -2178,13 +2189,21 @@ static void run_self_tests(void)
 
     {
         uint32_t measured_us = 0;
-        int passed = test_clock(&measured_us);
+        uint32_t walk_clock, walk_tick;
+        const char *why;
+        int passed = test_clock(&measured_us, &why, &walk_clock, &walk_tick);
 
         selftest_count(passed);
-        klog(passed ? KLOG_INFO : KLOG_ERR, "selftest",
-             passed ? "clock: passed: 2000 us asked, %d us seen"
-                    : "clock: failed: 2000 us asked, %d us seen",
-             (int)measured_us);
+        if (passed) {
+            klog(KLOG_INFO, "selftest", "clock: passed: 2000 us asked, %d us seen",
+                 (int)measured_us);
+        } else {
+            /* The record names the check that failed and the last walk's two
+               readings, so a boot log says what to look at. */
+            klog(KLOG_ERR, "selftest",
+                 "clock: failed: 2000 us asked, %d us seen; %s; last walk %d us by the clock, %d by the tick",
+                 (int)measured_us, why, (int)walk_clock, (int)walk_tick);
+        }
     }
 
     /* Reaching this line at all is the check: the code is running from mapped
