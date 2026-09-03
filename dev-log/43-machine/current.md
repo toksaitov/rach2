@@ -1,5 +1,7 @@
 Milestone 43, phase 7: the differences. Handoff written 2026-09-04 for
-a session that may be picked up by Codex; read notes.md's Phase 1 to
+a session that may be picked up by Codex; the procedures for working
+the machine from the host are in Readme.md under "Updating the
+installed machine" and "Working the machine from the host"; read notes.md's Phase 1 to
 Phase 5 differences and Open items for what is fixed and what is not.
 
 The machine: the Lenovo runs kernel e9246422... (commit bb3f628's tree)
