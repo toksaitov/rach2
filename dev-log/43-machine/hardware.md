@@ -119,3 +119,50 @@ the disk are polled paths and neither has a vector.
 | A file copy of 4 MB through the mount | intact across unmount and mount |
 | The stick copy through the FAT driver | 0.65 MB/s falling to 0.17 MB/s by 900 MB |
 | The recovery stick | the recovery ISO with an 8 GiB FAT32 second partition, booted at the BIOS menu; recovery from partition 3 has an older kernel and its own host key |
+
+## Phase 3: the stick on a root port
+
+The data stick is the SanDisk 3.2Gen1 (781:55a9), 61524148224 bytes,
+formatted on the mac mini with `diskutil eraseDisk ExFAT RACH2DATA GPT`,
+which gave it a GUID table with a 200 MiB EFI vfat partition and the
+exFAT volume. The rates are `dd` in 32 KiB pieces from the whole device
+and 64 KiB pieces through the exFAT mount, 16 MiB each unless stated.
+
+| Socket | Port | Speed | Raw read | exFAT write | exFAT read |
+|--------|------|-------|----------|-------------|------------|
+| Right side, black | 1 | high | 8.4 MB/s | 2.1 MB/s | 8.7 MB/s |
+| Left side, black | 3 | high | 8.4 MB/s | | |
+| Left side, blue | 10 | super | 23.2 MB/s | | |
+| Left side, blue, `rach2.nomsi` | 10 | super | 103 KB/s, 4 MiB | about 60 KB/s | |
+
+In every socket `blkid` reports both partitions, the volume mounts by
+`LABEL=RACH2DATA`, lists the files the Mac and the earlier sockets
+wrote, takes a file and `sync`, and unmounts with two flushes counted
+in `/proc/usb`. The pull under a mount in port 1: a read and a write
+fail with `EIO`, `umount` returns 0, `/proc/usb` shows the disk closing
+with one hold and then reclaimed.
+
+The clock self-test: `clock: failed: 2000 us asked, 2018 us seen` on
+the MSI boot and `1361 us seen` on the nomsi boot; the phase 1 boots
+passed it with 2019 us.
+
+The three files the sockets wrote read on the Mac with their content;
+their times show six hours ahead because the RTC holds local time.
+`diskutil verifyVolume`, which runs `fsck_exfat -n -x`, finds the
+volume the kernel wrote in three sockets clean.
+
+The same volume with an MBR, in port 1: `blkid` reports the one
+partition, the volume mounts by label, lists the Mac's file with the
+time the Mac wrote it, takes a file and `sync`, and unmounts with two
+flushes.
+
+The stick image `rach2-stick.img` built from the tree at b392fc8,
+`86178f18...`, written to the stick on the Mac and read back with the
+same hash. The notebook booted it from the firmware's boot menu, first
+GRUB entry, into the RAM root with `rach2.ip=192.168.0.105/24`: the
+self-tests passed 13 of 13, `blkid` reports the ISO and the exFAT
+fixture volume on `/dev/usb0p2`, the volume mounted, listed the
+fixture's files, took a file and `sync`, and unmounted with two flushes.
+The file that boot wrote reads on the Mac from the stick's second
+partition, and `diskutil verifyVolume` finds that volume clean. The
+notebook then booted its disk again as the candidate.

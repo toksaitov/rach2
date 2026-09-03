@@ -56,7 +56,55 @@ and recovery is no longer the saved default.
    request, a keyboard on port 3. Files: `rach2/sys/usb/hub.c`,
    `tests/host/hub_hosttest.c`, `rach2/sys/usb/Readme.md`.
 
+### Phase 3
+
+* Under `rach2.nomsi` the stick is eighty times slower than under MSI:
+  103 KB/s raw against 8.4 MB/s in a high-speed socket and 23.2 MB/s in
+  the SuperSpeed one. The timer is the only pump without messages, and
+  `/proc/interrupts` shows no line interrupt for the controller and a
+  fallback count of zero, so every stage of every transfer waits for
+  the next 10 ms tick. A 32 KiB read costs about 310 ms, which is some
+  thirty ticks; how the driver's stages add up to that many is phase
+  7's to count. QEMU hides this because its controller completes a transfer before the
+  tick that started it returns. To decide in phase 7: whether nomsi is
+  a diagnostic mode that may be slow, said so in the USB Readme, or
+  whether the pump should drain again after it queues work.
+* The clock self-test fails on some boots of the machine and passes
+  on others: 2018 us on the MSI boot of this phase, 1361 us on the
+  nomsi boot, 2019 us and a pass in phase 1. The failure record does
+  not say which of the three checks failed. Phase 7 makes it say, and
+  finds why the shortest of eight 2 ms waits measured 1361 us with MSI
+  off.
+* The acceptance script's stick section reads the line of `usb0` only.
+  The machine gave the data stick `usb1` when the recovery stick's slot
+  had not been reclaimed yet, and `usb0` after the slot came back. The
+  section must use the disk `blkid` found the label on.
+
+* The machine's clock runs six hours ahead of UTC. The Lenovo's RTC
+  holds local time, +06, as firmware set up for Windows does, and the
+  kernel reads it as UTC, so `date` on the machine says 17:42 UTC at
+  11:42 UTC and the files it writes to the exFAT volume show on the Mac
+  six hours in the future. The kernel has no notion of a zone. To decide
+  in phase 7: a boot flag for the RTC's offset, or the limit stated in
+  the RTC's Readme with the owner setting the RTC to UTC.
+
+* On the stick boot, SSH as root with the demo key was refused for
+  the first three minutes after the boot, at about 60 s, 100 s and
+  170 s of uptime, with the key offered and the server answering
+  `publickey,password` again; the test account's key was accepted at
+  about 150 s, and root's key was accepted at 230 s and after. In
+  between, a `su` from the test account read `/root/.ssh`. The same
+  image accepts the key at once under QEMU. Phase 7 reproduces it on
+  the machine with `dropbear -v` on the console.
+
 ### Not a difference
+
+`fsck_exfat -n` run by the owner on the mounted data stick reported
+the Mac's own Spotlight index file, `live.0.indexPostings`, with a
+chain longer than its size. The volume was mounted and Spotlight was
+writing that file. `diskutil verifyVolume`, which unmounts first, found
+the volume clean before and after that run, and the kernel never opened
+the file.
 
 Doom with the 28 MB Freedoom IWAD is slow and its sound breaks up on the
 machine; with the 4 MB shareware IWAD it plays as it did before. The
