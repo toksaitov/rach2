@@ -38,6 +38,10 @@ static page_table_t *_free_page_tables = NULL;
  */
 static uintptr_t _user_frames_start = 0;
 
+/* Frames `alloc_kernel_frame` has taken from the top of the pool, the page
+ * cache's among them, for the record a failed user allocation writes. */
+static uint32_t _kernel_frames_reserved;
+
 /*
  * Set once the first address space has cloned the kernel page-directory
  * entries. `clone_page_directory` copies the kernel PDEs by value, so a kernel
@@ -625,6 +629,7 @@ uintptr_t alloc_kernel_frame(void)
     while (frame-- > _user_frames_start) {
         if (_frames[frame] == 0) {
             _frames[frame] = 1;
+            _kernel_frames_reserved++;
             return frame * PAGE_SIZE;
         }
     }
@@ -993,8 +998,26 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
     }
 
     if (frame >= _frames_number) {
-        klog(KLOG_ERR, "vm", "user page: no free frames in %d",
-             (int)_frames_number);
+        /* Who holds the pool, so that a machine that runs out says what
+         * filled it: the boot's reservations below the user frames, the
+         * kernel's frames from the top, and the user frames between, with
+         * the shared ones counted apart. */
+        uint32_t user_used = 0, user_shared = 0;
+        uintptr_t f;
+
+        for (f = _user_frames_start; f < _frames_number; f++) {
+            if (_frames[f] != 0) {
+                user_used++;
+            }
+            if (_frames[f] > 1) {
+                user_shared++;
+            }
+        }
+        user_used -= user_used < _kernel_frames_reserved ? user_used : _kernel_frames_reserved;
+        klog(KLOG_ERR, "vm",
+             "user page: no free frames in %d: %d boot, %d kernel, %d user of which %d shared, pid %d",
+             (int)_frames_number, (int)_user_frames_start, (int)_kernel_frames_reserved,
+             (int)user_used, (int)user_shared, current_proc ? current_proc->pid : 0);
         return 0;  /* No free frames */
     }
 

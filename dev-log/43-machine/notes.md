@@ -218,9 +218,12 @@ the file.
   minute later and every later command, the same `bootctl status`
   included, running with no fault. The same boot line on the sealed disk
   in QEMU with 32 MiB shows nothing of the kind. Something held every
-  user frame for a moment at the first login under the lag. To be found
-  in phase 7, from the allocator's side: which pool the message counts
-  and what filled it.
+  user frame for a moment at the first login under the lag. The message
+  counts the whole pool of 8192 frames: the boot's reservations, the
+  kernel's frames from the top, the page cache's at most 1024 among
+  them, and the user frames between. The record now says how many of
+  each and which process asked (phase 7); the lag boot is rerun on the
+  machine in the install round to read it.
 
 ### The review round after phase 1
 
