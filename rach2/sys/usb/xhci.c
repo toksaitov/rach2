@@ -964,6 +964,11 @@ void xhci_state_record(void)
          op_r32(XHCI_USBSTS), op_r32(XHCI_CRCR), r32(caps.rtsoff + XHCI_IR0 + IR_IMAN),
          r32(caps.rtsoff + XHCI_IR0 + IR_ERDP), command_running, command_finished,
          command_aborting, (int)command_type, (int)event_index, (int)event_cycle);
+    klog(KLOG_WARN, "usb", "state: event ring at %x, the block there %x %x %x %x, the one before %x",
+         (unsigned)(uintptr_t)event_ring, trb_at(event_ring, event_index)[0],
+         trb_at(event_ring, event_index)[1], trb_at(event_ring, event_index)[2],
+         trb_at(event_ring, event_index)[3],
+         trb_at(event_ring, event_index == 0 ? XHCI_RING_TRBS - 1 : event_index - 1)[3]);
 }
 
 int xhci_command_done(struct usb_command_result *out)

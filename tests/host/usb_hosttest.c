@@ -144,6 +144,15 @@ void msc_detach(int device)
     (void)device;
 }
 
+int xhci_interrupts_on(void)
+{
+    return 0; /* the model's controller sends no interrupts of its own */
+}
+
+void xhci_state_record(void)
+{
+}
+
 int hub_attach(int index, int device, int interface, int protocol, int ep_dci, int depth, int super)
 {
     (void)index;

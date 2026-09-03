@@ -348,6 +348,15 @@ int xhci_device_packet_size(int device, int max_packet)
     return 0;
 }
 
+int xhci_interrupts_on(void)
+{
+    return 0; /* the model's controller sends no interrupts of its own */
+}
+
+void xhci_state_record(void)
+{
+}
+
 int xhci_device_hub(int device, int ports, int multi_tt, int think_time)
 {
     model.hub_told = 1;
