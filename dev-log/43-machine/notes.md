@@ -121,8 +121,18 @@ and recovery is no longer the saved default.
   The keyboard and mouse, USB 2 devices, are on the high-speed half and
   work. Milestone 41 recorded the SuperSpeed hub as not driven; this is
   the consequence for a stick behind it. The owner decided on
-  2026-09-03 that this is work of the milestone and not a limit: phase
-  7 drives the SuperSpeed hub, as the plan now says.
+  2026-09-03 that this is work of the milestone and not a limit. Done
+  in phase 7: the hub driver drives a SuperSpeed hub by USB 3's rules,
+  the USB 3 descriptor, `SET_HUB_DEPTH` before the controller is told
+  it is a hub, no translator and no think time, SuperSpeed for every
+  device below it, and the warm reset, link state and configuration
+  error changes acknowledged with their feature numbers; the core
+  accepts protocol 3. Rows: the hub host test's SuperSpeed section,
+  eleven checks and a hub that refuses its descriptor. Mutations: the
+  depth not sent, the USB 2 descriptor asked, the speed read from the
+  status bits, the link state change not acknowledged; each caught by
+  its row. QEMU has no SuperSpeed hub, so the stick behind the hub in
+  the blue socket is the machine's proof, in the next install round.
 
 * The stick on the hub when the machine boots is refused: `usb:
   device: port 1.1: it refused its configuration` at 1.95 s, 0.66 s
