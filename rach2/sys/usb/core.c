@@ -204,7 +204,6 @@ void usb_parse_config(const uint8_t *buffer, int length, struct usb_interface_in
     int in_hub_interface = 0;
 
     out->found = 0;
-    out->refused_kind = 0;
     out->kind = USB_KIND_NONE;
     out->number = 0;
     out->class_code = 0;
@@ -257,15 +256,10 @@ void usb_parse_config(const uint8_t *buffer, int length, struct usb_interface_in
                  buffer[offset + 7] == USB_PROTOCOL_BULK_ONLY);
             in_storage_interface = in_storage_interface_now;
             /* A hub: class 9 on its setting zero, with a protocol that says
-             * what translates below it. A SuperSpeed hub, protocol 3, has a
-             * port status layout of its own and is refused by name; its
-             * high-speed half is another device and is driven. */
+             * what translates below it, or that it is a SuperSpeed hub,
+             * which the hub driver drives by USB 3's rules. */
             in_hub_interface = (buffer[offset + 3] == 0 && buffer[offset + 5] == USB_CLASS_HUB &&
-                                buffer[offset + 7] <= USB_PROTOCOL_HUB_MULTI);
-            if (buffer[offset + 3] == 0 && buffer[offset + 5] == USB_CLASS_HUB &&
-                buffer[offset + 7] == USB_PROTOCOL_HUB_SUPER && !out->found) {
-                out->refused_kind = USB_PROTOCOL_HUB_SUPER;
-            }
+                                buffer[offset + 7] <= USB_PROTOCOL_HUB_SUPER);
             if ((in_boot_interface || in_storage_interface_now || in_hub_interface) &&
                 !out->found && out->kind == USB_KIND_NONE) {
                 out->kind = in_boot_interface  ? USB_KIND_HID
@@ -1007,9 +1001,7 @@ static void step_device(struct usb_device_state *d)
          * is walked only as far as it answered. */
         usb_parse_config(d->buffer, (int)(d->config_length - d->short_by), &d->interface);
         if (!d->interface.found) {
-            fail(d, d->interface.refused_kind == USB_PROTOCOL_HUB_SUPER
-                        ? "it is a SuperSpeed hub, which this kernel does not drive"
-                        : "it offers no interface this kernel can drive");
+            fail(d, "it offers no interface this kernel can drive");
             return;
         }
         {
@@ -1126,7 +1118,7 @@ static void step_device(struct usb_device_state *d)
             /* A hub has no protocol to be put into either: its class driver
              * reads its descriptor and powers its ports from here. */
             if (hub_attach((int)(d - devices), d->slot, d->interface.number, d->interface.protocol,
-                           d->ep_dci) != 0) {
+                           d->ep_dci, d->where.depth) != 0) {
                 fail(d, "this kernel drives no more hubs at once");
                 return;
             }

@@ -24,7 +24,7 @@ struct usb_completion;
  * number, `protocol` the interface's protocol byte, and `ep_dci` the change
  * endpoint's handle. Returns 0 when the hub was taken, -1 when refused.
  */
-int hub_attach(int index, int device, int interface, int protocol, int ep_dci);
+int hub_attach(int index, int device, int interface, int protocol, int ep_dci, int depth);
 
 /** Give up a hub that has gone or that the core is closing. */
 void hub_detach(int index);

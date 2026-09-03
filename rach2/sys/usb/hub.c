@@ -11,6 +11,14 @@
  * time waited, and each port's status read once so that a device already
  * plugged in when the hub arrived is found.
  *
+ * A SuperSpeed hub, protocol 3, is the same machine with the USB 3
+ * differences: its descriptor is the USB 3 one, it is told its depth in the
+ * tree before its ports are used, its port status words have no speed bits
+ * because everything below it is SuperSpeed and no translator because
+ * nothing below it is slow, and its ports report three changes USB 2 has no
+ * feature numbers for. The USB 3.0 hub in the notebook's blue socket is two
+ * devices, this one and a high-speed hub for the USB 2 devices.
+ *
  * Everything the hub is asked is a control transfer on its endpoint zero,
  * one at a time per hub, stepped from the pump. Nothing here waits.
  */
@@ -35,6 +43,8 @@
 #define REQ_SET_FEATURE     3
 #define REQ_GET_DESCRIPTOR  6
 #define DESC_HUB            0x29
+#define DESC_HUB_SS         0x2A /* the USB 3 hub descriptor */
+#define REQ_SET_HUB_DEPTH   12   /* USB 3: the hub's tier, before its ports are used */
 #define REQ_SET_INTERFACE   11
 #define TYPE_STD_INTERFACE  0x01
 
@@ -53,6 +63,9 @@
 #define C_PORT_RESET        20
 #define C_PORT_SUSPEND      18
 #define C_PORT_OVER_CURRENT 19
+#define C_PORT_LINK_STATE   25 /* USB 3 */
+#define C_PORT_CONFIG_ERROR 26 /* USB 3 */
+#define C_BH_PORT_RESET     29 /* USB 3: a warm reset completed */
 
 /* The port status word (Table 11-21). */
 #define PORT_STAT_CONNECTION   0x0001
@@ -90,6 +103,7 @@
 #define HUB_SCAN       5 /* each port's status read once */
 #define HUB_RUNNING    6
 #define HUB_SETTING    7 /* a multi-TT hub's setting selected */
+#define HUB_DEPTH      8 /* a SuperSpeed hub being told its depth */
 
 /* What a port is doing, for the core's reset. */
 #define RESET_NONE   0
@@ -113,6 +127,7 @@
 #define REQ_CHANGE_CLEAR 9 /* one port change bit acknowledged */
 #define REQ_POWER_OFF    10
 #define REQ_POWER_ON     11
+#define REQ_DEPTH        12
 
 /* The change bits as bits of the change word, and one more of this driver's
  * own for a power-off owed to an over-current. */
@@ -121,6 +136,9 @@
 #define C_PORT_SUSPEND_BIT      0x0004
 #define C_PORT_OVER_CURRENT_BIT 0x0008
 #define C_PORT_RESET_BIT        0x0010
+#define C_BH_PORT_RESET_BIT     0x0020 /* USB 3 */
+#define C_PORT_LINK_STATE_BIT   0x0040 /* USB 3 */
+#define C_PORT_CONFIG_ERROR_BIT 0x0080 /* USB 3 */
 #define POWER_OFF_BIT           0x8000
 
 struct hub_port {
@@ -149,6 +167,8 @@ struct hub {
     int lpsm;
     int think_time;
     int multi_tt;
+    int super; /* a SuperSpeed hub: the USB 3 descriptor, depth and status words */
+    int depth; /* its tier below the root port, told to a SuperSpeed hub */
     uint32_t power_good_ms;
     int wait_fresh; /* the wait was set this tick; the tick is not counted */
     uint32_t wait_ms;
@@ -247,7 +267,7 @@ static void give_up(struct hub *h, const char *why)
     usb_core_hub_failed(index, why);
 }
 
-int hub_attach(int index, int device, int interface, int protocol, int ep_dci)
+int hub_attach(int index, int device, int interface, int protocol, int ep_dci, int depth)
 {
     int i;
     struct hub *h = 0;
@@ -271,9 +291,11 @@ int hub_attach(int index, int device, int interface, int protocol, int ep_dci)
     h->protocol = protocol;
     h->ep_dci = ep_dci;
     h->multi_tt = protocol == USB_PROTOCOL_HUB_MULTI;
+    h->super = protocol == USB_PROTOCOL_HUB_SUPER;
+    h->depth = depth;
     h->state = HUB_DESCRIPTOR;
-    if (request(h, TYPE_CLASS_HUB_IN, REQ_GET_DESCRIPTOR, DESC_HUB << 8, 0, (int)sizeof(h->data),
-                REQ_DESCRIPTOR, 0) != 0) {
+    if (request(h, TYPE_CLASS_HUB_IN, REQ_GET_DESCRIPTOR, (h->super ? DESC_HUB_SS : DESC_HUB) << 8,
+                0, (int)sizeof(h->data), REQ_DESCRIPTOR, 0) != 0) {
         h->used = 0;
         klog(KLOG_WARN, "usb", "hub: device %d refused: its descriptor could not be asked for",
              device);
@@ -291,12 +313,14 @@ void hub_detach(int index)
     }
 }
 
-/** What the descriptor said; -1 when it is not a hub descriptor. */
+/** What the descriptor said; -1 when it is not the hub descriptor asked
+ * for. The USB 3 descriptor keeps the port count, the characteristics and
+ * the power-good time at the USB 2 offsets, and has no think time. */
 static int take_descriptor(struct hub *h, int length)
 {
     int ports;
 
-    if (length < 7 || h->data[1] != DESC_HUB) {
+    if (length < 7 || h->data[1] != (h->super ? DESC_HUB_SS : DESC_HUB)) {
         return -1;
     }
     ports = h->data[2];
@@ -310,7 +334,7 @@ static int take_descriptor(struct hub *h, int length)
     }
     h->ports = ports;
     h->lpsm = h->data[3] & 3;
-    h->think_time = (h->data[3] >> 5) & 3;
+    h->think_time = h->super ? 0 : (h->data[3] >> 5) & 3;
     h->power_good_ms = (uint32_t)h->data[5] * 2u;
     if (h->power_good_ms < HUB_POWER_MIN_MS) {
         h->power_good_ms = HUB_POWER_MIN_MS;
@@ -380,6 +404,19 @@ static void over_current(struct hub *h, int port)
  * over-current, found by the first scan or reported later, is answered by
  * `over_current`.
  */
+/* The change bits a port can report and this driver acknowledges: USB 2's
+ * five, or USB 3's, which drop enable and suspend and add the warm reset,
+ * the link state and the configuration error. */
+static uint16_t change_mask(const struct hub *h)
+{
+    if (h->super) {
+        return C_PORT_CONNECTION_BIT | C_PORT_OVER_CURRENT_BIT | C_PORT_RESET_BIT |
+               C_BH_PORT_RESET_BIT | C_PORT_LINK_STATE_BIT | C_PORT_CONFIG_ERROR_BIT;
+    }
+    return C_PORT_CONNECTION_BIT | C_PORT_ENABLE_BIT | C_PORT_SUSPEND_BIT | C_PORT_OVER_CURRENT_BIT |
+           C_PORT_RESET_BIT;
+}
+
 static void port_read(struct hub *h, int port)
 {
     struct hub_port *p = &h->port[port - 1];
@@ -398,8 +435,7 @@ static void port_read(struct hub *h, int port)
         /* The change bits found by the first scan are acknowledged before
          * the change endpoint is read, or the hub would report the same
          * connections a second time and each device would arrive twice. */
-        p->to_clear = change & (C_PORT_CONNECTION_BIT | C_PORT_ENABLE_BIT | C_PORT_SUSPEND_BIT |
-                                C_PORT_OVER_CURRENT_BIT | C_PORT_RESET_BIT);
+        p->to_clear = change & change_mask(h);
         if (status & PORT_STAT_OVER_CURRENT) {
             over_current(h, port);
         } else if (now) {
@@ -411,8 +447,7 @@ static void port_read(struct hub *h, int port)
         return; /* a read for a reset, which its own arm judges */
     }
     h->change_reading = 0;
-    p->to_clear = change & (C_PORT_CONNECTION_BIT | C_PORT_ENABLE_BIT | C_PORT_SUSPEND_BIT |
-                            C_PORT_OVER_CURRENT_BIT | C_PORT_RESET_BIT);
+    p->to_clear = change & change_mask(h);
     if (change & C_PORT_OVER_CURRENT_BIT) {
         if (status & PORT_STAT_OVER_CURRENT) {
             over_current(h, port);
@@ -456,6 +491,15 @@ static int clear_next(struct hub *h, int port)
     } else if (p->to_clear & C_PORT_RESET_BIT) {
         feature = C_PORT_RESET;
         p->to_clear &= (uint16_t)~C_PORT_RESET_BIT;
+    } else if (p->to_clear & C_BH_PORT_RESET_BIT) {
+        feature = C_BH_PORT_RESET;
+        p->to_clear &= (uint16_t)~C_BH_PORT_RESET_BIT;
+    } else if (p->to_clear & C_PORT_LINK_STATE_BIT) {
+        feature = C_PORT_LINK_STATE;
+        p->to_clear &= (uint16_t)~C_PORT_LINK_STATE_BIT;
+    } else if (p->to_clear & C_PORT_CONFIG_ERROR_BIT) {
+        feature = C_PORT_CONFIG_ERROR;
+        p->to_clear &= (uint16_t)~C_PORT_CONFIG_ERROR_BIT;
     } else {
         return 0;
     }
@@ -478,6 +522,17 @@ static void answered(struct hub *h, const struct usb_completion *c)
             give_up(h, "it did not give a hub descriptor");
             return;
         }
+        if (h->super) {
+            /* USB 3.0 10.14.2.8: a SuperSpeed hub must know its tier, which
+             * is how it routes packets to its ports, before any is used. */
+            if (request(h, TYPE_CLASS_HUB_OUT, REQ_SET_HUB_DEPTH, h->depth, 0, 0, REQ_DEPTH, 0) !=
+                0) {
+                give_up(h, "it could not be told its depth");
+                return;
+            }
+            h->state = HUB_DEPTH;
+            return;
+        }
         if (h->multi_tt) {
             /* One translator per port is the interface's alternate setting
              * 1; a hub that refuses it is driven with one translator. */
@@ -497,6 +552,13 @@ static void answered(struct hub *h, const struct usb_completion *c)
             klog(KLOG_INFO, "usb", "hub: device %d refused a translator per port; one is used",
                  h->device);
             h->multi_tt = 0;
+        }
+        h->state = HUB_TELL;
+        return;
+    case REQ_DEPTH:
+        if (!ok) {
+            give_up(h, "it would not take its depth");
+            return;
         }
         h->state = HUB_TELL;
         return;
@@ -807,7 +869,11 @@ int hub_port_status(int owner, int port, struct usb_port_status *out)
     out->connected = (p->status & PORT_STAT_CONNECTION) != 0 && !p->off && p->power_on_ms == 0;
     out->enabled = (p->status & PORT_STAT_ENABLE) != 0;
     out->changed = p->change != 0;
-    out->speed = (p->status & PORT_STAT_LOW_SPEED)    ? USB_SPEED_LOW
+    /* A SuperSpeed hub's ports carry SuperSpeed devices and nothing else;
+     * its status word's speed field says which SuperSpeed, which this
+     * kernel does not distinguish. */
+    out->speed = h->super                              ? USB_SPEED_SUPER
+                 : (p->status & PORT_STAT_LOW_SPEED)  ? USB_SPEED_LOW
                  : (p->status & PORT_STAT_HIGH_SPEED) ? USB_SPEED_HIGH
                                                       : USB_SPEED_FULL;
     return 0;

@@ -57,8 +57,6 @@
  *  drive, and about the endpoint it reports on. */
 struct usb_interface_info {
     int found;        /* whether such an interface was there at all */
-    int refused_kind; /* an interface this kernel names when it refuses it:
-                       * a SuperSpeed hub */
     int kind;         /* one of the `USB_KIND_` values */
     int number;       /* the interface's number, for SET_PROTOCOL and the
                        * class requests a stick's transport is made of */

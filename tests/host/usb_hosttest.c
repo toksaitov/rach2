@@ -144,12 +144,13 @@ void msc_detach(int device)
     (void)device;
 }
 
-int hub_attach(int index, int device, int interface, int protocol, int ep_dci)
+int hub_attach(int index, int device, int interface, int protocol, int ep_dci, int depth)
 {
     (void)index;
     (void)device;
     (void)interface;
     (void)protocol;
+    (void)depth;
     (void)ep_dci;
     return -1;
 }

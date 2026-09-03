@@ -178,6 +178,9 @@ static struct {
     int hub_told_think;
     int hub_told_slot;
     int hub_told;
+    int hub_depth_sets;        /* SET_HUB_DEPTH requests, a SuperSpeed hub's */
+    int hub_depth;             /* the depth the last one carried */
+    int hub_depth_before_tell; /* the depth arrived before the controller was told */
     uint32_t now_ms;
 } model;
 
@@ -420,7 +423,10 @@ static void hub_config_fill(void)
 
 static unsigned int port_status_word(int port)
 {
-    unsigned int status = model.port_powered_off[port - 1] ? 0 : 0x0100; /* powered */
+    /* USB 3 puts the power bit at 9 and has no speed bits: the speed field
+       above it says which SuperSpeed, zero for 5 Gbps. */
+    unsigned int status =
+        model.port_powered_off[port - 1] ? 0 : (model.hub_protocol == 3 ? 0x0200 : 0x0100);
 
     if (model.port_over_current[port - 1]) {
         status |= 0x0008;
@@ -430,9 +436,9 @@ static unsigned int port_status_word(int port)
         if (model.port_enabled[port - 1]) {
             status |= 0x0002;
         }
-        if (model.port_speed[port - 1] == USB_SPEED_LOW) {
+        if (model.hub_protocol != 3 && model.port_speed[port - 1] == USB_SPEED_LOW) {
             status |= 0x0200;
-        } else if (model.port_speed[port - 1] == USB_SPEED_HIGH) {
+        } else if (model.hub_protocol != 3 && model.port_speed[port - 1] == USB_SPEED_HIGH) {
             status |= 0x0400;
         }
     }
@@ -554,9 +560,43 @@ int xhci_submit(int device, int endpoint, const struct usb_transfer *transfer)
                transfer->generation);
         return 0;
     }
-    /* The hub's class requests. */
+    /* The hub's class requests. A SuperSpeed hub has the USB 3 descriptor
+       and stalls a request for the USB 2 one, as the specification's hubs
+       do; a USB 2 hub the other way round. */
+    if (setup[0] == 0xA0 && setup[1] == 6 && setup[3] == 0x2A) {
+        if (model.hub_protocol != 3 || model.hub_desc_stall) {
+            answer(device, 1, USB_XFER_STALLED, transfer->length, transfer->length,
+                   transfer->generation);
+            return 0;
+        }
+        buf[0] = 12;
+        buf[1] = 0x2A;
+        buf[2] = (unsigned char)model.hub_ports;
+        buf[3] = (unsigned char)model.hub_lpsm;
+        buf[4] = 0;
+        buf[5] = (unsigned char)model.hub_pwrgood;
+        buf[6] = 50;
+        buf[7] = 0; /* header decode latency */
+        buf[8] = 0; /* hub delay */
+        buf[9] = 0;
+        buf[10] = 0; /* removable */
+        buf[11] = 0;
+        answer(device, 1, transfer->length > 12 ? USB_XFER_SHORT : USB_XFER_OK, transfer->length,
+               transfer->length > 12 ? transfer->length - 12 : 0, transfer->generation);
+        return 0;
+    }
+    if (setup[0] == 0x20 && setup[1] == 12) { /* SET_HUB_DEPTH */
+        model.hub_depth_sets++;
+        model.hub_depth = setup[2] | (setup[3] << 8);
+        if (!model.hub_told) {
+            model.hub_depth_before_tell = 1;
+        }
+        answer(device, 1, model.hub_protocol == 3 ? USB_XFER_OK : USB_XFER_STALLED, 0, 0,
+               transfer->generation);
+        return 0;
+    }
     if (setup[0] == 0xA0 && setup[1] == 6 && setup[3] == 0x29) {
-        if (model.hub_desc_stall) {
+        if (model.hub_protocol == 3 || model.hub_desc_stall) {
             answer(device, 1, USB_XFER_STALLED, transfer->length, transfer->length,
                    transfer->generation);
             return 0;
@@ -660,6 +700,17 @@ int xhci_submit(int device, int endpoint, const struct usb_transfer *transfer)
         model.clears++;
         if (feature >= 16 && feature <= 20 && port >= 1 && port <= MODEL_PORTS) {
             model.port_change[port - 1] &= ~(1u << (feature - 16));
+        }
+        /* USB 3's three: the warm reset, the link state, the configuration
+           error, at bits 5, 6 and 7 of the change word. */
+        if (port >= 1 && port <= MODEL_PORTS) {
+            if (feature == 29) {
+                model.port_change[port - 1] &= ~(1u << 5);
+            } else if (feature == 25) {
+                model.port_change[port - 1] &= ~(1u << 6);
+            } else if (feature == 26) {
+                model.port_change[port - 1] &= ~(1u << 7);
+            }
         }
         if (feature == 8 && port >= 1 && port <= MODEL_PORTS) {
             model.power_offs++;
@@ -917,6 +968,62 @@ int main(void)
           kbd != 0 && slot_of[kbd].where.tt_device == hub && slot_of[kbd].where.tt_port == 3 &&
               slot_of[kbd].where.tt_multi == 1);
     CHECK("and a route of 3", kbd != 0 && slot_of[kbd].where.route == 0x3u);
+
+    /* A SuperSpeed hub, protocol 3, on a SuperSpeed root port: it is read
+       through the USB 3 descriptor, told its depth before the controller is
+       told it is a hub, told no translators, its ports are powered where USB
+       3 puts the power bit, a device below it is opened at SuperSpeed with
+       no translator and a route of its port, and the change bits USB 3 adds
+       are acknowledged with their own feature numbers. */
+    model_reset();
+    model.root_speed = USB_SPEED_SUPER;
+    model.hub_protocol = 3;
+    model.hub_lpsm = 1;
+    model.port_kind[1] = KIND_KBD;
+    model.port_speed[1] = USB_SPEED_SUPER;
+    pump(2000);
+    hub = slot_of_kind(KIND_HUB);
+    kbd = slot_of_kind(KIND_KBD);
+    CHECK("a SuperSpeed hub is enumerated on the root port", hub != 0);
+    CHECK("through the USB 3 hub descriptor, and told its eight ports", model.hub_told_ports == 8);
+    CHECK("it is told its depth, zero on a root port, once",
+          model.hub_depth_sets == 1 && model.hub_depth == 0);
+    CHECK("before the controller is told it is a hub", model.hub_depth_before_tell == 1);
+    CHECK("and told no translators and no think time",
+          model.hub_told_multi == 0 && model.hub_told_think == 0);
+    CHECK("its ports are powered", model.power_requests == 8);
+    CHECK("the device on port 2 is found and enumerated", kbd != 0);
+    CHECK("at SuperSpeed, from the hub's protocol and not a speed bit",
+          kbd != 0 && slot_of[kbd].opened_speed == USB_SPEED_SUPER);
+    CHECK("with no translator below a SuperSpeed hub",
+          kbd != 0 && slot_of[kbd].where.tt_device == 0 && slot_of[kbd].where.tt_port == 0);
+    CHECK("and a route of 2", kbd != 0 && slot_of[kbd].where.route == 0x2u);
+    CHECK("its port was reset through the hub and the reset change cleared",
+          model.reset_requests >= 1 && model.reset_clears >= 1);
+    model.clears = 0;
+    model.port_change[1] |= 0x40u; /* a link state change on port 2 */
+    model_change(2);
+    pump(200);
+    {
+        int i, found = 0;
+
+        for (i = 0; i < model.clears && i < 32; i++) {
+            if (model.cleared_feature[i] == 25 && model.cleared_port[i] == 2) {
+                found = 1;
+            }
+        }
+        CHECK("a link state change is acknowledged with USB 3's feature 25", found);
+    }
+    CHECK("and the device below is still running", running_count() == 2);
+
+    /* A SuperSpeed hub that will not take its depth is closed. */
+    model_reset();
+    model.root_speed = USB_SPEED_SUPER;
+    model.hub_protocol = 3;
+    model.hub_desc_stall = 1;
+    pump(2000);
+    CHECK("a SuperSpeed hub that will not give its descriptor is closed",
+          running_count() == 0 && model.hub_depth_sets == 0);
 
     /* A hub with twenty ports publishes fifteen. */
     model_reset();
