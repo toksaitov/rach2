@@ -115,16 +115,33 @@ else
     model="$(echo "$DISK" | sed -n 's/^model //p')"
 
     note "disk: state=$state policy=$policy"
-    [ "$policy" = "read-only" ] || bad "the running kernel is not the read-only build"
+    # Two kernels answer here. The stick's, milestone 25's, is built
+    # read-only because the disk under it may be somebody's Windows, and it
+    # mounts nothing from that disk. The installed one, whose boot line names
+    # its root with rach2.root=disk or rach2.root=ext2, writes that root and
+    # is built read-write; a read-only kernel there would be a system that
+    # cannot take a file.
+    if run 'cat /proc/cmdline' | grep -q 'rach2.root=\(disk\|ext2\)'; then
+        INSTALLED=1
+        [ "$policy" = "read-write" ] || bad "the installed kernel is not the read-write build"
+    else
+        INSTALLED=0
+        [ "$policy" = "read-only" ] || bad "the running kernel is not the read-only build"
+    fi
 
     # A machine with no disk reports that and stops there, which is a complete
     # answer and not a failure: this script is rehearsed against exactly such a
-    # machine. What would be a failure is a disk that is present AND mounted.
+    # machine. What would be a failure is a disk that is present AND mounted
+    # under the stick's kernel.
     if [ "$state" != "present" ]; then
         note "disk: none answered, so there is nothing further to read"
     else
         note "disk: model [$model], $sectors sectors, mounted=$mounted"
-        [ "$mounted" = "0" ] || bad "the disk is mounted, which this milestone forbids"
+        if [ "$INSTALLED" = 1 ]; then
+            note "disk: the installed system's root is on it"
+        else
+            [ "$mounted" = "0" ] || bad "the disk is mounted, which the stick's kernel forbids"
+        fi
     fi
 
     if [ "$state" = "present" ]; then
@@ -335,9 +352,12 @@ fi
 
 # ---- the ext2 root, once milestone 43 has made it: the candidate's command
 #      line names it, the mount table has it writable on the fourth partition,
-#      the boot came from the candidate slot, the boot log shows no check, and
-#      the volume takes a write that survives a sync. Before that the command
-#      line says rach2.root=disk and this is a note, not a failure. ----
+#      the boot came from the candidate slot, the boot log shows either no
+#      check or a clean one, and the volume takes a write that survives a
+#      sync. A boot after a power cut checks the root and records
+#      `ext2: check: clean`; a check that found lost blocks, orphans or a fault
+#      is the failure. Before the ext2 root the command line says
+#      rach2.root=disk and this is a note, not a failure. ----
 if run 'cat /proc/cmdline' | grep -q 'rach2.root=ext2'; then
     OUT="$(run 'cat /proc/mounts')"
     case "$OUT" in
@@ -350,7 +370,11 @@ if run 'cat /proc/cmdline' | grep -q 'rach2.root=ext2'; then
         *) bad "the ext2 root boot did not come from the candidate slot: $OUT" ;;
     esac
     if [ -s "$BOOTLOG_OUT" ] && grep -q "ext2: check" "$BOOTLOG_OUT"; then
-        bad "the ext2 root was checked at this boot; it was not unmounted the time before"
+        if grep -q "ext2: check: clean" "$BOOTLOG_OUT"; then
+            note "the ext2 root was checked at this boot and found clean; it was not unmounted the time before"
+        else
+            bad "the ext2 root's check found a fault: $(grep 'ext2: check' "$BOOTLOG_OUT" | head -1)"
+        fi
     fi
     # Read back through the same cache: that the bytes reached the disk is
     # what the procedure's reboot after a write shows, not this call.
@@ -387,31 +411,41 @@ fi
 #      gives it back after an unmount that flushed the stick's own cache. A
 #      machine with nothing plugged in is a note, not a failure. The pull from
 #      under a mount and the boot from a Rach2 stick need a person in the
-#      room and are in dev-log/40-usbdisk/hardware.md. ----
-USBLINE="$(run 'cat /proc/usb 2>/dev/null' | grep '^usb0 ' || true)"
+#      room and are in dev-log/40-usbdisk/hardware.md.
+#      The stick is whichever disk slot holds one: the kernel reclaims a slot
+#      only when its next stick is found, so the machine's first stick may be
+#      usb1 for a while. The volume is the first FAT or exFAT partition blkid
+#      finds on it; a Rach2 stick's ISO half is listed and left alone, since
+#      it is the boot half of a recovery stick and takes no file. ----
+USBLINE="$(run 'cat /proc/usb 2>/dev/null' | grep '^usb[0-9]* ' | head -1 || true)"
 if [ -z "$USBLINE" ]; then
-    note "no flash drive is plugged in (/proc/usb names no usb0)"
+    note "no flash drive is plugged in (/proc/usb names no usb disk)"
 else
     note "stick: $USBLINE"
-    case "$(run 'ls -l /dev/usb0 2>/dev/null')" in
-        b*) note "stick: /dev/usb0 is a block device" ;;
-        *)  bad "stick: /dev/usb0 is not a block device, so a label scan cannot find it" ;;
+    STICK="$(echo "$USBLINE" | awk '{print $1}')"
+    case "$(run "ls -l /dev/$STICK 2>/dev/null")" in
+        b*) note "stick: /dev/$STICK is a block device" ;;
+        *)  bad "stick: /dev/$STICK is not a block device, so a label scan cannot find it" ;;
     esac
-    run 'blkid 2>/dev/null' | grep '^/dev/usb0' | while read -r line; do note "stick: $line"; done
-    LABEL="$(run 'blkid 2>/dev/null' | grep '^/dev/usb0' | sed -n 's/.*LABEL="\([^"]*\)".*/\1/p' | head -1 || true)"
+    BLKID="$(run 'blkid 2>/dev/null' | grep "^/dev/$STICK")"
+    echo "$BLKID" | while read -r line; do note "stick: $line"; done
+    if echo "$BLKID" | grep -q 'TYPE="iso9660"'; then
+        note "stick: the ISO half of a Rach2 stick is on it and is left alone"
+    fi
+    LABEL="$(echo "$BLKID" | grep 'TYPE="\(vfat\|exfat\)"' | sed -n 's/.*LABEL="\([^"]*\)".*/\1/p' | head -1 || true)"
     # The label is the stick's own text and goes into a shell command on the
     # machine, so only a label of letters, digits, `_` and `-` is used.
     case "$LABEL" in
         *[!A-Za-z0-9_-]*) bad "stick: the label has a character this script will not put in a command: $LABEL"; LABEL="" ;;
     esac
     if [ -z "$LABEL" ]; then
-        bad "stick: no volume with a plain label was found on it"
+        bad "stick: no FAT or exFAT volume with a plain label was found on it"
     else
         before="$(echo "$USBLINE" | sed -n 's/.*flushes \([0-9]*\).*/\1/p')"
         # The unmount runs whether or not the write and the read back did, so
         # a failure leaves neither a file nor a mount behind on the stick.
         OUT="$(run "mkdir -p /mnt && mount 'LABEL=$LABEL' /mnt && { echo accept > /mnt/accept.txt && cat /mnt/accept.txt; rm -f /mnt/accept.txt; umount /mnt; }")"
-        after="$(run 'cat /proc/usb 2>/dev/null' | grep '^usb0 ' | sed -n 's/.*flushes \([0-9]*\).*/\1/p' || true)"
+        after="$(run 'cat /proc/usb 2>/dev/null' | grep "^$STICK " | sed -n 's/.*flushes \([0-9]*\).*/\1/p' || true)"
         if [ "$OUT" = "accept" ]; then
             note "stick: the volume $LABEL mounts by its label, takes a file and gives it back"
         else
