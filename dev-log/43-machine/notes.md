@@ -75,10 +75,10 @@ and recovery is no longer the saved default.
   not say which of the three checks failed. Phase 7 makes it say, and
   finds why the shortest of eight 2 ms waits measured 1361 us with MSI
   off.
-* The acceptance script's stick section reads the line of `usb0` only.
+* The acceptance script's stick section read the line of `usb0` only.
   The machine gave the data stick `usb1` when the recovery stick's slot
-  had not been reclaimed yet, and `usb0` after the slot came back. The
-  section must use the disk `blkid` found the label on.
+  had not been reclaimed yet, and `usb0` after the slot came back. Fixed
+  in phase 6: the section uses whichever slot holds the stick.
 
 * The machine's clock runs six hours ahead of UTC. The Lenovo's RTC
   holds local time, +06, as firmware set up for Windows does, and the
@@ -308,4 +308,6 @@ again.
 Noted for phase 6: the acceptance script's stick section wrote to the
 recovery stick's ISO partition and failed; the script must leave a
 recovery stick alone. The script's scratch line left `accept.txt` on
-the volume; fixed in 9b7bf52.
+the volume; fixed in 9b7bf52. Phase 6 fixed the stick section, the
+disk section's demand for the read-only kernel, and the ext2 section's
+reading of a clean check; the script passes on the machine and in QEMU.

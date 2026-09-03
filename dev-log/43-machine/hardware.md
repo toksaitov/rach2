@@ -239,3 +239,21 @@ power button until the machine was off. The next boot recorded
 read-write, and the log file had its 140 lines up to the cut. At the
 console on the ext2 root the keyboard, the mouse and Doom work as on the
 KRFFS root.
+
+## Phase 6: the acceptance script
+
+Run from the mac mini against the ext2 root with the hub in the
+right-side black socket carrying the keyboard, the mouse and the
+recovery stick. The first run failed four lines, each a fault of the
+script and not of the machine: it required milestone 25's read-only
+stick kernel of a system whose root is on the disk; it took the clean
+check after the power cut for a failure; and it took the recovery
+stick's ISO half as the volume to write, which failed the write and the
+flush count. The script now tells the installed kernel from the stick's
+by the boot line's root, accepts `ext2: check: clean` and fails any
+other check record, uses whichever disk slot holds the stick, and picks
+its first FAT or exFAT volume, leaving an ISO half alone. The second
+run passes every line on the machine, and `tests/run metal` passes the
+same script against QEMU. The first run is the proof of the three
+changed checks: each failed before its change on the case it now
+accepts.

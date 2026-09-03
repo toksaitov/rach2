@@ -1,11 +1,13 @@
-Milestone 43, phase 6: the acceptance script end to end.
-Evidence gathered: phase 5 closed; the machine runs the tree's kernel
-0e2d1d11... on the ext2 root as the saved default with the KRFFS root
-the fallback, proved by a trial, a deliberate fallback, a commit and a
-power cut; one difference recorded under "Phase 5" in notes.md. The
-stick carries the recovery image with the RACH2SAVE partition holding
-the saved copies.
-Next action: fix the script's disk section for the installed system,
-its choice of the stick's volume, and its use of the first disk slot;
-rehearse with tests/run metal; run it against the machine.
+Milestone 43, phase 7: the differences.
+Evidence gathered: phases 1 to 6 closed; the acceptance script passes on
+the machine and in QEMU; the machine runs the tree's kernel on the ext2
+root with the hub, the keyboard, the mouse and the recovery stick on it.
+Open differences, in notes.md under Phases 1 to 5 and Open: the frame
+exhaustion under the lag; the stick under nomsi; the clock self-test;
+the RTC's zone; root's key after the stick boot; the FAT32 write rate;
+the large IWAD; the SuperSpeed hub; the stick on the hub at boot; the
+recovery partition without e2fsck.
+Next action: take the differences one at a time, each in its subsystem
+with a row, its suites, and a machine rerun; the SuperSpeed hub last
+since it is the largest.
 File being read when written: none.
