@@ -1051,6 +1051,13 @@ run-fatwrite: $(DEMO_CREDS) rach2 tests krffs os-real-image $(MKFATFIXTURE) $(HA
 	sh tests/system/suites/fatwrite.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(FATWRITE_DISK) \
 	    $(OS_REAL_IMAGE) "`cat krffs/rach2_demo_password`" $(MKFATFIXTURE)
 
+# `tests/run krffsmount`: a KRFFS volume placed by mount(2), read through to
+# its last byte and unmounted, and the three volumes the kernel refuses.
+KRFFSMOUNT_DISK = $(IMAGES_DIR)/krffsmount-test.disk
+run-krffsmount: rach2 tests krffs test-image $(HARNESS) build/tools/image/mkmbr
+	sh tests/system/suites/krffsmount.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) \
+	    $(KRFFSMOUNT_DISK)
+
 # `tests/run ext2`: the ext2 driver booted over a fixture disk the host's
 # mke2fs wrote, with the walker's link rows on the mounted volume.
 EXT2_DISK = $(IMAGES_DIR)/ext2-test.disk

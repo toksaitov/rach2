@@ -1,0 +1,8 @@
+# The volume `tests/run krffsmount` mounts: a file whose bytes follow a rule,
+# a name inside a directory, and nothing else. The suite writes these three
+# host files before it builds the image, so what the guest reads back is what
+# the suite can compute.
+file 0644 /pattern.bin build/tests/system/krffsvol/pattern.bin
+file 0644 /hello.txt   build/tests/system/krffsvol/hello.txt
+dir 0755 /sub
+file 0644 /sub/inner.txt build/tests/system/krffsvol/inner.txt

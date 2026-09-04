@@ -102,6 +102,12 @@ manifest disk-test
 sentinel /blockprobe 0755:0:0
 init none
 
+# The volume `tests/run krffsmount` mounts: three data files and no program,
+# so it stages no set-id node and has no init to run.
+manifest krffsvol-test
+sentinel /pattern.bin 0644:0:0
+init none
+
 manifest persist-test
 sentinel /persistprobe 0755:0:0
 init none
