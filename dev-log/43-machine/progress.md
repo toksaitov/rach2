@@ -47,4 +47,5 @@ Phase 8: the machine's own build
 
 Phase 9: the record and the sweep
 - [x] the full test set (two pool failures pass alone); the milestone Readme; the review of the documents, ten findings fixed or recorded
-- [ ] the acceptance script read for lines that prove what another proves; the dev-log entry made final; the machine's root rewritten once more so it carries the line fix
+- [x] the machine's root rewritten from the final tree and its own build installed and committed; the acceptance script passes
+- [x] the acceptance script read: its sections each prove one thing, and the scratch section is a note on the ext2 root; the dev-log entry made final

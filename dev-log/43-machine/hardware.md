@@ -321,3 +321,13 @@ kernel it built.
 `metal_accept.sh` against the final machine, the kernel it built on the
 root written from the current tree, with the hub, the keyboard, the
 mouse and the stick in the blue socket: every line passes.
+
+The root rewritten once more from the tree at 204409e, `9c20cabd...`,
+with the owner's approval, read back with that hash and `e2fsck` clean;
+the machine built its kernel again from that root's `/src`, 688796
+bytes, `77b78018...`, installed through `bootctl kernel`, trial-booted
+with the eleven self-tests passing and the five USB devices up, and
+committed. The acceptance script passes against it. This is the
+machine the milestone leaves: the ext2 root of the final tree, the
+kernel the machine built from that tree, the KRFFS root as the
+fallback, the recovery partition with `e2fsck`.

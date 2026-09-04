@@ -49,12 +49,13 @@ test-account su session; the RTC set to UTC by the owner; the shareware
 WAD put back as /doom1.wad on the machine (the machine's /bin/doom is
 the multi-track build, ahead of the ext2 image the tree last wrote).
 Phase 8 is closed: the machine runs the kernel it built itself,
-`8ed3c0f8...`, from the root rewritten from the current tree. Then
-phase 9, nearly closed: the acceptance script passes on the final
-machine; `tests/run all` passed 67 suites with two pool failures that
-pass alone; the milestone Readme is written; the review of the
-documents returned ten findings, fixed or recorded in notes.md. Left:
-the acceptance script read for lines that prove what another proves,
-the `dev-log/Readme.md` entry made final, and one more root rewrite so
-the machine's own build carries the line-path fix of the review.
+`8ed3c0f8...`, from the root rewritten from the current tree. Phase 9 is closed except for what the owner holds: the machine runs its
+own build of the final tree, `77b78018...`, on the ext2 root
+`9c20cabd...`; the full set, the acceptance script and the documents'
+review are done and recorded. Open with the owner: the BIOS clock to
+UTC; the SSH key refused after a metal-stick boot, which needs a stick
+rewritten as the metal stick and a boot from it; the panic at a pull
+of a silent stick, awaiting its record. Open for a later session: a
+host row for the Doom port's multi-track player; the runner building
+one image from two pooled suites.
 File being read when written: none.
