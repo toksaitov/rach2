@@ -1353,7 +1353,7 @@ int xhci_events(void)
 
     port_scan();
 
-    if (taken != 0 || msi_on) {
+    if (taken != 0 || msi_on || line_on) {
         /*
          * Tell the controller how far this driver has read, and that it may
          * raise the next event.

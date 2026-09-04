@@ -1923,6 +1923,10 @@ int main(void)
     CHECK("the acknowledgement clears the pending bit", (reg[M_IMAN] & M_IMAN_IP) == 0);
     CHECK("and the event bit", (reg[OP(O_USBSTS)] & M_USBSTS_EINT) == 0);
     CHECK("and leaves the enable set", (reg[M_IMAN] & M_IMAN_IE) != 0);
+    CHECK("the drain takes the event", xhci_events() == 1);
+    reg[M_ERDP] = 0;
+    CHECK("an empty drain on the line still writes the dequeue pointer with the busy bit",
+          xhci_events() == 0 && (reg[M_ERDP] & M_ERDP_EHB) != 0);
     xhci_interrupts_disable();
     CHECK("stopped, the controller is off its line", xhci_interrupts_on() == 0);
     CHECK("with the interrupter's enable clear", (reg[M_IMAN] & M_IMAN_IE) == 0);
