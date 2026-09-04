@@ -35,12 +35,15 @@
 
 struct loop_device {
     block_device_t dev; /* first: a device pointer is a loop pointer */
-    int used;
+    int used;           /* the slot is taken, whether or not it is attached */
+    int attached;       /* the file is open and the device can be reached */
     int index;
     struct vfs_mount *mnt;
     void *node;
     void *handle;
     int writable;
+    int in_flight;   /* transfers inside the file system holding the file */
+    int release_due; /* the medium went while one was: the last one lets go */
     char path[LOOP_PATH_MAX]; /* what it was called when it was attached */
 };
 
@@ -51,6 +54,9 @@ static struct loop_device *loop_of(block_device_t *device)
     return (struct loop_device *)device;
 }
 
+static void loop_release(struct loop_device *loop);
+static void loop_transfer_ended(struct loop_device *loop);
+
 /**
  * A transfer of whole sectors, through the file system holding the file.
  *
@@ -58,16 +64,37 @@ static struct loop_device *loop_of(block_device_t *device)
  * at the attachment and nothing may change it while it is attached, so a read
  * or a write that does not move every byte means the file is not what it was.
  */
+/**
+ * Whether a transfer of `count` sectors at `lba` is one this device has.
+ *
+ * The block layer bounds every request before it calls a device, and this
+ * asks the same of what arrives: a device that trusted its caller would read
+ * or write past the end of the file it stands on, and a count that wrapped
+ * the byte arithmetic would move nothing and report success.
+ */
+static int loop_bounded(struct loop_device *loop, uint64_t lba, uint32_t count)
+{
+    if (count == 0 || count > 0x7FFFFFu) {
+        return 0;
+    }
+    if (lba >= loop->dev.sector_count || count > loop->dev.sector_count - lba) {
+        return 0;
+    }
+    return 1;
+}
+
 static int loop_read(block_device_t *device, uint64_t lba, uint32_t count, void *buffer)
 {
     struct loop_device *loop = loop_of(device);
     uint32_t bytes = count * BLOCK_SECTOR_SIZE;
     int32_t got;
 
-    if (!loop->used) {
+    if (!loop->attached || !loop_bounded(loop, lba, count)) {
         return -EIO;
     }
+    loop->in_flight++;
     got = vfs_read(loop->mnt, loop->handle, buffer, bytes, lba * BLOCK_SECTOR_SIZE);
+    loop_transfer_ended(loop);
     if (got < 0 || (uint32_t)got != bytes) {
         klog(KLOG_WARN, "loop", "read: loop%d: sector %d: short by %d",
              loop->index, (int)lba, (int)(bytes - (got < 0 ? 0 : (uint32_t)got)));
@@ -82,36 +109,43 @@ static int loop_write(block_device_t *device, uint64_t lba, uint32_t count, cons
     uint32_t bytes = count * BLOCK_SECTOR_SIZE;
     int32_t wrote;
 
-    if (!loop->used) {
+    if (!loop->attached || !loop_bounded(loop, lba, count)) {
         return -EIO;
     }
     if (!loop->writable) {
         return -EROFS;
     }
+    loop->in_flight++;
     wrote = vfs_write(loop->mnt, loop->handle, buffer, bytes, lba * BLOCK_SECTOR_SIZE);
+    if (wrote >= 0 && (uint32_t)wrote == bytes && vfs_fsync(loop->mnt, loop->handle) != 0) {
+        loop_transfer_ended(loop);
+        return -EIO;
+    }
+    loop_transfer_ended(loop);
     if (wrote < 0 || (uint32_t)wrote != bytes) {
         klog(KLOG_WARN, "loop", "write: loop%d: sector %d: short by %d",
              loop->index, (int)lba, (int)(bytes - (wrote < 0 ? 0 : (uint32_t)wrote)));
         return -EIO;
     }
     /* The cache's promise is that a written block has reached the device, and
-     * this device is a file: the sync is the half of the write that makes
-     * that true. */
-    if (vfs_fsync(loop->mnt, loop->handle) != 0) {
-        return -EIO;
-    }
+     * this device is a file: the sync above is the half of the write that
+     * makes that true. */
     return 0;
 }
 
 static int loop_flush(block_device_t *device, struct block_request *request)
 {
     struct loop_device *loop = loop_of(device);
+    int rc;
 
     (void)request;
-    if (!loop->used) {
+    if (!loop->attached) {
         return -EIO;
     }
-    return vfs_fsync(loop->mnt, loop->handle) == 0 ? 0 : -EIO;
+    loop->in_flight++;
+    rc = vfs_fsync(loop->mnt, loop->handle);
+    loop_transfer_ended(loop);
+    return rc == 0 ? 0 : -EIO;
 }
 
 block_device_t *loop_device_at(int index)
@@ -127,7 +161,7 @@ int loop_backs(struct vfs_mount *mnt, void *node)
     int i;
 
     for (i = 0; i < LOOP_DEVICES; i++) {
-        if (loops[i].used && loops[i].mnt == mnt && loops[i].node == node) {
+        if (loops[i].mnt == mnt && loops[i].node == node) {
             return 1;
         }
     }
@@ -139,7 +173,7 @@ int loop_holds_mount(struct vfs_mount *mnt)
     int i;
 
     for (i = 0; i < LOOP_DEVICES; i++) {
-        if (loops[i].used && loops[i].mnt == mnt) {
+        if (loops[i].mnt == mnt) {
             return 1;
         }
     }
@@ -150,6 +184,10 @@ int loop_holds_mount(struct vfs_mount *mnt)
  * Let go of everything the attachment holds. The buffers go first: a device
  * whose file is released while the cache still has its blocks would write
  * them into a file nobody holds open.
+ *
+ * Never called while a transfer is inside the file system holding the file:
+ * the caller checks, and a medium that goes during one leaves the release to
+ * the transfer on its way out.
  */
 static void loop_release(struct loop_device *loop)
 {
@@ -157,7 +195,9 @@ static void loop_release(struct loop_device *loop)
     void *node = loop->node;
     void *handle = loop->handle;
 
+    loop->attached = 0;
     loop->used = 0;
+    loop->release_due = 0;
     loop->mnt = 0;
     loop->node = 0;
     loop->handle = 0;
@@ -165,6 +205,16 @@ static void loop_release(struct loop_device *loop)
     bcache_invalidate(&loop->dev);
     if (mnt) {
         vfs_desc_close(mnt, node, handle);
+    }
+}
+
+/**
+ * The end of one transfer, and the release the medium's going left owing.
+ */
+static void loop_transfer_ended(struct loop_device *loop)
+{
+    if (--loop->in_flight == 0 && loop->release_due) {
+        loop_release(loop);
     }
 }
 
@@ -178,15 +228,22 @@ void loop_device_gone(block_device_t *device)
         }
         /* Nothing can reach the file again, so the device goes with it and
          * the mount above it can be taken down: an unmount of a device that
-         * has gone writes nothing and only lets go of what it holds. */
+         * has gone writes nothing and only lets go of what it holds. What
+         * this attachment holds goes back the same way, since the volume
+         * holding the file cannot be unmounted while a description of it is
+         * outstanding. */
         klog(KLOG_WARN, "loop", "loop%d: the device under its file has gone", i);
         loops[i].dev.flags |= BLOCK_GONE;
+        loops[i].attached = 0; /* nothing new reaches the file from here */
         bcache_device_gone(&loops[i].dev);
-        loops[i].used = 0;
-        loops[i].mnt = 0;
-        loops[i].node = 0;
-        loops[i].handle = 0;
-        loops[i].path[0] = '\0';
+        if (loops[i].in_flight > 0) {
+            /* A transfer is inside the file system holding the file: it
+             * cannot have its mount taken from under it, so the last one out
+             * lets go of what the attachment holds. */
+            loops[i].release_due = 1;
+            continue;
+        }
+        loop_release(&loops[i]);
     }
 }
 
@@ -264,37 +321,63 @@ int loop_attach(int index, const char *path, int writable)
     if (loop->used) {
         return -EBUSY;
     }
+    /* Claimed before the steps below, every one of which can sleep: a second
+     * attach that found this slot free would publish over this one, and what
+     * the first had opened would have nobody left to release it. */
+    loop->used = 1;
+    loop->attached = 0;
+    loop->in_flight = 0;
+    loop->release_due = 0;
+    loop->mnt = 0;
+    loop->node = 0;
+    loop->handle = 0;
 
     rc = vfs_resolve(0, path, 0, &ref, 0, 0);
     if (rc != 0) {
+        loop->used = 0;
         return rc;
     }
     rc = vfs_getattr(ref.mnt, ref.node, &st);
     if (rc != 0) {
         vfs_ref_release(&ref);
+        loop->used = 0;
         return rc;
     }
     if ((st.mode & 0170000u) != 0100000u) {
         vfs_ref_release(&ref);
+        loop->used = 0;
         return -EINVAL; /* only a regular file is an image */
     }
     if (st.size == 0 || st.size % BLOCK_SECTOR_SIZE != 0) {
         vfs_ref_release(&ref);
+        loop->used = 0;
         return -EINVAL; /* whole sectors, or the last one is a lie */
     }
     if (loop_backs(ref.mnt, ref.node)) {
         vfs_ref_release(&ref);
+        loop->used = 0;
         return -EBUSY; /* one file, one device, whatever it is called */
     }
     if (block_depth(ref.mnt->dev) + 1 > BLOCK_MAX_DEPTH) {
         vfs_ref_release(&ref);
+        loop->used = 0;
         return -ELOOP; /* deeper than the four buffers a process may hold */
     }
 
     rc = vfs_open_node(ref.mnt, ref.node, writable ? 2 : 0, &handle);
     if (rc != 0) {
         vfs_ref_release(&ref);
+        loop->used = 0;
         return rc;
+    }
+    /* The open could sleep, and another attach could have taken this file in
+     * the meantime; the publication below is what makes it this device's, and
+     * nothing sleeps between here and it. */
+    if (loop_backs(ref.mnt, ref.node)) {
+        vfs_release(ref.mnt, handle);
+        vfs_ref_release(&ref);
+        loop->used = 0;
+        return -EBUSY;
     }
 
     /* The description keeps the mount, so unmounting the volume holding the
@@ -311,6 +394,7 @@ int loop_attach(int index, const char *path, int writable)
     loop->writable = writable ? 1 : 0;
     k_strncpy(loop->path, path, sizeof(loop->path));
     loop->path[sizeof(loop->path) - 1] = '\0';
+    loop->attached = 1;
 
     loop->dev.sector_size = BLOCK_SECTOR_SIZE;
     loop->dev.sector_count = st.size / BLOCK_SECTOR_SIZE;
@@ -322,7 +406,6 @@ int loop_attach(int index, const char *path, int writable)
     loop->dev.flush = loop_flush;
     loop->dev.backing = ref.mnt->dev;
     loop->dev.drvdata = loop;
-    loop->used = 1;
 
     /* The resolver's hold on the node is the attachment's; released at the
      * detach through the description. */
@@ -339,7 +422,7 @@ int loop_detach(int index)
         return -EINVAL;
     }
     loop = &loops[index];
-    if (!loop->used) {
+    if (!loop->used || !loop->attached) {
         return -ENOENT;
     }
     if (vfs_device_holds(&loop->dev)) {
@@ -347,6 +430,9 @@ int loop_detach(int index)
     }
     if (bcache_device_holds(&loop->dev)) {
         return -EBUSY; /* a buffer of it is held */
+    }
+    if (loop->in_flight > 0) {
+        return -EBUSY; /* a transfer is inside the file system holding it */
     }
     if (bcache_sync(&loop->dev) != 0) {
         return -EIO;
@@ -357,6 +443,36 @@ int loop_detach(int index)
     klog(KLOG_INFO, "loop", "loop%d: detached", index);
     loop_release(loop);
     return 0;
+}
+
+/**
+ * The device number at `*at`, and `*at` moved past it.
+ *
+ * A number and nothing else: no digits, a digit beyond the devices there are,
+ * or anything but a space after it, and the command is not one.
+ */
+static int read_index(char **at)
+{
+    char *p = *at;
+    int index = 0;
+    int digits = 0;
+
+    while (*p >= '0' && *p <= '9') {
+        if (index > LOOP_DEVICES) {
+            return -1;
+        }
+        index = index * 10 + (*p - '0');
+        digits++;
+        p++;
+    }
+    /* The one place a device number is read: no digits, a number beyond the
+     * devices there are, or anything but the end of the word after it, and
+     * the command is not one. */
+    if (digits == 0 || index >= LOOP_DEVICES || (*p != ' ' && *p != '\0')) {
+        return -1;
+    }
+    *at = p;
+    return index;
 }
 
 /** Whether `line` begins with `word`. */
@@ -404,21 +520,25 @@ int loop_control_write(const char *buffer, uint32_t count)
     if (word_is(word, "attach ")) {
         char *arg = word + 7;
         char *path;
+        int writable = 1;
 
         while (*arg == ' ') {
             arg++;
         }
-        if (*arg == '\0') {
-            return -EINVAL;
-        }
-        if (*arg != '-') {
-            index = 0;
-            while (*arg >= '0' && *arg <= '9') {
-                index = index * 10 + (*arg - '0');
+        if (word_is(arg, "ro ")) {
+            writable = 0;
+            arg += 3;
+            while (*arg == ' ') {
                 arg++;
             }
-        } else {
+        }
+        if (*arg == '-' && arg[1] == ' ') {
             arg++;
+        } else {
+            index = read_index(&arg);
+            if (index < 0) {
+                return -EINVAL;
+            }
         }
         while (*arg == ' ') {
             arg++;
@@ -427,7 +547,7 @@ int loop_control_write(const char *buffer, uint32_t count)
         if (*path != '/') {
             return -EINVAL; /* an absolute path, since the device has no cwd */
         }
-        return loop_attach(index, path, 1);
+        return loop_attach(index, path, writable);
     }
     if (word_is(word, "detach ")) {
         char *arg = word + 7;
@@ -435,10 +555,9 @@ int loop_control_write(const char *buffer, uint32_t count)
         while (*arg == ' ') {
             arg++;
         }
-        index = 0;
-        while (*arg >= '0' && *arg <= '9') {
-            index = index * 10 + (*arg - '0');
-            arg++;
+        index = read_index(&arg);
+        if (index < 0) {
+            return -EINVAL;
         }
         return loop_detach(index);
     }

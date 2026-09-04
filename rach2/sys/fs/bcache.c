@@ -100,6 +100,7 @@ static void check_hold_rules(block_device_t *dev, uint64_t blk)
 static int victim_may_be_written(block_device_t *victim)
 {
     int pid = caller_pid();
+    int held = 0;
     int i;
 
     if (!victim || !victim->backing) {
@@ -109,11 +110,16 @@ static int victim_may_be_written(block_device_t *victim)
         if (bufs[i].holder != pid || !bufs[i].dev) {
             continue;
         }
+        held++;
         if (bufs[i].dev != victim && !block_is_below(victim->backing, bufs[i].dev)) {
             return 0;
         }
     }
-    return 1;
+    /* Room for two more: the victim, held for the write, and the block the
+     * write takes on the device under it. A caller with less room than that
+     * is given another victim rather than a machine that stops on the fifth
+     * buffer. */
+    return held + 2 <= BCACHE_HOLD_MAX;
 }
 
 static int busy_gone(void *arg)
@@ -332,9 +338,14 @@ int bcache_sync(block_device_t *dev)
         }
         /* A held dirty buffer is waited for, not passed over: a sync that
          * returned over one would report clean what is still in flight. */
-        if (next->holder != -1) {
+        if (next->holder != -1 && next->holder != caller_pid()) {
             wq_wait_event_nointr(&next->wq, busy_gone, next);
             continue;
+        }
+        if (next->holder == caller_pid()) {
+            /* Waiting below would be waiting for ourselves: a sync is called
+             * with nothing of the device held. */
+            k_panic("bcache: hold rule: a sync while holding a block of the device");
         }
         if (!victim_may_be_written(next->dev)) {
             /* A sync is called with nothing else held; one that is not would

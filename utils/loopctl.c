@@ -2,9 +2,10 @@
  * loopctl: attach a file to a loop device, detach one, or list them.
  *
  * `loopctl attach FILE` takes the first free device, `loopctl attach N FILE`
- * takes that one, and `loopctl detach N` gives it back. With no arguments it
- * prints what /proc/loop says: the device, its size in bytes, whether it
- * takes writes, and the file it was attached by.
+ * takes that one, `loopctl attach -r [N] FILE` takes one that will not write,
+ * and `loopctl detach N` gives it back. With no arguments it prints what
+ * /proc/loop says: the device, its size in bytes, whether it takes writes,
+ * and the file it was attached by.
  *
  * The kernel is spoken to through /dev/loop-control, one command per write,
  * which is what a shell can send and what a program of this size can afford.
@@ -64,18 +65,27 @@ int main(int argc, char **argv)
     if (argc == 1) {
         return list();
     }
-    if (argc == 3 && strcmp(argv[1], "attach") == 0) {
-        snprintf(line, sizeof(line), "attach - %s", argv[2]);
-        return command(line);
-    }
-    if (argc == 4 && strcmp(argv[1], "attach") == 0) {
-        snprintf(line, sizeof(line), "attach %s %s", argv[2], argv[3]);
-        return command(line);
+    if (argc >= 3 && strcmp(argv[1], "attach") == 0) {
+        const char *ro = "";
+        int at = 2;
+
+        if (strcmp(argv[2], "-r") == 0) {
+            ro = "ro ";
+            at = 3;
+        }
+        if (argc == at + 1) {
+            snprintf(line, sizeof(line), "attach %s- %s", ro, argv[at]);
+            return command(line);
+        }
+        if (argc == at + 2) {
+            snprintf(line, sizeof(line), "attach %s%s %s", ro, argv[at], argv[at + 1]);
+            return command(line);
+        }
     }
     if (argc == 3 && strcmp(argv[1], "detach") == 0) {
         snprintf(line, sizeof(line), "detach %s", argv[2]);
         return command(line);
     }
-    fputs("usage: loopctl [attach [N] FILE | detach N]\n", stderr);
+    fputs("usage: loopctl [attach [-r] [N] FILE | detach N]\n", stderr);
     return 2;
 }

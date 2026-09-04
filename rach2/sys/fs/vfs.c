@@ -1574,6 +1574,14 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
         vfs_ref_release(&tref);
         return rc;
     }
+    /* A medium that refuses writes makes every mount of it read-only,
+     * whatever the caller asked for: a write-protected stick, or a loop
+     * device attached to be read and not written. The types are told through
+     * the flags, which is the one place that has to know. */
+    if (dev->flags & BLOCK_READ_ONLY) {
+        flags |= VFS_MS_RDONLY;
+    }
+
     /* A source with no disk under it, which is what a loop device is: the
      * device itself is the identity a second mount collides with, and the
      * table below refuses that on its own. */
