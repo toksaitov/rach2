@@ -435,9 +435,14 @@ else
     mkdir -p "$TREE"
     printf 'hello from inside an image' > "$TREE/hello.txt"
     dd if=/dev/zero of="$TREE/inner.bin" bs=512 count=8 2>/dev/null
-    if sh "$REPO/krffs/mkimage.sh" "$REPO/krffs/manifests/loopimg-test.manifest" \
-        "$IMG" 4 >/dev/null 2>&1; then
-        put "$IMG" /root/loop.img
+    if ! sh "$REPO/krffs/mkimage.sh" "$REPO/krffs/manifests/loopimg-test.manifest" \
+        "$IMG" 1 >/dev/null 2>&1; then
+        note "the image could not be built here; no image row"
+    elif ! put "$IMG" /root/loop.img ||
+        [ "$(run 'wc -c < /root/loop.img')" != "1048576" ]; then
+        run 'rm -f /root/loop.img'
+        note "the root has no room for a 1 MiB image; no image row"
+    else
         OUT="$(run 'loopctl attach 0 /root/loop.img && grep -c "^loop0 " /proc/loop')"
         if [ "$OUT" = "1" ]; then
             note "an image on the root is attached to /dev/loop0"
@@ -476,8 +481,6 @@ else
             bad "the file the machine wrote is not in the image"
         fi
         run 'rm -f /root/loop.img'
-    else
-        note "the image could not be built here; no image row"
     fi
 fi
 

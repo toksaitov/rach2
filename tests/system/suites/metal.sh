@@ -261,12 +261,17 @@ echo "metal-test: the machine handed over its own boot log, from the first line:
 # The acceptance script itself, rehearsed here so it is not being debugged on
 # the laptop. Its baseline comparisons are against a drive this machine does
 # not have, which it reports, not fails on.
-ACCEPT="$(sh "$REPO/tests/system/accept/metal_accept.sh" 127.0.0.1 "$PORT" 2>&1)"
+ACCEPT="$(sh "$REPO/tests/system/accept/metal_accept.sh" 127.0.0.1 "$PORT" 2>&1)" || true
 if ! echo "$ACCEPT" | grep -q '^metal-accept: PASS'; then
-    echo "$ACCEPT" | grep 'FAIL' >&2
+    echo "$ACCEPT" | tail -20 >&2
     fail "the acceptance script did not pass against the rehearsal machine"
 fi
 echo "metal-test: the acceptance script runs clean against the rehearsal machine: OK"
+if echo "$ACCEPT" | grep -q 'the file system in that file mounts and reads'; then
+    echo "metal-test: and its image row attached a file, mounted it and read it: OK"
+else
+    fail "the acceptance script's image row did not run against the rehearsal machine"
+fi
 if echo "$ACCEPT" | grep -q 'stick: the volume ACCEPT mounts by its label'; then
     echo "metal-test: and its stick section found the stick, wrote it and flushed it: OK"
 else
