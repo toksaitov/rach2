@@ -83,3 +83,56 @@ returned seven findings. All are fixed:
 The unit also said what it found sound: the bounds arithmetic, that every ring
 walk is capped, that both published states of the grow are sound, and that
 fsck defers its repairs until after its structural walk.
+
+## The Codex review at the phase 4 boundary
+
+One unit, six files (`krffsmount.c`, `krffs.c`, `krffs.Readme.md`,
+`krffs_hosttest.c`, `krffsprobe.c`, `krffsmount.sh`), read-only, on tree
+46fa9f2. It returned eleven findings, three of them states a stop could leave
+that no repair could undo. All are fixed:
+
+1. A move published the new node's length and its type with nothing between
+   them, and freed the old node without the new one being on the medium. A
+   stop could leave the file at length zero, or gone. A node is now published
+   only once everything it is made of is on the medium, and the allocation
+   syncs after the type that publishes it, which is what the removal that
+   follows rests on.
+2. A grow of less than a header wrote the tail's header before the enlarged
+   size was on the medium, and that header lands where the free node's own
+   header was. A stop could leave a node the walk cannot cross. The enlarged
+   size is synced first.
+3. A create published a node as reserved before its name, and a freed node
+   keeps the name it had, so a stop could bring a removed file back. An empty
+   name is written before the type now, and the real name last, after the
+   directory, the mode and the owner are on the medium.
+4. A write and a truncate ignored a failure of the length they publish, and
+   answered success over it. Both check it.
+5. The namespace operations ignored what the backend answered. A removal now
+   answers, and create, mkdir and rename check every write.
+6. A truncate that moved a node and then failed left every holder naming free
+   space, and reported a full disk for an I/O error. The core answers where
+   the node is whatever happened, the mount repoints from that, and the two
+   errors are told apart.
+7. A volume had no bookkeeping for open files: unlink freed the node under a
+   reader. A volume now keeps sixteen open files, a name removed under a
+   reader takes the name and leaves the node, and the last close frees it,
+   which is what the root does.
+8. `sync` did not take the mount's lock. It does.
+9. The host rows modelled a cache by losing one write; a cache loses whole
+   blocks. They now do both: every block written since the last sync, lost
+   whole, and every single write, which is stricter than a cache and is the
+   order between fields this file system keeps. The sync rule was off by one
+   and hid the states a missing sync produces.
+10. The refusal rows judged only the shape of the image. They now refuse
+    syncs as well as writes, cover every call of each operation, and require
+    that no name reaches a node that is not finished.
+11. The crash row printed its token before writing anything, so the machine
+    was killed inside a mount; it now writes first. The row that proves the
+    repair is the volume broken on purpose, whose counts are exact. Three
+    claims in the Readme did not match the code and are rewritten.
+
+Each fix was proved by putting it back the way it was and watching a row fail,
+except the two that the review found to be already covered elsewhere: the sync
+before a removal (the allocation's own sync covers it, and the redundant one
+was taken out) and the read-only flag on a writable mount (which phase 4
+replaced).

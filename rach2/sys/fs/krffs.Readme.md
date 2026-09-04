@@ -20,9 +20,11 @@ A writable mount of a volume whose bit is set repairs it before it publishes the
 
 ## What a mount requires
 
-Before an image is used the whole ring is walked, and it is refused unless every node has the magic number and a known type, unless every node's size is at least a header and stays inside the region, unless every node's data fits between its header and its end, unless every reserved node's name ends within its field, unless every node's backward link is the size of the node before it and the root's is the size of the last, and unless the walk returns to the root.
+Before an image is used the whole ring is walked, and it is refused unless every node has the magic number and a known type, unless every node's size is at least a header and stays inside the region, unless every node's data fits between its header and its end, unless every reserved node's name ends within its field, and unless the walk returns to the root, having covered it exactly.
 
-The backward link is the one derived thing in that list: the forward chain already says what it must be. The kernel checks it and refuses an image that fails it, because a disagreement means something wrote the image without keeping the format's rules and the kernel has no repair pass of its own. `fsck.krffs` on the host rebuilds it from the forward chain, which is what makes it repairable rather than fatal.
+The backward links are asked for on top of that, of a mount that will write: a writable mount repairs them first, and then requires them. A mount that only reads asks nothing of them, since nothing it does follows one, which is what lets a volume a machine stopped inside be read before it is repaired.
+
+The backward link is the one derived thing in that list: the forward chain already says what it must be, so a disagreement is repaired from the walk rather than refused. The kernel does that at a writable mount of a volume that was not unmounted cleanly; `fsck.krffs` does it on the host, at any time, to any image.
 
 ## The order of writes
 
@@ -36,11 +38,11 @@ The backward link comes last and may lag. Every operation that changes a size re
 
 The operations in those terms:
 
-* Create. Split the free node, write the header's fields into it, then store the type, which publishes the node, and write the name after that. Between the two the node is reserved with no name, which is a node no path reaches; the check reclaims one left there by a stop.
+* Create. Split the free node, write the file's fields into it with an empty name, and store the type, which makes it a node. Then write the directory it belongs to, the mode and the owner, and last, once those are on the medium, the name, which is what a path can reach. A stop before the name leaves a node no path reaches, and the check reclaims it; a stop after it leaves a file that is finished. The empty name written before the type matters: a free node keeps whatever name it had when it was freed, and publishing that would bring a removed file back.
 * Write past the end. Take the whole free node after it with one size, and split the surplus back off with a second: the tail's header is written into space the node already covers, and the size that shortens the node is what reveals it. Then write the caller's bytes, then store `data_size`. Writing that header before the free node is taken would land on the free node's own header whenever the growth is shorter than a header, and leave a torn node in the ring. The growth changes what the node can hold; the length changes only when the bytes are there.
 * Truncate. Store the shorter `data_size` first, since the bytes beyond it stay inside the node, then write the surplus's free header and store the shortened size. A surplus too small to hold a header of its own stays in the node, where a later shrink or a removal reclaims it.
 * Remove. Store the type as free, then merge with a free successor by one size, then with a free predecessor by one size.
-* Move. A file that grows with no room after it is copied into a node taken elsewhere and the old node is then freed. The copy is published under the file's name before the old node goes, so a stop between the two leaves one name on two nodes. The check resolves it: a move only ever makes a node larger, so the larger of the two is the copy the move was making, and the smaller loses its name.
+* Move. A file that grows with no room after it is copied into a node taken elsewhere, and the old node is then freed. The copy, its length and its name are all on the medium before the type that publishes it, and that type is on the medium before the old node is freed, so a stop leaves the file whole in one node or whole in two. Two is one name on two nodes, which the check resolves: a move only ever makes a node larger, so the larger of the two is the copy the move was making, and the smaller loses its name.
 * Rename. The name, the identifier and the parent are three fields, and a stop can leave a name half written. The file stays reachable under whatever name the medium has; nothing else is damaged, and the check has nothing to repair.
 
 ## What a stop can leave, and what the check does
