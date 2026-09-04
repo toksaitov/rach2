@@ -216,3 +216,103 @@ milestone-end round may:
 
 Every unit is told what the milestone decided, what the three earlier reviews
 already found and fixed, and that it may read anything else in the tree.
+
+The third unit, the loop device and the block layer, reported five findings
+and they were fixed here:
+
+1. A file on the memory root that a loop device stood on could be unlinked,
+   or renamed over, and its extent freed under the device. The root's rule
+   for a file somebody holds is the descriptor tables, which an attachment is
+   not in; the other file systems keep an unlinked node for whoever holds it.
+   Both removals now answer `EBUSY` while a device stands on the file, and
+   `vfs_repoint` follows a node the file system moves into the attachments as
+   it already did into descriptions.
+2. A detach of a slot an attachment had claimed but not yet published freed
+   that claim, and the attach then published into a slot another attach could
+   take. The claim is a state of its own now, and a detach of a slot in it is
+   refused; the claim also clears the device this slot last stood on, so a
+   medium going cannot match it.
+3. The cache looked for the requested block again after a writeback only when
+   the written buffer's device stood on another. Every writeback sleeps, so
+   another caller can key that block whatever kind of device it was; the
+   lookup is repeated after every one.
+4. A write or a truncation that had passed the attachment check and was
+   waiting for its description's lock ran after an attach published itself.
+   The check is made again under the lock, and an attach over a file whose
+   description is inside an operation is refused, which closes the window
+   from the other side.
+5. `detach 0 junk` detached: the number was read but what followed it was
+   not. The command now takes nothing after the number.
+
+Findings 1, 3, 4 and 5 have rows, each proved by putting the code back the
+way it was. The claim state in finding 2 is between two processes at a
+particular moment and has no row; it is a state a reading proves.
+
+The first unit, the format's core, reported six findings:
+
+1. A split published the smaller size of a free node while its length was
+   still the length of the file removed there, and the mount check refused
+   every node whose length was larger than the node. A free node's length
+   means nothing; the kernel's check and `fsck.krffs` now ask it only of a
+   node that has data.
+2. One field can cross a cache block, so a `size` at the end of a block
+   reaches the medium in two pieces and a stop between them leaves a value
+   that is neither. Nothing in the order of writes prevents it. It is written
+   down in `krffs.Readme.md` as the one state the format cannot rule out on a
+   block device; ruling it out means keeping every header inside one block,
+   which is a change to the allocator and to `mkfs.krffs`, and the owner
+   should decide it rather than have it arrive inside this milestone.
+3. A rename that published its new parent and stopped before its new name can
+   put a file beside a directory of the same name, and the repair, which
+   keeps the larger, could take the directory's name away and put its
+   children out of reach. A directory never loses its name now.
+4. A shrink wrote the surplus's free header inside the bytes the old length
+   still counted, without putting the shorter length on the medium first. The
+   length goes first, and a host row replays every stop of a shrink and
+   requires the file to hold its own bytes.
+5. A name the medium would not give up was read as a name that is not there,
+   and the reaper frees such a node. A failed read now answers that the node
+   has a name, which is the answer that frees nothing.
+6. A move that could not free the node it copied from reported success, and a
+   running kernel would then walk to the old node and read what the file used
+   to be. It reports the failure, and the refusal sweep in the host test now
+   holds every operation that reports success to leaving no name on two
+   nodes.
+
+The second unit, the mounted volume, reported ten. Fixed here: a truncate of
+an unlinked file, which reached its parent directory through the path a
+nameless node spells and could free it (the core takes a node now, not a
+path); a create and a mkdir that threw the mode and the owner away; a create
+over a name that is already there, which the core answers with success and
+which is now `EEXIST`; a rename over an open file and a removal of an open
+directory, which freed nodes under their holders; a handle held by a caller
+that was asleep while the node moved, which the volume now follows through
+the moves it remembers, with reads taking the mount's lock as writes do; the
+format's sync point, which put the cache on the device but not the device's
+own cache on the medium; a truncate through `open(O_TRUNC)` that did not ask
+whether a loop device stood on the file, now asked in the VFS for every path;
+an unmount that cleared the dirty flag and then failed, which now puts it
+back through a new `abort_unmount` operation; and a last close that mutated
+the allocator without the mount's lock and cleared a flag another open had
+set in the slot it had given up.
+
+The one finding of that unit not fixed here is the shared `exec_ctx` in
+`syscall.c`: `execve` keeps one static context and its reads of a mounted
+volume sleep, so two of them can interleave. It is not this milestone's code
+and the fix is a lock or a per-call context; it is recorded for the owner
+rather than changed inside a milestone about mounting.
+
+The fourth unit read what proves the work and named eleven gaps. The two
+that hid defects are fixed with the findings above: the refusal sweep ran
+over too few calls to reach a move's last writes and threw the operation's
+answer away, and the slack row's oracle did not look at the bytes a lost
+write leaves. The rest are rows this milestone should add and are listed in
+the plan's phase 9.
+
+The fifth unit read the host tool and the documents. Its three faults in
+`fsck.krffs` are fixed: the checker called the allocator on links it had not
+yet rebuilt, so a corrupt backward link could merge a node with itself; it
+never judged a node's own size, so a root of no size passed `--strict`
+without the region being walked; and every early exit freed a pointer that
+was not yet initialised. The documents it read are being corrected against
+the code in phase 9.
