@@ -29,6 +29,9 @@ file 0755 /bin/ping build/utils/ping
 # way to see it; `klogctl` does not exist here, and the log is a device.
 file 0755 /bin/dmesg krffs/dmesg.script
 file 0755 /bin/dropbearmulti build/vendor/dropbear/dropbearmulti
+# Attaches a file to a loop device so a file system in a file can be mounted
+# (utils/Readme.md); it writes /dev/loop-control, which is root's.
+file 0755 /bin/loopctl build/utils/loopctl
 
 dir 0755 /sbin
 file 0755 /sbin/init build/utils/sbin/init-metal
