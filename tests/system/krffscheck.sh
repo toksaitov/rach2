@@ -46,9 +46,25 @@ elif how == 'dirty':
 elif how == 'magic':
     struct.pack_into('<H', b, root, 0x1234)
 elif how == 'datasize':
+    # The root, which is a node with data like any other. The free node after
+    # it is not asked: a free node keeps the length of whatever was removed
+    # there, and a split publishes the smaller size before the new length.
     DATA = 341
-    node = struct.unpack_from('<Q', b, root + SIZE)[0]
-    struct.pack_into('<Q', b, root + DATA, node)
+    struct.pack_into('<Q', b, DATA, struct.unpack_from('<Q', b, SIZE)[0])
+elif how == 'zerosize':
+    # The root itself, whose size the walk steps by: a size of zero returns
+    # the walk to the root at once, so a checker that does not judge the size
+    # first calls an image clean without looking at any of it.
+    struct.pack_into('<Q', b, SIZE, 0)
+    struct.pack_into('<Q', b, 341, 0)
+elif how == 'smallsize':
+    struct.pack_into('<Q', b, root + SIZE, 8)
+elif how == 'hugesize':
+    struct.pack_into('<Q', b, root + SIZE, 1 << 40)
+elif how == 'freedatasize':
+    DATA = 341
+    struct.pack_into('<Q', b, root + DATA,
+                     struct.unpack_from('<Q', b, root + SIZE)[0])
 open(path, 'wb').write(b)
 PY
     echo "$out"
@@ -81,6 +97,23 @@ for how in magic datasize; do
     [ "$before" = "$(cksum < "$img")" ] || bad "the checker changed an image it refused for $how"
 done
 say "a bad signature and a data size larger than its node are refused either way, and the image is left as it was: OK"
+
+# A size no region can hold, in either direction: refused, and the image left
+# as it was. The walk steps by these, so it must judge them before it does.
+for how in zerosize smallsize hugesize; do
+    img=$(copy_broken "$how" "$how")
+    before=$(cksum < "$img")
+    [ "$(status "$img" --strict)" != 0 ] || bad "--strict accepted the $how fault"
+    [ "$(status "$img" "")" != 0 ] || bad "the checker accepted the $how fault"
+    [ "$before" = "$(cksum < "$img")" ] || bad "the checker changed an image it refused for $how"
+done
+say "a root of no size, a node smaller than a header and one larger than the region are refused either way: OK"
+
+# And the same field on a free node, which is not a fault: what a split leaves
+# between the size it publishes and the length it writes after it.
+img=$(copy_broken freedatasize freedatasize)
+[ "$(status "$img" --strict)" = 0 ] || bad "--strict refused a free node's own length"
+say "a free node whose length is larger than the node is accepted, as the kernel accepts it: OK"
 
 # The update protocol. The kernel writes an image a field at a time and a
 # machine can stop between any two of them, so every prefix of every mutating

@@ -172,7 +172,11 @@ static int krffs_has_name(krffs_mount_t *mount, uint64_t offset)
 
     if (mount->backend->read(mount->ctx, offset + KRFFS_FIELD_NAME, &first,
                              1) != 0) {
-        return 0;
+        /* A name the medium would not give up is not a name that is not
+         * there: the callers free such a node, refuse to remove a directory
+         * over it, or count it, and a read that failed must not be the
+         * reason a file is freed. */
+        return 1;
     }
     return first != '\0';
 }
@@ -1164,8 +1168,13 @@ uint64_t krffs_resize_at(krffs_mount_t *mount, uint64_t offset,
              * after the type that publishes a node. A stop between the two
              * leaves one name on two nodes, which the check resolves, and
              * never leaves the file with neither. */
-            if (moved != KRFFS_NO_NODE) {
-                krffs_remove_at(mount, offset);
+            /* The old node must go: two nodes with one name is a state the
+             * check resolves at the next mount, but a running kernel would
+             * walk to the old one and read what the file used to be, so the
+             * caller is told this did not work. */
+            if (moved != KRFFS_NO_NODE &&
+                krffs_remove_at(mount, offset) != 0) {
+                return KRFFS_NO_NODE;
             }
             return moved;
         }
@@ -1178,8 +1187,13 @@ uint64_t krffs_resize_at(krffs_mount_t *mount, uint64_t offset,
          * length inside the slack a node already has publishes nothing: the
          * caller writes the bytes and publishes the length after them, the
          * way a grow does. */
+        /* On the medium before the surplus's header is written: that header
+         * lands inside the bytes the length still on the medium counts, so a
+         * stop with the header written and the length not would give the
+         * file the allocator's bytes to read. */
         if (size < head.data_size &&
-            krffs_put_u64(mount, offset, KRFFS_FIELD_DATA_SIZE, size) != 0) {
+            (krffs_put_u64(mount, offset, KRFFS_FIELD_DATA_SIZE, size) != 0 ||
+             krffs_sync_point(mount) != 0)) {
             return KRFFS_NO_NODE;
         }
 
@@ -1555,7 +1569,12 @@ int krffs_rename_at(krffs_mount_t *mount, const char *old_path,
             KRFFS_IS_DIR(victim.mode)) {
             return -1;
         }
-        krffs_remove_at(mount, existing);
+        /* The name is about to be given to another node, so the one that has
+         * it must lose it first: a destination that would not go leaves two
+         * nodes under one name. */
+        if (krffs_remove_at(mount, existing) != 0) {
+            return -1;
+        }
     }
 
     /* Both ends change: the name left one directory and arrived in another,
@@ -1977,8 +1996,21 @@ int krffs_repair_at(krffs_mount_t *mount, uint32_t *links, uint32_t *orphans,
                 if (other.type == KRFFS_RESERVED_NODE &&
                     other.parent_id == head.parent_id && other.name[0] != '\0' &&
                     krffs_names_match(other.name, head.name)) {
-                    uint64_t loser = other.size > head.size ? offset : scan;
+                    /* The larger is the copy a move was making, since a
+                     * move only ever makes a node larger. A directory is
+                     * never the loser whatever the sizes say: its children
+                     * name it by its id, and a rename interrupted between
+                     * the parent it published and the name it had still to
+                     * write is what puts a file beside a directory of the
+                     * same name. */
+                    uint64_t loser;
                     uint8_t empty = '\0';
+
+                    if (KRFFS_IS_DIR(head.mode) != KRFFS_IS_DIR(other.mode)) {
+                        loser = KRFFS_IS_DIR(head.mode) ? scan : offset;
+                    } else {
+                        loser = other.size > head.size ? offset : scan;
+                    }
 
                     if (krffs_put(mount, loser, KRFFS_FIELD_NAME, &empty, 1) !=
                         0) {
@@ -2061,7 +2093,13 @@ static int krffs_chain_walk(krffs_mount_t *mount, int with_links)
             head.size > mount->size - position) {
             return 0;
         }
-        if (head.data_size > head.size - sizeof(krffs_node_t)) {
+        /* Only a node that has data: a free node keeps whatever length the
+         * file removed there had, and the allocator publishes the smaller
+         * size of a split before it writes the new length, so a free node
+         * whose length is larger than it is is an ordinary state and not a
+         * fault. */
+        if (head.type != KRFFS_FREE_NODE &&
+            head.data_size > head.size - sizeof(krffs_node_t)) {
             return 0;
         }
         if (with_links && count > 1 &&

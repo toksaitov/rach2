@@ -577,6 +577,80 @@ static int every_stop_file_is_whole(const uint8_t *before, uint32_t size, const 
 }
 
 /**
+ * Every stop, asked whether the file called `name` ever holds, inside the
+ * length it publishes, a byte other than the one it was written with: what a
+ * shrink that put the surplus's free header on the medium before the shorter
+ * length looks like to a reader with the old length in hand.
+ */
+static int every_stop_keeps_its_bytes(const uint8_t *before, uint32_t size, const char *name,
+                                      uint8_t value)
+{
+    static uint8_t state[IMAGE_SIZE];
+    static uint8_t epoch[IMAGE_SIZE];
+    krffs_mount_t mount = mount_over(&memory_backend, state, size);
+    int prefix;
+
+    for (prefix = 0; prefix <= recorded_count; prefix++) {
+        uint64_t seen[64];
+        int mark = epoch_of(prefix);
+        int seen_count = touched_blocks(mark, prefix, seen, 64);
+        int variant;
+
+        build(epoch, before, mark, size);
+        for (variant = -1; variant < seen_count + (prefix - mark); variant++) {
+            uint64_t offset = 0;
+            uint64_t steps = 0;
+            krffs_node_t head;
+
+            if (variant < seen_count) {
+                build(state, before, prefix, size);
+                if (variant >= 0) {
+                    uint32_t at = (uint32_t)(seen[variant] * CACHE_BLOCK);
+                    uint32_t take = size - at > CACHE_BLOCK ? CACHE_BLOCK : size - at;
+
+                    k_memcpy(state + at, epoch + at, take);
+                }
+            } else {
+                int skip = mark + (variant - seen_count);
+                int i;
+
+                k_memcpy(state, before, size);
+                for (i = 0; i < prefix; i++) {
+                    if (i != skip) {
+                        k_memcpy(state + recorded[i].offset, recorded[i].bytes, recorded[i].size);
+                    }
+                }
+            }
+            if (!forward_chain_closes(&mount)) {
+                continue;
+            }
+            if (krffs_repair_at(&mount, (uint32_t *)0, (uint32_t *)0, (uint32_t *)0) != 0) {
+                return 0;
+            }
+            do {
+                if (krffs_head(&mount, offset, &head) != 0) {
+                    return 0;
+                }
+                if (head.type == KRFFS_RESERVED_NODE && k_strcmp_name(head.name, name)) {
+                    uint64_t at;
+
+                    for (at = 0; at < head.data_size; at++) {
+                        if (state[offset + sizeof(krffs_node_t) + at] != value) {
+                            printf("krffs_hosttest: %d of %d writes left %s holding a byte "
+                                   "of somebody else's at %d of %d\n",
+                                   prefix, recorded_count, name, (int)at, (int)head.data_size);
+                            return 0;
+                        }
+                    }
+                }
+                offset = krffs_next_offset(&mount, offset, &head);
+            } while (offset != 0 && ++steps < krffs_max_steps(&mount));
+        }
+    }
+    return 1;
+}
+
+/**
  * Every stop, asked whether a file ever claims a byte past `old_length` that
  * is not a zero: what a length published before the zeroes it counts looks
  * like when a file grows into slack it already had.
@@ -634,6 +708,41 @@ static int every_stop_is_zero_filled(const uint8_t *before, uint32_t size, uint6
 }
 
 /**
+ * Whether every named node in the image has its name to itself, which is what
+ * an operation that reports success must have left.
+ */
+static int no_name_is_on_two_nodes(krffs_mount_t *mount)
+{
+    uint64_t offset = 0;
+    uint64_t steps = 0;
+    krffs_node_t head;
+
+    do {
+        if (krffs_head(mount, offset, &head) != 0) {
+            return 0;
+        }
+        if (head.type == KRFFS_RESERVED_NODE && head.name[0] != '\0') {
+            uint64_t scan = krffs_next_offset(mount, offset, &head);
+            uint64_t inner = 0;
+            krffs_node_t other;
+
+            while (scan != 0 && ++inner < krffs_max_steps(mount)) {
+                if (krffs_head(mount, scan, &other) != 0) {
+                    return 0;
+                }
+                if (other.type == KRFFS_RESERVED_NODE && other.parent_id == head.parent_id &&
+                    k_strcmp_name(other.name, (const char *)head.name)) {
+                    return 0;
+                }
+                scan = krffs_next_offset(mount, scan, &other);
+            }
+        }
+        offset = krffs_next_offset(mount, offset, &head);
+    } while (offset != 0 && ++steps < krffs_max_steps(mount));
+    return 1;
+}
+
+/**
  * Run `what` with the backend refusing one of its calls, and judge what the
  * file system was left with.
  *
@@ -643,12 +752,13 @@ static int every_stop_is_zero_filled(const uint8_t *before, uint32_t size, uint6
  * an image a mount can walk with no file half made under a name.
  */
 static int survives_refusal(uint8_t *img, const uint8_t *before, uint32_t size,
-                            void (*what)(krffs_mount_t *), int which)
+                            int (*what)(krffs_mount_t *), int which)
 {
     krffs_mount_t mount = mount_over(&recording_backend, img, size);
     uint64_t offset = 0;
     uint64_t steps = 0;
     krffs_node_t head;
+    int answer;
 
     k_memcpy(img, before, size);
     recording = 0;
@@ -658,11 +768,18 @@ static int survives_refusal(uint8_t *img, const uint8_t *before, uint32_t size,
     } else {
         refused_sync = -which - 1; /* a refused sync, counted the same way */
     }
-    what(&mount);
+    answer = what(&mount);
     refused_write = -1;
     refused_sync = -1;
 
     if (!forward_chain_closes(&mount)) {
+        return 0;
+    }
+    /* Before the check has had it, and only of an operation that says it
+       worked: a move that could not free the node it copied from would leave
+       two nodes under one name, and a caller told the operation succeeded
+       would read whichever the walk reaches first. */
+    if (answer == 0 && !no_name_is_on_two_nodes(&mount)) {
         return 0;
     }
     if (krffs_repair_at(&mount, (uint32_t *)0, (uint32_t *)0, (uint32_t *)0) != 0) {
@@ -692,21 +809,24 @@ static int survives_refusal(uint8_t *img, const uint8_t *before, uint32_t size,
     return krffs_chain_is_valid(&mount);
 }
 
-static void make_a_file(krffs_mount_t *mount)
+/* The three operations the refusal sweep runs, each answering what the core
+   answered: an operation that reports success has made its change, and the
+   sweep holds it to that. */
+static int make_a_file(krffs_mount_t *mount)
 {
     /* A name the image does not have, so the allocator really runs: creating
        one that exists answers success without taking a node. */
-    krffs_create_at(mount, "/second");
+    return krffs_create_at(mount, "/second");
 }
 
-static void grow_a_file(krffs_mount_t *mount)
+static int grow_a_file(krffs_mount_t *mount)
 {
-    krffs_truncate_at(mount, "/refused", 3000, (uint64_t *)0);
+    return krffs_truncate_at(mount, "/refused", 3000, (uint64_t *)0);
 }
 
-static void remove_a_file(krffs_mount_t *mount)
+static int remove_a_file(krffs_mount_t *mount)
 {
-    krffs_unlink_at(mount, "/refused");
+    return krffs_unlink_at(mount, "/refused");
 }
 
 int main(void)
@@ -752,8 +872,23 @@ int main(void)
     {
         uint64_t data = IMAGE_SIZE;
 
+        /* On a node that has data: the second node of a fresh image is the
+           free one, and a free node keeps the length of whatever was removed
+           there, which the allocator rewrites when it takes it. */
+        krffs_create_at(&mount, "/data.bin");
         k_memcpy(image + sizeof(krffs_node_t) + KRFFS_FIELD_DATA_SIZE, &data, sizeof(data));
         check(krffs_chain_is_valid(&mount) == 0, "data larger than its node is refused");
+        make_image(image, IMAGE_SIZE);
+    }
+    {
+        uint64_t data = IMAGE_SIZE;
+
+        /* And not on one that has none: a free node whose length is larger
+           than the node is what a split leaves between the size it publishes
+           and the length it writes after it. */
+        k_memcpy(image + sizeof(krffs_node_t) + KRFFS_FIELD_DATA_SIZE, &data, sizeof(data));
+        check(krffs_chain_is_valid(&mount) == 1,
+              "a free node's length is not a fault whatever it says");
         make_image(image, IMAGE_SIZE);
     }
     {
@@ -888,6 +1023,40 @@ int main(void)
     check(krffs_reap_orphans_at(&mount) == 1, "and the reaper frees it");
     check(krffs_reap_orphans_at(&mount) == 0, "and finds nothing the next time");
     check(krffs_chain_is_valid(&mount) == 1, "the chain is sound after reaping");
+
+    /* ---- one name on two nodes, when one of them is a directory ---- */
+
+    /* A rename that published its new parent and stopped before its new name
+       leaves the file it moved beside whatever already had that name there.
+       The repair keeps the larger, which is the copy a move was making, but
+       never a directory's name: its children name it by its id, and clearing
+       it would put a whole tree out of reach. */
+    make_image(image, IMAGE_SIZE);
+    check(krffs_mkdir_at(&mount, "/both") == 0, "a directory is made");
+    check(krffs_create_at(&mount, "/file") == 0, "and a file beside it");
+    check(krffs_truncate_at(&mount, "/file", 2048, (uint64_t *)0) == 0,
+          "grown past the directory's own size");
+    {
+        uint64_t dir = krffs_walk(&mount, "/both");
+        uint64_t file = krffs_walk(&mount, "/file");
+        krffs_node_t dir_head;
+        krffs_node_t file_head;
+
+        check(dir != KRFFS_NO_NODE && file != KRFFS_NO_NODE, "both are there");
+        image[file + KRFFS_FIELD_NAME + 0] = 'b';
+        image[file + KRFFS_FIELD_NAME + 1] = 'o';
+        image[file + KRFFS_FIELD_NAME + 2] = 't';
+        image[file + KRFFS_FIELD_NAME + 3] = 'h';
+        image[file + KRFFS_FIELD_NAME + 4] = '\0';
+        check(krffs_repair_at(&mount, (uint32_t *)0, (uint32_t *)0, (uint32_t *)0) == 0,
+              "the check repairs the volume");
+        check(krffs_head(&mount, dir, &dir_head) == 0 && KRFFS_IS_DIR(dir_head.mode) &&
+                  dir_head.name[0] == 'b',
+              "and the directory keeps its name, whatever the sizes say");
+        check(krffs_head(&mount, file, &file_head) != 0 || file_head.type != KRFFS_RESERVED_NODE ||
+                  file_head.name[0] == '\0',
+              "and the file that took its name lost it");
+    }
 
     /* ---- the ends of the region ---- */
 
@@ -1048,6 +1217,35 @@ int main(void)
     check(krffs_read_at(&mount, node, buffer, 4, 100) == 4 && buffer[0] == 0 && buffer[3] == 0,
           "and the bytes it grew by are zeroes, not what the file held before");
 
+    /* A shrink that leaves a surplus large enough for a header of its own:
+       that header is written inside the bytes the length still on the medium
+       counts, so the shorter length must be there first. The file is filled
+       with a byte of its own, and no stop may show it holding anything else
+       inside whatever length it publishes. */
+    make_image(image, IMAGE_SIZE);
+    check(krffs_create_at(&mount, "/cut") == 0, "the file to be cut short is made");
+    for (i = 0; i < 4096; i++) {
+        buffer[i % (int)sizeof(buffer)] = (char)0x5A;
+    }
+    node = krffs_walk(&mount, "/cut");
+    check(krffs_truncate_at(&mount, "/cut", 4096, (uint64_t *)0) == 0, "and grown");
+    node = krffs_walk(&mount, "/cut");
+    for (i = 0; i < 4096; i += (int)sizeof(buffer)) {
+        check(krffs_write_at(&mount, &node, buffer, sizeof(buffer), (uint32_t)i) ==
+                  (int)sizeof(buffer),
+              "and filled with a byte of its own");
+    }
+    k_memcpy(before, image, IMAGE_SIZE);
+    recorded_count = 0;
+    sync_count = 0;
+    recording = 1;
+    krffs_truncate_at(&mount, "/cut", 1024, (uint64_t *)0);
+    recording = 0;
+    check(every_stop_is_sound(before, IMAGE_SIZE) && every_lost_write_is_sound(before, IMAGE_SIZE),
+          "every stop inside a shrink leaves a chain a mount can walk");
+    check(every_stop_keeps_its_bytes(before, IMAGE_SIZE, "cut", 0x5A),
+          "and none of them shows the file holding the allocator's bytes");
+
     /* ---- a backend that refuses a write ---- */
 
     make_image(image, IMAGE_SIZE);
@@ -1058,16 +1256,22 @@ int main(void)
     krffs_create_at(&mount, "/refused");
     node = krffs_walk(&mount, "/refused");
     krffs_write_at(&mount, &node, buffer, 64, 0);
+    /* A second file right behind the first, so the grow below has no room
+       after it and must copy the file elsewhere and free the node it came
+       from. That freeing is a write like any other and the sweep refuses it
+       in its turn. */
+    krffs_create_at(&mount, "/box");
     k_memcpy(before, image, IMAGE_SIZE);
 
     {
         int which;
         int sound = 1;
 
-        /* Every call of each operation, in both kinds: the count is what the
-           operations below take, with room to spare, and a call that never
-           happens refuses nothing. */
-        for (which = -40; which < 40; which++) {
+        /* Every call of each operation, in both kinds: a grow that must move
+           the file writes its bytes 64 at a time and then frees the node it
+           came from, so the count runs well past the fields; a call that
+           never happens refuses nothing. */
+        for (which = -120; which < 120; which++) {
             if (!survives_refusal(image, before, IMAGE_SIZE, grow_a_file, which) ||
                 !survives_refusal(image, before, IMAGE_SIZE, remove_a_file, which) ||
                 !survives_refusal(image, before, IMAGE_SIZE, make_a_file, which)) {

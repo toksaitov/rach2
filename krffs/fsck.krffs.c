@@ -114,6 +114,10 @@ int main(int argc, char **argv)
         EXIT_SUCCESS;
 
     int file_descriptor = -1;
+    /* Declared here and not beside its use: `cleanup` frees it, and the help
+       text, the argument errors and every failure before the walk jump
+       straight there. */
+    struct krffs_name_entry *entries = NULL;
     struct krffs_file_system file_system = {
         .node = NULL
     };
@@ -300,7 +304,6 @@ int main(int argc, char **argv)
     uint64_t backlinks = 0;  /* backward links the forward chain contradicts */
     uint64_t duplicates = 0; /* names repeated in one directory */
 
-    struct krffs_name_entry *entries = NULL;
     size_t entry_count = 0;
     size_t entry_capacity = 0;
 
@@ -401,10 +404,38 @@ int main(int argc, char **argv)
             break;
         }
 
+        /* A node holds at least its own header and ends inside the region.
+           Checked before the subtraction below and before the walk steps by
+           it: a size under a header would wrap that subtraction, and a size
+           past the region would step outside the mapping. */
+        if (node->size < sizeof(struct krffs_node) ||
+            node->size > file_system.size -
+                krffs_get_node_relative_position(&file_system, node)) {
+            printf(
+                "- node at position %"PRIu64": a size of %"PRIu64" bytes in "
+                "a region of %"PRIu64"\n",
+                krffs_get_node_relative_position(&file_system, node),
+                node->size,
+                (uint64_t) file_system.size
+            );
+            fprintf(
+                stderr,
+                "Found a node whose size is not one this region can hold. "
+                "Won't proceed.\n"
+            );
+            exit_status = KRFFS_Node_Size_Error;
+            break;
+        }
+
         /* A node's data lives between its header and its end, so a data size
            that does not fit is a node whose bytes are somebody else's. Fatal:
-           nothing in the image says what the size should have been. */
-        if (node->data_size > node->size - sizeof(struct krffs_node)) {
+           nothing in the image says what the size should have been. A free
+           node is not asked: it keeps the length of whatever was removed
+           there, and the allocator publishes the smaller size of a split
+           before it writes the new length, which the kernel's own check
+           passes over for the same reason. */
+        if (node->type != KRFFS_Free_Node &&
+            node->data_size > node->size - sizeof(struct krffs_node)) {
             printf(
                 "- node at position %"PRIu64": %"PRIu64" bytes of data in "
                 "%"PRIu64" bytes of node\n",
@@ -634,6 +665,34 @@ int main(int argc, char **argv)
         exit_status = KRFFS_Repairs_Needed_Error;
     }
 
+    /* The backward links, rebuilt from the forward chain the walk validated,
+       and rebuilt first: the passes below free nodes through the allocator,
+       which merges a freed node with the node before it by following that
+       link. A link that lies would merge the wrong two, or a node with
+       itself. */
+    if (exit_status == EXIT_SUCCESS && backlinks != 0) {
+        struct krffs_node *scan = file_system.node;
+        struct krffs_node *behind = NULL;
+        uint64_t walked = 0;
+        uint64_t fixed = 0;
+
+        do {
+            if (behind != NULL && scan->previous_node_size != behind->size) {
+                scan->previous_node_size = behind->size;
+                fixed++;
+            }
+            behind = scan;
+            scan = krffs_get_next_node(&file_system, scan);
+        } while (scan != file_system.node && ++walked <= max_steps);
+
+        if (behind != NULL && file_system.node->previous_node_size != behind->size) {
+            file_system.node->previous_node_size = behind->size;
+            fixed++;
+        }
+        printf("Rebuilt %"PRIu64" backward link(s) from the forward chain.\n",
+               fixed);
+    }
+
     /* The loser of a repeated name gives up its name, which makes it the same
        thing as an orphan and leaves the pass below one kind of node to
        reclaim. */
@@ -655,11 +714,11 @@ int main(int argc, char **argv)
        do the freeing. The kernel reaps them at mount; doing it here as well is
        what makes the offline repair a repair.
 
-       Only after the walk above has validated the chain end to end. Following
-       node->size and calling into the allocator on an image whose links are
-       corrupt is how a checker hangs, reads outside its mapping, or damages the
-       thing it was asked to inspect; a structurally bad image is reported and
-       left exactly as it was found. One bounded pass: a removal coalesces with
+       Only after the walk above has validated every node's extent and after
+       the backward links have been rebuilt from it. Calling into the
+       allocator on an image whose links are corrupt is how a checker damages
+       the thing it was asked to inspect; a structurally bad image is
+       reported and left exactly as it was found. One bounded pass: a removal coalesces with
        whichever neighbours are free, and the merged region begins at the
        previous node when that was free and at this one otherwise, so the walk
        resumes there and steps over it by its new size. */
@@ -687,32 +746,6 @@ int main(int argc, char **argv)
             printf("Reclaimed %"PRIu64" orphan node(s) no path could reach.\n",
                    reclaimed);
         }
-    }
-
-    /* The backward links, rebuilt from the forward chain the walk validated.
-       The orphan pass above merges nodes, so this runs after it and reads the
-       chain as it now stands. */
-    if (exit_status == EXIT_SUCCESS && backlinks != 0) {
-        struct krffs_node *scan = file_system.node;
-        struct krffs_node *behind = NULL;
-        uint64_t walked = 0;
-        uint64_t fixed = 0;
-
-        do {
-            if (behind != NULL && scan->previous_node_size != behind->size) {
-                scan->previous_node_size = behind->size;
-                fixed++;
-            }
-            behind = scan;
-            scan = krffs_get_next_node(&file_system, scan);
-        } while (scan != file_system.node && ++walked <= max_steps);
-
-        if (behind != NULL && file_system.node->previous_node_size != behind->size) {
-            file_system.node->previous_node_size = behind->size;
-            fixed++;
-        }
-        printf("Rebuilt %"PRIu64" backward link(s) from the forward chain.\n",
-               fixed);
     }
 
     if (exit_status == EXIT_SUCCESS && was_dirty) {
