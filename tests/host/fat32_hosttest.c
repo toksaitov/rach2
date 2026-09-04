@@ -1,7 +1,7 @@
 /*
  * fat32_hosttest.c: the vfat driver over the buffer cache over an image.
  *
- * host-deps: rach2/sys/fs/fat32.c rach2/sys/fs/bcache.c
+ * host-deps: rach2/sys/fs/fat32.c rach2/sys/fs/bcache.c rach2/sys/block/chain.c
  * host-deps: rach2/sys/fs/fat32name.c rach2/sys/fs/fatcommon.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  *

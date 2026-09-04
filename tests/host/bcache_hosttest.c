@@ -456,7 +456,7 @@ int main(void)
            above is let go first, since these rows take blocks of their own. */
         bcache_release(b);
         nested.backing = &fake;
-        check(block_depth(&nested) == 1 && block_depth(&fake) == 0,
+        check(block_depth(&nested) == BLOCK_MAX_DEPTH && block_depth(&fake) == 0,
               "a device says how many are under it");
         check(block_is_below(&fake, &nested) && !block_is_below(&nested, &fake),
               "and which way round they are");

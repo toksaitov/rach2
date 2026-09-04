@@ -3,6 +3,7 @@
  * host's mke2fs made.
  *
  * host-deps: rach2/sys/fs/ext2.c rach2/sys/fs/bcache.c rach2/sys/fs/fatcommon.c
+ * host-deps: rach2/sys/block/chain.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  *
  * The volumes are built here from a staged tree by the host's mke2fs on the

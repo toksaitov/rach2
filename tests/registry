@@ -80,6 +80,7 @@ runner|-|core
 imagerace|-|full
 krffscheck|python3|full
 krffsmount|qemu-system-i386|full
+loopdev|qemu-system-i386,mformat,mcopy,mtype,mke2fs|full
 mount|qemu-system-i386,mformat,mcopy,mdir|core
 fatwrite|qemu-system-i386,mformat,mcopy,mdir,python3|core
 exfat|qemu-system-i386,python3|core

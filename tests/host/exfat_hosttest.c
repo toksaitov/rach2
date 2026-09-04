@@ -1,7 +1,7 @@
 /*
  * exfat_hosttest.c: the exfat driver over the buffer cache over an image.
  *
- * host-deps: rach2/sys/fs/exfat.c rach2/sys/fs/bcache.c
+ * host-deps: rach2/sys/fs/exfat.c rach2/sys/fs/bcache.c rach2/sys/block/chain.c
  * host-deps: rach2/sys/fs/fatcommon.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  *

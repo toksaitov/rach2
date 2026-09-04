@@ -1051,6 +1051,14 @@ run-fatwrite: $(DEMO_CREDS) rach2 tests krffs os-real-image $(MKFATFIXTURE) $(HA
 	sh tests/system/suites/fatwrite.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(FATWRITE_DISK) \
 	    $(OS_REAL_IMAGE) "`cat krffs/rach2_demo_password`" $(MKFATFIXTURE)
 
+# `tests/run loopdev`: a file system in a file, through a loop device: a FAT32
+# image and an ext2 image on a FAT32 volume, each mounted, written and read
+# back, and everything an attachment refuses.
+LOOPDEV_DISK = $(IMAGES_DIR)/loopdev-test.disk
+run-loopdev: rach2 tests krffs test-image $(HARNESS) build/tools/image/mkmbr
+	sh tests/system/suites/loopdev.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) \
+	    $(LOOPDEV_DISK)
+
 # `tests/run krffsmount`: a KRFFS volume placed by mount(2), read through to
 # its last byte and unmounted, and the three volumes the kernel refuses.
 KRFFSMOUNT_DISK = $(IMAGES_DIR)/krffsmount-test.disk
