@@ -46,6 +46,9 @@ httpd: httpd.c
 halt: halt.c
 	$(UCC) $(UFLAGS) -o halt halt.c
 
+loopctl: loopctl.c
+	$(UCC) $(UFLAGS) -o loopctl loopctl.c
+
 update: update.c
 	$(UCC) $(UFLAGS) -o update update.c
 sudo: sudo.c
