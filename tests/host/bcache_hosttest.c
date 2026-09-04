@@ -76,6 +76,15 @@ void k_panic(const char *s)
     _exit(44);
 }
 
+/* The cache asks the mount table whether this caller holds a lock before it
+   writes back a buffer of a device that stands on a file; a row sets this. */
+static int ns_held;
+
+int vfs_ns_held_by_caller(void)
+{
+    return ns_held;
+}
+
 void klog(int level, const char *sys, const char *fmt, ...)
 {
     (void)level;
@@ -478,6 +487,37 @@ int main(void)
                       "a block of the device above while holding one under it panics");
             bcache_release(b);
         }
+        /* A dirty buffer of a device that stands on another is not written
+           back on the way to an unrelated device while this caller holds a
+           mount's lock: that write takes the lock of the mount holding its
+           file, and two callers could then wait for each other. */
+        {
+            struct bbuf *dirty;
+            int i2;
+
+            bcache_invalidate(&nested);
+            bcache_invalidate(&other);
+            dirty = bcache_get(&nested, 7);
+            check(dirty != 0, "a block of the device above is taken");
+            bcache_dirty(dirty);
+            bcache_release(dirty);
+            ns_held = 1;
+            writes_made = 0;
+            for (i2 = 0; i2 < BCACHE_BUFFERS; i2++) {
+                struct bbuf *c2 = bcache_get(&other, (uint64_t)i2);
+
+                if (c2) {
+                    bcache_release(c2);
+                }
+            }
+            check(writes_made == 0,
+                  "and its dirty block is passed over while a mount's lock is held");
+            ns_held = 0;
+            bcache_sync(&nested);
+            bcache_invalidate(&nested);
+            bcache_invalidate(&other);
+        }
+
         bcache_invalidate(&nested);
         nested.backing = 0;
         b = bcache_get(&fake, 3);

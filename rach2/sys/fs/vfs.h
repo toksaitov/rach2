@@ -332,6 +332,16 @@ void vfs_leave(struct vfs_mount *mnt);
  * constructor and the unmount; sleeps until free. The holder may take it
  * again, since a type's own operations lock for the callers that arrive
  * unlocked (`write`, `sync`, a last `put`) and are also called under it. */
+/**
+ * Whether this process holds any mount's namespace lock.
+ *
+ * The buffer cache asks before it writes back a buffer of a device that
+ * stands on a file: that write takes the lock of the mount holding the file,
+ * and a caller that already holds another mount's lock would be one half of a
+ * pair waiting for each other.
+ */
+int vfs_ns_held_by_caller(void);
+
 void vfs_ns_lock(struct vfs_mount *mnt);
 void vfs_ns_unlock(struct vfs_mount *mnt);
 

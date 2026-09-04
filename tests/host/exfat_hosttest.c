@@ -99,6 +99,12 @@ void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
     *seconds = 1788264000; /* 2026-09-01 12:00:00 UTC */
     *nanoseconds = 0;
 }
+
+int vfs_ns_held_by_caller(void)
+{
+    return 0;
+}
+
 void vfs_device_failed(block_device_t *dev, uint64_t lba, int rc)
 {
     (void)dev;

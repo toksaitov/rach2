@@ -1905,6 +1905,12 @@ void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
     *nanoseconds = (int64_t)(++calls % 100) * 10000000;
 }
 
+
+int vfs_ns_held_by_caller(void)
+{
+    return 0;
+}
+
 void vfs_device_failed(block_device_t *dev, uint64_t lba, int rc)
 {
     (void)dev;

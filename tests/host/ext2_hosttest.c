@@ -96,6 +96,12 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     (void)arg;
     return -1;
 }
+
+int vfs_ns_held_by_caller(void)
+{
+    return 0;
+}
+
 void vfs_device_failed(block_device_t *d, uint64_t lba, int rc)
 {
     (void)d;

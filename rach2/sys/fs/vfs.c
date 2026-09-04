@@ -90,6 +90,20 @@ static int ns_free(void *arg)
     return mnt->ns_holder == -1;
 }
 
+int vfs_ns_held_by_caller(void)
+{
+    int me = current_proc ? (int)current_proc->pid : 0;
+    int i;
+
+    for (i = 0; i < VFS_MOUNTS; i++) {
+        if (mounts[i].state != VFS_FREE && mounts[i].ns_holder == me &&
+            mounts[i].ns_depth > 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 void vfs_ns_lock(struct vfs_mount *mnt)
 {
     int me = current_proc ? (int)current_proc->pid : 0;

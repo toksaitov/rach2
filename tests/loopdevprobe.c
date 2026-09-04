@@ -280,6 +280,11 @@ void probe_main(unsigned int *sp)
             }
         }
 
+        /* The slot is still taken: a mount may still be standing on the
+           device, and an attachment here would put another file under it. */
+        if (control("attach 0 /m/fat.img") != -EBUSY) {
+            fail("a device whose stick went took another file");
+        }
         rc = sys2(SYS_UMOUNT2, (int)"/l", 0);
         if (rc != 0) {
             fail_with("unmounting an image whose stick has gone", rc);

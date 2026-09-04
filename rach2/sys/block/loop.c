@@ -56,6 +56,7 @@ static struct loop_device *loop_of(block_device_t *device)
 
 static void loop_release(struct loop_device *loop);
 static void loop_transfer_ended(struct loop_device *loop);
+static void loop_settle(void);
 
 /**
  * A transfer of whole sectors, through the file system holding the file.
@@ -213,7 +214,31 @@ static void loop_release(struct loop_device *loop)
  */
 static void loop_transfer_ended(struct loop_device *loop)
 {
-    if (--loop->in_flight == 0 && loop->release_due) {
+    loop->in_flight--;
+}
+
+/**
+ * The release a medium's going left owing, done where it can be done.
+ *
+ * A device that goes is reported from wherever the driver noticed, which can
+ * be the interrupt that found the stick missing, and letting go of what the
+ * attachment holds takes a mount's lock and can sleep. So the going only
+ * marks the device, and this runs at the next command through the control
+ * node or the next reading of /proc/loop, both of which are syscalls.
+ */
+static void loop_settle(void)
+{
+    int i;
+
+    for (i = 0; i < LOOP_DEVICES; i++) {
+        struct loop_device *loop = &loops[i];
+
+        if (!loop->release_due || loop->in_flight > 0) {
+            continue;
+        }
+        if (vfs_device_holds(&loop->dev)) {
+            continue; /* something is still mounted on it */
+        }
         loop_release(loop);
     }
 }
@@ -235,15 +260,11 @@ void loop_device_gone(block_device_t *device)
         klog(KLOG_WARN, "loop", "loop%d: the device under its file has gone", i);
         loops[i].dev.flags |= BLOCK_GONE;
         loops[i].attached = 0; /* nothing new reaches the file from here */
+        /* The slot stays taken until somebody detaches it: a mount may still
+         * be standing on this device, and a fresh attachment here would put
+         * another file under it. */
+        loops[i].release_due = 1;
         bcache_device_gone(&loops[i].dev);
-        if (loops[i].in_flight > 0) {
-            /* A transfer is inside the file system holding the file: it
-             * cannot have its mount taken from under it, so the last one out
-             * lets go of what the attachment holds. */
-            loops[i].release_due = 1;
-            continue;
-        }
-        loop_release(&loops[i]);
     }
 }
 
@@ -278,6 +299,7 @@ int loop_line(int index, char *buffer, uint32_t cap)
     struct loop_device *loop;
     uint32_t at = 0;
 
+    loop_settle();
     if (index < 0 || index >= LOOP_DEVICES || !loops[index].used || cap == 0) {
         return 0;
     }
@@ -288,7 +310,7 @@ int loop_line(int index, char *buffer, uint32_t cap)
     at = put_number(buffer, at, cap,
                     (uint32_t)(loop->dev.sector_count * BLOCK_SECTOR_SIZE));
     at = put_text(buffer, at, cap, loop->writable ? " rw " : " ro ");
-    at = put_text(buffer, at, cap, loop->path);
+    at = put_text(buffer, at, cap, loop->attached ? loop->path : "(gone)");
     at = put_text(buffer, at, cap, "\n");
     buffer[at] = '\0';
     return (int)at;
@@ -317,6 +339,7 @@ int loop_attach(int index, const char *path, int writable)
             return -EBUSY;
         }
     }
+    loop_settle();
     loop = &loops[index];
     if (loop->used) {
         return -EBUSY;
@@ -422,8 +445,21 @@ int loop_detach(int index)
         return -EINVAL;
     }
     loop = &loops[index];
-    if (!loop->used || !loop->attached) {
+    if (!loop->used) {
         return -ENOENT;
+    }
+    /* A device whose medium went is detached by letting go of what it still
+     * holds, which is what a detach is; there is nothing left to write. */
+    if (!loop->attached) {
+        if (vfs_device_holds(&loop->dev)) {
+            return -EBUSY;
+        }
+        if (loop->in_flight > 0) {
+            return -EBUSY;
+        }
+        klog(KLOG_INFO, "loop", "loop%d: detached", index);
+        loop_release(loop);
+        return 0;
     }
     if (vfs_device_holds(&loop->dev)) {
         return -EBUSY; /* something is mounted on it */
@@ -502,6 +538,7 @@ int loop_control_write(const char *buffer, uint32_t count)
     int index = -1;
     uint32_t i;
 
+    loop_settle();
     if (count == 0 || count >= sizeof(line)) {
         return -EINVAL;
     }

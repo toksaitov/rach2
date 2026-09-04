@@ -89,7 +89,7 @@ static void check_hold_rules(block_device_t *dev, uint64_t blk)
 
 /**
  * Whether a dirty buffer of `victim` may be written while this caller holds
- * what it holds.
+ * what it holds, on the way to a buffer of `filling`.
  *
  * Writing a buffer re-enters its device, and a device with a backing reaches
  * this cache again to do it. That is allowed only where the hold rules allow
@@ -97,7 +97,7 @@ static void check_hold_rules(block_device_t *dev, uint64_t blk)
  * victim that fails this is passed over, and another buffer takes the
  * eviction, which is why this answers instead of stopping the machine.
  */
-static int victim_may_be_written(block_device_t *victim)
+static int victim_may_be_written(block_device_t *victim, block_device_t *filling)
 {
     int pid = caller_pid();
     int held = 0;
@@ -119,7 +119,20 @@ static int victim_may_be_written(block_device_t *victim)
      * write takes on the device under it. A caller with less room than that
      * is given another victim rather than a machine that stops on the fifth
      * buffer. */
-    return held + 2 <= BCACHE_HOLD_MAX;
+    if (held + 2 > BCACHE_HOLD_MAX) {
+        return 0;
+    }
+    /* And the locks, which this cache cannot see: writing such a buffer goes
+     * through the file system holding its file and takes that mount's lock.
+     * A caller that already holds a mount's lock could then be waiting for a
+     * lock another caller holds while that one waits for this one. Its own
+     * chain is what it may write: a volume on a loop device evicting the
+     * device's own buffers is the ordinary case, and the ordering rules
+     * above cover it. */
+    if (victim == filling) {
+        return 1;
+    }
+    return !vfs_ns_held_by_caller();
 }
 
 static int busy_gone(void *arg)
@@ -233,7 +246,7 @@ again:
         if (!victim->dirty) {
             break;
         }
-        if (!victim_may_be_written(victim->dev)) {
+        if (!victim_may_be_written(victim->dev, dev)) {
             /* Its write would take a block this caller may not take while it
              * holds what it holds; another buffer can be the victim. */
             tried[victim - bufs] = 1;
@@ -243,6 +256,12 @@ again:
         if (write_buffer(victim) == 0) {
             victim->holder = -1;
             wq_wake_all(&victim->wq);
+            /* The write may have gone through a file system and back into
+             * this cache, which could have filled the very block this call
+             * is about to key. Look again rather than key it twice. */
+            if (victim->dev && victim->dev->backing) {
+                goto again;
+            }
             break;
         }
         victim->holder = -1;
@@ -320,15 +339,19 @@ int bcache_write(struct bbuf *b)
 
 int bcache_sync(block_device_t *dev)
 {
-    struct bbuf *last = 0;
+    uint64_t last = 0;
+    int started = 0;
 
     for (;;) {
         struct bbuf *next = 0;
         int rc;
         int i;
 
+        /* The place reached is a block number and not a buffer: a buffer let
+         * go of while this waits can be given to another block, and a cutoff
+         * read from it afterwards would step over blocks still to write. */
         for (i = 0; i < BCACHE_BUFFERS; i++) {
-            if (bufs[i].dev == dev && bufs[i].dirty && (!last || bufs[i].blk > last->blk) &&
+            if (bufs[i].dev == dev && bufs[i].dirty && (!started || bufs[i].blk > last) &&
                 (!next || bufs[i].blk < next->blk)) {
                 next = &bufs[i];
             }
@@ -347,7 +370,7 @@ int bcache_sync(block_device_t *dev)
              * with nothing of the device held. */
             k_panic("bcache: hold rule: a sync while holding a block of the device");
         }
-        if (!victim_may_be_written(next->dev)) {
+        if (!victim_may_be_written(next->dev, dev)) {
             /* A sync is called with nothing else held; one that is not would
              * write a block whose device re-enters this cache from under a
              * hold that forbids it. */
@@ -360,7 +383,8 @@ int bcache_sync(block_device_t *dev)
         if (rc != 0) {
             return rc;
         }
-        last = next;
+        last = next->blk;
+        started = 1;
     }
 }
 
