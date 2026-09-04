@@ -27,6 +27,51 @@ static const int KRFFS_Invalid_Link_Error            = -10,
                  KRFFS_Repairs_Needed_Error          = -15;
 
 /**
+ * One named node, gathered by the walk so the check can find two of them.
+ *
+ * A file is found by its parent and its name, so a name repeated in one
+ * directory is the fault; `hash` is only what sorts the entries, and the names
+ * themselves decide.
+ */
+struct krffs_name_entry {
+    uint64_t parent_id;
+    uint64_t hash;
+    uint64_t position;
+    uint64_t size;
+    bool     drop;
+};
+
+/** The node `position` bytes into the mapped file system. */
+static struct krffs_node *krffs_node_at(
+                              struct krffs_file_system *file_system,
+                              uint64_t position
+                          )
+{
+    return (struct krffs_node *) ((char *) file_system->node + position);
+}
+
+/**
+ * Orders entries by directory, then by name hash, then by position, so every
+ * repeated name stands in one run.
+ */
+static int krffs_compare_name_entries(const void *left, const void *right)
+{
+    const struct krffs_name_entry *a = left;
+    const struct krffs_name_entry *b = right;
+
+    if (a->parent_id != b->parent_id) {
+        return a->parent_id < b->parent_id ? -1 : 1;
+    }
+    if (a->hash != b->hash) {
+        return a->hash < b->hash ? -1 : 1;
+    }
+    if (a->position != b->position) {
+        return a->position < b->position ? -1 : 1;
+    }
+    return 0;
+}
+
+/**
  * Checks the consistency of a KRFFS file system stored in a file.
  *
  * Usage: `fsck.krffs <file> [--offset N --size N] [--strict]`, or
@@ -46,7 +91,8 @@ static const int KRFFS_Invalid_Link_Error            = -10,
  * a chain that does not close, is reported and the image is left as it was.
  * A repairable one,
  * the dirty flag of an image that was not cleanly unmounted, an orphan node no
- * path reaches, and a backward link that disagrees with the forward chain, is
+ * path reaches, a name repeated in one directory by a move that was
+ * interrupted, and a backward link that disagrees with the forward chain, is
  * repaired after the walk has passed, and each repair is named. Nothing is
  * repaired before the walk: writing to an image whose structure has not been
  * read through is how a checker damages what it was asked to inspect.
@@ -252,6 +298,11 @@ int main(int argc, char **argv)
 
     uint64_t orphans = 0;
     uint64_t backlinks = 0;  /* backward links the forward chain contradicts */
+    uint64_t duplicates = 0; /* names repeated in one directory */
+
+    struct krffs_name_entry *entries = NULL;
+    size_t entry_count = 0;
+    size_t entry_capacity = 0;
 
     struct krffs_node *previous_node =
         file_system.node;
@@ -409,6 +460,28 @@ int main(int argc, char **argv)
                 (unsigned) node->gid
             );
         } else if (node->type == KRFFS_Reserved_Node) {
+            if (entry_count == entry_capacity) {
+                size_t wanted = entry_capacity ? entry_capacity * 2 : 64;
+                struct krffs_name_entry *grown =
+                    realloc(entries, wanted * sizeof(*entries));
+
+                if (!grown) {
+                    fprintf(stderr, "Out of memory reading the names.\n");
+                    exit_status = EXIT_FAILURE;
+                    break;
+                }
+                entries = grown;
+                entry_capacity = wanted;
+            }
+            entries[entry_count].parent_id = node->parent_id;
+            entries[entry_count].hash =
+                krffs_calculate_djb_hash(node->name);
+            entries[entry_count].position =
+                krffs_get_node_relative_position(&file_system, node);
+            entries[entry_count].size = node->size;
+            entries[entry_count].drop = false;
+            entry_count++;
+
             printf(
                 "+ reserved node with ID %"PRIu64" at position %"PRIu64": "
                 "%"PRIu64" bytes (%"PRIu64" bytes for data, owner %u:%u) - [%s]\n",
@@ -470,20 +543,86 @@ int main(int argc, char **argv)
         }
     }
 
+    /* A name repeated in one directory is what an interrupted move leaves. The
+       node the move is making is published under the name before the node it
+       replaces is freed, so a machine that stops between the two keeps both.
+       A move only ever happens to grow a file into a larger node, so the
+       larger of the two is the one the move was making: the smaller loses its
+       name and the orphan pass below reclaims it. */
+    if (exit_status == EXIT_SUCCESS && entry_count > 1) {
+        size_t i;
+
+        qsort(entries, entry_count, sizeof(*entries),
+              krffs_compare_name_entries);
+
+        for (i = 0; i + 1 < entry_count; i++) {
+            size_t j;
+
+            for (j = i + 1;
+                 !entries[i].drop && j < entry_count &&
+                 entries[j].parent_id == entries[i].parent_id &&
+                 entries[j].hash == entries[i].hash;
+                 j++) {
+                struct krffs_node *first = krffs_node_at(&file_system, entries[i].position);
+                struct krffs_node *second = krffs_node_at(&file_system, entries[j].position);
+                size_t keep;
+                size_t drop;
+
+                if (entries[j].drop ||
+                    strncmp((const char *) first->name,
+                            (const char *) second->name,
+                            KRFFS_FILE_NAME_BUFFER_SIZE) != 0) {
+                    continue;
+                }
+
+                keep = entries[i].size >= entries[j].size ? i : j;
+                drop = keep == i ? j : i;
+                entries[drop].drop = true;
+                duplicates++;
+
+                printf(
+                    "! name [%s] twice in one directory: "
+                    "position %"PRIu64" (%"PRIu64" bytes) kept, "
+                    "position %"PRIu64" (%"PRIu64" bytes) dropped\n",
+                    first->name,
+                    entries[keep].position,
+                    entries[keep].size,
+                    entries[drop].position,
+                    entries[drop].size
+                );
+            }
+        }
+    }
+
     /* Under `--strict` a repairable fault is the answer, and the image is left
        as it was found. */
     if (exit_status == EXIT_SUCCESS && is_strict &&
-        (was_dirty || orphans != 0 || backlinks != 0)) {
+        (was_dirty || orphans != 0 || duplicates != 0 || backlinks != 0)) {
         fprintf(
             stderr,
-            "The file system needs repair: %s%s%"PRIu64" orphan node(s), "
-            "%"PRIu64" backward link(s).\n",
+            "The file system needs repair: %s%"PRIu64" orphan node(s), "
+            "%"PRIu64" repeated name(s), %"PRIu64" backward link(s).\n",
             was_dirty ? "not cleanly unmounted, " : "",
-            "",
             orphans,
+            duplicates,
             backlinks
         );
         exit_status = KRFFS_Repairs_Needed_Error;
+    }
+
+    /* The loser of a repeated name gives up its name, which makes it the same
+       thing as an orphan and leaves the pass below one kind of node to
+       reclaim. */
+    if (exit_status == EXIT_SUCCESS && duplicates != 0) {
+        size_t i;
+
+        for (i = 0; i < entry_count; i++) {
+            if (entries[i].drop) {
+                krffs_node_at(&file_system, entries[i].position)->name[0] = '\0';
+            }
+        }
+        printf("Dropped %"PRIu64" repeated name(s) an interrupted move left.\n",
+               duplicates);
     }
 
     /* Reclaim every orphan: a reserved node with no name, kept alive in a
@@ -565,6 +704,8 @@ int main(int argc, char **argv)
     }
 
 cleanup:
+    free(entries);
+
     if (file_descriptor != -1) {
         if (PLATFORM_PREFIX(close(file_descriptor)) == -1) {
             fprintf(
