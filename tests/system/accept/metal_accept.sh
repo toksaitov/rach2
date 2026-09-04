@@ -76,6 +76,22 @@ run() {
         "root@$HOST" "$1" 2>/dev/null | tr -d '\r'
 }
 
+# The machine has no sftp server, so a file goes over as the standard input of
+# a command that writes it, and comes back as the standard output of one that
+# reads it.
+put() {
+    ssh -i "$KEY" -p "$PORT" \
+        -o StrictHostKeyChecking=no -o UserKnownHostsFile="$KNOWN" \
+        -o ConnectTimeout=10 -o BatchMode=yes \
+        "root@$HOST" "cat > $2" < "$1" 2>/dev/null
+}
+get() {
+    ssh -i "$KEY" -p "$PORT" \
+        -o StrictHostKeyChecking=no -o UserKnownHostsFile="$KNOWN" \
+        -o ConnectTimeout=10 -o BatchMode=yes \
+        "root@$HOST" "cat $1" > "$2" 2>/dev/null
+}
+
 echo "metal-accept: $HOST:$PORT"
 
 # ---- that it is reachable at all, which is the milestone's whole point ----
@@ -402,6 +418,67 @@ elif run 'ls /dev/disk0p4 2>/dev/null' | grep -q disk0p4; then
     fi
 else
     note "no scratch partition yet (/dev/disk0p4 absent)"
+fi
+
+# ---- a file system in a file, which milestone 44 made possible: an image on
+#      the root, attached to a loop device, mounted, written, read back,
+#      unmounted, detached, and judged here by the host's own checker. The
+#      image is built here and taken away again, so the machine is left as it
+#      was found. ----
+if ! run 'grep -q krffs /proc/filesystems && echo LISTED' | grep -q LISTED; then
+    note "this kernel does not take the krffs type; no image row"
+elif [ ! -x "$REPO/build/krffs/mkfs.krffs" ]; then
+    note "no host KRFFS tools built; no image row"
+else
+    IMG="$REPO/build/images/metal-loop.krffs"
+    TREE="$REPO/build/tests/system/loopimg"
+    mkdir -p "$TREE"
+    printf 'hello from inside an image' > "$TREE/hello.txt"
+    dd if=/dev/zero of="$TREE/inner.bin" bs=512 count=8 2>/dev/null
+    if sh "$REPO/krffs/mkimage.sh" "$REPO/krffs/manifests/loopimg-test.manifest" \
+        "$IMG" 4 >/dev/null 2>&1; then
+        put "$IMG" /root/loop.img
+        OUT="$(run 'loopctl attach 0 /root/loop.img && grep -c "^loop0 " /proc/loop')"
+        if [ "$OUT" = "1" ]; then
+            note "an image on the root is attached to /dev/loop0"
+        else
+            bad "the image was not attached: $OUT"
+        fi
+        OUT="$(run 'mkdir -p /mnt/loop && mount -t krffs /dev/loop0 /mnt/loop && cat /mnt/loop/hello.txt')"
+        if [ "$OUT" = "hello from inside an image" ]; then
+            note "the file system in that file mounts and reads"
+        else
+            bad "the file system in that file did not read: $OUT"
+        fi
+        OUT="$(run 'echo written-on-the-machine > /mnt/loop/accept.txt && cat /mnt/loop/accept.txt')"
+        if [ "$OUT" = "written-on-the-machine" ]; then
+            note "and takes a write"
+        else
+            bad "the file system in that file did not take a write: $OUT"
+        fi
+        OUT="$(run 'umount /mnt/loop && rmdir /mnt/loop && loopctl detach 0 && wc -c < /proc/loop')"
+        if [ "$OUT" = "0" ]; then
+            note "and unmounts and detaches, leaving no device attached"
+        else
+            bad "the unmount or the detach left something behind: $OUT"
+        fi
+        get /root/loop.img "$IMG.after"
+        if "$REPO/build/krffs/fsck.krffs" "$IMG.after" --strict >/dev/null 2>&1; then
+            note "the host's checker finds the image the machine wrote clean"
+        else
+            bad "the host's checker finds the image the machine wrote faulty"
+        fi
+        if "$REPO/build/krffs/readfile.krffs" "$IMG.after" /accept.txt \
+            "$IMG.accept" >/dev/null 2>&1 &&
+            grep -q written-on-the-machine "$IMG.accept"; then
+            note "with the file the machine wrote inside it"
+        else
+            bad "the file the machine wrote is not in the image"
+        fi
+        run 'rm -f /root/loop.img'
+    else
+        note "the image could not be built here; no image row"
+    fi
 fi
 
 # ---- a flash drive, when one is plugged in. Written in milestone 40 and run
