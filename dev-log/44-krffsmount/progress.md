@@ -6,8 +6,8 @@ Phase 1: the oracle and the crash model
 - [x] host rows for the protocol over images, with their mutations
 
 Phase 2: the offset core
-- [ ] krffs.c in offsets over a backend, memory backend only, root on a pointer facade
-- [ ] the VFS adapter on encoded handles
+- [x] krffs.c in offsets over a backend, memory backend only, root on a pointer facade
+- [ ] the VFS adapter on encoded handles (moved to the mountable type, phase 3; see notes.md)
 - [ ] tests/run all unchanged; both roots boot; review at the boundary
 
 Phase 3: the block backend, read-only
