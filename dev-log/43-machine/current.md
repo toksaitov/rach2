@@ -40,19 +40,17 @@ clock and the turn taken only on a free ring (the boot that lost every
 USB device); a silent stick handed back for a port reset; the Doom
 zone from free memory through brk.
 
-Open, in order: the Doom port's host row over a two-track MIDI
-fixture (the multi-track player is in and proved on the machine); the
-panic at a pull of a silent stick, awaiting its record from the
-netconsole capture; root's SSH key refused after a
-stick boot, to reproduce with a second dropbear started with -E from a
-test-account su session; the RTC set to UTC by the owner; the shareware
-WAD put back as /doom1.wad on the machine (the machine's /bin/doom is
-the multi-track build, ahead of the ext2 image the tree last wrote).
-Phase 8 is closed: the machine runs the kernel it built itself,
-`8ed3c0f8...`, from the root rewritten from the current tree. Phase 9 is closed except for what the owner holds: the machine runs its
-own build of the final tree, `77b78018...`, on the ext2 root
-`9c20cabd...`; the full set, the acceptance script and the documents'
-review are done and recorded. Open with the owner: the SSH key refused after a metal-stick boot, which needs a stick
-rewritten as the metal stick and a boot from it; the panic at a pull
-of a silent stick, awaiting its record. Nothing is owed for a later session.
+Phases 1 to 9 are closed. The machine runs its own build of the final
+tree, `77b78018...`, on the ext2 root `9c20cabd...`, with the KRFFS
+root as the fallback and a recovery partition that has `e2fsck`; the
+acceptance script passes against it, and the stick beside it is the
+recovery stick with an empty save volume. The full set, the documents'
+review and every difference's row are done and recorded in notes.md.
+
+Open, and each recorded there: the panic at a pull of a stick that had
+stopped answering, which did not recur and whose record the netconsole
+capture on the Mac would keep; and the frame exhaustion under the lag
+device, seen once in phase 1 and not reproduced in two trials with the
+record in place. Both wait on the machine showing them again. The
+milestone's own Readme has the trust statement.
 File being read when written: none.
