@@ -256,6 +256,10 @@ static void get_other(void *arg)
 {
     bcache_get(&other, *(uint64_t *)arg);
 }
+static void sync_it(void *arg)
+{
+    bcache_sync((block_device_t *)arg);
+}
 static void release_it(void *arg)
 {
     bcache_release(arg);
@@ -514,6 +518,35 @@ int main(void)
                   "and its dirty block is passed over while a mount's lock is held");
             ns_held = 0;
             bcache_sync(&nested);
+            bcache_invalidate(&nested);
+            bcache_invalidate(&other);
+        }
+        /* A sync waits for a dirty buffer somebody else holds. A caller
+           holding one of the device it syncs would be waiting for itself,
+           and one holding a block of another device would write through a
+           file system it is already inside. Both are named, not waited on. */
+        {
+            struct bbuf *held;
+
+            bcache_invalidate(&fake);
+            held = bcache_get(&fake, 2);
+            check(held != 0, "a block of a device is taken and marked dirty");
+            bcache_dirty(held);
+            panic_row(sync_it, &fake, "a sync while holding a block of the device",
+                      "a sync of the device whose dirty block the caller holds panics");
+            bcache_release(held);
+            check(bcache_sync(&fake) == 0, "and the same sync writes it once it is let go");
+
+            held = bcache_get(&nested, 9);
+            check(held != 0, "a dirty block of a device that stands on another");
+            bcache_dirty(held);
+            bcache_release(held);
+            held = bcache_get(&other, 1);
+            check(held != 0, "with a block of an unrelated device held");
+            panic_row(sync_it, &nested, "a sync while holding a block of another device",
+                      "a sync that would write through a file system already entered panics");
+            bcache_release(held);
+            check(bcache_sync(&nested) == 0, "and that sync writes once the other is let go");
             bcache_invalidate(&nested);
             bcache_invalidate(&other);
         }
