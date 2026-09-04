@@ -9,9 +9,9 @@ tree, `77b78018...` through TinyCC, on the ext2 root `9c20cabd...`,
 with the KRFFS root as the fallback and a recovery partition that has
 `e2fsck`; `bootctl kernel build/rach2/kernel` puts the host's build
 back. The hub with the keyboard, the mouse and the recovery stick is
-in the blue socket, and Freedoom is `/doom1.wad` on the machine with
-the shareware WAD beside it as `/shareware.wad`, where the tree stages
-the shareware one. The
+in the blue socket, and the machine plays the tree's own shareware
+WAD as `/doom1.wad`, with Freedoom beside it as `/freedoom1.wad` for
+the music test. The
 acceptance script passes against it, and the stick beside it is the
 recovery stick with an empty save volume. The full set, the documents'
 review and every difference's row are done and recorded in notes.md.

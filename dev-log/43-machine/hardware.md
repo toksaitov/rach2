@@ -331,3 +331,7 @@ committed. The acceptance script passes against it. This is the
 machine the milestone leaves: the ext2 root of the final tree, the
 kernel the machine built from that tree, the KRFFS root as the
 fallback, the recovery partition with `e2fsck`.
+
+The machine the milestone leaves plays the tree's own shareware IWAD as
+`/doom1.wad`, `1d7d43be...`, with Freedoom beside it as
+`/freedoom1.wad` for the music comparison.

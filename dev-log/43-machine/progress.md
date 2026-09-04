@@ -39,7 +39,7 @@ Phase 7: the differences
 - [x] the recovery partition rewritten with e2fsck, from recovery with a saved copy, with approval
 - [x] root's SSH key after a stick boot: the session's own command, not the machine
 - [x] the RTC set to UTC by the owner and stated in the Readme
-- [ ] the shareware WAD put back as /doom1.wad on the machine
+- [x] the shareware WAD is /doom1.wad on the machine, the tree's own, with Freedoom beside it as /freedoom1.wad
 
 Phase 8: the machine's own build
 - [x] the machine builds its kernel, utilities and shell from the staged sources (7 s for the kernel)
