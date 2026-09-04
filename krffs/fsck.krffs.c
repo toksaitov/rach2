@@ -43,7 +43,8 @@ static const int KRFFS_Invalid_Link_Error            = -10,
  *
  * Two kinds of fault. A fatal one, an unreadable signature, an unknown type, a
  * size that leaves the region, a data size larger than the node holding it, or
- * a chain that does not close, is reported and the image is left as found. A repairable one,
+ * a chain that does not close, is reported and the image is left as it was.
+ * A repairable one,
  * the dirty flag of an image that was not cleanly unmounted, an orphan node no
  * path reaches, and a backward link that disagrees with the forward chain, is
  * repaired after the walk has passed, and each repair is named. Nothing is
