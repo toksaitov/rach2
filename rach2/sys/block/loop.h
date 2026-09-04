@@ -42,6 +42,10 @@ int loop_detach(int index);
 /** Whether the file at (`mnt`, `node`) backs a loop device. */
 int loop_backs(struct vfs_mount *mnt, void *node);
 
+/** Follow a node the file system moved, for `vfs_repoint`, which owns that
+ * sweep. */
+void loop_repoint(struct vfs_mount *mnt, void *from, void *to);
+
 /** Whether `mnt` holds the file of any loop device. */
 int loop_holds_mount(struct vfs_mount *mnt);
 

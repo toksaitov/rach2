@@ -718,6 +718,12 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
             return -EBUSY;
         }
         fd_ofd_lock(ofd);
+        /* And again under it: taking the lock waits, and an attachment can
+         * publish itself while this call is in that wait. */
+        if (loop_backs(ofd->vmnt, ofd->vnode)) {
+            fd_ofd_unlock(ofd);
+            return -EBUSY;
+        }
         /* O_APPEND: every write lands at the current end of file, regardless of
          * any intervening seek (the POSIX append contract). The flag lives on
          * the shared open-file description. */
@@ -805,6 +811,10 @@ static int32_t sys_ftruncate(isr_params_t *params)
         return -EBUSY;
     }
     fd_ofd_lock(entry->ofd);
+    if (loop_backs(entry->ofd->vmnt, entry->ofd->vnode)) {
+        fd_ofd_unlock(entry->ofd); /* attached while this waited for the lock */
+        return -EBUSY;
+    }
     rc = vfs_truncate(entry->ofd->vmnt, entry->ofd->fhandle, length);
     if (rc == 0 && !cred_privileged()) {
         if (entry->node) {
@@ -6979,6 +6989,15 @@ static int32_t sys_unlink(isr_params_t *params)
             vfs_ref_release(&parent);
             return rc;
         }
+        /* A file a loop device stands on is not removed while it stands
+         * there. The holder rule below is the descriptor tables, which an
+         * attachment is not in, and the memory root has no count of its own
+         * to keep the extent alive; the other file systems keep an unlinked
+         * node for whoever holds it, so this is the root's answer only. */
+        if (loop_backs(parent.mnt, node)) {
+            vfs_ref_release(&parent);
+            return -EBUSY;
+        }
         /* The last decision, never the first: orphaning bypasses the refusals
          * the file system would have made, so every one of them is decided
          * above. With a holder the node stays live and nameless until the
@@ -7318,6 +7337,10 @@ static int32_t sys_rename(isr_params_t *params)
         }
         if (existing == krffs_fs->node || KRFFS_IS_DIR(existing->mode)) {
             rc = -EISDIR;
+            goto out;
+        }
+        if (loop_backs(npar.mnt, existing)) {
+            rc = -EBUSY; /* a loop device stands on what this would replace */
             goto out;
         }
         /* Orphan the destination the rename is about to replace, so a

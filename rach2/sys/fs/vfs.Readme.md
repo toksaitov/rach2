@@ -34,7 +34,7 @@ An operation a type does not implement is a NULL pointer, and the wrapper in `vf
 
 An open-file description on a mounted file system holds its mount, its node and the handle (`fd.h`). A directory descriptor's `*at` calls resolve against the directory's current path: a type with a `path` operation rebuilds it, so the descriptor follows a rename of the directory; a type without one keeps the path the descriptor was opened by. `read`, `write`, `lseek`, `getdents64` and `ftruncate` hold the description for the length of the operation, so two processes sharing one description cannot both read one offset while one of them sleeps in a disk request, and every byte of a file read through a shared description is handed out once. A process whose working directory is inside a mount placed by `mount(2)` holds that mount; the permanent three need no such hold and take none. A child mount holds its parent. The mount's reference count is its descriptions, working directories and child mounts, and it is what `umount2` reports as busy.
 
-When KRFFS relocates a node, `vfs_repoint` moves every reference to it: descriptions, working directories, directory descriptors and covering mounts.
+When KRFFS relocates a node, `vfs_repoint` moves every reference to it: descriptions, working directories, directory descriptors, covering mounts and the loop devices standing on it.
 
 ## Locks
 

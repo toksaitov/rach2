@@ -25,6 +25,7 @@
 #include "loop.h"
 
 #include "../fs/bcache.h"
+#include "../fs/fd.h"
 #include "../fs/vfs.h"
 #include "../klog.h"
 #include "../lib/kerrno.h"
@@ -157,6 +158,29 @@ block_device_t *loop_device_at(int index)
         return 0;
     }
     return &loops[index].dev;
+}
+
+/**
+ * Follow a node that moved, which is what a KRFFS relocation does to one.
+ *
+ * An attachment names its file by its mount and its node, and the VFS owns
+ * the sweep over every other holder; this is the loop devices' part of it.
+ */
+void loop_repoint(struct vfs_mount *mnt, void *from, void *to)
+{
+    int i;
+
+    for (i = 0; i < LOOP_DEVICES; i++) {
+        if (loops[i].mnt != mnt) {
+            continue;
+        }
+        if (loops[i].node == from) {
+            loops[i].node = to;
+        }
+        if (loops[i].handle == from) {
+            loops[i].handle = to;
+        }
+    }
 }
 
 int loop_backs(struct vfs_mount *mnt, void *node)
@@ -410,6 +434,17 @@ int loop_attach(int index, const char *path, int writable)
         vfs_ref_release(&ref);
         loop_unclaim(loop);
         return rc;
+    }
+    /* A write or a truncation already inside the file system holding this
+     * file would finish after the publication below and change an image the
+     * mount above is reading. A description in the middle of one is what
+     * says so, and this attach waits for another moment rather than taking
+     * the file out from under it. */
+    if (fd_node_busy(ref.mnt, ref.node)) {
+        vfs_release(ref.mnt, handle);
+        vfs_ref_release(&ref);
+        loop_unclaim(loop);
+        return -EBUSY;
     }
     /* The open could sleep, and another attach could have taken this file in
      * the meantime; the publication below is what makes it this device's, and

@@ -183,6 +183,9 @@ void fd_ofd_unlock(struct open_file *ofd);
  * relocation moved a node. Called by vfs_repoint, which owns the sweep. */
 void fd_ofd_repoint(struct vfs_mount *mnt, void *from, void *to);
 
+/** Whether a description of (`mnt`, `node`) is inside an operation now. */
+int fd_node_busy(struct vfs_mount *mnt, void *node);
+
 /** 1 if fd is allocated, 0 otherwise. */
 int fd_is_valid(fd_table_t *table, int fd);
 

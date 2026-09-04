@@ -633,6 +633,7 @@ void vfs_repoint(struct vfs_mount *mnt, void *from, void *to)
         mnt->root = to;
     }
     fd_ofd_repoint(mnt, from, to);
+    loop_repoint(mnt, from, to);
 }
 
 /* ---- the default-answer wrappers ---- */

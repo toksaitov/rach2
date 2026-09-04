@@ -73,6 +73,27 @@ void fd_ofd_unlock(struct open_file *ofd)
     wq_wake_all(&ofd_wq[ofd - ofd_pool]);
 }
 
+/**
+ * Whether any description of the file at (`mnt`, `node`) is inside an
+ * operation. A write or a truncation holds its description for the length of
+ * the call, so this is how an attachment asks whether one is in flight over
+ * the file it is about to take.
+ */
+int fd_node_busy(struct vfs_mount *mnt, void *node)
+{
+    int i;
+
+    for (i = 0; i < OFD_POOL_SIZE; i++) {
+        if (ofd_pool[i].refcount == 0 || ofd_pool[i].vmnt != mnt) {
+            continue;
+        }
+        if (ofd_pool[i].vnode == node && ofd_pool[i].busy) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 void fd_ofd_repoint(struct vfs_mount *mnt, void *from, void *to)
 {
     int i;

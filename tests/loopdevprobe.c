@@ -32,6 +32,7 @@ typedef unsigned int size_t;
 #define SYS_OPEN      5
 #define SYS_CLOSE     6
 #define SYS_UNLINK    10
+#define SYS_RENAME    38
 #define SYS_MKDIR     39
 #define SYS_MOUNT     21
 #define SYS_UMOUNT2   52
@@ -513,6 +514,28 @@ void probe_main(unsigned int *sp)
     rc = control("attach 0 /ram.img");
     if (rc != 0) {
         fail_with("attaching an image that lives in memory", rc);
+    }
+    /* The root keeps no count on a node of its own: its rule for a file
+       somebody holds is the descriptor tables, and an attachment is not one.
+       So a removal of the file under this device, by either name it can be
+       removed by, is refused while the device stands on it. */
+    if (sys1(SYS_UNLINK, (int)"/ram.img") != -EBUSY) {
+        fail("the file under an attached device was unlinked");
+    }
+    {
+        int spare = sys3(SYS_OPEN, (int)"/spare.img", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+
+        if (spare < 0) {
+            fail("making a file to rename over the attached one");
+        }
+        sys3(SYS_WRITE, spare, (int)"x", 1);
+        sys1(SYS_CLOSE, spare);
+        if (sys2(SYS_RENAME, (int)"/spare.img", (int)"/ram.img") != -EBUSY) {
+            fail("the file under an attached device was renamed over");
+        }
+        if (sys1(SYS_UNLINK, (int)"/spare.img") != 0) {
+            fail("removing the spare file");
+        }
     }
     rc = sys5(SYS_MOUNT, (int)"/dev/loop0", (int)"/l", (int)type, MS_RDONLY, 0);
     if (rc != 0) {
