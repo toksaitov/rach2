@@ -44,7 +44,7 @@ The forward chain is the invariant. A change is ordered so that every block the 
 
 ### The loop device
 
-`/dev/loop0` to `/dev/loop3` over a regular file, attached and detached by a small Rach2 utility through a control node, and reported in `/proc/loop`; BusyBox's `losetup` stays out of the build. The file is held open for the attachment, its length fixes the sector count and is never changed by the device, a length that is not whole sectors is refused, a short read or write becomes a device error, and a file opened without write access attaches read-only, which the mount inherits.
+`/dev/loop0` to `/dev/loop3` over a regular file, attached and detached by a small Rach2 utility through a control node, and reported in `/proc/loop`; BusyBox's `losetup` stays out of the build. The file is held open for the attachment, its length fixes the sector count and is never changed by the device, a length that is not whole sectors is refused, a short read or write becomes a device error, and a file opened without write access attaches read-only, which the mount inherits. Holding it open is not enough on its own: while a file backs a device, a write or a truncation of it through any other descriptor is refused, because the image under a mounted file system may not change beneath it.
 
 A loop transfer runs in the context of the process that asked for it and returns when the backing file has taken it: a write is a VFS write followed by a VFS `fsync` of the backing file, so the cache's promise that a written block has reached the device still holds. Detach unpublishes the node, refuses new mounts and opens, waits for the holds to go, syncs and invalidates every buffer of that device, and only then releases the file.
 
