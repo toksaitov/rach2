@@ -454,6 +454,33 @@ static uint64_t krffs_find_offset_by_hash(krffs_mount_t *mount,
 }
 
 /**
+ * The child of the directory at `dir` named `name`, one step of a walk.
+ *
+ * `dir` is an offset, and offset 0 is the root directory. Answers
+ * KRFFS_NO_NODE when there is no such name.
+ */
+uint64_t krffs_child_at(krffs_mount_t *mount, uint64_t dir, const char *name)
+{
+    uint64_t id = KRFFS_ROOT_ID;
+    uint32_t len = 0;
+    krffs_brief_t brief;
+
+    if (!name) {
+        return KRFFS_NO_NODE;
+    }
+    while (name[len] != '\0') {
+        len++;
+    }
+    if (dir != 0 && dir != KRFFS_NO_NODE) {
+        if (krffs_brief(mount, dir, &brief) != 0) {
+            return KRFFS_NO_NODE;
+        }
+        id = brief.id;
+    }
+    return krffs_find_child(mount, id, name, len);
+}
+
+/**
  * Resolve `path` to a node offset, honoring '.' and '..'.
  *
  * "/" (or "") resolves to the root, which is offset 0. A non-final component

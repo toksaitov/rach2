@@ -82,6 +82,7 @@ C_SRC = kernel.c \
         sys/proc/uimage.c \
         sys/proc/tls.c \
         sys/fs/krffs.c \
+        sys/fs/krffsmount.c \
         sys/fs/fd.c \
         sys/fs/devfs.c \
         sys/fs/synthfs.c \

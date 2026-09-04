@@ -1,0 +1,415 @@
+/*
+ * KRFFS as a mounted volume.
+ *
+ * The format is in krffs.c, which addresses nodes by their offset from the
+ * first byte of the region and reaches the medium through a backend. This
+ * file is the other backend, over a block device through the buffer cache,
+ * and the VFS type that `mount(2)` places. The root file system is not this:
+ * it is a mapped image with a pointer interface, and it never comes through
+ * here.
+ *
+ * A node handle is its offset plus one, so the root's offset of zero is not
+ * the NULL the VFS reads as the mount's root. Nothing else is kept per node:
+ * a KRFFS node is found by walking the ring, and an offset is all it takes to
+ * read one again.
+ */
+
+#include "krffsmount.h"
+
+#include "../klog.h"
+#include "../lib/kerrno.h"
+#include "../lib/kstring.h"
+#include "bcache.h"
+#include "krffs.h"
+#include "vfs.h"
+
+/* Two at once: a volume of a disk and a volume of a stick, which is what the
+ * machine has. A third mount answers ENOMEM rather than growing a table
+ * nothing has asked for. */
+#define KRFFS_VOLUMES 2
+
+struct krffs_volume {
+    int used;
+    block_device_t *dev;
+    struct vfs_mount *mnt;
+    krffs_mount_t fs;
+    int writable;
+};
+
+static struct krffs_volume krffs_volumes[KRFFS_VOLUMES];
+
+static struct krffs_volume *vol_of(struct vfs_mount *mnt)
+{
+    return (struct krffs_volume *)mnt->priv;
+}
+
+/* The handle a node is known by outside this file, and the way back. */
+
+static void *handle_of(uint64_t offset)
+{
+    return (void *)(uintptr_t)(offset + 1);
+}
+
+static uint64_t offset_of(struct vfs_mount *mnt, void *handle)
+{
+    (void)mnt;
+    if (!handle) {
+        return 0; /* the VFS says NULL for the mount's root */
+    }
+    return (uint64_t)(uintptr_t)handle - 1;
+}
+
+/*
+ * The block backend: the region's bytes, through the buffer cache.
+ *
+ * The offsets are from the start of the volume, which is the start of the
+ * device the mount was given, so a partition window needs no arithmetic here.
+ * One buffer is held at a time, which is inside the cache's hold rules.
+ */
+
+static int volume_read(void *ctx, uint64_t offset, void *buffer, uint32_t size)
+{
+    struct krffs_volume *vol = ctx;
+    uint8_t *out = buffer;
+
+    while (size > 0) {
+        uint64_t block = offset / BCACHE_BLOCK_BYTES;
+        uint32_t within = (uint32_t)(offset % BCACHE_BLOCK_BYTES);
+        uint32_t take = BCACHE_BLOCK_BYTES - within;
+        struct bbuf *b;
+
+        if (take > size) {
+            take = size;
+        }
+        b = bcache_get(vol->dev, block);
+        if (!b) {
+            return -1;
+        }
+        if (within + take > b->bytes) {
+            bcache_release(b); /* past the device's short last block */
+            return -1;
+        }
+        k_memcpy(out, b->data + within, take);
+        bcache_release(b);
+        out += take;
+        offset += take;
+        size -= take;
+    }
+    return 0;
+}
+
+static int volume_write(void *ctx, uint64_t offset, const void *buffer,
+                        uint32_t size)
+{
+    (void)ctx;
+    (void)offset;
+    (void)buffer;
+    (void)size;
+    return -1; /* a mounted volume is read-only */
+}
+
+static int volume_sync(void *ctx)
+{
+    struct krffs_volume *vol = ctx;
+
+    return bcache_sync(vol->dev) == 0 ? 0 : -1;
+}
+
+static const krffs_backend_t volume_backend = {volume_read, volume_write,
+                                               volume_sync};
+
+/* ==== the operations ==== */
+
+static int kv_lookup(struct vfs_mount *mnt, void *dir, const char *name,
+                     void **node)
+{
+    struct krffs_volume *vol = vol_of(mnt);
+    uint64_t at = offset_of(mnt, dir);
+    uint64_t found;
+
+    if (name[0] == '.' && name[1] == '\0') {
+        *node = handle_of(at);
+        return 0;
+    }
+    if (name[0] == '.' && name[1] == '.' && name[2] == '\0') {
+        uint64_t parent = krffs_parent_offset(&vol->fs, at);
+
+        *node = handle_of(parent == KRFFS_NO_NODE ? 0 : parent);
+        return 0;
+    }
+    found = krffs_child_at(&vol->fs, at, name);
+    if (found == KRFFS_NO_NODE) {
+        return -ENOENT;
+    }
+    *node = handle_of(found);
+    return 0;
+}
+
+static int kv_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
+{
+    struct krffs_volume *vol = vol_of(mnt);
+    uint64_t at = offset_of(mnt, node);
+    krffs_node_t head;
+
+    if (krffs_head(&vol->fs, at, &head) != 0) {
+        return -EIO;
+    }
+    k_memset(st, 0, sizeof(*st));
+    if (at == 0) {
+        /* The root directory's mode is the format's, not the node's: the
+         * root node carries the dirty flag in the same field. */
+        st->mode = KRFFS_S_IFDIR | 0755u;
+        st->nlink = 2;
+    } else {
+        st->mode = KRFFS_IS_DIR(head.mode) ? head.mode
+                                           : (KRFFS_S_IFREG | (head.mode & 07777u));
+        st->nlink = KRFFS_IS_DIR(head.mode) ? 2 : 1;
+    }
+    st->uid = head.uid;
+    st->gid = head.gid;
+    /* The node's offset names it: unique within the volume at any moment,
+     * and what every other call here takes. A node that moves takes a new
+     * number with it, which is the price of a format with no inode table. */
+    st->ino = at + 1;
+    st->size = head.data_size;
+    st->atime_sec = head.access_time.seconds;
+    st->atime_nsec = head.access_time.nanoseconds;
+    st->mtime_sec = head.modification_time.seconds;
+    st->mtime_nsec = head.modification_time.nanoseconds;
+    st->ctime_sec = head.attribute_change_time.seconds;
+    st->ctime_nsec = head.attribute_change_time.nanoseconds;
+    return 0;
+}
+
+static int kv_open(struct vfs_mount *mnt, void *node, int flags, void **handle)
+{
+    (void)mnt;
+    (void)flags;
+    *handle = node; /* the node is the handle: an offset needs nothing else */
+    return 0;
+}
+
+static void kv_release(struct vfs_mount *mnt, void *handle)
+{
+    (void)mnt;
+    (void)handle;
+}
+
+static int32_t kv_read(struct vfs_mount *mnt, void *handle, void *buf,
+                       uint32_t count, uint64_t offset)
+{
+    struct krffs_volume *vol = vol_of(mnt);
+    uint64_t at = offset_of(mnt, handle);
+    int got;
+
+    if (offset > 0xFFFFFFFFull) {
+        return 0; /* past the largest offset this kernel has */
+    }
+    got = krffs_read_at(&vol->fs, at, buf, count, (uint32_t)offset);
+    return got < 0 ? -EIO : (int32_t)got;
+}
+
+/*
+ * One directory entry, the cursor being the offset of the node to look at
+ * next. Zero starts at the root node, which is never an entry, and the walk
+ * ends where it returns there.
+ */
+#define KRFFS_DIR_END 0xFFFFFFFFu
+
+static int kv_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
+                      struct vfs_dirent *ent)
+{
+    struct krffs_volume *vol = vol_of(mnt);
+    uint64_t dir = offset_of(mnt, handle);
+    uint64_t dir_id = KRFFS_ROOT_ID;
+    uint64_t scan = *cursor;
+    uint64_t steps = 0;
+    krffs_node_t head;
+
+    if (*cursor == KRFFS_DIR_END) {
+        return 0;
+    }
+    if (dir != 0) {
+        if (krffs_head(&vol->fs, dir, &head) != 0) {
+            return -EIO;
+        }
+        if (!KRFFS_IS_DIR(head.mode)) {
+            return -ENOTDIR;
+        }
+        dir_id = head.id;
+    }
+
+    do {
+        if (krffs_head(&vol->fs, scan, &head) != 0) {
+            return -EIO;
+        }
+        if (head.type == KRFFS_RESERVED_NODE && head.parent_id == dir_id &&
+            head.name[0] != '\0') {
+            uint32_t i;
+            uint64_t next = krffs_next_offset(&vol->fs, scan, &head);
+
+            for (i = 0; i + 1 < sizeof(ent->name) && head.name[i] != '\0'; i++) {
+                ent->name[i] = (char)head.name[i];
+            }
+            ent->name[i] = '\0';
+            ent->ino = scan + 1;
+            ent->is_dir = KRFFS_IS_DIR(head.mode) ? 1 : 0;
+            *cursor = next == 0 ? KRFFS_DIR_END : (uint32_t)next;
+            return 1;
+        }
+        scan = krffs_next_offset(&vol->fs, scan, &head);
+    } while (scan != 0 && ++steps < krffs_max_steps(&vol->fs));
+
+    *cursor = KRFFS_DIR_END;
+    return 0;
+}
+
+static int kv_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
+{
+    struct krffs_volume *vol = vol_of(mnt);
+
+    st->magic = KRFFS_FILE_SYSTEM_MAGIC;
+    st->bsize = 1024;
+    st->blocks = vol->fs.size / 1024u;
+    st->bfree = krffs_free_at(&vol->fs) / 1024u;
+    st->namelen = KRFFS_FILE_NAME_BUFFER_SIZE - 1;
+    return 0;
+}
+
+static int kv_sync(struct vfs_mount *mnt)
+{
+    struct krffs_volume *vol = vol_of(mnt);
+
+    return vol->writable ? bcache_sync(vol->dev) : 0;
+}
+
+static int kv_prepare_unmount(struct vfs_mount *mnt)
+{
+    return kv_sync(mnt);
+}
+
+static void kv_unmount(struct vfs_mount *mnt)
+{
+    struct krffs_volume *vol = vol_of(mnt);
+
+    k_memset(vol, 0, sizeof(*vol));
+    mnt->priv = 0;
+}
+
+static int kv_path(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
+{
+    struct krffs_volume *vol = vol_of(mnt);
+
+    return krffs_node_path_at(&vol->fs, offset_of(mnt, node), buf, cap) == 0
+               ? 0
+               : -ENAMETOOLONG;
+}
+
+static const struct vfs_ops krffs_volume_ops = {
+    kv_lookup, 0,  /* lookup_rest */
+    0,             /* hold: a handle is a number, not a thing to count */
+    0,             /* put */
+    kv_getattr, 0, /* setattr: a read-only volume has none */
+    kv_open,    kv_release,
+    kv_read,    0, /* write */
+    0,             /* truncate */
+    0,             /* fsync */
+    kv_readdir, 0, /* create */
+    0,             /* unlink */
+    0,             /* mkdir */
+    0,             /* rmdir */
+    0,             /* rename */
+    0,             /* link: KRFFS has none */
+    0,             /* readlink: KRFFS has none */
+    kv_statfs,  kv_sync, kv_prepare_unmount, kv_unmount, kv_path,
+    0, /* symlink */
+};
+
+/**
+ * Mount the KRFFS volume on `dev`.
+ *
+ * The region is the whole device, since the format records no size of its
+ * own: the ring tiles what it was made in, and a device larger than the image
+ * fails the chain check rather than mounting short. Every refusal says which
+ * rule the volume broke.
+ */
+static int krffs_volume_mount(struct vfs_mount *mnt, block_device_t *dev,
+                              uint32_t flags, const char *options)
+{
+    struct krffs_volume *vol = 0;
+    uint64_t bytes;
+    krffs_node_t root;
+    int i;
+
+    (void)options;
+    for (i = 0; i < KRFFS_VOLUMES; i++) {
+        if (!krffs_volumes[i].used) {
+            vol = &krffs_volumes[i];
+            break;
+        }
+    }
+    if (!vol) {
+        return -ENOMEM;
+    }
+
+    bytes = dev->sector_count * (uint64_t)dev->sector_size;
+    if (bytes < sizeof(krffs_node_t) * 2) {
+        klog(KLOG_ERR, "krffs", "mount: refused: the volume is too small");
+        return -EINVAL;
+    }
+    if (bytes > 0xFFFFFFFFull) {
+        klog(KLOG_ERR, "krffs",
+             "mount: refused: the volume is larger than four gibibytes");
+        return -EFBIG;
+    }
+
+    k_memset(vol, 0, sizeof(*vol));
+    vol->used = 1; /* claimed before the constructor sleeps */
+    vol->dev = dev;
+    vol->mnt = mnt;
+    vol->fs.backend = &volume_backend;
+    vol->fs.ctx = vol;
+    vol->fs.size = (uint32_t)bytes;
+    mnt->priv = vol;
+
+    if (krffs_head(&vol->fs, 0, &root) != 0) {
+        klog(KLOG_ERR, "krffs", "mount: refused: the first node cannot be read");
+        vol->used = 0;
+        mnt->priv = 0;
+        return -EIO;
+    }
+    if (root.magic != KRFFS_FILE_SYSTEM_MAGIC) {
+        klog(KLOG_ERR, "krffs", "mount: refused: magic 0x%X, expected 0x%X",
+             root.magic, KRFFS_FILE_SYSTEM_MAGIC);
+        vol->used = 0;
+        mnt->priv = 0;
+        return -EINVAL;
+    }
+    if (root.type != KRFFS_ROOT_NODE) {
+        klog(KLOG_ERR, "krffs",
+             "mount: refused: the first node is type %d, not the root",
+             root.type);
+        vol->used = 0;
+        mnt->priv = 0;
+        return -EINVAL;
+    }
+    if (!krffs_chain_is_valid(&vol->fs)) {
+        klog(KLOG_ERR, "krffs", "mount: refused: the node chain is malformed");
+        vol->used = 0;
+        mnt->priv = 0;
+        return -EINVAL;
+    }
+
+    /* Read-only, whatever was asked: writing a mounted volume is not built
+     * yet, and a mount that says it can write and cannot is worse than one
+     * that says what it is. */
+    (void)flags;
+    vol->writable = 0;
+    mnt->flags |= VFS_MS_RDONLY;
+    mnt->root = handle_of(0);
+    klog(KLOG_INFO, "krffs", "mount: %d bytes, read-only", (int)vol->fs.size);
+    return 0;
+}
+
+const struct vfs_type vfs_krffs_volume_type = {"krffs", krffs_volume_mount,
+                                               &krffs_volume_ops};

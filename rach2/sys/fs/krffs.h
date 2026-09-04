@@ -204,6 +204,7 @@ uint64_t krffs_max_steps(krffs_mount_t *mount);
 uint64_t krffs_next_offset(krffs_mount_t *mount, uint64_t offset,
                            const krffs_node_t *head);
 uint64_t krffs_walk(krffs_mount_t *mount, const char *path);
+uint64_t krffs_child_at(krffs_mount_t *mount, uint64_t dir, const char *name);
 uint64_t krffs_walk_err(krffs_mount_t *mount, const char *path, int *err);
 uint64_t krffs_parent_offset(krffs_mount_t *mount, uint64_t offset);
 int krffs_node_path_at(krffs_mount_t *mount, uint64_t offset, char *buf,

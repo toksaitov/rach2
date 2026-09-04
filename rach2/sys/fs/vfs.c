@@ -20,6 +20,7 @@
 #include "exfat.h"
 #include "ext2.h"
 #include "krffs.h"
+#include "krffsmount.h"
 #include "synthfs.h"
 
 #define VFS_S_IFMT       0170000u
@@ -1448,13 +1449,19 @@ int vfs_init_root(const struct vfs_type *type, struct block_device *dev, const c
 
 /* The types mount(2) accepts, by the name it spells; the permanent three
  * are not here because nothing mounts them by name. */
-static const struct vfs_type *const mount_types[] = {&vfs_vfat_type, &vfs_exfat_type, &vfs_ext2_type, 0};
+static const struct vfs_type *const mount_types[] = {&vfs_vfat_type, &vfs_exfat_type, &vfs_ext2_type,
+                                                    &vfs_krffs_volume_type, 0};
+
+/* The table's entries, its terminator apart. Counted, not written down twice:
+ * a fifth type added to the list above and not to a number here is a type
+ * mount(2) would not find. */
+#define VFS_MOUNT_TYPES ((int)(sizeof(mount_types) / sizeof(mount_types[0])) - 1)
 
 static const struct vfs_type *type_named(const char *name)
 {
     int i;
 
-    for (i = 0; i < 4; i++) {
+    for (i = 0; i < VFS_MOUNT_TYPES; i++) {
         if (mount_types[i] && streq(mount_types[i]->name, name)) {
             return mount_types[i];
         }
@@ -1464,7 +1471,7 @@ static const struct vfs_type *type_named(const char *name)
 
 const struct vfs_type *vfs_type_at(int idx)
 {
-    if (idx < 0 || idx >= 4) {
+    if (idx < 0 || idx >= VFS_MOUNT_TYPES) {
         return 0;
     }
     return mount_types[idx];

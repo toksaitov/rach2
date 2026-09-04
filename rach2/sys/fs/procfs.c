@@ -999,8 +999,8 @@ static int procfs_gen_mounts(struct procfs_text *t)
 }
 
 /* /proc/filesystems: `nodev` for the two synthetic namespaces, then every
- * type mount(2) accepts. KRFFS is not listed, because the root is not
- * mounted through mount(2) and cannot be while it lives in the window. */
+ * type mount(2) accepts, KRFFS among them. The root is not one of these: it
+ * is a mapped image, not a volume placed by mount(2). */
 /* /proc/interrupts: one line per vector that has taken an interrupt, the
  * vector, its count and where it comes from, then the counts the APIC's
  * spurious vector and the timer's fallback pump keep. */
@@ -1054,7 +1054,7 @@ static int procfs_gen_filesystems(struct procfs_text *t)
 
     ap_str(t, "nodev\tdevfs\n");
     ap_str(t, "nodev\tproc\n");
-    for (i = 0; i < 4; i++) {
+    for (i = 0; vfs_type_at(i); i++) {
         const struct vfs_type *ty = vfs_type_at(i);
 
         if (ty) {
