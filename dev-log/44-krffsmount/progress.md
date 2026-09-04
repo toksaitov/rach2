@@ -16,9 +16,10 @@ Phase 3: the block backend, read-only
 - [x] the refusals: bad magic, short region, malformed chain
 
 Phase 4: the block backend, writable
-- [ ] writes under the mount lock in the protocol's order; the dirty bit; the check at the next mount
-- [ ] the crash rows over every write prefix; two writers on one mount
-- [ ] the oracle finds every volume consistent; review at the boundary
+- [x] writes under the mount lock in the protocol's order; the dirty bit; the check at the next mount
+- [x] the crash rows over every write prefix; two writers on one mount
+- [x] the oracle finds every volume consistent
+- [ ] review at the boundary
 
 Phase 5: the block layer's third device and the cache's rule
 - [ ] the caller-synchronous sleeping device, refused outside syscall context
