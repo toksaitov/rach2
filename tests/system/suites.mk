@@ -1056,7 +1056,7 @@ run-fatwrite: $(DEMO_CREDS) rach2 tests krffs os-real-image $(MKFATFIXTURE) $(HA
 KRFFSMOUNT_DISK = $(IMAGES_DIR)/krffsmount-test.disk
 run-krffsmount: rach2 tests krffs test-image $(HARNESS) build/tools/image/mkmbr
 	sh tests/system/suites/krffsmount.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) \
-	    $(KRFFSMOUNT_DISK)
+	    $(KRFFSMOUNT_DISK) build/krffs/fsck.krffs
 
 # `tests/run ext2`: the ext2 driver booted over a fixture disk the host's
 # mke2fs wrote, with the walker's link rows on the mounted volume.

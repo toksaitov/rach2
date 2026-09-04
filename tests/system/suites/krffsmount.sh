@@ -1,11 +1,12 @@
 #!/bin/sh
-# krffsmount.sh: a KRFFS volume mounted by mount(2), read, and unmounted, and
-# the volumes the kernel must refuse. Four boots on a disk whose only
-# partition is a KRFFS image the host tools built.
+# krffsmount.sh: a KRFFS volume mounted by mount(2), read, written, read back
+# after a reboot, taken through a machine that was killed while writing, and
+# written by two processes at once; and the volumes the kernel must refuse.
+# The host's fsck.krffs judges the volume after every boot that wrote it.
 #
-# Usage: krffsmount.sh KERNEL IMAGE HARNESS DISK
+# Usage: krffsmount.sh KERNEL IMAGE HARNESS DISK FSCK
 set -u
-KERNEL=$1; IMAGE=$2; HARNESS=$3; DISK=$4
+KERNEL=$1; IMAGE=$2; HARNESS=$3; DISK=$4; FSCK=$5
 REPO=$(cd "$(dirname "$0")/../../.." && pwd)
 DIR="$REPO/build/tests/system/krffsvol"
 VOL="$DIR/volume.krffs"
@@ -60,7 +61,144 @@ cmp -s "$VOL" "$DISK.after" \
     || fail "the read-only mount changed the volume"
 echo "krffsmount-test: and the volume is byte for byte what it was: OK"
 
-# ---- 2, 3, 4: the volumes the kernel refuses ----
+# The volume as the host reads it: taken out of the disk and judged by
+# fsck.krffs, which is the independent check of everything the kernel writes.
+# `--strict` refuses an image that needs any repair, which is what a volume
+# that was unmounted cleanly must not.
+take_volume() {
+    dd if="$DISK" of="$DISK.vol" bs=512 skip=$PART count=$SECTORS 2>/dev/null
+}
+strict_clean() {
+    take_volume
+    "$FSCK" "$DISK.vol" --strict > "$DISK.fsck" 2>&1 \
+        || { cat "$DISK.fsck" >&2; fail "$1"; }
+}
+
+# ---- 2: written from a program, and the host finds it consistent ----
+if run --append "rach2.rescue" --timeout 120 --steptmo 90 \
+    --ok "KRFFSPROBE OK (write)" --never "KRFFSPROBE FAIL" \
+    --log "$DISK.write.log" "expect=Type 'help'" \
+    "send=exec /krffsprobe write" "expect=KRFFSPROBE" > /dev/null 2>&1; then
+    echo "krffsmount-test: a program writes the volume and unmounts it: OK"
+else
+    fail "the write boot"
+fi
+grep -aq 'krffs: mount: .* read-write' "$DISK.write.log" \
+    || fail "the write boot did not mount for writing"
+strict_clean "the volume needs repair after a clean unmount"
+echo "krffsmount-test: the host's checker finds it consistent and clean: OK"
+
+# ---- 3: the next boot finds everything where it was left ----
+if run --append "rach2.rescue" --timeout 120 --steptmo 90 \
+    --ok "KRFFSPROBE OK (readback)" --never "KRFFSPROBE FAIL" \
+    "expect=Type 'help'" "send=exec /krffsprobe readback" "expect=KRFFSPROBE" \
+    > /dev/null 2>&1; then
+    echo "krffsmount-test: every byte, name and mode is there after a reboot: OK"
+else
+    fail "the read-back boot"
+fi
+
+# ---- 4: a machine killed while writing, and the mount that repairs it ----
+run --append "rach2.rescue" --timeout 60 --steptmo 30 --ok "KRFFSPROBE WRITING" \
+    --never "KRFFSPROBE FAIL" "expect=Type 'help'" \
+    "send=exec /krffsprobe crash" "expect=KRFFSPROBE WRITING" > /dev/null 2>&1 \
+    || fail "the crash boot"
+take_volume
+"$FSCK" "$DISK.vol" --strict > "$DISK.fsck" 2>&1 \
+    && fail "the killed machine left the volume calling itself clean"
+grep -q 'not cleanly unmounted' "$DISK.fsck" \
+    || { cat "$DISK.fsck" >&2; fail "the checker did not see the dirty flag"; }
+echo "krffsmount-test: a machine killed while writing leaves the dirty flag set: OK"
+
+if run --append "rach2.rescue" --timeout 120 --steptmo 90 \
+    --ok "KRFFSPROBE OK (readback)" --never "KRFFSPROBE FAIL" \
+    --log "$DISK.repair.log" "expect=Type 'help'" \
+    "send=exec /krffsprobe readback" "expect=KRFFSPROBE" > /dev/null 2>&1; then
+    echo "krffsmount-test: the volume still reads back after the machine was killed: OK"
+else
+    fail "the boot after the crash"
+fi
+if run --append "rach2.rescue" --timeout 120 --steptmo 90 \
+    --ok "KRFFSPROBE OK (write)" --never "KRFFSPROBE FAIL" \
+    --log "$DISK.repair2.log" "expect=Type 'help'" \
+    "send=exec /krffsprobe write" "expect=KRFFSPROBE" > /dev/null 2>&1 \
+    && grep -aq 'krffs: check: the volume was not unmounted cleanly' "$DISK.repair2.log" \
+    && grep -aq 'krffs: check: repaired' "$DISK.repair2.log"; then
+    echo "krffsmount-test: the next mount that writes checks the volume and says what it repaired: OK"
+else
+    fail "the repair boot"
+fi
+strict_clean "the volume needs repair after the mount that repaired it"
+
+# ---- 5: what the mount repairs, on a volume broken on purpose ----
+# The three faults the format's order of writes can leave: a backward link the
+# forward chain contradicts, a reserved node with no name that no path
+# reaches, and one name on two nodes of a directory. The dirty flag is what
+# tells the mount a check is owed.
+python3 - "$VOL" "$DIR/broken.krffs" <<'PY' || fail "the volume to repair"
+import struct, sys
+
+HDR = 357
+TYPE, NAME, MODE, SIZE, PREV, DATA, PARENT = 2, 11, 267, 325, 333, 341, 349
+b = bytearray(open(sys.argv[1], 'rb').read())
+
+# A check is owed.
+struct.pack_into('<H', b, MODE, struct.unpack_from('<H', b, MODE)[0] | 0o4000)
+
+nodes, off = [], 0
+while off < len(b):
+    size = struct.unpack_from('<Q', b, off + SIZE)[0]
+    nodes.append((off, size, b[off + TYPE], bytes(b[off + NAME:off + NAME + 32])))
+    off += size
+
+reserved = [n for n in nodes if n[2] == 2 and n[3][0] != 0]
+if len(reserved) < 3:
+    raise SystemExit('the volume has too few files for these rows')
+
+# A backward link that disagrees with the forward chain.
+struct.pack_into('<Q', b, nodes[1][0] + PREV, 12345)
+# A node no path reaches: a reserved node whose name is gone.
+b[reserved[0][0] + NAME] = 0
+# One name on two nodes: the second takes the third's name and directory.
+b[reserved[1][0] + NAME:reserved[1][0] + NAME + 256] = \
+    b[reserved[2][0] + NAME:reserved[2][0] + NAME + 256]
+struct.pack_into('<Q', b, reserved[1][0] + PARENT,
+                 struct.unpack_from('<Q', b, reserved[2][0] + PARENT)[0])
+open(sys.argv[2], 'wb').write(b)
+PY
+build_disk "$DIR/broken.krffs"
+if run --append "rach2.rescue" --timeout 120 --steptmo 90 \
+    --ok "KRFFSPROBE OK (write)" --never "KRFFSPROBE FAIL" \
+    --log "$DISK.broken.log" "expect=Type 'help'" \
+    "send=exec /krffsprobe write" "expect=KRFFSPROBE" > /dev/null 2>&1 \
+    && grep -aq 'krffs: check: repaired: 1 backward link(s), 2 orphan(s), 1 repeated name(s)' \
+        "$DISK.broken.log"; then
+    # Two nameless nodes, not one: the loser of the repeated name gives up its
+    # name and is reclaimed in the same pass as the node that had none.
+    echo "krffsmount-test: a mount repairs a wrong backward link, a nameless node and a repeated name, and says how many: OK"
+else
+    grep -a 'krffs: check' "$DISK.broken.log" >&2 || true
+    fail "the repair of a volume broken on purpose"
+fi
+strict_clean "the repaired volume still needs repair"
+
+build_disk "$VOL"
+
+# ---- 6: two writers on one mount ----
+if run --append "rach2.rescue" --timeout 120 --steptmo 90 \
+    --ok "KRFFSPROBE OK (writers)" --never "KRFFSPROBE FAIL" \
+    --log "$DISK.writers.log" "expect=Type 'help'" "send=exec /krffsprobe writers" "expect=KRFFSPROBE" \
+    > /dev/null 2>&1; then
+    echo "krffsmount-test: two writers on one mount write files that read back: OK"
+else
+    fail "the two-writer boot"
+fi
+strict_clean "the volume needs repair after two writers"
+
+# The rows below start from the image again, since the ones above changed it.
+build_disk "$VOL"
+
+# ---- the volumes the kernel refuses ----
 refuse() {
     what=$1; line=$2
     if run --append "rach2.rescue" --timeout 90 --steptmo 60 \
