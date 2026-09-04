@@ -40,9 +40,15 @@ mkdir -p "$(dirname "$OUT")"
 # Build into a temp file and rename only on success, so a staging failure leaves
 # any previous image intact, not a half-written one that run.sh would
 # boot.
-TMP="$OUT.new"
-DEPS_TMP="$OUT.d.new"
-trap 'rm -f "$TMP" "$DEPS_TMP"' EXIT INT TERM
+# The temporaries carry this process's number. Two suites of a parallel test
+# run can build one image at the same moment, and with one fixed name each
+# removed the other's file: the second build then failed and make deleted the
+# image the first had just moved into place, which took two suites down with
+# it. Both builds stage the same manifest, so either result is the image, and
+# the rename is atomic.
+TMP="$OUT.new.$$"
+DEPS_TMP="$OUT.d.new.$$"
+trap 'rm -f "$TMP" "$DEPS_TMP" "$OUT.d.list.$$" "$OUT.d.$$"' EXIT INT TERM
 dd if=/dev/zero of="$TMP" bs=1048576 count="$SIZE" 2>/dev/null
 "$TOOLS/mkfs.krffs" "$TMP" >/dev/null
 STAGEIMAGE_DEPS="$DEPS_TMP" "$TOOLS/stageimage.krffs" "$MANIFEST" "$TMP"
@@ -75,7 +81,7 @@ mv "$TMP" "$OUT"
 # its nearest existing ancestor directory stands in for it, because that
 # directory's timestamp moves when the file appears.
 if [ -s "$DEPS_TMP" ]; then
-    DEPS_LIST="$OUT.d.list"
+    DEPS_LIST="$OUT.d.list.$$"
     # Absolute paths, for a reason beyond neatness: a relative recorded path
     # such as `rach2` names the root Makefile's phony component target, and a
     # phony prerequisite is considered remade on every run, which would
@@ -98,6 +104,7 @@ if [ -s "$DEPS_TMP" ]; then
         while IFS= read -r p; do printf ' %s' "$p"; done < "$DEPS_LIST"
         printf '\n'
         sed 's/$/:/' "$DEPS_LIST"
-    } > "$OUT.d"
+    } > "$OUT.d.$$"
+    mv "$OUT.d.$$" "$OUT.d"
     rm -f "$DEPS_LIST"
 fi

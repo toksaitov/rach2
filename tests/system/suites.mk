@@ -1346,6 +1346,13 @@ run-host: check-libc $(DEADLINE)
 run-runner:
 	@./tests/system/selftest.sh
 
+# `tests/run imagerace`: two builds of one image at the same moment, which a
+# parallel run of the suites produces and which used to take both of them
+# down. No machine is booted; the image is built twice and read.
+IMAGERACE_IMAGE = $(IMAGES_DIR)/imagerace-test.krffs
+run-imagerace: $(DEMO_CREDS) krffs rach2 tests utils musl-programs $(IMAGE_TOOLS)
+	sh tests/system/imagerace.sh krffs/manifests/test.manifest $(IMAGERACE_IMAGE) 10
+
 # The nine network suites again on the second card. Each is the first-card
 # target with `NIC=e1000`, which picks the tagged files and the second set of
 # forwarded ports, so a pair can run at the same time.
