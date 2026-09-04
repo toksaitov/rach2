@@ -537,6 +537,46 @@ else
             bad "stick: the unmount did not flush its cache (${before:-?} to ${after:-?})"
         fi
     fi
+    # A KRFFS volume of the stick, which milestone 44 made mountable: a
+    # partition blkid does not name is tried as one, and the first that mounts
+    # is read, written and unmounted. A stick with no such volume says so.
+    KVOL=""
+    for part in 1 2 3 4; do
+        node="/dev/${STICK}p${part}"
+        if [ -n "$(run "ls $node 2>/dev/null")" ] &&
+            ! echo "$BLKID" | grep -q "^$node:" &&
+            [ "$(run "mkdir -p /mnt/k && mount -t krffs $node /mnt/k && echo MOUNTED")" \
+                = "MOUNTED" ]; then
+            KVOL="$node"
+            break
+        fi
+    done
+    if [ -z "$KVOL" ]; then
+        note "stick: no KRFFS volume on it (no partition of it mounts as krffs)"
+    else
+        before="$(run 'cat /proc/usb 2>/dev/null' | grep "^$STICK " | sed -n 's/.*flushes \([0-9]*\).*/\1/p')"
+        OUT="$(run 'cat /mnt/k/hello.txt; echo written-on-the-stick > /mnt/k/accept.txt; cat /mnt/k/accept.txt')"
+        after="$(run 'cat /proc/usb 2>/dev/null' | grep "^$STICK " | sed -n 's/.*flushes \([0-9]*\).*/\1/p')"
+        if [ "$OUT" = "hello from inside an imagewritten-on-the-stick" ]; then
+            note "stick: the KRFFS volume on $KVOL mounts, reads and takes a write"
+        else
+            bad "stick: the KRFFS volume on $KVOL did not read and write: $OUT"
+        fi
+        # Every field the format publishes is written after the bytes it
+        # publishes have reached the medium, which on a stick is a flush and
+        # not a write the device has merely taken.
+        if [ -n "$before" ] && [ -n "$after" ] && [ "$after" -gt "$before" ]; then
+            note "stick: writing it put the device's own cache on the medium ($before to $after)"
+        else
+            bad "stick: writing it never flushed the device (${before:-?} to ${after:-?})"
+        fi
+        OUT="$(run 'umount /mnt/k && rmdir /mnt/k && echo UNMOUNTED')"
+        if [ "$OUT" = "UNMOUNTED" ]; then
+            note "stick: and it unmounts"
+        else
+            bad "stick: the KRFFS volume did not unmount: $OUT"
+        fi
+    fi
 fi
 
 # ---- a hub, when one is plugged in. Written in milestone 41 and run in

@@ -20,6 +20,7 @@
 #include "../proc/process.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
+#include "../block/block.h"
 #include "bcache.h"
 #include "krffs.h"
 #include "vfs.h"
@@ -168,11 +169,21 @@ static int volume_write(void *ctx, uint64_t offset, const void *buffer,
     return 0;
 }
 
+/*
+ * The format's sync point: the cache's dirty buffers to the device, and then
+ * the device's own cache to the medium. A stick answers a write as soon as
+ * it has taken it, so a volume whole on the wire is not yet whole on the
+ * medium, and the order this file system's protocol rests on would be an
+ * order the medium never saw.
+ */
 static int volume_sync(void *ctx)
 {
     struct krffs_volume *vol = ctx;
 
-    return bcache_sync(vol->dev) == 0 ? 0 : -1;
+    if (bcache_sync(vol->dev) != 0) {
+        return -1;
+    }
+    return block_flush(vol->dev) == 0 ? 0 : -1;
 }
 
 /*

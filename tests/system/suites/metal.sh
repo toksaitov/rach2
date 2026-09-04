@@ -122,9 +122,22 @@ GUEST_GW="192.168.90.2"
 # through its own driver, so the write is taken on this kernel as it would be
 # on the installed one.
 STICK="$WORK.stick"
-dd if=/dev/zero of="$STICK" bs=1048576 count=50 2>/dev/null || fail "the stick image"
-"$REPO/build/tools/image/mkmbr" --lba "$STICK" 2048:98304:0c > /dev/null || fail "mkmbr for the stick"
+dd if=/dev/zero of="$STICK" bs=1048576 count=80 2>/dev/null || fail "the stick image"
+"$REPO/build/tools/image/mkmbr" --lba "$STICK" 2048:98304:0c 100352:32768:83 \
+    > /dev/null || fail "mkmbr for the stick"
 mformat -i "$STICK"@@1048576 -F -T 98304 -v ACCEPT :: || fail "mformat for the stick"
+# The second partition is a KRFFS volume, which is what milestone 44 gave a
+# stick: the acceptance script mounts it through the mass-storage driver, not
+# through a loop device, and the host judges what it wrote below.
+STICKVOL="$WORK.stickvol"
+mkdir -p "$REPO/build/tests/system/loopimg"
+printf 'hello from inside an image' > "$REPO/build/tests/system/loopimg/hello.txt"
+dd if=/dev/zero of="$REPO/build/tests/system/loopimg/inner.bin" bs=512 count=8 \
+    2>/dev/null
+sh "$REPO/krffs/mkimage.sh" "$REPO/krffs/manifests/loopimg-test.manifest" \
+    "$STICKVOL" 16 > /dev/null 2>&1 || fail "the KRFFS volume for the stick"
+dd if="$STICKVOL" of="$STICK" bs=512 seek=100352 conv=notrunc 2>/dev/null \
+    || fail "putting the KRFFS volume on the stick"
 qemu-system-i386 -cpu max -display none -kernel "$KERNEL" \
     -initrd "$WORK" \
     -append "rach2.ip=$GUEST_IP/24 rach2.gateway=$GUEST_GW rach2.netconsole rach2.diskdiag" \
@@ -277,6 +290,21 @@ if echo "$ACCEPT" | grep -q 'stick: the volume ACCEPT mounts by its label'; then
 else
     fail "the acceptance script's stick section did not run against the stick"
 fi
+if echo "$ACCEPT" | grep -q 'stick: the KRFFS volume on .* mounts, reads and takes a write'; then
+    echo "metal-test: and its KRFFS section mounted a volume of the stick and wrote it: OK"
+else
+    fail "the acceptance script's KRFFS section did not run against the stick"
+fi
+# What the machine wrote to that volume, judged here by the host's own tools.
+dd if="$STICK" of="$STICK.vol" bs=512 skip=100352 count=32768 2>/dev/null \
+    || fail "taking the KRFFS volume off the stick"
+"$REPO/build/krffs/fsck.krffs" "$STICK.vol" --strict > "$STICK.fsck" 2>&1 \
+    || { cat "$STICK.fsck" >&2; fail "the KRFFS volume of the stick is not clean"; }
+"$REPO/build/krffs/readfile.krffs" "$STICK.vol" /accept.txt "$STICK.accept" \
+    > /dev/null 2>&1 || fail "reading what the machine wrote to the stick's volume"
+grep -q written-on-the-stick "$STICK.accept" \
+    || fail "the bytes the machine wrote to the stick's volume"
+echo "metal-test: and the host finds that volume clean with the machine's bytes in it: OK"
 if echo "$ACCEPT" | grep -q 'behind a hub: port' && echo "$ACCEPT" | grep -q 'hub: device [0-9]*: [0-9]* ports'; then
     echo "metal-test: and its hub section found the hub and the two devices behind it: OK"
 else
