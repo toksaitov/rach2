@@ -38,21 +38,15 @@
 
 struct krffs_open {
     uint64_t offset;
+    /* Where this node was before it last moved, for a caller that was asleep
+     * when it did. A handle is a node's offset, and a grow with no room after
+     * it moves the node: every holder the VFS knows is repointed then, but a
+     * call already inside this file system, waiting for the mount's lock,
+     * holds its handle as an argument nothing can reach. It looks its offset
+     * up here when it wakes. */
+    uint64_t was;
     int refs;
     int nameless; /* unlinked while open: freed at the last close */
-};
-
-/* Where a node went, for a caller that was asleep when it moved. A handle is
- * a node's offset, and a grow with no room after it moves the node: every
- * holder the VFS knows is repointed then, but a call already inside this
- * file system, waiting for the mount's lock, holds its handle as an
- * argument that nothing can reach. It looks its offset up here when it
- * wakes. Eight is more moves than can happen while one caller waits. */
-#define KRFFS_MOVES 8
-
-struct krffs_move {
-    uint64_t from;
-    uint64_t to;
 };
 
 struct krffs_volume {
@@ -62,8 +56,6 @@ struct krffs_volume {
     krffs_mount_t fs;
     int writable;
     struct krffs_open opens[KRFFS_OPENS];
-    struct krffs_move moves[KRFFS_MOVES];
-    int move_at; /* the next entry to write; the ring is a ring */
 };
 
 static struct krffs_volume krffs_volumes[KRFFS_VOLUMES];
@@ -322,38 +314,30 @@ static void open_moved(struct krffs_volume *vol, uint64_t from, uint64_t to)
     struct krffs_open *o = open_at(vol, from);
 
     if (o) {
+        o->was = from;
         o->offset = to;
     }
-    vol->moves[vol->move_at].from = from;
-    vol->moves[vol->move_at].to = to;
-    vol->move_at = (vol->move_at + 1) % KRFFS_MOVES;
 }
 
 /**
  * Where the node a handle names is now.
  *
  * A caller that was waiting for the mount's lock while the node moved holds
- * the offset the node had then. The moves the volume remembers are followed
- * from it, at most as many times as there are entries, since a node can move
- * again while the same caller waits.
+ * the offset the node had then. An open file that is exactly there is that
+ * offset's owner and answers for itself; otherwise an open file that came
+ * from there is the one this caller meant.
  */
 static uint64_t follow_moves(struct krffs_volume *vol, uint64_t at)
 {
-    int steps;
+    int i;
 
-    for (steps = 0; steps < KRFFS_MOVES; steps++) {
-        int i;
-        int found = 0;
-
-        for (i = 0; i < KRFFS_MOVES; i++) {
-            if (vol->moves[i].from != 0 && vol->moves[i].from == at) {
-                at = vol->moves[i].to;
-                found = 1;
-                break;
-            }
-        }
-        if (!found) {
-            break;
+    if (open_at(vol, at)) {
+        return at;
+    }
+    for (i = 0; i < KRFFS_OPENS; i++) {
+        if (vol->opens[i].refs > 0 && vol->opens[i].was == at &&
+            vol->opens[i].offset != at) {
+            return vol->opens[i].offset;
         }
     }
     return at;
@@ -372,6 +356,7 @@ static int kv_open(struct vfs_mount *mnt, void *node, int flags, void **handle)
             if (vol->opens[i].refs == 0) {
                 o = &vol->opens[i];
                 o->offset = at;
+                o->was = at;
                 o->nameless = 0;
                 break;
             }
@@ -519,7 +504,7 @@ static int32_t kv_write(struct vfs_mount *mnt, void *handle, const void *buf,
      * reason. Done under the mount's lock, before anything else can look. */
     if (at != KRFFS_NO_NODE && at != was) {
         open_moved(vol, was, at);
-        vfs_repoint(mnt, handle_of(was), handle_of(at));
+        vfs_repoint(mnt, handle, handle_of(at));
     }
     vfs_ns_unlock(mnt);
     if (written == KRFFS_ENOSPACE) {
@@ -556,7 +541,7 @@ static int kv_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
          * and then failed has left every holder naming free space. */
         if (now != KRFFS_NO_NODE && now != was) {
             open_moved(vol, was, now);
-            vfs_repoint(mnt, handle_of(was), handle_of(now));
+            vfs_repoint(mnt, handle, handle_of(now));
         }
     }
     vfs_ns_unlock(mnt);

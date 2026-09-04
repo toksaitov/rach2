@@ -450,6 +450,9 @@ static void write_rows(void)
     sys1(SYS_RMDIR, (int)"/k/busydir");
     sys1(SYS_UNLINK, (int)"/k/over.txt");
     sys1(SYS_UNLINK, (int)"/k/spare.txt");
+    sys1(SYS_UNLINK, (int)"/k/cut.bin");
+    sys1(SYS_UNLINK, (int)"/k/cutblock.bin");
+    sys1(SYS_UNLINK, (int)"/k/over.bin");
 
     fd = sys3(SYS_OPEN, (int)"/k/written.bin", O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
@@ -698,6 +701,95 @@ static void write_rows(void)
     }
     sys1(SYS_CLOSE, fd);
 
+    /* A grow through ftruncate, which is the other way a file moves, with two
+       descriptors on it: both must follow the file, the bytes it had must
+       still be there, and the length it gained must read as zeroes. */
+    {
+        int one = sys3(SYS_OPEN, (int)"/k/cut.bin", O_RDWR | O_CREAT | O_TRUNC, 0644);
+        int two;
+        int blocker;
+        char got[512];
+        int n;
+        int i;
+
+        if (one < 0) {
+            fail_with("creating the file to grow by truncation", one);
+        }
+        write_pattern(one, 256);
+        two = sys3(SYS_OPEN, (int)"/k/cut.bin", O_RDONLY, 0);
+        if (two < 0) {
+            fail_with("opening it a second time", two);
+        }
+        blocker = sys3(SYS_OPEN, (int)"/k/cutblock.bin", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (blocker < 0) {
+            fail_with("creating the file that boxes the truncation in", blocker);
+        }
+        write_pattern(blocker, 64);
+        sys1(SYS_CLOSE, blocker);
+        if (sys3(SYS_FTRUNCATE, one, 8192, 0) != 0) {
+            fail("growing a boxed-in file through ftruncate");
+        }
+        if (sys2(SYS_STAT64, (int)"/k/cut.bin", (int)st) != 0) {
+            fail("stat after a grow through ftruncate");
+        }
+        if (*(unsigned *)(st + ST_SIZE_OFF) != 8192) {
+            fail_with("the size after a grow through ftruncate",
+                      (int)*(unsigned *)(st + ST_SIZE_OFF));
+        }
+        n = sys3(SYS_READ, two, (int)got, (int)sizeof(got));
+        if (n != (int)sizeof(got)) {
+            fail_with("reading through the second descriptor after the move", n);
+        }
+        for (i = 0; i < 256; i++) {
+            if ((unsigned char)got[i] != pattern_byte((unsigned)i)) {
+                fail_with("a byte the file had before it was moved", i);
+            }
+        }
+        for (i = 256; i < n; i++) {
+            if (got[i] != 0) {
+                fail_with("a byte of the length a truncation added", i);
+            }
+        }
+        if (sys3(SYS_LSEEK, one, 0, 0) != 0) {
+            fail("seeking the writing descriptor after the move");
+        }
+        if (sys3(SYS_WRITE, one, (int)"after\n", 6) != 6) {
+            fail("writing through the descriptor whose file was moved");
+        }
+        sys1(SYS_CLOSE, one);
+        sys1(SYS_CLOSE, two);
+    }
+
+    /* An overwrite of bytes that are already there, which a write that
+       reported what it never wrote would leave unchanged. */
+    {
+        int over = sys3(SYS_OPEN, (int)"/k/over.bin", O_RDWR | O_CREAT | O_TRUNC, 0644);
+        char got[16];
+        int n;
+
+        got[0] = 0; /* the read below fills it, which cppcheck cannot see */
+        if (over < 0) {
+            fail_with("creating the file to overwrite", over);
+        }
+        if (sys3(SYS_WRITE, over, (int)"aaaaaaaaaaaaaaaa", 16) != 16) {
+            fail("writing the file to overwrite");
+        }
+        if (sys3(SYS_LSEEK, over, 4, 0) != 4) {
+            fail("seeking into the file to overwrite");
+        }
+        if (sys3(SYS_WRITE, over, (int)"bbbb", 4) != 4) {
+            fail("overwriting inside a file");
+        }
+        if (sys3(SYS_LSEEK, over, 0, 0) != 0) {
+            fail("seeking back over the overwrite");
+        }
+        n = sys3(SYS_READ, over, (int)got, 16);
+        if (n != 16 || got[3] != 'a' || got[4] != 'b' || got[7] != 'b' || got[8] != 'a') {
+            fail_with("the bytes an overwrite inside a file left", n);
+        }
+        sys1(SYS_CLOSE, over);
+    }
+
     if (sys2(SYS_CHMOD, (int)"/k/written.bin", 0600) != 0) {
         fail("chmod on the volume");
     }
@@ -746,6 +838,25 @@ static void readback_rows(void)
     }
     if ((stat_mode("/k/private", st) & 07777) != 0700) {
         fail("the made directory's own mode after a reboot");
+    }
+    {
+        int fd2 = sys3(SYS_OPEN, (int)"/k/over.bin", O_RDONLY, 0);
+        char got[16];
+        int n;
+
+        got[0] = 0; /* as above: filled by the read, not by this */
+        if (fd2 < 0) {
+            fail_with("the overwritten file after a reboot", fd2);
+        }
+        n = sys3(SYS_READ, fd2, (int)got, 16);
+        if (n != 16 || got[3] != 'a' || got[4] != 'b' || got[7] != 'b' || got[8] != 'a') {
+            fail_with("the bytes of the overwritten file after a reboot", n);
+        }
+        sys1(SYS_CLOSE, fd2);
+    }
+    if (sys2(SYS_STAT64, (int)"/k/cut.bin", (int)st) != 0 ||
+        *(unsigned *)(st + ST_SIZE_OFF) != 8192) {
+        fail("the size of the file grown by truncation after a reboot");
     }
     fd = sys3(SYS_OPEN, (int)"/k/made/inside", O_RDONLY, 0);
     if (fd < 0) {
