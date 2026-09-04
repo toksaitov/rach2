@@ -2,27 +2,7 @@
 
 KRFFS is the kernel's own writable file system: the RAM images' and the fallback root's, since the everyday root on a disk is an ext2 partition ([ext2.Readme.md](ext2.Readme.md)). It stores a hierarchical namespace in one contiguous region and uses a first-fit extent allocator. The same code can address a RAM module directly, a RAM module through the page-cache window, or a partition on an ATA or AHCI disk.
 
-`krffs.c` and `krffs.h` implement the on-disk format, allocator, namespace, and file data operations. `fd.c` and `fd.h` implement descriptor tables and shared open-file descriptions. The syscall-facing permission, descriptor, and metadata rules are in `../syscall.c`. The mount table and the resolver every path goes through are described in [vfs.Readme.md](vfs.Readme.md), the kernel-generated `/dev` and `/proc` namespaces in [synthfs.Readme.md](synthfs.Readme.md), the read-only FAT32 type in [fat32.Readme.md](fat32.Readme.md), and the page cache and disk drivers in `../mm/Readme.md` and `../block/Readme.md`.
-
-## On-disk layout
-
-The region is a circular, doubly linked sequence of extents. Every extent starts with the same packed 357-byte header. Its fields are the magic and node type; ID and 256-byte name buffer; mode, uid, gid, and three timestamps; total extent size, preceding extent size, data size, and parent ID. File data follows the header.
-
-There are three node types: root, free, and reserved. A reserved node represents either a regular file or a directory. Directory modes include `S_IFDIR`; regular-file modes store only the permission and special bits. The root is a separate node with logical ID 0 and a stored mode of 0755 without `S_IFDIR`. Stat and permission code therefore handle the root by identity.
-
-Mount validation requires a root node with the KRFFS magic and root type. It then walks the complete extent sequence and checks each node's magic, type, size, preceding-size link, bounds, exact tiling of the region, and closure back to the root. A malformed sequence fails validation before the mount is published.
-
-A child records its containing directory's ID in `parent_id`. Lookup scans the node sequence for a matching `(parent_id, name)` pair. A directory's ID is a 64-bit mix of its parent ID and name. The implementation does not detect ID collisions. Regular-file IDs are not consistent between creation routes: the host stager uses the parent-aware mix for every staged node, while guest creation and rename use the older DJB hash of the basename. The kernel path resolver does not use a regular file's ID, but `stat` and `getdents64` report it as the inode number.
-
-Names may contain at most 255 bytes. The syscall pathname buffers hold at most 255 bytes plus the terminating NUL. A process's absolute current directory is smaller: 63 bytes plus NUL. Reconstructing a path from parent IDs also stops after 64 components.
-
-## Allocation
-
-Allocation scans for the first free extent large enough for the header and requested data. It splits a larger extent when the remainder can hold another header. Freeing an extent coalesces adjacent free extents and repairs the backward link of the following node.
-
-Growth first consumes an adjacent free extent. Otherwise it allocates a new extent, copies the node and its data, and frees the old extent. The write path then repoints every regular-file descriptor in every process from the old node to the new one. Sparse growth through write or truncate zero-fills the gap. A short remainder that cannot hold a header stays in the allocated extent.
-
-A write that cannot grow the file separates its two reasons. No free extent large enough returns `KRFFS_ENOSPACE`, which the write syscall reports as `ENOSPC`; a rejected argument returns `KRFFS_EBAD` and `EIO`. A caller can therefore tell a full file system from a failed write.
+`krffs.c` and `krffs.h` implement the format, the allocator, the namespace and the file operations, and `krffsmount.c` is the type `mount(2)` places over a block device; the format, its two backends and the order in which a change reaches the medium are in [krffs.Readme.md](krffs.Readme.md). `fd.c` and `fd.h` implement descriptor tables and shared open-file descriptions. The syscall-facing permission, descriptor, and metadata rules are in `../syscall.c`. The mount table and the resolver every path goes through are described in [vfs.Readme.md](vfs.Readme.md), the kernel-generated `/dev` and `/proc` namespaces in [synthfs.Readme.md](synthfs.Readme.md), the read-only FAT32 type in [fat32.Readme.md](fat32.Readme.md), and the page cache and disk drivers in `../mm/Readme.md` and `../block/Readme.md`.
 
 ## Paths and directories
 

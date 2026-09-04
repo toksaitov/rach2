@@ -6,7 +6,11 @@ KRFFS is this project's own file system and the root a Rach2 machine boots. `krf
 
 An image is a ring of nodes covering every byte of the region, with no gaps and no free list beside the ring itself. A node is a packed header (`krffs_node_t`, 357 bytes, the on-disk ABI) followed by its data. The header has a magic number, a type, an identifier, a name, a mode with the owner and the group, three times, the node's whole size in bytes including the header, the size of the node before it, the bytes of data in use, and the identifier of the directory it belongs to.
 
-The first node is the root, which is also the root directory. The rest are reserved, holding a file or a directory, or free. Walking forward means adding a node's size to its address; the walk returns to the root, which is what makes it a ring. Walking backward means subtracting the size the node records for the one before it. Allocation is first fit with split and coalesce, after the storage allocator in The C Programming Language.
+The first node is the root, which is also the root directory. The rest are reserved, holding a file or a directory, or free. Walking forward means adding a node's size to its address; the walk returns to the root, which is what makes it a ring. Walking backward means subtracting the size the node records for the one before it.
+
+A directory's mode has `S_IFDIR`; a regular file's mode holds only its permission and special bits, which is why a node with no type bits is a regular file. The root is a node of its own with the logical id 0 and a stored mode of 0755 without `S_IFDIR`, so stat and the permission rules answer for it by identity rather than by reading its mode.
+
+A name is at most 255 bytes and its field is 256, so every name ends within it; the mount check refuses a node whose name does not. An id is 64 bits and no collision is detected. A regular file's id is not the same thing on both sides: the host stager writes the parent-aware mix for every node it stages, while a file created or renamed on the machine keeps the older hash of its name alone. Nothing resolves a path by a regular file's id, so the two agree where it matters; `stat` and `getdents64` report the node's position instead.
 
 A name is one component, not a path, and a file is found by its directory and its name: `parent_id` says which directory holds it, and the root directory's identifier is zero. Two files in different directories may have the same name; two in one directory may not. A directory's own identifier is a hash of its parent's identifier and its name, and its children carry it in their `parent_id`, which is why a directory is never renamed or moved: its children reference the identifier the old name produced. A regular file's identifier is not used to find it, so nothing depends on the name it was hashed from.
 
@@ -48,3 +52,23 @@ One name on two nodes in one directory, which is a move that was interrupted. Th
 The dirty flag of an image that was not cleanly unmounted, which says only that a check is owed. `fsck.krffs` clears it once the three above are settled.
 
 Nothing else. A node whose header is torn, whose size leaves the region, whose data does not fit, or whose name never ends is not a state this order of writes can produce, so the check refuses the image and changes nothing rather than guessing what it should have been. `fsck.krffs` on the host makes the same judgements and repairs the four things above; `--strict` there reports them and changes nothing, which is how a test asks whether the kernel left an image clean rather than repairable.
+
+## The core, and the two backends
+
+One implementation serves both media. `krffs.c` addresses every node by its offset from the first byte of the region and reaches the medium through a backend of `read`, `write` and `sync`, so what differs between a root in memory and a volume on a disk is three functions and nothing else.
+
+The memory backend is one `memcpy` either way, over a mapped image: a Multiboot module in place, or a disk region the page-cache window maps. It cannot fail. The root is mounted this way, and the descriptor table, the syscall layer and the boot code hold `krffs_node_t` pointers into that image, so the root keeps a pointer interface, at the end of `krffs.c`, which turns those pointers into offsets and refuses one that is not in the image.
+
+The block backend (`krffsmount.c`) reads the region through the buffer cache, a 4 KiB block at a time, holding one buffer at a time. That is what `mount(2)` places, under the type name `krffs`, and what `/proc/filesystems` lists. Its region is the whole device it is given, since the format records no size of its own: an image on a partition longer than itself fails the chain check rather than mounting short. A mounted volume is read-only, whatever flags the mount asked for, and `/proc/mounts` says so.
+
+A node handle outside the file system is its offset plus one, so the root's offset of zero is not the NULL the mount table reads as the mount's root. Nothing else is kept per node.
+
+## The allocator
+
+Allocation is first fit with split and coalesce, after the storage allocator in The C Programming Language. It scans for the first free node large enough for a header and the bytes asked for, and splits a larger one when the remainder can hold a header of its own; a remainder shorter than that stays inside the allocated node, where a later shrink or a removal reclaims it.
+
+A file grows into the free node after it when there is one. Otherwise it is moved: a new node is allocated, the old node's fields and data are copied into it, and the old node is freed. The write path then repoints every descriptor in every process from the old node to the new one, since a descriptor holds the node and not a name.
+
+Freeing a node marks it free and merges it with whichever neighbours are free, so the ring never holds two free nodes side by side.
+
+A write that cannot grow a file separates its two reasons: no free node large enough answers `KRFFS_ENOSPACE`, which the write syscall reports as `ENOSPC`, and an argument the file system cannot use answers `KRFFS_EBAD` and `EIO`. A caller can tell a full file system from a failed write.
