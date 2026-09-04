@@ -1,6 +1,6 @@
 # `usb/`: the USB stack
 
-Rach2 drives USB keyboards and mice. The stack is a host-controller driver, a device core, and one class driver, and only the first of the three touches a register.
+Rach2 drives USB keyboards, mice, flash drives and hubs. The stack is a host-controller driver, a device core, and three class drivers, HID, hub and mass storage, and only the first of them touches a register.
 
 ## Why xHCI, and only xHCI
 
@@ -42,7 +42,7 @@ With `rach2.usblatency` on the boot line the kernel stamps four points of a keys
 
 Nothing on the pump's path may wait: not a port reset, not a control transfer, not a command completion, not a millisecond delay. So `submit` queues work and returns, `poll` reports what finished, and enumeration is a state machine that advances at most one step per call. Each device has its own state and a deadline counted in milliseconds; a step that does not complete by its deadline fails the device and gives the slot back. Every step gets half a second except the configuration request, which gets five, as the Linux driver allows it: the notebook's stick behind the hub, present at boot, answered it after the half second while its flash started.
 
-At boot the kernel waits while the timer drives that machine, so the devices present at reset are enumerated before the first process starts. The boot path does not drive it itself: two parties draining one event ring, one of them inside an interrupt of the other, is the defect this arrangement exists to prevent. The controller's own interrupt is turned on last, after the devices present at reset are enumerated, so that no message arrives at a stack that is still building its rings.
+At boot the kernel waits up to 400 ms while the timer drives that machine, so the devices present at reset are enumerated before the first process starts where they answer in time; a slower one, or the devices behind a hub still reading its descriptor, are finished by the timer's pump afterwards. The boot path does not drive it itself: two parties draining one event ring, one of them inside an interrupt of the other, is the defect this arrangement exists to prevent. The controller's own interrupt is turned on last, after the devices present at reset are enumerated, so that no message arrives at a stack that is still building its rings.
 
 One command is in flight at a time, and one device is enumerated at a time. The controller has one command ring; a second device waits at its port, which costs a hundred milliseconds. A device takes the turn only when the ring is free, and a command past its second is aborted from the pump's clock whether or not the device that issued it still waits: the notebook's soldered port 7 once never answered an Address Device, the device was given up on at its half second, and the command left running held the ring against every device after it until the boot had lost them all.
 

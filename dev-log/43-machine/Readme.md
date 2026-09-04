@@ -43,8 +43,8 @@ four, now aborted from the pump's clock with the enumeration turn taken
 only on a free ring. A stick that stopped answering behind the
 SuperSpeed hub, now handed back for a port reset. The Doom port
 reading track 0 of a MIDI file only, so Freedoom's music sounded no
-note and its restarts took the processor; every track is played now
-and the game runs at sixty frames a second. The port's zone grown
+note and its restarts took the processor; every track, up to 32, is played
+now and the game runs at sixty frames a second. The port's zone grown
 through brk from a fixed 8 MiB heap. Records that say why: the clock
 self-test, a refused configuration, the frame pool.
 
