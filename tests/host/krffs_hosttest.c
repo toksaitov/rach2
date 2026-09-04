@@ -139,10 +139,17 @@ static int record_write(void *ctx, uint64_t offset, const void *buffer, uint32_t
 static int sync_marks[WRITES_MAX];
 static int sync_count;
 
+/* A sync the medium refuses, counted with the writes so a row can refuse
+   either. */
+static int refused_sync = -1;
+
 static int record_sync(void *ctx)
 {
     if (recording && sync_count < WRITES_MAX) {
         sync_marks[sync_count++] = recorded_count;
+    }
+    if (writes_seen++ == refused_sync) {
+        return -1;
     }
     return memory_sync(ctx);
 }
@@ -275,112 +282,346 @@ static void rebuild_backward_links(krffs_mount_t *mount)
     mount->backend->write(mount->ctx, KRFFS_FIELD_PREVIOUS, &previous_size, sizeof(previous_size));
 }
 
+/* The block a cache keeps and loses as one. */
+#define CACHE_BLOCK 4096u
+
 /**
- * Replay the first `count` recorded writes onto a fresh copy of `before` and
- * judge what a machine stopping there would have left.
+ * The writes that are certainly on the medium when a machine stops after
+ * `prefix` of them.
+ *
+ * A sync recorded at `prefix` ran after that write and before the next, so at
+ * the moment the machine stopped it may not have run yet: only a sync
+ * recorded strictly earlier is one the state has certainly passed. Reading it
+ * this way tests the state between a write and the sync that follows it,
+ * which is exactly where a missing sync shows.
  */
-static int state_is_sound(const uint8_t *before, int count, int skip, uint32_t size)
+static int epoch_of(int prefix)
 {
-    static uint8_t replay[IMAGE_SIZE];
-    krffs_mount_t mount = mount_over(&memory_backend, replay, size);
+    int epoch = 0;
+    int i;
+
+    for (i = 0; i < sync_count; i++) {
+        if (sync_marks[i] < prefix) {
+            epoch = sync_marks[i];
+        }
+    }
+    return epoch;
+}
+
+/** `image` = `before` with the first `count` writes applied. */
+static void build(uint8_t *image, const uint8_t *before, int count, uint32_t size)
+{
+    int i;
+
+    k_memcpy(image, before, size);
+    for (i = 0; i < count; i++) {
+        k_memcpy(image + recorded[i].offset, recorded[i].bytes, recorded[i].size);
+    }
+}
+
+/** The distinct cache blocks the writes in [from, to) touched. */
+static int touched_blocks(int from, int to, uint64_t *seen, int cap)
+{
+    int count = 0;
+    int i;
+
+    for (i = from; i < to; i++) {
+        uint64_t first = recorded[i].offset / CACHE_BLOCK;
+        uint64_t last = (recorded[i].offset + recorded[i].size - 1) / CACHE_BLOCK;
+        uint64_t blk;
+
+        for (blk = first; blk <= last; blk++) {
+            int k;
+            int known = 0;
+
+            for (k = 0; k < count; k++) {
+                if (seen[k] == blk) {
+                    known = 1;
+                }
+            }
+            if (known || count == cap) {
+                continue;
+            }
+            seen[count++] = blk;
+        }
+    }
+    return count;
+}
+
+/**
+ * What every state a stop can leave must answer: a forward chain that closes,
+ * no file claiming a byte nobody wrote, and the whole check once the backward
+ * links are rebuilt from that chain, which is what the check at the next
+ * mount does.
+ */
+static int image_is_sound(krffs_mount_t *mount, const uint8_t *image)
+{
     uint64_t offset = 0;
     uint64_t steps = 0;
     krffs_node_t head;
-    int i;
 
-    k_memcpy(replay, before, size);
-    for (i = 0; i < count; i++) {
-        if (i == skip) {
-            continue; /* a block the cache had not written when it stopped */
-        }
-        k_memcpy(replay + recorded[i].offset, recorded[i].bytes, recorded[i].size);
-    }
-    if (!forward_chain_closes(&mount)) {
+    if (!forward_chain_closes(mount)) {
         return 0;
     }
-    /* The free space is poisoned, so a length published before the bytes it
-       counts shows up here as a file claiming bytes nobody wrote. */
     do {
-        if (krffs_head(&mount, offset, &head) != 0) {
+        if (krffs_head(mount, offset, &head) != 0) {
             return 0;
         }
         if (head.type == KRFFS_RESERVED_NODE) {
             uint64_t at;
 
             for (at = 0; at < head.data_size; at++) {
-                if (replay[offset + sizeof(krffs_node_t) + at] == POISON) {
+                if (image[offset + sizeof(krffs_node_t) + at] == POISON) {
                     return 0;
                 }
             }
         }
-        offset = krffs_next_offset(&mount, offset, &head);
-    } while (offset != 0 && ++steps < krffs_max_steps(&mount));
-
-    rebuild_backward_links(&mount);
-    return krffs_chain_is_valid(&mount);
+        offset = krffs_next_offset(mount, offset, &head);
+    } while (offset != 0 && ++steps < krffs_max_steps(mount));
+    /* What the next mount does with it, and then what that mount requires. */
+    if (krffs_repair_at(mount, (uint32_t *)0, (uint32_t *)0, (uint32_t *)0) != 0) {
+        return 0;
+    }
+    return krffs_chain_is_valid(mount);
 }
 
 /**
- * Every state a stop can leave, asked whether the file named `name` still has
- * the bytes it had before the operation started.
+ * Every state a machine can stop in, block by block.
  *
- * A move copies a file's bytes into the node it is making, and the length
- * that counts them must not be on the medium before they are. Free space
- * holds whatever the last file there left, so a dropped copy shows up not as
- * poison but as the wrong bytes, which is what this looks for: every node of
- * that name whose length covers them must hold `value` in all of them.
+ * A cache holds whole blocks and writes whole blocks, so what a stop can lose
+ * is any block written since the last sync, whole: never half of one, and
+ * never one of two writes that fell in the same block. Each such state must
+ * leave a chain a mount can walk and no file claiming bytes nobody wrote,
+ * which is what the syncs between a write and the field that publishes it
+ * are for.
  */
-static int every_state_keeps_bytes(const uint8_t *before, uint32_t size, const char *name,
-                                   uint8_t value, uint32_t count)
+static int every_stop_is_sound(const uint8_t *before, uint32_t size)
 {
-    static uint8_t replay[IMAGE_SIZE];
-    krffs_mount_t mount = mount_over(&memory_backend, replay, size);
+    static uint8_t state[IMAGE_SIZE];
+    static uint8_t epoch[IMAGE_SIZE];
+    krffs_mount_t mount = mount_over(&memory_backend, state, size);
     int prefix;
 
     for (prefix = 0; prefix <= recorded_count; prefix++) {
-        int epoch = 0;
-        int i;
-        int skip;
+        uint64_t seen[64];
+        int mark = epoch_of(prefix);
+        int seen_count = touched_blocks(mark, prefix, seen, 64);
+        int variant;
 
-        for (i = 0; i < sync_count; i++) {
-            if (sync_marks[i] <= prefix) {
-                epoch = sync_marks[i];
+        build(epoch, before, mark, size);
+        for (variant = -1; variant < seen_count; variant++) {
+            build(state, before, prefix, size);
+            if (variant >= 0) {
+                uint32_t at = (uint32_t)(seen[variant] * CACHE_BLOCK);
+                uint32_t take = size - at > CACHE_BLOCK ? CACHE_BLOCK : size - at;
+
+                k_memcpy(state + at, epoch + at, take);
+            }
+            if (!image_is_sound(&mount, state)) {
+                printf("krffs_hosttest: %d of %d writes, having lost the block at %d, "
+                       "is not an image a mount could repair\n",
+                       prefix, recorded_count,
+                       variant < 0 ? -1 : (int)(seen[variant] * CACHE_BLOCK));
+                return 0;
             }
         }
-        /* No drop at all, then each write since the last sync: a synced
-           write is on the medium and cannot be missing. */
-        for (skip = -1; skip < prefix; skip++) {
-            if (skip >= 0 && skip < epoch) {
-                continue;
+    }
+    return 1;
+}
+
+/**
+ * Every state a stop can leave if one write since the last sync did not
+ * happen.
+ *
+ * A cache loses whole blocks, so some of these states no cache can produce:
+ * two writes that fall in one block are lost or kept together. They are
+ * judged anyway, because the order this file system keeps is an order between
+ * fields and not between blocks: what a header holds must be on the medium
+ * before the field that reveals it, whether or not the two share a block. A
+ * file system that depends on two fields sharing a block is one a different
+ * image layout breaks.
+ */
+static int every_lost_write_is_sound(const uint8_t *before, uint32_t size)
+{
+    static uint8_t state[IMAGE_SIZE];
+    krffs_mount_t mount = mount_over(&memory_backend, state, size);
+    int prefix;
+
+    for (prefix = 0; prefix <= recorded_count; prefix++) {
+        int mark = epoch_of(prefix);
+        int skip;
+
+        for (skip = mark; skip < prefix; skip++) {
+            int i;
+
+            k_memcpy(state, before, size);
+            for (i = 0; i < prefix; i++) {
+                if (i != skip) {
+                    k_memcpy(state + recorded[i].offset, recorded[i].bytes, recorded[i].size);
+                }
             }
+            if (!image_is_sound(&mount, state)) {
+                printf("krffs_hosttest: %d of %d writes, without write %d, is not an "
+                       "image a mount could repair\n",
+                       prefix, recorded_count, skip);
+                return 0;
+            }
+        }
+    }
+    return 1;
+}
+
+/**
+ * Every state a stop can leave, asked whether the file `name` is whole.
+ *
+ * Whole means what a name promises: the directory it is in, the mode it was
+ * made with, a length of at least `bytes`, and those bytes holding `value`. A
+ * node that is half made must not be reachable by a name, so a state may have
+ * no such node at all unless `must_exist`, which is what a move requires: the
+ * file it moves is there before, during and after.
+ */
+static int every_stop_file_is_whole(const uint8_t *before, uint32_t size, const char *name,
+                                    int must_exist, uint64_t parent, uint16_t mode, uint32_t bytes,
+                                    uint8_t value)
+{
+    static uint8_t state[IMAGE_SIZE];
+    static uint8_t epoch[IMAGE_SIZE];
+    krffs_mount_t mount = mount_over(&memory_backend, state, size);
+    int prefix;
+
+    for (prefix = 0; prefix <= recorded_count; prefix++) {
+        uint64_t seen[64];
+        int mark = epoch_of(prefix);
+        int seen_count = touched_blocks(mark, prefix, seen, 64);
+        int variant;
+
+        build(epoch, before, mark, size);
+        /* -1 is the state that lost nothing; then each block since the last
+           sync, and then each write since it, which is the stricter rule the
+           order between fields asks for. */
+        for (variant = -1; variant < seen_count + (prefix - mark); variant++) {
             uint64_t offset = 0;
             uint64_t steps = 0;
             krffs_node_t head;
+            int whole = 0;
 
-            k_memcpy(replay, before, size);
-            for (i = 0; i < prefix; i++) {
-                if (i == skip) {
-                    continue;
+            if (variant < seen_count) {
+                build(state, before, prefix, size);
+                if (variant >= 0) {
+                    uint32_t at = (uint32_t)(seen[variant] * CACHE_BLOCK);
+                    uint32_t take = size - at > CACHE_BLOCK ? CACHE_BLOCK : size - at;
+
+                    k_memcpy(state + at, epoch + at, take);
                 }
-                k_memcpy(replay + recorded[i].offset, recorded[i].bytes, recorded[i].size);
+            } else {
+                int skip = mark + (variant - seen_count);
+                int i;
+
+                k_memcpy(state, before, size);
+                for (i = 0; i < prefix; i++) {
+                    if (i != skip) {
+                        k_memcpy(state + recorded[i].offset, recorded[i].bytes, recorded[i].size);
+                    }
+                }
             }
             if (!forward_chain_closes(&mount)) {
-                continue; /* judged elsewhere */
+                continue; /* the row that asks for a chain judges this */
+            }
+            /* Judged after the check at the next mount has had it, since that
+               is what a machine coming back up would read. */
+            if (krffs_repair_at(&mount, (uint32_t *)0, (uint32_t *)0, (uint32_t *)0) != 0) {
+                return 0;
             }
             do {
                 if (krffs_head(&mount, offset, &head) != 0) {
                     return 0;
                 }
-                if (head.type == KRFFS_RESERVED_NODE && head.data_size >= count &&
-                    k_strcmp_name(head.name, name)) {
+                if (head.type == KRFFS_RESERVED_NODE && k_strcmp_name(head.name, name)) {
                     uint32_t at;
 
-                    for (at = 0; at < count; at++) {
-                        if (replay[offset + sizeof(krffs_node_t) + at] != value) {
-                            printf("krffs_hosttest: %d of %d writes, without "
-                                   "write %d, left %s holding bytes it never "
-                                   "had\n",
-                                   prefix, recorded_count, skip, name);
+                    if (head.parent_id != parent) {
+                        printf("krffs_hosttest: %d of %d writes left %s in a directory it "
+                               "was never put in\n",
+                               prefix, recorded_count, name);
+                        return 0;
+                    }
+                    if ((head.mode & 07777u) != mode) {
+                        printf("krffs_hosttest: %d of %d writes left %s with a mode it was "
+                               "never given\n",
+                               prefix, recorded_count, name);
+                        return 0;
+                    }
+                    if (head.data_size < bytes) {
+                        continue;
+                    }
+                    for (at = 0; at < bytes; at++) {
+                        if (state[offset + sizeof(krffs_node_t) + at] != value) {
+                            printf("krffs_hosttest: %d of %d writes left %s holding bytes "
+                                   "it never had\n",
+                                   prefix, recorded_count, name);
+                            return 0;
+                        }
+                    }
+                    whole = 1;
+                }
+                offset = krffs_next_offset(&mount, offset, &head);
+            } while (offset != 0 && ++steps < krffs_max_steps(&mount));
+            if (must_exist && !whole) {
+                printf("krffs_hosttest: %d of %d writes left no whole file called %s\n", prefix,
+                       recorded_count, name);
+                return 0;
+            }
+        }
+    }
+    return 1;
+}
+
+/**
+ * Every stop, asked whether a file ever claims a byte past `old_length` that
+ * is not a zero: what a length published before the zeroes it counts looks
+ * like when a file grows into slack it already had.
+ */
+static int every_stop_is_zero_filled(const uint8_t *before, uint32_t size, uint64_t old_length)
+{
+    static uint8_t state[IMAGE_SIZE];
+    static uint8_t epoch[IMAGE_SIZE];
+    krffs_mount_t mount = mount_over(&memory_backend, state, size);
+    int prefix;
+
+    for (prefix = 0; prefix <= recorded_count; prefix++) {
+        uint64_t seen[64];
+        int mark = epoch_of(prefix);
+        int seen_count = touched_blocks(mark, prefix, seen, 64);
+        int variant;
+
+        build(epoch, before, mark, size);
+        for (variant = -1; variant < seen_count; variant++) {
+            uint64_t offset = 0;
+            uint64_t steps = 0;
+            krffs_node_t head;
+
+            build(state, before, prefix, size);
+            if (variant >= 0) {
+                uint32_t at = (uint32_t)(seen[variant] * CACHE_BLOCK);
+                uint32_t take = size - at > CACHE_BLOCK ? CACHE_BLOCK : size - at;
+
+                k_memcpy(state + at, epoch + at, take);
+            }
+            if (!forward_chain_closes(&mount)) {
+                continue;
+            }
+            do {
+                if (krffs_head(&mount, offset, &head) != 0) {
+                    return 0;
+                }
+                if (head.type == KRFFS_RESERVED_NODE) {
+                    uint64_t at;
+
+                    for (at = old_length; at < head.data_size; at++) {
+                        if (state[offset + sizeof(krffs_node_t) + at] != 0) {
+                            printf("krffs_hosttest: %d of %d writes left a file claiming a "
+                                   "byte it did not zero\n",
+                                   prefix, recorded_count);
                             return 0;
                         }
                     }
@@ -393,113 +634,13 @@ static int every_state_keeps_bytes(const uint8_t *before, uint32_t size, const c
 }
 
 /**
- * Every prefix of the writes just recorded, asked whether a file ever claims a
- * byte past `old_length` that is not a zero.
+ * Run `what` with the backend refusing one of its calls, and judge what the
+ * file system was left with.
  *
- * That is what a length published before the zeroes it counts looks like: the
- * file grew into slack it already had, so the bytes under the new length are
- * whatever it held before rather than the zeroes a growth owes.
- */
-static int every_prefix_is_zero_filled(const uint8_t *before, uint32_t size, uint64_t old_length)
-{
-    static uint8_t replay[IMAGE_SIZE];
-    krffs_mount_t mount = mount_over(&memory_backend, replay, size);
-    int i;
-
-    for (i = 0; i <= recorded_count; i++) {
-        uint64_t offset = 0;
-        uint64_t steps = 0;
-        krffs_node_t head;
-        int k;
-
-        k_memcpy(replay, before, size);
-        for (k = 0; k < i; k++) {
-            k_memcpy(replay + recorded[k].offset, recorded[k].bytes, recorded[k].size);
-        }
-        do {
-            if (krffs_head(&mount, offset, &head) != 0) {
-                return 0;
-            }
-            if (head.type == KRFFS_RESERVED_NODE) {
-                uint64_t at;
-
-                for (at = old_length; at < head.data_size; at++) {
-                    if (replay[offset + sizeof(krffs_node_t) + at] != 0) {
-                        printf("krffs_hosttest: after %d of %d writes a file claims "
-                               "a byte it did not zero\n",
-                               i, recorded_count);
-                        return 0;
-                    }
-                }
-            }
-            offset = krffs_next_offset(&mount, offset, &head);
-        } while (offset != 0 && ++steps < krffs_max_steps(&mount));
-    }
-    return 1;
-}
-
-/**
- * Every prefix of the writes just recorded, judged. Returns 1 if all are
- * sound.
- */
-static int every_prefix_is_sound(const uint8_t *before, uint32_t size)
-{
-    int i;
-
-    for (i = 0; i <= recorded_count; i++) {
-        if (!state_is_sound(before, i, -1, size)) {
-            printf("krffs_hosttest: the image after %d of %d writes is not "
-                   "one a mount could repair\n",
-                   i, recorded_count);
-            return 0;
-        }
-    }
-    return 1;
-}
-
-/**
- * The writes since the last sync, each one missing in turn.
- *
- * A cache holds what it has been given until something makes it write, so a
- * machine that stops has everything up to its last sync and any part of what
- * came after. The order the format keeps is an order on the medium, which is
- * what the syncs between a write and the field that publishes it are for:
- * without them, the field can be on the medium and the write it publishes
- * still in the cache. Every one of those states must be one a mount can walk.
- */
-static int every_late_drop_is_sound(const uint8_t *before, uint32_t size)
-{
-    int prefix;
-
-    for (prefix = 0; prefix <= recorded_count; prefix++) {
-        int epoch = 0;
-        int i;
-        int k;
-
-        for (i = 0; i < sync_count; i++) {
-            if (sync_marks[i] <= prefix) {
-                epoch = sync_marks[i];
-            }
-        }
-        for (k = epoch; k < prefix; k++) {
-            if (!state_is_sound(before, prefix, k, size)) {
-                printf("krffs_hosttest: %d of %d writes, without write %d, "
-                       "is not an image a mount could repair\n",
-                       prefix, recorded_count, k);
-                return 0;
-            }
-        }
-    }
-    return 1;
-}
-
-/**
- * Run `what` with the backend refusing write number `which`, and judge what
- * the file system was left with.
- *
- * A backend on a device can refuse a write, and the core must not publish a
- * change over a write that was refused. Returns 1 if the image is still one a
- * mount can walk, whatever the operation answered.
+ * A non-negative `which` refuses that write; a negative one refuses the sync
+ * at that position, since a medium can refuse either. The core must not
+ * publish a change over a call that was refused, and what it leaves must be
+ * an image a mount can walk with no file half made under a name.
  */
 static int survives_refusal(uint8_t *img, const uint8_t *before, uint32_t size,
                             void (*what)(krffs_mount_t *), int which)
@@ -512,11 +653,19 @@ static int survives_refusal(uint8_t *img, const uint8_t *before, uint32_t size,
     k_memcpy(img, before, size);
     recording = 0;
     writes_seen = 0;
-    refused_write = which;
+    if (which >= 0) {
+        refused_write = which;
+    } else {
+        refused_sync = -which - 1; /* a refused sync, counted the same way */
+    }
     what(&mount);
     refused_write = -1;
+    refused_sync = -1;
 
     if (!forward_chain_closes(&mount)) {
+        return 0;
+    }
+    if (krffs_repair_at(&mount, (uint32_t *)0, (uint32_t *)0, (uint32_t *)0) != 0) {
         return 0;
     }
     do {
@@ -531,10 +680,16 @@ static int survives_refusal(uint8_t *img, const uint8_t *before, uint32_t size,
                     return 0;
                 }
             }
+            /* A name is only on a node that is finished: the file the row
+               makes is in the root, with the mode it was made with. */
+            if (k_strcmp_name(head.name, "second") &&
+                (head.parent_id != 0 || (head.mode & 07777u) != 0644)) {
+                return 0;
+            }
         }
         offset = krffs_next_offset(&mount, offset, &head);
     } while (offset != 0 && ++steps < krffs_max_steps(&mount));
-    return 1;
+    return krffs_chain_is_valid(&mount);
 }
 
 static void make_a_file(krffs_mount_t *mount)
@@ -546,7 +701,7 @@ static void make_a_file(krffs_mount_t *mount)
 
 static void grow_a_file(krffs_mount_t *mount)
 {
-    krffs_truncate_at(mount, "/refused", 3000);
+    krffs_truncate_at(mount, "/refused", 3000, (uint64_t *)0);
 }
 
 static void remove_a_file(krffs_mount_t *mount)
@@ -675,12 +830,12 @@ int main(void)
     }
     check(i == 32, "and every byte of it is zero");
 
-    check(krffs_truncate_at(&mount, "/alpha", 4) == 0, "the file is truncated");
+    check(krffs_truncate_at(&mount, "/alpha", 4, (uint64_t *)0) == 0, "the file is truncated");
     node = krffs_walk(&mount, "/alpha");
     check(krffs_head(&mount, node, &head) == 0 && head.data_size == 4, "and is four bytes long");
     check(krffs_chain_is_valid(&mount) == 1, "the chain is sound after a truncate");
 
-    check(krffs_truncate_at(&mount, "/alpha", 4096) == 0, "the file grows");
+    check(krffs_truncate_at(&mount, "/alpha", 4096, (uint64_t *)0) == 0, "the file grows");
     node = krffs_walk(&mount, "/alpha");
     check(krffs_head(&mount, node, &head) == 0 && head.data_size == 4096, "to what was asked");
     check(krffs_read_at(&mount, node, buffer, 8, 64) == 8 && buffer[0] == 0,
@@ -780,10 +935,10 @@ int main(void)
     recording = 1;
     krffs_create_at(&mount, "/one");
     recording = 0;
-    check(every_prefix_is_sound(before, IMAGE_SIZE),
+    check(every_stop_is_sound(before, IMAGE_SIZE) && every_lost_write_is_sound(before, IMAGE_SIZE),
           "every stop inside a create leaves a chain a mount can walk");
-    check(every_late_drop_is_sound(before, IMAGE_SIZE),
-          "and so does one that lost a block the cache had not written");
+    check(every_stop_file_is_whole(before, IMAGE_SIZE, "one", 0, 0, 0644, 0, 0),
+          "and never a file half made under a name");
 
     k_memcpy(before, image, IMAGE_SIZE);
     recorded_count = 0;
@@ -792,32 +947,38 @@ int main(void)
     node = krffs_walk(&mount, "/one");
     krffs_write_at(&mount, &node, buffer, 512, 0);
     recording = 0;
-    check(every_prefix_is_sound(before, IMAGE_SIZE),
+    check(every_stop_is_sound(before, IMAGE_SIZE) && every_lost_write_is_sound(before, IMAGE_SIZE),
           "every stop inside a write leaves a chain a mount can walk");
-    check(every_late_drop_is_sound(before, IMAGE_SIZE),
-          "and so does one that lost a block the cache had not written");
 
     k_memcpy(before, image, IMAGE_SIZE);
     recorded_count = 0;
     sync_count = 0;
     recording = 1;
-    krffs_truncate_at(&mount, "/one", 8192);
+    krffs_truncate_at(&mount, "/one", 8192, (uint64_t *)0);
     recording = 0;
-    check(every_prefix_is_sound(before, IMAGE_SIZE),
+    check(every_stop_is_sound(before, IMAGE_SIZE) && every_lost_write_is_sound(before, IMAGE_SIZE),
           "every stop inside a grow leaves a chain a mount can walk");
-    check(every_late_drop_is_sound(before, IMAGE_SIZE),
-          "and so does one that lost a block the cache had not written");
 
     k_memcpy(before, image, IMAGE_SIZE);
     recorded_count = 0;
     sync_count = 0;
     recording = 1;
-    krffs_truncate_at(&mount, "/one", 16);
+    krffs_truncate_at(&mount, "/one", 16, (uint64_t *)0);
     recording = 0;
-    check(every_prefix_is_sound(before, IMAGE_SIZE),
+    check(every_stop_is_sound(before, IMAGE_SIZE) && every_lost_write_is_sound(before, IMAGE_SIZE),
           "every stop inside a truncate leaves a chain a mount can walk");
-    check(every_late_drop_is_sound(before, IMAGE_SIZE),
-          "and so does one that lost a block the cache had not written");
+
+    /* A growth shorter than a header, which is the case the grow publishes two
+       sizes for: the tail's header lands where the free node's own header was,
+       so the first size must be on the medium before it is written. */
+    k_memcpy(before, image, IMAGE_SIZE);
+    recorded_count = 0;
+    sync_count = 0;
+    recording = 1;
+    krffs_truncate_at(&mount, "/one", 40, (uint64_t *)0);
+    recording = 0;
+    check(every_stop_is_sound(before, IMAGE_SIZE) && every_lost_write_is_sound(before, IMAGE_SIZE),
+          "every stop inside a grow of less than a header leaves a chain a mount can walk");
 
     /* A move: a second file boxes the first in, so the grow relocates it.
        The file to be moved is filled with a byte of its own, so a copy that
@@ -842,12 +1003,10 @@ int main(void)
     krffs_write_at(&mount, &node, buffer, 16, 4096);
     recording = 0;
     check(node != other, "the grow with a node in the way moved the file");
-    check(every_state_keeps_bytes(before, IMAGE_SIZE, "one", 0xC3, 16),
+    check(every_stop_file_is_whole(before, IMAGE_SIZE, "one", 1, 0, 0644, 16, 0xC3),
           "and no stop inside it left the moved file without its own bytes");
-    check(every_prefix_is_sound(before, IMAGE_SIZE),
+    check(every_stop_is_sound(before, IMAGE_SIZE) && every_lost_write_is_sound(before, IMAGE_SIZE),
           "every stop inside a move leaves a chain a mount can walk");
-    check(every_late_drop_is_sound(before, IMAGE_SIZE),
-          "and so does one that lost a block the cache had not written");
 
     k_memcpy(before, image, IMAGE_SIZE);
     recorded_count = 0;
@@ -855,10 +1014,8 @@ int main(void)
     recording = 1;
     krffs_unlink_at(&mount, "/two");
     recording = 0;
-    check(every_prefix_is_sound(before, IMAGE_SIZE),
+    check(every_stop_is_sound(before, IMAGE_SIZE) && every_lost_write_is_sound(before, IMAGE_SIZE),
           "every stop inside a removal leaves a chain a mount can walk");
-    check(every_late_drop_is_sound(before, IMAGE_SIZE),
-          "and so does one that lost a block the cache had not written");
 
     /* ---- a length raised inside the slack a node already has ---- */
 
@@ -870,7 +1027,7 @@ int main(void)
     krffs_create_at(&mount, "/slack");
     node = krffs_walk(&mount, "/slack");
     krffs_write_at(&mount, &node, buffer, 108, 0);
-    krffs_truncate_at(&mount, "/slack", 100);
+    krffs_truncate_at(&mount, "/slack", 100, (uint64_t *)0);
     node = krffs_walk(&mount, "/slack");
     check(krffs_head(&mount, node, &head) == 0 && head.data_size == 100 &&
               head.size == sizeof(krffs_node_t) + 108,
@@ -880,12 +1037,12 @@ int main(void)
     recorded_count = 0;
     sync_count = 0;
     recording = 1;
-    krffs_truncate_at(&mount, "/slack", 104);
+    krffs_truncate_at(&mount, "/slack", 104, (uint64_t *)0);
     recording = 0;
-    check(every_prefix_is_sound(before, IMAGE_SIZE),
+    check(every_stop_is_sound(before, IMAGE_SIZE) && every_lost_write_is_sound(before, IMAGE_SIZE),
           "every stop inside a growth into that slack leaves a chain a mount "
           "can walk");
-    check(every_prefix_is_zero_filled(before, IMAGE_SIZE, 100),
+    check(every_stop_is_zero_filled(before, IMAGE_SIZE, 100),
           "and none of them shows a length over bytes the file used to hold");
     node = krffs_walk(&mount, "/slack");
     check(krffs_read_at(&mount, node, buffer, 4, 100) == 4 && buffer[0] == 0 && buffer[3] == 0,
@@ -907,7 +1064,10 @@ int main(void)
         int which;
         int sound = 1;
 
-        for (which = 0; which < 24; which++) {
+        /* Every call of each operation, in both kinds: the count is what the
+           operations below take, with room to spare, and a call that never
+           happens refuses nothing. */
+        for (which = -40; which < 40; which++) {
             if (!survives_refusal(image, before, IMAGE_SIZE, grow_a_file, which) ||
                 !survives_refusal(image, before, IMAGE_SIZE, remove_a_file, which) ||
                 !survives_refusal(image, before, IMAGE_SIZE, make_a_file, which)) {

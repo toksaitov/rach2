@@ -437,6 +437,9 @@ static void write_rows(void)
     sys1(SYS_UNLINK, (int)"/k/before.txt");
     sys1(SYS_UNLINK, (int)"/k/gone.txt");
     sys1(SYS_UNLINK, (int)"/k/grown.bin");
+    sys1(SYS_UNLINK, (int)"/k/held.bin");
+    sys1(SYS_UNLINK, (int)"/k/moved.bin");
+    sys1(SYS_UNLINK, (int)"/k/blocker.bin");
     sys1(SYS_RMDIR, (int)"/k/empty");
 
     fd = sys3(SYS_OPEN, (int)"/k/written.bin", O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -509,6 +512,76 @@ static void write_rows(void)
     if (sys1(SYS_RMDIR, (int)"/k/empty") != 0) {
         fail("rmdir on the volume");
     }
+    /* A name taken away while the file is open: the reader keeps the file,
+       the name is gone at once, and the space comes back at the close. */
+    fd = sys3(SYS_OPEN, (int)"/k/held.bin", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) {
+        fail_with("creating the file to hold open", fd);
+    }
+    write_pattern(fd, 200);
+    sys1(SYS_CLOSE, fd);
+    fd = sys3(SYS_OPEN, (int)"/k/held.bin", O_RDONLY, 0);
+    if (fd < 0) {
+        fail_with("opening the file to hold", fd);
+    }
+    if (sys1(SYS_UNLINK, (int)"/k/held.bin") != 0) {
+        fail("unlinking a file that is open");
+    }
+    if (sys3(SYS_OPEN, (int)"/k/held.bin", O_RDONLY, 0) != -ENOENT) {
+        fail("the name of an unlinked file is still there");
+    }
+    {
+        char held[200];
+        int n = sys3(SYS_READ, fd, (int)held, (int)sizeof(held));
+        int i;
+
+        if (n != 200) {
+            fail_with("reading a file whose name was taken away", n);
+        }
+        for (i = 0; i < n; i++) {
+            if ((unsigned char)held[i] != pattern_byte((unsigned)i)) {
+                fail_with("a byte of the file whose name was taken away", i);
+            }
+        }
+    }
+    sys1(SYS_CLOSE, fd);
+
+    /* A descriptor open across a grow that moves the file: the write path
+       repoints it, and the same descriptor reads what it wrote. */
+    fd = sys3(SYS_OPEN, (int)"/k/moved.bin", O_RDWR | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) {
+        fail_with("creating the file to move", fd);
+    }
+    write_pattern(fd, 64);
+    {
+        int blocker = sys3(SYS_OPEN, (int)"/k/blocker.bin", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+
+        if (blocker < 0) {
+            fail_with("creating the file that boxes it in", blocker);
+        }
+        write_pattern(blocker, 64);
+        sys1(SYS_CLOSE, blocker);
+    }
+    write_pattern_from(fd, 64, 6000);
+    if (sys3(SYS_LSEEK, fd, 0, 0) != 0) {
+        fail("seeking back through a descriptor whose file moved");
+    }
+    {
+        char moved[512];
+        int n = sys3(SYS_READ, fd, (int)moved, (int)sizeof(moved));
+        int i;
+
+        if (n != (int)sizeof(moved)) {
+            fail_with("reading through a descriptor whose file moved", n);
+        }
+        for (i = 0; i < n; i++) {
+            if ((unsigned char)moved[i] != pattern_byte((unsigned)i)) {
+                fail_with("a byte read through a descriptor whose file moved", i);
+            }
+        }
+    }
+    sys1(SYS_CLOSE, fd);
+
     if (sys2(SYS_CHMOD, (int)"/k/written.bin", 0600) != 0) {
         fail("chmod on the volume");
     }
@@ -595,14 +668,16 @@ void probe_main(unsigned int *sp)
             if (fd < 0) {
                 fail_with("creating the file to be killed", fd);
             }
-            puts("KRFFSPROBE WRITING");
             /* The same bytes over and over: the machine is killed somewhere
                in here, and a volume that filled up would say nothing about
-               what a stop leaves behind. */
+               what a stop leaves behind. The token comes after the first
+               round, so what the machine is killed in the middle of is a
+               write and not a mount. */
             for (;;) {
                 sys3(SYS_LSEEK, fd, 0, 0);
                 write_pattern(fd, 4096);
                 sys1(SYS_FSYNC, fd);
+                puts("KRFFSPROBE WRITING");
             }
         }
         if (streq(mode, "writers")) {

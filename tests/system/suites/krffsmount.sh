@@ -122,9 +122,11 @@ if run --append "rach2.rescue" --timeout 120 --steptmo 90 \
     --ok "KRFFSPROBE OK (write)" --never "KRFFSPROBE FAIL" \
     --log "$DISK.repair2.log" "expect=Type 'help'" \
     "send=exec /krffsprobe write" "expect=KRFFSPROBE" > /dev/null 2>&1 \
-    && grep -aq 'krffs: check: the volume was not unmounted cleanly' "$DISK.repair2.log" \
-    && grep -aq 'krffs: check: repaired' "$DISK.repair2.log"; then
-    echo "krffsmount-test: the next mount that writes checks the volume and says what it repaired: OK"
+    && grep -aq 'krffs: check: the volume was not unmounted cleanly' "$DISK.repair2.log"; then
+    # What the check repairs is the row below, on a volume broken on purpose:
+    # a killed machine need not have left anything to repair, and a row that
+    # accepts a count of none would say nothing either way.
+    echo "krffsmount-test: the next mount that writes checks the volume it was left: OK"
 else
     fail "the repair boot"
 fi
