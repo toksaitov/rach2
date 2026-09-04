@@ -11,9 +11,9 @@ Phase 2: the offset core
 - [ ] tests/run all unchanged; both roots boot; review at the boundary
 
 Phase 3: the block backend, read-only
-- [ ] the second backend through bcache; the mount state pool and the lifetime operations
-- [ ] mount(2) accepts krffs read-only over a partition; /proc/filesystems lists it
-- [ ] the refusals: bad magic, short region, malformed chain
+- [x] the second backend through bcache; the mount state pool and the lifetime operations
+- [x] mount(2) accepts krffs read-only over a partition; /proc/filesystems lists it
+- [x] the refusals: bad magic, short region, malformed chain
 
 Phase 4: the block backend, writable
 - [ ] writes under the mount lock in the protocol's order; the dirty bit; the check at the next mount
