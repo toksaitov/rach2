@@ -98,14 +98,45 @@ static int volume_read(void *ctx, uint64_t offset, void *buffer, uint32_t size)
     return 0;
 }
 
+/*
+ * A write goes into the cache and reaches the device at the sync the format
+ * asks for, which is what keeps the order a stop must survive: the file
+ * system syncs between a write and the field that publishes it.
+ */
 static int volume_write(void *ctx, uint64_t offset, const void *buffer,
                         uint32_t size)
 {
-    (void)ctx;
-    (void)offset;
-    (void)buffer;
-    (void)size;
-    return -1; /* a mounted volume is read-only */
+    struct krffs_volume *vol = ctx;
+    const uint8_t *in = buffer;
+
+    if (!vol->writable) {
+        return -1;
+    }
+    while (size > 0) {
+        uint64_t block = offset / BCACHE_BLOCK_BYTES;
+        uint32_t within = (uint32_t)(offset % BCACHE_BLOCK_BYTES);
+        uint32_t take = BCACHE_BLOCK_BYTES - within;
+        struct bbuf *b;
+
+        if (take > size) {
+            take = size;
+        }
+        b = bcache_get(vol->dev, block);
+        if (!b) {
+            return -1;
+        }
+        if (within + take > b->bytes) {
+            bcache_release(b); /* past the device's short last block */
+            return -1;
+        }
+        k_memcpy(b->data + within, in, take);
+        bcache_dirty(b);
+        bcache_release(b);
+        in += take;
+        offset += take;
+        size -= take;
+    }
+    return 0;
 }
 
 static int volume_sync(void *ctx)
@@ -113,6 +144,57 @@ static int volume_sync(void *ctx)
     struct krffs_volume *vol = ctx;
 
     return bcache_sync(vol->dev) == 0 ? 0 : -1;
+}
+
+/*
+ * The mount's lock for an operation the common layer does not lock: write,
+ * truncate, fsync and sync. The namespace operations arrive locked. Decided
+ * under the lock, so a writer queued behind one whose write failed finds the
+ * mount as it now is and not as it was.
+ */
+static int begin_write(struct vfs_mount *mnt)
+{
+    struct krffs_volume *vol;
+
+    vfs_ns_lock(mnt);
+    vol = vol_of(mnt);
+    if (!vol->writable || (mnt->flags & VFS_MS_RDONLY)) {
+        vfs_ns_unlock(mnt);
+        return -EROFS;
+    }
+    return 0;
+}
+
+/**
+ * The path of `dir` within the volume with `name` joined to it.
+ *
+ * The core's namespace operations take a path, which is what the ring is
+ * searched by; the mount table hands out a directory and a name, so they are
+ * put back together here, as the root's adapter does.
+ */
+static int join(struct vfs_mount *mnt, void *dir, const char *name, char *path,
+                uint32_t cap)
+{
+    struct krffs_volume *vol = vol_of(mnt);
+    uint32_t dlen;
+    uint32_t nlen;
+
+    if (krffs_node_path_at(&vol->fs, offset_of(mnt, dir), path, cap) != 0) {
+        return -ENAMETOOLONG;
+    }
+    dlen = (uint32_t)k_strlen(path);
+    nlen = (uint32_t)k_strlen(name);
+    if (dlen == 0 || path[dlen - 1] != '/') {
+        if (dlen + 1 >= cap) {
+            return -ENAMETOOLONG;
+        }
+        path[dlen++] = '/';
+    }
+    if (dlen + nlen + 1 > cap) {
+        return -ENAMETOOLONG;
+    }
+    k_memcpy(path + dlen, name, nlen + 1);
+    return 0;
 }
 
 static const krffs_backend_t volume_backend = {volume_read, volume_write,
@@ -264,6 +346,224 @@ static int kv_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
     return 0;
 }
 
+static int32_t kv_write(struct vfs_mount *mnt, void *handle, const void *buf,
+                        uint32_t count, uint64_t offset)
+{
+    struct krffs_volume *vol;
+    uint64_t at;
+    int written;
+    int rc = begin_write(mnt);
+
+    if (rc != 0) {
+        return rc;
+    }
+    vol = vol_of(mnt);
+    at = offset_of(mnt, handle);
+    if (offset > 0xFFFFFFFFull || offset + count > 0xFFFFFFFFull) {
+        vfs_ns_unlock(mnt);
+        return -EFBIG;
+    }
+    written = krffs_write_at(&vol->fs, &at, buf, count, (uint32_t)offset);
+    /* A grow with no room after the node moves it, and every description,
+     * working directory and covering mount that named the old node is
+     * repointed at the new one, which is what the root does for the same
+     * reason. Done under the mount's lock, before anything else can look. */
+    if (at != KRFFS_NO_NODE && at != offset_of(mnt, handle)) {
+        vfs_repoint(mnt, handle, handle_of(at));
+    }
+    vfs_ns_unlock(mnt);
+    if (written == KRFFS_ENOSPACE) {
+        return -ENOSPC;
+    }
+    if (written < 0) {
+        return -EIO;
+    }
+    return (int32_t)written;
+}
+
+static int kv_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
+{
+    struct krffs_volume *vol;
+    char path[256];
+    int rc = begin_write(mnt);
+
+    if (rc != 0) {
+        return rc;
+    }
+    vol = vol_of(mnt);
+    if (size > 0xFFFFFFFFull) {
+        vfs_ns_unlock(mnt);
+        return -EFBIG;
+    }
+    if (krffs_node_path_at(&vol->fs, offset_of(mnt, handle), path,
+                           sizeof(path)) != 0) {
+        vfs_ns_unlock(mnt);
+        return -ENAMETOOLONG;
+    }
+    rc = krffs_truncate_at(&vol->fs, path, (uint32_t)size);
+    if (rc == 0) {
+        uint64_t now = krffs_walk(&vol->fs, path);
+
+        if (now != KRFFS_NO_NODE && now != offset_of(mnt, handle)) {
+            vfs_repoint(mnt, handle, handle_of(now));
+        }
+    }
+    vfs_ns_unlock(mnt);
+    return rc == 0 ? 0 : -ENOSPC;
+}
+
+static int kv_fsync(struct vfs_mount *mnt, void *handle)
+{
+    int rc = begin_write(mnt);
+
+    (void)handle;
+    if (rc != 0) {
+        return 0; /* nothing of a read-only mount is waiting to be written */
+    }
+    rc = bcache_sync(vol_of(mnt)->dev);
+    vfs_ns_unlock(mnt);
+    return rc;
+}
+
+static int kv_create(struct vfs_mount *mnt, void *dir, const char *name,
+                     uint32_t mode, void **node)
+{
+    struct krffs_volume *vol = vol_of(mnt);
+    char path[256];
+    uint64_t made;
+    int rc;
+
+    (void)mode; /* the caller stamps mode and owner under its own rules */
+    if (!vol->writable || (mnt->flags & VFS_MS_RDONLY)) {
+        return -EROFS;
+    }
+    rc = join(mnt, dir, name, path, sizeof(path));
+    if (rc != 0) {
+        return rc;
+    }
+    if (krffs_create_at(&vol->fs, path) != 0) {
+        return -ENOSPC;
+    }
+    made = krffs_child_at(&vol->fs, offset_of(mnt, dir), name);
+    if (made == KRFFS_NO_NODE) {
+        return -EIO;
+    }
+    *node = handle_of(made);
+    return 0;
+}
+
+static int kv_unlink(struct vfs_mount *mnt, void *dir, const char *name)
+{
+    struct krffs_volume *vol = vol_of(mnt);
+    char path[256];
+    int rc;
+
+    if (!vol->writable || (mnt->flags & VFS_MS_RDONLY)) {
+        return -EROFS;
+    }
+    rc = join(mnt, dir, name, path, sizeof(path));
+    if (rc != 0) {
+        return rc;
+    }
+    return krffs_unlink_at(&vol->fs, path) == 0 ? 0 : -EIO;
+}
+
+static int kv_mkdir(struct vfs_mount *mnt, void *dir, const char *name,
+                    uint32_t mode)
+{
+    struct krffs_volume *vol = vol_of(mnt);
+    char path[256];
+    int rc;
+
+    (void)mode;
+    if (!vol->writable || (mnt->flags & VFS_MS_RDONLY)) {
+        return -EROFS;
+    }
+    rc = join(mnt, dir, name, path, sizeof(path));
+    if (rc != 0) {
+        return rc;
+    }
+    return krffs_mkdir_at(&vol->fs, path) == 0 ? 0 : -ENOSPC;
+}
+
+static int kv_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
+{
+    struct krffs_volume *vol = vol_of(mnt);
+    char path[256];
+    int rc;
+
+    if (!vol->writable || (mnt->flags & VFS_MS_RDONLY)) {
+        return -EROFS;
+    }
+    rc = join(mnt, dir, name, path, sizeof(path));
+    if (rc != 0) {
+        return rc;
+    }
+    return krffs_rmdir_at(&vol->fs, path) == 0 ? 0 : -ENOTEMPTY;
+}
+
+static int kv_rename(struct vfs_mount *mnt, void *olddir, const char *oldname,
+                     void *newdir, const char *newname)
+{
+    struct krffs_volume *vol = vol_of(mnt);
+    char from[256];
+    char to[256];
+    int rc;
+
+    if (!vol->writable || (mnt->flags & VFS_MS_RDONLY)) {
+        return -EROFS;
+    }
+    rc = join(mnt, olddir, oldname, from, sizeof(from));
+    if (rc != 0) {
+        return rc;
+    }
+    rc = join(mnt, newdir, newname, to, sizeof(to));
+    if (rc != 0) {
+        return rc;
+    }
+    return krffs_rename_at(&vol->fs, from, to) == 0 ? 0 : -EIO;
+}
+
+/**
+ * The attributes a volume keeps: the permission bits, the owner and the
+ * times. The type field of the mode is the node's kind and is not changed.
+ */
+static int kv_setattr(struct vfs_mount *mnt, void *node, int what,
+                      const struct vfs_stat *st)
+{
+    struct krffs_volume *vol = vol_of(mnt);
+    uint64_t at = offset_of(mnt, node);
+    krffs_node_t head;
+    int rc = begin_write(mnt);
+
+    if (rc != 0) {
+        return rc;
+    }
+    if (at == 0 || krffs_head(&vol->fs, at, &head) != 0) {
+        vfs_ns_unlock(mnt);
+        return at == 0 ? 0 : -EIO; /* the root's mode is the format's */
+    }
+    if (what & VFS_SET_MODE) {
+        krffs_set_mode_at(&vol->fs, at, (uint16_t)st->mode);
+    }
+    if (what & (VFS_SET_UID | VFS_SET_GID)) {
+        krffs_set_owner_at(&vol->fs, at, st->uid, st->gid,
+                           ((what & VFS_SET_UID) ? KRFFS_SET_UID : 0) |
+                               ((what & VFS_SET_GID) ? KRFFS_SET_GID : 0));
+    }
+    if (what & VFS_SET_ATIME) {
+        krffs_set_time_at(&vol->fs, at, KRFFS_SET_ATIME, st->atime_sec,
+                          st->atime_nsec);
+    }
+    if (what & VFS_SET_MTIME) {
+        krffs_set_time_at(&vol->fs, at, KRFFS_SET_MTIME, st->mtime_sec,
+                          st->mtime_nsec);
+    }
+    krffs_stamp_at(&vol->fs, at, KRFFS_STAMP_ATTR);
+    vfs_ns_unlock(mnt);
+    return 0;
+}
+
 static int kv_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
 {
     struct krffs_volume *vol = vol_of(mnt);
@@ -283,9 +583,24 @@ static int kv_sync(struct vfs_mount *mnt)
     return vol->writable ? bcache_sync(vol->dev) : 0;
 }
 
+/**
+ * Write what the volume owes and take the dirty flag off it.
+ *
+ * The flag is cleared only after everything else has reached the medium, so
+ * a volume that says it is clean is one whose last write landed.
+ */
 static int kv_prepare_unmount(struct vfs_mount *mnt)
 {
-    return kv_sync(mnt);
+    struct krffs_volume *vol = vol_of(mnt);
+    int rc = kv_sync(mnt);
+
+    if (rc != 0 || !vol->writable) {
+        return rc;
+    }
+    if (krffs_set_dirty(&vol->fs, 0) != 0) {
+        return -EIO;
+    }
+    return 0;
 }
 
 static void kv_unmount(struct vfs_mount *mnt)
@@ -306,22 +621,15 @@ static int kv_path(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
 }
 
 static const struct vfs_ops krffs_volume_ops = {
-    kv_lookup, 0,  /* lookup_rest */
-    0,             /* hold: a handle is a number, not a thing to count */
-    0,             /* put */
-    kv_getattr, 0, /* setattr: a read-only volume has none */
-    kv_open,    kv_release,
-    kv_read,    0, /* write */
-    0,             /* truncate */
-    0,             /* fsync */
-    kv_readdir, 0, /* create */
-    0,             /* unlink */
-    0,             /* mkdir */
-    0,             /* rmdir */
-    0,             /* rename */
-    0,             /* link: KRFFS has none */
-    0,             /* readlink: KRFFS has none */
-    kv_statfs,  kv_sync, kv_prepare_unmount, kv_unmount, kv_path,
+    kv_lookup,   0, /* lookup_rest */
+    0,              /* hold: a handle is a number, not a thing to count */
+    0,              /* put */
+    kv_getattr,  kv_setattr, kv_open,  kv_release, kv_read, kv_write,
+    kv_truncate, kv_fsync,   kv_readdir, kv_create,
+    kv_unlink,   kv_mkdir,   kv_rmdir, kv_rename,
+    0,              /* link: KRFFS has none */
+    0,              /* readlink: KRFFS has none */
+    kv_statfs,   kv_sync,    kv_prepare_unmount, kv_unmount, kv_path,
     0, /* symlink */
 };
 
@@ -393,21 +701,57 @@ static int krffs_volume_mount(struct vfs_mount *mnt, block_device_t *dev,
         mnt->priv = 0;
         return -EINVAL;
     }
-    if (!krffs_chain_is_valid(&vol->fs)) {
+    if (!krffs_chain_is_walkable(&vol->fs)) {
         klog(KLOG_ERR, "krffs", "mount: refused: the node chain is malformed");
         vol->used = 0;
         mnt->priv = 0;
         return -EINVAL;
     }
 
-    /* Read-only, whatever was asked: writing a mounted volume is not built
-     * yet, and a mount that says it can write and cannot is worse than one
-     * that says what it is. */
-    (void)flags;
-    vol->writable = 0;
-    mnt->flags |= VFS_MS_RDONLY;
+    vol->writable = !(flags & VFS_MS_RDONLY) && !(dev->flags & BLOCK_READ_ONLY);
+    if (!vol->writable) {
+        mnt->flags |= VFS_MS_RDONLY;
+        if (krffs_is_dirty(&vol->fs)) {
+            klog(KLOG_WARN, "krffs",
+                 "mount: a check is owed and this mount is read-only");
+        }
+    } else if (krffs_is_dirty(&vol->fs)) {
+        uint32_t links = 0;
+        uint32_t orphans = 0;
+        uint32_t doubles = 0;
+
+        klog(KLOG_WARN, "krffs", "check: the volume was not unmounted cleanly");
+        if (krffs_repair_at(&vol->fs, &links, &orphans, &doubles) != 0) {
+            klog(KLOG_ERR, "krffs", "mount: refused: the volume cannot be repaired here");
+            vol->used = 0;
+            mnt->priv = 0;
+            return -EIO;
+        }
+        klog(KLOG_WARN, "krffs",
+             "check: repaired: %d backward link(s), %d orphan(s), %d repeated name(s)",
+             (int)links, (int)orphans, (int)doubles);
+    }
+
+    /* The backward links are what a stop leaves wrong, and they are repaired
+     * above; what remains must be a chain the strict check accepts. A
+     * read-only mount does not repair, and its walkers never read a backward
+     * link, so it is enough for its chain to be walkable. */
+    if (vol->writable && !krffs_chain_is_valid(&vol->fs)) {
+        klog(KLOG_ERR, "krffs", "mount: refused: the node chain is malformed");
+        vol->used = 0;
+        mnt->priv = 0;
+        return -EINVAL;
+    }
+    if (vol->writable && krffs_set_dirty(&vol->fs, 1) != 0) {
+        klog(KLOG_ERR, "krffs", "mount: refused: the volume cannot be written");
+        vol->used = 0;
+        mnt->priv = 0;
+        return -EIO;
+    }
+
     mnt->root = handle_of(0);
-    klog(KLOG_INFO, "krffs", "mount: %d bytes, read-only", (int)vol->fs.size);
+    klog(KLOG_INFO, "krffs", "mount: %d bytes, %s", (int)vol->fs.size,
+         vol->writable ? "read-write" : "read-only");
     return 0;
 }
 

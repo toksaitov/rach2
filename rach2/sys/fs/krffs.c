@@ -260,6 +260,19 @@ static int krffs_data_fill(krffs_mount_t *mount, uint64_t offset, uint64_t at,
 }
 
 /**
+ * Make everything written so far reach the medium.
+ *
+ * The protocol's order is an order on the medium, not in a cache, so a write
+ * that must be there before the field that publishes it is followed by this.
+ * On a memory backend it does nothing, which is why a root pays nothing for
+ * it. Answers 0, or -1 if the medium refused.
+ */
+static int krffs_sync_point(krffs_mount_t *mount)
+{
+    return mount->backend->sync(mount->ctx);
+}
+
+/**
  * Hash a file name with Bernstein's DJB algorithm.
  *
  * A NULL pointer hashes to the seed (5381). This is the legacy id of a regular
@@ -910,7 +923,8 @@ uint64_t krffs_allocate_at(krffs_mount_t *mount, uint64_t size,
                      * bytes nobody wrote, so the failure ends the
                      * allocation. */
                     if (krffs_write_free_header(mount, tail, second_half_size,
-                                                size_with_header) != 0) {
+                                                size_with_header) != 0 ||
+                        krffs_sync_point(mount) != 0) {
                         return KRFFS_NO_NODE;
                     }
                     if (krffs_put_u64(mount, offset, KRFFS_FIELD_SIZE,
@@ -959,7 +973,12 @@ uint64_t krffs_allocate_at(krffs_mount_t *mount, uint64_t size,
 
             /* The type is the node, so nothing before it may have been
              * refused: a reserved node whose fields did not land is a file
-             * made of whatever the free space held. */
+             * made of whatever the free space held. The sync is what puts a
+             * copied file's bytes on the medium before the length that counts
+             * them. */
+            if (krffs_sync_point(mount) != 0) {
+                return KRFFS_NO_NODE;
+            }
             if (krffs_put_u64(mount, offset, KRFFS_FIELD_DATA_SIZE,
                               data_size) != 0) {
                 return KRFFS_NO_NODE;
@@ -1106,6 +1125,7 @@ uint64_t krffs_resize_at(krffs_mount_t *mount, uint64_t offset,
                  * is the better of the two answers. */
                 if (krffs_write_free_header(mount, tail, tail_size,
                                             size_with_header) == 0 &&
+                    krffs_sync_point(mount) == 0 &&
                     krffs_put_u64(mount, offset, KRFFS_FIELD_SIZE,
                                   size_with_header) == 0) {
                     krffs_fix_backward_link(mount, tail, tail_size);
@@ -1150,6 +1170,7 @@ uint64_t krffs_resize_at(krffs_mount_t *mount, uint64_t offset,
             }
             if (krffs_write_free_header(mount, surplus, free_size,
                                         size_with_header) == 0 &&
+                krffs_sync_point(mount) == 0 &&
                 krffs_put_u64(mount, offset, KRFFS_FIELD_SIZE,
                               size_with_header) == 0) {
                 krffs_fix_backward_link(mount, surplus, free_size);
@@ -1238,7 +1259,8 @@ int krffs_write_at(krffs_mount_t *mount, uint64_t *node,
                         (uint64_t)at - old_data_size) != 0) {
         return KRFFS_EBAD;
     }
-    if (krffs_data_write(mount, offset, at, buffer, size) != 0) {
+    if (krffs_data_write(mount, offset, at, buffer, size) != 0 ||
+        krffs_sync_point(mount) != 0) {
         return KRFFS_EBAD;
     }
     if (krffs_head(mount, offset, &head) == 0 && new_size > head.data_size) {
@@ -1336,8 +1358,9 @@ int krffs_truncate_at(krffs_mount_t *mount, const char *path,
     }
 
     if ((uint64_t)new_size > old_data_size &&
-        krffs_data_fill(mount, node, old_data_size, 0,
-                        (uint64_t)new_size - old_data_size) != 0) {
+        (krffs_data_fill(mount, node, old_data_size, 0,
+                         (uint64_t)new_size - old_data_size) != 0 ||
+         krffs_sync_point(mount) != 0)) {
         return -1;
     }
     krffs_put_u64(mount, node, KRFFS_FIELD_DATA_SIZE, new_size);
@@ -1693,6 +1716,190 @@ uint32_t krffs_reap_orphans_at(krffs_mount_t *mount)
     return reaped;
 }
 
+/** Whether two name fields hold the same name. */
+static int krffs_names_match(const uint8_t *a, const uint8_t *b)
+{
+    uint32_t i;
+
+    for (i = 0; i < KRFFS_FILE_NAME_BUFFER_SIZE; i++) {
+        if (a[i] != b[i]) {
+            return 0;
+        }
+        if (a[i] == '\0') {
+            return 1;
+        }
+    }
+    return 1;
+}
+
+/**
+ * Set or clear the root's dirty flag, and make it reach the medium.
+ *
+ * A writable mount sets it before its first change and clears it when
+ * everything it wrote has been written back. An image found with it set says
+ * a check is owed, not what is wrong.
+ */
+int krffs_set_dirty(krffs_mount_t *mount, int dirty)
+{
+    krffs_node_t root;
+    uint16_t mode;
+
+    if (krffs_head(mount, 0, &root) != 0) {
+        return -1;
+    }
+    mode = dirty ? (uint16_t)(root.mode | KRFFS_MODE_DIRTY)
+                 : (uint16_t)(root.mode & ~KRFFS_MODE_DIRTY);
+    if (mode == root.mode) {
+        return 0;
+    }
+    if (krffs_put_u16(mount, 0, KRFFS_FIELD_MODE, mode) != 0) {
+        return -1;
+    }
+    return krffs_sync_point(mount);
+}
+
+/** Whether the root says a check is owed. */
+int krffs_is_dirty(krffs_mount_t *mount)
+{
+    krffs_node_t root;
+
+    if (krffs_head(mount, 0, &root) != 0) {
+        return 0;
+    }
+    return (root.mode & KRFFS_MODE_DIRTY) != 0;
+}
+
+/**
+ * The most named nodes the repair below will compare with each other.
+ *
+ * Finding one name on two nodes takes a comparison of every named node with
+ * every other, which is what a volume of this size can afford at a mount. A
+ * volume with more named nodes than this is left to `fsck.krffs`, whose
+ * sorting has no such bound, and the mount says so.
+ */
+#define KRFFS_REPAIR_NAMES 4096u
+
+/**
+ * Repair what a machine that stopped inside a change can leave.
+ *
+ * Three things, and they are the three the format's order of writes can
+ * produce: a backward link the forward chain contradicts, a reserved node
+ * with no name that no path reaches, and one name on two nodes of a
+ * directory, which is a move that was interrupted. The counts go to
+ * `links`, `orphans` and `doubles`, any of which may be NULL.
+ *
+ * The forward chain must already be sound: this repairs what the check would
+ * otherwise refuse, and a chain it cannot walk is not one it can repair.
+ * Answers 0, or -1 if a write was refused or the volume has more named nodes
+ * than the pass compares.
+ */
+int krffs_repair_at(krffs_mount_t *mount, uint32_t *links, uint32_t *orphans,
+                    uint32_t *doubles)
+{
+    uint64_t offset = 0;
+    uint64_t previous_size = 0;
+    uint64_t steps = 0;
+    uint64_t bound = krffs_max_steps(mount);
+    uint32_t named = 0;
+    uint32_t fixed_links = 0;
+    uint32_t fixed_doubles = 0;
+    krffs_node_t head;
+
+    if (links) {
+        *links = 0;
+    }
+    if (orphans) {
+        *orphans = 0;
+    }
+    if (doubles) {
+        *doubles = 0;
+    }
+
+    /* The backward links, from the forward chain that was just walked. */
+    do {
+        if (krffs_head(mount, offset, &head) != 0) {
+            return -1;
+        }
+        if (offset != 0 && head.previous_node_size != previous_size) {
+            if (krffs_put_u64(mount, offset, KRFFS_FIELD_PREVIOUS,
+                              previous_size) != 0) {
+                return -1;
+            }
+            fixed_links++;
+        }
+        if (head.type == KRFFS_RESERVED_NODE && head.name[0] != '\0') {
+            named++;
+        }
+        previous_size = head.size;
+        offset = krffs_step(mount, offset, head.size);
+    } while (offset != 0 && ++steps < bound);
+
+    if (krffs_head(mount, 0, &head) == 0 &&
+        head.previous_node_size != previous_size) {
+        if (krffs_put_u64(mount, 0, KRFFS_FIELD_PREVIOUS, previous_size) != 0) {
+            return -1;
+        }
+        fixed_links++;
+    }
+
+    if (named > KRFFS_REPAIR_NAMES) {
+        return -1; /* too many names to compare here; the host tool has them */
+    }
+
+    /* One name on two nodes: the larger is the copy the move was making,
+     * since a move only ever makes a node larger, so the smaller loses its
+     * name and the pass below reclaims it with the other nameless nodes. */
+    offset = 0;
+    steps = 0;
+    do {
+        krffs_node_t other;
+        uint64_t scan;
+        uint64_t inner = 0;
+
+        if (krffs_head(mount, offset, &head) != 0) {
+            return -1;
+        }
+        if (head.type == KRFFS_RESERVED_NODE && head.name[0] != '\0') {
+            scan = krffs_step(mount, offset, head.size);
+            while (scan != 0 && ++inner < bound) {
+                if (krffs_head(mount, scan, &other) != 0) {
+                    return -1;
+                }
+                if (other.type == KRFFS_RESERVED_NODE &&
+                    other.parent_id == head.parent_id && other.name[0] != '\0' &&
+                    krffs_names_match(other.name, head.name)) {
+                    uint64_t loser = other.size > head.size ? offset : scan;
+                    uint8_t empty = '\0';
+
+                    if (krffs_put(mount, loser, KRFFS_FIELD_NAME, &empty, 1) !=
+                        0) {
+                        return -1;
+                    }
+                    fixed_doubles++;
+                    if (loser == offset) {
+                        break;
+                    }
+                }
+                scan = krffs_step(mount, scan, other.size);
+            }
+        }
+        offset = krffs_step(mount, offset, head.size);
+    } while (offset != 0 && ++steps < bound);
+
+    if (links) {
+        *links = fixed_links;
+    }
+    if (doubles) {
+        *doubles = fixed_doubles;
+    }
+    if (orphans) {
+        *orphans = krffs_reap_orphans_at(mount);
+    } else {
+        krffs_reap_orphans_at(mount);
+    }
+    return krffs_sync_point(mount);
+}
+
 /**
  * Walk the whole circular node chain once, bounding every step.
  *
@@ -1706,7 +1913,7 @@ uint32_t krffs_reap_orphans_at(krffs_mount_t *mount)
  * previous node; the sizes must tile the region exactly and the chain must
  * close back on the root. Returns 1 if sound, 0 if not.
  */
-int krffs_chain_is_valid(krffs_mount_t *mount)
+static int krffs_chain_walk(krffs_mount_t *mount, int with_links)
 {
     uint64_t position = 0;
     uint64_t previous_size = 0;
@@ -1748,7 +1955,8 @@ int krffs_chain_is_valid(krffs_mount_t *mount)
         if (head.data_size > head.size - sizeof(krffs_node_t)) {
             return 0;
         }
-        if (count > 1 && head.previous_node_size != previous_size) {
+        if (with_links && count > 1 &&
+            head.previous_node_size != previous_size) {
             return 0;
         }
         if (head.type == KRFFS_RESERVED_NODE) {
@@ -1770,10 +1978,80 @@ int krffs_chain_is_valid(krffs_mount_t *mount)
             break; /* the last node ends at the region edge; the list wraps */
         }
     }
-    if (total != mount->size || root.previous_node_size != previous_size) {
+    if (total != mount->size) {
+        return 0;
+    }
+    if (with_links && root.previous_node_size != previous_size) {
         return 0;
     }
     return 1;
+}
+
+/**
+ * The whole check: the structure and the backward links.
+ */
+int krffs_chain_is_valid(krffs_mount_t *mount)
+{
+    return krffs_chain_walk(mount, 1);
+}
+
+/**
+ * The structure alone, without the backward links.
+ *
+ * What a mount asks of a volume it will not repair: the links are derived
+ * from the forward chain, nothing that only reads one follows them, and a
+ * machine that stopped inside a change is allowed to have left them behind.
+ * A mount that writes repairs them and then asks for the whole check.
+ */
+int krffs_chain_is_walkable(krffs_mount_t *mount)
+{
+    return krffs_chain_walk(mount, 0);
+}
+
+/**
+ * A node's permission bits, its owner, and the times a caller sets.
+ *
+ * The kind of a node is in the same field as its permissions and is never
+ * changed by these: a directory stays a directory. The root is excluded by
+ * its caller, since its mode is the format's and carries the dirty flag.
+ */
+int krffs_set_mode_at(krffs_mount_t *mount, uint64_t offset, uint16_t mode)
+{
+    krffs_node_t head;
+
+    if (krffs_head(mount, offset, &head) != 0) {
+        return -1;
+    }
+    return krffs_put_u16(mount, offset, KRFFS_FIELD_MODE,
+                         (uint16_t)((head.mode & KRFFS_S_IFMT) |
+                                    (mode & 07777u)));
+}
+
+int krffs_set_owner_at(krffs_mount_t *mount, uint64_t offset, uint32_t uid,
+                       uint32_t gid, int which)
+{
+    int rc = 0;
+
+    if (which & KRFFS_SET_UID) {
+        rc |= krffs_put_u32(mount, offset, KRFFS_FIELD_UID, uid);
+    }
+    if (which & KRFFS_SET_GID) {
+        rc |= krffs_put_u32(mount, offset, KRFFS_FIELD_GID, gid);
+    }
+    return rc;
+}
+
+int krffs_set_time_at(krffs_mount_t *mount, uint64_t offset, int which,
+                      int64_t seconds, int64_t nanoseconds)
+{
+    krffs_node_time_t when;
+
+    when.seconds = seconds;
+    when.nanoseconds = nanoseconds;
+    return krffs_put(mount, offset,
+                     which == KRFFS_SET_ATIME ? KRFFS_FIELD_ATIME
+                                              : KRFFS_FIELD_MTIME,
+                     &when, (uint32_t)sizeof(when));
 }
 
 /**

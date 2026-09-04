@@ -200,6 +200,19 @@ typedef struct krffs_brief {
  */
 int krffs_head(krffs_mount_t *mount, uint64_t offset, krffs_node_t *out);
 int krffs_chain_is_valid(krffs_mount_t *mount);
+int krffs_chain_is_walkable(krffs_mount_t *mount);
+
+/* Which of the attributes a caller is setting. */
+#define KRFFS_SET_UID   1
+#define KRFFS_SET_GID   2
+#define KRFFS_SET_ATIME 1
+#define KRFFS_SET_MTIME 2
+
+int krffs_set_mode_at(krffs_mount_t *mount, uint64_t offset, uint16_t mode);
+int krffs_set_owner_at(krffs_mount_t *mount, uint64_t offset, uint32_t uid,
+                       uint32_t gid, int which);
+int krffs_set_time_at(krffs_mount_t *mount, uint64_t offset, int which,
+                      int64_t seconds, int64_t nanoseconds);
 uint64_t krffs_max_steps(krffs_mount_t *mount);
 uint64_t krffs_next_offset(krffs_mount_t *mount, uint64_t offset,
                            const krffs_node_t *head);
@@ -231,6 +244,10 @@ uint64_t krffs_allocate_at(krffs_mount_t *mount, uint64_t size,
 uint64_t krffs_resize_at(krffs_mount_t *mount, uint64_t offset, uint64_t size);
 void krffs_remove_at(krffs_mount_t *mount, uint64_t offset);
 uint32_t krffs_count_at(krffs_mount_t *mount);
+int krffs_set_dirty(krffs_mount_t *mount, int dirty);
+int krffs_is_dirty(krffs_mount_t *mount);
+int krffs_repair_at(krffs_mount_t *mount, uint32_t *links, uint32_t *orphans,
+                    uint32_t *doubles);
 uint32_t krffs_free_at(krffs_mount_t *mount);
 
 /* The mounted file system, or NULL before init_krffs. */
