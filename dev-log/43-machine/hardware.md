@@ -335,3 +335,5 @@ fallback, the recovery partition with `e2fsck`.
 The machine the milestone leaves plays the tree's own shareware IWAD as
 `/doom1.wad`, `1d7d43be...`, with Freedoom beside it as
 `/freedoom1.wad` for the music comparison.
+
+`tests/run all` on the final tree: 70 suites, all passed.

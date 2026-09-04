@@ -377,7 +377,9 @@ machine that never reached its login prompt, and each passed alone,
 480 s and 105 s. They are the longest sequences of boots, twelve and
 nine, every step waited for with a deadline; in the pool they lose a
 step to the host's load. They run outside the pool now, beside `usb`
-and `usbdisk`, which were there for the same reason.
+and `usbdisk`, which were there for the same reason. The set then
+passed whole: 70 suites, none failed, on the tree the milestone
+leaves.
 
 One Codex unit read `Readme.md`, `dev-log/43-machine/Readme.md`,
 `current.md` and the USB Readme against the code and returned ten

@@ -13,7 +13,7 @@ in the blue socket, and the machine plays the tree's own shareware
 WAD as `/doom1.wad`, with Freedoom beside it as `/freedoom1.wad` for
 the music test. The
 acceptance script passes against it, and the stick beside it is the
-recovery stick with an empty save volume. The full set, the documents'
+recovery stick with an empty save volume. The full set passed whole on this tree, 70 suites; the documents'
 review and every difference's row are done and recorded in notes.md.
 
 Open, and each recorded there: the panic at a pull of a stick that had
