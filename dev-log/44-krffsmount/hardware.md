@@ -26,6 +26,10 @@ The second install was that build. The trial booted, `/proc/filesystems`
 listed `krffs`, `/dev` had `loop-control`, and `bootctl commit` made it the
 saved default.
 
+The third install carries the xHCI completion code into the mass-storage
+failure message, for the stick's fault below. It went in the same way and was
+committed after it came up on the ext2 root.
+
 ## A file system in a file, on the machine
 
 An image built here by `krffs/mkimage.sh` (4 MiB, two files), copied to
@@ -72,8 +76,13 @@ and the file system took no other harm.
 
 Each command carries at most eight sectors (`MSC_MAX_SECTORS`), so a 1 MiB
 write is about two hundred and fifty commands; 256 KiB, sixty-four of them,
-is enough. What is not yet known is whether the hub is what makes the
-difference, which needs the stick in a port of the machine itself.
+is enough.
+
+The same stick in the machine's own port, where it enumerates at high speed
+(`port 3 high 781:55a9`), takes those writes: 256 KiB, 1 MiB and 8 MiB, each
+written to the FAT32 volume and synced, 33 MiB in all, with nothing in the
+log and the mount still read-write afterwards. The size is not what decides
+it; the path through the hub is.
 
 This is the mass-storage path and not this milestone's code: no loop device
 was attached and the buffer cache's chain rules do not reach a device with no
