@@ -1,9 +1,9 @@
 # Milestone 44 progress
 
 Phase 1: the oracle and the crash model
-- [ ] fsck.krffs checks the backlink and validates before it clears the dirty bit
-- [ ] the update protocol and what the mount check repairs, written in the new Readme
-- [ ] host rows for the protocol over images, with their mutations
+- [x] fsck.krffs checks the backlink and validates before it clears the dirty bit
+- [x] the update protocol and what the mount check repairs, written in the new Readme
+- [x] host rows for the protocol over images, with their mutations
 
 Phase 2: the offset core
 - [ ] krffs.c in offsets over a backend, memory backend only, root on a pointer facade
