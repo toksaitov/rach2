@@ -307,3 +307,11 @@ was built from, `bb3f628` or thereabouts, so that kernel is behind the
 installed one by the fixes of the install round; the root is rewritten
 from the current tree before the kernel the machine builds is
 installed.
+
+The root rewritten from the current tree, `7f724aed...`, with the
+owner's approval, read back with that hash and `e2fsck` clean; the
+machine then built its kernel again from the staged `/src`: 688796
+bytes, `8ed3c0f8...`, installed through `bootctl kernel`, trial-booted
+with all eleven self-tests passing, the five USB devices up and SSH
+answering, and committed as the saved default. The machine runs the
+kernel it built.
