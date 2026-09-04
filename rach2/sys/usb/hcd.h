@@ -112,6 +112,7 @@ struct usb_completion {
     int device;          /* the device handle the transfer was submitted for */
     int endpoint;        /* the endpoint handle */
     int status;          /* one of the `USB_XFER_` values */
+    int code;            /* the controller's own completion code, for the record */
     uint32_t length;     /* bytes the transfer asked for */
     uint32_t residual;   /* what the controller did not move, so length less this
                           * is what arrived */

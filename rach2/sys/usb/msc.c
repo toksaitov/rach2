@@ -392,6 +392,9 @@ static int status_begin(struct msc_device *m)
  * The specification's order is exactly this, and a driver that cleared the
  * outward endpoint first leaves a device that answers nothing again.
  */
+/** As `recover_begin`, and says what the controller reported. */
+static void recover_with_code(struct msc_device *m, const char *why, int code);
+
 static void recover_begin(struct msc_device *m, const char *why)
 {
     klog(KLOG_WARN, "usbdisk", "recovery: device %d: %s", m->device, why);
@@ -413,6 +416,12 @@ static void recover_begin(struct msc_device *m, const char *why)
     }
     m->recover = RECOVER_RESET;
     m->deadline = MSC_STEP_MS;
+}
+
+static void recover_with_code(struct msc_device *m, const char *why, int code)
+{
+    klog(KLOG_WARN, "usbdisk", "device %d: %s: completion code %d", m->device, why, code);
+    recover_begin(m, why);
 }
 
 /**
@@ -679,7 +688,7 @@ int msc_completion(const struct usb_completion *completion)
             return 1;
         }
         if (completion->status != USB_XFER_OK && completion->status != USB_XFER_SHORT) {
-            recover_begin(m, "the data stage failed");
+            recover_with_code(m, "the data stage failed", completion->code);
             return 1;
         }
         m->residue = completion->residual;

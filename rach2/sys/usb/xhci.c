@@ -1100,6 +1100,11 @@ static void event_dispatch(const uint32_t *trb)
         c->generation = (c->endpoint > 0 && c->endpoint < XHCI_MAX_DCI)
                             ? slots[c->device].generation[c->endpoint]
                             : 0;
+        /* The code the controller reported, kept beside the four answers the
+         * layer above knows: a transfer that failed says only that it failed,
+         * and the code is what names the reason on a machine where it
+         * happens. */
+        c->code = (int)code;
         if (code == TRB_COMPLETION_SUCCESS) {
             c->status = USB_XFER_OK;
         } else if (code == TRB_COMPLETION_SHORT) {
