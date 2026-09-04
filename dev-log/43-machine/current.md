@@ -46,7 +46,10 @@ stick boot, to reproduce with a second dropbear started with -E from a
 test-account su session; the RTC set to UTC by the owner; the shareware
 WAD put back as /doom1.wad on the machine (the machine's /bin/doom is
 the multi-track build, ahead of the ext2 image the tree last wrote).
-Then phase 8, tests/run selfbuild on the machine and the kernel it
-builds installed; phase 9, the record and the sweep, with a Codex
+Then phase 8, begun: the machine built its kernel, utilities and shell
+from the staged sources in seconds (hardware.md); the ext2 root must
+be rewritten from the current tree (a partition 4 write, approval by
+name) so the staged sources are current, then the build repeated and
+the kernel it builds trial-booted through bootctl and committed; phase 9, the record and the sweep, with a Codex
 review per phase and the full test set once.
 File being read when written: none.

@@ -296,3 +296,14 @@ written through `gzip`, `ssh` and `reflash` in 26 s and read back as
 `d28d96f1...`; the recovery entry then booted from partition 3 with
 `/sbin/e2fsck` and the USB stack, and `e2fsck -fn /dev/disk0p4` found
 the ext2 root clean. The saved default stayed the candidate throughout.
+
+## Phase 8: the machine's own build
+
+From the ext2 root on 2026-09-04, the staged `/src` copied to
+`/home/test/kbuild` and built with the staged pdpmake and TinyCC:
+the kernel in 7.3 s, 684700 bytes, `c9280827...`; the utilities and
+the shell with exit 0. The staged sources are the tree the ext2 image
+was built from, `bb3f628` or thereabouts, so that kernel is behind the
+installed one by the fixes of the install round; the root is rewritten
+from the current tree before the kernel the machine builds is
+installed.

@@ -42,7 +42,8 @@ Phase 7: the differences
 - [ ] the shareware WAD put back as /doom1.wad on the machine
 
 Phase 8: the machine's own build
-- [ ] tests/run selfbuild on the machine; the kernel it builds installed and committed
+- [x] the machine builds its kernel, utilities and shell from the staged sources (7 s for the kernel)
+- [ ] the root rewritten from the current tree, the build repeated, the kernel it builds trial-booted, installed and committed
 
 Phase 9: the record and the sweep
 - [ ] the Readmes, the acceptance script read, the full test set, notes.md closed, 43-machine/Readme.md, the dev-log entry
