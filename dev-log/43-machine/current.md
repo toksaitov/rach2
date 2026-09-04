@@ -55,7 +55,7 @@ phase 9, begun: the acceptance script passes on the final machine;
 directory (rerun it if that log is gone). Left for phase 9: the
 Readmes read once for stale claims, the acceptance script read for
 lines that prove what another proves, notes.md closed line by line,
-`dev-log/43-machine/Readme.md` with its trust statement, the
-`dev-log/Readme.md` entry made final, and a Codex review of the
+the `dev-log/Readme.md` entry made final (the milestone Readme with its
+trust statement is written), and a Codex review of the
 reader-facing documents.
 File being read when written: none.
