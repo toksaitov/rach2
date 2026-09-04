@@ -15,7 +15,7 @@ Six mechanisms, and the reason for each:
 * Registry order is the schedule order, longest suite first. A pool finishes when its longest member does, so a long suite started last leaves the machine idle around it.
 * A shim named `qemu-system-i386` goes first on `PATH` and writes its own pid to the ledger of the suite that is running. A machine still alive when its suite ends is named with the suite that left it. Listing every QEMU on the host would work only while one suite ran at a time.
 
-`style` and `host` run alone, before the pool: `style` rebuilds the kernel with its own flags, and both share a scratch directory.
+`style` and `host` run alone, before the pool: `style` rebuilds the kernel with its own flags, and both share a scratch directory. `usb`, `usbdisk`, `sealed` and `mount` run alone after it: the first two plug devices in and out through QEMU's monitor, which stops answering on a saturated host, and the other two are the longest sequences of boots, each step waited for with a deadline that the pool's load overruns.
 
 `tests/run runner` (`selftest.sh`) drives the runner against a registry and a makefile of its own in a temporary directory, and boots nothing. It is the only test of the runner itself.
 

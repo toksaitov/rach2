@@ -169,13 +169,17 @@ prepare() {
 # and out through QEMU's monitor, and on a host saturated by the pool that
 # monitor stops answering `device_add` for a minute or more while the machine
 # runs on; the suite passes every time on its own, so it runs alone, after
-# the pool.
+# the pool. `sealed` and `mount` are the longest sequences of boots, twelve
+# and nine, each step waited for with a deadline: in the pool they lose a
+# step to the host's load and report a machine that never reached its login
+# prompt, twice in the full runs of 2026-09-04, and each passes alone every
+# time, so they run there too.
 run_set() {
     failed=""; serial=""; pooled=""; lone=""
     for suite in $1; do
         case "$suite" in
             style|host) serial="$serial $suite" ;;
-            usb|usbdisk) lone="$lone $suite" ;;
+            usb|usbdisk|sealed|mount) lone="$lone $suite" ;;
             *)          pooled="$pooled $suite" ;;
         esac
     done
