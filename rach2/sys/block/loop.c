@@ -36,6 +36,7 @@
 struct loop_device {
     block_device_t dev; /* first: a device pointer is a loop pointer */
     int used;           /* the slot is taken, whether or not it is attached */
+    int attaching;      /* claimed, with the steps that can sleep still to run */
     int attached;       /* the file is open and the device can be reached */
     int index;
     struct vfs_mount *mnt;
@@ -55,6 +56,7 @@ static struct loop_device *loop_of(block_device_t *device)
 }
 
 static void loop_release(struct loop_device *loop);
+static void loop_unclaim(struct loop_device *loop);
 static void loop_transfer_ended(struct loop_device *loop);
 static void loop_settle(void);
 
@@ -197,6 +199,7 @@ static void loop_release(struct loop_device *loop)
     void *handle = loop->handle;
 
     loop->attached = 0;
+    loop->attaching = 0;
     loop->used = 0;
     loop->release_due = 0;
     loop->mnt = 0;
@@ -207,6 +210,16 @@ static void loop_release(struct loop_device *loop)
     if (mnt) {
         vfs_desc_close(mnt, node, handle);
     }
+}
+
+/**
+ * Give back a claim whose attachment never finished. The slot is free again
+ * and nothing was published into it, so there is nothing to let go of.
+ */
+static void loop_unclaim(struct loop_device *loop)
+{
+    loop->attaching = 0;
+    loop->used = 0;
 }
 
 /**
@@ -348,49 +361,54 @@ int loop_attach(int index, const char *path, int writable)
      * attach that found this slot free would publish over this one, and what
      * the first had opened would have nobody left to release it. */
     loop->used = 1;
+    loop->attaching = 1;
     loop->attached = 0;
     loop->in_flight = 0;
     loop->release_due = 0;
     loop->mnt = 0;
     loop->node = 0;
     loop->handle = 0;
+    /* The device this slot last stood on is not this one's: a medium going
+     * while the steps below sleep must not match a claim that has published
+     * nothing. */
+    loop->dev.backing = 0;
 
     rc = vfs_resolve(0, path, 0, &ref, 0, 0);
     if (rc != 0) {
-        loop->used = 0;
+        loop_unclaim(loop);
         return rc;
     }
     rc = vfs_getattr(ref.mnt, ref.node, &st);
     if (rc != 0) {
         vfs_ref_release(&ref);
-        loop->used = 0;
+        loop_unclaim(loop);
         return rc;
     }
     if ((st.mode & 0170000u) != 0100000u) {
         vfs_ref_release(&ref);
-        loop->used = 0;
+        loop_unclaim(loop);
         return -EINVAL; /* only a regular file is an image */
     }
     if (st.size == 0 || st.size % BLOCK_SECTOR_SIZE != 0) {
         vfs_ref_release(&ref);
-        loop->used = 0;
+        loop_unclaim(loop);
         return -EINVAL; /* whole sectors, or the last one is a lie */
     }
     if (loop_backs(ref.mnt, ref.node)) {
         vfs_ref_release(&ref);
-        loop->used = 0;
+        loop_unclaim(loop);
         return -EBUSY; /* one file, one device, whatever it is called */
     }
     if (block_depth(ref.mnt->dev) + 1 > BLOCK_MAX_DEPTH) {
         vfs_ref_release(&ref);
-        loop->used = 0;
+        loop_unclaim(loop);
         return -ELOOP; /* deeper than the four buffers a process may hold */
     }
 
     rc = vfs_open_node(ref.mnt, ref.node, writable ? 2 : 0, &handle);
     if (rc != 0) {
         vfs_ref_release(&ref);
-        loop->used = 0;
+        loop_unclaim(loop);
         return rc;
     }
     /* The open could sleep, and another attach could have taken this file in
@@ -399,7 +417,7 @@ int loop_attach(int index, const char *path, int writable)
     if (loop_backs(ref.mnt, ref.node)) {
         vfs_release(ref.mnt, handle);
         vfs_ref_release(&ref);
-        loop->used = 0;
+        loop_unclaim(loop);
         return -EBUSY;
     }
 
@@ -417,6 +435,7 @@ int loop_attach(int index, const char *path, int writable)
     loop->writable = writable ? 1 : 0;
     k_strncpy(loop->path, path, sizeof(loop->path));
     loop->path[sizeof(loop->path) - 1] = '\0';
+    loop->attaching = 0;
     loop->attached = 1;
 
     loop->dev.sector_size = BLOCK_SECTOR_SIZE;
@@ -447,6 +466,12 @@ int loop_detach(int index)
     loop = &loops[index];
     if (!loop->used) {
         return -ENOENT;
+    }
+    /* A slot claimed by an attachment still inside the steps that sleep:
+     * releasing it here would free a claim that is about to publish itself,
+     * and the next attach would then stand a second file under it. */
+    if (loop->attaching) {
+        return -EBUSY;
     }
     /* A device whose medium went is detached by letting go of what it still
      * holds, which is what a detach is; there is nothing left to write. */
@@ -593,8 +618,8 @@ int loop_control_write(const char *buffer, uint32_t count)
             arg++;
         }
         index = read_index(&arg);
-        if (index < 0) {
-            return -EINVAL;
+        if (index < 0 || *arg != '\0') {
+            return -EINVAL; /* `detach N` and nothing after it */
         }
         return loop_detach(index);
     }

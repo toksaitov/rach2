@@ -397,6 +397,9 @@ void probe_main(unsigned int *sp)
     if (control("detach 0junk") != -EINVAL) {
         fail("a detach with something after the number was taken");
     }
+    if (control("detach 0 junk") != -EINVAL) {
+        fail("a detach with a word after the number was taken");
+    }
     if (control("attach 9 /m/fat.img") != -EINVAL) {
         fail("a device that does not exist was attached");
     }
