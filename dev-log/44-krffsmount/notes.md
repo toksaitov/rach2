@@ -136,3 +136,17 @@ except the two that the review found to be already covered elsewhere: the sync
 before a removal (the allocation's own sync covers it, and the redundant one
 was taken out) and the read-only flag on a writable mount (which phase 4
 replaced).
+
+## Where the third kind of device is proved
+
+`request.c` is i386 assembly (it reads the flags register to refuse a
+sleeping device where interrupts are off), so it does not compile on the
+host, which is why `bcache_hosttest` stubs `block_request` rather than
+linking it. A host test for the new caller-synchronous kind was written and
+then removed for that reason. What can be proved on the host is the chain of
+devices, which `chain.c` holds on its own and `bcache_hosttest` links: which
+device is under which, how deep a chain may go, and the cache's rule that a
+caller holding one device's block may take a block of a device under it and
+not one above it. The dispatch itself, and that such a device takes no slot
+of the request pool, are the guest's rows in phases 6 and 7, where a loop
+device exists to be driven.

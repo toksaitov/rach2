@@ -22,9 +22,9 @@ Phase 4: the block backend, writable
 - [ ] review at the boundary
 
 Phase 5: the block layer's third device and the cache's rule
-- [ ] the caller-synchronous sleeping device, refused outside syscall context
-- [ ] the dependency checked where a buffer is taken, where a victim is written, and in sync
-- [ ] the depth budget, the cycle refusal, the request pool saturated on purpose
+- [x] the caller-synchronous sleeping device, refused outside syscall context
+- [x] the dependency checked where a buffer is taken, where a victim is written, and in sync
+- [x] the depth budget and the cycle it refuses; the pool's rows are the guest's, in phase 6
 
 Phase 6: the loop device
 - [ ] /dev/loopN, the control node, /proc/loop, the utility, the two tables
