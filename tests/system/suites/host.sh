@@ -76,6 +76,10 @@ for t in tests/host/*_hosttest.c; do
     # silently lose everything past the fold; a second line is how a test with
     # more dependencies than fit says so.
     deps="$(grep -oE 'host-deps:[^*]*' "$t" | sed 's/host-deps://' | tr '\n' ' ')"
+    # A test over sources outside the kernel tree says here what they need
+    # to compile: their own include directories and the warnings their build
+    # turns off. Empty for every kernel test, which the fixed flags cover.
+    extra="$(grep -oE 'host-cflags:[^*]*' "$t" | sed 's/host-cflags://' | tr '\n' ' ')"
 
     if ! wrapped_deps "$t" "host-deps:"; then
         echo "hosttest: $t: a host-deps: line is wrapped; repeat the" >&2
@@ -122,7 +126,7 @@ for t in tests/host/*_hosttest.c; do
     # loop-idiom pass is gated on the whole of -fno-builtin. The cross
     # compiler makes no such transformation, so the kernel is unaffected.
     # shellcheck disable=SC2086
-    if $CC -std=c99 $SAN -g -O1 -Wno-empty-body $FREESTANDING $INC -o "$out" "$t" $deps \
+    if $CC -std=c99 $SAN -g -O1 -Wno-empty-body $FREESTANDING $INC $extra -o "$out" "$t" $deps \
          >"$VDIR/$base.clog" 2>&1; then
         # shellcheck disable=SC2086
         $WATCHDOG "$out" >"$VDIR/$base.rlog" 2>&1
