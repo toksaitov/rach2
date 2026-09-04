@@ -118,6 +118,120 @@ typedef struct krffs_file_system {
     uint32_t size;         /* total size of the file system in bytes */
 } krffs_file_system_t;
 
+/*
+ * How a mount reaches its image.
+ *
+ * The format is walked in offsets from the first byte of the region, and a
+ * backend moves bytes between those offsets and wherever the image really is.
+ * `read` and `write` answer 0 on success and -1 on a fault, and `write`
+ * promises nothing about order beyond what the caller has already done: the
+ * order that survives a stop is the caller's, and it is written down in
+ * krffs.Readme.md. `sync` makes everything written so far durable.
+ *
+ * The memory backend is one memcpy either way. It is the only backend for a
+ * root, which is a mapped image and cannot fault.
+ */
+typedef struct krffs_backend {
+    int (*read)(void *ctx, uint64_t offset, void *buffer, uint32_t size);
+    int (*write)(void *ctx, uint64_t offset, const void *buffer, uint32_t size);
+    int (*sync)(void *ctx);
+} krffs_backend_t;
+
+/* A mounted region: what reaches it, and how many bytes it has. A region is
+ * addressed in 32 bits, which is the largest image this kernel can map or
+ * cache and the largest file offset it has. */
+typedef struct krffs_mount {
+    const krffs_backend_t *backend;
+    void *ctx;
+    uint32_t size;
+} krffs_mount_t;
+
+/* The offset that is no node, since every real one is a byte of the region. */
+#define KRFFS_NO_NODE ((uint64_t)-1)
+
+/* Byte offsets of the fields a write publishes, for the backend's writes. */
+#define KRFFS_FIELD_TYPE      2u
+#define KRFFS_FIELD_ID        3u
+#define KRFFS_FIELD_NAME      11u
+#define KRFFS_FIELD_MODE      267u
+#define KRFFS_FIELD_UID       269u
+#define KRFFS_FIELD_GID       273u
+#define KRFFS_FIELD_ATIME     277u
+#define KRFFS_FIELD_MTIME     293u
+#define KRFFS_FIELD_CTIME     309u
+#define KRFFS_FIELD_SIZE      325u
+#define KRFFS_FIELD_PREVIOUS  333u
+#define KRFFS_FIELD_DATA_SIZE 341u
+#define KRFFS_FIELD_PARENT    349u
+
+/*
+ * The fields every walk reads, which is the header without its name.
+ *
+ * The two runs of bytes are contiguous on the medium, so this is two reads:
+ * the type and the id, then everything from the mode to the end of the
+ * header. The layout follows the node's, so a read fills it directly.
+ */
+#pragma pack(push, 1)
+typedef struct krffs_brief {
+    uint8_t type;
+    uint64_t id;
+    uint16_t mode;
+    uint32_t uid;
+    uint32_t gid;
+    krffs_node_time_t access_time;
+    krffs_node_time_t modification_time;
+    krffs_node_time_t attribute_change_time;
+    uint64_t size;
+    uint64_t previous_node_size;
+    uint64_t data_size;
+    uint64_t parent_id;
+} krffs_brief_t;
+#pragma pack(pop)
+
+/*
+ * The format, on a mount.
+ *
+ * These are the file system itself: they address nodes by their offset from
+ * the first byte of the region and reach the medium through the mount's
+ * backend, so one implementation serves a root in memory and a volume on a
+ * device. `KRFFS_NO_NODE` is the answer that is no node, and offset 0 is
+ * always the root. The pointer interface below is the root's, and it is these
+ * with the conversion done for it.
+ */
+int krffs_head(krffs_mount_t *mount, uint64_t offset, krffs_node_t *out);
+int krffs_chain_is_valid(krffs_mount_t *mount);
+uint64_t krffs_max_steps(krffs_mount_t *mount);
+uint64_t krffs_next_offset(krffs_mount_t *mount, uint64_t offset,
+                           const krffs_node_t *head);
+uint64_t krffs_walk(krffs_mount_t *mount, const char *path);
+uint64_t krffs_walk_err(krffs_mount_t *mount, const char *path, int *err);
+uint64_t krffs_parent_offset(krffs_mount_t *mount, uint64_t offset);
+int krffs_node_path_at(krffs_mount_t *mount, uint64_t offset, char *buf,
+                       uint32_t size);
+int krffs_read_at(krffs_mount_t *mount, uint64_t node, char *buffer,
+                  uint32_t size, uint32_t at);
+int krffs_write_at(krffs_mount_t *mount, uint64_t *node, const char *buffer,
+                   uint32_t size, uint32_t at);
+int krffs_create_at(krffs_mount_t *mount, const char *path);
+int krffs_truncate_at(krffs_mount_t *mount, const char *path,
+                      uint32_t new_size);
+int krffs_unlink_at(krffs_mount_t *mount, const char *path);
+int krffs_rename_at(krffs_mount_t *mount, const char *old_path,
+                    const char *new_path);
+int krffs_mkdir_at(krffs_mount_t *mount, const char *path);
+int krffs_rmdir_at(krffs_mount_t *mount, const char *path);
+int krffs_readdir_at(krffs_mount_t *mount, const char *path, uint32_t index,
+                     char *name_out, uint32_t buf_size, int *is_dir_out);
+void krffs_orphan_at(krffs_mount_t *mount, uint64_t offset);
+uint32_t krffs_reap_orphans_at(krffs_mount_t *mount);
+void krffs_stamp_at(krffs_mount_t *mount, uint64_t offset, int what);
+uint64_t krffs_allocate_at(krffs_mount_t *mount, uint64_t size,
+                           uint64_t original);
+uint64_t krffs_resize_at(krffs_mount_t *mount, uint64_t offset, uint64_t size);
+void krffs_remove_at(krffs_mount_t *mount, uint64_t offset);
+uint32_t krffs_count_at(krffs_mount_t *mount);
+uint32_t krffs_free_at(krffs_mount_t *mount);
+
 /* The mounted file system, or NULL before init_krffs. */
 extern krffs_file_system_t *krffs_fs;
 
