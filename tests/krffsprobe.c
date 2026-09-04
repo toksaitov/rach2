@@ -56,6 +56,7 @@ typedef unsigned int size_t;
 
 #define ENOENT 2
 #define EINVAL 22
+#define EBUSY  16
 #define EROFS  30
 
 static int sys1(int n, int a)
@@ -446,6 +447,9 @@ static void write_rows(void)
     sys1(SYS_UNLINK, (int)"/k/hold/keep.txt");
     sys1(SYS_UNLINK, (int)"/k/hold/gone.bin");
     sys1(SYS_RMDIR, (int)"/k/hold");
+    sys1(SYS_RMDIR, (int)"/k/busydir");
+    sys1(SYS_UNLINK, (int)"/k/over.txt");
+    sys1(SYS_UNLINK, (int)"/k/spare.txt");
 
     fd = sys3(SYS_OPEN, (int)"/k/written.bin", O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
@@ -550,6 +554,70 @@ static void write_rows(void)
         }
     }
     sys1(SYS_CLOSE, fd);
+
+    /* A directory somebody has open is not taken away under them, and a
+       rename over an open file leaves that file for its holder the way an
+       unlink does. */
+    {
+        int dirfd;
+
+        if (sys2(SYS_MKDIR, (int)"/k/busydir", 0755) != 0) {
+            fail("the directory to hold open");
+        }
+        dirfd = sys3(SYS_OPEN, (int)"/k/busydir", O_RDONLY, 0);
+        if (dirfd < 0) {
+            fail_with("opening a directory of the volume", dirfd);
+        }
+        if (sys1(SYS_RMDIR, (int)"/k/busydir") != -EBUSY) {
+            fail("a directory somebody had open was removed");
+        }
+        sys1(SYS_CLOSE, dirfd);
+        if (sys1(SYS_RMDIR, (int)"/k/busydir") != 0) {
+            fail("removing the directory after its holder let go");
+        }
+    }
+    fd = sys3(SYS_OPEN, (int)"/k/over.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) {
+        fail_with("creating the file to be renamed over", fd);
+    }
+    if (sys3(SYS_WRITE, fd, (int)"under\n", 6) != 6) {
+        fail("writing the file to be renamed over");
+    }
+    sys1(SYS_CLOSE, fd);
+    fd = sys3(SYS_OPEN, (int)"/k/over.txt", O_RDONLY, 0);
+    if (fd < 0) {
+        fail_with("holding the file to be renamed over", fd);
+    }
+    {
+        int spare = sys3(SYS_OPEN, (int)"/k/spare.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        char kept[8];
+        int n;
+
+        if (spare < 0) {
+            fail_with("the file to rename over it", spare);
+        }
+        if (sys3(SYS_WRITE, spare, (int)"spare\n", 6) != 6) {
+            fail("writing the file to rename over it");
+        }
+        sys1(SYS_CLOSE, spare);
+        if (sys2(SYS_RENAME, (int)"/k/spare.txt", (int)"/k/over.txt") != 0) {
+            fail("renaming over a file somebody has open");
+        }
+        n = sys3(SYS_READ, fd, (int)kept, (int)sizeof(kept));
+        if (n != 6 || kept[0] != 'u') {
+            fail_with("the bytes of a file renamed over while it was open", n);
+        }
+        sys1(SYS_CLOSE, fd);
+        fd = sys3(SYS_OPEN, (int)"/k/over.txt", O_RDONLY, 0);
+        if (fd < 0) {
+            fail_with("the file that took the name", fd);
+        }
+        n = sys3(SYS_READ, fd, (int)kept, (int)sizeof(kept));
+        if (n != 6 || kept[0] != 's') {
+            fail_with("the bytes of the file that took the name", n);
+        }
+        sys1(SYS_CLOSE, fd);
+    }
 
     /* A truncation of a file whose name is gone. It has no path, and the one
        its parent and empty name spell reaches the directory it was in; the

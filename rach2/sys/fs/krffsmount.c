@@ -41,6 +41,19 @@ struct krffs_open {
     int nameless; /* unlinked while open: freed at the last close */
 };
 
+/* Where a node went, for a caller that was asleep when it moved. A handle is
+ * a node's offset, and a grow with no room after it moves the node: every
+ * holder the VFS knows is repointed then, but a call already inside this
+ * file system, waiting for the mount's lock, holds its handle as an
+ * argument that nothing can reach. It looks its offset up here when it
+ * wakes. Eight is more moves than can happen while one caller waits. */
+#define KRFFS_MOVES 8
+
+struct krffs_move {
+    uint64_t from;
+    uint64_t to;
+};
+
 struct krffs_volume {
     int used;
     block_device_t *dev;
@@ -48,6 +61,8 @@ struct krffs_volume {
     krffs_mount_t fs;
     int writable;
     struct krffs_open opens[KRFFS_OPENS];
+    struct krffs_move moves[KRFFS_MOVES];
+    int move_at; /* the next entry to write; the ring is a ring */
 };
 
 static struct krffs_volume krffs_volumes[KRFFS_VOLUMES];
@@ -298,6 +313,39 @@ static void open_moved(struct krffs_volume *vol, uint64_t from, uint64_t to)
     if (o) {
         o->offset = to;
     }
+    vol->moves[vol->move_at].from = from;
+    vol->moves[vol->move_at].to = to;
+    vol->move_at = (vol->move_at + 1) % KRFFS_MOVES;
+}
+
+/**
+ * Where the node a handle names is now.
+ *
+ * A caller that was waiting for the mount's lock while the node moved holds
+ * the offset the node had then. The moves the volume remembers are followed
+ * from it, at most as many times as there are entries, since a node can move
+ * again while the same caller waits.
+ */
+static uint64_t follow_moves(struct krffs_volume *vol, uint64_t at)
+{
+    int steps;
+
+    for (steps = 0; steps < KRFFS_MOVES; steps++) {
+        int i;
+        int found = 0;
+
+        for (i = 0; i < KRFFS_MOVES; i++) {
+            if (vol->moves[i].from != 0 && vol->moves[i].from == at) {
+                at = vol->moves[i].to;
+                found = 1;
+                break;
+            }
+        }
+        if (!found) {
+            break;
+        }
+    }
+    return at;
 }
 
 static int kv_open(struct vfs_mount *mnt, void *node, int flags, void **handle)
@@ -338,24 +386,42 @@ static void kv_release(struct vfs_mount *mnt, void *handle)
         return;
     }
     /* The last close of a file whose name was taken away frees it, which is
-     * the moment the space comes back. */
-    if (o->nameless && vol->writable && !(mnt->flags & VFS_MS_RDONLY)) {
-        krffs_remove_at(&vol->fs, o->offset);
+     * the moment the space comes back. The slot is given up before the
+     * removal, which sleeps: another open would take this slot while it
+     * slept, and what it wrote there is not this call's to clear. The
+     * removal is a change to the allocator and takes the mount's lock, as
+     * every other change to it does. */
+    {
+        uint64_t at = o->offset;
+        int reap = o->nameless;
+
+        o->nameless = 0;
+        if (reap && vol->writable && !(mnt->flags & VFS_MS_RDONLY)) {
+            vfs_ns_lock(mnt);
+            krffs_remove_at(&vol->fs, at);
+            vfs_ns_unlock(mnt);
+        }
     }
-    o->nameless = 0;
 }
 
 static int32_t kv_read(struct vfs_mount *mnt, void *handle, void *buf,
                        uint32_t count, uint64_t offset)
 {
-    struct krffs_volume *vol = vol_of(mnt);
-    uint64_t at = offset_of(mnt, handle);
+    struct krffs_volume *vol;
+    uint64_t at;
     int got;
 
     if (offset > 0xFFFFFFFFull) {
         return 0; /* past the largest offset this kernel has */
     }
+    /* Under the mount's lock, as a write is: a read of a node another caller
+     * is moving would otherwise read the bytes of wherever the offset it
+     * holds has ended up. */
+    vfs_ns_lock(mnt);
+    vol = vol_of(mnt);
+    at = follow_moves(vol, offset_of(mnt, handle));
     got = krffs_read_at(&vol->fs, at, buf, count, (uint32_t)offset);
+    vfs_ns_unlock(mnt);
     return got < 0 ? -EIO : (int32_t)got;
 }
 
@@ -419,6 +485,7 @@ static int32_t kv_write(struct vfs_mount *mnt, void *handle, const void *buf,
 {
     struct krffs_volume *vol;
     uint64_t at;
+    uint64_t was;
     int written;
     int rc = begin_write(mnt);
 
@@ -426,7 +493,10 @@ static int32_t kv_write(struct vfs_mount *mnt, void *handle, const void *buf,
         return rc;
     }
     vol = vol_of(mnt);
-    at = offset_of(mnt, handle);
+    /* Under the lock, and through the moves made while this call waited for
+     * it: the handle is an argument nothing could repoint. */
+    at = follow_moves(vol, offset_of(mnt, handle));
+    was = at;
     if (offset > 0xFFFFFFFFull || offset + count > 0xFFFFFFFFull) {
         vfs_ns_unlock(mnt);
         return -EFBIG;
@@ -436,9 +506,9 @@ static int32_t kv_write(struct vfs_mount *mnt, void *handle, const void *buf,
      * working directory and covering mount that named the old node is
      * repointed at the new one, which is what the root does for the same
      * reason. Done under the mount's lock, before anything else can look. */
-    if (at != KRFFS_NO_NODE && at != offset_of(mnt, handle)) {
-        open_moved(vol, offset_of(mnt, handle), at);
-        vfs_repoint(mnt, handle, handle_of(at));
+    if (at != KRFFS_NO_NODE && at != was) {
+        open_moved(vol, was, at);
+        vfs_repoint(mnt, handle_of(was), handle_of(at));
     }
     vfs_ns_unlock(mnt);
     if (written == KRFFS_ENOSPACE) {
@@ -467,14 +537,15 @@ static int kv_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
      * file whose name has been taken away has no path, and the one such a
      * node spells reaches its parent directory. */
     {
-        uint64_t now = offset_of(mnt, handle);
+        uint64_t was = follow_moves(vol, offset_of(mnt, handle));
+        uint64_t now = was;
 
         rc = krffs_truncate_node_at(&vol->fs, now, (uint32_t)size, &now);
         /* Repointed whether or not it worked: a resize that moved the node
          * and then failed has left every holder naming free space. */
-        if (now != KRFFS_NO_NODE && now != offset_of(mnt, handle)) {
-            open_moved(vol, offset_of(mnt, handle), now);
-            vfs_repoint(mnt, handle, handle_of(now));
+        if (now != KRFFS_NO_NODE && now != was) {
+            open_moved(vol, was, now);
+            vfs_repoint(mnt, handle_of(was), handle_of(now));
         }
     }
     vfs_ns_unlock(mnt);
@@ -528,6 +599,13 @@ static int kv_create(struct vfs_mount *mnt, void *dir, const char *name,
     rc = join(mnt, dir, name, path, sizeof(path));
     if (rc != 0) {
         return rc;
+    }
+    /* The core answers a create of a name that is already there with
+     * success, which would make this a creation of somebody else's file: its
+     * mode, its owner and the caller's O_EXCL all belong to the open that
+     * finds it, not to this. */
+    if (krffs_child_at(&vol->fs, offset_of(mnt, dir), name) != KRFFS_NO_NODE) {
+        return -EEXIST;
     }
     rc = krffs_create_at(&vol->fs, path);
     if (rc != 0) {
@@ -619,6 +697,16 @@ static int kv_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
     if (rc != 0) {
         return rc;
     }
+    /* A directory somebody has open stays: this file system has no name for
+     * a directory nobody can reach, and freeing it would leave that holder's
+     * offset in the allocator's hands. */
+    {
+        uint64_t at = krffs_child_at(&vol->fs, offset_of(mnt, dir), name);
+
+        if (at != KRFFS_NO_NODE && open_at(vol, at)) {
+            return -EBUSY;
+        }
+    }
     return krffs_rmdir_at(&vol->fs, path) == 0 ? 0 : -ENOTEMPTY;
 }
 
@@ -640,6 +728,28 @@ static int kv_rename(struct vfs_mount *mnt, void *olddir, const char *oldname,
     rc = join(mnt, newdir, newname, to, sizeof(to));
     if (rc != 0) {
         return rc;
+    }
+    /* A rename over a file removes it as surely as an unlink does, so the
+     * name comes off it here and the node stays for whoever has it open;
+     * the core would free it under them. */
+    {
+        uint64_t dst = krffs_child_at(&vol->fs, offset_of(mnt, newdir), newname);
+        struct krffs_open *o = dst == KRFFS_NO_NODE ? 0 : open_at(vol, dst);
+
+        if (o) {
+            krffs_node_t head;
+
+            if (krffs_head(&vol->fs, dst, &head) != 0) {
+                return -EIO;
+            }
+            if (KRFFS_IS_DIR(head.mode)) {
+                return -EISDIR;
+            }
+            krffs_stamp_at(&vol->fs, krffs_parent_offset(&vol->fs, dst),
+                           KRFFS_STAMP_DATA);
+            krffs_orphan_at(&vol->fs, dst);
+            o->nameless = 1;
+        }
     }
     return krffs_rename_at(&vol->fs, from, to) == 0 ? 0 : -EIO;
 }
