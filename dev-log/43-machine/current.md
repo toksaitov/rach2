@@ -4,9 +4,11 @@ the machine from the host are in Readme.md under "Updating the
 installed machine" and "Working the machine from the host"; read notes.md's Phase 1 to
 Phase 5 differences and Open items for what is fixed and what is not.
 
-The machine: the Lenovo runs kernel e9246422... (commit bb3f628's tree)
-on the ext2 root as the saved default, installed and committed through
-bootctl with the owner's approval; the KRFFS root is the fallback. The
+The machine: the Lenovo runs the kernel it built itself from the
+staged sources of the current tree, `8ed3c0f8...` through TinyCC, on
+the ext2 root written from that tree, both committed with the owner's
+approval; the KRFFS root is the fallback, and `bootctl kernel
+build/rach2/kernel` would put the host's build back. The
 hub with the keyboard, the mouse and the recovery stick is in the blue
 socket. The stick carries the recovery image with the RACH2SAVE volume
 holding saved copies. Freedoom is /doom1.wad on the machine and the
