@@ -256,13 +256,11 @@ again:
         if (write_buffer(victim) == 0) {
             victim->holder = -1;
             wq_wake_all(&victim->wq);
-            /* The write may have gone through a file system and back into
-             * this cache, which could have filled the very block this call
-             * is about to key. Look again rather than key it twice. */
-            if (victim->dev && victim->dev->backing) {
-                goto again;
-            }
-            break;
+            /* The write slept, whether it went through a file system and
+             * back into this cache or waited for a controller, and another
+             * caller could have filled the very block this one is about to
+             * key. Look again rather than key it twice. */
+            goto again;
         }
         victim->holder = -1;
         wq_wake_all(&victim->wq); /* a waiter for its old key looks again */

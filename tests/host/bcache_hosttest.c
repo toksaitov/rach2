@@ -133,6 +133,10 @@ static int gone_during_write;
 static unsigned last_count;
 static uint64_t writes_lba[8];
 static int writes_made;
+/* A block another caller keys while this write is inside the device, which
+   is what a writeback that sleeps allows. Keyed with a marker byte, so the
+   row can tell that buffer from one the cache filled itself. */
+static uint64_t fill_during_write;
 /* The fault injector: report success and write nothing at write number
    `drop_at`; write only `tear_bytes` at write number `tear_at`. */
 static int drop_at = -1, tear_at = -1, tear_bytes;
@@ -172,6 +176,17 @@ static int fake_write(block_device_t *d, uint64_t lba, uint32_t count, const voi
     if (gone_during_write) {
         gone_during_write = 0;
         bcache_device_gone(d);
+    }
+    if (fill_during_write) {
+        uint64_t blk = fill_during_write;
+        struct bbuf *keyed;
+
+        fill_during_write = 0;
+        keyed = bcache_get_blank(d, blk);
+        if (keyed) {
+            keyed->data[0] = 0xAB;
+            bcache_release(keyed);
+        }
     }
     if (writes_made < 8) {
         writes_lba[writes_made] = lba;
@@ -519,6 +534,37 @@ int main(void)
             ns_held = 0;
             bcache_sync(&nested);
             bcache_invalidate(&nested);
+            bcache_invalidate(&other);
+        }
+        /* A writeback sleeps, whatever kind of device it goes to, and
+           another caller can key the very block this call is about to key.
+           The device's write keys it here, with a byte the cache would not
+           have put there, and the call must come back with that buffer
+           rather than a second one of its own. */
+        {
+            uint64_t last = BCACHE_BUFFERS;
+            struct bbuf *b2;
+            int i2;
+
+            bcache_invalidate(&fake);
+            bcache_invalidate(&other);
+            for (i2 = 0; i2 < BCACHE_BUFFERS; i2++) {
+                b2 = bcache_get(&other, (uint64_t)i2);
+                check(b2 != 0, "a buffer is taken to fill the cache");
+                if (i2 == 0) {
+                    bcache_dirty(b2); /* the oldest buffer, and dirty */
+                }
+                if (b2) {
+                    bcache_release(b2);
+                }
+            }
+            fill_during_write = last;
+            b2 = bcache_get(&other, last);
+            check(b2 != 0 && b2->data[0] == 0xAB,
+                  "a block keyed while the victim's write ran is the one given back");
+            if (b2) {
+                bcache_release(b2);
+            }
             bcache_invalidate(&other);
         }
         /* A sync waits for a dirty buffer somebody else holds. A caller
