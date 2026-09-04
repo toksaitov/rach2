@@ -315,3 +315,9 @@ bytes, `8ed3c0f8...`, installed through `bootctl kernel`, trial-booted
 with all eleven self-tests passing, the five USB devices up and SSH
 answering, and committed as the saved default. The machine runs the
 kernel it built.
+
+## Phase 9: the close
+
+`metal_accept.sh` against the final machine, the kernel it built on the
+root written from the current tree, with the hub, the keyboard, the
+mouse and the stick in the blue socket: every line passes.
