@@ -135,6 +135,7 @@ The procedures milestone 43 used on the machine:
 * `reboot` and `reboot -f` both unmount the ext2 root cleanly; only a power cut leaves it dirty for the check. `poweroff` turns the machine off; `halt` takes no `-p`.
 * The acceptance script is `sh tests/system/accept/metal_accept.sh 192.168.0.106 22`, run from the host with the hub, the keyboard, the mouse and a stick plugged in; it writes its known-hosts file under `build/images/`.
 * The kernel's log goes out on the wire as broadcast frames of ethertype `0x88b5` when `rach2.netconsole` is on the line; `sudo tcpdump -i en0 -U 'ether proto 0x88b5' -w FILE` on the Mac keeps it, which is the only record of a panic, since the screen shows one line and the boot log dies with the machine.
+* The laptop's hardware clock holds UTC, set so in the BIOS setup on 2026-09-04; the kernel reads the clock as UTC and has no notion of a zone, so a clock left on local time puts every file's time hours out.
 * `/proc/usb`, `/proc/interrupts`, `/proc/disk`, `/proc/meminfo` and `dmesg` are the machine's own readings; `bootctl status` reports the slots and the saved and next entries.
 
 Check the credentials before flashing a root. The image trusts `krffs/authorized_keys`, which `krffs/gen_demo_key.sh` composes from the demo public key and an optional `krffs/authorized_keys.extra` belonging to whoever works on the machine. The private key used to log in must be the pair of one of those, and a copy carried between hosts can be older than the file it is meant to match:

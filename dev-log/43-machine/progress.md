@@ -38,7 +38,7 @@ Phase 7: the differences
 - [ ] the panic at a pull of a silent stick, when its record arrives through the capture
 - [x] the recovery partition rewritten with e2fsck, from recovery with a saved copy, with approval
 - [ ] root's SSH key refused after a stick boot, reproduced with a second dropbear
-- [ ] the RTC set to UTC by the owner and stated in the Readme
+- [x] the RTC set to UTC by the owner and stated in the Readme
 - [ ] the shareware WAD put back as /doom1.wad on the machine
 
 Phase 8: the machine's own build

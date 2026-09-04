@@ -111,7 +111,10 @@ and recovery is no longer the saved default.
   11:42 UTC and the files it writes to the exFAT volume show on the Mac
   six hours in the future. The kernel has no notion of a zone. To decide
   in phase 7: a boot flag for the RTC's offset, or the limit stated in
-  the RTC's Readme with the owner setting the RTC to UTC.
+  the RTC's Readme with the owner setting the RTC to UTC. Decided for
+  the Unix convention: the owner set the clock to UTC in the BIOS on
+  2026-09-04, the kernel read it back to the second, and the Readme
+  states that the machine's clock holds UTC.
 
 * On the stick boot, SSH as root with the demo key was refused for
   the first three minutes after the boot, at about 60 s, 100 s and

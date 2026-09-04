@@ -26,8 +26,7 @@ since each root has a host key of its own; a stick boot takes
 machine's netconsole frames, `tcpdump -i en0 -U 'ether proto 0x88b5'`
 on the Mac, was running when this was written and is not part of the
 tree; start one before the next machine round so a panic keeps its
-record. The BIOS clock is still local time; the owner sets it to UTC
-when at the BIOS.
+record. The BIOS clock holds UTC since 2026-09-04.
 
 Fixed on the host and installed, each with a row and a mutation: the
 xHCI's PCI line under nomsi (21 MB/s on the machine); the wait's torn
@@ -52,8 +51,7 @@ Phase 8 is closed: the machine runs the kernel it built itself,
 `8ed3c0f8...`, from the root rewritten from the current tree. Phase 9 is closed except for what the owner holds: the machine runs its
 own build of the final tree, `77b78018...`, on the ext2 root
 `9c20cabd...`; the full set, the acceptance script and the documents'
-review are done and recorded. Open with the owner: the BIOS clock to
-UTC; the SSH key refused after a metal-stick boot, which needs a stick
+review are done and recorded. Open with the owner: the SSH key refused after a metal-stick boot, which needs a stick
 rewritten as the metal stick and a boot from it; the panic at a pull
 of a silent stick, awaiting its record. Open for a later session: a
 host row for the Doom port's multi-track player; the runner building
