@@ -52,9 +52,7 @@ self-test, a refused configuration, the frame pool.
 
 The panic at a pull of a stick that had stopped answering, whose
 record the screen did not keep; the Mac now captures the machine's
-netconsole frames for the next one. Root's SSH key refused for the
-first minutes after a boot from the metal stick while the test
-account's was taken. The hardware clock, which holds local time. A host
+netconsole frames for the next one. The hardware clock, which holds local time. A host
 row for the Doom port's multi-track player, which needs a `GENMIDI`
 lump the tree does not carry. The frame exhaustion under the lag
 device, seen once and not reproduced in two trials with the record in

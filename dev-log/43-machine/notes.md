@@ -116,14 +116,17 @@ and recovery is no longer the saved default.
   2026-09-04, the kernel read it back to the second, and the Readme
   states that the machine's clock holds UTC.
 
-* On the stick boot, SSH as root with the demo key was refused for
-  the first three minutes after the boot, at about 60 s, 100 s and
-  170 s of uptime, with the key offered and the server answering
-  `publickey,password` again; the test account's key was accepted at
-  about 150 s, and root's key was accepted at 230 s and after. In
-  between, a `su` from the test account read `/root/.ssh`. The same
-  image accepts the key at once under QEMU. Phase 7 reproduces it on
-  the machine with `dropbear -v` on the console.
+* On the stick boot, SSH as root with the demo key appeared to be
+  refused for the first minutes while the test account's key worked.
+  Not a fault of the machine, and reproduced on 2026-09-04 with the
+  stick written as the metal stick again: the commands that failed had
+  `-i KEY` after the destination, where ssh takes it as part of the
+  remote command and not as the identity option, so the demo key was
+  never offered; and the password attempts were refused because `init`
+  starts the server with `-g`, which forbids root password logins. On
+  the machine, seconds apart: the malformed command refused, the
+  correct one accepted, root by password refused. The `-i` placement is
+  now written into the Readme's host section.
 
 ### Phase 4
 
