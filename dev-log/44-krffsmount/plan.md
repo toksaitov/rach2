@@ -73,7 +73,7 @@ Fixed: the offset core, the block backend, the mountable type, the loop device, 
 
 ## Documentation
 
-`rach2/sys/fs/krffs.Readme.md` is new: the format, the core, the two backends, the order of writes and what the check repairs. `vfs.Readme.md` lists `krffs` among the types `mount(2)` places. `block/Readme.md` gains the loop device, its lifetime and the dependency rule; the rule is restated where the cache's hold rules live. `krffs/Readme.md` records what the oracle now checks. The Readme's limits say what a mounted KRFFS volume may be.
+The documents are reviewed as a whole in phase 9, and this is what changes in them. `rach2/sys/fs/krffs.Readme.md` is new: the format, the core, the two backends, the order of writes and what the check repairs. `vfs.Readme.md` lists `krffs` among the types `mount(2)` places. `block/Readme.md` gains the loop device, its lifetime and the dependency rule; the rule is restated where the cache's hold rules live. `krffs/Readme.md` records what the oracle now checks. The Readme's limits say what a mounted KRFFS volume may be.
 
 ## The phases
 
@@ -127,9 +127,17 @@ The notebook: a KRFFS image file on the ext2 root through a loop device, written
 
 Proof: both work on the machine, and every difference the machine shows is fixed in its subsystem with a row.
 
-### Phase 9: the record and the sweep
+### Phase 9: the documents
 
-The Readmes, the notes closed line by line, `tests/run all` on the final tree, the milestone's Readme with its trust statement, and the `dev-log/Readme.md` entry.
+Every Readme in the tree is read against the code it describes, not only the ones this milestone touched: a change to the mount table, the block layer, the cache and the file systems reaches claims made in places that were written before any of it. The comments of the systems this milestone changed are read line by line in the same pass, against the rule that a comment states the contract and the reason and never narrates the body.
+
+Then a proofreading round on Codex, its units running in parallel at the end as the milestone-end round may: each takes at most six files, states what it finds, and proposes the wording it would use; the total number of units is fixed and written in `notes.md` before the first one starts. The rewriting is done here, in one voice, because a document written by several hands reads like several hands. `tools/verify/prosecheck.c` decides the mechanical half of the register rule before a unit is asked to read anything, so the units spend their time on claims rather than on words a checker can find.
+
+Proof: every Readme's claims match the code at the milestone's final tree; `tests/run style` passes; each finding is either fixed or recorded with the reason it was not; and the round's units and their findings are listed in `notes.md`.
+
+### Phase 10: the record and the sweep
+
+The notes closed line by line, `tests/run all` on the final tree, the milestone's Readme with its trust statement, and the `dev-log/Readme.md` entry.
 
 ## Risks, in expected order
 
