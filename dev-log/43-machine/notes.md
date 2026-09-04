@@ -251,9 +251,11 @@ and recovery is no longer the saved default.
 * The disk's recovery partition, written in milestone 37, has no
   `e2fsck`; the tree's recovery image has had it since milestone 42.
   The plan's repair of a dirty root from recovery works from the stick
-  only. Phase 7 presents the write of the current recovery image into
-  partition 3, by the Readme's procedure, with its saved copy; until
-  then the stick is the recovery with `e2fsck`.
+  only. Done in phase 7 with the owner's approval: partition 3 saved
+  on the host and the stick and rewritten with the tree's recovery
+  kernel and image, read back with the new hash, booted, and its
+  `e2fsck` run on the ext2 root, which is clean. The disk's recovery
+  now has the USB stack too, so a stick can be reached from it.
 
 * Found in the install round, with the hub in the blue socket: one boot
   in four came up with no USB device at all, one message interrupt

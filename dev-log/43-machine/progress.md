@@ -36,7 +36,7 @@ Phase 7: the differences
 - [x] the Doom zone from free memory; the port's timing report; the cause found (single-track MIDI)
 - [x] the Doom port playing every track of a format 1 MIDI; rerun on the machine (a host row is owed)
 - [ ] the panic at a pull of a silent stick, when its record arrives through the capture
-- [ ] the recovery partition rewritten with e2fsck, from recovery with a saved copy, with approval
+- [x] the recovery partition rewritten with e2fsck, from recovery with a saved copy, with approval
 - [ ] root's SSH key refused after a stick boot, reproduced with a second dropbear
 - [ ] the RTC set to UTC by the owner and stated in the Readme
 - [ ] the shareware WAD put back as /doom1.wad on the machine

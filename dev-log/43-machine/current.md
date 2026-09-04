@@ -41,9 +41,7 @@ zone from free memory through brk.
 Open, in order: the Doom port's host row over a two-track MIDI
 fixture (the multi-track player is in and proved on the machine); the
 panic at a pull of a silent stick, awaiting its record from the
-netconsole capture; the recovery partition without e2fsck, a write of
-partition 3 (byte 592445440, 67108864 bytes) from recovery with a saved
-copy, needing the owner's approval; root's SSH key refused after a
+netconsole capture; root's SSH key refused after a
 stick boot, to reproduce with a second dropbear started with -E from a
 test-account su session; the RTC set to UTC by the owner; the shareware
 WAD put back as /doom1.wad on the machine (the machine's /bin/doom is

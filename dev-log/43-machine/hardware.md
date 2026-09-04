@@ -286,3 +286,13 @@ the phase 7 differences; the next completed.
 The nomsi row above is `e9246422...` with the controller's PCI line:
 `usb: interrupts: the line, irq 7 on vector 39`, 48361 interrupts on
 that vector in the minute the reads took, no fallback.
+
+The recovery partition, 2026-09-04, with the owner's approval of the
+write on `/dev/disk0`: partition 3 saved as
+`saved/recovery-partition-before.img`, `5bbc9904...`, on the host and
+on the stick; the same volume with `/boot/recovery` and
+`/boot/recovery.krffs` replaced by the tree's recovery kernel and image
+written through `gzip`, `ssh` and `reflash` in 26 s and read back as
+`d28d96f1...`; the recovery entry then booted from partition 3 with
+`/sbin/e2fsck` and the USB stack, and `e2fsck -fn /dev/disk0p4` found
+the ext2 root clean. The saved default stayed the candidate throughout.
