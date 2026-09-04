@@ -12,6 +12,8 @@
 #include "../isr.h"
 #include "../lapic.h"
 #include "procfs.h"
+
+#include "../block/loop.h"
 #include "synthfs.h"
 #include "fd.h"
 #include "file.h"
@@ -56,6 +58,7 @@
 #define PROCFS_INO_MOUNTS  0x108u
 #define PROCFS_INO_USB     0x10Cu
 #define PROCFS_INO_FILESYSTEMS 0x10Du
+#define PROCFS_INO_LOOP        0x10Eu
 #define PROCFS_INO_INTERRUPTS 0x10Eu
 #define PROCFS_INO_NETROUTE 0x109u
 #define PROCFS_INO_NETARP  0x10Au
@@ -91,6 +94,7 @@
 /* Four devices and two sticks, one line each, and the line that counts the
  * names. A stick's line has two names a drive chose the text of. */
 #define PROCFS_MAX_USB      576
+#define PROCFS_MAX_LOOP     512
 #define PROCFS_MAX_FILESYSTEMS 128 /* two nodev lines and four types */
 /* Thirty-two vectors at most, each a line of its number, its count, which of
    the two roads it arrives on, and up to four names of at most a dozen
@@ -181,6 +185,9 @@ static const char *procfs_kind_name(const struct vpath *vp)
     }
     if (vp->kind == VNODE_PROC_FILESYSTEMS) {
         return "/proc/filesystems";
+    }
+    if (vp->kind == VNODE_PROC_LOOP) {
+        return "/proc/loop";
     }
     if (vp->kind == VNODE_PROC_NET_ROUTE) {
         return "/proc/net/route";
@@ -612,6 +619,11 @@ uint32_t procfs_ino_usb(void)
     return PROCFS_INO_USB;
 }
 
+uint32_t procfs_ino_loop(void)
+{
+    return PROCFS_INO_LOOP;
+}
+
 uint32_t procfs_ino_filesystems(void)
 {
     return PROCFS_INO_FILESYSTEMS;
@@ -686,6 +698,9 @@ uint32_t procfs_fd_ino(struct fd_entry *e)
     }
     if (pf->origin_file == SYNTH_PROC_FILESYSTEMS) {
         return PROCFS_INO_FILESYSTEMS;
+    }
+    if (pf->origin_file == SYNTH_PROC_LOOP) {
+        return PROCFS_INO_LOOP;
     }
     if (pf->origin_file == SYNTH_PROC_INTERRUPTS) {
         return PROCFS_INO_INTERRUPTS;
@@ -1048,6 +1063,23 @@ static int procfs_gen_interrupts(struct procfs_text *t)
     return t->over ? -1 : t->len;
 }
 
+/* /proc/loop: one line per attached device, its size in bytes, whether it
+ * takes writes, and the path it was attached by. A device nothing is attached
+ * to has no line, so an empty file is a machine with no image mounted through
+ * one. */
+static int procfs_gen_loop(struct procfs_text *t)
+{
+    char line[128];
+    int i;
+
+    for (i = 0; i < LOOP_DEVICES; i++) {
+        if (loop_line(i, line, sizeof(line)) > 0) {
+            ap_str(t, line);
+        }
+    }
+    return t->over ? -1 : t->len;
+}
+
 static int procfs_gen_filesystems(struct procfs_text *t)
 {
     int i;
@@ -1308,7 +1340,8 @@ int procfs_open(const struct vpath *vp, int flags)
         vp->kind != VNODE_PROC_NET_DEV && vp->kind != VNODE_PROC_UPTIME &&
         vp->kind != VNODE_PROC_STAT_SYS && vp->kind != VNODE_PROC_MEMINFO &&
         vp->kind != VNODE_PROC_MOUNTS && vp->kind != VNODE_PROC_USB &&
-        vp->kind != VNODE_PROC_FILESYSTEMS && vp->kind != VNODE_PROC_INTERRUPTS &&
+        vp->kind != VNODE_PROC_FILESYSTEMS && vp->kind != VNODE_PROC_LOOP &&
+        vp->kind != VNODE_PROC_INTERRUPTS &&
         vp->kind != VNODE_PROC_NET_ROUTE &&
         vp->kind != VNODE_PROC_NET_ARP && vp->kind != VNODE_PROC_NET_TCP) {
         pid = procfs_resolve_pid(vp->pid);
@@ -1367,6 +1400,9 @@ int procfs_open(const struct vpath *vp, int flags)
     } else if (vp->kind == VNODE_PROC_USB) {
         procfs_text_init(&text, f->data, PROCFS_MAX_USB);
         len = procfs_gen_usb(&text);
+    } else if (vp->kind == VNODE_PROC_LOOP) {
+        procfs_text_init(&text, f->data, PROCFS_MAX_LOOP);
+        len = procfs_gen_loop(&text);
     } else if (vp->kind == VNODE_PROC_INTERRUPTS) {
         procfs_text_init(&text, f->data, PROCFS_MAX_INTERRUPTS);
         len = procfs_gen_interrupts(&text);
@@ -1420,6 +1456,8 @@ int procfs_open(const struct vpath *vp, int flags)
         f->origin_file = SYNTH_PROC_INTERRUPTS;
     } else if (vp->kind == VNODE_PROC_FILESYSTEMS) {
         f->origin_file = SYNTH_PROC_FILESYSTEMS;
+    } else if (vp->kind == VNODE_PROC_LOOP) {
+        f->origin_file = SYNTH_PROC_LOOP;
     } else if (vp->kind == VNODE_PROC_NET_ROUTE) {
         f->origin_file = SYNTH_PROC_NETROUTE;
     } else if (vp->kind == VNODE_PROC_NET_ARP) {

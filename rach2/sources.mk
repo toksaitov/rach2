@@ -31,6 +31,7 @@ C_SRC = kernel.c \
         sys/power.c \
         sys/block/block.c \
         sys/block/chain.c \
+        sys/block/loop.c \
         sys/block/request.c \
         sys/block/lag.c \
         sys/fs/bcache.c \

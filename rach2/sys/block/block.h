@@ -70,11 +70,13 @@ struct block_device {
     void *drvdata;
 };
 
-/* How long a chain of backing devices may be: a file system on a loop device
- * on a disk is two, and that is the most the four buffers a process may hold
- * can serve. A device whose chain would be longer is refused where it is
- * attached. */
-#define BLOCK_MAX_DEPTH 2
+/* How long a chain of backing devices may be: a loop device stands on a real
+ * device and nothing stands on it. One is what the four buffers a process may
+ * hold can serve: a file system on a loop device holds a buffer of it while
+ * the file system under it holds two of the disk, and a second loop device in
+ * the middle would want two more than there are. A device whose chain would
+ * be longer is refused where it is attached. */
+#define BLOCK_MAX_DEPTH 1
 
 /**
  * How many devices are under `device`, following its backing chain.

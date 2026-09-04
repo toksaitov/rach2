@@ -20,6 +20,7 @@
 #include "exfat.h"
 #include "ext2.h"
 #include "krffs.h"
+#include "../block/loop.h"
 #include "krffsmount.h"
 #include "synthfs.h"
 
@@ -725,6 +726,11 @@ int vfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 
 int vfs_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_stat *st)
 {
+    /* The length of a file that backs a loop device is the device's sector
+     * count: nothing may change it while the device is attached. */
+    if ((what & VFS_SET_SIZE) && loop_backs(mnt, node)) {
+        return -EBUSY;
+    }
     if ((mnt->flags & VFS_MS_RDONLY) || !mnt->type->ops->setattr) {
         return -EROFS;
     }
@@ -1568,11 +1574,25 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
         vfs_ref_release(&tref);
         return rc;
     }
-    claim = devfs_claim(backing, first, first + count - 1);
-    if (claim < 0) {
-        vfs_ns_unlock(tref.mnt);
-        vfs_ref_release(&tref);
-        return claim;
+    /* A source with no disk under it, which is what a loop device is: the
+     * device itself is the identity a second mount collides with, and the
+     * table below refuses that on its own. */
+    claim = -1;
+    if (backing) {
+        claim = devfs_claim(backing, first, first + count - 1);
+        if (claim < 0) {
+            vfs_ns_unlock(tref.mnt);
+            vfs_ref_release(&tref);
+            return claim;
+        }
+    }
+    for (i = 0; i < VFS_MOUNTS; i++) {
+        if (mounts[i].state != VFS_FREE && mounts[i].dev == dev) {
+            devfs_release_claim(claim);
+            vfs_ns_unlock(tref.mnt);
+            vfs_ref_release(&tref);
+            return -EBUSY; /* the device already carries a mount */
+        }
     }
     for (i = 3; i < VFS_MOUNTS; i++) {
         if (mounts[i].state == VFS_FREE) {

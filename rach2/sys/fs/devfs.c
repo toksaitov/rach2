@@ -12,6 +12,8 @@
 
 #include "../klog.h"
 #include "devfs.h"
+
+#include "../block/loop.h"
 #include "fd.h"
 #include "file.h"
 #include "../proc/process.h"
@@ -641,6 +643,45 @@ static void dev_part_close(fd_entry_t *e)
 }
 
 static const struct file_ops usbwin_ops = {dev_usb_read, dev_usb_write, dev_poll, dev_ioctl, NULL};
+/*
+ * /dev/loop0 to /dev/loop3, and the node that attaches and detaches them.
+ *
+ * A loop device is reached through a mount and not through its node: the node
+ * is what `mount(2)` names as the source, and reading or writing it directly
+ * would be a second way to the same bytes, which the image under a mounted
+ * file system may not have. The control node takes one line per write:
+ * `attach N /path`, `attach - /path` for the first free device, `detach N`.
+ */
+static int32_t loop_node_read(fd_entry_t *entry, char *buffer, uint32_t count)
+{
+    (void)entry;
+    (void)buffer;
+    (void)count;
+    return -EPERM;
+}
+
+static int32_t loop_node_write(fd_entry_t *entry, const char *buffer, uint32_t count)
+{
+    (void)entry;
+    (void)buffer;
+    (void)count;
+    return -EPERM;
+}
+
+static int32_t loopctl_write(fd_entry_t *entry, const char *buffer, uint32_t count)
+{
+    int rc;
+
+    (void)entry;
+    rc = loop_control_write(buffer, count);
+    return rc < 0 ? (int32_t)rc : (int32_t)count;
+}
+
+static const struct file_ops loop_ops = {loop_node_read, loop_node_write, dev_poll, dev_ioctl,
+                                         NULL};
+static const struct file_ops loopctl_ops = {dev_eof_read, loopctl_write, dev_poll, dev_ioctl,
+                                            NULL};
+
 static const struct file_ops null_ops = {dev_eof_read, dev_sink_write, dev_poll, dev_ioctl, NULL};
 static const struct file_ops zero_ops = {dev_zero_read, dev_sink_write, dev_poll, dev_ioctl, NULL};
 static const struct file_ops full_ops = {dev_zero_read, dev_full_write, dev_poll, dev_ioctl, NULL};
@@ -941,7 +982,12 @@ static const struct devfs_entry dev_table[] = {{"null", 1, 3, 1, 0666, &null_ops
                                                {"usb1p1", 240, 22, 0, 0400, &usbwin_ops},
                                                {"usb1p2", 240, 23, 0, 0400, &usbwin_ops},
                                                {"usb1p3", 240, 24, 0, 0400, &usbwin_ops},
-                                               {"usb1p4", 240, 25, 0, 0400, &usbwin_ops}};
+                                               {"usb1p4", 240, 25, 0, 0400, &usbwin_ops},
+                                               {"loop0", 240, 32, 0, 0400, &loop_ops},
+                                               {"loop1", 240, 33, 0, 0400, &loop_ops},
+                                               {"loop2", 240, 34, 0, 0400, &loop_ops},
+                                               {"loop3", 240, 35, 0, 0400, &loop_ops},
+                                               {"loop-control", 240, 36, 0, 0600, &loopctl_ops}};
 
 /* One row above per window below, and the minors run from USB_MINOR_BASE in
  * that order; a change to either number must change the rows with it. */
@@ -949,9 +995,21 @@ typedef char usb_rows_match_windows[(USBDISK_MAX * USB_WINDOWS == 10) ? 1 : -1];
 
 #define DEVFS_NDEV ((int)(sizeof(dev_table) / sizeof(dev_table[0])))
 
+/** The loop device an entry names, or -1 for an entry that is not one. */
+static int devfs_loop_index(const struct devfs_entry *dev)
+{
+    if (dev->ops != &loop_ops) {
+        return -1;
+    }
+    return (int)(dev->minor - 32);
+}
+
 /** Whether table entry `i` exists right now (bootpart is mount-dependent). */
 static int devfs_entry_present(int i)
 {
+    if (dev_table[i].ops == &loop_ops) {
+        return loop_device_at(devfs_loop_index(&dev_table[i])) != 0;
+    }
     if (dev_table[i].ops == &bootpart_ops) {
         return bootpart.present;
     }
@@ -1151,6 +1209,20 @@ int devfs_window_of(const char *path, block_device_t **view, block_device_t **ba
     dev = devfs_find(path + 5);
     if (!dev) {
         return -ENOENT;
+    }
+    if (dev->ops == &loop_ops) {
+        block_device_t *loop = loop_device_at(devfs_loop_index(dev));
+
+        if (!loop) {
+            return -ENOENT;
+        }
+        /* A file has no sectors on a disk to claim: the device itself is the
+         * identity, and only one mount can be placed on it. */
+        *view = loop;
+        *backing = 0;
+        *first = 0;
+        *count = loop->sector_count;
+        return 0;
     }
     if (dev->ops == &bootpart_ops) {
         w = &bootpart;

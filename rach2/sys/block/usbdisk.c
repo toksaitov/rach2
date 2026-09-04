@@ -23,6 +23,8 @@
 
 #include "usbdisk.h"
 
+#include "loop.h"
+
 #include "../fs/bcache.h"
 #include "../fs/devfs.h"
 #include "../fs/vfs.h"
@@ -432,6 +434,10 @@ static void close_down(int n)
         block_device_t *view = devfs_usb_view(n, k);
 
         if (view != 0) {
+            /* A loop device over a file on this stick has lost its medium as
+             * surely as the stick has, and is told before the buffers of
+             * either are dropped. */
+            loop_device_gone(view);
             bcache_device_gone(view);
         }
     }

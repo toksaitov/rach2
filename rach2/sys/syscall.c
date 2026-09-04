@@ -23,6 +23,7 @@
 #include "tty/tty.h"
 #include "tty/pty.h"
 #include "rtc.h"
+#include "block/loop.h"
 #include "fs/krffs.h"
 #include "fs/devfs.h"
 #include "fs/synthfs.h"
@@ -708,6 +709,14 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
         if (!user_buffer_ok((uint32_t)(__force uintptr_t)buf, count, 0)) {
             return -EFAULT;
         }
+        /* A file that backs a loop device is reached through that device and
+         * nowhere else: the file system mounted on it may not have its image
+         * change underneath. Answered before the description is locked, since
+         * a return from under that lock is a description nobody can use
+         * again. */
+        if (loop_backs(ofd->vmnt, ofd->vnode)) {
+            return -EBUSY;
+        }
         fd_ofd_lock(ofd);
         /* O_APPEND: every write lands at the current end of file, regardless of
          * any intervening seek (the POSIX append contract). The flag lives on
@@ -789,6 +798,11 @@ static int32_t sys_ftruncate(isr_params_t *params)
     }
     if (!entry->ofd || !entry->ofd->vmnt) {
         return -EBADF;
+    }
+    /* Before the description is locked: a return from under that lock is a
+     * description nobody can use again. */
+    if (loop_backs(entry->ofd->vmnt, entry->ofd->vnode)) {
+        return -EBUSY;
     }
     fd_ofd_lock(entry->ofd);
     rc = vfs_truncate(entry->ofd->vmnt, entry->ofd->fhandle, length);
@@ -1461,6 +1475,7 @@ static int32_t synth_open(const struct vpath *vp, int flags)
         case VNODE_PROC_STAT_SYS:
         case VNODE_PROC_MEMINFO:
         case VNODE_PROC_MOUNTS:
+        case VNODE_PROC_LOOP:
         case VNODE_PROC_USB:
         case VNODE_PROC_FILESYSTEMS:
         case VNODE_PROC_INTERRUPTS:
@@ -1794,7 +1809,7 @@ again:
                 return rc;
             }
             if (flags & O_TRUNC) {
-                rc = vfs_truncate(ref.mnt, node, 0);
+                rc = loop_backs(ref.mnt, node) ? -EBUSY : vfs_truncate(ref.mnt, node, 0);
                 if (rc == 0 && !cred_privileged()) {
                     vfs_kill_setid(ref.mnt, node);
                 }
@@ -3547,6 +3562,11 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
             kst->st_dev = PROCFS_FSID;
             kst->st_mode = S_IFREG | 0444;
             kst->st_ino = procfs_ino_usb();
+            return 0;
+        case VNODE_PROC_LOOP:
+            kst->st_dev = PROCFS_FSID;
+            kst->st_mode = S_IFREG | 0444;
+            kst->st_ino = procfs_ino_loop();
             return 0;
         case VNODE_PROC_FILESYSTEMS:
             kst->st_dev = PROCFS_FSID;
@@ -7648,7 +7668,7 @@ static int synth_dirent_at(int kind, int pid, int n, char *name, uint64_t *ino, 
          * follow, numbered from where the table ends. */
         static const char *const globals[] = {"cmdline", "disk",    "uptime", "stat",
                                               "meminfo", "mounts",  "net",    "self",
-                                              "usb"};
+                                              "usb",     "loop"};
         int count = (int)(sizeof(globals) / sizeof(globals[0]));
 
         if (n < count) {
