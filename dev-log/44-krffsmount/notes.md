@@ -196,3 +196,23 @@ Each fix was proved by putting it back the way it was, except the two the
 review named as depending on code outside its six files (the transfer bounds,
 which the block layer also checks, and the privilege of the control node,
 which is the node's mode).
+
+## The milestone-end review round on Codex
+
+The owner asked on 2026-09-05 for the whole milestone to be read again by
+Codex on a model he had just made the default there, with as much time as it
+wants and with permission to build its own context. The round is five units,
+fixed here before the first one starts, running in parallel as a
+milestone-end round may:
+
+1. The format's core: `krffs.c`, `krffs.h`, `krffs.Readme.md`.
+2. The mounted volume: `krffsmount.c`, `krffsmount.h`, `vfs.c`, `syscall.c`.
+3. The loop device and the block layer: `loop.c`, `loop.h`, `chain.c`,
+   `request.c`, `block.h`, `bcache.c`.
+4. What proves it: `krffs_hosttest.c`, `bcache_hosttest.c`, `krffsprobe.c`,
+   `loopdevprobe.c`, `krffscheck.sh`, `loopdev.sh`, `krffsmount.sh`.
+5. The host tool and the documents: `fsck.krffs.c`, `krffs/Readme.md`,
+   `block/Readme.md`, `fs/Readme.md`, `vfs.Readme.md`, `tests/Readme.md`.
+
+Every unit is told what the milestone decided, what the three earlier reviews
+already found and fixed, and that it may read anything else in the tree.
