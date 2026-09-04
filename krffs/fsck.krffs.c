@@ -22,22 +22,43 @@
 static const int KRFFS_Invalid_Link_Error            = -10,
                  KRFFS_Out_of_Range_Node_Error       = -11,
                  KRFFS_Invalid_Magic_Signature_Error = -12,
-                 KRFFS_Unknown_Node_Type_Error       = -13;
+                 KRFFS_Unknown_Node_Type_Error       = -13,
+                 KRFFS_Repairs_Needed_Error          = -14;
 
 /**
  * Checks the consistency of a KRFFS file system stored in a file.
  *
- * Usage: `fsck.krffs <file>`, or `fsck.krffs -h` for help. The check maps the
- * file, validates the file system magic and root node, then walks the node
- * list once, verifying that links are consecutive, stay within the file system
- * space, carry a valid signature, and name a known node type, and that the last
- * node links back to the first.
+ * Usage: `fsck.krffs <file> [--offset N --size N] [--strict]`, or
+ * `fsck.krffs -h` for help. The check maps the file, validates the file system
+ * magic and root node, then walks the node list once, verifying that links are
+ * consecutive, stay within the file system space, carry a valid signature, name
+ * a known node type, and that the last node links back to the first.
+ *
+ * The walk asks of every node what the kernel asks of it before it mounts an
+ * image: each node's `previous_node_size` is the size of the node before it,
+ * the root's is the size of the last, and the sizes together span the region
+ * exactly. Without those the checker accepted images the kernel refuses, which
+ * is no use as an independent judge of what the kernel writes.
+ *
+ * Two kinds of fault. A fatal one, an unreadable signature, an unknown type, a
+ * size that leaves the region, a chain that does not close or does not span the
+ * region, is reported and the image is left exactly as found. A repairable one,
+ * the dirty flag of an image that was not cleanly unmounted, an orphan node no
+ * path reaches, and a backward link that disagrees with the forward chain, is
+ * repaired after the walk has passed, and each repair is named. Nothing is
+ * repaired before the walk: writing to an image whose structure has not been
+ * read through is how a checker damages what it was asked to inspect.
+ *
+ * `--strict` reports the repairable faults and changes nothing, which is what
+ * a test asks when it wants to know that the kernel left an image clean rather
+ * than repairable.
  *
  * Returns `EXIT_SUCCESS` on a clean file system and `EXIT_FAILURE` for a usage
  * or I/O error. A structural fault yields a specific negative status: `-10` for
  * a nonconsecutive link, `-11` for a link outside the file system space, `-12`
- * for an invalid signature, and `-13` for an unknown node type. Per-node debug
- * output goes to stdout and can be silenced with `> /dev/null`.
+ * for an invalid signature, `-13` for an unknown node type, and `-14` for
+ * repairs owed under `--strict`.
+ * Per-node debug output goes to stdout and can be silenced with `> /dev/null`.
  */
 int main(int argc, char **argv)
 {
@@ -50,6 +71,12 @@ int main(int argc, char **argv)
     };
 
     bool has_help_option  = false;
+    bool is_strict        = false;
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "--strict") == 0) {
+            is_strict = true;
+        }
+    }
     for (int i = 1; i < argc; ++i) {
         if (strncmp(argv[i], "-h", 2) == 0) {
             has_help_option = true;
@@ -212,12 +239,17 @@ int main(int argc, char **argv)
 
     puts("The filesystem has a correct root node.");
 
-    if (file_system.node->mode & KRFFS_MODE_DIRTY) {
-        puts("The filesystem was not cleanly unmounted. Clearing the dirty flag.");
-        file_system.node->mode &= (uint16_t) ~KRFFS_MODE_DIRTY;
+    /* Read before written: the dirty flag is reported here and cleared after
+       the walk, so an image whose chain is broken keeps the evidence of both
+       faults. */
+    bool was_dirty = (file_system.node->mode & KRFFS_MODE_DIRTY) != 0;
+
+    if (was_dirty) {
+        puts("The filesystem was not cleanly unmounted.");
     }
 
     uint64_t orphans = 0;
+    uint64_t backlinks = 0;  /* backward links the forward chain contradicts */
 
     struct krffs_node *previous_node =
         file_system.node;
@@ -316,6 +348,21 @@ int main(int argc, char **argv)
             break;
         }
 
+        /* What the kernel checks before it mounts: the backward link is the
+           size of the node before, and the sizes span the region. The forward
+           chain is the truth; a backward link that disagrees is repairable
+           because it can be derived from the walk that just passed it. */
+        if (steps > 1 && node->previous_node_size != previous_node->size) {
+            printf(
+                "! backward link at position %"PRIu64": %"PRIu64" bytes, "
+                "the node before is %"PRIu64"\n",
+                krffs_get_node_relative_position(&file_system, node),
+                node->previous_node_size,
+                previous_node->size
+            );
+            backlinks++;
+        }
+
         if (node->type == KRFFS_Root_Node) {
             printf(
                 "* root node at position %"PRIu64" (owner %u:%u)\n",
@@ -385,6 +432,39 @@ int main(int argc, char **argv)
             );
     } while (node != file_system.node);
 
+    /* The chain closed at the root, so `previous_node` is the last node and its
+       size is what the root's backward link must say. That the sizes span the
+       region is not checked separately: the walk steps by each node's size and
+       ends only where the chain returns to the root, and every size is bounded
+       against the region above, so a walk that closes has spanned it. */
+    if (exit_status == EXIT_SUCCESS) {
+        if (file_system.node->previous_node_size != previous_node->size) {
+            printf(
+                "! backward link at the root: %"PRIu64" bytes, "
+                "the last node is %"PRIu64"\n",
+                file_system.node->previous_node_size,
+                previous_node->size
+            );
+            backlinks++;
+        }
+    }
+
+    /* Under `--strict` a repairable fault is the answer, and the image is left
+       as it was found. */
+    if (exit_status == EXIT_SUCCESS && is_strict &&
+        (was_dirty || orphans != 0 || backlinks != 0)) {
+        fprintf(
+            stderr,
+            "The file system needs repair: %s%s%"PRIu64" orphan node(s), "
+            "%"PRIu64" backward link(s).\n",
+            was_dirty ? "not cleanly unmounted, " : "",
+            "",
+            orphans,
+            backlinks
+        );
+        exit_status = KRFFS_Repairs_Needed_Error;
+    }
+
     /* Reclaim every orphan: a reserved node with no name, kept alive in a
        running system by the descriptors holding it and freed by the last close.
        A shutdown that closed none of them leaves one here with nothing left to
@@ -423,6 +503,37 @@ int main(int argc, char **argv)
             printf("Reclaimed %"PRIu64" orphan node(s) no path could reach.\n",
                    reclaimed);
         }
+    }
+
+    /* The backward links, rebuilt from the forward chain the walk validated.
+       The orphan pass above merges nodes, so this runs after it and reads the
+       chain as it now stands. */
+    if (exit_status == EXIT_SUCCESS && backlinks != 0) {
+        struct krffs_node *scan = file_system.node;
+        struct krffs_node *behind = NULL;
+        uint64_t walked = 0;
+        uint64_t fixed = 0;
+
+        do {
+            if (behind != NULL && scan->previous_node_size != behind->size) {
+                scan->previous_node_size = behind->size;
+                fixed++;
+            }
+            behind = scan;
+            scan = krffs_get_next_node(&file_system, scan);
+        } while (scan != file_system.node && ++walked <= max_steps);
+
+        if (behind != NULL && file_system.node->previous_node_size != behind->size) {
+            file_system.node->previous_node_size = behind->size;
+            fixed++;
+        }
+        printf("Rebuilt %"PRIu64" backward link(s) from the forward chain.\n",
+               fixed);
+    }
+
+    if (exit_status == EXIT_SUCCESS && was_dirty) {
+        puts("Clearing the dirty flag.");
+        file_system.node->mode &= (uint16_t) ~KRFFS_MODE_DIRTY;
     }
 
     if (exit_status == EXIT_SUCCESS) {

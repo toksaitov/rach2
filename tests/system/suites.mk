@@ -1349,6 +1349,12 @@ run-runner:
 # `tests/run imagerace`: two builds of one image at the same moment, which a
 # parallel run of the suites produces and which used to take both of them
 # down. No machine is booted; the image is built twice and read.
+# `tests/run krffscheck`: what the offline checker says about images broken on
+# purpose. No machine is booted.
+KRFFSCHECK_DIR = $(IMAGES_DIR)/krffscheck
+run-krffscheck: krffs
+	sh tests/system/krffscheck.sh build/krffs/mkfs.krffs build/krffs/fsck.krffs $(KRFFSCHECK_DIR)
+
 IMAGERACE_IMAGE = $(IMAGES_DIR)/imagerace-test.krffs
 run-imagerace: $(DEMO_CREDS) krffs rach2 tests utils musl-programs $(IMAGE_TOOLS)
 	sh tests/system/imagerace.sh krffs/manifests/test.manifest $(IMAGERACE_IMAGE) 10
