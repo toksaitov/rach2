@@ -222,7 +222,9 @@ void probe_main(unsigned int *sp)
     int argc = (int)sp[0];
     char **argv = (char **)(sp + 1);
     const char *type = argc > 1 ? argv[1] : "vfat";
-    const char *image = streq(type, "ext2") ? "/m/ext2.img" : "/m/fat.img";
+    const char *image = streq(type, "ext2")    ? "/m/ext2.img"
+                        : streq(type, "krffs") ? "/m/krffs.img"
+                                               : "/m/fat.img";
     char attach[64];
     char lines[512];
     int fd;
@@ -367,6 +369,49 @@ void probe_main(unsigned int *sp)
         fail_with("opening the image after the detach", fd);
     }
     sys1(SYS_CLOSE, fd);
+
+    /* The same image, copied onto the root, which is memory and has no
+       device under it at all: a loop device reads its file through the file
+       system holding it, so where that file lives does not matter. */
+    {
+        char block[4096];
+        int from = sys3(SYS_OPEN, (int)image, O_RDONLY, 0);
+        int to = sys3(SYS_OPEN, (int)"/ram.img", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        int n;
+
+        if (from < 0 || to < 0) {
+            fail("opening the image to copy it onto the root");
+        }
+        while ((n = sys3(SYS_READ, from, (int)block, (int)sizeof(block))) > 0) {
+            if (sys3(SYS_WRITE, to, (int)block, n) != n) {
+                fail("copying the image onto the root");
+            }
+        }
+        sys1(SYS_CLOSE, from);
+        sys1(SYS_CLOSE, to);
+        if (n < 0) {
+            fail_with("reading the image to copy it", n);
+        }
+    }
+    rc = control("attach 0 /ram.img");
+    if (rc != 0) {
+        fail_with("attaching an image that lives in memory", rc);
+    }
+    rc = sys5(SYS_MOUNT, (int)"/dev/loop0", (int)"/l", (int)type, MS_RDONLY, 0);
+    if (rc != 0) {
+        fail_with("mounting an image that lives in memory", rc);
+    }
+    expect_file("/l/hello.txt", "hello from inside an image");
+    rc = sys2(SYS_UMOUNT2, (int)"/l", 0);
+    if (rc != 0) {
+        fail_with("unmounting the image in memory", rc);
+    }
+    if (control("detach 0") != 0) {
+        fail("detaching the image in memory");
+    }
+    if (sys1(SYS_UNLINK, (int)"/ram.img") != 0) {
+        fail("removing the copy from the root");
+    }
 
     rc = sys2(SYS_UMOUNT2, (int)"/m", 0);
     if (rc != 0) {

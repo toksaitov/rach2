@@ -33,8 +33,8 @@ Phase 6: the loop device
 - [ ] the stick pulled under an attached file; review at the boundary
 
 Phase 7: KRFFS through the loop device
-- [ ] an image on ext2 and on FAT32, read and written, with the oracle after each
-- [ ] an image on a RAM root; a loop over a loop refused by the depth rule
+- [x] an image on ext2 and on FAT32, read and written, with the oracle after each
+- [x] an image on a RAM root; a loop over a loop refused by the depth rule
 
 Phase 8: the machine
 - [ ] a KRFFS image file on the notebook's ext2 root, through a loop device
