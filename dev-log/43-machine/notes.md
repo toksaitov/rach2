@@ -361,8 +361,14 @@ The full set, `tests/run all` on 2026-09-04: 67 suites passed in the
 pool and two, dhcp and procfiles, failed in three seconds each because
 two suites rebuilt `build/images/os-real.krffs` at once and one deleted
 it under the other; both pass alone, dhcp in 342 s and procfiles in
-135 s. The pool building one image from two suites is the runner's to
-fix, recorded here and not fixed in this milestone.
+135 s. Fixed: `krffs/mkimage.sh` and
+`krffs/mkdisk.sh` named every temporary after the output alone, so the
+second build removed the first's file, failed, and make deleted the
+image both needed; the temporaries carry the builder's process number
+now, and either build's result is the image, since both stage the same
+manifest. Row: `tests/run imagerace`, two builds of one image at the
+same moment; mutation: the fixed names back, which leaves no image at
+all. The two suites pass together afterwards.
 
 One Codex unit read `Readme.md`, `dev-log/43-machine/Readme.md`,
 `current.md` and the USB Readme against the code and returned ten

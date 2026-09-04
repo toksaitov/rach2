@@ -10,8 +10,9 @@ the ext2 root written from that tree, both committed with the owner's
 approval; the KRFFS root is the fallback, and `bootctl kernel
 build/rach2/kernel` would put the host's build back. The
 hub with the keyboard, the mouse and the recovery stick is in the blue
-socket. The stick carries the recovery image with the RACH2SAVE volume
-holding saved copies. Freedoom is /doom1.wad on the machine and the
+socket. The stick is the recovery stick, `f530085a...`, with an empty
+RACH2SAVE volume; every saved copy is on the host under
+`dev-log/43-machine/saved/`. Freedoom is /doom1.wad on the machine and the
 shareware WAD /shareware.wad; the tree stages the shareware one, so
 swap them back at the end. The ordinary kernel publishes no raw disk
 window without rach2.diskdiag, so partition reads and writes go through
@@ -54,6 +55,6 @@ own build of the final tree, `77b78018...`, on the ext2 root
 review are done and recorded. Open with the owner: the SSH key refused after a metal-stick boot, which needs a stick
 rewritten as the metal stick and a boot from it; the panic at a pull
 of a silent stick, awaiting its record. Open for a later session: a
-host row for the Doom port's multi-track player; the runner building
-one image from two pooled suites.
+host row for the Doom port's multi-track player, which needs the port
+built on the host with a GENMIDI lump the tree does not carry.
 File being read when written: none.
