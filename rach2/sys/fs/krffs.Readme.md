@@ -14,7 +14,9 @@ A name is at most 255 bytes and its field is 256, so every name ends within it; 
 
 A name is one component, not a path, and a file is found by its directory and its name: `parent_id` says which directory holds it, and the root directory's identifier is zero. Two files in different directories may have the same name; two in one directory may not. A directory's own identifier is a hash of its parent's identifier and its name, and its children carry it in their `parent_id`, which is why a directory is never renamed or moved: its children reference the identifier the old name produced. A regular file's identifier is not used to find it, so nothing depends on the name it was hashed from.
 
-The root's mode has one bit the format reserves, `KRFFS_MODE_DIRTY`: the kernel sets it before the first change of a writable mount and clears it when a clean shutdown has flushed everything. An image found with the bit set says a check is owed, not what is wrong with it.
+The root's mode has one bit the format reserves, `KRFFS_MODE_DIRTY`: the kernel sets it before the first change of a writable mount and clears it at the unmount, after everything the mount wrote has reached the medium. An image found with the bit set says a check is owed, not what is wrong with it.
+
+A writable mount of a volume whose bit is set repairs it before it publishes the mount: the three faults below, each counted in the line it writes to the log. A read-only mount repairs nothing, since nothing it does reads a backward link, and says that a check is owed. The repair compares every named node with every other to find one name on two nodes, so a volume with more named nodes than the pass will compare is refused rather than half-checked, and `fsck.krffs` on the host, which sorts them, is what such a volume is for.
 
 ## What a mount requires
 
@@ -59,7 +61,9 @@ One implementation serves both media. `krffs.c` addresses every node by its offs
 
 The memory backend is one `memcpy` either way, over a mapped image: a Multiboot module in place, or a disk region the page-cache window maps. It cannot fail. The root is mounted this way, and the descriptor table, the syscall layer and the boot code hold `krffs_node_t` pointers into that image, so the root keeps a pointer interface, at the end of `krffs.c`, which turns those pointers into offsets and refuses one that is not in the image.
 
-The block backend (`krffsmount.c`) reads the region through the buffer cache, a 4 KiB block at a time, holding one buffer at a time. That is what `mount(2)` places, under the type name `krffs`, and what `/proc/filesystems` lists. Its region is the whole device it is given, since the format records no size of its own: an image on a partition longer than itself fails the chain check rather than mounting short. A mounted volume is read-only, whatever flags the mount asked for, and `/proc/mounts` says so.
+The block backend (`krffsmount.c`) reads and writes the region through the buffer cache, a 4 KiB block at a time, holding one buffer at a time. That is what `mount(2)` places, under the type name `krffs`, and what `/proc/filesystems` lists. Its region is the whole device it is given, since the format records no size of its own: an image on a partition longer than itself fails the chain check rather than mounting short. A mount without `MS_RDONLY` on a device that takes writes is writable; anything else is read-only, and `/proc/mounts` says which.
+
+A cache is not a medium, so the order below is kept by syncing between a write and the field that publishes it. On a memory backend that costs nothing; on a volume it is what the cache has written when the machine stops. A write that the cache refuses stops the operation before the field that would have published it.
 
 A node handle outside the file system is its offset plus one, so the root's offset of zero is not the NULL the mount table reads as the mount's root. Nothing else is kept per node.
 
