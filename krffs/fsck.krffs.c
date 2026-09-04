@@ -23,7 +23,8 @@ static const int KRFFS_Invalid_Link_Error            = -10,
                  KRFFS_Out_of_Range_Node_Error       = -11,
                  KRFFS_Invalid_Magic_Signature_Error = -12,
                  KRFFS_Unknown_Node_Type_Error       = -13,
-                 KRFFS_Repairs_Needed_Error          = -14;
+                 KRFFS_Node_Size_Error               = -14,
+                 KRFFS_Repairs_Needed_Error          = -15;
 
 /**
  * Checks the consistency of a KRFFS file system stored in a file.
@@ -41,8 +42,8 @@ static const int KRFFS_Invalid_Link_Error            = -10,
  * is no use as an independent judge of what the kernel writes.
  *
  * Two kinds of fault. A fatal one, an unreadable signature, an unknown type, a
- * size that leaves the region, a chain that does not close or does not span the
- * region, is reported and the image is left exactly as found. A repairable one,
+ * size that leaves the region, a data size larger than the node holding it, or
+ * a chain that does not close, is reported and the image is left as found. A repairable one,
  * the dirty flag of an image that was not cleanly unmounted, an orphan node no
  * path reaches, and a backward link that disagrees with the forward chain, is
  * repaired after the walk has passed, and each repair is named. Nothing is
@@ -56,8 +57,8 @@ static const int KRFFS_Invalid_Link_Error            = -10,
  * Returns `EXIT_SUCCESS` on a clean file system and `EXIT_FAILURE` for a usage
  * or I/O error. A structural fault yields a specific negative status: `-10` for
  * a nonconsecutive link, `-11` for a link outside the file system space, `-12`
- * for an invalid signature, `-13` for an unknown node type, and `-14` for
- * repairs owed under `--strict`.
+ * for an invalid signature, `-13` for an unknown node type, `-14` for a node
+ * whose data does not fit in it, and `-15` for repairs owed under `--strict`.
  * Per-node debug output goes to stdout and can be silenced with `> /dev/null`.
  */
 int main(int argc, char **argv)
@@ -345,6 +346,25 @@ int main(int argc, char **argv)
             exit_status =
                 KRFFS_Invalid_Magic_Signature_Error;
 
+            break;
+        }
+
+        /* A node's data lives between its header and its end, so a data size
+           that does not fit is a node whose bytes are somebody else's. Fatal:
+           nothing in the image says what the size should have been. */
+        if (node->data_size > node->size - sizeof(struct krffs_node)) {
+            printf(
+                "- node at position %"PRIu64": %"PRIu64" bytes of data in "
+                "%"PRIu64" bytes of node\n",
+                krffs_get_node_relative_position(&file_system, node),
+                node->data_size,
+                node->size
+            );
+            fprintf(
+                stderr,
+                "Found a node whose data does not fit in it. Won't proceed.\n"
+            );
+            exit_status = KRFFS_Node_Size_Error;
             break;
         }
 

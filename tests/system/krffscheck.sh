@@ -45,6 +45,10 @@ elif how == 'dirty':
     struct.pack_into('<H', b, MODE, struct.unpack_from('<H', b, MODE)[0] | 0o4000)
 elif how == 'magic':
     struct.pack_into('<H', b, root, 0x1234)
+elif how == 'datasize':
+    DATA = 341
+    node = struct.unpack_from('<Q', b, root + SIZE)[0]
+    struct.pack_into('<Q', b, root + DATA, node)
 open(path, 'wb').write(b)
 PY
     echo "$out"
@@ -69,12 +73,14 @@ done
 say "a wrong backward link, at a node and at the root, and the dirty flag: refused strict, repaired, then clean: OK"
 
 # A fatal fault is refused either way and the image is left as it was.
-img=$(copy_broken magic magic)
-before=$(cksum < "$img")
-[ "$(status "$img" --strict)" != 0 ] || bad "--strict accepted a bad signature"
-[ "$(status "$img" "")" != 0 ] || bad "the checker accepted a bad signature"
-[ "$before" = "$(cksum < "$img")" ] || bad "the checker changed an image it refused"
-say "a bad signature is refused either way and the image is left as it was: OK"
+for how in magic datasize; do
+    img=$(copy_broken "$how" "$how")
+    before=$(cksum < "$img")
+    [ "$(status "$img" --strict)" != 0 ] || bad "--strict accepted the $how fault"
+    [ "$(status "$img" "")" != 0 ] || bad "the checker accepted the $how fault"
+    [ "$before" = "$(cksum < "$img")" ] || bad "the checker changed an image it refused for $how"
+done
+say "a bad signature and a data size larger than its node are refused either way, and the image is left as it was: OK"
 
 if [ "$fails" = 0 ]; then
     say "PASS"
