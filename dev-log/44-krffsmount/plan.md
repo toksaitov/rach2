@@ -42,11 +42,19 @@ The forward chain is the invariant. A change is ordered so that every block the 
 
 `fsck.krffs` gains the backlink check, validates before it clears the dirty bit, and reports what it repaired. Nothing in this milestone is proved by an oracle weaker than the kernel's own validator.
 
+### Why a loop device and not a map of the file's sectors
+
+The alternative considered was to give up the loop device: `mount(2)` would take a file, ask its type where the file's blocks sit on the disk, and mount the image on a view of those sectors. It is smaller on the surface and needs nothing of the buffer cache. It is refused for three reasons. The cache is keyed by a device and a block, so the same sectors would be cached twice, once under the view and once under the file system that holds the file; that file system addresses its volume in 4 KiB blocks whatever its allocation unit is, so one of its blocks can hold sectors of the image and sectors of a neighbouring file, and writing that block for the neighbour restores stale image bytes. Refusing writes to the image file does not prevent it. The claim model compares physical ranges, and every extent of the image lies inside the range the outer mount has already claimed. And a file on a memory root, or on the KRFFS fallback root, has no sectors to map at all, so the design would not serve the machine's own fallback system. A read-only extent view may be worth revisiting later, where immutable sectors make the alias harmless; it is not this milestone.
+
 ### The loop device
 
 `/dev/loop0` to `/dev/loop3` over a regular file, attached and detached by a small Rach2 utility through a control node, and reported in `/proc/loop`; BusyBox's `losetup` stays out of the build. The file is held open for the attachment, its length fixes the sector count and is never changed by the device, a length that is not whole sectors is refused, a short read or write becomes a device error, and a file opened without write access attaches read-only, which the mount inherits. Holding it open is not enough on its own: while a file backs a device, a write or a truncation of it through any other descriptor is refused, because the image under a mounted file system may not change beneath it.
 
-A loop transfer runs in the context of the process that asked for it and returns when the backing file has taken it: a write is a VFS write followed by a VFS `fsync` of the backing file, so the cache's promise that a written block has reached the device still holds. Detach unpublishes the node, refuses new mounts and opens, waits for the holds to go, syncs and invalidates every buffer of that device, and only then releases the file.
+A loop transfer runs in the context of the process that asked for it and returns when the backing file has taken it: a write is a VFS write followed by a VFS `fsync` of the backing file, so the cache's promise that a written block has reached the device still holds. The block layer gains a third kind of device for it. Today a device is either fault-safe, whose `read` and `write` may be called from any context, or asynchronous, whose work goes through a request of the pool; a loop device is neither, because it may sleep and must not take a request slot while the backing device takes another from the same pool of sixteen. It is called directly, in syscall context only, and a call from anywhere else is refused rather than served. The binding names the file by its mount and its node, not by the path, so a hard link to it and a description already open are the same object; a second attachment of one file is refused. While a file is attached, every route that would change it is refused: write, truncate and the size-setting attribute path.
+
+The mount that holds the file is pinned while the binding lives, so unmounting it first answers `EBUSY`. If the device under that mount goes, a stick pulled out, the loop device goes with it: it enters the same gone state a device has, its unwritable dirty buffers are dropped as the cache already drops them, and the mount above it can be taken down rather than failing its sync for ever.
+
+Detach unpublishes the node, refuses new mounts and opens, waits for the holds to go, syncs and invalidates every buffer of that device, and only then releases the file.
 
 ### The cache's ordering rule
 
@@ -95,17 +103,17 @@ Writes through the cache under the mount lock, in the order the protocol fixes; 
 
 Proof: a program writes files of every kind and unmounts; the oracle finds the volume consistent; the crash rows replay every write prefix and each mounts, repairs and reads what the rule allows; two writers on one mount interleave without tearing the chain. Review at this boundary before phase 5.
 
-### Phase 5: the cache's dependency rule
+### Phase 5: the block layer's third device and the cache's rule
 
-The rank replaced by an exact dependency, checked where a buffer is taken, where a dirty victim is written and where a sync writes; the depth budget; the refusal of a cycle.
+The caller-synchronous sleeping device, refused outside syscall context; the exact dependency, checked where a buffer is taken, where a dirty victim is written and where a sync writes; the depth budget computed from the four-buffer limit; the refusal of a cycle.
 
-Proof: the cache's host rows, including a full cache with nested devices and the depth on both sides; the mutation that removes each check trips its own row.
+Proof: the cache's host rows, including a full cache with nested devices and the depth on both sides; a device of the new kind called from the pump is refused; the request pool is shown never to hold two slots for one transfer; the mutation that removes each check trips its own row.
 
 ### Phase 6: the loop device
 
 `/dev/loopN`, the control node, `/proc/loop`, the attach and detach protocol, the utility, and the entries in the two tables.
 
-Proof: a FAT32 image file and an ext2 image file on the ext2 root each mount through a loop device, take a file and give it back after an unmount, and read the same on the host; detach with a mount up is refused, and after the unmount it invalidates and releases; the refusals. Review at this boundary before phase 7.
+Proof: a FAT32 image file and an ext2 image file on the ext2 root each mount through a loop device, take a file and give it back after an unmount, and read the same on the host; detach with a mount up is refused, and after the unmount it invalidates and releases; unmounting the backing volume first answers `EBUSY`; a stick pulled while an image on it is mounted takes the loop device down and lets the mount go; a second attachment of one file, an attachment through a hard link to an attached file, a write and a truncation of an attached file, and an attachment on a read-only mount are each refused by name. Review at this boundary before phase 7.
 
 ### Phase 7: KRFFS through the loop device
 
@@ -129,6 +137,8 @@ The Readmes, the notes closed line by line, `tests/run all` on the final tree, t
 * The offset core touching the root. It is phase 2, behaviour-preserving, with the whole suite as its proof and the pointer facade keeping the callers outside the file system unchanged.
 * The cache's rule. A loop read takes another device's block while holding one, which the cache panics on today; the danger of the fix is a deadlock rather than a panic, so the rule is checked at all three points and the depth is computed rather than assumed.
 * The write-through promise. A loop write that does not reach the backing file leaves the cache's contract broken and a volume that reports what it has not stored; the backing `fsync` is part of the write, and its failure is a device error.
+* The request pool. Sixteen slots serve every sleeping device; a loop transfer must not hold one while the device under it takes another, which is why the loop is called directly and why the suite saturates the pool on purpose.
+* The cost of the write-through. Every metadata write through a loop device flushes the backing file, and the drivers' flush walks the whole mounted device. The suite records what a 4 MiB write to an image costs; if the number is unusable, the milestone records it and a weaker contract, an image consistent only after a sync, is left for a later milestone to decide rather than assumed here.
 * Scope. The root's window, its pointer callers and the format's growth are named out of scope; a finding that argues for them is recorded for a later milestone.
 
 ## Recovery after a compaction
