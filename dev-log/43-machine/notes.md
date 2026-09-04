@@ -244,10 +244,12 @@ and recovery is no longer the saved default.
   the nearest event; on the machine Freedoom then runs at 58 frames a
   second, the longest 60 ms, the emulator 0.5 s per 30 s in 2604 calls
   for 1.48 million samples after 2255 events, and the owner played it:
-  smooth, the music playing, no sound trouble. Owed: a host row over a two-track MIDI fixture, which needs
-  the player compiled on the host with a `GENMIDI` lump the tree does
-  not carry; the machine's report is the proof so far, and the old
-  player's report with the same WAD is the mutation's. Freedoom is on the notebook as
+  smooth, the music playing, no sound trouble. Row: `oplmusic_hosttest`, the player over a
+  two-track MIDI file built in memory, with two stubs for the WAD's
+  instrument table and the zone allocator and the port's own counter
+  hook as the window; mutation, track 0 alone, which fails four of its
+  rows. The host tests take a `host-cflags:` line now, for a test over
+  sources outside the kernel tree. Freedoom is on the notebook as
   `/doom1.wad` with the shareware WAD beside it as `/shareware.wad`;
   swap them back before the milestone closes, since the tree stages
   the shareware one.

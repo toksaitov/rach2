@@ -54,7 +54,5 @@ own build of the final tree, `77b78018...`, on the ext2 root
 `9c20cabd...`; the full set, the acceptance script and the documents'
 review are done and recorded. Open with the owner: the SSH key refused after a metal-stick boot, which needs a stick
 rewritten as the metal stick and a boot from it; the panic at a pull
-of a silent stick, awaiting its record. Open for a later session: a
-host row for the Doom port's multi-track player, which needs the port
-built on the host with a GENMIDI lump the tree does not carry.
+of a silent stick, awaiting its record. Nothing is owed for a later session.
 File being read when written: none.
