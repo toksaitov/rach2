@@ -1375,15 +1375,20 @@ int krffs_create_at(krffs_mount_t *mount, const char *path)
 }
 
 /**
- * Resize the file at `path` to `new_size` bytes, zero-filling any growth.
+ * Resize the node at `node` to `new_size` bytes, zero-filling any growth.
  *
- * Returns 0 on success, -1 if the path is not a regular file or there is no
- * space to grow it.
+ * The node and not a path, because a file whose name has been taken away is
+ * still a file its holder may truncate, and there is no path that names it:
+ * a walk of the path a nameless node would spell reaches its parent
+ * directory instead. `node_out` answers where the node is afterwards, which
+ * a grow with no room after it changes.
+ *
+ * Returns 0 on success, `KRFFS_EBAD` if it is not a regular file and
+ * `KRFFS_ENOSPACE` if there is no space to grow it.
  */
-int krffs_truncate_at(krffs_mount_t *mount, const char *path,
-                      uint32_t new_size, uint64_t *node_out)
+int krffs_truncate_node_at(krffs_mount_t *mount, uint64_t node,
+                           uint32_t new_size, uint64_t *node_out)
 {
-    uint64_t node = krffs_walk(mount, path);
     uint64_t old_data_size;
     krffs_node_t head;
 
@@ -1391,23 +1396,26 @@ int krffs_truncate_at(krffs_mount_t *mount, const char *path,
         *node_out = node;
     }
     if (node == KRFFS_NO_NODE || node == 0 ||
-        krffs_head(mount, node, &head) != 0 || KRFFS_IS_DIR(head.mode)) {
-        klog(KLOG_DEBUG, "krffs", "truncate: no such file: %s", path);
+        krffs_head(mount, node, &head) != 0 ||
+        head.type != KRFFS_RESERVED_NODE || KRFFS_IS_DIR(head.mode)) {
         return KRFFS_EBAD;
     }
 
     old_data_size = head.data_size;
 
-    node = krffs_resize_at(mount, node, new_size);
-    /* Where the node is now, whatever the answer: a resize that moved it and
-     * then failed has left the caller holding an offset that is free space,
-     * and the caller repoints from this. */
-    if (node_out) {
-        *node_out = node != KRFFS_NO_NODE ? node : krffs_walk(mount, path);
-    }
-    if (node == KRFFS_NO_NODE) {
-        klog(KLOG_WARN, "krffs", "truncate: no space to resize: %s", path);
-        return KRFFS_ENOSPACE;
+    {
+        uint64_t moved = krffs_resize_at(mount, node, new_size);
+
+        /* Where the node is now, whatever the answer: a resize that could
+         * not move it left it where it was, and the caller repoints from
+         * this. */
+        if (node_out) {
+            *node_out = moved != KRFFS_NO_NODE ? moved : node;
+        }
+        if (moved == KRFFS_NO_NODE) {
+            return KRFFS_ENOSPACE;
+        }
+        node = moved;
     }
 
     if ((uint64_t)new_size > old_data_size &&
@@ -1422,6 +1430,23 @@ int krffs_truncate_at(krffs_mount_t *mount, const char *path,
     krffs_stamp_at(mount, node, KRFFS_STAMP_DATA);
 
     return 0;
+}
+
+/**
+ * Resize the file at `path`, which is the same work reached by its name.
+ */
+int krffs_truncate_at(krffs_mount_t *mount, const char *path,
+                      uint32_t new_size, uint64_t *node_out)
+{
+    uint64_t node = krffs_walk(mount, path);
+    int rc = krffs_truncate_node_at(mount, node, new_size, node_out);
+
+    if (rc == KRFFS_EBAD) {
+        klog(KLOG_DEBUG, "krffs", "truncate: no such file: %s", path);
+    } else if (rc == KRFFS_ENOSPACE) {
+        klog(KLOG_WARN, "krffs", "truncate: no space to resize: %s", path);
+    }
+    return rc;
 }
 
 /**

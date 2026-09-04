@@ -30,6 +30,9 @@ file 0755 /bin/ping build/utils/ping
 # /dev/bootlog, because this kernel has no klogctl ring.
 file 0755 /bin/dmesg krffs/dmesg.script
 file 0755 /bin/dropbearmulti build/vendor/dropbear/dropbearmulti
+# Attaches a file to a loop device so a file system in a file can be mounted
+# (utils/Readme.md); it writes /dev/loop-control, which is root's.
+file 0755 /bin/loopctl build/utils/loopctl
 optional-file 0755 /bin/doom build/ports/doom/doom
 
 # The compiler, and the sysroot it looks in when it runs. /bin/tcc is an

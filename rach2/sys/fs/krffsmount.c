@@ -17,6 +17,7 @@
 #include "krffsmount.h"
 
 #include "../klog.h"
+#include "../proc/process.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
 #include "bcache.h"
@@ -452,7 +453,6 @@ static int32_t kv_write(struct vfs_mount *mnt, void *handle, const void *buf,
 static int kv_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
 {
     struct krffs_volume *vol;
-    char path[256];
     int rc = begin_write(mnt);
 
     if (rc != 0) {
@@ -463,15 +463,13 @@ static int kv_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
         vfs_ns_unlock(mnt);
         return -EFBIG;
     }
-    if (krffs_node_path_at(&vol->fs, offset_of(mnt, handle), path,
-                           sizeof(path)) != 0) {
-        vfs_ns_unlock(mnt);
-        return -ENAMETOOLONG;
-    }
+    /* By the node the descriptor holds and not by a path built from it: a
+     * file whose name has been taken away has no path, and the one such a
+     * node spells reaches its parent directory. */
     {
         uint64_t now = offset_of(mnt, handle);
 
-        rc = krffs_truncate_at(&vol->fs, path, (uint32_t)size, &now);
+        rc = krffs_truncate_node_at(&vol->fs, now, (uint32_t)size, &now);
         /* Repointed whether or not it worked: a resize that moved the node
          * and then failed has left every holder naming free space. */
         if (now != KRFFS_NO_NODE && now != offset_of(mnt, handle)) {
@@ -499,6 +497,23 @@ static int kv_fsync(struct vfs_mount *mnt, void *handle)
     return rc;
 }
 
+/**
+ * The mode and the owner a creation asks for, put on the node the core made.
+ *
+ * The core stamps every new node with the format's defaults, which are root's
+ * and 0644; the caller's mode has already been masked by its umask, and the
+ * identity is the one that made the call. The kind of the node is the core's
+ * and is not touched here.
+ */
+static void stamp_made(struct krffs_volume *vol, uint64_t at, uint32_t mode)
+{
+    uint32_t uid = current_proc ? current_proc->euid : 0;
+    uint32_t gid = current_proc ? current_proc->egid : 0;
+
+    krffs_set_mode_at(&vol->fs, at, (uint16_t)(mode & 07777u));
+    krffs_set_owner_at(&vol->fs, at, uid, gid, KRFFS_SET_UID | KRFFS_SET_GID);
+}
+
 static int kv_create(struct vfs_mount *mnt, void *dir, const char *name,
                      uint32_t mode, void **node)
 {
@@ -507,7 +522,6 @@ static int kv_create(struct vfs_mount *mnt, void *dir, const char *name,
     uint64_t made;
     int rc;
 
-    (void)mode; /* the caller stamps mode and owner under its own rules */
     if (!vol->writable || (mnt->flags & VFS_MS_RDONLY)) {
         return -EROFS;
     }
@@ -523,6 +537,7 @@ static int kv_create(struct vfs_mount *mnt, void *dir, const char *name,
     if (made == KRFFS_NO_NODE) {
         return -EIO;
     }
+    stamp_made(vol, made, mode);
     *node = handle_of(made);
     return 0;
 }
@@ -570,7 +585,6 @@ static int kv_mkdir(struct vfs_mount *mnt, void *dir, const char *name,
     char path[256];
     int rc;
 
-    (void)mode;
     if (!vol->writable || (mnt->flags & VFS_MS_RDONLY)) {
         return -EROFS;
     }
@@ -578,7 +592,18 @@ static int kv_mkdir(struct vfs_mount *mnt, void *dir, const char *name,
     if (rc != 0) {
         return rc;
     }
-    return krffs_mkdir_at(&vol->fs, path) == 0 ? 0 : -ENOSPC;
+    if (krffs_mkdir_at(&vol->fs, path) != 0) {
+        return -ENOSPC;
+    }
+    {
+        uint64_t made = krffs_child_at(&vol->fs, offset_of(mnt, dir), name);
+
+        if (made == KRFFS_NO_NODE) {
+            return -EIO;
+        }
+        stamp_made(vol, made, mode);
+    }
+    return 0;
 }
 
 static int kv_rmdir(struct vfs_mount *mnt, void *dir, const char *name)

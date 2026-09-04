@@ -441,6 +441,11 @@ static void write_rows(void)
     sys1(SYS_UNLINK, (int)"/k/moved.bin");
     sys1(SYS_UNLINK, (int)"/k/blocker.bin");
     sys1(SYS_RMDIR, (int)"/k/empty");
+    sys1(SYS_UNLINK, (int)"/k/secret.txt");
+    sys1(SYS_RMDIR, (int)"/k/private");
+    sys1(SYS_UNLINK, (int)"/k/hold/keep.txt");
+    sys1(SYS_UNLINK, (int)"/k/hold/gone.bin");
+    sys1(SYS_RMDIR, (int)"/k/hold");
 
     fd = sys3(SYS_OPEN, (int)"/k/written.bin", O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
@@ -546,6 +551,49 @@ static void write_rows(void)
     }
     sys1(SYS_CLOSE, fd);
 
+    /* A truncation of a file whose name is gone. It has no path, and the one
+       its parent and empty name spell reaches the directory it was in; the
+       truncation must reach the file itself and leave that directory and
+       everything else in it exactly as they were. */
+    if (sys2(SYS_MKDIR, (int)"/k/hold", 0755) != 0) {
+        fail("the directory for the truncation of a nameless file");
+    }
+    fd = sys3(SYS_OPEN, (int)"/k/hold/keep.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) {
+        fail_with("the file that must survive", fd);
+    }
+    if (sys3(SYS_WRITE, fd, (int)"keep\n", 5) != 5) {
+        fail("writing the file that must survive");
+    }
+    sys1(SYS_CLOSE, fd);
+    fd = sys3(SYS_OPEN, (int)"/k/hold/gone.bin", O_RDWR | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) {
+        fail_with("the file to truncate after its name goes", fd);
+    }
+    write_pattern(fd, 300);
+    if (sys1(SYS_UNLINK, (int)"/k/hold/gone.bin") != 0) {
+        fail("unlinking the file to truncate");
+    }
+    sys3(SYS_FTRUNCATE, fd, 0, 0);
+    sys1(SYS_CLOSE, fd);
+    if (sys2(SYS_STAT64, (int)"/k/hold", (int)st) != 0) {
+        fail("the directory of a nameless file that was truncated");
+    }
+    {
+        char keep[8];
+        int n;
+
+        fd = sys3(SYS_OPEN, (int)"/k/hold/keep.txt", O_RDONLY, 0);
+        if (fd < 0) {
+            fail_with("the file beside the nameless one that was truncated", fd);
+        }
+        n = sys3(SYS_READ, fd, (int)keep, (int)sizeof(keep));
+        if (n != 5 || keep[0] != 'k') {
+            fail_with("the bytes beside the nameless file that was truncated", n);
+        }
+        sys1(SYS_CLOSE, fd);
+    }
+
     /* A descriptor open across a grow that moves the file: the write path
        repoints it, and the same descriptor reads what it wrote. */
     fd = sys3(SYS_OPEN, (int)"/k/moved.bin", O_RDWR | O_CREAT | O_TRUNC, 0644);
@@ -589,6 +637,25 @@ static void write_rows(void)
     if ((rc & 07777) != 0600) {
         fail_with("the mode after a chmod", rc & 07777);
     }
+
+    /* The mode a creation asks for is the mode it gets: the format stamps a
+       new node 0644 and the volume must put the caller's own bits on it. */
+    fd = sys3(SYS_OPEN, (int)"/k/secret.txt", O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) {
+        fail_with("creating a file with a mode of its own", fd);
+    }
+    sys1(SYS_CLOSE, fd);
+    rc = (int)stat_mode("/k/secret.txt", st);
+    if ((rc & 07777) != 0600) {
+        fail_with("the mode of a file created 0600", rc & 07777);
+    }
+    if (sys2(SYS_MKDIR, (int)"/k/private", 0700) != 0) {
+        fail("making a directory with a mode of its own");
+    }
+    rc = (int)stat_mode("/k/private", st);
+    if ((rc & 07777) != 0700) {
+        fail_with("the mode of a directory made 0700", rc & 07777);
+    }
 }
 
 /* What the boot after a write boot must find. */
@@ -605,6 +672,12 @@ static void readback_rows(void)
     }
     if ((stat_mode("/k/written.bin", st) & 07777) != 0600) {
         fail("the mode after a reboot");
+    }
+    if ((stat_mode("/k/secret.txt", st) & 07777) != 0600) {
+        fail("the created file's own mode after a reboot");
+    }
+    if ((stat_mode("/k/private", st) & 07777) != 0700) {
+        fail("the made directory's own mode after a reboot");
     }
     fd = sys3(SYS_OPEN, (int)"/k/made/inside", O_RDONLY, 0);
     if (fd < 0) {

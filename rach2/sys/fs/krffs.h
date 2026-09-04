@@ -227,6 +227,8 @@ int krffs_read_at(krffs_mount_t *mount, uint64_t node, char *buffer,
 int krffs_write_at(krffs_mount_t *mount, uint64_t *node, const char *buffer,
                    uint32_t size, uint32_t at);
 int krffs_create_at(krffs_mount_t *mount, const char *path);
+int krffs_truncate_node_at(krffs_mount_t *mount, uint64_t node,
+                           uint32_t new_size, uint64_t *node_out);
 int krffs_truncate_at(krffs_mount_t *mount, const char *path,
                       uint32_t new_size, uint64_t *node_out);
 int krffs_unlink_at(krffs_mount_t *mount, const char *path);
