@@ -45,6 +45,8 @@ The native and Rach2 builds both provide:
 
 These are small teaching implementations, not complete POSIX commands. Except for `rm -r`, they do not parse options.
 
+`loopctl` attaches a file to a loop device, detaches one, or prints what `/proc/loop` says. `loopctl attach FILE` takes the first free device, `loopctl attach N FILE` takes that one, and `loopctl detach N` gives it back; the device is then what `mount(2)` takes as its source, so a file system in a file is mounted like any other volume. The kernel is spoken to through `/dev/loop-control`, which takes one command per write ([block/Readme.md](../rach2/sys/block/Readme.md)).
+
 ## Network programs
 
 * `ping [HOST]` defaults to `10.0.2.2`, sends four requests through the Rach2-specific `SC_PING` socket call, and succeeds if at least one reply arrives. The kernel permits one request in flight for the whole machine; a busy request stops the program with an error.

@@ -27,9 +27,10 @@ Phase 5: the block layer's third device and the cache's rule
 - [x] the depth budget and the cycle it refuses; the pool's rows are the guest's, in phase 6
 
 Phase 6: the loop device
-- [ ] /dev/loopN, the control node, /proc/loop, the utility, the two tables
-- [ ] the binding by mount and node, the leases, the source pinning, removal propagation, detach
-- [ ] a FAT32 image and an ext2 image mounted through it; the refusals; review at the boundary
+- [x] /dev/loopN, the control node, /proc/loop, the utility, the two tables
+- [x] the binding by mount and node, the source pinning, removal propagation, detach
+- [x] a FAT32 image and an ext2 image mounted through it; the refusals
+- [ ] the stick pulled under an attached file; review at the boundary
 
 Phase 7: KRFFS through the loop device
 - [ ] an image on ext2 and on FAT32, read and written, with the oracle after each
