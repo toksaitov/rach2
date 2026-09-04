@@ -228,7 +228,7 @@ int krffs_write_at(krffs_mount_t *mount, uint64_t *node, const char *buffer,
                    uint32_t size, uint32_t at);
 int krffs_create_at(krffs_mount_t *mount, const char *path);
 int krffs_truncate_at(krffs_mount_t *mount, const char *path,
-                      uint32_t new_size);
+                      uint32_t new_size, uint64_t *node_out);
 int krffs_unlink_at(krffs_mount_t *mount, const char *path);
 int krffs_rename_at(krffs_mount_t *mount, const char *old_path,
                     const char *new_path);
@@ -242,7 +242,7 @@ void krffs_stamp_at(krffs_mount_t *mount, uint64_t offset, int what);
 uint64_t krffs_allocate_at(krffs_mount_t *mount, uint64_t size,
                            uint64_t original);
 uint64_t krffs_resize_at(krffs_mount_t *mount, uint64_t offset, uint64_t size);
-void krffs_remove_at(krffs_mount_t *mount, uint64_t offset);
+int krffs_remove_at(krffs_mount_t *mount, uint64_t offset);
 uint32_t krffs_count_at(krffs_mount_t *mount);
 int krffs_set_dirty(krffs_mount_t *mount, int dirty);
 int krffs_is_dirty(krffs_mount_t *mount);

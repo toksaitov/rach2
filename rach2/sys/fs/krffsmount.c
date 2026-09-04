@@ -28,12 +28,25 @@
  * nothing has asked for. */
 #define KRFFS_VOLUMES 2
 
+/* The files a volume has open. A name removed while a file is open takes the
+ * name off the node and leaves the node, the way the root does, so whoever
+ * holds it keeps reading it; the last close frees it. Sixteen at once per
+ * volume, which is what one process's descriptor table can hold. */
+#define KRFFS_OPENS 16
+
+struct krffs_open {
+    uint64_t offset;
+    int refs;
+    int nameless; /* unlinked while open: freed at the last close */
+};
+
 struct krffs_volume {
     int used;
     block_device_t *dev;
     struct vfs_mount *mnt;
     krffs_mount_t fs;
     int writable;
+    struct krffs_open opens[KRFFS_OPENS];
 };
 
 static struct krffs_volume krffs_volumes[KRFFS_VOLUMES];
@@ -263,18 +276,72 @@ static int kv_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     return 0;
 }
 
+/** The record of an open file at `at`, or NULL. */
+static struct krffs_open *open_at(struct krffs_volume *vol, uint64_t at)
+{
+    int i;
+
+    for (i = 0; i < KRFFS_OPENS; i++) {
+        if (vol->opens[i].refs > 0 && vol->opens[i].offset == at) {
+            return &vol->opens[i];
+        }
+    }
+    return 0;
+}
+
+/** Follow an open record to where the node moved. */
+static void open_moved(struct krffs_volume *vol, uint64_t from, uint64_t to)
+{
+    struct krffs_open *o = open_at(vol, from);
+
+    if (o) {
+        o->offset = to;
+    }
+}
+
 static int kv_open(struct vfs_mount *mnt, void *node, int flags, void **handle)
 {
-    (void)mnt;
+    struct krffs_volume *vol = vol_of(mnt);
+    uint64_t at = offset_of(mnt, node);
+    struct krffs_open *o = open_at(vol, at);
+    int i;
+
     (void)flags;
+    if (!o) {
+        for (i = 0; i < KRFFS_OPENS; i++) {
+            if (vol->opens[i].refs == 0) {
+                o = &vol->opens[i];
+                o->offset = at;
+                o->nameless = 0;
+                break;
+            }
+        }
+        if (!o) {
+            return -ENFILE; /* sixteen files of one volume are open */
+        }
+    }
+    o->refs++;
     *handle = node; /* the node is the handle: an offset needs nothing else */
     return 0;
 }
 
 static void kv_release(struct vfs_mount *mnt, void *handle)
 {
-    (void)mnt;
-    (void)handle;
+    struct krffs_volume *vol = vol_of(mnt);
+    struct krffs_open *o = open_at(vol, offset_of(mnt, handle));
+
+    if (!o) {
+        return;
+    }
+    if (--o->refs > 0) {
+        return;
+    }
+    /* The last close of a file whose name was taken away frees it, which is
+     * the moment the space comes back. */
+    if (o->nameless && vol->writable && !(mnt->flags & VFS_MS_RDONLY)) {
+        krffs_remove_at(&vol->fs, o->offset);
+    }
+    o->nameless = 0;
 }
 
 static int32_t kv_read(struct vfs_mount *mnt, void *handle, void *buf,
@@ -369,6 +436,7 @@ static int32_t kv_write(struct vfs_mount *mnt, void *handle, const void *buf,
      * repointed at the new one, which is what the root does for the same
      * reason. Done under the mount's lock, before anything else can look. */
     if (at != KRFFS_NO_NODE && at != offset_of(mnt, handle)) {
+        open_moved(vol, offset_of(mnt, handle), at);
         vfs_repoint(mnt, handle, handle_of(at));
     }
     vfs_ns_unlock(mnt);
@@ -400,16 +468,22 @@ static int kv_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
         vfs_ns_unlock(mnt);
         return -ENAMETOOLONG;
     }
-    rc = krffs_truncate_at(&vol->fs, path, (uint32_t)size);
-    if (rc == 0) {
-        uint64_t now = krffs_walk(&vol->fs, path);
+    {
+        uint64_t now = offset_of(mnt, handle);
 
+        rc = krffs_truncate_at(&vol->fs, path, (uint32_t)size, &now);
+        /* Repointed whether or not it worked: a resize that moved the node
+         * and then failed has left every holder naming free space. */
         if (now != KRFFS_NO_NODE && now != offset_of(mnt, handle)) {
+            open_moved(vol, offset_of(mnt, handle), now);
             vfs_repoint(mnt, handle, handle_of(now));
         }
     }
     vfs_ns_unlock(mnt);
-    return rc == 0 ? 0 : -ENOSPC;
+    if (rc == KRFFS_ENOSPACE) {
+        return -ENOSPC;
+    }
+    return rc == 0 ? 0 : -EIO;
 }
 
 static int kv_fsync(struct vfs_mount *mnt, void *handle)
@@ -441,7 +515,8 @@ static int kv_create(struct vfs_mount *mnt, void *dir, const char *name,
     if (rc != 0) {
         return rc;
     }
-    if (krffs_create_at(&vol->fs, path) != 0) {
+    rc = krffs_create_at(&vol->fs, path);
+    if (rc != 0) {
         return -ENOSPC;
     }
     made = krffs_child_at(&vol->fs, offset_of(mnt, dir), name);
@@ -464,6 +539,26 @@ static int kv_unlink(struct vfs_mount *mnt, void *dir, const char *name)
     rc = join(mnt, dir, name, path, sizeof(path));
     if (rc != 0) {
         return rc;
+    }
+    /* A name taken off a file somebody has open leaves the node, which is
+       what keeps that reader's file alive; the last close frees it. */
+    {
+        uint64_t at = krffs_child_at(&vol->fs, offset_of(mnt, dir), name);
+        struct krffs_open *o = at == KRFFS_NO_NODE ? 0 : open_at(vol, at);
+
+        if (o) {
+            krffs_node_t head;
+
+            if (krffs_head(&vol->fs, at, &head) != 0 ||
+                KRFFS_IS_DIR(head.mode)) {
+                return -EIO;
+            }
+            krffs_stamp_at(&vol->fs, krffs_parent_offset(&vol->fs, at),
+                           KRFFS_STAMP_DATA);
+            krffs_orphan_at(&vol->fs, at);
+            o->nameless = 1;
+            return 0;
+        }
     }
     return krffs_unlink_at(&vol->fs, path) == 0 ? 0 : -EIO;
 }
@@ -576,11 +671,20 @@ static int kv_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
     return 0;
 }
 
+/*
+ * Everything the volume owes the medium, under the mount's lock: a sync that
+ * ran beside a namespace operation could write half of one.
+ */
 static int kv_sync(struct vfs_mount *mnt)
 {
-    struct krffs_volume *vol = vol_of(mnt);
+    int rc = begin_write(mnt);
 
-    return vol->writable ? bcache_sync(vol->dev) : 0;
+    if (rc != 0) {
+        return 0; /* nothing of a read-only mount is waiting to be written */
+    }
+    rc = bcache_sync(vol_of(mnt)->dev);
+    vfs_ns_unlock(mnt);
+    return rc;
 }
 
 /**
@@ -593,6 +697,7 @@ static int kv_prepare_unmount(struct vfs_mount *mnt)
 {
     struct krffs_volume *vol = vol_of(mnt);
     int rc = kv_sync(mnt);
+
 
     if (rc != 0 || !vol->writable) {
         return rc;
