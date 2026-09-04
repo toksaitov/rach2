@@ -151,6 +151,21 @@ int block_request(block_device_t *device, int write, uint64_t lba, uint32_t coun
         }
         return device->read(device, lba, count, buffer);
     }
+    /* A device that sleeps its caller and answers in the same call is called
+     * directly and takes no request slot: the device under it takes one from
+     * this pool while it waits, and two slots for one transfer is how the
+     * pool runs out with everybody waiting for everybody. */
+    if (device->flags & BLOCK_CALLER_SYNC) {
+        __asm__ __volatile__("pushfl; popl %0" : "=r"(eflags));
+        if (!(eflags & 0x200) || !current_proc || !current_proc->in_syscall) {
+            k_panic("block: a sleeping device was reached outside syscall context");
+        }
+        if (write) {
+            return device->write ? device->write(device, lba, count, buffer)
+                                 : -EIO;
+        }
+        return device->read ? device->read(device, lba, count, buffer) : -EIO;
+    }
     if (!device->submit) {
         return -EIO;
     }
@@ -186,6 +201,9 @@ int block_flush(block_device_t *device)
     __asm__ __volatile__("pushfl; popl %0" : "=r"(eflags));
     if (!(eflags & 0x200) || !current_proc || !current_proc->in_syscall) {
         k_panic("block: a sleeping device was reached outside syscall context");
+    }
+    if (device->flags & BLOCK_CALLER_SYNC) {
+        return device->flush(device, 0); /* answers in this call, no slot */
     }
     r = req_take(device, 1, 0, 1);
     if (!r) {

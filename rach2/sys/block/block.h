@@ -30,6 +30,13 @@ struct block_request;
 /* The medium refuses writes and says so: a stick with its switch across, or
  * a partition view over one. Every mount of it is read-only. */
 #define BLOCK_READ_ONLY 0x4u
+/* The device sleeps its caller and answers in the same call: a loop device
+ * over a file, whose read is a read of that file through the file system
+ * holding it. It is neither of the two above: it may sleep, so it cannot be
+ * called with interrupts off, and it must not take a request slot, because
+ * the device under it takes one from the same pool of sixteen while it
+ * waits. It is called directly, in syscall context only. */
+#define BLOCK_CALLER_SYNC 0x10u
 /* The device has gone: a stick pulled out. Nothing can reach it again, so an
  * unmount writes nothing and only lets go of what it holds. Set by the cache
  * when the disk layer tells it, cleared when the device is published again. */
@@ -55,8 +62,33 @@ struct block_device {
      * A stick has one, because its cache is the reason a volume can be whole
      * on the wire and not on the medium. */
     int (*flush)(block_device_t *device, struct block_request *request);
+    /* The device this one's bytes live on, or NULL for a device that is its
+     * own medium. A loop device names the device of the file system holding
+     * its file, and the buffer cache reads the chain to decide whether a
+     * caller holding one device's buffer may take another's. */
+    block_device_t *backing;
     void *drvdata;
 };
+
+/* How long a chain of backing devices may be: a file system on a loop device
+ * on a disk is two, and that is the most the four buffers a process may hold
+ * can serve. A device whose chain would be longer is refused where it is
+ * attached. */
+#define BLOCK_MAX_DEPTH 2
+
+/**
+ * How many devices are under `device`, following its backing chain.
+ *
+ * Zero for a device that is its own medium. A chain longer than
+ * `BLOCK_MAX_DEPTH` answers `BLOCK_MAX_DEPTH + 1`, which is what a caller
+ * refuses on.
+ */
+int block_depth(block_device_t *device);
+
+/**
+ * Whether `ancestor` is under `device`: its backing, or its backing's.
+ */
+int block_is_below(block_device_t *ancestor, block_device_t *device);
 
 /**
  * The whole-disk boot device, or `NULL` until `block_probe` finds a disk.

@@ -51,8 +51,16 @@ static int caller_pid(void)
     return current_proc ? (int)current_proc->pid : 0;
 }
 
-/* The two rules that keep holders out of deadlock, checked before a wait or
- * a fill. A violation is a driver defect, not a runtime condition. */
+/* The rules that keep holders out of deadlock, checked before a wait or a
+ * fill. A violation is a driver defect, not a runtime condition.
+ *
+ * Blocks of one device are taken in order, so two processes holding one each
+ * cannot each be waiting for the other's. A second device is allowed only
+ * downward: a device that is under everything the caller holds, which is what
+ * a loop device's read does when it reads the file it is made of. Downward is
+ * the only direction there is, since the chain of backing devices has no
+ * cycle in it, so the same argument holds across devices as within one.
+ */
 static void check_hold_rules(block_device_t *dev, uint64_t blk)
 {
     int pid = caller_pid();
@@ -65,7 +73,10 @@ static void check_hold_rules(block_device_t *dev, uint64_t blk)
         }
         held++;
         if (bufs[i].dev != dev) {
-            k_panic("bcache: hold rule: a block on a second device taken while holding one");
+            if (!block_is_below(dev, bufs[i].dev)) {
+                k_panic("bcache: hold rule: a block on a device that is not under the ones held");
+            }
+            continue; /* under it: its blocks are its own to order */
         }
         if (bufs[i].blk >= blk) {
             k_panic("bcache: hold rule: a block taken that is not above every held block");
@@ -74,6 +85,35 @@ static void check_hold_rules(block_device_t *dev, uint64_t blk)
     if (held >= BCACHE_HOLD_MAX) {
         k_panic("bcache: hold rule: a fifth buffer taken");
     }
+}
+
+/**
+ * Whether a dirty buffer of `victim` may be written while this caller holds
+ * what it holds.
+ *
+ * Writing a buffer re-enters its device, and a device with a backing reaches
+ * this cache again to do it. That is allowed only where the hold rules allow
+ * it: the backing must be under everything held, the victim included. A
+ * victim that fails this is passed over, and another buffer takes the
+ * eviction, which is why this answers instead of stopping the machine.
+ */
+static int victim_may_be_written(block_device_t *victim)
+{
+    int pid = caller_pid();
+    int i;
+
+    if (!victim || !victim->backing) {
+        return 1; /* its write does not come back through here */
+    }
+    for (i = 0; i < BCACHE_BUFFERS; i++) {
+        if (bufs[i].holder != pid || !bufs[i].dev) {
+            continue;
+        }
+        if (bufs[i].dev != victim && !block_is_below(victim->backing, bufs[i].dev)) {
+            return 0;
+        }
+    }
+    return 1;
 }
 
 static int busy_gone(void *arg)
@@ -187,6 +227,12 @@ again:
         if (!victim->dirty) {
             break;
         }
+        if (!victim_may_be_written(victim->dev)) {
+            /* Its write would take a block this caller may not take while it
+             * holds what it holds; another buffer can be the victim. */
+            tried[victim - bufs] = 1;
+            continue;
+        }
         victim->holder = caller_pid(); /* held for the write, as a sync would */
         if (write_buffer(victim) == 0) {
             victim->holder = -1;
@@ -289,6 +335,12 @@ int bcache_sync(block_device_t *dev)
         if (next->holder != -1) {
             wq_wait_event_nointr(&next->wq, busy_gone, next);
             continue;
+        }
+        if (!victim_may_be_written(next->dev)) {
+            /* A sync is called with nothing else held; one that is not would
+             * write a block whose device re-enters this cache from under a
+             * hold that forbids it. */
+            k_panic("bcache: hold rule: a sync while holding a block of another device");
         }
         next->holder = caller_pid(); /* held across the request's sleep */
         rc = write_buffer(next);
