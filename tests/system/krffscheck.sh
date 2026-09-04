@@ -179,20 +179,24 @@ def split_and_fill(img, name, capacity):
 
 
 def grow(img, name, new_length):
-    """Grow into the free node after it, then write, then publish."""
+    """Take the free node after it whole, split the surplus back off, then
+    write, then publish the length.
+
+    Two published sizes, because the tail's header cannot be written while
+    the free node it lands on is still in the ring: a growth shorter than a
+    header would write over that node's own header."""
     nodes = walk(img)
     index = [k for k, n in enumerate(nodes) if n['name'] == name][0]
     node, following = nodes[index], nodes[index + 1]
     want = HDR + new_length
-    tail = node['size'] + following['size'] - want
-    stores = []
-    if 0 < tail < HDR:
-        want += tail
-        tail = 0
-    if tail > 0:
+    whole = node['size'] + following['size']
+    tail = whole - want
+    stores = [(node['off'] + SIZE, struct.pack('<Q', whole)),
+              (PREV, struct.pack('<Q', whole))]
+    if tail >= HDR:
         stores.append((node['off'] + want, header(tail, want, FREE)))
-    stores.append((node['off'] + SIZE, struct.pack('<Q', want)))
-    stores.append((PREV, struct.pack('<Q', tail if tail else want)))
+        stores.append((node['off'] + SIZE, struct.pack('<Q', want)))
+        stores.append((PREV, struct.pack('<Q', tail)))
     stores.append((node['off'] + HDR + node['data'],
                    content(new_length)[node['data']:]))
     stores.append((node['off'] + DATA, struct.pack('<Q', new_length)))
@@ -238,10 +242,12 @@ def remove_at(img, off):
 
 
 def relocate(img, name, new_length):
-    """A grow with no room after the node: fill a new one, free the old.
+    """One name on two nodes, which is what an interrupted move leaves.
 
-    Between the two stands one name on two nodes, which the check resolves in
-    favour of the larger, since a move only ever makes a node larger."""
+    The stores here are the test's own, not the allocator's: what these rows
+    ask is whether the check resolves the state, in favour of the larger node,
+    since a move only ever makes a node larger. That the core takes this path
+    at all is the host rows' business, where a real allocator runs."""
     stores = split_and_fill(img, name, new_length)
     after = apply(img, stores)
     new = named(after, name)[-1]
@@ -315,10 +321,17 @@ def caught(tag, img, stores, present):
     return False
 
 
-def swap(stores, i, j):
+def swap(stores, first, second):
+    """The sequence with two of its stores exchanged, named by what they do."""
+    i, j = stores.index(first), stores.index(second)
     out = list(stores)
     out[i], out[j] = out[j], out[i]
     return out
+
+
+def store_at(stores, offset):
+    """The last store to `offset`, which is what a name in a row means."""
+    return [st for st in stores if st[0] == offset][-1]
 
 
 fails = []
@@ -328,8 +341,10 @@ create_alpha = split_and_fill(start, b'alpha', 100)
 after_create = apply(start, create_alpha)
 grow_alpha = grow(after_create, b'alpha', 4000)
 after_grow = apply(after_create, grow_alpha)
-shrink_alpha = shrink(after_grow, b'alpha', 50)
-after_shrink = apply(after_grow, shrink_alpha)
+nudge_alpha = grow(after_grow, b'alpha', 4030)
+after_nudge = apply(after_grow, nudge_alpha)
+shrink_alpha = shrink(after_nudge, b'alpha', 50)
+after_shrink = apply(after_nudge, shrink_alpha)
 create_beta = split_and_fill(after_shrink, b'beta', 200)
 after_beta = apply(after_shrink, create_beta)
 remove_alpha = remove_at(after_beta, named(after_beta, b'alpha')[0]['off'])
@@ -339,10 +354,11 @@ move_beta, removal_length = relocate(after_remove, b'beta', 900)
 steps = [
     ('create', start, create_alpha, ()),
     ('grow', after_create, grow_alpha, (b'alpha',)),
-    ('shrink', after_grow, shrink_alpha, (b'alpha',)),
+    ('grow by less than a header', after_grow, nudge_alpha, (b'alpha',)),
+    ('shrink', after_nudge, shrink_alpha, (b'alpha',)),
     ('create beside it', after_shrink, create_beta, (b'alpha',)),
     ('remove', after_beta, remove_alpha, (b'beta',)),
-    ('move', after_remove, move_beta, (b'beta',)),
+    ('name on two nodes', after_remove, move_beta, (b'beta',)),
 ]
 
 for tag, img, stores, present in steps:
@@ -357,14 +373,21 @@ for tag, img, stores, present in steps:
 # proves nothing, so every one of these must be caught.
 wrong = [
     ('a split published before the tail header was written',
-     start, swap(create_alpha, 0, 1), ()),
-    ('a grow published before the tail header was written',
-     after_create, swap(grow_alpha, 0, 1), (b'alpha',)),
+     start, swap(create_alpha, create_alpha[0], create_alpha[1]), ()),
     ('a length published before the bytes it counts',
-     after_create, swap(grow_alpha, 3, 4), (b'alpha',)),
+     after_create, swap(grow_alpha, grow_alpha[-2], grow_alpha[-1]),
+     (b'alpha',)),
+    # only a growth shorter than a header overlaps: with a longer one the
+    #  tail's header lands in free space and the order does not matter 
+    # Only a growth shorter than a header can overlap: with a longer one the
+    # tail's header lands in free space whichever order it is written in.
+    ('a grow of less than a header that split first',
+     after_grow, swap(nudge_alpha, nudge_alpha[0], nudge_alpha[2]),
+     (b'alpha',)),
     ('a shrink published before the free header was written',
-     after_grow, swap(shrink_alpha, 1, 2), (b'alpha',)),
-    ('a move that freed the old node before it published the new one',
+     after_nudge, swap(shrink_alpha, shrink_alpha[1], shrink_alpha[2]),
+     (b'alpha',)),
+    ('a copy freed before the node it replaces was published',
      after_remove,
      move_beta[-removal_length:] + move_beta[:-removal_length], (b'beta',)),
 ]

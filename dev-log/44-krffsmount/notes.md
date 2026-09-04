@@ -36,3 +36,50 @@
   walk, and a lookup reads the whole ring. The walks now read the ninety-nine
   bytes they match on and the name only when the rest matches. The suite
   passes again, at 330s against 354s for the run that failed.
+
+## The Codex review at the phase 2 boundary
+
+One unit, six files (`krffs.c`, `krffs.h`, `krffs.Readme.md`,
+`krffs_hosttest.c`, `fsck.krffs.c`, `krffscheck.sh`), read-only, on tree
+7058d84. It ran past the ten minutes the policy allows, at about eleven, and
+returned seven findings. All are fixed:
+
+1. A truncate that raised a file's length inside slack the node already had
+   published the length before the caller zeroed the bytes, so a stop between
+   them showed bytes the file used to hold. This predates the offset core.
+   A resize now publishes only a shorter length; a longer one is the caller's
+   to publish after the zeroes. Proved by a host row over the prefixes and by
+   its mutation.
+2. Writes that must land before a publication had their answers ignored. The
+   backend contract allows a refusal, so a device could refuse a tail header,
+   take the size that reveals it, and leave a ring nobody can walk. Every
+   prerequisite write is now checked; a refused surplus split leaves the space
+   inside the node, which is sound. Proved by a host row that refuses one
+   write of an operation, over every write of three operations, and by its
+   mutation.
+3. `sizeof(header) + size` could wrap for a size near the top of the range and
+   publish a node smaller than a header. Both the allocator and the resize now
+   refuse a size larger than the region. Proved by a row and its mutation.
+4. The pointer interface ignored its `krffs_file_system_t *` argument and
+   subtracted pointers that need not belong to the image. It now compares
+   addresses, refuses a pointer outside the root's image, and refuses a file
+   system that is not the root's.
+5. A name that filled its 256-byte field with no terminator passed the mount
+   check, and the readers then read past it. The check now refuses such a
+   node, `fsck.krffs` refuses it too, and the path builder is bounded. Proved
+   by a row and its mutation.
+6. Test gaps: the recorder could not refuse a write (fixed, above); no row
+   grew a file inside existing slack (fixed, above); the system suite's grow
+   model wrote one size where the implementation writes two, and its growth
+   was too large to reach the case the two publications exist for (both
+   fixed, with a row for a growth shorter than a header); its move row
+   fabricates the state rather than driving the allocator, which the comment
+   now says, the real relocation being the host rows' business.
+7. Three claims in the Readme did not match the code: a bad backward link is
+   refused by the kernel and repaired only by the host tool; a create
+   publishes the node before its name, leaving a window with no name; and the
+   dirty flag is a fourth thing the tool settles. All three rewritten.
+
+The unit also said what it found sound: the bounds arithmetic, that every ring
+walk is capped, that both published states of the grow are sound, and that
+fsck defers its repairs until after its structural walk.

@@ -424,6 +424,30 @@ int main(int argc, char **argv)
            size of the node before, and the sizes span the region. The forward
            chain is the truth; a backward link that disagrees is repairable
            because it can be derived from the walk that just passed it. */
+        if (node->type == KRFFS_Reserved_Node) {
+            uint32_t i;
+
+            for (i = 0; i < KRFFS_FILE_NAME_BUFFER_SIZE; i++) {
+                if (node->name[i] == '\0') {
+                    break;
+                }
+            }
+            if (i == KRFFS_FILE_NAME_BUFFER_SIZE) {
+                printf(
+                    "- node at position %"PRIu64" has a name with no end\n"
+                    "\n",
+                    krffs_get_node_relative_position(&file_system, node)
+                );
+                fprintf(
+                    stderr,
+                    "Found a node whose name is not terminated. "
+                    "Won't proceed.\n"
+                );
+                exit_status = KRFFS_Node_Size_Error;
+                break;
+            }
+        }
+
         if (steps > 1 && node->previous_node_size != previous_node->size) {
             printf(
                 "! backward link at position %"PRIu64": %"PRIu64" bytes, "
@@ -484,7 +508,7 @@ int main(int argc, char **argv)
 
             printf(
                 "+ reserved node with ID %"PRIu64" at position %"PRIu64": "
-                "%"PRIu64" bytes (%"PRIu64" bytes for data, owner %u:%u) - [%s]\n",
+                "%"PRIu64" bytes (%"PRIu64" bytes for data, owner %u:%u) - [%.255s]\n",
                 node->id,
                 krffs_get_node_relative_position(&file_system, node),
                 node->size,
@@ -581,7 +605,7 @@ int main(int argc, char **argv)
                 duplicates++;
 
                 printf(
-                    "! name [%s] twice in one directory: "
+                    "! name [%.255s] twice in one directory: "
                     "position %"PRIu64" (%"PRIu64" bytes) kept, "
                     "position %"PRIu64" (%"PRIu64" bytes) dropped\n",
                     first->name,

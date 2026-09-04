@@ -14,9 +14,9 @@ The root's mode has one bit the format reserves, `KRFFS_MODE_DIRTY`: the kernel 
 
 ## What a mount requires
 
-Before an image is used the whole ring is walked, and it is refused unless every node has the magic number and a known type, unless every node's size is at least a header and stays inside the region, unless every node's data fits between its header and its end, unless every node's backward link is the size of the node before it and the root's is the size of the last, and unless the walk returns to the root.
+Before an image is used the whole ring is walked, and it is refused unless every node has the magic number and a known type, unless every node's size is at least a header and stays inside the region, unless every node's data fits between its header and its end, unless every reserved node's name ends within its field, unless every node's backward link is the size of the node before it and the root's is the size of the last, and unless the walk returns to the root.
 
-The backward link is the one derived thing in that list: the forward chain already says what it must be. It is checked because a disagreement means something wrote the image without keeping the format's rules, and it is repaired rather than refused.
+The backward link is the one derived thing in that list: the forward chain already says what it must be. The kernel checks it and refuses an image that fails it, because a disagreement means something wrote the image without keeping the format's rules and the kernel has no repair pass of its own. `fsck.krffs` on the host rebuilds it from the forward chain, which is what makes it repairable rather than fatal.
 
 ## The order of writes
 
@@ -30,7 +30,7 @@ The backward link comes last and may lag. Every operation that changes a size re
 
 The operations in those terms:
 
-* Create. Split the free node, write the name and the rest of the header into it, then store the type, which publishes it. A node published before it is named is one no path reaches, and the check reclaims it.
+* Create. Split the free node, write the header's fields into it, then store the type, which publishes the node, and write the name after that. Between the two the node is reserved with no name, which is a node no path reaches; the check reclaims one left there by a stop.
 * Write past the end. Take the whole free node after it with one size, and split the surplus back off with a second: the tail's header is written into space the node already covers, and the size that shortens the node is what reveals it. Then write the caller's bytes, then store `data_size`. Writing that header before the free node is taken would land on the free node's own header whenever the growth is shorter than a header, and leave a torn node in the ring. The growth changes what the node can hold; the length changes only when the bytes are there.
 * Truncate. Store the shorter `data_size` first, since the bytes beyond it stay inside the node, then write the surplus's free header and store the shortened size. A surplus too small to hold a header of its own stays in the node, where a later shrink or a removal reclaims it.
 * Remove. Store the type as free, then merge with a free successor by one size, then with a free predecessor by one size.
@@ -45,4 +45,6 @@ A reserved node with no name, which is a node published before it was named, or 
 
 One name on two nodes in one directory, which is a move that was interrupted. The check keeps the larger node and takes the name off the smaller, which makes it the previous case.
 
-Nothing else. A node whose header is torn, whose size leaves the region, or whose data does not fit is not a state this order of writes can produce, so the check refuses the image and changes nothing rather than guessing what it should have been. `fsck.krffs` on the host makes the same judgements and repairs the same three things; `--strict` there reports them and changes nothing, which is how a test asks whether the kernel left an image clean rather than repairable.
+The dirty flag of an image that was not cleanly unmounted, which says only that a check is owed. `fsck.krffs` clears it once the three above are settled.
+
+Nothing else. A node whose header is torn, whose size leaves the region, whose data does not fit, or whose name never ends is not a state this order of writes can produce, so the check refuses the image and changes nothing rather than guessing what it should have been. `fsck.krffs` on the host makes the same judgements and repairs the four things above; `--strict` there reports them and changes nothing, which is how a test asks whether the kernel left an image clean rather than repairable.

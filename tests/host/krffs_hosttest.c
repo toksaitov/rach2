@@ -109,9 +109,18 @@ static struct {
 
 static int recorded_count;
 static int recording;
+/* Which write the backend refuses, counted from the start of an operation, or
+   -1 for a backend that refuses none. One write and not every write after it:
+   a device that refuses a block and takes the next is what leaves a change
+   published over a write that never landed. */
+static int refused_write = -1;
+static int writes_seen;
 
 static int record_write(void *ctx, uint64_t offset, const void *buffer, uint32_t size)
 {
+    if (writes_seen++ == refused_write) {
+        return -1;
+    }
     if (recording && size <= sizeof(recorded[0].bytes) && recorded_count < WRITES_MAX) {
         recorded[recorded_count].offset = offset;
         recorded[recorded_count].size = size;
@@ -282,6 +291,52 @@ static int prefix_is_sound(const uint8_t *before, int count, uint32_t size)
 }
 
 /**
+ * Every prefix of the writes just recorded, asked whether a file ever claims a
+ * byte past `old_length` that is not a zero.
+ *
+ * That is what a length published before the zeroes it counts looks like: the
+ * file grew into slack it already had, so the bytes under the new length are
+ * whatever it held before rather than the zeroes a growth owes.
+ */
+static int every_prefix_is_zero_filled(const uint8_t *before, uint32_t size, uint64_t old_length)
+{
+    static uint8_t replay[IMAGE_SIZE];
+    krffs_mount_t mount = mount_over(&memory_backend, replay, size);
+    int i;
+
+    for (i = 0; i <= recorded_count; i++) {
+        uint64_t offset = 0;
+        uint64_t steps = 0;
+        krffs_node_t head;
+        int k;
+
+        k_memcpy(replay, before, size);
+        for (k = 0; k < i; k++) {
+            k_memcpy(replay + recorded[k].offset, recorded[k].bytes, recorded[k].size);
+        }
+        do {
+            if (krffs_head(&mount, offset, &head) != 0) {
+                return 0;
+            }
+            if (head.type == KRFFS_RESERVED_NODE) {
+                uint64_t at;
+
+                for (at = old_length; at < head.data_size; at++) {
+                    if (replay[offset + sizeof(krffs_node_t) + at] != 0) {
+                        printf("krffs_hosttest: after %d of %d writes a file claims "
+                               "a byte it did not zero\n",
+                               i, recorded_count);
+                        return 0;
+                    }
+                }
+            }
+            offset = krffs_next_offset(&mount, offset, &head);
+        } while (offset != 0 && ++steps < krffs_max_steps(&mount));
+    }
+    return 1;
+}
+
+/**
  * Every prefix of the writes just recorded, judged. Returns 1 if all are
  * sound.
  */
@@ -298,6 +353,67 @@ static int every_prefix_is_sound(const uint8_t *before, uint32_t size)
         }
     }
     return 1;
+}
+
+/**
+ * Run `what` with the backend refusing write number `which`, and judge what
+ * the file system was left with.
+ *
+ * A backend on a device can refuse a write, and the core must not publish a
+ * change over a write that was refused. Returns 1 if the image is still one a
+ * mount can walk, whatever the operation answered.
+ */
+static int survives_refusal(uint8_t *img, const uint8_t *before, uint32_t size,
+                            void (*what)(krffs_mount_t *), int which)
+{
+    krffs_mount_t mount = mount_over(&recording_backend, img, size);
+    uint64_t offset = 0;
+    uint64_t steps = 0;
+    krffs_node_t head;
+
+    k_memcpy(img, before, size);
+    recording = 0;
+    writes_seen = 0;
+    refused_write = which;
+    what(&mount);
+    refused_write = -1;
+
+    if (!forward_chain_closes(&mount)) {
+        return 0;
+    }
+    do {
+        if (krffs_head(&mount, offset, &head) != 0) {
+            return 0;
+        }
+        if (head.type == KRFFS_RESERVED_NODE) {
+            uint64_t at;
+
+            for (at = 0; at < head.data_size; at++) {
+                if (img[offset + sizeof(krffs_node_t) + at] == POISON) {
+                    return 0;
+                }
+            }
+        }
+        offset = krffs_next_offset(&mount, offset, &head);
+    } while (offset != 0 && ++steps < krffs_max_steps(&mount));
+    return 1;
+}
+
+static void make_a_file(krffs_mount_t *mount)
+{
+    /* A name the image does not have, so the allocator really runs: creating
+       one that exists answers success without taking a node. */
+    krffs_create_at(mount, "/second");
+}
+
+static void grow_a_file(krffs_mount_t *mount)
+{
+    krffs_truncate_at(mount, "/refused", 3000);
+}
+
+static void remove_a_file(krffs_mount_t *mount)
+{
+    krffs_unlink_at(mount, "/refused");
 }
 
 int main(void)
@@ -363,10 +479,34 @@ int main(void)
               "a root whose backward link is not the last node is refused");
         make_image(image, IMAGE_SIZE);
     }
+    {
+        /* A name that fills its field has no end, and everything that reads
+           a name would read past it. */
+        uint64_t offset = sizeof(krffs_node_t);
+
+        image[offset + KRFFS_FIELD_TYPE] = KRFFS_RESERVED_NODE;
+        for (i = 0; i < KRFFS_FILE_NAME_BUFFER_SIZE; i++) {
+            image[offset + KRFFS_FIELD_NAME + i] = 'x';
+        }
+        check(krffs_chain_is_valid(&mount) == 0, "a name that never ends is refused");
+        make_image(image, IMAGE_SIZE);
+    }
+
+    /* A size no region could hold is refused before the arithmetic that adds
+       a header to it can wrap. */
+    check(krffs_allocate_at(&mount, (uint64_t)-1, KRFFS_NO_NODE) == KRFFS_NO_NODE,
+          "a size larger than the region allocates nothing");
+    check(krffs_allocate_at(&mount, IMAGE_SIZE, KRFFS_NO_NODE) == KRFFS_NO_NODE,
+          "and neither does one exactly the region's size");
+    check(krffs_chain_is_valid(&mount) == 1, "and the chain is what it was before both");
 
     /* ---- the operations ---- */
 
     check(krffs_create_at(&mount, "/alpha") == 0, "a file is created");
+    node = krffs_walk(&mount, "/alpha");
+    check(krffs_resize_at(&mount, node, (uint64_t)-1) == KRFFS_NO_NODE,
+          "a resize to more than the region answers nothing");
+    check(krffs_chain_is_valid(&mount) == 1, "and changes nothing");
     check(krffs_chain_is_valid(&mount) == 1, "the chain is sound after it");
     node = krffs_walk(&mount, "/alpha");
     check(node != KRFFS_NO_NODE && node != 0, "and the walk finds it");
@@ -549,6 +689,67 @@ int main(void)
     recording = 0;
     check(every_prefix_is_sound(before, IMAGE_SIZE),
           "every stop inside a removal leaves a chain a mount can walk");
+
+    /* ---- a length raised inside the slack a node already has ---- */
+
+    make_image(image, IMAGE_SIZE);
+    for (i = 2 * (int)sizeof(krffs_node_t); i < (int)IMAGE_SIZE; i++) {
+        image[i] = POISON;
+    }
+    mount = mount_over(&recording_backend, image, IMAGE_SIZE);
+    krffs_create_at(&mount, "/slack");
+    node = krffs_walk(&mount, "/slack");
+    krffs_write_at(&mount, &node, buffer, 108, 0);
+    krffs_truncate_at(&mount, "/slack", 100);
+    node = krffs_walk(&mount, "/slack");
+    check(krffs_head(&mount, node, &head) == 0 && head.data_size == 100 &&
+              head.size == sizeof(krffs_node_t) + 108,
+          "a node keeps the slack a truncate of a few bytes leaves");
+
+    k_memcpy(before, image, IMAGE_SIZE);
+    recorded_count = 0;
+    recording = 1;
+    krffs_truncate_at(&mount, "/slack", 104);
+    recording = 0;
+    check(every_prefix_is_sound(before, IMAGE_SIZE),
+          "every stop inside a growth into that slack leaves a chain a mount "
+          "can walk");
+    check(every_prefix_is_zero_filled(before, IMAGE_SIZE, 100),
+          "and none of them shows a length over bytes the file used to hold");
+    node = krffs_walk(&mount, "/slack");
+    check(krffs_read_at(&mount, node, buffer, 4, 100) == 4 && buffer[0] == 0 && buffer[3] == 0,
+          "and the bytes it grew by are zeroes, not what the file held before");
+
+    /* ---- a backend that refuses a write ---- */
+
+    make_image(image, IMAGE_SIZE);
+    for (i = 2 * (int)sizeof(krffs_node_t); i < (int)IMAGE_SIZE; i++) {
+        image[i] = POISON;
+    }
+    mount = mount_over(&recording_backend, image, IMAGE_SIZE);
+    krffs_create_at(&mount, "/refused");
+    node = krffs_walk(&mount, "/refused");
+    krffs_write_at(&mount, &node, buffer, 64, 0);
+    k_memcpy(before, image, IMAGE_SIZE);
+
+    {
+        int which;
+        int sound = 1;
+
+        for (which = 0; which < 24; which++) {
+            if (!survives_refusal(image, before, IMAGE_SIZE, grow_a_file, which) ||
+                !survives_refusal(image, before, IMAGE_SIZE, remove_a_file, which) ||
+                !survives_refusal(image, before, IMAGE_SIZE, make_a_file, which)) {
+                printf("krffs_hosttest: a backend that refused write %d left "
+                       "an image no mount could walk\n",
+                       which);
+                sound = 0;
+                break;
+            }
+        }
+        check(sound, "a refused write never leaves a chain a mount cannot walk");
+        k_memcpy(image, before, IMAGE_SIZE);
+    }
 
     if (fails == 0) {
         printf("krffs_hosttest: OK\n");
