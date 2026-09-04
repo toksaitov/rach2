@@ -1,7 +1,8 @@
 /*
  * bcache_hosttest.c: the buffer cache against a fake block device.
  *
- * host-deps: rach2/sys/fs/bcache.c rach2/sys/lib/kstring.c
+ * host-deps: rach2/sys/fs/bcache.c rach2/sys/block/chain.c
+ * host-deps: rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
  *
  * The fake device is polled and fault-safe, backed by a memory image whose
@@ -179,13 +180,19 @@ static int fake_write(block_device_t *d, uint64_t lba, uint32_t count, const voi
 }
 
 /* The members in order: the sector size, the count, the flags, the deadline,
-   the two polled calls, the two a sleeping device has, and the driver's own
-   pointer. Written out rather than left to position, so that a member added
-   to the structure is a compile error here and not a silent shift. */
-static block_device_t fake = {512, FAKE_SECTORS, BLOCK_FAULT_SAFE, 0, fake_read, fake_write, 0,
+   the two polled calls, the two a sleeping device has, the device this one's
+   bytes live on, and the driver's own pointer. Written out rather than left to position, so that a
+   member added to the structure is a compile error here and not a silent shift. */
+static block_device_t fake = {512, FAKE_SECTORS, BLOCK_FAULT_SAFE, 0, fake_read, fake_write, 0, 0,
                               0,   image_small};
-static block_device_t other = {512, BIG_SECTORS, BLOCK_FAULT_SAFE, 0, fake_read, fake_write,
+static block_device_t other = {512, BIG_SECTORS, BLOCK_FAULT_SAFE, 0, fake_read, fake_write, 0,
                                0,   0,           image_big};
+/* A device whose bytes live on `fake`: what a loop device is to the volume
+   holding its file. Its own reads and writes go through `fake`, so taking one
+   of its blocks and then one of `fake`'s is the order the rules must allow,
+   and the other way round is the one they must refuse. */
+static block_device_t nested = {512, FAKE_SECTORS, BLOCK_FAULT_SAFE, 0, fake_read, fake_write, 0, 0,
+                                0,   image_small};
 
 int block_request(block_device_t *device, int write, uint64_t lba, uint32_t count, void *data)
 {
@@ -231,6 +238,11 @@ static void write_it(void *arg)
 {
     bcache_write(arg);
 }
+static void get_nested(void *arg)
+{
+    bcache_get(&nested, *(uint64_t *)arg);
+}
+
 static void get_other(void *arg)
 {
     bcache_get(&other, *(uint64_t *)arg);
@@ -438,8 +450,38 @@ int main(void)
         b = bcache_get(&fake, 3);
         panic_row(get_fake, &two, "not above", "a lower block while holding a higher one panics");
         panic_row(get_fake, &three, "not above", "the held block taken again panics");
-        panic_row(get_other, &two, "second device",
+        panic_row(get_other, &two, "not under",
                   "a block on another device while holding one panics");
+        /* A chain of devices: down is allowed, up is not. The buffer held
+           above is let go first, since these rows take blocks of their own. */
+        bcache_release(b);
+        nested.backing = &fake;
+        check(block_depth(&nested) == 1 && block_depth(&fake) == 0,
+              "a device says how many are under it");
+        check(block_is_below(&fake, &nested) && !block_is_below(&nested, &fake),
+              "and which way round they are");
+        {
+            struct bbuf *n = bcache_get(&nested, 5);
+            struct bbuf *under;
+
+            check(n != 0, "a block of the device above is taken");
+            under = bcache_get(&fake, 1);
+            check(under != 0, "and a block of the one under it, which is what its read does");
+            bcache_release(under);
+            bcache_release(n);
+        }
+        {
+            uint64_t five = 5;
+
+            b = bcache_get(&fake, 1);
+            panic_row(get_nested, &five, "not under",
+                      "a block of the device above while holding one under it panics");
+            bcache_release(b);
+        }
+        bcache_invalidate(&nested);
+        nested.backing = 0;
+        b = bcache_get(&fake, 3);
+
         current_proc = &proc_b;
         panic_row(release_it, b, "does not hold",
                   "a release by a process that does not hold the buffer panics");
