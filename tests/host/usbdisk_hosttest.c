@@ -259,6 +259,16 @@ void bcache_device_gone(block_device_t *dev)
     }
 }
 
+/* A stick that goes takes a loop device standing on it with it; the loop
+   layer reaches the VFS, so its rows are the guest's and this is a stub. */
+static int loop_told;
+
+void loop_device_gone(block_device_t *dev)
+{
+    (void)dev;
+    loop_told++;
+}
+
 int bcache_device_holds(block_device_t *dev)
 {
     int n = view_owner(dev);

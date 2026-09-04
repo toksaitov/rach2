@@ -57,7 +57,12 @@ cp "$DISK.inner" "$REPO/build/tests/system/loopimg/inner.bin" || fail "the krffs
 sh "$REPO/krffs/mkimage.sh" "$REPO/krffs/manifests/loopimg-test.manifest" \
     "$DISK.krffs" 4 >/dev/null 2>&1 || fail "the krffs image"
 
+# A second FAT32 image, for the rows that ask what a taken device and a
+# device that will not write answer.
+cp "$DISK.fat" "$DISK.fat2" || fail "the second image"
+
 mcopy -i "$DISK"@@$((PART * 512)) "$DISK.fat" ::/fat.img || fail "mcopy fat.img"
+mcopy -i "$DISK"@@$((PART * 512)) "$DISK.fat2" ::/odd2.img || fail "mcopy odd2.img"
 mcopy -i "$DISK"@@$((PART * 512)) "$DISK.krffs" ::/krffs.img || fail "mcopy krffs.img"
 mcopy -i "$DISK"@@$((PART * 512)) "$DISK.ext2" ::/ext2.img || fail "mcopy ext2.img"
 mcopy -i "$DISK"@@$((PART * 512)) "$DISK.odd" ::/odd.bin || fail "mcopy odd.bin"
@@ -80,12 +85,58 @@ for type in vfat ext2 krffs; do
         || fail "the kernel did not say what it attached"
 done
 
+# The same sequence over a disk that sleeps its caller: the device under the
+# loop device takes a slot of the request pool for every transfer, and the
+# loop device must take none, or the pool of sixteen would run out with
+# everybody waiting for everybody.
+if run --append "rach2.rescue rach2.blocklag=1" --timeout 180 --steptmo 150 \
+    --ok "LOOPPROBE OK (vfat)" --never "LOOPPROBE FAIL" --log "$DISK.lag.log" \
+    "expect=Type 'help'" "send=exec /loopdevprobe vfat" "expect=LOOPPROBE" \
+    > /dev/null 2>&1; then
+    echo "loopdev-test: and all of it again over a disk that sleeps its caller: OK"
+else
+    fail "the boot over a sleeping disk"
+fi
+
+# A stick pulled from under an image mounted on a loop device. The volume of
+# the stick carries the same FAT32 image; the harness pulls the device while
+# the probe is reading through it, and what the machine owes then is an error,
+# two unmounts and the file the attachment held let go of.
+dd if=/dev/zero of="$DISK.stick" bs=1048576 count=32 2>/dev/null || fail "the stick"
+"$REPO/build/tools/image/mkmbr" --lba "$DISK.stick" "$PART:$SECTORS:0c" >/dev/null \
+    || fail "the stick's partition table"
+mformat -i "$DISK.stick"@@$((PART * 512)) -F -T $SECTORS -v LOOPSTICK :: \
+    || fail "mformat the stick"
+mcopy -i "$DISK.stick"@@$((PART * 512)) "$DISK.fat" ::/fat.img || fail "mcopy to the stick"
+
+if "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
+    --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
+    --qemu-arg=-drive --qemu-arg="file=$DISK.stick,format=raw,if=none,id=stick" \
+    --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=stick,id=st0 \
+    --append "rach2.rescue" --timeout 150 --steptmo 120 \
+    --ok "LOOPPROBE OK (pull)" --never "LOOPPROBE FAIL" --log "$DISK.pull.log" \
+    "expect=Type 'help'" "send=exec /loopdevprobe pull" \
+    "expect=LOOPPROBE HOLDING" wait=1 "usb=del:st0" "expect=LOOPPROBE OK" \
+    > /dev/null 2>&1; then
+    echo "loopdev-test: a stick pulled from under a mounted image takes the device with it: OK"
+else
+    fail "the stick-pull boot"
+fi
+grep -aq "loop: loop0: the device under its file has gone" "$DISK.pull.log" \
+    || fail "the kernel did not say the device under the file had gone"
+
 # The KRFFS image the machine wrote, judged by the host's own checker: what a
 # volume that was mounted, written and unmounted owes is a clean image.
 mcopy -i "$DISK"@@$((PART * 512)) ::/krffs.img "$DISK.krffs.after" || fail "mcopy krffs back"
 "$REPO/build/krffs/fsck.krffs" "$DISK.krffs.after" --strict > "$DISK.fsck" 2>&1 \
     || { cat "$DISK.fsck" >&2; fail "the checker finds the image faulty after the boots"; }
-echo "loopdev-test: the host's checker finds the KRFFS image clean after it was written: OK"
+# And the file the machine wrote inside it, read out of the image by the host's
+# own reader: a clean image says nothing about what reached it.
+"$REPO/build/krffs/readfile.krffs" "$DISK.krffs.after" /made.txt "$DISK.krffs.made" \
+    >/dev/null 2>&1 || fail "the host cannot read what the machine wrote"
+grep -q "written through a loop device" "$DISK.krffs.made" \
+    || fail "the host does not find what the machine wrote inside the KRFFS image"
+echo "loopdev-test: the host's checker finds the KRFFS image clean, with the file the machine wrote in it: OK"
 
 # What the machine wrote inside the image is in the image file the host reads,
 # which is what says the writes went through the file and not past it.

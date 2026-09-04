@@ -13,7 +13,13 @@
  * unmount of the volume holding the file, a directory, and a file whose
  * length is not whole sectors.
  *
- * `loopdevprobe vfat` and `loopdevprobe ext2` name the type inside the image.
+ * `loopdevprobe pull` is the stick's row: the image lives on a volume of a
+ * stick, and the harness pulls the stick while the image is mounted. What the
+ * machine owes then is an error from the read in flight, an unmount of the
+ * mount over the device that has gone, and an unmount of the volume the file
+ * was on, since the attachment let go of it when its medium went.
+ *
+ * `loopdevprobe vfat`, `ext2` and `krffs` name the type inside the image.
  * Prints "LOOPPROBE OK (type)" or "LOOPPROBE FAIL: reason". Freestanding;
  * int 0x80.
  */
@@ -44,6 +50,7 @@ typedef unsigned int size_t;
 #define ENOENT 2
 #define EBUSY  16
 #define EINVAL 22
+#define EROFS  30
 #define ELOOP  40
 
 static int sys1(int n, int a)
@@ -234,6 +241,61 @@ void probe_main(unsigned int *sp)
     sys2(SYS_MKDIR, (int)"/m", 0755);
     sys2(SYS_MKDIR, (int)"/l", 0755);
 
+    if (streq(type, "pull")) {
+        int reads = 0;
+
+        rc = sys5(SYS_MOUNT, (int)"/dev/usb0p1", (int)"/m", (int)"vfat", 0, 0);
+        if (rc != 0) {
+            fail_with("mounting the stick's volume", rc);
+        }
+        rc = control("attach 0 /m/fat.img");
+        if (rc != 0) {
+            fail_with("attaching an image on a stick", rc);
+        }
+        rc = sys5(SYS_MOUNT, (int)"/dev/loop0", (int)"/l", (int)"vfat", 0, 0);
+        if (rc != 0) {
+            fail_with("mounting an image on a stick", rc);
+        }
+        expect_file("/l/hello.txt", "hello from inside an image");
+        puts("LOOPPROBE HOLDING");
+
+        /* Read until the stick is not there any more. */
+        for (;;) {
+            int fd2 = sys3(SYS_OPEN, (int)"/l/hello.txt", O_RDONLY, 0);
+
+            if (fd2 < 0) {
+                break;
+            }
+            {
+                char one[8];
+                int got = sys3(SYS_READ, fd2, (int)one, (int)sizeof(one));
+
+                sys1(SYS_CLOSE, fd2);
+                if (got < 0) {
+                    break;
+                }
+            }
+            if (++reads > 100000) {
+                fail("the stick was never pulled");
+            }
+        }
+
+        rc = sys2(SYS_UMOUNT2, (int)"/l", 0);
+        if (rc != 0) {
+            fail_with("unmounting an image whose stick has gone", rc);
+        }
+        rc = control("detach 0");
+        if (rc != 0 && rc != -ENOENT) {
+            fail_with("detaching a device whose stick has gone", rc);
+        }
+        rc = sys2(SYS_UMOUNT2, (int)"/m", 0);
+        if (rc != 0) {
+            fail_with("unmounting the volume of a stick that has gone", rc);
+        }
+        puts("LOOPPROBE OK (pull)");
+        sys_exit(0);
+    }
+
     rc = sys5(SYS_MOUNT, (int)"/dev/disk0p1", (int)"/m", (int)"vfat", 0, 0);
     if (rc != 0) {
         fail_with("mounting the volume that holds the images", rc);
@@ -286,21 +348,24 @@ void probe_main(unsigned int *sp)
             fail("the same file was attached twice");
         }
     }
-    if (control(attach) != -EBUSY) {
-        fail("the device that is taken was taken again");
+    /* Another file, on the device that is taken: the slot is the reason, not
+       the file. */
+    if (control("attach 0 /m/odd2.img") != -EBUSY) {
+        fail("the device that is taken took another file");
     }
     fd = sys3(SYS_OPEN, (int)image, O_WRONLY, 0);
-    if (fd >= 0) {
-        rc = sys3(SYS_WRITE, fd, (int)"x", 1);
-        if (rc != -EBUSY) {
-            fail_with("writing a file that backs a device", rc);
-        }
-        rc = sys2(SYS_FTRUNCATE, fd, 0);
-        if (rc != -EBUSY) {
-            fail_with("truncating a file that backs a device", rc);
-        }
-        sys1(SYS_CLOSE, fd);
+    if (fd < 0) {
+        fail_with("opening a file that backs a device", fd);
     }
+    rc = sys3(SYS_WRITE, fd, (int)"x", 1);
+    if (rc != -EBUSY) {
+        fail_with("writing a file that backs a device", rc);
+    }
+    rc = sys2(SYS_FTRUNCATE, fd, 0);
+    if (rc != -EBUSY) {
+        fail_with("truncating a file that backs a device", rc);
+    }
+    sys1(SYS_CLOSE, fd);
     if (control("detach 0") != -EBUSY) {
         fail("a device with a mount on it was detached");
     }
@@ -317,6 +382,50 @@ void probe_main(unsigned int *sp)
        four buffers a process may hold can serve, and refused for it. */
     if (control("attach 1 /l/inner.bin") != -ELOOP) {
         fail("a device was made to stand on another one");
+    }
+
+    /* What the control node is not: a command with no number, one with a
+       number that is not a device, and one with something after it. */
+    if (control("detach x") != -EINVAL) {
+        fail("a detach with no number was taken");
+    }
+    if (control("detach 0junk") != -EINVAL) {
+        fail("a detach with something after the number was taken");
+    }
+    if (control("attach 9 /m/fat.img") != -EINVAL) {
+        fail("a device that does not exist was attached");
+    }
+    if (control("attach 4294967296 /m/fat.img") != -EINVAL) {
+        fail("a number larger than any device was attached");
+    }
+    if (control("nonsense 0 /m/fat.img") != -EINVAL) {
+        fail("a command that is not one was taken");
+    }
+
+    /* A device that will not write: the mount over it is read-only whatever
+       the mount asked for, and /proc/loop says which. */
+    if (control("attach ro 1 /m/odd2.img") != 0) {
+        fail("attaching a device that will not write");
+    }
+    loop_lines(lines, (int)sizeof(lines));
+    if (!contains(lines, "loop1 ") || !contains(lines, " ro ")) {
+        fail("/proc/loop does not say the device will not write");
+    }
+    sys2(SYS_MKDIR, (int)"/r", 0755);
+    rc = sys5(SYS_MOUNT, (int)"/dev/loop1", (int)"/r", (int)"vfat", 0, 0);
+    if (rc != 0) {
+        fail_with("mounting a device that will not write", rc);
+    }
+    rc = sys3(SYS_OPEN, (int)"/r/made.txt", O_WRONLY | O_CREAT, 0644);
+    if (rc != -EROFS) {
+        fail_with("creating a file on a device that will not write", rc);
+    }
+    rc = sys2(SYS_UMOUNT2, (int)"/r", 0);
+    if (rc != 0) {
+        fail_with("unmounting the device that will not write", rc);
+    }
+    if (control("detach 1") != 0) {
+        fail("detaching the device that will not write");
     }
 
     /* A write through the mount, then the same bytes read back from the file
