@@ -46,4 +46,5 @@ Phase 8: the machine's own build
 - [x] the root rewritten from the current tree, the build repeated, the kernel it builds trial-booted, installed and committed
 
 Phase 9: the record and the sweep
-- [ ] the Readmes, the acceptance script read, the full test set, notes.md closed, 43-machine/Readme.md, the dev-log entry
+- [x] the full test set (two pool failures pass alone); the milestone Readme; the review of the documents, ten findings fixed or recorded
+- [ ] the acceptance script read for lines that prove what another proves; the dev-log entry made final; the machine's root rewritten once more so it carries the line fix

@@ -349,6 +349,33 @@ the file.
   then took the timer's pump. Not reproduced; the record stands for
   the next occurrence.
 
+### The review round at the close
+
+The full set, `tests/run all` on 2026-09-04: 67 suites passed in the
+pool and two, dhcp and procfiles, failed in three seconds each because
+two suites rebuilt `build/images/os-real.krffs` at once and one deleted
+it under the other; both pass alone, dhcp in 342 s and procfiles in
+135 s. The pool building one image from two suites is the runner's to
+fix, recorded here and not fixed in this milestone.
+
+One Codex unit read `Readme.md`, `dev-log/43-machine/Readme.md`,
+`current.md` and the USB Readme against the code and returned ten
+findings. Fixed: the empty drain on the controller's line not writing
+the dequeue pointer, which could leave the interrupter silent (code,
+with a row and a mutation); the ext2 procedure setting recovery as the
+saved default only after the write; the claim that a stick-booted
+recovery refuses `bootctl` by its slot, which the code does not check
+in `env` and `trial`, now stated as what was observed; the boot-time
+enumeration stated as complete where the wait is 400 ms; the macOS
+commands without their devices; the USB Readme's opening still naming
+one class driver; "every track" where the player takes 32; the main
+Readme's claim that a stick can be pulled at any moment, qualified by
+the open panic; two figurative phrases. Left: `current.md` is a handoff
+by its role and reads as one; the hardware readings are `hardware.md`'s
+and not the code's to prove. The line fix is in the tree and not on the
+machine, which runs its own build of the sources before it; the next
+root rewrite carries it.
+
 ### The review round after phase 1
 
 One Codex unit over the four commits (f3d4abe, 40e7055, 8dccf4b,

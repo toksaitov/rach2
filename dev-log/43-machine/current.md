@@ -50,12 +50,11 @@ WAD put back as /doom1.wad on the machine (the machine's /bin/doom is
 the multi-track build, ahead of the ext2 image the tree last wrote).
 Phase 8 is closed: the machine runs the kernel it built itself,
 `8ed3c0f8...`, from the root rewritten from the current tree. Then
-phase 9, begun: the acceptance script passes on the final machine;
-`tests/run all` was started on the host with its log in the scratch
-directory (rerun it if that log is gone). Left for phase 9: the
-Readmes read once for stale claims, the acceptance script read for
-lines that prove what another proves, notes.md closed line by line,
-the `dev-log/Readme.md` entry made final (the milestone Readme with its
-trust statement is written), and a Codex review of the
-reader-facing documents.
+phase 9, nearly closed: the acceptance script passes on the final
+machine; `tests/run all` passed 67 suites with two pool failures that
+pass alone; the milestone Readme is written; the review of the
+documents returned ten findings, fixed or recorded in notes.md. Left:
+the acceptance script read for lines that prove what another proves,
+the `dev-log/Readme.md` entry made final, and one more root rewrite so
+the machine's own build carries the line-path fix of the review.
 File being read when written: none.
