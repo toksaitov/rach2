@@ -771,6 +771,19 @@ static void _krffs_strncpy(char *dest, const char *src, uint32_t n)
  * Stamp a region as a free node of `size` bytes whose predecessor was
  * `previous_node_size` bytes.
  */
+/**
+ * The address `offset` bytes into `node`, folded back into the region.
+ *
+ * A split writes the tail's header through this while the node still covers
+ * that address, so the header is on the medium before the size that reveals
+ * it. See `krffs.Readme.md` for the order every mutation keeps.
+ */
+static krffs_node_t *krffs_node_at_offset(krffs_file_system_t *fs, krffs_node_t *node,
+                                          uint64_t offset)
+{
+    return krffs_wrap_node_position(fs, (krffs_node_t *)((char *)node + offset));
+}
+
 krffs_node_t *krffs_initialize_free_node(krffs_node_t *node, uint64_t size, uint64_t previous_node_size)
 {
     if (!node) {
@@ -811,7 +824,13 @@ void krffs_set_reserved_node_name(krffs_node_t *node, const char *name)
  * `size`. A larger free node is split, leaving the remainder free, unless the
  * remainder is too small to hold a header (then the whole node is taken). If
  * `original` is non-NULL its metadata and data are copied into the new node, as
- * the relocation half of a grow. Returns the node, or NULL if no block fits.
+ * the relocation half of a grow, and the node keeps `original`'s data length
+ * until the caller writes the rest. Returns the node, or NULL if no block fits.
+ *
+ * The split writes the tail's header before the size that reveals it, and the
+ * node is published by its type, written last, so an interrupted allocation
+ * leaves a chain a mount can walk. A node published without a name is an
+ * orphan the check reclaims; every caller names it next.
  */
 krffs_node_t *krffs_allocate_reserved_node(krffs_file_system_t *fs, uint64_t size, krffs_node_t *original)
 {
@@ -835,21 +854,17 @@ krffs_node_t *krffs_allocate_reserved_node(krffs_file_system_t *fs, uint64_t siz
                 /* Split only if the tail can hold a node header of its own;
                  * otherwise leave the slack inside this node. */
                 if (second_half_size >= sizeof(krffs_node_t)) {
-                    krffs_node_t *next_node;
+                    krffs_node_t *tail;
 
+                    tail = krffs_node_at_offset(fs, node, size_with_header);
+                    krffs_initialize_free_node(tail, second_half_size, size_with_header);
                     node->size = size_with_header;
 
-                    next_node = krffs_get_next_node(fs, node);
-                    krffs_initialize_free_node(next_node, second_half_size, size_with_header);
-
                     /* Repair the following node's back link to the new tail. */
-                    next_node = krffs_get_next_node(fs, next_node);
-                    next_node->previous_node_size = second_half_size;
+                    tail = krffs_get_next_node(fs, tail);
+                    tail->previous_node_size = second_half_size;
                 }
             }
-
-            node->type = KRFFS_RESERVED_NODE;
-            node->data_size = size;
 
             if (original) {
                 _krffs_strncpy((char *)node->name, (char *)original->name, KRFFS_FILE_NAME_BUFFER_SIZE);
@@ -866,7 +881,13 @@ krffs_node_t *krffs_allocate_reserved_node(krffs_file_system_t *fs, uint64_t siz
                 if (original->data_size > 0) {
                     _krffs_memcpy(node + 1, original + 1, (uint32_t)original->data_size);
                 }
+
+                node->data_size = original->data_size;
+            } else {
+                node->data_size = size;
             }
+
+            node->type = KRFFS_RESERVED_NODE;
 
             result = node;
         }
@@ -885,6 +906,11 @@ krffs_node_t *krffs_allocate_reserved_node(krffs_file_system_t *fs, uint64_t siz
  * direction a remainder too small for a header is absorbed into the node rather
  * than left as an unusable fragment. Returns the (possibly moved) node, or NULL
  * if a relocation could not find space.
+ *
+ * A grow changes the node's capacity and not its length: `data_size` stays
+ * what it was, and the caller publishes the new length once the bytes are
+ * written. A shrink publishes the shorter length first, since the bytes beyond
+ * it stay inside the node until the size that frees them is written.
  */
 krffs_node_t *krffs_resize_reserved_node(krffs_file_system_t *fs, krffs_node_t *node, uint64_t size)
 {
@@ -914,27 +940,30 @@ krffs_node_t *krffs_resize_reserved_node(krffs_file_system_t *fs, krffs_node_t *
         if (next_node != fs->node &&
             next_node->type == KRFFS_FREE_NODE &&
             next_node->size >= difference) {
-            uint64_t node_size;
+            uint64_t node_size = size_with_header;
             uint64_t next_node_size = next_node->size - difference;
 
-            node->size += difference;
-            node->data_size = size;
-            result = node;
-
-            node_size = node->size;
-
-            if (next_node_size > 0) {
-                if (next_node_size < sizeof(krffs_node_t)) {
-                    /* Remainder cannot hold a header: absorb it. */
-                    node->size += next_node_size;
-                } else {
-                    node = krffs_get_next_node(fs, node);
-                    krffs_initialize_free_node(node, next_node_size, node_size);
-                }
+            if (next_node_size > 0 && next_node_size < sizeof(krffs_node_t)) {
+                /* Remainder cannot hold a header: absorb it. */
+                node_size += next_node_size;
+                next_node_size = 0;
             }
 
+            if (next_node_size > 0) {
+                krffs_initialize_free_node(krffs_node_at_offset(fs, node, node_size),
+                                           next_node_size, node_size);
+            }
+
+            node->size = node_size;
+            result = node;
+
             next_node = krffs_get_next_node(fs, node);
-            next_node->previous_node_size = node->size;
+            if (next_node_size > 0) {
+                next_node = krffs_get_next_node(fs, next_node);
+                next_node->previous_node_size = next_node_size;
+            } else {
+                next_node->previous_node_size = node_size;
+            }
         } else {
             /* No adjacent room: relocate, then free the old node. */
             result = krffs_allocate_reserved_node(fs, size, node);
@@ -945,26 +974,27 @@ krffs_node_t *krffs_resize_reserved_node(krffs_file_system_t *fs, krffs_node_t *
     } else {
         uint64_t difference = node->size - size_with_header;
 
-        node->size = size_with_header;
         node->data_size = size;
         result = node;
 
-        if (next_node->type == KRFFS_FREE_NODE) {
-            /* Merge the surplus with the following free node. */
-            node = krffs_get_next_node(fs, node);
-            krffs_initialize_free_node(node, difference + next_node->size, size_with_header);
-            next_node = krffs_get_next_node(fs, node);
+        if (difference < sizeof(krffs_node_t)) {
+            /* Surplus cannot hold a header of its own: leave it in the node,
+             * where a later shrink or a removal reclaims it. */
         } else {
-            if (difference < sizeof(krffs_node_t)) {
-                /* Surplus cannot hold a header: absorb it. */
-                node->size += difference;
-            } else {
-                node = krffs_get_next_node(fs, node);
-                krffs_initialize_free_node(node, difference, size_with_header);
-            }
-        }
+            uint64_t free_size = difference;
 
-        next_node->previous_node_size = node->size;
+            if (next_node->type == KRFFS_FREE_NODE) {
+                /* Merge the surplus with the following free node. */
+                free_size += next_node->size;
+            }
+
+            krffs_initialize_free_node(krffs_node_at_offset(fs, node, size_with_header),
+                                       free_size, size_with_header);
+            node->size = size_with_header;
+
+            next_node = krffs_get_next_node(fs, krffs_get_next_node(fs, node));
+            next_node->previous_node_size = free_size;
+        }
     }
 
     return result;
@@ -1152,9 +1182,8 @@ int krffs_write_node(krffs_node_t **nodep, const char *buffer, uint32_t size,
     }
     node = *nodep;
     base = node + 1;
-    /* Taken BEFORE the resize below, which sets `data_size` itself when it can
-     * grow the node in place. Read afterwards it is already the new size, and
-     * the gap test below would never fire. */
+    /* The length before the write, which the hole below is measured from and
+     * which a relocation carries to the node it returns. */
     old_data_size = node->data_size;
     available_space = node->size - sizeof(krffs_node_t);
     /* A write of nothing does nothing. POSIX says a successful zero-byte write
@@ -1183,10 +1212,10 @@ int krffs_write_node(krffs_node_t **nodep, const char *buffer, uint32_t size,
         k_memset((char *)base + old_data_size, 0,
                  (uint32_t)((uint64_t)offset - old_data_size));
     }
+    _krffs_memcpy((char *)base + offset, buffer, size);
     if (new_size > node->data_size) {
         node->data_size = new_size;
     }
-    _krffs_memcpy((char *)base + offset, buffer, size);
     krffs_stamp(node, KRFFS_STAMP_DATA);
     return (int)size;
 }
@@ -1251,6 +1280,7 @@ int krffs_truncate(const char *path, uint32_t new_size)
         uint32_t fill_size = new_size - (uint32_t)old_data_size;
         k_memset(dest, 0, fill_size);
     }
+    node->data_size = new_size;
     krffs_stamp(node, KRFFS_STAMP_DATA);
 
     return 0;
