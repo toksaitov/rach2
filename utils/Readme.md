@@ -45,7 +45,7 @@ The native and Rach2 builds both provide:
 
 These are small teaching implementations, not complete POSIX commands. Except for `rm -r`, they do not parse options.
 
-`loopctl` attaches a file to a loop device, detaches one, or prints what `/proc/loop` says. `loopctl attach FILE` takes the first free device, `loopctl attach N FILE` takes that one, and `loopctl detach N` gives it back; the device is then what `mount(2)` takes as its source, so a file system in a file is mounted like any other volume. The kernel is spoken to through `/dev/loop-control`, which takes one command per write ([block/Readme.md](../rach2/sys/block/Readme.md)).
+`loopctl` attaches a file to a loop device, detaches one, or prints what `/proc/loop` says. `loopctl attach FILE` takes the first free device, `loopctl attach N FILE` takes that one, `loopctl attach -r [N] FILE` takes one that will not write, and `loopctl detach N` gives it back; the device is then what `mount(2)` takes as its source, so a file system in a file is mounted like any other volume. The kernel is spoken to through `/dev/loop-control`, which takes one command per write ([block/Readme.md](../rach2/sys/block/Readme.md)).
 
 ## Network programs
 

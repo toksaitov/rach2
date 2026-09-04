@@ -150,3 +150,49 @@ caller holding one device's block may take a block of a device under it and
 not one above it. The dispatch itself, and that such a device takes no slot
 of the request pool, are the guest's rows in phases 6 and 7, where a loop
 device exists to be driven.
+
+## The Codex review at the phase 6 boundary
+
+One unit, six files (`loop.c`, `loop.h`, `chain.c`, `bcache.c`,
+`loopdevprobe.c`, `loopdev.sh`), read-only, on tree f428c93. Twelve findings,
+all fixed:
+
+1. A dirty victim of a loop device was written with the caller's holds
+   already at the limit, so the write's own re-entry took a fifth buffer and
+   stopped the machine. The cache now passes over such a victim unless there
+   is room for two more.
+2. `bcache_sync` waited for a buffer its own caller held, which nothing could
+   end. A sync while holding a block of the device it syncs is now named as
+   the defect it is.
+3. The attachment claimed its slot only after everything that can sleep, so
+   two attaches could publish over each other. The slot is claimed first, the
+   file is checked again after the open, and every failure gives the slot
+   back.
+4. A medium that went while a transfer was inside the file system holding the
+   file cleared the state that transfer was using. Transfers are counted now,
+   and the release waits for the last one out.
+5. Detach had the same shape; it refuses while a transfer is in flight.
+6. The transfer callbacks trusted their caller. They check the sector range
+   and the byte arithmetic themselves.
+7. The control node took `detach x`, `detach 0junk` and numbers that overflow.
+   A device number is read in one place, must be a number, must name one of
+   the four devices, and nothing may follow it.
+8. The control node has no privilege check of its own; the node is 0600 and
+   owned by root, which is the check, and the Readme now says so.
+9. The rows that ask what a write to an attached file answers ran only if the
+   open succeeded. The open must succeed.
+10. The row for a device that is taken used the file that was already
+    attached, so the duplicate rule answered it. It uses another image now.
+11. The row that called the KRFFS image clean proved nothing about what had
+    reached it. The host's own reader now reads the file the machine wrote
+    out of the image.
+12. `BLOCK_READ_ONLY` had no coverage, and the reason turned out to be that
+    only one file system honoured it: a write-protected stick would have been
+    mounted read-write by the other three. The mount table now forces
+    `MS_RDONLY` for a medium that refuses writes, which is one place rather
+    than four, and a row attaches a device read-only and is refused a create.
+
+Each fix was proved by putting it back the way it was, except the two the
+review named as depending on code outside its six files (the transfer bounds,
+which the block layer also checks, and the privilege of the control node,
+which is the node's mode).
