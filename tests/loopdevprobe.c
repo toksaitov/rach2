@@ -537,6 +537,10 @@ void probe_main(unsigned int *sp)
             fail("removing the spare file");
         }
     }
+    /* And an open that truncates is a change of its length like any other. */
+    if (sys3(SYS_OPEN, (int)"/ram.img", O_WRONLY | O_TRUNC, 0) != -EBUSY) {
+        fail("an attached image was truncated by an open");
+    }
     rc = sys5(SYS_MOUNT, (int)"/dev/loop0", (int)"/l", (int)type, MS_RDONLY, 0);
     if (rc != 0) {
         fail_with("mounting an image that lives in memory", rc);

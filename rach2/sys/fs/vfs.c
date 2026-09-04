@@ -657,6 +657,13 @@ int32_t vfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t
 
 int vfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
 {
+    /* The length of a file that backs a loop device is that device's sector
+     * count, so nothing changes it here either: `open(O_TRUNC)` reaches this
+     * with the node as its handle, and a descriptor's `ftruncate` reaches it
+     * with the handle its open was given. */
+    if (loop_backs(mnt, handle)) {
+        return -EBUSY;
+    }
     if ((mnt->flags & VFS_MS_RDONLY) || !mnt->type->ops->truncate) {
         return -EROFS;
     }
@@ -1154,6 +1161,7 @@ static const struct vfs_ops krffs_ops = {
     kfs_rename,  0,              /* link: KRFFS has none */
     0,                           /* readlink: KRFFS has none */
     kfs_statfs,  kfs_sync,    0, /* prepare_unmount: the root is permanent */
+    0,                           /* abort_unmount */
     0,                           /* unmount */
     0,                           /* path: KRFFS directories do not move */
     0, /* symlink */
@@ -1330,6 +1338,7 @@ static const struct vfs_ops devfs_vops = {
     0, 0,          0,          0,         0,
     0, 0,          0,          0,         0,
     0, 0,          0,          0,         0,
+    0, /* abort_unmount */
     0, /* symlink */
 };
 
@@ -1339,6 +1348,7 @@ static const struct vfs_ops procfs_vops = {
     0, 0,           0,          0,         0,
     0, 0,           0,          0,         0,
     0, 0,           0,          0,         0,
+    0, /* abort_unmount */
     0, /* symlink */
 };
 
@@ -1674,6 +1684,24 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
 }
 
 /**
+ * An unmount that prepared and could not be finished, so the mount stays.
+ *
+ * The type wrote its last metadata for a volume that is going away; the
+ * volume is not going away, and what it wrote says otherwise. A type that
+ * cannot put it back leaves a mount nobody may write, which is the answer
+ * that cannot be wrong.
+ */
+static void unmount_abandoned(struct vfs_mount *m)
+{
+    if (m->dev && (m->dev->flags & BLOCK_GONE)) {
+        return; /* nothing was written and nothing can be */
+    }
+    if (m->type->ops->abort_unmount) {
+        m->type->ops->abort_unmount(m);
+    }
+}
+
+/**
  * umount2(2): the mount goes to `unmounting`, which refuses new work; the
  * in-progress count drains; the reference count is checked; sync and
  * prepare_unmount; the cache's dirty buffers are written, a failure here
@@ -1737,6 +1765,7 @@ int vfs_do_umount(const char *target)
         }
     }
     if (!gone && bcache_sync(m->dev) != 0) {
+        unmount_abandoned(m);
         vfs_ns_unlock(m);
         m->state = VFS_ACTIVE;
         return -EIO; /* nothing irreversible has happened yet */
@@ -1744,11 +1773,13 @@ int vfs_do_umount(const char *target)
     /* The buffers are on the wire; a stick keeps a cache of its own, and
      * what is in it is not on the medium until it is told. */
     if (!gone && block_flush(m->dev) != 0) {
+        unmount_abandoned(m);
         vfs_ns_unlock(m);
         m->state = VFS_ACTIVE;
         return -EIO;
     }
     if (bcache_invalidate(m->dev) != 0) {
+        unmount_abandoned(m);
         vfs_ns_unlock(m);
         m->state = VFS_ACTIVE;
         return -EBUSY; /* a buffer of the device is still held or dirty */

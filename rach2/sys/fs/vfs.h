@@ -178,8 +178,14 @@ struct vfs_ops {
     /* The two halves of an unmount. The first writes the volume's last
      * metadata into cache buffers and dismantles nothing, so it can be
      * repeated or abandoned; the second frees the private state and is not
-     * undone. The buffer cache is written between them. */
+     * undone. The buffer cache is written between them.
+     *
+     * `abort_unmount` is what abandoning it looks like: the unmount got past
+     * `prepare_unmount` and then could not be finished, so the mount stays
+     * and the type puts back what it wrote for an unmount that is not
+     * happening. NULL for a type with nothing to put back. */
     int (*prepare_unmount)(struct vfs_mount *mnt);
+    void (*abort_unmount)(struct vfs_mount *mnt);
     void (*unmount)(struct vfs_mount *mnt);
     /* The canonical path of a directory node within the mount, for a
      * directory descriptor's `*at` calls after a rename; NULL for a type

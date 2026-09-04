@@ -2991,7 +2991,9 @@ static const struct vfs_ops vfat_ops = {
     fat_read,   fat_write, fat_truncate,        fat_fsync,   fat_readdir, fat_create,
     fat_unlink, fat_mkdir, fat_rmdir,           fat_rename,  0, /* link */
     0,                                                          /* readlink */
-    fat_statfs, fat_sync,  fat_prepare_unmount, fat_unmount, fat_path,
+    fat_statfs, fat_sync,  fat_prepare_unmount,
+    0, /* abort_unmount */
+    fat_unmount, fat_path,
     0, /* symlink */
 };
 

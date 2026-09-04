@@ -188,7 +188,13 @@ int loop_backs(struct vfs_mount *mnt, void *node)
     int i;
 
     for (i = 0; i < LOOP_DEVICES; i++) {
-        if (loops[i].mnt == mnt && loops[i].node == node) {
+        if (loops[i].mnt != mnt) {
+            continue;
+        }
+        /* By either name the file goes under: callers that have a node ask
+         * with a node, and callers that have a description ask with the
+         * handle the file system gave its open. */
+        if (loops[i].node == node || loops[i].handle == node) {
             return 1;
         }
     }

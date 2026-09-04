@@ -3741,7 +3741,9 @@ static const struct vfs_ops exfat_ops = {
     ex_read,   ex_write, ex_truncate,        ex_fsync,   ex_readdir, ex_create,
     ex_unlink, ex_mkdir, ex_rmdir,           ex_rename,  0, /* link */
     0,                                                      /* readlink */
-    ex_statfs, ex_sync,  ex_prepare_unmount, ex_unmount, ex_path,
+    ex_statfs, ex_sync,  ex_prepare_unmount,
+    0, /* abort_unmount */
+    ex_unmount, ex_path,
     0, /* symlink */
 };
 

@@ -839,6 +839,28 @@ static int kv_sync(struct vfs_mount *mnt)
  * The flag is cleared only after everything else has reached the medium, so
  * a volume that says it is clean is one whose last write landed.
  */
+/**
+ * The unmount that wrote the clean flag is not happening after all.
+ *
+ * The flag says a volume nobody is writing, and this one is still mounted
+ * and writable. It goes back on; a volume that will not take it is one no
+ * check would repair after a stop, so the mount takes no more writes.
+ */
+static void kv_abort_unmount(struct vfs_mount *mnt)
+{
+    struct krffs_volume *vol = vol_of(mnt);
+
+    if (!vol->writable || (mnt->flags & VFS_MS_RDONLY)) {
+        return;
+    }
+    if (krffs_set_dirty(&vol->fs, 1) != 0 || bcache_sync(vol->dev) != 0 ||
+        block_flush(vol->dev) != 0) {
+        klog(KLOG_WARN, "krffs",
+             "unmount: the volume would not take its dirty flag back: read-only");
+        mnt->flags |= VFS_MS_RDONLY;
+    }
+}
+
 static int kv_prepare_unmount(struct vfs_mount *mnt)
 {
     struct krffs_volume *vol = vol_of(mnt);
@@ -880,7 +902,8 @@ static const struct vfs_ops krffs_volume_ops = {
     kv_unlink,   kv_mkdir,   kv_rmdir, kv_rename,
     0,              /* link: KRFFS has none */
     0,              /* readlink: KRFFS has none */
-    kv_statfs,   kv_sync,    kv_prepare_unmount, kv_unmount, kv_path,
+    kv_statfs,   kv_sync,    kv_prepare_unmount, kv_abort_unmount,
+    kv_unmount,  kv_path,
     0, /* symlink */
 };
 
