@@ -126,15 +126,21 @@ say "a free node whose length is larger than the node is accepted, as the kernel
 # two writing at once leave whole files.
 VOLDIR="$REPO/build/tests/system/krffsvol"
 mkdir -p "$VOLDIR"
-python3 - "$VOLDIR/pattern.bin.$$" <<'PY' || bad "the pattern file"
+# The three are put in place only when all three were written whole, so a
+# failure here cannot replace a whole file of the other suite's with a
+# partial one.
+if python3 - "$VOLDIR/pattern.bin.$$" <<'PY' &&
 import sys
 open(sys.argv[1], 'wb').write(bytes((i * 31 + 7) & 0xFF for i in range(65536)))
 PY
-printf 'hello\n' > "$VOLDIR/hello.txt.$$"
-printf 'inner\n' > "$VOLDIR/inner.txt.$$"
-for f in pattern.bin hello.txt inner.txt; do
-    mv "$VOLDIR/$f.$$" "$VOLDIR/$f" || bad "the fixture files"
-done
+    printf 'hello\n' > "$VOLDIR/hello.txt.$$" && printf 'inner\n' > "$VOLDIR/inner.txt.$$"; then
+    for f in pattern.bin hello.txt inner.txt; do
+        mv "$VOLDIR/$f.$$" "$VOLDIR/$f" || bad "the fixture files"
+    done
+else
+    rm -f "$VOLDIR/pattern.bin.$$" "$VOLDIR/hello.txt.$$" "$VOLDIR/inner.txt.$$"
+    bad "the fixture files could not be written"
+fi
 DUP="$DIR/dirdup.krffs"
 sh "$REPO/krffs/mkimage.sh" "$REPO/krffs/manifests/krffsvol-test.manifest" \
     "$DUP" 4 >/dev/null 2>&1 || bad "the image with a directory in it"

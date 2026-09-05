@@ -193,6 +193,7 @@ void block_partition_init(
  */
 struct block_request {
     block_device_t *device;
+    block_device_t *owner; /* the device the slot is accounted to */
     int write;
     uint64_t lba;
     uint32_t count;        /* sectors, at most BLOCK_REQ_SECTORS */
@@ -277,6 +278,21 @@ int block_device_holds(block_device_t *device);
 void block_request_tick(void);
 
 /**
+ * Read `rach2.blockpool` and size the pool, once, before any device can
+ * submit; a later call does nothing. The boot calls it before the disk is
+ * probed, and the first request calls it too, in case nothing else did.
+ */
+void block_request_init(void);
+
+/**
+ * The device whose `submit` answers for `dev`: a partition view's backing,
+ * followed to a device that is not a view; `dev` itself otherwise. The
+ * request pool accounts a slot to this device, so a stick's views share
+ * the stick's share of the pool and its stall.
+ */
+block_device_t *block_submitter(block_device_t *dev);
+
+/**
  * The lag test device: `rach2.blocklag=N` wraps the boot disk for the
  * partition nodes and the mounts in a device without `BLOCK_FAULT_SAFE` whose
  * requests complete N ticks later, from the timer. The root window keeps the
@@ -287,8 +303,18 @@ block_device_t *block_lag_wrap(block_device_t *backing);
 /** Complete lagged requests whose ticks have passed; the timer calls it. */
 void block_lag_tick(void);
 
-/** The disk the lag device wraps, or NULL when `dev` is not the lag device. */
+/** The disk the lag device wraps, or NULL when `dev` is not the lag device
+ * or the never-answering device beside it. */
 block_device_t *block_lag_backing(block_device_t *dev);
+
+/**
+ * The device a partition view starting at `start_lba` of `backing` is built
+ * over: under `rach2.blockdead=P`, for partition `P` of the lag device, a
+ * device of its own that accepts every request and answers none, so a
+ * device that stalls has a healthy neighbour on the same pool; `backing`
+ * itself otherwise.
+ */
+block_device_t *block_lag_partition_backing(block_device_t *backing, uint64_t start_lba);
 
 /**
  * The disk under `dev`: a partition view's backing, the lag device's disk,

@@ -31,19 +31,20 @@
  * `lagprobe writers`: two children write files on the lagged volume while
  * the parent syncs it; each file reads back as its own bytes.
  *
- * `lagprobe pool`, under `rach2.blockpool=2` with the lag: three readers on
- * two slots, one of the raw first partition and two of files on the mounted
- * second one, whose view may hold one slot, so one of the two waits for the
- * other's; every read succeeds, a file is then written and synced, which is
- * a flush through the pool, and the mount is still writable.
+ * `lagprobe pool`, under `rach2.blockpool=2` with the lag: three readers
+ * and a writer on two slots, of which the disk may hold one, so whoever
+ * finds the share taken waits for it; every read succeeds, the write is
+ * synced while they run, which is a flush through the pool, and the mount
+ * is still writable.
  *
  * `lagprobe dead`, under `rach2.blockdead=1 rach2.blockpool=2` with the lag:
- * the first partition never answers. A child's raw read of it holds the one
- * slot its view may have; the parent's mount of the same partition waits
- * for that slot, and when the read's deadline quarantines it the device is
- * stalled, the waiter is released with EIO, and the read answers EIO at that
- * same deadline. Then the FAT32 volume on the second partition, on the same
- * pool, is mounted, written and synced.
+ * the first partition is a device that never answers. A child's raw read of
+ * it holds the one slot that device may have; the parent's mount of the
+ * same partition waits for that slot, and when the read's deadline
+ * quarantines it the device is stalled, the waiter is released with EIO, and
+ * the read answers EIO at that same deadline. Then the FAT32 volume on the
+ * second partition, the lag device on the same pool, is mounted, written and
+ * synced.
  *
  * Prints "LAGPROBE OK" or "LAGPROBE FAIL: reason". Freestanding; int 0x80.
  */
@@ -714,8 +715,7 @@ static int mount_is_ro(const char *dir)
 }
 
 /* On the FAT32 volume mounted at `dir`: a file written and synced, a
- * second file created after the sync, the mount still writable, and the
- * volume unmounted. */
+ * second file created after the sync, and the mount still writable. */
 static void write_and_sync(const char *dir, const char *first, const char *second)
 {
     int fd;
@@ -735,9 +735,6 @@ static void write_and_sync(const char *dir, const char *first, const char *secon
     syscall1(SYS_CLOSE, fd);
     if (mount_is_ro(dir)) {
         fail("the mount went read-only");
-    }
-    if (syscall2(SYS_UMOUNT2, (int)dir, 0) != 0) {
-        fail("umount2 of the volume");
     }
 }
 
@@ -765,6 +762,12 @@ static int child_result(int got, int want)
     return 0;
 }
 
+/* Three readers and a writer on a pool of two slots, the device's share
+ * one: the raw reads of the first partition go one at a time through the
+ * raw window, the two readers of files on the mounted volume and the
+ * parent's write and sync join them, and whoever finds the share taken
+ * waits. The sync runs while the readers run, so its flush is submitted
+ * against the contention and not after it. */
 static void run_pool(void)
 {
     int a, b, c;
@@ -775,10 +778,6 @@ static void run_pool(void)
     if (sys5(SYS_MOUNT, (int)"/dev/disk0p2", (int)"/lp", (int)"vfat", 0, 0) != 0) {
         fail("the writable mount of the second partition");
     }
-    /* Three readers on two slots: the raw reads of the first partition go
-     * one at a time through the raw window, so the contention is between
-     * the two readers of the mounted volume, whose view may hold one slot
-     * of a pool of two, and the raw reader holds the other. */
     a = syscall1(SYS_FORK, 0);
     if (a == 0) {
         child_result(read_part(sizeof(sector_buf)), (int)sizeof(sector_buf));
@@ -794,22 +793,26 @@ static void run_pool(void)
     if (a < 0 || b < 0 || c < 0) {
         fail("fork of a reader");
     }
+    write_and_sync("/lp", "/lp/POOL.TXT", "/lp/AGAIN.TXT");
     if (wait_status(a) != 0 || wait_status(b) != 0 || wait_status(c) != 0) {
         fail("a reader under the small pool failed");
     }
-    write_and_sync("/lp", "/lp/POOL.TXT", "/lp/AGAIN.TXT");
+    if (syscall2(SYS_UMOUNT2, (int)"/lp", 0) != 0) {
+        fail("umount2 of the volume");
+    }
     puts("LAGPROBE OK");
 }
 
+/* The raw reader's request holds the one slot the first partition's device
+ * may have and is never answered; the mount of the same partition then
+ * waits for that slot, and both must end at the reader's deadline. The
+ * second partition is another device on the same pool and still writes. */
 static void run_dead(void)
 {
     unsigned start = now_ms();
     unsigned elapsed;
     int a, rc;
 
-    /* The raw reader's request holds the one slot the first partition's
-     * view may have and is never answered; the mount of the same partition
-     * then waits for that slot, and both must end at the reader's deadline. */
     a = syscall1(SYS_FORK, 0);
     if (a == 0) {
         child_result(read_part(512), -EIO);
@@ -839,6 +842,9 @@ static void run_dead(void)
         fail("the writable mount of the second partition");
     }
     write_and_sync("/ld", "/ld/DEAD.TXT", "/ld/AGAIN.TXT");
+    if (syscall2(SYS_UMOUNT2, (int)"/ld", 0) != 0) {
+        fail("umount2 of the volume");
+    }
     puts("LAGPROBE OK");
 }
 

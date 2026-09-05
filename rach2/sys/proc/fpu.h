@@ -6,16 +6,17 @@
  *
  * The state is kept eagerly: `schedule` saves the outgoing process's
  * registers into its record and loads the incoming one's before the stack
- * changes hands, so two programs that both compute in floating point never
+ * pointer changes, so two programs that both compute in floating point never
  * see each other's registers. The kernel itself computes in none, which is
  * what lets the save and the restore stand at the switch alone.
  *
  * Two formats. When `cpuid` reports FXSR and `rach2.nofxsr` is not on the
  * boot line, `fxsave` and `fxrstor` keep the x87 and the XMM registers with
- * MXCSR in 512 bytes at a 16-byte alignment, and CR4.OSFXSR is set so the
- * SSE instructions run. Otherwise `fnsave` and `frstor` keep the x87 state
- * in the first 108 bytes, CR4.OSFXSR stays clear, and an SSE instruction is
- * an invalid opcode: a register file that is not saved is not offered.
+ * MXCSR in 512 bytes at a 16-byte alignment, and CR4.OSFXSR is set, when
+ * `cpuid` reports SSE as well, so the SSE instructions run. Otherwise
+ * `fnsave` and `frstor` keep the x87 state in the first 108 bytes,
+ * CR4.OSFXSR is cleared, and an SSE instruction is an invalid opcode: a
+ * register file that is not saved is not offered.
  */
 
 /** The bytes a save area has, the `fxsave` image; `fnsave` uses 108 of it. */

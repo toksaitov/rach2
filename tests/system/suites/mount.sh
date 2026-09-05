@@ -203,30 +203,32 @@ else
     fail "the blockfail boot"
 fi
 
-# ---- 10: the pool shrunk to two slots, so a device may hold one: three
-#          readers on two slots, and the one that finds none waits instead of
-#          failing; every read succeeds, a sync's flush goes through the pool,
-#          and the mount stays writable ----
+# ---- 10: the pool shrunk to two slots, so the disk may hold one: three
+#          readers and a writer, and whoever finds the share taken waits
+#          instead of failing; every read succeeds, the sync's flush goes
+#          through the pool while they run, and the mount stays writable ----
 if run --append "rach2.blocklag=10 rach2.blockpool=2 rach2.rescue" \
     --timeout 120 --steptmo 60 --ok "LAGPROBE OK" --never "LAGPROBE FAIL" \
     --log "$DISK.pool.log" \
     "expect=Type 'help'" "send=exec /lagprobe pool" \
-    "expect=request pool: waiting for a slot" \
+    "expect=request pool: waiting for a slot: the device holds its share" \
+    "expect=lag: flush answered" \
     "expect=LAGPROBE OK" > /dev/null 2>&1; then
     echo "mount-test: a full pool makes a request wait, not fail: OK"
 else
     fail "the pool boot"
 fi
 
-# ---- 11: the first partition never answers: the raw reader's slot is
-#          quarantined at the deadline, the mount waiting behind it is released
-#          with EIO the same tick with no deadline of its own, and the second
-#          partition on the same pool still writes ----
+# ---- 11: the first partition is a device that never answers: the raw
+#          reader's slot is quarantined at the deadline, the mount waiting
+#          behind it is released with EIO the same tick with no deadline of its
+#          own, and the second partition, the lag device on the same pool,
+#          still writes ----
 if run --append "rach2.blocklag=10 rach2.blockdead=1 rach2.blockpool=2 rach2.rescue" \
     --timeout 120 --steptmo 60 --ok "LAGPROBE OK" --never "LAGPROBE FAIL" \
     --log "$DISK.dead.log" \
     "expect=Type 'help'" "send=exec /lagprobe dead" \
-    "expect=request pool: waiting for a slot" "expect=quarantined" \
+    "expect=request pool: waiting for a slot: the device holds its share" "expect=quarantined" \
     "expect=device stalled: waiter released with EIO" \
     "expect=LAGPROBE OK" > /dev/null 2>&1; then
     echo "mount-test: a stalled device fails its own callers and no other: OK"

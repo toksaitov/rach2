@@ -1573,8 +1573,9 @@ void devfs_parts_publish(struct block_device *backing, const struct mbr_part *en
             part_win[i].present = 0;
             continue;
         }
-        block_partition_init(&part_win[i].part, backing, entries[i].start_lba,
-                             entries[i].sector_count);
+        block_partition_init(&part_win[i].part,
+                             block_lag_partition_backing(backing, entries[i].start_lba),
+                             entries[i].start_lba, entries[i].sector_count);
         part_win[i].present = 1;
     }
 }

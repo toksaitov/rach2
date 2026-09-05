@@ -41,6 +41,12 @@ int sched_is_enabled(void)
  * switch, and restores it afterward. Each process does this symmetrically
  * and resumes with its own IF; a process entered for the first time skips
  * the restore and takes its IF from iret instead.
+ *
+ * The floating-point registers are the one part of the processor
+ * `switch_context` does not touch. They are saved into the outgoing record
+ * and loaded from the incoming one here, inside the same masked window and
+ * before the stack pointer changes; the kernel computes in none of them, so
+ * nothing between the load and the switch can disturb the loaded state.
  */
 void schedule(void)
 {
@@ -93,9 +99,6 @@ void schedule(void)
                          : "=r"(saved_flags)
                          :
                          : "memory");
-    /* The floating-point registers are the one part of the processor
-     * `switch_context` does not touch; the kernel computes in none, so the
-     * incoming state can be loaded before the stack changes hands. */
     fpu_save(old->fpu);
     fpu_restore(next->fpu);
     current_proc = next;

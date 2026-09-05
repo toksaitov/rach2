@@ -1319,6 +1319,9 @@ static void exec_program(int argc, char *argv[])
     user_proc->parent_pid = current_proc ? current_proc->pid : 0;
     proc_set_comm(user_proc, path); /* program name for /proc/<pid>/stat and ps */
     current_proc = user_proc;
+    /* Entered without a switch, so the registers are loaded here: the
+     * program before it may have left its own state in them. */
+    fpu_restore(user_proc->fpu);
 
     /* The ELF segments are loaded eagerly above; these VMAs let the
      * demand-paging fault handler resolve later heap/stack/mmap faults. */
@@ -2975,6 +2978,7 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     klog(KLOG_INFO, "boot", "isr: ready");
 
     fpu_init();
+    block_request_init();
 
     init_mm();
     klog(KLOG_INFO, "boot", "memory manager: ready");

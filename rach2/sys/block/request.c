@@ -13,12 +13,14 @@
  * of a request starts when its slot is taken, which is when the transfer
  * starts, and not when the caller began to wait. Two rules keep a waiter
  * from waiting for ever on slots that will never free themselves. Failure
- * is per device: a device whose every slot is quarantined past its deadline
- * is stalled, and its waiters and its later callers answer `EIO` until it
- * answers something late. And no device may hold more than half of the
- * pool, so a stalled device leaves the other half to the healthy ones; a
- * waiter that finds no slot in flight anywhere is released with `EIO` too,
- * since nothing but a late answer could free one.
+ * is per device, where a device is the one whose `submit` answers, a stick
+ * and not each of its partition views: a device whose every slot is
+ * quarantined past its deadline is stalled, and its waiters and its later
+ * callers answer `EIO` until it answers something late. And no device may
+ * hold more than half of the pool, so a stalled device leaves the other
+ * half to the healthy ones; a waiter that finds every taken slot of the
+ * pool quarantined is released with `EIO` too, since nothing but a late
+ * answer could free one.
  */
 
 #include "block.h"
@@ -58,44 +60,54 @@ static void irq_restore(uint32_t flags)
     }
 }
 
-/* The pool's size, from the boot line the first time it is asked. The
- * option exists so a test can see a request wait without sixteen devices. */
-static void pool_configure(void)
+void block_request_init(void)
 {
     char value[8];
-    uint32_t n = 0;
+    uint32_t n = REQ_POOL;
+    uint32_t cap;
     int i;
 
     if (pool_size) {
         return;
     }
-    pool_size = REQ_POOL;
     if (kcmdline_value("rach2.blockpool", value, sizeof(value))) {
+        uint32_t asked = 0;
+
         for (i = 0; value[i] >= '0' && value[i] <= '9'; i++) {
-            n = n * 10u + (uint32_t)(value[i] - '0');
+            asked = asked * 10u + (uint32_t)(value[i] - '0');
         }
-        if (i == 0 || value[i] != '\0' || n == 0 || n > REQ_POOL) {
+        if (i == 0 || value[i] != '\0' || asked == 0 || asked > REQ_POOL) {
             klog(KLOG_WARN, "block", "rach2.blockpool: not a count of 1 to %d; ignored",
                  REQ_POOL);
         } else {
-            pool_size = n;
+            n = asked;
             klog(KLOG_INFO, "block", "request pool: %d slots", (int)n);
         }
     }
-    device_cap = pool_size / 2;
-    if (device_cap == 0) {
-        device_cap = 1;
+    cap = n / 2;
+    if (cap == 0) {
+        cap = 1;
     }
+    /* The share first and the size last: a caller from the USB pump reads
+     * both between two stores, and a size with no share would refuse it. */
+    device_cap = cap;
+    pool_size = n;
 }
 
-/* Interrupts off. How many slots `device` holds: in flight or quarantined. */
-static uint32_t device_held(const block_device_t *device)
+/**
+ * Interrupts off. How many slots `owner` holds: in flight or quarantined.
+ *
+ * `owner` is the device a slot is accounted to, `block_submitter` of the
+ * device the request named: a stick's partition views share the stick's
+ * share of the pool and its stall, since it is the stick that answers.
+ */
+static uint32_t device_held(const block_device_t *owner)
 {
     uint32_t i;
     uint32_t held = 0;
 
     for (i = 0; i < pool_size; i++) {
-        if (pool[i].device == device &&
+        if (pool[i].owner == owner &&
             (pool[i].state == BLOCK_REQ_IN_FLIGHT || pool[i].state == BLOCK_REQ_QUARANTINED)) {
             held++;
         }
@@ -103,35 +115,25 @@ static uint32_t device_held(const block_device_t *device)
     return held;
 }
 
-/* Interrupts off. How many of `device`'s slots are still in flight. */
-static uint32_t device_in_flight(const block_device_t *device)
+/** Interrupts off. How many of `owner`'s slots are still in flight. */
+static uint32_t device_in_flight(const block_device_t *owner)
 {
     uint32_t i;
     uint32_t n = 0;
 
     for (i = 0; i < pool_size; i++) {
-        if (pool[i].device == device && pool[i].state == BLOCK_REQ_IN_FLIGHT) {
+        if (pool[i].owner == owner && pool[i].state == BLOCK_REQ_IN_FLIGHT) {
             n++;
         }
     }
     return n;
 }
 
-/* Interrupts off. Whether `device` holds slots and none of them is in
- * flight: nothing but a late answer can free one, so a caller does not wait
- * on it. The flag records the tick that found it so, for the record; the
- * condition is what decides. */
-static int device_stalled(block_device_t *device)
-{
-    if (device->flags & BLOCK_STALLED) {
-        return 1;
-    }
-    return device_in_flight(device) == 0 && device_held(device) > 0;
-}
-
-/* Interrupts off. Whether no slot is in flight or answered and not yet
+/**
+ * Interrupts off. Whether no slot is in flight or answered and not yet
  * freed: every taken slot is quarantined, and nothing but a late answer
- * can free one. */
+ * can free one.
+ */
 static int nothing_pending(void)
 {
     uint32_t i;
@@ -144,7 +146,7 @@ static int nothing_pending(void)
     return 1;
 }
 
-/* Interrupts off. A free slot, or NULL. */
+/** Interrupts off. A free slot, or NULL. */
 static struct block_request *free_slot(void)
 {
     uint32_t i;
@@ -157,14 +159,16 @@ static struct block_request *free_slot(void)
     return NULL;
 }
 
-/* What a waiter for a slot wakes on: one it may take, its device stalled,
- * or nothing left in flight that could free one. */
+/**
+ * What a waiter for a slot wakes on: one it may take, its device stalled,
+ * or nothing left in flight that could free one. `arg` is the owner.
+ */
 static int slot_ready(void *arg)
 {
-    block_device_t *device = arg;
+    block_device_t *owner = arg;
     uint32_t flags = irq_save();
-    int ready = device_stalled(device) || nothing_pending() ||
-                (free_slot() != NULL && device_held(device) < device_cap);
+    int ready = (owner->flags & BLOCK_STALLED) != 0 || nothing_pending() ||
+                (free_slot() != NULL && device_held(owner) < device_cap);
 
     irq_restore(flags);
     return ready;
@@ -181,24 +185,28 @@ static int slot_ready(void *arg)
 static struct block_request *req_take(block_device_t *device, int write, uint64_t lba,
                                       uint32_t count, int wait)
 {
+    block_device_t *owner = block_submitter(device);
     int waited = 0;
 
-    pool_configure();
+    block_request_init();
     for (;;) {
         uint32_t flags = irq_save();
         struct block_request *r = NULL;
+        int share_taken;
 
-        if (device_stalled(device)) {
+        if (owner->flags & BLOCK_STALLED) {
             irq_restore(flags);
             klog(KLOG_WARN, "block", "device stalled: %s",
                  waited ? "waiter released with EIO" : "request refused");
             return NULL;
         }
-        if (device_held(device) < device_cap) {
+        share_taken = device_held(owner) >= device_cap;
+        if (!share_taken) {
             r = free_slot();
         }
         if (r) {
             r->device = device;
+            r->owner = owner;
             r->write = write;
             r->lba = lba;
             r->count = count;
@@ -224,9 +232,10 @@ static struct block_request *req_take(block_device_t *device, int write, uint64_
         irq_restore(flags);
         if (!waited) {
             waited = 1;
-            klog(KLOG_INFO, "block", "request pool: waiting for a slot");
+            klog(KLOG_INFO, "block", "request pool: waiting for a slot: %s",
+                 share_taken ? "the device holds its share" : "the pool is full");
         }
-        wq_wait_event_nointr(&pool_wq, slot_ready, device);
+        wq_wait_event_nointr(&pool_wq, slot_ready, owner);
     }
 }
 
@@ -457,8 +466,8 @@ void block_request_complete(struct block_request *request, uint32_t generation, 
         request->state = BLOCK_REQ_FREE;
         quarantined_count--;
         /* The device answered, late: it is not stalled any more. */
-        if (request->device->flags & BLOCK_STALLED) {
-            request->device->flags &= ~BLOCK_STALLED;
+        if (request->owner->flags & BLOCK_STALLED) {
+            request->owner->flags &= ~BLOCK_STALLED;
             answered = 1;
         }
         irq_restore(flags);
@@ -482,28 +491,38 @@ void block_request_complete(struct block_request *request, uint32_t generation, 
 int block_device_holds(block_device_t *device)
 {
     uint32_t flags = irq_save();
-    int held = (int)device_held(device);
+    uint32_t i;
+    int held = 0;
 
+    for (i = 0; i < pool_size; i++) {
+        if (pool[i].device == device &&
+            (pool[i].state == BLOCK_REQ_IN_FLIGHT || pool[i].state == BLOCK_REQ_QUARANTINED)) {
+            held++;
+        }
+    }
     irq_restore(flags);
     return held;
 }
 
-/* Interrupts off. A device holding slots with none of them in flight has
+/**
+ * Interrupts off. A device holding slots with none of them in flight has
  * stopped answering: it is marked stalled, once, so its waiters are
- * released and its later callers refused until a late answer clears it. */
+ * released and its later callers refused until a late answer clears it.
+ * Returns how many devices were marked by this tick.
+ */
 static int mark_stalled(void)
 {
     uint32_t i;
     int marked = 0;
 
     for (i = 0; i < pool_size; i++) {
-        block_device_t *device = pool[i].device;
+        block_device_t *owner = pool[i].owner;
 
-        if (pool[i].state != BLOCK_REQ_QUARANTINED || (device->flags & BLOCK_STALLED)) {
+        if (pool[i].state != BLOCK_REQ_QUARANTINED || (owner->flags & BLOCK_STALLED)) {
             continue;
         }
-        if (device_in_flight(device) == 0) {
-            device->flags |= BLOCK_STALLED;
+        if (device_in_flight(owner) == 0) {
+            owner->flags |= BLOCK_STALLED;
             marked++;
         }
     }

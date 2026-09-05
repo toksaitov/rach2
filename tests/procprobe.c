@@ -763,7 +763,6 @@ void probe_main(unsigned int *sp)
     n = slurp("/proc/net/dev", buf, (int)sizeof(buf));
     check(n > 0 && buf[n - 1] == '\n', "/proc/net/dev ends with its newline");
 
-    /* Two files, two identities. */
     {
         static unsigned char st_loop[144], st_intr[144];
 

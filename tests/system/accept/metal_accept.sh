@@ -48,11 +48,26 @@ BASELINE_SECTORS="1953525168"
 BASELINE_MODEL="Samsung SSD 870 EVO 1TB"
 
 # What the rows leave on the machine is removed here as well as in the rows,
-# so an interrupted run leaves nothing but the machine as it was found.
+# so an interrupted run leaves nothing but the machine as it was found: the
+# image's mount and its loop device first, then the directory that holds the
+# image, and the known-hosts file last, after the last connection. Each
+# variable is set when its resource exists and cleared when the row let it
+# go, and the function keeps the status the script is exiting with.
 MACHINE_TMP=""
+MACHINE_MOUNTED=""
+MACHINE_LOOP=""
 cleanup() {
+    if [ -n "$MACHINE_MOUNTED" ]; then
+        run "umount $MACHINE_MOUNTED; rmdir $MACHINE_MOUNTED" > /dev/null 2>&1 || true
+    fi
+    if [ -n "$MACHINE_LOOP" ]; then
+        run "loopctl detach $MACHINE_LOOP" > /dev/null 2>&1 || true
+    fi
+    if [ -n "$MACHINE_TMP" ]; then
+        run "rm -rf $MACHINE_TMP" > /dev/null 2>&1 || true
+    fi
     rm -f "$KNOWN"
-    [ -n "$MACHINE_TMP" ] && run "rm -rf $MACHINE_TMP" > /dev/null 2>&1
+    return 0
 }
 trap 'cleanup' EXIT
 trap 'cleanup; exit 130' INT
@@ -398,8 +413,10 @@ if run 'cat /proc/cmdline' | grep -q 'rach2.root=ext2'; then
     fi
     # Read back through the same cache: that the bytes reached the disk is
     # what the procedure's reboot after a write shows, not this call.
+    # The remote shell removes its file on its own exit, so a connection cut
+    # after the mktemp leaves nothing behind either.
     # shellcheck disable=SC2016 # the machine expands these, not this script
-    OUT="$(run 'f=$(mktemp /root/accept.XXXXXX) && echo accept > "$f" && sync && cat "$f"; rm -f "$f"')"
+    OUT="$(run 'f=$(mktemp /root/accept.XXXXXX) && trap '"'"'rm -f "$f"'"'"' EXIT && echo accept > "$f" && sync && cat "$f"')"
     if [ "$OUT" = "accept" ]; then
         note "the ext2 root takes a file and gives it back"
     else
@@ -415,7 +432,8 @@ fi
 if run 'cat /proc/cmdline' | grep -q 'rach2.root=ext2'; then
     note "the fourth partition is the ext2 root now; no scratch partition"
 elif run 'ls /dev/disk0p4 2>/dev/null' | grep -q disk0p4; then
-    OUT="$(run 'mkdir -p /mnt && mount -t vfat /dev/disk0p4 /mnt && echo accept > /mnt/accept.txt && cat /mnt/accept.txt; rm -f /mnt/accept.txt; umount /mnt')"
+    # shellcheck disable=SC2016 # the machine expands these, not this script
+    OUT="$(run 'mkdir -p /mnt && mount -t vfat /dev/disk0p4 /mnt && f=$(mktemp /mnt/accept.XXXXXX) && echo accept > "$f" && cat "$f"; rm -f "$f"; umount /mnt')"
     if [ "$OUT" = "accept" ]; then
         note "the scratch partition mounts for writing, takes a file and gives it back"
     else
@@ -450,12 +468,14 @@ else
         run "rm -rf $MACHINE_TMP"; MACHINE_TMP=""
         note "the root has no room for a 1 MiB image; no image row"
     else
+        MACHINE_LOOP=0
         OUT="$(run "loopctl attach 0 $MACHINE_TMP/loop.img && grep -c '^loop0 ' /proc/loop")"
         if [ "$OUT" = "1" ]; then
             note "an image on the root is attached to /dev/loop0"
         else
             bad "the image was not attached: $OUT"
         fi
+        MACHINE_MOUNTED=/mnt/loop
         OUT="$(run 'mkdir -p /mnt/loop && mount -t krffs /dev/loop0 /mnt/loop && cat /mnt/loop/hello.txt')"
         if [ "$OUT" = "hello from inside an image" ]; then
             note "the file system in that file mounts and reads"
@@ -471,6 +491,7 @@ else
         OUT="$(run 'umount /mnt/loop && rmdir /mnt/loop && loopctl detach 0 && wc -c < /proc/loop')"
         if [ "$OUT" = "0" ]; then
             note "and unmounts and detaches, leaving no device attached"
+            MACHINE_MOUNTED=""; MACHINE_LOOP=""
         else
             bad "the unmount or the detach left something behind: $OUT"
         fi
@@ -531,7 +552,8 @@ else
         before="$(echo "$USBLINE" | sed -n 's/.*flushes \([0-9]*\).*/\1/p')"
         # The unmount runs whether or not the write and the read back did, so
         # a failure leaves neither a file nor a mount behind on the stick.
-        OUT="$(run "mkdir -p /mnt && mount 'LABEL=$LABEL' /mnt && { echo accept > /mnt/accept.txt && cat /mnt/accept.txt; rm -f /mnt/accept.txt; umount /mnt; }")"
+        CMD="mkdir -p /mnt && mount 'LABEL=$LABEL' /mnt && { f=\$(mktemp /mnt/accept.XXXXXX) && echo accept > \"\$f\" && cat \"\$f\"; rm -f \"\$f\"; umount /mnt; }"
+        OUT="$(run "$CMD")"
         after="$(run 'cat /proc/usb 2>/dev/null' | grep "^$STICK " | sed -n 's/.*flushes \([0-9]*\).*/\1/p' || true)"
         if [ "$OUT" = "accept" ]; then
             note "stick: the volume $LABEL mounts by its label, takes a file and gives it back"

@@ -52,11 +52,11 @@ slow2|-|full
 REG
 cat > "$WORK/Makefile" <<'MK'
 components:
-	@echo components >> components.count
+	@echo components >> order.log; echo $$PPID >> components.count
 prepare-all:
-	@echo prepared >> prepared.count
+	@echo prepared >> order.log; echo $$PPID >> prepared.count
 run-passing:
-	@echo "passing ran"
+	@echo "passing ran"; echo passing >> order.log; echo $$PPID >> ran.pid
 run-failing:
 	@echo "failing ran"; exit 1
 run-leaky:
@@ -133,16 +133,23 @@ check "the same name twice is refused" 2 "$rc"
 # object twenty times, or race over it. A suite run alone builds through its
 # own target instead, so an edit far from it does not rebuild the whole
 # product first.
-rm -f "$WORK/prepared.count"
+# The components are built first and in a Make of their own, before the
+# Make that prepares the rest or runs the lone suite: the fake targets record
+# the order they ran in and the pid of the make that ran each.
+rm -f "$WORK/prepared.count" "$WORK/components.count" "$WORK/order.log"
 out=$(run passing failing)
 check "a run of two suites prepares once" 1 \
     "$(wc -l < "$WORK/prepared.count" | tr -d ' ')"
-rm -f "$WORK/prepared.count" "$WORK/components.count"
+check "after the components" components "$(head -1 "$WORK/order.log")"
+check "in a make of their own" 1 \
+    "$([ "$(cat "$WORK/components.count")" != "$(cat "$WORK/prepared.count")" ] && echo 1 || echo 0)"
+rm -f "$WORK/prepared.count" "$WORK/components.count" "$WORK/order.log" "$WORK/ran.pid"
 out=$(run passing)
 check "a suite run alone does not prepare the whole product" 0 \
     "$(cat "$WORK/prepared.count" 2>/dev/null | wc -l | tr -d ' ')"
-check "but builds the components first" 1 \
-    "$(wc -l < "$WORK/components.count" | tr -d ' ')"
+check "but builds the components first" components "$(head -1 "$WORK/order.log")"
+check "in a make of their own" 1 \
+    "$([ "$(cat "$WORK/components.count")" != "$(cat "$WORK/ran.pid")" ] && echo 1 || echo 0)"
 check "and still runs" 1 "$(printf '%s\n' "$out" | grep -c 'passing ran')"
 
 # The worker count is a limit, not a suggestion. Two suites that each take two

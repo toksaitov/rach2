@@ -17,14 +17,16 @@
 #define CR4_OSXMMEXCPT 0x00000400u
 
 #define CPUID_EDX_FXSR (1u << 24)
+#define CPUID_EDX_SSE (1u << 25)
 
 /* The state a process starts with: written once at boot from the unit
  * itself after `fninit`, so the tag word, the opcode and the pointers are
  * whatever the processor makes them and not a guess. */
 static uint8_t initial_state[FPU_STATE_SIZE] __attribute__((aligned(16)));
-/* An aligned page for an area that is not: `fxsave` faults on one. */
+/* An aligned buffer for an area that is not: `fxsave` faults on one. */
 static uint8_t scratch[FPU_STATE_SIZE] __attribute__((aligned(16)));
 static int use_fxsr;
+static int have_sse; /* MXCSR and the XMM registers exist and are enabled */
 static uint32_t mxcsr_mask = 0xFFBFu; /* what `fxsave` reports, or the default */
 
 static uint32_t irq_save(void)
@@ -57,7 +59,11 @@ static void restore_aligned(const void *area)
     if (use_fxsr) {
         __asm__ __volatile__("fxrstor (%0)" : : "r"(area) : "memory");
     } else {
-        __asm__ __volatile__("frstor (%0)" : : "r"(area) : "memory");
+        /* `frstor` raises the x87 exception the unit has pending, in the
+         * kernel; `fnclex` clears it first. The image's own pending bits
+         * are loaded with it and are raised by the process's next x87
+         * instruction, where they belong. */
+        __asm__ __volatile__("fnclex; frstor (%0)" : : "r"(area) : "memory");
     }
 }
 
@@ -79,25 +85,36 @@ void fpu_init(void)
     if (use_fxsr && kcmdline_has("rach2.nofxsr")) {
         use_fxsr = 0;
     }
+    /* A processor can have FXSR without SSE, the Pentium II for one; the
+     * SSE instructions and CR4.OSFXSR are for a processor that has both. */
+    have_sse = use_fxsr && (d & CPUID_EDX_SSE) != 0;
 
     __asm__ __volatile__("mov %%cr0, %0" : "=r"(cr0));
     cr0 = (cr0 | CR0_MP | CR0_NE) & ~(CR0_EM | CR0_TS);
     __asm__ __volatile__("mov %0, %%cr0" : : "r"(cr0));
-    if (use_fxsr) {
-        __asm__ __volatile__("mov %%cr4, %0" : "=r"(cr4));
+    /* The loader's CR4 is not promised either way; set the two bits when the
+     * XMM state is saved, and clear them when it is not, so an SSE
+     * instruction is an invalid opcode wherever its registers would leak. */
+    __asm__ __volatile__("mov %%cr4, %0" : "=r"(cr4));
+    if (have_sse) {
         cr4 |= CR4_OSFXSR | CR4_OSXMMEXCPT;
-        __asm__ __volatile__("mov %0, %%cr4" : : "r"(cr4));
+    } else {
+        cr4 &= ~(CR4_OSFXSR | CR4_OSXMMEXCPT);
     }
+    __asm__ __volatile__("mov %0, %%cr4" : : "r"(cr4));
 
     __asm__ __volatile__("fninit");
     k_memset(initial_state, 0, sizeof(initial_state));
-    if (use_fxsr) {
+    if (have_sse) {
         uint32_t mxcsr = 0x1F80u;
-        uint32_t reported;
 
         /* `ldmxcsr (%eax)` as bytes: the staged TinyCC's assembler has
          * `fxsave` and `fxrstor` but not this one. */
         __asm__ __volatile__(".byte 0x0f, 0xae, 0x10" : : "a"(&mxcsr) : "memory");
+    }
+    if (use_fxsr) {
+        uint32_t reported;
+
         __asm__ __volatile__("fxsave (%0)" : : "r"(initial_state) : "memory");
         k_memcpy(&reported, initial_state + 28, sizeof(reported));
         if (reported != 0) {
@@ -106,7 +123,8 @@ void fpu_init(void)
     } else {
         __asm__ __volatile__("fnsave (%0); frstor (%0)" : : "r"(initial_state) : "memory");
     }
-    klog(KLOG_INFO, "fpu", "fxsr: %s", use_fxsr ? "on" : "off");
+    klog(KLOG_INFO, "fpu", "fxsr: %s, sse: %s", use_fxsr ? "on" : "off",
+         have_sse ? "on" : "off");
 }
 
 int fpu_has_fxsr(void)

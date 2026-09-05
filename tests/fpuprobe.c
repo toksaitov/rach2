@@ -27,11 +27,13 @@ typedef unsigned int size_t;
 
 #define SYS_EXIT         1
 #define SYS_FORK         2
+#define SYS_READ         3
 #define SYS_WRITE        4
 #define SYS_WAITPID      7
 #define SYS_EXECVE       11
 #define SYS_GETPID       20
 #define SYS_KILL         37
+#define SYS_PIPE         42
 #define SYS_GETTIMEOFDAY 78
 #define SYS_SCHED_YIELD  158
 #define SYS_RT_SIGACTION 174
@@ -298,48 +300,67 @@ static void clobber_handler(int sig)
     handlers_ran++;
     if (sig == SIGUSR1) {
         syscall2(SYS_KILL, syscall1(SYS_GETPID, 0), SIGUSR2);
+        /* The inner handler clobbered everything and returned: the outer
+         * one must find its own values back. */
+        if (compare(&junk, 0x0F7Fu, 0x7F80u)) {
+            handler_fault = "the outer handler did not get its state back from the inner one";
+        }
     }
 }
 
+static int damage_pipe[2];
+
 /* The frame the kernel built starts where the handler's stack pointer was
- * at entry, which is one word above the saved frame pointer. The kernel's
- * magic word is found by scanning, and the saved floating-point image
- * follows the two 128-byte blocks after it; MXCSR is 24 bytes into it. */
+ * at entry, which is one word above the saved frame pointer. Its layout is
+ * the kernel's `struct sig_frame`: four words, the 76-byte trapframe, the
+ * 8-byte mask, the magic word at byte 100, two 128-byte blocks, and the
+ * floating-point image at byte 360 with MXCSR 24 bytes into it. The magic
+ * word is checked where the layout puts it, and a byte goes down the pipe
+ * once the field is written, so the parent knows the frame was damaged
+ * before the kernel refused it and not that the handler itself faulted. */
 static void damage_handler(int sig)
 {
-    unsigned *frame = (unsigned *)__builtin_frame_address(0) + 1;
-    int i;
+    unsigned char *frame = (unsigned char *)((unsigned *)__builtin_frame_address(0) + 1);
+    unsigned magic, mxcsr;
+    int k;
 
     (void)sig;
-    for (i = 0; i < 64; i++) {
-        if (frame[i] == SIG_FRAME_MAGIC) {
-            unsigned char *fpu = (unsigned char *)&frame[i + 1] + 256;
-            unsigned mxcsr;
-            int k;
-
-            for (k = 0; k < 4; k++) {
-                ((unsigned char *)&mxcsr)[k] = fpu[24 + k];
-            }
-            mxcsr |= 0x80000000u;
-            for (k = 0; k < 4; k++) {
-                fpu[24 + k] = ((unsigned char *)&mxcsr)[k];
-            }
-            return;
-        }
+    for (k = 0; k < 4; k++) {
+        ((unsigned char *)&magic)[k] = frame[100 + k];
     }
-    puts("FPUPROBE FAIL: the frame's magic word was not found");
-    sys_exit(1);
+    if (magic != SIG_FRAME_MAGIC) {
+        puts("FPUPROBE FAIL: the frame's magic word is not where the layout puts it");
+        sys_exit(1);
+    }
+    for (k = 0; k < 4; k++) {
+        ((unsigned char *)&mxcsr)[k] = frame[360 + 24 + k];
+    }
+    mxcsr |= 0x80000000u;
+    for (k = 0; k < 4; k++) {
+        frame[360 + 24 + k] = ((unsigned char *)&mxcsr)[k];
+    }
+    syscall3(SYS_WRITE, damage_pipe[1], (int)(size_t)"d", 1);
 }
 
 static void run_switches(void)
 {
-    struct values mine;
+    struct values mine, before;
     int pid, status;
     const char *why;
 
+    /* The parent's live state before the fork is what the child must start
+     * with, on both sides of the fork and before either loads its own. */
+    make_values(&before, 0x0F0Fu);
+    load_values(&before, CW_ROUND_DOWN, MXCSR_FLUSH);
     pid = syscall1(SYS_FORK, 0);
     if (pid < 0) {
         fail("fork");
+    }
+    why = compare(&before, CW_ROUND_DOWN, MXCSR_FLUSH);
+    if (why) {
+        syscall3(SYS_WRITE, 1, (int)(size_t)"FPUPROBE FAIL: across fork: ", 28);
+        puts(why);
+        sys_exit(1);
     }
     make_values(&mine, pid == 0 ? 0x1111u : 0x2222u);
     load_values(&mine, CW_ROUND_DOWN, MXCSR_FLUSH);
@@ -437,7 +458,11 @@ static void run_reset(void)
 static void run_damaged(void)
 {
     int pid, status;
+    char byte = 0;
 
+    if (syscall1(SYS_PIPE, (int)(size_t)damage_pipe) != 0) {
+        fail("pipe for the damaged frame");
+    }
     pid = syscall1(SYS_FORK, 0);
     if (pid < 0) {
         fail("fork for the damaged frame");
@@ -447,6 +472,9 @@ static void run_damaged(void)
         syscall2(SYS_KILL, syscall1(SYS_GETPID, 0), SIGUSR1);
         puts("FPUPROBE FAIL: the damaged frame was restored");
         sys_exit(6);
+    }
+    if (syscall3(SYS_READ, damage_pipe[0], (int)(size_t)&byte, 1) != 1 || byte != 'd') {
+        fail("the handler did not report the frame damaged");
     }
     if (syscall3(SYS_WAITPID, pid, (int)(size_t)&status, 0) != pid) {
         fail("waitpid for the damaged frame");

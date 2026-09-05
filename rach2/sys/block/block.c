@@ -150,6 +150,14 @@ uint64_t block_flushes(void)
     return flush_count;
 }
 
+block_device_t *block_submitter(block_device_t *dev)
+{
+    while (dev && dev->submit == block_partition_submit) {
+        dev = ((block_partition_t *)dev->drvdata)->backing;
+    }
+    return dev;
+}
+
 block_device_t *block_physical(block_device_t *dev)
 {
     for (;;) {

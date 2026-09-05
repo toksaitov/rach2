@@ -23,7 +23,7 @@
 # read from the registry rather than written out again: `tests/run style`
 # already requires the registry and the targets in this file to name the same
 # suites, so a list derived from one cannot fall behind the other.
-.PHONY: prepare-all components harness-kernel \
+.PHONY: prepare-all prepare-images components harness-kernel \
         $(addprefix run-,$(shell awk -F'|' '!/^#/ && NF > 1 { print $$1 }' tests/registry))
 
 # --- RAM-disk images. Each is built out of tree from a checked-in manifest
@@ -73,6 +73,11 @@ WAVCHECK        = build/tests/system/wavcheck
 HARNESS         = build/tests/system/harness
 RUNTESTS        = build/tests/system/runtests
 PTYDRIVE        = build/tests/system/ptydrive
+# The stick and disk tools (their rules are with the usbdisk suite), named
+# here because a prerequisite list expands its variables where it is read.
+MKGPT           = build/tools/image/mkgpt
+MKMBR           = build/tools/image/mkmbr
+STICKCHECK      = build/tools/image/stickcheck
 # The deadline tool: the suites' wall-clock limit with process-group kill,
 # replacing coreutils' gtimeout. Built with the host compiler like the KRFFS
 # tools.
@@ -150,21 +155,24 @@ run-default: rach2 test-image $(RUNTESTS)
 # `tests/run` checks that it stays the union.
 #
 # The components, the builds that turn sources into programs, are a target of
-# their own, and `tests/run` builds them in a Make of their own before the
-# one that builds images and disks. An image rule names the programs it
-# stages as prerequisites and the component that builds them as an order-only
-# one, and make reads a prerequisite's time when it first meets the name:
-# before the component's sub-make has run, if both are met in one rule. The
-# image then compares its own time with the old one and stays as it was, and
-# a suite boots a program that is not the one just compiled. Two Makes read
-# the times twice.
+# their own, built in a Make of their own before the one that builds images
+# and disks: `prepare-all` builds them and then runs a second Make for the
+# rest, and `tests/run` builds them before a lone suite's own target. An
+# image rule names the programs it stages as prerequisites and the component
+# that builds them as an order-only one, and make reads a prerequisite's time
+# when it first meets the name: before the component's sub-make has run, if
+# both are met in one rule. Make then compares the image's time with the old
+# one, leaves the image as it was, and a suite boots a program that is not
+# the one just compiled. Two Makes read the times twice.
 components: harness-kernel busybox check-busybox check-dropbearmulti check-libc \
             check-pdpmake check-setid check-tcc ish krffs musl-programs \
             ports/doom rach2 rach2-metal rach2-recovery tests utils
-prepare-all: components $(DEMO_CREDS) $(BINFIND) $(DEADLINE) $(ELFCHECK) $(HARNESS) $(HOSTPEER) \
-             $(MKFIXTURE) $(PCAPCHECK) $(PTYDRIVE) $(RUNTESTS) $(WAVCHECK) \
-             os-real-image os-simple-image rach2-metal-image rach2-recovery-image \
-             rach2-sealed-disk test-image
+prepare-images: $(DEMO_CREDS) $(BINFIND) $(DEADLINE) $(ELFCHECK) $(HARNESS) $(HOSTPEER) \
+                $(MKFIXTURE) $(MKGPT) $(MKMBR) $(PCAPCHECK) $(PTYDRIVE) $(RUNTESTS) \
+                $(SHA256TOOL) $(WAVCHECK) os-real-image os-simple-image \
+                rach2-metal-image rach2-recovery-image rach2-sealed-disk test-image
+prepare-all: components
+	$(MAKE) --no-print-directory prepare-images
 # `tests/run addressed`: the address named on the boot line, and the proof that
 # it is the one in force. The address is deliberately not the one SLIRP hands
 # out: a kernel that ignored `rach2.ip=` entirely would still hold 10.0.2.15 and
@@ -484,7 +492,7 @@ run-install-ext2: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-
 # from recovery), and a control run that injects nothing and asserts that no
 # fallback and no recovery appears anywhere. The disk is assembled natively; the
 # runs are QEMU and ssh.
-run-sealed: $(DEMO_CREDS) rach2-sealed-disk $(DEADLINE) $(ELFCHECK) $(BINFIND)
+run-sealed: $(DEMO_CREDS) rach2-sealed-disk $(DEADLINE) $(ELFCHECK) $(BINFIND) $(MKMBR)
 	sh tests/system/suites/sealed.sh $(SEALED_DISK) \
 	    "`cat krffs/rach2_demo_password`" $(SEALED_PORT)
 # `tests/run drill`: the recovery drill, boots of one disk that carries the same
@@ -504,7 +512,7 @@ run-sealed: $(DEMO_CREDS) rach2-sealed-disk $(DEADLINE) $(ELFCHECK) $(BINFIND)
 # such flag, so there the everyday entries have no whole-disk node at all, and
 # the recovery build publishes its own whatever the command line says.
 DRILL_DISK = $(IMAGES_DIR)/drill-test.disk
-run-drill: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krffs check-setid $(BINFIND) $(HARNESS)
+run-drill: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krffs check-setid $(BINFIND) $(MKMBR) $(HARNESS)
 	@mkdir -p $(IMAGES_DIR)
 	RACH2_DISK_MANIFEST=krffs/manifests/os-simple.manifest \
 	RACH2_DISK_KRFFS_MB=16 \
@@ -525,7 +533,7 @@ $(OS_SIMPLE_EXT2): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(shell sh k
 	sh tools/image/mkext2.sh krffs/manifests/os-simple.manifest $@ 16
 DRILL_EXT2_DISK = $(IMAGES_DIR)/drill-ext2-test.disk
 DRILL_EXT2_PORT = 2300
-run-drill-ext2: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krffs check-setid $(BINFIND) $(HARNESS) $(OS_SIMPLE_EXT2)
+run-drill-ext2: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krffs check-setid $(BINFIND) $(MKMBR) $(HARNESS) $(OS_SIMPLE_EXT2)
 	@mkdir -p $(IMAGES_DIR)
 	RACH2_DISK_MANIFEST=krffs/manifests/os-simple.manifest \
 	RACH2_DISK_KRFFS_MB=16 \
@@ -1053,7 +1061,7 @@ run-reset: rach2 tests krffs test-image $(HARNESS)
 # read-only kernel reading it over SSH with nothing typed at the console, where
 # every sector hashed on the machine must equal the same offset hashed here; and
 # the same kernel with no drive at all.
-run-diskdiag: rach2 rach2-metal rach2-metal-image $(HARNESS)
+run-diskdiag: rach2 rach2-metal rach2-metal-image $(HARNESS) $(SHA256TOOL)
 	sh tests/system/suites/diskdiag.sh build/rach2/kernel $(METAL_KERNEL) $(METAL_IMAGE) \
 	    $(DISKDIAG_PORT)
 # `tests/run subset`: each optional device probe left out, and proved left out
@@ -1065,7 +1073,7 @@ run-diskdiag: rach2 rach2-metal rach2-metal-image $(HARNESS)
 # and the partition nodes; later phases grow it. Its disk is the test disk
 # with a FAT32 partition added at 49 MiB by mkmbr and mtools.
 MOUNT_DISK = build/images/mount-test.disk
-run-mount: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(MKFIXTURE) $(HARNESS)
+run-mount: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(MKFIXTURE) $(MKMBR) $(HARNESS)
 	sh tests/system/suites/mount.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(MOUNT_DISK) \
 	    $(OS_REAL_IMAGE) "`cat krffs/rach2_demo_password`"
 
@@ -1073,7 +1081,7 @@ run-mount: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(MKFIXTURE)
 # reboot, judged by the host's walk and mtools, taken through a crash and its
 # repair, written from BusyBox, and written by two processes under the lag.
 FATWRITE_DISK = $(IMAGES_DIR)/fatwrite-test.disk
-run-fatwrite: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(MKFATFIXTURE) $(HARNESS)
+run-fatwrite: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(MKFATFIXTURE) $(MKMBR) $(HARNESS)
 	sh tests/system/suites/fatwrite.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(FATWRITE_DISK) \
 	    $(OS_REAL_IMAGE) "`cat krffs/rach2_demo_password`" $(MKFATFIXTURE)
 
@@ -1081,21 +1089,21 @@ run-fatwrite: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(MKFATFI
 # image and an ext2 image on a FAT32 volume, each mounted, written and read
 # back, and everything an attachment refuses.
 LOOPDEV_DISK = $(IMAGES_DIR)/loopdev-test.disk
-run-loopdev: rach2 tests krffs test-image $(HARNESS) build/tools/image/mkmbr
+run-loopdev: rach2 tests krffs test-image $(HARNESS) $(MKMBR)
 	sh tests/system/suites/loopdev.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) \
 	    $(LOOPDEV_DISK)
 
 # `tests/run krffsmount`: a KRFFS volume placed by mount(2), read through to
 # its last byte and unmounted, and the three volumes the kernel refuses.
 KRFFSMOUNT_DISK = $(IMAGES_DIR)/krffsmount-test.disk
-run-krffsmount: rach2 tests krffs test-image $(HARNESS) build/tools/image/mkmbr
+run-krffsmount: rach2 tests krffs test-image $(HARNESS) $(MKMBR)
 	sh tests/system/suites/krffsmount.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) \
 	    $(KRFFSMOUNT_DISK) build/krffs/fsck.krffs
 
 # `tests/run ext2`: the ext2 driver booted over a fixture disk the host's
 # mke2fs wrote, with the walker's link rows on the mounted volume.
 EXT2_DISK = $(IMAGES_DIR)/ext2-test.disk
-run-ext2: $(DEMO_CREDS) rach2 tests krffs test-image $(HARNESS) build/tools/image/mkmbr \
+run-ext2: $(DEMO_CREDS) rach2 tests krffs test-image $(HARNESS) $(MKMBR) \
           utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom \
           rach2-recovery $(RECOVERY_IMAGE)
 	sh tests/system/suites/ext2.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(EXT2_DISK) \
@@ -1106,25 +1114,22 @@ run-ext2: $(DEMO_CREDS) rach2 tests krffs test-image $(HARNESS) build/tools/imag
 # one, taken through a crash and its repair, written from BusyBox, and
 # written by two processes under the lag.
 EXFAT_DISK = $(IMAGES_DIR)/exfat-test.disk
-run-exfat: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(MKEXFATFIXTURE) $(HARNESS)
+run-exfat: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(MKEXFATFIXTURE) $(MKMBR) $(HARNESS)
 	sh tests/system/suites/exfat.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(EXFAT_DISK) \
 	    $(OS_REAL_IMAGE) "`cat krffs/rach2_demo_password`" $(MKEXFATFIXTURE)
 
 # The GUID table writer (tools/image/mkgpt.c), for `tests/run usbdisk`: the
 # tree had no writer and the suite needs a table to read.
-MKGPT = build/tools/image/mkgpt
 $(MKGPT): tools/image/mkgpt.c
 	@mkdir -p $(dir $@)
 	cc -O2 -Wall -Wextra -o $@ $<
 # The MBR writer, which krffs/mkdisk.sh builds on demand as well; named here
 # so a suite that runs before any disk image was made still has it.
-MKMBR = build/tools/image/mkmbr
 $(MKMBR): tools/image/mkmbr.c
 	@mkdir -p $(dir $@)
 	cc -O2 -o $@ $<
 # The stick image's judge (tools/image/stickcheck.c), linked with the
 # kernel's own MBR reader so the rules it applies are the kernel's.
-STICKCHECK = build/tools/image/stickcheck
 $(STICKCHECK): tools/image/stickcheck.c rach2/sys/block/mbr.c rach2/sys/block/mbr.h
 	@mkdir -p $(dir $@)
 	cc -O2 -Wall -Wextra -I rach2/sys -I rach2/sys/lib -o $@ tools/image/stickcheck.c rach2/sys/block/mbr.c
@@ -1144,7 +1149,7 @@ run-usbdisk: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(MKEXFATF
 	sh tests/system/suites/usbdisk.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(USBDISK_DIR) \
 	    $(OS_REAL_IMAGE) "`cat krffs/rach2_demo_password`" $(MKEXFATFIXTURE) $(STICK_IMAGE)
 
-run-usb: rach2 tests krffs test-image $(HARNESS) harness-kernel
+run-usb: rach2 tests krffs test-image $(HARNESS) $(MKMBR) harness-kernel
 	sh tests/system/suites/usb.sh $(HARNESS_KERNEL) $(TEST_IMAGE) $(HARNESS)
 # (see tests/system/suites/subset.sh).
 run-subset: rach2 tests krffs test-image $(HARNESS)
@@ -1164,7 +1169,7 @@ run-diskpolicy: rach2 rach2-metal $(HARNESS)
 # key authentication, a pty, and a file crossing intact each way are all one
 # test. It kills the server once as well, because a supervisor that starts a
 # daemon and does not restart it has not been tested.
-run-metal: rach2-metal rach2-metal-image
+run-metal: rach2-metal rach2-metal-image $(MKMBR)
 	sh tests/system/suites/metal.sh $(METAL_KERNEL) $(METAL_IMAGE) $(METAL_PORT)
 # `tests/run account`: accounts created, authenticated, changed and deleted on
 # both images, since both have account tools now and they are different code.

@@ -19,8 +19,8 @@ python3 - "$DIR/pattern.bin.$$" <<'PY' || fail "the pattern file"
 import sys
 open(sys.argv[1], 'wb').write(bytes((i * 31 + 7) & 0xFF for i in range(65536)))
 PY
-printf 'hello\n' > "$DIR/hello.txt.$$"
-printf 'inner\n' > "$DIR/inner.txt.$$"
+printf 'hello\n' > "$DIR/hello.txt.$$" || fail "the hello file"
+printf 'inner\n' > "$DIR/inner.txt.$$" || fail "the inner file"
 # Into place by rename: `tests/run krffscheck` writes the same three files
 # for the same manifest, and the two may run at once.
 for f in pattern.bin hello.txt inner.txt; do

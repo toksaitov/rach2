@@ -405,9 +405,10 @@ static const char *const ENTRY_IDS[] = {"candidate",       "fallback", "candidat
  * because a repair is not one boot: rewriting a root takes minutes, and a
  * machine that lost power in the middle of one has to come back to the image
  * that was doing the rewriting, not to a kernel that cannot mount what
- * is there. `debug` is the one entry that is a boot and never a default:
- * leaving a machine saved into the kernel shell would leave it with no init and
- * no way in. */
+ * is there. Two entries are a boot and never a default. `debug`: leaving a
+ * machine saved into the kernel shell would leave it with no init and
+ * no way in. `recovery-fsck`: a repair is one boot, and a machine saved
+ * into it would repair its partitions at every start. */
 static const char *const SAVED_IDS[] = {"candidate", "fallback",        "candidate-static",
                                         "fallback-static", "recovery", "recovery-static"};
 #define ENTRY_ID_COUNT ((int)(sizeof(ENTRY_IDS) / sizeof(ENTRY_IDS[0])))
