@@ -269,24 +269,23 @@ int main(void)
 
     /* The exact text, because what reads it is awk and grep on the machine. */
     {
-        static const char *want[] = {
-            "state present\n",
-            "driver ahci\n",
-            "policy read-write\ndisk-commands 0\ndisk-flushes 0\n",
-            "cache-hits 0\ncache-fills 0\ncache-waits 0\n",
-            "port 0\n",
-            "mounted 0\n",
-            "sector-size 512\n",
-            "sectors 1953525168\n",
-            "window-sectors 1953525168\n",
-            "raw-batch-sectors 64\n",
-            "raw-driver-calls 0\n",
-            "mbr-signature ok\n",
-            "mbr-id 4905b015\n",
-            "part1 07 2048 1024000\n",
-            "part2 ff 4294967295 4294967295\n",
-            "part3 00 0 0\n",
-            "part4 00 0 0\n"};
+        static const char *want[] = {"state present\n",
+                                     "driver ahci\n",
+                                     "policy read-write\ndisk-commands 0\ndisk-flushes 0\n",
+                                     "cache-hits 0\ncache-fills 0\ncache-waits 0\n",
+                                     "port 0\n",
+                                     "mounted 0\n",
+                                     "sector-size 512\n",
+                                     "sectors 1953525168\n",
+                                     "window-sectors 1953525168\n",
+                                     "raw-batch-sectors 64\n",
+                                     "raw-driver-calls 0\n",
+                                     "mbr-signature ok\n",
+                                     "mbr-id 4905b015\n",
+                                     "part1 07 2048 1024000\n",
+                                     "part2 ff 4294967295 4294967295\n",
+                                     "part3 00 0 0\n",
+                                     "part4 00 0 0\n"};
         int w;
 
         for (w = 0; w < (int)(sizeof(want) / sizeof(want[0])); w++) {
