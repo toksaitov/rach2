@@ -6,6 +6,7 @@
 #include "../lib/ksignal.h"
 #include "../fs/fd.h"
 #include "../mm/vm.h"
+#include "fpu.h"
 
 /* Maximum number of processes. */
 #define MAX_PROCS 16
@@ -113,6 +114,9 @@ struct process {
      * mount and the held node, or NULL on a permanent mount (vfs_cwd_set). */
     struct vfs_mount *cwd_mnt;
     void *cwd_node;
+    /* The x87 and SSE state, saved at every switch away and loaded at every
+     * switch to; `fxsave` needs the 16-byte alignment. */
+    uint8_t fpu[FPU_STATE_SIZE] __attribute__((aligned(16)));
 };
 
 typedef struct process process_t;

@@ -93,6 +93,11 @@ void schedule(void)
                          : "=r"(saved_flags)
                          :
                          : "memory");
+    /* The floating-point registers are the one part of the processor
+     * `switch_context` does not touch; the kernel computes in none, so the
+     * incoming state can be loaded before the stack changes hands. */
+    fpu_save(old->fpu);
+    fpu_restore(next->fpu);
     current_proc = next;
 
     switch_context(old, next);

@@ -75,6 +75,7 @@ crash|qemu-system-i386|core
 metal|qemu-system-i386,ssh,mformat|core
 diskfull|qemu-system-i386|core
 fault|qemu-system-i386|core
+fpu|qemu-system-i386|core
 reset|qemu-system-i386|core
 runner|-|core
 imagerace|-|full

@@ -2,7 +2,7 @@
 
 ![Rach2 BSODing](https://raw.githubusercontent.com/rachmiroff/images/refs/heads/main/rach2/bsod.png)
 
-Rach2 is a freestanding 32-bit x86 kernel. It boots through Multiboot1, runs static ELF32 programs in ring 3, implements a Linux i386-style `int 0x80` interface, and schedules isolated processes preemptively. Its KRFFS root can come from a Multiboot module or an ATA or AHCI disk.
+Rach2 is a freestanding 32-bit x86 kernel. It boots through Multiboot1, runs static ELF32 programs in ring 3, implements a Linux i386-style `int 0x80` interface, and schedules isolated processes preemptively, each with its own floating-point state. Its KRFFS root can come from a Multiboot module or an ATA or AHCI disk.
 
 The [root Readme](../Readme.md) describes the complete system and its userland. This file owns the kernel-level build, boot, and debugging contract. The subsystem Readmes own their implementation details.
 
@@ -127,6 +127,7 @@ Options are whitespace-delimited. Flags match whole tokens, and the first `key=v
 | `rach2.diag` | Print the boot diagnostic report again at the end and wait for input. |
 | `rach2.apicdiag` | Print what the machine's firmware left in the local APIC and what MSI capabilities the xHCI and HDA controllers have. It changes nothing. |
 | `rach2.nomsi` | Leave the local APIC alone and take every interrupt through the 8259 pair. |
+| `rach2.nofxsr` | Save the floating-point state with `fnsave` and `frstor` even where `cpuid` reports FXSR; CR4.OSFXSR stays clear, so an SSE instruction is an invalid opcode. `tests/run fpu` boots it. |
 | `rach2.usblatency` | Print the four stamps of every USB keystroke's path when a reader takes it. |
 | `rach2.msidrop=N` | Test option: silence the USB controller's messages after N of them, so the timer's fallback pump can be seen to keep the machine working. |
 | `rach2.nousb` | Skip the USB stack: no controller is taken, and nothing is enumerated. |

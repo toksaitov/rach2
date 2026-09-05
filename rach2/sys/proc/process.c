@@ -127,6 +127,7 @@ process_t *alloc_process(void)
             proc_table[i].sid = candidate;
             proc_table[i].pgid = candidate;
             proc_table[i].umask = 022;
+            fpu_init_area(proc_table[i].fpu);
 
             fd_table_init(&proc_table[i].fds);
             fd_init_stdio(&proc_table[i].fds);

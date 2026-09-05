@@ -207,6 +207,22 @@ run-noentropy: rach2 test-image $(HARNESS)
 	    --qemu-arg=-cpu --qemu-arg=qemu64 \
 	    --timeout 180 --ok "PASSWDMUSL OK (fail-closed)" \
 	    "expect=Type 'help'" "send=exec /musl/passwdmusl" wait=60
+# `tests/run fpu`: the floating-point state of a process is its own. Two
+# boots of `fpuprobe`: with FXSR, where the x87 and XMM registers, the control
+# word and MXCSR are saved by `fxsave`, and with `rach2.nofxsr`, where the x87
+# state is saved by `fnsave` and an SSE instruction is an invalid opcode, so
+# the probe's x87 branch runs alone.
+run-fpu: rach2 tests krffs test-image $(HARNESS)
+	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+	    --qemu-arg=-cpu --qemu-arg=max --append "rach2.rescue" \
+	    --timeout 90 --steptmo 30 --ok "FPUPROBE OK" --never "FPUPROBE FAIL" \
+	    --log $(TEST_IMAGE).fpu.log \
+	    "expect=fpu: fxsr: on" "expect=Type 'help'" "send=exec /fpuprobe" "expect=FPUPROBE"
+	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+	    --qemu-arg=-cpu --qemu-arg=max --append "rach2.rescue rach2.nofxsr" \
+	    --timeout 90 --steptmo 30 --ok "FPUPROBE OK" --never "FPUPROBE FAIL" \
+	    --log $(TEST_IMAGE).fpu-x87.log \
+	    "expect=fpu: fxsr: off" "expect=Type 'help'" "send=exec /fpuprobe x87" "expect=FPUPROBE"
 # `tests/run fault`: the three probes whose whole claim is that the kernel
 # killed them. vmfault writes through a pointer in no mapping, vmro writes a
 # page it mapped read-only, and winprobe reads the page-cache window, which

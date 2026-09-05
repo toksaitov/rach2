@@ -1,6 +1,7 @@
 #include "vendor/multiboot.h"
 
 #include "sys/kio.h"
+#include "sys/proc/fpu.h"
 #include "sys/klog.h"
 #include "sys/serial.h"
 #include "sys/syscall.h"
@@ -2972,6 +2973,8 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
 
     init_isr();
     klog(KLOG_INFO, "boot", "isr: ready");
+
+    fpu_init();
 
     init_mm();
     klog(KLOG_INFO, "boot", "memory manager: ready");

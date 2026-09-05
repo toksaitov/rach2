@@ -6492,6 +6492,10 @@ interpreter_checked:
         params->ds = 0x23;
         current_proc->tls_base = 0;
         gdt_set_tls(0);
+        /* A fresh image starts with the initial floating-point state, in the
+         * registers now and in the record for the next switch. */
+        fpu_init_area(current_proc->fpu);
+        fpu_restore(current_proc->fpu);
 
         /* Build the address-space map (VMAs) for the new image so the
          * page-fault handler can demand-page, grow the stack, or segfault. The
@@ -6614,6 +6618,9 @@ static int32_t sys_fork(isr_params_t *params)
      * %gs-relative reads (errno, the stack canary) would fault or read garbage.
      */
     child->tls_base = parent->tls_base;
+    /* The floating-point registers as they are now, since the parent's record
+     * holds only what they were at its last switch away. */
+    fpu_save(child->fpu);
 
     /* The child's address space is a copy of the parent's at the same virtual
      * addresses (copy_user_pages duplicated the pages), so copy the VMA map too
@@ -8711,6 +8718,7 @@ struct sig_frame {
     uint32_t magic;        /* sanity tag checked by rt_sigreturn */
     uint8_t info[128];     /* siginfo_t storage (zeroed; si_signo set) */
     uint8_t uc[128];       /* ucontext storage (zeroed) */
+    uint8_t fpu[FPU_STATE_SIZE]; /* the x87 and SSE state at delivery */
 };
 
 #define SIG_FRAME_MAGIC 0x5347464du /* "SGFM" */
@@ -8742,10 +8750,14 @@ static int signal_setup_frame(isr_params_t *tf, int signo, struct k_sigaction *s
     frame.saved_mask = current_proc->sig_blocked;
     frame.magic = SIG_FRAME_MAGIC;
     frame.info[0] = (uint8_t)signo; /* siginfo_t.si_signo (first int) low byte */
+    fpu_save(frame.fpu);
 
     if (copy_to_user((void __user *)frame_addr, &frame, sizeof(frame)) != 0) {
         return -1;
     }
+    /* The handler starts with the initial state, as a fresh image does; the
+     * interrupted state is on the frame for sigreturn. */
+    fpu_reset();
 
     /* Block the handler's mask, plus this signal unless SA_NODEFER, for the
      * run. */
@@ -8798,6 +8810,14 @@ static int32_t signal_restore(isr_params_t *tf, uint32_t delta)
         terminate_current_process(SIGSEGV); /* forged/clobbered frame */
         return 0;
     }
+    /* The floating-point image is loaded into the registers by `fxrstor`,
+     * which faults in the kernel on a reserved MXCSR bit; a frame with one
+     * is refused as a forged frame is. */
+    if (fpu_check_area(frame.fpu) != 0) {
+        terminate_current_process(SIGSEGV);
+        return 0;
+    }
+    fpu_restore(frame.fpu);
 
     /* Restore the general registers and instruction/stack pointers, but FORCE
      * the segment selectors to ring-3 user values and sanitize EFLAGS (keep IF
