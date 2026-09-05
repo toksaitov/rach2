@@ -22,7 +22,8 @@ kernel binary boots and passes its suite with 64 MiB, 512 MiB, 2 GiB,
   reduces the Multiboot map to its highest available address
   (`frame.c:11`), `frame_usable_count` caps it (`frame.c:60`), and
   `init_paging` marks every frame below that free (`paging.c:145`), holes
-  included; with no map at all the code assumes the full 32 MiB.
+  included; with no usable map the code takes `mem_upper`, and 32 MiB
+  only when that fails too (`frame.c:69`).
 * There is no kernel heap that frees. `mem_reserve` is a monotonic
   allocator over identity-mapped physical addresses that stops at the
   limit (`heap.c:24`); fresh page tables and directories come from it
@@ -92,8 +93,11 @@ and the allocator's own tables, resolves an overlap conservatively and
 does its arithmetic in 64 bits so a range ending at 4 GiB is right. Frames
 are named by number. The frame table, a state and a reference count wide
 enough that it cannot saturate, is sized from that result. The boot line
-reports installed, usable, reserved and managed memory as four numbers.
-No memory map means the legacy `mem_upper`, not an assumption.
+reports four numbers with these meanings: installed is the sum of every
+range the map declares, above 4 GiB included; usable is the available
+ranges below 4 GiB; reserved is the kernel, the modules, the boot data
+and the allocator's tables; managed is usable less reserved, and is what
+the allocator hands out. No usable map means `mem_upper`, as today.
 
 ### The kernel has a virtual layout and a heap that frees
 
@@ -178,19 +182,22 @@ and 48 depend on it.
 Ranges from the map, frames by number, the reservations, the four boot
 numbers, the wide reference count. Proof: a host test over the recorded
 maps of QEMU and the Lenovo and over synthetic maps with holes,
-overlapping entries and a range crossing 4 GiB; a boot at 64 MiB, 2 GiB,
-3 GiB and 4 GiB whose four numbers match what QEMU was given.
+overlapping entries and a range crossing 4 GiB; a boot at 64 MiB, 512
+MiB, 2 GiB, 3 GiB and 4 GiB whose installed number matches what QEMU was
+given and whose other three follow the equations, with the harness shown
+to pass the size to every boot it makes.
 
 ### Phase 2: the layout and the heap
 
 The kernel regions above `0xC0000000` with their page tables shared; the
-heap; MMIO mapped into its region; the modules mapped and reserved
-wherever the loader put them; the old arithmetic uncompilable. Proof: a
-boot at 4 GiB whose probe fills pages beyond the old limit with a pattern
-and reads it back, forces copy-on-write, execs, frees and reuses; kernel
-objects still created after the old low region is full; a mapping made
-after a fork seen from every process at 64 MiB and at
-4 GiB.
+heap; MMIO mapped into its region; the modules mapped and reserved wherever
+the loader put them; the old arithmetic uncompilable. Proof: a boot at 4 GiB
+whose probe fills pages beyond the old limit with a pattern and reads it
+back, forces copy-on-write, execs, frees and reuses; kernel objects still
+created after the old low region is full; a mapping made after a fork seen
+from every process; a frame that fails to come at each step of fork, exec,
+mount and descriptor growth, injected by a boot switch, leaving no leaked
+reference and the surviving objects unchanged at 64 MiB and at 4 GiB.
 
 ### Phase 3: the objects
 
@@ -204,35 +211,42 @@ sixteen would have shown still shows.
 
 ### Phase 4: the caches and the rules
 
-Targets and reclaim; the reserve; the waiting rules in the request layer
-and the allocators; a sleeping device in the pressure row, since polled
-SATA bypasses the pool until milestone 47. Proof: a row that fills memory
-with dirty cache and finds it written back and the mount still writable;
-a row that queues requests past every slot and finds each completed with
-no deadline expired; the mutation that starts the deadline at the queue
-makes it fail; a row that exhausts memory and finds `fork` refused with
-`ENOMEM` and the console still answering.
+Targets and reclaim; the reserve; the waiting rules in the request layer and
+the allocators; a sleeping device in the pressure row, since polled SATA
+bypasses the pool until milestone 47. Proof: a row that fills memory with
+dirty cache and finds it written back and the mount still writable; a row
+that queues requests past every slot and finds each completed with no
+deadline expired; the mutation that starts the deadline at the queue makes
+it fail; a row that exhausts memory from one user, finds that user's `fork`
+refused with `ENOMEM`, and then logs root in fresh on the console and runs a
+recovery command to completion, since a login needs processes and the SSH
+supervisor begins with a `fork` (`init.c:368`).
 
 ### Phase 5: limits and vectors
 
 `prlimit64` enforced; defaults from `/etc/rach2/limits`; vectors
 allocated. Proof: a user that forks past its limit is refused while
-another is not; a connection flood while root logs in on the console; a
-device given a vector it did not have before, with the network and USB
-suites unchanged.
+another is not; a process past its file and address-space limits refused
+by name; a hard limit raised by a user refused and by root allowed; the
+limits seen inherited across fork and exec; a `setuid` process counted
+against its new user; a connection flood while root logs in on the
+console; a device given a vector it did not have before, with the
+network and USB suites unchanged.
 
 ### Phase 6: the close
 
 Twenty sessions in QEMU building at once as the load row that milestone 47
-will run on the machine. Proof, once and in this order: build from clean; the full set at 64 MiB and at 4 GiB; a boot on
-the Lenovo and the SSH capstone; everything that comes up fixed; the whole
-milestone's diff to Codex in units of six files, most serious first; every
-finding fixed; the full set again. The Readmes the milestone changed carry
-the facts in the same commits as the code and Codex writes their prose in
-the same round. Problems found on the way that this milestone did not set
-out to fix are already in `dev-log/50-shortcomings/plan.md` with file and
-line, and none is fixed here unless the milestone cannot close without it.
-Then notes, the milestone's Readme and the index entry.
+runs on the machine; the functional rows at 512 MiB, 2 GiB and 3 GiB as well
+as the full set at the two ends. Proof, once and in this order: build from
+clean; the full set at 64 MiB and at 4 GiB; a boot on the Lenovo and the SSH
+capstone; everything that comes up fixed; the whole milestone's diff to
+Codex in units of six files, most serious first; every finding fixed; the
+full set again. The Readmes the milestone changed carry the facts in the
+same commits as the code and Codex writes their prose in the same round.
+Problems found on the way that this milestone did not set out to fix are
+already in `dev-log/50-shortcomings/plan.md` with file and line, and none is
+fixed here unless the milestone cannot close without it. Then notes, the
+milestone's Readme and the index entry.
 
 ## Risks
 

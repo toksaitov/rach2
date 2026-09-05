@@ -68,10 +68,14 @@ Codex against the code they describe.
 
 Every fixed number left in the kernel, the tools, the image builders and
 the procedures is found and classified: physical, format or ABI, policy
-and configurable, safety invariant, or unfinished work. The first four
-get their reason beside them; the fifth gets an entry in `notes.md` and
-a place in the next plan. An old helper or document that still imposes a
-limit the kernel no longer has is the fault this phase exists to find.
+and configurable, or safety invariant, each with its reason beside it.
+A bound that is none of those is unfinished work, and unfinished work is
+an entry in milestone 50's list, fixed before this milestone's documents
+are accepted; there is no next plan. A tool's own limit that obstructed
+milestone 46 or 47 was lifted there, not saved for here. An old helper
+or document that still imposes a limit the kernel no longer has is the
+fault this phase exists to find, and the inventory is reviewed by a
+person, not produced by a new checker.
 
 ### Nothing moves that does not have to
 
@@ -146,9 +150,21 @@ Every suite is listed with what it proves and how long it runs; a suite
 that proves what another proves is merged or removed; the new hardware
 arrangements, memory sizes, two disks, two controllers, two cards, get
 rows in existing suites where they fit and new suites only where they do
-not; the tiers are rebalanced so the core tier still answers in the time
-it did. Every rule in the build is listed with its owner; a rule with
-none, or one kept for a milestone that ended, goes.
+not, and two suites of one subsystem with different failure modes are not
+duplicates; the tiers are rebalanced so the core tier still answers in
+the time it did. The runner today serialises style, host, USB, USB disk,
+sealed and mount work (`tests/run:167`) and budgets workers by processor
+alone; it gets a worker budget and a memory budget, since the memory
+matrix boots at 4 GiB, isolated artifacts per worker, console parsing
+that does not mistake one suite's output for another's, and deadlines
+sized to the row. The allowed time for the full set is the baseline
+milestone 45 recorded plus a quarter, on the same host with the same
+worker count, and the number is in this milestone's Readme. Every rule
+in the build is listed with its owner; a rule with none, or one kept for
+a milestone that ended, goes; and the result is proved by an incremental
+rebuild after a header, a manifest and a configuration change, by two
+concurrent invocations, and by the built artifacts' contents compared
+with the clean build's.
 
 ### The images go to the machine and the stick
 
@@ -178,16 +194,18 @@ can change around identical bodies.
 
 ### Phase 3: the test set and the build
 
-The suite and rule inventories; the merges and removals; the new rows;
-the tiers. Proof: the full set's time recorded against the record from
-before milestone 45; every suite in the registry named in the inventory.
+The suite and rule inventories; the runner's budgets and isolation; the
+merges and removals; the new rows; the tiers; the build proved as
+decided. Proof: the full set's time within the allowance; every suite in
+the registry named in the inventory with what it proves; the pooled-run
+failures of milestone 44 not reproducing in ten consecutive full runs.
 
 ### Phase 4: the bounds
 
 The classification, with the reasons written into the headers, the
-scripts and the Makefile; the tools' own limits lifted where the kernel's
-were. Proof: a host check that lists every numeric bound in the tree with
-its class, and refuses one without.
+scripts and the Makefile. Proof: the inventory file in this milestone's
+directory, every bound in it with its class and reason, read by Codex
+against the code as part of the review.
 
 ### Phase 5: the inventory
 
@@ -222,10 +240,15 @@ files that changed finding nothing.
 
 Once: build from clean; the full set; the whole milestone's diff to Codex
 in units of six files; every finding fixed; the full set again. Then the
-stick rebuilt and booted, the notebook installed through the installer
-under the hardware rule, the demo checked on it. Then notes, the
-milestone's Readme and the index entry, and the report to the owner that
-everything is done, with nothing deferred.
+deployment, against an inventory written first: each image, the stick's
+recovery and installer, the disk's candidate kernel, fallback, recovery
+and root, with its hash, its destination and the boot that proves it;
+the stick rebuilt and booted; the notebook installed through the
+installer under the hardware rule; each of the four boots made and the
+acceptance run with the installed credentials; the demo checked on it.
+Then notes, the milestone's Readme with the inventory and its hashes,
+the index entry, and the report to the owner that everything is done,
+with milestone 50's list empty.
 
 ## Risks
 

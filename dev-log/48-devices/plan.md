@@ -18,12 +18,15 @@ devices work as before.
   and keeps its state globally (`xhci.h:7`, `xhci.c:297`); the limits are
   12 devices, 2 hubs, 12 slots, 16 root ports and 32 scratchpad pages
   (`core.h:20`, `hub.h:16`, `xhci.c:543`); extra ports are clipped and a
-  controller needing more scratchpads is rejected; a configuration
+  controller needing more scratchpads is rejected; a hub with more than
+  fifteen ports is clipped to `USB_HUB_PORT_MAX` because the route string
+  encodes a port in four bits (`hub.c:340`, `core.c:460`); a configuration
   descriptor is truncated at 64 bytes (`core.c:999`); the command, event,
   endpoint and completion rings are fixed. An Intel controller's port
   routing is written on vendor identity alone (`xhci.c:267`). EHCI is
   declined (`usb.c:9`).
-* Three network drivers; the first that comes up is the interface and a
+* Three network drivers; the common layer keeps one selected driver
+  (`netdev.c:21`), the first that comes up is the interface and a
   supported card that fails stops the probe (`netdev.c:35`); each driver
   keeps one instance in globals (`rtl8168.c:106`); the stack has one MAC,
   one address configuration and one interface state (`netif.c:49`,
@@ -33,7 +36,9 @@ devices work as before.
 * The platform: power management uses a small chipset table
   (`board.c:42`); reboot sends an Insyde-specific SMI command first without
   checking the firmware (`power.c:241`); audio takes one HDA controller
-  (`hda.c:1605`). PCI already scans all 256 buses (`pci.c:217`).
+  (`hda.c:1605`). PCI already scans all 256 buses (`pci.c:217`). The
+  metal acceptance reads the USB and audio vectors as fixed numbers
+  (`metal_accept.sh:249`), which milestone 46's allocated vectors break.
 * Milestone 46 allocates objects and interrupt vectors; milestone 47 put
   USB disks in the block registry.
 
@@ -80,22 +85,32 @@ names any other.
 
 Per-controller state, capability-sized arrays, allocated records,
 descriptors whole. Proof: QEMU with two xHCI controllers, a keyboard on
-one and three sticks behind a hub on the other, all working; a row with
-more devices than the old twelve; a hub with more than fifteen ports
-clipped by the hub's own count.
+one and three sticks behind a hub on the other, all working, a stick
+pulled from each while the other controller is busy, one controller
+failed at probe with the other up, every slot taken and a device waiting
+for one and getting it; a row with more devices than the old twelve; a
+hub with more than fifteen ports clipped to fifteen and the reason logged;
+a configuration descriptor longer than 64 bytes read whole and one with a
+wrong length refused.
 
 ### Phase 2: interface instances
 
 Driver instances, the stack per interface, ARP and routes by interface,
-configuration by MAC. Proof: QEMU with two e1000 cards on two subnets,
-both reachable, SSH through each; one card failed at probe with the other
-up; the sealed image's network files carrying no QEMU address.
+configuration by MAC. Proof: QEMU with two e1000 cards on two subnets
+and again with an RTL8139 beside an e1000, both reachable at once under
+traffic, SSH through each, DHCP on each interface by name, one ARP
+destination reachable through each; one card failed at probe with the
+other up, and one taken down after startup with the other still serving;
+the sealed image's network files carrying no QEMU address.
 
 ### Phase 3: the platform and the machine
 
 The firmware check before the SMI reboot; the chipset table's fallbacks;
-the Lenovo booted with its keyboard, mouse, sticks, hub and card as
-before. Proof: the metal acceptance; the reboot from SSH.
+the metal acceptance reading vectors from `/proc/interrupts` by device
+rather than by number; the Lenovo booted with its keyboard, mouse, sticks,
+hub and card as before. Proof: a host test of the reboot decision that
+feeds it the Lenovo's firmware strings and another's and checks which
+port writes it makes; the metal acceptance; the reboot from SSH.
 
 ### Phase 4: the close
 

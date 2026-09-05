@@ -70,6 +70,13 @@ Lenovo's root has been grown to its disk under the rule.
 * The Lenovo's SATA disk has 488397168 sectors, 238475 MiB
   (`dev-log/43-machine/hardware.md:43`); its fourth entry is 2 GiB with a
   1 GiB file system in it. The 1 TB disk in that record was a USB disk.
+* The KRFFS fallback root faults with interrupts off and polls the disk
+  from the fault (`kernel.c:2064`). ATA disables its interrupt and polls
+  (`ata.c:311`). USB starts after the root is mounted (`kernel.c:3224`).
+* GRUB's pinned core opens fixed `hd0` paths before the generated menu
+  (`grub-embed.cfg:14`) and its prefix is `(hd0,msdos1)` (`regen_grub.sh:79`);
+  a kernel identity does not change where the loader looks.
+* The MBR's fields count sectors (`mbr.c:28`); its 2 TiB is at 512 bytes.
 * Milestone 46 gave the kernel a heap, allocated objects, the waiting
   rules and allocated interrupt vectors.
 
@@ -115,15 +122,38 @@ every supported controller and every port with a disk; ATA gets
 per-channel and per-device state, both channels, master and slave, native
 PCI ports where the controller has them, and LBA48. Both probe, always.
 
-### The disk is driven by interrupts, one command at a time
+### AHCI is driven by interrupts, one command at a time; ATA stays polled
 
 AHCI enables interrupts and completes through the request layer's
 sleeping path with one active command per port and a software queue above
 it, which lets the processor run someone else during a transfer and lets
 two disks progress independently. Several commands in flight to one disk
 is NCQ, with tags, ordering, flushes and recovery of its own; it is not
-this milestone's. The polled path stays for boot and for the recovery
-kernel's raw window.
+this milestone's. The polled path stays for boot, for the recovery
+kernel's raw window and for the fallback root's fault, which runs with
+interrupts off: a polled command takes the port only when its queue is
+idle and the queue does not start until the polled command has completed,
+and the fallback root is proved after interrupts are on. ATA is polled
+and stays so; it is the emulator's disk and a transfer is short, and the
+Readme says which bus sleeps.
+
+### The loader finds the root the way the kernel does
+
+The pinned GRUB core is regenerated through `regen_grub.sh` and its
+review procedure to search for the boot partition by its file-system
+identity rather than open `hd0`, and the generated menu names the root
+by the identity the kernel takes; the artifacts are verified by the
+procedure's own checks. Without this a root on the second disk is found
+by the kernel and not by the loader.
+
+### An install target is a disk the firmware boots
+
+USB disks are usable: mounted, written, repaired, written raw from
+recovery. They are not install targets, because USB comes up after the
+root is mounted and the loader on this machine boots them by a different
+path; milestone 49 shows the reason beside the disk. A root on USB would
+need early USB discovery and a bounded wait for the root, and that is
+not this milestone's.
 
 ### USB disks are disks
 
@@ -167,10 +197,12 @@ sizes showing both, each partition mountable and writable.
 ### Phase 2: partitions and identity
 
 The shared discovery service with MBR extended entries and full GPT; the
-guarded reread; root by identity; `bootctl` through identity. Proof: rows
+guarded reread; root by identity; `bootctl` through identity; the GRUB
+core regenerated and the menu naming the root by identity. Proof: rows
 with MBR on one disk and GPT with more than four partitions on another, a
 damaged primary GPT, duplicate identities refused, a blank disk, a root
-whose enumeration number changes between boots and is still found; the
+whose enumeration number changes between boots and is still found by the
+loader and the kernel both, the disks swapped in QEMU; the
 mutation that takes the first match makes the duplicate row fail.
 
 ### Phase 3: the drivers
@@ -178,9 +210,11 @@ mutation that takes the first match makes the duplicate row fail.
 AHCI on every controller and port, interrupt-driven with the software
 queue; ATA on both channels, both devices, LBA48; both probed together.
 Proof: AHCI and IDE together with each as root in turn; master and slave
-on both channels; a row reading from two processes on two disks showing
-both progressing; a sparse disk larger than 128 GiB written and read near
-its end on IDE.
+on both channels; a row with a transfer delayed by the lag device from
+which a second process on the other disk completes before the first, the
+overlap observed and the longest scheduling delay measured; the fallback
+root faulting and mounting after interrupts are on; a sparse disk larger
+than 128 GiB written and read near its end on IDE.
 
 ### Phase 4: USB disks
 
@@ -192,35 +226,39 @@ addressed near its end.
 
 ### Phase 5: sectors, volumes and files
 
-Discovered sector size; the ext2 array sized at mount; the checks sized
-from geometry and memory with the read-only answer; 64-bit offsets;
-`resize2fs` and `growroot`. Proof: a 4096-byte-sector QEMU disk mounted
-and checked; a sparse disk the Lenovo's size grown from 1 GiB to the
-partition at 64 MiB of RAM with `resize2fs` and `e2fsck` memory recorded,
-written near its end, killed and repaired; a growth interrupted between
-the entry and the grow repaired by running again; a 5 GiB file written
-and read back on ext2 and exFAT.
+Discovered sector size; the ext2 array sized at mount; the checks sized from
+geometry and memory with the read-only answer; 64-bit offsets; `resize2fs`
+and `growroot`. Proof: a 4096-byte-sector QEMU disk mounted and checked; a
+sparse disk the Lenovo's size grown from 1 GiB to the partition at 64 MiB of
+RAM with `resize2fs` and `e2fsck` memory recorded, written near its end,
+killed and repaired; a growth interrupted between the entry and the grow
+repaired by running again; a 5 GiB file written, read back, sought, stat'ed,
+truncated, appended and shared between two descriptors on ext2 and exFAT,
+and an offset past the format's limit refused by name.
 
-### Phase 6: the machine
+### Phase 6: the close
 
-The Lenovo's root grown to its disk under the rule: the stick booted and
-shown to work, every sector the growth changes saved on the host and the
-stick, which for a grow is the old partition's extent and the table, since
-`resize2fs` rewrites metadata inside the old extent; recovery the saved
-default until the grown root has booted and been checked.
-
-### Phase 7: the close
-
-Proof, once and in this order: build from clean; the full set; a boot on
-the Lenovo and the SSH capstone; everything that comes up fixed; the whole
+Proof, once and in this order: build from clean; the full set; a boot on the
+Lenovo and the SSH capstone; everything that comes up fixed; the whole
 milestone's diff to Codex in units of six files, most serious first; every
-finding fixed; the full set again. The block, file-system and kernel Readmes and the Readme's "Updating the
-installed machine" carry
-the facts in the same commits as the code and Codex writes their prose in
-the same round. Problems found on the way that this milestone did not set
-out to fix are already in `dev-log/50-shortcomings/plan.md` with file and
-line, and none is fixed here unless the milestone cannot close without it.
-Then notes, the milestone's Readme and the index entry.
+finding fixed; the full set again. The block, file-system and kernel Readmes
+and the Readme's "Updating the installed machine" carry the facts in the
+same commits as the code and Codex writes their prose in the same round.
+Problems found on the way that this milestone did not set out to fix are
+already in `dev-log/50-shortcomings/plan.md` with file and line, and none is
+fixed here unless the milestone cannot close without it. Then notes, the
+milestone's Readme and the index entry.
+
+### Phase 7: the machine
+
+After the review of the code that writes. The Lenovo's root grown to its
+disk under the rule: the stick booted and shown to work, every sector the
+growth changes saved on the host and the stick, which for a grow is the
+old partition's extent and the table, since `resize2fs` rewrites metadata
+inside the old extent; recovery the saved default until the grown root
+has booted and been checked. Then twenty sessions on it running milestone
+46's load row for an hour, the numbers into `hardware.md` and the
+Readme's Limits section.
 
 ## Risks
 

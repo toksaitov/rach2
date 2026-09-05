@@ -5,13 +5,14 @@
 A person boots the recovery stick, answers a few questions and has a working
 Rach2 on a disk of the machine: which disk, chosen from every disk the
 kernel found, each shown by node, model, serial, size in bytes, bus,
-internal or external, and its current partition table; the root password; the first user's
-name, password and, if they have one, their authorized keys; a confirmation
-before the write; a line that says how far the write has got; a check that
-what reached the disk is what was sent; and a closing line that says to
-reboot. Root may then log in over SSH with that password. The milestone is
-complete when a fresh disk in QEMU and the Lenovo's disk have both been
-installed this way and come up as the system the answers described.
+internal or external, and its current partition table; the root password;
+the first user's name, password and, if they have one, their authorized
+keys; a confirmation before the write; a line that says how far the write
+has got; a check that what reached the disk is what was sent; and a closing
+line that says to reboot. Root may then log in over SSH with that password.
+The milestone is complete when a fresh disk in QEMU and the Lenovo's disk
+have both been installed this way and come up as the system the answers
+described.
 
 ## What the tree settles before this plan
 
@@ -20,7 +21,14 @@ installed this way and come up as the system the answers described.
   `e2fsck` and dropbear (`krffs/manifests/rach2-recovery.manifest`).
 * `reflash` copies a declared number of bytes to an offset of a device,
   refusing a short or a long input and a misaligned range
-  (`utils/reflash.c`); it prints one line at the end and nothing during.
+  (`utils/reflash.c`); it prints one line at the end and nothing during;
+  it opens its target by pathname (`reflash.c:85`), so a handle the
+  installer holds protects nothing it runs.
+* `bootctl commit` accepts only a running candidate (`bootctl.c:321`) and
+  every `bootctl` command opens `/dev/bootpart`, the running system's boot
+  partition (`bootctl.c:198`); from the stick that is the stick's.
+* The metal acceptance authenticates with the demo key fixed in its source
+  (`metal_accept.sh:39`), which an install removes.
 * Milestone 47 gave the kernel a registry of every disk on every bus,
   `/dev/diskN` for each, partition identities, a guarded table reread,
   and recovery raw writes to USB disks under the same authority as SATA.
@@ -60,13 +68,17 @@ installed this way and come up as the system the answers described.
 
 The installer lists every disk in the registry with what `/proc/disk`
 reports: node, model, serial, size in bytes, bus, internal or external,
-whole disk, and the table it has now. It excludes the stick it is running
-from, any disk with a mounted partition, and any disk recovery itself
-depends on, each with its reason shown. The chosen disk is held by its
-handle and generation through the write, so a disk pulled after the
-question is refused, not replaced by the next one. The install writes
-fresh partition identities, and the GRUB menu it writes names the target
-disk, not `hd0`, so a root on a second disk boots.
+whole disk, and the table it has now. It excludes, each with its reason
+shown: the stick it is running from; any disk with a mounted partition;
+any disk recovery itself depends on; a USB disk, which the firmware and
+the kernel do not boot as a root; a disk whose logical sector is not 512
+bytes; and a disk smaller than the image. The chosen disk is opened once
+and the descriptor is inherited by `reflash`, the reread and the check,
+which gain a form that takes a descriptor instead of a pathname, so a
+disk pulled after the question is refused, not replaced by the next one.
+The install writes fresh partition identities, and the GRUB menu it
+writes names the target by identity, as milestone 47's loader does, so a
+root on a second disk boots.
 
 ### The image travels whole and is verified twice
 
@@ -118,15 +130,33 @@ drops the `-g`. The installer writes it. The RAM images and recovery keep
 The installer prints the device as the rule describes and asks for the
 device's name typed back, not a `y`. On the Lenovo the owner's own procedure
 still applies around it: the stick booted and shown to work; every sector
-the image will overwrite, all 1655 MiB, saved compressed on the host and on
-the stick and the stick's copy hashed back before the write, since a
-sustained write to the stick is the path that once failed; and recovery
-the saved default until the first boot is verified. The image's own boot
-partition replaces the one that held the saved default, so after the write
-and before the reboot the installer sets the new boot partition's default
-to recovery, and the person runs `bootctl commit` from the installed
-system once it has come up. The failure row of phase 5 boots the stick on a
-damaged install and restores the saved copy.
+the install will write, which is the image's 1655 MiB and then the whole
+extent of the old root partition that `growroot` rewrites, saved
+compressed on the host and on the stick and the stick's copy hashed back
+before the write, since a sustained write to the stick is the path that
+once failed; and recovery the saved default until the first boot is
+verified. The steps after the copy change the disk too, so they run in a
+fixed order with a durable point after each: the image written and
+hashed back; the table reread; the identities written; the root grown and
+checked with `e2fsck -fn`; the accounts written; the boot default set;
+the configuration read back and compared with the answers. Only then does
+the installer say "installed". The image's own boot partition replaces
+the one that held the saved default, so the installer sets the new boot
+partition's default to recovery through `bootctl` given that partition as
+a target, marks the new root a candidate for one trial boot, and the
+person runs `bootctl commit` from the installed system once it has come
+up, as the tool already requires. The restore row of phase 5 boots the
+stick on a damaged install and puts the saved copy back, all of it.
+
+### Recovery is interactive too
+
+The stick's menu offers `rach2-recover` beside the installer: a program
+that lists the disks and their partitions, checks a file system and says
+what it found, restores a saved image to a named disk with the same
+confirmation as the installer, installs a kernel through `bootctl` on a
+named boot partition, and opens a shell, each step cancellable with the
+outcome said in one line. A damaged install that recovery can reach is
+not the goal; a person putting it back without knowing `reflash` is.
 
 ### The root takes the disk
 
@@ -166,9 +196,10 @@ reading passwords without echo, confirming with the device's name typed
 back, holding the target by handle. Proof includes: QEMU with two disks,
 installed onto each in turn with the other's hash unchanged, the disks
 enumerated in the other order and the right one still written, a target
-pulled after the question refused, a disk with a mounted partition
-refused, and the installed system booting from the second disk. Proof: the harness drives it through its
-serial steps with good and bad answers and requires each refusal.
+pulled after the question refused, a disk with a mounted partition refused,
+and the installed system booting from the second disk. Proof: the harness
+drives it through its serial steps with good and bad answers and requires
+each refusal.
 
 ### Phase 4: the accounts and the SSH policy
 
@@ -181,32 +212,39 @@ hash; the fallback still takes the demo key.
 
 ### Phase 5: what goes wrong
 
-A write interrupted by a killed machine, a hash that does not match, a full
-stick, a disk that is not there, an answer of nothing. Proof: a row for each,
-each ending in the message the manual page promises and a disk that recovery
-can still reach.
+A write interrupted by a killed machine at each durable point, a hash
+that does not match, a full stick, a disk that is not there, a disk
+pulled after the question, an answer of nothing, an interrupted growth.
+Proof: a row for each, each ending in the message the manual page
+promises, and a restore row that boots the stick on the damaged install
+and brings the saved system back byte for byte through `rach2-recover`;
+the acceptance script taking its credentials from a file on the host
+rather than from its source or its arguments, so it works after the demo
+key is gone.
 
-### Phase 6: the machine
-
-The Lenovo, under the rule: stick booted, sectors saved, recovery the saved
-default, the install, the readback, the first boot, `bootctl commit`. "Any
-disk" is a capability, not an approval: the owner is shown the target and
-names it, every time, as the rule says.
-
-### Phase 7: the close
+### Phase 6: the close
 
 The reference for `rach2-install`, its facts gathered here and its prose
 Codex's, as plain text under `utils/` until milestone 51 makes it
-`install(8)`; the Readme's "Updating the installed machine" rewritten
-around the installer the same way. Proof, once and in this order: build from clean; the full set; a boot on
-the Lenovo and the SSH capstone; everything that comes up fixed; the whole
-milestone's diff to Codex in units of six files, most serious first; every
-finding fixed; the full set again. The Readmes the milestone changed carry
-the facts in the same commits as the code and Codex writes their prose in
-the same round. Problems found on the way that this milestone did not set
-out to fix are already in `dev-log/50-shortcomings/plan.md` with file and
-line, and none is fixed here unless the milestone cannot close without it.
-Then notes, the milestone's Readme and the index entry.
+`install(8)`; the Readme's "Updating the installed machine" rewritten around
+the installer the same way. Proof, once and in this order: build from clean;
+the full set; a boot on the Lenovo and the SSH capstone; everything that
+comes up fixed; the whole milestone's diff to Codex in units of six files,
+most serious first; every finding fixed; the full set again. The Readmes the
+milestone changed carry the facts in the same commits as the code and Codex
+writes their prose in the same round. Problems found on the way that this
+milestone did not set out to fix are already in
+`dev-log/50-shortcomings/plan.md` with file and line, and none is fixed here
+unless the milestone cannot close without it. Then notes, the milestone's
+Readme and the index entry.
+
+### Phase 7: the machine
+
+After the review of the code that writes. The Lenovo, under the rule:
+stick booted, sectors saved, recovery the saved default, the install, the
+readback, the first boot, `bootctl commit`, the acceptance with the
+installed credentials. "Any disk" is a capability, not an approval: the
+owner is shown the target and names it, every time, as the rule says.
 
 ## Risks
 

@@ -82,7 +82,9 @@ what it has, and where to look.
 A host check, `tools/verify/mancheck.c`, takes the inventory from three
 places: the programs the manifests stage, expanded, with the test probes
 excluded by a list; the applets the built BusyBox reports with
-`busybox --list`, with their aliases; and `programs.mk` for what `utils/`
+the applet table the build keeps beside the binary
+(`build_busybox.sh:88`), since the guest binary does not run on the host,
+with their aliases; and `programs.mk` for what `utils/`
 builds. It refuses a program with no page in section 1 or 8. BusyBox
 applets that this project enables get pages adapted from BusyBox's own
 documentation, under its licence, describing what the applet does here and
@@ -100,9 +102,21 @@ the fact sheet carries and the check here confirms.
 
 ### The recovery image gets the pages it needs
 
-A small set on the RAM image: `install(8)`, `reflash(8)`, `bootctl(8)`,
-`recovery(7)`, `e2fsck(8)`, `mount(8)`, `netup(8)`. The rest are on the
-installed root.
+A small set on the RAM image: every command the interactive recovery
+and the installer direct a person to use, `rach2-install(8)`,
+`rach2-recover(8)`, `reflash(8)`, `bootctl(8)`, `growroot(8)`,
+`resize2fs(8)`, `recovery(7)`, `e2fsck(8)`, `mount(8)`, `netup(8)`, and
+`man(1)` itself. The rest are on the installed root. `mancheck` checks
+each image's staged pages and aliases, not the page tree, so a page that
+exists but is not staged where its command is fails the check.
+
+### BusyBox pages are family pages
+
+A hundred applets do not get a hundred pages. Applets of one family, the
+file utilities, the text filters, the archive tools, share a page with
+an alias per name, concise, saying what each does here and what it does
+not do on this kernel. An example is rerun on a second device
+arrangement only when it depends on device selection.
 
 ## Phases
 
@@ -140,16 +154,19 @@ The rest of `utils/`, Doom, dropbear, and the BusyBox applets. Proof:
 
 ### Phase 5: the close
 
-`mancheck` in `tests/run style`; the rule written into `CLAUDE.md`'s
-Documentation section. Then, once: build from clean; the full set; the
-pages read on the Lenovo; a Codex proofreading round over every page,
-six a unit, reading each against its fact sheet; every finding fixed; the
-full set again; notes, the milestone's Readme and the index entry.
+`mancheck` in `tests/run style`, proved by mutation: a page removed, an
+alias broken and a malformed page each refused; the rule written into
+`CLAUDE.md`'s Documentation section. Then, once: build from clean; the
+full set; the pages read on the Lenovo; the milestone's code, `mancheck`,
+the rendering, the staging and the build rules, to Codex for review as
+one unit, and every page to Codex for proofreading, six a unit, each
+against its fact sheet; every finding fixed; the full set again; notes,
+the milestone's Readme and the index entry.
 
 ## Risks
 
-* Volume: BusyBox alone is well over a hundred applets. The order is the
-  order a student meets them, and phase 4 is allowed to take weeks.
+* Volume: BusyBox alone is well over a hundred applets. The family pages
+  bound it, and the order is the order a student meets them.
 * A page that describes Linux rather than this kernel is worse than none;
   every system-call page is written from the kernel's source, not from
   memory.
