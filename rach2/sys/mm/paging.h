@@ -1,6 +1,7 @@
 #ifndef _PAGING_H_
 #define _PAGING_H_
 
+#include "frame.h"
 #include "heap.h"
 
 #include "../panic.h"
@@ -69,12 +70,12 @@ struct page_dir {
 typedef struct page_dir page_dir_t;
 
 /*
- * Initialize paging. 'usable_frames' is the number of PAGE_SIZE physical frames
- * the kernel should manage (from frame_usable_count(), sized off the multiboot
- * memory map and capped to the direct-mapped window); 0 falls back to the full
- * window.
+ * Initialize paging. `map` is the physical memory the firmware's map
+ * establishes, with the kernel image and the modules already reserved; the
+ * frame table is sized from it, one word per frame below its top, and the
+ * tables this carves are reserved in it before it returns.
  */
-void init_paging(size_t usable_frames);
+void init_paging(struct frame_map *map);
 
 /*
  * Mark a page as user-accessible or supervisor-only.
@@ -198,12 +199,19 @@ extern page_dir_t *_kernel_dir;
 extern page_dir_t *_curr_dir;
 
 /*
- * Physical frame reference counts (one byte per frame) and the frame count.
- * 0 means the frame is free; N means N mappings share it. A fresh allocation
- * sets the count to 1; copy-on-write fork bumps it; freeing a mapping drops it,
- * and the frame returns to the pool only when the last reference is gone.
+ * The frame table: one word per physical frame below the map's top, named
+ * by frame number. 0 means the frame is free; N below `FRAME_REF_MAX` means
+ * N mappings share it. A fresh allocation sets the count to 1; copy-on-write
+ * fork raises it; freeing a mapping lowers it, and the frame returns to the
+ * pool only when the last reference is gone. The words at and above
+ * `FRAME_REF_MAX` are states and not counts: a frame the map does not offer,
+ * and a frame the map offers that the kernel cannot reach yet, above the
+ * identity-mapped window.
  */
-extern uint8_t *_frames;
+#define FRAME_REF_MAX  0xFFFFFF00u
+#define FRAME_UNMAPPED 0xFFFFFFFEu
+#define FRAME_ABSENT   0xFFFFFFFFu
+extern uint32_t *_frames;
 extern size_t _frames_number;
 
 /*

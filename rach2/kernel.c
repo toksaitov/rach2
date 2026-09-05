@@ -122,6 +122,40 @@ static void keyboard_handler(isr_params_t *params);
 static bool str_equal(const char *a, const char *b);
 static void boot_init_process(void);
 
+/**
+ * One memory-map entry as text, `START-END TYPE` with 64-bit hexadecimal
+ * addresses, since the kernel's formatter prints 32-bit words and a map on
+ * a 4 GiB machine reaches past them.
+ */
+static void memory_map_line(char *buf, uint32_t buflen, uint64_t addr, uint64_t len, uint32_t type)
+{
+    static const char digits[] = "0123456789ABCDEF";
+    uint64_t v[2];
+    uint32_t pos = 0, k;
+    int shift;
+
+    v[0] = addr;
+    v[1] = addr + len;
+    for (k = 0; k < 2 && pos + 20 < buflen; k++) {
+        if (k == 1) {
+            buf[pos++] = '-';
+        }
+        buf[pos++] = '0';
+        buf[pos++] = 'x';
+        for (shift = 60; shift >= 0; shift -= 4) {
+            buf[pos++] = digits[(v[k] >> shift) & 0xF];
+        }
+    }
+    if (pos + 12 < buflen) {
+        const char *name = type == 1 ? " available" : type == 2 ? " reserved" : type == 3 ? " acpi" : type == 4 ? " nvs" : type == 5 ? " bad" : " other";
+
+        for (k = 0; name[k] && pos + 1 < buflen; k++) {
+            buf[pos++] = name[k];
+        }
+    }
+    buf[pos] = '\0';
+}
+
 static bool test_memory(void);
 static bool test_strings(void);
 static void test_display(void);
@@ -2983,9 +3017,49 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     init_mm();
     klog(KLOG_INFO, "boot", "memory manager: ready");
 
-    /* Size the physical frame pool from the multiboot memory map, capped to the
-     * direct-mapped window (frame_usable_count). */
-    init_paging(frame_usable_count(info));
+    /* Physical memory as the firmware's map establishes it: the map is
+     * recorded entry by entry, since no record of the Lenovo's exists and
+     * the netconsole is how one is taken; then the kernel image with the
+     * boot data below it and the modules are reserved, the frame table is
+     * sized from what is left, and the four numbers are reported. */
+    {
+        static struct frame_map map;
+        const void *mmap = NULL;
+        uint32_t mmap_len = 0;
+        uint32_t m;
+        uint64_t addr, len;
+        uint32_t type;
+
+        if (info->flags & MULTIBOOT_INFO_MEM_MAP) {
+            mmap = (const void *)(uintptr_t)info->mmap_addr;
+            mmap_len = info->mmap_length;
+        }
+        for (m = 0; frame_map_entry(mmap, mmap_len, m, &addr, &len, &type); m++) {
+            char line[64];
+
+            memory_map_line(line, sizeof(line), addr, len, type);
+            klog(KLOG_INFO, "memory", "map: %s", line);
+        }
+        if (frame_map_build(&map, mmap, mmap_len,
+                            (info->flags & MULTIBOOT_INFO_MEMORY) ? info->mem_upper : 0) != 0) {
+            k_panic("memory: the firmware's map has more ranges than the kernel keeps");
+        }
+        if (map.from_mem_upper) {
+            klog(KLOG_WARN, "memory", "no usable map; mem_upper taken as one range");
+        }
+        frame_map_reserve(&map, 0, (uintptr_t)&_end);
+        for (m = 0; m < num_modules && m < MAX_MODULES; m++) {
+            module_info_t *mod = get_module(m);
+
+            if (mod) {
+                frame_map_reserve(&map, mod->start, mod->end);
+            }
+        }
+        init_paging(&map);
+        klog(KLOG_INFO, "memory", "usable %d KiB, unreachable %d KiB, reserved %d KiB, managed %d KiB",
+             (int)(map.usable_bytes / 1024), (int)(map.unreachable_bytes / 1024),
+             (int)(map.reserved_bytes / 1024), (int)(frame_total_count() * (PAGE_SIZE / 1024)));
+    }
     klog(KLOG_INFO, "boot", "paging: ready");
 
     /* Reserve the cache frames and pre-map the disk window in the kernel

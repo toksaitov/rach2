@@ -20,8 +20,13 @@ extern void terminate_current_process(int32_t signo);
 page_dir_t *_kernel_dir;
 page_dir_t *_curr_dir;
 
-uint8_t *_frames;
-size_t   _frames_number;
+uint32_t *_frames;
+size_t    _frames_number;
+/* The frames the allocator can hand out today: those below the
+ * identity-mapped window. The scans stop here rather than at the table's
+ * end, which on a 4 GiB machine is a million entries further. */
+static size_t _window_frames;
+static uint32_t _managed_frames;
 
 /**
  * Free lists for page directories and page tables. When a process exits, its
@@ -67,8 +72,8 @@ static page_table_t *alloc_page_table(void)
 
     table = (page_table_t *)mem_reserve(sizeof(page_table_t), true);
     if (table) {
-        /* Mark the frame as used in the bitmap. mem_reserve allocates memory
-         * after init_paging but does not update the frame bitmap; without this,
+        /* Mark the frame as used in the frame table. mem_reserve allocates
+         * memory after init_paging without updating the table; without this,
          * alloc_user_page could hand the same frame to a user page, overwriting
          * the page table. */
         uintptr_t frame = (uintptr_t)table / PAGE_SIZE;
@@ -106,7 +111,7 @@ static page_dir_t *alloc_page_dir(void)
 
     dir = (page_dir_t *)mem_reserve(sizeof(page_dir_t), true);
     if (dir) {
-        /* Mark the frames as used in the bitmap. page_dir_t is 8KB (2 pages),
+        /* Mark the frames as used in the table. page_dir_t is 8KB (2 pages),
          * so mark both frames. */
         uintptr_t frame = (uintptr_t)dir / PAGE_SIZE;
         uintptr_t num_frames = (sizeof(page_dir_t) + PAGE_SIZE - 1) / PAGE_SIZE;
@@ -123,7 +128,7 @@ static void _page_fault_handler(isr_params_t *params);
 
 static void _load_page_dir(page_dir_t *dir);
 
-void init_paging(size_t usable_frames)
+void init_paging(struct frame_map *map)
 {
     unsigned int frame;
 
@@ -139,15 +144,27 @@ void init_paging(size_t usable_frames)
         k_panic("frame.h constants drifted from paging.h");
     }
 
-    /* Size the frame pool from the multiboot memory map, capped to the
-     * direct-mapped window (computed by frame_usable_count in k_main). Falls
-     * back to the full window if the bootloader gave us nothing usable. */
-    _frames_number = usable_frames ? usable_frames : (HARD_MEMORY_LIMIT / PAGE_SIZE);
-    _frames = (uint8_t *) mem_reserve(_frames_number, true);
+    /* The table covers every frame below the map's top, one word each, and
+     * lives below the window with the other boot tables; a map with nothing
+     * usable gets the window, so a machine whose firmware says nothing still
+     * boots as it did. */
+    _frames_number = map->top_frame ? map->top_frame : (HARD_MEMORY_LIMIT / PAGE_SIZE);
+    _window_frames = _frames_number < HARD_MEMORY_LIMIT / PAGE_SIZE
+                         ? _frames_number
+                         : HARD_MEMORY_LIMIT / PAGE_SIZE;
+    _frames = (uint32_t *) mem_reserve(_frames_number * sizeof(uint32_t), true);
     if (_frames == NULL) {
-        k_panic("init_paging: no reserved memory for the frame bitmap");
+        k_panic("init_paging: no reserved memory for the frame table");
     }
-    k_memset(_frames, 0, _frames_number);
+    _managed_frames = 0;
+    for (frame = 0; frame < _frames_number; frame++) {
+        if (map->top_frame == 0 || frame_map_usable(map, (uint32_t)frame)) {
+            _frames[frame] = frame < _window_frames ? 0 : FRAME_UNMAPPED;
+            _managed_frames++;
+        } else {
+            _frames[frame] = FRAME_ABSENT;
+        }
+    }
 
     _kernel_dir = (page_dir_t *) mem_reserve(sizeof(page_dir_t), true);
     if (_kernel_dir == NULL) {
@@ -159,7 +176,7 @@ void init_paging(size_t usable_frames)
     /*
      * Identity map all physical memory up to HARD_MEMORY_LIMIT.
      * This allows kernel code to access any physical address directly.
-     * Only frames below mem_reserved_ptr are marked as "in use" in the bitmap;
+     * Only frames below mem_reserved_ptr are marked as used in the frame table;
      * frames above remain free for user page allocation.
      */
     phys_address = frame = 0;
@@ -188,7 +205,7 @@ void init_paging(size_t usable_frames)
 
         /* Mark frames below mem_reserved_ptr as used (kernel, heap, modules).
          * The `frame < _frames_number` bound matches the final pass and the
-         * other bitmap writes; it only matters when real RAM is smaller than
+         * other table writes; it only matters when real RAM is smaller than
          * the direct-mapped window, but the guard keeps every write in range.
          */
         if (phys_address < mem_reserved_ptr && frame < _frames_number) {
@@ -226,6 +243,20 @@ void init_paging(size_t usable_frames)
      * User page allocations will search for free frames starting here.
      */
     _user_frames_start = mem_reserved_ptr / PAGE_SIZE;
+    /* Everything the boot carved below the break is reserved, the tables
+     * above included. What the allocator manages is counted from the table
+     * and not from the map's arithmetic, so the boot's report compares the
+     * two: every whole frame the map offers above the break, reachable or
+     * not yet. */
+    if (map->top_frame) {
+        frame_map_reserve(map, 0, mem_reserved_ptr);
+    }
+    _managed_frames = 0;
+    for (frame = _user_frames_start; frame < _frames_number; frame++) {
+        if (_frames[frame] == 0 || _frames[frame] == FRAME_UNMAPPED) {
+            _managed_frames++;
+        }
+    }
 
     register_isr_handler(14, &_page_fault_handler, "page fault");
 
@@ -624,7 +655,7 @@ uintptr_t map_mmio(uintptr_t phys_addr, size_t size)
  */
 uintptr_t alloc_kernel_frame(void)
 {
-    uintptr_t frame = _frames_number;
+    uintptr_t frame = _window_frames;
 
     while (frame-- > _user_frames_start) {
         if (_frames[frame] == 0) {
@@ -642,20 +673,21 @@ uintptr_t alloc_kernel_frame(void)
  */
 uint32_t frame_total_count(void)
 {
-    return (uint32_t)_frames_number;
+    return _managed_frames;
 }
 
 /**
  * Return the number of physical frames currently free.
  *
- * A linear scan of the allocation bitmap. The caller (sysinfo, the leak probe)
- * wants a point-in-time count, so no locking is needed under the IF discipline.
+ * A linear scan of the frame table below the window. The caller (sysinfo,
+ * the leak probe) wants a point-in-time count, so no locking is needed
+ * under the IF discipline.
  */
 uint32_t frame_free_count(void)
 {
     uint32_t i, free_count = 0;
 
-    for (i = 0; i < (uint32_t)_frames_number; i++) {
+    for (i = 0; i < (uint32_t)_window_frames; i++) {
         if (_frames[i] == 0) {
             free_count++;
         }
@@ -854,9 +886,9 @@ void frame_ref(uintptr_t phys)
 {
     uintptr_t frame = phys / PAGE_SIZE;
 
-    /* Only a live frame can gain a sharer; cap at the byte's range so a runaway
-     * count cannot wrap to 0 (which would read as "free"). */
-    if (frame < _frames_number && _frames[frame] != 0 && _frames[frame] < 0xFF) {
+    /* Only a live frame can gain a sharer, and the words at and above
+     * `FRAME_REF_MAX` are states, not counts. */
+    if (frame < _frames_number && _frames[frame] != 0 && _frames[frame] < FRAME_REF_MAX - 1) {
         _frames[frame]++;
     }
 }
@@ -868,13 +900,10 @@ uint32_t frame_unref(uintptr_t phys)
     if (frame >= _frames_number || _frames[frame] == 0) {
         return 0;
     }
-    /* A frame whose count ever saturated (frame_ref caps at 0xFF) has lost its
-     * exact share count, so decrementing it could drop below the real number of
-     * mappings and free a still-live frame. Pin it instead; leaking a frame is
-     * safe, a use-after-free is not. (Unreachable while MAX_PROCS <= 255 bounds
-     * sharing far below the cap; this is a guard, not a hot path.) */
-    if (_frames[frame] == 0xFF) {
-        return 0xFF;
+    /* A state word is not a count: a frame the map does not offer or the
+     * kernel cannot reach has no mapping to drop. */
+    if (_frames[frame] >= FRAME_REF_MAX) {
+        return _frames[frame];
     }
     _frames[frame]--;
     return _frames[frame];
@@ -991,13 +1020,13 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
      * freed user pages can be reused, even if mem_reserved_ptr advances
      * due to later kernel allocations (like new page tables).
      */
-    for (frame = _user_frames_start; frame < _frames_number; frame++) {
+    for (frame = _user_frames_start; frame < _window_frames; frame++) {
         if (_frames[frame] == 0) {
             break;
         }
     }
 
-    if (frame >= _frames_number) {
+    if (frame >= _window_frames) {
         /* Who holds the pool, so that a machine that runs out says what
          * filled it: the boot's reservations below the user frames, the
          * kernel's frames from the top, and the user frames between, with
@@ -1005,18 +1034,18 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
         uint32_t user_used = 0, user_shared = 0;
         uintptr_t f;
 
-        for (f = _user_frames_start; f < _frames_number; f++) {
+        for (f = _user_frames_start; f < _window_frames; f++) {
             if (_frames[f] != 0) {
                 user_used++;
             }
-            if (_frames[f] > 1) {
+            if (_frames[f] > 1 && _frames[f] < FRAME_REF_MAX) {
                 user_shared++;
             }
         }
         user_used -= user_used < _kernel_frames_reserved ? user_used : _kernel_frames_reserved;
         klog(KLOG_ERR, "vm",
              "user page: no free frames in %d: %d boot, %d kernel, %d user of which %d shared, pid %d",
-             (int)_frames_number, (int)_user_frames_start, (int)_kernel_frames_reserved,
+             (int)_window_frames, (int)_user_frames_start, (int)_kernel_frames_reserved,
              (int)user_used, (int)user_shared, current_proc ? current_proc->pid : 0);
         return 0;  /* No free frames */
     }

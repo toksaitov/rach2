@@ -231,6 +231,10 @@ run-fpu: rach2 tests krffs test-image $(HARNESS)
 	    --timeout 90 --steptmo 30 --ok "FPUPROBE OK" --never "FPUPROBE FAIL" \
 	    --log $(TEST_IMAGE).fpu-x87.log \
 	    "expect=fpu: fxsr: off" "expect=Type 'help'" "send=exec /fpuprobe x87" "expect=FPUPROBE"
+# `tests/run memory`: the kernel's account of physical memory at five sizes
+# (see tests/system/suites/memory.sh).
+run-memory: rach2 tests krffs test-image $(HARNESS)
+	sh tests/system/suites/memory.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS)
 # `tests/run fault`: the three probes whose whole claim is that the kernel
 # killed them. vmfault writes through a pointer in no mapping, vmro writes a
 # page it mapped read-only, and winprobe reads the page-cache window, which
