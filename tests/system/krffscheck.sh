@@ -115,6 +115,45 @@ img=$(copy_broken freedatasize freedatasize)
 [ "$(status "$img" --strict)" = 0 ] || bad "--strict refused a free node's own length"
 say "a free node whose length is larger than the node is accepted, as the kernel accepts it: OK"
 
+# A file and a directory of one name in one directory, which a rename
+# interrupted between the parent it published and the name it had still to
+# write leaves behind. The repair keeps the directory whatever the sizes say,
+# because its children name it by its identifier; the kernel's own check makes
+# the same judgement.
+DUP="$DIR/dirdup.krffs"
+sh "$REPO/krffs/mkimage.sh" "$REPO/krffs/manifests/krffsvol-test.manifest" \
+    "$DUP" 4 >/dev/null 2>&1 || bad "the image with a directory in it"
+python3 - "$DUP" <<'PYDUP' || bad "the image with a name on two nodes"
+import struct, sys
+NAME, MODE, SIZE, PARENT = 11, 267, 325, 349
+b = bytearray(open(sys.argv[1], 'rb').read())
+nodes, off = [], 0
+while off < len(b):
+    size = struct.unpack_from('<Q', b, off + SIZE)[0]
+    if size == 0:
+        break
+    nodes.append((off, size, b[off + 2], bytes(b[off + NAME:off + NAME + 32]),
+                  struct.unpack_from('<H', b, off + MODE)[0]))
+    off += size
+dirs = [n for n in nodes if n[2] == 2 and (n[4] & 0o170000) == 0o040000]
+files = [n for n in nodes if n[2] == 2 and (n[4] & 0o170000) != 0o040000 and n[3][0]]
+if not dirs or not files:
+    raise SystemExit('the image has no directory beside a file')
+d = dirs[0]
+# The largest file takes the directory's name and its parent, so the rule that
+# keeps the larger node would drop the directory.
+f = max(files, key=lambda n: n[1])
+b[f[0] + NAME:f[0] + NAME + 256] = b[d[0] + NAME:d[0] + NAME + 256]
+struct.pack_into('<Q', b, f[0] + PARENT,
+                 struct.unpack_from('<Q', b, d[0] + PARENT)[0])
+open(sys.argv[1], 'wb').write(b)
+PYDUP
+[ "$(status "$DUP" --strict)" != 0 ] || bad "--strict accepted a name on two nodes"
+[ "$(status "$DUP" "")" = 0 ] || bad "the repeated name was not repaired"
+"$REPO/build/krffs/readfile.krffs" "$DUP" /sub/inner.txt "$DIR/inner.out" \
+    > /dev/null 2>&1 || bad "the repair took the directory and not the file"
+say "a file that took a directory's name loses it, and the directory keeps its children: OK"
+
 # The update protocol. The kernel writes an image a field at a time and a
 # machine can stop between any two of them, so every prefix of every mutating
 # operation must leave a file system the check accepts or repairs. The model
