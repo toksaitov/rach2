@@ -7,7 +7,7 @@ recovery system writes nothing to a disk without being asked, two
 floating-point programs no longer share one register file, and a burst of
 writes no longer takes a healthy mount read-only. Nothing here adds a
 feature, and nothing else from the last review round is done here; the
-build, the large file and the stale claims are milestone 50, after the
+build, the large file and the stale claims are milestone 51, after the
 technical milestones that would drift them again. The milestone is complete
 when the three proofs below pass on the final tree.
 
@@ -58,10 +58,14 @@ processor, and Intel advises against it (SA-00145).
 
 ### Running out is not a device failure
 
-A submission that finds the request pool full waits for a slot; only a
-transfer that failed answers `EIO`, and only `EIO` makes the buffer cache
-mark the device failed. Milestone 46 makes the pool larger and the device
-interrupt-driven; this milestone makes the answer right at any size.
+A submission that finds the request pool full waits for a slot, and its
+transfer deadline starts when the transfer starts, not when it joined the
+queue (`request.c:47` starts it at the slot today); only a transfer that
+failed answers `EIO`, and only `EIO` makes the buffer cache mark the
+device failed. Milestone 46 replaces the pool with allocated requests and
+milestone 47 makes the disk interrupt-driven; this milestone makes the
+answer right at any size, proved on a sleeping device, since polled SATA
+bypasses the pool.
 
 ## Phases
 

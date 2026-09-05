@@ -1,10 +1,11 @@
-# Milestone 48: the installer
+# Milestone 49: the installer
 
 ## The goal
 
 A person boots the recovery stick, answers a few questions and has a working
-Rach2 on the machine's disk: the disk it will write, shown by model, size,
-bus and its current partition table; the root password; the first user's
+Rach2 on a disk of the machine: which disk, chosen from every disk the
+kernel found, each shown by node, model, serial, size in bytes, bus,
+internal or external, and its current partition table; the root password; the first user's
 name, password and, if they have one, their authorized keys; a confirmation
 before the write; a line that says how far the write has got; a check that
 what reached the disk is what was sent; and a closing line that says to
@@ -20,9 +21,10 @@ installed this way and come up as the system the answers described.
 * `reflash` copies a declared number of bytes to an offset of a device,
   refusing a short or a long input and a misaligned range
   (`utils/reflash.c`); it prints one line at the end and nothing during.
-* The kernel writes one disk, the SATA disk it probed, published as
-  `/dev/disk0` with a raw window in the recovery kernel only; a stick's
-  nodes refuse writes (`devfs.c`, `dev_usb_write`).
+* Milestone 47 gave the kernel a registry of every disk on every bus,
+  `/dev/diskN` for each, partition identities, a guarded table reread,
+  and recovery raw writes to USB disks under the same authority as SATA.
+  Milestone 48 gave it every controller and card.
 * `init` starts dropbear with `-g`, which forbids root's password login
   (`utils/init.c:381`).
 * BusyBox's `adduser`, `addgroup` and `deluser` write `/etc/passwd`,
@@ -37,10 +39,9 @@ installed this way and come up as the system the answers described.
   stick is a hybrid ISO followed by an exFAT partition, and `stickcheck`
   requires that partition type and an exFAT boot sector
   (`stickcheck.c:106`, `:123`); exFAT holds a file of that size.
-* The partition nodes are built once at boot from the table the kernel read
-  (`kernel.c:1896`, `devfs.c:1567`); nothing rereads a table the system
-  itself has just written. A blank disk has no `/dev/disk0p4`; a disk with
-  another layout has one that describes the wrong range.
+* GRUB's embedded configuration names `hd0` and fixed partition numbers
+  (`mkdisk_grub.sh:215`), so a root on the second disk boots only if the
+  menu names that disk.
 * Recorded speeds: USB reads of 8.4 to 23.2 MB/s over short raw and exFAT
   transfers, and 224 s for the compressed 1 GiB root written to SATA over
   SSH (`dev-log/43-machine/hardware.md:128`, `:218`). Nothing has measured
@@ -55,12 +56,17 @@ installed this way and come up as the system the answers described.
 
 ## Decisions
 
-### One target, shown properly
+### Any disk, shown properly, one chosen
 
-The installer offers what the kernel can write: the SATA disk, with what
-`/proc/disk` reports, its model, serial, size in bytes, controller, and the
-table it has now, or nothing. It does not offer a USB target. That is a
-policy the kernel keeps and this milestone does not change.
+The installer lists every disk in the registry with what `/proc/disk`
+reports: node, model, serial, size in bytes, bus, internal or external,
+whole disk, and the table it has now. It excludes the stick it is running
+from, any disk with a mounted partition, and any disk recovery itself
+depends on, each with its reason shown. The chosen disk is held by its
+handle and generation through the write, so a disk pulled after the
+question is refused, not replaced by the next one. The install writes
+fresh partition identities, and the GRUB menu it writes names the target
+disk, not `hd0`, so a root on a second disk boots.
 
 ### The image travels whole and is verified twice
 
@@ -77,12 +83,9 @@ console, over SSH and in a log.
 
 ### The table is reread after the write
 
-The recovery kernel gains one guarded operation: reread the partition
-table of a disk none of whose partitions is open or mounted, and rebuild
-its nodes. The installer calls it after the write, so `/dev/disk0p4` is
-the partition the image just made, on a blank disk as on one with another
-layout. The alternative, a second boot of the stick that resumes the
-install, was rejected because a student demo should not need it.
+The installer calls milestone 47's guarded reread after the write, so the
+fourth partition node is the one the image just made, on a blank disk as
+on one with another layout.
 
 ### The installed system is configured after the write, from recovery
 
@@ -128,9 +131,10 @@ damaged install and restores the saved copy.
 ### The root takes the disk
 
 The installer writes the four partitions the sealed image has, then calls
-milestone 47's `growroot`, so the installed root is nearly the whole disk
-from the first install. The question offers the whole disk as the default
-and the image's own size as the alternative.
+milestone 47's `growroot` with the target's identity, so the installed
+root is nearly the whole disk from the first install. The question offers
+the whole disk as the default and the image's own size as the
+alternative.
 
 ## Phases
 
@@ -144,10 +148,10 @@ boot of it reaches recovery and lists the image with the right hash.
 ### Phase 2: `reflash -p` and the readback
 
 The progress line, shown during the readback too, and a `--verify` that
-reads back and hashes; the guarded table reread. Proof: a host test of the
-progress arithmetic; a suite row that installs to a blank QEMU disk and to
-one carrying another layout, compares hashes and finds the new nodes; the
-mutation that skips the reread makes the second fail. On the Lenovo,
+reads back and hashes. Proof: a host test of the progress arithmetic; a
+suite row that installs to a blank QEMU disk and to one carrying another
+layout, compares hashes and finds the new nodes; the mutation that skips
+the reread makes the second fail. On the Lenovo,
 before phase 6, the whole sequence is timed on the port the stick will
 use: the hash of the image on the stick, the write, the readback. If the
 two stick reads take longer than a demo can bear, the image's hash on the
@@ -156,9 +160,14 @@ and the installer's own check is the readback alone.
 
 ### Phase 3: the questions
 
-`rach2-install`, a shell program in the recovery image, asking each
-question, validating the user name, reading passwords without echo,
-confirming with the device's name typed back. Proof: the harness drives it through its
+`rach2-install`, a shell program in the recovery image, listing the disks
+with their exclusions, asking each question, validating the user name,
+reading passwords without echo, confirming with the device's name typed
+back, holding the target by handle. Proof includes: QEMU with two disks,
+installed onto each in turn with the other's hash unchanged, the disks
+enumerated in the other order and the right one still written, a target
+pulled after the question refused, a disk with a mounted partition
+refused, and the installed system booting from the second disk. Proof: the harness drives it through its
 serial steps with good and bad answers and requires each refusal.
 
 ### Phase 4: the accounts and the SSH policy
@@ -181,12 +190,14 @@ can still reach.
 ### Phase 6: the machine
 
 The Lenovo, under the rule: stick booted, sectors saved, recovery the saved
-default, the install, the readback, the first boot, `bootctl commit`.
+default, the install, the readback, the first boot, `bootctl commit`. "Any
+disk" is a capability, not an approval: the owner is shown the target and
+names it, every time, as the rule says.
 
 ### Phase 7: the record
 
 The reference for `rach2-install`, written as plain text under `utils/`
-now and made `install(8)` by milestone 49; the Readme's "Updating the
+now and made `install(8)` by milestone 50; the Readme's "Updating the
 installed machine" rewritten around the installer; notes, `tests/run all`,
 the milestone's Readme and the index entry.
 

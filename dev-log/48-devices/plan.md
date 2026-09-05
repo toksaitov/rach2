@@ -1,0 +1,113 @@
+# Milestone 48: USB and network
+
+## The goal
+
+The kernel drives every controller and every card it has a driver for,
+however many the machine has and in whatever order they are found: two
+xHCI controllers, a dozen or more USB devices behind several hubs, two
+network cards of the same model or different ones, each interface with
+its own address, and a card that fails leaving the others working. What
+the kernel cannot drive, an EHCI-only machine or a wireless card, it says
+by name at boot. The milestone is complete when the proof set below
+passes in QEMU with two controllers and two cards and the Lenovo's own
+devices work as before.
+
+## What the tree settles before this plan
+
+* xHCI is the one host-controller driver. Discovery takes one controller
+  and keeps its state globally (`xhci.h:7`, `xhci.c:297`); the limits are
+  12 devices, 2 hubs, 12 slots, 16 root ports and 32 scratchpad pages
+  (`core.h:20`, `hub.h:16`, `xhci.c:543`); extra ports are clipped and a
+  controller needing more scratchpads is rejected; a configuration
+  descriptor is truncated at 64 bytes (`core.c:999`); the command, event,
+  endpoint and completion rings are fixed. An Intel controller's port
+  routing is written on vendor identity alone (`xhci.c:267`). EHCI is
+  declined (`usb.c:9`).
+* Three network drivers; the first that comes up is the interface and a
+  supported card that fails stops the probe (`netdev.c:35`); each driver
+  keeps one instance in globals (`rtl8168.c:106`); the stack has one MAC,
+  one address configuration and one interface state (`netif.c:49`,
+  `net.h:45`); a route is the connected subnet or the one gateway
+  (`ip.c:263`); ARP entries have no interface. Manifests name `eth0` and
+  the resolver files carry QEMU's addresses (`rach2-metal-disk.manifest:133`).
+* The platform: power management uses a small chipset table
+  (`board.c:42`); reboot sends an Insyde-specific SMI command first without
+  checking the firmware (`power.c:241`); audio takes one HDA controller
+  (`hda.c:1605`). PCI already scans all 256 buses (`pci.c:217`).
+* Milestone 46 allocates objects and interrupt vectors; milestone 47 put
+  USB disks in the block registry.
+
+## Decisions
+
+### Controllers are instances
+
+xHCI state is per controller, every supported controller is driven, and
+each has its own vector, rings and completion state. Ports and scratchpads
+are sized from the controller's capability registers. Device and hub
+records are allocated; a slot count is the controller's own limit and a
+device that finds no slot waits for one. Configuration descriptors are
+read whole and validated. The Intel port-routing write is done only on a
+controller whose identity matches a list, with the reason recorded.
+
+### EHCI is named, not driven
+
+An EHCI-only machine is older than this project's target and a driver
+would be a project of its own, with transaction translators and companion
+controllers behind it. The boot says "USB: EHCI at 00:1d.0, not driven".
+UHCI, OHCI and UAS are the same.
+
+### Interfaces are instances
+
+Each card gets its own driver instance, MAC, addresses, link state and
+queues; a failed card leaves the others; two cards of one model work.
+Interfaces are `eth0`, `eth1` in probe order and may be configured by MAC
+so probe order does not decide policy. ARP entries carry their interface;
+routes select an interface; connected routes for each interface and one
+chosen default; packet sockets, DHCP and interface ioctls name the
+interface. Bonding, bridging, forwarding, wireless and IPv6 are not this
+milestone's. The manifests stop naming QEMU's addresses.
+
+### The platform checks before it acts
+
+The Insyde reboot command is sent only when the firmware identifies
+itself as Insyde; the chipset table is consulted for what it knows and the
+standard paths run for the rest; HDA drives the first controller and
+names any other.
+
+## Phases
+
+### Phase 1: xHCI instances
+
+Per-controller state, capability-sized arrays, allocated records,
+descriptors whole. Proof: QEMU with two xHCI controllers, a keyboard on
+one and three sticks behind a hub on the other, all working; a row with
+more devices than the old twelve; a hub with more than fifteen ports
+clipped by the hub's own count; a Codex review of the controller change as
+one unit.
+
+### Phase 2: interface instances
+
+Driver instances, the stack per interface, ARP and routes by interface,
+configuration by MAC. Proof: QEMU with two e1000 cards on two subnets,
+both reachable, SSH through each; one card failed at probe with the other
+up; the sealed image's network files carrying no QEMU address; the
+network suites; a Codex review of the routing change as one unit.
+
+### Phase 3: the platform and the machine
+
+The firmware check before the SMI reboot; the chipset table's fallbacks;
+the Lenovo booted with its keyboard, mouse, sticks, hub and card as
+before. Proof: the metal acceptance; the reboot from SSH.
+
+### Phase 4: the record
+
+The USB and network Readmes corrected in the same commits; notes;
+`tests/run all`; the milestone's Readme and the index entry.
+
+## Risks
+
+* Two controllers sharing nothing is the design, but the input layer
+  behind them is one; the keyboard row on each controller proves it.
+* A second interface changes the meaning of every address in the stack;
+  the review is asked for the case where a packet arrives on the wrong
+  one.

@@ -1,4 +1,4 @@
-# Milestone 50: the audit
+# Milestone 51: the audit
 
 ## The goal
 
@@ -26,8 +26,9 @@ minute, or the claim is dropped.
   directory while Make is still parsing, so a target that only reads can
   delete.
 * `rach2/sys/syscall.c` is 12071 lines.
-* The documents drifted before milestone 45 and the four milestones since
-  changed the memory, the disk, the installer and the manuals: the last
+* The documents drifted before milestone 45 and the five milestones since
+  changed the memory, the disks, the devices, the installer and the
+  manuals: the last
   round found `rach2/Readme.md` calling exFAT read-only where `exfat.c`
   writes, `utils/Readme.md` naming retired targets, and suite counts
   disagreeing between `tests/Readme.md`, `tests/system/Readme.md` and the
@@ -42,8 +43,12 @@ minute, or the claim is dropped.
   failure behaviour and its proofs, some are a narrative of how a thing came
   to be, some are an inventory that repeats what a manifest or a registry
   already lists.
-* Milestone 49 gave the machine manual pages: `install(8)`, `bootctl(8)`,
+* Milestone 50 gave the machine manual pages: `install(8)`, `bootctl(8)`,
   `reflash(8)` and `recovery(7)` are where a procedure now lives.
+* Milestone 46 classified every fixed bound that stayed in the kernel;
+  the tools were not classified: `guestcheck` assumes 16 descriptors
+  (`guestcheck.c:38`), `bootslot` has fixed FAT workspaces
+  (`bootslot.h:28`), the sealed image fixes four sizes (`Makefile:624`).
 * `CLAUDE.md` says a delegate reviews and proofreads and never writes a
   document, and that the rewriting is done here so the tree keeps one voice.
   The owner asked for Codex's criticism and structure "up to a full
@@ -53,6 +58,15 @@ minute, or the claim is dropped.
   rule; a person decides the rest.
 
 ## Decisions
+
+### Every remaining bound is classified
+
+Every fixed number left in the kernel, the tools, the image builders and
+the procedures is found and classified: physical, format or ABI, policy
+and configurable, safety invariant, or unfinished work. The first four
+get their reason beside them; the fifth gets an entry in `notes.md` and
+a place in the next plan. An old helper or document that still imposes a
+limit the kernel no longer has is the fault this phase exists to find.
 
 ### Nothing moves that does not have to
 
@@ -92,7 +106,7 @@ rewrite is done from it.
 
 The root Readme: purpose, what it supports, quick start, limits, and a map.
 The administration prose is split by what it is: the general procedures
-are the manual pages milestone 49 wrote; the measured facts of the one
+are the manual pages milestone 50 wrote; the measured facts of the one
 installed machine, its identity, geometry and offsets, stay in the
 milestone records under `dev-log/`; the root Readme keeps a short section
 that points to both, and `CLAUDE.md`'s Hardware section, which today sends
@@ -138,19 +152,26 @@ selfbuild` unchanged; a script that shows every function body identical
 before and after is supporting evidence, since headers, macros and linkage
 can change around identical bodies.
 
-### Phase 3: the inventory
+### Phase 3: the bounds
+
+The classification, with the reasons written into the headers, the
+scripts and the Makefile; the tools' own limits lifted where the kernel's
+were. Proof: a host check that lists every numeric bound in the tree with
+its class, and refuses one without.
+
+### Phase 4: the inventory
 
 Every Readme read; the claim inventory written; the criticism round on
 Codex, its units fixed in `notes.md` first. Proof: the inventory names an
 owner for every claim or a fix.
 
-### Phase 4: the pilot
+### Phase 5: the pilot
 
 The root Readme, the kernel Readme and one component Readme, `vfs.Readme.md`,
 rewritten into the shapes above. Proof: the owner reads the three and
 accepts the shape before it goes further.
 
-### Phase 5: the rest
+### Phase 6: the rest
 
 Every component Readme into its shape; the administration prose split as
 decided; the generated inventories. Proof: `tests/run style`, the
@@ -159,12 +180,12 @@ file of questions a newcomer asks, each answered by a named place in the
 documents, worked through by the owner with a clock; the time is recorded
 in `notes.md` and the one-minute claim is kept or dropped by it.
 
-### Phase 6: the proofreading round
+### Phase 7: the proofreading round
 
 Codex over the final documents, six files a unit, wording proposed and
 applied here. Proof: no claim it doubts survives unanswered in `notes.md`.
 
-### Phase 7: the record
+### Phase 8: the record
 
 Notes, `tests/run all`, the milestone's Readme and the index entry.
 

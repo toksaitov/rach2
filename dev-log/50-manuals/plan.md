@@ -1,4 +1,4 @@
-# Milestone 49: the manuals
+# Milestone 50: the manuals
 
 ## The goal
 
@@ -35,10 +35,13 @@ a program without a page, and the pages are true to the code they describe.
   number for the whole socket family. Their behaviour is documented, where
   it is, in `rach2/sys/fs/Readme.md`, `vfs.Readme.md`, `network/Readme.md`
   and the kernel Readme.
-* Milestone 48 left the reference for `rach2-install` as plain text under
-  `utils/`; milestone 46 left the limits in the kernel Readme and
-  `hardware.md`; milestone 47 left the disk layout in the block Readme.
-  The pages are written from those and the code.
+* Milestone 49 left the reference for `rach2-install` as plain text under
+  `utils/`; milestone 46 left the memory accounting, the limits policy and
+  the waiting rules in the kernel Readme; milestone 47 left the disk
+  registry, the identities and the disk layout in the block Readme;
+  milestone 48 left the interfaces in the USB and network Readmes. The
+  pages are written from those and the code, and every example is run on
+  more than one device arrangement so no page describes one machine.
 * The style rules of `CLAUDE.md` apply to a manual page as to any prose:
   ASCII, terse, exact, the Unix manual pages themselves the model.
 
@@ -105,8 +108,9 @@ nothing.
 
 `rach2(7)`, `login(1)`, `su(1)`, `sh(1)` for the shell, `tcc(1)`, `make(1)`,
 `loopctl(8)`, `mount(8)`, `disk(7)` for the layout, `recovery(7)`,
-`install(8)`, `growroot(8)`, `bootctl(8)`, `reflash(8)`, and `limits(7)`
-for what milestone 46 measured. Proof: each read on the machine
+`install(8)`, `growroot(8)`, `bootctl(8)`, `reflash(8)`, `limits(7)` for
+the policy and `memory(7)` for the accounting, both from milestone 46, and
+`disk(7)` covering identities and `/dev/diskN` from milestone 47. Proof: each read on the machine
 and its examples run.
 
 ### Phase 3: the kernel's interfaces
