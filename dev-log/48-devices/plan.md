@@ -82,16 +82,14 @@ Per-controller state, capability-sized arrays, allocated records,
 descriptors whole. Proof: QEMU with two xHCI controllers, a keyboard on
 one and three sticks behind a hub on the other, all working; a row with
 more devices than the old twelve; a hub with more than fifteen ports
-clipped by the hub's own count; a Codex review of the controller change as
-one unit.
+clipped by the hub's own count.
 
 ### Phase 2: interface instances
 
 Driver instances, the stack per interface, ARP and routes by interface,
 configuration by MAC. Proof: QEMU with two e1000 cards on two subnets,
 both reachable, SSH through each; one card failed at probe with the other
-up; the sealed image's network files carrying no QEMU address; the
-network suites; a Codex review of the routing change as one unit.
+up; the sealed image's network files carrying no QEMU address.
 
 ### Phase 3: the platform and the machine
 
@@ -99,10 +97,17 @@ The firmware check before the SMI reboot; the chipset table's fallbacks;
 the Lenovo booted with its keyboard, mouse, sticks, hub and card as
 before. Proof: the metal acceptance; the reboot from SSH.
 
-### Phase 4: the record
+### Phase 4: the close
 
-The USB and network Readmes corrected in the same commits; notes;
-`tests/run all`; the milestone's Readme and the index entry.
+Proof, once and in this order: build from clean; the full set; a boot on
+the Lenovo and the SSH capstone; everything that comes up fixed; the whole
+milestone's diff to Codex in units of six files, most serious first; every
+finding fixed; the full set again. The USB and network Readmes carry
+the facts in the same commits as the code and Codex writes their prose in
+the same round. Problems found on the way that this milestone did not set
+out to fix are already in `dev-log/50-shortcomings/plan.md` with file and
+line, and none is fixed here unless the milestone cannot close without it.
+Then notes, the milestone's Readme and the index entry.
 
 ## Risks
 

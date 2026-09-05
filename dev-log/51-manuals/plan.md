@@ -1,4 +1,4 @@
-# Milestone 50: the manuals
+# Milestone 51: the manuals
 
 ## The goal
 
@@ -42,10 +42,21 @@ a program without a page, and the pages are true to the code they describe.
   milestone 48 left the interfaces in the USB and network Readmes. The
   pages are written from those and the code, and every example is run on
   more than one device arrangement so no page describes one machine.
+* `CLAUDE.md` makes Codex the writer of prose: the facts of a page are
+  gathered here, from the source, and Codex writes the page from them.
 * The style rules of `CLAUDE.md` apply to a manual page as to any prose:
   ASCII, terse, exact, the Unix manual pages themselves the model.
 
 ## Decisions
+
+### The facts are gathered here and the pages are written by Codex
+
+For each page a fact sheet is written here from the source: the name, the
+synopsis, every argument and flag with what the code does with it, every
+error the code answers and when, the files it touches, and an example
+that a suite row runs. Codex turns fact sheets into pages, in units of at
+most six, and each page that comes back is checked here against its
+sheet before it is committed. A page never says what the sheet does not.
 
 ### `mdoc` on the host, plain text on the machine
 
@@ -84,8 +95,8 @@ format changes its page in the same commit. On the host `mancheck` checks
 syntax with `mandoc -T lint` and coverage; an example that must be shown
 to run is tied to a guest suite row by name, since the host cannot run
 this kernel's calls, and the rows are the proof. A system-call page must
-say which flags the kernel accepts and what it answers to the rest, and a
-reviewer, not a tool, judges that.
+say which flags the kernel accepts and what it answers to the rest, which
+the fact sheet carries and the check here confirms.
 
 ### The recovery image gets the pages it needs
 
@@ -110,8 +121,8 @@ nothing.
 `loopctl(8)`, `mount(8)`, `disk(7)` for the layout, `recovery(7)`,
 `install(8)`, `growroot(8)`, `bootctl(8)`, `reflash(8)`, `limits(7)` for
 the policy and `memory(7)` for the accounting, both from milestone 46, and
-`disk(7)` covering identities and `/dev/diskN` from milestone 47. Proof: each read on the machine
-and its examples run.
+`disk(7)` covering identities and `/dev/diskN` from milestone 47. Proof:
+each read on the machine and its examples run.
 
 ### Phase 3: the kernel's interfaces
 
@@ -127,16 +138,13 @@ registered call with no page.
 The rest of `utils/`, Doom, dropbear, and the BusyBox applets. Proof:
 `mancheck` passes on every manifest.
 
-### Phase 5: the check in the tree
+### Phase 5: the close
 
 `mancheck` in `tests/run style`; the rule written into `CLAUDE.md`'s
-Documentation section; a Codex round over the pages, six a unit, its unit
-count fixed in `notes.md` first, reading each page against the source it
-describes before it proofreads.
-
-### Phase 6: the record
-
-Notes, `tests/run all`, the milestone's Readme and the index entry.
+Documentation section. Then, once: build from clean; the full set; the
+pages read on the Lenovo; a Codex proofreading round over every page,
+six a unit, reading each against its fact sheet; every finding fixed; the
+full set again; notes, the milestone's Readme and the index entry.
 
 ## Risks
 

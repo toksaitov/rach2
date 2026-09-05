@@ -189,9 +189,8 @@ wherever the loader put them; the old arithmetic uncompilable. Proof: a
 boot at 4 GiB whose probe fills pages beyond the old limit with a pattern
 and reads it back, forces copy-on-write, execs, frees and reuses; kernel
 objects still created after the old low region is full; a mapping made
-after a fork seen from every process; the whole suite at 64 MiB and at
-4 GiB; a boot on the Lenovo; a Codex review of the memory changes as one
-unit.
+after a fork seen from every process at 64 MiB and at
+4 GiB.
 
 ### Phase 3: the objects
 
@@ -201,8 +200,7 @@ classified in their headers. Proof: a row per former pool that crosses
 the old sixteen, or eight, or four, and a row that makes and frees the
 objects a thousand times and finds the heap where it started; the host
 tests running with the heap under a small memory so a leak or a bug
-sixteen would have shown still shows; a Codex review of the process and
-descriptor changes as one unit.
+sixteen would have shown still shows.
 
 ### Phase 4: the caches and the rules
 
@@ -221,21 +219,27 @@ makes it fail; a row that exhausts memory and finds `fork` refused with
 allocated. Proof: a user that forks past its limit is refused while
 another is not; a connection flood while root logs in on the console; a
 device given a vector it did not have before, with the network and USB
-suites unchanged; a Codex review of the limits as one unit.
+suites unchanged.
 
-### Phase 6: the record
+### Phase 6: the close
 
 Twenty sessions in QEMU building at once as the load row that milestone 47
-will run on the machine; the kernel and subsystem Readmes changed in the
-same commits as the code; notes, `tests/run all` at two memory sizes, the
-milestone's Readme and the index entry.
+will run on the machine. Proof, once and in this order: build from clean; the full set at 64 MiB and at 4 GiB; a boot on
+the Lenovo and the SSH capstone; everything that comes up fixed; the whole
+milestone's diff to Codex in units of six files, most serious first; every
+finding fixed; the full set again. The Readmes the milestone changed carry
+the facts in the same commits as the code and Codex writes their prose in
+the same round. Problems found on the way that this milestone did not set
+out to fix are already in `dev-log/50-shortcomings/plan.md` with file and
+line, and none is fixed here unless the milestone cannot close without it.
+Then notes, the milestone's Readme and the index entry.
 
 ## Risks
 
 * This is the kernel's memory design replaced underneath everything.
-  Each phase ends with the whole suite at two memory sizes and a boot on
-  the machine, and phase 2 is allowed to be the longest phase this project
-  has had.
+  Each phase compiles and runs the rows it touched; the full set at two
+  memory sizes and the machine come once at the close; phase 2 is allowed
+  to be the longest phase this project has had.
 * A heap that frees can fragment; the allocator keeps size classes and
   the thousand-cycle row measures it.
 * A lost wakeup or an allocation from interrupt context is the class of

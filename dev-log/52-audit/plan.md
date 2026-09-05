@@ -1,9 +1,10 @@
-# Milestone 51: the audit
+# Milestone 52: the audit
 
 ## The goal
 
 The tree put back into a state a person can trust, after the technical
-milestones and once, so nothing drifts it again before students see it:
+milestones and once, so nothing drifts it again before students see it,
+and the machine and the stick carrying the result:
 every document says what the code does, the build's rules live where
 their subject lives, the largest file is a size a reader can hold, and the
 documents a developer reads have one shape, one voice and no claim the
@@ -14,7 +15,13 @@ component's Readme has the same parts in the same order. History stays in
 below pass on the final tree, every claim in every Readme has an owner, a
 Codex round finds nothing stale, and a person new to the tree can find the
 answer to any question the milestone's own checklist asks in under a
-minute, or the claim is dropped.
+minute, or the claim is dropped; the test set covers the system as it now
+is, runs in parallel, and takes no longer than it did before milestone 45
+plus what the new hardware arrangements need; the build has no rule left
+over from a milestone that no longer needs it; the whole set of images is
+on the notebook's disk and the stick carries recovery and the installer;
+and the comments in the source and the support files have been read by
+Codex against the code they describe.
 
 ## What the tree settles before this plan
 
@@ -43,17 +50,15 @@ minute, or the claim is dropped.
   failure behaviour and its proofs, some are a narrative of how a thing came
   to be, some are an inventory that repeats what a manifest or a registry
   already lists.
-* Milestone 50 gave the machine manual pages: `install(8)`, `bootctl(8)`,
+* Milestone 51 gave the machine manual pages: `install(8)`, `bootctl(8)`,
   `reflash(8)` and `recovery(7)` are where a procedure now lives.
 * Milestone 46 classified every fixed bound that stayed in the kernel;
   the tools were not classified: `guestcheck` assumes 16 descriptors
   (`guestcheck.c:38`), `bootslot` has fixed FAT workspaces
   (`bootslot.h:28`), the sealed image fixes four sizes (`Makefile:624`).
-* `CLAUDE.md` says a delegate reviews and proofreads and never writes a
-  document, and that the rewriting is done here so the tree keeps one voice.
-  The owner asked for Codex's criticism and structure "up to a full
-  rewrite"; Codex's own answer was that it criticises and reviews and the
-  writing stays here unless the owner changes the rule.
+* `CLAUDE.md` makes Codex the writer and checker of prose since
+  2026-09-05: the facts and the claim inventory are prepared here, the
+  prose is Codex's, and every claim in what comes back is checked here.
 * `tools/verify/prosecheck.c` decides the mechanical half of the register
   rule; a person decides the rest.
 
@@ -106,7 +111,7 @@ rewrite is done from it.
 
 The root Readme: purpose, what it supports, quick start, limits, and a map.
 The administration prose is split by what it is: the general procedures
-are the manual pages milestone 50 wrote; the measured facts of the one
+are the manual pages milestone 51 wrote; the measured facts of the one
 installed machine, its identity, geometry and offsets, stay in the
 milestone records under `dev-log/`; the root Readme keeps a short section
 that points to both, and `CLAUDE.md`'s Hardware section, which today sends
@@ -125,13 +130,32 @@ the system calls, is produced by the tool that already reads the registry
 or removed; a document does not carry a count a registry already holds. No
 new tool is written for a list that appears once.
 
-### Codex criticises first and proofreads last; the writing is here
+### Codex writes the documents from the inventory, and reads the comments
 
-The round at the start takes at most six files per unit and asks for the
-structure it would use and every claim it doubts; the round at the end
-proofreads. Between them, one voice. If the owner wants Codex as the author
-of a document, that is a change to `CLAUDE.md` made before the document is
-written, not an exception made during.
+The claim inventory is the input: for each document, its shape and its
+claims with their owners. Codex writes each document from that, in units
+of six, and what comes back is checked here claim by claim before it is
+committed. Codex also reads every comment in the source and the support
+files against the code beside it, in the same units, and reports the ones
+that are stale, that narrate, or that use the register `CLAUDE.md`
+forbids; those are fixed here.
+
+### The test set is made lean and the build is made clean
+
+Every suite is listed with what it proves and how long it runs; a suite
+that proves what another proves is merged or removed; the new hardware
+arrangements, memory sizes, two disks, two controllers, two cards, get
+rows in existing suites where they fit and new suites only where they do
+not; the tiers are rebalanced so the core tier still answers in the time
+it did. Every rule in the build is listed with its owner; a rule with
+none, or one kept for a milestone that ended, goes.
+
+### The images go to the machine and the stick
+
+The last act of the milestone is the deployment: the stick rebuilt with
+recovery and the installer, booted and shown to work; the whole set of
+images installed on the notebook's disk through the installer under the
+hardware rule; the demo checked on the machine.
 
 ## Phases
 
@@ -152,26 +176,33 @@ selfbuild` unchanged; a script that shows every function body identical
 before and after is supporting evidence, since headers, macros and linkage
 can change around identical bodies.
 
-### Phase 3: the bounds
+### Phase 3: the test set and the build
+
+The suite and rule inventories; the merges and removals; the new rows;
+the tiers. Proof: the full set's time recorded against the record from
+before milestone 45; every suite in the registry named in the inventory.
+
+### Phase 4: the bounds
 
 The classification, with the reasons written into the headers, the
 scripts and the Makefile; the tools' own limits lifted where the kernel's
 were. Proof: a host check that lists every numeric bound in the tree with
 its class, and refuses one without.
 
-### Phase 4: the inventory
+### Phase 5: the inventory
 
 Every Readme read; the claim inventory written; the criticism round on
 Codex, its units fixed in `notes.md` first. Proof: the inventory names an
 owner for every claim or a fix.
 
-### Phase 5: the pilot
+### Phase 6: the pilot
 
 The root Readme, the kernel Readme and one component Readme, `vfs.Readme.md`,
-rewritten into the shapes above. Proof: the owner reads the three and
-accepts the shape before it goes further.
+written by Codex from the inventory into the shapes above and checked
+here. Proof: the owner reads the three and accepts the shape before it
+goes further.
 
-### Phase 6: the rest
+### Phase 7: the rest
 
 Every component Readme into its shape; the administration prose split as
 decided; the generated inventories. Proof: `tests/run style`, the
@@ -180,14 +211,21 @@ file of questions a newcomer asks, each answered by a named place in the
 documents, worked through by the owner with a clock; the time is recorded
 in `notes.md` and the one-minute claim is kept or dropped by it.
 
-### Phase 7: the proofreading round
+### Phase 8: the comments
 
-Codex over the final documents, six files a unit, wording proposed and
-applied here. Proof: no claim it doubts survives unanswered in `notes.md`.
+Codex over every source and support file, six a unit, reading each
+comment against its code; the stale, the narrating and the wrong register
+fixed here. Proof: `tests/run style` and a second Codex pass over the
+files that changed finding nothing.
 
-### Phase 8: the record
+### Phase 9: the close and the deployment
 
-Notes, `tests/run all`, the milestone's Readme and the index entry.
+Once: build from clean; the full set; the whole milestone's diff to Codex
+in units of six files; every finding fixed; the full set again. Then the
+stick rebuilt and booted, the notebook installed through the installer
+under the hardware rule, the demo checked on it. Then notes, the
+milestone's Readme and the index entry, and the report to the owner that
+everything is done, with nothing deferred.
 
 ## Risks
 

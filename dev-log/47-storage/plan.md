@@ -171,8 +171,7 @@ guarded reread; root by identity; `bootctl` through identity. Proof: rows
 with MBR on one disk and GPT with more than four partitions on another, a
 damaged primary GPT, duplicate identities refused, a blank disk, a root
 whose enumeration number changes between boots and is still found; the
-mutation that takes the first match makes the duplicate row fail; a Codex
-review of the discovery and root selection as one unit.
+mutation that takes the first match makes the duplicate row fail.
 
 ### Phase 3: the drivers
 
@@ -181,8 +180,7 @@ queue; ATA on both channels, both devices, LBA48; both probed together.
 Proof: AHCI and IDE together with each as root in turn; master and slave
 on both channels; a row reading from two processes on two disks showing
 both progressing; a sparse disk larger than 128 GiB written and read near
-its end on IDE; the metal acceptance on the Lenovo; a Codex review of the
-AHCI change as one unit.
+its end on IDE.
 
 ### Phase 4: USB disks
 
@@ -201,8 +199,7 @@ and checked; a sparse disk the Lenovo's size grown from 1 GiB to the
 partition at 64 MiB of RAM with `resize2fs` and `e2fsck` memory recorded,
 written near its end, killed and repaired; a growth interrupted between
 the entry and the grow repaired by running again; a 5 GiB file written
-and read back on ext2 and exFAT; a Codex review of the driver and offset
-changes as one unit.
+and read back on ext2 and exFAT.
 
 ### Phase 6: the machine
 
@@ -212,11 +209,18 @@ stick, which for a grow is the old partition's extent and the table, since
 `resize2fs` rewrites metadata inside the old extent; recovery the saved
 default until the grown root has booted and been checked.
 
-### Phase 7: the record
+### Phase 7: the close
 
-The block, file-system and kernel Readmes and the Readme's "Updating the
-installed machine" corrected in the same commits; notes; `tests/run all`;
-the milestone's Readme and the index entry.
+Proof, once and in this order: build from clean; the full set; a boot on
+the Lenovo and the SSH capstone; everything that comes up fixed; the whole
+milestone's diff to Codex in units of six files, most serious first; every
+finding fixed; the full set again. The block, file-system and kernel Readmes and the Readme's "Updating the
+installed machine" carry
+the facts in the same commits as the code and Codex writes their prose in
+the same round. Problems found on the way that this milestone did not set
+out to fix are already in `dev-log/50-shortcomings/plan.md` with file and
+line, and none is fixed here unless the milestone cannot close without it.
+Then notes, the milestone's Readme and the index entry.
 
 ## Risks
 

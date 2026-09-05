@@ -177,8 +177,7 @@ The root mounted from recovery, the accounts written, `sshd.conf` written,
 over SSH with the password; the first user logs in with the password and,
 when one was given, with the key; the demo credentials are refused on the
 installed root; the recovery system's own files are unchanged, checked by
-hash; the fallback still takes the demo key. The phase ends with a Codex
-review of the installer, `init` and `reflash` as one unit.
+hash; the fallback still takes the demo key.
 
 ### Phase 5: what goes wrong
 
@@ -194,12 +193,20 @@ default, the install, the readback, the first boot, `bootctl commit`. "Any
 disk" is a capability, not an approval: the owner is shown the target and
 names it, every time, as the rule says.
 
-### Phase 7: the record
+### Phase 7: the close
 
-The reference for `rach2-install`, written as plain text under `utils/`
-now and made `install(8)` by milestone 50; the Readme's "Updating the
-installed machine" rewritten around the installer; notes, `tests/run all`,
-the milestone's Readme and the index entry.
+The reference for `rach2-install`, its facts gathered here and its prose
+Codex's, as plain text under `utils/` until milestone 51 makes it
+`install(8)`; the Readme's "Updating the installed machine" rewritten
+around the installer the same way. Proof, once and in this order: build from clean; the full set; a boot on
+the Lenovo and the SSH capstone; everything that comes up fixed; the whole
+milestone's diff to Codex in units of six files, most serious first; every
+finding fixed; the full set again. The Readmes the milestone changed carry
+the facts in the same commits as the code and Codex writes their prose in
+the same round. Problems found on the way that this milestone did not set
+out to fix are already in `dev-log/50-shortcomings/plan.md` with file and
+line, and none is fixed here unless the milestone cannot close without it.
+Then notes, the milestone's Readme and the index entry.
 
 ## Risks
 

@@ -7,7 +7,7 @@ recovery system writes nothing to a disk without being asked, two
 floating-point programs no longer share one register file, and a burst of
 writes no longer takes a healthy mount read-only. Nothing here adds a
 feature, and nothing else from the last review round is done here; the
-build, the large file and the stale claims are milestone 51, after the
+build, the large file and the stale claims are milestone 52, after the
 technical milestones that would drift them again. The milestone is complete
 when the three proofs below pass on the final tree.
 
@@ -88,15 +88,19 @@ Save and restore in the switch, fork, exec and signal delivery. Proof: a
 probe whose processes keep live values in x87 and XMM registers and a
 non-default rounding mode across forced switches and timer preemption, fork
 and signal return, and check them; the mutation that removes the restore
-makes it fail, and so does the one that skips the signal frame. The phase
-ends with a Codex review of the switch, fork, exec and signal changes as
-one unit.
+makes it fail, and so does the one that skips the signal frame.
 
-### Phase 3: the record
+### Phase 3: the close
 
-Notes, `tests/run all`, a boot on the Lenovo with the new kernel through
-`bootctl`, the touched Readmes corrected in the same commits, the
-milestone's Readme and the index entry.
+Proof, once and in this order: build from clean; the full set; the new kernel on the Lenovo
+through `bootctl` and the SSH capstone; everything that comes up fixed; the whole
+milestone's diff to Codex in units of six files, most serious first; every
+finding fixed; the full set again. The Readmes the milestone changed carry
+the facts in the same commits as the code and Codex writes their prose in
+the same round. Problems found on the way that this milestone did not set
+out to fix are already in `dev-log/50-shortcomings/plan.md` with file and
+line, and none is fixed here unless the milestone cannot close without it.
+Then notes, the milestone's Readme and the index entry.
 
 ## Risks
 
