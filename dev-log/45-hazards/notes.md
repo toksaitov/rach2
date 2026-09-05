@@ -22,3 +22,8 @@ Recorded on 2026-09-06 before any change of this milestone, at commit `3c51bc6`,
 * `fnsave` leaves the unit initialised, so the x87 path's save is `fnsave; frstor`, a copy and not a reset, which fork and the signal frame need.
 * An unaligned area, the frame on the user stack, goes through an aligned static copy under masked interrupts; `fxsave` faults on an unaligned address.
 * A handler starts with the initial state, as Linux gives it, and the interrupted state is on the frame; a frame whose MXCSR has a reserved bit set is refused with `SIGSEGV`, since `fxrstor` would fault in the kernel.
+
+## The close
+
+* The clean build: `make -j` from a removed `build/` stops in its first second, entry 5 of milestone 50; `tests/run all` from that state built everything through the components make and ran, which is entry 4's test passing.
+* The first full set failed six suites. The guest build of the kernel: the staged TinyCC's assembler has `fxsave`, `fxrstor`, `fnsave` and `frstor` but not `ldmxcsr`, which is now written as bytes; the two install suites build the kernel on the machine and failed with it. `tests/run sealed` armed `recovery` for its repair and expected `e2fsck` to run; the repair is now `bootctl trial recovery-fsck`, which the stub's next-entry rules and `bootctl`'s entry list gained. `tests/run krffscheck` staged an image from three fixture files that only `tests/run krffsmount` wrote, scheduled after it; on a built tree the files were left from an earlier run, and on the clean tree the race showed. Both suites now write the files, by rename.

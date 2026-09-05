@@ -15,12 +15,16 @@ PART=2048
 fail() { echo "krffsmount-test: FAIL: $1" >&2; exit 1; }
 
 mkdir -p "$DIR"
-python3 - "$DIR/pattern.bin" <<'PY' || fail "the pattern file"
+python3 - "$DIR/pattern.bin.$$" <<'PY' || fail "the pattern file"
 import sys
 open(sys.argv[1], 'wb').write(bytes((i * 31 + 7) & 0xFF for i in range(65536)))
 PY
-printf 'hello\n' > "$DIR/hello.txt"
-printf 'inner\n' > "$DIR/inner.txt"
+printf 'hello\n' > "$DIR/hello.txt.$$"
+printf 'inner\n' > "$DIR/inner.txt.$$"
+# Into place by rename: `tests/run krffscheck` writes the same three files
+# for the same manifest, and the two may run at once.
+mv "$DIR/pattern.bin.$$" "$DIR/pattern.bin" && mv "$DIR/hello.txt.$$" "$DIR/hello.txt" &&
+    mv "$DIR/inner.txt.$$" "$DIR/inner.txt" || fail "the fixture files"
 
 sh "$REPO/krffs/mkimage.sh" "$REPO/krffs/manifests/krffsvol-test.manifest" \
     "$VOL" 4 >/dev/null 2>&1 || fail "building the volume"

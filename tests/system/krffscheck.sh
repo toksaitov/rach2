@@ -120,6 +120,20 @@ say "a free node whose length is larger than the node is accepted, as the kernel
 # write leaves behind. The repair keeps the directory whatever the sizes say,
 # because its children name it by its identifier; the kernel's own check makes
 # the same judgement.
+# The manifest stages three files under build/tests/system/krffsvol, which
+# `tests/run krffsmount` writes too; this suite writes them itself so that
+# it does not depend on running after that one, and by rename so that the
+# two writing at once leave whole files.
+VOLDIR="$REPO/build/tests/system/krffsvol"
+mkdir -p "$VOLDIR"
+python3 - "$VOLDIR/pattern.bin.$$" <<'PY' || bad "the pattern file"
+import sys
+open(sys.argv[1], 'wb').write(bytes((i * 31 + 7) & 0xFF for i in range(65536)))
+PY
+printf 'hello\n' > "$VOLDIR/hello.txt.$$"
+printf 'inner\n' > "$VOLDIR/inner.txt.$$"
+mv "$VOLDIR/pattern.bin.$$" "$VOLDIR/pattern.bin" && mv "$VOLDIR/hello.txt.$$" "$VOLDIR/hello.txt" &&
+    mv "$VOLDIR/inner.txt.$$" "$VOLDIR/inner.txt" || bad "the fixture files"
 DUP="$DIR/dirdup.krffs"
 sh "$REPO/krffs/mkimage.sh" "$REPO/krffs/manifests/krffsvol-test.manifest" \
     "$DUP" 4 >/dev/null 2>&1 || bad "the image with a directory in it"
