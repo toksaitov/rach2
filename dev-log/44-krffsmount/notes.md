@@ -406,3 +406,13 @@ the model for kernel code; those rewrites are refused for that reason and
 not for taste. Where a sentence was long because it was carrying its reason,
 it stays; where it was long because it was built toward a phrase, it is
 gone.
+
+## The sweep
+
+`tests/run all` on the final tree: all 73 suites passed. Two runs before it
+failed on suites that pass alone, and both are the load the pool puts on this
+host rather than the tree: `install-ext2` read a number the machine was still
+typing (`[: 3eD: integer expression expected`) and `selfbuild-ext2` did not
+reach a login prompt in its window, and in the next run `usb` failed a row it
+passes alone. They are recorded here because a run that has to be repeated is
+worth knowing about, not because anything in this milestone changed them.
