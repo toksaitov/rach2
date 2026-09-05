@@ -5674,14 +5674,13 @@ static int exec_krffs_read(void *ctx, void *dst, uint32_t count, uint32_t off)
 
 /* A program on a mount that is not the root is read through the mount: the
  * node held from the resolution, opened once for the load and released
- * after it. One exec runs at a time (see the argument buffers below), so
- * the context is static. */
+ * after it. It lives in the caller's own exec workspace below, because a
+ * read of a mounted volume sleeps and a second exec runs while it does. */
 struct exec_vfs_ctx {
     struct vfs_ref ref;
     void *handle;
     int32_t err; /* the last failed read's errno, reported instead of ENOEXEC */
 };
-static struct exec_vfs_ctx exec_ctx;
 
 static int exec_vfs_read(void *ctx, void *dst, uint32_t count, uint32_t off)
 {
@@ -5695,24 +5694,30 @@ static int exec_vfs_read(void *ctx, void *dst, uint32_t count, uint32_t off)
     return (int)got;
 }
 
-static void exec_vfs_done(void)
+static void exec_vfs_done(struct exec_vfs_ctx *c)
 {
-    if (exec_ctx.ref.mnt) {
-        vfs_release(exec_ctx.ref.mnt, exec_ctx.handle);
-        vfs_ref_release(&exec_ctx.ref);
-        exec_ctx.ref.mnt = NULL;
-        exec_ctx.handle = NULL;
+    if (c->ref.mnt) {
+        vfs_release(c->ref.mnt, c->handle);
+        vfs_ref_release(&c->ref);
+        c->ref.mnt = NULL;
+        c->handle = NULL;
     }
 }
 
 /*
  * Where execve has the new image's arguments while it destroys the old one.
  *
- * Static, and safe to be static: one process at a time is between filling these
- * and using them, because `in_syscall` stops the timer from scheduling and no
- * path inside execve blocks. They cannot be on the stack (the kernel stack is
- * 16 KB) and cannot be in the caller's address space (that is what is being
- * torn down).
+ * One workspace per process, and not one for the machine: a program on a
+ * mounted volume is read through the buffer cache, which sleeps, so a second
+ * execve runs while the first is inside a read. Sharing one set of buffers
+ * meant the second overwrote the first's arguments, its open file and the
+ * reference its resolution held, and the mount that reference belongs to
+ * could never be unmounted afterwards. `in_syscall` stops the timer from
+ * scheduling; it does not stop a call that gives the processor up.
+ *
+ * They cannot be on the stack (the kernel stack is 16 KB and this is about
+ * seven of them) and cannot be in the caller's address space (that is what
+ * is being torn down).
  *
  * The sizes come from the page these end up in, not from a round number.
  * `build_user_stack` lays the strings, both pointer arrays, the argc word, a
@@ -5732,18 +5737,24 @@ static void exec_vfs_done(void)
 #define EXEC_MAX_ENTRIES 63
 #define EXEC_MAX_STRINGS 3072
 
-static char _exec_path_buf[256];
-static char _exec_argv_storage[EXEC_MAX_STRINGS];
-static char *_exec_argv_bufs[EXEC_MAX_ENTRIES + 1];
-static char _exec_envp_storage[EXEC_MAX_STRINGS];
-static char *_exec_envp_bufs[EXEC_MAX_ENTRIES + 1];
-
 /* A script's first line, and the script's own path, which becomes an argument
- * to its interpreter. Both static, because the argv pointers handed on point
- * into them and the caller's memory is gone by the time they are read. */
+ * to its interpreter. Both in the workspace, because the argv pointers handed
+ * on point into them and the caller's memory is gone by the time they are
+ * read. */
 #define EXEC_SHEBANG_MAX 128
-static char _exec_shebang_line[EXEC_SHEBANG_MAX + 1];
-static char _exec_script_path[sizeof(_exec_path_buf)];
+
+struct exec_state {
+    struct exec_vfs_ctx vfs;
+    char path[256];
+    char argv_storage[EXEC_MAX_STRINGS];
+    char *argv_bufs[EXEC_MAX_ENTRIES + 1];
+    char envp_storage[EXEC_MAX_STRINGS];
+    char *envp_bufs[EXEC_MAX_ENTRIES + 1];
+    char shebang_line[EXEC_SHEBANG_MAX + 1];
+    char script_path[256];
+};
+
+static struct exec_state exec_states[MAX_PROCS];
 
 /**
  * Kill the current process after exec has destroyed its old address space.
@@ -5861,7 +5872,7 @@ static void __attribute__((noreturn)) exec_fail_destroyed(void)
  * not followed, because a chain of them is a loop nobody can see the
  * end of, and nothing here needs one.
  *
- * `_exec_path_buf` and `_exec_argv_bufs` are rewritten in place on success.
+ * The caller's `path` and `argv_bufs` are rewritten in place on success.
  * The script is read through `read` over `ctx`: the root's reader by path,
  * or the mount's over an open handle.
  *
@@ -5869,7 +5880,8 @@ static void __attribute__((noreturn)) exec_fail_destroyed(void)
  * @return 1 when rewritten, 0 when the file is not a script, or a negative
  *         errno for one whose first line names nothing.
  */
-static int32_t exec_shebang(int *argc, int (*read)(void *, void *, uint32_t, uint32_t),
+static int32_t exec_shebang(struct exec_state *s, int *argc,
+                            int (*read)(void *, void *, uint32_t, uint32_t),
                             void *ctx)
 {
     char *interp;
@@ -5881,14 +5893,14 @@ static int32_t exec_shebang(int *argc, int (*read)(void *, void *, uint32_t, uin
     int count;
     char *rebuilt[EXEC_MAX_ENTRIES + 1];
 
-    n = read(ctx, _exec_shebang_line, EXEC_SHEBANG_MAX, 0);
-    if (n < 3 || _exec_shebang_line[0] != '#' || _exec_shebang_line[1] != '!') {
+    n = read(ctx, s->shebang_line, EXEC_SHEBANG_MAX, 0);
+    if (n < 3 || s->shebang_line[0] != '#' || s->shebang_line[1] != '!') {
         return 0;
     }
-    _exec_shebang_line[n] = '\0';
+    s->shebang_line[n] = '\0';
     for (i = 2; i < n; i++) {
-        if (_exec_shebang_line[i] == '\n') {
-            _exec_shebang_line[i] = '\0';
+        if (s->shebang_line[i] == '\n') {
+            s->shebang_line[i] = '\0';
             break;
         }
     }
@@ -5899,7 +5911,7 @@ static int32_t exec_shebang(int *argc, int (*read)(void *, void *, uint32_t, uin
         return -ENOEXEC;
     }
 
-    p = _exec_shebang_line + 2;
+    p = s->shebang_line + 2;
     while (*p == ' ' || *p == '\t') {
         p++;
     }
@@ -5939,8 +5951,8 @@ static int32_t exec_shebang(int *argc, int (*read)(void *, void *, uint32_t, uin
        the same size, so this is a copy and never a truncation: handing the
        interpreter a shortened name would run a different file from the one
        whose permissions were just checked. */
-    k_strncpy(_exec_script_path, _exec_path_buf, sizeof(_exec_script_path) - 1);
-    _exec_script_path[sizeof(_exec_script_path) - 1] = '\0';
+    k_strncpy(s->script_path, s->path, sizeof(s->script_path) - 1);
+    s->script_path[sizeof(s->script_path) - 1] = '\0';
 
     extra = arg ? 2 : 1;
     count = extra + (*argc > 0 ? *argc - 1 : 0);
@@ -5952,24 +5964,24 @@ static int32_t exec_shebang(int *argc, int (*read)(void *, void *, uint32_t, uin
     if (arg) {
         rebuilt[i++] = arg;
     }
-    rebuilt[i++] = _exec_script_path;
+    rebuilt[i++] = s->script_path;
     for (n = 1; n < *argc; n++) {
-        rebuilt[i++] = _exec_argv_bufs[n];
+        rebuilt[i++] = s->argv_bufs[n];
     }
     rebuilt[i] = NULL;
     for (n = 0; n <= i; n++) {
-        _exec_argv_bufs[n] = rebuilt[n];
+        s->argv_bufs[n] = rebuilt[n];
     }
     *argc = i;
 
-    k_strncpy(_exec_path_buf, interp, sizeof(_exec_path_buf) - 1);
-    _exec_path_buf[sizeof(_exec_path_buf) - 1] = '\0';
+    k_strncpy(s->path, interp, sizeof(s->path) - 1);
+    s->path[sizeof(s->path) - 1] = '\0';
     /* Normalized the way a path from a caller is normalized. The check that
        keeps an exec out of the synthetic mounts reads the first component and
        does not collapse `.` or `..`, so an interpreter named
        `/bin/../dev/something` would pass it while the file system resolved the
        name it really wrote. */
-    if (canonicalize_abs(_exec_path_buf) < 0) {
+    if (canonicalize_abs(s->path) < 0) {
         return -ENOENT;
     }
     return 1;
@@ -6002,6 +6014,7 @@ static int32_t sys_execve(isr_params_t *params)
     uint32_t file_gid = 0;
     int secure = 0;
 
+    struct exec_state *s;
     uint32_t entry_point;
     elf_image_t img;
     uint8_t random16[16];
@@ -6013,21 +6026,26 @@ static int32_t sys_execve(isr_params_t *params)
     if (!current_proc) {
         return -ESRCH;
     }
+    /* This caller's workspace, by its place in the process table: what it
+     * puts there is read again after a sleep, and another exec must not be
+     * able to reach it. */
+    s = &exec_states[current_proc - proc_table];
+    k_memset(s, 0, sizeof(*s));
 
-    /* Resolve the program path (relative names against the cwd) into the static
-     * buffer. A bad user pointer, an over-long path, or an empty path is
+    /* Resolve the program path (relative names against the cwd) into that
+     * workspace. A bad user pointer, an over-long path, or an empty path is
      * rejected by the return value, so a kernel-range pointer cannot leak
      * kernel memory. The buffer is 256 bytes (NUL included). */
     if (!user_path) {
         return -EFAULT;
     }
-    len = copy_path_cwd(_exec_path_buf, sizeof(_exec_path_buf), user_path);
+    len = copy_path_cwd(s->path, sizeof(s->path), user_path);
     if (len < 0) {
         return len;
     }
 
     /* Copy argv from user space, range-checking every user pointer and bounding
-     * the cumulative offset so _exec_argv_storage cannot overflow. An argument
+     * the cumulative offset so s->argv_storage cannot overflow. An argument
      * that does not fit fails the exec instead of being silently truncated.
      * The pointer array and each string are read through the copy helpers,
      * which fault-check each access.
@@ -6051,13 +6069,13 @@ static int32_t sys_execve(isr_params_t *params)
             }
             /* The storage is exactly full and another argument is waiting:
              * that is a size limit reached, not a bad address. */
-            if (argv_offset >= sizeof(_exec_argv_storage)) {
+            if (argv_offset >= sizeof(s->argv_storage)) {
                 return -E2BIG;
             }
-            _exec_argv_bufs[argc] = &_exec_argv_storage[argv_offset];
-            r = strncpy_from_user(&_exec_argv_storage[argv_offset],
+            s->argv_bufs[argc] = &s->argv_storage[argv_offset];
+            r = strncpy_from_user(&s->argv_storage[argv_offset],
                                   (const char __user *)arg_ptr,
-                                  sizeof(_exec_argv_storage) - argv_offset);
+                                  sizeof(s->argv_storage) - argv_offset);
             if (r == -EFAULT) {
                 return -EFAULT;
             }
@@ -6081,7 +6099,7 @@ static int32_t sys_execve(isr_params_t *params)
             }
         }
     }
-    _exec_argv_bufs[argc] = NULL;
+    s->argv_bufs[argc] = NULL;
 
     /* Copy the real envp the same way. */
     if (user_envp) {
@@ -6096,13 +6114,13 @@ static int32_t sys_execve(isr_params_t *params)
             if (env_ptr == 0) {
                 break;  /* NULL terminator */
             }
-            if (envp_offset >= sizeof(_exec_envp_storage)) {
+            if (envp_offset >= sizeof(s->envp_storage)) {
                 return -E2BIG;
             }
-            _exec_envp_bufs[envc] = &_exec_envp_storage[envp_offset];
-            r = strncpy_from_user(&_exec_envp_storage[envp_offset],
+            s->envp_bufs[envc] = &s->envp_storage[envp_offset];
+            r = strncpy_from_user(&s->envp_storage[envp_offset],
                                   (const char __user *)env_ptr,
-                                  sizeof(_exec_envp_storage) - envp_offset);
+                                  sizeof(s->envp_storage) - envp_offset);
             if (r == -EFAULT) {
                 return -EFAULT;
             }
@@ -6125,7 +6143,7 @@ static int32_t sys_execve(isr_params_t *params)
             }
         }
     }
-    _exec_envp_bufs[envc] = NULL;
+    s->envp_bufs[envc] = NULL;
 
     /* The two vectors share the page they are laid into, so they share a
      * budget, and it is checked HERE: `build_user_stack` would catch it, but it
@@ -6135,7 +6153,7 @@ static int32_t sys_execve(isr_params_t *params)
         return -E2BIG;
     }
 
-    name = _exec_path_buf;
+    name = s->path;
     if (name[0] == '/') {
         name++;
     }
@@ -6185,12 +6203,12 @@ static int32_t sys_execve(isr_params_t *params)
             }
             file_uid = vst.uid;
             file_gid = vst.gid;
-            exec_ctx.ref = xref; /* held until the image is loaded or refused */
-            exec_ctx.err = 0;
-            rc = vfs_open_node(xref.mnt, xref.node, 0, &exec_ctx.handle);
+            s->vfs.ref = xref; /* held until the image is loaded or refused */
+            s->vfs.err = 0;
+            rc = vfs_open_node(xref.mnt, xref.node, 0, &s->vfs.handle);
             if (rc != 0) {
-                vfs_ref_release(&exec_ctx.ref);
-                exec_ctx.ref.mnt = NULL;
+                vfs_ref_release(&s->vfs.ref);
+                s->vfs.ref.mnt = NULL;
                 return rc;
             }
             goto checked;
@@ -6246,16 +6264,16 @@ checked:
 
         int script = 0;
 
-        if (exec_ctx.ref.mnt) {
+        if (s->vfs.ref.mnt) {
             /* On another type the image is read through its mount; a
              * script there is read the same way, and its interpreter is
              * resolved below as any program is. */
-            if (exec_vfs_read(&exec_ctx, &ehdr, sizeof(ehdr), 0) != (int)sizeof(ehdr) ||
+            if (exec_vfs_read(&s->vfs, &ehdr, sizeof(ehdr), 0) != (int)sizeof(ehdr) ||
                 !elf_valid_exec(&ehdr, sizeof(ehdr))) {
-                int32_t sb = exec_ctx.err ? exec_ctx.err
-                                          : exec_shebang(&argc, exec_vfs_read, &exec_ctx);
+                int32_t sb = s->vfs.err ? s->vfs.err
+                                          : exec_shebang(s, &argc, exec_vfs_read, &s->vfs);
 
-                exec_vfs_done();
+                exec_vfs_done(&s->vfs);
                 if (sb < 0) {
                     return sb;
                 }
@@ -6266,8 +6284,8 @@ checked:
             }
         } else if (exec_krffs_read((void *)name, &ehdr, sizeof(ehdr), 0) != (int)sizeof(ehdr) ||
             !elf_valid_exec(&ehdr, sizeof(ehdr))) {
-            int32_t sb = exec_shebang(&argc, exec_krffs_read,
-                                      (void *)(_exec_path_buf + (_exec_path_buf[0] == '/' ? 1 : 0)));
+            int32_t sb = exec_shebang(s, &argc, exec_krffs_read,
+                                      (void *)(s->path + (s->path[0] == '/' ? 1 : 0)));
 
             if (sb < 0) {
                 return sb;
@@ -6286,7 +6304,7 @@ checked:
             file_uid = 0;
             file_gid = 0;
 
-            name = _exec_path_buf;
+            name = s->path;
             if (name[0] == '/') {
                 name++;
             }
@@ -6311,19 +6329,19 @@ checked:
                         vfs_ref_release(&iref);
                         return rc;
                     }
-                    exec_ctx.ref = iref;
-                    exec_ctx.err = 0;
-                    rc = vfs_open_node(iref.mnt, iref.node, 0, &exec_ctx.handle);
+                    s->vfs.ref = iref;
+                    s->vfs.err = 0;
+                    rc = vfs_open_node(iref.mnt, iref.node, 0, &s->vfs.handle);
                     if (rc != 0) {
-                        vfs_ref_release(&exec_ctx.ref);
-                        exec_ctx.ref.mnt = NULL;
+                        vfs_ref_release(&s->vfs.ref);
+                        s->vfs.ref.mnt = NULL;
                         return rc;
                     }
-                    if (exec_vfs_read(&exec_ctx, &ehdr, sizeof(ehdr), 0) != (int)sizeof(ehdr) ||
+                    if (exec_vfs_read(&s->vfs, &ehdr, sizeof(ehdr), 0) != (int)sizeof(ehdr) ||
                         !elf_valid_exec(&ehdr, sizeof(ehdr))) {
-                        int32_t why = exec_ctx.err ? exec_ctx.err : -ENOEXEC;
+                        int32_t why = s->vfs.err ? s->vfs.err : -ENOEXEC;
 
-                        exec_vfs_done();
+                        exec_vfs_done(&s->vfs);
                         return why; /* one level only: an interpreter that is a script */
                     }
                     goto interpreter_checked;
@@ -6376,11 +6394,11 @@ interpreter_checked:
      * dispositions and the blocked mask are preserved (POSIX exec semantics).
      */
     {
-        int s;
-        for (s = 1; s <= KSIG_MAX; s++) {
-            if (current_proc->sigacts[s].handler != KSIG_DFL &&
-                current_proc->sigacts[s].handler != KSIG_IGN) {
-                k_memset(&current_proc->sigacts[s], 0, sizeof(struct k_sigaction));
+        int sig;
+        for (sig = 1; sig <= KSIG_MAX; sig++) {
+            if (current_proc->sigacts[sig].handler != KSIG_DFL &&
+                current_proc->sigacts[sig].handler != KSIG_IGN) {
+                k_memset(&current_proc->sigacts[sig], 0, sizeof(struct k_sigaction));
             }
         }
         current_proc->sig_pending = 0;
@@ -6405,13 +6423,13 @@ interpreter_checked:
      * returning into a destroyed address space. */
     free_user_pages(proc_dir);
 
-    if (elf_load_image(exec_ctx.ref.mnt ? exec_vfs_read : exec_krffs_read,
-                       exec_ctx.ref.mnt ? (void *)&exec_ctx : (void *)name, proc_dir,
+    if (elf_load_image(s->vfs.ref.mnt ? exec_vfs_read : exec_krffs_read,
+                       s->vfs.ref.mnt ? (void *)&s->vfs : (void *)name, proc_dir,
                        &img) != 0) {
-        exec_vfs_done();
+        exec_vfs_done(&s->vfs);
         exec_fail_destroyed();
     }
-    exec_vfs_done();
+    exec_vfs_done(&s->vfs);
     entry_point = img.entry;
 
     stack_phys = alloc_user_page(proc_dir, USER_STACK_BASE);
@@ -6441,8 +6459,8 @@ interpreter_checked:
     krandom_bytes(random16, 16);
     {
         uint32_t user_esp = build_user_stack((void *)stack_phys, USER_STACK_BASE,
-                                             PAGE_SIZE, argc, _exec_argv_bufs,
-                                             _exec_envp_bufs, &img, random16,
+                                             PAGE_SIZE, argc, s->argv_bufs,
+                                             s->envp_bufs, &img, random16,
                                              secure);
 
         if (user_esp == 0) {

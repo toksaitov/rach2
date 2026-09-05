@@ -40,6 +40,7 @@ typedef unsigned int size_t;
 #define SYS_LSEEK      19
 #define SYS_RENAME     38
 #define SYS_RMDIR      40
+#define SYS_SYNC       36
 #define SYS_FSYNC      118
 #define SYS_FTRUNCATE  93
 #define SYS_WAITPID    7
@@ -906,6 +907,87 @@ void probe_main(unsigned int *sp)
             fail_with("the errno of a refused mount", rc);
         }
         puts("KRFFSPROBE OK (refuse)");
+        sys_exit(0);
+    }
+
+    /* A stick pulled from under a mounted volume. What the machine owes then
+       is an error from what was in flight, no writes to a device that is not
+       there, and an unmount that takes the mount down rather than failing its
+       sync for ever. */
+    if (streq(mode, "pull")) {
+        int tries = 0;
+
+        rc = sys5(SYS_MOUNT, (int)"/dev/usb0p1", (int)"/k", (int)"krffs", 0, 0);
+        if (rc != 0) {
+            fail_with("mounting the stick's volume", rc);
+        }
+        {
+            int fd = sys3(SYS_OPEN, (int)"/k/hello.txt", O_RDONLY, 0);
+            char one[8];
+
+            one[0] = 0;
+            if (fd < 0 || sys3(SYS_READ, fd, (int)one, (int)sizeof(one)) <= 0) {
+                fail("reading the stick's volume before the pull");
+            }
+            sys1(SYS_CLOSE, fd);
+        }
+        puts("KRFFSPROBE HOLDING");
+        /* Write until the stick is not there any more, then once more. */
+        for (;;) {
+            int fd = sys3(SYS_OPEN, (int)"/k/pulled.bin", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            int wrote;
+
+            if (fd < 0) {
+                break;
+            }
+            wrote = sys3(SYS_WRITE, fd, (int)"pull\n", 5);
+            sys1(SYS_FSYNC, fd);
+            sys1(SYS_CLOSE, fd);
+            if (wrote != 5) {
+                break;
+            }
+            if (++tries > 100000) {
+                fail("the stick was never pulled");
+            }
+        }
+        /* The mount stays while the stick is plugged back in: the driver
+           finds a second device with the first still held, and a machine
+           that gave the new one the old one's slot would be handing this
+           mount a pointer into it. */
+        puts("KRFFSPROBE GONE");
+        for (tries = 0; tries < 2000000; tries++) {
+            int fd = sys3(SYS_OPEN, (int)"/dev/usb0p1", O_RDONLY, 0);
+
+            if (fd >= 0) {
+                char one[512];
+                int got = sys3(SYS_READ, fd, (int)one, (int)sizeof(one));
+
+                sys1(SYS_CLOSE, fd);
+                if (got == (int)sizeof(one)) {
+                    break; /* a stick answers there again */
+                }
+            }
+        }
+        {
+            /* And the mount over the device that went answers as it did:
+               nothing of the new stick reaches it. */
+            int fd = sys3(SYS_OPEN, (int)"/k/hello.txt", O_RDONLY, 0);
+            char one[8];
+
+            one[0] = 0;
+            if (fd >= 0) {
+                if (sys3(SYS_READ, fd, (int)one, (int)sizeof(one)) > 0) {
+                    fail("a mount whose stick went read the stick that replaced it");
+                }
+                sys1(SYS_CLOSE, fd);
+            }
+        }
+        sys1(SYS_SYNC, 0);
+        rc = sys2(SYS_UMOUNT2, (int)"/k", 0);
+        if (rc != 0) {
+            fail_with("unmounting a volume whose stick has gone", rc);
+        }
+        puts("KRFFSPROBE OK (pull)");
         sys_exit(0);
     }
 

@@ -242,4 +242,43 @@ SECTORS=$((SECTORS + 8))
 build_disk "$VOL" 8
 refuse "a region the ring does not fill" "krffs: mount: refused: the node chain is malformed"
 
+# ---- a stick pulled from under a mounted volume ----
+#
+# The medium goes while the volume is mounted and being written: what the
+# machine owes is an error, no write to a device that is not there, and an
+# unmount that takes the mount down. The same stick is then plugged back in
+# while the old mount is still there, which is what a person does and what
+# gives the driver a second device to find while the first is still held: a
+# machine that gave the new stick the old one's slot would hand the mount a
+# pointer into somebody else's device. A panic here is what that looks like,
+# which is why this row exists at all.
+STICK="$DISK.stick"
+# The partition is the volume's own length: a ring that does not fill its
+# region is refused, which is the row above and not this one.
+VOLSECTORS=$(($(wc -c < "$VOL") / 512))
+dd if=/dev/zero of="$STICK" bs=1048576 count=32 2>/dev/null || fail "the stick image"
+"$REPO/build/tools/image/mkmbr" --lba "$STICK" "2048:$VOLSECTORS:83" > /dev/null \
+    || fail "the stick's partition table"
+dd if="$VOL" of="$STICK" bs=512 seek=2048 conv=notrunc 2>/dev/null \
+    || fail "the volume on the stick"
+if "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
+    --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
+    --qemu-arg=-drive --qemu-arg="file=$STICK,format=raw,if=none,id=kst" \
+    --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=kst,id=kst0 \
+    --append "rach2.rescue" --timeout 150 --steptmo 120 \
+    --ok "KRFFSPROBE OK (pull)" --never "KRFFSPROBE FAIL" --log "$DISK.pull.log" \
+    "expect=Type 'help'" "send=exec /krffsprobe pull" \
+    "expect=KRFFSPROBE HOLDING" wait=1 "usb=del:kst0" \
+    "expect=KRFFSPROBE GONE" \
+    "drive=add:if=none,id=kst2,format=raw,file=$STICK" \
+    "usb=add:usb-storage,bus=xhci.0,drive=kst2,id=kst1" \
+    "expect=KRFFSPROBE OK" \
+    > /dev/null 2>&1; then
+    echo "krffsmount-test: a stick pulled from under a mounted volume leaves a machine that unmounts it: OK"
+else
+    grep -a 'panic\|usbdisk\|krffs' "$DISK.pull.log" | tail -5 >&2 || true
+    fail "the stick-pull boot"
+fi
+grep -aq "usbdisk: gone" "$DISK.pull.log" || fail "the kernel did not say the stick had gone"
+
 echo "krffsmount-test: PASS"
