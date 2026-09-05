@@ -146,7 +146,14 @@ int diskinfo_format(const struct diskinfo *d, char *buf, int cap)
      * buffer, reads that filled one, and waits for a buffer another process
      * held. Printed whatever the disk's state, since a mount can be on any
      * device the cache reads. */
-    put(buf, &n, cap, "cache-hits ");
+    /* The drivers' own totals, printed whatever this disk's state: a mount can
+     * be on any device they serve, and a row that counts what a write owed
+     * the medium has no disk of its own to ask. */
+    put(buf, &n, cap, "disk-commands ");
+    put_dec(buf, &n, cap, block_commands());
+    put(buf, &n, cap, "\ndisk-flushes ");
+    put_dec(buf, &n, cap, block_flushes());
+    put(buf, &n, cap, "\ncache-hits ");
     put_dec(buf, &n, cap, bcache_stat_hits());
     put(buf, &n, cap, "\ncache-fills ");
     put_dec(buf, &n, cap, bcache_stat_fills());
@@ -183,10 +190,6 @@ int diskinfo_format(const struct diskinfo *d, char *buf, int cap)
     put_dec(buf, &n, cap, (uint64_t)DEVFS_RAW_BATCH_SECTORS);
     put(buf, &n, cap, "\nraw-driver-calls ");
     put_dec(buf, &n, cap, devfs_raw_calls());
-    put(buf, &n, cap, "\ndisk-commands ");
-    put_dec(buf, &n, cap, block_commands());
-    put(buf, &n, cap, "\ndisk-flushes ");
-    put_dec(buf, &n, cap, block_flushes());
     put(buf, &n, cap, "\nmbr-signature ");
     if (d->mbr_state == DISKINFO_MBR_OK) {
         put(buf, &n, cap, "ok");

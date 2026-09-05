@@ -45,6 +45,11 @@ struct loop_device {
     void *handle;
     int writable;
     int in_flight;   /* transfers inside the file system holding the file */
+    /* What the device owes its writes and what it has paid: every write is a
+     * write of the file and a sync of it, and /proc/loop reports both so a
+     * test can ask whether the second half happened. */
+    uint32_t writes;
+    uint32_t syncs;
     int release_due; /* the medium went while one was: the last one lets go */
     char path[LOOP_PATH_MAX]; /* what it was called when it was attached */
 };
@@ -121,9 +126,13 @@ static int loop_write(block_device_t *device, uint64_t lba, uint32_t count, cons
     }
     loop->in_flight++;
     wrote = vfs_write(loop->mnt, loop->handle, buffer, bytes, lba * BLOCK_SECTOR_SIZE);
-    if (wrote >= 0 && (uint32_t)wrote == bytes && vfs_fsync(loop->mnt, loop->handle) != 0) {
-        loop_transfer_ended(loop);
-        return -EIO;
+    loop->writes++;
+    if (wrote >= 0 && (uint32_t)wrote == bytes) {
+        if (vfs_fsync(loop->mnt, loop->handle) != 0) {
+            loop_transfer_ended(loop);
+            return -EIO;
+        }
+        loop->syncs++;
     }
     loop_transfer_ended(loop);
     if (wrote < 0 || (uint32_t)wrote != bytes) {
@@ -353,6 +362,11 @@ int loop_line(int index, char *buffer, uint32_t cap)
     at = put_number(buffer, at, cap,
                     (uint32_t)(loop->dev.sector_count * BLOCK_SECTOR_SIZE));
     at = put_text(buffer, at, cap, loop->writable ? " rw " : " ro ");
+    at = put_text(buffer, at, cap, "writes ");
+    at = put_number(buffer, at, cap, loop->writes);
+    at = put_text(buffer, at, cap, " syncs ");
+    at = put_number(buffer, at, cap, loop->syncs);
+    at = put_text(buffer, at, cap, " ");
     at = put_text(buffer, at, cap, loop->attached ? loop->path : "(gone)");
     at = put_text(buffer, at, cap, "\n");
     buffer[at] = '\0';
@@ -394,6 +408,8 @@ int loop_attach(int index, const char *path, int writable)
     loop->attaching = 1;
     loop->attached = 0;
     loop->in_flight = 0;
+    loop->writes = 0;
+    loop->syncs = 0;
     loop->release_due = 0;
     loop->mnt = 0;
     loop->node = 0;

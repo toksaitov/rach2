@@ -35,6 +35,19 @@ build_disk() {
         || fail "the partition table"
 }
 
+# Three volumes on one disk, for the row that asks how many the kernel mounts
+# at once: the pool is two, and the third is what says so.
+build_three() {
+    three=$(($(wc -c < "$VOL") / 512))
+    { dd if=/dev/zero bs=512 count=$PART 2>/dev/null; cat "$VOL"; cat "$VOL"; \
+      cat "$VOL"; } > "$DISK"
+    "$REPO/build/tools/image/mkmbr" --lba "$DISK" \
+        "$PART:$three:7f" \
+        "$((PART + three)):$three:7f" \
+        "$((PART + 2 * three)):$three:7f" >/dev/null \
+        || fail "the partition table of three"
+}
+
 run() {
     "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
         --drive "file=$DISK,format=raw,if=ide,index=0,media=disk" "$@"
@@ -241,6 +254,18 @@ refuse "a malformed chain" "krffs: mount: refused: the node chain is malformed"
 SECTORS=$((SECTORS + 8))
 build_disk "$VOL" 8
 refuse "a region the ring does not fill" "krffs: mount: refused: the node chain is malformed"
+
+# ---- two volumes at once, and the third the pool has no room for ----
+build_three
+if run --append "rach2.rescue" --timeout 120 --steptmo 90 \
+    --ok "KRFFSPROBE OK (two)" --never "KRFFSPROBE FAIL" --log "$DISK.two.log" \
+    "expect=Type 'help'" "send=exec /krffsprobe two" "expect=KRFFSPROBE" \
+    > /dev/null 2>&1; then
+    echo "krffsmount-test: two volumes are mounted at once, each holding only its own files, and the third waits for a slot: OK"
+else
+    grep -a 'KRFFSPROBE FAIL' "$DISK.two.log" >&2 || true
+    fail "the two-volume boot"
+fi
 
 # ---- a stick pulled from under a mounted volume ----
 #

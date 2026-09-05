@@ -31,6 +31,7 @@ typedef unsigned int size_t;
 #define SYS_WRITE     4
 #define SYS_OPEN      5
 #define SYS_CLOSE     6
+#define SYS_LINK      9
 #define SYS_UNLINK    10
 #define SYS_RENAME    38
 #define SYS_MKDIR     39
@@ -195,7 +196,74 @@ static int contains(const char *hay, const char *needle)
     return 0;
 }
 
-/** Read a file whole and compare it with `want`. */
+/** The decimal number `text` starts with. */
+static int read_number(const char *text)
+{
+    int value = 0;
+
+    while (*text >= '0' && *text <= '9') {
+        value = value * 10 + (*text - '0');
+        text++;
+    }
+    return value;
+}
+
+/**
+ * The number after `name` in /proc/disk, which is how a row counts what the
+ * drivers did without a device of its own to watch.
+ */
+static int proc_disk_number(const char *name)
+{
+    char buffer[2048];
+    int fd = sys3(SYS_OPEN, (int)"/proc/disk", O_RDONLY, 0);
+    int n;
+    int i;
+    int j;
+
+    if (fd < 0) {
+        fail_with("opening /proc/disk", fd);
+    }
+    /* Read to the end: /proc hands out a record at a time, and the count this
+       row wants is not in the first of them. */
+    n = 0;
+    for (;;) {
+        int got = sys3(SYS_READ, fd, (int)(buffer + n), (int)sizeof(buffer) - 1 - n);
+
+        if (got <= 0) {
+            break;
+        }
+        n += got;
+        if (n >= (int)sizeof(buffer) - 1) {
+            break;
+        }
+    }
+    sys1(SYS_CLOSE, fd);
+    if (n <= 0) {
+        fail_with("reading /proc/disk", n);
+    }
+    buffer[n] = '\0';
+    for (i = 0; i < n; i++) {
+        for (j = 0; name[j] && buffer[i + j] == name[j]; j++) {
+        }
+        if (name[j] == '\0') {
+            int value = 0;
+
+            i += j;
+            while (buffer[i] == ' ') {
+                i++;
+            }
+            while (buffer[i] >= '0' && buffer[i] <= '9') {
+                value = value * 10 + (buffer[i] - '0');
+                i++;
+            }
+            return value;
+        }
+    }
+    sys3(SYS_WRITE, 1, (int)buffer, n > 200 ? 200 : n);
+    fail("a name /proc/disk does not have");
+    return -1;
+}
+
 static void expect_file(const char *path, const char *want)
 {
     char buffer[256];
@@ -241,6 +309,131 @@ void probe_main(unsigned int *sp)
 
     sys2(SYS_MKDIR, (int)"/m", 0755);
     sys2(SYS_MKDIR, (int)"/l", 0755);
+
+    /* A write through a loop device is durable when it returns, and not when
+       something later flushes: the device writes the backing file and syncs
+       it. The row fills the cache so that dirty blocks of the image are
+       written back by eviction alone, with no sync and no unmount, and the
+       drivers' flush count must move. */
+    if (streq(type, "durable")) {
+        int filler;
+        int block_at;
+
+        rc = sys5(SYS_MOUNT, (int)"/dev/disk0p1", (int)"/m", (int)"vfat", 0, 0);
+        if (rc != 0) {
+            fail_with("mounting the volume that holds the image", rc);
+        }
+        rc = control("attach 0 /m/krffs.img");
+        if (rc != 0) {
+            fail_with("attaching the image", rc);
+        }
+        rc = sys5(SYS_MOUNT, (int)"/dev/loop0", (int)"/l", (int)"krffs", 0, 0);
+        if (rc != 0) {
+            fail_with("mounting the image", rc);
+        }
+        (void)proc_disk_number;
+        filler = sys3(SYS_OPEN, (int)"/l/filler.bin", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (filler < 0) {
+            fail_with("the file that fills the cache", filler);
+        }
+        for (block_at = 0; block_at < 128; block_at++) {
+            char block[1024];
+            int k;
+
+            for (k = 0; k < (int)sizeof(block); k++) {
+                block[k] = (char)(block_at + k);
+            }
+            if (sys3(SYS_WRITE, filler, (int)block, (int)sizeof(block)) != (int)sizeof(block)) {
+                fail("filling the cache through the image");
+            }
+        }
+        sys1(SYS_CLOSE, filler);
+        /* Every write the device made, and every sync it owed for one. The
+           blocks reached it by eviction alone: nothing here asked for a sync
+           or an unmount. */
+        {
+            char line[256];
+            int writes = 0;
+            int syncs = 0;
+            int i2;
+            int n2 = loop_lines(line, (int)sizeof(line));
+
+            for (i2 = 0; i2 < n2; i2++) {
+                if (line[i2] == 'w' && line[i2 + 1] == 'r' && line[i2 + 2] == 'i') {
+                    writes = read_number(line + i2 + 7);
+                }
+                if (line[i2] == 's' && line[i2 + 1] == 'y' && line[i2 + 2] == 'n') {
+                    syncs = read_number(line + i2 + 6);
+                }
+            }
+            if (writes <= 0) {
+                fail_with("the writes eviction made through the device", writes);
+            }
+            if (syncs != writes) {
+                fail_with("the writes the device did not sync", writes - syncs);
+            }
+        }
+        if (sys2(SYS_UMOUNT2, (int)"/l", 0) != 0) {
+            fail("unmounting the image after filling it");
+        }
+        if (control("detach 0") != 0) {
+            fail("detaching after filling it");
+        }
+        if (sys2(SYS_UMOUNT2, (int)"/m", 0) != 0) {
+            fail("unmounting the volume after filling it");
+        }
+        puts("LOOPPROBE OK (durable)");
+        sys_exit(0);
+    }
+
+    /* The volume the file lives on need not be a FAT one, and a file is named
+       by its mount and its node rather than by a path: a hard link to an
+       attached image is the same file and a second device over it is
+       refused. */
+    if (streq(type, "ext2back")) {
+        rc = sys5(SYS_MOUNT, (int)"/dev/disk0p1", (int)"/m", (int)"ext2", 0, 0);
+        if (rc != 0) {
+            fail_with("mounting the ext2 volume that holds the image", rc);
+        }
+        if (sys2(SYS_LINK, (int)"/m/krffs.img", (int)"/m/alias.img") != 0) {
+            fail("a second name for the image");
+        }
+        rc = control("attach 0 /m/krffs.img");
+        if (rc != 0) {
+            fail_with("attaching an image on an ext2 volume", rc);
+        }
+        if (control("attach 1 /m/alias.img") != -EBUSY) {
+            fail("the same file was attached twice under two names");
+        }
+        rc = sys5(SYS_MOUNT, (int)"/dev/loop0", (int)"/l", (int)"krffs", 0, 0);
+        if (rc != 0) {
+            fail_with("mounting the image on the ext2 volume", rc);
+        }
+        expect_file("/l/hello.txt", "hello from inside an image");
+        {
+            int made = sys3(SYS_OPEN, (int)"/l/on-ext2.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+
+            if (made < 0 || sys3(SYS_WRITE, made, (int)"on ext2\n", 8) != 8) {
+                fail("writing the image on an ext2 volume");
+            }
+            sys1(SYS_FSYNC, made);
+            sys1(SYS_CLOSE, made);
+        }
+        if (sys2(SYS_UMOUNT2, (int)"/l", 0) != 0) {
+            fail("unmounting the image on an ext2 volume");
+        }
+        if (control("detach 0") != 0) {
+            fail("detaching the image on an ext2 volume");
+        }
+        if (sys1(SYS_UNLINK, (int)"/m/alias.img") != 0) {
+            fail("removing the second name");
+        }
+        if (sys2(SYS_UMOUNT2, (int)"/m", 0) != 0) {
+            fail("unmounting the ext2 volume");
+        }
+        puts("LOOPPROBE OK (ext2back)");
+        sys_exit(0);
+    }
 
     if (streq(type, "pull")) {
         int reads = 0;

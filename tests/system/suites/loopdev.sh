@@ -85,6 +85,46 @@ for type in vfat ext2 krffs; do
         || fail "the kernel did not say what it attached"
 done
 
+# What a loop device's write owes when it returns: the backing file written
+# and synced. The row fills the cache through a mounted image so that eviction
+# alone writes the image's blocks back, with no sync and no unmount, and the
+# drivers' own flush count must move.
+if run --append "rach2.rescue" --timeout 150 --steptmo 120 \
+    --ok "LOOPPROBE OK (durable)" --never "LOOPPROBE FAIL" \
+    --log "$DISK.durable.log" "expect=Type 'help'" \
+    "send=exec /loopdevprobe durable" "expect=LOOPPROBE" > /dev/null 2>&1; then
+    echo "loopdev-test: a write through a loop device reaches the medium when it returns, not when something later flushes: OK"
+else
+    grep -a 'LOOPPROBE FAIL' "$DISK.durable.log" >&2 || true
+    fail "the durability boot"
+fi
+
+# The outer volume as ext2 rather than FAT32: a file is a file whatever holds
+# it, and ext2 has hard links, so the row that says one file is one device can
+# be asked with two names for it.
+rm -rf "$DISK.tree2"
+mkdir -p "$DISK.tree2" || fail "the ext2 tree"
+cp "$DISK.krffs" "$DISK.tree2/krffs.img" || fail "the image in the ext2 tree"
+: > "$DISK.ext2out"
+E2FSPROGS_FAKE_TIME=1 mke2fs -q -F -t ext2 -b 4096 -I 128 \
+    -O sparse_super,large_file,filetype,^dir_index,^resize_inode,^ext_attr,^has_journal,^extent,^64bit,^flex_bg,^metadata_csum,^huge_file,^dir_nlink,^extra_isize \
+    -d "$DISK.tree2" "$DISK.ext2out" 16M >/dev/null 2>&1 || fail "mke2fs for the outer volume"
+E2SECTORS=$(($(wc -c < "$DISK.ext2out") / 512))
+{ dd if=/dev/zero bs=512 count=$PART 2>/dev/null; cat "$DISK.ext2out"; } > "$DISK.e2"
+"$REPO/build/tools/image/mkmbr" --lba "$DISK.e2" "$PART:$E2SECTORS:83" >/dev/null \
+    || fail "the ext2 disk's partition table"
+if "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
+    --drive "file=$DISK.e2,format=raw,if=ide,index=0,media=disk" \
+    --append "rach2.rescue" --timeout 150 --steptmo 120 \
+    --ok "LOOPPROBE OK (ext2back)" --never "LOOPPROBE FAIL" \
+    --log "$DISK.ext2back.log" "expect=Type 'help'" \
+    "send=exec /loopdevprobe ext2back" "expect=LOOPPROBE" > /dev/null 2>&1; then
+    echo "loopdev-test: an image on an ext2 volume is attached, mounted and written, and its second name is refused a device of its own: OK"
+else
+    grep -a 'LOOPPROBE FAIL' "$DISK.ext2back.log" >&2 || true
+    fail "the ext2-backing boot"
+fi
+
 # The same sequence over a disk that sleeps its caller: the device under the
 # loop device takes a slot of the request pool for every transfer, and the
 # loop device must take none, or the pool of sixteen would run out with

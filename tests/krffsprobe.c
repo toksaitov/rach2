@@ -56,6 +56,7 @@ typedef unsigned int size_t;
 #define MS_RDONLY 1
 
 #define ENOENT 2
+#define ENOMEM 12
 #define EINVAL 22
 #define EBUSY  16
 #define EROFS  30
@@ -907,6 +908,67 @@ void probe_main(unsigned int *sp)
             fail_with("the errno of a refused mount", rc);
         }
         puts("KRFFSPROBE OK (refuse)");
+        sys_exit(0);
+    }
+
+    /* Two volumes at once, and the third the pool has no room for. Each is a
+       volume of its own: what one mount writes is in that volume and in no
+       other, and the pool of two is what the third mount answers for. */
+    if (streq(mode, "two")) {
+        int fd;
+        char got[16];
+
+        sys2(SYS_MKDIR, (int)"/k2", 0755);
+        sys2(SYS_MKDIR, (int)"/k3", 0755);
+        rc = sys5(SYS_MOUNT, (int)"/dev/disk0p1", (int)"/k", (int)"krffs", 0, 0);
+        if (rc != 0) {
+            fail_with("mounting the first volume", rc);
+        }
+        rc = sys5(SYS_MOUNT, (int)"/dev/disk0p2", (int)"/k2", (int)"krffs", 0, 0);
+        if (rc != 0) {
+            fail_with("mounting the second volume", rc);
+        }
+        rc = sys5(SYS_MOUNT, (int)"/dev/disk0p3", (int)"/k3", (int)"krffs", 0, 0);
+        if (rc != -ENOMEM) {
+            fail_with("the errno of a third volume", rc);
+        }
+        fd = sys3(SYS_OPEN, (int)"/k/first.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd < 0 || sys3(SYS_WRITE, fd, (int)"first\n", 6) != 6) {
+            fail("writing the first volume");
+        }
+        sys1(SYS_CLOSE, fd);
+        fd = sys3(SYS_OPEN, (int)"/k2/second.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd < 0 || sys3(SYS_WRITE, fd, (int)"second\n", 7) != 7) {
+            fail("writing the second volume");
+        }
+        sys1(SYS_CLOSE, fd);
+        if (sys3(SYS_OPEN, (int)"/k2/first.txt", O_RDONLY, 0) != -ENOENT) {
+            fail("a file of one volume is in the other");
+        }
+        if (sys3(SYS_OPEN, (int)"/k/second.txt", O_RDONLY, 0) != -ENOENT) {
+            fail("a file of the other volume is in the one");
+        }
+        got[0] = 0;
+        fd = sys3(SYS_OPEN, (int)"/k2/second.txt", O_RDONLY, 0);
+        if (fd < 0 || sys3(SYS_READ, fd, (int)got, 7) != 7 || got[0] != 's') {
+            fail("reading back the second volume");
+        }
+        sys1(SYS_CLOSE, fd);
+        if (sys2(SYS_UMOUNT2, (int)"/k", 0) != 0) {
+            fail("unmounting the first volume");
+        }
+        /* And the slot it gave back is a slot: the third volume mounts now. */
+        rc = sys5(SYS_MOUNT, (int)"/dev/disk0p3", (int)"/k3", (int)"krffs", 0, 0);
+        if (rc != 0) {
+            fail_with("mounting the third volume after a slot came back", rc);
+        }
+        if (sys2(SYS_UMOUNT2, (int)"/k3", 0) != 0) {
+            fail("unmounting the third volume");
+        }
+        if (sys2(SYS_UMOUNT2, (int)"/k2", 0) != 0) {
+            fail("unmounting the second volume");
+        }
+        puts("KRFFSPROBE OK (two)");
         sys_exit(0);
     }
 

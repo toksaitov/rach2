@@ -316,3 +316,37 @@ never judged a node's own size, so a root of no size passed `--strict`
 without the region being walked; and every early exit freed a pointer that
 was not yet initialised. The documents it read are being corrected against
 the code in phase 9.
+
+## Phase 9
+
+The fifth unit's documents are corrected against the code: what the mount
+table takes as a source, what a missing `fsync` answers, what `link` and a
+directory rename answer, how many links a mounted volume reports, where
+`getdents64` keeps its place, which mounts are permanent, what the victim
+rule is, what a write-through means for a type that marks its metadata
+dirty, and the checker's own comments about what it validates, what it
+returns and what it repairs. The checker's usage line now names the arguments
+it takes.
+
+The fourth unit's gaps are rows now, each proved by putting the code back:
+
+* Two volumes at once, the third answering `ENOMEM`, and the slot coming back
+  at an unmount, with each volume holding only its own files.
+* A write through a loop device synced when it returns. The row fills the
+  cache through a mounted image so that eviction alone writes its blocks
+  back, and `/proc/loop` says how many writes the device made and how many it
+  synced; without the sync in the write, 837 writes went unsynced.
+* An image on an ext2 volume, attached, mounted and written, with a second
+  name for that file made by `link` refused a device of its own. The earlier
+  duplicate row used one path for both attempts, so a check by path passed
+  it; this one fails such a check.
+* A truncation that moves a file, with two descriptors on it, and an
+  overwrite inside a file, which the mounted volume had no row for.
+
+Two of that unit's gaps have no row and this is the reason. The refusal of a
+detach while a transfer is in flight sits behind the refusal of a detach
+while anything is mounted on the device, and a transfer with no mount over it
+arises only when a medium goes, which the pull row already covers. A loop
+device reached outside syscall context is a panic in the block layer that no
+program can ask for; it is the kind of fault a mutation shows and a row
+cannot.
