@@ -937,6 +937,10 @@ static int krffs_volume_mount(struct vfs_mount *mnt, block_device_t *dev,
     vol->fs.backend = &volume_backend;
     vol->fs.ctx = vol;
     vol->fs.size = (uint32_t)bytes;
+    /* What the cache puts on the medium at a time: a field whose changed
+     * bytes fall in two of these is refused rather than published in two
+     * pieces (krffs.Readme.md). */
+    vol->fs.grain = BCACHE_BLOCK_BYTES;
     mnt->priv = vol;
 
     if (krffs_head(&vol->fs, 0, &root) != 0) {

@@ -205,6 +205,7 @@ static krffs_mount_t mount_over(const krffs_backend_t *backend, void *ctx, uint3
     mount.backend = backend;
     mount.ctx = ctx;
     mount.size = size;
+    mount.grain = 0; /* a memory image has no unit it reaches in pieces */
     return mount;
 }
 
@@ -1023,6 +1024,37 @@ int main(void)
     check(krffs_reap_orphans_at(&mount) == 1, "and the reaper frees it");
     check(krffs_reap_orphans_at(&mount) == 0, "and finds nothing the next time");
     check(krffs_chain_is_valid(&mount) == 1, "the chain is sound after reaping");
+
+    /* ---- a field the medium would reach in two pieces ---- */
+
+    /* A backend that puts whole blocks on the medium writes a field that
+       spans two of them twice, and a stop between the two leaves a value
+       nobody wrote. The core refuses such a write. Only the bytes that
+       change count: a field whose changed byte is on one side of the line is
+       written like any other. The node below is placed so that its owner
+       field ends one byte into the second block. */
+    make_image(image, IMAGE_SIZE);
+    check(krffs_create_at(&mount, "/spacer") == 0, "a file to place the next one");
+    check(krffs_truncate_at(&mount, "/spacer", 3110, (uint64_t *)0) == 0,
+          "grown so the next node's owner field falls across a block");
+    check(krffs_create_at(&mount, "/across") == 0, "and the file that lands there");
+    {
+        uint64_t across = krffs_walk(&mount, "/across");
+        krffs_node_t head;
+
+        check(across != KRFFS_NO_NODE, "the file is there");
+        check(across + KRFFS_FIELD_UID == 4093,
+              "and its owner field ends one byte into the next block");
+        mount.grain = 4096;
+        check(krffs_set_owner_at(&mount, across, 0x01020304u, 0, KRFFS_SET_UID) != 0,
+              "an owner whose every byte changes is refused");
+        check(krffs_head(&mount, across, &head) == 0 && head.uid == 0,
+              "and nothing of it reached the medium");
+        check(krffs_set_owner_at(&mount, across, 5, 0, KRFFS_SET_UID) == 0,
+              "an owner that changes one byte on one side of the line is written");
+        check(krffs_head(&mount, across, &head) == 0 && head.uid == 5, "and it is there");
+        mount.grain = 0;
+    }
 
     /* ---- one name on two nodes, when one of them is a directory ---- */
 

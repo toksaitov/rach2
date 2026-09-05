@@ -187,10 +187,64 @@ static int krffs_has_name(krffs_mount_t *mount, uint64_t offset)
  * One call publishes one field. What may be written before what is the
  * update protocol, and the callers below keep it.
  */
+/**
+ * Whether the bytes this write changes all fall in one unit of the medium.
+ *
+ * A backend that puts whole blocks on the medium writes a field that spans
+ * two of them in two pieces, and a stop between them leaves half of each.
+ * Only the bytes that change matter: a length whose top four bytes are zero
+ * before and after is written in two pieces that say the same thing in one
+ * of them, and that is a write like any other.
+ */
+static int krffs_write_is_whole(krffs_mount_t *mount, uint64_t at,
+                                const void *value, uint32_t size)
+{
+    uint8_t old[16];
+    const uint8_t *want = value;
+    /* A region is addressed in 32 bits and this kernel has no 64-bit
+     * division, so the unit a byte falls in is counted in 32. */
+    uint32_t base = (uint32_t)at;
+    uint32_t first;
+    uint32_t last;
+    uint32_t i;
+
+    if (mount->grain == 0 || size <= 1 || size > sizeof(old)) {
+        return 1; /* a byte cannot be torn, and a name is not published here */
+    }
+    if (base / mount->grain == (base + size - 1) / mount->grain) {
+        return 1; /* the whole field is in one unit */
+    }
+    if (mount->backend->read(mount->ctx, at, old, size) != 0) {
+        return 0;
+    }
+    first = size;
+    last = 0;
+    for (i = 0; i < size; i++) {
+        if (old[i] != want[i]) {
+            if (first == size) {
+                first = i;
+            }
+            last = i;
+        }
+    }
+    if (first == size) {
+        return 1; /* nothing changes */
+    }
+    return (base + first) / mount->grain == (base + last) / mount->grain;
+}
+
 static int krffs_put(krffs_mount_t *mount, uint64_t offset, uint32_t field,
                      const void *value, uint32_t size)
 {
-    return mount->backend->write(mount->ctx, offset + field, value, size);
+    uint64_t at = offset + field;
+
+    if (!krffs_write_is_whole(mount, at, value, size)) {
+        klog(KLOG_WARN, "krffs",
+             "refused: a field at %d would reach the medium in two pieces",
+             (int)at);
+        return -1;
+    }
+    return mount->backend->write(mount->ctx, at, value, size);
 }
 
 static int krffs_put_u64(krffs_mount_t *mount, uint64_t offset, uint32_t field,

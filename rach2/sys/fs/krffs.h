@@ -144,6 +144,12 @@ typedef struct krffs_mount {
     const krffs_backend_t *backend;
     void *ctx;
     uint32_t size;
+    /* How many bytes the backend puts on the medium at a time, or 0 for one
+     * that has no such unit. A field whose changed bytes fall in two of these
+     * reaches the medium in two pieces, and a stop between them leaves a
+     * value that was never written; the core refuses such a write rather
+     * than publish something no reader could make sense of. */
+    uint32_t grain;
 } krffs_mount_t;
 
 /* The offset that is no node, since every real one is a byte of the region. */
