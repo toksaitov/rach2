@@ -350,3 +350,26 @@ arises only when a medium goes, which the pull row already covers. A loop
 device reached outside syscall context is a panic in the block layer that no
 program can ask for; it is the kind of fault a mutation shows and a row
 cannot.
+
+### The proofreading round
+
+Fixed before the first unit starts, as the plan asks: five units, each at most
+six files, running in parallel on Codex. `tools/verify/prosecheck.c` has
+already passed on this tree, so the units are asked for the half a checker
+cannot decide: a phrase that reads as one model's private shorthand rather
+than as this tree's prose, and a claim the code does not keep.
+
+1. The format and the file systems: `krffs.Readme.md`, `fs/Readme.md`,
+   `vfs.Readme.md`.
+2. The devices and the tools: `block/Readme.md`, `synthfs.Readme.md`,
+   `krffs/Readme.md`, `utils/Readme.md`.
+3. What proves it: `tests/Readme.md`, `tests/host/Readme.md`,
+   `tests/system/Readme.md`.
+4. The comments of the code this milestone changed: `krffs.c`,
+   `krffsmount.c`, `loop.c`, `bcache.c`, `fsck.krffs.c`, and the exec
+   workspace in `syscall.c`.
+5. The milestone's own record: `plan.md`, `notes.md`, `current.md`,
+   `hardware.md`.
+
+Each unit quotes what it would change and writes the replacement; the
+rewriting is done here so the tree keeps one voice.
