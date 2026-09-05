@@ -18,6 +18,9 @@
  * open must come back whole: `/proc/cmdline` and `/proc/net/dev` end in the
  * newline their last line has, and `/proc/self/stat` ends in one after a
  * closing parenthesis it must also carry, which a truncated line would lack.
+ * And two files are two inodes: `/proc/loop` and `/proc/interrupts` once
+ * shared a number, and a program that compares files by identity would have
+ * called them one.
  *
  * `procprobe mount` reads the root's line out of /proc/mounts, prints it, and
  * stops there. That line is the one thing here that depends on how the machine
@@ -759,6 +762,18 @@ void probe_main(unsigned int *sp)
 
     n = slurp("/proc/net/dev", buf, (int)sizeof(buf));
     check(n > 0 && buf[n - 1] == '\n', "/proc/net/dev ends with its newline");
+
+    /* Two files, two identities. */
+    {
+        static unsigned char st_loop[144], st_intr[144];
+
+        check(syscall3(SYS_STAT64, (int)(size_t)"/proc/loop", (int)(size_t)st_loop, 0) == 0 &&
+                  syscall3(SYS_STAT64, (int)(size_t)"/proc/interrupts", (int)(size_t)st_intr, 0) ==
+                      0,
+              "stat /proc/loop and /proc/interrupts");
+        check(*(unsigned int *)(st_loop + ST_INO64) != *(unsigned int *)(st_intr + ST_INO64),
+              "/proc/loop and /proc/interrupts have different inodes");
+    }
     /* The header is two lines and the interface line is there only when the
      * machine has an interface, which a boot with no network device does not.
      * So what is required is that the text is COMPLETE: the tail of the second
