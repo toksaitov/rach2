@@ -409,10 +409,13 @@ gone.
 
 ## The sweep
 
-`tests/run all` on the final tree: all 73 suites passed. Two runs before it
-failed on suites that pass alone, and both are the load the pool puts on this
-host rather than the tree: `install-ext2` read a number the machine was still
-typing (`[: 3eD: integer expression expected`) and `selfbuild-ext2` did not
-reach a login prompt in its window, and in the next run `usb` failed a row it
-passes alone. They are recorded here because a run that has to be repeated is
-worth knowing about, not because anything in this milestone changed them.
+`tests/run all` on the final tree: all 73 suites passed.
+
+Getting there took four runs, and the three that failed each failed on a
+suite that passes alone under no other load: `install-ext2` read a number the
+machine was still typing (`[: 3eD: integer expression expected`), `usb` failed
+a row about a device behind a hub, and `selfbuild-ext2`, which has a guest
+build a kernel inside an emulator while a dozen other machines run, twice did
+not finish in its window. Each was rerun alone and passed. They are recorded
+because a sweep that has to be repeated is worth knowing about; nothing in
+this milestone touched what they exercise.
