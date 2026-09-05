@@ -132,8 +132,9 @@ open(sys.argv[1], 'wb').write(bytes((i * 31 + 7) & 0xFF for i in range(65536)))
 PY
 printf 'hello\n' > "$VOLDIR/hello.txt.$$"
 printf 'inner\n' > "$VOLDIR/inner.txt.$$"
-mv "$VOLDIR/pattern.bin.$$" "$VOLDIR/pattern.bin" && mv "$VOLDIR/hello.txt.$$" "$VOLDIR/hello.txt" &&
-    mv "$VOLDIR/inner.txt.$$" "$VOLDIR/inner.txt" || bad "the fixture files"
+for f in pattern.bin hello.txt inner.txt; do
+    mv "$VOLDIR/$f.$$" "$VOLDIR/$f" || bad "the fixture files"
+done
 DUP="$DIR/dirdup.krffs"
 sh "$REPO/krffs/mkimage.sh" "$REPO/krffs/manifests/krffsvol-test.manifest" \
     "$DUP" 4 >/dev/null 2>&1 || bad "the image with a directory in it"
