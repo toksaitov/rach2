@@ -53,7 +53,7 @@ Group related BusyBox applets on family pages, the file utilities, the text filt
 
 ### Phase 2: the pages a student meets first
 
-`rach2(7)`, `login(1)`, `su(1)`, `sh(1)` for the shell, `tcc(1)`, `make(1)`, `loopctl(8)`, `mount(8)`, `disk(7)` for the layout, `recovery(7)`, `rach2-install(8)`, `growroot(8)`, `bootctl(8)`, `reflash(8)`, `limits(7)` for the policy and `memory(7)` for the accounting, both from milestone 46, and `disk(7)` covering identities and `/dev/diskN` from milestone 47. Proof: each read on the machine and its examples run.
+`rach2(7)`, `login(1)`, `su(1)`, `sh(1)` for the shell, `tcc(1)`, `make(1)`, `loopctl(8)`, `mount(8)`, `disk(7)` for the layout, `recovery(7)`, `rach2-install(8)`, `growroot(8)`, `bootctl(8)`, `reflash(8)`, `limits(7)` for the policy and `memory(7)` for the accounting, both from milestone 46, and `disk(7)` covering identities and `/dev/diskN` from milestone 47. Proof: each read in the os-real image in QEMU and its examples run there.
 
 ### Phase 3: the kernel's interfaces
 
@@ -65,7 +65,7 @@ The rest of `utils/`, Doom, dropbear, and the BusyBox applets. Proof: `mancheck`
 
 ### Phase 5: the close
 
-`mancheck` in `tests/run style`, proved by mutation: a page removed, an alias broken and a malformed page each refused; the rule written into `CLAUDE.md`'s Documentation section. Then, once: build from clean; the full set; the pages read on the Lenovo; the milestone's code, `mancheck`, the rendering, the staging and the build rules, to Codex for review as one unit, and every page to Codex for proofreading, six a unit, each against its fact sheet; every finding fixed; the full set again; notes, the milestone's Readme and the index entry.
+`mancheck` in `tests/run style`, proved by mutation: a page removed, an alias broken and a malformed page each refused; the rule written into `CLAUDE.md`'s Documentation section. Then, once: build from clean; the full set; the pages read on the os-real image in QEMU; the milestone's code, `mancheck`, the rendering, the staging and the build rules, to Codex for review as one unit, and every page to Codex for proofreading, six a unit, each against its fact sheet; every finding fixed; the full set again; notes, the milestone's Readme and the index entry.
 
 ## Risks
 

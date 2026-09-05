@@ -2,7 +2,7 @@
 
 ## The goal
 
-The kernel uses the memory the machine has. On a notebook with 2 GiB it uses 2 GiB, on one with 3 GiB it uses 3 GiB, and on one with 4 GiB it uses what the processor can address below 4 GiB, and it says at boot how much it found, how much is reserved and how much it manages. No table of sixteen decides how many processes, files, ptys, pipes, sockets or mounts there can be: each is an object allocated when it is needed and freed when it is done, and the only bounds left are the ones physics, a format or a policy sets, each named as such. Work that cannot proceed for lack of a resource waits where waiting is safe and is refused by name where it is not; nothing is turned into a disk error or dropped in silence. The same kernel binary boots and passes its suite with 64 MiB, 512 MiB, 2 GiB, 3 GiB and 4 GiB in QEMU and on the Lenovo. SMP and PAE are out of scope.
+The kernel uses the memory the machine has. On a notebook with 2 GiB it uses 2 GiB, on one with 3 GiB it uses 3 GiB, and on one with 4 GiB it uses what the processor can address below 4 GiB, and it says at boot how much it found, how much is reserved and how much it manages. No fixed table sets how many processes, files, ptys, pipes, sockets or mounts there can be: each is an object allocated when it is needed and freed when it is done, and the only bounds left are the ones physics, a format or a policy sets, each named as such. Work that cannot proceed for lack of a resource waits where waiting is safe and is refused by name where it is not; nothing is turned into a disk error or dropped in silence. The same kernel binary boots and passes its suite with 64 MiB, 512 MiB, 2 GiB, 3 GiB and 4 GiB in QEMU; milestone 50 boots it on the Lenovo. SMP and PAE are out of scope.
 
 ## What the tree settles before this plan
 
@@ -54,7 +54,7 @@ Allocate an available interrupt vector for each device; the fixed vector numbers
 
 ### Phase 1: the frame map
 
-Ranges from the map, frames by number, the reservations, the four boot numbers, the wide reference count. Proof: a host test over the recorded maps of QEMU and the Lenovo and over synthetic maps with holes, overlapping entries and a range crossing 4 GiB; a boot at 64 MiB, 512 MiB, 2 GiB, 3 GiB and 4 GiB whose usable and unreachable numbers together match what QEMU was given and whose other two follow the equations, with the harness shown to pass the size to every boot it makes.
+Ranges from the map, frames by number, the reservations, the four boot numbers, the wide reference count. Proof: a host test over QEMU's recorded maps and over synthetic maps with holes, overlapping entries and a range crossing 4 GiB, since no Lenovo map is on record; the kernel prints its map at boot, so milestone 50 captures the Lenovo's from the netconsole and adds it to the fixture; a boot at 64 MiB, 512 MiB, 2 GiB, 3 GiB and 4 GiB whose usable and unreachable numbers together match what QEMU was given and whose other two follow the equations, with the harness shown to pass the size to every boot it makes.
 
 ### Phase 2: the layout and the heap
 
@@ -74,11 +74,11 @@ Targets and reclaim; the reserve; the waiting rules in the request layer and the
 
 ### Phase 6: the close
 
-Twenty sessions in QEMU building at once as the load row that milestone 47 runs on the machine; the functional rows at 512 MiB, 2 GiB and 3 GiB as well as the full set at the two ends. Proof, once and in this order: build from clean; the full set at 64 MiB and at 4 GiB; everything that comes up fixed; the whole milestone's diff to Codex in units of six files, most serious first; every finding fixed; the full set again; then the Lenovo and the SSH capstone. Update each affected Readme in the commit that changes its contract. Codex writes the prose from verified facts. Problems found on the way that this milestone did not set out to fix are already in `dev-log/50-shortcomings/plan.md` with file and line, and none is fixed here unless the milestone cannot close without it. Record the results in `notes.md` and the milestone's Readme. Add the index entry.
+Twenty sessions in QEMU building at once as the load row that milestone 50 runs on the machine; the functional rows at 512 MiB, 2 GiB and 3 GiB as well as the full set at the two ends. Proof, once and in this order: build from clean; the full set at 64 MiB and at 4 GiB; everything that comes up fixed; the whole milestone's diff to Codex in units of six files, most serious first; every finding fixed; the full set again. The machine is not touched. Update each affected Readme in the commit that changes its contract. Codex writes the prose from verified facts. Problems found on the way that this milestone did not set out to fix are already in `dev-log/50-shortcomings/plan.md` with file and line, and one is fixed here only when the milestone cannot close without it, with its entry saying so. Record the results in `notes.md` and the milestone's Readme. Add the index entry.
 
 ## Risks
 
-* The memory changes affect every kernel subsystem. Each phase compiles and runs the rows it touched; the full set at two memory sizes and the machine come once at the close; phase 2 is allowed to be the longest phase this project has had.
+* The memory changes affect every kernel subsystem. Each phase compiles and runs the rows it touched; the full set at two memory sizes comes once at the close; phase 2 is allowed to be the longest phase this project has had.
 * A heap that frees can fragment; the allocator keeps size classes and the thousand-cycle row measures it.
 * Write the rules before implementation. Review specifically for lost wakeups and allocation from interrupt context.
 * Larger objects make linear scans and interrupt-disabled loops longer; the load row measures the longest delay of the timer, the console, the network and disk completion under load, and the numbers are recorded. 

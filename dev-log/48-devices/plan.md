@@ -2,7 +2,7 @@
 
 ## The goal
 
-Drive every supported xHCI controller and network card, however many the machine has and in whatever order they are found: two xHCI controllers, a dozen or more USB devices behind several hubs, two network cards of the same model or different ones, each interface with its own address, and a card that fails leaving the others working. What the kernel cannot drive, an EHCI-only machine or a wireless card, it says by name at boot. The milestone is complete when the proof set below passes in QEMU with two controllers and two cards and the Lenovo's own devices work as before.
+Drive every supported xHCI controller and network card, however many the machine has and in whatever order they are found: two xHCI controllers, a dozen or more USB devices behind several hubs, two network cards of the same model or different ones, each interface with its own address, and a card that fails leaving the others working. What the kernel cannot drive, an EHCI-only machine or a wireless card, it says by name at boot. The milestone is complete when the proof set below passes in QEMU with two controllers and two cards. The Lenovo's own devices are shown to work as before in milestone 50.
 
 ## What the tree settles before this plan
 
@@ -39,15 +39,15 @@ Per-controller state, capability-sized arrays, allocated records, descriptors wh
 
 Driver instances, the stack per interface, ARP and routes by interface, configuration by MAC. Proof: QEMU with two e1000 cards on two subnets and again with an RTL8139 beside an e1000, both reachable at once under traffic, SSH through each, DHCP on each interface by name, one ARP destination reachable through each; one card failed at probe with the other up, and one taken down after startup with the other still serving; the sealed image's network files carrying no QEMU address.
 
-### Phase 3: the platform and the machine
+### Phase 3: the platform
 
-The firmware check before the SMI reboot; the chipset table's fallbacks;  the Lenovo booted with its keyboard, mouse, sticks, hub and card as before. Proof: a host test of the reboot decision that feeds it the Lenovo's firmware strings and another's and checks which port writes it makes; the metal acceptance; the reboot from SSH.
+The firmware check before the SMI reboot; the chipset table's fallbacks. Proof: a host test of the reboot decision that feeds it the Lenovo's firmware strings and another's and checks which port writes it makes. The Lenovo with its keyboard, mouse, sticks, hub and card, the metal acceptance and the reboot from SSH are milestone 50's.
 
 ### Phase 4: the close
 
-Proof, once and in this order: build from clean; the full set; everything that comes up fixed; the whole milestone's diff to Codex in units of six files, most serious first; every finding fixed; the full set again; then the Lenovo and the SSH capstone. Update the USB and network Readmes in the commits that change their contracts. Codex writes the prose from verified facts. Problems found on the way that this milestone did not set out to fix are already in `dev-log/50-shortcomings/plan.md` with file and line, and none is fixed here unless the milestone cannot close without it. Record the results in `notes.md` and the milestone's Readme. Add the index entry.
+Proof, once and in this order: build from clean; the full set; everything that comes up fixed; the whole milestone's diff to Codex in units of six files, most serious first; every finding fixed; the full set again. The machine is not touched. Update the USB and network Readmes in the commits that change their contracts. Codex writes the prose from verified facts. Problems found on the way that this milestone did not set out to fix are already in `dev-log/50-shortcomings/plan.md` with file and line, and one is fixed here only when the milestone cannot close without it, with its entry saying so. Record the results in `notes.md` and the milestone's Readme. Add the index entry.
 
 ## Risks
 
-* Both controllers feed the shared input layer. Test a keyboard on each controller.
+* Both controllers feed the shared input layer. Test a keyboard on each controller in QEMU. The Lenovo has one xHCI controller and an EHCI the kernel names (`dev-log/43-machine/hardware.md:41`); milestone 50 checks its sockets and hub on that one.
 * A second interface changes the meaning of every address in the stack; the review is asked for the case where a packet arrives on the wrong one. 

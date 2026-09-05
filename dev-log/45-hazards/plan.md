@@ -45,7 +45,7 @@ Save and restore in the switch, fork, exec and signal delivery, the restored sta
 
 ### Phase 3: the close
 
-Proof, once and in this order: build from clean; the full set; everything that comes up fixed; the whole milestone's diff to Codex in units of six files, most serious first; every finding fixed; the full set again; then the new kernel on the Lenovo through `bootctl` and the SSH capstone. Update each affected Readme in the commit that changes its contract. Codex writes the prose from verified facts. Problems found on the way that this milestone did not set out to fix are already in `dev-log/50-shortcomings/plan.md` with file and line, and none is fixed here unless the milestone cannot close without it. Record the results in `notes.md` and the milestone's Readme. Add the index entry.
+Proof, once and in this order: build from clean; the full set; everything that comes up fixed; the whole milestone's diff to Codex in units of six files, most serious first; every finding fixed; the full set again. The machine is not touched; milestone 50 runs this kernel on it. Update each affected Readme in the commit that changes its contract. Codex writes the prose from verified facts. Problems found on the way that this milestone did not set out to fix are already in `dev-log/50-shortcomings/plan.md` with file and line, and one is fixed here only when the milestone cannot close without it, with its entry saying so. Record the results in `notes.md` and the milestone's Readme. Add the index entry.
 
 ## Risks
 
