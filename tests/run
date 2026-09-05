@@ -121,6 +121,7 @@ check_machines() {
 # A suite run on its own builds what its own target names, in parallel, and
 # nothing else: `tests/run host` after an edit to a utility does not restage
 # five images and two ISOs first. In a set, `prepare` has built everything.
+# The components were built before either, in a Make of their own.
 run_one() {
     start=$(date +%s)
     RACH2_QEMU_LEDGER="$WORK/$1.machines"; export RACH2_QEMU_LEDGER
@@ -163,8 +164,16 @@ run_pool() {
 
 alive() { n=0; for p in $1; do kill -0 "$p" 2>/dev/null && n=$((n + 1)); done; echo "$n"; }
 
-# Build the product and the test tools once for a set, so no two suites build
-# at once. A suite run alone skips this and builds through its own target.
+# The components first, in a Make of their own: an image rule that meets a
+# program and the component that builds it in one Make reads the program's
+# time before the component has run, and keeps the old image. Then, for a
+# set, the product and the test tools once, so no two suites build at once. A
+# suite run alone builds its own images through its own target.
+build_components() {
+    make -C "$REPO" --no-print-directory -j components || {
+        echo "run: result: the components did not build" >&2; exit 1
+    }
+}
 prepare() {
     echo "run: preparing"
     make -C "$REPO" --no-print-directory -j prepare-all || {
@@ -236,6 +245,7 @@ for suite in "$@"; do
     check_tools "$suite" || exit 1
 done
 
+build_components
 if [ "$#" -eq 1 ]; then
     run_one "$1" alone || exit 1
 else

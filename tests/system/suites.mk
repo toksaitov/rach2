@@ -23,7 +23,7 @@
 # read from the registry rather than written out again: `tests/run style`
 # already requires the registry and the targets in this file to name the same
 # suites, so a list derived from one cannot fall behind the other.
-.PHONY: prepare-all harness-kernel \
+.PHONY: prepare-all components harness-kernel \
         $(addprefix run-,$(shell awk -F'|' '!/^#/ && NF > 1 { print $$1 }' tests/registry))
 
 # --- RAM-disk images. Each is built out of tree from a checked-in manifest
@@ -148,13 +148,23 @@ run-default: test-image $(RUNTESTS)
 # this built first, each suite's own target finds its work done and only boots
 # machines. The list is the union of what the `run-*` targets depend on, and
 # `tests/run` checks that it stays the union.
-prepare-all: harness-kernel $(DEMO_CREDS) $(BINFIND) $(DEADLINE) $(ELFCHECK) $(HARNESS) $(HOSTPEER) \
+#
+# The components, the builds that turn sources into programs, are a target of
+# their own, and `tests/run` builds them in a Make of their own before the
+# one that builds images and disks. An image rule names the programs it
+# stages as prerequisites and the component that builds them as an order-only
+# one, and make reads a prerequisite's time when it first meets the name:
+# before the component's sub-make has run, if both are met in one rule. The
+# image then compares its own time with the old one and stays as it was, and
+# a suite boots a program that is not the one just compiled. Two Makes read
+# the times twice.
+components: harness-kernel busybox check-busybox check-dropbearmulti check-libc \
+            check-pdpmake check-setid check-tcc ish krffs musl-programs \
+            ports/doom rach2 rach2-metal rach2-recovery tests utils
+prepare-all: components $(DEMO_CREDS) $(BINFIND) $(DEADLINE) $(ELFCHECK) $(HARNESS) $(HOSTPEER) \
              $(MKFIXTURE) $(PCAPCHECK) $(PTYDRIVE) $(RUNTESTS) $(WAVCHECK) \
-             busybox check-busybox check-dropbearmulti check-libc \
-             check-pdpmake check-setid check-tcc ish krffs musl-programs \
-             os-real-image os-simple-image ports/doom rach2 rach2-metal \
-             rach2-metal-image rach2-recovery rach2-recovery-image \
-             rach2-sealed-disk test-image tests utils
+             os-real-image os-simple-image rach2-metal-image rach2-recovery-image \
+             rach2-sealed-disk test-image
 # `tests/run addressed`: the address named on the boot line, and the proof that
 # it is the one in force. The address is deliberately not the one SLIRP hands
 # out: a kernel that ignored `rach2.ip=` entirely would still hold 10.0.2.15 and

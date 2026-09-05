@@ -51,6 +51,8 @@ slow1|-|full
 slow2|-|full
 REG
 cat > "$WORK/Makefile" <<'MK'
+components:
+	@echo components >> components.count
 prepare-all:
 	@echo prepared >> prepared.count
 run-passing:
@@ -135,10 +137,12 @@ rm -f "$WORK/prepared.count"
 out=$(run passing failing)
 check "a run of two suites prepares once" 1 \
     "$(wc -l < "$WORK/prepared.count" | tr -d ' ')"
-rm -f "$WORK/prepared.count"
+rm -f "$WORK/prepared.count" "$WORK/components.count"
 out=$(run passing)
 check "a suite run alone does not prepare the whole product" 0 \
     "$(cat "$WORK/prepared.count" 2>/dev/null | wc -l | tr -d ' ')"
+check "but builds the components first" 1 \
+    "$(wc -l < "$WORK/components.count" | tr -d ' ')"
 check "and still runs" 1 "$(printf '%s\n' "$out" | grep -c 'passing ran')"
 
 # The worker count is a limit, not a suggestion. Two suites that each take two

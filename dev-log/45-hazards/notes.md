@@ -13,3 +13,4 @@ Recorded on 2026-09-06 before any change of this milestone, at commit `3c51bc6`,
 ## What the rows found
 
 * With `build/` removed, `tests/run host` stops in `prepare-all`: `No rule to make target build/utils/ping, needed by build/images/os-real.krffs`. Entry 4 of milestone 50; `make` and then the runner is the way around it, and it is what the close uses.
+* The first mutation of the recovery-boot row passed: `make -j run-ext2` rebuilt `init-metal` but not the recovery image that stages it. An image rule names the staged program as a prerequisite and the component as an order-only one, and make reads the program's time when it first meets the name, before the component's sub-make runs in the same rule. `tests/run` now builds the components in a Make of their own before the one that builds images, for a lone suite and for a set; the mutation then failed the row, and the restored source passed it.
