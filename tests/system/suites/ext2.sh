@@ -132,9 +132,21 @@ grep -aq 'ext2: check: inode [0-9]*: a reached inode the bitmap calls free' "$RO
 grep -aq 'ext2: mounted read-only: the check found a fault' "$ROOT.fault.log" || fail "the read-only reason"
 echo "ext2-test: a fault mounts the root read-only with the fault named: OK"
 
-# ---- 6: recovery's init repairs every ext2 partition, and its nodes write ----
+# ---- 6: a recovery boot repairs only when asked. Without `rach2.fsck` the
+#         boot reaches its login with the disk byte for byte as it was, the
+#         dirty root included; with it, init runs e2fsck -p on every ext2
+#         partition, and its nodes write ----
+BEFORE=$(cksum < "$ROOT")
 "$HARNESS" --kernel "$RKERNEL" --initrd "$RIMAGE" --qemu-arg=-cpu --qemu-arg=max \
     --drive "file=$ROOT,format=raw,if=ide,index=0,media=disk" \
+    --timeout 150 --steptmo 40 --ok "LOOKDONE" --log "$ROOT.look.log" \
+    "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" "expect=~ #" \
+    "send=echo LOOK\"\"DONE" "expect=LOOKDONE" > /dev/null 2>&1 || fail "the recovery boot without the repair"
+[ "$(cksum < "$ROOT")" = "$BEFORE" ] || fail "a recovery boot without rach2.fsck changed the disk"
+grep -aq 'init: e2fsck' "$ROOT.look.log" && fail "a recovery boot without rach2.fsck ran e2fsck"
+echo "ext2-test: a recovery boot without rach2.fsck leaves the disk as it was: OK"
+"$HARNESS" --kernel "$RKERNEL" --initrd "$RIMAGE" --qemu-arg=-cpu --qemu-arg=max \
+    --drive "file=$ROOT,format=raw,if=ide,index=0,media=disk" --append "rach2.fsck" \
     --timeout 150 --steptmo 40 --ok "RECDONE" --log "$ROOT.recovery.log" \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" "expect=~ #" \
     "send=dd if=/dev/disk0p2 of=/tmp/s bs=512 count=1 skip=16383 && printf 'rach2 wrote this sector%%s' '' | dd of=/tmp/w bs=512 count=1 conv=sync 2>/dev/null && dd if=/tmp/w of=/dev/disk0p2 bs=512 count=1 seek=16383 && dd if=/dev/disk0p2 bs=512 count=1 skip=16383 | head -c 23 && dd if=/tmp/s of=/dev/disk0p2 bs=512 count=1 seek=16383 && echo BACK\"\"OK" \
@@ -143,7 +155,8 @@ grep -aq 'init: e2fsck: /dev/disk0p1: status 1' "$ROOT.recovery.log" || fail "e2
 grep -aq 'init: e2fsck: /dev/disk0p2: status 0' "$ROOT.recovery.log" || fail "e2fsck's pass over the second partition"
 p1_out; e2fsck -fn "$VOL" > "$ROOT.fsck3.log" 2>&1 || fail "e2fsck after recovery"
 [ "$(p1_state)" = "1" ] || fail "the valid bit after recovery"
-echo "ext2-test: recovery's init runs e2fsck -p on every ext2 partition and its nodes write: OK"
+[ "$(cksum < "$ROOT")" != "$BEFORE" ] || fail "the repair changed nothing"
+echo "ext2-test: recovery's init runs e2fsck -p on every ext2 partition under rach2.fsck, and its nodes write: OK"
 
 # ---- 7: the repaired root boots clean ----
 boot_root "$ROOT.clean.log" --ok "Goodbye" \

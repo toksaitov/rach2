@@ -228,10 +228,11 @@ Rach2 (fallback kernel, static address)
 Rach2 (kernel debug shell)
 Rach2 (recovery, not yet built)
 Rach2 (recovery, static address, not yet built)
+Rach2 (recovery, repairs the ext2 partitions, not yet built)
 stagedone
 stagedtwo"
 [ "$SEEN" = "$WANT" ] || \
-    fail "the seven stub entries are not in the order their numbers assume, or the staged two are not after them"
+    fail "the eight stub entries are not in the order their numbers assume, or the staged two are not after them"
 if grep -a "Falling back to" "$LOG" | grep -aq "staged"; then
     fail "the fallback number selected a staged entry, so the stub's entries no longer hold the low indices"
 fi

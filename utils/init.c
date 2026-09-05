@@ -199,8 +199,10 @@ static pid_t spawn_shell(void)
  * Check every ext2 partition before anything runs from the disk, on the
  * recovery system, which is the system that carries `/sbin/e2fsck` and
  * whose root needs nothing from the disk; an image without the program
- * skips this. The partitions are the four MBR entries the kernel
- * publishes as nodes. A partition is an ext2 one by the magic at byte
+ * skips this, and so does a boot whose line lacks `rach2.fsck`: a person
+ * who booted recovery to look, or an installer that booted it to write,
+ * did not ask for a repair. The partitions are the four MBR entries the
+ * kernel publishes as nodes. A partition is an ext2 one by the magic at byte
  * 1080 of it. A fork that fails is retried a few times a second apart,
  * as the shell's is, because a check skipped is a repair not made.
  * `e2fsck -p` repairs what needs no question and leaves the rest for a
@@ -263,21 +265,17 @@ static void check_ext2_partitions(void)
 }
 
 /**
- * Whether the boot line handed the network to userland.
+ * Whether the boot line has `want` as a whole token.
  *
- * `rach2.ip=none` means the kernel came up with the device probed and IPv4
- * unset because a program will set it. Any other boot line either named an
- * address or accepted the default, and in both cases the machine is already
- * configured: running a DHCP client over that would begin by unconfiguring the
- * address somebody put on the command line, and on a network with no server it
- * would never put one back.
+ * A whole token and not a prefix: `rach2.ip=none` and `rach2.ip=none.x` are
+ * different things. The line is read from `/proc/cmdline` each time, which
+ * is twice in a boot.
  */
-static int boot_wants_userland_network(void)
+static int boot_line_has(const char *want)
 {
     char line[512];
     int fd = open("/proc/cmdline", O_RDONLY);
     ssize_t n;
-    const char *want = "rach2.ip=none";
     size_t wlen = strlen(want);
     size_t i;
 
@@ -290,8 +288,6 @@ static int boot_wants_userland_network(void)
         return 0;
     }
     line[n] = '\0';
-    /* A whole token and not a prefix: `rach2.ip=none` and `rach2.ip=none.x` are
-       different things, and only the first one asks for this. */
     for (i = 0; i + wlen <= (size_t)n; i++) {
         if ((i == 0 || line[i - 1] == ' ' || line[i - 1] == '\t' || line[i - 1] == '\n') &&
             strncmp(&line[i], want, wlen) == 0) {
@@ -303,6 +299,21 @@ static int boot_wants_userland_network(void)
         }
     }
     return 0;
+}
+
+/**
+ * Whether the boot line handed the network to userland.
+ *
+ * `rach2.ip=none` means the kernel came up with the device probed and IPv4
+ * unset because a program will set it. Any other boot line either named an
+ * address or accepted the default, and in both cases the machine is already
+ * configured: running a DHCP client over that would begin by unconfiguring the
+ * address somebody put on the command line, and on a network with no server it
+ * would never put one back.
+ */
+static int boot_wants_userland_network(void)
+{
+    return boot_line_has("rach2.ip=none");
 }
 
 /**
@@ -491,7 +502,9 @@ int main(void)
 
     clear_var_run();
 #ifdef INIT_METAL
-    check_ext2_partitions();
+    if (boot_line_has("rach2.fsck")) {
+        check_ext2_partitions();
+    }
 #endif
 
     for (;;) {

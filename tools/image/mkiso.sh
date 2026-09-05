@@ -132,8 +132,15 @@ menuentry \"Rach2 (metal) - no network configuration\" {
 elif [ "$IMAGE" = rach2-recovery ]; then
     # The stick takes an address from DHCP and answers SSH on it, which is
     # how reflash is reached from a host beside the machine; the disk it
-    # repairs is behind an AHCI controller on the machine this is for.
-    METAL_ENTRIES=''
+    # repairs is behind an AHCI controller on the machine this is for. The
+    # default entry repairs nothing: `rach2.fsck`, which makes init run
+    # `e2fsck -p` on every ext2 partition first, is the second entry's.
+    METAL_ENTRIES="menuentry \"Rach2 ($IMAGE) - repairs the ext2 partitions first\" {
+    multiboot /boot/kernel rach2.ip=none rach2.disk=ahci rach2.fsck
+    module /boot/$IMAGE.krffs
+    boot
+}
+"
     METAL_DEFAULT_ARGS='rach2.ip=none rach2.disk=ahci'
 else
     METAL_ENTRIES=''

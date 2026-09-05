@@ -209,7 +209,7 @@ load_env
 # still boots.
 #
 #   0 candidate   1 fallback   2 candidate-static   3 fallback-static
-#   4 debug       5 recovery   6 recovery-static
+#   4 debug       5 recovery   6 recovery-static    7 recovery-fsck
 
 menuentry "Rach2" --id candidate {
     set root=(hd0,msdos1)
@@ -260,6 +260,19 @@ menuentry "RACH2_RECOVERY_TITLE" --id recovery {
 menuentry "RACH2_RECOVERY_STATIC_TITLE" --id recovery-static {
     set root=(hd0,msdos3)
     multiboot /boot/recovery rach2.root=ram rach2.slot=recovery RACH2_APPEND_TOKENS RACH2_STATIC_TOKENS
+    module /boot/recovery.krffs
+    boot
+}
+
+# Recovery with the repair: `rach2.fsck` makes its init run `e2fsck -p` on
+# every ext2 partition before anything else starts. The two entries above
+# do not carry it, so a recovery booted to look at a disk, or to write one,
+# changes nothing a person did not ask for; this one is chosen for the
+# repair. It has no saved-default or next-entry rule, since a repair over
+# SSH runs `e2fsck` from a recovery shell by hand.
+menuentry "RACH2_RECOVERY_FSCK_TITLE" --id recovery-fsck {
+    set root=(hd0,msdos3)
+    multiboot /boot/recovery rach2.root=ram rach2.slot=recovery rach2.fsck RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
     module /boot/recovery.krffs
     boot
 }
@@ -388,14 +401,17 @@ done
 sedq() { printf '%s' "$1" | sed 's/[\\&|]/\\&/g'; }
 RECOVERY_TITLE="Rach2 (recovery, not yet built)"
 RECOVERY_STATIC_TITLE="Rach2 (recovery, static address, not yet built)"
+RECOVERY_FSCK_TITLE="Rach2 (recovery, repairs the ext2 partitions, not yet built)"
 if [ -n "$RECOVERY_KERNEL" ] && [ -n "$RECOVERY_IMAGE" ]; then
     RECOVERY_TITLE="Rach2 (recovery, rewrites this disk)"
     RECOVERY_STATIC_TITLE="Rach2 (recovery, static address)"
+    RECOVERY_FSCK_TITLE="Rach2 (recovery, repairs the ext2 partitions first)"
 fi
 sed -e "s|RACH2_STATIC_TOKENS|$(sedq "$STATIC_APPEND")|" \
     -e "s|RACH2_DHCP_TOKENS|$(sedq "$DHCP_APPEND")|" \
     -e "s|RACH2_CANDIDATE_ROOT|$CANDIDATE_ROOT|" \
     -e "s|RACH2_RECOVERY_STATIC_TITLE|$(sedq "$RECOVERY_STATIC_TITLE")|" \
+    -e "s|RACH2_RECOVERY_FSCK_TITLE|$(sedq "$RECOVERY_FSCK_TITLE")|" \
     -e "s|RACH2_RECOVERY_TITLE|$(sedq "$RECOVERY_TITLE")|" \
     -e "s|RACH2_APPEND_TOKENS|$(sedq "$EXTRA_APPEND")|" \
     "$GRUB_CFG" > "$GRUB_CFG.new"

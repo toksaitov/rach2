@@ -111,6 +111,7 @@ Options are whitespace-delimited. Flags match whole tokens, and the first `key=v
 | `rach2.fswindow` | Mount the Multiboot KRFFS module through the page-cache window. |
 | `rach2.disk=ahci` | Try AHCI before ATA; fall back to ATA if no AHCI disk answers. |
 | `rach2.diskdiag` | Probe the disk and publish the `/dev/disk0` whole-disk window. `/proc/disk` always exists and records the result. |
+| `rach2.fsck` | Read by recovery's `init`, not by the kernel: run `e2fsck -p` on every ext2 partition before anything else starts. The menu's repair entries carry it; the plain recovery entries do not. |
 | `rach2.blocklag=N` | Test option: answer boot-disk requests N ticks late through a sleeping wrapper. The partition nodes and `/dev/bootpart` are on it; the root window keeps the real device. |
 | `rach2.blockfail=N` | Test option, with `rach2.blocklag`: the Nth write through the wrapper fails with `EIO`, so a mount is seen to go read-only. |
 | `rach2.ip=A.B.C.D/prefix` | Set the single IPv4 address and mask. No gateway is implied. |
