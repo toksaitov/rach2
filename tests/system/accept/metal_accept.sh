@@ -47,8 +47,12 @@ BASELINE_MBR_SHA256="652ad40fe72061185cf3a69c1a9a45394f68374f409153e082b7c1fa04c
 BASELINE_SECTORS="1953525168"
 BASELINE_MODEL="Samsung SSD 870 EVO 1TB"
 
+# What the rows leave on the machine is removed here as well as in the rows,
+# so an interrupted run leaves nothing but the machine as it was found.
+MACHINE_TMP=""
 cleanup() {
     rm -f "$KNOWN"
+    [ -n "$MACHINE_TMP" ] && run "rm -rf $MACHINE_TMP" > /dev/null 2>&1
 }
 trap 'cleanup' EXIT
 trap 'cleanup; exit 130' INT
@@ -394,7 +398,8 @@ if run 'cat /proc/cmdline' | grep -q 'rach2.root=ext2'; then
     fi
     # Read back through the same cache: that the bytes reached the disk is
     # what the procedure's reboot after a write shows, not this call.
-    OUT="$(run 'echo accept > /root/accept.txt && sync && cat /root/accept.txt; rm -f /root/accept.txt')"
+    # shellcheck disable=SC2016 # the machine expands these, not this script
+    OUT="$(run 'f=$(mktemp /root/accept.XXXXXX) && echo accept > "$f" && sync && cat "$f"; rm -f "$f"')"
     if [ "$OUT" = "accept" ]; then
         note "the ext2 root takes a file and gives it back"
     else
@@ -438,12 +443,14 @@ else
     if ! sh "$REPO/krffs/mkimage.sh" "$REPO/krffs/manifests/loopimg-test.manifest" \
         "$IMG" 1 >/dev/null 2>&1; then
         note "the image could not be built here; no image row"
-    elif ! put "$IMG" /root/loop.img ||
-        [ "$(run 'wc -c < /root/loop.img')" != "1048576" ]; then
-        run 'rm -f /root/loop.img'
+    elif ! MACHINE_TMP="$(run 'mktemp -d /tmp/accept.XXXXXX')" || [ -z "$MACHINE_TMP" ]; then
+        note "the machine gave no temporary directory; no image row"
+    elif ! put "$IMG" "$MACHINE_TMP/loop.img" ||
+        [ "$(run "wc -c < $MACHINE_TMP/loop.img")" != "1048576" ]; then
+        run "rm -rf $MACHINE_TMP"; MACHINE_TMP=""
         note "the root has no room for a 1 MiB image; no image row"
     else
-        OUT="$(run 'loopctl attach 0 /root/loop.img && grep -c "^loop0 " /proc/loop')"
+        OUT="$(run "loopctl attach 0 $MACHINE_TMP/loop.img && grep -c '^loop0 ' /proc/loop")"
         if [ "$OUT" = "1" ]; then
             note "an image on the root is attached to /dev/loop0"
         else
@@ -467,7 +474,7 @@ else
         else
             bad "the unmount or the detach left something behind: $OUT"
         fi
-        get /root/loop.img "$IMG.after"
+        get "$MACHINE_TMP/loop.img" "$IMG.after"
         if "$REPO/build/krffs/fsck.krffs" "$IMG.after" --strict >/dev/null 2>&1; then
             note "the host's checker finds the image the machine wrote clean"
         else
@@ -480,7 +487,7 @@ else
         else
             bad "the file the machine wrote is not in the image"
         fi
-        run 'rm -f /root/loop.img'
+        run "rm -rf $MACHINE_TMP"; MACHINE_TMP=""
     fi
 fi
 
