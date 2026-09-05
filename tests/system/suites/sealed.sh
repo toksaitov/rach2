@@ -517,13 +517,14 @@ cold_watch dirty "rach2 login:"
 grep -aq "ext2: check: clean" "$LOG" || fail "the dirty root was not checked clean"
 cleanup_boot
 fell_back after-dirty dirty
-# The repair and the return: recovery's init checks every ext2 partition, and
-# the candidate, tried once more, comes up clean and is committed, which is
-# the state the run continues in.
+# The repair and the return: the recovery entry that carries `rach2.fsck`
+# is armed, its init checks every ext2 partition, and the candidate, tried
+# once more, comes up clean and is committed, which is the state the run
+# continues in.
 cold_boot arm-recovery
-OUT="$(machine 'bootctl trial recovery && bootctl status' || true)"
+OUT="$(machine 'bootctl trial recovery-fsck && bootctl status' || true)"
 case "$OUT" in
-    *"next_entry: recovery"*) ;;
+    *"next_entry: recovery-fsck"*) ;;
     *) fail "recovery could not be armed for the repair: $OUT" ;;
 esac
 stop_machine

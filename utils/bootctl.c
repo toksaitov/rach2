@@ -389,15 +389,16 @@ static const char *const ENV_KEYS[] = {"saved_entry", "next_entry"};
 /* The menu ids `trial` may arm. Every one of these is an entry the stub both
  * defines and consumes a trial for; a value the stub does not consume would
  * stay in the block forever, arming nothing and blocking every later commit.
- * The two recovery ids are here now that partition 3 has the kernel and the
+ * The three recovery ids are here now that partition 3 has the kernel and the
  * RAM image they name: arming one is how a machine that still boots is sent to
  * the image that can rewrite its root, which is the only way in when the root
- * is damaged but the machine is not yet stopped. A disk built without those
+ * is damaged but the machine is not yet stopped, and `recovery-fsck` is the
+ * one whose init runs `e2fsck -p` on every ext2 partition first. A disk built without those
  * files still defines the entries, and arming one there costs a boot that
  * falls back, not a machine that will not start. */
 static const char *const ENTRY_IDS[] = {"candidate",       "fallback", "candidate-static",
                                         "fallback-static", "debug",    "recovery",
-                                        "recovery-static"};
+                                        "recovery-static", "recovery-fsck"};
 
 /* What `saved_entry` may hold, which is not quite the same set. The stub reads
  * the saved default for the four kernel entries and for the two recovery ones,

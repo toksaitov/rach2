@@ -102,7 +102,7 @@ bootctl env KEY [VALUE]
 
 Boot-partition commands require `/proc/cmdline` and `/dev/bootpart`. A kernel install validates both the candidate and fallback, saves the fallback entry, writes and verifies the fixed candidate slot, then arms one trial. `commit` requires a candidate boot and GRUB's consumed-trial marker. The ordinary or fixed-address pair used by the current boot determines which entry ids are written.
 
-`config` rewrites and verifies the fixed menu slot. `env` permits only `saved_entry` and `next_entry`; `trial` permits only the seven entries defined by the immutable menu stub; `cancel` removes `next_entry` instead of writing the empty marker that means a trial boot was consumed.
+`config` rewrites and verifies the fixed menu slot. `env` permits only `saved_entry` and `next_entry`; `trial` permits only the eight entries defined by the immutable menu stub, `recovery-fsck` among them, the recovery boot that repairs the ext2 partitions first; `cancel` removes `next_entry` instead of writing the empty marker that means a trial boot was consumed.
 
 `bootctl grub FILE` replaces an i386-pc GRUB core image through `/dev/grubcore`. It accepts 2 through 1024 sectors, writes and verifies the inactive 1023-sector gap tail, then switches LBA 1. It never writes sector 0. A torn final write to LBA 1 can still make GRUB unreachable, and a transfer cut within the final sector cannot be detected from GRUB's sector count.
 

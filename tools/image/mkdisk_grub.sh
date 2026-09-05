@@ -268,8 +268,10 @@ menuentry "RACH2_RECOVERY_STATIC_TITLE" --id recovery-static {
 # every ext2 partition before anything else starts. The two entries above
 # do not carry it, so a recovery booted to look at a disk, or to write one,
 # changes nothing a person did not ask for; this one is chosen for the
-# repair. It has no saved-default or next-entry rule, since a repair over
-# SSH runs `e2fsck` from a recovery shell by hand.
+# repair. `bootctl trial recovery-fsck` arms it for one boot, which is how a
+# root that mounted read-only is repaired from the running system; it is
+# never a saved default, since a repair is one boot and a machine left
+# saved into it would repair at every start.
 menuentry "RACH2_RECOVERY_FSCK_TITLE" --id recovery-fsck {
     set root=(hd0,msdos3)
     multiboot /boot/recovery rach2.root=ram rach2.slot=recovery rach2.fsck RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
@@ -376,6 +378,11 @@ fi
 if [ "${next_entry}" = "recovery-static" ]; then
     set default=recovery-static
     set fallback=3
+    set next_entry=
+    save_env next_entry
+fi
+if [ "${next_entry}" = "recovery-fsck" ]; then
+    set default=recovery-fsck
     set next_entry=
     save_env next_entry
 fi
