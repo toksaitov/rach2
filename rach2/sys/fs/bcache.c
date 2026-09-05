@@ -76,7 +76,7 @@ static void check_hold_rules(block_device_t *dev, uint64_t blk)
             if (!block_is_below(dev, bufs[i].dev)) {
                 k_panic("bcache: hold rule: a block on a device that is not under the ones held");
             }
-            continue; /* under it: its blocks are its own to order */
+            continue; /* below it: its blocks are ordered among themselves */
         }
         if (bufs[i].blk >= blk) {
             k_panic("bcache: hold rule: a block taken that is not above every held block");
@@ -219,7 +219,7 @@ again:
                 stat_hits++;
                 return &bufs[i];
             }
-            goto again; /* the release invalidated or repurposed it */
+            goto again;
         }
     }
 
@@ -252,7 +252,7 @@ again:
             tried[victim - bufs] = 1;
             continue;
         }
-        victim->holder = caller_pid(); /* held for the write, as a sync would */
+        victim->holder = caller_pid(); /* held for the write */
         if (write_buffer(victim) == 0) {
             victim->holder = -1;
             wq_wake_all(&victim->wq);
@@ -263,7 +263,7 @@ again:
             goto again;
         }
         victim->holder = -1;
-        wq_wake_all(&victim->wq); /* a waiter for its old key looks again */
+        wq_wake_all(&victim->wq);
         tried[victim - bufs] = 1;
     }
     /* Keyed and held before the request sleeps, so a second process asking
@@ -439,6 +439,6 @@ int bcache_invalidate(block_device_t *dev)
             bufs[i].dev = 0;
         }
     }
-    dev->flags &= ~BLOCK_WRITE_FAILED; /* the next mount starts clean */
+    dev->flags &= ~BLOCK_WRITE_FAILED;
     return 0;
 }

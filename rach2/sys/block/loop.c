@@ -50,7 +50,7 @@ struct loop_device {
      * test can ask whether the second half happened. */
     uint32_t writes;
     uint32_t syncs;
-    int release_due; /* the medium went while one was: the last one lets go */
+    int release_due; /* the medium went during a transfer: the last one out releases */
     char path[LOOP_PATH_MAX]; /* what it was called when it was attached */
 };
 
@@ -289,7 +289,7 @@ static void loop_settle(void)
             continue;
         }
         if (vfs_device_holds(&loop->dev)) {
-            continue; /* something is still mounted on it */
+            continue;
         }
         loop_release(loop);
     }
@@ -311,7 +311,7 @@ void loop_device_gone(block_device_t *device)
          * outstanding. */
         klog(KLOG_WARN, "loop", "loop%d: the device under its file has gone", i);
         loops[i].dev.flags |= BLOCK_GONE;
-        loops[i].attached = 0; /* nothing new reaches the file from here */
+        loops[i].attached = 0;
         /* The slot stays taken until somebody detaches it: a mount may still
          * be standing on this device, and a fresh attachment here would put
          * another file under it. */
@@ -443,7 +443,7 @@ int loop_attach(int index, const char *path, int writable)
     if (loop_backs(ref.mnt, ref.node)) {
         vfs_ref_release(&ref);
         loop_unclaim(loop);
-        return -EBUSY; /* one file, one device, whatever it is called */
+        return -EBUSY;
     }
     if (block_depth(ref.mnt->dev) + 1 > BLOCK_MAX_DEPTH) {
         vfs_ref_release(&ref);
@@ -530,8 +530,8 @@ int loop_detach(int index)
     if (loop->attaching) {
         return -EBUSY;
     }
-    /* A device whose medium went is detached by letting go of what it still
-     * holds, which is what a detach is; there is nothing left to write. */
+    /* A device whose medium went has nothing left to write: the detach only
+     * releases what the attachment still holds. */
     if (!loop->attached) {
         if (vfs_device_holds(&loop->dev)) {
             return -EBUSY;
@@ -583,9 +583,9 @@ static int read_index(char **at)
         digits++;
         p++;
     }
-    /* The one place a device number is read: no digits, a number beyond the
-     * devices there are, or anything but the end of the word after it, and
-     * the command is not one. */
+    /* The one place a device number is read. No digits, a number beyond the
+     * devices there are, or anything but the end of the word after it makes
+     * the command invalid. */
     if (digits == 0 || index >= LOOP_DEVICES || (*p != ' ' && *p != '\0')) {
         return -1;
     }

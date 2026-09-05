@@ -76,7 +76,7 @@ static uint64_t offset_of(struct vfs_mount *mnt, void *handle)
 {
     (void)mnt;
     if (!handle) {
-        return 0; /* the VFS says NULL for the mount's root */
+        return 0;
     }
     return (uint64_t)(uintptr_t)handle - 1;
 }
@@ -362,11 +362,11 @@ static int kv_open(struct vfs_mount *mnt, void *node, int flags, void **handle)
             }
         }
         if (!o) {
-            return -ENFILE; /* sixteen files of one volume are open */
+            return -ENFILE;
         }
     }
     o->refs++;
-    *handle = node; /* the node is the handle: an offset needs nothing else */
+    *handle = node; /* the node is the handle */
     return 0;
 }
 
@@ -408,7 +408,7 @@ static int32_t kv_read(struct vfs_mount *mnt, void *handle, void *buf,
     int got;
 
     if (offset > 0xFFFFFFFFull) {
-        return 0; /* past the largest offset this kernel has */
+        return 0;
     }
     /* Under the mount's lock, as a write is: a read of a node another caller
      * is moving would otherwise read the bytes of wherever the offset it
@@ -882,7 +882,7 @@ static int kv_path(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
 
 static const struct vfs_ops krffs_volume_ops = {
     kv_lookup,   0, /* lookup_rest */
-    0,              /* hold: a handle is a number, not a thing to count */
+    0,              /* hold: a numeric handle is not counted */
     0,              /* put */
     kv_getattr,  kv_setattr, kv_open,  kv_release, kv_read, kv_write,
     kv_truncate, kv_fsync,   kv_readdir, kv_create,
@@ -933,7 +933,7 @@ static int krffs_volume_mount(struct vfs_mount *mnt, block_device_t *dev,
     }
 
     k_memset(vol, 0, sizeof(*vol));
-    vol->used = 1; /* claimed before the constructor sleeps */
+    vol->used = 1;
     vol->dev = dev;
     vol->mnt = mnt;
     vol->fs.backend = &volume_backend;

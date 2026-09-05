@@ -33,11 +33,16 @@ static const int KRFFS_Invalid_Link_Error            = -10,
  * directory is the fault; `hash` is only what sorts the entries, and the names
  * themselves decide.
  */
+/* A directory's type bits in a node's mode, as the kernel writes them. */
+#define FSCK_S_IFMT  0170000u
+#define FSCK_S_IFDIR 0040000u
+
 struct krffs_name_entry {
     uint64_t parent_id;
     uint64_t hash;
     uint64_t position;
     uint64_t size;
+    bool     is_dir;
     bool     drop;
 };
 
@@ -544,6 +549,8 @@ int main(int argc, char **argv)
             entries[entry_count].position =
                 krffs_get_node_relative_position(&file_system, node);
             entries[entry_count].size = node->size;
+            entries[entry_count].is_dir =
+                (node->mode & FSCK_S_IFMT) == FSCK_S_IFDIR;
             entries[entry_count].drop = false;
             entry_count++;
 
@@ -640,7 +647,17 @@ int main(int argc, char **argv)
                     continue;
                 }
 
-                keep = entries[i].size >= entries[j].size ? i : j;
+                /* The larger is the copy a move was making, since a move
+                   only ever makes a node larger. A directory is never the
+                   one that loses its name whatever the sizes say: its
+                   children name it by its identifier, and clearing it would
+                   put a whole tree out of reach. The kernel's own check
+                   makes the same two judgements. */
+                if (entries[i].is_dir != entries[j].is_dir) {
+                    keep = entries[i].is_dir ? i : j;
+                } else {
+                    keep = entries[i].size >= entries[j].size ? i : j;
+                }
                 drop = keep == i ? j : i;
                 entries[drop].drop = true;
                 duplicates++;
@@ -678,8 +695,8 @@ int main(int argc, char **argv)
     /* The backward links, rebuilt from the forward chain the walk validated,
        and rebuilt first: the passes below free nodes through the allocator,
        which merges a freed node with the node before it by following that
-       link. A link that lies would merge the wrong two, or a node with
-       itself. */
+       link. A link that disagrees with the chain would merge the wrong two nodes, or
+       a node with itself. */
     if (exit_status == EXIT_SUCCESS && backlinks != 0) {
         struct krffs_node *scan = file_system.node;
         struct krffs_node *behind = NULL;
@@ -703,9 +720,8 @@ int main(int argc, char **argv)
                fixed);
     }
 
-    /* The loser of a repeated name gives up its name, which makes it the same
-       thing as an orphan and leaves the pass below one kind of node to
-       reclaim. */
+    /* The node that loses a repeated name has no name left, so the pass below
+       reclaims it with the other nameless nodes. */
     if (exit_status == EXIT_SUCCESS && duplicates != 0) {
         size_t i;
 

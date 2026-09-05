@@ -5794,7 +5794,7 @@ static void __attribute__((noreturn)) exec_fail_destroyed(void)
         parent->state = PROC_READY;
     }
 
-    /* Hand any surviving children to init, as the other death paths do. */
+    /* Children go to init, as they do on every other death path. */
     reparent_children(current_proc->pid);
 
     /* Release the descriptor table (socket refs + open-file descriptions), the
@@ -6059,8 +6059,7 @@ static int32_t sys_execve(isr_params_t *params)
             uint32_t arg_ptr = 0;
             int r;
 
-            /* Read the argv[argc] pointer out of the user array. */
-            if (copy_from_user(&arg_ptr, (const void __user *)&user_argv[argc],
+                if (copy_from_user(&arg_ptr, (const void __user *)&user_argv[argc],
                                sizeof(arg_ptr)) != 0) {
                 return -EFAULT;
             }
@@ -6101,7 +6100,6 @@ static int32_t sys_execve(isr_params_t *params)
     }
     s->argv_bufs[argc] = NULL;
 
-    /* Copy the real envp the same way. */
     if (user_envp) {
         for (envc = 0; envc < EXEC_MAX_ENTRIES; envc++) {
             uint32_t env_ptr = 0;
@@ -6175,7 +6173,7 @@ static int32_t sys_execve(isr_params_t *params)
             vfs_ref_release(&xref);
             return -EACCES;
         }
-        /* MS_NOEXEC is enforced here, the one place exec decides. */
+        /* MS_NOEXEC is enforced here. */
         if (xref.mnt->flags & VFS_MS_NOEXEC) {
             vfs_ref_release(&xref);
             return -EACCES;
@@ -6217,7 +6215,7 @@ static int32_t sys_execve(isr_params_t *params)
         rc = cred_access_node(prog, CRED_X, 0);
         if (rc != 0) {
             vfs_ref_release(&xref);
-            return rc; /* exec is the execute bit, for root too */
+            return rc; /* the execute bit, for root too */
         }
         /* Capture the set-id facts while the node is at hand; they apply only
          * once the exec commits, so a rejected image changes nothing. The
@@ -6237,8 +6235,7 @@ static int32_t sys_execve(isr_params_t *params)
         if ((prog->mode & KRFFS_MODE_SGID) && (prog->mode & 0010u)) {
             setid_mode |= KRFFS_MODE_SGID;
         }
-        /* MS_NOSUID: the bits are read and then ignored, which is the
-         * flag's whole meaning. */
+        /* MS_NOSUID: the bits are read and then ignored. */
         if (xref.mnt->flags & VFS_MS_NOSUID) {
             setid_mode = 0;
         }
@@ -6254,11 +6251,10 @@ checked:
         proc_dir = (page_dir_t *)(current_proc->cr3 - 1024 * sizeof(page_table_t *));
     }
 
-    /* Validate the ELF header BEFORE tearing down the old image, so the common
-     * "not a valid executable" failure leaves the calling process intact. A
-     * file that is not an ELF may still be a script naming its interpreter, and
-     * then what runs is the interpreter, checked here exactly as the script
-     * was. */
+    /* The ELF header is validated before the old image is torn down, so the
+     * common "not a valid executable" failure leaves the calling process
+     * intact. A file that is not an ELF may still be a script naming its
+     * interpreter, which is checked here as the script was. */
     {
         Elf32_Ehdr ehdr;
 
@@ -6502,8 +6498,7 @@ interpreter_checked:
          * ELF code/data pages themselves are still eagerly loaded above. */
         elf_setup_vmas(&current_proc->vm, &img, USER_STACK_BASE,
                        VM_STACK_MAX_GROWTH);
-        /* A new program in an old process: what the last one ran out of is not
-         * this one's, so it may say so once too. */
+        /* The new image may report a full descriptor table once of its own. */
         current_proc->vma_reported = 0;
     }
 
