@@ -1118,7 +1118,7 @@ run-usbdisk: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(MKEXFATF
 	sh tests/system/suites/usbdisk.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(USBDISK_DIR) \
 	    $(OS_REAL_IMAGE) "`cat krffs/rach2_demo_password`" $(MKEXFATFIXTURE) $(STICK_IMAGE)
 
-run-usb: rach2 tests krffs test-image $(HARNESS)
+run-usb: rach2 tests krffs test-image $(HARNESS) harness-kernel
 	sh tests/system/suites/usb.sh $(HARNESS_KERNEL) $(TEST_IMAGE) $(HARNESS)
 # (see tests/system/suites/subset.sh).
 run-subset: rach2 tests krffs test-image $(HARNESS)
@@ -1258,15 +1258,16 @@ run-procfiles: $(DEMO_CREDS) rach2 tests utils krffs busybox os-real-image test-
 # run with no token, which has only the plain line to read.
 HARNESS_KERNEL = build/rach2-harness/kernel
 
-# The kernel built with the harness exit port, which two suites boot. It is
-# built by `prepare-all` and by nothing else: a suite that built it in its own
-# recipe would be a second `make` in `rach2/` while the pool was running, and
-# two of those in one directory write over each other's response file. That is
-# what this target exists to prevent, and what it cost to find out.
+# The kernel built with the harness exit port, which two suites boot. It is a
+# prerequisite of those two and of `prepare-all`, never a step of a recipe: a
+# recipe that ran `make` in `rach2/` while the pool was running would be a
+# second build of one tree beside the first, and two builds of one tree write
+# over each other. As a prerequisite it is built once, before the pool, or by
+# the one `make` a suite run alone is.
 harness-kernel:
 	$(MAKE) -C rach2 COMPONENT=rach2-harness HARNESS=1
 
-run-exitline: $(DEMO_CREDS) rach2 tests utils krffs busybox os-real-image test-image $(HARNESS)
+run-exitline: $(DEMO_CREDS) rach2 tests utils krffs busybox os-real-image test-image $(HARNESS) harness-kernel
 	sh tests/system/suites/exitline.sh build/rach2/kernel $(TEST_IMAGE) \
 	    $(OS_REAL_IMAGE) root "`cat krffs/rach2_demo_password`" \
 	    $(HARNESS_KERNEL)

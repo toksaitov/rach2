@@ -118,12 +118,19 @@ check_machines() {
 
 # The name and the tools were checked before anything was built, so this does
 # not repeat them; it runs the target and then reads the ledger the shim wrote.
+# A suite run on its own builds what its own target names, in parallel, and
+# nothing else: `tests/run host` after an edit to a utility does not restage
+# five images and two ISOs first. In a set, `prepare` has built everything.
 run_one() {
     start=$(date +%s)
     RACH2_QEMU_LEDGER="$WORK/$1.machines"; export RACH2_QEMU_LEDGER
     : > "$RACH2_QEMU_LEDGER"
     rc=0
-    make -C "$REPO" --no-print-directory "run-$1" || rc=1
+    if [ "${2-}" = alone ]; then
+        make -C "$REPO" --no-print-directory -j "run-$1" || rc=1
+    else
+        make -C "$REPO" --no-print-directory "run-$1" || rc=1
+    fi
     check_machines "$1" || rc=1
     if [ "$rc" = 0 ]; then
         echo "run: $1: PASS in $(($(date +%s) - start))s"
@@ -156,7 +163,8 @@ run_pool() {
 
 alive() { n=0; for p in $1; do kill -0 "$p" 2>/dev/null && n=$((n + 1)); done; echo "$n"; }
 
-# Build the product and the test tools once, so no two suites build at once.
+# Build the product and the test tools once for a set, so no two suites build
+# at once. A suite run alone skips this and builds through its own target.
 prepare() {
     echo "run: preparing"
     make -C "$REPO" --no-print-directory -j prepare-all || {
@@ -228,10 +236,10 @@ for suite in "$@"; do
     check_tools "$suite" || exit 1
 done
 
-prepare
 if [ "$#" -eq 1 ]; then
-    run_one "$1" || exit 1
+    run_one "$1" alone || exit 1
 else
+    prepare
     run_set "$*" || exit 1
     echo "run: result: all $# suites passed"
 fi

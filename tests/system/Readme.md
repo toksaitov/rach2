@@ -9,7 +9,7 @@ This directory contains everything that runs Rach2 to test it: the QEMU runners 
 Six mechanisms, and the reason for each:
 
 * Names and tools are checked before anything is built. A run whose last suite needs a missing `mformat` fails in the first second instead of an hour later.
-* `prepare-all` builds the product and the test tools once, before any suite starts. Twenty suites each running Make on the same tree would build the same object twenty times, or race over it.
+* For a set, `prepare-all` builds the product and the test tools once, before any suite starts. Twenty suites each running Make on the same tree would build the same object twenty times, or race over it. A suite run alone builds through its own target instead, with `make -j run-NAME`, so it builds only what that target names: `tests/run host` after an edit to a utility takes 97 s instead of 129 s, since the five images and the two ISOs the edit touches are not its business.
 * The suites then run in a pool, `RACH2_WORKERS` at a time, default twice the processor count and at least four, eight when the count cannot be read. Most of a suite's time is spent waiting for an emulated machine rather than computing, so the useful count is above the core count; on a ten-core machine the full run takes 1286s at four workers, 587 at twelve, and stops improving at twenty.
 * Each pooled suite's output is held and replayed at the end in the order the suites were named, which for `all` and `core` is the registry's. Twenty suites writing to one terminal is not a report.
 * Registry order is the schedule order, longest suite first. A pool finishes when its longest member does, so a long suite started last leaves the machine idle around it.

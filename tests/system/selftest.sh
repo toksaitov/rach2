@@ -128,11 +128,18 @@ check "the same name twice is refused" 2 "$rc"
 
 # The product and the tools are built once for the whole run, not once per
 # suite: twenty suites each running make on one tree would build the same
-# object twenty times, or race over it.
+# object twenty times, or race over it. A suite run alone builds through its
+# own target instead, so an edit far from it does not rebuild the whole
+# product first.
 rm -f "$WORK/prepared.count"
 out=$(run passing failing)
 check "a run of two suites prepares once" 1 \
     "$(wc -l < "$WORK/prepared.count" | tr -d ' ')"
+rm -f "$WORK/prepared.count"
+out=$(run passing)
+check "a suite run alone does not prepare the whole product" 0 \
+    "$(cat "$WORK/prepared.count" 2>/dev/null | wc -l | tr -d ' ')"
+check "and still runs" 1 "$(printf '%s\n' "$out" | grep -c 'passing ran')"
 
 # The worker count is a limit, not a suggestion. Two suites that each take two
 # seconds take four one at a time and two together, so the wall clock says
