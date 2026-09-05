@@ -139,7 +139,7 @@ $(PTYDRIVE): tests/system/runner/ptydrive.c
 # a failing probe ever waits a step window out, so widening it costs a passing
 # run nothing. The default suite's build-and-run target. `make test` and
 # `tests/run default` both land here; the registry in tests/registry names it.
-run-default: test-image $(RUNTESTS)
+run-default: rach2 test-image $(RUNTESTS)
 	$(RUNTESTS) $(NIC_DEV) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
 	    --timeout 300 --steptmo 60 --log $(TEST_IMAGE).default.log
 # Everything every suite needs, in one target, so `tests/run all` can build once
@@ -198,7 +198,7 @@ run-addressed: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
 # once, and leaves /etc/shadow, its temporary file and the lock exactly as they
 # were. The harness passes no -cpu of its own, so the passthrough is the only
 # one on the command line.
-run-noentropy: test-image $(HARNESS)
+run-noentropy: rach2 test-image $(HARNESS)
 	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
 	    --qemu-arg=-cpu --qemu-arg=qemu64 \
 	    --timeout 90 --ok "SALTNOENT OK" \
@@ -342,7 +342,7 @@ run-disk: rach2 tests krffs $(HARNESS)
 # driver's 28-bit LBA stops at 128 GiB.
 BOOTPART_TEST_IMAGE = $(IMAGES_DIR)/bootpart-test.disk
 WIDE_TEST_IMAGE = $(IMAGES_DIR)/wide-test.disk
-run-bootpart: rach2 tests krffs $(MKFIXTURE) $(HARNESS)
+run-bootpart: rach2 tests krffs test-image $(MKFIXTURE) $(HARNESS)
 	$(MKDISK) krffs/manifests/disk-test.manifest $(BOOTPART_TEST_IMAGE) 64 48
 	$(HARNESS) --kernel build/rach2/kernel \
 	    --append "rach2.fsdisk rach2.rescue" \
@@ -1049,7 +1049,7 @@ run-diskdiag: rach2 rach2-metal rach2-metal-image $(HARNESS)
 # and the partition nodes; later phases grow it. Its disk is the test disk
 # with a FAT32 partition added at 49 MiB by mkmbr and mtools.
 MOUNT_DISK = build/images/mount-test.disk
-run-mount: $(DEMO_CREDS) rach2 tests krffs os-real-image $(MKFIXTURE) $(HARNESS)
+run-mount: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(MKFIXTURE) $(HARNESS)
 	sh tests/system/suites/mount.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(MOUNT_DISK) \
 	    $(OS_REAL_IMAGE) "`cat krffs/rach2_demo_password`"
 
@@ -1057,7 +1057,7 @@ run-mount: $(DEMO_CREDS) rach2 tests krffs os-real-image $(MKFIXTURE) $(HARNESS)
 # reboot, judged by the host's walk and mtools, taken through a crash and its
 # repair, written from BusyBox, and written by two processes under the lag.
 FATWRITE_DISK = $(IMAGES_DIR)/fatwrite-test.disk
-run-fatwrite: $(DEMO_CREDS) rach2 tests krffs os-real-image $(MKFATFIXTURE) $(HARNESS)
+run-fatwrite: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(MKFATFIXTURE) $(HARNESS)
 	sh tests/system/suites/fatwrite.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(FATWRITE_DISK) \
 	    $(OS_REAL_IMAGE) "`cat krffs/rach2_demo_password`" $(MKFATFIXTURE)
 
@@ -1090,7 +1090,7 @@ run-ext2: $(DEMO_CREDS) rach2 tests krffs test-image $(HARNESS) build/tools/imag
 # one, taken through a crash and its repair, written from BusyBox, and
 # written by two processes under the lag.
 EXFAT_DISK = $(IMAGES_DIR)/exfat-test.disk
-run-exfat: $(DEMO_CREDS) rach2 tests krffs os-real-image $(MKEXFATFIXTURE) $(HARNESS)
+run-exfat: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(MKEXFATFIXTURE) $(HARNESS)
 	sh tests/system/suites/exfat.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(EXFAT_DISK) \
 	    $(OS_REAL_IMAGE) "`cat krffs/rach2_demo_password`" $(MKEXFATFIXTURE)
 
