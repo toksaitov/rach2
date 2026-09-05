@@ -270,9 +270,9 @@ The first unit, the format's core, reported six findings:
    still counted, without putting the shorter length on the medium first. The
    length goes first, and a host row replays every stop of a shrink and
    requires the file to hold its own bytes.
-5. A name the medium would not give up was read as a name that is not there,
-   and the reaper frees such a node. A failed read now answers that the node
-   has a name, which is the answer that frees nothing.
+5. A name the medium would not give up was read as an absent name, and the
+   reaper frees a node with no name. A failed read now answers that the node
+   has one, which frees nothing.
 6. A move that could not free the node it copied from reported success, and a
    running kernel would then walk to the old node and read what the file used
    to be. It reports the failure, and the refusal sweep in the host test now
@@ -281,7 +281,7 @@ The first unit, the format's core, reported six findings:
 
 The second unit, the mounted volume, reported ten. Fixed here: a truncate of
 an unlinked file, which reached its parent directory through the path a
-nameless node spells and could free it (the core takes a node now, not a
+nameless node would have and could free it (the core takes a node now, not a
 path); a create and a mkdir that threw the mode and the owner away; a create
 over a name that is already there, which the core answers with success and
 which is now `EEXIST`; a rename over an open file and a removal of an open
@@ -373,3 +373,36 @@ than as this tree's prose, and a claim the code does not keep.
 
 Each unit quotes what it would change and writes the replacement; the
 rewriting is done here so the tree keeps one voice.
+
+The round's five units read the documents and the comments and reported. What
+was taken from them:
+
+* The claims the code does not keep, all of them. The mounted volume's
+  `release` sleeps, and the lock order said no `release` does; `truncate`
+  takes a length and the interface said an offset; a read that fails inside
+  the walk of a chain answers `EINVAL` and the list said `EIO`; the cache's
+  second hold rule is that a device must be below every device the caller
+  holds, not below one of them; `ENOSPC` from a write covers a medium that
+  refused the resize as well as a volume with no room, and the document
+  claimed the two could be told apart. Each is corrected where it stood.
+* One of those was a defect and not only a sentence: an unmount cleared the
+  dirty flag of a volume whose device had already failed a write, because it
+  asked the volume whether it was writable rather than the mount. A row now
+  fails a write under `rach2.blockfail`, unmounts, and requires the host's
+  checker to still find the flag set.
+* The host tool disagreed with the kernel about a name on two nodes when one
+  of them is a directory: the kernel keeps the directory and `fsck.krffs`
+  kept the larger. The tool keeps the directory now, and a row builds that
+  volume and requires the directory's children to survive the repair.
+* The register: the narration and the private shorthand the units quoted,
+  taken out of the comments of the six files this milestone changed and of
+  the documents it touched.
+
+What was not taken. Three units proposed rewriting whole documents and
+headers into a flat reference register, dropping the reason a thing is done
+and keeping only what it does. CLAUDE.md asks for the opposite in a comment
+header, the contract and the non-obvious why, and names Lions' Commentary as
+the model for kernel code; those rewrites are refused for that reason and
+not for taste. Where a sentence was long because it was carrying its reason,
+it stays; where it was long because it was built toward a phrase, it is
+gone.
