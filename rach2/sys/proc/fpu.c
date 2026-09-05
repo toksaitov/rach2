@@ -95,7 +95,9 @@ void fpu_init(void)
         uint32_t mxcsr = 0x1F80u;
         uint32_t reported;
 
-        __asm__ __volatile__("ldmxcsr %0" : : "m"(mxcsr));
+        /* `ldmxcsr (%eax)` as bytes: the staged TinyCC's assembler has
+         * `fxsave` and `fxrstor` but not this one. */
+        __asm__ __volatile__(".byte 0x0f, 0xae, 0x10" : : "a"(&mxcsr) : "memory");
         __asm__ __volatile__("fxsave (%0)" : : "r"(initial_state) : "memory");
         k_memcpy(&reported, initial_state + 28, sizeof(reported));
         if (reported != 0) {
