@@ -80,20 +80,23 @@ static int krffs_compare_name_entries(const void *left, const void *right)
  * consecutive, stay within the file system space, carry a valid signature, name
  * a known node type, and that the last node links back to the first.
  *
- * The walk asks of every node what the kernel asks of it before it mounts an
- * image: each node's `previous_node_size` is the size of the node before it,
- * the root's is the size of the last, and the sizes together span the region
- * exactly. Without those the checker accepted images the kernel refuses, which
- * is no use as an independent judge of what the kernel writes.
+ * The walk asks of every node what the kernel asks of a volume it is about to
+ * mount: a size of at least one header that ends inside the region, data that
+ * fits in the node holding it, each node's `previous_node_size` the size of
+ * the node before it, the root's the size of the last, and the sizes together
+ * spanning the region exactly. Without those the checker accepted images the
+ * kernel refuses, which is no use as an independent judge of what the kernel
+ * writes.
  *
  * Two kinds of fault. A fatal one, an unreadable signature, an unknown type, a
  * size that leaves the region, a data size larger than the node holding it, or
  * a chain that does not close, is reported and the image is left as it was.
  * A repairable one,
- * the dirty flag of an image that was not cleanly unmounted, an orphan node no
- * path reaches, a name repeated in one directory by a move that was
- * interrupted, and a backward link that disagrees with the forward chain, is
- * repaired after the walk has passed, and each repair is named. Nothing is
+ * the dirty flag of an image that was not cleanly unmounted, a reserved node
+ * with no name, which is what a crash leaves of a file nothing had a name for
+ * any more, a name repeated in one directory by a move that was interrupted,
+ * and a backward link that disagrees with the forward chain, is repaired
+ * after the walk has passed, and each repair is named. Nothing is
  * repaired before the walk: writing to an image whose structure has not been
  * read through is how a checker damages what it was asked to inspect.
  *
@@ -101,11 +104,15 @@ static int krffs_compare_name_entries(const void *left, const void *right)
  * a test asks when it wants to know that the kernel left an image clean rather
  * than repairable.
  *
- * Returns `EXIT_SUCCESS` on a clean file system and `EXIT_FAILURE` for a usage
- * or I/O error. A structural fault yields a specific negative status: `-10` for
- * a nonconsecutive link, `-11` for a link outside the file system space, `-12`
- * for an invalid signature, `-13` for an unknown node type, `-14` for a node
- * whose data does not fit in it, and `-15` for repairs owed under `--strict`.
+ * Returns `EXIT_SUCCESS` on a clean file system, and on the help text and the
+ * run with no arguments at all; `EXIT_FAILURE` for the arguments, the open and
+ * the mapping, and for a root whose signature or type is wrong. A fault the
+ * walk finds yields a specific negative status: `-10` for a nonconsecutive
+ * link, `-11` for a link outside the file system space, `-12` for an invalid
+ * signature, `-13` for an unknown node type, `-14` for a node whose size or
+ * data does not fit the region or whose name never ends, and `-15` for repairs
+ * owed under `--strict`. A failure while unmapping or closing is printed and
+ * changes nothing.
  * Per-node debug output goes to stdout and can be silenced with `> /dev/null`.
  */
 int main(int argc, char **argv)
@@ -139,7 +146,7 @@ int main(int argc, char **argv)
     if (argc <= 1 || has_help_option) {
         fprintf(
             stderr,
-            "Usage: %s <file>\n",
+            "Usage: %s <file> [--offset N --size N] [--strict]\n",
             argc >= 1 ?
                 argv[0] : "fsck.krffs"
         );
@@ -150,7 +157,7 @@ int main(int argc, char **argv)
             stderr,
             "The first parameter is invalid.\n"
             "\n"
-            "Usage: %s <file>\n",
+            "Usage: %s <file> [--offset N --size N] [--strict]\n",
             argc >= 1 ?
                 argv[0] : "fsck.krffs"
         );
@@ -220,8 +227,9 @@ int main(int argc, char **argv)
 
     /*
         Map the file into memory through the kernel's virtual memory system.
-        Writes to `file_system.node` reach the file directly, either right away
-        or at `krffs_unmap_file` or `krffs_sync_mapping`.
+        Writes to `file_system.node` change the shared mapping of the file.
+        `krffs_sync_mapping` asks for them to be written back; unmapping is
+        this host's `munmap` and promises nothing about when they land.
      */
     if ((file_system.node =
              krffs_map_file(
@@ -312,9 +320,10 @@ int main(int argc, char **argv)
     struct krffs_node *node =
         previous_node;
 
-    /* A node whose size is zero (or too small) does not advance the walk, so
-     * cap the iterations at the most nodes the mapping could hold; a chain that
-     * does not return to the root within that bound is corrupt, not endless. */
+    /* The walk judges every size before it steps by one, so a node too small
+     * to hold a header ends it. The bound below is the second answer to the
+     * same question: a chain that does not return to the root within the most
+     * nodes the mapping could hold is corrupt, not endless. */
     uint64_t steps =
         0;
     uint64_t max_steps =
@@ -500,14 +509,15 @@ int main(int argc, char **argv)
         } else if (node->type == KRFFS_Reserved_Node &&
                    node->name[0] == '\0') {
             /* An orphan: a reserved node no path names, left by a crash between
-               the last unlink or rename and the last close. The kernel reaps
-               these when it mounts a dirty image; report them here so an
-               operator reading fsck's output is not left wondering what the
-               space is. */
+               the last unlink or rename and the last close. A writable mount
+               of a volume whose dirty flag is set reaps these; a read-only
+               mount and a clean one leave them where they are. Report them
+               here so an operator reading fsck's output is not left
+               wondering what the space is. */
             orphans++;
             printf(
                 "+ orphan node at position %"PRIu64": %"PRIu64" bytes "
-                "(%"PRIu64" bytes for data, owner %u:%u), reclaimed below\n",
+                "(%"PRIu64" bytes for data, owner %u:%u), to be reclaimed\n",
                 krffs_get_node_relative_position(&file_system, node),
                 node->size,
                 node->data_size,
