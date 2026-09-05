@@ -1,10 +1,9 @@
-# Milestone 50: the root takes the disk
+# Milestone 47: the root takes the disk
 
 ## The goal
 
-The installer offers the root partition nearly the whole disk, minus what
-the boot, the fallback and the recovery partitions need, and the system
-runs on it: a volume of hundreds of gigabytes mounted, written, checked
+The root partition is nearly the whole disk, minus what the boot, the
+fallback and the recovery partitions need, and the system runs on it: a volume of hundreds of gigabytes mounted, written, checked
 after a stop and repaired, with the file size limits of a 32-bit kernel
 stated rather than discovered. The milestone is complete when the Lenovo's
 disk has been installed that way and `e2fsck` from recovery and the
@@ -30,8 +29,10 @@ kernel's own check both accept the volume.
   volume at once. The group descriptors are one array read at mount
   (`ext2.c:93`).
 * The recovery RAM image is built to a 4 MiB budget (`Makefile:493`).
-* Milestone 46's installer writes the sealed layout and rereads the table;
-  its manifest names the image's size and hash.
+* The sealed image is written today by hand from recovery with `reflash`,
+  partition by partition, under the Readme's "Updating the installed
+  machine"; the installer is milestone 48 and will offer the whole disk
+  from its first version because this milestone comes first.
 * The Lenovo's SATA disk has 488397168 sectors, 238475 MiB
   (`dev-log/43-machine/hardware.md:43`); the 1 TB disk in the same record
   was a USB disk plugged in by mistake. The fourth partition entry is
@@ -50,14 +51,16 @@ the partition with `resize2fs`, ported to musl from the pinned e2fsprogs
 and staged on the recovery image with its budget raised by name, offline,
 before the first boot. Its memory on the target size is measured before it
 is trusted, and if it does not fit the machine, the extent package is the
-recorded fallback. The partition entry is written by the installer from
-the disk's size.
+recorded fallback. The partition entry is written from the disk's size by
+a `growroot` step in the recovery image that the installer of milestone 48
+will call and that a person can run by hand: it rewrites the fourth
+entry, rereads the table and runs `resize2fs`.
 
 ### The driver takes a large volume
 
 The group descriptors become an array sized at mount from the superblock,
 about 60 KB for this disk and 240 KB for a 1 TB one, allocated from the
-memory milestone 49 made available; not a cache with lifetimes on every
+memory milestone 46 made available; not a cache with lifetimes on every
 access. The dirty-volume check is not partitioned: a dirty volume larger
 than the check's bound mounts read-only, says so, and is repaired by
 recovery's `e2fsck`. That narrows the automatic check to the sizes it can
@@ -89,19 +92,25 @@ and the volume repaired from recovery; the ext2 host test over a fixture
 with the metadata of that size; the phase ends with a Codex review of the
 driver change as one unit.
 
-### Phase 3: the installer
+### Phase 3: the grow step
 
-The partition entry from the disk's size; the grow after the write; the
-question that offers it. Proof: the installer row on a large QEMU disk.
+`growroot` in the recovery image: the fourth entry rewritten from the
+disk's size, the table reread, `resize2fs` run, `e2fsck -fn` to confirm.
+Proof: the row on a target-sized QEMU disk, and a run interrupted after
+the entry is written and before the grow, repaired by running it again.
 
 ### Phase 4: the machine
 
-The Lenovo installed with the root taking the disk, under the rule.
+The Lenovo's root grown to the disk from recovery, under the rule: the
+stick booted and shown to work, the fourth entry and the table saved on
+the host and the stick, recovery the saved default until the grown root
+has booted and been checked.
 
 ### Phase 5: the record
 
-`disk(7)`, the ext2 Readme, notes, `tests/run all`, the milestone's Readme
-and the index entry.
+The ext2 and block Readmes and the Readme's "Updating the installed
+machine" corrected in the same commits, notes, `tests/run all`, the
+milestone's Readme and the index entry. `disk(7)` is milestone 49's.
 
 ## Risks
 

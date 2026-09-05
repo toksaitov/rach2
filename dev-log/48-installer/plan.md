@@ -1,4 +1,4 @@
-# Milestone 46: the installer
+# Milestone 48: the installer
 
 ## The goal
 
@@ -50,7 +50,8 @@ installed this way and come up as the system the answers described.
   work, the sectors about to be overwritten are saved, and recovery is the
   saved default until the write is verified.
 * Milestone 45 made the recovery boot's `e2fsck` optional; the installer
-  boots without it.
+  boots without it. Milestone 47 put `growroot` and `resize2fs` on the
+  recovery image and grew the Lenovo's root to its disk by hand.
 
 ## Decisions
 
@@ -124,11 +125,12 @@ to recovery, and the person runs `bootctl commit` from the installed
 system once it has come up. The failure row of phase 5 boots the stick on a
 damaged install and restores the saved copy.
 
-### The layout is the sealed layout
+### The root takes the disk
 
-This milestone installs the four partitions the sealed image has. Giving
-the root nearly the whole disk is milestone 50, after the ext2 driver and
-the tools can grow a volume.
+The installer writes the four partitions the sealed image has, then calls
+milestone 47's `growroot`, so the installed root is nearly the whole disk
+from the first install. The question offers the whole disk as the default
+and the image's own size as the alternative.
 
 ## Phases
 
@@ -183,9 +185,8 @@ default, the install, the readback, the first boot, `bootctl commit`.
 
 ### Phase 7: the record
 
-The reference for `rach2-install`, written as plain text under
-`utils/` now and moved into milestone 47's page format when that exists,
-so this milestone does not wait for it; the Readme's "Updating the
+The reference for `rach2-install`, written as plain text under `utils/`
+now and made `install(8)` by milestone 49; the Readme's "Updating the
 installed machine" rewritten around the installer; notes, `tests/run all`,
 the milestone's Readme and the index entry.
 
