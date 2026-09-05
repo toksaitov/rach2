@@ -7,8 +7,9 @@ Four partitions on the disk:
   /dev/disk0p3   the recovery system                   FAT32
   /dev/disk0p4   the root you are running              ext2
 
-Each of them has a /hello.txt in it. The root's is the one you can read
-without mounting anything:
+Each of them has a /hello.txt in it, all reading the same line. Run what
+follows as root. The running root's copy is read without mounting
+anything:
 
   cat /hello.txt
 
@@ -38,10 +39,12 @@ A file is not a device until a loop device stands on it:
   umount /mnt/k
   loopctl detach 0
 
-The same three lines mount the others, with -t vfat, -t exfat or -t ext2.
-`loopctl` with no arguments prints what is attached, which is what
-/proc/loop says. There are four loop devices and two KRFFS volumes may be
-mounted at once.
+The others go the same way, each with its own file and type: fat32.img as
+vfat, exfat.img as exfat, ext2.img as ext2. Changing only the -t leaves the
+KRFFS image attached and the wrong driver reading it. `loopctl` with no
+arguments says which devices are taken, which is what /proc/loop says; use
+a free number in both commands. There are four loop devices and two KRFFS
+volumes may be mounted at once.
 
 An image of your own is a copy of the empty one:
 
@@ -54,9 +57,10 @@ An image of your own is a copy of the empty one:
   umount /mnt/k
   loopctl detach 0
 
-There is no mkfs on this machine, so an image of another size is made on
-the host with krffs/mkimage.sh and copied here.
+There is no KRFFS formatter on this machine, so an image of another size
+is made on the host with krffs/mkimage.sh and copied here.
 
-What a file under a loop device will not take while it is attached: a
-write, a truncation, a rename over it or a removal. Unmount, then detach,
-then it is an ordinary file again.
+A write or a truncation of an attached image answers EBUSY. On ext2 the
+file can still be renamed or unlinked, and the image survives that because
+the loop device holds its inode; unmount and detach before replacing or
+removing it.
