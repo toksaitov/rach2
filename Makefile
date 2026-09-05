@@ -561,8 +561,53 @@ SEALED_PREFIX ?= 24
 SEALED_GATEWAY ?= 192.168.0.1
 SEALED_IP = $(SEALED_ADDRESS)/$(SEALED_PREFIX)
 SEALED_DISK = build/images/rach2-sealed.disk
+
+# The file systems in files a fresh disk carries in /demo, one of each kind
+# this kernel mounts, each with a hello.txt in it, and an empty KRFFS volume
+# to copy when a person wants an image of their own. They are built here
+# rather than staged from somewhere, because what they are is what the host's
+# own formatters write.
+FS_DEMO_DIR = build/images/fs-demo
+FS_DEMO_IMAGES = $(FS_DEMO_DIR)/fat32.img $(FS_DEMO_DIR)/exfat.img \
+                 $(FS_DEMO_DIR)/ext2.img $(FS_DEMO_DIR)/krffs.img \
+                 $(FS_DEMO_DIR)/empty.krffs
+
+$(FS_DEMO_DIR)/fat32.img: krffs/demo/hello.txt
+	@mkdir -p $(FS_DEMO_DIR)
+	dd if=/dev/zero of=$@.new bs=1048576 count=4 2>/dev/null
+	mformat -i $@.new -F -T 8192 -v RACHDEMO ::
+	mcopy -i $@.new krffs/demo/hello.txt ::/hello.txt
+	mv $@.new $@
+
+$(FS_DEMO_DIR)/exfat.img: build/tests/host/mkexfatfixture
+	@mkdir -p $(FS_DEMO_DIR)
+	build/tests/host/mkexfatfixture $@.new --demo
+	build/tests/host/mkexfatfixture --check $@.new > /dev/null
+	mv $@.new $@
+
+$(FS_DEMO_DIR)/ext2.img: krffs/manifests/fs-demo.manifest krffs/demo/hello.txt \
+                         tools/image/mkext2.sh $(IMAGE_TOOLS) | krffs
+	@mkdir -p $(FS_DEMO_DIR)
+	sh tools/image/mkext2.sh krffs/manifests/fs-demo.manifest $@ 4
+
+$(FS_DEMO_DIR)/krffs.img: krffs/manifests/fs-demo.manifest krffs/demo/hello.txt \
+                          krffs/mkimage.sh | krffs
+	@mkdir -p $(FS_DEMO_DIR)
+	sh krffs/mkimage.sh krffs/manifests/fs-demo.manifest $@ 4
+
+# Formatted and nothing else: what a person copies to make an image of their
+# own, since the machine has no formatter of its own.
+$(FS_DEMO_DIR)/empty.krffs: krffs/mkfs.krffs.c | krffs
+	@mkdir -p $(FS_DEMO_DIR)
+	dd if=/dev/zero of=$@.new bs=1048576 count=4 2>/dev/null
+	build/krffs/mkfs.krffs $@.new > /dev/null
+	build/krffs/fsck.krffs $@.new --strict > /dev/null
+	mv $@.new $@
+
+fs-demo-images: $(FS_DEMO_IMAGES)
+.PHONY: fs-demo-images
 SEALED_EXT2 = build/images/rach2-metal-disk.ext2
-$(SEALED_EXT2): $(DEMO_CREDS) krffs/manifests/rach2-metal-disk.manifest $(shell sh krffs/manifest_deps.sh krffs/manifests/rach2-metal-disk.manifest) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+$(SEALED_EXT2): $(FS_DEMO_IMAGES) $(DEMO_CREDS) krffs/manifests/rach2-metal-disk.manifest $(shell sh krffs/manifest_deps.sh krffs/manifests/rach2-metal-disk.manifest) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	sh tools/image/mkext2.sh krffs/manifests/rach2-metal-disk.manifest $@ 1024
 # The alias builds everything the disk is made of, then asks for the disk
 # itself. The two are separate because the components are phony targets, which
@@ -588,6 +633,7 @@ $(SEALED_DISK): build/rach2/kernel $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(SEALED
 	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
 	RACH2_DISK_EXT2_MB=1024 \
 	RACH2_DISK_EXT2_IMAGE=$(SEALED_EXT2) \
+	RACH2_DISK_HELLO=krffs/demo/hello.txt \
 	    sh tools/image/mkdisk_grub.sh build/rach2/kernel $(SEALED_DISK)
 
 

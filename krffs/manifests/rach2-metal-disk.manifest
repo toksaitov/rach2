@@ -1,11 +1,12 @@
 # rach2-metal-disk.manifest: the os-real machine, staged for the laptop's own
-# disk. One difference from os-real and one only: /sbin/init is the metal
+# disk. Two differences from os-real: /sbin/init is the metal
 # variant, which supervises dropbear beside the console login, because the
 # machine this disk goes into is across the room and must be reachable the
-# moment it has booted. Everything else, /src and the compilers included, is
-# os-real's by construction: this file is its manifest with that single line
-# changed, and tools/inspect/check_setid.py derives its profile from os-real's the
-# same way.
+# moment it has booted; and /demo carries a file system of each kind this
+# kernel mounts, for a person at the console to attach, mount and write.
+# Everything else, /src and the compilers included, is os-real's by
+# construction, and tools/inspect/check_setid.py derives its profile from
+# os-real's the same way.
 dir 0755 /bin
 # This busybox stays unprivileged. A setuid one would run every one of its
 # BB_SUID_REQUIRE and BB_SUID_MAYBE applets as root unless a config file
@@ -106,6 +107,20 @@ file 0755 /bin/bootctl build/utils/sbin/bootctl
 # when absent), kept 0600 root so the permission bits deny it to everyone else;
 # passwd keeps world-readable x fields, which is what the split shadow exists
 # for.
+# What a person who sits down at this machine can look at and change: a
+# hello.txt in the root, and one file system of each kind this kernel mounts,
+# in a file, for a loop device to stand on. `empty.krffs` is formatted and
+# holds nothing, which is what a person copies to make an image of their own,
+# since the machine has no formatter. `demo/Readme.txt` has the commands.
+text 0644 /hello.txt hello, world\n
+dir 0755 /demo
+file 0644 /demo/Readme.txt krffs/demo/Readme.txt
+file 0644 /demo/fat32.img build/images/fs-demo/fat32.img
+file 0644 /demo/exfat.img build/images/fs-demo/exfat.img
+file 0644 /demo/ext2.img build/images/fs-demo/ext2.img
+file 0644 /demo/krffs.img build/images/fs-demo/krffs.img
+file 0444 /demo/empty.krffs build/images/fs-demo/empty.krffs
+
 dir 0755 /etc
 dir 0700 /etc/dropbear
 text 0644 /etc/motd Welcome to Rach2 (os-real). busybox ash; ssh in as root or test; su for root.\n

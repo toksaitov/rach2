@@ -76,6 +76,9 @@ GAP_MB=1
 BOOT_MB="${RACH2_DISK_BOOT_MB:-16}"
 CLUSTER="${RACH2_DISK_CLUSTER:-}"
 RECOVERY_MB="${RACH2_DISK_RECOVERY_MB:-0}"
+# A file to read in each FAT partition, so that every partition of a fresh
+# disk has one and a person can tell which is which by reading it.
+HELLO="${RACH2_DISK_HELLO:-}"
 RECOVERY_KERNEL="${RACH2_DISK_RECOVERY_KERNEL:-}"
 RECOVERY_IMAGE="${RACH2_DISK_RECOVERY_IMAGE:-}"
 # The fourth partition: an ext2 root image, at most EXT2_MB in size, and the
@@ -514,6 +517,9 @@ GENVN=$(wc -c < "$TMPD/genv.head" | tr -d ' ')
     dd if=/dev/zero bs=1 count=$((1024 - GENVN)) 2>/dev/null | tr '\0' '#'
 } > "$TMPD/genv"
 mcopy -i "$TMPD/p1.img" "$TMPD/genv" ::/boot/grub/grubenv
+if [ -n "$HELLO" ]; then
+    mcopy -i "$TMPD/p1.img" "$HELLO" ::/hello.txt
+fi
 
 # Every staged chain, verified before the partition is committed: each of
 # the five files must be whole (its cluster count matching its size) and
@@ -617,6 +623,9 @@ if [ "$RECOVERY_MB" -gt 0 ]; then
         mcopy -i "$TMPD/p3.img" "$RECOVERY_IMAGE" ::/boot/recovery.krffs
     fi
     mcopy -i "$TMPD/p3.img" "$RECOVERY_CFG" ::/boot/grub/recovery.cfg
+    if [ -n "$HELLO" ]; then
+        mcopy -i "$TMPD/p3.img" "$HELLO" ::/hello.txt
+    fi
     dd if="$TMPD/p3.img" of="$OUT.new" bs=1048576 \
         seek=$((GAP_MB + BOOT_MB + KRFFS_MB)) conv=notrunc 2>/dev/null
 fi

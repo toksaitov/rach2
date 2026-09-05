@@ -1612,8 +1612,17 @@ static int build(const char *out, const char *opt)
         goto finish; /* the system objects alone: a volume for the suite to write */
     }
 
-    /* hello.txt: twelve bytes, contiguous, NoFatChain. */
+    /* hello.txt: twelve bytes, contiguous, NoFatChain. `--demo` writes the
+       line the machine's own demonstration volumes carry instead, and stops
+       there: what a person mounts should hold one file they can read and
+       write, not the shapes a test needs. */
     c = b_alloc(&b, 1, 0);
+    if (b_is(&b, "--demo")) {
+        memcpy(b_cluster(&b, c), "hello, world\n", 13);
+        n = set_build(&b, set, "hello.txt", 0, c, 13, 13, 1, 0, 0);
+        b.hello_set = dw_put_set(&root, set, n);
+        goto finish;
+    }
     memcpy(b_cluster(&b, c), "hello exfat\n", 12);
     n = set_build(&b, set, "hello.txt", 0, c, 12, 12, 1, 0, 0);
     b.hello_set = dw_put_set(&root, set, n);

@@ -108,6 +108,12 @@ manifest loopimg-test
 sentinel /hello.txt 0644:0:0
 init none
 
+# The four file systems in files that a fresh disk carries in /demo, and the
+# empty KRFFS volume beside them: one file each, no program, no init.
+manifest fs-demo
+sentinel /hello.txt 0644:0:0
+init none
+
 # The volume `tests/run krffsmount` mounts: three data files and no program,
 # so it stages no set-id node and has no init to run.
 manifest krffsvol-test

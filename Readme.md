@@ -38,7 +38,7 @@ Additional targets build persistent disks, GRUB images, metal images, and recove
 
 The [kernel](rach2/Readme.md) boots through Multiboot1 and runs static ELF32 programs in ring 3. It implements preemptive processes, paged address spaces, files, pipes, terminals, signals, and sockets through a Linux i386-style system call interface. The kernel Readme indexes the subsystem documents.
 
-[KRFFS](rach2/sys/fs/Readme.md) is the native hierarchical file system, the RAM images' and the fallback root's. The kernel can mount it directly from a RAM module or from an ATA or AHCI disk through a write-back page cache, or boot an [ext2](rach2/sys/fs/ext2.Readme.md) partition as its root, read and written through the buffer cache, checked before a writable mount when it was not unmounted and repaired by `e2fsck` from the recovery system; a program with root's privilege can mount a FAT32 partition of the same disk with `mount(2)`, for reading and writing, an ext2 partition the same way, an exFAT partition for reading, and a KRFFS volume of a partition or of a stick, read and written through the same buffer cache ([the VFS](rach2/sys/fs/vfs.Readme.md)). A file system can also live in a file: `loopctl` attaches an image to `/dev/loop0` and `mount(2)` takes that device as its source ([the block layer](rach2/sys/block/Readme.md)). The [KRFFS host tools](krffs/Readme.md) build, inspect, repair, and mount its images.
+[KRFFS](rach2/sys/fs/Readme.md) is the native hierarchical file system, the RAM images' and the fallback root's. The kernel can mount it directly from a RAM module or from an ATA or AHCI disk through a write-back page cache, or boot an [ext2](rach2/sys/fs/ext2.Readme.md) partition as its root, read and written through the buffer cache, checked before a writable mount when it was not unmounted and repaired by `e2fsck` from the recovery system; a program with root's privilege can mount a FAT32 partition of the same disk with `mount(2)`, for reading and writing, an ext2 partition the same way, an exFAT partition, read and written the same way, and a KRFFS volume of a partition or of a stick, read and written through the same buffer cache ([the VFS](rach2/sys/fs/vfs.Readme.md)). A file system can also live in a file: `loopctl` attaches an image to `/dev/loop0` and `mount(2)` takes that device as its source ([the block layer](rach2/sys/block/Readme.md)). The [KRFFS host tools](krffs/Readme.md) build, inspect, repair, and mount its images.
 
 The [network stack](rach2/sys/network/Readme.md) implements Ethernet, ARP, IPv4, ICMP, UDP, and TCP for RTL8139, Intel 82540EM, and RTL8168GU devices. The two userlands include DHCP and DNS clients, ping, netcat, and a small HTTP server; `os-real` also runs Dropbear SSH.
 
@@ -66,6 +66,56 @@ The kernel manages at most 32 MiB of physical RAM. Its fixed tables allow 16 pro
 ## Hardware status
 
 QEMU is the primary development and test environment. Rach2 also runs on a Lenovo G50-70 from a sealed SSD installed in the laptop's SATA bay. Since milestone 43 the laptop boots the complete `os-real` system from the ext2 root on its fourth partition, with the KRFFS root on its second as the boot menu's fallback entry, both through the AHCI controller; the move was rehearsed in emulation by `tests/run sealed` and is recorded step by step in `dev-log/43-machine/hardware.md`. RTL8168GU networking and keyed SSH work, file system changes persist across reboots and a power cut, and a kernel install through `bootctl`, a root written through `reflash` and the boot menu rewritten have each completed on the machine. A USB keyboard and a USB mouse work in any of the laptop's three sockets, in the shell and in Doom, on a root port and behind the owner's USB 3.0 hub, whose SuperSpeed half is driven too; the owner's flash drive works in both partition-table formats on every socket and behind the hub, and the laptop boots from the stick image. `dev-log/43-machine/notes.md` lists what the machine showed that the emulator had not, with what was fixed and what is still open. [Milestone 25](dev-log/25-sealed/Readme.md#later-laptop-installation) and [milestone 35](dev-log/35-usb/Readme.md) record the earlier hardware results.
+
+## What a fresh disk carries
+
+The disk `make rach2-sealed-disk` writes has four partitions, and every one of them has a `hello.txt` in it, so a person at the console can tell which is which by reading one file:
+
+| Device | What it is | Type |
+| --- | --- | --- |
+| `/dev/disk0p1` | the boot files and the two kernel slots | FAT32 |
+| `/dev/disk0p2` | the fallback root | KRFFS |
+| `/dev/disk0p3` | the recovery system | FAT32 |
+| `/dev/disk0p4` | the root the machine runs | ext2 |
+
+The root's own copy needs no mount: `cat /hello.txt`. The other three are read by mounting them read-only, which is what the disk's own partitions are for looking at:
+
+```sh
+mkdir -p /mnt/x
+mount -t vfat -o ro /dev/disk0p1 /mnt/x && cat /mnt/x/hello.txt && umount /mnt/x
+mount -t krffs -o ro /dev/disk0p2 /mnt/x && cat /mnt/x/hello.txt && umount /mnt/x
+mount -t vfat -o ro /dev/disk0p3 /mnt/x && cat /mnt/x/hello.txt && umount /mnt/x
+```
+
+The root also carries `/demo`, one file system of each kind this kernel mounts, in a file: `fat32.img`, `exfat.img`, `ext2.img` and `krffs.img`, each with its own `hello.txt`, and `empty.krffs`, which is formatted and holds nothing. `/demo/Readme.txt` on the machine has the same commands as this section. A file is not a device until a loop device stands on it:
+
+```sh
+mkdir -p /mnt/k
+loopctl attach 0 /demo/krffs.img
+mount -t krffs /dev/loop0 /mnt/k
+cat /mnt/k/hello.txt
+echo 'written on the machine' >> /mnt/k/hello.txt
+sync
+umount /mnt/k
+loopctl detach 0
+```
+
+The other three mount the same way with `-t vfat`, `-t exfat` and `-t ext2`. `loopctl` with no arguments prints what is attached, which is what `/proc/loop` says; there are four loop devices, two KRFFS volumes may be mounted at once, and a file under an attached device takes no write, truncation, rename or removal until it is detached.
+
+An image of one's own is a copy of the empty one, since the machine has no formatter of its own:
+
+```sh
+cp /demo/empty.krffs /root/mine.krffs
+loopctl attach 0 /root/mine.krffs
+mount -t krffs /dev/loop0 /mnt/k
+echo 'hello, world' > /mnt/k/hello.txt
+mkdir /mnt/k/notes
+sync
+umount /mnt/k
+loopctl detach 0
+```
+
+An image of another size is built on the host with `krffs/mkimage.sh MANIFEST OUT SIZE_MB` and copied over with `ssh`. The five images the disk carries are built by `make fs-demo-images` into `build/images/fs-demo/`, from `krffs/manifests/fs-demo.manifest` and the host's own formatters, and staged into the root by `krffs/manifests/rach2-metal-disk.manifest`.
 
 ## Updating the installed machine
 
