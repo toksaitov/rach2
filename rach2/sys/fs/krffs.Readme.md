@@ -69,7 +69,7 @@ The block backend (`krffsmount.c`) reads and writes the region through the buffe
 
 A cache is not a medium, so the order below is kept by syncing between a write and the field that publishes it. On a memory backend that costs nothing; on a volume it is what the cache has written when the machine stops. A write that the cache refuses stops the operation before the field that would have published it.
 
-A node handle outside the file system is its offset plus one, so the root's offset of zero is not the NULL the mount table reads as the mount's root. Nothing else is kept per node.
+A node handle outside the file system is its offset plus one, so the root's offset of zero is not the NULL the mount table reads as the mount's root. The core keeps nothing else per node; the mounted volume keeps a record per open file, sixteen to a volume, holding where the node is, where it was before it last moved, how many opens hold it, and whether its name has been taken away.
 
 ## The allocator
 
@@ -79,4 +79,4 @@ A file grows into the free node after it when there is one. Otherwise it is move
 
 Freeing a node marks it free and merges it with whichever neighbours are free, so the ring never holds two free nodes side by side.
 
-A write that cannot grow a file separates its two reasons: no free node large enough answers `KRFFS_ENOSPACE`, which the write syscall reports as `ENOSPC`, and an argument the file system cannot use answers `KRFFS_EBAD` and `EIO`. A caller can tell a full file system from a failed write.
+A write that cannot grow a file answers `KRFFS_ENOSPACE`, which the write syscall reports as `ENOSPC`, and an argument the file system cannot use, or a failure while the bytes are being written, answers `KRFFS_EBAD` and `EIO`. The first of those covers a medium that refused a write during the resize as well as a file system with no room, so `ENOSPC` from a volume on a failing device is not proof that the volume is full.

@@ -911,6 +911,43 @@ void probe_main(unsigned int *sp)
         sys_exit(0);
     }
 
+    /* A write the device fails takes the mount read-only, and the unmount
+       that follows writes nothing: the volume owes the next mount a check,
+       and the flag that says so must still be set when the host reads it. */
+    if (streq(mode, "failed")) {
+        int fd;
+        int i;
+        int refused = 0;
+
+        rc = sys5(SYS_MOUNT, (int)"/dev/disk0p1", (int)"/k", (int)"krffs", 0, 0);
+        if (rc != 0) {
+            fail_with("mounting the volume the device will fail", rc);
+        }
+        for (i = 0; i < 64 && !refused; i++) {
+            fd = sys3(SYS_OPEN, (int)"/k/failing.bin", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            if (fd < 0) {
+                refused = 1;
+                break;
+            }
+            if (sys3(SYS_WRITE, fd, (int)"failing\n", 8) != 8) {
+                refused = 1;
+            }
+            if (sys1(SYS_FSYNC, fd) != 0) {
+                refused = 1;
+            }
+            sys1(SYS_CLOSE, fd);
+        }
+        if (!refused) {
+            fail("the device never failed a write");
+        }
+        rc = sys2(SYS_UMOUNT2, (int)"/k", 0);
+        if (rc != 0) {
+            fail_with("unmounting a volume the device took read-only", rc);
+        }
+        puts("KRFFSPROBE OK (failed)");
+        sys_exit(0);
+    }
+
     /* Two volumes at once, and the third the pool has no room for. Each is a
        volume of its own: what one mount writes is in that volume and in no
        other, and the pool of two is what the third mount answers for. */

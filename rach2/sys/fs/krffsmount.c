@@ -851,8 +851,10 @@ static int kv_prepare_unmount(struct vfs_mount *mnt)
     struct krffs_volume *vol = vol_of(mnt);
     int rc = kv_sync(mnt);
 
-
-    if (rc != 0 || !vol->writable) {
+    /* A mount the device took read-only after a failed write clears nothing:
+     * what it wrote before the failure may never have reached the medium, so
+     * the volume owes the next mount a check and the flag is what says so. */
+    if (rc != 0 || !vol->writable || (mnt->flags & VFS_MS_RDONLY)) {
         return rc;
     }
     if (krffs_set_dirty(&vol->fs, 0) != 0) {

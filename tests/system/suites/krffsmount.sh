@@ -255,6 +255,29 @@ SECTORS=$((SECTORS + 8))
 build_disk "$VOL" 8
 refuse "a region the ring does not fill" "krffs: mount: refused: the node chain is malformed"
 
+# ---- a write the device fails, and the flag the unmount must leave ----
+# The rows above leave SECTORS one partition longer than the volume, which is
+# what the refusal above is for; this row wants the volume's own length again.
+SECTORS=$(($(wc -c < "$VOL") / 512))
+build_disk "$VOL"
+if run --append "rach2.rescue rach2.blocklag=1 rach2.blockfail=24" \
+    --timeout 120 --steptmo 90 \
+    --ok "KRFFSPROBE OK (failed)" --never "KRFFSPROBE FAIL" \
+    --log "$DISK.failed.log" "expect=Type 'help'" \
+    "send=exec /krffsprobe failed" "expect=KRFFSPROBE" > /dev/null 2>&1; then
+    echo "krffsmount-test: a write the device failed takes the mount read-only and the unmount writes nothing: OK"
+else
+    grep -a 'KRFFSPROBE FAIL' "$DISK.failed.log" >&2 || true
+    fail "the failed-write boot"
+fi
+grep -aq 'read-only' "$DISK.failed.log" || fail "the mount did not go read-only"
+take_volume
+"$FSCK" "$DISK.vol" --strict > "$DISK.fsck" 2>&1 \
+    && fail "the volume calls itself clean after a write the device failed"
+grep -q 'not cleanly unmounted' "$DISK.fsck" \
+    || { cat "$DISK.fsck" >&2; fail "the checker did not find the dirty flag"; }
+echo "krffsmount-test: and the volume still says a check is owed: OK"
+
 # ---- two volumes at once, and the third the pool has no room for ----
 build_three
 if run --append "rach2.rescue" --timeout 120 --steptmo 90 \
