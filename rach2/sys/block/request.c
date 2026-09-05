@@ -2,15 +2,28 @@
  * request.c: the one entry every transfer takes, and the pool behind it.
  *
  * A polled device is called and done. A sleeping device is handed a request
- * from a fixed pool, one per process, each with its own page: a write is
- * copied into the page before submit and a read is copied out after, so a
- * completion that arrives after the caller gave up lands in a page nothing
- * else owns. A timed-out slot is quarantined with its page until the device
- * answers late, so a late answer never reaches memory that has been reused.
+ * from a fixed pool, each slot with its own page: a write is copied into the
+ * page before submit and a read is copied out after, so a completion that
+ * arrives after the caller gave up lands in a page nothing else owns. A
+ * timed-out slot is quarantined with its page until the device answers late,
+ * so a late answer never reaches memory that has been reused.
+ *
+ * A caller that finds no slot waits for one. Running out is not a failure
+ * of the device, and only a transfer that failed answers `EIO`; the deadline
+ * of a request starts when its slot is taken, which is when the transfer
+ * starts, and not when the caller began to wait. Two rules keep a waiter
+ * from waiting for ever on slots that will never free themselves. Failure
+ * is per device: a device whose every slot is quarantined past its deadline
+ * is stalled, and its waiters and its later callers answer `EIO` until it
+ * answers something late. And no device may hold more than half of the
+ * pool, so a stalled device leaves the other half to the healthy ones; a
+ * waiter that finds no slot in flight anywhere is released with `EIO` too,
+ * since nothing but a late answer could free one.
  */
 
 #include "block.h"
 
+#include "../cmdline.h"
 #include "../klog.h"
 #include "../kio.h"
 #include "../lib/kerrno.h"
@@ -25,9 +38,11 @@
 static struct block_request pool[REQ_POOL];
 static uint8_t pool_pages[REQ_POOL][BLOCK_REQ_SECTORS * BLOCK_SECTOR_SIZE]
     __attribute__((aligned(4096)));
-static wait_queue_t pool_wq; /* woken on any completion or freed slot */
+static wait_queue_t pool_wq; /* woken on any completion, freed slot or quarantine */
 static volatile uint32_t req_ticks;
 static uint32_t quarantined_count;
+static uint32_t pool_size;       /* slots in use: REQ_POOL, or rach2.blockpool=N */
+static uint32_t device_cap;      /* the most slots one device may hold */
 
 static uint32_t irq_save(void)
 {
@@ -43,35 +58,178 @@ static void irq_restore(uint32_t flags)
     }
 }
 
-/** A slot to submit with, or NULL when the pool is exhausted. */
-static struct block_request *req_take(block_device_t *device, int write, uint64_t lba,
-                                      uint32_t count)
+/* The pool's size, from the boot line the first time it is asked. The
+ * option exists so a test can see a request wait without sixteen devices. */
+static void pool_configure(void)
 {
-    uint32_t flags = irq_save();
+    char value[8];
+    uint32_t n = 0;
     int i;
 
-    for (i = 0; i < REQ_POOL; i++) {
-        if (pool[i].state == BLOCK_REQ_FREE) {
-            struct block_request *r = &pool[i];
+    if (pool_size) {
+        return;
+    }
+    pool_size = REQ_POOL;
+    if (kcmdline_value("rach2.blockpool", value, sizeof(value))) {
+        for (i = 0; value[i] >= '0' && value[i] <= '9'; i++) {
+            n = n * 10u + (uint32_t)(value[i] - '0');
+        }
+        if (i == 0 || value[i] != '\0' || n == 0 || n > REQ_POOL) {
+            klog(KLOG_WARN, "block", "rach2.blockpool: not a count of 1 to %d; ignored",
+                 REQ_POOL);
+        } else {
+            pool_size = n;
+            klog(KLOG_INFO, "block", "request pool: %d slots", (int)n);
+        }
+    }
+    device_cap = pool_size / 2;
+    if (device_cap == 0) {
+        device_cap = 1;
+    }
+}
 
+/* Interrupts off. How many slots `device` holds: in flight or quarantined. */
+static uint32_t device_held(const block_device_t *device)
+{
+    uint32_t i;
+    uint32_t held = 0;
+
+    for (i = 0; i < pool_size; i++) {
+        if (pool[i].device == device &&
+            (pool[i].state == BLOCK_REQ_IN_FLIGHT || pool[i].state == BLOCK_REQ_QUARANTINED)) {
+            held++;
+        }
+    }
+    return held;
+}
+
+/* Interrupts off. How many of `device`'s slots are still in flight. */
+static uint32_t device_in_flight(const block_device_t *device)
+{
+    uint32_t i;
+    uint32_t n = 0;
+
+    for (i = 0; i < pool_size; i++) {
+        if (pool[i].device == device && pool[i].state == BLOCK_REQ_IN_FLIGHT) {
+            n++;
+        }
+    }
+    return n;
+}
+
+/* Interrupts off. Whether `device` holds slots and none of them is in
+ * flight: nothing but a late answer can free one, so a caller does not wait
+ * on it. The flag records the tick that found it so, for the record; the
+ * condition is what decides. */
+static int device_stalled(block_device_t *device)
+{
+    if (device->flags & BLOCK_STALLED) {
+        return 1;
+    }
+    return device_in_flight(device) == 0 && device_held(device) > 0;
+}
+
+/* Interrupts off. Whether no slot is in flight or answered and not yet
+ * freed: every taken slot is quarantined, and nothing but a late answer
+ * can free one. */
+static int nothing_pending(void)
+{
+    uint32_t i;
+
+    for (i = 0; i < pool_size; i++) {
+        if (pool[i].state == BLOCK_REQ_IN_FLIGHT || pool[i].state == BLOCK_REQ_DONE) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* Interrupts off. A free slot, or NULL. */
+static struct block_request *free_slot(void)
+{
+    uint32_t i;
+
+    for (i = 0; i < pool_size; i++) {
+        if (pool[i].state == BLOCK_REQ_FREE) {
+            return &pool[i];
+        }
+    }
+    return NULL;
+}
+
+/* What a waiter for a slot wakes on: one it may take, its device stalled,
+ * or nothing left in flight that could free one. */
+static int slot_ready(void *arg)
+{
+    block_device_t *device = arg;
+    uint32_t flags = irq_save();
+    int ready = device_stalled(device) || nothing_pending() ||
+                (free_slot() != NULL && device_held(device) < device_cap);
+
+    irq_restore(flags);
+    return ready;
+}
+
+/**
+ * A slot to submit with, or NULL.
+ *
+ * With `wait` the caller sleeps until a slot is its to take, and NULL then
+ * means the device is stalled or the pool is: every slot taken and none in
+ * flight, so only a late answer could free one. Without `wait`, for a caller
+ * that cannot sleep, NULL means no slot now.
+ */
+static struct block_request *req_take(block_device_t *device, int write, uint64_t lba,
+                                      uint32_t count, int wait)
+{
+    int waited = 0;
+
+    pool_configure();
+    for (;;) {
+        uint32_t flags = irq_save();
+        struct block_request *r = NULL;
+
+        if (device_stalled(device)) {
+            irq_restore(flags);
+            klog(KLOG_WARN, "block", "device stalled: %s",
+                 waited ? "waiter released with EIO" : "request refused");
+            return NULL;
+        }
+        if (device_held(device) < device_cap) {
+            r = free_slot();
+        }
+        if (r) {
             r->device = device;
             r->write = write;
             r->lba = lba;
             r->count = count;
-            r->page = pool_pages[i];
+            r->page = pool_pages[r - pool];
             r->status = -EIO;
             r->state = BLOCK_REQ_IN_FLIGHT;
             r->generation++;
-            r->deadline = req_ticks +
-                          (device->deadline_ticks ? device->deadline_ticks : REQ_DEFAULT_DEADLINE);
+            r->deadline = req_ticks + (device->deadline_ticks ? device->deadline_ticks
+                                                              : REQ_DEFAULT_DEADLINE);
             irq_restore(flags);
             return r;
         }
+        if (!wait) {
+            irq_restore(flags);
+            return NULL;
+        }
+        if (nothing_pending()) {
+            irq_restore(flags);
+            klog(KLOG_WARN, "block", "request pool stalled: %d quarantined, waiter released",
+                 (int)quarantined_count);
+            return NULL;
+        }
+        irq_restore(flags);
+        if (!waited) {
+            waited = 1;
+            klog(KLOG_INFO, "block", "request pool: waiting for a slot");
+        }
+        wq_wait_event_nointr(&pool_wq, slot_ready, device);
     }
-    irq_restore(flags);
-    klog(KLOG_WARN, "block", "request pool exhausted: %d quarantined", (int)quarantined_count);
-    return NULL;
 }
+
 
 /* What one caller waits for: its own request, by slot and generation. */
 struct req_wait {
@@ -95,7 +253,7 @@ static int req_done(void *arg)
 static int req_run_one(block_device_t *device, int write, uint64_t lba, uint32_t count,
                        uint8_t *buffer)
 {
-    struct block_request *r = req_take(device, write, lba, count);
+    struct block_request *r = req_take(device, write, lba, count, 1);
     struct req_wait w;
     uint32_t flags;
     int status;
@@ -205,7 +363,7 @@ int block_flush(block_device_t *device)
     if (device->flags & BLOCK_CALLER_SYNC) {
         return device->flush(device, 0); /* answers in this call, no slot */
     }
-    r = req_take(device, 1, 0, 1);
+    r = req_take(device, 1, 0, 1, 1);
     if (!r) {
         return -EIO;
     }
@@ -243,7 +401,7 @@ struct block_request *block_request_begin(block_device_t *device, uint64_t lba, 
         lba >= device->sector_count || count > device->sector_count - lba) {
         return NULL;
     }
-    r = req_take(device, 0, lba, count);
+    r = req_take(device, 0, lba, count, 0);
     if (!r) {
         return NULL;
     }
@@ -287,6 +445,7 @@ int block_request_ended(struct block_request *r, uint32_t generation, void *buff
 void block_request_complete(struct block_request *request, uint32_t generation, int status)
 {
     uint32_t flags = irq_save();
+    int answered = 0;
 
     if (!request || request->generation != generation) {
         irq_restore(flags);
@@ -297,8 +456,16 @@ void block_request_complete(struct block_request *request, uint32_t generation, 
         request->generation++; /* the caller that gave up must not match */
         request->state = BLOCK_REQ_FREE;
         quarantined_count--;
+        /* The device answered, late: it is not stalled any more. */
+        if (request->device->flags & BLOCK_STALLED) {
+            request->device->flags &= ~BLOCK_STALLED;
+            answered = 1;
+        }
         irq_restore(flags);
         klog(KLOG_INFO, "block", "late completion: quarantined slot freed");
+        if (answered) {
+            klog(KLOG_INFO, "block", "device answered: stall cleared");
+        }
         wq_wake_all(&pool_wq);
         return;
     }
@@ -314,36 +481,59 @@ void block_request_complete(struct block_request *request, uint32_t generation, 
 
 int block_device_holds(block_device_t *device)
 {
-    int i;
-    int held = 0;
     uint32_t flags = irq_save();
+    int held = (int)device_held(device);
 
-    for (i = 0; i < REQ_POOL; i++) {
-        if (pool[i].device != device) {
-            continue;
-        }
-        if (pool[i].state == BLOCK_REQ_IN_FLIGHT || pool[i].state == BLOCK_REQ_QUARANTINED) {
-            held++;
-        }
-    }
     irq_restore(flags);
     return held;
 }
 
+/* Interrupts off. A device holding slots with none of them in flight has
+ * stopped answering: it is marked stalled, once, so its waiters are
+ * released and its later callers refused until a late answer clears it. */
+static int mark_stalled(void)
+{
+    uint32_t i;
+    int marked = 0;
+
+    for (i = 0; i < pool_size; i++) {
+        block_device_t *device = pool[i].device;
+
+        if (pool[i].state != BLOCK_REQ_QUARANTINED || (device->flags & BLOCK_STALLED)) {
+            continue;
+        }
+        if (device_in_flight(device) == 0) {
+            device->flags |= BLOCK_STALLED;
+            marked++;
+        }
+    }
+    return marked;
+}
+
 void block_request_tick(void)
 {
-    int i;
+    uint32_t i;
+    int quarantined = 0;
+    int stalled;
 
     req_ticks++;
-    for (i = 0; i < REQ_POOL; i++) {
+    for (i = 0; i < pool_size; i++) {
         if (pool[i].state == BLOCK_REQ_IN_FLIGHT && (int32_t)(req_ticks - pool[i].deadline) >= 0) {
             /* The caller is woken with EIO; the slot and its page wait for
              * the device, which still owns them. The generation stays so the
              * late completion matches, and moves on when it frees the slot. */
             pool[i].state = BLOCK_REQ_QUARANTINED;
             quarantined_count++;
-            klog(KLOG_WARN, "block", "request deadline: slot quarantined");
-            wq_wake_all(&pool_wq);
+            quarantined++;
         }
     }
+    if (!quarantined) {
+        return;
+    }
+    klog(KLOG_WARN, "block", "request deadline: %d slots quarantined", quarantined);
+    stalled = mark_stalled();
+    if (stalled) {
+        klog(KLOG_WARN, "block", "device stalled: every slot it holds is past its deadline");
+    }
+    wq_wake_all(&pool_wq);
 }

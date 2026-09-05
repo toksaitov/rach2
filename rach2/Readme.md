@@ -114,6 +114,8 @@ Options are whitespace-delimited. Flags match whole tokens, and the first `key=v
 | `rach2.fsck` | Read by recovery's `init`, not by the kernel: run `e2fsck -p` on every ext2 partition before anything else starts. The menu's repair entries carry it; the plain recovery entries do not. |
 | `rach2.blocklag=N` | Test option: answer boot-disk requests N ticks late through a sleeping wrapper. The partition nodes and `/dev/bootpart` are on it; the root window keeps the real device. |
 | `rach2.blockfail=N` | Test option, with `rach2.blocklag`: the Nth write through the wrapper fails with `EIO`, so a mount is seen to go read-only. |
+| `rach2.blockdead=P` | Test option, with `rach2.blocklag`: every request inside MBR partition P is never answered, so one partition's device stalls while the others keep working. |
+| `rach2.blockpool=N` | Test option: the request pool has N slots, one to sixteen, instead of sixteen, so a request can be seen to wait for one. |
 | `rach2.ip=A.B.C.D/prefix` | Set the single IPv4 address and mask. No gateway is implied. |
 | `rach2.ip=none` | Probe the NIC but leave IPv4 unconfigured for userland. |
 | `rach2.gateway=A.B.C.D` | Set a gateway on the configured subnet. It requires `rach2.ip`. |

@@ -31,6 +31,20 @@
  * `lagprobe writers`: two children write files on the lagged volume while
  * the parent syncs it; each file reads back as its own bytes.
  *
+ * `lagprobe pool`, under `rach2.blockpool=2` with the lag: three readers on
+ * two slots, one of the raw first partition and two of files on the mounted
+ * second one, whose view may hold one slot, so one of the two waits for the
+ * other's; every read succeeds, a file is then written and synced, which is
+ * a flush through the pool, and the mount is still writable.
+ *
+ * `lagprobe dead`, under `rach2.blockdead=1 rach2.blockpool=2` with the lag:
+ * the first partition never answers. A child's raw read of it holds the one
+ * slot its view may have; the parent's mount of the same partition waits
+ * for that slot, and when the read's deadline quarantines it the device is
+ * stalled, the waiter is released with EIO, and the read answers EIO at that
+ * same deadline. Then the FAT32 volume on the second partition, on the same
+ * pool, is mounted, written and synced.
+ *
  * Prints "LAGPROBE OK" or "LAGPROBE FAIL: reason". Freestanding; int 0x80.
  */
 
@@ -665,6 +679,169 @@ static void run_mounted(void)
     puts("LAGPROBE OK");
 }
 
+/* Whether /proc/mounts lists `dir` with `ro` among its options. */
+static int mount_is_ro(const char *dir)
+{
+    static char text[1024];
+    int fd = syscall3(SYS_OPEN, (int)"/proc/mounts", O_RDONLY, 0);
+    int n = fd < 0 ? -1 : syscall3(SYS_READ, fd, (int)text, (int)sizeof(text) - 1);
+    int i, j, ro = 0;
+    size_t dlen = strlen(dir);
+
+    syscall1(SYS_CLOSE, fd);
+    if (n <= 0) {
+        fail("read /proc/mounts");
+        return 0;
+    }
+    text[n] = 0;
+    for (i = 0; i + (int)dlen < n; i++) {
+        if (text[i] != ' ' || text[i + 1 + (int)dlen] != ' ') {
+            continue;
+        }
+        for (j = 0; j < (int)dlen && text[i + 1 + j] == dir[j]; j++) {
+        }
+        if (j != (int)dlen) {
+            continue;
+        }
+        for (j = i + 1 + (int)dlen; j + 3 < n && text[j] != '\n'; j++) {
+            if (text[j] == ' ' && text[j + 1] == 'r' && text[j + 2] == 'o' &&
+                (text[j + 3] == ',' || text[j + 3] == ' ')) {
+                ro = 1;
+            }
+        }
+    }
+    return ro;
+}
+
+/* On the FAT32 volume mounted at `dir`: a file written and synced, a
+ * second file created after the sync, the mount still writable, and the
+ * volume unmounted. */
+static void write_and_sync(const char *dir, const char *first, const char *second)
+{
+    int fd;
+
+    fd = syscall3(SYS_OPEN, (int)first, O_WRONLY | O_CREAT, 0644);
+    if (fd < 0 || syscall3(SYS_WRITE, fd, (int)"pool", 4) != 4) {
+        fail("the first write to the volume");
+    }
+    syscall1(SYS_CLOSE, fd);
+    if (syscall1(SYS_SYNC, 0) != 0) {
+        fail("sync of the volume");
+    }
+    fd = syscall3(SYS_OPEN, (int)second, O_WRONLY | O_CREAT, 0644);
+    if (fd < 0) {
+        fail("a write after the sync");
+    }
+    syscall1(SYS_CLOSE, fd);
+    if (mount_is_ro(dir)) {
+        fail("the mount went read-only");
+    }
+    if (syscall2(SYS_UMOUNT2, (int)dir, 0) != 0) {
+        fail("umount2 of the volume");
+    }
+}
+
+/* Read the whole of `path` into the sector buffer, in 4 KiB pieces; bytes
+ * or -errno. */
+static int read_file(const char *path)
+{
+    int fd = syscall3(SYS_OPEN, (int)(size_t)path, O_RDONLY, 0);
+    int total = 0, r;
+
+    if (fd < 0) {
+        return fd;
+    }
+    while ((r = syscall3(SYS_READ, fd, (int)(size_t)sector_buf, 4096)) > 0) {
+        total += r;
+    }
+    syscall1(SYS_CLOSE, fd);
+    return r < 0 ? r : total;
+}
+
+/* A child that exits 0 when `got` is `want`. */
+static int child_result(int got, int want)
+{
+    sys_exit(got == want ? 0 : 1);
+    return 0;
+}
+
+static void run_pool(void)
+{
+    int a, b, c;
+
+    if (syscall2(SYS_MKDIR, (int)"/lp", 0755) != 0) {
+        fail("mkdir /lp");
+    }
+    if (sys5(SYS_MOUNT, (int)"/dev/disk0p2", (int)"/lp", (int)"vfat", 0, 0) != 0) {
+        fail("the writable mount of the second partition");
+    }
+    /* Three readers on two slots: the raw reads of the first partition go
+     * one at a time through the raw window, so the contention is between
+     * the two readers of the mounted volume, whose view may hold one slot
+     * of a pool of two, and the raw reader holds the other. */
+    a = syscall1(SYS_FORK, 0);
+    if (a == 0) {
+        child_result(read_part(sizeof(sector_buf)), (int)sizeof(sector_buf));
+    }
+    b = syscall1(SYS_FORK, 0);
+    if (b == 0) {
+        child_result(read_file("/lp/pattern.bin"), PATTERN_SECTORS * 512);
+    }
+    c = syscall1(SYS_FORK, 0);
+    if (c == 0) {
+        child_result(read_file("/lp/again.bin") > 0 && read_file("/lp/hello") > 0, 1);
+    }
+    if (a < 0 || b < 0 || c < 0) {
+        fail("fork of a reader");
+    }
+    if (wait_status(a) != 0 || wait_status(b) != 0 || wait_status(c) != 0) {
+        fail("a reader under the small pool failed");
+    }
+    write_and_sync("/lp", "/lp/POOL.TXT", "/lp/AGAIN.TXT");
+    puts("LAGPROBE OK");
+}
+
+static void run_dead(void)
+{
+    unsigned start = now_ms();
+    unsigned elapsed;
+    int a, rc;
+
+    /* The raw reader's request holds the one slot the first partition's
+     * view may have and is never answered; the mount of the same partition
+     * then waits for that slot, and both must end at the reader's deadline. */
+    a = syscall1(SYS_FORK, 0);
+    if (a == 0) {
+        child_result(read_part(512), -EIO);
+    }
+    if (a < 0) {
+        fail("fork of the reader");
+    }
+    sleep_ms(200);
+    if (syscall2(SYS_MKDIR, (int)"/ld1", 0755) != 0) {
+        fail("mkdir /ld1");
+    }
+    rc = sys5(SYS_MOUNT, (int)"/dev/disk0p1", (int)"/ld1", (int)"krffs", 0, 0);
+    if (rc != -EIO) {
+        fail("the mount of the partition that never answers was not EIO");
+    }
+    if (wait_status(a) != 0) {
+        fail("the raw reader of the partition that never answers was not EIO");
+    }
+    elapsed = now_ms() - start;
+    if (elapsed < 4500u || elapsed > 6900u) {
+        fail("the reader and the waiter did not end at the one deadline");
+    }
+    if (syscall2(SYS_MKDIR, (int)"/ld", 0755) != 0) {
+        fail("mkdir /ld");
+    }
+    if (sys5(SYS_MOUNT, (int)"/dev/disk0p2", (int)"/ld", (int)"vfat", 0, 0) != 0) {
+        fail("the writable mount of the second partition");
+    }
+    write_and_sync("/ld", "/ld/DEAD.TXT", "/ld/AGAIN.TXT");
+    puts("LAGPROBE OK");
+}
+
 void probe_main(unsigned int *sp);
 
 __asm__(".global _start\n"
@@ -678,8 +855,13 @@ void probe_main(unsigned int *sp)
     int argc = (int)sp[0];
     char **argv = (char **)(sp + 1);
 
-    if (argc >= 2 && argv[1][0] == 'd') {
+    if (argc >= 2 && argv[1][0] == 'd' && argv[1][1] == 'e' && argv[1][2] == 'a' &&
+        argv[1][3] == 'd' && argv[1][4] == '\0') {
+        run_dead();
+    } else if (argc >= 2 && argv[1][0] == 'd') {
         run_deadline();
+    } else if (argc >= 2 && argv[1][0] == 'p') {
+        run_pool();
     } else if (argc >= 2 && argv[1][0] == 'w' && argv[1][5] == 'r') {
         if (argc >= 3) {
             writers_type = argv[2];

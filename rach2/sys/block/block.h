@@ -41,6 +41,11 @@ struct block_request;
  * unmount writes nothing and only lets go of what it holds. Set by the cache
  * when the disk layer tells it, cleared when the device is published again. */
 #define BLOCK_GONE 0x8u
+/* The device stopped answering: every slot of the request pool it held went
+ * past its deadline unanswered. Its waiters were released with `EIO` and a
+ * new request is refused with `EIO`, until a late answer clears it. Set and
+ * cleared by the request pool. */
+#define BLOCK_STALLED 0x20u
 
 struct block_device {
     uint32_t sector_size;
@@ -205,10 +210,11 @@ struct block_request {
  *
  * On a `BLOCK_FAULT_SAFE` device this calls the vtable and returns, from any
  * context, at boot included. On a device with `submit` it runs from syscall
- * context only, splits the transfer into requests of at most a page, and
- * sleeps between `submit` and the completion or the device's deadline.
- * Returns 0 or a negative errno; a deadline is `-EIO` with the slot
- * quarantined.
+ * context only, splits the transfer into requests of at most a page, waits
+ * for a slot of the pool when none is free or the device holds its share,
+ * and sleeps between `submit` and the completion or the device's deadline,
+ * which starts when the slot is taken. Returns 0 or a negative errno; a
+ * deadline is `-EIO` with the slot quarantined, and so is a stalled device.
  */
 int block_request(block_device_t *device, int write, uint64_t lba,
                   uint32_t count, void *buffer);
@@ -231,8 +237,9 @@ int block_flush(block_device_t *device);
  * For a caller that cannot sleep: the disk layer reads a stick's partition
  * table from the pump, where there is no process to put to sleep. The
  * request is the pool's slot, and `generation` is what the caller asks
- * after it with. Returns NULL when the pool is exhausted or the device
- * refused the request.
+ * after it with. Returns NULL when no slot is free now, the device holds
+ * its share of the pool or is stalled, or the device refused the request;
+ * this caller does not wait.
  */
 struct block_request *block_request_begin(block_device_t *device, uint64_t lba, uint32_t count,
                                           uint32_t *generation);
