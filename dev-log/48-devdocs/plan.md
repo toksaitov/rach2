@@ -14,7 +14,10 @@ own checklist asks in under a minute.
 
 ## What the tree settles before this plan
 
-* There are 69 Readmes. The root one is 240 lines and does five jobs:
+* There are 70 files named `Readme.md` outside `build/` and the vendored
+  trees, and 79 with the `NAME.Readme.md` form counted; the `dev-log/`
+  records are among them and are history, outside this milestone. The
+  root one is 240 lines and does five jobs:
   introduction, architecture, quick start, the demonstration walk-through,
   and the administration of one laptop.
 * The component Readmes differ in shape: some are a contract with its
@@ -35,29 +38,37 @@ own checklist asks in under a minute.
 
 ### An inventory of claims before a word is rewritten
 
-Every Readme is read against the code and each claim gets an owner: the
-file and function that establishes it. A claim with no owner is removed or
-made true. A claim two documents make is made once and linked from the
-other. The inventory is a file in this milestone's directory and the rewrite
-is done from it.
+Every Readme is read against the tree and each claim gets an owner and an
+evidence type: a file and function for what code does; a measured record
+under `dev-log/` for a hardware fact; a build rule or the doctor script
+for a prerequisite; `CLAUDE.md` for a policy. A claim with none is removed
+or made true. A claim two documents make is made once and linked from the
+other. The inventory is a file in this milestone's directory and the
+rewrite is done from it.
 
 ### Four kinds of document, each with a fixed shape
 
 The root Readme: purpose, what it supports, quick start, limits, and a map.
-One administration reference, `Readme.md`'s installed-machine sections
-moved out into `docs/admin.md`, or wherever milestone 47's `recovery(7)`
-and `install(8)` leave room: what the machine has, how it is updated, how
-it is recovered. The kernel Readme: an architectural map, one paragraph per
+The administration prose is split by what it is: the general procedures,
+how a machine is installed, updated and recovered, go to milestone 47's
+`install(8)`, `bootctl(8)`, `reflash(8)` and `recovery(7)`; the measured
+facts of the one installed machine, its identity, geometry and offsets,
+stay in the milestone records under `dev-log/`; the root Readme keeps a
+short section that points to both, and `CLAUDE.md`'s Hardware section,
+which today sends an operator to the root Readme, is updated in the same
+commit. The kernel Readme: an architectural map, one paragraph per
 subsystem with a link. A component Readme: what it owns, its interface,
-its invariants, what it does on failure, and what proves it, in that order,
-with nothing about how it was built. The `dev-log/` records are history and
-are not rewritten to describe today.
+its invariants, what it does on failure, and what proves it, in that
+order, then, where the component has one, how it is built and ported;
+what is excluded is history, not current instructions. The `dev-log/`
+records are history and are not rewritten to describe today.
 
 ### Inventories are generated
 
-A list a document repeats from the tree, the suites, the programs, the
-manifests, the syscalls, is produced by a tool or removed; a document does
-not carry a count a registry already holds.
+A list a document repeats from the tree today, the suites, the programs,
+the system calls, is produced by the tool that already reads the registry
+or removed; a document does not carry a count a registry already holds. No
+new tool is written for a list that appears once.
 
 ### Codex criticises first and proofreads last; the writing is here
 
@@ -83,9 +94,12 @@ accepts the shape before it goes further.
 
 ### Phase 3: the rest
 
-Every component Readme into its shape; the administration reference; the
-generated inventories. Proof: `tests/run style`, the generator's output
-matching the tree, and a link check.
+Every component Readme into its shape; the administration prose split as
+decided; the generated inventories. Proof: `tests/run style`, the
+generator's output matching the tree, a link check, and the checklist: a
+file of questions a newcomer asks, each answered by a named place in the
+documents, worked through by the owner with a clock; the time is recorded
+in `notes.md` and the one-minute claim is kept or dropped by it.
 
 ### Phase 4: the proofreading round
 

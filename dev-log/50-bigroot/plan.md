@@ -17,49 +17,77 @@ kernel's own check both accept the volume.
   for that (`ext2.c`, the check's block and inode limits).
 * File offsets are 32 bits on the ordinary path (`fd.h`); a file larger than
   4 GiB is not this kernel's to make, whatever the volume's size.
-* The e2fsprogs port builds `e2fsck` only; there is no `resize2fs` or
-  `mke2fs` on the machine, and `mkext2.sh` makes the image on the host at a
-  fixed size.
-* Milestone 46's installer writes the sealed layout; its manifest names the
-  image's size and hash.
-* The Lenovo's disk is 1 TB, and its fourth partition entry is already 2 GiB
-  long with a 1 GiB file system in it.
+* The e2fsprogs port builds `e2fsck` only (`build_e2fsprogs.sh:91` leaves
+  `resize2fs` out); there is no `resize2fs` or `mke2fs` on the machine.
+  `mkext2.sh` takes a size argument and makes a sparse image; the 1024 is
+  the Makefile's choice, not the script's. The pinned `resize2fs` grows
+  its bitmaps in memory (`resize/resize2fs.c:808`).
+* `reflash` reads a stream and writes every byte of it
+  (`sectorcopy.c:126`); a sparse image is not smaller to it, and a file on
+  the stick's exFAT volume is read through 32-bit offsets.
+* The ext2 writer caps a file at `0xFFFFFFFF` bytes (`ext2.c:2053`); the
+  dirty-volume check (`ext2.c:2758`) tracks every block and inode of the
+  volume at once. The group descriptors are one array read at mount
+  (`ext2.c:93`).
+* The recovery RAM image is built to a 4 MiB budget (`Makefile:493`).
+* Milestone 46's installer writes the sealed layout and rereads the table;
+  its manifest names the image's size and hash.
+* The Lenovo's SATA disk has 488397168 sectors, 238475 MiB
+  (`dev-log/43-machine/hardware.md:43`); the 1 TB disk in the same record
+  was a USB disk plugged in by mistake. The fourth partition entry is
+  already 2 GiB long with a 1 GiB file system in it.
 
 ## Decisions
 
 ### The volume is grown, not written large
 
-The image stays the size it is, since a 900 GiB file on a stick is not a
-thing to carry. The installer writes it, then grows the file system to the
-partition, with `resize2fs` ported to musl from the pinned e2fsprogs and
-staged on the recovery image, offline, before the first boot. The
-partition entry is written by the installer from the disk's size.
+The image stays the size it is. A large sparse image made on the host is
+not a shortcut: `reflash` would write every zero of it, the stick's volume
+cannot hold it, and only an extent package, offsets and lengths and hashes
+with a writer that seeks, would carry it, which is a format and a tool of
+its own. So the installer writes the image, then grows the file system to
+the partition with `resize2fs`, ported to musl from the pinned e2fsprogs
+and staged on the recovery image with its budget raised by name, offline,
+before the first boot. Its memory on the target size is measured before it
+is trusted, and if it does not fit the machine, the extent package is the
+recorded fallback. The partition entry is written by the installer from
+the disk's size.
 
 ### The driver takes a large volume
 
-The group limit becomes a bound on what the driver keeps in memory rather
-than on what it mounts: group descriptors are read through the cache as
-needed, not held whole; the dirty-volume check walks in bounded passes with
-its memory sized from what the machine has. What the driver still refuses,
-it refuses by name.
+The group descriptors become an array sized at mount from the superblock,
+about 60 KB for this disk and 240 KB for a 1 TB one, allocated from the
+memory milestone 49 made available; not a cache with lifetimes on every
+access. The dirty-volume check is not partitioned: a dirty volume larger
+than the check's bound mounts read-only, says so, and is repaired by
+recovery's `e2fsck`. That narrows the automatic check to the sizes it can
+hold, which is the bound it can keep. What the driver refuses, it refuses by
+name.
 
-### The 32-bit limits are stated
+### The limits are stated exactly
 
-A file is at most what a 32-bit offset addresses; the volume may be as
-large as ext2 allows. `disk(7)` and the ext2 Readme say both.
+A file is at most 4 GiB less one byte; the volume is bounded by the MBR's
+32-bit sector count, 2 TiB, and by the largest size this milestone has
+tested. `disk(7)` and the ext2 Readme say all three.
 
 ## Phases
 
 ### Phase 1: `resize2fs`
 
 Ported, staged on recovery, grown volumes accepted by `e2fsck -fn` and by
-the host. Proof: a QEMU disk grown from 1 GiB to 20 GiB and checked.
+the host. Proof: a sparse QEMU disk the size of the Lenovo's, 238475 MiB,
+grown from 1 GiB to the whole partition with QEMU at 64 MiB, the memory
+of `resize2fs` and of the recovery `e2fsck` measured and recorded, and a
+growth interrupted by a killed machine repaired afterwards.
 
 ### Phase 2: the driver
 
-Group descriptors read as needed; the check in passes. Proof: the 20 GiB
-volume mounted, written, killed and repaired; the ext2 host test over a
-large fixture.
+The descriptor array sized at mount; the read-only answer for an oversized
+dirty volume. Proof: the target-sized volume mounted, files written near
+its far end, read, unlinked and counted by `statfs`, the machine killed
+and the volume repaired from recovery; the ext2 host test over a fixture
+with the metadata of that size; the phase ends with a Codex review of the
+driver change as one unit.
 
 ### Phase 3: the installer
 
@@ -77,9 +105,9 @@ and the index entry.
 
 ## Risks
 
-* A check that walks a large volume on a machine with little memory: the
-  passes are bounded and the memory sized, and the row runs with QEMU at
-  64 MiB.
+* A volume that comes up dirty and too large for the check will run
+  read-only until someone boots recovery; the message says exactly that
+  and the manual page repeats it.
 * `resize2fs` on a volume with `resize_inode` off, which is what this
   driver writes; the port is tried against exactly this image before it is
   trusted.

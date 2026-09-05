@@ -27,8 +27,16 @@ complete when the checks below pass on the final tree and the record in
   (`procfs.c:61`, `0x10E` twice).
 * `rach2/sys/syscall.c` is 12071 lines.
 * No code saves or restores the floating-point state across a process switch:
-  `switch.s`, `process.c` and `isr.c` have no `fnsave`, `fxsave` or `clts`.
-  Two programs that both use the x87 or SSE share one register file.
+  `switch.s:28` switches the general registers, TLS and CR3 and nothing
+  else. Two programs that both use the x87 or SSE share one register file.
+  `paging.c:235` is the only code that writes CR0, for PG and WP; vector 7
+  has the default handler (`isr.c:135`), which kills the process; no code
+  detects FXSR or SSE, sets CR4.OSFXSR or initialises the unit; the signal
+  frame (`syscall.c:8704`) has no floating-point state; fork copies none.
+* A full request pool answers `EIO` (`request.c:103`), and the buffer cache
+  marks the device failed on any write error (`bcache.c:151`), so a burst
+  of writes can take a healthy mount read-only for good. Polled SATA does
+  not use the pool (`request.c:148`).
 * The documents drifted: `rach2/Readme.md` calls exFAT read-only where
   `exfat.c` writes; `utils/Readme.md` names retired targets; suite counts
   disagree between `tests/Readme.md`, `tests/system/Readme.md` and the
@@ -36,8 +44,9 @@ complete when the checks below pass on the final tree and the record in
 * `tests/system/Readme.md` calls the metal acceptance non-destructive; its
   rows write a file to the stick and copy an image to a fixed path on the
   root.
-* The `prlimit64` path accepts a limit and enforces nothing (`syscall.c`,
-  the `prlimit64` arm).
+* `sys_prlimit64` (`syscall.c:11583`) accepts a limit and enforces nothing;
+  it also ignores the pid it is given and accepts a resource number it does
+  not know.
 
 ## Decisions
 
@@ -55,13 +64,26 @@ off by default in the recovery entries the disk and the stick carry, and
 the menu gains a second recovery entry that has it on. A person who wants
 the repair chooses it.
 
-### The floating-point state is saved
+### The floating-point state is saved, eagerly
 
-The switch saves and restores the x87 and SSE state per process with
-`fxsave` and `fxrstor` when the processor has them and `fnsave` and `frstor`
-when it does not, lazily through `CR0.TS` so a process that never touches
-the unit pays nothing. This is a kernel change inside an audit because it is
-a correctness defect that any two floating-point programs can show.
+Every switch saves the outgoing process's x87 and SSE state and restores the
+incoming one's: `fxsave` and `fxrstor` when CPUID reports FXSR, with
+CR4.OSFXSR set at boot, and `fnsave` and `frstor` otherwise. The save area
+is 512 bytes, 16-byte aligned, in the process record. Fork copies the
+parent's state; exec resets it to the initial control word and MXCSR; signal
+delivery saves the state on the signal frame and the return restores it.
+Not lazily: a lazy switch through `CR0.TS` needs an owner, a vector 7
+handler and rules for fork and exit, buys nothing measurable on one
+processor, and Intel advises against it (SA-00145). This is a kernel change
+inside an audit because it is a correctness defect that any two
+floating-point programs can show.
+
+### Running out is not a device failure
+
+A submission that finds the request pool full waits for a slot; only a
+transfer that failed answers `EIO`, and only `EIO` makes the buffer cache
+mark the device failed. This is the one piece of milestone 49 that belongs
+here, because it is a wrong answer today, not a capacity question.
 
 ### Image rules go to the build, not the tests
 
@@ -88,35 +110,50 @@ generated or removed.
 
 The recovery boot's repair made optional; the fixed `/root/loop.img` path
 of the acceptance rows made a temporary name under `/tmp` and cleaned up;
-the `/proc` inode fixed. Proof: `tests/run sealed` with the recovery entry
-booted and no `e2fsck` record in its log; the acceptance rehearsal; a row
-that stats both `/proc` files and requires different inodes.
+the `/proc` inode fixed; the request pool waiting instead of failing.
+Proof: the sealed disk's bytes hashed before and after an ordinary recovery
+boot and found equal, and the repair entry booted on a deliberately damaged
+copy and found to change it; the acceptance rehearsal; a row that stats
+both `/proc` files and requires different inodes; a row that floods a mount
+with writes past the pool and finds it still writable, and the mutation
+that lets the full pool answer `EIO` makes that row fail.
 
 ### Phase 2: the floating-point state
 
-Save and restore in the switch, lazily. Proof: a probe that forks two
-processes each computing a known floating-point sequence and checks their
-results; the mutation that removes the restore makes it fail.
+Save and restore in the switch, fork, exec and signal delivery. Proof: a
+probe whose processes keep live values in x87 and XMM registers and a
+non-default rounding mode across forced switches and timer preemption, fork
+and signal return, and check them; the mutation that removes the restore
+makes it fail, and so does the one that skips the signal frame.
 
 ### Phase 3: the build
 
-Product rules out of `suites.mk`; the purge explicit; the root Makefile's
-duplicated declarations and stale comments removed. Proof: `make` from
-`distclean`, `make test`, and a check that no target under `tests/` names a
-product.
+Product rules out of `suites.mk`; the purge, and the files the fingerprint
+writes while Make parses, made an explicit step; the root Makefile's
+duplicated declarations and stale comments removed. The rule is that no
+recipe under `tests/` makes a product, while a test may depend on one.
+Proof: `make` from `distclean`, `make test`, `make -n` and an inspection
+target run with a changed fingerprint and shown to delete nothing, a flag
+change within one second rebuilt, a parallel build, and a check that no
+recipe under `tests/` names a product.
 
 ### Phase 4: the split
 
 `syscall.c` divided along its existing arms, one commit per extraction.
-Proof: the suites unchanged and a script that shows every function body
-identical before and after.
+Proof: the suites, `make check-sources`, `guestcheck` and `tests/run
+selfbuild` unchanged; a script that shows every function body identical
+before and after is supporting evidence, since headers, macros and linkage
+can change around identical bodies. Codex advised cutting this phase as
+work with no benefit to a student; it stays because a 12000-line file is
+the wrong shape for a reader, but it is the phase the owner may drop.
 
 ### Phase 5: the claims
 
 Every stale claim found by the last round and by this one corrected;
-`prlimit64` either enforced for the limits the kernel has or documented as
-accepted and ignored. Proof: `tests/run style`, and a Codex proofreading
-round of the touched documents, its unit count fixed in `notes.md` first.
+`prlimit64` documented as accepted and ignored, with the pid and the
+resource number checked and refused by name; enforcement is milestone 49.
+Proof: `tests/run style`, and a Codex proofreading round of the touched
+documents, its unit count fixed in `notes.md` first.
 
 ### Phase 6: the record
 
@@ -126,7 +163,9 @@ the index entry.
 ## Risks
 
 * The floating-point change touches the switch, which every process runs
-  through; the lazy path has a known shape and the probe is the proof.
+  through; the eager path is the simplest one there is, and the probe is
+  the proof. The phase ends with a Codex review of the switch, fork, exec
+  and signal changes as one unit.
 * Moving build rules can break a suite's expectations of where an artifact
   is; each move runs the suites that name the artifact.
 * The split of `syscall.c` invites a "while I am here" change; the rule is
