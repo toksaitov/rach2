@@ -77,7 +77,7 @@
  * of the size it is given, truncating; a text it filled to the end is
  * refused with `-EOVERFLOW` rather than served short.
  */
-#define PROCFS_MAX_DISK 768 /* diskinfo_format's widest record */
+#define PROCFS_MAX_DISK (768 + DISK_MAX * 96) /* diskinfo_format's widest record, then a line per disk */
 
 /* The header line of each network table. */
 #define PROCFS_NETROUTE_HEADER "Iface\tDestination\tGateway \tFlags\tRefCnt" \
@@ -1382,6 +1382,7 @@ int procfs_open(const struct vpath *vp, int flags)
         len = 0;
         if (procfs_text_room(&text, PROCFS_MAX_DISK) == 0) {
             len = diskinfo_format(diskinfo_get(), text.buf, PROCFS_MAX_DISK);
+            len += diskinfo_format_disks(text.buf + len, PROCFS_MAX_DISK - len);
             if (len >= PROCFS_MAX_DISK - 1) {
                 kfree(text.buf);
                 kfree(f);

@@ -2,7 +2,7 @@
 #include "block.h"
 #include "ata.h"
 #include "diskcmd.h"
-#include "diskinfo.h"
+#include "disk.h"
 
 #include "../kio.h"
 #include "../serial.h"
@@ -364,8 +364,6 @@ int ata_init(void)
         return -1;
     }
 
-    diskinfo_record_identify("ata", -1, identify, sector_count);
-
     ata_device.sector_size = BLOCK_SECTOR_SIZE;
     ata_device.sector_count = sector_count;
     ata_device.flags = BLOCK_FAULT_SAFE;
@@ -373,6 +371,7 @@ int ata_init(void)
     ata_device.write = ata_write;
     ata_device.drvdata = NULL;
     block0 = &ata_device;
+    disk_register(&ata_device, "ata", 0, identify);
 
     klog(KLOG_INFO, "ata", "primary master: %d sectors, %d MiB",
                   (uint32_t) sector_count, (uint32_t) (sector_count / 2048));

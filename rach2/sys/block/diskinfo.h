@@ -3,6 +3,7 @@
 
 #include "../lib/kint.h"
 #include "mbr.h"
+#include "disk.h"
 
 /*
  * diskinfo: what a disk says about itself, read once and published as text.
@@ -32,9 +33,9 @@
  */
 
 /* IDENTIFY string fields, in characters, as ATA lays them out. */
-#define DISKINFO_MODEL_CHARS    40 /* words 27-46 */
-#define DISKINFO_SERIAL_CHARS   20 /* words 10-19 */
-#define DISKINFO_FIRMWARE_CHARS 8  /* words 23-26 */
+#define DISKINFO_MODEL_CHARS    DISK_MODEL_CHARS
+#define DISKINFO_SERIAL_CHARS   DISK_SERIAL_CHARS
+#define DISKINFO_FIRMWARE_CHARS DISK_FIRMWARE_CHARS
 
 /* Whether a disk was looked for, and what was found. `not-asked` and
    `no-device` are kept apart so a script can tell a kernel that was never
@@ -123,12 +124,20 @@ uint64_t diskinfo_window(uint64_t sectors);
  */
 int diskinfo_format(const struct diskinfo *d, char *buf, int cap);
 
-/** Keep what an IDENTIFY reported. Called by both drivers on success. */
+/** Keep what disk 0's IDENTIFY reported. The registry calls it. */
 void diskinfo_record_identify(const char *driver, int port, const volatile uint16_t *id,
                               uint64_t sectors);
 
 /**
- * Find a disk, read its first sector once, and publish `/dev/disk0`.
+ * Render one line per registered disk into `buf`, which has `cap` bytes:
+ * `disk N TRANSPORT LOCATION SECTORS TABLE MODEL`. Truncates and always
+ * terminates. Returns the number of characters written.
+ */
+int diskinfo_format_disks(char *buf, int cap);
+
+/**
+ * Find a disk, read its first sector once, and publish `/dev/diskN` for
+ * every registered disk.
  *
  * Adopts an already-published `block0` instead of probing again, so a machine
  * whose root is on the disk does not get its controller reset underneath a

@@ -2057,14 +2057,17 @@ static void discover_boot_devices(void)
     devfs_bootpart_publish(block_lag_wrap(block0), disc_parts[0].start_lba, disc_parts[0].sector_count);
 }
 
-/* The partition nodes, over the lag device when `rach2.blocklag` asks for
- * one; the root window keeps the real device underneath. */
+/* The boot disk's partition nodes, from the table the root was chosen by,
+ * over the lag device when `rach2.blocklag` asks for one; the root window
+ * keeps the real device underneath. */
 static void publish_partition_nodes(void)
 {
-    if (!disc_table_ok || !block0) {
+    struct disk *d = disk_of(block0);
+
+    if (!disc_table_ok || !block0 || !d) {
         return;
     }
-    devfs_parts_publish(block_lag_wrap(block0), disc_parts);
+    disk_set_table(d, disc_parts, block_lag_wrap(block0));
 }
 
 static uint32_t sb_le32(const uint8_t *p)
@@ -2603,6 +2606,7 @@ static void process_command(const char *cmd)
             } else {
                 ahci_dump();
                 ahci_selftest();
+                block_scan_disks();
             }
             discover_boot_devices();
             publish_partition_nodes();

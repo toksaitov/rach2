@@ -303,13 +303,14 @@ void block_count_batch(uint32_t sectors)
     (void)sectors;
 }
 
-void diskinfo_record_identify(const char *driver, int port, const volatile uint16_t *id,
-                              uint64_t sectors)
+struct disk *disk_register(block_device_t *dev, const char *transport, int location,
+                           const volatile uint16_t *identify)
 {
-    (void)driver;
-    (void)port;
-    (void)id;
-    (void)sectors;
+    (void)dev;
+    (void)transport;
+    (void)location;
+    (void)identify;
+    return 0;
 }
 
 #include "../../rach2/sys/block/ahci.c"
@@ -318,7 +319,7 @@ void diskinfo_record_identify(const char *driver, int port, const volatile uint1
    back the number of bytes it moved. */
 static void complete_command(void)
 {
-    volatile ahci_cmd_header_t *hdr = (volatile ahci_cmd_header_t *)ahci_cmdlist;
+    volatile ahci_cmd_header_t *hdr = (volatile ahci_cmd_header_t *)ahci_disks[0].cmdlist;
 
     hdr->prdbc = moved_bytes;
 }
@@ -425,7 +426,7 @@ int main(void)
     /* Starting the port's engines. */
     model_reset();
     CHECK("a port can be selected", ahci_select_port() == 0);
-    CHECK("and started", ahci_port_start() == 0);
+    CHECK("and started", ahci_port_start(&ahci_disks[0]) == 0);
     CHECK("with the command engine running", (reg[P0 + P_CMD] & CMD_CR) != 0);
     CHECK("and the FIS receiver running", (reg[P0 + P_CMD] & CMD_FR) != 0);
 
@@ -435,33 +436,33 @@ int main(void)
 
         model_reset();
         CHECK("the port starts for the command rows",
-              ahci_select_port() == 0 && ahci_port_start() == 0);
+              ahci_select_port() == 0 && ahci_port_start(&ahci_disks[0]) == 0);
         CHECK("a command that completes is accepted",
-              ahci_run_command(ATA_IDENTIFY, 0, 0, buf, sizeof(buf), 0) == 0);
+              ahci_run_command(&ahci_disks[0], ATA_IDENTIFY, 0, 0, buf, sizeof(buf), 0) == 0);
 
         model_reset();
         (void)ahci_select_port();
-        (void)ahci_port_start();
+        (void)ahci_port_start(&ahci_disks[0]);
         command_completes = 0;
         ci_reads = 0;
         CHECK("a command that never completes is refused",
-              ahci_run_command(ATA_IDENTIFY, 0, 0, buf, sizeof(buf), 0) != 0);
+              ahci_run_command(&ahci_disks[0], ATA_IDENTIFY, 0, 0, buf, sizeof(buf), 0) != 0);
         CHECK("and the wait polled and then gave up", ci_reads > 1);
 
         model_reset();
         (void)ahci_select_port();
-        (void)ahci_port_start();
+        (void)ahci_port_start(&ahci_disks[0]);
         fatal_status = 1;
         CHECK("a device that reports a fatal status is refused",
-              ahci_run_command(ATA_IDENTIFY, 0, 0, buf, sizeof(buf), 0) != 0);
+              ahci_run_command(&ahci_disks[0], ATA_IDENTIFY, 0, 0, buf, sizeof(buf), 0) != 0);
 
         model_reset();
         (void)ahci_select_port();
-        (void)ahci_port_start();
+        (void)ahci_port_start(&ahci_disks[0]);
         policy_allows = 0;
         ci_reads = 0;
         CHECK("a command the disk policy refuses is refused",
-              ahci_run_command(ATA_IDENTIFY, 0, 0, buf, sizeof(buf), 0) != 0);
+              ahci_run_command(&ahci_disks[0], ATA_IDENTIFY, 0, 0, buf, sizeof(buf), 0) != 0);
         CHECK("and never reaches the port", ci_reads == 0);
         policy_allows = 1;
     }

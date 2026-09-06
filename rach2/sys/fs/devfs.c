@@ -29,6 +29,7 @@
 #include "../block/gpt.h"
 #include "../block/usbdisk.h"
 #include "../block/recovery.h"
+#include "../block/disk.h"
 #include "../serial.h"
 
 /* Linux O_* bits devfs_open honours (the rest are irrelevant to a char
@@ -175,10 +176,6 @@ struct devfs_entry {
  * user pointer. Writes are write-through: both disk drivers flush the drive
  * cache after every write, so a returned write is on the platter.
  */
-struct raw_window {
-    int present;
-    block_partition_t part;
-};
 
 /*
  * The staging buffer every raw transfer passes through, and the number of
@@ -250,7 +247,7 @@ uint64_t devfs_raw_calls(void)
     return raw_calls;
 }
 
-static struct raw_window bootpart;
+static struct disk_window bootpart;
 
 /*
  * /dev/grubcore: the post-MBR gap, LBA 1 through 2047, as a bounded raw
@@ -261,7 +258,7 @@ static struct raw_window bootpart;
  * cannot widen it. Sector 0 is deliberately outside: it has the partition
  * table, and a disk writes whole sectors.
  */
-static struct raw_window grubcore;
+static struct disk_window grubcore;
 
 /**
  * Read whole sectors from a bounded raw window.
@@ -274,7 +271,7 @@ static struct raw_window grubcore;
  * programs the buffer's physical address into its PRDT and must never be given
  * a user pointer.
  */
-static int32_t raw_window_read(struct raw_window *w, fd_entry_t *e, char __user *buf,
+static int32_t raw_window_read(struct disk_window *w, fd_entry_t *e, char __user *buf,
                                uint32_t count)
 {
     block_device_t *part = &w->part.device;
@@ -357,7 +354,7 @@ static int32_t raw_window_read(struct raw_window *w, fd_entry_t *e, char __user 
  * can open this device while privileged, drop privilege, and keep the
  * descriptor. Checking at write time is what makes that useless.
  */
-static int32_t raw_window_write(struct raw_window *w, fd_entry_t *e, const char __user *buf,
+static int32_t raw_window_write(struct disk_window *w, fd_entry_t *e, const char __user *buf,
                                 uint32_t count)
 {
     block_device_t *part = &w->part.device;
@@ -418,34 +415,83 @@ static int32_t dev_bootpart_read(fd_entry_t *e, char __user *buf, uint32_t count
     return raw_window_read(&bootpart, e, buf, count);
 }
 
-/* The four MBR partitions as raw windows, `/dev/disk0p1` to `p4`. A write
- * answers EPERM in every build but recovery: the writable windows exist
- * under their own names, and a whole-disk write belongs to recovery. The
- * recovery build writes them, under the same authority as `/dev/disk0`,
- * because `e2fsck` repairs a partition through its node. */
-static struct raw_window part_win[4];
+/*
+ * The disks: `/dev/diskN` is the whole of disk N as the registry numbers
+ * them, and `/dev/diskNpM` its M-th MBR partition. A node exists while its
+ * window is published: the partitions from the scan at boot, the whole disk
+ * on a boot that asked for it (`rach2.diskdiag`) and on every boot of the
+ * recovery build. The nodes are made when a disk is registered, with one
+ * vtable for all of them; the entry says which disk and which window.
+ *
+ * Disk 0 keeps the minors it always had, 1 for the disk and 4 to 7 for its
+ * partitions; the others take eight minors each from 64. Reads take whole
+ * sectors, and a write answers EPERM in every build but recovery, where the
+ * whole disk is written by a reflash and a partition by `e2fsck`.
+ */
+#define DISK_NODE_WINDOWS (DISK_PARTS + 1)
+#define DISK_MINOR_BASE   64
 
-static int32_t dev_part_write(fd_entry_t *e, const char __user *buf, uint32_t count);
+struct disk_node {
+    struct devfs_entry entry; /* first, so an entry pointer is the node */
+    char name[16];
+    struct disk *disk;
+    int part; /* 0 for the whole disk, else the 1-based partition */
+};
 
-static int32_t dev_part1_read(fd_entry_t *e, char __user *buf, uint32_t count)
+static struct disk_node disk_nodes[DISK_MAX * DISK_NODE_WINDOWS];
+static int disk_node_count;
+
+static const struct file_ops diskwin_ops;
+
+static const struct disk_node *disk_node_of(const struct devfs_entry *dev)
 {
-    return raw_window_read(&part_win[0], e, buf, count);
+    if (dev->ops != &diskwin_ops) {
+        return 0;
+    }
+    return (const struct disk_node *)dev;
 }
 
-static int32_t dev_part2_read(fd_entry_t *e, char __user *buf, uint32_t count)
+static struct disk_window *disk_node_window(const struct disk_node *node)
 {
-    return raw_window_read(&part_win[1], e, buf, count);
+    if (node->part == 0) {
+        return &node->disk->whole;
+    }
+    return &node->disk->views[node->part - 1];
 }
 
-static int32_t dev_part3_read(fd_entry_t *e, char __user *buf, uint32_t count)
+static int32_t dev_disk_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
-    return raw_window_read(&part_win[2], e, buf, count);
+    const struct disk_node *node = disk_node_of((const struct devfs_entry *)e->priv);
+
+    return raw_window_read(disk_node_window(node), e, buf, count);
 }
 
-static int32_t dev_part4_read(fd_entry_t *e, char __user *buf, uint32_t count)
+/**
+ * Write whole sectors anywhere on a disk, in a recovery build only.
+ *
+ * This is the one place in the kernel that can destroy the machine outright,
+ * so which kernel it is compiled into is decided when the kernel is built and
+ * not when it boots. An everyday build compiles the refusal below and has no
+ * path around it; a `-DRACH2_RECOVERY` build compiles the body. Both carry a
+ * banner naming which they are, and `check_recovery.sh` reads it off the
+ * artifact in both directions.
+ */
+#ifdef RACH2_RECOVERY
+static int32_t dev_disk_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
-    return raw_window_read(&part_win[3], e, buf, count);
+    const struct disk_node *node = disk_node_of((const struct devfs_entry *)e->priv);
+
+    return raw_window_write(disk_node_window(node), e, buf, count);
 }
+#else
+static int32_t dev_disk_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+{
+    (void)e;
+    (void)buf;
+    (void)count;
+    return -EPERM;
+}
+#endif
 
 /*
  * The sticks: `/dev/usb0` is the whole medium and `/dev/usb0p1` to `p4` are
@@ -465,11 +511,11 @@ static int32_t dev_part4_read(fd_entry_t *e, char __user *buf, uint32_t count)
 #define USB_WINDOWS    (GPT_PART_COUNT + 1)
 #define USB_MINOR_BASE 16
 
-static struct raw_window usb_win[USBDISK_MAX][USB_WINDOWS];
+static struct disk_window usb_win[USBDISK_MAX][USB_WINDOWS];
 static int usb_hidden[USBDISK_MAX];
 
 /** The window an entry's minor names, or null when there is no such one. */
-static struct raw_window *usb_window(const struct devfs_entry *dev)
+static struct disk_window *usb_window(const struct devfs_entry *dev)
 {
     int index = (int)dev->minor - USB_MINOR_BASE;
     int n = index / USB_WINDOWS;
@@ -492,7 +538,7 @@ static struct raw_window *usb_window(const struct devfs_entry *dev)
  * bytes asked for are copied out of it, one batch at a time; the end is a
  * short read, as a regular file's is.
  */
-static int32_t raw_window_read_bytes(struct raw_window *w, fd_entry_t *e, char __user *buf,
+static int32_t raw_window_read_bytes(struct disk_window *w, fd_entry_t *e, char __user *buf,
                                      uint32_t count)
 {
     block_device_t *part = &w->part.device;
@@ -548,7 +594,7 @@ static int32_t raw_window_read_bytes(struct raw_window *w, fd_entry_t *e, char _
 static int32_t dev_usb_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     const struct devfs_entry *dev = (const struct devfs_entry *)e->priv;
-    struct raw_window *w = usb_window(dev);
+    struct disk_window *w = usb_window(dev);
 
     if (!w || !w->present) {
         return -EIO; /* the stick was pulled out from under the reader */
@@ -599,12 +645,16 @@ static int32_t dev_grubcore_write(fd_entry_t *e, const char __user *buf, uint32_
  * alongside a write may return a torn region, and a repair hashes the region
  * after its write has completed.
  */
-static int raw_writer_held;
+static struct disk *window_disk(const struct devfs_entry *dev);
 
 static void raw_close(fd_entry_t *e)
 {
     if (e->flags & FD_FLAG_WRITE) {
-        raw_writer_held = 0;
+        struct disk *d = window_disk((const struct devfs_entry *)e->priv);
+
+        if (d) {
+            d->writer_held = 0;
+        }
     }
 }
 
@@ -628,17 +678,12 @@ static void dev_grubcore_close(fd_entry_t *e)
     raw_close(e);
 }
 
-static void dev_disk0_close(fd_entry_t *e)
-{
-    raw_close(e);
-}
-
 static void dev_bootpart_close(fd_entry_t *e)
 {
     raw_close(e);
 }
 
-static void dev_part_close(fd_entry_t *e)
+static void dev_disk_close(fd_entry_t *e)
 {
     raw_close(e);
 }
@@ -710,154 +755,6 @@ static const struct file_ops zero_ops = {dev_zero_read, dev_sink_write, dev_poll
 static const struct file_ops full_ops = {dev_zero_read, dev_full_write, dev_poll, dev_ioctl, NULL};
 static const struct file_ops rand_ops = {dev_rand_read, dev_sink_write, dev_poll, dev_ioctl, NULL};
 /*
- * The whole disk as a raw window. On an everyday kernel it exists only on a
- * boot that asked for it (`rach2.diskdiag`), so no image grows one by accident;
- * on the recovery build it exists on every boot, because rewriting this disk is
- * the only reason that build exists and the day it is needed is no time to
- * discover that a menu entry was missing a token.
- *
- * Reads serve the milestone 24 diagnostic, which answers what this machine's
- * drive is and what it has without mounting it, since mounting stamps a dirty
- * flag and that is a write. Writes belong to the recovery build alone: an
- * ordinary kernel compiles a handler that returns `-EPERM`, and the rescue
- * shell's own destructive command is compiled out of it too, so the refusal is
- * a property of the kernel, not of one function. `sys/block/recovery.h`
- * says why that is decided when the kernel is built and not when it boots.
- *
- * The mode is the weakest of the barriers and is not one at all for root, whose
- * credential check passes whatever the mode says. That is why the recovery
- * write handler asks the effective uid again at write time instead of trusting
- * the open.
- */
-static struct {
-    int present;
-    block_device_t *whole;
-    uint64_t window_sectors;
-} disk0;
-
-static int32_t dev_disk0_read(fd_entry_t *e, char __user *buf, uint32_t count)
-{
-    block_device_t *dev = disk0.whole;
-    uint64_t off = e->ofd->raw_offset;
-    uint64_t total = disk0.window_sectors;
-    uint64_t lba;
-    uint32_t want, done;
-
-    if (!disk0.present || !dev) {
-        return -ENXIO;
-    }
-    if ((off % BLOCK_SECTOR_SIZE) != 0 || (count % BLOCK_SECTOR_SIZE) != 0) {
-        return -EINVAL;
-    }
-    lba = off / BLOCK_SECTOR_SIZE;
-    if (lba >= total) {
-        return 0; /* the end of the window, the regular-file convention */
-    }
-    want = count / BLOCK_SECTOR_SIZE;
-    if ((uint64_t)want > total - lba) {
-        want = (uint32_t)(total - lba);
-    }
-    done = 0;
-    while (done < want) {
-        uint32_t chunk = want - done;
-
-        if (chunk > RAW_BATCH_SECTORS) {
-            chunk = RAW_BATCH_SECTORS;
-        }
-        raw_calls++;
-        if (block_request(dev, 0, lba + done, chunk, raw_batch) != 0) {
-            break;
-        }
-        if (copy_to_user((void __user *)(buf + done * BLOCK_SECTOR_SIZE), raw_batch,
-                         chunk * BLOCK_SECTOR_SIZE) != 0) {
-            if (done == 0) {
-                return -EFAULT;
-            }
-            break;
-        }
-        done += chunk;
-    }
-    if (done == 0) {
-        return -EIO;
-    }
-    e->ofd->raw_offset = off + (uint64_t)done * BLOCK_SECTOR_SIZE;
-    return (int32_t)(done * BLOCK_SECTOR_SIZE);
-}
-
-/**
- * Write whole sectors anywhere on the disk, in a recovery build only.
- *
- * This is the one place in the kernel that can destroy the machine outright,
- * so which kernel it is compiled into is decided when the kernel is built and
- * not when it boots. An everyday build compiles the refusal below and has no
- * path around it; a `-DRACH2_RECOVERY` build compiles the body. Both carry a
- * banner naming which they are, and `check_recovery.sh` reads it off the
- * artifact in both directions.
- */
-#ifdef RACH2_RECOVERY
-static int32_t dev_disk0_write(fd_entry_t *e, const char __user *buf, uint32_t count)
-{
-    block_device_t *dev = disk0.whole;
-    uint64_t off = e->ofd->raw_offset;
-    uint64_t total = disk0.window_sectors;
-    uint64_t lba;
-    uint32_t want, done;
-
-    if (!disk0.present || !dev) {
-        return -ENXIO;
-    }
-    if (!current_proc || current_proc->euid != 0) {
-        return -EPERM;
-    }
-    if ((off % BLOCK_SECTOR_SIZE) != 0 || (count % BLOCK_SECTOR_SIZE) != 0) {
-        return -EINVAL;
-    }
-    if (count == 0) {
-        return 0;
-    }
-    lba = off / BLOCK_SECTOR_SIZE;
-    want = count / BLOCK_SECTOR_SIZE;
-    if (lba >= total || (uint64_t)want > total - lba) {
-        return -ENOSPC;
-    }
-
-    done = 0;
-    while (done < want) {
-        uint32_t chunk = want - done;
-
-        if (chunk > RAW_BATCH_SECTORS) {
-            chunk = RAW_BATCH_SECTORS;
-        }
-        if (copy_from_user(raw_batch, (const void __user *)(buf + done * BLOCK_SECTOR_SIZE),
-                           chunk * BLOCK_SECTOR_SIZE) != 0) {
-            if (done == 0) {
-                return -EFAULT;
-            }
-            break;
-        }
-        raw_calls++;
-        if (block_request(dev, 1, lba + done, chunk, raw_batch) != 0) {
-            break;
-        }
-        done += chunk;
-    }
-    if (done == 0) {
-        return -EIO;
-    }
-    e->ofd->raw_offset = off + (uint64_t)done * BLOCK_SECTOR_SIZE;
-    return (int32_t)(done * BLOCK_SECTOR_SIZE);
-}
-#else
-static int32_t dev_disk0_write(fd_entry_t *e, const char __user *buf, uint32_t count)
-{
-    (void)e;
-    (void)buf;
-    (void)count;
-    return -EPERM;
-}
-#endif
-
-/*
  * /dev/bootlog: what this machine printed while it was starting.
  *
  * It exists so a question about a boot can be asked after that boot, over the
@@ -912,55 +809,54 @@ static const struct file_ops grubcore_ops = {dev_grubcore_read, dev_grubcore_wri
                                              dev_ioctl, dev_grubcore_close};
 static const struct file_ops bootpart_ops = {dev_bootpart_read, dev_bootpart_write, dev_poll,
                                              dev_ioctl, dev_bootpart_close};
-static const struct file_ops part1_ops = {dev_part1_read, dev_part_write, dev_poll, dev_ioctl,
-                                          dev_part_close};
-static const struct file_ops part2_ops = {dev_part2_read, dev_part_write, dev_poll, dev_ioctl,
-                                          dev_part_close};
-static const struct file_ops part3_ops = {dev_part3_read, dev_part_write, dev_poll, dev_ioctl,
-                                          dev_part_close};
-static const struct file_ops part4_ops = {dev_part4_read, dev_part_write, dev_poll, dev_ioctl,
-                                          dev_part_close};
-static const struct file_ops *const part_ops[4] = {&part1_ops, &part2_ops, &part3_ops, &part4_ops};
-
-static int raw_write_window(const struct devfs_entry *dev);
-
-static int32_t dev_part_write(fd_entry_t *e, const char __user *buf, uint32_t count)
-{
-    const struct devfs_entry *dev;
-    int i;
-
-    if (!recovery_publishes_disk() || !e || !e->priv) {
-        return -EPERM;
-    }
-    dev = (const struct devfs_entry *)e->priv;
-    for (i = 0; i < 4; i++) {
-        if (dev->ops == part_ops[i]) {
-            return raw_window_write(&part_win[i], e, buf, count);
-        }
-    }
-    return -EPERM;
-}
-
 static const struct file_ops bootlog_ops = {dev_bootlog_read, dev_sink_write, dev_poll, dev_ioctl,
                                             NULL};
-static const struct file_ops disk0_ops = {dev_disk0_read, dev_disk0_write, dev_poll, dev_ioctl,
-                                          dev_disk0_close};
+static const struct file_ops diskwin_ops = {dev_disk_read, dev_disk_write, dev_poll, dev_ioctl,
+                                            dev_disk_close};
 
-/* Whether `dev` is a raw window a write may reach: the whole disk and the
+/* Whether `dev` is a raw window a write may reach: the whole disks and the
  * two boot windows in every build, the partitions in the recovery build. */
 static int raw_write_window(const struct devfs_entry *dev)
 {
-    int i;
+    const struct disk_node *node = disk_node_of(dev);
 
-    if (dev->ops == &disk0_ops || dev->ops == &bootpart_ops || dev->ops == &grubcore_ops) {
-        return 1;
+    if (node) {
+        return node->part == 0 ? 1 : recovery_publishes_disk();
     }
-    for (i = 0; i < 4; i++) {
-        if (dev->ops == part_ops[i]) {
-            return recovery_publishes_disk();
-        }
+    return dev->ops == &bootpart_ops || dev->ops == &grubcore_ops;
+}
+
+/* The raw window of `dev`, among the disks' and the two boot windows, or null. */
+static struct disk_window *raw_window_of(const struct devfs_entry *dev)
+{
+    const struct disk_node *node = disk_node_of(dev);
+
+    if (node) {
+        return disk_node_window(node);
+    }
+    if (dev->ops == &bootpart_ops) {
+        return &bootpart;
+    }
+    if (dev->ops == &grubcore_ops) {
+        return &grubcore;
     }
     return 0;
+}
+
+/* The disk a raw window is on, for its writer reservation, or null. */
+static struct disk *window_disk(const struct devfs_entry *dev)
+{
+    const struct disk_node *node = disk_node_of(dev);
+    struct disk_window *w;
+
+    if (node) {
+        return node->disk;
+    }
+    w = raw_window_of(dev);
+    if (!w || !w->present) {
+        return 0;
+    }
+    return disk_of(w->part.backing);
 }
 
 /*
@@ -989,13 +885,8 @@ static const struct devfs_entry dev_table[] = {{"null", 1, 3, 1, 0666, &null_ops
                                                {"tty", 5, 0, 0, 0666, NULL},
                                                {"ptmx", 5, 2, 0, 0666, NULL},
                                                {"bootpart", 240, 0, 0, 0600, &bootpart_ops},
-                                               {"disk0", 240, 1, 0, 0400, &disk0_ops},
                                                {"bootlog", 240, 2, 0, 0400, &bootlog_ops},
                                                {"grubcore", 240, 3, 0, 0600, &grubcore_ops},
-                                               {"disk0p1", 240, 4, 0, 0400, &part1_ops},
-                                               {"disk0p2", 240, 5, 0, 0400, &part2_ops},
-                                               {"disk0p3", 240, 6, 0, 0400, &part3_ops},
-                                               {"disk0p4", 240, 7, 0, 0400, &part4_ops},
                                                {"usb0", 240, 16, 0, 0400, &usbwin_ops},
                                                {"usb0p1", 240, 17, 0, 0400, &usbwin_ops},
                                                {"usb0p2", 240, 18, 0, 0400, &usbwin_ops},
@@ -1040,23 +931,8 @@ static int devfs_entry_present(int i)
     if (dev_table[i].ops == &grubcore_ops) {
         return grubcore.present;
     }
-    if (dev_table[i].ops == &disk0_ops) {
-        return disk0.present;
-    }
-    if (dev_table[i].ops == &part1_ops) {
-        return part_win[0].present;
-    }
-    if (dev_table[i].ops == &part2_ops) {
-        return part_win[1].present;
-    }
-    if (dev_table[i].ops == &part3_ops) {
-        return part_win[2].present;
-    }
-    if (dev_table[i].ops == &part4_ops) {
-        return part_win[3].present;
-    }
     if (dev_table[i].ops == &usbwin_ops) {
-        struct raw_window *w = usb_window(&dev_table[i]);
+        struct disk_window *w = usb_window(&dev_table[i]);
         int n = ((int)dev_table[i].minor - USB_MINOR_BASE) / USB_WINDOWS;
 
         return w && w->present && !usb_hidden[n];
@@ -1094,6 +970,24 @@ static int name_eq(const char *a, const char *b)
     return *a == *b;
 }
 
+/** Whether disk node `j` exists right now: its window is published. */
+static int disk_node_present(int j)
+{
+    return j >= 0 && j < disk_node_count && disk_node_window(&disk_nodes[j])->present;
+}
+
+/* The index `stat` and the listing agree on: the table's entries first,
+ * then the disk nodes in the order the disks were registered. */
+static int entry_index(const struct devfs_entry *dev)
+{
+    const struct disk_node *node = disk_node_of(dev);
+
+    if (node) {
+        return DEVFS_NDEV + (int)(node - disk_nodes);
+    }
+    return (int)(dev - dev_table);
+}
+
 static const struct devfs_entry *devfs_find(const char *name)
 {
     int i;
@@ -1102,7 +996,61 @@ static const struct devfs_entry *devfs_find(const char *name)
             return devfs_entry_present(i) ? &dev_table[i] : NULL;
         }
     }
+    for (i = 0; i < disk_node_count; i++) {
+        if (name_eq(disk_nodes[i].name, name)) {
+            return disk_node_present(i) ? &disk_nodes[i].entry : NULL;
+        }
+    }
     return NULL;
+}
+
+/** Append the decimal `v` at `*n` in `out`, which has `cap` bytes. */
+static void put_decimal(char *out, int *n, int cap, int v)
+{
+    char digits[12];
+    int k = 0;
+
+    do {
+        digits[k++] = (char)('0' + v % 10);
+        v /= 10;
+    } while (v > 0);
+    while (k > 0 && *n < cap - 1) {
+        out[(*n)++] = digits[--k];
+    }
+    out[*n] = '\0';
+}
+
+void devfs_disk_nodes(struct disk *d)
+{
+    int k;
+
+    if (disk_node_count + DISK_NODE_WINDOWS > (int)(sizeof(disk_nodes) / sizeof(disk_nodes[0]))) {
+        klog(KLOG_WARN, "devfs", "disk%d: no nodes: the table is full", d->number);
+        return;
+    }
+    for (k = 0; k < DISK_NODE_WINDOWS; k++) {
+        struct disk_node *node = &disk_nodes[disk_node_count++];
+        int n = 0;
+
+        node->disk = d;
+        node->part = k;
+        node->name[n++] = 'd';
+        node->name[n++] = 'i';
+        node->name[n++] = 's';
+        node->name[n++] = 'k';
+        put_decimal(node->name, &n, (int)sizeof(node->name), d->number);
+        if (k > 0) {
+            node->name[n++] = 'p';
+            put_decimal(node->name, &n, (int)sizeof(node->name), k);
+        }
+        node->entry.name = node->name;
+        node->entry.major = 240;
+        node->entry.minor = (uint16_t)(d->number == 0 ? (k == 0 ? 1 : 3 + k)
+                                                       : DISK_MINOR_BASE + d->number * 8 + k);
+        node->entry.lseek_zero = 0;
+        node->entry.mode = 0400;
+        node->entry.ops = &diskwin_ops;
+    }
 }
 
 /*
@@ -1128,10 +1076,6 @@ struct claim {
 
 static struct claim claims[DEVFS_CLAIMS];
 
-/* The range the raw writer holds while `raw_writer_held`. */
-static block_device_t *raw_writer_backing;
-static uint64_t raw_writer_first, raw_writer_last;
-
 static int ranges_cross(block_device_t *a, uint64_t af, uint64_t al, block_device_t *b, uint64_t bf,
                         uint64_t bl)
 {
@@ -1142,8 +1086,9 @@ int devfs_claim(block_device_t *backing, uint64_t first, uint64_t last)
 {
     int i;
 
-    if (raw_writer_held &&
-        ranges_cross(backing, first, last, raw_writer_backing, raw_writer_first, raw_writer_last)) {
+    struct disk *d = disk_of(backing);
+
+    if (d && d->writer_held && first <= d->writer_last && d->writer_first <= last) {
         return -EBUSY;
     }
     for (i = 0; i < DEVFS_CLAIMS; i++) {
@@ -1188,29 +1133,8 @@ static int claimed(block_device_t *backing, uint64_t first, uint64_t last)
 static int window_range(const struct devfs_entry *dev, block_device_t **backing, uint64_t *first,
                         uint64_t *last)
 {
-    struct raw_window *w = 0;
-    int i;
+    struct disk_window *w = raw_window_of(dev);
 
-    if (dev->ops == &disk0_ops) {
-        if (!disk0.present) {
-            return -ENXIO;
-        }
-        *backing = block_physical(disk0.whole);
-        *first = 0;
-        *last = disk0.window_sectors - 1;
-        return 0;
-    }
-    if (dev->ops == &bootpart_ops) {
-        w = &bootpart;
-    } else if (dev->ops == &grubcore_ops) {
-        w = &grubcore;
-    } else {
-        for (i = 0; i < 4; i++) {
-            if (dev->ops == part_ops[i]) {
-                w = &part_win[i];
-            }
-        }
-    }
     if (!w || !w->present) {
         return -ENXIO;
     }
@@ -1224,8 +1148,8 @@ int devfs_window_of(const char *path, block_device_t **view, block_device_t **ba
                     uint64_t *first, uint64_t *count)
 {
     const struct devfs_entry *dev;
-    struct raw_window *w = 0;
-    int i;
+    const struct disk_node *node;
+    struct disk_window *w = 0;
 
     if (path[0] != '/' || path[1] != 'd' || path[2] != 'e' || path[3] != 'v' || path[4] != '/') {
         return -EINVAL;
@@ -1248,16 +1172,13 @@ int devfs_window_of(const char *path, block_device_t **view, block_device_t **ba
         *count = loop->sector_count;
         return 0;
     }
+    node = disk_node_of(dev);
     if (dev->ops == &bootpart_ops) {
         w = &bootpart;
     } else if (dev->ops == &usbwin_ops) {
         w = usb_window(dev);
-    } else {
-        for (i = 0; i < 4; i++) {
-            if (dev->ops == part_ops[i]) {
-                w = &part_win[i];
-            }
-        }
+    } else if (node && node->part > 0) {
+        w = disk_node_window(node);
     }
     if (!w) {
         return -EINVAL; /* not a partition window */
@@ -1343,13 +1264,14 @@ int devfs_open(const char *name, int flags)
     /* The raw windows that take a write, under one writer at a time and
      * the claims: the whole disk, the two boot windows, and in the recovery
      * build the four partitions. */
-    if ((flags & 3) != 0 && raw_writer_held && raw_write_window(dev)) {
-        return -EBUSY;
-    }
     if ((flags & 3) != 0 && raw_write_window(dev)) {
+        struct disk *d = window_disk(dev);
         block_device_t *backing;
         uint64_t first, last;
 
+        if (d && d->writer_held) {
+            return -EBUSY;
+        }
         /* A mounted volume's sectors are nobody else's to write. */
         if (window_range(dev, &backing, &first, &last) == 0 && claimed(backing, first, last)) {
             return -EBUSY;
@@ -1394,8 +1316,12 @@ int devfs_open(const char *name, int flags)
         grubcore_held = 1;
     }
     if ((e->flags & FD_FLAG_WRITE) && raw_write_window(dev)) {
-        raw_writer_held = 1;
-        window_range(dev, &raw_writer_backing, &raw_writer_first, &raw_writer_last);
+        struct disk *d = window_disk(dev);
+        block_device_t *backing;
+
+        if (d && window_range(dev, &backing, &d->writer_first, &d->writer_last) == 0) {
+            d->writer_held = 1;
+        }
     }
 
     return fd;
@@ -1439,7 +1365,7 @@ int devfs_stat(const char *name, uint32_t *mode, uint32_t *rdev, uint32_t *ino)
         *rdev = ((uint32_t)dev->major << 8) | (uint32_t)dev->minor;
     }
     if (ino) {
-        *ino = DEVFS_INO((int)(dev - dev_table));
+        *ino = DEVFS_INO(entry_index(dev));
     }
     return 0;
 }
@@ -1463,7 +1389,7 @@ uint32_t devfs_fd_ino(struct fd_entry *e)
         return 0;
     }
     dev = (const struct devfs_entry *)e->priv;
-    return DEVFS_INO((int)(dev - dev_table));
+    return DEVFS_INO(entry_index(dev));
 }
 
 int devfs_lseek_zero(struct fd_entry *e)
@@ -1510,12 +1436,26 @@ int devfs_dirent(int n, const char **name, uint32_t *ino)
         }
         n--;
     }
+    for (i = 0; i < disk_node_count; i++) {
+        if (!disk_node_present(i)) {
+            continue;
+        }
+        if (n == 0) {
+            *name = disk_nodes[i].name;
+            *ino = DEVFS_INO(DEVFS_NDEV + i);
+            return 1;
+        }
+        n--;
+    }
     return 0;
 }
 
 const char *devfs_name(int i)
 {
-    if (i < 0 || i >= DEVFS_NDEV || !devfs_entry_present(i)) {
+    if (i >= DEVFS_NDEV) {
+        return disk_node_present(i - DEVFS_NDEV) ? disk_nodes[i - DEVFS_NDEV].name : NULL;
+    }
+    if (i < 0 || !devfs_entry_present(i)) {
         return NULL;
     }
     return dev_table[i].name;
@@ -1542,19 +1482,21 @@ uint32_t devfs_fd_mode(struct fd_entry *e)
  */
 void devfs_disk_withdraw(void)
 {
-    disk0.present = 0;
-    disk0.whole = 0;
+    int i;
+
+    for (i = 0; i < disk_count(); i++) {
+        disk_at(i)->whole.present = 0;
+    }
 }
 
-void devfs_disk_publish(struct block_device *whole, uint64_t window_sectors)
+void devfs_disk_publish(struct disk *d, uint64_t window_sectors)
 {
-    if (!whole || window_sectors == 0) {
+    if (!d || window_sectors == 0) {
         klog(KLOG_DEBUG, "devfs", "no whole-disk window to publish");
         return;
     }
-    disk0.whole = whole;
-    disk0.window_sectors = window_sectors;
-    disk0.present = 1;
+    block_partition_init(&d->whole.part, d->dev, 0, window_sectors);
+    d->whole.present = 1;
 }
 
 /**
@@ -1579,29 +1521,6 @@ int devfs_fd_log_size(struct fd_entry *e, uint32_t *size)
         return 1;
     }
     return 0;
-}
-
-/**
- * Publish `/dev/disk0pN` for every non-empty MBR entry, over `backing`.
- *
- * The nodes are read-only; `mount(2)` takes its source from them. With
- * `rach2.blocklag` the backing is the lag device, so a read through a node
- * sleeps, which is what the lag exists to prove.
- */
-void devfs_parts_publish(struct block_device *backing, const struct mbr_part *entries)
-{
-    int i;
-
-    for (i = 0; i < 4; i++) {
-        if (entries[i].sector_count == 0) {
-            part_win[i].present = 0;
-            continue;
-        }
-        block_partition_init(&part_win[i].part,
-                             block_lag_partition_backing(backing, entries[i].start_lba),
-                             entries[i].start_lba, entries[i].sector_count);
-        part_win[i].present = 1;
-    }
 }
 
 void devfs_bootpart_publish(struct block_device *backing, uint32_t start_lba, uint32_t sector_count)
@@ -1783,61 +1702,25 @@ int devfs_fd_is_raw(struct fd_entry *e)
         return 0;
     }
     dev = (const struct devfs_entry *)e->priv;
-    return dev->ops == &bootpart_ops || dev->ops == &grubcore_ops || dev->ops == &disk0_ops ||
-           dev->ops == &part1_ops || dev->ops == &part2_ops || dev->ops == &part3_ops ||
-           dev->ops == &part4_ops || dev->ops == &usbwin_ops;
+    return dev->ops == &bootpart_ops || dev->ops == &grubcore_ops || dev->ops == &diskwin_ops ||
+           dev->ops == &usbwin_ops;
 }
 
 int devfs_fd_raw_size(struct fd_entry *e, uint64_t *size)
 {
     const struct devfs_entry *dev;
+    struct disk_window *w;
 
     if (!e || e->type != FD_TYPE_DEVICE || !e->priv) {
         return 0;
     }
     dev = (const struct devfs_entry *)e->priv;
-    if (dev->ops == &usbwin_ops) {
-        struct raw_window *w = usb_window(dev);
-
-        if (!w || !w->present) {
-            return 0;
-        }
-        if (size) {
-            *size = w->part.device.sector_count * BLOCK_SECTOR_SIZE;
-        }
-        return 1;
+    w = dev->ops == &usbwin_ops ? usb_window(dev) : raw_window_of(dev);
+    if (!w || !w->present) {
+        return 0;
     }
-    if (dev->ops == &part1_ops || dev->ops == &part2_ops || dev->ops == &part3_ops ||
-        dev->ops == &part4_ops) {
-        int idx = dev->ops == &part1_ops   ? 0
-                  : dev->ops == &part2_ops ? 1
-                  : dev->ops == &part3_ops ? 2
-                                           : 3;
-        if (!part_win[idx].present) {
-            return 0;
-        }
-        if (size) {
-            *size = part_win[idx].part.device.sector_count * BLOCK_SECTOR_SIZE;
-        }
-        return 1;
+    if (size) {
+        *size = w->part.device.sector_count * BLOCK_SECTOR_SIZE;
     }
-    if (dev->ops == &bootpart_ops && bootpart.present) {
-        if (size) {
-            *size = bootpart.part.device.sector_count * BLOCK_SECTOR_SIZE;
-        }
-        return 1;
-    }
-    if (dev->ops == &grubcore_ops && grubcore.present) {
-        if (size) {
-            *size = grubcore.part.device.sector_count * BLOCK_SECTOR_SIZE;
-        }
-        return 1;
-    }
-    if (dev->ops == &disk0_ops && disk0.present) {
-        if (size) {
-            *size = disk0.window_sectors * BLOCK_SECTOR_SIZE;
-        }
-        return 1;
-    }
-    return 0;
+    return 1;
 }

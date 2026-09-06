@@ -3,6 +3,7 @@
 #include "../klog.h"
 #include "ata.h"
 #include "ahci.h"
+#include "disk.h"
 #include "../serial.h"
 
 #include "../cmdline.h"
@@ -98,6 +99,15 @@ int block_ready(void)
     return block_probe();
 }
 
+void block_scan_disks(void)
+{
+    int i;
+
+    for (i = 0; i < disk_count(); i++) {
+        disk_scan(disk_at(i));
+    }
+}
+
 int block_probe(void)
 {
     /* rach2.nodisk skips the probe entirely, which is the switch a first boot
@@ -115,9 +125,14 @@ int block_probe(void)
        before. kcmdline_has matches whole tokens, so the flag never collides
        with rach2.fsdisk. Both drivers publish block0 themselves. */
     if (kcmdline_has("rach2.disk=ahci") && ahci_init() == 0) {
+        block_scan_disks();
         return 0;
     }
-    return ata_init();
+    if (ata_init() != 0) {
+        return -1;
+    }
+    block_scan_disks();
+    return 0;
 }
 
 /*

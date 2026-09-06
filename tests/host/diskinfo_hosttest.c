@@ -56,10 +56,23 @@ uint64_t devfs_raw_calls(void)
     return 0;
 }
 
-void devfs_disk_publish(struct block_device *whole, uint64_t window_sectors)
+void devfs_disk_publish(struct disk *d, uint64_t window_sectors)
 {
-    (void)whole;
+    (void)d;
     (void)window_sectors;
+}
+
+/* The registry is empty here: the probe finds no disk and the disk lines
+   are none. */
+int disk_count(void)
+{
+    return 0;
+}
+
+struct disk *disk_at(int n)
+{
+    (void)n;
+    return 0;
 }
 
 /* The probe says what disk answered through the kernel log, which this test

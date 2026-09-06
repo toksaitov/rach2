@@ -280,7 +280,11 @@ int diskinfo_probe(int mounted)
         info.mbr_id = mbr_disk_id(sector);
     }
 
-    devfs_disk_publish(block0, info.window_sectors);
+    for (i = 0; i < disk_count(); i++) {
+        struct disk *d = disk_at(i);
+
+        devfs_disk_publish(d, diskinfo_window(d->dev->sector_count));
+    }
     klog(KLOG_INFO, "disk", "%s: %d sectors, model %s", info.driver,
          (uint32_t)info.sectors,
                   info.model);
@@ -290,4 +294,33 @@ int diskinfo_probe(int mounted)
 const struct diskinfo *diskinfo_get(void)
 {
     return &info;
+}
+
+int diskinfo_format_disks(char *buf, int cap)
+{
+    int n = 0;
+    int i;
+
+    if (cap <= 0) {
+        return 0;
+    }
+    for (i = 0; i < disk_count(); i++) {
+        const struct disk *d = disk_at(i);
+
+        put(buf, &n, cap, "disk ");
+        put_dec(buf, &n, cap, (uint64_t)d->number);
+        put(buf, &n, cap, " ");
+        put(buf, &n, cap, d->transport);
+        put(buf, &n, cap, " ");
+        put_dec(buf, &n, cap, (uint64_t)d->location);
+        put(buf, &n, cap, " ");
+        put_dec(buf, &n, cap, d->dev->sector_count);
+        put(buf, &n, cap, d->table == DISK_TABLE_MBR    ? " mbr "
+                          : d->table == DISK_TABLE_NONE ? " none "
+                                                        : " unread ");
+        put(buf, &n, cap, d->model);
+        put(buf, &n, cap, "\n");
+    }
+    buf[n] = '\0';
+    return n;
 }

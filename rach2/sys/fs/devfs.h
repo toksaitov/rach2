@@ -54,9 +54,13 @@ uint32_t devfs_fd_mode(struct fd_entry *e);
  * window, which the boot partition is small enough for on any disk this
  * project builds. A larger one is not published.
  */
-struct mbr_part;
-/* Publish /dev/disk0p1..p4 from the four MBR entries over `backing`. */
-void devfs_parts_publish(struct block_device *backing, const struct mbr_part *entries);
+struct disk;
+/**
+ * Make the nodes of a newly registered disk: `/dev/diskN` and one
+ * `/dev/diskNpM` per possible partition. Each is listed while its window
+ * in the disk's record is present.
+ */
+void devfs_disk_nodes(struct disk *d);
 void devfs_bootpart_publish(struct block_device *backing, uint32_t start_lba,
                             uint32_t sector_count);
 
@@ -158,13 +162,13 @@ int devfs_fd_is_raw(struct fd_entry *e);
 int devfs_fd_raw_size(struct fd_entry *e, uint64_t *size);
 
 /**
- * Publish `/dev/disk0`, a read-only window over the whole of `whole`.
+ * Publish `/dev/diskN`, a read-only window over the whole of disk `d`.
  *
  * The window is `window_sectors` sectors, which is the disk's size clamped to
  * this window's chosen ceiling; `/proc/disk` prints both numbers so the clamp
  * is visible, not silent.
  */
-void devfs_disk_publish(struct block_device *whole, uint64_t window_sectors);
+void devfs_disk_publish(struct disk *d, uint64_t window_sectors);
 
 /**
  * Whether `e` is the open boot log; if so, `*size` gets its current byte

@@ -114,6 +114,13 @@ extern block_device_t *block0;
 int block_probe(void);
 
 /**
+ * Read every registered disk's partition table and publish its partition
+ * views. `block_probe` calls it after the drivers have registered their
+ * disks, and the debug shell's re-probe calls it again.
+ */
+void block_scan_disks(void);
+
+/**
  * Report a boot disk, probing only if none has been established.
  *
  * `block_probe` resets and re-identifies a controller every time it is called,

@@ -2,7 +2,7 @@
 #include "../lib/kcpu.h"
 #include "ahci.h"
 #include "diskcmd.h"
-#include "diskinfo.h"
+#include "disk.h"
 #include "../udelay.h"
 #include "block.h"
 
@@ -123,18 +123,39 @@
 #define AHCI_LINK_STEPS    10000u
 #define AHCI_READY_STEPS   50000u
 
-/* The DMA regions the HBA reads and writes. They are static so they land in
-   .bss below HARD_MEMORY_LIMIT, where the identity map makes the virtual
-   address equal the physical DMA address and the bytes are contiguous and
-   below 4 GiB. The alignments are AHCI-mandated. The bring-up needs only the
-   base addresses; a later phase lays typed records over the bytes. */
+/* The DMA regions the HBA reads and writes, one set per disk. They are
+   static so they land in .bss below HARD_MEMORY_LIMIT, where the identity map
+   makes the virtual address equal the physical DMA address and the bytes are
+   contiguous and below 4 GiB. The alignments are AHCI-mandated. */
 #define AHCI_CMDLIST_SIZE  1024 /* 32 command headers of 32 bytes */
 #define AHCI_RECV_FIS_SIZE 256
 #define AHCI_CMDTABLE_SIZE 256 /* 128-byte header plus a 16-byte PRDT entry */
 
-static volatile uint8_t ahci_cmdlist[AHCI_CMDLIST_SIZE] __attribute__((aligned(1024)));
-static volatile uint8_t ahci_recv_fis[AHCI_RECV_FIS_SIZE] __attribute__((aligned(256)));
-static volatile uint8_t ahci_cmdtable[AHCI_CMDTABLE_SIZE] __attribute__((aligned(128)));
+/* How many disks one controller may publish. A port beyond the count is
+   stopped and left, with a record. */
+#define AHCI_DISKS 4
+
+/**
+ * One disk on one port: its DMA areas, its capacity, and the device the
+ * block layer sees, whose `drvdata` points back here.
+ */
+struct ahci_disk {
+    volatile uint8_t cmdlist[AHCI_CMDLIST_SIZE] __attribute__((aligned(1024)));
+    volatile uint8_t recv_fis[AHCI_RECV_FIS_SIZE] __attribute__((aligned(256)));
+    volatile uint8_t cmdtable[AHCI_CMDTABLE_SIZE] __attribute__((aligned(128)));
+    int port;
+    uint64_t sectors; /* IDENTIFY words 100-103, 0 until known */
+    block_device_t dev;
+};
+
+static struct ahci_disk ahci_disks[AHCI_DISKS];
+static int ahci_ndisks;
+
+/* The areas a port is pointed at while it is reset, before the scan knows
+   whether it has a disk. Nothing reads them: a port that is kept gets its
+   own areas when it is started, and a port that is skipped is stopped. */
+static volatile uint8_t ahci_reset_cmdlist[AHCI_CMDLIST_SIZE] __attribute__((aligned(1024)));
+static volatile uint8_t ahci_reset_fis[AHCI_RECV_FIS_SIZE] __attribute__((aligned(256)));
 
 /* Task-file status bits (PxTFD low byte) and the fatal port-interrupt bits. A
    command fails on a device error (PxTFD ERR or DF) or on a fatal PxIS bit (the
@@ -208,11 +229,8 @@ typedef struct {
     uint32_t dbc; /* byte count minus one [21:0], interrupt bit [31] */
 } __attribute__((packed)) ahci_prdt_t;
 
-/* The logical sector count from IDENTIFY words 100-103, 0 until known. */
-static uint64_t ahci_sector_count;
-
 /* The mapped ABAR, NULL until ahci_init succeeds. MMIO, so volatile. The
-   selected port (first implemented port with a device), -1 until bring-up. */
+   first port with a disk, -1 until bring-up. */
 static pci_device_t ahci_pci;
 static volatile uint8_t *ahci_base;
 static int ahci_port = -1;
@@ -450,9 +468,9 @@ static int ahci_port_comreset(int port)
      * not in the start path afterwards; without this the task file
      * never updates and every port looks like a device that will not answer.
      * The command engine stays off: nothing is being issued here. */
-    ahci_write32(ahci_port_off(port, AHCI_PxCLB), (uint32_t)(uintptr_t)ahci_cmdlist);
+    ahci_write32(ahci_port_off(port, AHCI_PxCLB), (uint32_t)(uintptr_t)ahci_reset_cmdlist);
     ahci_write32(ahci_port_off(port, AHCI_PxCLBU), 0);
-    ahci_write32(ahci_port_off(port, AHCI_PxFB), (uint32_t)(uintptr_t)ahci_recv_fis);
+    ahci_write32(ahci_port_off(port, AHCI_PxFB), (uint32_t)(uintptr_t)ahci_reset_fis);
     ahci_write32(ahci_port_off(port, AHCI_PxFBU), 0);
     pci_enable_bus_master(&ahci_pci);
 
@@ -664,17 +682,21 @@ static int ahci_port_ready(int port)
  * driven as if it were a disk.
  *
  * A port that is skipped is stopped again before the scan moves on. The reset
- * had to enable that port's FIS receive engine, and every port is pointed at
- * the same single received-FIS area, so a skipped port left running would go
- * on writing into the buffer the selected port is using. On the machine this
- * targets that is not hypothetical: it has a SATA disk and a bay that may hold
- * an optical drive, which is exactly two ports.
+ * had to enable that port's FIS receive engine, and a port left running with
+ * no area of its own programmed would write wherever its base registers
+ * point. On the machine this targets that is not hypothetical: it has a SATA
+ * disk and a bay that may hold an optical drive, which is exactly two ports.
+ *
+ * Every port with a disk is kept, up to `AHCI_DISKS`, in port order; the
+ * first is `ahci_port`. The function fails only when no port has a disk.
  */
 static int ahci_select_port(void)
 {
     uint32_t pi = ahci_read32(AHCI_PI);
     int p;
 
+    ahci_ndisks = 0;
+    ahci_port = -1;
     for (p = 0; p < 32; ++p) {
         uint32_t ssts, sig;
 
@@ -712,32 +734,46 @@ static int ahci_select_port(void)
             (void)ahci_port_stop(p);
             continue;
         }
-        ahci_port = p;
-        return 0;
+        if (ahci_ndisks >= AHCI_DISKS) {
+            klog(KLOG_WARN, "ahci", "port %d: a disk past the %d this driver publishes; skipped",
+                 p, AHCI_DISKS);
+            (void)ahci_port_stop(p);
+            continue;
+        }
+        ahci_disks[ahci_ndisks].port = p;
+        ahci_disks[ahci_ndisks].sectors = 0;
+        ahci_ndisks++;
+        if (ahci_port < 0) {
+            ahci_port = p;
+        }
     }
-    ahci_err = "no port has a disk";
-    return -1;
+    if (ahci_ndisks == 0) {
+        ahci_err = "no port has a disk";
+        return -1;
+    }
+    return 0;
 }
 
-/** Stop the port engine, program the DMA bases, and restart it. */
-static int ahci_port_start(void)
+/** Stop `d`'s port engine, program its DMA bases, and restart it. */
+static int ahci_port_start(struct ahci_disk *d)
 {
-    uint32_t cmd_off = ahci_port_off(ahci_port, AHCI_PxCMD);
+    int port = d->port;
+    uint32_t cmd_off = ahci_port_off(port, AHCI_PxCMD);
 
-    if (ahci_port_stop(ahci_port) != 0) {
+    if (ahci_port_stop(port) != 0) {
         ahci_err = "the selected port would not stop";
         return -1;
     }
 
     /* Program the command list and received-FIS bases (32-bit; upper = 0). */
-    ahci_write32(ahci_port_off(ahci_port, AHCI_PxCLB), (uint32_t)(uintptr_t)ahci_cmdlist);
-    ahci_write32(ahci_port_off(ahci_port, AHCI_PxCLBU), 0);
-    ahci_write32(ahci_port_off(ahci_port, AHCI_PxFB), (uint32_t)(uintptr_t)ahci_recv_fis);
-    ahci_write32(ahci_port_off(ahci_port, AHCI_PxFBU), 0);
+    ahci_write32(ahci_port_off(port, AHCI_PxCLB), (uint32_t)(uintptr_t)d->cmdlist);
+    ahci_write32(ahci_port_off(port, AHCI_PxCLBU), 0);
+    ahci_write32(ahci_port_off(port, AHCI_PxFB), (uint32_t)(uintptr_t)d->recv_fis);
+    ahci_write32(ahci_port_off(port, AHCI_PxFBU), 0);
 
     /* Clear latched errors and interrupt status (write 1 to clear). */
-    ahci_write32(ahci_port_off(ahci_port, AHCI_PxSERR), 0xFFFFFFFFu);
-    ahci_write32(ahci_port_off(ahci_port, AHCI_PxIS), 0xFFFFFFFFu);
+    ahci_write32(ahci_port_off(port, AHCI_PxSERR), 0xFFFFFFFFu);
+    ahci_write32(ahci_port_off(port, AHCI_PxIS), 0xFFFFFFFFu);
 
     pci_enable_bus_master(&ahci_pci);
 
@@ -766,24 +802,24 @@ static void ahci_zero(volatile uint8_t *p, uint32_t n)
  * engine restarts, leaving the port able to serve the next command. If the
  * engine will not stop, the port stays down and recovery fails closed rather
  * than restart a wedged engine. All bounded MMIO, so it is safe at IF=0. */
-static int ahci_io_error(void)
+static int ahci_io_error(struct ahci_disk *d)
 {
-    uint32_t cmd_off = ahci_port_off(ahci_port, AHCI_PxCMD);
+    uint32_t cmd_off = ahci_port_off(d->port, AHCI_PxCMD);
 
     ahci_write32(cmd_off, ahci_read32(cmd_off) & ~AHCI_PxCMD_ST);
     if (ahci_wait_clear(cmd_off, AHCI_PxCMD_CR) != 0) {
         return -EIO;
     }
-    ahci_write32(ahci_port_off(ahci_port, AHCI_PxSERR), 0xFFFFFFFFu);
-    ahci_write32(ahci_port_off(ahci_port, AHCI_PxIS), 0xFFFFFFFFu);
+    ahci_write32(ahci_port_off(d->port, AHCI_PxSERR), 0xFFFFFFFFu);
+    ahci_write32(ahci_port_off(d->port, AHCI_PxIS), 0xFFFFFFFFu);
     ahci_write32(cmd_off, ahci_read32(cmd_off) | AHCI_PxCMD_ST);
     return -EIO;
 }
 
-/** Issue one polled command on the selected port and spin to completion.
+/** Issue one polled command on `d`'s port and spin to completion.
  *
  * Builds the command-list header, a Register H2D FIS, and a single PRDT entry
- * over the static DMA regions, waits for the task file to go idle, sets the
+ * over the disk's DMA regions, waits for the task file to go idle, sets the
  * slot's `PxCI` bit, and busy-polls it clear, watching the fatal `PxIS` bits
  * and `PxTFD` ERR/DF for failure, then verifies the byte count the HBA reports
  * so a short transfer fails instead of passing. The HBA performs the DMA; the
@@ -796,15 +832,15 @@ static int ahci_io_error(void)
  * anywhere, and gets an entry per page with the page's physical address,
  * up to the eight the table holds. Returns 0 on success, `-EIO` on error,
  * expiry, or a buffer the table cannot describe. */
-static int ahci_run_command(uint8_t command, uint64_t lba, uint32_t count, volatile uint8_t *buf,
-                            uint32_t bytes, int write)
+static int ahci_run_command(struct ahci_disk *d, uint8_t command, uint64_t lba, uint32_t count,
+                            volatile uint8_t *buf, uint32_t bytes, int write)
 {
-    volatile ahci_cmd_header_t *hdr = (volatile ahci_cmd_header_t *)ahci_cmdlist;
-    volatile ahci_h2d_fis_t *fis = (volatile ahci_h2d_fis_t *)ahci_cmdtable;
-    volatile ahci_prdt_t *prdt = (volatile ahci_prdt_t *)(ahci_cmdtable + AHCI_PRDT_OFFSET);
-    uint32_t ci_off = ahci_port_off(ahci_port, AHCI_PxCI);
-    uint32_t tfd_off = ahci_port_off(ahci_port, AHCI_PxTFD);
-    uint32_t is_off = ahci_port_off(ahci_port, AHCI_PxIS);
+    volatile ahci_cmd_header_t *hdr = (volatile ahci_cmd_header_t *)d->cmdlist;
+    volatile ahci_h2d_fis_t *fis = (volatile ahci_h2d_fis_t *)d->cmdtable;
+    volatile ahci_prdt_t *prdt = (volatile ahci_prdt_t *)(d->cmdtable + AHCI_PRDT_OFFSET);
+    uint32_t ci_off = ahci_port_off(d->port, AHCI_PxCI);
+    uint32_t tfd_off = ahci_port_off(d->port, AHCI_PxTFD);
+    uint32_t is_off = ahci_port_off(d->port, AHCI_PxIS);
     uint32_t prdtl = 0;
     uint32_t spin;
 
@@ -816,7 +852,7 @@ static int ahci_run_command(uint8_t command, uint64_t lba, uint32_t count, volat
         return -1;
     }
 
-    ahci_zero(ahci_cmdtable, AHCI_CMDTABLE_SIZE);
+    ahci_zero(d->cmdtable, AHCI_CMDTABLE_SIZE);
 
     fis->fis_type = AHCI_FIS_H2D;
     fis->pmport_c = AHCI_FIS_H2D_C;
@@ -869,11 +905,11 @@ static int ahci_run_command(uint8_t command, uint64_t lba, uint32_t count, volat
 
     hdr->dw0 = AHCI_CFL_DWORDS | (write ? AHCI_CMD_W : 0u) | prdtl;
     hdr->prdbc = 0;
-    hdr->ctba = (uint32_t)(uintptr_t)ahci_cmdtable;
+    hdr->ctba = (uint32_t)(uintptr_t)d->cmdtable;
     hdr->ctbau = 0;
 
-    ahci_dma_sync(ahci_cmdtable, AHCI_CMDTABLE_SIZE);
-    ahci_dma_sync(ahci_cmdlist, sizeof(ahci_cmd_header_t));
+    ahci_dma_sync(d->cmdtable, AHCI_CMDTABLE_SIZE);
+    ahci_dma_sync(d->cmdlist, sizeof(ahci_cmd_header_t));
     if (write && bytes > 0) {
         ahci_dma_sync(buf, bytes);
     }
@@ -882,7 +918,7 @@ static int ahci_run_command(uint8_t command, uint64_t lba, uint32_t count, volat
     spin = AHCI_CMD_STEPS;
     while (ahci_read32(tfd_off) & (AHCI_PxTFD_BSY | AHCI_PxTFD_DRQ)) {
         if (--spin == 0) {
-            return ahci_io_error();
+            return ahci_io_error(d);
         }
         k_udelay(AHCI_CMD_POLL_US);
     }
@@ -897,10 +933,10 @@ static int ahci_run_command(uint8_t command, uint64_t lba, uint32_t count, volat
     spin = AHCI_CMD_STEPS;
     while (ahci_read32(ci_off) & (1u << AHCI_SLOT)) {
         if (ahci_read32(is_off) & AHCI_PxIS_FATAL) {
-            return ahci_io_error();
+            return ahci_io_error(d);
         }
         if (--spin == 0) {
-            return ahci_io_error();
+            return ahci_io_error(d);
         }
         k_udelay(AHCI_CMD_POLL_US);
     }
@@ -908,16 +944,16 @@ static int ahci_run_command(uint8_t command, uint64_t lba, uint32_t count, volat
        post-loop check tests both: a fatal interrupt or a task-file ERR/DF. */
     if ((ahci_read32(is_off) & AHCI_PxIS_FATAL) ||
         (ahci_read32(tfd_off) & (AHCI_PxTFD_ERR | AHCI_PxTFD_DF))) {
-        return ahci_io_error();
+        return ahci_io_error(d);
     }
 
     /* The HBA counts the bytes it moved into `prdbc`. A completion that moved
        fewer than requested without raising an error would otherwise pass, and a
        short write that pc_sync then marks clean is silent data loss. */
     if (bytes > 0) {
-        ahci_dma_sync(ahci_cmdlist, sizeof(ahci_cmd_header_t));
+        ahci_dma_sync(d->cmdlist, sizeof(ahci_cmd_header_t));
         if (hdr->prdbc != bytes) {
-            return ahci_io_error();
+            return ahci_io_error(d);
         }
     }
 
@@ -927,89 +963,104 @@ static int ahci_run_command(uint8_t command, uint64_t lba, uint32_t count, volat
     return 0;
 }
 
-/** IDENTIFY the device and record the 48-bit sector count (words 100-103).
+/* The last IDENTIFY answer, which the registry reads the strings from. */
+static volatile uint8_t ahci_idbuf[BLOCK_SECTOR_SIZE] __attribute__((aligned(2)));
+
+/** IDENTIFY `d` and record its 48-bit sector count (words 100-103).
    Rejects a device whose logical sector is not 512 bytes (IDENTIFY word 106
    bit 14 valid, bit 12 set), which the block math needs. Returns 0 on success,
    -1 on a failed IDENTIFY or a bad device. */
-static int ahci_identify(void)
+static int ahci_identify(struct ahci_disk *d)
 {
-    static volatile uint8_t idbuf[BLOCK_SECTOR_SIZE] __attribute__((aligned(2)));
-    volatile uint16_t *w = (volatile uint16_t *)idbuf;
+    volatile uint16_t *w = (volatile uint16_t *)ahci_idbuf;
 
-    if (ahci_run_command(ATA_IDENTIFY, 0, 0, idbuf, BLOCK_SECTOR_SIZE, 0) != 0) {
+    if (ahci_run_command(d, ATA_IDENTIFY, 0, 0, ahci_idbuf, BLOCK_SECTOR_SIZE, 0) != 0) {
+        ahci_err = "the device did not answer IDENTIFY";
         return -1;
     }
     if ((w[106] & 0x4000u) != 0 && (w[106] & 0x1000u) != 0) {
+        ahci_err = "the device's logical sector is not 512 bytes";
         return -1;
     }
-    ahci_sector_count = (uint64_t)w[100] | ((uint64_t)w[101] << 16) | ((uint64_t)w[102] << 32) |
-                        ((uint64_t)w[103] << 48);
-    if (ahci_sector_count == 0) {
+    d->sectors = (uint64_t)w[100] | ((uint64_t)w[101] << 16) | ((uint64_t)w[102] << 32) |
+                 ((uint64_t)w[103] << 48);
+    if (d->sectors == 0) {
         ahci_err = "the device reported no sectors";
         return -1;
     }
     /* An all-ones capacity is a device that did not answer, not a 281 TB
      * disk: the field is 48 bits, so the top 16 must be zero, and a driver
      * that accepted it would truncate every LBA it later computed. */
-    if ((ahci_sector_count >> 48) != 0 || ahci_sector_count == 0xFFFFFFFFFFFFull) {
+    if ((d->sectors >> 48) != 0 || d->sectors == 0xFFFFFFFFFFFFull) {
         ahci_err = "the device reported an impossible capacity";
         return -1;
     }
-    diskinfo_record_identify("ahci", ahci_port, w, ahci_sector_count);
     return 0;
 }
 
 /** Flush the device write cache so a completed write reaches durable media,
    the durability the dirty-flag and pc_sync write-back contract relies on. */
-static int ahci_flush(void)
+static int ahci_flush(struct ahci_disk *d)
 {
-    return ahci_run_command(ATA_FLUSH_EXT, 0, 0, 0, 0, 0);
+    return ahci_run_command(d, ATA_FLUSH_EXT, 0, 0, 0, 0, 0);
 }
 
-/** block0->read: a polled READ DMA EXT of `count` sectors from `lba`. */
+/** The device's read: a polled READ DMA EXT of `count` sectors from `lba`. */
 static int ahci_read(block_device_t *device, uint64_t lba, uint32_t count, void *buffer)
 {
+    struct ahci_disk *d = (struct ahci_disk *)device->drvdata;
+
     if (count == 0 || lba > device->sector_count || count > device->sector_count - lba ||
         count > AHCI_MAX_SECTORS_PER_CMD) {
         return -EIO;
     }
-    return ahci_run_command(ATA_READ_DMA_EXT, lba, count, (volatile uint8_t *)buffer,
+    return ahci_run_command(d, ATA_READ_DMA_EXT, lba, count, (volatile uint8_t *)buffer,
                             count * BLOCK_SECTOR_SIZE, 0);
 }
 
 /**
- * `block0->write`: a polled `WRITE DMA EXT`, then `FLUSH CACHE EXT` for
+ * The device's write: a polled `WRITE DMA EXT`, then `FLUSH CACHE EXT` for
  * durability.
  */
 static int ahci_write(block_device_t *device, uint64_t lba, uint32_t count, const void *buffer)
 {
+    struct ahci_disk *d = (struct ahci_disk *)device->drvdata;
     int rc;
 
     if (count == 0 || lba > device->sector_count || count > device->sector_count - lba ||
         count > AHCI_MAX_SECTORS_PER_CMD) {
         return -EIO;
     }
-    rc = ahci_run_command(ATA_WRITE_DMA_EXT, lba, count, (volatile uint8_t *)(uintptr_t)buffer,
-                          count * BLOCK_SECTOR_SIZE, 1);
+    rc = ahci_run_command(d, ATA_WRITE_DMA_EXT, lba, count,
+                          (volatile uint8_t *)(uintptr_t)buffer, count * BLOCK_SECTOR_SIZE, 1);
     if (rc != 0) {
         return rc;
     }
-    return ahci_flush();
+    return ahci_flush(d);
 }
 
-static block_device_t ahci_device;
-
+/**
+ * Bring the controller up and publish every disk on it.
+ *
+ * Each port the scan kept is started and identified in port order; one that
+ * fails is stopped and left, with a record, and the rest go on. The first
+ * that answers is `block0`. The whole probe fails only when no port ends up
+ * with a disk, so a machine whose second bay holds a dead drive still boots
+ * from its first.
+ */
 int ahci_init(void)
 {
+    int i, published = 0;
+
     /* Leave the published device unset until bring-up succeeds, so a failed
      * probe fails closed regardless of caller (mirrors ata_init). */
     block0 = 0;
     ahci_base = 0;
     ahci_port = -1;
-    ahci_sector_count = 0;
+    ahci_ndisks = 0;
     ahci_detect_cache();
     if (ahci_discover() != 0 || ahci_hba_own() != 0 || ahci_quiesce_ports() != 0 ||
-        ahci_select_port() != 0 || ahci_port_start() != 0 || ahci_identify() != 0) {
+        ahci_select_port() != 0) {
         klog(KLOG_ERR, "ahci", "unusable: %s", ahci_err);
         /* The registers behind the refusal, into the log the machine hands
          * out afterwards (/dev/bootlog): one failed boot then leaves enough
@@ -1021,17 +1072,34 @@ int ahci_init(void)
         return -1;
     }
 
-    ahci_device.sector_size = BLOCK_SECTOR_SIZE;
-    ahci_device.sector_count = ahci_sector_count;
-    ahci_device.flags = BLOCK_FAULT_SAFE;
-    ahci_device.read = ahci_read;
-    ahci_device.write = ahci_write;
-    ahci_device.drvdata = 0;
-    block0 = &ahci_device;
+    for (i = 0; i < ahci_ndisks; i++) {
+        struct ahci_disk *d = &ahci_disks[i];
 
-    klog(KLOG_INFO, "ahci", "port %d: %d sectors, %d MiB", ahci_port,
-         (uint32_t)ahci_sector_count,
-                  (uint32_t)(ahci_sector_count / 2048));
+        if (ahci_port_start(d) != 0 || ahci_identify(d) != 0) {
+            klog(KLOG_ERR, "ahci", "port %d: unusable: %s", d->port, ahci_err);
+            (void)ahci_port_stop(d->port);
+            continue;
+        }
+        d->dev.sector_size = BLOCK_SECTOR_SIZE;
+        d->dev.sector_count = d->sectors;
+        d->dev.flags = BLOCK_FAULT_SAFE;
+        d->dev.read = ahci_read;
+        d->dev.write = ahci_write;
+        d->dev.drvdata = d;
+        if (!block0) {
+            block0 = &d->dev;
+            ahci_port = d->port;
+        }
+        disk_register(&d->dev, "ahci", d->port, (volatile uint16_t *)ahci_idbuf);
+        klog(KLOG_INFO, "ahci", "port %d: %d sectors, %d MiB", d->port, (uint32_t)d->sectors,
+             (uint32_t)(d->sectors / 2048));
+        published++;
+    }
+    if (published == 0) {
+        klog(KLOG_ERR, "ahci", "unusable: no port's disk answered");
+        ahci_dump();
+        return -1;
+    }
     return 0;
 }
 
@@ -1058,8 +1126,12 @@ void ahci_dump(void)
     console_printf("ahci: CAP2=%X BOHC=%X PCS=%X\n", ahci_read32(AHCI_CAP2), ahci_read32(AHCI_BOHC),
                   (unsigned)pci_read_config16(ahci_pci.bus, ahci_pci.device, ahci_pci.function,
                                               AHCI_INTEL_PCS));
-    console_printf("ahci: dma cmdlist=%X fis=%X table=%X\n", (uint32_t)(uintptr_t)ahci_cmdlist,
-                  (uint32_t)(uintptr_t)ahci_recv_fis, (uint32_t)(uintptr_t)ahci_cmdtable);
+    for (port = 0; port < ahci_ndisks; ++port) {
+        console_printf("ahci: port %d dma cmdlist=%X fis=%X table=%X\n", ahci_disks[port].port,
+                      (uint32_t)(uintptr_t)ahci_disks[port].cmdlist,
+                      (uint32_t)(uintptr_t)ahci_disks[port].recv_fis,
+                      (uint32_t)(uintptr_t)ahci_disks[port].cmdtable);
+    }
 
     for (port = 0; port < 32; ++port) {
         uint32_t ssts, sig, tfd, cmd, clb;
