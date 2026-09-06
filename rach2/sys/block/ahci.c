@@ -1059,8 +1059,11 @@ int ahci_init(void)
     ahci_port = -1;
     ahci_ndisks = 0;
     ahci_detect_cache();
-    if (ahci_discover() != 0 || ahci_hba_own() != 0 || ahci_quiesce_ports() != 0 ||
-        ahci_select_port() != 0) {
+    if (ahci_discover() != 0) {
+        klog(KLOG_INFO, "ahci", "none: %s", ahci_err);
+        return -1;
+    }
+    if (ahci_hba_own() != 0 || ahci_quiesce_ports() != 0 || ahci_select_port() != 0) {
         klog(KLOG_ERR, "ahci", "unusable: %s", ahci_err);
         /* The registers behind the refusal, into the log the machine hands
          * out afterwards (/dev/bootlog): one failed boot then leaves enough

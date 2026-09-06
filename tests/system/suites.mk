@@ -1394,6 +1394,11 @@ PARTS_DIR = $(IMAGES_DIR)/parts
 run-parts: rach2 tests krffs test-image $(MKMBR) $(MKGPT) $(OS_SIMPLE_EXT2) $(HARNESS)
 	sh tests/system/suites/parts.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(MKMBR) $(MKGPT) \
 	    $(OS_SIMPLE_EXT2) $(PARTS_DIR)
+# `tests/run bus`: four IDE drives on both channels, an AHCI and an IDE disk
+# together with the root on each in turn, and a disk past 128 GiB.
+BUS_DIR = $(IMAGES_DIR)/bus
+run-bus: rach2 tests krffs test-image $(MKMBR) $(HARNESS)
+	sh tests/system/suites/bus.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(MKMBR) $(BUS_DIR)
 run-persist-ahci: rach2 tests krffs $(HARNESS)
 	$(MKDISK) krffs/manifests/persist-test.manifest $(PERSIST_AHCI_DISK) 64 48
 	$(HARNESS) --kernel build/rach2/kernel \

@@ -124,15 +124,14 @@ int block_probe(void)
         return -1;
     }
     klog(KLOG_INFO, "block", "started");
-    /* With rach2.disk=ahci, prefer the AHCI HBA and fall back to ATA if none
-       answered; otherwise use ATA, so every existing IDE image boots exactly as
-       before. kcmdline_has matches whole tokens, so the flag never collides
-       with rach2.fsdisk. Both drivers publish block0 themselves. */
-    if (kcmdline_has("rach2.disk=ahci") && ahci_init() == 0) {
-        block_scan_disks();
-        return 0;
-    }
-    if (ata_init() != 0) {
+    /* Both drivers probe, AHCI first, so a machine with a SATA disk and an
+       IDE one has both, and the first disk found is `block0`. Each driver
+       registers what it finds; `rach2.disk=ahci` is accepted for the boot
+       lines that have it and changes nothing. */
+    block0 = 0;
+    (void)ahci_init();
+    (void)ata_init();
+    if (!block0) {
         return -1;
     }
     block_scan_disks();
