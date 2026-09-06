@@ -209,6 +209,7 @@ struct block_request {
     uint32_t deadline;     /* tick at which the wait gives up */
     int held_by_caller;    /* until the caller has read the answer or given up */
     int held_by_device;    /* until the device has answered */
+    uint32_t taken_us;     /* when it was taken, for the completion's delay */
 };
 
 #define BLOCK_REQ_SECTORS 8u

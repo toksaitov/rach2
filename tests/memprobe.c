@@ -81,6 +81,13 @@ static int syscall3(int n, int a, int b, int c)
     return r;
 }
 
+static int syscall4(int n, int a, int b, int c, int d)
+{
+    int r;
+    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c), "S"(d) : "memory");
+    return r;
+}
+
 static unsigned sys_mmap2_anon(unsigned len)
 {
     unsigned result;
@@ -223,7 +230,7 @@ static void run_fresh(void)
     for (i = 0; i < len / PAGE; i++) {
         const unsigned *p = (const unsigned *)(base + i * PAGE);
 
-        for (w = 0; w < PAGE / 4; w += 64) {
+        for (w = 0; w < PAGE / 4; w++) {
             if (p[w] != 0) {
                 sys_exit(3);
             }
@@ -300,20 +307,22 @@ static void run_fail(void)
         if (free_now + 64 < baseline || free_now > baseline + 64) {
             fail("memory leaked or was freed twice around a fork");
         }
-        arm(n);
         pid = syscall1(SYS_FORK, 0);
         if (pid == 0) {
             char *args[3];
 
+            /* Armed by the child itself, just before its exec: armed by the
+               parent, the count would be the parent's to disarm, and whether
+               the exec saw it would depend on which of the two ran first. */
+            arm(n);
             args[0] = (char *)"memprobe";
             args[1] = (char *)"fresh";
             args[2] = 0;
             status = syscall3(SYS_EXECVE, (int)(size_t)"/memprobe", (int)(size_t)args, 0);
             sys_exit(status == -ENOMEM ? 7 : 5);
         }
-        arm(0);
-        if (pid < 0 && pid != -ENOMEM) {
-            fail("a fork before an exec did not answer ENOMEM");
+        if (pid < 0) {
+            fail("the fork before an exec failed");
         }
         if (pid > 0) {
             status = wait_status(pid);
@@ -351,7 +360,9 @@ static void run_hog(void)
     act[2] = 0;
     act[3] = 0;
     act[4] = 0;
-    syscall3(SYS_RT_SIGACTION, SIGHUP, (int)(size_t)act, 0);
+    if (syscall4(SYS_RT_SIGACTION, SIGHUP, (int)(size_t)act, 0, 8) != 0) {
+        fail("ignoring SIGHUP");
+    }
     for (;;) {
         unsigned base = sys_mmap2_anon(1u << 20);
         unsigned off;

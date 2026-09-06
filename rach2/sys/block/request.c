@@ -33,10 +33,12 @@
 #include "../klog.h"
 #include "../kio.h"
 #include "../lib/kerrno.h"
+#include "../latency.h"
 #include "../lib/kstring.h"
 #include "../mm/kheap.h"
 #include "../mm/paging.h"
 #include "../panic.h"
+#include "../pit.h"
 #include "../proc/process.h"
 #include "../proc/wait_queue.h"
 
@@ -256,6 +258,7 @@ static struct block_request *req_take(block_device_t *device, int write, uint64_
 {
     block_device_t *owner = block_submitter(device);
     int waited = 0;
+    uint32_t wait_from = pit_now_us();
 
     block_request_init();
     for (;;) {
@@ -289,6 +292,10 @@ static struct block_request *req_take(block_device_t *device, int write, uint64_
             r->generation = ++next_generation;
             r->deadline = req_ticks + (device->deadline_ticks ? device->deadline_ticks
                                                               : REQ_DEFAULT_DEADLINE);
+            r->taken_us = pit_now_us();
+            if (waited) {
+                latency_note(LAT_DISK_WAIT, r->taken_us - wait_from);
+            }
             irq_restore(flags);
             return r;
         }
@@ -558,6 +565,7 @@ void block_request_complete(struct block_request *request, uint32_t generation, 
     }
     request->status = status;
     request->state = BLOCK_REQ_DONE;
+    latency_note(LAT_DISK, pit_now_us() - request->taken_us);
     req_let_go(request, 0);
     irq_restore(flags);
     wq_wake_all(&pool_wq);

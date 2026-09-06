@@ -55,7 +55,7 @@ host|-|full
 dgram|qemu-system-i386|core
 dgram-e1000|qemu-system-i386|full
 e1000|qemu-system-i386,ssh|core
-ssh|qemu-system-i386,ssh|core
+ssh|qemu-system-i386,ssh,nc|core
 diskdiag|qemu-system-i386,ssh|full
 ssh-e1000|qemu-system-i386,ssh|full
 grub|qemu-system-i386,mformat,mmd,mcopy,mshowfat|core
@@ -78,6 +78,7 @@ fault|qemu-system-i386|core
 fpu|qemu-system-i386|core
 memory|qemu-system-i386|core
 pools|qemu-system-i386|core
+load|qemu-system-i386,mformat|full
 reset|qemu-system-i386|core
 runner|-|core
 imagerace|-|full

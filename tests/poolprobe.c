@@ -1,15 +1,16 @@
 /**
- * The former pools, crossed: pipes, ptys and sockets past the sixteen each
- * used to have, and the heap where it started after a thousand of each.
+ * The pools that were: pipes, ptys and sockets past the sixteen each used
+ * to have, and the heap where it started after a thousand of each.
  *
- * Eight children each open six pipes, which is twelve of a process's
- * sixteen descriptors, then five pty masters, then six datagram sockets,
- * and hold them while they tell the parent through one shared pipe that
- * they have them; the parent reads the eight bytes before any child lets
- * go, so forty-eight pipes, forty ptys and forty-eight sockets are live at
- * once, three times the old sixteen; and each child forks four children of
- * its own that sleep, forty processes with the parent and the shell, past
- * the sixteen the process table held. Then the parent opens and
+ * Eight children each open six pipes, then five pty masters, then six
+ * datagram sockets, and hold them while they tell the parent through one
+ * shared pipe that they have them; each then waits for the parent's word
+ * before letting go, and the parent gives it only after all eight have
+ * reported, so forty-eight pipes, forty ptys and forty-eight sockets are
+ * live at once, three times the old sixteen; and each child forks four
+ * children of its own that wait for the same word, forty processes with
+ * the parent and the shell, past the sixteen the process table held. Then
+ * the parent opens and
  * closes a pipe, a pty and a socket a thousand times each, and the heap's
  * `HeapUsed` in `/proc/meminfo` must be what it was before, with
  * `HeapPages` within two pages of it, so nothing leaked.
@@ -142,6 +143,15 @@ static unsigned meminfo(const char *key)
     return 0xFFFFFFFFu;
 }
 
+static int ack_fd = -1; /* the parent's word that every holder has reported */
+
+static void wait_for_word(void)
+{
+    char byte;
+
+    syscall3(SYS_READ, ack_fd, (int)(size_t)&byte, 1);
+}
+
 /* A child: `kind` objects opened and held while the parent counts. */
 static void hold(int kind, int count, int report)
 {
@@ -171,7 +181,7 @@ static void hold(int kind, int count, int report)
                 sys_exit(3);
             }
             if (pid == 0) {
-                sleep_ms(800);
+                wait_for_word();
                 sys_exit(0);
             }
             fd = pid;
@@ -182,7 +192,7 @@ static void hold(int kind, int count, int report)
         fds[kind == 0 ? i * 2 : i] = fd;
     }
     syscall3(SYS_WRITE, report, (int)(size_t)"h", 1);
-    sleep_ms(800);
+    wait_for_word();
     if (kind == 3) {
         for (i = 0; i < count; i++) {
             int status;
@@ -196,14 +206,17 @@ static void hold(int kind, int count, int report)
 static void crossed(int kind, int per_child, const char *what)
 {
     int report[2];
+    int ack[2];
     int pids[8];
     int i;
     char byte;
 
     report[0] = report[1] = -1;
-    if (syscall1(SYS_PIPE, (int)(size_t)report) != 0) {
+    ack[0] = ack[1] = -1;
+    if (syscall1(SYS_PIPE, (int)(size_t)report) != 0 || syscall1(SYS_PIPE, (int)(size_t)ack) != 0) {
         fail("the report pipe");
     }
+    ack_fd = ack[0];
     for (i = 0; i < 8; i++) {
         pids[i] = syscall1(SYS_FORK, 0);
         if (pids[i] < 0) {
@@ -211,13 +224,20 @@ static void crossed(int kind, int per_child, const char *what)
         }
         if (pids[i] == 0) {
             syscall1(SYS_CLOSE, report[0]);
+            syscall1(SYS_CLOSE, ack[1]);
             hold(kind, per_child, report[1]);
         }
     }
+    syscall1(SYS_CLOSE, report[1]); /* a holder that dies unheard is end of input */
     for (i = 0; i < 8; i++) {
         if (syscall3(SYS_READ, report[0], (int)(size_t)&byte, 1) != 1 || byte != 'h') {
             fail(what);
         }
+    }
+    /* Every holder has reported: the word to let go, one byte per waiter,
+       the holders and their children. */
+    for (i = 0; i < 8 * (1 + (kind == 3 ? per_child : 0)); i++) {
+        syscall3(SYS_WRITE, ack[1], (int)(size_t)"g", 1);
     }
     for (i = 0; i < 8; i++) {
         int status = -1;
@@ -227,7 +247,9 @@ static void crossed(int kind, int per_child, const char *what)
         }
     }
     syscall1(SYS_CLOSE, report[0]);
-    syscall1(SYS_CLOSE, report[1]);
+    syscall1(SYS_CLOSE, ack[0]);
+    syscall1(SYS_CLOSE, ack[1]);
+    ack_fd = -1;
 }
 
 static void cycle(int kind, const char *what)

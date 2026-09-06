@@ -11,6 +11,8 @@
  */
 
 #include "tty.h"
+#include "../latency.h"
+#include "../pit.h"
 
 #include "../usb/usb.h"
 #include "../io/poll.h"
@@ -146,6 +148,9 @@ void tty_input_char(struct tty *t, unsigned char c)
         tty_deliver_signal(t, signo);
     }
     if (n_tty_readable(&t->ldisc)) {
+        if (t->ready_us == 0) {
+            t->ready_us = pit_now_us();
+        }
         wq_wake_all(&t->input_wq);
     }
 }
@@ -207,6 +212,10 @@ int tty_read(struct tty *t, unsigned char *kbuf, int count, int nonblock)
         flags = kirq_save();
         if (n_tty_readable(&t->ldisc)) {
             n = n_tty_read(&t->ldisc, kbuf, count);
+            if (t->ready_us) {
+                latency_note(LAT_CONSOLE, pit_now_us() - t->ready_us);
+                t->ready_us = 0;
+            }
             kirq_restore(flags);
             /* Where a reader first has the byte, which is the last of the
              * four stamps the USB latency record prints. A byte from

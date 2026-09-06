@@ -96,6 +96,13 @@ fail() {
     exit 1
 }
 
+# A line for the feed to type at the console, published whole: written
+# beside the file the feed takes and renamed into place.
+type_line() {
+    printf '%s\n' "$1" > "$FEED.type.new"
+    mv "$FEED.type.new" "$FEED.type"
+}
+
 wait_token() {
     i=0
     while [ "$i" -lt "$2" ]; do
@@ -140,9 +147,11 @@ QPID=$!
     while [ "$held" -lt 600 ] && kill -0 "$QPID" 2>/dev/null; do
         # Lines a later row wants typed at the console arrive in a file, so
         # the feed's script can stay a script.
-        if [ -f "$FEED.type" ]; then
-            cat "$FEED.type"
-            rm -f "$FEED.type"
+        # Taken by a rename first, so a line being written is never read
+        # half or deleted unread.
+        if [ -f "$FEED.type" ] && mv "$FEED.type" "$FEED.taken" 2>/dev/null; then
+            cat "$FEED.taken"
+            rm -f "$FEED.taken"
         fi
         sleep 1
         held=$((held + 1))
@@ -322,22 +331,34 @@ require_denied "$OUT" "root's password attempt"
 FLOOD=""
 i=0
 while [ "$i" -lt 40 ]; do
-    (sleep 60 | nc localhost "$PORT" >/dev/null 2>&1) &
+    (sleep 300 | nc localhost "$PORT" >/dev/null 2>&1) &
     FLOOD="$FLOOD $!"
     i=$((i + 1))
 done
 sleep 5
-printf 'exit\n' > "$FEED.type"
+# The flood is real before it is relied on: the guest's own count of
+# established connections, typed at the console session about to end.
+type_line 'netstat -tn 2>/dev/null | grep -c ESTABLISHED; echo FLOOD""COUNT'
+if ! wait_token "FLOODCOUNT" 30; then
+    for p in $FLOOD; do kill "$p" 2>/dev/null; done
+    fail "the console did not answer while the flood was on"
+fi
+established=$(tr -d '\r' < "$LOG" | grep -B1 'FLOODCOUNT' | head -1 | tr -dc '0-9')
+if [ "${established:-0}" -lt 30 ]; then
+    for p in $FLOOD; do kill "$p" 2>/dev/null; done
+    fail "the flood held ${established:-0} connections, fewer than the thirty dropbear allows"
+fi
+type_line 'exit'
 if ! wait_token "rach2 login: .*rach2 login:" 30 && ! [ "$(grep -c 'rach2 login:' "$LOG")" -ge 2 ]; then
     for p in $FLOOD; do kill "$p" 2>/dev/null; done
     fail "the console did not come back to a login prompt under the flood"
 fi
 sleep 2
-printf 'root\n' > "$FEED.type"
+type_line 'root'
 sleep 4
-printf '%s\n' "$PASSWORD" > "$FEED.type"
+type_line "$PASSWORD"
 sleep 4
-printf 'id; echo FLOOD""LOGIN\n' > "$FEED.type"
+type_line 'id; echo FLOOD""LOGIN'
 if ! wait_token "FLOODLOGIN" 40 || ! grep -q 'uid=0' "$LOG"; then
     for p in $FLOOD; do kill "$p" 2>/dev/null; done
     fail "root could not log in on the console under a connection flood"

@@ -171,8 +171,8 @@ int main(void)
         CHECK(vm_find(&s, 0xBFFFE000u) != NULL && vm_find(&s, 0xBF900000u) != NULL);
         CHECK(vm_find(&s, 0xBF8FF000u) == NULL); /* stack did not jump the region */
         /* Growth counts against an address-space limit: with the regions at
-           two pages, a limit of three pages allows one page of growth and
-           refuses the next. */
+           three pages, a limit of four allows one page of growth and refuses
+           the next. */
         CHECK(vm_total(&s) == 3 * PG);
         CHECK(vm_grow_stack(&s, 0xBFFFD000u, 4 * PG) == 1);
         CHECK(vm_grow_stack(&s, 0xBFFFC000u, 4 * PG) == 0);

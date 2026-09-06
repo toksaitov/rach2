@@ -967,7 +967,7 @@ static void refusal_rows(void)
           "an inode table at block zero is refused by name");
 
     /* Two hundred nodes held at once, past the sixty-four the pool once
-       had, each looked up again the node it is. */
+       had, and one of them looked up again is the node it is. */
     bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
     use_image(img, bytes);
     check(mount_image() == 0, "the volume mounts for the node row");
@@ -988,11 +988,14 @@ static void refusal_rows(void)
         }
         check(took == 200, "two hundred files are held at once");
         if (many) {
-            void *node;
+            void *node = 0;
 
-            check(OPS->lookup(&mnt, many, "file150.txt", &node) == 0 && node == held[150],
-                  "a held name looked up again is the held node");
-            OPS->put(&mnt, node);
+            if (took > 150 && OPS->lookup(&mnt, many, "file150.txt", &node) == 0) {
+                check(node == held[150], "a held name looked up again is the held node");
+                OPS->put(&mnt, node);
+            } else {
+                check(0, "a held name looked up again is the held node");
+            }
             for (i = 0; i < took; i++) {
                 OPS->put(&mnt, held[i]);
             }

@@ -37,6 +37,7 @@
 #include "sys/rtc.h"
 #include "sys/fs/krffs.h"
 #include "sys/pit.h"
+#include "sys/latency.h"
 #include "sys/kbd.h"
 #include "sys/input.h"
 #include "sys/mouse.h"
@@ -315,6 +316,7 @@ static void timer_handler(isr_params_t *params)
     /* The microsecond clock's periods are this tick's to count; see
        `pit_now_us`. */
     pit_tick_clock();
+    latency_tick();
     if (++kernel_second_ticks >= 100) {
         kernel_second_ticks = 0;
         ++kernel_uptime_seconds;

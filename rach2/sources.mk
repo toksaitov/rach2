@@ -63,6 +63,7 @@ C_SRC = kernel.c \
         sys/mm/paging.c \
         sys/mm/kheap.c \
         sys/mm/pressure.c \
+        sys/latency.c \
         sys/mm/usercopy.c \
         sys/mm/vm.c \
         sys/mm/frame.c \

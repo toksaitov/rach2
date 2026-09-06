@@ -1090,6 +1090,12 @@ run-mount: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(MKFIXTURE)
 	sh tests/system/suites/mount.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(MOUNT_DISK) \
 	    $(OS_REAL_IMAGE) "`cat krffs/rach2_demo_password`"
 
+# `tests/run load`: the machine under load for twenty seconds and the
+# longest delays it saw, from `/proc/stat`, within their bounds.
+LOAD_DISK = $(IMAGES_DIR)/load-test.disk
+run-load: rach2 tests krffs test-image $(MKMBR) $(HARNESS)
+	sh tests/system/suites/load.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(LOAD_DISK)
+
 # `tests/run fatwrite`: FAT32 written from a program, read back after a
 # reboot, judged by the host's walk and mtools, taken through a crash and its
 # repair, written from BusyBox, and written by two processes under the lag.

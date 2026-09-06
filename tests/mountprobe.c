@@ -62,17 +62,19 @@ typedef unsigned int size_t;
 #define MNT_FORCE       1
 #define MNT_DETACH      2
 
-#define EPERM        1
-#define ENOENT       2
-#define EACCES       13
-#define EMFILE       24
-#define EBADF        9
-#define EBUSY        16
-#define EXDEV        18
-#define ENOTDIR      20
-#define EINVAL       22
-#define EROFS        30
-#define ENAMETOOLONG 36
+#define EPERM         1
+#define ENOENT        2
+#define EACCES        13
+#define EMFILE        24
+#define SYS_PRLIMIT64 340
+#define RLIMIT_NOFILE 7
+#define EBADF         9
+#define EBUSY         16
+#define EXDEV         18
+#define ENOTDIR       20
+#define EINVAL        22
+#define EROFS         30
+#define ENAMETOOLONG  36
 
 #define STATFS_MAGIC_VFAT 0x4d44
 
@@ -705,12 +707,14 @@ static void rows_claim(void)
 }
 
 /* The unmount record counts descriptions, not descriptors: one open and
-   three duplicates, then a duplication refused past the limit, end in a
-   record of one open and one release, read back from the kernel log. */
+   three duplicates, then a duplication that fails on a table filled to a
+   limit of sixteen and one refused past the limit, end in a record of one
+   open and one release, read back from the kernel log. */
 static void rows_record(void)
 {
     static char log[16384 + 1];
-    int fd, i, n;
+    unsigned rl[4];
+    int fd, d, filler[16], nfill = 0, i, n;
     static const char want[] = "unmounted " MNT ": 1 opens, 1 releases";
 
     if (do_mount(SRC, MNT, MS_RDONLY, 0) != 0) {
@@ -724,8 +728,26 @@ static void rows_record(void)
         sys3(SYS_FCNTL, fd, F_DUPFD, 3) < 3) {
         fail("the duplicates for the record row");
     }
+    /* The descriptor limit lowered to sixteen, the table filled to it, and a
+       duplication that must fail there without taking a reference. */
+    rl[0] = 16;
+    rl[1] = 0;
+    rl[2] = 1024;
+    rl[3] = 0;
+    if (sys4(SYS_PRLIMIT64, 0, RLIMIT_NOFILE, (int)(size_t)rl, 0) != 0) {
+        fail("lowering the descriptor limit to sixteen");
+    }
+    while (nfill < 16 && (d = sys3(SYS_OPEN, (int)"/dev/null", O_RDONLY, 0)) >= 0) {
+        filler[nfill++] = d;
+    }
+    if (sys1(SYS_DUP, fd) != -EMFILE) {
+        fail("dup on a table at its limit is EMFILE");
+    }
     if (sys2(SYS_DUP2, fd, 1024) != -EBADF) {
         fail("dup2 past the limit is EBADF");
+    }
+    for (i = 0; i < nfill; i++) {
+        sys1(SYS_CLOSE, filler[i]);
     }
     for (i = 3; i < 16; i++) {
         sys1(SYS_CLOSE, i);

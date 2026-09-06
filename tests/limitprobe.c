@@ -7,7 +7,8 @@
  * and a hard value the soft may be raised to. The probe runs as root and
  * proves, one child at a time: the limits read back as the table's; a
  * descriptor limit of eight refuses the ninth open with `EMFILE` and a
- * `dup2` onto a number past it with `EBADF`, and an
+ * `dup2` onto a number past it with `EBADF`, a child forked under a limit
+ * reads that limit, and an
  * address-space limit of eight megabytes refuses a larger mapping with
  * `ENOMEM` and leaves the break where it was; a hard limit raised by a
  * user is refused with `EPERM` while a lowering and root's raising are
@@ -148,6 +149,9 @@ static int wait_status(int pid)
     if (syscall3(SYS_WAITPID, pid, (int)(size_t)&status, 0) != pid) {
         return -1;
     }
+    if ((status & 0x7f) != 0) {
+        return 128 + (status & 0x7f); /* ended by a signal: never an answer */
+    }
     return (status >> 8) & 0xff;
 }
 
@@ -259,7 +263,7 @@ static int body_hard(void)
 static int report_fd = -1;
 
 /* Uid 1000 with four processes allowed: three forks succeed and the fourth
-   is EAGAIN; the parent is told when the family stands. */
+   is EAGAIN; the parent is told once the four exist. */
 static int body_nproc(void)
 {
     int i, pid;
@@ -307,12 +311,24 @@ static int body_others(void)
     return wait_status(pid) == 0 ? 0 : 4;
 }
 
+/* Five allowed, with the family's four of uid 1000 standing: this process,
+   once it is uid 1000, is the fifth, and its fork is refused only if it is
+   counted; a kernel that left it out would see four and allow the fork. */
 static int body_setuid(void)
 {
-    if (set_limit(RLIMIT_NPROC, 2, 2) != 0 || syscall1(SYS_SETUID32, 1000) != 0) {
+    if (set_limit(RLIMIT_NPROC, 5, 5) != 0 || syscall1(SYS_SETUID32, 1000) != 0) {
         return 2;
     }
     return syscall1(SYS_FORK, 0) == -EAGAIN ? 0 : 3;
+}
+
+/* The limits are the parent's at the fork: a child forked under a
+   descriptor limit of 200 reads 200. */
+static int body_inherit(void)
+{
+    struct rlimit64 rl;
+
+    return get_limit(RLIMIT_NOFILE, &rl) == 0 && rl.cur_lo == 200 && rl.max_lo == 200 ? 0 : 2;
 }
 
 static void run_show(void)
@@ -355,6 +371,13 @@ void probe_main(unsigned int *sp)
                "eight descriptors: the ninth open is EMFILE and the exec sees eight");
     child_must(body_as, 0, "eight megabytes: a larger mapping is ENOMEM and the break stays");
     child_must(body_hard, 0, "the hard limit: a user lowers, root raises");
+    if (set_limit(RLIMIT_NOFILE, 200, 200) != 0) {
+        fail("setting the limit a child inherits");
+    }
+    child_must(body_inherit, 0, "a child forked under a limit of 200 reads 200");
+    if (set_limit(RLIMIT_NOFILE, 200, 1024) != 0 || set_limit(RLIMIT_NOFILE, 1024, 1024) != 0) {
+        fail("raising the limit back as root");
+    }
     fds[0] = fds[1] = -1;
     if (syscall1(SYS_PIPE, (int)(size_t)fds) != 0) {
         fail("the report pipe");
@@ -367,6 +390,7 @@ void probe_main(unsigned int *sp)
     if (family == 0) {
         sys_exit(body_nproc());
     }
+    syscall1(SYS_CLOSE, fds[1]); /* so a family that dies unheard is end of input here */
     if (syscall3(SYS_READ, fds[0], (int)(size_t)&byte, 1) != 1 || byte != 's') {
         fail("four processes of one user: three forks and a fourth refused with EAGAIN");
     }

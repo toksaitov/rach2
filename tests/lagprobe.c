@@ -941,9 +941,12 @@ static void say_numbers(unsigned a, unsigned b, unsigned c, unsigned d)
 }
 #define DIRTY_BYTES (1024 * 1024)
 
-/* A megabyte left dirty in the buffer cache, then the machine's memory
- * taken until the caches must give their frames back; the file whole and
- * the mount writable after. */
+/* A megabyte left dirty in the buffer cache of the KRFFS volume, whose
+ * writes stay dirty until a sync where the FAT32 volume's go through, then
+ * the machine's memory taken a page at a time until the caches must give
+ * their frames back, which a page fault does with clean frames only, and
+ * one more mapping, the system call in which dirty buffers are written
+ * back; the file whole and the mount writable after. */
 static void run_dirty(void)
 {
     unsigned total, buffers_before, buffers_after, take;
@@ -954,8 +957,6 @@ static void run_dirty(void)
     if (syscall2(SYS_MKDIR, (int)"/ly", 0755) != 0) {
         fail("mkdir /ly");
     }
-    /* The KRFFS volume, whose writes stay dirty in the buffer cache until a
-       sync; the FAT32 one writes its data through. */
     if (sys5(SYS_MOUNT, (int)"/dev/disk0p1", (int)"/ly", (int)"krffs", 0, 0) != 0) {
         fail("the writable mount of the first partition");
     }
@@ -977,10 +978,7 @@ static void run_dirty(void)
     if (total == 0xFFFFFFFFu || buffers_before < 512) {
         fail("the buffer cache does not hold the file");
     }
-    /* All of the machine but a twentieth, touched a page at a time: below
-       the sixteenth at which the kernel starts reclaim, and enough left for
-       the kernel's own objects after. */
-    take = (total - total / 20) * 1024;
+    take = (total - total / 20) * 1024; /* below the sixteenth that starts reclaim */
     mem = (unsigned char *)sys5(SYS_MMAP2, 0, (int)take, 3, 0x22, -1);
     if ((int)(size_t)mem < 0 && (int)(size_t)mem > -4096) {
         fail("the anonymous mapping");
@@ -988,8 +986,6 @@ static void run_dirty(void)
     for (off = 0; off < take; off += 4096) {
         mem[off] = 1;
     }
-    /* A page fault reclaims clean frames only; a system call may write
-       dirty buffers back, and this mapping is the call that does. */
     if ((int)sys5(SYS_MMAP2, 0, 4096, 3, 0x22, -1) == -ENOMEM) {
         fail("the mapping after the pressure");
     }

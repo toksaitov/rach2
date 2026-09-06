@@ -13,6 +13,7 @@
 #include "../lapic.h"
 #include "procfs.h"
 
+#include "../latency.h"
 #include "../mm/kheap.h"
 #include "../mm/pagecache.h"
 #include "bcache.h"
@@ -818,6 +819,16 @@ static int procfs_gen_statsys(struct procfs_text *t)
     ap_ch(t, '\n');
     ap_str(t, "processes ");
     ap_u32(t, process_forks_since_boot());
+    ap_ch(t, '\n');
+    /* The longest delays since boot, for the load row; see latency.h. */
+    ap_str(t, "latency_timer_us ");
+    ap_u32(t, latency_max(LAT_TIMER));
+    ap_str(t, "\nlatency_disk_us ");
+    ap_u32(t, latency_max(LAT_DISK));
+    ap_str(t, "\nlatency_diskwait_us ");
+    ap_u32(t, latency_max(LAT_DISK_WAIT));
+    ap_str(t, "\nlatency_console_us ");
+    ap_u32(t, latency_max(LAT_CONSOLE));
     ap_ch(t, '\n');
     for (p = proc_list; p; p = p->next) {
         if (p->state == PROC_RUNNING || p->state == PROC_READY) {
