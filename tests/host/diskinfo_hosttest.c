@@ -2,6 +2,7 @@
  * diskinfo_hosttest.c: what a disk says about itself, rendered as text.
  *
  * host-deps: rach2/sys/block/diskinfo.c rach2/sys/block/mbr.c
+ * host-deps: rach2/sys/block/partition.c rach2/sys/block/gpt.c
  *
  * The kernel side of this is exercised by `tests/run diskdiag`, which boots a
  * real disk and hashes its sectors. What that cannot reach is the arithmetic

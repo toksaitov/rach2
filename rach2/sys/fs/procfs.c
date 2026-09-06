@@ -77,7 +77,7 @@
  * of the size it is given, truncating; a text it filled to the end is
  * refused with `-EOVERFLOW` rather than served short.
  */
-#define PROCFS_MAX_DISK (768 + DISK_MAX * 96) /* diskinfo_format's widest record, then a line per disk */
+#define PROCFS_MAX_DISK (768 + DISKINFO_DISKS_BYTES) /* diskinfo_format's widest record, then the disks */
 
 /* The header line of each network table. */
 #define PROCFS_NETROUTE_HEADER "Iface\tDestination\tGateway \tFlags\tRefCnt" \

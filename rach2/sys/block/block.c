@@ -103,8 +103,12 @@ void block_scan_disks(void)
 {
     int i;
 
+    /* The boot disk's views go over the lag device when `rach2.blocklag`
+     * asks for one; the raw whole-disk window keeps the real device. */
     for (i = 0; i < disk_count(); i++) {
-        disk_scan(disk_at(i));
+        struct disk *d = disk_at(i);
+
+        disk_scan(d, i == 0 ? block_lag_wrap(d->dev) : d->dev);
     }
 }
 

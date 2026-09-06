@@ -129,11 +129,19 @@ void diskinfo_record_identify(const char *driver, int port, const volatile uint1
                               uint64_t sectors);
 
 /**
- * Render one line per registered disk into `buf`, which has `cap` bytes:
- * `disk N TRANSPORT LOCATION SECTORS TABLE MODEL`. Truncates and always
- * terminates. Returns the number of characters written.
+ * Render every registered disk into `buf`, which has `cap` bytes: a line
+ * `disk N TRANSPORT LOCATION SECTORS TABLE MODEL`, then one line
+ * `part N M START COUNT ID LABEL` per partition, where ID is the partition's
+ * GUID on a GPT and `mbr:` and the type byte on an MBR. Truncates and
+ * always terminates. Returns the number of characters written.
  */
 int diskinfo_format_disks(char *buf, int cap);
+
+/* The widest text `diskinfo_format_disks` writes: a line per disk and one
+   per partition, each under these many bytes. */
+#define DISKINFO_DISK_LINE   96
+#define DISKINFO_PART_LINE   112
+#define DISKINFO_DISKS_BYTES (DISK_MAX * (DISKINFO_DISK_LINE + PART_MAX * DISKINFO_PART_LINE))
 
 /**
  * Find a disk, read its first sector once, and publish `/dev/diskN` for

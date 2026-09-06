@@ -53,6 +53,7 @@
 #include "sys/network/netconf.h"
 #include "sys/block/diskcmd.h"
 #include "sys/block/diskinfo.h"
+#include "sys/block/disk.h"
 #include "sys/block/recovery.h"
 #include "sys/board.h"
 #include "sys/network/driver/netdev.h"
@@ -1573,6 +1574,8 @@ static void refuse_unmounted_root(void)
     }
 }
 
+static int root_spec_named(void);
+
 /**
  * Halt a boot whose command line asks for two things that cannot both hold.
  *
@@ -1592,7 +1595,7 @@ static void refuse_contradictory_boot_line(void)
 {
     int skipping_disk = kcmdline_has("rach2.nodisk");
     int root_on_disk = kcmdline_has("rach2.fsdisk") || kcmdline_has("rach2.root=disk") ||
-                       kcmdline_has("rach2.root=ext2");
+                       kcmdline_has("rach2.root=ext2") || root_spec_named();
     int wants_rescue = kcmdline_has("rach2.rescue") || kcmdline_has("init=rescue");
 
     if (!skipping_disk || !root_on_disk || wants_rescue) {
@@ -2004,6 +2007,24 @@ static int krffs_disk_write(uint32_t off, const void *page)
 static struct mbr_part disc_parts[MBR_PART_COUNT];
 static int disc_table_ok;
 
+/* The disk the boot windows are on: the one `rach2.boot=` names, else the
+   one the root named by identity is on, else disk 0. */
+static block_device_t *boot_disk_device;
+
+/* A partition an identity resolved to: the disk and the table slot. */
+struct root_match {
+    struct disk *disk;
+    int slot;
+};
+
+/* The identity `rach2.root=` names, when it names one: not `ram`, `disk`
+   or `ext2`, which choose by kind and place. `root_source` is the node the
+   KRFFS root came from, for `/proc/mounts`. */
+static char root_spec[80];
+static char root_source[24];
+
+static int root_resolve(const char *spec, struct root_match *m);
+
 /**
  * Publish the boot partition and the boot loader's gap, before any root is
  * chosen.
@@ -2026,14 +2047,52 @@ static int disc_table_ok;
  * Silent when there is no disk: a machine booting a RAM image on a diskless
  * board is the ordinary case, not a failure.
  */
+/**
+ * Choose the disk the boot windows are on.
+ *
+ * `rach2.boot=` names the boot partition by identity, as `rach2.root=`
+ * names the root; the named partition must be the first entry of an MBR
+ * disk, since the boot layout is judged from that table. Without it, the
+ * root's disk when the root is named by identity, and disk 0 otherwise.
+ */
+static block_device_t *choose_boot_disk(void)
+{
+    char spec[80];
+    struct root_match m;
+
+    if (kcmdline_value("rach2.boot", spec, sizeof(spec))) {
+        if (root_resolve(spec, &m) != 1) {
+            klog(KLOG_WARN, "block", "rach2.boot=%s names no one partition; no boot devices",
+                 spec);
+            return 0;
+        }
+        if (m.disk->table.kind != PART_MBR || m.disk->table.parts[m.slot].number != 1) {
+            klog(KLOG_WARN, "block",
+                 "rach2.boot=%s is not the first entry of an MBR disk; no boot devices", spec);
+            return 0;
+        }
+        return m.disk->dev;
+    }
+    if (root_spec_named() && root_resolve(root_spec, &m) == 1) {
+        return m.disk->dev;
+    }
+    return block0;
+}
+
 static void discover_boot_devices(void)
 {
     static uint8_t mbr[BLOCK_SECTOR_SIZE];
+    block_device_t *disk;
 
     if (block_ready() != 0 || !block0) {
         return;
     }
-    if (block0->read(block0, 0, 1, mbr) != 0) {
+    disk = choose_boot_disk();
+    boot_disk_device = disk;
+    if (!disk) {
+        return;
+    }
+    if (disk->read(disk, 0, 1, mbr) != 0) {
         klog(KLOG_WARN, "block", "MBR read failed; no boot devices");
         return;
     }
@@ -2047,27 +2106,14 @@ static void discover_boot_devices(void)
         klog(KLOG_INFO, "block", "a partition occupies the boot loader's gap; "
                       "/dev/grubcore absent\n");
     } else {
-        devfs_grubcore_publish(block0);
+        devfs_grubcore_publish(disk);
     }
 
-    if (mbr_bootpart_ok(disc_parts, block0->sector_count) != 0) {
+    if (mbr_bootpart_ok(disc_parts, disk->sector_count) != 0) {
         klog(KLOG_WARN, "block", "entry 0 is not a boot partition; /dev/bootpart absent");
         return;
     }
-    devfs_bootpart_publish(block_lag_wrap(block0), disc_parts[0].start_lba, disc_parts[0].sector_count);
-}
-
-/* The boot disk's partition nodes, from the table the root was chosen by,
- * over the lag device when `rach2.blocklag` asks for one; the root window
- * keeps the real device underneath. */
-static void publish_partition_nodes(void)
-{
-    struct disk *d = disk_of(block0);
-
-    if (!disc_table_ok || !block0 || !d) {
-        return;
-    }
-    disk_set_table(d, disc_parts, block_lag_wrap(block0));
+    devfs_bootpart_publish(block_lag_wrap(disk), disc_parts[0].start_lba, disc_parts[0].sector_count);
 }
 
 static uint32_t sb_le32(const uint8_t *p)
@@ -2087,9 +2133,69 @@ static uint32_t sb_le32(const uint8_t *p)
  */
 static block_partition_t _ext2_root_part;
 
+/* What the ext2 superblock at `start + 2` of `disk` says: 0 for no ext2
+   magic, -1 for features this driver does not mount, 1 for a mountable
+   volume. The superblock stays in `ext2_sb` for the identity checks. */
+static uint8_t ext2_sb[BLOCK_SECTOR_SIZE * 2];
+
+static int ext2_root_at(block_device_t *disk, uint64_t start, uint64_t count)
+{
+    uint32_t rev, incompat;
+
+    if (count < 4 || disk->read(disk, start + 2, 2, ext2_sb) != 0) {
+        return 0;
+    }
+    if (ext2_sb[56] != 0x53 || ext2_sb[57] != 0xEF) {
+        return 0;
+    }
+    rev = sb_le32(ext2_sb + 76);
+    incompat = rev >= 1 ? sb_le32(ext2_sb + 96) : 0;
+    if (rev > 1 || (incompat & ~0x2u) != 0 || sb_le32(ext2_sb + 24) > 2) {
+        return -1;
+    }
+    return 1;
+}
+
+/**
+ * Mount the ext2 root at `start` of `disk`, published as `path`.
+ *
+ * The root reads the real disk, as the KRFFS root does: the partition nodes
+ * are on the lag wrapper for the tests, and a root that slept behind it
+ * would sleep outside any process.
+ */
+static int ext2_root_mount(block_device_t *disk, uint64_t start, uint64_t count, const char *path)
+{
+    struct block_device *view, *backing;
+    uint64_t first, span;
+    int claim, rc;
+
+    rc = devfs_window_of(path, &view, &backing, &first, &span);
+    if (rc != 0) {
+        klog(KLOG_ERR, "ext2", "root: %s is not published", path);
+        return -1;
+    }
+    claim = devfs_claim(backing, first, first + span - 1);
+    if (claim < 0) {
+        klog(KLOG_ERR, "ext2", "root: %s is claimed", path);
+        return -1;
+    }
+    (void)view;
+    block_partition_init(&_ext2_root_part, disk, start, count);
+    rc = vfs_init_root(&vfs_ext2_type, &_ext2_root_part.device, path, claim);
+    if (rc != 0) {
+        devfs_release_claim(claim);
+        klog(KLOG_ERR, "ext2", "root: %s refused", path);
+        return -1;
+    }
+    set_fore_color(light_green);
+    klog(KLOG_INFO, "ext2", "root: %s%s", path,
+         (vfs_root_mount()->flags & VFS_MS_RDONLY) ? ", read-only" : "");
+    set_fore_color(light_grey);
+    return 0;
+}
+
 static int init_ext2_root(void)
 {
-    static uint8_t sb[BLOCK_SECTOR_SIZE * 2];
     int i;
 
     if (block_ready() != 0 || !block0 || !disc_table_ok) {
@@ -2098,57 +2204,23 @@ static int init_ext2_root(void)
     }
     for (i = 0; i < MBR_PART_COUNT; i++) {
         char path[] = "/dev/disk0p1";
-        struct block_device *view, *backing;
-        uint64_t first, count;
-        uint32_t rev, incompat;
-        int claim, rc;
+        int at = ext2_root_at(block0, disc_parts[i].start_lba, disc_parts[i].sector_count);
 
         path[11] = (char)('1' + i);
-        if (disc_parts[i].sector_count < 4 ||
-            block0->read(block0, disc_parts[i].start_lba + 2, 2, sb) != 0) {
+        if (at == 0) {
             continue;
         }
-        if (sb[56] != 0x53 || sb[57] != 0xEF) {
-            continue;
-        }
-        rev = sb_le32(sb + 76);
-        incompat = rev >= 1 ? sb_le32(sb + 96) : 0;
-        if (rev > 1 || (incompat & ~0x2u) != 0 || sb_le32(sb + 24) > 2) {
+        if (at < 0) {
             klog(KLOG_WARN, "ext2", "root: %s has the magic and features this driver "
                                     "does not mount", path);
             continue;
         }
-        rc = devfs_window_of(path, &view, &backing, &first, &count);
-        if (rc != 0) {
-            klog(KLOG_ERR, "ext2", "root: %s is not published", path);
-            return -1;
-        }
-        claim = devfs_claim(backing, first, first + count - 1);
-        if (claim < 0) {
-            klog(KLOG_ERR, "ext2", "root: %s is claimed", path);
-            return -1;
-        }
-        /* The root reads the real disk, as the KRFFS root does: the
-         * partition nodes are on the lag wrapper for the tests, and a root
-         * that slept behind it would sleep outside any process. */
-        (void)view;
-        block_partition_init(&_ext2_root_part, block0, disc_parts[i].start_lba,
-                             disc_parts[i].sector_count);
-        rc = vfs_init_root(&vfs_ext2_type, &_ext2_root_part.device, path, claim);
-        if (rc != 0) {
-            devfs_release_claim(claim);
-            klog(KLOG_ERR, "ext2", "root: %s refused", path);
-            return -1;
-        }
-        set_fore_color(light_green);
-        klog(KLOG_INFO, "ext2", "root: %s%s", path,
-             (vfs_root_mount()->flags & VFS_MS_RDONLY) ? ", read-only" : "");
-        set_fore_color(light_grey);
-        return 0;
+        return ext2_root_mount(block0, disc_parts[i].start_lba, disc_parts[i].sector_count, path);
     }
     klog(KLOG_ERR, "ext2", "root: no ext2 partition on the disk");
     return -1;
 }
+
 
 /**
  * Mounts KRFFS from the real disk through the page-cache window.
@@ -2159,13 +2231,28 @@ static int init_ext2_root(void)
  * the RAM stub. Rejects a partition larger than the window (which also keeps
  * the byte size within 32 bits). Returns 0 on a valid mount, -1 otherwise.
  */
-static int init_krffs_disk(void)
+static int krffs_root_mount(block_device_t *disk, uint32_t start_lba, uint32_t sector_count,
+                            int found);
+
+/** Whether the sector at `start_lba` of `disk` is a KRFFS root that fits
+ * `count` sectors. */
+static int krffs_root_at(block_device_t *disk, uint64_t start_lba, uint64_t count)
 {
     static uint8_t part0[BLOCK_SECTOR_SIZE];
+    krffs_node_t *root = (krffs_node_t *)part0;
+
+    if (count == 0 || start_lba == 0 || disk->read(disk, start_lba, 1, part0) != 0) {
+        return 0;
+    }
+    return root->magic == KRFFS_FILE_SYSTEM_MAGIC && root->type == KRFFS_ROOT_NODE &&
+           root->size != 0 && root->size <= count * BLOCK_SECTOR_SIZE;
+}
+
+static int init_krffs_disk(void)
+{
     const struct mbr_part *parts = disc_parts;
     uint32_t start_lba = 0;
     uint32_t sector_count = 0;
-    uint32_t part_bytes;
     int i;
     int found = -1;
 
@@ -2185,18 +2272,7 @@ static int init_krffs_disk(void)
        whatever the MBR type byte says, so a GRUB-partitioned disk (boot partition first, KRFFS second)
        still mounts. LBA 0 is never probed; it has the boot code. */
     for (i = 0; i < MBR_PART_COUNT; ++i) {
-        krffs_node_t *root;
-
-        if (parts[i].sector_count == 0 || parts[i].start_lba == 0) {
-            continue;
-        }
-        if (block0->read(block0, parts[i].start_lba, 1, part0) != 0) {
-            continue;
-        }
-        root = (krffs_node_t *) part0;
-        if (root->magic == KRFFS_FILE_SYSTEM_MAGIC &&
-            root->type == KRFFS_ROOT_NODE && root->size != 0 &&
-            root->size <= (uint64_t) parts[i].sector_count * BLOCK_SECTOR_SIZE) {
+        if (krffs_root_at(block0, parts[i].start_lba, parts[i].sector_count)) {
             start_lba = parts[i].start_lba;
             sector_count = parts[i].sector_count;
             found = i;
@@ -2207,6 +2283,20 @@ static int init_krffs_disk(void)
         klog(KLOG_WARN, "krffs", "no KRFFS partition on the disk");
         return -1;
     }
+    return krffs_root_mount(block0, start_lba, sector_count, found);
+}
+
+/**
+ * Mount the KRFFS root at `start_lba` of `disk` through the page-cache
+ * window. `found` is the boot disk's MBR entry when the legacy scan chose
+ * it, and -1 for a root named by identity, whose overlap with the boot
+ * partition is judged by range.
+ */
+static int krffs_root_mount(block_device_t *disk, uint32_t start_lba, uint32_t sector_count,
+                            int found)
+{
+    const struct mbr_part *parts = disc_parts;
+    uint32_t part_bytes;
 
     /* Reject a malformed partition before mounting, so a bad MBR fails cleanly
        instead of faulting past the disk or the window later: it must be
@@ -2218,8 +2308,7 @@ static int init_krffs_disk(void)
                       sector_count);
         return -1;
     }
-    if (start_lba > block0->sector_count ||
-        sector_count > block0->sector_count - start_lba) {
+    if (start_lba > disk->sector_count || sector_count > disk->sector_count - start_lba) {
         klog(KLOG_WARN, "krffs", "partition runs past the disk");
         return -1;
     }
@@ -2233,12 +2322,12 @@ static int init_krffs_disk(void)
     /* The window faults with interrupts off and polls the device from that
        context, so a device that completes later instead of answering now
        cannot back it. */
-    if (!(block0->flags & BLOCK_FAULT_SAFE)) {
+    if (!(disk->flags & BLOCK_FAULT_SAFE)) {
         klog(KLOG_WARN, "krffs", "the device is not fault-safe; no root on it");
         return -1;
     }
 
-    block_partition_init(&_krffs_disk_part, block0, start_lba, sector_count);
+    block_partition_init(&_krffs_disk_part, disk, start_lba, sector_count);
     pc_set_backing(krffs_disk_read, krffs_disk_write, part_bytes);
     if (init_krffs((void *) PCWIN_BASE, part_bytes) != 0) {
         pc_set_backing(0, 0, 0);
@@ -2298,10 +2387,282 @@ static int init_krffs_disk(void)
        What the mount adds is the one fact discovery cannot know: which entry
        has the root, and therefore whether entry 0 overlaps it. A disk whose
        boot partition sits over its own root loses the device again. */
-    if (mbr_bootpart_pick(parts, found, block0->sector_count) != 0) {
+    if (found >= 0 && mbr_bootpart_pick(parts, found, disk->sector_count) != 0) {
+        devfs_bootpart_withdraw();
+    } else if (found < 0 && disk == boot_disk_device && disc_table_ok &&
+               (uint64_t)start_lba <
+                   (uint64_t)disc_parts[0].start_lba + disc_parts[0].sector_count &&
+               (uint64_t)disc_parts[0].start_lba < (uint64_t)start_lba + sector_count) {
+        klog(KLOG_WARN, "krffs", "the root overlaps the boot partition; /dev/bootpart withdrawn");
         devfs_bootpart_withdraw();
     }
     return 0;
+}
+
+/*
+ * A root named by identity.
+ *
+ * `rach2.root=` may name the root by what the partition table says of it
+ * rather than by its place: `PARTUUID=` a GPT entry's GUID, `MBRID=id,M`
+ * an MBR's disk id and entry number, `UUID=` an ext2 volume's UUID,
+ * `LABEL=` a GPT entry's name or an ext2 volume's label, or `/dev/diskNpM`
+ * as the rescue override. Every partition of every registered disk is
+ * compared, and the root is mounted only when exactly one matches: none is
+ * "not found", two is "ambiguous", and both leave nothing mounted, because
+ * a first match would put a clone's root where the named one was meant.
+ * `rach2.rootfstype=` names the type, `krffs` or `ext2`; without it the
+ * partition's first sectors decide.
+ */
+/** Case-insensitive equality of two strings. */
+static int str_equal_fold(const char *a, const char *b)
+{
+    while (*a && *b) {
+        char ca = *a, cb = *b;
+
+        if (ca >= 'A' && ca <= 'Z') {
+            ca = (char)(ca - 'A' + 'a');
+        }
+        if (cb >= 'A' && cb <= 'Z') {
+            cb = (char)(cb - 'A' + 'a');
+        }
+        if (ca != cb) {
+            return 0;
+        }
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
+
+static int str_starts(const char *s, const char *prefix)
+{
+    while (*prefix) {
+        if (*s++ != *prefix++) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/** Append the decimal `v` at `*n` in `out`. */
+static void put_number(char *out, int *n, unsigned v)
+{
+    char digits[12];
+    int k = 0;
+
+    do {
+        digits[k++] = (char)('0' + v % 10);
+        v /= 10;
+    } while (v > 0);
+    while (k > 0) {
+        out[(*n)++] = digits[--k];
+    }
+    out[*n] = '\0';
+}
+
+/** The node path of partition `slot` of `d`, `/dev/diskNpM`. */
+static void part_node_path(char out[24], const struct disk *d, int slot)
+{
+    static const char head[] = "/dev/disk";
+    int n = 0;
+
+    while (head[n]) {
+        out[n] = head[n];
+        n++;
+    }
+    put_number(out, &n, (unsigned)d->number);
+    out[n++] = 'p';
+    put_number(out, &n, (unsigned)d->table.parts[slot].number);
+}
+
+/** The 36-character text of the ext2 UUID in `ext2_sb`. */
+static void ext2_uuid_text(char out[37])
+{
+    static const char digits[] = "0123456789abcdef";
+    int i, n = 0;
+
+    for (i = 0; i < 16; i++) {
+        if (i == 4 || i == 6 || i == 8 || i == 10) {
+            out[n++] = '-';
+        }
+        out[n++] = digits[ext2_sb[104 + i] >> 4];
+        out[n++] = digits[ext2_sb[104 + i] & 0xF];
+    }
+    out[n] = '\0';
+}
+
+/**
+ * Whether partition `slot` of `d` is the one `spec` names.
+ *
+ * `LABEL=` and `UUID=` read the partition's ext2 superblock, since a label
+ * may be the volume's, so a partition with neither a GPT name nor a
+ * readable ext2 superblock does not match those.
+ */
+static int root_spec_matches(const char *spec, struct disk *d, int slot)
+{
+    const struct part_entry *e = &d->table.parts[slot];
+    char text[40];
+    int i;
+
+    if (str_starts(spec, "PARTUUID=")) {
+        uint8_t guid[16];
+
+        return d->table.kind == PART_GPT && part_guid_parse(spec + 9, guid) == 0 &&
+               part_guid_equal(guid, e->guid);
+    }
+    if (str_starts(spec, "MBRID=")) {
+        uint32_t id = 0;
+        int number = 0;
+        const char *p = spec + 6;
+
+        for (i = 0; i < 8; i++) {
+            int v = p[i] >= '0' && p[i] <= '9'   ? p[i] - '0'
+                    : p[i] >= 'a' && p[i] <= 'f' ? p[i] - 'a' + 10
+                    : p[i] >= 'A' && p[i] <= 'F' ? p[i] - 'A' + 10
+                                                 : -1;
+
+            if (v < 0) {
+                return 0;
+            }
+            id = (id << 4) | (uint32_t)v;
+        }
+        if (p[8] != ',') {
+            return 0;
+        }
+        for (p += 9; *p >= '0' && *p <= '9'; p++) {
+            number = number * 10 + (*p - '0');
+        }
+        return *p == '\0' && d->table.kind == PART_MBR && d->table.mbr_id == id &&
+               e->number == number;
+    }
+    if (str_starts(spec, "/dev/disk")) {
+        part_node_path(text, d, slot);
+        return str_equal(spec, text);
+    }
+    if (str_starts(spec, "LABEL=") && d->table.kind == PART_GPT && e->label[0] != '\0' &&
+        str_equal(spec + 6, e->label)) {
+        return 1;
+    }
+    if (str_starts(spec, "LABEL=") || str_starts(spec, "UUID=")) {
+        if (ext2_root_at(d->dev, e->start_lba, e->sector_count) == 0) {
+            return 0;
+        }
+        if (str_starts(spec, "UUID=")) {
+            ext2_uuid_text(text);
+            return str_equal_fold(spec + 5, text);
+        }
+        for (i = 0; i < 16; i++) {
+            text[i] = (char)ext2_sb[120 + i];
+        }
+        text[16] = '\0';
+        return text[0] != '\0' && str_equal(spec + 6, text);
+    }
+    return 0;
+}
+
+/**
+ * Resolve `spec` over every registered disk. Returns 1 with `m` filled
+ * when exactly one partition matches, 0 when none does, and -1 when more
+ * than one does; the last two are recorded by name.
+ */
+static int root_resolve(const char *spec, struct root_match *m)
+{
+    struct root_match first, second;
+    char a[24], b[24];
+    int found = 0, i, k;
+
+    first.disk = 0;
+    second.disk = 0;
+    first.slot = second.slot = 0;
+    for (i = 0; i < disk_count(); i++) {
+        struct disk *d = disk_at(i);
+
+        for (k = 0; k < d->table.count; k++) {
+            if (!root_spec_matches(spec, d, k)) {
+                continue;
+            }
+            if (found == 0) {
+                first.disk = d;
+                first.slot = k;
+            } else if (found == 1) {
+                second.disk = d;
+                second.slot = k;
+            }
+            found++;
+        }
+    }
+    if (found == 1) {
+        *m = first;
+        return 1;
+    }
+    if (found == 0) {
+        klog(KLOG_ERR, "root", "%s: not found on any of %d disks", spec, disk_count());
+        return 0;
+    }
+    part_node_path(a, first.disk, first.slot);
+    part_node_path(b, second.disk, second.slot);
+    klog(KLOG_ERR, "root", "%s: ambiguous: %s and %s%s", spec, a, b,
+         found > 2 ? " and more" : "");
+    return -1;
+}
+
+/**
+ * Mount the root `rach2.root=` names by identity: -1 when it is not
+ * found, is ambiguous, or does not mount. `krffs_mounted` says whether a
+ * KRFFS root came up, for the caller's report.
+ */
+static int root_spec_named(void)
+{
+    if (!kcmdline_value("rach2.root", root_spec, sizeof(root_spec))) {
+        return 0;
+    }
+    return !str_equal(root_spec, "ram") && !str_equal(root_spec, "disk") &&
+           !str_equal(root_spec, "ext2");
+}
+
+static int init_root_by_identity(const char *spec, int *krffs_mounted)
+{
+    struct root_match m;
+    const struct part_entry *e;
+    char type[8];
+    char path[24];
+    int want_krffs = 0, want_ext2 = 0;
+
+    *krffs_mounted = 0;
+    if (block_ready() != 0 || root_resolve(spec, &m) != 1) {
+        return -1;
+    }
+    e = &m.disk->table.parts[m.slot];
+    part_node_path(path, m.disk, m.slot);
+    if (kcmdline_value("rach2.rootfstype", type, sizeof(type))) {
+        want_krffs = str_equal(type, "krffs");
+        want_ext2 = str_equal(type, "ext2");
+        if (!want_krffs && !want_ext2) {
+            klog(KLOG_ERR, "root", "%s: rach2.rootfstype=%s is not krffs or ext2", path, type);
+            return -1;
+        }
+    }
+    if (!want_ext2 && krffs_root_at(m.disk->dev, e->start_lba, e->sector_count)) {
+        if (e->start_lba > 0xFFFFFFFFull || e->sector_count > 0xFFFFFFFFull) {
+            klog(KLOG_ERR, "root", "%s: past what the KRFFS window addresses", path);
+            return -1;
+        }
+        klog(KLOG_INFO, "root", "%s: %s, KRFFS", spec, path);
+        if (krffs_root_mount(m.disk->dev, (uint32_t)e->start_lba, (uint32_t)e->sector_count,
+                             -1) != 0) {
+            return -1;
+        }
+        k_strncpy(root_source, path, sizeof(root_source));
+        *krffs_mounted = 1;
+        return 0;
+    }
+    if (!want_krffs && ext2_root_at(m.disk->dev, e->start_lba, e->sector_count) == 1) {
+        klog(KLOG_INFO, "root", "%s: %s, ext2", spec, path);
+        return ext2_root_mount(m.disk->dev, e->start_lba, e->sector_count, path);
+    }
+    klog(KLOG_ERR, "root", "%s: %s has no %s file system this kernel mounts", spec, path,
+         want_krffs ? "KRFFS" : want_ext2 ? "ext2" : "root");
+    return -1;
 }
 
 /* How many self-tests ran and how many failed, which the summary reports and
@@ -2609,7 +2970,6 @@ static void process_command(const char *cmd)
                 block_scan_disks();
             }
             discover_boot_devices();
-            publish_partition_nodes();
             if (kcmdline_has("rach2.diskdiag")) {
                 diskinfo_probe(_krffs_on_disk);
             }
@@ -3372,7 +3732,6 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     refuse_contradictory_boot_line();
 
     discover_boot_devices();
-    publish_partition_nodes();
 
     {
         int mounted = -1;
@@ -3396,6 +3755,17 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
              * back to the entry that does. */
             mounted = init_ext2_root();
             root_ext2 = 1;
+        } else if (root_spec_named()) {
+            int krffs_root = 0;
+
+            mounted = init_root_by_identity(root_spec, &krffs_root);
+            if (krffs_root) {
+                via = " (disk)";
+                source = root_source;
+                options = "rw,relatime";
+            } else {
+                root_ext2 = 1; /* reported by name inside, mounted or refused */
+            }
         } else if (kcmdline_has("rach2.fsdisk") || kcmdline_has("rach2.root=disk")) {
             mounted = init_krffs_disk();
             via = " (disk)";

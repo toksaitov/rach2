@@ -128,6 +128,8 @@ static short dev_poll(fd_entry_t *e, short events, struct wait_queue **wq)
  * header, and both take eight bytes; `BLKGETSIZE` is the sector count in
  * an unsigned long. Everything else is not a terminal.
  */
+static int32_t dev_disk_rescan(fd_entry_t *e);
+
 static int32_t dev_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
 {
     uint64_t size;
@@ -137,6 +139,9 @@ static int32_t dev_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
             return -ENOTTY;
         }
         return copy_to_user((void __user *)arg, &size, sizeof(size)) != 0 ? -EFAULT : 0;
+    }
+    if (request == 0x125Fu) {
+        return dev_disk_rescan(e);
     }
     if (request == 0x1260u) {
         uint32_t sectors;
@@ -417,16 +422,19 @@ static int32_t dev_bootpart_read(fd_entry_t *e, char __user *buf, uint32_t count
 
 /*
  * The disks: `/dev/diskN` is the whole of disk N as the registry numbers
- * them, and `/dev/diskNpM` its M-th MBR partition. A node exists while its
- * window is published: the partitions from the scan at boot, the whole disk
- * on a boot that asked for it (`rach2.diskdiag`) and on every boot of the
- * recovery build. The nodes are made when a disk is registered, with one
- * vtable for all of them; the entry says which disk and which window.
+ * them, and `/dev/diskNpM` the partition its table numbers M: an MBR's
+ * primary entries 1 to 4 and its logical partitions from 5, a GPT's entries
+ * from 1. A node exists while its window is published: the partitions from
+ * the scan at boot, the whole disk on a boot that asked for it
+ * (`rach2.diskdiag`) and on every boot of the recovery build. The nodes are
+ * made when a disk is registered, one per partition slot with one vtable
+ * for all of them, and named again after every scan of the table.
  *
  * Disk 0 keeps the minors it always had, 1 for the disk and 4 to 7 for its
- * partitions; the others take eight minors each from 64. Reads take whole
- * sectors, and a write answers EPERM in every build but recovery, where the
- * whole disk is written by a reflash and a partition by `e2fsck`.
+ * first four partitions; its later partitions take minor 64 + M, and disk N
+ * takes 64 + 16N for the disk and 64 + 16N + M for partition M. Reads take
+ * whole sectors, and a write answers EPERM in every build but recovery,
+ * where the whole disk is written by a reflash and a partition by `e2fsck`.
  */
 #define DISK_NODE_WINDOWS (DISK_PARTS + 1)
 #define DISK_MINOR_BASE   64
@@ -464,6 +472,21 @@ static int32_t dev_disk_read(fd_entry_t *e, char __user *buf, uint32_t count)
     const struct disk_node *node = disk_node_of((const struct devfs_entry *)e->priv);
 
     return raw_window_read(disk_node_window(node), e, buf, count);
+}
+
+/**
+ * `BLKRRPART` on a whole-disk node: read the table again, for a table
+ * rewritten through the node or on another machine, refused while a
+ * partition is mounted or another descriptor is open on the disk.
+ */
+static int32_t dev_disk_rescan(fd_entry_t *e)
+{
+    const struct disk_node *node = disk_node_of((const struct devfs_entry *)e->priv);
+
+    if (!node || node->part != 0) {
+        return -ENOTTY;
+    }
+    return disk_rescan(node->disk);
 }
 
 /**
@@ -685,7 +708,10 @@ static void dev_bootpart_close(fd_entry_t *e)
 
 static void dev_disk_close(fd_entry_t *e)
 {
+    const struct disk_node *node = disk_node_of((const struct devfs_entry *)e->priv);
+
     raw_close(e);
+    node->disk->opens--;
 }
 
 static const struct file_ops usbwin_ops = {dev_usb_read, dev_usb_write, dev_poll, dev_ioctl, NULL};
@@ -826,7 +852,7 @@ static int raw_write_window(const struct devfs_entry *dev)
     return dev->ops == &bootpart_ops || dev->ops == &grubcore_ops;
 }
 
-/* The raw window of `dev`, among the disks' and the two boot windows, or null. */
+/* The raw window of `dev`, a disk's or one of the two boot windows, or null. */
 static struct disk_window *raw_window_of(const struct devfs_entry *dev)
 {
     const struct disk_node *node = disk_node_of(dev);
@@ -1020,6 +1046,29 @@ static void put_decimal(char *out, int *n, int cap, int v)
     out[*n] = '\0';
 }
 
+/** Name a node `diskN` or `diskNpM`, with the minor the pair has. */
+static void disk_node_name(struct disk_node *node, int number, int m)
+{
+    int n = 0;
+
+    node->name[n++] = 'd';
+    node->name[n++] = 'i';
+    node->name[n++] = 's';
+    node->name[n++] = 'k';
+    put_decimal(node->name, &n, (int)sizeof(node->name), number);
+    if (m > 0) {
+        node->name[n++] = 'p';
+        put_decimal(node->name, &n, (int)sizeof(node->name), m);
+    }
+    if (number == 0 && m == 0) {
+        node->entry.minor = 1;
+    } else if (number == 0 && m <= 4) {
+        node->entry.minor = (uint16_t)(3 + m);
+    } else {
+        node->entry.minor = (uint16_t)(DISK_MINOR_BASE + number * 16 + m);
+    }
+}
+
 void devfs_disk_nodes(struct disk *d)
 {
     int k;
@@ -1030,28 +1079,33 @@ void devfs_disk_nodes(struct disk *d)
     }
     for (k = 0; k < DISK_NODE_WINDOWS; k++) {
         struct disk_node *node = &disk_nodes[disk_node_count++];
-        int n = 0;
 
         node->disk = d;
         node->part = k;
-        node->name[n++] = 'd';
-        node->name[n++] = 'i';
-        node->name[n++] = 's';
-        node->name[n++] = 'k';
-        put_decimal(node->name, &n, (int)sizeof(node->name), d->number);
-        if (k > 0) {
-            node->name[n++] = 'p';
-            put_decimal(node->name, &n, (int)sizeof(node->name), k);
-        }
+        disk_node_name(node, d->number, k);
         node->entry.name = node->name;
         node->entry.major = 240;
-        node->entry.minor = (uint16_t)(d->number == 0 ? (k == 0 ? 1 : 3 + k)
-                                                       : DISK_MINOR_BASE + d->number * 8 + k);
         node->entry.lseek_zero = 0;
         node->entry.mode = 0400;
         node->entry.ops = &diskwin_ops;
     }
 }
+
+void devfs_disk_part_nodes(struct disk *d)
+{
+    int j, k;
+
+    for (j = 0; j < disk_node_count; j++) {
+        struct disk_node *node = &disk_nodes[j];
+
+        if (node->disk != d || node->part == 0) {
+            continue;
+        }
+        k = node->part - 1;
+        disk_node_name(node, d->number, k < d->table.count ? d->table.parts[k].number : node->part);
+    }
+}
+
 
 /*
  * Claims: a mounted volume's sector range on the physical disk. Two ranges
@@ -1114,6 +1168,18 @@ void devfs_release_claim(int claim)
     if (claim >= 0 && claim < DEVFS_CLAIMS) {
         claims[claim].used = 0;
     }
+}
+
+int devfs_disk_claimed(struct disk *d)
+{
+    int i;
+
+    for (i = 0; i < DEVFS_CLAIMS; i++) {
+        if (claims[i].used && claims[i].backing == d->dev) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 static int claimed(block_device_t *backing, uint64_t first, uint64_t last)
@@ -1322,6 +1388,9 @@ int devfs_open(const char *name, int flags)
         if (d && window_range(dev, &backing, &d->writer_first, &d->writer_last) == 0) {
             d->writer_held = 1;
         }
+    }
+    if (disk_node_of(dev)) {
+        disk_node_of(dev)->disk->opens++;
     }
 
     return fd;

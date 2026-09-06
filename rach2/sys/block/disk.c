@@ -6,6 +6,7 @@
 #include "diskinfo.h"
 #include "../klog.h"
 #include "../fs/devfs.h"
+#include "../lib/kerrno.h"
 
 static struct disk disks[DISK_MAX];
 static int ndisks;
@@ -53,15 +54,14 @@ struct disk *disk_register(block_device_t *dev, const char *transport, int locat
     ata_string_or_empty(d->model, DISK_MODEL_CHARS, identify, 27);
     ata_string_or_empty(d->serial, DISK_SERIAL_CHARS, identify, 10);
     ata_string_or_empty(d->firmware, DISK_FIRMWARE_CHARS, identify, 23);
-    d->table = DISK_TABLE_UNREAD;
-    d->mbr_id = 0;
+    d->table.kind = PART_UNREAD;
+    d->table.count = 0;
+    d->backing = dev;
     for (i = 0; i < DISK_PARTS; i++) {
-        d->parts[i].type = 0;
-        d->parts[i].start_lba = 0;
-        d->parts[i].sector_count = 0;
         d->views[i].present = 0;
     }
     d->whole.present = 0;
+    d->opens = 0;
     d->writer_held = 0;
     if (d->number == 0 && identify) {
         diskinfo_record_identify(transport, location, identify, dev->sector_count);
@@ -100,48 +100,56 @@ int disk_count(void)
     return ndisks;
 }
 
-static uint32_t mbr_disk_id(const uint8_t *sector)
+static int read_backing(void *ctx, uint64_t lba, uint32_t count, void *buf)
 {
-    return (uint32_t)sector[440] | ((uint32_t)sector[441] << 8) | ((uint32_t)sector[442] << 16) |
-           ((uint32_t)sector[443] << 24);
+    return block_request((block_device_t *)ctx, 0, lba, count, buf);
 }
 
-void disk_set_table(struct disk *d, const struct mbr_part *parts, block_device_t *backing)
-{
-    int i;
+/* One work area: the scans run one at a time, at boot and from a system
+   call that cannot be preempted. */
+static uint8_t scan_work[PART_WORK_BYTES];
 
-    for (i = 0; i < DISK_PARTS; i++) {
-        d->parts[i] = parts[i];
-        if (parts[i].sector_count == 0) {
-            d->views[i].present = 0;
-            continue;
-        }
-        block_partition_init(&d->views[i].part,
-                             block_lag_partition_backing(backing, parts[i].start_lba),
-                             parts[i].start_lba, parts[i].sector_count);
-        d->views[i].present = 1;
-    }
-}
-
-void disk_scan(struct disk *d)
+void disk_scan(struct disk *d, block_device_t *backing)
 {
-    static uint8_t sector[BLOCK_SECTOR_SIZE];
-    struct mbr_part parts[DISK_PARTS];
     int i;
 
     for (i = 0; i < DISK_PARTS; i++) {
         d->views[i].present = 0;
     }
-    if (d->dev->read(d->dev, 0, 1, sector) != 0) {
-        d->table = DISK_TABLE_UNREAD;
+    d->backing = backing;
+    /* The table is read through the device itself, which answers at boot
+     * where no process could sleep on the lag device; the views go over
+     * `backing`. */
+    if (part_scan(&d->table, read_backing, d->dev, d->dev->sector_count, scan_work) != 0) {
         klog(KLOG_WARN, "disk", "disk%d: the first sector could not be read", d->number);
         return;
     }
-    d->mbr_id = mbr_disk_id(sector);
-    if (mbr_parse(sector, parts) != 0) {
-        d->table = DISK_TABLE_NONE;
-        return;
+    for (i = 0; i < d->table.count; i++) {
+        const struct part_entry *e = &d->table.parts[i];
+
+        block_partition_init(&d->views[i].part, block_lag_partition_backing(backing, e->start_lba),
+                             e->start_lba, e->sector_count);
+        d->views[i].present = 1;
     }
-    d->table = DISK_TABLE_MBR;
-    disk_set_table(d, parts, d->dev);
+    devfs_disk_part_nodes(d);
+    if (d->table.refused != 0) {
+        klog(KLOG_WARN, "disk", "disk%d: %d partition entries refused", d->number,
+             d->table.refused);
+    }
+    if (d->table.backup_used) {
+        klog(KLOG_WARN, "disk", "disk%d: the primary GPT is damaged; the backup served", d->number);
+    }
+    if (d->table.kind == PART_GPT_BAD) {
+        klog(KLOG_WARN, "disk", "disk%d: a GPT whose headers both fail; no partitions", d->number);
+    }
+}
+
+int disk_rescan(struct disk *d)
+{
+    if (d->opens > 1 || devfs_disk_claimed(d)) {
+        return -EBUSY;
+    }
+    disk_scan(d, d->backing);
+    klog(KLOG_INFO, "disk", "disk%d: table read again: %d partitions", d->number, d->table.count);
+    return 0;
 }

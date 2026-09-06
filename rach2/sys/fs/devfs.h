@@ -56,11 +56,21 @@ uint32_t devfs_fd_mode(struct fd_entry *e);
  */
 struct disk;
 /**
- * Make the nodes of a newly registered disk: `/dev/diskN` and one
- * `/dev/diskNpM` per possible partition. Each is listed while its window
- * in the disk's record is present.
+ * Make the nodes of a newly registered disk: `/dev/diskN` and one node per
+ * partition slot. Each is listed while its window in the disk's record is
+ * present.
  */
 void devfs_disk_nodes(struct disk *d);
+
+/**
+ * Name the partition nodes of `d` from its table: slot `i` is
+ * `/dev/diskNpM` with `M` the number of the table's entry `i`. Called after
+ * every scan of the table.
+ */
+void devfs_disk_part_nodes(struct disk *d);
+
+/** Whether a mount holds a claim on any range of `d`. */
+int devfs_disk_claimed(struct disk *d);
 void devfs_bootpart_publish(struct block_device *backing, uint32_t start_lba,
                             uint32_t sector_count);
 

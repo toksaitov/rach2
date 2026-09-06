@@ -49,6 +49,7 @@ C_SRC = kernel.c \
         sys/block/recovery.c \
         sys/block/diskinfo.c \
         sys/block/disk.c \
+        sys/block/partition.c \
         sys/block/ahci.c \
         sys/display/vga_text.c \
         sys/display/vga_gfx.c \

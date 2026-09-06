@@ -93,6 +93,30 @@ block_device_t *block_lag_backing(block_device_t *dev)
     return 0;
 }
 
+/* The lag wrapper and the registry, which the probe path reaches and this
+   test of the partition view does not. */
+block_device_t *block_lag_wrap(block_device_t *dev)
+{
+    return dev;
+}
+
+int disk_count(void)
+{
+    return 0;
+}
+
+struct disk *disk_at(int n)
+{
+    (void)n;
+    return 0;
+}
+
+void disk_scan(struct disk *d, block_device_t *dev)
+{
+    (void)d;
+    (void)dev;
+}
+
 int main(void)
 {
     block_partition_t part;

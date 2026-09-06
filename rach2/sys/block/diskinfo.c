@@ -298,8 +298,9 @@ const struct diskinfo *diskinfo_get(void)
 
 int diskinfo_format_disks(char *buf, int cap)
 {
+    char guid[37];
     int n = 0;
-    int i;
+    int i, k;
 
     if (cap <= 0) {
         return 0;
@@ -315,11 +316,36 @@ int diskinfo_format_disks(char *buf, int cap)
         put_dec(buf, &n, cap, (uint64_t)d->location);
         put(buf, &n, cap, " ");
         put_dec(buf, &n, cap, d->dev->sector_count);
-        put(buf, &n, cap, d->table == DISK_TABLE_MBR    ? " mbr "
-                          : d->table == DISK_TABLE_NONE ? " none "
-                                                        : " unread ");
+        put(buf, &n, cap, d->table.kind == PART_MBR       ? " mbr "
+                          : d->table.kind == PART_GPT     ? " gpt "
+                          : d->table.kind == PART_GPT_BAD ? " gpt-bad "
+                          : d->table.kind == PART_NONE    ? " none "
+                                                          : " unread ");
         put(buf, &n, cap, d->model);
         put(buf, &n, cap, "\n");
+        for (k = 0; k < d->table.count; k++) {
+            const struct part_entry *e = &d->table.parts[k];
+
+            put(buf, &n, cap, "part ");
+            put_dec(buf, &n, cap, (uint64_t)d->number);
+            put(buf, &n, cap, " ");
+            put_dec(buf, &n, cap, (uint64_t)e->number);
+            put(buf, &n, cap, " ");
+            put_dec(buf, &n, cap, e->start_lba);
+            put(buf, &n, cap, " ");
+            put_dec(buf, &n, cap, e->sector_count);
+            put(buf, &n, cap, " ");
+            if (d->table.kind == PART_GPT) {
+                part_guid_text(e->guid, guid);
+                put(buf, &n, cap, guid);
+            } else {
+                put(buf, &n, cap, "mbr:");
+                put_hex(buf, &n, cap, (uint32_t)e->mbr_type, 2);
+            }
+            put(buf, &n, cap, " ");
+            put(buf, &n, cap, e->label);
+            put(buf, &n, cap, "\n");
+        }
     }
     buf[n] = '\0';
     return n;

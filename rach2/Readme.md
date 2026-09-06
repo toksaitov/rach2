@@ -41,9 +41,10 @@ Each boot initializes the architecture, memory, timer, RTC, entropy, input, proc
 The kernel accepts one root:
 
 * With no root option, it mounts the first Multiboot module in place. Changes affect the boot-time copy and disappear when the machine stops.
-* `rach2.fsdisk` and `rach2.root=disk` scan the attached disk's MBR and mount its KRFFS partition through the write-back page cache.
+* `rach2.fsdisk` and `rach2.root=disk` scan disk 0's MBR and mount its KRFFS partition through the write-back page cache.
 * `rach2.fswindow` mounts the Multiboot module through the page-cache window. This is a development path for the cache rather than a persistent disk.
-* `rach2.root=ext2` scans the attached disk's MBR for the first ext2 partition the driver can mount and mounts it as the root through the buffer cache, checked before a writable mount when it was not unmounted, as [ext2.Readme.md](sys/fs/ext2.Readme.md) describes. The KRFFS module is not tried in its place.
+* `rach2.root=SPEC` selects a partition across all registered disks. SPEC may be `PARTUUID=GUID` for a GPT partition's 36-character GUID, `MBRID=XXXXXXXX,M` for an eight-digit hexadecimal MBR disk identifier and partition number, `UUID=UUID` for an ext2 volume UUID, `LABEL=NAME` for a GPT partition name or ext2 volume label, or `/dev/diskNpM` for a node selected directly during recovery. UUID comparison ignores letter case. Exactly one partition must match; an absent or ambiguous identity is logged and leaves no root mounted. `rach2.rootfstype=krffs` or `rach2.rootfstype=ext2` selects the file system, with other values refused by name. Without it, the kernel checks for KRFFS first and then ext2. KRFFS uses the page-cache window with the disk-root limits; ext2 uses the buffer cache.
+* `rach2.root=ext2` scans disk 0's MBR for the first ext2 partition the driver can mount and mounts it as the root through the buffer cache, checked before a writable mount when it was not unmounted, as [ext2.Readme.md](sys/fs/ext2.Readme.md) describes. The KRFFS module is not tried in its place.
 
 The root is mounted before the USB stack starts, so a root is on the disk the block layer found and never on a stick. An orderly stop writes an ext2 root's buffers and sets its valid bit when the mount was writable, its error bit clear and those writes succeeded; otherwise the next mount checks it.
 
@@ -106,9 +107,13 @@ Options are whitespace-delimited. Flags match whole tokens, and the first `key=v
 | Option | Effect |
 |--------|--------|
 | `rach2.rescue` or `init=rescue` | Skip `/sbin/init` and enter the kernel debug shell. |
-| `rach2.fsdisk` or `rach2.root=disk` | Mount KRFFS from the disk selected by the block layer. |
-| `rach2.root=ext2` | Mount the first ext2 partition of that disk as the root. |
+| `rach2.fsdisk` or `rach2.root=disk` | Scan disk 0's MBR and mount its KRFFS root through the page cache. |
+| `rach2.root=ext2` | Scan disk 0's MBR and mount the first ext2 partition the driver can mount as the root. |
 | `rach2.fswindow` | Mount the Multiboot KRFFS module through the page-cache window. |
+| `rach2.root=ram` | Mount the first Multiboot module in place. |
+| `rach2.root=SPEC` | Resolve `PARTUUID=GUID`, `MBRID=XXXXXXXX,M`, `UUID=UUID`, `LABEL=NAME`, or `/dev/diskNpM` across all registered disks. Mount only when exactly one partition matches. |
+| `rach2.rootfstype=krffs` or `rach2.rootfstype=ext2` | Select the file system for a root resolved by identity. Other values are refused; without this option, check for KRFFS first and then ext2. |
+| `rach2.boot=SPEC` | Select the boot partition using the root identity forms. It must resolve uniquely to entry 1 of an MBR disk, then pass the boot-window checks. Otherwise publish no boot devices. Without this option, use the disk containing the root resolved by identity, or disk 0. |
 | `rach2.disk=ahci` | Try AHCI before ATA; fall back to ATA if no AHCI disk answers. |
 | `rach2.diskdiag` | Probe the disks and publish `/dev/diskN` for every registered disk. `/proc/disk` always exists, records the probe result for disk 0, and lists every registered disk on a `disk N ...` line regardless of probe state. |
 | `rach2.fsck` | Read by recovery's `init`, not by the kernel: run `e2fsck -p` on every ext2 partition before anything else starts. The menu's repair entries carry it; the plain recovery entries do not. |
