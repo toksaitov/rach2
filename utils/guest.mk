@@ -48,6 +48,8 @@ halt: halt.c
 
 loopctl: loopctl.c
 	$(UCC) $(UFLAGS) -o loopctl loopctl.c
+growroot: growroot.c
+	$(UCC) $(UFLAGS) -o growroot growroot.c
 
 update: update.c
 	$(UCC) $(UFLAGS) -o update update.c

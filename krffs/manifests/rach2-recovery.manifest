@@ -35,14 +35,20 @@ file 0755 /bin/dmesg krffs/dmesg.script
 # repair and this image is booted from one.
 file 0755 /bin/reflash build/utils/reflash
 file 0755 /bin/bootctl build/utils/sbin/bootctl
+# `growroot` enlarges the root's partition entry into the free space after it
+# and runs the checker and the resizer under /sbin on the volume.
+file 0755 /bin/growroot build/utils/growroot
 file 0755 /bin/dropbearmulti build/vendor/dropbear/dropbearmulti
 
 dir 0755 /sbin
 # The ext2 checker, for the day the machine's own root was not unmounted:
 # `init` here runs it on each partition node with the ext2 magic before anything else,
-# and it can be run by hand over SSH. It is the one program of e2fsprogs this
-# system stages, because checking is the one use recovery has for it.
+# and it can be run by hand over SSH. The resizer beside it is what `growroot`
+# runs after it has enlarged the root's partition entry; the two are the
+# programs of e2fsprogs this system stages, because checking and growing are
+# the uses recovery has for it.
 file 0755 /sbin/e2fsck build/vendor/e2fsprogs/e2fsck
+file 0755 /sbin/resize2fs build/vendor/e2fsprogs/resize2fs
 file 0755 /sbin/init build/utils/sbin/init-metal
 # The periodic sync init keeps running: sleep thirty seconds, sync(2), for ever.
 file 0755 /bin/update build/utils/update
