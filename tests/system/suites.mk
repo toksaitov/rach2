@@ -1373,6 +1373,14 @@ run-disk-q35: rach2 tests krffs $(HARNESS)
 	    --qemu-arg=-machine --qemu-arg=q35 --qemu-arg=-cpu --qemu-arg=max \
 	    --qemu-arg=-device --qemu-arg=ide-hd,drive=drv0,bus=ide.0 \
 	    --timeout 90 --ok "BLOCKPROBE OK" probe=blockprobe
+# `tests/run disks`: two disks of different sizes on one AHCI controller,
+# both in /proc/disk with their ports and sizes, both with nodes, a
+# partition of each mounted and written, and the second disk's file found
+# on the second disk by the host.
+DISKS_DISK0 = $(IMAGES_DIR)/disks-test-0.disk
+DISKS_DISK1 = $(IMAGES_DIR)/disks-test-1.disk
+run-disks: rach2 tests krffs test-image $(MKMBR) $(HARNESS)
+	sh tests/system/suites/disks.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(DISKS_DISK0) $(DISKS_DISK1)
 run-persist-ahci: rach2 tests krffs $(HARNESS)
 	$(MKDISK) krffs/manifests/persist-test.manifest $(PERSIST_AHCI_DISK) 64 48
 	$(HARNESS) --kernel build/rach2/kernel \
