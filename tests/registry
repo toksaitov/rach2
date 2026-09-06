@@ -65,6 +65,7 @@ disks|qemu-system-i386,mformat,mtype|core
 parts|qemu-system-i386,mformat,mtype|core
 bootorder|qemu-system-i386,mformat,mmd,mcopy,mshowfat|full
 bus|qemu-system-i386,mformat,mtype|full
+queue|qemu-system-i386,mformat|core
 disk-q35|qemu-system-i386|full
 diskpolicy|qemu-system-i386|full
 console|qemu-system-i386|core

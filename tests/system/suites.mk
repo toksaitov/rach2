@@ -1399,6 +1399,11 @@ run-parts: rach2 tests krffs test-image $(MKMBR) $(MKGPT) $(OS_SIMPLE_EXT2) $(HA
 BUS_DIR = $(IMAGES_DIR)/bus
 run-bus: rach2 tests krffs test-image $(MKMBR) $(HARNESS)
 	sh tests/system/suites/bus.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(MKMBR) $(BUS_DIR)
+# `tests/run queue`: the AHCI disks on their interrupts: a throttled disk
+# beside a fast one, and the fallback root's faults beside the queue.
+QUEUE_DIR = $(IMAGES_DIR)/queue
+run-queue: rach2 tests krffs test-image $(MKMBR) $(HARNESS)
+	sh tests/system/suites/queue.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(MKMBR) $(QUEUE_DIR)
 run-persist-ahci: rach2 tests krffs $(HARNESS)
 	$(MKDISK) krffs/manifests/persist-test.manifest $(PERSIST_AHCI_DISK) 64 48
 	$(HARNESS) --kernel build/rach2/kernel \

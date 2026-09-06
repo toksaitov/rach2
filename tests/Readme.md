@@ -72,6 +72,8 @@ Programs that need another boot, disk, network exchange, or result contract have
 * `tests/run noentropy` runs `musl/saltnoent` and the fail-closed case of `musl/passwdmusl` on `-cpu qemu64`.
 * `tests/run ping`, `tests/run packet`, `tests/run raw`, `tests/run netif`, and `tests/run dgram` run `pingtest`, `packetprobe`, `rawprobe`, `netifprobe`, and `dgramprobe` with their required network setup.
 * `tests/run disk`, `tests/run disk-ahci`, and `tests/run disk-q35` run `blockprobe` against a disk-backed root.
+* `tests/run bus` runs `busprobe` on all four IDE positions and on a 130 GiB disk with a partition beyond the LBA28 range, checks written files from the host, and runs `blockprobe` with roots selected by MBR identifier on AHCI and IDE disks attached together.
+* `tests/run queue` runs `ahciprobe slow` to check that a throttled AHCI disk does not delay a second disk's reader and that the controller's interrupt vector counts, then `ahciprobe fault` to check queued raw reads beside `blockprobe` on a KRFFS root whose page faults poll the same port.
 * `tests/run persist` and `tests/run persist-ahci` run `persistprobe` twice against one disk image.
 * `tests/run stress` and `tests/run stress-ahci` run `stressprobe` against a file system larger than physical memory.
 * `tests/run bootpart` and `tests/run authority` run the applicable `bootprobe` modes.

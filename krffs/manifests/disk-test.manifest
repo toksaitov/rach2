@@ -6,6 +6,7 @@
 # whose combined size exceeds the resident cache, fsyncs, reads them back, and
 # checks every byte; its "BLOCKPROBE OK" token on the serial is the test result.
 file 0755 /blockprobe build/tests/blockprobe
+file 0755 /ahciprobe build/tests/ahciprobe
 
 # And procprobe, which `tests/run procfiles` runs from the same rescue shell:
 # /proc/mounts must name the disk on a boot that mounted one, and this is the
