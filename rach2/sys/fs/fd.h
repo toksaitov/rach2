@@ -16,9 +16,13 @@
 #include "../lib/kdef.h"
 
 /*
- * Maximum number of file descriptors per process
+ * Policy: the descriptors a process may hold at most, which is the width of
+ * a select fd_set, so no descriptor is one select cannot name. A table
+ * starts with FD_TABLE_FIRST entries and doubles as it fills, up to the
+ * limit; the entries are in the heap and freed with the process.
  */
-#define MAX_FDS 16
+#define FD_TABLE_LIMIT 1024
+#define FD_TABLE_FIRST 16
 
 /*
  * Standard file descriptor numbers
@@ -135,14 +139,35 @@ typedef struct fd_entry {
 } fd_entry_t;
 
 /*
- * File descriptor table embedded in each process's PCB.
+ * File descriptor table in each process's record: `cap` entries in the
+ * heap, every one FD_TYPE_NONE unless open.
  */
 typedef struct fd_table {
-    fd_entry_t entries[MAX_FDS];
+    fd_entry_t *entries;
+    int cap;
 } fd_table_t;
 
-/** Clear every entry of a fresh table to FD_TYPE_NONE. */
-void fd_table_init(fd_table_t *table);
+/** Give a fresh table its first entries; 0, or -1 when the heap has none. */
+int fd_table_init(fd_table_t *table);
+
+/** Free the entries; the descriptors must have been released first. */
+void fd_table_free(fd_table_t *table);
+
+/** How many entries the table has now: the bound of a walk over it. */
+int fd_table_cap(const fd_table_t *table);
+
+/**
+ * Grow the table so that `fd` is inside it, for dup2 onto a number past
+ * the end; 0 when it is, -1 when `fd` is past the limit or the heap has no
+ * room.
+ */
+int fd_table_reach(fd_table_t *table, int fd);
+
+/**
+ * Make `dst`, which has no entries, a copy of `src`'s entries, for fork;
+ * the references the copies share are the caller's to add. 0 or -1.
+ */
+int fd_table_copy(fd_table_t *dst, const fd_table_t *src);
 
 /** Wire fd 0/1/2 as console stdin/stdout/stderr; call after fd_table_init. */
 void fd_init_stdio(fd_table_t *table);
@@ -151,8 +176,9 @@ void fd_init_stdio(fd_table_t *table);
  * full. */
 int fd_alloc(fd_table_t *table);
 
-/** 1 when `fd_alloc` would succeed, for a call that must know before it
- * creates or truncates anything. */
+/** 1 when `fd_alloc` would find or make a slot, for a call that must know
+ * before it creates or truncates anything; a heap with no room for the
+ * growth is not foreseen here. */
 int fd_can_alloc(const fd_table_t *table);
 
 /** Reserve the lowest free descriptor >= minfd (the fcntl(F_DUPFD)

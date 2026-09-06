@@ -43,7 +43,8 @@ struct cpu_regs {
 
 typedef struct cpu_regs cpu_regs_t;
 
-/* Maximum length of current working directory path. */
+/* Policy: the working directory's path is kept in the record, and a
+ * directory whose path is longer cannot be made current (ENAMETOOLONG). */
 #define CWD_MAX 64
 
 /* Supplementary group slots per process (the 4.2BSD number). */
@@ -72,8 +73,8 @@ struct process {
     char cwd[CWD_MAX];      /* Current working directory (absolute, canonical; "/" at start) */
     volatile uint32_t in_syscall; /* Non-zero while a user syscall is executing */
     /* APPEND-ONLY below this line: switch.s hard-codes field offsets, so new
-     * PCB fields go at the end and the .set offsets in switch.s are re-checked
-     * in the same patch (PROC_TLS_BASE, asserted against offsetof at boot). */
+     * PCB fields go at the end; process.c checks the .set offsets in switch.s
+     * against the compiler's at build time. */
     uint32_t tls_base;      /* Per-process %gs TLS base (set_thread_area) */
     vm_space_t vm;          /* Address-space map (VMAs + brk + stack limit) */
     uint32_t wakeup_tick;   /* nanosleep: kernel tick to wake a timed sleeper (0 = none) */

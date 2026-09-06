@@ -3,13 +3,41 @@
  *
  * host-deps: rach2/sys/mm/vm.c
  *
- * Exercises insert with overlap/alignment/slot rejection, find by address,
- * overlap detection, and the four munmap cases (full cover, left trim, right
- * trim, middle split). Returns the failed-check count (0 == all passed). Run
- * natively under AddressSanitizer/UBSan.
+ * Exercises insert with overlap and alignment rejection, find by address,
+ * overlap detection, the four munmap cases (full cover, left trim, right
+ * trim, middle split), and the array's growth past what it starts with.
+ * Returns the failed-check count (0 == all passed). Run natively under
+ * AddressSanitizer/UBSan.
  */
 
 #include "mm/vm.h"
+
+/* The host's allocator stands in for the kernel heap; declared here, since
+ * the kernel's headers define the types the host's stdlib.h would define
+ * again. */
+void *malloc(unsigned long n);
+void free(void *p);
+
+void *kmalloc(size_t n)
+{
+    return malloc(n);
+}
+
+void kfree(void *p)
+{
+    free(p);
+}
+
+void *k_memcpy(void *dest, const void *src, size_t n)
+{
+    unsigned char *d = dest;
+    const unsigned char *s = src;
+
+    while (n-- > 0) {
+        *d++ = *s++;
+    }
+    return dest;
+}
 
 static int fails;
 
@@ -24,7 +52,7 @@ static int fails;
 
 int main(void)
 {
-    vm_space_t vm;
+    vm_space_t vm = {0};
     vma_t *r;
 
     vm_init(&vm);
@@ -95,7 +123,7 @@ int main(void)
     /* Stack growth: a one-page stack at the top, growable down to the
      * stack_limit. */
     {
-        vm_space_t s;
+        vm_space_t s = {0};
         vma_t *st;
 
         vm_init(&s);
@@ -142,7 +170,36 @@ int main(void)
         CHECK(vm_grow_stack(&s, 0xBF8FF000u) == 0);
         CHECK(vm_find(&s, 0xBFFFE000u) != NULL && vm_find(&s, 0xBF900000u) != NULL);
         CHECK(vm_find(&s, 0xBF8FF000u) == NULL); /* stack did not jump the region */
+        vm_free(&s);
     }
+
+    /* Growth: three times what the array starts with, each found after, and
+     * a copy holds the same regions in an array of its own. */
+    {
+        vm_space_t g = {0};
+        vm_space_t c = {0};
+        uint32_t i;
+
+        vm_init(&g);
+        for (i = 0; i < 3 * VMA_FIRST; i++) {
+            CHECK(vm_insert(&g, 0x10000000u + i * 2 * PG, 0x10000000u + i * 2 * PG + PG,
+                            VM_PROT_READ, VM_ANON) == 0);
+        }
+        CHECK(g.count == 3 * VMA_FIRST && g.cap >= 3 * VMA_FIRST);
+        for (i = 0; i < 3 * VMA_FIRST; i++) {
+            CHECK(vm_find(&g, 0x10000000u + i * 2 * PG) != NULL);
+            CHECK(vm_find(&g, 0x10000000u + i * 2 * PG + PG) == NULL);
+        }
+        CHECK(vm_copy(&c, &g) == 0);
+        CHECK(c.count == g.count && c.vmas != g.vmas);
+        CHECK(vm_find(&c, 0x10000000u + 40 * 2 * PG) != NULL);
+        /* A removal from the copy leaves the original. */
+        CHECK(vm_remove(&c, 0x10000000u, 0x10000000u + PG) == 0);
+        CHECK(c.count == g.count - 1 && vm_find(&g, 0x10000000u) != NULL);
+        vm_free(&c);
+        vm_free(&g);
+    }
+    vm_free(&vm);
 
     return (fails > 100) ? 100 : fails;
 }

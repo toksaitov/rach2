@@ -1,10 +1,11 @@
 /**
  * Fills a process's descriptor table, then proves a closed one is reusable.
  *
- * A process has sixteen descriptors and three are taken before it starts, so a
- * program that opens files in a loop meets the limit rather than being told
- * it. What matters is what happens there: the refusal has to be `EMFILE`, the
- * count has to be the table's size less what was already open, and a
+ * A process may hold a thousand and twenty-four descriptors, its table
+ * growing from sixteen as it fills, and three are taken before it starts,
+ * so a program that opens files in a loop meets the limit rather than being
+ * told it. What matters is what happens there: the refusal has to be
+ * `EMFILE`, the count has to be the limit less what was already open, and a
  * descriptor given back by `close` has to be usable again. A kernel that
  * leaked a slot per close would pass a test that only opened once.
  *
@@ -23,9 +24,9 @@ typedef unsigned int size_t;
 #define O_RDONLY 0
 #define EMFILE   24
 
-/* More than the table can hold, so the loop below always reaches the
-   refusal. */
-#define TRIES 32
+/* More than the limit, so the loop below always reaches the refusal. */
+#define TRIES  1040
+#define LIMIT  1024
 
 static int syscall3(int n, int a, int b, int c)
 {
@@ -123,9 +124,9 @@ void _start(void)
         sys_exit(1);
     }
     opened = n_fds;
-    if (opened < 2 || opened >= TRIES) {
+    if (opened != LIMIT - 3) {
         close_all();
-        puts("FDFULL FAIL: the count is not one this table could have");
+        puts("FDFULL FAIL: the count is not the limit less the three open at the start");
         sys_exit(1);
     }
 

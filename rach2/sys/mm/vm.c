@@ -1,6 +1,8 @@
 #include "vm.h"
 
 #include "../lib/kdef.h"
+#include "../lib/kstring.h"
+#include "kheap.h"
 
 /* A VMA boundary must be page-aligned (4 KB). */
 #define VM_PAGE_MASK 0xFFFu
@@ -13,19 +15,64 @@
  */
 void vm_init(vm_space_t *vm)
 {
-    uint32_t i;
-
-    for (i = 0; i < VMA_MAX; i++) {
-        vm->vmas[i].start = 0;
-        vm->vmas[i].end = 0;
-        vm->vmas[i].prot = 0;
-        vm->vmas[i].type = VM_NONE;
-    }
     vm->count = 0;
     vm->heap_start = 0;
     vm->brk = 0;
     vm->stack_limit = 0;
     vm->mmap_top = 0;
+}
+
+void vm_free(vm_space_t *vm)
+{
+    kfree(vm->vmas);
+    vm->vmas = NULL;
+    vm->cap = 0;
+    vm->count = 0;
+}
+
+int vm_copy(vm_space_t *dst, const vm_space_t *src)
+{
+    *dst = *src;
+    dst->vmas = NULL;
+    dst->cap = 0;
+    if (src->count == 0) {
+        return 0;
+    }
+    dst->vmas = kmalloc(sizeof(vma_t) * src->cap);
+    if (!dst->vmas) {
+        dst->count = 0;
+        return -1;
+    }
+    k_memcpy(dst->vmas, src->vmas, sizeof(vma_t) * src->count);
+    dst->cap = src->cap;
+    return 0;
+}
+
+/* Room for one more region, the array doubled when full; -1 at the limit
+ * or with no memory. */
+static int vm_room(vm_space_t *vm)
+{
+    uint32_t cap;
+    vma_t *grown;
+
+    if (vm->count < vm->cap) {
+        return 0;
+    }
+    if (vm->cap >= VMA_LIMIT) {
+        return -1;
+    }
+    cap = vm->cap ? vm->cap * 2 : VMA_FIRST;
+    grown = kmalloc(sizeof(vma_t) * cap);
+    if (!grown) {
+        return -1;
+    }
+    if (vm->count) {
+        k_memcpy(grown, vm->vmas, sizeof(vma_t) * vm->count);
+    }
+    kfree(vm->vmas);
+    vm->vmas = grown;
+    vm->cap = cap;
+    return 0;
 }
 
 /**
@@ -79,11 +126,11 @@ int vm_insert(vm_space_t *vm, uint32_t start, uint32_t end, uint32_t prot, vm_ty
     if ((start & VM_PAGE_MASK) != 0 || (end & VM_PAGE_MASK) != 0) {
         return -1; /* boundaries must be page-aligned */
     }
-    if (vm->count >= VMA_MAX) {
-        return -1; /* no free slot */
-    }
     if (vm_overlaps(vm, start, end)) {
         return -1; /* would overlap an existing region */
+    }
+    if (vm_room(vm) != 0) {
+        return -1; /* the limit, or no memory */
     }
 
     slot = &vm->vmas[vm->count];
@@ -131,9 +178,10 @@ int vm_remove(vm_space_t *vm, uint32_t start, uint32_t end)
         if (start > r->start && end < r->end) {
             /* Punched out of the middle: split into [r->start, start) and
              * [end, r->end). */
-            if (vm->count >= VMA_MAX) {
-                return -1; /* no slot for the upper half */
+            if (vm_room(vm) != 0) {
+                return -1; /* no room for the upper half */
             }
+            r = &vm->vmas[i]; /* the array may have moved */
             vm->vmas[vm->count].start = end;
             vm->vmas[vm->count].end = r->end;
             vm->vmas[vm->count].prot = r->prot;

@@ -45,6 +45,19 @@ void paging_set_writable(page_dir_t *dir, uintptr_t addr, bool writable)
     (void)writable;
 }
 
+/* Never reached: the loader maps a frame only after `alloc_user_page` gave
+ * one, and the stub above gives none. */
+void *kmap_temp(uintptr_t phys)
+{
+    (void)phys;
+    return NULL;
+}
+
+void kunmap_temp(void *va)
+{
+    (void)va;
+}
+
 void vm_init(vm_space_t *vm)
 {
     (void)vm;

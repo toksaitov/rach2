@@ -23,8 +23,13 @@
  * operation on it is refused, not answered with silence. */
 #define SOCK_RAW             3
 #define AF_INET              2      /* IPv4 address family */
-#define SOCK_RECV_BUF_SIZE   1500  /* one max-size UDP datagram */
-#define SOCK_ACCEPT_BACKLOG  16     /* queued connections (power of two) */
+/* Format: one datagram of the Ethernet MTU is the most UDP can carry here. */
+#define SOCK_RECV_BUF_SIZE   1500
+/* Policy: a listener holds sixteen accepted connections not yet taken by
+ * `accept`, a ring in the socket record; a power of two, since the ring's
+ * indexes wrap by a mask. The seventeenth is refused with a reset, as a
+ * full backlog is on any system. */
+#define SOCK_ACCEPT_BACKLOG  16
 
 /* Returned by socket_try_recv when no datagram is waiting (Linux EAGAIN). */
 #define SOCK_EAGAIN  (-11)

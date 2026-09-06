@@ -27,11 +27,12 @@
 #include "../mm/usercopy.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
+#include "../mm/kheap.h"
 #include "../network/socket/socket.h"
 
-/* At most this many descriptors can be polled at once: a process has at most
- * MAX_FDS open, so this also caps the per-call stack arrays. */
-#define POLL_MAX_FDS MAX_FDS
+/* At most this many descriptors can be polled at once: the most a process
+ * may hold. The per-call arrays come from the heap, sized by the call. */
+#define POLL_MAX_FDS FD_TABLE_LIMIT
 
 extern volatile uint32_t kernel_ticks;
 
@@ -154,12 +155,19 @@ static int poll_scan(struct kernel_pollfd *fds, uint32_t nfds, struct wait_queue
 static int do_poll(struct kernel_pollfd *fds, uint32_t nfds, int has_deadline, uint32_t deadline,
                    int sel)
 {
-    struct wait_queue *wqs[POLL_MAX_FDS];
-    struct wq_waiter recs[POLL_MAX_FDS];
+    struct wait_queue **wqs;
+    struct wq_waiter *recs;
     uint32_t flags;
     int rc;
     uint32_t i;
 
+    wqs = kzalloc(sizeof(*wqs) * (nfds ? nfds : 1));
+    recs = kzalloc(sizeof(*recs) * (nfds ? nfds : 1));
+    if (!wqs || !recs) {
+        kfree(wqs);
+        kfree(recs);
+        return -ENOMEM;
+    }
     flags = irq_save();
     for (;;) {
         int ready = poll_scan(fds, nfds, wqs, sel);
@@ -221,6 +229,8 @@ static int do_poll(struct kernel_pollfd *fds, uint32_t nfds, int has_deadline, u
     }
     current_proc->state = PROC_RUNNING;
     irq_restore(flags);
+    kfree(wqs);
+    kfree(recs);
     return rc;
 }
 
@@ -310,7 +320,7 @@ static uint32_t ts_deadline(const struct poll_timespec *ts, int *has_deadline)
  * deadline. */
 static int32_t poll_common(uint32_t ufds, uint32_t nfds, int has_deadline, uint32_t deadline)
 {
-    struct kernel_pollfd fds[POLL_MAX_FDS];
+    struct kernel_pollfd *fds;
     uint32_t bytes;
     int ready;
 
@@ -318,22 +328,25 @@ static int32_t poll_common(uint32_t ufds, uint32_t nfds, int has_deadline, uint3
         return -ESRCH;
     }
     if (nfds > POLL_MAX_FDS) {
-        return -EINVAL; /* a process has at most MAX_FDS descriptors */
+        return -EINVAL; /* more than a process can hold */
     }
     /* nfds == 0 is valid: a pure sleep until the deadline (do_poll finds
      * nothing ready, parks on no queues, and waits out the timeout). */
     bytes = nfds * (uint32_t)sizeof(struct kernel_pollfd);
+    fds = kmalloc(bytes ? bytes : 1);
+    if (!fds) {
+        return -ENOMEM;
+    }
     if (nfds > 0 && copy_from_user(fds, (const void __user *)ufds, bytes) != 0) {
+        kfree(fds);
         return -EFAULT;
     }
 
     ready = do_poll(fds, nfds, has_deadline, deadline, 0);
-    if (ready < 0) {
-        return ready;
+    if (ready >= 0 && nfds > 0 && copy_to_user((void __user *)ufds, fds, bytes) != 0) {
+        ready = -EFAULT;
     }
-    if (nfds > 0 && copy_to_user((void __user *)ufds, fds, bytes) != 0) {
-        return -EFAULT;
-    }
+    kfree(fds);
     return ready;
 }
 
@@ -378,7 +391,7 @@ int32_t sys_ppoll(struct isr_params *params)
 static int32_t select_common(int nfds, uint32_t ur, uint32_t uw, uint32_t ue,
                              int has_deadline, uint32_t deadline)
 {
-    struct kernel_pollfd fds[POLL_MAX_FDS];
+    struct kernel_pollfd *fds;
     uint32_t rset[FDSET_WORDS], wset[FDSET_WORDS], eset[FDSET_WORDS];
     uint32_t orset[FDSET_WORDS], owset[FDSET_WORDS], oeset[FDSET_WORDS];
     uint32_t setbytes;
@@ -390,9 +403,9 @@ static int32_t select_common(int nfds, uint32_t ur, uint32_t uw, uint32_t ue,
     if (nfds < 0 || nfds > FDSET_BITS) {
         return -EINVAL; /* nfds is bounded by the fd_set width (FD_SETSIZE = 1024) */
     }
-    /* A large nfds is fine as long as no bit is set for an fd the kernel cannot
-     * have: we scan the whole [0, nfds) range and only fail (below, -EBADF) if
-     * a selected bit names fd >= MAX_FDS, never a silent truncation. */
+    /* The whole [0, nfds) range is scanned, and a selected bit whose
+     * descriptor is not open fails the call (below, -EBADF), never a silent
+     * truncation. */
     setbytes = (uint32_t)FDSET_WORDS * (uint32_t)sizeof(uint32_t);
 
     k_memset(rset, 0, setbytes);
@@ -408,14 +421,21 @@ static int32_t select_common(int nfds, uint32_t ur, uint32_t uw, uint32_t ue,
         return -EFAULT;
     }
 
-    /* fd_sets -> pollfds (pure, host-tested). */
-    npoll = fdsets_to_pollfds((uint32_t)nfds, rset, wset, eset, fds, POLL_MAX_FDS);
+    /* fd_sets -> pollfds (pure, host-tested): one per selected descriptor,
+     * so `nfds` of them is enough. */
+    fds = kmalloc(sizeof(*fds) * (size_t)(nfds ? nfds : 1));
+    if (!fds) {
+        return -ENOMEM;
+    }
+    npoll = fdsets_to_pollfds((uint32_t)nfds, rset, wset, eset, fds, nfds);
     if (npoll < 0) {
+        kfree(fds);
         return -EBADF; /* a selected bit named an fd the kernel can never have */
     }
 
     ready = do_poll(fds, (uint32_t)npoll, has_deadline, deadline, 1);
     if (ready < 0) {
+        kfree(fds);
         return ready;
     }
 
@@ -428,6 +448,7 @@ static int32_t select_common(int nfds, uint32_t ur, uint32_t uw, uint32_t ue,
         int i;
         for (i = 0; i < npoll; i++) {
             if (fds[i].revents & POLLNVAL) {
+                kfree(fds);
                 return -EBADF;
             }
         }
@@ -439,6 +460,7 @@ static int32_t select_common(int nfds, uint32_t ur, uint32_t uw, uint32_t ue,
     k_memset(owset, 0, setbytes);
     k_memset(oeset, 0, setbytes);
     ready = pollfds_to_fdsets(fds, npoll, orset, owset, oeset);
+    kfree(fds);
     if (ur && copy_to_user((void __user *)ur, orset, setbytes) != 0) {
         return -EFAULT;
     }

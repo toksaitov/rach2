@@ -68,48 +68,15 @@
 #define PROCFS_INO_PID_BASE 0x200u
 
 /*
- * The room a snapshot is built in, and the bound each file is allowed of it.
- *
- * Every file declares a worst case that can be argued from a fixed pool: the
- * process table, the ARP cache and the tcb pool all have a size the kernel
- * chose, so the largest text each can produce is a number and not a guess. The
- * buffer is the largest of those bounds, written out rather than derived so
- * that declaring a larger file without raising it stops the build instead of
- * borrowing another file's room. A text that would exceed its own bound is
- * reported and refused rather than served short, which is what the appenders
- * used to do: a sixteen-row table read back as a nine-row one with nothing
- * anywhere saying so.
+ * A text is built in the heap and grows as it is appended to, so a report
+ * lists what there is: every mount, every connection, every vector. The one
+ * fixed width is `/proc/disk`, which `diskinfo_format` writes into a buffer
+ * of the size it is given, truncating; a text it filled to the end is
+ * refused with `-EOVERFLOW` rather than served short.
  */
-#define PROCFS_TEXT_MAX 3072
+#define PROCFS_MAX_DISK 768 /* diskinfo_format's widest record */
 
-/* Per-file bounds. Each is the file's own worst case, and each is checked
-   against the buffer below at compile time. */
-#define PROCFS_MAX_BOOTLINE 320  /* the 256-byte boot line, a newline, slack */
-#define PROCFS_MAX_DISK     768  /* diskinfo_format's widest record */
-#define PROCFS_MAX_NETDEV   512  /* two header lines and one interface */
-#define PROCFS_MAX_PIDSTAT  256  /* one line of small fields plus comm */
-#define PROCFS_MAX_PIDCMD    64  /* comm and its terminator */
-#define PROCFS_MAX_UPTIME    64  /* two decimal numbers */
-#define PROCFS_MAX_STATSYS  256  /* the cpu lines, btime, and the counters */
-#define PROCFS_MAX_MEMINFO  320  /* nine sized lines */
-#define PROCFS_MAX_MOUNTS   256  /* the root, and the two synthetic mounts */
-/* Four devices and two sticks, one line each, and the line that counts the
- * names. A stick's line has two names a drive chose the text of. */
-#define PROCFS_MAX_USB      576
-#define PROCFS_MAX_LOOP     512
-#define PROCFS_MAX_FILESYSTEMS 128 /* two nodev lines and four types */
-/* Thirty-two vectors at most, each a line of its number, its count, which of
-   the two roads it arrives on, and up to four names of at most a dozen
-   characters, plus the two lines that belong to no vector. */
-#define PROCFS_MAX_INTERRUPTS 2304
-#define PROCFS_MAX_NETROUTE 512  /* a header and at most two routes */
-#define PROCFS_MAX_NETARP  1024  /* a header and the eight-entry cache */
-#define PROCFS_MAX_NETTCP  3072  /* a header and the sixteen-block pool */
-
-/* The header line of each network table, named so the same text is printed and
-   measured, and the widest row each can print. A row is a fixed-width shape:
-   the decimal fields are uint32 at their widest, the addresses and queues are
-   hex of a known width, and the rest is literal. */
+/* The header line of each network table. */
 #define PROCFS_NETROUTE_HEADER "Iface\tDestination\tGateway \tFlags\tRefCnt" \
                                "\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n"
 #define PROCFS_NETARP_HEADER   "IP address       HW type     Flags       " \
@@ -117,48 +84,8 @@
 #define PROCFS_NETTCP_HEADER   "  sl  local_address rem_address   st tx_queue" \
                                " rx_queue tr tm->when retrnsmt   uid  timeout" \
                                " inode\n"
-#define PROCFS_DEC32       10 /* a uint32 in decimal, at its widest */
-#define PROCFS_IFNAME_LEN  (sizeof(NETDEV_IFNAME) - 1)
-#define PROCFS_NETROUTE_ROW (PROCFS_IFNAME_LEN + 8 + 8 + 34)
-#define PROCFS_NETARP_ROW   (15 + 32 + 17 + 14 + PROCFS_IFNAME_LEN + 1)
-/* The connections the report lists at most: a bound of this report and
- * not of the stack, until the report iterates. */
-#define PROCFS_NETTCP_ROWS  16
-#define PROCFS_NETTCP_ROW   (3 + PROCFS_DEC32 + 2 + 13 + 1 + 13 + 1 + 2 + 1 + \
-                             17 + 22 + PROCFS_DEC32 + 10 + PROCFS_DEC32 + 33)
 
-/* C89 has no static assert: a bound that does not fit makes this array size
-   negative and the build stops here rather than truncating at run time. The
-   network tables are checked against the tables behind them, so growing the
-   connection pool or the ARP cache fails the build instead of truncating. */
-typedef char procfs_bounds_fit[(PROCFS_MAX_BOOTLINE <= PROCFS_TEXT_MAX &&
-                                PROCFS_MAX_DISK <= PROCFS_TEXT_MAX &&
-                                PROCFS_MAX_NETDEV <= PROCFS_TEXT_MAX &&
-                                PROCFS_MAX_PIDSTAT <= PROCFS_TEXT_MAX &&
-                                PROCFS_MAX_PIDCMD <= PROCFS_TEXT_MAX &&
-                                PROCFS_MAX_UPTIME <= PROCFS_TEXT_MAX &&
-                                PROCFS_MAX_STATSYS <= PROCFS_TEXT_MAX &&
-                                PROCFS_MAX_MEMINFO <= PROCFS_TEXT_MAX &&
-                                PROCFS_MAX_MOUNTS <= PROCFS_TEXT_MAX &&
-                                PROCFS_MAX_USB <= PROCFS_TEXT_MAX &&
-                                PROCFS_MAX_FILESYSTEMS <= PROCFS_TEXT_MAX &&
-                                PROCFS_MAX_INTERRUPTS <= PROCFS_TEXT_MAX &&
-                                PROCFS_MAX_NETROUTE <= PROCFS_TEXT_MAX &&
-                                PROCFS_MAX_NETARP <= PROCFS_TEXT_MAX &&
-                                PROCFS_MAX_NETTCP <= PROCFS_TEXT_MAX &&
-                                sizeof(PROCFS_NETROUTE_HEADER) - 1 +
-                                        2 * PROCFS_NETROUTE_ROW <=
-                                    PROCFS_MAX_NETROUTE &&
-                                sizeof(PROCFS_NETARP_HEADER) - 1 +
-                                        ARP_CACHE_SIZE * PROCFS_NETARP_ROW <=
-                                    PROCFS_MAX_NETARP &&
-                                sizeof(PROCFS_NETTCP_HEADER) - 1 +
-                                        PROCFS_NETTCP_ROWS * PROCFS_NETTCP_ROW <=
-                                    PROCFS_MAX_NETTCP)
-                                   ? 1
-                                   : -1];
-
-/** The file's name, for the one diagnostic a text over its bound prints. */
+/** The file's name, for the diagnostic of a text that could not be built. */
 static const char *procfs_kind_name(const struct vpath *vp)
 {
     if (vp->kind == VNODE_PROC_CMDLINE) {
@@ -211,45 +138,70 @@ static const char *procfs_kind_name(const struct vpath *vp)
 
 /* A /proc text file, snapshotted at open and served through file_ops. */
 struct procfs_file {
-    char data[PROCFS_TEXT_MAX];
+    char *data; /* the text, from the heap, freed at the last close */
     int len;
     int origin_pid;  /* the /proc/<pid> this snapshot came from (for fd readlink) */
     int origin_file; /* SYNTH_PROC_STAT or SYNTH_PROC_CMDLINE */
 };
 
 /*
- * One text under construction: where it goes, how much of it this file is
- * allowed, how much is written, and whether an append did not fit.
- *
- * `cap` is the file's declared bound rather than the buffer's size, so a file
- * that outgrows what was argued for it fails on its own terms instead of
- * quietly borrowing another file's room.
+ * One text under construction: its buffer in the heap, the buffer's size,
+ * how much is written, and whether the heap ran out. The buffer doubles
+ * when an append does not fit; a text the heap could not hold is refused
+ * whole, never served short.
  */
 struct procfs_text {
     char *buf;
     int cap;
     int len;
-    int over;
+    int nomem;
 };
 
-static void procfs_text_init(struct procfs_text *t, char *buf, int cap)
+#define PROCFS_TEXT_FIRST 256
+
+static void procfs_text_init(struct procfs_text *t)
 {
-    t->buf = buf;
-    t->cap = cap;
+    t->buf = NULL;
+    t->cap = 0;
     t->len = 0;
-    t->over = 0;
+    t->nomem = 0;
 }
 
-/* bounded text builders (no snprintf; cap leaves room for a NUL) */
+/* Room for `want` bytes and a NUL; -1 when the heap has none. */
+static int procfs_text_room(struct procfs_text *t, int want)
+{
+    int cap = t->cap ? t->cap : PROCFS_TEXT_FIRST;
+    char *grown;
+
+    if (want < t->cap) {
+        return 0;
+    }
+    while (cap <= want) {
+        cap *= 2;
+    }
+    grown = kmalloc((size_t)cap);
+    if (!grown) {
+        t->nomem = 1;
+        return -1;
+    }
+    if (t->len) {
+        k_memcpy(grown, t->buf, (size_t)t->len);
+    }
+    kfree(t->buf);
+    t->buf = grown;
+    t->cap = cap;
+    return 0;
+}
+
+/* text builders (no snprintf; the buffer keeps room for a NUL) */
 
 static void ap_ch(struct procfs_text *t, char c)
 {
-    if (t->len < t->cap - 1) {
-        t->buf[t->len] = c;
-        t->len++;
-    } else {
-        t->over = 1;
+    if (t->len + 1 >= t->cap && procfs_text_room(t, t->len + 1) != 0) {
+        return;
     }
+    t->buf[t->len] = c;
+    t->len++;
 }
 
 static void ap_str(struct procfs_text *t, const char *s)
@@ -433,14 +385,15 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
     struct procfs_text *t = &text;
     process_t *p;
     fd_entry_t *e;
+    int n;
 
-    procfs_text_init(t, buf, cap);
+    procfs_text_init(t);
 
     p = get_process((uint32_t)pid);
     if (!p || p->state == PROC_UNUSED) {
         return -ENOENT;
     }
-    if (fd < 0 || fd >= MAX_FDS) {
+    if (fd < 0 || fd >= fd_table_cap(&p->fds)) {
         return -ENOENT;
     }
     e = &p->fds.entries[fd];
@@ -546,7 +499,19 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
             ap_str(t, "anon_inode:[device]"); /* fb/mouse: best effort */
             break;
     }
-    return t->len;
+    if (t->nomem) {
+        kfree(t->buf);
+        return -ENOMEM;
+    }
+    n = t->len < cap - 1 ? t->len : cap - 1;
+    if (n > 0) {
+        k_memcpy(buf, t->buf, (size_t)n);
+    }
+    if (cap > 0) {
+        buf[n] = '\0';
+    }
+    kfree(t->buf);
+    return n;
 }
 
 /**
@@ -969,7 +934,7 @@ static int procfs_gen_usb(struct procfs_text *t)
         ap_u32(t, usbdisk_teardowns());
         ap_str(t, " reclaimed\n");
     }
-    return t->over ? -1 : t->len;
+    return t->nomem ? -1 : t->len;
 }
 
 static int procfs_gen_mounts(struct procfs_text *t)
@@ -1026,7 +991,7 @@ static int procfs_gen_mounts(struct procfs_text *t)
         }
         ap_str(t, " 0 0\n");
     }
-    return t->over ? -1 : t->len;
+    return t->nomem ? -1 : t->len;
 }
 
 /* /proc/filesystems: `nodev` for the two synthetic namespaces, then every
@@ -1076,7 +1041,7 @@ static int procfs_gen_interrupts(struct procfs_text *t)
     ap_str(t, "FBK:\t");
     ap_u32(t, usb_fallback_count());
     ap_str(t, "\tusb fallback\n");
-    return t->over ? -1 : t->len;
+    return t->nomem ? -1 : t->len;
 }
 
 /* /proc/loop: one line per attached device, its size in bytes, whether it
@@ -1093,7 +1058,7 @@ static int procfs_gen_loop(struct procfs_text *t)
             ap_str(t, line);
         }
     }
-    return t->over ? -1 : t->len;
+    return t->nomem ? -1 : t->len;
 }
 
 static int procfs_gen_filesystems(struct procfs_text *t)
@@ -1111,7 +1076,7 @@ static int procfs_gen_filesystems(struct procfs_text *t)
             ap_ch(t, '\n');
         }
     }
-    return t->over ? -1 : t->len;
+    return t->nomem ? -1 : t->len;
 }
 
 /*
@@ -1232,32 +1197,31 @@ static int procfs_gen_netarp(struct procfs_text *t)
  */
 static int procfs_gen_nettcp(struct procfs_text *t)
 {
-    static struct tcp_row rows[PROCFS_NETTCP_ROWS];
-    int n, i;
+    struct tcp_row row;
+    int i;
 
     ap_str(t, PROCFS_NETTCP_HEADER);
-    n = tcp_snapshot(rows, PROCFS_NETTCP_ROWS);
-    for (i = 0; i < n; i++) {
+    for (i = 0; tcp_row_at(i, &row); i++) {
         ap_str(t, "   ");
         ap_u32(t, (uint32_t)i);
         ap_str(t, ": ");
-        ap_ip_hex(t, rows[i].local_ip);
+        ap_ip_hex(t, row.local_ip);
         ap_ch(t, ':');
-        ap_hex(t, rows[i].local_port, 4);
+        ap_hex(t, row.local_port, 4);
         ap_ch(t, ' ');
-        ap_ip_hex(t, rows[i].remote_ip);
+        ap_ip_hex(t, row.remote_ip);
         ap_ch(t, ':');
-        ap_hex(t, rows[i].remote_port, 4);
+        ap_hex(t, row.remote_port, 4);
         ap_ch(t, ' ');
-        ap_hex(t, (uint32_t)tcp_state_to_linux(rows[i].state), 2);
+        ap_hex(t, (uint32_t)tcp_state_to_linux(row.state), 2);
         ap_ch(t, ' ');
-        ap_hex(t, rows[i].txq, 8);
+        ap_hex(t, row.txq, 8);
         ap_ch(t, ':');
-        ap_hex(t, rows[i].rxq, 8);
+        ap_hex(t, row.rxq, 8);
         ap_str(t, " 00:00000000 00000000 ");
-        ap_u32(t, rows[i].uid);
+        ap_u32(t, row.uid);
         ap_str(t, "        0 ");
-        ap_u32(t, rows[i].inode);
+        ap_u32(t, row.inode);
         ap_str(t, " 1 0000000000000000 100 0 0 10 0\n");
     }
     return t->len;
@@ -1265,9 +1229,8 @@ static int procfs_gen_nettcp(struct procfs_text *t)
 
 /* the /proc file backing: a snapshot served through file_ops */
 
-/* A snapshot is allocated from the heap at open and freed at the last
- * close; the text it holds is PROCFS_TEXT_MAX, so a snapshot is a large
- * object of one page. */
+/* A snapshot and its text are allocated from the heap at open and freed at
+ * the last close. */
 
 static int32_t procfs_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
@@ -1320,6 +1283,7 @@ static void procfs_close(fd_entry_t *e)
     struct procfs_file *f = (struct procfs_file *)e->priv;
     if (f) {
         e->priv = NULL;
+        kfree(f->data);
         kfree(f);
     }
 }
@@ -1330,20 +1294,20 @@ static const struct file_ops procfs_file_ops = {procfs_read, procfs_write, procf
 /**
  * Open a /proc/<pid>/{stat,cmdline} file, returning a descriptor or -errno.
  *
- * The text is generated and snapshotted into a pooled slot at open, then served
- * read-only through procfs_file_ops; the slot returns to the pool on the last
- * close. These files are read-only regular files, so the open-flag checks are
- * ordered to report the conventional errno: O_CREAT|O_EXCL on an existing file
- * is -EEXIST first, then O_DIRECTORY is -ENOTDIR, then any write or create
+ * The text is generated into a snapshot at open, then served read-only
+ * through procfs_file_ops; the snapshot is freed on the last close. These
+ * files are read-only regular files, so the open-flag checks are ordered to
+ * report the conventional errno: O_CREAT|O_EXCL on an existing file is
+ * -EEXIST first, then O_DIRECTORY is -ENOTDIR, then any write or create
  * intent is -EACCES.
  *
- * The text is built once, here, against the bound its file declared. A text
- * that did not fit is refused with `-EOVERFLOW` and one line on the serial log
- * naming the file: a table read back with rows missing and nothing saying so is
- * the failure the bounds exist to prevent. `/proc/disk` is rendered from the
+ * The text is built once, here, in a buffer that grows with it. A text the
+ * heap could not hold is refused with `-ENOMEM` and one line on the serial
+ * log naming the file: a table read back with rows missing and nothing
+ * saying so is the failure to prevent. `/proc/disk` is rendered from the
  * record taken at boot, so opening it issues no command to the device, and
- * `diskinfo_format` truncates to the cap it is given rather than reporting, so
- * its bound is tested against what it returned.
+ * `diskinfo_format` truncates to the cap it is given rather than reporting,
+ * so a text that reached the cap is refused with `-EOVERFLOW`.
  */
 int procfs_open(const struct vpath *vp, int flags)
 {
@@ -1383,70 +1347,66 @@ int procfs_open(const struct vpath *vp, int flags)
         return -ENOMEM;
     }
 
+    procfs_text_init(&text);
     if (vp->kind == VNODE_PROC_CMDLINE) {
         /* The captured boot line and a newline, the Linux shape. */
         const char *line = kcmdline_get();
-        procfs_text_init(&text, f->data, PROCFS_MAX_BOOTLINE);
         ap_str(&text, line);
         ap_ch(&text, '\n');
         len = text.len;
     } else if (vp->kind == VNODE_PROC_DISK) {
-        procfs_text_init(&text, f->data, PROCFS_MAX_DISK);
-        len = diskinfo_format(diskinfo_get(), f->data, PROCFS_MAX_DISK);
-        if (len >= PROCFS_MAX_DISK - 1) {
-            text.over = 1;
+        len = 0;
+        if (procfs_text_room(&text, PROCFS_MAX_DISK) == 0) {
+            len = diskinfo_format(diskinfo_get(), text.buf, PROCFS_MAX_DISK);
+            if (len >= PROCFS_MAX_DISK - 1) {
+                kfree(text.buf);
+                kfree(f);
+                klog(KLOG_ERR, "procfs", "/proc/disk: text exceeds its %d-byte bound, refusing",
+                     PROCFS_MAX_DISK);
+                return -EOVERFLOW;
+            }
         }
     } else if (vp->kind == VNODE_PROC_NET_DEV) {
-        procfs_text_init(&text, f->data, PROCFS_MAX_NETDEV);
         len = procfs_gen_netdev(&text);
     } else if (vp->kind == VNODE_PROC_UPTIME) {
-        procfs_text_init(&text, f->data, PROCFS_MAX_UPTIME);
         len = procfs_gen_uptime(&text);
     } else if (vp->kind == VNODE_PROC_STAT_SYS) {
-        procfs_text_init(&text, f->data, PROCFS_MAX_STATSYS);
         len = procfs_gen_statsys(&text);
     } else if (vp->kind == VNODE_PROC_MEMINFO) {
-        procfs_text_init(&text, f->data, PROCFS_MAX_MEMINFO);
         len = procfs_gen_meminfo(&text);
     } else if (vp->kind == VNODE_PROC_MOUNTS) {
-        procfs_text_init(&text, f->data, PROCFS_MAX_MOUNTS);
         len = procfs_gen_mounts(&text);
     } else if (vp->kind == VNODE_PROC_USB) {
-        procfs_text_init(&text, f->data, PROCFS_MAX_USB);
         len = procfs_gen_usb(&text);
     } else if (vp->kind == VNODE_PROC_LOOP) {
-        procfs_text_init(&text, f->data, PROCFS_MAX_LOOP);
         len = procfs_gen_loop(&text);
     } else if (vp->kind == VNODE_PROC_INTERRUPTS) {
-        procfs_text_init(&text, f->data, PROCFS_MAX_INTERRUPTS);
         len = procfs_gen_interrupts(&text);
     } else if (vp->kind == VNODE_PROC_FILESYSTEMS) {
-        procfs_text_init(&text, f->data, PROCFS_MAX_FILESYSTEMS);
         len = procfs_gen_filesystems(&text);
     } else if (vp->kind == VNODE_PROC_NET_ROUTE) {
-        procfs_text_init(&text, f->data, PROCFS_MAX_NETROUTE);
         len = procfs_gen_netroute(&text);
     } else if (vp->kind == VNODE_PROC_NET_ARP) {
-        procfs_text_init(&text, f->data, PROCFS_MAX_NETARP);
         len = procfs_gen_netarp(&text);
     } else if (vp->kind == VNODE_PROC_NET_TCP) {
-        procfs_text_init(&text, f->data, PROCFS_MAX_NETTCP);
         len = procfs_gen_nettcp(&text);
     } else if (vp->procfile == SYNTH_PROC_STAT) {
-        procfs_text_init(&text, f->data, PROCFS_MAX_PIDSTAT);
         len = procfs_gen_stat(&text, pid);
     } else {
-        procfs_text_init(&text, f->data, PROCFS_MAX_PIDCMD);
         len = procfs_gen_cmdline(&text, pid);
     }
     if (len < 0) {
+        kfree(text.buf);
+        kfree(f);
         return len;
     }
-    if (text.over) {
-        klog(KLOG_ERR, "procfs", "%s: text exceeds its %d-byte bound, refusing",
-                      procfs_kind_name(vp), text.cap);
-        return -EOVERFLOW;
+    if (text.nomem) {
+        kfree(text.buf);
+        kfree(f);
+        klog(KLOG_ERR, "procfs", "%s: no memory for the text", procfs_kind_name(vp));
+        return -ENOMEM;
     }
+    f->data = text.buf;
     f->len = len;
     f->origin_pid = pid;
     if (vp->kind == VNODE_PROC_CMDLINE) {

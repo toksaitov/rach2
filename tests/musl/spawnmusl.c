@@ -228,9 +228,9 @@ int main(void)
         return fail(detail);
     }
 
-    /* And enough of them to cross this machine's ceilings. MAX_PROCS and
-     * MAX_FDS are both 16, so a descriptor or a zombie leaked per call would
-     * stop the twentieth of these; a make runs hundreds. */
+    /* And enough of them to cross the sixteen the process and descriptor
+     * tables once held, so a descriptor or a zombie leaked per call would
+     * have stopped the twentieth of these; a make runs hundreds. */
     {
         int round;
 

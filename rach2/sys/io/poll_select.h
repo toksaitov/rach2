@@ -10,8 +10,9 @@
  * lives apart from poll.c and is exercised natively under ASan in
  * tests/host/poll_select_hosttest.c.
  *
- * A musl fd_set is FD_SETSIZE=1024 bits; the caller's buffer is that full size,
- * so we copy and clear all of it even though Rach2 fds only reach MAX_FDS.
+ * A musl fd_set is FD_SETSIZE=1024 bits, which is also the most descriptors
+ * a process here may hold; the caller's buffer is that full size, and all of
+ * it is copied and cleared.
  */
 #define FDSET_BITS  1024
 #define FDSET_WORDS (FDSET_BITS / 32) /* 32 x 32-bit words = 128 bytes */

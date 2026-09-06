@@ -43,6 +43,8 @@
 #define KVA_MMIO      0xF0000000u
 #define KVA_MMIO_SIZE 0x08000000u
 #define KVA_TEMP      0xF8000000u
+/* Policy: the temporary mappings held at once, one page each, a fourth of
+ * the region's 4 MiB; a caller that finds none free is told so. */
 #define KVA_TEMP_SLOTS 1024u
 #define KVA_MODULES   0xF8400000u
 #define KVA_MODULES_SIZE 0x04000000u

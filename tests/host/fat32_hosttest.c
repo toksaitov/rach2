@@ -4,6 +4,7 @@
  * host-deps: rach2/sys/fs/fat32.c rach2/sys/fs/bcache.c rach2/sys/block/chain.c
  * host-deps: rach2/sys/fs/fat32name.c rach2/sys/fs/fatcommon.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/kheap_host.c
  *
  * The volumes are mkfatfixture's, built here on first use the way the
  * bootctl test builds them. The well-formed volume (`--vfs`) must read back
@@ -1821,26 +1822,25 @@ static void matrix_rows(void)
     long_names = 0;
 }
 
-static void pool_rows(void)
+static void node_rows(void)
 {
-    void *held[FAT32_NODES + 1];
+    void *held[40];
     int i, err, took = 0;
 
     load("--vfs");
     err = mount_image("");
     if (err != 0) {
-        printf("fat32_hosttest: the pool row's mount said %d\n", err);
+        printf("fat32_hosttest: the node row's mount said %d\n", err);
     }
-    check(err == 0, "the volume mounts for the pool row");
-    /* The root holds one entry and /MANY a second; its files fill the
-       thirty that remain, the next lookup is ENOMEM and not a corruption,
-       and a put frees a slot the next lookup takes. */
+    check(err == 0, "the volume mounts for the node row");
+    /* All forty files of /MANY held at once, with the root and the
+       directory, past the thirty-two nodes the pool once had. */
     {
         void *many = walk("/many", &err);
         char name[8];
 
         check(many != 0, "the directory of forty files is found");
-        for (i = 0; many && i < 31; i++) {
+        for (i = 0; many && i < 40; i++) {
             name[0] = 'M';
             name[1] = (char)('0' + i / 10);
             name[2] = (char)('0' + i % 10);
@@ -1850,8 +1850,7 @@ static void pool_rows(void)
                 took++;
             }
         }
-        check(took == 30 && err == -ENOMEM,
-              "thirty files fill the pool and the next lookup is ENOMEM");
+        check(took == 40, "forty files are held at once");
         {
             void *again;
 
@@ -1861,10 +1860,6 @@ static void pool_rows(void)
                 OPS->put(&mnt, again);
             }
         }
-        OPS->put(&mnt, held[--took]);
-        check(OPS->lookup(&mnt, many, "M39", &held[took]) == 0,
-              "a put frees a slot the next lookup takes");
-        took++;
         for (i = 0; i < took; i++) {
             OPS->put(&mnt, held[i]);
         }
@@ -1928,7 +1923,7 @@ int main(void)
     well_formed_rows();
     small_and_active_rows();
     malformed_rows();
-    pool_rows();
+    node_rows();
     write_rows();
     long_rows();
     tree_rows();

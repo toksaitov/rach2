@@ -3,6 +3,7 @@
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/network/tcp/rcvwnd.c
+ * host-deps: tests/host/compat/kheap_host.c
  *
  * A guest can make this stack open a connection and carry bytes, and the
  * network suites do. What it cannot make happen on demand is the rest: a
@@ -171,16 +172,6 @@ void klog(int level, const char *subsystem, const char *format, ...)
     (void)format;
 }
 
-/* Named because `tcp_init` calls it, and never called: the kernel's
-   `uintptr_t` is 32 bits and a host pointer is not, so the pool is a static
-   array this test hands to `tcp_table` directly. */
-uintptr_t mem_reserve(unsigned int size, int zero)
-{
-    (void)size;
-    (void)zero;
-    return 0;
-}
-
 #include "../../rach2/sys/network/tcp/tcp.c"
 
 /* ---- the cases ---- */
@@ -213,8 +204,8 @@ static void reset_all(void)
     cb_connected = cb_fin = cb_writable = cb_deliver = cb_accept = 0;
     delivered_bytes = 0;
     kernel_ticks = 1000;
-    for (i = 0; i < MAX_TCP_CONNS; i++) {
-        tcp_table[i].in_use = 0;
+    while (tcbs) {
+        tcb_free(tcbs);
     }
 }
 
@@ -253,30 +244,29 @@ static uint8_t last_flags(void)
     return segs[n_segs - 1].data[13];
 }
 
-static struct tcb table_storage[MAX_TCP_CONNS];
-
 int main(void)
 {
     struct tcb *t;
     unsigned i;
 
-    /* The pool, in this test's own memory. */
-    tcp_table = table_storage;
-    for (i = 0; i < MAX_TCP_CONNS; i++) {
-        tcp_table[i].in_use = 0;
-    }
-
-    /* The pool, which one process cannot exhaust from userland: every block
-       is owned by a socket and both pools hold sixteen. Here it is reached
-       directly. */
+    /* The blocks, past the sixteen the pool once held: forty at once, one
+       freed from the middle of the list and the rest still there. */
+    tcp_init();
     reset_all();
-    for (i = 0; i < MAX_TCP_CONNS; i++) {
-        CHECK("every block in the pool can be had", tcb_alloc() != 0);
+    t = 0;
+    for (i = 0; i < 40; i++) {
+        struct tcb *b = tcb_alloc();
+
+        CHECK("every block asked for can be had", b != 0);
+        if (i == 20) {
+            t = b;
+        }
     }
-    CHECK("and the next one cannot", tcb_alloc() == 0);
-    t = &tcp_table[0];
     tcb_free(t);
-    CHECK("a freed block is handed out again", tcb_alloc() != 0);
+    for (i = 0, t = tcbs; t; t = t->next) {
+        i++;
+    }
+    CHECK("thirty-nine remain after one is freed", i == 39);
 
     /* A segment for a port nobody listens on is answered with a reset, which
        is what tells the peer to stop retransmitting. */

@@ -5,7 +5,9 @@
 #include "lib/kdef.h"
 #include "../vendor/multiboot.h"
 
-/* Maximum number of boot modules recorded. */
+/* Policy: the boot modules recorded. A boot here passes one or two, the
+ * root image and a second file system; a loader that passes more than
+ * eight is refused by name at boot rather than read in part. */
 #define MAX_MODULES 8
 
 /* One boot module the bootloader handed us. */

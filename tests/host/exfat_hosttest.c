@@ -4,6 +4,7 @@
  * host-deps: rach2/sys/fs/exfat.c rach2/sys/fs/bcache.c rach2/sys/block/chain.c
  * host-deps: rach2/sys/fs/fatcommon.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/kheap_host.c
  *
  * The volumes are mkexfatfixture's, built here on every run. The
  * well-formed volume must read back what the builder wrote, through every

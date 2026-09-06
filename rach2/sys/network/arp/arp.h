@@ -16,9 +16,10 @@
 #define ARP_OP_REQUEST  1
 #define ARP_OP_REPLY    2
 
-/* Number of cached IP-to-MAC mappings. Eight is small for a real network, so
- * what fills them matters: addresses no neighbour can have are refused, and a
- * full cache replaces the mapping gone longest without use. */
+/* A cache: eight IP-to-MAC mappings, which is small for a real network, so
+ * what fills them matters: addresses no neighbour can have are refused, and
+ * a full cache replaces the mapping gone longest without use. Nothing is
+ * refused for its being full. */
 #define ARP_CACHE_SIZE  8
 
 /** Handle a received ARP packet (the payload after the Ethernet header). */

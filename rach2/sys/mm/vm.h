@@ -8,8 +8,8 @@
  * The address-space model: a process's memory is described by a small set of
  * virtual memory areas (VMAs), each a half-open page-aligned range with a
  * protection and a kind. This is the data structure real kernels (Linux
- * vm_area_struct, BSD vm_map_entry) are built on; here a fixed array rather
- * than a tree, since a teaching process has only a handful of regions. The
+ * vm_area_struct, BSD vm_map_entry) are built on; here a growable array
+ * rather than a tree, since a teaching process has few regions. The
  * demand-paging fault handler consults it to decide whether a fault is a page
  * to lazily allocate, a stack to grow, or a segfault. See the Readme.
  *
@@ -17,30 +17,17 @@
  * find/insert/remove/overlap operations directly.
  */
 
-/* Maximum regions per process.
- *
- * Four are spoken for before a program runs a line: its code, its data, the
- * heap and the stack. The rest are anonymous mmaps, which is what a C library's
- * allocator reaches for once an allocation is large enough, so this number is
- * the number of large allocations a process may hold at once.
- *
- * It was 16, and 12 usable mappings is fewer than a compiler needs: tcc reading
- * the 1.9 MB `libc.a` ran out and reported "memory full", with physical memory
- * barely touched and the address space almost entirely free. The table was the
- * ceiling, not the machine. Then 64 ran out the same way when the machine
- * linked its own `login` (two sources whose SHA-512 crypt pulls more libc.a
- * members than any one-source link), so it became 128.
- *
- * It is 512 now, and this time from a measurement rather than from one link
- * that ran out. A process asking for 1 KB at a time got about 3.1 MB before
- * malloc began to fail, while a single 64 MB request succeeded: musl's
- * allocator carves many small mappings and each one is a VMA, so the ceiling
- * a program meets is the table, not the memory. At 512 the same walk reached
- * past 8 MiB. An entry is 16 bytes (three words and the kind), so all 512
- * across the 16-process table cost 128 KB of kernel .bss against 32 KB at 128.
- * The boundary is guarded by `tests/musl/vmamusl.c`, which asks for more
- * mappings than 128 could grant while staying below this maximum. */
-#define VMA_MAX 512
+/* Policy: the regions a process may hold at most. A process's regions are an
+ * array in the heap that starts at VMA_FIRST entries and doubles as it
+ * fills; the limit is where a program that maps without end is refused,
+ * as Linux's max_map_count refuses it. An entry is 16 bytes, so a process
+ * at the limit holds a megabyte of them. Four regions are spoken for
+ * before a program runs a line: its code, its data, the heap and the
+ * stack; the rest are anonymous mmaps, which is what a C library's
+ * allocator reaches for, one per large allocation. `tests/musl/vmamusl.c`
+ * takes three hundred of them, past the sixteen the array starts with. */
+#define VMA_LIMIT 65536
+#define VMA_FIRST 16
 
 /* How far below its base the main stack VMA may grow on demand (8 MB). */
 #define VM_STACK_MAX_GROWTH 0x800000u
@@ -74,7 +61,8 @@ typedef struct vma {
 
 /* The per-process address space. */
 typedef struct vm_space {
-    vma_t vmas[VMA_MAX];
+    vma_t *vmas;          /* `cap` entries in the heap, `count` of them in use */
+    uint32_t cap;
     uint32_t count;
     uint32_t heap_start;  /* initial program break (base of the heap VMA) */
     uint32_t brk;         /* current program break (top of the heap VMA)  */
@@ -82,8 +70,14 @@ typedef struct vm_space {
     uint32_t mmap_top;    /* next anonymous mmap is placed just below here */
 } vm_space_t;
 
-/* Reset an address space to empty. */
+/* Reset an address space to empty; the array it has, if any, is kept. */
 void vm_init(vm_space_t *vm);
+
+/* Give the array back; the space is empty after. */
+void vm_free(vm_space_t *vm);
+
+/* Make `dst`, which has no array, a copy of `src`; 0, or -1 with no memory. */
+int vm_copy(vm_space_t *dst, const vm_space_t *src);
 
 /* Return the VMA containing 'addr' (start <= addr < end), or NULL. */
 vma_t *vm_find(vm_space_t *vm, uint32_t addr);
@@ -91,10 +85,11 @@ vma_t *vm_find(vm_space_t *vm, uint32_t addr);
 /* Return 1 if any existing VMA intersects [start, end), else 0. */
 int vm_overlaps(const vm_space_t *vm, uint32_t start, uint32_t end);
 
-/** Insert a region [start, end) with 'prot'/'type'; 0 ok, -1 on error. */
+/** Insert a region [start, end) with 'prot'/'type'; 0 ok, -1 on error,
+ * which includes the limit reached and a heap with no room to grow. */
 int vm_insert(vm_space_t *vm, uint32_t start, uint32_t end, uint32_t prot, vm_type_t type);
 
-/** Remove [start, end) (munmap semantics); 0 ok, -1 if a split has no slot. */
+/** Remove [start, end) (munmap semantics); 0 ok, -1 if a split has no room. */
 int vm_remove(vm_space_t *vm, uint32_t start, uint32_t end);
 
 /** Grow the stack VMA down to cover 'page' (page-aligned; the fault handler

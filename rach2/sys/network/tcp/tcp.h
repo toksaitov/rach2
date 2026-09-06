@@ -21,8 +21,11 @@
 #define TCP_HDR_SIZE     20
 #define TCP_MSS          1460
 #define TCP_INIT_CWND    (4 * TCP_MSS)  /* initial congestion window (RFC 6928) */
+/* Policy: a connection's send and receive rings are four kilobytes each,
+ * in the control block, and the window offered is the receive ring; a
+ * power of two, since the rings' indexes wrap by a mask. */
 #define TCP_WINDOW_SIZE  4096
-#define TCP_RING_SIZE    4096   /* send/recv ring size, power of two */
+#define TCP_RING_SIZE    4096
 
 /* Reliability constants (100 Hz clock). */
 #define TCP_RTO_INIT    100     /* initial RTO  = 1 s (RFC 6298) */
@@ -206,13 +209,15 @@ struct tcp_row {
 };
 
 /**
- * Copy the live connections into `out`, returning how many were written.
+ * The `index`th live connection as a row, 1 when there is one and 0 past
+ * the end, so a report iterates until it is told to stop.
  *
- * A snapshot rather than a walk of the pool: rows are created and freed from
- * receive context, and the identity fields come from the block rather than
- * from `sock`, which is cleared while a connection is still closing.
+ * A copy under the lock rather than a pointer into the list: blocks are
+ * made and freed from receive context, and the identity fields come from
+ * the block rather than from `sock`, which is cleared while a connection is
+ * still closing.
  */
-int tcp_snapshot(struct tcp_row *out, int max);
+int tcp_row_at(int index, struct tcp_row *out);
 
 /**
  * This stack's state as the number Linux's `/proc/net/tcp` uses.

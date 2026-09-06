@@ -5,11 +5,18 @@
 #include "../mm/kheap.h"
 #include "sched.h"
 
-/*
- * Offset of a PCB field, without pulling in <stddef.h> (whose size_t would
- * clash with kdef.h). Pointer and uint32_t are the same width on i386.
- */
-#define PCB_OFF(field) ((uint32_t)&((process_t *)0)->field)
+/* The offsets switch.s reads from the process record, checked here against
+ * the compiler's: a field added before one of them makes an array size
+ * negative and stops the build. */
+typedef char process_offsets_fit[(__builtin_offsetof(struct process, regs) +
+                                          __builtin_offsetof(cpu_regs_t, esp) ==
+                                      48 &&
+                                  __builtin_offsetof(struct process, cr3) == 52 &&
+                                  __builtin_offsetof(struct process, kernel_stack) == 56 &&
+                                  __builtin_offsetof(struct process, tls_base) == 144 &&
+                                  __builtin_offsetof(struct process, page_dir) == 2112)
+                                     ? 1
+                                     : -1];
 
 process_t *proc_list;
 process_t *proc_idle;
@@ -39,24 +46,14 @@ extern volatile uint32_t init_pid;
 static uint32_t next_pid = 0;
 
 /**
- * Reset the process table to its boot state and verify the PCB layout.
+ * Reset the process table to its boot state.
  *
- * `switch.s` hard-codes the byte offsets of the registers it saves and
- * restores during a context switch. Before clearing the table this asserts
- * those offsets still match `process_t`, so a future field insertion fails
- * loudly here at boot instead of silently corrupting context switches.
+ * `switch.s` hard-codes the byte offsets of the fields it reads during a
+ * context switch; `process_offsets_fit` above checks them against the
+ * record at build time.
  */
 void init_proc(void)
 {
-    /* Keep in sync with the .set values in proc/switch.s. */
-    if (PCB_OFF(regs.esp) != 48 ||
-        PCB_OFF(cr3) != 52 ||
-        PCB_OFF(kernel_stack) != 56 ||
-        PCB_OFF(tls_base) != 584 ||
-        PCB_OFF(page_dir) != 10736) {
-        k_panic("process_t layout drifted from switch.s offsets");
-    }
-
     proc_list = NULL;
     proc_tail = NULL;
     proc_idle = NULL;
@@ -132,7 +129,10 @@ process_t *alloc_process(void)
     fpu_init_area(p->fpu);
     p->waiter.proc = p;
 
-    fd_table_init(&p->fds);
+    if (fd_table_init(&p->fds) != 0) {
+        kfree(p);
+        return NULL;
+    }
     fd_init_stdio(&p->fds);
 
     p->cwd[0] = '/';
@@ -171,6 +171,8 @@ void free_process(process_t *proc)
     if (proc == proc_idle) {
         proc_idle = NULL;
     }
+    fd_table_free(&proc->fds);
+    vm_free(&proc->vm);
     kfree(proc->exec_ws);
     kfree(proc);
 }

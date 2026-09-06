@@ -13,18 +13,16 @@
 #include "../driver/netdev.h"
 #include "../../lib/kerrno.h"
 #include "../../lib/kstring.h"
+#include "../../mm/kheap.h"
 #include "../../serial.h"
 #include "../../proc/wait_queue.h"
 
-/* One client is the case; two is room for a second. Each socket's queue is
-   eight datagrams of one MTU, which is 24 KB of the kernel's image for the two
-   of them, and enough to hold a reply behind a burst of other people's frames
-   while the client is being scheduled. */
-#define PACKET_MAX_BOUND 2
+/* Policy: each socket's queue is eight datagrams of one MTU, twelve
+   kilobytes from the heap for the life of the binding, enough to hold a
+   reply behind a burst of other people's frames while the client is being
+   scheduled. */
 #define PACKET_QUEUE_SLOTS 8
 #define PACKET_SLOT_SIZE 1500
-
-static struct socket *bound[PACKET_MAX_BOUND];
 
 struct packet_queue {
     uint8_t buf[PACKET_QUEUE_SLOTS][PACKET_SLOT_SIZE];
@@ -48,51 +46,59 @@ struct packet_queue {
     int have_last;
 };
 
-static struct packet_queue queues[PACKET_MAX_BOUND];
+/* A bound socket and its queue, one record from the heap per binding, on
+   a list the receive path walks. */
+struct packet_binding {
+    struct packet_binding *next;
+    struct socket *sock;
+    struct packet_queue q;
+};
 
-/** The queue belonging to `sock`, or NULL if it is not bound. */
-static struct packet_queue *queue_of(struct socket *sock)
+static struct packet_binding *packets;
+
+/** The binding of `sock`, or NULL if it has none. */
+static struct packet_binding *binding_of(struct socket *sock)
 {
-    int i;
+    struct packet_binding *b;
 
-    for (i = 0; i < PACKET_MAX_BOUND; i++) {
-        if (bound[i] == sock) {
-            return &queues[i];
+    for (b = packets; b; b = b->next) {
+        if (b->sock == sock) {
+            return b;
         }
     }
     return NULL;
 }
 
+/** The queue belonging to `sock`, or NULL if it is not bound. */
+static struct packet_queue *queue_of(struct socket *sock)
+{
+    struct packet_binding *b = binding_of(sock);
+
+    return b ? &b->q : NULL;
+}
+
 int packet_bind(struct socket *sock, int ifindex)
 {
     uint32_t flags;
-    int i, free_slot;
+    struct packet_binding *b;
 
     if (ifindex != 0 && ifindex != NETDEV_IFINDEX) {
         return -ENODEV;
     }
 
     flags = net_lock();
-    free_slot = -1;
-    for (i = 0; i < PACKET_MAX_BOUND; i++) {
-        if (bound[i] == sock) {
-            net_unlock(flags);
-            return 0;
-        }
-        if (!bound[i] && free_slot < 0) {
-            free_slot = i;
-        }
+    if (binding_of(sock)) {
+        net_unlock(flags);
+        return 0;
     }
-    if (free_slot < 0) {
+    b = kzalloc(sizeof(*b));
+    if (!b) {
         net_unlock(flags);
         return -ENOBUFS;
     }
-    bound[free_slot] = sock;
-    queues[free_slot].head = 0;
-    queues[free_slot].count = 0;
-    queues[free_slot].dropped = 0;
-    queues[free_slot].reported = 0;
-    queues[free_slot].have_last = 0;
+    b->sock = sock;
+    b->next = packets;
+    packets = b;
     net_unlock(flags);
     return 0;
 }
@@ -100,15 +106,16 @@ int packet_bind(struct socket *sock, int ifindex)
 void packet_unbind(struct socket *sock)
 {
     uint32_t flags;
-    int i;
+    struct packet_binding **link;
 
     flags = net_lock();
-    for (i = 0; i < PACKET_MAX_BOUND; i++) {
-        if (bound[i] == sock) {
-            bound[i] = NULL;
-            queues[i].count = 0;
-            queues[i].head = 0;
-            queues[i].have_last = 0;
+    for (link = &packets; *link; link = &(*link)->next) {
+        if ((*link)->sock == sock) {
+            struct packet_binding *b = *link;
+
+            *link = b->next;
+            kfree(b);
+            break;
         }
     }
     net_unlock(flags);
@@ -157,7 +164,7 @@ void packet_rx(uint16_t ethertype, const uint8_t *frame, uint16_t frame_len)
 {
     const uint8_t *payload;
     uint16_t len, copy_len;
-    int i;
+    struct packet_binding *b;
 
     if (frame_len < ETH_HDR_SIZE) {
         return;
@@ -168,14 +175,11 @@ void packet_rx(uint16_t ethertype, const uint8_t *frame, uint16_t frame_len)
 
     /* Runs in the receive interrupt, where interrupts are already off; the
        table and the queues are touched without taking net_lock again. */
-    for (i = 0; i < PACKET_MAX_BOUND; i++) {
-        struct packet_queue *q = &queues[i];
+    for (b = packets; b; b = b->next) {
+        struct packet_queue *q = &b->q;
         int slot;
 
-        if (!bound[i]) {
-            continue;
-        }
-        if (bound[i]->protocol != ethertype) {
+        if (b->sock->protocol != ethertype) {
             continue; /* another EtherType, or a socket that asked for none */
         }
         if (q->count == PACKET_QUEUE_SLOTS) {
@@ -197,7 +201,7 @@ void packet_rx(uint16_t ethertype, const uint8_t *frame, uint16_t frame_len)
         q->pkttype[slot] = packet_type_of(frame);
         q->proto[slot] = ethertype;
         q->count++;
-        wq_wake_all(&bound[i]->waiters);
+        wq_wake_all(&b->sock->waiters);
     }
 }
 

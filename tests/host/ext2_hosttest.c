@@ -5,6 +5,7 @@
  * host-deps: rach2/sys/fs/ext2.c rach2/sys/fs/bcache.c rach2/sys/fs/fatcommon.c
  * host-deps: rach2/sys/block/chain.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/kheap_host.c
  *
  * The volumes are built here from a staged tree by the host's mke2fs on the
  * profile mkext2.sh writes, and debugfs adds device nodes in both encodings
@@ -964,16 +965,17 @@ static void refusal_rows(void)
     check(mount_image() == -EINVAL && streq(last_warn, "refused: group descriptor"),
           "an inode table at block zero is refused by name");
 
-    /* Sixty-four nodes held, and the sixty-fifth refused. */
+    /* Two hundred nodes held at once, past the sixty-four the pool once
+       had, each looked up again the node it is. */
     bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
     use_image(img, bytes);
-    check(mount_image() == 0, "the volume mounts for the pool row");
+    check(mount_image() == 0, "the volume mounts for the node row");
     if (mnt.root) {
-        void *held[EXT2_NODES];
+        void *held[200];
         int took = 0, i;
         void *many = walk("/many", &err);
 
-        for (i = 0; many && i < EXT2_NODES; i++) {
+        for (i = 0; many && i < 200; i++) {
             char name[32];
             void *node;
 
@@ -983,21 +985,16 @@ static void refusal_rows(void)
             }
             held[took++] = node;
         }
-        /* The root and /many are held too, so the pool fills two short of
-           the count. */
-        check(took == EXT2_NODES - 2,
-              "the pool holds sixty-two files beside the root and their directory");
+        check(took == 200, "two hundred files are held at once");
         if (many) {
             void *node;
 
-            check(OPS->lookup(&mnt, many, "file63.txt", &node) == -ENOMEM,
-                  "the sixty-fifth node answers ENOMEM");
+            check(OPS->lookup(&mnt, many, "file150.txt", &node) == 0 && node == held[150],
+                  "a held name looked up again is the held node");
+            OPS->put(&mnt, node);
             for (i = 0; i < took; i++) {
                 OPS->put(&mnt, held[i]);
             }
-            check(OPS->lookup(&mnt, many, "file63.txt", &node) == 0,
-                  "and is found once one is put");
-            OPS->put(&mnt, node);
             OPS->put(&mnt, many);
         }
     }
@@ -1874,13 +1871,13 @@ static void refusal_write_rows(void)
         OPS->put(&mnt, n);
     }
     proc_a.euid = 0;
-    /* The sixty-fourth node held and the sixty-fifth refused, over a
-       file each. */
+    /* A hundred nodes made and held at once, past the sixty-four the pool
+       once had, over a file each. */
     {
-        void *held[EXT2_NODES];
+        void *held[100];
         int took = 0;
 
-        for (i = 0; i < EXT2_NODES; i++) {
+        for (i = 0; i < 100; i++) {
             char nm[32];
 
             snprintf(nm, sizeof(nm), "p%d.txt", i);
@@ -1890,8 +1887,7 @@ static void refusal_write_rows(void)
             }
             held[took++] = n;
         }
-        check(took == EXT2_NODES - 1 && rc == -ENOMEM,
-              "the sixty-fourth node is the root's neighbour and the next answers ENOMEM");
+        check(took == 100, "a hundred new files are held at once");
         for (i = 0; i < took; i++) {
             OPS->put(&mnt, held[i]);
         }

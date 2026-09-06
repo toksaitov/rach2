@@ -9,8 +9,8 @@
  * dups it onto stdin, stdout, and stderr, exactly as a login server wires a
  * shell before exec. With that set held, the probe counts how many more fds it
  * can open against `/dev/null`: spare capacity beyond the session set proves a
- * real session (which also forks pipeline children in the shell) fits under the
- * fixed limits (`MAX_FDS`, `MAX_PROCS`, and the socket pool, 16 each).
+ * real session (which also forks pipeline children in the shell) fits, as it
+ * had to under the fixed tables of sixteen this kernel once had.
  *
  * Prints the spare-fd count, then "BUDGETMUSL OK" on success or a
  * "BUDGETMUSL FAIL (...)" line naming the failed step. Linked against musl.

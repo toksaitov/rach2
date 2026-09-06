@@ -1469,30 +1469,34 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
     }
 }
 
-int tcp_snapshot(struct tcp_row *out, int max)
+int tcp_row_at(int index, struct tcp_row *out)
 {
     uint32_t flags;
     const struct tcb *t;
     int n = 0;
 
-    if (!out || max <= 0) {
+    if (!out || index < 0) {
         return 0;
     }
     flags = net_lock();
-    for (t = tcbs; t && n < max; t = t->next) {
-        out[n].local_ip    = t->local_ip;
-        out[n].local_port  = t->local_port;
-        out[n].remote_ip   = t->remote_ip;
-        out[n].remote_port = t->remote_port;
-        out[n].state       = (int)t->state;
-        out[n].txq         = t->send_tail - t->send_ack;
-        out[n].rxq         = t->recv_tail - t->recv_head;
-        out[n].uid         = t->uid;
-        out[n].inode       = t->inode;
+    for (t = tcbs; t && n < index; t = t->next) {
         n++;
     }
+    if (!t) {
+        net_unlock(flags);
+        return 0;
+    }
+    out->local_ip    = t->local_ip;
+    out->local_port  = t->local_port;
+    out->remote_ip   = t->remote_ip;
+    out->remote_port = t->remote_port;
+    out->state       = (int)t->state;
+    out->txq         = t->send_tail - t->send_ack;
+    out->rxq         = t->recv_tail - t->recv_head;
+    out->uid         = t->uid;
+    out->inode       = t->inode;
     net_unlock(flags);
-    return n;
+    return 1;
 }
 
 int tcp_state_to_linux(int state)

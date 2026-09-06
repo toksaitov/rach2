@@ -154,23 +154,81 @@ void fd_ofd_unref(struct open_file *ofd)
  * table is torn down descriptor by descriptor through `fd_free`, which releases
  * each OFD reference.
  */
-void fd_table_init(fd_table_t *table)
+int fd_table_init(fd_table_t *table)
 {
-    int i;
+    if (!table) {
+        return -1;
+    }
+    table->entries = kzalloc(sizeof(fd_entry_t) * FD_TABLE_FIRST);
+    table->cap = table->entries ? FD_TABLE_FIRST : 0;
+    return table->entries ? 0 : -1;
+}
 
+void fd_table_free(fd_table_t *table)
+{
     if (!table) {
         return;
     }
+    kfree(table->entries);
+    table->entries = NULL;
+    table->cap = 0;
+}
 
-    for (i = 0; i < MAX_FDS; i++) {
-        table->entries[i].type   = FD_TYPE_NONE;
-        table->entries[i].node   = NULL;
-        table->entries[i].sock   = NULL;
-        table->entries[i].ofd    = NULL;
-        table->entries[i].ops    = NULL;
-        table->entries[i].priv   = NULL;
-        table->entries[i].flags  = 0;
+int fd_table_cap(const fd_table_t *table)
+{
+    return table ? table->cap : 0;
+}
+
+/* The table grown to at least `want` entries by doubling, the new ones
+ * free; -1 when `want` is past the limit or the heap has no room. */
+static int fd_table_grow(fd_table_t *table, int want)
+{
+    int cap = table->cap ? table->cap : FD_TABLE_FIRST;
+    fd_entry_t *grown;
+
+    if (want > FD_TABLE_LIMIT) {
+        return -1;
     }
+    while (cap < want) {
+        cap *= 2;
+    }
+    if (cap > FD_TABLE_LIMIT) {
+        cap = FD_TABLE_LIMIT;
+    }
+    grown = kzalloc(sizeof(fd_entry_t) * (size_t)cap);
+    if (!grown) {
+        return -1;
+    }
+    if (table->cap) {
+        k_memcpy(grown, table->entries, sizeof(fd_entry_t) * (size_t)table->cap);
+    }
+    kfree(table->entries);
+    table->entries = grown;
+    table->cap = cap;
+    return 0;
+}
+
+int fd_table_reach(fd_table_t *table, int fd)
+{
+    if (!table || fd < 0) {
+        return -1;
+    }
+    if (fd < table->cap) {
+        return 0;
+    }
+    return fd_table_grow(table, fd + 1);
+}
+
+int fd_table_copy(fd_table_t *dst, const fd_table_t *src)
+{
+    dst->entries = kzalloc(sizeof(fd_entry_t) * (size_t)src->cap);
+    if (!dst->entries) {
+        dst->cap = 0;
+        return -1;
+    }
+    k_memcpy(dst->entries, src->entries, sizeof(fd_entry_t) * (size_t)src->cap);
+    dst->cap = src->cap;
+    return 0;
 }
 
 /**
@@ -202,31 +260,41 @@ void fd_init_stdio(fd_table_t *table)
  * Reserve the lowest free descriptor at or above `minfd`.
  *
  * The chosen slot gets a fresh OFD but stays FD_TYPE_NONE; the caller fills in
- * type, node or sock, and flags. Returns the descriptor number, or -1 if the
- * table has no free slot at or above `minfd` or the OFD pool is exhausted.
+ * type, node or sock, and flags. A table with no free slot at or above
+ * `minfd` grows, up to the limit. Returns the descriptor number, or -1 when
+ * the limit is reached or the heap has no room.
  */
 int fd_alloc_from(fd_table_t *table, int minfd)
 {
     int i;
 
-    if (!table || minfd < 0 || minfd >= MAX_FDS) {
+    if (!table || minfd < 0 || minfd >= FD_TABLE_LIMIT) {
         return -1;
     }
-
-    for (i = minfd; i < MAX_FDS; i++) {
-        if (table->entries[i].type == FD_TYPE_NONE) {
-            struct open_file *ofd = ofd_alloc();
-            if (!ofd) {
-                return -1;
-            }
-            table->entries[i].ofd  = ofd;
-            table->entries[i].ops  = NULL;
-            table->entries[i].priv = NULL;
-            return i;
+    for (i = minfd; i < table->cap; i++) {
+        if (table->entries[i].type == FD_TYPE_NONE && table->entries[i].ofd == NULL) {
+            break;
         }
     }
+    if (i >= table->cap) {
+        int want = minfd > table->cap ? minfd + 1 : table->cap + 1;
 
-    return -1;
+        if (fd_table_grow(table, want) != 0) {
+            return -1;
+        }
+        i = minfd > i ? minfd : i;
+    }
+    {
+        struct open_file *ofd = ofd_alloc();
+
+        if (!ofd) {
+            return -1;
+        }
+        table->entries[i].ofd  = ofd;
+        table->entries[i].ops  = NULL;
+        table->entries[i].priv = NULL;
+    }
+    return i;
 }
 
 int fd_alloc(fd_table_t *table)
@@ -244,7 +312,7 @@ int fd_alloc(fd_table_t *table)
  */
 int fd_free(fd_table_t *table, int fd)
 {
-    if (!table || fd < 0 || fd >= MAX_FDS) {
+    if (!table || fd < 0 || fd >= table->cap) {
         return -1;
     }
 
@@ -266,7 +334,7 @@ int fd_free(fd_table_t *table, int fd)
 
 fd_entry_t *fd_get(fd_table_t *table, int fd)
 {
-    if (!table || fd < 0 || fd >= MAX_FDS) {
+    if (!table || fd < 0 || fd >= table->cap) {
         return NULL;
     }
 
@@ -279,7 +347,7 @@ fd_entry_t *fd_get(fd_table_t *table, int fd)
 
 int fd_is_valid(fd_table_t *table, int fd)
 {
-    if (!table || fd < 0 || fd >= MAX_FDS) {
+    if (!table || fd < 0 || fd >= table->cap) {
         return 0;
     }
 
@@ -290,10 +358,10 @@ int fd_can_alloc(const fd_table_t *table)
 {
     int i;
 
-    for (i = 0; i < MAX_FDS; i++) {
-        if (table->entries[i].type == FD_TYPE_NONE) {
+    for (i = 0; i < table->cap; i++) {
+        if (table->entries[i].type == FD_TYPE_NONE && table->entries[i].ofd == NULL) {
             return 1;
         }
     }
-    return 0;
+    return table->cap < FD_TABLE_LIMIT;
 }

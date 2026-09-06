@@ -31,11 +31,6 @@ struct socket;
  * transport layer checked.
  */
 
-/* Each socket's queue is eight datagrams of one MTU, which is the packet
- * socket's budget rather than a second convention, and four sockets may be
- * registered at once: `traceroute` holds one while `ping` holds another, and
- * the fan-out test holds two. That is 48 KB of the kernel's image. */
-#define RAW_MAX_BOUND 4
 
 /**
  * Register `sock` to receive IPv4 protocol `proto`, or return a negative errno.

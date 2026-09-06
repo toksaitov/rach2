@@ -129,7 +129,7 @@ static int fd_node_holders(const krffs_node_t *node, const fd_entry_t *except)
         return 0;
     }
     for (pr = proc_list; pr; pr = pr->next) {
-        for (i = 0; i < MAX_FDS; i++) {
+        for (i = 0; i < fd_table_cap(&pr->fds); i++) {
             fd_entry_t *e = &pr->fds.entries[i];
 
             if (e != except && e->type == FD_TYPE_FILE && e->node == node) {
@@ -369,7 +369,7 @@ void release_fd_table(fd_table_t *table)
     if (!table) {
         return;
     }
-    for (fdi = 0; fdi < MAX_FDS; fdi++) {
+    for (fdi = 0; fdi < fd_table_cap(table); fdi++) {
         fd_entry_t *e = &table->entries[fdi];
         if (e->type == FD_TYPE_NONE) {
             continue;
@@ -3055,13 +3055,17 @@ static int32_t sys_dup2(isr_params_t *params)
         return -EBADF;
     }
 
-    if (newfd < 0 || newfd >= MAX_FDS) {
+    if (newfd < 0 || newfd >= FD_TABLE_LIMIT) {
         return -EBADF;
     }
 
     if (oldfd == newfd) {
         return newfd;
     }
+    if (fd_table_reach(&current_proc->fds, newfd) != 0) {
+        return -EMFILE;
+    }
+    old_entry = fd_get(&current_proc->fds, oldfd); /* the entries may have moved */
 
     /* Close newfd if it's open (ignore errors), releasing every backing it held
      * (socket reference, ops object, framebuffer ownership). */
@@ -3610,7 +3614,7 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
             if (follow) {
                 /* A followed stat reports the target descriptor's identity. */
                 process_t *p = get_process((uint32_t)rpid);
-                if (p && vp->procfd >= 0 && vp->procfd < MAX_FDS &&
+                if (p && vp->procfd >= 0 && vp->procfd < fd_table_cap(&p->fds) &&
                     p->fds.entries[vp->procfd].type != FD_TYPE_NONE) {
                     fstat_fill(&p->fds.entries[vp->procfd], kst);
                     return 0;
@@ -5297,7 +5301,7 @@ static int32_t sys_fcntl64(isr_params_t *params)
             /* F_DUPFD duplicates onto the LOWEST free fd >= arg (the POSIX
              * contract). An arg past the table is -EINVAL; no slot at or above
              * it is -EMFILE. */
-            if (arg >= (uint32_t)MAX_FDS) {
+            if (arg >= (uint32_t)FD_TABLE_LIMIT) {
                 return -EINVAL;
             }
             newfd = fd_alloc_from(&current_proc->fds, (int)arg);
@@ -5616,7 +5620,7 @@ static void close_cloexec_fds(void)
 {
     int fd;
 
-    for (fd = 0; fd < MAX_FDS; fd++) {
+    for (fd = 0; fd < fd_table_cap(&current_proc->fds); fd++) {
         fd_entry_t *entry = fd_get(&current_proc->fds, fd);
         if (!entry || !(entry->flags & FD_FLAG_CLOEXEC)) {
             continue;
@@ -6540,6 +6544,7 @@ static int32_t sys_fork(isr_params_t *params)
      * overwrites the table), or those OFDs would be orphaned and leak the pool
      * on every fork. */
     release_fd_table(&child->fds);
+    fd_table_free(&child->fds);
 
     child_dir = clone_page_directory();
     if (!child_dir) {
@@ -6608,7 +6613,10 @@ static int32_t sys_fork(isr_params_t *params)
      * otherwise the child would have no regions and the first heap/stack
      * fault would segfault it. (k_memcpy, not struct assignment, so the
      * freestanding kernel does not need a compiler-emitted memcpy.) */
-    k_memcpy(&child->vm, &parent->vm, sizeof(child->vm));
+    if (vm_copy(&child->vm, &parent->vm) != 0) {
+        free_process(child);
+        return -ENOMEM;
+    }
 
     /* The child inherits the parent's current working directory. */
     k_memcpy(child->cwd, parent->cwd, sizeof(child->cwd));
@@ -6623,10 +6631,13 @@ static int32_t sys_fork(isr_params_t *params)
      * descriptions (so a seek in one is seen by the other, per POSIX), so each
      * inherited OFD gains a reference; inherited sockets gain one too, so the
      * parent and child release independently. */
-    k_memcpy(&child->fds, &parent->fds, sizeof(fd_table_t));
+    if (fd_table_copy(&child->fds, &parent->fds) != 0) {
+        free_process(child);
+        return -ENOMEM;
+    }
     {
         int fdi;
-        for (fdi = 0; fdi < MAX_FDS; fdi++) {
+        for (fdi = 0; fdi < fd_table_cap(&child->fds); fdi++) {
             if (child->fds.entries[fdi].type == FD_TYPE_NONE) {
                 continue;
             }
@@ -7757,7 +7768,7 @@ static int synth_dirent_at(int kind, int pid, int n, char *name, uint64_t *ino, 
         if (!pp) {
             return 0;
         }
-        for (i = 0; i < MAX_FDS; i++) {
+        for (i = 0; i < fd_table_cap(&pp->fds); i++) {
             if (pp->fds.entries[i].type != FD_TYPE_NONE) {
                 if (c == n) {
                     synth_u32_str(name, (uint32_t)i);
@@ -11540,7 +11551,7 @@ static void rlimit_for(uint32_t resource, uint32_t *cur, uint32_t *max)
 
     switch (resource) {
     case RLIMIT_NOFILE_RES:
-        v = (uint32_t)MAX_FDS;
+        v = (uint32_t)FD_TABLE_LIMIT;
         break;
     case RLIMIT_NPROC_RES:
         v = (uint32_t)PROC_COUNT_POLICY;
@@ -11734,7 +11745,7 @@ static void vma_exhausted(const char *what)
     }
     current_proc->vma_reported = 1;
     klog(KLOG_WARN, "vm", "%s: pid %d (%s) has used all %d of its mappings", what,
-                  (int)current_proc->pid, current_proc->comm, VMA_MAX);
+                  (int)current_proc->pid, current_proc->comm, VMA_LIMIT);
 }
 
 /*

@@ -12,14 +12,16 @@
 #include "../ip/ip.h"
 #include "../../lib/kerrno.h"
 #include "../../lib/kstring.h"
+#include "../../mm/kheap.h"
 #include "../../serial.h"
 #include "../../proc/wait_queue.h"
 
+/* Policy: each socket's queue is eight datagrams of one MTU, twelve
+ * kilobytes from the heap for the life of the registration, enough to hold
+ * a reply behind a burst of other people's datagrams while the reader is
+ * being scheduled. */
 #define RAW_QUEUE_SLOTS 8
 #define RAW_SLOT_SIZE   1500
-
-static struct socket *bound[RAW_MAX_BOUND];
-static uint8_t bound_proto[RAW_MAX_BOUND];
 
 struct raw_queue {
     uint8_t buf[RAW_QUEUE_SLOTS][RAW_SLOT_SIZE];
@@ -32,49 +34,60 @@ struct raw_queue {
     uint32_t last_src;
 };
 
-static struct raw_queue queues[RAW_MAX_BOUND];
+/* A registered socket: the socket, the protocol it asked for, and its
+ * queue, one record from the heap per registration, on a list the receive
+ * path walks. */
+struct raw_binding {
+    struct raw_binding *next;
+    struct socket *sock;
+    uint8_t proto;
+    struct raw_queue q;
+};
 
-/** The queue belonging to `sock`, or NULL if it is not registered. */
-static struct raw_queue *queue_of(struct socket *sock)
+static struct raw_binding *raws;
+
+/** The registration of `sock`, or NULL if it has none. */
+static struct raw_binding *binding_of(struct socket *sock)
 {
-    int i;
+    struct raw_binding *b;
 
-    for (i = 0; i < RAW_MAX_BOUND; i++) {
-        if (bound[i] == sock) {
-            return &queues[i];
+    for (b = raws; b; b = b->next) {
+        if (b->sock == sock) {
+            return b;
         }
     }
     return NULL;
 }
 
+/** The queue belonging to `sock`, or NULL if it is not registered. */
+static struct raw_queue *queue_of(struct socket *sock)
+{
+    struct raw_binding *b = binding_of(sock);
+
+    return b ? &b->q : NULL;
+}
+
 int raw_register(struct socket *sock, uint8_t proto)
 {
     uint32_t flags;
-    int i, free_slot;
+    struct raw_binding *b;
 
     flags = net_lock();
-    free_slot = -1;
-    for (i = 0; i < RAW_MAX_BOUND; i++) {
-        if (bound[i] == sock) {
-            bound_proto[i] = proto;
-            net_unlock(flags);
-            return 0;
-        }
-        if (!bound[i] && free_slot < 0) {
-            free_slot = i;
-        }
+    b = binding_of(sock);
+    if (b) {
+        b->proto = proto;
+        net_unlock(flags);
+        return 0;
     }
-    if (free_slot < 0) {
+    b = kzalloc(sizeof(*b));
+    if (!b) {
         net_unlock(flags);
         return -ENOBUFS;
     }
-    bound[free_slot] = sock;
-    bound_proto[free_slot] = proto;
-    queues[free_slot].head = 0;
-    queues[free_slot].count = 0;
-    queues[free_slot].dropped = 0;
-    queues[free_slot].reported = 0;
-    queues[free_slot].last_src = 0;
+    b->sock = sock;
+    b->proto = proto;
+    b->next = raws;
+    raws = b;
     net_unlock(flags);
     return 0;
 }
@@ -82,16 +95,16 @@ int raw_register(struct socket *sock, uint8_t proto)
 void raw_unregister(struct socket *sock)
 {
     uint32_t flags;
-    int i;
+    struct raw_binding **link;
 
     flags = net_lock();
-    for (i = 0; i < RAW_MAX_BOUND; i++) {
-        if (bound[i] == sock) {
-            bound[i] = NULL;
-            bound_proto[i] = 0;
-            queues[i].count = 0;
-            queues[i].head = 0;
-            queues[i].last_src = 0;
+    for (link = &raws; *link; link = &(*link)->next) {
+        if ((*link)->sock == sock) {
+            struct raw_binding *b = *link;
+
+            *link = b->next;
+            kfree(b);
+            break;
         }
     }
     net_unlock(flags);
@@ -101,7 +114,7 @@ void raw_rx(uint8_t proto, const uint8_t *data, uint16_t total_len)
 {
     uint16_t copy_len = total_len > RAW_SLOT_SIZE ? RAW_SLOT_SIZE : total_len;
     uint32_t src;
-    int i;
+    struct raw_binding *b;
 
     if (total_len < IP_HDR_SIZE) {
         return;
@@ -113,11 +126,11 @@ void raw_rx(uint8_t proto, const uint8_t *data, uint16_t total_len)
        table and the queues are touched without taking net_lock again. Every
        matching socket gets its own copy: two programs watching ICMP each see
        the whole exchange, which is what a tap means. */
-    for (i = 0; i < RAW_MAX_BOUND; i++) {
-        struct raw_queue *q = &queues[i];
+    for (b = raws; b; b = b->next) {
+        struct raw_queue *q = &b->q;
         int slot;
 
-        if (!bound[i] || bound_proto[i] != proto) {
+        if (b->proto != proto) {
             continue;
         }
         if (q->count == RAW_QUEUE_SLOTS) {
@@ -138,7 +151,7 @@ void raw_rx(uint8_t proto, const uint8_t *data, uint16_t total_len)
         q->len[slot] = copy_len;
         q->src[slot] = src;
         q->count++;
-        wq_wake_all(&bound[i]->waiters);
+        wq_wake_all(&b->sock->waiters);
     }
 }
 

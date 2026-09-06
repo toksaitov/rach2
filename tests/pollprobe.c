@@ -12,8 +12,8 @@
  *       moment a forked child writes (it does NOT wait out the timeout),
  *       proving poll truly blocks on the pipe wait queue;
  *   (f) fd contract: a wide nfds with only in-range bits works; a bit naming
- *       an fd >= MAX_FDS or a closed fd is -EBADF; nfds past the fd_set width
- *       is -EINVAL (never a silent truncation);
+ *       a closed fd, past the table or not, is -EBADF; nfds past the fd_set
+ *       width is -EINVAL (never a silent truncation);
  *   (g) bad timeout: an out-of-range timeval (tv_usec >= 1e6) is -EINVAL.
  *
  * Prints "POLLPROBE OK". Freestanding; direct int 0x80.
@@ -235,14 +235,14 @@ void _start(void)
         n = syscall5(SYS_NEWSELECT, 64, 0, (int)(size_t)set, 0, 0);
         check(n == 1 && (set[0] & (1u << 1)) != 0, "wide select with an in-range bit works");
 
-        /* A bit for an fd >= MAX_FDS (16) is an impossible descriptor ->
-         * -EBADF. */
+        /* A bit for an fd past the table's sixteen, which nothing has
+         * opened, is a closed descriptor -> -EBADF. */
         for (i = 0; i < 32; i++) {
             set[i] = 0;
         }
         set[17u / 32] = 1u << (17u % 32);
         check(syscall5(SYS_NEWSELECT, 18, (int)(size_t)set, 0, 0, 0) == -EBADF,
-              "select bit past MAX_FDS -> -EBADF");
+              "select bit past the table -> -EBADF");
 
         /* A bit for a closed in-range fd is also -EBADF, not ignored: a[0] was
          * closed above. */

@@ -2,12 +2,13 @@
  * How many separate mappings one process may hold, which is a limit a program
  * meets long before it runs out of memory.
  *
- * A process's address space here is a fixed array of regions (`VMA_MAX` in
- * rach2/sys/mm/vm.h). Four are spoken for before it runs a line: its code, its
- * data, the heap and the stack. Every anonymous `mmap` after that takes one
- * more, and a C library's allocator reaches for `mmap` once an allocation is
- * large enough, so the array size is the number of large allocations a program
- * may hold AT ONCE.
+ * A process's address space here is an array of regions that grows as it
+ * fills, from sixteen to the limit in rach2/sys/mm/vm.h. Four are spoken for
+ * before it runs a line: its code, its data, the heap and the stack. Every
+ * anonymous `mmap` after that takes one more, and a C library's allocator
+ * reaches for `mmap` once an allocation is large enough, so the regions a
+ * process may hold is the number of large allocations a program may hold AT
+ * ONCE.
  *
  * The compiler is what found the old number too small. Reading musl's 1.9 MB
  * `libc.a`, tcc reported "memory full (malloc)" with physical memory barely

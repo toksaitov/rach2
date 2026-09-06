@@ -331,9 +331,9 @@ void _start(void)
         failed++;
     }
 
-    /* Test 5: dup2 with invalid newfd should fail */
-    print_stderr("Test 5: dup2(1, 999) with invalid newfd... ");
-    result = sys_dup2(STDOUT_FILENO, 999);
+    /* Test 5: dup2 onto a number past the limit of 1024 should fail */
+    print_stderr("Test 5: dup2(1, 2000) with invalid newfd... ");
+    result = sys_dup2(STDOUT_FILENO, 2000);
     if (result < 0) {
         puts_stderr("OK (failed as expected)");
         passed++;

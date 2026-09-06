@@ -11,7 +11,6 @@
  */
 
 #define UDP_HDR_SIZE        8
-#define UDP_PORT_TABLE_SIZE 8
 
 struct socket;
 

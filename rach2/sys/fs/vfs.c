@@ -683,7 +683,7 @@ void vfs_repoint(struct vfs_mount *mnt, void *from, void *to)
 
     for (pr = proc_list; pr; pr = pr->next) {
         if (mnt == mounts[0]) {
-            for (j = 0; j < MAX_FDS; j++) {
+            for (j = 0; j < fd_table_cap(&pr->fds); j++) {
                 fd_entry_t *e = &pr->fds.entries[j];
 
                 if ((e->type == FD_TYPE_FILE || e->type == FD_TYPE_DIR) &&

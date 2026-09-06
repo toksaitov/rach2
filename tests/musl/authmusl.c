@@ -6,8 +6,9 @@
  * and gid 0; getspnam("root") parses the staged /etc/shadow and crypt() with
  * the stored setting reproduces the stored hash (the image commits the fixed
  * test credential "rach2", so this proves the guest verifies exactly what the
- * host's mkhash mints); getrlimit(RLIMIT_NOFILE) reports the real cap
- * (MAX_FDS == 16); gethostname() round-trips with sethostname(); dup3 onto an
+ * host's mkhash mints); getrlimit(RLIMIT_NOFILE) reports the real limit,
+ * a thousand and twenty-four descriptors; gethostname() round-trips with
+ * sethostname(); dup3 onto an
  * explicit high fd with O_CLOEXEC dups and sets close-on-exec; an advisory
  * fcntl(F_SETLK) is granted with no conflict (single-user locks); and the
  * credential walk a login server performs works through libc: the seteuid
@@ -64,7 +65,7 @@ int main(void)
         return 1;
     }
 
-    if (getrlimit(RLIMIT_NOFILE, &rl) != 0 || rl.rlim_cur != 16) {
+    if (getrlimit(RLIMIT_NOFILE, &rl) != 0 || rl.rlim_cur != 1024) {
         printf("AUTHMUSL FAIL (RLIMIT_NOFILE=%ld)\n", (long)rl.rlim_cur);
         return 1;
     }

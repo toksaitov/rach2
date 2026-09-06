@@ -16,16 +16,18 @@
 #include "../core/byteorder.h"
 #include "../../serial.h"
 #include "../../lib/kstring.h"
+#include "../../mm/kheap.h"
 
-/* Maps a destination UDP port to the socket that should receive its data. */
+/* Maps a destination UDP port to the socket that should receive its data:
+   one record from the heap per bound socket, on a list. */
 typedef struct udp_binding {
+    struct udp_binding *next;
     uint16_t       port;
     struct socket *sock;
     uint32_t       owner;  /* the effective uid that bound it */
-    uint8_t        in_use;
 } udp_binding_t;
 
-static udp_binding_t port_table[UDP_PORT_TABLE_SIZE];
+static udp_binding_t *bindings;
 
 static uint8_t udp_tx_buf[UDP_HDR_SIZE + 1500];
 
@@ -34,10 +36,10 @@ static uint16_t udp_next_ephemeral = 49152;
 
 static int udp_port_in_use(uint16_t port)
 {
-    int i;
+    const udp_binding_t *b;
 
-    for (i = 0; i < UDP_PORT_TABLE_SIZE; i++) {
-        if (port_table[i].in_use && port_table[i].port == port) {
+    for (b = bindings; b; b = b->next) {
+        if (b->port == port) {
             return 1;
         }
     }
@@ -47,18 +49,18 @@ static int udp_port_in_use(uint16_t port)
 /**
  * Bind a socket to a UDP port so udp_rx can route inbound datagrams to it.
  *
- * Fails if the port is already bound or the port table is full. The table is
- * shared with udp_rx, which runs in IRQ context, so the update is done under
- * net_lock.
+ * Fails if the port is already bound or the heap has no room for the
+ * binding. The list is shared with udp_rx, which runs in IRQ context, so
+ * the update is done under net_lock.
  *
- * @return 0 on success, -1 on conflict or a full table.
+ * @return 0 on success, -1 on conflict or no memory.
  */
 int udp_bind(uint16_t port, struct socket *sock)
 {
-    int i;
+    udp_binding_t *b;
     uint32_t flags;
 
-    /* The port table is read by udp_rx in IRQ context; update it atomically. */
+    /* The list is read by udp_rx in IRQ context; update it atomically. */
     flags = net_lock();
 
     /* A port already bound is taken again only when every socket on it asked
@@ -72,10 +74,9 @@ int udp_bind(uint16_t port, struct socket *sock)
         uint32_t uid = current_proc ? current_proc->euid : 0;
         int shared = sock && sock->reuseaddr;
 
-        for (i = 0; shared && i < UDP_PORT_TABLE_SIZE; i++) {
-            if (port_table[i].in_use && port_table[i].port == port &&
-                (!port_table[i].sock || !port_table[i].sock->reuseaddr ||
-                 port_table[i].owner != uid)) {
+        for (b = bindings; shared && b; b = b->next) {
+            if (b->port == port &&
+                (!b->sock || !b->sock->reuseaddr || b->owner != uid)) {
                 shared = 0;
             }
         }
@@ -86,21 +87,20 @@ int udp_bind(uint16_t port, struct socket *sock)
         }
     }
 
-    for (i = 0; i < UDP_PORT_TABLE_SIZE; i++) {
-        if (!port_table[i].in_use) {
-            port_table[i].port   = port;
-            port_table[i].sock   = sock;
-            port_table[i].owner  = current_proc ? current_proc->euid : 0;
-            port_table[i].in_use = 1;
-            net_unlock(flags);
-            return 0;
-        }
+    b = kzalloc(sizeof(*b));
+    if (!b) {
+        net_unlock(flags);
+        klog(KLOG_WARN, "udp", "bind: no memory for a binding, port %d refused",
+             (int)port);
+        return -1;
     }
-
+    b->port  = port;
+    b->sock  = sock;
+    b->owner = current_proc ? current_proc->euid : 0;
+    b->next  = bindings;
+    bindings = b;
     net_unlock(flags);
-    klog(KLOG_WARN, "udp", "bind: the port table is full, port %d refused",
-         (int)port);
-    return -1;
+    return 0;
 }
 
 /**
@@ -115,27 +115,7 @@ int udp_bind(uint16_t port, struct socket *sock)
 uint16_t udp_bind_ephemeral(struct socket *sock)
 {
     int tries;
-    int i;
     uint16_t port;
-    uint32_t flags;
-    int room = 0;
-
-    /* A table with no free slot is answered at once. Walking sixteen thousand
-       ports to find that out takes a long time and prints a line for each, and
-       a caller holding the network lock across this call would hold interrupts
-       off for all of it: a process that filled the table could stop the
-       machine's clock by connecting one more socket. */
-    flags = net_lock();
-    for (i = 0; i < UDP_PORT_TABLE_SIZE; i++) {
-        if (!port_table[i].in_use) {
-            room = 1;
-            break;
-        }
-    }
-    net_unlock(flags);
-    if (!room) {
-        return 0;
-    }
 
     for (tries = 0; tries < 16384; tries++) {
         port = udp_next_ephemeral++;
@@ -157,17 +137,22 @@ uint16_t udp_bind_ephemeral(struct socket *sock)
 
 void udp_unbind(struct socket *sock)
 {
-    int i;
+    udp_binding_t **link;
     uint32_t flags;
 
     /* By socket and not by port: two sockets may share a port, and releasing
        the first entry that names it would take the other one's binding away
        and leave this one's behind. */
     flags = net_lock();
-    for (i = 0; i < UDP_PORT_TABLE_SIZE; i++) {
-        if (port_table[i].in_use && port_table[i].sock == sock) {
-            port_table[i].in_use = 0;
-            port_table[i].sock = NULL;
+    link = &bindings;
+    while (*link) {
+        udp_binding_t *b = *link;
+
+        if (b->sock == sock) {
+            *link = b->next;
+            kfree(b);
+        } else {
+            link = &b->next;
         }
     }
     net_unlock(flags);
@@ -186,7 +171,6 @@ void udp_unbind(struct socket *sock)
 void udp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len)
 {
     uint16_t dst_port, udp_len, payload_len;
-    int i;
 
     if (len < UDP_HDR_SIZE) {
         return;
@@ -213,11 +197,12 @@ void udp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len)
     {
         struct socket *listener = NULL;
         uint16_t src_port = read16be(data + 0);
+        const udp_binding_t *b;
 
-        for (i = 0; i < UDP_PORT_TABLE_SIZE; i++) {
-            struct socket *cand = port_table[i].sock;
+        for (b = bindings; b; b = b->next) {
+            struct socket *cand = b->sock;
 
-            if (!port_table[i].in_use || port_table[i].port != dst_port || !cand) {
+            if (b->port != dst_port || !cand) {
                 continue;
             }
             if (cand->connected) {

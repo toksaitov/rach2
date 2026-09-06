@@ -1756,7 +1756,7 @@ int devfs_usb_opens(int n)
     for (p = proc_list; p; p = p->next) {
         int f;
 
-        for (f = 0; f < MAX_FDS; f++) {
+        for (f = 0; f < fd_table_cap(&p->fds); f++) {
             const fd_entry_t *e = &p->fds.entries[f];
             const struct devfs_entry *dev;
 
