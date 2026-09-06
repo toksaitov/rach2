@@ -18,7 +18,11 @@
  */
 
 /** How many sticks this kernel drives at once. */
-#define MSC_MAX_DEVICES 2
+#define MSC_MAX_DEVICES 8
+
+/* How many logical units of one device are driven: a card reader has a
+   slot per unit, a stick has one. */
+#define MSC_MAX_LUNS 4
 
 /**
  * What a stick says it is, for `/proc/usb` and the disk layer.
@@ -84,6 +88,9 @@ int msc_ready(int index);
 /** What slot `index` holds; -1 when the slot is free. */
 int msc_ident(int index, struct msc_ident *out);
 
+/** As `msc_ident`, for logical unit `lun` of the device. */
+int msc_lun_ident(int index, int lun, struct msc_ident *out);
+
 /**
  * Free a slot whose stick has gone and whose device nothing holds.
  *
@@ -100,5 +107,8 @@ void msc_release(int index);
  * buffer still name it.
  */
 struct block_device *msc_block_device(int index);
+
+/** The block device of logical unit `lun` of the device at `index`, or NULL. */
+struct block_device *msc_lun_device(int index, int lun);
 
 #endif /* _USB_MSC_H_ */

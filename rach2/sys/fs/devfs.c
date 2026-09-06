@@ -483,11 +483,18 @@ static struct disk_window *disk_node_window(const struct disk_node *node)
     return &node->disk->views[node->part - 1];
 }
 
+static int32_t raw_window_read_bytes(struct disk_window *w, fd_entry_t *e, char __user *buf,
+                                     uint32_t count);
+
 static int32_t dev_disk_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     const struct disk_node *node = disk_node_of((const struct devfs_entry *)e->priv);
+    struct disk_window *w = disk_node_window(node);
 
-    return raw_window_read(disk_node_window(node), e, buf, count);
+    if (!w->present) {
+        return -EIO; /* a stick pulled out from under the reader */
+    }
+    return raw_window_read_bytes(w, e, buf, count);
 }
 
 /**
@@ -532,45 +539,11 @@ static int32_t dev_disk_write(fd_entry_t *e, const char __user *buf, uint32_t co
 }
 #endif
 
-/*
- * The sticks: `/dev/usb0` is the whole medium and `/dev/usb0p1` to `p4` are
- * what its partition table describes, and the same for `usb1`.
- *
- * These are raw windows like the disk's, with two differences. They report
- * themselves as block devices in `stat`, because that is what BusyBox's
- * `blkid`, `findfs` and `mount LABEL=` scan `/dev` for, and a stick is then
- * found by its label rather than by the order the sticks were plugged in;
- * and there is one shared vtable rather than one per node, with the entry's
- * minor saying which window it is, because ten of these would otherwise be
- * ten pairs of identical functions.
- *
- * A stick that is pulled hides its nodes at once, so nothing new can open
- * them, and keeps its windows until the last hold on them is released.
- */
-#define USB_WINDOWS    (GPT_PART_COUNT + 1)
-#define USB_MINOR_BASE 16
-
-static struct disk_window usb_win[USBDISK_MAX][USB_WINDOWS];
-static int usb_hidden[USBDISK_MAX];
-
-/** The window an entry's minor names, or null when there is no such one. */
-static struct disk_window *usb_window(const struct devfs_entry *dev)
-{
-    int index = (int)dev->minor - USB_MINOR_BASE;
-    int n = index / USB_WINDOWS;
-    int k = index % USB_WINDOWS;
-
-    if (index < 0 || n >= USBDISK_MAX) {
-        return 0;
-    }
-    return &usb_win[n][k];
-}
-
 /**
- * Read any byte range from a stick's window.
+ * Read any byte range from a disk's window.
  *
- * The disk's windows take whole sectors only, because their readers are the
- * reflash tools and a partial sector there is a mistake. A stick's nodes are
+ * The boot windows take whole sectors only, because their readers are the
+ * reflash tools and a partial sector there is a mistake. A disk's nodes are
  * read by `blkid`, whose probers ask for the size of a superblock structure
  * at whatever offset it lives, and a block device node on Linux answers
  * that. So the covering sectors are read into the staging buffer and the
@@ -629,28 +602,6 @@ static int32_t raw_window_read_bytes(struct disk_window *w, fd_entry_t *e, char 
     }
     e->ofd->raw_offset = off + done;
     return (int32_t)done;
-}
-
-static int32_t dev_usb_read(fd_entry_t *e, char __user *buf, uint32_t count)
-{
-    const struct devfs_entry *dev = (const struct devfs_entry *)e->priv;
-    struct disk_window *w = usb_window(dev);
-
-    if (!w || !w->present) {
-        return -EIO; /* the stick was pulled out from under the reader */
-    }
-    return raw_window_read_bytes(w, e, buf, count);
-}
-
-/* A stick is written through a file system on it. The nodes are the view a
- * mount and a label scan read, and a raw write to a mounted volume is what
- * the disk's windows exist to keep out. */
-static int32_t dev_usb_write(fd_entry_t *e, const char __user *buf, uint32_t count)
-{
-    (void)e;
-    (void)buf;
-    (void)count;
-    return -EPERM;
 }
 
 static int32_t dev_bootpart_write(fd_entry_t *e, const char __user *buf, uint32_t count)
@@ -731,7 +682,6 @@ static void dev_disk_close(fd_entry_t *e)
     node->disk->opens--;
 }
 
-static const struct file_ops usbwin_ops = {dev_usb_read, dev_usb_write, dev_poll, dev_ioctl, NULL};
 /*
  * /dev/loop0 to /dev/loop3, and the node that attaches and detaches them.
  *
@@ -930,26 +880,12 @@ static const struct devfs_entry dev_table[] = {{"null", 1, 3, 1, 0666, &null_ops
                                                {"bootpart", 240, 0, 0, 0600, &bootpart_ops},
                                                {"bootlog", 240, 2, 0, 0400, &bootlog_ops},
                                                {"grubcore", 240, 3, 0, 0600, &grubcore_ops},
-                                               {"usb0", 240, 16, 0, 0400, &usbwin_ops},
-                                               {"usb0p1", 240, 17, 0, 0400, &usbwin_ops},
-                                               {"usb0p2", 240, 18, 0, 0400, &usbwin_ops},
-                                               {"usb0p3", 240, 19, 0, 0400, &usbwin_ops},
-                                               {"usb0p4", 240, 20, 0, 0400, &usbwin_ops},
-                                               {"usb1", 240, 21, 0, 0400, &usbwin_ops},
-                                               {"usb1p1", 240, 22, 0, 0400, &usbwin_ops},
-                                               {"usb1p2", 240, 23, 0, 0400, &usbwin_ops},
-                                               {"usb1p3", 240, 24, 0, 0400, &usbwin_ops},
-                                               {"usb1p4", 240, 25, 0, 0400, &usbwin_ops},
                                                {"loop0", 240, 32, 0, 0400, &loop_ops},
                                                {"loop1", 240, 33, 0, 0400, &loop_ops},
                                                {"loop2", 240, 34, 0, 0400, &loop_ops},
                                                {"loop3", 240, 35, 0, 0400, &loop_ops},
                                                {"loop-control", 240, 36, 0, 0600, &loopctl_ops},
                                                {"framefail", 240, 37, 0, 0600, &framefail_ops}};
-
-/* One row above per window below, and the minors run from USB_MINOR_BASE in
- * that order; a change to either number must change the rows with it. */
-typedef char usb_rows_match_windows[(USBDISK_MAX * USB_WINDOWS == 10) ? 1 : -1];
 
 #define DEVFS_NDEV ((int)(sizeof(dev_table) / sizeof(dev_table[0])))
 
@@ -974,26 +910,21 @@ static int devfs_entry_present(int i)
     if (dev_table[i].ops == &grubcore_ops) {
         return grubcore.present;
     }
-    if (dev_table[i].ops == &usbwin_ops) {
-        struct disk_window *w = usb_window(&dev_table[i]);
-        int n = ((int)dev_table[i].minor - USB_MINOR_BASE) / USB_WINDOWS;
-
-        return w && w->present && !usb_hidden[n];
-    }
     return 1;
 }
 
 /**
  * The type bits `stat` reports for an entry.
  *
- * The sticks are block devices and everything else here is a character
- * device. The difference is not decoration: `blkid`, `findfs` and
- * `mount LABEL=` walk `/dev` and look at nothing that is not a block device,
- * so a stick reported as a character device cannot be found by its label.
+ * The disks' nodes are block devices and everything else here is a
+ * character device. The difference is not decoration: `blkid`, `findfs`
+ * and `mount LABEL=` walk `/dev` and look at nothing that is not a block
+ * device, so a volume reported as a character device cannot be found by
+ * its label.
  */
 static uint32_t devfs_type_bits(const struct devfs_entry *dev)
 {
-    return dev->ops == &usbwin_ops ? 0060000u : 0020000u; /* S_IFBLK, S_IFCHR */
+    return dev->ops == &diskwin_ops ? 0060000u : 0020000u; /* S_IFBLK, S_IFCHR */
 }
 
 /* Stable inode namespace for /dev: the directory itself, then one per
@@ -1016,7 +947,8 @@ static int name_eq(const char *a, const char *b)
 /** Whether disk node `j` exists right now: its window is published. */
 static int disk_node_present(int j)
 {
-    return j >= 0 && j < disk_node_count && disk_node_window(&disk_nodes[j])->present;
+    return j >= 0 && j < disk_node_count && disk_nodes[j].disk->present &&
+           disk_node_window(&disk_nodes[j])->present;
 }
 
 /* The index `stat` and the listing agree on: the table's entries first,
@@ -1258,9 +1190,10 @@ int devfs_window_of(const char *path, block_device_t **view, block_device_t **ba
     node = disk_node_of(dev);
     if (dev->ops == &bootpart_ops) {
         w = &bootpart;
-    } else if (dev->ops == &usbwin_ops) {
-        w = usb_window(dev);
-    } else if (node && node->part > 0) {
+    } else if (node) {
+        /* The whole disk is a mount's source when it holds one volume and
+         * no table, as a stick formatted without one does; the claim rules
+         * keep a whole-disk mount and a partition's from overlapping. */
         w = disk_node_window(node);
     }
     if (!w) {
@@ -1682,104 +1615,6 @@ void devfs_grubcore_publish(struct block_device *backing)
  * node; a stick with a table is read through it as well, which is how a
  * partition table is inspected without mounting anything.
  */
-void devfs_usb_publish(int n, block_device_t *whole, const struct gpt_part *parts, int count)
-{
-    int k;
-
-    if (n < 0 || n >= USBDISK_MAX || whole == 0) {
-        return;
-    }
-    for (k = 0; k < USB_WINDOWS; k++) {
-        usb_win[n][k].present = 0;
-    }
-    usb_hidden[n] = 0;
-    block_partition_init(&usb_win[n][0].part, whole, 0, whole->sector_count);
-    usb_win[n][0].present = 1;
-    for (k = 0; k < count && k < GPT_PART_COUNT; k++) {
-        block_partition_init(&usb_win[n][k + 1].part, whole, parts[k].start_lba,
-                             parts[k].sector_count);
-        usb_win[n][k + 1].present = 1;
-    }
-}
-
-/**
- * Take the stick numbered `n` out of `/dev` without taking its windows away.
- *
- * A pulled stick may still be mounted and may still have descriptions open
- * on it, and both read through these windows; what must stop at once is a
- * new open, so the nodes go and the windows stay until `devfs_usb_withdraw`.
- */
-void devfs_usb_hide(int n)
-{
-    if (n < 0 || n >= USBDISK_MAX) {
-        return;
-    }
-    usb_hidden[n] = 1;
-}
-
-/** Take the windows of the stick numbered `n` back. */
-void devfs_usb_withdraw(int n)
-{
-    int k;
-
-    if (n < 0 || n >= USBDISK_MAX) {
-        return;
-    }
-    for (k = 0; k < USB_WINDOWS; k++) {
-        usb_win[n][k].present = 0;
-    }
-    usb_hidden[n] = 0;
-}
-
-block_device_t *devfs_usb_view(int n, int k)
-{
-    if (n < 0 || n >= USBDISK_MAX || k < 0 || k >= USB_WINDOWS) {
-        return 0;
-    }
-    if (!usb_win[n][k].present) {
-        return 0;
-    }
-    return &usb_win[n][k].part.device;
-}
-
-/**
- * How many descriptions are open on the nodes of the stick numbered `n`.
- *
- * Counted by walking the descriptor tables rather than by keeping a number
- * up to date at every open and close. A number that drifted by one would
- * leave a pulled stick a tombstone for the life of the machine, and the
- * walk is over what the machine has open, which is not many.
- */
-int devfs_usb_opens(int n)
-{
-    const process_t *p;
-    int open_count = 0;
-
-    if (n < 0 || n >= USBDISK_MAX) {
-        return 0;
-    }
-    for (p = proc_list; p; p = p->next) {
-        int f;
-
-        for (f = 0; f < fd_table_cap(&p->fds); f++) {
-            const fd_entry_t *e = &p->fds.entries[f];
-            const struct devfs_entry *dev;
-
-            if (e->type != FD_TYPE_DEVICE || e->priv == 0) {
-                continue;
-            }
-            dev = (const struct devfs_entry *)e->priv;
-            if (dev->ops != &usbwin_ops) {
-                continue;
-            }
-            if (((int)dev->minor - USB_MINOR_BASE) / USB_WINDOWS == n) {
-                open_count++;
-            }
-        }
-    }
-    return open_count;
-}
-
 int devfs_fd_is_raw(struct fd_entry *e)
 {
     const struct devfs_entry *dev;
@@ -1788,8 +1623,7 @@ int devfs_fd_is_raw(struct fd_entry *e)
         return 0;
     }
     dev = (const struct devfs_entry *)e->priv;
-    return dev->ops == &bootpart_ops || dev->ops == &grubcore_ops || dev->ops == &diskwin_ops ||
-           dev->ops == &usbwin_ops;
+    return dev->ops == &bootpart_ops || dev->ops == &grubcore_ops || dev->ops == &diskwin_ops;
 }
 
 int devfs_fd_raw_size(struct fd_entry *e, uint64_t *size)
@@ -1801,7 +1635,7 @@ int devfs_fd_raw_size(struct fd_entry *e, uint64_t *size)
         return 0;
     }
     dev = (const struct devfs_entry *)e->priv;
-    w = dev->ops == &usbwin_ops ? usb_window(dev) : raw_window_of(dev);
+    w = raw_window_of(dev);
     if (!w || !w->present) {
         return 0;
     }

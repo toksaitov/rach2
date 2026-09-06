@@ -58,6 +58,7 @@ struct part_table {
     int count;
     int refused;     /* entries not taken: past PART_MAX, outside the disk, overlapping */
     int backup_used; /* GPT: the primary was bad and the backup served */
+    int volume;      /* no table, and sector 0 is a FAT or exFAT boot sector: one volume */
     struct part_entry parts[PART_MAX];
 };
 

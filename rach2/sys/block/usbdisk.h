@@ -24,10 +24,10 @@
  */
 
 /** How many sticks are named at once; one number per stick the class drives. */
-#define USBDISK_MAX 2
+#define USBDISK_MAX 8
 
 /** The stick in class-driver slot `slot` is up. Called from the pump. */
-void usbdisk_arrived(int slot);
+void usbdisk_arrived(int slot, int lun);
 
 /** The stick in slot `slot` has gone. Called from the pump. */
 void usbdisk_left(int slot);

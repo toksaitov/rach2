@@ -63,6 +63,10 @@
 #define SCSI_READ_10         0x28
 #define SCSI_WRITE_10        0x2A
 #define SCSI_SYNCHRONIZE     0x35
+#define SCSI_READ_16         0x88
+#define SCSI_WRITE_16        0x8A
+#define SCSI_SERVICE_IN      0x9E /* with the service action READ CAPACITY(16) */
+#define SCSI_READ_CAPACITY16 0x10
 
 /* The device type INQUIRY reports in the low five bits of its first byte. A
  * direct-access device is a disk; anything else on a LUN is passed over. */
@@ -97,6 +101,7 @@
 #define MSC_STATE_READY    7
 #define MSC_STATE_REFUSED  8
 #define MSC_STATE_GONE     9
+#define MSC_STATE_CAPACITY16 10 /* the ten-byte answer was all ones */
 
 /*
  * Recovery, which the class defines as three things in this order: the reset
@@ -135,6 +140,19 @@
  * the 100 Hz timer. Ten seconds, because a stick may have a controller of its
  * own to wake up. */
 #define MSC_DEADLINE_TICKS 1000u
+
+struct msc_device;
+
+/** One logical unit of a stick: what it is and the device it is served as. */
+struct msc_lun {
+    int present;
+    int index;
+    struct msc_device *owner;
+    uint64_t blocks;
+    uint32_t block_size;
+    int write_protect;
+    block_device_t block;
+};
 
 struct msc_device {
     int used;
@@ -176,21 +194,27 @@ struct msc_device {
     char vendor[9];
     char product[17];
     uint32_t flushes; /* SYNCHRONIZE CACHE commands sent, for /proc/usb */
+
+    /* What the unit being brought up answered; copied into its record. */
     uint64_t blocks;
     uint32_t block_size;
     int write_protect;
 
-    /* The block device this stick is published as, the request in flight on
-     * it, and the ones waiting their turn. Two processes may want one stick,
-     * since either can sleep inside a request while the other runs, so the
-     * requests are admitted in the order they arrived and served one at a
-     * time; a flush waits its turn like a read, which is what puts it after
-     * every write before it. */
-    block_device_t block;
+    /* The logical units that answered, each the block device it is
+     * published as, whose `drvdata` is its record; a command addresses
+     * `lun`. The request in flight on the stick and the ones waiting their
+     * turn: two processes may want one stick, since either can sleep inside
+     * a request while the other runs, so the requests are admitted in the
+     * order they arrived and served one at a time, the units sharing the
+     * one pipe; a flush waits its turn like a read, which is what puts it
+     * after every write before it. */
+    struct msc_lun luns[MSC_MAX_LUNS];
+    int ready_luns;
     struct block_request *request;
     int flushing;
     struct block_request *queue[MSC_QUEUE];
     int queue_flush[MSC_QUEUE];
+    int queue_lun[MSC_QUEUE]; /* the unit each waiting request is for */
     int queue_head;
     int queue_count;
 };
@@ -209,10 +233,11 @@ static uint32_t tag_seed;
 static uint8_t setup_buffer[MSC_MAX_DEVICES][8];
 
 static struct block_request *queue_take(struct msc_device *m, int *flush);
+static int queue_put(struct msc_device *m, struct block_request *r, int flush, int lun);
 static int status_begin(struct msc_device *m);
 static void command_end(struct msc_device *m, int status);
 static void queue_drain(struct msc_device *m, int status);
-static void publish(struct msc_device *m);
+static void publish(struct msc_device *m, int lun);
 
 static struct msc_device *by_device(int device)
 {
@@ -576,16 +601,18 @@ int msc_ready(int index)
     return sticks[index].used && !sticks[index].closing && sticks[index].state == MSC_STATE_READY;
 }
 
-int msc_ident(int index, struct msc_ident *out)
+int msc_lun_ident(int index, int lun, struct msc_ident *out)
 {
     struct msc_device *m;
+    struct msc_lun *u;
     int i;
 
-    if (index < 0 || index >= MSC_MAX_DEVICES || out == 0) {
+    if (index < 0 || index >= MSC_MAX_DEVICES || lun < 0 || lun >= MSC_MAX_LUNS || out == 0) {
         return -1;
     }
     m = &sticks[index];
-    if (!m->used) {
+    u = &m->luns[lun];
+    if (!m->used || !u->present) {
         return -1;
     }
     for (i = 0; i < (int)sizeof(out->vendor); i++) {
@@ -594,13 +621,18 @@ int msc_ident(int index, struct msc_ident *out)
     for (i = 0; i < (int)sizeof(out->product); i++) {
         out->product[i] = m->product[i];
     }
-    out->blocks = m->blocks;
+    out->blocks = u->blocks;
     out->flushes = m->flushes;
-    out->block_size = m->block_size;
-    out->write_protect = m->write_protect;
+    out->block_size = u->block_size;
+    out->write_protect = u->write_protect;
     out->closing = m->closing;
     out->device = m->device;
     return 0;
+}
+
+int msc_ident(int index, struct msc_ident *out)
+{
+    return msc_lun_ident(index, 0, out);
 }
 
 int msc_count(void)
@@ -817,6 +849,18 @@ static int send_read_capacity(struct msc_device *m)
     return command_begin(m, cdb, 10, m->scratch, 8, 1);
 }
 
+/** READ CAPACITY(16), for a unit whose ten-byte answer was all ones. */
+static int send_read_capacity16(struct msc_device *m)
+{
+    uint8_t cdb[16];
+
+    cdb_clear(cdb, 16);
+    cdb[0] = SCSI_SERVICE_IN;
+    cdb[1] = SCSI_READ_CAPACITY16;
+    cdb[13] = 32; /* the allocation length, big-endian in bytes 10-13 */
+    return command_begin(m, cdb, 16, m->scratch, 32, 1);
+}
+
 static int send_mode_sense(struct msc_device *m)
 {
     uint8_t cdb[6];
@@ -828,10 +872,23 @@ static int send_mode_sense(struct msc_device *m)
     return command_begin(m, cdb, 6, m->scratch, 4, 1);
 }
 
+/**
+ * READ(10) or WRITE(10), or their sixteen-byte forms on a unit with more
+ * sectors than a ten-byte address names, to the unit `m->lun` addresses.
+ */
 static int send_read_write(struct msc_device *m, struct block_request *r)
 {
-    uint8_t cdb[10];
+    struct msc_lun *u = &m->luns[m->lun];
+    uint8_t cdb[16];
 
+    if (u->blocks > 0xFFFFFFFFull) {
+        cdb_clear(cdb, 16);
+        cdb[0] = r->write ? SCSI_WRITE_16 : SCSI_READ_16;
+        write32_be(&cdb[2], (uint32_t)(r->lba >> 32));
+        write32_be(&cdb[6], (uint32_t)r->lba);
+        write32_be(&cdb[10], r->count);
+        return command_begin(m, cdb, 16, r->page, r->count * MSC_SECTOR_SIZE, !r->write);
+    }
     cdb_clear(cdb, 10);
     cdb[0] = r->write ? SCSI_WRITE_10 : SCSI_READ_10;
     write32_be(&cdb[2], (uint32_t)r->lba);
@@ -859,31 +916,62 @@ static void refuse(struct msc_device *m, const char *why)
     queue_drain(m, -EIO);
 }
 
-/** Move to the next LUN, or refuse when there are no more. */
+static void ready(struct msc_device *m);
+
+/**
+ * Go on to the next logical unit, or, when there is none, serve the units
+ * that answered; refuse the device when none did. `why` is what the unit
+ * just left behind said, or NULL for one that answered.
+ */
 static void next_lun(struct msc_device *m, const char *why)
 {
-    if (m->lun >= m->max_lun) {
-        refuse(m, why);
+    if (why) {
+        klog(KLOG_INFO, "usbdisk", "device %d: lun %d passed over: %s", m->device, m->lun, why);
+    }
+    if (m->lun >= m->max_lun || m->lun + 1 >= MSC_MAX_LUNS) {
+        if (m->ready_luns == 0) {
+            refuse(m, why ? why : "no unit answered");
+            return;
+        }
+        ready(m);
         return;
     }
-    klog(KLOG_INFO, "usbdisk", "device %d: lun %d passed over: %s", m->device, m->lun, why);
     m->lun++;
     m->ready_left = MSC_READY_MS;
     m->state = MSC_STATE_INQUIRY;
     m->stage = STAGE_IDLE;
 }
 
-/**
- * The stick is up: publish what it is.
- */
-static void ready(struct msc_device *m)
+/** The unit being brought up answered everything: keep its record. */
+static void lun_ready(struct msc_device *m)
 {
-    publish(m);
-    m->state = MSC_STATE_READY;
-    m->stage = STAGE_IDLE;
+    struct msc_lun *u = &m->luns[m->lun];
+
+    u->present = 1;
+    u->index = m->lun;
+    u->owner = m;
+    u->blocks = m->blocks;
+    u->block_size = m->block_size;
+    u->write_protect = m->write_protect;
+    m->ready_luns++;
     klog(KLOG_INFO, "usbdisk", "ready: device %d: lun %d, %d sectors of %d bytes%s", m->device,
          m->lun, (int)m->blocks, (int)m->block_size, m->write_protect ? ", write protected" : "");
-    usbdisk_arrived((int)(m - sticks));
+    next_lun(m, 0);
+}
+
+/** Every unit has been asked: serve the ones that answered. */
+static void ready(struct msc_device *m)
+{
+    int lun;
+
+    m->state = MSC_STATE_READY;
+    m->stage = STAGE_IDLE;
+    for (lun = 0; lun < MSC_MAX_LUNS; lun++) {
+        if (m->luns[lun].present) {
+            publish(m, lun);
+            usbdisk_arrived((int)(m - sticks), lun);
+        }
+    }
 }
 
 /**
@@ -973,11 +1061,13 @@ static void step_command_done(struct msc_device *m)
             uint32_t size = read32_be(&m->scratch[4]);
 
             if (last == 0xFFFFFFFFu) {
-                refuse(m, "it is larger than a ten-byte read can address");
+                /* More sectors than a ten-byte address names: the
+                 * sixteen-byte form says how many. */
+                m->state = MSC_STATE_CAPACITY16;
                 return;
             }
             if (size != MSC_SECTOR_SIZE) {
-                refuse(m, "its blocks are not 512 bytes");
+                next_lun(m, "its blocks are not 512 bytes");
                 return;
             }
             /* The field is the address of the last block, not a count. */
@@ -987,11 +1077,34 @@ static void step_command_done(struct msc_device *m)
         m->state = MSC_STATE_MODE;
         return;
 
+    case MSC_STATE_CAPACITY16:
+        if (status != CSW_GOOD) {
+            refuse(m, "it would not say how large it is");
+            return;
+        }
+        {
+            uint64_t last = ((uint64_t)read32_be(&m->scratch[0]) << 32) | read32_be(&m->scratch[4]);
+            uint32_t size = read32_be(&m->scratch[8]);
+
+            if (last == 0xFFFFFFFFFFFFFFFFull) {
+                refuse(m, "it reported an impossible capacity");
+                return;
+            }
+            if (size != MSC_SECTOR_SIZE) {
+                next_lun(m, "its blocks are not 512 bytes");
+                return;
+            }
+            m->blocks = last + 1u;
+            m->block_size = size;
+        }
+        m->state = MSC_STATE_MODE;
+        return;
+
     case MSC_STATE_MODE:
         /* A drive that refuses the page has no write protection to report,
          * which is the ordinary answer and not a failure. */
         m->write_protect = (status == CSW_GOOD) && (m->scratch[2] & 0x80) != 0;
-        ready(m);
+        lun_ready(m);
         return;
 
     case MSC_STATE_READY:
@@ -1064,6 +1177,10 @@ static void step_idle(struct msc_device *m)
 
     case MSC_STATE_CAPACITY:
         (void)send_read_capacity(m);
+        return;
+
+    case MSC_STATE_CAPACITY16:
+        (void)send_read_capacity16(m);
         return;
 
     case MSC_STATE_MODE:
@@ -1175,7 +1292,7 @@ void msc_step(uint32_t elapsed_ms)
 /* ---- the stick as a block device ---- */
 
 /** Put a request at the end of this stick's queue. */
-static int queue_put(struct msc_device *m, struct block_request *r, int flush)
+static int queue_put(struct msc_device *m, struct block_request *r, int flush, int lun)
 {
     int at;
 
@@ -1185,11 +1302,12 @@ static int queue_put(struct msc_device *m, struct block_request *r, int flush)
     at = (m->queue_head + m->queue_count) % MSC_QUEUE;
     m->queue[at] = r;
     m->queue_flush[at] = flush;
+    m->queue_lun[at] = lun;
     m->queue_count++;
     return 0;
 }
 
-/** Take the next request off the queue, or nothing. */
+/** Take the next request off the queue, or nothing; `lun` becomes its unit. */
 static struct block_request *queue_take(struct msc_device *m, int *flush)
 {
     struct block_request *r;
@@ -1199,6 +1317,7 @@ static struct block_request *queue_take(struct msc_device *m, int *flush)
     }
     r = m->queue[m->queue_head];
     *flush = m->queue_flush[m->queue_head];
+    m->lun = m->queue_lun[m->queue_head];
     m->queue_head = (m->queue_head + 1) % MSC_QUEUE;
     m->queue_count--;
     return r;
@@ -1226,17 +1345,18 @@ static void queue_drain(struct msc_device *m, int status)
  */
 static int msc_block_submit(block_device_t *device, struct block_request *request)
 {
-    struct msc_device *m = (struct msc_device *)device->drvdata;
+    struct msc_lun *u = (struct msc_lun *)device->drvdata;
+    struct msc_device *m = u ? u->owner : 0;
     uint32_t flags;
     int rc = 0;
 
-    if (m == 0 || !m->used || m->state != MSC_STATE_READY) {
+    if (m == 0 || !m->used || m->state != MSC_STATE_READY || !u->present) {
         return -EIO;
     }
-    if (request->write && m->write_protect) {
+    if (request->write && u->write_protect) {
         return -EROFS;
     }
-    if (request->lba + request->count > m->blocks) {
+    if (request->lba + request->count > u->blocks) {
         return -EIO;
     }
     /* This is the one entry from a process, and everything else that
@@ -1249,11 +1369,12 @@ static int msc_block_submit(block_device_t *device, struct block_request *reques
     if (m->request == 0 && m->stage == STAGE_IDLE) {
         m->request = request;
         m->flushing = 0;
+        m->lun = u->index;
         if (send_read_write(m, request) != 0) {
             m->request = 0;
             rc = -EIO;
         }
-    } else if (queue_put(m, request, 0) != 0) {
+    } else if (queue_put(m, request, 0, u->index) != 0) {
         rc = -EIO;
     }
     kirq_restore(flags);
@@ -1269,23 +1390,25 @@ static int msc_block_submit(block_device_t *device, struct block_request *reques
  */
 static int msc_block_flush(block_device_t *device, struct block_request *request)
 {
-    struct msc_device *m = (struct msc_device *)device->drvdata;
+    struct msc_lun *u = (struct msc_lun *)device->drvdata;
+    struct msc_device *m = u ? u->owner : 0;
     uint32_t flags;
     int rc = 0;
 
-    if (m == 0 || !m->used || m->state != MSC_STATE_READY) {
+    if (m == 0 || !m->used || m->state != MSC_STATE_READY || !u->present) {
         return -EIO;
     }
     flags = kirq_save(); /* as in `msc_block_submit` */
     if (m->request == 0 && m->stage == STAGE_IDLE) {
         m->request = request;
         m->flushing = 1;
+        m->lun = u->index;
         if (send_synchronize(m) != 0) {
             m->request = 0;
             m->flushing = 0;
             rc = -EIO;
         }
-    } else if (queue_put(m, request, 1) != 0) {
+    } else if (queue_put(m, request, 1, u->index) != 0) {
         rc = -EIO;
     }
     kirq_restore(flags);
@@ -1293,26 +1416,34 @@ static int msc_block_flush(block_device_t *device, struct block_request *request
 }
 
 /** Publish this stick to the block layer. */
-static void publish(struct msc_device *m)
+static void publish(struct msc_device *m, int lun)
 {
-    m->block.sector_size = m->block_size;
-    m->block.sector_count = m->blocks;
-    m->block.flags = m->write_protect ? BLOCK_READ_ONLY : 0u;
-    m->block.deadline_ticks = MSC_DEADLINE_TICKS;
-    m->block.read = 0;
-    m->block.write = 0;
-    m->block.submit = msc_block_submit;
-    m->block.flush = msc_block_flush;
-    m->block.drvdata = m;
+    struct msc_lun *u = &m->luns[lun];
+
+    u->block.sector_size = u->block_size;
+    u->block.sector_count = u->blocks;
+    u->block.flags = u->write_protect ? BLOCK_READ_ONLY : 0u;
+    u->block.deadline_ticks = MSC_DEADLINE_TICKS;
+    u->block.read = 0;
+    u->block.write = 0;
+    u->block.submit = msc_block_submit;
+    u->block.flush = msc_block_flush;
+    u->block.backing = 0;
+    u->block.drvdata = u;
+}
+
+block_device_t *msc_lun_device(int index, int lun)
+{
+    if (index < 0 || index >= MSC_MAX_DEVICES || lun < 0 || lun >= MSC_MAX_LUNS) {
+        return 0;
+    }
+    if (!sticks[index].used || !sticks[index].luns[lun].present) {
+        return 0;
+    }
+    return &sticks[index].luns[lun].block;
 }
 
 block_device_t *msc_block_device(int index)
 {
-    if (index < 0 || index >= MSC_MAX_DEVICES) {
-        return 0;
-    }
-    if (!sticks[index].used) {
-        return 0;
-    }
-    return &sticks[index].block;
+    return msc_lun_device(index, 0);
 }

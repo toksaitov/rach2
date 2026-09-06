@@ -438,9 +438,10 @@ int usb_core_clear_halt(int device, int endpoint)
 static int arrivals;
 static int departures;
 
-void usbdisk_arrived(int slot)
+void usbdisk_arrived(int slot, int lun)
 {
     (void)slot;
+    (void)lun;
     arrivals++;
 }
 
@@ -743,9 +744,12 @@ int main(void)
         CHECK("its device is kept until the disk layer releases it", msc_block_device(0) != 0);
         CHECK("and refuses what it is asked for",
               msc_block_device(0)->submit(msc_block_device(0), r) == -EIO);
+        /* The new stick's units are published only once it is up, so what
+           shows it took another slot is that the first slot's device is
+           still the closing one. */
         CHECK("a second stick is given a different slot",
-              msc_attach(2, 0, EP_IN, EP_OUT) == 0 && msc_block_device(1) != 0 &&
-                  msc_block_device(1) != msc_block_device(0));
+              msc_attach(2, 0, EP_IN, EP_OUT) == 0 && msc_block_device(0) != 0 &&
+                  msc_block_device(0)->submit(msc_block_device(0), r) == -EIO);
         msc_release(0);
         CHECK("the slot goes back when the last hold does", msc_block_device(0) == 0);
     }

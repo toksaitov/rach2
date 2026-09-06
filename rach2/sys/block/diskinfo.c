@@ -283,7 +283,9 @@ int diskinfo_probe(int mounted)
     for (i = 0; i < disk_count(); i++) {
         struct disk *d = disk_at(i);
 
-        devfs_disk_publish(d, diskinfo_window(d->dev->sector_count));
+        if (d) {
+            devfs_disk_publish(d, diskinfo_window(d->dev->sector_count));
+        }
     }
     klog(KLOG_INFO, "disk", "%s: %d sectors, model %s", info.driver,
          (uint32_t)info.sectors,
@@ -308,6 +310,9 @@ int diskinfo_format_disks(char *buf, int cap)
     for (i = 0; i < disk_count(); i++) {
         const struct disk *d = disk_at(i);
 
+        if (!d) {
+            continue;
+        }
         put(buf, &n, cap, "disk ");
         put_dec(buf, &n, cap, (uint64_t)d->number);
         put(buf, &n, cap, " ");

@@ -1,128 +1,113 @@
 /*
- * usbdisk_hosttest.c: the stick as a disk, from its table to its last hold.
+ * usbdisk_hosttest.c: a stick as a disk of the registry, from its arrival
+ * to its last hold.
  *
- * host-deps: rach2/sys/block/gpt.c rach2/sys/block/mbr.c
+ * host-deps: rach2/sys/block/disk.c rach2/sys/block/partition.c
+ * host-deps: rach2/sys/block/gpt.c rach2/sys/lib/kstring.c
+ * host-deps: rach2/sys/lib/kctypes.c
  *
- * The layer under test reads a partition table through the block interface
- * and publishes what it finds, so the model here is a medium in memory and a
- * `block_request` that copies sectors out of it. Everything else the layer
- * reaches (the device nodes, the buffer cache, the mounts and the class
- * driver) is a stub that records what it was told, because what the rows are
- * about is the judgement, not the plumbing.
- *
- * The rows are the contract: an MBR whose entries are sound, and one with an
- * entry past the medium, one overlapping another and one starting at sector
- * zero, each passed over with the rest still read; a GUID table with its
- * first used entry away from index zero; a GUID table whose entry array
- * fails its checksum in an entry beyond the fourth, which must publish
- * nothing, since a reader that took the first four would take a table that
- * is not sound; a header that fails its own checksum, that names another
- * sector, or that describes an array larger than the bound; a volume with no
- * table at all, published as the whole node alone; a medium that will not
- * give its first sector; the numbering, which is the lowest free one; and
- * the reclaiming, which happens at once for a stick nobody held and waits
- * for the last hold otherwise.
- *
- * No hosted headers: the kernel headers define the fixed-width types, and
- * the few libc calls are declared by hand as the other host tests declare
- * them.
+ * The class driver, the block request layer, devfs and the caches are
+ * stubs: a medium in memory answers the requests the scan starts, one per
+ * pass of the pump, and counters stand for the holds. What is judged is
+ * the layer's own work: a unit that arrives is registered with the lowest
+ * free number and its table read through the pump, a GUID table across
+ * several requests; a stick that is pulled is closed at once and reclaimed
+ * only when the last hold goes; a stick pulled while its table is being
+ * read is reclaimed too; a plug after a pull takes the number back; and
+ * two units of one device are two disks.
  */
+extern int printf(const char *fmt, ...);
+extern void *memset(void *p, int c, unsigned long n);
 
 #include "../../rach2/sys/block/block.h"
-#include "../../rach2/sys/block/gpt.h"
+#include "../../rach2/sys/block/disk.h"
+#include "../../rach2/sys/block/diskinfo.h"
 #include "../../rach2/sys/block/usbdisk.h"
 #include "../../rach2/sys/usb/msc.h"
 
-extern int printf(const char *fmt, ...);
+static int fails;
 
-#define SECTOR       512
-#define DISK_SECTORS 2048u
-#define STICKS       2
+#define CHECK(what, cond)                 \
+    do {                                  \
+        if (!(cond)) {                    \
+            printf("  FAIL: %s\n", what); \
+            fails++;                      \
+        }                                 \
+    } while (0)
 
-static unsigned char medium[DISK_SECTORS * SECTOR];
-static int unreadable; /* a sector every read of which fails, or -1 */
+#define SECTOR         512u
+#define MEDIUM_SECTORS 8192u
 
-/* ---- the class driver's side ---- */
+/* ---- the class driver: one device with up to two units ---- */
 
-static block_device_t stick_dev[STICKS];
-static int stick_taken[STICKS];
-static int stick_ready_flag[STICKS];
-static int released[STICKS];
+static unsigned char medium[MSC_MAX_LUNS][MEDIUM_SECTORS * SECTOR];
+static block_device_t unit[MSC_MAX_DEVICES][MSC_MAX_LUNS];
+static int unit_present[MSC_MAX_DEVICES][MSC_MAX_LUNS];
+static int releases;
 
-block_device_t *msc_block_device(int index)
+block_device_t *msc_lun_device(int index, int lun)
 {
-    if (index < 0 || index >= STICKS || !stick_taken[index]) {
+    if (index < 0 || index >= MSC_MAX_DEVICES || lun < 0 || lun >= MSC_MAX_LUNS ||
+        !unit_present[index][lun]) {
         return 0;
     }
-    return &stick_dev[index];
+    return &unit[index][lun];
 }
 
-int msc_ready(int index)
+int msc_lun_ident(int index, int lun, struct msc_ident *out)
 {
-    return index >= 0 && index < STICKS && stick_ready_flag[index];
+    if (!msc_lun_device(index, lun)) {
+        return -1;
+    }
+    memset(out, 0, sizeof(*out));
+    out->vendor[0] = 'Q';
+    out->product[0] = 'S';
+    out->blocks = MEDIUM_SECTORS;
+    out->block_size = SECTOR;
+    return 0;
 }
 
 void msc_release(int index)
 {
-    if (index >= 0 && index < STICKS) {
-        released[index]++;
-        stick_taken[index] = 0;
-        stick_ready_flag[index] = 0;
+    int lun;
+
+    releases++;
+    for (lun = 0; lun < MSC_MAX_LUNS; lun++) {
+        unit_present[index][lun] = 0;
     }
 }
 
-int msc_ident(int index, struct msc_ident *out)
-{
-    int i;
+/* ---- the request layer: one request in flight, answered next pass ---- */
 
-    if (index < 0 || index >= STICKS || !stick_taken[index]) {
-        return -1;
-    }
-    for (i = 0; i < (int)sizeof(out->vendor); i++) {
-        out->vendor[i] = 0;
-    }
-    for (i = 0; i < (int)sizeof(out->product); i++) {
-        out->product[i] = 0;
-    }
-    out->vendor[0] = 'Q';
-    out->vendor[1] = 0;
-    out->product[0] = 'S';
-    out->product[1] = 0;
-    out->blocks = DISK_SECTORS;
-    out->block_size = SECTOR;
-    out->flushes = 0;
-    out->write_protect = 0;
-    out->closing = 0;
-    out->device = index + 1;
-    return 0;
-}
-
-/* ---- the block interface ----
- *
- * The layer reads without sleeping: it begins a request and asks after it
- * on later passes. The model answers on the pass after the one that began
- * it, so every step of the reading is a separate pass, the way it is on the
- * machine. */
-
-static struct block_request pending_req;
-static int pending_live;
-static int pending_failed;
-static uint32_t generations;
+static struct block_request the_request;
+static int request_live;
+static uint64_t request_lba;
+static uint32_t request_count;
+static int request_lun;
+static int requests_started;
+static int device_holds;
 
 struct block_request *block_request_begin(block_device_t *device, uint64_t lba, uint32_t count,
                                           uint32_t *generation)
 {
-    (void)device;
-    if (pending_live || count == 0 || count > BLOCK_REQ_SECTORS || lba + count > DISK_SECTORS) {
+    int i, lun;
+
+    if (request_live) {
         return 0;
     }
-    pending_req.lba = lba;
-    pending_req.count = count;
-    pending_req.generation = ++generations;
-    pending_live = 1;
-    pending_failed = 0;
-    *generation = pending_req.generation;
-    return &pending_req;
+    for (i = 0; i < MSC_MAX_DEVICES; i++) {
+        for (lun = 0; lun < MSC_MAX_LUNS; lun++) {
+            if (device == &unit[i][lun]) {
+                request_lun = lun;
+            }
+        }
+    }
+    request_live = 1;
+    request_lba = lba;
+    request_count = count;
+    requests_started++;
+    *generation = (uint32_t)requests_started;
+    return &the_request;
 }
 
 int block_request_ended(struct block_request *r, uint32_t generation, void *buffer, int *status)
@@ -130,30 +115,136 @@ int block_request_ended(struct block_request *r, uint32_t generation, void *buff
     unsigned char *out = (unsigned char *)buffer;
     uint32_t i;
 
-    if (r != &pending_req || generation != pending_req.generation || !pending_live) {
-        *status = -1;
+    (void)r;
+    (void)generation;
+    if (!request_live) {
         return 1;
     }
-    pending_live = 0;
-    for (i = 0; i < r->count; i++) {
-        uint32_t j;
-
-        if (unreadable >= 0 && (uint64_t)unreadable == r->lba + i) {
-            *status = -1;
-            return 1;
-        }
-        for (j = 0; j < SECTOR; j++) {
-            out[i * SECTOR + j] = medium[(r->lba + i) * SECTOR + j];
-        }
+    request_live = 0;
+    if (!unit_present[0][request_lun] || request_lba + request_count > MEDIUM_SECTORS) {
+        *status = -5;
+        return 1;
+    }
+    for (i = 0; i < request_count * SECTOR; i++) {
+        out[i] = medium[request_lun][request_lba * SECTOR + i];
     }
     *status = 0;
     return 1;
 }
 
-/* No process is ever inside a syscall here, so every pass may settle. */
+int block_request(block_device_t *device, int write, uint64_t lba, uint32_t count, void *buffer)
+{
+    (void)device;
+    (void)write;
+    (void)lba;
+    (void)count;
+    (void)buffer;
+    return -5;
+}
+
+int block_device_holds(block_device_t *device)
+{
+    (void)device;
+    return device_holds;
+}
+
+/* ---- the block layer's views and physical identity ---- */
+
+static int view_read(block_device_t *device, uint64_t lba, uint32_t count, void *buffer)
+{
+    (void)device;
+    (void)lba;
+    (void)count;
+    (void)buffer;
+    return -5;
+}
+
+void block_partition_init(block_partition_t *partition, block_device_t *backing, uint64_t start_lba,
+                          uint64_t sector_count)
+{
+    partition->backing = backing;
+    partition->start_lba = start_lba;
+    partition->device.sector_size = SECTOR;
+    partition->device.sector_count = sector_count;
+    partition->device.read = view_read;
+    partition->device.write = 0;
+    partition->device.submit = 0;
+    partition->device.flush = 0;
+    partition->device.flags = 0;
+    partition->device.drvdata = partition;
+}
+
+block_device_t *block_lag_partition_backing(block_device_t *backing, uint64_t start_lba)
+{
+    (void)start_lba;
+    return backing;
+}
+
+block_device_t *block_physical(block_device_t *dev)
+{
+    return dev;
+}
+
+/* ---- devfs, the caches and the mounts as counters ---- */
+
+static int nodes_made, parts_named, published;
+static int mount_holds, cache_holds, gone_told;
+
+void devfs_disk_nodes(struct disk *d)
+{
+    (void)d;
+    nodes_made++;
+}
+
+void devfs_disk_part_nodes(struct disk *d)
+{
+    (void)d;
+    parts_named++;
+}
+
+void devfs_disk_publish(struct disk *d, uint64_t window_sectors)
+{
+    (void)window_sectors;
+    d->whole.present = 1;
+    published++;
+}
+
+int devfs_disk_claimed(struct disk *d)
+{
+    (void)d;
+    return mount_holds != 0;
+}
+
+void bcache_device_gone(block_device_t *dev)
+{
+    (void)dev;
+    gone_told++;
+}
+
+void loop_device_gone(block_device_t *dev)
+{
+    (void)dev;
+}
+
+int bcache_device_holds(block_device_t *dev)
+{
+    (void)dev;
+    return cache_holds;
+}
+
+int vfs_device_holds(block_device_t *dev)
+{
+    (void)dev;
+    return mount_holds;
+}
+
+/* ---- the rest of the kernel ---- */
+
+static int in_syscall;
+
 int proc_in_syscall(void)
 {
-    return 0;
+    return in_syscall;
 }
 
 uint32_t kirq_save(void)
@@ -166,127 +257,6 @@ void kirq_restore(uint32_t flags)
     (void)flags;
 }
 
-/* A request of the device still in the pool: in flight, or quarantined
-   with a page the device may yet write into. */
-static block_device_t *request_held_by;
-
-int block_device_holds(block_device_t *device)
-{
-    return device == request_held_by ? 1 : 0;
-}
-
-/* ---- the device nodes ---- */
-
-static struct {
-    int published;
-    int hidden;
-    int withdrawn;
-    int parts;
-    uint64_t whole;
-    uint64_t start[GPT_PART_COUNT];
-    uint64_t count[GPT_PART_COUNT];
-} node[USBDISK_MAX];
-
-static block_device_t view[USBDISK_MAX][GPT_PART_COUNT + 1];
-static int opens[USBDISK_MAX];
-
-void devfs_usb_publish(int n, block_device_t *whole, const struct gpt_part *parts, int count)
-{
-    int k;
-
-    node[n].published = 1;
-    node[n].hidden = 0;
-    node[n].withdrawn = 0;
-    node[n].parts = count;
-    node[n].whole = whole->sector_count;
-    for (k = 0; k < GPT_PART_COUNT; k++) {
-        node[n].start[k] = k < count ? parts[k].start_lba : 0;
-        node[n].count[k] = k < count ? parts[k].sector_count : 0;
-    }
-}
-
-void devfs_usb_hide(int n)
-{
-    node[n].hidden = 1;
-}
-
-void devfs_usb_withdraw(int n)
-{
-    node[n].published = 0;
-    node[n].withdrawn = 1;
-    node[n].parts = 0;
-}
-
-block_device_t *devfs_usb_view(int n, int k)
-{
-    if (!node[n].published || k > node[n].parts) {
-        return 0;
-    }
-    return &view[n][k];
-}
-
-int devfs_usb_opens(int n)
-{
-    return opens[n];
-}
-
-/* ---- the cache and the mounts ---- */
-
-static int gone_told[USBDISK_MAX];
-static int cache_holds[USBDISK_MAX];
-
-static int view_owner(block_device_t *dev)
-{
-    int n;
-    int k;
-
-    for (n = 0; n < USBDISK_MAX; n++) {
-        for (k = 0; k <= GPT_PART_COUNT; k++) {
-            if (dev == &view[n][k]) {
-                return n;
-            }
-        }
-    }
-    return -1;
-}
-
-void bcache_device_gone(block_device_t *dev)
-{
-    int n = view_owner(dev);
-
-    if (n >= 0) {
-        gone_told[n]++;
-    }
-}
-
-/* A stick that goes takes a loop device standing on it with it; the loop
-   layer reaches the VFS, so its rows are the guest's and this is a stub. */
-static int loop_told;
-
-void loop_device_gone(block_device_t *dev)
-{
-    (void)dev;
-    loop_told++;
-}
-
-int bcache_device_holds(block_device_t *dev)
-{
-    int n = view_owner(dev);
-
-    if (n >= 0 && dev == &view[n][0]) {
-        return cache_holds[n];
-    }
-    return 0;
-}
-
-int vfs_device_holds(block_device_t *dev)
-{
-    (void)dev;
-    return 0;
-}
-
-/* ---- the log ---- */
-
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     (void)level;
@@ -294,406 +264,279 @@ void klog(int level, const char *subsystem, const char *format, ...)
     (void)format;
 }
 
+void diskinfo_ata_string(char *out, int chars, const volatile uint16_t *id, int first_word)
+{
+    (void)chars;
+    (void)id;
+    (void)first_word;
+    out[0] = '\0';
+}
+
+void diskinfo_record_identify(const char *driver, int port, const volatile uint16_t *id,
+                              uint64_t sectors)
+{
+    (void)driver;
+    (void)port;
+    (void)id;
+    (void)sectors;
+}
+
+int diskinfo_u64_dec(char *out, int cap, uint64_t v)
+{
+    int n = 0, i;
+    char tmp[24];
+
+    do {
+        tmp[n++] = (char)('0' + (int)(v % 10));
+        v /= 10;
+    } while (v > 0);
+    if (n + 1 > cap) {
+        out[0] = '\0';
+        return 0;
+    }
+    for (i = 0; i < n; i++) {
+        out[i] = tmp[n - 1 - i];
+    }
+    out[n] = '\0';
+    return n;
+}
+
 #include "../../rach2/sys/block/usbdisk.c"
 
-/* ---- the rows ---- */
+/* ---- the media ---- */
 
-static int failures;
-
-static void check(const char *what, int ok)
+static void wr32(unsigned char *p, uint32_t v)
 {
-    printf("  %s: %s\n", ok ? "ok" : "FAIL", what);
-    if (!ok) {
-        failures++;
+    p[0] = (unsigned char)v;
+    p[1] = (unsigned char)(v >> 8);
+    p[2] = (unsigned char)(v >> 16);
+    p[3] = (unsigned char)(v >> 24);
+}
+
+static void wr64(unsigned char *p, uint64_t v)
+{
+    wr32(p, (uint32_t)v);
+    wr32(p + 4, (uint32_t)(v >> 32));
+}
+
+/** An MBR with two partitions on unit `lun`. */
+static void mbr_medium(int lun)
+{
+    unsigned char *s = medium[lun];
+
+    memset(s, 0, sizeof(medium[lun]));
+    s[446 + 4] = 0x0C;
+    wr32(s + 446 + 8, 64);
+    wr32(s + 446 + 12, 2048);
+    s[462 + 4] = 0x07;
+    wr32(s + 462 + 8, 2112);
+    wr32(s + 462 + 12, 4096);
+    s[510] = 0x55;
+    s[511] = 0xAA;
+}
+
+/** A GPT with six entries on unit `lun`, the primary and its backup. */
+static void gpt_medium(int lun)
+{
+    unsigned char *s = medium[lun];
+    unsigned char *array = s + 2 * SECTOR;
+    unsigned char *h = s + SECTOR;
+    uint64_t backup_array = MEDIUM_SECTORS - 1 - 32;
+    unsigned char *bh = s + (MEDIUM_SECTORS - 1) * SECTOR;
+    int i, k;
+
+    memset(s, 0, sizeof(medium[lun]));
+    s[446 + 4] = 0xEE;
+    wr32(s + 446 + 8, 1);
+    wr32(s + 446 + 12, MEDIUM_SECTORS - 1);
+    s[510] = 0x55;
+    s[511] = 0xAA;
+    for (i = 0; i < 6; i++) {
+        unsigned char *e = array + i * 128;
+
+        for (k = 0; k < 16; k++) {
+            e[k] = (unsigned char)(0xA0 + k);
+            e[16 + k] = (unsigned char)(i * 16 + k + 1);
+        }
+        wr64(e + 32, 64 + (uint64_t)i * 128);
+        wr64(e + 40, 64 + (uint64_t)i * 128 + 100);
+        e[56] = (unsigned char)('A' + i);
+    }
+    for (k = 0; k < 2; k++) {
+        unsigned char *hdr = k == 0 ? h : bh;
+
+        memset(hdr, 0, SECTOR);
+        hdr[0] = 'E';
+        hdr[1] = 'F';
+        hdr[2] = 'I';
+        hdr[3] = ' ';
+        hdr[4] = 'P';
+        hdr[5] = 'A';
+        hdr[6] = 'R';
+        hdr[7] = 'T';
+        wr32(hdr + 8, 0x00010000u);
+        wr32(hdr + 12, 92);
+        wr64(hdr + 24, k == 0 ? 1 : MEDIUM_SECTORS - 1);
+        wr64(hdr + 32, k == 0 ? MEDIUM_SECTORS - 1 : 1);
+        wr64(hdr + 40, 34);
+        wr64(hdr + 48, MEDIUM_SECTORS - 34);
+        wr64(hdr + 72, k == 0 ? 2 : backup_array);
+        wr32(hdr + 80, 128);
+        wr32(hdr + 84, 128);
+        wr32(hdr + 88, gpt_crc32(array, 128 * 128));
+        wr32(hdr + 16, gpt_crc32(hdr, 92));
+    }
+    for (i = 0; i < 128 * 128; i++) {
+        s[backup_array * SECTOR + i] = array[i];
     }
 }
 
-#define CHECK(what, cond) check(what, (cond) ? 1 : 0)
-
-static void put32(unsigned char *p, uint32_t v)
-{
-    p[0] = (unsigned char)(v & 0xFFu);
-    p[1] = (unsigned char)((v >> 8) & 0xFFu);
-    p[2] = (unsigned char)((v >> 16) & 0xFFu);
-    p[3] = (unsigned char)((v >> 24) & 0xFFu);
-}
-
-static void put64(unsigned char *p, uint64_t v)
-{
-    put32(p, (uint32_t)(v & 0xFFFFFFFFu));
-    put32(p + 4, (uint32_t)(v >> 32));
-}
-
-static void wipe(void)
-{
-    uint32_t i;
-
-    for (i = 0; i < sizeof(medium); i++) {
-        medium[i] = 0;
-    }
-    unreadable = -1;
-}
-
-/** Put one MBR entry in place: the type, the first sector and the length. */
-static void mbr_entry(int index, unsigned char type, uint32_t first, uint32_t count)
-{
-    unsigned char *e = medium + 446 + index * 16;
-
-    e[4] = type;
-    put32(e + 8, first);
-    put32(e + 12, count);
-}
-
-static void mbr_signature(void)
-{
-    medium[510] = 0x55;
-    medium[511] = 0xAA;
-}
-
-/* The GUID table this test writes: a header at sector 1 and an array of
- * `GPT_MAX_ENTRIES` entries of 128 bytes at sector 2, which is what every
- * tool writes and what leaves room for a backup at the end. */
-#define ARRAY_LBA    2u
-#define ENTRIES      128u
-#define ENTRY_SIZE   128u
-#define FIRST_USABLE 34u
-#define LAST_USABLE  2014u
-
-static unsigned char *entry_at(uint32_t i)
-{
-    return medium + (ARRAY_LBA * SECTOR) + i * ENTRY_SIZE;
-}
-
-/** Mark entry `i` used, covering `[first, first + count)`. */
-static void gpt_entry(uint32_t i, uint64_t first, uint64_t count)
-{
-    unsigned char *e = entry_at(i);
-    int j;
-
-    for (j = 0; j < 16; j++) {
-        e[j] = (unsigned char)(0xA0 + j); /* a type GUID that is not all zeros */
-    }
-    put64(e + 32, first);
-    put64(e + 40, first + count - 1u);
-}
-
-/**
- * Write the header at sector 1 over whatever the array now holds.
- *
- * The array checksum is taken here, so a row that damages the array after
- * this call has a table whose header is sound and whose array is not, which
- * is exactly the case a reader that took four entries at a time would miss.
- */
-static void gpt_header(void)
-{
-    unsigned char *h = medium + SECTOR;
-    int i;
-
-    for (i = 0; i < SECTOR; i++) {
-        h[i] = 0;
-    }
-    h[0] = 'E';
-    h[1] = 'F';
-    h[2] = 'I';
-    h[3] = ' ';
-    h[4] = 'P';
-    h[5] = 'A';
-    h[6] = 'R';
-    h[7] = 'T';
-    put32(h + 8, 0x00010000u);
-    put32(h + 12, 92u);
-    put64(h + 24, 1u);                /* this header's own sector */
-    put64(h + 32, DISK_SECTORS - 1u); /* the backup's */
-    put64(h + 40, FIRST_USABLE);
-    put64(h + 48, LAST_USABLE);
-    put64(h + 72, ARRAY_LBA);
-    put32(h + 80, ENTRIES);
-    put32(h + 84, ENTRY_SIZE);
-    put32(h + 88, gpt_crc32(entry_at(0), ENTRIES * ENTRY_SIZE));
-    put32(h + 16, gpt_crc32(h, 92u));
-}
-
-/** The protective MBR a GUID table sits behind. */
-static void gpt_protective_mbr(void)
-{
-    mbr_entry(0, 0xEE, 1u, DISK_SECTORS - 1u);
-    mbr_signature();
-}
-
-/** An exFAT boot sector: a volume with no partition table at all. */
-static void exfat_boot_sector(void)
-{
-    medium[0] = 0xEB;
-    medium[1] = 0x76;
-    medium[2] = 0x90;
-    medium[3] = 'E';
-    medium[4] = 'X';
-    medium[5] = 'F';
-    medium[6] = 'A';
-    medium[7] = 'T';
-    mbr_signature();
-}
-
-/* Put every stick and every number back, so a row starts where the one
- * before it did. */
-static void model_reset(void)
+/** Run the pump until nothing is pending or `limit` passes have run. */
+static int scanning(void)
 {
     int i;
 
-    for (i = 0; i < STICKS; i++) {
-        stick_taken[i] = 1;
-        stick_ready_flag[i] = 1;
-        released[i] = 0;
-        stick_dev[i].sector_size = SECTOR;
-        stick_dev[i].sector_count = DISK_SECTORS;
-        stick_dev[i].flags = 0;
-        stick_dev[i].deadline_ticks = 0;
-        stick_dev[i].read = 0;
-        stick_dev[i].write = 0;
-        stick_dev[i].submit = 0;
-        stick_dev[i].flush = 0;
-        stick_dev[i].drvdata = 0;
-    }
     for (i = 0; i < USBDISK_MAX; i++) {
-        disks[i].state = DISK_NONE;
-        disks[i].marked = 0;
-        disks[i].request = 0;
-        node[i].published = 0;
-        node[i].hidden = 0;
-        node[i].withdrawn = 0;
-        node[i].parts = 0;
-        opens[i] = 0;
-        cache_holds[i] = 0;
-        gone_told[i] = 0;
+        if (sticks[i].state == STICK_SCANNING) {
+            return 1;
+        }
     }
-    request_held_by = 0;
-    pending = 0;
-    reading = -1;
-    pending_live = 0;
-    wipe();
+    return 0;
 }
 
-/** Run the pump's passes until the layer has nothing left to do. */
-static void passes(void)
+static int passes(int limit)
 {
-    int i;
+    int n = 0;
 
-    for (i = 0; i < 64; i++) {
+    while (n < limit) {
         usbdisk_step();
+        n++;
+        if (scan.n < 0 && !pending && !scanning()) {
+            break;
+        }
     }
+    return n;
 }
 
-/** Bring the stick in slot `slot` up and let the layer read its table. */
-static void arrive(int slot)
+static void plug(int slot, int lun)
 {
-    usbdisk_arrived(slot);
-    passes();
+    unit_present[slot][lun] = 1;
+    unit[slot][lun].sector_size = SECTOR;
+    unit[slot][lun].sector_count = MEDIUM_SECTORS;
+    unit[slot][lun].read = 0;
+    unit[slot][lun].write = 0;
+    unit[slot][lun].submit = 0;
+    unit[slot][lun].flags = 0;
+    usbdisk_arrived(slot, lun);
 }
 
 int main(void)
 {
-    printf("usbdisk_hosttest: the stick as a disk\n");
+    struct disk *d;
+    int before, i;
 
-    /* An MBR with two sound entries. */
-    model_reset();
-    mbr_entry(0, 0x0C, 1024u, 512u);
-    mbr_entry(1, 0x07, 1536u, 512u);
-    mbr_signature();
-    arrive(0);
-    CHECK("an MBR stick is published", node[0].published);
-    CHECK("the whole medium is the first node", node[0].whole == DISK_SECTORS);
-    CHECK("both entries become partitions", node[0].parts == 2);
-    CHECK("the first covers what it said", node[0].start[0] == 1024u && node[0].count[0] == 512u);
-    CHECK("and so does the second", node[0].start[1] == 1536u && node[0].count[1] == 512u);
+    printf("usbdisk_hosttest: the stick as a disk of the registry\n");
 
-    /* An entry that runs past the medium is passed over, and the rest are
-       still read: a table with one bad entry is not a table with none. */
-    model_reset();
-    mbr_entry(0, 0x0C, 2000u, 1000u);
-    mbr_entry(1, 0x07, 1024u, 512u);
-    mbr_signature();
-    arrive(0);
-    CHECK("an entry past the medium is passed over", node[0].parts == 1);
-    CHECK("and the entry after it is still read",
-          node[0].start[0] == 1024u && node[0].count[0] == 512u);
+    /* An MBR stick: registered, its table read through the pump. */
+    mbr_medium(0);
+    plug(0, 0);
+    CHECK("an arrival is pending", pending);
+    passes(40);
+    d = disk_at(0);
+    CHECK("the stick is disk 0", d != 0 && d->number == 0 && d->present);
+    CHECK("as a removable usb disk", d && d->removable && d->transport[0] == 'u');
+    CHECK("its table was read", d && d->table.kind == PART_MBR && d->table.count == 2);
+    CHECK("in one request, sector 0", requests_started == 1);
+    CHECK("its views are published", d && d->views[0].present && d->views[1].present);
+    CHECK("and its whole window", d && d->whole.present);
+    CHECK("its nodes were made and named", nodes_made == 1 && parts_named >= 1);
+    CHECK("the model is the inquiry strings", d && d->model[0] == 'Q' && d->model[2] == 'S');
+    CHECK("and nothing is pending", !pending && scan.n < 0);
+    CHECK("one record is taken", usbdisk_free() == USBDISK_MAX - 1);
 
-    /* An entry overlapping one already taken. */
-    model_reset();
-    mbr_entry(0, 0x0C, 1024u, 512u);
-    mbr_entry(1, 0x07, 1280u, 512u);
-    mbr_signature();
-    arrive(0);
-    CHECK("an overlapping entry is passed over", node[0].parts == 1);
-
-    /* An entry starting at the sector the table itself is in. */
-    model_reset();
-    mbr_entry(0, 0x0C, 0u, 512u);
-    mbr_signature();
-    arrive(0);
-    CHECK("an entry over the table is passed over", node[0].parts == 0);
-    CHECK("and the whole node is published anyway", node[0].published);
-
-    /* A GUID table whose first used entry is not the first entry. */
-    model_reset();
-    gpt_protective_mbr();
-    gpt_entry(3, 40u, 100u);
-    gpt_entry(9, 200u, 100u);
-    gpt_header();
-    arrive(0);
-    CHECK("a GUID table is read", node[0].parts == 2);
-    CHECK("the first used entry is the first partition",
-          node[0].start[0] == 40u && node[0].count[0] == 100u);
-    CHECK("wherever in the array it was", node[0].start[1] == 200u && node[0].count[1] == 100u);
-
-    /* The array's checksum covers the whole array. An entry beyond the four
-       this kernel publishes is damaged after the header was written, so a
-       reader that took four entries at a time would see nothing wrong. */
-    model_reset();
-    gpt_protective_mbr();
-    gpt_entry(0, 40u, 100u);
-    gpt_header();
-    entry_at(60)[7] ^= 0xFFu;
-    arrive(0);
-    CHECK("a damaged entry array publishes nothing", node[0].parts == 0);
-    CHECK("and the whole node is still published", node[0].published);
-
-    /* A header that fails its own checksum. */
-    model_reset();
-    gpt_protective_mbr();
-    gpt_entry(0, 40u, 100u);
-    gpt_header();
-    medium[SECTOR + 40] ^= 0xFFu;
-    arrive(0);
-    CHECK("a damaged header publishes nothing", node[0].parts == 0);
-
-    /* A header that says it is somewhere else. */
-    model_reset();
-    gpt_protective_mbr();
-    gpt_entry(0, 40u, 100u);
-    put64(medium + SECTOR + 24, 5u);
-    gpt_header();
-    put64(medium + SECTOR + 24, 5u);
-    put32(medium + SECTOR + 16, 0u);
-    put32(medium + SECTOR + 16, gpt_crc32(medium + SECTOR, 92u));
-    arrive(0);
-    CHECK("a header that names another sector publishes nothing", node[0].parts == 0);
-
-    /* An array larger than the bound. */
-    model_reset();
-    gpt_protective_mbr();
-    gpt_entry(0, 40u, 100u);
-    gpt_header();
-    put32(medium + SECTOR + 84, 4096u); /* 128 entries of 4 KiB */
-    put32(medium + SECTOR + 16, 0u);
-    put32(medium + SECTOR + 16, gpt_crc32(medium + SECTOR, 92u));
-    arrive(0);
-    CHECK("an array past the bound publishes nothing", node[0].parts == 0);
-
-    /* A volume with no table. */
-    model_reset();
-    exfat_boot_sector();
-    arrive(0);
-    CHECK("a stick with no table is the whole node alone",
-          node[0].published && node[0].parts == 0 && node[0].whole == DISK_SECTORS);
-
-    /* A medium that will not give its first sector. */
-    model_reset();
-    mbr_entry(0, 0x0C, 1024u, 512u);
-    mbr_signature();
-    unreadable = 0;
-    arrive(0);
-    CHECK("an unreadable first sector leaves the whole node",
-          node[0].published && node[0].parts == 0);
-
-    /* A GUID table whose array cannot be read. */
-    model_reset();
-    gpt_protective_mbr();
-    gpt_entry(0, 40u, 100u);
-    gpt_header();
-    unreadable = ARRAY_LBA;
-    arrive(0);
-    CHECK("an unreadable entry array publishes nothing", node[0].parts == 0);
-
-    /* The numbering: the lowest free one, and it comes back. */
-    model_reset();
-    mbr_signature();
-    arrive(0);
-    arrive(1);
-    CHECK("two sticks take two numbers", node[0].published && node[1].published);
-    CHECK("and no number is left", usbdisk_free() == 0);
+    /* Pulled under a mount: closed at once, reclaimed when the hold goes. */
+    mount_holds = 1;
     usbdisk_left(0);
-    passes();
-    CHECK("a stick nobody held is reclaimed at once", !node[0].published && node[0].withdrawn);
-    CHECK("its slot goes back to the class driver", released[0] == 1);
-    CHECK("the cache is told it has gone", gone_told[0] > 0);
-    CHECK("and its number is free again", usbdisk_free() == 1);
-    stick_taken[0] = 1;
-    stick_ready_flag[0] = 1;
-    arrive(0);
-    CHECK("the next stick is given the lowest free number", node[0].published);
+    passes(4);
+    CHECK("a pulled stick's nodes are hidden", d && !d->present);
+    CHECK("the caches were told", gone_told >= 1);
+    CHECK("but it is not reclaimed while a mount holds it",
+          releases == 0 && disk_at(0) == d && usbdisk_holds(0) >= 1);
+    mount_holds = 0;
+    passes(4);
+    CHECK("it is reclaimed when the last hold goes",
+          releases == 1 && usbdisk_free() == USBDISK_MAX);
+    CHECK("and its number is free", disk_count() == 1 && disk_at(0) == 0);
 
-    /* A stick something still holds is a tombstone until the last hold. */
-    model_reset();
-    mbr_signature();
-    arrive(0);
-    opens[0] = 1;
+    /* A GPT stick plugged after: the number comes back, the table takes
+       several requests. */
+    gpt_medium(0);
+    before = requests_started;
+    plug(0, 0);
+    passes(60);
+    d = disk_at(0);
+    CHECK("the next stick takes number 0 again", d != 0 && d->number == 0);
+    CHECK("its GUID table was read", d && d->table.kind == PART_GPT && d->table.count == 6);
+    CHECK("across several requests", requests_started - before >= 5);
+    CHECK("the fourth entry is named", d && d->table.parts[3].label[0] == 'D');
+    CHECK("and no node was made again", nodes_made == 1);
+
+    /* Ten plugs and pulls of a stick nobody holds. */
     usbdisk_left(0);
-    passes();
-    CHECK("a stick with a description open is not reclaimed", released[0] == 0);
-    CHECK("its nodes are hidden at once", node[0].hidden);
-    CHECK("and its windows are kept", node[0].published);
-    CHECK("the cache is told once", gone_told[0] > 0);
-    passes();
-    CHECK("and it is still not reclaimed while the hold is there", released[0] == 0);
-    opens[0] = 0;
-    cache_holds[0] = 1;
-    passes();
-    CHECK("nor while a buffer is held on it", released[0] == 0);
-    cache_holds[0] = 0;
-    request_held_by = &view[0][0];
-    passes();
-    CHECK("nor while a request of its is quarantined", released[0] == 0);
-    request_held_by = 0;
-    usbdisk_service(); /* the syscall entry's half, which does the same */
-    CHECK("the last release reclaims it", released[0] == 1 && node[0].withdrawn);
-    CHECK("and the cache is not told a second time", gone_told[0] == 1);
+    passes(4);
+    for (i = 0; i < 10; i++) {
+        mbr_medium(0);
+        plug(0, 0);
+        passes(40);
+        usbdisk_left(0);
+        passes(4);
+    }
+    CHECK("ten plugs and pulls leave every record free", usbdisk_free() == USBDISK_MAX);
+    CHECK("and each was reclaimed", releases == 12 && usbdisk_teardowns() == 12);
+    CHECK("and one registry record served them all", disk_count() == 1);
 
-    /* A stick pulled before its table was read. */
-    model_reset();
-    mbr_signature();
-    usbdisk_arrived(0);
-    stick_ready_flag[0] = 0;
-    passes();
-    CHECK("a stick that goes before its table is read is not published", !node[0].published);
-    CHECK("and is reclaimed", released[0] == 1);
-
-    /* A stick that goes before it was ever up was never named here, and
-       nothing holds it: the class driver's slot goes back at once, or a
-       stick plugged and pulled during bring-up twice would take both slots
-       for the life of the machine. */
-    model_reset();
-    usbdisk_left(1);
-    CHECK("a stick that goes before it is up has its slot released at once", released[1] == 1);
-    CHECK("and no name was taken for it", usbdisk_free() == USBDISK_MAX);
-
-    /* A stick pulled in the middle of its table: the read out for it is
-       failed by the class driver and taken back here, and nothing of the
-       stick is published. */
-    model_reset();
-    gpt_protective_mbr();
-    gpt_entry(0, 40u, 100u);
-    gpt_header();
-    usbdisk_arrived(0);
-    usbdisk_step(); /* the first sector asked for */
-    usbdisk_step(); /* answered; the header asked for */
-    CHECK("the table is being read", disks[0].state == DISK_SCANNING);
+    /* Pulled while the table is being read: reclaimed, nothing published. */
+    published = 0;
+    mbr_medium(0);
+    plug(0, 0);
+    usbdisk_step();
+    usbdisk_step();
+    CHECK("the scan is in progress", scan.n == 0 && request_live);
     usbdisk_left(0);
-    stick_ready_flag[0] = 0;
-    passes();
-    CHECK("a stick that goes while its table is read is not published", !node[0].published);
-    CHECK("and is reclaimed once its read has come back", released[0] == 1);
-    CHECK("and the next stick can be read", reading == -1);
+    passes(8);
+    CHECK("a stick pulled mid-scan is reclaimed", releases == 13 && usbdisk_free() == USBDISK_MAX);
+    CHECK("and nothing was published for it", published == 0);
 
-    printf("usbdisk_hosttest: %s\n", failures == 0 ? "all rows pass" : "rows failed");
-    return failures == 0 ? 0 : 1;
+    /* Two units of one device are two disks. */
+    mbr_medium(0);
+    mbr_medium(1);
+    plug(0, 0);
+    plug(0, 1);
+    passes(80);
+    CHECK("two units are two disks", disk_at(0) != 0 && disk_at(1) != 0 &&
+                                         disk_at(0)->location == 0 && disk_at(1)->location == 1);
+    CHECK("each with its table", disk_at(0)->table.count == 2 && disk_at(1)->table.count == 2);
+    usbdisk_left(0);
+    passes(8);
+    CHECK("the device's pull takes both",
+          usbdisk_free() == USBDISK_MAX && disk_at(0) == 0 && disk_at(1) == 0);
+
+    /* The pump's settle waits for a syscall to end; the entry's does not. */
+    mbr_medium(0);
+    plug(0, 0);
+    in_syscall = 1;
+    usbdisk_step();
+    CHECK("the pump leaves a syscall alone", pending && disk_at(0) == 0);
+    usbdisk_service();
+    CHECK("the syscall entry registers the stick", disk_at(0) != 0);
+    in_syscall = 0;
+    passes(40);
+    CHECK("and the pump reads its table", disk_at(0)->table.count == 2);
+
+    if (fails == 0) {
+        printf("usbdisk_hosttest: PASS\n");
+        return 0;
+    }
+    printf("usbdisk_hosttest: %d failure(s)\n", fails);
+    return 1;
 }

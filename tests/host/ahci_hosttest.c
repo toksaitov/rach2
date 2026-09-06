@@ -303,6 +303,59 @@ void block_count_batch(uint32_t sectors)
     (void)sectors;
 }
 
+/* The interrupt-driven path's surroundings, which no row here reaches: the
+   rows drive the polled commands, and the switch is never asked for. */
+void block_request_complete(struct block_request *request, uint32_t generation, int status)
+{
+    (void)request;
+    (void)generation;
+    (void)status;
+}
+
+int isr_alloc_vector(void)
+{
+    return -1;
+}
+
+int kcmdline_has(const char *token)
+{
+    (void)token;
+    return 0;
+}
+
+uint32_t kirq_save(void)
+{
+    return 0;
+}
+
+void kirq_restore(uint32_t flags)
+{
+    (void)flags;
+}
+
+int lapic_ready(void)
+{
+    return 0;
+}
+
+void latency_note(int which, uint32_t us)
+{
+    (void)which;
+    (void)us;
+}
+
+int pci_msi_enable(const pci_device_t *dev, uint8_t vector)
+{
+    (void)dev;
+    (void)vector;
+    return -1;
+}
+
+uint32_t pit_now_us(void)
+{
+    return 0;
+}
+
 struct disk *disk_register(block_device_t *dev, const char *transport, int location,
                            const volatile uint16_t *identify)
 {
@@ -314,6 +367,13 @@ struct disk *disk_register(block_device_t *dev, const char *transport, int locat
 }
 
 #include "../../rach2/sys/block/ahci.c"
+
+void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *name)
+{
+    (void)vector;
+    (void)handler;
+    (void)name;
+}
 
 /* What the controller does when a command is issued and completes: it writes
    back the number of bytes it moved. */

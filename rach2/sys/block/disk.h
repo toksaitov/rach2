@@ -51,6 +51,8 @@ struct disk {
     struct disk_window whole;              /* `/dev/diskN`, over `dev` */
     struct disk_window views[DISK_PARTS];  /* view `i` of `table.parts[i]` */
     int opens;                             /* descriptors open on its nodes */
+    int removable; /* a stick: its whole window is always published, and it may go */
+    int released;  /* gone and let go of; the number is free */
     /* The range the raw writer holds on this disk, while `writer_held`. */
     int writer_held;
     uint64_t writer_first, writer_last;
@@ -66,7 +68,23 @@ struct disk {
 struct disk *disk_register(block_device_t *dev, const char *transport, int location,
                            const volatile uint16_t *identify);
 
-/** Disk `n`, or NULL when there is none. */
+/**
+ * Give `d` a model string that came from somewhere other than IDENTIFY: a
+ * stick's INQUIRY vendor and product, joined by a space.
+ */
+void disk_set_model(struct disk *d, const char *vendor, const char *product);
+
+/**
+ * Let go of `d`: a disk that has gone and that nothing holds. Its number is
+ * free for the next disk registered; its nodes stay made and are named
+ * again for that disk.
+ */
+void disk_release(struct disk *d);
+
+/** The table's kind as a word: `mbr`, `gpt`, `gpt-bad`, `none`, `unread`. */
+const char *disk_table_name(const struct disk *d);
+
+/** Disk `n`, or NULL when there is none; a released disk is NULL too. */
 struct disk *disk_at(int n);
 
 /** The disk whose medium `dev` is or stands on, or NULL. */
@@ -85,6 +103,12 @@ int disk_count(void);
  * later. A disk whose table cannot be read keeps no partitions.
  */
 void disk_scan(struct disk *d, block_device_t *backing);
+
+/**
+ * Give `d` a table read elsewhere, with its views over `backing`: a stick's,
+ * read by the pump a sector at a time.
+ */
+void disk_set_table(struct disk *d, const struct part_table *table, block_device_t *backing);
 
 /**
  * Read `d`'s table again, for a table rewritten under a running system.

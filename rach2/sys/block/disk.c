@@ -37,6 +37,15 @@ struct disk *disk_register(block_device_t *dev, const char *transport, int locat
             again = 1;
         }
     }
+    /* A released record is taken again before a fresh one, so a stick
+     * plugged and pulled and plugged takes the lowest number free; its
+     * nodes were made the first time and are named again for the table. */
+    for (i = 0; !d && i < ndisks; i++) {
+        if (disks[i].released) {
+            d = &disks[i];
+            again = 1;
+        }
+    }
     if (!d && ndisks >= DISK_MAX) {
         klog(KLOG_WARN, "disk", "%s %d: not registered: the registry has %d disks", transport,
              location, DISK_MAX);
@@ -48,6 +57,8 @@ struct disk *disk_register(block_device_t *dev, const char *transport, int locat
         ndisks++;
     }
     d->present = 1;
+    d->released = 0;
+    d->removable = 0;
     d->dev = dev;
     d->transport = transport;
     d->location = location;
@@ -76,10 +87,60 @@ struct disk *disk_register(block_device_t *dev, const char *transport, int locat
 
 struct disk *disk_at(int n)
 {
-    if (n < 0 || n >= ndisks) {
+    if (n < 0 || n >= ndisks || disks[n].released) {
         return 0;
     }
     return &disks[n];
+}
+
+void disk_set_model(struct disk *d, const char *vendor, const char *product)
+{
+    int n = 0, i;
+
+    for (i = 0; vendor[i] && n < DISK_MODEL_CHARS; i++) {
+        d->model[n++] = vendor[i];
+    }
+    if (n > 0 && n < DISK_MODEL_CHARS && product[0]) {
+        d->model[n++] = ' ';
+    }
+    for (i = 0; product[i] && n < DISK_MODEL_CHARS; i++) {
+        d->model[n++] = product[i];
+    }
+    d->model[n] = '\0';
+}
+
+void disk_release(struct disk *d)
+{
+    int i;
+
+    d->present = 0;
+    d->released = 1;
+    d->dev = 0;
+    d->backing = 0;
+    d->table.kind = PART_UNREAD;
+    d->table.count = 0;
+    d->whole.present = 0;
+    for (i = 0; i < DISK_PARTS; i++) {
+        d->views[i].present = 0;
+    }
+    d->opens = 0;
+    d->writer_held = 0;
+}
+
+const char *disk_table_name(const struct disk *d)
+{
+    switch (d->table.kind) {
+    case PART_MBR:
+        return "mbr";
+    case PART_GPT:
+        return "gpt";
+    case PART_GPT_BAD:
+        return "gpt-bad";
+    case PART_NONE:
+        return d->table.volume ? "one volume" : "none";
+    default:
+        return "unread";
+    }
 }
 
 struct disk *disk_of(block_device_t *dev)
@@ -88,7 +149,7 @@ struct disk *disk_of(block_device_t *dev)
     int i;
 
     for (i = 0; i < ndisks; i++) {
-        if (disks[i].dev == physical) {
+        if (!disks[i].released && disks[i].dev == physical) {
             return &disks[i];
         }
     }
@@ -109,6 +170,27 @@ static int read_backing(void *ctx, uint64_t lba, uint32_t count, void *buf)
    call that cannot be preempted. */
 static uint8_t scan_work[PART_WORK_BYTES];
 
+void disk_set_table(struct disk *d, const struct part_table *table, block_device_t *backing)
+{
+    int i;
+
+    for (i = 0; i < DISK_PARTS; i++) {
+        d->views[i].present = 0;
+    }
+    d->backing = backing;
+    if (table != &d->table) {
+        d->table = *table;
+    }
+    for (i = 0; i < d->table.count; i++) {
+        const struct part_entry *e = &d->table.parts[i];
+
+        block_partition_init(&d->views[i].part, block_lag_partition_backing(backing, e->start_lba),
+                             e->start_lba, e->sector_count);
+        d->views[i].present = 1;
+    }
+    devfs_disk_part_nodes(d);
+}
+
 void disk_scan(struct disk *d, block_device_t *backing)
 {
     int i;
@@ -124,14 +206,7 @@ void disk_scan(struct disk *d, block_device_t *backing)
         klog(KLOG_WARN, "disk", "disk%d: the first sector could not be read", d->number);
         return;
     }
-    for (i = 0; i < d->table.count; i++) {
-        const struct part_entry *e = &d->table.parts[i];
-
-        block_partition_init(&d->views[i].part, block_lag_partition_backing(backing, e->start_lba),
-                             e->start_lba, e->sector_count);
-        d->views[i].present = 1;
-    }
-    devfs_disk_part_nodes(d);
+    disk_set_table(d, &d->table, backing);
     if (d->table.refused != 0) {
         klog(KLOG_WARN, "disk", "disk%d: %d partition entries refused", d->number,
              d->table.refused);

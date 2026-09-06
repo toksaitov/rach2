@@ -126,6 +126,16 @@ static void follow_logical(struct part_table *t, part_read_fn read, void *ctx,
     }
 }
 
+/** Whether `sector` opens a FAT or exFAT volume: a jump, or the exFAT name. */
+static int volume_boot_sector(const uint8_t *sector)
+{
+    if (sector[0] == 0xEB || sector[0] == 0xE9) {
+        return 1;
+    }
+    return sector[3] == 'E' && sector[4] == 'X' && sector[5] == 'F' && sector[6] == 'A' &&
+           sector[7] == 'T';
+}
+
 static void scan_mbr(struct part_table *t, part_read_fn read, void *ctx, uint64_t disk_sectors,
                      uint8_t *sector, uint8_t *spare)
 {
@@ -161,6 +171,7 @@ static void scan_mbr(struct part_table *t, part_read_fn read, void *ctx, uint64_
     }
     if (t->count == 0 && t->refused == 0) {
         t->kind = PART_NONE;
+        t->volume = volume_boot_sector(sector);
     }
 }
 
@@ -255,6 +266,7 @@ int part_scan(struct part_table *t, part_read_fn read, void *ctx, uint64_t disk_
     t->count = 0;
     t->refused = 0;
     t->backup_used = 0;
+    t->volume = 0;
     for (i = 0; i < 16; i++) {
         t->disk_guid[i] = 0;
     }
@@ -266,6 +278,7 @@ int part_scan(struct part_table *t, part_read_fn read, void *ctx, uint64_t disk_
     }
     if (sector[510] != 0x55 || sector[511] != 0xAA) {
         t->kind = PART_NONE;
+        t->volume = volume_boot_sector(sector);
         return 0;
     }
     if (gpt_protective(sector)) {
