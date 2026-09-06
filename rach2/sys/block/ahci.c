@@ -9,6 +9,12 @@
 #include "../pci.h"
 #include "../serial.h"
 #include "../mm/paging.h"
+#include "../isr.h"
+#include "../lapic.h"
+#include "../lib/kirq.h"
+#include "../pit.h"
+#include "../cmdline.h"
+#include "../latency.h"
 
 #include "../lib/kerrno.h"
 #include "../lib/kint.h"
@@ -25,6 +31,7 @@
 /* Generic host control registers, as offsets from the ABAR. */
 #define AHCI_CAP  0x00 /* host capabilities */
 #define AHCI_GHC  0x04 /* global host control */
+#define AHCI_IS   0x08 /* interrupt status, one bit per port */
 #define AHCI_PI   0x0C /* ports implemented (bitmask) */
 #define AHCI_VS   0x10 /* version */
 #define AHCI_CAP2 0x24 /* extended capabilities */
@@ -146,10 +153,24 @@ struct ahci_disk {
     int port;
     uint64_t sectors; /* IDENTIFY words 100-103, 0 until known */
     block_device_t dev;
+    /* The interrupt-driven path: one command active on the port, the
+     * request it belongs to, and the requests waiting their turn, oldest
+     * first. A write is two commands, the transfer and then the flush, and
+     * `flushing` says which the active one is. */
+    struct block_request *active;
+    uint32_t active_generation;
+    int flushing;
+    struct block_request *queue_head, *queue_tail;
 };
 
 static struct ahci_disk ahci_disks[AHCI_DISKS];
 static int ahci_ndisks;
+
+/* The vector the controller's messages arrive on once `ahci_start` has
+   switched the disks to the interrupt-driven path, -1 before and under
+   `rach2.ahcipoll`, which keeps every transfer polled. */
+static int ahci_vector = -1;
+static uint32_t ahci_messages;
 
 /* The areas a port is pointed at while it is reset, before the scan knows
    whether it has a disk. Nothing reads them: a port that is kept gets its
@@ -169,6 +190,10 @@ static volatile uint8_t ahci_reset_fis[AHCI_RECV_FIS_SIZE] __attribute__((aligne
 #define AHCI_PxIS_HBDS  0x10000000u /* host bus data error */
 #define AHCI_PxIS_IFS   0x08000000u /* interface fatal error */
 #define AHCI_PxIS_FATAL (AHCI_PxIS_TFES | AHCI_PxIS_HBFS | AHCI_PxIS_HBDS | AHCI_PxIS_IFS)
+/* The port interrupts the driven path enables: a D2H register FIS, which
+   every command ends with, and the fatal ones. */
+#define AHCI_PxIS_DHRS  0x00000001u
+#define AHCI_PxIE_WANTED (AHCI_PxIS_DHRS | AHCI_PxIS_FATAL)
 
 /* The H2D Register FIS and the ATA commands the polled path issues. */
 #define AHCI_FIS_H2D      0x27u
@@ -832,17 +857,18 @@ static int ahci_io_error(struct ahci_disk *d)
  * anywhere, and gets an entry per page with the page's physical address,
  * up to the eight the table holds. Returns 0 on success, `-EIO` on error,
  * expiry, or a buffer the table cannot describe. */
-static int ahci_run_command(struct ahci_disk *d, uint8_t command, uint64_t lba, uint32_t count,
-                            volatile uint8_t *buf, uint32_t bytes, int write)
+/**
+ * Build the command in `d`'s slot: the header, the FIS and the PRDT, and
+ * sync them for the HBA. Returns 0, or -1 when the policy refuses the
+ * command or the table cannot describe the buffer.
+ */
+static int ahci_build_command(struct ahci_disk *d, uint8_t command, uint64_t lba, uint32_t count,
+                              volatile uint8_t *buf, uint32_t bytes, int write)
 {
     volatile ahci_cmd_header_t *hdr = (volatile ahci_cmd_header_t *)d->cmdlist;
     volatile ahci_h2d_fis_t *fis = (volatile ahci_h2d_fis_t *)d->cmdtable;
     volatile ahci_prdt_t *prdt = (volatile ahci_prdt_t *)(d->cmdtable + AHCI_PRDT_OFFSET);
-    uint32_t ci_off = ahci_port_off(d->port, AHCI_PxCI);
-    uint32_t tfd_off = ahci_port_off(d->port, AHCI_PxTFD);
-    uint32_t is_off = ahci_port_off(d->port, AHCI_PxIS);
     uint32_t prdtl = 0;
-    uint32_t spin;
 
     /* The one place a command leaves this driver. A kernel built read-only
      * refuses here, whatever the caller believed it was doing. */
@@ -913,6 +939,59 @@ static int ahci_run_command(struct ahci_disk *d, uint8_t command, uint64_t lba, 
     if (write && bytes > 0) {
         ahci_dma_sync(buf, bytes);
     }
+    return 0;
+}
+
+/**
+ * Judge the command that has left the slot: 0 when it completed and moved
+ * `bytes`, `-EIO` after the port's recovery otherwise. The HBA counts the
+ * bytes it moved into `prdbc`; a completion that moved fewer than requested
+ * without raising an error would otherwise pass, and a short write that
+ * pc_sync then marks clean is silent data loss. A fatal PxIS error can
+ * clear PxCI without setting PxTFD.ERR, so both are tested.
+ */
+static int ahci_judge(struct ahci_disk *d, uint32_t bytes, volatile uint8_t *buf, int write)
+{
+    volatile ahci_cmd_header_t *hdr = (volatile ahci_cmd_header_t *)d->cmdlist;
+    uint32_t tfd_off = ahci_port_off(d->port, AHCI_PxTFD);
+    uint32_t is_off = ahci_port_off(d->port, AHCI_PxIS);
+
+    if ((ahci_read32(is_off) & AHCI_PxIS_FATAL) ||
+        (ahci_read32(tfd_off) & (AHCI_PxTFD_ERR | AHCI_PxTFD_DF))) {
+        return ahci_io_error(d);
+    }
+    if (bytes > 0) {
+        ahci_dma_sync(d->cmdlist, sizeof(ahci_cmd_header_t));
+        if (hdr->prdbc != bytes) {
+            return ahci_io_error(d);
+        }
+    }
+    if (!write && bytes > 0) {
+        ahci_dma_sync(buf, bytes); /* evict stale lines; CPU reads fresh */
+    }
+    return 0;
+}
+
+static void ahci_drain(struct ahci_disk *d);
+static void ahci_start_next(struct ahci_disk *d);
+
+static int ahci_run_command(struct ahci_disk *d, uint8_t command, uint64_t lba, uint32_t count,
+                            volatile uint8_t *buf, uint32_t bytes, int write)
+{
+    uint32_t ci_off = ahci_port_off(d->port, AHCI_PxCI);
+    uint32_t tfd_off = ahci_port_off(d->port, AHCI_PxTFD);
+    uint32_t is_off = ahci_port_off(d->port, AHCI_PxIS);
+    uint32_t spin;
+    int rc;
+
+    /* A polled command on a port with a queued one active: the fault path
+     * with interrupts off, or a raw window on the recovery kernel. The
+     * active command is finished here first, its request completed, and
+     * the queue resumes once this command is done. */
+    ahci_drain(d);
+    if (ahci_build_command(d, command, lba, count, buf, bytes, write) != 0) {
+        return -1;
+    }
 
     /* The task file must be idle before a command issues (AHCI 5.5.1). */
     spin = AHCI_CMD_STEPS;
@@ -940,27 +1019,226 @@ static int ahci_run_command(struct ahci_disk *d, uint8_t command, uint64_t lba, 
         }
         k_udelay(AHCI_CMD_POLL_US);
     }
-    /* A fatal PxIS error can clear PxCI without setting PxTFD.ERR, so the
-       post-loop check tests both: a fatal interrupt or a task-file ERR/DF. */
-    if ((ahci_read32(is_off) & AHCI_PxIS_FATAL) ||
-        (ahci_read32(tfd_off) & (AHCI_PxTFD_ERR | AHCI_PxTFD_DF))) {
-        return ahci_io_error(d);
-    }
+    rc = ahci_judge(d, bytes, buf, write);
+    ahci_start_next(d);
+    return rc;
+}
 
-    /* The HBA counts the bytes it moved into `prdbc`. A completion that moved
-       fewer than requested without raising an error would otherwise pass, and a
-       short write that pc_sync then marks clean is silent data loss. */
-    if (bytes > 0) {
-        ahci_dma_sync(d->cmdlist, sizeof(ahci_cmd_header_t));
-        if (hdr->prdbc != bytes) {
-            return ahci_io_error(d);
+/*
+ * The interrupt-driven path.
+ *
+ * A request is at most a page in the identity-mapped window, so its page is
+ * one PRDT entry with the physical address the virtual one is. One command
+ * is active per port; the rest wait in the port's queue. The port's
+ * interrupt completes the active request and starts the next, so the
+ * processor runs someone else during a transfer and two disks progress
+ * independently. A write is the transfer and then a flush, so a completed
+ * write is on the medium as the polled path's is.
+ */
+
+/** Issue the command built in `d`'s slot without waiting. */
+static void ahci_issue(struct ahci_disk *d)
+{
+    uint32_t is_off = ahci_port_off(d->port, AHCI_PxIS);
+
+    ahci_write32(is_off, 0xFFFFFFFFu);
+    block_count_command();
+    ahci_write32(ahci_port_off(d->port, AHCI_PxCI), 1u << AHCI_SLOT);
+}
+
+/**
+ * Start the request `r` on `d`: a read, or the transfer half of a write.
+ * Returns 0, or -1 when the command could not be built.
+ */
+static int ahci_start_request(struct ahci_disk *d, struct block_request *r)
+{
+    uint32_t bytes = r->count * BLOCK_SECTOR_SIZE;
+
+    if (ahci_build_command(d, r->write ? ATA_WRITE_DMA_EXT : ATA_READ_DMA_EXT, r->lba, r->count,
+                           (volatile uint8_t *)r->page, bytes, r->write) != 0) {
+        return -1;
+    }
+    d->active = r;
+    d->active_generation = r->generation;
+    d->flushing = 0;
+    ahci_issue(d);
+    return 0;
+}
+
+/**
+ * The active command has left the slot: judge it, finish its request or
+ * start the flush half of a write, and start the next request queued.
+ * Runs from the interrupt, and from the polled path draining the port.
+ */
+static void ahci_finish_active(struct ahci_disk *d)
+{
+    struct block_request *r = d->active;
+    int rc;
+
+    if (!r) {
+        return;
+    }
+    rc = ahci_judge(d, d->flushing ? 0 : r->count * BLOCK_SECTOR_SIZE, (volatile uint8_t *)r->page,
+                    r->write);
+    if (rc == 0 && r->write && !d->flushing) {
+        if (ahci_build_command(d, ATA_FLUSH_EXT, 0, 0, 0, 0, 0) == 0) {
+            d->flushing = 1;
+            block_count_flush();
+            ahci_issue(d);
+            return;
+        }
+        rc = -EIO;
+    }
+    d->active = 0;
+    latency_note(LAT_DISK, pit_now_us() - r->taken_us);
+    block_request_complete(r, d->active_generation, rc);
+}
+
+/** Start the oldest queued request when the port is idle. */
+static void ahci_start_next(struct ahci_disk *d)
+{
+    while (!d->active && d->queue_head) {
+        struct block_request *r = d->queue_head;
+
+        d->queue_head = r->queued;
+        if (!d->queue_head) {
+            d->queue_tail = 0;
+        }
+        r->queued = 0;
+        if (ahci_start_request(d, r) != 0) {
+            block_request_complete(r, r->generation, -EIO);
         }
     }
+}
 
-    if (!write && bytes > 0) {
-        ahci_dma_sync(buf, bytes); /* evict stale lines; CPU reads fresh */
+/**
+ * Finish the active command by polling, for a caller that needs the port
+ * now and cannot take an interrupt: the fault path with interrupts off.
+ * The interrupt that would have completed it finds nothing active.
+ */
+static void ahci_drain(struct ahci_disk *d)
+{
+    uint32_t ci_off = ahci_port_off(d->port, AHCI_PxCI);
+    uint32_t is_off = ahci_port_off(d->port, AHCI_PxIS);
+    uint32_t flags;
+
+    if (!d->active) {
+        return;
     }
+    flags = kirq_save();
+    while (d->active) {
+        uint32_t spin = AHCI_CMD_STEPS;
+
+        while ((ahci_read32(ci_off) & (1u << AHCI_SLOT)) &&
+               !(ahci_read32(is_off) & AHCI_PxIS_FATAL)) {
+            if (--spin == 0) {
+                break;
+            }
+            k_udelay(AHCI_CMD_POLL_US);
+        }
+        if (spin == 0) {
+            struct block_request *r = d->active;
+
+            (void)ahci_io_error(d);
+            d->active = 0;
+            block_request_complete(r, d->active_generation, -EIO);
+            break;
+        }
+        ahci_finish_active(d);
+    }
+    kirq_restore(flags);
+}
+
+/** The device's `submit`: queue `r`, and start it when the port is idle. */
+static int ahci_submit(block_device_t *device, struct block_request *r)
+{
+    struct ahci_disk *d = (struct ahci_disk *)device->drvdata;
+    uint32_t flags;
+
+    if (r->count == 0 || r->lba > device->sector_count || r->count > device->sector_count - r->lba) {
+        return -EIO;
+    }
+    flags = kirq_save();
+    r->queued = 0;
+    if (d->queue_tail) {
+        d->queue_tail->queued = r;
+    } else {
+        d->queue_head = r;
+    }
+    d->queue_tail = r;
+    ahci_start_next(d);
+    kirq_restore(flags);
     return 0;
+}
+
+/**
+ * The controller's interrupt: every port with a disk whose command has
+ * left the slot is finished, and its interrupt status cleared.
+ */
+static void ahci_handler(isr_params_t *params)
+{
+    int i;
+
+    (void)params;
+    ahci_messages++;
+    for (i = 0; i < ahci_ndisks; i++) {
+        struct ahci_disk *d = &ahci_disks[i];
+        uint32_t is_off = ahci_port_off(d->port, AHCI_PxIS);
+        uint32_t is = ahci_read32(is_off);
+
+        if (is == 0) {
+            continue;
+        }
+        if (d->active && !(ahci_read32(ahci_port_off(d->port, AHCI_PxCI)) & (1u << AHCI_SLOT))) {
+            ahci_finish_active(d);
+            ahci_start_next(d);
+        } else if (d->active && (is & AHCI_PxIS_FATAL)) {
+            struct block_request *r = d->active;
+
+            (void)ahci_io_error(d);
+            d->active = 0;
+            block_request_complete(r, d->active_generation, -EIO);
+            ahci_start_next(d);
+        }
+        ahci_write32(is_off, is);
+    }
+    ahci_write32(AHCI_IS, ahci_read32(AHCI_IS));
+}
+
+void ahci_start(void)
+{
+    int i;
+
+    if (!ahci_base || ahci_ndisks == 0 || kcmdline_has("rach2.ahcipoll")) {
+        return;
+    }
+    if (!lapic_ready() || (ahci_vector = isr_alloc_vector()) < 0) {
+        klog(KLOG_INFO, "ahci", "polled: no vector for the controller's messages");
+        return;
+    }
+    register_isr_handler((uint8_t)ahci_vector, ahci_handler, "ahci");
+    if (pci_msi_enable(&ahci_pci, (uint8_t)ahci_vector) != 0) {
+        klog(KLOG_INFO, "ahci", "polled: the controller has no message capability");
+        ahci_vector = -1;
+        return;
+    }
+    for (i = 0; i < ahci_ndisks; i++) {
+        struct ahci_disk *d = &ahci_disks[i];
+
+        ahci_write32(ahci_port_off(d->port, AHCI_PxIS), 0xFFFFFFFFu);
+        ahci_write32(ahci_port_off(d->port, AHCI_PxIE), AHCI_PxIE_WANTED);
+        d->dev.flags &= ~BLOCK_FAULT_SAFE;
+        d->dev.submit = ahci_submit;
+    }
+    ahci_write32(AHCI_IS, 0xFFFFFFFFu);
+    ahci_write32(AHCI_GHC, ahci_read32(AHCI_GHC) | AHCI_GHC_IE);
+    klog(KLOG_INFO, "ahci", "interrupts: messages on vector %d, %d disks queued", ahci_vector,
+         ahci_ndisks);
+}
+
+uint32_t ahci_interrupts(void)
+{
+    return ahci_messages;
 }
 
 /* The last IDENTIFY answer, which the registry reads the strings from. */
@@ -1058,6 +1336,7 @@ int ahci_init(void)
     ahci_base = 0;
     ahci_port = -1;
     ahci_ndisks = 0;
+    ahci_vector = -1;
     ahci_detect_cache();
     if (ahci_discover() != 0) {
         klog(KLOG_INFO, "ahci", "none: %s", ahci_err);
@@ -1085,10 +1364,15 @@ int ahci_init(void)
         }
         d->dev.sector_size = BLOCK_SECTOR_SIZE;
         d->dev.sector_count = d->sectors;
-        d->dev.flags = BLOCK_FAULT_SAFE;
+        d->dev.flags = BLOCK_FAULT_SAFE | BLOCK_POLLABLE;
         d->dev.read = ahci_read;
         d->dev.write = ahci_write;
+        d->dev.submit = 0;
+        d->dev.flush = 0;
+        d->dev.backing = 0;
         d->dev.drvdata = d;
+        d->active = 0;
+        d->queue_head = d->queue_tail = 0;
         if (!block0) {
             block0 = &d->dev;
             ahci_port = d->port;

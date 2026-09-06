@@ -408,7 +408,7 @@ case "$ROOTS" in
     *) fail "the fallback's command line does not name the KRFFS root: $ROOTS" ;;
 esac
 case "$ROOTS" in
-    *"/dev/disk0 / krffs"*) ;;
+    *"/dev/disk0p2 / krffs"*) ;;
     *) fail "the fallback did not mount the KRFFS root: $ROOTS" ;;
 esac
 
@@ -466,7 +466,7 @@ fell_back() {
         *) fail "the trial was still armed after a $2 candidate root: $OUT" ;;
     esac
     case "$OUT" in
-        *"/dev/disk0 / krffs"*) ;;
+        *"/dev/disk0p2 / krffs"*) ;;
         *) fail "the fallback after a $2 candidate root did not mount KRFFS: $OUT" ;;
     esac
     stop_machine
@@ -475,7 +475,7 @@ fell_back() {
 # nothing and halts, which is the state the trial exists for.
 arm_candidate_trial arm-missing
 dd if=/dev/zero of="$WORK" bs=512 seek=$((EXT2_LBA + 2)) count=2 conv=notrunc status=none
-cold_watch missing "ext2: root: no ext2 partition on the disk"
+cold_watch missing "root: MBRID=1acef00d,4: /dev/disk0p4 has no ext2 file system this kernel mounts"
 if grep -aq "rach2 login:" "$LOG"; then
     fail "a candidate whose ext2 root is missing still reached a login"
 fi
@@ -677,7 +677,7 @@ dd if=/dev/zero of="$WORK" bs=512 seek=$((ROOT_OFF / 512)) count=1 \
 # the machine in. Booting straight into recovery would prove the repair
 # without ever showing that anything was broken.
 arm_next fallback
-cold_watch broken "no KRFFS partition on the disk"
+cold_watch broken "root: MBRID=1acef00d,2: /dev/disk0p2 has no KRFFS file system this kernel mounts"
 if grep -aq "rach2 login:" "$LOG"; then
     fail "a machine whose root is destroyed still reached a login"
 fi

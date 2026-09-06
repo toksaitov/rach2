@@ -392,7 +392,7 @@ int block_request(block_device_t *device, int write, uint64_t lba, uint32_t coun
         count > device->sector_count - lba) {
         return -EIO;
     }
-    if (device->flags & BLOCK_FAULT_SAFE) {
+    if (block_flags(device) & BLOCK_FAULT_SAFE) {
         if (write) {
             return device->write(device, lba, count, buffer);
         }
@@ -418,6 +418,15 @@ int block_request(block_device_t *device, int write, uint64_t lba, uint32_t coun
     }
     __asm__ __volatile__("pushfl; popl %0" : "=r"(eflags));
     if (!(eflags & 0x200) || !current_proc || !current_proc->in_syscall) {
+        /* A page fault reading a file, with interrupts off: a disk that can
+         * be polled from here is, its queue drained first; a device that
+         * cannot is the caller's mistake. */
+        if (block_flags(device) & BLOCK_POLLABLE) {
+            if (write) {
+                return device->write(device, lba, count, buffer);
+            }
+            return device->read(device, lba, count, buffer);
+        }
         k_panic("block: a sleeping device was reached outside syscall context");
     }
     while (count > 0) {

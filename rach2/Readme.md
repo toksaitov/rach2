@@ -48,6 +48,8 @@ The kernel accepts one root:
 
 The root is mounted before the USB stack starts, so a root is on the disk the block layer found and never on a stick. An orderly stop writes an ext2 root's buffers and sets its valid bit when the mount was writable, its error bit clear and those writes succeeded; otherwise the next mount checks it.
 
+After root mounting, `ahci_start` enables queued requests unless `rach2.ahcipoll` is present, the local APIC is unavailable, no interrupt vector is free, or the controller cannot enable message-signalled interrupts (MSI). It allocates a vector with `isr_alloc_vector`, registers the handler as `ahci`, enables MSI with `pci_msi_enable`, enables D2H Register FIS and fatal-error interrupts in each disk's `PxIE`, and sets `GHC.IE`. Each disk clears `BLOCK_FAULT_SAFE` and gains `submit`, while retaining its polled transfer functions. Success logs `ahci: interrupts: messages on vector N, K disks queued`; unavailable vectors or MSI log the reason as `ahci: polled: ...`. Once an interrupt has arrived, `/proc/interrupts` lists the MSI vector as `ahci`. `ahci_interrupts()` returns the controller's message count.
+
 A boot with no mounted root halts unless `rach2.rescue` was requested. The kernel also halts before mounting when `rach2.nodisk` is combined with a disk root, unless rescue mode was requested, because skipping the disk would otherwise expose an unauthenticated shell after the root failed to mount.
 
 The page cache writes dirty pages on eviction, `fsync`, `sync`, and an orderly stop. A disk root sets a dirty-mount flag while mounted and clears it only after a successful final flush. See [block storage](sys/block/Readme.md) and [KRFFS](sys/fs/Readme.md).
@@ -114,7 +116,8 @@ Options are whitespace-delimited. Flags match whole tokens, and the first `key=v
 | `rach2.root=SPEC` | Resolve `PARTUUID=GUID`, `MBRID=XXXXXXXX,M`, `UUID=UUID`, `LABEL=NAME`, or `/dev/diskNpM` across all registered disks. Mount only when exactly one partition matches. |
 | `rach2.rootfstype=krffs` or `rach2.rootfstype=ext2` | Select the file system for a root resolved by identity. Other values are refused; without this option, check for KRFFS first and then ext2. |
 | `rach2.boot=SPEC` | Select the boot partition using the root identity forms. It must resolve uniquely to entry 1 of an MBR disk, then pass the boot-window checks. Otherwise publish no boot devices. Without this option, use the disk containing the root resolved by identity, or disk 0. |
-| `rach2.disk=ahci` | Try AHCI before ATA; fall back to ATA if no AHCI disk answers. |
+| `rach2.disk=ahci` | Accepted with no effect. Both drivers always probe, AHCI first. |
+| `rach2.ahcipoll` | Keep AHCI disks polled, with no interrupts or request queue. |
 | `rach2.diskdiag` | Probe the disks and publish `/dev/diskN` for every registered disk. `/proc/disk` always exists, records the probe result for disk 0, and lists every registered disk on a `disk N ...` line regardless of probe state. |
 | `rach2.fsck` | Read by recovery's `init`, not by the kernel: run `e2fsck -p` on every ext2 partition before anything else starts. The menu's repair entries carry it; the plain recovery entries do not. |
 | `rach2.blocklag=N` | Test option: answer boot-disk requests N ticks late through a sleeping wrapper. The partition nodes and `/dev/bootpart` are on it; the root window keeps the real device. |
@@ -238,7 +241,7 @@ The kernel currently supports:
 * VGA text mode and Mode 13h graphics.
 * PS/2 keyboard and mouse input, and USB keyboards, mice and flash drives through xHCI, on a root port or behind a hub.
 * COM1 serial input and output.
-* Polled ATA PIO and AHCI disk access with MBR partition discovery.
+* Polled ATA PIO on both channels and both drives with LBA28 and LBA48, and AHCI disk access with interrupt-driven request queues and a polled path for boot and page faults, with MBR partition discovery.
 * RTL8139, Intel 82540EM (e1000), and RTL8168GU Ethernet devices.
 * Sound Blaster 16, Intel HDA, and the PC speaker.
 

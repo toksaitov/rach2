@@ -37,6 +37,19 @@
  */
 int ahci_init(void);
 
+/**
+ * Switch the disks to the interrupt-driven path: the controller's messages
+ * on an allocated vector, one command active per port and a queue behind
+ * it. Called once interrupts are on and the scheduler runs; before that,
+ * and under `rach2.ahcipoll`, every transfer is polled. A disk switched
+ * loses `BLOCK_FAULT_SAFE` and gains `submit`; its polled `read` and
+ * `write` remain for the fault path, which drains the port first.
+ */
+void ahci_start(void);
+
+/** How many messages the controller has sent. */
+uint32_t ahci_interrupts(void);
+
 /** Dump the discovered HBA's global and per-port registers to serial. */
 void ahci_dump(void);
 

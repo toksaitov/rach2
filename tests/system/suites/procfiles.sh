@@ -137,7 +137,7 @@ case "$window" in
     *) echo "procfiles-test: FAIL: a window root did not say so" >&2; exit 1 ;;
 esac
 case "$disk" in
-    "/dev/disk0 / krffs rw,relatime 0 0") ;;
+    "/dev/disk0p1 / krffs rw,relatime 0 0") ;;
     *) echo "procfiles-test: FAIL: a disk root did not say so" >&2; exit 1 ;;
 esac
 if [ "$ram" = "$window" ] || [ "$ram" = "$disk" ]; then

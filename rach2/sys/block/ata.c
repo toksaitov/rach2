@@ -100,7 +100,7 @@ static struct ata_drive drives[4];
 static int ata_read(block_device_t *device, uint64_t lba, uint32_t count, void *buffer);
 static int ata_write(block_device_t *device, uint64_t lba, uint32_t count, const void *buffer);
 
-/** Issue `command` to the selected drive of `ch` unless the policy refuses it. */
+/** Issue `command` to the selected drive of `ch`, unless the policy refuses. */
 static int ata_command(const struct ata_channel *ch, uint8_t command)
 {
     if (!diskcmd_allowed(command)) {

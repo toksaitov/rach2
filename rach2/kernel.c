@@ -2024,6 +2024,7 @@ static char root_spec[80];
 static char root_source[24];
 
 static int root_resolve(const char *spec, struct root_match *m);
+static void part_node_path(char out[24], const struct disk *d, int slot);
 
 /**
  * Publish the boot partition and the boot loader's gap, before any root is
@@ -2282,6 +2283,19 @@ static int init_krffs_disk(void)
     if (found < 0) {
         klog(KLOG_WARN, "krffs", "no KRFFS partition on the disk");
         return -1;
+    }
+    root_source[0] = '\0';
+    if (disk_of(block0)) {
+        int slot;
+        struct disk *d = disk_of(block0);
+
+        /* The node the root came from, for `/proc/mounts`: the table entry
+         * whose start is the partition's. */
+        for (slot = 0; slot < d->table.count; slot++) {
+            if (d->table.parts[slot].start_lba == start_lba) {
+                part_node_path(root_source, d, slot);
+            }
+        }
     }
     return krffs_root_mount(block0, start_lba, sector_count, found);
 }
@@ -3769,7 +3783,7 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
         } else if (kcmdline_has("rach2.fsdisk") || kcmdline_has("rach2.root=disk")) {
             mounted = init_krffs_disk();
             via = " (disk)";
-            source = "/dev/disk0";
+            source = root_source[0] ? root_source : "/dev/disk0";
             options = "rw,relatime";
         } else if (num_modules > 0) {
             module_info_t *ramdisk = get_ramdisk();
@@ -3816,6 +3830,11 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
         usb_report_controllers();
         usb_init();
     }
+
+    /* The SATA disks go over to their interrupts here, after the root: the
+     * boot's reads were polled where no process could sleep, and from here
+     * a transfer lets the processor run someone else. */
+    ahci_start();
 
     /* The disk diagnostic, asked for by name. It probes a disk only if the
      * mount above did not, publishes /proc/disk and /dev/disk0, and issues

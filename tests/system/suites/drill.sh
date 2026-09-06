@@ -201,13 +201,13 @@ cp "$DISK" "$WORK"
 # and rewritten has to be the partition the machine actually mounts.
 ROOT_TYPE="${DRILL_ROOT:-krffs}"
 case "$ROOT_TYPE" in
-    krffs) ROOT_GONE="no KRFFS partition on the disk"; ROOT_UP="krffs: mounted:"
+    krffs) ROOT_GONE="has no KRFFS file system this kernel mounts"; ROOT_UP="krffs: mounted:"
            REFUSED_TOOL="did not take the write"; REFUSED_SHELL="write error" ;;
     # An ext2 root holds a claim on its partition, so the whole-disk window
     # refuses to open for writing at all, with EBUSY, before the build's rule
     # could refuse the write: reflash cannot open the device and the shell
     # cannot open its redirection.
-    ext2) ROOT_GONE="ext2: root: no ext2 partition on the disk"; ROOT_UP="ext2: root:"
+    ext2) ROOT_GONE="has no ext2 file system this kernel mounts"; ROOT_UP="ext2: root:"
           REFUSED_TOOL="Resource busy"; REFUSED_SHELL="cannot open a redirection" ;;
     *) echo "drill_test.sh: DRILL_ROOT is krffs or ext2" >&2; exit 2 ;;
 esac

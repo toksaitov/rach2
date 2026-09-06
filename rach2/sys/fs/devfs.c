@@ -23,6 +23,7 @@
 #include "../block/mbr.h"
 #include "../lib/kerrno.h"
 #include "../mm/paging.h"
+#include "../mm/kheap.h"
 #include "../io/poll.h"
 #include "../tty/pty.h"
 #include "../block/block.h"
@@ -199,10 +200,10 @@ struct devfs_entry {
  * write command, so it was a million cache flushes too; at 64 sectors it is
  * sixteen thousand.
  *
- * One buffer is safe for all of them because a syscall cannot be preempted:
- * the entry path sets `in_syscall` and the timer refuses to schedule a process
- * that is in one, so a second writer cannot be running while this is in use.
- * Interrupts do still run, so no interrupt path may touch it.
+ * A transfer stages through pages of its own from the heap, so two of them
+ * on two disks each sleep on their own device; this buffer is the one taken
+ * when the heap has none, in turn. Interrupts do still run, so no interrupt
+ * path may touch it.
  */
 #define RAW_BATCH_SECTORS DEVFS_RAW_BATCH_SECTORS
 static uint8_t raw_batch[RAW_BATCH_SECTORS * BLOCK_SECTOR_SIZE] __attribute__((aligned(4096)));
@@ -216,13 +217,11 @@ static uint8_t raw_batch[RAW_BATCH_SECTORS * BLOCK_SECTOR_SIZE] __attribute__((a
 static uint64_t raw_calls;
 
 /*
- * Who has the staging buffer. It was one buffer for everyone while every
- * raw window was over a device that polls: a syscall is not preempted, so
- * a transfer began and ended with no other process running. A stick's
- * window sleeps inside its request with the sectors in this buffer, and a
- * second process reading any raw window would fill it under the sleeper.
- * So a transfer takes the buffer first and gives it back after the copy,
- * and a second process sleeps until then.
+ * Who has the static staging buffer. A window over a device that sleeps
+ * holds its buffer across the sleep, and a second process filling the same
+ * buffer under the sleeper would hand it the wrong sectors; so the static
+ * buffer is taken first and given back after the copy, and a second process
+ * that also found the heap empty sleeps until then.
  */
 static int raw_batch_holder = -1;
 static wait_queue_t raw_batch_wq;
@@ -233,16 +232,31 @@ static int raw_batch_free(void *arg)
     return raw_batch_holder == -1;
 }
 
-static void raw_batch_take(void)
+/**
+ * A staging buffer for one transfer: pages from the heap, so two transfers
+ * on two disks run side by side while each sleeps on its own device; the
+ * static buffer above when the heap has none, taken in turn.
+ */
+static uint8_t *raw_batch_take(void)
 {
+    uint8_t *batch = kalloc_pages(RAW_BATCH_SECTORS * BLOCK_SECTOR_SIZE / PAGE_SIZE, 0);
+
+    if (batch) {
+        return batch;
+    }
     while (raw_batch_holder != -1) {
         wq_wait_event_nointr(&raw_batch_wq, raw_batch_free, 0);
     }
     raw_batch_holder = current_proc ? (int)current_proc->pid : 0;
+    return raw_batch;
 }
 
-static void raw_batch_put(void)
+static void raw_batch_put(uint8_t *batch)
 {
+    if (batch != raw_batch) {
+        kfree_pages(batch, RAW_BATCH_SECTORS * BLOCK_SECTOR_SIZE / PAGE_SIZE);
+        return;
+    }
     raw_batch_holder = -1;
     wq_wake_all(&raw_batch_wq);
 }
@@ -284,6 +298,7 @@ static int32_t raw_window_read(struct disk_window *w, fd_entry_t *e, char __user
     uint64_t total = part->sector_count;
     uint64_t lba;
     uint32_t want, done;
+    uint8_t *batch;
     int rc = 0;
 
     if (!w->present) {
@@ -301,7 +316,7 @@ static int32_t raw_window_read(struct disk_window *w, fd_entry_t *e, char __user
         want = (uint32_t)(total - lba);
     }
     done = 0;
-    raw_batch_take();
+    batch = raw_batch_take();
     while (done < want) {
         uint32_t chunk = want - done;
 
@@ -309,21 +324,21 @@ static int32_t raw_window_read(struct disk_window *w, fd_entry_t *e, char __user
             chunk = RAW_BATCH_SECTORS;
         }
         raw_calls++;
-        rc = block_request(part, 0, lba + done, chunk, raw_batch);
+        rc = block_request(part, 0, lba + done, chunk, batch);
         if (rc != 0) {
             break;
         }
-        if (copy_to_user((void __user *)(buf + done * BLOCK_SECTOR_SIZE), raw_batch,
+        if (copy_to_user((void __user *)(buf + done * BLOCK_SECTOR_SIZE), batch,
                          chunk * BLOCK_SECTOR_SIZE) != 0) {
             if (done == 0) {
-                raw_batch_put();
+                raw_batch_put(batch);
                 return -EFAULT;
             }
             break;
         }
         done += chunk;
     }
-    raw_batch_put();
+    raw_batch_put(batch);
     if (done == 0) {
         return rc; /* the request's own errno: EIO, or what the device said */
     }
@@ -367,6 +382,7 @@ static int32_t raw_window_write(struct disk_window *w, fd_entry_t *e, const char
     uint64_t total = part->sector_count;
     uint64_t lba;
     uint32_t want, done;
+    uint8_t *batch;
 
     if (!w->present) {
         return -ENXIO;
@@ -386,28 +402,28 @@ static int32_t raw_window_write(struct disk_window *w, fd_entry_t *e, const char
         return -ENOSPC;
     }
     done = 0;
-    raw_batch_take();
+    batch = raw_batch_take();
     while (done < want) {
         uint32_t chunk = want - done;
 
         if (chunk > RAW_BATCH_SECTORS) {
             chunk = RAW_BATCH_SECTORS;
         }
-        if (copy_from_user(raw_batch, (const void __user *)(buf + done * BLOCK_SECTOR_SIZE),
+        if (copy_from_user(batch, (const void __user *)(buf + done * BLOCK_SECTOR_SIZE),
                            chunk * BLOCK_SECTOR_SIZE) != 0) {
             if (done == 0) {
-                raw_batch_put();
+                raw_batch_put(batch);
                 return -EFAULT;
             }
             break;
         }
         raw_calls++;
-        if (block_request(part, 1, lba + done, chunk, raw_batch) != 0) {
+        if (block_request(part, 1, lba + done, chunk, batch) != 0) {
             break;
         }
         done += chunk;
     }
-    raw_batch_put();
+    raw_batch_put(batch);
     if (done == 0) {
         return -EIO;
     }
@@ -568,6 +584,7 @@ static int32_t raw_window_read_bytes(struct disk_window *w, fd_entry_t *e, char 
     uint64_t off = e->ofd->raw_offset;
     uint64_t total = part->sector_count * BLOCK_SECTOR_SIZE;
     uint32_t done = 0;
+    uint8_t *batch;
     int rc = 0;
 
     if (off >= total) {
@@ -576,7 +593,7 @@ static int32_t raw_window_read_bytes(struct disk_window *w, fd_entry_t *e, char 
     if ((uint64_t)count > total - off) {
         count = (uint32_t)(total - off);
     }
-    raw_batch_take();
+    batch = raw_batch_take();
     while (done < count) {
         uint64_t at = off + done;
         uint64_t lba = at / BLOCK_SECTOR_SIZE;
@@ -593,20 +610,20 @@ static int32_t raw_window_read_bytes(struct disk_window *w, fd_entry_t *e, char 
             take = left;
         }
         raw_calls++;
-        rc = block_request(part, 0, lba, sectors, raw_batch);
+        rc = block_request(part, 0, lba, sectors, batch);
         if (rc != 0) {
             break;
         }
-        if (copy_to_user((void __user *)(buf + done), raw_batch + skip, take) != 0) {
+        if (copy_to_user((void __user *)(buf + done), batch + skip, take) != 0) {
             if (done == 0) {
-                raw_batch_put();
+                raw_batch_put(batch);
                 return -EFAULT;
             }
             break;
         }
         done += take;
     }
-    raw_batch_put();
+    raw_batch_put(batch);
     if (done == 0) {
         return rc;
     }

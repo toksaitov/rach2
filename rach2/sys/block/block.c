@@ -49,12 +49,20 @@ static int block_partition_submit(block_device_t *device, struct block_request *
 {
     block_partition_t *partition = (block_partition_t *)device;
 
-    if (request->count == 0 || request->lba > device->sector_count ||
+    if (!partition->backing->submit || request->count == 0 || request->lba > device->sector_count ||
         request->count > device->sector_count - request->lba) {
         return -EIO;
     }
     request->lba += partition->start_lba;
     return partition->backing->submit(partition->backing, request);
+}
+
+uint32_t block_flags(block_device_t *device)
+{
+    while (device->read == block_partition_read) {
+        device = ((block_partition_t *)device)->backing;
+    }
+    return device->flags;
 }
 
 static int block_partition_flush(block_device_t *device, struct block_request *request)
@@ -80,7 +88,11 @@ void block_partition_init(block_partition_t *partition, block_device_t *backing,
     partition->backing = backing;
     partition->device.flags = backing->flags;
     partition->device.deadline_ticks = backing->deadline_ticks;
-    partition->device.submit = backing->submit ? block_partition_submit : 0;
+    /* The forwarder is there whatever the backing has now: a disk switched
+       to its interrupts after the view was cut gains a `submit` the view
+       must follow, and `block_flags` reads the backing's flags for the same
+       reason. */
+    partition->device.submit = block_partition_submit;
     partition->device.flush = backing->flush ? block_partition_flush : 0;
     partition->start_lba = start_lba;
 

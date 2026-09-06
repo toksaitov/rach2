@@ -41,6 +41,10 @@ struct block_request;
  * unmount writes nothing and only lets go of what it holds. Set by the cache
  * when the disk layer tells it, cleared when the device is published again. */
 #define BLOCK_GONE 0x8u
+/* The device answers a polled `read` or `write` from any context, its queue
+ * drained first: a SATA disk on its interrupts. A caller that cannot sleep,
+ * a page fault with interrupts off, takes that path instead of a request. */
+#define BLOCK_POLLABLE 0x40u
 /* The device stopped answering: every slot of the request pool it held went
  * past its deadline unanswered. Its waiters were released with `EIO` and a
  * new request is refused with `EIO`, until a late answer clears it. Set and
@@ -82,6 +86,13 @@ struct block_device {
  * the middle would want two more than there are. A device whose chain would
  * be longer is refused where it is attached. */
 #define BLOCK_MAX_DEPTH 1
+
+/**
+ * The flags that decide how `device` is driven: a partition view's are its
+ * backing's, read when asked and not when the view was cut, since a disk
+ * may lose `BLOCK_FAULT_SAFE` when it goes over to its interrupts.
+ */
+uint32_t block_flags(block_device_t *device);
 
 /**
  * How many devices are under `device`, following its backing chain.
@@ -204,6 +215,7 @@ void block_partition_init(
  */
 struct block_request {
     struct block_request *next; /* the list of live requests */
+    struct block_request *queued; /* the device's own queue, oldest first */
     block_device_t *device;
     block_device_t *owner; /* the device the request is accounted to */
     int write;
