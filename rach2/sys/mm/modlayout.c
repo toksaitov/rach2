@@ -54,7 +54,7 @@ const char *modlayout_reason(int code)
     case MODLAYOUT_EMPTY:
         return "a boot module is empty or ends before it starts";
     case MODLAYOUT_PAST_LIMIT:
-        return "a boot module ends past the 32 MiB memory limit";
+        return "a boot module ends past addressable memory";
     case MODLAYOUT_HITS_KERNEL:
         return "a boot module overlaps the kernel image";
     case MODLAYOUT_OVERLAP:

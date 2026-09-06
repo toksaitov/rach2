@@ -1593,6 +1593,7 @@ static int hda_init(void)
 {
     uint16_t gcap;
     uint32_t bar0;
+    uintptr_t mapped;
     pci_device_t *skip_dev = NULL;
     pci_device_t temp_pci;
     bool found_controller = false;
@@ -1636,17 +1637,15 @@ static int hda_init(void)
         return -1;
     }
 
-    /* Map MMIO region if above identity-mapped memory */
-    if (bar0 >= HARD_MEMORY_LIMIT) {
-        hda_probe_log("HDA: Mapping MMIO...");
-        if (map_mmio(bar0, HDA_MMIO_SIZE) == 0) {
-            hda_probe_log("FAIL\n");
-            return -1;
-        }
-        hda_probe_log("OK\n");
+    hda_probe_log("HDA: Mapping MMIO...");
+    mapped = map_mmio(bar0, HDA_MMIO_SIZE);
+    if (mapped == 0) {
+        hda_probe_log("FAIL\n");
+        return -1;
     }
+    hda_probe_log("OK\n");
 
-    hda_base = (volatile uint8_t *)(uintptr_t)bar0;
+    hda_base = (volatile uint8_t *)mapped;
 
     /* Detect CLFLUSH support for DMA coherency (no-ops in emulators). */
     hda_cpu_detect_cache();

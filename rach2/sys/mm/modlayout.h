@@ -9,11 +9,12 @@
  * GRUB promises a module's address and length and nothing about placement, so
  * the kernel checks the layout before it reserves memory over it. The rules
  * are the four ways a placement breaks this kernel: a module past the
- * identity-mapped ceiling (the kernel would page-fault reading it), a module
+ * memory the kernel can address (its end would wrap), a module
  * overlapping the kernel image (the bump allocator would carve over its own
  * code), two modules overlapping each other (one image would be torn), and an
  * empty or backwards range (a bootloader bug that would make every later
- * length calculation wrong).
+ * length calculation wrong). Where a module lies is otherwise the loader's
+ * choice: the boot maps it into the kernel's layout wherever it is.
  *
  * The function is pure so tests/host/modlayout_hosttest.c can craft every
  * refusal, including the ones no bootloader will produce on demand.

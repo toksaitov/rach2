@@ -17,6 +17,8 @@
 .set PROC_KERNEL_STACK, 56 # offset of kernel_stack
 .set PROC_TLS_BASE, 584    # offset of tls_base (after in_syscall; the embedded fd
                            # table grew by 8 bytes/entry in Phase 12: 456 -> 584)
+.set PROC_PAGE_DIR, 10736  # offset of page_dir, the directory cr3 names, after
+                           # the 512-byte floating-point area at 10224
 
 # Shared TLS GDT descriptor (mirrors GDT_TLS_ENTRY / GDT_TLS_SELECTOR in
 # tables/gdt.h): entry 6, so its 8-byte descriptor lives at gdt_descriptors+48;
@@ -96,10 +98,9 @@ switch_context:
     # Switch to new page directory
     movl %edx, %cr3
 
-    # Update _curr_dir to match new CR3
-    # cr3 points to phys_page_tables (offset 4096 in page_dir_t)
-    # So page_dir_t* = cr3 - 4096
-    subl $4096, %edx
+    # _curr_dir is the record's pointer: a directory lives in the heap, and
+    # its physical address says nothing about where the kernel reads it.
+    movl PROC_PAGE_DIR(%eax), %edx
     movl %edx, _curr_dir
 
 .no_cr3_switch:

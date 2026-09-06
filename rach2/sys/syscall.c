@@ -533,7 +533,7 @@ static int32_t sys_exit(isr_params_t *params)
          * would leak the directory and its private page tables. */
         if (current_proc->cr3 != 0) {
             page_dir_t *init_dir;
-            init_dir = (page_dir_t *)(current_proc->cr3 - 1024 * sizeof(page_table_t *));
+            init_dir = current_proc->page_dir;
             free_user_pages(init_dir);
             switch_page_directory(_kernel_dir);
             free_page_directory(init_dir);
@@ -5586,7 +5586,7 @@ static int copy_user_pages(process_t *parent, page_dir_t *child_dir)
          * the page_dir_t* by subtracting that offset. The layout is
          * logical_page_tables[1024] then phys_page_tables[1024], so the offset
          * is 1024 * sizeof(page_table_t*) = 4096 bytes. */
-        parent_dir = (page_dir_t *)(parent->cr3 - 1024 * sizeof(page_table_t *));
+        parent_dir = parent->page_dir;
     }
 
     for (dir_idx = 0; dir_idx < 1024; dir_idx++) {
@@ -5607,9 +5607,9 @@ static int copy_user_pages(process_t *parent, page_dir_t *child_dir)
             virt_addr = (dir_idx << 22) | (page_idx << 12);
             parent_phys = pte & ~0xFFF;
 
-            /* Skip the identity-mapped kernel region (first 32MB) and any bogus
+            /* Skip the kernel's identity map below user space and any bogus
              * mapping. */
-            if (virt_addr < HARD_MEMORY_LIMIT || parent_phys == 0) {
+            if (virt_addr < USER_ADDR_MIN || parent_phys == 0) {
                 continue;
             }
 
@@ -5826,7 +5826,7 @@ static void __attribute__((noreturn)) exec_fail_destroyed(void)
     sched_disable();
     switch_page_directory(_kernel_dir);
     if (current_proc->cr3 != 0) {
-        dir = (page_dir_t *)(current_proc->cr3 - 1024 * sizeof(page_table_t *));
+        dir = current_proc->page_dir;
         free_user_pages(dir);
         free_page_directory(dir);
     }
@@ -6020,6 +6020,7 @@ static int32_t sys_execve(isr_params_t *params)
     uint8_t random16[16];
     page_dir_t *proc_dir;
     uintptr_t stack_phys;
+    void *stack_page;
     const char *name;
     int len;
 
@@ -6248,7 +6249,7 @@ checked:
     if (current_proc->cr3 == 0) {
         proc_dir = _kernel_dir;
     } else {
-        proc_dir = (page_dir_t *)(current_proc->cr3 - 1024 * sizeof(page_table_t *));
+        proc_dir = current_proc->page_dir;
     }
 
     /* The ELF header is validated before the old image is torn down, so the
@@ -6433,7 +6434,11 @@ interpreter_checked:
         exec_fail_destroyed();
     }
 
-    k_memset((void *)stack_phys, 0, PAGE_SIZE);
+    stack_page = kmap_temp(stack_phys);
+    if (!stack_page) {
+        return -ENOMEM;
+    }
+    k_memset(stack_page, 0, PAGE_SIZE);
 
     /*
      * Initial user stack layout (growing down from USER_STACK_BASE +
@@ -6454,10 +6459,12 @@ interpreter_checked:
      * host-side (tests/host/uimage_hosttest.c). */
     krandom_bytes(random16, 16);
     {
-        uint32_t user_esp = build_user_stack((void *)stack_phys, USER_STACK_BASE,
+        uint32_t user_esp = build_user_stack(stack_page, USER_STACK_BASE,
                                              PAGE_SIZE, argc, s->argv_bufs,
                                              s->envp_bufs, &img, random16,
                                              secure);
+
+        kunmap_temp(stack_page);
 
         if (user_esp == 0) {
             exec_fail_destroyed();
@@ -6589,6 +6596,7 @@ static int32_t sys_fork(isr_params_t *params)
     child->kernel_stack = child_kstack_base + KERNEL_STACK_SIZE;
 
     child->cr3 = get_page_dir_phys(child_dir);
+    child->page_dir = child_dir;
     child->parent_pid = parent->pid;
 
     /* Inherit the parent's session and process group: a forked child stays in
@@ -6787,7 +6795,7 @@ static int32_t do_wait(int pid, int __user *status, int options, uint32_t rusage
                 exit_code = p->exit_code;
                 if (p->cr3 != 0) {
                     page_dir_t *child_dir =
-                        (page_dir_t *)(p->cr3 - 1024 * sizeof(page_table_t *));
+                        p->page_dir;
                     free_user_pages(child_dir);
                     free_page_directory(child_dir);
                 }

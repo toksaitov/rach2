@@ -166,7 +166,7 @@ int main(void)
 
         modlayout_describe(MODLAYOUT_PAST_LIMIT, 0, 0x00197000u, 0x02997000u, msg,
                            (uint32_t)sizeof(msg));
-        CHECK(streq(msg, "a boot module ends past the 32 MiB memory limit: module 0 "
+        CHECK(streq(msg, "a boot module ends past addressable memory: module 0 "
                          "spans 0x00197000 - 0x02997000"),
               "the past-limit description");
 

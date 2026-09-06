@@ -22,6 +22,7 @@
 #include "../lib/krandom.h"
 #include "../block/mbr.h"
 #include "../lib/kerrno.h"
+#include "../mm/paging.h"
 #include "../io/poll.h"
 #include "../tty/pty.h"
 #include "../block/block.h"
@@ -679,6 +680,28 @@ static int32_t loopctl_write(fd_entry_t *entry, const char *buffer, uint32_t cou
 
 static const struct file_ops loop_ops = {loop_node_read, loop_node_write, dev_poll, dev_ioctl,
                                          NULL};
+
+/* `/dev/framefail`: a count written to it arms the test switch in the
+ * frame allocator; EPERM unless `rach2.framefail` is on the boot line. */
+static int32_t framefail_write(fd_entry_t *entry, const char *buffer, uint32_t count)
+{
+    uint32_t n = 0, i;
+
+    (void)entry;
+    for (i = 0; i < count && buffer[i] >= '0' && buffer[i] <= '9'; i++) {
+        n = n * 10u + (uint32_t)(buffer[i] - '0');
+    }
+    if (i == 0) {
+        return -EINVAL;
+    }
+    if (paging_framefail_arm(n) != 0) {
+        return -EPERM;
+    }
+    return (int32_t)count;
+}
+
+static const struct file_ops framefail_ops = {dev_eof_read, framefail_write, dev_poll, dev_ioctl,
+                                              NULL};
 static const struct file_ops loopctl_ops = {dev_eof_read, loopctl_write, dev_poll, dev_ioctl,
                                             NULL};
 
@@ -987,7 +1010,8 @@ static const struct devfs_entry dev_table[] = {{"null", 1, 3, 1, 0666, &null_ops
                                                {"loop1", 240, 33, 0, 0400, &loop_ops},
                                                {"loop2", 240, 34, 0, 0400, &loop_ops},
                                                {"loop3", 240, 35, 0, 0400, &loop_ops},
-                                               {"loop-control", 240, 36, 0, 0600, &loopctl_ops}};
+                                               {"loop-control", 240, 36, 0, 0600, &loopctl_ops},
+                                               {"framefail", 240, 37, 0, 0600, &framefail_ops}};
 
 /* One row above per window below, and the minors run from USB_MINOR_BASE in
  * that order; a change to either number must change the rows with it. */

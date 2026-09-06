@@ -87,6 +87,7 @@ static void diag_say(const char *line)
  */
 static void diag_eth_probe(struct diag_eth *out)
 {
+    uintptr_t mapped;
     pci_device_t dev;
     uint16_t command;
     uint32_t bar = 0;
@@ -134,12 +135,13 @@ static void diag_eth_probe(struct diag_eth *out)
     }
 
     out->mmio = pci_bar_address(bar);
-    if (map_mmio(out->mmio, DIAG_MMIO_WINDOW) == 0) {
+    mapped = map_mmio(out->mmio, DIAG_MMIO_WINDOW);
+    if (mapped == 0) {
         out->state = DIAG_ETH_NO_MAP;
         return;
     }
 
-    out->txconfig = *(volatile uint32_t *)(uintptr_t)(out->mmio + DIAG_TXCONFIG);
+    out->txconfig = *(volatile uint32_t *)(mapped + DIAG_TXCONFIG);
     out->xid = (out->txconfig >> DIAG_XID_SHIFT) & DIAG_XID_MASK;
     out->state = DIAG_ETH_READ;
 }
@@ -292,7 +294,7 @@ void boot_diag_report(void)
             continue;
         }
         klog(KLOG_INFO, "diag", "module %d: 0x%X to 0x%X, %d bytes", i,
-             mod->start, mod->end, mod->size);
+             mod->phys, mod->phys + mod->size, mod->size);
     }
 
     diag_eth_report(&eth);

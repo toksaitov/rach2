@@ -384,6 +384,7 @@ static void e1000_tx_setup(void)
 static int e1000_init(void)
 {
     uint32_t addr;
+    uintptr_t mapped;
     uint32_t bar = 0;
     uint32_t ctrl;
     uint32_t i;
@@ -431,11 +432,12 @@ static int e1000_init(void)
         return NETDEV_FAILED;
     }
     addr = pci_bar_address(bar);
-    if (map_mmio(addr, E1000_BAR_WINDOW) == 0) {
+    mapped = map_mmio(addr, E1000_BAR_WINDOW);
+    if (mapped == 0) {
         e1000_err = "the e1000 window would not map";
         return NETDEV_FAILED;
     }
-    e1000_mmio = (volatile uint8_t *)(uintptr_t)addr;
+    e1000_mmio = (volatile uint8_t *)mapped;
     pci_enable_memory_space(&e1000_pci);
 
     /* A window that answers every read with all ones is a card that is not

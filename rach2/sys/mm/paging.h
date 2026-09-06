@@ -13,10 +13,39 @@
 
 #include "../lib/kstring.h"
 
-/* Top of the direct-mapped physical window (32MB). */
+/* Top of the identity-mapped physical window (32 MiB): the kernel image,
+ * the boot data, the modules, the page tables and the DMA buffers that a
+ * device is given a physical address of live below it, where the virtual
+ * address equals the physical one. Nothing above it is reached through its
+ * physical address; a frame there is mapped into the kernel's layout first. */
 #define HARD_MEMORY_LIMIT 0x2000000
 
 #define PAGE_SIZE 0x1000
+
+/*
+ * The kernel's virtual layout above user space, in the gigabyte from
+ * `USER_ADDR_MAX`. Every page table for it exists at boot and is shared by
+ * every page directory, so a mapping made in it after the first fork is
+ * seen by every process. The regions:
+ *
+ *   0xC0000000  256 MiB  the heap (mm/kheap.c), grown a frame at a time
+ *   0xD0000000  512 MiB  the page-cache window (mm/pagecache.h)
+ *   0xF0000000  128 MiB  MMIO, a controller's BAR mapped wherever it is
+ *   0xF8000000    4 MiB  temporary mappings, one page each, for the paths
+ *                        that touch a user frame by its physical address
+ *   0xF8400000   64 MiB  the boot modules, mapped wherever the loader put
+ *                        them
+ *   0xFC400000   ...     unused
+ */
+#define KVA_BASE      0xC0000000u
+#define KVA_HEAP      0xC0000000u
+#define KVA_HEAP_SIZE 0x10000000u
+#define KVA_MMIO      0xF0000000u
+#define KVA_MMIO_SIZE 0x08000000u
+#define KVA_TEMP      0xF8000000u
+#define KVA_TEMP_SLOTS 1024u
+#define KVA_MODULES   0xF8400000u
+#define KVA_MODULES_SIZE 0x04000000u
 
 /*
  * Software-available PTE bit (bit 9; the CPU ignores bits 9-11) used to mark
@@ -159,9 +188,54 @@ void unmap_user_range(page_dir_t *dir, uint32_t start, uint32_t end);
  * free_user_pages(). */
 void free_page_directory(page_dir_t *dir);
 
-/** Identity-map an MMIO region; returns its virtual address (== physical),
- * or 0. */
+/**
+ * Map an MMIO region into the kernel's MMIO region, uncached, and return
+ * its virtual address, or 0. The address is not the physical one: a driver
+ * reaches its registers through what this returns. A region is mapped once
+ * for the life of the kernel.
+ */
 uintptr_t map_mmio(uintptr_t phys_addr, size_t size);
+
+/**
+ * Map the frame at physical `phys` at a temporary kernel address and return
+ * it, or 0 when every slot is taken. The mapping lasts until `kunmap_temp`;
+ * a caller may sleep while it holds one, since a slot is its own. The paths
+ * that zero, copy or fill a user frame use these, because a user frame may
+ * lie above the identity-mapped window.
+ */
+void *kmap_temp(uintptr_t phys);
+
+/** Release a mapping `kmap_temp` returned. */
+void kunmap_temp(void *va);
+
+/** Zero the frame at physical `phys`. */
+void paging_zero_frame(uintptr_t phys);
+
+/** Copy the frame at physical `src` into the one at physical `dst`. */
+void paging_copy_frame(uintptr_t dst, uintptr_t src);
+
+/**
+ * A free frame from anywhere the map offers, marked used with one
+ * reference; 0 when none is free. The caller reaches it through a mapping,
+ * never through its physical address.
+ */
+uintptr_t alloc_frame(void);
+
+/** Return a frame `alloc_frame` gave to the pool. */
+void free_frame(uintptr_t phys);
+
+/** The physical address behind kernel virtual address `va` in the kernel
+ * directory, or 0 when nothing is mapped there. */
+uintptr_t paging_virt_to_phys(uintptr_t va);
+
+/**
+ * Test switch: with `rach2.framefail` on the boot line, `/dev/framefail`
+ * takes a count, and the count-th frame allocation made inside a system
+ * call from then on fails as a full machine's would. Allocations for a
+ * user page fault are not counted, so the process arming it is not the
+ * one that fails. Returns -1 when the switch is off.
+ */
+int paging_framefail_arm(uint32_t count);
 
 /** Reserve one free physical frame for kernel use (never user); 0 if none. */
 uintptr_t alloc_kernel_frame(void);
@@ -204,13 +278,10 @@ extern page_dir_t *_curr_dir;
  * N mappings share it. A fresh allocation sets the count to 1; copy-on-write
  * fork raises it; freeing a mapping lowers it, and the frame returns to the
  * pool only when the last reference is gone. The words at and above
- * `FRAME_REF_MAX` are states and not counts: a frame the map does not offer,
- * and a frame the map offers that the kernel cannot reach yet, above the
- * identity-mapped window.
+ * `FRAME_REF_MAX` are states and not counts: a frame the map does not offer.
  */
-#define FRAME_REF_MAX  0xFFFFFF00u
-#define FRAME_UNMAPPED 0xFFFFFFFEu
-#define FRAME_ABSENT   0xFFFFFFFFu
+#define FRAME_REF_MAX 0xFFFFFF00u
+#define FRAME_ABSENT  0xFFFFFFFFu
 extern uint32_t *_frames;
 extern size_t _frames_number;
 

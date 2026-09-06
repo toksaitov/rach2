@@ -51,6 +51,7 @@ uint32_t init_modules(multiboot_uint32_t magic, multiboot_info_t *info)
         module_table[i].start = mods[i].mod_start;
         module_table[i].end = mods[i].mod_end;
         module_table[i].size = mods[i].mod_end - mods[i].mod_start;
+        module_table[i].phys = mods[i].mod_start;
         module_table[i].cmdline = (mods[i].cmdline != 0) ?
                                   (const char *)mods[i].cmdline : NULL;
 

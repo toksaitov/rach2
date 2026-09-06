@@ -13,6 +13,7 @@
 #include "sys/isr.h"
 #include "sys/mm/heap.h"
 #include "sys/mm/paging.h"
+#include "sys/mm/kheap.h"
 #include "sys/mm/frame.h"
 #include "sys/mm/pagecache.h"
 #include "sys/mm/modlayout.h"
@@ -111,6 +112,71 @@ volatile size_t stdin_pos = 0;
 volatile bool stdin_ready = false;
 volatile process_t *stdin_waiting_proc = NULL;
 
+/**
+ * The heap: objects of every class and of pages taken and given back, a
+ * thousand times, and the heap's pages and bytes where they started; a
+ * block written whole and read back; and a mapping made in the kernel's
+ * gigabyte after a directory was cloned, seen through that clone, since
+ * the clone copied the directory entries and the tables behind them are
+ * shared.
+ */
+static int test_heap(void)
+{
+    uint32_t pages0, bytes0, pages1, bytes1;
+    uint32_t i, j;
+    void *held[16];
+    int ok = 1;
+
+    kheap_stats(&pages0, &bytes0);
+    for (i = 0; i < 1000 && ok; i++) {
+        for (j = 0; j < 16; j++) {
+            uint32_t size = (j % 8 == 7) ? 3000 + i : (16u << (j % 8)) - (i % 5);
+
+            held[j] = kmalloc(size);
+            if (!held[j]) {
+                ok = 0;
+                break;
+            }
+            k_memset(held[j], (int)(j + i), size);
+        }
+        for (j = 0; j < 16; j++) {
+            if (held[j] && ((uint8_t *)held[j])[0] != (uint8_t)(j + i)) {
+                ok = 0;
+            }
+            kfree(held[j]);
+        }
+    }
+    kheap_stats(&pages1, &bytes1);
+    if (pages1 != pages0 || bytes1 != bytes0) {
+        klog(KLOG_ERR, "selftest", "heap: %d pages and %d bytes held, then %d and %d",
+             (int)pages0, (int)bytes0, (int)pages1, (int)bytes1);
+        ok = 0;
+    }
+    {
+        page_dir_t *clone = clone_page_directory();
+        uintptr_t phys = 0;
+        volatile uint32_t *page = kalloc_pages(1, &phys);
+
+        if (!clone || !page) {
+            ok = 0;
+        } else {
+            page[0] = 0x5EEDu;
+            switch_page_directory(clone);
+            if (page[0] != 0x5EEDu) {
+                ok = 0;
+            }
+            switch_page_directory(_kernel_dir);
+        }
+        if (page) {
+            kfree_pages((void *)page, 1);
+        }
+        if (clone) {
+            free_page_directory(clone);
+        }
+    }
+    return ok;
+}
+
 static void run_self_tests(void);
 void shell_loop(void);
 void shell_reset_input(void);
@@ -121,6 +187,39 @@ static void timer_handler(isr_params_t *params);
 static void keyboard_handler(isr_params_t *params);
 static bool str_equal(const char *a, const char *b);
 static void boot_init_process(void);
+
+/**
+ * Map every boot module into the module region of the kernel's layout,
+ * page by page from wherever the loader put it, and point its record at
+ * the mapping; the physical address stays in `phys`. The region is 64 MiB,
+ * a bound of this layout, and a set of modules that does not fit stops the
+ * boot by name rather than reading a module in part.
+ */
+static void map_modules(void)
+{
+    uintptr_t next = KVA_MODULES;
+    uint32_t m;
+
+    for (m = 0; m < module_count; m++) {
+        module_info_t *mod = &module_table[m];
+        uintptr_t first = mod->phys & ~(uintptr_t)(PAGE_SIZE - 1);
+        uintptr_t last = (mod->phys + mod->size + PAGE_SIZE - 1) & ~(uintptr_t)(PAGE_SIZE - 1);
+        uintptr_t off;
+
+        if (mod->size == 0) {
+            continue;
+        }
+        if (last - first > KVA_MODULES + KVA_MODULES_SIZE - next) {
+            k_panic("modules: more than the 64 MiB module region holds");
+        }
+        for (off = 0; off < last - first; off += PAGE_SIZE) {
+            map_kernel_frame(next + off, first + off, 1);
+        }
+        mod->start = (uint32_t)(next + (mod->phys - first));
+        mod->end = mod->start + mod->size;
+        next += last - first;
+    }
+}
 
 /**
  * One memory-map entry as text, `START-END TYPE` with 64-bit hexadecimal
@@ -308,7 +407,7 @@ void terminate_current_process(int32_t signo)
      * its private page tables. */
     if (current_proc->cr3 != 0) {
         page_dir_t *dir;
-        dir = (page_dir_t *)(current_proc->cr3 - 1024 * sizeof(page_table_t *));
+        dir = current_proc->page_dir;
         free_user_pages(dir);
         switch_page_directory(_kernel_dir);
         free_page_directory(dir);
@@ -1047,6 +1146,7 @@ static bool test_isolation(void)
     stack_a = mem_reserve(KERNEL_STACK_SIZE, true);
     isolation_proc_a->kernel_stack = stack_a + KERNEL_STACK_SIZE;
     isolation_proc_a->cr3 = get_page_dir_phys(dir_a);
+    isolation_proc_a->page_dir = dir_a;
     isolation_proc_a->parent_pid = isolation_proc_main->pid;
     setup_process_stack(isolation_proc_a, isolation_proc_a_entry);
 
@@ -1058,6 +1158,7 @@ static bool test_isolation(void)
     stack_b = mem_reserve(KERNEL_STACK_SIZE, true);
     isolation_proc_b->kernel_stack = stack_b + KERNEL_STACK_SIZE;
     isolation_proc_b->cr3 = get_page_dir_phys(dir_b);
+    isolation_proc_b->page_dir = dir_b;
     isolation_proc_b->parent_pid = isolation_proc_main->pid;
     setup_process_stack(isolation_proc_b, isolation_proc_b_entry);
 
@@ -1262,6 +1363,7 @@ static void exec_program(int argc, char *argv[])
     page_dir_t *user_dir;
     process_t *user_proc;
     uintptr_t user_stack_phys;
+    void *user_stack_page;
     uint32_t user_stack_vaddr;
     uint32_t user_esp;
     uint8_t random16[16];
@@ -1328,14 +1430,19 @@ static void exec_program(int argc, char *argv[])
         return;
     }
 
-    k_memset((void *)user_stack_phys, 0, PAGE_SIZE);
+    user_stack_page = kmap_temp(user_stack_phys);
+    if (!user_stack_page) {
+        return;
+    }
+    k_memset(user_stack_page, 0, PAGE_SIZE);
 
     /* build_user_stack copies the strings in and lays out the argv/envp pointer
      * arrays and the AT_NULL-terminated auxv, 16-byte-aligning the entry ESP.
      * The layout is verified host-side (tests/host/uimage_hosttest.c). */
     krandom_bytes(random16, 16);
-    user_esp = build_user_stack((void *)user_stack_phys, user_stack_vaddr, PAGE_SIZE,
+    user_esp = build_user_stack(user_stack_page, user_stack_vaddr, PAGE_SIZE,
                                 argc, argv, default_envp, &img, random16, 0);
+    kunmap_temp(user_stack_page);
     if (user_esp == 0) {
         console_puts("exec: argv/env too large for the initial stack");
         return;
@@ -1349,6 +1456,7 @@ static void exec_program(int argc, char *argv[])
 
     user_proc->state = PROC_RUNNING;
     user_proc->cr3 = get_page_dir_phys(user_dir);
+    user_proc->page_dir = user_dir;
     user_proc->kernel_stack = (uint32_t)stack + KERNEL_STACK_SIZE;
     user_proc->parent_pid = current_proc ? current_proc->pid : 0;
     proc_set_comm(user_proc, path); /* program name for /proc/<pid>/stat and ps */
@@ -2211,6 +2319,7 @@ static void run_self_tests(void)
     klog(KLOG_INFO, "selftest", "started");
 
     selftest_note("memory", test_memory());
+    selftest_note("heap", test_heap());
     selftest_note("strings", test_strings());
     selftest_note("timer", test_timer());
 
@@ -2931,14 +3040,13 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
      * physical access. */
     num_modules = init_modules(magic, info);
 
-    /* Push the bump allocator past the modules so it does not overwrite their
-     * data when it carves out page tables and other structures. The modules are
-     * not guaranteed to be address-ordered, so take the highest end across all
-     * of them. A module that ends above the 32 MiB direct-mapped limit cannot
-     * be addressed or managed and would drive the reservation break past the
-     * limit, so fail the boot closed with a clear diagnostic, not let
-     * init_paging corrupt low memory when its first reservation comes back
-     * empty. */
+    /* Push the bump allocator past the modules below the window, so it does
+     * not carve page tables over their bytes; a module above the window is
+     * reserved in the frame map and mapped into the module region once
+     * paging is up, and the break has nothing to do with it. The modules are
+     * not guaranteed to be address-ordered, so take the highest end across
+     * all of them. A module past 4 GiB, before the kernel image, or over
+     * another fails the boot closed with a clear diagnostic. */
     if (num_modules > 0) {
         static struct modlayout_range ranges[MAX_MODULES];
         uint32_t m;
@@ -2956,14 +3064,14 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
             ranges[nranges].start = mod->start;
             ranges[nranges].end = mod->end;
             nranges++;
-            if (mod->end > modules_end) {
+            if (mod->end <= HARD_MEMORY_LIMIT && mod->end > modules_end) {
                 modules_end = mod->end;
             }
         }
 
         verdict = modlayout_check(ranges, nranges,
                                   (uint32_t) (uintptr_t) &_end,
-                                  HARD_MEMORY_LIMIT, &bad);
+                                  0xFFFFFFFFu, &bad);
         if (verdict != MODLAYOUT_OK) {
             /* The detail travels INTO the panic, not ahead of it: the
              * machine this check was written for has no serial port, and
@@ -3056,6 +3164,7 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
             }
         }
         init_paging(&map);
+        map_modules();
         klog(KLOG_INFO, "memory", "usable %d KiB, unreachable %d KiB, reserved %d KiB, managed %d KiB",
              (int)(map.usable_bytes / 1024), (int)(map.unreachable_bytes / 1024),
              (int)(map.reserved_bytes / 1024), (int)(frame_total_count() * (PAGE_SIZE / 1024)));

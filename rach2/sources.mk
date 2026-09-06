@@ -61,6 +61,7 @@ C_SRC = kernel.c \
         sys/tables/idt.c \
         sys/mm/heap.c \
         sys/mm/paging.c \
+        sys/mm/kheap.c \
         sys/mm/usercopy.c \
         sys/mm/vm.c \
         sys/mm/frame.c \

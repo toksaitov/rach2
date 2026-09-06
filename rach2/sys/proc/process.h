@@ -117,6 +117,11 @@ struct process {
     /* The x87 and SSE state, saved at every switch away and loaded at every
      * switch to; `fxsave` needs the 16-byte alignment. */
     uint8_t fpu[FPU_STATE_SIZE] __attribute__((aligned(16)));
+    /* The page directory `cr3` names, or NULL for the kernel's: the record
+     * of it, since a directory lives in the heap and its physical address
+     * says nothing about where the kernel reads it. `switch.s` reads this
+     * offset too. */
+    struct page_dir *page_dir;
 };
 
 typedef struct process process_t;

@@ -174,7 +174,7 @@ int elf_load(const void *data, uint32_t size, page_dir_t *dir)
             }
 
             /* Zero each page so the BSS tail and any unwritten bytes read 0. */
-            k_memset((void *)phys_addr, 0, PAGE_SIZE);
+            paging_zero_frame(phys_addr);
         }
 
         file_offset = phdr->p_offset;
@@ -206,9 +206,16 @@ int elf_load(const void *data, uint32_t size, page_dir_t *dir)
 
             phys_base = pt->pages[pte_idx] & ~0xFFF;
 
-            k_memcpy((void *)(phys_base + page_offset),
-                     file_data + file_offset + bytes_copied,
-                     chunk_size);
+            {
+                uint8_t *page = kmap_temp(phys_base);
+
+                if (!page) {
+                    return -1;
+                }
+                k_memcpy(page + page_offset, file_data + file_offset + bytes_copied,
+                         chunk_size);
+                kunmap_temp(page);
+            }
 
             bytes_copied += chunk_size;
         }
@@ -391,7 +398,7 @@ int elf_load_image(elf_read_fn readfn, void *ctx, page_dir_t *dir, elf_image_t *
             if (phys_addr == 0) {
                 return -1;
             }
-            k_memset((void *)phys_addr, 0, PAGE_SIZE);
+            paging_zero_frame(phys_addr);
         }
 
         file_offset = ph->p_offset;
@@ -419,9 +426,18 @@ int elf_load_image(elf_read_fn readfn, void *ctx, page_dir_t *dir, elf_image_t *
             }
             phys_base = pt->pages[pte_idx] & ~0xFFF;
 
-            if (readfn(ctx, (void *)(phys_base + page_offset), chunk_size,
-                       file_offset + copied) != (int)chunk_size) {
-                return -1;
+            {
+                uint8_t *page = kmap_temp(phys_base);
+                int got;
+
+                if (!page) {
+                    return -1;
+                }
+                got = readfn(ctx, page + page_offset, chunk_size, file_offset + copied);
+                kunmap_temp(page);
+                if (got != (int)chunk_size) {
+                    return -1;
+                }
             }
             copied += chunk_size;
         }

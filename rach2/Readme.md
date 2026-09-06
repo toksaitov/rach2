@@ -116,6 +116,7 @@ Options are whitespace-delimited. Flags match whole tokens, and the first `key=v
 | `rach2.blockfail=N` | Test option, with `rach2.blocklag`: the Nth write through the wrapper fails with `EIO`, so a mount is seen to go read-only. |
 | `rach2.blockdead=P` | Test option, with `rach2.blocklag`: MBR partition P's view is built over a second device that accepts every request and answers none, so a device that stalls has a healthy neighbour on the pool. |
 | `rach2.blockpool=N` | Test option: the request pool has N slots, one to sixteen, instead of sixteen, so a request can be seen to wait for one. |
+| `rach2.framefail` | Test option: `/dev/framefail` takes a count, and the count-th frame allocation made inside a system call from then on fails, so `fork` and `execve` are seen to answer `ENOMEM` and leak nothing. |
 | `rach2.ip=A.B.C.D/prefix` | Set the single IPv4 address and mask. No gateway is implied. |
 | `rach2.ip=none` | Probe the NIC but leave IPv4 unconfigured for userland. |
 | `rach2.gateway=A.B.C.D` | Set a gateway on the configured subnet. It requires `rach2.ip`. |

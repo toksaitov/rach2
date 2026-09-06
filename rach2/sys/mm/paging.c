@@ -1,5 +1,7 @@
+#include "../cmdline.h"
 #include "../klog.h"
 #include "paging.h"
+#include "kheap.h"
 #include "pagecache.h"
 #include "frame.h"
 #include "usercopy.h"
@@ -22,19 +24,61 @@ page_dir_t *_curr_dir;
 
 uint32_t *_frames;
 size_t    _frames_number;
-/* The frames the allocator can hand out today: those below the
- * identity-mapped window. The scans stop here rather than at the table's
- * end, which on a 4 GiB machine is a million entries further. */
+/* The frames below the identity-mapped window, which `alloc_kernel_frame`
+ * hands out: a frame the kernel reaches through its physical address. */
 static size_t _window_frames;
 static uint32_t _managed_frames;
+/* Where the next scan for a free frame starts: no frame below it is free.
+ * A scan from the bottom of a million-frame table for every page would be
+ * the table's length squared over a large mapping. */
+static uintptr_t _next_free_frame;
+/* rach2.framefail: the allocation that fails on purpose, counted down. */
+static uint32_t _framefail_left;
+static int _framefail_on = -1;
 
-/**
- * Free lists for page directories and page tables. When a process exits, its
- * structures go onto these lists for reuse. The first pointer in the freed
- * structure points to the next free entry.
- */
-static page_dir_t   *_free_page_dirs = NULL;
-static page_table_t *_free_page_tables = NULL;
+/* Whether this allocation is the one armed to fail. */
+static int framefail_now(void)
+{
+    if (_framefail_left == 0 || !current_proc || !current_proc->in_syscall) {
+        return 0;
+    }
+    if (--_framefail_left != 0) {
+        return 0;
+    }
+    klog(KLOG_WARN, "vm", "frame allocation failed on purpose (rach2.framefail)");
+    return 1;
+}
+
+int paging_framefail_arm(uint32_t count)
+{
+    if (_framefail_on < 0) {
+        _framefail_on = kcmdline_has("rach2.framefail");
+    }
+    if (!_framefail_on) {
+        return -1;
+    }
+    _framefail_left = count;
+    return 0;
+}
+
+/* The temporary mappings: one bit per slot of the region, set while a
+ * caller holds it. */
+static uint32_t _temp_slots[KVA_TEMP_SLOTS / 32];
+/* The next free page of the MMIO region; a region is mapped for good. */
+static uintptr_t _mmio_next = KVA_MMIO;
+
+/* Set once the heap exists: from then on page tables and directories come
+ * from it and go back to it, and their physical addresses, which the
+ * processor reads, come from the kernel directory's own mapping. Before
+ * that the boot carves them below the window, where the two are equal. */
+static int _heap_ready;
+
+/* The physical address of a page table or directory the kernel holds by
+ * its virtual address. */
+static uintptr_t table_phys(const void *table)
+{
+    return _heap_ready ? paging_virt_to_phys((uintptr_t)table) : (uintptr_t)table;
+}
 
 /**
  * Starting frame index for user page allocation. Set once at init time to
@@ -47,15 +91,6 @@ static uintptr_t _user_frames_start = 0;
  * cache's among them, for the record a failed user allocation writes. */
 static uint32_t _kernel_frames_reserved;
 
-/*
- * Set once the first address space has cloned the kernel page-directory
- * entries. `clone_page_directory` copies the kernel PDEs by value, so a kernel
- * page table first installed after that point is invisible to every directory
- * already cloned. `map_mmio` consults this to refuse installing a new PDE after
- * the first fork; every real device mapping runs at boot, before any fork.
- */
-static int _kernel_pdes_cloned = 0;
-
 /**
  * Allocate a page table from the free list, or fresh via `mem_reserve`.
  */
@@ -63,10 +98,11 @@ static page_table_t *alloc_page_table(void)
 {
     page_table_t *table;
 
-    if (_free_page_tables) {
-        table = _free_page_tables;
-        _free_page_tables = *(page_table_t **)table;
-        k_memset(table, 0, sizeof(page_table_t));
+    if (_heap_ready) {
+        table = kalloc_pages(1, NULL);
+        if (table) {
+            k_memset(table, 0, sizeof(page_table_t));
+        }
         return table;
     }
 
@@ -91,8 +127,7 @@ static page_table_t *alloc_page_table(void)
 static void free_page_table(page_table_t *table)
 {
     if (!table) return;
-    *(page_table_t **)table = _free_page_tables;
-    _free_page_tables = table;
+    kfree_pages(table, 1);
 }
 
 /**
@@ -102,10 +137,11 @@ static page_dir_t *alloc_page_dir(void)
 {
     page_dir_t *dir;
 
-    if (_free_page_dirs) {
-        dir = _free_page_dirs;
-        _free_page_dirs = *(page_dir_t **)dir;
-        k_memset(dir, 0, sizeof(page_dir_t));
+    if (_heap_ready) {
+        dir = kalloc_pages(sizeof(page_dir_t) / PAGE_SIZE, NULL);
+        if (dir) {
+            k_memset(dir, 0, sizeof(page_dir_t));
+        }
         return dir;
     }
 
@@ -159,7 +195,7 @@ void init_paging(struct frame_map *map)
     _managed_frames = 0;
     for (frame = 0; frame < _frames_number; frame++) {
         if (map->top_frame == 0 || frame_map_usable(map, (uint32_t)frame)) {
-            _frames[frame] = frame < _window_frames ? 0 : FRAME_UNMAPPED;
+            _frames[frame] = 0;
             _managed_frames++;
         } else {
             _frames[frame] = FRAME_ABSENT;
@@ -223,6 +259,24 @@ void init_paging(struct frame_map *map)
     }
 
     /*
+     * The kernel's own gigabyte: every page table for it exists now and is
+     * shared by every directory cloned later, so a mapping made in it after
+     * the first fork is seen by every process. 256 tables, a megabyte.
+     */
+    for (table_index = KVA_BASE / PAGE_SIZE / 1024; table_index < 1024; table_index++) {
+        if (_curr_dir->logical_page_tables[table_index]) {
+            continue;
+        }
+        tmp = mem_reserve(sizeof(page_table_t), true);
+        if (tmp == 0) {
+            k_panic("init_paging: no reserved memory for the kernel's page tables");
+        }
+        k_memset((void *)tmp, 0, sizeof(page_table_t));
+        _curr_dir->phys_page_tables[table_index] = tmp | 0x3;
+        _curr_dir->logical_page_tables[table_index] = (page_table_t *)tmp;
+    }
+
+    /*
      * Final pass: mark all frames up to mem_reserved_ptr as used.
      * This is necessary because page tables allocated during the loop above
      * may reside at physical addresses that were already scanned before
@@ -243,6 +297,7 @@ void init_paging(struct frame_map *map)
      * User page allocations will search for free frames starting here.
      */
     _user_frames_start = mem_reserved_ptr / PAGE_SIZE;
+    _next_free_frame = _user_frames_start;
     /* Everything the boot carved below the break is reserved, the tables
      * above included. What the allocator manages is counted from the table
      * and not from the map's arithmetic, so the boot's report compares the
@@ -253,7 +308,7 @@ void init_paging(struct frame_map *map)
     }
     _managed_frames = 0;
     for (frame = _user_frames_start; frame < _frames_number; frame++) {
-        if (_frames[frame] == 0 || _frames[frame] == FRAME_UNMAPPED) {
+        if (_frames[frame] == 0) {
             _managed_frames++;
         }
     }
@@ -261,6 +316,11 @@ void init_paging(struct frame_map *map)
     register_isr_handler(14, &_page_fault_handler, "page fault");
 
     _load_page_dir(_curr_dir);
+
+    /* From here the heap exists, and every page table and directory made
+     * later comes from it. */
+    kheap_init();
+    _heap_ready = 1;
 }
 
 static void _load_page_dir(page_dir_t *dir)
@@ -403,7 +463,7 @@ static int vm_resolve(uint32_t addr, int write)
     /* Zero the fresh page: brk/mmap/stack memory must read as zero, and the
      * frame may carry a previous process's data. The frame is inside the
      * identity-mapped window, so its physical address is directly writable. */
-    k_memset((void *)phys, 0, PAGE_SIZE);
+    paging_zero_frame(phys);
 
     /* Honor a read-only region's protection in the PTE, so a later write faults
      * as a protection violation, which the handler segfaults, and which
@@ -488,7 +548,7 @@ static int cow_fault(uint32_t addr)
     if (new_phys == 0) {
         return 0; /* out of frames -> caller segfaults the process */
     }
-    k_memcpy((void *)new_phys, (void *)old_phys, PAGE_SIZE);
+    paging_copy_frame(new_phys, old_phys);
     frame_unref(old_phys);
     return 1;
 }
@@ -584,7 +644,7 @@ uintptr_t map_mmio(uintptr_t phys_addr, size_t size)
 {
     uintptr_t start_page = phys_addr & ~(PAGE_SIZE - 1);
     uintptr_t end_addr = phys_addr + size;
-    uintptr_t addr;
+    uintptr_t pages, i, va;
 
     /* Reject an empty or wrapping region: a `phys_addr + size` that overflowed
      * would leave end_addr below start_page, map nothing, and falsely succeed.
@@ -594,42 +654,20 @@ uintptr_t map_mmio(uintptr_t phys_addr, size_t size)
              size);
         return 0;
     }
-
-    for (addr = start_page; addr < end_addr; addr += PAGE_SIZE) {
-        uintptr_t page_num = addr / PAGE_SIZE;
-        uintptr_t table_index = page_num / 1024;
-        uintptr_t page_index = page_num % 1024;
-        page_table_t *table;
-
-        if (table_index >= 1024) {
-            klog(KLOG_ERR, "vm", "map_mmio: address 0x%x out of range", addr);
-            return 0;
-        }
-
-        /* Get or create the page table. A new kernel PDE installed after the
-         * first fork would be invisible to every already-cloned address space,
-         * so refuse it: every real device mapping runs at boot, before any
-         * fork, and a runtime probe of a not-yet-mapped band must fail loudly,
-         * not install a PDE only `_kernel_dir` can see. */
-        table = _kernel_dir->logical_page_tables[table_index];
-        if (!table) {
-            if (_kernel_pdes_cloned) {
-                klog(KLOG_ERR, "vm", "map_mmio: refusing a new kernel PDE after fork "
-                              "(0x%x)\n", addr);
-                return 0;
-            }
-            table = alloc_page_table();
-            if (!table) {
-                klog(KLOG_ERR, "vm", "map_mmio: no page table could be allocated");
-                return 0;
-            }
-            _kernel_dir->logical_page_tables[table_index] = table;
-            _kernel_dir->phys_page_tables[table_index] = (uintptr_t)table | 0x3;
-        }
-
-        /* Map page: present, writable, cache-disabled for MMIO */
-        table->pages[page_index] = addr | 0x1B;  /* P=1, R/W=1, PWT=1, PCD=1 */
+    pages = (end_addr - start_page + PAGE_SIZE - 1) / PAGE_SIZE;
+    if (pages > (KVA_MMIO + KVA_MMIO_SIZE - _mmio_next) / PAGE_SIZE) {
+        klog(KLOG_ERR, "vm", "map_mmio: the MMIO region is full at 0x%x", _mmio_next);
+        return 0;
     }
+    va = _mmio_next;
+    for (i = 0; i < pages; i++) {
+        uintptr_t page_num = (va + i * PAGE_SIZE) / PAGE_SIZE;
+        page_table_t *table = _kernel_dir->logical_page_tables[page_num / 1024];
+
+        /* Present, writable, cache-disabled: a register is not memory. */
+        table->pages[page_num % 1024] = (start_page + i * PAGE_SIZE) | 0x1B;
+    }
+    _mmio_next += pages * PAGE_SIZE;
 
     /* Flush TLB */
     __asm__ __volatile__(
@@ -638,7 +676,124 @@ uintptr_t map_mmio(uintptr_t phys_addr, size_t size)
         ::: "eax", "memory"
     );
 
-    return phys_addr;
+    return va + (phys_addr - start_page);
+}
+
+static uint32_t paging_irq_save(void)
+{
+    uint32_t flags;
+    __asm__ __volatile__("pushfl; popl %0; cli" : "=r"(flags)::"memory");
+    return flags;
+}
+
+static void paging_irq_restore(uint32_t flags)
+{
+    if (flags & 0x200) {
+        __asm__ __volatile__("sti");
+    }
+}
+
+void *kmap_temp(uintptr_t phys)
+{
+    uint32_t flags = paging_irq_save();
+    uint32_t slot;
+
+    for (slot = 0; slot < KVA_TEMP_SLOTS; slot++) {
+        if (!(_temp_slots[slot / 32] & (1u << (slot % 32)))) {
+            uintptr_t va = KVA_TEMP + slot * PAGE_SIZE;
+            page_table_t *table = _kernel_dir->logical_page_tables[va / PAGE_SIZE / 1024];
+
+            _temp_slots[slot / 32] |= 1u << (slot % 32);
+            table->pages[(va / PAGE_SIZE) % 1024] = (phys & ~(PAGE_SIZE - 1)) | 0x3;
+            paging_flush_tlb(va);
+            paging_irq_restore(flags);
+            return (void *)(va + (phys & (PAGE_SIZE - 1)));
+        }
+    }
+    paging_irq_restore(flags);
+    klog(KLOG_ERR, "vm", "temporary mappings: every slot is held");
+    return 0;
+}
+
+void kunmap_temp(void *va)
+{
+    uintptr_t addr = (uintptr_t)va & ~(PAGE_SIZE - 1);
+    uint32_t slot = (addr - KVA_TEMP) / PAGE_SIZE;
+    uint32_t flags;
+    page_table_t *table;
+
+    if (addr < KVA_TEMP || slot >= KVA_TEMP_SLOTS) {
+        return;
+    }
+    flags = paging_irq_save();
+    table = _kernel_dir->logical_page_tables[addr / PAGE_SIZE / 1024];
+    table->pages[(addr / PAGE_SIZE) % 1024] = 0;
+    paging_flush_tlb(addr);
+    _temp_slots[slot / 32] &= ~(1u << (slot % 32));
+    paging_irq_restore(flags);
+}
+
+void paging_zero_frame(uintptr_t phys)
+{
+    void *va = kmap_temp(phys);
+
+    if (va) {
+        k_memset(va, 0, PAGE_SIZE);
+        kunmap_temp(va);
+    }
+}
+
+void paging_copy_frame(uintptr_t dst, uintptr_t src)
+{
+    void *d = kmap_temp(dst);
+    void *s = kmap_temp(src);
+
+    if (d && s) {
+        k_memcpy(d, s, PAGE_SIZE);
+    }
+    if (s) {
+        kunmap_temp(s);
+    }
+    if (d) {
+        kunmap_temp(d);
+    }
+}
+
+uintptr_t alloc_frame(void)
+{
+    uintptr_t frame;
+
+    if (framefail_now()) {
+        return 0;
+    }
+    for (frame = _next_free_frame; frame < _frames_number; frame++) {
+        if (_frames[frame] == 0) {
+            _frames[frame] = 1;
+            _next_free_frame = frame + 1;
+            return frame * PAGE_SIZE;
+        }
+    }
+    return 0;
+}
+
+void free_frame(uintptr_t phys)
+{
+    frame_unref(phys);
+}
+
+uintptr_t paging_virt_to_phys(uintptr_t va)
+{
+    page_table_t *table = _kernel_dir->logical_page_tables[va / PAGE_SIZE / 1024];
+    uint32_t pte;
+
+    if (!table) {
+        return 0;
+    }
+    pte = table->pages[(va / PAGE_SIZE) % 1024];
+    if (!(pte & 0x1)) {
+        return 0;
+    }
+    return (pte & ~(PAGE_SIZE - 1)) | (va & (PAGE_SIZE - 1));
 }
 
 /**
@@ -687,7 +842,7 @@ uint32_t frame_free_count(void)
 {
     uint32_t i, free_count = 0;
 
-    for (i = 0; i < (uint32_t)_window_frames; i++) {
+    for (i = 0; i < (uint32_t)_frames_number; i++) {
         if (_frames[i] == 0) {
             free_count++;
         }
@@ -725,7 +880,7 @@ int premap_kernel_window(uintptr_t va_start, size_t size)
                 return -1;
             }
             _kernel_dir->logical_page_tables[table_index] = table;
-            _kernel_dir->phys_page_tables[table_index] = (uintptr_t)table | 0x3;
+            _kernel_dir->phys_page_tables[table_index] = table_phys(table) | 0x3;
         }
     }
 
@@ -860,16 +1015,17 @@ page_dir_t *clone_page_directory(void)
         new_dir->phys_page_tables[i] = _kernel_dir->phys_page_tables[i];
         new_dir->logical_page_tables[i] = _kernel_dir->logical_page_tables[i];
     }
-    _kernel_pdes_cloned = 1;
 
     return new_dir;
 }
 
 uintptr_t get_page_dir_phys(page_dir_t *dir)
 {
-    /* The phys_page_tables array is at the start of the page_dir structure and
-     * is what CR3 should point to. */
-    return (uintptr_t)&dir->phys_page_tables;
+    /* CR3 takes the physical address of the entries, the directory's second
+     * page; the kernel's own directory was carved below the window, where
+     * that is the address the kernel holds, and every other lives in the
+     * heap. */
+    return table_phys(&dir->phys_page_tables);
 }
 
 void switch_page_directory(page_dir_t *dir)
@@ -906,6 +1062,9 @@ uint32_t frame_unref(uintptr_t phys)
         return _frames[frame];
     }
     _frames[frame]--;
+    if (frame >= _user_frames_start && frame < _next_free_frame && _frames[frame] == 0) {
+        _next_free_frame = frame;
+    }
     return _frames[frame];
 }
 
@@ -934,7 +1093,7 @@ static page_table_t *ensure_user_table(page_dir_t *dir, uintptr_t table_index)
         for (i = 0; i < 1024; i++) {
             new_table->pages[i] = table->pages[i];
         }
-        dir->phys_page_tables[table_index] = (uintptr_t)new_table | 0x7; /* P+RW+U */
+        dir->phys_page_tables[table_index] = table_phys(new_table) | 0x7; /* P+RW+U */
         dir->logical_page_tables[table_index] = new_table;
         table = new_table;
     } else if (!table) {
@@ -944,7 +1103,7 @@ static page_table_t *ensure_user_table(page_dir_t *dir, uintptr_t table_index)
                           (int)table_index);
             return NULL;
         }
-        dir->phys_page_tables[table_index] = (uintptr_t)table | 0x7; /* P+RW+U */
+        dir->phys_page_tables[table_index] = table_phys(table) | 0x7; /* P+RW+U */
         dir->logical_page_tables[table_index] = table;
     } else if (!(dir->phys_page_tables[table_index] & 0x4)) {
         dir->phys_page_tables[table_index] |= 0x4; /* make table user-accessible */
@@ -1020,13 +1179,16 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
      * freed user pages can be reused, even if mem_reserved_ptr advances
      * due to later kernel allocations (like new page tables).
      */
-    for (frame = _user_frames_start; frame < _window_frames; frame++) {
+    for (frame = _next_free_frame; frame < _frames_number; frame++) {
         if (_frames[frame] == 0) {
             break;
         }
     }
+    if (framefail_now()) {
+        frame = _frames_number;
+    }
 
-    if (frame >= _window_frames) {
+    if (frame >= _frames_number) {
         /* Who holds the pool, so that a machine that runs out says what
          * filled it: the boot's reservations below the user frames, the
          * kernel's frames from the top, and the user frames between, with
@@ -1034,8 +1196,8 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
         uint32_t user_used = 0, user_shared = 0;
         uintptr_t f;
 
-        for (f = _user_frames_start; f < _window_frames; f++) {
-            if (_frames[f] != 0) {
+        for (f = _user_frames_start; f < _frames_number; f++) {
+            if (_frames[f] != 0 && _frames[f] < FRAME_REF_MAX) {
                 user_used++;
             }
             if (_frames[f] > 1 && _frames[f] < FRAME_REF_MAX) {
@@ -1045,13 +1207,14 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
         user_used -= user_used < _kernel_frames_reserved ? user_used : _kernel_frames_reserved;
         klog(KLOG_ERR, "vm",
              "user page: no free frames in %d: %d boot, %d kernel, %d user of which %d shared, pid %d",
-             (int)_window_frames, (int)_user_frames_start, (int)_kernel_frames_reserved,
+             (int)_frames_number, (int)_user_frames_start, (int)_kernel_frames_reserved,
              (int)user_used, (int)user_shared, current_proc ? current_proc->pid : 0);
         return 0;  /* No free frames */
     }
 
     /* Mark frame as used (one reference) */
     _frames[frame] = 1;
+    _next_free_frame = frame + 1;
     phys_addr = frame * PAGE_SIZE;
 
     /* Map the page with present, rw, and user bits */
@@ -1068,7 +1231,7 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
 /**
  * Free all user pages in a page directory. Walks every page directory entry
  * and frees the user-accessible pages above the kernel region
- * (`HARD_MEMORY_LIMIT`), clearing the private page table entries as it goes.
+ * (`USER_ADDR_MIN`), clearing the private page table entries as it goes.
  */
 void free_user_pages(page_dir_t *dir)
 {
@@ -1113,7 +1276,7 @@ void free_user_pages(page_dir_t *dir)
              * that are clearly garbage:
              *   * phys_addr == 0 (NULL pointer)
              *   * phys_addr points to the page table itself (corruption) */
-            if (phys_addr == 0 || phys_addr == (uint32_t)table) {
+            if (phys_addr == 0 || phys_addr == table_phys(table)) {
                 /* Clear the garbage entry but don't try to free frame */
                 table->pages[page_idx] = 0;
                 continue;
@@ -1212,7 +1375,5 @@ void free_page_directory(page_dir_t *dir)
         dir->phys_page_tables[dir_idx] = 0;
     }
 
-    /* Add the page directory itself to the free list */
-    *(page_dir_t **)dir = _free_page_dirs;
-    _free_page_dirs = dir;
+    kfree_pages(dir, sizeof(page_dir_t) / PAGE_SIZE);
 }

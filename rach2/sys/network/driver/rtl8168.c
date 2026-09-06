@@ -938,6 +938,7 @@ static int rtl8168_init(void)
     uint32_t txconfig;
     uint32_t bar = 0;
     uint32_t addr;
+    uintptr_t mapped;
     int i;
 
     r8168_up = 0;
@@ -964,11 +965,12 @@ static int rtl8168_init(void)
         return NETDEV_FAILED;
     }
     addr = pci_bar_address(bar);
-    if (map_mmio(addr, 256) == 0) {
+    mapped = map_mmio(addr, 256);
+    if (mapped == 0) {
         r8168_err = "the RTL8168 window would not map";
         return NETDEV_FAILED;
     }
-    r8168_mmio = (volatile uint8_t *)(uintptr_t)addr;
+    r8168_mmio = (volatile uint8_t *)mapped;
     pci_enable_memory_space(&r8168_pci);
 
     /* The chip's own revision, which is what decides whether this driver may

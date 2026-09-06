@@ -32,7 +32,7 @@ PROGS = hello filetest forktest shelltest dirtest stattest usbprobe mouseprobe i
         tlsprobe errnoprobe vmprobe vmfault vmro forkro cowprobe cowregrant \
         usercopyfault forkleak fdstale dirgrow dirprobe unlinkdirprobe pathcanon timeprobe sigprobe credprobe ownprobe permprobe trapprobe ofdprobe \
         waitprobe pipeprobe pollprobe devprobe ttyprobe jobprobe miscprobe \
-        ptyprobe rngprobe orphanprobe loopprobe procprobe suidprobe suidhelper sudoprobe modeprobe searchprobe stickyprobe blockprobe bootprobe persistprobe stressprobe winprobe dirtyprobe rebootprobe lagprobe fpuprobe vfsprobe mountprobe fatwriteprobe usbdiskprobe ext2probe krffsprobe loopdevprobe \
+        ptyprobe rngprobe orphanprobe loopprobe procprobe suidprobe suidhelper sudoprobe modeprobe searchprobe stickyprobe blockprobe bootprobe persistprobe stressprobe winprobe dirtyprobe rebootprobe lagprobe fpuprobe memprobe vfsprobe mountprobe fatwriteprobe usbdiskprobe ext2probe krffsprobe loopdevprobe \
         idreport procfull fdfull diskfull sockfull oomprobe tcbfull
 
 # These compile+link in one step, so there are no .o intermediates; only the

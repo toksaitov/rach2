@@ -354,6 +354,7 @@ static int ahci_discover(void)
     pci_device_t skip;
     pci_device_t *skip_dev = 0;
     uint32_t abar;
+    uintptr_t mapped;
     int found = 0;
 
     while (pci_find_device_skip(PCI_CLASS_MASS_STORAGE, PCI_SUBCLASS_SATA, skip_dev, &dev)) {
@@ -400,11 +401,12 @@ static int ahci_discover(void)
     /* Map the ABAR cache-disabled (PCD|PWT) whatever its address. A low ABAR is
        already identity-mapped but cacheable, so a status poll could read stale;
        map_mmio rewrites the PTE cache-disabled either way. */
-    if (map_mmio(abar, AHCI_ABAR_MAP_SIZE) == 0) {
+    mapped = map_mmio(abar, AHCI_ABAR_MAP_SIZE);
+    if (mapped == 0) {
         ahci_err = "the ABAR window could not be mapped";
         return -1;
     }
-    ahci_base = (volatile uint8_t *)(uintptr_t)abar;
+    ahci_base = (volatile uint8_t *)mapped;
 
     /* Decode MMIO now. Bus-master DMA is enabled only after the selected port's
        DMA bases are programmed. */

@@ -50,4 +50,31 @@ for mib in 64 512 2048 3072 4096; do
         || fail "at $mib MiB managed $managed is not usable $usable less reserved $reserved"
     echo "memory-test: $mib MiB: usable $usable, unreachable $unreachable, reserved $reserved, managed $managed KiB: OK"
 done
+
+# The frames beyond the old 32 MiB window, used: at the two ends of the
+# range, the probe maps more than the window held, patterns it, forks over
+# it, execs and frees it.
+for spec in "64 24" "4096 1024"; do
+    mib=${spec% *}; map=${spec#* }
+    LOG="$IMAGE.memprobe-$mib.log"
+    "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" --qemu-arg=-cpu --qemu-arg=max \
+        --qemu-arg=-m --qemu-arg="$mib" --append "rach2.rescue" \
+        --timeout 300 --steptmo 240 --ok "MEMPROBE OK" --never "MEMPROBE FAIL" --log "$LOG" \
+        "expect=Type 'help'" "send=exec /memprobe $map" "expect=MEMPROBE" > /dev/null 2>&1 \
+        || fail "memprobe $map at $mib MiB"
+    echo "memory-test: $map MiB mapped, patterned, forked over, execed and freed at $mib MiB: OK"
+done
+
+# A frame allocation failing at each step of fork and of exec, at the two
+# ends: the caller answers ENOMEM, nothing leaks, nothing surviving changes.
+for mib in 64 4096; do
+    LOG="$IMAGE.framefail-$mib.log"
+    "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" --qemu-arg=-cpu --qemu-arg=max \
+        --qemu-arg=-m --qemu-arg="$mib" --append "rach2.rescue rach2.framefail" \
+        --timeout 240 --steptmo 180 --ok "MEMPROBE OK" --never "MEMPROBE FAIL" --log "$LOG" \
+        "expect=Type 'help'" "send=exec /memprobe fail" \
+        "expect=frame allocation failed on purpose" "expect=MEMPROBE" > /dev/null 2>&1 \
+        || fail "memprobe fail at $mib MiB"
+    echo "memory-test: a frame allocation failing at each step of fork and exec at $mib MiB: OK"
+done
 echo "memory-test: PASS"
