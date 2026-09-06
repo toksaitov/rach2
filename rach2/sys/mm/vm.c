@@ -209,7 +209,17 @@ int vm_remove(vm_space_t *vm, uint32_t start, uint32_t end)
  * the growth window must not swallow any other region: a hostile ELF segment
  * or mmap inside that window must not be absorbed into the stack.
  */
-int vm_grow_stack(vm_space_t *vm, uint32_t page)
+uint32_t vm_total(const vm_space_t *vm)
+{
+    uint32_t i, total = 0;
+
+    for (i = 0; i < vm->count; i++) {
+        total += vm->vmas[i].end - vm->vmas[i].start;
+    }
+    return total;
+}
+
+int vm_grow_stack(vm_space_t *vm, uint32_t page, uint32_t as_limit)
 {
     uint32_t i, j;
 
@@ -222,6 +232,11 @@ int vm_grow_stack(vm_space_t *vm, uint32_t page)
          * intervening pages fault in lazily as the stack is actually touched.
          */
         if (r->type == VM_STACK && page < r->start && page >= vm->stack_limit) {
+            /* The growth counts against the address-space limit like a
+               mapping would. */
+            if (vm_total(vm) + (r->start - page) > as_limit) {
+                return 0;
+            }
             /* The new span [page, r->start) must be clear of every other
              * region: a (possibly hostile) ELF segment or mmap inside the
              * growth window must not be swallowed by the stack. */

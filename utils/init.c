@@ -26,10 +26,12 @@
 #include <signal.h>
 #include <unistd.h>
 #include <sys/reboot.h>
+#include <sys/resource.h>
 #include <sys/wait.h>
 #include <sys/ioctl.h>
 #include <dirent.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <limits.h>
 #include <string.h>
 #include <errno.h>
@@ -482,6 +484,76 @@ static pid_t spawn_update(void)
     }
 }
 
+/*
+ * The resource limits every session starts with, from `/etc/rach2/limits`:
+ * one line per limit, `nproc`, `nofile` or `as`, then the soft and the hard
+ * value, a number or `unlimited`. They are set on init itself, and fork and
+ * exec hand them down to every login and everything it starts; root's
+ * sessions carry them too, and root may raise them. A line that does not
+ * parse is reported and skipped; a missing file leaves the kernel's own
+ * defaults, which are the table's limits.
+ */
+static rlim_t limit_value(const char *word)
+{
+    char *end;
+    unsigned long long v;
+
+    if (strcmp(word, "unlimited") == 0) {
+        return RLIM_INFINITY;
+    }
+    v = strtoull(word, &end, 10);
+    if (*end != '\0' || end == word) {
+        return (rlim_t)-2;
+    }
+    return (rlim_t)v;
+}
+
+static void apply_limits(void)
+{
+    FILE *f = fopen("/etc/rach2/limits", "r");
+    char line[128];
+    int lineno = 0;
+
+    if (!f) {
+        return;
+    }
+    while (fgets(line, sizeof(line), f)) {
+        char name[16], soft[32], hard[32];
+        struct rlimit rl;
+        int resource;
+
+        lineno++;
+        if (line[0] == '#' || line[0] == '\n') {
+            continue;
+        }
+        if (sscanf(line, "%15s %31s %31s", name, soft, hard) != 3) {
+            fprintf(stderr, "init: limits: line %d: not a name and two values\n", lineno);
+            continue;
+        }
+        if (strcmp(name, "nproc") == 0) {
+            resource = RLIMIT_NPROC;
+        } else if (strcmp(name, "nofile") == 0) {
+            resource = RLIMIT_NOFILE;
+        } else if (strcmp(name, "as") == 0) {
+            resource = RLIMIT_AS;
+        } else {
+            fprintf(stderr, "init: limits: line %d: %s is not a limit\n", lineno, name);
+            continue;
+        }
+        rl.rlim_cur = limit_value(soft);
+        rl.rlim_max = limit_value(hard);
+        if (rl.rlim_cur == (rlim_t)-2 || rl.rlim_max == (rlim_t)-2) {
+            fprintf(stderr, "init: limits: line %d: a value is not a number\n", lineno);
+            continue;
+        }
+        if (setrlimit(resource, &rl) != 0) {
+            fprintf(stderr, "init: limits: line %d: %s refused: %s\n", lineno, name,
+                    strerror(errno));
+        }
+    }
+    fclose(f);
+}
+
 int main(void)
 {
     pid_t shell = -1;
@@ -501,6 +573,7 @@ int main(void)
     signal(SIGTERM, shutdown_handler);
 
     clear_var_run();
+    apply_limits();
 #ifdef INIT_METAL
     if (boot_line_has("rach2.fsck")) {
         check_ext2_partitions();

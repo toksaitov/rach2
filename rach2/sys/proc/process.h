@@ -8,9 +8,9 @@
 #include "../mm/vm.h"
 #include "fpu.h"
 
-/* What `sysconf` and the resource limits report as the process count until
- * milestone 46's phase 5 makes it a per-user limit: a policy number, since
- * the bound on processes is memory. */
+/* Policy: the processes one real user may have unless `prlimit64` or
+ * `/etc/rach2/limits` says otherwise, and what `sysconf` reports; the bound
+ * on processes is memory. Root is not limited. */
 #define PROC_COUNT_POLICY 4096
 
 /* Process states. */
@@ -42,6 +42,18 @@ struct cpu_regs {
 };
 
 typedef struct cpu_regs cpu_regs_t;
+
+/* A limit as `prlimit64` keeps it: the soft value enforced, the hard one
+ * the soft may be raised to, `RLIM_INFINITY32` for none. */
+struct rlimit32 {
+    uint32_t cur;
+    uint32_t max;
+};
+#define RLIM_NPROC       0
+#define RLIM_NOFILE      1
+#define RLIM_AS          2
+#define RLIM_COUNT       3
+#define RLIM_INFINITY32  0xFFFFFFFFu
 
 /* Policy: the working directory's path is kept in the record, and a
  * directory whose path is longer cannot be made current (ENAMETOOLONG). */
@@ -146,6 +158,10 @@ struct process {
      * kept in the record and not in one global, since a handler that
      * switches away leaves the count with the process it interrupted. */
     uint32_t irq_depth;
+    /* The resource limits `prlimit64` keeps: processes of the real user,
+     * open descriptors, and the address space in bytes; soft and hard,
+     * inherited by fork and exec. */
+    struct rlimit32 rlim[RLIM_COUNT];
 };
 
 typedef struct process process_t;

@@ -37,7 +37,9 @@ static pci_device_t hda_pci;
  * kernel's message vectors; the xHCI takes the first and this takes the
  * second.
  */
-#define HDA_MSI_VECTOR 49
+/* The vector the controller's messages arrive on, given by `isr_alloc_vector`
+ * when they are enabled; -1 before. */
+static int msi_vector = -1;
 static volatile uint8_t *hda_base = NULL;
 
 /* Controller capabilities */
@@ -1707,10 +1709,11 @@ static int hda_init(void)
      * begins by asking the controller whether the interrupt is its own, so
      * being called twice for one event costs a register read.
      */
-    if (lapic_ready() && pci_msi_enable(&hda_pci, HDA_MSI_VECTOR) == 0) {
-        register_isr_handler(HDA_MSI_VECTOR, hda_irq_handler, "hda");
+    if (lapic_ready() && (msi_vector = isr_alloc_vector()) >= 0 &&
+        pci_msi_enable(&hda_pci, (uint8_t)msi_vector) == 0) {
+        register_isr_handler((uint8_t)msi_vector, hda_irq_handler, "hda");
         hda_write32(HDA_INTCTL, 0x80000000 | (1 << output_stream_index));
-        klog(KLOG_INFO, "audio", "interrupts: messages on vector %d", HDA_MSI_VECTOR);
+        klog(KLOG_INFO, "audio", "interrupts: messages on vector %d", msi_vector);
     }
 
     hda_build_boot_status();

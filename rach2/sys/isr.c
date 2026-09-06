@@ -41,6 +41,7 @@ static volatile uint32_t vector_count[32];
  * clear its device, the line stays asserted, and the IRQ storms.
  */
 static isr_handler_t _isr_handlers[256][ISR_MAX_VECTOR_HANDLERS];
+static uint8_t _vector_taken[256]; /* given to a device by isr_alloc_vector */
 
 /* What each handler asked to be called, indexed as the chain is. A name is
  * the only thing /proc/interrupts can say about a line that a number cannot:
@@ -151,6 +152,20 @@ void init_isr(void)
  * not invoke it twice, and the name it registered under the first time
  * stands. A full chain is reported and the handler is dropped.
  */
+int isr_alloc_vector(void)
+{
+    int v;
+
+    for (v = ISR_MSI_FIRST; v <= ISR_MSI_LAST; v++) {
+        if (!_vector_taken[v]) {
+            _vector_taken[v] = 1;
+            return v;
+        }
+    }
+    klog(KLOG_ERR, "isr", "vector: none free for a device");
+    return -1;
+}
+
 void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *name)
 {
     int i;

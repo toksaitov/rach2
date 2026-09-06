@@ -161,6 +161,7 @@ int fd_table_init(fd_table_t *table)
     }
     table->entries = kzalloc(sizeof(fd_entry_t) * FD_TABLE_FIRST);
     table->cap = table->entries ? FD_TABLE_FIRST : 0;
+    table->limit = FD_TABLE_LIMIT;
     return table->entries ? 0 : -1;
 }
 
@@ -186,7 +187,7 @@ static int fd_table_grow(fd_table_t *table, int want)
     int cap = table->cap ? table->cap : FD_TABLE_FIRST;
     fd_entry_t *grown;
 
-    if (want > FD_TABLE_LIMIT) {
+    if (want > table->limit) {
         return -1;
     }
     while (cap < want) {
@@ -228,6 +229,7 @@ int fd_table_copy(fd_table_t *dst, const fd_table_t *src)
     }
     k_memcpy(dst->entries, src->entries, sizeof(fd_entry_t) * (size_t)src->cap);
     dst->cap = src->cap;
+    dst->limit = src->limit;
     return 0;
 }
 
@@ -268,21 +270,19 @@ int fd_alloc_from(fd_table_t *table, int minfd)
 {
     int i;
 
-    if (!table || minfd < 0 || minfd >= FD_TABLE_LIMIT) {
+    if (!table || minfd < 0 || minfd >= table->limit) {
         return -1;
     }
-    for (i = minfd; i < table->cap; i++) {
+    for (i = minfd; i < table->cap && i < table->limit; i++) {
         if (table->entries[i].type == FD_TYPE_NONE && table->entries[i].ofd == NULL) {
             break;
         }
     }
-    if (i >= table->cap) {
-        int want = minfd > table->cap ? minfd + 1 : table->cap + 1;
-
-        if (fd_table_grow(table, want) != 0) {
-            return -1;
-        }
-        i = minfd > i ? minfd : i;
+    if (i >= table->limit) {
+        return -1;
+    }
+    if (i >= table->cap && fd_table_grow(table, i + 1) != 0) {
+        return -1;
     }
     {
         struct open_file *ofd = ofd_alloc();
@@ -358,10 +358,10 @@ int fd_can_alloc(const fd_table_t *table)
 {
     int i;
 
-    for (i = 0; i < table->cap; i++) {
+    for (i = 0; i < table->cap && i < table->limit; i++) {
         if (table->entries[i].type == FD_TYPE_NONE && table->entries[i].ofd == NULL) {
             return 1;
         }
     }
-    return table->cap < FD_TABLE_LIMIT;
+    return table->cap < table->limit;
 }

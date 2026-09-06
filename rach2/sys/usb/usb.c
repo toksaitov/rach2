@@ -136,12 +136,9 @@ static int usb_up;
 
 static void usb_interrupts_start(void);
 
-/*
- * The vector the controller's messages arrive on. Vectors 48 to 63 are this
- * kernel's message vectors; the xHCI takes the first of them and the audio
- * controller the second.
- */
-#define USB_MSI_VECTOR 48
+/* The vector the controller's messages arrive on, given by `isr_alloc_vector`
+ * when they are enabled; -1 before. */
+static int msi_vector = -1;
 
 /* How many messages the controller has sent, how many times the timer's pump
  * found work that a message should have brought, and after how many messages
@@ -341,7 +338,7 @@ static int interrupt_pending(void)
     if (line_irq >= 0) {
         return pic_irq_pending((uint8_t)line_irq);
     }
-    return lapic_pending(USB_MSI_VECTOR);
+    return msi_vector >= 0 && lapic_pending((uint8_t)msi_vector);
 }
 
 static void usb_msi_handler(isr_params_t *params)
@@ -445,11 +442,11 @@ static void usb_interrupts_start(void)
         }
         msi_drop_after = n;
     }
-    if (lapic_ready()) {
-        register_isr_handler(USB_MSI_VECTOR, usb_msi_handler, "xhci");
-        if (xhci_interrupts_enable(USB_MSI_VECTOR) == 0) {
+    if (lapic_ready() && (msi_vector = isr_alloc_vector()) >= 0) {
+        register_isr_handler((uint8_t)msi_vector, usb_msi_handler, "xhci");
+        if (xhci_interrupts_enable((uint8_t)msi_vector) == 0) {
             msi_started = 1;
-            klog(KLOG_INFO, "usb", "interrupts: messages on vector %d", USB_MSI_VECTOR);
+            klog(KLOG_INFO, "usb", "interrupts: messages on vector %d", msi_vector);
             return;
         }
     }

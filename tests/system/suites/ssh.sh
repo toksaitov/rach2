@@ -138,6 +138,12 @@ QPID=$!
     printf 'dropbearmulti dropbear -R -g -p 22\n'
     held=0
     while [ "$held" -lt 600 ] && kill -0 "$QPID" 2>/dev/null; do
+        # Lines a later row wants typed at the console arrive in a file, so
+        # the feed's script can stay a script.
+        if [ -f "$FEED.type" ]; then
+            cat "$FEED.type"
+            rm -f "$FEED.type"
+        fi
         sleep 1
         held=$((held + 1))
     done
@@ -306,6 +312,38 @@ case "$OUT" in
     *ROOTPWRAN*) fail "root was let in by password, which -g must refuse: $OUT" ;;
 esac
 require_denied "$OUT" "root's password attempt"
+
+# A flood: forty connections opened to the server and held without a word,
+# past the thirty unauthenticated clients dropbear allows, while root ends
+# the console session and logs in again there. The console needs no socket
+# and root's processes are not counted, so the login must come back to a
+# shell that answers `id` with uid 0; the flood's children are dropbear's
+# to refuse.
+FLOOD=""
+i=0
+while [ "$i" -lt 40 ]; do
+    (sleep 60 | nc localhost "$PORT" >/dev/null 2>&1) &
+    FLOOD="$FLOOD $!"
+    i=$((i + 1))
+done
+sleep 5
+printf 'exit\n' > "$FEED.type"
+if ! wait_token "rach2 login: .*rach2 login:" 30 && ! [ "$(grep -c 'rach2 login:' "$LOG")" -ge 2 ]; then
+    for p in $FLOOD; do kill "$p" 2>/dev/null; done
+    fail "the console did not come back to a login prompt under the flood"
+fi
+sleep 2
+printf 'root\n' > "$FEED.type"
+sleep 4
+printf '%s\n' "$PASSWORD" > "$FEED.type"
+sleep 4
+printf 'id; echo FLOOD""LOGIN\n' > "$FEED.type"
+if ! wait_token "FLOODLOGIN" 40 || ! grep -q 'uid=0' "$LOG"; then
+    for p in $FLOOD; do kill "$p" 2>/dev/null; done
+    fail "root could not log in on the console under a connection flood"
+fi
+for p in $FLOOD; do kill "$p" 2>/dev/null; done
+echo "ssh-test: root logs in on the console under a flood of forty connections: OK"
 
 cleanup_boot
 

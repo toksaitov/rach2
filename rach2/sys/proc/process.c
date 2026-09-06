@@ -13,8 +13,8 @@ typedef char process_offsets_fit[(__builtin_offsetof(struct process, regs) +
                                       48 &&
                                   __builtin_offsetof(struct process, cr3) == 52 &&
                                   __builtin_offsetof(struct process, kernel_stack) == 56 &&
-                                  __builtin_offsetof(struct process, tls_base) == 144 &&
-                                  __builtin_offsetof(struct process, page_dir) == 2112)
+                                  __builtin_offsetof(struct process, tls_base) == 148 &&
+                                  __builtin_offsetof(struct process, page_dir) == 2128)
                                      ? 1
                                      : -1];
 
@@ -126,6 +126,9 @@ process_t *alloc_process(void)
     p->sid = candidate;
     p->pgid = candidate;
     p->umask = 022;
+    p->rlim[RLIM_NPROC].cur = p->rlim[RLIM_NPROC].max = PROC_COUNT_POLICY;
+    p->rlim[RLIM_NOFILE].cur = p->rlim[RLIM_NOFILE].max = FD_TABLE_LIMIT;
+    p->rlim[RLIM_AS].cur = p->rlim[RLIM_AS].max = RLIM_INFINITY32;
     fpu_init_area(p->fpu);
     p->waiter.proc = p;
 

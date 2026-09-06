@@ -26,7 +26,7 @@ A device is opened at a location, `struct usb_location` in `hcd.h`: the root por
 
 ## The one pump, and the two contexts
 
-The event ring is drained by one function, `usb_pump` in `usb.c`, and by nothing else. Two contexts turn it: the controller's own interrupt, which is a message on vector 48, and the 100 Hz timer, which turns it every tick whether or not a message came.
+The event ring is drained by one function, `usb_pump` in `usb.c`, and by nothing else. It runs from the controller's interrupt and from the 100 Hz timer, which calls it every tick whether or not an interrupt arrived. To enable messages, the driver calls `isr_alloc_vector` for the lowest unallocated vector from 48 through 127. On success the boot log reports `usb: interrupts: messages on vector N`, and `/proc/interrupts` identifies the handler as `xhci` once an interrupt has arrived. If messages cannot be enabled, the driver tries the controller's PCI interrupt line; the timer remains active in either case.
 
 Whichever turns it, the interrupt flag stays as that context found it. The handler runs from an interrupt gate and the timer's handler does too, and the pump saves and restores the flag rather than enabling interrupts on its way out. That is what keeps the two from being inside the ring at once on this one processor. A pump that returns with the flag raised records `usb: pump: interrupts were enabled inside it`, once.
 
@@ -129,7 +129,7 @@ When a hub is pulled, or a hub reports a port's connection gone, everything belo
 * **Report descriptors.** Above.
 * **Isochronous transfers.** Audio and video over USB. Nothing here reads them.
 * **Typematic repeat.** A held key on a USB keyboard does not repeat. The PS/2 keyboard's repeat comes from its hardware; a USB host is supposed to make its own, and this one does not.
-* **More than one interrupter.** The controller has one, on vector 48, and every event goes to it. Several would need several vectors and a rule for which endpoint answers on which.
+* **More than one interrupter.** The driver uses one interrupter for every event. When messages are enabled, `isr_alloc_vector` allocates its vector, and `/proc/interrupts` identifies the handler as `xhci`. Several interrupters would need several vectors and a rule for assigning endpoints to them.
 * **EHCI.** The companion controller is not driven and will not be. Taking its pins costs one register write. Driving it would cost a controller driver, a hub driver and split transactions, for an interface no machine made after about 2014 has.
 * **Booting from a USB disk.** The firmware loads the kernel; this stack starts afterwards.
 

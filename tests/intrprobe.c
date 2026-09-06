@@ -40,10 +40,9 @@ typedef unsigned int size_t;
 
 #define O_RDONLY 0
 
-/* The vectors the two drivers' messages arrive on, which the kernel fixes at
-   48 for the USB controller and 49 for the audio controller. */
-#define USB_VECTOR   "48:"
-#define AUDIO_VECTOR "49:"
+/* The two drivers' message vectors are found by the names their handlers
+   registered under, since a vector is given to a device when it enables its
+   messages and the number is whatever came next. */
 
 /* Larger than the file's own worst case, which `PROCFS_MAX_INTERRUPTS` in
    the kernel fixes at 2304 bytes: a read that filled this buffer would be a
@@ -345,8 +344,8 @@ void _start(void)
     if (count_for("32:", text) <= 0) {
         fail("the timer's vector has taken no interrupts");
     }
-    vector = count_for(USB_VECTOR, text);
-    audio = count_for(AUDIO_VECTOR, text);
+    vector = count_for_named("MSI", "xhci", text);
+    audio = count_for_named("MSI", "hda", text);
     line = count_for_named("PIC", "xhci", text);
     fallback = count_for("FBK:", text);
     if (fallback < 0) {

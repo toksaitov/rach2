@@ -92,8 +92,11 @@ int vm_insert(vm_space_t *vm, uint32_t start, uint32_t end, uint32_t prot, vm_ty
 /** Remove [start, end) (munmap semantics); 0 ok, -1 if a split has no room. */
 int vm_remove(vm_space_t *vm, uint32_t start, uint32_t end);
 
+/** Bytes the regions cover together: what RLIMIT_AS is measured against. */
+uint32_t vm_total(const vm_space_t *vm);
+
 /** Grow the stack VMA down to cover 'page' (page-aligned; the fault handler
  * floors the fault address); 1 if grown, 0 if not. */
-int vm_grow_stack(vm_space_t *vm, uint32_t page);
+int vm_grow_stack(vm_space_t *vm, uint32_t page, uint32_t as_limit);
 
 #endif /* _VM_H_ */

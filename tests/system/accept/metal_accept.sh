@@ -265,8 +265,10 @@ if [ -z "$INTR" ]; then
 else
     echo "$INTR" | while read -r line; do note "interrupts: $line"; done
     timer="$(echo "$INTR" | awk -F'\t' '$1 == "32:" { print $2 }')"
-    usb_vector="$(echo "$INTR" | awk -F'\t' '$1 == "48:" { print $2 }')"
-    audio_vector="$(echo "$INTR" | awk -F'\t' '$1 == "49:" { print $2 }')"
+    # By the device's name and not by a number: a vector is given to a device
+    # when it enables its messages, so the number is whatever came next.
+    usb_vector="$(echo "$INTR" | awk -F'\t' '$4 ~ /xhci/ { print $2 }')"
+    audio_vector="$(echo "$INTR" | awk -F'\t' '$4 ~ /hda/ { print $2 }')"
     fallback="$(echo "$INTR" | awk -F'\t' '$1 == "FBK:" { print $2 }')"
     spurious="$(echo "$INTR" | awk -F'\t' '$1 == "SPU:" { print $2 }')"
 

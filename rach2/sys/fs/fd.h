@@ -145,6 +145,7 @@ typedef struct fd_entry {
 typedef struct fd_table {
     fd_entry_t *entries;
     int cap;
+    int limit; /* the process's RLIMIT_NOFILE, at most FD_TABLE_LIMIT */
 } fd_table_t;
 
 /** Give a fresh table its first entries; 0, or -1 when the heap has none. */
@@ -158,8 +159,8 @@ int fd_table_cap(const fd_table_t *table);
 
 /**
  * Grow the table so that `fd` is inside it, for dup2 onto a number past
- * the end; 0 when it is, -1 when `fd` is past the limit or the heap has no
- * room.
+ * the end; 0 when it is, -1 when `fd` is past the process's limit or the
+ * heap has no room.
  */
 int fd_table_reach(fd_table_t *table, int fd);
 

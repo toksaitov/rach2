@@ -1010,7 +1010,7 @@ static int procfs_gen_interrupts(struct procfs_text *t)
 {
     int v;
 
-    for (v = 32; v < 64; v++) {
+    for (v = 32; v <= ISR_MSI_LAST; v++) {
         uint32_t n = isr_vector_count(v);
         int slot;
         int named = 0;

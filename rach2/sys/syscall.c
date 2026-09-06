@@ -3056,7 +3056,7 @@ static int32_t sys_dup2(isr_params_t *params)
         return -EBADF;
     }
 
-    if (newfd < 0 || newfd >= FD_TABLE_LIMIT) {
+    if (newfd < 0 || newfd >= current_proc->fds.limit) {
         return -EBADF;
     }
 
@@ -5302,7 +5302,7 @@ static int32_t sys_fcntl64(isr_params_t *params)
             /* F_DUPFD duplicates onto the LOWEST free fd >= arg (the POSIX
              * contract). An arg past the table is -EINVAL; no slot at or above
              * it is -EMFILE. */
-            if (arg >= (uint32_t)FD_TABLE_LIMIT) {
+            if (arg >= (uint32_t)current_proc->fds.limit) {
                 return -EINVAL;
             }
             newfd = fd_alloc_from(&current_proc->fds, (int)arg);
@@ -6536,6 +6536,23 @@ static int32_t sys_fork(isr_params_t *params)
     if (!parent) {
         return -ESRCH;
     }
+    /* RLIMIT_NPROC: the processes of the parent's real user, this one
+     * included, against the parent's limit; root is not limited. Counted by
+     * the real uid at the time, so a process that took a new identity with
+     * setuid counts for that user. */
+    if (parent->ruid != 0 && parent->rlim[RLIM_NPROC].cur != RLIM_INFINITY32) {
+        process_t *q;
+        uint32_t mine = 0;
+
+        for (q = proc_list; q; q = q->next) {
+            if (q->ruid == parent->ruid && q->state != PROC_UNUSED) {
+                mine++;
+            }
+        }
+        if (mine >= parent->rlim[RLIM_NPROC].cur) {
+            return -EAGAIN;
+        }
+    }
     mem_balance();
 
     child = alloc_process();
@@ -6587,6 +6604,8 @@ static int32_t sys_fork(isr_params_t *params)
     child->sid = parent->sid;
     child->pgid = parent->pgid;
     child->umask = parent->umask; /* the file-creation mask is inherited */
+    k_memcpy(child->rlim, parent->rlim, sizeof(child->rlim));
+    child->fds.limit = parent->fds.limit;
     child->ruid = parent->ruid;   /* credentials: the child is who the parent was */
     child->euid = parent->euid;
     child->suid = parent->suid;
@@ -11542,33 +11561,90 @@ static int32_t sys_getgroups(isr_params_t *params)
     return (int32_t) p->ngroups;
 }
 
-/* The real resource caps: RLIMIT_NOFILE/NPROC mirror the kernel's fixed pools,
- * RLIMIT_STACK the user stack growth cap; the rest are effectively unlimited.
- * cur == max. */
+/* The resources: three are kept in the record and enforced, RLIMIT_STACK
+ * reports the stack growth cap, and the rest are unlimited. */
 #define RLIMIT_STACK_RES  3
 #define RLIMIT_NPROC_RES  6
 #define RLIMIT_NOFILE_RES 7
-#define RLIM_INF32 0xFFFFFFFFu
-static void rlimit_for(uint32_t resource, uint32_t *cur, uint32_t *max)
-{
-    uint32_t v;
+#define RLIMIT_AS_RES     9
+#define RLIM_INF32 RLIM_INFINITY32
 
+/** The record's slot for `resource`, or -1 for one that is not kept. */
+static int rlimit_slot(uint32_t resource)
+{
     switch (resource) {
-    case RLIMIT_NOFILE_RES:
-        v = (uint32_t)FD_TABLE_LIMIT;
-        break;
     case RLIMIT_NPROC_RES:
-        v = (uint32_t)PROC_COUNT_POLICY;
-        break;
-    case RLIMIT_STACK_RES:
-        v = 0x800000u; /* 8 MB user-stack growth cap (documented) */
-        break;
+        return RLIM_NPROC;
+    case RLIMIT_NOFILE_RES:
+        return RLIM_NOFILE;
+    case RLIMIT_AS_RES:
+        return RLIM_AS;
     default:
-        v = RLIM_INF32;
-        break;
+        return -1;
     }
-    *cur = v;
-    *max = v;
+}
+
+static void rlimit_for(const process_t *p, uint32_t resource, uint32_t *cur, uint32_t *max)
+{
+    int slot = rlimit_slot(resource);
+
+    if (slot >= 0) {
+        *cur = p->rlim[slot].cur;
+        *max = p->rlim[slot].max;
+        return;
+    }
+    *cur = *max = resource == RLIMIT_STACK_RES ? 0x800000u : RLIM_INF32;
+}
+
+/**
+ * Set a kept limit of `p`: the soft value at most the hard, the hard raised
+ * by root only and lowered by anyone, and RLIMIT_NOFILE never above the
+ * table's limit. A limit that is not kept is accepted and not changed.
+ * 0, or -EINVAL and -EPERM as POSIX names them.
+ */
+static int rlimit_set(process_t *p, uint32_t resource, uint32_t cur, uint32_t max)
+{
+    int slot = rlimit_slot(resource);
+
+    if (slot < 0) {
+        return 0;
+    }
+    if (cur > max) {
+        return -EINVAL;
+    }
+    if (max > p->rlim[slot].max && current_proc->euid != 0) {
+        return -EPERM;
+    }
+    if (slot == RLIM_NOFILE) {
+        if (max > FD_TABLE_LIMIT) {
+            return -EPERM;
+        }
+        p->fds.limit = (int)cur;
+    }
+    p->rlim[slot].cur = cur;
+    p->rlim[slot].max = max;
+    return 0;
+}
+
+/**
+ * The process `pid` names for a limit call: the caller for 0 or its own
+ * pid; another process only to root or to a caller of the same real uid.
+ */
+static process_t *rlimit_target(uint32_t pid)
+{
+    process_t *p;
+
+    if (pid == 0 || pid == current_proc->pid) {
+        return current_proc;
+    }
+    p = get_process(pid);
+    if (!p || p->state == PROC_UNUSED || p->state == PROC_ZOMBIE) {
+        return NULL;
+    }
+    if (current_proc->euid != 0 && p->ruid != current_proc->ruid) {
+        return NULL;
+    }
+    return p;
 }
 
 /* getrlimit(76)/ugetrlimit(191): 32-bit struct rlimit { u32 rlim_cur,
@@ -11582,27 +11658,57 @@ static int32_t sys_getrlimit(isr_params_t *params)
     if (!rl) {
         return -EFAULT;
     }
-    rlimit_for(resource, &out[0], &out[1]);
+    rlimit_for(current_proc, resource, &out[0], &out[1]);
     if (copy_to_user((void __user *)rl, out, sizeof(out)) != 0) {
         return -EFAULT;
     }
     return 0;
 }
 
+/* setrlimit(75): the 32-bit form of a set. */
+static int32_t sys_setrlimit(isr_params_t *params)
+{
+    uint32_t resource = params->ebx;
+    uint32_t rl = params->ecx;
+    uint32_t in[2];
+
+    if (copy_from_user(in, (const void __user *)rl, sizeof(in)) != 0) {
+        return -EFAULT;
+    }
+    return rlimit_set(current_proc, resource, in[0], in[1]);
+}
+
+/* A 64-bit limit as the record holds it: the high word set is no limit, and
+ * a value past 32 bits is kept as no limit too, since nothing here reaches
+ * it. */
+static uint32_t rlimit_from64(uint32_t lo, uint32_t hi)
+{
+    return hi ? RLIM_INF32 : lo;
+}
+
 /* prlimit64(340): EBX=pid (0/self), ECX=resource, EDX=new (rlimit64* or NULL),
- * ESI=old (rlimit64* or NULL). 64-bit struct rlimit64 { u64 cur, max }. New
- * limits are accepted (validated readable) but not enforced; old limits report
- * the real caps. This is the form modern musl getrlimit/setrlimit issue. */
+ * ESI=old (rlimit64* or NULL). 64-bit struct rlimit64 { u64 cur, max }. The
+ * old limits are reported before the new are set, as POSIX's `setrlimit`
+ * and `getrlimit` see them. This is the form musl issues for both. */
 static int32_t sys_prlimit64(isr_params_t *params)
 {
+    uint32_t pid = params->ebx;
     uint32_t resource = params->ecx;
     uint32_t newp = params->edx;
     uint32_t oldp = params->esi;
+    process_t *p = rlimit_target(pid);
     uint32_t cur32, max32;
+    uint32_t in[4];
 
+    if (!p) {
+        return get_process(pid) ? -EPERM : -ESRCH;
+    }
+    if (newp && copy_from_user(in, (const void __user *)newp, sizeof(in)) != 0) {
+        return -EFAULT;
+    }
     if (oldp) {
         uint32_t out[4]; /* cur_lo, cur_hi, max_lo, max_hi */
-        rlimit_for(resource, &cur32, &max32);
+        rlimit_for(p, resource, &cur32, &max32);
         out[0] = cur32;
         out[1] = (cur32 == RLIM_INF32) ? 0xFFFFFFFFu : 0u; /* 64-bit RLIM_INFINITY */
         out[2] = max32;
@@ -11612,10 +11718,7 @@ static int32_t sys_prlimit64(isr_params_t *params)
         }
     }
     if (newp) {
-        uint32_t in[4];
-        if (copy_from_user(in, (const void __user *)newp, sizeof(in)) != 0) {
-            return -EFAULT;
-        }
+        return rlimit_set(p, resource, rlimit_from64(in[0], in[1]), rlimit_from64(in[2], in[3]));
     }
     return 0;
 }
@@ -11706,6 +11809,9 @@ static int32_t sys_brk(isr_params_t *params)
          * regions. */
         if (vm_overlaps(vm, old_top, new_top)) {
             return (int32_t)vm->brk;
+        }
+        if (vm_total(vm) + (new_top - old_top) > current_proc->rlim[RLIM_AS].cur) {
+            return (int32_t)vm->brk; /* RLIMIT_AS: brk reports the break unchanged */
         }
         /* Extend the region, or create it on the first non-empty break. */
         if (heap) {
@@ -11812,6 +11918,9 @@ static int32_t sys_mmap2(isr_params_t *params)
     }
     base = vm->mmap_top - len;
 
+    if (vm_total(vm) + len > current_proc->rlim[RLIM_AS].cur) {
+        return -ENOMEM; /* RLIMIT_AS */
+    }
     if (vm_insert(vm, base, base + len, vmprot, VM_ANON) != 0) {
         vma_exhausted("mmap");
         return -ENOMEM;
@@ -12043,6 +12152,7 @@ void init_syscall(void)
     _syscall_table[SYS_SETGID32] = sys_setgid;
     _syscall_table[SYS_SETGROUPS32] = sys_setgroups;
     _syscall_table[SYS_GETRLIMIT] = sys_getrlimit;
+    _syscall_table[SYS_SETRLIMIT] = sys_setrlimit;
     _syscall_table[SYS_UGETRLIMIT] = sys_getrlimit;
     _syscall_table[SYS_PRLIMIT64] = sys_prlimit64;
     _syscall_table[SYS_DUP3] = sys_dup3;

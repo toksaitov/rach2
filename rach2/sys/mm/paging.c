@@ -438,7 +438,7 @@ static int vm_resolve(uint32_t addr, int write)
     if (!vma) {
         /* The one legal access outside every region is growing the stack
          * down. */
-        if (!vm_grow_stack(vm, addr & ~(PAGE_SIZE - 1))) {
+        if (!vm_grow_stack(vm, addr & ~(PAGE_SIZE - 1), current_proc->rlim[RLIM_AS].cur)) {
             return 0;
         }
         /* A grown stack page is read+write; fall through to back it. */
@@ -567,6 +567,7 @@ static int cow_fault(uint32_t addr)
     /* Shared: alloc_user_page installs a fresh writable frame (present+rw+user,
      * no COW) at addr; copy the shared page into it, then drop our reference to
      * the old shared frame. */
+    mem_balance(); /* the caches give frames back first when memory is short */
     new_phys = alloc_user_page(_curr_dir, addr);
     if (new_phys == 0) {
         return 0; /* out of frames -> caller segfaults the process */

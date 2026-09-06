@@ -63,6 +63,9 @@ static const char *const PROBES[] = {
        socket pool and the frames. Each fills the thing, requires the refusal
        the kernel documents, and then requires the resource back. */
     "fdfull", "oomprobe",
+    /* The limits prlimit64 keeps: processes per user, descriptors and the
+       address space, each refused by name. */
+    "limitprobe",
     /* Hermetic without `--live`, which this does not pass: the resolver's
        pure helpers and the crafted wire data, not the real internet. */
     "dnstest",

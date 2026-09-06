@@ -131,30 +131,30 @@ int main(void)
         CHECK(vm_insert(&s, 0xBFFFF000u, 0xC0000000u, VM_PROT_READ | VM_PROT_WRITE, VM_STACK) == 0);
 
         /* A page just below the stack grows it down by one page. */
-        CHECK(vm_grow_stack(&s, 0xBFFFE000u) == 1);
+        CHECK(vm_grow_stack(&s, 0xBFFFE000u, 0xFFFFFFFFu) == 1);
         st = vm_find(&s, 0xBFFFE000u);
         CHECK(st != NULL && st->start == 0xBFFFE000u && st->end == 0xC0000000u);
         CHECK(s.count == 1); /* grown in place, not a new region */
 
         /* A page far below (but still at/above the limit) jumps start down to
          * it; the gap pages are now inside the region and fault in lazily. */
-        CHECK(vm_grow_stack(&s, 0xBF800000u) == 1);
+        CHECK(vm_grow_stack(&s, 0xBF800000u, 0xFFFFFFFFu) == 1);
         CHECK(vm_find(&s, 0xBF800000u) != NULL);
         CHECK(vm_find(&s, 0xBFF00000u) != NULL); /* a gap page, now covered */
 
         /* At the limit is allowed; below it is refused. */
-        CHECK(vm_grow_stack(&s, 0xBF7FF000u) == 1);
-        CHECK(vm_grow_stack(&s, 0xBF7FE000u) == 0);
+        CHECK(vm_grow_stack(&s, 0xBF7FF000u, 0xFFFFFFFFu) == 1);
+        CHECK(vm_grow_stack(&s, 0xBF7FE000u, 0xFFFFFFFFu) == 0);
         CHECK(vm_find(&s, 0xBF7FF000u) != NULL);
         CHECK(vm_find(&s, 0xBF7FE000u) == NULL);
 
         /* A page at or above the current start is not a growth (already mapped
          * region or above the stack entirely). */
-        CHECK(vm_grow_stack(&s, 0xBF7FF000u) == 0); /* equals start now */
+        CHECK(vm_grow_stack(&s, 0xBF7FF000u, 0xFFFFFFFFu) == 0); /* equals start now */
 
         /* With no stack region, growth always fails. */
         vm_init(&s);
-        CHECK(vm_grow_stack(&s, 0xBFFFE000u) == 0);
+        CHECK(vm_grow_stack(&s, 0xBFFFE000u, 0xFFFFFFFFu) == 0);
 
         /* Growth must not swallow another region sitting in the growth window:
          * a (hostile) segment mapped just below the stack blocks growth past
@@ -164,12 +164,18 @@ int main(void)
         CHECK(vm_insert(&s, 0xBFFFF000u, 0xC0000000u, VM_PROT_READ | VM_PROT_WRITE, VM_STACK) == 0);
         CHECK(vm_insert(&s, 0xBF900000u, 0xBF901000u, VM_PROT_READ, VM_DATA) == 0);
         /* One page down is still clear: allowed. */
-        CHECK(vm_grow_stack(&s, 0xBFFFE000u) == 1);
+        CHECK(vm_grow_stack(&s, 0xBFFFE000u, 0xFFFFFFFFu) == 1);
         /* Down to/over the planted region is refused; the stack stays put. */
-        CHECK(vm_grow_stack(&s, 0xBF900000u) == 0);
-        CHECK(vm_grow_stack(&s, 0xBF8FF000u) == 0);
+        CHECK(vm_grow_stack(&s, 0xBF900000u, 0xFFFFFFFFu) == 0);
+        CHECK(vm_grow_stack(&s, 0xBF8FF000u, 0xFFFFFFFFu) == 0);
         CHECK(vm_find(&s, 0xBFFFE000u) != NULL && vm_find(&s, 0xBF900000u) != NULL);
         CHECK(vm_find(&s, 0xBF8FF000u) == NULL); /* stack did not jump the region */
+        /* Growth counts against an address-space limit: with the regions at
+           two pages, a limit of three pages allows one page of growth and
+           refuses the next. */
+        CHECK(vm_total(&s) == 3 * PG);
+        CHECK(vm_grow_stack(&s, 0xBFFFD000u, 4 * PG) == 1);
+        CHECK(vm_grow_stack(&s, 0xBFFFC000u, 4 * PG) == 0);
         vm_free(&s);
     }
 

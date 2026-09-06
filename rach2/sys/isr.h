@@ -115,6 +115,19 @@ uint32_t isr_interrupt_total(void);
 /** How many handlers a vector's chain has. */
 #define ISR_MAX_VECTOR_HANDLERS 4
 
+/* The vectors a device may be given for its messages: above the 8259's
+ * sixteen at 32 and below the syscall's 128. */
+#define ISR_MSI_FIRST 48
+#define ISR_MSI_LAST  127
+
+/**
+ * A vector for a device's messages, the lowest not yet given, or -1 when
+ * every one is taken. A device asks once, when it enables its messages,
+ * and `/proc/interrupts` reports the vector with the device's name, which
+ * is how a reader finds it: the number is not fixed.
+ */
+int isr_alloc_vector(void);
+
 /*
  * Syscall interrupt handler (int 0x80)
  */

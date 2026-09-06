@@ -28,6 +28,7 @@ static void pc_platform_unmap(uint32_t va)
 #else
 
 #include "paging.h"
+#include "pressure.h"
 #include "../panic.h"
 #include "../pci.h"
 
@@ -597,7 +598,15 @@ void init_pagecache(void)
         pc_slots[i].accessed = 0;
         pc_slots[i].pinned = 0;
     }
-    pc_capacity = PC_SLOTS;
+    /* Half of what the caches together may hold under pressure, and never
+       more slots than there are. */
+    pc_capacity = mem_cache_target() / 2u;
+    if (pc_capacity > PC_SLOTS) {
+        pc_capacity = PC_SLOTS;
+    }
+    if (pc_capacity < 1u) {
+        pc_capacity = 1u;
+    }
     pc_resident_frames = 0;
     pc_clock = 0;
     pc_reads = pc_evicts = pc_writebacks = 0;

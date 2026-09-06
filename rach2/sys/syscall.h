@@ -99,6 +99,7 @@
 
 /* Auth/identity, resource, and tail syscalls a login server touches. */
 #define SYS_SETHOSTNAME 74
+#define SYS_SETRLIMIT   75
 #define SYS_GETRLIMIT   76
 #define SYS_UGETRLIMIT  191
 #define SYS_GETGROUPS32 205
