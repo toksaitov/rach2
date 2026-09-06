@@ -285,7 +285,7 @@ void probe_main(unsigned int *sp)
                     }
                 }
             } else if (i < 8) {
-                writer_syncs = !wanted(arg, 'n');
+                writer_syncs = !(arg && wanted(arg, 'n'));
                 if (wanted(arg, 'w') || (i == 6 && wanted(arg, 'W'))) {
                     writer(i == 6 ? "/lo/load1.bin" : "/lo/load2.bin");
                 }

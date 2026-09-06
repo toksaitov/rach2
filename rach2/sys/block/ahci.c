@@ -170,6 +170,9 @@ static volatile uint8_t ahci_cmdtable[AHCI_CMDTABLE_SIZE] __attribute__((aligned
 #define AHCI_CMD_W       (1u << 6)  /* command header: write direction */
 #define AHCI_PRDTL_ONE   (1u << 16) /* command header: one PRDT entry */
 #define AHCI_PRDT_OFFSET 0x80
+/* The entries the command table has room for after the FIS: eight, so a
+ * buffer from the heap, one entry per page, may span 32 KiB. */
+#define AHCI_PRDT_MAX    ((AHCI_CMDTABLE_SIZE - AHCI_PRDT_OFFSET) / 16)
 #define AHCI_DBC_MASK    0x3FFFFFu /* PRDT byte count, bits 0-21 */
 
 /* Typed overlays on the DMA byte regions: one command-list header (the HBA
@@ -787,9 +790,12 @@ static int ahci_io_error(void)
  * CPU only spins
  * on memory-mapped status, bounded by the iteration watchdog. So it
  * neither sleeps nor allocates and is callable with interrupts off, the
- * contract the page-cache window fault needs. `buf` must be physically
- * contiguous and below 4 GiB, which every identity-mapped buffer below
- * HARD_MEMORY_LIMIT is. Returns 0 on success, `-EIO` on error or expiry. */
+ * contract the page-cache window fault needs. A `buf` below
+ * HARD_MEMORY_LIMIT is identity-mapped and physically contiguous, and goes
+ * in one PRDT entry; one above it is a heap buffer, whose pages may lie
+ * anywhere, and gets an entry per page with the page's physical address,
+ * up to the eight the table holds. Returns 0 on success, `-EIO` on error,
+ * expiry, or a buffer the table cannot describe. */
 static int ahci_run_command(uint8_t command, uint64_t lba, uint32_t count, volatile uint8_t *buf,
                             uint32_t bytes, int write)
 {
@@ -799,7 +805,7 @@ static int ahci_run_command(uint8_t command, uint64_t lba, uint32_t count, volat
     uint32_t ci_off = ahci_port_off(ahci_port, AHCI_PxCI);
     uint32_t tfd_off = ahci_port_off(ahci_port, AHCI_PxTFD);
     uint32_t is_off = ahci_port_off(ahci_port, AHCI_PxIS);
-    uint32_t prdtl = (bytes > 0) ? AHCI_PRDTL_ONE : 0u;
+    uint32_t prdtl = 0;
     uint32_t spin;
 
     /* The one place a command leaves this driver. A kernel built read-only
@@ -830,11 +836,35 @@ static int ahci_run_command(uint8_t command, uint64_t lba, uint32_t count, volat
     fis->control = 0;
     fis->aux = 0;
 
-    if (bytes > 0) {
+    if (bytes > 0 && (uintptr_t)buf < HARD_MEMORY_LIMIT) {
         prdt->dba = (uint32_t)(uintptr_t)buf;
         prdt->dbau = 0;
         prdt->reserved = 0;
         prdt->dbc = (bytes - 1) & AHCI_DBC_MASK;
+        prdtl = AHCI_PRDTL_ONE;
+    } else if (bytes > 0) {
+        uint32_t off = 0, n = 0;
+
+        while (off < bytes) {
+            uintptr_t va = (uintptr_t)buf + off;
+            uintptr_t phys = paging_virt_to_phys(va);
+            uint32_t chunk = PAGE_SIZE - (uint32_t)(va & (PAGE_SIZE - 1));
+
+            if (chunk > bytes - off) {
+                chunk = bytes - off;
+            }
+            if (phys == 0 || n >= AHCI_PRDT_MAX) {
+                klog(KLOG_WARN, "ahci", "refused: a buffer the command table cannot describe");
+                return -1;
+            }
+            prdt[n].dba = (uint32_t)phys;
+            prdt[n].dbau = 0;
+            prdt[n].reserved = 0;
+            prdt[n].dbc = (chunk - 1) & AHCI_DBC_MASK;
+            n++;
+            off += chunk;
+        }
+        prdtl = n << 16;
     }
 
     hdr->dw0 = AHCI_CFL_DWORDS | (write ? AHCI_CMD_W : 0u) | prdtl;

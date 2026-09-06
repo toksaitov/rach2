@@ -4,8 +4,9 @@
 #
 # A disk with a FAT32 partition for the writers, under the lag device so
 # their writes go through the request layer, whose delays are the ones
-# recorded, the harness's own card for the pinger, and the harness typing a line at the console every two seconds for the
-# reader; `loadprobe` runs the load for twenty seconds and prints the four
+# recorded, the harness's own card for the pinger, and the harness typing a
+# line at the console every two seconds for the reader; `loadprobe` runs the
+# load for twenty seconds and prints the four
 # delays `/proc/stat` keeps as its longest, which this suite requires within
 # their bounds and prints, since the numbers are the record.
 #

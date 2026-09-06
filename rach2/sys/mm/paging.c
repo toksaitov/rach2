@@ -702,15 +702,13 @@ static void _page_fault_handler(isr_params_t *params)
 }
 
 /**
- * Map a physical MMIO region to the same virtual address (identity map),
- * creating or rewriting its page table entries cache-disabled (PCD|PWT) so a
- * device-register read is never stale, whatever the region's address.
- *
- * This is a boot-time operation. Device MMIO above the identity-mapped window
- * needs a fresh kernel page table, and a kernel PDE installed after the first
- * fork would not reach the address spaces already cloned from `_kernel_dir`, so
- * a call that would add a new PDE after that point is refused (returns 0).
- * Rewriting a leaf PTE in a table every directory already shares stays legal.
+ * Map a physical MMIO region into the kernel's MMIO region and return the
+ * virtual address it was given, or 0 when the region has no room or the
+ * range is empty or wraps. The entries are cache-disabled (PCD|PWT) so a
+ * device-register read is never stale, whatever the region's address. The
+ * page tables of the kernel's gigabyte exist at boot and are shared by
+ * every directory, so a mapping made here at any time is seen by every
+ * process.
  */
 uintptr_t map_mmio(uintptr_t phys_addr, size_t size)
 {

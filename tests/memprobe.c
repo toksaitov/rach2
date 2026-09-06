@@ -21,7 +21,9 @@
  * own, the probe arms the count-th frame allocation to fail for each count
  * from one to thirty-two, and forks; then again, and forks a child that
  * execs `memprobe fresh`. A fork or an exec that meets the failure must
- * answer ENOMEM, or the child must exit as it would without it, and after
+ * answer ENOMEM, or the child must exit as it would without it, or, for an
+ * exec that met it after the old image was gone, end by the kernel's hand,
+ * and after
  * every attempt the parent's pages read as it wrote them, take a write, and
  * the free memory is what it was, so nothing leaked and nothing that
  * survived was changed.
@@ -115,6 +117,25 @@ static size_t strlen(const char *s)
         n++;
     }
     return n;
+}
+
+static void print(const char *s)
+{
+    syscall3(SYS_WRITE, 1, (int)(size_t)s, (int)strlen(s));
+}
+
+static void print_num(unsigned v)
+{
+    char tmp[12];
+    int n = 0;
+
+    do {
+        tmp[n++] = (char)('0' + v % 10);
+        v /= 10;
+    } while (v);
+    while (n) {
+        syscall3(SYS_WRITE, 1, (int)(size_t)&tmp[--n], 1);
+    }
 }
 
 static void puts(const char *s)
@@ -326,13 +347,28 @@ static void run_fail(void)
         }
         if (pid > 0) {
             status = wait_status(pid);
-            if (status != 0 && status != (7 << 8)) {
-                fail("an exec that met the failure neither ran nor answered ENOMEM");
+            /* A count the exec did not reach would fire on the next
+               allocation here; the child armed it, the parent disarms it. */
+            arm(0);
+            /* Ran whole, answered ENOMEM, or ended by the kernel: an exec
+               that fails after the old image is gone has nothing to return
+               to and the process ends, which is its contract. */
+            if (status != 0 && status != (7 << 8) && (status & 0x7f) == 0) {
+                fail("an exec that met the failure neither ran nor answered ENOMEM nor ended");
             }
         }
         survivors(base, pages, round++);
         free_now = mem_free_kib();
         if (free_now + 64 < baseline || free_now > baseline + 64) {
+            print("MEMPROBE count ");
+            print_num(n);
+            print(" free ");
+            print_num(free_now);
+            print(" baseline ");
+            print_num(baseline);
+            print(" status ");
+            print_num((unsigned)status);
+            print("\n");
             fail("memory leaked or was freed twice around an exec");
         }
     }
