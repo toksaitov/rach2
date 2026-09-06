@@ -302,9 +302,12 @@ static int ata_write(block_device_t *device, uint64_t lba, uint32_t count, const
  * emulators and 0xFF on most real hardware; 0xFF has BSY set, so without
  * that check an absent drive would spin out the whole watchdog. A packet
  * device answers IDENTIFY with the ATAPI signature in the LBA registers
- * and is refused. The 48-bit sector count is words 100-103 when word 83
- * says the drive has the 48-bit commands, else the 28-bit count in words
- * 60-61; a 28-bit drive is capped at what its commands address.
+ * and is refused, and so, by name, is a drive whose logical sector is not
+ * 512 bytes (word 106 bit 14 valid and bit 12 set), which the block math
+ * needs; the AHCI driver refuses the same. The 48-bit sector count is
+ * words 100-103 when word 83 says the drive has the 48-bit commands, else
+ * the 28-bit count in words 60-61; a 28-bit drive is capped at what its
+ * commands address.
  */
 static int ata_identify(struct ata_drive *d, uint16_t *identify)
 {
@@ -335,6 +338,11 @@ static int ata_identify(struct ata_drive *d, uint16_t *identify)
         return -1;
     }
     insw(ch->io + ATA_REG_DATA, identify, ATA_WORDS_PER_SECTOR);
+    if ((identify[106] & 0x4000u) != 0 && (identify[106] & 0x1000u) != 0) {
+        klog(KLOG_ERR, "ata", "%s %s: refused: the logical sector is not 512 bytes", ch->name,
+             d->slave ? "slave" : "master");
+        return -1;
+    }
     d->lba48 = (identify[83] & 0x0400u) != 0;
     if (d->lba48) {
         d->sectors = (uint64_t)identify[100] | ((uint64_t)identify[101] << 16) |
