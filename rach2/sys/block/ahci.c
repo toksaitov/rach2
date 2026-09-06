@@ -398,9 +398,10 @@ static int ahci_discover(void)
         ahci_err = "the controller's ABAR was never programmed";
         return -1;
     }
-    /* Map the ABAR cache-disabled (PCD|PWT) whatever its address. A low ABAR is
-       already identity-mapped but cacheable, so a status poll could read stale;
-       map_mmio rewrites the PTE cache-disabled either way. */
+    /* Map the ABAR cache-disabled (PCD|PWT) whatever its address: map_mmio
+       gives it a mapping of its own in the kernel's MMIO region, and the
+       driver reads and writes through that one, never through a low ABAR's
+       identity mapping, which stays cacheable. */
     mapped = map_mmio(abar, AHCI_ABAR_MAP_SIZE);
     if (mapped == 0) {
         ahci_err = "the ABAR window could not be mapped";

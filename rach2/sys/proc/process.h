@@ -67,7 +67,8 @@ struct vfs_mount;
 
 /* A sleeper's record on a wait queue: one is in every process record, for
  * the one queue a process sleeps on, and `poll` supplies one per watched
- * object from its own stack, so entering a sleep allocates nothing. */
+ * object from an array it took before it began, so entering a queue
+ * allocates nothing. */
 struct wq_waiter {
     struct process *proc;
     struct wq_waiter *next;
@@ -188,8 +189,8 @@ void init_proc(void);
 /** Restart pid numbering at 1, for the boot that is about to start init. */
 void proc_reclaim_boot_pids(void);
 
-/** Claim the first unused process slot; returns it, or NULL if the table is
- * full. */
+/** A process record from the heap, on the list; NULL when the heap has no
+ * room. */
 process_t *alloc_process(void);
 
 /** Take a record off the list and give it back to the heap; nothing may refer

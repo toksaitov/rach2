@@ -144,13 +144,8 @@ void init_isr(void)
 }
 
 /**
- * Append `handler` to a vector's chain.
- *
- * `name` is what /proc/interrupts calls this handler; it is a literal that
- * outlives the call, since only the pointer is kept. Re-registering an
- * already-installed handler is a no-op, so an init path that runs twice does
- * not invoke it twice, and the name it registered under the first time
- * stands. A full chain is reported and the handler is dropped.
+ * The lowest message vector not yet given to a device, marked as given;
+ * -1 with a record when every one is taken.
  */
 int isr_alloc_vector(void)
 {
@@ -166,6 +161,15 @@ int isr_alloc_vector(void)
     return -1;
 }
 
+/**
+ * Append `handler` to a vector's chain.
+ *
+ * `name` is what /proc/interrupts calls this handler; it is a literal that
+ * outlives the call, since only the pointer is kept. Re-registering an
+ * already-installed handler is a no-op, so an init path that runs twice does
+ * not invoke it twice, and the name it registered under the first time
+ * stands. A full chain is reported and the handler is dropped.
+ */
 void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *name)
 {
     int i;

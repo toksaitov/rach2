@@ -221,8 +221,8 @@ static int do_poll(struct kernel_pollfd *fds, uint32_t nfds, int has_deadline, u
 
     /* On a break we still hold the loop's cli but may be enqueued (broke right
      * after a scan that ran before any sleep this iteration, in which case we
-     * never enqueued, so the removes are no-ops). Belt-and-suspenders dequeue.
-     */
+     * never enqueued, so the removes are no-ops). Remove any remaining
+     * waiters. */
     current_proc->wakeup_tick = 0; /* disarm the timer wake */
     for (i = 0; i < nfds; i++) {
         wq_poll_remove(wqs[i], &recs[i]);

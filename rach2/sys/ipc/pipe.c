@@ -330,7 +330,7 @@ static int32_t pipe_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
  * Release one end when its last descriptor closes (called from
  * fd_release_backing at OFD refcount 1). Mark the end closed, wake the peer
  * so a blocked reader sees EOF or a blocked writer sees the broken pipe, and
- * return the pipe to the pool once both ends are gone.
+ * free the pipe once both ends are gone.
  */
 static void pipe_close(fd_entry_t *e)
 {

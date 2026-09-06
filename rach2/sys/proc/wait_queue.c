@@ -9,7 +9,7 @@
  * does not depend on the network module's net_lock/net_unlock.
  *
  * Under the dual-target host test there is no interrupt to mask, so these are
- * no-ops; the queue array logic exercised there is identical either way.
+ * no-ops; the list logic exercised there is identical either way.
  */
 #ifdef WAIT_QUEUE_HOSTTEST
 static uint32_t irq_save(void) { return 0; }

@@ -1742,8 +1742,8 @@ block_device_t *devfs_usb_view(int n, int k)
  *
  * Counted by walking the descriptor tables rather than by keeping a number
  * up to date at every open and close. A number that drifted by one would
- * leave a pulled stick a tombstone for the life of the machine, and there
- * are sixteen processes with sixteen descriptors each to walk.
+ * leave a pulled stick a tombstone for the life of the machine, and the
+ * walk is over what the machine has open, which is not many.
  */
 int devfs_usb_opens(int n)
 {

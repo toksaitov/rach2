@@ -19,12 +19,12 @@
 
 /* Policy: the regions a process may hold at most. A process's regions are an
  * array in the heap that starts at VMA_FIRST entries and doubles as it
- * fills; the limit is where a program that maps without end is refused,
- * as Linux's max_map_count refuses it. An entry is 16 bytes, so a process
- * at the limit holds a megabyte of them. Four regions are spoken for
- * before a program runs a line: its code, its data, the heap and the
- * stack; the rest are anonymous mmaps, which is what a C library's
- * allocator reaches for, one per large allocation. `tests/musl/vmamusl.c`
+ * fills; at the limit a further mapping answers ENOMEM, the bound Linux
+ * keeps as max_map_count. An entry is 16 bytes, so a process at the limit
+ * holds a megabyte of them. A program starts with a region per loaded
+ * segment and one for its stack, and the heap's comes with its first brk;
+ * the rest are anonymous mmaps, which is what a C library's allocator
+ * reaches for, one per large allocation. `tests/musl/vmamusl.c`
  * takes three hundred of them, past the sixteen the array starts with. */
 #define VMA_LIMIT 65536
 #define VMA_FIRST 16

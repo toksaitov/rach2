@@ -140,9 +140,9 @@ void block_lag_tick(void)
         /* Every completion is delivered twice, two ticks apart, and the
          * second copy claims an error. A request freed between the copies
          * is not live any more, and one made since at the same address has
-         * a generation of its own, so the duplicate must be dropped; a
-         * kernel that believed it would fail a healthy request, which is
-         * what makes the check's absence visible. */
+         * a generation of its own, so the duplicate must be dropped; one
+         * accepted would fail a healthy request, which is what makes the
+         * check's absence visible. */
         if (!e->delivered) {
             e->delivered = 1;
             e->due = lag_ticks + 2;

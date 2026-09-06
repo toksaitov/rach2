@@ -197,8 +197,8 @@ int elf_load_image(elf_read_fn read, void *ctx, page_dir_t *dir, elf_image_t *ou
 struct vm_space; /* mm/vm.h */
 
 /** Build the VMA map of a fresh address space from a loaded image. */
-void elf_setup_vmas(struct vm_space *vm, const elf_image_t *img,
-                    uint32_t stack_top, uint32_t stack_growth);
+int elf_setup_vmas(struct vm_space *vm, const elf_image_t *img,
+                   uint32_t stack_top, uint32_t stack_growth);
 
 /** Load PT_LOAD segments of an in-memory image into `dir`; 0 ok, -1 on
  * error. */

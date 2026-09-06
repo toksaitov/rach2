@@ -214,6 +214,9 @@ int fd_table_reach(fd_table_t *table, int fd)
     if (!table || fd < 0) {
         return -1;
     }
+    if (fd >= table->limit) {
+        return -1;
+    }
     if (fd < table->cap) {
         return 0;
     }

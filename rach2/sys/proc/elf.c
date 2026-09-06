@@ -112,8 +112,8 @@ uint16_t elf_program_header_count(const void *data)
  *
  * For each loadable segment, allocate the user pages spanning `p_vaddr` to
  * `p_vaddr + p_memsz`, copy `p_filesz` bytes from the file, and leave the rest
- * zero for the BSS. `alloc_user_page` returns a physical address inside the
- * identity-mapped region, so the copy writes through it directly.
+ * zero for the BSS. The frame `alloc_user_page` gives is written through a
+ * temporary mapping, since it may lie anywhere in memory.
  *
  * This is a self-test helper for a trusted, project-built image: it does not
  * apply the full hostile-image hardening (user-window bounds, segment overlap,
@@ -505,9 +505,11 @@ int elf_load_image(elf_read_fn readfn, void *ctx, page_dir_t *dir, elf_image_t *
  * Lay down one VMA per loaded segment with protection from its `p_flags`, an
  * empty heap just past the image, the anonymous-mmap window, and a one-page
  * stack at `stack_top` that may grow down to `stack_top - stack_growth`.
+ * 0, or -1 when a region could not be recorded, which is the heap having
+ * no room for the array.
  */
-void elf_setup_vmas(struct vm_space *vm, const elf_image_t *img,
-                    uint32_t stack_top, uint32_t stack_growth)
+int elf_setup_vmas(struct vm_space *vm, const elf_image_t *img,
+                   uint32_t stack_top, uint32_t stack_growth)
 {
     int si;
 
@@ -529,7 +531,9 @@ void elf_setup_vmas(struct vm_space *vm, const elf_image_t *img,
             prot |= VM_PROT_EXEC;
         }
         vt = (flags & PF_X) ? VM_CODE : VM_DATA;
-        vm_insert(vm, img->segs[si].start, img->segs[si].end, prot, vt);
+        if (vm_insert(vm, img->segs[si].start, img->segs[si].end, prot, vt) != 0) {
+            return -1;
+        }
     }
 
     /* Heap starts empty just past the image; brk grows it on demand. */
@@ -543,6 +547,6 @@ void elf_setup_vmas(struct vm_space *vm, const elf_image_t *img,
     /* The stack: one page mapped at the top, growable downward to
      * stack_limit. */
     vm->stack_limit = stack_top - stack_growth;
-    vm_insert(vm, stack_top, stack_top + PAGE_SIZE,
-              VM_PROT_READ | VM_PROT_WRITE, VM_STACK);
+    return vm_insert(vm, stack_top, stack_top + PAGE_SIZE,
+                     VM_PROT_READ | VM_PROT_WRITE, VM_STACK);
 }

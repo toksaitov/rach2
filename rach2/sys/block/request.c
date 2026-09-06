@@ -48,7 +48,7 @@
 
 static struct block_request *reqs; /* every live request */
 static uint32_t live;              /* how many are on the list */
-static uint32_t next_generation;   /* no two requests ever share one */
+static uint32_t next_generation;   /* no two live requests share one */
 static wait_queue_t pool_wq; /* woken on any completion, freed request or quarantine */
 static volatile uint32_t req_ticks;
 static uint32_t quarantined_count;

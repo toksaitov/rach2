@@ -484,15 +484,12 @@ static pid_t spawn_update(void)
     }
 }
 
-/*
- * The resource limits every session starts with, from `/etc/rach2/limits`:
- * one line per limit, `nproc`, `nofile` or `as`, then the soft and the hard
- * value, a number or `unlimited`. They are set on init itself, and fork and
- * exec hand them down to every login and everything it starts; root's
- * sessions carry them too, and root may raise them. A line that does not
- * parse is reported and skipped; a missing file leaves the kernel's own
- * defaults, which are the table's limits.
+/**
+ * One limit value as the file writes it: a decimal number, or `unlimited`.
+ * A word that is not one of those, a negative number, or one past what the
+ * type holds is `LIMIT_BAD`.
  */
+#define LIMIT_BAD ((rlim_t)-2)
 static rlim_t limit_value(const char *word)
 {
     char *end;
@@ -501,13 +498,26 @@ static rlim_t limit_value(const char *word)
     if (strcmp(word, "unlimited") == 0) {
         return RLIM_INFINITY;
     }
+    if (word[0] == '-' || word[0] == '+') {
+        return LIMIT_BAD;
+    }
+    errno = 0;
     v = strtoull(word, &end, 10);
-    if (*end != '\0' || end == word) {
-        return (rlim_t)-2;
+    if (*end != '\0' || end == word || errno == ERANGE || v >= (unsigned long long)RLIM_INFINITY) {
+        return LIMIT_BAD;
     }
     return (rlim_t)v;
 }
 
+/**
+ * The resource limits every session starts with, from `/etc/rach2/limits`:
+ * one line per limit, `nproc`, `nofile` or `as`, then the soft and the hard
+ * value, a number or `unlimited`. They are set on init itself, and fork and
+ * exec hand them down to every login and everything it starts, root's
+ * included, and root may raise them. A line that does not parse is reported
+ * and skipped; a missing file leaves the kernel's own defaults, which are
+ * the table's limits.
+ */
 static void apply_limits(void)
 {
     FILE *f = fopen("/etc/rach2/limits", "r");
@@ -542,7 +552,7 @@ static void apply_limits(void)
         }
         rl.rlim_cur = limit_value(soft);
         rl.rlim_max = limit_value(hard);
-        if (rl.rlim_cur == (rlim_t)-2 || rl.rlim_max == (rlim_t)-2) {
+        if (rl.rlim_cur == LIMIT_BAD || rl.rlim_max == LIMIT_BAD) {
             fprintf(stderr, "init: limits: line %d: a value is not a number\n", lineno);
             continue;
         }

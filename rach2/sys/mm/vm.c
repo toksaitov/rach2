@@ -10,8 +10,9 @@
 /**
  * Reset an address space to empty.
  *
- * Clears every VMA slot and zeroes the heap, brk, stack limit, and mmap
- * cursor. The space owns no mappings until vm_insert adds them.
+ * The count goes to zero, the array it has is kept for reuse, and the heap,
+ * brk, stack limit, and mmap cursor are zeroed. The space owns no mappings
+ * until vm_insert adds them.
  */
 void vm_init(vm_space_t *vm)
 {
@@ -209,6 +210,7 @@ int vm_remove(vm_space_t *vm, uint32_t start, uint32_t end)
  * the growth window must not swallow any other region: a hostile ELF segment
  * or mmap inside that window must not be absorbed into the stack.
  */
+/** Bytes the regions cover together, what RLIMIT_AS is measured against. */
 uint32_t vm_total(const vm_space_t *vm)
 {
     uint32_t i, total = 0;

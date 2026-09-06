@@ -502,12 +502,16 @@ static int32_t sys_exit(isr_params_t *params)
         } else {
             switch_page_directory(_kernel_dir);
         }
+        /* Freed and replaced with interrupts off: a handler between the two
+         * would count its entry in the record just freed. */
+        __asm__ __volatile__("cli");
         free_process(current_proc);
 
         init_pid = 0;
 
         current_proc = proc_idle;
         current_proc->state = PROC_RUNNING;
+        __asm__ __volatile__("sti");
 
         sched_disable();
 
@@ -3021,8 +3025,9 @@ static int32_t sys_dup(isr_params_t *params)
     if (newfd < 0) {
         return -EMFILE;
     }
-    /* entry still points at entries[oldfd] (a fixed array; alloc did not
-     * move it). */
+    /* The table may have grown, and its entries moved: the source is looked
+     * up again. */
+    entry = fd_get(&current_proc->fds, oldfd);
     dst = &current_proc->fds.entries[newfd];
     fd_ofd_unref(dst->ofd); /* drop the fresh OFD; share oldfd's instead */
     dst->type  = entry->type;
@@ -5309,6 +5314,7 @@ static int32_t sys_fcntl64(isr_params_t *params)
             if (newfd < 0) {
                 return -EMFILE;
             }
+            entry = fd_get(&current_proc->fds, fd); /* the entries may have moved */
             dst = &current_proc->fds.entries[newfd];
             /* The duplicate SHARES oldfd's open-file description (so the seek
              * offset is shared, per POSIX). fd_alloc_from just gave dst a fresh
@@ -5548,8 +5554,9 @@ static int copy_user_pages(process_t *parent, page_dir_t *child_dir)
     if (parent->cr3 == 0) {
         parent_dir = _kernel_dir;
     } else {
-        /* cr3 has &page_dir->phys_page_tables (get_page_dir_phys); recover
-         * the page_dir_t* by subtracting that offset. The layout is
+        /* The directory's record is kept beside cr3, since a directory
+         * lives in the heap and its physical address says nothing about
+         * where the kernel reads it. The layout is
          * logical_page_tables[1024] then phys_page_tables[1024], so the offset
          * is 1024 * sizeof(page_table_t*) = 4096 bytes. */
         parent_dir = parent->page_dir;
@@ -5805,6 +5812,9 @@ static void __attribute__((noreturn)) exec_fail_destroyed(void)
         free_user_pages(dir);
         free_page_directory(dir);
     }
+    /* Freed with interrupts off until the record is replaced below: a
+     * handler between the two would count its entry in the freed record. */
+    __asm__ __volatile__("cli");
     free_process(current_proc);
     current_proc = proc_idle;
     current_proc->state = PROC_RUNNING;
@@ -6416,7 +6426,7 @@ interpreter_checked:
 
     stack_page = kmap_temp(stack_phys);
     if (!stack_page) {
-        return -ENOMEM;
+        exec_fail_destroyed(); /* the old image is gone; nothing to return to */
     }
     k_memset(stack_page, 0, PAGE_SIZE);
 
@@ -6487,8 +6497,17 @@ interpreter_checked:
         /* Build the address-space map (VMAs) for the new image so the
          * page-fault handler can demand-page, grow the stack, or segfault. The
          * ELF code/data pages themselves are still eagerly loaded above. */
-        elf_setup_vmas(&current_proc->vm, &img, USER_STACK_BASE,
-                       VM_STACK_MAX_GROWTH);
+        if (elf_setup_vmas(&current_proc->vm, &img, USER_STACK_BASE,
+                           VM_STACK_MAX_GROWTH) != 0) {
+            exec_fail_destroyed(); /* the regions could not be made */
+        }
+        /* RLIMIT_AS: an image whose regions cover more than the limit does
+         * not run; the old image is gone by now, so the process ends. */
+        if (vm_total(&current_proc->vm) > current_proc->rlim[RLIM_AS].cur) {
+            klog(KLOG_WARN, "exec", "refused: the image is past RLIMIT_AS, pid %d",
+                 (int)current_proc->pid);
+            exec_fail_destroyed();
+        }
         /* The new image may report a full descriptor table once of its own. */
         current_proc->vma_reported = 0;
     }
@@ -6536,10 +6555,12 @@ static int32_t sys_fork(isr_params_t *params)
     if (!parent) {
         return -ESRCH;
     }
+    mem_balance();
     /* RLIMIT_NPROC: the processes of the parent's real user, this one
      * included, against the parent's limit; root is not limited. Counted by
      * the real uid at the time, so a process that took a new identity with
-     * setuid counts for that user. */
+     * setuid counts for that user, and counted after the reclaim above,
+     * which may sleep, so two forks cannot both see the last place. */
     if (parent->ruid != 0 && parent->rlim[RLIM_NPROC].cur != RLIM_INFINITY32) {
         process_t *q;
         uint32_t mine = 0;
@@ -6553,7 +6574,6 @@ static int32_t sys_fork(isr_params_t *params)
             return -EAGAIN;
         }
     }
-    mem_balance();
 
     child = alloc_process();
     if (!child) {
@@ -6637,8 +6657,7 @@ static int32_t sys_fork(isr_params_t *params)
      * fault would segfault it. (k_memcpy, not struct assignment, so the
      * freestanding kernel does not need a compiler-emitted memcpy.) */
     if (vm_copy(&child->vm, &parent->vm) != 0) {
-        free_process(child);
-        return -ENOMEM;
+        goto fail_built;
     }
 
     /* The child inherits the parent's current working directory. */
@@ -6655,8 +6674,7 @@ static int32_t sys_fork(isr_params_t *params)
      * inherited OFD gains a reference; inherited sockets gain one too, so the
      * parent and child release independently. */
     if (fd_table_copy(&child->fds, &parent->fds) != 0) {
-        free_process(child);
-        return -ENOMEM;
+        goto fail_built;
     }
     {
         int fdi;
@@ -6710,6 +6728,17 @@ static int32_t sys_fork(isr_params_t *params)
     child->state = PROC_READY;
 
     return (int32_t)child->pid;
+
+fail_built:
+    /* Everything built for the child so far goes back: the working
+     * directory's hold, the kernel stack, the copied pages and the
+     * directory, then the record. */
+    vfs_cwd_clear(child);
+    kstack_free(child->kernel_stack);
+    free_user_pages(child_dir);
+    free_page_directory(child_dir);
+    free_process(child);
+    return -ENOMEM;
 }
 
 
@@ -11696,31 +11725,34 @@ static int32_t sys_prlimit64(isr_params_t *params)
     uint32_t resource = params->ecx;
     uint32_t newp = params->edx;
     uint32_t oldp = params->esi;
-    process_t *p = rlimit_target(pid);
+    process_t *p;
     uint32_t cur32, max32;
     uint32_t in[4];
+    uint32_t out[4]; /* cur_lo, cur_hi, max_lo, max_hi */
+    int rc = 0;
 
-    if (!p) {
-        return get_process(pid) ? -EPERM : -ESRCH;
-    }
+    /* The user copies may sleep, and another process may end while they
+     * do, so the record is looked up between them and not held across one:
+     * the new limits are read first, the old are written last. */
     if (newp && copy_from_user(in, (const void __user *)newp, sizeof(in)) != 0) {
         return -EFAULT;
     }
-    if (oldp) {
-        uint32_t out[4]; /* cur_lo, cur_hi, max_lo, max_hi */
-        rlimit_for(p, resource, &cur32, &max32);
-        out[0] = cur32;
-        out[1] = (cur32 == RLIM_INF32) ? 0xFFFFFFFFu : 0u; /* 64-bit RLIM_INFINITY */
-        out[2] = max32;
-        out[3] = (max32 == RLIM_INF32) ? 0xFFFFFFFFu : 0u;
-        if (copy_to_user((void __user *)oldp, out, sizeof(out)) != 0) {
-            return -EFAULT;
-        }
+    p = rlimit_target(pid);
+    if (!p) {
+        return get_process(pid) ? -EPERM : -ESRCH;
     }
+    rlimit_for(p, resource, &cur32, &max32);
+    out[0] = cur32;
+    out[1] = (cur32 == RLIM_INF32) ? 0xFFFFFFFFu : 0u; /* 64-bit RLIM_INFINITY */
+    out[2] = max32;
+    out[3] = (max32 == RLIM_INF32) ? 0xFFFFFFFFu : 0u;
     if (newp) {
-        return rlimit_set(p, resource, rlimit_from64(in[0], in[1]), rlimit_from64(in[2], in[3]));
+        rc = rlimit_set(p, resource, rlimit_from64(in[0], in[1]), rlimit_from64(in[2], in[3]));
     }
-    return 0;
+    if (oldp && copy_to_user((void __user *)oldp, out, sizeof(out)) != 0) {
+        return -EFAULT;
+    }
+    return rc;
 }
 
 /* dup3(330): like dup2 but oldfd == newfd is -EINVAL and a flag can set

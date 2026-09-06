@@ -704,38 +704,27 @@ void _start(void)
         socketcall(SC_SETSOCKOPT, args);
     }
 
-    /* The table the sockets are registered in is four, and a fifth is refused
-       rather than opened as a socket nothing is ever delivered to. Closing one
-       gives the slot back. */
+    /* A registration is a record from the heap with its queue: eight raw
+       sockets beside `fd_a`, twice the four the table once held, all open
+       at once, and each closed again. */
     {
-        int held[4];
-        int extra;
+        int held[8];
 
-        for (i = 0; i < 4; i++) {
-            held[i] = -1;
-        }
-        /* fd_a holds one already; three more fill the table. */
-        for (i = 0; i < 3; i++) {
+        for (i = 0; i < 8; i++) {
             held[i] = raw_socket(args);
-            check_n(held[i] >= 0, "a raw socket within the table's size opens", held[i]);
+            check_n(held[i] >= 0, "a raw socket past the four the table held opens", held[i]);
         }
-        extra = raw_socket(args);
-        check_n(extra == -ENOBUFS, "one past the table is refused", extra);
-        sys_close(held[0]);
-        held[0] = raw_socket(args);
-        check_n(held[0] >= 0, "and closing one gives the slot back", held[0]);
-        for (i = 0; i < 3; i++) {
+        for (i = 0; i < 8; i++) {
             if (held[i] >= 0) {
                 sys_close(held[i]);
             }
         }
     }
 
-    /* The pool the sockets come from is shared with everything else, and a raw
-       socket must not be able to starve the machine of it. Two children fill
-       it, since one process cannot hold enough descriptors to; the next socket
-       must then be refused, and the socket this process already has must go on
-       receiving while it is. */
+    /* Sockets come from the heap, and a process is bounded by its descriptor
+       limit, not by a pool: two children open sockets until their tables are
+       full and hold them, and a socket for this process still opens beside
+       them, and the socket it already has goes on receiving. */
     {
         int kids[2], k;
 
@@ -744,9 +733,8 @@ void _start(void)
             if (kids[k] == 0) {
                 int held = 0;
 
-                /* Ordinary datagram sockets, not raw ones: the raw table is
-                   four, and what is being filled here is the pool behind every
-                   socket the machine has. */
+                /* Ordinary datagram sockets, not raw ones, up to the
+                   descriptor limit. */
                 for (;;) {
                     args[0] = AF_INET;
                     args[1] = SOCK_DGRAM;
@@ -761,26 +749,26 @@ void _start(void)
                 sys_exit(held > 0 ? 0 : 4);
             }
         }
-        check(kids[0] > 0 && kids[1] > 0, "two children forked to fill the pool");
+        check(kids[0] > 0 && kids[1] > 0, "two children forked to fill their tables");
         nap_ms(700);
 
         args[0] = AF_INET;
         args[1] = SOCK_DGRAM;
         args[2] = 0;
         n = socketcall(SC_SOCKET, args);
-        check_n(n == -ENOMEM, "a socket is refused once the pool is full", n);
+        check_n(n >= 0, "a socket opens while two others hold a thousand each", n);
         if (n >= 0) {
             sys_close(n);
         }
 
         /* And the descriptor this process already had still works, which is
-           the property that matters: a machine whose pool is exhausted must
+           the property that matters: a machine whose tables are full must
            not drop the session someone is already using. */
         args[0] = GATEWAY_IP;
         n = socketcall(SC_PING, args);
         check_n(n >= 0, "the machine can still reach the gateway", n);
         n = wait_for_icmp(args, fd_a, frame_a, (int)sizeof(frame_a), ICMP_ECHO_REPLY, 2000);
-        check(n > 0, "and a socket opened before the pool filled still receives");
+        check(n > 0, "and a socket opened before the tables filled still receives");
 
         for (k = 0; k < 2; k++) {
             status = -1;
@@ -791,7 +779,7 @@ void _start(void)
         args[1] = SOCK_DGRAM;
         args[2] = 0;
         n = socketcall(SC_SOCKET, args);
-        check_n(n >= 0, "and the pool comes back when they are closed", n);
+        check_n(n >= 0, "and a socket opens after they are closed", n);
         if (n >= 0) {
             sys_close(n);
         }

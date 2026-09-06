@@ -19,8 +19,9 @@
  *
  * The queue is a list of the sleepers' own records (`struct wq_waiter` in
  * process.h): a process sleeps with the record in its own record, and a
- * poller supplies one per watched object from its stack, so no sleep
- * allocates and no queue has a size. The single-CPU lock between a sleeper
+ * poller supplies one per watched object, from an array it took from the
+ * heap before it began, so entering a queue allocates nothing and no queue
+ * has a size. The single-CPU lock between a sleeper
  * and an IRQ waker is just "interrupts off"; there is no second core to
  * race.
  */

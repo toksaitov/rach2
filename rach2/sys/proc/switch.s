@@ -56,7 +56,7 @@ switch_context:
 
     # Program the incoming process's TLS base into the shared GDT TLS descriptor
     # (entry 6) and refresh %gs, so %gs-relative reads resolve to this process's
-    # TCB -- the i386 equivalent of Linux load_TLS() on __switch_to. Done with
+    # TCB, the i386 equivalent of Linux load_TLS() on __switch_to. Done with
     # interrupts disabled (the switch can be entered from syscall context with
     # IF=1) so a nested IRQ never observes a half-written descriptor. The actual
     # gs/fs/es/ds the user runs with are restored from the trapframe by the

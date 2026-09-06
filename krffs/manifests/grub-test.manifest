@@ -115,6 +115,8 @@ text 0644 /etc/passwd root:x:0:0:root:/root:/bin/sh\ntest:x:1000:1000:test:/home
 file 0600 /etc/shadow krffs/shadow
 text 0644 /etc/group root:x:0:\ntest:x:1000:\n
 text 0644 /etc/shells /bin/sh\n
+dir 0755 /etc/rach2
+text 0644 /etc/rach2/limits # The limits every session starts with: a name, the soft value and the\n# hard one; unlimited for none. Root may raise them.\nnproc 256 512\nnofile 1024 1024\nas unlimited unlimited\n
 text 0644 /etc/profile export PATH=/bin:/usr/bin\nexport HOME="${HOME:-/root}"\ncd "$HOME"\n
 text 0644 /etc/resolv.conf nameserver 10.0.2.3\n
 text 0644 /etc/hosts 127.0.0.1   localhost\n10.0.2.2    gateway\n10.0.2.3    dns\n10.0.2.15   rach2\n

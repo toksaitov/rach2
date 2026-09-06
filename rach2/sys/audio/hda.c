@@ -32,11 +32,6 @@
 /* PCI device info */
 static pci_device_t hda_pci;
 
-/*
- * The vector this controller's messages arrive on. Vectors 48 to 63 are the
- * kernel's message vectors; the xHCI takes the first and this takes the
- * second.
- */
 /* The vector the controller's messages arrive on, given by `isr_alloc_vector`
  * when they are enabled; -1 before. */
 static int msi_vector = -1;

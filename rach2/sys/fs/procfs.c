@@ -759,8 +759,8 @@ static void ap_ticks_as_seconds(struct procfs_text *t, uint32_t ticks)
  *
  * Both are counted from delivered ticks rather than timed. Interrupts are off
  * in several paths here and a tick can be lost, so what these say is what the
- * timer actually delivered, which is the honest number and the one that makes
- * the two add up to each other. Both counters are read once, into locals: a
+ * timer actually delivered, which is the number that makes the two add up
+ * to each other. Both counters are read once, into locals: a
  * tick landing between two reads of the same file would report a total and an
  * idle from different moments, which is what the snapshot exists to prevent.
  */
@@ -1408,7 +1408,9 @@ int procfs_open(const struct vpath *vp, int flags)
     } else {
         len = procfs_gen_cmdline(&text, pid);
     }
-    if (len < 0) {
+    /* No memory first: a generator that ran out says so with -1, which is
+       not an error of its own. */
+    if (len < 0 && !text.nomem) {
         kfree(text.buf);
         kfree(f);
         return len;
@@ -1456,6 +1458,7 @@ int procfs_open(const struct vpath *vp, int flags)
 
     fd = fd_alloc(&current_proc->fds);
     if (fd < 0) {
+        kfree(f->data);
         kfree(f);
         return -EMFILE;
     }

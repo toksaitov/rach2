@@ -115,10 +115,11 @@ uint32_t isr_interrupt_total(void);
 /** How many handlers a vector's chain has. */
 #define ISR_MAX_VECTOR_HANDLERS 4
 
-/* The vectors a device may be given for its messages: above the 8259's
- * sixteen at 32 and below the syscall's 128. */
+/* The vectors a device may be given for its messages: the sixteen above
+ * the 8259's, which are the ones the IDT has entries for; a seventeenth
+ * device is refused. */
 #define ISR_MSI_FIRST 48
-#define ISR_MSI_LAST  127
+#define ISR_MSI_LAST  63
 
 /**
  * A vector for a device's messages, the lowest not yet given, or -1 when

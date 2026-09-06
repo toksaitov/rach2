@@ -54,7 +54,8 @@
  * and the time spent waiting for the limit does not count.
  *
  * `lagprobe dirty`, under a lag of one tick: a megabyte is written to a
- * file on the mounted volume and left dirty in the buffer cache, then the
+ * file on the mounted KRFFS volume, whose writes stay dirty in the buffer
+ * cache until a sync where the FAT32 volume's go through, then the
  * probe takes all but a twentieth of the machine's memory in pages,
  * which makes the caches give their frames back, and then makes one more
  * mapping, the system call in which dirty buffers are written back; the
@@ -953,10 +954,12 @@ static void run_dirty(void)
     if (syscall2(SYS_MKDIR, (int)"/ly", 0755) != 0) {
         fail("mkdir /ly");
     }
-    if (sys5(SYS_MOUNT, (int)"/dev/disk0p2", (int)"/ly", (int)"vfat", 0, 0) != 0) {
-        fail("the writable mount of the second partition");
+    /* The KRFFS volume, whose writes stay dirty in the buffer cache until a
+       sync; the FAT32 one writes its data through. */
+    if (sys5(SYS_MOUNT, (int)"/dev/disk0p1", (int)"/ly", (int)"krffs", 0, 0) != 0) {
+        fail("the writable mount of the first partition");
     }
-    fd = syscall3(SYS_OPEN, (int)"/ly/DIRTY.BIN", O_WRONLY | O_CREAT, 0644);
+    fd = syscall3(SYS_OPEN, (int)"/ly/dirty.bin", O_WRONLY | O_CREAT, 0644);
     if (fd < 0) {
         fail("creating the dirty file");
     }
@@ -998,7 +1001,7 @@ static void run_dirty(void)
     if (syscall1(SYS_SYNC, 0) != 0) {
         fail("sync after the pressure");
     }
-    fd = syscall3(SYS_OPEN, (int)"/ly/DIRTY.BIN", O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (int)"/ly/dirty.bin", O_RDONLY, 0);
     if (fd < 0) {
         say_numbers((unsigned)-fd, meminfo_kb("MemFree:"), 0, 0);
         fail("reopening the dirty file");
@@ -1014,7 +1017,7 @@ static void run_dirty(void)
         }
     }
     syscall1(SYS_CLOSE, fd);
-    write_and_sync("/ly", "/ly/AFTER.TXT", "/ly/AGAIN.TXT");
+    write_and_sync("/ly", "/ly/after.txt", "/ly/again.txt");
     if (syscall2(SYS_UMOUNT2, (int)"/ly", 0) != 0) {
         fail("umount2 of the volume");
     }

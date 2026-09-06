@@ -129,9 +129,17 @@ static int test_heap(void)
 
     kheap_stats(&pages0, &bytes0);
     for (i = 0; i < 1000 && ok; i++) {
-        for (j = 0; j < 16; j++) {
-            uint32_t size = (j % 8 == 7) ? 3000 + i : (16u << (j % 8)) - (i % 5);
+        uint32_t sizes[16];
 
+        for (j = 0; j < 16; j++) {
+            held[j] = NULL;
+        }
+        /* Every class from 16 to 2048 bytes, a byte or so short of it, and
+           a large object past the classes: sixteen objects, two per class. */
+        for (j = 0; j < 16; j++) {
+            uint32_t size = (j == 15) ? 3000 + i : (16u << (j % 8)) - (i % 5);
+
+            sizes[j] = size;
             held[j] = kmalloc(size);
             if (!held[j]) {
                 ok = 0;
@@ -140,8 +148,16 @@ static int test_heap(void)
             k_memset(held[j], (int)(j + i), size);
         }
         for (j = 0; j < 16; j++) {
-            if (held[j] && ((uint8_t *)held[j])[0] != (uint8_t)(j + i)) {
-                ok = 0;
+            uint32_t k;
+
+            if (!held[j]) {
+                continue;
+            }
+            for (k = 0; k < sizes[j]; k++) {
+                if (((uint8_t *)held[j])[k] != (uint8_t)(j + i)) {
+                    ok = 0;
+                    break;
+                }
             }
             kfree(held[j]);
         }
@@ -1467,7 +1483,9 @@ static void exec_program(int argc, char *argv[])
 
     /* The ELF segments are loaded eagerly above; these VMAs let the
      * demand-paging fault handler resolve later heap/stack/mmap faults. */
-    elf_setup_vmas(&user_proc->vm, &img, USER_STACK_BASE, VM_STACK_MAX_GROWTH);
+    if (elf_setup_vmas(&user_proc->vm, &img, USER_STACK_BASE, VM_STACK_MAX_GROWTH) != 0) {
+        k_panic("boot: no memory for the first process's regions");
+    }
 
     /* The first user process of a normal boot is the persistent /sbin/init.
      * Capture that before claiming init_pid, because a real init must NOT own

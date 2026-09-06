@@ -5,18 +5,30 @@
 #include "../mm/kheap.h"
 #include "sched.h"
 
-/* The offsets switch.s reads from the process record, checked here against
- * the compiler's: a field added before one of them makes an array size
- * negative and stops the build. */
+/* The offsets switch.s reads from the process record, as `.set` values
+ * there and as numbers here; a field added before one of them stops the
+ * GNU build, and TinyCC's, which cannot fold an offset into an array size,
+ * checks them at boot in `init_proc`. */
+#define PROC_OFF(field) ((uint32_t)&((process_t *)0)->field)
+#define PROC_OFF_REGS_ESP     48u
+#define PROC_OFF_CR3          52u
+#define PROC_OFF_KERNEL_STACK 56u
+#define PROC_OFF_TLS_BASE     148u
+#define PROC_OFF_PAGE_DIR     2128u
+#ifndef __TINYC__
 typedef char process_offsets_fit[(__builtin_offsetof(struct process, regs) +
                                           __builtin_offsetof(cpu_regs_t, esp) ==
-                                      48 &&
-                                  __builtin_offsetof(struct process, cr3) == 52 &&
-                                  __builtin_offsetof(struct process, kernel_stack) == 56 &&
-                                  __builtin_offsetof(struct process, tls_base) == 148 &&
-                                  __builtin_offsetof(struct process, page_dir) == 2128)
+                                      PROC_OFF_REGS_ESP &&
+                                  __builtin_offsetof(struct process, cr3) == PROC_OFF_CR3 &&
+                                  __builtin_offsetof(struct process, kernel_stack) ==
+                                      PROC_OFF_KERNEL_STACK &&
+                                  __builtin_offsetof(struct process, tls_base) ==
+                                      PROC_OFF_TLS_BASE &&
+                                  __builtin_offsetof(struct process, page_dir) ==
+                                      PROC_OFF_PAGE_DIR)
                                      ? 1
                                      : -1];
+#endif
 
 process_t *proc_list;
 process_t *proc_idle;
@@ -46,14 +58,20 @@ extern volatile uint32_t init_pid;
 static uint32_t next_pid = 0;
 
 /**
- * Reset the process table to its boot state.
+ * Reset the process table to its boot state and check the record's layout.
  *
  * `switch.s` hard-codes the byte offsets of the fields it reads during a
- * context switch; `process_offsets_fit` above checks them against the
- * record at build time.
+ * context switch; `process_offsets_fit` above checks them at build time
+ * where the compiler can, and this checks them again here for the build
+ * that cannot.
  */
 void init_proc(void)
 {
+    if (PROC_OFF(regs.esp) != PROC_OFF_REGS_ESP || PROC_OFF(cr3) != PROC_OFF_CR3 ||
+        PROC_OFF(kernel_stack) != PROC_OFF_KERNEL_STACK ||
+        PROC_OFF(tls_base) != PROC_OFF_TLS_BASE || PROC_OFF(page_dir) != PROC_OFF_PAGE_DIR) {
+        k_panic("process: the record's layout is not what switch.s reads");
+    }
     proc_list = NULL;
     proc_tail = NULL;
     proc_idle = NULL;
@@ -95,7 +113,7 @@ void process_count_fork(void)
 }
 
 /**
- * Claim the first unused process slot and return it ready to run.
+ * A process record from the heap, on the list and ready to run.
  *
  * The new pid is bounded to the positive int range, since the /proc path
  * layer has pid as an int, and any still-live pid is skipped so live

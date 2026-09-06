@@ -190,8 +190,9 @@ void block_partition_init(
  * lands in the request's page and not in memory the caller reused. The
  * request is held by its caller and by its device and freed when both have
  * let go: quarantined until the late completion, which lets go for the
- * device. No two requests ever share a generation, and a completion naming
- * a request that is no longer live, or a generation that is not its, is
+ * device. Each request takes the next value of a counter as its
+ * generation, so no two live requests share one, and a completion naming a
+ * request that is no longer live, or a generation that is not its, is
  * dropped with a record.
  */
 struct block_request {

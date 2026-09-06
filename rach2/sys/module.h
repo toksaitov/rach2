@@ -6,8 +6,8 @@
 #include "../vendor/multiboot.h"
 
 /* Policy: the boot modules recorded. A boot here passes one or two, the
- * root image and a second file system; a loader that passes more than
- * eight is refused by name at boot rather than read in part. */
+ * root image and a second file system; what a loader passes past eight is
+ * left unread, with a record saying how many. */
 #define MAX_MODULES 8
 
 /* One boot module the bootloader handed us. */
