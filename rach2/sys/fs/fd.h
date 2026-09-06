@@ -99,7 +99,7 @@ struct vfs_mount;
  */
 struct open_file {
     uint32_t refcount;           /* Number of descriptors sharing this OFD */
-    uint32_t offset;             /* Shared read/write offset */
+    uint64_t offset;             /* Shared read/write offset */
     uint64_t raw_offset;         /* Shared offset for the raw disk windows */
     uint32_t status_flags;       /* Shared O_APPEND/O_NONBLOCK (OFD_* above) */
     /* A description on a mounted file system holds its mount, its node, and

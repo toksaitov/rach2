@@ -31,6 +31,9 @@
 #define EX_EOC 0xFFFFFFFFu
 #define EX_BAD 0xFFFFFFF7u
 
+/* The largest offset a 64-bit seek can hand a write; the format allows it. */
+#define EX_FILE_LIMIT (((uint64_t)0x7FFFFFFFu << 32) | 0xFFFFFFFFu)
+
 #define UPCASE_HELD 16384u /* a stored table up to this size is kept per mount */
 #define SET_MAX     19     /* the file entry, the stream, and up to 17 name entries */
 
@@ -2848,8 +2851,9 @@ static int32_t ex_write(struct vfs_mount *mnt, void *handle, const void *buf, ui
     if (count == 0) {
         return 0;
     }
-    if (offset >= 0xFFFFFFFFu || count > 0xFFFFFFFFu - offset) {
-        return -EFBIG; /* the kernel's file offset is 32 bits */
+    if (offset > EX_FILE_LIMIT || count > EX_FILE_LIMIT - offset) {
+        klog(KLOG_WARN, "exfat", "write: offset past the format's limit");
+        return -EFBIG;
     }
     rc = begin_write(mnt, em);
     if (rc != 0) {
@@ -2960,7 +2964,8 @@ static int ex_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
     if (n->is_dir) {
         return -EISDIR;
     }
-    if (size > 0xFFFFFFFFu) {
+    if (size > EX_FILE_LIMIT) {
+        klog(KLOG_WARN, "exfat", "truncate: size past the format's limit");
         return -EFBIG;
     }
     rc = begin_write(mnt, em);
@@ -3517,12 +3522,11 @@ static int ex_check_volume(struct ex_mount *em)
 
     k_memset(&w, 0, sizeof(w));
     w.em = em;
-    if (em->clusters + 2 > FAT_WALK_CLUSTERS) {
-        klog(KLOG_WARN, "exfat", "check: %d clusters is more than the walk covers; read-only",
-             (int)em->clusters);
+    if (fat_walk_acquire(em->clusters) != 0) {
+        klog(KLOG_WARN, "exfat", "check: no memory for the walk's %d KiB bitmap; read-only",
+             (int)(fat_walk_bytes(em->clusters) / 1024));
         return 1;
     }
-    fat_walk_acquire(em->clusters);
     klog(KLOG_INFO, "exfat", "check: the volume was not unmounted cleanly; checking");
     /* The system objects first: the root's chain, the bitmap's, the
      * up-case table's, disjoint and allocated. */

@@ -46,7 +46,7 @@ sh "$REPO/tools/image/mkext2.sh" "$REPO/krffs/manifests/os-real.manifest" "$VOL"
     || fail "the os-real ext2 volume"
 rm -f "$VOL2"; : > "$VOL2"
 E2FSPROGS_FAKE_TIME=1 mke2fs -q -F -t ext2 -b 4096 -I 128 \
-    -O sparse_super,large_file,filetype,^dir_index,^resize_inode,^ext_attr,^has_journal,^extent,^64bit,^flex_bg,^metadata_csum,^huge_file,^dir_nlink,^extra_isize \
+    -O sparse_super,large_file,filetype,^dir_index,resize_inode,^ext_attr,^has_journal,^extent,^64bit,^flex_bg,^metadata_csum,^huge_file,^dir_nlink,^extra_isize \
     "$VOL2" 8M > /dev/null 2>&1 || fail "the second volume"
 {
     dd if=/dev/zero bs=1048576 count=1 2>/dev/null

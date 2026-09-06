@@ -41,10 +41,11 @@
 #define EXT2_NAME_MAX    255u
 #define EXT2_FAST_LINK   60u /* the bytes of `i_block` a fast link lives in */
 
-#define EXT2_COMPAT_DIR_INDEX  0x0020u
-#define EXT2_RO_SPARSE_SUPER   0x0001u
-#define EXT2_RO_LARGE_FILE     0x0002u
-#define EXT2_INCOMPAT_FILETYPE 0x0002u
+#define EXT2_COMPAT_RESIZE_INODE 0x0010u
+#define EXT2_COMPAT_DIR_INDEX    0x0020u
+#define EXT2_RO_SPARSE_SUPER     0x0001u
+#define EXT2_RO_LARGE_FILE       0x0002u
+#define EXT2_INCOMPAT_FILETYPE   0x0002u
 
 #define EXT2_VALID_FS 0x0001u
 #define EXT2_ERROR_FS 0x0002u
@@ -62,7 +63,7 @@
 #define PATH_DEPTH         64 /* directories climbed by `ext2_path` before ENAMETOOLONG */
 #define BCACHE_BLOCK_SHIFT 12 /* log2 of BCACHE_BLOCK_BYTES */
 
-/* One held inode. `too_big` marks a size past the kernel's offset. */
+/* One held inode. */
 struct ext2_node {
     struct ext2_node *next; /* the mount's list of nodes in memory */
     int used;
@@ -75,7 +76,6 @@ struct ext2_node {
     uint32_t blocks;
     uint32_t block[EXT2_NBLOCKS];
     uint32_t atime, mtime, ctime;
-    int too_big;
     int unlinked; /* no name left; the inode and its blocks go at the last put */
 };
 
@@ -85,7 +85,9 @@ struct ext2_mount {
     struct vfs_mount *mnt;
     uint32_t block_size;
     uint32_t block_shift; /* log2 of the block size: the kernel has no 64-bit division */
+    uint64_t file_limit;  /* the largest regular file the pointers and i_blocks address */
     uint32_t blocks, inodes, first_data, bpg, ipg, groups, inode_size, first_ino;
+    uint32_t reserved_gdt; /* blocks kept after each descriptor table for a grow */
     uint32_t r_blocks;
     uint32_t compat, incompat, ro_compat;
     uint32_t state;
@@ -93,7 +95,7 @@ struct ext2_mount {
     uint64_t free_blocks, free_inodes;
     int valid_cleared;   /* the superblock's valid bit was cleared by this mount */
     uint32_t alloc_hint; /* the block after the last one given out */
-    uint8_t gd[EXT2_GROUPS * 32];
+    uint8_t *gd; /* the group descriptors, `groups * 32` bytes, from the heap */
     struct ext2_node *nodes; /* the nodes in memory, from the heap */
 };
 
@@ -180,26 +182,23 @@ static int read_bytes(struct ext2_mount *em, uint64_t off, void *dst, uint32_t l
 
 /* ---- the structural blocks ---- */
 
+static int is_power(uint32_t g, uint32_t base)
+{
+    while (g % base == 0) {
+        g /= base;
+    }
+    return g == 1;
+}
+
 /* Whether group `g` keeps a copy of the superblock and the descriptors: with
- * `sparse_super`, groups 0 and 1 and the powers of 3, 5 and 7; without it,
- * every group. */
+ * `sparse_super`, groups 0 and 1 and the powers of 3, 5 and 7, each power
+ * of one base alone, so 15 has none; without it, every group. */
 static int has_super(const struct ext2_mount *em, uint32_t g)
 {
-    uint32_t p = g;
-
     if (!(em->ro_compat & EXT2_RO_SPARSE_SUPER) || g <= 1) {
         return 1;
     }
-    while (p % 3 == 0) {
-        p /= 3;
-    }
-    while (p % 5 == 0) {
-        p /= 5;
-    }
-    while (p % 7 == 0) {
-        p /= 7;
-    }
-    return p == 1;
+    return is_power(g, 3) || is_power(g, 5) || is_power(g, 7);
 }
 
 /* The blocks of the descriptor table, after each superblock copy. */
@@ -283,14 +282,8 @@ static int inode_load(struct ext2_mount *em, uint32_t ino, struct ext2_node *n)
     for (i = 0; i < (int)EXT2_NBLOCKS; i++) {
         n->block[i] = le32(raw + 40 + i * 4);
     }
-    n->too_big = 0;
     if ((n->mode & S_IFMT_) == S_IFREG_) {
-        uint32_t high = le32(raw + 108);
-
-        n->size |= (uint64_t)high << 32;
-        if (high != 0) {
-            n->too_big = 1;
-        }
+        n->size |= (uint64_t)le32(raw + 108) << 32;
     }
     return 0;
 }
@@ -588,9 +581,6 @@ static int ext2_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     struct ext2_node *n = node;
 
     (void)mnt;
-    if (n->too_big) {
-        return -EOVERFLOW;
-    }
     k_memset(st, 0, sizeof(*st));
     st->mode = n->mode;
     st->uid = n->uid;
@@ -627,9 +617,6 @@ static int ext2_open(struct vfs_mount *mnt, void *node, int flags, void **handle
 
     (void)mnt;
     (void)flags;
-    if (n->too_big) {
-        return -EOVERFLOW;
-    }
     if (type == S_IFCHR_ || type == S_IFBLK_) {
         return -EACCES;
     }
@@ -814,6 +801,7 @@ static void ext2_unmount(struct vfs_mount *mnt)
         node_drop(em, em->nodes);
     }
     mnt->priv = 0;
+    kfree(em->gd);
     kfree(em);
 }
 
@@ -956,7 +944,8 @@ static int write_bytes(struct ext2_mount *em, uint64_t off, const void *src, uin
         if (take > len) {
             take = len;
         }
-        b = bcache_get(em->dev, blk);
+        /* A whole block is not read first: nothing of it survives. */
+        b = take == BCACHE_BLOCK_BYTES ? bcache_get_blank(em->dev, blk) : bcache_get(em->dev, blk);
         if (!b) {
             return -EIO;
         }
@@ -1015,6 +1004,21 @@ static uint64_t inode_offset(const struct ext2_mount *em, uint32_t ino)
  * Write inode `n` through: the fields this driver keeps, into the 128
  * bytes read back first so that what it does not keep stays as it was.
  */
+/**
+ * Sets the superblock's `large_file` read-only-compatible flag, written
+ * through. e2fsck expects it once a regular file reaches 2 GiB, and the
+ * flag is set before the inode that needs it is stored, so a stop between
+ * the two leaves a volume it does not complain about.
+ */
+static int large_file_flag(struct ext2_mount *em)
+{
+    uint8_t raw[4];
+
+    em->ro_compat |= EXT2_RO_LARGE_FILE;
+    LE32_PUT(raw, em->ro_compat);
+    return write_bytes(em, 1024 + 100, raw, 4, 1);
+}
+
 static int inode_store(struct ext2_mount *em, const struct ext2_node *n)
 {
     uint8_t raw[128];
@@ -1040,6 +1044,15 @@ static int inode_store(struct ext2_mount *em, const struct ext2_node *n)
     }
     LE16_PUT(raw + 120, (n->uid >> 16) & 0xFFFFu);
     LE16_PUT(raw + 122, (n->gid >> 16) & 0xFFFFu);
+    if ((n->mode & S_IFMT_) == S_IFREG_) {
+        LE32_PUT(raw + 108, (uint32_t)(n->size >> 32));
+        if (n->size >= 0x80000000u && !(em->ro_compat & EXT2_RO_LARGE_FILE)) {
+            rc = large_file_flag(em);
+            if (rc != 0) {
+                return rc;
+            }
+        }
+    }
     return write_bytes(em, at, raw, sizeof(raw), 1);
 }
 
@@ -1959,9 +1972,6 @@ static int ext2_setattr(struct vfs_mount *mnt, void *node, int what, const struc
     if (rc != 0) {
         return rc;
     }
-    if (n->too_big) {
-        return -EOVERFLOW;
-    }
     vfs_ns_lock(mnt);
     if (what & VFS_SET_MODE) {
         n->mode = (n->mode & S_IFMT_) | (st->mode & 07777u);
@@ -1984,6 +1994,20 @@ static int ext2_setattr(struct vfs_mount *mnt, void *node, int what, const struc
     return rc;
 }
 
+/**
+ * Refuses an offset past the largest file this volume can address, by
+ * name: the limit is the block pointers' reach or the 32-bit `i_blocks`,
+ * whichever is smaller. The seek that put the descriptor there was legal;
+ * the write or truncate is not.
+ */
+static int past_limit(const struct ext2_mount *em, const char *op, uint64_t offset)
+{
+    klog(KLOG_WARN, "ext2", "%s: offset %d MiB is past the file limit of %d MiB "
+         "for %d-byte blocks", op, (int)(offset >> 20), (int)(em->file_limit >> 20),
+         (int)em->block_size);
+    return -EFBIG;
+}
+
 static int ext2_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
 {
     struct ext2_mount *em = em_of(mnt);
@@ -1997,11 +2021,8 @@ static int ext2_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
     if (rc != 0) {
         return rc;
     }
-    if (n->too_big) {
-        return -EOVERFLOW;
-    }
-    if (size > 0xFFFFFFFFu) {
-        return -EFBIG;
+    if (size > em->file_limit) {
+        return past_limit(em, "truncate", size);
     }
     vfs_ns_lock(mnt);
     assert_locked(mnt);
@@ -2068,15 +2089,12 @@ static int32_t ext2_write(struct vfs_mount *mnt, void *handle, const void *buf, 
     if (count == 0) {
         return 0;
     }
-    if (offset >= 0xFFFFFFFFu || count > 0xFFFFFFFFu - offset) {
-        return -EFBIG;
+    if (offset > em->file_limit || count > em->file_limit - offset) {
+        return past_limit(em, "write", offset);
     }
     rc = assert_writable(mnt, em);
     if (rc != 0) {
         return rc;
-    }
-    if (n->too_big) {
-        return -EOVERFLOW;
     }
     end = offset + count;
     vfs_ns_lock(mnt);
@@ -2112,15 +2130,15 @@ static int32_t ext2_write(struct vfs_mount *mnt, void *handle, const void *buf, 
     /* The bytes: each block allocated as it is reached, its pointer
      * written after the block is in the bitmap, the data written back. */
     while (done < count) {
-        uint32_t at = (uint32_t)(offset + done);
-        uint32_t in_block = at % em->block_size;
+        uint64_t at = offset + done;
+        uint32_t in_block = (uint32_t)at & (em->block_size - 1);
         uint32_t take = em->block_size - in_block;
         uint32_t b;
 
         if (take > count - done) {
             take = count - done;
         }
-        rc = map_alloc(em, n, at / em->block_size, &b, &fresh);
+        rc = map_alloc(em, n, (uint32_t)(at >> em->block_shift), &b, &fresh);
         if (rc != 0) {
             goto out;
         }
@@ -2766,16 +2784,16 @@ static int ext2_rename(struct vfs_mount *mnt, void *olddir, const char *oldname,
  * free. The group descriptors' free counts are recomputed from the bitmaps
  * and not believed, because a crash leaves them stale.
  *
- * The walk keeps its state here rather than on the stack: the node of each
- * directory level, the hard links met with their expected and found
- * counts, the reached-inode set and one bitmap block. A volume with more
- * inodes than the set, more blocks than the shared bitmap, a directory
- * deeper than the levels or more hard-linked files than the table mounts
- * read-only when dirty and says which limit.
+ * The walk keeps its state on the heap rather than on the stack: the node
+ * of each directory level, the hard links met with their expected and
+ * found counts, the reached-inode set, one bit per inode of the volume,
+ * and one bitmap block; the block bitmap is the one the FAT walks share.
+ * A dirty volume whose set or bitmap the free memory cannot hold, a
+ * directory deeper than the levels or more hard-linked files than the
+ * table mounts read-only and says which.
  */
-#define EXT2_CHECK_INODES (1u << 20)
-#define EXT2_CHECK_DEPTH  32
-#define EXT2_CHECK_LINKS  512
+#define EXT2_CHECK_DEPTH 32
+#define EXT2_CHECK_LINKS 512
 
 struct ext2_link {
     uint32_t ino;
@@ -2789,11 +2807,43 @@ struct ext2_check {
     uint32_t lost, orphans, links;
     struct ext2_link link[EXT2_CHECK_LINKS];
     struct ext2_node node[EXT2_CHECK_DEPTH];
-    uint8_t seen[EXT2_CHECK_INODES / 8];
+    uint8_t *seen; /* `(inodes + 7) / 8` bytes */
     uint8_t bitmap[4096];
 };
 
-static struct ext2_check ext2_check_state; /* one check at a time, under the walk lock */
+/**
+ * The check's state and both bitmaps, taken together and given back
+ * together: the block bitmap through `fat_walk_acquire`, which counts the
+ * free frames first, and the state and inode set from the heap. NULL when
+ * any of them is refused, with nothing held.
+ */
+static struct ext2_check *check_state(struct ext2_mount *em)
+{
+    struct ext2_check *c;
+
+    if (fat_walk_acquire(em->blocks) != 0) {
+        return 0;
+    }
+    c = kzalloc(sizeof(*c));
+    if (c) {
+        c->seen = kzalloc((em->inodes + 7) / 8);
+    }
+    if (!c || !c->seen) {
+        fat_walk_release();
+        if (c) {
+            kfree(c);
+        }
+        return 0;
+    }
+    c->em = em;
+    return c;
+}
+
+static void check_state_free(struct ext2_check *c)
+{
+    kfree(c->seen);
+    kfree(c);
+}
 
 static int check_fault(struct ext2_check *c, uint32_t ino, const char *why)
 {
@@ -3021,7 +3071,7 @@ static int check_dir(struct ext2_check *c, uint32_t ino, uint32_t parent, int de
     if (rc != 0) {
         return rc;
     }
-    if (n->size == 0 || (n->size & (em->block_size - 1)) != 0 || n->too_big) {
+    if (n->size == 0 || (n->size & (em->block_size - 1)) != 0 || n->size > 0xFFFFFFFFu) {
         return check_fault(c, ino, "a directory size that is not whole blocks");
     }
     nblocks = (uint32_t)(n->size >> em->block_shift);
@@ -3182,25 +3232,18 @@ static int check_bitmaps(struct ext2_check *c)
  */
 static int ext2_check_volume(struct ext2_mount *em, const char **why)
 {
-    struct ext2_check *c = &ext2_check_state;
+    struct ext2_check *c;
     uint64_t free_blocks = em->free_blocks, free_inodes = em->free_inodes;
     uint32_t g, ino;
     int rc;
 
-    if (em->blocks + 2 > FAT_WALK_CLUSTERS) {
-        *why = "not unmounted cleanly and more blocks than the check's bitmap";
+    c = check_state(em);
+    if (!c) {
+        klog(KLOG_WARN, "ext2", "check: no memory for the %d KiB of workspace the volume needs",
+             (int)((fat_walk_bytes(em->blocks) + (em->inodes + 7) / 8 + sizeof(*c)) / 1024));
+        *why = "not unmounted cleanly and the check's workspace is more than the free memory";
         return 1;
     }
-    if (em->inodes > EXT2_CHECK_INODES) {
-        *why = "not unmounted cleanly and more inodes than the check's set";
-        return 1;
-    }
-    fat_walk_acquire(em->blocks);
-    c->em = em;
-    c->fault = 0;
-    c->fault_ino = 0;
-    c->lost = c->orphans = c->links = 0;
-    k_memset(c->seen, 0, (em->inodes + 7) / 8);
     for (g = 0; g < em->groups; g++) {
         const uint8_t *gd = em->gd + g * 32;
         uint32_t lo = em->first_data + g * em->bpg, b;
@@ -3244,6 +3287,7 @@ static int ext2_check_volume(struct ext2_mount *em, const char **why)
     }
     fat_walk_release();
     if (rc != 0 && !c->fault) {
+        check_state_free(c);
         return rc;
     }
     if (c->fault) {
@@ -3257,6 +3301,7 @@ static int ext2_check_volume(struct ext2_mount *em, const char **why)
             return rc;
         }
         klog(KLOG_WARN, "ext2", "check: inode %d: %s", (int)c->fault_ino, c->fault);
+        check_state_free(c);
         em->state |= EXT2_ERROR_FS;
         rc = sb_store(em);
         if (rc != 0) {
@@ -3268,6 +3313,7 @@ static int ext2_check_volume(struct ext2_mount *em, const char **why)
     for (g = 0; g < em->groups; g++) {
         rc = gd_store(em, g);
         if (rc != 0) {
+            check_state_free(c);
             return rc;
         }
     }
@@ -3278,8 +3324,27 @@ static int ext2_check_volume(struct ext2_mount *em, const char **why)
     } else {
         klog(KLOG_INFO, "ext2", "check: clean");
     }
-    rc = sb_store(em);
-    return rc;
+    check_state_free(c);
+    return sb_store(em);
+}
+
+/**
+ * The largest regular file a volume with `1 << block_shift`-byte blocks
+ * can hold: the direct, single, double and triple pointers' reach, capped
+ * by the 32-bit `i_blocks` count of 512-byte units, which the pointer
+ * blocks share. The cap leaves one part in `per` for those pointer blocks,
+ * a little more than they take, since the kernel divides only by shifting.
+ */
+static uint64_t file_limit(uint32_t block_shift)
+{
+    uint64_t block_size = (uint64_t)1 << block_shift;
+    uint64_t per = block_size / 4;
+    uint64_t reach = (EXT2_NDIR + per + per * per + per * per * per) << block_shift;
+    uint64_t units = (uint64_t)0xFFFFFFFFu * 512u;
+    uint64_t cap = units - (units >> (block_shift - 2)) - 2 * block_size;
+
+    cap &= ~(block_size - 1);
+    return reach < cap ? reach : cap;
 }
 
 static int refuse(const char *field)
@@ -3323,6 +3388,7 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
     }
     em->block_size = 1024u << log_size;
     em->block_shift = 10 + log_size;
+    em->file_limit = file_limit(em->block_shift);
     em->inodes = le32(sb + 0);
     em->blocks = le32(sb + 4);
     em->r_blocks = le32(sb + 8);
@@ -3340,6 +3406,9 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
         em->compat = le32(sb + 92);
         em->incompat = le32(sb + 96);
         em->ro_compat = le32(sb + 100);
+        if (em->compat & EXT2_COMPAT_RESIZE_INODE) {
+            em->reserved_gdt = le16(sb + 206);
+        }
     }
     if (em->inode_size != 128 && em->inode_size != 256) {
         return refuse("inode size");
@@ -3356,13 +3425,10 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
         return refuse("block count past the device");
     }
     em->groups = (em->blocks - em->first_data + em->bpg - 1) / em->bpg;
-    if (em->groups > EXT2_GROUPS) {
-        return refuse("more groups than this driver's table");
-    }
     if ((uint64_t)em->groups * em->ipg < em->inodes) {
         return refuse("inodes past the groups");
     }
-    if ((uint64_t)em->first_data + 1 + gd_blocks(em) > em->blocks) {
+    if ((uint64_t)em->first_data + 1 + gd_blocks(em) + em->reserved_gdt > em->blocks) {
         return refuse("descriptor table past the volume");
     }
     unknown = em->incompat & ~EXT2_INCOMPAT_FILETYPE;
@@ -3377,6 +3443,10 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
         readonly_why = "dir_index would be left stale by this writer";
     } else if (em->block_size != 4096) {
         readonly_why = "a block size below 4096 cannot be written in order";
+    }
+    em->gd = kmalloc(em->groups * 32);
+    if (!em->gd) {
+        return -ENOMEM;
     }
     rc = read_bytes(em, (uint64_t)(em->first_data + 1) * em->block_size, em->gd, em->groups * 32);
     if (rc != 0) {
@@ -3403,7 +3473,9 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
         if (bb < lo || bb >= hi || ib < lo || ib >= hi || it < lo || tables == 0 ||
             (uint64_t)it + tables > hi || bb == ib || (bb >= it && bb < it + tables) ||
             (ib >= it && ib < it + tables)) {
-            return refuse("group descriptor");
+            klog(KLOG_WARN, "ext2", "refused: group %d: bitmaps at %d and %d, table at %d, "
+                 "in blocks %d to %d", (int)g, (int)bb, (int)ib, (int)it, (int)lo, (int)hi);
+            return -EINVAL;
         }
         /* Against the group's own size: the last group is often short. */
         if (le16(gd + 12) > hi - (em->first_data + g * em->bpg) ||
@@ -3469,6 +3541,7 @@ static int ext2_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags
         while (em->nodes) {
             node_drop(em, em->nodes);
         }
+        kfree(em->gd);
         kfree(em);
     }
     return rc;

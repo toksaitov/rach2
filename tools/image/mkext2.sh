@@ -63,12 +63,13 @@ trap 'rm -rf "$WORK"' EXIT INT TERM
 
 "$STAGEIMAGE" "$MANIFEST" --tree "$TREE" > "$NODES"
 
-# The profile: revision 1, 4 KiB blocks, 128-byte inodes, and exactly the
-# three features the driver writes, with every other feature mke2fs's
+# The profile: revision 1, 4 KiB blocks, 128-byte inodes, the three
+# features the driver writes and the resize inode that keeps room for the
+# descriptor table a grow needs, with every other feature mke2fs's
 # configuration file might add named and switched off. The times, the
 # identifier and the directory hash seed, which mke2fs draws at random even
 # with dir_index off, are fixed, so that one manifest makes one image.
-PROFILE="sparse_super,large_file,filetype,^dir_index,^resize_inode,^ext_attr,^has_journal,^extent,^64bit,^flex_bg,^metadata_csum,^huge_file,^dir_nlink,^extra_isize"
+PROFILE="sparse_super,large_file,filetype,^dir_index,resize_inode,^ext_attr,^has_journal,^extent,^64bit,^flex_bg,^metadata_csum,^huge_file,^dir_nlink,^extra_isize"
 : > "$TMP"
 E2FSPROGS_FAKE_TIME=1 mke2fs -q -F -t ext2 -b 4096 -I 128 -O "$PROFILE" \
     -E hash_seed=52616368-3200-4578-7432-000000000002 \
@@ -87,7 +88,7 @@ sb16() { od -A n -t u2 -j "$((1024 + $1))" -N 2 "$TMP" | tr -d ' '; }
 [ "$(sb 76)" = "1" ] || { echo "mkext2: revision $(sb 76), not 1" >&2; exit 1; }
 [ "$(sb 24)" = "2" ] || { echo "mkext2: block size log $(sb 24), not 2 (4096)" >&2; exit 1; }
 [ "$(sb16 88)" = "128" ] || { echo "mkext2: inode size $(sb16 88), not 128" >&2; exit 1; }
-[ "$(sb 92)" = "0" ] || { echo "mkext2: compatible features $(sb 92), not 0" >&2; exit 1; }
+[ "$(sb 92)" = "16" ] || { echo "mkext2: compatible features $(sb 92), not resize_inode alone" >&2; exit 1; }
 [ "$(sb 96)" = "2" ] || { echo "mkext2: incompatible features $(sb 96), not filetype alone" >&2; exit 1; }
 [ "$(sb 100)" = "3" ] || { echo "mkext2: read-only features $(sb 100), not sparse_super and large_file" >&2; exit 1; }
 

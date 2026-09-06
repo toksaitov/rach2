@@ -40,7 +40,7 @@ ln -s hello.txt "$TREE/d41"
 
 : > "$VOL"
 E2FSPROGS_FAKE_TIME=1 mke2fs -q -F -t ext2 -b 4096 -I 128 \
-    -O sparse_super,large_file,filetype,^dir_index,^resize_inode,^ext_attr,^has_journal,^extent,^64bit,^flex_bg,^metadata_csum,^huge_file,^dir_nlink,^extra_isize \
+    -O sparse_super,large_file,filetype,^dir_index,resize_inode,^ext_attr,^has_journal,^extent,^64bit,^flex_bg,^metadata_csum,^huge_file,^dir_nlink,^extra_isize \
     -L e2fixture -d "$TREE" "$VOL" 16M 2>&1 | grep -v '128-byte inodes' || true
 e2fsck -fn "$VOL" > /dev/null 2>&1 || { echo "mkext2fixture: e2fsck finds the fixture faulty" >&2; exit 1; }
 

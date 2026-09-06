@@ -697,7 +697,7 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
             struct vfs_stat vst;
 
             if (vfs_getattr(ofd->vmnt, ofd->vnode, &vst) == 0) {
-                ofd->offset = (uint32_t)vst.size;
+                ofd->offset = vst.size;
             }
         }
         written = vfs_write(ofd->vmnt, ofd->fhandle, (const char __force *)buf,
@@ -716,7 +716,7 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
                     vfs_kill_setid(ofd->vmnt, ofd->vnode);
                 }
             }
-            ofd->offset += (uint32_t)written;
+            ofd->offset += (uint64_t)written;
         }
         fd_ofd_unlock(ofd);
         return written;
@@ -747,14 +747,14 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
 /**
  * Truncate an open file to `length` (ftruncate(2)).
  *
- * EBX = fd, ECX = length. The descriptor must be a writable file on a
- * mounted file system. A successful shrink or extend clears the set-id bits
- * for an unprivileged caller, like a write.
+ * The descriptor must be a writable file on a mounted file system. A
+ * successful shrink or extend clears the set-id bits for an unprivileged
+ * caller, like a write. `SYS_FTRUNCATE` takes the length in ECX, and
+ * `SYS_FTRUNCATE64`, the form musl calls, in ECX and EDX as the low and
+ * high halves; the file system answers a length past what it can hold.
  */
-static int32_t sys_ftruncate(isr_params_t *params)
+static int32_t truncate_fd(int fd, uint64_t length)
 {
-    int fd = (int)params->ebx;
-    uint32_t length = params->ecx;
     fd_entry_t *entry;
     int rc;
 
@@ -791,6 +791,16 @@ static int32_t sys_ftruncate(isr_params_t *params)
     }
     fd_ofd_unlock(entry->ofd);
     return rc;
+}
+
+static int32_t sys_ftruncate(isr_params_t *params)
+{
+    return truncate_fd((int)params->ebx, (uint64_t)params->ecx);
+}
+
+static int32_t sys_ftruncate64(isr_params_t *params)
+{
+    return truncate_fd((int)params->ebx, (uint64_t)params->ecx | ((uint64_t)params->edx << 32));
 }
 
 /* write(2): EBX = fd, ECX = buf, EDX = count. */
@@ -2373,8 +2383,9 @@ static int32_t sys_lseek(isr_params_t *params)
     int32_t offset = (int32_t)params->ecx;
     int whence = (int)params->edx;
     fd_entry_t *entry;
-    uint32_t file_size;
+    uint64_t file_size;
     int32_t new_offset;
+    long long at;
 
     if (!current_proc) {
         return -ESRCH;
@@ -2456,32 +2467,36 @@ static int32_t sys_lseek(isr_params_t *params)
             fd_ofd_unlock(entry->ofd);
             return rc;
         }
-        file_size = (uint32_t)vst.size;
+        file_size = vst.size;
     }
 
     switch (whence) {
         case 0:  /* SEEK_SET */
-            new_offset = offset;
+            at = (long long)offset;
             break;
         case 1:  /* SEEK_CUR */
-            new_offset = (int32_t)entry->ofd->offset + offset;
+            at = (long long)entry->ofd->offset + offset;
             break;
         case 2:  /* SEEK_END */
-            new_offset = (int32_t)file_size + offset;
+            at = (long long)file_size + offset;
             break;
         default:
-            new_offset = -1;
+            at = -1;
             break;
     }
 
-    if (new_offset < 0) {
+    if (at < 0) {
         fd_ofd_unlock(entry->ofd);
         return -EINVAL;
     }
+    if (at > (long long)0x7FFFFFFF) {
+        fd_ofd_unlock(entry->ofd);
+        return -EOVERFLOW; /* a real offset this call cannot return; llseek can */
+    }
 
-    entry->ofd->offset = (uint32_t)new_offset;
+    entry->ofd->offset = (uint64_t)at;
     fd_ofd_unlock(entry->ofd);
-    return new_offset;
+    return (int32_t)at;
 }
 
 /**
@@ -2688,7 +2703,7 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
         bytes_read = vfs_read(ofd->vmnt, ofd->fhandle, (char __force *)buf,
                               count, ofd->offset);
         if (bytes_read > 0) {
-            ofd->offset += (uint32_t)bytes_read;
+            ofd->offset += (uint64_t)bytes_read;
         }
         fd_ofd_unlock(ofd);
         return bytes_read;
@@ -5207,19 +5222,13 @@ static int32_t sys__llseek(isr_params_t *params)
     if (new_off < 0) {
         return -EINVAL;
     }
-    /* The descriptor offset is 32-bit (KRFFS files are well under 4 GB); refuse
-     * a seek it cannot represent, not silently truncating to a wrong
-     * place. */
-    if (new_off > (long long)0xFFFFFFFFu) {
-        return -EINVAL;
-    }
     /* The result pointer is mandatory: a NULL one is a caller bug, not a silent
      * success (musl always passes a valid loff_t*). */
     if (!result) {
         return -EFAULT;
     }
 
-    entry->ofd->offset = (uint32_t)new_off;
+    entry->ofd->offset = (uint64_t)new_off;
     if (copy_to_user(result, &new_off, sizeof(new_off)) != 0) {
         return -EFAULT;
     }
@@ -7844,7 +7853,7 @@ static int32_t synth_getdents(fd_entry_t *e, char *buf, uint32_t count)
     int kind = sd ? sd->kind : VNODE_ENOENT;
     int pid = sd ? sd->pid : 0;
     uint32_t written = 0;
-    uint32_t idx = e->ofd->offset;
+    uint32_t idx = (uint32_t)e->ofd->offset;
     char name[32];
     uint64_t ino;
     uint8_t dtype;
@@ -7967,7 +7976,7 @@ static int32_t sys_getdents64(isr_params_t *params)
             return -EBADF;
         }
         fd_ofd_lock(ofd);
-        cursor = ofd->offset;
+        cursor = (uint32_t)ofd->offset;
         for (;;) {
             struct vfs_dirent de;
             uint8_t recbuf[VFS_NAME_MAX + 1 + 32];
@@ -12192,6 +12201,7 @@ void init_syscall(void)
     _syscall_table[SYS_REBOOT] = sys_reboot;
     _syscall_table[SYS_FSYNC] = sys_fsync;
     _syscall_table[SYS_FTRUNCATE] = sys_ftruncate;
+    _syscall_table[SYS_FTRUNCATE64] = sys_ftruncate64;
     _syscall_table[SYS_MOUNT] = sys_mount;
     _syscall_table[SYS_UMOUNT2] = sys_umount2;
     _syscall_table[SYS_FDATASYNC] = sys_fsync;

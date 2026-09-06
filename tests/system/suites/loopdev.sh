@@ -44,7 +44,7 @@ cp "$DISK.inner" "$DISK.tree/inner.bin" || fail "the tree's whole-sector file"
 # the row asks for.
 : > "$DISK.ext2"
 E2FSPROGS_FAKE_TIME=1 mke2fs -q -F -t ext2 -b 4096 -I 128 \
-    -O sparse_super,large_file,filetype,^dir_index,^resize_inode,^ext_attr,^has_journal,^extent,^64bit,^flex_bg,^metadata_csum,^huge_file,^dir_nlink,^extra_isize \
+    -O sparse_super,large_file,filetype,^dir_index,resize_inode,^ext_attr,^has_journal,^extent,^64bit,^flex_bg,^metadata_csum,^huge_file,^dir_nlink,^extra_isize \
     -d "$DISK.tree" "$DISK.ext2" 4M >/dev/null 2>&1 || fail "mke2fs"
 
 # A file whose length is not whole sectors, which no device may stand on.
@@ -107,7 +107,7 @@ mkdir -p "$DISK.tree2" || fail "the ext2 tree"
 cp "$DISK.krffs" "$DISK.tree2/krffs.img" || fail "the image in the ext2 tree"
 : > "$DISK.ext2out"
 E2FSPROGS_FAKE_TIME=1 mke2fs -q -F -t ext2 -b 4096 -I 128 \
-    -O sparse_super,large_file,filetype,^dir_index,^resize_inode,^ext_attr,^has_journal,^extent,^64bit,^flex_bg,^metadata_csum,^huge_file,^dir_nlink,^extra_isize \
+    -O sparse_super,large_file,filetype,^dir_index,resize_inode,^ext_attr,^has_journal,^extent,^64bit,^flex_bg,^metadata_csum,^huge_file,^dir_nlink,^extra_isize \
     -d "$DISK.tree2" "$DISK.ext2out" 16M >/dev/null 2>&1 || fail "mke2fs for the outer volume"
 E2SECTORS=$(($(wc -c < "$DISK.ext2out") / 512))
 { dd if=/dev/zero bs=512 count=$PART 2>/dev/null; cat "$DISK.ext2out"; } > "$DISK.e2"

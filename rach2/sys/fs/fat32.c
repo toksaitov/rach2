@@ -1588,6 +1588,8 @@ static int32_t fat_write(struct vfs_mount *mnt, void *handle, const void *buf, u
         return 0;
     }
     if (offset >= 0xFFFFFFFFu || count > 0xFFFFFFFFu - offset) {
+        klog(KLOG_WARN, "vfat", "write: offset %d MiB is past the format's limit of 4 GiB",
+             (int)(offset >> 20));
         return -EFBIG;
     }
     rc = begin_write(mnt, fm);
@@ -1690,6 +1692,8 @@ static int fat_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
         return -EISDIR;
     }
     if (size > 0xFFFFFFFFu) {
+        klog(KLOG_WARN, "vfat", "truncate: size %d MiB is past the format's limit of 4 GiB",
+             (int)(size >> 20));
         return -EFBIG;
     }
     rc = begin_write(mnt, fm);
@@ -2659,12 +2663,11 @@ static int fat_check_volume(struct fat_mount *fm)
 
     k_memset(&w, 0, sizeof(w));
     w.fm = fm;
-    if (fm->cluster_count + 2 > FAT_WALK_CLUSTERS) {
-        klog(KLOG_WARN, "vfat", "check: %d clusters is more than the walk covers; read-only",
-             (int)fm->cluster_count);
+    if (fat_walk_acquire(fm->cluster_count) != 0) {
+        klog(KLOG_WARN, "vfat", "check: no memory for the walk's %d KiB bitmap; read-only",
+             (int)(fat_walk_bytes(fm->cluster_count) / 1024));
         return 1;
     }
-    fat_walk_acquire(fm->cluster_count);
     klog(KLOG_INFO, "vfat", "check: the volume was not unmounted cleanly; checking");
     if (walk_chain(&w, fm->root_cluster, -1) < 0) {
         goto done;

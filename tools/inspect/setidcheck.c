@@ -1652,12 +1652,20 @@ struct ext2 {
     long base;
     uint64_t size;
     unsigned long blocks, inodes, bpg, ipg, groups;
+    unsigned long reserved_gdt; /* blocks kept after each descriptor table */
     unsigned char *gd;          /* the group descriptors, 32 bytes each */
     unsigned char *structural;  /* one byte per block: 1 if a table's */
     unsigned char *seen_dir;    /* one byte per inode: a directory reached */
     unsigned char *seen_file;   /* one byte per inode: a file reached */
     char err[512];
 };
+
+static int ext2_is_power(unsigned long g, unsigned long base)
+{
+    while (g % base == 0)
+        g /= base;
+    return g == 1;
+}
 
 static int ext2_fail(struct ext2 *fs, const char *fmt, ...)
 {
@@ -1735,11 +1743,12 @@ static int ext2_open(struct ext2 *fs, const char *path, long offset,
     compat = rd32(sb + 92);
     incompat = rd32(sb + 96);
     ro_compat = rd32(sb + 100);
-    if (compat != 0 || incompat != 0x2 || ro_compat != 0x3)
+    if (compat != 0x10 || incompat != 0x2 || ro_compat != 0x3)
         return ext2_fail(fs, "features %#lx/%#lx/%#lx (compatible, "
                          "incompatible, read-only); the profile is "
-                         "0/0x2/0x3, filetype, sparse_super and large_file "
-                         "alone", compat, incompat, ro_compat);
+                         "0x10/0x2/0x3, resize_inode, filetype, sparse_super "
+                         "and large_file alone", compat, incompat, ro_compat);
+    fs->reserved_gdt = rd16(sb + 206);
     if (rd32(sb + 84) != EXT2_FIRST_INO)
         return ext2_fail(fs, "first inode %lu; the profile is 11",
                          rd32(sb + 84));
@@ -1794,23 +1803,17 @@ static int ext2_open(struct ext2 *fs, const char *path, long offset,
         fs->structural[ib] = 1;
         for (i = 0; i < it_blocks; i++)
             fs->structural[it + i] = 1;
-        p = g;
-        if (g == 0 || g == 1)
-            p = 1;
-        else {
-            while (p % 3 == 0)
-                p /= 3;
-            while (p % 5 == 0)
-                p /= 5;
-            while (p % 7 == 0)
-                p /= 7;
-        }
-        if (p == 1) {
+        /* sparse_super: groups 0 and 1 and the powers of 3, 5 and 7, each
+         * a power of one base alone, keep a superblock copy. */
+        if (g <= 1 || ext2_is_power(g, 3) || ext2_is_power(g, 5) ||
+            ext2_is_power(g, 7)) {
             unsigned long first = g * fs->bpg;
             unsigned long gd_blocks = (fs->groups * 32 + EXT2_BLOCK - 1) /
                                       EXT2_BLOCK;
 
-            for (i = 0; i <= gd_blocks && first + i < fs->blocks; i++)
+            /* The superblock copy, the descriptors and the blocks kept
+             * after them for a grow, which the resize inode owns. */
+            for (i = 0; i <= gd_blocks + fs->reserved_gdt && first + i < fs->blocks; i++)
                 fs->structural[first + i] = 1;
         }
     }
@@ -3691,7 +3694,7 @@ static int st_ext2_fixture(const char *out)
              ". tools/setup/e2fsprogs_path.sh 2>/dev/null || true; "
              ": > '%s' && E2FSPROGS_FAKE_TIME=1 mke2fs -q -F -t ext2 -b 4096 "
              "-I 128 -O sparse_super,large_file,filetype,^dir_index,"
-             "^resize_inode,^ext_attr,^has_journal,^extent,^64bit,^flex_bg,"
+             "resize_inode,^ext_attr,^has_journal,^extent,^64bit,^flex_bg,"
              "^metadata_csum,^huge_file,^dir_nlink,^extra_isize -d '%s' "
              "'%s' 8M >/dev/null 2>&1 && debugfs -w -f '%s' '%s' "
              ">/dev/null 2>&1", out, tree, out, script, out);
@@ -3871,7 +3874,7 @@ static void st_ext2_rows(const struct allow *img_allow)
         b[0] = 0x42; b[1] = 0; b[2] = 0; b[3] = 0;
         if (st_ext2_poke(clean, mut, 1024 + 96, b, 4) == 0)
             st_ext2_case(img_allow, "ext2: a feature outside the profile",
-                         mut, 0, "the profile is 0/0x2/0x3");
+                         mut, 0, "the profile is 0x10/0x2/0x3");
         /* A block past the volume in the set-id file's first pointer. */
         ino = st_ext2_inode_of(clean, "/bin/su");
         at = ino ? st_ext2_inode_at(clean, ino) : -1;

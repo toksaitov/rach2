@@ -21,7 +21,9 @@ uint32_t mem_reserve_frames(void)
     return 0;
 }
 
+uint32_t host_free_frames = 1u << 20; /* a test lowers it to run the machine short */
+
 uint32_t frame_free_count(void)
 {
-    return 1u << 20;
+    return host_free_frames;
 }

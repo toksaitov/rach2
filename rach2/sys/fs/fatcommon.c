@@ -8,6 +8,9 @@
 
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
+#include "../mm/kheap.h"
+#include "../mm/paging.h"
+#include "../mm/pressure.h"
 #include "../proc/wait_queue.h"
 #include "../rtc.h"
 
@@ -400,7 +403,8 @@ uint32_t fat_hint_next(uint32_t c, uint32_t cluster_count)
 
 /* ---- the dirty-volume walk's bitmap and its lock ---- */
 
-static uint8_t walk_bits[FAT_WALK_CLUSTERS / 8];
+static uint8_t *walk_bits; /* held between acquire and release, else NULL */
+static uint32_t walk_pages;
 static int walk_busy;
 static wait_queue_t walk_wq;
 
@@ -421,17 +425,46 @@ int fat_walk_test_set(uint32_t c)
     return 0;
 }
 
-void fat_walk_acquire(uint32_t cluster_count)
+uint32_t fat_walk_bytes(uint32_t cluster_count)
 {
+    return (cluster_count + 2 + 7) / 8;
+}
+
+/**
+ * The bitmap is taken in whole pages after the free frames are counted
+ * against them and the reserve, since a walk that took the last frames
+ * would starve the cache and the processes the check runs beside; the
+ * caller mounts read-only and says so. The heap's own refusal is the
+ * same answer.
+ */
+int fat_walk_acquire(uint32_t cluster_count)
+{
+    uint32_t pages = (fat_walk_bytes(cluster_count) + PAGE_SIZE - 1) / PAGE_SIZE;
+
     while (walk_busy) {
         wq_wait_event_nointr(&walk_wq, walk_idle, 0);
     }
     walk_busy = 1;
-    k_memset(walk_bits, 0, (cluster_count + 2 + 7) / 8);
+    if (frame_free_count() < pages + mem_reserve_frames()) {
+        walk_bits = 0;
+    } else {
+        walk_bits = kalloc_pages(pages, 0);
+    }
+    if (!walk_bits) {
+        walk_busy = 0;
+        wq_wake_all(&walk_wq);
+        return -ENOMEM;
+    }
+    walk_pages = pages;
+    k_memset(walk_bits, 0, (uint32_t)pages * PAGE_SIZE);
+    return 0;
 }
 
 void fat_walk_release(void)
 {
+    kfree_pages(walk_bits, walk_pages);
+    walk_bits = 0;
+    walk_pages = 0;
     walk_busy = 0;
     wq_wake_all(&walk_wq);
 }

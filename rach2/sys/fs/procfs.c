@@ -1264,7 +1264,7 @@ static int32_t procfs_read(fd_entry_t *e, char __user *buf, uint32_t count)
     if (!f) {
         return 0;
     }
-    off = e->ofd->offset;
+    off = (uint32_t)e->ofd->offset;
     if (off >= (uint32_t)f->len) {
         return 0; /* end of the snapshot */
     }

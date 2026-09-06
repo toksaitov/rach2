@@ -30,6 +30,7 @@
 #define SYS_MOUNT   21
 #define SYS_UMOUNT2 52
 #define SYS_FTRUNCATE 93
+#define SYS_FTRUNCATE64 194
 #define SYS_MKDIR   39
 #define SYS_RMDIR   40
 #define SYS_GETPID   20

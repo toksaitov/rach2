@@ -3,6 +3,7 @@
  *
  * host-deps: rach2/sys/fs/fat32name.c rach2/sys/fs/fatcommon.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/kheap_host.c tests/host/compat/pressure_host.c
  *
  * The conversion from UTF-8 to UTF-16 and what it refuses, the 8.3 rule
  * with its case bits, the alias and its numbering, the checksum and the

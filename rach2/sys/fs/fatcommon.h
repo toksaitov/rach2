@@ -51,12 +51,14 @@ uint32_t fat_hint_start(uint32_t hint, uint32_t cluster_count);
 /** The cluster after `c`, wrapping to the first past the last. */
 uint32_t fat_hint_next(uint32_t c, uint32_t cluster_count);
 
-/** The one bitmap the dirty-volume walks share: 2^22 bits, one walk at a
- * time. `fat_walk_acquire` waits for the bitmap and clears the bits of
- * cluster numbers up to `cluster_count + 1`; `fat_walk_release` gives it
- * back. */
-#define FAT_WALK_CLUSTERS (1u << 22)
-void fat_walk_acquire(uint32_t cluster_count);
+/** The one bitmap the dirty-volume walks share, one walk at a time.
+ * `fat_walk_acquire` waits for the bitmap and takes it from the heap, one
+ * clear bit per cluster number up to `cluster_count + 1`, and answers 0,
+ * or `-ENOMEM` with nothing held when the pages it needs would leave the
+ * machine short; `fat_walk_bytes` is the size it asks for, for the caller
+ * that reports the refusal. `fat_walk_release` gives it back. */
+int fat_walk_acquire(uint32_t cluster_count);
+uint32_t fat_walk_bytes(uint32_t cluster_count);
 void fat_walk_release(void);
 
 /** Mark cluster `c`: 1 if it was marked already, else 0. */

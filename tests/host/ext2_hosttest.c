@@ -64,6 +64,7 @@ void k_panic(const char *s)
 /* The last record, and the last one at warning level, which is where the
    driver puts a refusal or a read-only reason. */
 static char last_log[160];
+extern uint32_t host_free_frames; /* pressure_host.c: the frames the machine has free */
 static char last_warn[160];
 static char last_check[160]; /* the check's own record, before the read-only reason */
 extern int vsnprintf(char *s, unsigned long n, const char *fmt, __builtin_va_list ap);
@@ -428,8 +429,8 @@ static void against_reader(const char *img)
     check(listed > 0 && agreed == listed, "every node the reader lists agrees with the driver");
 }
 
-#define PROFILE                                                                         \
-    "sparse_super,large_file,filetype,^dir_index,^resize_inode,^ext_attr,^has_journal," \
+#define PROFILE                                                                        \
+    "sparse_super,large_file,filetype,^dir_index,resize_inode,^ext_attr,^has_journal," \
     "^extent,^64bit,^flex_bg,^metadata_csum,^huge_file,^dir_nlink,^extra_isize"
 
 /* The staged tree. */
@@ -682,7 +683,7 @@ static void refusal_rows(void)
     char linkbuf[300];
 
     bytes = build_image(img, 4096, 128,
-                        "sparse_super,large_file,filetype,dir_index,^resize_inode,"
+                        "sparse_super,large_file,filetype,dir_index,resize_inode,"
                         "^ext_attr,^has_journal,^extent,^64bit,^flex_bg,"
                         "^metadata_csum,^huge_file,^dir_nlink,^extra_isize",
                         16, "tree");
@@ -722,9 +723,12 @@ static void refusal_rows(void)
         struct vfs_stat st;
         void *h;
 
-        check(OPS->getattr(&mnt, n, &st) == -EOVERFLOW,
-              "a file past the offset answers EOVERFLOW to stat");
-        check(OPS->open(&mnt, n, 0, &h) == -EOVERFLOW, "and to open");
+        check(OPS->getattr(&mnt, n, &st) == 0 && st.size == 5000000000ull,
+              "a file past 4 GiB reports its size to stat");
+        check(OPS->open(&mnt, n, 0, &h) == 0, "and opens");
+        if (h) {
+            OPS->release(&mnt, h);
+        }
         OPS->put(&mnt, n);
     }
     same_as_tree("/hello.txt", "the rest of the volume reads");
@@ -957,13 +961,15 @@ static void refusal_rows(void)
     run(". tools/setup/e2fsprogs_path.sh; debugfs -w -R 'set_bg 0 block_bitmap 1' " FIXDIR
         "/mut.ext2 >/dev/null 2>&1");
     use_image(img, bytes);
-    check(mount_image() == -EINVAL && streq(last_warn, "refused: group descriptor"),
+    check(mount_image() == -EINVAL &&
+              memcmp(last_warn, "refused: group 0: bitmaps at 1 and ", 35) == 0,
           "a bitmap on the descriptors' block is refused by name");
     bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
     run(". tools/setup/e2fsprogs_path.sh; debugfs -w -R 'set_bg 0 inode_table 0' " FIXDIR
         "/mut.ext2 >/dev/null 2>&1");
     use_image(img, bytes);
-    check(mount_image() == -EINVAL && streq(last_warn, "refused: group descriptor"),
+    check(mount_image() == -EINVAL && memcmp(last_warn, "refused: group 0: bitmaps at ", 29) == 0 &&
+              strstr(last_warn, ", table at 0, in blocks "),
           "an inode table at block zero is refused by name");
 
     /* Two hundred nodes held at once, past the sixty-four the pool once
@@ -1801,6 +1807,21 @@ static int image_equals_snap(const char *img, uint64_t bytes)
     return 1;
 }
 
+/* One byte of the image file, or 0 when it cannot be read. */
+static unsigned image_byte(const char *img, long off)
+{
+    void *f = fopen(img, "rb");
+    unsigned char c = 0;
+
+    if (f) {
+        if (fseek(f, off, SEEK_SET_) != 0 || fread(&c, 1, 1, f) != 1) {
+            c = 0;
+        }
+        fclose(f);
+    }
+    return c;
+}
+
 static void snapshot(const char *img, uint64_t bytes)
 {
     void *f = fopen(img, "rb");
@@ -1844,11 +1865,50 @@ static void refusal_write_rows(void)
     if (n) {
         bcache_sync(&dev);
         snapshot(wimg, wbytes);
-        check(write_at(n, pattern, 1, 0xFFFFFFFFull) == -EFBIG,
-              "a write past the kernel's offset answers EFBIG");
+        check(write_at(n, pattern, 1, 0x1FF7FFFE000ull) == -EFBIG &&
+                  memcmp(last_warn,
+                         "write: offset 2095103 MiB is past the file limit of "
+                         "2095103 MiB for 4096-byte blocks",
+                         82) == 0,
+              "a write at the format's limit answers EFBIG by name");
         bcache_sync(&dev);
         check(image_equals_snap(wimg, wbytes), "and the volume is as it was");
+        {
+            void *h = 0;
+
+            check(OPS->open(&mnt, n, 1, &h) == 0 &&
+                      OPS->truncate(&mnt, h, 0x1FF7FFFE001ull) == -EFBIG,
+                  "a truncate past it answers EFBIG");
+            if (h) {
+                OPS->release(&mnt, h);
+            }
+        }
+        check(write_at(n, pattern, 1, 0x100000000ull) == 0, "a byte written at 4 GiB is accepted");
+        bcache_sync(&dev);
+        {
+            struct vfs_stat st;
+            unsigned char one[1] = {0xFF};
+
+            check(OPS->getattr(&mnt, n, &st) == 0 && st.size == 0x100000001ull,
+                  "and the size is 4 GiB plus one");
+            check(read_at(n, one, 1, 0x100000000ull) == 1 && one[0] == pattern[0],
+                  "and it reads back");
+            check(read_at(n, one, 1, 0x80000000ull) == 1 && one[0] == 0,
+                  "and the hole reads zeros");
+            check((image_byte(wimg, 1024 + 100) & 0x02) != 0,
+                  "and the superblock has the large_file flag");
+        }
         OPS->put(&mnt, n);
+        unmount_image();
+        check(mount_rw() == 0, "the volume remounts");
+        n = walk("/hello.txt", &err);
+        if (n) {
+            struct vfs_stat st;
+
+            check(OPS->getattr(&mnt, n, &st) == 0 && st.size == 0x100000001ull,
+                  "and the high size half was stored");
+            OPS->put(&mnt, n);
+        }
     }
     /* The reserved blocks: a caller who is not root stops short of them,
        and root does not. */
@@ -2305,6 +2365,27 @@ static void dirty_rows(void)
     rc = unmount_rw();
     check(rc == 0 && disk_state(img) == 1 && e2fsck_clean(img),
           "and its unmount marks it valid again");
+
+    /* The same volume on a machine too short of memory for the check's
+       workspace: read-only with the reason, nothing written. */
+    bytes = dirty_image(img, "");
+    use_image(img, bytes);
+    last_warn[0] = 0;
+    host_free_frames = 0;
+    rc = mount_rw();
+    host_free_frames = 1u << 20;
+    if (rc != 0 || (mnt.flags & VFS_MS_RDONLY) == 0 ||
+        !streq(last_warn, "mounted read-only: not unmounted cleanly and the check's "
+                          "workspace is more than the free memory")) {
+        printf("  mount %d, flags 0x%x, warn: %s\n", rc, (unsigned)mnt.flags, last_warn);
+        check(0, "a dirty volume on a machine short of memory mounts read-only by name");
+    } else {
+        check(1, "a dirty volume on a machine short of memory mounts read-only by name");
+    }
+    check(disk_state(img) == 0, "and nothing was written to it");
+    if (rc == 0) {
+        unmount_rw();
+    }
 
     /* The counts are recounted, not believed. */
     bytes = dirty_image(img, "ssv free_blocks_count 1\nssv free_inodes_count 1\n"
