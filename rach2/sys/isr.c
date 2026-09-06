@@ -3,6 +3,7 @@
 #include "isr.h"
 #include "panic.h"
 #include "serial.h"
+#include "mm/pressure.h"
 
 #include "lib/ksignal.h"
 
@@ -222,6 +223,18 @@ void _isr_router(isr_params_t *params)
     _dispatch(params);
 }
 
+/*
+ * The hardware interrupt's dispatch, with the depth `in_interrupt` reads
+ * kept around it: an allocation made by a handler is the kernel's, whoever
+ * was running.
+ */
+static void irq_dispatch(isr_params_t *params)
+{
+    irq_enter();
+    _dispatch(params);
+    irq_leave();
+}
+
 /**
  * Dispatch a hardware IRQ and send the PIC end-of-interrupt.
  *
@@ -255,7 +268,7 @@ void _irq_router(isr_params_t *params)
             lapic_spurious(); /* the APIC's own, which needs no end */
             return;
         }
-        _dispatch(params);
+        irq_dispatch(params);
         lapic_eoi();
         /*
          * A handler that woke a reader has to let it run, or the wake is
@@ -281,7 +294,7 @@ void _irq_router(isr_params_t *params)
 
     reset_master_pic();
 
-    _dispatch(params);
+    irq_dispatch(params);
 }
 
 /**

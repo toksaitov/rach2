@@ -86,6 +86,45 @@ static pc_write_fn pc_write;
 static uint32_t pc_reads;
 static uint32_t pc_evicts;
 static uint32_t pc_writebacks;
+static uint32_t pc_resident_frames; /* slots holding a frame */
+
+/*
+ * A slot's frame comes when the slot is first filled and goes when reclaim
+ * takes it, so the cache holds what it uses and no more. The frame is below
+ * the identity-mapped window, since the backing reads and writes it by its
+ * physical address. On the host every slot has its buffer from the start.
+ */
+static int pc_slot_storage(struct pc_entry *e)
+{
+#ifdef PAGECACHE_HOSTTEST
+    return e->page != 0;
+#else
+    if (e->phys) {
+        return 1;
+    }
+    e->phys = alloc_kernel_frame();
+    if (!e->phys) {
+        return 0;
+    }
+    e->page = (void *)e->phys;
+    ++pc_resident_frames;
+    return 1;
+#endif
+}
+
+static void pc_slot_release(struct pc_entry *e)
+{
+#ifdef PAGECACHE_HOSTTEST
+    (void)e;
+#else
+    if (e->phys) {
+        free_kernel_frame(e->phys);
+        e->phys = 0;
+        e->page = 0;
+        --pc_resident_frames;
+    }
+#endif
+}
 
 static uint32_t pc_page_of(uint32_t disk_off)
 {
@@ -222,8 +261,15 @@ static int32_t pc_get_slot(void)
     uint32_t i;
     uint32_t scanned;
 
+    /* An empty slot with a frame first, then one a frame can be had for;
+       when no frame can be had, a resident page gives way below. */
     for (i = 0; i < pc_capacity; ++i) {
-        if (!pc_slots[i].valid && !pc_slots[i].pinned) {
+        if (!pc_slots[i].valid && !pc_slots[i].pinned && pc_slots[i].phys) {
+            return (int32_t) i;
+        }
+    }
+    for (i = 0; i < pc_capacity; ++i) {
+        if (!pc_slots[i].valid && !pc_slots[i].pinned && pc_slot_storage(&pc_slots[i])) {
             return (int32_t) i;
         }
     }
@@ -295,6 +341,40 @@ int pc_fault(uint32_t fault_address, int write)
     ++pc_reads;
 
     return 1;
+}
+
+uint32_t pc_shrink(uint32_t want)
+{
+    uint32_t got = 0;
+    int pass;
+
+    /* Clean pages go first, whatever their age, then dirty ones written
+       back; a page whose writeback fails stays. */
+    for (pass = 0; pass < 2 && got < want; ++pass) {
+        uint32_t i;
+
+        for (i = 0; i < PC_SLOTS && got < want; ++i) {
+            struct pc_entry *e = &pc_slots[i];
+
+            if (!e->phys || e->pinned) {
+                continue;
+            }
+            if (e->valid && (pass == 0 ? e->dirty : 0)) {
+                continue;
+            }
+            if (e->valid && pc_evict(i) != 0) {
+                continue;
+            }
+            pc_slot_release(e);
+            ++got;
+        }
+    }
+    return got;
+}
+
+uint32_t pc_resident(void)
+{
+    return pc_resident_frames;
 }
 
 int pc_sync(void)
@@ -506,38 +586,19 @@ void init_pagecache(void)
         k_panic("pagecache: window pre-map failed");
     }
 
-    /* Reserve a block of frames up front; each slot keeps its frame for good,
-       so a cold fault always has a frame and never competes with user pages.
-       The count adapts to the machine: the full PC_SLOTS wherever the pool can
-       spare it, and no more than a quarter of the free frames where it cannot,
-       so a small-memory boot keeps its user pages instead of dying here. The
-       floor is the 256 frames the cache had before it grew; a machine that
-       cannot spare that could not have mounted a disk before this change
-       either. */
-    {
-        uint32_t spare = frame_free_count() / 4u;
-        uint32_t want = PC_SLOTS;
-
-        if (want > spare) {
-            want = spare;
-        }
-        if (want < PC_MIN_SLOTS) {
-            k_panic("pagecache: frame reservation failed");
-        }
-        for (i = 0; i < want; ++i) {
-            uintptr_t phys = alloc_kernel_frame();
-            if (!phys) {
-                k_panic("pagecache: frame reservation failed");
-            }
-            pc_slots[i].phys = phys;
-            pc_slots[i].page = (void *) phys;
-            pc_slots[i].valid = 0;
-            pc_slots[i].dirty = 0;
-            pc_slots[i].accessed = 0;
-            pc_slots[i].pinned = 0;
-        }
-        pc_capacity = want;
+    /* No frame is taken here: a slot gets its frame when it is first filled
+       and gives it back under memory pressure, so the cache is a target the
+       machine's free memory sets and not a reservation. */
+    for (i = 0; i < PC_SLOTS; ++i) {
+        pc_slots[i].phys = 0;
+        pc_slots[i].page = 0;
+        pc_slots[i].valid = 0;
+        pc_slots[i].dirty = 0;
+        pc_slots[i].accessed = 0;
+        pc_slots[i].pinned = 0;
     }
+    pc_capacity = PC_SLOTS;
+    pc_resident_frames = 0;
     pc_clock = 0;
     pc_reads = pc_evicts = pc_writebacks = 0;
     pc_hash_rebuild();

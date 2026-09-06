@@ -253,7 +253,7 @@ void free_kernel_frame(uintptr_t phys);
 /** Total physical frames the pool manages. */
 uint32_t frame_total_count(void);
 
-/** Physical frames currently free (a linear bitmap scan). */
+/** Physical frames currently free, kept as a count by the table's writers. */
 uint32_t frame_free_count(void);
 
 /*

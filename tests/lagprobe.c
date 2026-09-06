@@ -46,6 +46,20 @@
  * second partition, the lag device on the same pool, is mounted, written and
  * synced.
  *
+ * `lagprobe queue`, under `rach2.blockpool=2` with a lag of half a second:
+ * sixteen readers each read a block of their own from the mounted volume,
+ * so sixteen requests queue for the one the disk may have in flight, and
+ * the last waits eight seconds, past the five-second deadline; every read
+ * must succeed, since the deadline of a request starts when it is taken
+ * and the time spent waiting for the limit does not count.
+ *
+ * `lagprobe dirty`, under a lag of one tick: a megabyte is written to a
+ * file on the mounted volume and left dirty in the buffer cache, then the
+ * probe takes all but a twentieth of the machine's memory in pages,
+ * which makes the caches give their frames back; the file's bytes must
+ * read back whole after a sync, the mount must still take a write, and
+ * the buffer cache must have shrunk.
+ *
  * Prints "LAGPROBE OK" or "LAGPROBE FAIL: reason". Freestanding; int 0x80.
  */
 
@@ -803,6 +817,203 @@ static void run_pool(void)
     puts("LAGPROBE OK");
 }
 
+/* One block of `path` at `offset`, into the sector buffer; bytes or -errno. */
+static int read_block_at(const char *path, int offset)
+{
+    int fd = syscall3(SYS_OPEN, (int)(size_t)path, O_RDONLY, 0);
+    int r;
+
+    if (fd < 0) {
+        return fd;
+    }
+    if (syscall3(SYS_LSEEK, fd, offset, 0) != offset) {
+        syscall1(SYS_CLOSE, fd);
+        return -1;
+    }
+    r = syscall3(SYS_READ, fd, (int)(size_t)sector_buf, 4096);
+    syscall1(SYS_CLOSE, fd);
+    return r;
+}
+
+/* Sixteen readers of sixteen distinct blocks, queued for the one request
+ * the disk may hold; each must get its block, however long it waited. */
+static void run_queue(void)
+{
+    int pids[16];
+    int i;
+
+    if (syscall2(SYS_MKDIR, (int)"/lq", 0755) != 0) {
+        fail("mkdir /lq");
+    }
+    if (sys5(SYS_MOUNT, (int)"/dev/disk0p2", (int)"/lq", (int)"vfat", 0, 0) != 0) {
+        fail("the mount of the second partition");
+    }
+    for (i = 0; i < 16; i++) {
+        pids[i] = syscall1(SYS_FORK, 0);
+        if (pids[i] < 0) {
+            fail("fork of a reader");
+        }
+        if (pids[i] == 0) {
+            child_result(read_block_at("/lq/pattern.bin", i * 4096), 4096);
+        }
+    }
+    for (i = 0; i < 16; i++) {
+        if (wait_status(pids[i]) != 0) {
+            fail("a queued reader failed");
+        }
+    }
+    if (syscall2(SYS_UMOUNT2, (int)"/lq", 0) != 0) {
+        fail("umount2 of the volume");
+    }
+    puts("LAGPROBE OK");
+}
+
+/* A field of /proc/meminfo, in kilobytes, or 0xFFFFFFFF when absent. */
+static unsigned meminfo_kb(const char *key)
+{
+    static char text[2048];
+    int fd = syscall3(SYS_OPEN, (int)(size_t)"/proc/meminfo", O_RDONLY, 0);
+    int n, i;
+
+    if (fd < 0) {
+        return 0xFFFFFFFFu;
+    }
+    n = syscall3(SYS_READ, fd, (int)(size_t)text, (int)sizeof(text) - 1);
+    syscall1(SYS_CLOSE, fd);
+    if (n <= 0) {
+        return 0xFFFFFFFFu;
+    }
+    text[n] = 0;
+    for (i = 0; i < n; i++) {
+        int k;
+
+        for (k = 0; key[k] && text[i + k] == key[k]; k++) {
+        }
+        if (!key[k]) {
+            unsigned v = 0;
+
+            i += k;
+            while (text[i] == ' ') {
+                i++;
+            }
+            while (text[i] >= '0' && text[i] <= '9') {
+                v = v * 10 + (unsigned)(text[i] - '0');
+                i++;
+            }
+            return v;
+        }
+    }
+    return 0xFFFFFFFFu;
+}
+
+#define SYS_MMAP2 192
+
+/* Four numbers on one line, for a row that fails to say what it saw. */
+static void say_numbers(unsigned a, unsigned b, unsigned c, unsigned d)
+{
+    unsigned v[4];
+    char line[64];
+    int n = 0, k;
+
+    v[0] = a;
+    v[1] = b;
+    v[2] = c;
+    v[3] = d;
+    for (k = 0; k < 4; k++) {
+        char tmp[12];
+        int t = 0;
+        unsigned x = v[k];
+
+        do {
+            tmp[t++] = (char)('0' + x % 10);
+            x /= 10;
+        } while (x);
+        while (t) {
+            line[n++] = tmp[--t];
+        }
+        line[n++] = ' ';
+    }
+    line[n++] = '\n';
+    syscall3(SYS_WRITE, 1, (int)(size_t)line, n);
+}
+#define DIRTY_BYTES (1024 * 1024)
+
+/* A megabyte left dirty in the buffer cache, then the machine's memory
+ * taken until the caches must give their frames back; the file whole and
+ * the mount writable after. */
+static void run_dirty(void)
+{
+    unsigned total, buffers_before, buffers_after, take;
+    unsigned char *mem;
+    unsigned off;
+    int fd, i;
+
+    if (syscall2(SYS_MKDIR, (int)"/ly", 0755) != 0) {
+        fail("mkdir /ly");
+    }
+    if (sys5(SYS_MOUNT, (int)"/dev/disk0p2", (int)"/ly", (int)"vfat", 0, 0) != 0) {
+        fail("the writable mount of the second partition");
+    }
+    fd = syscall3(SYS_OPEN, (int)"/ly/DIRTY.BIN", O_WRONLY | O_CREAT, 0644);
+    if (fd < 0) {
+        fail("creating the dirty file");
+    }
+    for (off = 0; off < DIRTY_BYTES; off += 4096) {
+        for (i = 0; i < 4096; i++) {
+            sector_buf[i] = (unsigned char)((off / 4096 + i) & 0xff);
+        }
+        if (syscall3(SYS_WRITE, fd, (int)(size_t)sector_buf, 4096) != 4096) {
+            fail("a write of the dirty file");
+        }
+    }
+    syscall1(SYS_CLOSE, fd);
+    total = meminfo_kb("MemTotal:");
+    buffers_before = meminfo_kb("Buffers:");
+    if (total == 0xFFFFFFFFu || buffers_before < 512) {
+        fail("the buffer cache does not hold the file");
+    }
+    /* All of the machine but a twentieth, touched a page at a time: below
+       the sixteenth at which the kernel starts reclaim, and enough left for
+       the kernel's own objects after. */
+    take = (total - total / 20) * 1024;
+    mem = (unsigned char *)sys5(SYS_MMAP2, 0, (int)take, 3, 0x22, -1);
+    if ((int)(size_t)mem < 0 && (int)(size_t)mem > -4096) {
+        fail("the anonymous mapping");
+    }
+    for (off = 0; off < take; off += 4096) {
+        mem[off] = 1;
+    }
+    buffers_after = meminfo_kb("Buffers:");
+    if (buffers_after >= buffers_before) {
+        say_numbers(total, buffers_before, buffers_after, meminfo_kb("MemFree:"));
+        fail("the buffer cache did not give frames back under pressure");
+    }
+    if (syscall1(SYS_SYNC, 0) != 0) {
+        fail("sync after the pressure");
+    }
+    fd = syscall3(SYS_OPEN, (int)"/ly/DIRTY.BIN", O_RDONLY, 0);
+    if (fd < 0) {
+        say_numbers((unsigned)-fd, meminfo_kb("MemFree:"), 0, 0);
+        fail("reopening the dirty file");
+    }
+    for (off = 0; off < DIRTY_BYTES; off += 4096) {
+        if (syscall3(SYS_READ, fd, (int)(size_t)sector_buf, 4096) != 4096) {
+            fail("reading the file back");
+        }
+        for (i = 0; i < 4096; i++) {
+            if (sector_buf[i] != (unsigned char)((off / 4096 + i) & 0xff)) {
+                fail("the file's bytes after the pressure");
+            }
+        }
+    }
+    syscall1(SYS_CLOSE, fd);
+    write_and_sync("/ly", "/ly/AFTER.TXT", "/ly/AGAIN.TXT");
+    if (syscall2(SYS_UMOUNT2, (int)"/ly", 0) != 0) {
+        fail("umount2 of the volume");
+    }
+    puts("LAGPROBE OK");
+}
+
 /* The raw reader's request holds the one slot the first partition's device
  * may have and is never answered; the mount of the same partition then
  * waits for that slot, and both must end at the reader's deadline. The
@@ -864,8 +1075,12 @@ void probe_main(unsigned int *sp)
     if (argc >= 2 && argv[1][0] == 'd' && argv[1][1] == 'e' && argv[1][2] == 'a' &&
         argv[1][3] == 'd' && argv[1][4] == '\0') {
         run_dead();
+    } else if (argc >= 2 && argv[1][0] == 'd' && argv[1][1] == 'i') {
+        run_dirty();
     } else if (argc >= 2 && argv[1][0] == 'd') {
         run_deadline();
+    } else if (argc >= 2 && argv[1][0] == 'q') {
+        run_queue();
     } else if (argc >= 2 && argv[1][0] == 'p') {
         run_pool();
     } else if (argc >= 2 && argv[1][0] == 'w' && argv[1][5] == 'r') {

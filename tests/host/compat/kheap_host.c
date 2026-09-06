@@ -25,3 +25,17 @@ void kfree(void *p)
 {
     free(p);
 }
+
+void *kalloc_pages(uint32_t count, uintptr_t *phys)
+{
+    if (phys) {
+        *phys = 0;
+    }
+    return count ? malloc(4096ul * count) : NULL;
+}
+
+void kfree_pages(void *p, uint32_t count)
+{
+    (void)count;
+    free(p);
+}

@@ -4,7 +4,7 @@ This directory implements the kernel network stack. It supports one Ethernet int
 
 ## Device selection
 
-`init_network` allocates the TCP and socket pools before a device can receive a frame. `netdev_probe` then tries the RTL8139, the e1000, and the RTL8168GU, in that order, and binds the first device that starts.
+`init_network` initializes empty TCP and socket lists before a device can receive a frame. Sockets and TCP control blocks are allocated from the heap when created. `netdev_probe` then tries the RTL8139, the e1000, and the RTL8168GU, in that order, and binds the first device that starts.
 
 The order has a reason at each position. The RTL8139 is first because it is what every existing suite boots against. The e1000 is second because it is what QEMU attaches when nobody asks for a card. The RTL8168GU is last because it is the one physical target, and a failure from it is the only diagnostic a machine with no serial port and no network has.
 
@@ -61,13 +61,13 @@ There is no `lo` interface. At the socket boundary, a `127/8` destination become
 
 ICMP implements echo request and reply. The private ping socketcall permits one machine-wide request at a time. It makes four attempts with a one-second limit for each, which lets the first request populate ARP. A process sleeps on a wait queue; the kernel debug shell polls because no process scheduler is running there. The result is the round-trip time in ticks, `ETIMEDOUT`, `EBUSY`, or `EINTR`.
 
-UDP has an eight-entry binding table and assigns ephemeral ports from 49152 through 65535. A nonzero port below 1024 requires effective uid 0. Two sockets may share a port only when both use `SO_REUSEADDR` and have the same effective uid. A matching connected socket receives before an unconnected socket on the same port.
+UDP allocates a binding record from the heap when a socket binds and adds it to the binding list. It assigns ephemeral ports from 49152 through 65535. A nonzero port below 1024 requires effective uid 0. Two sockets may share a port only when both use `SO_REUSEADDR` and have the same effective uid. A matching connected socket receives before an unconnected socket on the same port.
 
 Outgoing UDP checksums are zero, which disables the checksum under IPv4. Incoming UDP checksums are not verified. The maximum user payload is 1472 bytes. An ordinary UDP socket has one 1500-byte receive slot. A newly delivered datagram replaces an unread datagram in that slot. Empty datagrams are represented separately from an empty slot and therefore return a valid zero-byte read. `connect` records a peer without a handshake, filters receive to that peer, and may be undone with `AF_UNSPEC`.
 
 ## TCP
 
-A transmission control block is allocated from the kernel heap when a connection opens, actively or for an incoming SYN on the interrupt side, and freed when the connection is done; a block in `TIME_WAIT` or `FIN_WAIT_2` is freed when its deadline passes, and there is no fixed count of them. `/proc/net/tcp` lists at most sixteen, a bound of that report. Send and receive rings are 4096 bytes each; MSS is 1460 bytes. The initial congestion window is four MSS and the initial slow-start threshold is 65,535 bytes.
+A transmission control block is allocated from the kernel heap when a connection opens, actively or for an incoming SYN on the interrupt side, and freed when the connection is done; a block in `TIME_WAIT` or `FIN_WAIT_2` is freed when its deadline passes, and there is no fixed count of them. `/proc/net/tcp` lists every control block in a snapshot taken at open. Send and receive rings are 4096 bytes each; MSS is 1460 bytes. The initial congestion window is four MSS and the initial slow-start threshold is 65,535 bytes.
 
 The implementation includes passive, active, and simultaneous open; in-order delivery; retransmission; slow start and congestion avoidance; RTT measurement with Karn's rule; zero-window probes; and an update when a reader reopens enough receive space. The update threshold is the smaller of one MSS and half the receive ring. TCP does not negotiate window scaling, so advertised windows remain 16-bit.
 
@@ -95,9 +95,9 @@ The effective options are `SO_BROADCAST`, `SO_REUSEADDR`, `SO_BINDTODEVICE` for 
 
 ## Packet and raw sockets
 
-A packet socket binds to interface index 0 or 1 and to IPv4 or ARP. At most two may be bound. Each has an eight-entry queue of payloads up to 1500 bytes. A full queue drops the newest frame. Receive omits the Ethernet header and reports the sender, protocol, interface, hardware type, and packet type in a 20-byte `sockaddr_ll`. Send accepts a nonempty payload of at most 1500 bytes plus a destination MAC address and supplies the Ethernet header.
+A packet socket binds to interface index 0 or 1 and to IPv4 or ARP. Each binding and its queue are allocated together from the heap, without a fixed count of bindings. Each has an eight-entry queue of payloads up to 1500 bytes. A full queue drops the newest frame. Receive omits the Ethernet header and reports the sender, protocol, interface, hardware type, and packet type in a 20-byte `sockaddr_ll`. Send accepts a nonempty payload of at most 1500 bytes plus a destination MAC address and supplies the Ethernet header.
 
-At most four raw ICMP sockets may be registered. Each has an eight-entry queue of whole IPv4 datagrams up to 1500 bytes. Every matching socket receives a copy; a full queue drops the newest datagram. A raw send preserves the caller's ICMP bytes and checksum, adds the IPv4 header, and applies the socket's `IP_TTL`. The syscall accepts an ICMP message as large as 1500 bytes, but Ethernet later drops a message from 1481 through 1500 bytes because the added IPv4 header exceeds its MTU; the syscall still reports the original length.
+Each raw ICMP registration and its queue are allocated together from the heap, without a fixed count of registrations. Each has an eight-entry queue of whole IPv4 datagrams up to 1500 bytes. Every matching socket receives a copy; a full queue drops the newest datagram. A raw send preserves the caller's ICMP bytes and checksum, adds the IPv4 header, and applies the socket's `IP_TTL`. The syscall accepts an ICMP message as large as 1500 bytes, but Ethernet later drops a message from 1481 through 1500 bytes because the added IPv4 header exceeds its MTU; the syscall still reports the original length.
 
 ## Netconsole
 
@@ -107,11 +107,11 @@ Each broadcast Ethernet frame uses EtherType `0x88b5`. Its payload starts with a
 
 ## Concurrency
 
-Protocol transmit buffers, driver descriptors, ARP state, and the socket and TCP pools are shared. IRQ handlers already run with interrupts disabled. Syscall paths use `net_lock` to save the interrupt flag and disable interrupts across shared-state operations. All three transmit paths also protect their descriptor handoff. The timer runs `netdev_poll`, `tcp_tick`, and `ip_loop_drain` in that order at 100 Hz.
+Protocol transmit buffers, driver descriptors, ARP state, and the socket and TCP lists are shared. IRQ handlers already run with interrupts disabled. Syscall paths use `net_lock` to save the interrupt flag and disable interrupts across shared-state operations. All three transmit paths also protect their descriptor handoff. The timer runs `netdev_poll`, `tcp_tick`, and `ip_loop_drain` in that order at 100 Hz.
 
 ## Verification
 
-The default suite runs 72 guest probes over the emulated card and SLIRP. It includes `loopprobe`, which covers UDP and TCP against the local address without touching the wire, `sockettest` and `dnstest`, which reach SLIRP's own services, and `sockfull` and `tcbfull`, which fill the socket table and the control-block pool and require the refusals this stack documents. A probe that needs a peer on the host has a suite of its own.
+The default suite runs 72 guest probes over the emulated card and SLIRP. It includes `loopprobe`, which covers UDP and TCP against the local address without touching the wire, and `sockettest` and `dnstest`, which reach SLIRP's own services. `tests/run pools` separately opens forty-eight sockets at once, then makes and closes a thousand sockets and requires the heap's bytes in use to remain unchanged and its page count to remain within two of the starting count. A probe that needs a peer on the host has a suite of its own.
 
 The specialized network targets are:
 

@@ -37,7 +37,7 @@ If no descriptor is ready, a pending signal returns `EINTR`; the kernel does not
 
 Projection is limited to sets in which the caller selected the descriptor. A hangup on a write-only selection does not create a read result. The return value counts ready set memberships, so one descriptor ready for both read and write contributes two.
 
-An `fd_set` has 1024 bits. `nfds` may be as large as 1024 even though a process can hold only 16 descriptors, but every selected bit must name an open descriptor below that limit. A selected closed or out-of-range descriptor returns `EBADF`; `nfds` outside 0 through 1024 returns `EINVAL`.
+An `fd_set` has 1024 bits, matching the maximum number of descriptors a process may hold. `nfds` may be as large as 1024. Every selected descriptor below `nfds` must be open, or the call returns `EBADF`; `nfds` outside 0 through 1024 returns `EINVAL`.
 
 ## System-call ABI and limits
 
@@ -45,7 +45,7 @@ The implemented i386 calls are old packed-argument `select(82)`, `_newselect(142
 
 The ported i386 musl calls `poll(168)` directly. It remaps ordinary `select` to `_newselect(142)`. `pselect` and `ppoll` use calls 308 and 309 while the timeout seconds fit in 32 bits. Only a larger timeout makes musl try call 413 or 414 before falling back to the 32-bit call with a clamped timeout.
 
-`poll` accepts at most 16 entries. `select` reads and writes a complete 128-byte `fd_set` for each non-null set. `timeval` and `timespec` fields must be nonnegative and normalized; an invalid value returns `EINVAL`. This implementation does not write the remaining `select` time back to the caller's `timeval`.
+`poll` accepts at most 1024 entries, the maximum number of descriptors a process may hold. Its descriptor, wait-queue and waiter arrays are allocated from the heap for each call. `select` reads and writes a complete 128-byte `fd_set` for each non-null set. `timeval` and `timespec` fields must be nonnegative and normalized; an invalid value returns `EINVAL`. This implementation does not write the remaining `select` time back to the caller's `timeval`.
 
 `ppoll`'s signal-mask arguments and `pselect6`'s sixth mask block are ignored. There is no atomic signal-mask replacement around the wait. No backing reports `POLLPRI`, so an exception-only `select` cannot become ready. The kernel does not implement `epoll`.
 

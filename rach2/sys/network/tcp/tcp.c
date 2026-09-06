@@ -91,11 +91,8 @@ static void tcb_init(struct tcb *tcb)
 }
 
 /**
- * Allocate a TCB from the shared pool, reclaiming a closing slot if full.
- *
- * Returns a free, initialized TCB, or NULL if none can be had. When every
- * slot is in use, the soonest-to-expire TIME_WAIT or FIN_WAIT_2 connection is
- * recycled instead of failing the new connection (see the reclaim note below).
+ * A control block from the heap, initialised and on the list, or NULL when
+ * the heap has no room for one.
  */
 struct tcb *tcb_alloc(void)
 {

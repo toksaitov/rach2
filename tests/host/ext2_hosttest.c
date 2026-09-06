@@ -6,6 +6,7 @@
  * host-deps: rach2/sys/block/chain.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c
+ * host-deps: tests/host/compat/pressure_host.c
  *
  * The volumes are built here from a staged tree by the host's mke2fs on the
  * profile mkext2.sh writes, and debugfs adds device nodes in both encodings

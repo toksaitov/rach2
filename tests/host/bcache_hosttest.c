@@ -4,6 +4,8 @@
  * host-deps: rach2/sys/fs/bcache.c rach2/sys/block/chain.c
  * host-deps: rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/kheap_host.c
+ * host-deps: tests/host/compat/pressure_host.c
  *
  * The fake device is polled and fault-safe, backed by a memory image whose
  * every sector holds its own number. `block_request` is stubbed to call the
@@ -119,8 +121,11 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 
 /* ---- the fake device ---- */
 
-#define FAKE_SECTORS 100u /* not a multiple of 8: block 12 is a 4-sector tail */
-#define BIG_SECTORS  (BCACHE_BUFFERS * 8u + 8u) /* enough blocks to fill it */
+#define FAKE_SECTORS   100u /* not a multiple of 8: block 12 is a 4-sector tail */
+/* The most buffers the cache makes in this test, set on the cache below,
+   so the rows that fill it know its size. */
+#define BCACHE_BUFFERS 64u
+#define BIG_SECTORS    (BCACHE_BUFFERS * 8u + 8u) /* enough blocks to fill it */
 
 static unsigned char image_small[FAKE_SECTORS * 512];
 static unsigned char image_big[BIG_SECTORS * 512];
@@ -289,6 +294,7 @@ int main(void)
     struct bbuf *b, *c, *d;
     unsigned i;
 
+    bcache_set_limit(BCACHE_BUFFERS);
     for (i = 0; i < sizeof(image_small); i++) {
         image_small[i] = (unsigned char)(i / 512u);
     }

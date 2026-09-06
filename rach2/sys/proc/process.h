@@ -142,6 +142,10 @@ struct process {
     /* The `execve` workspace, allocated at the first exec and kept for the
      * record's life; `syscall.c` owns its type. */
     void *exec_ws;
+    /* Interrupt handlers entered and not left on this process's stack;
+     * kept in the record and not in one global, since a handler that
+     * switches away leaves the count with the process it interrupted. */
+    uint32_t irq_depth;
 };
 
 typedef struct process process_t;

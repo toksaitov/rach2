@@ -14,6 +14,8 @@
 #include "procfs.h"
 
 #include "../mm/kheap.h"
+#include "../mm/pagecache.h"
+#include "bcache.h"
 
 #include "../block/loop.h"
 #include "synthfs.h"
@@ -843,23 +845,27 @@ static void ap_frames_as_kb(struct procfs_text *t, uint32_t frames)
  * Render /proc/meminfo from the physical frame pool.
  *
  * The pool is the whole of what this machine manages, so MemTotal and MemFree
- * are the two counts outright. MemAvailable is the free count as well and not
- * an estimate: there is no reclaimable cache to add to it, since the page cache
- * here is a fixed reservation the pool never gets back.
+ * are the two counts outright. Buffers and Cached are what the buffer cache
+ * and the page cache hold, which reclaim gives back under pressure, so
+ * MemAvailable is the free count and the two together.
  */
 static int procfs_gen_meminfo(struct procfs_text *t)
 {
     uint32_t total = frame_total_count();
     uint32_t free_frames = frame_free_count();
+    uint32_t buffers = bcache_resident();
+    uint32_t cached = pc_resident();
 
     ap_str(t, "MemTotal:       ");
     ap_frames_as_kb(t, total);
     ap_str(t, "MemFree:        ");
     ap_frames_as_kb(t, free_frames);
     ap_str(t, "MemAvailable:   ");
-    ap_frames_as_kb(t, free_frames);
-    ap_str(t, "Buffers:               0 kB\n");
-    ap_str(t, "Cached:                0 kB\n");
+    ap_frames_as_kb(t, free_frames + buffers + cached);
+    ap_str(t, "Buffers:        ");
+    ap_frames_as_kb(t, buffers);
+    ap_str(t, "Cached:         ");
+    ap_frames_as_kb(t, cached);
     /* The kernel's heap: what it holds and what is in use inside it, for a
      * test that makes and frees objects and requires the heap back where it
      * started. */

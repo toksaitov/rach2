@@ -21,22 +21,17 @@
    gap is exactly where that firmware's identity-mapped MMIO lives. */
 #define PCWIN_BASE 0xD0000000u
 
-/* Resident cache capacity, in PAGE_SIZE frames. Must be a power of two: the
-   lookup hash is sized at twice this. 1024 frames is a fixed 4 MiB
-   reservation. It was 256 (1 MiB) until the machine became its own build
-   host: a compile faults the 269 KiB compiler, the sources, the headers and
-   the objects through this window, and under 1 MiB every compile re-read
-   most of that working set from the disk, which measured at more than a
-   minute per file. Four MiB has the toolchain's hot set and leaves the
-   32 MiB pool most of its memory. */
+/* Policy: the most resident pages, in PAGE_SIZE frames, and a power of two,
+   since the lookup hash is sized at twice this. A page's frame is taken
+   when the page is first read and given back under memory pressure
+   (`pc_shrink`), so the cache holds at most 4 MiB and often less. 1024 is
+   what a compile on the machine needs for its hot set: at 256 every compile
+   re-read most of the compiler, the headers and the objects from the disk,
+   which measured at more than a minute per file. */
 #ifndef PC_SLOTS
 #define PC_SLOTS 1024u
 #endif
 
-/* The reservation's floor on a small-memory machine (see init_pagecache):
-   256 frames, the size the cache had before it grew, so any machine that
-   booted the old cache boots this one. */
-#define PC_MIN_SLOTS 256u
 
 /*
  * The backing store, accessed one page at a time. `disk_off` is a page-aligned
@@ -52,6 +47,15 @@ typedef int (*pc_write_fn)(uint32_t disk_off, const void *page);
  * pc_set_backing names a backing store.
  */
 void init_pagecache(void);
+
+/**
+ * Give back up to `want` frames: clean resident pages first, then dirty
+ * ones written back. Sleeps in the writes. Returns how many came back.
+ */
+uint32_t pc_shrink(uint32_t want);
+
+/** Frames the cache holds now. */
+uint32_t pc_resident(void);
 
 /*
  * Point the cache at a backing store of `fs_size` bytes and (re)start it

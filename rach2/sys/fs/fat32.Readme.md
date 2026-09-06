@@ -22,7 +22,7 @@ A FAT entry is masked to 28 bits. The walk to cluster `n` of a chain is bounded 
 
 ## Nodes and identities
 
-A node is an entry in a fixed per-mount pool of 32, freed at its last put; a lookup that finds the pool full answers `ENOMEM` and logs it. A directory's identity is its first cluster, so two lookups of one directory share a node. A file's identity is its directory's cluster and its entry index. The inode number is built from the identity: a directory's is its cluster, and a file's has its directory's cluster plus one in the high word and its index plus one in the low, so no two entries share a number.
+A node is a record allocated from the heap when first needed by a lookup or creation, or for the root at mount. It is added to the mount's node list and freed at its last put. A lookup that cannot allocate a node returns `ENOMEM` and logs the failure. A directory's identity is its first cluster, so two lookups of one directory share a node. A file's identity is its directory's cluster and its entry index. The inode number is built from the identity: a directory's is its cluster, and a file's has its directory's cluster plus one in the high word and its index plus one in the low, so no two entries share a number.
 
 ## Times and modes
 

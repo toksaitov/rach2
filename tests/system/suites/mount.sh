@@ -35,6 +35,10 @@ mcopy -i "$DISK"@@51380224 "$REPO/build/tests/hello" ::/again.bin || fail "mcopy
 awk 'BEGIN { for (i = 0; i < 128; i++) for (j = 0; j < 128; j++) printf "%03d.", i }' \
     > "${DISK}.pattern" || fail "pattern"
 mcopy -i "$DISK"@@51380224 "${DISK}.pattern" ::/pattern.bin || fail "mcopy pattern"
+# The memory probe, for the row where a user takes every frame outside the
+# reserve and root logs in beside it.
+mcopy -i "$DISK"@@51380224 "$REPO/build/tests/memprobe" ::/memprobe || fail "mcopy memprobe"
+TESTPASSWORD=$(cat "$REPO/krffs/rach2_test_password") || fail "the test account's password"
 
 run() {
     "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
@@ -234,6 +238,55 @@ if run --append "rach2.blocklag=10 rach2.blockdead=1 rach2.blockpool=2 rach2.res
     echo "mount-test: a stalled device fails its own callers and no other: OK"
 else
     fail "the dead boot"
+fi
+
+# ---- 12: sixteen requests queued for the one the disk may hold, the last
+#          eight seconds behind: none is quarantined, since a deadline starts
+#          when a request is taken and not when its caller began to wait ----
+if run --append "rach2.blocklag=50 rach2.blockpool=2 rach2.rescue" \
+    --timeout 120 --steptmo 60 --ok "LAGPROBE OK" --never "LAGPROBE FAIL" \
+    --log "$DISK.queue.log" \
+    "expect=Type 'help'" "send=exec /lagprobe queue" \
+    "expect=request pool: waiting for a slot: the device holds its share" \
+    "expect=LAGPROBE OK" > /dev/null 2>&1 && ! grep -aq 'quarantined' "$DISK.queue.log"; then
+    echo "mount-test: a request queued past the deadline's length is not a request past its deadline: OK"
+else
+    fail "the queue boot"
+fi
+
+# ---- 13: a megabyte left dirty, then memory taken until the caches
+#          give frames back: the buffer cache shrinks, the file reads back
+#          whole after a sync, and the mount still writes ----
+if run --append "rach2.blocklag=1 rach2.rescue" \
+    --timeout 180 --steptmo 90 --ok "LAGPROBE OK" --never "LAGPROBE FAIL" \
+    --log "$DISK.dirty.log" \
+    "expect=Type 'help'" "send=exec /lagprobe dirty" \
+    "expect=memory: reclaim:" \
+    "expect=LAGPROBE OK" > /dev/null 2>&1; then
+    echo "mount-test: dirty cache under memory pressure is written back and the mount stays writable: OK"
+else
+    fail "the dirty boot"
+fi
+
+# ---- 14: one user takes every frame outside the reserve and its fork is
+#          refused with ENOMEM; root then logs in fresh on the console and
+#          kills it, which is what the reserve is for ----
+if "$HARNESS" --kernel "$KERNEL" --initrd "$OSREAL" \
+    --qemu-arg=-cpu --qemu-arg=max \
+    --drive "file=$DISK,format=raw,if=ide,index=0,media=disk" \
+    --timeout 240 --steptmo 90 --ok "RECOVERED" --never "MEMPROBE FAIL" --log "$DISK.hog.log" \
+    "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
+    "expect=# " "send=mkdir /mnt && mount -t vfat /dev/disk0p2 /mnt && echo MOUNT\"\"ED" \
+    "expect=MOUNTED" "send=exit" \
+    "expect=rach2 login:" "send=test" "expect=Password:" "send=$TESTPASSWORD" \
+    "expect=\$ " "send=/mnt/memprobe hog &" \
+    "expect=MEMPROBE HOG: fork refused with ENOMEM" "send=exit" \
+    "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
+    "expect=# " "send=kill -9 \$(pidof memprobe) && grep MemFree /proc/meminfo && echo RECO\"\"VERED" \
+    "expect=RECOVERED" > /dev/null 2>&1; then
+    echo "mount-test: a user at the reserve is refused a fork and root still logs in and kills it: OK"
+else
+    fail "the hog boot"
 fi
 
 echo "mount-test: PASS"

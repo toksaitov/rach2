@@ -12,14 +12,37 @@
 
 #include "../klog.h"
 #include "../lib/kerrno.h"
+#include "../mm/kheap.h"
+#include "../mm/pressure.h"
 #include "../panic.h"
 #include "../proc/process.h"
 
-static struct bbuf bufs[BCACHE_BUFFERS];
-static uint8_t pages[BCACHE_BUFFERS][BCACHE_BLOCK_BYTES] __attribute__((aligned(4096)));
+static struct bbuf *bufs;     /* every buffer, newest first */
+static uint32_t nbufs;        /* how many */
+static uint32_t limit_set;    /* a limit given by `bcache_set_limit`, or 0 */
 static uint32_t clock_stamp;
-static int initialized;
+static uint32_t pass_stamp;   /* the victim search in progress, for `tried` */
 static uint64_t stat_hits, stat_fills, stat_waits;
+
+/* The most buffers the cache makes: half of what the caches together may
+ * hold under pressure, and never fewer than the floor, since a file system
+ * holds up to four at once and a write of one may take one more. */
+static uint32_t bcache_limit(void)
+{
+    uint32_t n = limit_set ? limit_set : mem_cache_target() / 2u;
+
+    return n < BCACHE_MIN_BUFFERS ? BCACHE_MIN_BUFFERS : n;
+}
+
+void bcache_set_limit(uint32_t n)
+{
+    limit_set = n;
+}
+
+uint32_t bcache_resident(void)
+{
+    return nbufs;
+}
 
 uint64_t bcache_stat_hits(void)
 {
@@ -34,16 +57,39 @@ uint64_t bcache_stat_waits(void)
     return stat_waits;
 }
 
-static void bcache_init(void)
+/* A buffer from the heap, empty and unheld, on the list; NULL when the
+ * heap has no room for it. */
+static struct bbuf *buffer_new(void)
 {
-    int i;
+    struct bbuf *b = kzalloc(sizeof(*b));
 
-    for (i = 0; i < BCACHE_BUFFERS; i++) {
-        bufs[i].data = pages[i];
-        bufs[i].holder = -1;
-        wait_queue_init(&bufs[i].wq);
+    if (!b) {
+        return 0;
     }
-    initialized = 1;
+    b->data = kalloc_pages(1, 0);
+    if (!b->data) {
+        kfree(b);
+        return 0;
+    }
+    b->holder = -1;
+    wait_queue_init(&b->wq);
+    b->next = bufs;
+    bufs = b;
+    nbufs++;
+    return b;
+}
+
+/* An empty, unheld buffer off the list and back to the heap. */
+static void buffer_free(struct bbuf *b)
+{
+    struct bbuf **link;
+
+    for (link = &bufs; *link != b; link = &(*link)->next) {
+    }
+    *link = b->next;
+    nbufs--;
+    kfree_pages(b->data, 1);
+    kfree(b);
 }
 
 static int caller_pid(void)
@@ -65,20 +111,20 @@ static void check_hold_rules(block_device_t *dev, uint64_t blk)
 {
     int pid = caller_pid();
     int held = 0;
-    int i;
+    const struct bbuf *b;
 
-    for (i = 0; i < BCACHE_BUFFERS; i++) {
-        if (bufs[i].holder != pid || !bufs[i].dev) {
+    for (b = bufs; b; b = b->next) {
+        if (b->holder != pid || !b->dev) {
             continue;
         }
         held++;
-        if (bufs[i].dev != dev) {
-            if (!block_is_below(dev, bufs[i].dev)) {
+        if (b->dev != dev) {
+            if (!block_is_below(dev, b->dev)) {
                 k_panic("bcache: hold rule: a block on a device that is not under the ones held");
             }
             continue; /* below it: its blocks are ordered among themselves */
         }
-        if (bufs[i].blk >= blk) {
+        if (b->blk >= blk) {
             k_panic("bcache: hold rule: a block taken that is not above every held block");
         }
     }
@@ -101,17 +147,17 @@ static int victim_may_be_written(block_device_t *victim, block_device_t *filling
 {
     int pid = caller_pid();
     int held = 0;
-    int i;
+    const struct bbuf *b;
 
     if (!victim || !victim->backing) {
         return 1; /* its write does not come back through here */
     }
-    for (i = 0; i < BCACHE_BUFFERS; i++) {
-        if (bufs[i].holder != pid || !bufs[i].dev) {
+    for (b = bufs; b; b = b->next) {
+        if (b->holder != pid || !b->dev) {
             continue;
         }
         held++;
-        if (bufs[i].dev != victim && !block_is_below(victim->backing, bufs[i].dev)) {
+        if (b->dev != victim && !block_is_below(victim->backing, b->dev)) {
             return 0;
         }
     }
@@ -193,50 +239,53 @@ struct bbuf *bcache_get_blank(block_device_t *dev, uint64_t blk)
 static struct bbuf *get(block_device_t *dev, uint64_t blk, int blank)
 {
     struct bbuf *victim = 0;
-    unsigned char tried[BCACHE_BUFFERS];
-    int i;
+    struct bbuf *b;
+    uint32_t pass = ++pass_stamp;
 
-    for (i = 0; i < BCACHE_BUFFERS; i++) {
-        tried[i] = 0;
-    }
-    if (!initialized) {
-        bcache_init();
-    }
     if (!dev || blk >= (dev->sector_count + BCACHE_BLOCK_SECTORS - 1) / BCACHE_BLOCK_SECTORS) {
         return 0;
     }
     check_hold_rules(dev, blk);
 
 again:
-    for (i = 0; i < BCACHE_BUFFERS; i++) {
-        if (bufs[i].dev == dev && bufs[i].blk == blk) {
-            while (bufs[i].holder != -1) {
+    for (b = bufs; b; b = b->next) {
+        if (b->dev == dev && b->blk == blk) {
+            while (b->holder != -1) {
                 stat_waits++;
-                wq_wait_event_nointr(&bufs[i].wq, busy_gone, &bufs[i]);
+                wq_wait_event_nointr(&b->wq, busy_gone, b);
             }
-            if (bufs[i].dev == dev && bufs[i].blk == blk) {
-                bufs[i].holder = caller_pid();
+            if (b->dev == dev && b->blk == blk) {
+                b->holder = caller_pid();
                 stat_hits++;
-                return &bufs[i];
+                return b;
             }
             goto again;
         }
     }
 
-    /* The least recently released unheld buffer, a dirty one written first;
-     * a buffer whose write fails stays dirty and is passed over this time. */
+    /* An empty buffer, or a new one while the cache is under its limit;
+     * otherwise the least recently released unheld buffer, a dirty one
+     * written first. A buffer whose write fails stays dirty and is passed
+     * over this time, which `tried` marks with this search's stamp. */
     for (;;) {
         victim = 0;
-        for (i = 0; i < BCACHE_BUFFERS; i++) {
-            if (bufs[i].holder != -1 || tried[i]) {
+        for (b = bufs; b; b = b->next) {
+            if (b->holder != -1 || b->tried == pass) {
                 continue;
             }
-            if (!bufs[i].dev) {
-                victim = &bufs[i];
+            if (!b->dev) {
+                victim = b;
                 break;
             }
-            if (!victim || (int32_t)(bufs[i].stamp - victim->stamp) < 0) {
-                victim = &bufs[i];
+            if (!victim || (int32_t)(b->stamp - victim->stamp) < 0) {
+                victim = b;
+            }
+        }
+        if ((!victim || victim->dev) && nbufs < bcache_limit()) {
+            struct bbuf *fresh = buffer_new();
+
+            if (fresh) {
+                victim = fresh;
             }
         }
         if (!victim) {
@@ -249,7 +298,7 @@ again:
         if (!victim_may_be_written(victim->dev, dev)) {
             /* Its write would take a block this caller may not take while it
              * holds what it holds; another buffer can be the victim. */
-            tried[victim - bufs] = 1;
+            victim->tried = pass;
             continue;
         }
         victim->holder = caller_pid(); /* held for the write */
@@ -264,7 +313,7 @@ again:
         }
         victim->holder = -1;
         wq_wake_all(&victim->wq);
-        tried[victim - bufs] = 1;
+        victim->tried = pass;
     }
     /* Keyed and held before the request sleeps, so a second process asking
      * for this block waits for this buffer instead of filling a second one. */
@@ -342,16 +391,16 @@ int bcache_sync(block_device_t *dev)
 
     for (;;) {
         struct bbuf *next = 0;
+        struct bbuf *b;
         int rc;
-        int i;
 
         /* The place reached is a block number and not a buffer: a buffer let
          * go of while this waits can be given to another block, and a cutoff
          * read from it afterwards would step over blocks still to write. */
-        for (i = 0; i < BCACHE_BUFFERS; i++) {
-            if (bufs[i].dev == dev && bufs[i].dirty && (!started || bufs[i].blk > last) &&
-                (!next || bufs[i].blk < next->blk)) {
-                next = &bufs[i];
+        for (b = bufs; b; b = b->next) {
+            if (b->dev == dev && b->dirty && (!started || b->blk > last) &&
+                (!next || b->blk < next->blk)) {
+                next = b;
             }
         }
         if (!next) {
@@ -388,55 +437,106 @@ int bcache_sync(block_device_t *dev)
 
 void bcache_device_gone(block_device_t *dev)
 {
-    int i;
+    struct bbuf *b;
     int failed = 0;
 
     dev->flags |= BLOCK_GONE;
-    for (i = 0; i < BCACHE_BUFFERS; i++) {
-        if (bufs[i].dev != dev) {
+    for (b = bufs; b; b = b->next) {
+        if (b->dev != dev) {
             continue;
         }
-        if (bufs[i].dirty) {
+        if (b->dirty) {
             if (!failed) {
-                vfs_device_failed(dev, bufs[i].blk * BCACHE_BLOCK_SECTORS, -EIO);
+                vfs_device_failed(dev, b->blk * BCACHE_BLOCK_SECTORS, -EIO);
                 failed = 1;
             }
-            bufs[i].dirty = 0;
+            b->dirty = 0;
         }
-        if (bufs[i].holder != -1) {
-            bufs[i].discard = 1;
+        if (b->holder != -1) {
+            b->discard = 1;
             continue;
         }
-        bufs[i].dev = 0;
-        bufs[i].discard = 0;
+        b->dev = 0;
+        b->discard = 0;
     }
 }
 
 int bcache_device_holds(block_device_t *dev)
 {
-    int i;
+    const struct bbuf *b;
     int held = 0;
 
-    for (i = 0; i < BCACHE_BUFFERS; i++) {
-        if (bufs[i].dev == dev && bufs[i].holder != -1) {
+    for (b = bufs; b; b = b->next) {
+        if (b->dev == dev && b->holder != -1) {
             held++;
         }
     }
     return held;
 }
 
+uint32_t bcache_shrink(uint32_t want)
+{
+    uint32_t got = 0;
+    int pass;
+
+    /* Empty buffers go first, then clean ones oldest first, then dirty ones
+     * written back where this caller may write them. */
+    for (pass = 0; pass < 3 && got < want; pass++) {
+        for (;;) {
+            struct bbuf *b, *victim = 0;
+
+            if (got >= want) {
+                break;
+            }
+            for (b = bufs; b; b = b->next) {
+                if (b->holder != -1) {
+                    continue;
+                }
+                if (pass == 0 ? b->dev != 0 : (pass == 1 ? b->dirty || !b->dev : !b->dirty)) {
+                    continue;
+                }
+                if (!victim || (int32_t)(b->stamp - victim->stamp) < 0) {
+                    victim = b;
+                }
+            }
+            if (!victim) {
+                break;
+            }
+            if (victim->dirty) {
+                if (!victim_may_be_written(victim->dev, 0)) {
+                    break;
+                }
+                victim->holder = caller_pid();
+                if (write_buffer(victim) != 0) {
+                    victim->holder = -1;
+                    wq_wake_all(&victim->wq);
+                    break;
+                }
+                victim->holder = -1;
+                wq_wake_all(&victim->wq);
+                if (victim->dirty) {
+                    break; /* dirtied again while the write slept */
+                }
+            }
+            buffer_free(victim);
+            got++;
+        }
+    }
+    return got;
+}
+
 int bcache_invalidate(block_device_t *dev)
 {
-    int i;
+    struct bbuf *b;
 
-    for (i = 0; i < BCACHE_BUFFERS; i++) {
-        if (bufs[i].dev == dev && (bufs[i].holder != -1 || bufs[i].dirty)) {
+    for (b = bufs; b; b = b->next) {
+        if (b->dev == dev && (b->holder != -1 || b->dirty)) {
             return -EBUSY;
         }
     }
-    for (i = 0; i < BCACHE_BUFFERS; i++) {
-        if (bufs[i].dev == dev) {
-            bufs[i].dev = 0;
+    for (b = bufs; b; b = b->next) {
+        if (b->dev == dev) {
+            b->dev = 0;
         }
     }
     dev->flags &= ~BLOCK_WRITE_FAILED;

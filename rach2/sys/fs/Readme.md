@@ -18,7 +18,7 @@ KRFFS has no hard links or symlink nodes. `link` and `linkat` validate their arg
 
 ## Descriptor state and lifetime
 
-Each process has 16 descriptor slots. The global open-file-description pool has 256 entries, enough for 16 processes with 16 distinct descriptions each. An open-file description contains the shared 32-bit file offset, a separate 64-bit offset for raw disk windows, the `O_APPEND` and `O_NONBLOCK` status flags, and a reference count.
+Each process has a descriptor table allocated from the kernel heap. It starts with 16 entries and doubles as it fills, up to 1024, the width of a `select` set; an open past that limit returns `EMFILE`. Open-file descriptions are allocated separately from the heap, one per open, without a fixed pool. An open-file description contains the shared 32-bit file offset, a separate 64-bit offset for raw disk windows, the `O_APPEND` and `O_NONBLOCK` status flags, and a reference count.
 
 A description on a mounted file system also holds its mount, its node, and the file system's per-open handle; the file system's `open` runs once per successful `open(2)` and its `release` once at the last close, and the record written at unmount says both counts. `read`, `write`, `lseek` and `ftruncate` hold the description for the length of the operation, so two processes sharing one description cannot both read the same offset while one sleeps in a disk request.
 

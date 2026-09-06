@@ -8,6 +8,7 @@
 #include "../serial.h"
 #include "../lib/ksignal.h"
 #include "../proc/process.h"
+#include "pressure.h"
 
 /**
  * Defined in kernel.c: tear the current user process down with a signal
@@ -28,10 +29,20 @@ size_t    _frames_number;
  * hands out: a frame the kernel reaches through its physical address. */
 static size_t _window_frames;
 static uint32_t _managed_frames;
+static uint32_t _free_frames; /* words of the table that are 0, kept by every writer */
+
+static void frame_take(uintptr_t frame);
 /* Where the next scan for a free frame starts: no frame below it is free.
  * A scan from the bottom of a million-frame table for every page would be
  * the table's length squared over a large mapping. */
 static uintptr_t _next_free_frame;
+/* Its twin for the frames above the identity-mapped window, which are
+ * taken first: the window's frames are the only ones a device can be given
+ * the address of, so the last WINDOW_KEEP of them are left to the requests
+ * and the page cache, which take from the window's top. */
+static uintptr_t _next_free_upper;
+static uint32_t _free_window_frames; /* free frames below the window */
+#define WINDOW_KEEP 64u
 /* rach2.framefail: the allocation that fails on purpose, counted down. */
 static uint32_t _framefail_left;
 static int _framefail_on = -1;
@@ -114,7 +125,7 @@ static page_table_t *alloc_page_table(void)
          * the page table. */
         uintptr_t frame = (uintptr_t)table / PAGE_SIZE;
         if (frame < _frames_number) {
-            _frames[frame] = 1;
+            frame_take(frame);
         }
         k_memset(table, 0, sizeof(page_table_t));
     }
@@ -245,7 +256,7 @@ void init_paging(struct frame_map *map)
          * the direct-mapped window, but the guard keeps every write in range.
          */
         if (phys_address < mem_reserved_ptr && frame < _frames_number) {
-            _frames[frame] = 1;
+            frame_take(frame);
         }
         frame++;
 
@@ -298,6 +309,7 @@ void init_paging(struct frame_map *map)
      */
     _user_frames_start = mem_reserved_ptr / PAGE_SIZE;
     _next_free_frame = _user_frames_start;
+    _next_free_upper = _window_frames;
     /* Everything the boot carved below the break is reserved, the tables
      * above included. What the allocator manages is counted from the table
      * and not from the map's arithmetic, so the boot's report compares the
@@ -310,6 +322,16 @@ void init_paging(struct frame_map *map)
     for (frame = _user_frames_start; frame < _frames_number; frame++) {
         if (_frames[frame] == 0) {
             _managed_frames++;
+        }
+    }
+    _free_frames = 0;
+    _free_window_frames = 0;
+    for (frame = 0; frame < _frames_number; frame++) {
+        if (_frames[frame] == 0) {
+            _free_frames++;
+            if (frame < _window_frames) {
+                _free_window_frames++;
+            }
         }
     }
 
@@ -454,7 +476,8 @@ static int vm_resolve(uint32_t addr, int write)
 
     /* Lazily back the page. alloc_user_page maps it present + user + writable;
      * code/data pages are eager-loaded at exec, so only heap/stack/anon faults
-     * reach here. */
+     * reach here. The caches give frames back first when memory is short. */
+    mem_balance();
     phys = alloc_user_page(_curr_dir, addr);
     if (phys == 0) {
         return 0; /* out of frames */
@@ -759,21 +782,60 @@ void paging_copy_frame(uintptr_t dst, uintptr_t src)
     }
 }
 
+/* Mark `frame` used with one reference, whatever it held. */
+static void frame_take(uintptr_t frame)
+{
+    if (_frames[frame] == 0) {
+        _free_frames--;
+        if (frame < _window_frames) {
+            _free_window_frames--;
+        }
+    }
+    _frames[frame] = 1;
+}
+
+/**
+ * A free frame for a user page or a kernel object: from above the window
+ * first, then from below it while more than WINDOW_KEEP are free there;
+ * `_frames_number` when there is none. The two hints say no frame below
+ * each is free in its region.
+ */
+static uintptr_t find_free_frame(void)
+{
+    uintptr_t frame;
+
+    for (frame = _next_free_upper; frame < _frames_number; frame++) {
+        if (_frames[frame] == 0) {
+            _next_free_upper = frame + 1;
+            return frame;
+        }
+    }
+    _next_free_upper = _frames_number;
+    if (_free_window_frames <= WINDOW_KEEP) {
+        return _frames_number;
+    }
+    for (frame = _next_free_frame; frame < _window_frames; frame++) {
+        if (_frames[frame] == 0) {
+            _next_free_frame = frame + 1;
+            return frame;
+        }
+    }
+    return _frames_number;
+}
+
 uintptr_t alloc_frame(void)
 {
     uintptr_t frame;
 
-    if (framefail_now()) {
+    if (framefail_now() || !mem_may_take(0)) {
         return 0;
     }
-    for (frame = _next_free_frame; frame < _frames_number; frame++) {
-        if (_frames[frame] == 0) {
-            _frames[frame] = 1;
-            _next_free_frame = frame + 1;
-            return frame * PAGE_SIZE;
-        }
+    frame = find_free_frame();
+    if (frame >= _frames_number) {
+        return 0;
     }
-    return 0;
+    frame_take(frame);
+    return frame * PAGE_SIZE;
 }
 
 void free_frame(uintptr_t phys)
@@ -814,7 +876,7 @@ uintptr_t alloc_kernel_frame(void)
 
     while (frame-- > _user_frames_start) {
         if (_frames[frame] == 0) {
-            _frames[frame] = 1;
+            frame_take(frame);
             _kernel_frames_reserved++;
             return frame * PAGE_SIZE;
         }
@@ -846,14 +908,7 @@ uint32_t frame_total_count(void)
  */
 uint32_t frame_free_count(void)
 {
-    uint32_t i, free_count = 0;
-
-    for (i = 0; i < (uint32_t)_frames_number; i++) {
-        if (_frames[i] == 0) {
-            free_count++;
-        }
-    }
-    return free_count;
+    return _free_frames;
 }
 
 /**
@@ -1068,8 +1123,16 @@ uint32_t frame_unref(uintptr_t phys)
         return _frames[frame];
     }
     _frames[frame]--;
-    if (frame >= _user_frames_start && frame < _next_free_frame && _frames[frame] == 0) {
-        _next_free_frame = frame;
+    if (_frames[frame] == 0) {
+        _free_frames++;
+        if (frame < _window_frames) {
+            _free_window_frames++;
+            if (frame >= _user_frames_start && frame < _next_free_frame) {
+                _next_free_frame = frame;
+            }
+        } else if (frame < _next_free_upper) {
+            _next_free_upper = frame;
+        }
     }
     return _frames[frame];
 }
@@ -1178,17 +1241,11 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
         return 0;
     }
 
-    /*
-     * NOW find a free physical frame.
-     * Start scanning from _user_frames_start (set at init time) to avoid
-     * conflicts with kernel structures. This fixed starting point ensures
-     * freed user pages can be reused, even if mem_reserved_ptr advances
-     * due to later kernel allocations (like new page tables).
-     */
-    for (frame = _next_free_frame; frame < _frames_number; frame++) {
-        if (_frames[frame] == 0) {
-            break;
-        }
+    frame = find_free_frame();
+    if (frame < _frames_number && !mem_may_take(1)) {
+        klog(KLOG_WARN, "vm", "user page: refused: the free frames are the reserve's, pid %d",
+             current_proc ? (int)current_proc->pid : 0);
+        return 0;
     }
     if (framefail_now()) {
         frame = _frames_number;
@@ -1218,9 +1275,7 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
         return 0;  /* No free frames */
     }
 
-    /* Mark frame as used (one reference) */
-    _frames[frame] = 1;
-    _next_free_frame = frame + 1;
+    frame_take(frame);
     phys_addr = frame * PAGE_SIZE;
 
     /* Map the page with present, rw, and user bits */

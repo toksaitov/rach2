@@ -34,12 +34,17 @@
  * fails in the host test and not on a machine.
  */
 
-#define BCACHE_BUFFERS 64
+/* Policy: the fewest buffers the cache keeps room for, whatever memory says:
+ * a file system holds up to BCACHE_HOLD_MAX at once, a write of one takes
+ * one more under it, and a second process needs the same. The most is half
+ * the caches' target, or what `bcache_set_limit` says. */
+#define BCACHE_MIN_BUFFERS 16
 #define BCACHE_BLOCK_SECTORS 8u
 #define BCACHE_BLOCK_BYTES (BCACHE_BLOCK_SECTORS * BLOCK_SECTOR_SIZE)
 #define BCACHE_HOLD_MAX 4
 
 struct bbuf {
+    struct bbuf *next;     /* the cache's list of buffers */
     block_device_t *dev;   /* NULL: the buffer is empty */
     uint64_t blk;          /* block index on dev, in 8-sector units */
     uint8_t *data;         /* BCACHE_BLOCK_BYTES, only the tail sectors valid
@@ -52,6 +57,7 @@ struct bbuf {
     int discard;
     int holder;            /* pid holding it, or -1 */
     uint32_t stamp;        /* last release, for least-recently-released */
+    uint32_t tried;        /* the victim search that passed this buffer over */
     wait_queue_t wq;       /* who waits for the hold to end */
 };
 
@@ -103,6 +109,19 @@ void bcache_device_gone(block_device_t *dev);
 
 /** How many of `dev`'s buffers are held right now. */
 int bcache_device_holds(block_device_t *dev);
+
+/**
+ * Give back up to `want` buffers, each a frame: empty ones, then clean
+ * ones oldest first, then dirty ones written back. Sleeps in the writes.
+ * Returns how many went.
+ */
+uint32_t bcache_shrink(uint32_t want);
+
+/** Buffers the cache holds now. */
+uint32_t bcache_resident(void);
+
+/** Fix the most buffers the cache makes, for a test; 0 restores the rule. */
+void bcache_set_limit(uint32_t n);
 
 /* Counters for /proc/disk: reads served from the cache, reads from the
  * device, and waits for a busy buffer. */

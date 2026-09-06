@@ -26,6 +26,14 @@
  * the free memory is what it was, so nothing leaked and nothing that
  * survived was changed.
  *
+ * `memprobe hog`: the probe takes anonymous memory a page at a time, each
+ * page backed through a `read` of `/dev/zero` into it, until the kernel
+ * refuses a page, which it does with EFAULT from the read once the free
+ * memory is inside the reserve kept for root; then a fork must be refused
+ * with ENOMEM, the probe says so, and it sleeps holding what it took until
+ * it is killed, ignoring the hangup its shell's exit sends. What the row
+ * then shows is that root can still log in beside it.
+ *
  * Prints "MEMPROBE OK" or "MEMPROBE FAIL: reason". Freestanding; int 0x80.
  */
 
@@ -323,6 +331,71 @@ static void run_fail(void)
     sys_exit(0);
 }
 
+#define SYS_NANOSLEEP    162
+#define SYS_RT_SIGACTION 174
+#define SIGHUP           1
+#define EFAULT           14
+
+static void run_hog(void)
+{
+    int zero = syscall3(SYS_OPEN, (int)(size_t)"/dev/zero", 0, 0);
+    unsigned act[5];
+    unsigned taken = 0;
+    int pid;
+
+    if (zero < 0) {
+        fail("open /dev/zero");
+    }
+    act[0] = 1; /* SIG_IGN */
+    act[1] = 0;
+    act[2] = 0;
+    act[3] = 0;
+    act[4] = 0;
+    syscall3(SYS_RT_SIGACTION, SIGHUP, (int)(size_t)act, 0);
+    for (;;) {
+        unsigned base = sys_mmap2_anon(1u << 20);
+        unsigned off;
+        int refused = 0;
+
+        if (base >= 0xFFFFF000u) {
+            break; /* no room for the region: the reserve reached another way */
+        }
+        for (off = 0; off < (1u << 20); off += PAGE) {
+            int r = syscall3(SYS_READ, zero, (int)(base + off), 16);
+
+            if (r == -EFAULT) {
+                refused = 1;
+                break;
+            }
+            if (r != 16) {
+                fail("a read of /dev/zero into a fresh page");
+            }
+            taken++;
+        }
+        if (refused) {
+            break;
+        }
+    }
+    pid = syscall1(SYS_FORK, 0);
+    if (pid == 0) {
+        sys_exit(0);
+    }
+    if (pid != -ENOMEM) {
+        if (pid > 0) {
+            wait_status(pid);
+        }
+        fail("the fork at the reserve was not refused with ENOMEM");
+    }
+    puts("MEMPROBE HOG: fork refused with ENOMEM");
+    for (;;) {
+        int ts[2];
+
+        ts[0] = 1;
+        ts[1] = 0;
+        syscall2(SYS_NANOSLEEP, (int)(size_t)ts, 0);
+    }
+}
+
 void probe_main(unsigned int *sp);
 
 __asm__(".global _start\n"
@@ -341,6 +414,9 @@ void probe_main(unsigned int *sp)
 
     if (argc >= 2 && argv[1][0] == 'f' && argv[1][1] == 'r') {
         run_fresh();
+    }
+    if (argc >= 2 && argv[1][0] == 'h') {
+        run_hog();
     }
     if (argc >= 2 && argv[1][0] == 'f') {
         run_fail();

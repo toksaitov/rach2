@@ -32,6 +32,7 @@
 #include "block/usbdisk.h"
 #include "fs/procfs.h"
 #include "mm/paging.h"
+#include "mm/pressure.h"
 #include "mm/pagecache.h"
 #include "mm/heap.h"
 #include "mm/usercopy.h"
@@ -5990,6 +5991,8 @@ static int32_t sys_execve(isr_params_t *params)
 
     struct exec_state *s;
     uint32_t entry_point;
+
+    mem_balance();
     elf_image_t img;
     uint8_t random16[16];
     page_dir_t *proc_dir;
@@ -6533,6 +6536,7 @@ static int32_t sys_fork(isr_params_t *params)
     if (!parent) {
         return -ESRCH;
     }
+    mem_balance();
 
     child = alloc_process();
     if (!child) {
@@ -11674,6 +11678,7 @@ static int32_t sys_brk(isr_params_t *params)
     if (!current_proc) {
         return -ESRCH;
     }
+    mem_balance();
     vm = &current_proc->vm;
 
     /* brk(0) queries the break; below the heap base or into the stack window is
@@ -11766,6 +11771,7 @@ static int32_t sys_mmap2(isr_params_t *params)
     if (!current_proc) {
         return -ESRCH;
     }
+    mem_balance();
     vm = &current_proc->vm;
 
     if (length == 0) {

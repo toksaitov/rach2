@@ -24,7 +24,7 @@ User addresses run from `USER_ADDR_MIN` (`0x02000000`) through, but not includin
 
 ## Virtual memory areas
 
-Each PCB contains a `vm_space_t` with at most 512 VMAs. A VMA is a half-open, page-aligned range with `VM_PROT_READ`, `VM_PROT_WRITE`, and `VM_PROT_EXEC` bits and one of these types:
+Each PCB contains a `vm_space_t` whose VMA array is allocated from the heap. The array starts with 16 entries and doubles as it fills, up to 65536. This limit serves the same purpose as Linux's `max_map_count`: a mapping that needs another VMA is refused. A VMA is a half-open, page-aligned range with `VM_PROT_READ`, `VM_PROT_WRITE`, and `VM_PROT_EXEC` bits and one of these types:
 
 * `VM_CODE` and `VM_DATA` describe loaded ELF segments.
 * `VM_HEAP` describes the non-empty part of the `brk` heap.

@@ -36,7 +36,7 @@ The namespace is fixed. Creation, removal, rename, and timestamp operations belo
 
 `null`, `zero`, and `full` seek to offset zero. Random devices, terminals, and pty endpoints are streams and return `ESPIPE`. `/dev/bootlog` uses an ordinary offset and supports seeks relative to the current ring length. All synthetic nodes use stable timestamps from the RTC reading taken during startup, or zero when no RTC reading was accepted.
 
-The pty pool has 16 pairs. Opening `/dev/ptmx` allocates a locked pair; `TIOCSPTLCK` must unlock it before `/dev/pts/N` can open. An allocated slave appears in `/dev/pts`, has device number 136:N, and starts with the opener's effective uid and gid and mode 0620. `chmod` and `chown` may change that slave for a login session. The slave uses the normal terminal discipline. Master writes become slave input, while slave output and echo enter a 4096-byte master ring. The pair is released after both endpoints close.
+Pty pairs are allocated from the heap without a fixed count. Each pair receives the lowest index not used by a live pair. Opening `/dev/ptmx` allocates a locked pair; `TIOCSPTLCK` must unlock it before `/dev/pts/N` can open. An allocated slave appears in `/dev/pts`, has device number 136:N, and starts with the opener's effective uid and gid and mode 0620. `chmod` and `chown` may change that slave for a login session. The slave uses the normal terminal discipline. Master writes become slave input, while slave output and echo enter a 4096-byte master ring. The pair is released after both endpoints close.
 
 `/proc/usb` has one line per USB device the kernel has configured: its location, the speed, the vendor and product identifiers, and the class and protocol it was driven as. The location is a path, `port 5` for root port 5 and `port 5.2` for port 2 of the hub on it, one more number for each hub down. A machine that has had a stick has further lines: one per stick naming its node, the two names the drive gave to `INQUIRY`, its size in sectors, how many partitions were published, whether its table is still being read, it is ready or it is closing, with the holds left on it when it is closing, how many `SYNCHRONIZE CACHE` commands it completed, which an unmount, a sync and an fsync each send once, and `ro` when it is write protected; and a last line, `disks N free M reclaimed`, gives how many of the two names are free and how many sticks have been given up since boot. A machine that never had a stick writes neither, so a machine with no USB controller, or one booted with `rach2.nousb`, has the file and it is empty. That is a different answer from the file not being there, and it is the one a program that opens it can act on. A program that counts devices counts the lines that begin with `port`.
 
@@ -83,7 +83,7 @@ Only one open-file description may hold write access across the three raw window
 * `/proc/net` contains `dev`, `route`, `arp`, and `tcp`. There is no `tcp6` because the kernel has no IPv6 stack.
 * `/proc/self` is a magic symlink to the caller's numeric pid.
 
-The network files are snapshots of fixed kernel tables. `/proc/net/dev` prints the sixteen columns Linux prints, because programs find their number by counting fields. Six carry a value: bytes and frames each way, receive errors, receive drops, and transmit drops. The rest are zero. `/proc/net/route` prints the on-link route and an optional default gateway. `/proc/net/arp` prints the eight-entry address cache. `/proc/net/tcp` prints the 16-entry TCP pool with Linux state numbers, queue lengths, uid, and the same socket inode used by `fstat` and `/proc/<pid>/fd/N`.
+The network files are snapshots taken at open of the entries then in the kernel tables. `/proc/net/dev` prints the sixteen columns Linux prints, because programs find their number by counting fields. Six carry a value: bytes and frames each way, receive errors, receive drops, and transmit drops. The rest are zero. `/proc/net/route` prints the on-link route and an optional default gateway. `/proc/net/arp` prints the eight-entry address cache. `/proc/net/tcp` prints every TCP control block with Linux state numbers, queue lengths, uid, and the same socket inode used by `fstat` and `/proc/<pid>/fd/N`.
 
 Each live `/proc/<pid>` directory contains `stat`, `cmdline`, and `fd`:
 
@@ -95,9 +95,9 @@ Following `/proc/self` produces the numeric pid directory. Following `/proc/<pid
 
 ## Snapshot lifetime
 
-Opening a proc text file builds it once in one of eight pooled 3072-byte buffers. Every generator has a declared bound no larger than that buffer. If the pool is full, open returns `ENFILE`. If a generator exceeds its bound, open logs the file name and returns `EOVERFLOW` instead of exposing truncated text.
+Opening a proc text file builds it once in a buffer allocated from the heap. The buffer grows as text is appended, so a report includes every row. If the heap cannot supply the text buffer, open returns `ENOMEM` and logs one line identifying the file. `/proc/disk` alone uses a formatter limited to 768 bytes, including the terminating NUL. The formatter truncates at that limit; open rejects a result of 767 bytes or more with `EOVERFLOW` and logs the file name.
 
-The descriptor reads this fixed image until EOF. Duplicated and inherited descriptors share the open-file description and its offset; the pool slot is released on the last close. A per-process snapshot therefore remains readable after that process exits. Proc text files are read-only, poll as readable, and report `st_size` as zero because their size is not generated by stat.
+The descriptor reads this fixed image until EOF. Duplicated and inherited descriptors share the open-file description and its offset; the snapshot and its buffer are freed on the last close of the description. A per-process snapshot therefore remains readable after that process exits. Proc text files are read-only, poll as readable, and report `st_size` as zero because their size is not generated by stat.
 
 Every synthetic directory includes `.` and `..`. `/proc` enumerates live processes, `/proc/<pid>/fd` enumerates live descriptors, and `/dev/pts` enumerates allocated slaves. These listings are snapshots only at the syscall level: another `getdents` call reads the current kernel tables from its saved index.
 
@@ -107,7 +107,7 @@ The default `make test` boot runs these relevant probes:
 
 * [devprobe.c](../../../tests/devprobe.c) checks the memory devices, trusted `urandom`, `/proc/self/stat`, and the console fd link.
 * [ptyprobe.c](../../../tests/ptyprobe.c) checks master allocation, slave unlocking, terminal ioctls, cooked input, echo, and output.
-* [procprobe.c](../../../tests/procprobe.c) checks snapshot lifetime and bounds, process names, system files, delivered tick accounting, mount records, network formats, socket identity, and full TCP-pool output.
+* [procprobe.c](../../../tests/procprobe.c) checks snapshot lifetime, process names, system files, delivered tick accounting, mount records, network formats, socket identity, and complete output for sixteen TCP listeners.
 * [statmusl.c](../../../tests/musl/statmusl.c) checks stable synthetic timestamps through path and descriptor stat calls.
 
 [devtest.c](../../../tests/musl/devtest.c) is built and staged as `/musl/devtest`, but the default runner does not invoke it. Its manual checks include `ttyname`, directory enumeration, access and symlink semantics, and `openat` relative to `/dev`.

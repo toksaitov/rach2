@@ -5,6 +5,7 @@
  * host-deps: rach2/sys/fs/fat32name.c rach2/sys/fs/fatcommon.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c
+ * host-deps: tests/host/compat/pressure_host.c
  *
  * The volumes are mkfatfixture's, built here on first use the way the
  * bootctl test builds them. The well-formed volume (`--vfs`) must read back
