@@ -621,13 +621,15 @@ static int kv_unlink(struct vfs_mount *mnt, void *dir, const char *name)
         return rc;
     }
     /* A name taken off a file somebody has open leaves the node, which is
-       what keeps that reader's file alive; the last close frees it. */
+       what keeps that reader's file alive; the last close frees it. The
+       record is looked up again after the writes, which sleep: a last close
+       meanwhile freed it, and then the node goes here. */
     {
         uint64_t at = krffs_child_at(&vol->fs, offset_of(mnt, dir), name);
-        struct krffs_open *o = at == KRFFS_NO_NODE ? 0 : open_at(vol, at);
 
-        if (o) {
+        if (at != KRFFS_NO_NODE && open_at(vol, at)) {
             krffs_node_t head;
+            struct krffs_open *o;
 
             if (krffs_head(&vol->fs, at, &head) != 0 ||
                 KRFFS_IS_DIR(head.mode)) {
@@ -636,7 +638,12 @@ static int kv_unlink(struct vfs_mount *mnt, void *dir, const char *name)
             krffs_stamp_at(&vol->fs, krffs_parent_offset(&vol->fs, at),
                            KRFFS_STAMP_DATA);
             krffs_orphan_at(&vol->fs, at);
-            o->nameless = 1;
+            o = open_at(vol, at);
+            if (o) {
+                o->nameless = 1;
+            } else {
+                krffs_remove_at(&vol->fs, at);
+            }
             return 0;
         }
     }
@@ -721,10 +728,10 @@ static int kv_rename(struct vfs_mount *mnt, void *olddir, const char *oldname,
      * the core would free it under them. */
     {
         uint64_t dst = krffs_child_at(&vol->fs, offset_of(mnt, newdir), newname);
-        struct krffs_open *o = dst == KRFFS_NO_NODE ? 0 : open_at(vol, dst);
 
-        if (o) {
+        if (dst != KRFFS_NO_NODE && open_at(vol, dst)) {
             krffs_node_t head;
+            struct krffs_open *o;
 
             if (krffs_head(&vol->fs, dst, &head) != 0) {
                 return -EIO;
@@ -735,7 +742,13 @@ static int kv_rename(struct vfs_mount *mnt, void *olddir, const char *oldname,
             krffs_stamp_at(&vol->fs, krffs_parent_offset(&vol->fs, dst),
                            KRFFS_STAMP_DATA);
             krffs_orphan_at(&vol->fs, dst);
-            o->nameless = 1;
+            /* Looked up again after the writes, which sleep, as in unlink. */
+            o = open_at(vol, dst);
+            if (o) {
+                o->nameless = 1;
+            } else {
+                krffs_remove_at(&vol->fs, dst);
+            }
         }
     }
     return krffs_rename_at(&vol->fs, from, to) == 0 ? 0 : -EIO;

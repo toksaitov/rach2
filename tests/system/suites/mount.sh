@@ -262,7 +262,8 @@ if run --append "rach2.blocklag=1 rach2.rescue" \
     --log "$DISK.dirty.log" \
     "expect=Type 'help'" "send=exec /lagprobe dirty" \
     "expect=memory: reclaim:" \
-    "expect=LAGPROBE OK" > /dev/null 2>&1; then
+    "expect=LAGPROBE OK" > /dev/null 2>&1 \
+    && grep -aq 'reclaim: .* [1-9][0-9]* written back' "$DISK.dirty.log"; then
     echo "mount-test: dirty cache under memory pressure is written back and the mount stays writable: OK"
 else
     fail "the dirty boot"

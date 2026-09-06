@@ -36,7 +36,7 @@ static void frame_take(uintptr_t frame);
  * A scan from the bottom of a million-frame table for every page would be
  * the table's length squared over a large mapping. */
 static uintptr_t _next_free_frame;
-/* Its twin for the frames above the identity-mapped window, which are
+/* The hint for the frames above the identity-mapped window, which are
  * taken first: the window's frames are the only ones a device can be given
  * the address of, so the last WINDOW_KEEP of them are left to the requests
  * and the page cache, which take from the window's top. */
@@ -103,7 +103,8 @@ static uintptr_t _user_frames_start = 0;
 static uint32_t _kernel_frames_reserved;
 
 /**
- * Allocate a page table from the free list, or fresh via `mem_reserve`.
+ * A page table: from the heap once it exists, from the boot allocator
+ * before.
  */
 static page_table_t *alloc_page_table(void)
 {
@@ -142,7 +143,8 @@ static void free_page_table(page_table_t *table)
 }
 
 /**
- * Allocate a page directory from the free list, or fresh via `mem_reserve`.
+ * A page directory: from the heap once it exists, from the boot allocator
+ * before.
  */
 static page_dir_t *alloc_page_dir(void)
 {
@@ -202,6 +204,20 @@ void init_paging(struct frame_map *map)
     _frames = (uint32_t *) mem_reserve(_frames_number * sizeof(uint32_t), true);
     if (_frames == NULL) {
         k_panic("init_paging: no reserved memory for the frame table");
+    }
+    /* The table was placed by the boot allocator before the map could be
+     * consulted; a table that lies over a range the map does not offer
+     * would have overwritten firmware's memory, and the machine stops
+     * rather than run on it. */
+    if (map->top_frame) {
+        uintptr_t first = (uintptr_t)_frames / PAGE_SIZE;
+        uintptr_t last = ((uintptr_t)_frames + _frames_number * sizeof(uint32_t) - 1) / PAGE_SIZE;
+
+        for (frame = first; frame <= last; frame++) {
+            if (!frame_map_usable(map, (uint32_t)frame)) {
+                k_panic("init_paging: the frame table lies over memory the map does not offer");
+            }
+        }
     }
     _managed_frames = 0;
     for (frame = 0; frame < _frames_number; frame++) {
@@ -418,6 +434,27 @@ static int pte_present(page_dir_t *dir, uint32_t addr)
     return (table->pages[page_index] & 0x1) != 0;
 }
 
+/* Take back the page `alloc_user_page` mapped at `addr` in `dir`: the
+ * entry cleared and the frame given back. For a page that could not be
+ * made ready. */
+static void unmap_user_page_frame(page_dir_t *dir, uint32_t addr)
+{
+    page_table_t *table = dir->logical_page_tables[addr / PAGE_SIZE / 1024];
+    uint32_t index = (addr / PAGE_SIZE) % 1024;
+    uint32_t pte;
+
+    if (!table) {
+        return;
+    }
+    pte = table->pages[index];
+    if (!(pte & 0x1)) {
+        return;
+    }
+    table->pages[index] = 0;
+    paging_flush_tlb(addr);
+    frame_unref(pte & ~0xFFFu);
+}
+
 /**
  * Demand-paging resolver. Decide whether an access at the (not necessarily
  * aligned) `addr` is legal for the current process and, if so, make sure the
@@ -484,9 +521,13 @@ static int vm_resolve(uint32_t addr, int write)
     }
 
     /* Zero the fresh page: brk/mmap/stack memory must read as zero, and the
-     * frame may carry a previous process's data. The frame is inside the
-     * identity-mapped window, so its physical address is directly writable. */
-    paging_zero_frame(phys);
+     * frame may have a previous process's data in it. A frame that could not
+     * be zeroed is not backed: the page comes off again and the fault is
+     * unresolved. */
+    if (paging_zero_frame(phys) != 0) {
+        unmap_user_page_frame(_curr_dir, addr);
+        return 0;
+    }
 
     /* Honor a read-only region's protection in the PTE, so a later write faults
      * as a protection violation, which the handler segfaults, and which
@@ -572,7 +613,14 @@ static int cow_fault(uint32_t addr)
     if (new_phys == 0) {
         return 0; /* out of frames -> caller segfaults the process */
     }
-    paging_copy_frame(new_phys, old_phys);
+    if (paging_copy_frame(new_phys, old_phys) != 0) {
+        /* Nothing was copied: the shared page is put back as it was, the
+         * fresh frame goes back, and the fault is unresolved. */
+        table->pages[page_index] = pte;
+        paging_flush_tlb(addr);
+        frame_unref(new_phys);
+        return 0;
+    }
     frame_unref(old_phys);
     return 1;
 }
@@ -757,20 +805,23 @@ void kunmap_temp(void *va)
     paging_irq_restore(flags);
 }
 
-void paging_zero_frame(uintptr_t phys)
+int paging_zero_frame(uintptr_t phys)
 {
     void *va = kmap_temp(phys);
 
-    if (va) {
-        k_memset(va, 0, PAGE_SIZE);
-        kunmap_temp(va);
+    if (!va) {
+        return -1;
     }
+    k_memset(va, 0, PAGE_SIZE);
+    kunmap_temp(va);
+    return 0;
 }
 
-void paging_copy_frame(uintptr_t dst, uintptr_t src)
+int paging_copy_frame(uintptr_t dst, uintptr_t src)
 {
     void *d = kmap_temp(dst);
     void *s = kmap_temp(src);
+    int rc = d && s ? 0 : -1;
 
     if (d && s) {
         k_memcpy(d, s, PAGE_SIZE);
@@ -781,6 +832,7 @@ void paging_copy_frame(uintptr_t dst, uintptr_t src)
     if (d) {
         kunmap_temp(d);
     }
+    return rc;
 }
 
 /* Mark `frame` used with one reference, whatever it held. */
@@ -827,15 +879,21 @@ static uintptr_t find_free_frame(void)
 uintptr_t alloc_frame(void)
 {
     uintptr_t frame;
+    uint32_t flags;
 
     if (framefail_now() || !mem_may_take(0)) {
         return 0;
     }
+    /* Selection and claim as one step: a handler's own allocation between
+     * them would take the frame this one had chosen. */
+    flags = paging_irq_save();
     frame = find_free_frame();
     if (frame >= _frames_number) {
+        paging_irq_restore(flags);
         return 0;
     }
     frame_take(frame);
+    paging_irq_restore(flags);
     return frame * PAGE_SIZE;
 }
 
@@ -884,6 +942,13 @@ uintptr_t alloc_kernel_frame(void)
     }
 
     return 0;
+}
+
+void paging_mark_reserved(uintptr_t frame)
+{
+    if (frame < _frames_number) {
+        frame_take(frame);
+    }
 }
 
 void free_kernel_frame(uintptr_t phys)
@@ -1216,6 +1281,7 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
     uintptr_t page_index;
     uintptr_t frame;
     page_table_t *table;
+    uint32_t flags;
 
     /* Align to page boundary */
     virt_addr &= ~(PAGE_SIZE - 1);
@@ -1242,15 +1308,20 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
         return 0;
     }
 
-    frame = find_free_frame();
-    if (frame < _frames_number && !mem_may_take(1)) {
+    if (!mem_may_take(1)) {
         klog(KLOG_WARN, "vm", "user page: refused: the free frames are the reserve's, pid %d",
              current_proc ? (int)current_proc->pid : 0);
         return 0;
     }
-    if (framefail_now()) {
-        frame = _frames_number;
+    /* Selection and claim as one step, as in `alloc_frame`; the refusals
+     * come first, so a refused selection does not move the hint past a
+     * free frame. */
+    flags = paging_irq_save();
+    frame = framefail_now() ? _frames_number : find_free_frame();
+    if (frame < _frames_number) {
+        frame_take(frame);
     }
+    paging_irq_restore(flags);
 
     if (frame >= _frames_number) {
         /* Who holds the pool, so that a machine that runs out says what
@@ -1276,7 +1347,6 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
         return 0;  /* No free frames */
     }
 
-    frame_take(frame);
     phys_addr = frame * PAGE_SIZE;
 
     /* Map the page with present, rw, and user bits */
@@ -1405,7 +1475,7 @@ void unmap_user_range(page_dir_t *dir, uint32_t start, uint32_t end)
 /**
  * Free a page directory and all its private page tables. Call this after
  * free_user_pages() to release the directory structures themselves; the
- * directory and its private page tables go onto free lists for reuse.
+ * directory and its private page tables go back to the heap.
  *
  * Must NOT be called on the kernel directory or the currently active
  * directory.

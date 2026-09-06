@@ -14,10 +14,11 @@
 #include "../lib/kstring.h"
 
 /* Top of the identity-mapped physical window (32 MiB): the kernel image,
- * the boot data, the modules, the page tables and the DMA buffers that a
+ * the boot data, the page tables the boot carves and the DMA buffers that a
  * device is given a physical address of live below it, where the virtual
  * address equals the physical one. Nothing above it is reached through its
- * physical address; a frame there is mapped into the kernel's layout first. */
+ * physical address; a frame there is mapped into the kernel's layout first,
+ * and the modules and the page tables made later are reached that way. */
 #define HARD_MEMORY_LIMIT 0x2000000
 
 #define PAGE_SIZE 0x1000
@@ -43,8 +44,8 @@
 #define KVA_MMIO      0xF0000000u
 #define KVA_MMIO_SIZE 0x08000000u
 #define KVA_TEMP      0xF8000000u
-/* Policy: the temporary mappings held at once, one page each, a fourth of
- * the region's 4 MiB; a caller that finds none free is told so. */
+/* Policy: the temporary mappings held at once, one page each, the whole
+ * of the region's 4 MiB; a caller that finds none free is told so. */
 #define KVA_TEMP_SLOTS 1024u
 #define KVA_MODULES   0xF8400000u
 #define KVA_MODULES_SIZE 0x04000000u
@@ -210,11 +211,13 @@ void *kmap_temp(uintptr_t phys);
 /** Release a mapping `kmap_temp` returned. */
 void kunmap_temp(void *va);
 
-/** Zero the frame at physical `phys`. */
-void paging_zero_frame(uintptr_t phys);
+/** Zero the frame at physical `phys`; -1 when no temporary mapping was
+ * free, and then the frame is untouched. */
+int paging_zero_frame(uintptr_t phys);
 
-/** Copy the frame at physical `src` into the one at physical `dst`. */
-void paging_copy_frame(uintptr_t dst, uintptr_t src);
+/** Copy the frame at physical `src` into the one at physical `dst`; -1
+ * when no temporary mapping was free, and then nothing was copied. */
+int paging_copy_frame(uintptr_t dst, uintptr_t src);
 
 /**
  * A free frame from anywhere the map offers, marked used with one
@@ -249,6 +252,10 @@ uintptr_t alloc_kernel_frame(void);
 
 /** Return a frame `alloc_kernel_frame` gave. */
 void free_kernel_frame(uintptr_t phys);
+
+/** Mark `frame` used by a boot reservation, with the counts kept; for
+ * `mem_reserve`, which takes memory after the table exists. */
+void paging_mark_reserved(uintptr_t frame);
 
 /** Total physical frames the pool manages. */
 uint32_t frame_total_count(void);

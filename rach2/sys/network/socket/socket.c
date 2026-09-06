@@ -84,11 +84,11 @@ struct socket *socket_by_inode(uint32_t inode)
 }
 
 /**
- * Claim a free socket slot and initialize it for the given type.
+ * A socket from the heap, on the list and initialised for the given type.
  *
- * Returns a socket with refcount 1 and clean protocol state, or NULL if the
- * pool is exhausted. The scan runs under net_lock because the slot table is
- * shared with the IRQ-context allocator (an incoming SYN claims a slot too).
+ * Returns a socket with refcount 1 and clean protocol state, or NULL when
+ * the heap has no room. The list is changed under net_lock because it is
+ * shared with the receive path (an incoming SYN makes a socket too).
  * The slot gets an inode of its own here; the owning uid is set by the caller,
  * which is the only context that knows whether there is a caller to ask.
  *
@@ -621,11 +621,16 @@ int socket_tcp_recv(struct socket *sock, uint8_t *buf, int len)
     int rc;
 
     if (!sock || !sock->tcb) return -1;
-    tcb = sock->tcb;
 
     rc = wq_wait_event(&sock->waiters, tcp_recv_ready, sock);
     if (rc < 0) {
         return rc;
+    }
+    /* Read again after the sleep: a sharer of the socket may have shut it
+     * down meanwhile and the peer's answer freed the block. */
+    tcb = sock->tcb;
+    if (!tcb) {
+        return 0;
     }
 
     avail = tcb->recv_tail - tcb->recv_head;

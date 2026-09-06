@@ -295,12 +295,12 @@ static int inode_load(struct ext2_mount *em, uint32_t ino, struct ext2_node *n)
     return 0;
 }
 
-/* ---- the node pool ---- */
+/* ---- the nodes in memory ---- */
 
 /**
- * The node for inode `ino`, held once more if it is in the pool and loaded
- * into a free entry otherwise; NULL with `*rc` set when the pool is full or
- * the inode cannot be read.
+ * The node for inode `ino`, held once more if the mount has it in memory
+ * and loaded into a fresh record otherwise; NULL with `*rc` set when the
+ * heap has no room or the inode cannot be read.
  */
 static struct ext2_node *node_for(struct ext2_mount *em, uint32_t ino, int *rc)
 {

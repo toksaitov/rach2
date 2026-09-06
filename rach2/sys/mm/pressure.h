@@ -9,14 +9,16 @@
  * gives frames up when they run short.
  *
  * The page cache and the buffer cache together have a target of a quarter
- * of managed memory. They use more while memory is idle and give frames
- * back under pressure: when free frames fall below the low mark, reclaim
- * evicts clean cached pages and buffers and writes dirty ones back until
- * the free count is above the high mark or nothing is left to give. Reclaim
- * sleeps in the writes, so it runs from syscall and fault context only,
- * before the allocation that needed the room; the allocators themselves
- * never sleep, and an allocation that finds nothing after reclaim is
- * refused by name.
+ * of managed memory, half each, which is the most either grows to; they
+ * take frames as they fill and give them back under pressure: when free
+ * frames fall below the low mark, reclaim evicts clean cached pages and
+ * buffers and, from a system call, writes dirty ones back, until the free
+ * count is above the high mark or nothing is left to give. It runs before
+ * the allocation that needed the room, in fork, exec, mmap, brk and a
+ * user page fault; a fault enters with interrupts off and outside any
+ * call, so reclaim there takes clean frames only. The allocators
+ * themselves never sleep, and an allocation that finds nothing after
+ * reclaim is refused by name.
  *
  * A reserve, a thirty-second of managed memory, is kept for the kernel's
  * own completion and writeback and for an administrator: a frame
@@ -46,8 +48,8 @@ int mem_may_take(int user_page);
 
 /**
  * Give the caches' frames back while the free count is below the low mark,
- * up to the high mark. Sleeps in writeback; syscall and fault context only.
- * Returns how many frames came back.
+ * up to the high mark; dirty ones are written back, which sleeps, only from
+ * a system call with interrupts on. Returns how many frames came back.
  */
 uint32_t mem_reclaim(void);
 

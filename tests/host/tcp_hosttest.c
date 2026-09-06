@@ -4,6 +4,7 @@
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/network/tcp/rcvwnd.c
  * host-deps: tests/host/compat/kheap_host.c
+ * host-deps: tests/host/compat/pressure_host.c
  *
  * A guest can make this stack open a connection and carry bytes, and the
  * network suites do. What it cannot make happen on demand is the rest: a

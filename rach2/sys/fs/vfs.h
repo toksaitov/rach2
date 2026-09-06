@@ -8,10 +8,11 @@
  * vfs: the mount table, the resolver, and the operation interface every
  * mounted file system answers.
  *
- * The table has eight entries. Entry zero is the root; entries one and two
- * are the two synthetic namespaces, /dev and /proc. The three are permanent:
- * umount2 on any of them answers EBUSY. The rest are placed by mount(2) and
- * removed by umount2.
+ * The table is an array of records from the heap that grows as mounts are
+ * placed. Entry zero is the root; entries one and two are the two synthetic
+ * namespaces, /dev and /proc. The three are permanent: umount2 on any of
+ * them answers EBUSY. The rest are placed by mount(2) and removed by
+ * umount2.
  *
  * A mount point is the covered directory's node. It is held through
  * the parent file system's `hold`, so it cannot be reached under another

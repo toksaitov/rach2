@@ -165,6 +165,17 @@ int frame_map_build(struct frame_map *m, const void *mmap_buf, uint32_t mmap_len
     uint64_t addr, len;
     uint32_t type;
     uint64_t dropped = 0;
+    /* The part at or above 4 GiB, merged and subtracted like the usable
+     * part, so an entry given twice or overlapped by a reserved one counts
+     * once and not at all. */
+    struct frame_map hi;
+
+    hi.count = 0;
+    hi.usable_bytes = 0;
+    hi.unreachable_bytes = 0;
+    hi.reserved_bytes = 0;
+    hi.top_frame = 0;
+    hi.from_mem_upper = 0;
 
     m->count = 0;
     m->usable_bytes = 0;
@@ -183,7 +194,10 @@ int frame_map_build(struct frame_map *m, const void *mmap_buf, uint32_t mmap_len
             continue;
         }
         if (end > FOUR_GIB) {
-            m->unreachable_bytes += end - (addr > FOUR_GIB ? addr : FOUR_GIB);
+            if (range_add(&hi, addr > FOUR_GIB ? addr : FOUR_GIB, end) != 0) {
+                m->count = 0;
+                return -1;
+            }
             end = FOUR_GIB;
         }
         if (addr < end && range_add(m, addr, end) != 0) {
@@ -203,6 +217,12 @@ int frame_map_build(struct frame_map *m, const void *mmap_buf, uint32_t mmap_len
             end = ~(uint64_t)0;
         }
         if (end > FOUR_GIB) {
+            uint64_t taken = 0;
+
+            if (range_subtract(&hi, addr > FOUR_GIB ? addr : FOUR_GIB, end, &taken) != 0) {
+                m->count = 0;
+                return -1;
+            }
             end = FOUR_GIB;
         }
         if (range_subtract(m, addr, end, &dropped) != 0) {
@@ -210,12 +230,21 @@ int frame_map_build(struct frame_map *m, const void *mmap_buf, uint32_t mmap_len
             return -1;
         }
     }
+    for (i = 0; i < hi.count; i++) {
+        m->unreachable_bytes += hi.usable[i].end - hi.usable[i].start;
+    }
     if (m->count == 0 && m->unreachable_bytes == 0) {
         /* No map, or nothing available in it: the older field, as one range
          * from the end of the first megabyte. */
         m->from_mem_upper = 1;
         if (mem_upper_kb > 0) {
-            range_add(m, 0x100000ULL, 0x100000ULL + (uint64_t)mem_upper_kb * 1024u);
+            uint64_t end = 0x100000ULL + (uint64_t)mem_upper_kb * 1024u;
+
+            if (end > FOUR_GIB) {
+                m->unreachable_bytes += end - FOUR_GIB;
+                end = FOUR_GIB;
+            }
+            range_add(m, 0x100000ULL, end);
         }
     }
     recount(m);

@@ -2673,15 +2673,14 @@ static int ex_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, v
             }
         }
     }
+    /* Held through the writes below, which sleep: a last close meanwhile
+     * would free the node this rename is about to update. */
     moved = node_find(em, is_dir, od_cluster, src.index, le32(src.stream + 20));
-    if (moved) {
-        moved->refs--;
-    }
     /* The new set in the buffer: the source's file and stream entries
      * under the new name, so the times, the chain and the flags stay. */
     rc = set_build(em, newname, is_dir, 0, 0, &count);
     if (rc != 0) {
-        return rc;
+        goto out;
     }
     {
         uint8_t hash_lo = em->setbuf[32 + 4], hash_hi = em->setbuf[32 + 5],
@@ -2701,7 +2700,7 @@ static int ex_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, v
 
             rc = dir_entry(em, od, src.index + k, e);
             if (rc < 0) {
-                return rc;
+                goto out;
             }
             if (rc == 0) {
                 break;
@@ -2717,21 +2716,22 @@ static int ex_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, v
         if (rc == 0 && moved) {
             moved->index = src.index;
         }
-        return rc;
+        goto out;
     }
     /* Elsewhere: the room first, so ENOSPC destroys nothing; the new set
      * written with an inactive file entry; a replaced destination and the
      * source unpublished; the new file entry published last. */
     rc = free_slots(em, nd, count, &index);
     if (rc != 0) {
-        return rc;
+        goto out;
     }
     if (dst_exists && dst.index >= index && dst.index < index + count) {
-        return -EIO; /* the room found lies inside the destination's set */
+rc = -EIO;
+        goto out; /* the room found lies inside the destination's set */
     }
     rc = set_store(em, nd, index, count, 0);
     if (rc != 0) {
-        return rc;
+        goto out;
     }
     if (dst_exists) {
         rc = set_retire(em, nd, dst.index, dst.entries);
@@ -2739,12 +2739,12 @@ static int ex_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, v
             rc = retire_chain(em, nd, &dst);
         }
         if (rc != 0) {
-            return rc;
+            goto out;
         }
     }
     rc = set_retire(em, od, src.index, src.entries);
     if (rc != 0) {
-        return rc;
+        goto out;
     }
     {
         uint8_t raw[32];
@@ -2753,7 +2753,7 @@ static int ex_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, v
         raw[0] = 0x85;
         rc = dir_write(em, nd, index, raw, 1);
         if (rc != 0) {
-            return rc;
+            goto out;
         }
     }
     if (moved) {
@@ -2763,7 +2763,12 @@ static int ex_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, v
             moved->parent = nd_cluster;
         }
     }
-    return 0;
+    rc = 0;
+out:
+    if (moved) {
+        ex_put(mnt, moved);
+    }
+    return rc;
 }
 
 /* Bytes of a file: `count` from `buf` (zeros for NULL) at `off`, through

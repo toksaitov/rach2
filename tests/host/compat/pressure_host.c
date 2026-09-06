@@ -15,3 +15,13 @@ int in_interrupt(void)
 {
     return 0;
 }
+
+uint32_t mem_reserve_frames(void)
+{
+    return 0;
+}
+
+uint32_t frame_free_count(void)
+{
+    return 1u << 20;
+}

@@ -1,8 +1,9 @@
 /*
- * bcache.c: the fixed buffer cache. The contract is in bcache.h; what is
- * here is the bookkeeping: a linear table of 64 buffers keyed by device and
- * block, least-recently-released replacement, and the two hold rules checked
- * on every acquisition.
+ * bcache.c: the buffer cache. The contract is in bcache.h; what is here is
+ * the bookkeeping: a list of buffers from the heap keyed by device and
+ * block, made as they are needed up to the cache's limit and given back
+ * under memory pressure, least-recently-released replacement, and the two
+ * hold rules checked on every acquisition.
  */
 
 #include "bcache.h"
@@ -21,7 +22,6 @@ static struct bbuf *bufs;     /* every buffer, newest first */
 static uint32_t nbufs;        /* how many */
 static uint32_t limit_set;    /* a limit given by `bcache_set_limit`, or 0 */
 static uint32_t clock_stamp;
-static uint32_t pass_stamp;   /* the victim search in progress, for `tried` */
 static uint64_t stat_hits, stat_fills, stat_waits;
 
 /* The most buffers the cache makes: half of what the caches together may
@@ -198,10 +198,12 @@ static int write_buffer(struct bbuf *b)
         klog(KLOG_WARN, "bcache", "write: sector %d failed (%d), kept dirty",
              (int)(b->blk * BCACHE_BLOCK_SECTORS), rc);
         b->dev->flags |= BLOCK_WRITE_FAILED;
+        b->write_failed = 1;
         vfs_device_failed(b->dev, b->blk * BCACHE_BLOCK_SECTORS, rc);
         return rc;
     }
     b->dirty = 0;
+    b->write_failed = 0;
     return 0;
 }
 
@@ -240,7 +242,6 @@ static struct bbuf *get(block_device_t *dev, uint64_t blk, int blank)
 {
     struct bbuf *victim = 0;
     struct bbuf *b;
-    uint32_t pass = ++pass_stamp;
 
     if (!dev || blk >= (dev->sector_count + BCACHE_BLOCK_SECTORS - 1) / BCACHE_BLOCK_SECTORS) {
         return 0;
@@ -252,7 +253,9 @@ again:
         if (b->dev == dev && b->blk == blk) {
             while (b->holder != -1) {
                 stat_waits++;
+                b->waiters++; /* counted until this runs again, so reclaim leaves it */
                 wq_wait_event_nointr(&b->wq, busy_gone, b);
+                b->waiters--;
             }
             if (b->dev == dev && b->blk == blk) {
                 b->holder = caller_pid();
@@ -264,18 +267,22 @@ again:
     }
 
     /* An empty buffer, or a new one while the cache is under its limit;
-     * otherwise the least recently released unheld buffer, a dirty one
-     * written first. A buffer whose write fails stays dirty and is passed
-     * over this time, which `tried` marks with this search's stamp. */
+     * otherwise the least recently released unheld buffer this caller may
+     * take, a dirty one written first. A dirty buffer whose last write
+     * failed, or whose write would take a block this caller may not take
+     * while it holds what it holds, is not a candidate. */
     for (;;) {
         victim = 0;
         for (b = bufs; b; b = b->next) {
-            if (b->holder != -1 || b->tried == pass) {
+            if (b->holder != -1) {
                 continue;
             }
             if (!b->dev) {
                 victim = b;
                 break;
+            }
+            if (b->dirty && (b->write_failed || !victim_may_be_written(b->dev, dev))) {
+                continue;
             }
             if (!victim || (int32_t)(b->stamp - victim->stamp) < 0) {
                 victim = b;
@@ -295,12 +302,6 @@ again:
         if (!victim->dirty) {
             break;
         }
-        if (!victim_may_be_written(victim->dev, dev)) {
-            /* Its write would take a block this caller may not take while it
-             * holds what it holds; another buffer can be the victim. */
-            victim->tried = pass;
-            continue;
-        }
         victim->holder = caller_pid(); /* held for the write */
         if (write_buffer(victim) == 0) {
             victim->holder = -1;
@@ -313,7 +314,7 @@ again:
         }
         victim->holder = -1;
         wq_wake_all(&victim->wq);
-        victim->tried = pass;
+        /* The write failed and marked the buffer; the next scan leaves it. */
     }
     /* Keyed and held before the request sleeps, so a second process asking
      * for this block waits for this buffer instead of filling a second one. */
@@ -409,7 +410,9 @@ int bcache_sync(block_device_t *dev)
         /* A held dirty buffer is waited for, not passed over: a sync that
          * returned over one would report clean what is still in flight. */
         if (next->holder != -1 && next->holder != caller_pid()) {
+            next->waiters++;
             wq_wait_event_nointr(&next->wq, busy_gone, next);
+            next->waiters--;
             continue;
         }
         if (next->holder == caller_pid()) {
@@ -474,25 +477,30 @@ int bcache_device_holds(block_device_t *dev)
     return held;
 }
 
-uint32_t bcache_shrink(uint32_t want)
+uint32_t bcache_shrink(uint32_t want, int can_write, uint32_t *written)
 {
     uint32_t got = 0;
     int pass;
 
     /* Empty buffers go first, then clean ones oldest first, then dirty ones
-     * written back where this caller may write them. */
-    for (pass = 0; pass < 3 && got < want; pass++) {
-        for (;;) {
+     * written back where this caller may write them. A buffer a process
+     * waits for is left, woken or not: the waiter holds its address. Each
+     * pass has a budget, so a buffer dirtied again as fast as it is written
+     * cannot keep this here. */
+    for (pass = 0; pass < (can_write ? 3 : 2) && got < want; pass++) {
+        int budget = (int)nbufs * 2;
+
+        while (got < want && budget-- > 0) {
             struct bbuf *b, *victim = 0;
 
-            if (got >= want) {
-                break;
-            }
             for (b = bufs; b; b = b->next) {
-                if (b->holder != -1) {
+                if (b->holder != -1 || b->waiters > 0) {
                     continue;
                 }
                 if (pass == 0 ? b->dev != 0 : (pass == 1 ? b->dirty || !b->dev : !b->dirty)) {
+                    continue;
+                }
+                if (pass == 2 && (b->write_failed || !victim_may_be_written(b->dev, 0))) {
                     continue;
                 }
                 if (!victim || (int32_t)(b->stamp - victim->stamp) < 0) {
@@ -503,20 +511,16 @@ uint32_t bcache_shrink(uint32_t want)
                 break;
             }
             if (victim->dirty) {
-                if (!victim_may_be_written(victim->dev, 0)) {
-                    break;
-                }
+                int rc;
+
                 victim->holder = caller_pid();
-                if (write_buffer(victim) != 0) {
-                    victim->holder = -1;
-                    wq_wake_all(&victim->wq);
-                    break;
-                }
+                rc = write_buffer(victim);
                 victim->holder = -1;
                 wq_wake_all(&victim->wq);
-                if (victim->dirty) {
-                    break; /* dirtied again while the write slept */
+                if (rc != 0 || victim->dirty || victim->waiters > 0) {
+                    continue; /* failed, dirtied again, or waited for meanwhile */
                 }
+                (*written)++;
             }
             buffer_free(victim);
             got++;

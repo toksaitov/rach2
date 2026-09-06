@@ -53,7 +53,7 @@ static int udp_port_in_use(uint16_t port)
  * binding. The list is shared with udp_rx, which runs in IRQ context, so
  * the update is done under net_lock.
  *
- * @return 0 on success, -1 on conflict or no memory.
+ * @return 0 on success, -1 on a conflict, -ENOMEM with no memory.
  */
 int udp_bind(uint16_t port, struct socket *sock)
 {
@@ -92,7 +92,7 @@ int udp_bind(uint16_t port, struct socket *sock)
         net_unlock(flags);
         klog(KLOG_WARN, "udp", "bind: no memory for a binding, port %d refused",
              (int)port);
-        return -1;
+        return -ENOMEM;
     }
     b->port  = port;
     b->sock  = sock;
@@ -123,7 +123,12 @@ uint16_t udp_bind_ephemeral(struct socket *sock)
             udp_next_ephemeral = 49152;
         }
         if (!udp_port_in_use(port)) {
-            if (udp_bind(port, sock) == 0) {
+            int rc = udp_bind(port, sock);
+
+            if (rc == -ENOMEM) {
+                return 0; /* no port would help */
+            }
+            if (rc == 0) {
                 /* Record the port on the socket so the caller's later sends do
                  * not re-bind a fresh port each time and so close() unbinds it.
                  * (do_sendto auto-binds an unbound socket via this path.) */

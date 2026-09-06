@@ -34,7 +34,7 @@ struct raw_queue {
     uint32_t last_src;
 };
 
-/* A registered socket: the socket, the protocol it asked for, and its
+/* A registered socket: the socket, its registered protocol, and its
  * queue, one record from the heap per registration, on a list the receive
  * path walks. */
 struct raw_binding {

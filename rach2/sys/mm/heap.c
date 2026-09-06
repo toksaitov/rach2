@@ -70,7 +70,7 @@ retry:
         }
 
         for (f = start_frame; f < end_frame && f < _frames_number; f++) {
-            _frames[f] = 1;
+            paging_mark_reserved(f);
         }
     }
 

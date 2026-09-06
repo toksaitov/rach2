@@ -352,10 +352,16 @@ static int walk_move(struct vfs_ref *cur, struct vfs_mount *mnt, void *node)
         }
     }
     vfs_ref_hold(&next);
-    if (mnt != cur->mnt) {
-        vfs_leave(cur->mnt);
+    /* The put, which may sleep, before the mount is left; the put clears
+     * the reference, so the mount is remembered first. */
+    {
+        struct vfs_mount *was = cur->mnt;
+
+        vfs_ref_put(cur);
+        if (mnt != was) {
+            vfs_leave(was);
+        }
     }
-    vfs_ref_put(cur);
     *cur = next;
     return 0;
 }
@@ -640,8 +646,12 @@ int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct
     return 0;
 
 out_err:
-    vfs_leave(cur.mnt);
-    vfs_ref_put(&cur);
+    {
+        struct vfs_mount *was = cur.mnt;
+
+        vfs_ref_put(&cur);
+        vfs_leave(was);
+    }
     return rc;
 }
 
@@ -1260,13 +1270,12 @@ const struct vfs_type vfs_krffs_type = {"krffs", kfs_mount, &krffs_ops};
 /* ==== the two synthetic types ==== */
 
 /*
- * A synthetic node is a classified path. The classification carries a
- * device leaf name, which a value packed into the pointer cannot, so the
- * nodes live in a small pool and hold/put count references into it. A
- * synthetic node lives for the length of one syscall (the open that
- * follows a resolution binds a device's own ops onto the descriptor), so
- * the pool's sixteen slots are a comfortable roof, and an exhausted pool
- * answers ENOMEM rather than corrupting anything.
+ * A synthetic node is a classified path. The classification has a device
+ * leaf name in it, which a value packed into the pointer cannot, so the
+ * nodes are records from the heap and hold/put count references to them.
+ * A synthetic node lives for the length of one syscall (the open that
+ * follows a resolution binds a device's own ops onto the descriptor); a
+ * record the heap cannot give answers ENOMEM.
  */
 struct synth_node {
     struct vpath vp;
@@ -1507,7 +1516,7 @@ static int root_installed;
 
 int vfs_root_mounted(void)
 {
-    return mounts[0]->state == VFS_ACTIVE;
+    return mounts && mounts[0] && mounts[0]->state == VFS_ACTIVE;
 }
 
 void vfs_init(void)
@@ -1755,8 +1764,8 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
 
         cov.mnt = m->parent;
         cov.node = m->covered;
-        m->parent->refs--;
         vfs_ref_put(&cov);
+        m->parent->refs--;
         devfs_release_claim(claim);
         mount_release(m);
         return rc;
@@ -1877,8 +1886,8 @@ int vfs_do_umount(const char *target)
     vfs_ns_unlock(m);
     cov.mnt = m->parent;
     cov.node = m->covered;
-    m->parent->refs--;
     vfs_ref_put(&cov);
+    m->parent->refs--;
     devfs_release_claim(m->claim);
     mount_release(m);
     return 0;
@@ -1904,14 +1913,18 @@ void vfs_cwd_set(struct process *p, struct vfs_mount *mnt, void *node)
 void vfs_cwd_clear(struct process *p)
 {
     struct vfs_ref r;
+    struct vfs_mount *was;
 
     if (!p->cwd_mnt) {
         return;
     }
-    r.mnt = p->cwd_mnt;
+    was = p->cwd_mnt;
+
+    r.mnt = was;
     r.node = p->cwd_node;
-    p->cwd_mnt->refs--;
     p->cwd_mnt = 0;
     p->cwd_node = 0;
+    /* The put may sleep; the mount's count keeps it until the put is done. */
     vfs_ref_put(&r);
+    was->refs--;
 }

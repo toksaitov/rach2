@@ -1203,11 +1203,17 @@ static int procfs_gen_netarp(struct procfs_text *t)
  */
 static int procfs_gen_nettcp(struct procfs_text *t)
 {
-    struct tcp_row row;
+    struct tcp_row *rows;
+    int n = tcp_snapshot(&rows);
     int i;
 
+    if (n < 0) {
+        return -ENOMEM;
+    }
     ap_str(t, PROCFS_NETTCP_HEADER);
-    for (i = 0; tcp_row_at(i, &row); i++) {
+    for (i = 0; i < n; i++) {
+        struct tcp_row row = rows[i];
+
         ap_str(t, "   ");
         ap_u32(t, (uint32_t)i);
         ap_str(t, ": ");
@@ -1230,6 +1236,7 @@ static int procfs_gen_nettcp(struct procfs_text *t)
         ap_u32(t, row.inode);
         ap_str(t, " 1 0000000000000000 100 0 0 10 0\n");
     }
+    kfree(rows);
     return t->len;
 }
 

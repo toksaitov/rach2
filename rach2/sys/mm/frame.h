@@ -28,8 +28,8 @@
 
 #define FRAME_PAGE_SIZE        0x1000u
 /* The identity-mapped window: mirrors HARD_MEMORY_LIMIT in mm/paging.h, and
- * init_paging checks that they agree. A frame above it is managed but not
- * yet reachable; the kernel's own virtual layout is milestone 46's phase 2. */
+ * init_paging checks that they agree. A frame above it is reached through a
+ * mapping in the kernel's own layout, never through its physical address. */
 #define FRAME_DIRECT_MAP_LIMIT 0x2000000u
 /* How many disjoint usable ranges a map may leave after the subtractions.
  * A format bound: firmware maps have a few dozen entries, and a map that

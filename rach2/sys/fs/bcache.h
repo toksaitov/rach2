@@ -5,7 +5,7 @@
 #include "../proc/wait_queue.h"
 
 /*
- * bcache: the fixed buffer cache under the mounted file systems.
+ * bcache: the buffer cache under the mounted file systems.
  *
  * The operations are the ones in Lions' commentary: get a block and hold it,
  * release it, mark it dirty, write a device's dirty buffers, drop a device's
@@ -34,10 +34,11 @@
  * fails in the host test and not on a machine.
  */
 
-/* Policy: the fewest buffers the cache keeps room for, whatever memory says:
- * a file system holds up to BCACHE_HOLD_MAX at once, a write of one takes
- * one more under it, and a second process needs the same. The most is half
- * the caches' target, or what `bcache_set_limit` says. */
+/* Policy: the fewest buffers the cache makes room for, however small the
+ * target the memory gives it: a file system holds up to BCACHE_HOLD_MAX at
+ * once, a write of one takes one more under it, and a second process needs
+ * the same. The most is half the caches' target, or what
+ * `bcache_set_limit` says. */
 #define BCACHE_MIN_BUFFERS 16
 #define BCACHE_BLOCK_SECTORS 8u
 #define BCACHE_BLOCK_BYTES (BCACHE_BLOCK_SECTORS * BLOCK_SECTOR_SIZE)
@@ -57,7 +58,8 @@ struct bbuf {
     int discard;
     int holder;            /* pid holding it, or -1 */
     uint32_t stamp;        /* last release, for least-recently-released */
-    uint32_t tried;        /* the victim search that passed this buffer over */
+    int waiters;           /* processes waiting for the hold to end, woken or not */
+    int write_failed;      /* its last write failed: not a victim until one succeeds */
     wait_queue_t wq;       /* who waits for the hold to end */
 };
 
@@ -112,10 +114,11 @@ int bcache_device_holds(block_device_t *dev);
 
 /**
  * Give back up to `want` buffers, each a frame: empty ones, then clean
- * ones oldest first, then dirty ones written back. Sleeps in the writes.
- * Returns how many went.
+ * ones oldest first, then, with `can_write`, dirty ones written back, which
+ * sleeps. A buffer a process waits for is left alone. Returns how many
+ * went; `*written` counts the writebacks.
  */
-uint32_t bcache_shrink(uint32_t want);
+uint32_t bcache_shrink(uint32_t want, int can_write, uint32_t *written);
 
 /** Buffers the cache holds now. */
 uint32_t bcache_resident(void);

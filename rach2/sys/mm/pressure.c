@@ -64,32 +64,53 @@ static uint32_t high_mark(void)
 int mem_may_take(int user_page)
 {
     (void)user_page;
-    if (in_interrupt() || !current_proc || current_proc->euid == 0) {
+    if (in_interrupt() || !current_proc || current_proc->euid == 0 ||
+        current_proc->reclaiming) {
         return 1;
     }
     return frame_free_count() > mem_reserve_frames();
 }
 
+/* Whether this context may sleep in a write: inside a system call with
+ * interrupts on. A page fault enters with them off and outside any call,
+ * and a writeback there would stop on the request layer's check. */
+static int may_write_back(void)
+{
+    uint32_t eflags;
+
+    __asm__ __volatile__("pushfl; popl %0" : "=r"(eflags));
+    return (eflags & 0x200u) != 0 && proc_in_syscall();
+}
+
 uint32_t mem_reclaim(void)
 {
     uint32_t before = frame_free_count();
-    uint32_t got = 0;
+    uint32_t got = 0, written = 0;
+    int can_write = may_write_back();
 
+    /* The requests a writeback needs come from the reserve when the caller
+     * itself may not take from it: the writeback is the reserve's purpose. */
+    if (current_proc) {
+        current_proc->reclaiming++;
+    }
     while (frame_free_count() < high_mark()) {
         uint32_t want = high_mark() - frame_free_count();
-        uint32_t freed = bcache_shrink(want);
+        uint32_t freed = bcache_shrink(want, can_write, &written);
 
         if (freed < want) {
-            freed += pc_shrink(want - freed);
+            freed += pc_shrink(want - freed, can_write, &written);
         }
         if (freed == 0) {
             break;
         }
         got += freed;
     }
+    if (current_proc) {
+        current_proc->reclaiming--;
+    }
     if (got) {
-        klog(KLOG_INFO, "memory", "reclaim: %d frames from the caches, %d free before",
-             (int)got, (int)before);
+        klog(KLOG_INFO, "memory", "reclaim: %d frames from the caches, %d written back, %d free before",
+             (int)got, (int)written, (int)before);
     }
     return got;
 }

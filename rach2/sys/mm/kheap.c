@@ -214,8 +214,8 @@ void *kmalloc(size_t size)
     uint32_t flags, cls;
     void *block;
 
-    if (size == 0) {
-        return NULL;
+    if (size == 0 || size > KVA_HEAP_SIZE - PAGE_SIZE) {
+        return NULL; /* nothing, or more than the region could hold */
     }
     if (size > class_size[KHEAP_CLASSES - 1]) {
         uint32_t count = (uint32_t)((size + KHEAP_HDR + PAGE_SIZE - 1) / PAGE_SIZE);

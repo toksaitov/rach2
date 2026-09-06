@@ -41,18 +41,19 @@ typedef int (*pc_read_fn)(uint32_t disk_off, void *page);
 typedef int (*pc_write_fn)(uint32_t disk_off, const void *page);
 
 /*
- * Reserve the cache frames, pre-map the window's page tables in the kernel
- * directory, and size the window against the lowest device MMIO BAR. Call once
- * after init_paging and before the first fork. The cache serves no fault until
- * pc_set_backing names a backing store.
+ * Pre-map the window's page tables in the kernel directory and size the
+ * window against the lowest device MMIO BAR; no frame is taken here. Call
+ * once after init_paging and before the first fork. The cache serves no
+ * fault until pc_set_backing names a backing store.
  */
 void init_pagecache(void);
 
 /**
- * Give back up to `want` frames: clean resident pages first, then dirty
- * ones written back. Sleeps in the writes. Returns how many came back.
+ * Give back up to `want` frames: clean resident pages first, then, with
+ * `can_write`, dirty ones written back through the backing, which may
+ * sleep. Returns how many came back; `*written` counts the writebacks.
  */
-uint32_t pc_shrink(uint32_t want);
+uint32_t pc_shrink(uint32_t want, int can_write, uint32_t *written);
 
 /** Frames the cache holds now. */
 uint32_t pc_resident(void);

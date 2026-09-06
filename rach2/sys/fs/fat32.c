@@ -2253,6 +2253,11 @@ static int fat_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, 
         return rc;
     }
     moved = is_dir ? dir_node_at(fm, entry_first(src.ent.raw)) : node_at(fm, od_cluster, src.index);
+    /* Held through the writes below, which sleep: a last close meanwhile
+     * would free the node this rename is about to update. */
+    if (moved) {
+        moved->refs++;
+    }
     if (od_cluster == nd_cluster && !dst_exists && src.index - src.start == nn.entries) {
         /* In place: the same entries rewritten under the new name, long
          * ones first and the short one last. */
@@ -2263,11 +2268,11 @@ static int fat_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, 
             k_memcpy(moved->name11, nn.name11, 11);
             moved->lower = nn.lower;
         }
-        return rc;
+        goto out;
     }
     rc = free_slots(fm, nd, nd->first, nn.entries + 1, &index);
     if (rc != 0) {
-        return rc;
+        goto out;
     }
     if (dst_exists) {
         rc = free_name_entries(fm, nd->first, &dst);
@@ -2279,12 +2284,12 @@ static int fat_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, 
             }
         }
         if (rc != 0) {
-            return rc;
+            goto out;
         }
     }
     rc = free_name_entries(fm, od->first, &src);
     if (rc != 0) {
-        return rc;
+        goto out;
     }
     if (is_dir && od_cluster != nd_cluster) {
         uint8_t dotdot[32];
@@ -2297,14 +2302,14 @@ static int fat_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, 
             rc = fat_put_bytes(fm, cluster_offset(fm, c) + 32, dotdot, 32, 1);
         }
         if (rc != 0) {
-            return rc;
+            goto out;
         }
     }
     k_memcpy(src.ent.raw, nn.name11, 11);
     src.ent.raw[12] = nn.lower;
     rc = write_name_entries(fm, nd->first, index, &nn, src.ent.raw);
     if (rc != 0) {
-        return rc;
+        goto out;
     }
     if (moved) {
         k_memcpy(moved->name11, nn.name11, 11);
@@ -2312,7 +2317,12 @@ static int fat_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, 
         moved->dir_cluster = nd_cluster;
         moved->index = index + nn.entries;
     }
-    return 0;
+    rc = 0;
+out:
+    if (moved) {
+        fat_put(mnt, moved);
+    }
+    return rc;
 }
 
 /* The clean unmount: every dirty buffer written, FSInfo, then the dirty

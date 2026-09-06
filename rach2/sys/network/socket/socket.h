@@ -25,10 +25,11 @@
 #define AF_INET              2      /* IPv4 address family */
 /* Format: one datagram of the Ethernet MTU is the most UDP can carry here. */
 #define SOCK_RECV_BUF_SIZE   1500
-/* Policy: a listener holds sixteen accepted connections not yet taken by
- * `accept`, a ring in the socket record; a power of two, since the ring's
- * indexes wrap by a mask. The seventeenth is refused with a reset, as a
- * full backlog is on any system. */
+/* Policy: a listener holds fifteen accepted connections not yet taken by
+ * `accept`, a ring of sixteen in the socket record with one place left
+ * empty to tell full from empty; a power of two, since the ring's indexes
+ * wrap by a mask. A SYN that arrives with the ring full is answered with a
+ * reset before anything is allocated for it. */
 #define SOCK_ACCEPT_BACKLOG  16
 
 /* Returned by socket_try_recv when no datagram is waiting (Linux EAGAIN). */
@@ -119,7 +120,7 @@ typedef struct socket {
     wait_queue_t waiters;
 } socket_t;
 
-/** Reserve the socket pool; called once from init_network. */
+/** Start with no sockets; called once from init_network. */
 void socket_init(void);
 
 /** Allocate a socket with refcount 1; NULL if the pool is full. */

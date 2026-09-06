@@ -12,14 +12,16 @@
  * there, so its pages are contiguous in virtual memory and scattered in
  * physical memory. An object of at most 2048 bytes comes from a page carved
  * into blocks of one size class, 16 to 2048 bytes by doubling, with a free
- * list per class; a larger object takes whole pages. Every page starts with
- * a 16-byte header naming its class or its page count, which is how `kfree`
- * finds what it was given: the page base of the pointer.
+ * list per class; a larger object takes whole pages. A class page and the
+ * first page of a large object start with a 16-byte header that says the
+ * class or the page count, which is how `kfree` finds what it was given:
+ * the page base of the pointer. Pages from `kalloc_pages` have no header.
  *
  * The allocator never sleeps: it scans the frame table and the page bitmap
  * with interrupts masked, so it may be called from any context that may
  * allocate at all. A request the heap cannot meet answers NULL with a
- * record; the caller refuses by name.
+ * record, and the caller answers its own caller with ENOMEM or the error
+ * its contract names.
  */
 
 /** Set up the heap; the page tables of the region exist since init_paging. */

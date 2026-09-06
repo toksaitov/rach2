@@ -30,6 +30,8 @@
 #include "../../lib/kstring.h"
 #include "../../lib/kerrno.h"
 #include "../../mm/kheap.h"
+#include "../../mm/pressure.h"
+#include "../../mm/paging.h"
 
 /* The live control blocks, each allocated from the heap when a connection
  * opens, actively or for an incoming SYN on the interrupt side, and freed
@@ -598,6 +600,18 @@ void tcp_local_addr_changed(uint32_t new_ip)
  * syscall. */
 static void tcp_giveup(struct tcb *tcb)
 {
+    if (tcb->passive && tcb->state == TCP_SYN_RCVD && tcb->sock) {
+        /* A handshake the peer never finished: nobody has a descriptor or
+           an accept-queue place for its socket, so both go here. */
+        struct socket *sock = tcb->sock;
+
+        klog(KLOG_INFO, "tcp", "accept: a handshake timed out, giving up");
+        tcb->sock = NULL;
+        sock->tcb = NULL;
+        tcb_free(tcb);
+        socket_unref(sock);
+        return;
+    }
     klog(KLOG_INFO, "tcp", "connect: timed out, giving up");
     tcb->state      = TCP_CLOSED;
     tcb->so_error   = ETIMEDOUT; /* surfaced by SO_ERROR and POLLERR */
@@ -808,10 +822,17 @@ int tcp_connect(struct socket *sock, uint32_t dst_ip, uint16_t dst_port)
          * loopback an ephemeral that collides with the listener being dialed
          * would give the looped SYN src == dst port, match the caller's own
          * TCB, and hang the handshake. The loop ends within as many
-         * increments as there are live blocks plus one. */
+         * increments as there are live blocks plus one, or at the range's
+         * length when every port is in use. */
+        int tries = 0;
+
         do {
             local = next_ephemeral++;
             if (next_ephemeral < 49152) next_ephemeral = 49152;
+            if (++tries > 16384) {
+                net_unlock(flags);
+                return -EADDRNOTAVAIL; /* every ephemeral port is in use */
+            }
         } while (tcp_local_port_in_use(local));
     }
 
@@ -1114,6 +1135,19 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
     case TCP_LISTEN:
         if (!(flags & TCP_SYN)) return;
 
+        /* A listener whose backlog is full refuses before anything is
+           allocated for the connection; and a machine whose free memory is
+           inside the reserve drops the SYN, since a handler's allocation
+           would take from what root's login needs, and the peer will send
+           it again. */
+        if (tcb->sock && ((tcb->sock->accept_tail + 1) & (SOCK_ACCEPT_BACKLOG - 1)) ==
+                             tcb->sock->accept_head) {
+            tcp_send_rst_unmatched(src_ip, dst_port, src_port, flags, seq, ack_num, 1);
+            return;
+        }
+        if (frame_free_count() <= mem_reserve_frames()) {
+            return;
+        }
         /* A machine with no room says so. Dropping the SYN would leave the
            peer retransmitting for six seconds and then reporting a timeout,
            which is what a machine that is not there looks like; a reset is
@@ -1466,34 +1500,46 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
     }
 }
 
-int tcp_row_at(int index, struct tcp_row *out)
+int tcp_snapshot(struct tcp_row **rows)
 {
     uint32_t flags;
     const struct tcb *t;
-    int n = 0;
+    struct tcp_row *out;
+    int n = 0, room;
 
-    if (!out || index < 0) {
-        return 0;
-    }
+    *rows = NULL;
+    /* Counted, allocated with the lock dropped, then copied; a block made
+       between the two is left out of this moment's report. */
     flags = net_lock();
-    for (t = tcbs; t && n < index; t = t->next) {
+    for (t = tcbs; t; t = t->next) {
         n++;
     }
-    if (!t) {
-        net_unlock(flags);
+    net_unlock(flags);
+    if (n == 0) {
         return 0;
     }
-    out->local_ip    = t->local_ip;
-    out->local_port  = t->local_port;
-    out->remote_ip   = t->remote_ip;
-    out->remote_port = t->remote_port;
-    out->state       = (int)t->state;
-    out->txq         = t->send_tail - t->send_ack;
-    out->rxq         = t->recv_tail - t->recv_head;
-    out->uid         = t->uid;
-    out->inode       = t->inode;
+    out = kmalloc(sizeof(*out) * (size_t)n);
+    if (!out) {
+        return -1;
+    }
+    room = n;
+    n = 0;
+    flags = net_lock();
+    for (t = tcbs; t && n < room; t = t->next) {
+        out[n].local_ip    = t->local_ip;
+        out[n].local_port  = t->local_port;
+        out[n].remote_ip   = t->remote_ip;
+        out[n].remote_port = t->remote_port;
+        out[n].state       = (int)t->state;
+        out[n].txq         = t->send_tail - t->send_ack;
+        out[n].rxq         = t->recv_tail - t->recv_head;
+        out[n].uid         = t->uid;
+        out[n].inode       = t->inode;
+        n++;
+    }
     net_unlock(flags);
-    return 1;
+    *rows = out;
+    return n;
 }
 
 int tcp_state_to_linux(int state)

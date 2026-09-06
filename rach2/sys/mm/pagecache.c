@@ -95,6 +95,14 @@ static uint32_t pc_resident_frames; /* slots holding a frame */
  * the identity-mapped window, since the backing reads and writes it by its
  * physical address. On the host every slot has its buffer from the start.
  */
+/* Whether a slot has a frame: on the host every slot has its buffer from
+   the start and `phys` is never set. */
+#ifdef PAGECACHE_HOSTTEST
+#define PC_HAS_STORAGE(e) ((e)->page != 0)
+#else
+#define PC_HAS_STORAGE(e) ((e)->phys != 0)
+#endif
+
 static int pc_slot_storage(struct pc_entry *e)
 {
 #ifdef PAGECACHE_HOSTTEST
@@ -102,6 +110,9 @@ static int pc_slot_storage(struct pc_entry *e)
 #else
     if (e->phys) {
         return 1;
+    }
+    if (!mem_may_take(0)) {
+        return 0; /* the reserve's: a resident page gives way instead */
     }
     e->phys = alloc_kernel_frame();
     if (!e->phys) {
@@ -265,7 +276,7 @@ static int32_t pc_get_slot(void)
     /* An empty slot with a frame first, then one a frame can be had for;
        when no frame can be had, a resident page gives way below. */
     for (i = 0; i < pc_capacity; ++i) {
-        if (!pc_slots[i].valid && !pc_slots[i].pinned && pc_slots[i].phys) {
+        if (!pc_slots[i].valid && !pc_slots[i].pinned && PC_HAS_STORAGE(&pc_slots[i])) {
             return (int32_t) i;
         }
     }
@@ -278,8 +289,8 @@ static int32_t pc_get_slot(void)
     for (scanned = 0; scanned < pc_capacity * 3u; ++scanned) {
         uint32_t v = pc_clock;
         pc_clock = (pc_clock + 1u) % pc_capacity;
-        if (pc_slots[v].pinned) {
-            continue;
+        if (pc_slots[v].pinned || !PC_HAS_STORAGE(&pc_slots[v])) {
+            continue; /* held, or a slot reclaim emptied of its frame */
         }
         if (pc_slots[v].accessed) {
             pc_slots[v].accessed = 0;
@@ -344,24 +355,27 @@ int pc_fault(uint32_t fault_address, int write)
     return 1;
 }
 
-uint32_t pc_shrink(uint32_t want)
+uint32_t pc_shrink(uint32_t want, int can_write, uint32_t *written)
 {
     uint32_t got = 0;
     int pass;
 
-    /* Clean pages go first, whatever their age, then dirty ones written
-       back; a page whose writeback fails stays. */
-    for (pass = 0; pass < 2 && got < want; ++pass) {
+    /* Clean pages go first, whatever their age, then, with `can_write`,
+       dirty ones written back; a page whose writeback fails stays. */
+    for (pass = 0; pass < (can_write ? 2 : 1) && got < want; ++pass) {
         uint32_t i;
 
         for (i = 0; i < PC_SLOTS && got < want; ++i) {
             struct pc_entry *e = &pc_slots[i];
 
-            if (!e->phys || e->pinned) {
+            if (!PC_HAS_STORAGE(e) || e->pinned) {
                 continue;
             }
             if (e->valid && (pass == 0 ? e->dirty : 0)) {
                 continue;
+            }
+            if (e->valid && e->dirty) {
+                ++(*written);
             }
             if (e->valid && pc_evict(i) != 0) {
                 continue;

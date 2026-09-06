@@ -56,9 +56,10 @@
  * `lagprobe dirty`, under a lag of one tick: a megabyte is written to a
  * file on the mounted volume and left dirty in the buffer cache, then the
  * probe takes all but a twentieth of the machine's memory in pages,
- * which makes the caches give their frames back; the file's bytes must
- * read back whole after a sync, the mount must still take a write, and
- * the buffer cache must have shrunk.
+ * which makes the caches give their frames back, and then makes one more
+ * mapping, the system call in which dirty buffers are written back; the
+ * file's bytes must read back whole after a sync, the mount must still
+ * take a write, and the buffer cache must have shrunk.
  *
  * Prints "LAGPROBE OK" or "LAGPROBE FAIL: reason". Freestanding; int 0x80.
  */
@@ -907,6 +908,7 @@ static unsigned meminfo_kb(const char *key)
 }
 
 #define SYS_MMAP2 192
+#define ENOMEM    12
 
 /* Four numbers on one line, for a row that fails to say what it saw. */
 static void say_numbers(unsigned a, unsigned b, unsigned c, unsigned d)
@@ -982,6 +984,11 @@ static void run_dirty(void)
     }
     for (off = 0; off < take; off += 4096) {
         mem[off] = 1;
+    }
+    /* A page fault reclaims clean frames only; a system call may write
+       dirty buffers back, and this mapping is the call that does. */
+    if ((int)sys5(SYS_MMAP2, 0, 4096, 3, 0x22, -1) == -ENOMEM) {
+        fail("the mapping after the pressure");
     }
     buffers_after = meminfo_kb("Buffers:");
     if (buffers_after >= buffers_before) {

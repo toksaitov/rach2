@@ -162,6 +162,9 @@ struct process {
      * open descriptors, and the address space in bytes; soft and hard,
      * inherited by fork and exec. */
     struct rlimit32 rlim[RLIM_COUNT];
+    /* Inside `mem_reclaim`: its own allocations, the requests a writeback
+     * needs, may take from the reserve. */
+    uint32_t reclaiming;
 };
 
 typedef struct process process_t;

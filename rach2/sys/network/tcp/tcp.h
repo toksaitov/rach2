@@ -209,15 +209,14 @@ struct tcp_row {
 };
 
 /**
- * The `index`th live connection as a row, 1 when there is one and 0 past
- * the end, so a report iterates until it is told to stop.
- *
- * A copy under the lock rather than a pointer into the list: blocks are
+ * Every live connection as rows in an array from the heap, which the
+ * caller frees; how many there are, or -1 when the heap has no room. Taken
+ * whole under the lock, so a report is one moment of the list: blocks are
  * made and freed from receive context, and the identity fields come from
  * the block rather than from `sock`, which is cleared while a connection is
  * still closing.
  */
-int tcp_row_at(int index, struct tcp_row *out);
+int tcp_snapshot(struct tcp_row **rows);
 
 /**
  * This stack's state as the number Linux's `/proc/net/tcp` uses.

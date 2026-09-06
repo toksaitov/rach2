@@ -174,7 +174,9 @@ int elf_load(const void *data, uint32_t size, page_dir_t *dir)
             }
 
             /* Zero each page so the BSS tail and any unwritten bytes read 0. */
-            paging_zero_frame(phys_addr);
+            if (paging_zero_frame(phys_addr) != 0) {
+                return -1;
+            }
         }
 
         file_offset = phdr->p_offset;
@@ -398,7 +400,9 @@ int elf_load_image(elf_read_fn readfn, void *ctx, page_dir_t *dir, elf_image_t *
             if (phys_addr == 0) {
                 return -1;
             }
-            paging_zero_frame(phys_addr);
+            if (paging_zero_frame(phys_addr) != 0) {
+                return -1;
+            }
         }
 
         file_offset = ph->p_offset;
