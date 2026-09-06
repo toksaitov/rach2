@@ -42,7 +42,7 @@ command -v docker >/dev/null 2>&1 || {
 }
 
 EMBED="$REPO/tools/image/grub-embed.cfg"
-DISK_MODULES="biosdisk part_msdos fat normal multiboot configfile loadenv echo test serial terminal"
+DISK_MODULES="biosdisk part_msdos fat normal multiboot configfile loadenv echo test serial terminal search search_label search_fs_uuid search_fs_file"
 ISO_MODULES="biosdisk iso9660 part_msdos fat normal multiboot configfile loadenv echo test serial terminal"
 
 # The pinned archive state. Every package this procedure installs, except

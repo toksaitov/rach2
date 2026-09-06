@@ -1,16 +1,25 @@
 /**
  * mkmbr: write an MBR partition table into a disk image file.
  *
- * Usage: `mkmbr [--lba] DISK START:SIZE:TYPE[:boot] ...`, one argument per
- * partition in table order, at most four. START and SIZE are whole MiB,
- * TYPE is the hexadecimal partition type byte, and a trailing `:boot`
- * sets the active flag. A specification is refused unless it parses in
- * full, fits the 32-bit LBA fields, lies inside the image, does not
- * overlap an earlier entry, and marks at most one partition active. Only
- * the 64 table bytes and the 0x55aa signature are written; the rest of the
- * first sector, and everything after it, is left exactly as it was, which
- * is what lets the GRUB embed step write its boot code around this table
- * later.
+ * Usage: `mkmbr [--lba] [--id HEX] DISK START:SIZE:TYPE[:boot|:logical] ...`,
+ * one argument per partition in table order, at most four primary ones.
+ * START and SIZE are whole MiB, TYPE is the hexadecimal partition type
+ * byte, and a trailing `:boot` sets the active flag. A specification is
+ * refused unless it parses in full, fits the 32-bit LBA fields, lies inside
+ * the image, does not overlap an earlier entry, and marks at most one
+ * partition active. Only the 64 table bytes and the 0x55aa signature are
+ * written; the rest of the first sector, and everything after it, is left
+ * exactly as it was, which is what lets the GRUB embed step write its boot
+ * code around this table later. `--id` writes the four-byte disk
+ * identifier at offset 440 as well, which is how a disk gets the identity
+ * `rach2.root=MBRID=` names.
+ *
+ * A primary entry of type 05 or 0f is an extended partition, and every
+ * `:logical` argument after it is a logical partition inside it: each is
+ * given by its own START and SIZE, and its extended boot record is written
+ * in the sector before it, chained to the next. The logical partitions are
+ * numbered from 5 in the order given, as the kernel and every other system
+ * number them.
  *
  * This replaced parted, and it writes the same bytes parted wrote, CHS
  * fields included, so the disks this builds are byte-identical to the ones
@@ -112,25 +121,114 @@ static int list_table(const char *path)
     return 0;
 }
 
+/* One logical partition as the arguments gave it, in sectors. */
+struct logical {
+    unsigned long lba, count, type;
+};
+
+/** Write the entry `e` for `[lba, lba + count)` of `type`. */
+static void put_entry(unsigned char *e, int lba_units, unsigned long lba, unsigned long count,
+                      unsigned long type, int boot)
+{
+    e[0] = boot ? 0x80 : 0x00;
+    if (lba_units) {
+        /* The "use the LBA" sentinel in both CHS fields. */
+        e[1] = 0xFE; e[2] = 0xFF; e[3] = 0xFF;
+        e[5] = 0xFE; e[6] = 0xFF; e[7] = 0xFF;
+    } else {
+        chs(lba, e + 1);
+        chs(lba + count - 1, e + 5);
+    }
+    e[4] = (unsigned char) type;
+    e[8] = (unsigned char) lba;
+    e[9] = (unsigned char) (lba >> 8);
+    e[10] = (unsigned char) (lba >> 16);
+    e[11] = (unsigned char) (lba >> 24);
+    e[12] = (unsigned char) count;
+    e[13] = (unsigned char) (count >> 8);
+    e[14] = (unsigned char) (count >> 16);
+    e[15] = (unsigned char) (count >> 24);
+}
+
+/**
+ * Write the chain of extended boot records for `n` logical partitions
+ * inside the extended partition `[ext_lba, ext_lba + ext_count)`. The
+ * first record is the extended partition's first sector and each later
+ * one the sector before its partition; a record's first entry is its
+ * partition, relative to the record, and its second the next record,
+ * relative to the extended partition, covering that record and its
+ * partition. Returns 0, or -1 with a message.
+ */
+static int write_logical(FILE *f, int lba_units, unsigned long ext_lba, unsigned long ext_count,
+                         const struct logical *log, int n)
+{
+    int i;
+
+    for (i = 0; i < n; i++) {
+        unsigned char ebr[512];
+        unsigned long at = i == 0 ? ext_lba : log[i].lba - 1;
+
+        if (log[i].lba < ext_lba + 1 || log[i].lba + log[i].count > ext_lba + ext_count) {
+            fprintf(stderr, "mkmbr: logical partition %d is outside the extended one\n", i + 5);
+            return -1;
+        }
+        if (i > 0 && log[i].lba < log[i - 1].lba + log[i - 1].count + 1) {
+            fprintf(stderr, "mkmbr: logical partition %d overlaps the one before\n", i + 5);
+            return -1;
+        }
+        memset(ebr, 0, sizeof(ebr));
+        put_entry(ebr + 0x1be, lba_units, log[i].lba - at, log[i].count, log[i].type, 0);
+        if (i + 1 < n) {
+            unsigned long next = log[i + 1].lba - 1;
+
+            put_entry(ebr + 0x1be + 16, lba_units, next - ext_lba,
+                      log[i + 1].lba + log[i + 1].count - next, 0x05, 0);
+        }
+        ebr[510] = 0x55;
+        ebr[511] = 0xaa;
+        if (fseek(f, (long)at * 512, SEEK_SET) != 0 || fwrite(ebr, 1, 512, f) != 512) {
+            fprintf(stderr, "mkmbr: cannot write the extended boot record\n");
+            return -1;
+        }
+    }
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     unsigned char sector[512];
     unsigned long ends[4], starts[4];
     unsigned long disk_sectors;
+    unsigned long disk_id = 0, ext_lba = 0, ext_count = 0;
+    struct logical log[16];
     long disk_bytes;
     FILE *f;
-    int i, active = 0, lba_units = 0;
+    int i, active = 0, lba_units = 0, have_id = 0, primaries = 0, logicals = 0;
 
     if (argc == 3 && strcmp(argv[1], "--list") == 0)
         return list_table(argv[2]);
-    if (argc >= 2 && strcmp(argv[1], "--lba") == 0) {
-        lba_units = 1;
-        argv++;
-        argc--;
+    while (argc >= 2 && argv[1][0] == '-') {
+        if (strcmp(argv[1], "--lba") == 0) {
+            lba_units = 1;
+            argv++;
+            argc--;
+        } else if (strcmp(argv[1], "--id") == 0 && argc >= 3) {
+            const char *p = argv[2];
+
+            if (!field(&p, 16, &disk_id) || *p != '\0' || disk_id > 0xFFFFFFFFul) {
+                fprintf(stderr, "mkmbr: bad disk id '%s'\n", argv[2]);
+                return 2;
+            }
+            have_id = 1;
+            argv += 2;
+            argc -= 2;
+        } else {
+            break;
+        }
     }
-    if (argc < 3 || argc > 6) {
+    if (argc < 3) {
         fprintf(stderr,
-                "usage: mkmbr [--lba] DISK START:SIZE:TYPE[:boot] ...\n");
+                "usage: mkmbr [--lba] [--id HEX] DISK START:SIZE:TYPE[:boot|:logical] ...\n");
         return 2;
     }
     f = fopen(argv[1], "r+b");
@@ -151,23 +249,40 @@ int main(int argc, char **argv)
         return 1;
     }
     memset(sector + 0x1be, 0, 64);
+    if (have_id) {
+        sector[440] = (unsigned char) disk_id;
+        sector[441] = (unsigned char) (disk_id >> 8);
+        sector[442] = (unsigned char) (disk_id >> 16);
+        sector[443] = (unsigned char) (disk_id >> 24);
+    }
     for (i = 2; i < argc; i++) {
         unsigned long start_mib, size_mib, type;
         unsigned long lba, count;
-        unsigned char *e = sector + 0x1be + 16 * (i - 2);
+        unsigned char *e = sector + 0x1be + 16 * primaries;
         const char *p = argv[i];
-        int boot = 0, j;
+        int boot = 0, logical = 0, j;
 
         if (!field(&p, 10, &start_mib) || !colon(&p) ||
             !field(&p, 10, &size_mib) || !colon(&p) ||
             !field(&p, 16, &type) ||
             type > 0xff || size_mib == 0 ||
-            (*p != '\0' && strcmp(p, ":boot") != 0)) {
+            (*p != '\0' && strcmp(p, ":boot") != 0 && strcmp(p, ":logical") != 0)) {
             fprintf(stderr, "mkmbr: bad partition '%s'\n", argv[i]);
             fclose(f);
             return 2;
         }
-        boot = *p != '\0';
+        boot = strcmp(p, ":boot") == 0;
+        logical = strcmp(p, ":logical") == 0;
+        if (!logical && primaries == 4) {
+            fprintf(stderr, "mkmbr: more than four primary partitions\n");
+            fclose(f);
+            return 2;
+        }
+        if (logical && (ext_count == 0 || logicals == 16)) {
+            fprintf(stderr, "mkmbr: a logical partition needs an extended one before it\n");
+            fclose(f);
+            return 2;
+        }
         /* The LBA fields are 32 bits, so the whole partition, end
            included, must sit below 2 TiB and inside the image. */
         if (lba_units) {
@@ -189,9 +304,16 @@ int main(int argc, char **argv)
             fclose(f);
             return 2;
         }
-        starts[i - 2] = lba;
-        ends[i - 2] = lba + count;
-        for (j = 0; j < i - 2; j++) {
+        if (logical) {
+            log[logicals].lba = lba;
+            log[logicals].count = count;
+            log[logicals].type = type;
+            logicals++;
+            continue;
+        }
+        starts[primaries] = lba;
+        ends[primaries] = lba + count;
+        for (j = 0; j < primaries; j++) {
             if (lba < ends[j] && starts[j] < lba + count) {
                 fprintf(stderr, "mkmbr: partition '%s' overlaps entry %d\n",
                         argv[i], j + 1);
@@ -204,24 +326,16 @@ int main(int argc, char **argv)
             fclose(f);
             return 2;
         }
-        e[0] = boot ? 0x80 : 0x00;
-        if (lba_units) {
-            /* The "use the LBA" sentinel in both CHS fields. */
-            e[1] = 0xFE; e[2] = 0xFF; e[3] = 0xFF;
-            e[5] = 0xFE; e[6] = 0xFF; e[7] = 0xFF;
-        } else {
-            chs(lba, e + 1);
-            chs(lba + count - 1, e + 5);
+        if ((type == 0x05 || type == 0x0f) && ext_count == 0) {
+            ext_lba = lba;
+            ext_count = count;
         }
-        e[4] = (unsigned char) type;
-        e[8] = (unsigned char) lba;
-        e[9] = (unsigned char) (lba >> 8);
-        e[10] = (unsigned char) (lba >> 16);
-        e[11] = (unsigned char) (lba >> 24);
-        e[12] = (unsigned char) count;
-        e[13] = (unsigned char) (count >> 8);
-        e[14] = (unsigned char) (count >> 16);
-        e[15] = (unsigned char) (count >> 24);
+        put_entry(e, lba_units, lba, count, type, boot);
+        primaries++;
+    }
+    if (logicals > 0 && write_logical(f, lba_units, ext_lba, ext_count, log, logicals) != 0) {
+        fclose(f);
+        return 2;
     }
     sector[510] = 0x55;
     sector[511] = 0xaa;

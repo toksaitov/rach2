@@ -93,10 +93,27 @@ if [ "$EXT2_MB" -gt 0 ] && [ ! -f "$EXT2_IMAGE" ]; then
     echo "mkdisk_grub: RACH2_DISK_EXT2_IMAGE names no file ($EXT2_IMAGE)" >&2
     exit 1
 fi
-CANDIDATE_ROOT=disk
+# The identities: the MBR's disk id, which the menu names the roots and the
+# boot partition by, and the two FAT serials, which the menu finds the
+# partitions holding the kernels by. Pinned here, distinct from each other
+# so a search by serial finds one partition, and replaced by the installer
+# when it copies a disk. The labels are what the core image searches for
+# and are the same on every disk.
+MBR_ID=1acef00d
+FAT_SERIAL=1acef00d
+RECOVERY_SERIAL=1acef003
+BOOT_LABEL=RACH2BOOT
+RECOVERY_LABEL=RACH2RECOV
+# The roots by identity: the disk id and the entry, with the type beside
+# it, so a clone of this disk behind it is not taken for it and a partition
+# of the wrong kind is refused by name. The candidate is the ext2 root in
+# entry 4 when there is one, else the KRFFS root in entry 2 with the
+# fallback.
+CANDIDATE_ROOT="MBRID=$MBR_ID,2 rach2.rootfstype=krffs"
 if [ "$EXT2_MB" -gt 0 ]; then
-    CANDIDATE_ROOT=ext2
+    CANDIDATE_ROOT="MBRID=$MBR_ID,4 rach2.rootfstype=ext2"
 fi
+FALLBACK_ROOT="MBRID=$MBR_ID,2 rach2.rootfstype=krffs"
 
 # The FAT half of this disk used to differ between two builds of one tree, in
 # two places that have nothing to do with its contents: mformat picks a random
@@ -111,7 +128,6 @@ fi
 # vendor/grub/ and verified before use.
 SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-1700000000}"
 export SOURCE_DATE_EPOCH
-FAT_SERIAL=1acef00d
 
 # The candidate slot: bootctl rewrites these bytes in place and never
 # touches FAT metadata, so the file's size is fixed at build time.
@@ -198,10 +214,12 @@ load_env
 # Every entry this file owns is defined before the rewritable half is read, and
 # the order below is a contract. `source` merges the second file's entries onto
 # the tail of this list, so these keep the low indices whatever that file has.
-# Every entry names its own root. GRUB does not put `root` back when an entry
-# fails: the recovery entries set it to partition 3, and a fallback that assumed
-# the root it started with would look for the ordinary kernel there and fail
-# too, which is a machine that stops instead of falling back.
+# Every entry finds its own root, by the serial of the partition holding its
+# kernel, wherever the firmware put this disk. GRUB does not put `root` back
+# when an entry fails: the recovery entries set it to partition 3, and a
+# fallback that assumed the root it started with would look for the ordinary
+# kernel there and fail too, which is a machine that stops instead of falling
+# back.
 #
 # `set fallback` takes an entry NUMBER and an id does not resolve, so a menu
 # supplied later cannot move what the fallback points at. A boot.cfg that is
@@ -212,32 +230,32 @@ load_env
 #   4 debug       5 recovery   6 recovery-static    7 recovery-fsck
 
 menuentry "Rach2" --id candidate {
-    set root=(hd0,msdos1)
-    multiboot /boot/kernel rach2.root=RACH2_CANDIDATE_ROOT rach2.slot=candidate RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
+    search --no-floppy --fs-uuid --set=root RACH2_BOOT_SERIAL
+    multiboot /boot/kernel rach2.root=RACH2_CANDIDATE_ROOT rach2.boot=RACH2_BOOT_PART rach2.slot=candidate RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
     boot
 }
 
 menuentry "Rach2 (fallback kernel)" --id fallback {
-    set root=(hd0,msdos1)
-    multiboot /boot/fallback rach2.root=disk rach2.slot=fallback RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
+    search --no-floppy --fs-uuid --set=root RACH2_BOOT_SERIAL
+    multiboot /boot/fallback rach2.root=RACH2_FALLBACK_ROOT rach2.boot=RACH2_BOOT_PART rach2.slot=fallback RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
     boot
 }
 
 menuentry "Rach2 (static address)" --id candidate-static {
-    set root=(hd0,msdos1)
-    multiboot /boot/kernel rach2.root=RACH2_CANDIDATE_ROOT rach2.slot=candidate RACH2_APPEND_TOKENS RACH2_STATIC_TOKENS
+    search --no-floppy --fs-uuid --set=root RACH2_BOOT_SERIAL
+    multiboot /boot/kernel rach2.root=RACH2_CANDIDATE_ROOT rach2.boot=RACH2_BOOT_PART rach2.slot=candidate RACH2_APPEND_TOKENS RACH2_STATIC_TOKENS
     boot
 }
 
 menuentry "Rach2 (fallback kernel, static address)" --id fallback-static {
-    set root=(hd0,msdos1)
-    multiboot /boot/fallback rach2.root=disk rach2.slot=fallback RACH2_APPEND_TOKENS RACH2_STATIC_TOKENS
+    search --no-floppy --fs-uuid --set=root RACH2_BOOT_SERIAL
+    multiboot /boot/fallback rach2.root=RACH2_FALLBACK_ROOT rach2.boot=RACH2_BOOT_PART rach2.slot=fallback RACH2_APPEND_TOKENS RACH2_STATIC_TOKENS
     boot
 }
 
 menuentry "Rach2 (kernel debug shell)" --id debug {
-    set root=(hd0,msdos1)
-    multiboot /boot/fallback rach2.root=disk rach2.slot=fallback rach2.rescue RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
+    search --no-floppy --fs-uuid --set=root RACH2_BOOT_SERIAL
+    multiboot /boot/fallback rach2.root=RACH2_FALLBACK_ROOT rach2.boot=RACH2_BOOT_PART rach2.slot=fallback rach2.rescue RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
     boot
 }
 
@@ -251,15 +269,15 @@ menuentry "Rach2 (kernel debug shell)" --id debug {
 # carry `rach2.slot=recovery`, which is how `bootctl` running there knows it is
 # running from neither kernel slot and may therefore install into either.
 menuentry "RACH2_RECOVERY_TITLE" --id recovery {
-    set root=(hd0,msdos3)
-    multiboot /boot/recovery rach2.root=ram rach2.slot=recovery RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
+    search --no-floppy --fs-uuid --set=root RACH2_RECOVERY_SERIAL
+    multiboot /boot/recovery rach2.root=ram rach2.boot=RACH2_BOOT_PART rach2.slot=recovery RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
     module /boot/recovery.krffs
     boot
 }
 
 menuentry "RACH2_RECOVERY_STATIC_TITLE" --id recovery-static {
-    set root=(hd0,msdos3)
-    multiboot /boot/recovery rach2.root=ram rach2.slot=recovery RACH2_APPEND_TOKENS RACH2_STATIC_TOKENS
+    search --no-floppy --fs-uuid --set=root RACH2_RECOVERY_SERIAL
+    multiboot /boot/recovery rach2.root=ram rach2.boot=RACH2_BOOT_PART rach2.slot=recovery RACH2_APPEND_TOKENS RACH2_STATIC_TOKENS
     module /boot/recovery.krffs
     boot
 }
@@ -273,8 +291,8 @@ menuentry "RACH2_RECOVERY_STATIC_TITLE" --id recovery-static {
 # running system; it is never a saved default, since a repair is one boot
 # and a machine left saved into it would repair at every start.
 menuentry "RACH2_RECOVERY_FSCK_TITLE" --id recovery-fsck {
-    set root=(hd0,msdos3)
-    multiboot /boot/recovery rach2.root=ram rach2.slot=recovery rach2.fsck RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
+    search --no-floppy --fs-uuid --set=root RACH2_RECOVERY_SERIAL
+    multiboot /boot/recovery rach2.root=ram rach2.boot=RACH2_BOOT_PART rach2.slot=recovery rach2.fsck RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
     module /boot/recovery.krffs
     boot
 }
@@ -406,6 +424,8 @@ for v in "$EXTRA_APPEND" "$DHCP_APPEND" "$STATIC_APPEND"; do
     fi
 done
 sedq() { printf '%s' "$1" | sed 's/[\\&|]/\\&/g'; }
+# A FAT serial as GRUB's `search --fs-uuid` names it: XXXX-XXXX, upper case.
+fat_uuid() { printf '%s' "$1" | tr 'a-f' 'A-F' | sed 's/^\(....\)\(....\)$/\1-\2/'; }
 RECOVERY_TITLE="Rach2 (recovery, not yet built)"
 RECOVERY_STATIC_TITLE="Rach2 (recovery, static address, not yet built)"
 RECOVERY_FSCK_TITLE="Rach2 (recovery, repairs the ext2 partitions, not yet built)"
@@ -417,6 +437,10 @@ fi
 sed -e "s|RACH2_STATIC_TOKENS|$(sedq "$STATIC_APPEND")|" \
     -e "s|RACH2_DHCP_TOKENS|$(sedq "$DHCP_APPEND")|" \
     -e "s|RACH2_CANDIDATE_ROOT|$CANDIDATE_ROOT|" \
+    -e "s|RACH2_FALLBACK_ROOT|$FALLBACK_ROOT|" \
+    -e "s|RACH2_BOOT_PART|MBRID=$MBR_ID,1|" \
+    -e "s|RACH2_BOOT_SERIAL|$(fat_uuid $FAT_SERIAL)|" \
+    -e "s|RACH2_RECOVERY_SERIAL|$(fat_uuid $RECOVERY_SERIAL)|" \
     -e "s|RACH2_RECOVERY_STATIC_TITLE|$(sedq "$RECOVERY_STATIC_TITLE")|" \
     -e "s|RACH2_RECOVERY_FSCK_TITLE|$(sedq "$RECOVERY_FSCK_TITLE")|" \
     -e "s|RACH2_RECOVERY_TITLE|$(sedq "$RECOVERY_TITLE")|" \
@@ -430,18 +454,18 @@ mv "$GRUB_CFG.new" "$GRUB_CFG"
 # image, `grub-embed.cfg` beside this script, which says why it is shaped so;
 # `configfile` does not retarget the root, which is why this file sets its own.
 cat > "$RECOVERY_CFG" <<'RCFG'
-set root=(hd0,msdos3)
+search --no-floppy --fs-uuid --set=root RACH2_RECOVERY_SERIAL
 set timeout=3
 set default=0
 
 menuentry "Rach2 (recovery, partition 1 unreadable)" --id recovery {
-    multiboot /boot/recovery rach2.root=ram rach2.slot=recovery RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
+    multiboot /boot/recovery rach2.root=ram rach2.boot=RACH2_BOOT_PART rach2.slot=recovery RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
     module /boot/recovery.krffs
     boot
 }
 
 menuentry "Rach2 (recovery, partition 1 unreadable, static address)" --id recovery-static {
-    multiboot /boot/recovery rach2.root=ram rach2.slot=recovery RACH2_APPEND_TOKENS RACH2_STATIC_TOKENS
+    multiboot /boot/recovery rach2.root=ram rach2.boot=RACH2_BOOT_PART rach2.slot=recovery RACH2_APPEND_TOKENS RACH2_STATIC_TOKENS
     module /boot/recovery.krffs
     boot
 }
@@ -449,6 +473,8 @@ RCFG
 
 sed -e "s|RACH2_STATIC_TOKENS|$(sedq "$STATIC_APPEND")|" \
     -e "s|RACH2_DHCP_TOKENS|$(sedq "$DHCP_APPEND")|" \
+    -e "s|RACH2_BOOT_PART|MBRID=$MBR_ID,1|" \
+    -e "s|RACH2_RECOVERY_SERIAL|$(fat_uuid $RECOVERY_SERIAL)|" \
     -e "s|RACH2_APPEND_TOKENS|$(sedq "$EXTRA_APPEND")|" \
     "$RECOVERY_CFG" > "$RECOVERY_CFG.new"
 mv "$RECOVERY_CFG.new" "$RECOVERY_CFG"
@@ -486,16 +512,16 @@ export TZ=UTC
 
 dd if=/dev/zero of="$OUT.new" bs=1048576 count="$DISK_MB" 2>/dev/null
 if [ "$EXT2_MB" -gt 0 ]; then
-    "$MKMBR" "$OUT.new" "${GAP_MB}:${BOOT_MB}:0c:boot" \
+    "$MKMBR" --id "$MBR_ID" "$OUT.new" "${GAP_MB}:${BOOT_MB}:0c:boot" \
         "$((GAP_MB + BOOT_MB)):${KRFFS_MB}:83" \
         "$((GAP_MB + BOOT_MB + KRFFS_MB)):${RECOVERY_MB}:0c" \
         "${EXT2_START_MB}:${EXT2_MB}:83"
 elif [ "$RECOVERY_MB" -gt 0 ]; then
-    "$MKMBR" "$OUT.new" "${GAP_MB}:${BOOT_MB}:0c:boot" \
+    "$MKMBR" --id "$MBR_ID" "$OUT.new" "${GAP_MB}:${BOOT_MB}:0c:boot" \
         "$((GAP_MB + BOOT_MB)):${KRFFS_MB}:83" \
         "$((GAP_MB + BOOT_MB + KRFFS_MB)):${RECOVERY_MB}:0c"
 else
-    "$MKMBR" "$OUT.new" "${GAP_MB}:${BOOT_MB}:0c:boot" \
+    "$MKMBR" --id "$MBR_ID" "$OUT.new" "${GAP_MB}:${BOOT_MB}:0c:boot" \
         "$((GAP_MB + BOOT_MB)):${KRFFS_MB}:83"
 fi
 
@@ -509,9 +535,9 @@ dd if=/dev/zero of="$TMPD/candidate.pad" bs="$SLOT_BYTES" count=1 2>/dev/null
 dd if="$KERNEL" of="$TMPD/candidate.pad" conv=notrunc 2>/dev/null
 dd if=/dev/zero of="$TMPD/p1.img" bs=1048576 count="$BOOT_MB" 2>/dev/null
 if [ -n "$CLUSTER" ]; then
-    mformat -i "$TMPD/p1.img" -F -N $FAT_SERIAL -c "$CLUSTER" ::
+    mformat -i "$TMPD/p1.img" -F -N $FAT_SERIAL -v $BOOT_LABEL -c "$CLUSTER" ::
 else
-    mformat -i "$TMPD/p1.img" -F -N $FAT_SERIAL ::
+    mformat -i "$TMPD/p1.img" -F -N $FAT_SERIAL -v $BOOT_LABEL ::
 fi
 mmd -i "$TMPD/p1.img" ::/boot
 mmd -i "$TMPD/p1.img" ::/boot/grub
@@ -633,9 +659,9 @@ dd if="$KRFFS_BIN" of="$OUT.new" bs=1048576 seek=$((GAP_MB + BOOT_MB)) \
 if [ "$RECOVERY_MB" -gt 0 ]; then
     dd if=/dev/zero of="$TMPD/p3.img" bs=1048576 count="$RECOVERY_MB" 2>/dev/null
     if [ -n "$CLUSTER" ]; then
-        mformat -i "$TMPD/p3.img" -F -N $FAT_SERIAL -c "$CLUSTER" ::
+        mformat -i "$TMPD/p3.img" -F -N $RECOVERY_SERIAL -v $RECOVERY_LABEL -c "$CLUSTER" ::
     else
-        mformat -i "$TMPD/p3.img" -F -N $FAT_SERIAL ::
+        mformat -i "$TMPD/p3.img" -F -N $RECOVERY_SERIAL -v $RECOVERY_LABEL ::
     fi
     mmd -i "$TMPD/p3.img" ::/boot
     mmd -i "$TMPD/p3.img" ::/boot/grub

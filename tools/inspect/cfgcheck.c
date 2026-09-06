@@ -47,9 +47,12 @@
 
 #define MAX_TEXT 65536
 
-static const char *const GRUB_WANT[2] = {
-    "configfile (hd0,msdos1)/boot/grub/grub.cfg",
-    "configfile (hd0,msdos3)/boot/grub/recovery.cfg"
+#define GRUB_LINES 4
+static const char *const GRUB_WANT[GRUB_LINES] = {
+    "search --no-floppy --label RACH2BOOT --set=root",
+    "configfile ($root)/boot/grub/grub.cfg",
+    "search --no-floppy --label RACH2RECOV --set=root",
+    "configfile ($root)/boot/grub/recovery.cfg"
 };
 
 static char why[512];
@@ -78,7 +81,8 @@ static char *trim(char *s)
 
 /* ---- grubembed ---- */
 
-/* Nonzero when `text` is exactly the two configfile calls, in order. */
+/* Nonzero when `text` is exactly the two searches and two configfile
+   calls, in order. */
 static int grub_ok(const char *text)
 {
     char buf[MAX_TEXT];
@@ -96,16 +100,16 @@ static int grub_ok(const char *text)
 
         if (*cmd == '\0' || *cmd == '#')
             continue;
-        if (n >= 2 || strcmp(cmd, GRUB_WANT[n]) != 0) {
-            say("the commands are not exactly '%s' then '%s'", GRUB_WANT[0],
-                GRUB_WANT[1]);
+        if (n >= GRUB_LINES || strcmp(cmd, GRUB_WANT[n]) != 0) {
+            say("the commands are not exactly '%s', '%s', '%s' then '%s'", GRUB_WANT[0],
+                GRUB_WANT[1], GRUB_WANT[2], GRUB_WANT[3]);
             return 0;
         }
         n++;
     }
-    if (n != 2) {
-        say("the commands are not exactly '%s' then '%s'", GRUB_WANT[0],
-            GRUB_WANT[1]);
+    if (n != GRUB_LINES) {
+        say("the commands are not exactly '%s', '%s', '%s' then '%s'", GRUB_WANT[0],
+            GRUB_WANT[1], GRUB_WANT[2], GRUB_WANT[3]);
         return 0;
     }
     return 1;
@@ -300,35 +304,57 @@ static void st_net(const char *name, const char *text, int want_ok)
 
 static int selftest(void)
 {
-    const char *both = "configfile (hd0,msdos1)/boot/grub/grub.cfg\n"
-                       "configfile (hd0,msdos3)/boot/grub/recovery.cfg\n";
+    const char *both = "search --no-floppy --label RACH2BOOT --set=root\n"
+                       "configfile ($root)/boot/grub/grub.cfg\n"
+                       "search --no-floppy --label RACH2RECOV --set=root\n"
+                       "configfile ($root)/boot/grub/recovery.cfg\n";
 
     st_bad = 0;
     st_ran = 0;
     st_grub("the configuration itself", both, 1);
     st_grub("comments and blank lines around it",
-            "# a comment\n\nconfigfile (hd0,msdos1)/boot/grub/grub.cfg\n"
-            "configfile (hd0,msdos3)/boot/grub/recovery.cfg\n\n# another\n",
+            "# a comment\n\nsearch --no-floppy --label RACH2BOOT --set=root\n"
+            "configfile ($root)/boot/grub/grub.cfg\n"
+            "search --no-floppy --label RACH2RECOV --set=root\n"
+            "configfile ($root)/boot/grub/recovery.cfg\n\n# another\n",
             1);
-    st_grub("partition 3 commented out",
+    st_grub("the recovery pair commented out",
+            "search --no-floppy --label RACH2BOOT --set=root\n"
+            "configfile ($root)/boot/grub/grub.cfg\n"
+            "# search --no-floppy --label RACH2RECOV --set=root\n"
+            "# configfile ($root)/boot/grub/recovery.cfg\n", 0);
+    st_grub("the recovery pair missing",
+            "search --no-floppy --label RACH2BOOT --set=root\n"
+            "configfile ($root)/boot/grub/grub.cfg\n", 0);
+    st_grub("the two pairs the other way round",
+            "search --no-floppy --label RACH2RECOV --set=root\n"
+            "configfile ($root)/boot/grub/recovery.cfg\n"
+            "search --no-floppy --label RACH2BOOT --set=root\n"
+            "configfile ($root)/boot/grub/grub.cfg\n", 0);
+    st_grub("the old fixed paths",
             "configfile (hd0,msdos1)/boot/grub/grub.cfg\n"
-            "# configfile (hd0,msdos3)/boot/grub/recovery.cfg\n", 0);
-    st_grub("partition 3 missing",
-            "configfile (hd0,msdos1)/boot/grub/grub.cfg\n", 0);
-    st_grub("the two the other way round",
-            "configfile (hd0,msdos3)/boot/grub/recovery.cfg\n"
-            "configfile (hd0,msdos1)/boot/grub/grub.cfg\n", 0);
-    st_grub("a third configfile",
-            "configfile (hd0,msdos1)/boot/grub/grub.cfg\n"
-            "configfile (hd0,msdos3)/boot/grub/recovery.cfg\n"
+            "configfile (hd0,msdos3)/boot/grub/recovery.cfg\n", 0);
+    st_grub("a search without its configfile",
+            "search --no-floppy --label RACH2BOOT --set=root\n"
+            "search --no-floppy --label RACH2RECOV --set=root\n"
+            "configfile ($root)/boot/grub/grub.cfg\n"
+            "configfile ($root)/boot/grub/recovery.cfg\n", 0);
+    st_grub("a fifth command",
+            "search --no-floppy --label RACH2BOOT --set=root\n"
+            "configfile ($root)/boot/grub/grub.cfg\n"
+            "search --no-floppy --label RACH2RECOV --set=root\n"
+            "configfile ($root)/boot/grub/recovery.cfg\n"
             "configfile (hd0,msdos2)/x.cfg\n", 0);
     st_grub("a command before them",
-            "echo hello\nconfigfile (hd0,msdos1)/boot/grub/grub.cfg\n"
-            "configfile (hd0,msdos3)/boot/grub/recovery.cfg\n", 0);
+            "echo hello\nsearch --no-floppy --label RACH2BOOT --set=root\n"
+            "configfile ($root)/boot/grub/grub.cfg\n"
+            "search --no-floppy --label RACH2RECOV --set=root\n"
+            "configfile ($root)/boot/grub/recovery.cfg\n", 0);
     st_grub("a command hidden behind a semicolon",
-            "echo hello; configfile (hd0,msdos3)/boot/grub/recovery.cfg\n"
-            "configfile (hd0,msdos1)/boot/grub/grub.cfg\n"
-            "configfile (hd0,msdos3)/boot/grub/recovery.cfg\n", 0);
+            "echo hello; search --no-floppy --label RACH2BOOT --set=root\n"
+            "configfile ($root)/boot/grub/grub.cfg\n"
+            "search --no-floppy --label RACH2RECOV --set=root\n"
+            "configfile ($root)/boot/grub/recovery.cfg\n", 0);
     st_grub("nothing at all", "", 0);
 
     st_net("the script as it is",

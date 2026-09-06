@@ -3,9 +3,10 @@
  *
  * grub-bios-setup wants to resolve the image file to a host block device,
  * which a plain file is not, so this performs the same install directly:
- * it writes boot.img's first 446 bytes to the MBR (keeping the partition
- * table), places core.img in the post-MBR gap at LBA 1, and patches the
- * two pointers grub-bios-setup would patch.
+ * it writes boot.img's first 440 bytes to the MBR (keeping the disk
+ * identifier and the partition table, as grub-bios-setup does), places
+ * core.img in the post-MBR gap at LBA 1, and patches the two pointers
+ * grub-bios-setup would patch.
  *
  *   boot.img[0x5c]  the 8-byte LBA of core.img's first sector (1)
  *   boot.img[0x64]  the boot drive (0xff: use the BIOS-provided drive)
@@ -130,7 +131,7 @@ int main(int argc, char **argv)
     core[0x1fc] = (unsigned char) (core_sectors - 1);
     core[0x1fd] = (unsigned char) ((core_sectors - 1) >> 8);
 
-    if (fseek(f, 0, SEEK_SET) != 0 || fwrite(boot, 1, 446, f) != 446 ||
+    if (fseek(f, 0, SEEK_SET) != 0 || fwrite(boot, 1, 440, f) != 440 ||
         fseek(f, SECTOR, SEEK_SET) != 0 ||
         fwrite(core, 1, core_sectors * SECTOR, f) != core_sectors * SECTOR ||
         fclose(f) != 0) {

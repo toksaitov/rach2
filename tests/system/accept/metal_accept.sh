@@ -394,8 +394,8 @@ fi
 #      sync. A boot after a power cut checks the root and records
 #      `ext2: check: clean`; a check that found lost blocks, orphans or a fault
 #      is the failure. Before the ext2 root the command line says
-#      rach2.root=disk and this is a note, not a failure. ----
-if run 'cat /proc/cmdline' | grep -q 'rach2.root=ext2'; then
+#      rach2.rootfstype=krffs and this is a note, not a failure. ----
+if run 'cat /proc/cmdline' | grep -q 'rach2.rootfstype=ext2'; then
     OUT="$(run 'cat /proc/mounts')"
     case "$OUT" in
         *"/dev/disk0p4 / ext2 rw,relatime"*) note "the ext2 root is mounted writable from /dev/disk0p4" ;;
@@ -425,13 +425,13 @@ if run 'cat /proc/cmdline' | grep -q 'rach2.root=ext2'; then
         bad "the ext2 root did not take a write: $OUT"
     fi
 else
-    note "the root is not ext2 yet (rach2.root=ext2 absent from the command line)"
+    note "the root is not ext2 yet (rach2.rootfstype=ext2 absent from the command line)"
 fi
 
 # ---- the scratch partition, before milestone 43 makes the fourth partition
 #      the ext2 root: mounted for writing, a file written and read back, the
 #      mount taken away. Absent, or ext2 already, this is a note. ----
-if run 'cat /proc/cmdline' | grep -q 'rach2.root=ext2'; then
+if run 'cat /proc/cmdline' | grep -q 'rach2.rootfstype=ext2'; then
     note "the fourth partition is the ext2 root now; no scratch partition"
 elif run 'ls /dev/disk0p4 2>/dev/null' | grep -q disk0p4; then
     # shellcheck disable=SC2016 # the machine expands these, not this script

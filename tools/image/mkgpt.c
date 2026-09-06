@@ -1,11 +1,18 @@
 /**
  * mkgpt: write a GUID partition table into a disk image file.
  *
- * Usage: `mkgpt DISK START:SIZE:KIND[@INDEX] ...`, one argument per
- * partition, at most four. START and SIZE are whole sectors of 512 bytes,
- * KIND is `fat` or `data` and selects the type GUID, and `@INDEX` puts the
- * entry at that index of the array instead of the next free one, which is
- * how a table whose first used entry is not the first entry is built.
+ * Usage: `mkgpt [--seed N] [--damage-primary] DISK SPEC ...`, with one
+ * SPEC of the form `START:SIZE:KIND[@INDEX][=LABEL]` per partition, at
+ * most fifteen. START and SIZE are whole
+ * sectors of 512 bytes, KIND is `fat` or `data` and selects the type GUID,
+ * `@INDEX` puts the entry at that index of the array instead of the next
+ * free one, which is how a table whose first used entry is not the first
+ * entry is built, and `=LABEL` is the entry's name, `RACH2` and the entry's
+ * position when absent. The GUIDs are made from the entry index and the
+ * seed, so two disks built with one seed have the same identities, which
+ * is what a test of a cloned disk wants, and two seeds give two sets.
+ * `--damage-primary` writes the primary header with a wrong checksum after
+ * the table is complete, leaving the backup as the table a reader finds.
  *
  * What is written: a protective MBR whose single entry is type 0xEE over
  * the whole medium, the primary header at sector 1 with the array at sector
@@ -28,7 +35,7 @@
 #define ARRAY_LBA   2u
 #define ARRAY_BYTES (ENTRIES * ENTRY_SIZE)
 #define ARRAY_SECS  (ARRAY_BYTES / SECTOR)
-#define MAX_PARTS   4
+#define MAX_PARTS   15
 
 /* The two type GUIDs this writes, in the mixed-endian form the standard
  * stores them in: the EFI system partition and a basic data partition,
@@ -72,12 +79,14 @@ static void put64(unsigned char *p, unsigned long long v)
 
 /* A partition GUID that differs per entry without a random source, so two
  * runs of this program on one image produce the same bytes. */
+static unsigned int seed;
+
 static void unique_guid(unsigned char *p, unsigned int index)
 {
     int i;
 
     for (i = 0; i < 16; i++) {
-        p[i] = (unsigned char)(0x40 + i + index * 16u);
+        p[i] = (unsigned char)(0x40 + i + index * 16u + seed * 7u);
     }
 }
 
@@ -100,10 +109,26 @@ int main(int argc, char **argv)
     FILE *f;
     long size;
     int used = 0;
+    int damage = 0;
     int i;
 
+    while (argc >= 2 && argv[1][0] == '-') {
+        if (strcmp(argv[1], "--seed") == 0 && argc >= 3) {
+            seed = (unsigned int)strtoul(argv[2], 0, 10);
+            argv += 2;
+            argc -= 2;
+        } else if (strcmp(argv[1], "--damage-primary") == 0) {
+            damage = 1;
+            argv++;
+            argc--;
+        } else {
+            return fail("usage: mkgpt [--seed N] [--damage-primary] DISK "
+                        "START:SIZE:KIND[@INDEX][=LABEL] ...");
+        }
+    }
     if (argc < 3) {
-        return fail("usage: mkgpt DISK START:SIZE:KIND[@INDEX] ...");
+        return fail("usage: mkgpt [--seed N] [--damage-primary] DISK "
+                    "START:SIZE:KIND[@INDEX][=LABEL] ...");
     }
     f = fopen(argv[1], "r+b");
     if (!f) {
@@ -129,16 +154,29 @@ int main(int argc, char **argv)
         unsigned long long start;
         unsigned long long count;
         char kind[16];
+        char spec[128];
+        char *label = 0;
         unsigned int at;
         int slot;
         int fields;
         unsigned char *e;
 
-        fields = sscanf(argv[i], "%llu:%llu:%15[^@]@%u", &start, &count, kind, &at);
+        if (strlen(argv[i]) >= sizeof(spec)) {
+            return fail("a partition argument is too long");
+        }
+        strcpy(spec, argv[i]);
+        label = strchr(spec, '=');
+        if (label) {
+            *label++ = '\0';
+            if (strlen(label) > 36) {
+                return fail("a label is longer than 36 characters");
+            }
+        }
+        fields = sscanf(spec, "%llu:%llu:%15[^@]@%u", &start, &count, kind, &at);
         if (fields == 3) {
             at = (unsigned int)used;
         } else if (fields != 4) {
-            return fail("a partition is not START:SIZE:KIND[@INDEX]");
+            return fail("a partition is not START:SIZE:KIND[@INDEX][=LABEL]");
         }
         if (at >= ENTRIES) {
             return fail("an entry index is past the array");
@@ -165,12 +203,20 @@ int main(int argc, char **argv)
         put64(e + 32, start);
         put64(e + 40, start + count - 1u);
         /* The name, in UTF-16: "RACH2 N". */
-        e[56] = 'R';
-        e[58] = 'A';
-        e[60] = 'C';
-        e[62] = 'H';
-        e[64] = '2';
-        e[66] = (unsigned char)('0' + used);
+        if (label) {
+            int k;
+
+            for (k = 0; label[k]; k++) {
+                e[56 + k * 2] = (unsigned char)label[k];
+            }
+        } else {
+            e[56] = 'R';
+            e[58] = 'A';
+            e[60] = 'C';
+            e[62] = 'H';
+            e[64] = '2';
+            e[66] = (unsigned char)('0' + used);
+        }
         used++;
     }
     if (used == 0) {
@@ -212,7 +258,9 @@ int main(int argc, char **argv)
         put32(header + 84, ENTRY_SIZE);
         put32(header + 88, array_crc);
         put32(header + 16, crc32_of(header, 92u));
-
+        if (primary && damage) {
+            header[20] ^= 0xFF; /* the checksum no longer covers the header */
+        }
         if (fseek(f, (long)((primary ? 1u : sectors - 1u) * SECTOR), SEEK_SET) != 0 ||
             fwrite(header, 1, SECTOR, f) != SECTOR) {
             return fail("a header would not be written");
@@ -228,6 +276,25 @@ int main(int argc, char **argv)
     }
     if (fclose(f) != 0) {
         return fail("the image would not close");
+    }
+    for (i = 0; i < (int)ENTRIES; i++) {
+        const unsigned char *e = array + (unsigned long)i * ENTRY_SIZE;
+        /* The text form: the first three fields little-endian on the disk,
+           printed most significant byte first, the last two as stored. */
+        static const int order[16] = {3, 2, 1, 0, 5, 4, 7, 6, 8, 9, 10, 11, 12, 13, 14, 15};
+        int k;
+
+        if (e[0] == 0 && e[1] == 0) {
+            continue;
+        }
+        printf("mkgpt: entry %d guid ", i + 1);
+        for (k = 0; k < 16; k++) {
+            if (k == 4 || k == 6 || k == 8 || k == 10) {
+                printf("-");
+            }
+            printf("%02x", e[16 + order[k]]);
+        }
+        printf("\n");
     }
     printf("mkgpt: %s: %d partitions, %llu sectors\n", argv[1], used, sectors);
     return 0;

@@ -319,7 +319,7 @@ esac
 # the mount table; the fallback's is proved KRFFS when the fallback boots.
 ROOTS="$(machine 'cat /proc/cmdline; cat /proc/mounts' || true)"
 case "$ROOTS" in
-    *"rach2.root=ext2"*) ;;
+    *"rach2.root=MBRID="*",4 rach2.rootfstype=ext2"*) ;;
     *) fail "the candidate's command line does not name the ext2 root: $ROOTS" ;;
 esac
 case "$ROOTS" in
@@ -404,7 +404,7 @@ case "$OUT" in
 esac
 ROOTS="$(machine 'cat /proc/cmdline; cat /proc/mounts' || true)"
 case "$ROOTS" in
-    *"rach2.root=disk"*) ;;
+    *"rach2.root=MBRID="*",2 rach2.rootfstype=krffs"*) ;;
     *) fail "the fallback's command line does not name the KRFFS root: $ROOTS" ;;
 esac
 case "$ROOTS" in

@@ -4,8 +4,8 @@ This directory pins the six GRUB boot artifacts the disk and ISO builders consum
 
 The artifacts, all for BIOS `i386-pc` boot:
 
-* `bios-boot.img`: GRUB's MBR boot sector template. The embedder (`tools/image/grubembed.c`) copies its first 446 bytes into a disk's MBR, preserving the partition table.
-* `disk-core.img`: the disk core image, with the embedded configuration `tools/image/grub-embed.cfg` and the modules to read the FAT boot partition and start a Multiboot kernel. The embedder writes it into the post-MBR gap.
+* `bios-boot.img`: GRUB's MBR boot sector template. The embedder (`tools/image/grubembed.c`) copies its first 440 bytes into a disk's MBR, preserving the disk identifier and partition table.
+* `disk-core.img`: the disk core image, with the embedded configuration `tools/image/grub-embed.cfg` and the modules to find and read the FAT boot partition and start a Multiboot kernel. The configuration searches for label `RACH2BOOT` and opens `/boot/grub/grub.cfg`; if that call returns, it searches for `RACH2RECOV` and opens `/boot/grub/recovery.cfg`. The disk modules are `biosdisk part_msdos fat normal multiboot configfile loadenv echo test serial terminal search search_label search_fs_uuid search_fs_file`. The embedder writes the core into the post-MBR gap.
 * `disk-core-a.img` and `disk-core-b.img`: the same core prefixed with a serial marker (`GRUBCORE=A`, `GRUBCORE=B`). The GRUB replacement suites install them alternately and prove a swap by the marker the running core prints. `tools/image/mkgrubcore.sh` verifies and hands one out.
 * `eltorito.img`: the El Torito boot image for ISOs, with the `iso9660` module, built in GRUB's `i386-pc-eltorito` output format.
 * `boot-hybrid.img`: GRUB's hybrid MBR template, placed by `xorriso` so an ISO also boots when written to a USB device.

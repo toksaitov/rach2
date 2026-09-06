@@ -39,12 +39,12 @@ installed python3.12-minimal 3.12.3-1ubuntu0.15
 installed readline-common 8.2-4build1
 installed tzdata 2026c-0ubuntu0.24.04.1
 tool grub-mkimage (GRUB) 2.12-1ubuntu7.3
-disk-modules biosdisk part_msdos fat normal multiboot configfile loadenv echo test serial terminal
+disk-modules biosdisk part_msdos fat normal multiboot configfile loadenv echo test serial terminal search search_label search_fs_uuid search_fs_file
 iso-modules biosdisk iso9660 part_msdos fat normal multiboot configfile loadenv echo test serial terminal
-embed-cfg e8cd27fce8199ac2a3449d3301691051e55511e15449cb35a25464cec0c8635e
+embed-cfg a2a9d1eedbce83eb9489d8c6b4a93788185745c040f21d2212b4b1bda0a61ec1
 artifact bios-boot.img 512 7720690bdaf25fd7e3ade7e01b8d0de91e0991653e2a6900011ab23daf6e6032
 artifact boot-hybrid.img 512 2d3027be0a695db635d0bdccaf0a5184636956a0769bb634f26429908c9cfd1d
-artifact disk-core.img 158112 1bd98a14ad37ef1f689e1fa561f443bcc51decb16a8c781dcfae1c900594db0c
-artifact disk-core-a.img 158239 8e62518f7eee6e8334cfe525cc4aa4881009cdb95b2afdaf2f673c6a009e5ea1
-artifact disk-core-b.img 158239 191a226bd5f364005ba30c490bfbf6c237ca6ff02c0728524d26f1bcf10cceef
+artifact disk-core.img 161142 899fd0fcc9cb35fd4366551a8e94288f77e692f4fb68a4f92005505bc85e9ca0
+artifact disk-core-a.img 160935 8372d3ca3c1d9ce920d29f23f01402b8d534fe7849575bd02263add2b3dd26a3
+artifact disk-core-b.img 160935 d87d92419d2763cc0e12664531065451771eb185820fb1bc2041a61f19089196
 artifact eltorito.img 163333 9b59c17b4f49bbbd2ffaf606628c5dc422168517e78603d377f799e85d60d924
