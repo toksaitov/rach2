@@ -23,7 +23,6 @@
  * operation on it is refused, not answered with silence. */
 #define SOCK_RAW             3
 #define AF_INET              2      /* IPv4 address family */
-#define MAX_SOCKETS          16    /* static pool size */
 #define SOCK_RECV_BUF_SIZE   1500  /* one max-size UDP datagram */
 #define SOCK_ACCEPT_BACKLOG  16     /* queued connections (power of two) */
 
@@ -33,6 +32,7 @@
 struct tcb; /* defined in tcp/tcp.h */
 
 typedef struct socket {
+    struct socket *next;   /* the list of live sockets */
     int      in_use;
     int      refcount;        /* descriptors referencing this socket */
     int      type;            /* SOCK_DGRAM, SOCK_STREAM or SOCK_RAW */

@@ -235,6 +235,15 @@ run-fpu: rach2 tests krffs test-image $(HARNESS)
 # (see tests/system/suites/memory.sh).
 run-memory: rach2 tests krffs test-image $(HARNESS)
 	sh tests/system/suites/memory.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS)
+# `tests/run pools`: the objects that were pools, past the count each pool
+# had, and the heap where it started after a thousand of each (see
+# tests/poolprobe.c).
+run-pools: rach2 tests krffs test-image $(HARNESS)
+	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+	    --qemu-arg=-cpu --qemu-arg=max --append "rach2.rescue" \
+	    --timeout 120 --steptmo 60 --ok "POOLPROBE OK" --never "POOLPROBE FAIL" \
+	    --log $(TEST_IMAGE).pools.log \
+	    "expect=Type 'help'" "send=exec /poolprobe" "expect=POOLPROBE"
 # `tests/run fault`: the three probes whose whole claim is that the kernel
 # killed them. vmfault writes through a pointer in no mapping, vmro writes a
 # page it mapped read-only, and winprobe reads the page-cache window, which

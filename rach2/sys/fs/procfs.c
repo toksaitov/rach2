@@ -13,6 +13,8 @@
 #include "../lapic.h"
 #include "procfs.h"
 
+#include "../mm/kheap.h"
+
 #include "../block/loop.h"
 #include "synthfs.h"
 #include "fd.h"
@@ -89,7 +91,7 @@
 #define PROCFS_MAX_PIDCMD    64  /* comm and its terminator */
 #define PROCFS_MAX_UPTIME    64  /* two decimal numbers */
 #define PROCFS_MAX_STATSYS  256  /* the cpu lines, btime, and the counters */
-#define PROCFS_MAX_MEMINFO  256  /* seven sized lines */
+#define PROCFS_MAX_MEMINFO  320  /* nine sized lines */
 #define PROCFS_MAX_MOUNTS   256  /* the root, and the two synthetic mounts */
 /* Four devices and two sticks, one line each, and the line that counts the
  * names. A stick's line has two names a drive chose the text of. */
@@ -893,6 +895,20 @@ static int procfs_gen_meminfo(struct procfs_text *t)
     ap_frames_as_kb(t, free_frames);
     ap_str(t, "Buffers:               0 kB\n");
     ap_str(t, "Cached:                0 kB\n");
+    /* The kernel's heap: what it holds and what is in use inside it, for a
+     * test that makes and frees objects and requires the heap back where it
+     * started. */
+    {
+        uint32_t pages = 0, bytes = 0;
+
+        kheap_stats(&pages, &bytes);
+        ap_str(t, "HeapPages:      ");
+        ap_u32(t, pages);
+        ap_str(t, "\n");
+        ap_str(t, "HeapUsed:       ");
+        ap_u32(t, bytes);
+        ap_str(t, "\n");
+    }
     ap_str(t, "SwapTotal:             0 kB\n");
     ap_str(t, "SwapFree:              0 kB\n");
     return t->len;

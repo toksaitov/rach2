@@ -30,6 +30,7 @@
 #define PIPE_BUF_SIZE 4096 /* one page; must stay a power of two for the ring mask */
 
 typedef struct pipe {
+    struct pipe *next; /* the list of live pipes */
     int in_use;
     uint32_t inode;        /* its own; never reused within a boot */
     uint8_t buf[PIPE_BUF_SIZE];

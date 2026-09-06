@@ -12,7 +12,7 @@
 #include "../fs/file.h"
 #include "../proc/process.h"
 #include "../mm/usercopy.h"
-#include "../mm/heap.h"
+#include "../mm/kheap.h"
 #include "../io/poll.h"
 #include "../lib/kstring.h"
 #include "../lib/kerrno.h"
@@ -31,14 +31,40 @@
 #define O_CLOEXEC_FLAG  02000000
 #define O_NONBLOCK_FLAG 04000
 
-static struct pty *pty_pool;
+/* The live ptys, each allocated from the heap at its master's open and
+ * freed when both ends are gone. The index is the lowest one no live pty
+ * has, so `/dev/pts` names stay small and are reused as Unix98 reuses them. */
+static struct pty *ptys;
 
 void pty_init_pool(void)
 {
-    pty_pool = (struct pty *)mem_reserve(sizeof(struct pty) * PTY_MAX, true);
-    if (pty_pool) {
-        k_memset(pty_pool, 0, sizeof(struct pty) * PTY_MAX);
+    ptys = NULL;
+}
+
+static struct pty *pty_by_index(int index)
+{
+    struct pty *p;
+
+    for (p = ptys; p; p = p->next) {
+        if (p->index == index) {
+            return p;
+        }
     }
+    return NULL;
+}
+
+/* Off the list and back to the heap; nothing refers to it after this. */
+static void pty_free(struct pty *p)
+{
+    struct pty **link = &ptys;
+
+    while (*link && *link != p) {
+        link = &(*link)->next;
+    }
+    if (*link) {
+        *link = p->next;
+    }
+    kfree(p);
 }
 
 /**
@@ -88,27 +114,25 @@ static void pty_slave_sink(void *ctx, unsigned char c)
 
 static struct pty *pty_alloc(void)
 {
+    struct pty *p = kzalloc(sizeof(*p));
     int i;
 
-    if (!pty_pool) {
+    if (!p) {
         return NULL;
     }
-    for (i = 0; i < PTY_MAX; i++) {
-        if (!pty_pool[i].in_use) {
-            struct pty *p = &pty_pool[i];
-            k_memset(p, 0, sizeof(*p));
-            p->in_use = 1;
-            p->index = i;
-            p->locked = 1; /* unlockpt() (TIOCSPTLCK 0) must run before pts open */
-            p->uid = current_proc ? current_proc->euid : 0;
-            p->gid = current_proc ? current_proc->egid : 0;
-            p->mode = 0620; /* crw--w----, the Unix98 slave default */
-            tty_init(&p->slave, pty_slave_sink, p); /* slave.pump stays NULL */
-            wait_queue_init(&p->m_read_wq);
-            return p;
-        }
+    for (i = 0; pty_by_index(i); i++) {
     }
-    return NULL;
+    p->in_use = 1;
+    p->index = i;
+    p->locked = 1; /* unlockpt() (TIOCSPTLCK 0) must run before pts open */
+    p->uid = current_proc ? current_proc->euid : 0;
+    p->gid = current_proc ? current_proc->egid : 0;
+    p->mode = 0620; /* crw--w----, the Unix98 slave default */
+    tty_init(&p->slave, pty_slave_sink, p); /* slave.pump stays NULL */
+    wait_queue_init(&p->m_read_wq);
+    p->next = ptys;
+    ptys = p;
+    return p;
 }
 
 static int fd_is_nonblock(fd_entry_t *e)
@@ -309,7 +333,7 @@ static void ptm_close(fd_entry_t *e)
     }
     tty_hangup(&p->slave);
     if (p->slave_opens == 0) {
-        p->in_use = 0; /* both ends gone: free the slot */
+        pty_free(p);
     }
 }
 
@@ -477,7 +501,7 @@ static void pts_close(fd_entry_t *e)
     if (p->slave_opens == 0) {
         wq_wake_all(&p->m_read_wq); /* master read now returns EOF */
         if (!p->master_open) {
-            p->in_use = 0; /* both ends gone */
+            pty_free(p);
         }
     }
 }
@@ -501,7 +525,7 @@ int pty_open_master(int flags)
     }
     fd = fd_alloc(&current_proc->fds);
     if (fd < 0) {
-        p->in_use = 0;
+        pty_free(p);
         return -EMFILE;
     }
     e = &current_proc->fds.entries[fd];
@@ -530,11 +554,8 @@ int pty_open_slave(int index, int flags)
     if (!current_proc) {
         return -ESRCH;
     }
-    if (index < 0 || index >= PTY_MAX || !pty_pool) {
-        return -ENXIO;
-    }
-    p = &pty_pool[index];
-    if (!p->in_use || !p->master_open) {
+    p = index < 0 ? NULL : pty_by_index(index);
+    if (!p || !p->master_open) {
         return -ENXIO; /* no such pty */
     }
     if (p->locked) {
@@ -578,14 +599,14 @@ int pty_open_slave(int index, int flags)
  */
 int pty_session_slave(int sid)
 {
-    int i;
+    struct pty *p;
 
-    if (sid == 0 || !pty_pool) {
+    if (sid == 0) {
         return -1;
     }
-    for (i = 0; i < PTY_MAX; i++) {
-        if (pty_pool[i].in_use && pty_pool[i].slave.sid == sid) {
-            return i;
+    for (p = ptys; p; p = p->next) {
+        if (p->slave.sid == sid) {
+            return p->index;
         }
     }
     return -1;
@@ -609,7 +630,7 @@ int pty_session_slave(int sid)
 void tty_make_sole_ctty(struct tty *keep, int sid, int pgid)
 {
     uint32_t flags;
-    int i;
+    struct pty *p;
 
     if (sid == 0 || !keep) {
         return;
@@ -621,13 +642,10 @@ void tty_make_sole_ctty(struct tty *keep, int sid, int pgid)
         console_tty.sid = 0;
         console_tty.fg_pgid = 0;
     }
-    if (pty_pool) {
-        for (i = 0; i < PTY_MAX; i++) {
-            if (pty_pool[i].in_use && &pty_pool[i].slave != keep &&
-                pty_pool[i].slave.sid == sid) {
-                pty_pool[i].slave.sid = 0;
-                pty_pool[i].slave.fg_pgid = 0;
-            }
+    for (p = ptys; p; p = p->next) {
+        if (&p->slave != keep && p->slave.sid == sid) {
+            p->slave.sid = 0;
+            p->slave.fg_pgid = 0;
         }
     }
     pty_irq_restore(flags);
@@ -643,15 +661,27 @@ struct tty *pty_slave_tty(struct fd_entry *e)
 
 int pty_is_allocated(int index)
 {
-    if (index < 0 || index >= PTY_MAX || !pty_pool) {
-        return 0;
+    struct pty *p = index < 0 ? NULL : pty_by_index(index);
+
+    return p != NULL && p->master_open;
+}
+
+int pty_index_limit(void)
+{
+    struct pty *p;
+    int limit = 0;
+
+    for (p = ptys; p; p = p->next) {
+        if (p->index + 1 > limit) {
+            limit = p->index + 1;
+        }
     }
-    return pty_pool[index].in_use && pty_pool[index].master_open;
+    return limit;
 }
 
 struct pty *pty_get(int index)
 {
-    return pty_is_allocated(index) ? &pty_pool[index] : NULL;
+    return pty_is_allocated(index) ? pty_by_index(index) : NULL;
 }
 
 int pty_slave_index(struct fd_entry *e)
@@ -675,14 +705,13 @@ int pty_slave_index(struct fd_entry *e)
  */
 void pty_release_leader(int sid, int pid)
 {
-    int i;
+    struct pty *p;
 
-    if (!pty_pool || sid == 0 || sid != pid) {
+    if (sid == 0 || sid != pid) {
         return;
     }
-    for (i = 0; i < PTY_MAX; i++) {
-        struct pty *p = &pty_pool[i];
-        if (p->in_use && p->slave.sid == sid) {
+    for (p = ptys; p; p = p->next) {
+        if (p->slave.sid == sid) {
             tty_set_session(&p->slave, 0, 0);
         }
     }

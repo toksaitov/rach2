@@ -7672,7 +7672,7 @@ static int synth_dirent_at(int kind, int pid, int n, char *name, uint64_t *ino, 
     if (kind == VNODE_PTS_DIR) {
         /* /dev/pts: one entry per allocated pty slave, named by its index. */
         int i, c = 0;
-        for (i = 0; i < PTY_MAX; i++) {
+        for (i = 0; i < pty_index_limit(); i++) {
             if (pty_is_allocated(i)) {
                 if (c == n) {
                     synth_u32_str(name, (uint32_t)i);

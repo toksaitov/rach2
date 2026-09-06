@@ -15,3 +15,8 @@
 * `munmap` leaves the mapping's page tables with the process until it exits, one page per 4 MiB; the probe's leak check allows them.
 * The `rach2.framefail` count counts only allocations made inside a system call, so a page fault of the process arming it is not the one that fails; at 64 MiB the sweep of sixty-four arms fired ten times, since a count past an operation's allocations fires on nothing.
 * The modules are mapped into the module region on every boot, so QEMU's placement below the window exercises the path; a module above the window is a case no QEMU boot here makes.
+
+## Phase 3: the objects
+
+* Pipes, ptys and sockets are heap objects on lists. A pty's index is the lowest no live pty has, so `/dev/pts` names stay small; the `/dev/pts` walk asks the pty code for its index limit. `sockfull`, which filled the pool of sixteen sockets, is retired: there is no pool to fill, and `poolprobe` is the row that crosses the old sixteen for all three.
+* `/proc/meminfo` gained `HeapPages` and `HeapUsed`, which is how a probe holds the heap to where it started.

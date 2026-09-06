@@ -22,23 +22,17 @@
 #include "../../io/poll.h"
 #include "../../serial.h"
 #include "../../lib/kstring.h"
-#include "../../mm/heap.h"
+#include "../../mm/kheap.h"
 
-/* Socket pool, allocated from kernel memory at init (kept out of BSS). */
-static socket_t *socket_pool;
+/* The live sockets, each allocated from the heap when opened and freed
+ * when its last reference goes. An incoming SYN allocates one from the
+ * interrupt side, which the heap allows: it masks interrupts and never
+ * sleeps. */
+static socket_t *sockets;
 
-/**
- * Reserve the socket pool from kernel memory.
- *
- * Allocated, not placed in BSS so the table does not bloat the kernel
- * image. A failed reservation leaves the pool NULL; socket_alloc then fails.
- */
 void socket_init(void)
 {
-    socket_pool = (socket_t *)mem_reserve(sizeof(socket_t) * MAX_SOCKETS, true);
-    if (socket_pool) {
-        k_memset(socket_pool, 0, sizeof(socket_t) * MAX_SOCKETS);
-    }
+    sockets = NULL;
 }
 
 static uint32_t next_socket_inode = 1;
@@ -46,32 +40,26 @@ static uint32_t next_socket_inode = 1;
 /**
  * The next inode to give a socket: rising, nonzero, and not one in use.
  *
- * A slot reused by a later socket must not read as the socket that had it, so
- * the number rises rather than being the slot. The counter is 32 bits and
- * wraps, so the pool is checked and a number a live socket already has is
- * stepped over. Zero is skipped because it is what an unset field reads as.
- * Called with net_lock held.
+ * The number rises, so a socket made later never reads as one that is gone.
+ * The counter is 32 bits and wraps, so the live sockets are checked and a
+ * number one of them has is stepped over. Zero is skipped because it is
+ * what an unset field reads as. Called with net_lock held.
  */
 static uint32_t socket_next_inode(void)
 {
-    int i, tries;
-
-    for (tries = 0; tries <= MAX_SOCKETS + 1; tries++) {
+    for (;;) {
         uint32_t candidate = next_socket_inode++;
+        const socket_t *s;
 
         if (candidate == 0) {
             continue;
         }
-        for (i = 0; i < MAX_SOCKETS; i++) {
-            if (socket_pool[i].in_use && socket_pool[i].inode == candidate) {
-                break;
-            }
+        for (s = sockets; s && s->inode != candidate; s = s->next) {
         }
-        if (i == MAX_SOCKETS) {
+        if (!s) {
             return candidate;
         }
     }
-    return 0; /* unreachable: the pool is smaller than the tries above */
 }
 
 /**
@@ -82,14 +70,14 @@ static uint32_t socket_next_inode(void)
  */
 struct socket *socket_by_inode(uint32_t inode)
 {
-    int i;
+    socket_t *s;
 
-    if (!socket_pool || inode == 0) {
+    if (inode == 0) {
         return NULL;
     }
-    for (i = 0; i < MAX_SOCKETS; i++) {
-        if (socket_pool[i].in_use && socket_pool[i].inode == inode) {
-            return &socket_pool[i];
+    for (s = sockets; s; s = s->next) {
+        if (s->inode == inode) {
+            return s;
         }
     }
     return NULL;
@@ -108,52 +96,27 @@ struct socket *socket_by_inode(uint32_t inode)
  */
 struct socket *socket_alloc(int type)
 {
-    int i;
+    socket_t *sock = kzalloc(sizeof(*sock));
     uint32_t flags;
 
-    if (!socket_pool) {
+    if (!sock) {
+        klog(KLOG_WARN, "socket", "open: no memory for a socket");
         return NULL;
     }
+    sock->in_use = 1;
+    sock->refcount = 1;
+    sock->type = type;
+    sock->family = AF_INET;
+    sock->ip_ttl = IP_TTL_DEFAULT;
+    wait_queue_init(&sock->waiters);
 
-    /* The pool scan races with the IRQ-context allocator (an incoming SYN). */
+    /* The list and the inode are shared with the interrupt side. */
     flags = net_lock();
-
-    for (i = 0; i < MAX_SOCKETS; i++) {
-        if (!socket_pool[i].in_use) {
-            socket_pool[i].in_use        = 1;
-            socket_pool[i].refcount      = 1;
-            socket_pool[i].type          = type;
-            socket_pool[i].family        = AF_INET;
-            socket_pool[i].protocol      = 0;
-            socket_pool[i].ip_ttl        = IP_TTL_DEFAULT;
-            socket_pool[i].local_port    = 0;
-            socket_pool[i].remote_ip     = 0;
-            socket_pool[i].remote_port   = 0;
-            socket_pool[i].connected     = 0;
-            socket_pool[i].broadcast     = 0;
-            socket_pool[i].reuseaddr     = 0;
-            socket_pool[i].bound_device  = 0;
-            socket_pool[i].tcb           = NULL;
-            socket_pool[i].accept_head   = 0;
-            socket_pool[i].accept_tail   = 0;
-            socket_pool[i].listening     = 0;
-            socket_pool[i].last_src_ip   = 0;
-            socket_pool[i].last_src_port = 0;
-            socket_pool[i].inode         = socket_next_inode();
-            socket_pool[i].uid           = 0;
-            socket_pool[i].recv_len      = 0;
-            socket_pool[i].recv_full     = 0;
-            wait_queue_init(&socket_pool[i].waiters);
-            k_memset(socket_pool[i].accept_queue, 0,
-                     sizeof(socket_pool[i].accept_queue));
-            net_unlock(flags);
-            return &socket_pool[i];
-        }
-    }
-
+    sock->inode = socket_next_inode();
+    sock->next = sockets;
+    sockets = sock;
     net_unlock(flags);
-    klog(KLOG_WARN, "socket", "open: the pool of %d is exhausted", MAX_SOCKETS);
-    return NULL;
+    return sock;
 }
 
 void socket_ref(struct socket *sock)
@@ -216,8 +179,20 @@ void socket_unref(struct socket *sock)
         }
     }
 
+    /* Off the list and back to the heap; nothing refers to it now. */
+    {
+        socket_t **link = &sockets;
+
+        while (*link && *link != sock) {
+            link = &(*link)->next;
+        }
+        if (*link) {
+            *link = sock->next;
+        }
+    }
     sock->in_use = 0;
     net_unlock(flags);
+    kfree(sock);
 }
 
 /**

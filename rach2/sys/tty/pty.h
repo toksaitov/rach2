@@ -32,10 +32,10 @@
  * (termios, winsize, ISIG, sessions/job-control) on its struct tty.
  */
 
-#define PTY_MAX      16   /* pty pairs (one per /dev/pts/N, N in 0..15) */
 #define PTY_BUF_SIZE 4096 /* slave->master ring; power of two for the mask */
 
 struct pty {
+    struct pty *next; /* the list of live ptys */
     int in_use;
     int index;                  /* N in /dev/pts/N (the pool slot) */
     struct tty slave;           /* the slave end: a full tty + N_TTY discipline */
@@ -95,6 +95,9 @@ int pty_slave_index(struct fd_entry *e);
 /* Whether slot `index` is an allocated pty pair (for /dev/pts
  * stat/getdents). */
 int pty_is_allocated(int index);
+
+/** One past the highest index a live pty has, for a walk of `/dev/pts`. */
+int pty_index_limit(void);
 
 /* The allocated pty behind /dev/pts/N, or NULL: the ownership fields for the
  * stat/chown/chmod paths. */

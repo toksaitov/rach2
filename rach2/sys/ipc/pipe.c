@@ -15,7 +15,7 @@
 #include "../fs/file.h"
 #include "../proc/process.h"
 #include "../mm/usercopy.h"
-#include "../mm/heap.h"
+#include "../mm/kheap.h"
 #include "../lib/kstring.h"
 #include "../lib/kerrno.h"
 #include "../lib/ksignal.h"
@@ -28,9 +28,9 @@
 #define O_CLOEXEC_FLAG  02000000
 #define O_NONBLOCK_FLAG 04000
 
-/* The pipe pool, allocated from kernel memory at init (kept out of BSS). */
-#define MAX_PIPES 16
-static pipe_t *pipe_pool;
+/* The live pipes, each allocated from the heap when made and freed when
+ * both ends are closed. */
+static pipe_t *pipes;
 
 /* The pure ring helpers (pipe_available/pipe_free_space/pipe_ring_put/
  * pipe_ring_get) live in pipe_ring.c so the host-host test can exercise the
@@ -38,10 +38,7 @@ static pipe_t *pipe_pool;
 
 void pipe_init_pool(void)
 {
-    pipe_pool = (pipe_t *)mem_reserve(sizeof(pipe_t) * MAX_PIPES, true);
-    if (pipe_pool) {
-        k_memset(pipe_pool, 0, sizeof(pipe_t) * MAX_PIPES);
-    }
+    pipes = NULL;
 }
 
 static uint32_t next_pipe_inode = 1;
@@ -57,47 +54,52 @@ static uint32_t next_pipe_inode = 1;
  */
 static uint32_t pipe_next_inode(void)
 {
-    int i, tries;
-
-    for (tries = 0; tries <= MAX_PIPES + 1; tries++) {
+    for (;;) {
         uint32_t candidate = next_pipe_inode++;
+        const pipe_t *p;
 
         if (candidate == 0) {
             continue;
         }
-        for (i = 0; i < MAX_PIPES; i++) {
-            if (pipe_pool[i].in_use && pipe_pool[i].inode == candidate) {
-                break;
-            }
+        for (p = pipes; p && p->inode != candidate; p = p->next) {
         }
-        if (i == MAX_PIPES) {
+        if (!p) {
             return candidate;
         }
     }
-    return 0; /* unreachable: the pool is smaller than the tries above */
 }
 
 static pipe_t *pipe_alloc(void)
 {
-    int i;
+    pipe_t *p = kzalloc(sizeof(*p));
 
-    if (!pipe_pool) {
+    if (!p) {
         return NULL;
     }
-    for (i = 0; i < MAX_PIPES; i++) {
-        if (!pipe_pool[i].in_use) {
-            pipe_t *p = &pipe_pool[i];
-            k_memset(p, 0, sizeof(*p));
-            p->in_use = 1;
-            p->inode = pipe_next_inode();
-            p->read_open = 1;
-            p->write_open = 1;
-            wait_queue_init(&p->read_wq);
-            wait_queue_init(&p->write_wq);
-            return p;
-        }
+    p->in_use = 1;
+    p->inode = pipe_next_inode();
+    p->read_open = 1;
+    p->write_open = 1;
+    wait_queue_init(&p->read_wq);
+    wait_queue_init(&p->write_wq);
+    p->next = pipes;
+    pipes = p;
+    return p;
+}
+
+/* Both ends closed, or the pipe never handed out: off the list and back to
+ * the heap. Nothing refers to it after this. */
+static void pipe_free(pipe_t *p)
+{
+    pipe_t **link = &pipes;
+
+    while (*link && *link != p) {
+        link = &(*link)->next;
     }
-    return NULL;
+    if (*link) {
+        *link = p->next;
+    }
+    kfree(p);
 }
 
 /**
@@ -345,7 +347,7 @@ static void pipe_close(fd_entry_t *e)
         wq_wake_all(&p->read_wq); /* readers now get EOF */
     }
     if (!p->read_open && !p->write_open) {
-        p->in_use = 0; /* both ends closed: free the slot */
+        pipe_free(p);
     }
 }
 
@@ -397,7 +399,7 @@ int32_t sys_pipe2(struct isr_params *params)
      * the very same slot. */
     rfd = fd_alloc(&current_proc->fds);
     if (rfd < 0) {
-        pipe->in_use = 0;
+        pipe_free(pipe);
         return -EMFILE;
     }
     pipe_setup_end(rfd, pipe, FD_FLAG_READ, flags);
@@ -405,7 +407,7 @@ int32_t sys_pipe2(struct isr_params *params)
     wfd = fd_alloc(&current_proc->fds);
     if (wfd < 0) {
         fd_free(&current_proc->fds, rfd);
-        pipe->in_use = 0;
+        pipe_free(pipe);
         return -EMFILE;
     }
     pipe_setup_end(wfd, pipe, FD_FLAG_WRITE, flags);
@@ -416,7 +418,7 @@ int32_t sys_pipe2(struct isr_params *params)
         /* The user array is unwritable: tear the just-created pipe down rather
          * than leaking the descriptors. Both ends are fresh (OFD refcount 1,
          * nothing blocked), so free the pipe slot and the two fds directly. */
-        pipe->in_use = 0;
+        pipe_free(pipe);
         fd_free(&current_proc->fds, rfd);
         fd_free(&current_proc->fds, wfd);
         return -EFAULT;
