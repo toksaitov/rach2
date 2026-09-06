@@ -1169,9 +1169,10 @@ build/images/rach2-metal.iso: rach2-metal-iso
 # a write, the pull from under a mount and the replug, ten plugs and pulls
 # of a stick nobody opened, BusyBox mounting by label, and a throughput line.
 USBDISK_DIR = $(IMAGES_DIR)/usbdisk
-run-usbdisk: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(MKEXFATFIXTURE) $(MKGPT) $(MKMBR) $(HARNESS) $(STICK_IMAGE)
+run-usbdisk: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(MKEXFATFIXTURE) $(MKGPT) $(MKMBR) $(HARNESS) $(STICK_IMAGE) rach2-recovery $(RECOVERY_IMAGE)
 	sh tests/system/suites/usbdisk.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(USBDISK_DIR) \
-	    $(OS_REAL_IMAGE) "`cat krffs/rach2_demo_password`" $(MKEXFATFIXTURE) $(STICK_IMAGE)
+	    $(OS_REAL_IMAGE) "`cat krffs/rach2_demo_password`" $(MKEXFATFIXTURE) $(STICK_IMAGE) \
+	    $(RECOVERY_KERNEL) $(RECOVERY_IMAGE)
 
 run-usb: rach2 tests krffs test-image $(HARNESS) $(MKMBR) harness-kernel
 	sh tests/system/suites/usb.sh $(HARNESS_KERNEL) $(TEST_IMAGE) $(HARNESS)

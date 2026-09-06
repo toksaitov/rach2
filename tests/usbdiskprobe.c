@@ -6,10 +6,10 @@
  * has to pull the stick out between some of them and a pulled stick cannot
  * be arranged from inside the machine:
  *
- * * `report`: `/dev/usb0` exists, is a block device, and `/proc/usb` names
+ * * `report`: `/dev/disk0` exists, is a block device, and `/proc/usb` names
  *   it with a size.
  * * `volumes`: the two volumes on the stick mount, read and unmount, and a
- *   raw read of `/dev/usb0` gives the table their partitions came from.
+ *   raw read of `/dev/disk0` gives the table their partitions came from.
  * * `write`: a file written to the FAT volume, synced, unmounted, and read
  *   back after the volume is mounted again; the unmount must have flushed
  *   the stick's own cache, which the stick's line in `/proc/usb` counts.
@@ -24,8 +24,8 @@
  *   stick that inherits nothing from the one before it.
  * * `free`: the number of free names `/proc/usb` reports, printed, so the
  *   harness can compare it across a run of plugs and pulls.
- * * `super`: a stick with no partition table mounts through `/dev/usb0`.
- * * `throughput`: 16 MiB read from `/dev/usb0` in 32 KiB pieces, timed by
+ * * `super`: a stick with no partition table mounts through `/dev/disk0`.
+ * * `throughput`: 16 MiB read from `/dev/disk0` in 32 KiB pieces, timed by
  *   the monotonic clock and printed as `USBDISKPROBE THROUGHPUT N KB/s`.
  *   The number is recorded, not judged: it is what this milestone's
  *   page-sized request gives under the emulator.
@@ -61,8 +61,9 @@ typedef unsigned int size_t;
 
 #define MS_RDONLY 1
 
-#define EIO   5
-#define EBUSY 16
+#define EIO       5
+#define SYS_LSEEK 19
+#define EBUSY     16
 
 #define MNT "/mnt"
 
@@ -278,16 +279,16 @@ static int free_names(void)
 
 static void part_report(void)
 {
-    if (mode_of("/dev/usb0") == 0) {
-        fail("/dev/usb0 does not stat");
+    if (mode_of("/dev/disk0") == 0) {
+        fail("/dev/disk0 does not stat");
     }
-    if ((mode_of("/dev/usb0") & 0170000u) != 0060000u) {
-        fail("/dev/usb0 is not a block device");
+    if ((mode_of("/dev/disk0") & 0170000u) != 0060000u) {
+        fail("/dev/disk0 is not a block device");
     }
     if (slurp("/proc/usb") < 0) {
         fail("/proc/usb did not read");
     }
-    if (!contains(text, "usb0 ")) {
+    if (!contains(text, "disk0 ")) {
         fail("/proc/usb does not name the stick");
     }
     if (!contains(text, " sectors ")) {
@@ -302,12 +303,17 @@ static void part_report(void)
     ok();
 }
 
+/* The two volumes' nodes: the table's numbering, given by the suite when
+   the entries are not the first two. */
+static const char *fat_node = "/dev/disk0p1";
+static const char *exfat_node = "/dev/disk0p2";
+
 static void part_volumes(void)
 {
     int fd;
     int n;
 
-    if (mount_at("/dev/usb0p1", "vfat", MS_RDONLY) != 0) {
+    if (mount_at(fat_node, "vfat", MS_RDONLY) != 0) {
         fail("the FAT volume would not mount");
     }
     n = slurp(MNT "/hello.txt");
@@ -320,7 +326,7 @@ static void part_volumes(void)
     if (sys2(SYS_UMOUNT2, (int)MNT, 0) != 0) {
         fail("the FAT volume would not unmount");
     }
-    if (mount_at("/dev/usb0p2", "exfat", MS_RDONLY) != 0) {
+    if (mount_at(exfat_node, "exfat", MS_RDONLY) != 0) {
         fail("the exFAT volume would not mount");
     }
     if (sys2(SYS_UMOUNT2, (int)MNT, 0) != 0) {
@@ -328,17 +334,17 @@ static void part_volumes(void)
     }
 
     /* The whole node is the table the two partitions came from. */
-    fd = sys3(SYS_OPEN, (int)"/dev/usb0", O_RDONLY, 0);
+    fd = sys3(SYS_OPEN, (int)"/dev/disk0", O_RDONLY, 0);
     if (fd < 0) {
-        fail("/dev/usb0 would not open");
+        fail("/dev/disk0 would not open");
     }
     n = sys3(SYS_READ, fd, (int)text, 512);
     sys1(SYS_CLOSE, fd);
     if (n != 512) {
-        fail("a sector of /dev/usb0 did not read");
+        fail("a sector of /dev/disk0 did not read");
     }
     if ((unsigned char)text[510] != 0x55 || (unsigned char)text[511] != 0xAA) {
-        fail("the first sector of /dev/usb0 is not a table");
+        fail("the first sector of /dev/disk0 is not a table");
     }
     /* And it is the table the two partitions came from: either the MBR with
        the FAT32 and exFAT entries the fixture wrote, or the protective entry
@@ -348,7 +354,7 @@ static void part_volumes(void)
         unsigned char type1 = (unsigned char)text[446 + 16 + 4];
 
         if (!((type0 == 0x0C && type1 == 0x07) || type0 == 0xEE)) {
-            fail("the table on /dev/usb0 is not the one the partitions came from");
+            fail("the table on /dev/disk0 is not the one the partitions came from");
         }
     }
     ok();
@@ -389,7 +395,7 @@ static void part_write(void)
     int n;
     int flushes_before;
 
-    if (mount_at("/dev/usb0p1", "vfat", 0) != 0) {
+    if (mount_at("/dev/disk0p1", "vfat", 0) != 0) {
         fail("the FAT volume would not mount for writing");
     }
     fd = sys3(SYS_OPEN, (int)MNT "/written.txt", O_RDWR | O_CREAT | O_TRUNC, 0644);
@@ -414,7 +420,7 @@ static void part_write(void)
     if (flushes_before < 0 || stick_flushes() <= flushes_before) {
         fail("the unmount did not flush the stick's cache");
     }
-    if (mount_at("/dev/usb0p1", "vfat", MS_RDONLY) != 0) {
+    if (mount_at("/dev/disk0p1", "vfat", MS_RDONLY) != 0) {
         fail("the volume would not mount again");
     }
     n = slurp(MNT "/written.txt");
@@ -436,7 +442,7 @@ static void part_hold(void)
     int gone = 0;
     char buf[512];
 
-    if (mount_at("/dev/usb0p1", "vfat", 0) != 0) {
+    if (mount_at("/dev/disk0p1", "vfat", 0) != 0) {
         fail("the volume would not mount");
     }
     fd = sys3(SYS_OPEN, (int)MNT "/pattern.bin", O_RDONLY, 0);
@@ -451,9 +457,9 @@ static void part_hold(void)
        in front of it: every one of them is a request on the stick, so the
        process is inside such a request when the stick goes. The file stays
        open on the mount meanwhile, which is what the unmount must refuse. */
-    raw = sys3(SYS_OPEN, (int)"/dev/usb0p1", O_RDONLY, 0);
+    raw = sys3(SYS_OPEN, (int)"/dev/disk0p1", O_RDONLY, 0);
     if (raw < 0) {
-        fail("/dev/usb0p1 would not open");
+        fail("/dev/disk0p1 would not open");
     }
     puts("USBDISKPROBE HOLDING");
     while (reads < 2000000) {
@@ -469,7 +475,7 @@ static void part_hold(void)
         }
         if (n == 0) {
             sys1(SYS_CLOSE, raw);
-            raw = sys3(SYS_OPEN, (int)"/dev/usb0p1", O_RDONLY, 0);
+            raw = sys3(SYS_OPEN, (int)"/dev/disk0p1", O_RDONLY, 0);
             if (raw < 0) {
                 gone = 1; /* the node went with the stick */
                 break;
@@ -504,7 +510,7 @@ static void part_hold(void)
 
 static void part_replug(void)
 {
-    if (mount_at("/dev/usb0p1", "vfat", MS_RDONLY) != 0) {
+    if (mount_at("/dev/disk0p1", "vfat", MS_RDONLY) != 0) {
         fail("the volume on the stick plugged back in would not mount");
     }
     if (slurp(MNT "/hello.txt") <= 0) {
@@ -540,19 +546,19 @@ static void part_throughput(void)
         int sec;
         int nsec;
     } before, after;
-    int fd = sys3(SYS_OPEN, (int)"/dev/usb0", O_RDONLY, 0);
+    int fd = sys3(SYS_OPEN, (int)"/dev/disk0", O_RDONLY, 0);
     int total = 0;
     int ms;
 
     if (fd < 0) {
-        fail("/dev/usb0 would not open");
+        fail("/dev/disk0 would not open");
     }
     sys2(SYS_CLOCK_GETTIME, CLOCK_MONOTONIC, (int)&before);
     while (total < 16 * 1024 * 1024) {
         int n = sys3(SYS_READ, fd, (int)big, (int)sizeof(big));
 
         if (n <= 0) {
-            fail("a read of /dev/usb0 failed before 16 MiB");
+            fail("a read of /dev/disk0 failed before 16 MiB");
         }
         total += n;
     }
@@ -572,11 +578,135 @@ static void part_throughput(void)
 
 static void part_super(void)
 {
-    if (mount_at("/dev/usb0", "exfat", MS_RDONLY) != 0) {
+    if (mount_at("/dev/disk0", "exfat", MS_RDONLY) != 0) {
         fail("the stick with no table would not mount through its whole node");
     }
     if (sys2(SYS_UMOUNT2, (int)MNT, 0) != 0) {
         fail("the stick with no table would not unmount");
+    }
+    ok();
+}
+
+/*
+ * `three`: three sticks at once, each with a FAT32 first partition holding
+ * the same file, mounted and read one after the other.
+ */
+static void part_three(void)
+{
+    static const char *const nodes[3] = {"/dev/disk0p1", "/dev/disk1p1", "/dev/disk2p1"};
+    int i;
+
+    for (i = 0; i < 3; i++) {
+        if (mount_at(nodes[i], "vfat", MS_RDONLY) != 0) {
+            fail("one of the three sticks would not mount");
+        }
+        if (slurp(MNT "/hello.txt") <= 0 || !contains(text, "hello from the stick")) {
+            fail("one of the three sticks did not read its file");
+        }
+        if (sys2(SYS_UMOUNT2, (int)MNT, 0) != 0) {
+            fail("one of the three sticks would not unmount");
+        }
+    }
+    ok();
+}
+
+/*
+ * `pullone`: with three sticks in, keep reading the middle one's whole node
+ * through the queue and say so; the suite pulls it, the read in flight
+ * answers EIO, and the two beside it still mount and read.
+ */
+static void part_pullone(void)
+{
+    static char sector[512];
+    int fd = sys3(SYS_OPEN, (int)"/dev/disk1", O_RDONLY, 0);
+    int reads = 0;
+    int n;
+
+    sector[0] = 0;
+    if (fd < 0) {
+        fail("/dev/disk1 would not open");
+    }
+    puts("USBDISKPROBE HOLDING");
+    for (;;) {
+        n = sys3(SYS_READ, fd, (int)sector, 512);
+        if (n == 512) {
+            reads++;
+            continue;
+        }
+        if (n == 0) {
+            sys3(SYS_LSEEK, fd, 0, 0);
+            continue;
+        }
+        if (n != -EIO) {
+            fail("the read of the pulled stick failed with something other than EIO");
+        }
+        break;
+    }
+    sys1(SYS_CLOSE, fd);
+    if (reads < 8) {
+        fail("too few reads ran before the pull to have met it");
+    }
+    if (mount_at("/dev/disk0p1", "vfat", MS_RDONLY) != 0 || slurp(MNT "/hello.txt") <= 0 ||
+        !contains(text, "hello from the stick") || sys2(SYS_UMOUNT2, (int)MNT, 0) != 0) {
+        fail("the first stick was harmed by the pull of the second");
+    }
+    if (mount_at("/dev/disk2p1", "vfat", MS_RDONLY) != 0 || slurp(MNT "/hello.txt") <= 0 ||
+        !contains(text, "hello from the stick") || sys2(SYS_UMOUNT2, (int)MNT, 0) != 0) {
+        fail("the third stick was harmed by the pull of the second");
+    }
+    if (mount_at("/dev/disk1p1", "vfat", MS_RDONLY) == 0) {
+        fail("the pulled stick still mounts");
+    }
+    ok();
+}
+
+/*
+ * `big`: a stick past two terabytes, its partition near the end, listed at
+ * its size, mounted, written and read back.
+ */
+static void part_big(void)
+{
+    int fd;
+
+    if (slurp("/proc/usb") <= 0 || !contains(text, " 4823449600 sectors ")) {
+        fail("/proc/usb does not list the stick at 4823449600 sectors");
+    }
+    if (slurp("/proc/disk") <= 0 || !contains(text, "part 0 1 4294969344 65536 ")) {
+        fail("/proc/disk does not place the partition past sector 2^32");
+    }
+    if (mount_at("/dev/disk0p1", "vfat", 0) != 0) {
+        fail("the far partition would not mount");
+    }
+    fd = sys3(SYS_OPEN, (int)MNT "/far.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0 || sys3(SYS_WRITE, fd, (int)"written past two terabytes\n", 27) != 27) {
+        fail("the file past two terabytes would not write");
+    }
+    sys1(SYS_CLOSE, fd);
+    if (slurp(MNT "/far.txt") != 27 || !contains(text, "written past two terabytes")) {
+        fail("the file past two terabytes did not read back");
+    }
+    if (sys2(SYS_UMOUNT2, (int)MNT, 0) != 0) {
+        fail("the far partition would not unmount");
+    }
+    ok();
+}
+
+/*
+ * `luns`: one device with two logical units, each a disk with a FAT32
+ * partition, both listed and both mounted.
+ */
+static void part_luns(void)
+{
+    if (slurp("/proc/usb") <= 0 || !contains(text, "disk0 ") || !contains(text, "disk1 ")) {
+        fail("/proc/usb does not list both units");
+    }
+    if (mount_at("/dev/disk0p1", "vfat", MS_RDONLY) != 0 || slurp(MNT "/hello.txt") <= 0 ||
+        sys2(SYS_UMOUNT2, (int)MNT, 0) != 0) {
+        fail("the first unit would not mount and read");
+    }
+    if (mount_at("/dev/disk1p1", "vfat", MS_RDONLY) != 0 || slurp(MNT "/hello.txt") <= 0 ||
+        sys2(SYS_UMOUNT2, (int)MNT, 0) != 0) {
+        fail("the second unit would not mount and read");
     }
     ok();
 }
@@ -595,8 +725,24 @@ void probe_main(unsigned int *sp)
     char **argv = (char **)(sp + 1);
     const char *what = argc > 1 ? argv[1] : "report";
 
+    if (argc > 3) {
+        fat_node = argv[2];
+        exfat_node = argv[3];
+    }
     if (same(what, "report")) {
         part_report();
+    }
+    if (same(what, "three")) {
+        part_three();
+    }
+    if (same(what, "pullone")) {
+        part_pullone();
+    }
+    if (same(what, "big")) {
+        part_big();
+    }
+    if (same(what, "luns")) {
+        part_luns();
     }
     if (same(what, "volumes")) {
         part_volumes();

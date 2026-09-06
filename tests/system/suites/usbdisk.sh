@@ -19,11 +19,12 @@
 # Usage: usbdisk.sh KERNEL IMAGE HARNESS DIR OSREAL PASSWORD MKEXFATFIXTURE \
 #        STICKIMAGE
 set -u
-if [ $# -ne 8 ]; then
-    echo "usage: usbdisk.sh KERNEL IMAGE HARNESS DIR OSREAL PASSWORD MKEXFATFIXTURE STICKIMAGE" >&2
+if [ $# -ne 10 ]; then
+    echo "usage: usbdisk.sh KERNEL IMAGE HARNESS DIR OSREAL PASSWORD MKEXFATFIXTURE STICKIMAGE RKERNEL RIMAGE" >&2
     exit 2
 fi
 KERNEL=$1; IMAGE=$2; HARNESS=$3; DIR=$4; OSREAL=$5; PASSWORD=$6; MKFIX=$7; STICKIMAGE=$8
+RKERNEL=$9; RIMAGE=${10}
 REPO=$(cd "$(dirname "$0")/../../.." && pwd)
 MKMBR="$REPO/build/tools/image/mkmbr"
 MKGPT="$REPO/build/tools/image/mkgpt"
@@ -86,7 +87,7 @@ run() {
         "$@"
 }
 # ---- 1: the MBR stick is named, sized, a block device, and both volumes
-#         mount; the table reads back through /dev/usb0 ----
+#         mount; the table reads back through /dev/disk0 ----
 if run "$MBR" --timeout 120 --steptmo 60 --ok "USBDISKPROBE OK" --never "USBDISKPROBE FAIL" \
     "expect=Type 'help'" "send=exec /usbdiskprobe report" "expect=USBDISKPROBE OK" \
     "expect=Type 'help'" "send=exec /usbdiskprobe volumes" "expect=USBDISKPROBE OK" \
@@ -96,12 +97,14 @@ else
     fail "the MBR stick boot"
 fi
 
-# ---- 2: the GUID stick, whose first used entry is the seventh ----
+# ---- 2: the GUID stick, whose first used entry is the seventh, so its
+#         nodes are p7 and p10: the table's own numbers ----
 if run "$GPT" --timeout 120 --steptmo 60 --ok "USBDISKPROBE OK" --never "USBDISKPROBE FAIL" \
     "expect=Type 'help'" "send=exec /usbdiskprobe report" "expect=USBDISKPROBE OK" \
-    "expect=Type 'help'" "send=exec /usbdiskprobe volumes" "expect=USBDISKPROBE OK" \
+    "expect=Type 'help'" "send=exec /usbdiskprobe volumes /dev/disk0p7 /dev/disk0p10" \
+    "expect=USBDISKPROBE OK" \
     > /dev/null 2>&1; then
-    note "a GUID stick with its first used entry at index 6 mounts both volumes: OK"
+    note "a GUID stick with its first used entry at index 6 mounts both volumes as p7 and p10: OK"
 else
     fail "the GUID stick boot"
 fi
@@ -116,7 +119,7 @@ if run "$SUPER" --timeout 120 --steptmo 60 --ok "USBDISKPROBE OK" --never "USBDI
 else
     fail "the superfloppy boot"
 fi
-if grep -aq "usbdisk: usb0: one volume" "$LOG"; then
+if grep -aq "usbdisk: disk0: one volume" "$LOG"; then
     note "and the kernel recorded it as one volume: OK"
 else
     fail "the superfloppy was not recorded as one volume"
@@ -153,17 +156,17 @@ if run "$DIR/stick-pull.img" --timeout 180 --steptmo 60 --ok "USBDISKPROBE OK" -
     --log "$LOG" \
     "expect=Type 'help'" "send=exec /usbdiskprobe hold" "expect=USBDISKPROBE HOLDING" \
     wait=1 "usb=del:st0" "expect=USBDISKPROBE OK" \
-    "expect=Type 'help'" "send=exec /usbdiskprobe free" "expect=USBDISKPROBE FREE 2" \
+    "expect=Type 'help'" "send=exec /usbdiskprobe free" "expect=USBDISKPROBE FREE 8" \
     "expect=Type 'help'" \
     "drive=add:if=none,id=again,format=raw,file=$DIR/stick-pull.img" \
-    "usb=add:usb-storage,bus=xhci.0,drive=again,id=st1" "expect=usbdisk: usb0: mbr" \
+    "usb=add:usb-storage,bus=xhci.0,drive=again,id=st1" "expect=usbdisk: disk0: mbr" \
     "send=exec /usbdiskprobe replug" "expect=USBDISKPROBE OK" \
     > /dev/null 2>&1; then
     note "a pulled stick answers EIO, unmounts after its file closes, and mounts again when plugged back: OK"
 else
     fail "the pull and replug boot"
 fi
-if grep -aq "usbdisk: usb0: reclaimed" "$LOG"; then
+if grep -aq "usbdisk: disk0: reclaimed" "$LOG"; then
     note "the pulled stick was reclaimed once nothing held it: OK"
 else
     fail "the pulled stick was never reclaimed"
@@ -176,11 +179,11 @@ set -- "expect=Type 'help'"
 i=0
 while [ $i -lt 10 ]; do
     set -- "$@" "drive=add:if=none,id=medium$i,format=raw,file=$MBR" \
-        "usb=add:usb-storage,bus=xhci.0,drive=medium$i,id=st$i" "expect=usbdisk: usb0: mbr" \
-        "usb=del:st$i" "expect=usbdisk: usb0: reclaimed"
+        "usb=add:usb-storage,bus=xhci.0,drive=medium$i,id=st$i" "expect=usbdisk: disk0: mbr" \
+        "usb=del:st$i" "expect=usbdisk: disk0: reclaimed"
     i=$((i + 1))
 done
-set -- "$@" "send=exec /usbdiskprobe free" "expect=USBDISKPROBE FREE 2"
+set -- "$@" "send=exec /usbdiskprobe free" "expect=USBDISKPROBE FREE 8"
 if "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
     --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
@@ -191,7 +194,7 @@ if "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
 else
     fail "the churn boot"
 fi
-if [ "$(grep -ac 'usbdisk: usb0: reclaimed' "$LOG")" = 10 ]; then
+if [ "$(grep -ac 'usbdisk: disk0: reclaimed' "$LOG")" = 10 ]; then
     note "and each of the ten was reclaimed: OK"
 else
     fail "the ten sticks were not each reclaimed"
@@ -217,17 +220,17 @@ if "$HARNESS" --kernel "$KERNEL" --initrd "$OSREAL" \
 else
     fail "the BusyBox boot"
 fi
-if grep -aq '^FOUND1=/dev/usb0p1' "$LOG"; then
-    note "findfs named /dev/usb0p1 for the FAT32 label: OK"
+if grep -aq '^FOUND1=/dev/disk0p1' "$LOG"; then
+    note "findfs named /dev/disk0p1 for the FAT32 label: OK"
 else
     fail "findfs did not name the FAT32 partition for its label"
 fi
-if grep -aq '^FOUND2=/dev/usb0p2' "$LOG"; then
-    note "and /dev/usb0p2 for the exFAT label, whose prober reads part of a sector: OK"
+if grep -aq '^FOUND2=/dev/disk0p2' "$LOG"; then
+    note "and /dev/disk0p2 for the exFAT label, whose prober reads part of a sector: OK"
 else
     fail "findfs did not name the exFAT partition for its label"
 fi
-if grep -a '^/dev/usb0p1:' "$LOG" | grep -aq 'STICKFAT'; then
+if grep -a '^/dev/disk0p1:' "$LOG" | grep -aq 'STICKFAT'; then
     note "blkid listed the FAT32 label: OK"
 else
     fail "blkid did not list the FAT32 label"
@@ -238,7 +241,7 @@ else
     fail "the copied file did not read"
 fi
 
-# ---- 8: throughput, recorded and not judged: a 16 MiB read of /dev/usb0
+# ---- 8: throughput, recorded and not judged: a 16 MiB read of /dev/disk0
 #         timed by the machine's own clock, with the controller's messages
 #         on, which is the ordinary machine. On the timer's pump alone, with
 #         neither messages nor the controller's line, the same read takes
@@ -281,8 +284,8 @@ if "$HARNESS" --bios \
     --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=stick,bootindex=0 \
     --timeout 240 --steptmo 120 --ok "STICKDONE" --log "$LOG" \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
-    "expect=# " "send=cat /proc/usb | grep ^usb0; echo USB\"\"DONE" \
-    "expect=USBDONE" "send=mkdir -p /mnt && mount -t exfat /dev/usb0p2 /mnt && echo MOUNT\"\"ED" \
+    "expect=# " "send=cat /proc/usb | grep ^disk0; echo USB\"\"DONE" \
+    "expect=USBDONE" "send=mkdir -p /mnt && mount -t exfat /dev/disk0p2 /mnt && echo MOUNT\"\"ED" \
     "expect=MOUNTED" "send=ls /mnt | head -3; grep exfat /proc/mounts; echo LIST\"\"DONE" \
     "expect=LISTDONE" "send=umount /mnt && echo STICK\"\"DONE" \
     "expect=STICKDONE" > /dev/null 2>&1; then
@@ -293,15 +296,111 @@ fi
 # The stick's size is the image's: the ISO half grows with the kernel, and
 # the machine must name the whole of what it booted from.
 STICK_SECTORS=$(($(wc -c < "$DIR/stick-boot.img") / 512))
-if grep -aq "usbdisk: usb0: mbr: $STICK_SECTORS sectors, 2 partitions" "$LOG"; then
-    note "and the stick it booted from is its usb0 with two partitions: OK"
+if grep -aq "usbdisk: disk0: mbr: $((STICK_SECTORS / 2048)) MiB, 2 partitions" "$LOG"; then
+    note "and the stick it booted from is its disk0 with two partitions: OK"
 else
     fail "the booted machine did not name its own stick"
 fi
-if grep -aq '/dev/usb0p2 /mnt exfat' "$LOG"; then
+if grep -aq '/dev/disk0p2 /mnt exfat' "$LOG"; then
     note "and /proc/mounts named the stick's second partition: OK"
 else
     fail "/proc/mounts did not name the stick's partition"
+fi
+
+# ---- 10: three sticks at once, each mounted and read; then one of them,
+#          the middle one, pulled while a reader keeps a command queued on
+#          it: the read in flight answers EIO and the two beside it are
+#          unharmed. The three are copies of the MBR stick. ----
+for i in 0 1 2; do
+    cp "$MBR" "$DIR/stick-three-$i.img" || fail "the three sticks' images"
+done
+three() {
+    "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
+        --qemu-arg=-cpu --qemu-arg=max \
+        --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
+        --drive "if=none,id=stick0,format=raw,file=$DIR/stick-three-0.img" \
+        --drive "if=none,id=stick1,format=raw,file=$DIR/stick-three-1.img" \
+        --drive "if=none,id=stick2,format=raw,file=$DIR/stick-three-2.img" \
+        --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=stick0,id=st0 \
+        --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=stick1,id=st1 \
+        --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=stick2,id=st2 \
+        "$@"
+}
+LOG="$DIR/three.log"
+if three --timeout 180 --steptmo 60 --ok "USBDISKPROBE OK" --never "USBDISKPROBE FAIL" --log "$LOG" \
+    "expect=Type 'help'" "send=exec /usbdiskprobe three" "expect=USBDISKPROBE OK" \
+    "expect=Type 'help'" "send=exec /usbdiskprobe pullone" "expect=USBDISKPROBE HOLDING" \
+    wait=1 "usb=del:st1" "expect=USBDISKPROBE OK" > /dev/null 2>&1; then
+    note "three sticks at once each mount, and the middle one pulled under a reader leaves the others unharmed: OK"
+else
+    fail "the three sticks boot"
+fi
+if grep -aq "usbdisk: disk1: reclaimed" "$LOG"; then
+    note "and the pulled one was reclaimed by name: OK"
+else
+    fail "the pulled stick was not reclaimed as disk1"
+fi
+
+# ---- 11: a stick written raw from the recovery kernel: a sector pattern
+#          through its whole node, read back there and on the host ----
+cp "$MBR" "$DIR/stick-recovery.img" || fail "the recovery stick's image"
+LOG="$DIR/recovery.log"
+if run "$DIR/stick-recovery.img" --kernel "$RKERNEL" --initrd "$RIMAGE" \
+    --timeout 180 --steptmo 60 --ok "RAWDONE" --log "$LOG" \
+    "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" "expect=~ #" \
+    "send=yes RACH2RAW | head -c 4096 > /tmp/p; dd if=/tmp/p of=/dev/disk0 bs=512 seek=1000 2>&1; dd if=/dev/disk0 bs=512 skip=1000 count=8 2>/dev/null | cksum; cksum < /tmp/p; echo RAW\"\"DONE" \
+    "expect=RAWDONE" > /dev/null 2>&1; then
+    note "the recovery kernel wrote the stick raw: OK"
+else
+    fail "the recovery kernel's raw write of the stick"
+fi
+WANT=$(yes RACH2RAW | head -c 4096 | cksum | cut -d' ' -f1)
+[ "$(grep -ac "^$WANT " "$LOG")" -ge 2 ] || fail "the pattern did not read back on the machine"
+GOT=$(dd if="$DIR/stick-recovery.img" bs=512 skip=1000 count=8 2>/dev/null | cksum | cut -d' ' -f1)
+[ "$GOT" = "$WANT" ] || fail "the pattern is not on the image"
+note "and the host finds the pattern where it was written: OK"
+
+# ---- 12: a stick past two terabytes: a sparse image with one partition
+#          starting past sector 2^32, which the sixteen-byte commands reach ----
+BIG="$DIR/stick-big.img"
+rm -f "$BIG"
+dd if=/dev/zero of="$BIG" bs=1 count=0 seek=$((4823449600 * 512)) 2>/dev/null || fail "the big stick's image"
+"$MKGPT" "$BIG" 4294969344:65536:fat=FARAWAY > /dev/null || fail "mkgpt big"
+# mtools cannot seek past two terabytes, so the volume is made on its own
+# and copied in, and read back the same way.
+rm -f "$BIG.vol"
+dd if=/dev/zero of="$BIG.vol" bs=512 count=65536 2>/dev/null || fail "the far volume"
+mformat -i "$BIG.vol" -F -T 65536 -v FARAWAY :: || fail "mformat big"
+dd if="$BIG.vol" of="$BIG" bs=512 seek=4294969344 conv=notrunc 2>/dev/null || fail "the far volume into the image"
+LOG="$DIR/big.log"
+if run "$BIG" --timeout 180 --steptmo 60 --ok "USBDISKPROBE OK" --never "USBDISKPROBE FAIL" --log "$LOG" \
+    "expect=Type 'help'" "send=exec /usbdiskprobe big" "expect=USBDISKPROBE OK" > /dev/null 2>&1; then
+    note "a stick past two terabytes is listed at its size and its far partition written: OK"
+else
+    fail "the big stick boot"
+fi
+dd if="$BIG" of="$BIG.vol" bs=512 skip=4294969344 count=65536 2>/dev/null || fail "the far volume out of the image"
+mtype -i "$BIG.vol" ::/far.txt 2>/dev/null | grep -q "written past two terabytes" \
+    || fail "the file past two terabytes is not on the image"
+note "and the host reads the file back past two terabytes: OK"
+rm -f "$BIG" "$BIG.vol"
+
+# ---- 13: two logical units on one device, each a disk ----
+cp "$MBR" "$DIR/stick-lun0.img" || fail "the first unit's image"
+cp "$MBR" "$DIR/stick-lun1.img" || fail "the second unit's image"
+LOG="$DIR/luns.log"
+if "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
+    --qemu-arg=-device --qemu-arg=usb-bot,bus=xhci.0,id=bot \
+    --drive "if=none,id=lun0,format=raw,file=$DIR/stick-lun0.img" \
+    --drive "if=none,id=lun1,format=raw,file=$DIR/stick-lun1.img" \
+    --qemu-arg=-device --qemu-arg=scsi-hd,bus=bot.0,scsi-id=0,lun=0,drive=lun0 \
+    --qemu-arg=-device --qemu-arg=scsi-hd,bus=bot.0,scsi-id=0,lun=1,drive=lun1 \
+    --timeout 180 --steptmo 60 --ok "USBDISKPROBE OK" --never "USBDISKPROBE FAIL" --log "$LOG" \
+    "expect=Type 'help'" "send=exec /usbdiskprobe luns" "expect=USBDISKPROBE OK" > /dev/null 2>&1; then
+    note "two logical units on one device are two disks, both mounted: OK"
+else
+    fail "the two-unit device boot"
 fi
 
 note "PASS"

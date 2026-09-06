@@ -382,7 +382,7 @@ if run_shell --qemu-arg=-cpu --qemu-arg=max \
     wait=1 "usb=del:st0" "expect=USBDISKPROBE OK" \
     "expect=Type 'help'" \
     "drive=add:if=none,id=again,format=raw,file=$STICK" \
-    "usb=add:usb-storage,bus=xhci.0,port=1.4,drive=again,id=st1" "expect=usbdisk: usb0: mbr" \
+    "usb=add:usb-storage,bus=xhci.0,port=1.4,drive=again,id=st1" "expect=usbdisk: disk0: mbr" \
     "send=exec /usbdiskprobe replug" "expect=USBDISKPROBE OK" > /dev/null 2>&1; then
     note "a stick behind the hub is written, pulled from under a mount and mounts again: OK"
 else
