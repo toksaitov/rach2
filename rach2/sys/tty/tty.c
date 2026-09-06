@@ -62,15 +62,13 @@ void tty_init(struct tty *t, n_tty_out_fn sink, void *sink_ctx)
 /** Post a signal to every live, user member of process group `pgid`. */
 void tty_signal_group(int pgid, int signo)
 {
-    int i;
+    process_t *p;
 
     if (pgid == 0) {
         return;
     }
-    for (i = 0; i < MAX_PROCS; i++) {
-        process_t *p = &proc_table[i];
-        if (p->state != PROC_UNUSED && p->state != PROC_ZOMBIE && p->cr3 != 0 &&
-            (int)p->pgid == pgid) {
+    for (p = proc_list; p; p = p->next) {
+        if (p->state != PROC_ZOMBIE && p->cr3 != 0 && (int)p->pgid == pgid) {
             signal_post(p, signo);
         }
     }

@@ -4,13 +4,21 @@
  * until then. */
 static volatile int _sched_enabled = 0;
 
-/** Index of the last process scheduled, advanced for round-robin fairness. */
-static uint32_t _last_sched_idx = 0;
+/** The process scheduled last, from whose successor the next search
+ * starts, for round-robin fairness. */
+static process_t *_last_sched;
+
+void sched_forget(process_t *p)
+{
+    if (_last_sched == p) {
+        _last_sched = p->prev;
+    }
+}
 
 void init_sched(void)
 {
     _sched_enabled = 0;
-    _last_sched_idx = 0;
+    _last_sched = NULL;
 }
 
 void sched_enable(void)
@@ -50,8 +58,8 @@ int sched_is_enabled(void)
  */
 void schedule(void)
 {
-    uint32_t i;
-    uint32_t start_idx;
+    process_t *start;
+    process_t *p;
     process_t *next = NULL;
     process_t *old;
     uint32_t saved_flags;
@@ -64,17 +72,25 @@ void schedule(void)
         return;
     }
 
-    start_idx = (_last_sched_idx + 1) % MAX_PROCS;
-
-    for (i = 0; i < MAX_PROCS; i++) {
-        uint32_t idx = (start_idx + i) % MAX_PROCS;
-        process_t *p = &proc_table[idx];
-
+    /* From the successor of the process scheduled last to the end of the
+     * list, then from its start back to it. */
+    start = _last_sched && _last_sched->next ? _last_sched->next : proc_list;
+    for (p = start; p; p = p->next) {
         if (p->state == PROC_READY) {
             next = p;
-            _last_sched_idx = idx;
             break;
         }
+    }
+    if (!next) {
+        for (p = proc_list; p && p != start; p = p->next) {
+            if (p->state == PROC_READY) {
+                next = p;
+                break;
+            }
+        }
+    }
+    if (next) {
+        _last_sched = next;
     }
 
     if (!next) {

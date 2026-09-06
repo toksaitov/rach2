@@ -43,7 +43,6 @@
  * A process holding one may take only what comes after it.
  */
 
-#define VFS_MOUNTS 8
 #define VFS_COVERED_PATH_MAX 64 /* a longer target answers ENAMETOOLONG */
 #define VFS_NAME_MAX 255        /* one component, NUL not counted */
 
@@ -291,7 +290,10 @@ void vfs_ref_put(struct vfs_ref *r);
  * the mount cannot unmount while the caller still uses the node. */
 void vfs_ref_release(struct vfs_ref *r);
 
-/** The table entry at `idx` (0..VFS_MOUNTS-1), or NULL when free; for
+/** How many mount numbers there are now; the array grows as mounts are made. */
+int vfs_mount_slots(void);
+
+/** The table entry at `idx` (0..vfs_mount_slots()-1), or NULL when free; for
  * /proc/mounts and /proc/filesystems. */
 struct vfs_mount *vfs_mount_at(int idx);
 

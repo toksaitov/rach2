@@ -37,12 +37,14 @@ static int fails;
         }              \
     } while (0)
 
-/* Count how many slots in wq point at p. */
+/* How many records on wq are p's. */
 static int count_in(wait_queue_t *wq, process_t *p)
 {
-    int i, n = 0;
-    for (i = 0; i < WQ_MAX_WAITERS; i++) {
-        if (wq->waiters[i] == p) {
+    struct wq_waiter *w;
+    int n = 0;
+
+    for (w = wq->head; w; w = w->next) {
+        if (w->proc == p) {
             n++;
         }
     }
@@ -51,13 +53,24 @@ static int count_in(wait_queue_t *wq, process_t *p)
 
 static int total_queued(wait_queue_t *wq)
 {
-    int i, n = 0;
-    for (i = 0; i < WQ_MAX_WAITERS; i++) {
-        if (wq->waiters[i]) {
-            n++;
-        }
+    struct wq_waiter *w;
+    int n = 0;
+
+    for (w = wq->head; w; w = w->next) {
+        n++;
     }
     return n;
+}
+
+static void enqueue(wait_queue_t *wq, process_t *p)
+{
+    p->waiter.proc = p;
+    wq_enqueue(wq, &p->waiter);
+}
+
+static void dequeue(wait_queue_t *wq, process_t *p)
+{
+    wq_dequeue(wq, &p->waiter);
 }
 
 int main(void)
@@ -69,27 +82,30 @@ int main(void)
     wait_queue_init(&wq);
     CHECK(total_queued(&wq) == 0);
 
+    a.waiter.next = 0;
+    b.waiter.next = 0;
+    c.waiter.next = 0;
     a.state = PROC_BLOCKED;
     b.state = PROC_BLOCKED;
     c.state = PROC_BLOCKED;
 
     /* enqueue adds, and is idempotent (no double-insert). */
-    wq_enqueue(&wq, &a);
-    wq_enqueue(&wq, &b);
-    wq_enqueue(&wq, &a); /* already queued */
+    enqueue(&wq, &a);
+    enqueue(&wq, &b);
+    enqueue(&wq, &a); /* already queued */
     CHECK(count_in(&wq, &a) == 1);
     CHECK(count_in(&wq, &b) == 1);
     CHECK(total_queued(&wq) == 2);
 
     /* dequeue removes one, idempotently. */
-    wq_dequeue(&wq, &a);
-    wq_dequeue(&wq, &a); /* already gone */
+    dequeue(&wq, &a);
+    dequeue(&wq, &a); /* already gone */
     CHECK(count_in(&wq, &a) == 0);
     CHECK(total_queued(&wq) == 1);
 
     /* wq_wake_all makes every BLOCKED waiter READY and empties the queue. */
-    wq_enqueue(&wq, &a);
-    wq_enqueue(&wq, &c);
+    enqueue(&wq, &a);
+    enqueue(&wq, &c);
     CHECK(total_queued(&wq) == 3); /* a, b, c */
     wq_wake_all(&wq);
     CHECK(a.state == PROC_READY);
@@ -101,28 +117,28 @@ int main(void)
     wait_queue_init(&wq);
     a.state = PROC_RUNNING;
     b.state = PROC_BLOCKED;
-    wq_enqueue(&wq, &a);
-    wq_enqueue(&wq, &b);
+    enqueue(&wq, &a);
+    enqueue(&wq, &b);
     wq_wake_all(&wq);
     CHECK(a.state == PROC_RUNNING); /* not forced READY */
     CHECK(b.state == PROC_READY);
     CHECK(total_queued(&wq) == 0);
 
-    /* The fixed array has exactly WQ_MAX_WAITERS distinct waiters. */
+    /* Sixty-four distinct waiters, four times the process table that was:
+     * the list has no size. */
     wait_queue_init(&wq);
     {
-        static process_t pool[WQ_MAX_WAITERS];
-        for (i = 0; i < WQ_MAX_WAITERS; i++) {
+        static process_t pool[64];
+        for (i = 0; i < 64; i++) {
             pool[i].state = PROC_BLOCKED;
-            wq_enqueue(&wq, &pool[i]);
+            enqueue(&wq, &pool[i]);
         }
-        CHECK(total_queued(&wq) == WQ_MAX_WAITERS);
+        CHECK(total_queued(&wq) == 64);
         wq_wake_all(&wq);
-        for (i = 0; i < WQ_MAX_WAITERS; i++) {
+        for (i = 0; i < 64; i++) {
             CHECK(pool[i].state == PROC_READY);
         }
         CHECK(total_queued(&wq) == 0);
     }
-
     return fails;
 }

@@ -2,6 +2,8 @@
 #include "../lib/kstring.h"
 #include "../fs/fd.h"
 #include "../panic.h"
+#include "../mm/kheap.h"
+#include "sched.h"
 
 /*
  * Offset of a PCB field, without pulling in <stddef.h> (whose size_t would
@@ -9,7 +11,9 @@
  */
 #define PCB_OFF(field) ((uint32_t)&((process_t *)0)->field)
 
-process_t proc_table[MAX_PROCS];
+process_t *proc_list;
+process_t *proc_idle;
+static process_t *proc_tail;
 
 process_t *current_proc = NULL;
 
@@ -44,8 +48,6 @@ static uint32_t next_pid = 0;
  */
 void init_proc(void)
 {
-    uint32_t i;
-
     /* Keep in sync with the .set values in proc/switch.s. */
     if (PCB_OFF(regs.esp) != 48 ||
         PCB_OFF(cr3) != 52 ||
@@ -55,11 +57,9 @@ void init_proc(void)
         k_panic("process_t layout drifted from switch.s offsets");
     }
 
-    for (i = 0; i < MAX_PROCS; i++) {
-        k_memset(&proc_table[i], 0, sizeof(process_t));
-        proc_table[i].state = PROC_UNUSED;
-    }
-
+    proc_list = NULL;
+    proc_tail = NULL;
+    proc_idle = NULL;
     next_pid = 0;
     current_proc = NULL;
 }
@@ -111,44 +111,68 @@ void process_count_fork(void)
  */
 process_t *alloc_process(void)
 {
-    uint32_t i;
+    process_t *p = kmalloc(sizeof(*p));
+    uint32_t candidate;
 
-    for (i = 0; i < MAX_PROCS; i++) {
-        if (proc_table[i].state == PROC_UNUSED) {
-            uint32_t candidate;
-            k_memset(&proc_table[i], 0, sizeof(process_t));
-            do {
-                if (next_pid >= 2000000000u) {
-                    next_pid = 1;
-                }
-                candidate = next_pid++;
-            } while (get_process(candidate) != NULL);
-            proc_table[i].pid = candidate;
-            proc_table[i].state = PROC_READY;
-            proc_table[i].sid = candidate;
-            proc_table[i].pgid = candidate;
-            proc_table[i].umask = 022;
-            fpu_init_area(proc_table[i].fpu);
-
-            fd_table_init(&proc_table[i].fds);
-            fd_init_stdio(&proc_table[i].fds);
-
-            proc_table[i].cwd[0] = '/';
-            proc_table[i].cwd[1] = '\0';
-
-            process_count_fork();
-            return &proc_table[i];
-        }
+    if (!p) {
+        return NULL;
     }
+    k_memset(p, 0, sizeof(*p));
+    do {
+        if (next_pid >= 2000000000u) {
+            next_pid = 1;
+        }
+        candidate = next_pid++;
+    } while (get_process(candidate) != NULL);
+    p->pid = candidate;
+    p->state = PROC_READY;
+    p->sid = candidate;
+    p->pgid = candidate;
+    p->umask = 022;
+    fpu_init_area(p->fpu);
+    p->waiter.proc = p;
 
-    return NULL;
+    fd_table_init(&p->fds);
+    fd_init_stdio(&p->fds);
+
+    p->cwd[0] = '/';
+    p->cwd[1] = '\0';
+
+    p->prev = proc_tail;
+    p->next = NULL;
+    if (proc_tail) {
+        proc_tail->next = p;
+    } else {
+        proc_list = p;
+    }
+    proc_tail = p;
+
+    process_count_fork();
+    return p;
 }
 
 void free_process(process_t *proc)
 {
-    if (proc) {
-        proc->state = PROC_UNUSED;
+    if (!proc) {
+        return;
     }
+    proc->state = PROC_UNUSED;
+    sched_forget(proc);
+    if (proc->prev) {
+        proc->prev->next = proc->next;
+    } else {
+        proc_list = proc->next;
+    }
+    if (proc->next) {
+        proc->next->prev = proc->prev;
+    } else {
+        proc_tail = proc->prev;
+    }
+    if (proc == proc_idle) {
+        proc_idle = NULL;
+    }
+    kfree(proc->exec_ws);
+    kfree(proc);
 }
 
 /**
@@ -160,10 +184,9 @@ void free_process(process_t *proc)
  */
 void proc_wake_sleepers(uint32_t now)
 {
-    uint32_t i;
+    process_t *p;
 
-    for (i = 0; i < MAX_PROCS; i++) {
-        process_t *p = &proc_table[i];
+    for (p = proc_list; p; p = p->next) {
         if (p->state == PROC_BLOCKED && p->wakeup_tick != 0 &&
             (int32_t)(now - p->wakeup_tick) >= 0) {
             p->wakeup_tick = 0;
@@ -174,14 +197,13 @@ void proc_wake_sleepers(uint32_t now)
 
 process_t *get_process(uint32_t pid)
 {
-    uint32_t i;
+    process_t *p;
 
-    for (i = 0; i < MAX_PROCS; i++) {
-        if (proc_table[i].state != PROC_UNUSED && proc_table[i].pid == pid) {
-            return &proc_table[i];
+    for (p = proc_list; p; p = p->next) {
+        if (p->pid == pid) {
+            return p;
         }
     }
-
     return NULL;
 }
 
@@ -201,7 +223,7 @@ process_t *get_process(uint32_t pid)
 void reparent_children(uint32_t dead_pid)
 {
     process_t *init;
-    uint32_t i;
+    process_t *p;
 
     if (init_pid == 0 || dead_pid == init_pid) {
         return;
@@ -210,10 +232,8 @@ void reparent_children(uint32_t dead_pid)
     if (init == NULL) {
         return;
     }
-    for (i = 0; i < MAX_PROCS; i++) {
-        process_t *p = &proc_table[i];
-
-        if (p->state == PROC_UNUSED || p->parent_pid != dead_pid) {
+    for (p = proc_list; p; p = p->next) {
+        if (p->parent_pid != dead_pid) {
             continue;
         }
         p->parent_pid = init_pid;

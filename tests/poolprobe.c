@@ -7,7 +7,9 @@
  * and hold them while they tell the parent through one shared pipe that
  * they have them; the parent reads the eight bytes before any child lets
  * go, so forty-eight pipes, forty ptys and forty-eight sockets are live at
- * once, three times the old sixteen. Then the parent opens and
+ * once, three times the old sixteen; and each child forks four children of
+ * its own that sleep, forty processes with the parent and the shell, past
+ * the sixteen the process table held. Then the parent opens and
  * closes a pipe, a pty and a socket a thousand times each, and the heap's
  * `HeapUsed` in `/proc/meminfo` must be what it was before, with
  * `HeapPages` within two pages of it, so nothing leaked.
@@ -160,8 +162,19 @@ static void hold(int kind, int count, int report)
             fds[i * 2 + 1] = pair[1];
         } else if (kind == 1) {
             fd = syscall3(SYS_OPEN, (int)(size_t)"/dev/ptmx", O_RDWR, 0);
-        } else {
+        } else if (kind == 2) {
             fd = open_socket();
+        } else {
+            int pid = syscall1(SYS_FORK, 0);
+
+            if (pid < 0) {
+                sys_exit(3);
+            }
+            if (pid == 0) {
+                sleep_ms(800);
+                sys_exit(0);
+            }
+            fd = pid;
         }
         if (fd < 0) {
             sys_exit(3);
@@ -170,6 +183,13 @@ static void hold(int kind, int count, int report)
     }
     syscall3(SYS_WRITE, report, (int)(size_t)"h", 1);
     sleep_ms(800);
+    if (kind == 3) {
+        for (i = 0; i < count; i++) {
+            int status;
+
+            syscall3(SYS_WAITPID, fds[i], (int)(size_t)&status, 0);
+        }
+    }
     sys_exit(0);
 }
 
@@ -260,6 +280,7 @@ void probe_main(unsigned int *sp)
     crossed(0, 6, "forty-eight pipes at once");
     crossed(1, 5, "forty ptys at once");
     crossed(2, 6, "forty-eight sockets at once");
+    crossed(3, 4, "forty processes at once");
     cycle(0, "a thousand pipes made and closed left the heap changed");
     cycle(1, "a thousand ptys made and closed left the heap changed");
     cycle(2, "a thousand sockets made and closed left the heap changed");

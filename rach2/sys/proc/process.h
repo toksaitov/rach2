@@ -8,8 +8,10 @@
 #include "../mm/vm.h"
 #include "fpu.h"
 
-/* Maximum number of processes. */
-#define MAX_PROCS 16
+/* What `sysconf` and the resource limits report as the process count until
+ * milestone 46's phase 5 makes it a per-user limit: a policy number, since
+ * the bound on processes is memory. */
+#define PROC_COUNT_POLICY 4096
 
 /* Process states. */
 typedef enum {
@@ -49,6 +51,14 @@ typedef struct cpu_regs cpu_regs_t;
 
 /* Process Control Block (PCB). */
 struct vfs_mount;
+
+/* A sleeper's record on a wait queue: one is in every process record, for
+ * the one queue a process sleeps on, and `poll` supplies one per watched
+ * object from its own stack, so entering a sleep allocates nothing. */
+struct wq_waiter {
+    struct process *proc;
+    struct wq_waiter *next;
+};
 
 struct process {
     uint32_t pid;           /* Process ID */
@@ -122,12 +132,25 @@ struct process {
      * says nothing about where the kernel reads it. `switch.s` reads this
      * offset too. */
     struct page_dir *page_dir;
+    /* The list of live records, in the order they were made; the scheduler
+     * walks it round-robin. */
+    struct process *next;
+    struct process *prev;
+    /* The record this process sleeps with, see `struct wq_waiter`. */
+    struct wq_waiter waiter;
+    /* The `execve` workspace, allocated at the first exec and kept for the
+     * record's life; `syscall.c` owns its type. */
+    void *exec_ws;
 };
 
 typedef struct process process_t;
 
-/* Process table. */
-extern process_t proc_table[MAX_PROCS];
+/* The live processes, first to last; a walk is
+ * `for (p = proc_list; p; p = p->next)`. */
+extern process_t *proc_list;
+
+/* Process 0, the kernel's idle process, which the debug shell returns to. */
+extern process_t *proc_idle;
 
 /* Currently running process. */
 extern process_t *current_proc;
@@ -145,7 +168,8 @@ void proc_reclaim_boot_pids(void);
  * full. */
 process_t *alloc_process(void);
 
-/** Mark a process slot unused. */
+/** Take a record off the list and give it back to the heap; nothing may refer
+ * to it afterwards. */
 void free_process(process_t *proc);
 
 /** Get process by PID; returns the slot, or NULL if not found. */

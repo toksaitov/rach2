@@ -17,14 +17,15 @@
  *   * signal-interruptible: a pending signal breaks the sleep with -EINTR, so a
  *     blocked read/recv unwinds to deliver the signal instead of hanging.
  *
- * At most MAX_PROCS processes exist, so a fixed array of that many slots can
- * never overflow. The single-CPU lock between a sleeper and an IRQ waker is
- * just "interrupts off"; there is no second core to race.
+ * The queue is a list of the sleepers' own records (`struct wq_waiter` in
+ * process.h): a process sleeps with the record in its own record, and a
+ * poller supplies one per watched object from its stack, so no sleep
+ * allocates and no queue has a size. The single-CPU lock between a sleeper
+ * and an IRQ waker is just "interrupts off"; there is no second core to
+ * race.
  */
-#define WQ_MAX_WAITERS MAX_PROCS
-
 typedef struct wait_queue {
-    process_t *waiters[WQ_MAX_WAITERS];
+    struct wq_waiter *head;
 } wait_queue_t;
 
 /*
@@ -68,8 +69,8 @@ void wq_wake_all(wait_queue_t *wq);
  * BLOCKED/schedule()/RUNNING transitions, the same lost-wakeup-safe way
  * wq_wait_event does.
  */
-void wq_poll_add(wait_queue_t *wq, process_t *p);
-void wq_poll_remove(wait_queue_t *wq, process_t *p);
+void wq_poll_add(wait_queue_t *wq, struct wq_waiter *w);
+void wq_poll_remove(wait_queue_t *wq, struct wq_waiter *w);
 
 /*
  * Non-zero if any process is currently blocked on wq. Used to gate work that

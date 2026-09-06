@@ -116,24 +116,21 @@ static struct synth_dir *synth_dir_alloc(int kind, int pid)
  * one missed increment is a use-after-free that no test would show. The tables
  * are the count, so there is nothing to keep in step.
  *
- * MAX_PROCS and MAX_FDS are both 16, so this is at most 256 pointer compares
- * of kernel memory; it never touches the page-cache window.
+ * The tables are a few pointer compares per live process, of kernel memory;
+ * it never touches the page-cache window.
  */
 static int fd_node_holders(const krffs_node_t *node, const fd_entry_t *except)
 {
     int held = 0;
-    int p;
+    process_t *pr;
     int i;
 
     if (!node) {
         return 0;
     }
-    for (p = 0; p < MAX_PROCS; p++) {
-        if (proc_table[p].state == PROC_UNUSED) {
-            continue;
-        }
+    for (pr = proc_list; pr; pr = pr->next) {
         for (i = 0; i < MAX_FDS; i++) {
-            fd_entry_t *e = &proc_table[p].fds.entries[i];
+            fd_entry_t *e = &pr->fds.entries[i];
 
             if (e != except && e->type == FD_TYPE_FILE && e->node == node) {
                 held++;
@@ -284,62 +281,29 @@ struct audio_write_params {
 #define KERNEL_STACK_SIZE 0x4000
 
 /*
- * Per-process kernel stacks come from a fixed arena of MAX_PROCS slots, not
- * from the never-freed bump allocator, so a fork/exit/reap cycle returns the
- * stack to the pool instead of leaking four frames each time. The arena is
- * reserved once at init; a slot is claimed on fork and released when the
- * zombie is reaped.
- */
-static uintptr_t kstack_arena;
-static uint8_t kstack_in_use[MAX_PROCS];
-
-/**
- * Reserve the kernel-stack arena. Called once at init, before the first fork.
+ * A process's kernel stack comes from the heap at fork, KERNEL_STACK_SIZE
+ * of pages, and goes back when the zombie is reaped; the one reaping is
+ * never the one whose stack it is.
  */
 static void init_kstacks(void)
 {
-    kstack_arena = mem_reserve((size_t)MAX_PROCS * KERNEL_STACK_SIZE, true);
-    if (kstack_arena == 0) {
-        k_panic("kstack: cannot reserve the kernel-stack arena");
-    }
 }
 
 /**
- * Claim a kernel stack, returning its base, or 0 if the arena is full.
+ * A kernel stack, returning its base, or 0 when the heap has none.
  *
  * The caller uses `base + KERNEL_STACK_SIZE` as the stack top.
  */
 static uintptr_t kstack_alloc(void)
 {
-    uint32_t i;
-
-    if (kstack_arena == 0) {
-        return 0;
-    }
-    for (i = 0; i < MAX_PROCS; i++) {
-        if (!kstack_in_use[i]) {
-            kstack_in_use[i] = 1;
-            return kstack_arena + (uintptr_t)i * KERNEL_STACK_SIZE;
-        }
-    }
-    return 0;
+    return (uintptr_t)kalloc_pages(KERNEL_STACK_SIZE / PAGE_SIZE, NULL);
 }
 
-/**
- * Release the kernel stack whose top is `top`.
- *
- * A top outside the arena (the boot stack of the init-role process) is
- * ignored, so this is safe to call on any reaped process. Only a zombie may
- * be freed: the dying process is still executing on its own stack until the
- * parent reaps it.
- */
+/** Give back the stack whose top is `top`. */
 static void kstack_free(uintptr_t top)
 {
-    uintptr_t base = top - KERNEL_STACK_SIZE;
-
-    if (kstack_arena != 0 && base >= kstack_arena &&
-        base < kstack_arena + (uintptr_t)MAX_PROCS * KERNEL_STACK_SIZE) {
-        kstack_in_use[(base - kstack_arena) / KERNEL_STACK_SIZE] = 0;
+    if (top != 0) {
+        kfree_pages((void *)(top - KERNEL_STACK_SIZE), KERNEL_STACK_SIZE / PAGE_SIZE);
     }
 }
 
@@ -502,8 +466,7 @@ static int32_t sys_exit(isr_params_t *params)
     }
 
     /* Hand any surviving children to init before this slot is reaped, so an
-     * exit never strands an orphan on a dead parent (the MAX_PROCS zombie
-     * leak). */
+     * exit never strands an orphan on a dead parent. */
     reparent_children(exiting_pid);
 
     /* A real /sbin/init must never exit; if it does there is no reaper, so the
@@ -542,7 +505,7 @@ static int32_t sys_exit(isr_params_t *params)
 
         init_pid = 0;
 
-        current_proc = &proc_table[0];
+        current_proc = proc_idle;
         current_proc->state = PROC_RUNNING;
 
         sched_disable();
@@ -3434,7 +3397,7 @@ static int32_t vfs_fill_stat64(struct linux_stat64 *kst, const struct vfs_ref *r
         return rc;
     }
     k_memset(kst, 0, sizeof(*kst));
-    for (i = 0; i < VFS_MOUNTS; i++) {
+    for (i = 0; i < vfs_mount_slots(); i++) {
         if (vfs_mount_at(i) == r->mnt) {
             kst->st_dev = (unsigned long long)(0x10u + (unsigned)i);
         }
@@ -5752,7 +5715,16 @@ struct exec_state {
     char script_path[256];
 };
 
-static struct exec_state exec_states[MAX_PROCS];
+/* A process's workspace is allocated at its first exec and kept in its
+ * record for the record's life, since a program that execs once execs
+ * again; `free_process` gives it back. */
+static struct exec_state *exec_state_of(process_t *proc)
+{
+    if (!proc->exec_ws) {
+        proc->exec_ws = kzalloc(sizeof(struct exec_state));
+    }
+    return proc->exec_ws;
+}
 
 /**
  * Kill the current process after exec has destroyed its old address space.
@@ -5829,7 +5801,7 @@ static void __attribute__((noreturn)) exec_fail_destroyed(void)
         free_page_directory(dir);
     }
     free_process(current_proc);
-    current_proc = &proc_table[0];
+    current_proc = proc_idle;
     current_proc->state = PROC_RUNNING;
     /* Fresh command line + drop stdin-wait state before re-enabling IRQs. */
     shell_reset_input();
@@ -6028,7 +6000,10 @@ static int32_t sys_execve(isr_params_t *params)
     /* This caller's workspace, by its place in the process table: what it
      * puts there is read again after a sleep, and another exec must not be
      * able to reach it. */
-    s = &exec_states[current_proc - proc_table];
+    s = exec_state_of(current_proc);
+    if (!s) {
+        return -ENOMEM;
+    }
     k_memset(s, 0, sizeof(*s));
 
     /* Resolve the program path (relative names against the cwd) into that
@@ -6557,7 +6532,7 @@ static int32_t sys_fork(isr_params_t *params)
 
     child = alloc_process();
     if (!child) {
-        return -EAGAIN;
+        return -ENOMEM; /* a record the heap could not give */
     }
 
     /* alloc_process gave the child its own stdio open-file descriptions;
@@ -6751,7 +6726,7 @@ static int32_t do_wait(int pid, int __user *status, int options, uint32_t rusage
 {
     uint32_t child_pid;
     int exit_code;
-    uint32_t i;
+    process_t *p;
     uint32_t flags;
 
     if (!current_proc) {
@@ -6776,10 +6751,8 @@ static int32_t do_wait(int pid, int __user *status, int options, uint32_t rusage
 
         /* Scan ALL matching children for a reportable event (a zombie to reap,
          * or a stop/continue to report), not just the first non-zombie. */
-        for (i = 0; i < MAX_PROCS; i++) {
-            process_t *p = &proc_table[i];
-
-            if (p->state == PROC_UNUSED || p->parent_pid != current_proc->pid) {
+        for (p = proc_list; p; p = p->next) {
+            if (p->parent_pid != current_proc->pid) {
                 continue;
             }
             if (!wait_pid_match(pid, p)) {
@@ -8441,11 +8414,10 @@ static int32_t kill_group(int pgid, int signo)
 {
     int found = 0;
     int allowed = 0;
-    int i;
+    process_t *p;
 
-    for (i = 0; i < MAX_PROCS; i++) {
-        process_t *p = &proc_table[i];
-        if (p->state == PROC_UNUSED || p->state == PROC_ZOMBIE) {
+    for (p = proc_list; p; p = p->next) {
+        if (p->state == PROC_ZOMBIE) {
             continue;
         }
         if ((int)p->pgid != pgid) {
@@ -8973,12 +8945,10 @@ void deliver_signals(isr_params_t *tf)
  * shell reporting that it could not set the terminal's process group. */
 static int pgrp_in_session(int pgid, int sid)
 {
-    int i;
+    const process_t *p;
 
-    for (i = 0; i < MAX_PROCS; i++) {
-        process_t *p = &proc_table[i];
-        if (p->state != PROC_UNUSED &&
-            (int)p->pgid == pgid && (int)p->sid == sid) {
+    for (p = proc_list; p; p = p->next) {
+        if ((int)p->pgid == pgid && (int)p->sid == sid) {
             return 1;
         }
     }
@@ -11200,8 +11170,10 @@ static int32_t sys_sysinfo(isr_params_t *params)
     if (!params->ebx) {
         return -EFAULT;
     }
-    for (i = 0; i < MAX_PROCS; i++) {
-        if (proc_table[i].state != PROC_UNUSED) {
+    {
+        const process_t *p;
+
+        for (p = proc_list; p; p = p->next) {
             n++;
         }
     }
@@ -11571,7 +11543,7 @@ static void rlimit_for(uint32_t resource, uint32_t *cur, uint32_t *max)
         v = (uint32_t)MAX_FDS;
         break;
     case RLIMIT_NPROC_RES:
-        v = (uint32_t)MAX_PROCS;
+        v = (uint32_t)PROC_COUNT_POLICY;
         break;
     case RLIMIT_STACK_RES:
         v = 0x800000u; /* 8 MB user-stack growth cap (documented) */

@@ -432,7 +432,7 @@ void terminate_current_process(int32_t signo)
         free_process(current_proc);
 
         init_pid = 0;
-        current_proc = &proc_table[0];
+        current_proc = proc_idle;
         current_proc->state = PROC_RUNNING;
 
         /* Fresh command line and dropped stdin-wait state, before "sti" below
@@ -3299,6 +3299,7 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
             proc0->cr3 = 0;  /* shares the kernel page directory */
             proc0->kernel_stack = (uint32_t)stack + KERNEL_STACK_SIZE;
             proc0->parent_pid = 0;
+            proc_idle = proc0;
             current_proc = proc0;
         }
     }

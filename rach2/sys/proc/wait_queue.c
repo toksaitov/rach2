@@ -30,62 +30,40 @@ static void irq_restore(uint32_t flags)
 
 void wait_queue_init(wait_queue_t *wq)
 {
-    int i;
-
-    if (!wq) {
-        return;
-    }
-    for (i = 0; i < WQ_MAX_WAITERS; i++) {
-        wq->waiters[i] = NULL;
+    if (wq) {
+        wq->head = NULL;
     }
 }
 
-/* Add p to wq if not already queued (idempotent). Caller holds interrupts
- * off. */
-static void wq_enqueue(wait_queue_t *wq, process_t *p)
+/* Interrupts off. Put `w` on the queue unless it is there. */
+static void wq_enqueue(wait_queue_t *wq, struct wq_waiter *w)
 {
-    int i;
-    int free_slot = -1;
+    struct wq_waiter *q;
 
-    for (i = 0; i < WQ_MAX_WAITERS; i++) {
-        if (wq->waiters[i] == p) {
-            return;
-        }
-        if (wq->waiters[i] == NULL && free_slot < 0) {
-            free_slot = i;
-        }
-    }
-    if (free_slot >= 0) {
-        wq->waiters[free_slot] = p;
-    }
-}
-
-/* Remove p from wq (idempotent). Caller holds interrupts off. */
-static void wq_dequeue(wait_queue_t *wq, process_t *p)
-{
-    int i;
-
-    for (i = 0; i < WQ_MAX_WAITERS; i++) {
-        if (wq->waiters[i] == p) {
-            wq->waiters[i] = NULL;
+    for (q = wq->head; q; q = q->next) {
+        if (q == w) {
             return;
         }
     }
+    w->next = wq->head;
+    wq->head = w;
 }
 
-/**
- * Block the current process on `wq` until `cond` holds or a signal arrives.
- *
- * Re-checks `cond(arg)` and re-enqueues on every wakeup, so it is robust to
- * spurious wakes and to the condition flipping back before we run. Returns 0
- * when the condition became true, `-EINTR` if a pending signal cut the wait
- * short, `-EINVAL` on a bad argument or no current process.
- *
- * The sleep is interrupt-discipline critical: the condition test, the enqueue,
- * and the transition to BLOCKED all happen with interrupts off, so a waker IRQ
- * either ran before the test (and we saw the condition true) or after the
- * enqueue (and finds us queued). See the in-body notes for the idle path.
- */
+/* Interrupts off. Take `w` off the queue if it is there. */
+static void wq_dequeue(wait_queue_t *wq, struct wq_waiter *w)
+{
+    struct wq_waiter **link = &wq->head;
+
+    while (*link) {
+        if (*link == w) {
+            *link = w->next;
+            w->next = NULL;
+            return;
+        }
+        link = &(*link)->next;
+    }
+}
+
 static int wq_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, int interruptible)
 {
     uint32_t flags;
@@ -113,7 +91,7 @@ static int wq_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, int interruptib
          * section (and changed the condition, which we saw as true above) or it
          * runs after, finds us queued, and makes us READY.
          */
-        wq_enqueue(wq, current_proc);
+        wq_enqueue(wq, &current_proc->waiter);
         current_proc->state = PROC_BLOCKED;
         irq_restore(flags);
 
@@ -144,60 +122,48 @@ static int wq_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, int interruptib
      * RUNNING is correct whether a wake/signal had set us READY or we never
      * slept.
      */
-    wq_dequeue(wq, current_proc);
+    wq_dequeue(wq, &current_proc->waiter);
     current_proc->state = PROC_RUNNING;
     irq_restore(flags);
     return rc;
 }
 
-void wq_poll_add(wait_queue_t *wq, process_t *p)
+void wq_poll_add(wait_queue_t *wq, struct wq_waiter *w)
 {
-    if (wq && p) {
-        wq_enqueue(wq, p); /* caller holds interrupts off (see wait_queue.h) */
+    if (wq && w) {
+        wq_enqueue(wq, w); /* caller holds interrupts off (see wait_queue.h) */
     }
 }
 
-void wq_poll_remove(wait_queue_t *wq, process_t *p)
+void wq_poll_remove(wait_queue_t *wq, struct wq_waiter *w)
 {
-    if (wq && p) {
-        wq_dequeue(wq, p);
+    if (wq && w) {
+        wq_dequeue(wq, w);
     }
 }
 
 int wq_active(const wait_queue_t *wq)
 {
-    int i;
-
-    if (!wq) {
-        return 0;
-    }
-    for (i = 0; i < WQ_MAX_WAITERS; i++) {
-        if (wq->waiters[i] != NULL) {
-            return 1;
-        }
-    }
-    return 0;
+    return wq != NULL && wq->head != NULL;
 }
 
 void wq_wake_all(wait_queue_t *wq)
 {
     uint32_t flags;
-    int i;
+    struct wq_waiter *w, *next;
 
     if (!wq) {
         return;
     }
-
     flags = irq_save();
-    for (i = 0; i < WQ_MAX_WAITERS; i++) {
-        process_t *p = wq->waiters[i];
-        if (p) {
-            if (p->state == PROC_BLOCKED) {
-                p->state = PROC_READY;
-            }
-            wq->waiters[i] = NULL;
+    for (w = wq->head; w; w = next) {
+        next = w->next;
+        w->next = NULL;
+        if (w->proc && w->proc->state == PROC_BLOCKED) {
+            w->proc->state = PROC_READY;
         }
     }
+    wq->head = NULL;
     irq_restore(flags);
 }
 

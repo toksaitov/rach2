@@ -21,6 +21,10 @@ void schedule(void);
 /** Voluntarily give up the CPU to the next READY process. */
 void sched_yield(void);
 
+/** A record is about to go: the scheduler must not start its next search
+ * from it. */
+void sched_forget(process_t *p);
+
 /*
  * The idle wait, and the two counters it feeds.
  *

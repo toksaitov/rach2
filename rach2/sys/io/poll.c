@@ -155,6 +155,7 @@ static int do_poll(struct kernel_pollfd *fds, uint32_t nfds, int has_deadline, u
                    int sel)
 {
     struct wait_queue *wqs[POLL_MAX_FDS];
+    struct wq_waiter recs[POLL_MAX_FDS];
     uint32_t flags;
     int rc;
     uint32_t i;
@@ -185,7 +186,9 @@ static int do_poll(struct kernel_pollfd *fds, uint32_t nfds, int has_deadline, u
          * computed tick of 0 maps to 1, the value 0 being the "not sleeping"
          * sentinel. */
         for (i = 0; i < nfds; i++) {
-            wq_poll_add(wqs[i], current_proc);
+            recs[i].proc = current_proc;
+            recs[i].next = NULL;
+            wq_poll_add(wqs[i], &recs[i]);
         }
         if (has_deadline) {
             current_proc->wakeup_tick = deadline ? deadline : 1;
@@ -200,7 +203,7 @@ static int do_poll(struct kernel_pollfd *fds, uint32_t nfds, int has_deadline, u
          * that advances the deadline). sti;hlt;cli is atomic from IF=0. */
         flags = irq_save();
         for (i = 0; i < nfds; i++) {
-            wq_poll_remove(wqs[i], current_proc);
+            wq_poll_remove(wqs[i], &recs[i]);
         }
         if (current_proc->state == PROC_BLOCKED) {
             idle_wait_irq_off();
@@ -214,7 +217,7 @@ static int do_poll(struct kernel_pollfd *fds, uint32_t nfds, int has_deadline, u
      */
     current_proc->wakeup_tick = 0; /* disarm the timer wake */
     for (i = 0; i < nfds; i++) {
-        wq_poll_remove(wqs[i], current_proc);
+        wq_poll_remove(wqs[i], &recs[i]);
     }
     current_proc->state = PROC_RUNNING;
     irq_restore(flags);

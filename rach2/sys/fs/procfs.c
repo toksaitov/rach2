@@ -556,19 +556,17 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
  */
 int procfs_nth_pid(int n)
 {
-    int i;
+    const process_t *p;
     int seen = 0;
 
     if (n < 0) {
         return -1;
     }
-    for (i = 0; i < MAX_PROCS; i++) {
-        if (proc_table[i].state != PROC_UNUSED) {
-            if (seen == n) {
-                return (int)proc_table[i].pid;
-            }
-            seen++;
+    for (p = proc_list; p; p = p->next) {
+        if (seen == n) {
+            return (int)p->pid;
         }
+        seen++;
     }
     return -1;
 }
@@ -830,7 +828,7 @@ static int procfs_gen_statsys(struct procfs_text *t)
 {
     uint32_t busy = sched_busy_ticks();
     uint32_t idle = sched_idle_ticks();
-    int i;
+    const process_t *p;
     uint32_t running = 0;
     uint32_t blocked = 0;
 
@@ -854,10 +852,10 @@ static int procfs_gen_statsys(struct procfs_text *t)
     ap_str(t, "processes ");
     ap_u32(t, process_forks_since_boot());
     ap_ch(t, '\n');
-    for (i = 0; i < MAX_PROCS; i++) {
-        if (proc_table[i].state == PROC_RUNNING || proc_table[i].state == PROC_READY) {
+    for (p = proc_list; p; p = p->next) {
+        if (p->state == PROC_RUNNING || p->state == PROC_READY) {
             running++;
-        } else if (proc_table[i].state == PROC_BLOCKED) {
+        } else if (p->state == PROC_BLOCKED) {
             blocked++;
         }
     }
@@ -995,7 +993,7 @@ static int procfs_gen_mounts(struct procfs_text *t)
     ap_str(t, "proc /proc proc rw,relatime 0 0\n");
     /* Then every mount mount(2) placed, in table order: its source as the
      * caller spelled it, its target, its type, and the flags as words. */
-    for (i = 3; i < VFS_MOUNTS; i++) {
+    for (i = 3; i < vfs_mount_slots(); i++) {
         struct vfs_mount *m = vfs_mount_at(i);
 
         if (!m || m->state != VFS_ACTIVE) {

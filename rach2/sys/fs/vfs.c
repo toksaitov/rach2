@@ -30,19 +30,83 @@
 #define VFS_S_IFREG      0100000u
 #define VFS_IS_DIR(mode) (((mode) & VFS_S_IFMT) == VFS_S_IFDIR)
 
-static struct vfs_mount mounts[VFS_MOUNTS];
+/*
+ * The mounts, by number: an array of pointers that grows, each record
+ * allocated from the heap when the mount is made and freed when it is
+ * unmounted; a NULL slot is free. The root is 0, /dev 1 and /proc 2, for
+ * the life of the kernel.
+ */
+static struct vfs_mount **mounts;
+static int mount_slots;
+
+int vfs_mount_slots(void)
+{
+    return mount_slots;
+}
+
+/* A record in slot `idx`, allocated if the slot is empty; NULL when the
+ * heap has none. */
+static struct vfs_mount *mount_record(int idx)
+{
+    if (!mounts[idx]) {
+        mounts[idx] = kzalloc(sizeof(struct vfs_mount));
+    }
+    return mounts[idx];
+}
+
+/* The first free slot from 3 on, the array grown by doubling when every
+ * slot is taken, with a record in it; -1 when the heap has none. */
+static int mount_new_slot(void)
+{
+    int i;
+
+    for (i = 3; i < mount_slots; i++) {
+        if (!mounts[i]) {
+            return mount_record(i) ? i : -1;
+        }
+    }
+    {
+        int more = mount_slots * 2;
+        struct vfs_mount **grown = kzalloc(sizeof(*grown) * more);
+
+        if (!grown) {
+            return -1;
+        }
+        k_memcpy(grown, mounts, sizeof(*grown) * mount_slots);
+        kfree(mounts);
+        mounts = grown;
+        i = mount_slots;
+        mount_slots = more;
+    }
+    return mount_record(i) ? i : -1;
+}
+
+/* Give a user mount's record back; its slot is free for the next. */
+static void mount_release(struct vfs_mount *m)
+{
+    int i;
+
+    for (i = 3; i < mount_slots; i++) {
+        if (mounts[i] == m) {
+            mounts[i] = NULL;
+            kfree(m);
+            return;
+        }
+    }
+    m->state = VFS_FREE;
+}
 
 struct vfs_mount *vfs_mount_at(int idx)
 {
-    if (idx < 0 || idx >= VFS_MOUNTS || mounts[idx].state == VFS_FREE) {
+    if (idx < 0 || idx >= mount_slots || !mounts[idx] || mounts[idx]->state == VFS_FREE) {
         return 0;
     }
-    return &mounts[idx];
+    return mounts[idx];
 }
 
 struct vfs_mount *vfs_root_mount(void)
 {
-    return &mounts[0];
+    return mounts[0];
 }
 
 /* ---- reference and transient counts ---- */
@@ -96,9 +160,9 @@ int vfs_ns_held_by_caller(void)
     int me = current_proc ? (int)current_proc->pid : 0;
     int i;
 
-    for (i = 0; i < VFS_MOUNTS; i++) {
-        if (mounts[i].state != VFS_FREE && mounts[i].ns_holder == me &&
-            mounts[i].ns_depth > 0) {
+    for (i = 0; i < mount_slots; i++) {
+        if (mounts[i] && mounts[i]->state != VFS_FREE && mounts[i]->ns_holder == me &&
+            mounts[i]->ns_depth > 0) {
             return 1;
         }
     }
@@ -195,10 +259,10 @@ static struct vfs_mount *mount_covering(struct vfs_mount *mnt, void *node)
 {
     int i;
 
-    for (i = 1; i < VFS_MOUNTS; i++) {
-        if (mounts[i].state != VFS_FREE && mounts[i].parent == mnt && mounts[i].covered &&
-            mounts[i].covered == node) {
-            return &mounts[i]; /* a transitional mount answers EBUSY on entry */
+    for (i = 1; i < mount_slots; i++) {
+        if (mounts[i] && mounts[i]->state != VFS_FREE && mounts[i]->parent == mnt && mounts[i]->covered &&
+            mounts[i]->covered == node) {
+            return mounts[i]; /* a transitional mount answers EBUSY on entry */
         }
     }
     return 0;
@@ -217,10 +281,10 @@ static struct vfs_mount *mount_named(struct vfs_mount *mnt, void *node, const ch
 {
     int i;
 
-    for (i = 1; i < VFS_MOUNTS; i++) {
-        if (mounts[i].state == VFS_ACTIVE && mounts[i].parent == mnt && !mounts[i].covered &&
-            node == mnt->root && streq(mounts[i].covered_path + 1, name)) {
-            return &mounts[i];
+    for (i = 1; i < mount_slots; i++) {
+        if (mounts[i] && mounts[i]->state == VFS_ACTIVE && mounts[i]->parent == mnt && !mounts[i]->covered &&
+            node == mnt->root && streq(mounts[i]->covered_path + 1, name)) {
+            return mounts[i];
         }
     }
     return 0;
@@ -241,9 +305,9 @@ struct vfs_mount *vfs_leaf_mount(struct vfs_mount *mnt, void *node, const char *
     /* Any slot that holds the node covers it for a namespace change: one
      * still mounting, whose constructor may be asleep, as much as an
      * active one. The resolver crosses only into active mounts. */
-    for (i = 1; i < VFS_MOUNTS; i++) {
-        if (mounts[i].state != VFS_FREE && mounts[i].parent == mnt && mounts[i].covered == found) {
-            m = &mounts[i];
+    for (i = 1; i < mount_slots; i++) {
+        if (mounts[i] && mounts[i]->state != VFS_FREE && mounts[i]->parent == mnt && mounts[i]->covered == found) {
+            m = mounts[i];
         }
     }
     if (mnt->type->ops->put) {
@@ -303,7 +367,7 @@ int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct
     if (!path || !out) {
         return -EINVAL;
     }
-    if (mounts[0].state != VFS_ACTIVE) {
+    if (mounts[0]->state != VFS_ACTIVE) {
         return -ENOENT;
     }
 
@@ -330,8 +394,8 @@ int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct
     }
 
     if (p[0] == '/' || !start) {
-        cur.mnt = &mounts[0];
-        cur.node = mounts[0].root;
+        cur.mnt = mounts[0];
+        cur.node = mounts[0]->root;
     } else {
         cur = *start;
     }
@@ -381,8 +445,8 @@ int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct
             }
             rc = cur.mnt->type->ops->lookup_rest(cur.mnt, rest, &found, &left);
             if (rc == VFS_CLIMB) {
-                struct vfs_mount *pm = cur.mnt->parent ? cur.mnt->parent : &mounts[0];
-                void *pnode = cur.mnt->covered ? cur.mnt->covered : mounts[0].root;
+                struct vfs_mount *pm = cur.mnt->parent ? cur.mnt->parent : mounts[0];
+                void *pnode = cur.mnt->covered ? cur.mnt->covered : mounts[0]->root;
                 if (rest == restbuf) {
                     /* The climb consumed part of a bounded copy; continue
                      * at the same offset of the real path. */
@@ -427,7 +491,7 @@ int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct
         }
         if (comp[0] == '.' && comp[1] == '.' && comp[2] == '\0') {
             if (cur.node == cur.mnt->root) {
-                if (cur.mnt == &mounts[0]) {
+                if (cur.mnt == mounts[0]) {
                     continue; /* the root of the root is its own parent */
                 }
                 /* At a mount root: continue at the covered node (the two
@@ -525,7 +589,7 @@ int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct
                 }
                 p = linkpath;
                 if (target[0] == '/') {
-                    rc = walk_move(&cur, &mounts[0], mounts[0].root);
+                    rc = walk_move(&cur, mounts[0], mounts[0]->root);
                     if (rc != 0) {
                         goto out_err;
                     }
@@ -600,15 +664,11 @@ void vfs_desc_close(struct vfs_mount *mnt, void *node, void *handle)
 
 void vfs_repoint(struct vfs_mount *mnt, void *from, void *to)
 {
+    process_t *pr;
     int i, j;
 
-    for (i = 0; i < MAX_PROCS; i++) {
-        process_t *pr = &proc_table[i];
-
-        if (pr->state == PROC_UNUSED) {
-            continue;
-        }
-        if (mnt == &mounts[0]) {
+    for (pr = proc_list; pr; pr = pr->next) {
+        if (mnt == mounts[0]) {
             for (j = 0; j < MAX_FDS; j++) {
                 fd_entry_t *e = &pr->fds.entries[j];
 
@@ -622,12 +682,12 @@ void vfs_repoint(struct vfs_mount *mnt, void *from, void *to)
             pr->cwd_node = to;
         }
     }
-    for (i = 0; i < VFS_MOUNTS; i++) {
-        if (mounts[i].state == VFS_FREE) {
+    for (i = 0; i < mount_slots; i++) {
+        if (!mounts[i] || mounts[i]->state == VFS_FREE) {
             continue;
         }
-        if (mounts[i].parent == mnt && mounts[i].covered == from) {
-            mounts[i].covered = to;
+        if (mounts[i]->parent == mnt && mounts[i]->covered == from) {
+            mounts[i]->covered = to;
         }
     }
     if (mnt->root == from) {
@@ -690,14 +750,14 @@ void vfs_device_failed(block_device_t *dev, uint64_t lba, int rc)
 {
     int i;
 
-    for (i = 0; i < VFS_MOUNTS; i++) {
-        if (mounts[i].state == VFS_FREE || mounts[i].dev != dev ||
-            (mounts[i].flags & VFS_MS_RDONLY)) {
+    for (i = 0; i < mount_slots; i++) {
+        if (!mounts[i] || mounts[i]->state == VFS_FREE || mounts[i]->dev != dev ||
+            (mounts[i]->flags & VFS_MS_RDONLY)) {
             continue;
         }
-        mounts[i].flags |= VFS_MS_RDONLY;
+        mounts[i]->flags |= VFS_MS_RDONLY;
         klog(KLOG_WARN, "vfs", "read-only: %s: write of sector %d failed (%d)",
-             mounts[i].covered_path, (int)lba, rc);
+             mounts[i]->covered_path, (int)lba, rc);
     }
 }
 
@@ -706,14 +766,14 @@ int vfs_device_holds(block_device_t *dev)
     int i;
     int held = 0;
 
-    for (i = 0; i < VFS_MOUNTS; i++) {
-        if (mounts[i].state == VFS_FREE || mounts[i].dev != dev) {
+    for (i = 0; i < mount_slots; i++) {
+        if (!mounts[i] || mounts[i]->state == VFS_FREE || mounts[i]->dev != dev) {
             continue;
         }
         /* The mount itself is one hold, and each description, working
          * directory, covering mount and operation in flight on it is
          * another; the last of them is what an unmount waits for. */
-        held += 1 + (int)mounts[i].refs + (int)mounts[i].inprogress;
+        held += 1 + (int)mounts[i]->refs + (int)mounts[i]->inprogress;
     }
     return held;
 }
@@ -722,10 +782,10 @@ int vfs_sync_all(void)
 {
     int i;
 
-    for (i = 0; i < VFS_MOUNTS; i++) {
-        struct vfs_mount *m = &mounts[i];
+    for (i = 0; i < mount_slots; i++) {
+        struct vfs_mount *m = mounts[i];
 
-        if (m->state != VFS_ACTIVE || !m->dev || vfs_enter(m) != 0) {
+        if (!m || m->state != VFS_ACTIVE || !m->dev || vfs_enter(m) != 0) {
             continue;
         }
         if (m->type->ops->sync) {
@@ -1327,7 +1387,7 @@ static int synth_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 
     k_memset(st, 0, sizeof(*st));
     if (is_dir) {
-        st->mode = VFS_S_IFDIR | (mnt == &mounts[1] ? 0755u : 0555u);
+        st->mode = VFS_S_IFDIR | (mnt == mounts[1] ? 0755u : 0555u);
     } else {
         st->mode = VFS_S_IFREG | 0444u;
     }
@@ -1400,7 +1460,12 @@ const struct vpath *vfs_synth_vpath(struct vfs_mount *mnt, void *node)
 static void install(int idx, const struct vfs_type *type, const char *path,
                     struct vfs_mount *parent)
 {
-    struct vfs_mount *m = &mounts[idx];
+    struct vfs_mount *m = mount_record(idx);
+
+    if (!m) {
+        k_panic("vfs: no memory for a mount the kernel needs");
+        return;
+    }
 
     m->type = type;
     m->dev = 0;
@@ -1428,7 +1493,7 @@ static int root_installed;
 
 int vfs_root_mounted(void)
 {
-    return mounts[0].state == VFS_ACTIVE;
+    return mounts[0]->state == VFS_ACTIVE;
 }
 
 void vfs_init(void)
@@ -1437,21 +1502,26 @@ void vfs_init(void)
         /* A re-mount of the root (the debug shell can remount from the
          * disk) replaces the image; the entry keeps its slot and takes the
          * new root node. An ext2 root is not replaced. */
-        if (mounts[0].type == &vfs_krffs_type) {
-            mounts[0].root = krffs_fs->node;
+        if (mounts[0]->type == &vfs_krffs_type) {
+            mounts[0]->root = krffs_fs->node;
         }
         return;
     }
     root_installed = 1;
+    mount_slots = 8;
+    mounts = kzalloc(sizeof(*mounts) * mount_slots);
+    if (!mounts) {
+        k_panic("vfs: no memory for the mount table");
+    }
     install(0, &vfs_krffs_type, "/", 0);
-    install(1, &vfs_devfs_type, "/dev", &mounts[0]);
-    install(2, &vfs_procfs_type, "/proc", &mounts[0]);
+    install(1, &vfs_devfs_type, "/dev", mounts[0]);
+    install(2, &vfs_procfs_type, "/proc", mounts[0]);
 }
 
 int vfs_init_root(const struct vfs_type *type, struct block_device *dev, const char *source,
                   int claim)
 {
-    struct vfs_mount *m = &mounts[0];
+    struct vfs_mount *m = mounts[0];
     int rc;
 
     if (root_installed) {
@@ -1474,8 +1544,8 @@ int vfs_init_root(const struct vfs_type *type, struct block_device *dev, const c
     }
     m->state = VFS_ACTIVE;
     root_installed = 1;
-    install(1, &vfs_devfs_type, "/dev", &mounts[0]);
-    install(2, &vfs_procfs_type, "/proc", &mounts[0]);
+    install(1, &vfs_devfs_type, "/dev", mounts[0]);
+    install(2, &vfs_procfs_type, "/proc", mounts[0]);
     return 0;
 }
 
@@ -1563,7 +1633,7 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
         vfs_ref_release(&tref);
         return -EINVAL;
     }
-    if (tref.mnt == &mounts[0] && tref.node == mounts[0].root) {
+    if (tref.mnt == mounts[0] && tref.node == mounts[0]->root) {
         vfs_ref_release(&tref);
         return -EINVAL;
     }
@@ -1580,15 +1650,15 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
         vfs_ref_release(&tref);
         return -ENOTDIR;
     }
-    if (tref.mnt == &mounts[0] && mounts[0].type == &vfs_krffs_type &&
+    if (tref.mnt == mounts[0] && mounts[0]->type == &vfs_krffs_type &&
         krffs_node_path(tref.node, canon, sizeof(canon)) != 0) {
         vfs_ref_release(&tref);
         return -ENAMETOOLONG;
     }
     vfs_ns_lock(tref.mnt);
-    for (i = 0; i < VFS_MOUNTS; i++) {
-        if (mounts[i].state != VFS_FREE && mounts[i].covered == tref.node &&
-            mounts[i].parent == tref.mnt) {
+    for (i = 0; i < mount_slots; i++) {
+        if (mounts[i] && mounts[i]->state != VFS_FREE && mounts[i]->covered == tref.node &&
+            mounts[i]->parent == tref.mnt) {
             vfs_ns_unlock(tref.mnt);
             vfs_ref_release(&tref);
             return -EBUSY; /* covered, or reserved by a mount in progress */
@@ -1622,20 +1692,16 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
             return claim;
         }
     }
-    for (i = 0; i < VFS_MOUNTS; i++) {
-        if (mounts[i].state != VFS_FREE && mounts[i].dev == dev) {
+    for (i = 0; i < mount_slots; i++) {
+        if (mounts[i] && mounts[i]->state != VFS_FREE && mounts[i]->dev == dev) {
             devfs_release_claim(claim);
             vfs_ns_unlock(tref.mnt);
             vfs_ref_release(&tref);
             return -EBUSY; /* the device already carries a mount */
         }
     }
-    for (i = 3; i < VFS_MOUNTS; i++) {
-        if (mounts[i].state == VFS_FREE) {
-            m = &mounts[i];
-            break;
-        }
-    }
+    i = mount_new_slot();
+    m = i < 0 ? NULL : mounts[i];
     if (!m) {
         devfs_release_claim(claim);
         vfs_ns_unlock(tref.mnt);
@@ -1658,7 +1724,7 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
     wait_queue_init(&m->ns_wq);
     m->claim = claim;
     k_strncpy(m->covered_path,
-              tref.mnt == &mounts[0] && mounts[0].type == &vfs_krffs_type ? canon : target,
+              tref.mnt == mounts[0] && mounts[0]->type == &vfs_krffs_type ? canon : target,
               sizeof(m->covered_path));
     k_strncpy(m->source, source, sizeof(m->source));
     m->source[sizeof(m->source) - 1] = '\0';
@@ -1677,7 +1743,7 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
         m->parent->refs--;
         vfs_ref_put(&cov);
         devfs_release_claim(claim);
-        m->state = VFS_FREE;
+        mount_release(m);
         return rc;
     }
     m->state = VFS_ACTIVE;
@@ -1729,7 +1795,7 @@ int vfs_do_umount(const char *target)
         vfs_ref_release(&tref);
         return -EINVAL; /* not a mount point */
     }
-    if (m == &mounts[0] || m == &mounts[1] || m == &mounts[2]) {
+    if (m == mounts[0] || m == mounts[1] || m == mounts[2]) {
         vfs_ref_release(&tref);
         return -EBUSY; /* the permanent three */
     }
@@ -1799,7 +1865,7 @@ int vfs_do_umount(const char *target)
     m->parent->refs--;
     vfs_ref_put(&cov);
     devfs_release_claim(m->claim);
-    m->state = VFS_FREE;
+    mount_release(m);
     return 0;
 }
 
@@ -1808,8 +1874,8 @@ int vfs_do_umount(const char *target)
 void vfs_cwd_set(struct process *p, struct vfs_mount *mnt, void *node)
 {
     vfs_cwd_clear(p);
-    if (!mnt || mnt == &mounts[1] || mnt == &mounts[2] ||
-        (mnt == &mounts[0] && mnt->type == &vfs_krffs_type)) {
+    if (!mnt || mnt == mounts[1] || mnt == mounts[2] ||
+        (mnt == mounts[0] && mnt->type == &vfs_krffs_type)) {
         return; /* the permanent mounts need no pin, but a root of another type does */
     }
     p->cwd_mnt = mnt;

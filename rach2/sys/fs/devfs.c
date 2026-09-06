@@ -1747,20 +1747,17 @@ block_device_t *devfs_usb_view(int n, int k)
  */
 int devfs_usb_opens(int n)
 {
-    int p;
+    const process_t *p;
     int open_count = 0;
 
     if (n < 0 || n >= USBDISK_MAX) {
         return 0;
     }
-    for (p = 0; p < MAX_PROCS; p++) {
+    for (p = proc_list; p; p = p->next) {
         int f;
 
-        if (proc_table[p].state == PROC_UNUSED) {
-            continue;
-        }
         for (f = 0; f < MAX_FDS; f++) {
-            const fd_entry_t *e = &proc_table[p].fds.entries[f];
+            const fd_entry_t *e = &p->fds.entries[f];
             const struct devfs_entry *dev;
 
             if (e->type != FD_TYPE_DEVICE || e->priv == 0) {
