@@ -20,3 +20,4 @@
 
 * Pipes, ptys and sockets are heap objects on lists. A pty's index is the lowest no live pty has, so `/dev/pts` names stay small; the `/dev/pts` walk asks the pty code for its index limit. `sockfull`, which filled the pool of sixteen sockets, is retired: there is no pool to fill, and `poolprobe` is the row that crosses the old sixteen for all three.
 * `/proc/meminfo` gained `HeapPages` and `HeapUsed`, which is how a probe holds the heap to where it started.
+* Open-file descriptions, TCP control blocks, `/proc` snapshots, synthetic directories and synthetic nodes are heap objects too; the description's lock queue moved into a record beside it, since the wait-queue header cannot be included from `fd.h`. `tcbfull`, which filled the pool of sixteen blocks, is retired with the pool. A walk of the control blocks that frees the one it is at reads its successor first.

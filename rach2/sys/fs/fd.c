@@ -2,22 +2,30 @@
 
 #include "vfs.h"
 #include "../lib/kstring.h"
+#include "../mm/kheap.h"
 
 /*
- * The open-file-description pool. Each OFD has one shared seek offset
- * and a refcount of how many descriptors point at it (dup/dup2/fork add
- * references). A slot with refcount 0 is free. The pool is sized for the
- * worst case of every descriptor in every process holding a distinct OFD,
- * MAX_PROCS (16) * MAX_FDS, since the number of live OFDs can never exceed
- * the number of live descriptors.
+ * An open-file description has one shared seek offset and a refcount of how
+ * many descriptors point at it (dup/dup2/fork add references). It is
+ * allocated from the heap at open and freed by the last unref, on the list
+ * of live descriptions, which the two scans below walk. The wait queue of
+ * its lock lives beside it in the record rather than in fd.h, because the
+ * wait-queue header includes the process header and the process header
+ * includes fd.h; the description is the record's first member, so the one
+ * is found from the other.
  */
-#define OFD_POOL_SIZE (16 * MAX_FDS)
-static struct open_file ofd_pool[OFD_POOL_SIZE];
+struct ofd_rec {
+    struct open_file ofd;
+    wait_queue_t wq;
+    struct ofd_rec *next;
+};
 
-/* One wait queue per description, beside the pool rather than in fd.h,
- * because the wait-queue header includes the process header and the process
- * header includes fd.h. */
-static wait_queue_t ofd_wq[OFD_POOL_SIZE];
+static struct ofd_rec *ofds;
+
+static struct ofd_rec *ofd_rec_of(struct open_file *ofd)
+{
+    return (struct ofd_rec *)ofd;
+}
 
 /**
  * Allocate a fresh open-file description.
@@ -28,23 +36,16 @@ static wait_queue_t ofd_wq[OFD_POOL_SIZE];
  */
 static struct open_file *ofd_alloc(void)
 {
-    int i;
+    struct ofd_rec *rec = kzalloc(sizeof(*rec));
 
-    for (i = 0; i < OFD_POOL_SIZE; i++) {
-        if (ofd_pool[i].refcount == 0) {
-            ofd_pool[i].refcount     = 1;
-            ofd_pool[i].offset       = 0;
-            ofd_pool[i].raw_offset   = 0;
-            ofd_pool[i].status_flags = 0;
-            ofd_pool[i].vmnt         = NULL;
-            ofd_pool[i].vnode        = NULL;
-            ofd_pool[i].fhandle      = NULL;
-            ofd_pool[i].busy         = 0;
-            wait_queue_init(&ofd_wq[i]);
-            return &ofd_pool[i];
-        }
+    if (!rec) {
+        return NULL;
     }
-    return NULL;
+    rec->ofd.refcount = 1;
+    wait_queue_init(&rec->wq);
+    rec->next = ofds;
+    ofds = rec;
+    return &rec->ofd;
 }
 
 void fd_ofd_ref(struct open_file *ofd)
@@ -62,7 +63,7 @@ static int ofd_idle(void *arg)
 void fd_ofd_lock(struct open_file *ofd)
 {
     while (ofd->busy) {
-        wq_wait_event_nointr(&ofd_wq[ofd - ofd_pool], ofd_idle, ofd);
+        wq_wait_event_nointr(&ofd_rec_of(ofd)->wq, ofd_idle, ofd);
     }
     ofd->busy = 1;
 }
@@ -70,7 +71,7 @@ void fd_ofd_lock(struct open_file *ofd)
 void fd_ofd_unlock(struct open_file *ofd)
 {
     ofd->busy = 0;
-    wq_wake_all(&ofd_wq[ofd - ofd_pool]);
+    wq_wake_all(&ofd_rec_of(ofd)->wq);
 }
 
 /**
@@ -81,13 +82,10 @@ void fd_ofd_unlock(struct open_file *ofd)
  */
 int fd_node_busy(struct vfs_mount *mnt, void *node)
 {
-    int i;
+    struct ofd_rec *rec;
 
-    for (i = 0; i < OFD_POOL_SIZE; i++) {
-        if (ofd_pool[i].refcount == 0 || ofd_pool[i].vmnt != mnt) {
-            continue;
-        }
-        if (ofd_pool[i].vnode == node && ofd_pool[i].busy) {
+    for (rec = ofds; rec; rec = rec->next) {
+        if (rec->ofd.vmnt == mnt && rec->ofd.vnode == node && rec->ofd.busy) {
             return 1;
         }
     }
@@ -96,17 +94,17 @@ int fd_node_busy(struct vfs_mount *mnt, void *node)
 
 void fd_ofd_repoint(struct vfs_mount *mnt, void *from, void *to)
 {
-    int i;
+    struct ofd_rec *rec;
 
-    for (i = 0; i < OFD_POOL_SIZE; i++) {
-        if (ofd_pool[i].refcount == 0 || ofd_pool[i].vmnt != mnt) {
+    for (rec = ofds; rec; rec = rec->next) {
+        if (rec->ofd.vmnt != mnt) {
             continue;
         }
-        if (ofd_pool[i].vnode == from) {
-            ofd_pool[i].vnode = to;
+        if (rec->ofd.vnode == from) {
+            rec->ofd.vnode = to;
         }
-        if (ofd_pool[i].fhandle == from) {
-            ofd_pool[i].fhandle = to;
+        if (rec->ofd.fhandle == from) {
+            rec->ofd.fhandle = to;
         }
     }
 }
@@ -123,15 +121,28 @@ void fd_ofd_unref(struct open_file *ofd)
 {
     if (ofd && ofd->refcount > 0) {
         ofd->refcount--;
-        if (ofd->refcount == 0 && ofd->vmnt) {
-            struct vfs_mount *mnt = ofd->vmnt;
-            void *node = ofd->vnode;
-            void *handle = ofd->fhandle;
+        if (ofd->refcount == 0) {
+            struct ofd_rec **link = &ofds;
+            struct ofd_rec *rec = ofd_rec_of(ofd);
 
-            ofd->vmnt = NULL;
-            ofd->vnode = NULL;
-            ofd->fhandle = NULL;
-            vfs_desc_close(mnt, node, handle);
+            if (ofd->vmnt) {
+                struct vfs_mount *mnt = ofd->vmnt;
+                void *node = ofd->vnode;
+                void *handle = ofd->fhandle;
+
+                ofd->vmnt = NULL;
+                ofd->vnode = NULL;
+                ofd->fhandle = NULL;
+                vfs_desc_close(mnt, node, handle);
+            }
+            /* Off the list and back to the heap: nothing points at it now. */
+            while (*link && *link != rec) {
+                link = &(*link)->next;
+            }
+            if (*link) {
+                *link = rec->next;
+            }
+            kfree(rec);
         }
     }
 }

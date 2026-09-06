@@ -62,7 +62,7 @@ static const char *const PROBES[] = {
     /* The four limits: the process table, a process's descriptors, the
        socket pool and the frames. Each fills the thing, requires the refusal
        the kernel documents, and then requires the resource back. */
-    "procfull", "fdfull", "tcbfull", "oomprobe",
+    "procfull", "fdfull", "oomprobe",
     /* Hermetic without `--live`, which this does not pass: the resolver's
        pure helpers and the crafted wire data, not the real internet. */
     "dnstest",

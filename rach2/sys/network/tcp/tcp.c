@@ -29,14 +29,13 @@
 #include "../../serial.h"
 #include "../../lib/kstring.h"
 #include "../../lib/kerrno.h"
-#include "../../mm/heap.h"
+#include "../../mm/kheap.h"
 
-/*
- * TCB pool, allocated from kernel memory at init instead of living in BSS:
- * the rings make it large (tens of KB), and keeping it out of the kernel image
- * leaves room for the boot ramdisk module just past the kernel.
- */
-static struct tcb *tcp_table;
+/* The live control blocks, each allocated from the heap when a connection
+ * opens, actively or for an incoming SYN on the interrupt side, and freed
+ * when it is done; the rings make one large, tens of KB, which is the heap's
+ * to hold. */
+static struct tcb *tcbs;
 
 /* TX segment assembly buffer: header + MSS option + one MSS of data. */
 static uint8_t tcp_tx_buf[TCP_HDR_SIZE + 4 + TCP_MSS];
@@ -78,16 +77,11 @@ static uint32_t tcp_isn(uint16_t local_port, uint16_t remote_port)
 
 void tcp_init(void)
 {
-    tcp_table = (struct tcb *)mem_reserve(sizeof(struct tcb) * MAX_TCP_CONNS,
-                                          true);
-    if (tcp_table) {
-        k_memset(tcp_table, 0, sizeof(struct tcb) * MAX_TCP_CONNS);
-    }
+    tcbs = NULL;
 }
 
 static void tcb_init(struct tcb *tcb)
 {
-    k_memset(tcb, 0, sizeof(struct tcb));
     tcb->in_use   = 1;
     tcb->state    = TCP_CLOSED;
     tcb->rcv_wnd  = TCP_WINDOW_SIZE;
@@ -105,53 +99,34 @@ static void tcb_init(struct tcb *tcb)
  */
 struct tcb *tcb_alloc(void)
 {
-    int i;
-    struct tcb *recycle = NULL;
+    struct tcb *tcb = kzalloc(sizeof(*tcb));
 
-    if (!tcp_table) {
+    if (!tcb) {
+        klog(KLOG_WARN, "tcp", "open: no memory for a control block");
         return NULL;
     }
-
-    for (i = 0; i < MAX_TCP_CONNS; i++) {
-        if (!tcp_table[i].in_use) {
-            tcb_init(&tcp_table[i]);
-            return &tcp_table[i];
-        }
-        /* Track the closing connection closest to expiring, in case the pool
-         * is full and we must reclaim one. TIME_WAIT and FIN_WAIT_2 are both
-         * detached and only waiting on the peer, so either is safe to drop;
-         * both carry a deadline in timewait_until. */
-        if ((tcp_table[i].state == TCP_TIME_WAIT ||
-             tcp_table[i].state == TCP_FIN_WAIT_2) &&
-            (!recycle ||
-             (int32_t)(tcp_table[i].timewait_until - recycle->timewait_until) < 0)) {
-            recycle = &tcp_table[i];
-        }
-    }
-
-    /*
-     * No free slot. Reclaim the soonest-to-expire closing connection rather
-     * than drop the new one: TIME_WAIT only guards against stale duplicate
-     * segments and FIN_WAIT_2 is merely awaiting the peer's FIN, both
-     * negligible to abandon on the local QEMU network, and recycling keeps the
-     * pool usable under bursty load such as a browser opening many parallel
-     * connections.
-     */
-    if (recycle) {
-        tcb_init(recycle);
-        return recycle;
-    }
-
-    klog(KLOG_WARN, "tcp", "open: the control block pool is exhausted");
-    return NULL;
+    tcb_init(tcb);
+    tcb->next = tcbs;
+    tcbs = tcb;
+    return tcb;
 }
 
 void tcb_free(struct tcb *tcb)
 {
-    if (tcb) {
-        tcb->in_use = 0;
-        tcb->state  = TCP_CLOSED;
+    struct tcb **link = &tcbs;
+
+    if (!tcb) {
+        return;
     }
+    while (*link && *link != tcb) {
+        link = &(*link)->next;
+    }
+    if (*link) {
+        *link = tcb->next;
+    }
+    tcb->in_use = 0;
+    tcb->state = TCP_CLOSED;
+    kfree(tcb);
 }
 
 /*
@@ -407,10 +382,10 @@ int tcp_send(struct socket *sock, const uint8_t *buf, int len)
 /* True if any connection, listener included, occupies this local port. */
 static int tcp_local_port_in_use(uint16_t port)
 {
-    int i;
+    const struct tcb *t;
 
-    for (i = 0; i < MAX_TCP_CONNS; i++) {
-        if (tcp_table[i].in_use && tcp_table[i].local_port == port) {
+    for (t = tcbs; t; t = t->next) {
+        if (t->local_port == port) {
             return 1;
         }
     }
@@ -432,15 +407,10 @@ static int tcp_local_port_in_use(uint16_t port)
  */
 static int tcp_port_has_listener(uint16_t port)
 {
-    int i;
+    const struct tcb *t;
 
-    if (!tcp_table) {
-        return 0;
-    }
-
-    for (i = 0; i < MAX_TCP_CONNS; i++) {
-        if (tcp_table[i].in_use && tcp_table[i].state == TCP_LISTEN &&
-            tcp_table[i].local_port == port) {
+    for (t = tcbs; t; t = t->next) {
+        if (t->state == TCP_LISTEN && t->local_port == port) {
             return 1;
         }
     }
@@ -462,16 +432,11 @@ static int tcp_port_has_listener(uint16_t port)
  */
 static int tcp_pair_in_use(uint16_t local_port, uint32_t remote_ip, uint16_t remote_port)
 {
-    int i;
+    const struct tcb *t;
 
-    if (!tcp_table) {
-        return 0;
-    }
-
-    for (i = 0; i < MAX_TCP_CONNS; i++) {
-        if (tcp_table[i].in_use && tcp_table[i].state != TCP_LISTEN &&
-            tcp_table[i].local_port == local_port && tcp_table[i].remote_ip == remote_ip &&
-            tcp_table[i].remote_port == remote_port) {
+    for (t = tcbs; t; t = t->next) {
+        if (t->state != TCP_LISTEN && t->local_port == local_port &&
+            t->remote_ip == remote_ip && t->remote_port == remote_port) {
             return 1;
         }
     }
@@ -525,20 +490,18 @@ static void tcp_send_rst_unmatched(uint32_t remote_ip, uint16_t local_port,
 static struct tcb *tcp_find(uint16_t local_port,
                             uint32_t remote_ip, uint16_t remote_port)
 {
-    int i;
+    struct tcb *t;
     struct tcb *listen_tcb = NULL;
 
-    for (i = 0; i < MAX_TCP_CONNS; i++) {
-        if (!tcp_table[i].in_use) continue;
-        if (tcp_table[i].local_port != local_port) continue;
+    for (t = tcbs; t; t = t->next) {
+        if (t->local_port != local_port) continue;
 
-        if (tcp_table[i].state == TCP_LISTEN) {
-            listen_tcb = &tcp_table[i];
+        if (t->state == TCP_LISTEN) {
+            listen_tcb = t;
             continue;
         }
-        if (tcp_table[i].remote_ip == remote_ip &&
-            tcp_table[i].remote_port == remote_port) {
-            return &tcp_table[i];
+        if (t->remote_ip == remote_ip && t->remote_port == remote_port) {
+            return t;
         }
     }
     return listen_tcb;
@@ -546,13 +509,11 @@ static struct tcb *tcp_find(uint16_t local_port,
 
 static struct socket *tcp_find_listen_sock(uint16_t local_port)
 {
-    int i;
+    const struct tcb *t;
 
-    for (i = 0; i < MAX_TCP_CONNS; i++) {
-        if (tcp_table[i].in_use &&
-            tcp_table[i].state == TCP_LISTEN &&
-            tcp_table[i].local_port == local_port) {
-            return tcp_table[i].sock;
+    for (t = tcbs; t; t = t->next) {
+        if (t->state == TCP_LISTEN && t->local_port == local_port) {
+            return t->sock;
         }
     }
     return NULL;
@@ -584,15 +545,12 @@ static void tcp_send_zwp(struct tcb *tcb)
 
 void tcp_local_addr_changed(uint32_t new_ip)
 {
-    int i;
+    struct tcb *tcb, *next;
 
-    if (!tcp_table) {
-        return;
-    }
-    for (i = 0; i < MAX_TCP_CONNS; i++) {
-        struct tcb *tcb = &tcp_table[i];
-
-        if (!tcb->in_use || tcb->local_ip == new_ip) {
+    /* A block freed on the way is freed after its successor was read. */
+    for (tcb = tcbs; tcb; tcb = next) {
+        next = tcb->next;
+        if (tcb->local_ip == new_ip) {
             continue;
         }
         /* A block that is already closed has nothing to abort, and arming its
@@ -667,16 +625,11 @@ static void tcp_giveup(struct tcb *tcb)
  */
 void tcp_tick(void)
 {
-    int i;
-    struct tcb *tcb;
+    struct tcb *tcb, *next;
 
-    if (!tcp_table) {
-        return;
-    }
-
-    for (i = 0; i < MAX_TCP_CONNS; i++) {
-        tcb = &tcp_table[i];
-        if (!tcb->in_use) continue;
+    /* A block freed on the way is freed after its successor was read. */
+    for (tcb = tcbs; tcb; tcb = next) {
+        next = tcb->next;
 
         if (tcb->state == TCP_TIME_WAIT) {
             if (kernel_ticks >= tcb->timewait_until) {
@@ -857,8 +810,8 @@ int tcp_connect(struct socket *sock, uint32_t dst_ip, uint16_t dst_port)
         /* Skip local ports already spoken for, listeners included: over
          * loopback an ephemeral that collides with the listener being dialed
          * would give the looped SYN src == dst port, match the caller's own
-         * TCB, and hang the handshake. The pool bounds the loop at
-         * MAX_TCP_CONNS + 1 increments. */
+         * TCB, and hang the handshake. The loop ends within as many
+         * increments as there are live blocks plus one. */
         do {
             local = next_ephemeral++;
             if (next_ephemeral < 49152) next_ephemeral = 49152;
@@ -1519,18 +1472,14 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
 int tcp_snapshot(struct tcp_row *out, int max)
 {
     uint32_t flags;
-    int i, n = 0;
+    const struct tcb *t;
+    int n = 0;
 
-    if (!out || max <= 0 || !tcp_table) {
+    if (!out || max <= 0) {
         return 0;
     }
     flags = net_lock();
-    for (i = 0; i < MAX_TCP_CONNS && n < max; i++) {
-        struct tcb *t = &tcp_table[i];
-
-        if (!t->in_use) {
-            continue;
-        }
+    for (t = tcbs; t && n < max; t = t->next) {
         out[n].local_ip    = t->local_ip;
         out[n].local_port  = t->local_port;
         out[n].remote_ip   = t->remote_ip;

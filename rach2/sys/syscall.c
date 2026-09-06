@@ -1,3 +1,4 @@
+#include "mm/kheap.h"
 #include "klog.h"
 #include "syscall.h"
 #include "power.h"
@@ -91,23 +92,19 @@ void fb_release_if_owner(uint32_t pid)
 
 /* The pool backing FD_TYPE_SYNTH_DIR descriptors. A 32-bit pid does not fit
  * packed in the fd's priv pointer alongside the kind without truncation, so the
- * (kind, pid) live here (struct synth_dir is in synthfs.h); priv points at the
- * slot, freed when the last descriptor referencing it closes (see
- * fd_release_backing). */
-static struct synth_dir synth_dir_pool[32];
-
+ * (kind, pid) live here (struct synth_dir is in synthfs.h); priv points at a
+ * record from the heap, freed when the last descriptor referencing it closes
+ * (see fd_release_backing). */
 static struct synth_dir *synth_dir_alloc(int kind, int pid)
 {
-    int i;
-    for (i = 0; i < (int)(sizeof(synth_dir_pool) / sizeof(synth_dir_pool[0])); i++) {
-        if (!synth_dir_pool[i].used) {
-            synth_dir_pool[i].kind = kind;
-            synth_dir_pool[i].pid = pid;
-            synth_dir_pool[i].used = 1;
-            return &synth_dir_pool[i];
-        }
+    struct synth_dir *sd = kzalloc(sizeof(*sd));
+
+    if (sd) {
+        sd->kind = kind;
+        sd->pid = pid;
+        sd->used = 1;
     }
-    return NULL;
+    return sd;
 }
 
 /**
@@ -210,7 +207,8 @@ static void fd_release_backing(fd_entry_t *e)
      * descriptor closes (dup/fork share it via the OFD refcount, like an ops
      * backing). */
     if (e->type == FD_TYPE_SYNTH_DIR && e->priv && e->ofd && e->ofd->refcount == 1) {
-        ((struct synth_dir *)e->priv)->used = 0;
+        kfree(e->priv);
+        e->priv = NULL;
     }
     /* Restore text mode only if THIS process actually owns the framebuffer, so
      * a fork child that merely inherited the fb descriptor cannot clear the
@@ -1550,7 +1548,7 @@ static int32_t synth_open_dir(const struct vpath *vp, int flags)
     }
     fd = fd_alloc(&current_proc->fds);
     if (fd < 0) {
-        sd->used = 0;
+        kfree(sd);
         return -EMFILE;
     }
     e = &current_proc->fds.entries[fd];

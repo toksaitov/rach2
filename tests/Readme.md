@@ -36,14 +36,14 @@ This suite builds the test image and runs `tests/system/runner/runtests.c` with 
 
 The runner scores the kernel diagnostic that returns control to the debug shell. Exit status 0 passes. A nonzero status, signal, absent return diagnostic, timeout, early QEMU exit, or program skipped after an earlier hang fails. A program's own success text is not the verdict. After `musl/clockmusl`, the runner also compares the guest epoch with the host clock and permits a 30-second difference.
 
-The 56 root programs in the default suite are:
+The 55 root programs in the default suite are:
 
 ```text
 hello filetest forktest shelltest dirtest stattest touchtest rmtest mvtest
 lstest dup2test auxvprobe tlsprobe errnoprobe vmprobe forkro cowprobe
 cowregrant usercopyfault forkleak fdstale dirgrow dirprobe unlinkdirprobe
 pathcanon vfsprobe timeprobe sigprobe credprobe ownprobe permprobe sockettest
-procfull fdfull tcbfull oomprobe dnstest trapprobe ofdprobe waitprobe
+procfull fdfull oomprobe dnstest trapprobe ofdprobe waitprobe
 pipeprobe pollprobe devprobe jobprobe miscprobe ptyprobe rngprobe orphanprobe
 loopprobe procprobe suidprobe sudoprobe modeprobe rebootprobe searchprobe
 stickyprobe

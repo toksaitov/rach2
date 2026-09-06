@@ -6,6 +6,7 @@
  * operation interface.
  */
 
+#include "../mm/kheap.h"
 #include "vfs.h"
 
 #include "../klog.h"
@@ -1198,22 +1199,20 @@ struct synth_node {
     int refs;
 };
 
-static struct synth_node synth_pool[16];
-
+/* A synthetic node is allocated from the heap when a path is resolved to
+ * it and freed when its last holder puts it. */
 static int synth_take(const struct vpath *vp, void **node)
 {
-    int i;
+    struct synth_node *n = kzalloc(sizeof(*n));
 
-    for (i = 0; i < 16; i++) {
-        if (synth_pool[i].refs == 0) {
-            synth_pool[i].vp = *vp;
-            synth_pool[i].refs = 1;
-            *node = &synth_pool[i];
-            return 0;
-        }
+    if (!n) {
+        klog(KLOG_WARN, "vfs", "synthetic node: no memory");
+        return -ENOMEM;
     }
-    klog(KLOG_WARN, "vfs", "synthetic node pool: exhausted");
-    return -ENOMEM;
+    n->vp = *vp;
+    n->refs = 1;
+    *node = n;
+    return 0;
 }
 
 static void synth_hold(struct vfs_mount *mnt, void *node)
@@ -1224,8 +1223,12 @@ static void synth_hold(struct vfs_mount *mnt, void *node)
 
 static void synth_put(struct vfs_mount *mnt, void *node)
 {
+    struct synth_node *n = node;
+
     (void)mnt;
-    ((struct synth_node *)node)->refs--;
+    if (n->refs > 0 && --n->refs == 0) {
+        kfree(n);
+    }
 }
 
 /**

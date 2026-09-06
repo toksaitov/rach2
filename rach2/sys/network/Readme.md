@@ -67,7 +67,7 @@ Outgoing UDP checksums are zero, which disables the checksum under IPv4. Incomin
 
 ## TCP
 
-TCP uses a pool of 16 transmission control blocks. When the pool is full, allocation may recycle the closing block whose `TIME_WAIT` or `FIN_WAIT_2` deadline expires first. Send and receive rings are 4096 bytes each; MSS is 1460 bytes. The initial congestion window is four MSS and the initial slow-start threshold is 65,535 bytes.
+A transmission control block is allocated from the kernel heap when a connection opens, actively or for an incoming SYN on the interrupt side, and freed when the connection is done; a block in `TIME_WAIT` or `FIN_WAIT_2` is freed when its deadline passes, and there is no fixed count of them. `/proc/net/tcp` lists at most sixteen, a bound of that report. Send and receive rings are 4096 bytes each; MSS is 1460 bytes. The initial congestion window is four MSS and the initial slow-start threshold is 65,535 bytes.
 
 The implementation includes passive, active, and simultaneous open; in-order delivery; retransmission; slow start and congestion avoidance; RTT measurement with Karn's rule; zero-window probes; and an update when a reader reopens enough receive space. The update threshold is the smaller of one MSS and half the receive ring. TCP does not negotiate window scaling, so advertised windows remain 16-bit.
 

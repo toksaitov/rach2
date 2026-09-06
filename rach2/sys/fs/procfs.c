@@ -121,6 +121,9 @@
 #define PROCFS_IFNAME_LEN  (sizeof(NETDEV_IFNAME) - 1)
 #define PROCFS_NETROUTE_ROW (PROCFS_IFNAME_LEN + 8 + 8 + 34)
 #define PROCFS_NETARP_ROW   (15 + 32 + 17 + 14 + PROCFS_IFNAME_LEN + 1)
+/* The connections the report lists at most: a bound of this report and
+ * not of the stack, until the report iterates. */
+#define PROCFS_NETTCP_ROWS  16
 #define PROCFS_NETTCP_ROW   (3 + PROCFS_DEC32 + 2 + 13 + 1 + 13 + 1 + 2 + 1 + \
                              17 + 22 + PROCFS_DEC32 + 10 + PROCFS_DEC32 + 33)
 
@@ -150,7 +153,7 @@ typedef char procfs_bounds_fit[(PROCFS_MAX_BOOTLINE <= PROCFS_TEXT_MAX &&
                                         ARP_CACHE_SIZE * PROCFS_NETARP_ROW <=
                                     PROCFS_MAX_NETARP &&
                                 sizeof(PROCFS_NETTCP_HEADER) - 1 +
-                                        MAX_TCP_CONNS * PROCFS_NETTCP_ROW <=
+                                        PROCFS_NETTCP_ROWS * PROCFS_NETTCP_ROW <=
                                     PROCFS_MAX_NETTCP)
                                    ? 1
                                    : -1];
@@ -210,7 +213,6 @@ static const char *procfs_kind_name(const struct vpath *vp)
 struct procfs_file {
     char data[PROCFS_TEXT_MAX];
     int len;
-    int used;
     int origin_pid;  /* the /proc/<pid> this snapshot came from (for fd readlink) */
     int origin_file; /* SYNTH_PROC_STAT or SYNTH_PROC_CMDLINE */
 };
@@ -1232,11 +1234,11 @@ static int procfs_gen_netarp(struct procfs_text *t)
  */
 static int procfs_gen_nettcp(struct procfs_text *t)
 {
-    static struct tcp_row rows[MAX_TCP_CONNS];
+    static struct tcp_row rows[PROCFS_NETTCP_ROWS];
     int n, i;
 
     ap_str(t, PROCFS_NETTCP_HEADER);
-    n = tcp_snapshot(rows, MAX_TCP_CONNS);
+    n = tcp_snapshot(rows, PROCFS_NETTCP_ROWS);
     for (i = 0; i < n; i++) {
         ap_str(t, "   ");
         ap_u32(t, (uint32_t)i);
@@ -1265,7 +1267,9 @@ static int procfs_gen_nettcp(struct procfs_text *t)
 
 /* the /proc file backing: a snapshot served through file_ops */
 
-static struct procfs_file proc_files[8];
+/* A snapshot is allocated from the heap at open and freed at the last
+ * close; the text it holds is PROCFS_TEXT_MAX, so a snapshot is a large
+ * object of one page. */
 
 static int32_t procfs_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
@@ -1317,7 +1321,8 @@ static void procfs_close(fd_entry_t *e)
 {
     struct procfs_file *f = (struct procfs_file *)e->priv;
     if (f) {
-        f->used = 0; /* return the snapshot slot to the pool */
+        e->priv = NULL;
+        kfree(f);
     }
 }
 
@@ -1348,7 +1353,7 @@ int procfs_open(const struct vpath *vp, int flags)
     struct procfs_file *f = NULL;
     struct procfs_text text;
     fd_entry_t *e;
-    int slot, fd, len;
+    int fd, len;
 
     /* /proc/cmdline and /proc/disk are global; every other proc file lives
      * under a pid. */
@@ -1375,14 +1380,9 @@ int procfs_open(const struct vpath *vp, int flags)
         return -EACCES;
     }
 
-    for (slot = 0; slot < 8; slot++) {
-        if (!proc_files[slot].used) {
-            f = &proc_files[slot];
-            break;
-        }
-    }
+    f = kzalloc(sizeof(*f));
     if (!f) {
-        return -ENFILE;
+        return -ENOMEM;
     }
 
     if (vp->kind == VNODE_PROC_CMDLINE) {
@@ -1450,7 +1450,6 @@ int procfs_open(const struct vpath *vp, int flags)
         return -EOVERFLOW;
     }
     f->len = len;
-    f->used = 1;
     f->origin_pid = pid;
     if (vp->kind == VNODE_PROC_CMDLINE) {
         f->origin_file = SYNTH_PROC_BOOTLINE;
@@ -1486,7 +1485,7 @@ int procfs_open(const struct vpath *vp, int flags)
 
     fd = fd_alloc(&current_proc->fds);
     if (fd < 0) {
-        f->used = 0;
+        kfree(f);
         return -EMFILE;
     }
     e = &current_proc->fds.entries[fd];

@@ -23,7 +23,6 @@
 #define TCP_INIT_CWND    (4 * TCP_MSS)  /* initial congestion window (RFC 6928) */
 #define TCP_WINDOW_SIZE  4096
 #define TCP_RING_SIZE    4096   /* send/recv ring size, power of two */
-#define MAX_TCP_CONNS    16
 
 /* Reliability constants (100 Hz clock). */
 #define TCP_RTO_INIT    100     /* initial RTO  = 1 s (RFC 6298) */
@@ -52,6 +51,7 @@ struct socket; /* defined in socket/socket.h */
 
 /* Per-connection control block. */
 struct tcb {
+    struct tcb *next; /* the list of live control blocks */
     int         in_use;
     tcp_state_t state;
 
