@@ -10,6 +10,11 @@
  * The file is reached through the file system holding it, so an image on any
  * mounted volume can carry a file system of its own. Four of them, attached
  * and detached through /dev/loop-control and listed in /proc/loop.
+ *
+ * Policy: four devices. Each has a node of its own in /dev, made with the
+ * device table at boot, and a program names one by that node, so the count
+ * is part of the names the system offers rather than a table that runs
+ * out; a fifth would be a fifth name.
  */
 
 #define LOOP_DEVICES 4

@@ -40,8 +40,8 @@ build_disk() {
         || fail "the partition table"
 }
 
-# Three volumes on one disk, for the row that asks how many the kernel mounts
-# at once: the pool is two, and the third is what says so.
+# Three volumes on one disk, for the row that mounts them all at once, one
+# past the two the kernel once had room for.
 build_three() {
     three=$(($(wc -c < "$VOL") / 512))
     { dd if=/dev/zero bs=512 count=$PART 2>/dev/null; cat "$VOL"; cat "$VOL"; \
@@ -283,13 +283,13 @@ grep -q 'not cleanly unmounted' "$DISK.fsck" \
     || { cat "$DISK.fsck" >&2; fail "the checker did not find the dirty flag"; }
 echo "krffsmount-test: and the volume still says a check is owed: OK"
 
-# ---- two volumes at once, and the third the pool has no room for ----
+# ---- three volumes at once ----
 build_three
 if run --append "rach2.rescue" --timeout 120 --steptmo 90 \
-    --ok "KRFFSPROBE OK (two)" --never "KRFFSPROBE FAIL" --log "$DISK.two.log" \
-    "expect=Type 'help'" "send=exec /krffsprobe two" "expect=KRFFSPROBE" \
+    --ok "KRFFSPROBE OK (three)" --never "KRFFSPROBE FAIL" --log "$DISK.two.log" \
+    "expect=Type 'help'" "send=exec /krffsprobe three" "expect=KRFFSPROBE" \
     > /dev/null 2>&1; then
-    echo "krffsmount-test: two volumes are mounted at once, each holding only its own files, and the third waits for a slot: OK"
+    echo "krffsmount-test: three volumes are mounted at once, each holding only its own files: OK"
 else
     grep -a 'KRFFSPROBE FAIL' "$DISK.two.log" >&2 || true
     fail "the two-volume boot"

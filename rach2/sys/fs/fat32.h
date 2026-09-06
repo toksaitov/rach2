@@ -40,8 +40,6 @@
  * `getdents64` reports.
  */
 
-#define FAT32_NODES  32
-#define FAT32_MOUNTS 4 /* the table has eight entries and three are permanent */
 
 extern const struct vfs_type vfs_vfat_type;
 

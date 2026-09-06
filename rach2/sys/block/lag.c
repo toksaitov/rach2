@@ -138,10 +138,11 @@ void block_lag_tick(void)
         }
         r = e->request;
         /* Every completion is delivered twice, two ticks apart, and the
-         * second copy claims an error. A slot freed and retaken between the
-         * copies has a new generation, so the duplicate must be dropped; a
+         * second copy claims an error. A request freed between the copies
+         * is not live any more, and one made since at the same address has
+         * a generation of its own, so the duplicate must be dropped; a
          * kernel that believed it would fail a healthy request, which is
-         * what makes the generation check's absence visible. */
+         * what makes the check's absence visible. */
         if (!e->delivered) {
             e->delivered = 1;
             e->due = lag_ticks + 2;

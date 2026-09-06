@@ -9,6 +9,8 @@
 
 #include "exfat.h"
 
+#include "../mm/kheap.h"
+
 #include "../klog.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
@@ -33,6 +35,7 @@
 #define SET_MAX     19     /* the file entry, the stream, and up to 17 name entries */
 
 struct ex_node {
+    struct ex_node *next; /* the mount's list of nodes in memory */
     int used;
     int refs;
     int is_dir;
@@ -79,10 +82,22 @@ struct ex_mount {
     uint32_t frozen[EXFAT_FROZEN];
     int nfrozen;
     uint8_t setbuf[256 * 32]; /* one set, other writers' up to 255 secondaries */
-    struct ex_node nodes[EXFAT_NODES];
+    struct ex_node *nodes; /* the nodes in memory, from the heap */
 };
 
-static struct ex_mount ex_mounts[EXFAT_MOUNTS];
+/* The way a node leaves the mount's list and the heap. */
+static void node_drop(struct ex_mount *em, struct ex_node *n)
+{
+    struct ex_node **link = &em->nodes;
+
+    while (*link && *link != n) {
+        link = &(*link)->next;
+    }
+    if (*link) {
+        *link = n->next;
+    }
+    kfree(n);
+}
 
 static uint16_t le16(const uint8_t *p)
 {
@@ -238,28 +253,24 @@ static int chain_at(struct ex_mount *em, struct ex_node *n, uint32_t first, int 
 
 static struct ex_node *node_take(struct ex_mount *em)
 {
-    int i;
+    struct ex_node *n = kzalloc(sizeof(*n));
 
-    for (i = 0; i < EXFAT_NODES; i++) {
-        if (!em->nodes[i].used) {
-            k_memset(&em->nodes[i], 0, sizeof(em->nodes[i]));
-            em->nodes[i].used = 1;
-            em->nodes[i].refs = 1;
-            return &em->nodes[i];
-        }
+    if (n) {
+        n->used = 1;
+        n->refs = 1;
+        n->next = em->nodes;
+        em->nodes = n;
     }
-    return 0;
+    return n;
 }
 
 static struct ex_node *node_find(struct ex_mount *em, int is_dir, uint32_t dir_cluster,
                                  uint32_t index, uint32_t first)
 {
-    int i;
+    struct ex_node *n;
 
-    for (i = 0; i < EXFAT_NODES; i++) {
-        struct ex_node *n = &em->nodes[i];
-
-        if (!n->used || n->is_dir != is_dir || n->unlinked) {
+    for (n = em->nodes; n; n = n->next) {
+        if (n->is_dir != is_dir || n->unlinked) {
             continue;
         }
         if (is_dir ? n->first == first : (n->dir_cluster == dir_cluster && n->index == index)) {
@@ -297,7 +308,7 @@ static void ex_put(struct vfs_mount *mnt, void *node)
             free_chain(em, n->first, n->nofat, n->length);
             vfs_ns_unlock(mnt);
         }
-        n->used = 0;
+        node_drop((struct ex_mount *)mnt->priv, n);
     }
 }
 
@@ -1083,9 +1094,12 @@ static void ex_unmount(struct vfs_mount *mnt)
 {
     struct ex_mount *em = em_of(mnt);
 
-    em->used = 0;
+    while (em->nodes) {
+        node_drop(em, em->nodes);
+    }
     mnt->priv = 0;
     mnt->root = 0;
+    kfree(em);
 }
 
 /* ---- the constructor ---- */
@@ -1489,23 +1503,19 @@ static int ex_mount_on(struct ex_mount *em, struct vfs_mount *mnt, block_device_
 
 static int ex_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags, const char *options)
 {
-    struct ex_mount *em = 0;
-    int i, rc;
+    struct ex_mount *em = kzalloc(sizeof(*em));
+    int rc;
 
-    for (i = 0; i < EXFAT_MOUNTS; i++) {
-        if (!ex_mounts[i].used) {
-            em = &ex_mounts[i];
-            break;
-        }
-    }
     if (!em) {
         return -ENOMEM;
     }
-    k_memset(em, 0, sizeof(*em));
-    em->used = 1; /* claimed before the constructor sleeps */
+    em->used = 1;
     rc = ex_mount_on(em, mnt, dev, flags, options);
     if (rc != 0) {
-        em->used = 0;
+        while (em->nodes) {
+            node_drop(em, em->nodes);
+        }
+        kfree(em);
     }
     return rc;
 }
@@ -2453,7 +2463,7 @@ static int retire_chain(struct ex_mount *em, struct ex_node *d, const struct ex_
             n->unlinked = 1;
             return 0;
         }
-        n->used = 0;
+        node_drop(em, n);
     }
     return first ? free_chain(em, first, (set->stream[1] & FLAG_NO_FAT_CHAIN) != 0,
                               le64(set->stream + 24))

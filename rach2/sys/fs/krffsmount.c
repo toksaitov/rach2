@@ -20,23 +20,18 @@
 #include "../proc/process.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
+#include "../mm/kheap.h"
 #include "../block/block.h"
 #include "bcache.h"
 #include "krffs.h"
 #include "vfs.h"
 
-/* Two at once: a volume of a disk and a volume of a stick, which is what the
- * machine has. A third mount answers ENOMEM rather than growing a table
- * nothing has asked for. */
-#define KRFFS_VOLUMES 2
-
-/* The files a volume has open. A name removed while a file is open takes the
- * name off the node and leaves the node, the way the root does, so whoever
- * holds it keeps reading it; the last close frees it. Sixteen at once per
- * volume, which is what one process's descriptor table can hold. */
-#define KRFFS_OPENS 16
-
+/* The files a volume has open, one record per open node, allocated at the
+ * first open and freed at the last close. A name removed while a file is
+ * open takes the name off the node and leaves the node, the way the root
+ * does, so whoever holds it keeps reading it; the last close frees it. */
 struct krffs_open {
+    struct krffs_open *next;
     uint64_t offset;
     /* Where this node was before it last moved, for a caller that was asleep
      * when it did. A handle is a node's offset, and a grow with no room after
@@ -49,16 +44,14 @@ struct krffs_open {
     int nameless; /* unlinked while open: freed at the last close */
 };
 
+/* A mounted volume, allocated at mount and freed at unmount. */
 struct krffs_volume {
-    int used;
     block_device_t *dev;
     struct vfs_mount *mnt;
     krffs_mount_t fs;
     int writable;
-    struct krffs_open opens[KRFFS_OPENS];
+    struct krffs_open *opens;
 };
-
-static struct krffs_volume krffs_volumes[KRFFS_VOLUMES];
 
 static struct krffs_volume *vol_of(struct vfs_mount *mnt)
 {
@@ -298,11 +291,11 @@ static int kv_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 /** The record of an open file at `at`, or NULL. */
 static struct krffs_open *open_at(struct krffs_volume *vol, uint64_t at)
 {
-    int i;
+    struct krffs_open *o;
 
-    for (i = 0; i < KRFFS_OPENS; i++) {
-        if (vol->opens[i].refs > 0 && vol->opens[i].offset == at) {
-            return &vol->opens[i];
+    for (o = vol->opens; o; o = o->next) {
+        if (o->offset == at) {
+            return o;
         }
     }
     return 0;
@@ -329,15 +322,14 @@ static void open_moved(struct krffs_volume *vol, uint64_t from, uint64_t to)
  */
 static uint64_t follow_moves(struct krffs_volume *vol, uint64_t at)
 {
-    int i;
+    struct krffs_open *o;
 
     if (open_at(vol, at)) {
         return at;
     }
-    for (i = 0; i < KRFFS_OPENS; i++) {
-        if (vol->opens[i].refs > 0 && vol->opens[i].was == at &&
-            vol->opens[i].offset != at) {
-            return vol->opens[i].offset;
+    for (o = vol->opens; o; o = o->next) {
+        if (o->was == at && o->offset != at) {
+            return o->offset;
         }
     }
     return at;
@@ -348,22 +340,17 @@ static int kv_open(struct vfs_mount *mnt, void *node, int flags, void **handle)
     struct krffs_volume *vol = vol_of(mnt);
     uint64_t at = offset_of(mnt, node);
     struct krffs_open *o = open_at(vol, at);
-    int i;
 
     (void)flags;
     if (!o) {
-        for (i = 0; i < KRFFS_OPENS; i++) {
-            if (vol->opens[i].refs == 0) {
-                o = &vol->opens[i];
-                o->offset = at;
-                o->was = at;
-                o->nameless = 0;
-                break;
-            }
-        }
+        o = kzalloc(sizeof(*o));
         if (!o) {
-            return -ENFILE;
+            return -ENOMEM;
         }
+        o->offset = at;
+        o->was = at;
+        o->next = vol->opens;
+        vol->opens = o;
     }
     o->refs++;
     *handle = node; /* the node is the handle */
@@ -382,16 +369,20 @@ static void kv_release(struct vfs_mount *mnt, void *handle)
         return;
     }
     /* The last close of a file whose name was taken away frees it, which is
-     * the moment the space comes back. The slot is given up before the
-     * removal, which sleeps: another open would take this slot while it
-     * slept, and what it wrote there is not this call's to clear. The
-     * removal is a change to the allocator and takes the mount's lock, as
-     * every other change to it does. */
+     * the moment the space comes back. The record is unlinked and freed
+     * before the removal, which sleeps: another open of the same node while
+     * it slept must make a record of its own. The removal is a change to the
+     * allocator and takes the mount's lock, as every other change to it
+     * does. */
     {
         uint64_t at = o->offset;
         int reap = o->nameless;
+        struct krffs_open **link;
 
-        o->nameless = 0;
+        for (link = &vol->opens; *link != o; link = &(*link)->next) {
+        }
+        *link = o->next;
+        kfree(o);
         if (reap && vol->writable && !(mnt->flags & VFS_MS_RDONLY)) {
             vfs_ns_lock(mnt);
             krffs_remove_at(&vol->fs, at);
@@ -867,7 +858,13 @@ static void kv_unmount(struct vfs_mount *mnt)
 {
     struct krffs_volume *vol = vol_of(mnt);
 
-    k_memset(vol, 0, sizeof(*vol));
+    while (vol->opens) {
+        struct krffs_open *o = vol->opens;
+
+        vol->opens = o->next;
+        kfree(o);
+    }
+    kfree(vol);
     mnt->priv = 0;
 }
 
@@ -905,22 +902,11 @@ static const struct vfs_ops krffs_volume_ops = {
 static int krffs_volume_mount(struct vfs_mount *mnt, block_device_t *dev,
                               uint32_t flags, const char *options)
 {
-    struct krffs_volume *vol = 0;
+    struct krffs_volume *vol;
     uint64_t bytes;
     krffs_node_t root;
-    int i;
 
     (void)options;
-    for (i = 0; i < KRFFS_VOLUMES; i++) {
-        if (!krffs_volumes[i].used) {
-            vol = &krffs_volumes[i];
-            break;
-        }
-    }
-    if (!vol) {
-        return -ENOMEM;
-    }
-
     bytes = dev->sector_count * (uint64_t)dev->sector_size;
     if (bytes < sizeof(krffs_node_t) * 2) {
         klog(KLOG_ERR, "krffs", "mount: refused: the volume is too small");
@@ -932,8 +918,10 @@ static int krffs_volume_mount(struct vfs_mount *mnt, block_device_t *dev,
         return -EFBIG;
     }
 
-    k_memset(vol, 0, sizeof(*vol));
-    vol->used = 1;
+    vol = kzalloc(sizeof(*vol));
+    if (!vol) {
+        return -ENOMEM;
+    }
     vol->dev = dev;
     vol->mnt = mnt;
     vol->fs.backend = &volume_backend;
@@ -947,14 +935,14 @@ static int krffs_volume_mount(struct vfs_mount *mnt, block_device_t *dev,
 
     if (krffs_head(&vol->fs, 0, &root) != 0) {
         klog(KLOG_ERR, "krffs", "mount: refused: the first node cannot be read");
-        vol->used = 0;
+        kfree(vol);
         mnt->priv = 0;
         return -EIO;
     }
     if (root.magic != KRFFS_FILE_SYSTEM_MAGIC) {
         klog(KLOG_ERR, "krffs", "mount: refused: magic 0x%X, expected 0x%X",
              root.magic, KRFFS_FILE_SYSTEM_MAGIC);
-        vol->used = 0;
+        kfree(vol);
         mnt->priv = 0;
         return -EINVAL;
     }
@@ -962,13 +950,13 @@ static int krffs_volume_mount(struct vfs_mount *mnt, block_device_t *dev,
         klog(KLOG_ERR, "krffs",
              "mount: refused: the first node is type %d, not the root",
              root.type);
-        vol->used = 0;
+        kfree(vol);
         mnt->priv = 0;
         return -EINVAL;
     }
     if (!krffs_chain_is_walkable(&vol->fs)) {
         klog(KLOG_ERR, "krffs", "mount: refused: the node chain is malformed");
-        vol->used = 0;
+        kfree(vol);
         mnt->priv = 0;
         return -EINVAL;
     }
@@ -988,7 +976,7 @@ static int krffs_volume_mount(struct vfs_mount *mnt, block_device_t *dev,
         klog(KLOG_WARN, "krffs", "check: the volume was not unmounted cleanly");
         if (krffs_repair_at(&vol->fs, &links, &orphans, &doubles) != 0) {
             klog(KLOG_ERR, "krffs", "mount: refused: the volume cannot be repaired here");
-            vol->used = 0;
+            kfree(vol);
             mnt->priv = 0;
             return -EIO;
         }
@@ -1003,13 +991,13 @@ static int krffs_volume_mount(struct vfs_mount *mnt, block_device_t *dev,
      * link, so it is enough for its chain to be walkable. */
     if (vol->writable && !krffs_chain_is_valid(&vol->fs)) {
         klog(KLOG_ERR, "krffs", "mount: refused: the node chain is malformed");
-        vol->used = 0;
+        kfree(vol);
         mnt->priv = 0;
         return -EINVAL;
     }
     if (vol->writable && krffs_set_dirty(&vol->fs, 1) != 0) {
         klog(KLOG_ERR, "krffs", "mount: refused: the volume cannot be written");
-        vol->used = 0;
+        kfree(vol);
         mnt->priv = 0;
         return -EIO;
     }

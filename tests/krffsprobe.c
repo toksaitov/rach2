@@ -948,10 +948,10 @@ void probe_main(unsigned int *sp)
         sys_exit(0);
     }
 
-    /* Two volumes at once, and the third the pool has no room for. Each is a
-       volume of its own: what one mount writes is in that volume and in no
-       other, and the pool of two is what the third mount answers for. */
-    if (streq(mode, "two")) {
+    /* Three volumes at once, past the two the kernel once had room for.
+       Each is a volume of its own: what one mount writes is in that volume
+       and in no other. */
+    if (streq(mode, "three")) {
         int fd;
         char got[16];
 
@@ -966,8 +966,17 @@ void probe_main(unsigned int *sp)
             fail_with("mounting the second volume", rc);
         }
         rc = sys5(SYS_MOUNT, (int)"/dev/disk0p3", (int)"/k3", (int)"krffs", 0, 0);
-        if (rc != -ENOMEM) {
-            fail_with("the errno of a third volume", rc);
+        if (rc != 0) {
+            fail_with("mounting the third volume", rc);
+        }
+        fd = sys3(SYS_OPEN, (int)"/k3/third.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd < 0 || sys3(SYS_WRITE, fd, (int)"third\n", 6) != 6) {
+            fail("writing the third volume");
+        }
+        sys1(SYS_CLOSE, fd);
+        if (sys3(SYS_OPEN, (int)"/k/third.txt", O_RDONLY, 0) != -ENOENT ||
+            sys3(SYS_OPEN, (int)"/k2/third.txt", O_RDONLY, 0) != -ENOENT) {
+            fail("a file of the third volume is in another");
         }
         fd = sys3(SYS_OPEN, (int)"/k/first.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (fd < 0 || sys3(SYS_WRITE, fd, (int)"first\n", 6) != 6) {
@@ -994,18 +1003,13 @@ void probe_main(unsigned int *sp)
         if (sys2(SYS_UMOUNT2, (int)"/k", 0) != 0) {
             fail("unmounting the first volume");
         }
-        /* And the slot it gave back is a slot: the third volume mounts now. */
-        rc = sys5(SYS_MOUNT, (int)"/dev/disk0p3", (int)"/k3", (int)"krffs", 0, 0);
-        if (rc != 0) {
-            fail_with("mounting the third volume after a slot came back", rc);
-        }
         if (sys2(SYS_UMOUNT2, (int)"/k3", 0) != 0) {
             fail("unmounting the third volume");
         }
         if (sys2(SYS_UMOUNT2, (int)"/k2", 0) != 0) {
             fail("unmounting the second volume");
         }
-        puts("KRFFSPROBE OK (two)");
+        puts("KRFFSPROBE OK (three)");
         sys_exit(0);
     }
 

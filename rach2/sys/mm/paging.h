@@ -237,8 +237,16 @@ uintptr_t paging_virt_to_phys(uintptr_t va);
  */
 int paging_framefail_arm(uint32_t count);
 
-/** Reserve one free physical frame for kernel use (never user); 0 if none. */
+/**
+ * Reserve one free physical frame for kernel use (never user); 0 if none.
+ * The frame is below the identity-mapped window, so its physical address
+ * is also its virtual one, which is what a device given the address for
+ * DMA needs.
+ */
 uintptr_t alloc_kernel_frame(void);
+
+/** Return a frame `alloc_kernel_frame` gave. */
+void free_kernel_frame(uintptr_t phys);
 
 /** Total physical frames the pool manages. */
 uint32_t frame_total_count(void);

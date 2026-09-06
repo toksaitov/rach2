@@ -176,7 +176,6 @@ void block_partition_init(
 /* How a request stands. A request the caller gave up on is quarantined with
  * its page until the device answers, late, so the answer has nowhere to land
  * but a page nothing else owns. */
-#define BLOCK_REQ_FREE        0
 #define BLOCK_REQ_IN_FLIGHT   1
 #define BLOCK_REQ_DONE        2
 #define BLOCK_REQ_QUARANTINED 3
@@ -184,24 +183,31 @@ void block_partition_init(
 /**
  * One request on a sleeping device: at most a page, in the request's own page.
  *
- * A write is copied into the page before `submit` and a read is copied out
- * after a successful completion, so a completion that arrives after the
- * deadline lands in the pool's page and not in memory the caller reused. The
- * slot is quarantined until then; the late completion frees it and advances
- * the generation, and a completion whose generation does not match the slot's
- * is dropped with a record.
+ * The request is allocated for the transfer and its page is a frame of the
+ * identity-mapped window, whose address the device is given for DMA. A write
+ * is copied into the page before `submit` and a read is copied out after a
+ * successful completion, so a completion that arrives after the deadline
+ * lands in the request's page and not in memory the caller reused. The
+ * request is held by its caller and by its device and freed when both have
+ * let go: quarantined until the late completion, which lets go for the
+ * device. No two requests ever share a generation, and a completion naming
+ * a request that is no longer live, or a generation that is not its, is
+ * dropped with a record.
  */
 struct block_request {
+    struct block_request *next; /* the list of live requests */
     block_device_t *device;
-    block_device_t *owner; /* the device the slot is accounted to */
+    block_device_t *owner; /* the device the request is accounted to */
     int write;
     uint64_t lba;
     uint32_t count;        /* sectors, at most BLOCK_REQ_SECTORS */
-    uint8_t *page;         /* the pool's page for this slot */
+    uint8_t *page;         /* the request's page, in the window */
     int status;            /* 0 or -errno, valid once done */
     volatile int state;    /* BLOCK_REQ_* */
-    uint32_t generation;   /* advanced when the slot is reused or abandoned */
+    uint32_t generation;   /* unique to this request */
     uint32_t deadline;     /* tick at which the wait gives up */
+    int held_by_caller;    /* until the caller has read the answer or given up */
+    int held_by_device;    /* until the device has answered */
 };
 
 #define BLOCK_REQ_SECTORS 8u
@@ -212,10 +218,11 @@ struct block_request {
  * On a `BLOCK_FAULT_SAFE` device this calls the vtable and returns, from any
  * context, at boot included. On a device with `submit` it runs from syscall
  * context only, splits the transfer into requests of at most a page, waits
- * for a slot of the pool when none is free or the device holds its share,
- * and sleeps between `submit` and the completion or the device's deadline,
- * which starts when the slot is taken. Returns 0 or a negative errno; a
- * deadline is `-EIO` with the slot quarantined, and so is a stalled device.
+ * when as many requests are live as the limit allows or the device holds
+ * its share, and sleeps between `submit` and the completion or the device's
+ * deadline, which starts when the request is taken. Returns 0 or a negative
+ * errno; a deadline is `-EIO` with the request quarantined, and so is a
+ * stalled device.
  */
 int block_request(block_device_t *device, int write, uint64_t lba,
                   uint32_t count, void *buffer);
@@ -237,10 +244,10 @@ int block_flush(block_device_t *device);
  *
  * For a caller that cannot sleep: the disk layer reads a stick's partition
  * table from the pump, where there is no process to put to sleep. The
- * request is the pool's slot, and `generation` is what the caller asks
- * after it with. Returns NULL when no slot is free now, the device holds
- * its share of the pool or is stalled, or the device refused the request;
- * this caller does not wait.
+ * request is allocated, and `generation` is what the caller asks after it
+ * with. Returns NULL when the limit is reached now, the device holds its
+ * share or is stalled, the heap has no room, or the device refused the
+ * request; this caller does not wait.
  */
 struct block_request *block_request_begin(block_device_t *device, uint64_t lba, uint32_t count,
                                           uint32_t *generation);
@@ -249,9 +256,10 @@ struct block_request *block_request_begin(block_device_t *device, uint64_t lba, 
  * Whether a request begun with `block_request_begin` has ended.
  *
  * Returns 0 while it is in flight. Otherwise 1, with `status` the result
- * and, for a read that succeeded, its sectors copied into `buffer`; the slot
- * is freed. A request past its deadline is quarantined by the tick and ends
- * here with `EIO`, and its slot stays the device's until the late completion.
+ * and, for a read that succeeded, its sectors copied into `buffer`; the
+ * caller lets go of the request. A request past its deadline is quarantined
+ * by the tick and ends here with `EIO`, and it stays the device's until the
+ * late completion.
  */
 int block_request_ended(struct block_request *r, uint32_t generation, void *buffer, int *status);
 
@@ -259,18 +267,19 @@ int block_request_ended(struct block_request *r, uint32_t generation, void *buff
  * A sleeping device reports one request's end.
  *
  * `generation` is the value the device captured at `submit`. A completion
- * whose generation is not the request's current one is dropped with a record;
- * one for a quarantined request frees the slot.
+ * for a request no longer live, or whose generation is not the request's, is
+ * dropped with a record; one for a quarantined request lets go of it for the
+ * device.
  */
 void block_request_complete(struct block_request *request, uint32_t generation,
                             int status);
 
 /**
- * How many of the pool's slots are still the device's: in flight, or
- * quarantined with a page the device may yet write into.
+ * How many requests are still the device's: in flight, or quarantined with
+ * a page the device may yet write into.
  *
  * A device whose driver has gone cannot be freed while either exists, since
- * a late completion names the slot and the slot names the device.
+ * a late completion names the request and the request names the device.
  */
 int block_device_holds(block_device_t *device);
 
@@ -278,17 +287,18 @@ int block_device_holds(block_device_t *device);
 void block_request_tick(void);
 
 /**
- * Read `rach2.blockpool` and size the pool, once, before any device can
- * submit; a later call does nothing. The boot calls it before the disk is
- * probed, and the first request calls it too, in case nothing else did.
+ * Read `rach2.blockpool` and set the limit on live requests, once, before
+ * any device can submit; a later call does nothing. The boot calls it before
+ * the disk is probed, and the first request calls it too, in case nothing
+ * else did.
  */
 void block_request_init(void);
 
 /**
  * The device whose `submit` answers for `dev`: a partition view's backing,
- * followed to a device that is not a view; `dev` itself otherwise. The
- * request pool accounts a slot to this device, so a stick's views share
- * the stick's share of the pool and its stall.
+ * followed to a device that is not a view; `dev` itself otherwise. A
+ * request is accounted to this device, so a stick's views share the
+ * stick's share of the limit and its stall.
  */
 block_device_t *block_submitter(block_device_t *dev);
 

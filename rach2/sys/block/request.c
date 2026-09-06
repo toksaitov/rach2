@@ -1,26 +1,30 @@
 /*
- * request.c: the one entry every transfer takes, and the pool behind it.
+ * request.c: the one entry every transfer takes, and the requests behind it.
  *
  * A polled device is called and done. A sleeping device is handed a request
- * from a fixed pool, each slot with its own page: a write is copied into the
- * page before submit and a read is copied out after, so a completion that
- * arrives after the caller gave up lands in a page nothing else owns. A
- * timed-out slot is quarantined with its page until the device answers late,
- * so a late answer never reaches memory that has been reused.
+ * allocated for the transfer, with a page of its own from the identity-mapped
+ * window, since the device is given the page's physical address: a write is
+ * copied into the page before submit and a read is copied out after, so a
+ * completion that arrives after the caller gave up lands in a page nothing
+ * else owns. A request is held by its caller and by its device, and is freed
+ * when both have let go: a timed-out request is quarantined with its page
+ * until the device answers late, so a late answer never reaches memory that
+ * has been reused.
  *
- * A caller that finds no slot waits for one. Running out is not a failure
- * of the device, and only a transfer that failed answers `EIO`; the deadline
- * of a request starts when its slot is taken, which is when the transfer
- * starts, and not when the caller began to wait. Two rules keep a waiter
- * from waiting for ever on slots that will never free themselves. Failure
- * is per device, where a device is the one whose `submit` answers, a stick
- * and not each of its partition views: a device whose every slot is
- * quarantined past its deadline is stalled, and its waiters and its later
- * callers answer `EIO` until it answers something late. And no device may
- * hold more than half of the pool, so a stalled device leaves the other
- * half to the healthy ones; a waiter that finds every taken slot of the
- * pool quarantined is released with `EIO` too, since nothing but a late
- * answer could free one.
+ * How many requests may be live at once is a policy, `rach2.blockpool=N`,
+ * sixteen unless set, and a caller that finds the limit reached waits.
+ * Running out is not a failure of the device, and only a transfer that
+ * failed answers `EIO`; the deadline of a request starts when it is taken,
+ * which is when the transfer starts, and not when the caller began to wait.
+ * Two rules keep a waiter from waiting for ever on requests that will never
+ * free themselves. Failure is per device, where a device is the one whose
+ * `submit` answers, a stick and not each of its partition views: a device
+ * whose every request is quarantined past its deadline is stalled, and its
+ * waiters and its later callers answer `EIO` until it answers something
+ * late. And no device may hold more than half of the limit, so a stalled
+ * device leaves the other half to the healthy ones; a waiter that finds
+ * every live request quarantined is released with `EIO` too, since nothing
+ * but a late answer could free one.
  */
 
 #include "block.h"
@@ -30,21 +34,26 @@
 #include "../kio.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
+#include "../mm/kheap.h"
+#include "../mm/paging.h"
 #include "../panic.h"
 #include "../proc/process.h"
 #include "../proc/wait_queue.h"
 
-#define REQ_POOL             16
+/* Policy: how many requests may be live at once unless `rach2.blockpool`
+ * says otherwise, and the most the option accepts. The limit is what the
+ * stall rules divide between devices; it is not a table. */
+#define REQ_LIMIT            16
 #define REQ_DEFAULT_DEADLINE 500u /* five seconds of 100 Hz ticks */
 
-static struct block_request pool[REQ_POOL];
-static uint8_t pool_pages[REQ_POOL][BLOCK_REQ_SECTORS * BLOCK_SECTOR_SIZE]
-    __attribute__((aligned(4096)));
-static wait_queue_t pool_wq; /* woken on any completion, freed slot or quarantine */
+static struct block_request *reqs; /* every live request */
+static uint32_t live;              /* how many are on the list */
+static uint32_t next_generation;   /* no two requests ever share one */
+static wait_queue_t pool_wq; /* woken on any completion, freed request or quarantine */
 static volatile uint32_t req_ticks;
 static uint32_t quarantined_count;
-static uint32_t pool_size;       /* slots in use: REQ_POOL, or rach2.blockpool=N */
-static uint32_t device_cap;      /* the most slots one device may hold */
+static uint32_t pool_size;       /* the limit: REQ_LIMIT, or rach2.blockpool=N */
+static uint32_t device_cap;      /* the most requests one device may hold */
 
 static uint32_t irq_save(void)
 {
@@ -63,7 +72,7 @@ static void irq_restore(uint32_t flags)
 void block_request_init(void)
 {
     char value[8];
-    uint32_t n = REQ_POOL;
+    uint32_t n = REQ_LIMIT;
     uint32_t cap;
     int i;
 
@@ -76,9 +85,9 @@ void block_request_init(void)
         for (i = 0; value[i] >= '0' && value[i] <= '9'; i++) {
             asked = asked * 10u + (uint32_t)(value[i] - '0');
         }
-        if (i == 0 || value[i] != '\0' || asked == 0 || asked > REQ_POOL) {
+        if (i == 0 || value[i] != '\0' || asked == 0 || asked > REQ_LIMIT) {
             klog(KLOG_WARN, "block", "rach2.blockpool: not a count of 1 to %d; ignored",
-                 REQ_POOL);
+                 REQ_LIMIT);
         } else {
             n = asked;
             klog(KLOG_INFO, "block", "request pool: %d slots", (int)n);
@@ -88,41 +97,86 @@ void block_request_init(void)
     if (cap == 0) {
         cap = 1;
     }
-    /* The share first and the size last: a caller from the USB pump reads
-     * both between two stores, and a size with no share would refuse it. */
+    /* Half of the limit each, so a stalled device leaves room for a healthy
+     * one. The share first and the size last: a caller from the USB pump
+     * reads both between two stores, and a size with no share would refuse
+     * it. */
     device_cap = cap;
     pool_size = n;
 }
 
+/** Interrupts off. Whether `r` is on the list of live requests. */
+static int req_is_live(const struct block_request *r)
+{
+    const struct block_request *p;
+
+    for (p = reqs; p; p = p->next) {
+        if (p == r) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/** Interrupts off. Take `r` off the list and give its page and record back. */
+static void req_drop(struct block_request *r)
+{
+    struct block_request **link;
+
+    for (link = &reqs; *link != r; link = &(*link)->next) {
+    }
+    *link = r->next;
+    live--;
+    free_kernel_frame((uintptr_t)r->page);
+    kfree(r);
+}
+
 /**
- * Interrupts off. How many slots `owner` holds: in flight or quarantined.
+ * Interrupts off. One holder lets go: the caller when it has read the
+ * answer or given up, the device when it has answered. The last one out
+ * frees the request.
+ */
+static void req_let_go(struct block_request *r, int caller)
+{
+    if (caller) {
+        r->held_by_caller = 0;
+    } else {
+        r->held_by_device = 0;
+    }
+    if (!r->held_by_caller && !r->held_by_device) {
+        req_drop(r);
+    }
+}
+
+/**
+ * Interrupts off. How many requests `owner` holds: in flight or quarantined.
  *
- * `owner` is the device a slot is accounted to, `block_submitter` of the
+ * `owner` is the device a request is accounted to, `block_submitter` of the
  * device the request named: a stick's partition views share the stick's
- * share of the pool and its stall, since it is the stick that answers.
+ * share of the limit and its stall, since it is the stick that answers.
  */
 static uint32_t device_held(const block_device_t *owner)
 {
-    uint32_t i;
+    const struct block_request *r;
     uint32_t held = 0;
 
-    for (i = 0; i < pool_size; i++) {
-        if (pool[i].owner == owner &&
-            (pool[i].state == BLOCK_REQ_IN_FLIGHT || pool[i].state == BLOCK_REQ_QUARANTINED)) {
+    for (r = reqs; r; r = r->next) {
+        if (r->owner == owner &&
+            (r->state == BLOCK_REQ_IN_FLIGHT || r->state == BLOCK_REQ_QUARANTINED)) {
             held++;
         }
     }
     return held;
 }
 
-/** Interrupts off. How many of `owner`'s slots are still in flight. */
+/** Interrupts off. How many of `owner`'s requests are still in flight. */
 static uint32_t device_in_flight(const block_device_t *owner)
 {
-    uint32_t i;
+    const struct block_request *r;
     uint32_t n = 0;
 
-    for (i = 0; i < pool_size; i++) {
-        if (pool[i].owner == owner && pool[i].state == BLOCK_REQ_IN_FLIGHT) {
+    for (r = reqs; r; r = r->next) {
+        if (r->owner == owner && r->state == BLOCK_REQ_IN_FLIGHT) {
             n++;
         }
     }
@@ -130,57 +184,72 @@ static uint32_t device_in_flight(const block_device_t *owner)
 }
 
 /**
- * Interrupts off. Whether no slot is in flight or answered and not yet
- * freed: every taken slot is quarantined, and nothing but a late answer
+ * Interrupts off. Whether no request is in flight or answered and not yet
+ * freed: every live request is quarantined, and nothing but a late answer
  * can free one.
  */
 static int nothing_pending(void)
 {
-    uint32_t i;
+    const struct block_request *r;
 
-    for (i = 0; i < pool_size; i++) {
-        if (pool[i].state == BLOCK_REQ_IN_FLIGHT || pool[i].state == BLOCK_REQ_DONE) {
+    for (r = reqs; r; r = r->next) {
+        if (r->state == BLOCK_REQ_IN_FLIGHT || r->state == BLOCK_REQ_DONE) {
             return 0;
         }
     }
     return 1;
 }
 
-/** Interrupts off. A free slot, or NULL. */
-static struct block_request *free_slot(void)
+/**
+ * Interrupts off. A fresh request on the list, held by its caller and its
+ * device, or NULL when the heap or the window has no room for one.
+ */
+static struct block_request *req_new(void)
 {
-    uint32_t i;
+    struct block_request *r = kzalloc(sizeof(*r));
+    uintptr_t page;
 
-    for (i = 0; i < pool_size; i++) {
-        if (pool[i].state == BLOCK_REQ_FREE) {
-            return &pool[i];
-        }
+    if (!r) {
+        return NULL;
     }
-    return NULL;
+    page = alloc_kernel_frame();
+    if (!page) {
+        kfree(r);
+        return NULL;
+    }
+    r->page = (uint8_t *)page;
+    r->held_by_caller = 1;
+    r->held_by_device = 1;
+    r->next = reqs;
+    reqs = r;
+    live++;
+    return r;
 }
 
 /**
- * What a waiter for a slot wakes on: one it may take, its device stalled,
- * or nothing left in flight that could free one. `arg` is the owner.
+ * What a waiter for a request wakes on: room for one it may take, its
+ * device stalled, or nothing left in flight that could free one. `arg` is
+ * the owner.
  */
 static int slot_ready(void *arg)
 {
     block_device_t *owner = arg;
     uint32_t flags = irq_save();
     int ready = (owner->flags & BLOCK_STALLED) != 0 || nothing_pending() ||
-                (free_slot() != NULL && device_held(owner) < device_cap);
+                (live < pool_size && device_held(owner) < device_cap);
 
     irq_restore(flags);
     return ready;
 }
 
 /**
- * A slot to submit with, or NULL.
+ * A request to submit, or NULL.
  *
- * With `wait` the caller sleeps until a slot is its to take, and NULL then
- * means the device is stalled or the pool is: every slot taken and none in
- * flight, so only a late answer could free one. Without `wait`, for a caller
- * that cannot sleep, NULL means no slot now.
+ * With `wait` the caller sleeps until a request is its to take, and NULL
+ * then means the device is stalled, the limit is reached with nothing in
+ * flight, so only a late answer could free one, or there is no memory for
+ * one. Without `wait`, for a caller that cannot sleep, NULL means no
+ * request now.
  */
 static struct block_request *req_take(block_device_t *device, int write, uint64_t lba,
                                       uint32_t count, int wait)
@@ -201,8 +270,13 @@ static struct block_request *req_take(block_device_t *device, int write, uint64_
             return NULL;
         }
         share_taken = device_held(owner) >= device_cap;
-        if (!share_taken) {
-            r = free_slot();
+        if (!share_taken && live < pool_size) {
+            r = req_new();
+            if (!r) {
+                irq_restore(flags);
+                klog(KLOG_WARN, "block", "request: no memory");
+                return NULL;
+            }
         }
         if (r) {
             r->device = device;
@@ -210,10 +284,9 @@ static struct block_request *req_take(block_device_t *device, int write, uint64_
             r->write = write;
             r->lba = lba;
             r->count = count;
-            r->page = pool_pages[r - pool];
             r->status = -EIO;
             r->state = BLOCK_REQ_IN_FLIGHT;
-            r->generation++;
+            r->generation = ++next_generation;
             r->deadline = req_ticks + (device->deadline_ticks ? device->deadline_ticks
                                                               : REQ_DEFAULT_DEADLINE);
             irq_restore(flags);
@@ -239,17 +312,20 @@ static struct block_request *req_take(block_device_t *device, int write, uint64_
     }
 }
 
-
-/* What one caller waits for: its own request, by slot and generation. */
-struct req_wait {
-    struct block_request *r;
-    uint32_t generation;
-};
+/**
+ * Interrupts off. The device refused `submit`, so it never held the
+ * request: the caller alone lets go and the request is freed.
+ */
+static void req_refused(struct block_request *r)
+{
+    r->held_by_device = 0;
+    req_let_go(r, 1);
+}
 
 static int req_done(void *arg)
 {
-    const struct req_wait *w = arg;
-    return w->r->state != BLOCK_REQ_IN_FLIGHT || w->r->generation != w->generation;
+    const struct block_request *r = arg;
+    return r->state != BLOCK_REQ_IN_FLIGHT;
 }
 
 /**
@@ -263,33 +339,30 @@ static int req_run_one(block_device_t *device, int write, uint64_t lba, uint32_t
                        uint8_t *buffer)
 {
     struct block_request *r = req_take(device, write, lba, count, 1);
-    struct req_wait w;
     uint32_t flags;
     int status;
 
     if (!r) {
         return -EIO;
     }
-    w.r = r;
-    w.generation = r->generation;
     if (write) {
         k_memcpy(r->page, buffer, count * BLOCK_SECTOR_SIZE);
     }
     if (device->submit(device, r) != 0) {
         flags = irq_save();
-        r->state = BLOCK_REQ_FREE;
+        req_refused(r);
         irq_restore(flags);
         wq_wake_all(&pool_wq);
         return -EIO;
     }
-    while (!req_done(&w)) {
-        wq_wait_event_nointr(&pool_wq, req_done, &w);
+    while (!req_done(r)) {
+        wq_wait_event_nointr(&pool_wq, req_done, r);
     }
     flags = irq_save();
-    /* A quarantined slot, or one the late completion freed and another
-     * caller took (the generation moved on): the request is not ours to
-     * touch any more. */
-    if (r->state == BLOCK_REQ_QUARANTINED || r->generation != w.generation) {
+    /* Quarantined: the device still owns the page, and the request is the
+     * late completion's to free. */
+    if (r->state == BLOCK_REQ_QUARANTINED) {
+        req_let_go(r, 1);
         irq_restore(flags);
         return -EIO;
     }
@@ -297,7 +370,7 @@ static int req_run_one(block_device_t *device, int write, uint64_t lba, uint32_t
     if (status == 0 && !write) {
         k_memcpy(buffer, r->page, count * BLOCK_SECTOR_SIZE);
     }
-    r->state = BLOCK_REQ_FREE;
+    req_let_go(r, 1);
     irq_restore(flags);
     wq_wake_all(&pool_wq);
     return status;
@@ -319,9 +392,9 @@ int block_request(block_device_t *device, int write, uint64_t lba, uint32_t coun
         return device->read(device, lba, count, buffer);
     }
     /* A device that sleeps its caller and answers in the same call is called
-     * directly and takes no request slot: the device under it takes one from
-     * this pool while it waits, and two slots for one transfer is how the
-     * pool runs out with everybody waiting for everybody. */
+     * directly and takes no request: the device under it takes one while it
+     * waits, and two requests for one transfer is how the limit is reached
+     * with everybody waiting for everybody. */
     if (device->flags & BLOCK_CALLER_SYNC) {
         __asm__ __volatile__("pushfl; popl %0" : "=r"(eflags));
         if (!(eflags & 0x200) || !current_proc || !current_proc->in_syscall) {
@@ -357,7 +430,6 @@ int block_request(block_device_t *device, int write, uint64_t lba, uint32_t coun
 int block_flush(block_device_t *device)
 {
     struct block_request *r;
-    struct req_wait w;
     uint32_t flags;
     int status;
     uint32_t eflags;
@@ -370,31 +442,30 @@ int block_flush(block_device_t *device)
         k_panic("block: a sleeping device was reached outside syscall context");
     }
     if (device->flags & BLOCK_CALLER_SYNC) {
-        return device->flush(device, 0); /* answers in this call, no slot */
+        return device->flush(device, 0); /* answers in this call, no request */
     }
     r = req_take(device, 1, 0, 1, 1);
     if (!r) {
         return -EIO;
     }
-    w.r = r;
-    w.generation = r->generation;
     if (device->flush(device, r) != 0) {
         flags = irq_save();
-        r->state = BLOCK_REQ_FREE;
+        req_refused(r);
         irq_restore(flags);
         wq_wake_all(&pool_wq);
         return -EIO;
     }
-    while (!req_done(&w)) {
-        wq_wait_event_nointr(&pool_wq, req_done, &w);
+    while (!req_done(r)) {
+        wq_wait_event_nointr(&pool_wq, req_done, r);
     }
     flags = irq_save();
-    if (r->state == BLOCK_REQ_QUARANTINED || r->generation != w.generation) {
+    if (r->state == BLOCK_REQ_QUARANTINED) {
+        req_let_go(r, 1);
         irq_restore(flags);
         return -EIO;
     }
     status = r->status;
-    r->state = BLOCK_REQ_FREE;
+    req_let_go(r, 1);
     irq_restore(flags);
     wq_wake_all(&pool_wq);
     return status;
@@ -417,7 +488,7 @@ struct block_request *block_request_begin(block_device_t *device, uint64_t lba, 
     *generation = r->generation;
     if (device->submit(device, r) != 0) {
         flags = irq_save();
-        r->state = BLOCK_REQ_FREE;
+        req_refused(r);
         irq_restore(flags);
         wq_wake_all(&pool_wq);
         return NULL;
@@ -433,10 +504,10 @@ int block_request_ended(struct block_request *r, uint32_t generation, void *buff
         irq_restore(flags);
         return 0;
     }
-    /* Quarantined, or freed by a late completion and taken by another
-     * caller: the request is not ours to touch any more, and the slot is
-     * the pool's to free. */
+    /* Quarantined: the page is the device's until the late completion, and
+     * the request is freed when both have let go. */
     if (r->state != BLOCK_REQ_DONE || r->generation != generation) {
+        req_let_go(r, 1);
         irq_restore(flags);
         *status = -EIO;
         return 1;
@@ -445,7 +516,7 @@ int block_request_ended(struct block_request *r, uint32_t generation, void *buff
     if (r->status == 0) {
         k_memcpy(buffer, r->page, r->count * BLOCK_SECTOR_SIZE);
     }
-    r->state = BLOCK_REQ_FREE;
+    req_let_go(r, 1);
     irq_restore(flags);
     wq_wake_all(&pool_wq);
     return 1;
@@ -456,20 +527,23 @@ void block_request_complete(struct block_request *request, uint32_t generation, 
     uint32_t flags = irq_save();
     int answered = 0;
 
-    if (!request || request->generation != generation) {
+    /* A request freed since the device captured its address is not on the
+     * list, and one made since at the same address has a generation of its
+     * own: the completion is stale either way. */
+    if (!request || !req_is_live(request) || request->generation != generation) {
         irq_restore(flags);
         klog(KLOG_WARN, "block", "completion dropped: stale generation");
         return;
     }
     if (request->state == BLOCK_REQ_QUARANTINED) {
-        request->generation++; /* the caller that gave up must not match */
-        request->state = BLOCK_REQ_FREE;
         quarantined_count--;
         /* The device answered, late: it is not stalled any more. */
         if (request->owner->flags & BLOCK_STALLED) {
             request->owner->flags &= ~BLOCK_STALLED;
             answered = 1;
         }
+        request->state = BLOCK_REQ_DONE;
+        req_let_go(request, 0);
         irq_restore(flags);
         klog(KLOG_INFO, "block", "late completion: quarantined slot freed");
         if (answered) {
@@ -484,6 +558,7 @@ void block_request_complete(struct block_request *request, uint32_t generation, 
     }
     request->status = status;
     request->state = BLOCK_REQ_DONE;
+    req_let_go(request, 0);
     irq_restore(flags);
     wq_wake_all(&pool_wq);
 }
@@ -491,12 +566,12 @@ void block_request_complete(struct block_request *request, uint32_t generation, 
 int block_device_holds(block_device_t *device)
 {
     uint32_t flags = irq_save();
-    uint32_t i;
+    const struct block_request *r;
     int held = 0;
 
-    for (i = 0; i < pool_size; i++) {
-        if (pool[i].device == device &&
-            (pool[i].state == BLOCK_REQ_IN_FLIGHT || pool[i].state == BLOCK_REQ_QUARANTINED)) {
+    for (r = reqs; r; r = r->next) {
+        if (r->device == device &&
+            (r->state == BLOCK_REQ_IN_FLIGHT || r->state == BLOCK_REQ_QUARANTINED)) {
             held++;
         }
     }
@@ -505,20 +580,20 @@ int block_device_holds(block_device_t *device)
 }
 
 /**
- * Interrupts off. A device holding slots with none of them in flight has
+ * Interrupts off. A device holding requests with none of them in flight has
  * stopped answering: it is marked stalled, once, so its waiters are
  * released and its later callers refused until a late answer clears it.
  * Returns how many devices were marked by this tick.
  */
 static int mark_stalled(void)
 {
-    uint32_t i;
+    const struct block_request *r;
     int marked = 0;
 
-    for (i = 0; i < pool_size; i++) {
-        block_device_t *owner = pool[i].owner;
+    for (r = reqs; r; r = r->next) {
+        block_device_t *owner = r->owner;
 
-        if (pool[i].state != BLOCK_REQ_QUARANTINED || (owner->flags & BLOCK_STALLED)) {
+        if (r->state != BLOCK_REQ_QUARANTINED || (owner->flags & BLOCK_STALLED)) {
             continue;
         }
         if (device_in_flight(owner) == 0) {
@@ -531,17 +606,17 @@ static int mark_stalled(void)
 
 void block_request_tick(void)
 {
-    uint32_t i;
+    struct block_request *r;
     int quarantined = 0;
     int stalled;
 
     req_ticks++;
-    for (i = 0; i < pool_size; i++) {
-        if (pool[i].state == BLOCK_REQ_IN_FLIGHT && (int32_t)(req_ticks - pool[i].deadline) >= 0) {
-            /* The caller is woken with EIO; the slot and its page wait for
-             * the device, which still owns them. The generation stays so the
-             * late completion matches, and moves on when it frees the slot. */
-            pool[i].state = BLOCK_REQ_QUARANTINED;
+    for (r = reqs; r; r = r->next) {
+        if (r->state == BLOCK_REQ_IN_FLIGHT && (int32_t)(req_ticks - r->deadline) >= 0) {
+            /* The caller is woken with EIO; the request and its page wait
+             * for the device, which still owns them. The generation stays
+             * so the late completion matches. */
+            r->state = BLOCK_REQ_QUARANTINED;
             quarantined_count++;
             quarantined++;
         }

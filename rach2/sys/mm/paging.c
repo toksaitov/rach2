@@ -823,6 +823,12 @@ uintptr_t alloc_kernel_frame(void)
     return 0;
 }
 
+void free_kernel_frame(uintptr_t phys)
+{
+    _kernel_frames_reserved--;
+    frame_unref(phys);
+}
+
 /**
  * Return the number of physical frames the pool manages.
  */

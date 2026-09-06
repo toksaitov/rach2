@@ -22,6 +22,8 @@
 
 #include "ext2.h"
 
+#include "../mm/kheap.h"
+
 #include "../block/block.h"
 #include "../klog.h"
 #include "../lib/kerrno.h"
@@ -62,6 +64,7 @@
 
 /* One held inode. `too_big` marks a size past the kernel's offset. */
 struct ext2_node {
+    struct ext2_node *next; /* the mount's list of nodes in memory */
     int used;
     uint32_t refs;
     uint32_t ino;
@@ -91,10 +94,36 @@ struct ext2_mount {
     int valid_cleared;   /* the superblock's valid bit was cleared by this mount */
     uint32_t alloc_hint; /* the block after the last one given out */
     uint8_t gd[EXT2_GROUPS * 32];
-    struct ext2_node nodes[EXT2_NODES];
+    struct ext2_node *nodes; /* the nodes in memory, from the heap */
 };
 
-static struct ext2_mount ext2_mounts[EXT2_MOUNTS];
+/* A node from the heap, on the mount's list, or NULL when the heap has none;
+ * and the way back. Every node a mount has in memory is on the list, so an
+ * unmount frees what is left. */
+static struct ext2_node *node_new(struct ext2_mount *em)
+{
+    struct ext2_node *n = kzalloc(sizeof(*n));
+
+    if (n) {
+        n->used = 1;
+        n->next = em->nodes;
+        em->nodes = n;
+    }
+    return n;
+}
+
+static void node_drop(struct ext2_mount *em, struct ext2_node *n)
+{
+    struct ext2_node **link = &em->nodes;
+
+    while (*link && *link != n) {
+        link = &(*link)->next;
+    }
+    if (*link) {
+        *link = n->next;
+    }
+    kfree(n);
+}
 
 /* ---- little-endian fields ---- */
 
@@ -275,38 +304,30 @@ static int inode_load(struct ext2_mount *em, uint32_t ino, struct ext2_node *n)
  */
 static struct ext2_node *node_for(struct ext2_mount *em, uint32_t ino, int *rc)
 {
-    struct ext2_node *n = 0;
-    int i;
+    struct ext2_node *n;
 
     /* Under the mount's lock, because the load sleeps in the cache and a
      * second lookup meanwhile must find the entry taken, not take it too. */
     vfs_ns_lock(em->mnt);
     *rc = 0;
-    for (i = 0; i < EXT2_NODES; i++) {
-        if (em->nodes[i].used && em->nodes[i].ino == ino) {
-            em->nodes[i].refs++;
+    for (n = em->nodes; n; n = n->next) {
+        if (n->ino == ino) {
+            n->refs++;
             vfs_ns_unlock(em->mnt);
-            return &em->nodes[i];
+            return n;
         }
     }
-    for (i = 0; i < EXT2_NODES; i++) {
-        if (!em->nodes[i].used) {
-            n = &em->nodes[i];
-            break;
-        }
-    }
+    n = node_new(em); /* on the list before the load sleeps */
     if (!n) {
-        klog(KLOG_WARN, "ext2", "node pool full");
+        klog(KLOG_WARN, "ext2", "node: no memory");
         *rc = -ENOMEM;
         vfs_ns_unlock(em->mnt);
         return 0;
     }
-    k_memset(n, 0, sizeof(*n));
-    n->used = 1; /* taken before the load sleeps */
     n->ino = ino;
     *rc = inode_load(em, ino, n);
     if (*rc != 0) {
-        n->used = 0;
+        node_drop(em, n);
         vfs_ns_unlock(em->mnt);
         return 0;
     }
@@ -345,7 +366,7 @@ static void ext2_put(struct vfs_mount *mnt, void *node)
             klog(KLOG_WARN, "ext2", "inode %d: not freed at its last put", (int)n->ino);
             mark_error(em_of(mnt));
         }
-        n->used = 0;
+        node_drop(em_of(mnt), n);
     }
     vfs_ns_unlock(mnt);
 }
@@ -789,7 +810,11 @@ static void ext2_unmount(struct vfs_mount *mnt)
 {
     struct ext2_mount *em = em_of(mnt);
 
-    k_memset(em, 0, sizeof(*em));
+    while (em->nodes) {
+        node_drop(em, em->nodes);
+    }
+    mnt->priv = 0;
+    kfree(em);
 }
 
 /**
@@ -1834,11 +1859,11 @@ static int is_below(struct ext2_mount *em, uint32_t ino, uint32_t ancestor, int 
 /* A node in the pool for `ino` with holds on it, or NULL. */
 static struct ext2_node *node_held(struct ext2_mount *em, uint32_t ino)
 {
-    int i;
+    struct ext2_node *n;
 
-    for (i = 0; i < EXT2_NODES; i++) {
-        if (em->nodes[i].used && em->nodes[i].ino == ino && em->nodes[i].refs > 0) {
-            return &em->nodes[i];
+    for (n = em->nodes; n; n = n->next) {
+        if (n->ino == ino && n->refs > 0) {
+            return n;
         }
     }
     return 0;
@@ -1883,25 +1908,18 @@ static int inode_new(struct ext2_mount *em, uint32_t parent_ino, uint32_t mode, 
 {
     uint32_t ino;
     struct ext2_node *n;
-    int rc, i;
+    int rc;
 
     rc = inode_alloc(em, parent_ino, (mode & S_IFMT_) == S_IFDIR_, &ino);
     if (rc != 0) {
         return rc;
     }
-    for (i = 0; i < EXT2_NODES; i++) {
-        if (!em->nodes[i].used) {
-            break;
-        }
-    }
-    if (i == EXT2_NODES) {
+    n = node_new(em);
+    if (!n) {
         inode_bit_free(em, ino, (mode & S_IFMT_) == S_IFDIR_);
-        klog(KLOG_WARN, "ext2", "node pool full");
+        klog(KLOG_WARN, "ext2", "node: no memory");
         return -ENOMEM;
     }
-    n = &em->nodes[i];
-    k_memset(n, 0, sizeof(*n));
-    n->used = 1;
     n->refs = 1;
     n->ino = ino;
     n->mode = mode;
@@ -1913,14 +1931,14 @@ static int inode_new(struct ext2_mount *em, uint32_t parent_ino, uint32_t mode, 
      * `inode_store` writes only the fields this driver keeps. */
     rc = write_bytes(em, inode_offset(em, ino), 0, 128, 1);
     if (rc != 0) {
-        n->used = 0;
+        node_drop(em, n);
         inode_bit_free(em, ino, (mode & S_IFMT_) == S_IFDIR_);
         return rc;
     }
     if (store) {
         rc = inode_store(em, n);
         if (rc != 0) {
-            n->used = 0;
+            node_drop(em, n);
             inode_bit_free(em, ino, (mode & S_IFMT_) == S_IFDIR_);
             return rc;
         }
@@ -2174,7 +2192,7 @@ static int ext2_create(struct vfs_mount *mnt, void *dir, const char *name, uint3
     if (rc != 0) {
         n->nlink = 0;
         release_inode(em, n);
-        n->used = 0;
+        node_drop(em, n);
         return rc;
     }
     d->mtime = d->ctime = now_seconds();
@@ -2318,7 +2336,7 @@ static int ext2_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32
         n->nlink = 0;
         release_inode(em, n);
     }
-    n->used = 0;
+    node_drop(em, n);
     return rc;
 }
 
@@ -2490,7 +2508,7 @@ static int ext2_symlink(struct vfs_mount *mnt, void *dir, const char *name, cons
         n->nlink = 0;
         release_inode(em, n);
     }
-    n->used = 0;
+    node_drop(em, n);
     return rc;
 }
 
@@ -3438,24 +3456,20 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
 static int ext2_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
                       const char *options)
 {
-    struct ext2_mount *em = 0;
-    int i, rc;
+    struct ext2_mount *em = kzalloc(sizeof(*em));
+    int rc;
 
     (void)options;
-    for (i = 0; i < EXT2_MOUNTS; i++) {
-        if (!ext2_mounts[i].used) {
-            em = &ext2_mounts[i];
-            break;
-        }
-    }
     if (!em) {
         return -ENOMEM;
     }
-    k_memset(em, 0, sizeof(*em));
-    em->used = 1; /* claimed before the constructor sleeps */
+    em->used = 1;
     rc = ext2_mount_on(em, mnt, dev, flags);
     if (rc != 0) {
-        em->used = 0;
+        while (em->nodes) {
+            node_drop(em, em->nodes);
+        }
+        kfree(em);
     }
     return rc;
 }

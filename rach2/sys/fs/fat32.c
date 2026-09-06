@@ -13,6 +13,8 @@
 
 #include "fat32.h"
 
+#include "../mm/kheap.h"
+
 #include "../klog.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
@@ -42,6 +44,7 @@
 #define LFN_MAX_ENTRIES 20 /* 20 * 13 = 260 code units, past the 255 limit */
 
 struct fat_node {
+    struct fat_node *next; /* the mount's list of nodes in memory */
     int used;
     int refs;
     int is_dir;
@@ -84,10 +87,22 @@ struct fat_mount {
     int dirty_set; /* the dirty flag has been written for this mount */
     uint32_t alloc_hint;
     struct vfs_mount *mnt;
-    struct fat_node nodes[FAT32_NODES];
+    struct fat_node *nodes; /* the nodes in memory, from the heap */
 };
 
-static struct fat_mount fat_mounts[FAT32_MOUNTS];
+/* The way a node leaves the mount's list and the heap. */
+static void node_drop(struct fat_mount *fm, struct fat_node *n)
+{
+    struct fat_node **link = &fm->nodes;
+
+    while (*link && *link != n) {
+        link = &(*link)->next;
+    }
+    if (*link) {
+        *link = n->next;
+    }
+    kfree(n);
+}
 
 static int count_free(struct fat_mount *fm);
 struct fat_scan;
@@ -231,29 +246,25 @@ static int chain_at(struct fat_mount *fm, struct fat_node *node, uint32_t first,
 
 static struct fat_node *node_take(struct fat_mount *fm)
 {
-    int i;
+    struct fat_node *n = kzalloc(sizeof(*n));
 
-    for (i = 0; i < FAT32_NODES; i++) {
-        if (!fm->nodes[i].used) {
-            k_memset(&fm->nodes[i], 0, sizeof(fm->nodes[i]));
-            fm->nodes[i].used = 1;
-            fm->nodes[i].refs = 1;
-            return &fm->nodes[i];
-        }
+    if (n) {
+        n->used = 1;
+        n->refs = 1;
+        n->next = fm->nodes;
+        fm->nodes = n;
     }
-    return 0;
+    return n;
 }
 
 /* A node already in the pool for this identity, held once more, or NULL. */
 static struct fat_node *node_find(struct fat_mount *fm, int is_dir, uint32_t dir_cluster,
                                   uint32_t index, uint32_t first)
 {
-    int i;
+    struct fat_node *n;
 
-    for (i = 0; i < FAT32_NODES; i++) {
-        struct fat_node *n = &fm->nodes[i];
-
-        if (!n->used || n->is_dir != is_dir || n->unlinked) {
+    for (n = fm->nodes; n; n = n->next) {
+        if (n->is_dir != is_dir || n->unlinked) {
             continue;
         }
         if (is_dir ? n->first == first : (n->dir_cluster == dir_cluster && n->index == index)) {
@@ -289,7 +300,7 @@ static void fat_put(struct vfs_mount *mnt, void *node)
             free_chain(fm, n->first);
             vfs_ns_unlock(mnt);
         }
-        n->used = 0;
+        node_drop((struct fat_mount *)mnt->priv, n);
     }
 }
 
@@ -1200,13 +1211,10 @@ static int find_entry(struct fat_mount *fm, struct fat_node *dir, uint32_t first
  * holds it, or NULL. */
 static struct fat_node *node_at(struct fat_mount *fm, uint32_t dir_cluster, uint32_t index)
 {
-    int i;
+    struct fat_node *n;
 
-    for (i = 0; i < FAT32_NODES; i++) {
-        struct fat_node *n = &fm->nodes[i];
-
-        if (n->used && !n->unlinked && !n->is_dir && n->dir_cluster == dir_cluster &&
-            n->index == index) {
+    for (n = fm->nodes; n; n = n->next) {
+        if (!n->unlinked && !n->is_dir && n->dir_cluster == dir_cluster && n->index == index) {
             return n;
         }
     }
@@ -1215,12 +1223,10 @@ static struct fat_node *node_at(struct fat_mount *fm, uint32_t dir_cluster, uint
 
 static struct fat_node *dir_node_at(struct fat_mount *fm, uint32_t first)
 {
-    int i;
+    struct fat_node *n;
 
-    for (i = 0; i < FAT32_NODES; i++) {
-        struct fat_node *n = &fm->nodes[i];
-
-        if (n->used && n->is_dir && n->first == first) {
+    for (n = fm->nodes; n; n = n->next) {
+        if (n->is_dir && n->first == first) {
             return n;
         }
     }
@@ -1911,7 +1917,7 @@ static int fat_create(struct vfs_mount *mnt, void *dir, const char *name, uint32
         rc = free_slots(fm, d, d->first, nn.entries + 1, &index);
     }
     if (rc != 0) {
-        n->used = 0;
+        node_drop(fm, n);
         return rc;
     }
     k_memcpy(n->name11, nn.name11, 11);
@@ -1929,7 +1935,7 @@ static int fat_create(struct vfs_mount *mnt, void *dir, const char *name, uint32
     entry_of(n, raw);
     rc = write_name_entries(fm, d->first, index, &nn, raw);
     if (rc != 0) {
-        n->used = 0;
+        node_drop(fm, n);
         return rc;
     }
     *node = n;
@@ -1982,7 +1988,7 @@ static int retire_chain(struct vfs_mount *mnt, struct fat_mount *fm, uint32_t di
         return 0;
     }
     if (n) {
-        n->used = 0;
+        node_drop(fm, n);
     }
     return first ? free_chain(fm, first) : 0;
 }
@@ -2131,7 +2137,7 @@ static int fat_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
         return rc;
     }
     if (held) {
-        held->used = 0;
+        node_drop(fm, held);
     }
     return free_chain(fm, first);
 }
@@ -2347,9 +2353,12 @@ static void fat_unmount(struct vfs_mount *mnt)
 {
     struct fat_mount *fm = fm_of(mnt);
 
-    fm->used = 0;
+    while (fm->nodes) {
+        node_drop(fm, fm->nodes);
+    }
     mnt->priv = 0;
     mnt->root = 0;
+    kfree(fm);
 }
 
 static int k_memcmp_bytes(const uint8_t *a, const uint8_t *b, uint32_t n)
@@ -2892,23 +2901,19 @@ static int fat_mount_on(struct fat_mount *fm, struct vfs_mount *mnt, block_devic
 static int fat_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
                      const char *options)
 {
-    struct fat_mount *fm = 0;
-    int i, rc;
+    struct fat_mount *fm = kzalloc(sizeof(*fm));
+    int rc;
 
-    for (i = 0; i < FAT32_MOUNTS; i++) {
-        if (!fat_mounts[i].used) {
-            fm = &fat_mounts[i];
-            break;
-        }
-    }
     if (!fm) {
         return -ENOMEM;
     }
-    k_memset(fm, 0, sizeof(*fm));
-    fm->used = 1; /* claimed before the constructor sleeps */
+    fm->used = 1;
     rc = fat_mount_on(fm, mnt, dev, flags, options);
     if (rc != 0) {
-        fm->used = 0;
+        while (fm->nodes) {
+            node_drop(fm, fm->nodes);
+        }
+        kfree(fm);
     }
     return rc;
 }

@@ -44,6 +44,20 @@ int vfs_mount_slots(void)
     return mount_slots;
 }
 
+/* The array of eight slots, made once: the boot's root installers both
+ * need it, and either can run first. */
+static void mount_table_init(void)
+{
+    if (mounts) {
+        return;
+    }
+    mount_slots = 8;
+    mounts = kzalloc(sizeof(*mounts) * mount_slots);
+    if (!mounts) {
+        k_panic("vfs: no memory for the mount table");
+    }
+}
+
 /* A record in slot `idx`, allocated if the slot is empty; NULL when the
  * heap has none. */
 static struct vfs_mount *mount_record(int idx)
@@ -1508,11 +1522,7 @@ void vfs_init(void)
         return;
     }
     root_installed = 1;
-    mount_slots = 8;
-    mounts = kzalloc(sizeof(*mounts) * mount_slots);
-    if (!mounts) {
-        k_panic("vfs: no memory for the mount table");
-    }
+    mount_table_init();
     install(0, &vfs_krffs_type, "/", 0);
     install(1, &vfs_devfs_type, "/dev", mounts[0]);
     install(2, &vfs_procfs_type, "/proc", mounts[0]);
@@ -1521,11 +1531,16 @@ void vfs_init(void)
 int vfs_init_root(const struct vfs_type *type, struct block_device *dev, const char *source,
                   int claim)
 {
-    struct vfs_mount *m = mounts[0];
+    struct vfs_mount *m;
     int rc;
 
     if (root_installed) {
         return -EBUSY;
+    }
+    mount_table_init();
+    m = mount_record(0);
+    if (!m) {
+        return -ENOMEM;
     }
     k_memset(m, 0, sizeof(*m));
     m->type = type;

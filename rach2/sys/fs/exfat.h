@@ -23,8 +23,6 @@
  * with the read-only attribute as the write bits, as vfat does.
  */
 
-#define EXFAT_NODES  32
-#define EXFAT_MOUNTS 4
 
 extern const struct vfs_type vfs_exfat_type;
 
