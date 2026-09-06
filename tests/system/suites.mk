@@ -423,6 +423,11 @@ run-grub: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake 
 	    sh tools/image/mkdisk_grub.sh build/rach2/kernel $(GRUB_TEST_DISK)
 	sh tests/system/suites/grub.sh $(GRUB_TEST_DISK) \
 	    "`cat krffs/rach2_demo_password`"
+# `tests/run bootorder`: the GRUB disk on the second AHCI port behind a
+# disk holding nothing, booted by the firmware, its root found as disk 1.
+BOOTORDER_DISK = $(IMAGES_DIR)/bootorder-test.disk
+run-bootorder: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(HARNESS)
+	sh tests/system/suites/bootorder.sh build/rach2/kernel $(HARNESS) $(BOOTORDER_DISK)
 # `tests/run menu`: the boot menu that can be rewritten, and the stub that
 # cannot. Four boots of one GRUB disk: a two-entry menu staged through `bootctl
 # config` with a grubenv key round-tripped and the candidate kernel corrupted; a
@@ -1381,6 +1386,14 @@ DISKS_DISK0 = $(IMAGES_DIR)/disks-test-0.disk
 DISKS_DISK1 = $(IMAGES_DIR)/disks-test-1.disk
 run-disks: rach2 tests krffs test-image $(MKMBR) $(HARNESS)
 	sh tests/system/suites/disks.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(DISKS_DISK0) $(DISKS_DISK1)
+# `tests/run parts`: four tables on four AHCI disks (an MBR with logical
+# partitions, a GPT, a GPT read from its backup, a blank disk), the nodes
+# as the tables number them, the table read again, and the root chosen by
+# identity: found when the disks are swapped, refused when two disks have it.
+PARTS_DIR = $(IMAGES_DIR)/parts
+run-parts: rach2 tests krffs test-image $(MKMBR) $(MKGPT) $(OS_SIMPLE_EXT2) $(HARNESS)
+	sh tests/system/suites/parts.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(MKMBR) $(MKGPT) \
+	    $(OS_SIMPLE_EXT2) $(PARTS_DIR)
 run-persist-ahci: rach2 tests krffs $(HARNESS)
 	$(MKDISK) krffs/manifests/persist-test.manifest $(PERSIST_AHCI_DISK) 64 48
 	$(HARNESS) --kernel build/rach2/kernel \

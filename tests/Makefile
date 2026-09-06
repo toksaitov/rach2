@@ -33,7 +33,7 @@ PROGS = hello filetest forktest shelltest dirtest stattest usbprobe mouseprobe i
         usercopyfault forkleak fdstale dirgrow dirprobe unlinkdirprobe pathcanon timeprobe sigprobe credprobe ownprobe permprobe trapprobe ofdprobe \
         waitprobe pipeprobe pollprobe devprobe ttyprobe jobprobe miscprobe \
         ptyprobe rngprobe orphanprobe loopprobe procprobe suidprobe suidhelper sudoprobe modeprobe searchprobe stickyprobe blockprobe bootprobe persistprobe stressprobe winprobe dirtyprobe rebootprobe lagprobe fpuprobe memprobe poolprobe vfsprobe mountprobe fatwriteprobe usbdiskprobe ext2probe krffsprobe loopdevprobe \
-        idreport fdfull diskfull oomprobe limitprobe loadprobe disksprobe
+        idreport fdfull diskfull oomprobe limitprobe loadprobe disksprobe partsprobe
 
 # These compile+link in one step, so there are no .o intermediates; only the
 # GCC-written .d, which -MF puts under $(BUILD) (build/tests/, from

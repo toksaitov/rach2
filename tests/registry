@@ -62,6 +62,8 @@ grub|qemu-system-i386,mformat,mmd,mcopy,mshowfat|core
 disk|qemu-system-i386|core
 disk-ahci|qemu-system-i386|core
 disks|qemu-system-i386,mformat,mtype|core
+parts|qemu-system-i386,mformat,mtype|core
+bootorder|qemu-system-i386,mformat,mmd,mcopy,mshowfat|full
 disk-q35|qemu-system-i386|full
 diskpolicy|qemu-system-i386|full
 console|qemu-system-i386|core

@@ -290,7 +290,10 @@ if "$HARNESS" --bios \
 else
     fail "the boot from the stick image"
 fi
-if grep -aq 'usbdisk: usb0: mbr: 45056 sectors, 2 partitions' "$LOG"; then
+# The stick's size is the image's: the ISO half grows with the kernel, and
+# the machine must name the whole of what it booted from.
+STICK_SECTORS=$(($(wc -c < "$DIR/stick-boot.img") / 512))
+if grep -aq "usbdisk: usb0: mbr: $STICK_SECTORS sectors, 2 partitions" "$LOG"; then
     note "and the stick it booted from is its usb0 with two partitions: OK"
 else
     fail "the booted machine did not name its own stick"
