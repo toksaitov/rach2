@@ -2864,12 +2864,21 @@ static int32_t ex_write(struct vfs_mount *mnt, void *handle, const void *buf, ui
     have = clusters_of(em, n->length);
     needed = clusters_of(em, end);
     if (needed > have) {
-        rc = room_for(em, (uint32_t)(needed - have));
+        uint64_t want = needed - have;
+
+        /* A cluster count is 32 bits and the volume has no more than
+         * `clusters` of them. Casting a larger demand would ask for its
+         * low half and put the bytes at the wrong cluster. */
+        if (want > (uint64_t)em->clusters) {
+            rc = -ENOSPC;
+            goto out;
+        }
+        rc = room_for(em, (uint32_t)want);
         if (rc == 0) {
             rc = chain_convert(em, n); /* nothing is written before the room is known */
         }
         if (rc == 0) {
-            rc = alloc_run(em, (uint32_t)(needed - have), 1, &run_first, &run_last);
+            rc = alloc_run(em, (uint32_t)want, 1, &run_first, &run_last);
         }
         if (rc != 0) {
             goto out;
@@ -2882,9 +2891,20 @@ static int32_t ex_write(struct vfs_mount *mnt, void *handle, const void *buf, ui
         uint64_t gap_end = have * cbytes < offset ? have * cbytes : offset;
 
         if (gap_end > n->valid) {
-            rc = put_file_bytes(em, n, n->valid, 0, (uint32_t)(gap_end - n->valid));
-            if (rc != 0) {
-                goto undo;
+            uint64_t at = n->valid;
+
+            /* The gap can be longer than a 32-bit count. One cast of it
+             * would clear nothing and then publish a valid length over
+             * clusters that still hold whatever was on the medium. */
+            while (at < gap_end) {
+                uint64_t left = gap_end - at;
+                uint32_t piece = left > 0x40000000u ? 0x40000000u : (uint32_t)left;
+
+                rc = put_file_bytes(em, n, at, 0, piece);
+                if (rc != 0) {
+                    goto undo;
+                }
+                at += piece;
             }
         }
     }
@@ -2983,12 +3003,18 @@ static int ex_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
         uint32_t run_first = 0, run_last = 0;
 
         if (keep > have) {
-            rc = room_for(em, (uint32_t)(keep - have));
+            uint64_t want = keep - have;
+
+            if (want > (uint64_t)em->clusters) {
+                rc = -ENOSPC;
+                goto out;
+            }
+            rc = room_for(em, (uint32_t)want);
             if (rc == 0) {
                 rc = chain_convert(em, n); /* nothing is written before the room is known */
             }
             if (rc == 0) {
-                rc = alloc_run(em, (uint32_t)(keep - have), 0, &run_first, &run_last);
+                rc = alloc_run(em, (uint32_t)want, 0, &run_first, &run_last);
             }
             if (rc != 0) {
                 goto out;

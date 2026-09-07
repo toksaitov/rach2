@@ -1504,7 +1504,12 @@ void devfs_disk_withdraw(void)
     int i;
 
     for (i = 0; i < disk_count(); i++) {
-        disk_at(i)->whole.present = 0;
+        struct disk *d = disk_at(i);
+
+        /* A released slot is still counted and has no record. */
+        if (d) {
+            d->whole.present = 0;
+        }
     }
 }
 

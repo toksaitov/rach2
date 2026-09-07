@@ -3514,6 +3514,19 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
     } else if (em->block_size != 4096) {
         readonly_why = "a block size below 4096 cannot be written in order";
     }
+    /* The descriptor table is `groups` entries of 32 bytes at the block
+     * after the superblock's copy. A count whose table overflows the size
+     * asked of the allocator, or does not fit the volume, describes no
+     * volume this driver can read: without the compiled limit that used
+     * to bound it, the product wraps and the check below reads past what
+     * was allocated. */
+    if (em->groups == 0 || em->groups > 0xFFFFFFFFu / 32 || em->blocks <= em->first_data ||
+        (em->groups * 32 + em->block_size - 1) / em->block_size >
+            em->blocks - em->first_data - 1) {
+        klog(KLOG_WARN, "ext2", "refused: %u groups do not fit a table on %u blocks",
+             (unsigned)em->groups, (unsigned)em->blocks);
+        return -EINVAL;
+    }
     em->gd = kmalloc(em->groups * 32);
     if (!em->gd) {
         return -ENOMEM;
