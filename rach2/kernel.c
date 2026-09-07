@@ -2203,9 +2203,13 @@ static int init_ext2_root(void)
         klog(KLOG_ERR, "ext2", "root: no boot disk with a partition table");
         return -1;
     }
+    /* The entries are the boot disk's, so the reads must go to that disk
+     * and not to the first one the layer published; `rach2.boot=` can name
+     * another. */
     for (i = 0; i < MBR_PART_COUNT; i++) {
+        block_device_t *disk = boot_disk_device ? boot_disk_device : block0;
         char path[] = "/dev/disk0p1";
-        int at = ext2_root_at(block0, disc_parts[i].start_lba, disc_parts[i].sector_count);
+        int at = ext2_root_at(disk, disc_parts[i].start_lba, disc_parts[i].sector_count);
 
         path[11] = (char)('1' + i);
         if (at == 0) {
@@ -2216,7 +2220,7 @@ static int init_ext2_root(void)
                                     "does not mount", path);
             continue;
         }
-        return ext2_root_mount(block0, disc_parts[i].start_lba, disc_parts[i].sector_count, path);
+        return ext2_root_mount(disk, disc_parts[i].start_lba, disc_parts[i].sector_count, path);
     }
     klog(KLOG_ERR, "ext2", "root: no ext2 partition on the disk");
     return -1;
@@ -2273,7 +2277,8 @@ static int init_krffs_disk(void)
        whatever the MBR type byte says, so a GRUB-partitioned disk (boot partition first, KRFFS second)
        still mounts. LBA 0 is never probed; it has the boot code. */
     for (i = 0; i < MBR_PART_COUNT; ++i) {
-        if (krffs_root_at(block0, parts[i].start_lba, parts[i].sector_count)) {
+        if (krffs_root_at(boot_disk_device ? boot_disk_device : block0, parts[i].start_lba,
+                          parts[i].sector_count)) {
             start_lba = parts[i].start_lba;
             sector_count = parts[i].sector_count;
             found = i;
@@ -2285,9 +2290,9 @@ static int init_krffs_disk(void)
         return -1;
     }
     root_source[0] = '\0';
-    if (disk_of(block0)) {
+    if (disk_of(boot_disk_device ? boot_disk_device : block0)) {
         int slot;
-        struct disk *d = disk_of(block0);
+        struct disk *d = disk_of(boot_disk_device ? boot_disk_device : block0);
 
         /* The node the root came from, for `/proc/mounts`: the table entry
          * whose start is the partition's. */
@@ -2297,7 +2302,8 @@ static int init_krffs_disk(void)
             }
         }
     }
-    return krffs_root_mount(block0, start_lba, sector_count, found);
+    return krffs_root_mount(boot_disk_device ? boot_disk_device : block0, start_lba, sector_count,
+                            found);
 }
 
 /**

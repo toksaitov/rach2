@@ -5,8 +5,10 @@
 #include "disk.h"
 #include "diskinfo.h"
 #include "../klog.h"
+#include "../fs/bcache.h"
 #include "../fs/devfs.h"
 #include "../lib/kerrno.h"
+#include "../proc/wait_queue.h"
 
 static struct disk disks[DISK_MAX];
 static int ndisks;
@@ -166,15 +168,34 @@ static int read_backing(void *ctx, uint64_t lba, uint32_t count, void *buf)
     return block_request((block_device_t *)ctx, 0, lba, count, buf);
 }
 
-/* One work area: the scans run one at a time, at boot and from a system
-   call that cannot be preempted. */
+/* One work area, held by the scan that has it: a scan reads through the
+   device and sleeps there, so two `BLKRRPART` calls on two disks would
+   otherwise write over each other's table between the header it checked
+   and the entries it checks against it. A caller that finds it held
+   waits. */
 static uint8_t scan_work[PART_WORK_BYTES];
+static int scan_busy;
+static wait_queue_t scan_wq;
+
+static int scan_free(void *arg)
+{
+    (void)arg;
+    return !scan_busy;
+}
 
 void disk_set_table(struct disk *d, const struct part_table *table, block_device_t *backing)
 {
     int i;
 
     for (i = 0; i < DISK_PARTS; i++) {
+        /* The cache keys a block by its device and its number within that
+         * device, so a view that moves to another place on the medium
+         * must leave no block of its old place behind. A view with a held
+         * or dirty block is not moved: `disk_rescan` refuses while
+         * anything is open, and the rest are dropped here. */
+        if (d->views[i].present) {
+            (void)bcache_invalidate(&d->views[i].part.device);
+        }
         d->views[i].present = 0;
     }
     d->backing = backing;
@@ -193,7 +214,7 @@ void disk_set_table(struct disk *d, const struct part_table *table, block_device
 
 void disk_scan(struct disk *d, block_device_t *backing)
 {
-    int i;
+    int i, rc;
 
     for (i = 0; i < DISK_PARTS; i++) {
         d->views[i].present = 0;
@@ -202,7 +223,14 @@ void disk_scan(struct disk *d, block_device_t *backing)
     /* The table is read through the device itself, which answers at boot
      * where no process could sleep on the lag device; the views go over
      * `backing`. */
-    if (part_scan(&d->table, read_backing, d->dev, d->dev->sector_count, scan_work) != 0) {
+    while (scan_busy) {
+        wq_wait_event_nointr(&scan_wq, scan_free, 0);
+    }
+    scan_busy = 1;
+    rc = part_scan(&d->table, read_backing, d->dev, d->dev->sector_count, scan_work);
+    scan_busy = 0;
+    wq_wake_all(&scan_wq);
+    if (rc != 0) {
         klog(KLOG_WARN, "disk", "disk%d: the first sector could not be read", d->number);
         return;
     }

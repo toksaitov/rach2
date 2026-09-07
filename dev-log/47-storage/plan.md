@@ -135,7 +135,19 @@ Written by the session that ran phases 1 to 5 when its allowance ran out. The ne
 
 `rm -rf build && make` does not work: entry 5 of the shortcomings list, both the parallel and the serial form, since the test manifest stages `build/tests` as an `exec-dir` and no rule makes a directory. Use `rm -rf build && tests/run all`, whose `prepare-all` builds the components in a make of its own first; that is how milestone 46 closed. Read the shortcomings list before any hour-scale run for the same reason. When a suite fails, rebuild what changed and rerun that suite, not the set. Run the Codex units beside the set, not after it: the diff they read is fixed, and only a file a later fix touches needs its unit again.
 
-### What blocks the close, 2026-09-07 17:20
+### Where the five failures stand, 2026-09-07 18:40
+
+`metal`, `drill`, `drill-ext2` and `large` pass. Their failures were expectations this milestone's renaming left behind, not faults in the kernel:
+
+* The metal acceptance looked for the stick under `usb0` in `/proc/usb`, which now names sticks the way the registry does, and it treated `/dev/disk0p1` as a boot partition on a machine that has no hard disk at all. Both corrected in `tests/system/accept/metal_accept.sh`.
+* `sealed` and `drill` asked `test -c /dev/disk0`, and a disk node is a block device now. Four such checks corrected.
+* `large` passed alone; its failure was in the pool of twenty workers, entry 2.
+
+`sealed` still fails, further along than before. In its fault phase it writes `next_entry=fallback` into the GRUB environment block, destroys the KRFFS root's first sector, and expects the machine to try that root and refuse it. The machine boots the candidate on the ext2 root instead, so the one-shot entry is not honoured, and the suite waits for a message that never comes until its deadline. The console log of 2026-09-07 shows `root: MBRID=1acef00d,4: /dev/disk0p4, ext2` where the suite expects `root: MBRID=1acef00d,2: /dev/disk0p2 has no KRFFS file system this kernel mounts`. The menu and the environment block are what this milestone changed in `tools/image/mkdisk_grub.sh` and `vendor/grub/`, so start there: check whether the regenerated core still applies `next_entry` and clears it, and whether `arm_next` in the suite writes a block the new core reads.
+
+Also fixed on the way, from init's own diagnostic: `ifup -a` on the fault boot is killed by a signal rather than exiting, which init now reports as `status -1`.
+
+### What blocked the close, 2026-09-07 17:20
 
 The full set from a clean tree passed 72 of 77 suites. Five failed: `sealed`, `drill`, `drill-ext2`, `metal` and `large`.
 

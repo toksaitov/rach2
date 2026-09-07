@@ -5205,7 +5205,17 @@ static int32_t sys__llseek(isr_params_t *params)
         return -EBADF;
     }
 
+    /* The result pointer is mandatory: a NULL one is a caller bug, not a silent
+     * success (musl always passes a valid loff_t*). */
+    if (!result) {
+        return -EFAULT;
+    }
     off = (long long)(((uint64_t)offset_high << 32) | (uint64_t)offset_low);
+    /* Under the description's lock, as read and write are: the offset is
+     * shared by every descriptor a dup or a fork made, and a seek from
+     * the current position that read it outside the lock would move it
+     * from a place another process had already left. */
+    fd_ofd_lock(entry->ofd);
     switch (whence) {
         case 0: /* SEEK_SET */
             new_off = off;
@@ -5217,18 +5227,15 @@ static int32_t sys__llseek(isr_params_t *params)
             new_off = (long long)size + off;
             break;
         default:
+            fd_ofd_unlock(entry->ofd);
             return -EINVAL;
     }
     if (new_off < 0) {
+        fd_ofd_unlock(entry->ofd);
         return -EINVAL;
     }
-    /* The result pointer is mandatory: a NULL one is a caller bug, not a silent
-     * success (musl always passes a valid loff_t*). */
-    if (!result) {
-        return -EFAULT;
-    }
-
     entry->ofd->offset = (uint64_t)new_off;
+    fd_ofd_unlock(entry->ofd);
     if (copy_to_user(result, &new_off, sizeof(new_off)) != 0) {
         return -EFAULT;
     }

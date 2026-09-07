@@ -50,7 +50,9 @@ extern char **environ;
 
 #define BLKRRPART 0x125Fu
 #define MBR_ENTRIES 446
-#define MBR_REACH 0xFFFFFFFFull /* the largest sector an entry can address */
+/* One past the largest sector an entry can address: a count and an end are
+ * both exclusive here, and the last addressable sector is 0xFFFFFFFF. */
+#define MBR_REACH 0x100000000ull
 
 struct part {
     int disk, number;
@@ -262,8 +264,19 @@ int main(int argc, char **argv)
         limit = MBR_REACH;
     }
     for (i = 0; i < nparts; i++) {
-        if (parts[i].disk == disk && &parts[i] != p && parts[i].start >= end &&
-            parts[i].start < limit) {
+        if (parts[i].disk != disk || &parts[i] == p) {
+            continue;
+        }
+        /* A logical partition is described by a record that lies outside
+         * it, in the extended partition that holds it, and `/proc/disk`
+         * does not name that container. Growing up to the logical's own
+         * start would write over the record that names it, so a logical
+         * partition after this entry stops the growth altogether. */
+        if (parts[i].number >= 5 && parts[i].start >= end) {
+            return fail(part_node, "an extended partition lies after it, and its records are "
+                                   "not where this can see them");
+        }
+        if (parts[i].start >= end && parts[i].start < limit) {
             limit = parts[i].start;
         }
     }

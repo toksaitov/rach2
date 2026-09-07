@@ -43,6 +43,22 @@ static void clear_entry(struct part_entry *e)
  * one already taken, in which case it is counted in `refused`. Returns the
  * entry, or NULL when it was refused.
  */
+/* Whether sector `lba` lies inside a partition already accepted: the next
+   record of an extended chain may not, or the partition holding it would
+   be written over its own table. */
+static int inside_accepted(const struct part_table *t, uint64_t lba)
+{
+    int i;
+
+    for (i = 0; i < t->count; i++) {
+        if (lba >= t->parts[i].start_lba &&
+            lba < t->parts[i].start_lba + t->parts[i].sector_count) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static struct part_entry *take(struct part_table *t, int number, uint64_t start, uint64_t count,
                                uint64_t low, uint64_t high)
 {
@@ -61,7 +77,9 @@ static struct part_entry *take(struct part_table *t, int number, uint64_t start,
             return 0;
         }
     }
-    if (t->count >= PART_MAX) {
+    /* The count and the number both, since devfs gives a minor per number
+     * and a number past the table's would take the next disk's. */
+    if (t->count >= PART_MAX || number < 1 || number > (int)PART_MAX) {
         t->refused++;
         return 0;
     }
@@ -105,7 +123,11 @@ static void follow_logical(struct part_table *t, part_read_fn read, void *ctx,
         if (read(ctx, ebr, 1, sector) != 0 || sector[510] != 0x55 || sector[511] != 0xAA) {
             return;
         }
-        if (e0[4] != 0 && le32(e0 + 12) != 0) {
+        /* The record itself is not data: a partition that began at the
+         * EBR would be published over the bytes that name it, and a later
+         * record in the chain would sit inside an accepted range, so
+         * writing the first would destroy the second. */
+        if (e0[4] != 0 && le32(e0 + 12) != 0 && le32(e0 + 8) != 0) {
             struct part_entry *e = take(t, number, ebr + le32(e0 + 8), le32(e0 + 12), ebr + 1,
                                         ext_last);
 
@@ -118,7 +140,7 @@ static void follow_logical(struct part_table *t, part_read_fn read, void *ctx,
             return;
         }
         next = ext_start + le32(e1 + 8);
-        if (next <= ext_start || next > ext_last || next == ebr) {
+        if (next <= ext_start || next > ext_last || next == ebr || inside_accepted(t, next)) {
             t->refused++;
             return;
         }
