@@ -9,16 +9,18 @@
  * any page is allocated. The alloc stub records whether allocation was
  * reached, so a test tells a validation reject (alloc never reached) from an
  * image that passed validation (reached alloc, which the stub then fails). A
- * multi-segment defect (an overlapping pair) needs the first segment to load
- * fully, which the 32-bit physical-pointer model cannot fake natively, so
- * that case is left to a guest exec test. Returns the failed-check count (0
- * == pass).
+ * separate reentry row maps synthetic frame numbers to host buffers and loads
+ * a second image inside the first image's read callback. Both loads must retain
+ * their own segment geometry and bytes. Returns the failed-check count.
  */
 
 #include "proc/elf.c"
 
 static int fails;
 static int alloc_reached;
+static int map_frames;
+static unsigned frame_count;
+static unsigned char frames[4][PAGE_SIZE];
 
 #define CHECK(cond)    \
     do {               \
@@ -27,15 +29,24 @@ static int alloc_reached;
         }              \
     } while (0)
 
-/* The kernel stubs elf.c links against; only alloc_user_page is reached, and
- * only once an image has passed validation (which is exactly what it records).
- */
+/** Fail allocation in rejection rows; map frames in the reentry row. */
 uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
 {
-    (void)dir;
-    (void)virt_addr;
+    uintptr_t phys;
+    page_table_t *pt;
+
     alloc_reached = 1;
-    return 0;
+    if (!map_frames || frame_count == 4) {
+        return 0;
+    }
+    pt = dir->logical_page_tables[virt_addr / PAGE_SIZE / 1024];
+    CHECK(pt != NULL);
+    if (!pt) {
+        return 0;
+    }
+    phys = ++frame_count * PAGE_SIZE;
+    pt->pages[virt_addr / PAGE_SIZE % 1024] = (uint32_t)phys | 7u;
+    return phys;
 }
 
 void paging_set_writable(page_dir_t *dir, uintptr_t addr, bool writable)
@@ -45,12 +56,24 @@ void paging_set_writable(page_dir_t *dir, uintptr_t addr, bool writable)
     (void)writable;
 }
 
-/* Never reached: the loader maps a frame only after `alloc_user_page` gave
- * one, and the stub above gives none. */
+/** Map synthetic frame numbers without truncating a host pointer to 32 bits. */
 void *kmap_temp(uintptr_t phys)
 {
-    (void)phys;
-    return NULL;
+    if (phys == 0 || phys / PAGE_SIZE > frame_count) {
+        return NULL;
+    }
+    return frames[phys / PAGE_SIZE - 1];
+}
+
+int paging_zero_frame(uintptr_t phys)
+{
+    void *page = kmap_temp(phys);
+
+    if (!page) {
+        return -1;
+    }
+    k_memset(page, 0, PAGE_SIZE);
+    return 0;
 }
 
 void kunmap_temp(void *va)
@@ -155,6 +178,83 @@ static int run(page_dir_t *dir, elf_image_t *out)
     return elf_load_image(test_read, 0, dir, out);
 }
 
+struct nested_image {
+    unsigned char bytes[8192];
+    uint32_t size;
+    struct nested_image *other;
+    page_dir_t dir;
+    page_table_t table;
+    elf_image_t loaded;
+    int result;
+};
+
+/** A segment read may sleep while another process completes its own exec. */
+static int nested_read(void *ctx, void *dst, uint32_t count, uint32_t off)
+{
+    struct nested_image *image = ctx;
+
+    if (off == 0 && count > sizeof(Elf32_Ehdr) && image->other) {
+        struct nested_image *other = image->other;
+
+        image->other = NULL;
+        other->result = elf_load_image(nested_read, other, &other->dir, &other->loaded);
+    }
+    if (off >= image->size) {
+        return 0;
+    }
+    if (count > image->size - off) {
+        count = image->size - off;
+    }
+    k_memcpy(dst, image->bytes + off, count);
+    return (int)count;
+}
+
+/** Two valid images with different second segments must load independently. */
+static void reentrant_load(void)
+{
+    static struct nested_image images[2];
+    int i, j;
+
+    k_memset(images, 0, sizeof(images));
+    for (i = 0; i < 2; i++) {
+        uint32_t addr = 0x08048000u + (uint32_t)i * 0x01000000u;
+
+        base_image(2);
+        set_load(0, 0, addr, 0x100u, 0x100u, PF_R | PF_X);
+        set_load(1, 0x200u, addr + (uint32_t)(i + 1) * PAGE_SIZE, 0x100u, 0x100u, PF_R | PF_W);
+        ((Elf32_Ehdr *)img_buf)->e_entry = addr;
+        img_size = 0x300u;
+        for (j = 0x200; j < 0x300; j++) {
+            img_buf[j] = (unsigned char)(i + 1);
+        }
+        k_memcpy(images[i].bytes, img_buf, img_size);
+        images[i].size = img_size;
+        images[i].dir.logical_page_tables[addr / PAGE_SIZE / 1024] = &images[i].table;
+    }
+    images[0].other = &images[1];
+    frame_count = 0;
+    map_frames = 1;
+    images[0].result = elf_load_image(nested_read, &images[0], &images[0].dir, &images[0].loaded);
+    map_frames = 0;
+    for (i = 0; i < 2; i++) {
+        uint32_t addr = 0x08048000u + (uint32_t)i * 0x01000000u;
+        uint32_t second = addr + (uint32_t)(i + 1) * PAGE_SIZE;
+        uintptr_t phys = images[i].table.pages[second / PAGE_SIZE % 1024] & ~0xFFFu;
+        unsigned char *page = kmap_temp(phys);
+
+        CHECK(images[i].result == 0);
+        CHECK(images[i].loaded.nsegs == 2);
+        CHECK(images[i].loaded.phdr_vaddr == addr + sizeof(Elf32_Ehdr));
+        CHECK(images[i].loaded.segs[1].start == second);
+        CHECK(page != NULL);
+        if (page) {
+            for (j = 0; j < 0x100; j++) {
+                CHECK(page[j] == (unsigned char)(i + 1));
+            }
+        }
+    }
+}
+
 int main(void)
 {
     page_dir_t dir;
@@ -220,6 +320,8 @@ int main(void)
     base_image(1);
     set_load(0, 0x100u, 0x08048000u, 0x100u, 0x100u, 5u);
     CHECK(run(&dir, &out) == -1 && alloc_reached == 1);
+
+    reentrant_load();
 
     return (fails > 100) ? 100 : fails;
 }

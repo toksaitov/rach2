@@ -5676,10 +5676,6 @@ static int exec_vfs_read(void *ctx, void *dst, uint32_t count, uint32_t off)
     struct exec_vfs_ctx *c = ctx;
     int32_t got = vfs_read(c->ref.mnt, c->handle, dst, count, off);
 
-    if (got != (int32_t)count) {
-        klog(KLOG_ERR, "exec", "read: pid %d off %d wanted %d got %d",
-             (int)current_proc->pid, (int)off, (int)count, (int)got);
-    }
     if (got < 0) {
         c->err = got;
         return -1;
@@ -6438,7 +6434,6 @@ interpreter_checked:
     if (elf_load_image(s->vfs.ref.mnt ? exec_vfs_read : exec_krffs_read,
                        s->vfs.ref.mnt ? (void *)&s->vfs : (void *)name, proc_dir,
                        &img) != 0) {
-        klog(KLOG_ERR, "exec", "load failed: pid %d name %s", (int)current_proc->pid, name);
         exec_vfs_done(&s->vfs);
         exec_fail_destroyed(1);
     }

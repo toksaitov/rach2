@@ -76,3 +76,33 @@ suites that failed the full set, all nineteen Codex review findings, and the dis
 speed-up. What remains for the close is this failure, then the milestone Readme with
 its hashes and the index entry. The handoff section in `dev-log/47-storage/plan.md`
 carries the rest.
+
+## Diagnosis and fix, 2026-09-07
+
+`elf_load_image()` in `rach2/sys/proc/elf.c` kept `phdrs[ELF_MAX_PHNUM]` static. The argument workspace in `sys_execve()` was already per process, but the loader's program headers were still shared. Init starts the console login and update process before it forks `ifup`; their execs can overlap. An ext2 cache miss follows `exec_vfs_read` -> `vfs_read` -> `ext2_read` -> `read_data` -> `read_bytes` -> `bcache_get` -> `block_request` -> `req_run_one`, which sleeps in `wq_wait_event_nointr`. A second exec overwrites the suspended loader's headers. `in_syscall` prevents timer preemption, but does not prevent this explicit wait.
+
+The serial variant of the two-boot harness reproduced step 1 failures in login and Dropbear. Instrumentation compared the program headers across each segment read and reported:
+
+```text
+elf: headers changed: pid 2 segment 0 off 4096 got 4096 wanted 4096
+elf: header: before vaddr 8048000 offset 0 size 155ec; after vaddr 8048000 offset 0 size dbf4c
+exec: read: pid 2 off 901120 wanted 531 got 0
+elf: reject: pid 2 line 472
+exec: load failed: pid 2 name bin/login
+exec: pid 2 died: the image was destroyed and step 1 failed
+elf: headers changed: pid 18 segment 0 off 49152 got 4096 wanted 4096
+elf: header: before vaddr 8048000 offset 0 size 4f9d0; after vaddr 8048000 offset 0 size 155ec
+elf: reject: pid 18 line 380
+exec: load failed: pid 18 name bin/dropbearmulti
+exec: pid 18 died: the image was destroyed and step 1 failed
+```
+
+The line numbers above belong to the instrumented source. Line 472 rejects a segment read shorter than requested; line 380 rejects a segment that precedes the previous segment's page-aligned end. The first read that observed changed headers completed all 4096 bytes. The later zero-byte read was ext2's correct EOF answer to an offset taken from another executable's headers. `i686-elf-readelf -l` confirms the sizes above in the staged login, BusyBox and Dropbear binaries; offset 901120 (`0xdc000`) and length 531 (`0x213`) describe BusyBox's second load segment, which login was incorrectly trying to read from its own file. This is a shared-loader-state defect exposed by sleeping disk reads, not evidence of corrupt disk data or an incorrect ext2 EOF return.
+
+The fix makes the program-header array automatic: 32 entries of 32 bytes, private to each call on its process's 16 KiB kernel stack. The temporary comparison and rejection instrumentation was removed; the existing step-numbered `exec_fail_destroyed()` diagnostic remains.
+
+The host ELF regression completes a second load inside the first load's segment-read callback, then checks both images' segment addresses, program-header address and data. It passes with private headers, fails with exit status 5 when the array is restored to static, and passes after restoration and recompilation, under AddressSanitizer and UndefinedBehaviorSanitizer.
+
+The original SSH harness could not start in the Codex sandbox: QEMU could not establish its forwarding rule, and a localhost bind returned `Operation not permitted`. All reproduction files were kept under `build/boot2-debug/`. `serial-boot2.py` uses a private copy of the sealed disk, stages the built kernel on its FAT partition while QEMU is stopped, and performs `bootctl status`, the mount and command-line reads, the kernel install, the refused early commit, status and `sync; reboot -f` through the serial login. It preserves AHCI, user networking, DHCP and the GRUB trial boot. In these runs both boots mounted the ext2 root, correcting the earlier assumption that boot 1 necessarily used KRFFS.
+
+Two runs of the same serial variant with the fixed kernel reached login, acquired a DHCP lease and started Dropbear without a step-numbered exec failure. The complete style checker passed using a copy of `tools/verify/check.sh` whose repository and scratch paths point inside this repository. The full host suite was not run because several of its fixtures use fixed paths under `/tmp`; the changed ELF host test was compiled and run separately with the suite's sanitizer flags. The full SSH-driven `tests/run sealed` remains unverified in this sandbox; a serial boot does not establish that the full suite passes. The before-and-after console logs and the mutation output are under `build/boot2-debug/`.
