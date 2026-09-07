@@ -46,16 +46,20 @@ The check's workspace and the descriptor table come from the heap, so a volume i
 
 ## What was accepted
 
-* Commit: `49f4199`, the last change of the driver and its host test; the documents came after it.
-* Build options: the repository's default kernel builds, `-ansi` with `-Werror` and no libgcc; the host tests build with `-m32 -mno-sse -mno-sse2 -ansi` and `-Werror`. The guest kernel is also built with the staged TinyCC. The storage suites boot QEMU with `-cpu max`, the AHCI rows on `-machine q35` and the IDE rows on the default machine, and give `rach2.root=` as a partition identifier, an MBR signature and entry, a file-system identifier, a label and a node path in their respective rows. `large` runs at `RACH2_LARGE_MIB=256` and was run once at 5120; `grow` runs on a 16 GiB disk and was run once with `RACH2_GROW_LENOVO=1`.
-* SHA-256 of the kernels and images built from it, `build/` removed first:
-  * `d154564fd6feb39ab4c89fe58949741cb01d4beeb0c861d189dcec0f50aa65b8` `build/rach2/kernel`
-  * `c20873792b43a5a90d7336a2e67cf0723243d16e962cf2a0a75ff262377a3428` `build/rach2-recovery/kernel`
-  * `241eec09fc9f0591451bb8b86e69c7d03dbe4937b17eb555aa5d8206bf153689` `build/rach2-metal/kernel`
+* Commit: `55c003a`, the last change of the code; the documents came after it.
+* Build options: the repository's default kernel builds, `-ansi` with `-Werror` and no libgcc; the host tests build with `-m32 -mno-sse -mno-sse2 -ansi` and `-Werror`. The guest kernel is also built with the staged TinyCC. Every kernel source this milestone changed was compiled again with `-Wdeclaration-after-statement -Werror`, which the ordinary build does not use and which found three declarations after statements. The storage suites boot QEMU with `-cpu max`, the AHCI rows on `-machine q35` and the IDE rows on the default machine, and give `rach2.root=` as a partition identifier, an MBR signature and entry, a file-system identifier, a label and a node path in their respective rows. `large` runs at `RACH2_LARGE_MIB=256` and was run once at 5120; `grow` runs on a 16 GiB disk and was run once with `RACH2_GROW_LENOVO=1`.
+* SHA-256 of the kernels and images the closing run used:
+  * `8f1a91a63784dbeac6f447766e4c04357aa565a9567fedb6f57d9f6050d228fe` `build/rach2/kernel`
+  * `b672a0604c48feb41d8d048a1afb50e06213b39d635bc5b601af41295b23db69` `build/rach2-recovery/kernel`
+  * `7cca66c7c15d4ca3241020ea42471345c79f45dd26ba77d38313f3c92fae23a0` `build/rach2-metal/kernel`
   * `2b61d411a9093de551b99a9c7d4dd07239251dccc1cb8d1a44174e9c6c0cdcc6` `build/images/test.krffs`
-  * `50e2f2d9c49518b65e7306c805cfdde53d3f5b50578dccfdf5a4c73a333d2a5a` `build/images/os-simple.krffs`
-  * `337f106f4c8e3bc6220de88b10cf05f4e5b37df7f2f668c4d2b54dee01d55318` `build/images/os-real.krffs`
-  * `30938c5c652bd3f28e16dc3ed7458fb4a8948ca02c47b812d4fb602a6e61fb0b` `build/images/rach2-recovery.krffs`
+  * `7591b2c6865aa59e6a3696d6ea8e2e6f83bf6d9db57dd51162943f69a4609569` `build/images/os-simple.krffs`
+  * `ece75e26255347962bc21267f9b789a2ad956a3315f2db74c989a402fb466041` `build/images/os-real.krffs`
+  * `47fddee91dea3263b99201174a5d3c17a98a3d5ba01a8ca3932c6304a040f837` `build/images/rach2-recovery.krffs`
   * `f91c106ba842c10e1df8489069c9eb2e9fb5f453ea2334c12c83cec955dd79a6` `build/images/rach2-metal.krffs`
-* Closing test command and result: `tests/run all` on 2026-09-07, from a removed `build/`, all 84 suites passed in 2179 s at 20 workers. An earlier attempt at the same run, in a host session that denied socket binds and disk-image attaches, failed 22 suites for that reason alone; it is entry 17 of the shortcomings list, and every suite it lost passed in the run above.
+* Test commands and results, both at 20 workers on 2026-09-07:
+  * `rm -rf build && tests/run all` at `49f4199`, before the review: all 84 suites passed in 2179 s.
+  * `tests/run all` at `55c003a`, after every review finding was fixed: all 84 suites passed in 2274 s.
+  * An earlier attempt at the first of these, in a host session that denied socket binds and disk-image attaches, failed 22 suites for that reason alone; it is entry 17 of the shortcomings list, and every suite it lost passed in the runs above.
+* Review: the milestone's diff, `c267442..49f4199`, went to Codex in five units grouped by contract, at most six files each: the block core, the drivers, the file systems and the cache, the system calls and the loader, and the tools that write a disk. They returned 21 findings, 16 of them the reviewer's highest severity. Twenty were fixed in `d0199c9`, `047658e`, `eb8af06` and `55c003a`. One, the buffer cache writing a deferred pointer block before the batch's bitmaps when it evicts under pressure, is entry 18 of the shortcomings list, and the claim it breaks is narrowed above to what the code gives.
 * Hardware arrangement: Apple M4 host, macOS 26.6.2, QEMU 11.1.1. No run or write on the Lenovo.
