@@ -14,7 +14,7 @@ The root is named on the boot line by `rach2.root=` as a partition identifier, a
 
 AHCI takes an interrupt vector after the root is mounted, enables each port's completion and fatal interrupts, and keeps one command active per port with a queue behind it. The polled path stays for the page-fault context, draining the port first. The IDE driver was rewritten for both channels and both drives, with the 48-bit commands above sector 2^28, and refuses a drive whose logical sector is not 512 bytes, as the AHCI driver does.
 
-A block request carries up to the device's own limit, sixty-four sectors on AHCI, in heap pages that the command table describes one entry per page. The buffer cache finds a block through an index by device and block, and writes runs of adjacent dirty blocks in one request. An ext2 write marks the bitmap bytes, descriptors and pointer words its allocations touch and writes them at the end of the write, the bitmaps and descriptors before the pointers that name their blocks.
+A block request carries up to the device's own limit, sixty-four sectors on AHCI, in heap pages that the command table describes one entry per page. The buffer cache finds a block through an index by device and block, and writes runs of adjacent dirty blocks in one request. An ext2 write marks the bitmap bytes, descriptors and pointer words its allocations touch and writes them at the end of the write, the bitmaps and descriptors before the pointers that name their blocks. The order holds for the write the batch itself performs; a pointer block the cache evicts under pressure before the batch ends goes out ahead of them, which entry 18 of the shortcomings list records.
 
 A file offset is 64 bits throughout, `_llseek` reaches any offset the format allows, and `ftruncate64` exists. Each file system refuses a write or a truncate past its own limit by name: ext2's is the reach of its pointers or its 32-bit block count, 2095103 MiB at 4096-byte blocks; FAT32's is 4 GiB; exFAT's is the seek's own reach. ext2 stores the high half of a regular file's size and sets the volume's large-file flag before the inode that needs it.
 
@@ -46,4 +46,16 @@ The check's workspace and the descriptor table come from the heap, so a volume i
 
 ## What was accepted
 
-MILESTONE_ACCEPTED
+* Commit: `49f4199`, the last change of the driver and its host test; the documents came after it.
+* Build options: the repository's default kernel builds, `-ansi` with `-Werror` and no libgcc; the host tests build with `-m32 -mno-sse -mno-sse2 -ansi` and `-Werror`. The guest kernel is also built with the staged TinyCC. The storage suites boot QEMU with `-cpu max`, the AHCI rows on `-machine q35` and the IDE rows on the default machine, and give `rach2.root=` as a partition identifier, an MBR signature and entry, a file-system identifier, a label and a node path in their respective rows. `large` runs at `RACH2_LARGE_MIB=256` and was run once at 5120; `grow` runs on a 16 GiB disk and was run once with `RACH2_GROW_LENOVO=1`.
+* SHA-256 of the kernels and images built from it, `build/` removed first:
+  * `d154564fd6feb39ab4c89fe58949741cb01d4beeb0c861d189dcec0f50aa65b8` `build/rach2/kernel`
+  * `c20873792b43a5a90d7336a2e67cf0723243d16e962cf2a0a75ff262377a3428` `build/rach2-recovery/kernel`
+  * `241eec09fc9f0591451bb8b86e69c7d03dbe4937b17eb555aa5d8206bf153689` `build/rach2-metal/kernel`
+  * `2b61d411a9093de551b99a9c7d4dd07239251dccc1cb8d1a44174e9c6c0cdcc6` `build/images/test.krffs`
+  * `50e2f2d9c49518b65e7306c805cfdde53d3f5b50578dccfdf5a4c73a333d2a5a` `build/images/os-simple.krffs`
+  * `337f106f4c8e3bc6220de88b10cf05f4e5b37df7f2f668c4d2b54dee01d55318` `build/images/os-real.krffs`
+  * `30938c5c652bd3f28e16dc3ed7458fb4a8948ca02c47b812d4fb602a6e61fb0b` `build/images/rach2-recovery.krffs`
+  * `f91c106ba842c10e1df8489069c9eb2e9fb5f453ea2334c12c83cec955dd79a6` `build/images/rach2-metal.krffs`
+* Closing test command and result: `tests/run all` on 2026-09-07, from a removed `build/`, all 84 suites passed in 2179 s at 20 workers. An earlier attempt at the same run, in a host session that denied socket binds and disk-image attaches, failed 22 suites for that reason alone; it is entry 17 of the shortcomings list, and every suite it lost passed in the run above.
+* Hardware arrangement: Apple M4 host, macOS 26.6.2, QEMU 11.1.1. No run or write on the Lenovo.
