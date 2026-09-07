@@ -150,6 +150,7 @@ static struct {
     int power_on_refuse; /* SET_FEATURE(PORT_POWER) on a port that is off is stalled */
     int pull_on_open;    /* the next device opened is pulled while its Enable Slot is out */
     int hold_commands;   /* no command answers while set */
+    int slot_cap;        /* the slots the controller has, 0 for fifteen */
     int change_stall;    /* the change endpoint answers with a stall */
     /* The transfer outstanding on the change endpoint. */
     int change_device;
@@ -336,6 +337,18 @@ int xhci_command_busy(struct xhci_ctrl *hc)
     return 0;
 }
 
+/* The controller answering that every slot it has is taken. */
+static void command_no_slots(void)
+{
+    if (command_pending) {
+        model.double_issues++;
+    }
+    command_pending = 1;
+    command_result_pending.device = 0;
+    command_result_pending.status = USB_XFER_FAILED;
+    command_result_pending.code = USB_NO_SLOTS;
+}
+
 static void command_ok(int device)
 {
     if (command_pending) {
@@ -344,6 +357,7 @@ static void command_ok(int device)
     command_pending = 1;
     command_result_pending.device = device;
     command_result_pending.status = USB_XFER_OK;
+    command_result_pending.code = 0;
 }
 
 int xhci_command_done(struct xhci_ctrl *hc, struct usb_command_result *out)
@@ -381,6 +395,10 @@ int xhci_device_open(struct xhci_ctrl *hc, const struct usb_location *where, int
 
     if (slots_given >= 15) {
         return -1;
+    }
+    if (model.slot_cap != 0 && slots_given >= model.slot_cap) {
+        command_no_slots();
+        return 0; /* the command went out; its answer is the refusal */
     }
     n = ++slots_given;
     slot_of[n].where = *where;
@@ -1526,6 +1544,36 @@ int main(void)
     model.hub_desc_stall = 1;
     pump(2000);
     CHECK("a hub that will not give its descriptor is closed", closes == 1 && running_count() == 0);
+
+    /* Every slot taken: the device waits for one rather than being refused,
+       and takes the slot another device gives back. */
+    model_reset();
+    pump(2000);
+    CHECK("the hub is up with nothing below it", running_count() == 1);
+    model.port_kind[0] = KIND_KBD;
+    model.port_change[0] |= 1u;
+    model_change(1);
+    pump(3000);
+    CHECK("a keyboard below it is enumerated", running_count() == 2);
+    {
+        int held = slots_given;
+
+        /* The controller has no slot left from here. */
+        model.slot_cap = held;
+        model.port_kind[1] = KIND_KBD;
+        model.port_change[1] |= 1u;
+        model_change(2);
+        pump(3000);
+        CHECK("a device that finds no slot is not refused", running_count() == 2);
+        CHECK("and it keeps its entry, waiting", free_count() == USB_MAX_DEVICES - 3);
+        CHECK("with no slot taken for it", slots_given == held);
+
+        /* One comes free. */
+        model.slot_cap = held + 1;
+        pump(3000);
+        CHECK("and it is enumerated once a slot comes free",
+              slots_given == held + 1 && running_count() == 3);
+    }
 
     if (fails == 0) {
         printf("hub_hosttest: OK\n");

@@ -95,6 +95,9 @@
  * and never will be: the controller may still write into the rings and the
  * context that slot names, so nothing of this device is reused. */
 #define ST_TOMBSTONE  17
+/* Every slot the controller has is taken. The device keeps its entry and its
+ * reset, and asks again when one comes free. */
+#define ST_SLOTWAIT   19
 
 struct usb_device_state {
     int index; /* its entry in the table, which the record no longer implies */
@@ -121,6 +124,8 @@ struct usb_device_state {
     int hub_multi;
     uint32_t deadline;
     int closing_asked;
+    /* Said once, so a device waiting for a slot does not say so every pass. */
+    int waiting_said;
     /* Set when the device left with a command of its own in flight: the
      * answer is taken before the entry closes, because an Enable Slot that
      * answers after its device has gone would leave the slot the
@@ -937,9 +942,41 @@ static void step_device(struct usb_device_state *d)
         arm(d);
         return;
 
+    case ST_SLOTWAIT:
+        /* Ask again. A slot comes free when another device closes, and
+         * nothing else here has to know when that was. */
+        if (!expired(d)) {
+            return;
+        }
+        if (enumerating[bus_of(d)] >= 0 && enumerating[bus_of(d)] != index) {
+            d->deadline = core_ms + STEP_MS;
+            return;
+        }
+        enumerating[bus_of(d)] = index;
+        if (xhci_device_open(d->hc, &d->where, d->speed) != 0) {
+            d->deadline = core_ms + STEP_MS;
+            return;
+        }
+        d->state = ST_SLOT;
+        arm(d);
+        return;
+
     case ST_SLOT:
         answer = command_result(d, &result);
         if (answer == 0) {
+            return;
+        }
+        if (answer == 1 && result.status != USB_XFER_OK && result.code == USB_NO_SLOTS) {
+            /* Every slot is taken. The device is not refused: it keeps the
+             * entry and the reset it has, and asks again when a slot comes
+             * free, which is what unplugging another device does. */
+            if (!d->waiting_said) {
+                klog(KLOG_INFO, "usb", "device: port %s: waiting for a slot", path_of(d));
+                d->waiting_said = 1;
+            }
+            enumerating[bus_of(d)] = -1;
+            d->state = ST_SLOTWAIT;
+            d->deadline = core_ms + STEP_MS;
             return;
         }
         if (answer < 0 || result.device <= 0) {
@@ -1640,8 +1677,12 @@ int usb_core_idle(void)
     int i;
 
     for (i = 0; i < USB_MAX_DEVICES; i++) {
+        /* A device waiting for a slot is not work in progress: it waits for
+         * another device to go, which may be never, and a caller that
+         * waited for the stack to be idle would wait with it. */
         if (dev_at(i)->state != ST_FREE && dev_at(i)->state != ST_RUNNING &&
-            dev_at(i)->state != ST_FAILED && dev_at(i)->state != ST_TOMBSTONE) {
+            dev_at(i)->state != ST_FAILED && dev_at(i)->state != ST_TOMBSTONE &&
+            dev_at(i)->state != ST_SLOTWAIT) {
             return 0;
         }
     }

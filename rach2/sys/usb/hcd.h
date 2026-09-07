@@ -101,6 +101,11 @@ struct usb_transfer {
 #define USB_XFER_FAILED  3
 
 /** What `command_done` reports about the command in flight. */
+/* The completion code a controller gives when every device slot it has is
+ * taken. It is not a failure of the command: the caller asks again when one
+ * comes free. */
+#define USB_NO_SLOTS 9
+
 struct usb_command_result {
     int status; /* `USB_XFER_OK`, or a failure from the same set */
     int code;   /* the controller's own completion code, for the record */
