@@ -162,7 +162,16 @@ int netconf_is_broadcast(uint32_t ip)
     return ip == netconf_broadcast() || ip == 0xFFFFFFFFu;
 }
 
-int netdev_tx(const uint8_t *frame, uint16_t len)
+/* The interface the stack sends through. This test never looks inside one,
+ * so a record of its own is all that is needed. */
+static struct netdev the_iface;
+
+struct netdev *netdev_first(void)
+{
+    return &the_iface;
+}
+
+int netdev_tx(struct netdev *nd, const uint8_t *frame, uint16_t len)
 {
     (void)frame;
     (void)len;

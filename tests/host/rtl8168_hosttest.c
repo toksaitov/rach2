@@ -662,6 +662,9 @@ static int find_eri_write(unsigned from, unsigned addr)
     return -1;
 }
 
+/* The record this driver hands back for its one card, which is nothing. */
+static void *model_dev;
+
 int main(void)
 {
     int a, b, c, d, e;
@@ -670,7 +673,7 @@ int main(void)
     /* ---- the bring-up completes on a healthy model ---- */
     model_reset();
     {
-        int rc = rtl8168_init();
+        int rc = rtl8168_init(0, &model_dev);
 
         if (rc != 1) {
             printf("  init refused: %s\n", r8168_err);
@@ -811,53 +814,60 @@ int main(void)
     /* ---- the chip this driver refuses ---- */
     model_reset();
     model_xid_txconfig = 0x5c8u << 20; /* an 8168 that is not the GU */
-    CHECK(rtl8168_init() == NETDEV_FAILED, "a different 8168 is refused");
+    CHECK(rtl8168_init(0, &model_dev) == NETDEV_FAILED, "a different 8168 is refused");
     CHECK(r8168_up == 0, "the driver stays down after a refusal");
 
     /* An identifier differing only in the bits the family mask ignores is the
        same chip and must be accepted. */
     model_reset();
     model_xid_txconfig = (0x509u | 0x800u) << 20;
-    CHECK(rtl8168_init() == NETDEV_UP, "an identifier differing outside the mask is accepted");
+    CHECK(rtl8168_init(0, &model_dev) == NETDEV_UP,
+          "an identifier differing outside the mask is accepted");
 
     /* A window that reads back all ones is an absent device, not a chip. */
     model_reset();
     model_xid_txconfig = 0xfff00000u;
-    CHECK(rtl8168_init() == NETDEV_FAILED, "an all-ones window is refused");
+    CHECK(rtl8168_init(0, &model_dev) == NETDEV_FAILED, "an all-ones window is refused");
 
     model_reset();
     pci_present = 0;
-    CHECK(rtl8168_init() == NETDEV_ABSENT, "an absent card reports absence, not failure");
+    CHECK(rtl8168_init(0, &model_dev) == NETDEV_ABSENT,
+          "an absent card reports absence, not failure");
 
     /* ---- every handshake that never completes is bounded ---- */
     model_reset();
     model_stuck_fifo = 1;
-    CHECK(rtl8168_init() == NETDEV_FAILED, "a chip whose FIFOs never drain is refused");
+    CHECK(rtl8168_init(0, &model_dev) == NETDEV_FAILED,
+          "a chip whose FIFOs never drain is refused");
 
     model_reset();
     model_half_fifo = 1;
-    CHECK(rtl8168_init() == NETDEV_FAILED,
+    CHECK(rtl8168_init(0, &model_dev) == NETDEV_FAILED,
           "a chip with one FIFO still holding data is refused, not accepted as drained");
 
     model_reset();
     model_stuck_linklist = 1;
-    CHECK(rtl8168_init() == NETDEV_FAILED, "a link list that never reports ready is refused");
+    CHECK(rtl8168_init(0, &model_dev) == NETDEV_FAILED,
+          "a link list that never reports ready is refused");
 
     model_reset();
     model_stuck_reset = 1;
-    CHECK(rtl8168_init() == NETDEV_FAILED, "a reset that never completes is refused");
+    CHECK(rtl8168_init(0, &model_dev) == NETDEV_FAILED, "a reset that never completes is refused");
 
     model_reset();
     model_stuck_eri = 1;
-    CHECK(rtl8168_init() == NETDEV_FAILED, "an ERI window that never completes is refused");
+    CHECK(rtl8168_init(0, &model_dev) == NETDEV_FAILED,
+          "an ERI window that never completes is refused");
 
     model_reset();
     model_stuck_ocp = 1;
-    CHECK(rtl8168_init() == NETDEV_FAILED, "a PHY window that never completes is refused");
+    CHECK(rtl8168_init(0, &model_dev) == NETDEV_FAILED,
+          "a PHY window that never completes is refused");
 
     /* ---- transmit ---- */
     model_reset();
-    CHECK(rtl8168_init() == NETDEV_UP, "the bring-up completes before the transmit cases");
+    CHECK(rtl8168_init(0, &model_dev) == NETDEV_UP,
+          "the bring-up completes before the transmit cases");
     {
         unsigned char frame[100];
         unsigned before = model_log_len;
@@ -866,7 +876,7 @@ int main(void)
         for (i = 0; i < sizeof(frame); i++) {
             frame[i] = (unsigned char)i;
         }
-        rtl8168_tx(frame, (unsigned short)sizeof(frame));
+        rtl8168_tx(model_dev, frame, (unsigned short)sizeof(frame));
         CHECK(r8168_tx_packets == 1, "the frame was sent");
         CHECK(r8168_tx_stalls == 0, "the frame did not stall");
         doorbell = find_write_value(before, 8, R8168_TXPOLL, R8168_TXPOLL_NPQ);
@@ -892,7 +902,7 @@ int main(void)
         for (i = 0; i < sizeof(frame); i++) {
             frame[i] = 0x11;
         }
-        rtl8168_tx(frame, (unsigned short)sizeof(frame));
+        rtl8168_tx(model_dev, frame, (unsigned short)sizeof(frame));
         CHECK((r8168_tx_ring[1].opts1 & R8168_DESC_LEN_MASK) == 60,
               "a short frame is padded to the Ethernet minimum");
         CHECK(r8168_tx_buf[1][59] == 0, "the padding is zero, not stale bytes");
@@ -901,7 +911,7 @@ int main(void)
     /* A chip that never takes the frame is counted and gives up: the machine
        must not stop because the wire did. */
     model_reset();
-    CHECK(rtl8168_init() == NETDEV_UP, "the bring-up completes before the stall case");
+    CHECK(rtl8168_init(0, &model_dev) == NETDEV_UP, "the bring-up completes before the stall case");
     model_swallow_doorbell = 1;
     {
         unsigned char frame[64];
@@ -916,11 +926,11 @@ int main(void)
            backpressure a burst meets, and it must be a counted refusal rather
            than a wait without end. */
         for (f = 0; f < R8168_RING_SIZE; f++) {
-            rtl8168_tx(frame, (unsigned short)sizeof(frame));
+            rtl8168_tx(model_dev, frame, (unsigned short)sizeof(frame));
         }
         CHECK(r8168_tx_packets == R8168_RING_SIZE, "the ring absorbs a full burst");
         CHECK(r8168_tx_stalls == 0, "and nothing stalls while there is room");
-        rtl8168_tx(frame, (unsigned short)sizeof(frame));
+        rtl8168_tx(model_dev, frame, (unsigned short)sizeof(frame));
         CHECK(r8168_tx_stalls == 1, "the frame past a full ring is counted, not waited on");
         CHECK(r8168_tx_packets == R8168_RING_SIZE, "and is not counted as sent");
 
@@ -929,7 +939,7 @@ int main(void)
         {
             unsigned before = model_log_len;
 
-            rtl8168_poll();
+            rtl8168_poll(model_dev);
             CHECK(find_write(before, 8, R8168_TXPOLL) >= 0,
                   "the tick rings the doorbell again while frames are outstanding");
         }
@@ -937,7 +947,7 @@ int main(void)
 
     /* ---- a working chip drains, and the ring wraps under it ---- */
     model_reset();
-    CHECK(rtl8168_init() == NETDEV_UP, "the bring-up completes before the drain case");
+    CHECK(rtl8168_init(0, &model_dev) == NETDEV_UP, "the bring-up completes before the drain case");
     {
         unsigned char frame[64];
         unsigned f;
@@ -946,18 +956,19 @@ int main(void)
             frame[i] = 2;
         }
         for (f = 0; f < R8168_RING_SIZE * 3; f++) {
-            rtl8168_tx(frame, (unsigned short)sizeof(frame));
+            rtl8168_tx(model_dev, frame, (unsigned short)sizeof(frame));
         }
         CHECK(r8168_tx_packets == R8168_RING_SIZE * 3,
               "a chip that answers takes three ring loads without a stall");
         CHECK(r8168_tx_stalls == 0, "and stalls on none of them");
-        rtl8168_poll();
+        rtl8168_poll(model_dev);
         CHECK(r8168_tx_tail == r8168_tx_head, "the tick reclaims every completed descriptor");
     }
 
     /* ---- receive ---- */
     model_reset();
-    CHECK(rtl8168_init() == NETDEV_UP, "the bring-up completes before the receive cases");
+    CHECK(rtl8168_init(0, &model_dev) == NETDEV_UP,
+          "the bring-up completes before the receive cases");
     {
         unsigned len = 64;
 
@@ -967,7 +978,7 @@ int main(void)
         /* The chip hands the descriptor back with the length INCLUDING the
            frame check sequence. */
         r8168_rx_ring[0].opts1 = R8168_DESC_FS | R8168_DESC_LS | (len + 4);
-        rtl8168_poll();
+        rtl8168_poll(model_dev);
         CHECK(rx_calls == 1, "the frame was delivered");
         CHECK(rx_last_len == len, "the frame check sequence was stripped");
         CHECK(rx_last[0] == 3 && rx_last[63] == 66, "the payload was delivered");
@@ -981,7 +992,7 @@ int main(void)
         unsigned before = rx_calls;
 
         r8168_rx_ring[1].opts1 = R8168_DESC_FS | R8168_DESC_LS | R8168_DESC_RX_RES | 64;
-        rtl8168_poll();
+        rtl8168_poll(model_dev);
         CHECK(rx_calls == before, "an error frame is not delivered");
         CHECK(r8168_rx_errors == 1, "an error frame is counted");
     }
@@ -992,7 +1003,7 @@ int main(void)
         unsigned before = rx_calls;
 
         r8168_rx_ring[2].opts1 = R8168_DESC_FS | 64;
-        rtl8168_poll();
+        rtl8168_poll(model_dev);
         CHECK(rx_calls == before, "a fragment is not delivered");
         CHECK(r8168_rx_dropped == 1, "a fragment is counted as dropped");
     }
@@ -1002,14 +1013,14 @@ int main(void)
         unsigned before = rx_calls;
 
         r8168_rx_ring[3].opts1 = R8168_DESC_FS | R8168_DESC_LS | 2;
-        rtl8168_poll();
+        rtl8168_poll(model_dev);
         CHECK(rx_calls == before, "a frame shorter than its checksum is not delivered");
         CHECK(r8168_rx_dropped == 2, "the short frame is counted as dropped");
     }
 
     /* ---- the ring wraps, and a full ring is drained in one pass ---- */
     model_reset();
-    CHECK(rtl8168_init() == NETDEV_UP, "the bring-up completes before the wrap case");
+    CHECK(rtl8168_init(0, &model_dev) == NETDEV_UP, "the bring-up completes before the wrap case");
     {
         unsigned n;
 
@@ -1017,7 +1028,7 @@ int main(void)
             r8168_rx_ring[n].opts1 = R8168_DESC_FS | R8168_DESC_LS |
                                      ((n == R8168_RING_SIZE - 1) ? R8168_DESC_EOR : 0) | 68;
         }
-        rtl8168_poll();
+        rtl8168_poll(model_dev);
         CHECK(rx_calls == R8168_RING_SIZE, "a full ring is drained in one pass");
         CHECK(r8168_rx_cur == R8168_RING_SIZE, "the ring index advanced by the ring size");
         CHECK((r8168_rx_ring[R8168_RING_SIZE - 1].opts1 & R8168_DESC_EOR) != 0,
@@ -1028,7 +1039,7 @@ int main(void)
         /* The next descriptor the driver looks at is the first one again. */
         rx_calls = 0;
         r8168_rx_ring[0].opts1 = R8168_DESC_FS | R8168_DESC_LS | 68;
-        rtl8168_poll();
+        rtl8168_poll(model_dev);
         CHECK(rx_calls == 1, "the ring wrapped back to its first descriptor");
     }
 
@@ -1042,7 +1053,7 @@ int main(void)
             frame[i] = 2;
         }
         for (n = 0; n < R8168_RING_SIZE + 2; n++) {
-            rtl8168_tx(frame, (unsigned short)sizeof(frame));
+            rtl8168_tx(model_dev, frame, (unsigned short)sizeof(frame));
         }
         CHECK(r8168_tx_packets == R8168_RING_SIZE + 2, "every frame in the wrap was sent");
         CHECK((r8168_tx_ring[R8168_RING_SIZE - 1].opts1 & R8168_DESC_EOR) != 0,
@@ -1056,9 +1067,9 @@ int main(void)
     {
         unsigned char frame[64];
 
-        CHECK(rtl8168_tx(frame, (unsigned short)sizeof(frame)) == NETDEV_TX_DROPPED,
+        CHECK(rtl8168_tx(model_dev, frame, (unsigned short)sizeof(frame)) == NETDEV_TX_DROPPED,
               "a driver that never came up refuses the frame rather than swallowing it");
-        rtl8168_poll();
+        rtl8168_poll(model_dev);
         CHECK(r8168_tx_packets == 0 && rx_calls == 0,
               "a driver that never came up neither sends nor receives");
     }

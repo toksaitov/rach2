@@ -322,7 +322,7 @@ int packet_send(struct socket *sock, const uint8_t *dst_mac, uint16_t ethertype,
        whole of the send are held against a receive interrupt that would send
        through the same buffer. This is the rule in net.h. */
     flags = net_lock();
-    if (!netdev) {
+    if (!netdev_first()) {
         net_unlock(flags);
         return -ENETDOWN;
     }

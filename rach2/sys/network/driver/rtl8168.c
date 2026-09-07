@@ -933,13 +933,18 @@ static uint32_t r8168_link_speed(void)
  *
  * @return `NETDEV_UP`, `NETDEV_ABSENT`, or `NETDEV_FAILED`.
  */
-static int rtl8168_init(void)
+static int rtl8168_init(int nth, void **dev)
 {
     uint32_t txconfig;
     uint32_t bar = 0;
     uint32_t addr;
     uintptr_t mapped;
     int i;
+
+    *dev = 0; /* this driver keeps its one card in its own file */
+    if (nth != 0) {
+        return NETDEV_ABSENT;
+    }
 
     r8168_up = 0;
     if (!pci_find_device_by_id(0x10EC, 0x8168, &r8168_pci)) {
@@ -1101,13 +1106,15 @@ static void r8168_tx_reclaim(void)
  * drivers behind that interface follow the same rule. The bracket nests, so a
  * caller that already has it pays nothing.
  */
-static int rtl8168_tx(const uint8_t *data, uint16_t len)
+static int rtl8168_tx(void *dev, const uint8_t *data, uint16_t len)
 {
     uint32_t idx;
     uint32_t eor;
     uint32_t i;
     uint16_t total = len;
     uint32_t flags;
+
+    (void)dev; /* this driver has one card */
 
     if (!r8168_up || len == 0 || len > R8168_FRAME_MAX) {
         return NETDEV_TX_DROPPED;
@@ -1171,9 +1178,11 @@ static int rtl8168_tx(const uint8_t *data, uint16_t len)
  * reason to split one. The reported length includes the frame check sequence,
  * which is stripped before delivery.
  */
-static void rtl8168_poll(void)
+static void rtl8168_poll(void *dev)
 {
     uint32_t budget;
+
+    (void)dev; /* this driver has one card */
 
     if (!r8168_up) {
         return;
@@ -1226,9 +1235,11 @@ static const char *rtl8168_error(void)
  *
  * @return 1 with `*out` filled; 0 only when no window is mapped.
  */
-static int rtl8168_link(struct netdev_link *out)
+static int rtl8168_link(void *dev, struct netdev_link *out)
 {
     uint32_t speed;
+
+    (void)dev; /* this driver has one card */
 
     if (r8168_mmio == 0) {
         return 0;
@@ -1241,9 +1252,11 @@ static int rtl8168_link(struct netdev_link *out)
 }
 
 /** The card's detail line under the boot summary. */
-static void rtl8168_print_info(void)
+static void rtl8168_print_info(void *dev)
 {
     struct netdev_link link;
+
+    (void)dev; /* this driver has one card */
 
     klog(KLOG_INFO, "rtl8168",
          "RTL8168GU: xid 0x%X, MMIO 0x%X, "
@@ -1253,7 +1266,7 @@ static void rtl8168_print_info(void)
         (unsigned)(net_mac[2] >> 4), (unsigned)(net_mac[2] & 0xF), (unsigned)(net_mac[3] >> 4),
         (unsigned)(net_mac[3] & 0xF), (unsigned)(net_mac[4] >> 4), (unsigned)(net_mac[4] & 0xF),
         (unsigned)(net_mac[5] >> 4), (unsigned)(net_mac[5] & 0xF));
-    if (rtl8168_link(&link) && link.up) {
+    if (rtl8168_link(0, &link) && link.up) {
         klog(KLOG_INFO, "rtl8168", "link %d Mb/s, %s duplex", (int)link.mbps,
              link.full_duplex ? "full" : "half");
     } else {
@@ -1287,9 +1300,11 @@ static void rtl8168_print_info(void)
  * driver refused therefore gets only what is safe on any of them, the
  * interrupt mask and the bus, and none of the sequence written for the GU.
  */
-static void rtl8168_stop(void)
+static void rtl8168_stop(void *dev)
 {
     uint32_t i;
+
+    (void)dev; /* this driver has one card */
 
     if (r8168_mmio != 0) {
         /* What the chip already accepted, given a bounded moment to leave.

@@ -919,6 +919,7 @@ int main(void)
         page[0] = 0xEE;
         block.completions = 0;
         CHECK("a fresh read is taken", msc_block_device(0)->submit(msc_block_device(0), r) == 0);
+        late.hc = 0; /* the controller this test's sticks are on */
         late.device = 1;
         late.endpoint = EP_IN;
         /* The abandoned transfer fails, as one on a device that went away

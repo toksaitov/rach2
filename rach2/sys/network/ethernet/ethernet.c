@@ -117,7 +117,7 @@ void ethernet_tx(const uint8_t *dst_mac, uint16_t ethertype,
     /* Counted after the driver answers, not before it is asked: a frame the
      * card would not take did not leave, and counting it as carried is the
      * error this verdict exists to correct. */
-    if (netdev_tx(eth_tx_frame, total) != NETDEV_TX_OK) {
+    if (netdev_tx(netdev_first(), eth_tx_frame, total) != NETDEV_TX_OK) {
         counts.tx_dropped++;
         return;
     }

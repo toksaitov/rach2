@@ -71,7 +71,7 @@ int init_network(void)
 
 const char *net_status(void)
 {
-    return netdev_name();
+    return netdev_name(netdev_first());
 }
 
 const char *net_error(void)
@@ -87,7 +87,7 @@ void net_print_info(void)
      * registers are called. */
     char addr[16], gw[16];
 
-    netdev_print_info();
+    netdev_print_info(netdev_first());
     netconf_format(net_ip_addr, addr);
     if (net_ip_gateway != 0) {
         netconf_format(net_ip_gateway, gw);

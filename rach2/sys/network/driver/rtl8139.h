@@ -86,11 +86,11 @@
 #define RTL_RX_PKT_MAX  1518    /* max frame (1514) + CRC (4)            */
 
 /** Probe and bring up the card; 1 on success, 0 if absent or bring-up fails. */
-int rtl8139_init(void);
+int rtl8139_init(int nth, void **dev);
 
 /** Transmit a raw Ethernet frame (destination MAC through payload, no FCS; the
  *  chip appends the CRC). len must be <= RTL_TX_BUF_SIZE. */
-int rtl8139_tx(const uint8_t *data, uint16_t len);
+int rtl8139_tx(void *dev, const uint8_t *data, uint16_t len);
 
 /** Configured I/O base. */
 uint16_t rtl8139_iobase(void);

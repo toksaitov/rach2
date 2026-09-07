@@ -1980,7 +1980,13 @@ void kernel_shutdown(int how)
      * alternative, stopping the card inside `power_stop`, would put subsystem
      * knowledge in the one file whose whole claim is that it has none. */
     usb_stop();
-    netdev_stop();
+    {
+        int i;
+
+        for (i = 0; i < netdev_count(); i++) {
+            netdev_stop(netdev_at(i));
+        }
+    }
     power_stop(how);
 }
 

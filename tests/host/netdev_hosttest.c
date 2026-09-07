@@ -69,78 +69,99 @@ static void note(char c)
     trace[trace_len] = '\0';
 }
 
-static int first_init(void)
+static int first_init(int nth, void **dev)
 {
+    *dev = 0; /* this model has one card */
+    if (nth != 0) {
+        return NETDEV_ABSENT;
+    }
     m_first.inits++;
     note('1');
     return m_first.verdict;
 }
-static int second_init(void)
+static int second_init(int nth, void **dev)
 {
+    *dev = 0; /* this model has one card */
+    if (nth != 0) {
+        return NETDEV_ABSENT;
+    }
     m_second.inits++;
     note('2');
     return m_second.verdict;
 }
-static int third_init(void)
+static int third_init(int nth, void **dev)
 {
+    *dev = 0; /* this model has one card */
+    if (nth != 0) {
+        return NETDEV_ABSENT;
+    }
     m_third.inits++;
     note('3');
     return m_third.verdict;
 }
 
-static void first_stop(void)
+static void first_stop(void *dev)
 {
+    (void)dev;
     m_first.stops++;
     note('S');
 }
-static void second_stop(void)
+static void second_stop(void *dev)
 {
+    (void)dev;
     m_second.stops++;
     note('T');
 }
-static void third_stop(void)
+static void third_stop(void *dev)
 {
+    (void)dev;
     m_third.stops++;
     note('U');
 }
 
-static int first_tx(const uint8_t *d, uint16_t n)
+static int first_tx(void *dev, const uint8_t *d, uint16_t n)
 {
+    (void)dev;
     (void)d;
     (void)n;
     m_first.txs++;
     return NETDEV_TX_OK;
 }
-static int second_tx(const uint8_t *d, uint16_t n)
+static int second_tx(void *dev, const uint8_t *d, uint16_t n)
 {
+    (void)dev;
     (void)d;
     (void)n;
     m_second.txs++;
     return NETDEV_TX_DROPPED;
 }
-static int third_tx(const uint8_t *d, uint16_t n)
+static int third_tx(void *dev, const uint8_t *d, uint16_t n)
 {
+    (void)dev;
     (void)d;
     (void)n;
     m_third.txs++;
     return NETDEV_TX_OK;
 }
 
-static void second_poll(void)
+static void second_poll(void *dev)
 {
+    (void)dev;
     m_second.polls++;
 }
 
-static int first_link(struct netdev_link *out)
+static int first_link(void *dev, struct netdev_link *out)
 {
+    (void)dev;
     if (!m_first.can_say) {
         return 0;
     }
     *out = m_first.state;
     return 1;
 }
-static int second_link(struct netdev_link *out)
+static int second_link(void *dev, struct netdev_link *out)
 {
+    (void)dev;
     if (!m_second.can_say) {
         return 0;
     }
@@ -164,8 +185,9 @@ static const char *third_error(void)
 /* Recorded, so a check that says no driver was called can mean it. */
 static int info_calls;
 
-static void nothing(void)
+static void nothing(void *dev)
 {
+    (void)dev;
     info_calls++;
 }
 
@@ -228,40 +250,40 @@ int main(void)
         frame[i] = (unsigned char)i;
     }
 
-    /* ---- the first card that answers is the one that is bound ---- */
+    /* ---- every card every driver has becomes an interface ---- */
     reset(NETDEV_UP, NETDEV_UP, NETDEV_UP);
-    CHECK(netdev_probe() == 1, "a machine with a card binds one");
-    CHECK(same(netdev_name(), "first"), "the first driver in the table wins");
-    CHECK(same(trace, "1"), "no driver after the one that answered is asked");
-    CHECK(m_second.inits == 0 && m_third.inits == 0,
-          "a machine that already has its card does not probe for another");
+    CHECK(netdev_probe() == 1, "a machine with cards brings them up");
+    CHECK(netdev_count() == 3, "one interface for each card found");
+    CHECK(same(netdev_name(netdev_at(0)), "first"), "the first driver's card is the first");
+    CHECK(same(netdev_name(netdev_at(1)), "second"), "the second driver's is next");
+    CHECK(same(netdev_name(netdev_at(2)), "third"), "and the third driver's last");
+    CHECK(same(trace, "123"), "every driver is asked, in the table's order");
+    CHECK(netdev_at(0)->index == 1 && netdev_at(1)->index == 2 && netdev_at(2)->index == 3,
+          "and they are numbered from one, as a packet socket binds to them");
+    CHECK(same(netdev_at(0)->name, "eth0") && same(netdev_at(1)->name, "eth1") &&
+              same(netdev_at(2)->name, "eth2"),
+          "and named eth0 upward in the order they were found");
 
     /* ---- an absent card is stepped over, not stopped ---- */
     reset(NETDEV_ABSENT, NETDEV_UP, NETDEV_UP);
-    CHECK(netdev_probe() == 1, "a machine whose first card is absent still binds one");
-    CHECK(same(netdev_name(), "second"), "the next driver in the table is asked");
-    CHECK(same(trace, "12"), "the absent card is asked once and passed over");
+    CHECK(netdev_probe() == 1, "a machine whose first card is absent still brings up the rest");
+    CHECK(netdev_count() == 2, "one interface for each card that was there");
+    CHECK(same(netdev_name(netdev_first()), "second"), "the next driver's card is the first");
+    CHECK(same(trace, "123"), "the absent card is asked once and passed over");
     CHECK(m_first.stops == 0,
           "a card that is not in the machine is not silenced, having never started");
 
-    /* ---- the whole table, in order ---- */
-    reset(NETDEV_ABSENT, NETDEV_ABSENT, NETDEV_UP);
-    CHECK(netdev_probe() == 1, "the last driver is reached");
-    CHECK(same(trace, "123"), "the table is walked in its own order");
-    CHECK(same(netdev_name(), "third"), "the card that answered is the one bound");
-
     /* ---- a card that is present and will not start ---- */
     reset(NETDEV_ABSENT, NETDEV_FAILED, NETDEV_UP);
-    CHECK(netdev_probe() == 0, "a card that will not start fails the probe");
-    CHECK(netdev == 0, "nothing is bound");
-    CHECK(same(netdev_name(), "none"), "and the machine says so");
+    CHECK(netdev_probe() == 1, "a card that will not start does not stop the others");
+    CHECK(netdev_count() == 1, "and the machine keeps the one that did start");
+    CHECK(same(netdev_name(netdev_first()), "third"), "which is the card that answered");
     CHECK(same(netdev_error(), "the second card would not start"),
           "the reason kept is the card that failed, not the one that was absent");
-    CHECK(m_third.inits == 0,
-          "the probe stops rather than let a later driver configure the machine");
+    CHECK(m_third.inits == 1, "the driver after the one that failed is still asked");
     CHECK(m_second.stops == 1,
           "the card that failed is silenced, because nothing will ever reach it again");
-    CHECK(same(trace, "12T"), "it is silenced after its own bring-up and before the walk gives up");
+    CHECK(same(trace, "12T3"), "it is silenced before the walk goes on");
 
     /* ---- a machine with no supported card ---- */
     reset(NETDEV_ABSENT, NETDEV_ABSENT, NETDEV_ABSENT);
@@ -272,11 +294,11 @@ int main(void)
           "nothing is silenced, because nothing was started");
 
     /* ---- what the layers above get with nothing bound ---- */
-    CHECK(netdev_tx(frame, (uint16_t)sizeof(frame)) == NETDEV_TX_DROPPED,
+    CHECK(netdev_tx(netdev_first(), frame, (uint16_t)sizeof(frame)) == NETDEV_TX_DROPPED,
           "a frame sent with no card is reported dropped, not quietly swallowed");
     netdev_poll();
-    netdev_stop();
-    netdev_print_info();
+    netdev_stop(netdev_first());
+    netdev_print_info(netdev_first());
     CHECK(m_first.txs == 0 && m_second.txs == 0 && m_third.txs == 0 && m_second.polls == 0 &&
               m_first.stops == 0 && m_second.stops == 0 && m_third.stops == 0 && info_calls == 0,
           "and no driver is called at all");
@@ -284,11 +306,11 @@ int main(void)
     /* ---- and with one bound ---- */
     reset(NETDEV_UP, NETDEV_UP, NETDEV_UP);
     CHECK(netdev_probe() == 1, "a card is bound again");
-    CHECK(netdev_tx(frame, (uint16_t)sizeof(frame)) == NETDEV_TX_OK,
+    CHECK(netdev_tx(netdev_first(), frame, (uint16_t)sizeof(frame)) == NETDEV_TX_OK,
           "the bound driver's verdict is the one that comes back");
     netdev_poll();
     CHECK(m_first.polls == 0, "a driver with no poll is not polled");
-    netdev_stop();
+    netdev_stop(netdev_first());
     CHECK(m_first.stops == 1, "the bound driver is the one silenced");
 
     /* ---- the link, through the interface ---- */
@@ -297,7 +319,7 @@ int main(void)
     {
         struct netdev_link link;
 
-        CHECK(netdev_link(&link) == 1 && link.up && link.mbps == 100,
+        CHECK(netdev_link(netdev_first(), &link) == 1 && link.up && link.mbps == 100,
               "the bound driver's answer is the one that comes back");
     }
 
@@ -309,7 +331,8 @@ int main(void)
         struct netdev_link link;
 
         link.up = 42;
-        CHECK(netdev_link(&link) == 0, "a driver with no link report says it cannot say");
+        CHECK(netdev_link(netdev_first(), &link) == 0,
+              "a driver with no link report says it cannot say");
         CHECK(link.up == 42, "and leaves the caller's answer untouched");
     }
 
@@ -320,7 +343,7 @@ int main(void)
         struct netdev_link link;
 
         link.up = 42;
-        CHECK(netdev_link(&link) == 0, "a machine with no card cannot say either");
+        CHECK(netdev_link(netdev_first(), &link) == 0, "a machine with no card cannot say either");
         CHECK(link.up == 42, "and leaves the caller's answer untouched");
     }
 
@@ -328,9 +351,9 @@ int main(void)
     reset(NETDEV_UP, NETDEV_UP, NETDEV_UP);
     CHECK(netdev_probe() == 1, "a card is bound before the running checks");
     m_first.state.up = 1;
-    CHECK(netdev_running() == 1, "a card reporting a live link is running");
+    CHECK(netdev_running(netdev_first()) == 1, "a card reporting a live link is running");
     m_first.state.up = 0;
-    CHECK(netdev_running() == 0,
+    CHECK(netdev_running(netdev_first()) == 0,
           "a card reporting a dead link is not running, which is the whole point: "
           "a bound card and a working one are different things");
 
@@ -340,7 +363,7 @@ int main(void)
        through the interface and proved by nothing. */
     reset(NETDEV_ABSENT, NETDEV_ABSENT, NETDEV_UP);
     CHECK(netdev_probe() == 1, "the driver with no link report is bound");
-    CHECK(netdev_running() == 1,
+    CHECK(netdev_running(netdev_first()) == 1,
           "a card that cannot report a link is reported running, which is the most "
           "that can be said of it and what the flag meant before");
 
@@ -348,17 +371,18 @@ int main(void)
     reset(NETDEV_UP, NETDEV_UP, NETDEV_UP);
     CHECK(netdev_probe() == 1, "a card is bound");
     m_first.can_say = 0;
-    CHECK(netdev_running() == 1, "a card that declines to answer is treated the same way");
+    CHECK(netdev_running(netdev_first()) == 1,
+          "a card that declines to answer is treated the same way");
 
     reset(NETDEV_ABSENT, NETDEV_ABSENT, NETDEV_ABSENT);
     CHECK(netdev_probe() == 0, "nothing is bound");
-    CHECK(netdev_running() == 0, "a machine with no card is not running");
+    CHECK(netdev_running(netdev_first()) == 0, "a machine with no card is not running");
 
     /* A driver whose transmit refuses: the refusal reaches the caller
        unchanged, which is what lets the interface count it. */
     reset(NETDEV_ABSENT, NETDEV_UP, NETDEV_UP);
     CHECK(netdev_probe() == 1, "the second card is bound");
-    CHECK(netdev_tx(frame, (uint16_t)sizeof(frame)) == NETDEV_TX_DROPPED,
+    CHECK(netdev_tx(netdev_first(), frame, (uint16_t)sizeof(frame)) == NETDEV_TX_DROPPED,
           "a driver that refuses a frame has its refusal passed up");
     netdev_poll();
     CHECK(m_second.polls == 1, "a driver that needs polling is polled");

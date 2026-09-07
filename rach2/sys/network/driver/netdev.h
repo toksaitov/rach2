@@ -28,10 +28,13 @@
  * be asked. A member with no consumer does not belong here.
  */
 
-/* The machine has one network interface, and these are the two things a user
- * program can ask about it by: the name every `SIOCGIF*` ioctl matches and the
- * index a packet socket binds to. Linux numbers interfaces from 1 and reserves
- * 0 for "any", which is why this is 1. */
+/* How many interfaces this kernel drives at once. Each card found becomes
+ * one, named `eth0` upward in the order the probe finds them and numbered
+ * from 1, since Linux reserves index 0 for "any". */
+#define NETDEV_MAX 4
+
+/* The first interface's name and index, which is what a machine with one card
+ * has and what every suite that names an interface uses. */
 #define NETDEV_IFNAME  "eth0"
 #define NETDEV_IFINDEX 1
 
@@ -90,17 +93,44 @@ struct netdev_link {
  */
 struct netdev_ops {
     const char *name;
-    int (*init)(void);
-    int (*tx)(const uint8_t *data, uint16_t len);
-    void (*poll)(void);
-    void (*stop)(void);
-    int (*link)(struct netdev_link *out);
+    /*
+     * Bring up this driver's `nth` card, counting from zero, and hand back
+     * the driver's own record for it in `*dev`. A driver with one card
+     * answers `NETDEV_ABSENT` for anything but the first.
+     */
+    int (*init)(int nth, void **dev);
+    int (*tx)(void *dev, const uint8_t *data, uint16_t len);
+    void (*poll)(void *dev);
+    void (*stop)(void *dev);
+    int (*link)(void *dev, struct netdev_link *out);
     const char *(*error)(void);
-    void (*print_info)(void);
+    void (*print_info)(void *dev);
 };
 
-/** The bound device, or NULL until `netdev_probe` finds one. */
-extern const struct netdev_ops *netdev;
+/**
+ * One interface: the driver that drives it and that driver's own record for
+ * the card, with the name and index the rest of the kernel knows it by.
+ *
+ * A machine with two cards has two of these, and everything above holds the
+ * interface rather than the driver: an address, a route and an ARP entry all
+ * belong to one of them.
+ */
+struct netdev {
+    const struct netdev_ops *ops;
+    void *dev;
+    char name[8];
+    int index; /* 1 upward, as a packet socket binds to */
+};
+
+/** How many interfaces the last probe brought up, and the nth of them. */
+int netdev_count(void);
+struct netdev *netdev_at(int n);
+
+/** The interface of that name, or NULL. */
+struct netdev *netdev_by_name(const char *name);
+
+/** The first interface, or NULL when none came up. */
+struct netdev *netdev_first(void);
 
 /**
  * Try every compiled-in driver in order and bind the first that answers.
@@ -115,19 +145,19 @@ int netdev_probe(void);
  * @return `NETDEV_TX_OK`, or `NETDEV_TX_DROPPED` when the driver refused the
  *         frame or no device is bound. A caller that counts drops counts this.
  */
-int netdev_tx(const uint8_t *data, uint16_t len);
+int netdev_tx(struct netdev *nd, const uint8_t *data, uint16_t len);
 
 /** Give the bound device its turn on the timer tick, if it needs one. */
 void netdev_poll(void);
 
 /** The bound device's name, or "none". */
-const char *netdev_name(void);
+const char *netdev_name(struct netdev *nd);
 
 /** Why the last probe found nothing, or "no supported network card". */
 const char *netdev_error(void);
 
 /** The bound device's detail line, or nothing with none bound. */
-void netdev_print_info(void);
+void netdev_print_info(struct netdev *nd);
 
 /**
  * Silence the bound device so it can no longer read or write memory.
@@ -138,7 +168,7 @@ void netdev_print_info(void);
  * card left mastering the bus keeps writing into its rings while the machine
  * resets around it. Does nothing when no device is bound.
  */
-void netdev_stop(void);
+void netdev_stop(struct netdev *nd);
 
 /**
  * Ask the bound device about its link.
@@ -146,7 +176,7 @@ void netdev_stop(void);
  * @return 1 with `*out` filled, or 0 when no device is bound or the bound
  *         device cannot report its link.
  */
-int netdev_link(struct netdev_link *out);
+int netdev_link(struct netdev *nd, struct netdev_link *out);
 
 /**
  * Whether the interface is running, in the sense `IFF_RUNNING` reports.
@@ -159,6 +189,6 @@ int netdev_link(struct netdev_link *out);
  *
  * @return 1 when the interface should be reported running, 0 otherwise.
  */
-int netdev_running(void);
+int netdev_running(struct netdev *nd);
 
 #endif /* _NETDEV_H_ */

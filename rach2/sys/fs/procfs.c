@@ -710,7 +710,7 @@ static int procfs_gen_netdev(struct procfs_text *t)
            "  Transmit\n"
            " face |bytes    packets errs drop fifo frame compressed multicast|"
            "bytes    packets errs drop fifo colls carrier compressed\n");
-    if (!netdev) {
+    if (!netdev_first()) {
         return t->len;
     }
     ap_str(t, "  ");
@@ -1155,7 +1155,7 @@ static void ap_ip_dotted(struct procfs_text *t, uint32_t ip)
 static int procfs_gen_netroute(struct procfs_text *t)
 {
     ap_str(t, PROCFS_NETROUTE_HEADER);
-    if (!netdev || net_ip_addr == 0) {
+    if (!netdev_first() || net_ip_addr == 0) {
         return t->len;
     }
     if (net_ip_gateway != 0) {

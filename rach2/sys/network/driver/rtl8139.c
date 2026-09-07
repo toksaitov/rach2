@@ -52,7 +52,7 @@ static const char *rtl_err = "no card";
 static void rtl8139_irq(isr_params_t *params);
 static void rtl8139_rx(void);
 static void rtl8139_rx_reset(void);
-static int rtl8139_link(struct netdev_link *out);
+static int rtl8139_link(void *dev, struct netdev_link *out);
 
 /**
  * Probe, reset, and bring up the RTL8139.
@@ -66,11 +66,16 @@ static int rtl8139_link(struct netdev_link *out);
  * @return 1 on success; 0 if no card is present or bring-up fails, with
  *         rtl8139_error() set to the reason.
  */
-int rtl8139_init(void)
+int rtl8139_init(int nth, void **dev)
 {
     uint32_t mac_lo, mac_hi;
     uint32_t i;
     uint32_t timeout;
+
+    *dev = 0; /* this driver keeps its one card in its own file */
+    if (nth != 0) {
+        return NETDEV_ABSENT;
+    }
 
     if (!pci_find_device_by_id(0x10EC, 0x8139, &rtl_pci)) {
         rtl_err = "RTL8139 not found on PCI bus";
@@ -175,9 +180,11 @@ const char *rtl8139_error(void) { return rtl_err; }
  * a time.
  * The console keeps only the one-line summary; this is the serial detail.
  */
-static void rtl8139_print_info(void)
+static void rtl8139_print_info(void *dev)
 {
     struct netdev_link link;
+
+    (void)dev; /* this driver has one card */
 
     klog(KLOG_INFO, "rtl8139",
          "IRQ %d, I/O 0x%X, MAC %X%X:%X%X:%X%X:%X%X:%X%X:%X%X",
@@ -188,7 +195,7 @@ static void rtl8139_print_info(void)
                   (unsigned)(net_mac[3] >> 4), (unsigned)(net_mac[3] & 0xF),
                   (unsigned)(net_mac[4] >> 4), (unsigned)(net_mac[4] & 0xF),
                   (unsigned)(net_mac[5] >> 4), (unsigned)(net_mac[5] & 0xF));
-    if (rtl8139_link(&link) && link.up) {
+    if (rtl8139_link(0, &link) && link.up) {
         klog(KLOG_INFO, "rtl8139", "link %d Mb/s, %s duplex", (int)link.mbps,
              link.full_duplex ? "full" : "half");
     } else {
@@ -219,8 +226,9 @@ static void rtl8139_print_info(void)
  * be unusable is exactly the one still able to write memory with no way to be
  * told to stop.
  */
-static void rtl8139_stop(void)
+static void rtl8139_stop(void *dev)
 {
+    (void)dev; /* this driver has one card */
     if (iobase != 0) {
         outb(iobase + RTL_CHIPCMD, 0);
         outw(iobase + RTL_IMR, 0);
@@ -242,9 +250,11 @@ static void rtl8139_stop(void)
  * @return 1 with `*out` filled; 0 only when no card was found, since a card
  *         that is present can always answer this.
  */
-static int rtl8139_link(struct netdev_link *out)
+static int rtl8139_link(void *dev, struct netdev_link *out)
 {
     uint8_t msr;
+
+    (void)dev; /* this driver has one card */
 
     if (iobase == 0) {
         return 0;
@@ -279,10 +289,12 @@ const struct netdev_ops rtl8139_netdev = {"RTL8139",    rtl8139_init,  rtl8139_t
  * it; no OWN-bit poll is needed. Real hardware would poll the TSD OWN bit, but
  * this driver targets QEMU only.
  */
-int rtl8139_tx(const uint8_t *data, uint16_t len)
+int rtl8139_tx(void *dev, const uint8_t *data, uint16_t len)
 {
     uint16_t txlen;
     uint32_t eflags;
+
+    (void)dev; /* this driver has one card */
 
     if (len > RTL_TX_BUF_SIZE) {
         klog(KLOG_WARN, "rtl8139", "tx: frame of %d bytes is too large, dropped",

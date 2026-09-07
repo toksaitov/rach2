@@ -300,8 +300,13 @@ static void model_record(unsigned off, unsigned value)
 /* The chip's transmit engine, defined once the driver's rings are in scope. */
 static void model_tx_drain(void);
 
-static unsigned m_r32(unsigned off)
+/* The driver's own record for a card, which this model does not look
+ * inside. */
+struct e1000;
+
+static unsigned m_r32(struct e1000 *e, unsigned off)
 {
+    (void)e; /* the model presents one card */
     model_accesses++;
     if (model_dead_window) {
         return 0xffffffffu;
@@ -322,8 +327,9 @@ static unsigned m_r32(unsigned off)
     return model_reg[off / 4];
 }
 
-static void m_w32(unsigned off, unsigned value)
+static void m_w32(struct e1000 *e, unsigned off, unsigned value)
 {
+    (void)e;
     model_accesses++;
     model_record(off, value);
     model_reg[off / 4] = value;
@@ -355,8 +361,9 @@ static void m_w32(unsigned off, unsigned value)
    went this way and not the other. */
 #define MODEL_IO_MARK 0x80000000u
 
-static void m_wio(unsigned off, unsigned value)
+static void m_wio(struct e1000 *e, unsigned off, unsigned value)
 {
+    (void)e;
     model_accesses++;
     model_record(off | MODEL_IO_MARK, value);
     model_reg[off / 4] = value;
@@ -377,7 +384,27 @@ static void m_udelay(unsigned usec)
 
 /* ------------------------------------------------------------------ */
 
+/* Two of the kernel's own, which the driver reaches and this test does not
+ * build: a fill, and the nth card of an identity on the bus. */
+void *k_memset(void *ptr, char c, size_t n)
+{
+    unsigned char *q = (unsigned char *)ptr;
+
+    while (n-- > 0) {
+        *q++ = (unsigned char)c;
+    }
+    return ptr;
+}
+
+bool pci_find_nth_by_id(uint16_t vendor, uint16_t device, int nth, pci_device_t *out)
+{
+    return nth == 0 ? pci_find_device_by_id(vendor, device, out) : false;
+}
+
 #include "network/driver/e1000.c"
+
+/* What the driver hands back for the card this model presents. */
+static void *model_card;
 
 static int fails;
 
@@ -420,7 +447,7 @@ static void model_tx_finish(void)
     unsigned n;
 
     for (n = 0; n < E1000_RING_SIZE; n++) {
-        e1000_tx_ring[n].upper |= E1000_TXD_STAT_DD;
+        e1000s[0].tx_ring[n].upper |= E1000_TXD_STAT_DD;
     }
 }
 
@@ -433,13 +460,13 @@ static void model_tx_drain(void)
         return;
     }
     while (model_tdh != tdt && guard < E1000_RING_SIZE * 2) {
-        volatile struct e1000_tx_desc *d = &e1000_tx_ring[model_tdh];
+        volatile struct e1000_tx_desc *d = &e1000s[0].tx_ring[model_tdh];
         unsigned len = d->lower & 0xffffu;
         unsigned i;
 
         model_tx_last_len = len;
         for (i = 0; i < len && i < sizeof(model_tx_last); i++) {
-            model_tx_last[i] = e1000_tx_buf[model_tdh][i];
+            model_tx_last[i] = e1000s[0].tx_buf[model_tdh][i];
         }
         if (model_tx_completes_after == 0) {
             d->upper |= E1000_TXD_STAT_DD;
@@ -473,14 +500,14 @@ static unsigned model_rdh;
 static int model_deliver(const unsigned char *data, unsigned len, unsigned char status,
                          unsigned char errors)
 {
-    volatile struct e1000_rx_desc *d = &e1000_rx_ring[model_rdh];
+    volatile struct e1000_rx_desc *d = &e1000s[0].rx_ring[model_rdh];
     unsigned i;
 
     if (model_rdh == model_reg[E1000_RDT / 4] % E1000_RING_SIZE) {
         return 0; /* the card has caught up with the driver's tail */
     }
     for (i = 0; i < len && i < E1000_RX_BUF_SIZE; i++) {
-        e1000_rx_buf[model_rdh][i] = data[i];
+        e1000s[0].rx_buf[model_rdh][i] = data[i];
     }
     d->len_csum = len & 0xffffu;
     d->sta_err = (unsigned)status | ((unsigned)errors << 8);
@@ -511,7 +538,7 @@ static void model_reset(void)
     model_dead_window = 0;
     model_tdh = 0;
     model_rdh = 0;
-    e1000_rx_discarding = 0;
+    e1000s[0].rx_discarding = 0;
     model_tx_sent = 0;
     model_tx_last_len = 0;
     map_refused = 0;
@@ -525,21 +552,21 @@ static void model_reset(void)
     note_rx_drops = 0;
     rx_calls = 0;
     rx_last_len = 0;
-    e1000_up = 0;
+    e1000s[0].up = 0;
     /* The window pointer and the PCI record are part of a cold-power state
        and are what `e1000_stop` reads to decide whether a register may be
        written at all. A reset that left them set would be a driver that
        remembers a card the machine no longer has. */
-    e1000_mmio = 0;
-    e1000_pci.vendor_id = 0;
-    e1000_pci.device_id = 0;
-    e1000_rx_cur = 0;
-    e1000_tx_head = 0;
-    e1000_rx_packets = 0;
-    e1000_rx_errors = 0;
-    e1000_rx_dropped = 0;
-    e1000_tx_packets = 0;
-    e1000_tx_stalls = 0;
+    e1000s[0].mmio = 0;
+    e1000s[0].pci.vendor_id = 0;
+    e1000s[0].pci.device_id = 0;
+    e1000s[0].rx_cur = 0;
+    e1000s[0].tx_head = 0;
+    e1000s[0].rx_packets = 0;
+    e1000s[0].rx_errors = 0;
+    e1000s[0].rx_dropped = 0;
+    e1000s[0].tx_packets = 0;
+    e1000s[0].tx_stalls = 0;
     io = &model_io;
     for (i = 0; i < 6; i++) {
         net_mac[i] = 0;
@@ -606,14 +633,14 @@ int main(void)
     /* ---- the bring-up completes on a healthy model ---- */
     model_reset();
     {
-        int rc = e1000_init();
+        int rc = e1000_init(0, &model_card);
 
         if (rc != NETDEV_UP) {
             printf("  init refused: %s\n", e1000_err);
         }
         CHECK(rc == NETDEV_UP, "the bring-up completes");
     }
-    CHECK(e1000_up == 1, "the driver reports itself up");
+    CHECK(e1000s[0].up == 1, "the driver reports itself up");
     CHECK(pci_memory_enabled && pci_master_enabled, "decoding and bus mastering are enabled");
     CHECK(map_size_asked == E1000_BAR_WINDOW, "the whole declared window is mapped");
     CHECK(isr_handler_registered && isr_vector_registered == 32 + 11,
@@ -682,7 +709,8 @@ int main(void)
     /* ---- the station address from the EEPROM, and written back ---- */
     model_reset();
     model_reg[E1000_RAH0 / 4] = 0; /* no valid address in the pair */
-    CHECK(e1000_init() == NETDEV_UP, "the bring-up completes with an empty address pair");
+    CHECK(e1000_init(0, &model_card) == NETDEV_UP,
+          "the bring-up completes with an empty address pair");
     CHECK(net_mac[0] == 0x52 && net_mac[1] == 0x54 && net_mac[2] == 0xaa && net_mac[3] == 0xbb &&
               net_mac[4] == 0xcc && net_mac[5] == 0xdd,
           "the station address came from the EEPROM when the pair had none");
@@ -694,67 +722,70 @@ int main(void)
     /* ---- the bounded failures ---- */
     model_reset();
     model_stuck_reset = 1;
-    CHECK(e1000_init() == NETDEV_FAILED, "a reset that never completes is refused");
-    CHECK(!e1000_up, "a refused bring-up does not report itself up");
+    CHECK(e1000_init(0, &model_card) == NETDEV_FAILED, "a reset that never completes is refused");
+    CHECK(!e1000s[0].up, "a refused bring-up does not report itself up");
 
     model_reset();
     model_reg[E1000_RAH0 / 4] = 0;
     model_stuck_eeprom = 1;
-    CHECK(e1000_init() == NETDEV_FAILED, "an EEPROM that never answers is refused");
+    CHECK(e1000_init(0, &model_card) == NETDEV_FAILED, "an EEPROM that never answers is refused");
 
     model_reset();
     model_reg[E1000_RAH0 / 4] = 0;
     model_eeprom[0] = 0;
     model_eeprom[1] = 0;
     model_eeprom[2] = 0;
-    CHECK(e1000_init() == NETDEV_FAILED, "an all-zero station address is refused");
+    CHECK(e1000_init(0, &model_card) == NETDEV_FAILED, "an all-zero station address is refused");
 
     model_reset();
     model_reg[E1000_RAH0 / 4] = 0;
     model_eeprom[0] = 0x0001; /* the group bit, which no station address has */
-    CHECK(e1000_init() == NETDEV_FAILED, "a group station address is refused");
+    CHECK(e1000_init(0, &model_card) == NETDEV_FAILED, "a group station address is refused");
 
     model_reset();
     model_dead_window = 1;
-    CHECK(e1000_init() == NETDEV_FAILED, "a window that reads back all ones is refused");
+    CHECK(e1000_init(0, &model_card) == NETDEV_FAILED,
+          "a window that reads back all ones is refused");
 
     model_reset();
     map_refused = 1;
-    CHECK(e1000_init() == NETDEV_FAILED, "a window that will not map is refused");
+    CHECK(e1000_init(0, &model_card) == NETDEV_FAILED, "a window that will not map is refused");
 
     /* ---- a card that is not in the machine is not touched ---- */
     model_reset();
     pci_present = 0;
-    CHECK(e1000_init() == NETDEV_ABSENT, "an absent card reports itself absent");
+    CHECK(e1000_init(0, &model_card) == NETDEV_ABSENT, "an absent card reports itself absent");
     CHECK(model_accesses == 0, "an absent card costs not one register access");
     CHECK(!pci_memory_enabled && !pci_master_enabled,
           "an absent card leaves the PCI command word alone");
 
     /* ---- receive: an ordinary frame ---- */
     model_reset();
-    CHECK(e1000_init() == NETDEV_UP, "the bring-up completes before the receive checks");
+    CHECK(e1000_init(0, &model_card) == NETDEV_UP,
+          "the bring-up completes before the receive checks");
     CHECK(model_deliver(frame, 100, E1000_RXD_STAT_DD | E1000_RXD_STAT_EOP, 0),
           "the card has a descriptor to put the frame in");
     e1000_irq(0);
     CHECK(rx_calls == 1 && rx_last_len == 100, "a whole frame reaches the stack with its length");
     CHECK(rx_last[0] == 0 && rx_last[99] == 99, "the bytes handed up are the bytes received");
-    CHECK(e1000_rx_packets == 1, "the frame is counted");
+    CHECK(e1000s[0].rx_packets == 1, "the frame is counted");
     CHECK(model_reg[E1000_RDT / 4] == 0, "the tail returns the descriptor that was read");
-    CHECK((e1000_rx_ring[0].sta_err & 0xffu) == 0,
+    CHECK((e1000s[0].rx_ring[0].sta_err & 0xffu) == 0,
           "the descriptor's status is cleared before it goes back");
 
     /* ---- receive: each of the four checks fails on its own ---- */
     model_reset();
-    CHECK(e1000_init() == NETDEV_UP, "the bring-up completes before the refusal checks");
+    CHECK(e1000_init(0, &model_card) == NETDEV_UP,
+          "the bring-up completes before the refusal checks");
     (void)model_deliver(frame, 100, E1000_RXD_STAT_DD | E1000_RXD_STAT_EOP, 0x80);
     e1000_irq(0);
-    CHECK(rx_calls == 0 && e1000_rx_errors == 1,
+    CHECK(rx_calls == 0 && e1000s[0].rx_errors == 1,
           "a descriptor reporting an error is refused even though it is done and complete");
     CHECK(note_rx_errors == 1 && note_rx_drops == 0,
           "a hardware error is reported to the interface as an error, not a drop");
 
     model_reset();
-    CHECK(e1000_init() == NETDEV_UP, "the bring-up completes");
+    CHECK(e1000_init(0, &model_card) == NETDEV_UP, "the bring-up completes");
     /* A split frame is two descriptors: one without end-of-packet and one
        with it. A driver that judged each on its own would refuse the first
        and hand the second up as a whole frame, which is the second half of
@@ -762,7 +793,8 @@ int main(void)
     model_deliver(frame, 100, E1000_RXD_STAT_DD, 0);
     model_deliver(frame + 100, 60, E1000_RXD_STAT_DD | E1000_RXD_STAT_EOP, 0);
     e1000_irq(0);
-    CHECK(rx_calls == 0 && e1000_rx_dropped == 2, "a frame split across descriptors is refused");
+    CHECK(rx_calls == 0 && e1000s[0].rx_dropped == 2,
+          "a frame split across descriptors is refused");
     CHECK(note_rx_drops == 2 && note_rx_errors == 0,
           "a split frame is reported to the interface as a drop, not an error");
 
@@ -774,23 +806,23 @@ int main(void)
           "the frame after a split one is delivered, so the discard ended with it");
 
     model_reset();
-    CHECK(e1000_init() == NETDEV_UP, "the bring-up completes");
+    CHECK(e1000_init(0, &model_card) == NETDEV_UP, "the bring-up completes");
     (void)model_deliver(frame, 13, E1000_RXD_STAT_DD | E1000_RXD_STAT_EOP, 0);
     e1000_irq(0);
-    CHECK(rx_calls == 0 && e1000_rx_dropped == 1,
+    CHECK(rx_calls == 0 && e1000s[0].rx_dropped == 1,
           "a frame too short to hold an Ethernet header is refused");
 
     model_reset();
-    CHECK(e1000_init() == NETDEV_UP, "the bring-up completes");
+    CHECK(e1000_init(0, &model_card) == NETDEV_UP, "the bring-up completes");
     (void)model_deliver(frame, 100, E1000_RXD_STAT_DD | E1000_RXD_STAT_EOP, 0);
-    e1000_rx_ring[0].len_csum = E1000_RX_BUF_SIZE + 1;
+    e1000s[0].rx_ring[0].len_csum = E1000_RX_BUF_SIZE + 1;
     e1000_irq(0);
-    CHECK(rx_calls == 0 && e1000_rx_dropped == 1,
+    CHECK(rx_calls == 0 && e1000s[0].rx_dropped == 1,
           "a length past the end of the buffer is refused, not trusted");
 
     /* ---- receive: the ring wraps ---- */
     model_reset();
-    CHECK(e1000_init() == NETDEV_UP, "the bring-up completes before the wrap check");
+    CHECK(e1000_init(0, &model_card) == NETDEV_UP, "the bring-up completes before the wrap check");
     {
         int placed = 1;
 
@@ -801,17 +833,19 @@ int main(void)
         CHECK(placed, "the driver kept returning descriptors, so the card never ran out");
     }
     CHECK(rx_calls == E1000_RING_SIZE + 5, "every frame across a ring wrap is delivered");
-    CHECK(e1000_rx_cur == (E1000_RING_SIZE + 5) % E1000_RING_SIZE,
+    CHECK(e1000s[0].rx_cur == (E1000_RING_SIZE + 5) % E1000_RING_SIZE,
           "the read index wrapped rather than ran off the ring");
 
     /* ---- transmit: the descriptor contract ---- */
     model_reset();
-    CHECK(e1000_init() == NETDEV_UP, "the bring-up completes before the transmit checks");
-    CHECK(e1000_tx_frame(frame, 200) == NETDEV_TX_OK, "a frame that is sent reports that it was");
+    CHECK(e1000_init(0, &model_card) == NETDEV_UP,
+          "the bring-up completes before the transmit checks");
+    CHECK(e1000_tx_frame(&e1000s[0], frame, 200) == NETDEV_TX_OK,
+          "a frame that is sent reports that it was");
     CHECK(model_tx_sent == 1 && model_tx_last_len == 200, "a frame is sent with its own length");
-    CHECK(e1000_tx_packets == 1, "the frame is counted");
+    CHECK(e1000s[0].tx_packets == 1, "the frame is counted");
     {
-        unsigned lower = e1000_tx_ring[0].lower;
+        unsigned lower = e1000s[0].tx_ring[0].lower;
         unsigned char cmd = (unsigned char)(lower >> 24);
 
         CHECK((lower & 0xffffu) == 200, "the descriptor carries the frame's length");
@@ -819,42 +853,43 @@ int main(void)
         CHECK((cmd & E1000_TXD_CMD_IFCS) != 0, "the card is asked to append the check sequence");
         CHECK((cmd & E1000_TXD_CMD_RS) != 0,
               "the card is asked to report status, without which no descriptor is ever free");
-        CHECK(e1000_tx_ring[0].addr_lo == (unsigned)(uintptr_t)e1000_tx_buf[0],
+        CHECK(e1000s[0].tx_ring[0].addr_lo == (unsigned)(uintptr_t)e1000s[0].tx_buf[0],
               "the descriptor points at the buffer the frame was copied into");
     }
 
     /* ---- transmit: a short frame is padded ---- */
     model_reset();
-    CHECK(e1000_init() == NETDEV_UP, "the bring-up completes");
-    e1000_tx_frame(frame, 20);
+    CHECK(e1000_init(0, &model_card) == NETDEV_UP, "the bring-up completes");
+    e1000_tx_frame(&e1000s[0], frame, 20);
     CHECK(model_tx_last_len == 60, "a short frame is padded to the Ethernet minimum");
     CHECK(model_tx_last[59] == 0, "the padding is zeroed, not whatever the buffer held");
 
     /* ---- transmit: an over-length frame is refused ---- */
     model_reset();
-    CHECK(e1000_init() == NETDEV_UP, "the bring-up completes");
-    CHECK(e1000_tx_frame(frame, E1000_FRAME_MAX + 1) == NETDEV_TX_DROPPED,
+    CHECK(e1000_init(0, &model_card) == NETDEV_UP, "the bring-up completes");
+    CHECK(e1000_tx_frame(&e1000s[0], frame, E1000_FRAME_MAX + 1) == NETDEV_TX_DROPPED,
           "an over-length frame reports that it was dropped");
-    CHECK(model_tx_sent == 0 && e1000_tx_packets == 0,
+    CHECK(model_tx_sent == 0 && e1000s[0].tx_packets == 0,
           "a frame larger than the card's own maximum is refused");
-    CHECK(e1000_tx_head == 0, "a refused frame consumes no descriptor");
+    CHECK(e1000s[0].tx_head == 0, "a refused frame consumes no descriptor");
 
     /* ---- transmit: a card that never finishes stalls, bounded ---- */
     model_reset();
-    CHECK(e1000_init() == NETDEV_UP, "the bring-up completes");
+    CHECK(e1000_init(0, &model_card) == NETDEV_UP, "the bring-up completes");
     model_swallow_tx = 1;
     {
         int refusals = 0;
 
         for (i = 0; i < E1000_RING_SIZE + 2; i++) {
-            if (e1000_tx_frame(frame, 64) == NETDEV_TX_DROPPED) {
+            if (e1000_tx_frame(&e1000s[0], frame, 64) == NETDEV_TX_DROPPED) {
                 refusals++;
             }
         }
         CHECK(refusals > 0, "a frame the stalled ring could not take reports that it was dropped");
     }
-    CHECK(e1000_tx_stalls > 0, "a ring the card never drains is counted as a stall, not a hang");
-    CHECK(e1000_tx_packets == E1000_RING_SIZE - 1,
+    CHECK(e1000s[0].tx_stalls > 0,
+          "a ring the card never drains is counted as a stall, not a hang");
+    CHECK(e1000s[0].tx_packets == E1000_RING_SIZE - 1,
           "one descriptor is left unsubmitted, so a full ring is not an empty one");
     /* The whole point of that spare descriptor. The card reads head equal to
        tail as nothing to do, so a driver that filled every entry would wrap
@@ -864,20 +899,20 @@ int main(void)
 
     /* ---- a driver that is not up does nothing ---- */
     model_reset();
-    CHECK(e1000_tx_frame(frame, 64) == NETDEV_TX_DROPPED,
+    CHECK(e1000_tx_frame(&e1000s[0], frame, 64) == NETDEV_TX_DROPPED,
           "a driver that never came up refuses the frame rather than swallowing it");
     e1000_irq(0);
-    CHECK(e1000_tx_packets == 0 && rx_calls == 0,
+    CHECK(e1000s[0].tx_packets == 0 && rx_calls == 0,
           "a driver that never came up neither sends nor receives");
 
     /* ---- stop: the order, and what it leaves ---- */
     model_reset();
-    CHECK(e1000_init() == NETDEV_UP, "the bring-up completes before the stop checks");
+    CHECK(e1000_init(0, &model_card) == NETDEV_UP, "the bring-up completes before the stop checks");
     {
         unsigned mark = model_log_len;
         int rctl, tctl, imc;
 
-        e1000_stop();
+        e1000_stop(&e1000s[0]);
         rctl = find_write(mark, E1000_RCTL);
         tctl = find_write(mark, E1000_TCTL);
         imc = find_write_bits(mark, E1000_IMC, 0xffffffffu);
@@ -896,7 +931,7 @@ int main(void)
                   "it can still be reached by");
         }
         CHECK(!pci_master_enabled, "the card is left unable to master the bus");
-        CHECK(!e1000_up, "a stopped driver no longer reports itself up");
+        CHECK(!e1000s[0].up, "a stopped driver no longer reports itself up");
     }
 
     /* Twice. No current path calls it twice, but the interface says it must
@@ -905,8 +940,8 @@ int main(void)
     {
         unsigned mark = model_log_len;
 
-        e1000_stop();
-        CHECK(!e1000_up, "stopping a stopped card changes nothing");
+        e1000_stop(&e1000s[0]);
+        CHECK(!e1000s[0].up, "stopping a stopped card changes nothing");
         CHECK(model_log_len > mark, "a second stop is still a stop");
     }
 
@@ -918,17 +953,18 @@ int main(void)
        address the card will not report fails there. */
     model_reset();
     model_stuck_reset = 1;
-    CHECK(e1000_init() == NETDEV_FAILED, "a bring-up that fails at the reset is refused");
+    CHECK(e1000_init(0, &model_card) == NETDEV_FAILED,
+          "a bring-up that fails at the reset is refused");
     CHECK(!pci_master_enabled, "and never took the bus in the first place");
 
     model_reset();
     model_swallow_tx = 1;
-    CHECK(e1000_init() == NETDEV_UP, "a card that starts takes the bus");
+    CHECK(e1000_init(0, &model_card) == NETDEV_UP, "a card that starts takes the bus");
     CHECK(pci_master_enabled, "and is mastering it");
     {
         unsigned mark = model_log_len;
 
-        e1000_stop();
+        e1000_stop(&e1000s[0]);
         CHECK(find_write(mark, MODEL_BUSMASTER_OFF) >= 0 && !pci_master_enabled,
               "a card that was started and then stopped is left unable to master the bus");
     }
@@ -937,37 +973,39 @@ int main(void)
        nothing: stop must write nothing either. */
     model_reset();
     pci_present = 0;
-    CHECK(e1000_init() == NETDEV_ABSENT, "the card is absent");
+    CHECK(e1000_init(0, &model_card) == NETDEV_ABSENT, "the card is absent");
     {
         unsigned mark = model_accesses;
 
-        e1000_stop();
+        e1000_stop(&e1000s[0]);
         CHECK(model_accesses == mark, "stopping an absent card costs no register access");
     }
 
     /* ---- stop waits for what the card already took ---- */
     model_reset();
-    CHECK(e1000_init() == NETDEV_UP, "the bring-up completes before the drain check");
+    CHECK(e1000_init(0, &model_card) == NETDEV_UP, "the bring-up completes before the drain check");
     model_tx_completes_after = 3;
-    CHECK(e1000_tx_frame(frame, 200) == NETDEV_TX_OK, "a frame is accepted by a slow card");
-    CHECK(e1000_tx_head != e1000_tx_tail, "and is still outstanding, since the card is slow");
-    e1000_stop();
-    CHECK(e1000_tx_head == e1000_tx_tail,
+    CHECK(e1000_tx_frame(&e1000s[0], frame, 200) == NETDEV_TX_OK,
+          "a frame is accepted by a slow card");
+    CHECK(e1000s[0].tx_head != e1000s[0].tx_tail,
+          "and is still outstanding, since the card is slow");
+    e1000_stop(&e1000s[0]);
+    CHECK(e1000s[0].tx_head == e1000s[0].tx_tail,
           "stop waits for what the card accepted before silencing it, so the last log "
           "line a remote reader is waiting for is sent and not discarded");
 
     /* A card that never finishes costs the wait and no more. */
     model_reset();
-    CHECK(e1000_init() == NETDEV_UP, "the bring-up completes");
+    CHECK(e1000_init(0, &model_card) == NETDEV_UP, "the bring-up completes");
     model_swallow_tx = 1;
-    CHECK(e1000_tx_frame(frame, 200) == NETDEV_TX_OK, "a frame is accepted");
-    e1000_stop();
+    CHECK(e1000_tx_frame(&e1000s[0], frame, 200) == NETDEV_TX_OK, "a frame is accepted");
+    e1000_stop(&e1000s[0]);
     CHECK(!pci_master_enabled, "a card that never finishes is still stopped, bounded");
 
     /* ---- a line this kernel cannot deliver ---- */
     model_reset();
     pci_irq_line = 20;
-    CHECK(e1000_init() == NETDEV_FAILED,
+    CHECK(e1000_init(0, &model_card) == NETDEV_FAILED,
           "an interrupt line outside the sixteen a PIC can deliver is refused");
     CHECK(!isr_handler_registered,
           "and no handler is installed, which for a large enough line would land on an "
@@ -975,56 +1013,57 @@ int main(void)
 
     model_reset();
     pci_irq_line = 15;
-    CHECK(e1000_init() == NETDEV_UP, "the last line a PIC can deliver is accepted");
+    CHECK(e1000_init(0, &model_card) == NETDEV_UP, "the last line a PIC can deliver is accepted");
 
     /* ---- the link ---- */
     model_reset();
-    CHECK(e1000_init() == NETDEV_UP, "the bring-up completes before the link checks");
+    CHECK(e1000_init(0, &model_card) == NETDEV_UP, "the bring-up completes before the link checks");
     {
         struct netdev_link link;
 
         model_reg[E1000_STATUS / 4] = E1000_STATUS_LU | E1000_STATUS_FD | (2u << 6);
-        CHECK(e1000_link(&link) == 1, "a card whose registers can be read answers");
+        CHECK(e1000_link(&e1000s[0], &link) == 1, "a card whose registers can be read answers");
         CHECK(link.up && link.mbps == 1000 && link.full_duplex,
               "a gigabit full-duplex link is reported as one");
 
         model_reg[E1000_STATUS / 4] = E1000_STATUS_LU | (1u << 6);
-        CHECK(e1000_link(&link) && link.mbps == 100 && !link.full_duplex,
+        CHECK(e1000_link(&e1000s[0], &link) && link.mbps == 100 && !link.full_duplex,
               "a hundred-megabit half-duplex link is reported as one");
 
         model_reg[E1000_STATUS / 4] = E1000_STATUS_LU;
-        CHECK(e1000_link(&link) && link.mbps == 10, "ten megabit is reported as ten");
+        CHECK(e1000_link(&e1000s[0], &link) && link.mbps == 10, "ten megabit is reported as ten");
 
         /* Both 2 and 3 encode a gigabit, and a driver that read the field as
            a table would get the second of them wrong. */
         model_reg[E1000_STATUS / 4] = E1000_STATUS_LU | (3u << 6);
-        CHECK(e1000_link(&link) && link.mbps == 1000,
+        CHECK(e1000_link(&e1000s[0], &link) && link.mbps == 1000,
               "the second encoding of a gigabit is a gigabit too");
 
         model_reg[E1000_STATUS / 4] = 0;
-        CHECK(e1000_link(&link) == 1 && !link.up,
+        CHECK(e1000_link(&e1000s[0], &link) == 1 && !link.up,
               "a card with no link says so, which is not the same as not saying");
     }
 
     /* A card that was never found cannot be asked. */
     model_reset();
     pci_present = 0;
-    CHECK(e1000_init() == NETDEV_ABSENT, "the card is absent");
+    CHECK(e1000_init(0, &model_card) == NETDEV_ABSENT, "the card is absent");
     {
         struct netdev_link link;
 
         link.up = 42;
-        CHECK(e1000_link(&link) == 0, "a card with no window reports that it cannot say");
+        CHECK(e1000_link(&e1000s[0], &link) == 0,
+              "a card with no window reports that it cannot say");
         CHECK(link.up == 42, "and leaves the caller's answer untouched");
     }
 
     /* ---- the driver's table ---- */
-    CHECK(e1000_netdev.tx == e1000_tx_frame, "the table names the transmit path");
+    CHECK(e1000_netdev.tx == e1000_op_tx, "the table names the transmit path");
     CHECK(e1000_netdev.poll == 0, "the table leaves poll empty, because this card interrupts");
     CHECK(e1000_netdev.init == e1000_init, "the table names the bring-up");
     CHECK(e1000_netdev.error != 0, "the table names a diagnostic");
-    CHECK(e1000_netdev.stop == e1000_stop, "the table names the way to silence the card");
-    CHECK(e1000_netdev.link == e1000_link, "the table names the way to ask about the link");
+    CHECK(e1000_netdev.stop == e1000_op_stop, "the table names the way to silence the card");
+    CHECK(e1000_netdev.link == e1000_op_link, "the table names the way to ask about the link");
 
     CHECK(lock_depth == 0 && !lock_ever_negative,
           "every interrupt bracket the driver took, it released");

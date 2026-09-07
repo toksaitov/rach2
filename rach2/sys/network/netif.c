@@ -182,7 +182,7 @@ static int32_t ifreq_ioctl(uint32_t request, uint32_t arg)
          * working one until the driver interface could be asked. The rule for
          * a card that cannot report a link belongs to that interface, so it
          * is asked rather than repeated here. */
-        if (netdev_running()) {
+        if (netdev_running(netdev_first())) {
             flags |= (uint16_t)IFF_RUNNING;
         }
         k_memset(ifr + IFREQ_UNION, 0, IFREQ_LEN - IFREQ_UNION);

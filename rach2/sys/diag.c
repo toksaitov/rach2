@@ -200,7 +200,7 @@ static void diag_summary(void)
     klog(KLOG_INFO, "diag", "board: %s", board_name());
 
     klog(KLOG_INFO, "diag",
-         "network: %s, station %X%X:%X%X:%X%X:%X%X:%X%X:%X%X", netdev_name(),
+         "network: %s, station %X%X:%X%X:%X%X:%X%X:%X%X:%X%X", netdev_name(netdev_first()),
         (unsigned)(net_mac[0] >> 4), (unsigned)(net_mac[0] & 0xF), (unsigned)(net_mac[1] >> 4),
         (unsigned)(net_mac[1] & 0xF), (unsigned)(net_mac[2] >> 4), (unsigned)(net_mac[2] & 0xF),
         (unsigned)(net_mac[3] >> 4), (unsigned)(net_mac[3] & 0xF), (unsigned)(net_mac[4] >> 4),
