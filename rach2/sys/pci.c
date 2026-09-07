@@ -285,8 +285,14 @@ bool pci_find_device_skip(uint8_t class_code, uint8_t subclass, pci_device_t *sk
  */
 bool pci_find_device_by_id(uint16_t vendor_id, uint16_t device_id, pci_device_t *out)
 {
+    return pci_find_nth_by_id(vendor_id, device_id, 0, out);
+}
+
+bool pci_find_nth_by_id(uint16_t vendor_id, uint16_t device_id, int nth, pci_device_t *out)
+{
     uint16_t bus;
     uint8_t device, function;
+    int seen = 0;
 
     for (bus = 0; bus < 256; bus++) {
         for (device = 0; device < 32; device++) {
@@ -305,8 +311,10 @@ bool pci_find_device_by_id(uint16_t vendor_id, uint16_t device_id, pci_device_t 
                 did = pci_read_config16((uint8_t)bus, device, function, PCI_DEVICE_ID);
 
                 if (vid == vendor_id && did == device_id) {
-                    pci_read_device_info((uint8_t)bus, device, function, out);
-                    return true;
+                    if (seen++ == nth) {
+                        pci_read_device_info((uint8_t)bus, device, function, out);
+                        return true;
+                    }
                 }
 
                 if (function == 0) {

@@ -97,6 +97,16 @@ bool pci_find_device_skip(uint8_t class_code, uint8_t subclass, pci_device_t *sk
  * match. */
 bool pci_find_device_by_id(uint16_t vendor_id, uint16_t device_id, pci_device_t *out);
 
+/**
+ * The `nth` device of that identity on the bus, counting from zero.
+ *
+ * A machine may have several cards of one kind, and a driver that takes them
+ * all asks for each in turn until this says there are no more.
+ *
+ * @return true with `*out` filled, false when there is no such device.
+ */
+bool pci_find_nth_by_id(uint16_t vendor_id, uint16_t device_id, int nth, pci_device_t *out);
+
 /*
  * PCIe capability walk. The capability list starts at the pointer in config
  * space and is a singly linked list of (id, next) pairs; a bounded walk is
