@@ -227,10 +227,11 @@ int main(int argc, char **argv)
                         "profile this computes for\n", argv[arg]);
         return 1;
     }
-    /* resize2fs places a new group's bitmaps by the stride when the volume
-     * declares one, so the set this computes from the plain layout would
-     * miss the blocks it writes. The images this project makes declare
-     * none; another volume is refused rather than half computed. */
+    /* resize2fs places a new group's bitmaps by a stride, and it takes
+     * that stride from the volume's own layout rather than from the
+     * recorded value, which `tune2fs -E stride=0` can clear without
+     * moving anything. So the recorded value is refused when it is set,
+     * and the layout is checked group by group further down. */
     if (rd16(sb + 356) != 0 || rd16(sb + 358) != 0) {
         fprintf(stderr, "growset: %s: the volume declares a RAID stride or stripe width, "
                         "and the grow would place its bitmaps by them\n", argv[arg]);
@@ -268,6 +269,25 @@ int main(int argc, char **argv)
         fprintf(stderr, "growset: the descriptors did not read\n");
         return 1;
     }
+    /* Every existing group has its bitmaps where the plain layout puts
+     * them: at the group's start, past its superblock copy, descriptors
+     * and reserve when it has them. A volume laid out by a stride is
+     * refused here, since the blocks a grow would write are not the ones
+     * computed below. */
+    for (g = 0; g < groups; g++) {
+        const unsigned char *d = gd + g * 32;
+        unsigned long long start = first_data + (unsigned long long)g * bpg;
+        unsigned long long plain = start + (has_super(sparse, g) ? 1 + gd_old + reserved : 0);
+
+        if (rd32(d + 0) != plain || rd32(d + 4) != plain + 1) {
+            fprintf(stderr, "growset: %s: group %lu has its bitmaps at %lu and %lu and the plain "
+                            "layout puts them at %llu and %llu; the grow would place a new "
+                            "group's by the same rule\n",
+                    argv[arg], g, (unsigned long)rd32(d + 0), (unsigned long)rd32(d + 4), plain,
+                    plain + 1);
+            return 1;
+        }
+    }
     itable0 = rd32(gd + 8);
     if (read_at(f, (unsigned long long)itable0 * bs + 6 * inode_size, raw, sizeof(raw)) != 0) {
         fprintf(stderr, "growset: the resize inode did not read\n");
@@ -277,7 +297,7 @@ int main(int argc, char **argv)
     fclose(f);
 
     add(0, 1, "the primary superblock");
-    add(itable0, 1, "the inode table block of the resize inode");
+    add(itable0 + (6 * inode_size) / bs, 1, "the inode table block of the resize inode");
     if (dind != 0) {
         add(dind, 1, "the resize inode's double-indirect block");
     }

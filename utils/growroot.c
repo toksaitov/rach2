@@ -206,7 +206,7 @@ int main(int argc, char **argv)
     unsigned long long end, limit, new_count;
     unsigned char sector[512];
     char dev[32], part_node[32];
-    char text[64];
+    char text[128];
 
     if (argc != 2 || sscanf(argv[1], "MBRID=%lx,%d", &want_id, &entry) != 2) {
         fprintf(stderr, "usage: growroot MBRID=ID,N\n");
@@ -311,9 +311,33 @@ int main(int argc, char **argv)
                                            ((unsigned long long)e0[10] << 16) |
                                            ((unsigned long long)e0[11] << 24);
 
+            int other;
+
             if (now_id != want_id || was_start != p->start) {
                 close(fd);
                 return fail(dev, "the table changed while this was deciding; nothing written");
+            }
+            /* The limit came from a table read through a descriptor that
+             * is closed by now. Another writer can add an entry in the
+             * space this is about to take without moving this entry or
+             * the disk's signature, so the space itself is judged again
+             * against the table the writer sees. */
+            for (other = 0; other < 4; other++) {
+                const unsigned char *o = sector + MBR_ENTRIES + 16 * other;
+                unsigned long long o_start, o_count;
+
+                if (other == entry - 1 || o[4] == 0) {
+                    continue;
+                }
+                o_start = (unsigned long long)o[8] | ((unsigned long long)o[9] << 8) |
+                          ((unsigned long long)o[10] << 16) | ((unsigned long long)o[11] << 24);
+                o_count = (unsigned long long)o[12] | ((unsigned long long)o[13] << 8) |
+                          ((unsigned long long)o[14] << 16) | ((unsigned long long)o[15] << 24);
+                if (o_count != 0 && o_start < limit && o_start + o_count > end) {
+                    close(fd);
+                    return fail(dev, "another entry now lies in the space this would take; "
+                                     "nothing written");
+                }
             }
         }
         if (lseek(fd, 0, SEEK_SET) != 0 ||
@@ -356,6 +380,18 @@ int main(int argc, char **argv)
         if (found != 2) {
             return fail(part_node, "the table read again does not show the new size");
         }
+    }
+    /* A repairing pass writes wherever the damage is, and `growset`
+     * computes only the blocks a grow itself writes, so a volume that
+     * needs repair cannot be undone from the set saved before this. It is
+     * checked read-only first and refused rather than repaired. */
+    printf("growroot: check: e2fsck -f -n %s\n", part_node);
+    fflush(stdout);
+    rc = run("/sbin/e2fsck", "-fn", part_node);
+    if (rc != 0) {
+        snprintf(text, sizeof(text), "e2fsck -fn status %d; repair it first, since a repair "
+                                     "writes outside the saved set", rc);
+        return fail(part_node, text);
     }
     printf("growroot: check: e2fsck -f -p %s\n", part_node);
     fflush(stdout);
