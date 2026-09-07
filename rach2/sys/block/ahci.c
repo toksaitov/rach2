@@ -978,6 +978,18 @@ static int ahci_judge(struct ahci_disk *d, uint32_t bytes, volatile uint8_t *buf
     return 0;
 }
 
+/**
+ * Acknowledge this port before issuing another command. Clear only this
+ * port's controller bit so another port's completion remains pending.
+ */
+static void ahci_acknowledge(struct ahci_disk *d)
+{
+    uint32_t is_off = ahci_port_off(d->port, AHCI_PxIS);
+
+    ahci_write32(is_off, ahci_read32(is_off));
+    ahci_write32(AHCI_IS, 1u << d->port);
+}
+
 static void ahci_drain(struct ahci_disk *d);
 static void ahci_start_next(struct ahci_disk *d);
 static int ahci_polled_failed(struct ahci_disk *d);
@@ -1027,6 +1039,7 @@ static int ahci_run_command(struct ahci_disk *d, uint8_t command, uint64_t lba, 
         k_udelay(AHCI_CMD_POLL_US);
     }
     rc = ahci_judge(d, bytes, buf, write);
+    ahci_acknowledge(d);
     ahci_start_next(d);
     return rc;
 }
@@ -1038,6 +1051,7 @@ static int ahci_polled_failed(struct ahci_disk *d)
 {
     int rc = ahci_io_error(d);
 
+    ahci_acknowledge(d);
     ahci_start_next(d);
     return rc;
 }
@@ -1084,8 +1098,8 @@ static int ahci_start_request(struct ahci_disk *d, struct block_request *r)
 }
 
 /**
- * The active command has left the slot: judge it, finish its request or
- * start the flush half of a write, and start the next request queued.
+ * The active command has left the slot: judge it, acknowledge its interrupt,
+ * then finish its request or start the flush half of a write.
  * Runs from the interrupt, and from the polled path draining the port.
  */
 static void ahci_finish_active(struct ahci_disk *d)
@@ -1098,6 +1112,7 @@ static void ahci_finish_active(struct ahci_disk *d)
     }
     rc = ahci_judge(d, d->flushing ? 0 : r->count * BLOCK_SECTOR_SIZE, (volatile uint8_t *)r->page,
                     r->write);
+    ahci_acknowledge(d);
     if (rc == 0 && r->write && !d->flushing) {
         if (ahci_build_command(d, ATA_FLUSH_EXT, 0, 0, 0, 0, 0) == 0) {
             d->flushing = 1;
@@ -1220,12 +1235,6 @@ static void ahci_handler(isr_params_t *params)
         }
         if (d->active && !(ahci_read32(ahci_port_off(d->port, AHCI_PxCI)) & (1u << AHCI_SLOT))) {
             ahci_finish_active(d);
-            /* The status this interrupt reported is cleared before the next
-             * command is issued. Acknowledging afterwards clears the bit
-             * that command has already set when it finishes quickly, and
-             * the next interrupt then finds nothing to do and leaves it
-             * active until its deadline. */
-            ahci_write32(is_off, is);
             ahci_start_next(d);
             continue;
         }
@@ -1235,13 +1244,12 @@ static void ahci_handler(isr_params_t *params)
             (void)ahci_io_error(d);
             d->active = 0;
             block_request_complete(r, d->active_generation, -EIO);
-            ahci_write32(is_off, is);
+            ahci_acknowledge(d);
             ahci_start_next(d);
             continue;
         }
-        ahci_write32(is_off, is);
+        ahci_acknowledge(d);
     }
-    ahci_write32(AHCI_IS, ahci_read32(AHCI_IS));
 }
 
 void ahci_start(void)

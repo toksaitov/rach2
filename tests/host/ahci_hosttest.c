@@ -42,8 +42,10 @@ static int link_comes_up;
 static int command_completes;
 static int fatal_status;
 static int engine_stuck;
+static int immediate_interrupt;
 static unsigned stop_reads;
 static unsigned issued;
+static unsigned stale_issues;
 static unsigned completed;
 static uint32_t interrupts_masked;
 /* What the model says it moved, which the driver compares with what it
@@ -55,6 +57,7 @@ static void (*on_command_issued)(void);
 
 #define R_CAP  0x00
 #define R_GHC  0x04
+#define R_IS   0x08
 #define R_PI   0x0C
 #define R_VS   0x10
 #define R_CAP2 0x24
@@ -155,7 +158,7 @@ static void model_w32(uint32_t off, uint32_t v)
         reg[off] = v;
         return;
     }
-    if (off == P0 + P_IS || off == P0 + P_SERR) {
+    if (off == R_IS || off == P0 + P_IS || off == P0 + P_SERR) {
         /* Write one to clear, which is how a controller's status registers
            are cleared and the opposite of storing what was written. */
         reg[off] &= ~v;
@@ -172,10 +175,21 @@ static void model_w32(uint32_t off, uint32_t v)
            bytes it moved; one it does not leaves the bit set until the
            driver's wait gives up. The byte count is the controller's word for
            what it did, and the driver checks it, so the model must give one. */
+        if (reg[R_IS] & 1u) {
+            stale_issues++;
+        }
         issued++;
         reg[off] = command_completes ? 0 : v;
         if (command_completes && on_command_issued) {
             on_command_issued();
+            if (immediate_interrupt) {
+                reg[P0 + P_IS] |= 1u;
+                reg[R_IS] |= 1u;
+            }
+        }
+        if (fatal_status == 2) {
+            reg[P0 + P_IS] |= 0x40000000u;
+            reg[R_IS] |= 1u;
         }
         if (fatal_status) {
             reg[P0 + P_TFD] = 0x81; /* BSY clear, ERR set */
@@ -437,7 +451,8 @@ static void model_reset(void)
     command_completes = 1;
     fatal_status = 0;
     engine_stuck = 0;
-    stop_reads = issued = completed = 0;
+    immediate_interrupt = 0;
+    stop_reads = issued = completed = stale_issues = 0;
     interrupts_masked = 0;
     reg[R_CAP2] = 0u; /* no handoff, unless a row asks for one */
     block0 = 0;
@@ -510,6 +525,65 @@ static void stuck_recovery(int path)
     }
     CHECK("the recovery child is reaped", waitpid(pid, &status, 0) == pid);
     CHECK("failed engine stop preserves DMA ownership before halting", status == (42 << 8));
+}
+
+/** A flush and the next queued read may finish before the handler returns. */
+static void quick_completions(void)
+{
+    static uint8_t buf[512];
+
+    model_reset();
+    CHECK("the flush row starts a port",
+          ahci_select_port() == 0 && ahci_port_start(&ahci_disks[0]) == 0);
+    active_request.count = 1;
+    active_request.write = 1;
+    active_request.page = buf;
+    ahci_disks[0].active = &active_request;
+    ahci_disks[0].flushing = 0;
+    queued_request.count = 1;
+    queued_request.page = buf;
+    ahci_disks[0].queue_head = ahci_disks[0].queue_tail = &queued_request;
+    ((volatile ahci_cmd_header_t *)ahci_disks[0].cmdlist)->prdbc = 512;
+    reg[P0 + P_IS] = 1;
+    reg[P0 + P_CI] = 0;
+    reg[R_IS] = 3;
+    immediate_interrupt = 1;
+    ahci_handler(0);
+    CHECK("the completed write issued its flush", issued == 1 && ahci_disks[0].flushing);
+    CHECK("the quick flush completion is still pending", (reg[P0 + P_IS] & 1) != 0);
+    CHECK("the flush keeps its controller interrupt pending", (reg[R_IS] & 1) != 0);
+    CHECK("another port keeps its controller interrupt pending", (reg[R_IS] & 2) != 0);
+    ahci_handler(0);
+    CHECK("the quick flush completes its request", completed == 1);
+    CHECK("the next request is active", ahci_disks[0].active == &queued_request);
+    CHECK("the next completion keeps both interrupt bits pending",
+          (reg[P0 + P_IS] & 1) && (reg[R_IS] & 1));
+    ahci_handler(0);
+    CHECK("the next request completes", completed == 2 && !ahci_disks[0].active);
+    CHECK("the other port remains pending", reg[R_IS] == 2);
+}
+
+/** A polled command is acknowledged before its queue resumes, even on error. */
+static void polled_queue_restart(int fault)
+{
+    static uint8_t buf[512];
+    int rc;
+
+    model_reset();
+    CHECK("the polled queue row starts a port",
+          ahci_select_port() == 0 && ahci_port_start(&ahci_disks[0]) == 0);
+    queued_request.count = 1;
+    queued_request.page = buf;
+    ahci_disks[0].queue_head = ahci_disks[0].queue_tail = &queued_request;
+    reg[R_IS] = 2;
+    immediate_interrupt = 1;
+    fatal_status = fault;
+    command_completes = fault != 2;
+    rc = ahci_run_command(&ahci_disks[0], ATA_IDENTIFY, 0, 0, buf, sizeof(buf), 0);
+    CHECK("the polled command reports its result", rc == (fault ? -EIO : 0));
+    CHECK("the polled command starts the queued request", ahci_disks[0].active == &queued_request);
+    CHECK("the queue resumes after the polled interrupt is acknowledged", stale_issues == 0);
+    CHECK("the queued completion and the other port remain pending", reg[R_IS] == 3);
 }
 
 int main(void)
@@ -619,6 +693,11 @@ int main(void)
     stuck_recovery(1);
     stuck_recovery(2);
     stuck_recovery(3);
+
+    quick_completions();
+    polled_queue_restart(0);
+    polled_queue_restart(1);
+    polled_queue_restart(2);
 
     if (fails == 0) {
         printf("ahci_hosttest: PASS\n");
