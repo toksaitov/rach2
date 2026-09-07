@@ -135,6 +135,16 @@ Written by the session that ran phases 1 to 5 when its allowance ran out. The ne
 
 `rm -rf build && make` does not work: entry 5 of the shortcomings list, both the parallel and the serial form, since the test manifest stages `build/tests` as an `exec-dir` and no rule makes a directory. Use `rm -rf build && tests/run all`, whose `prepare-all` builds the components in a make of its own first; that is how milestone 46 closed. Read the shortcomings list before any hour-scale run for the same reason. When a suite fails, rebuild what changed and rerun that suite, not the set. Run the Codex units beside the set, not after it: the diff they read is fixed, and only a file a later fix touches needs its unit again.
 
+### What blocks the close, 2026-09-07 17:20
+
+The full set from a clean tree passed 72 of 77 suites. Five failed: `sealed`, `drill`, `drill-ext2`, `metal` and `large`.
+
+* `sealed` fails at its second boot, and the cause is entry 16 of the shortcomings list, written today: the network does not come up when the machine is restarted by `reboot -f` sent over SSH. The first boot gets its lease and answers SSH; the second prints `init: network: ifup -a did not configure the interface` with no output from `udhcpc` at all. The same reboot by hand at the console works. This is not phase 5's work: it was seen in this milestone's earlier session as well.
+* `drill`, `drill-ext2` and `metal` all reboot the machine too, and may share that cause. Read their logs before assuming it; the suites write their console logs beside their disk images under `build/images/`, and a rerun overwrites them, so read first.
+* `large` passed twice when run alone today and failed in a pool of twenty workers. Entry 2, the pooled runs, unless it repeats alone.
+
+Nothing else in the set failed, so the close needs entry 16 fixed, the other three understood, and then the suites that failed run again. Do not run the whole set again for them.
+
 ### Rules the owner set on 2026-09-07
 
 Codex once at the close for review and once for prose, never per phase. A suite's default rows run in minutes; a long proof runs once, recorded, behind a variable. A problem that would slow every later run is fixed in the milestone that found it, with its entry saying so; only what costs nothing to carry goes to milestone 50. Do not give finish times that assume nothing fails.
