@@ -102,15 +102,19 @@ boot "$DIR/one.qcow2" $MEM "$DIR/end.log" \
     "send=dd if=/mnt/end.bin bs=4096 skip=$((LAST - 40)) count=8 2>/dev/null | cksum" \
     "send=umount /mnt && echo UMOUNT\"\"OK" "expect=UMOUNTOK" \
     "$FSCK" "expect=FSCK0" "send=echo ROW\"\"DONE" "expect=ROWDONE" || fail "the file near the end"
-SUMS=$(tr -d '\r' < "$DIR/end.log" | grep -a '^[0-9]* 32768$' | sort -u | wc -l | tr -d ' ')
-[ "$SUMS" = "1" ] || fail "the file near the end did not read back"
+# Two checksums of 32768 bytes each, written and read, and they must be the
+# same one. Counting the distinct lines alone would pass a run that produced
+# one line and lost the other, so the count of lines is checked as well.
+SUMS=$(tr -d '\r' < "$DIR/end.log" | grep -ac '^[0-9]* 32768$')
+UNIQ=$(tr -d '\r' < "$DIR/end.log" | grep -a '^[0-9]* 32768$' | sort -u | wc -l | tr -d ' ')
+[ "$SUMS" = "2" ] && [ "$UNIQ" = "1" ] || fail "the file near the end did not read back ($SUMS lines, $UNIQ distinct)"
 echo "grow-test: a file written in the grown volume's last group reads back and the volume is clean: OK"
 
 # ---- 2: killed inside resize2fs, repaired and finished by the next run ----
 overlay "$DIR/two.qcow2" "$BASE"
 boot "$DIR/two.qcow2" $MEM "$DIR/two.log" \
-    "send=growroot MBRID=$ID,1 > /tmp/g.log 2>&1 & sleep $KILL_AFTER; kill \$!; killall resize2fs; sleep 2; cat /tmp/g.log; pidof resize2fs || echo NO\"\"RESIZER; echo KILL\"\"DONE" \
-    "expect=NORESIZER" "expect=KILLDONE" \
+    "send=growroot MBRID=$ID,1 > /tmp/g.log 2>&1 & sleep $KILL_AFTER; pidof resize2fs > /tmp/r.pid; kill \$!; killall resize2fs; sleep 2; cat /tmp/g.log; test -s /tmp/r.pid && echo WAS\"\"RESIZING; pidof resize2fs || echo NO\"\"RESIZER; echo KILL\"\"DONE" \
+    "expect=WASRESIZING" "expect=NORESIZER" "expect=KILLDONE" \
     "send=growroot MBRID=$ID,1" "expect=$GROWN" \
     "$FSCK" "expect=FSCK0" "send=echo ROW\"\"DONE" "expect=ROWDONE" || fail "the grow killed and run again"
 grep -aq 'growroot: grow: resize2fs /dev/disk0p1' "$DIR/two.log" || fail "the first run reached resize2fs"
@@ -130,10 +134,15 @@ grep -aq "growroot: entry: /dev/disk0p1 already fills the $END sectors after it"
 echo "grow-test: a grow interrupted between the entry and the resize is finished by running again: OK"
 
 # ---- 4: too little memory, refused by name before anything is read ----
-cc -o "$DIR/growroot-host" "$REPO/utils/growroot.c" > "$DIR/growroot-host.log" 2>&1 || fail "growroot on the host"
+# The refusal is proved on the host, where the memory can be dictated: the
+# program is built with a requirement no machine meets, so what it reads
+# from `/proc/meminfo` decides nothing. A host that has that file and one
+# that does not both take this path.
+cc -DGROWROOT_MEMORY_MIB=1048576u -o "$DIR/growroot-host" "$REPO/utils/growroot.c" \
+    > "$DIR/growroot-host.log" 2>&1 || fail "growroot on the host"
 "$DIR/growroot-host" MBRID=$ID,1 > "$DIR/four.log" 2>&1; rc=$?
 [ "$rc" -eq 1 ] || fail "the refusal's status ($rc)"
-grep -q '^growroot: refused: 0 MiB of memory; growing a root needs 7 MiB$' "$DIR/four.log" \
+grep -q '^growroot: refused: [0-9]* MiB of memory; growing a root needs 1048576 MiB$' "$DIR/four.log" \
     || fail "the refusal by name"
 echo "grow-test: a machine without the memory is refused by name and nothing is read: OK"
 rm -f "$DIR"/*.qcow2 "$BASE" "$FULL"

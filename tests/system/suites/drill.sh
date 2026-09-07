@@ -406,12 +406,17 @@ case "$OUT" in
     *) fail "the repair did not report the whole length written: $OUT" ;;
 esac
 
-# Read back through the same device and hashed on the machine: the bytes on the
-# platter are compared, not the bytes the writer believes it sent.
-OUT="$(machine "dd if=/dev/disk0 bs=512 skip=$((ROOT_OFF / 512)) count=$((ROOT_BYTES / 512)) 2>/dev/null | sha256sum" || true)"
+# The bytes on the platter are compared, not the bytes the writer believes it
+# sent, and they are read from the disk file on the host: hashing the whole
+# root on an emulated 32-bit processor costs minutes, and a check that reads
+# through the machine's own driver would be judging the writer with the
+# reader that is under test beside it.
+machine 'sync' > /dev/null 2>&1 || true
+OUT="$(dd if="$WORK" bs=512 skip=$((ROOT_OFF / 512)) count=$((ROOT_BYTES / 512)) status=none \
+    | shasum -a 256 | awk '{print $1}')"
 case "$OUT" in
-    *"$ROOT_SHA"*) ;;
-    *) fail "the region read back does not hash as the image sent: $OUT" ;;
+    "$ROOT_SHA") ;;
+    *) fail "the region written does not hash as the image sent: $OUT" ;;
 esac
 
 # A repair is not one boot, and a machine that lost power in the middle of one

@@ -696,12 +696,17 @@ case "$OUT" in
     *"wrote $ROOT_BYTES bytes"*) ;;
     *) fail "the repair did not report the whole root written: $OUT" ;;
 esac
-OUT="$(machine "dd if=/dev/disk0 bs=512 skip=$ROOT_LBA count=$ROOT_SECTORS 2>/dev/null | sha256sum" || true)"
-case "$OUT" in
-    *"$ROOT_SHA"*) ;;
-    *) fail "the root read back does not hash as the image sent: $OUT" ;;
-esac
+# What landed is read from the disk file on the host, not from inside the
+# machine: the bytes are the same bytes, and hashing 500 MiB on an emulated
+# 32-bit processor took longer than any answer is worth waiting for. The
+# machine's own read path is proved by the suites that mount this root.
+machine 'sync' > /dev/null 2>&1 || true
 stop_machine
+OUT="$(dd if="$WORK" bs=512 skip=$ROOT_LBA count=$ROOT_SECTORS status=none | shasum -a 256 | awk '{print $1}')"
+case "$OUT" in
+    "$ROOT_SHA") ;;
+    *) fail "the root written does not hash as the image sent: $OUT" ;;
+esac
 
 phase "the last cold boot"
 cold_boot final
