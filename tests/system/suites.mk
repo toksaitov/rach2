@@ -76,6 +76,7 @@ PTYDRIVE        = build/tests/system/ptydrive
 # The stick and disk tools (their rules are with the usbdisk suite), named
 # here because a prerequisite list expands its variables where it is read.
 MKGPT           = build/tools/image/mkgpt
+GROWSET         = build/tools/inspect/growset
 MKMBR           = build/tools/image/mkmbr
 STICKCHECK      = build/tools/image/stickcheck
 # The deadline tool: the suites' wall-clock limit with process-group kill,
@@ -1147,6 +1148,11 @@ run-exfat: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(MKEXFATFIX
 $(MKGPT): tools/image/mkgpt.c
 	@mkdir -p $(dir $@)
 	cc -O2 -Wall -Wextra -o $@ $<
+# The grow set (tools/inspect/growset.c), for `tests/run grow`: the sectors
+# a grow writes, checked against what the grow in QEMU changed.
+$(GROWSET): tools/inspect/growset.c
+	@mkdir -p $(dir $@)
+	cc -O2 -Wall -Wextra -o $@ $<
 # The MBR writer, which krffs/mkdisk.sh builds on demand as well; named here
 # so a suite that runs before any disk image was made still has it.
 $(MKMBR): tools/image/mkmbr.c
@@ -1400,6 +1406,22 @@ run-parts: rach2 tests krffs test-image $(MKMBR) $(MKGPT) $(OS_SIMPLE_EXT2) $(HA
 BUS_DIR = $(IMAGES_DIR)/bus
 run-bus: rach2 tests krffs test-image $(MKMBR) $(HARNESS)
 	sh tests/system/suites/bus.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(MKMBR) $(BUS_DIR)
+# `tests/run large`: a file past 4 GiB on ext2 and on exFAT, written, read
+# back after a remount, sought, sized, truncated, appended and shared
+# between two descriptors, and a write past each format's limit refused by
+# name. The exFAT volume comes from the host's own formatter.
+LARGE_DIR = $(IMAGES_DIR)/large
+run-large: rach2 tests krffs test-image $(MKMBR) $(HARNESS)
+	sh tests/system/suites/large.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(MKMBR) $(LARGE_DIR)
+# `tests/run grow`: a 1 GiB ext2 root grown by `growroot` on the recovery
+# system to a partition the size of the installed machine's disk, its
+# writes checked against the grow set, a grow killed and repaired, one
+# interrupted between the entry and the grow, and the memory it needs.
+GROW_DIR = $(IMAGES_DIR)/grow
+run-grow: $(DEMO_CREDS) rach2 tests krffs test-image $(MKMBR) $(GROWSET) $(HARNESS) \
+          utils check-busybox check-dropbearmulti rach2-recovery $(RECOVERY_IMAGE)
+	sh tests/system/suites/grow.sh $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(HARNESS) $(MKMBR) $(GROWSET) \
+	    $(GROW_DIR) "`cat krffs/rach2_demo_password`"
 # `tests/run queue`: the AHCI disks on their interrupts: a throttled disk
 # beside a fast one, and the fallback root's faults beside the queue.
 QUEUE_DIR = $(IMAGES_DIR)/queue

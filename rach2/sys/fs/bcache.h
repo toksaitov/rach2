@@ -46,6 +46,7 @@
 
 struct bbuf {
     struct bbuf *next;     /* the cache's list of buffers */
+    struct bbuf *hnext;    /* the next buffer in its hash bucket */
     block_device_t *dev;   /* NULL: the buffer is empty */
     uint64_t blk;          /* block index on dev, in 8-sector units */
     uint8_t *data;         /* BCACHE_BLOCK_BYTES, only the tail sectors valid

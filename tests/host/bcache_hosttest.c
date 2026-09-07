@@ -4,7 +4,7 @@
  * host-deps: rach2/sys/fs/bcache.c rach2/sys/block/chain.c
  * host-deps: rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
- * host-deps: tests/host/compat/kheap_host.c
+ * host-deps: tests/host/compat/kheap_host.c tests/host/compat/blockmax_host.c
  * host-deps: tests/host/compat/pressure_host.c
  *
  * The fake device is polled and fault-safe, backed by a memory image whose
@@ -212,16 +212,16 @@ static int fake_write(block_device_t *d, uint64_t lba, uint32_t count, const voi
    the two polled calls, the two a sleeping device has, the device this one's
    bytes live on, and the driver's own pointer. Written out rather than left to position, so that a
    member added to the structure is a compile error here and not a silent shift. */
-static block_device_t fake = {512, FAKE_SECTORS, BLOCK_FAULT_SAFE, 0, fake_read, fake_write, 0, 0,
-                              0,   image_small};
-static block_device_t other = {512, BIG_SECTORS, BLOCK_FAULT_SAFE, 0, fake_read, fake_write, 0,
+static block_device_t fake = {
+    512, FAKE_SECTORS, BLOCK_FAULT_SAFE, 0, 0, fake_read, fake_write, 0, 0, 0, image_small};
+static block_device_t other = {512, BIG_SECTORS, BLOCK_FAULT_SAFE, 0, 0, fake_read, fake_write, 0,
                                0,   0,           image_big};
 /* A device whose bytes live on `fake`: what a loop device is to the volume
    holding its file. Its own reads and writes go through `fake`, so taking one
    of its blocks and then one of `fake`'s is the order the rules must allow,
    and the other way round is the one they must refuse. */
-static block_device_t nested = {512, FAKE_SECTORS, BLOCK_FAULT_SAFE, 0, fake_read, fake_write, 0, 0,
-                                0,   image_small};
+static block_device_t nested = {
+    512, FAKE_SECTORS, BLOCK_FAULT_SAFE, 0, 0, fake_read, fake_write, 0, 0, 0, image_small};
 
 int block_request(block_device_t *device, int write, uint64_t lba, uint32_t count, void *data)
 {

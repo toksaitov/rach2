@@ -5,7 +5,7 @@
  * host-deps: rach2/sys/fs/ext2.c rach2/sys/fs/bcache.c rach2/sys/fs/fatcommon.c
  * host-deps: rach2/sys/block/chain.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
- * host-deps: tests/host/compat/kheap_host.c
+ * host-deps: tests/host/compat/kheap_host.c tests/host/compat/blockmax_host.c
  * host-deps: tests/host/compat/pressure_host.c
  *
  * The volumes are built here from a staged tree by the host's mke2fs on the
@@ -177,7 +177,7 @@ void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
     *nanoseconds = 0;
 }
 
-static block_device_t dev = {512, 0, BLOCK_FAULT_SAFE, 0, img_read, img_write, 0, 0, 0};
+static block_device_t dev = {512, 0, BLOCK_FAULT_SAFE, 0, 0, img_read, img_write, 0, 0, 0};
 
 int block_request(block_device_t *device, int write, uint64_t lba, uint32_t count, void *data)
 {

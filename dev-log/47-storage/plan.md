@@ -94,3 +94,44 @@ Proof, once and in this order: build from clean; the full set; everything that c
 * AHCI interrupts have not been tested on the Lenovo, and milestone 50 is the first run there. Use the network driver's MSI implementation as a reference. Retain a boot option for polled operation.
 * A stale handle to a removed disk is a use after free unless the record outlives it; the pull row is the proof.
 * The check workspaces sized from memory can still refuse a volume on a small machine; the answer is read-only and recovery, stated, never a silent limit. 
+
+## Handoff, 2026-09-07 07:00
+
+Written by the session that ran phases 1 to 5 when its allowance ran out. The next session finishes phase 5's close and runs phase 6. Everything below is checked against the tree at the time of writing; verify before relying on it.
+
+### State of the tree
+
+* Committed on `master`: phases 1 to 4 (`0fe30c3` to `921ea6a`), then phase 5 in three commits: `bb8c71b` (64-bit offsets, the ext2 tables and check workspaces from the heap, `resize_inode` in every image profile, the sparse_super fix, `ftruncate64`), `a710b09` (the 4096-byte-sector refusal on IDE with the `bus` rows), `e69bbae` (the `resize2fs` port, `growroot`, `growset`).
+* Uncommitted, all of it phase 5 and all of it built and passing the checks run so far: the disk path speed-up (`rach2/sys/block/request.c`, `block.c`, `block.h`, `ahci.c`, `lag.c`, `rach2/sys/fs/bcache.c`, `bcache.h`, `ext2.c`, `exfat.c`), the KRFFS create fix (`rach2/sys/fs/krffs.c`), the host stub `tests/host/compat/blockmax_host.c` and the host-deps and initializer edits in `tests/host/{bcache,ext2,exfat,fat32,block}_hosttest.c`, the new probe `tests/bigfileprobe.c` and its line in `tests/Makefile`, the suites `tests/system/suites/{large,grow}.sh` with their rules in `tests/system/suites.mk` and rows in `tests/registry`, `tools/inspect/growset.c` (the table's page), `dev-log/47-storage/notes.md` (phase 5 written, two proof placeholders left: `GROW_LARGE_PROOF` and `GROW_PROOF`), `dev-log/50-shortcomings/plan.md` (entries 9 to 15), and `CLAUDE.md` (the deferral rule now carries the speed test).
+* Commit the uncommitted work in two units, code first: `Move the disk path to 64-sector requests, index the cache and batch ext2's metadata` for the kernel, host test and tool files; `Add the large and grow suites and record phase 5` for the probe, suites, registry, suites.mk, notes, the shortcomings list and CLAUDE.md. Commit style: one line, imperative, no attribution beyond the trailer the session uses.
+
+### What was running at the handoff
+
+* `/tmp/claude-501/suites3.log`: the validation set in the main tree, serial: style, host, mount, queue, disk-ahci, disk, usbdisk, exfat, ext2, fatwrite, krffsmount, persist, persist-ahci, diskfull, stress-ahci, large, grow, bus, then the three mutations of `mutate5.sh`. At 07:00 the first ten had passed. Read the log; anything that failed is phase 5's to fix before the close.
+* After it, a waiter syncs the tree into the check worktree `/Users/toksaitov/Desktop/rach2-check` and runs `RACH2_GROW_LENOVO=1 tests/run grow` there: the Lenovo-sized record. Its first run on the slow kernel passed rows 1 and 2 (`grow-test: coverage: 14930 extents written, 0 outside the set`) and timed out in row 3; the rerun is on the fast kernel with the orphan check `NORESIZER` added to the row. The record's numbers go into the milestone Readme.
+* The 5 GiB `large` record: `RACH2_LARGE_MIB=5120 tests/run large` in the check tree passed the ext2 rows on the slow kernel (4 MiB/s) and was cut by the harness in the exFAT write before the hint fix. Rerun it once on the fast kernel for the record, in the check tree, alone.
+
+### Mutations still to prove
+
+`mutate5.sh` in the scratchpad runs them, each restored under a trap and the source touched: `growset.c` without the block-bitmap ranges must fail `grow` (coverage), `ext2.c` with `file_limit` set to 4 GiB must fail `large` (the sparse row), `ata.c` without the word-106 check must fail `bus`. The scratchpad is `/private/tmp/claude-501/-Users-toksaitov-Desktop-rach2/efb96526-e443-41d8-b412-58860e87b0c4/scratchpad`; it may be gone in a new session, in which case rewrite the three from this description. The memory-short host row was already proved: `fatcommon.c` with the frame check removed fails `a dirty volume on a machine short of memory mounts read-only by name` in `ext2_hosttest`.
+
+### Phase 6, the close, in order
+
+1. `rm -rf build` and `make` (the vendor projects need no rebuild unless a port changed; `e2fsprogs` did, and its stamp rebuilds itself).
+2. `tests/run all`. Fix what fails. The full tier now has `large` (3 min) and `grow` (3 min) at their defaults.
+3. Codex, once: review units of at most six files each over the whole diff `c267442..HEAD`, most serious findings first; group by contract: the registry and partitions; the drivers and the request layer; the file systems (ext2, exfat, fat32, fatcommon, bcache, krffs); the syscalls and devfs; the tools and utils (`growroot`, `growset`, `mkmbr`, `mkgpt`, `grubembed`, `setidcheck`); the suites and host tests. The plugin is `node ~/.claude/plugins/cache/openai-codex/codex/1.0.6/scripts/codex-companion.mjs task --background --fresh "<prompt>"`, then `status <id>` and `result <id>`; do not set its model. Fix every finding or reject it in `notes.md` with the source that shows it wrong. `tools/verify/prosecheck.c` runs before the review.
+4. `tests/run all` again.
+5. Codex, once, for the prose: the fact sheets are `facts-47-{1,2,3,4,5}.md` in the scratchpad; `facts-47-5.md` lists every Readme claim phase 5 changes, with two placeholders to fill from the records (`LARGE_RATES`, `GROW_ROWS_RESULT`). If the scratchpad is gone, the facts are in `notes.md` and the code. Readmes to touch: `rach2/sys/fs/ext2.Readme.md`, `fat32.Readme.md`, `exfat.Readme.md`, `vfs.Readme.md`, `krffs.Readme.md`, `rach2/sys/block/Readme.md`, `utils/Readme.md`, `tools/Readme.md`, `vendor/e2fsprogs/Readme.md`, `tests/Readme.md`, `tests/system/Readme.md`, `Readme.md`. Apply what comes back after checking each claim against the code (`applyprose.py` in the scratchpad applied `File:/Original:/Replacement:/---` blocks).
+6. `dev-log/47-storage/Readme.md` in the shape of `dev-log/46-memory/Readme.md`: what is built, what proves it, the machine (none), trust, what was accepted: the closing commit, the build options, the SHA-256 of the three kernels and five images from a clean build, the `tests/run all` command with its date, count and time, the hardware (Apple M4, macOS 26.6.2, QEMU 11.1.1, no Lenovo). Add the index entry in `dev-log/Readme.md`.
+7. Remove the check worktree when done: `git worktree remove /Users/toksaitov/Desktop/rach2-check`.
+
+### Numbers for the record
+
+* The grow's memory: the 1 GiB root grown to 1953523120 sectors finished with `e2fsck -fn` clean at 256, 128, 64, 32 and 16 MiB of guest memory; 8 MiB does not boot (entry 12). `MemTotal` at 16 MiB is 7232 kB; `GROWROOT_MEMORY_MIB` is 7.
+* Rates on a 1 GiB write over AHCI in QEMU: before the disk-path fix ext2 4 MiB/s, exFAT 1 MiB/s, IDE 2 MiB/s, reads about 15 MiB/s; after, ext2 8 MiB/s, exFAT 10 MiB/s. Suite times at the defaults: `large` 182 s, `grow` 170 s.
+* The kernel's `_end` moved from 0x4831c4 to 0x3bf6c4 with the static check state gone. `resize2fs` is 390816 bytes stripped, limit 430080.
+* `growset` on the host: a 1 GiB volume grown to 8 GiB changed 194 blocks, all inside a set of 15376.
+
+### Rules the owner set on 2026-09-07
+
+Codex once at the close for review and once for prose, never per phase. A suite's default rows run in minutes; a long proof runs once, recorded, behind a variable. A problem that would slow every later run is fixed in the milestone that found it, with its entry saying so; only what costs nothing to carry goes to milestone 50. Do not give finish times that assume nothing fails.

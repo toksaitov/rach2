@@ -57,6 +57,7 @@ struct block_device {
     uint32_t flags;          /* BLOCK_FAULT_SAFE, or nothing */
     uint32_t deadline_ticks; /* sleeping path: give up after this many ticks;
                               * 0 means the 5-second default */
+    uint32_t max_sectors;    /* the most one request may move; 0 means a page */
     int (*read)(block_device_t *device, uint64_t lba, uint32_t count,
                 void *buffer);
     int (*write)(block_device_t *device, uint64_t lba, uint32_t count,
@@ -220,8 +221,10 @@ struct block_request {
     block_device_t *owner; /* the device the request is accounted to */
     int write;
     uint64_t lba;
-    uint32_t count;        /* sectors, at most BLOCK_REQ_SECTORS */
-    uint8_t *page;         /* the request's page, in the window */
+    uint32_t count;        /* sectors, at most the device's `max_sectors` */
+    uint8_t *page;         /* the request's buffer: one page in the window, or
+                            * `pages` heap pages for a larger transfer */
+    uint32_t pages;        /* pages of the buffer */
     int status;            /* 0 or -errno, valid once done */
     volatile int state;    /* BLOCK_REQ_* */
     uint32_t generation;   /* unique to this request */
@@ -232,6 +235,13 @@ struct block_request {
 };
 
 #define BLOCK_REQ_SECTORS 8u
+/* The most a device may take in one request: 32 KiB, the eight pages of a
+ * heap buffer the AHCI command table describes. */
+#define BLOCK_REQ_MAX_SECTORS 64u
+
+/** The most one request to `device` may move, in sectors: the backing's
+ * `max_sectors` through a partition view, or a page's worth. */
+uint32_t block_max_sectors(block_device_t *device);
 
 /**
  * Transfer `count` whole sectors, sleeping the caller when the device does.

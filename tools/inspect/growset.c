@@ -9,7 +9,7 @@
  * way `resize2fs` does, and prints one `range START COUNT WHAT` line per
  * run of sectors the grow writes, sorted and merged, relative to the
  * volume's start, or to the disk's when `--lba` gives the partition's
- * first sector, in which case the disk's first sector, where `growroot`
+ * first sector, in which case the disk's first page, where `growroot`
  * rewrites the entry, is in the set too. The last lines are `total
  * SECTORS` and the geometry.
  *
@@ -314,7 +314,9 @@ int main(int argc, char **argv)
     }
     nranges = merged;
     if (lba > 0) {
-        add(0, 1, "the partition table");
+        /* The table sector, with the rest of its page: a device written
+         * through a page cache records the page. */
+        add(0, 8, "the partition table");
         qsort(ranges, nranges, sizeof(ranges[0]), by_start);
     }
     for (i = 0; i < nranges; i++) {

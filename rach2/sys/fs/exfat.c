@@ -2941,7 +2941,9 @@ static int32_t ex_write(struct vfs_mount *mnt, void *handle, const void *buf, ui
     if (rc != 0) {
         goto out; /* the chain is joined; the length is the walk's surplus */
     }
-    n->hint_cluster = 0;
+    /* The hint stays: a write changes no cluster the chain had, so the
+     * position it remembers is still that cluster, and the next append
+     * walks from there rather than from the first cluster again. */
     vfs_ns_unlock(mnt);
     return (int32_t)count;
 undo:

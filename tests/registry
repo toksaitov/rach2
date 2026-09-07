@@ -66,6 +66,8 @@ parts|qemu-system-i386,mformat,mtype|core
 bootorder|qemu-system-i386,mformat,mmd,mcopy,mshowfat|full
 bus|qemu-system-i386,mformat,mtype|full
 queue|qemu-system-i386,mformat|core
+large|qemu-system-i386,mke2fs,e2fsck,mformat,hdiutil,newfs_exfat,fsck_exfat|full
+grow|qemu-system-i386,mke2fs,e2fsck,qemu-img|full
 disk-q35|qemu-system-i386|full
 diskpolicy|qemu-system-i386|full
 console|qemu-system-i386|core

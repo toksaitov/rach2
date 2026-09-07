@@ -94,6 +94,14 @@ struct ext2_mount {
     int writable;
     uint64_t free_blocks, free_inodes;
     int valid_cleared;   /* the superblock's valid bit was cleared by this mount */
+    /* A write in progress: the bitmap bytes, descriptors and pointer slots
+     * its allocations touch are marked dirty and written together at its
+     * end, the bitmaps and descriptors first; `meta` is the blocks to
+     * write first, `metas` how many, and a block past the table is written
+     * through at once. */
+    int batch;
+    uint64_t meta[16];
+    int metas;
     uint32_t alloc_hint; /* the block after the last one given out */
     uint8_t *gd; /* the group descriptors, `groups * 32` bytes, from the heap */
     struct ext2_node *nodes; /* the nodes in memory, from the heap */
@@ -337,6 +345,7 @@ static void ext2_hold(struct vfs_mount *mnt, void *node)
 
 static int release_inode(struct ext2_mount *em, struct ext2_node *n);
 static int sb_store(struct ext2_mount *em);
+static int meta_deferred(struct ext2_mount *em, uint64_t at);
 
 static void mark_error(struct ext2_mount *em);
 
@@ -1061,7 +1070,60 @@ static int gd_store(struct ext2_mount *em, uint32_t g)
 {
     uint64_t at = (uint64_t)(em->first_data + 1) * em->block_size + (uint64_t)g * 32;
 
-    return write_bytes(em, at, em->gd + g * 32, 32, 1);
+    return write_bytes(em, at, em->gd + g * 32, 32, !meta_deferred(em, at));
+}
+
+/**
+ * Whether a metadata write at byte `at` may wait for the end of the write
+ * in progress: only inside one, and only while the table of blocks to
+ * write first has room for its block. The block is noted, once.
+ */
+static int meta_deferred(struct ext2_mount *em, uint64_t at)
+{
+    uint64_t blk = at >> BCACHE_BLOCK_SHIFT;
+    int i;
+
+    if (!em->batch) {
+        return 0;
+    }
+    for (i = 0; i < em->metas; i++) {
+        if (em->meta[i] == blk) {
+            return 1;
+        }
+    }
+    if (em->metas == (int)(sizeof(em->meta) / sizeof(em->meta[0]))) {
+        return 0;
+    }
+    em->meta[em->metas++] = blk;
+    return 1;
+}
+
+/**
+ * The end of a write's batch: the noted bitmap and descriptor blocks
+ * written first, then everything else the write left dirty, data and
+ * pointer blocks, so that no pointer reaches the disk before the bit of
+ * the block it names.
+ */
+static int batch_end(struct ext2_mount *em)
+{
+    int i, rc = 0;
+
+    em->batch = 0;
+    for (i = 0; i < em->metas && rc == 0; i++) {
+        struct bbuf *b = bcache_get(em->dev, em->meta[i]);
+
+        if (!b) {
+            rc = -EIO;
+            break;
+        }
+        rc = bcache_write(b);
+        bcache_release(b);
+    }
+    em->metas = 0;
+    if (rc == 0) {
+        rc = bcache_sync(em->dev);
+    }
+    return rc;
 }
 
 /* A fault met while reading: the error bit set and written when the mount
@@ -1121,7 +1183,7 @@ static int bit_put(struct ext2_mount *em, uint32_t bitmap_block, uint32_t index,
     } else {
         byte = (uint8_t)(byte & ~(1u << (index % 8)));
     }
-    return write_bytes(em, at, &byte, 1, 1);
+    return write_bytes(em, at, &byte, 1, !meta_deferred(em, at));
 }
 
 /* The pointer blocks a file block index can need at most: none below the
@@ -1504,7 +1566,7 @@ static int map_alloc(struct ext2_mount *em, struct ext2_node *n, uint32_t index,
                     uint8_t raw[4];
 
                     LE32_PUT(raw, b);
-                    rc = write_bytes(em, slot_at, raw, 4, 1);
+                    rc = write_bytes(em, slot_at, raw, 4, !em->batch);
                     if (rc != 0) {
                         return rc;
                     }
@@ -1549,7 +1611,7 @@ static int map_alloc(struct ext2_mount *em, struct ext2_node *n, uint32_t index,
             uint8_t raw[4];
 
             LE32_PUT(raw, b);
-            rc = write_bytes(em, slot_at, raw, 4, 1);
+            rc = write_bytes(em, slot_at, raw, 4, !em->batch);
             if (rc != 0) {
                 return rc;
             }
@@ -2127,8 +2189,10 @@ static int32_t ext2_write(struct vfs_mount *mnt, void *handle, const void *buf, 
             goto out;
         }
     }
-    /* The bytes: each block allocated as it is reached, its pointer
-     * written after the block is in the bitmap, the data written back. */
+    /* The bytes: each block allocated as it is reached, its bit and its
+     * pointer marked dirty, the data written back; `batch_end` puts the
+     * bitmaps and descriptors on the disk before the pointers. */
+    em->batch = 1;
     while (done < count) {
         uint64_t at = offset + done;
         uint32_t in_block = (uint32_t)at & (em->block_size - 1);
@@ -2156,21 +2220,24 @@ static int32_t ext2_write(struct vfs_mount *mnt, void *handle, const void *buf, 
         }
         done += take;
     }
-    /* The pointers and i_blocks, then the data synced, then the size. */
+    rc = batch_end(em);
+    if (rc != 0) {
+        goto out;
+    }
+    /* The pointers and i_blocks, then the size. */
     rc = inode_store(em, n);
     if (rc != 0) {
         goto out;
     }
     if (end > n->size) {
-        rc = bcache_sync(em->dev);
-        if (rc != 0) {
-            goto out;
-        }
         n->size = end;
     }
     n->mtime = n->ctime = now_seconds();
     rc = inode_store(em, n);
 out:
+    if (em->batch) {
+        (void)batch_end(em); /* a failure inside the batch: what it marked still goes out */
+    }
     vfs_ns_unlock(mnt);
     /* Bytes in the cache that no size covers are not written: a failure
      * anywhere is the error, never a count. */

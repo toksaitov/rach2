@@ -4,7 +4,7 @@
  * host-deps: rach2/sys/fs/exfat.c rach2/sys/fs/bcache.c rach2/sys/block/chain.c
  * host-deps: rach2/sys/fs/fatcommon.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
- * host-deps: tests/host/compat/kheap_host.c
+ * host-deps: tests/host/compat/kheap_host.c tests/host/compat/blockmax_host.c
  * host-deps: tests/host/compat/pressure_host.c
  *
  * The volumes are mkexfatfixture's, built here on every run. The
@@ -159,7 +159,7 @@ static int img_write(block_device_t *d, uint64_t lba, uint32_t count, const void
     return 0;
 }
 
-static block_device_t dev = {512, 32768u, BLOCK_FAULT_SAFE, 0, img_read, img_write, 0, 0, 0};
+static block_device_t dev = {512, 32768u, BLOCK_FAULT_SAFE, 0, 0, img_read, img_write, 0, 0, 0};
 
 int block_request(block_device_t *device, int write, uint64_t lba, uint32_t count, void *data)
 {

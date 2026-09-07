@@ -253,6 +253,21 @@ static int krffs_put_u64(krffs_mount_t *mount, uint64_t offset, uint32_t field,
     return krffs_put(mount, offset, field, &value, (uint32_t)sizeof(value));
 }
 
+/**
+ * A 64-bit field of a node no path reaches yet: a node being made, or a
+ * copy being filled before it is linked. Nothing reads it until its name
+ * is written, which comes last and after a sync point, so a field torn
+ * across two units of the medium is seen by nobody, and the whole-unit
+ * rule that guards a live node does not apply. Without this a name whose
+ * hash happened to land astride a unit could not be created.
+ */
+static int krffs_put_new_u64(krffs_mount_t *mount, uint64_t offset, uint32_t field,
+                             uint64_t value)
+{
+    return mount->backend->write(mount->ctx, offset + field, &value,
+                                 (uint32_t)sizeof(value));
+}
+
 static int krffs_put_u32(krffs_mount_t *mount, uint64_t offset, uint32_t field,
                          uint32_t value)
 {
@@ -1002,10 +1017,10 @@ uint64_t krffs_allocate_at(krffs_mount_t *mount, uint64_t size,
                 }
                 rc |= krffs_put(mount, offset, KRFFS_FIELD_NAME, from.name,
                                 KRFFS_FILE_NAME_BUFFER_SIZE);
-                rc |= krffs_put_u64(mount, offset, KRFFS_FIELD_ID, from.id);
+                rc |= krffs_put_new_u64(mount, offset, KRFFS_FIELD_ID, from.id);
                 /* keep its directory membership */
-                rc |= krffs_put_u64(mount, offset, KRFFS_FIELD_PARENT,
-                                    from.parent_id);
+                rc |= krffs_put_new_u64(mount, offset, KRFFS_FIELD_PARENT,
+                                        from.parent_id);
                 rc |= krffs_put_u16(mount, offset, KRFFS_FIELD_MODE, from.mode);
                 rc |= krffs_put_u32(mount, offset, KRFFS_FIELD_UID, from.uid);
                 rc |= krffs_put_u32(mount, offset, KRFFS_FIELD_GID, from.gid);
@@ -1408,9 +1423,9 @@ int krffs_create_at(krffs_mount_t *mount, const char *path)
 
     _krffs_strncpy((char *)name, base, KRFFS_FILE_NAME_BUFFER_SIZE);
     name[KRFFS_FILE_NAME_BUFFER_SIZE - 1] = '\0';
-    rc |= krffs_put_u64(mount, node, KRFFS_FIELD_ID,
-                        krffs_calculate_djb_hash(name));
-    rc |= krffs_put_u64(mount, node, KRFFS_FIELD_PARENT, parent_id);
+    rc |= krffs_put_new_u64(mount, node, KRFFS_FIELD_ID,
+                            krffs_calculate_djb_hash(name));
+    rc |= krffs_put_new_u64(mount, node, KRFFS_FIELD_PARENT, parent_id);
     rc |= krffs_put_u16(mount, node, KRFFS_FIELD_MODE, 0644); /* rw-r--r-- */
     rc |= krffs_put_u32(mount, node, KRFFS_FIELD_UID, 0);
     rc |= krffs_put_u32(mount, node, KRFFS_FIELD_GID, 0);

@@ -46,7 +46,7 @@
  * says otherwise, and the most the option accepts. The limit is what the
  * stall rules divide between devices; it is not a table. */
 #define REQ_LIMIT            16
-#define REQ_DEFAULT_DEADLINE 500u /* five seconds of 100 Hz ticks */
+#define REQ_DEFAULT_DEADLINE 3000u /* thirty seconds of 100 Hz ticks */
 
 static struct block_request *reqs; /* every live request */
 static uint32_t live;              /* how many are on the list */
@@ -129,7 +129,11 @@ static void req_drop(struct block_request *r)
     }
     *link = r->next;
     live--;
-    free_kernel_frame((uintptr_t)r->page);
+    if (r->pages > 1) {
+        kfree_pages(r->page, r->pages);
+    } else {
+        free_kernel_frame((uintptr_t)r->page);
+    }
     kfree(r);
 }
 
@@ -203,23 +207,32 @@ static int nothing_pending(void)
 }
 
 /**
- * Interrupts off. A fresh request on the list, held by its caller and its
- * device, or NULL when the heap or the window has no room for one.
+ * Interrupts off. A fresh request on the list for `count` sectors, held by
+ * its caller and its device, or NULL when the heap or the window has no
+ * room for one. A transfer of a page or less takes a frame of the window,
+ * whose address is physical for every device; a larger one takes heap
+ * pages, which a device that describes a buffer page by page, the AHCI
+ * controller, is the only one to ask for.
  */
-static struct block_request *req_new(void)
+static struct block_request *req_new(uint32_t count)
 {
     struct block_request *r = kzalloc(sizeof(*r));
-    uintptr_t page;
+    uint32_t pages = (count * BLOCK_SECTOR_SIZE + PAGE_SIZE - 1) / PAGE_SIZE;
 
     if (!r) {
         return NULL;
     }
-    page = alloc_kernel_frame();
-    if (!page) {
+    if (pages <= 1) {
+        r->page = (uint8_t *)alloc_kernel_frame();
+        pages = 1;
+    } else {
+        r->page = kalloc_pages(pages, 0);
+    }
+    if (!r->page) {
         kfree(r);
         return NULL;
     }
-    r->page = (uint8_t *)page;
+    r->pages = pages;
     r->held_by_caller = 1;
     r->held_by_device = 1;
     r->next = reqs;
@@ -274,7 +287,7 @@ static struct block_request *req_take(block_device_t *device, int write, uint64_
         }
         share_taken = device_held(owner) >= device_cap;
         if (!share_taken && live < pool_size) {
-            r = req_new();
+            r = req_new(count);
             if (!r) {
                 irq_restore(flags);
                 klog(KLOG_WARN, "block", "request: no memory");
@@ -336,7 +349,7 @@ static int req_done(void *arg)
 }
 
 /**
- * One request of at most a page on a sleeping device.
+ * One request of at most the device's `max_sectors` on a sleeping device.
  *
  * Sleeps until the completion or the deadline. A signal does not end the
  * wait: the device owns the page until it answers, so the wait is the
@@ -430,7 +443,8 @@ int block_request(block_device_t *device, int write, uint64_t lba, uint32_t coun
         k_panic("block: a sleeping device was reached outside syscall context");
     }
     while (count > 0) {
-        uint32_t chunk = count > BLOCK_REQ_SECTORS ? BLOCK_REQ_SECTORS : count;
+        uint32_t most = block_max_sectors(device);
+        uint32_t chunk = count > most ? most : count;
         int rc = req_run_one(device, write, lba, chunk, bytes);
 
         if (rc != 0) {
@@ -493,7 +507,7 @@ struct block_request *block_request_begin(block_device_t *device, uint64_t lba, 
     struct block_request *r;
     uint32_t flags;
 
-    if (!device || !device->submit || count == 0 || count > BLOCK_REQ_SECTORS ||
+    if (!device || !device->submit || count == 0 || count > block_max_sectors(device) ||
         lba >= device->sector_count || count > device->sector_count - lba) {
         return NULL;
     }
