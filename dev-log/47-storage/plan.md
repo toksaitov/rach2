@@ -131,6 +131,10 @@ Written by the session that ran phases 1 to 5 when its allowance ran out. The ne
 * The kernel's `_end` moved from 0x4831c4 to 0x3bf6c4 with the static check state gone. `resize2fs` is 390816 bytes stripped, limit 430080.
 * `growset` on the host: a 1 GiB volume grown to 8 GiB changed 194 blocks, all inside a set of 15376.
 
+### How phase 6 is actually run
+
+`rm -rf build && make` does not work: entry 5 of the shortcomings list, both the parallel and the serial form, since the test manifest stages `build/tests` as an `exec-dir` and no rule makes a directory. Use `rm -rf build && tests/run all`, whose `prepare-all` builds the components in a make of its own first; that is how milestone 46 closed. Read the shortcomings list before any hour-scale run for the same reason. When a suite fails, rebuild what changed and rerun that suite, not the set. Run the Codex units beside the set, not after it: the diff they read is fixed, and only a file a later fix touches needs its unit again.
+
 ### Rules the owner set on 2026-09-07
 
 Codex once at the close for review and once for prose, never per phase. A suite's default rows run in minutes; a long proof runs once, recorded, behind a variable. A problem that would slow every later run is fixed in the milestone that found it, with its entry saying so; only what costs nothing to carry goes to milestone 50. Do not give finish times that assume nothing fails.
