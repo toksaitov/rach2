@@ -138,7 +138,7 @@ static void req_drop(struct block_request *r)
     if (r->pages > 1) {
         kfree_pages(r->page, r->pages);
     } else {
-        free_kernel_frame((uintptr_t)r->page);
+        free_kernel_frame(r->page);
     }
     kfree(r);
 }

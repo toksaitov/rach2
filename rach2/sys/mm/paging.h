@@ -248,10 +248,10 @@ int paging_framefail_arm(uint32_t count);
  * is also its virtual one, which is what a device given the address for
  * DMA needs.
  */
-uintptr_t alloc_kernel_frame(void);
+void *alloc_kernel_frame(void);
 
 /** Return a frame `alloc_kernel_frame` gave. */
-void free_kernel_frame(uintptr_t phys);
+void free_kernel_frame(void *frame);
 
 /** Mark `frame` used by a boot reservation, with the counts kept; for
  * `mem_reserve`, which takes memory after the table exists. */

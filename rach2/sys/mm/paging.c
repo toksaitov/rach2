@@ -927,7 +927,7 @@ uintptr_t paging_virt_to_phys(uintptr_t va)
  * identity-mapped virtual address, since the kernel identity-maps the whole
  * pool.
  */
-uintptr_t alloc_kernel_frame(void)
+void *alloc_kernel_frame(void)
 {
     uintptr_t frame = _window_frames;
 
@@ -935,7 +935,7 @@ uintptr_t alloc_kernel_frame(void)
         if (_frames[frame] == 0) {
             frame_take(frame);
             _kernel_frames_reserved++;
-            return frame * PAGE_SIZE;
+            return (void *)(frame * PAGE_SIZE);
         }
     }
 
@@ -949,10 +949,10 @@ void paging_mark_reserved(uintptr_t frame)
     }
 }
 
-void free_kernel_frame(uintptr_t phys)
+void free_kernel_frame(void *frame)
 {
     _kernel_frames_reserved--;
-    frame_unref(phys);
+    frame_unref((uintptr_t)frame);
 }
 
 /**

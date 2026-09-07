@@ -114,7 +114,7 @@ static int pc_slot_storage(struct pc_entry *e)
     if (!mem_may_take(0)) {
         return 0; /* the reserve's: a resident page gives way instead */
     }
-    e->phys = alloc_kernel_frame();
+    e->phys = (uintptr_t)alloc_kernel_frame();
     if (!e->phys) {
         return 0;
     }
@@ -130,7 +130,7 @@ static void pc_slot_release(struct pc_entry *e)
     (void)e;
 #else
     if (e->phys) {
-        free_kernel_frame(e->phys);
+        free_kernel_frame((void *)e->phys);
         e->phys = 0;
         e->page = 0;
         --pc_resident_frames;
