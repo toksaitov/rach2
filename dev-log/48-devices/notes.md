@@ -81,15 +81,14 @@ than assumed; that is the list of what remains.
 
 ## What is left in the milestone
 
-Phase 1, after the sizing: device and hub records allocated rather than fixed
-tables (`core.c`'s `devices[]` and `hub.c`'s `hubs[]`); a configuration
-descriptor read whole rather than truncated at 64 bytes (`core.c:999`); a
-device that finds no slot waiting for one rather than being refused; a
-full- or high-speed hub with a device on a port above fifteen driven through
-the route encoding the specification defines for it.
+The rest of phase 2, as above: the stack per interface.
 
-Phases 2, 3 and 4 as the plan describes them: the network stack per interface,
-the platform's firmware and chipset checks, and the close.
+Phase 3: the firmware check before the Insyde SMI reboot, and the chipset
+table's fallbacks, with a host test of the reboot decision.
+
+Phase 4: the close. Build from clean, the full set, everything fixed, the
+milestone's diff to Codex in units of six files, every finding fixed, the full
+set again. The machine is not touched.
 
 ## What was found on the way
 
