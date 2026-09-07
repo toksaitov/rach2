@@ -124,7 +124,7 @@ void input_mouse_found(void)
 #define KIND_HUB  1
 #define KIND_KBD  2
 
-#define MODEL_PORTS 20
+#define MODEL_PORTS 31
 
 static struct {
     int root_connected; /* the hub on root port 0 */
@@ -200,10 +200,10 @@ static struct {
     int opened_speed; /* what the core opened it with, from the status word */
     struct usb_location where;
     int open;
-} slot_of[16];
+} slot_of[USB_MAX_DEVICES + 2];
 static int slots_given;
 
-static int close_order[16];
+static int close_order[USB_MAX_DEVICES + 2];
 static int closes;
 static int closed_done; /* slots the core took back through `xhci_device_closed` */
 
@@ -399,7 +399,7 @@ int xhci_device_open(struct xhci_ctrl *hc, const struct usb_location *where, int
 {
     int n;
 
-    if (slots_given >= 15) {
+    if (slots_given >= (int)(sizeof(slot_of) / sizeof(slot_of[0])) - 1) {
         return -1;
     }
     if (model.slot_cap != 0 && slots_given >= model.slot_cap) {
@@ -1463,18 +1463,19 @@ int main(void)
        entry comes free, as one on a root port is. */
     model_reset();
     model.hub_ports = 15;
-    for (port = 0; port < 12; port++) {
+    for (port = 0; port < USB_MAX_DEVICES; port++) {
         model.port_kind[port] = KIND_KBD;
     }
     pump(8000);
-    CHECK("a hub and eleven keyboards fill the table", running_count() == 12 && free_count() == 0);
-    CHECK("the twelfth keyboard's refusal is recorded once", full_records == 1);
+    CHECK("a hub and the keyboards below it fill the table",
+          running_count() == USB_MAX_DEVICES && free_count() == 0);
+    CHECK("the one that found no entry is recorded once", full_records == 1);
     model.port_kind[0] = KIND_NONE;
     model.port_change[0] |= 1u;
     model_change(1);
     pump(4000);
-    CHECK("when one is pulled, the twelfth keyboard takes its entry",
-          running_count() == 12 && slot_at_route(12) != 0);
+    CHECK("when one is pulled, the one that waited takes its entry",
+          running_count() == USB_MAX_DEVICES && slot_at_route(USB_MAX_DEVICES) != 0);
 
     /* The power-on retry after an over-current refused: the port is left
        off and not asked again. */

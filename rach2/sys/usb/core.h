@@ -14,9 +14,10 @@
  * of that reaches the wire, which is the host controller's business.
  */
 
-/* How many devices this kernel holds at once. The tables are fixed, like every
- * other table in this kernel, and four is more than the machines here have
- * room for on their root ports without a hub. */
+/* How many devices this kernel holds at once. A device's record is a frame
+ * taken when it appears and given back when it goes, so this bounds the table
+ * of records and not the memory they take: a machine with two controllers and
+ * hubs on both has room for more than the root ports hold. */
 #define USB_MAX_DEVICES 12
 
 /* The largest descriptor this kernel reads. A configuration descriptor with
