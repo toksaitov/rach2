@@ -233,6 +233,45 @@ static void answer(int device, int endpoint, int status, uint32_t length, uint32
  * drive the layers above the driver through their own stubs, so there is one
  * controller and its record is never dereferenced.
  */
+/*
+ * The identity-mapped frames a device's record lives in. On the host they are
+ * pages of this program's memory; nothing here is given to a controller, so
+ * the address it would be reached by is the only one that matters.
+ */
+/*
+ * The driver's table of controllers, as the stack asks about it. These tests
+ * drive the layers above the driver through their own stubs, so there is one
+ * controller and its record is never dereferenced.
+ */
+#define FRAME_COUNT 64
+static uint8_t frames[FRAME_COUNT][4096] __attribute__((aligned(4096)));
+static uint8_t frame_taken[FRAME_COUNT];
+
+void *alloc_kernel_frame(void)
+{
+    unsigned i;
+
+    for (i = 0; i < FRAME_COUNT; i++) {
+        if (!frame_taken[i]) {
+            frame_taken[i] = 1;
+            return &frames[i][0];
+        }
+    }
+    return 0;
+}
+
+void free_kernel_frame(void *frame)
+{
+    unsigned i;
+
+    for (i = 0; i < FRAME_COUNT; i++) {
+        if (frame == &frames[i][0]) {
+            frame_taken[i] = 0;
+            return;
+        }
+    }
+}
+
 static struct xhci_ctrl *the_ctrl = (struct xhci_ctrl *)1;
 
 int xhci_controllers(void)
@@ -909,7 +948,7 @@ static int running_count(void)
     int n = 0;
 
     for (i = 0; i < USB_MAX_DEVICES; i++) {
-        if (devices[i].state == ST_RUNNING) {
+        if (dev_at(i)->state == ST_RUNNING) {
             n++;
         }
     }
@@ -922,7 +961,7 @@ static int free_count(void)
     int n = 0;
 
     for (i = 0; i < USB_MAX_DEVICES; i++) {
-        if (devices[i].state == ST_FREE) {
+        if (dev_at(i)->state == ST_FREE) {
             n++;
         }
     }
@@ -1234,17 +1273,17 @@ int main(void)
         int hub_index = -1;
 
         for (i = 0; i < USB_MAX_DEVICES; i++) {
-            if (devices[i].state == ST_RUNNING && devices[i].interface.kind == USB_KIND_HUB) {
+            if (dev_at(i)->state == ST_RUNNING && dev_at(i)->interface.kind == USB_KIND_HUB) {
                 hub_index = i;
             }
         }
         CHECK("and its port is remembered as refused on the hub",
-              hub_index >= 0 && (devices[hub_index].refused & 0x2u) != 0);
+              hub_index >= 0 && (dev_at(hub_index)->refused & 0x2u) != 0);
         pump(2000);
         CHECK("so it is not tried again", model.reset_requests == 1);
         usb_core_hub_port(hub_index, 1, 0);
         CHECK("until its device leaves",
-              hub_index >= 0 && (devices[hub_index].refused & 0x2u) == 0);
+              hub_index >= 0 && (dev_at(hub_index)->refused & 0x2u) == 0);
     }
 
     /* A disconnection closes the device below. */
@@ -1258,7 +1297,7 @@ int main(void)
         int hub_index = -1;
 
         for (i = 0; i < USB_MAX_DEVICES; i++) {
-            if (devices[i].state == ST_RUNNING && devices[i].interface.kind == USB_KIND_HUB) {
+            if (dev_at(i)->state == ST_RUNNING && dev_at(i)->interface.kind == USB_KIND_HUB) {
                 hub_index = i;
             }
         }

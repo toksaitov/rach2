@@ -31,11 +31,58 @@ void klog(int level, const char *subsystem, const char *format, ...)
     (void)format;
 }
 
+#include "../../rach2/sys/lib/kdef.h"
+
+/* The kernel's fill, which the core reaches and this test does not build. */
+void *k_memset(void *ptr, char c, size_t n)
+{
+    unsigned char *p = (unsigned char *)ptr;
+
+    while (n-- > 0) {
+        *p++ = (unsigned char)c;
+    }
+    return ptr;
+}
+
+/*
+ * The identity-mapped frames a device's record lives in. On the host they are
+ * pages of this program's memory; nothing here is given to a controller, so
+ * the address it would be reached by is the only one that matters.
+ */
 /*
  * The driver's table of controllers, as the stack asks about it. These tests
  * drive the layers above the driver through their own stubs, so there is one
  * controller and its record is never dereferenced.
  */
+#define FRAME_COUNT 64
+static uint8_t frames[FRAME_COUNT][4096] __attribute__((aligned(4096)));
+static uint8_t frame_taken[FRAME_COUNT];
+
+void *alloc_kernel_frame(void)
+{
+    unsigned i;
+
+    for (i = 0; i < FRAME_COUNT; i++) {
+        if (!frame_taken[i]) {
+            frame_taken[i] = 1;
+            return &frames[i][0];
+        }
+    }
+    return 0;
+}
+
+void free_kernel_frame(void *frame)
+{
+    unsigned i;
+
+    for (i = 0; i < FRAME_COUNT; i++) {
+        if (frame == &frames[i][0]) {
+            frame_taken[i] = 0;
+            return;
+        }
+    }
+}
+
 static struct xhci_ctrl *the_ctrl = (struct xhci_ctrl *)1;
 
 int xhci_controllers(void)

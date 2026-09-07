@@ -20,9 +20,12 @@
 #define USB_MAX_DEVICES 12
 
 /* The largest descriptor this kernel reads. A configuration descriptor with
- * one interface and one endpoint is 25 bytes; a device with several interfaces
- * can be longer, and what does not fit is not read. */
-#define USB_DESC_MAX 64
+ * one interface and one endpoint is 25 bytes; a device with several
+ * interfaces and several endpoints runs to hundreds. A device's record is one
+ * frame, and this is what is left of that frame for the descriptor, so a
+ * configuration is read whole rather than truncated to a header. A device
+ * whose configuration is longer than this is refused by name. */
+#define USB_DESC_MAX 3072
 
 /* The classes this kernel knows by number. */
 #define USB_CLASS_HID      3
