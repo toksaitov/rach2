@@ -553,12 +553,27 @@ static int location_of(const struct usb_device_state *d, struct usb_location *ou
         const struct usb_device_state *hub = dev_at(d->owner);
         int tier = hub->where.depth;
 
+        uint32_t nibble = (uint32_t)(d->port + 1);
+
         if (d->port + 1 > USB_HUB_PORT_MAX || tier >= USB_TREE_TIERS) {
             return -1;
         }
+        /* The route string names a port in four bits, and a port above
+         * fifteen is written as fifteen, which is what the specification
+         * says to do. Below a full- or high-speed hub that loses nothing:
+         * the packet is routed by the translator's own port number, which
+         * has eight bits and carries the real one. A SuperSpeed hub is
+         * routed by this string alone, so a port above fifteen under one
+         * cannot be reached. */
+        if (nibble > 15u) {
+            if (hub->speed == USB_SPEED_SUPER) {
+                return -1;
+            }
+            nibble = 15u;
+        }
         out->root_port = hub->where.root_port;
         out->depth = tier + 1;
-        out->route = hub->where.route | ((uint32_t)(d->port + 1) << (4 * tier));
+        out->route = hub->where.route | (nibble << (4 * tier));
         if (d->speed == USB_SPEED_LOW || d->speed == USB_SPEED_FULL) {
             /* Up the tree to the nearest high-speed hub; the port carried is
              * the one on that hub that the path to this device goes through. */

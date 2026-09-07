@@ -381,6 +381,12 @@ static int kind_at(const struct usb_location *where, int *speed)
     if (where->depth == 1) {
         int port = (int)(where->route & 0xFu);
 
+        /* A port above fifteen is written as fifteen in the route string, and
+         * the translator's own port number is what says which it really is,
+         * which is how a controller finds it too. */
+        if (port == 15 && where->tt_port != 0) {
+            port = where->tt_port;
+        }
         if (port >= 1 && port <= MODEL_PORTS) {
             *speed = model.port_speed[port - 1];
             return model.port_kind[port - 1];
@@ -571,9 +577,12 @@ static void model_report_changes(void)
     if (model.change_device == 0 || model.change_buffer == 0) {
         return;
     }
-    model.change_buffer[0] = (unsigned char)(model.change_bits & 0xFF);
-    if (model.change_length > 1) {
-        model.change_buffer[1] = (unsigned char)((model.change_bits >> 8) & 0xFF);
+    {
+        uint32_t b;
+
+        for (b = 0; b < model.change_length && b < 4; b++) {
+            model.change_buffer[b] = (unsigned char)((model.change_bits >> (8 * b)) & 0xFF);
+        }
     }
     answer(model.change_device, 3, USB_XFER_OK, model.change_length, 0, model.change_generation);
     model.change_device = 0;
@@ -1272,11 +1281,11 @@ int main(void)
     CHECK("a SuperSpeed hub that refuses its depth is closed",
           running_count() == 0 && model.hub_depth_sets == 1 && model.hub_told == 0);
 
-    /* A hub with twenty ports publishes fifteen. */
+    /* A hub with twenty ports keeps all twenty. */
     model_reset();
     model.hub_ports = 20;
     pump(2000);
-    CHECK("a hub with twenty ports is told as fifteen", model.hub_told_ports == 15);
+    CHECK("a hub with twenty ports is told as twenty", model.hub_told_ports == 20);
 
     /* A reset that never ends: the device below is refused, its port is
        remembered as refused on the hub, and the refusal goes when the device
@@ -1544,6 +1553,30 @@ int main(void)
     model.hub_desc_stall = 1;
     pump(2000);
     CHECK("a hub that will not give its descriptor is closed", closes == 1 && running_count() == 0);
+
+    /* A high-speed hub with twenty ports, and a device on port twenty: the
+       route string writes fifteen where the nibble will not hold the number,
+       and the translator carries the real port. */
+    model_reset();
+    model.root_speed = USB_SPEED_HIGH;
+    model.hub_ports = 20;
+    model.hub_protocol = 1; /* a single-translator high-speed hub */
+    pump(2000);
+    CHECK("a hub with twenty ports keeps them all", hub_at(0)->ports == 20);
+    model.port_kind[19] = KIND_KBD;
+    model.port_speed[19] = USB_SPEED_FULL;
+    model.port_change[19] |= 1u;
+    model_change(20);
+    pump(3000);
+    {
+        int kbd = slot_of_kind(KIND_KBD);
+
+        CHECK("a device on port twenty is enumerated", kbd != 0 && running_count() == 2);
+        CHECK("with fifteen in the route string's nibble",
+              kbd != 0 && slot_of[kbd].where.route == 0xFu);
+        CHECK("and the translator carrying the port it is really on",
+              kbd != 0 && slot_of[kbd].where.tt_port == 20);
+    }
 
     /* Every slot taken: the device waits for one rather than being refused,
        and takes the slot another device gives back. */

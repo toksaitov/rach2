@@ -125,10 +125,16 @@ struct usb_completion {
 };
 
 /* How deep a tree goes below the root: the route string has four bits for
- * each hub tier, five tiers in twenty bits, and a port number above 15 does
- * not fit a nibble. Both are the specification's limits and the field's. */
+ * each hub tier, five tiers in twenty bits. A port number above 15 does not
+ * fit a nibble, and the specification writes 15 in its place: below a full-
+ * or high-speed hub the packet is routed by the translator's own port
+ * number, which has eight bits and carries the real one. So a hub may have
+ * more ports than a nibble names, and this is how many of them this kernel
+ * keeps state for; the port bitmaps a hub holds are words, which is what
+ * bounds it at thirty-one: a bit each for the ports and one for the hub
+ * itself is a word exactly. */
 #define USB_TREE_TIERS   5
-#define USB_HUB_PORT_MAX 15
+#define USB_HUB_PORT_MAX 31
 
 /*
  * Where a device is in the tree.

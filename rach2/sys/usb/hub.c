@@ -195,7 +195,9 @@ struct hub {
      * with, bit 0 being the hub itself. */
     int change_out;
     uint32_t change_tag;
-    uint8_t bitmap[2];
+    /* One bit per port plus the hub's own, so a hub with more ports than
+     * a byte holds still reports every one of them. */
+    uint8_t bitmap[(USB_HUB_PORT_MAX + 8) / 8];
     uint32_t changes;
     int change_reading; /* the port whose status is being read for a change */
     struct hub_port port[USB_HUB_PORT_MAX];
@@ -781,7 +783,13 @@ int hub_completion(const struct usb_completion *completion)
                 give_up(h, "its change endpoint stopped answering");
                 return 1;
             }
-            h->changes |= (uint32_t)h->bitmap[0] | ((uint32_t)h->bitmap[1] << 8);
+            {
+                unsigned b;
+
+                for (b = 0; b < sizeof(h->bitmap) && b < sizeof(h->changes); b++) {
+                    h->changes |= (uint32_t)h->bitmap[b] << (8 * b);
+                }
+            }
             return 1;
         }
         if (completion->endpoint != 1 || h->request == REQ_NONE) {
