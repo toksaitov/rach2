@@ -1097,6 +1097,16 @@ static void ahci_finish_active(struct ahci_disk *d)
 /** Start the oldest queued request when the port is idle. */
 static void ahci_start_next(struct ahci_disk *d)
 {
+    /* Interrupts are masked across the whole of it. Taking a request off
+     * the queue publishes it as the active one before its command is
+     * issued, and an interrupt arriving in that window finds a request
+     * whose command has not been sent and the slot's bit clear, and
+     * completes it as though the disk had answered. The queue then holds
+     * requests nobody will start, and each waits out its deadline. The
+     * polled path calls this with interrupts on, which is where that
+     * window was reached. */
+    uint32_t flags = kirq_save();
+
     while (!d->active && d->queue_head) {
         struct block_request *r = d->queue_head;
 
@@ -1109,6 +1119,7 @@ static void ahci_start_next(struct ahci_disk *d)
             block_request_complete(r, r->generation, -EIO);
         }
     }
+    kirq_restore(flags);
 }
 
 /**
