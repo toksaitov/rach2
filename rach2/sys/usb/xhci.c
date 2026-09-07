@@ -19,6 +19,8 @@
 #include "xhci.h"
 
 #include "../klog.h"
+#include "../lib/kstring.h"
+#include "../mm/kheap.h"
 #include "../mm/paging.h"
 #include "../pci.h"
 #include "../udelay.h"
@@ -117,13 +119,11 @@
 #define INTEL_USB3PSSEN  0xD8
 #define INTEL_USB3PRM    0xDC
 /*
- * How many root ports this driver keeps state for. A controller may advertise
- * as many as 255; the two machines here have eight and fewer, and the state
- * below is a fixed table like every other in this kernel. A controller with
- * more ports than this is used as far as this many and says so, which is
- * better than refusing it and better than writing past the table.
+ * How many root ports a controller may have. The specification's field is a
+ * byte, so this is its whole range; the state below is sized from what the
+ * controller says it has, not from a number compiled in.
  */
-#define XHCI_MAX_PORTS   16
+#define XHCI_MAX_PORTS   255
 
 /* A transfer request block is four words. */
 #define TRB_WORDS 4
@@ -132,7 +132,8 @@
  * endpoints and its index runs to 31; a stick picks its own numbers and the
  * ones it picks are its business, not this driver's. */
 #define XHCI_MAX_DCI      32
-#define XHCI_EP_RING_TRBS 16
+/* An endpoint's ring is one page: 4096 bytes of sixteen-byte blocks. */
+#define XHCI_EP_RING_TRBS 256
 
 /* Completions waiting to be reported. A transfer ends in an interrupt-free
  * drain, so what it ended as is kept until the layer above asks. */
@@ -148,6 +149,14 @@ struct xhci_slot {
     int hub_ports;
     int hub_multi_tt;
     int hub_think_time;
+    /* The device context the controller reads for this slot, and a ring per
+     * endpoint opened on it. Each is one page, taken when the slot or the
+     * endpoint is opened and given back when it closes, and each is read by
+     * the controller at the physical address recorded beside it. */
+    uint8_t *ctx;
+    uintptr_t ctx_phys;
+    uint32_t *ring[XHCI_MAX_DCI];
+    uintptr_t ring_phys[XHCI_MAX_DCI];
     uint32_t enqueue[XHCI_MAX_DCI];
     uint32_t cycle[XHCI_MAX_DCI];
     uint8_t open[XHCI_MAX_DCI];
@@ -202,15 +211,27 @@ struct xhci_ctrl {
 
     const struct xhci_io *io;
 
-    /* The scratchpad pages this controller asked for, and the array of their
-     * addresses. */
-    uint64_t scratchpad_array[XHCI_MAX_SCRATCHPADS] __attribute__((aligned(64)));
-    uint8_t scratchpad_pages[XHCI_MAX_SCRATCHPADS][4096] __attribute__((aligned(4096)));
+    /* The scratchpad pages this controller asked for, and the page holding
+     * the array of their physical addresses. Both are read by the
+     * controller, so each page's physical address is kept beside the
+     * address this kernel reaches it by. */
+    uint64_t *scratchpad_array;
+    uintptr_t scratchpad_array_phys;
+    /* The addresses this kernel reaches those pages by, beside the physical
+     * ones the array holds for the controller: a page whose only record was
+     * its physical address could never be given back. */
+    void **scratchpad_page;
+    uint32_t scratchpads;
 
     /* The rings, the context base array and the event ring segment table. */
     uint32_t cmd_ring[XHCI_RING_TRBS * TRB_WORDS] __attribute__((aligned(64)));
     uint32_t event_ring[XHCI_RING_TRBS * TRB_WORDS] __attribute__((aligned(64)));
-    uint64_t dcbaa[XHCI_SLOTS + 1] __attribute__((aligned(64)));
+    /* The context base array, one page: the controller reads it by its
+     * physical address, and a page holds 512 entries, more than the 255
+     * slots the standard's field can name. */
+    uint64_t *dcbaa;
+    uintptr_t dcbaa_phys;
+    uint32_t nslots; /* the slots this controller was told to enable */
     uint32_t erst[4] __attribute__((aligned(64)));
 
     uint32_t cmd_enqueue; /* the block this driver writes next */
@@ -235,10 +256,12 @@ struct xhci_ctrl {
     /* This driver's own clock, in milliseconds, and the per-port state that
      * is counted against it. */
     uint32_t now_ms;
-    uint32_t port_deadline[XHCI_MAX_PORTS];
-    uint32_t port_connect_at[XHCI_MAX_PORTS];
-    uint8_t port_connected[XHCI_MAX_PORTS];
-    uint8_t port_changed[XHCI_MAX_PORTS];
+    /* One entry per root port the controller says it has, taken at
+     * bring-up. */
+    uint32_t *port_deadline;
+    uint32_t *port_connect_at;
+    uint8_t *port_connected;
+    uint8_t *port_changed;
 
     struct usb_completion completions[XHCI_COMPLETIONS];
     uint32_t completion_head;
@@ -248,11 +271,7 @@ struct xhci_ctrl {
      * command at a time, which is all this driver issues. Each device has its
      * own output context and a ring for each endpoint it opens. */
     uint8_t input_ctx[(XHCI_MAX_DCI + 1) * 64] __attribute__((aligned(64)));
-    uint8_t device_ctx[XHCI_SLOTS + 1][XHCI_MAX_DCI * 64] __attribute__((aligned(64)));
-    uint32_t ep_ring[XHCI_SLOTS + 1][XHCI_MAX_DCI][XHCI_EP_RING_TRBS * TRB_WORDS]
-        __attribute__((aligned(256)));
-
-    struct xhci_slot slots[XHCI_SLOTS + 1];
+    struct xhci_slot *slots;
 
     /* The port and speed a slot is being taken for. The controller decides
      * which slot that will be and does not say so until the command answers,
@@ -338,6 +357,9 @@ const struct xhci_caps *xhci_capabilities(struct xhci_ctrl *hc)
 {
     return &hc->caps;
 }
+
+static void slot_pages_free(struct xhci_slot *s);
+static void ctrl_free_tables(struct xhci_ctrl *hc);
 
 /* What the last discovery had to say when it found no controller at all.
  * Before there is a record there is nowhere else to put it. */
@@ -510,6 +532,9 @@ int xhci_discover(void)
         {
             struct xhci_ctrl *hc = &ctrls[nctrls];
 
+            /* A record used by an earlier discovery gives back what it holds
+             * before it is taken again. */
+            ctrl_free_tables(hc);
             k_memset(hc, 0, sizeof(*hc));
             hc->number = nctrls;
             hc->io = xhci_default_io;
@@ -682,6 +707,56 @@ int xhci_halt_reset(struct xhci_ctrl *hc)
     return 0;
 }
 
+/**
+ * Give back the tables sized from a controller's capability registers.
+ *
+ * Reading those registers again, which a reset does, sizes them again, so
+ * what was taken for the old sizes goes back first. A slot's own pages are
+ * not these: they are taken when the slot is addressed and given back when it
+ * closes.
+ */
+static void ctrl_free_tables(struct xhci_ctrl *hc)
+{
+    uint32_t i;
+
+    if (hc->slots) {
+        for (i = 0; i <= hc->nslots; i++) {
+            slot_pages_free(&hc->slots[i]);
+        }
+        kfree(hc->slots);
+        hc->slots = 0;
+    }
+    if (hc->dcbaa) {
+        kfree_pages(hc->dcbaa, 1);
+        hc->dcbaa = 0;
+        hc->dcbaa_phys = 0;
+    }
+    if (hc->scratchpad_page) {
+        for (i = 0; i < hc->scratchpads; i++) {
+            if (hc->scratchpad_page[i]) {
+                kfree_pages(hc->scratchpad_page[i], 1);
+            }
+        }
+        kfree(hc->scratchpad_page);
+        hc->scratchpad_page = 0;
+    }
+    if (hc->scratchpad_array) {
+        kfree_pages(hc->scratchpad_array, 1);
+        hc->scratchpad_array = 0;
+        hc->scratchpad_array_phys = 0;
+    }
+    hc->scratchpads = 0;
+    kfree(hc->port_deadline);
+    kfree(hc->port_connect_at);
+    kfree(hc->port_connected);
+    kfree(hc->port_changed);
+    hc->port_deadline = 0;
+    hc->port_connect_at = 0;
+    hc->port_connected = 0;
+    hc->port_changed = 0;
+    hc->nslots = 0;
+}
+
 int xhci_read_caps(struct xhci_ctrl *hc)
 {
     uint32_t word;
@@ -733,10 +808,39 @@ int xhci_read_caps(struct xhci_ctrl *hc)
         return -1;
     }
 
-    if (hc->caps.max_ports > XHCI_MAX_PORTS) {
-        klog(KLOG_WARN, "usb", "ports: the controller has %d and this kernel reaches %d",
-             (int)hc->caps.max_ports, (int)XHCI_MAX_PORTS);
-        hc->caps.max_ports = XHCI_MAX_PORTS;
+    if (hc->caps.max_ports == 0 || hc->caps.max_ports > XHCI_MAX_PORTS) {
+        hc->err = "the controller says it has a number of ports the standard does not allow";
+        return -1;
+    }
+    /* Read again on a controller that has been read before, which is what a
+     * reset does: what it held goes back before it takes it again. */
+    ctrl_free_tables(hc);
+
+    /* The slots this controller offers, and the tables that hold them: one
+     * record per slot for this driver, and one page for the context base
+     * array the controller reads. Both are the controller's own count. */
+    if (hc->caps.max_slots == 0 || hc->caps.max_slots > XHCI_SLOTS) {
+        hc->err = "the controller says it has a number of slots the standard does not allow";
+        return -1;
+    }
+    hc->nslots = hc->caps.max_slots;
+    hc->slots = (struct xhci_slot *)kzalloc((hc->nslots + 1) * sizeof(struct xhci_slot));
+    hc->dcbaa = (uint64_t *)kalloc_pages(1, &hc->dcbaa_phys);
+    if (!hc->slots || !hc->dcbaa) {
+        hc->err = "the slot table could not be allocated";
+        return -1;
+    }
+    k_memset(hc->dcbaa, 0, 4096);
+
+    /* The per-port state, one entry each, taken from the heap for the ports
+     * this controller says it has. */
+    hc->port_deadline = (uint32_t *)kzalloc(hc->caps.max_ports * sizeof(uint32_t));
+    hc->port_connect_at = (uint32_t *)kzalloc(hc->caps.max_ports * sizeof(uint32_t));
+    hc->port_connected = (uint8_t *)kzalloc(hc->caps.max_ports);
+    hc->port_changed = (uint8_t *)kzalloc(hc->caps.max_ports);
+    if (!hc->port_deadline || !hc->port_connect_at || !hc->port_connected || !hc->port_changed) {
+        hc->err = "the port state could not be allocated";
+        return -1;
     }
 
     hc->caps.pagesize = op_r32(hc, XHCI_PAGESIZE) & 0xFFFFu;
@@ -756,23 +860,53 @@ int xhci_read_caps(struct xhci_ctrl *hc)
     return 0;
 }
 
+/**
+ * Give the controller the scratchpad pages it asked for.
+ *
+ * The count is the controller's own, from its capability registers, and the
+ * pages come from the heap: a controller that wants a hundred gets a hundred
+ * rather than being refused by a number compiled into this driver. The array
+ * of their addresses is one page, which holds 512 of them, and a controller
+ * asking for more than that is refused by name.
+ *
+ * Both the array and the pages are read by the controller at their physical
+ * addresses, so each is taken a page at a time and its physical address
+ * recorded: the heap's pages are contiguous where this kernel reaches them
+ * and scattered where the controller does.
+ */
 int xhci_scratchpads(struct xhci_ctrl *hc)
 {
     uint32_t i;
-    uint32_t j;
+    uintptr_t phys;
 
-    if (hc->caps.scratchpads > XHCI_MAX_SCRATCHPADS) {
-        klog(KLOG_ERR, "usb", "scratchpad: the controller requires %d pages and this kernel has %d",
-             (int)hc->caps.scratchpads, (int)XHCI_MAX_SCRATCHPADS);
-        hc->err = "the controller requires more scratchpad pages than this kernel has";
+    hc->scratchpads = hc->caps.scratchpads;
+    if (hc->scratchpads == 0) {
+        hc->err = "none";
+        return 0;
+    }
+    if (hc->scratchpads > XHCI_MAX_SCRATCHPADS) {
+        klog(KLOG_ERR, "usb", "scratchpad: the controller requires %d pages and the array holds %d",
+             (int)hc->scratchpads, (int)XHCI_MAX_SCRATCHPADS);
+        hc->err = "the controller requires more scratchpad pages than the array holds";
         return -1;
     }
+    hc->scratchpad_array = (uint64_t *)kalloc_pages(1, &hc->scratchpad_array_phys);
+    hc->scratchpad_page = (void **)kzalloc(hc->scratchpads * sizeof(void *));
+    if (!hc->scratchpad_array || !hc->scratchpad_page) {
+        hc->err = "the scratchpad array could not be allocated";
+        return -1;
+    }
+    k_memset(hc->scratchpad_array, 0, 4096);
+    for (i = 0; i < hc->scratchpads; i++) {
+        void *page = kalloc_pages(1, &phys);
 
-    for (i = 0; i < hc->caps.scratchpads; i++) {
-        for (j = 0; j < 4096; j++) {
-            hc->scratchpad_pages[i][j] = 0;
+        if (!page) {
+            hc->err = "a scratchpad page could not be allocated";
+            return -1;
         }
-        hc->scratchpad_array[i] = (uint64_t)(uintptr_t)&hc->scratchpad_pages[i][0];
+        k_memset(page, 0, 4096);
+        hc->scratchpad_page[i] = page;
+        hc->scratchpad_array[i] = (uint64_t)phys;
     }
 
     hc->err = "none";
@@ -1185,7 +1319,7 @@ static void event_dispatch(struct xhci_ctrl *hc, const uint32_t *trb)
         /* A slot the controller has just given out is recorded here, because
          * this is where its number arrives. */
         if (hc->command_type == TRB_TYPE_ENABLE_SLOT && hc->command_result.status == USB_XFER_OK &&
-            hc->command_result.device > 0 && hc->command_result.device <= XHCI_SLOTS && hc->pending_port >= 0) {
+            hc->command_result.device > 0 && hc->command_result.device <= (int)hc->nslots && hc->pending_port >= 0) {
             struct xhci_slot *s = &hc->slots[hc->command_result.device];
 
             s->used = 1;
@@ -1213,7 +1347,7 @@ static void event_dispatch(struct xhci_ctrl *hc, const uint32_t *trb)
 
         c->device = (int)((trb[3] >> TRB_SLOT_SHIFT) & 0xFFu);
         c->endpoint = (int)((trb[3] >> 16) & 0x1Fu);
-        if (c->device <= 0 || c->device > XHCI_SLOTS || !hc->slots[c->device].used) {
+        if (c->device <= 0 || c->device > (int)hc->nslots || !hc->slots[c->device].used) {
             /* A device that has gone, answering for a transfer nobody is
              * waiting for. Reporting it would let a slot handed to the next
              * device be advanced by the last one's transfer. */
@@ -1258,7 +1392,7 @@ static void event_dispatch(struct xhci_ctrl *hc, const uint32_t *trb)
 static void port_scan(struct xhci_ctrl *hc)
 {
     uint32_t i;
-    uint32_t limit = hc->caps.max_ports < XHCI_MAX_PORTS ? hc->caps.max_ports : XHCI_MAX_PORTS;
+    uint32_t limit = hc->caps.max_ports;
 
     for (i = 0; i < limit; i++) {
         int now_connected = (r32(hc, portsc_offset(hc, (int)i)) & PORTSC_CCS) ? 1 : 0;
@@ -1516,7 +1650,7 @@ int xhci_start(struct xhci_ctrl *hc)
         hc->cmd_ring[i] = 0;
         hc->event_ring[i] = 0;
     }
-    for (i = 0; i < XHCI_SLOTS + 1; i++) {
+    for (i = 0; i < hc->nslots + 1; i++) {
         hc->dcbaa[i] = 0;
     }
     hc->cmd_enqueue = 0;
@@ -1529,7 +1663,7 @@ int xhci_start(struct xhci_ctrl *hc)
     hc->pending_port = -1;
     hc->completion_head = 0;
     hc->completion_tail = 0;
-    for (i = 0; i <= XHCI_SLOTS; i++) {
+    for (i = 0; i <= hc->nslots; i++) {
         uint32_t j;
 
         hc->slots[i].used = 0;
@@ -1537,7 +1671,7 @@ int xhci_start(struct xhci_ctrl *hc)
             hc->slots[i].open[j] = 0;
         }
     }
-    for (i = 0; i < XHCI_MAX_PORTS; i++) {
+    for (i = 0; i < hc->caps.max_ports; i++) {
         hc->port_changed[i] = 0;
         hc->port_deadline[i] = 0;
         hc->port_connect_at[i] = 0;
@@ -1547,13 +1681,13 @@ int xhci_start(struct xhci_ctrl *hc)
     /* The scratchpad array is the controller's own memory, and the first entry
      * of the context array is where it looks for it. */
     if (hc->caps.scratchpads != 0) {
-        hc->dcbaa[0] = (uint64_t)(uintptr_t)hc->scratchpad_array;
+        hc->dcbaa[0] = (uint64_t)hc->scratchpad_array_phys;
     }
 
-    slots_enabled = hc->caps.max_slots < XHCI_SLOTS ? hc->caps.max_slots : XHCI_SLOTS;
+    slots_enabled = hc->nslots;
     op_w32(hc, XHCI_CONFIG, slots_enabled);
 
-    op_w32(hc, XHCI_DCBAAP, (uint32_t)(uintptr_t)hc->dcbaa);
+    op_w32(hc, XHCI_DCBAAP, (uint32_t)hc->dcbaa_phys);
     op_w32(hc, XHCI_DCBAAP + 4, 0);
 
     op_w32(hc, XHCI_CRCR, (uint32_t)(uintptr_t)hc->cmd_ring | CRCR_RCS);
@@ -1737,7 +1871,7 @@ int xhci_device_open(struct xhci_ctrl *hc, const struct usb_location *where, int
     if ((where->route >> (4 * where->depth)) != 0) {
         return -1;
     }
-    if (where->tt_device < 0 || where->tt_device > XHCI_SLOTS || where->tt_port < 0 ||
+    if (where->tt_device < 0 || where->tt_device > (int)hc->nslots || where->tt_port < 0 ||
         where->tt_port > 255) {
         return -1;
     }
@@ -1781,7 +1915,7 @@ int xhci_device_hub(struct xhci_ctrl *hc, int device, int ports, int multi_tt, i
     struct xhci_slot *s;
     uint32_t i;
 
-    if (device <= 0 || device > XHCI_SLOTS || !hc->slots[device].used || xhci_command_busy(hc)) {
+    if (device <= 0 || device > (int)hc->nslots || !hc->slots[device].used || xhci_command_busy(hc)) {
         return -1;
     }
     if (ports < 1 || ports > 255 || think_time < 0 || think_time > 3) {
@@ -1804,6 +1938,52 @@ int xhci_device_hub(struct xhci_ctrl *hc, int device, int ports, int multi_tt, i
 }
 
 /**
+ * Take the pages a slot needs: its device context and the ring of endpoint
+ * zero, one page each, read by the controller at their physical addresses.
+ *
+ * @return 0, or -1 when the heap has nothing to give.
+ */
+static int slot_pages(struct xhci_slot *s)
+{
+    if (!s->ctx) {
+        s->ctx = (uint8_t *)kalloc_pages(1, &s->ctx_phys);
+        if (!s->ctx) {
+            return -1;
+        }
+        k_memset(s->ctx, 0, 4096);
+    }
+    if (!s->ring[1]) {
+        s->ring[1] = (uint32_t *)kalloc_pages(1, &s->ring_phys[1]);
+        if (!s->ring[1]) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Give back every page a slot held. The controller has finished with the slot
+ * by the time this runs, so nothing of its is left pointing at them.
+ */
+static void slot_pages_free(struct xhci_slot *s)
+{
+    uint32_t i;
+
+    for (i = 0; i < XHCI_MAX_DCI; i++) {
+        if (s->ring[i]) {
+            kfree_pages(s->ring[i], 1);
+            s->ring[i] = 0;
+            s->ring_phys[i] = 0;
+        }
+    }
+    if (s->ctx) {
+        kfree_pages(s->ctx, 1);
+        s->ctx = 0;
+        s->ctx_phys = 0;
+    }
+}
+
+/**
  * Fill the input context for a device that has just been given a slot, and
  * ask the controller to address it.
  */
@@ -1815,7 +1995,7 @@ int xhci_device_address(struct xhci_ctrl *hc, int device)
     struct xhci_slot *s;
     uint32_t i;
 
-    if (device <= 0 || device > XHCI_SLOTS || !hc->slots[device].used) {
+    if (device <= 0 || device > (int)hc->nslots || !hc->slots[device].used) {
         return -1;
     }
     /* The input context is one, shared by every command that takes one, so
@@ -1826,6 +2006,9 @@ int xhci_device_address(struct xhci_ctrl *hc, int device)
         return -1;
     }
     s = &hc->slots[device];
+    if (slot_pages(s) != 0) {
+        return -1;
+    }
 
     for (i = 0; i <= XHCI_MAX_DCI; i++) {
         context_clear(hc, hc->input_ctx, i);
@@ -1838,7 +2021,7 @@ int xhci_device_address(struct xhci_ctrl *hc, int device)
 
     ep0 = context_entry(hc, hc->input_ctx, 2);
     ep0[1] = (4u << 3) | (3u << 1) | (default_packet_size(s->speed) << 16);
-    ep0[2] = (uint32_t)(uintptr_t)&hc->ep_ring[device][1][0] | TRB_CYCLE;
+    ep0[2] = (uint32_t)s->ring_phys[1] | TRB_CYCLE;
     ep0[3] = 0;
     ep0[4] = 8;
 
@@ -1848,17 +2031,17 @@ int xhci_device_address(struct xhci_ctrl *hc, int device)
      * carry the cycle value it is looking for and addresses that are no longer
      * anybody's. */
     for (i = 0; i < XHCI_EP_RING_TRBS * TRB_WORDS; i++) {
-        hc->ep_ring[device][1][i] = 0;
+        s->ring[1][i] = 0;
     }
     for (i = 0; i < XHCI_MAX_DCI; i++) {
-        context_clear(hc, hc->device_ctx[device], i);
+        context_clear(hc, s->ctx, i);
     }
 
     s->enqueue[1] = 0;
     s->cycle[1] = TRB_CYCLE;
     s->open[1] = 1;
 
-    hc->dcbaa[device] = (uint64_t)(uintptr_t)&hc->device_ctx[device][0];
+    hc->dcbaa[device] = (uint64_t)s->ctx_phys;
     xhci_barrier();
     return xhci_command_issue(hc, TRB_TYPE_ADDRESS_DEVICE, (uint64_t)(uintptr_t)hc->input_ctx,
                               (uint32_t)device);
@@ -1870,7 +2053,7 @@ int xhci_device_packet_size(struct xhci_ctrl *hc, int device, int max_packet)
     uint32_t *ep0;
     uint32_t i;
 
-    if (device <= 0 || device > XHCI_SLOTS || !hc->slots[device].used || xhci_command_busy(hc)) {
+    if (device <= 0 || device > (int)hc->nslots || !hc->slots[device].used || xhci_command_busy(hc)) {
         return -1;
     }
     for (i = 0; i <= XHCI_MAX_DCI; i++) {
@@ -1889,7 +2072,7 @@ int xhci_device_close(struct xhci_ctrl *hc, int device)
 {
     uint32_t i;
 
-    if (device <= 0 || device > XHCI_SLOTS || !hc->slots[device].used) {
+    if (device <= 0 || device > (int)hc->nslots || !hc->slots[device].used) {
         return -1;
     }
     /* The endpoints are closed to this driver at once, so nothing new is
@@ -1905,11 +2088,12 @@ int xhci_device_close(struct xhci_ctrl *hc, int device)
 
 void xhci_device_closed(struct xhci_ctrl *hc, int device)
 {
-    if (device <= 0 || device > XHCI_SLOTS) {
+    if (device <= 0 || device > (int)hc->nslots) {
         return;
     }
     hc->slots[device].used = 0;
     hc->dcbaa[device] = 0;
+    slot_pages_free(&hc->slots[device]);
 }
 
 int xhci_command_busy(struct xhci_ctrl *hc)
@@ -1942,11 +2126,17 @@ int xhci_endpoint_open(struct xhci_ctrl *hc, int device, const struct usb_endpoi
     uint32_t i;
     struct xhci_slot *s;
 
-    if (device <= 0 || device > XHCI_SLOTS || !hc->slots[device].used || dci == 0 ||
+    if (device <= 0 || device > (int)hc->nslots || !hc->slots[device].used || dci == 0 ||
         xhci_command_busy(hc)) {
         return -1;
     }
     s = &hc->slots[device];
+    if (!s->ring[dci]) {
+        s->ring[dci] = (uint32_t *)kalloc_pages(1, &s->ring_phys[dci]);
+        if (!s->ring[dci]) {
+            return -1;
+        }
+    }
 
     for (i = 0; i <= XHCI_MAX_DCI; i++) {
         context_clear(hc, hc->input_ctx, i);
@@ -1967,14 +2157,14 @@ int xhci_endpoint_open(struct xhci_ctrl *hc, int device, const struct usb_endpoi
      * the low eleven of them; the rest say how many such packets a high-speed
      * device may send in a microframe, which this kernel does not use. */
     entry[1] = (type << 3) | (3u << 1) | (((uint32_t)ep->max_packet & 0x7FFu) << 16);
-    entry[2] = (uint32_t)(uintptr_t)&hc->ep_ring[device][dci][0] | TRB_CYCLE;
+    entry[2] = (uint32_t)s->ring_phys[dci] | TRB_CYCLE;
     entry[3] = 0;
     /* The average block length and the most this endpoint may move in one
      * service interval, which is what the controller reserves bandwidth by. */
     entry[4] = (uint32_t)ep->max_packet | ((uint32_t)ep->max_packet << 16);
 
     for (i = 0; i < XHCI_EP_RING_TRBS * TRB_WORDS; i++) {
-        hc->ep_ring[device][dci][i] = 0;
+        s->ring[dci][i] = 0;
     }
     s->enqueue[dci] = 0;
     s->cycle[dci] = TRB_CYCLE;
@@ -1985,14 +2175,14 @@ int xhci_endpoint_open(struct xhci_ctrl *hc, int device, const struct usb_endpoi
 
 void xhci_endpoint_close(struct xhci_ctrl *hc, int device, int endpoint)
 {
-    if (device > 0 && device < XHCI_SLOTS && endpoint > 0 && endpoint < XHCI_MAX_DCI) {
+    if (device > 0 && device < (int)hc->nslots && endpoint > 0 && endpoint < XHCI_MAX_DCI) {
         hc->slots[device].open[endpoint] = 0;
     }
 }
 
 int xhci_endpoint_reset(struct xhci_ctrl *hc, int device, int endpoint)
 {
-    if (device <= 0 || device > XHCI_SLOTS || endpoint <= 0 || endpoint >= XHCI_MAX_DCI) {
+    if (device <= 0 || device > (int)hc->nslots || endpoint <= 0 || endpoint >= XHCI_MAX_DCI) {
         return -1;
     }
     if (!hc->slots[device].used) {
@@ -2009,7 +2199,7 @@ int xhci_endpoint_dequeue(struct xhci_ctrl *hc, int device, int endpoint)
 {
     struct xhci_slot *s;
 
-    if (device <= 0 || device > XHCI_SLOTS || endpoint <= 0 || endpoint >= XHCI_MAX_DCI) {
+    if (device <= 0 || device > (int)hc->nslots || endpoint <= 0 || endpoint >= XHCI_MAX_DCI) {
         return -1;
     }
     if (!hc->slots[device].used) {
@@ -2019,7 +2209,7 @@ int xhci_endpoint_dequeue(struct xhci_ctrl *hc, int device, int endpoint)
     s->enqueue[endpoint] = 0;
     s->cycle[endpoint] = TRB_CYCLE;
     return xhci_command_issue(hc, TRB_TYPE_SET_TR_DEQUEUE,
-                              (uint64_t)(uintptr_t)&hc->ep_ring[device][endpoint][0] | TRB_CYCLE,
+                              (uint64_t)s->ring_phys[endpoint] | TRB_CYCLE,
                               (uint32_t)device | ((uint32_t)endpoint << 16));
 }
 
@@ -2028,7 +2218,7 @@ static uint32_t *ring_put(struct xhci_ctrl *hc, int device, uint32_t dci, uint32
                           uint32_t w1, uint32_t w2, uint32_t w3)
 {
     struct xhci_slot *s = &hc->slots[device];
-    uint32_t *ring = &hc->ep_ring[device][dci][0];
+    uint32_t *ring = s->ring[dci];
     uint32_t *trb = &ring[s->enqueue[dci] * TRB_WORDS];
 
     trb[0] = w0;
@@ -2040,7 +2230,9 @@ static uint32_t *ring_put(struct xhci_ctrl *hc, int device, uint32_t dci, uint32
     if (s->enqueue[dci] == XHCI_EP_RING_TRBS - 1) {
         uint32_t *link = &ring[s->enqueue[dci] * TRB_WORDS];
 
-        link[0] = (uint32_t)(uintptr_t)ring;
+        /* The controller follows this by its physical address, which is not
+         * the address this kernel reaches the page by. */
+        link[0] = (uint32_t)s->ring_phys[dci];
         link[1] = 0;
         link[2] = 0;
         link[3] = (TRB_TYPE_LINK << TRB_TYPE_SHIFT) | TRB_TOGGLE | s->cycle[dci];
@@ -2055,7 +2247,7 @@ int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb
     struct xhci_slot *s;
     uint32_t dci = (uint32_t)endpoint;
 
-    if (device <= 0 || device > XHCI_SLOTS || dci == 0 || dci >= XHCI_MAX_DCI) {
+    if (device <= 0 || device > (int)hc->nslots || dci == 0 || dci >= XHCI_MAX_DCI) {
         return -1;
     }
     s = &hc->slots[device];

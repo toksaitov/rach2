@@ -542,6 +542,89 @@ void klog(int level, const char *subsystem, const char *format, ...)
     (void)format;
 }
 
+/*
+ * The kernel heap, as this test supplies it: an arena of pages with a bitmap,
+ * and a bump for the plain allocations. A page here is a page of this
+ * program's memory and its "physical" address is the address itself, which is
+ * what the driver programs into the model's registers and what the model
+ * reads back.
+ */
+#define ARENA_PAGES 1024
+static uint8_t arena[ARENA_PAGES][4096] __attribute__((aligned(4096)));
+static uint8_t arena_taken[ARENA_PAGES];
+static uint8_t bump[256 * 1024];
+static unsigned bump_used;
+static unsigned bump_live;
+
+void *kalloc_pages(uint32_t count, uintptr_t *phys)
+{
+    unsigned i;
+
+    if (count != 1) {
+        return 0; /* this driver takes its pages one at a time */
+    }
+    for (i = 0; i < ARENA_PAGES; i++) {
+        if (!arena_taken[i]) {
+            unsigned j;
+
+            arena_taken[i] = 1;
+            for (j = 0; j < 4096; j++) {
+                arena[i][j] = 0;
+            }
+            if (phys) {
+                *phys = (uintptr_t)&arena[i][0];
+            }
+            return &arena[i][0];
+        }
+    }
+    return 0;
+}
+
+void kfree_pages(void *p, uint32_t count)
+{
+    unsigned i;
+
+    (void)count;
+    for (i = 0; i < ARENA_PAGES; i++) {
+        if (p == &arena[i][0]) {
+            arena_taken[i] = 0;
+            return;
+        }
+    }
+}
+
+void *kzalloc(size_t size)
+{
+    unsigned char *p;
+    size_t i;
+
+    size = (size + 15u) & ~(size_t)15u;
+    if (bump_used + size > sizeof(bump)) {
+        return 0;
+    }
+    p = &bump[bump_used];
+    bump_used += (unsigned)size;
+    bump_live++;
+    for (i = 0; i < size; i++) {
+        p[i] = 0;
+    }
+    return p;
+}
+
+void *kmalloc(size_t size)
+{
+    return kzalloc(size);
+}
+
+void kfree(void *p)
+{
+    /* The driver gives every one of these back before it takes them again,
+     * so the bump starts over once nothing is out. */
+    if (p && bump_live > 0 && --bump_live == 0) {
+        bump_used = 0;
+    }
+}
+
 /* Two of the kernel's own, which the driver reaches and this test does not
  * build: a fill, and the name of a controller's register interface. */
 void *k_memset(void *ptr, char c, size_t n)
@@ -686,12 +769,13 @@ static int transfer_answers;
 
 static void endpoint_doorbell(uint32_t slot, uint32_t dci)
 {
-    if (slot == 0 || slot > XHCI_SLOTS || dci == 0 || dci >= XHCI_MAX_DCI) {
-        return;
+    if (slot == 0 || slot > XHCI_SLOTS || dci == 0 || dci >= XHCI_MAX_DCI ||
+        !hc->slots[slot].ring[dci]) {
+        return; /* no ring has been given to that endpoint */
     }
     for (;;) {
         uint32_t at = model_ep_dequeue[slot][dci];
-        const uint32_t *t = &hc->ep_ring[slot][dci][at * TRB_WORDS];
+        const uint32_t *t = &hc->slots[slot].ring[dci][at * TRB_WORDS];
         uint32_t type;
 
         if ((t[3] & TRB_CYCLE) != model_ep_cycle[slot][dci]) {
@@ -1117,19 +1201,26 @@ int main(void)
 
     model_reset();
     reg[R_HCSPARAMS2] = (1u << 21) | (3u << 27); /* 35 pages */
-    CHECK("a controller that requires more pages than this kernel has is read",
-          xhci_read_caps(hc) == 0);
-    CHECK("and refused", xhci_scratchpads(hc) != 0);
+    CHECK("a controller that requires thirty-five pages is read", xhci_read_caps(hc) == 0);
+    CHECK("and served, since the pages come from the heap", xhci_scratchpads(hc) == 0);
+    CHECK("with thirty-five of them",
+          hc->scratchpad_array[34] != 0 && hc->scratchpad_array[35] == 0);
 
-    /* Starting it: the rings, the hc->slots, and the ports powered. */
+    model_reset();
+    reg[R_HCSPARAMS2] = (31u << 21) | (31u << 27); /* 1023 pages */
+    CHECK("a controller that requires more pages than the array holds is read",
+          xhci_read_caps(hc) == 0);
+    CHECK("and refused by name", xhci_scratchpads(hc) != 0);
+
+    /* Starting it: the rings, the slots, and the ports powered. */
     model_reset();
     CHECK("the capability registers are read", xhci_read_caps(hc) == 0);
     CHECK("the controller is taken", xhci_own(hc) == 0);
     CHECK("halted and reset", xhci_halt_reset(hc) == 0);
     CHECK("given its scratchpads", xhci_scratchpads(hc) == 0);
     CHECK("a controller that starts is started", xhci_start(hc) == 0);
-    CHECK("with the hc->slots this kernel can use, not every slot it offers",
-          reg[OP(0x38u)] == XHCI_SLOTS);
+    CHECK("with every slot the controller offers, which is its own number",
+          reg[OP(0x38u)] == hc->caps.max_slots);
     CHECK("its context array programmed", reg[OP(0x30u)] != 0);
     CHECK("its command ring programmed, running from the first block",
           (reg[OP(0x18u)] & ~0xFu) != 0 && (reg[OP(0x18u)] & 1u) != 0);
@@ -1302,11 +1393,11 @@ int main(void)
     xhci_events(hc);
     CHECK("a port with nothing on it is never settled", xhci_port_settled(hc, 0) == 0);
 
-    /* A controller with more ports than this kernel has state for. */
+    /* A controller with more ports than the machines here have. */
     model_reset();
     reg[R_HCSPARAMS1] = 16u | (1u << 8) | (40u << 24);
-    CHECK("a controller with more ports than this kernel reaches is read", xhci_read_caps(hc) == 0);
-    CHECK("and reaches as many as it has state for", xhci_capabilities(hc)->max_ports == 16);
+    CHECK("a controller with forty ports is read", xhci_read_caps(hc) == 0);
+    CHECK("and every one of them is reached", xhci_capabilities(hc)->max_ports == 40);
 
     model_reset();
     port_reset_completes = 0;
@@ -1557,15 +1648,15 @@ int main(void)
     CHECK("the controller answers", xhci_command_done(hc, &result) == 1);
 
     CHECK("a device the controller never gave out is refused", xhci_device_address(hc, 3) != 0);
-    /* Slots are numbered from one, so the last one this kernel asked for is
-       `XHCI_SLOTS` and not one less. A driver whose tables were a slot short
-       would refuse the last slot the controller is entitled to hand out. */
+    /* Slots are numbered from one, so the last one the controller may give
+       out is its own count and not one less. A driver whose tables were a
+       slot short would refuse the last slot it is entitled to hand out. */
     CHECK("the last slot the controller may give out is not refused for being last",
-          xhci_device_address(hc, XHCI_SLOTS) != 0 && hc->slots[XHCI_SLOTS].used == 0);
-    hc->slots[XHCI_SLOTS].used = 1;
-    hc->slots[XHCI_SLOTS].port = 0;
-    hc->slots[XHCI_SLOTS].speed = USB_SPEED_HIGH;
-    CHECK("and is addressed like any other", xhci_device_address(hc, XHCI_SLOTS) == 0);
+          xhci_device_address(hc, (int)hc->nslots) != 0 && hc->slots[hc->nslots].used == 0);
+    hc->slots[hc->nslots].used = 1;
+    hc->slots[hc->nslots].port = 0;
+    hc->slots[hc->nslots].speed = USB_SPEED_HIGH;
+    CHECK("and is addressed like any other", xhci_device_address(hc, (int)hc->nslots) == 0);
     xhci_events(hc);
     CHECK("the controller answers", xhci_command_done(hc, &result) == 1);
     CHECK("and so is an endpoint on one", xhci_endpoint_reset(hc, 3, 3) != 0);
@@ -1606,7 +1697,7 @@ int main(void)
         struct usb_completion completion;
         static uint8_t setup[8];
         static uint8_t buffer[64];
-        const uint32_t *ring = &hc->ep_ring[1][1][0];
+        const uint32_t *ring;
 
         model_reset();
         CHECK("the capability registers are read", xhci_read_caps(hc) == 0);
@@ -1627,6 +1718,8 @@ int main(void)
         transfer.length = 18;
         transfer.direction = USB_DIR_IN;
         CHECK("a control transfer is queued", xhci_submit(hc, 1, 1, &transfer) == 0);
+        /* The ring is the one the slot was given when it was addressed. */
+        ring = hc->slots[1].ring[1];
         CHECK("as a setup block", ((ring[3] >> TRB_TYPE_SHIFT) & TRB_TYPE_MASK) == TRB_TYPE_SETUP);
         CHECK("carrying the eight bytes itself", (ring[3] & TRB_IDT) != 0);
         CHECK("saying which way the data goes", (ring[3] & (3u << 16)) == TRB_TRT_IN);
@@ -1688,7 +1781,7 @@ int main(void)
         transfer.length = 8;
         CHECK("a report is queued on it", xhci_submit(hc, 1, 3, &transfer) == 0);
         CHECK("as one ordinary block",
-              ((hc->ep_ring[1][3][3] >> TRB_TYPE_SHIFT) & TRB_TYPE_MASK) == TRB_TYPE_NORMAL);
+              ((hc->slots[1].ring[3][3] >> TRB_TYPE_SHIFT) & TRB_TYPE_MASK) == TRB_TYPE_NORMAL);
         xhci_events(hc);
         CHECK("and is reported", xhci_poll(hc, &completion) == 1);
         CHECK("on the endpoint it was queued on", completion.endpoint == 3);
@@ -1881,9 +1974,7 @@ int main(void)
               xhci_poll(hc, &completion) == 0);
     }
 
-    /* Every slot the tables hold, and one more. The notebook has four devices
-       soldered to it that this kernel refuses, so a keyboard, a mouse and two
-       sticks beside them is what eight is for. */
+    /* Every slot the controller offers, and one more. */
     model_reset();
     CHECK("the capability registers are read", xhci_read_caps(hc) == 0);
     CHECK("halted and reset", xhci_halt_reset(hc) == 0);
@@ -1892,7 +1983,7 @@ int main(void)
         int slot;
 
         reg[M_PORTSC(0)] |= M_PORTSC_CCS | (3u << 10);
-        for (slot = 1; slot <= XHCI_SLOTS; slot++) {
+        for (slot = 1; slot <= (int)hc->nslots; slot++) {
             CHECK("a slot is asked for", xhci_device_open(hc, &root0, USB_SPEED_HIGH) == 0);
             xhci_events(hc);
             CHECK("and given", xhci_command_done(hc, &result) == 1 && result.device == slot);
@@ -1900,14 +1991,13 @@ int main(void)
             xhci_events(hc);
             CHECK("the controller answers", xhci_command_done(hc, &result) == 1);
         }
-        /* The thirteenth. A controller with more hc->slots than this kernel's
-           tables
-           hold answers with a handle past their end, and everything that
-           takes a handle refuses it rather than writing past the tables. */
-        CHECK("a thirteenth slot is asked for", xhci_device_open(hc, &root0, USB_SPEED_HIGH) == 0);
+        /* One past the last. A controller that answers with a handle past
+           the slots it said it had is not trusted: everything that takes a
+           handle refuses it rather than writing past the tables. */
+        CHECK("one more slot is asked for", xhci_device_open(hc, &root0, USB_SPEED_HIGH) == 0);
         xhci_events(hc);
         CHECK("and the controller answers with a handle past the tables",
-              xhci_command_done(hc, &result) == 1 && result.device == XHCI_SLOTS + 1);
+              xhci_command_done(hc, &result) == 1 && result.device == (int)hc->nslots + 1);
         CHECK("which cannot be addressed", xhci_device_address(hc, result.device) != 0);
         {
             struct usb_endpoint ep;

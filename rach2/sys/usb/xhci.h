@@ -18,13 +18,14 @@
  */
 
 /*
- * How many scratchpad pages this kernel will hand a controller. The
- * specification allows a controller to ask for as many as 1023, which is four
- * megabytes on a machine limited to thirty-two, so the pages are compiled in
- * and a controller that asks for more is refused by name rather than served
- * badly. No controller met so far asks for anything near this.
+ * How many scratchpad pages this kernel will hand a controller. The pages
+ * themselves come from the heap, as many as the controller asks for; this is
+ * the limit of the one page that holds the array of their addresses, which is
+ * 512 eight-byte entries. The specification allows a controller to ask for
+ * 1023, and one that asks for more than fits the array is refused by name. No
+ * controller met so far asks for anything near this.
  */
-#define XHCI_MAX_SCRATCHPADS 32
+#define XHCI_MAX_SCRATCHPADS 512
 
 /*
  * How many controllers this kernel drives at once. A machine with more than
@@ -48,16 +49,16 @@ struct xhci_ctrl *xhci_controller(int n);
 int xhci_number(const struct xhci_ctrl *hc);
 
 /*
- * How many device slots this kernel asks the controller to enable, and how
- * many transfer request blocks each of its two rings holds. Slots are numbered
- * from one, so the tables that hold them have one more entry than this and
- * their first is never used. A controller may
- * offer 64 slots or more; four is what the fixed tables above this driver
- * hold, and asking for more would have the controller reserve memory for
- * devices that could never be opened. Each ring is one page, which is 256
- * blocks of sixteen bytes.
+ * The most device slots a controller may have, and how many transfer request
+ * blocks each of its command and event rings holds. Slots are numbered from
+ * one, so the tables that hold them have one more entry than the count. The
+ * standard's field is a byte, so 255 is its whole range; what a controller is
+ * told to enable is its own number, and its slot table, context array and
+ * device contexts are sized from that rather than from a number compiled
+ * here. Each of the two rings is one page, which is 256 blocks of sixteen
+ * bytes.
  */
-#define XHCI_SLOTS     12
+#define XHCI_SLOTS     255
 #define XHCI_RING_TRBS 256
 
 /*
