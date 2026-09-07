@@ -131,6 +131,7 @@ static int ps2_send_command(uint8_t cmd)
 static int mouse_send_command(uint8_t cmd)
 {
     int retries = 3;
+    uint8_t response;
 
     while (retries-- > 0) {
         /* Prefix tells the 8042 to forward the next byte to the mouse. */
@@ -147,8 +148,7 @@ static int mouse_send_command(uint8_t cmd)
             continue;
         }
 
-        uint8_t response = inb(PS2_DATA_PORT);
-
+        response = inb(PS2_DATA_PORT);
         if (response == MOUSE_ACK) {
             return response;
         } else if (response == MOUSE_RESEND) {
@@ -197,15 +197,15 @@ void mouse_push_packet(uint8_t buttons, int dx, int dy)
  */
 static void mouse_irq_handler(isr_params_t *params)
 {
+    uint8_t status;
+    uint8_t data;
+
     (void)params;
-
-    uint8_t status = inb(PS2_STATUS_PORT);
-
+    status = inb(PS2_STATUS_PORT);
     if (!(status & PS2_STATUS_OUTPUT_FULL)) {
         return;
     }
-
-    uint8_t data = inb(PS2_DATA_PORT);
+    data = inb(PS2_DATA_PORT);
 
     /* Keyboard byte sharing the 8042; its own handler will read it. */
     if (!(status & PS2_STATUS_MOUSE_DATA)) {

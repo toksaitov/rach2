@@ -719,11 +719,12 @@ static int command_result(struct usb_device_state *d, struct usb_command_result 
  */
 static void step_running(struct usb_device_state *d)
 {
+    int kind;
+    int length;
+
     if (d->interface.kind == USB_KIND_HUB) {
         return; /* the hub driver reads its own change endpoint */
     }
-    int kind;
-    int length;
 
     if (d->interface.kind == USB_KIND_STORAGE) {
         /* A stick answers when it is asked and not before, so there is no
@@ -1462,13 +1463,12 @@ void usb_core_step(uint32_t elapsed_ms)
 void usb_core_reset(void)
 {
     int k;
+    int i;
 
     for (k = 0; k < USB_MAX_DEVICES; k++) {
         devices[k].owner = -1;
         devices[k].ops = &root_ops;
     }
-    int i;
-
     port_refused = 0;
     port_unentered = 0;
 

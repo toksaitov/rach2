@@ -31,7 +31,7 @@ LD := $(CROSS_LD)
 # quality gate builds with it on). Override with `make WERROR=` only for
 # transient debugging.
 WERROR ?= -Werror
-CFLAGS  = -m32 -mno-sse -mno-sse2 -g -Wall -Wextra $(WERROR) -ansi -nostdlib -nostartfiles -nodefaultlibs $(DEPFLAGS)
+CFLAGS  = -m32 -mno-sse -mno-sse2 -g -Wall -Wextra -Wdeclaration-after-statement $(WERROR) -ansi -nostdlib -nostartfiles -nodefaultlibs $(DEPFLAGS)
 LDFLAGS = -m elf_i386 -T $(LINKER_SCRIPT).ld
 
 # Harness build (`make HARNESS=1`): the kernel reports each process exit status
