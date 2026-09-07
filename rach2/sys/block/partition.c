@@ -140,7 +140,11 @@ static void follow_logical(struct part_table *t, part_read_fn read, void *ctx,
             return;
         }
         next = ext_start + le32(e1 + 8);
-        if (next <= ext_start || next > ext_last || next == ebr || inside_accepted(t, next)) {
+        /* The chain moves forward. A record behind the one being read can
+         * lie inside a range this walk has already published, and writing
+         * that partition would then destroy the record that names the
+         * rest of the chain. Forward movement also ends a loop. */
+        if (next <= ebr || next > ext_last || inside_accepted(t, next)) {
             t->refused++;
             return;
         }

@@ -347,6 +347,11 @@ static int ata_identify(struct ata_drive *d, uint16_t *identify)
     if (d->lba48) {
         d->sectors = (uint64_t)identify[100] | ((uint64_t)identify[101] << 16) |
                      ((uint64_t)identify[102] << 32) | ((uint64_t)identify[103] << 48);
+        if ((d->sectors >> 48) != 0) {
+            klog(KLOG_ERR, "ata", "%s %s: refused: the capacity is past what LBA48 addresses",
+                 ch->name, d->slave ? "slave" : "master");
+            return -1;
+        }
     }
     if (!d->lba48 || d->sectors == 0) {
         d->lba48 = 0;

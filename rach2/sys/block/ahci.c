@@ -161,6 +161,11 @@ struct ahci_disk {
     struct block_request *active;
     uint32_t active_generation;
     int flushing;
+    /* A polled command is in flight on this port and its status belongs
+     * to the caller polling for it. The handler leaves the port alone
+     * while this is set, since acknowledging would clear the error bits
+     * that caller reads. */
+    int polling;
     struct block_request *queue_head, *queue_tail;
 };
 
@@ -1009,8 +1014,12 @@ static int ahci_run_command(struct ahci_disk *d, uint8_t command, uint64_t lba, 
      * the queue resumes once this command is done. */
     ahci_drain(d);
     if (ahci_build_command(d, command, lba, count, buf, bytes, write) != 0) {
+        /* The drain finished what was active, so the queue behind it has
+         * no command to advance it and would wait out its deadlines. */
+        ahci_start_next(d);
         return -1;
     }
+    d->polling = 1;
 
     /* The task file must be idle before a command issues (AHCI 5.5.1). */
     spin = AHCI_CMD_STEPS;
@@ -1039,6 +1048,7 @@ static int ahci_run_command(struct ahci_disk *d, uint8_t command, uint64_t lba, 
         k_udelay(AHCI_CMD_POLL_US);
     }
     rc = ahci_judge(d, bytes, buf, write);
+    d->polling = 0;
     ahci_acknowledge(d);
     ahci_start_next(d);
     return rc;
@@ -1051,6 +1061,7 @@ static int ahci_polled_failed(struct ahci_disk *d)
 {
     int rc = ahci_io_error(d);
 
+    d->polling = 0;
     ahci_acknowledge(d);
     ahci_start_next(d);
     return rc;
@@ -1230,6 +1241,9 @@ static void ahci_handler(isr_params_t *params)
         uint32_t is_off = ahci_port_off(d->port, AHCI_PxIS);
         uint32_t is = ahci_read32(is_off);
 
+        if (d->polling) {
+            continue;
+        }
         if (is == 0) {
             continue;
         }

@@ -368,11 +368,24 @@ static void reclaim(int n)
 {
     struct disk *d = sticks[n].disk;
     int number = d ? d->number : -1;
+    int shared = 0;
+    int k;
 
     if (d) {
         disk_release(d);
     }
-    msc_release(sticks[n].slot);
+    /* The slot is the transport, and a device with several logical units
+     * has a record for each. Releasing it while another unit is still
+     * held would leave that unit's holders addressing storage the next
+     * device to arrive can take. */
+    for (k = 0; k < USBDISK_MAX; k++) {
+        if (k != n && sticks[k].state != STICK_NONE && sticks[k].slot == sticks[n].slot) {
+            shared = 1;
+        }
+    }
+    if (!shared) {
+        msc_release(sticks[n].slot);
+    }
     sticks[n].state = STICK_NONE;
     sticks[n].disk = 0;
     sticks[n].marked = 0;

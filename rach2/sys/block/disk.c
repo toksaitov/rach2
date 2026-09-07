@@ -217,6 +217,13 @@ void disk_scan(struct disk *d, block_device_t *backing)
     int i, rc;
 
     for (i = 0; i < DISK_PARTS; i++) {
+        /* The scan sleeps, so the views go out of use here, and their
+         * cached blocks go with them: the table about to be read may put
+         * a view somewhere else on the medium, and `disk_set_table` no
+         * longer sees these views as present to drop them itself. */
+        if (d->views[i].present) {
+            (void)bcache_invalidate(&d->views[i].part.device);
+        }
         d->views[i].present = 0;
     }
     d->backing = backing;
