@@ -974,6 +974,7 @@ static int ahci_judge(struct ahci_disk *d, uint32_t bytes, volatile uint8_t *buf
 
 static void ahci_drain(struct ahci_disk *d);
 static void ahci_start_next(struct ahci_disk *d);
+static int ahci_polled_failed(struct ahci_disk *d);
 
 static int ahci_run_command(struct ahci_disk *d, uint8_t command, uint64_t lba, uint32_t count,
                             volatile uint8_t *buf, uint32_t bytes, int write)
@@ -997,7 +998,7 @@ static int ahci_run_command(struct ahci_disk *d, uint8_t command, uint64_t lba, 
     spin = AHCI_CMD_STEPS;
     while (ahci_read32(tfd_off) & (AHCI_PxTFD_BSY | AHCI_PxTFD_DRQ)) {
         if (--spin == 0) {
-            return ahci_io_error(d);
+            return ahci_polled_failed(d);
         }
         k_udelay(AHCI_CMD_POLL_US);
     }
@@ -1012,14 +1013,25 @@ static int ahci_run_command(struct ahci_disk *d, uint8_t command, uint64_t lba, 
     spin = AHCI_CMD_STEPS;
     while (ahci_read32(ci_off) & (1u << AHCI_SLOT)) {
         if (ahci_read32(is_off) & AHCI_PxIS_FATAL) {
-            return ahci_io_error(d);
+            return ahci_polled_failed(d);
         }
         if (--spin == 0) {
-            return ahci_io_error(d);
+            return ahci_polled_failed(d);
         }
         k_udelay(AHCI_CMD_POLL_US);
     }
     rc = ahci_judge(d, bytes, buf, write);
+    ahci_start_next(d);
+    return rc;
+}
+
+/* A polled command that failed: the queue behind it is started again, or
+ * every request in it waits out its deadline and the disk is declared
+ * stalled with nothing wrong. */
+static int ahci_polled_failed(struct ahci_disk *d)
+{
+    int rc = ahci_io_error(d);
+
     ahci_start_next(d);
     return rc;
 }
