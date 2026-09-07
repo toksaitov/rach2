@@ -296,7 +296,28 @@ int main(int argc, char **argv)
         if (fd < 0) {
             return fail(dev, strerror(errno));
         }
-        if (read(fd, sector, sizeof(sector)) != (ssize_t)sizeof(sector)) {
+        /* The disk is judged again with the writer's descriptor open, since
+         * the identity and the entry were read through descriptors that are
+         * closed by now and another writer on this system could have put a
+         * different table there in between. */
+        if (read(fd, sector, sizeof(sector)) == (ssize_t)sizeof(sector)) {
+            unsigned long now_id = (unsigned long)sector[440] |
+                                   ((unsigned long)sector[441] << 8) |
+                                   ((unsigned long)sector[442] << 16) |
+                                   ((unsigned long)sector[443] << 24);
+            const unsigned char *e0 = sector + MBR_ENTRIES + 16 * (entry - 1);
+            unsigned long long was_start = (unsigned long long)e0[8] |
+                                           ((unsigned long long)e0[9] << 8) |
+                                           ((unsigned long long)e0[10] << 16) |
+                                           ((unsigned long long)e0[11] << 24);
+
+            if (now_id != want_id || was_start != p->start) {
+                close(fd);
+                return fail(dev, "the table changed while this was deciding; nothing written");
+            }
+        }
+        if (lseek(fd, 0, SEEK_SET) != 0 ||
+            read(fd, sector, sizeof(sector)) != (ssize_t)sizeof(sector)) {
             close(fd);
             return fail(dev, "the first sector did not read");
         }

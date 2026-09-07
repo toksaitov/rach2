@@ -233,7 +233,7 @@ void probe_main(unsigned int *sp)
     if (!has_line(text, "part 1 1 64 2048 ") || !has_line(text, "part 1 6 50176 1024 ")) {
         fail("disk 1's first and sixth partitions");
     }
-    if (!has_text(text, "part 1 3 8192 8192 6a696867-6c6b-6e6d-6f70-717273747576 DATA3\n")) {
+    if (!has_text(text, "part 1 3 8192 8192 45444342-4746-4948-494a-4b4c4d4e4f50 DATA3\n")) {
         fail("disk 1's third partition with its GUID and label");
     }
     if (has_text(text, "part 1 7 ")) {
@@ -242,7 +242,7 @@ void probe_main(unsigned int *sp)
 
     /* Disk 2: the damaged copy, read from its backup. */
     if (!has_line(text, "disk 2 ahci 2 65536 gpt ") ||
-        !has_text(text, "part 2 3 8192 8192 6a696867-6c6b-6e6d-6f70-717273747576 DATA3\n")) {
+        !has_text(text, "part 2 3 8192 8192 45444342-4746-4948-494a-4b4c4d4e4f50 DATA3\n")) {
         fail("disk 2's table from the backup header");
     }
     if (slurp("/dev/bootlog", log, (int)sizeof(log)) <= 0) {

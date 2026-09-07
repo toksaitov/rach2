@@ -85,8 +85,11 @@ static void unique_guid(unsigned char *p, unsigned int index)
 {
     int i;
 
+    /* The index and the seed go into different bytes, so that no pair of
+     * them meets in one identity: with both folded into every byte, seed
+     * 0 at index 7 and seed 16 at index 0 gave the same sixteen bytes. */
     for (i = 0; i < 16; i++) {
-        p[i] = (unsigned char)(0x40 + i + index * 16u + seed * 7u);
+        p[i] = (unsigned char)(0x40 + i + (i < 8 ? index : seed));
     }
 }
 

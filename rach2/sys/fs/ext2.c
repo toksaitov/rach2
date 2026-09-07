@@ -1570,11 +1570,9 @@ static int map_alloc(struct ext2_mount *em, struct ext2_node *n, uint32_t index,
                     if (rc != 0) {
                         return rc;
                     }
-                } else if (em->batch) {
-                    /* The pointer word is in the inode, and the inode is
+                } else if (!em->batch) {
+                    /* Outside a batch the inode goes now; inside one it is
                      * written at the batch's end, after the bitmaps. */
-                    *slot = b;
-                } else {
                     *slot = b;
                     rc = inode_store(em, n);
                     if (rc != 0) {

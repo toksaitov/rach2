@@ -227,6 +227,15 @@ int main(int argc, char **argv)
                         "profile this computes for\n", argv[arg]);
         return 1;
     }
+    /* resize2fs places a new group's bitmaps by the stride when the volume
+     * declares one, so the set this computes from the plain layout would
+     * miss the blocks it writes. The images this project makes declare
+     * none; another volume is refused rather than half computed. */
+    if (rd16(sb + 356) != 0 || rd16(sb + 358) != 0) {
+        fprintf(stderr, "growset: %s: the volume declares a RAID stride or stripe width, "
+                        "and the grow would place its bitmaps by them\n", argv[arg]);
+        return 1;
+    }
     itb = (ipg * inode_size + bs - 1) / bs;
     groups = (blocks - first_data + bpg - 1) / bpg;
     gd_old = (groups * 32 + bs - 1) / bs;

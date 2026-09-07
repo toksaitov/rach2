@@ -164,10 +164,9 @@ static int write_logical(FILE *f, int lba_units, unsigned long ext_lba, unsigned
 {
     int i;
 
+    /* Every partition is judged before any record is written, so a
+     * specification refused in the middle leaves the image as it was. */
     for (i = 0; i < n; i++) {
-        unsigned char ebr[512];
-        unsigned long at = i == 0 ? ext_lba : log[i].lba - 1;
-
         if (log[i].lba < ext_lba + 1 || log[i].lba + log[i].count > ext_lba + ext_count) {
             fprintf(stderr, "mkmbr: logical partition %d is outside the extended one\n", i + 5);
             return -1;
@@ -176,6 +175,11 @@ static int write_logical(FILE *f, int lba_units, unsigned long ext_lba, unsigned
             fprintf(stderr, "mkmbr: logical partition %d overlaps the one before\n", i + 5);
             return -1;
         }
+    }
+    for (i = 0; i < n; i++) {
+        unsigned char ebr[512];
+        unsigned long at = i == 0 ? ext_lba : log[i].lba - 1;
+
         memset(ebr, 0, sizeof(ebr));
         put_entry(ebr + 0x1be, lba_units, log[i].lba - at, log[i].count, log[i].type, 0);
         if (i + 1 < n) {

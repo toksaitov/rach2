@@ -21,6 +21,7 @@ extern void *memset(void *p, int c, unsigned long n);
 
 #include "../../rach2/sys/block/block.h"
 #include "../../rach2/sys/block/disk.h"
+#include "../../rach2/sys/proc/wait_queue.h"
 #include "../../rach2/sys/block/diskinfo.h"
 #include "../../rach2/sys/block/usbdisk.h"
 #include "../../rach2/sys/usb/msc.h"
@@ -140,6 +141,27 @@ int block_request(block_device_t *device, int write, uint64_t lba, uint32_t coun
     (void)count;
     (void)buffer;
     return -5;
+}
+
+/* The disk layer's scan takes a lock and drops a moved view's cached
+   blocks; on the host one scan runs at a time and no cache exists. */
+int bcache_invalidate(block_device_t *dev)
+{
+    (void)dev;
+    return 0;
+}
+
+int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
+{
+    (void)wq;
+    (void)cond;
+    (void)arg;
+    return 0;
+}
+
+void wq_wake_all(wait_queue_t *wq)
+{
+    (void)wq;
 }
 
 int block_device_holds(block_device_t *device)
