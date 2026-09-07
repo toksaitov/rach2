@@ -466,6 +466,36 @@ else
     bad "twelve devices were not configured"
 fi
 
+# ---- two controllers: each is driven from its own record, with its own
+#      rings and its own vector. A keyboard on the first and a hub with a
+#      keyboard and a mouse on the second, all four devices up at once, and
+#      the keyboard on the first still types. ----
+if run_harness --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-machine --qemu-arg=pc,i8042=off \
+    --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci0 \
+    --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci1 \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci0.0 \
+    --qemu-arg=-device --qemu-arg=usb-hub,bus=xhci1.0,port=1,id=hub3 \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci1.0,port=1.1 \
+    --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci1.0,port=1.2 \
+    --timeout 120 --steptmo 60 --ok "Available commands" --log "$IMAGE.twohc.log" \
+    "expect=Type 'help'" wait=3 key=h key=e key=l key=p key=ret \
+    "expect=Available commands" > /dev/null 2>&1; then
+    note "a keyboard on one controller types while a hub and two devices run on the other: OK"
+else
+    bad "the two-controller boot"
+fi
+if [ "$(grep -ac 'usb: ready: xhci[01]:' "$IMAGE.twohc.log")" = 2 ]; then
+    note "and both controllers came up, each named by its own number: OK"
+else
+    bad "both controllers did not come up"
+fi
+if [ "$(grep -ac 'usb: device: port .*class' "$IMAGE.twohc.log")" = 4 ]; then
+    note "and all four devices were configured across them: OK"
+else
+    bad "the four devices across two controllers were not all configured"
+fi
+
 if [ "$fail" -ne 0 ]; then
     echo "usb-test: FAIL" >&2
     exit 1

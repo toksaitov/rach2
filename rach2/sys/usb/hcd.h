@@ -114,6 +114,10 @@ struct usb_command_result {
 
 /** What `poll` reports about a transfer that finished. */
 struct usb_completion {
+    /* The controller the transfer was on. Slot numbers start at one on every
+     * controller, so a machine with two of them has two devices called slot
+     * one, and a completion says which. */
+    struct xhci_ctrl *hc;
     int device;          /* the device handle the transfer was submitted for */
     int endpoint;        /* the endpoint handle */
     int status;          /* one of the `USB_XFER_` values */

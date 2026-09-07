@@ -211,6 +211,7 @@ static int closed_done; /* slots the core took back through `xhci_device_closed`
 static int command_pending;
 static struct usb_command_result command_result_pending;
 static struct usb_completion done[32];
+static struct xhci_ctrl *the_ctrl = (struct xhci_ctrl *)1;
 static int done_head, done_tail;
 
 static void model_change(int port);
@@ -220,6 +221,7 @@ static void answer(int device, int endpoint, int status, uint32_t length, uint32
 {
     struct usb_completion *c = &done[done_tail % 32];
 
+    c->hc = the_ctrl;
     c->device = device;
     c->endpoint = endpoint;
     c->status = status;
@@ -272,8 +274,6 @@ void free_kernel_frame(void *frame)
         }
     }
 }
-
-static struct xhci_ctrl *the_ctrl = (struct xhci_ctrl *)1;
 
 int xhci_controllers(void)
 {

@@ -1345,6 +1345,7 @@ static void event_dispatch(struct xhci_ctrl *hc, const uint32_t *trb)
     if (type == TRB_TYPE_TRANSFER_EVENT) {
         struct usb_completion *c = &hc->completions[hc->completion_head % XHCI_COMPLETIONS];
 
+        c->hc = hc;
         c->device = (int)((trb[3] >> TRB_SLOT_SHIFT) & 0xFFu);
         c->endpoint = (int)((trb[3] >> 16) & 0x1Fu);
         if (c->device <= 0 || c->device > (int)hc->nslots || !hc->slots[c->device].used) {

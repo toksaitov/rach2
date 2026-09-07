@@ -654,6 +654,10 @@ int msc_completion(const struct usb_completion *completion)
 {
     struct msc_device *m = by_device(completion->device);
 
+    if (m && m->hc != completion->hc) {
+        m = 0; /* another controller's slot of the same number */
+    }
+
     if (m == 0 || !m->used) {
         return 0;
     }

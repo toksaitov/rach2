@@ -1498,7 +1498,7 @@ void usb_core_step(uint32_t elapsed_ms)
                 continue;
             }
             for (i = 0; i < USB_MAX_DEVICES; i++) {
-                if (dev_at(i)->state == ST_FREE || dev_at(i)->hc != hc ||
+                if (dev_at(i)->state == ST_FREE || dev_at(i)->hc != completion.hc ||
                     dev_at(i)->slot != completion.device) {
                     continue;
                 }

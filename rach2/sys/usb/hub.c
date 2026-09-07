@@ -771,7 +771,7 @@ int hub_completion(const struct usb_completion *completion)
     for (i = 0; i < HUB_MAX; i++) {
         struct hub *h = hub_at(i);
 
-        if (!h->used || h->device != completion->device) {
+        if (!h->used || h->hc != completion->hc || h->device != completion->device) {
             continue;
         }
         if (completion->endpoint == h->ep_dci) {
