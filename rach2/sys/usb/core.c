@@ -102,6 +102,9 @@ struct usb_device_state {
     /* Where the device is: its port's operations, the hub it is under or -1
      * on a root port, and the location the controller was given. */
     const struct usb_port_ops *ops;
+    /* The controller this device is on. Every call about it goes to that
+     * controller and to no other. */
+    struct xhci_ctrl *hc;
     int owner;
     struct usb_location where;
     /* For a hub: the ports whose device this kernel could not drive, one bit
@@ -145,29 +148,29 @@ struct usb_device_state {
 
 static struct usb_device_state devices[USB_MAX_DEVICES];
 
-/* A root port's operations are the controller's; `owner` is not used. */
-static int root_status(int owner, int port, struct usb_port_status *out)
+/* A root port's operations are its controller's; `owner` is not used. */
+static int root_status(struct xhci_ctrl *hc, int owner, int port, struct usb_port_status *out)
 {
     (void)owner;
-    return xhci_port_status(port, out);
+    return xhci_port_status(hc, port, out);
 }
 
-static int root_settled(int owner, int port)
+static int root_settled(struct xhci_ctrl *hc, int owner, int port)
 {
     (void)owner;
-    return xhci_port_settled(port);
+    return xhci_port_settled(hc, port);
 }
 
-static int root_reset_begin(int owner, int port)
+static int root_reset_begin(struct xhci_ctrl *hc, int owner, int port)
 {
     (void)owner;
-    return xhci_port_reset_begin(port);
+    return xhci_port_reset_begin(hc, port);
 }
 
-static int root_reset_done(int owner, int port)
+static int root_reset_done(struct xhci_ctrl *hc, int owner, int port)
 {
     (void)owner;
-    return xhci_port_reset_done(port);
+    return xhci_port_reset_done(hc, port);
 }
 
 static const struct usb_port_ops root_ops = {root_status, root_settled, root_reset_begin,
@@ -176,9 +179,18 @@ static const struct usb_port_ops root_ops = {root_status, root_settled, root_res
 static const struct usb_port_ops hub_ops = {hub_port_status, hub_port_settled, hub_port_reset_begin,
                                             hub_port_reset_done};
 
-/* Which device is being enumerated, or -1. Only one is, because the controller
- * takes one command at a time. */
-static int enumerating = -1;
+/* Which device is being enumerated on each controller, or -1. Only one is per
+ * controller, because a controller takes one command at a time; two
+ * controllers enumerate beside each other. */
+static int enumerating[XHCI_MAX_CONTROLLERS];
+
+/** Which controller's turn a device's enumeration takes. */
+static int bus_of(const struct usb_device_state *d)
+{
+    int n = xhci_number(d->hc);
+
+    return n >= 0 ? n : 0;
+}
 
 /*
  * The ports whose device this kernel could not drive, one bit each.
@@ -195,8 +207,8 @@ static int enumerating = -1;
  * unplugging one arrives, so a device that was refused once is tried again
  * when it is plugged in again.
  */
-static uint32_t port_refused;
-static uint32_t port_unentered; /* root ports waiting for a table entry */
+static uint32_t port_refused[XHCI_MAX_CONTROLLERS];
+static uint32_t port_unentered[XHCI_MAX_CONTROLLERS]; /* ports waiting for a table entry */
 
 /* This module's own clock, advanced with the driver's. */
 static uint32_t core_ms;
@@ -339,7 +351,7 @@ static int control_in(struct usb_device_state *d, int request, int value, int in
     transfer.buffer = d->buffer;
     transfer.length = (uint32_t)length;
     transfer.direction = USB_DIR_IN;
-    return xhci_submit(d->slot, 1, &transfer);
+    return xhci_submit(d->hc, d->slot, 1, &transfer);
 }
 
 /** Tell a device something on its control endpoint. */
@@ -352,7 +364,7 @@ static int control_out(struct usb_device_state *d, int type, int request, int va
     transfer.buffer = 0;
     transfer.length = 0;
     transfer.direction = USB_DIR_OUT;
-    return xhci_submit(d->slot, 1, &transfer);
+    return xhci_submit(d->hc, d->slot, 1, &transfer);
 }
 
 /** Where the next step's deadline falls. */
@@ -425,12 +437,12 @@ static void device_gone(int i)
     d->have_control = 0;
     d->have_report = 0;
     d->closing_asked = 0;
-    if (enumerating == i && d->state == ST_RESETTING) {
+    if (enumerating[bus_of(d)] == i && d->state == ST_RESETTING) {
         /* The turn was taken for the port's reset, which is the hub's or
          * the controller's port and not a command; no answer is owed, and
          * a wait for one would hold every later device's enumeration. */
-        enumerating = -1;
-    } else if (enumerating == i) {
+        enumerating[bus_of(d)] = -1;
+    } else if (enumerating[bus_of(d)] == i) {
         /* The command turn is kept until the command that may be in flight
          * has answered or been given up on; `step_closing` takes it. */
         d->abandoned = 1;
@@ -525,11 +537,11 @@ static int subtree_closing(int hub)
 static void fail(struct usb_device_state *d, const char *why)
 {
     klog(KLOG_WARN, "usb", "device: port %s: %s", path_of(d), why);
-    if (xhci_interrupts_on()) {
-        xhci_state_record(); /* once, at the first failure after bring-up */
+    if (xhci_interrupts_on(d->hc)) {
+        xhci_state_record(d->hc); /* once, at the first failure after bring-up */
     }
-    if (enumerating == (int)(d - devices)) {
-        enumerating = -1;
+    if (enumerating[bus_of(d)] == (int)(d - devices)) {
+        enumerating[bus_of(d)] = -1;
     }
     if (d->interface.kind == USB_KIND_STORAGE) {
         msc_detach(d->slot);
@@ -547,7 +559,7 @@ static void fail(struct usb_device_state *d, const char *why)
         if (d->owner >= 0) {
             devices[d->owner].refused |= (uint32_t)1u << d->port;
         } else {
-            port_refused |= (uint32_t)1u << d->port;
+            port_refused[bus_of(d)] |= (uint32_t)1u << d->port;
         }
     }
     if (d->slot > 0) {
@@ -582,16 +594,16 @@ static void step_closing(struct usb_device_state *d)
     if (d->interface.kind == USB_KIND_HUB && subtree_closing(index)) {
         return; /* children before their hub */
     }
-    if (enumerating >= 0 && enumerating != index) {
+    if (enumerating[bus_of(d)] >= 0 && enumerating[bus_of(d)] != index) {
         return;
     }
-    if (enumerating != index && !d->abandoned && !xhci_command_free()) {
+    if (enumerating[bus_of(d)] != index && !d->abandoned && !xhci_command_free(d->hc)) {
         return; /* the Disable Slot waits for the ring, not for a deadline */
     }
-    enumerating = index;
+    enumerating[bus_of(d)] = index;
 
     if (d->abandoned) {
-        int done = xhci_command_done(&result);
+        int done = xhci_command_done(d->hc, &result);
 
         if (done == 0) {
             return; /* the controller gives up on it at its own deadline */
@@ -604,11 +616,11 @@ static void step_closing(struct usb_device_state *d)
     }
     if (d->slot <= 0) {
         d->state = ST_FREE;
-        enumerating = -1;
+        enumerating[bus_of(d)] = -1;
         return;
     }
     if (d->closing_asked) {
-        int done = xhci_command_done(&result);
+        int done = xhci_command_done(d->hc, &result);
 
         if (done == 0 && !expired(d)) {
             return;
@@ -627,25 +639,25 @@ static void step_closing(struct usb_device_state *d)
              * next device a ring the controller is still reading.
              */
             klog(KLOG_WARN, "usb", "slot: %d was not given back; the entry is lost", d->slot);
-            enumerating = -1;
+            enumerating[bus_of(d)] = -1;
             d->state = ST_TOMBSTONE;
             return;
         }
         klog(KLOG_INFO, "usb", "slot: %d: given back", d->slot);
-        xhci_device_closed(d->slot);
+        xhci_device_closed(d->hc, d->slot);
         d->slot = 0;
-        enumerating = -1;
+        enumerating[bus_of(d)] = -1;
         d->state = ST_FREE;
         return;
     }
-    if (xhci_device_close(d->slot) == 0) {
+    if (xhci_device_close(d->hc, d->slot) == 0) {
         d->closing_asked = 1;
         d->deadline = core_ms + CLOSE_LIMIT_MS;
     } else if (expired(d)) {
         /* The ring never came back from the abort, so nothing can be asked;
          * the entry is lost as one whose Disable Slot went unanswered is. */
         klog(KLOG_WARN, "usb", "slot: %d could not be asked back; the entry is lost", d->slot);
-        enumerating = -1;
+        enumerating[bus_of(d)] = -1;
         d->state = ST_TOMBSTONE;
     }
 }
@@ -698,7 +710,7 @@ static const char *transfer_why(const struct usb_device_state *d)
 /** The command this device is waiting for, with the same three answers. */
 static int command_result(struct usb_device_state *d, struct usb_command_result *out)
 {
-    int done = xhci_command_done(out);
+    int done = xhci_command_done(d->hc, out);
 
     if (done == 1) {
         return 1;
@@ -747,7 +759,7 @@ static void step_running(struct usb_device_state *d)
             /* A halted endpoint keeps its ring until it is reset, and nothing
              * queued on it moves. Both halves of the recovery are commands,
              * and the second is issued when the first has answered. */
-            if (xhci_endpoint_reset(d->slot, d->ep_dci) == 0) {
+            if (xhci_endpoint_reset(d->hc, d->slot, d->ep_dci) == 0) {
                 d->state = ST_HALTED;
                 arm(d);
                 return;
@@ -764,7 +776,7 @@ static void step_running(struct usb_device_state *d)
         transfer.buffer = d->report;
         transfer.length = (uint32_t)length;
         transfer.direction = USB_DIR_IN;
-        if (xhci_submit(d->slot, d->ep_dci, &transfer) == 0) {
+        if (xhci_submit(d->hc, d->slot, d->ep_dci, &transfer) == 0) {
             d->reporting = 1;
         }
     }
@@ -797,7 +809,7 @@ static void step_device(struct usb_device_state *d)
             d->reporting = 0;
             return;
         }
-        if (xhci_endpoint_dequeue(d->slot, d->ep_dci) != 0) {
+        if (xhci_endpoint_dequeue(d->hc, d->slot, d->ep_dci) != 0) {
             fail(d, "its endpoint's ring could not be pointed anywhere");
             return;
         }
@@ -806,7 +818,7 @@ static void step_device(struct usb_device_state *d)
         return;
 
     case ST_SETTLING:
-        if (!d->ops->settled(d->owner, d->port)) {
+        if (!d->ops->settled(d->hc, d->owner, d->port)) {
             /* A connect that never settles is a port that keeps bouncing, or
              * a device pulled out again. Either way this entry is not held for
              * ever. */
@@ -815,14 +827,14 @@ static void step_device(struct usb_device_state *d)
             }
             return;
         }
-        if (enumerating >= 0 && enumerating != index) {
+        if (enumerating[bus_of(d)] >= 0 && enumerating[bus_of(d)] != index) {
             return; /* another device has the command ring */
         }
-        if (!xhci_command_free()) {
+        if (!xhci_command_free(d->hc)) {
             return; /* a command another device left is still on it */
         }
-        enumerating = index;
-        if (d->ops->reset_begin(d->owner, d->port) != 0) {
+        enumerating[bus_of(d)] = index;
+        if (d->ops->reset_begin(d->hc, d->owner, d->port) != 0) {
             fail(d, "the port would not begin a reset");
             return;
         }
@@ -831,7 +843,7 @@ static void step_device(struct usb_device_state *d)
         return;
 
     case ST_RESETTING:
-        answer = d->ops->reset_done(d->owner, d->port);
+        answer = d->ops->reset_done(d->hc, d->owner, d->port);
         if (answer == 0) {
             return;
         }
@@ -842,7 +854,7 @@ static void step_device(struct usb_device_state *d)
         {
             struct usb_port_status status;
 
-            if (d->ops->status(d->owner, d->port, &status) != 0 || !status.connected) {
+            if (d->ops->status(d->hc, d->owner, d->port, &status) != 0 || !status.connected) {
                 fail(d, "the device left during its reset");
                 return;
             }
@@ -853,7 +865,7 @@ static void step_device(struct usb_device_state *d)
                 fail(d, "it is deeper in the tree than a route string can say");
                 return;
             }
-            if (xhci_device_open(&d->where, d->speed) != 0) {
+            if (xhci_device_open(d->hc, &d->where, d->speed) != 0) {
                 /* The controller takes one command at a time, and another
                  * device may have one in flight; this is a turn to wait, not
                  * a refusal. The deadline armed when the reset began is what
@@ -879,7 +891,7 @@ static void step_device(struct usb_device_state *d)
             return;
         }
         d->slot = result.device;
-        if (xhci_device_address(d->slot) != 0) {
+        if (xhci_device_address(d->hc, d->slot) != 0) {
             if (!expired(d)) {
                 return;
             }
@@ -924,7 +936,7 @@ static void step_device(struct usb_device_state *d)
          * one thing that could not be known before asking. */
         d->ep0_packet = d->buffer[7];
         if (d->ep0_packet != 8 && d->speed != USB_SPEED_HIGH && d->speed != USB_SPEED_SUPER) {
-            if (xhci_device_packet_size(d->slot, d->ep0_packet) != 0) {
+            if (xhci_device_packet_size(d->hc, d->slot, d->ep0_packet) != 0) {
                 if (!expired(d)) {
                     return;
                 }
@@ -1035,7 +1047,7 @@ static void step_device(struct usb_device_state *d)
             endpoint.interval = d->interface.ep_interval;
             d->ep_dci = d->interface.ep_number * 2 + 1;
             d->ep_out_dci = 0;
-            if (xhci_endpoint_open(d->slot, &endpoint) != 0) {
+            if (xhci_endpoint_open(d->hc, d->slot, &endpoint) != 0) {
                 if (!expired(d)) {
                     return;
                 }
@@ -1067,7 +1079,7 @@ static void step_device(struct usb_device_state *d)
             endpoint.max_packet = d->interface.ep_out_max_packet;
             endpoint.interval = 0;
             d->ep_out_dci = d->interface.ep_out_number * 2;
-            if (xhci_endpoint_open(d->slot, &endpoint) != 0) {
+            if (xhci_endpoint_open(d->hc, d->slot, &endpoint) != 0) {
                 if (!expired(d)) {
                     return;
                 }
@@ -1121,13 +1133,13 @@ static void step_device(struct usb_device_state *d)
             /* A stick has no protocol to be put into: its transport is the
              * class requests and the two bulk endpoints, and the class driver
              * takes it from here. */
-            if (msc_attach(d->slot, d->interface.number, d->ep_dci, d->ep_out_dci) != 0) {
+            if (msc_attach(d->hc, d->slot, d->interface.number, d->ep_dci, d->ep_out_dci) != 0) {
                 fail(d, "this kernel drives no more sticks at once");
                 return;
             }
             d->state = ST_RUNNING;
             d->reporting = 0;
-            enumerating = -1;
+            enumerating[bus_of(d)] = -1;
             klog(KLOG_INFO, "usb",
                  "device: port %s: %x:%x, class %d protocol %d, endpoints %d and %d", path_of(d),
                  (int)d->vendor, (int)d->product, d->interface.class_code, d->interface.protocol,
@@ -1140,7 +1152,7 @@ static void step_device(struct usb_device_state *d)
             /* A SuperSpeed hub is known by its speed: the specification puts
              * its protocol 3 in the device descriptor and leaves the
              * interface's at zero. */
-            if (hub_attach((int)(d - devices), d->slot, d->interface.number, d->interface.protocol,
+            if (hub_attach(d->hc, (int)(d - devices), d->slot, d->interface.number, d->interface.protocol,
                            d->ep_dci, d->where.depth, d->speed == USB_SPEED_SUPER) != 0) {
                 fail(d, "this kernel drives no more hubs at once");
                 return;
@@ -1150,7 +1162,7 @@ static void step_device(struct usb_device_state *d)
             d->refused = 0;
             d->unentered = 0;
             d->hub_multi = 0;
-            enumerating = -1;
+            enumerating[bus_of(d)] = -1;
             klog(KLOG_INFO, "usb",
                  "device: port %s: %x:%x, class %d protocol %d, endpoint %d, a hub", path_of(d),
                  (int)d->vendor, (int)d->product, d->interface.class_code, d->interface.protocol,
@@ -1179,7 +1191,7 @@ static void step_device(struct usb_device_state *d)
         }
         d->state = ST_RUNNING;
         d->reporting = 0;
-        enumerating = -1;
+        enumerating[bus_of(d)] = -1;
         if (d->interface.protocol == USB_PROTOCOL_MOUSE) {
             /* `/dev/mouse` opens when a mouse exists, of either kind. Without
              * this an open of that node fails on a machine whose only mouse is
@@ -1196,14 +1208,21 @@ static void step_device(struct usb_device_state *d)
     }
 }
 
-/** Give a device that has appeared on a port its entry, if one is free. */
-static void device_arrive(int owner, int port)
+/**
+ * Give a device that has appeared on a port its entry, if one is free.
+ *
+ * `hc` is the controller the port is on: a root port's own, or the one the
+ * hub that owns the port is on, so a device is always recorded against the
+ * controller that will drive it.
+ */
+static void device_arrive(struct xhci_ctrl *hc, int owner, int port)
 {
     int i;
 
     for (i = 0; i < USB_MAX_DEVICES; i++) {
         if (devices[i].state == ST_FREE) {
             devices[i].state = ST_SETTLING;
+            devices[i].hc = hc;
             devices[i].owner = owner;
             devices[i].ops = owner < 0 ? &root_ops : &hub_ops;
             devices[i].port = port;
@@ -1221,7 +1240,7 @@ static void device_arrive(int owner, int port)
             if (owner >= 0) {
                 devices[owner].unentered &= ~((uint32_t)1u << port);
             } else {
-                port_unentered &= ~((uint32_t)1u << port);
+                port_unentered[xhci_number(hc)] &= ~((uint32_t)1u << port);
             }
             return;
         }
@@ -1233,8 +1252,8 @@ static void device_arrive(int owner, int port)
             klog(KLOG_WARN, "usb", "device: port %s.%d: refused: the device table is full",
                  path_of(&devices[owner]), port + 1);
         }
-    } else if (!(port_unentered & ((uint32_t)1u << port))) {
-        port_unentered |= (uint32_t)1u << port;
+    } else if (!(port_unentered[xhci_number(hc)] & ((uint32_t)1u << port))) {
+        port_unentered[xhci_number(hc)] |= (uint32_t)1u << port;
         klog(KLOG_WARN, "usb", "device: port %d: refused: the device table is full", port + 1);
     }
 }
@@ -1270,7 +1289,7 @@ void usb_core_hub_port(int hub, int port, int connected)
     }
     devices[hub].refused &= ~((uint32_t)1u << port);
     if (connected) {
-        device_arrive(hub, port);
+        device_arrive(devices[hub].hc, hub, port);
     }
 }
 
@@ -1284,17 +1303,17 @@ int usb_core_hub_tell(int index, int ports, int multi_tt, int think_time)
         return -1;
     }
     d = &devices[index];
-    if (enumerating >= 0 && enumerating != index) {
+    if (enumerating[bus_of(d)] >= 0 && enumerating[bus_of(d)] != index) {
         return 0; /* another device has the command ring */
     }
-    if (enumerating != index && !xhci_command_free()) {
+    if (enumerating[bus_of(d)] != index && !xhci_command_free(d->hc)) {
         return 0; /* a command another device left is still on it */
     }
-    enumerating = index;
+    enumerating[bus_of(d)] = index;
     if (!d->closing_asked) {
         d->hub_multi = multi_tt;
-        if (xhci_device_hub(d->slot, ports, multi_tt, think_time) != 0) {
-            enumerating = -1;
+        if (xhci_device_hub(d->hc, d->slot, ports, multi_tt, think_time) != 0) {
+            enumerating[bus_of(d)] = -1;
             return -1;
         }
         d->closing_asked = 1; /* the one command flag a running device has */
@@ -1306,7 +1325,7 @@ int usb_core_hub_tell(int index, int ports, int multi_tt, int think_time)
         return 0;
     }
     d->closing_asked = 0;
-    enumerating = -1;
+    enumerating[bus_of(d)] = -1;
     return answer < 0 ? -1 : 1;
 }
 
@@ -1329,22 +1348,25 @@ int usb_core_location(int index, struct usb_location *out)
 
 void usb_core_step(uint32_t elapsed_ms)
 {
-    int ports = xhci_ports();
     int port;
     int i;
+    int n;
 
     core_ms += elapsed_ms;
 
     /*
-     * One drain, and every completion goes to the device it names. A device
-     * that drained the controller itself would take the completions of the
-     * others and throw them away, which is a device enumerated beside a
-     * running one never being answered.
+     * One drain per controller, and every completion goes to the device it
+     * names. A device that drained the controller itself would take the
+     * completions of the others and throw them away, which is a device
+     * enumerated beside a running one never being answered. A completion
+     * names a slot, and slot numbers repeat across controllers, so the
+     * device it belongs to is the one on this controller.
      */
-    {
+    for (n = 0; n < xhci_controllers(); n++) {
+        struct xhci_ctrl *hc = xhci_controller(n);
         struct usb_completion completion;
 
-        while (xhci_poll(&completion)) {
+        while (xhci_poll(hc, &completion)) {
             if (msc_completion(&completion)) {
                 continue; /* a stick's, and its driver has taken it */
             }
@@ -1352,7 +1374,8 @@ void usb_core_step(uint32_t elapsed_ms)
                 continue;
             }
             for (i = 0; i < USB_MAX_DEVICES; i++) {
-                if (devices[i].state == ST_FREE || devices[i].slot != completion.device) {
+                if (devices[i].state == ST_FREE || devices[i].hc != hc ||
+                    devices[i].slot != completion.device) {
                     continue;
                 }
                 if (completion.endpoint == 1) {
@@ -1377,36 +1400,44 @@ void usb_core_step(uint32_t elapsed_ms)
             devices[i].state == ST_TOMBSTONE) {
             continue;
         }
-        if (devices[i].ops->status(devices[i].owner, devices[i].port, &status) != 0 ||
+        if (devices[i].ops->status(devices[i].hc, devices[i].owner, devices[i].port, &status) !=
+                0 ||
             !status.connected) {
             device_gone(i);
         }
     }
 
-    /* A port that has a device and no state gets one. */
-    for (port = 0; port < ports && port < 32; port++) {
-        struct usb_port_status status;
-        int known = 0;
+    /* A port that has a device and no state gets one, on every controller. */
+    for (n = 0; n < xhci_controllers(); n++) {
+        struct xhci_ctrl *hc = xhci_controller(n);
+        int ports = xhci_ports(hc);
 
-        if (xhci_port_status(port, &status) != 0 || !status.connected) {
-            /* Nothing is there, so whatever was refused there is forgotten:
-             * the next thing plugged into that port is tried like any other. */
-            port_refused &= ~((uint32_t)1u << port);
-            port_unentered &= ~((uint32_t)1u << port);
-            continue;
-        }
-        if (port_refused & ((uint32_t)1u << port)) {
-            continue;
-        }
-        for (i = 0; i < USB_MAX_DEVICES; i++) {
-            if (devices[i].state != ST_FREE && devices[i].owner < 0 && devices[i].port == port) {
-                known = 1;
+        for (port = 0; port < ports && port < 32; port++) {
+            struct usb_port_status status;
+            int known = 0;
+
+            if (xhci_port_status(hc, port, &status) != 0 || !status.connected) {
+                /* Nothing is there, so whatever was refused there is
+                 * forgotten: the next thing plugged into that port is tried
+                 * like any other. */
+                port_refused[n] &= ~((uint32_t)1u << port);
+                port_unentered[n] &= ~((uint32_t)1u << port);
+                continue;
             }
+            if (port_refused[n] & ((uint32_t)1u << port)) {
+                continue;
+            }
+            for (i = 0; i < USB_MAX_DEVICES; i++) {
+                if (devices[i].state != ST_FREE && devices[i].hc == hc &&
+                    devices[i].owner < 0 && devices[i].port == port) {
+                    known = 1;
+                }
+            }
+            if (known) {
+                continue;
+            }
+            device_arrive(hc, -1, port);
         }
-        if (known) {
-            continue;
-        }
-        device_arrive(-1, port);
     }
 
     /* The same for the ports of every hub that is up. The hub driver reports
@@ -1424,7 +1455,7 @@ void usb_core_step(uint32_t elapsed_ms)
             int j;
             int known = 0;
 
-            if (hub_port_status(i, port, &status) != 0 || !status.connected) {
+            if (hub_port_status(hub->hc, i, port, &status) != 0 || !status.connected) {
                 hub->refused &= ~((uint32_t)1u << port);
                 hub->unentered &= ~((uint32_t)1u << port);
                 continue;
@@ -1438,7 +1469,7 @@ void usb_core_step(uint32_t elapsed_ms)
                 }
             }
             if (!known) {
-                device_arrive(i, port);
+                device_arrive(hub->hc, i, port);
             }
         }
     }
@@ -1468,16 +1499,19 @@ void usb_core_reset(void)
     for (k = 0; k < USB_MAX_DEVICES; k++) {
         devices[k].owner = -1;
         devices[k].ops = &root_ops;
+        devices[k].hc = 0;
     }
-    port_refused = 0;
-    port_unentered = 0;
+    for (k = 0; k < XHCI_MAX_CONTROLLERS; k++) {
+        port_refused[k] = 0;
+        port_unentered[k] = 0;
+        enumerating[k] = -1;
+    }
 
     for (i = 0; i < USB_MAX_DEVICES; i++) {
         devices[i].state = ST_FREE;
         devices[i].slot = 0;
         devices[i].port = 0;
     }
-    enumerating = -1;
     core_ms = 0;
 }
 
@@ -1504,13 +1538,13 @@ int usb_core_clear_halt(int device, int endpoint)
         if (d->state == ST_FREE || d->slot != device) {
             continue;
         }
-        if (enumerating >= 0 && enumerating != i) {
-            return 0; /* another device has the command ring */
+        if (enumerating[bus_of(d)] >= 0 && enumerating[bus_of(d)] != i) {
+            return 0; /* another device has this controller's command ring */
         }
-        enumerating = i;
+        enumerating[bus_of(d)] = i;
         if (!d->closing_asked) {
-            if (xhci_endpoint_reset(device, endpoint) != 0) {
-                enumerating = -1;
+            if (xhci_endpoint_reset(d->hc, device, endpoint) != 0) {
+                enumerating[bus_of(d)] = -1;
                 return -1;
             }
             d->closing_asked = 1;
@@ -1522,13 +1556,13 @@ int usb_core_clear_halt(int device, int endpoint)
             return 0;
         }
         d->closing_asked = 0;
-        enumerating = -1;
+        enumerating[bus_of(d)] = -1;
         if (answer < 0) {
             return -1;
         }
         /* The ring is pointed at the block the driver will write next, or
          * the endpoint is usable and empty and nothing more is needed. */
-        (void)xhci_endpoint_dequeue(device, endpoint);
+        (void)xhci_endpoint_dequeue(d->hc, device, endpoint);
         return 1;
     }
     return -1;

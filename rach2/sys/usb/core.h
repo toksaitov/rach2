@@ -104,11 +104,18 @@ void usb_core_step(uint32_t elapsed_ms);
  * unused for a root port; `port` is numbered from zero in both cases, and
  * the hub's operations add one when they talk to the hub.
  */
+/*
+ * A port's operations. `hc` is the controller the port's device is on, which a
+ * root port needs and a hub's port ignores: a hub reaches its own ports
+ * through transfers to itself, and its device already names its controller.
+ */
+struct xhci_ctrl;
+
 struct usb_port_ops {
-    int (*status)(int owner, int port, struct usb_port_status *out);
-    int (*settled)(int owner, int port);
-    int (*reset_begin)(int owner, int port);
-    int (*reset_done)(int owner, int port);
+    int (*status)(struct xhci_ctrl *hc, int owner, int port, struct usb_port_status *out);
+    int (*settled)(struct xhci_ctrl *hc, int owner, int port);
+    int (*reset_begin)(struct xhci_ctrl *hc, int owner, int port);
+    int (*reset_done)(struct xhci_ctrl *hc, int owner, int port);
 };
 
 /**

@@ -31,37 +31,59 @@ void klog(int level, const char *subsystem, const char *format, ...)
     (void)format;
 }
 
-int xhci_ports(void)
+/*
+ * The driver's table of controllers, as the stack asks about it. These tests
+ * drive the layers above the driver through their own stubs, so there is one
+ * controller and its record is never dereferenced.
+ */
+static struct xhci_ctrl *the_ctrl = (struct xhci_ctrl *)1;
+
+int xhci_controllers(void)
+{
+    return 1;
+}
+
+struct xhci_ctrl *xhci_controller(int n)
+{
+    return n == 0 ? the_ctrl : 0;
+}
+
+int xhci_number(const struct xhci_ctrl *hc)
+{
+    return hc == the_ctrl ? 0 : -1;
+}
+
+int xhci_ports(struct xhci_ctrl *hc)
 {
     return 0;
 }
 
-int xhci_port_status(int port, struct usb_port_status *out)
+int xhci_port_status(struct xhci_ctrl *hc, int port, struct usb_port_status *out)
 {
     (void)port;
     (void)out;
     return -1;
 }
 
-int xhci_port_settled(int port)
+int xhci_port_settled(struct xhci_ctrl *hc, int port)
 {
     (void)port;
     return 0;
 }
 
-int xhci_port_reset_begin(int port)
+int xhci_port_reset_begin(struct xhci_ctrl *hc, int port)
 {
     (void)port;
     return -1;
 }
 
-int xhci_port_reset_done(int port)
+int xhci_port_reset_done(struct xhci_ctrl *hc, int port)
 {
     (void)port;
     return -1;
 }
 
-int xhci_device_hub(int device, int ports, int multi_tt, int think_time)
+int xhci_device_hub(struct xhci_ctrl *hc, int device, int ports, int multi_tt, int think_time)
 {
     (void)device;
     (void)ports;
@@ -70,56 +92,56 @@ int xhci_device_hub(int device, int ports, int multi_tt, int think_time)
     return 0;
 }
 
-int xhci_device_open(const struct usb_location *where, int speed)
+int xhci_device_open(struct xhci_ctrl *hc, const struct usb_location *where, int speed)
 {
     (void)where;
     (void)speed;
     return -1;
 }
 
-int xhci_device_address(int device)
+int xhci_device_address(struct xhci_ctrl *hc, int device)
 {
     (void)device;
     return -1;
 }
 
-int xhci_device_packet_size(int device, int max_packet)
+int xhci_device_packet_size(struct xhci_ctrl *hc, int device, int max_packet)
 {
     (void)device;
     (void)max_packet;
     return -1;
 }
 
-int xhci_device_close(int device)
+int xhci_device_close(struct xhci_ctrl *hc, int device)
 {
     (void)device;
     return -1;
 }
 
-void xhci_device_closed(int device)
+void xhci_device_closed(struct xhci_ctrl *hc, int device)
 {
     (void)device;
 }
 
-int xhci_command_busy(void)
+int xhci_command_busy(struct xhci_ctrl *hc)
 {
     return 0;
 }
 
-int xhci_endpoint_open(int device, const struct usb_endpoint *endpoint)
+int xhci_endpoint_open(struct xhci_ctrl *hc, int device, const struct usb_endpoint *endpoint)
 {
     (void)device;
     (void)endpoint;
     return -1;
 }
 
-int xhci_command_done(struct usb_command_result *out)
+int xhci_command_done(struct xhci_ctrl *hc, struct usb_command_result *out)
 {
     (void)out;
     return -1;
 }
 
-int xhci_submit(int device, int endpoint, const struct usb_transfer *transfer)
+int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb_transfer *transfer)
 {
     (void)device;
     (void)endpoint;
@@ -130,7 +152,7 @@ int xhci_submit(int device, int endpoint, const struct usb_transfer *transfer)
 /* The class driver the core hands a stick to. This test drives the core's
    own walk of the descriptors and its enumeration, not that driver, so the
    stubs record what they were told and nothing more. */
-int msc_attach(int device, int interface, int ep_in, int ep_out)
+int msc_attach(struct xhci_ctrl *hc, int device, int interface, int ep_in, int ep_out)
 {
     (void)device;
     (void)interface;
@@ -144,20 +166,21 @@ void msc_detach(int device)
     (void)device;
 }
 
-int xhci_command_free(void)
+int xhci_command_free(struct xhci_ctrl *hc)
 {
     return 1;
 }
 
-int xhci_interrupts_on(void)
+int xhci_interrupts_on(struct xhci_ctrl *hc)
 {
     return 0; /* the model's controller sends no interrupts of its own */
 }
 
-void xhci_state_record(void)
+void xhci_state_record(struct xhci_ctrl *hc)
 {}
 
-int hub_attach(int index, int device, int interface, int protocol, int ep_dci, int depth, int super)
+int hub_attach(struct xhci_ctrl *hc, int index, int device, int interface, int protocol, int ep_dci,
+               int depth, int super)
 {
     (void)index;
     (void)device;
@@ -185,7 +208,7 @@ int hub_completion(const struct usb_completion *completion)
     return 0;
 }
 
-int hub_port_status(int owner, int port, struct usb_port_status *out)
+int hub_port_status(struct xhci_ctrl *hc, int owner, int port, struct usb_port_status *out)
 {
     (void)owner;
     (void)port;
@@ -193,21 +216,21 @@ int hub_port_status(int owner, int port, struct usb_port_status *out)
     return -1;
 }
 
-int hub_port_settled(int owner, int port)
+int hub_port_settled(struct xhci_ctrl *hc, int owner, int port)
 {
     (void)owner;
     (void)port;
     return 0;
 }
 
-int hub_port_reset_begin(int owner, int port)
+int hub_port_reset_begin(struct xhci_ctrl *hc, int owner, int port)
 {
     (void)owner;
     (void)port;
     return -1;
 }
 
-int hub_port_reset_done(int owner, int port)
+int hub_port_reset_done(struct xhci_ctrl *hc, int owner, int port)
 {
     (void)owner;
     (void)port;
@@ -228,20 +251,20 @@ int msc_completion(const struct usb_completion *completion)
     return 0;
 }
 
-int xhci_poll(struct usb_completion *out)
+int xhci_poll(struct xhci_ctrl *hc, struct usb_completion *out)
 {
     (void)out;
     return 0;
 }
 
-int xhci_endpoint_reset(int device, int endpoint)
+int xhci_endpoint_reset(struct xhci_ctrl *hc, int device, int endpoint)
 {
     (void)device;
     (void)endpoint;
     return -1;
 }
 
-int xhci_endpoint_dequeue(int device, int endpoint)
+int xhci_endpoint_dequeue(struct xhci_ctrl *hc, int device, int endpoint)
 {
     (void)device;
     (void)endpoint;

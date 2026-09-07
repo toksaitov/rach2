@@ -68,4 +68,11 @@ void usb_stamp_wake(void);
  */
 void usb_stamp_read(void);
 
+/**
+ * The name of a USB controller's register interface, from its PCI interface
+ * byte: `uhci`, `ohci`, `ehci`, `xhci`, or `other` for a byte this kernel does
+ * not know.
+ */
+const char *usb_interface_name(uint8_t prog_if);
+
 #endif

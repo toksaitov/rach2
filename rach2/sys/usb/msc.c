@@ -156,6 +156,7 @@ struct msc_lun {
 
 struct msc_device {
     int used;
+    struct xhci_ctrl *hc; /* the controller this stick is on */
     /* The stick has gone and the slot is not free: something still holds the
      * block device, so neither the slot nor anything in it may be reused
      * until the disk layer says the last hold is gone. */
@@ -362,7 +363,7 @@ static int command_begin(struct msc_device *m, const uint8_t *cdb, int cdb_lengt
     transfer.length = CBW_BYTES;
     transfer.direction = USB_DIR_OUT;
     transfer.generation = m->tag;
-    if (xhci_submit(m->device, m->ep_out, &transfer) != 0) {
+    if (xhci_submit(m->hc, m->device, m->ep_out, &transfer) != 0) {
         return -1;
     }
     m->stage = STAGE_CBW;
@@ -380,7 +381,7 @@ static int data_begin(struct msc_device *m)
     transfer.length = m->data_length;
     transfer.direction = m->data_in ? USB_DIR_IN : USB_DIR_OUT;
     transfer.generation = m->tag;
-    if (xhci_submit(m->device, m->data_in ? m->ep_in : m->ep_out, &transfer) != 0) {
+    if (xhci_submit(m->hc, m->device, m->data_in ? m->ep_in : m->ep_out, &transfer) != 0) {
         return -1;
     }
     m->stage = STAGE_DATA;
@@ -402,7 +403,7 @@ static int status_begin(struct msc_device *m)
     transfer.length = CSW_BYTES;
     transfer.direction = USB_DIR_IN;
     transfer.generation = m->tag;
-    if (xhci_submit(m->device, m->ep_in, &transfer) != 0) {
+    if (xhci_submit(m->hc, m->device, m->ep_in, &transfer) != 0) {
         return -1;
     }
     m->stage = STAGE_CSW;
@@ -432,7 +433,7 @@ static void recover_begin(struct msc_device *m, const char *why)
         transfer.length = 0;
         transfer.direction = USB_DIR_OUT;
         transfer.generation = m->tag;
-        if (xhci_submit(m->device, 1, &transfer) != 0) {
+        if (xhci_submit(m->hc, m->device, 1, &transfer) != 0) {
             m->recover = RECOVER_NONE;
             m->stage = STAGE_DONE;
             m->status = CSW_PHASE_ERROR;
@@ -523,7 +524,7 @@ static void request_end(struct msc_device *m, int status)
     block_request_complete(r, r->generation, status);
 }
 
-int msc_attach(int device, int interface, int ep_in, int ep_out)
+int msc_attach(struct xhci_ctrl *hc, int device, int interface, int ep_in, int ep_out)
 {
     int i;
     struct msc_device *m = 0;
@@ -542,6 +543,7 @@ int msc_attach(int device, int interface, int ep_in, int ep_out)
 
     k_memset(m, 0, sizeof(*m));
     m->used = 1;
+    m->hc = hc;
     m->device = device;
     m->interface = interface;
     m->ep_in = ep_in;
@@ -792,7 +794,7 @@ static int class_request_in(struct msc_device *m, int request, uint8_t *data, in
     transfer.direction = USB_DIR_IN;
     m->tag = ++tag_seed;
     transfer.generation = m->tag;
-    if (xhci_submit(m->device, 1, &transfer) != 0) {
+    if (xhci_submit(m->hc, m->device, 1, &transfer) != 0) {
         return -1;
     }
     m->stage = STAGE_CLASS;

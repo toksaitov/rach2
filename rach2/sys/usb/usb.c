@@ -55,7 +55,7 @@
  * know. The byte itself is recorded beside the name, so an unknown controller
  * is still identified by the record.
  */
-static const char *interface_name(uint8_t prog_if)
+const char *usb_interface_name(uint8_t prog_if)
 {
     switch (prog_if) {
     case USB_IF_UHCI:
@@ -77,7 +77,7 @@ static const char *interface_name(uint8_t prog_if)
 static void report_one(const pci_device_t *dev)
 {
     klog(KLOG_INFO, "usb", "controller: %x:%x.%d %s interface 0x%x %x:%x bar0 0x%X",
-         (int)dev->bus, (int)dev->device, (int)dev->function, interface_name(dev->prog_if),
+         (int)dev->bus, (int)dev->device, (int)dev->function, usb_interface_name(dev->prog_if),
          (int)dev->prog_if, (int)dev->vendor_id, (int)dev->device_id, dev->bar[0]);
 
     if (dev->vendor_id == PCI_VENDOR_INTEL && dev->prog_if == USB_IF_XHCI) {
@@ -218,23 +218,29 @@ static void usb_wait(uint32_t milliseconds)
  */
 static void report_ports(void)
 {
-    struct usb_port_status status;
-    int ports = xhci_ports();
     int found = 0;
-    int port;
+    int n;
 
-    for (port = 0; port < ports; port++) {
-        if (xhci_port_status(port, &status) != 0) {
-            continue;
-        }
-        if (status.connected) {
-            if (status.speed == USB_SPEED_LOW) {
-                klog(KLOG_INFO, "usb", "port: %d: a low-speed device", port + 1);
-            } else {
-                klog(KLOG_INFO, "usb", "port: %d: a device; its reset tells full from high speed",
-                     port + 1);
+    for (n = 0; n < xhci_controllers(); n++) {
+        struct xhci_ctrl *hc = xhci_controller(n);
+        struct usb_port_status status;
+        int ports = xhci_ports(hc);
+        int port;
+
+        for (port = 0; port < ports; port++) {
+            if (xhci_port_status(hc, port, &status) != 0) {
+                continue;
             }
-            found++;
+            if (status.connected) {
+                if (status.speed == USB_SPEED_LOW) {
+                    klog(KLOG_INFO, "usb", "port: xhci%d.%d: a low-speed device", n, port + 1);
+                } else {
+                    klog(KLOG_INFO, "usb",
+                         "port: xhci%d.%d: a device; its reset tells full from high speed", n,
+                         port + 1);
+                }
+                found++;
+            }
         }
     }
     if (found == 0) {
@@ -271,10 +277,25 @@ static int usb_pump(uint32_t elapsed_ms, int from_interrupt)
     int taken;
 
     flags = kirq_save();
-    xhci_advance(elapsed_ms);
-    /* The handler's drain acknowledges the interrupt first and in the same
-     * call; the timer's has nothing to acknowledge. */
-    taken = from_interrupt ? xhci_interrupt_take() : xhci_events();
+    /* Every controller is advanced and drained in the one pump, so a machine
+     * with two of them keeps both moving from whichever context turns it. */
+    taken = 0;
+    {
+        int n;
+
+        for (n = 0; n < xhci_controllers(); n++) {
+            struct xhci_ctrl *hc = xhci_controller(n);
+            int took;
+
+            xhci_advance(hc, elapsed_ms);
+            /* The handler's drain acknowledges the interrupt first and in the
+             * same call; the timer's has nothing to acknowledge. */
+            took = from_interrupt ? xhci_interrupt_take(hc) : xhci_events(hc);
+            if (took > 0) {
+                taken += took;
+            }
+        }
+    }
     pump_took = taken > 0;
     if (taken > 0) {
         stamp_event = pit_now_us();
@@ -354,34 +375,52 @@ static void usb_msi_handler(isr_params_t *params)
         /* rach2.msidrop=N: the machine loses its edges from here, and the
          * timer's pump is all that is left. It is how the fallback is seen
          * to work on a machine whose interrupts stop. */
-        xhci_interrupts_disable();
-        klog(KLOG_WARN, "usb", "msidrop: %d messages taken; the controller was silenced",
+        int n;
+
+        for (n = 0; n < xhci_controllers(); n++) {
+            xhci_interrupts_disable(xhci_controller(n));
+        }
+        klog(KLOG_WARN, "usb", "msidrop: %d messages taken; the controllers were silenced",
              (int)usb_messages);
     }
 }
 
 int usb_init(void)
 {
-    const struct xhci_caps *caps;
+    int up = 0;
+    int n;
 
     if (xhci_discover() != 0) {
-        klog(KLOG_INFO, "usb", "absent: %s", xhci_error());
+        klog(KLOG_INFO, "usb", "absent: %s", xhci_error(0));
         return -1;
     }
-    if (xhci_read_caps() != 0 || xhci_own() != 0 || xhci_halt_reset() != 0 ||
-        xhci_scratchpads() != 0 || xhci_start() != 0) {
-        klog(KLOG_WARN, "usb", "refused: %s", xhci_error());
-        /* Whatever was taken from the firmware goes back. A machine that has
-         * no USB driver is a machine that should still have whatever its
-         * firmware was doing for it. */
-        xhci_release();
-        return -1;
-    }
+    /*
+     * Every controller is brought up on its own. One that refuses is released
+     * and left out, and the others still come up: a machine whose second
+     * controller is broken keeps the sockets on its first.
+     */
+    for (n = 0; n < xhci_controllers(); n++) {
+        struct xhci_ctrl *hc = xhci_controller(n);
+        const struct xhci_caps *caps;
 
-    caps = xhci_capabilities();
-    klog(KLOG_INFO, "usb", "ready: version %x, %d ports, %d slots, %d-byte contexts",
-         (int)caps->hciversion, (int)caps->max_ports, (int)caps->max_slots,
-         (int)caps->context_size);
+        if (xhci_read_caps(hc) != 0 || xhci_own(hc) != 0 || xhci_halt_reset(hc) != 0 ||
+            xhci_scratchpads(hc) != 0 || xhci_start(hc) != 0) {
+            klog(KLOG_WARN, "usb", "refused: xhci%d: %s", n, xhci_error(hc));
+            /* Whatever was taken from the firmware goes back. A controller
+             * this kernel does not drive is one that should still have
+             * whatever its firmware was doing for it. */
+            xhci_release(hc);
+            continue;
+        }
+        caps = xhci_capabilities(hc);
+        klog(KLOG_INFO, "usb", "ready: xhci%d: version %x, %d ports, %d slots, %d-byte contexts", n,
+             (int)caps->hciversion, (int)caps->max_ports, (int)caps->max_slots,
+             (int)caps->context_size);
+        up++;
+    }
+    if (up == 0) {
+        return -1;
+    }
 
     usb_core_reset();
     usb_up = 1;
@@ -431,38 +470,52 @@ static void usb_interrupts_start(void)
 {
     char value[16];
     int irq;
+    int n;
 
     stamp_record = kcmdline_has("rach2.usblatency");
     if (kcmdline_value("rach2.msidrop", value, (unsigned int)sizeof(value))) {
-        uint32_t n = 0;
+        uint32_t after = 0;
         int i;
 
         for (i = 0; i < 6 && value[i] >= '0' && value[i] <= '9'; i++) {
-            n = n * 10u + (uint32_t)(value[i] - '0');
+            after = after * 10u + (uint32_t)(value[i] - '0');
         }
-        msi_drop_after = n;
+        msi_drop_after = after;
     }
-    if (lapic_ready() && (msi_vector = isr_alloc_vector()) >= 0) {
-        register_isr_handler((uint8_t)msi_vector, usb_msi_handler, "xhci");
-        if (xhci_interrupts_enable((uint8_t)msi_vector) == 0) {
-            msi_started = 1;
-            klog(KLOG_INFO, "usb", "interrupts: messages on vector %d", msi_vector);
-            return;
+    /*
+     * A vector per controller. The handler is the one pump and drains them
+     * all, so which vector a message arrived on does not matter; what matters
+     * is that each controller has one of its own to send, since two
+     * controllers sharing a vector cannot both be told to stop.
+     */
+    for (n = 0; n < xhci_controllers(); n++) {
+        struct xhci_ctrl *hc = xhci_controller(n);
+        int vector;
+
+        if (lapic_ready() && (vector = isr_alloc_vector()) >= 0) {
+            register_isr_handler((uint8_t)vector, usb_msi_handler, "xhci");
+            if (xhci_interrupts_enable(hc, (uint8_t)vector) == 0) {
+                msi_started = 1;
+                msi_vector = vector;
+                klog(KLOG_INFO, "usb", "interrupts: xhci%d: messages on vector %d", n, vector);
+                continue;
+            }
         }
-    }
-    irq = xhci_line_irq();
-    if (irq > 0) {
-        /* The handler before the enable: a level line the firmware left
-           asserted would otherwise be dispatched to nobody. */
-        register_isr_handler((uint8_t)(32 + irq), usb_msi_handler, "xhci");
-        if (xhci_interrupts_enable_line() == irq) {
-            msi_started = 1;
-            line_irq = irq;
-            klog(KLOG_INFO, "usb", "interrupts: the line, irq %d on vector %d", irq, 32 + irq);
-            return;
+        irq = xhci_line_irq(hc);
+        if (irq > 0) {
+            /* The handler before the enable: a level line the firmware left
+               asserted would otherwise be dispatched to nobody. */
+            register_isr_handler((uint8_t)(32 + irq), usb_msi_handler, "xhci");
+            if (xhci_interrupts_enable_line(hc) == irq) {
+                msi_started = 1;
+                line_irq = irq;
+                klog(KLOG_INFO, "usb", "interrupts: xhci%d: the line, irq %d on vector %d", n, irq,
+                     32 + irq);
+                continue;
+            }
         }
+        klog(KLOG_INFO, "usb", "interrupts: xhci%d: the timer pumps this controller", n);
     }
-    klog(KLOG_INFO, "usb", "interrupts: the timer pumps this controller");
 }
 
 void usb_poll(void)
@@ -569,9 +622,13 @@ void usb_stamp_read(void)
 
 void usb_stop(void)
 {
+    int n;
+
     usb_up = 0;
-    xhci_interrupts_disable();
-    xhci_stop();
+    for (n = 0; n < xhci_controllers(); n++) {
+        xhci_interrupts_disable(xhci_controller(n));
+        xhci_stop(xhci_controller(n));
+    }
 }
 
 

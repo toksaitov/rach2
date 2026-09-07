@@ -27,6 +27,27 @@
 #define XHCI_MAX_SCRATCHPADS 32
 
 /*
+ * How many controllers this kernel drives at once. A machine with more than
+ * this many says so and drives the first of them; two is what the notebooks
+ * here have, and a fixed number keeps the records in one table.
+ */
+#define XHCI_MAX_CONTROLLERS 4
+
+/*
+ * One controller, as the rest of the kernel holds it. The record itself is
+ * the driver's; a caller takes one from `xhci_controller` and gives it back
+ * to every call it makes about that controller.
+ */
+struct xhci_ctrl;
+
+/** How many controllers the last discovery found, and the nth of them. */
+int xhci_controllers(void);
+struct xhci_ctrl *xhci_controller(int n);
+
+/** Which of them this is, or -1 for none; its place in the table. */
+int xhci_number(const struct xhci_ctrl *hc);
+
+/*
  * How many device slots this kernel asks the controller to enable, and how
  * many transfer request blocks each of its two rings holds. Slots are numbered
  * from one, so the tables that hold them have one more entry than this and
@@ -47,8 +68,8 @@
  * request no machine would make happen on demand.
  */
 struct xhci_io {
-    uint32_t (*r32)(uint32_t offset);
-    void (*w32)(uint32_t offset, uint32_t value);
+    uint32_t (*r32)(struct xhci_ctrl *hc, uint32_t offset);
+    void (*w32)(struct xhci_ctrl *hc, uint32_t offset, uint32_t value);
     void (*udelay)(uint32_t microseconds);
 };
 
@@ -100,7 +121,7 @@ int xhci_discover(void);
  * Returns -1 when the firmware never answers, which leaves the machine's
  * firmware-emulated PS/2 input working rather than racing it.
  */
-int xhci_own(void);
+int xhci_own(struct xhci_ctrl *hc);
 
 /**
  * Halt the controller and reset it.
@@ -110,7 +131,7 @@ int xhci_own(void);
  * again, and then waits for the reset to finish and for the controller to
  * report that it is ready. Returns -1 if any of those never happens.
  */
-int xhci_halt_reset(void);
+int xhci_halt_reset(struct xhci_ctrl *hc);
 
 /**
  * Read the capability registers and check that they fit in the mapped window.
@@ -120,7 +141,7 @@ int xhci_halt_reset(void);
  * first would have the driver write into whatever follows the window, and the
  * second would have it hand the controller pages of the wrong size.
  */
-int xhci_read_caps(void);
+int xhci_read_caps(struct xhci_ctrl *hc);
 
 /**
  * Give the controller the scratchpad pages it asked for.
@@ -130,7 +151,7 @@ int xhci_read_caps(void);
  * array, which bring-up programs later. A controller that requires more pages
  * than `XHCI_MAX_SCRATCHPADS` is refused with both numbers recorded.
  */
-int xhci_scratchpads(void);
+int xhci_scratchpads(struct xhci_ctrl *hc);
 
 /**
  * Program the controller's rings and start it.
@@ -140,7 +161,7 @@ int xhci_scratchpads(void);
  * kernel will use, and sets it running. Returns -1 if it does not leave the
  * halted state.
  */
-int xhci_start(void);
+int xhci_start(struct xhci_ctrl *hc);
 
 /**
  * Stop the controller.
@@ -149,7 +170,7 @@ int xhci_start(void);
  * wake or reset the machine it was in, which is what other operating systems
  * carry a quirk for on this exact Intel part.
  */
-void xhci_stop(void);
+void xhci_stop(struct xhci_ctrl *hc);
 
 /**
  * Give the controller back to the firmware.
@@ -160,13 +181,13 @@ void xhci_stop(void);
  * must not keep it, because on a machine whose firmware emulates a PS/2
  * keyboard out of a USB one, what it kept is the keyboard.
  */
-void xhci_release(void);
+void xhci_release(struct xhci_ctrl *hc);
 
 /** How many root ports the controller has. */
-int xhci_ports(void);
+int xhci_ports(struct xhci_ctrl *hc);
 
 /** What a root port reports now. */
-int xhci_port_status(int port, struct usb_port_status *out);
+int xhci_port_status(struct xhci_ctrl *hc, int port, struct usb_port_status *out);
 
 /**
  * Whether a port's connect has been steady long enough to act on.
@@ -176,13 +197,13 @@ int xhci_port_status(int port, struct usb_port_status *out);
  * resets a port, so a device pushed in slowly is enumerated once rather than
  * three times.
  */
-int xhci_port_settled(int port);
+int xhci_port_settled(struct xhci_ctrl *hc, int port);
 
 /** Begin resetting a port. Returns -1 if the port has no device. */
-int xhci_port_reset_begin(int port);
+int xhci_port_reset_begin(struct xhci_ctrl *hc, int port);
 
 /** 1 when the reset finished, 0 while it has not, -1 when it gave up. */
-int xhci_port_reset_done(int port);
+int xhci_port_reset_done(struct xhci_ctrl *hc, int port);
 
 /**
  * Issue one command.
@@ -193,7 +214,7 @@ int xhci_port_reset_done(int port);
  * in flight at a time, which is what lets this driver hold one ring and no
  * queue of its own.
  */
-int xhci_command_issue(uint32_t type, uint64_t parameter, uint32_t slot);
+int xhci_command_issue(struct xhci_ctrl *hc, uint32_t type, uint64_t parameter, uint32_t slot);
 
 /**
  * Report the command in flight: 1 finished, 0 still running, -1 given up on.
@@ -201,7 +222,7 @@ int xhci_command_issue(uint32_t type, uint64_t parameter, uint32_t slot);
  * A command that passes its deadline is aborted, which is the only way to get
  * a command ring back from a controller that stopped answering.
  */
-int xhci_command_done(struct usb_command_result *out);
+int xhci_command_done(struct xhci_ctrl *hc, struct usb_command_result *out);
 
 /**
  * Drain the event ring.
@@ -210,7 +231,7 @@ int xhci_command_done(struct usb_command_result *out);
  * completions and port changes are recorded for the pollers above; transfer
  * events belong to the next phase of this work.
  */
-int xhci_events(void);
+int xhci_events(struct xhci_ctrl *hc);
 
 /**
  * Have the controller send its interrupts as messages on `vector`.
@@ -219,10 +240,10 @@ int xhci_events(void);
  * MSI capability is programmed last. 0 when the controller will send them,
  * -1 when it will not, in which case nothing was enabled.
  */
-int xhci_interrupts_enable(uint8_t vector);
+int xhci_interrupts_enable(struct xhci_ctrl *hc, uint8_t vector);
 
 /** The IRQ of the controller's PCI line, or -1 when it names none. */
-int xhci_line_irq(void);
+int xhci_line_irq(struct xhci_ctrl *hc);
 
 /**
  * Have the controller raise its interrupts on its PCI line instead.
@@ -231,10 +252,10 @@ int xhci_line_irq(void);
  * APIC. Returns the line's IRQ, or -1 when the controller names none, in
  * which case nothing was enabled.
  */
-int xhci_interrupts_enable_line(void);
+int xhci_interrupts_enable_line(struct xhci_ctrl *hc);
 
 /** Stop the interrupts; the controller keeps running and the timer pumps it. */
-void xhci_interrupts_disable(void);
+void xhci_interrupts_disable(struct xhci_ctrl *hc);
 
 /**
  * Whether a command can be issued now: none is running and no abort is
@@ -242,13 +263,13 @@ void xhci_interrupts_disable(void);
  * enumeration turn only when this says so, so a command it then issues is
  * never refused for a ring another device left busy.
  */
-int xhci_command_free(void);
+int xhci_command_free(struct xhci_ctrl *hc);
 
 /** Record the controller's registers and the command in flight, once. */
-void xhci_state_record(void);
+void xhci_state_record(struct xhci_ctrl *hc);
 
 /** Whether the controller is raising its interrupts, by message or line. */
-int xhci_interrupts_on(void);
+int xhci_interrupts_on(struct xhci_ctrl *hc);
 
 /**
  * Acknowledge the interrupt at the controller, keeping the interrupter on.
@@ -256,7 +277,7 @@ int xhci_interrupts_on(void);
  * The handler's first act. A bare write of the pending bit would clear the
  * enable beside it, and no later interrupt would be raised.
  */
-void xhci_interrupt_ack(void);
+void xhci_interrupt_ack(struct xhci_ctrl *hc);
 
 /**
  * Acknowledge the interrupt and drain the ring, in that order.
@@ -265,10 +286,10 @@ void xhci_interrupt_ack(void);
  * acknowledgement that came after it would be left unread with its pending
  * bit cleared, which is why the two are one call. Returns what was drained.
  */
-int xhci_interrupt_take(void);
+int xhci_interrupt_take(struct xhci_ctrl *hc);
 
 /** Advance the driver's own clock, in milliseconds. */
-void xhci_advance(uint32_t milliseconds);
+void xhci_advance(struct xhci_ctrl *hc, uint32_t milliseconds);
 
 /**
  * Ask the controller for a slot for a device at `where`, on a reset port.
@@ -279,10 +300,10 @@ void xhci_advance(uint32_t milliseconds);
  * decide and it does not say until the command answers. A location deeper
  * than five tiers, or whose route has bits above its depth, is refused.
  */
-int xhci_device_open(const struct usb_location *where, int speed);
+int xhci_device_open(struct xhci_ctrl *hc, const struct usb_location *where, int speed);
 
 /** Address a device and give it its default control endpoint. */
-int xhci_device_address(int device);
+int xhci_device_address(struct xhci_ctrl *hc, int device);
 
 /**
  * Tell the controller that a device is a hub: the hub bit and its port
@@ -290,7 +311,7 @@ int xhci_device_address(int device);
  * think time, all in the hub's own slot context, through the evaluate
  * command. Issues one command.
  */
-int xhci_device_hub(int device, int ports, int multi_tt, int think_time);
+int xhci_device_hub(struct xhci_ctrl *hc, int device, int ports, int multi_tt, int think_time);
 
 /**
  * Tell the controller the real size of a device's control endpoint.
@@ -300,7 +321,7 @@ int xhci_device_hub(int device, int ports, int multi_tt, int think_time);
  * size every device answers to; this corrects it once the descriptor has
  * arrived.
  */
-int xhci_device_packet_size(int device, int max_packet);
+int xhci_device_packet_size(struct xhci_ctrl *hc, int device, int max_packet);
 
 /**
  * Ask the controller for a device's slot back.
@@ -310,36 +331,36 @@ int xhci_device_packet_size(int device, int max_packet);
  * is called for. Returns -1 when the command could not be issued, and the
  * caller may try again.
  */
-int xhci_device_close(int device);
+int xhci_device_close(struct xhci_ctrl *hc, int device);
 
 /** Finish a close: the controller has given the slot back. */
-void xhci_device_closed(int device);
+void xhci_device_closed(struct xhci_ctrl *hc, int device);
 
 /** Whether a command is in flight or being taken back. */
-int xhci_command_busy(void);
+int xhci_command_busy(struct xhci_ctrl *hc);
 
 /** Open an endpoint on a device. Returns its handle, which is its index. */
-int xhci_endpoint_open(int device, const struct usb_endpoint *endpoint);
+int xhci_endpoint_open(struct xhci_ctrl *hc, int device, const struct usb_endpoint *endpoint);
 
 /** Forget an endpoint. */
-void xhci_endpoint_close(int device, int endpoint);
+void xhci_endpoint_close(struct xhci_ctrl *hc, int device, int endpoint);
 
 /** Clear a halted endpoint. `xhci_endpoint_dequeue` follows it. */
-int xhci_endpoint_reset(int device, int endpoint);
+int xhci_endpoint_reset(struct xhci_ctrl *hc, int device, int endpoint);
 
 /** Point a reset endpoint's ring at the block this driver will write next. */
-int xhci_endpoint_dequeue(int device, int endpoint);
+int xhci_endpoint_dequeue(struct xhci_ctrl *hc, int device, int endpoint);
 
 /** Queue one transfer on an endpoint. */
-int xhci_submit(int device, int endpoint, const struct usb_transfer *transfer);
+int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb_transfer *transfer);
 
 /** 1 when a completion was waiting, 0 when none was. */
-int xhci_poll(struct usb_completion *out);
+int xhci_poll(struct xhci_ctrl *hc, struct usb_completion *out);
 
 /** What was read from the controller, valid after `xhci_read_caps`. */
-const struct xhci_caps *xhci_capabilities(void);
+const struct xhci_caps *xhci_capabilities(struct xhci_ctrl *hc);
 
 /** Why the last step refused, for the record that reports it. */
-const char *xhci_error(void);
+const char *xhci_error(struct xhci_ctrl *hc);
 
 #endif

@@ -290,7 +290,29 @@ static int scsi_status(void)
     }
 }
 
-int xhci_submit(int device, int endpoint, const struct usb_transfer *transfer)
+/*
+ * The driver's table of controllers, as the stack asks about it. These tests
+ * drive the layers above the driver through their own stubs, so there is one
+ * controller and its record is never dereferenced.
+ */
+static struct xhci_ctrl *the_ctrl = (struct xhci_ctrl *)1;
+
+int xhci_controllers(void)
+{
+    return 1;
+}
+
+struct xhci_ctrl *xhci_controller(int n)
+{
+    return n == 0 ? the_ctrl : 0;
+}
+
+int xhci_number(const struct xhci_ctrl *hc)
+{
+    return hc == the_ctrl ? 0 : -1;
+}
+
+int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb_transfer *transfer)
 {
     int stage = stage_of(endpoint, transfer);
 
@@ -592,7 +614,7 @@ int main(void)
 
     /* A stick that comes up at once. */
     model_reset();
-    CHECK("a stick is taken", msc_attach(1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("a stick is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
     CHECK("and comes up", run_until_settled(100));
     CHECK("with the capacity the drive reported, which is its last block plus one",
           msc_block_device(0) != 0 && msc_block_device(0)->sector_count == MEDIUM_SECTORS);
@@ -634,14 +656,14 @@ int main(void)
        one does for a moment after it is plugged in. */
     model_reset();
     dev.lun_ready_after[0] = 12;
-    CHECK("a stick that is not ready yet is taken", msc_attach(1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("a stick that is not ready yet is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
     CHECK("and comes up when it becomes ready", run_until_settled(4000));
     CHECK("after the tests it needed", dev.tests_seen[0] == 13);
 
     /* One that never becomes ready is refused at the deadline. */
     model_reset();
     dev.lun_ready_after[0] = 100000;
-    CHECK("a stick that never becomes ready is taken", msc_attach(1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("a stick that never becomes ready is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
     CHECK("and is not brought up", run_until_settled(30000) == 0);
     CHECK("and serves nothing", !msc_ready(0));
     CHECK("and the disk layer is never told of it", arrivals == 0);
@@ -650,7 +672,7 @@ int main(void)
     model_reset();
     dev.stall_max_lun = 1;
     CHECK("a stick that will not say how many units it has is taken",
-          msc_attach(1, 0, EP_IN, EP_OUT) == 0);
+          msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
     CHECK("and comes up on the one it has", run_until_settled(100));
 
     /* A promotional drive: a CD-ROM on the first unit and the flash on the
@@ -661,7 +683,7 @@ int main(void)
     dev.lun_type[1] = 0x00;
     dev.capacity_lun = -1;
     CHECK("a drive with a CD-ROM in front of its flash is taken",
-          msc_attach(1, 0, EP_IN, EP_OUT) == 0);
+          msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
     CHECK("and comes up", run_until_settled(200));
     CHECK("on the unit that is a disk and not on the one that is not", dev.capacity_lun == 1);
 
@@ -670,7 +692,7 @@ int main(void)
     dev.max_lun = 1;
     dev.lun_no_medium[0] = 1;
     dev.capacity_lun = -1;
-    CHECK("a reader with an empty slot is taken", msc_attach(1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("a reader with an empty slot is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
     CHECK("and comes up", run_until_settled(200));
     CHECK("on the slot that has a card", dev.capacity_lun == 1);
 
@@ -678,18 +700,18 @@ int main(void)
     model_reset();
     dev.last_block = 0xFFFFFFFFu;
     CHECK("a drive larger than a ten-byte read can address is taken",
-          msc_attach(1, 0, EP_IN, EP_OUT) == 0);
+          msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
     CHECK("and refused", run_until_settled(200) == 0);
 
     model_reset();
     dev.block_size = 4096;
-    CHECK("a drive with 4 KiB blocks is taken", msc_attach(1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("a drive with 4 KiB blocks is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
     CHECK("and refused", run_until_settled(200) == 0);
 
     /* Write protection, and the drive that will not answer the question. */
     model_reset();
     dev.write_protect = 1;
-    CHECK("a protected stick is taken", msc_attach(1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("a protected stick is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
     CHECK("and comes up", run_until_settled(200));
     CHECK("read-only", (msc_block_device(0)->flags & BLOCK_READ_ONLY) != 0);
     {
@@ -701,7 +723,7 @@ int main(void)
 
     /* The status wrapper's rules, each of which is reset recovery. */
     model_reset();
-    CHECK("a stick is taken", msc_attach(1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("a stick is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
     CHECK("and comes up", run_until_settled(200));
     {
         struct block_request *r = make_request(0, 0, 1, page);
@@ -723,7 +745,7 @@ int main(void)
     /* A device pulled between the command and its answer: every request it
        had is failed, and nothing of it is used again. */
     model_reset();
-    CHECK("a stick is taken", msc_attach(1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("a stick is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
     CHECK("and comes up", run_until_settled(200));
     {
         struct block_request *r = make_request(0, 0, 1, page);
@@ -748,7 +770,7 @@ int main(void)
            shows it took another slot is that the first slot's device is
            still the closing one. */
         CHECK("a second stick is given a different slot",
-              msc_attach(2, 0, EP_IN, EP_OUT) == 0 && msc_block_device(0) != 0 &&
+              msc_attach(0, 2, 0, EP_IN, EP_OUT) == 0 && msc_block_device(0) != 0 &&
                   msc_block_device(0)->submit(msc_block_device(0), r) == -EIO);
         msc_release(0);
         CHECK("the slot goes back when the last hold does", msc_block_device(0) == 0);
@@ -756,7 +778,7 @@ int main(void)
 
     /* Two requests, admitted in the order they arrived. */
     model_reset();
-    CHECK("a stick is taken", msc_attach(1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("a stick is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
     CHECK("and comes up", run_until_settled(200));
     {
         static struct block_request first, second;
@@ -790,7 +812,7 @@ int main(void)
     /* A read whose data stage came up short is a failure: a block is whole
        or it is not. */
     model_reset();
-    CHECK("a stick is taken", msc_attach(1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("a stick is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
     CHECK("and comes up", run_until_settled(200));
     {
         struct block_request *r = make_request(0, 0, 1, page);
@@ -810,7 +832,7 @@ int main(void)
        is reset recovery, because a device that will not give its status is a
        device in a state this driver cannot reason about. */
     model_reset();
-    CHECK("a stick is taken", msc_attach(1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("a stick is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
     CHECK("and comes up", run_until_settled(200));
     {
         struct block_request *r = make_request(0, 0, 1, page);
@@ -854,7 +876,7 @@ int main(void)
        ticks for a read, and a request of eight sectors would cost thirty
        milliseconds of nothing. */
     model_reset();
-    CHECK("a stick is taken", msc_attach(1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("a stick is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
     CHECK("and comes up", run_until_settled(200));
     {
         struct block_request *r = make_request(0, 0, 1, page);
@@ -873,7 +895,7 @@ int main(void)
        the slot back and its page may be another request's, so the answer is
        dropped by the number the transfer carried. */
     model_reset();
-    CHECK("a stick is taken", msc_attach(1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("a stick is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
     CHECK("and comes up", run_until_settled(200));
     {
         struct block_request *r = make_request(0, 0, 1, page);
@@ -923,13 +945,13 @@ int main(void)
        that stop answering for good when that is done to them. */
     model_reset();
     dev.lun_ready_after[0] = 4;
-    CHECK("a stick that takes a moment is taken", msc_attach(1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("a stick that takes a moment is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
     CHECK("and comes up", run_until_settled(2000));
     CHECK("with no reset sent while it did", dev.resets == 0);
 
     /* The flush, and the two answers that are not failures. */
     model_reset();
-    CHECK("a stick is taken", msc_attach(1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("a stick is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
     CHECK("and comes up", run_until_settled(200));
     {
         struct block_request *r = make_request(0, 0, 0, page);
@@ -953,7 +975,7 @@ int main(void)
        sense says decides the request: a medium error fails it, a unit
        attention has the command sent once more. */
     model_reset();
-    CHECK("a stick is taken", msc_attach(1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("a stick is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
     CHECK("and comes up", run_until_settled(200));
     {
         struct block_request *r = make_request(0, 0, 1, page);
@@ -970,7 +992,7 @@ int main(void)
         CHECK("after one REQUEST SENSE", dev.senses == 1);
     }
     model_reset();
-    CHECK("a stick is taken", msc_attach(1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("a stick is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
     CHECK("and comes up", run_until_settled(200));
     {
         struct block_request *r = make_request(0, 3, 1, page);
@@ -1003,7 +1025,7 @@ int main(void)
 
     /* The flush's three answers. */
     model_reset();
-    CHECK("a stick is taken", msc_attach(1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("a stick is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
     CHECK("and comes up", run_until_settled(200));
     {
         struct block_request *r = make_request(0, 0, 0, page);
@@ -1035,7 +1057,7 @@ int main(void)
        deadline, since the controller still owns its page; recovery is
        attempted first, and the request fails when that ends. */
     model_reset();
-    CHECK("a stick is taken", msc_attach(1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("a stick is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
     CHECK("and comes up", run_until_settled(200));
     {
         struct block_request *r = make_request(0, 0, 1, page);
@@ -1065,7 +1087,7 @@ int main(void)
        would; the entry goes with the core's close. */
     model_reset();
     drops = 0;
-    CHECK("a stick is taken", msc_attach(1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("a stick is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
     CHECK("and comes up", run_until_settled(200));
     {
         struct block_request *r = make_request(0, 0, 1, page);
@@ -1089,7 +1111,7 @@ int main(void)
     /* Tags go up across sticks and attaches, so a completion left over from
        a stick that was pulled cannot match the next stick's command. */
     model_reset();
-    CHECK("a stick is taken", msc_attach(1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("a stick is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
     CHECK("and comes up", run_until_settled(200));
     {
         uint32_t first_tag;
@@ -1105,7 +1127,8 @@ int main(void)
         msc_detach(1);
         msc_release(0);
         dev.attached = 1;
-        CHECK("a second stick is taken on the same handle", msc_attach(1, 0, EP_IN, EP_OUT) == 0);
+        CHECK("a second stick is taken on the same handle",
+              msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
         CHECK("and comes up", run_until_settled(200));
         CHECK("and its first command's tag is past every tag the first stick used",
               dev.last_tag > first_tag);

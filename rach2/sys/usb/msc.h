@@ -42,6 +42,9 @@ struct msc_ident {
     int device;
 };
 
+/* A stick is on one controller; its transfers go to that one. */
+struct xhci_ctrl;
+
 /**
  * Take a device the core has enumerated as Bulk-Only mass storage.
  *
@@ -50,7 +53,7 @@ struct msc_ident {
  * controller's indexes for the bulk pair. Returns 0 when the stick was taken
  * and -1 when it was refused, which is recorded by name.
  */
-int msc_attach(int device, int interface, int ep_in, int ep_out);
+int msc_attach(struct xhci_ctrl *hc, int device, int interface, int ep_in, int ep_out);
 
 /**
  * Give up a device that has gone or that the core is closing.

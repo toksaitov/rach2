@@ -166,6 +166,7 @@ struct hub_port {
 
 struct hub {
     int used;
+    struct xhci_ctrl *hc; /* the controller this hub is on */
     int index;  /* the core's device index */
     int device; /* the controller's handle */
     int interface;
@@ -235,7 +236,7 @@ static int request(struct hub *h, int type, int req, int value, int index, int l
     transfer.direction = (type & 0x80) ? USB_DIR_IN : USB_DIR_OUT;
     h->tag = ++tag_seed;
     transfer.generation = h->tag;
-    if (xhci_submit(h->device, 1, &transfer) != 0) {
+    if (xhci_submit(h->hc, h->device, 1, &transfer) != 0) {
         return -1;
     }
     h->request = what;
@@ -256,7 +257,7 @@ static int change_submit(struct hub *h)
     transfer.direction = USB_DIR_IN;
     h->change_tag = ++tag_seed;
     transfer.generation = h->change_tag;
-    if (xhci_submit(h->device, h->ep_dci, &transfer) != 0) {
+    if (xhci_submit(h->hc, h->device, h->ep_dci, &transfer) != 0) {
         return -1;
     }
     h->change_out = 1;
@@ -276,8 +277,8 @@ static void give_up(struct hub *h, const char *why)
     usb_core_hub_failed(index, why);
 }
 
-int hub_attach(int index, int device, int interface, int protocol, int ep_dci, int depth,
-               int super)
+int hub_attach(struct xhci_ctrl *hc, int index, int device, int interface, int protocol,
+               int ep_dci, int depth, int super)
 {
     int i;
     struct hub *h = 0;
@@ -295,6 +296,7 @@ int hub_attach(int index, int device, int interface, int protocol, int ep_dci, i
     }
     k_memset(h, 0, sizeof(*h));
     h->used = 1;
+    h->hc = hc;
     h->index = index;
     h->device = device;
     h->interface = interface;
@@ -891,10 +893,12 @@ void hub_step(uint32_t elapsed_ms)
     }
 }
 
-int hub_port_status(int owner, int port, struct usb_port_status *out)
+int hub_port_status(struct xhci_ctrl *hc, int owner, int port, struct usb_port_status *out)
 {
     struct hub *h = by_index(owner);
     const struct hub_port *p;
+
+    (void)hc; /* a hub is reached through its own device */
 
     out->connected = 0;
     out->enabled = 0;
@@ -921,10 +925,12 @@ int hub_port_status(int owner, int port, struct usb_port_status *out)
     return 0;
 }
 
-int hub_port_settled(int owner, int port)
+int hub_port_settled(struct xhci_ctrl *hc, int owner, int port)
 {
     struct hub *h = by_index(owner);
     const struct hub_port *p;
+
+    (void)hc; /* a hub is reached through its own device */
 
     if (h == 0 || port < 0 || port >= h->ports) {
         return 0;
@@ -934,9 +940,11 @@ int hub_port_settled(int owner, int port)
            hub_ms - p->connect_ms >= HUB_DEBOUNCE_MS;
 }
 
-int hub_port_reset_begin(int owner, int port)
+int hub_port_reset_begin(struct xhci_ctrl *hc, int owner, int port)
 {
     struct hub *h = by_index(owner);
+
+    (void)hc; /* a hub is reached through its own device */
 
     if (h == 0 || port < 0 || port >= h->ports || h->state != HUB_RUNNING) {
         return -1;
@@ -946,9 +954,11 @@ int hub_port_reset_begin(int owner, int port)
     return 0;
 }
 
-int hub_port_reset_done(int owner, int port)
+int hub_port_reset_done(struct xhci_ctrl *hc, int owner, int port)
 {
     struct hub *h = by_index(owner);
+
+    (void)hc; /* a hub is reached through its own device */
 
     if (h == 0 || port < 0 || port >= h->ports) {
         return -1;

@@ -87,7 +87,7 @@ void hid_gone(int slot)
     hid_gone_count++;
 }
 
-int msc_attach(int device, int interface, int ep_in, int ep_out)
+int msc_attach(struct xhci_ctrl *hc, int device, int interface, int ep_in, int ep_out)
 {
     (void)device;
     (void)interface;
@@ -228,7 +228,29 @@ static void answer(int device, int endpoint, int status, uint32_t length, uint32
     done_tail++;
 }
 
-int xhci_poll(struct usb_completion *out)
+/*
+ * The driver's table of controllers, as the stack asks about it. These tests
+ * drive the layers above the driver through their own stubs, so there is one
+ * controller and its record is never dereferenced.
+ */
+static struct xhci_ctrl *the_ctrl = (struct xhci_ctrl *)1;
+
+int xhci_controllers(void)
+{
+    return 1;
+}
+
+struct xhci_ctrl *xhci_controller(int n)
+{
+    return n == 0 ? the_ctrl : 0;
+}
+
+int xhci_number(const struct xhci_ctrl *hc)
+{
+    return hc == the_ctrl ? 0 : -1;
+}
+
+int xhci_poll(struct xhci_ctrl *hc, struct usb_completion *out)
 {
     if (done_head == done_tail) {
         return 0;
@@ -238,12 +260,12 @@ int xhci_poll(struct usb_completion *out)
     return 1;
 }
 
-int xhci_ports(void)
+int xhci_ports(struct xhci_ctrl *hc)
 {
     return 4;
 }
 
-int xhci_port_status(int port, struct usb_port_status *out)
+int xhci_port_status(struct xhci_ctrl *hc, int port, struct usb_port_status *out)
 {
     out->connected = port == 0 && model.root_connected;
     out->enabled = out->connected;
@@ -252,25 +274,25 @@ int xhci_port_status(int port, struct usb_port_status *out)
     return 0;
 }
 
-int xhci_port_settled(int port)
+int xhci_port_settled(struct xhci_ctrl *hc, int port)
 {
     (void)port;
     return 1;
 }
 
-int xhci_port_reset_begin(int port)
+int xhci_port_reset_begin(struct xhci_ctrl *hc, int port)
 {
     (void)port;
     return 0;
 }
 
-int xhci_port_reset_done(int port)
+int xhci_port_reset_done(struct xhci_ctrl *hc, int port)
 {
     (void)port;
     return 1;
 }
 
-int xhci_command_busy(void)
+int xhci_command_busy(struct xhci_ctrl *hc)
 {
     return 0;
 }
@@ -285,7 +307,7 @@ static void command_ok(int device)
     command_result_pending.status = USB_XFER_OK;
 }
 
-int xhci_command_done(struct usb_command_result *out)
+int xhci_command_done(struct xhci_ctrl *hc, struct usb_command_result *out)
 {
     if (!command_pending || model.hold_commands) {
         return 0;
@@ -314,7 +336,7 @@ static int kind_at(const struct usb_location *where, int *speed)
     return KIND_NONE;
 }
 
-int xhci_device_open(const struct usb_location *where, int speed)
+int xhci_device_open(struct xhci_ctrl *hc, const struct usb_location *where, int speed)
 {
     int n;
 
@@ -339,33 +361,33 @@ int xhci_device_open(const struct usb_location *where, int speed)
     return 0;
 }
 
-int xhci_device_address(int device)
+int xhci_device_address(struct xhci_ctrl *hc, int device)
 {
     command_ok(device);
     return 0;
 }
 
-int xhci_device_packet_size(int device, int max_packet)
+int xhci_device_packet_size(struct xhci_ctrl *hc, int device, int max_packet)
 {
     (void)max_packet;
     command_ok(device);
     return 0;
 }
 
-int xhci_command_free(void)
+int xhci_command_free(struct xhci_ctrl *hc)
 {
     return !command_pending;
 }
 
-int xhci_interrupts_on(void)
+int xhci_interrupts_on(struct xhci_ctrl *hc)
 {
     return 0; /* the model's controller sends no interrupts of its own */
 }
 
-void xhci_state_record(void)
+void xhci_state_record(struct xhci_ctrl *hc)
 {}
 
-int xhci_device_hub(int device, int ports, int multi_tt, int think_time)
+int xhci_device_hub(struct xhci_ctrl *hc, int device, int ports, int multi_tt, int think_time)
 {
     model.hub_told = 1;
     model.hub_told_slot = device;
@@ -376,14 +398,14 @@ int xhci_device_hub(int device, int ports, int multi_tt, int think_time)
     return 0;
 }
 
-int xhci_endpoint_open(int device, const struct usb_endpoint *endpoint)
+int xhci_endpoint_open(struct xhci_ctrl *hc, int device, const struct usb_endpoint *endpoint)
 {
     (void)endpoint;
     command_ok(device);
     return 0;
 }
 
-int xhci_device_close(int device)
+int xhci_device_close(struct xhci_ctrl *hc, int device)
 {
     if (closes < 16) {
         close_order[closes] = device;
@@ -394,27 +416,27 @@ int xhci_device_close(int device)
     return 0;
 }
 
-void xhci_device_closed(int device)
+void xhci_device_closed(struct xhci_ctrl *hc, int device)
 {
     (void)device;
     closed_done++;
 }
 
-int xhci_endpoint_reset(int device, int endpoint)
+int xhci_endpoint_reset(struct xhci_ctrl *hc, int device, int endpoint)
 {
     (void)endpoint;
     command_ok(device);
     return 0;
 }
 
-int xhci_endpoint_dequeue(int device, int endpoint)
+int xhci_endpoint_dequeue(struct xhci_ctrl *hc, int device, int endpoint)
 {
     (void)endpoint;
     command_ok(device);
     return 0;
 }
 
-void xhci_endpoint_close(int device, int endpoint)
+void xhci_endpoint_close(struct xhci_ctrl *hc, int device, int endpoint)
 {
     (void)device;
     (void)endpoint;
@@ -509,7 +531,7 @@ static void model_change(int port)
     model_report_changes();
 }
 
-int xhci_submit(int device, int endpoint, const struct usb_transfer *transfer)
+int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb_transfer *transfer)
 {
     const unsigned char *setup = transfer->setup;
     unsigned char *buf = transfer->buffer;
