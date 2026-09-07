@@ -897,7 +897,7 @@ static void model_reset(void)
     }
     usb_core_reset();
     for (i = 0; i < HUB_MAX; i++) {
-        hubs[i].used = 0;
+        hub_at(i)->used = 0;
     }
 }
 

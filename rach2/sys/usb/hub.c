@@ -30,6 +30,7 @@
 
 #include "../klog.h"
 #include "../lib/kstring.h"
+#include "../mm/paging.h"
 #include "core.h"
 #include "hcd.h"
 #include "xhci.h"
@@ -200,7 +201,50 @@ struct hub {
     struct hub_port port[USB_HUB_PORT_MAX];
 };
 
-static struct hub hubs[HUB_MAX];
+/*
+ * One record per hub, each its own frame from the identity-mapped window.
+ * The record holds the buffers the controller writes a hub's descriptor and
+ * its port-change bitmap into, and a controller is given an address to write
+ * to rather than a pointer this kernel reaches it by.
+ */
+static struct hub *hubs[HUB_MAX];
+
+/* The record is a frame, so it must fit one. */
+typedef char hub_record_fits_a_frame[(sizeof(struct hub) <= 4096) ? 1 : -1];
+
+/** The record of hub `i`, or a spare one that is always free. */
+static struct hub *hub_at(int i)
+{
+    static struct hub none;
+
+    return hubs[i] ? hubs[i] : &none;
+}
+
+/** Take a frame for hub `i`'s record, or say there is none. */
+static struct hub *hub_take(int i)
+{
+    void *frame;
+
+    if (hubs[i]) {
+        return hubs[i];
+    }
+    frame = alloc_kernel_frame();
+    if (!frame) {
+        return 0;
+    }
+    hubs[i] = (struct hub *)frame;
+    k_memset(hubs[i], 0, sizeof(*hubs[i]));
+    return hubs[i];
+}
+
+/** Give back hub `i`'s frame. */
+static void hub_release(int i)
+{
+    if (hubs[i]) {
+        free_kernel_frame(hubs[i]);
+        hubs[i] = 0;
+    }
+}
 static uint32_t hub_ms;
 static uint32_t tag_seed;
 
@@ -209,8 +253,8 @@ static struct hub *by_index(int index)
     int i;
 
     for (i = 0; i < HUB_MAX; i++) {
-        if (hubs[i].used && hubs[i].index == index) {
-            return &hubs[i];
+        if (hub_at(i)->used && hub_at(i)->index == index) {
+            return hub_at(i);
         }
     }
     return 0;
@@ -284,8 +328,12 @@ int hub_attach(struct xhci_ctrl *hc, int index, int device, int interface, int p
     struct hub *h = 0;
 
     for (i = 0; i < HUB_MAX; i++) {
-        if (!hubs[i].used) {
-            h = &hubs[i];
+        if (!hub_at(i)->used) {
+            h = hub_take(i);
+            if (!h) {
+                klog(KLOG_WARN, "usb", "hub: device %d refused: no frame for its record", device);
+                return -1;
+            }
             break;
         }
     }
@@ -719,7 +767,7 @@ int hub_completion(const struct usb_completion *completion)
     int i;
 
     for (i = 0; i < HUB_MAX; i++) {
-        struct hub *h = &hubs[i];
+        struct hub *h = hub_at(i);
 
         if (!h->used || h->device != completion->device) {
             continue;
@@ -886,9 +934,17 @@ void hub_step(uint32_t elapsed_ms)
     int i;
 
     hub_ms += elapsed_ms;
+    /* A hub that has gone gives its frame back here, and not where it was
+     * released: the record is the frame, and a caller that gave it back
+     * itself would go on reading what it had just handed away. */
     for (i = 0; i < HUB_MAX; i++) {
-        if (hubs[i].used) {
-            step_hub(&hubs[i], elapsed_ms);
+        if (hubs[i] && !hubs[i]->used) {
+            hub_release(i);
+        }
+    }
+    for (i = 0; i < HUB_MAX; i++) {
+        if (hub_at(i)->used) {
+            step_hub(hub_at(i), elapsed_ms);
         }
     }
 }

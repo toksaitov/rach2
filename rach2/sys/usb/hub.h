@@ -12,8 +12,10 @@
  * core's port operations for the devices below it.
  */
 
-/** How many hubs this kernel drives at once. */
-#define HUB_MAX 2
+/* How many hubs this kernel drives at once. A hub's record is a frame taken
+ * when it attaches and given back when it goes, so this bounds the table of
+ * records and not the memory they take. */
+#define HUB_MAX 8
 
 struct usb_port_status;
 struct usb_completion;
