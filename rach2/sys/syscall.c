@@ -2377,6 +2377,42 @@ static int32_t raw_seek_resolve(uint64_t cur, uint64_t size, long long delta, in
  *
  * @return the new offset, or -errno.
  */
+/**
+ * Add a seek displacement to a file offset without overflowing.
+ *
+ * The sum of an offset and a displacement leaves the range of the type
+ * for offsets a caller may legally ask about, and signed overflow has no
+ * value in C to check afterwards, so the bound is tested first and the
+ * arithmetic done unsigned.
+ *
+ * @return 0, `-EINVAL` when the result would be negative, or
+ * `-EOVERFLOW` when it would pass the largest offset a file can have.
+ */
+static int seek_add(uint64_t base, long long off, long long *out)
+{
+    const uint64_t max = 0x7FFFFFFFFFFFFFFFull;
+
+    if (base > max) {
+        return -EOVERFLOW;
+    }
+    if (off >= 0) {
+        if ((uint64_t)off > max - base) {
+            return -EOVERFLOW;
+        }
+        *out = (long long)(base + (uint64_t)off);
+        return 0;
+    }
+    {
+        uint64_t back = (uint64_t)(-(off + 1)) + 1;
+
+        if (back > base) {
+            return -EINVAL;
+        }
+        *out = (long long)(base - back);
+    }
+    return 0;
+}
+
 static int32_t sys_lseek(isr_params_t *params)
 {
     int fd = (int)params->ebx;
@@ -2384,6 +2420,7 @@ static int32_t sys_lseek(isr_params_t *params)
     int whence = (int)params->edx;
     fd_entry_t *entry;
     uint64_t file_size;
+    int seek_rc;
     int32_t new_offset;
     long long at;
 
@@ -2473,16 +2510,22 @@ static int32_t sys_lseek(isr_params_t *params)
     switch (whence) {
         case 0:  /* SEEK_SET */
             at = (long long)offset;
+            seek_rc = 0;
             break;
         case 1:  /* SEEK_CUR */
-            at = (long long)entry->ofd->offset + offset;
+            seek_rc = seek_add(entry->ofd->offset, (long long)offset, &at);
             break;
         case 2:  /* SEEK_END */
-            at = (long long)file_size + offset;
+            seek_rc = seek_add(file_size, (long long)offset, &at);
             break;
         default:
             at = -1;
+            seek_rc = 0;
             break;
+    }
+    if (seek_rc != 0) {
+        fd_ofd_unlock(entry->ofd);
+        return (int32_t)seek_rc;
     }
 
     if (at < 0) {
@@ -5095,6 +5138,38 @@ static int32_t sys_linkat(isr_params_t *params)
  * raw disk windows are the reason this call has a full 64-bit offset, since
  * a whole drive's far end cannot be named in 32 bits.
  */
+/**
+ * The current size of the file an ordinary descriptor is open on.
+ *
+ * A `SEEK_END` resolves against this, so the caller reads it inside the
+ * description's lock: a process sharing the description can extend the
+ * file while this one waits.
+ *
+ * @return 0, or -errno when the file is gone or its size cannot be read.
+ */
+static int file_size_now(fd_entry_t *entry, uint64_t *out)
+{
+    if (entry->node) {
+        if (fd_node_check(entry) != 0) {
+            return -EBADF; /* the file was unlinked or relocated out from under us */
+        }
+        *out = entry->node->data_size;
+        return 0;
+    }
+    if (entry->ofd->vmnt) {
+        /* A file of another type: its size from its own file system. */
+        struct vfs_stat vst;
+        int rc = vfs_getattr(entry->ofd->vmnt, entry->ofd->vnode, &vst);
+
+        if (rc != 0) {
+            return rc;
+        }
+        *out = vst.size;
+        return 0;
+    }
+    return -EBADF;
+}
+
 static int32_t sys__llseek(isr_params_t *params)
 {
     int fd = (int)params->ebx;
@@ -5104,7 +5179,8 @@ static int32_t sys__llseek(isr_params_t *params)
     int whence = (int)params->edi;
     fd_entry_t *entry;
     long long off, new_off;
-    uint64_t size;
+    uint64_t size = 0;
+    int seek_rc;
 
     if (!current_proc) {
         return -ESRCH;
@@ -5187,22 +5263,9 @@ static int32_t sys__llseek(isr_params_t *params)
     if (!entry || entry->type != FD_TYPE_FILE || !entry->ofd) {
         return -EBADF;
     }
-    if (entry->node) {
-        if (fd_node_check(entry) != 0) {
-            return -EBADF; /* the file was unlinked or relocated out from under us */
-        }
-        size = entry->node->data_size;
-    } else if (entry->ofd->vmnt) {
-        /* A file of another type: its size from its own file system. */
-        struct vfs_stat vst;
-        int rc = vfs_getattr(entry->ofd->vmnt, entry->ofd->vnode, &vst);
-
-        if (rc != 0) {
-            return rc;
-        }
-        size = vst.size;
-    } else {
-        return -EBADF;
+    seek_rc = file_size_now(entry, &size);
+    if (seek_rc != 0) {
+        return seek_rc;
     }
 
     /* The result pointer is mandatory: a NULL one is a caller bug, not a silent
@@ -5216,19 +5279,35 @@ static int32_t sys__llseek(isr_params_t *params)
      * the current position that read it outside the lock would move it
      * from a place another process had already left. */
     fd_ofd_lock(entry->ofd);
+    if (whence == 2) {
+        /* The end is read again here, inside the lock. Another process on
+         * this description can extend the file while this call waits for
+         * it, and an end taken before the wait lands inside what that
+         * process wrote. */
+        seek_rc = file_size_now(entry, &size);
+        if (seek_rc != 0) {
+            fd_ofd_unlock(entry->ofd);
+            return seek_rc;
+        }
+    }
     switch (whence) {
         case 0: /* SEEK_SET */
             new_off = off;
+            seek_rc = 0;
             break;
         case 1: /* SEEK_CUR */
-            new_off = (long long)entry->ofd->offset + off;
+            seek_rc = seek_add(entry->ofd->offset, off, &new_off);
             break;
         case 2: /* SEEK_END */
-            new_off = (long long)size + off;
+            seek_rc = seek_add(size, off, &new_off);
             break;
         default:
             fd_ofd_unlock(entry->ofd);
             return -EINVAL;
+    }
+    if (seek_rc != 0) {
+        fd_ofd_unlock(entry->ofd);
+        return seek_rc;
     }
     if (new_off < 0) {
         fd_ofd_unlock(entry->ofd);
@@ -5767,11 +5846,12 @@ static void __attribute__((noreturn)) exec_fail_destroyed(int where)
     /* The process cannot report this itself: its image is gone and its
      * parent sees only a death by signal. The record says which step of
      * the load failed, so a machine that dies here says why. */
-    klog(KLOG_ERR, "exec", "pid %d died: the image was destroyed and step %d failed",
-         current_proc ? (int)current_proc->pid : -1, where);
     process_t *parent;
     page_dir_t *dir;
     int was_init = (current_proc->pid == init_pid && init_pid != 0);
+
+    klog(KLOG_ERR, "exec", "pid %d died: the image was destroyed and step %d failed",
+         current_proc ? (int)current_proc->pid : -1, where);
 
     /* If the console-owning session leader is the one whose exec failed,
      * release the controlling terminal before zombifying so the timer-IRQ
@@ -6023,7 +6103,6 @@ static int32_t sys_execve(isr_params_t *params)
     struct exec_state *s;
     uint32_t entry_point;
 
-    mem_balance();
     elf_image_t img;
     uint8_t random16[16];
     page_dir_t *proc_dir;
@@ -6032,6 +6111,7 @@ static int32_t sys_execve(isr_params_t *params)
     const char *name;
     int len;
 
+    mem_balance();
     if (!current_proc) {
         return -ESRCH;
     }
@@ -7491,15 +7571,15 @@ static int32_t sys_utimensat(isr_params_t *params)
     int flags = (int)params->esi;
     char pathbuf[256];
     struct kernel_timespec ktimes[2];
-
-    if (flags & ~AT_SYMLINK_NOFOLLOW) {
-        return -EINVAL;
-    }
     const struct kernel_timespec *times = NULL;
     const char *name;
     krffs_node_t *node;
     int64_t now_sec, now_nsec;
     int len;
+
+    if (flags & ~AT_SYMLINK_NOFOLLOW) {
+        return -EINVAL;
+    }
 
     if (!current_proc || !user_path) {
         return -EFAULT;

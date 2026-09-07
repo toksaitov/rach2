@@ -64,8 +64,7 @@ bool elf_check(const void *data, uint32_t size)
         return false;
     }
 
-    uint32_t phdr_end = ehdr->e_phoff + (ehdr->e_phnum * ehdr->e_phentsize);
-    if (phdr_end > size) {
+    if ((uint32_t)ehdr->e_phoff + (uint32_t)ehdr->e_phnum * (uint32_t)ehdr->e_phentsize > size) {
         return false;
     }
 

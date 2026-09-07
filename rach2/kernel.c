@@ -2208,10 +2208,26 @@ static int init_ext2_root(void)
      * another. */
     for (i = 0; i < MBR_PART_COUNT; i++) {
         block_device_t *disk = boot_disk_device ? boot_disk_device : block0;
-        char path[] = "/dev/disk0p1";
+        struct disk *reg = disk_of(disk);
+        char path[24];
         int at = ext2_root_at(disk, disc_parts[i].start_lba, disc_parts[i].sector_count);
+        int slot;
 
-        path[11] = (char)('1' + i);
+        /* The node is the one this entry has in the registry, since the
+         * disk read here is the boot disk and need not be disk 0; naming
+         * another disk's partition would claim it and leave this one free
+         * to be mounted a second time. */
+        path[0] = '\0';
+        if (reg) {
+            for (slot = 0; slot < reg->table.count; slot++) {
+                if (reg->table.parts[slot].start_lba == disc_parts[i].start_lba) {
+                    part_node_path(path, reg, slot);
+                }
+            }
+        }
+        if (path[0] == '\0') {
+            continue;
+        }
         if (at == 0) {
             continue;
         }
@@ -2550,6 +2566,9 @@ static int root_spec_matches(const char *spec, struct disk *d, int slot)
             return 0;
         }
         for (p += 9; *p >= '0' && *p <= '9'; p++) {
+            if (number > PART_MAX) {
+                return 0; /* past any entry a table can hold */
+            }
             number = number * 10 + (*p - '0');
         }
         return *p == '\0' && d->table.kind == PART_MBR && d->table.mbr_id == id &&
@@ -2634,7 +2653,11 @@ static int root_resolve(const char *spec, struct root_match *m)
 static int root_spec_named(void)
 {
     if (!kcmdline_value("rach2.root", root_spec, sizeof(root_spec))) {
-        return 0;
+        /* The option is there and its value did not fit. An identity that
+         * cannot be read is not an absent one: the root stays named, and
+         * matches nothing, rather than falling back to another root. */
+        root_spec[0] = '\0';
+        return kcmdline_count("rach2.root") > 0;
     }
     return !str_equal(root_spec, "ram") && !str_equal(root_spec, "disk") &&
            !str_equal(root_spec, "ext2");
