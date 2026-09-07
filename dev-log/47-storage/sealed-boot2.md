@@ -19,8 +19,19 @@ No kernel warning of any kind appears on that boot: no page fault, no out-of-mem
 no device error. The driver comes up normally (`rtl8139: link 100 Mb/s`), and the root
 mounts (`root: MBRID=1acef00d,4: /dev/disk0p4, ext2`).
 
-`utils/init.c` now prints the signal number (`ifup -a was killed by signal N`); the run
-started at 19:06 will show it.
+`utils/init.c` prints the signal, and the run of 19:10 gave it: **signal 9**. On this
+kernel that is not a killer at work. `exec_fail_destroyed()` in `rach2/sys/syscall.c`
+(line 5765) sets `exit_code = SIGKILL & 0x7F` when an `execve` fails after
+`free_user_pages` has destroyed the caller's image, so the parent sees a death by
+signal nine. So `ifup` did not run: the exec of its program failed part way through
+loading, and BusyBox's image was already gone.
+
+Boot 1 runs the KRFFS root and boot 2 the ext2 root, so this is an exec reading its
+program from ext2 and failing. Other execs on that same boot succeed (dropbear
+starts), so it is not every load. `exec_fail_destroyed` now takes a step number and
+logs `exec: pid N died: the image was destroyed and step S failed`; step 1 is
+`elf_load_image`, steps 2 and 3 are the stack. That kernel is built but the run that
+would print it has not been made yet.
 
 ## What has been ruled out, each by direct test
 

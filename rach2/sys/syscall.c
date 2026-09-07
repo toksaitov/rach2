@@ -5762,8 +5762,13 @@ static struct exec_state *exec_state_of(process_t *proc)
  * the scheduler has a target), switch away, and never iret back into the
  * destroyed space.
  */
-static void __attribute__((noreturn)) exec_fail_destroyed(void)
+static void __attribute__((noreturn)) exec_fail_destroyed(int where)
 {
+    /* The process cannot report this itself: its image is gone and its
+     * parent sees only a death by signal. The record says which step of
+     * the load failed, so a machine that dies here says why. */
+    klog(KLOG_ERR, "exec", "pid %d died: the image was destroyed and step %d failed",
+         current_proc ? (int)current_proc->pid : -1, where);
     process_t *parent;
     page_dir_t *dir;
     int was_init = (current_proc->pid == init_pid && init_pid != 0);
@@ -6430,19 +6435,19 @@ interpreter_checked:
                        s->vfs.ref.mnt ? (void *)&s->vfs : (void *)name, proc_dir,
                        &img) != 0) {
         exec_vfs_done(&s->vfs);
-        exec_fail_destroyed();
+        exec_fail_destroyed(1);
     }
     exec_vfs_done(&s->vfs);
     entry_point = img.entry;
 
     stack_phys = alloc_user_page(proc_dir, USER_STACK_BASE);
     if (stack_phys == 0) {
-        exec_fail_destroyed();
+        exec_fail_destroyed(2);
     }
 
     stack_page = kmap_temp(stack_phys);
     if (!stack_page) {
-        exec_fail_destroyed(); /* the old image is gone; nothing to return to */
+        exec_fail_destroyed(3); /* the old image is gone; nothing to return to */
     }
     k_memset(stack_page, 0, PAGE_SIZE);
 
@@ -6473,7 +6478,7 @@ interpreter_checked:
         kunmap_temp(stack_page);
 
         if (user_esp == 0) {
-            exec_fail_destroyed();
+            exec_fail_destroyed(4);
         }
 
         /* Modify the ISR return frame so iret resumes at the new program's
@@ -6515,14 +6520,14 @@ interpreter_checked:
          * ELF code/data pages themselves are still eagerly loaded above. */
         if (elf_setup_vmas(&current_proc->vm, &img, USER_STACK_BASE,
                            VM_STACK_MAX_GROWTH) != 0) {
-            exec_fail_destroyed(); /* the regions could not be made */
+            exec_fail_destroyed(5); /* the regions could not be made */
         }
         /* RLIMIT_AS: an image whose regions cover more than the limit does
          * not run; the old image is gone by now, so the process ends. */
         if (vm_total(&current_proc->vm) > current_proc->rlim[RLIM_AS].cur) {
             klog(KLOG_WARN, "exec", "refused: the image is past RLIMIT_AS, pid %d",
                  (int)current_proc->pid);
-            exec_fail_destroyed();
+            exec_fail_destroyed(6);
         }
         /* The new image may report a full descriptor table once of its own. */
         current_proc->vma_reported = 0;

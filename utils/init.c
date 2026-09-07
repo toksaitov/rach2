@@ -371,9 +371,15 @@ static void configure_network(void)
         }
     }
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        fprintf(stderr, "init: network: ifup -a did not configure the interface (status %d%s)\n",
-                WIFEXITED(status) ? WEXITSTATUS(status) : -1,
-                WIFEXITED(status) && WEXITSTATUS(status) == 127 ? ", not executed" : "");
+        if (WIFEXITED(status)) {
+            fprintf(stderr, "init: network: ifup -a did not configure the interface (status %d%s)\n",
+                    WEXITSTATUS(status), WEXITSTATUS(status) == 127 ? ", not executed" : "");
+        } else if (WIFSIGNALED(status)) {
+            fprintf(stderr, "init: network: ifup -a was killed by signal %d\n", WTERMSIG(status));
+        } else {
+            fprintf(stderr, "init: network: ifup -a neither exited nor was killed (0x%x)\n",
+                    (unsigned)status);
+        }
     }
 }
 
