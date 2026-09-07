@@ -46,7 +46,13 @@
  * says otherwise, and the most the option accepts. The limit is what the
  * stall rules divide between devices; it is not a table. */
 #define REQ_LIMIT            16
-#define REQ_DEFAULT_DEADLINE 3000u /* thirty seconds of 100 Hz ticks */
+/* Two minutes of 100 Hz ticks. The deadline is here to answer a caller
+ * whose device has gone, not to judge a slow one: an emulated disk on a
+ * host running twenty machines at once has taken more than thirty
+ * seconds to answer a write, and the mount was lost to it. A device that
+ * truly never answers is what the lag device tests, and it sets its own
+ * deadline of five seconds. */
+#define REQ_DEFAULT_DEADLINE 12000u
 
 static struct block_request *reqs; /* every live request */
 static uint32_t live;              /* how many are on the list */
