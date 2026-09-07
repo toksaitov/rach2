@@ -134,3 +134,15 @@ Written by the session that ran phases 1 to 5 when its allowance ran out. The ne
 ### Rules the owner set on 2026-09-07
 
 Codex once at the close for review and once for prose, never per phase. A suite's default rows run in minutes; a long proof runs once, recorded, behind a variable. A problem that would slow every later run is fixed in the milestone that found it, with its entry saying so; only what costs nothing to carry goes to milestone 50. Do not give finish times that assume nothing fails.
+
+### The validation run's result, 2026-09-07 07:40
+
+The set the handoff describes finished. Fifteen suites passed: style, host, queue, disk-ahci, disk, usbdisk, exfat, ext2, fatwrite, persist, persist-ahci, diskfull, stress-ahci, large (181 s), grow (165 s). Three failed and are phase 5's to fix before the close:
+
+* `bus`: the row this milestone added, `the 4096-byte-sector disk on ide`. The refusal itself is in the driver and the AHCI half of the row was written the same way; the row's own steps or its log check are what fail, and the run left no `build/images/bus/sec4k-ide.log`, so the boot did not reach the step. Read the row in `tests/system/suites/bus.sh` first: it passes `--ok NODISK` with `send=cat /proc/disk; echo NO""DISK`, and a disk QEMU refuses to attach at all would end the boot before that.
+* `krffsmount`: `the stick-pull boot`, failing alone as well as in the set. Nothing in this milestone's phase 5 touched USB; the suspects are the wider requests through the stick's class driver (`MSC_MAX_SECTORS` is `BLOCK_REQ_SECTORS`, which is still 8, so a stick's requests did not widen) and the buffer cache's index or run writer under a device that goes away mid-transfer. Compare against `921ea6a`, the last commit before phase 5, to see whether it passed there.
+* `mount`: failed in the set at 218 s and passed alone afterwards. Its dirty row is the one entry 15 fixed; treat the set failure as another instance of entry 2, the pooled runs, unless it repeats.
+
+Mutations: the `growset` one is proved, `grow` fails without the block-bitmap ranges. The `ata` one is void, since `bus` fails already; prove it again once `bus` is green. The `ext2` one printed nothing and must be run again.
+
+The Lenovo-sized grow record ran again on the fast kernel and failed at the same place, row 3, after 6803 s: rows 1 and 2 passed with `coverage: 14930 extents written, 0 outside the set`. The row kills `growroot` inside `resize2fs` and runs it again; on a 931 GiB volume the second run's `e2fsck -f -p` after a killed resize is what takes the time. Give that row its own longer step timeout, or record the Lenovo proof from rows 1 and 2 alone and leave row 3 to the 16 GiB default, where it passes.
