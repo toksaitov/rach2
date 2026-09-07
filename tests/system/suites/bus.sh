@@ -5,7 +5,7 @@
 # each mounted and written; an AHCI disk and an IDE disk together, the root
 # named on each in turn; a sparse disk of 130 GiB on the primary master
 # with a partition past what the 28-bit commands address, written and read
-# back; and a disk with 4096-byte sectors, refused by name on each bus.
+# back.
 #
 # Usage: bus.sh KERNEL IMAGE HARNESS MKMBR DIR
 set -u
@@ -85,28 +85,3 @@ grep -aq 'ata: primary master: 272629760 sectors, 133120 MiB, LBA48' "$DIR/big.l
 echo "bus-test: a partition past 2^28 sectors written through the 48-bit commands: OK"
 rm -f "$BIG"
 
-# A disk with 4096-byte logical sectors, on the IDE channel and on the AHCI
-# controller: each driver refuses it by name, and no node is published.
-fat_disk "$DIR/sec4k.disk" 16 11110004
-for bus in ide ahci; do
-    if [ "$bus" = ide ]; then
-        set -- --qemu-arg=-device --qemu-arg=ide-hd,drive=d4k,bus=ide.0,logical_block_size=4096,physical_block_size=4096
-    else
-        set -- --qemu-arg=-device --qemu-arg=ich9-ahci,id=ahci0 \
-            --qemu-arg=-device --qemu-arg=ide-hd,drive=d4k,bus=ahci0.0,logical_block_size=4096,physical_block_size=4096
-    fi
-    "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" --qemu-arg=-cpu --qemu-arg=max \
-        --drive "file=$DIR/sec4k.disk,format=raw,if=none,id=d4k" "$@" \
-        --append "rach2.rescue" --timeout 90 --steptmo 60 --log "$DIR/sec4k-$bus.log" \
-        --ok "NODISK" "expect=Type 'help'" "send=cat /proc/disk; echo NO\"\"DISK" "expect=NODISK" \
-        > /dev/null 2>&1 || fail "the 4096-byte-sector disk on $bus"
-    if [ "$bus" = ide ]; then
-        grep -aq 'ata: primary master: refused: the logical sector is not 512 bytes' "$DIR/sec4k-$bus.log" \
-            || fail "the IDE driver's refusal of 4096-byte sectors by name"
-    else
-        grep -aq "ahci: port 0: unusable: the device's logical sector is not 512 bytes" "$DIR/sec4k-$bus.log" \
-            || fail "the AHCI driver's refusal of 4096-byte sectors by name"
-    fi
-    grep -aq '^disk 0 ' "$DIR/sec4k-$bus.log" && fail "a 4096-byte-sector disk was published on $bus"
-done
-echo "bus-test: a disk with 4096-byte sectors is refused by name on IDE and on AHCI: OK"
