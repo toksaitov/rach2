@@ -82,6 +82,8 @@ A test is proved by making it fail, in three steps: the unmodified test passes; 
 
 A step that costs the owner time, allowance or a device is checked before it is started. That covers a build from clean, a full set, a Codex round, a hardware sitting, and any run a person waits for. The check is to read what would stop it: `dev-log/50-shortcomings/plan.md`, the milestone's notes, and the code the step depends on. Where a form is known to work, use that form. A minute of reading is worth an hour of running, and a step whose conditions were not checked is not started.
 
+A build while a run is in flight voids that run. The suites read the kernel and the images from `build/`, so a rebuild part way through replaces what the remaining suites boot and the finished ones were judged on. Before `make`, check for a running set with `ps` and either wait or stop it deliberately. On 2026-09-07 two full sets of about thirty-five minutes each were lost to this, both times by rebuilding the moment a fix was written.
+
 A run in flight is watched, not waited on. Stream its log and react to the first failing line, since most failures arrive in the first seconds and the rest of the run is then wasted. Do not sleep until a run ends to find out how it ended.
 
 The whole output of a long run is kept. Write it to a file and read the file; never pipe it through `tail` or `head`, which throws away the failure and forces the run again. On 2026-09-07 a full set was piped through `tail -22`, its five failures were lost, and the suites were started a second time to see what the first run had already said.
