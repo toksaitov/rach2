@@ -82,6 +82,8 @@ A test is proved by making it fail, in three steps: the unmodified test passes; 
 
 A step that costs the owner time, allowance or a device is checked before it is started. That covers a build from clean, a full set, a Codex round, a hardware sitting, and any run a person waits for. The check is to read what would stop it: `dev-log/50-shortcomings/plan.md`, the milestone's notes, and the code the step depends on. Where a form is known to work, use that form. A minute of reading is worth an hour of running, and a step whose conditions were not checked is not started.
 
+The whole output of a long run is kept. Write it to a file and read the file; never pipe it through `tail` or `head`, which throws away the failure and forces the run again. On 2026-09-07 a full set was piped through `tail -22`, its five failures were lost, and the suites were started a second time to see what the first run had already said.
+
 A run that fails part way is resumed at the failing step. Rebuild what changed, run the suite that failed, and run the others again only when the change could have touched them. Work that does not depend on a running job is started beside it. When a failure repeats in a new form, write down the general rule and keep the instance as its example.
 
 On 2026-09-07 this was ignored three times in one hour. A clean build was started twice in the two forms entry 5 of the shortcomings list says fail, and then a whole set was restarted from its first suite rather than resumed at the failure.
