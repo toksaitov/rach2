@@ -2,94 +2,82 @@
 
 ## Where the work stands
 
-Phase 1 is part done. What is on `master` is the first half: every xHCI
-controller is driven from a record of its own. What is on the branch
-`48-sizing-wip` is the second half, unfinished: the tables sized from each
-controller's own capability registers.
+Phase 1 is done. Phase 2 is part done: the driver layer holds interfaces and
+the e1000 has a record per card, but the stack above them is still written for
+one interface. Phases 3 and 4 have not been started.
 
-Phases 2, 3 and 4 have not been started.
+## Phase 1, done
 
-## What is done, on master
+Commits `f71aad0` through `a1c01ee`.
 
-Commit `f71aad0`, "Give every xHCI controller its own record, rings and
-interrupt".
-
-`struct xhci_ctrl` holds what used to be forty file-scope variables in
-`xhci.c`: the aperture, the capability record, the legacy-handoff state, the
-PCI position, the command and event rings, the context base array, the
-per-port state, the completions, the slot table, the input context and the
-command in flight. `ctrls[XHCI_MAX_CONTROLLERS]` holds four of them. Every
-function in the driver takes the controller as its first argument, named `hc`;
-the register accessors in `struct xhci_io` take it too, so a host test can
-model two controllers.
+Every xHCI controller is driven from `struct xhci_ctrl`, one per controller,
+holding what used to be forty file-scope variables in `xhci.c`: the aperture,
+the capability record, the legacy-handoff state, the PCI position, the command
+and event rings, the context base array, the per-port state, the completions,
+the slot table, the input context and the command in flight. Every function in
+the driver takes it as `hc`, and the register accessors in `struct xhci_io`
+take it too, so a host test can model two controllers.
 
 `xhci_discover` walks the whole bus and takes a record for every xHCI
-controller on it, in the order the walk finds them. A controller of another
-interface is named and not driven, through `usb_interface_name`, which moved
-from `usb.c` to `usb.h`. A controller whose bring-up fails is left out of the
-table and says why; the others still come up. `xhci_controllers()` and
-`xhci_controller(n)` are how the rest of the kernel reaches them, and
-`xhci_number(hc)` is a controller's place in the table.
+controller on it. A controller of another interface is named and not driven,
+through `usb_interface_name`. A controller whose bring-up fails is left out and
+says why; the others still come up. `xhci_controllers`, `xhci_controller` and
+`xhci_number` are how the rest of the kernel reaches them.
 
-Above the driver: `usb_device_state` records which controller a device is on,
-and `usb_core_step` drains and scans every controller in one pass. The
-enumeration turn, the refused-port bitmap and the unentered-port bitmap are
-one per controller, so two controllers enumerate beside each other. A hub
-record and a stick record each carry their controller. The port operations
-take the controller as their first argument; a hub ignores it, since a hub is
-reached through transfers to its own device. `usb_init` brings up each
-controller on its own and `usb_interrupts_start` gives each its own vector,
-with the one handler draining them all.
+The tables are sized from each controller's own registers: the port state and
+the slot table from what it reports, the scratchpads as many as it asks for,
+and a slot's device context and each endpoint's ring one heap page each, taken
+when the slot is addressed and given back when it closes. Because the heap is
+not identity-mapped, every address the controller reads is the physical one
+recorded beside the pointer this kernel reaches it by.
 
-`xhci_error(0)` answers with the discovery's own error rather than
-dereferencing a controller that does not exist, which is what a machine with
-no xHCI asks for; the same for `xhci_ports(0)`.
+Above the driver: a device's record and a hub's record are each an
+identity-mapped frame, taken when the device appears and given back when it
+goes, so the controller can write a device's descriptors and reports straight
+into it. A configuration is read whole, and one longer than the record's
+buffer is refused by name. A device that finds no slot waits in `ST_SLOTWAIT`
+and takes one when another device goes. A hub port above fifteen is reached
+through the route encoding the standard defines, where the translator's own
+port number says which port it really is.
 
-Proved by `tests/run host` (all of it, including the four USB host tests),
-`tests/run usb`, `tests/run usbdisk` and `tests/run default`.
+Two faults came out of the work. The endpoint ring's link block pointed at the
+ring's virtual address, which the controller reads as physical. And
+completions were matched by slot number alone, which repeats across
+controllers, so a hub on one controller took the other's answers; `struct
+usb_completion` now carries the controller that answered.
 
-## What is on the branch, unfinished
+Proofs: the whole host tier, with new rows for the slot wait, the port above
+fifteen and the long configuration, each proved by mutation; `tests/run usb`
+with a two-controller row where four devices run across two controllers and a
+keyboard still types; `usbdisk`, `memory`, `pools`, `queue`, `default`.
 
-Branch `48-sizing-wip`, commit `8f41a64`. It builds and the kernel is correct
-as far as the compiler goes; `xhci_hosttest` fails 479 rows and the cause is
-not yet found.
+## Phase 2, part done
 
-What it changes:
+Commits `58482dc` and `89eaee9`.
 
-* The scratchpad pages come from the heap, as many as the controller asks for,
-  instead of thirty-two compiled in. The array of their addresses is one page,
-  which holds 512, and a controller asking for more is refused by name.
-  `XHCI_MAX_SCRATCHPADS` is that 512.
-* The per-port state is four heap arrays sized from `caps.max_ports` instead
-  of sixteen compiled in. `XHCI_MAX_PORTS` is 255, the range of the standard's
-  field, and a controller reporting more is refused rather than clipped.
-* The slot table and the context base array are sized from `caps.max_slots`,
-  and the controller is told to enable every slot it offers rather than
-  `min(its own, 12)`. `XHCI_SLOTS` is 255.
-* A slot's device context and each endpoint's ring are one page each, taken
-  from the heap when the slot is addressed and when the endpoint is opened,
-  and given back in `xhci_device_closed`. The endpoint ring is a page, so
-  `XHCI_EP_RING_TRBS` is 256 rather than 16.
-* Because the heap's pages are not identity-mapped, every address the
-  controller reads is now the physical one recorded beside the pointer this
-  kernel reaches it by: `dcbaa_phys`, `scratchpad_array_phys`, `ctx_phys` and
-  `ring_phys[dci]`.
-* `ctrl_free_tables` gives back what a record holds, called when the registers
-  are read again and when a record is reused by a later discovery.
-* `xhci_hosttest` gained a page arena and a bump allocator for the kernel heap
-  it now needs, and its rows for the scratchpad limit, the slot count and the
-  port count were rewritten to the new contract.
+`struct netdev` is one interface: the driver, that driver's own record for the
+card, and the name and index the rest of the kernel knows it by. A driver's
+`init` takes the number of the card it is being asked for and hands back its
+own record; every other operation takes that record. `netdev_probe` asks each
+driver for its cards one after another and makes an interface of each, naming
+them `eth0` upward and numbering them from one. A card that is in the machine
+and will not start is silenced and left out, and the drivers after it are
+still asked, so a machine whose second card is broken keeps its first.
 
-Where to pick it up: the 479 failures begin at "and it can be addressed",
-which is `xhci_device_address` returning non-zero, which is `slot_pages`
-failing, which is the test's page arena giving nothing back. The arena is
-1024 pages and the test opens few slots, so either a page is leaked on a path
-that does not reach `xhci_device_closed`, or the arena's bump reset in the
-test's `kfree` frees memory that is still live. Check the second first: the
-reset was added on the assumption that the driver gives every plain
-allocation back before it takes another, and `ctrl_free_tables` frees the slot
-table after freeing the slots' pages, so a page freed after the reset would be
-handed out twice.
+The e1000 has `struct e1000` per card, holding its registers, rings, buffers
+and counters, with its interrupt handler servicing every card it brought up,
+since the line is shared. `pci_find_nth_by_id` is what finds the second card
+of an identity. The RTL8139 and the RTL8168 keep one card each and say so.
+
+What is left in phase 2, and it is the larger half: the stack above the
+interfaces. `net_mac`, `net_ip_addr`, `net_ip_mask` and `net_ip_gateway` in
+`rach2/sys/network/net.h` are one set for the machine, and every consumer
+reads them directly: ARP, IP, TCP, UDP, DHCP, the sockets, `/proc/net/*` and
+the `SIOCGIF*` ioctls. Each has to become the interface's own, with an ARP
+entry naming its interface, a route selecting one, and the configuration
+matched by MAC so probe order does not decide policy. Every caller that now
+says `netdev_first()` is a place where the interface has to be chosen rather
+than assumed; that is the list of what remains.
 
 ## What is left in the milestone
 
