@@ -22,6 +22,10 @@
  */
 
 extern int printf(const char *fmt, ...);
+extern int strcmp(const char *a, const char *b);
+extern int fork(void);
+extern int waitpid(int pid, int *status, int options);
+extern void _exit(int status);
 
 #include "../../rach2/sys/block/ahci.h"
 #include "../../rach2/sys/block/block.h"
@@ -37,6 +41,11 @@ static int handoff_answers;
 static int link_comes_up;
 static int command_completes;
 static int fatal_status;
+static int engine_stuck;
+static unsigned stop_reads;
+static unsigned issued;
+static unsigned completed;
+static uint32_t interrupts_masked;
 /* What the model says it moved, which the driver compares with what it
    asked for. */
 static uint32_t moved_bytes;
@@ -80,6 +89,9 @@ static uint32_t model_r32(uint32_t off)
 {
     if (off >= REGS) {
         return 0;
+    }
+    if (off == P0 + P_CMD && engine_stuck) {
+        stop_reads++;
     }
     if (off == P0 + P_CI) {
         ci_reads++;
@@ -131,8 +143,9 @@ static void model_w32(uint32_t off, uint32_t v)
         /* The engines follow the bits that start and stop them. */
         if (v & CMD_ST) {
             v |= CMD_CR;
-        } else {
+        } else if (!engine_stuck) {
             v &= ~CMD_CR;
+            reg[P0 + P_CI] = 0;
         }
         if (v & CMD_FRE) {
             v |= CMD_FR;
@@ -159,6 +172,7 @@ static void model_w32(uint32_t off, uint32_t v)
            bytes it moved; one it does not leaves the bit set until the
            driver's wait gives up. The byte count is the controller's word for
            what it did, and the driver checks it, so the model must give one. */
+        issued++;
         reg[off] = command_completes ? 0 : v;
         if (command_completes && on_command_issued) {
             on_command_issued();
@@ -303,13 +317,13 @@ void block_count_batch(uint32_t sectors)
     (void)sectors;
 }
 
-/* The interrupt-driven path's surroundings, which no row here reaches: the
-   rows drive the polled commands, and the switch is never asked for. */
+/** Count completions so failed recovery cannot release a DMA buffer. */
 void block_request_complete(struct block_request *request, uint32_t generation, int status)
 {
     (void)request;
     (void)generation;
     (void)status;
+    completed++;
 }
 
 int isr_alloc_vector(void)
@@ -325,12 +339,15 @@ int kcmdline_has(const char *token)
 
 uint32_t kirq_save(void)
 {
-    return 0;
+    uint32_t old = interrupts_masked;
+
+    interrupts_masked = 1;
+    return old;
 }
 
 void kirq_restore(uint32_t flags)
 {
-    (void)flags;
+    interrupts_masked = flags;
 }
 
 int lapic_ready(void)
@@ -419,9 +436,80 @@ static void model_reset(void)
     link_comes_up = 1;
     command_completes = 1;
     fatal_status = 0;
+    engine_stuck = 0;
+    stop_reads = issued = completed = 0;
+    interrupts_masked = 0;
     reg[R_CAP2] = 0u; /* no handoff, unless a row asks for one */
     block0 = 0;
     ahci_set_io(&model_io);
+}
+
+static struct block_request active_request;
+static struct block_request queued_request;
+static int expect_active;
+static int expect_panic;
+
+/** A panic must precede every release or reuse of the active DMA state. */
+void k_panic(const char *s)
+{
+    struct ahci_disk *d = &ahci_disks[0];
+
+    if (expect_panic &&
+        strcmp(s, "ahci: recovery: command engine did not stop; DMA buffer still owned") == 0 &&
+        interrupts_masked && stop_reads > 1 && issued == 0 && completed == 0 &&
+        d->active == (expect_active ? &active_request : 0) && d->queue_head == &queued_request &&
+        d->queue_tail == &queued_request && d->cmdtable[0] == 0xA5 && (reg[P0 + P_CMD] & CMD_CR) &&
+        !(reg[P0 + P_CMD] & CMD_ST)) {
+        _exit(42);
+    }
+    _exit(43);
+}
+
+/**
+ * Fail engine stop in each completion path. A child lets the test observe a
+ * panic without returning into code that could reuse the controller's buffer.
+ */
+static void stuck_recovery(int path)
+{
+    int pid = fork();
+    int status = 0;
+
+    CHECK("the recovery row forks", pid >= 0);
+    if (pid < 0) {
+        return;
+    }
+    if (pid == 0) {
+        struct ahci_disk *d = &ahci_disks[0];
+
+        model_reset();
+        if (ahci_select_port() != 0 || ahci_port_start(d) != 0) {
+            _exit(44);
+        }
+        expect_panic = 1;
+        expect_active = path != 3;
+        active_request.count = 1;
+        active_request.page = (void *)0x1000;
+        d->active = expect_active ? &active_request : 0;
+        d->queue_head = d->queue_tail = &queued_request;
+        d->cmdtable[0] = 0xA5;
+        engine_stuck = 1;
+        reg[P0 + P_CI] = 1;
+        if (path == 0) {
+            reg[P0 + P_IS] = AHCI_PxIS_FATAL;
+            ahci_handler(0);
+        } else if (path == 1) {
+            ahci_drain(d);
+        } else if (path == 2) {
+            reg[P0 + P_CI] = 0;
+            reg[P0 + P_IS] = AHCI_PxIS_FATAL;
+            ahci_handler(0);
+        } else {
+            ahci_polled_failed(d);
+        }
+        _exit(45);
+    }
+    CHECK("the recovery child is reaped", waitpid(pid, &status, 0) == pid);
+    CHECK("failed engine stop preserves DMA ownership before halting", status == (42 << 8));
 }
 
 int main(void)
@@ -526,6 +614,11 @@ int main(void)
         CHECK("and never reaches the port", ci_reads == 0);
         policy_allows = 1;
     }
+
+    stuck_recovery(0);
+    stuck_recovery(1);
+    stuck_recovery(2);
+    stuck_recovery(3);
 
     if (fails == 0) {
         printf("ahci_hosttest: PASS\n");

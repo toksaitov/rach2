@@ -15,6 +15,7 @@
 #include "../pit.h"
 #include "../cmdline.h"
 #include "../latency.h"
+#include "../panic.h"
 
 #include "../lib/kerrno.h"
 #include "../lib/kint.h"
@@ -825,19 +826,24 @@ static void ahci_zero(volatile uint8_t *p, uint32_t n)
  * on a stopped engine and wedge the port until a fresh `ahci_init`. Clearing
  * `PxCMD.ST` resets `PxCI`; once `CR` is clear the latched errors clear and the
  * engine restarts, leaving the port able to serve the next command. If the
- * engine will not stop, the port stays down and recovery fails closed rather
- * than restart a wedged engine. All bounded MMIO, so it is safe at IF=0. */
+ * engine will not stop, panic with interrupts masked before a request or a
+ * polled caller can release its DMA buffer. The controller may still use the
+ * buffer and command table, so neither may be reused. All bounded MMIO, so
+ * it is safe at IF=0.
+ */
 static int ahci_io_error(struct ahci_disk *d)
 {
     uint32_t cmd_off = ahci_port_off(d->port, AHCI_PxCMD);
+    uint32_t flags = kirq_save();
 
     ahci_write32(cmd_off, ahci_read32(cmd_off) & ~AHCI_PxCMD_ST);
     if (ahci_wait_clear(cmd_off, AHCI_PxCMD_CR) != 0) {
-        return -EIO;
+        k_panic("ahci: recovery: command engine did not stop; DMA buffer still owned");
     }
     ahci_write32(ahci_port_off(d->port, AHCI_PxSERR), 0xFFFFFFFFu);
     ahci_write32(ahci_port_off(d->port, AHCI_PxIS), 0xFFFFFFFFu);
     ahci_write32(cmd_off, ahci_read32(cmd_off) | AHCI_PxCMD_ST);
+    kirq_restore(flags);
     return -EIO;
 }
 
