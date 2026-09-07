@@ -26,7 +26,7 @@ The ext2 descriptor table is taken from the heap at mount, so there is no compil
 
 `tests/run disks`, `parts`, `bootorder`, `bus`, `queue`, `usbdisk`, `large` and `grow` are new or rewritten for this milestone, and the older disk, mount, file-system and boot suites run unchanged against the new paths. The proofs of the large-file and grow work are recorded once at their full size and run small by default: `RACH2_LARGE_MIB=5120` writes a 5 GiB file on ext2 and on exFAT, and `RACH2_GROW_LENOVO=1` grows a 1 GiB root to a partition the size of the installed machine's disk.
 
-Four mutations were proved: a partition service that takes the first match rather than the only one fails `parts`; a driver that never chooses the 48-bit commands fails `bus`; a driver left polled after the switch fails `queue`; a grow set without its block-bitmap ranges fails `grow`; and an ext2 file limit of 4 GiB fails `large`. A dirty ext2 volume on a machine with no free frames mounts read-only by name, which the host test proves by mutation as well.
+Five mutations were proved: a partition service that takes the first match rather than the only one fails `parts`; a driver that never chooses the 48-bit commands fails `bus`; a driver left polled after the switch fails `queue`; a grow set without its block-bitmap ranges fails `grow`; and an ext2 file limit of 4 GiB fails `large`. A dirty ext2 volume on a machine with no free frames mounts read-only by name, which the host test proves by mutation as well.
 
 ## The machine
 
@@ -34,7 +34,15 @@ Nothing in this milestone touched the Lenovo. The grow, the identity roots and t
 
 ## Trust
 
-MILESTONE_TRUST
+The rates the disk path reaches are QEMU's, not a disk's: a file written through ext2 on the emulated AHCI controller goes at about 8 MiB a second and through exFAT at about 10, against 4 and 1 before the request layer and the buffer cache were widened. What the change proves is that the path moves a run of blocks per request and finds a block without walking its list; it says nothing about the Lenovo's controller.
+
+A disk with a logical sector other than 512 bytes is refused by both drivers, and that refusal is unproved in QEMU: its IDE and AHCI models take no such drive, so the row written for it was removed and the restriction stands on the code alone. Entry 11 of the shortcomings list records it.
+
+The grow is proved on a 16 GiB disk by default and once on a partition the size of the installed machine's, both in QEMU, with `growset` computing the sectors the grow writes and `qemu-img map` confirming that nothing outside them was written. The memory a grow needs was measured by halving the machine down to 16 MiB, where it still finished; 8 MiB does not boot, which entry 12 records. Neither says what the machine will do with a disk that answers slowly.
+
+The check's workspace and the descriptor table come from the heap, so a volume is bounded by memory rather than by a compiled limit. The refusal when memory is short is proved by a host test with the free frames forced to none; it is not proved on a machine that ran out of memory while working.
+
+`resize2fs` and `growroot` are staged on the recovery system and have never run on hardware. The identity roots, the interrupt-driven controller and the queue behind each port are likewise proved only in QEMU, and milestone 50 is the first run on the machine.
 
 ## What was accepted
 
