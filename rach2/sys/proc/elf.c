@@ -7,6 +7,8 @@
 #include "../mm/vm.h"
 #include "../lib/kstring.h"
 #include "../serial.h"
+#include "../klog.h"
+#include "../proc/process.h"
 
 /* The user image window: a PT_LOAD segment must fit between the user/kernel
  * boundary and the bottom of the user stack (matching the kernel's
@@ -310,6 +312,7 @@ uint32_t elf_phdr_vaddr(const Elf32_Phdr *phdrs, uint16_t phnum, uint32_t phoff)
 int elf_load_image(elf_read_fn readfn, void *ctx, page_dir_t *dir, elf_image_t *out)
 {
     static Elf32_Phdr phdrs[ELF_MAX_PHNUM];
+    Elf32_Phdr saved_phdrs[ELF_MAX_PHNUM];
     Elf32_Ehdr ehdr;
     uint16_t i;
     uint32_t ph_bytes;
@@ -317,6 +320,7 @@ int elf_load_image(elf_read_fn readfn, void *ctx, page_dir_t *dir, elf_image_t *
     int nload = 0;
 
     if (!readfn || !dir || !out) {
+        klog(KLOG_ERR, "elf", "reject: pid %d line %d", (int)current_proc->pid, __LINE__);
         return -1;
     }
 
@@ -324,17 +328,21 @@ int elf_load_image(elf_read_fn readfn, void *ctx, page_dir_t *dir, elf_image_t *
     out->image_end = 0;
 
     if (readfn(ctx, &ehdr, sizeof(ehdr), 0) != (int)sizeof(ehdr)) {
+        klog(KLOG_ERR, "elf", "reject: pid %d line %d", (int)current_proc->pid, __LINE__);
         return -1;
     }
     if (!elf_valid_exec(&ehdr, sizeof(ehdr)) || ehdr.e_phnum > ELF_MAX_PHNUM) {
+        klog(KLOG_ERR, "elf", "reject: pid %d line %d", (int)current_proc->pid, __LINE__);
         return -1;
     }
 
     ph_bytes = (uint32_t)ehdr.e_phnum * sizeof(Elf32_Phdr);
     if (readfn(ctx, phdrs, ph_bytes, ehdr.e_phoff) != (int)ph_bytes) {
+        klog(KLOG_ERR, "elf", "reject: pid %d line %d", (int)current_proc->pid, __LINE__);
         return -1;
     }
 
+    k_memcpy(saved_phdrs, phdrs, ph_bytes);
     for (i = 0; i < ehdr.e_phnum; i++) {
         Elf32_Phdr *ph = &phdrs[i];
         uint32_t vaddr, vaddr_end, page_addr;
@@ -344,7 +352,8 @@ int elf_load_image(elf_read_fn readfn, void *ctx, page_dir_t *dir, elf_image_t *
             continue;
         }
         if (ph->p_filesz > ph->p_memsz) {
-            return -1;
+            klog(KLOG_ERR, "elf", "reject: pid %d line %d", (int)current_proc->pid, __LINE__);
+        return -1;
         }
 
         vaddr = ph->p_vaddr;
@@ -360,13 +369,16 @@ int elf_load_image(elf_read_fn readfn, void *ctx, page_dir_t *dir, elf_image_t *
          * bytes), so a segment must start on or after the previous one's
          * page-aligned end. */
         if (vaddr_end < vaddr || ph->p_offset + ph->p_filesz < ph->p_offset) {
-            return -1;
+            klog(KLOG_ERR, "elf", "reject: pid %d line %d", (int)current_proc->pid, __LINE__);
+        return -1;
         }
         if (vaddr < ELF_USER_MIN || vaddr_end > ELF_USER_MAX) {
-            return -1;
+            klog(KLOG_ERR, "elf", "reject: pid %d line %d", (int)current_proc->pid, __LINE__);
+        return -1;
         }
         if ((vaddr & ~(PAGE_SIZE - 1)) < prev_end) {
-            return -1;
+            klog(KLOG_ERR, "elf", "reject: pid %d line %d", (int)current_proc->pid, __LINE__);
+        return -1;
         }
         prev_end = (vaddr_end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
         nload++;
@@ -382,7 +394,8 @@ int elf_load_image(elf_read_fn readfn, void *ctx, page_dir_t *dir, elf_image_t *
             uint32_t seg_end = (vaddr_end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
 
             if (out->nsegs >= ELF_MAX_SEGS) {
-                return -1;
+                klog(KLOG_ERR, "elf", "reject: pid %d line %d", (int)current_proc->pid, __LINE__);
+        return -1;
             }
             out->segs[out->nsegs].start = seg_start;
             out->segs[out->nsegs].end = seg_end;
@@ -398,10 +411,12 @@ int elf_load_image(elf_read_fn readfn, void *ctx, page_dir_t *dir, elf_image_t *
             uintptr_t phys_addr = alloc_user_page(dir, page_addr);
 
             if (phys_addr == 0) {
-                return -1;
+                klog(KLOG_ERR, "elf", "reject: pid %d line %d", (int)current_proc->pid, __LINE__);
+        return -1;
             }
             if (paging_zero_frame(phys_addr) != 0) {
-                return -1;
+                klog(KLOG_ERR, "elf", "reject: pid %d line %d", (int)current_proc->pid, __LINE__);
+        return -1;
             }
         }
 
@@ -426,21 +441,36 @@ int elf_load_image(elf_read_fn readfn, void *ctx, page_dir_t *dir, elf_image_t *
             pte_idx = (page_base / PAGE_SIZE) % 1024;
             pt = dir->logical_page_tables[pde_idx];
             if (!pt) {
-                return -1;
+                klog(KLOG_ERR, "elf", "reject: pid %d line %d", (int)current_proc->pid, __LINE__);
+        return -1;
             }
             phys_base = pt->pages[pte_idx] & ~0xFFF;
 
             {
                 uint8_t *page = kmap_temp(phys_base);
                 int got;
+                uint32_t j;
 
                 if (!page) {
-                    return -1;
+                    klog(KLOG_ERR, "elf", "reject: pid %d line %d", (int)current_proc->pid, __LINE__);
+        return -1;
                 }
                 got = readfn(ctx, page + page_offset, chunk_size, file_offset + copied);
                 kunmap_temp(page);
+                for (j = 0; j < ph_bytes; j++) {
+                    if (((uint8_t *)saved_phdrs)[j] != ((uint8_t *)phdrs)[j]) break;
+                }
+                if (j != ph_bytes) {
+                    klog(KLOG_ERR, "elf", "headers changed: pid %d segment %d off %d got %d wanted %d",
+                         (int)current_proc->pid, (int)i, (int)(file_offset + copied), got, (int)chunk_size);
+                    klog(KLOG_ERR, "elf", "header: before vaddr %x offset %x size %x; after vaddr %x offset %x size %x",
+                         saved_phdrs[i].p_vaddr, saved_phdrs[i].p_offset, saved_phdrs[i].p_filesz,
+                         phdrs[i].p_vaddr, phdrs[i].p_offset, phdrs[i].p_filesz);
+                    k_memcpy(saved_phdrs, phdrs, ph_bytes);
+                }
                 if (got != (int)chunk_size) {
-                    return -1;
+                    klog(KLOG_ERR, "elf", "reject: pid %d line %d", (int)current_proc->pid, __LINE__);
+        return -1;
                 }
             }
             copied += chunk_size;
@@ -488,9 +518,11 @@ int elf_load_image(elf_read_fn readfn, void *ctx, page_dir_t *dir, elf_image_t *
      * entry point must be in the user window. */
     out->phdr_vaddr = elf_phdr_vaddr(phdrs, ehdr.e_phnum, ehdr.e_phoff);
     if (nload == 0 || out->phdr_vaddr == 0) {
+        klog(KLOG_ERR, "elf", "reject: pid %d line %d", (int)current_proc->pid, __LINE__);
         return -1;
     }
     if (ehdr.e_entry < ELF_USER_MIN || ehdr.e_entry >= ELF_USER_MAX) {
+        klog(KLOG_ERR, "elf", "reject: pid %d line %d", (int)current_proc->pid, __LINE__);
         return -1;
     }
     out->entry = ehdr.e_entry;
@@ -532,7 +564,8 @@ int elf_setup_vmas(struct vm_space *vm, const elf_image_t *img,
         }
         vt = (flags & PF_X) ? VM_CODE : VM_DATA;
         if (vm_insert(vm, img->segs[si].start, img->segs[si].end, prot, vt) != 0) {
-            return -1;
+            klog(KLOG_ERR, "elf", "reject: pid %d line %d", (int)current_proc->pid, __LINE__);
+        return -1;
         }
     }
 

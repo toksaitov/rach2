@@ -412,7 +412,7 @@ esac
 # through the machine's own driver would be judging the writer with the
 # reader that is under test beside it.
 machine 'sync' > /dev/null 2>&1 || true
-OUT="$(dd if="$WORK" bs=512 skip=$((ROOT_OFF / 512)) count=$((ROOT_BYTES / 512)) status=none \
+OUT="$(dd if="$WORK" bs=512 skip="$((ROOT_OFF / 512))" count="$((ROOT_BYTES / 512))" status=none \
     | shasum -a 256 | awk '{print $1}')"
 case "$OUT" in
     "$ROOT_SHA") ;;

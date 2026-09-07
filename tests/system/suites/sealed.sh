@@ -702,7 +702,7 @@ esac
 # machine's own read path is proved by the suites that mount this root.
 machine 'sync' > /dev/null 2>&1 || true
 stop_machine
-OUT="$(dd if="$WORK" bs=512 skip=$ROOT_LBA count=$ROOT_SECTORS status=none | shasum -a 256 | awk '{print $1}')"
+OUT="$(dd if="$WORK" bs=512 skip="$ROOT_LBA" count="$ROOT_SECTORS" status=none | shasum -a 256 | awk '{print $1}')"
 case "$OUT" in
     "$ROOT_SHA") ;;
     *) fail "the root written does not hash as the image sent: $OUT" ;;
