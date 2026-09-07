@@ -340,6 +340,17 @@ else
             "/dev/disk0p1 /mnt/accept-boot vfat ro"*) note "partitions: /dev/disk0p1 mounted read-only, as asked" ;;
             *) bad "partitions: /dev/disk0p1 mounted, but /proc/mounts does not say read-only" ;;
         esac
+        # The volume must be the boot partition before its files are judged.
+        # A machine with no hard disk has a stick as disk0, and its first
+        # partition is a FAT volume that mounts and holds none of this.
+        case "$OUT" in
+            *" kernel"*) ;;
+            *)
+                note "partitions: /dev/disk0p1 is a FAT volume without a kernel, so not this machine's boot partition"
+                OUT="" ;;
+        esac
+    fi
+    if [ -n "$OUT" ]; then
         # The listing's sizes against the slot report: the same bytes read
         # through two paths, the FAT driver and bootslot's own walk.
         for name in kernel fallback boot.cfg grubenv; do
@@ -524,10 +535,10 @@ fi
 #      room and are in dev-log/40-usbdisk/hardware.md.
 #      The stick is whichever disk slot holds one: the kernel reclaims a slot
 #      only when its next stick is found, so the machine's first stick may be
-#      usb1 for a while. The volume is the first FAT or exFAT partition blkid
+#      disk1 for a while. The volume is the first FAT or exFAT partition blkid
 #      finds on it; a Rach2 stick's ISO half is listed and left alone, since
 #      it is the boot half of a recovery stick and takes no file. ----
-USBLINE="$(run 'cat /proc/usb 2>/dev/null' | grep '^usb[0-9]* ' | head -1 || true)"
+USBLINE="$(run 'cat /proc/usb 2>/dev/null' | grep '^disk[0-9]* ' | head -1 || true)"
 if [ -z "$USBLINE" ]; then
     note "no flash drive is plugged in (/proc/usb names no usb disk)"
 else

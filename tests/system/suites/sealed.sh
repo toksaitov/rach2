@@ -686,7 +686,7 @@ arm_next recovery
 
 cold_boot recovery
 grep -aq "modules: found" "$LOG" || fail "the armed entry did not load the recovery image"
-OUT="$(machine 'test -c /dev/disk0 && echo RECOVERY""HERE' || true)"
+OUT="$(machine 'test -b /dev/disk0 && echo RECOVERY""HERE' || true)"
 case "$OUT" in
     *RECOVERYHERE*) ;;
     *) fail "the recovery entry did not come up with the whole-disk device: $OUT" ;;

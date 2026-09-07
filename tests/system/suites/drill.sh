@@ -284,7 +284,7 @@ if ! "$REPO/build/tests/system/harness" --kernel "$REPO/build/rach2-recovery/ker
         --drive "file=$WORK,format=raw,if=ide,index=0,media=disk" \
         --append "rach2.root=ram" --timeout 180 --steptmo 60 --ok "NODETHERE" \
         "expect=rach2 login:" "send=root" "expect=Password:" "send=$ROOTPASSWORD" \
-        "expect=# " "send=test -c /dev/disk0 && echo NODE\"\"THERE" \
+        "expect=# " "send=test -b /dev/disk0 && echo NODE\"\"THERE" \
         "expect=NODETHERE" wait=3 > /dev/null 2>&1; then
     fail "the recovery kernel did not publish /dev/disk0 without rach2.diskdiag"
 fi
@@ -354,7 +354,7 @@ wait_count "rach2 login:" 1 200 || fail "the recovery entry never reached a logi
 # lease and the key login are what say the machine is reachable.
 wait_count "lease of" 1 90 || fail "recovery never took an address"
 
-OUT="$(machine 'test -c /dev/disk0 && echo DISK""NODE' || true)"
+OUT="$(machine 'test -b /dev/disk0 && echo DISK""NODE' || true)"
 case "$OUT" in
     *DISKNODE*) ;;
     *) fail "recovery has no whole-disk device: $OUT" ;;
@@ -447,7 +447,7 @@ LOG="$DISK.log.latched"
 : > "$STEPS"
 boot_feed net
 wait_count "rach2 login:" 1 200 || fail "the saved recovery default did not boot recovery"
-OUT="$(machine 'test -c /dev/disk0 && echo STILL""RECOVERY' || true)"
+OUT="$(machine 'test -b /dev/disk0 && echo STILL""RECOVERY' || true)"
 case "$OUT" in
     *STILLRECOVERY*) ;;
     *) fail "the machine that came back was not recovery: $OUT" ;;

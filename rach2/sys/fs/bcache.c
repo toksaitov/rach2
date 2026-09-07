@@ -260,8 +260,12 @@ static int write_buffer(struct bbuf *b)
 }
 
 /* The staging buffer a run of blocks is written through, the most one
- * request moves; taken from the heap at the first run. */
+ * request moves; taken from the heap at the first run. One writer at a
+ * time holds it, since the request it hands the bytes to sleeps before it
+ * copies them, and a second writer would overwrite them in that window; a
+ * writer that finds it held writes its blocks one at a time. */
 static uint8_t *run_stage;
+static int run_stage_busy;
 #define RUN_BLOCKS (BLOCK_REQ_MAX_SECTORS / BCACHE_BLOCK_SECTORS)
 
 /**
@@ -284,8 +288,11 @@ static int write_run(struct bbuf *first, uint64_t *last)
     if (most > RUN_BLOCKS) {
         most = RUN_BLOCKS;
     }
-    if (!run_stage && most > 1) {
+    if (!run_stage && most > 1 && !run_stage_busy) {
         run_stage = kalloc_pages(RUN_BLOCKS * BCACHE_BLOCK_BYTES / PAGE_SIZE, 0);
+    }
+    if (run_stage_busy) {
+        most = 1;
     }
     while ((uint32_t)n < most && run_stage && run[n - 1]->bytes == BCACHE_BLOCK_BYTES) {
         struct bbuf *b = index_find(dev, first->blk + (uint64_t)n);
@@ -303,6 +310,7 @@ static int write_run(struct bbuf *first, uint64_t *last)
         *last = first->blk;
         return rc;
     }
+    run_stage_busy = 1;
     for (i = 0; i < n; i++) {
         run[i]->holder = caller_pid();
         k_memcpy(run_stage + bytes, run[i]->data, run[i]->bytes);
@@ -310,6 +318,7 @@ static int write_run(struct bbuf *first, uint64_t *last)
     }
     rc = block_request(dev, 1, first->blk * BCACHE_BLOCK_SECTORS, bytes / BLOCK_SECTOR_SIZE,
                        run_stage);
+    run_stage_busy = 0;
     if (rc != 0) {
         klog(KLOG_WARN, "bcache", "write: sector %d failed (%d), %d blocks kept dirty",
              (int)(first->blk * BCACHE_BLOCK_SECTORS), rc, n);

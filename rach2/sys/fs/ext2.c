@@ -1570,6 +1570,10 @@ static int map_alloc(struct ext2_mount *em, struct ext2_node *n, uint32_t index,
                     if (rc != 0) {
                         return rc;
                     }
+                } else if (em->batch) {
+                    /* The pointer word is in the inode, and the inode is
+                     * written at the batch's end, after the bitmaps. */
+                    *slot = b;
                 } else {
                     *slot = b;
                     rc = inode_store(em, n);
@@ -3365,6 +3369,7 @@ static int ext2_check_volume(struct ext2_mount *em, const char **why)
         rc = read_bytes(em, (uint64_t)(em->first_data + 1) * em->block_size, em->gd,
                         em->groups * 32);
         if (rc != 0) {
+            check_state_free(c);
             return rc;
         }
         klog(KLOG_WARN, "ext2", "check: inode %d: %s", (int)c->fault_ino, c->fault);

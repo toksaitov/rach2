@@ -342,9 +342,15 @@ static int boot_wants_userland_network(void)
  */
 static void configure_network(void)
 {
-    pid_t pid = fork();
+    pid_t pid;
     int status = 0;
 
+    /* What `ifup` recorded on the boot before this one. The file says which
+     * interfaces are up now, and nothing of it survives a restart; on a
+     * machine whose root is a disk it does survive, and `ifup -a` then
+     * refuses eth0 as already configured and brings up nothing. */
+    unlink("/var/run/ifstate");
+    pid = fork();
     if (pid < 0) {
         fprintf(stderr, "init: network: cannot fork ifup\n");
         return;
@@ -365,7 +371,9 @@ static void configure_network(void)
         }
     }
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        fprintf(stderr, "init: network: ifup -a did not configure the interface\n");
+        fprintf(stderr, "init: network: ifup -a did not configure the interface (status %d%s)\n",
+                WIFEXITED(status) ? WEXITSTATUS(status) : -1,
+                WIFEXITED(status) && WEXITSTATUS(status) == 127 ? ", not executed" : "");
     }
 }
 
