@@ -1191,14 +1191,24 @@ static void ahci_handler(isr_params_t *params)
         }
         if (d->active && !(ahci_read32(ahci_port_off(d->port, AHCI_PxCI)) & (1u << AHCI_SLOT))) {
             ahci_finish_active(d);
+            /* The status this interrupt reported is cleared before the next
+             * command is issued. Acknowledging afterwards clears the bit
+             * that command has already set when it finishes quickly, and
+             * the next interrupt then finds nothing to do and leaves it
+             * active until its deadline. */
+            ahci_write32(is_off, is);
             ahci_start_next(d);
-        } else if (d->active && (is & AHCI_PxIS_FATAL)) {
+            continue;
+        }
+        if (d->active && (is & AHCI_PxIS_FATAL)) {
             struct block_request *r = d->active;
 
             (void)ahci_io_error(d);
             d->active = 0;
             block_request_complete(r, d->active_generation, -EIO);
+            ahci_write32(is_off, is);
             ahci_start_next(d);
+            continue;
         }
         ahci_write32(is_off, is);
     }
