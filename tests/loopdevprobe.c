@@ -438,7 +438,7 @@ void probe_main(unsigned int *sp)
     if (streq(type, "pull")) {
         int reads = 0;
 
-        rc = sys5(SYS_MOUNT, (int)"/dev/usb0p1", (int)"/m", (int)"vfat", 0, 0);
+        rc = sys5(SYS_MOUNT, (int)"/dev/disk0p1", (int)"/m", (int)"vfat", 0, 0);
         if (rc != 0) {
             fail_with("mounting the stick's volume", rc);
         }

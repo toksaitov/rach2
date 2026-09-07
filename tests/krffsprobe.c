@@ -1020,7 +1020,7 @@ void probe_main(unsigned int *sp)
     if (streq(mode, "pull")) {
         int tries = 0;
 
-        rc = sys5(SYS_MOUNT, (int)"/dev/usb0p1", (int)"/k", (int)"krffs", 0, 0);
+        rc = sys5(SYS_MOUNT, (int)"/dev/disk0p1", (int)"/k", (int)"krffs", 0, 0);
         if (rc != 0) {
             fail_with("mounting the stick's volume", rc);
         }
@@ -1059,7 +1059,7 @@ void probe_main(unsigned int *sp)
            mount a pointer into it. */
         puts("KRFFSPROBE GONE");
         for (tries = 0; tries < 2000000; tries++) {
-            int fd = sys3(SYS_OPEN, (int)"/dev/usb0p1", O_RDONLY, 0);
+            int fd = sys3(SYS_OPEN, (int)"/dev/disk0p1", O_RDONLY, 0);
 
             if (fd >= 0) {
                 char one[512];
