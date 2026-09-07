@@ -151,6 +151,8 @@ static struct {
     int pull_on_open;    /* the next device opened is pulled while its Enable Slot is out */
     int hold_commands;   /* no command answers while set */
     int slot_cap;        /* the slots the controller has, 0 for fifteen */
+    int long_config;     /* a device whose configuration is 115 bytes */
+    int config_claims;   /* what its header claims, 0 for the truth */
     int change_stall;    /* the change endpoint answers with a stall */
     /* The transfer outstanding on the change endpoint. */
     int change_device;
@@ -515,6 +517,49 @@ static const unsigned char keyboard_config[] = {
 
 static unsigned char hub_config[31];
 
+/*
+ * A configuration longer than the sixty-four bytes this kernel used to read:
+ * a vendor block of ninety, then the interface and its endpoint. A driver
+ * that read only the header's first sixty-four bytes would find no interface
+ * here at all.
+ */
+#define LONG_CONFIG_LEN 115
+static unsigned char long_config[LONG_CONFIG_LEN];
+
+static void long_config_fill(void)
+{
+    int i;
+
+    for (i = 0; i < LONG_CONFIG_LEN; i++) {
+        long_config[i] = 0;
+    }
+    long_config[0] = 9;
+    long_config[1] = 2;
+    long_config[2] = LONG_CONFIG_LEN;
+    long_config[3] = 0;
+    long_config[4] = 1;
+    long_config[5] = 1;
+    long_config[6] = 0;
+    long_config[7] = 0xA0;
+    long_config[8] = 50;
+    /* A vendor descriptor of ninety bytes, which a walker steps over. */
+    long_config[9] = 90;
+    long_config[10] = 0x21;
+    /* The interface and its endpoint, past byte ninety-nine. */
+    long_config[99] = 9;
+    long_config[100] = 4;
+    long_config[103] = 1;
+    long_config[104] = 3;
+    long_config[105] = 1;
+    long_config[106] = 1;
+    long_config[108] = 7;
+    long_config[109] = 5;
+    long_config[110] = 0x81;
+    long_config[111] = 3;
+    long_config[112] = 8;
+    long_config[114] = 10;
+}
+
 /* A USB 2 hub's configuration, or a SuperSpeed hub's: the interface's
  * protocol is the translator kind for USB 2 and zero for USB 3, whose 3 is
  * in the device descriptor; a SuperSpeed hub's status endpoint takes two
@@ -656,6 +701,15 @@ int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb
                 hub_config_fill();
                 cfg = hub_config;
                 len = hub_config[2];
+            } else if (model.long_config) {
+                long_config_fill();
+                if (model.config_claims != 0) {
+                    /* A header claiming a length the device will not give. */
+                    long_config[2] = (unsigned char)(model.config_claims & 0xFF);
+                    long_config[3] = (unsigned char)((model.config_claims >> 8) & 0xFF);
+                }
+                cfg = long_config;
+                len = LONG_CONFIG_LEN;
             }
             for (i = 0; i < len && i < want; i++) {
                 buf[i] = cfg[i];
@@ -1578,6 +1632,23 @@ int main(void)
         CHECK("and the translator carrying the port it is really on",
               kbd != 0 && slot_of[kbd].where.tt_port == 20);
     }
+
+    /* A configuration longer than sixty-four bytes is read whole, and one
+       whose header claims more than this kernel reads is refused by name. */
+    model_reset();
+    model.long_config = 1;
+    model.port_kind[0] = KIND_KBD;
+    pump(4000);
+    CHECK("a device whose configuration is 115 bytes is enumerated", running_count() == 2);
+    CHECK("with the interface found past the first sixty-four bytes", slot_of_kind(KIND_KBD) != 0);
+
+    model_reset();
+    model.long_config = 1;
+    model.config_claims = 5000; /* longer than the record's buffer */
+    model.port_kind[0] = KIND_KBD;
+    pump(4000);
+    CHECK("a configuration longer than this kernel reads is refused",
+          running_count() == 1 && slot_of_kind(KIND_KBD) == 0);
 
     /* Every slot taken: the device waits for one rather than being refused,
        and takes the slot another device gives back. */
