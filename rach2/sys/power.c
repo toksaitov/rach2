@@ -16,6 +16,8 @@
 
 #include "klog.h"
 #include "power.h"
+
+#include "smbios.h"
 #include "board.h"
 #include "cmdline.h"
 #include "kio.h"
@@ -220,6 +222,61 @@ static int kbc_ready(void)
  * leave the target machine parked at a halt, which over SSH is
  * indistinguishable from a kernel that died.
  */
+/*
+ * The reset's own writes, so that the decision can be watched.
+ *
+ * A reset does not return, so the only way to see which ports it writes is to
+ * put the writes behind something a test can replace. The machine's binding
+ * is `outb` and the real firmware's table; a host test supplies its own.
+ */
+struct power_io {
+    void (*outb)(uint16_t port, uint8_t value);
+    int (*kbc_ready)(void);
+    void (*settle)(void);
+    const char *(*vendor)(void);
+};
+
+static void power_outb(uint16_t port, uint8_t value)
+{
+    outb(port, value);
+}
+
+static void power_io_settle(void)
+{
+    power_reset_settle();
+}
+
+static const struct power_io power_mmio = {power_outb, kbc_ready, power_io_settle,
+                                           smbios_bios_vendor};
+static const struct power_io *power_io = &power_mmio;
+
+void power_set_io(const struct power_io *ops)
+{
+    power_io = ops ? ops : &power_mmio;
+}
+
+/**
+ * Whether the firmware's own reset command is this firmware's.
+ *
+ * `0xFB` on port `0xB2` is a request to an Insyde firmware's
+ * system-management handler. Sent to a machine running another firmware it
+ * reaches a handler written for something else, which may do anything at all,
+ * so it goes only where the firmware says it belongs.
+ */
+static int firmware_takes_smi_reset(void)
+{
+    const char *v = power_io->vendor();
+    const char *want = "Insyde";
+    int i;
+
+    for (i = 0; want[i] != '\0'; i++) {
+        if (v[i] != want[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 static void power_reset(void)
 {
     int skip = 0;
@@ -239,18 +296,23 @@ static void power_reset(void)
      * boots each value. It is also the switch to reach for on a machine where
      * an earlier method makes things worse. */
     if (skip < 1) {
-        outb(APM_CONTROL_PORT, APM_CMD_RESET);
-        power_reset_settle();
+        if (firmware_takes_smi_reset()) {
+            power_io->outb(APM_CONTROL_PORT, APM_CMD_RESET);
+            power_io->settle();
+        } else {
+            klog(KLOG_INFO, "reboot", "the firmware is %s, not Insyde: its reset is not sent",
+                 power_io->vendor()[0] != '\0' ? power_io->vendor() : "not named");
+        }
     }
 
     if (skip < 2) {
-        outb(RESET_CONTROL_PORT, RESET_CONTROL_ARM);
-        outb(RESET_CONTROL_PORT, RESET_CONTROL_FIRE);
-        power_reset_settle();
+        power_io->outb(RESET_CONTROL_PORT, RESET_CONTROL_ARM);
+        power_io->outb(RESET_CONTROL_PORT, RESET_CONTROL_FIRE);
+        power_io->settle();
     }
 
-    if (kbc_ready()) {
-        outb(KBC_COMMAND_PORT, KBC_PULSE_RESET);
+    if (power_io->kbc_ready()) {
+        power_io->outb(KBC_COMMAND_PORT, KBC_PULSE_RESET);
     }
     power_settle();
     klog(KLOG_ERR, "reboot", "the platform did not reset; halting instead");
