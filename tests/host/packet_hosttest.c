@@ -54,8 +54,9 @@ void arp_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
     to_arp++;
 }
 
-void packet_rx(uint16_t etype, const uint8_t *data, uint16_t len)
+void packet_rx(struct netdev *nd, uint16_t etype, const uint8_t *data, uint16_t len)
 {
+    (void)nd;
     (void)etype;
     (void)data;
     (void)len;
@@ -168,13 +169,45 @@ int netconf_is_broadcast(uint32_t ip)
 
 /* The interface the stack sends through. This test never looks inside one,
  * so a record of its own is all that is needed. */
-static struct netdev the_iface;
+/* The interface these cases run on, carrying the machine's own address so
+ * that a datagram addressed to it is taken. */
+static struct netdev the_iface = {0,
+                                  0,
+                                  {'e', 't', 'h', '0', 0, 0, 0, 0},
+                                  1,
+                                  {0, 0, 0, 0, 0, 0},
+                                  0x0A00020Fu,
+                                  0xFFFFFF00u,
+                                  0x0A000202u,
+                                  0,
+                                  0,
+                                  0,
+                                  0,
+                                  0,
+                                  0,
+                                  0,
+                                  1};
 
 struct netdev *netdev_route(uint32_t dst, uint32_t *via)
 {
     (void)dst;
     *via = dst;
     return &the_iface;
+}
+
+/* Which addresses this machine's interfaces hold, as this test presents
+ * them: the one interface it configures. */
+int netdev_owns(uint32_t ip)
+{
+    return ip != 0 && ip == the_iface.ip;
+}
+
+int netdev_is_broadcast(uint32_t ip)
+{
+    if (ip == 0xFFFFFFFFu) {
+        return 1;
+    }
+    return the_iface.ip != 0 && the_iface.mask != 0 && ip == (the_iface.ip | ~the_iface.mask);
 }
 
 struct netdev *netdev_first(void)
@@ -225,6 +258,7 @@ static void deliver(const uint8_t *bytes, unsigned len)
 
 static void reset(void)
 {
+    the_iface.up = 1;
     to_arp = to_icmp = to_udp = to_tcp = to_raw = to_packet = 0;
 }
 
@@ -320,6 +354,7 @@ int main(void)
     /* An interface that is down receives nothing. */
     reset();
     up = 0;
+    the_iface.up = 0; /* the flag the receive path reads is the interface's */
     n = build_eth(f, 0x0800);
     n += build_ip(f + n, 17, 8);
     deliver(f, n + 8);

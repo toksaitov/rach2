@@ -10000,6 +10000,7 @@ static int32_t do_sendto(int fd, uint32_t buf_ptr, int len,
     if (entry->sock->family == AF_PACKET) {
         uint8_t sll[SOCKADDR_LL_LEN];
         uint16_t proto;
+        int32_t ifindex;
 
         if (len > 1500) {
             return -EMSGSIZE;
@@ -10017,9 +10018,15 @@ static int32_t do_sendto(int fd, uint32_t buf_ptr, int len,
         if (proto == 0) {
             proto = entry->sock->protocol;
         }
+        /* An interface named here is the one the frame leaves by, which is
+           what the field is for; zero leaves the choice to the bind. */
+        ifindex = (int32_t)((uint32_t)sll[SOCKADDR_LL_IFINDEX] |
+                            ((uint32_t)sll[SOCKADDR_LL_IFINDEX + 1] << 8) |
+                            ((uint32_t)sll[SOCKADDR_LL_IFINDEX + 2] << 16) |
+                            ((uint32_t)sll[SOCKADDR_LL_IFINDEX + 3] << 24));
         /* The payload is read where it lies, as the UDP path reads it: the
            range above was validated, and __force strips __user at the call. */
-        return (int32_t)packet_send(entry->sock, sll + SOCKADDR_LL_ADDR, proto,
+        return (int32_t)packet_send(entry->sock, (int)ifindex, sll + SOCKADDR_LL_ADDR, proto,
                                     (const uint8_t __force *)(const void __user *)buf_ptr,
                                     (uint16_t)len);
     }

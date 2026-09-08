@@ -4,6 +4,7 @@
 #include "../../lib/kint.h"
 
 struct socket;
+struct netdev;
 
 /*
  * packet: AF_PACKET sockets, the tap a DHCP client cannot work without.
@@ -53,9 +54,12 @@ struct socket;
  * Bind a packet socket to an interface index.
  *
  * Binding is what puts the socket in the delivery table; an unbound one
- * receives nothing. Rebinding moves it. There is one interface, so the only
- * index that binds is `NETDEV_IFINDEX`, and 0 (any) binds to it too. The
- * socket's own `protocol` decides what it is then offered.
+ * receives nothing, and rebinding moves it. An index must be one this machine
+ * has; 0 is every interface, which is what a socket that named none asked for.
+ * A socket bound to one interface is offered that interface's frames and sends
+ * through it, so a client watching for a lease on one card is not handed the
+ * other card's traffic. The socket's own `protocol` decides what of that it is
+ * offered.
  *
  * @return 0, or a negative errno.
  */
@@ -67,12 +71,13 @@ void packet_unbind(struct socket *sock);
 /**
  * Offer one received frame's payload to every bound socket that asked for it.
  *
- * Called from `ethernet_rx` with the frame's EtherType (host order) and the
- * WHOLE frame, header included, before the kernel's own handler for that type
- * runs: before `ip_rx` judges the destination address, and before `arp_rx`
- * answers and fills the cache. What is queued is the payload; the header is
- * read for the sender's address and for who the frame was addressed to, which
- * a reader is given with it.
+ * Called from `ethernet_rx` with the interface the frame arrived on, its
+ * EtherType (host order) and the WHOLE frame, header included, before the
+ * kernel's own handler for that type runs: before `ip_rx` judges the
+ * destination address, and before `arp_rx` answers and fills the cache. What
+ * is queued is the payload; the header is read for the sender's address and
+ * for who the frame was addressed to, which a reader is given with it, along
+ * with the interface it came in on.
  *
  * Each socket has a queue, not the one slot the rest of the datagram
  * path has, and the difference is the point of the socket. Everything the
@@ -82,7 +87,7 @@ void packet_unbind(struct socket *sock);
  * single slot would hand that client whichever frame arrived last. A full
  * queue drops the newest and counts it.
  */
-void packet_rx(uint16_t ethertype, const uint8_t *frame, uint16_t frame_len);
+void packet_rx(struct netdev *nd, uint16_t ethertype, const uint8_t *frame, uint16_t frame_len);
 
 /*
  * The receive queue, as the three steps `socket_dgram_*` are made of. A packet
@@ -128,11 +133,14 @@ int packet_last_addr(struct socket *sock, uint8_t *sll);
  *
  * The caller takes the EtherType from the `sockaddr_ll` it was given, falling
  * back to the socket's own protocol, so a program that names neither is told
- * so rather than having a frame sent under a type it did not choose.
+ * so rather than having a frame sent under a type it did not choose. `ifindex`
+ * is the interface the caller's `sockaddr_ll` named, or 0 for none; the frame
+ * leaves by that one, or by the one the socket is bound to, or by the first.
+ * There is no address to route on here, since the caller gave a MAC.
  *
  * @return the bytes sent, or a negative errno.
  */
-int packet_send(struct socket *sock, const uint8_t *dst_mac, uint16_t ethertype,
+int packet_send(struct socket *sock, int ifindex, const uint8_t *dst_mac, uint16_t ethertype,
                 const uint8_t *data, uint16_t len);
 
 #endif /* _PACKET_H_ */

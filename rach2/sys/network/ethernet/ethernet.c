@@ -67,7 +67,7 @@ void ethernet_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
        device is still handing frames up, but a machine that answered them
        while it was down would be a machine whose sockets saw traffic it could
        not reply to, since transmission is gated below. */
-    if (!netif_is_up()) {
+    if (!nd->up) {
         nd->rx_dropped++;
         return;
     }
@@ -79,7 +79,7 @@ void ethernet_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
 
     switch (etype) {
     case ETH_TYPE_ARP:
-        packet_rx(etype, data, len);
+        packet_rx(nd, etype, data, len);
         arp_rx(nd, data + ETH_HDR_SIZE, (uint16_t)(len - ETH_HDR_SIZE));
         break;
     case ETH_TYPE_IP:
@@ -87,7 +87,7 @@ void ethernet_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
            drops what is not addressed to this machine, which is every reply a
            DHCP client is waiting for. The kernel's own handler still runs, so
            a program watching ARP does not stop the machine answering it. */
-        packet_rx(etype, data, len);
+        packet_rx(nd, etype, data, len);
         ip_rx(data + ETH_HDR_SIZE, (uint16_t)(len - ETH_HDR_SIZE), 0);
         break;
     default:
@@ -122,7 +122,7 @@ void ethernet_tx(struct netdev *out, const uint8_t *dst_mac, uint16_t ethertype,
        ARP. Netconsole is not gated, and that is deliberate: it is how a machine
        with no console is read, and a machine whose network was just
        misconfigured is exactly when its log is worth having. */
-    if (!netif_is_up() && (ethertype == ETH_TYPE_IP || ethertype == ETH_TYPE_ARP)) {
+    if (!out->up && (ethertype == ETH_TYPE_IP || ethertype == ETH_TYPE_ARP)) {
         out->tx_dropped++;
         return;
     }
