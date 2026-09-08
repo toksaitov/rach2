@@ -175,7 +175,8 @@ components: harness-kernel busybox check-busybox check-dropbearmulti check-libc 
 prepare-images: $(DEMO_CREDS) $(BINFIND) $(DEADLINE) $(ELFCHECK) $(HARNESS) $(HOSTPEER) \
                 $(MKFIXTURE) $(MKGPT) $(MKMBR) $(PCAPCHECK) $(PTYDRIVE) $(RUNTESTS) \
                 $(SHA256TOOL) $(WAVCHECK) os-real-image os-simple-image \
-                rach2-metal-image rach2-recovery-image rach2-sealed-disk test-image
+                rach2-metal-image rach2-recovery-image rach2-sealed-disk test-image \
+                $(INSTALL_STICK) $(INSTALL_TEST_STICK)
 prepare-all: components
 	$(MAKE) --no-print-directory prepare-images
 # `tests/run addressed`: the address named on the boot line, and the proof that
@@ -1317,8 +1318,13 @@ $(STICK_IMAGE): build/images/rach2-metal.iso tools/image/mkstick.sh $(MKEXFATFIX
 build/images/rach2-metal.iso: rach2-metal-iso
 # The install stick (tools/image/mkinstallstick.sh): the recovery ISO followed
 # by an exFAT volume carrying the sealed disk image and the manifest naming its
-# length and hash. It is what a person boots to install this system, and it is
-# built only when it is asked for: the image it carries is 1655 MiB.
+# length and hash. It is what a person boots to install this system.
+#
+# Both install suites read it, so `prepare-images` builds it once before the
+# pool starts: two suites that each named its rule would otherwise run the same
+# recovery ISO build at the same time, in the one directory that build uses,
+# and neither would find what it wrote. They still name it, so a suite run on
+# its own builds what it needs.
 INSTALL_STICK = $(IMAGES_DIR)/rach2-install-stick.img
 rach2-install-stick: $(INSTALL_STICK)
 $(INSTALL_STICK): build/images/rach2-recovery.iso $(SEALED_DISK) tools/image/mkinstallstick.sh \
@@ -1362,9 +1368,7 @@ $(INSTALL_TEST_STICK): build/images/rach2-recovery.iso $(INSTALLER_DISK) $(INSTA
 # is what GRUB reads off it.
 INSTALLER_DIR = $(IMAGES_DIR)/installer
 INSTALLER_PORT = 2327
-run-installer: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake \
-               check-setid check-dropbearmulti ports/doom $(BINFIND) rach2-recovery \
-               $(RECOVERY_IMAGE) $(INSTALL_STICK) $(INSTALL_TEST_STICK) $(PTYDRIVE) $(HARNESS)
+run-installer: $(DEMO_CREDS) $(INSTALL_STICK) $(INSTALL_TEST_STICK) $(PTYDRIVE) $(HARNESS)
 	sh tests/system/suites/installer.sh $(INSTALL_STICK) $(SEALED_DISK) $(HARNESS) \
 	    $(INSTALLER_DIR) "`cat krffs/rach2_demo_password`" $(INSTALL_TEST_STICK) \
 	    $(INSTALLER_DISK) $(INSTALLER_PORT) $(PTYDRIVE) krffs/rach2_demo_ed25519 install
@@ -1373,9 +1377,7 @@ run-installer: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdp
 # hashing in the emulator, and one after the other they are the longest suite
 # in the tree.
 INSTALLER_REPAIR_DIR = $(IMAGES_DIR)/installer-repair
-run-installer-repair: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake \
-                      check-setid check-dropbearmulti ports/doom $(BINFIND) rach2-recovery \
-                      $(RECOVERY_IMAGE) $(INSTALL_STICK) $(INSTALL_TEST_STICK) $(PTYDRIVE) \
+run-installer-repair: $(DEMO_CREDS) $(INSTALL_STICK) $(INSTALL_TEST_STICK) $(PTYDRIVE) \
                       $(HARNESS)
 	sh tests/system/suites/installer.sh $(INSTALL_STICK) $(SEALED_DISK) $(HARNESS) \
 	    $(INSTALLER_REPAIR_DIR) "`cat krffs/rach2_demo_password`" $(INSTALL_TEST_STICK) \
