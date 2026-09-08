@@ -22,7 +22,7 @@ It is also the only one that reaches a low-speed keyboard without a second mecha
 
 ## Every controller, each on its own
 
-Every xHCI controller on the bus is driven. Discovery walks the whole bus and takes a record for each, `struct xhci_ctrl` in `xhci.c`, holding that controller's aperture, capability record, rings, context array, port state, slots, completions and the command in flight. Nothing is shared between them: two controllers run beside each other, each with its own interrupt vector, and a controller whose bring-up fails is left out with its reason while the others come up. `xhci_controllers`, `xhci_controller` and `xhci_number` are how the rest of the kernel reaches them, and every call about a controller takes the record.
+Every xHCI controller on the bus is driven, up to four of them. Discovery walks the whole bus and takes a record for each, `struct xhci_ctrl` in `xhci.c`, holding that controller's aperture, capability record, rings, context array, port state, slots, completions and the command in flight. Nothing is shared between them: two controllers run beside each other, each with its own interrupt vector, and a controller whose bring-up fails is left out with its reason while the others come up. `xhci_controllers`, `xhci_controller` and `xhci_number` are how the rest of the kernel reaches them, and every call about a controller takes the record. A machine with more than four is told so once, and each controller past the fourth is named at its address and not driven, since the walk goes on to the end of the bus.
 
 The tables are the controller's own size. The port state is one entry per port it reports, the slot table and the context array are its own slot count, and it is told to enable every slot it offers rather than a number compiled here. A slot's device context and each endpoint's ring are one page each, taken when the slot is addressed and when the endpoint is opened, and given back when the slot closes. Those pages come from the heap, which is not identity-mapped, so every address written for the controller to read is the physical one recorded beside the address this kernel reaches the page by. The scratchpads are as many as the controller asks for; the one page holding the array of their addresses is the limit, 512 of them, and a controller asking for more is refused by name.
 
@@ -84,6 +84,7 @@ It is remembered by port, in a word of bits, and not by holding an entry in the 
 |-------|-------|
 | Device slots the controller is asked for | 12, or fewer on a controller that offers fewer, numbered from one; the device table has twelve entries, shared by hubs, leaf devices, devices being enumerated and devices being closed; the notebook's four soldered devices, a USB 3 hub's two halves, a keyboard, a mouse and a stick are nine |
 | Endpoint numbers reachable on a device | 0 to 15, which is thirty-one directions; a boot device uses two and a stick two |
+| Controllers driven | 4; each one past that is named at its address and not driven |
 | Root ports reached | 16 |
 | Scratchpad pages given | 32 |
 | Keyboards and mice driven at once | as many as the slots hold, with one modifier state between them |
