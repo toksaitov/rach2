@@ -404,7 +404,11 @@ static int root_password_login(void)
         return 0;
     }
     while (fgets(line, (int)sizeof(line), f)) {
-        if (strncmp(line, "root-password-login yes", 23) == 0) {
+        /* The whole line and not a prefix of it: a line reading
+         * `root-password-login yesterday` is not this setting. */
+        if (strncmp(line, "root-password-login yes", 23) == 0 &&
+            (line[23] == '\0' || line[23] == '\n' || line[23] == '\r' || line[23] == ' ' ||
+             line[23] == '\t')) {
             yes = 1;
         }
     }

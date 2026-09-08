@@ -57,11 +57,14 @@ sleep 2
 # image and one of them is written: what a stick damaged in the writing or in a
 # pocket looks like from the machine's side.
 spoil_manifest() { # spoil_manifest IMAGE
-    # The last match is the manifest's: the ones before it are inside the
-    # recovery system's own programs, which name the algorithm in their text.
-    at=$(grep -abo 'sha256 ' "$1" | tail -1 | cut -d: -f1)
+    # The manifest is found by its first line and the hash's place computed
+    # from there, since the word `sha256` appears in the programs the volume
+    # carries as well: `image NAME\n`, then `bytes N\n`, then `sha256 `.
+    name=$(basename "$TEST_DISK")
+    bytes=$(wc -c < "$TEST_DISK" | tr -d ' ')
+    at=$(grep -abo "image $name" "$1" | head -1 | cut -d: -f1)
     [ -n "$at" ] || return 1
-    at=$((at + 7))
+    at=$((at + 6 + ${#name} + 1 + 6 + ${#bytes} + 1 + 7))
     was=$(dd if="$1" bs=1 skip="$at" count=1 2>/dev/null)
     if [ "$was" = "a" ]; then
         now=b

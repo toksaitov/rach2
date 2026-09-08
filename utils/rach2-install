@@ -51,7 +51,11 @@ die() {
 # would keep the disk from being read again.
 mounted_source=""
 mounted_root=""
+echo_off=""
 cleanup() {
+    # A password question turns the terminal's echo off; a run that ends inside
+    # one would otherwise leave a shell nobody can see what they type in.
+    [ -n "$echo_off" ] && stty echo 2>/dev/null
     [ -n "$mounted_root" ] && umount "$mounted_root" 2>/dev/null
     [ -n "$mounted_source" ] && umount "$mounted_source" 2>/dev/null
     return 0
@@ -149,9 +153,12 @@ find_source() {
 
 if [ -n "$update_image" ]; then
     [ -f "$update_image" ] || die "$update_image is not a file"
+    # A whole disk and not a partition of one: the offsets below are the
+    # table's, so a partition node here would write the root's bytes at the
+    # root's own offset inside the root.
     case "$update_disk" in
-        /dev/disk[0-9]*) ;;
-        *) die "$update_disk is not a disk of this machine" ;;
+        /dev/disk[0-9] | /dev/disk[0-9][0-9]) ;;
+        *) die "$update_disk is not a whole disk of this machine" ;;
     esac
     [ -e "$update_disk" ] || die "$update_disk is not there"
     target=${update_disk#/dev/disk}
@@ -185,8 +192,11 @@ not there to be kept"
         mkdir -p "$keep/etc/dropbear"
         cp "$TARGET_MNT"/etc/dropbear/* "$keep/etc/dropbear/" 2>/dev/null
     fi
+    # Checked, because what is not kept here is replaced below by the image's
+    # own: a copy that failed and said nothing would take the machine's home
+    # directories away in the name of updating it.
     if [ -d "$TARGET_MNT/home" ]; then
-        cp -r "$TARGET_MNT/home" "$keep/home" 2>/dev/null
+        cp -r "$TARGET_MNT/home" "$keep/home" || die "the home directories could not be kept"
     fi
     umount "$TARGET_MNT" || die "the root would not unmount"
     mounted_root=""
@@ -320,12 +330,14 @@ done
 # A password, twice, with the terminal's echo off. `stty` is put back however
 # this ends, since a shell left with no echo is a shell nobody can use.
 ask_password() { # ask_password PROMPT
+    echo_off=yes
     stty -echo 2>/dev/null
     printf '%s: %s: ' "$ME" "$1"
     read -r pw1
     printf '\n%s: %s again: ' "$ME" "$1"
     read -r pw2
     stty echo 2>/dev/null
+    echo_off=""
     printf '\n'
     [ "$pw1" = "$pw2" ] || die "the two do not match"
     [ -n "$pw1" ] || die "an empty password is not one"
@@ -334,7 +346,7 @@ ask_password() { # ask_password PROMPT
 
 # The name rules are the ones every account file here is read under: a letter
 # first, then letters, digits, hyphen and underscore, at most 32 characters,
-# and not a name the image already carries.
+# and not root, whose account this writes itself.
 check_name() { # check_name NAME
     case "$1" in
         "" | *[!a-z0-9_-]* | [!a-z]*)
@@ -402,6 +414,14 @@ got=$(dd if="$source_dir/$image" bs=1048576 2>/dev/null | sha256sum | cut -d' ' 
 [ "$got" = "$want" ] ||
     die "the image on the stick hashes to $got and the manifest says $want"
 say "the image on the stick is the one the manifest describes"
+
+# The disk is asked who it is once more before the first byte and once after
+# the last: a disk pulled out between the question and the write takes a fresh
+# record when it comes back, and the record that answers here would be another
+# disk's.
+[ "$(disk_serial "$target")" = "$target_serial" ] &&
+    [ "$(disk_field "$target" 5)" = "$target_sectors" ] ||
+    die "/dev/disk$target is no longer the disk the question was answered about"
 
 say "writing $bytes bytes to /dev/disk$target"
 if ! reflash -p "/dev/disk$target" 0 "$bytes" < "$source_dir/$image"; then
