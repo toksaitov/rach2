@@ -514,6 +514,7 @@ int xhci_discover(void)
     pci_device_t skip;
     pci_device_t *skip_dev = 0;
     int refused = 0;
+    int said_full = 0;
 
     nctrls = 0;
     while (pci_find_device_skip(PCI_CLASS_SERIAL_BUS, PCI_SUBCLASS_USB, skip_dev, &dev)) {
@@ -525,9 +526,17 @@ int xhci_discover(void)
             continue;
         }
         if (nctrls == XHCI_MAX_CONTROLLERS) {
-            klog(KLOG_WARN, "usb", "refused: more than %d controllers; the rest are not driven",
-                 XHCI_MAX_CONTROLLERS);
-            break;
+            /* Said once, and the walk goes on: the controllers after this one
+             * are not driven either, but a machine is still told what it has,
+             * which is what the unsupported line above is for. */
+            if (!said_full) {
+                said_full = 1;
+                klog(KLOG_WARN, "usb", "refused: more than %d controllers; the rest are not driven",
+                     XHCI_MAX_CONTROLLERS);
+            }
+            klog(KLOG_INFO, "usb", "not driven: an xHCI controller at %02x:%02x.%d", (int)dev.bus,
+                 (int)dev.device, (int)dev.function);
+            continue;
         }
         {
             struct xhci_ctrl *hc = &ctrls[nctrls];
@@ -561,6 +570,38 @@ int xhci_discover(void)
 int xhci_controllers(void)
 {
     return nctrls;
+}
+
+/**
+ * Drop a controller that did not come up.
+ *
+ * Its record holds nothing the rest of the kernel may ask about: the tables
+ * sized from its registers were never taken, so a port asked about on it
+ * would read through a null. Discovery put it in the table before its
+ * bring-up was tried, and this is what takes it out again. The controllers
+ * after it move up and are renumbered, which is safe because nothing holds a
+ * controller until they are all up.
+ */
+void xhci_forget(struct xhci_ctrl *hc)
+{
+    int i;
+    int at = -1;
+
+    for (i = 0; i < nctrls; i++) {
+        if (&ctrls[i] == hc) {
+            at = i;
+            break;
+        }
+    }
+    if (at < 0) {
+        return;
+    }
+    ctrl_free_tables(&ctrls[at]);
+    for (i = at; i + 1 < nctrls; i++) {
+        ctrls[i] = ctrls[i + 1];
+        ctrls[i].number = i;
+    }
+    nctrls--;
 }
 
 struct xhci_ctrl *xhci_controller(int n)

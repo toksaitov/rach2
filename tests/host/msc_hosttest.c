@@ -429,15 +429,17 @@ int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb
  */
 static int drops; /* devices handed back to the core */
 
-void usb_core_device_drop(int device, const char *why)
+void usb_core_device_drop(struct xhci_ctrl *hc, int device, const char *why)
 {
+    (void)hc;
     (void)device;
     (void)why;
     drops++;
 }
 
-int usb_core_clear_halt(int device, int endpoint)
+int usb_core_clear_halt(struct xhci_ctrl *hc, int device, int endpoint)
 {
+    (void)hc;
     (void)device;
     if (dev.clears < 8) {
         dev.clear_order[dev.clears] = endpoint;
@@ -581,7 +583,7 @@ static void model_reset(void)
      * that goes leaves its slot taken until the disk layer says nothing
      * holds it, so the reset does what that layer would. */
     for (i = 0; i < MSC_MAX_DEVICES; i++) {
-        msc_detach(1 + i);
+        msc_detach(0, 1 + i);
     }
     for (i = 0; i < MSC_MAX_DEVICES; i++) {
         msc_release(i);
@@ -755,7 +757,7 @@ int main(void)
         CHECK("a read is taken", msc_block_device(0)->submit(msc_block_device(0), r) == 0);
         pump(1);
         pump(1);
-        msc_detach(1);
+        msc_detach(0, 1);
         CHECK("the read is failed when the stick goes",
               block.completions == 1 && block.last_status == -EIO);
         CHECK("and the stick stops serving", msc_count() == 0 && !msc_ready(0));
@@ -1125,7 +1127,7 @@ int main(void)
             pump(1);
         }
         first_tag = dev.last_tag;
-        msc_detach(1);
+        msc_detach(0, 1);
         msc_release(0);
         dev.attached = 1;
         CHECK("a second stick is taken on the same handle",

@@ -208,8 +208,9 @@ int msc_attach(struct xhci_ctrl *hc, int device, int interface, int ep_in, int e
     return 0;
 }
 
-void msc_detach(int device)
+void msc_detach(struct xhci_ctrl *hc, int device)
 {
+    (void)hc;
     (void)device;
 }
 

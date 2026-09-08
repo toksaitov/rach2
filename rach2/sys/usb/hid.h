@@ -27,7 +27,7 @@
  * previous report can be found, and `length` is how much actually arrived. A
  * report shorter than its layout is dropped rather than read past.
  */
-void hid_report(int slot, int kind, const uint8_t *report, int length);
+void hid_report(int device, int kind, const uint8_t *report, int length);
 
 /**
  * Say that a device has gone.
@@ -36,6 +36,6 @@ void hid_report(int slot, int kind, const uint8_t *report, int length);
  * the keyboard is unplugged stays down for ever, because the release that
  * would have lifted it is on a device that is no longer there.
  */
-void hid_gone(int slot);
+void hid_gone(int device);
 
 #endif

@@ -467,21 +467,24 @@ else
 fi
 
 # ---- two controllers: each is driven from its own record, with its own
-#      rings and its own vector. A keyboard on the first and a hub with a
-#      keyboard and a mouse on the second, all four devices up at once, and
-#      the keyboard on the first still types. ----
+#      rings and its own interrupt. A mouse on the first, and on the second a
+#      hub with a keyboard and a mouse behind it. The machine's only keyboard
+#      is the one behind that hub, so a shell that answers what was typed is
+#      the second controller delivering transfers, and it is the second
+#      controller because there is nothing else the keystrokes could have
+#      come from. The 8042 is off for the same reason. ----
 if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-machine --qemu-arg=pc,i8042=off \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci0 \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci1 \
-    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci0.0 \
+    --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci0.0 \
     --qemu-arg=-device --qemu-arg=usb-hub,bus=xhci1.0,port=1,id=hub3 \
     --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci1.0,port=1.1 \
     --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci1.0,port=1.2 \
     --timeout 120 --steptmo 60 --ok "Available commands" --log "$IMAGE.twohc.log" \
     "expect=Type 'help'" wait=3 key=h key=e key=l key=p key=ret \
     "expect=Available commands" > /dev/null 2>&1; then
-    note "a keyboard on one controller types while a hub and two devices run on the other: OK"
+    note "the only keyboard, behind a hub on the second controller, types: OK"
 else
     bad "the two-controller boot"
 fi
@@ -494,6 +497,17 @@ if [ "$(grep -ac 'usb: device: port .*class' "$IMAGE.twohc.log")" = 4 ]; then
     note "and all four devices were configured across them: OK"
 else
     bad "the four devices across two controllers were not all configured"
+fi
+# Each controller has an interrupt of its own, by message or by line: two
+# controllers on one vector cannot both be told to stop. A controller the timer
+# pumps has none at all, which the boot says in as many words.
+v0="$(sed -n 's/.*interrupts: xhci0: .*vector \([0-9]*\).*/\1/p' "$IMAGE.twohc.log" | head -1)"
+v1="$(sed -n 's/.*interrupts: xhci1: .*vector \([0-9]*\).*/\1/p' "$IMAGE.twohc.log" | head -1)"
+if [ -n "$v0" ] && [ -n "$v1" ] && [ "$v0" != "$v1" ] &&
+    ! grep -aq 'the timer pumps this controller' "$IMAGE.twohc.log"; then
+    note "and each takes an interrupt of its own, $v0 and $v1: OK"
+else
+    bad "the two controllers did not each take an interrupt of their own"
 fi
 
 if [ "$fail" -ne 0 ]; then

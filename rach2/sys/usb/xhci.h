@@ -48,6 +48,15 @@ struct xhci_ctrl *xhci_controller(int n);
 /** Which of them this is, or -1 for none; its place in the table. */
 int xhci_number(const struct xhci_ctrl *hc);
 
+/**
+ * Drop a controller whose bring-up failed, so nothing asks about it.
+ *
+ * Its tables were never taken, and a port asked about on it would read
+ * through a null. Called only while the controllers are being brought up,
+ * before anything holds one.
+ */
+void xhci_forget(struct xhci_ctrl *hc);
+
 /*
  * The most device slots a controller may have, and how many transfer request
  * blocks each of its command and event rings holds. Slots are numbered from

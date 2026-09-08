@@ -96,8 +96,9 @@ int msc_attach(struct xhci_ctrl *hc, int device, int interface, int ep_in, int e
     return -1;
 }
 
-void msc_detach(int device)
+void msc_detach(struct xhci_ctrl *hc, int device)
 {
+    (void)hc;
     (void)device;
 }
 
@@ -369,7 +370,9 @@ int xhci_command_done(struct xhci_ctrl *hc, struct usb_command_result *out)
     }
     command_pending = 0;
     *out = command_result_pending;
-    return 1;
+    /* As the driver answers: a command the controller refused is not a
+     * command that is still running, and its answer is a failure. */
+    return command_result_pending.status == USB_XFER_OK ? 1 : -1;
 }
 
 /** What is at a location: the hub on the root port, or a device on one of

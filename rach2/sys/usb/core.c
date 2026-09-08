@@ -488,11 +488,11 @@ static void device_gone(int i)
     if (d->state == ST_RUNNING) {
         klog(KLOG_INFO, "usb", "device: port %s: gone", path_of(d));
         if (d->interface.kind == USB_KIND_STORAGE) {
-            msc_detach(d->slot);
+            msc_detach(d->hc, d->slot);
         } else if (d->interface.kind == USB_KIND_HUB) {
             hub_detach(i);
         } else {
-            hid_gone(d->slot);
+            hid_gone(d->index + 1);
         }
     }
     d->have_control = 0;
@@ -583,7 +583,12 @@ static int location_of(const struct usb_device_state *d, struct usb_location *ou
          * below a high-speed hub. Anywhere else the string is all the
          * controller has, and the port cannot be reached. */
         if (nibble > 15u) {
-            if (out->tt_device == 0 || (uint32_t)out->tt_port != nibble) {
+            /* The translator must be the hub this device is on. Its port
+             * number names a port of the high-speed hub the path goes
+             * through, and only where that hub is this device's own parent
+             * does it name the port the nibble could not hold. */
+            if (out->tt_device == 0 || out->tt_device != hub->slot ||
+                (uint32_t)out->tt_port != nibble) {
                 return -1;
             }
             nibble = 15u;
@@ -618,13 +623,13 @@ static void fail(struct usb_device_state *d, const char *why)
         enumerating[bus_of(d)] = -1;
     }
     if (d->interface.kind == USB_KIND_STORAGE) {
-        msc_detach(d->slot);
+        msc_detach(d->hc, d->slot);
     }
     if (d->interface.kind == USB_KIND_HUB) {
         hub_detach(d->index);
         subtree_gone(d->index);
     }
-    hid_gone(d->slot);
+    hid_gone(d->index + 1);
     /* The port is remembered, not the entry: a machine with several devices
      * this kernel cannot drive would otherwise spend its whole table on them
      * and have none left for what a person plugs in. A hub's ports are
@@ -839,7 +844,8 @@ static void step_running(struct usb_device_state *d)
                 return;
             }
         } else if (completion.status == USB_XFER_OK || completion.status == USB_XFER_SHORT) {
-            hid_report(d->slot, kind, d->report, (int)(completion.length - completion.residual));
+            hid_report(d->index + 1, kind, d->report,
+                       (int)(completion.length - completion.residual));
         }
     }
 
@@ -975,11 +981,15 @@ static void step_device(struct usb_device_state *d)
         return;
 
     case ST_SLOT:
+        result.code = 0;
         answer = command_result(d, &result);
         if (answer == 0) {
             return;
         }
-        if (answer == 1 && result.status != USB_XFER_OK && result.code == USB_NO_SLOTS) {
+        /* The controller answered and refused. `xhci_command_done` reports a
+         * refusal as a failure, so this is the answer's own code and not a
+         * command still in flight. */
+        if (answer < 0 && result.code == USB_NO_SLOTS) {
             /* Every slot is taken. The device is not refused: it keeps the
              * entry and the reset it has, and asks again when a slot comes
              * free, which is what unplugging another device does. */
@@ -1373,12 +1383,13 @@ static void device_arrive(struct xhci_ctrl *hc, int owner, int port)
     }
 }
 
-void usb_core_device_drop(int device, const char *why)
+void usb_core_device_drop(struct xhci_ctrl *hc, int device, const char *why)
 {
     int i;
 
     for (i = 0; i < USB_MAX_DEVICES; i++) {
-        if (dev_at(i)->state == ST_RUNNING && dev_at(i)->slot == device) {
+        if (dev_at(i)->state == ST_RUNNING && dev_at(i)->hc == hc &&
+            dev_at(i)->slot == device) {
             klog(KLOG_WARN, "usb", "device: port %s: %s; its port is enumerated again",
                  path_of(dev_at(i)), why);
             device_gone(i);
@@ -1643,7 +1654,7 @@ void usb_core_reset(void)
  * again, 0 while the controller has not answered, and -1 when it refused or
  * never did.
  */
-int usb_core_clear_halt(int device, int endpoint)
+int usb_core_clear_halt(struct xhci_ctrl *hc, int device, int endpoint)
 {
     int i;
 
@@ -1652,7 +1663,7 @@ int usb_core_clear_halt(int device, int endpoint)
         struct usb_command_result result;
         int answer;
 
-        if (d->state == ST_FREE || d->slot != device) {
+        if (d->state == ST_FREE || d->hc != hc || d->slot != device) {
             continue;
         }
         if (enumerating[bus_of(d)] >= 0 && enumerating[bus_of(d)] != i) {

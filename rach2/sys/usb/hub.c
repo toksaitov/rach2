@@ -942,11 +942,21 @@ void hub_step(uint32_t elapsed_ms)
     int i;
 
     hub_ms += elapsed_ms;
-    /* A hub that has gone gives its frame back here, and not where it was
+    /*
+     * A hub that has gone gives its frame back here, and not where it was
      * released: the record is the frame, and a caller that gave it back
-     * itself would go on reading what it had just handed away. */
+     * itself would go on reading what it had just handed away.
+     *
+     * It waits for the core's entry to close as well. The controller may
+     * still have a transfer outstanding on the hub's change endpoint, and it
+     * writes that report into this frame; the entry closes only once the
+     * slot has been given back, which is when the controller is finished
+     * with it.
+     */
     for (i = 0; i < HUB_MAX; i++) {
-        if (hubs[i] && !hubs[i]->used) {
+        struct usb_location where;
+
+        if (hubs[i] && !hubs[i]->used && usb_core_location(hubs[i]->index, &where) != 0) {
             hub_release(i);
         }
     }

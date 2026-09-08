@@ -159,7 +159,7 @@ void usb_core_reset(void);
  * 1 when the endpoint is usable again, 0 while the controller has not
  * answered, -1 when it refused or the device is not one the core has.
  */
-int usb_core_clear_halt(int device, int endpoint);
+int usb_core_clear_halt(struct xhci_ctrl *hc, int device, int endpoint);
 
 /**
  * Give up a running device whose class driver cannot reach it any more.
@@ -170,7 +170,7 @@ int usb_core_clear_halt(int device, int endpoint);
  * that stopped answering behind the notebook's SuperSpeed hub, with the hub
  * reporting its link up, was the case.
  */
-void usb_core_device_drop(int device, const char *why);
+void usb_core_device_drop(struct xhci_ctrl *hc, int device, const char *why);
 
 /** Whether nothing is part way through enumeration. */
 int usb_core_idle(void);

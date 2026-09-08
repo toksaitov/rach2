@@ -240,12 +240,18 @@ static void command_end(struct msc_device *m, int status);
 static void queue_drain(struct msc_device *m, int status);
 static void publish(struct msc_device *m, int lun);
 
-static struct msc_device *by_device(int device)
+/*
+ * The stick at `device` on `hc`. Slot numbers start at one on every
+ * controller, so a machine with two of them has two sticks called slot one
+ * and the controller is half of the name.
+ */
+static struct msc_device *by_device(struct xhci_ctrl *hc, int device)
 {
     int i;
 
     for (i = 0; i < MSC_MAX_DEVICES; i++) {
-        if (sticks[i].used && !sticks[i].closing && sticks[i].device == device) {
+        if (sticks[i].used && !sticks[i].closing && sticks[i].hc == hc &&
+            sticks[i].device == device) {
             return &sticks[i];
         }
     }
@@ -467,7 +473,7 @@ static int step_recovery(struct msc_device *m)
         return 1; /* the reset request's own completion moves this on */
 
     case RECOVER_CLEAR_IN:
-        answer = usb_core_clear_halt(m->device, m->ep_in);
+        answer = usb_core_clear_halt(m->hc, m->device, m->ep_in);
         if (answer == 0) {
             return 1;
         }
@@ -476,7 +482,7 @@ static int step_recovery(struct msc_device *m)
         return 1;
 
     case RECOVER_CLEAR_OUT:
-        answer = usb_core_clear_halt(m->device, m->ep_out);
+        answer = usb_core_clear_halt(m->hc, m->device, m->ep_out);
         if (answer == 0) {
             return 1;
         }
@@ -487,7 +493,7 @@ static int step_recovery(struct msc_device *m)
         return 1;
 
     case RECOVER_CLEAR_ONE:
-        answer = usb_core_clear_halt(m->device, m->after_recover);
+        answer = usb_core_clear_halt(m->hc, m->device, m->after_recover);
         if (answer == 0) {
             return 1;
         }
@@ -558,9 +564,9 @@ int msc_attach(struct xhci_ctrl *hc, int device, int interface, int ep_in, int e
     return 0;
 }
 
-void msc_detach(int device)
+void msc_detach(struct xhci_ctrl *hc, int device)
 {
-    struct msc_device *m = by_device(device);
+    struct msc_device *m = by_device(hc, device);
 
     if (m == 0) {
         return;
@@ -652,11 +658,7 @@ int msc_count(void)
 
 int msc_completion(const struct usb_completion *completion)
 {
-    struct msc_device *m = by_device(completion->device);
-
-    if (m && m->hc != completion->hc) {
-        m = 0; /* another controller's slot of the same number */
-    }
+    struct msc_device *m = by_device(completion->hc, completion->device);
 
     if (m == 0 || !m->used) {
         return 0;
@@ -1263,7 +1265,7 @@ void msc_step(uint32_t elapsed_ms)
                  * connected; the core resets its port and enumerates it
                  * again, as a replug would. This entry is detached by the
                  * core's close. */
-                usb_core_device_drop(device, "its transport stopped answering");
+                usb_core_device_drop(m->hc, device, "its transport stopped answering");
             }
         } else {
             if (m->stage == STAGE_DONE) {

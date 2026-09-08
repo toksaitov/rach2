@@ -161,14 +161,14 @@ static void keyboard_report(struct hid_state *state, const uint8_t *report)
     }
 }
 
-void hid_report(int slot, int kind, const uint8_t *report, int length)
+void hid_report(int device, int kind, const uint8_t *report, int length)
 {
     struct hid_state *state;
 
-    if (slot <= 0 || slot > USB_MAX_DEVICES) {
+    if (device <= 0 || device > USB_MAX_DEVICES) {
         return;
     }
-    state = &states[slot];
+    state = &states[device];
     state->used = 1;
 
     if (kind == HID_KEYBOARD) {
@@ -193,15 +193,15 @@ void hid_report(int slot, int kind, const uint8_t *report, int length)
     }
 }
 
-void hid_gone(int slot)
+void hid_gone(int device)
 {
     struct hid_state *state;
     int i;
 
-    if (slot <= 0 || slot > USB_MAX_DEVICES) {
+    if (device <= 0 || device > USB_MAX_DEVICES) {
         return;
     }
-    state = &states[slot];
+    state = &states[device];
     if (!state->used) {
         return;
     }

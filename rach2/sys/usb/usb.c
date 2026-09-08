@@ -410,6 +410,12 @@ int usb_init(void)
              * this kernel does not drive is one that should still have
              * whatever its firmware was doing for it. */
             xhci_release(hc);
+            /* Out of the table: nothing above may ask a controller that never
+             * came up about its ports, and its tables were never taken. The
+             * ones after it move up, so the walk steps back onto the one that
+             * took this place. */
+            xhci_forget(hc);
+            n--;
             continue;
         }
         caps = xhci_capabilities(hc);

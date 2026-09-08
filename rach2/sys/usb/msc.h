@@ -62,7 +62,7 @@ int msc_attach(struct xhci_ctrl *hc, int device, int interface, int ep_in, int e
  * device stops answering, and nothing of the stick is reused. Safe to call
  * for a device this driver never took.
  */
-void msc_detach(int device);
+void msc_detach(struct xhci_ctrl *hc, int device);
 
 /**
  * Step every stick by `elapsed_ms`.
