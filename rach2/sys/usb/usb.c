@@ -385,10 +385,34 @@ static void usb_msi_handler(isr_params_t *params)
     }
 }
 
+/**
+ * Which controller `rach2.hcfail=N` refuses at its bring-up, or -1.
+ *
+ * A controller that is present and will not start is the case the bring-up
+ * loop exists for, and no QEMU machine has one. This makes the Nth controller
+ * that would have come up fail instead, so what happens to the others can be
+ * seen on a machine whose controllers all work.
+ */
+static int hcfail_at(void)
+{
+    char value[8];
+    int n = 0;
+    int i;
+
+    if (!kcmdline_value("rach2.hcfail", value, (unsigned int)sizeof(value))) {
+        return -1;
+    }
+    for (i = 0; value[i] >= '0' && value[i] <= '9'; i++) {
+        n = n * 10 + (value[i] - '0');
+    }
+    return i > 0 && value[i] == '\0' ? n : -1;
+}
+
 int usb_init(void)
 {
     int up = 0;
     int n;
+    int seen = 0;
 
     if (xhci_discover() != 0) {
         klog(KLOG_INFO, "usb", "absent: %s", xhci_error(0));
@@ -402,10 +426,18 @@ int usb_init(void)
     for (n = 0; n < xhci_controllers(); n++) {
         struct xhci_ctrl *hc = xhci_controller(n);
         const struct xhci_caps *caps;
+        /* Counted, not indexed: a controller left out shifts the ones after it
+         * down and the walk steps back onto this index, so the index is not
+         * which controller this is. */
+        int refuse = (seen++ == hcfail_at());
 
-        if (xhci_read_caps(hc) != 0 || xhci_own(hc) != 0 || xhci_halt_reset(hc) != 0 ||
+        if (refuse || xhci_read_caps(hc) != 0 || xhci_own(hc) != 0 || xhci_halt_reset(hc) != 0 ||
             xhci_scratchpads(hc) != 0 || xhci_start(hc) != 0) {
-            klog(KLOG_WARN, "usb", "refused: xhci%d: %s", n, xhci_error(hc));
+            if (refuse) {
+                klog(KLOG_WARN, "usb", "refused: xhci%d: rach2.hcfail=%d", n, n);
+            } else {
+                klog(KLOG_WARN, "usb", "refused: xhci%d: %s", n, xhci_error(hc));
+            }
             /* Whatever was taken from the firmware goes back. A controller
              * this kernel does not drive is one that should still have
              * whatever its firmware was doing for it. */
