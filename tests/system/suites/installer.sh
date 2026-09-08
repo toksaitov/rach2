@@ -230,6 +230,7 @@ if "$HARNESS" --bios \
     "expect=the password for $USERNAME" "send=$USERPASS" \
     "expect=again" "send=$USERPASS" \
     "expect=authorized keys" "send=" \
+    "expect=grow the root" "send=no" \
     "expect=type the name of that disk" "send=yes" \
     "expect=nothing was written" \
     "expect=# " "send=rach2-install" \
@@ -240,11 +241,13 @@ if "$HARNESS" --bios \
     "expect=the password for $USERNAME" "send=$USERPASS" \
     "expect=again" "send=$USERPASS" \
     "expect=authorized keys" "send=" \
+    "expect=grow the root" "send=" \
     "expect=type the name of that disk" "send=/dev/disk1" \
     "expect=the image on the stick is the one the manifest describes" \
     "expect=what reached the disk is the image" \
     "expect=the table is the one the image carries" \
     "expect=the accounts are root and $USERNAME" \
+    "expect=growing the root into the rest of the disk" \
     "expect=installed:" "send=echo INSTALL\"\"DONE" \
     "expect=INSTALLDONE" > "$LOG3.harness" 2>&1; then
     note "the installer refuses an answer and a confirmation, and writes the disk it was told: OK"
@@ -291,6 +294,7 @@ if "$HARNESS" --bios \
     "expect=the password for $USERNAME" "send=$USERPASS" \
     "expect=again" "send=$USERPASS" \
     "expect=authorized keys" "send=/root/.ssh/authorized_keys" \
+    "expect=grow the root" "send=no" \
     "expect=type the name of that disk" "send=/dev/disk0" \
     "expect=what reached the disk is the image" \
     "expect=installed:" "send=echo OTHER\"\"DONE" \
@@ -300,14 +304,27 @@ else
     sed -n 's/^HARNESS: /installer-test: /p' "$LOG3B.harness" >&2
     bad "the install onto the first of two disks"
 fi
-# Both disks carry the image's boot sector now, each written when it was named.
-BOOT1=$(dd if="$DIR/one.img" bs=512 count=1 2>/dev/null | shasum -a 256 | cut -d' ' -f1)
-BOOT2=$(dd if="$DIR/two.img" bs=512 count=1 2>/dev/null | shasum -a 256 | cut -d' ' -f1)
-BOOTIMG=$(dd if="$TEST_DISK" bs=512 count=1 2>/dev/null | shasum -a 256 | cut -d' ' -f1)
+# Both disks carry the image's boot code now, each written when it was named.
+# The comparison is of the 440 bytes before the table, since the disk grown in
+# row 3 has a partition entry the image does not: that is the grow, and row 4
+# boots what it left.
+BOOT1=$(dd if="$DIR/one.img" bs=440 count=1 2>/dev/null | shasum -a 256 | cut -d' ' -f1)
+BOOT2=$(dd if="$DIR/two.img" bs=440 count=1 2>/dev/null | shasum -a 256 | cut -d' ' -f1)
+BOOTIMG=$(dd if="$TEST_DISK" bs=440 count=1 2>/dev/null | shasum -a 256 | cut -d' ' -f1)
 if [ "$BOOT1" = "$BOOTIMG" ] && [ "$BOOT2" = "$BOOTIMG" ]; then
     note "and both disks now carry the image, each written when it was named: OK"
 else
     bad "the first disk begins $BOOT1 and the second $BOOT2, and the image $BOOTIMG"
+fi
+# The disk that was grown has a larger root than the image; the one that was
+# not has the image's own. The entry's sector count is at offset 12 of the
+# fourth entry, which begins at 446 + 48.
+GROWN=$(dd if="$DIR/two.img" bs=1 skip=506 count=4 2>/dev/null | od -An -tu4 | tr -d ' ')
+KEPT=$(dd if="$DIR/one.img" bs=1 skip=506 count=4 2>/dev/null | od -An -tu4 | tr -d ' ')
+if [ -n "$GROWN" ] && [ "$GROWN" -gt "$KEPT" ]; then
+    note "and the root of the disk that was told to grow is larger than the one that was not: OK"
+else
+    bad "the grown root is $GROWN sectors and the one left alone is $KEPT"
 fi
 
 # ---- 4: the machine written in row 3 boots on its own, with no stick and no
@@ -325,6 +342,8 @@ if "$HARNESS" --bios --qemu-arg=-cpu --qemu-arg=max \
     "expect=POLICYSET" \
     "send=test -d /home/$USERNAME && test ! -d /root/.ssh && echo HOME\"\"MADE" \
     "expect=HOMEMADE" \
+    "send=df -k / | tail -1" \
+    "expect=/dev/" \
     "send=echo INSTALLED\"\"UP" \
     "expect=INSTALLEDUP" > /dev/null 2>&1; then
     note "and the disk it wrote boots, refuses the image's own password and takes the new one: OK"

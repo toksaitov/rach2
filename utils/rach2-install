@@ -236,6 +236,12 @@ read -r user_keys
 if [ -n "$user_keys" ]; then
     [ -f "$user_keys" ] || die "$user_keys is not a file"
 fi
+printf '%s: grow the root into the whole disk? [yes] ' "$ME"
+read -r grow_answer
+case "$grow_answer" in
+    "" | y | yes) grow=yes ;;
+    *) grow=no ;;
+esac
 
 say "everything on /dev/disk$target will be overwritten:"
 say "  $(disk_model "$target"), serial $(disk_serial "$target"),"
@@ -302,13 +308,14 @@ grep "^part $target " /proc/disk | sed 's/^/  /'
 # it is the way back into a machine whose new root will not come up, and so
 # does the recovery partition.
 
+# Prints the entry number and where it was mounted, and leaves it mounted.
 find_root() {
     for p in 4 3 2 1; do
         [ -e "/dev/disk${target}p${p}" ] || continue
         mkdir -p "$TARGET_MNT" 2>/dev/null
         mount -t ext2 "/dev/disk${target}p${p}" "$TARGET_MNT" 2>/dev/null || continue
         if [ -f "$TARGET_MNT/etc/passwd" ]; then
-            echo "$TARGET_MNT"
+            echo "$p $TARGET_MNT"
             return 0
         fi
         umount "$TARGET_MNT" 2>/dev/null
@@ -316,7 +323,9 @@ find_root() {
     return 1
 }
 
-root_dir=$(find_root) || die "the disk carries no ext2 root to write the accounts into"
+found_root=$(find_root) || die "the disk carries no ext2 root to write the accounts into"
+root_entry=${found_root%% *}
+root_dir=${found_root#* }
 mounted_root=$root_dir
 say "writing the accounts into the ext2 root at $root_dir"
 
@@ -374,4 +383,20 @@ umount "$root_dir" || die "the root would not unmount"
 mounted_root=""
 
 say "the accounts are root and $user_name, and root may log in over SSH with a password"
+
+# ---- the root's size ----
+#
+# The image is as large as it was built and the disk is usually larger. The
+# root is the last partition, so the space after it is free, and `growroot`
+# puts the entry and then the file system on it: the entry first, then the
+# checker, then the resizer, each of which a run stopped in the middle leaves
+# for the next run to finish. It runs on a volume nothing has mounted, which is
+# why it comes after the accounts and not before them.
+
+if [ "$grow" = "yes" ]; then
+    id=$(diskctl id "/dev/disk$target") || die "the disk's identity could not be read"
+    say "growing the root into the rest of the disk"
+    growroot "MBRID=$id,$root_entry" ||
+        die "the root was not grown; the disk carries the image and boots as it is"
+fi
 say "installed: /dev/disk$target now carries this system. Reboot from it."
