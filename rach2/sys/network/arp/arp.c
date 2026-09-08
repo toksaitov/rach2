@@ -298,6 +298,7 @@ int arp_snapshot(struct arp_row *out, int max)
             int b;
 
             out[n].ip = arp_cache[i].ip;
+            out[n].iface = arp_cache[i].nd ? arp_cache[i].nd->name : "";
             for (b = 0; b < 6; b++) {
                 out[n].mac[b] = arp_cache[i].mac[b];
             }

@@ -54,6 +54,9 @@ void arp_request(struct netdev *nd, uint32_t target_ip);
 struct arp_row {
     uint32_t ip;
     uint8_t mac[6];
+    /* The interface the mapping was learned on, which is the column `arp`
+     * prints last. */
+    const char *iface;
 };
 
 /**

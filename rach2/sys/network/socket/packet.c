@@ -82,7 +82,9 @@ int packet_bind(struct socket *sock, int ifindex)
     uint32_t flags;
     struct packet_binding *b;
 
-    if (ifindex != 0 && ifindex != NETDEV_IFINDEX) {
+    /* Zero is every interface, which is what a socket that names none
+     * means; any other number must be one this machine has. */
+    if (ifindex != 0 && netdev_at(ifindex - 1) == 0) {
         return -ENODEV;
     }
 
@@ -293,7 +295,7 @@ int packet_last_addr(struct socket *sock, uint8_t *sll)
        protocol must not relabel a datagram that arrived under the first. */
     sll[2] = (uint8_t)((q->last_proto >> 8) & 0xff); /* network order */
     sll[3] = (uint8_t)(q->last_proto & 0xff);
-    sll[4] = (uint8_t)NETDEV_IFINDEX;
+    sll[4] = (uint8_t)(netdev_first() ? netdev_first()->index : 0);
     sll[8] = (uint8_t)PACKET_HATYPE_ETHER;
     sll[10] = q->last_pkttype;
     sll[11] = 6;

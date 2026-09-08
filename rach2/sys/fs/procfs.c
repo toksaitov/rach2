@@ -1155,22 +1155,28 @@ static void ap_ip_dotted(struct procfs_text *t, uint32_t ip)
  */
 static int procfs_gen_netroute(struct procfs_text *t)
 {
+    int i;
+
     ap_str(t, PROCFS_NETROUTE_HEADER);
-    if (!netdev_first() || net_ip_addr == 0) {
-        return t->len;
+    for (i = 0; i < netdev_count(); i++) {
+        const struct netdev *nd = netdev_at(i);
+
+        if (nd->ip == 0) {
+            continue; /* an interface with no address has no route */
+        }
+        if (nd->gateway != 0) {
+            ap_str(t, nd->name);
+            ap_str(t, "\t00000000\t");
+            ap_ip_hex(t, nd->gateway);
+            ap_str(t, "\t0003\t0\t0\t0\t00000000\t0\t0\t0\n");
+        }
+        ap_str(t, nd->name);
+        ap_ch(t, '\t');
+        ap_ip_hex(t, nd->ip & nd->mask);
+        ap_str(t, "\t00000000\t0001\t0\t0\t0\t");
+        ap_ip_hex(t, nd->mask);
+        ap_str(t, "\t0\t0\t0\n");
     }
-    if (net_ip_gateway != 0) {
-        ap_str(t, NETDEV_IFNAME);
-        ap_str(t, "\t00000000\t");
-        ap_ip_hex(t, net_ip_gateway);
-        ap_str(t, "\t0003\t0\t0\t0\t00000000\t0\t0\t0\n");
-    }
-    ap_str(t, NETDEV_IFNAME);
-    ap_ch(t, '\t');
-    ap_ip_hex(t, net_ip_addr & net_ip_mask);
-    ap_str(t, "\t00000000\t0001\t0\t0\t0\t");
-    ap_ip_hex(t, net_ip_mask);
-    ap_str(t, "\t0\t0\t0\n");
     return t->len;
 }
 
@@ -1198,7 +1204,7 @@ static int procfs_gen_netarp(struct procfs_text *t)
             ap_hex(t, rows[i].mac[b], 2);
         }
         ap_str(t, "     *        ");
-        ap_str(t, NETDEV_IFNAME);
+        ap_str(t, rows[i].iface);
         ap_ch(t, '\n');
     }
     return t->len;
