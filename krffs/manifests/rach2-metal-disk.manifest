@@ -132,8 +132,13 @@ text 0644 /etc/shells /bin/sh\n
 dir 0755 /etc/rach2
 text 0644 /etc/rach2/limits # The limits every session starts with: a name, the soft value and the\n# hard one; unlimited for none. Root may raise them.\nnproc 256 512\nnofile 1024 1024\nas unlimited unlimited\n
 text 0644 /etc/profile export PATH=/bin:/usr/bin\nexport HOME="${HOME:-/root}"\ncd "$HOME"\n
-text 0644 /etc/resolv.conf nameserver 10.0.2.3\n
-text 0644 /etc/hosts 127.0.0.1   localhost\n10.0.2.2    gateway\n10.0.2.3    dns\n10.0.2.15   rach2\n
+# The machine this disk is installed on is on whatever network it is plugged
+# into, so neither file names an address of QEMU's. The nameserver comes from
+# the lease: `udhcpc` writes this file when one arrives, and until then a
+# lookup has no server and says so. The hosts file names the loopback and this
+# machine's own name, which is what a program resolving `rach2` on it asks for.
+text 0644 /etc/resolv.conf # written by udhcpc when a lease arrives\n
+text 0644 /etc/hosts 127.0.0.1   localhost\n127.0.1.1   rach2\n
 
 # The network configuration `ifup -a` reads, in the file Debian put it in and
 # busybox's ifup expects. `dhcp` is what the sealed machine carries: it comes up
