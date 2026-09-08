@@ -90,6 +90,9 @@ struct e1000 {
     pci_device_t pci;
     int up;
 
+    /* The card's own hardware address, from its EEPROM or its registers. */
+    uint8_t mac[6];
+
     /* What the boot detail line reports. The receive counters separate the
      * reasons a frame is refused, because on this card they mean different
      * things: a hardware error, a frame the card split across descriptors,
@@ -479,7 +482,7 @@ static int e1000_init(int nth, void **dev)
         return NETDEV_FAILED;
     }
 
-    if (!e1000_read_mac(e, net_mac)) {
+    if (!e1000_read_mac(e, e->mac)) {
         e1000_err = "the e1000 reports no usable station address";
         return NETDEV_FAILED;
     }
@@ -502,7 +505,7 @@ static int e1000_init(int nth, void **dev)
     for (i = 0; i < E1000_MTA_ENTRIES; i++) {
         io->w32(e, E1000_MTA + i * 4, 0);
     }
-    e1000_set_mac(e, net_mac);
+    e1000_set_mac(e, e->mac);
 
     e1000_rx_setup(e);
     e1000_tx_setup(e);
@@ -881,12 +884,12 @@ static void e1000_print_info(struct e1000 *e)
     klog(KLOG_INFO, "e1000",
          "82540EM, MMIO 0x%X, IRQ %d, MAC %X%X:%X%X:%X%X:%X%X:%X%X:%X%X",
                   (unsigned)(uintptr_t)e->mmio, (int)e->pci.irq,
-                  (unsigned)(net_mac[0] >> 4), (unsigned)(net_mac[0] & 0xF),
-                  (unsigned)(net_mac[1] >> 4), (unsigned)(net_mac[1] & 0xF),
-                  (unsigned)(net_mac[2] >> 4), (unsigned)(net_mac[2] & 0xF),
-                  (unsigned)(net_mac[3] >> 4), (unsigned)(net_mac[3] & 0xF),
-                  (unsigned)(net_mac[4] >> 4), (unsigned)(net_mac[4] & 0xF),
-                  (unsigned)(net_mac[5] >> 4), (unsigned)(net_mac[5] & 0xF));
+                  (unsigned)(e->mac[0] >> 4), (unsigned)(e->mac[0] & 0xF),
+                  (unsigned)(e->mac[1] >> 4), (unsigned)(e->mac[1] & 0xF),
+                  (unsigned)(e->mac[2] >> 4), (unsigned)(e->mac[2] & 0xF),
+                  (unsigned)(e->mac[3] >> 4), (unsigned)(e->mac[3] & 0xF),
+                  (unsigned)(e->mac[4] >> 4), (unsigned)(e->mac[4] & 0xF),
+                  (unsigned)(e->mac[5] >> 4), (unsigned)(e->mac[5] & 0xF));
     if (e1000_link(e, &link) && link.up) {
         klog(KLOG_INFO, "e1000", "link %d Mb/s, %s duplex", (int)link.mbps,
              link.full_duplex ? "full" : "half");
@@ -925,6 +928,17 @@ static void e1000_op_print_info(void *dev)
     e1000_print_info((struct e1000 *)dev);
 }
 
+static void e1000_op_mac(void *dev, uint8_t *out)
+{
+    struct e1000 *e = (struct e1000 *)dev;
+    int i;
+
+    for (i = 0; i < 6; i++) {
+        out[i] = e->mac[i];
+    }
+}
+
 const struct netdev_ops e1000_netdev = {"e1000",      e1000_init,   e1000_op_tx,
                                         0,            e1000_op_stop, e1000_op_link,
-                                        e1000_error,  e1000_op_print_info};
+                                        e1000_error,  e1000_op_print_info,
+                                        e1000_op_mac};

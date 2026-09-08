@@ -1333,6 +1333,18 @@ static void rtl8168_stop(void *dev)
     r8168_up = 0;
 }
 
+/* This driver keeps its one card's address in the stack's own. */
+static void rtl8168_op_mac(void *dev, uint8_t *out)
+{
+    int i;
+
+    (void)dev;
+    for (i = 0; i < 6; i++) {
+        out[i] = net_mac[i];
+    }
+}
+
 const struct netdev_ops rtl8168_netdev = {"RTL8168GU",   rtl8168_init,  rtl8168_tx,
                                           rtl8168_poll,  rtl8168_stop,  rtl8168_link,
-                                          rtl8168_error, rtl8168_print_info};
+                                          rtl8168_error, rtl8168_print_info,
+                                          rtl8168_op_mac};

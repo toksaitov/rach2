@@ -105,6 +105,8 @@ struct netdev_ops {
     int (*link)(void *dev, struct netdev_link *out);
     const char *(*error)(void);
     void (*print_info)(void *dev);
+    /* The card's own hardware address, read at bring-up. */
+    void (*mac)(void *dev, uint8_t *out);
 };
 
 /**
@@ -120,6 +122,10 @@ struct netdev {
     void *dev;
     char name[8];
     int index; /* 1 upward, as a packet socket binds to */
+    /* The card's own hardware address, read by its driver at bring-up. Two
+     * cards have two of them, and every frame this interface sends carries
+     * its own. */
+    uint8_t mac[6];
 };
 
 /** How many interfaces the last probe brought up, and the nth of them. */

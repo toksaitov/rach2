@@ -267,9 +267,21 @@ static int rtl8139_link(void *dev, struct netdev_link *out)
 }
 
 /* The card's entry in the driver table. `poll` is NULL: this one interrupts. */
+/* This driver keeps its one card's address in the stack's own. */
+static void rtl8139_op_mac(void *dev, uint8_t *out)
+{
+    int i;
+
+    (void)dev;
+    for (i = 0; i < 6; i++) {
+        out[i] = net_mac[i];
+    }
+}
+
 const struct netdev_ops rtl8139_netdev = {"RTL8139",    rtl8139_init,  rtl8139_tx,
                                           0,            rtl8139_stop,  rtl8139_link,
-                                          rtl8139_error, rtl8139_print_info};
+                                          rtl8139_error, rtl8139_print_info,
+                                          rtl8139_op_mac};
 
 /**
  * Copy a frame into the next TX descriptor and start its DMA.

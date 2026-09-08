@@ -17,6 +17,7 @@
 #include "e1000.h"
 #include "rtl8139.h"
 #include "rtl8168.h"
+#include "../net.h"
 
 /*
  * The interfaces the probe brought up, in the order it found them. Each is
@@ -136,6 +137,18 @@ int netdev_probe(void)
             ifaces[niface].dev = dev;
             ifaces[niface].index = niface + 1;
             name_iface(&ifaces[niface], niface);
+            if (drivers[i]->mac) {
+                drivers[i]->mac(dev, ifaces[niface].mac);
+            }
+            if (niface == 0) {
+                int b;
+
+                /* The stack still holds one address for the machine, which is
+                 * the first interface's until every layer names its own. */
+                for (b = 0; b < 6; b++) {
+                    net_mac[b] = ifaces[0].mac[b];
+                }
+            }
             niface++;
         }
     }

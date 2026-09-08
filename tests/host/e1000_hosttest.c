@@ -569,7 +569,7 @@ static void model_reset(void)
     e1000s[0].tx_stalls = 0;
     io = &model_io;
     for (i = 0; i < 6; i++) {
-        net_mac[i] = 0;
+        e1000s[0].mac[i] = 0;
     }
 
     /* Every register the driver reads is seeded with a value that is wrong
@@ -645,8 +645,8 @@ int main(void)
     CHECK(map_size_asked == E1000_BAR_WINDOW, "the whole declared window is mapped");
     CHECK(isr_handler_registered && isr_vector_registered == 32 + 11,
           "the handler is registered on the card's own line");
-    CHECK(net_mac[0] == 0x52 && net_mac[1] == 0x54 && net_mac[2] == 0x12 && net_mac[3] == 0x00 &&
-              net_mac[4] == 0x34 && net_mac[5] == 0x56,
+    CHECK(e1000s[0].mac[0] == 0x52 && e1000s[0].mac[1] == 0x54 && e1000s[0].mac[2] == 0x12 &&
+              e1000s[0].mac[3] == 0x00 && e1000s[0].mac[4] == 0x34 && e1000s[0].mac[5] == 0x56,
           "the station address came from the register pair");
 
     /* ---- the bring-up order ---- */
@@ -711,8 +711,8 @@ int main(void)
     model_reg[E1000_RAH0 / 4] = 0; /* no valid address in the pair */
     CHECK(e1000_init(0, &model_card) == NETDEV_UP,
           "the bring-up completes with an empty address pair");
-    CHECK(net_mac[0] == 0x52 && net_mac[1] == 0x54 && net_mac[2] == 0xaa && net_mac[3] == 0xbb &&
-              net_mac[4] == 0xcc && net_mac[5] == 0xdd,
+    CHECK(e1000s[0].mac[0] == 0x52 && e1000s[0].mac[1] == 0x54 && e1000s[0].mac[2] == 0xaa &&
+              e1000s[0].mac[3] == 0xbb && e1000s[0].mac[4] == 0xcc && e1000s[0].mac[5] == 0xdd,
           "the station address came from the EEPROM when the pair had none");
     CHECK((model_reg[E1000_RAH0 / 4] & E1000_RAH_AV) != 0 &&
               (model_reg[E1000_RAH0 / 4] & 0xffffu) == 0xddccu &&

@@ -241,6 +241,9 @@ static int same(const char *a, const char *b)
     return *a == *b;
 }
 
+/* The one address the stack still holds for the machine. */
+uint8_t net_mac[6];
+
 int main(void)
 {
     unsigned char frame[64];
