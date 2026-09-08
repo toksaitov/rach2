@@ -1326,13 +1326,48 @@ $(INSTALL_STICK): build/images/rach2-recovery.iso $(SEALED_DISK) tools/image/mki
 	sh tools/image/mkinstallstick.sh build/images/rach2-recovery.iso $(SEALED_DISK) $@ \
 	    $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK)
 build/images/rach2-recovery.iso: rach2-recovery-iso
+# A stick of the same shape carrying a 170 MiB disk instead of the sealed one,
+# so the rows that install do not each write a gibibyte and a half. The image
+# it carries has the shape the sealed disk has, a boot partition, a KRFFS root,
+# a recovery partition and an ext2 root, with a 96 MiB os-real on the ext2
+# root; a machine written from it boots, and its ext2 root is what the
+# installer writes accounts into.
+# The ext2 root the installer's own disk carries: the same manifest the sealed
+# disk's root is built from, since its `init` is the one that starts the SSH
+# server and reads the policy the installer writes. It is 64 MiB, the smallest
+# that holds it, because every row that installs reads and hashes the whole
+# image and the emulator hashes at a megabyte or two a second.
+INSTALLER_EXT2 = $(IMAGES_DIR)/installer-root.ext2
+$(INSTALLER_EXT2): $(DEMO_CREDS) krffs/manifests/rach2-metal-disk.manifest tools/image/mkext2.sh \
+                   $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc \
+                   check-pdpmake check-setid check-dropbearmulti ports/doom
+	sh tools/image/mkext2.sh krffs/manifests/rach2-metal-disk.manifest $@ 64
+INSTALLER_DISK = $(IMAGES_DIR)/installer-test.disk
+$(INSTALLER_DISK): $(DEMO_CREDS) $(INSTALLER_EXT2) $(RECOVERY_IMAGE) tools/image/mkdisk_grub.sh \
+                   | rach2 rach2-recovery utils krffs
+	@mkdir -p $(IMAGES_DIR)
+	RACH2_DISK_RECOVERY_MB=8 \
+	RACH2_DISK_EXT2_MB=64 \
+	RACH2_DISK_EXT2_IMAGE=$(INSTALLER_EXT2) \
+	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
+	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
+	    sh tools/image/mkdisk_grub.sh build/rach2/kernel $@
+INSTALL_TEST_STICK = $(IMAGES_DIR)/install-test-stick.img
+$(INSTALL_TEST_STICK): build/images/rach2-recovery.iso $(INSTALLER_DISK) \
+                       tools/image/mkinstallstick.sh $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK)
+	sh tools/image/mkinstallstick.sh build/images/rach2-recovery.iso $(INSTALLER_DISK) $@ \
+	    $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK)
 # `tests/run installer`: the install stick and the program on it. The stick is
 # booted through the firmware with no kernel given to the emulator, so what runs
 # is what GRUB reads off it.
 INSTALLER_DIR = $(IMAGES_DIR)/installer
-run-installer: $(DEMO_CREDS) $(INSTALL_STICK) $(HARNESS)
+INSTALLER_PORT = 2327
+run-installer: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake \
+               check-setid check-dropbearmulti ports/doom $(BINFIND) rach2-recovery \
+               $(RECOVERY_IMAGE) $(INSTALL_STICK) $(INSTALL_TEST_STICK) $(PTYDRIVE) $(HARNESS)
 	sh tests/system/suites/installer.sh $(INSTALL_STICK) $(SEALED_DISK) $(HARNESS) \
-	    $(INSTALLER_DIR) "`cat krffs/rach2_demo_password`"
+	    $(INSTALLER_DIR) "`cat krffs/rach2_demo_password`" $(INSTALL_TEST_STICK) \
+	    $(INSTALLER_DISK) $(INSTALLER_PORT) $(PTYDRIVE) krffs/rach2_demo_ed25519
 # `tests/run usbdisk`: a flash drive as a disk. Three sticks built on the
 # host, an MBR one, a GUID one and one with no table; the nodes, the mounts,
 # a write, the pull from under a mount and the replug, ten plugs and pulls

@@ -38,6 +38,12 @@ file 0755 /bin/bootctl build/utils/sbin/bootctl
 # `growroot` enlarges the root's partition entry into the free space after it
 # and runs the checker and the resizer under /sbin on the volume.
 file 0755 /bin/growroot build/utils/growroot
+# `diskctl reread` is the step of that which an install without a grow still
+# needs: the kernel reads the table a whole-disk write has just replaced.
+file 0755 /bin/diskctl build/utils/diskctl
+# The installer itself, a shell program: it reads the manifest on the stick,
+# checks the image against it, asks which disk, writes it and reads it back.
+file 0755 /bin/rach2-install utils/rach2-install
 file 0755 /bin/dropbearmulti build/vendor/dropbear/dropbearmulti
 
 dir 0755 /sbin

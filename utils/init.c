@@ -384,6 +384,35 @@ static void configure_network(void)
 }
 
 /**
+ * Whether this system lets root log in over SSH with a password.
+ *
+ * The RAM images and recovery do not: root arrives by key there, and the
+ * console is the way in when the key is not to hand. An installed system is
+ * another matter, since the person who installed it chose root's password at
+ * the install and may have no key at all, so `rach2-install` writes
+ * `root-password-login yes` into `/etc/rach2/sshd.conf` and this reads it. A
+ * file that is not there, or that says anything else, leaves the refusal in
+ * place.
+ */
+static int root_password_login(void)
+{
+    FILE *f = fopen("/etc/rach2/sshd.conf", "r");
+    char line[128];
+    int yes = 0;
+
+    if (!f) {
+        return 0;
+    }
+    while (fgets(line, (int)sizeof(line), f)) {
+        if (strncmp(line, "root-password-login yes", 23) == 0) {
+            yes = 1;
+        }
+    }
+    fclose(f);
+    return yes;
+}
+
+/**
  * Fork the SSH server and return its pid (-1 on failure).
  *
  * Unlike the console session this child does NOT call `setsid` or claim a
@@ -394,6 +423,7 @@ static void configure_network(void)
  */
 static pid_t spawn_sshd(void)
 {
+    int password_login = root_password_login();
     pid_t pid = fork();
 
     if (pid != 0) {
@@ -401,14 +431,18 @@ static pid_t spawn_sshd(void)
     }
     {
         char *argv[8];
-        argv[0] = (char *)"dropbearmulti";
-        argv[1] = (char *)"dropbear";
-        argv[2] = (char *)"-F";
-        argv[3] = (char *)"-R";
-        argv[4] = (char *)"-g";
-        argv[5] = (char *)"-p";
-        argv[6] = (char *)"22";
-        argv[7] = 0;
+        int n = 0;
+
+        argv[n++] = (char *)"dropbearmulti";
+        argv[n++] = (char *)"dropbear";
+        argv[n++] = (char *)"-F";
+        argv[n++] = (char *)"-R";
+        if (!password_login) {
+            argv[n++] = (char *)"-g";
+        }
+        argv[n++] = (char *)"-p";
+        argv[n++] = (char *)"22";
+        argv[n] = 0;
         execve(SSHD_PROGRAM, argv, environ); /* returns only on failure */
     }
     {

@@ -5,10 +5,14 @@
 # It has the shape of the product stick mkstick.sh writes, with two
 # differences: the bootable part is the recovery system rather than the metal
 # one, since recovery is what runs the installer, and the exFAT volume after it
-# carries the sealed disk image and a manifest naming that image's length and
-# SHA-256. The installer reads the manifest, hashes the image on the stick
-# before it writes anything, and hashes the disk after it has written it, so a
-# stick damaged in either direction is found rather than installed.
+# carries a whole disk image, under its own name, and a manifest naming that
+# image's name, length and SHA-256. The product stick carries the sealed disk;
+# the suites build one carrying a small disk instead, so the rows that install
+# do not each write a gibibyte and a half.
+#
+# The installer reads the manifest, hashes the image on the stick before it
+# writes anything, and hashes the disk after it has written it, so a stick
+# damaged in either direction is found rather than installed.
 #
 # The volume is as large as the image plus four megabytes for the file system's
 # own structures, rounded up to a mebibyte. The MBR gets two entries: the ISO
@@ -30,6 +34,7 @@ fi
 MIB_SECTORS=2048
 SLACK_SECTORS=8192
 
+name=$(basename "$DISK")
 iso_bytes=$(wc -c < "$ISO" | tr -d ' ')
 iso_sectors=$(( (iso_bytes + 511) / 512 ))
 disk_bytes=$(wc -c < "$DISK" | tr -d ' ')
@@ -47,13 +52,13 @@ rm -f "$OUT.new"
 # its SHA-256, one field a line so a shell reads it with `read`.
 sum=$(shasum -a 256 "$DISK" | cut -d' ' -f1)
 {
-    echo "image rach2-sealed.disk"
+    echo "image $name"
     echo "bytes $disk_bytes"
     echo "sha256 $sum"
 } > "$OUT.manifest"
 
 "$MKFIX" --make "$OUT.vol" --sectors "$volume" --offset "$start" \
-    --add "rach2-sealed.disk=$DISK" --add "rach2-install.manifest=$OUT.manifest" > /dev/null
+    --add "$name=$DISK" --add "rach2-install.manifest=$OUT.manifest" > /dev/null
 
 cp "$ISO" "$OUT.new"
 # Pad to the volume's start, then place the volume.
@@ -69,4 +74,4 @@ rm -f "$OUT.vol" "$OUT.manifest"
 mv "$OUT.new" "$OUT"
 trap - EXIT
 echo "mkinstallstick: wrote $OUT: recovery at sector 1, $volume sectors of exFAT at $start,"\
-     "holding rach2-sealed.disk of $disk_bytes bytes"
+     "holding $name of $disk_bytes bytes"

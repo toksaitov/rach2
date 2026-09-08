@@ -1,0 +1,377 @@
+#!/bin/sh
+#
+# rach2-install: install this system onto a disk of this machine.
+#
+# It runs from the recovery system booted off the install stick. The stick
+# carries the whole disk image and a manifest naming that image's length and
+# SHA-256; this reads the manifest, hashes the image before it writes anything,
+# lists the disks it could write with what each one is, asks which, asks for
+# the name typed back, writes the image, reads it back and hashes it again,
+# and asks the kernel to read the new table.
+#
+# The name is `rach2-install` and not `install` because the shell resolves
+# `install` to BusyBox's own applet before it searches the path.
+#
+# Nothing is written until the question about the target has been answered
+# with the device's own name. Every refusal says which disk and why, because a
+# person standing at a machine with two disks in it needs to know which one was
+# passed over and for what.
+#
+# Usage: rach2-install [--source DIR]
+#
+# `--source DIR` takes the image and its manifest from a directory already
+# mounted, which is how the tests drive it without a stick.
+#
+
+set -u
+
+ME=rach2-install
+MNT=/mnt/install-source
+TARGET_MNT=/mnt/install-root
+
+say() { echo "$ME: $1"; }
+die() {
+    echo "$ME: $1" >&2
+    exit 1
+}
+
+# What this mounted, unmounted however it ends. A source left mounted would
+# make the next run report that it could find no stick, and a root left mounted
+# would keep the disk from being read again.
+mounted_source=""
+mounted_root=""
+cleanup() {
+    [ -n "$mounted_root" ] && umount "$mounted_root" 2>/dev/null
+    [ -n "$mounted_source" ] && umount "$mounted_source" 2>/dev/null
+    return 0
+}
+trap cleanup EXIT INT TERM HUP
+
+source_dir=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --source)
+            [ $# -ge 2 ] || die "--source takes a directory"
+            source_dir=$2
+            shift 2
+            ;;
+        *)
+            die "usage: $ME [--source DIR]"
+            ;;
+    esac
+done
+
+# ---- the disks this machine has ----
+#
+# `/proc/disk` names each registered disk on a `disk` line and describes it on
+# the `identity` line after it. Both are read here rather than the nodes being
+# guessed, since a disk that has gone leaves its node named and unopenable.
+
+disk_numbers() {
+    grep '^disk ' /proc/disk | cut -d' ' -f2
+}
+
+disk_field() { # disk_field N FIELD
+    grep "^disk $1 " /proc/disk | head -1 | cut -d' ' -f"$2"
+}
+
+disk_model() {
+    grep "^disk $1 " /proc/disk | head -1 | cut -d' ' -f7-
+}
+
+identity_field() { # identity_field N FIELD
+    grep "^identity $1 " /proc/disk | head -1 | cut -d' ' -f"$2"
+}
+
+disk_serial() {
+    grep "^identity $1 " /proc/disk | head -1 | cut -d' ' -f6-
+}
+
+# The fields of the two lines, counting the word that names them:
+#   disk     N TRANSPORT LOCATION SECTORS TABLE MODEL...
+#   identity N SECTOR-SIZE fixed|removable mounted|free SERIAL...
+SECTOR_SIZE=3
+FIXED_OR_NOT=4
+MOUNT_STATE=5
+
+# ---- the image and its manifest ----
+#
+# The stick is found by looking for the manifest rather than by position: the
+# machine may have any number of disks and the stick is not always the last of
+# them. Every partition of every removable disk is tried, and the first that
+# mounts and holds a manifest is the source.
+
+# Prints the disk's number and where its volume was mounted, so the caller
+# knows both which disk to leave out of the offer and what to unmount.
+find_source() {
+    for n in $(disk_numbers); do
+        [ "$(identity_field "$n" "$FIXED_OR_NOT")" = "removable" ] || continue
+        for p in 1 2 3 4; do
+            [ -e "/dev/disk${n}p${p}" ] || continue
+            mkdir -p "$MNT" 2>/dev/null
+            mount -t exfat "/dev/disk${n}p${p}" "$MNT" 2>/dev/null || continue
+            if [ -f "$MNT/rach2-install.manifest" ]; then
+                echo "$n $MNT"
+                return 0
+            fi
+            umount "$MNT" 2>/dev/null
+        done
+    done
+    return 1
+}
+
+source_disk=-1
+if [ -n "$source_dir" ]; then
+    [ -f "$source_dir/rach2-install.manifest" ] ||
+        die "$source_dir holds no rach2-install.manifest"
+else
+    found=$(find_source) || die "no stick with an image on it was found"
+    source_disk=${found%% *}
+    source_dir=${found#* }
+    mounted_source=$source_dir
+fi
+
+image=$(sed -n 's/^image //p' "$source_dir/rach2-install.manifest")
+bytes=$(sed -n 's/^bytes //p' "$source_dir/rach2-install.manifest")
+want=$(sed -n 's/^sha256 //p' "$source_dir/rach2-install.manifest")
+[ -n "$image" ] && [ -n "$bytes" ] && [ -n "$want" ] ||
+    die "the manifest does not name an image, a length and a hash"
+[ -f "$source_dir/$image" ] || die "$source_dir holds no $image"
+
+say "the image is $image, $bytes bytes"
+
+# ---- which disks could take it ----
+#
+# A disk is a candidate when it is fixed, nothing is mounted from it, its
+# sector is 512 bytes, it is not the stick this is running from, and it is
+# large enough. Each refusal is printed with its reason.
+
+candidates=""
+for n in $(disk_numbers); do
+    sectors=$(disk_field "$n" 5)
+    size=$((sectors * 512))
+    what="/dev/disk$n ($(disk_model "$n"), serial $(disk_serial "$n"), $size bytes, \
+$(disk_field "$n" 3), $(identity_field "$n" "$FIXED_OR_NOT"), table $(disk_field "$n" 6))"
+    if [ "$n" = "$source_disk" ]; then
+        say "not offered: /dev/disk$n is the stick this is running from"
+        continue
+    fi
+    if [ "$(identity_field "$n" "$FIXED_OR_NOT")" = "removable" ]; then
+        # A disk that can be pulled out is not one this system boots from:
+        # the firmware and the kernel both take their root from a fixed one.
+        say "not offered: /dev/disk$n can be pulled out, and this system does not boot from one"
+        continue
+    fi
+    if [ "$(identity_field "$n" "$MOUNT_STATE")" = "mounted" ]; then
+        say "not offered: /dev/disk$n has something mounted from it"
+        continue
+    fi
+    if [ "$(identity_field "$n" "$SECTOR_SIZE")" != "512" ]; then
+        say "not offered: /dev/disk$n counts in $(identity_field "$n" "$SECTOR_SIZE")-byte sectors, not 512"
+        continue
+    fi
+    if [ "$size" -lt "$bytes" ]; then
+        say "not offered: /dev/disk$n holds $size bytes and the image is $bytes"
+        continue
+    fi
+    echo "  $what"
+    candidates="$candidates $n"
+done
+[ -n "$candidates" ] && [ "$candidates" != " " ] ||
+    die "no disk of this machine can take the image"
+
+# ---- the questions ----
+#
+# All of them are asked before anything is written, and the last of them is the
+# confirmation, so a person who changes their mind has not left a disk half
+# written.
+
+# A password, twice, with the terminal's echo off. `stty` is put back however
+# this ends, since a shell left with no echo is a shell nobody can use.
+ask_password() { # ask_password PROMPT
+    stty -echo 2>/dev/null
+    printf '%s: %s: ' "$ME" "$1"
+    read -r pw1
+    printf '\n%s: %s again: ' "$ME" "$1"
+    read -r pw2
+    stty echo 2>/dev/null
+    printf '\n'
+    [ "$pw1" = "$pw2" ] || die "the two do not match"
+    [ -n "$pw1" ] || die "an empty password is not one"
+    password=$pw1
+}
+
+# The name rules are the ones every account file here is read under: a letter
+# first, then letters, digits, hyphen and underscore, at most 32 characters,
+# and not a name the image already carries.
+check_name() { # check_name NAME
+    case "$1" in
+        "" | *[!a-z0-9_-]* | [!a-z]*)
+            return 1
+            ;;
+    esac
+    [ "${#1}" -le 32 ] || return 1
+    [ "$1" != "root" ] || return 1
+    return 0
+}
+
+printf '%s: which disk shall it be written to? ' "$ME"
+read -r answer
+target=""
+for n in $candidates; do
+    [ "$answer" = "/dev/disk$n" ] && target=$n
+done
+[ -n "$target" ] || die "$answer is not one of the disks offered"
+
+ask_password "the password for root"
+root_password=$password
+printf '%s: the name of the first account: ' "$ME"
+read -r user_name
+check_name "$user_name" ||
+    die "$user_name is not a name this system takes: a letter, then letters, digits, - and _"
+ask_password "the password for $user_name"
+user_password=$password
+printf '%s: a file of authorized keys for %s, or nothing: ' "$ME" "$user_name"
+read -r user_keys
+if [ -n "$user_keys" ]; then
+    [ -f "$user_keys" ] || die "$user_keys is not a file"
+fi
+
+say "everything on /dev/disk$target will be overwritten:"
+say "  $(disk_model "$target"), serial $(disk_serial "$target"),"
+say "  $(($(disk_field "$target" 5) * 512)) bytes, $(disk_field "$target" 3),"
+say "  $(identity_field "$target" "$FIXED_OR_NOT"), table $(disk_field "$target" 6)"
+printf '%s: type the name of that disk to go on, anything else to stop: ' "$ME"
+read -r confirm
+[ "$confirm" = "/dev/disk$target" ] || die "nothing was written"
+
+# The generation the answer was given about. A disk that goes and comes back
+# takes a fresh record, so the write below is refused rather than landing on
+# whatever took its place.
+target_serial=$(disk_serial "$target")
+target_sectors=$(disk_field "$target" 5)
+
+# ---- the write ----
+#
+# The image is hashed here, after the last question and before the first write:
+# a stick that has gone bad is found before anything is destroyed, and a run
+# that ends at a question has not paid for the reading.
+
+say "reading the image to check it against the manifest, which takes a few minutes"
+# Read in mebibytes rather than by `sha256sum FILE`, which reads a few
+# kilobytes at a time: through a file system on a stick that is the difference
+# between minutes and an hour.
+got=$(dd if="$source_dir/$image" bs=1048576 2>/dev/null | sha256sum | cut -d' ' -f1)
+[ "$got" = "$want" ] ||
+    die "the image on the stick hashes to $got and the manifest says $want"
+say "the image on the stick is the one the manifest describes"
+
+say "writing $bytes bytes to /dev/disk$target"
+if ! reflash -p "/dev/disk$target" 0 "$bytes" < "$source_dir/$image"; then
+    die "the image was not written"
+fi
+[ "$(disk_serial "$target")" = "$target_serial" ] &&
+    [ "$(disk_field "$target" 5)" = "$target_sectors" ] ||
+    die "/dev/disk$target is not the disk the question was answered about"
+
+say "reading it back"
+back=$(reflash --verify "/dev/disk$target" 0 "$bytes" | cut -d' ' -f3)
+[ "$back" = "$want" ] ||
+    die "what reached the disk hashes to $back and the image hashes to $want"
+say "what reached the disk is the image"
+
+# ---- the new table ----
+
+diskctl reread "/dev/disk$target" || die "the new table was not read"
+say "the table is the one the image carries:"
+grep "^part $target " /proc/disk | sed 's/^/  /'
+
+# ---- the accounts ----
+#
+# The image carries the accounts it was built with, which are a demonstration's
+# and not this machine's. They are replaced here, on the root the installed
+# system boots: the three files are small and a fresh install knows all of
+# their contents, so each is written whole to a name of its own and renamed
+# into place, which is the write a stop in the middle leaves undone rather than
+# half done. BusyBox's account tools would need a `chroot` this kernel does not
+# have.
+#
+# The root is found rather than assumed: the last partition of the disk that
+# mounts as ext2 and has an `/etc/passwd` is the one the candidate entries
+# boot. The KRFFS root beside it keeps the credentials it was built with, since
+# it is the way back into a machine whose new root will not come up, and so
+# does the recovery partition.
+
+find_root() {
+    for p in 4 3 2 1; do
+        [ -e "/dev/disk${target}p${p}" ] || continue
+        mkdir -p "$TARGET_MNT" 2>/dev/null
+        mount -t ext2 "/dev/disk${target}p${p}" "$TARGET_MNT" 2>/dev/null || continue
+        if [ -f "$TARGET_MNT/etc/passwd" ]; then
+            echo "$TARGET_MNT"
+            return 0
+        fi
+        umount "$TARGET_MNT" 2>/dev/null
+    done
+    return 1
+}
+
+root_dir=$(find_root) || die "the disk carries no ext2 root to write the accounts into"
+mounted_root=$root_dir
+say "writing the accounts into the ext2 root at $root_dir"
+
+hash_of() { # hash_of PASSWORD
+    printf '%s\n' "$1" | mkpasswd -m sha512 -P 0
+}
+
+root_hash=$(hash_of "$root_password")
+user_hash=$(hash_of "$user_password")
+[ -n "$root_hash" ] && [ -n "$user_hash" ] || die "the passwords could not be hashed"
+
+put_file() { # put_file PATH MODE CONTENT
+    printf '%s' "$3" > "$1.new" || die "$1 could not be written"
+    chmod "$2" "$1.new" || die "$1 could not be given its mode"
+    mv "$1.new" "$1" || die "$1 could not be put in place"
+}
+
+put_file "$root_dir/etc/passwd" 644 "root:x:0:0:root:/root:/bin/sh
+$user_name:x:1000:1000:$user_name:/home/$user_name:/bin/sh
+"
+put_file "$root_dir/etc/group" 644 "root:x:0:
+$user_name:x:1000:
+"
+put_file "$root_dir/etc/shadow" 600 "root:$root_hash:0:0:99999:7:::
+$user_name:$user_hash:0:0:99999:7:::
+"
+
+# The account's home, and the keys if any were given. The demonstration's home
+# and its keys go, whatever they were called.
+rm -rf "$root_dir/home" 2>/dev/null
+mkdir -p "$root_dir/home/$user_name" || die "the home directory could not be made"
+chmod 700 "$root_dir/home/$user_name"
+chown 1000:1000 "$root_dir/home/$user_name" 2>/dev/null
+rm -rf "$root_dir/root/.ssh" 2>/dev/null
+if [ -n "$user_keys" ]; then
+    mkdir -p "$root_dir/home/$user_name/.ssh"
+    chmod 700 "$root_dir/home/$user_name/.ssh"
+    cp "$user_keys" "$root_dir/home/$user_name/.ssh/authorized_keys" ||
+        die "the keys could not be copied"
+    chmod 600 "$root_dir/home/$user_name/.ssh/authorized_keys"
+    chown 1000:1000 "$root_dir/home/$user_name/.ssh" \
+        "$root_dir/home/$user_name/.ssh/authorized_keys" 2>/dev/null
+    say "the keys in $user_keys are $user_name's"
+fi
+
+# Root over SSH with a password, which is this system's policy once it is
+# installed: the person who installed it chose that password and may have no
+# key at all. `init` reads this file and drops dropbear's `-g` for it.
+mkdir -p "$root_dir/etc/rach2"
+put_file "$root_dir/etc/rach2/sshd.conf" 644 "root-password-login yes
+"
+
+sync
+umount "$root_dir" || die "the root would not unmount"
+mounted_root=""
+
+say "the accounts are root and $user_name, and root may log in over SSH with a password"
+say "installed: /dev/disk$target now carries this system. Reboot from it."

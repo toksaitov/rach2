@@ -63,6 +63,14 @@ void devfs_disk_publish(struct disk *d, uint64_t window_sectors)
     (void)window_sectors;
 }
 
+/* Nothing is mounted here: the registry below is empty, so no disk line is
+   rendered and no disk is asked about. */
+int devfs_disk_claimed(struct disk *d)
+{
+    (void)d;
+    return 0;
+}
+
 /* The registry is empty here: the probe finds no disk and the disk lines
    are none. */
 int disk_count(void)

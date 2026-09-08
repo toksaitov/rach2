@@ -51,6 +51,9 @@ loopctl: loopctl.c
 growroot: growroot.c
 	$(UCC) $(UFLAGS) -o growroot growroot.c
 
+diskctl: diskctl.c
+	$(UCC) $(UFLAGS) -o diskctl diskctl.c
+
 update: update.c
 	$(UCC) $(UFLAGS) -o update update.c
 sudo: sudo.c

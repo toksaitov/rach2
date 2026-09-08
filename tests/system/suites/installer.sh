@@ -15,6 +15,11 @@
 #
 # Usage:
 #   installer.sh <stick-image> <sealed-disk> <harness> <work-dir> <password>
+#       <test-stick> <test-disk> <ssh-port> <ptydrive> <demo-key>
+#
+# The first stick is the product's, carrying the sealed disk; the second
+# carries a 65 MiB disk instead, so the rows that install do not each write a
+# gibibyte and a half.
 #
 
 set -e
@@ -24,11 +29,18 @@ DISK="$2"
 HARNESS="$3"
 DIR="$4"
 PASSWORD="$5"
+TEST_STICK="$6"
+TEST_DISK="$7"
+PORT="$8"
+PTYDRIVE="$9"
+DEMO_KEY="${10}"
 
-if [ -z "$PASSWORD" ]; then
-    echo "usage: installer.sh <stick-image> <sealed-disk> <harness> <work-dir> <password>" >&2
+if [ -z "$DEMO_KEY" ]; then
+    echo "usage: installer.sh <stick-image> <sealed-disk> <harness> <work-dir>" \
+         "<password> <test-stick> <test-disk> <ssh-port> <ptydrive> <demo-key>" >&2
     exit 2
 fi
+KNOWN="$DIR/known_hosts"
 
 mkdir -p "$DIR"
 fail=0
@@ -116,22 +128,23 @@ if "$HARNESS" --bios \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
     "expect=# " "send=mkdir -p /mnt && mount -t exfat /dev/disk1p2 /mnt && echo MOUNT\"\"ED" \
     "expect=MOUNTED" \
-    "send=dd if=/mnt/rach2-sealed.disk bs=1048576 count=32 2>/dev/null | sha256sum" \
-    "expect= -" \
+    "send=dd if=/mnt/rach2-sealed.disk bs=1048576 count=32 2>/dev/null | sha256sum; echo SUM\"\"ONE" \
+    "expect=SUMONE" \
     "send=dd if=/mnt/rach2-sealed.disk bs=1048576 count=32 2>/dev/null | reflash -p /dev/disk0 0 33554432" \
     "expect=wrote 33554432 bytes" \
-    "send=reflash --verify /dev/disk0 0 33554432" \
-    "expect=reflash: sha256 " \
-    "send=dd if=/mnt/rach2-sealed.disk bs=1048576 skip=40 count=2 2>/dev/null | sha256sum" \
-    "expect= -" \
+    "send=reflash --verify /dev/disk0 0 33554432; echo VERIFY\"\"ONE" \
+    "expect=VERIFYONE" \
+    "send=dd if=/mnt/rach2-sealed.disk bs=1048576 skip=40 count=2 2>/dev/null | sha256sum; echo SUM\"\"TWO" \
+    "expect=SUMTWO" \
     "send=dd if=/mnt/rach2-sealed.disk bs=1048576 skip=40 count=2 2>/dev/null | reflash /dev/disk0 33554432 2097152" \
     "expect=wrote 2097152 bytes" \
-    "send=reflash --verify /dev/disk0 33554432 2097152" \
-    "expect=reflash: sha256 " \
+    "send=reflash --verify /dev/disk0 33554432 2097152; echo VERIFY\"\"TWO" \
+    "expect=VERIFYTWO" \
     "send=umount /mnt && echo REFLASH\"\"DONE" \
-    "expect=REFLASHDONE" > /dev/null 2>&1; then
+    "expect=REFLASHDONE" > "$LOG2.harness" 2>&1; then
     note "the image is written to a disk and read back on the machine that wrote it: OK"
 else
+    sed -n 's/^HARNESS: /installer-test: /p' "$LOG2.harness" >&2
     bad "the raw write and its readback"
 fi
 
@@ -170,6 +183,230 @@ if grep -aq 'of 2097152 bytes, ' "$LOG2"; then
 else
     note "and a write not asked for them printed none: OK"
 fi
+
+# ---- 3: the installer, on a machine with two blank disks. It must name both
+#         as candidates and the stick as the source, refuse an answer that is
+#         not one of them, refuse a confirmation that is not the disk's own
+#         name, and then write the one it was told to and leave the other as it
+#         was. ----
+NEWPASS=an-installed-machine
+USERNAME=alice
+USERPASS=alices-own-password
+rm -f "$DIR/one.img" "$DIR/two.img"
+dd if=/dev/zero of="$DIR/one.img" bs=1048576 count=256 2>/dev/null
+dd if=/dev/zero of="$DIR/two.img" bs=1048576 count=256 2>/dev/null
+BLANK=$(shasum -a 256 "$DIR/one.img" | cut -d' ' -f1)
+cp "$TEST_STICK" "$DIR/test-stick.img"
+LOG3="$DIR/install.log"
+if "$HARNESS" --bios \
+    --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
+    --drive "if=none,id=stick,format=raw,file=$DIR/test-stick.img" \
+    --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=stick,bootindex=0 \
+    --qemu-arg=-drive --qemu-arg="file=$DIR/one.img,format=raw,if=ide,index=0,media=disk" \
+    --qemu-arg=-drive --qemu-arg="file=$DIR/two.img,format=raw,if=ide,index=1,media=disk" \
+    --timeout 420 --steptmo 180 --ok "INSTALLDONE" --log "$LOG3" \
+    "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
+    "expect=# " "send=rach2-install" \
+    "expect=which disk shall it be written to" "send=/dev/disk9" \
+    "expect=is not one of the disks offered" \
+    "expect=# " "send=rach2-install" \
+    "expect=which disk shall it be written to" "send=/dev/disk1" \
+    "expect=the password for root" "send=$NEWPASS" \
+    "expect=again" "send=$NEWPASS" \
+    "expect=the name of the first account" "send=ROOT" \
+    "expect=is not a name this system takes" \
+    "expect=# " "send=rach2-install" \
+    "expect=which disk shall it be written to" "send=/dev/disk1" \
+    "expect=the password for root" "send=$NEWPASS" \
+    "expect=again" "send=different" \
+    "expect=the two do not match" \
+    "expect=# " "send=rach2-install" \
+    "expect=which disk shall it be written to" "send=/dev/disk1" \
+    "expect=the password for root" "send=$NEWPASS" \
+    "expect=again" "send=$NEWPASS" \
+    "expect=the name of the first account" "send=$USERNAME" \
+    "expect=the password for $USERNAME" "send=$USERPASS" \
+    "expect=again" "send=$USERPASS" \
+    "expect=authorized keys" "send=" \
+    "expect=type the name of that disk" "send=yes" \
+    "expect=nothing was written" \
+    "expect=# " "send=rach2-install" \
+    "expect=which disk shall it be written to" "send=/dev/disk1" \
+    "expect=the password for root" "send=$NEWPASS" \
+    "expect=again" "send=$NEWPASS" \
+    "expect=the name of the first account" "send=$USERNAME" \
+    "expect=the password for $USERNAME" "send=$USERPASS" \
+    "expect=again" "send=$USERPASS" \
+    "expect=authorized keys" "send=" \
+    "expect=type the name of that disk" "send=/dev/disk1" \
+    "expect=the image on the stick is the one the manifest describes" \
+    "expect=what reached the disk is the image" \
+    "expect=the table is the one the image carries" \
+    "expect=the accounts are root and $USERNAME" \
+    "expect=installed:" "send=echo INSTALL\"\"DONE" \
+    "expect=INSTALLDONE" > "$LOG3.harness" 2>&1; then
+    note "the installer refuses an answer and a confirmation, and writes the disk it was told: OK"
+else
+    sed -n 's/^HARNESS: /installer-test: /p' "$LOG3.harness" >&2
+    bad "the install onto the second of two disks"
+fi
+# The disk it was not told to write is as it was. The one it did write is not
+# compared with the image, since the accounts were written into its root after
+# the image reached it; that the image reached it whole is what the readback
+# inside the installer says, and row 4 boots what is there.
+if [ "$(shasum -a 256 "$DIR/one.img" | cut -d' ' -f1)" = "$BLANK" ]; then
+    note "and the disk it was not told to write is as it was: OK"
+else
+    bad "the other disk was written"
+fi
+# The nodes the reread published are the image's four partitions.
+if [ "$(grep -ac ' part 1 ' "$LOG3")" -ge 2 ]; then
+    note "and the new table's partitions were published: OK"
+else
+    bad "the new table was not published"
+fi
+
+# ---- 3b: the same machine, the other disk. The disks are the same two in the
+#          same order, and the answer names the first this time, so what
+#          decides which disk is written is the name typed and not the
+#          position. The one written in row 3 must be left as row 3 left it.
+LOG3B="$DIR/install-other.log"
+if "$HARNESS" --bios \
+    --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
+    --drive "if=none,id=stick,format=raw,file=$DIR/test-stick.img" \
+    --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=stick,bootindex=0 \
+    --qemu-arg=-drive --qemu-arg="file=$DIR/one.img,format=raw,if=ide,index=0,media=disk" \
+    --qemu-arg=-drive --qemu-arg="file=$DIR/two.img,format=raw,if=ide,index=1,media=disk" \
+    --timeout 420 --steptmo 180 --ok "OTHERDONE" --log "$LOG3B" \
+    "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
+    "expect=# " "send=rach2-install" \
+    "expect=which disk shall it be written to" "send=/dev/disk0" \
+    "expect=the password for root" "send=$NEWPASS" \
+    "expect=again" "send=$NEWPASS" \
+    "expect=the name of the first account" "send=$USERNAME" \
+    "expect=the password for $USERNAME" "send=$USERPASS" \
+    "expect=again" "send=$USERPASS" \
+    "expect=authorized keys" "send=/root/.ssh/authorized_keys" \
+    "expect=type the name of that disk" "send=/dev/disk0" \
+    "expect=what reached the disk is the image" \
+    "expect=installed:" "send=echo OTHER\"\"DONE" \
+    "expect=OTHERDONE" > "$LOG3B.harness" 2>&1; then
+    note "the other disk of the same machine takes the same install: OK"
+else
+    sed -n 's/^HARNESS: /installer-test: /p' "$LOG3B.harness" >&2
+    bad "the install onto the first of two disks"
+fi
+# Both disks carry the image's boot sector now, each written when it was named.
+BOOT1=$(dd if="$DIR/one.img" bs=512 count=1 2>/dev/null | shasum -a 256 | cut -d' ' -f1)
+BOOT2=$(dd if="$DIR/two.img" bs=512 count=1 2>/dev/null | shasum -a 256 | cut -d' ' -f1)
+BOOTIMG=$(dd if="$TEST_DISK" bs=512 count=1 2>/dev/null | shasum -a 256 | cut -d' ' -f1)
+if [ "$BOOT1" = "$BOOTIMG" ] && [ "$BOOT2" = "$BOOTIMG" ]; then
+    note "and both disks now carry the image, each written when it was named: OK"
+else
+    bad "the first disk begins $BOOT1 and the second $BOOT2, and the image $BOOTIMG"
+fi
+
+# ---- 4: the machine written in row 3 boots on its own, with no stick and no
+#         kernel given to the emulator. ----
+LOG4="$DIR/installed.log"
+if "$HARNESS" --bios --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-drive --qemu-arg="file=$DIR/two.img,format=raw,if=ide,index=0,media=disk" \
+    --timeout 300 --steptmo 120 --ok "INSTALLEDUP" --log "$LOG4" \
+    "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
+    "expect=incorrect" \
+    "expect=rach2 login:" "send=root" "expect=Password:" "send=$NEWPASS" \
+    "expect=# " "send=id -u; grep -c . /etc/passwd" \
+    "expect=0" \
+    "send=grep -q '^root-password-login yes' /etc/rach2/sshd.conf && echo POLICY\"\"SET" \
+    "expect=POLICYSET" \
+    "send=test -d /home/$USERNAME && test ! -d /root/.ssh && echo HOME\"\"MADE" \
+    "expect=HOMEMADE" \
+    "send=echo INSTALLED\"\"UP" \
+    "expect=INSTALLEDUP" > /dev/null 2>&1; then
+    note "and the disk it wrote boots, refuses the image's own password and takes the new one: OK"
+else
+    bad "the boot of the installed disk"
+fi
+
+# ---- 5: a disk with something mounted from it is not offered. The stick's own
+#         volume is mounted first, which makes the stick a disk with a mount as
+#         well as the source. ----
+LOG5="$DIR/mounted.log"
+cp "$TEST_STICK" "$DIR/mounted-stick.img"
+rm -f "$DIR/three.img"
+cp "$DIR/two.img" "$DIR/three.img"
+if "$HARNESS" --bios \
+    --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
+    --drive "if=none,id=stick,format=raw,file=$DIR/mounted-stick.img" \
+    --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=stick,bootindex=0 \
+    --qemu-arg=-drive --qemu-arg="file=$DIR/three.img,format=raw,if=ide,index=0,media=disk" \
+    --timeout 300 --steptmo 120 --ok "MOUNTEDDONE" --log "$LOG5" \
+    "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
+    "expect=# " "send=mkdir -p /mnt/held && mount -t vfat /dev/disk0p1 /mnt/held && echo HELD" \
+    "expect=HELD" "send=rach2-install" \
+    "expect=has something mounted from it" \
+    "expect=no disk of this machine can take the image" \
+    "send=umount /mnt/held; echo MOUNTED\"\"DONE" \
+    "expect=MOUNTEDDONE" > /dev/null 2>&1; then
+    note "a disk with something mounted from it is named and not offered: OK"
+else
+    bad "the refusal of a disk with a mount"
+fi
+
+# ---- 6: the accounts an install writes, over SSH. The install in row 3b was
+#         given the recovery system's own authorized keys as the account's, so
+#         the host's demo private key opens that account; root's password is
+#         the one typed at the install, and root's keys are gone, since the
+#         image's demonstration keys are not this machine's. The SSH server is
+#         started by `init` and not by hand, which is what puts the policy the
+#         installer wrote under test: without it dropbear runs with `-g` and
+#         refuses root a password. ----
+rm -f "$KNOWN"
+LOG6="$DIR/ssh.log"
+"$HARNESS" --bios --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-drive --qemu-arg="file=$DIR/one.img,format=raw,if=ide,index=0,media=disk" \
+    --net "user,id=net0,hostfwd=tcp::$PORT-:22" --device "rtl8139,netdev=net0" \
+    --timeout 300 --steptmo 120 --ok "SSHREADY" --log "$LOG6" \
+    "expect=rach2 login:" wait=25 \
+    "send=" "expect=rach2 login:" "send=root" "expect=Password:" "send=$NEWPASS" \
+    "expect=# " "send=echo SSH\"\"READY" "expect=SSHREADY" wait=90 \
+    > "$LOG6.harness" 2>&1 &
+QPID=$!
+
+# The three attempts, while that machine is up. Each says what it proves.
+sleep 60
+OUT=$(RACH2_PASSWORD="$NEWPASS" "$PTYDRIVE" --rows 40 --cols 100 --timeout 60 -- \
+    ssh -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
+    -o ConnectTimeout=20 -o PubkeyAuthentication=no \
+    -o PreferredAuthentications=password -o NumberOfPasswordPrompts=3 -tt \
+    -p "$PORT" root@localhost 'id -u; echo ROOT""PASSWORD' 2>&1 || true)
+case "$OUT" in
+    *ROOTPASSWORD*) note "root logs in over SSH with the password the install was given: OK" ;;
+    *) bad "root's password login over SSH: $OUT" ;;
+esac
+OUT=$(ssh -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
+    -o ConnectTimeout=20 -o BatchMode=yes -o IdentitiesOnly=yes \
+    -o PreferredAuthentications=publickey -o PasswordAuthentication=no \
+    -i "$DEMO_KEY" -p "$PORT" "$USERNAME@localhost" 'id -un; echo KEY""LOGIN' 2>&1 || true)
+case "$OUT" in
+    *KEYLOGIN*) note "and the account logs in with the keys the install was given: OK" ;;
+    *) bad "the account's key login: $OUT" ;;
+esac
+OUT=$(ssh -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
+    -o ConnectTimeout=20 -o BatchMode=yes -o IdentitiesOnly=yes \
+    -o PreferredAuthentications=publickey -o PasswordAuthentication=no \
+    -i "$DEMO_KEY" -p "$PORT" root@localhost 'echo DEMO""KEY' 2>&1 || true)
+case "$OUT" in
+    *DEMOKEY*) bad "the image's demonstration key still opens root on the installed machine" ;;
+    *) note "and the image's own key no longer opens root: OK" ;;
+esac
+wait "$QPID" || bad "the installed machine did not stay up for the SSH attempts"
 
 if [ "$fail" -ne 0 ]; then
     echo "installer-test: FAIL" >&2

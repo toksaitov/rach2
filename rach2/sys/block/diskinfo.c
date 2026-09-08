@@ -328,6 +328,19 @@ int diskinfo_format_disks(char *buf, int cap)
                                                           : " unread ");
         put(buf, &n, cap, d->model);
         put(buf, &n, cap, "\n");
+        /* What a person choosing a disk to write needs beside its size: the
+         * unit it counts in, whether it is a fixed disk or something that can
+         * be pulled out, whether anything is mounted from it, and the serial
+         * the label on the drive carries. The serial is last because it is the
+         * only field of the two lines that may hold a space. */
+        put(buf, &n, cap, "identity ");
+        put_dec(buf, &n, cap, (uint64_t)d->number);
+        put(buf, &n, cap, " ");
+        put_dec(buf, &n, cap, (uint64_t)d->dev->sector_size);
+        put(buf, &n, cap, d->removable ? " removable" : " fixed");
+        put(buf, &n, cap, devfs_disk_claimed((struct disk *)d) ? " mounted " : " free ");
+        put(buf, &n, cap, d->serial);
+        put(buf, &n, cap, "\n");
         for (k = 0; k < d->table.count; k++) {
             const struct part_entry *e = &d->table.parts[k];
 

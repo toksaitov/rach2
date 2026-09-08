@@ -6,7 +6,7 @@
 # replace `-` with `_` because a POSIX macro name cannot contain a dash.
 
 UTILITIES = true false echo yes cat pwd touch mkdir rm mv cp ls ping nc \
-            httpd dhcpc netup reflash halt update loopctl growroot
+            httpd dhcpc netup reflash halt update loopctl growroot diskctl
 
 SBIN_PROGS = init-shell init-login init-metal login su sudo passwd adduser \
              adduser-crash bootctl
