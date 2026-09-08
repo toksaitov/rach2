@@ -1625,6 +1625,26 @@ static int hda_init(void)
         hda_probe_log("HDA: Fallback to %x:%x\n", hda_pci.vendor_id, hda_pci.device_id);
     }
 
+    /* Any other audio controller the machine has is named and not driven.
+     * This kernel takes one, and a person looking at a machine with two needs
+     * to see that the other was found and passed over rather than missed. */
+    {
+        pci_device_t other;
+        pci_device_t seen;
+        pci_device_t *from = 0;
+
+        while (pci_find_device_skip(PCI_CLASS_MULTIMEDIA, PCI_SUBCLASS_AUDIO, from, &other)) {
+            if (other.bus != hda_pci.bus || other.device != hda_pci.device ||
+                other.function != hda_pci.function) {
+                klog(KLOG_INFO, "audio", "not driven: %x:%x at %02x:%02x.%d",
+                     (int)other.vendor_id, (int)other.device_id, (int)other.bus,
+                     (int)other.device, (int)other.function);
+            }
+            seen = other;
+            from = &seen;
+        }
+    }
+
     hda_probe_log("HDA: Using %x:%x BAR0=", hda_pci.vendor_id, hda_pci.device_id);
 
     bar0 = pci_bar_address(hda_pci.bar[0]);
