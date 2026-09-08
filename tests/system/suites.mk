@@ -522,7 +522,11 @@ run-install-ext2: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-
 # from recovery), and a control run that injects nothing and asserts that no
 # fallback and no recovery appears anywhere. The disk is assembled natively; the
 # runs are QEMU and ssh.
-run-sealed: $(DEMO_CREDS) rach2-sealed-disk $(DEADLINE) $(ELFCHECK) $(BINFIND) $(MKMBR)
+# The disk itself and not the alias that builds it: the alias is a phony whose
+# recipe always runs, and two suites of the pool that named it would write the
+# one image at the same time. `prepare-images` builds the file before the pool
+# starts, and a suite run on its own builds it through this rule.
+run-sealed: $(DEMO_CREDS) $(SEALED_DISK) $(DEADLINE) $(ELFCHECK) $(BINFIND) $(MKMBR)
 	sh tests/system/suites/sealed.sh $(SEALED_DISK) \
 	    "`cat krffs/rach2_demo_password`" $(SEALED_PORT)
 # `tests/run drill`: the recovery drill, boots of one disk that carries the same
