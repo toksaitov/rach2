@@ -18,9 +18,20 @@
 # passed over and for what.
 #
 # Usage: rach2-install [--source DIR]
+#        rach2-install --update IMAGE DISK
 #
 # `--source DIR` takes the image and its manifest from a directory already
 # mounted, which is how the tests drive it without a stick.
+#
+# `--update` is the other half of a machine's life: a root file system image
+# written into the root partition of a machine that is already installed,
+# without touching its table and without losing what the machine has become.
+# The accounts, the SSH policy, the server's host keys and the account's own
+# keys are read off the root first and put back afterwards, so a password
+# changed after the install survives an update; the root is grown again into
+# whatever the partition is, and the new root is marked a candidate for one
+# trial boot, which is what makes an update that will not come up cost a
+# reboot rather than a journey.
 #
 
 set -u
@@ -48,6 +59,8 @@ cleanup() {
 trap cleanup EXIT INT TERM HUP
 
 source_dir=""
+update_image=""
+update_disk=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --source)
@@ -55,8 +68,14 @@ while [ $# -gt 0 ]; do
             source_dir=$2
             shift 2
             ;;
+        --update)
+            [ $# -ge 3 ] || die "--update takes an image and a disk"
+            update_image=$2
+            update_disk=$3
+            shift 3
+            ;;
         *)
-            die "usage: $ME [--source DIR]"
+            die "usage: $ME [--source DIR] | $ME --update IMAGE DISK"
             ;;
     esac
 done
@@ -119,6 +138,118 @@ find_source() {
     done
     return 1
 }
+
+# ---- the update ----
+#
+# A machine that is already installed, given a new root file system. What it
+# has become since the install is read off the root first: the account files,
+# the SSH policy, the server's host keys and the keys the account logs in with.
+# The image goes into the root's own partition and nowhere else, so the table,
+# the boot partition and the recovery partition are what they were.
+
+if [ -n "$update_image" ]; then
+    [ -f "$update_image" ] || die "$update_image is not a file"
+    case "$update_disk" in
+        /dev/disk[0-9]*) ;;
+        *) die "$update_disk is not a disk of this machine" ;;
+    esac
+    [ -e "$update_disk" ] || die "$update_disk is not there"
+    target=${update_disk#/dev/disk}
+    root_entry=""
+    for p in 4 3 2 1; do
+        [ -e "${update_disk}p${p}" ] || continue
+        mkdir -p "$TARGET_MNT" 2>/dev/null
+        mount -t ext2 "${update_disk}p${p}" "$TARGET_MNT" 2>/dev/null || continue
+        if [ -f "$TARGET_MNT/etc/passwd" ]; then
+            root_entry=$p
+            mounted_root=$TARGET_MNT
+            break
+        fi
+        umount "$TARGET_MNT" 2>/dev/null
+    done
+    [ -n "$root_entry" ] ||
+        die "$update_disk carries no ext2 root this can read; the machine's configuration is \
+not there to be kept"
+
+    keep=/tmp/rach2-update-keep
+    rm -rf "$keep"
+    mkdir -p "$keep" || die "there is nowhere to keep the machine's configuration"
+    say "keeping this machine's accounts, policy and keys"
+    for f in etc/passwd etc/group etc/shadow etc/rach2/sshd.conf; do
+        if [ -f "$TARGET_MNT/$f" ]; then
+            mkdir -p "$keep/$(dirname "$f")"
+            cp "$TARGET_MNT/$f" "$keep/$f" || die "$f could not be kept"
+        fi
+    done
+    if [ -d "$TARGET_MNT/etc/dropbear" ]; then
+        mkdir -p "$keep/etc/dropbear"
+        cp "$TARGET_MNT"/etc/dropbear/* "$keep/etc/dropbear/" 2>/dev/null
+    fi
+    if [ -d "$TARGET_MNT/home" ]; then
+        cp -r "$TARGET_MNT/home" "$keep/home" 2>/dev/null
+    fi
+    umount "$TARGET_MNT" || die "the root would not unmount"
+    mounted_root=""
+
+    # Where the root partition is, from the table the machine has now: an
+    # update writes that range and nothing else.
+    start=$(grep "^part $target $root_entry " /proc/disk | head -1 | cut -d' ' -f4)
+    count=$(grep "^part $target $root_entry " /proc/disk | head -1 | cut -d' ' -f5)
+    [ -n "$start" ] && [ -n "$count" ] || die "the root partition's place could not be read"
+    bytes=$(stat -c %s "$update_image")
+    at=$((start * 512))
+    room=$((count * 512))
+    [ "$bytes" -le "$room" ] ||
+        die "the image is $bytes bytes and the root partition holds $room"
+
+    say "writing $bytes bytes into ${update_disk}p${root_entry}, at $at"
+    reflash -p "$update_disk" "$at" "$bytes" < "$update_image" ||
+        die "the root was not written"
+    want=$(dd if="$update_image" bs=1048576 2>/dev/null | sha256sum | cut -d' ' -f1)
+    back=$(reflash --verify "$update_disk" "$at" "$bytes" | cut -d' ' -f3)
+    [ "$back" = "$want" ] || die "what reached the root hashes to $back and the image to $want"
+    say "what reached the root is the image"
+
+    id=$(diskctl id "$update_disk") || die "the disk's identity could not be read"
+    growroot "MBRID=$id,$root_entry" || die "the root was not grown into its partition"
+
+    mount -t ext2 "${update_disk}p${root_entry}" "$TARGET_MNT" ||
+        die "the new root would not mount"
+    mounted_root=$TARGET_MNT
+    say "putting the accounts, the policy and the keys back"
+    for f in etc/passwd etc/group etc/shadow etc/rach2/sshd.conf; do
+        if [ -f "$keep/$f" ]; then
+            mkdir -p "$TARGET_MNT/$(dirname "$f")"
+            cp "$keep/$f" "$TARGET_MNT/$f" || die "$f could not be put back"
+        fi
+    done
+    chmod 600 "$TARGET_MNT/etc/shadow" 2>/dev/null
+    if [ -d "$keep/etc/dropbear" ]; then
+        mkdir -p "$TARGET_MNT/etc/dropbear"
+        cp "$keep"/etc/dropbear/* "$TARGET_MNT/etc/dropbear/" 2>/dev/null
+        chmod 700 "$TARGET_MNT/etc/dropbear"
+    fi
+    if [ -d "$keep/home" ]; then
+        rm -rf "$TARGET_MNT/home"
+        cp -r "$keep/home" "$TARGET_MNT/home" || die "the home directories could not be put back"
+    fi
+    sync
+    umount "$TARGET_MNT" || die "the new root would not unmount"
+    mounted_root=""
+    rm -rf "$keep"
+
+    # One trial boot of the new root: a root that does not come up costs a
+    # reboot and the machine is back on the entries it was on.
+    if bootctl --target "${update_disk}p1" trial candidate; then
+        say "the new root is armed for one trial boot"
+    else
+        die "the new root is on the disk and no trial was armed; arm one with \
+bootctl --target ${update_disk}p1 trial candidate"
+    fi
+    say "updated: ${update_disk}p${root_entry} carries the new root and keeps this machine's \
+accounts. Reboot to try it."
+    exit 0
+fi
 
 source_disk=-1
 if [ -n "$source_dir" ]; then

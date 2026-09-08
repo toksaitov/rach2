@@ -35,6 +35,7 @@ PORT="$8"
 PTYDRIVE="$9"
 DEMO_KEY="${10}"
 PART="${11:-all}"
+INSTALLER_EXT2="${12:-}"
 
 if [ -z "$DEMO_KEY" ]; then
     echo "usage: installer.sh <stick-image> <sealed-disk> <harness> <work-dir>" \
@@ -645,6 +646,62 @@ if "$HARNESS" --bios --qemu-arg=-cpu --qemu-arg=max \
     note "and the machine boots what was put back, with the image's own accounts: OK"
 else
     bad "the boot of the restored disk"
+fi
+
+# ---- 11: the machine changed after it was installed, and then updated. Root's
+#          password is changed on the running machine, the stick is booted, and
+#          `rach2-install --update` writes the root file system's image into the
+#          root partition. What the machine had become must survive: the
+#          changed password opens it afterwards and the image's own does not.
+LOG11="$DIR/changed.log"
+if "$HARNESS" --bios --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-drive --qemu-arg="file=$DIR/one.img,format=raw,if=ide,index=0,media=disk" \
+    --timeout 300 --steptmo 120 --ok "CHANGEDDONE" --log "$LOG11" \
+    "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
+    "expect=# " "send=echo root:$NEWPASS | chpasswd && echo CHANGED\"\"DONE" \
+    "expect=CHANGEDDONE" > /dev/null 2>&1; then
+    note "the installed machine's root password is changed on the machine: OK"
+else
+    bad "changing the password on the installed machine"
+fi
+
+LOG12="$DIR/update.log"
+if "$HARNESS" --bios \
+    --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
+    --drive "if=none,id=stick,format=raw,file=$DIR/test-stick.img" \
+    --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=stick,bootindex=0 \
+    --qemu-arg=-drive --qemu-arg="file=$DIR/one.img,format=raw,if=ide,index=0,media=disk" \
+    --timeout 1800 --steptmo 900 --ok "UPDATEDONE" --log "$LOG12" \
+    "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
+    "expect=# " "send=mkdir -p /m && mount -t exfat /dev/disk1p2 /m && echo MOUNT\"\"ED" \
+    "expect=MOUNTED" \
+    "send=rach2-install --update /m/$(basename "$INSTALLER_EXT2") /dev/disk0" \
+    "expect=keeping this machine's accounts" \
+    "expect=what reached the root is the image" \
+    "expect=putting the accounts, the policy and the keys back" \
+    "expect=armed for one trial boot" \
+    "expect=updated:" "send=umount /m; echo UPDATE\"\"DONE" \
+    "expect=UPDATEDONE" > "$LOG12.harness" 2>&1; then
+    note "a machine that is already installed takes a new root and keeps its accounts: OK"
+else
+    sed -n 's/^HARNESS: /installer-test: /p' "$LOG12.harness" >&2
+    bad "the update of an installed machine"
+fi
+
+LOG13="$DIR/updated.log"
+if "$HARNESS" --bios --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-drive --qemu-arg="file=$DIR/one.img,format=raw,if=ide,index=0,media=disk" \
+    --timeout 300 --steptmo 120 --ok "UPDATEDUP" --log "$LOG13" \
+    "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
+    "expect=incorrect" \
+    "expect=rach2 login:" "send=root" "expect=Password:" "send=$NEWPASS" \
+    "expect=# " "send=echo UPDATED\"\"UP" \
+    "expect=UPDATEDUP" > /dev/null 2>&1; then
+    note "and the machine it updated takes the password it had, not the image's: OK"
+else
+    bad "the boot of the updated machine"
 fi
 
 fi

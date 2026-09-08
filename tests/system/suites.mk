@@ -1353,10 +1353,10 @@ $(INSTALLER_DISK): $(DEMO_CREDS) $(INSTALLER_EXT2) $(RECOVERY_IMAGE) tools/image
 	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
 	    sh tools/image/mkdisk_grub.sh build/rach2/kernel $@
 INSTALL_TEST_STICK = $(IMAGES_DIR)/install-test-stick.img
-$(INSTALL_TEST_STICK): build/images/rach2-recovery.iso $(INSTALLER_DISK) \
+$(INSTALL_TEST_STICK): build/images/rach2-recovery.iso $(INSTALLER_DISK) $(INSTALLER_EXT2) \
                        tools/image/mkinstallstick.sh $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK)
 	sh tools/image/mkinstallstick.sh build/images/rach2-recovery.iso $(INSTALLER_DISK) $@ \
-	    $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK)
+	    $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK) $(INSTALLER_EXT2)
 # `tests/run installer`: the install stick and the program on it. The stick is
 # booted through the firmware with no kernel given to the emulator, so what runs
 # is what GRUB reads off it.
@@ -1379,7 +1379,8 @@ run-installer-repair: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc ch
                       $(HARNESS)
 	sh tests/system/suites/installer.sh $(INSTALL_STICK) $(SEALED_DISK) $(HARNESS) \
 	    $(INSTALLER_REPAIR_DIR) "`cat krffs/rach2_demo_password`" $(INSTALL_TEST_STICK) \
-	    $(INSTALLER_DISK) $(INSTALLER_PORT) $(PTYDRIVE) krffs/rach2_demo_ed25519 repair
+	    $(INSTALLER_DISK) $(INSTALLER_PORT) $(PTYDRIVE) krffs/rach2_demo_ed25519 repair \
+	    $(INSTALLER_EXT2)
 # `tests/run usbdisk`: a flash drive as a disk. Three sticks built on the
 # host, an MBR one, a GUID one and one with no table; the nodes, the mounts,
 # a write, the pull from under a mount and the replug, ten plugs and pulls

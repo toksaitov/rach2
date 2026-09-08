@@ -22,9 +22,12 @@
 # The finished image is judged whole by stickcheck with the kernel's own
 # partition rules, and its volume is walked by mkexfatfixture --check.
 #
-# Usage: mkinstallstick.sh ISO DISK OUT MKEXFATFIXTURE MKMBR STICKCHECK
+# An EXTRA file, if one is given, is placed in the volume beside the image: the
+# root file system an update writes, which `rach2-install --update` takes.
+#
+# Usage: mkinstallstick.sh ISO DISK OUT MKEXFATFIXTURE MKMBR STICKCHECK [EXTRA]
 set -e
-ISO=$1; DISK=$2; OUT=$3; MKFIX=$4; MKMBR=$5; CHECK=$6
+ISO=$1; DISK=$2; OUT=$3; MKFIX=$4; MKMBR=$5; CHECK=$6; EXTRA=${7:-}
 
 if [ -z "$CHECK" ]; then
     echo "usage: mkinstallstick.sh ISO DISK OUT MKEXFATFIXTURE MKMBR STICKCHECK" >&2
@@ -39,9 +42,13 @@ iso_bytes=$(wc -c < "$ISO" | tr -d ' ')
 iso_sectors=$(( (iso_bytes + 511) / 512 ))
 disk_bytes=$(wc -c < "$DISK" | tr -d ' ')
 disk_sectors=$(( (disk_bytes + 511) / 512 ))
+extra_sectors=0
+if [ -n "$EXTRA" ]; then
+    extra_sectors=$(( ( $(wc -c < "$EXTRA" | tr -d ' ') + 511) / 512 ))
+fi
 # The volume starts at the first 1 MiB boundary at or after the ISO's end.
 start=$(( ((iso_sectors + MIB_SECTORS - 1) / MIB_SECTORS) * MIB_SECTORS ))
-volume=$(( disk_sectors + SLACK_SECTORS ))
+volume=$(( disk_sectors + extra_sectors + SLACK_SECTORS ))
 volume=$(( ((volume + MIB_SECTORS - 1) / MIB_SECTORS) * MIB_SECTORS ))
 
 # A failure at any step leaves neither the half-built image nor its parts.
@@ -57,8 +64,14 @@ sum=$(shasum -a 256 "$DISK" | cut -d' ' -f1)
     echo "sha256 $sum"
 } > "$OUT.manifest"
 
-"$MKFIX" --make "$OUT.vol" --sectors "$volume" --offset "$start" \
-    --add "$name=$DISK" --add "rach2-install.manifest=$OUT.manifest" > /dev/null
+if [ -n "$EXTRA" ]; then
+    "$MKFIX" --make "$OUT.vol" --sectors "$volume" --offset "$start" \
+        --add "$name=$DISK" --add "rach2-install.manifest=$OUT.manifest" \
+        --add "$(basename "$EXTRA")=$EXTRA" > /dev/null
+else
+    "$MKFIX" --make "$OUT.vol" --sectors "$volume" --offset "$start" \
+        --add "$name=$DISK" --add "rach2-install.manifest=$OUT.manifest" > /dev/null
+fi
 
 cp "$ISO" "$OUT.new"
 # Pad to the volume's start, then place the volume.
