@@ -37,8 +37,13 @@ static unsigned char rx_last[2048];
 static unsigned rx_last_len;
 static unsigned rx_calls;
 
-void ethernet_rx(const unsigned char *data, unsigned short len)
+/* The interface a frame arrived on, which this model does not look
+ * inside. */
+struct netdev;
+
+void ethernet_rx(struct netdev *nd, const unsigned char *data, unsigned short len)
 {
+    (void)nd;
     unsigned i;
 
     rx_calls++;
@@ -62,13 +67,15 @@ void ethernet_tx(const unsigned char *dst, unsigned short type, const unsigned c
 static unsigned note_rx_errors;
 static unsigned note_rx_drops;
 
-void ethernet_note_rx_error(void)
+void ethernet_note_rx_error(struct netdev *nd)
 {
+    (void)nd;
     note_rx_errors++;
 }
 
-void ethernet_note_rx_drop(void)
+void ethernet_note_rx_drop(struct netdev *nd)
 {
+    (void)nd;
     note_rx_drops++;
 }
 

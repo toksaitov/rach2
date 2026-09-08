@@ -54,6 +54,10 @@ static void rtl8139_rx(void);
 static void rtl8139_rx_reset(void);
 static int rtl8139_link(void *dev, struct netdev_link *out);
 
+/* The interface this driver's one card is. Kept from the bring-up, so a
+ * frame it delivers says where it arrived. */
+static struct netdev *rtl8139_iface;
+
 /**
  * Probe, reset, and bring up the RTL8139.
  *
@@ -72,6 +76,7 @@ int rtl8139_init(struct netdev *nd, int nth)
     uint32_t i;
     uint32_t timeout;
 
+    rtl8139_iface = nd;
     nd->dev = 0; /* this driver keeps its one card in its own file */
     if (nth != 0) {
         return NETDEV_ABSENT;
@@ -380,13 +385,13 @@ static void rtl8139_rx(void)
             klog(KLOG_WARN, "rtl8139",
                  "rx: bad header status 0x%X len %d, resynchronising",
                           (unsigned)status, (int)pkt_len);
-            ethernet_note_rx_error();
+            ethernet_note_rx_error(rtl8139_iface);
             rtl8139_rx_reset();
             return;
         }
 
         /* Hand the frame up without its 4-byte CRC. */
-        ethernet_rx(rx_buf + rx_ptr + 4, (uint16_t)(pkt_len - 4));
+        ethernet_rx(rtl8139_iface, rx_buf + rx_ptr + 4, (uint16_t)(pkt_len - 4));
 
         /* Advance past header + packet, rounded up to the next dword, and wrap
          * within the ring. CAPR trails the read pointer by 16 bytes. */
@@ -431,13 +436,13 @@ static void rtl8139_irq(isr_params_t *params)
         }
         if (isr_val & RTL_ISR_RER) {
             klog(KLOG_WARN, "rtl8139", "rx: the card reported an error");
-            ethernet_note_rx_error();
+            ethernet_note_rx_error(rtl8139_iface);
         }
         if (isr_val & (RTL_ISR_RXOVW | RTL_ISR_FOVW)) {
             klog(KLOG_WARN, "rtl8139", "rx: overflow, resynchronising");
             /* The ring filled while the machine was elsewhere; what it held
              * is gone, and the resync is the recovery. */
-            ethernet_note_rx_drop();
+            ethernet_note_rx_drop(rtl8139_iface);
             rtl8139_rx_reset();
         }
         if (isr_val & RTL_ISR_TER) {

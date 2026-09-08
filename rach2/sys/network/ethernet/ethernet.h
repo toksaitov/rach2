@@ -10,8 +10,11 @@
 #define ETH_TYPE_IP     0x0800
 #define ETH_TYPE_ARP    0x0806
 
+/* The interface a frame arrived on, or whose counters are asked about. */
+struct netdev;
+
 /** Dispatch a received Ethernet frame to ARP or IP by EtherType. */
-void ethernet_rx(const uint8_t *data, uint16_t len);
+void ethernet_rx(struct netdev *nd, const uint8_t *data, uint16_t len);
 
 /** Build an Ethernet frame and hand it to the driver. `ethertype` is in host
  * byte order (e.g. ETH_TYPE_IP) and is written big-endian on the wire. */
@@ -43,10 +46,10 @@ const struct eth_counts *ethernet_counts(void);
 
 /* A frame the hardware reported an error on: it reached the card and the card
  * says it is not sound. */
-void ethernet_note_rx_error(void);
+void ethernet_note_rx_error(struct netdev *nd);
 
 /* A frame this machine could not take: one the driver cannot present whole,
  * or one that arrived with nowhere to put it. */
-void ethernet_note_rx_drop(void);
+void ethernet_note_rx_drop(struct netdev *nd);
 
 #endif /* _ETHERNET_H_ */

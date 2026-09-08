@@ -921,6 +921,10 @@ static uint32_t r8168_link_speed(void)
 /* The driver's entry points.                                          */
 /* ------------------------------------------------------------------ */
 
+/* The interface this driver's one card is. Kept from the bring-up, so a
+ * frame it delivers says where it arrived. */
+static struct netdev *rtl8168_iface;
+
 /**
  * Find the chip, take it out of whatever state it was left in, and start it.
  *
@@ -941,6 +945,7 @@ static int rtl8168_init(struct netdev *nd, int nth)
     uintptr_t mapped;
     int i;
 
+    rtl8168_iface = nd;
     nd->dev = 0; /* this driver keeps its one card in its own file */
     if (nth != 0) {
         return NETDEV_ABSENT;
@@ -1212,16 +1217,16 @@ static void rtl8168_poll(void *dev)
         len = opts1 & R8168_DESC_LEN_MASK;
         if (opts1 & R8168_DESC_RX_RES) {
             r8168_rx_errors++;
-            ethernet_note_rx_error();
+            ethernet_note_rx_error(rtl8168_iface);
         } else if ((opts1 & (R8168_DESC_FS | R8168_DESC_LS)) != (R8168_DESC_FS | R8168_DESC_LS)) {
             r8168_rx_dropped++;
-            ethernet_note_rx_drop();
+            ethernet_note_rx_drop(rtl8168_iface);
         } else if (len <= 4 || len > R8168_RX_BUF_SIZE) {
             r8168_rx_dropped++;
-            ethernet_note_rx_drop();
+            ethernet_note_rx_drop(rtl8168_iface);
         } else {
             r8168_rx_packets++;
-            ethernet_rx(r8168_rx_buf[idx], (uint16_t)(len - 4));
+            ethernet_rx(rtl8168_iface, r8168_rx_buf[idx], (uint16_t)(len - 4));
         }
 
         r8168_rx_ring[idx].opts2 = 0;

@@ -708,24 +708,24 @@ static void e1000_rx(struct e1000 *e)
              * frame of its own, and delivering it would hand the stack the
              * second half of something as though it were whole. */
             e->rx_dropped++;
-            ethernet_note_rx_drop();
+            ethernet_note_rx_drop(e->nd);
             if (status & E1000_RXD_STAT_EOP) {
                 e->rx_discarding = 0;
             }
         } else if (errors & E1000_RXD_ERR_ANY) {
             e->rx_errors++;
-            ethernet_note_rx_error();
+            ethernet_note_rx_error(e->nd);
             e->rx_discarding = (status & E1000_RXD_STAT_EOP) ? 0 : 1;
         } else if (!(status & E1000_RXD_STAT_EOP)) {
             e->rx_dropped++;
-            ethernet_note_rx_drop();
+            ethernet_note_rx_drop(e->nd);
             e->rx_discarding = 1;
         } else if (len < E1000_FRAME_MIN || len > E1000_RX_BUF_SIZE) {
             e->rx_dropped++;
-            ethernet_note_rx_drop();
+            ethernet_note_rx_drop(e->nd);
         } else {
             e->rx_packets++;
-            ethernet_rx(e->rx_buf[e->rx_cur], (uint16_t)len);
+            ethernet_rx(e->nd, e->rx_buf[e->rx_cur], (uint16_t)len);
         }
 
         d->len_csum = 0;
@@ -790,7 +790,7 @@ static void e1000_service(struct e1000 *e)
              * the whole recovery: the descriptors the card could not use are
              * returned by the tail write e1000_rx ends with. */
             e->rx_dropped++;
-            ethernet_note_rx_drop();
+            ethernet_note_rx_drop(e->nd);
             e1000_rx(e);
         }
         /* A link change needs nothing done. The card renegotiates on its own

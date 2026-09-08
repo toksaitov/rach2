@@ -208,7 +208,7 @@ static void deliver(const uint8_t *bytes, unsigned len)
     uint8_t *exact = (uint8_t *)malloc(len ? len : 1);
 
     memcpy(exact, bytes, len);
-    ethernet_rx(exact, (uint16_t)len);
+    ethernet_rx(netdev_first(), exact, (uint16_t)len);
     free(exact);
 }
 

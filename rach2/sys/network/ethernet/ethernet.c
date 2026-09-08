@@ -23,10 +23,26 @@ static uint8_t eth_tx_frame[ETH_HDR_SIZE + 1500];
 
 /* What the interface has carried, for /proc/net/dev. Counted here rather than
    in the drivers, because this is the one place every frame passes. */
+/*
+ * The machine's counters, which are the first interface's. Every count is
+ * kept on the interface it belongs to; this reads them back for the callers
+ * that still ask about the machine rather than about an interface.
+ */
 static struct eth_counts counts;
 
 const struct eth_counts *ethernet_counts(void)
 {
+    struct netdev *nd = netdev_first();
+
+    if (nd) {
+        counts.rx_packets = nd->rx_packets;
+        counts.rx_bytes = nd->rx_bytes;
+        counts.rx_errors = nd->rx_errors;
+        counts.rx_dropped = nd->rx_dropped;
+        counts.tx_packets = nd->tx_packets;
+        counts.tx_bytes = nd->tx_bytes;
+        counts.tx_dropped = nd->tx_dropped;
+    }
     return &counts;
 }
 
@@ -39,12 +55,12 @@ const struct eth_counts *ethernet_counts(void)
  * given the whole frame, since the addresses in the header are part of what it
  * reports. Frames shorter than a header are dropped.
  */
-void ethernet_rx(const uint8_t *data, uint16_t len)
+void ethernet_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
 {
     uint16_t etype;
 
     if (len < ETH_HDR_SIZE) {
-        counts.rx_dropped++;
+        nd->rx_dropped++;
         return;
     }
     /* An interface an administrator took down receives nothing either. The
@@ -52,12 +68,12 @@ void ethernet_rx(const uint8_t *data, uint16_t len)
        while it was down would be a machine whose sockets saw traffic it could
        not reply to, since transmission is gated below. */
     if (!netif_is_up()) {
-        counts.rx_dropped++;
+        nd->rx_dropped++;
         return;
     }
 
-    counts.rx_packets++;
-    counts.rx_bytes += len;
+    nd->rx_packets++;
+    nd->rx_bytes += len;
 
     etype = (uint16_t)(((uint16_t)data[12] << 8) | data[13]);
 
@@ -90,12 +106,17 @@ void ethernet_rx(const uint8_t *data, uint16_t len)
 void ethernet_tx(const uint8_t *dst_mac, uint16_t ethertype,
                  const uint8_t *payload, uint16_t plen)
 {
+    struct netdev *out = netdev_first();
     uint16_t total;
+
+    if (!out) {
+        return; /* nothing to send through */
+    }
 
     if (plen > 1500) {
         klog(KLOG_WARN, "eth", "tx: payload of %d bytes is too large, dropped",
                       (int)plen);
-        counts.tx_dropped++;
+        out->tx_dropped++;
         return;
     }
     /* An interface an administrator took down has no IP and answers no
@@ -103,12 +124,12 @@ void ethernet_tx(const uint8_t *dst_mac, uint16_t ethertype,
        with no console is read, and a machine whose network was just
        misconfigured is exactly when its log is worth having. */
     if (!netif_is_up() && (ethertype == ETH_TYPE_IP || ethertype == ETH_TYPE_ARP)) {
-        counts.tx_dropped++;
+        out->tx_dropped++;
         return;
     }
 
     k_memcpy(eth_tx_frame,     dst_mac, 6);
-    k_memcpy(eth_tx_frame + 6, net_mac, 6);
+    k_memcpy(eth_tx_frame + 6, out->mac, 6);
     eth_tx_frame[12] = (uint8_t)(ethertype >> 8);
     eth_tx_frame[13] = (uint8_t)(ethertype & 0xFF);
     k_memcpy(eth_tx_frame + ETH_HDR_SIZE, payload, plen);
@@ -118,19 +139,19 @@ void ethernet_tx(const uint8_t *dst_mac, uint16_t ethertype,
      * card would not take did not leave, and counting it as carried is the
      * error this verdict exists to correct. */
     if (netdev_tx(netdev_first(), eth_tx_frame, total) != NETDEV_TX_OK) {
-        counts.tx_dropped++;
+        out->tx_dropped++;
         return;
     }
-    counts.tx_packets++;
-    counts.tx_bytes += total;
+    out->tx_packets++;
+    out->tx_bytes += total;
 }
 
-void ethernet_note_rx_error(void)
+void ethernet_note_rx_error(struct netdev *nd)
 {
-    counts.rx_errors++;
+    nd->rx_errors++;
 }
 
-void ethernet_note_rx_drop(void)
+void ethernet_note_rx_drop(struct netdev *nd)
 {
-    counts.rx_dropped++;
+    nd->rx_dropped++;
 }
