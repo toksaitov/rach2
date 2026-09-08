@@ -22,6 +22,12 @@
 # that machine) it compares and says so; where none exists it reports the
 # number so the record has it.
 #
+# The key is the demonstration one the RAM images carry, unless
+# `RACH2_ACCEPT_KEY` names another. A machine installed by `rach2-install` has
+# no demonstration key on it: its accounts are the ones the install was given,
+# so the acceptance of such a machine is run with that account's key named in
+# the environment rather than with this script edited.
+#
 # Usage: metal_accept.sh <host> [port]
 #
 
@@ -36,7 +42,12 @@ if [ -z "$HOST" ]; then
 fi
 
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
-KEY="$REPO/krffs/rach2_demo_ed25519"
+KEY="${RACH2_ACCEPT_KEY:-$REPO/krffs/rach2_demo_ed25519}"
+if [ ! -f "$KEY" ]; then
+    echo "metal_accept.sh: $KEY is not a file: name the machine's own key in" \
+         "RACH2_ACCEPT_KEY" >&2
+    exit 2
+fi
 KNOWN="$REPO/build/images/metal-accept.known"
 
 # The MBR's SHA-256 as Windows measured it, from dev-log/24-metal/baseline.md.

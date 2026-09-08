@@ -117,9 +117,11 @@ loopctl detach 0
 
 An image of another size is built on the host and copied over: `sh krffs/mkimage.sh krffs/manifests/fs-demo.manifest build/images/mine.krffs 8` for an 8 MiB one, then `ssh -i krffs/rach2_demo_ed25519 root@ADDRESS 'cat > /root/mine.krffs' < build/images/mine.krffs`. `make fs-demo-images` builds the five the disk has, in `build/images/fs-demo/`: FAT32 through `mformat`, exFAT through this tree's own `mkexfatfixture`, ext2 and KRFFS from `krffs/manifests/fs-demo.manifest`, and the empty one from `mkfs.krffs`. `krffs/manifests/rach2-metal-disk.manifest` puts them in `/demo`.
 
-## Updating the installed machine
+## Installing and updating a machine
 
-The laptop is maintained over SSH from a host that has built the artifacts; nothing here needs the disk out of the bay. There are two paths and they are not interchangeable. A kernel goes into a boot slot from the running system. A root goes in from the recovery system, because only the recovery kernel may write a whole disk.
+A machine is installed from the stick `make rach2-install-stick` writes: the recovery system, and after it an exFAT volume carrying the whole disk image and a manifest naming that image's length and SHA-256. Boot the stick, log in at the console as root, and run `rach2-install`. It lists the disks it could write with what each one is and why the others were passed over, asks for root's password, the first account's name, password and keys, whether to grow the root into the whole disk, and then for the disk's own name typed back. Nothing is written before that answer. It then checks the image against the manifest, writes it, reads it back and compares, has the kernel read the new table, writes the accounts and the SSH policy into the root, and grows it. `utils/rach2-install.txt` is the reference; `rach2-recover` is the menu for a machine that will not boot, which lists what the machine has, checks a file system, puts a saved image back and installs a kernel.
+
+The laptop is maintained over SSH from a host that has built the artifacts; nothing here needs the disk out of the bay. There are three paths and they are not interchangeable. A kernel goes into a boot slot from the running system. A whole root file system goes in from the recovery system with `rach2-install --update`, which keeps the accounts, the SSH policy and the host keys the machine has; the raw `reflash` path below is what that is built on and what remains for a partition the installer does not know about.
 
 A kernel, from the ordinary system:
 
@@ -133,7 +135,19 @@ ssh -i $KEY root@ADDRESS 'bootctl status && bootctl commit'
 
 `bootctl kernel` writes the candidate slot and arms one trial. The machine that comes back is either the new kernel, which `commit` then makes the default, or the fallback, which needs nothing done to it. A kernel that does not boot costs one reboot and leaves the machine on the fallback: the candidate slot holds the new kernel and the saved default is the fallback until a later install or commit changes them.
 
-A root, from recovery:
+A root file system, from the machine's own recovery entry, keeping its accounts:
+
+```sh
+KEY=krffs/rach2_demo_ed25519          # or the account's own key after an install
+ssh -i $KEY root@ADDRESS 'bootctl trial recovery' && ssh -i $KEY root@ADDRESS reboot
+# recovery boots a RAM root, takes a DHCP address, and answers SSH on it
+ssh -i $KEY root@ADDRESS 'cat > /tmp/root.ext2' < build/images/rach2-metal-disk.ext2
+ssh -i $KEY root@ADDRESS 'rach2-install --update /tmp/root.ext2 /dev/disk0'
+ssh -i $KEY root@ADDRESS reboot
+ssh -i $KEY root@ADDRESS 'cat /proc/mounts && bootctl status && bootctl commit'
+```
+
+`--update` reads the account files, the SSH policy and the host keys off the root before it writes, puts them back after, grows the root into its partition again, and arms one trial boot; the machine that comes back is either the new root, which `commit` then makes the default, or the fallback, which needs nothing done to it. The raw path it is built on, for a partition it does not know about:
 
 ```sh
 dd if=build/images/rach2-sealed.disk of=root.img bs=512 skip=133120 count=1024000

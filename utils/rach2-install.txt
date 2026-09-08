@@ -1,0 +1,95 @@
+RACH2-INSTALL(8)
+
+NAME
+     rach2-install - install this system onto a disk, or update an installed one
+
+SYNOPSIS
+     rach2-install [--source DIR]
+     rach2-install --update IMAGE DISK
+
+DESCRIPTION
+     rach2-install writes Rach2 onto a disk of the machine it is running on. It
+     runs from the recovery system booted off the install stick, which carries
+     a whole disk image and a manifest naming that image's name, length and
+     SHA-256.
+
+     The stick is found by the manifest on it rather than by a position, so the
+     machine may have any number of disks. --source DIR takes the image and its
+     manifest from a directory that is already mounted, which is how the tests
+     drive it without a stick.
+
+     Every question is asked before anything is written, and the last of them
+     is the confirmation, so a person who changes their mind has not left a
+     disk half written. The questions, in order:
+
+     which disk        A disk is offered when it is fixed, nothing is mounted
+                       from it, its sector is 512 bytes, it is not the stick
+                       this is running from, and it is at least as large as the
+                       image. Each disk that is not offered is named with the
+                       reason. The answer is the disk's own node, /dev/diskN.
+
+     root's password   Typed twice, with the terminal's echo off. The two must
+                       match and neither may be empty.
+
+     the first account The name must begin with a letter and hold only letters,
+                       digits, hyphen and underscore, at most 32 characters,
+                       and it may not be root.
+
+     its password      Twice, as root's.
+
+     its keys          A file of authorized keys, or nothing. Given, the file
+                       is copied into the account's ~/.ssh/authorized_keys.
+
+     the root's size   Whether to grow the root into the whole disk. The
+                       default is yes; no leaves the root the size the image
+                       has.
+
+     the confirmation  The disk is described again and its own name must be
+                       typed back. Anything else stops without writing.
+
+     Then, in this order: the image on the stick is read and its SHA-256
+     compared with the manifest, so a damaged stick is found before anything is
+     destroyed; the image is written to the disk with reflash -p, which says
+     how far it has got every sixteen mebibytes; the same range is read back
+     and hashed, and what reached the disk must be the image; the kernel is
+     asked to read the disk's new table; the accounts, /etc/passwd, /etc/group
+     and /etc/shadow, are written whole into the ext2 root the image carries,
+     each to a name of its own and renamed into place; the account's home is
+     made and its keys placed; /etc/rach2/sshd.conf is written with
+     root-password-login yes, which is what makes init start the SSH server
+     without dropbear's -g; and the root is grown into the free space after it
+     when that was asked for.
+
+     The demonstration accounts and keys the image carries are removed from the
+     installed root. The KRFFS root beside it and the recovery partition keep
+     theirs, since they are the way back into a machine whose new root will not
+     come up.
+
+     --update IMAGE DISK writes a root file system image into the root
+     partition of a machine that is already installed, without touching its
+     table. What the machine has become is read off the root first, the account
+     files, the SSH policy, the server's host keys and the accounts' own keys,
+     and put back after the write, so a password changed after the install
+     survives an update. The root is grown again into its partition and the new
+     root is armed for one trial boot, so an update that will not come up costs
+     a reboot rather than a journey.
+
+EXIT STATUS
+     0 when the disk carries the system and, for an update, when the new root
+     is on the disk and armed. Anything else is a failure with the reason on
+     standard error; nothing is written after a failure that happened before
+     the write.
+
+EXAMPLES
+     Boot the install stick, log in at the console as root, and run:
+
+           rach2-install
+
+     Update an installed machine from its own recovery entry, with the new root
+     file system on the stick:
+
+           mount -t exfat /dev/disk1p2 /mnt
+           rach2-install --update /mnt/rach2-root.ext2 /dev/disk0
+
+SEE ALSO
+     rach2-recover, reflash, growroot, bootctl, diskctl
