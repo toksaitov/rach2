@@ -244,6 +244,25 @@ static int same(const char *a, const char *b)
 /* The one address the stack still holds for the machine. */
 uint8_t net_mac[6];
 
+/* The boot line and the log, which the walk reaches and this test does not
+ * build. No case here asks for a card to be refused. */
+int kcmdline_value(const char *key, char *out, unsigned int outlen)
+{
+    (void)key;
+    (void)outlen;
+    if (outlen > 0) {
+        out[0] = '\0';
+    }
+    return 0;
+}
+
+void klog(int level, const char *subsystem, const char *format, ...)
+{
+    (void)level;
+    (void)subsystem;
+    (void)format;
+}
+
 /* The kernel's fill, which the walk reaches and this test does not build. */
 void *k_memset(void *ptr, char c, size_t n)
 {

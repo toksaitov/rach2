@@ -18,6 +18,8 @@
 #include "rtl8139.h"
 #include "rtl8168.h"
 #include "../net.h"
+#include "../../cmdline.h"
+#include "../../klog.h"
 #include "../../lib/kstring.h"
 
 /*
@@ -123,9 +125,33 @@ static void name_iface(struct netdev *nd, int n)
  *
  * @return 1 when at least one interface came up, 0 when none did.
  */
+/*
+ * Which card the boot line asks to see fail, counting the cards this probe
+ * brings up from zero, or -1 for none. `rach2.nicfail=1` makes the second
+ * card refuse, which is how a machine with one broken card and one good one
+ * is seen to keep the good one; there is no other way to make a card in QEMU
+ * fail its bring-up.
+ */
+static int nicfail_at(void)
+{
+    char value[8];
+    int n = 0;
+    int i;
+
+    if (!kcmdline_value("rach2.nicfail", value, (unsigned int)sizeof(value))) {
+        return -1;
+    }
+    for (i = 0; value[i] >= '0' && value[i] <= '9'; i++) {
+        n = n * 10 + (value[i] - '0');
+    }
+    return i > 0 && value[i] == '\0' ? n : -1;
+}
+
 int netdev_probe(void)
 {
     int i;
+    int fail_at = nicfail_at();
+    int found = 0;
 
     niface = 0;
     probe_error = "no supported network card";
@@ -143,6 +169,11 @@ int netdev_probe(void)
             name_iface(nd, niface);
             verdict = drivers[i]->init(nd, nth);
 
+            if (verdict == NETDEV_UP && found++ == fail_at) {
+                klog(KLOG_WARN, "net", "%s: refused: rach2.nicfail=%d", nd->name, fail_at);
+                verdict = NETDEV_FAILED;
+                probe_error = "the card was refused on the boot line";
+            }
             if (verdict == NETDEV_ABSENT) {
                 break; /* this driver has no more cards */
             }
@@ -160,6 +191,9 @@ int netdev_probe(void)
                 }
                 if (drivers[i]->error) {
                     probe_error = drivers[i]->error();
+                }
+                if (fail_at >= 0) {
+                    continue; /* a refusal asked for, not one the card gave */
                 }
                 break; /* this driver's next card is not tried */
             }

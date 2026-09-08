@@ -696,6 +696,7 @@ run-raw: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(PCAPCHECK) $
 # address out from under the machine and puts it back, and the last thing it
 # does is ping the gateway, which needs the network to answer.
 TWONIC_LOG = $(TEST_IMAGE).twonic.log
+NICFAIL_LOG = $(TEST_IMAGE).nicfail.log
 run-netif: rach2 tests krffs test-image $(HARNESS)
 	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
@@ -721,8 +722,9 @@ run-netif: rach2 tests krffs test-image $(HARNESS)
 	    --qemu-arg=-device --qemu-arg=e1000,netdev=net1 \
 	    --append "rach2.ifaddr=52:54:00:12:34:57,10.0.3.5/24,10.0.3.2" \
 	    --log $(TWONIC_LOG) \
-	    --timeout 120 --ok "PINGTEST OK" \
-	    "expect=Type 'help'" "send=exec /pingtest" wait=60
+	    --timeout 180 --steptmo 60 --ok "NETIFPROBE OK" \
+	    "expect=Type 'help'" "send=exec /pingtest" "expect=PINGTEST OK" \
+	    "expect=Type 'help'" "send=exec /netifprobe second" wait=60
 	@sh -c 'l=$(TWONIC_LOG); \
 	    grep -aq "net: eth0: e1000" "$$l" || \
 	        { echo "netif-test: FAIL: the first card did not become eth0" >&2; exit 1; }; \
@@ -739,6 +741,25 @@ run-netif: rach2 tests krffs test-image $(HARNESS)
 	    grep -aq "net: eth0: IPv4 10.0.2.15/24" "$$l" || \
 	        { echo "netif-test: FAIL: the first card lost its own address" >&2; exit 1; }; \
 	    echo "netif-test: two cards are two interfaces, each with its own station and address: OK"'
+# The first card refused at its bring-up: the second still comes up, takes the
+# one interface there is, and carries the traffic.
+	@rm -f $(NICFAIL_LOG)
+	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+	    --qemu-arg=-cpu --qemu-arg=max \
+	    --net "user,id=net0" --device "e1000,netdev=net0" \
+	    --qemu-arg=-netdev --qemu-arg=user,id=net1 \
+	    --qemu-arg=-device --qemu-arg=e1000,netdev=net1 \
+	    --append "rach2.nicfail=0" \
+	    --log $(NICFAIL_LOG) \
+	    --timeout 120 --ok "PINGTEST OK" \
+	    "expect=Type 'help'" "send=exec /pingtest" wait=60
+	@sh -c 'l=$(NICFAIL_LOG); \
+	    grep -aq "net: eth0: refused: rach2.nicfail=0" "$$l" || \
+	        { echo "netif-test: FAIL: the card was not refused" >&2; exit 1; }; \
+	    n=`grep -ac "net: eth[0-9]*: e1000, station" "$$l"`; \
+	    [ "$$n" = "1" ] || \
+	        { echo "netif-test: FAIL: $$n interfaces came up, not one" >&2; exit 1; }; \
+	    echo "netif-test: a card refused at its bring-up leaves the other one serving: OK"'
 # `tests/run dgram`: a connected datagram socket and the permission to
 # broadcast, which is how a DHCP client renews a lease and how it asks for one.
 # Its own target because it broadcasts, and a probe in the suite must not put a

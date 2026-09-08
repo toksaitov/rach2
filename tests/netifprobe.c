@@ -385,7 +385,75 @@ static void configure_from_nothing(int fd)
     }
 }
 
-void _start(void)
+/*
+ * `netifprobe second`: with two cards, taking the second down leaves the
+ * first serving. An interface an administrator takes down carries nothing
+ * itself, and a machine whose other card kept working is what says the flag
+ * belongs to the interface and not to the stack.
+ */
+static void second_down(void)
+{
+    uint32_t args[6];
+    int fd;
+
+    args[0] = AF_INET;
+    args[1] = SOCK_RAW;
+    args[2] = IPPROTO_RAW;
+    fd = socketcall(SC_SOCKET, args);
+    if (fd < 0) {
+        fail("the raw descriptor the interface is asked through did not open");
+    }
+
+    set_name("eth1");
+    if (sys_ioctl(fd, SIOCGIFFLAGS, ifr) != 0) {
+        fail("the second interface could not be asked about its flags");
+    }
+    if (!(ifr[16] & IFF_UP)) {
+        fail("the second interface was not up to begin with");
+    }
+    set_name("eth1");
+    ifr[16] = 0;
+    ifr[17] = 0;
+    if (sys_ioctl(fd, SIOCSIFFLAGS, ifr) != 0) {
+        fail("the second interface could not be taken down");
+    }
+    set_name("eth0");
+    if (sys_ioctl(fd, SIOCGIFFLAGS, ifr) != 0 || !(ifr[16] & IFF_UP)) {
+        fail("the first interface went down with the second");
+    }
+    if (ping_retry(SLIRP_GW) < 0) {
+        fail("the gateway stopped answering when the second interface went down");
+    }
+    set_name("eth1");
+    ifr[16] = IFF_UP;
+    ifr[17] = 0;
+    if (sys_ioctl(fd, SIOCSIFFLAGS, ifr) != 0) {
+        fail("the second interface could not be brought back up");
+    }
+    say("NETIFPROBE OK\n");
+    sys_exit(0);
+}
+
+static void netif_main(void);
+
+void probe_main(unsigned int *sp)
+{
+    int argc = (int)sp[0];
+    char **argv = (char **)(sp + 1);
+
+    if (argc > 1 && argv[1][0] == 's') {
+        second_down();
+    }
+    netif_main();
+}
+
+__asm__(".global _start\n"
+        "_start:\n"
+        "   mov %esp, %eax\n"
+        "   push %eax\n"
+        "   call probe_main\n");
+
+static void netif_main(void)
 {
     uint32_t args[6];
     int fd, listener, client, conn, client2, conn2, pid, status;
