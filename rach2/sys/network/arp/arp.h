@@ -38,6 +38,14 @@ void arp_rx(struct netdev *nd, const uint8_t *data, uint16_t len);
 void arp_flush(void);
 
 /**
+ * Forget the mappings learned on `nd`.
+ *
+ * Called when that one interface's address changes, which says nothing about
+ * the neighbours of the other interfaces.
+ */
+void arp_forget_dev(struct netdev *nd);
+
+/**
  * Look up the cached MAC for an IP; 1 on a hit, 0 on a miss.
  *
  * A hit counts as use, so the entry moves to the back of the queue for

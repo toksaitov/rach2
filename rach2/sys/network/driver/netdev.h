@@ -135,6 +135,14 @@ struct netdev {
     uint32_t mask;
     uint32_t gateway;
 
+    /* An address this interface has been given and cannot put in force yet,
+     * and whether the mask in force was derived rather than given. Setting an
+     * address is two ioctls, the address and then the mask, and what happens
+     * between them belongs to the interface being configured: the other
+     * interfaces are in force throughout. */
+    uint32_t pending_ip;
+    int mask_provisional;
+
     /* What has passed through this interface. Two cards keep two sets, which
      * is what `/proc/net/dev` prints a line each of. */
     uint32_t rx_packets;
@@ -171,6 +179,19 @@ struct netdev *netdev_by_name(const char *name);
  *         filled only when one does.
  */
 struct netdev *netdev_route(uint32_t dst, uint32_t *via);
+
+/**
+ * Whether `ip` is an address one of this machine's interfaces holds.
+ *
+ * A machine with two cards owns two addresses, and a datagram to either is
+ * addressed to it.
+ */
+int netdev_owns(uint32_t ip);
+
+/**
+ * Whether `ip` is the broadcast address of a subnet one interface is on.
+ */
+int netdev_is_broadcast(uint32_t ip);
 
 /** The first interface, or NULL when none came up. */
 struct netdev *netdev_first(void);

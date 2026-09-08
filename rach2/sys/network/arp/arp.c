@@ -125,6 +125,25 @@ void arp_flush(void)
 }
 
 /**
+ * Drop the mappings learned on one interface, leaving the others.
+ *
+ * Called when that interface's address changes. A machine with two cards is
+ * on two networks, and the neighbours of the network whose address did not
+ * change are still where they were.
+ */
+void arp_forget_dev(struct netdev *nd)
+{
+    int i;
+
+    for (i = 0; i < ARP_CACHE_SIZE; i++) {
+        if (arp_cache[i].nd == nd) {
+            arp_cache[i].valid = 0;
+            arp_cache[i].used = 0;
+        }
+    }
+}
+
+/**
  * Store or refresh an IP-to-MAC mapping.
  *
  * We learn from every ARP packet, including unsolicited ones, which is a

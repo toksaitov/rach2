@@ -132,8 +132,12 @@ static int32_t ifreq_ioctl(uint32_t request, uint32_t arg)
                                   ((uint32_t)ifr[IFREQ_UNION + 2] << 16) |
                                   ((uint32_t)ifr[IFREQ_UNION + 3] << 24));
 
-        struct netdev *at = netdev_at(index - 1);
+        struct netdev *at;
 
+        if (index < 1 || index > netdev_count()) {
+            return -ENODEV; /* judged before it is made a place in the table */
+        }
+        at = netdev_at(index - 1);
         if (!at || at->index != index) {
             return -ENODEV;
         }
@@ -214,14 +218,15 @@ static int32_t ifreq_ioctl(uint32_t request, uint32_t arg)
            with it is either the classful one until `SIOCSIFNETMASK` arrives or
            the wrong one carried over from the address before it. `ifconfig`
            issues the two in that order for exactly this reason. */
-        return netconf_set_address(be32(ifr + IFREQ_SA_ADDR), 0);
+        return netconf_set_address(nd, be32(ifr + IFREQ_SA_ADDR), 0);
     case SIOCSIFNETMASK:
-        return netconf_set_netmask(be32(ifr + IFREQ_SA_ADDR));
+        return netconf_set_netmask(nd, be32(ifr + IFREQ_SA_ADDR));
     case SIOCSIFBRDADDR:
         /* The broadcast address of a subnet is the subnet's, not a choice, so
-         * this accepts the one this machine already derives and refuses any
+         * this accepts the one this interface already derives and refuses any
          * other instead of storing a second answer to the same question. */
-        if (be32(ifr + IFREQ_SA_ADDR) != netconf_broadcast()) {
+        if (be32(ifr + IFREQ_SA_ADDR) !=
+            (nd->ip != 0 && nd->mask != 0 ? (nd->ip | ~nd->mask) : 0xFFFFFFFFu)) {
             return -EINVAL;
         }
         return 0;
@@ -249,6 +254,7 @@ static int32_t route_ioctl(uint32_t request, uint32_t arg)
     uint8_t rt[RTENTRY_LEN];
     uint8_t name[IFREQ_NAMESIZE];
     uint32_t dst, gw, mask, dev;
+    struct netdev *nd;
 
     if (!current_proc || current_proc->euid != 0) {
         return -EPERM;
@@ -260,12 +266,13 @@ static int32_t route_ioctl(uint32_t request, uint32_t arg)
     gw = be32(rt + RTENTRY_GATEWAY + 4);
     mask = be32(rt + RTENTRY_GENMASK + 4);
 
-    /* The device the route is for. A null pointer means "wherever it goes",
-       which on a machine with one interface is this one; a name is checked,
-       so that a route for an interface this machine does not have cannot
-       change the route of the one it does. */
+    /* The interface the route is for. A null pointer means "wherever it goes",
+       which is the first interface, the one whose address is the machine's; a
+       name is checked and the route is that interface's, so that a route for
+       one interface cannot change the route of another. */
     dev = (uint32_t)rt[RTENTRY_DEV] | ((uint32_t)rt[RTENTRY_DEV + 1] << 8) |
           ((uint32_t)rt[RTENTRY_DEV + 2] << 16) | ((uint32_t)rt[RTENTRY_DEV + 3] << 24);
+    nd = netdev_first();
     if (dev != 0) {
         /* A name is a string, and it is read as one: a fixed sixteen bytes from
            a caller whose name is five bytes long can run off the end of the
@@ -277,9 +284,10 @@ static int32_t route_ioctl(uint32_t request, uint32_t arg)
         if (got < 0) {
             return got == -EFAULT ? -EFAULT : -ENODEV;
         }
-        if (!named(name)) {
-            return -ENODEV;
-        }
+        nd = named(name);
+    }
+    if (!nd) {
+        return -ENODEV;
     }
 
     if (dst == 0 && mask == 0) {
@@ -292,25 +300,25 @@ static int32_t route_ioctl(uint32_t request, uint32_t arg)
             if (gw == 0) {
                 return -EINVAL;
             }
-            return netconf_set_gateway(gw);
+            return netconf_set_gateway(nd, gw);
         }
         if (request == SIOCDELRT) {
             /* Removing a route that is not there is an error, and saying so
                matters: a DHCP client's script removes old default routes in a
                loop that ends when the removal fails, and a removal that always
                succeeds is a machine that never gets past it. */
-            if (net_ip_gateway == 0) {
+            if (nd->gateway == 0) {
                 return -ESRCH;
             }
-            if (gw != 0 && gw != net_ip_gateway) {
+            if (gw != 0 && gw != nd->gateway) {
                 return -ESRCH;
             }
-            return netconf_set_gateway(0);
+            return netconf_set_gateway(nd, 0);
         }
         return -EINVAL;
     }
-    if (request == SIOCADDRT && net_ip_mask != 0 && dst == (net_ip_addr & net_ip_mask) &&
-        mask == net_ip_mask && gw == 0) {
+    if (request == SIOCADDRT && nd->mask != 0 && dst == (nd->ip & nd->mask) &&
+        mask == nd->mask && gw == 0) {
         /* The subnet is reachable already, by being on it, so adding that route
            asks for what is already true. Removing it is another matter: it
            cannot be removed while the address that implies it is in force, and

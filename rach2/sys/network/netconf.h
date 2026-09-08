@@ -3,6 +3,9 @@
 
 #include "../lib/kint.h"
 
+/* The interface a configuration belongs to. */
+struct netdev;
+
 /*
  * netconf: the machine's one IPv4 address, chosen at boot.
  *
@@ -109,46 +112,49 @@ int netconf_address_is_impossible(uint32_t ip);
 int netconf_is_broadcast(uint32_t ip);
 
 /**
- * Set the machine's address and mask at runtime.
+ * Set `nd`'s address and mask at runtime.
  *
  * An address of zero means unconfigured, and takes the mask with it: half a
  * configuration is not one. Everything else is held to the same rules the boot
  * line's address is held to, and a mask must be a run of ones. A mask of zero
  * means "take the classful one for now", not "no mask".
  *
- * Changing the address is not just a number. Every ARP mapping was learned by
- * a machine at the old address and is dropped, and every TCP connection
- * recorded the address it was opened from: those are aborted, with `ENETRESET`
- * on their sockets, not left to send from an address this machine no
- * longer has. A gateway that is no longer on the subnet is dropped too.
+ * Changing the address is not just a number. Every ARP mapping learned on that
+ * interface was learned by a machine at the old address and is dropped. The
+ * first interface's address is also the machine's, the one every TCP
+ * connection recorded being opened from, so changing that one aborts them,
+ * with `ENETRESET` on their sockets, rather than leaving them to send from an
+ * address the machine no longer has. A gateway of that interface that is no
+ * longer on its subnet is dropped too. The other interfaces are untouched
+ * throughout.
  *
- * @return 0, or a negative errno.
+ * @return 0, or a negative errno; `-ENODEV` for a null interface.
  */
-int netconf_set_address(uint32_t ip, uint32_t mask);
+int netconf_set_address(struct netdev *nd, uint32_t ip, uint32_t mask);
 
 /**
- * Set the machine's netmask at runtime.
+ * Set `nd`'s netmask at runtime.
  *
  * Separate from the address because `ifconfig` sets them separately, one ioctl
- * each: a machine that could not hold an address without a mask, or a mask
+ * each: an interface that could not hold an address without a mask, or a mask
  * without an address, could not be configured at all. An address given with no
  * mask takes the classful one its first byte implies until a mask arrives,
  * which is what Linux does.
  *
- * @return 0, or a negative errno.
+ * @return 0, or a negative errno; `-ENODEV` for a null interface.
  */
-int netconf_set_netmask(uint32_t mask);
+int netconf_set_netmask(struct netdev *nd, uint32_t mask);
 
 /**
- * Set or clear the default gateway.
+ * Set or clear `nd`'s default gateway.
  *
  * Zero clears it, which leaves off-subnet traffic refused. A gateway must be a
- * host on this machine's subnet, so this fails while the machine has no
+ * host on that interface's subnet, so this fails while the interface has no
  * address.
  *
- * @return 0, or a negative errno.
+ * @return 0, or a negative errno; `-ENODEV` for a null interface.
  */
-int netconf_set_gateway(uint32_t gw);
+int netconf_set_gateway(struct netdev *nd, uint32_t gw);
 
 /** Format `ip` as `A.B.C.D` into `out`, which needs 16 bytes. */
 void netconf_format(uint32_t ip, char *out);
