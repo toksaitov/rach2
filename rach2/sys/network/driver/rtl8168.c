@@ -945,11 +945,11 @@ static int rtl8168_init(struct netdev *nd, int nth)
     uintptr_t mapped;
     int i;
 
-    rtl8168_iface = nd;
     nd->dev = 0; /* this driver keeps its one card in its own file */
     if (nth != 0) {
         return NETDEV_ABSENT;
     }
+    rtl8168_iface = nd; /* only for the card this driver has */
 
     r8168_up = 0;
     if (!pci_find_device_by_id(0x10EC, 0x8168, &r8168_pci)) {

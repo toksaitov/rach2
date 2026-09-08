@@ -76,11 +76,11 @@ int rtl8139_init(struct netdev *nd, int nth)
     uint32_t i;
     uint32_t timeout;
 
-    rtl8139_iface = nd;
     nd->dev = 0; /* this driver keeps its one card in its own file */
     if (nth != 0) {
         return NETDEV_ABSENT;
     }
+    rtl8139_iface = nd; /* only for the card this driver has */
 
     if (!pci_find_device_by_id(0x10EC, 0x8139, &rtl_pci)) {
         rtl_err = "RTL8139 not found on PCI bus";

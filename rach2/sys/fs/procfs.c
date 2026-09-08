@@ -703,36 +703,37 @@ uint32_t procfs_ino_pid(int pid)
  */
 static int procfs_gen_netdev(struct procfs_text *t)
 {
-    const struct eth_counts *c = ethernet_counts();
+    int i;
 
     ap_str(t,
            "Inter-|   Receive                                                |"
            "  Transmit\n"
            " face |bytes    packets errs drop fifo frame compressed multicast|"
            "bytes    packets errs drop fifo colls carrier compressed\n");
-    if (!netdev_first()) {
-        return t->len;
+    for (i = 0; i < netdev_count(); i++) {
+        const struct netdev *nd = netdev_at(i);
+
+        ap_str(t, "  ");
+        ap_str(t, nd->name);
+        ap_str(t, ": ");
+        ap_u32(t, nd->rx_bytes);
+        ap_ch(t, ' ');
+        ap_u32(t, nd->rx_packets);
+        ap_ch(t, ' ');
+        ap_u32(t, nd->rx_errors);
+        ap_ch(t, ' ');
+        ap_u32(t, nd->rx_dropped);
+        /* fifo, frame, compressed, multicast */
+        ap_str(t, " 0 0 0 0 ");
+        ap_u32(t, nd->tx_bytes);
+        ap_ch(t, ' ');
+        ap_u32(t, nd->tx_packets);
+        /* errs */
+        ap_str(t, " 0 ");
+        ap_u32(t, nd->tx_dropped);
+        /* fifo, colls, carrier, compressed */
+        ap_str(t, " 0 0 0 0\n");
     }
-    ap_str(t, "  ");
-    ap_str(t, NETDEV_IFNAME);
-    ap_str(t, ": ");
-    ap_u32(t, c->rx_bytes);
-    ap_ch(t, ' ');
-    ap_u32(t, c->rx_packets);
-    ap_ch(t, ' ');
-    ap_u32(t, c->rx_errors);
-    ap_ch(t, ' ');
-    ap_u32(t, c->rx_dropped);
-    /* fifo, frame, compressed, multicast */
-    ap_str(t, " 0 0 0 0 ");
-    ap_u32(t, c->tx_bytes);
-    ap_ch(t, ' ');
-    ap_u32(t, c->tx_packets);
-    /* errs */
-    ap_str(t, " 0 ");
-    ap_u32(t, c->tx_dropped);
-    /* fifo, colls, carrier, compressed */
-    ap_str(t, " 0 0 0 0\n");
     return t->len;
 }
 
