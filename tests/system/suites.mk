@@ -181,7 +181,7 @@ INSTALL_TEST_STICK = $(IMAGES_DIR)/install-test-stick.img
 prepare-images: $(DEMO_CREDS) $(BINFIND) $(DEADLINE) $(ELFCHECK) $(HARNESS) $(HOSTPEER) \
                 $(MKFIXTURE) $(MKGPT) $(MKMBR) $(PCAPCHECK) $(PTYDRIVE) $(RUNTESTS) \
                 $(SHA256TOOL) $(WAVCHECK) os-real-image os-simple-image \
-                rach2-metal-image rach2-recovery-image rach2-sealed-disk test-image \
+                rach2-metal-image rach2-recovery-image $(SEALED_DISK) test-image \
                 $(INSTALL_STICK) $(INSTALL_TEST_STICK)
 prepare-all: components
 	$(MAKE) --no-print-directory prepare-images

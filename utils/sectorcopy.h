@@ -48,6 +48,9 @@ struct sectorcopy_io {
  * a second line. `*last` is the count the last line reported, zero at the
  * start.
  *
+ * The percentage is `done * 100 / total`, so `total` is bounded by a hundredth
+ * of what 64 bits hold, which is 184 exabytes: past every medium this writes.
+ *
  * @return 1 when a line is due, with `*last` moved to `done` and `*percent`
  *         set; 0 when it is not, and neither is touched.
  */

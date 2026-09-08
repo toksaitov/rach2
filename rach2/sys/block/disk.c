@@ -262,9 +262,6 @@ int disk_rescan(struct disk *d)
     if (d->opens > 1 || devfs_disk_claimed(d)) {
         return -EBUSY;
     }
-    /* A scan whose first sector would not read leaves the disk with no
-     * partitions and its views withdrawn, which a caller that was told the
-     * table had been read would take for a disk with no table. */
     rc = disk_scan(d, d->backing);
     if (rc != 0) {
         return rc;

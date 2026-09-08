@@ -21,6 +21,8 @@
 extern int printf(const char *fmt, ...);
 extern int strcmp(const char *a, const char *b);
 extern unsigned long strlen(const char *s);
+extern char *strcpy(char *to, const char *from);
+extern char *strstr(const char *hay, const char *needle);
 
 #include "../../rach2/sys/block/diskinfo.h"
 #include "../../rach2/sys/block/block.h"
@@ -63,25 +65,30 @@ void devfs_disk_publish(struct disk *d, uint64_t window_sectors)
     (void)window_sectors;
 }
 
-/* Nothing is mounted here: the registry below is empty, so no disk line is
-   rendered and no disk is asked about. */
+/*
+ * The registry this test presents: none by default, and the two disks below
+ * for the rows that read the `disk` and `identity` lines. They stand in for
+ * the registry the kernel fills, which no host test links.
+ */
+static struct disk fake[2];
+static block_device_t fake_dev[2];
+static int fake_count;
+static int fake_claimed;
+
 int devfs_disk_claimed(struct disk *d)
 {
-    (void)d;
-    return 0;
+    /* The second disk is the one with something mounted from it. */
+    return fake_claimed && d == &fake[1];
 }
 
-/* The registry is empty here: the probe finds no disk and the disk lines
-   are none. */
 int disk_count(void)
 {
-    return 0;
+    return fake_count;
 }
 
 struct disk *disk_at(int n)
 {
-    (void)n;
-    return 0;
+    return n >= 0 && n < fake_count ? &fake[n] : 0;
 }
 
 /* The probe says what disk answered through the kernel log, which this test
@@ -364,6 +371,63 @@ int main(void)
         CHECK(n == 0 && small[0] == '\0', "a one-byte buffer has only the terminator");
         n = diskinfo_format(&d, small, 0);
         CHECK(n == 0, "a zero-byte buffer writes nothing at all");
+    }
+
+    /* ---- the lines a program choosing a disk reads ----
+     *
+     * Two disks: a fixed one of 512-byte sectors with nothing mounted, and a
+     * removable one of 4096-byte sectors with a mount holding it. Every field
+     * of the `identity` line decides whether an installer offers the disk, so
+     * each is compared as it is rendered rather than as a count of lines.
+     */
+    {
+        static char text[1024];
+
+        fake_dev[0].sector_size = 512;
+        fake_dev[0].sector_count = 3389440;
+        fake[0].present = 1;
+        fake[0].number = 0;
+        fake[0].dev = &fake_dev[0];
+        fake[0].transport = "ahci";
+        fake[0].location = 0;
+        fake[0].removable = 0;
+        strcpy(fake[0].model, "QEMU HARDDISK");
+        strcpy(fake[0].serial, "QM00001");
+        fake[0].table.kind = PART_MBR;
+        fake[0].table.count = 0;
+
+        fake_dev[1].sector_size = 4096;
+        fake_dev[1].sector_count = 1000;
+        fake[1].present = 1;
+        fake[1].number = 1;
+        fake[1].dev = &fake_dev[1];
+        fake[1].transport = "usb";
+        fake[1].location = 4;
+        fake[1].removable = 1;
+        strcpy(fake[1].model, "A Stick With Spaces");
+        strcpy(fake[1].serial, "S 1");
+        fake[1].table.kind = PART_NONE;
+        fake[1].table.count = 0;
+
+        fake_count = 2;
+        fake_claimed = 1;
+        text[0] = '\0';
+        diskinfo_format_disks(text, (int)sizeof(text));
+        CHECK(strstr(text, "disk 0 ahci 0 3389440 mbr QEMU HARDDISK\n") != 0,
+              "a disk is named with its transport, its sectors, its table and its model");
+        CHECK(strstr(text, "identity 0 512 fixed free QM00001\n") != 0,
+              "and described with its sector size, its kind, its mount state and its serial");
+        CHECK(strstr(text, "disk 1 usb 4 1000 none A Stick With Spaces\n") != 0,
+              "a second disk is named after it");
+        CHECK(strstr(text, "identity 1 4096 removable mounted S 1\n") != 0,
+              "with its own sector size, a removable kind, a mount, and a serial holding a space");
+
+        fake_claimed = 0;
+        text[0] = '\0';
+        diskinfo_format_disks(text, (int)sizeof(text));
+        CHECK(strstr(text, "identity 1 4096 removable free S 1\n") != 0,
+              "and a disk nothing mounts is free");
+        fake_count = 0;
     }
 
     return fails;

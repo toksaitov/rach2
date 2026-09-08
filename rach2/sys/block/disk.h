@@ -122,7 +122,12 @@ void disk_set_table(struct disk *d, const struct part_table *table, block_device
  * Refused with `-EBUSY` while a partition of the disk is claimed by a mount
  * or a node of the disk is open by anyone but the caller, because a view
  * that moved under a mount is corruption; the caller holds one descriptor,
- * the whole-disk node it asked through. Returns 0 after the scan.
+ * the whole-disk node it asked through.
+ *
+ * @return 0 after the scan, or `-EIO` when the first sector would not read,
+ *         which leaves the disk with no partitions and its views withdrawn: a
+ *         caller told the table had been read would take that for a disk whose
+ *         table is empty.
  */
 int disk_rescan(struct disk *d);
 

@@ -135,19 +135,22 @@ ssh -i $KEY root@ADDRESS 'bootctl status && bootctl commit'
 
 `bootctl kernel` writes the candidate slot and arms one trial. The machine that comes back is either the new kernel, which `commit` then makes the default, or the fallback, which needs nothing done to it. A kernel that does not boot costs one reboot and leaves the machine on the fallback: the candidate slot holds the new kernel and the saved default is the fallback until a later install or commit changes them.
 
-A root file system, from the machine's own recovery entry, keeping its accounts:
+A root file system, from the machine's own recovery entry, keeping the machine's accounts. Two identities are in play and they are not the same: the recovery system carries the demonstration key it was built with, and an installed root carries whatever the install put there, which is the first account's key and root's password. `rach2-install --update` is on a recovery system built at milestone 49 or later; the Lenovo's recovery partition is milestone 43's, so it is written from a booted install stick before this path is available there.
 
 ```sh
-KEY=krffs/rach2_demo_ed25519          # or the account's own key after an install
-ssh -i $KEY root@ADDRESS 'bootctl trial recovery' && ssh -i $KEY root@ADDRESS reboot
+RKEY=krffs/rach2_demo_ed25519         # recovery's own key, as it was built
+ssh -i $RKEY root@ADDRESS 'bootctl trial recovery' && ssh -i $RKEY root@ADDRESS reboot
 # recovery boots a RAM root, takes a DHCP address, and answers SSH on it
-ssh -i $KEY root@ADDRESS 'cat > /tmp/root.ext2' < build/images/rach2-metal-disk.ext2
-ssh -i $KEY root@ADDRESS 'rach2-install --update /tmp/root.ext2 /dev/disk0'
-ssh -i $KEY root@ADDRESS reboot
-ssh -i $KEY root@ADDRESS 'cat /proc/mounts && bootctl status && bootctl commit'
+ssh -i $RKEY root@ADDRESS 'cat > /tmp/root.ext2' < build/images/rach2-metal-disk.ext2
+ssh -i $RKEY root@ADDRESS 'rach2-install --update /tmp/root.ext2 /dev/disk0'
+ssh -i $RKEY root@ADDRESS reboot
+# then, on the installed system, with its own credentials:
+ssh -i IKEY USER@ADDRESS 'cat /proc/mounts'      # read the root's line yourself
+ssh -i IKEY USER@ADDRESS 'bootctl status'        # and the slot report
+ssh -i IKEY USER@ADDRESS 'bootctl commit'        # only when both say what they should
 ```
 
-`--update` reads the account files, the SSH policy and the host keys off the root before it writes, puts them back after, grows the root into its partition again, and arms one trial boot; the machine that comes back is either the new root, which `commit` then makes the default, or the fallback, which needs nothing done to it. The raw path it is built on, for a partition it does not know about:
+`--update` copies the account files, the SSH policy and the host keys off the root before it writes and writes them back after, grows the root into its partition again, moves the saved entry to the fallback before the write and arms one trial boot after it; the machine that comes back is either the new root, which `commit` then makes the default, or the fallback, which needs nothing done to it. `commit` is a person's decision after reading the mount table and the slot report, as it is for a kernel: a root that mounted read-only answers SSH too, and `bootctl` reads the slot and the command line, not the mount. The raw path `--update` is built on, for a partition it does not know about:
 
 ```sh
 dd if=build/images/rach2-sealed.disk of=root.img bs=512 skip=133120 count=1024000

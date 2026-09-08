@@ -29,7 +29,9 @@ static int fails;
         }                                          \
     } while (0)
 
-#define DISK_BYTES (256 * 1024)
+/* Large enough for a copy of two progress steps and a little, which is what
+   the reporting rows below drive; the rest use a few kilobytes. */
+#define DISK_BYTES (34 * 1024 * 1024)
 
 /* The stream and the device, with the controls each case needs. */
 static struct {
@@ -95,7 +97,25 @@ static long m_write(void *ctx, const unsigned char *buf, unsigned long n)
     return (long)n;
 }
 
+/* What the copy reported: the counts it passed to `note`, in order, so a
+   caller that reported twice at a step or not at all is seen. */
+static unsigned long long noted[64];
+static int notes;
+static unsigned last_percent;
+
+static void m_note(void *ctx, unsigned long long done, unsigned long long total, unsigned percent)
+{
+    (void)ctx;
+    (void)total;
+    if (notes < (int)(sizeof(noted) / sizeof(noted[0]))) {
+        noted[notes] = done;
+    }
+    notes++;
+    last_percent = percent;
+}
+
 static const struct sectorcopy_io IO = {m_read, m_write, NULL, NULL};
+static const struct sectorcopy_io IO_NOTED = {m_read, m_write, m_note, NULL};
 
 /** Load the stream with `len` bytes of a pattern and clear the device. */
 static void load(unsigned long len)
@@ -307,8 +327,8 @@ static void check_progress(void)
     CHECK(sectorcopy_step(2 * step, total, &last, &percent), "the next step is");
     CHECK(percent == 2, "at two percent");
 
-    /* A copy that jumps several steps in one write says so once: the line is
-       for the reader, and eight lines for one write would be the transport. */
+    /* A write that passes several steps at once is one line and not one a
+       step: the count is the bytes on the device, not the writes it took. */
     last = 0;
     CHECK(sectorcopy_step(8 * step, total, &last, &percent),
           "a write past several steps is a line");
@@ -341,10 +361,47 @@ static void check_progress(void)
     CHECK(percent == 25, "at a quarter");
 }
 
+/*
+ * The copy's own reporting: the line comes once at each step and once at the
+ * end, and a copy that was given no callback reports nothing at all. The rule
+ * is checked above; this is the loop calling it.
+ */
+static void check_notes(void)
+{
+    unsigned long long written;
+    char err[96];
+
+    load(4096);
+    notes = 0;
+    CHECK(sectorcopy_run(&IO_NOTED, 4096, &written, err, sizeof(err)) == 0, "a short copy runs");
+    CHECK(notes == 1, "and reports once, at its end");
+    CHECK(noted[0] == 4096, "with the count it wrote");
+    CHECK(last_percent == 100, "at a hundred percent");
+
+    load(4096);
+    notes = 0;
+    CHECK(sectorcopy_run(&IO, 4096, &written, err, sizeof(err)) == 0, "the same copy without one");
+    CHECK(notes == 0, "reports nothing");
+
+    /* A copy of two steps and a little: three lines, at each step and at the
+       end, and no more. */
+    load(2 * SECTORCOPY_STEP + 4096);
+    notes = 0;
+    m.per_read = 64 * 1024;
+    CHECK(sectorcopy_run(&IO_NOTED, 2 * SECTORCOPY_STEP + 4096, &written, err, sizeof(err)) == 0,
+          "a copy of two steps and a little runs");
+    CHECK(notes == 3, "and reports three times");
+    CHECK(noted[0] == SECTORCOPY_STEP, "at the first step");
+    CHECK(noted[1] == 2 * SECTORCOPY_STEP, "at the second");
+    CHECK(noted[2] == 2 * SECTORCOPY_STEP + 4096, "and at the end");
+    m.per_read = 0;
+}
+
 int main(void)
 {
     check_numbers();
     check_copy();
     check_progress();
+    check_notes();
     return fails > 120 ? 120 : fails;
 }
