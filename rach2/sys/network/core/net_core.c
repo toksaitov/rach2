@@ -89,16 +89,34 @@ void net_print_info(void)
      * from the driver, which is the only layer that knows what its own
      * registers are called. */
     char addr[16], gw[16];
+    int i;
 
-    netdev_print_info(netdev_first());
-    netconf_format(net_ip_addr, addr);
-    if (net_ip_gateway != 0) {
-        netconf_format(net_ip_gateway, gw);
-        klog(KLOG_INFO, "net", "IPv4 %s/%d, gateway %s", addr,
-             netconf_prefix_of(net_ip_mask), gw);
-    } else {
-        klog(KLOG_INFO, "net", "IPv4 %s/%d, no gateway: this subnet only", addr,
-                      netconf_prefix_of(net_ip_mask));
+    /* One report per interface: a machine with two cards has two, and which
+     * of them a person is looking at is the first thing they need. */
+    for (i = 0; i < netdev_count(); i++) {
+        struct netdev *nd = netdev_at(i);
+
+        klog(KLOG_INFO, "net", "%s: %s, station %X%X:%X%X:%X%X:%X%X:%X%X:%X%X", nd->name,
+             netdev_name(nd), (unsigned)(nd->mac[0] >> 4), (unsigned)(nd->mac[0] & 0xF),
+             (unsigned)(nd->mac[1] >> 4), (unsigned)(nd->mac[1] & 0xF),
+             (unsigned)(nd->mac[2] >> 4), (unsigned)(nd->mac[2] & 0xF),
+             (unsigned)(nd->mac[3] >> 4), (unsigned)(nd->mac[3] & 0xF),
+             (unsigned)(nd->mac[4] >> 4), (unsigned)(nd->mac[4] & 0xF),
+             (unsigned)(nd->mac[5] >> 4), (unsigned)(nd->mac[5] & 0xF));
+        netdev_print_info(nd);
+        if (nd->ip == 0) {
+            klog(KLOG_INFO, "net", "%s: no address", nd->name);
+            continue;
+        }
+        netconf_format(nd->ip, addr);
+        if (nd->gateway != 0) {
+            netconf_format(nd->gateway, gw);
+            klog(KLOG_INFO, "net", "%s: IPv4 %s/%d, gateway %s", nd->name, addr,
+                 netconf_prefix_of(nd->mask), gw);
+        } else {
+            klog(KLOG_INFO, "net", "%s: IPv4 %s/%d, no gateway: this subnet only", nd->name,
+                 addr, netconf_prefix_of(nd->mask));
+        }
     }
     netconsole_print_info();
 }

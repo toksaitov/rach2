@@ -695,6 +695,7 @@ run-raw: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(PCAPCHECK) $
 # machine's address. Its own target, like `tests/run ping`: it changes the
 # address out from under the machine and puts it back, and the last thing it
 # does is ping the gateway, which needs the network to answer.
+TWONIC_LOG = $(TEST_IMAGE).twonic.log
 run-netif: rach2 tests krffs test-image $(HARNESS)
 	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
@@ -708,6 +709,29 @@ run-netif: rach2 tests krffs test-image $(HARNESS)
 	    --append "rach2.ip=none" \
 	    --timeout 120 --ok "NETIFPROBE OK" \
 	    "expect=Type 'help'" "send=exec /netifprobe" wait=60
+# Two cards on two subnets: each becomes an interface of its own, with its own
+# name, its own station address and its own line in the boot report and in
+# `/proc/net/dev`. The first still carries the traffic, which is what says the
+# second did not take the stack over.
+	@rm -f $(TWONIC_LOG)
+	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+	    --qemu-arg=-cpu --qemu-arg=max \
+	    --net "user,id=net0" --device "e1000,netdev=net0" \
+	    --qemu-arg=-netdev --qemu-arg=user,id=net1,net=10.0.3.0/24 \
+	    --qemu-arg=-device --qemu-arg=e1000,netdev=net1 \
+	    --log $(TWONIC_LOG) \
+	    --timeout 120 --ok "PINGTEST OK" \
+	    "expect=Type 'help'" "send=exec /pingtest" wait=60
+	@sh -c 'l=$(TWONIC_LOG); \
+	    grep -aq "net: eth0: e1000" "$$l" || \
+	        { echo "netif-test: FAIL: the first card did not become eth0" >&2; exit 1; }; \
+	    grep -aq "net: eth1: e1000" "$$l" || \
+	        { echo "netif-test: FAIL: the second card did not become eth1" >&2; exit 1; }; \
+	    a=`sed -n "s/.*net: eth0: e1000, station \\(.*\\)/\\1/p" "$$l" | head -1`; \
+	    b=`sed -n "s/.*net: eth1: e1000, station \\(.*\\)/\\1/p" "$$l" | head -1`; \
+	    [ -n "$$a" ] && [ "$$a" != "$$b" ] || \
+	        { echo "netif-test: FAIL: the two cards report one station address" >&2; exit 1; }; \
+	    echo "netif-test: two cards are two interfaces, each with its own station: OK"'
 # `tests/run dgram`: a connected datagram socket and the permission to
 # broadcast, which is how a DHCP client renews a lease and how it asks for one.
 # Its own target because it broadcasts, and a probe in the suite must not put a
