@@ -36,6 +36,7 @@ typedef unsigned char uint8_t;
 #define SYS_WAITPID    7
 #define SYS_IOCTL      54
 #define SYS_READ       3
+#define SYS_OPEN       5
 #define SYS_POLL       168
 #define SYS_SOCKETCALL 102
 #define SYS_NANOSLEEP  162
@@ -47,14 +48,24 @@ typedef unsigned char uint8_t;
 #define SC_LISTEN     4
 #define SC_ACCEPT     5
 #define SC_RECV       10
+#define SC_SENDTO     11
+#define SC_RECVFROM   12
 #define SC_GETSOCKOPT 15
 #define SC_PING       0x1000
 
 #define AF_INET     2
+#define AF_PACKET   17
 #define SOCK_STREAM 1
 #define SOCK_DGRAM  2
 #define SOCK_RAW    3
 #define IPPROTO_RAW 255
+
+/* The protocol argument of an AF_PACKET socket is in network order. */
+#define ETH_P_ARP_BE 0x0608
+
+/* The second card's subnet, which the two-card machine is booted on. */
+#define SECOND_IP 0x0A000305UL /* 10.0.3.5 */
+#define SECOND_GW 0x0A000302UL /* 10.0.3.2 */
 
 #define SOL_SOCKET 1
 #define SO_ERROR   4
@@ -137,6 +148,16 @@ static int sys_poll(struct pollfd_probe *fds, unsigned int n, int timeout)
     __asm__ __volatile__("int $0x80"
                          : "=a"(r)
                          : "0"(SYS_POLL), "b"(fds), "c"(n), "d"(timeout)
+                         : "memory");
+    return r;
+}
+
+static int sys_open(const char *path, int flags)
+{
+    int r;
+    __asm__ __volatile__("int $0x80"
+                         : "=a"(r)
+                         : "0"(SYS_OPEN), "b"(path), "c"(flags), "d"(0)
                          : "memory");
     return r;
 }
@@ -385,6 +406,248 @@ static void configure_from_nothing(int fd)
     }
 }
 
+/** Whether `hay` holds `needle`. */
+static int holds(const char *hay, const char *needle)
+{
+    int i, j;
+
+    for (i = 0; hay[i] != '\0'; i++) {
+        for (j = 0; needle[j] != '\0' && hay[i + j] == needle[j]; j++) {
+        }
+        if (needle[j] == '\0') {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/*
+ * `netifprobe second`: the files that report the network report both cards.
+ *
+ * `/proc/net/dev` is a line per interface and the counters on it are that
+ * interface's own, so a machine with two cards whose file names one is a
+ * machine counting the second card's traffic on the first. It is read here
+ * rather than asserted from the boot log, which says what came up and not what
+ * the file says afterwards.
+ */
+static void proc_names_both(void)
+{
+    char buf[2048];
+    int fd, n, total = 0;
+
+    fd = sys_open("/proc/net/dev", 0);
+    if (fd < 0) {
+        fail_n("/proc/net/dev did not open", fd);
+    }
+    while (total < (int)sizeof(buf) - 1) {
+        n = sys_read(fd, buf + total, (size_t)((int)sizeof(buf) - 1 - total));
+        if (n <= 0) {
+            break;
+        }
+        total += n;
+    }
+    sys_close(fd);
+    buf[total] = '\0';
+    if (!holds(buf, "eth0:")) {
+        fail("/proc/net/dev does not name the first interface");
+    }
+    if (!holds(buf, "eth1:")) {
+        fail("/proc/net/dev names one interface on a machine with two");
+    }
+}
+
+/* struct sockaddr_ll: family, protocol, ifindex, hatype, pkttype, halen,
+ * addr. */
+struct sockaddr_ll_probe {
+    uint16_t sll_family;
+    uint16_t sll_protocol;
+    int sll_ifindex;
+    uint16_t sll_hatype;
+    uint8_t sll_pkttype;
+    uint8_t sll_halen;
+    uint8_t sll_addr[8];
+};
+
+/*
+ * `netifprobe second`: a packet socket is a socket on one interface.
+ *
+ * A machine with two cards is on two networks, and a client watching for a
+ * lease on one of them must be given that one's frames and must send on that
+ * one. So a socket is bound to the second interface and an ARP request for
+ * that subnet's gateway is sent through it: the answer can only come back if
+ * the frame left by the second card, since the first card's network has no
+ * host at that address, and every datagram the socket is given must say it
+ * arrived on the interface the socket is bound to.
+ *
+ * A second socket is bound to the first interface throughout, and nothing it
+ * is given may claim to have arrived on the other one. Until the binding
+ * carried an interface both sockets were handed every frame the machine
+ * received, and both sent through the first card.
+ */
+static void packet_on_second(int raw_fd)
+{
+    uint32_t args[6];
+    struct sockaddr_ll_probe to, from;
+    uint8_t mac[6];
+    uint8_t arp[28];
+    uint8_t buf[64];
+    uint32_t fromlen;
+    int on_first, on_second, i, tries, got;
+
+    args[0] = AF_PACKET;
+    args[1] = SOCK_DGRAM;
+    args[2] = ETH_P_ARP_BE;
+    on_second = socketcall(SC_SOCKET, args);
+    if (on_second < 0) {
+        fail("a packet socket for the second interface did not open");
+    }
+    args[0] = AF_PACKET;
+    args[1] = SOCK_DGRAM;
+    args[2] = ETH_P_ARP_BE;
+    on_first = socketcall(SC_SOCKET, args);
+    if (on_first < 0) {
+        fail("a packet socket for the first interface did not open");
+    }
+
+    for (i = 0; i < (int)sizeof(to); i++) {
+        ((uint8_t *)&to)[i] = 0;
+    }
+    to.sll_family = AF_PACKET;
+    to.sll_protocol = ETH_P_ARP_BE;
+    to.sll_ifindex = 2;
+    args[0] = (uint32_t)on_second;
+    args[1] = (uint32_t)&to;
+    args[2] = sizeof(to);
+    if (socketcall(SC_BIND, args) != 0) {
+        fail("the socket would not bind to the second interface");
+    }
+    for (i = 0; i < (int)sizeof(to); i++) {
+        ((uint8_t *)&to)[i] = 0;
+    }
+    to.sll_family = AF_PACKET;
+    to.sll_protocol = ETH_P_ARP_BE;
+    to.sll_ifindex = 1;
+    args[0] = (uint32_t)on_first;
+    args[1] = (uint32_t)&to;
+    args[2] = sizeof(to);
+    if (socketcall(SC_BIND, args) != 0) {
+        fail("the socket would not bind to the first interface");
+    }
+
+    /* The request is built from the second card's own station address, since
+       a reply is addressed to the sender the request names. */
+    set_name("eth1");
+    if (sys_ioctl(raw_fd, SIOCGIFHWADDR, ifr) != 0) {
+        fail("the second interface would not report its station address");
+    }
+    for (i = 0; i < 6; i++) {
+        mac[i] = ifr[18 + i];
+    }
+    for (i = 0; i < (int)sizeof(arp); i++) {
+        arp[i] = 0;
+    }
+    arp[1] = 1;    /* Ethernet */
+    arp[2] = 0x08; /* IPv4 */
+    arp[4] = 6;
+    arp[5] = 4;
+    arp[7] = 1; /* a request */
+    for (i = 0; i < 6; i++) {
+        arp[8 + i] = mac[i];
+    }
+    arp[14] = (uint8_t)(SECOND_IP >> 24);
+    arp[15] = (uint8_t)(SECOND_IP >> 16);
+    arp[16] = (uint8_t)(SECOND_IP >> 8);
+    arp[17] = (uint8_t)SECOND_IP;
+    arp[24] = (uint8_t)(SECOND_GW >> 24);
+    arp[25] = (uint8_t)(SECOND_GW >> 16);
+    arp[26] = (uint8_t)(SECOND_GW >> 8);
+    arp[27] = (uint8_t)SECOND_GW;
+
+    for (i = 0; i < (int)sizeof(to); i++) {
+        ((uint8_t *)&to)[i] = 0;
+    }
+    to.sll_family = AF_PACKET;
+    to.sll_protocol = ETH_P_ARP_BE;
+    to.sll_ifindex = 2;
+    to.sll_halen = 6;
+    for (i = 0; i < 6; i++) {
+        to.sll_addr[i] = 0xff;
+    }
+    args[0] = (uint32_t)on_second;
+    args[1] = (uint32_t)arp;
+    args[2] = sizeof(arp);
+    args[3] = 0;
+    args[4] = (uint32_t)&to;
+    args[5] = sizeof(to);
+    if (socketcall(SC_SENDTO, args) != (int)sizeof(arp)) {
+        fail("the request would not send through the second interface");
+    }
+
+    /* The answer, which exists only on the second card's network. */
+    got = 0;
+    for (tries = 0; tries < 200 && !got; tries++) {
+        struct pollfd_probe pfd;
+
+        pfd.fd = on_second;
+        pfd.events = POLLIN;
+        pfd.revents = 0;
+        sys_poll(&pfd, 1, 50);
+        for (i = 0; i < (int)sizeof(from); i++) {
+            ((uint8_t *)&from)[i] = 0;
+        }
+        fromlen = sizeof(from);
+        args[0] = (uint32_t)on_second;
+        args[1] = (uint32_t)buf;
+        args[2] = sizeof(buf);
+        args[3] = 0x40; /* MSG_DONTWAIT */
+        args[4] = (uint32_t)&from;
+        args[5] = (uint32_t)&fromlen;
+        if (socketcall(SC_RECVFROM, args) < 0) {
+            continue;
+        }
+        if (from.sll_ifindex != 2) {
+            fail_n("a datagram on the second interface claimed another", from.sll_ifindex);
+        }
+        if (from.sll_hatype != 1) {
+            fail_n("the answer did not arrive over Ethernet", (int)from.sll_hatype);
+        }
+        if (from.sll_pkttype != 0 && from.sll_pkttype != 1) {
+            fail_n("the answer was addressed to neither this machine nor everyone",
+                   (int)from.sll_pkttype);
+        }
+        got = 1;
+    }
+    if (!got) {
+        fail("nothing answered on the second interface, so the frame did not "
+             "leave by it");
+    }
+
+    /* And whatever the first interface's socket was given arrived there. */
+    for (tries = 0; tries < 8; tries++) {
+        for (i = 0; i < (int)sizeof(from); i++) {
+            ((uint8_t *)&from)[i] = 0;
+        }
+        fromlen = sizeof(from);
+        args[0] = (uint32_t)on_first;
+        args[1] = (uint32_t)buf;
+        args[2] = sizeof(buf);
+        args[3] = 0x40; /* MSG_DONTWAIT */
+        args[4] = (uint32_t)&from;
+        args[5] = (uint32_t)&fromlen;
+        if (socketcall(SC_RECVFROM, args) < 0) {
+            break;
+        }
+        if (from.sll_ifindex != 1) {
+            fail_n("the first interface's socket was given another interface's "
+                   "traffic",
+                   from.sll_ifindex);
+        }
+    }
+
+    sys_close(on_second);
+    sys_close(on_first);
+}
+
 /*
  * `netifprobe second`: with two cards, taking the second down leaves the
  * first serving. An interface an administrator takes down carries nothing
@@ -430,6 +693,8 @@ static void second_down(void)
     if (sys_ioctl(fd, SIOCSIFFLAGS, ifr) != 0) {
         fail("the second interface could not be brought back up");
     }
+    proc_names_both();
+    packet_on_second(fd);
     say("NETIFPROBE OK\n");
     sys_exit(0);
 }

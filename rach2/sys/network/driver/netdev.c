@@ -83,7 +83,8 @@ struct netdev *netdev_route(uint32_t dst, uint32_t *via)
     for (i = 0; i < niface; i++) {
         struct netdev *nd = &ifaces[i];
 
-        if (nd->ip != 0 && nd->mask != 0 && (dst & nd->mask) == (nd->ip & nd->mask)) {
+        if (nd->up && nd->ip != 0 && nd->mask != 0 &&
+            (dst & nd->mask) == (nd->ip & nd->mask)) {
             *via = dst;
             return nd;
         }
@@ -91,9 +92,41 @@ struct netdev *netdev_route(uint32_t dst, uint32_t *via)
     for (i = 0; i < niface; i++) {
         struct netdev *nd = &ifaces[i];
 
-        if (nd->gateway != 0) {
+        if (nd->up && nd->gateway != 0) {
             *via = nd->gateway;
             return nd;
+        }
+    }
+    return 0;
+}
+
+int netdev_owns(uint32_t ip)
+{
+    int i;
+
+    if (ip == 0) {
+        return 0; /* an unconfigured interface owns no address */
+    }
+    for (i = 0; i < niface; i++) {
+        if (ifaces[i].ip == ip) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int netdev_is_broadcast(uint32_t ip)
+{
+    int i;
+
+    if (ip == 0xFFFFFFFFu) {
+        return 1;
+    }
+    for (i = 0; i < niface; i++) {
+        const struct netdev *nd = &ifaces[i];
+
+        if (nd->ip != 0 && nd->mask != 0 && ip == (nd->ip | ~nd->mask)) {
+            return 1;
         }
     }
     return 0;
@@ -158,8 +191,13 @@ int netdev_probe(void)
 
     for (i = 0; i < NETDEV_COUNT; i++) {
         int nth;
+        int failures = 0;
 
-        for (nth = 0; niface < NETDEV_MAX; nth++) {
+        /* A driver's cards are asked for one at a time until it says it has no
+         * more. The count of failures bounds that walk: a driver that answered
+         * FAILED for every card it was asked about, rather than ABSENT past
+         * the last one, would otherwise be asked forever. */
+        for (nth = 0; niface < NETDEV_MAX && failures < NETDEV_MAX; nth++) {
             struct netdev *nd = &ifaces[niface];
             int verdict;
 
@@ -192,10 +230,14 @@ int netdev_probe(void)
                 if (drivers[i]->error) {
                     probe_error = drivers[i]->error();
                 }
-                if (fail_at >= 0) {
-                    continue; /* a refusal asked for, not one the card gave */
-                }
-                break; /* this driver's next card is not tried */
+                /* The next card of the same driver is still asked for. Two
+                 * cards of one kind are two interfaces, and the second is not
+                 * the first one's to lose: a machine whose first e1000 will
+                 * not start keeps the network on its second. This is the same
+                 * path `rach2.nicfail` takes, so what that boot line proves is
+                 * what a real failure does. */
+                failures++;
+                continue;
             }
             nd->up = 1; /* an interface that came up is up until it is taken down */
             if (niface == 0) {
