@@ -510,6 +510,92 @@ else
     bad "the two controllers did not each take an interrupt of their own"
 fi
 
+# ---- sticks on both controllers, and one pulled from under a reader while
+#      the other controller's stick is in use. Two boots, one for each
+#      direction: the sticks are enumerated controller by controller, so the
+#      one the probe holds, `/dev/disk1`, is on the second controller in the
+#      first boot and on the first in the second. What the row requires is
+#      that the pull answers the reader that held it and leaves the stick on
+#      the other controller mounting and reading. ----
+for i in 0 1 2; do
+    cp "$STICK" "$IMAGE.twohc-stick-$i.img" || bad "the two-controller sticks"
+done
+twohc_sticks() {
+    where0=$1
+    where1=$2
+    where2=$3
+    shift 3
+    run_shell --qemu-arg=-cpu --qemu-arg=max \
+        --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci0 \
+        --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci1 \
+        --drive "if=none,id=stick0,format=raw,file=$IMAGE.twohc-stick-0.img" \
+        --drive "if=none,id=stick1,format=raw,file=$IMAGE.twohc-stick-1.img" \
+        --drive "if=none,id=stick2,format=raw,file=$IMAGE.twohc-stick-2.img" \
+        --qemu-arg=-device --qemu-arg="usb-storage,bus=$where0.0,drive=stick0,id=st0" \
+        --qemu-arg=-device --qemu-arg="usb-storage,bus=$where1.0,drive=stick1,id=st1" \
+        --qemu-arg=-device --qemu-arg="usb-storage,bus=$where2.0,drive=stick2,id=st2" \
+        "$@"
+}
+# One stick on the first controller and two on the second. The core enumerates
+# one device per controller in turn, so `/dev/disk1` is the second
+# controller's first stick, and pulling it leaves the first controller's.
+if twohc_sticks xhci0 xhci1 xhci1 \
+    --timeout 180 --steptmo 60 --ok "USBDISKPROBE OK" --never "USBDISKPROBE FAIL" \
+    --log "$IMAGE.twohcstick.log" \
+    "expect=Type 'help'" "send=exec /usbdiskprobe three" "expect=USBDISKPROBE OK" \
+    "expect=Type 'help'" "send=exec /usbdiskprobe pullone" "expect=USBDISKPROBE HOLDING" \
+    wait=1 "usb=del:st1" "expect=USBDISKPROBE OK" > /dev/null 2>&1; then
+    note "three sticks across two controllers mount, and one pulled from the second leaves the first's reading: OK"
+else
+    bad "the sticks across two controllers"
+fi
+# And the other way. The sticks are enumerated one controller at a time in
+# turn, so with two on the first controller and one on the second the disks
+# come out as st0, st2, st1: `/dev/disk2` is the first controller's second
+# stick, and pulling it leaves a stick on each controller behind.
+if twohc_sticks xhci0 xhci0 xhci1 \
+    --timeout 180 --steptmo 60 --ok "USBDISKPROBE OK" --never "USBDISKPROBE FAIL" \
+    --log "$IMAGE.twohcstick2.log" \
+    "expect=Type 'help'" "send=exec /usbdiskprobe three" "expect=USBDISKPROBE OK" \
+    "expect=Type 'help'" "send=exec /usbdiskprobe pullone 2" "expect=USBDISKPROBE HOLDING" \
+    wait=1 "usb=del:st1" "expect=USBDISKPROBE OK" > /dev/null 2>&1; then
+    note "and one pulled from the first controller leaves the second's reading: OK"
+else
+    bad "the stick pulled from the first controller"
+fi
+
+# ---- one controller refused at its bring-up: the other still comes up and
+#      the keyboard on it still types. `rach2.hcfail=0` refuses the first,
+#      which is the case no QEMU machine has and the one the bring-up loop was
+#      written for. What was taken from the firmware goes back and the record
+#      is closed, so the controller that is left is numbered from zero and the
+#      devices on it are enumerated as though the other had never been there.
+if run_harness --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-machine --qemu-arg=pc,i8042=off \
+    --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci0 \
+    --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci1 \
+    --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci0.0 \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci1.0 \
+    --append "rach2.hcfail=0" \
+    --timeout 120 --steptmo 60 --ok "Available commands" --log "$IMAGE.hcfail.log" \
+    "expect=Type 'help'" wait=3 key=h key=e key=l key=p key=ret \
+    "expect=Available commands" > /dev/null 2>&1; then
+    note "a controller refused at its bring-up leaves the other one serving: OK"
+else
+    bad "the refused-controller boot"
+fi
+if grep -aq 'usb: refused: xhci0: rach2.hcfail=0' "$IMAGE.hcfail.log" &&
+    [ "$(grep -ac 'usb: ready: xhci' "$IMAGE.hcfail.log")" = 1 ]; then
+    note "and it was named with its reason while one controller came up: OK"
+else
+    bad "the refusal was not recorded, or the wrong number of controllers came up"
+fi
+if [ "$(grep -ac 'usb: device: port .*class' "$IMAGE.hcfail.log")" = 1 ]; then
+    note "and only the device on the controller that came up was enumerated: OK"
+else
+    bad "the devices behind a refused controller were enumerated anyway"
+fi
+
 if [ "$fail" -ne 0 ]; then
     echo "usb-test: FAIL" >&2
     exit 1

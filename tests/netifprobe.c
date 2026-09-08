@@ -667,6 +667,16 @@ static void second_down(void)
         fail("the raw descriptor the interface is asked through did not open");
     }
 
+    /* A neighbour on each subnet, reached through the interface that is on it.
+       Each answer is an address resolved on that interface and a datagram that
+       left by it, which is what two networks on one machine means. */
+    if (ping_retry(SLIRP_GW) < 0) {
+        fail("the first interface's gateway did not answer");
+    }
+    if (ping_retry(SECOND_GW) < 0) {
+        fail("the second interface's gateway did not answer");
+    }
+
     set_name("eth1");
     if (sys_ioctl(fd, SIOCGIFFLAGS, ifr) != 0) {
         fail("the second interface could not be asked about its flags");

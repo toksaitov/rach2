@@ -53,12 +53,16 @@ ifeq ($(NIC),e1000)
 NIC_TAG          = -e1000
 SSH_TEST_PORT   ?= 2322
 DHCP_SSH_PORT    = 2324
+DHCP_TWO_PORT_A  = 2326
+DHCP_TWO_PORT_B  = 2328
 DGRAM_PORT       = 15898
 NETIF_PORT       = 15899
 else
 NIC_TAG          =
 SSH_TEST_PORT   ?= 2222
 DHCP_SSH_PORT    = 2224
+DHCP_TWO_PORT_A  = 2226
+DHCP_TWO_PORT_B  = 2228
 DGRAM_PORT       = 15998
 NETIF_PORT       = 15999
 endif
@@ -696,6 +700,7 @@ run-raw: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(PCAPCHECK) $
 # address out from under the machine and puts it back, and the last thing it
 # does is ping the gateway, which needs the network to answer.
 TWONIC_LOG = $(TEST_IMAGE).twonic.log
+MIXNIC_LOG = $(TEST_IMAGE).mixnic.log
 NICFAIL_LOG = $(TEST_IMAGE).nicfail.log
 run-netif: rach2 tests krffs test-image $(HARNESS)
 	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
@@ -741,6 +746,34 @@ run-netif: rach2 tests krffs test-image $(HARNESS)
 	    grep -aq "net: eth0: IPv4 10.0.2.15/24" "$$l" || \
 	        { echo "netif-test: FAIL: the first card lost its own address" >&2; exit 1; }; \
 	    echo "netif-test: two cards are two interfaces, each with its own station and address: OK"'
+# Two cards of different models on two subnets. The driver table tries the
+# RTL8139 first, so the RTL8139 is eth0 whichever slot it sits in and the e1000
+# is eth1: probe order is the table's, and each card is given its address by the
+# station address it carries rather than by where it was found. The ping leaves
+# by the second card, which is the one on the network the gateway is on, while
+# the first is up and configured on another.
+	@rm -f $(MIXNIC_LOG)
+	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+	    --qemu-arg=-cpu --qemu-arg=max \
+	    --net "user,id=net0" --device "e1000,netdev=net0,mac=52:54:00:12:34:56" \
+	    --qemu-arg=-netdev --qemu-arg=user,id=net1,net=10.0.3.0/24 \
+	    --qemu-arg=-device --qemu-arg=rtl8139,netdev=net1,mac=52:54:00:12:34:58 \
+	    --append "rach2.ifaddr=52:54:00:12:34:58,10.0.3.5/24,10.0.3.2 \
+rach2.ifaddr=52:54:00:12:34:56,10.0.2.15/24,10.0.2.2" \
+	    --log $(MIXNIC_LOG) \
+	    --timeout 180 --steptmo 60 --ok "PINGTEST OK" \
+	    "expect=Type 'help'" "send=exec /pingtest" wait=60
+	@sh -c 'l=$(MIXNIC_LOG); \
+	    grep -aq "net: eth0: RTL8139" "$$l" || \
+	        { echo "netif-test: FAIL: the RTL8139 did not become eth0" >&2; exit 1; }; \
+	    grep -aq "net: eth1: e1000" "$$l" || \
+	        { echo "netif-test: FAIL: the e1000 did not become eth1" >&2; exit 1; }; \
+	    grep -aq "net: eth0: IPv4 10.0.3.5/24, gateway 10.0.3.2" "$$l" || \
+	        { echo "netif-test: FAIL: the RTL8139 did not take its own address" >&2; exit 1; }; \
+	    grep -aq "net: eth1: IPv4 10.0.2.15/24, gateway 10.0.2.2" "$$l" || \
+	        { echo "netif-test: FAIL: the e1000 did not take its own address" >&2; exit 1; }; \
+	    echo "netif-test: two cards of different models are two interfaces, and the ping \
+leaves by the one that reaches the gateway: OK"'
 # The first card refused at its bring-up: the second still comes up, takes the
 # one interface there is, and carries the traffic.
 	@rm -f $(NICFAIL_LOG)
@@ -782,6 +815,8 @@ run-dgram: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
 # a network of its own so the address that arrives cannot be the one the machine
 # would have had anyway.
 DHCP_NET = user,id=net0,net=192.168.90.0/24,host=192.168.90.2,dhcpstart=192.168.90.20,dns=192.168.90.3
+TWONET_PCAP_A = $(IMAGES_DIR)/twonet-a$(NIC_TAG).pcap
+TWONET_PCAP_B = $(IMAGES_DIR)/twonet-b$(NIC_TAG).pcap
 DHCP_PCAP = $(IMAGES_DIR)/dhcp$(NIC_TAG).pcap
 DHCP_DISK = $(IMAGES_DIR)/dhcp-test$(NIC_TAG).disk
 METAL_PCAP = $(IMAGES_DIR)/dhcp-metal$(NIC_TAG).pcap
@@ -1030,6 +1065,64 @@ run-dhcp: $(DEMO_CREDS) rach2 utils busybox krffs os-real-image os-simple-image 
 	    "expect=# " "send=echo CONSOLE\"\"UP" \
 	    "expect=CONSOLEUP" \
 	    "expect=no lease, forking to background" wait=30
+	# Two cards on two networks, each with a server of its own: a lease on each
+	# interface, asked for by name, and a server answering through both. The
+	# second client is `udhcpc -i eth1`, which is how an administrator configures
+	# an interface that no boot-time file names. Both cards are e1000s whichever
+	# card the rest of this suite runs on, since that is the driver with a record
+	# per card; the RTL8139 and the RTL8168 drive one each.
+	#
+	# The knock on each forwarded port proves nothing on its own, since QEMU's
+	# user network accepts the host side before it knows whether the guest is
+	# there. What proves it is the capture of each network: packets sent FROM the
+	# address that network leased, which only a machine holding that address on
+	# that card can send, and on the second network that address is not the
+	# machine's own. Until TCP took the address a connection arrived on, a
+	# connection to the second card was answered from the first card's address
+	# and no capture held a packet from the second's.
+	@rm -f $(TWONET_PCAP_A) $(TWONET_PCAP_B)
+	$(HARNESS) --kernel build/rach2/kernel \
+	    --initrd $(OS_REAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
+	    --net "$(DHCP_NET),hostfwd=tcp::$(DHCP_TWO_PORT_A)-:22" \
+	    --device "e1000,netdev=net0" \
+	    --qemu-arg=-netdev \
+	    --qemu-arg=user,id=net1,net=10.0.7.0/24,host=10.0.7.2,dhcpstart=10.0.7.20,dns=10.0.7.3,hostfwd=tcp::$(DHCP_TWO_PORT_B)-:22 \
+	    --qemu-arg=-device --qemu-arg=e1000,netdev=net1 \
+	    --qemu-arg=-object \
+	    --qemu-arg=filter-dump,id=tw0,netdev=net0,file=$(TWONET_PCAP_A) \
+	    --qemu-arg=-object \
+	    --qemu-arg=filter-dump,id=tw1,netdev=net1,file=$(TWONET_PCAP_B) \
+	    --append "rach2.ip=none" \
+	    --timeout 300 --steptmo 90 --ok "TWONETOK" \
+	    --log $(IMAGES_DIR)/twonet$(NIC_TAG).log \
+	    "expect=rach2 login:" "send=root" "expect=Password:" \
+	    "send=`cat krffs/rach2_demo_password`" \
+	    "expect=# " "send=ifup -a" \
+	    "expect=lease of 192.168.90.20 obtained" wait=3 \
+	    "send=udhcpc -i eth1 -n -q" \
+	    "expect=lease of 10.0.7.20 obtained" wait=3 \
+	    "send=ifconfig eth0 > /tmp/i0; ifconfig eth1 > /tmp/i1; grep -q 'addr:192.168.90.20' /tmp/i0 && grep -q 'addr:10.0.7.20' /tmp/i1 && echo TWO\"\"LEASES" \
+	    "expect=TWOLEASES" \
+	    "send=dropbearmulti dropbear -R -g -p 22" wait=25 \
+	    "tcp=$(DHCP_TWO_PORT_A)" wait=3 "tcp=$(DHCP_TWO_PORT_B)" wait=3 \
+	    "send=echo TWONET\"\"OK" wait=5
+	$(PCAPCHECK) bcast $(TWONET_PCAP_A) --source 192.168.90.20
+	$(PCAPCHECK) bcast $(TWONET_PCAP_B) --source 10.0.7.20
+	# And the server's own record of who reached it. The knock says only that
+	# QEMU took the host side; this says the segments crossed the interface, were
+	# taken by TCP as addressed to the address that card holds, and reached the
+	# program listening. A connection arriving on the second card was dropped at
+	# the checksum until it was taken against the address the segment was sent
+	# to, and answered from the wrong address until the connection recorded the
+	# one it arrived on.
+	@sh -c 'l=$(IMAGES_DIR)/twonet$(NIC_TAG).log; \
+	    grep -aq "Child connection from 192.168.90.2:" "$$l" || \
+	        { echo "dhcp-test: FAIL: nothing reached the server on the first card" >&2; \
+	          exit 1; }; \
+	    grep -aq "Child connection from 10.0.7.2:" "$$l" || \
+	        { echo "dhcp-test: FAIL: nothing reached the server on the second card" >&2; \
+	          exit 1; }; \
+	    echo "dhcp-test: a lease on each interface and the server answering through both: OK"'
 # `tests/run netconsole`: the kernel log on the wire. The machine this milestone
 # targets has no serial port, so the boot log has to leave over Ethernet or not
 # at all. QEMU's filter-dump writes every frame the guest sends to a libpcap

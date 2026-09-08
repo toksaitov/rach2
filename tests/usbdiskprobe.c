@@ -614,17 +614,36 @@ static void part_three(void)
  * `pullone`: with three sticks in, keep reading the middle one's whole node
  * through the queue and say so; the suite pulls it, the read in flight
  * answers EIO, and the two beside it still mount and read.
+ *
+ * `which` is the disk held and pulled, 0, 1 or 2. It is 1 unless a caller
+ * names another: a machine with two controllers numbers its disks in the order
+ * they were enumerated across both, so which disk is on which controller is
+ * the caller's to say.
  */
-static void part_pullone(void)
+static void part_pullone(int which)
 {
     static char sector[512];
-    int fd = sys3(SYS_OPEN, (int)"/dev/disk1", O_RDONLY, 0);
+    static char node[16] = "/dev/disk1";
+    static char part[16] = "/dev/disk1p1";
+    static char other[2][16] = {"/dev/disk0p1", "/dev/disk0p1"};
+    int fd;
     int reads = 0;
-    int n;
+    int n, i, o = 0;
 
+    node[9] = (char)('0' + which);
+    part[9] = (char)('0' + which);
+    for (i = 0; i < 3; i++) {
+        if (i == which) {
+            continue;
+        }
+        other[o][9] = (char)('0' + i);
+        o++;
+    }
+
+    fd = sys3(SYS_OPEN, (int)node, O_RDONLY, 0);
     sector[0] = 0;
     if (fd < 0) {
-        fail("/dev/disk1 would not open");
+        fail("the stick to be pulled would not open");
     }
     puts("USBDISKPROBE HOLDING");
     for (;;) {
@@ -646,15 +665,13 @@ static void part_pullone(void)
     if (reads < 8) {
         fail("too few reads ran before the pull to have met it");
     }
-    if (mount_at("/dev/disk0p1", "vfat", MS_RDONLY) != 0 || slurp(MNT "/hello.txt") <= 0 ||
-        !contains(text, "hello from the stick") || sys2(SYS_UMOUNT2, (int)MNT, 0) != 0) {
-        fail("the first stick was harmed by the pull of the second");
+    for (i = 0; i < 2; i++) {
+        if (mount_at(other[i], "vfat", MS_RDONLY) != 0 || slurp(MNT "/hello.txt") <= 0 ||
+            !contains(text, "hello from the stick") || sys2(SYS_UMOUNT2, (int)MNT, 0) != 0) {
+            fail("a stick beside the pulled one was harmed by the pull");
+        }
     }
-    if (mount_at("/dev/disk2p1", "vfat", MS_RDONLY) != 0 || slurp(MNT "/hello.txt") <= 0 ||
-        !contains(text, "hello from the stick") || sys2(SYS_UMOUNT2, (int)MNT, 0) != 0) {
-        fail("the third stick was harmed by the pull of the second");
-    }
-    if (mount_at("/dev/disk1p1", "vfat", MS_RDONLY) == 0) {
+    if (mount_at(part, "vfat", MS_RDONLY) == 0) {
         fail("the pulled stick still mounts");
     }
     ok();
@@ -736,7 +753,13 @@ void probe_main(unsigned int *sp)
         part_three();
     }
     if (same(what, "pullone")) {
-        part_pullone();
+        /* `pullone [N]`: N is the disk held and pulled, 1 by default. */
+        int which = 1;
+
+        if (argc > 2 && argv[2][0] >= '0' && argv[2][0] <= '2' && argv[2][1] == '\0') {
+            which = argv[2][0] - '0';
+        }
+        part_pullone(which);
     }
     if (same(what, "big")) {
         part_big();
