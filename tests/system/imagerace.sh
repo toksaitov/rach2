@@ -74,4 +74,19 @@ for t in "$TESTIMG" "$REALIMG"; do
 done
 [ "$fails" = 0 ] || exit 1
 say "an image just built is not out of date: OK"
+
+# The shape of the fault of 2026-09-09: a suite writes a fixture below a staged
+# `exec-dir` while the set runs. The stager takes the executables of that one
+# directory and nothing beneath it, so a file in a directory below it may not
+# put the image out of date. The directory itself stays a prerequisite through
+# the image's `.d` file, since a program that appears in it is staged, so the
+# marker goes one level down and not beside the programs.
+mkdir -p build/tests/system/imagerace.d
+: > build/tests/system/imagerace.d/marker
+stale=$(MAKEFLAGS= make --no-print-directory -n "$TESTIMG" 2>&1 |
+        grep -E "mkimage\.sh" | grep -c "$TESTIMG")
+rm -rf build/tests/system/imagerace.d
+[ "$stale" = 0 ] || bad "$TESTIMG went out of date for a file written below a staged directory"
+[ "$fails" = 0 ] || exit 1
+say "a file written below a staged directory does not put the image out of date: OK"
 say "PASS"
