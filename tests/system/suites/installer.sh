@@ -34,6 +34,7 @@ TEST_DISK="$7"
 PORT="$8"
 PTYDRIVE="$9"
 DEMO_KEY="${10}"
+PART="${11:-all}"
 
 if [ -z "$DEMO_KEY" ]; then
     echo "usage: installer.sh <stick-image> <sealed-disk> <harness> <work-dir>" \
@@ -43,6 +44,12 @@ fi
 KNOWN="$DIR/known_hosts"
 
 mkdir -p "$DIR"
+
+# A machine left running by an earlier run of this suite holds the images this
+# one writes, and QEMU refuses to open a file another process has locked. Any
+# such machine is this suite's own, since the paths are its own.
+pkill -f "$DIR/" 2>/dev/null || true
+sleep 2
 
 # Change one digit of the hash the manifest on a stick image declares. The
 # manifest is a few lines of text in the volume, so its bytes are found in the
@@ -69,6 +76,8 @@ bad() {
     echo "installer-test: FAIL: $1" >&2
     fail=1
 }
+
+if [ "$PART" = "all" ] || [ "$PART" = "install" ]; then
 
 # ---- 1: the stick boots, and the volume it carries holds the image the
 #         manifest declares. No kernel is given to the emulator, so what runs
@@ -514,13 +523,84 @@ else
     bad "the machine with no disk to write"
 fi
 
+fi
+
+if [ "$PART" = "all" ] || [ "$PART" = "repair" ]; then
+
+# The disk this half repairs is a disk with nothing on it: what a person has
+# after a machine's disk was destroyed, or a disk they have just put in. The
+# install that would otherwise have to run first is the other half's subject.
+NEWPASS=an-installed-machine
+USERNAME=alice
+USERPASS=alices-own-password
+cp "$TEST_STICK" "$DIR/test-stick.img"
+rm -f "$DIR/one.img"
+dd if=/dev/zero of="$DIR/one.img" bs=1048576 count=256 2>/dev/null
+BOOTIMG=$(dd if="$TEST_DISK" bs=440 count=1 2>/dev/null | shasum -a 256 | cut -d' ' -f1)
+
 # ---- 9: a machine whose disk has been destroyed, brought back through the
 #         recovery menu. The first mebibyte of the disk installed in row 3b is
 #         zeroed on the host, which takes its boot code, its table and the
 #         start of its first partition; the stick is booted on it, and
 #         `rach2-recover` puts the stick's own image back and reads it back.
 #         The disk must then boot again. ----
-dd if=/dev/zero of="$DIR/one.img" bs=1048576 count=1 conv=notrunc 2>/dev/null
+# First a write killed while it is running, at the layer that does the writing:
+# twenty-four mebibytes of the image are sent to the disk and the machine is
+# killed once it says it has passed sixteen. What is left is neither the disk
+# that was there nor the image, which is what a person who pulled the plug
+# during an install comes back to, and the restore below is what puts it right.
+#
+# It is `reflash` and not the menu because reaching the menu's own write costs
+# ten minutes of hashing in the emulator, and what is being shown is the state
+# a killed write leaves, not which program was running it.
+DAMAGED=$(shasum -a 256 "$DIR/one.img" | cut -d' ' -f1)
+rm -f "$DIR/cutoff.log"
+"$HARNESS" --bios \
+    --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
+    --drive "if=none,id=stick,format=raw,file=$DIR/test-stick.img" \
+    --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=stick,bootindex=0 \
+    --qemu-arg=-drive --qemu-arg="file=$DIR/one.img,format=raw,if=ide,index=0,media=disk" \
+    --timeout 600 --steptmo 300 --ok "NEVERSEEN" --log "$DIR/cutoff.log" \
+    "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
+    "expect=# " "send=mkdir -p /m && mount -t exfat /dev/disk1p2 /m && echo MOUNT\"\"ED" \
+    "expect=MOUNTED" \
+    "send=dd if=/m/$(basename "$TEST_DISK") bs=1048576 count=96 2>/dev/null | reflash -p /dev/disk0 0 100663296" \
+    "expect=NEVERSEEN" > /dev/null 2>&1 &
+CUTPID=$!
+waited=0
+while [ "$waited" -lt 300 ]; do
+    if grep -aq 'reflash: 16777216 of ' "$DIR/cutoff.log" 2>/dev/null; then
+        break
+    fi
+    sleep 2
+    waited=$((waited + 2))
+done
+# The harness's own child holds the disk and the stick; both are named, since a
+# machine left running would hold them for every later row. Every one of these
+# may find nothing left to kill, which is not a failure of the row.
+kill "$CUTPID" 2>/dev/null || true
+pkill -f "file=$DIR/one.img" 2>/dev/null || true
+pkill -f "file=$DIR/test-stick.img" 2>/dev/null || true
+wait "$CUTPID" 2>/dev/null || true
+# The machine writes through the emulator's own cache, so what is on the host
+# is what QEMU has flushed; the disk is read after that process has gone.
+gone=0
+while [ "$gone" -lt 60 ]; do
+    pgrep -f "file=$DIR/one.img" > /dev/null 2>&1 || break
+    sleep 1
+    gone=$((gone + 1))
+done
+sleep 2
+CUT=$(shasum -a 256 "$DIR/one.img" | cut -d' ' -f1)
+WHOLE=$(shasum -a 256 "$TEST_DISK" | cut -d' ' -f1)
+if [ "$CUT" != "$DAMAGED" ] && [ "$CUT" != "$WHOLE" ]; then
+    note "a write killed while it was running leaves a disk that is neither: OK"
+else
+    bad "the write that was killed left the disk unchanged or complete"
+fi
+
 LOG9="$DIR/recover.log"
 if "$HARNESS" --bios \
     --qemu-arg=-cpu --qemu-arg=max \
@@ -529,7 +609,7 @@ if "$HARNESS" --bios \
     --drive "if=none,id=stick,format=raw,file=$DIR/test-stick.img" \
     --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=stick,bootindex=0 \
     --qemu-arg=-drive --qemu-arg="file=$DIR/one.img,format=raw,if=ide,index=0,media=disk" \
-    --timeout 900 --steptmo 420 --ok "RECOVERDONE" --log "$LOG9" \
+    --timeout 1800 --steptmo 900 --ok "RECOVERDONE" --log "$LOG9" \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
     "expect=# " "send=rach2-recover" \
     "expect=which?" "send=1" \
@@ -538,6 +618,8 @@ if "$HARNESS" --bios \
     "expect=which disk shall be restored" "send=/dev/disk0" \
     "expect=the image to put on it" "send=" \
     "expect=type the name of that disk" "send=/dev/disk0" \
+    "expect=reading the image to check it against its hash" \
+    "expect=reflash: 16777216 of " \
     "expect=restored and read back" \
     "expect=which?" "send=6" \
     "expect=leaving" "send=echo RECOVER\"\"DONE" \
@@ -563,6 +645,8 @@ if "$HARNESS" --bios --qemu-arg=-cpu --qemu-arg=max \
     note "and the machine boots what was put back, with the image's own accounts: OK"
 else
     bad "the boot of the restored disk"
+fi
+
 fi
 
 if [ "$fail" -ne 0 ]; then

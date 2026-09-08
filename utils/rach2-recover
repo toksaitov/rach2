@@ -138,7 +138,13 @@ restore_image() {
         warn "no hash for $image: an image is restored only against one"
         return 0
     }
-    bytes=$(wc -c < "$image" | tr -d ' ')
+    # The length is asked of the file rather than counted: `wc -c` on a stick
+    # reads the whole image, which is minutes before a question is even asked.
+    bytes=$(stat -c %s "$image")
+    [ -n "$bytes" ] || {
+        warn "the length of $image could not be read"
+        return 0
+    }
     say "everything on $target will be overwritten by $bytes bytes of $image"
     printf '%s: type the name of that disk to go on, anything else to stop: ' "$ME"
     read -r confirm

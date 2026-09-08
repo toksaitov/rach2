@@ -19,6 +19,7 @@ sealed|qemu-system-i386,ssh,mformat,mmd,mcopy,mshowfat|full
 selfbuild|qemu-system-i386,mformat,mmd,mcopy,mshowfat|full
 install|qemu-system-i386,mformat,mmd,mcopy,mshowfat|full
 installer|qemu-system-i386,shasum,ssh|full
+installer-repair|qemu-system-i386,shasum|full
 menu|qemu-system-i386,mformat,mmd,mcopy,mshowfat|full
 drill|qemu-system-i386,ssh,mformat,mmd,mcopy,mshowfat|full
 install-ext2|qemu-system-i386,mformat,mmd,mcopy,mshowfat,mke2fs,debugfs,e2fsck|full

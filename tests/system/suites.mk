@@ -1367,7 +1367,19 @@ run-installer: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdp
                $(RECOVERY_IMAGE) $(INSTALL_STICK) $(INSTALL_TEST_STICK) $(PTYDRIVE) $(HARNESS)
 	sh tests/system/suites/installer.sh $(INSTALL_STICK) $(SEALED_DISK) $(HARNESS) \
 	    $(INSTALLER_DIR) "`cat krffs/rach2_demo_password`" $(INSTALL_TEST_STICK) \
-	    $(INSTALLER_DISK) $(INSTALLER_PORT) $(PTYDRIVE) krffs/rach2_demo_ed25519
+	    $(INSTALLER_DISK) $(INSTALLER_PORT) $(PTYDRIVE) krffs/rach2_demo_ed25519 install
+# `tests/run installer-repair`: the other half, the machine that will not boot.
+# Its own entry so the pool runs the two beside each other: each is minutes of
+# hashing in the emulator, and one after the other they are the longest suite
+# in the tree.
+INSTALLER_REPAIR_DIR = $(IMAGES_DIR)/installer-repair
+run-installer-repair: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake \
+                      check-setid check-dropbearmulti ports/doom $(BINFIND) rach2-recovery \
+                      $(RECOVERY_IMAGE) $(INSTALL_STICK) $(INSTALL_TEST_STICK) $(PTYDRIVE) \
+                      $(HARNESS)
+	sh tests/system/suites/installer.sh $(INSTALL_STICK) $(SEALED_DISK) $(HARNESS) \
+	    $(INSTALLER_REPAIR_DIR) "`cat krffs/rach2_demo_password`" $(INSTALL_TEST_STICK) \
+	    $(INSTALLER_DISK) $(INSTALLER_PORT) $(PTYDRIVE) krffs/rach2_demo_ed25519 repair
 # `tests/run usbdisk`: a flash drive as a disk. Three sticks built on the
 # host, an MBR one, a GUID one and one with no table; the nodes, the mounts,
 # a write, the pull from under a mount and the replug, ten plugs and pulls
