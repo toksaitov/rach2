@@ -36,6 +36,16 @@ int kcmdline_has(const char *flag);
  */
 int kcmdline_value(const char *key, char *out, unsigned int outlen);
 
+/**
+ * The value of the `nth` `key=value` token, counting from zero.
+ *
+ * A key a machine may give more than once, one per interface, is read this
+ * way; `kcmdline_value` is this with `nth` zero.
+ *
+ * @return 1 when there is such a token and its value fit, 0 otherwise.
+ */
+int kcmdline_value_nth(const char *key, int nth, char *out, unsigned int outlen);
+
 /** How many `key=` tokens the line has; more than one is a
  * contradiction. */
 int kcmdline_count(const char *key);

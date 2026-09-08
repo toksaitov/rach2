@@ -165,4 +165,13 @@ int netconf_prefix_of(uint32_t mask);
  */
 void netconf_publish(void);
 
+/**
+ * Configure interfaces the boot line names by their hardware address.
+ *
+ * `rach2.ifaddr=<mac>,<addr>/<prefix>[,<gateway>]`, once per interface. Read
+ * after the cards are probed, since it names them by what they carry rather
+ * than by the order they were found in.
+ */
+void netconf_apply_by_mac(void);
+
 #endif /* _NETCONF_H_ */

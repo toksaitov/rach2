@@ -76,10 +76,16 @@ static int token_has_key(const char *tok, size_t len, const char *key, size_t kl
 
 int kcmdline_value(const char *key, char *out, unsigned int outlen)
 {
+    return kcmdline_value_nth(key, 0, out, outlen);
+}
+
+int kcmdline_value_nth(const char *key, int nth, char *out, unsigned int outlen)
+{
     size_t klen = k_strlen(key);
     const char *p = kcmdline;
     const char *tok;
     size_t len;
+    int seen = 0;
 
     if (outlen == 0) {
         return 0;
@@ -89,6 +95,10 @@ int kcmdline_value(const char *key, char *out, unsigned int outlen)
         if (token_has_key(tok, len, key, klen)) {
             size_t vlen = len - klen - 1;
             size_t i;
+
+            if (seen++ != nth) {
+                continue;
+            }
 
             if (vlen + 1 > (size_t)outlen) {
                 return 0;

@@ -68,6 +68,7 @@ int init_network(void)
     /* The address was read from the boot line before there was an interface
      * to put it on; now there is one. */
     netconf_publish();
+    netconf_apply_by_mac();
 
     return 1;
 }

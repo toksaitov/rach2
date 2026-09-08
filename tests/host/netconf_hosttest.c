@@ -134,6 +134,23 @@ struct netdev *netdev_first(void)
     return &the_iface;
 }
 
+int netdev_count(void)
+{
+    return 1;
+}
+
+struct netdev *netdev_at(int n)
+{
+    return n == 0 ? &the_iface : 0;
+}
+
+void klog(int level, const char *subsystem, const char *format, ...)
+{
+    (void)level;
+    (void)subsystem;
+    (void)format;
+}
+
 int main(void)
 {
     uint32_t ip, mask;

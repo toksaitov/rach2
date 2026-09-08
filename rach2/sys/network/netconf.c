@@ -16,6 +16,7 @@
 #include "arp/arp.h"
 #include "tcp/tcp.h"
 #include "../cmdline.h"
+#include "../klog.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
 
@@ -30,6 +31,147 @@
 uint32_t net_ip_addr = NET_IP_ADDR_DEFAULT;
 uint32_t net_ip_mask = NET_IP_MASK_DEFAULT;
 uint32_t net_ip_gateway = NET_IP_GATEWAY_DEFAULT;
+
+/**
+ * Read one two-digit hexadecimal byte, advancing `*s` past it.
+ *
+ * @return 1 on success, 0 on anything that is not two hexadecimal digits.
+ */
+static int parse_hex_byte(const char **s, uint8_t *out)
+{
+    const char *p = *s;
+    uint32_t v = 0;
+    int i;
+
+    for (i = 0; i < 2; i++) {
+        char c = p[i];
+        int d;
+
+        if (c >= '0' && c <= '9') {
+            d = c - '0';
+        } else if (c >= 'a' && c <= 'f') {
+            d = c - 'a' + 10;
+        } else if (c >= 'A' && c <= 'F') {
+            d = c - 'A' + 10;
+        } else {
+            return 0;
+        }
+        v = (v << 4) | (uint32_t)d;
+    }
+    *out = (uint8_t)v;
+    *s = p + 2;
+    return 1;
+}
+
+/**
+ * Read a hardware address, six hexadecimal bytes separated by colons.
+ *
+ * @return 1 on success with the six bytes in `out`, 0 on anything else.
+ */
+static int parse_mac(const char **s, uint8_t *out)
+{
+    int i;
+
+    for (i = 0; i < 6; i++) {
+        if (i != 0) {
+            if (**s != ':') {
+                return 0;
+            }
+            (*s)++;
+        }
+        if (!parse_hex_byte(s, &out[i])) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/** Whether two hardware addresses are the same. */
+static int mac_equal(const uint8_t *a, const uint8_t *b)
+{
+    int i;
+
+    for (i = 0; i < 6; i++) {
+        if (a[i] != b[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/**
+ * Configure interfaces the boot line names by their hardware address.
+ *
+ * `rach2.ifaddr=52:54:00:12:34:57,10.0.3.5/24` gives that card that address,
+ * and a gateway may follow after another comma. The card is named by the
+ * address it carries rather than by the order the probe found it in, so a
+ * machine whose cards are enumerated the other way round on the next boot
+ * still puts each address on the card the operator meant.
+ *
+ * A token that names no card the machine has, or that will not parse, is
+ * reported and skipped; the interfaces it does not name keep what they had.
+ */
+void netconf_apply_by_mac(void)
+{
+    char value[48];
+    int n;
+
+    for (n = 0; kcmdline_value_nth("rach2.ifaddr", n, value, (unsigned int)sizeof(value)); n++) {
+        const char *p = value;
+        uint8_t mac[6];
+        uint32_t ip = 0, mask = 0, gw = 0;
+        struct netdev *nd = 0;
+        int i;
+
+        if (!parse_mac(&p, mac) || *p != ',') {
+            klog(KLOG_WARN, "net", "ifaddr: %s: not a hardware address", value);
+            continue;
+        }
+        p++;
+        {
+            /* The address and prefix end at the comma the gateway follows,
+             * and the parser reads a whole string, so it is given one. */
+            char cidr[24];
+            int c = 0;
+
+            while (p[c] != '\0' && p[c] != ',' && c < (int)sizeof(cidr) - 1) {
+                cidr[c] = p[c];
+                c++;
+            }
+            cidr[c] = '\0';
+            p += c;
+            if (!netconf_parse_cidr(cidr, &ip, &mask)) {
+                klog(KLOG_WARN, "net", "ifaddr: %s: not an address and prefix", value);
+                continue;
+            }
+        }
+        if (*p == ',') {
+            p++;
+            if (!netconf_parse_addr(p, &gw)) {
+                klog(KLOG_WARN, "net", "ifaddr: %s: not a gateway", value);
+                continue;
+            }
+            if (!netconf_gateway_ok(gw, ip, mask)) {
+                klog(KLOG_WARN, "net", "ifaddr: %s: the gateway is not on that subnet", value);
+                continue;
+            }
+        }
+        for (i = 0; i < netdev_count(); i++) {
+            if (mac_equal(netdev_at(i)->mac, mac)) {
+                nd = netdev_at(i);
+                break;
+            }
+        }
+        if (!nd) {
+            klog(KLOG_WARN, "net", "ifaddr: %s: no card of this machine has that address", value);
+            continue;
+        }
+        nd->ip = ip;
+        nd->mask = mask;
+        nd->gateway = gw;
+        klog(KLOG_INFO, "net", "%s: configured by its station address", nd->name);
+    }
+}
 
 /** Write the machine's configuration through to the interface it belongs to. */
 void netconf_publish(void)

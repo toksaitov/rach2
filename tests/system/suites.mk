@@ -719,6 +719,7 @@ run-netif: rach2 tests krffs test-image $(HARNESS)
 	    --net "user,id=net0" --device "e1000,netdev=net0" \
 	    --qemu-arg=-netdev --qemu-arg=user,id=net1,net=10.0.3.0/24 \
 	    --qemu-arg=-device --qemu-arg=e1000,netdev=net1 \
+	    --append "rach2.ifaddr=52:54:00:12:34:57,10.0.3.5/24,10.0.3.2" \
 	    --log $(TWONIC_LOG) \
 	    --timeout 120 --ok "PINGTEST OK" \
 	    "expect=Type 'help'" "send=exec /pingtest" wait=60
@@ -731,7 +732,13 @@ run-netif: rach2 tests krffs test-image $(HARNESS)
 	    b=`sed -n "s/.*net: eth1: e1000, station \\(.*\\)/\\1/p" "$$l" | head -1`; \
 	    [ -n "$$a" ] && [ "$$a" != "$$b" ] || \
 	        { echo "netif-test: FAIL: the two cards report one station address" >&2; exit 1; }; \
-	    echo "netif-test: two cards are two interfaces, each with its own station: OK"'
+	    grep -aq "net: eth1: configured by its station address" "$$l" || \
+	        { echo "netif-test: FAIL: the second card was not configured by its station" >&2; exit 1; }; \
+	    grep -aq "net: eth1: IPv4 10.0.3.5/24, gateway 10.0.3.2" "$$l" || \
+	        { echo "netif-test: FAIL: the second card did not take the address it was given" >&2; exit 1; }; \
+	    grep -aq "net: eth0: IPv4 10.0.2.15/24" "$$l" || \
+	        { echo "netif-test: FAIL: the first card lost its own address" >&2; exit 1; }; \
+	    echo "netif-test: two cards are two interfaces, each with its own station and address: OK"'
 # `tests/run dgram`: a connected datagram socket and the permission to
 # broadcast, which is how a DHCP client renews a lease and how it asks for one.
 # Its own target because it broadcasts, and a probe in the suite must not put a
