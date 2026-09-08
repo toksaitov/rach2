@@ -1315,6 +1315,24 @@ rach2-stick-image: $(STICK_IMAGE)
 $(STICK_IMAGE): build/images/rach2-metal.iso tools/image/mkstick.sh $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK)
 	sh tools/image/mkstick.sh build/images/rach2-metal.iso $@ $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK)
 build/images/rach2-metal.iso: rach2-metal-iso
+# The install stick (tools/image/mkinstallstick.sh): the recovery ISO followed
+# by an exFAT volume carrying the sealed disk image and the manifest naming its
+# length and hash. It is what a person boots to install this system, and it is
+# built only when it is asked for: the image it carries is 1655 MiB.
+INSTALL_STICK = $(IMAGES_DIR)/rach2-install-stick.img
+rach2-install-stick: $(INSTALL_STICK)
+$(INSTALL_STICK): build/images/rach2-recovery.iso $(SEALED_DISK) tools/image/mkinstallstick.sh \
+                  $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK)
+	sh tools/image/mkinstallstick.sh build/images/rach2-recovery.iso $(SEALED_DISK) $@ \
+	    $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK)
+build/images/rach2-recovery.iso: rach2-recovery-iso
+# `tests/run installer`: the install stick and the program on it. The stick is
+# booted through the firmware with no kernel given to the emulator, so what runs
+# is what GRUB reads off it.
+INSTALLER_DIR = $(IMAGES_DIR)/installer
+run-installer: $(DEMO_CREDS) $(INSTALL_STICK) $(HARNESS)
+	sh tests/system/suites/installer.sh $(INSTALL_STICK) $(SEALED_DISK) $(HARNESS) \
+	    $(INSTALLER_DIR) "`cat krffs/rach2_demo_password`"
 # `tests/run usbdisk`: a flash drive as a disk. Three sticks built on the
 # host, an MBR one, a GUID one and one with no table; the nodes, the mounts,
 # a write, the pull from under a mount and the replug, ten plugs and pulls

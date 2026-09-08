@@ -1497,6 +1497,151 @@ static void boot_write(struct build *b, uint64_t first)
         wr32(b_sector(b, first + 11) + i, sum);
 }
 
+/*
+ * `mkexfatfixture --make OUT --sectors N [--offset S] [--add NAME=PATH]...`
+ *
+ * A volume with files in it, rather than the tree of shapes the fixture is.
+ * The fixture is sixteen megabytes of every shape an entry set can take,
+ * written for the reader's tests. A stick carries something else: a volume of
+ * whatever size the medium has with a few large files in its root, which is
+ * what this writes. Every file is contiguous with NoFatChain, since nothing
+ * here fragments; the volume is otherwise the same, with both boot regions,
+ * the bitmap at cluster 2, the recommended up-case table, a label and a root,
+ * so `--check` walks it as it walks the fixture.
+ *
+ * The whole volume is held in memory while it is built, so what it can write
+ * is bounded by the host's memory.
+ */
+static int build_volume(const char *out, uint64_t sectors, uint64_t offset, char **adds, int nadds)
+{
+    struct build b;
+    struct dw root;
+    unsigned char set[19 * 32], entry[32], *table;
+    uint64_t table_len, bitmap_len, heap;
+    uint32_t c, used;
+    unsigned n, i;
+    int k;
+    FILE *f;
+
+    memset(&b, 0, sizeof(b));
+    b.partition_offset = offset;
+    b.bps_shift = B_BPS_SHIFT;
+    b.spc_shift = B_SPC_SHIFT;
+    b.sectors = sectors;
+    b.fat_offset = 24; /* after both boot regions */
+    /* The heap begins on a cluster boundary after a FAT long enough for the
+       clusters the heap then holds. Each pass shortens the heap and so the
+       FAT; it settles in two. */
+    heap = 1u << b.spc_shift;
+    for (i = 0; i < 8; i++) {
+        uint64_t need;
+
+        b.clusters = (uint32_t)((b.sectors - heap) >> b.spc_shift);
+        b.fat_length = (uint32_t)(((uint64_t)(b.clusters + 2) * 4 + b_bps(&b) - 1) / b_bps(&b));
+        need = b.fat_offset + b.fat_length;
+        need = ((need + (1u << b.spc_shift) - 1) >> b.spc_shift) << b.spc_shift;
+        if (need <= heap) {
+            break;
+        }
+        heap = need;
+    }
+    b.heap_offset = (uint32_t)heap;
+    b.clusters = (uint32_t)((b.sectors - heap) >> b.spc_shift);
+    b.img = calloc((size_t)b.sectors, b_bps(&b));
+    if (!b.img) {
+        fprintf(stderr, "mkexfatfixture: no memory for %llu sectors\n",
+                (unsigned long long)sectors);
+        return 2;
+    }
+    decompress_upcase(upcase_stored, sizeof(upcase_stored), b.upcase);
+    b_fat(&b, 0, 0xFFFFFFF8u);
+    b_fat(&b, 1, 0xFFFFFFFFu);
+    b.next = 2;
+    bitmap_len = ((uint64_t)b.clusters + 7) / 8;
+    b_alloc(&b, (uint32_t)((bitmap_len + b_cbytes(&b) - 1) / b_cbytes(&b)), 1);
+    table = malloc(140000);
+    if (!table) {
+        return 2;
+    }
+    table_len = upcase_bytes(&b, table, 140000);
+    c = b_alloc(&b, (uint32_t)((table_len + b_cbytes(&b) - 1) / b_cbytes(&b)), 1);
+    memcpy(b_cluster(&b, c), table, (size_t)table_len);
+    b.root = b_alloc(&b, 1, 1);
+    dw_init(&root, &b, 0, b.root);
+    memset(entry, 0, 32);
+    entry[0] = 0x83;
+    entry[1] = 5;
+    for (i = 0; i < 5; i++) {
+        wr16(entry + 2 + i * 2, (uint32_t)"RACH2"[i]);
+    }
+    dw_put(&root, entry);
+    memset(entry, 0, 32);
+    entry[0] = 0x81;
+    wr32(entry + 20, 2);
+    wr64(entry + 24, bitmap_len);
+    dw_put(&root, entry);
+    memset(entry, 0, 32);
+    entry[0] = 0x82;
+    wr32(entry + 4, b_table_checksum(table, table_len));
+    wr32(entry + 20, c);
+    wr64(entry + 24, table_len);
+    dw_put(&root, entry);
+    free(table);
+
+    for (k = 0; k < nadds; k++) {
+        char name[256];
+        const char *eq = strchr(adds[k], '=');
+        uint64_t bytes, want;
+        FILE *in;
+
+        if (!eq || (size_t)(eq - adds[k]) >= sizeof(name)) {
+            fprintf(stderr, "mkexfatfixture: --add takes NAME=PATH\n");
+            return 2;
+        }
+        memcpy(name, adds[k], (size_t)(eq - adds[k]));
+        name[eq - adds[k]] = '\0';
+        in = fopen(eq + 1, "rb");
+        if (!in) {
+            fprintf(stderr, "mkexfatfixture: cannot open %s\n", eq + 1);
+            return 2;
+        }
+        fseek(in, 0, SEEK_END);
+        bytes = (uint64_t)ftell(in);
+        fseek(in, 0, SEEK_SET);
+        want = (bytes + b_cbytes(&b) - 1) / b_cbytes(&b);
+        if (b.next + want > b.clusters + 2) {
+            fprintf(stderr, "mkexfatfixture: %s does not fit the volume\n", name);
+            return 2;
+        }
+        c = b_alloc(&b, (uint32_t)want, 0);
+        if (bytes && fread(b_cluster(&b, c), 1, (size_t)bytes, in) != (size_t)bytes) {
+            fprintf(stderr, "mkexfatfixture: cannot read %s\n", eq + 1);
+            return 2;
+        }
+        fclose(in);
+        n = set_build(&b, set, name, 0, c, bytes, bytes, 1, 0, 0);
+        dw_put_set(&root, set, n);
+    }
+
+    used = 0;
+    for (c = 2; c < b.clusters + 2; c++) {
+        if (b_cluster(&b, 2)[(c - 2) / 8] & (1u << ((c - 2) % 8))) {
+            used++;
+        }
+    }
+    b.percent = (unsigned)((uint64_t)used * 100 / b.clusters);
+    boot_write(&b, 0);
+    boot_write(&b, 12);
+    f = fopen(out, "wb");
+    if (!f || fwrite(b.img, 1, (size_t)b.sectors * b_bps(&b), f) != (size_t)b.sectors * b_bps(&b)) {
+        fprintf(stderr, "mkexfatfixture: cannot write %s\n", out);
+        return 2;
+    }
+    fclose(f);
+    free(b.img);
+    return 0;
+}
+
 static int build(const char *out, const char *opt)
 {
     struct build b;
@@ -1930,9 +2075,40 @@ int main(int argc, char **argv)
         if (strcmp(argv[i], "--check") == 0)
             return check_main(argc, argv);
     }
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--make") == 0) {
+            const char *out = 0;
+            uint64_t sectors = 0, offset = 0;
+            char *adds[8];
+            int nadds = 0, k;
+
+            for (k = 1; k < argc; k++) {
+                if (strcmp(argv[k], "--make") == 0 && k + 1 < argc)
+                    out = argv[++k];
+                else if (strcmp(argv[k], "--sectors") == 0 && k + 1 < argc)
+                    sectors = strtoull(argv[++k], 0, 10);
+                else if (strcmp(argv[k], "--offset") == 0 && k + 1 < argc)
+                    offset = strtoull(argv[++k], 0, 10);
+                else if (strcmp(argv[k], "--add") == 0 && k + 1 < argc &&
+                         nadds < (int)(sizeof(adds) / sizeof(adds[0])))
+                    adds[nadds++] = argv[++k];
+                else {
+                    fprintf(stderr, "mkexfatfixture: %s: not an option of --make\n", argv[k]);
+                    return 2;
+                }
+            }
+            if (!out || sectors < 2048) {
+                fprintf(stderr, "usage: mkexfatfixture --make OUT --sectors N [--offset S] "
+                                "[--add NAME=PATH]...\n");
+                return 2;
+            }
+            return build_volume(out, sectors, offset, adds, nadds);
+        }
+    }
     if (argc < 2 || argc > 3) {
         fprintf(stderr, "usage: mkexfatfixture IMAGE [OPTION | --offset=SECTORS] | --check IMAGE "
-                        "[OFFSET-SECTORS] [--list] [--dump]\n");
+                        "[OFFSET-SECTORS] [--list] [--dump] | --make OUT --sectors N "
+                        "[--offset S] [--add NAME=PATH]...\n");
         return 2;
     }
     return build(argv[1], argc == 3 ? argv[2] : 0);
