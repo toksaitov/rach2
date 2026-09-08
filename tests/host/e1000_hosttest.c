@@ -54,9 +54,10 @@ void ethernet_rx(struct netdev *nd, const unsigned char *data, unsigned short le
     }
 }
 
-void ethernet_tx(const unsigned char *dst, unsigned short type, const unsigned char *payload,
-                 unsigned short plen)
+void ethernet_tx(struct netdev *out, const unsigned char *dst, unsigned short type,
+                 const unsigned char *payload, unsigned short plen)
 {
+    (void)out;
     (void)dst;
     (void)type;
     (void)payload;

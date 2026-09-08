@@ -103,14 +103,13 @@ void ethernet_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
  * driver `netdev_probe` bound. The payload must fit the 1500-byte MTU; an
  * oversize payload is dropped, not truncated.
  */
-void ethernet_tx(const uint8_t *dst_mac, uint16_t ethertype,
+void ethernet_tx(struct netdev *out, const uint8_t *dst_mac, uint16_t ethertype,
                  const uint8_t *payload, uint16_t plen)
 {
-    struct netdev *out = netdev_first();
     uint16_t total;
 
     if (!out) {
-        return; /* nothing to send through */
+        return; /* no interface reaches that address */
     }
 
     if (plen > 1500) {
@@ -138,7 +137,7 @@ void ethernet_tx(const uint8_t *dst_mac, uint16_t ethertype,
     /* Counted after the driver answers, not before it is asked: a frame the
      * card would not take did not leave, and counting it as carried is the
      * error this verdict exists to correct. */
-    if (netdev_tx(netdev_first(), eth_tx_frame, total) != NETDEV_TX_OK) {
+    if (netdev_tx(out, eth_tx_frame, total) != NETDEV_TX_OK) {
         out->tx_dropped++;
         return;
     }

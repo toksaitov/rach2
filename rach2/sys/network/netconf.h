@@ -156,4 +156,13 @@ void netconf_format(uint32_t ip, char *out);
 /** How many leading one bits `mask` has, for printing a prefix. */
 int netconf_prefix_of(uint32_t mask);
 
+/**
+ * Write the machine's configuration through to the interface it belongs to.
+ *
+ * The address is read from the boot line before the card is probed, so that a
+ * refusal is on screen before anything depends on it; this is what gives the
+ * interface its address once there is one.
+ */
+void netconf_publish(void);
+
 #endif /* _NETCONF_H_ */

@@ -65,6 +65,9 @@ int init_network(void)
     if (!netdev_probe()) {
         return 0;
     }
+    /* The address was read from the boot line before there was an interface
+     * to put it on; now there is one. */
+    netconf_publish();
 
     return 1;
 }

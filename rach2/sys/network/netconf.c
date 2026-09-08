@@ -32,7 +32,7 @@ uint32_t net_ip_mask = NET_IP_MASK_DEFAULT;
 uint32_t net_ip_gateway = NET_IP_GATEWAY_DEFAULT;
 
 /** Write the machine's configuration through to the interface it belongs to. */
-static void netconf_publish(void)
+void netconf_publish(void)
 {
     struct netdev *nd = netdev_first();
 

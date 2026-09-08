@@ -74,6 +74,29 @@ struct netdev *netdev_by_name(const char *name)
     return 0;
 }
 
+struct netdev *netdev_route(uint32_t dst, uint32_t *via)
+{
+    int i;
+
+    for (i = 0; i < niface; i++) {
+        struct netdev *nd = &ifaces[i];
+
+        if (nd->ip != 0 && nd->mask != 0 && (dst & nd->mask) == (nd->ip & nd->mask)) {
+            *via = dst;
+            return nd;
+        }
+    }
+    for (i = 0; i < niface; i++) {
+        struct netdev *nd = &ifaces[i];
+
+        if (nd->gateway != 0) {
+            *via = nd->gateway;
+            return nd;
+        }
+    }
+    return 0;
+}
+
 /** Name interface `n` `ethN`, which is what every ioctl matches it by. */
 static void name_iface(struct netdev *nd, int n)
 {

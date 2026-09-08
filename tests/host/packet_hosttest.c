@@ -29,6 +29,7 @@ extern void free(void *p);
 extern void *memcpy(void *d, const void *s, unsigned long n);
 
 #include "../../rach2/sys/network/ethernet/ethernet.h"
+#include "../../rach2/sys/network/driver/netdev.h"
 #include "../../rach2/sys/network/ip/ip.h"
 
 /* ---- what the layers under the parsers record ---- */
@@ -165,6 +166,13 @@ int netconf_is_broadcast(uint32_t ip)
 /* The interface the stack sends through. This test never looks inside one,
  * so a record of its own is all that is needed. */
 static struct netdev the_iface;
+
+struct netdev *netdev_route(uint32_t dst, uint32_t *via)
+{
+    (void)dst;
+    *via = dst;
+    return &the_iface;
+}
 
 struct netdev *netdev_first(void)
 {

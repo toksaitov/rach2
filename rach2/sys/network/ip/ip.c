@@ -20,6 +20,7 @@
 #include "../arp/arp.h"
 #include "../core/byteorder.h"
 #include "../ethernet/ethernet.h"
+#include "../driver/netdev.h"
 #include "../socket/raw.h"
 #include "../net.h"
 #include "../netconf.h"
@@ -201,6 +202,7 @@ int ip_tx(uint32_t dst_ip, uint8_t proto,
     uint16_t total_len;
     uint8_t  dst_mac[6];
     uint32_t route_ip;
+    struct netdev *out;
 
     if (plen > 1500) {
         klog(KLOG_WARN, "ip", "tx: payload of %d bytes is too large, refused",
@@ -256,7 +258,7 @@ int ip_tx(uint32_t dst_ip, uint8_t proto,
                  "tx: refused to broadcast a datagram that is not UDP");
             return -EOPNOTSUPP;
         }
-        ethernet_tx(all_ones, ETH_TYPE_IP, ip_tx_buf, total_len);
+        ethernet_tx(netdev_first(), all_ones, ETH_TYPE_IP, ip_tx_buf, total_len);
         return 0;
     }
 
@@ -264,13 +266,10 @@ int ip_tx(uint32_t dst_ip, uint8_t proto,
      * machine configured with an address and no gateway has no route off its
      * own subnet, and the datagram is dropped here with a reason rather than
      * ARPed for at address zero. */
-    if ((dst_ip & net_ip_mask) == (net_ip_addr & net_ip_mask)) {
-        route_ip = dst_ip;
-    } else if (net_ip_gateway != 0) {
-        route_ip = net_ip_gateway;
-    } else {
+    out = netdev_route(dst_ip, &route_ip);
+    if (!out) {
         klog(KLOG_WARN, "ip",
-             "tx: no gateway: refused a datagram for another subnet");
+             "tx: no route: refused a datagram no interface reaches");
         return -ENETUNREACH;
     }
 
@@ -282,7 +281,7 @@ int ip_tx(uint32_t dst_ip, uint8_t proto,
         return 0;
     }
 
-    ethernet_tx(dst_mac, ETH_TYPE_IP, ip_tx_buf, total_len);
+    ethernet_tx(out, dst_mac, ETH_TYPE_IP, ip_tx_buf, total_len);
     return 0;
 }
 

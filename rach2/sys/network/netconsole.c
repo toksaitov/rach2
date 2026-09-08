@@ -42,6 +42,7 @@
 #include "net.h"
 #include "core/byteorder.h"
 #include "ethernet/ethernet.h"
+#include "driver/netdev.h"
 #include "ip/ip.h"
 #include "../lib/krandom.h"
 
@@ -143,7 +144,7 @@ void netconsole_flush(void)
         write16be(nc_payload + 14, 0);
         write16be(nc_payload + 14, ip_checksum(nc_payload, (uint16_t)(NETCONSOLE_HDR_LEN + n)));
 
-        ethernet_tx(nc_broadcast, NETCONSOLE_ETHERTYPE, nc_payload,
+        ethernet_tx(netdev_first(), nc_broadcast, NETCONSOLE_ETHERTYPE, nc_payload,
                     (uint16_t)(NETCONSOLE_HDR_LEN + n));
         nc_seq++;
         nc_frames++;

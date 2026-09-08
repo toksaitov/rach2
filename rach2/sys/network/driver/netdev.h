@@ -153,6 +153,21 @@ struct netdev *netdev_at(int n);
 /** The interface of that name, or NULL. */
 struct netdev *netdev_by_name(const char *name);
 
+/**
+ * The interface a datagram for `dst` leaves by, and the address on the wire
+ * it is sent to.
+ *
+ * An address on an interface's own subnet leaves by that interface and is
+ * sent straight to it. Anything else leaves by the first interface that has a
+ * way out and is sent to that interface's gateway. A machine with two cards
+ * on two subnets therefore answers each subnet on the card that reaches it,
+ * which is the whole of what a route means here.
+ *
+ * @return the interface, or NULL when nothing reaches that address; `*via` is
+ *         filled only when one does.
+ */
+struct netdev *netdev_route(uint32_t dst, uint32_t *via);
+
 /** The first interface, or NULL when none came up. */
 struct netdev *netdev_first(void);
 

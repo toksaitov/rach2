@@ -326,7 +326,7 @@ int packet_send(struct socket *sock, const uint8_t *dst_mac, uint16_t ethertype,
         net_unlock(flags);
         return -ENETDOWN;
     }
-    ethernet_tx(dst_mac, ethertype, data, len);
+    ethernet_tx(netdev_first(), dst_mac, ethertype, data, len);
     net_unlock(flags);
     return (int)len;
 }

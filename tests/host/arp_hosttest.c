@@ -34,6 +34,7 @@
 extern int printf(const char *fmt, ...);
 
 #include "../../rach2/sys/network/arp/arp.h"
+#include "../../rach2/sys/network/driver/netdev.h"
 
 /* ------------------------------------------------------------------ */
 /* The stubs arp.c links against.                                      */
@@ -51,8 +52,23 @@ uint8_t net_mac[6] = {0x52, 0x54, 0x00, 0x12, 0x34, 0x56};
 uint32_t net_ip_addr = 0xC0A80005u; /* 192.168.0.5 */
 uint32_t net_ip_mask = 0xFFFFFF00u;
 
-void ethernet_tx(const uint8_t *dst, uint16_t type, const uint8_t *payload, uint16_t plen)
+/* The interface a frame leaves by, which this model does not look
+ * inside. */
+struct netdev;
+
+/* The interface this test's stack sends through. It never looks inside one,
+ * so a record of its own is all that is needed. */
+static struct netdev the_iface;
+
+struct netdev *netdev_first(void)
 {
+    return &the_iface;
+}
+
+void ethernet_tx(struct netdev *out, const uint8_t *dst, uint16_t type, const uint8_t *payload,
+                 uint16_t plen)
+{
+    (void)out;
     unsigned i;
 
     if (frame_count < MAX_FRAMES) {

@@ -21,6 +21,7 @@ extern int printf(const char *fmt, ...);
 /* The kernel headers this pulls in define uint32_t themselves, so nothing
    from the host's stdint may be included alongside them. */
 #include "../../rach2/sys/network/netconsole.h"
+#include "../../rach2/sys/network/driver/netdev.h"
 
 /* ------------------------------------------------------------------ */
 /* The stubs netconsole links against.                                 */
@@ -51,9 +52,23 @@ void klog(int level, const char *subsystem, const char *format, ...)
     (void)format;
 }
 
-void ethernet_tx(const unsigned char *dst, unsigned short type, const unsigned char *payload,
-                 unsigned short plen)
+/* The interface a frame leaves by, which this model does not look
+ * inside. */
+struct netdev;
+
+/* The interface this test's stack sends through. It never looks inside one,
+ * so a record of its own is all that is needed. */
+static struct netdev the_iface;
+
+struct netdev *netdev_first(void)
 {
+    return &the_iface;
+}
+
+void ethernet_tx(struct netdev *out, const unsigned char *dst, unsigned short type,
+                 const unsigned char *payload, unsigned short plen)
+{
+    (void)out;
     unsigned i;
 
     tx_depth++;

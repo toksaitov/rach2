@@ -12,6 +12,7 @@
 #include "arp.h"
 #include "../core/byteorder.h"
 #include "../ethernet/ethernet.h"
+#include "../driver/netdev.h"
 #include "../net.h"
 #include "../netconf.h"
 #include "../../lib/kstring.h"
@@ -188,7 +189,7 @@ static void arp_send_reply(const uint8_t *dst_mac, uint32_t dst_ip)
     k_memcpy(arp_reply_buf + 18, dst_mac, 6);
     write32be(arp_reply_buf + 24, dst_ip);
 
-    ethernet_tx(dst_mac, ETH_TYPE_ARP, arp_reply_buf, 28);
+    ethernet_tx(netdev_first(), dst_mac, ETH_TYPE_ARP, arp_reply_buf, 28);
 }
 
 /**
@@ -269,7 +270,7 @@ void arp_request(uint32_t target_ip)
     k_memcpy(arp_req_buf + 18, zero_mac, 6);
     write32be(arp_req_buf + 24, target_ip);
 
-    ethernet_tx(broadcast, ETH_TYPE_ARP, arp_req_buf, 28);
+    ethernet_tx(netdev_first(), broadcast, ETH_TYPE_ARP, arp_req_buf, 28);
 }
 
 int arp_snapshot(struct arp_row *out, int max)
