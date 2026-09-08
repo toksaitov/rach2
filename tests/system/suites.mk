@@ -1350,9 +1350,11 @@ build/images/rach2-recovery.iso: $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) tools/imag
 # that holds it, because every row that installs reads and hashes the whole
 # image and the emulator hashes at a megabyte or two a second.
 INSTALLER_EXT2 = $(IMAGES_DIR)/installer-root.ext2
-$(INSTALLER_EXT2): $(DEMO_CREDS) krffs/manifests/rach2-metal-disk.manifest tools/image/mkext2.sh \
-                   $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc \
-                   check-pdpmake check-setid check-dropbearmulti ports/doom
+$(INSTALLER_EXT2): $(FS_DEMO_IMAGES) $(DEMO_CREDS) krffs/manifests/rach2-metal-disk.manifest \
+                   $(shell sh krffs/manifest_deps.sh krffs/manifests/rach2-metal-disk.manifest) \
+                   tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils \
+                   check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti \
+                   ports/doom
 	sh tools/image/mkext2.sh krffs/manifests/rach2-metal-disk.manifest $@ 64
 INSTALLER_DISK = $(IMAGES_DIR)/installer-test.disk
 $(INSTALLER_DISK): $(DEMO_CREDS) $(INSTALLER_EXT2) $(RECOVERY_IMAGE) tools/image/mkdisk_grub.sh \
