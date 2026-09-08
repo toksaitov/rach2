@@ -18,6 +18,11 @@
 /* The unit every raw device here takes and gives: a partial one is refused. */
 #define SECTORCOPY_SECTOR 512
 
+/* How far apart the progress lines are. Sixteen mebibytes is a line every few
+ * seconds on the transports this runs over, which is often enough to show that
+ * a write is moving and rare enough that the lines are not the transport. */
+#define SECTORCOPY_STEP (16ULL * 1024 * 1024)
+
 /** Where the bytes come from and where they go. */
 struct sectorcopy_io {
     /* Read up to `n` bytes: the count read, 0 at the end of the stream, or a
@@ -27,8 +32,25 @@ struct sectorcopy_io {
      * the count written, or a negative number, like write(2). A short count is
      * not an error here; the loop calls again. */
     long (*write)(void *ctx, const unsigned char *buf, unsigned long n);
+    /* Called as the copy passes each step and once at its end, or NULL for a
+     * copy that says nothing. `done` is the bytes that have reached the
+     * device, `total` the bytes it was asked for. */
+    void (*note)(void *ctx, unsigned long long done, unsigned long long total, unsigned percent);
     void *ctx;
 };
+
+/**
+ * Whether a progress line is due, and the percentage it would carry.
+ *
+ * A line is due when the copy has passed a step boundary since the last one,
+ * and again when it has finished, so a copy of any length says at least that
+ * it ended. `*last` is the count the last line reported, zero at the start.
+ *
+ * @return 1 when a line is due, with `*last` moved to `done` and `*percent`
+ *         set; 0 when it is not, and neither is touched.
+ */
+int sectorcopy_step(unsigned long long done, unsigned long long total, unsigned long long *last,
+                    unsigned *percent);
 
 int sectorcopy_parse_u64(const char *text, unsigned long long *out);
 int sectorcopy_bounds(unsigned long long device, unsigned long long offset,

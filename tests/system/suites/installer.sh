@@ -94,6 +94,83 @@ else
     bad "the stick was not published whole with two partitions"
 fi
 
+# ---- 2: the two halves of a raw write, on the machine that does it. A blank
+#         disk is attached beside the stick; thirty-two mebibytes of the image
+#         are written to it with `reflash -p`, which must say how far it has
+#         got as it goes, and read back with `reflash --verify`, whose digest
+#         must be the digest of the same bytes taken by another program. Two
+#         mebibytes are then written at a later offset and verified there, so a
+#         digest that ignored the offset would be caught. ----
+rm -f "$DIR/target.img"
+dd if=/dev/zero of="$DIR/target.img" bs=1048576 count=64 2>/dev/null
+LOG2="$DIR/reflash.log"
+if "$HARNESS" --bios \
+    --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
+    --drive "if=none,id=stick,format=raw,file=$DIR/install-stick.img" \
+    --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=stick,bootindex=0 \
+    --qemu-arg=-drive \
+    --qemu-arg="file=$DIR/target.img,format=raw,if=ide,index=0,media=disk" \
+    --timeout 300 --steptmo 120 --ok "REFLASHDONE" --log "$LOG2" \
+    "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
+    "expect=# " "send=mkdir -p /mnt && mount -t exfat /dev/disk1p2 /mnt && echo MOUNT\"\"ED" \
+    "expect=MOUNTED" \
+    "send=dd if=/mnt/rach2-sealed.disk bs=1048576 count=32 2>/dev/null | sha256sum" \
+    "expect= -" \
+    "send=dd if=/mnt/rach2-sealed.disk bs=1048576 count=32 2>/dev/null | reflash -p /dev/disk0 0 33554432" \
+    "expect=wrote 33554432 bytes" \
+    "send=reflash --verify /dev/disk0 0 33554432" \
+    "expect=reflash: sha256 " \
+    "send=dd if=/mnt/rach2-sealed.disk bs=1048576 skip=40 count=2 2>/dev/null | sha256sum" \
+    "expect= -" \
+    "send=dd if=/mnt/rach2-sealed.disk bs=1048576 skip=40 count=2 2>/dev/null | reflash /dev/disk0 33554432 2097152" \
+    "expect=wrote 2097152 bytes" \
+    "send=reflash --verify /dev/disk0 33554432 2097152" \
+    "expect=reflash: sha256 " \
+    "send=umount /mnt && echo REFLASH\"\"DONE" \
+    "expect=REFLASHDONE" > /dev/null 2>&1; then
+    note "the image is written to a disk and read back on the machine that wrote it: OK"
+else
+    bad "the raw write and its readback"
+fi
+
+# The digest reflash read back must be the one another program takes of the
+# same bytes. Both come out of the same boot, so a wrong digest on both sides
+# would have to be two faults that agree.
+SUM_SHA=$(grep -a '^[0-9a-f]\{64\}  -' "$LOG2" | head -1 | cut -d' ' -f1)
+SUM_REFLASH=$(grep -a 'reflash: sha256 ' "$LOG2" | head -1 | cut -d' ' -f3)
+if [ -n "$SUM_SHA" ] && [ "$SUM_SHA" = "$SUM_REFLASH" ]; then
+    note "and the digest of what reached the disk is the digest of what was sent: OK"
+else
+    bad "sha256sum read $SUM_SHA and reflash read $SUM_REFLASH"
+fi
+
+# The second write is at another offset and holds bytes from another part of
+# the image, so a readback that ignored the offset would give the digest of the
+# first thirty-two mebibytes' beginning instead of this one's.
+SUM_SHA2=$(grep -a '^[0-9a-f]\{64\}  -' "$LOG2" | sed -n '2p' | cut -d' ' -f1)
+SUM_SECOND=$(grep -a 'reflash: sha256 ' "$LOG2" | sed -n '2p' | cut -d' ' -f3)
+if [ -n "$SUM_SHA2" ] && [ "$SUM_SHA2" = "$SUM_SECOND" ] && [ "$SUM_SECOND" != "$SUM_REFLASH" ]; then
+    note "and a readback at another offset is the digest of what was written there: OK"
+else
+    bad "the readback at 33554432 gave $SUM_SECOND and the bytes written there hash to $SUM_SHA2"
+fi
+
+# The progress lines: one every sixteen mebibytes and one at the end, and none
+# at all for the write that was not asked for them.
+STEPS=$(grep -ac 'reflash: [0-9]* of 33554432 bytes' "$LOG2" || true)
+if [ "$STEPS" -ge 2 ]; then
+    note "and the write said how far it had got $STEPS times: OK"
+else
+    bad "the progress lines were not printed ($STEPS of them)"
+fi
+if grep -aq 'of 2097152 bytes, ' "$LOG2"; then
+    bad "a write that was not asked to report its progress reported it"
+else
+    note "and a write not asked for them printed none: OK"
+fi
+
 if [ "$fail" -ne 0 ]; then
     echo "installer-test: FAIL" >&2
     exit 1

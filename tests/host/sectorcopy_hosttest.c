@@ -95,7 +95,7 @@ static long m_write(void *ctx, const unsigned char *buf, unsigned long n)
     return (long)n;
 }
 
-static const struct sectorcopy_io IO = {m_read, m_write, NULL};
+static const struct sectorcopy_io IO = {m_read, m_write, NULL, NULL};
 
 /** Load the stream with `len` bytes of a pattern and clear the device. */
 static void load(unsigned long len)
@@ -279,9 +279,72 @@ static void check_copy(void)
     CHECK(memcmp(m.device, m.source, 512) == 0, "byte for byte");
 }
 
+/*
+ * The progress rule: a line every step, one at the end, and none in between.
+ *
+ * The rule is arithmetic and not a device, so it is decided here rather than
+ * watched on a machine writing a gibibyte and a half. What matters is that a
+ * copy of any length says that it ended, that a copy shorter than a step says
+ * nothing before that, and that the percentage is of the whole.
+ */
+static void check_progress(void)
+{
+    unsigned long long last = 0;
+    unsigned percent = 0;
+    unsigned long long total = 100ULL * SECTORCOPY_STEP;
+    unsigned long long step = SECTORCOPY_STEP;
+
+    CHECK(!sectorcopy_step(512, total, &last, &percent),
+          "a copy that has not passed a step says nothing");
+    CHECK(last == 0, "and the last line reported stays where it was");
+
+    CHECK(sectorcopy_step(step, total, &last, &percent), "the first step is a line");
+    CHECK(percent == 1, "at one percent of a hundred steps");
+    CHECK(last == step, "and the line reported is that count");
+
+    CHECK(!sectorcopy_step(step + 512, total, &last, &percent),
+          "the bytes after it are not another line");
+    CHECK(sectorcopy_step(2 * step, total, &last, &percent), "the next step is");
+    CHECK(percent == 2, "at two percent");
+
+    /* A copy that jumps several steps in one write says so once: the line is
+       for the reader, and eight lines for one write would be the transport. */
+    last = 0;
+    CHECK(sectorcopy_step(8 * step, total, &last, &percent),
+          "a write past several steps is a line");
+    CHECK(percent == 8, "at the percentage it reached");
+
+    /* The end, whatever it lands on. */
+    last = 0;
+    CHECK(sectorcopy_step(1024, 1024, &last, &percent), "a copy shorter than a step says it ended");
+    CHECK(percent == 100, "at a hundred percent");
+    last = 0;
+    CHECK(!sectorcopy_step(512, 1024, &last, &percent), "and says nothing before that");
+
+    /* The end again after a line at exactly that count: the same count is not
+       two lines. */
+    last = 0;
+    CHECK(sectorcopy_step(step, step, &last, &percent), "a copy of exactly one step is a line");
+    CHECK(!sectorcopy_step(step, step, &last, &percent), "and not two");
+
+    /* A count of zero has nothing to be a percentage of. */
+    last = 0;
+    CHECK(sectorcopy_step(0, 0, &last, &percent), "a copy of nothing says it ended");
+    CHECK(percent == 100, "at a hundred percent, since there is nothing left");
+
+    /* The percentage of a length no machine here has, to show the arithmetic
+       is 64-bit: a quarter of two tebibytes. */
+    last = 0;
+    CHECK(
+        sectorcopy_step(512ULL * 1024 * 1024 * 1024, 2048ULL * 1024 * 1024 * 1024, &last, &percent),
+        "a step of a two-tebibyte copy is a line");
+    CHECK(percent == 25, "at a quarter");
+}
+
 int main(void)
 {
     check_numbers();
     check_copy();
+    check_progress();
     return fails > 120 ? 120 : fails;
 }

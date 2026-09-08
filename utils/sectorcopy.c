@@ -99,6 +99,20 @@ int sectorcopy_bounds(unsigned long long device, unsigned long long offset,
     return 0;
 }
 
+int sectorcopy_step(unsigned long long done, unsigned long long total, unsigned long long *last,
+                    unsigned *percent)
+{
+    if (done != total && done / SECTORCOPY_STEP == *last / SECTORCOPY_STEP) {
+        return 0;
+    }
+    if (done == *last && done != 0) {
+        return 0; /* nothing has moved since the last line */
+    }
+    *last = done;
+    *percent = total ? (unsigned)(done * 100 / total) : 100;
+    return 1;
+}
+
 /**
  * Copy exactly `count` bytes from the stream to the device.
  *
@@ -120,7 +134,9 @@ int sectorcopy_run(const struct sectorcopy_io *io, unsigned long long count,
 {
     static unsigned char buf[CHUNK];
     unsigned long long done = 0;
+    unsigned long long last = 0;
     unsigned long held = 0;
+    unsigned percent;
 
     *written = 0;
     while (done + held < count) {
@@ -157,6 +173,9 @@ int sectorcopy_run(const struct sectorcopy_io *io, unsigned long long count,
                 off += (unsigned long)w;
                 done += (unsigned long long)w;
                 *written = done;
+            }
+            if (io->note && sectorcopy_step(done, count, &last, &percent)) {
+                io->note(io->ctx, done, count, percent);
             }
             memmove(buf, buf + chunk, held - chunk);
             held -= chunk;
