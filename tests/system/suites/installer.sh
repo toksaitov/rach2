@@ -43,6 +43,26 @@ fi
 KNOWN="$DIR/known_hosts"
 
 mkdir -p "$DIR"
+
+# Change one digit of the hash the manifest on a stick image declares. The
+# manifest is a few lines of text in the volume, so its bytes are found in the
+# image and one of them is written: what a stick damaged in the writing or in a
+# pocket looks like from the machine's side.
+spoil_manifest() { # spoil_manifest IMAGE
+    # The last match is the manifest's: the ones before it are inside the
+    # recovery system's own programs, which name the algorithm in their text.
+    at=$(grep -abo 'sha256 ' "$1" | tail -1 | cut -d: -f1)
+    [ -n "$at" ] || return 1
+    at=$((at + 7))
+    was=$(dd if="$1" bs=1 skip="$at" count=1 2>/dev/null)
+    if [ "$was" = "a" ]; then
+        now=b
+    else
+        now=a
+    fi
+    printf '%s' "$now" | dd of="$1" bs=1 seek="$at" count=1 conv=notrunc 2>/dev/null
+}
+
 fail=0
 note() { echo "installer-test: $1"; }
 bad() {
@@ -206,8 +226,11 @@ if "$HARNESS" --bios \
     --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=stick,bootindex=0 \
     --qemu-arg=-drive --qemu-arg="file=$DIR/one.img,format=raw,if=ide,index=0,media=disk" \
     --qemu-arg=-drive --qemu-arg="file=$DIR/two.img,format=raw,if=ide,index=1,media=disk" \
-    --timeout 420 --steptmo 180 --ok "INSTALLDONE" --log "$LOG3" \
+    --timeout 900 --steptmo 420 --ok "INSTALLDONE" --log "$LOG3" \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
+    "expect=# " "send=rach2-install" \
+    "expect=which disk shall it be written to" "send=" \
+    "expect=is not one of the disks offered" \
     "expect=# " "send=rach2-install" \
     "expect=which disk shall it be written to" "send=/dev/disk9" \
     "expect=is not one of the disks offered" \
@@ -284,7 +307,7 @@ if "$HARNESS" --bios \
     --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=stick,bootindex=0 \
     --qemu-arg=-drive --qemu-arg="file=$DIR/one.img,format=raw,if=ide,index=0,media=disk" \
     --qemu-arg=-drive --qemu-arg="file=$DIR/two.img,format=raw,if=ide,index=1,media=disk" \
-    --timeout 420 --steptmo 180 --ok "OTHERDONE" --log "$LOG3B" \
+    --timeout 900 --steptmo 420 --ok "OTHERDONE" --log "$LOG3B" \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
     "expect=# " "send=rach2-install" \
     "expect=which disk shall it be written to" "send=/dev/disk0" \
@@ -296,6 +319,7 @@ if "$HARNESS" --bios \
     "expect=authorized keys" "send=/root/.ssh/authorized_keys" \
     "expect=grow the root" "send=no" \
     "expect=type the name of that disk" "send=/dev/disk0" \
+    "expect=the image on the stick is the one the manifest describes" \
     "expect=what reached the disk is the image" \
     "expect=installed:" "send=echo OTHER\"\"DONE" \
     "expect=OTHERDONE" > "$LOG3B.harness" 2>&1; then
@@ -426,6 +450,69 @@ case "$OUT" in
     *) note "and the image's own key no longer opens root: OK" ;;
 esac
 wait "$QPID" || bad "the installed machine did not stay up for the SSH attempts"
+
+# ---- 7: a stick whose image is not the one its manifest describes. The
+#         manifest's hash is changed on the host, one digit of it, which is
+#         what a stick damaged in the writing or in a pocket looks like from
+#         the machine's side. Nothing may be written. ----
+cp "$TEST_STICK" "$DIR/bad-stick.img"
+spoil_manifest "$DIR/bad-stick.img" || bad "the manifest on the copy could not be changed"
+rm -f "$DIR/four.img"
+dd if=/dev/zero of="$DIR/four.img" bs=1048576 count=256 2>/dev/null
+LOG7="$DIR/badhash.log"
+if "$HARNESS" --bios \
+    --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
+    --drive "if=none,id=stick,format=raw,file=$DIR/bad-stick.img" \
+    --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=stick,bootindex=0 \
+    --qemu-arg=-drive --qemu-arg="file=$DIR/four.img,format=raw,if=ide,index=0,media=disk" \
+    --timeout 900 --steptmo 420 --ok "BADHASHDONE" --log "$LOG7" \
+    "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
+    "expect=# " "send=rach2-install" \
+    "expect=which disk shall it be written to" "send=/dev/disk0" \
+    "expect=the password for root" "send=$NEWPASS" \
+    "expect=again" "send=$NEWPASS" \
+    "expect=the name of the first account" "send=$USERNAME" \
+    "expect=the password for $USERNAME" "send=$USERPASS" \
+    "expect=again" "send=$USERPASS" \
+    "expect=authorized keys" "send=" \
+    "expect=grow the root" "send=no" \
+    "expect=type the name of that disk" "send=/dev/disk0" \
+    "expect=and the manifest says" \
+    "expect=# " "send=echo BADHASH\"\"DONE" \
+    "expect=BADHASHDONE" > "$LOG7.harness" 2>&1; then
+    note "a stick whose image is not the one its manifest describes is refused: OK"
+else
+    sed -n 's/^HARNESS: /installer-test: /p' "$LOG7.harness" >&2
+    bad "the refusal of a damaged stick"
+fi
+if [ "$(shasum -a 256 "$DIR/four.img" | cut -d' ' -f1)" = "$BLANK" ]; then
+    note "and the disk it was going to write is as it was: OK"
+else
+    bad "the disk was written from a stick whose image did not match its manifest"
+fi
+
+# ---- 8: the stick alone, with no disk to write. The machine must say so and
+#         stop, rather than offering the stick it is running from. ----
+LOG8="$DIR/nodisk.log"
+if "$HARNESS" --bios \
+    --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
+    --drive "if=none,id=stick,format=raw,file=$DIR/test-stick.img" \
+    --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=stick,bootindex=0 \
+    --timeout 300 --steptmo 120 --ok "NODISKDONE" --log "$LOG8" \
+    "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
+    "expect=# " "send=rach2-install" \
+    "expect=is the stick this is running from" \
+    "expect=no disk of this machine can take the image" \
+    "expect=# " "send=echo NODISK\"\"DONE" \
+    "expect=NODISKDONE" > /dev/null 2>&1; then
+    note "a machine with nothing but the stick is told so and nothing is written: OK"
+else
+    bad "the machine with no disk to write"
+fi
 
 if [ "$fail" -ne 0 ]; then
     echo "installer-test: FAIL" >&2
