@@ -28,6 +28,7 @@ extern void *malloc(unsigned long n);
 
 /* The kernel headers define the fixed-width types themselves. */
 #include "../../rach2/sys/network/tcp/tcp.h"
+#include "../../rach2/sys/network/driver/netdev.h"
 
 /* ---- the clock, and the layers above and below ---- */
 
@@ -171,6 +172,23 @@ void klog(int level, const char *subsystem, const char *format, ...)
     (void)level;
     (void)subsystem;
     (void)format;
+}
+
+/* The interface layer, as this test presents it: one interface holding the
+ * machine's address, which is what every case here is written against. */
+static struct netdev the_iface;
+
+struct netdev *netdev_route(uint32_t dst, uint32_t *via)
+{
+    (void)dst;
+    *via = dst;
+    the_iface.ip = net_ip_addr;
+    return &the_iface;
+}
+
+int netdev_owns(uint32_t ip)
+{
+    return ip != 0 && ip == net_ip_addr;
 }
 
 #include "../../rach2/sys/network/tcp/tcp.c"

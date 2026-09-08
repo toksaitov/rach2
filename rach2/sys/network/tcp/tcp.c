@@ -26,6 +26,7 @@
 #include "../core/byteorder.h"
 #include "../net.h"
 #include "../netconf.h"
+#include "../driver/netdev.h"
 #include "../../serial.h"
 #include "../../lib/kstring.h"
 #include "../../lib/kerrno.h"
@@ -452,10 +453,9 @@ static int tcp_pair_in_use(uint16_t local_port, uint32_t remote_ip, uint16_t rem
  * segment occupied (SYN and FIN each count one) so the peer accepts it. A
  * reset is never answered with a reset.
  */
-static void tcp_send_rst_unmatched(uint32_t remote_ip, uint16_t local_port,
-                                   uint16_t remote_port, uint8_t seg_flags,
-                                   uint32_t seg_seq, uint32_t seg_ack,
-                                   uint32_t seg_occupied)
+static void tcp_send_rst_unmatched(uint32_t local_ip, uint32_t remote_ip, uint16_t local_port,
+                                   uint16_t remote_port, uint8_t seg_flags, uint32_t seg_seq,
+                                   uint32_t seg_ack, uint32_t seg_occupied)
 {
     uint8_t  flags;
     uint32_t seq, ack;
@@ -479,8 +479,7 @@ static void tcp_send_rst_unmatched(uint32_t remote_ip, uint16_t local_port,
     write16be(tcp_tx_buf + 14, 0);
     write16be(tcp_tx_buf + 16, 0);
     write16be(tcp_tx_buf + 18, 0);
-    write16be(tcp_tx_buf + 16,
-              tcp_checksum(net_ip_addr, remote_ip, tcp_tx_buf, TCP_HDR_SIZE));
+    write16be(tcp_tx_buf + 16, tcp_checksum(local_ip, remote_ip, tcp_tx_buf, TCP_HDR_SIZE));
     ip_tx(remote_ip, IP_PROTO_TCP, tcp_tx_buf, TCP_HDR_SIZE, IP_TTL_DEFAULT);
 }
 
@@ -549,7 +548,10 @@ void tcp_local_addr_changed(uint32_t new_ip)
     /* A block freed on the way is freed after its successor was read. */
     for (tcb = tcbs; tcb; tcb = next) {
         next = tcb->next;
-        if (tcb->local_ip == new_ip) {
+        /* A connection on an address this machine still holds is a connection
+           that still works. On a machine with two cards, changing one card's
+           address says nothing about the connections on the other. */
+        if (netdev_owns(tcb->local_ip)) {
             continue;
         }
         /* A block that is already closed has nothing to abort, and arming its
@@ -842,7 +844,14 @@ int tcp_connect(struct socket *sock, uint32_t dst_ip, uint16_t dst_port)
         return -ENOBUFS;
     }
 
-    tcb->local_ip    = net_ip_addr;
+    /* Opened from the address of the interface the route to the peer leaves
+       by, which is the only address the answer can come back to. */
+    {
+        uint32_t via;
+        struct netdev *out = netdev_route(dst_ip, &via);
+
+        tcb->local_ip = out ? out->ip : net_ip_addr;
+    }
     tcb->local_port  = local;
     tcb->remote_ip   = dst_ip;
     tcb->remote_port = dst_port;
@@ -1044,14 +1053,14 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
     struct socket *conn_sock;
     struct socket *listen_sock;
 
-    (void)dst_ip;
-
     if (len < TCP_HDR_SIZE || len > TCP_SEG_MAX) {
         return;
     }
 
-    /* Verify the checksum before trusting any field. */
-    if (tcp_checksum(src_ip, net_ip_addr, data, len) != 0) {
+    /* Verify the checksum before trusting any field. The address it is taken
+       against is the one the segment was sent to, which on a machine with two
+       cards is not always the machine's own. */
+    if (tcp_checksum(src_ip, dst_ip, data, len) != 0) {
         klog(KLOG_WARN, "tcp", "rx: bad checksum, dropped");
         return;
     }
@@ -1076,7 +1085,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
 
             if (flags & TCP_SYN) occupied++;
             if (flags & TCP_FIN) occupied++;
-            tcp_send_rst_unmatched(src_ip, dst_port, src_port,
+            tcp_send_rst_unmatched(dst_ip, src_ip, dst_port, src_port,
                                    flags, seq, ack_num, occupied);
         }
         return;
@@ -1142,7 +1151,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
            it again. */
         if (tcb->sock && ((tcb->sock->accept_tail + 1) & (SOCK_ACCEPT_BACKLOG - 1)) ==
                              tcb->sock->accept_head) {
-            tcp_send_rst_unmatched(src_ip, dst_port, src_port, flags, seq, ack_num, 1);
+            tcp_send_rst_unmatched(dst_ip, src_ip, dst_port, src_port, flags, seq, ack_num, 1);
             return;
         }
         if (frame_free_count() <= mem_reserve_frames()) {
@@ -1157,7 +1166,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
             klog(KLOG_WARN, "tcp",
                  "accept: no control block for a connection to port %d",
                  (int)dst_port);
-            tcp_send_rst_unmatched(src_ip, dst_port, src_port, flags, seq,
+            tcp_send_rst_unmatched(dst_ip, src_ip, dst_port, src_port, flags, seq,
                                    ack_num, 1);
             return;
         }
@@ -1166,7 +1175,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
             tcb_free(conn_tcb);
             klog(KLOG_WARN, "tcp",
                  "accept: no socket for a connection to port %d", (int)dst_port);
-            tcp_send_rst_unmatched(src_ip, dst_port, src_port, flags, seq,
+            tcp_send_rst_unmatched(dst_ip, src_ip, dst_port, src_port, flags, seq,
                                    ack_num, 1);
             return;
         }
@@ -1175,7 +1184,10 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
         conn_sock->uid         = tcb->sock ? tcb->sock->uid : tcb->uid;
 
         conn_tcb->passive      = 1;
-        conn_tcb->local_ip     = net_ip_addr;
+        /* The address this connection is on is the one the SYN was addressed
+           to. A listener answers whatever address this machine has, and a
+           machine with two cards has two. */
+        conn_tcb->local_ip     = dst_ip;
         conn_tcb->local_port   = tcb->local_port;
         conn_tcb->remote_ip    = src_ip;
         conn_tcb->remote_port  = src_port;
