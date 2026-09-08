@@ -1,14 +1,16 @@
 # network/: Ethernet and IPv4
 
-This directory implements the kernel network stack. It supports one Ethernet interface, IPv4, ARP, ICMP echo, UDP, TCP, packet sockets, raw ICMP sockets, and a broadcast netconsole. User programs reach it through the Linux i386 `socketcall` ABI and the interface ioctls.
+This directory implements the kernel network stack. It supports Ethernet interfaces, IPv4, ARP, ICMP echo, UDP, TCP, packet sockets, raw ICMP sockets, and a broadcast netconsole. User programs reach it through the Linux i386 `socketcall` ABI and the interface ioctls.
 
 ## Device selection
 
-`init_network` initializes empty TCP and socket lists before a device can receive a frame. Sockets and TCP control blocks are allocated from the heap when created. `netdev_probe` then tries the RTL8139, the e1000, and the RTL8168GU, in that order, and binds the first device that starts.
+`init_network` initializes empty TCP and socket lists before a device can receive a frame. Sockets and TCP control blocks are allocated from the heap when created. `netdev_probe` then asks the RTL8139, the e1000 and the RTL8168GU, in that order, for their cards one after another, and makes an interface of every card that starts.
 
 The order has a reason at each position. The RTL8139 is first because it is what every existing suite boots against. The e1000 is second because it is what QEMU attaches when nobody asks for a card. The RTL8168GU is last because it is the one physical target, and a failure from it is the only diagnostic a machine with no serial port and no network has.
 
-A driver that finds its device but cannot start it stops the probe and supplies the boot diagnostic. It is also silenced on the way past: a bring-up can fail after it has enabled bus mastering, and an unbound driver is one nothing else will ever reach.
+A driver that finds a card and cannot start it supplies the boot diagnostic, and that card is silenced on the way past: a bring-up can fail after it has enabled bus mastering, and a card no interface holds is one nothing else will ever reach. The drivers after it are still asked, so a machine whose second card is broken keeps its first. `rach2.nicfail=N` refuses the Nth card that would otherwise have come up, which is how that is seen to work on a machine whose cards all start.
+
+An interface is `struct netdev`: the driver, that driver's own record for the card, the name and index the rest of the kernel knows it by, the card's station address, that interface's own address, mask and way out, its counters, and whether an administrator has it up. Interfaces are `eth0` upward in the order the probe found them, numbered from one. A driver is given the interface at bring-up and keeps it, so every frame it delivers says which interface it arrived on, and every count is that interface's.
 
 Every driver publishes a `link`, which reports whether the link is up and at what speed and duplex, and a `stop`, which turns the receiver and transmitter off, masks the interrupts, and clears PCI bus mastering, in that order. The last of those is what ends DMA whatever the device believes it is doing. `kernel_shutdown` calls it after the page cache is flushed and after the goodbye line, so a machine read over netconsole sees that line and nothing `power_stop` prints after it. `stop` must be safe on a device that never finished starting and safe to call twice.
 
@@ -26,7 +28,13 @@ The RTL8168GU initialization sequence is derived from Linux v6.16 commit `038d61
 
 ## Interface configuration
 
-The kernel has one interface, `eth0`, with index 1 and MTU 1500. With no address options it uses the QEMU SLIRP configuration `10.0.2.15/24` through `10.0.2.2`.
+Each interface has an index from one and an MTU of 1500. With no address options the first uses the QEMU SLIRP configuration `10.0.2.15/24` through `10.0.2.2`, which is what `rach2.ip=` and `rach2.gateway=` change.
+
+`rach2.ifaddr=<mac>,<addr>/<prefix>[,<gateway>]` gives a card an address by the station address it carries, once per interface, read after the probe. A card is named by what it carries rather than by the order it was found in, so a machine whose cards are enumerated the other way round on the next boot still puts each address on the card the operator meant. A token naming no card the machine has is reported and skipped.
+
+A datagram leaves by the interface its destination reaches: an address on an interface's own subnet goes out by that interface and straight to it, and anything else goes out by the first interface with a way out and to that interface's gateway. An address nothing reaches is refused with a reason. ARP entries name the interface they were learned on and a lookup matches only on the same one, so two cards may have neighbours at the same address on their own subnets. An interface an administrator takes down carries nothing and answers nothing; the others are unaffected.
+
+`/proc/net/dev` has a line per interface, `/proc/net/route` a route per interface, and `/proc/net/arp` names the interface each mapping was learned on. Every `SIOCGIF*` answers about the interface the caller names, and `SIOCGIFNAME` answers for any index the machine has. A packet socket binds to any of them, or to zero for all.
 
 The boot line accepts:
 
