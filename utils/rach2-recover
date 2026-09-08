@@ -1,0 +1,213 @@
+#!/bin/sh
+#
+# rach2-recover: the recovery system's menu, for a machine that will not boot.
+#
+# A person who has to repair a machine should not have to know `reflash`'s
+# arguments or which partition the root is. This lists what the machine has,
+# checks a file system, puts a saved image back, installs a kernel through
+# `bootctl`, and opens a shell. Every step can be left without doing anything,
+# and every step says in one line what it did or why it did not.
+#
+# It runs from the recovery system, which mounts nothing from the disk it is
+# repairing, so a root that will not mount is still a root this can write.
+#
+# Usage: rach2-recover
+#
+
+set -u
+
+ME=rach2-recover
+MNT=/mnt/recover
+
+say() { echo "$ME: $1"; }
+warn() { echo "$ME: $1" >&2; }
+
+mounted=""
+cleanup() {
+    [ -n "$mounted" ] && umount "$mounted" 2>/dev/null
+    return 0
+}
+trap cleanup EXIT INT TERM HUP
+
+disk_numbers() {
+    grep '^disk ' /proc/disk | cut -d' ' -f2
+}
+
+disk_field() { # disk_field N FIELD
+    grep "^disk $1 " /proc/disk | head -1 | cut -d' ' -f"$2"
+}
+
+disk_model() {
+    grep "^disk $1 " /proc/disk | head -1 | cut -d' ' -f7-
+}
+
+disk_serial() {
+    grep "^identity $1 " /proc/disk | head -1 | cut -d' ' -f6-
+}
+
+# ---- what the machine has ----
+
+list_disks() {
+    for n in $(disk_numbers); do
+        say "/dev/disk$n: $(disk_model "$n"), serial $(disk_serial "$n"), \
+$(($(disk_field "$n" 5) * 512)) bytes, $(disk_field "$n" 3), table $(disk_field "$n" 6)"
+        grep "^part $n " /proc/disk | sed "s/^/  /"
+    done
+}
+
+# A device the person names, refused unless the machine has it.
+ask_device() { # ask_device PROMPT
+    printf '%s: %s: ' "$ME" "$1"
+    read -r device
+    [ -n "$device" ] || return 1
+    [ -e "$device" ] || {
+        warn "$device is not a device of this machine"
+        return 1
+    }
+    return 0
+}
+
+# ---- the steps ----
+
+check_volume() {
+    ask_device "which partition shall be checked, for example /dev/disk0p4" || return 0
+    say "checking $device without writing to it"
+    if e2fsck -f -n "$device"; then
+        say "$device: the file system is clean"
+    else
+        say "$device: the checker found faults; the repair is 'e2fsck -f -p $device'"
+    fi
+}
+
+# Mount the stick this is running from, if it carries an image, and print
+# where. The same volume the installer reads, found the same way: by the
+# manifest on it rather than by a position.
+find_stick() {
+    for n in $(disk_numbers); do
+        [ "$(grep "^identity $n " /proc/disk | cut -d' ' -f4)" = "removable" ] || continue
+        for p in 1 2 3 4; do
+            [ -e "/dev/disk${n}p${p}" ] || continue
+            mkdir -p "$MNT" 2>/dev/null
+            mount -t exfat "/dev/disk${n}p${p}" "$MNT" 2>/dev/null || continue
+            if [ -f "$MNT/rach2-install.manifest" ]; then
+                echo "$MNT"
+                return 0
+            fi
+            umount "$MNT" 2>/dev/null
+        done
+    done
+    return 1
+}
+
+restore_image() {
+    ask_device "which disk shall be restored, for example /dev/disk0" || return 0
+    target=$device
+    # The stick's own image is the answer this offers, since the stick a person
+    # boots to repair a machine is usually the stick that carries the system.
+    offer=""
+    if [ -z "$mounted" ]; then
+        mounted=$(find_stick) || mounted=""
+    fi
+    if [ -n "$mounted" ]; then
+        offer="$mounted/$(sed -n 's/^image //p' "$mounted/rach2-install.manifest")"
+        printf '%s: the image to put on it [%s]: ' "$ME" "$offer"
+    else
+        printf '%s: the image to put on it, with its hash in IMAGE.sha256: ' "$ME"
+    fi
+    read -r image
+    [ -n "$image" ] || image=$offer
+    [ -n "$image" ] || return 0
+    [ -f "$image" ] || {
+        warn "$image is not a file"
+        return 0
+    }
+    # The hash comes from `IMAGE.sha256` beside the image, or from the
+    # installer's own manifest when that manifest names this image.
+    want=""
+    if [ -f "$image.sha256" ]; then
+        want=$(cut -d' ' -f1 < "$image.sha256")
+    else
+        here=$(dirname "$image")
+        if [ -f "$here/rach2-install.manifest" ] &&
+            [ "$(sed -n 's/^image //p' "$here/rach2-install.manifest")" = "$(basename "$image")" ]
+        then
+            want=$(sed -n 's/^sha256 //p' "$here/rach2-install.manifest")
+        fi
+    fi
+    [ -n "$want" ] || {
+        warn "no hash for $image: an image is restored only against one"
+        return 0
+    }
+    bytes=$(wc -c < "$image" | tr -d ' ')
+    say "everything on $target will be overwritten by $bytes bytes of $image"
+    printf '%s: type the name of that disk to go on, anything else to stop: ' "$ME"
+    read -r confirm
+    [ "$confirm" = "$target" ] || {
+        say "nothing was written"
+        return 0
+    }
+    say "reading the image to check it against its hash"
+    got=$(dd if="$image" bs=1048576 2>/dev/null | sha256sum | cut -d' ' -f1)
+    [ "$got" = "$want" ] || {
+        warn "the image hashes to $got and its manifest says $want; nothing was written"
+        return 0
+    }
+    reflash -p "$target" 0 "$bytes" < "$image" || {
+        warn "the image was not written"
+        return 0
+    }
+    back=$(reflash --verify "$target" 0 "$bytes" | cut -d' ' -f3)
+    [ "$back" = "$want" ] || {
+        warn "what reached the disk hashes to $back and the image to $want"
+        return 0
+    }
+    diskctl reread "$target" > /dev/null 2>&1
+    say "$target: restored and read back; reboot from it"
+}
+
+install_kernel() {
+    ask_device "which boot partition, for example /dev/disk0p1" || return 0
+    boot=$device
+    printf '%s: the kernel to install: ' "$ME"
+    read -r kernel
+    [ -n "$kernel" ] || return 0
+    [ -f "$kernel" ] || {
+        warn "$kernel is not a file"
+        return 0
+    }
+    if bootctl --target "$boot" kernel "$kernel"; then
+        say "$boot: the kernel is installed as the candidate; boot it once to try it"
+    else
+        warn "$boot: the kernel was not installed"
+    fi
+}
+
+# ---- the menu ----
+
+say "this machine mounts nothing from the disk it is repairing"
+while :; do
+    echo ""
+    echo "  1  what this machine has"
+    echo "  2  check a file system"
+    echo "  3  put a saved image back on a disk"
+    echo "  4  install a kernel on a boot partition"
+    echo "  5  a shell"
+    echo "  6  leave"
+    printf '%s: which? ' "$ME"
+    read -r choice || break
+    case "$choice" in
+        1) list_disks ;;
+        2) check_volume ;;
+        3) restore_image ;;
+        4) install_kernel ;;
+        5)
+            say "the shell; leave it with exit to come back here"
+            /bin/sh
+            ;;
+        6)
+            say "leaving"
+            break
+            ;;
+        *) warn "$choice is not one of the numbers above" ;;
+    esac
+done

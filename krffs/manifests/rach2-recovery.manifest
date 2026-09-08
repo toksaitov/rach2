@@ -44,6 +44,9 @@ file 0755 /bin/diskctl build/utils/diskctl
 # The installer itself, a shell program: it reads the manifest on the stick,
 # checks the image against it, asks which disk, writes it and reads it back.
 file 0755 /bin/rach2-install utils/rach2-install
+# The recovery menu beside it: what the machine has, a file system checked, a
+# saved image put back, a kernel installed, and a shell.
+file 0755 /bin/rach2-recover utils/rach2-recover
 file 0755 /bin/dropbearmulti build/vendor/dropbear/dropbearmulti
 
 dir 0755 /sbin

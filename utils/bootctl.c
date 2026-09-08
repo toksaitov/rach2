@@ -63,6 +63,11 @@ static char errbuf[128];
 /* The device fd behind the bootslot_io callbacks. */
 static int devfd = -1;
 
+/* The boot partition this run acts on: this machine's own unless `--target`
+ * named another. */
+static const char default_boot_partition[] = "/dev/bootpart";
+static const char *boot_partition = default_boot_partition;
+
 static int dev_read(void *ctx, uint32_t lba, void *buf)
 {
     (void)ctx;
@@ -195,10 +200,14 @@ static int open_slot(void)
                         "machine booted from is unknown: %s\n", strerror(errno));
         return -1;
     }
-    devfd = open("/dev/bootpart", O_RDWR);
+    devfd = open(boot_partition, O_RDWR);
     if (devfd < 0) {
-        fprintf(stderr, "bootctl: this machine has no boot partition "
-                        "(no /dev/bootpart)\n");
+        if (boot_partition == default_boot_partition) {
+            fprintf(stderr, "bootctl: this machine has no boot partition "
+                            "(no /dev/bootpart)\n");
+        } else {
+            fprintf(stderr, "bootctl: cannot open %s: %s\n", boot_partition, strerror(errno));
+        }
         return -1;
     }
     io.read = dev_read;
@@ -689,6 +698,7 @@ static void usage(void)
     fprintf(stderr, "       bootctl trial <entry>\n");
     fprintf(stderr, "       bootctl cancel\n");
     fprintf(stderr, "       bootctl env <key> [value]\n");
+    fprintf(stderr, "       bootctl --target <partition> <command> ...\n");
 }
 
 /** Resolve the command line and run the verb it names. */
@@ -696,6 +706,18 @@ int main(int argc, char **argv)
 {
     const char *arg;
     const char *arg2;
+
+    /* `--target PARTITION` acts on a boot partition the caller names instead of
+     * this machine's own. The kernel publishes `/dev/bootpart` as the first
+     * partition of the disk it probed first, which from a recovery stick can be
+     * the internal disk or the stick itself; a program repairing a named disk
+     * must be able to say which one it means. */
+    if (argc >= 3 && strcmp(argv[1], "--target") == 0) {
+        boot_partition = argv[2];
+        argv[2] = argv[0];
+        argv += 2;
+        argc -= 2;
+    }
 
     switch (bootverb_parse(argc, argv, &arg, &arg2)) {
     case BOOTVERB_STATUS:

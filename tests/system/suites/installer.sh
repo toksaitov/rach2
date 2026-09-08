@@ -514,6 +514,57 @@ else
     bad "the machine with no disk to write"
 fi
 
+# ---- 9: a machine whose disk has been destroyed, brought back through the
+#         recovery menu. The first mebibyte of the disk installed in row 3b is
+#         zeroed on the host, which takes its boot code, its table and the
+#         start of its first partition; the stick is booted on it, and
+#         `rach2-recover` puts the stick's own image back and reads it back.
+#         The disk must then boot again. ----
+dd if=/dev/zero of="$DIR/one.img" bs=1048576 count=1 conv=notrunc 2>/dev/null
+LOG9="$DIR/recover.log"
+if "$HARNESS" --bios \
+    --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
+    --drive "if=none,id=stick,format=raw,file=$DIR/test-stick.img" \
+    --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=stick,bootindex=0 \
+    --qemu-arg=-drive --qemu-arg="file=$DIR/one.img,format=raw,if=ide,index=0,media=disk" \
+    --timeout 900 --steptmo 420 --ok "RECOVERDONE" --log "$LOG9" \
+    "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
+    "expect=# " "send=rach2-recover" \
+    "expect=which?" "send=1" \
+    "expect=/dev/disk0:" \
+    "expect=which?" "send=3" \
+    "expect=which disk shall be restored" "send=/dev/disk0" \
+    "expect=the image to put on it" "send=" \
+    "expect=type the name of that disk" "send=/dev/disk0" \
+    "expect=restored and read back" \
+    "expect=which?" "send=6" \
+    "expect=leaving" "send=echo RECOVER\"\"DONE" \
+    "expect=RECOVERDONE" > "$LOG9.harness" 2>&1; then
+    note "a destroyed disk is put back through the recovery menu: OK"
+else
+    sed -n 's/^HARNESS: /installer-test: /p' "$LOG9.harness" >&2
+    bad "the restore through the recovery menu"
+fi
+BOOT9=$(dd if="$DIR/one.img" bs=440 count=1 2>/dev/null | shasum -a 256 | cut -d' ' -f1)
+if [ "$BOOT9" = "$BOOTIMG" ]; then
+    note "and the disk carries the image's boot code again: OK"
+else
+    bad "the restored disk begins $BOOT9 and the image $BOOTIMG"
+fi
+LOG10="$DIR/recovered.log"
+if "$HARNESS" --bios --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-drive --qemu-arg="file=$DIR/one.img,format=raw,if=ide,index=0,media=disk" \
+    --timeout 300 --steptmo 120 --ok "RECOVEREDUP" --log "$LOG10" \
+    "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
+    "expect=# " "send=echo RECOVERED\"\"UP" \
+    "expect=RECOVEREDUP" > /dev/null 2>&1; then
+    note "and the machine boots what was put back, with the image's own accounts: OK"
+else
+    bad "the boot of the restored disk"
+fi
+
 if [ "$fail" -ne 0 ]; then
     echo "installer-test: FAIL" >&2
     exit 1
