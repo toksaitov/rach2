@@ -19,6 +19,20 @@ extern int printf(const char *fmt, ...);
 
 #include "../../rach2/sys/smbios.h"
 
+/* A table above the identity-mapped window is read through a mapping, and
+ * `smbios.c` asks for one here. The fixtures below are handed to the reader
+ * directly, so this is never called; the types are the kernel's `uintptr_t`
+ * and `size_t`, both `unsigned int`. */
+unsigned int map_mmio(unsigned int phys_addr, unsigned int size);
+
+unsigned int map_mmio(unsigned int phys_addr, unsigned int size)
+{
+    (void)phys_addr;
+    (void)size;
+    printf("  FAIL: a table inside the window was mapped anyway\n");
+    return 0;
+}
+
 static int fails;
 
 #define CHECK(cond, what)                   \
@@ -39,11 +53,18 @@ static int fails;
 static unsigned char table[512];
 static unsigned int table_len;
 
-/** Build the structures whose BIOS vendor is `vendor`, and present them. */
-static void present(const char *vendor)
+/**
+ * Build the structures whose BIOS vendor is `vendor`, and present them.
+ *
+ * `index` is the number the structure's vendor field carries, and `before` is
+ * the text of the strings that come before it, one per string, so that a
+ * vendor which is not the first string can be presented. `index` of 0 is a
+ * structure that names no vendor at all.
+ */
+static void present_at(const char *vendor, int index, const char *const *before, int nbefore)
 {
     unsigned char *p = table;
-    int i;
+    int i, j;
     unsigned n;
 
     for (i = 0; i < (int)sizeof(table); i++) {
@@ -51,13 +72,19 @@ static void present(const char *vendor)
     }
 
     /* One BIOS Information structure: type 0, an 0x18-byte formatted area,
-     * a handle, then its strings. Its first string is the vendor. */
+     * a handle, then its strings. */
     p[0] = 0;
     p[1] = 0x18;
     p[2] = 0;
     p[3] = 0;
-    p[4] = 1; /* the vendor is string 1 */
+    p[4] = (unsigned char)index;
     n = 0x18;
+    for (j = 0; j < nbefore; j++) {
+        for (i = 0; before[j][i] != 0; i++) {
+            p[n++] = (unsigned char)before[j][i];
+        }
+        p[n++] = 0;
+    }
     for (i = 0; vendor[i] != 0; i++) {
         p[n++] = (unsigned char)vendor[i];
     }
@@ -73,6 +100,12 @@ static void present(const char *vendor)
 
     table_len = n;
     smbios_set_table(table, table_len);
+}
+
+/** Build the structures whose BIOS vendor is `vendor`, the first string. */
+static void present(const char *vendor)
+{
+    present_at(vendor, 1, 0, 0);
 }
 
 /*
@@ -111,14 +144,41 @@ int main(void)
     CHECK(smbios_bios_vendor()[0] == '\0', "an empty table named a vendor");
     CHECK(!takes_smi_reset(), "a machine that names no firmware was sent Insyde's reset");
 
-    /* The vendor is read once and kept, so a second ask does not scan again
-     * and does not give a different answer. */
+    /* The vendor field names which string it is, and it is not always the
+     * first. A machine whose firmware puts its version first would lose its
+     * own reset if the reader took string one. */
+    {
+        static const char *const version_first[1] = {"1.42"};
+
+        present_at("Insyde Corp.", 2, version_first, 1);
+        CHECK(takes_smi_reset(), "a vendor that is the second string was not read");
+    }
+
+    /* And the reverse: a structure whose second string is the vendor must not
+     * be read as though the first one were. */
+    {
+        static const char *const insyde_first[1] = {"Insyde Corp."};
+
+        present_at("Phoenix", 2, insyde_first, 1);
+        CHECK(!takes_smi_reset(), "a string that is not the vendor was taken for one");
+    }
+
+    /* A structure that names no vendor names none. */
+    present_at("Insyde Corp.", 0, 0, 0);
+    CHECK(smbios_bios_vendor()[0] == '\0', "a vendor field of zero named a vendor");
+    CHECK(!takes_smi_reset(), "and a machine that names none was sent Insyde's reset");
+
+    /* The vendor is read once and kept, so a second call does not scan again.
+     * The bytes behind it are changed without presenting them, which a reader
+     * that scanned every time would pick up and a reader that kept the answer
+     * cannot. */
     present("Insyde Corp.");
     {
         const char *first = smbios_bios_vendor();
-        const char *again = smbios_bios_vendor();
 
-        CHECK(first == again, "the vendor was read twice into two places");
+        table[0x18] = 'X';
+        CHECK(smbios_bios_vendor()[0] == 'I' && first[0] == 'I',
+              "the vendor was read again instead of kept");
     }
 
     /* A table whose structure claims a length past its end is refused rather
@@ -127,6 +187,15 @@ int main(void)
     table[1] = 0xFF;
     smbios_set_table(table, table_len);
     CHECK(!takes_smi_reset(), "a structure longer than its table was walked anyway");
+
+    /* A string that does not end inside the table is not a string. Cutting
+     * the table at the last byte of the name leaves "Insyde" running to the
+     * end with no terminator, and a reader that supplied one would publish a
+     * vendor the firmware never wrote. */
+    present("Insyde");
+    smbios_set_table(table, 0x18 + 6);
+    CHECK(smbios_bios_vendor()[0] == '\0', "an unterminated string was published as a vendor");
+    CHECK(!takes_smi_reset(), "and it authorised the firmware's own reset");
 
     if (fails == 0) {
         printf("power_hosttest: OK\n");

@@ -1585,6 +1585,10 @@ static bool is_hdmi_controller(uint16_t vendor_id, uint16_t device_id)
  * forces D0, resets the controller, reads the stream counts from GCAP, brings
  * up CORB/RIRB and the DMA position buffer, discovers the output path, and
  * registers the IRQ handler. Returns 0 on success, -1 on any failure.
+ *
+ * Any other audio controller the machine has is named in the log and not
+ * driven. This kernel takes one, and a person looking at a machine with two
+ * needs to see that the other was found and passed over rather than missed.
  */
 static int hda_init(void)
 {
@@ -1625,9 +1629,6 @@ static int hda_init(void)
         hda_probe_log("HDA: Fallback to %x:%x\n", hda_pci.vendor_id, hda_pci.device_id);
     }
 
-    /* Any other audio controller the machine has is named and not driven.
-     * This kernel takes one, and a person looking at a machine with two needs
-     * to see that the other was found and passed over rather than missed. */
     {
         pci_device_t other;
         pci_device_t seen;

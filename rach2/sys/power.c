@@ -202,26 +202,6 @@ static int kbc_ready(void)
     return 0;
 }
 
-/**
- * Ask the machine to reset, three ways. Returns only if it is still running.
- *
- * All three ports are fixed, not discovered, and the asymmetry with the
- * power-off above is deliberate: that one derives an address, and a wrong
- * address would put a sleep word into a live device, so it refuses unless it
- * knows the address is right. Each of these writes a byte to a port that is a
- * reset mechanism on the machines that have it and unclaimed on those that do
- * not, where the write is inert. Discovering them would need a mechanism PCI
- * configuration space does not offer for these registers.
- *
- * The order is by how much of the machine each one goes through, most first.
- * The firmware's own SMI handler resets the way the firmware intends,
- * including whatever it does about the devices it owns; the chipset register
- * resets the chipset; the keyboard controller pulse is the oldest and the
- * least likely to be wired on a recent laptop. Trying them in the other order
- * would work on QEMU, where the chipset register is the one that acts, and
- * leave the target machine parked at a halt, which over SSH is
- * indistinguishable from a kernel that died.
- */
 /*
  * The reset's own writes, so that the decision can be watched.
  *
@@ -277,6 +257,26 @@ static int firmware_takes_smi_reset(void)
     return 1;
 }
 
+/**
+ * Ask the machine to reset, three ways. Returns only if it is still running.
+ *
+ * All three ports are fixed, not discovered, and the asymmetry with the
+ * power-off above is deliberate: that one derives an address, and a wrong
+ * address would put a sleep word into a live device, so it refuses unless it
+ * knows the address is right. Each of these writes a byte to a port that is a
+ * reset mechanism on the machines that have it and unclaimed on those that do
+ * not, where the write is inert. Discovering them would need a mechanism PCI
+ * configuration space does not offer for these registers.
+ *
+ * The order is by how much of the machine each one goes through, most first.
+ * The firmware's own SMI handler resets the way the firmware intends,
+ * including whatever it does about the devices it owns; the chipset register
+ * resets the chipset; the keyboard controller pulse is the oldest and the
+ * least likely to be wired on a recent laptop. Trying them in the other order
+ * would work on QEMU, where the chipset register is the one that acts, and
+ * leave the target machine parked at a halt, which over SSH is
+ * indistinguishable from a kernel that died.
+ */
 static void power_reset(void)
 {
     int skip = 0;
@@ -297,6 +297,8 @@ static void power_reset(void)
      * an earlier method makes things worse. */
     if (skip < 1) {
         if (firmware_takes_smi_reset()) {
+            klog(KLOG_INFO, "reboot", "the firmware is %s: sending its own reset",
+                 power_io->vendor());
             power_io->outb(APM_CONTROL_PORT, APM_CMD_RESET);
             power_io->settle();
         } else {

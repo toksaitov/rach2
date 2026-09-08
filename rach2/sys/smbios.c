@@ -9,16 +9,24 @@
  * followed by its formatted area and then its strings, one after another,
  * ending with an empty one.
  *
- * Only the first structure of type 0, BIOS Information, is wanted, and only
- * its first string, which is the vendor. Everything else is stepped over.
+ * Only the first structure of type 0, BIOS Information, is wanted, and out of
+ * it the string its vendor field names. Everything else is stepped over.
  *
- * The whole region is inside the identity-mapped window, so an address in the
- * table is an address this kernel can read.
+ * The anchor is in the read-only region below a megabyte, which is inside the
+ * identity-mapped window. The structures it points at need not be: a machine
+ * with more than 32 MiB usually publishes them near the top of its memory, so
+ * a table above the window is mapped before it is read.
+ *
+ * A firmware's table is data this kernel did not write, and every field read
+ * out of it is bounded by the length the anchor gave. A structure that claims
+ * more than the table holds, or a string that does not end inside it, is a
+ * table this does not read rather than a read that runs off the end.
  */
 
 #include "smbios.h"
 
 #include "lib/kint.h"
+#include "mm/paging.h"
 
 #define SMBIOS_SCAN_START 0xF0000u
 #define SMBIOS_SCAN_END   0x100000u
@@ -27,6 +35,14 @@
 /* The longest vendor string this keeps. The names are short; a longer one is
  * cut, which is enough to tell one firmware from another. */
 #define SMBIOS_VENDOR_MAX 64
+
+/* The entry points, as the specification fixes them: the 32-bit one is 31
+ * bytes and carries the table's address at 0x18, and the 64-bit one is 24 and
+ * carries it at 0x10. A candidate shorter than its own entry point is not one,
+ * whatever its checksum says, because the address would be read from bytes the
+ * checksum never covered. */
+#define SMBIOS_EP32_LEN 0x1F
+#define SMBIOS_EP64_LEN 0x18
 
 static char vendor[SMBIOS_VENDOR_MAX];
 static int vendor_read;
@@ -66,10 +82,17 @@ static const uint8_t *find_anchor(void)
     for (at = SMBIOS_SCAN_START; at + 32u <= SMBIOS_SCAN_END; at += SMBIOS_SCAN_STEP) {
         const uint8_t *p = (const uint8_t *)at;
 
-        if (four_are(p, "_SM_") && p[5] >= 4 && sum_of(p, p[5]) == 0) {
+        if (four_are(p, "_SM_") && p[5] >= SMBIOS_EP32_LEN && sum_of(p, p[5]) == 0 &&
+            four_are(p + 0x10, "_DMI") && p[0x14] == '_' && sum_of(p + 0x10, 15) == 0) {
+            /* The 32-bit entry point has a second anchor inside it, with a
+             * checksum of its own over the fifteen bytes that hold the table's
+             * address and length. Both are required: a candidate whose length
+             * field is short passes the outer checksum over bytes that do not
+             * include the address. */
             return p;
         }
-        if (four_are(p, "_SM3") && p[4] == '_' && p[6] >= 4 && sum_of(p, p[6]) == 0) {
+        if (four_are(p, "_SM3") && p[4] == '_' && p[6] >= SMBIOS_EP64_LEN &&
+            sum_of(p, p[6]) == 0) {
             return p;
         }
     }
@@ -80,19 +103,17 @@ static const uint8_t *find_anchor(void)
  * Where the structure table is and how long it is, from an anchor.
  *
  * @return 1 with `*at` and `*len` filled, 0 when the anchor is one this does
- *         not read.
+ *         not read or names a region that does not fit an address.
  */
-static int table_of(const uint8_t *anchor, const uint8_t **at, uint32_t *len)
+static int table_of(const uint8_t *anchor, uint32_t *at, uint32_t *len)
 {
     if (four_are(anchor, "_SM_")) {
         /* The 32-bit entry point: the length is two bytes at 0x16 and the
          * address four at 0x18. */
         *len = (uint32_t)anchor[0x16] | ((uint32_t)anchor[0x17] << 8);
-        *at = (const uint8_t *)((uint32_t)anchor[0x18] | ((uint32_t)anchor[0x19] << 8) |
-                                ((uint32_t)anchor[0x1A] << 16) | ((uint32_t)anchor[0x1B] << 24));
-        return 1;
-    }
-    if (four_are(anchor, "_SM3") && anchor[4] == '_') {
+        *at = (uint32_t)anchor[0x18] | ((uint32_t)anchor[0x19] << 8) |
+              ((uint32_t)anchor[0x1A] << 16) | ((uint32_t)anchor[0x1B] << 24);
+    } else if (four_are(anchor, "_SM3") && anchor[4] == '_') {
         /* The 64-bit entry point: the maximum length is four bytes at 0x0C
          * and the address eight at 0x10, whose upper half must be zero on a
          * machine this kernel addresses. */
@@ -104,11 +125,36 @@ static int table_of(const uint8_t *anchor, const uint8_t **at, uint32_t *len)
         }
         *len = (uint32_t)anchor[0x0C] | ((uint32_t)anchor[0x0D] << 8) |
                ((uint32_t)anchor[0x0E] << 16) | ((uint32_t)anchor[0x0F] << 24);
-        *at = (const uint8_t *)((uint32_t)anchor[0x10] | ((uint32_t)anchor[0x11] << 8) |
-                                ((uint32_t)anchor[0x12] << 16) | ((uint32_t)anchor[0x13] << 24));
-        return 1;
+        *at = (uint32_t)anchor[0x10] | ((uint32_t)anchor[0x11] << 8) |
+              ((uint32_t)anchor[0x12] << 16) | ((uint32_t)anchor[0x13] << 24);
+    } else {
+        return 0;
     }
-    return 0;
+    /* A region of no length holds no structure, and one that wraps the address
+     * space is not a region. */
+    if (*len == 0 || *at + *len < *at) {
+        return 0;
+    }
+    return 1;
+}
+
+/**
+ * An address this kernel can read the `len` bytes at physical `at` through.
+ *
+ * A table inside the identity-mapped window is read where it is. One above it
+ * is mapped first: on a machine with more than 32 MiB the firmware usually
+ * publishes its table near the top of memory, and reading that through its
+ * physical address would fault. The mapping lasts for the life of the kernel,
+ * which costs a few pages once, since the vendor is read once.
+ *
+ * @return the address, or 0 when the table cannot be reached.
+ */
+static const uint8_t *table_at(uint32_t at, uint32_t len)
+{
+    if (at + len <= (uint32_t)HARD_MEMORY_LIMIT) {
+        return (const uint8_t *)at;
+    }
+    return (const uint8_t *)map_mmio((uintptr_t)at, (size_t)len);
 }
 
 /**
@@ -116,29 +162,37 @@ static int table_of(const uint8_t *anchor, const uint8_t **at, uint32_t *len)
  *
  * The strings are NUL-terminated one after another and the run ends with an
  * empty one; `want` counts from one, as the structure's fields name them.
- * `end` bounds the read, so a table that lies about its length cannot walk
- * this off the end of it.
+ * `end` bounds the read. A string that does not end before it is not copied:
+ * the bytes are a firmware's, the length is a firmware's, and a table cut
+ * short would otherwise yield whatever ran up to the cut as a vendor's name.
  */
 static void copy_string(const uint8_t *s, const uint8_t *end, int want, char *out, int outlen)
 {
     int n = 1;
-    int i = 0;
 
     out[0] = '\0';
+    if (want < 1) {
+        return;
+    }
     while (s < end && *s != 0) {
+        const uint8_t *stop = s;
+
+        while (stop < end && *stop != 0) {
+            stop++;
+        }
+        if (stop >= end) {
+            return; /* no terminator inside the table */
+        }
         if (n == want) {
-            while (s < end && *s != 0 && i < outlen - 1) {
+            int i = 0;
+
+            while (s < stop && i < outlen - 1) {
                 out[i++] = (char)*s++;
             }
             out[i] = '\0';
             return;
         }
-        while (s < end && *s != 0) {
-            s++;
-        }
-        if (s < end) {
-            s++; /* past this string's terminator */
-        }
+        s = stop + 1;
         n++;
     }
 }
@@ -149,6 +203,7 @@ static void read_vendor(void)
 {
     const uint8_t *anchor;
     const uint8_t *p;
+    uint32_t at = 0;
     uint32_t len = 0;
     const uint8_t *end;
 
@@ -160,7 +215,11 @@ static void read_vendor(void)
         len = forced_len;
     } else {
         anchor = find_anchor();
-        if (!anchor || !table_of(anchor, &p, &len)) {
+        if (!anchor || !table_of(anchor, &at, &len)) {
+            return;
+        }
+        p = table_at(at, len);
+        if (!p) {
             return;
         }
     }
@@ -178,8 +237,12 @@ static void read_vendor(void)
         }
         strings = p + flen;
         if (type == 0) {
-            /* BIOS Information: its first string is the vendor. */
-            copy_string(strings, end, 1, vendor, SMBIOS_VENDOR_MAX);
+            /* BIOS Information: the byte at offset 4 is the number of the
+             * string that is the vendor, and 0 there means the structure names
+             * none. It is not always the first string. */
+            if (flen >= 5 && p[4] != 0) {
+                copy_string(strings, end, (int)p[4], vendor, SMBIOS_VENDOR_MAX);
+            }
             return;
         }
         if (type == 127) {

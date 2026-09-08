@@ -26,6 +26,13 @@
 # checks alone accept. A panic that also ends the machine is refused by
 # `--never`, since a crash is not a reset.
 #
+# The first of the three is sent only to the firmware it belongs to, and that
+# decision is made in the kernel and not in a test's copy of it, so both of its
+# answers are booted: a machine whose firmware is SeaBIOS, which is every
+# machine QEMU boots by default, must say the command was not sent; and a
+# machine given `-smbios type=0,vendor=Insyde Corp.`, which is how QEMU is
+# asked to publish another firmware's name, must say it was.
+#
 # What is left uncheckable from here: a triple fault also resets the machine,
 # and with `-no-reboot` QEMU exits for it exactly as it does for a reset the
 # kernel asked for. The kernel prints a `CRIT` record for a kernel exception,
@@ -86,7 +93,34 @@ for skip in 0 1 2; do
         echo "reset-test: FAIL: with $what, nothing restarted the machine" >&2
         exit 1
     fi
+    if [ "$skip" = "0" ] && ! grep -q "not Insyde: its reset is not sent" "$LOG"; then
+        echo "reset-test: FAIL: SeaBIOS was sent another firmware's reset command" >&2
+        exit 1
+    fi
     echo "reset-test: $what: OK"
 done
+
+# The same first mechanism on a machine that says it runs the firmware the
+# command belongs to. QEMU publishes the name; the write itself is inert there,
+# and the machine still restarts through the chipset register after it.
+rm -f "$LOG"
+"$REPO/build/tests/system/harness" --kernel "$KERNEL" --initrd "$IMAGE"     --qemu-arg=-cpu --qemu-arg=max     --qemu-arg=-smbios --qemu-arg="type=0,vendor=Insyde Corp."     --append "rach2.rescue rach2.resetskip=0"     --timeout 90 --log "$LOG" --ok "reboot: restarting"     --must-exit --never "<2>"     "expect=Type 'help'" "send=reboot" wait=6 >"$LOG.harness" 2>&1 && rc=0 || rc=$?
+
+if [ "$rc" -ne 0 ]; then
+    echo "reset-test: FAIL: the machine naming an Insyde firmware did not restart:" >&2
+    sed -n 's/^HARNESS: /reset-test: /p' "$LOG.harness" >&2
+    rm -f "$LOG.harness"
+    exit 1
+fi
+rm -f "$LOG.harness"
+if ! grep -q "the firmware is Insyde Corp.: sending its own reset" "$LOG"; then
+    echo "reset-test: FAIL: the firmware that owns the reset command was not sent it" >&2
+    exit 1
+fi
+if grep -q "its reset is not sent" "$LOG"; then
+    echo "reset-test: FAIL: the machine both sent and did not send the command" >&2
+    exit 1
+fi
+echo "reset-test: the firmware's own reset, sent only to that firmware: OK"
 
 echo "reset-test: PASS"
