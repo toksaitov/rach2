@@ -1700,8 +1700,9 @@ run-krffscheck: krffs
 	sh tests/system/krffscheck.sh build/krffs/mkfs.krffs build/krffs/fsck.krffs $(KRFFSCHECK_DIR)
 
 IMAGERACE_IMAGE = $(IMAGES_DIR)/imagerace-test.krffs
-run-imagerace: $(DEMO_CREDS) krffs rach2 tests utils musl-programs $(IMAGE_TOOLS)
-	sh tests/system/imagerace.sh krffs/manifests/test.manifest $(IMAGERACE_IMAGE) 10
+run-imagerace: $(TEST_IMAGE) $(OS_REAL_IMAGE) $(DEMO_CREDS) krffs rach2 tests utils musl-programs $(IMAGE_TOOLS)
+	sh tests/system/imagerace.sh krffs/manifests/test.manifest $(IMAGERACE_IMAGE) 10 \
+	    $(TEST_IMAGE) $(OS_REAL_IMAGE)
 
 # The nine network suites again on the second card. Each is the first-card
 # target with `NIC=e1000`, which picks the tagged files and the second set of
