@@ -392,7 +392,8 @@ static void configure_network(void)
  * the install and may have no key at all, so `rach2-install` writes
  * `root-password-login yes` into `/etc/rach2/sshd.conf` and this reads it. A
  * file that is not there, or that says anything else, leaves the refusal in
- * place.
+ * place. The whole line is matched and not a prefix of it, so a line reading
+ * `root-password-login yesterday` is not this setting.
  */
 static int root_password_login(void)
 {
@@ -404,8 +405,6 @@ static int root_password_login(void)
         return 0;
     }
     while (fgets(line, (int)sizeof(line), f)) {
-        /* The whole line and not a prefix of it: a line reading
-         * `root-password-login yesterday` is not this setting. */
         if (strncmp(line, "root-password-login yes", 23) == 0 &&
             (line[23] == '\0' || line[23] == '\n' || line[23] == '\r' || line[23] == ' ' ||
              line[23] == '\t')) {

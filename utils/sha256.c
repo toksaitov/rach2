@@ -118,8 +118,6 @@ void sha256_final(struct sha256 *s, unsigned char out[32])
     unsigned char len[8];
     int i;
 
-    /* The padding is not part of the message, so the length this keeps is put
-       back after each byte of it. */
     sha256_update(s, &pad, 1);
     s->bytes -= 1;
     while (s->fill != 56) {

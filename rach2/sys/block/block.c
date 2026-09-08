@@ -129,7 +129,7 @@ void block_scan_disks(void)
         struct disk *d = disk_at(i);
 
         if (d) {
-            disk_scan(d, i == 0 ? block_lag_wrap(d->dev) : d->dev);
+            (void)disk_scan(d, i == 0 ? block_lag_wrap(d->dev) : d->dev);
         }
     }
 }

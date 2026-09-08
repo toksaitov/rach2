@@ -63,8 +63,16 @@ static char errbuf[128];
 /* The device fd behind the bootslot_io callbacks. */
 static int devfd = -1;
 
-/* The boot partition this run acts on: this machine's own unless `--target`
- * named another. */
+/*
+ * The boot partition this run acts on: this machine's own unless `--target`
+ * named another.
+ *
+ * The kernel publishes `/dev/bootpart` as the first partition of the disk it
+ * probed first, which from a recovery stick can be the internal disk or the
+ * stick itself, so a program repairing a named disk must be able to say which
+ * one it means. `grub` and `commit` refuse the option, since both act on the
+ * disk this machine booted from.
+ */
 static const char default_boot_partition[] = "/dev/bootpart";
 static const char *boot_partition = default_boot_partition;
 
@@ -707,16 +715,22 @@ int main(int argc, char **argv)
     const char *arg;
     const char *arg2;
 
-    /* `--target PARTITION` acts on a boot partition the caller names instead of
-     * this machine's own. The kernel publishes `/dev/bootpart` as the first
-     * partition of the disk it probed first, which from a recovery stick can be
-     * the internal disk or the stick itself; a program repairing a named disk
-     * must be able to say which one it means. */
     if (argc >= 3 && strcmp(argv[1], "--target") == 0) {
         boot_partition = argv[2];
         argv[2] = argv[0];
         argv += 2;
         argc -= 2;
+        /* Two commands mean something about the machine that is running and
+         * not about the partition named: `grub` writes the boot loader through
+         * `/dev/grubcore`, which is the booted disk's gap and not the target's,
+         * and `commit` accepts the running kernel, which came from the booted
+         * disk. Either would act on one disk while reporting the other. */
+        if (argc >= 2 && (strcmp(argv[1], "grub") == 0 || strcmp(argv[1], "commit") == 0)) {
+            fprintf(stderr, "bootctl: --target does not take '%s': it acts on the disk this "
+                            "machine booted from\n",
+                    argv[1]);
+            return 1;
+        }
     }
 
     switch (bootverb_parse(argc, argv, &arg, &arg2)) {

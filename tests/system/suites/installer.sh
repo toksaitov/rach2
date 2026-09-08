@@ -225,9 +225,18 @@ fi
 NEWPASS=an-installed-machine
 USERNAME=alice
 USERPASS=alices-own-password
-rm -f "$DIR/one.img" "$DIR/two.img"
-dd if=/dev/zero of="$DIR/one.img" bs=1048576 count=256 2>/dev/null
-dd if=/dev/zero of="$DIR/two.img" bs=1048576 count=256 2>/dev/null
+# The disks are filled with a pattern and not with zeros: a stray write of
+# zeros into a zeroed disk leaves no trace, and every check below that says a
+# disk was untouched is a comparison of the whole of it.
+rm -f "$DIR/one.img" "$DIR/two.img" "$DIR/pattern"
+awk 'BEGIN { for (i = 0; i < 65536; i++) printf "%016d", i }' > "$DIR/pattern"
+: > "$DIR/one.img"
+i=0
+while [ "$i" -lt 256 ]; do
+    cat "$DIR/pattern" >> "$DIR/one.img"
+    i=$((i + 1))
+done
+cp "$DIR/one.img" "$DIR/two.img"
 BLANK=$(shasum -a 256 "$DIR/one.img" | cut -d' ' -f1)
 cp "$TEST_STICK" "$DIR/test-stick.img"
 LOG3="$DIR/install.log"
@@ -291,12 +300,12 @@ else
     sed -n 's/^HARNESS: /installer-test: /p' "$LOG3.harness" >&2
     bad "the install onto the second of two disks"
 fi
-# The disk it was not told to write is as it was. The one it did write is not
-# compared with the image, since the accounts were written into its root after
-# the image reached it; that the image reached it whole is what the readback
-# inside the installer says, and row 4 boots what is there.
+# The disk it was not told to write is as it was, compared whole. The one it
+# did write is not compared with the image, since the accounts were written
+# into its root after the image reached it; that the image reached it whole is
+# what the readback inside the installer says, and row 4 boots what is there.
 if [ "$(shasum -a 256 "$DIR/one.img" | cut -d' ' -f1)" = "$BLANK" ]; then
-    note "and the disk it was not told to write is as it was: OK"
+    note "and the disk it was not told to write is as it was, byte for byte: OK"
 else
     bad "the other disk was written"
 fi
@@ -311,6 +320,7 @@ fi
 #          same order, and the answer names the first this time, so what
 #          decides which disk is written is the name typed and not the
 #          position. The one written in row 3 must be left as row 3 left it.
+BEFORE3B=$(shasum -a 256 "$DIR/two.img" | cut -d' ' -f1)
 LOG3B="$DIR/install-other.log"
 if "$HARNESS" --bios \
     --qemu-arg=-cpu --qemu-arg=max \
@@ -340,6 +350,14 @@ if "$HARNESS" --bios \
 else
     sed -n 's/^HARNESS: /installer-test: /p' "$LOG3B.harness" >&2
     bad "the install onto the first of two disks"
+fi
+# The disk installed in row 3 is untouched by the install onto the other one,
+# compared whole: an installer that wrote accounts or a table on both would
+# pass a comparison of their first sectors alone.
+if [ "$(shasum -a 256 "$DIR/two.img" | cut -d' ' -f1)" = "$BEFORE3B" ]; then
+    note "and the disk installed before it is untouched, byte for byte: OK"
+else
+    bad "the install onto the first disk changed the second"
 fi
 # Both disks carry the image's boot code now, each written when it was named.
 # The comparison is of the 440 bytes before the table, since the disk grown in
@@ -458,9 +476,12 @@ OUT=$(ssh -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
     -o ConnectTimeout=20 -o BatchMode=yes -o IdentitiesOnly=yes \
     -o PreferredAuthentications=publickey -o PasswordAuthentication=no \
     -i "$DEMO_KEY" -p "$PORT" root@localhost 'echo DEMO""KEY' 2>&1 || true)
+# The server must have refused it, not merely failed to answer: a machine that
+# had gone would pass a check that only looked for the token's absence.
 case "$OUT" in
     *DEMOKEY*) bad "the image's demonstration key still opens root on the installed machine" ;;
-    *) note "and the image's own key no longer opens root: OK" ;;
+    *"Permission denied"*) note "and the image's own key is refused for root: OK" ;;
+    *) bad "the demonstration key's attempt neither ran nor was refused: $OUT" ;;
 esac
 wait "$QPID" || bad "the installed machine did not stay up for the SSH attempts"
 
@@ -471,7 +492,8 @@ wait "$QPID" || bad "the installed machine did not stay up for the SSH attempts"
 cp "$TEST_STICK" "$DIR/bad-stick.img"
 spoil_manifest "$DIR/bad-stick.img" || bad "the manifest on the copy could not be changed"
 rm -f "$DIR/four.img"
-dd if=/dev/zero of="$DIR/four.img" bs=1048576 count=256 2>/dev/null
+cp "$DIR/one.img" "$DIR/four.img"
+FOUR=$(shasum -a 256 "$DIR/four.img" | cut -d' ' -f1)
 LOG7="$DIR/badhash.log"
 if "$HARNESS" --bios \
     --qemu-arg=-cpu --qemu-arg=max \
@@ -500,8 +522,8 @@ else
     sed -n 's/^HARNESS: /installer-test: /p' "$LOG7.harness" >&2
     bad "the refusal of a damaged stick"
 fi
-if [ "$(shasum -a 256 "$DIR/four.img" | cut -d' ' -f1)" = "$BLANK" ]; then
-    note "and the disk it was going to write is as it was: OK"
+if [ "$(shasum -a 256 "$DIR/four.img" | cut -d' ' -f1)" = "$FOUR" ]; then
+    note "and the disk it was going to write is as it was, byte for byte: OK"
 else
     bad "the disk was written from a stick whose image did not match its manifest"
 fi
@@ -538,8 +560,14 @@ NEWPASS=an-installed-machine
 USERNAME=alice
 USERPASS=alices-own-password
 cp "$TEST_STICK" "$DIR/test-stick.img"
-rm -f "$DIR/one.img"
-dd if=/dev/zero of="$DIR/one.img" bs=1048576 count=256 2>/dev/null
+rm -f "$DIR/one.img" "$DIR/pattern"
+awk 'BEGIN { for (i = 0; i < 65536; i++) printf "%016d", i }' > "$DIR/pattern"
+: > "$DIR/one.img"
+i=0
+while [ "$i" -lt 256 ]; do
+    cat "$DIR/pattern" >> "$DIR/one.img"
+    i=$((i + 1))
+done
 BOOTIMG=$(dd if="$TEST_DISK" bs=440 count=1 2>/dev/null | shasum -a 256 | cut -d' ' -f1)
 
 # ---- 9: a machine whose disk has been destroyed, brought back through the
@@ -557,7 +585,8 @@ BOOTIMG=$(dd if="$TEST_DISK" bs=440 count=1 2>/dev/null | shasum -a 256 | cut -d
 # It is `reflash` and not the menu because reaching the menu's own write costs
 # ten minutes of hashing in the emulator, and what is being shown is the state
 # a killed write leaves, not which program was running it.
-DAMAGED=$(shasum -a 256 "$DIR/one.img" | cut -d' ' -f1)
+cp "$DIR/one.img" "$DIR/cut.img"
+dd if="$DIR/cut.img" bs=1048576 count=96 of="$DIR/pattern-96" 2>/dev/null
 rm -f "$DIR/cutoff.log"
 "$HARNESS" --bios \
     --qemu-arg=-cpu --qemu-arg=max \
@@ -565,7 +594,7 @@ rm -f "$DIR/cutoff.log"
     --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
     --drive "if=none,id=stick,format=raw,file=$DIR/test-stick.img" \
     --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=stick,bootindex=0 \
-    --qemu-arg=-drive --qemu-arg="file=$DIR/one.img,format=raw,if=ide,index=0,media=disk" \
+    --qemu-arg=-drive --qemu-arg="file=$DIR/cut.img,format=raw,if=ide,index=0,media=disk" \
     --timeout 600 --steptmo 300 --ok "NEVERSEEN" --log "$DIR/cutoff.log" \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
     "expect=# " "send=mkdir -p /m && mount -t exfat /dev/disk1p2 /m && echo MOUNT\"\"ED" \
@@ -574,8 +603,10 @@ rm -f "$DIR/cutoff.log"
     "expect=NEVERSEEN" > /dev/null 2>&1 &
 CUTPID=$!
 waited=0
+saw_progress=no
 while [ "$waited" -lt 300 ]; do
     if grep -aq 'reflash: 16777216 of ' "$DIR/cutoff.log" 2>/dev/null; then
+        saw_progress=yes
         break
     fi
     sleep 2
@@ -585,24 +616,34 @@ done
 # machine left running would hold them for every later row. Every one of these
 # may find nothing left to kill, which is not a failure of the row.
 kill "$CUTPID" 2>/dev/null || true
-pkill -f "file=$DIR/one.img" 2>/dev/null || true
-pkill -f "file=$DIR/test-stick.img" 2>/dev/null || true
+pkill -f "file=$DIR/cut.img" 2>/dev/null || true
 wait "$CUTPID" 2>/dev/null || true
 # The machine writes through the emulator's own cache, so what is on the host
-# is what QEMU has flushed; the disk is read after that process has gone.
+# is what QEMU has flushed; the disk is read after that process has gone. It is
+# a disk of this row's own, so a machine slow to die holds nothing the rows
+# after it open.
 gone=0
 while [ "$gone" -lt 60 ]; do
-    pgrep -f "file=$DIR/one.img" > /dev/null 2>&1 || break
+    pgrep -f "file=$DIR/cut.img" > /dev/null 2>&1 || break
     sleep 1
     gone=$((gone + 1))
 done
 sleep 2
-CUT=$(shasum -a 256 "$DIR/one.img" | cut -d' ' -f1)
-WHOLE=$(shasum -a 256 "$TEST_DISK" | cut -d' ' -f1)
-if [ "$CUT" != "$DAMAGED" ] && [ "$CUT" != "$WHOLE" ]; then
-    note "a write killed while it was running leaves a disk that is neither: OK"
+# What is judged is the ninety-six mebibytes the write asked for: it must have
+# begun, so those bytes are not what was there before, and it must not have
+# finished, so they are not the image's either. A comparison of the whole disk
+# would pass whatever happened, since the disk is larger than the image.
+STARTED=$(dd if="$DIR/cut.img" bs=1048576 count=96 2>/dev/null | shasum -a 256 | cut -d' ' -f1)
+WAS=$(dd if="$DIR/pattern-96" bs=1048576 count=96 2>/dev/null | shasum -a 256 | cut -d' ' -f1)
+WHOLE=$(dd if="$TEST_DISK" bs=1048576 count=96 2>/dev/null | shasum -a 256 | cut -d' ' -f1)
+if [ "$saw_progress" != yes ]; then
+    bad "the write never said it had got anywhere, so it was not killed while it ran"
+elif [ "$STARTED" = "$WAS" ]; then
+    bad "the write that was killed had not begun"
+elif [ "$STARTED" = "$WHOLE" ]; then
+    bad "the write that was killed had finished"
 else
-    bad "the write that was killed left the disk unchanged or complete"
+    note "a write killed while it was running leaves the range it asked for part written: OK"
 fi
 
 LOG9="$DIR/recover.log"
@@ -651,21 +692,27 @@ else
     bad "the boot of the restored disk"
 fi
 
-# ---- 11: the machine changed after it was installed, and then updated. Root's
-#          password is changed on the running machine, the stick is booted, and
-#          `rach2-install --update` writes the root file system's image into the
-#          root partition. What the machine had become must survive: the
-#          changed password opens it afterwards and the image's own does not.
+# ---- 11: a machine changed after it was installed, and then updated. On the
+#          running machine root's password is changed, root's keys are removed
+#          as an install removes them, an account's home is made, and a file
+#          outside everything the update keeps is marked. The update must then
+#          leave the password, the absent keys and the home as they are, and
+#          must replace the marked file with the image's, which is what says
+#          the root was written at all.
 LOG11="$DIR/changed.log"
 if "$HARNESS" --bios --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-drive --qemu-arg="file=$DIR/one.img,format=raw,if=ide,index=0,media=disk" \
     --timeout 300 --steptmo 120 --ok "CHANGEDDONE" --log "$LOG11" \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
-    "expect=# " "send=echo root:$NEWPASS | chpasswd && echo CHANGED\"\"DONE" \
+    "expect=# " "send=echo root:$NEWPASS | chpasswd && echo PASSWORD\"\"SET" \
+    "expect=PASSWORDSET" \
+    "send=rm -rf /root/.ssh && mkdir -p /home/$USERNAME && chown 1000:1000 /home/$USERNAME" \
+    "send=echo this-machines-own > /home/$USERNAME/mine && chown 1000:1000 /home/$USERNAME/mine" \
+    "send=echo a-marked-motd > /etc/motd && echo CHANGED\"\"DONE" \
     "expect=CHANGEDDONE" > /dev/null 2>&1; then
-    note "the installed machine's root password is changed on the machine: OK"
+    note "the installed machine is given a password, an account's home and a marked file: OK"
 else
-    bad "changing the password on the installed machine"
+    bad "changing the installed machine"
 fi
 
 LOG12="$DIR/update.log"
@@ -681,9 +728,9 @@ if "$HARNESS" --bios \
     "expect=# " "send=mkdir -p /m && mount -t exfat /dev/disk1p2 /m && echo MOUNT\"\"ED" \
     "expect=MOUNTED" \
     "send=rach2-install --update /m/$(basename "$INSTALLER_EXT2") /dev/disk0" \
-    "expect=keeping this machine's accounts" \
+    "expect=copying this machine's accounts" \
     "expect=what reached the root is the image" \
-    "expect=putting the accounts, the policy and the keys back" \
+    "expect=writing the accounts, the policy and the keys back" \
     "expect=armed for one trial boot" \
     "expect=updated:" "send=umount /m; echo UPDATE\"\"DONE" \
     "expect=UPDATEDONE" > "$LOG12.harness" 2>&1; then
@@ -700,9 +747,14 @@ if "$HARNESS" --bios --qemu-arg=-cpu --qemu-arg=max \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
     "expect=incorrect" \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$NEWPASS" \
-    "expect=# " "send=echo UPDATED\"\"UP" \
+    "expect=# " "send=cat /etc/motd" "expect=Welcome to Rach2" \
+    "send=test ! -d /root/.ssh && echo KEYS\"\"GONE" "expect=KEYSGONE" \
+    "send=cat /home/$USERNAME/mine; stat -c %u /home/$USERNAME/mine" \
+    "expect=this-machines-own" "expect=1000" \
+    "send=echo UPDATED\"\"UP" \
     "expect=UPDATEDUP" > /dev/null 2>&1; then
-    note "and the machine it updated takes the password it had, not the image's: OK"
+    note "and it takes the password it had, keeps the home and its owner, and has the image's \
+own motd where the marked one was: OK"
 else
     bad "the boot of the updated machine"
 fi

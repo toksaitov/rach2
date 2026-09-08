@@ -102,7 +102,13 @@ int disk_count(void);
  * scheduler, and sleeps on a device that sleeps when a process calls it
  * later. A disk whose table cannot be read keeps no partitions.
  */
-void disk_scan(struct disk *d, block_device_t *backing);
+/**
+ * Read `d`'s partition table again over `backing` and publish its views.
+ *
+ * @return 0, or `-EIO` when the first sector would not read, which leaves the
+ *         disk with no partitions and its views withdrawn.
+ */
+int disk_scan(struct disk *d, block_device_t *backing);
 
 /**
  * Give `d` a table read elsewhere, with its views over `backing`: a stick's,

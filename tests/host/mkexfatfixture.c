@@ -1592,6 +1592,7 @@ static int build_volume(const char *out, uint64_t sectors, uint64_t offset, char
         char name[256];
         const char *eq = strchr(adds[k], '=');
         uint64_t bytes, want;
+        size_t ni;
         FILE *in;
 
         if (!eq || (size_t)(eq - adds[k]) >= sizeof(name)) {
@@ -1600,6 +1601,19 @@ static int build_volume(const char *out, uint64_t sectors, uint64_t offset, char
         }
         memcpy(name, adds[k], (size_t)(eq - adds[k]));
         name[eq - adds[k]] = '\0';
+        /* Printable ASCII only. The name goes to a decoder written for the
+           fixture's own well-formed names, which reads a byte's continuation
+           bytes without checking that they are there. */
+        for (ni = 0; name[ni] != '\0'; ni++) {
+            if ((unsigned char)name[ni] < 0x20 || (unsigned char)name[ni] > 0x7E) {
+                fprintf(stderr, "mkexfatfixture: %s: a name here is printable ASCII\n", name);
+                return 2;
+            }
+        }
+        if (ni > 200) {
+            fprintf(stderr, "mkexfatfixture: %s: a name here is at most 200 characters\n", name);
+            return 2;
+        }
         in = fopen(eq + 1, "rb");
         if (!in) {
             fprintf(stderr, "mkexfatfixture: cannot open %s\n", eq + 1);
@@ -1609,17 +1623,23 @@ static int build_volume(const char *out, uint64_t sectors, uint64_t offset, char
         bytes = (uint64_t)ftell(in);
         fseek(in, 0, SEEK_SET);
         want = (bytes + b_cbytes(&b) - 1) / b_cbytes(&b);
-        if (b.next + want > b.clusters + 2) {
+        /* The file's clusters and a cluster for the root's own entries, since
+           a name of two hundred characters is fifteen entries and the root
+           grows through the same allocator. */
+        if (b.next + want + 1 > b.clusters + 2) {
             fprintf(stderr, "mkexfatfixture: %s does not fit the volume\n", name);
             return 2;
         }
-        c = b_alloc(&b, (uint32_t)want, 0);
+        c = bytes ? b_alloc(&b, (uint32_t)want, 0) : 0;
         if (bytes && fread(b_cluster(&b, c), 1, (size_t)bytes, in) != (size_t)bytes) {
             fprintf(stderr, "mkexfatfixture: cannot read %s\n", eq + 1);
             return 2;
         }
         fclose(in);
-        n = set_build(&b, set, name, 0, c, bytes, bytes, 1, 0, 0);
+        /* An empty file has no cluster and no NoFatChain, which is what the
+           specification says an empty stream is and what this kernel's reader
+           refuses it for otherwise. */
+        n = set_build(&b, set, name, 0, c, bytes, bytes, bytes ? 1 : 0, 0, 0);
         dw_put_set(&root, set, n);
     }
 

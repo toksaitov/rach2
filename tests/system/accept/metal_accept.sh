@@ -23,10 +23,14 @@
 # number so the record has it.
 #
 # The key is the demonstration one the RAM images carry, unless
-# `RACH2_ACCEPT_KEY` names another. A machine installed by `rach2-install` has
-# no demonstration key on it: its accounts are the ones the install was given,
-# so the acceptance of such a machine is run with that account's key named in
-# the environment rather than with this script edited.
+# `RACH2_ACCEPT_KEY` names another, and the account is root unless
+# `RACH2_ACCEPT_USER` names another. A machine installed by `rach2-install` has
+# no demonstration key on it and root's keys are whatever its owner put there:
+# the acceptance of such a machine is run with that account's name and key in
+# the environment rather than with this script edited. The account must be able
+# to run the acceptance's commands, which read and write the whole disk, so it
+# is root's key on an installed machine or the account's on one where root's
+# keys were left in place.
 #
 # Usage: metal_accept.sh <host> [port]
 #
@@ -43,6 +47,7 @@ fi
 
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 KEY="${RACH2_ACCEPT_KEY:-$REPO/krffs/rach2_demo_ed25519}"
+USER_NAME="${RACH2_ACCEPT_USER:-root}"
 if [ ! -f "$KEY" ]; then
     echo "metal_accept.sh: $KEY is not a file: name the machine's own key in" \
          "RACH2_ACCEPT_KEY" >&2
@@ -103,7 +108,7 @@ run() {
     ssh -i "$KEY" -p "$PORT" \
         -o StrictHostKeyChecking=no -o UserKnownHostsFile="$KNOWN" \
         -o ConnectTimeout=10 -o BatchMode=yes \
-        "root@$HOST" "$1" 2>/dev/null | tr -d '\r'
+        "$USER_NAME@$HOST" "$1" 2>/dev/null | tr -d '\r'
 }
 
 # The machine has no sftp server, so a file goes over as the standard input of
@@ -113,13 +118,13 @@ put() {
     ssh -i "$KEY" -p "$PORT" \
         -o StrictHostKeyChecking=no -o UserKnownHostsFile="$KNOWN" \
         -o ConnectTimeout=10 -o BatchMode=yes \
-        "root@$HOST" "cat > $2" < "$1" 2>/dev/null
+        "$USER_NAME@$HOST" "cat > $2" < "$1" 2>/dev/null
 }
 get() {
     ssh -i "$KEY" -p "$PORT" \
         -o StrictHostKeyChecking=no -o UserKnownHostsFile="$KNOWN" \
         -o ConnectTimeout=10 -o BatchMode=yes \
-        "root@$HOST" "cat $1" > "$2" 2>/dev/null
+        "$USER_NAME@$HOST" "cat $1" > "$2" 2>/dev/null
 }
 
 echo "metal-accept: $HOST:$PORT"

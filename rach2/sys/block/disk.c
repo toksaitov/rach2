@@ -212,7 +212,7 @@ void disk_set_table(struct disk *d, const struct part_table *table, block_device
     devfs_disk_part_nodes(d);
 }
 
-void disk_scan(struct disk *d, block_device_t *backing)
+int disk_scan(struct disk *d, block_device_t *backing)
 {
     int i, rc;
 
@@ -239,7 +239,7 @@ void disk_scan(struct disk *d, block_device_t *backing)
     wq_wake_all(&scan_wq);
     if (rc != 0) {
         klog(KLOG_WARN, "disk", "disk%d: the first sector could not be read", d->number);
-        return;
+        return -EIO;
     }
     disk_set_table(d, &d->table, backing);
     if (d->table.refused != 0) {
@@ -252,14 +252,23 @@ void disk_scan(struct disk *d, block_device_t *backing)
     if (d->table.kind == PART_GPT_BAD) {
         klog(KLOG_WARN, "disk", "disk%d: a GPT whose headers both fail; no partitions", d->number);
     }
+    return 0;
 }
 
 int disk_rescan(struct disk *d)
 {
+    int rc;
+
     if (d->opens > 1 || devfs_disk_claimed(d)) {
         return -EBUSY;
     }
-    disk_scan(d, d->backing);
+    /* A scan whose first sector would not read leaves the disk with no
+     * partitions and its views withdrawn, which a caller that was told the
+     * table had been read would take for a disk with no table. */
+    rc = disk_scan(d, d->backing);
+    if (rc != 0) {
+        return rc;
+    }
     klog(KLOG_INFO, "disk", "disk%d: table read again: %d partitions", d->number, d->table.count);
     return 0;
 }

@@ -27,7 +27,12 @@ cleanup() {
     [ -n "$mounted" ] && umount "$mounted" 2>/dev/null
     return 0
 }
-trap cleanup EXIT INT TERM HUP
+# A signal ends the run: a handler that tidied up and returned would let the
+# menu go on with the volume it had just unmounted.
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
+trap 'cleanup; exit 129' HUP
 
 disk_numbers() {
     grep '^disk ' /proc/disk | cut -d' ' -f2
@@ -93,8 +98,17 @@ find_stick() {
                 echo "$MNT"
                 return 0
             fi
-            umount "$MNT" 2>/dev/null
+            umount "$MNT" || return 1
         done
+    done
+    return 1
+}
+
+# The disks this machine has, as `/proc/disk` names them, so a target is a
+# disk of this machine and not a path that happens to exist.
+is_whole_disk() { # is_whole_disk PATH
+    for n in $(disk_numbers); do
+        [ "$1" = "/dev/disk$n" ] && return 0
     done
     return 1
 }
@@ -102,6 +116,14 @@ find_stick() {
 restore_image() {
     ask_device "which disk shall be restored, for example /dev/disk0" || return 0
     target=$device
+    # A whole disk and not a partition: an image begins with a table, and
+    # written at a partition's first sector it would put that table there and
+    # read back as though it had been written correctly.
+    is_whole_disk "$target" || {
+        warn "$target is not a whole disk of this machine; the disks are:"
+        list_disks
+        return 0
+    }
     # The stick's own image is the answer this offers, since the stick a person
     # boots to repair a machine is usually the stick that carries the system.
     offer=""
@@ -138,14 +160,18 @@ restore_image() {
         warn "no hash for $image: an image is restored only against one"
         return 0
     }
-    # The length is asked of the file rather than counted: `wc -c` on a stick
-    # reads the whole image, which is minutes before a question is even asked.
+    # The length comes from the file's own record rather than from counting its
+    # bytes: `wc -c` on a stick reads the whole image, which is minutes before
+    # a question is even asked.
     bytes=$(stat -c %s "$image")
     [ -n "$bytes" ] || {
         warn "the length of $image could not be read"
         return 0
     }
-    say "everything on $target will be overwritten by $bytes bytes of $image"
+    n=${target#/dev/disk}
+    say "everything on $target will be overwritten by $bytes bytes of $image:"
+    say "  $(disk_model "$n"), serial $(disk_serial "$n"), \
+$(($(disk_field "$n" 5) * 512)) bytes, $(disk_field "$n" 3), table $(disk_field "$n" 6)"
     printf '%s: type the name of that disk to go on, anything else to stop: ' "$ME"
     read -r confirm
     [ "$confirm" = "$target" ] || {
@@ -167,7 +193,11 @@ restore_image() {
         warn "what reached the disk hashes to $back and the image to $want"
         return 0
     }
-    diskctl reread "$target" > /dev/null 2>&1
+    if ! diskctl reread "$target" > /dev/null; then
+        warn "$target: the image is on the disk and read back, and the kernel would not read \
+its new table; reboot before mounting anything from it"
+        return 0
+    fi
     say "$target: restored and read back; reboot from it"
 }
 

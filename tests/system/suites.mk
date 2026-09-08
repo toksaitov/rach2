@@ -172,6 +172,12 @@ run-default: rach2 test-image $(RUNTESTS)
 components: harness-kernel busybox check-busybox check-dropbearmulti check-libc \
             check-pdpmake check-setid check-tcc ish krffs musl-programs \
             ports/doom rach2 rach2-metal rach2-recovery tests utils
+# The install sticks, named here because `prepare-images` below names them and
+# make expands a prerequisite when it reads the rule. Their own rules are with
+# the suite that reads them.
+INSTALL_STICK = $(IMAGES_DIR)/rach2-install-stick.img
+INSTALL_TEST_STICK = $(IMAGES_DIR)/install-test-stick.img
+
 prepare-images: $(DEMO_CREDS) $(BINFIND) $(DEADLINE) $(ELFCHECK) $(HARNESS) $(HOSTPEER) \
                 $(MKFIXTURE) $(MKGPT) $(MKMBR) $(PCAPCHECK) $(PTYDRIVE) $(RUNTESTS) \
                 $(SHA256TOOL) $(WAVCHECK) os-real-image os-simple-image \
@@ -1315,7 +1321,8 @@ STICK_IMAGE = $(IMAGES_DIR)/rach2-stick.img
 rach2-stick-image: $(STICK_IMAGE)
 $(STICK_IMAGE): build/images/rach2-metal.iso tools/image/mkstick.sh $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK)
 	sh tools/image/mkstick.sh build/images/rach2-metal.iso $@ $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK)
-build/images/rach2-metal.iso: rach2-metal-iso
+build/images/rach2-metal.iso: $(METAL_KERNEL) $(METAL_IMAGE) tools/image/mkiso.sh
+	sh tools/image/mkiso.sh rach2-metal
 # The install stick (tools/image/mkinstallstick.sh): the recovery ISO followed
 # by an exFAT volume carrying the sealed disk image and the manifest naming its
 # length and hash. It is what a person boots to install this system.
@@ -1325,19 +1332,18 @@ build/images/rach2-metal.iso: rach2-metal-iso
 # recovery ISO build at the same time, in the one directory that build uses,
 # and neither would find what it wrote. They still name it, so a suite run on
 # its own builds what it needs.
-INSTALL_STICK = $(IMAGES_DIR)/rach2-install-stick.img
 rach2-install-stick: $(INSTALL_STICK)
 $(INSTALL_STICK): build/images/rach2-recovery.iso $(SEALED_DISK) tools/image/mkinstallstick.sh \
                   $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK)
 	sh tools/image/mkinstallstick.sh build/images/rach2-recovery.iso $(SEALED_DISK) $@ \
 	    $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK)
-build/images/rach2-recovery.iso: rach2-recovery-iso
-# A stick of the same shape carrying a 170 MiB disk instead of the sealed one,
+build/images/rach2-recovery.iso: $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) tools/image/mkiso.sh
+	sh tools/image/mkiso.sh rach2-recovery
+# A stick of the same shape carrying a 138 MiB disk instead of the sealed one,
 # so the rows that install do not each write a gibibyte and a half. The image
 # it carries has the shape the sealed disk has, a boot partition, a KRFFS root,
-# a recovery partition and an ext2 root, with a 96 MiB os-real on the ext2
-# root; a machine written from it boots, and its ext2 root is what the
-# installer writes accounts into.
+# a recovery partition and a 64 MiB ext2 root; a machine written from it boots,
+# and that ext2 root is what the installer writes accounts into.
 # The ext2 root the installer's own disk carries: the same manifest the sealed
 # disk's root is built from, since its `init` is the one that starts the SSH
 # server and reads the policy the installer writes. It is 64 MiB, the smallest
@@ -1358,7 +1364,6 @@ $(INSTALLER_DISK): $(DEMO_CREDS) $(INSTALLER_EXT2) $(RECOVERY_IMAGE) tools/image
 	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
 	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
 	    sh tools/image/mkdisk_grub.sh build/rach2/kernel $@
-INSTALL_TEST_STICK = $(IMAGES_DIR)/install-test-stick.img
 $(INSTALL_TEST_STICK): build/images/rach2-recovery.iso $(INSTALLER_DISK) $(INSTALLER_EXT2) \
                        tools/image/mkinstallstick.sh $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK)
 	sh tools/image/mkinstallstick.sh build/images/rach2-recovery.iso $(INSTALLER_DISK) $@ \

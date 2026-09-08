@@ -23,15 +23,13 @@
 # `--source DIR` takes the image and its manifest from a directory already
 # mounted, which is how the tests drive it without a stick.
 #
-# `--update` is the other half of a machine's life: a root file system image
-# written into the root partition of a machine that is already installed,
-# without touching its table and without losing what the machine has become.
-# The accounts, the SSH policy, the server's host keys and the account's own
-# keys are read off the root first and put back afterwards, so a password
-# changed after the install survives an update; the root is grown again into
-# whatever the partition is, and the new root is marked a candidate for one
-# trial boot, which is what makes an update that will not come up cost a
-# reboot rather than a journey.
+# `--update` writes a root file system image into the root partition of a
+# machine that is already installed, without touching its table. The account
+# files, the SSH policy, the server's host keys and the accounts' own keys are
+# copied off the root first and written back afterwards, so a password changed
+# after the install is still the machine's password. The root is grown again
+# into its partition, and the new root is armed for one trial boot, so an
+# update that does not come up costs a reboot rather than a journey.
 #
 
 set -u
@@ -60,7 +58,13 @@ cleanup() {
     [ -n "$mounted_source" ] && umount "$mounted_source" 2>/dev/null
     return 0
 }
-trap cleanup EXIT INT TERM HUP
+# A signal ends the run. A handler that tidied up and returned would let the
+# next command write into a directory whose file system had just been
+# unmounted under it.
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
+trap 'cleanup; exit 129' HUP
 
 source_dir=""
 update_image=""
@@ -137,7 +141,12 @@ find_source() {
                 echo "$n $MNT"
                 return 0
             fi
-            umount "$MNT" 2>/dev/null
+            # A volume this could not let go of is one the disk is still held
+            # by, and a search that went on would mount the next over it.
+            umount "$MNT" || {
+                echo "$ME: /dev/disk${n}p${p} would not unmount" >&2
+                return 2
+            }
         done
     done
     return 1
@@ -145,11 +154,11 @@ find_source() {
 
 # ---- the update ----
 #
-# A machine that is already installed, given a new root file system. What it
-# has become since the install is read off the root first: the account files,
-# the SSH policy, the server's host keys and the keys the account logs in with.
-# The image goes into the root's own partition and nowhere else, so the table,
-# the boot partition and the recovery partition are what they were.
+# A machine that is already installed, given a new root file system. The
+# account files, the SSH policy, the server's host keys and the keys the
+# accounts log in with are copied off the root first. The image goes into the
+# root's own partition and nowhere else, so the table, the boot partition and
+# the recovery partition are left as they are.
 
 if [ -n "$update_image" ]; then
     [ -f "$update_image" ] || die "$update_image is not a file"
@@ -162,41 +171,65 @@ if [ -n "$update_image" ]; then
     esac
     [ -e "$update_disk" ] || die "$update_disk is not there"
     target=${update_disk#/dev/disk}
+
+    # The disk must be one this system installed, and not another system's that
+    # happens to have an ext2 partition with an `/etc/passwd` in it: the write
+    # below replaces a whole partition, and a disk that was never installed
+    # from here has no partition this may claim. Two things say so together:
+    # the boot partition is one `bootctl` can read, which is this system's own
+    # menu and slots, and the root carries `/etc/rach2`, which no other system
+    # writes.
+    bootctl --target "${update_disk}p1" status > /dev/null 2>&1 ||
+        die "${update_disk}p1 is not a boot partition this system wrote; \
+$update_disk was not installed from here"
+
     root_entry=""
     for p in 4 3 2 1; do
         [ -e "${update_disk}p${p}" ] || continue
         mkdir -p "$TARGET_MNT" 2>/dev/null
         mount -t ext2 "${update_disk}p${p}" "$TARGET_MNT" 2>/dev/null || continue
-        if [ -f "$TARGET_MNT/etc/passwd" ]; then
+        mounted_root=$TARGET_MNT
+        if [ -f "$TARGET_MNT/etc/passwd" ] && [ -d "$TARGET_MNT/etc/rach2" ]; then
             root_entry=$p
-            mounted_root=$TARGET_MNT
             break
         fi
-        umount "$TARGET_MNT" 2>/dev/null
+        umount "$TARGET_MNT" || die "${update_disk}p${p} would not unmount"
+        mounted_root=""
     done
     [ -n "$root_entry" ] ||
-        die "$update_disk carries no ext2 root this can read; the machine's configuration is \
+        die "$update_disk carries no root of this system that can be read; its accounts are \
 not there to be kept"
 
     keep=/tmp/rach2-update-keep
     rm -rf "$keep"
     mkdir -p "$keep" || die "there is nowhere to keep the machine's configuration"
-    say "keeping this machine's accounts, policy and keys"
+    say "copying this machine's accounts, policy and keys off the root"
     for f in etc/passwd etc/group etc/shadow etc/rach2/sshd.conf; do
         if [ -f "$TARGET_MNT/$f" ]; then
             mkdir -p "$keep/$(dirname "$f")"
             cp "$TARGET_MNT/$f" "$keep/$f" || die "$f could not be kept"
         fi
     done
+    # Every copy is checked, because what is not kept here is replaced below by
+    # the image's own: a copy that failed and said nothing would take the
+    # machine's home directories, or its host keys, away in the name of
+    # updating it. `-a` keeps the owner and the mode, which `cp` run by root
+    # does not do on its own: an account's home restored as root's is a home
+    # its owner cannot enter.
     if [ -d "$TARGET_MNT/etc/dropbear" ]; then
-        mkdir -p "$keep/etc/dropbear"
-        cp "$TARGET_MNT"/etc/dropbear/* "$keep/etc/dropbear/" 2>/dev/null
+        cp -a "$TARGET_MNT/etc/dropbear" "$keep/etc/dropbear" ||
+            die "the server's host keys could not be kept"
     fi
-    # Checked, because what is not kept here is replaced below by the image's
-    # own: a copy that failed and said nothing would take the machine's home
-    # directories away in the name of updating it.
     if [ -d "$TARGET_MNT/home" ]; then
-        cp -r "$TARGET_MNT/home" "$keep/home" || die "the home directories could not be kept"
+        cp -a "$TARGET_MNT/home" "$keep/home" || die "the home directories could not be kept"
+    fi
+    # Root's own keys, and their absence: an install takes the image's
+    # demonstration keys off root, and an update that put the image's back
+    # would open the machine to whoever holds the demonstration key.
+    if [ -d "$TARGET_MNT/root/.ssh" ]; then
+        mkdir -p "$keep/root"
+        cp -a "$TARGET_MNT/root/.ssh" "$keep/root/.ssh" ||
+            die "root's keys could not be kept"
     fi
     umount "$TARGET_MNT" || die "the root would not unmount"
     mounted_root=""
@@ -211,11 +244,37 @@ not there to be kept"
     room=$((count * 512))
     [ "$bytes" -le "$room" ] ||
         die "the image is $bytes bytes and the root partition holds $room"
+    [ $((bytes % 512)) -eq 0 ] ||
+        die "the image is $bytes bytes, which is not a whole number of sectors"
+
+    # The image is judged before the root it replaces is destroyed. Its hash is
+    # taken here, so the readback below compares the disk with what was read
+    # rather than with itself; and the first bytes of an ext2 file system are
+    # read, since an image that is not one would leave a machine with no root
+    # at all and nothing to say why.
+    want=$(dd if="$update_image" bs=1048576 2>/dev/null | sha256sum | cut -d' ' -f1)
+    [ -n "$want" ] || die "the image could not be read"
+    if [ -f "$update_image.sha256" ]; then
+        declared=$(cut -d' ' -f1 < "$update_image.sha256")
+        [ "$want" = "$declared" ] ||
+            die "the image hashes to $want and $update_image.sha256 says $declared"
+    fi
+    magic=$(dd if="$update_image" bs=1 skip=1080 count=2 2>/dev/null | od -An -tx1 | tr -d ' \n')
+    [ "$magic" = "53ef" ] ||
+        die "$update_image does not begin with an ext2 file system"
+
+    # The machine is put on the entries it can come back to before its root is
+    # replaced: `trial` arms one boot and leaves the saved default alone, so a
+    # machine already saved to the candidate would boot a root that hangs again
+    # at every reboot, and a write cut off by a power cut would leave it there
+    # with no root at all.
+    bootctl --target "${update_disk}p1" env saved_entry fallback > /dev/null ||
+        die "the saved boot entry could not be moved to the fallback; nothing was written"
+    say "the machine is saved to its fallback entries until the new root is tried"
 
     say "writing $bytes bytes into ${update_disk}p${root_entry}, at $at"
     reflash -p "$update_disk" "$at" "$bytes" < "$update_image" ||
         die "the root was not written"
-    want=$(dd if="$update_image" bs=1048576 2>/dev/null | sha256sum | cut -d' ' -f1)
     back=$(reflash --verify "$update_disk" "$at" "$bytes" | cut -d' ' -f3)
     [ "$back" = "$want" ] || die "what reached the root hashes to $back and the image to $want"
     say "what reached the root is the image"
@@ -226,7 +285,7 @@ not there to be kept"
     mount -t ext2 "${update_disk}p${root_entry}" "$TARGET_MNT" ||
         die "the new root would not mount"
     mounted_root=$TARGET_MNT
-    say "putting the accounts, the policy and the keys back"
+    say "writing the accounts, the policy and the keys back"
     for f in etc/passwd etc/group etc/shadow etc/rach2/sshd.conf; do
         if [ -f "$keep/$f" ]; then
             mkdir -p "$TARGET_MNT/$(dirname "$f")"
@@ -235,13 +294,21 @@ not there to be kept"
     done
     chmod 600 "$TARGET_MNT/etc/shadow" 2>/dev/null
     if [ -d "$keep/etc/dropbear" ]; then
-        mkdir -p "$TARGET_MNT/etc/dropbear"
-        cp "$keep"/etc/dropbear/* "$TARGET_MNT/etc/dropbear/" 2>/dev/null
-        chmod 700 "$TARGET_MNT/etc/dropbear"
+        rm -rf "$TARGET_MNT/etc/dropbear"
+        cp -a "$keep/etc/dropbear" "$TARGET_MNT/etc/dropbear" ||
+            die "the server's host keys could not be put back"
     fi
     if [ -d "$keep/home" ]; then
         rm -rf "$TARGET_MNT/home"
-        cp -r "$keep/home" "$TARGET_MNT/home" || die "the home directories could not be put back"
+        cp -a "$keep/home" "$TARGET_MNT/home" || die "the home directories could not be put back"
+    fi
+    # Root's keys are put back as they were, and where there were none the
+    # image's are taken off: an update must not open the machine to a key its
+    # owner had removed.
+    rm -rf "$TARGET_MNT/root/.ssh"
+    if [ -d "$keep/root/.ssh" ]; then
+        mkdir -p "$TARGET_MNT/root"
+        cp -a "$keep/root/.ssh" "$TARGET_MNT/root/.ssh" || die "root's keys could not be put back"
     fi
     sync
     umount "$TARGET_MNT" || die "the new root would not unmount"
@@ -256,7 +323,7 @@ not there to be kept"
         die "the new root is on the disk and no trial was armed; arm one with \
 bootctl --target ${update_disk}p1 trial candidate"
     fi
-    say "updated: ${update_disk}p${root_entry} carries the new root and keeps this machine's \
+    say "updated: ${update_disk}p${root_entry} carries the new root with this machine's \
 accounts. Reboot to try it."
     exit 0
 fi
@@ -266,7 +333,12 @@ if [ -n "$source_dir" ]; then
     [ -f "$source_dir/rach2-install.manifest" ] ||
         die "$source_dir holds no rach2-install.manifest"
 else
-    found=$(find_source) || die "no stick with an image on it was found"
+    found=$(find_source)
+    case "$?" in
+        0) ;;
+        2) die "a volume this looked at would not unmount; nothing was written" ;;
+        *) die "no stick with an image on it was found" ;;
+    esac
     source_disk=${found%% *}
     source_dir=${found#* }
     mounted_source=$source_dir
@@ -406,6 +478,14 @@ target_sectors=$(disk_field "$target" 5)
 # a stick that has gone bad is found before anything is destroyed, and a run
 # that ends at a question has not paid for the reading.
 
+# The length the manifest declares is the length the file has: a manifest whose
+# `bytes` was changed and whose hash was not would otherwise send `reflash` a
+# count that is not the image's, and the disk is written before the stream's
+# end says so.
+actual=$(stat -c %s "$source_dir/$image")
+[ "$actual" = "$bytes" ] ||
+    die "the manifest says $bytes bytes and $image is $actual"
+
 say "reading the image to check it against the manifest, which takes a few minutes"
 # Read in mebibytes rather than by `sha256sum FILE`, which reads a few
 # kilobytes at a time: through a file system on a stick that is the difference
@@ -415,10 +495,9 @@ got=$(dd if="$source_dir/$image" bs=1048576 2>/dev/null | sha256sum | cut -d' ' 
     die "the image on the stick hashes to $got and the manifest says $want"
 say "the image on the stick is the one the manifest describes"
 
-# The disk is asked who it is once more before the first byte and once after
-# the last: a disk pulled out between the question and the write takes a fresh
-# record when it comes back, and the record that answers here would be another
-# disk's.
+# The disk's serial and sector count are read again before the first byte and
+# after the last: a disk pulled out between the question and the write takes a
+# fresh record when it comes back, and that record describes another disk.
 [ "$(disk_serial "$target")" = "$target_serial" ] &&
     [ "$(disk_field "$target" 5)" = "$target_sectors" ] ||
     die "/dev/disk$target is no longer the disk the question was answered about"

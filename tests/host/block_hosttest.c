@@ -111,10 +111,11 @@ struct disk *disk_at(int n)
     return 0;
 }
 
-void disk_scan(struct disk *d, block_device_t *dev)
+int disk_scan(struct disk *d, block_device_t *dev)
 {
     (void)d;
     (void)dev;
+    return 0;
 }
 
 int main(void)

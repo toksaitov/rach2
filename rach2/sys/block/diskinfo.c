@@ -298,6 +298,15 @@ const struct diskinfo *diskinfo_get(void)
     return &info;
 }
 
+/**
+ * Render one `disk` line and one `identity` line for each registered disk,
+ * with the accepted partitions of each after them.
+ *
+ * The `identity` line is what a program choosing a disk to write reads: the
+ * unit the disk counts in, whether it can be pulled out, whether a mount holds
+ * any range of it, and the drive's serial. The serial is last on its line and
+ * the model last on the other, since either may hold a space.
+ */
 int diskinfo_format_disks(char *buf, int cap)
 {
     char guid[37];
@@ -328,11 +337,6 @@ int diskinfo_format_disks(char *buf, int cap)
                                                           : " unread ");
         put(buf, &n, cap, d->model);
         put(buf, &n, cap, "\n");
-        /* What a person choosing a disk to write needs beside its size: the
-         * unit it counts in, whether it is a fixed disk or something that can
-         * be pulled out, whether anything is mounted from it, and the serial
-         * the label on the drive carries. The serial is last because it is the
-         * only field of the two lines that may hold a space. */
         put(buf, &n, cap, "identity ");
         put_dec(buf, &n, cap, (uint64_t)d->number);
         put(buf, &n, cap, " ");

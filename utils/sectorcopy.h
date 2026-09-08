@@ -32,9 +32,9 @@ struct sectorcopy_io {
      * the count written, or a negative number, like write(2). A short count is
      * not an error here; the loop calls again. */
     long (*write)(void *ctx, const unsigned char *buf, unsigned long n);
-    /* Called as the copy passes each step and once at its end, or NULL for a
-     * copy that says nothing. `done` is the bytes that have reached the
-     * device, `total` the bytes it was asked for. */
+    /* Called as the copy passes each step and once at its end; NULL prints no
+     * progress at all. `done` is the bytes that have reached the device,
+     * `total` the whole count. */
     void (*note)(void *ctx, unsigned long long done, unsigned long long total, unsigned percent);
     void *ctx;
 };
@@ -43,8 +43,10 @@ struct sectorcopy_io {
  * Whether a progress line is due, and the percentage it would carry.
  *
  * A line is due when the copy has passed a step boundary since the last one,
- * and again when it has finished, so a copy of any length says at least that
- * it ended. `*last` is the count the last line reported, zero at the start.
+ * and again at the end, so a copy shorter than one step still prints the line
+ * that reports its end. A count that has not moved since the last line is not
+ * a second line. `*last` is the count the last line reported, zero at the
+ * start.
  *
  * @return 1 when a line is due, with `*last` moved to `done` and `*percent`
  *         set; 0 when it is not, and neither is touched.

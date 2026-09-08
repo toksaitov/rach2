@@ -67,12 +67,20 @@ DESCRIPTION
 
      --update IMAGE DISK writes a root file system image into the root
      partition of a machine that is already installed, without touching its
-     table. What the machine has become is read off the root first, the account
-     files, the SSH policy, the server's host keys and the accounts' own keys,
-     and put back after the write, so a password changed after the install
-     survives an update. The root is grown again into its partition and the new
-     root is armed for one trial boot, so an update that will not come up costs
-     a reboot rather than a journey.
+     table. The disk must be one this system installed: its first partition
+     must be a boot partition bootctl can read and the root it replaces must
+     carry /etc/rach2. The account files, the SSH policy, the server's host
+     keys and the accounts' own keys, root's included and their absence with
+     them, are copied off the root first and written back after the write, so a
+     password changed after the install is still the machine's password.
+
+     The image is judged before the root it replaces is destroyed: its length
+     must be a whole number of sectors and must fit the partition, its first
+     bytes must be an ext2 file system, and its SHA-256 must match IMAGE.sha256
+     when one is there. The saved boot entry is moved to the fallback before
+     the write and the new root is armed for one trial boot after it, so a root
+     that does not come up, or a write cut off by a power cut, leaves a machine
+     that boots the system it had.
 
 EXIT STATUS
      0 when the disk carries the system and, for an update, when the new root

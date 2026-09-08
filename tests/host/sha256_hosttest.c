@@ -12,7 +12,12 @@
  *
  * The vectors are FIPS 180-4's two and the standard million-a test, plus the
  * empty message and the block-boundary lengths where the padding rule decides
- * whether one block or two are added.
+ * whether one block or two are added: 55 bytes fit their length field in the
+ * same block, 56 do not, and 64 is a whole block with nothing left.
+ *
+ * The million-a test is fed a thousand bytes at a time and again one byte at a
+ * time, which is the same message through every boundary the buffer has and is
+ * how a digest taken over a disk arrives: in whatever pieces the reads gave.
  *
  * Returns the failed-check count (0 == pass).
  */
@@ -73,9 +78,6 @@ int main(void)
            "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1",
            "the specification's second vector");
 
-    /* The lengths where the padding rule turns over: 55 bytes fit their length
-     * field in the same block, 56 do not, and 64 is a whole block with nothing
-     * left. A reader that padded from the wrong count fails one of these. */
     memset(big, 'a', sizeof(big));
     digest(big, 55, got);
     CHECK(strcmp(got, "9f4390f8d30c2dd92ec9f095b65e2b9ae9b0a925a5258e241c9f1e910f734318") == 0,
@@ -87,9 +89,6 @@ int main(void)
     CHECK(strcmp(got, "ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb") == 0,
           "a whole block");
 
-    /* The million-a test, fed a thousand at a time, which also proves the
-     * state carries across calls: a digest taken over a disk arrives in
-     * whatever pieces the reads gave. */
     sha256_init(&s);
     for (i = 0; i < 1000; i++) {
         sha256_update(&s, big, sizeof(big));
@@ -99,8 +98,6 @@ int main(void)
     CHECK(strcmp(got, "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0") == 0,
           "a million a's in a thousand pieces");
 
-    /* And in pieces of one byte, which is the same message through every
-     * boundary the buffer has. */
     {
         char once[65];
 

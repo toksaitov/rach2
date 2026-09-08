@@ -57,7 +57,22 @@ rm -f "$OUT.new"
 
 # The manifest the installer reads: the image's name, its length in bytes and
 # its SHA-256, one field a line so a shell reads it with `read`.
-sum=$(shasum -a 256 "$DISK" | cut -d' ' -f1)
+# The hash's own status is checked: `shasum | cut` under `set -e` reports the
+# status of `cut`, so a hash that was never taken would be written as an empty
+# field and the stick would carry a manifest nothing can match.
+sum_line=$(shasum -a 256 "$DISK")
+sum=$(printf '%s' "$sum_line" | cut -d' ' -f1)
+case "$sum" in
+    [0-9a-f][0-9a-f]*) ;;
+    *)
+        echo "mkinstallstick: the image's hash could not be taken" >&2
+        exit 1
+        ;;
+esac
+[ "${#sum}" = 64 ] || {
+    echo "mkinstallstick: the image's hash is $sum, not 64 hexadecimal digits" >&2
+    exit 1
+}
 {
     echo "image $name"
     echo "bytes $disk_bytes"

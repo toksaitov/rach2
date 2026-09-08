@@ -106,7 +106,7 @@ int sectorcopy_step(unsigned long long done, unsigned long long total, unsigned 
         return 0;
     }
     if (done == *last && done != 0) {
-        return 0; /* nothing has moved since the last line */
+        return 0;
     }
     *last = done;
     *percent = total ? (unsigned)(done * 100 / total) : 100;

@@ -1,5 +1,6 @@
 /**
- * SHA-256, FIPS 180-4, for the programs that must judge what they wrote.
+ * SHA-256, FIPS 180-4, for the programs that compare what reached a disk with
+ * what was sent to it.
  *
  * `reflash --verify` reads a range of a device back and prints its digest, and
  * the installer compares that with the manifest the stick carries. The digest
