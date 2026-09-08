@@ -115,8 +115,8 @@ void ip_rx(const uint8_t *data, uint16_t len, int from_loopback)
     /* An unconfigured machine owns no address, and 0.0.0.0 is not one it owns:
        comparing against it would make every packet addressed to nobody look
        like a packet addressed to this machine. */
-    to_broadcast = (dst_ip == 0xFFFFFFFFu || dst_ip == netconf_broadcast());
-    if (!(net_ip_addr != 0 && dst_ip == net_ip_addr) && !to_broadcast) {
+    to_broadcast = netdev_is_broadcast(dst_ip);
+    if (!netdev_owns(dst_ip) && !to_broadcast) {
         return;   /* not addressed to us */
     }
 
@@ -125,7 +125,7 @@ void ip_rx(const uint8_t *data, uint16_t len, int from_loopback)
     /* Reject a martian source off the wire: our own address, or 127/8, from a
      * peer is a spoof (only a loopback delivery legitimately has these). */
     if (!from_loopback &&
-        (src_ip == net_ip_addr || (src_ip & 0xFF000000u) == 0x7F000000u)) {
+        (netdev_owns(src_ip) || (src_ip & 0xFF000000u) == 0x7F000000u)) {
         return;
     }
 
@@ -212,6 +212,21 @@ int ip_tx(uint32_t dst_ip, uint8_t proto,
 
     total_len = (uint16_t)(IP_HDR_SIZE + plen);
 
+    /* The interface first: its address is the source this datagram carries,
+     * and a reply comes back to that and to no other. A broadcast goes out
+     * by the first interface, which is where a machine with one card sends
+     * everything. */
+    if (netdev_is_broadcast(dst_ip)) {
+        out = netdev_first();
+        route_ip = dst_ip;
+    } else {
+        out = netdev_route(dst_ip, &route_ip);
+        if (!out) {
+            klog(KLOG_WARN, "ip", "tx: no route: refused a datagram no interface reaches");
+            return -ENETUNREACH;
+        }
+    }
+
     ip_tx_buf[0] = 0x45;                         /* version 4, IHL 5 */
     ip_tx_buf[1] = 0x00;                         /* DSCP/ECN */
     write16be(ip_tx_buf + 2,  total_len);
@@ -220,13 +235,15 @@ int ip_tx(uint32_t dst_ip, uint8_t proto,
     ip_tx_buf[8]  = ttl;                         /* hop limit */
     ip_tx_buf[9]  = proto;
     write16be(ip_tx_buf + 10, 0x0000);           /* checksum, filled below */
-    write32be(ip_tx_buf + 12, net_ip_addr);
+    /* The source is the address of the interface this datagram leaves by,
+     * which is the only address a reply can come back to. */
+    write32be(ip_tx_buf + 12, out ? out->ip : net_ip_addr);
     write32be(ip_tx_buf + 16, dst_ip);
     write16be(ip_tx_buf + 10, ip_checksum(ip_tx_buf, IP_HDR_SIZE));
 
     k_memcpy(ip_tx_buf + IP_HDR_SIZE, payload, plen);
 
-    if (dst_ip == net_ip_addr) {
+    if (netdev_owns(dst_ip)) {
         uint32_t slot;
 
         if (loop_head - loop_tail == LOOP_RING_SLOTS) {
@@ -258,19 +275,8 @@ int ip_tx(uint32_t dst_ip, uint8_t proto,
                  "tx: refused to broadcast a datagram that is not UDP");
             return -EOPNOTSUPP;
         }
-        ethernet_tx(netdev_first(), all_ones, ETH_TYPE_IP, ip_tx_buf, total_len);
+        ethernet_tx(out, all_ones, ETH_TYPE_IP, ip_tx_buf, total_len);
         return 0;
-    }
-
-    /* On-subnet destinations resolve directly; otherwise via the gateway. A
-     * machine configured with an address and no gateway has no route off its
-     * own subnet, and the datagram is dropped here with a reason rather than
-     * ARPed for at address zero. */
-    out = netdev_route(dst_ip, &route_ip);
-    if (!out) {
-        klog(KLOG_WARN, "ip",
-             "tx: no route: refused a datagram no interface reaches");
-        return -ENETUNREACH;
     }
 
     /* The address is not resolved yet: the request has gone out and this
