@@ -56,12 +56,15 @@ static int rtl8139_link(void *dev, struct netdev_link *out);
 
 /* The interface this driver's one card is. Kept from the bring-up, so a
  * frame it delivers says where it arrived. */
+/* The card's own station address, read from the chip. */
+static uint8_t rtl8139_mac[6];
+
 static struct netdev *rtl8139_iface;
 
 /**
  * Probe, reset, and bring up the RTL8139.
  *
- * Finds the card on the PCI bus, resets it, latches net_mac from the chip,
+ * Finds the card on the PCI bus, resets it, latches rtl8139_mac from the chip,
  * programs the RX ring and TX descriptor base addresses, sets the receive and
  * transmit configuration, registers the IRQ handler, and enables the receiver
  * and transmitter. The receiver and transmitter are enabled last, after the
@@ -123,12 +126,12 @@ int rtl8139_init(struct netdev *nd, int nth)
     /* The MAC address is latched at I/O offsets 0x00-0x05 after reset. */
     mac_lo = inl(iobase + RTL_MAC0);
     mac_hi = inw(iobase + RTL_MAC4);
-    net_mac[0] = (uint8_t)(mac_lo >>  0);
-    net_mac[1] = (uint8_t)(mac_lo >>  8);
-    net_mac[2] = (uint8_t)(mac_lo >> 16);
-    net_mac[3] = (uint8_t)(mac_lo >> 24);
-    net_mac[4] = (uint8_t)(mac_hi >>  0);
-    net_mac[5] = (uint8_t)(mac_hi >>  8);
+    rtl8139_mac[0] = (uint8_t)(mac_lo >>  0);
+    rtl8139_mac[1] = (uint8_t)(mac_lo >>  8);
+    rtl8139_mac[2] = (uint8_t)(mac_lo >> 16);
+    rtl8139_mac[3] = (uint8_t)(mac_lo >> 24);
+    rtl8139_mac[4] = (uint8_t)(mac_hi >>  0);
+    rtl8139_mac[5] = (uint8_t)(mac_hi >>  8);
 
     /* Allocate the RX ring from kernel memory (page-aligned, which also
      * satisfies the chip's DMA alignment). Point the chip at it; Rach2 is
@@ -173,10 +176,11 @@ int rtl8139_init(struct netdev *nd, int nth)
     {
         int b;
 
-        /* This driver reads the card's address into the stack's own; the
-         * interface keeps a copy, as one with two cards must. */
+        /* The card's own address goes to the interface it is. The stack's
+         * one address for the machine is the first interface's, set by the
+         * walk, not by whichever driver ran last. */
         for (b = 0; b < 6; b++) {
-            nd->mac[b] = net_mac[b];
+            nd->mac[b] = rtl8139_mac[b];
         }
     }
     return NETDEV_UP;
@@ -203,12 +207,12 @@ static void rtl8139_print_info(void *dev)
     klog(KLOG_INFO, "rtl8139",
          "IRQ %d, I/O 0x%X, MAC %X%X:%X%X:%X%X:%X%X:%X%X:%X%X",
                   (int)rtl_pci.irq, (unsigned)iobase,
-                  (unsigned)(net_mac[0] >> 4), (unsigned)(net_mac[0] & 0xF),
-                  (unsigned)(net_mac[1] >> 4), (unsigned)(net_mac[1] & 0xF),
-                  (unsigned)(net_mac[2] >> 4), (unsigned)(net_mac[2] & 0xF),
-                  (unsigned)(net_mac[3] >> 4), (unsigned)(net_mac[3] & 0xF),
-                  (unsigned)(net_mac[4] >> 4), (unsigned)(net_mac[4] & 0xF),
-                  (unsigned)(net_mac[5] >> 4), (unsigned)(net_mac[5] & 0xF));
+                  (unsigned)(rtl8139_mac[0] >> 4), (unsigned)(rtl8139_mac[0] & 0xF),
+                  (unsigned)(rtl8139_mac[1] >> 4), (unsigned)(rtl8139_mac[1] & 0xF),
+                  (unsigned)(rtl8139_mac[2] >> 4), (unsigned)(rtl8139_mac[2] & 0xF),
+                  (unsigned)(rtl8139_mac[3] >> 4), (unsigned)(rtl8139_mac[3] & 0xF),
+                  (unsigned)(rtl8139_mac[4] >> 4), (unsigned)(rtl8139_mac[4] & 0xF),
+                  (unsigned)(rtl8139_mac[5] >> 4), (unsigned)(rtl8139_mac[5] & 0xF));
     if (rtl8139_link(0, &link) && link.up) {
         klog(KLOG_INFO, "rtl8139", "link %d Mb/s, %s duplex", (int)link.mbps,
              link.full_duplex ? "full" : "half");

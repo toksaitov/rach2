@@ -695,8 +695,9 @@ int main(void)
     CHECK((model_link_ctl_bridge & PCIE_LINK_CTL_ASPM_MASK) == 0,
           "the link state is turned off at the port above the card too");
     CHECK(r8168_xid == 0x509u, "the revision was read from the chip");
-    CHECK(net_mac[0] == 0x28 && net_mac[1] == 0xD2 && net_mac[2] == 0x44 && net_mac[3] == 0x7E &&
-              net_mac[4] == 0xE0 && net_mac[5] == 0xAF,
+    CHECK(model_iface.mac[0] == 0x28 && model_iface.mac[1] == 0xD2 && model_iface.mac[2] == 0x44 &&
+              model_iface.mac[3] == 0x7E && model_iface.mac[4] == 0xE0 &&
+              model_iface.mac[5] == 0xAF,
           "the station address came from the permanent one, not the register pair");
     CHECK((model_reg[R8168_CPLUSCMD] | (model_reg[R8168_CPLUSCMD + 1] << 8)) ==
               (0xFFFFu & R8168_CPCMD_MASK),

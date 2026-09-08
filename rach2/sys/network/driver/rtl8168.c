@@ -923,6 +923,9 @@ static uint32_t r8168_link_speed(void)
 
 /* The interface this driver's one card is. Kept from the bring-up, so a
  * frame it delivers says where it arrived. */
+/* The card's own station address, read from the chip. */
+static uint8_t rtl8168_mac[6];
+
 static struct netdev *rtl8168_iface;
 
 /**
@@ -1014,7 +1017,7 @@ static int rtl8168_init(struct netdev *nd, int nth)
         return NETDEV_FAILED;
     }
 
-    if (!r8168_read_mac(net_mac)) {
+    if (!r8168_read_mac(rtl8168_mac)) {
         r8168_err = "the chip reports no usable station address";
         return NETDEV_FAILED;
     }
@@ -1041,7 +1044,7 @@ static int rtl8168_init(struct netdev *nd, int nth)
     }
     r8168_tx_clear();
     r8168_rx_fill();
-    r8168_rar_set(net_mac);
+    r8168_rar_set(rtl8168_mac);
 
     if (!r8168_hw_start()) {
         return NETDEV_FAILED;
@@ -1051,10 +1054,11 @@ static int rtl8168_init(struct netdev *nd, int nth)
     {
         int b;
 
-        /* This driver reads the card's address into the stack's own; the
-         * interface keeps a copy, as one with two cards must. */
+        /* The card's own address goes to the interface it is. The stack's
+         * one address for the machine is the first interface's, set by the
+         * walk, not by whichever driver ran last. */
         for (b = 0; b < 6; b++) {
-            nd->mac[b] = net_mac[b];
+            nd->mac[b] = rtl8168_mac[b];
         }
     }
     return NETDEV_UP;
@@ -1275,11 +1279,11 @@ static void rtl8168_print_info(void *dev)
     klog(KLOG_INFO, "rtl8168",
          "RTL8168GU: xid 0x%X, MMIO 0x%X, "
          "MAC %X%X:%X%X:%X%X:%X%X:%X%X:%X%X",
-        r8168_xid, (unsigned)(uintptr_t)r8168_mmio, (unsigned)(net_mac[0] >> 4),
-        (unsigned)(net_mac[0] & 0xF), (unsigned)(net_mac[1] >> 4), (unsigned)(net_mac[1] & 0xF),
-        (unsigned)(net_mac[2] >> 4), (unsigned)(net_mac[2] & 0xF), (unsigned)(net_mac[3] >> 4),
-        (unsigned)(net_mac[3] & 0xF), (unsigned)(net_mac[4] >> 4), (unsigned)(net_mac[4] & 0xF),
-        (unsigned)(net_mac[5] >> 4), (unsigned)(net_mac[5] & 0xF));
+        r8168_xid, (unsigned)(uintptr_t)r8168_mmio, (unsigned)(rtl8168_mac[0] >> 4),
+        (unsigned)(rtl8168_mac[0] & 0xF), (unsigned)(rtl8168_mac[1] >> 4), (unsigned)(rtl8168_mac[1] & 0xF),
+        (unsigned)(rtl8168_mac[2] >> 4), (unsigned)(rtl8168_mac[2] & 0xF), (unsigned)(rtl8168_mac[3] >> 4),
+        (unsigned)(rtl8168_mac[3] & 0xF), (unsigned)(rtl8168_mac[4] >> 4), (unsigned)(rtl8168_mac[4] & 0xF),
+        (unsigned)(rtl8168_mac[5] >> 4), (unsigned)(rtl8168_mac[5] & 0xF));
     if (rtl8168_link(0, &link) && link.up) {
         klog(KLOG_INFO, "rtl8168", "link %d Mb/s, %s duplex", (int)link.mbps,
              link.full_duplex ? "full" : "half");
