@@ -52,8 +52,14 @@ volume=$(( disk_sectors + extra_sectors + SLACK_SECTORS ))
 volume=$(( ((volume + MIB_SECTORS - 1) / MIB_SECTORS) * MIB_SECTORS ))
 
 # A failure at any step leaves neither the half-built image nor its parts.
-trap 'rm -f "$OUT.new" "$OUT.vol" "$OUT.manifest"' EXIT
-rm -f "$OUT.new"
+# Each temporary carries this run's process number, so two builds of one stick
+# cannot take each other's file away and leave make to delete the stick both
+# of them needed.
+NEW="$OUT.$$.new"
+VOL="$OUT.$$.vol"
+MAN="$OUT.$$.manifest"
+trap 'rm -f "$NEW" "$VOL" "$MAN"' EXIT
+rm -f "$NEW"
 
 # The manifest the installer reads: the image's name, its length in bytes and
 # its SHA-256, one field a line so a shell reads it with `read`.
@@ -77,29 +83,29 @@ esac
     echo "image $name"
     echo "bytes $disk_bytes"
     echo "sha256 $sum"
-} > "$OUT.manifest"
+} > "$MAN"
 
 if [ -n "$EXTRA" ]; then
-    "$MKFIX" --make "$OUT.vol" --sectors "$volume" --offset "$start" \
-        --add "$name=$DISK" --add "rach2-install.manifest=$OUT.manifest" \
+    "$MKFIX" --make "$VOL" --sectors "$volume" --offset "$start" \
+        --add "$name=$DISK" --add "rach2-install.manifest=$MAN" \
         --add "$(basename "$EXTRA")=$EXTRA" > /dev/null
 else
-    "$MKFIX" --make "$OUT.vol" --sectors "$volume" --offset "$start" \
-        --add "$name=$DISK" --add "rach2-install.manifest=$OUT.manifest" > /dev/null
+    "$MKFIX" --make "$VOL" --sectors "$volume" --offset "$start" \
+        --add "$name=$DISK" --add "rach2-install.manifest=$MAN" > /dev/null
 fi
 
-cp "$ISO" "$OUT.new"
+cp "$ISO" "$NEW"
 # Pad to the volume's start, then place the volume.
-dd if=/dev/zero of="$OUT.new" bs=512 seek="$iso_sectors" count=$((start - iso_sectors)) \
+dd if=/dev/zero of="$NEW" bs=512 seek="$iso_sectors" count=$((start - iso_sectors)) \
     conv=notrunc 2>/dev/null
-dd if="$OUT.vol" of="$OUT.new" bs=1048576 seek=$((start / MIB_SECTORS)) conv=notrunc 2>/dev/null
-rm -f "$OUT.vol" "$OUT.manifest"
+dd if="$VOL" of="$NEW" bs=1048576 seek=$((start / MIB_SECTORS)) conv=notrunc 2>/dev/null
+rm -f "$VOL" "$MAN"
 # The two entries. mkmbr writes the table bytes and the signature only.
-"$MKMBR" --lba "$OUT.new" "1:$((iso_sectors - 1)):17" "$start:$volume:07" > /dev/null
+"$MKMBR" --lba "$NEW" "1:$((iso_sectors - 1)):17" "$start:$volume:07" > /dev/null
 
-"$CHECK" "$OUT.new" "$start" "$volume"
-"$MKFIX" --check "$OUT.new" "$start" > /dev/null
-mv "$OUT.new" "$OUT"
+"$CHECK" "$NEW" "$start" "$volume"
+"$MKFIX" --check "$NEW" "$start" > /dev/null
+mv "$NEW" "$OUT"
 trap - EXIT
 echo "mkinstallstick: wrote $OUT: recovery at sector 1, $volume sectors of exFAT at $start,"\
      "holding $name of $disk_bytes bytes"

@@ -177,7 +177,12 @@ fi
 # configuration or partition images. The trap clears it and the unrenamed
 # output on any exit; the finished disk appears only through the final mv.
 TMPD="$(mktemp -d "$REPO/build/images/mkdisk.XXXXXX")"
-trap 'rm -rf "$TMPD" "$OUT.new"' EXIT
+# The unrenamed output carries this run's process number for the same reason:
+# two builds of one disk with one fixed name removed each other's file, and
+# make deleted the disk both wanted. On 2026-09-09 the installer and
+# installer-repair suites went down that way, six and twelve seconds each.
+NEW="$OUT.$$.new"
+trap 'rm -rf "$TMPD" "$NEW"' EXIT
 KRFFS_BIN="$TMPD/grub-krffs.bin"
 GRUB_CFG="$TMPD/grub-disk.cfg"
 RECOVERY_CFG="$TMPD/grub-recovery.cfg"
@@ -510,18 +515,18 @@ export MTOOLS_SKIP_CHECK=1
 # retired container (which ran UTC) wrote them.
 export TZ=UTC
 
-dd if=/dev/zero of="$OUT.new" bs=1048576 count="$DISK_MB" 2>/dev/null
+dd if=/dev/zero of="$NEW" bs=1048576 count="$DISK_MB" 2>/dev/null
 if [ "$EXT2_MB" -gt 0 ]; then
-    "$MKMBR" --id "$MBR_ID" "$OUT.new" "${GAP_MB}:${BOOT_MB}:0c:boot" \
+    "$MKMBR" --id "$MBR_ID" "$NEW" "${GAP_MB}:${BOOT_MB}:0c:boot" \
         "$((GAP_MB + BOOT_MB)):${KRFFS_MB}:83" \
         "$((GAP_MB + BOOT_MB + KRFFS_MB)):${RECOVERY_MB}:0c" \
         "${EXT2_START_MB}:${EXT2_MB}:83"
 elif [ "$RECOVERY_MB" -gt 0 ]; then
-    "$MKMBR" --id "$MBR_ID" "$OUT.new" "${GAP_MB}:${BOOT_MB}:0c:boot" \
+    "$MKMBR" --id "$MBR_ID" "$NEW" "${GAP_MB}:${BOOT_MB}:0c:boot" \
         "$((GAP_MB + BOOT_MB)):${KRFFS_MB}:83" \
         "$((GAP_MB + BOOT_MB + KRFFS_MB)):${RECOVERY_MB}:0c"
 else
-    "$MKMBR" --id "$MBR_ID" "$OUT.new" "${GAP_MB}:${BOOT_MB}:0c:boot" \
+    "$MKMBR" --id "$MBR_ID" "$NEW" "${GAP_MB}:${BOOT_MB}:0c:boot" \
         "$((GAP_MB + BOOT_MB)):${KRFFS_MB}:83"
 fi
 
@@ -646,11 +651,11 @@ END {
     printf "mkdisk_grub: boot files verified at %d bytes per cluster\n", cbytes
 }' "$TMPD/chains.txt"
 
-dd if="$TMPD/p1.img" of="$OUT.new" bs=1048576 seek="$GAP_MB" conv=notrunc 2>/dev/null
+dd if="$TMPD/p1.img" of="$NEW" bs=1048576 seek="$GAP_MB" conv=notrunc 2>/dev/null
 
-"$GRUBEMBED" "$OUT.new" "$TMPD/bios-boot.img" "$TMPD/disk-core.img"
+"$GRUBEMBED" "$NEW" "$TMPD/bios-boot.img" "$TMPD/disk-core.img"
 
-dd if="$KRFFS_BIN" of="$OUT.new" bs=1048576 seek=$((GAP_MB + BOOT_MB)) \
+dd if="$KRFFS_BIN" of="$NEW" bs=1048576 seek=$((GAP_MB + BOOT_MB)) \
     conv=notrunc 2>/dev/null
 
 # Partition 3, when asked for: a FAT32 volume holding the recovery kernel
@@ -675,7 +680,7 @@ if [ "$RECOVERY_MB" -gt 0 ]; then
     if [ -n "$HELLO" ]; then
         mcopy -i "$TMPD/p3.img" "$HELLO" ::/hello.txt
     fi
-    dd if="$TMPD/p3.img" of="$OUT.new" bs=1048576 \
+    dd if="$TMPD/p3.img" of="$NEW" bs=1048576 \
         seek=$((GAP_MB + BOOT_MB + KRFFS_MB)) conv=notrunc 2>/dev/null
 fi
 # Partition 4, when asked for: the ext2 root image, which must fit.
@@ -683,14 +688,14 @@ if [ "$EXT2_MB" -gt 0 ]; then
     EXT2_BYTES=$(wc -c < "$EXT2_IMAGE" | tr -d ' ')
     if [ "$EXT2_BYTES" -gt $((EXT2_MB * 1048576)) ]; then
         echo "mkdisk_grub: the ext2 image is $EXT2_BYTES bytes and partition 4 has $((EXT2_MB * 1048576))" >&2
-        rm -f "$OUT.new"
+        rm -f "$NEW"
         exit 1
     fi
-    dd if="$EXT2_IMAGE" of="$OUT.new" bs=1048576 \
+    dd if="$EXT2_IMAGE" of="$NEW" bs=1048576 \
         seek="$EXT2_START_MB" conv=notrunc 2>/dev/null
 fi
 rm -rf "$TMPD"
-mv "$OUT.new" "$OUT"
+mv "$NEW" "$OUT"
 
 echo "mkdisk_grub: wrote $OUT"
 echo "mkdisk_grub: boot it with rach2/run_from_disk.sh"
