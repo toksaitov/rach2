@@ -139,6 +139,9 @@ Options are whitespace-delimited. Flags match whole tokens, and the first `key=v
 | `rach2.nofxsr` | Save the floating-point state with `fnsave` and `frstor` even where `cpuid` reports FXSR; CR4.OSFXSR stays clear, so an SSE instruction is an invalid opcode. `tests/run fpu` boots it. |
 | `rach2.usblatency` | Print the four stamps of every USB keystroke's path when a reader takes it. |
 | `rach2.msidrop=N` | Test option: silence the USB controller's messages after N of them, so the timer's fallback pump can be seen to keep the machine working. |
+| `rach2.hcfail=N` | Test option: refuse the Nth xHCI controller that would have come up, counting from zero, so a machine whose controllers all work can show what happens to the others when one does not. |
+| `rach2.nicfail=N` | Test option: refuse the Nth network card that would have come up, counting from zero, so a machine whose cards all work can show the interfaces the others take. |
+| `rach2.ifaddr=<mac>,<addr>/<prefix>[,<gateway>]` | Give the card carrying that station address its own configuration, once per interface, read after the probe. Repeat it for each card. |
 | `rach2.nousb` | Skip the USB stack: no controller is taken, and nothing is enumerated. |
 | `rach2.trace=enosys` | Log each missing system-call number once per process. |
 | `rach2.board=name` | Select a named board power profile instead of automatic matching. |
