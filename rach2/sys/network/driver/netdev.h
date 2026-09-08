@@ -144,6 +144,10 @@ struct netdev {
     uint32_t tx_packets;
     uint32_t tx_bytes;
     uint32_t tx_dropped;
+
+    /* Whether an administrator has this interface up. One taken down carries
+     * nothing and answers nothing, and the others are unaffected. */
+    int up;
 };
 
 /** How many interfaces the last probe brought up, and the nth of them. */

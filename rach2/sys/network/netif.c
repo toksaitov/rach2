@@ -46,11 +46,12 @@
 /* The interface is up until somebody says otherwise. A machine whose network
  * came up at boot and was never configured is up, which is what every existing
  * test expects. */
-static int netif_up = 1;
 
 int netif_is_up(void)
 {
-    return netif_up;
+    struct netdev *nd = netdev_first();
+
+    return nd ? nd->up : 0;
 }
 
 /** The 32-bit big-endian address at `p`, as a host-order number. */
@@ -68,30 +69,34 @@ static void put_be32(uint8_t *p, uint32_t v)
     p[3] = (uint8_t)v;
 }
 
-/** Whether `name` (NUL-terminated inside 16 bytes) is this machine's
- * interface. */
-static int name_is_ours(const uint8_t *name)
+/**
+ * The interface a caller named, or NULL when this machine has no such one.
+ *
+ * The name comes out of a caller's `ifreq`, so it is read only as far as the
+ * field goes and only up to its terminator; a name that fills the field
+ * without one names nothing.
+ */
+static struct netdev *named(const uint8_t *name)
 {
-    const char *want = NETDEV_IFNAME;
-    size_t n = k_strlen(want);
-    size_t i;
+    char want[IFREQ_NAMESIZE];
+    int i;
 
-    /* The comparison runs over the name this machine has, which is shorter
-       than the caller's field, so it cannot run off the end of either. */
-    if (n >= (size_t)IFREQ_NAMESIZE) {
-        return 0;
-    }
-    for (i = 0; i < n; i++) {
-        if ((char)name[i] != want[i]) {
-            return 0;
+    for (i = 0; i < IFREQ_NAMESIZE - 1; i++) {
+        want[i] = (char)name[i];
+        if (want[i] == '\0') {
+            break;
         }
     }
-    return name[n] == '\0';
+    if (i == IFREQ_NAMESIZE - 1) {
+        return 0; /* no terminator inside the field */
+    }
+    want[i] = '\0';
+    return netdev_by_name(want);
 }
 
 int netif_name_is_ours(const char *name)
 {
-    return name_is_ours((const uint8_t *)name);
+    return netdev_by_name(name) != 0;
 }
 
 /** Fill the sockaddr in an ifreq's union with an IPv4 address. */
@@ -112,6 +117,7 @@ static void set_sa(uint8_t *ifr, uint32_t ip)
 static int32_t ifreq_ioctl(uint32_t request, uint32_t arg)
 {
     uint8_t ifr[IFREQ_LEN];
+    struct netdev *nd;
     int setter;
 
     if (copy_from_user(ifr, (const void __user *)arg, IFREQ_LEN) != 0) {
@@ -126,18 +132,21 @@ static int32_t ifreq_ioctl(uint32_t request, uint32_t arg)
                                   ((uint32_t)ifr[IFREQ_UNION + 2] << 16) |
                                   ((uint32_t)ifr[IFREQ_UNION + 3] << 24));
 
-        if (index != NETDEV_IFINDEX) {
+        struct netdev *at = netdev_at(index - 1);
+
+        if (!at || at->index != index) {
             return -ENODEV;
         }
         k_memset(ifr + IFREQ_NAME, 0, IFREQ_NAMESIZE);
-        k_memcpy(ifr + IFREQ_NAME, NETDEV_IFNAME, k_strlen(NETDEV_IFNAME));
+        k_memcpy(ifr + IFREQ_NAME, at->name, k_strlen(at->name));
         if (copy_to_user((void __user *)arg, ifr, IFREQ_LEN) != 0) {
             return -EFAULT;
         }
         return 0;
     }
 
-    if (!name_is_ours(ifr + IFREQ_NAME)) {
+    nd = named(ifr + IFREQ_NAME);
+    if (!nd) {
         return -ENODEV;
     }
 
@@ -150,21 +159,21 @@ static int32_t ifreq_ioctl(uint32_t request, uint32_t arg)
     switch (request) {
     case SIOCGIFINDEX:
         k_memset(ifr + IFREQ_UNION, 0, IFREQ_LEN - IFREQ_UNION);
-        ifr[IFREQ_UNION] = (uint8_t)NETDEV_IFINDEX;
+        ifr[IFREQ_UNION] = (uint8_t)nd->index;
         break;
     case SIOCGIFHWADDR:
         k_memset(ifr + IFREQ_UNION, 0, IFREQ_LEN - IFREQ_UNION);
         ifr[IFREQ_UNION] = (uint8_t)ARPHRD_ETHER;
-        k_memcpy(ifr + IFREQ_HW_ADDR, net_mac, 6);
+        k_memcpy(ifr + IFREQ_HW_ADDR, nd->mac, 6);
         break;
     case SIOCGIFADDR:
-        set_sa(ifr, net_ip_addr);
+        set_sa(ifr, nd->ip);
         break;
     case SIOCGIFNETMASK:
-        set_sa(ifr, net_ip_mask);
+        set_sa(ifr, nd->mask);
         break;
     case SIOCGIFBRDADDR:
-        set_sa(ifr, netconf_broadcast());
+        set_sa(ifr, nd->ip != 0 && nd->mask != 0 ? (nd->ip | ~nd->mask) : 0);
         break;
     case SIOCGIFMTU:
         k_memset(ifr + IFREQ_UNION, 0, IFREQ_LEN - IFREQ_UNION);
@@ -174,7 +183,7 @@ static int32_t ifreq_ioctl(uint32_t request, uint32_t arg)
     case SIOCGIFFLAGS: {
         uint16_t flags = (uint16_t)(IFF_BROADCAST | IFF_MULTICAST);
 
-        if (netif_up) {
+        if (nd->up) {
             flags |= (uint16_t)IFF_UP;
         }
         /* RUNNING is the link, not the card. `ifconfig` prints it, and a
@@ -182,7 +191,7 @@ static int32_t ifreq_ioctl(uint32_t request, uint32_t arg)
          * working one until the driver interface could be asked. The rule for
          * a card that cannot report a link belongs to that interface, so it
          * is asked rather than repeated here. */
-        if (netdev_running(netdev_first())) {
+        if (netdev_running(nd)) {
             flags |= (uint16_t)IFF_RUNNING;
         }
         k_memset(ifr + IFREQ_UNION, 0, IFREQ_LEN - IFREQ_UNION);
@@ -197,7 +206,7 @@ static int32_t ifreq_ioctl(uint32_t request, uint32_t arg)
         /* Returns here instead of falling through to the writeback: this
            request only reads its argument, and a copy back that failed would
            report a refusal for a change already made. */
-        netif_up = (flags & IFF_UP) ? 1 : 0;
+        nd->up = (flags & IFF_UP) ? 1 : 0;
         return 0;
     }
     case SIOCSIFADDR:
@@ -268,7 +277,7 @@ static int32_t route_ioctl(uint32_t request, uint32_t arg)
         if (got < 0) {
             return got == -EFAULT ? -EFAULT : -ENODEV;
         }
-        if (!name_is_ours(name)) {
+        if (!named(name)) {
             return -ENODEV;
         }
     }

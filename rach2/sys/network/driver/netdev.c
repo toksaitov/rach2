@@ -163,6 +163,7 @@ int netdev_probe(void)
                 }
                 break; /* this driver's next card is not tried */
             }
+            nd->up = 1; /* an interface that came up is up until it is taken down */
             if (niface == 0) {
                 int b;
 
