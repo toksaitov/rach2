@@ -27,6 +27,7 @@
 #include "../ethernet/ethernet.h"
 #include "../../isr.h"
 #include "../../kio.h"
+#include "../../mm/paging.h"
 #include "../../pci.h"
 #include "../../serial.h"
 #include "../../udelay.h"
@@ -106,10 +107,15 @@ struct e1000 {
     uint32_t tx_packets;
     uint32_t tx_stalls;
 
-    volatile struct e1000_rx_desc rx_ring[E1000_RING_SIZE] __attribute__((aligned(16)));
-    volatile struct e1000_tx_desc tx_ring[E1000_RING_SIZE] __attribute__((aligned(16)));
-    uint8_t rx_buf[E1000_RING_SIZE][E1000_RX_BUF_SIZE] __attribute__((aligned(8)));
-    uint8_t tx_buf[E1000_RING_SIZE][E1000_TX_BUF_SIZE] __attribute__((aligned(8)));
+    /* The rings and their buffers, taken from the identity-mapped window when
+     * the card comes up rather than compiled in: a machine with one card
+     * takes one card's worth, and one with four takes four. The window is
+     * where the two addresses of a page are the same, which is what a card
+     * given an address for DMA needs. */
+    volatile struct e1000_rx_desc *rx_ring;
+    volatile struct e1000_tx_desc *tx_ring;
+    uint8_t *rx_buf[E1000_RING_SIZE];
+    uint8_t *tx_buf[E1000_RING_SIZE];
 
     uint32_t rx_cur; /* next receive descriptor to inspect */
     /* Submitted and reclaimed counts, not ring indices: they only ever
@@ -404,6 +410,51 @@ static void e1000_tx_setup(struct e1000 *e)
  * @return `NETDEV_UP`, `NETDEV_ABSENT` when there is no such card, or
  *         `NETDEV_FAILED` with `e1000_error()` set to the reason.
  */
+/*
+ * Take the pages this card's rings and buffers live in.
+ *
+ * The two rings are 512 bytes each and share one page. A buffer is 2048
+ * bytes, so two of them share a page and sixteen pages hold the ring's
+ * thirty-two. Taken once: a card brought up a second time keeps what it has.
+ *
+ * @return 0, or -1 when the window has no more frames.
+ */
+static int e1000_pages(struct e1000 *e)
+{
+    uint32_t i;
+
+    if (!e->rx_ring) {
+        void *page = alloc_kernel_frame();
+
+        if (!page) {
+            return -1;
+        }
+        e->rx_ring = (volatile struct e1000_rx_desc *)page;
+        e->tx_ring = (volatile struct e1000_tx_desc *)((uint8_t *)page + 2048);
+    }
+    for (i = 0; i < E1000_RING_SIZE; i += 2) {
+        if (!e->rx_buf[i]) {
+            uint8_t *page = (uint8_t *)alloc_kernel_frame();
+
+            if (!page) {
+                return -1;
+            }
+            e->rx_buf[i] = page;
+            e->rx_buf[i + 1] = page + E1000_RX_BUF_SIZE;
+        }
+        if (!e->tx_buf[i]) {
+            uint8_t *page = (uint8_t *)alloc_kernel_frame();
+
+            if (!page) {
+                return -1;
+            }
+            e->tx_buf[i] = page;
+            e->tx_buf[i + 1] = page + E1000_TX_BUF_SIZE;
+        }
+    }
+    return 0;
+}
+
 static int e1000_init(struct netdev *nd, int nth)
 {
     uint32_t addr;
@@ -417,7 +468,28 @@ static int e1000_init(struct netdev *nd, int nth)
         return NETDEV_ABSENT; /* more of these cards than this kernel drives */
     }
     e = &e1000s[nth];
-    k_memset(e, 0, sizeof(*e));
+    {
+        /* The pages this card already holds survive a second bring-up: they
+         * are the window's, and a record cleared over them would lose them
+         * for the life of the machine. */
+        volatile struct e1000_rx_desc *rx = e->rx_ring;
+        volatile struct e1000_tx_desc *tx = e->tx_ring;
+        uint8_t *rb[E1000_RING_SIZE];
+        uint8_t *tb[E1000_RING_SIZE];
+        uint32_t b;
+
+        for (b = 0; b < E1000_RING_SIZE; b++) {
+            rb[b] = e->rx_buf[b];
+            tb[b] = e->tx_buf[b];
+        }
+        k_memset(e, 0, sizeof(*e));
+        e->rx_ring = rx;
+        e->tx_ring = tx;
+        for (b = 0; b < E1000_RING_SIZE; b++) {
+            e->rx_buf[b] = rb[b];
+            e->tx_buf[b] = tb[b];
+        }
+    }
     e->number = nth;
     e->nd = nd;
     nd->dev = e;
@@ -517,6 +589,10 @@ static int e1000_init(struct netdev *nd, int nth)
         }
     }
 
+    if (e1000_pages(e) != 0) {
+        e1000_err = "the card's rings and buffers could not be taken";
+        return NETDEV_FAILED;
+    }
     e1000_rx_setup(e);
     e1000_tx_setup(e);
 

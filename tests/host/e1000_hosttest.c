@@ -409,6 +409,29 @@ bool pci_find_nth_by_id(uint16_t vendor, uint16_t device, int nth, pci_device_t 
     return nth == 0 ? pci_find_device_by_id(vendor, device, out) : false;
 }
 
+/*
+ * The identity-mapped frames the card's rings and buffers live in. On the
+ * host they are pages of this program's memory, and the address the model
+ * reads back is the address the driver wrote, which is what the checks
+ * compare.
+ */
+#define FRAME_COUNT 64
+static unsigned char frames[FRAME_COUNT][4096] __attribute__((aligned(4096)));
+static unsigned frames_taken;
+
+void *alloc_kernel_frame(void)
+{
+    if (frames_taken >= FRAME_COUNT) {
+        return 0;
+    }
+    return &frames[frames_taken++][0];
+}
+
+void free_kernel_frame(void *frame)
+{
+    (void)frame;
+}
+
 #include "network/driver/e1000.c"
 
 static int fails;
