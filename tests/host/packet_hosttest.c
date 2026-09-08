@@ -46,8 +46,9 @@ int netif_is_up(void)
     return (int)up;
 }
 
-void arp_rx(const uint8_t *data, uint16_t len)
+void arp_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
 {
+    (void)nd;
     (void)data;
     (void)len;
     to_arp++;
@@ -96,15 +97,17 @@ void raw_rx(uint8_t proto, const uint8_t *data, uint16_t len)
 
 /* The rest of what the two files reach for. None of it is exercised here;
    `ethernet_tx` is `ethernet.c`'s own and is compiled in below. */
-int arp_lookup(uint32_t ip, uint8_t *mac)
+int arp_lookup(struct netdev *nd, uint32_t ip, uint8_t *mac)
 {
+    (void)nd;
     (void)ip;
     (void)mac;
     return -1;
 }
 
-void arp_request(uint32_t ip)
+void arp_request(struct netdev *nd, uint32_t ip)
 {
+    (void)nd;
     (void)ip;
 }
 

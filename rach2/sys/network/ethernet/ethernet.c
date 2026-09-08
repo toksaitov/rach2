@@ -80,7 +80,7 @@ void ethernet_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
     switch (etype) {
     case ETH_TYPE_ARP:
         packet_rx(etype, data, len);
-        arp_rx(data + ETH_HDR_SIZE, (uint16_t)(len - ETH_HDR_SIZE));
+        arp_rx(nd, data + ETH_HDR_SIZE, (uint16_t)(len - ETH_HDR_SIZE));
         break;
     case ETH_TYPE_IP:
         /* Packet sockets first, and unconditionally: they exist because ip_rx

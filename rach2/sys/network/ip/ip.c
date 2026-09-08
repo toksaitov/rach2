@@ -276,8 +276,8 @@ int ip_tx(uint32_t dst_ip, uint8_t proto,
     /* The address is not resolved yet: the request has gone out and this
        datagram is dropped, which is not an error a datagram sender is told
        about. The next one leaves resolved. */
-    if (!arp_lookup(route_ip, dst_mac)) {
-        arp_request(route_ip);
+    if (!arp_lookup(out, route_ip, dst_mac)) {
+        arp_request(out, route_ip);
         return 0;
     }
 

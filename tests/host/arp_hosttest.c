@@ -58,7 +58,16 @@ struct netdev;
 
 /* The interface this test's stack sends through. It never looks inside one,
  * so a record of its own is all that is needed. */
-static struct netdev the_iface;
+/* The interface these cases run on, with the machine's own address, since
+ * that is what a reply answers for and what a neighbour is judged against. */
+static struct netdev the_iface = {0,
+                                  0,
+                                  {'e', 't', 'h', '0', 0, 0, 0, 0},
+                                  1,
+                                  {0x52, 0x54, 0x00, 0x12, 0x34, 0x56},
+                                  0xC0A80005u,
+                                  0xFFFFFF00u,
+                                  0};
 
 struct netdev *netdev_first(void)
 {
@@ -189,7 +198,7 @@ static void feed(int op, uint32_t sender_ip, uint8_t mac_last, uint32_t target_i
     pkt[25] = (unsigned char)((target_ip >> 16) & 0xff);
     pkt[26] = (unsigned char)((target_ip >> 8) & 0xff);
     pkt[27] = (unsigned char)(target_ip & 0xff);
-    arp_rx(pkt, 28);
+    arp_rx(&the_iface, pkt, 28);
 }
 
 /** How many entries the cache holds. */
@@ -205,7 +214,7 @@ static int holds(uint32_t ip)
 {
     uint8_t mac[6];
 
-    return arp_lookup(ip, mac);
+    return arp_lookup(&the_iface, ip, mac);
 }
 
 int main(void)
@@ -270,14 +279,15 @@ int main(void)
     /* A mapping that changes is followed, not duplicated. */
     feed(ARP_OP_REPLY, 0xC0A80099u, 0x77, net_ip_addr);
     CHECK(cached() == ARP_CACHE_SIZE, "a changed mapping added an entry");
-    CHECK(arp_lookup(0xC0A80099u, mac) && mac[5] == 0x77, "a changed mapping was not followed");
+    CHECK(arp_lookup(&the_iface, 0xC0A80099u, mac) && mac[5] == 0x77,
+          "a changed mapping was not followed");
 
     /* And the ordering survives the counter wrapping, which no run reaches. */
     arp_flush();
     feed(ARP_OP_REPLY, 0xC0A80021u, 0x21, net_ip_addr);
     feed(ARP_OP_REPLY, 0xC0A80022u, 0x22, net_ip_addr);
     arp_clock = 0xFFFFFFFEu;
-    (void)arp_lookup(0xC0A80021u, mac); /* 21 is used; 22 becomes the oldest */
+    (void)arp_lookup(&the_iface, 0xC0A80021u, mac); /* 21 is used; 22 becomes the oldest */
     for (i = 0; i < ARP_CACHE_SIZE - 2; i++) {
         feed(ARP_OP_REPLY, 0xC0A80030u + (uint32_t)i, (unsigned char)(0x30 + i), net_ip_addr);
     }

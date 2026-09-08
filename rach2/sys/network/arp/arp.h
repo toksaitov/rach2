@@ -22,8 +22,11 @@
  * refused for its being full. */
 #define ARP_CACHE_SIZE  8
 
+/* The interface a mapping was learned on, or a request goes out by. */
+struct netdev;
+
 /** Handle a received ARP packet (the payload after the Ethernet header). */
-void arp_rx(const uint8_t *data, uint16_t len);
+void arp_rx(struct netdev *nd, const uint8_t *data, uint16_t len);
 
 /**
  * Forget every mapping.
@@ -42,10 +45,10 @@ void arp_flush(void);
  * is among the last to be replaced rather than the first. That is why a
  * lookup writes.
  */
-int arp_lookup(uint32_t ip, uint8_t *mac_out);
+int arp_lookup(struct netdev *nd, uint32_t ip, uint8_t *mac_out);
 
 /* Broadcast "who has target_ip?" to learn its MAC. */
-void arp_request(uint32_t target_ip);
+void arp_request(struct netdev *nd, uint32_t target_ip);
 
 /* One row of the cache, copied out for a reader. */
 struct arp_row {

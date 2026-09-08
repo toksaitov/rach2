@@ -21,6 +21,10 @@
    mapping was learned or looked up, which is what decides who leaves when the
    cache is full. */
 typedef struct arp_entry {
+    /* The interface the answer came in on. Two cards may both have a
+     * neighbour at the same address on their own subnets, and a mapping
+     * learned on one says nothing about the other. */
+    struct netdev *nd;
     uint32_t ip;
     uint8_t  mac[6];
     uint8_t  valid;   /* 0 = free slot */
@@ -135,7 +139,7 @@ void arp_flush(void)
  * whose cache filled with strangers before it learned its gateway can reach
  * nothing off its own subnet, and never recovers.
  */
-static void arp_cache_update(uint32_t ip, const uint8_t *mac)
+static void arp_cache_update(struct netdev *nd, uint32_t ip, const uint8_t *mac)
 {
     int i;
     int free_slot = -1;
@@ -146,7 +150,7 @@ static void arp_cache_update(uint32_t ip, const uint8_t *mac)
     }
 
     for (i = 0; i < ARP_CACHE_SIZE; i++) {
-        if (arp_cache[i].valid && arp_cache[i].ip == ip) {
+        if (arp_cache[i].valid && arp_cache[i].nd == nd && arp_cache[i].ip == ip) {
             k_memcpy(arp_cache[i].mac, mac, 6);
             arp_cache[i].used = arp_stamp();
             return;
@@ -162,6 +166,7 @@ static void arp_cache_update(uint32_t ip, const uint8_t *mac)
     if (free_slot < 0) {
         free_slot = oldest;
     }
+    arp_cache[free_slot].nd = nd;
     arp_cache[free_slot].ip = ip;
     k_memcpy(arp_cache[free_slot].mac, mac, 6);
     arp_cache[free_slot].valid = 1;
@@ -177,19 +182,22 @@ static void arp_cache_update(uint32_t ip, const uint8_t *mac)
  *   8  sender_mac (ours)   14 sender_ip (ours)
  *   18 target_mac (requester)   24 target_ip (requester)
  */
-static void arp_send_reply(const uint8_t *dst_mac, uint32_t dst_ip)
+static void arp_send_reply(struct netdev *nd, const uint8_t *dst_mac, uint32_t dst_ip)
 {
+    if (!nd) {
+        return;
+    }
     write16be(arp_reply_buf + 0,  0x0001);
     write16be(arp_reply_buf + 2,  0x0800);
     arp_reply_buf[4] = 6;
     arp_reply_buf[5] = 4;
     write16be(arp_reply_buf + 6,  ARP_OP_REPLY);
-    k_memcpy(arp_reply_buf + 8,  net_mac, 6);
-    write32be(arp_reply_buf + 14, net_ip_addr);
+    k_memcpy(arp_reply_buf + 8,  nd->mac, 6);
+    write32be(arp_reply_buf + 14, nd->ip);
     k_memcpy(arp_reply_buf + 18, dst_mac, 6);
     write32be(arp_reply_buf + 24, dst_ip);
 
-    ethernet_tx(netdev_first(), dst_mac, ETH_TYPE_ARP, arp_reply_buf, 28);
+    ethernet_tx(nd, dst_mac, ETH_TYPE_ARP, arp_reply_buf, 28);
 }
 
 /**
@@ -199,7 +207,7 @@ static void arp_send_reply(const uint8_t *dst_mac, uint32_t dst_ip)
  * ARP packet, then answer a request that targets our own IP. Short or
  * non-Ethernet/IPv4 frames are dropped silently.
  */
-void arp_rx(const uint8_t *data, uint16_t len)
+void arp_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
 {
     uint16_t hw_type, proto_type, op;
     uint8_t  sender_mac[6];
@@ -223,10 +231,10 @@ void arp_rx(const uint8_t *data, uint16_t len)
     target_ip = read32be(data + 24);
 
     /* Learn the sender's mapping from any ARP packet. */
-    arp_cache_update(sender_ip, sender_mac);
+    arp_cache_update(nd, sender_ip, sender_mac);
 
-    if (op == ARP_OP_REQUEST && target_ip == net_ip_addr) {
-        arp_send_reply(sender_mac, sender_ip);
+    if (op == ARP_OP_REQUEST && nd != 0 && target_ip == nd->ip) {
+        arp_send_reply(nd, sender_mac, sender_ip);
     }
 }
 
@@ -235,12 +243,12 @@ void arp_rx(const uint8_t *data, uint16_t len)
  *
  * @return 1 and copies six bytes into `mac_out` on a hit, 0 on a miss.
  */
-int arp_lookup(uint32_t ip, uint8_t *mac_out)
+int arp_lookup(struct netdev *nd, uint32_t ip, uint8_t *mac_out)
 {
     int i;
 
     for (i = 0; i < ARP_CACHE_SIZE; i++) {
-        if (arp_cache[i].valid && arp_cache[i].ip == ip) {
+        if (arp_cache[i].valid && arp_cache[i].nd == nd && arp_cache[i].ip == ip) {
             k_memcpy(mac_out, arp_cache[i].mac, 6);
             arp_cache[i].used = arp_stamp();
             return 1;
@@ -255,7 +263,7 @@ int arp_lookup(uint32_t ip, uint8_t *mac_out)
  * The sender fields carry our own MAC and IP; the target MAC is left zero,
  * as the resolver does not yet know it.
  */
-void arp_request(uint32_t target_ip)
+void arp_request(struct netdev *nd, uint32_t target_ip)
 {
     static const uint8_t broadcast[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
     static const uint8_t zero_mac[6]  = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
@@ -265,12 +273,15 @@ void arp_request(uint32_t target_ip)
     arp_req_buf[4] = 6;
     arp_req_buf[5] = 4;
     write16be(arp_req_buf + 6,  ARP_OP_REQUEST);
-    k_memcpy(arp_req_buf + 8,  net_mac, 6);
-    write32be(arp_req_buf + 14, net_ip_addr);
+    if (!nd) {
+        return; /* no interface reaches that address */
+    }
+    k_memcpy(arp_req_buf + 8,  nd->mac, 6);
+    write32be(arp_req_buf + 14, nd->ip);
     k_memcpy(arp_req_buf + 18, zero_mac, 6);
     write32be(arp_req_buf + 24, target_ip);
 
-    ethernet_tx(netdev_first(), broadcast, ETH_TYPE_ARP, arp_req_buf, 28);
+    ethernet_tx(nd, broadcast, ETH_TYPE_ARP, arp_req_buf, 28);
 }
 
 int arp_snapshot(struct arp_row *out, int max)
