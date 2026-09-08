@@ -2,7 +2,7 @@
 
 ## Where the work stands
 
-Phases 1 to 5 are done except for the four things named under "What was not built". Phase 6, the close, is under way.
+Phases 1 to 5 are done except for the four things named under "What was not built". Phase 6, the close, has run; the Readme's last section records what was accepted.
 
 ## Phase 1: the stick that carries the image
 
@@ -55,6 +55,14 @@ A stick whose image is not the one its manifest describes is refused before anyt
 `rach2-install --update IMAGE DISK` writes a root file system into the root partition of a machine that is already installed. Copied off the root before the write and written back after it: `/etc/passwd`, `/etc/group`, `/etc/shadow`, `/etc/rach2/sshd.conf`, `/etc/dropbear`, `/home` and `/root/.ssh`, the last including its absence. Everything else on that root is the image's. The disk must be one this system installed, which its boot partition and an `/etc/rach2` on its root say together; the image is judged before the root is destroyed, by its length, its sector alignment, its ext2 magic and its `.sha256` when one is there; the saved entry moves to the fallback before the write and one trial boot is armed after it. The row changes root's password on the installed machine, makes an account's home, marks a file the update does not keep, updates, and then requires the changed password, the home with its owner, the absent keys and the image's own marked file.
 
 `tests/system/accept/metal_accept.sh` takes its key from `RACH2_ACCEPT_KEY` when one is named, since a machine installed by `rach2-install` has no demonstration key on it.
+
+## Phase 6: the close
+
+Commits `06de999` through `0bad67c` are the review's findings fixed; `2c228d5` and `380d789` are the sticks and the sealed disk built once, before the pool, after two suites were seen building one stick at the same time.
+
+The first full set after the review lost `installer`, `installer-repair` and `sealed`, and the cause was older than the milestone: `krffs/manifest_deps.sh` printed a staged directory as a prerequisite of the image that carries it, and the source trees a `tree` line stages, `utils`, `rach2` and `ish`, are also phony targets, which make remakes every time. Every image built from such a manifest was out of date the moment it was built; a suite in the pool rebuilt it, two suites reached that point together, and `mkdisk_grub.sh` had one fixed name for its unrenamed output. A second make of the session's own ran beside that set as well. Entry 24 of the shortcomings list is the record; `7aa9a46` through `f837430` and `72c9b00` are the fix, the temporaries named after their builder, and the checks in `tests/run imagerace`, each proved by a mutation that fails it.
+
+The clean build and full set at `f837430` then passed 82 of 86 suites in about 2870 s. `imagerace` failed on its own new check, rightly: the first expansion of a staged directory took every file beneath it, and the fixtures the suites write under `build/tests/system` put the test image out of date again; `72c9b00` takes from a directory only what the stager takes. `install`, `installer` and `installer-repair` each lost one step to its deadline in the pool of twenty, with every row after the lost step passing: run again as a set of three at `72c9b00`, they passed in 787, 815 and 559 s. The pool's effect on the rows that hash a 138 MiB image at the emulator's rate is a further instance of entry 2.
 
 ## What the emulator costs
 
