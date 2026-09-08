@@ -69,9 +69,9 @@ static void note(char c)
     trace[trace_len] = '\0';
 }
 
-static int first_init(int nth, void **dev)
+static int first_init(struct netdev *nd, int nth)
 {
-    *dev = 0; /* this model has one card */
+    nd->dev = 0; /* this model has one card */
     if (nth != 0) {
         return NETDEV_ABSENT;
     }
@@ -79,9 +79,9 @@ static int first_init(int nth, void **dev)
     note('1');
     return m_first.verdict;
 }
-static int second_init(int nth, void **dev)
+static int second_init(struct netdev *nd, int nth)
 {
-    *dev = 0; /* this model has one card */
+    nd->dev = 0; /* this model has one card */
     if (nth != 0) {
         return NETDEV_ABSENT;
     }
@@ -89,9 +89,9 @@ static int second_init(int nth, void **dev)
     note('2');
     return m_second.verdict;
 }
-static int third_init(int nth, void **dev)
+static int third_init(struct netdev *nd, int nth)
 {
-    *dev = 0; /* this model has one card */
+    nd->dev = 0; /* this model has one card */
     if (nth != 0) {
         return NETDEV_ABSENT;
     }
@@ -243,6 +243,17 @@ static int same(const char *a, const char *b)
 
 /* The one address the stack still holds for the machine. */
 uint8_t net_mac[6];
+
+/* The kernel's fill, which the walk reaches and this test does not build. */
+void *k_memset(void *ptr, char c, size_t n)
+{
+    unsigned char *q = (unsigned char *)ptr;
+
+    while (n-- > 0) {
+        *q++ = (unsigned char)c;
+    }
+    return ptr;
+}
 
 int main(void)
 {

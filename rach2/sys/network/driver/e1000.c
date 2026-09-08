@@ -81,6 +81,9 @@ struct e1000_io {
 struct e1000 {
     int used;
     int number; /* its place in the table, and what the log names it by */
+    /* The interface this card is, so a frame it delivers says where it
+     * arrived and its counters are that interface's. */
+    struct netdev *nd;
 
     /* The mapped memory window and the I/O port window; the accessors read
      * and write through them. */
@@ -401,7 +404,7 @@ static void e1000_tx_setup(struct e1000 *e)
  * @return `NETDEV_UP`, `NETDEV_ABSENT` when there is no such card, or
  *         `NETDEV_FAILED` with `e1000_error()` set to the reason.
  */
-static int e1000_init(int nth, void **dev)
+static int e1000_init(struct netdev *nd, int nth)
 {
     uint32_t addr;
     uintptr_t mapped;
@@ -410,14 +413,14 @@ static int e1000_init(int nth, void **dev)
     uint32_t i;
     struct e1000 *e;
 
-    *dev = 0;
     if (nth < 0 || nth >= E1000_MAX) {
         return NETDEV_ABSENT; /* more of these cards than this kernel drives */
     }
     e = &e1000s[nth];
     k_memset(e, 0, sizeof(*e));
     e->number = nth;
-    *dev = e;
+    e->nd = nd;
+    nd->dev = e;
 
     e->up = 0;
     if (!pci_find_nth_by_id(E1000_VENDOR, E1000_DEVICE, nth, &e->pci)) {
@@ -506,6 +509,13 @@ static int e1000_init(int nth, void **dev)
         io->w32(e, E1000_MTA + i * 4, 0);
     }
     e1000_set_mac(e, e->mac);
+    {
+        int b;
+
+        for (b = 0; b < 6; b++) {
+            e->nd->mac[b] = e->mac[b];
+        }
+    }
 
     e1000_rx_setup(e);
     e1000_tx_setup(e);
@@ -928,17 +938,6 @@ static void e1000_op_print_info(void *dev)
     e1000_print_info((struct e1000 *)dev);
 }
 
-static void e1000_op_mac(void *dev, uint8_t *out)
-{
-    struct e1000 *e = (struct e1000 *)dev;
-    int i;
-
-    for (i = 0; i < 6; i++) {
-        out[i] = e->mac[i];
-    }
-}
-
 const struct netdev_ops e1000_netdev = {"e1000",      e1000_init,   e1000_op_tx,
                                         0,            e1000_op_stop, e1000_op_link,
-                                        e1000_error,  e1000_op_print_info,
-                                        e1000_op_mac};
+                                        e1000_error,  e1000_op_print_info};

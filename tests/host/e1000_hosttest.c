@@ -403,9 +403,6 @@ bool pci_find_nth_by_id(uint16_t vendor, uint16_t device, int nth, pci_device_t 
 
 #include "network/driver/e1000.c"
 
-/* What the driver hands back for the card this model presents. */
-static void *model_card;
-
 static int fails;
 
 /* Declared, not included: the kernel's kint.h and the host's headers
@@ -620,6 +617,9 @@ static int find_write_bits(unsigned from, unsigned off, unsigned bits)
     return -1;
 }
 
+/* The interface this model's card is brought up for. */
+static struct netdev model_iface;
+
 int main(void)
 {
     int a, b, c;
@@ -633,7 +633,7 @@ int main(void)
     /* ---- the bring-up completes on a healthy model ---- */
     model_reset();
     {
-        int rc = e1000_init(0, &model_card);
+        int rc = e1000_init(&model_iface, 0);
 
         if (rc != NETDEV_UP) {
             printf("  init refused: %s\n", e1000_err);
@@ -709,7 +709,7 @@ int main(void)
     /* ---- the station address from the EEPROM, and written back ---- */
     model_reset();
     model_reg[E1000_RAH0 / 4] = 0; /* no valid address in the pair */
-    CHECK(e1000_init(0, &model_card) == NETDEV_UP,
+    CHECK(e1000_init(&model_iface, 0) == NETDEV_UP,
           "the bring-up completes with an empty address pair");
     CHECK(e1000s[0].mac[0] == 0x52 && e1000s[0].mac[1] == 0x54 && e1000s[0].mac[2] == 0xaa &&
               e1000s[0].mac[3] == 0xbb && e1000s[0].mac[4] == 0xcc && e1000s[0].mac[5] == 0xdd,
@@ -722,46 +722,46 @@ int main(void)
     /* ---- the bounded failures ---- */
     model_reset();
     model_stuck_reset = 1;
-    CHECK(e1000_init(0, &model_card) == NETDEV_FAILED, "a reset that never completes is refused");
+    CHECK(e1000_init(&model_iface, 0) == NETDEV_FAILED, "a reset that never completes is refused");
     CHECK(!e1000s[0].up, "a refused bring-up does not report itself up");
 
     model_reset();
     model_reg[E1000_RAH0 / 4] = 0;
     model_stuck_eeprom = 1;
-    CHECK(e1000_init(0, &model_card) == NETDEV_FAILED, "an EEPROM that never answers is refused");
+    CHECK(e1000_init(&model_iface, 0) == NETDEV_FAILED, "an EEPROM that never answers is refused");
 
     model_reset();
     model_reg[E1000_RAH0 / 4] = 0;
     model_eeprom[0] = 0;
     model_eeprom[1] = 0;
     model_eeprom[2] = 0;
-    CHECK(e1000_init(0, &model_card) == NETDEV_FAILED, "an all-zero station address is refused");
+    CHECK(e1000_init(&model_iface, 0) == NETDEV_FAILED, "an all-zero station address is refused");
 
     model_reset();
     model_reg[E1000_RAH0 / 4] = 0;
     model_eeprom[0] = 0x0001; /* the group bit, which no station address has */
-    CHECK(e1000_init(0, &model_card) == NETDEV_FAILED, "a group station address is refused");
+    CHECK(e1000_init(&model_iface, 0) == NETDEV_FAILED, "a group station address is refused");
 
     model_reset();
     model_dead_window = 1;
-    CHECK(e1000_init(0, &model_card) == NETDEV_FAILED,
+    CHECK(e1000_init(&model_iface, 0) == NETDEV_FAILED,
           "a window that reads back all ones is refused");
 
     model_reset();
     map_refused = 1;
-    CHECK(e1000_init(0, &model_card) == NETDEV_FAILED, "a window that will not map is refused");
+    CHECK(e1000_init(&model_iface, 0) == NETDEV_FAILED, "a window that will not map is refused");
 
     /* ---- a card that is not in the machine is not touched ---- */
     model_reset();
     pci_present = 0;
-    CHECK(e1000_init(0, &model_card) == NETDEV_ABSENT, "an absent card reports itself absent");
+    CHECK(e1000_init(&model_iface, 0) == NETDEV_ABSENT, "an absent card reports itself absent");
     CHECK(model_accesses == 0, "an absent card costs not one register access");
     CHECK(!pci_memory_enabled && !pci_master_enabled,
           "an absent card leaves the PCI command word alone");
 
     /* ---- receive: an ordinary frame ---- */
     model_reset();
-    CHECK(e1000_init(0, &model_card) == NETDEV_UP,
+    CHECK(e1000_init(&model_iface, 0) == NETDEV_UP,
           "the bring-up completes before the receive checks");
     CHECK(model_deliver(frame, 100, E1000_RXD_STAT_DD | E1000_RXD_STAT_EOP, 0),
           "the card has a descriptor to put the frame in");
@@ -775,7 +775,7 @@ int main(void)
 
     /* ---- receive: each of the four checks fails on its own ---- */
     model_reset();
-    CHECK(e1000_init(0, &model_card) == NETDEV_UP,
+    CHECK(e1000_init(&model_iface, 0) == NETDEV_UP,
           "the bring-up completes before the refusal checks");
     (void)model_deliver(frame, 100, E1000_RXD_STAT_DD | E1000_RXD_STAT_EOP, 0x80);
     e1000_irq(0);
@@ -785,7 +785,7 @@ int main(void)
           "a hardware error is reported to the interface as an error, not a drop");
 
     model_reset();
-    CHECK(e1000_init(0, &model_card) == NETDEV_UP, "the bring-up completes");
+    CHECK(e1000_init(&model_iface, 0) == NETDEV_UP, "the bring-up completes");
     /* A split frame is two descriptors: one without end-of-packet and one
        with it. A driver that judged each on its own would refuse the first
        and hand the second up as a whole frame, which is the second half of
@@ -806,14 +806,14 @@ int main(void)
           "the frame after a split one is delivered, so the discard ended with it");
 
     model_reset();
-    CHECK(e1000_init(0, &model_card) == NETDEV_UP, "the bring-up completes");
+    CHECK(e1000_init(&model_iface, 0) == NETDEV_UP, "the bring-up completes");
     (void)model_deliver(frame, 13, E1000_RXD_STAT_DD | E1000_RXD_STAT_EOP, 0);
     e1000_irq(0);
     CHECK(rx_calls == 0 && e1000s[0].rx_dropped == 1,
           "a frame too short to hold an Ethernet header is refused");
 
     model_reset();
-    CHECK(e1000_init(0, &model_card) == NETDEV_UP, "the bring-up completes");
+    CHECK(e1000_init(&model_iface, 0) == NETDEV_UP, "the bring-up completes");
     (void)model_deliver(frame, 100, E1000_RXD_STAT_DD | E1000_RXD_STAT_EOP, 0);
     e1000s[0].rx_ring[0].len_csum = E1000_RX_BUF_SIZE + 1;
     e1000_irq(0);
@@ -822,7 +822,7 @@ int main(void)
 
     /* ---- receive: the ring wraps ---- */
     model_reset();
-    CHECK(e1000_init(0, &model_card) == NETDEV_UP, "the bring-up completes before the wrap check");
+    CHECK(e1000_init(&model_iface, 0) == NETDEV_UP, "the bring-up completes before the wrap check");
     {
         int placed = 1;
 
@@ -838,7 +838,7 @@ int main(void)
 
     /* ---- transmit: the descriptor contract ---- */
     model_reset();
-    CHECK(e1000_init(0, &model_card) == NETDEV_UP,
+    CHECK(e1000_init(&model_iface, 0) == NETDEV_UP,
           "the bring-up completes before the transmit checks");
     CHECK(e1000_tx_frame(&e1000s[0], frame, 200) == NETDEV_TX_OK,
           "a frame that is sent reports that it was");
@@ -859,14 +859,14 @@ int main(void)
 
     /* ---- transmit: a short frame is padded ---- */
     model_reset();
-    CHECK(e1000_init(0, &model_card) == NETDEV_UP, "the bring-up completes");
+    CHECK(e1000_init(&model_iface, 0) == NETDEV_UP, "the bring-up completes");
     e1000_tx_frame(&e1000s[0], frame, 20);
     CHECK(model_tx_last_len == 60, "a short frame is padded to the Ethernet minimum");
     CHECK(model_tx_last[59] == 0, "the padding is zeroed, not whatever the buffer held");
 
     /* ---- transmit: an over-length frame is refused ---- */
     model_reset();
-    CHECK(e1000_init(0, &model_card) == NETDEV_UP, "the bring-up completes");
+    CHECK(e1000_init(&model_iface, 0) == NETDEV_UP, "the bring-up completes");
     CHECK(e1000_tx_frame(&e1000s[0], frame, E1000_FRAME_MAX + 1) == NETDEV_TX_DROPPED,
           "an over-length frame reports that it was dropped");
     CHECK(model_tx_sent == 0 && e1000s[0].tx_packets == 0,
@@ -875,7 +875,7 @@ int main(void)
 
     /* ---- transmit: a card that never finishes stalls, bounded ---- */
     model_reset();
-    CHECK(e1000_init(0, &model_card) == NETDEV_UP, "the bring-up completes");
+    CHECK(e1000_init(&model_iface, 0) == NETDEV_UP, "the bring-up completes");
     model_swallow_tx = 1;
     {
         int refusals = 0;
@@ -907,7 +907,8 @@ int main(void)
 
     /* ---- stop: the order, and what it leaves ---- */
     model_reset();
-    CHECK(e1000_init(0, &model_card) == NETDEV_UP, "the bring-up completes before the stop checks");
+    CHECK(e1000_init(&model_iface, 0) == NETDEV_UP,
+          "the bring-up completes before the stop checks");
     {
         unsigned mark = model_log_len;
         int rctl, tctl, imc;
@@ -953,13 +954,13 @@ int main(void)
        address the card will not report fails there. */
     model_reset();
     model_stuck_reset = 1;
-    CHECK(e1000_init(0, &model_card) == NETDEV_FAILED,
+    CHECK(e1000_init(&model_iface, 0) == NETDEV_FAILED,
           "a bring-up that fails at the reset is refused");
     CHECK(!pci_master_enabled, "and never took the bus in the first place");
 
     model_reset();
     model_swallow_tx = 1;
-    CHECK(e1000_init(0, &model_card) == NETDEV_UP, "a card that starts takes the bus");
+    CHECK(e1000_init(&model_iface, 0) == NETDEV_UP, "a card that starts takes the bus");
     CHECK(pci_master_enabled, "and is mastering it");
     {
         unsigned mark = model_log_len;
@@ -973,7 +974,7 @@ int main(void)
        nothing: stop must write nothing either. */
     model_reset();
     pci_present = 0;
-    CHECK(e1000_init(0, &model_card) == NETDEV_ABSENT, "the card is absent");
+    CHECK(e1000_init(&model_iface, 0) == NETDEV_ABSENT, "the card is absent");
     {
         unsigned mark = model_accesses;
 
@@ -983,7 +984,8 @@ int main(void)
 
     /* ---- stop waits for what the card already took ---- */
     model_reset();
-    CHECK(e1000_init(0, &model_card) == NETDEV_UP, "the bring-up completes before the drain check");
+    CHECK(e1000_init(&model_iface, 0) == NETDEV_UP,
+          "the bring-up completes before the drain check");
     model_tx_completes_after = 3;
     CHECK(e1000_tx_frame(&e1000s[0], frame, 200) == NETDEV_TX_OK,
           "a frame is accepted by a slow card");
@@ -996,7 +998,7 @@ int main(void)
 
     /* A card that never finishes costs the wait and no more. */
     model_reset();
-    CHECK(e1000_init(0, &model_card) == NETDEV_UP, "the bring-up completes");
+    CHECK(e1000_init(&model_iface, 0) == NETDEV_UP, "the bring-up completes");
     model_swallow_tx = 1;
     CHECK(e1000_tx_frame(&e1000s[0], frame, 200) == NETDEV_TX_OK, "a frame is accepted");
     e1000_stop(&e1000s[0]);
@@ -1005,7 +1007,7 @@ int main(void)
     /* ---- a line this kernel cannot deliver ---- */
     model_reset();
     pci_irq_line = 20;
-    CHECK(e1000_init(0, &model_card) == NETDEV_FAILED,
+    CHECK(e1000_init(&model_iface, 0) == NETDEV_FAILED,
           "an interrupt line outside the sixteen a PIC can deliver is refused");
     CHECK(!isr_handler_registered,
           "and no handler is installed, which for a large enough line would land on an "
@@ -1013,11 +1015,12 @@ int main(void)
 
     model_reset();
     pci_irq_line = 15;
-    CHECK(e1000_init(0, &model_card) == NETDEV_UP, "the last line a PIC can deliver is accepted");
+    CHECK(e1000_init(&model_iface, 0) == NETDEV_UP, "the last line a PIC can deliver is accepted");
 
     /* ---- the link ---- */
     model_reset();
-    CHECK(e1000_init(0, &model_card) == NETDEV_UP, "the bring-up completes before the link checks");
+    CHECK(e1000_init(&model_iface, 0) == NETDEV_UP,
+          "the bring-up completes before the link checks");
     {
         struct netdev_link link;
 
@@ -1047,7 +1050,7 @@ int main(void)
     /* A card that was never found cannot be asked. */
     model_reset();
     pci_present = 0;
-    CHECK(e1000_init(0, &model_card) == NETDEV_ABSENT, "the card is absent");
+    CHECK(e1000_init(&model_iface, 0) == NETDEV_ABSENT, "the card is absent");
     {
         struct netdev_link link;
 

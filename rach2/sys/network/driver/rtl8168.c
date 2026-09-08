@@ -933,7 +933,7 @@ static uint32_t r8168_link_speed(void)
  *
  * @return `NETDEV_UP`, `NETDEV_ABSENT`, or `NETDEV_FAILED`.
  */
-static int rtl8168_init(int nth, void **dev)
+static int rtl8168_init(struct netdev *nd, int nth)
 {
     uint32_t txconfig;
     uint32_t bar = 0;
@@ -941,7 +941,7 @@ static int rtl8168_init(int nth, void **dev)
     uintptr_t mapped;
     int i;
 
-    *dev = 0; /* this driver keeps its one card in its own file */
+    nd->dev = 0; /* this driver keeps its one card in its own file */
     if (nth != 0) {
         return NETDEV_ABSENT;
     }
@@ -1043,6 +1043,15 @@ static int rtl8168_init(int nth, void **dev)
     }
 
     r8168_up = 1;
+    {
+        int b;
+
+        /* This driver reads the card's address into the stack's own; the
+         * interface keeps a copy, as one with two cards must. */
+        for (b = 0; b < 6; b++) {
+            nd->mac[b] = net_mac[b];
+        }
+    }
     return NETDEV_UP;
 }
 
@@ -1333,18 +1342,6 @@ static void rtl8168_stop(void *dev)
     r8168_up = 0;
 }
 
-/* This driver keeps its one card's address in the stack's own. */
-static void rtl8168_op_mac(void *dev, uint8_t *out)
-{
-    int i;
-
-    (void)dev;
-    for (i = 0; i < 6; i++) {
-        out[i] = net_mac[i];
-    }
-}
-
 const struct netdev_ops rtl8168_netdev = {"RTL8168GU",   rtl8168_init,  rtl8168_tx,
                                           rtl8168_poll,  rtl8168_stop,  rtl8168_link,
-                                          rtl8168_error, rtl8168_print_info,
-                                          rtl8168_op_mac};
+                                          rtl8168_error, rtl8168_print_info};

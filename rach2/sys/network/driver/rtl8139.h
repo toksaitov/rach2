@@ -85,8 +85,11 @@
 #define RTL_RX_PKT_MIN  18      /* Ethernet header (14) + CRC (4)        */
 #define RTL_RX_PKT_MAX  1518    /* max frame (1514) + CRC (4)            */
 
+/* The interface a card is brought up for. */
+struct netdev;
+
 /** Probe and bring up the card; 1 on success, 0 if absent or bring-up fails. */
-int rtl8139_init(int nth, void **dev);
+int rtl8139_init(struct netdev *nd, int nth);
 
 /** Transmit a raw Ethernet frame (destination MAC through payload, no FCS; the
  *  chip appends the CRC). len must be <= RTL_TX_BUF_SIZE. */

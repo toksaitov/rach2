@@ -18,6 +18,7 @@
 #include "rtl8139.h"
 #include "rtl8168.h"
 #include "../net.h"
+#include "../../lib/kstring.h"
 
 /*
  * The interfaces the probe brought up, in the order it found them. Each is
@@ -110,8 +111,14 @@ int netdev_probe(void)
         int nth;
 
         for (nth = 0; niface < NETDEV_MAX; nth++) {
-            void *dev = 0;
-            int verdict = drivers[i]->init(nth, &dev);
+            struct netdev *nd = &ifaces[niface];
+            int verdict;
+
+            k_memset(nd, 0, sizeof(*nd));
+            nd->ops = drivers[i];
+            nd->index = niface + 1;
+            name_iface(nd, niface);
+            verdict = drivers[i]->init(nd, nth);
 
             if (verdict == NETDEV_ABSENT) {
                 break; /* this driver has no more cards */
@@ -126,19 +133,12 @@ int netdev_probe(void)
                  * stop it, and a card left able to write into its rings is the
                  * one case this operation exists for. */
                 if (drivers[i]->stop) {
-                    drivers[i]->stop(dev);
+                    drivers[i]->stop(nd->dev);
                 }
                 if (drivers[i]->error) {
                     probe_error = drivers[i]->error();
                 }
                 break; /* this driver's next card is not tried */
-            }
-            ifaces[niface].ops = drivers[i];
-            ifaces[niface].dev = dev;
-            ifaces[niface].index = niface + 1;
-            name_iface(&ifaces[niface], niface);
-            if (drivers[i]->mac) {
-                drivers[i]->mac(dev, ifaces[niface].mac);
             }
             if (niface == 0) {
                 int b;
@@ -146,7 +146,7 @@ int netdev_probe(void)
                 /* The stack still holds one address for the machine, which is
                  * the first interface's until every layer names its own. */
                 for (b = 0; b < 6; b++) {
-                    net_mac[b] = ifaces[0].mac[b];
+                    net_mac[b] = nd->mac[b];
                 }
             }
             niface++;

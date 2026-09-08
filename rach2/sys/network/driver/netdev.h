@@ -91,22 +91,24 @@ struct netdev_link {
  * are not the same: a card that says the link is down is different from a
  * card that cannot say.
  */
+struct netdev;
+
 struct netdev_ops {
     const char *name;
     /*
-     * Bring up this driver's `nth` card, counting from zero, and hand back
-     * the driver's own record for it in `*dev`. A driver with one card
-     * answers `NETDEV_ABSENT` for anything but the first.
+     * Bring up this driver's `nth` card, counting from zero, for the
+     * interface `nd`. The driver puts its own record for the card in
+     * `nd->dev`, the card's address in `nd->mac`, and keeps `nd` so that
+     * every frame it delivers says which interface it arrived on. A driver
+     * with one card answers `NETDEV_ABSENT` for anything but the first.
      */
-    int (*init)(int nth, void **dev);
+    int (*init)(struct netdev *nd, int nth);
     int (*tx)(void *dev, const uint8_t *data, uint16_t len);
     void (*poll)(void *dev);
     void (*stop)(void *dev);
     int (*link)(void *dev, struct netdev_link *out);
     const char *(*error)(void);
     void (*print_info)(void *dev);
-    /* The card's own hardware address, read at bring-up. */
-    void (*mac)(void *dev, uint8_t *out);
 };
 
 /**
@@ -132,6 +134,16 @@ struct netdev {
     uint32_t ip;
     uint32_t mask;
     uint32_t gateway;
+
+    /* What has passed through this interface. Two cards keep two sets, which
+     * is what `/proc/net/dev` prints a line each of. */
+    uint32_t rx_packets;
+    uint32_t rx_bytes;
+    uint32_t rx_errors;
+    uint32_t rx_dropped;
+    uint32_t tx_packets;
+    uint32_t tx_bytes;
+    uint32_t tx_dropped;
 };
 
 /** How many interfaces the last probe brought up, and the nth of them. */

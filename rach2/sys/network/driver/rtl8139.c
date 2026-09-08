@@ -66,13 +66,13 @@ static int rtl8139_link(void *dev, struct netdev_link *out);
  * @return 1 on success; 0 if no card is present or bring-up fails, with
  *         rtl8139_error() set to the reason.
  */
-int rtl8139_init(int nth, void **dev)
+int rtl8139_init(struct netdev *nd, int nth)
 {
     uint32_t mac_lo, mac_hi;
     uint32_t i;
     uint32_t timeout;
 
-    *dev = 0; /* this driver keeps its one card in its own file */
+    nd->dev = 0; /* this driver keeps its one card in its own file */
     if (nth != 0) {
         return NETDEV_ABSENT;
     }
@@ -165,6 +165,15 @@ int rtl8139_init(int nth, void **dev)
      * configured). */
     outb(iobase + RTL_CHIPCMD, RTL_CMD_RE | RTL_CMD_TE);
 
+    {
+        int b;
+
+        /* This driver reads the card's address into the stack's own; the
+         * interface keeps a copy, as one with two cards must. */
+        for (b = 0; b < 6; b++) {
+            nd->mac[b] = net_mac[b];
+        }
+    }
     return NETDEV_UP;
 }
 
@@ -267,21 +276,9 @@ static int rtl8139_link(void *dev, struct netdev_link *out)
 }
 
 /* The card's entry in the driver table. `poll` is NULL: this one interrupts. */
-/* This driver keeps its one card's address in the stack's own. */
-static void rtl8139_op_mac(void *dev, uint8_t *out)
-{
-    int i;
-
-    (void)dev;
-    for (i = 0; i < 6; i++) {
-        out[i] = net_mac[i];
-    }
-}
-
 const struct netdev_ops rtl8139_netdev = {"RTL8139",    rtl8139_init,  rtl8139_tx,
                                           0,            rtl8139_stop,  rtl8139_link,
-                                          rtl8139_error, rtl8139_print_info,
-                                          rtl8139_op_mac};
+                                          rtl8139_error, rtl8139_print_info};
 
 /**
  * Copy a frame into the next TX descriptor and start its DMA.
