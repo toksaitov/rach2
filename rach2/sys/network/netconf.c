@@ -12,16 +12,36 @@
 
 #include "netconf.h"
 #include "net.h"
+#include "driver/netdev.h"
 #include "arp/arp.h"
 #include "tcp/tcp.h"
 #include "../cmdline.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
 
-/* The SLIRP tuple, which is what QEMU gives and what every test expects. */
+/*
+ * The SLIRP tuple, which is what QEMU gives and what every test expects.
+ *
+ * These are the first interface's address, mask and way out. Every interface
+ * has its own in its record; these are kept beside them while the layers
+ * above are taught to name the interface they mean, and `netconf_publish`
+ * is the one place that writes both.
+ */
 uint32_t net_ip_addr = NET_IP_ADDR_DEFAULT;
 uint32_t net_ip_mask = NET_IP_MASK_DEFAULT;
 uint32_t net_ip_gateway = NET_IP_GATEWAY_DEFAULT;
+
+/** Write the machine's configuration through to the interface it belongs to. */
+static void netconf_publish(void)
+{
+    struct netdev *nd = netdev_first();
+
+    if (nd) {
+        nd->ip = net_ip_addr;
+        nd->mask = net_ip_mask;
+        nd->gateway = net_ip_gateway;
+    }
+}
 
 /**
  * Read one decimal quartet, 0 to 255, advancing `*s` past it.
@@ -226,6 +246,7 @@ int netconf_apply(const char **why)
         net_ip_addr = 0;
         net_ip_mask = 0;
         net_ip_gateway = 0;
+        netconf_publish();
         return NETCONF_NONE;
     }
     if (!netconf_parse_cidr(value, &ip, &mask)) {
@@ -250,6 +271,7 @@ int netconf_apply(const char **why)
     net_ip_addr = ip;
     net_ip_mask = mask;
     net_ip_gateway = gw; /* zero when none was given, which means no route out */
+    netconf_publish();
     mask_provisional = 0;
     pending_addr = 0;
     return NETCONF_APPLIED;
@@ -361,6 +383,7 @@ static void addr_publish(uint32_t ip, uint32_t mask)
          !netconf_gateway_ok(net_ip_gateway, net_ip_addr, net_ip_mask))) {
         net_ip_gateway = 0;
     }
+    netconf_publish();
 }
 
 int netconf_set_address(uint32_t ip, uint32_t mask)
@@ -491,6 +514,7 @@ int netconf_set_gateway(uint32_t gw)
     } else {
         net_ip_gateway = gw;
     }
+    netconf_publish();
     net_unlock(flags);
     return rc;
 }

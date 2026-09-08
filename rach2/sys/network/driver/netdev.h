@@ -126,6 +126,12 @@ struct netdev {
      * cards have two of them, and every frame this interface sends carries
      * its own. */
     uint8_t mac[6];
+    /* This interface's own address, mask and way out. A machine with two
+     * cards is on two networks, and which one a packet leaves by is a
+     * question about the address it is going to, not about the machine. */
+    uint32_t ip;
+    uint32_t mask;
+    uint32_t gateway;
 };
 
 /** How many interfaces the last probe brought up, and the nth of them. */

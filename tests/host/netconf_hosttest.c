@@ -22,6 +22,7 @@ extern int printf(const char *fmt, ...);
 
 #include "../../rach2/sys/network/netconf.h"
 #include "../../rach2/sys/network/net.h"
+#include "../../rach2/sys/network/driver/netdev.h"
 #include "../../rach2/sys/cmdline.h"
 #include "../../rach2/sys/lib/kerrno.h"
 
@@ -121,6 +122,16 @@ static int apply(const char *cmdline, const char **why)
     conf_reset();
     kcmdline_capture(cmdline);
     return netconf_apply(why);
+}
+
+/* The interface the configuration is published to. This test drives the
+ * parsing and the setters, not the card, so one record standing in for the
+ * machine's interface is enough. */
+static struct netdev the_iface;
+
+struct netdev *netdev_first(void)
+{
+    return &the_iface;
 }
 
 int main(void)
