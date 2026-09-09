@@ -829,14 +829,16 @@ fi
 #      restore wrote inside the set too. The times are printed against the
 #      sitting's ten-minute budget, which is the machine's, not the
 #      emulator's. ----
-if { [ "$PART" = "all" ] || [ "$PART" = "install" ] || [ "$PART" = "rehearse" ]; } &&
-    { [ -n "${RACH2_REHEARSE_LENOVO:-}" ] || [ -n "${RACH2_REHEARSE_SMALL:-}" ]; }; then
+if [ "$PART" = "rehearse" ] ||
+    { { [ "$PART" = "all" ] || [ "$PART" = "install" ]; } &&
+      { [ -n "${RACH2_REHEARSE_LENOVO:-}" ] || [ -n "${RACH2_REHEARSE_SMALL:-}" ]; }; }; then
 REPO=$(cd "$(dirname "$0")/../../.." && pwd)
 GROWSET="$REPO/build/tools/inspect/growset"
-# The small form, RACH2_REHEARSE_SMALL: the same steps on a 256 MiB disk
-# with the test stick and its 138 MiB image, minutes where the machine's
-# size is hours, which is what the row is proved on before it runs at size.
-if [ -n "${RACH2_REHEARSE_SMALL:-}" ]; then
+# The small form, the `rehearse` part's default and RACH2_REHEARSE_SMALL
+# for the other parts: the same steps on a 256 MiB disk with the test stick
+# and its 138 MiB image, minutes where the machine's size is longer, which
+# is what the row is proved on before RACH2_REHEARSE_LENOVO runs it at size.
+if [ -z "${RACH2_REHEARSE_LENOVO:-}" ]; then
     LENOVO=524288
     STICK=$TEST_STICK
     DISK=$TEST_DISK
@@ -920,8 +922,10 @@ rehearse_boot() { # rehearse_boot LOG TIMEOUT OK STEPFILE
 # range of a gibibyte in 512-byte blocks is hours on the machine as well as
 # in the emulator; the ranges the grow writes are aligned to eight sectors.
 {
+    # shellcheck disable=SC2016
     echo 'send=v=$(grep ^identity /proc/disk | grep " fixed " | sed -n 2p | cut -d" " -f2); mkdir -p /save && mount -t exfat /dev/disk${v}p1 /save && echo SAVE""MOUNTED'
     echo 'expect=SAVEMOUNTED'
+    # shellcheck disable=SC2016
     echo 'send=d=$(grep ^identity /proc/disk | grep " fixed " | head -1 | cut -d" " -f2); i=0; while read s c; do u=1; for t in 2048 8; do if [ $((s % t)) = 0 ] && [ $((c % t)) = 0 ] && [ $u = 1 ]; then u=$t; fi; done; dd if=/dev/disk$d of=/save/range-$i bs=$((u * 512)) skip=$((s / u)) count=$((c / u)) 2>/dev/null || echo SAVEFAIL $i; i=$((i + 1)); done < /save/ranges; sync; echo SAVED""ALL $i'
     echo "expect=SAVEDALL $NRANGES"
     echo 'send=umount /save && echo SAVE""DONE'
@@ -980,10 +984,13 @@ fi
 # of digests the host compares with its own digests of the saved bytes,
 # which are zeros of each length.
 {
+    # shellcheck disable=SC2016
     echo 'send=v=$(grep ^identity /proc/disk | grep " fixed " | sed -n 2p | cut -d" " -f2); mkdir -p /save && mount -t exfat /dev/disk${v}p1 /save && echo SAVE""MOUNTED'
     echo 'expect=SAVEMOUNTED'
+    # shellcheck disable=SC2016
     echo 'send=d=$(grep ^identity /proc/disk | grep " fixed " | head -1 | cut -d" " -f2); i=0; while read s c; do reflash /dev/disk$d $((s * 512)) $((c * 512)) < /save/range-$i || echo PUTFAIL $i; i=$((i + 1)); done < /save/ranges; echo PUT""ALL $i'
     echo "expect=PUTALL $NRANGES"
+    # shellcheck disable=SC2016
     echo 'send=: > /save/verify; while read s c; do reflash --verify /dev/disk$d $((s * 512)) $((c * 512)) >> /save/verify; done < /save/ranges; sync; echo VERIFY""ALL'
     echo 'expect=VERIFYALL'
     echo 'send=umount /save && echo RESTORE""DONE'
@@ -1001,7 +1008,7 @@ fi
 # What the machine read back against what was saved: zeros of each length.
 "$REPO/build/tests/host/mkexfatfixture" --check "$R/save-stick.img" 2048 --read /verify > "$R/verify.machine" 2>/dev/null || bad "the digests off the save disk"
 : > "$R/verify.host"
-while read -r start count; do
+while read -r _start count; do
     head -c $((count * 512)) /dev/zero | shasum -a 256 | cut -d' ' -f1 >> "$R/verify.host"
 done < "$R/ranges"
 if [ "$(tr -d '\r' < "$R/verify.machine" | awk '{print $3}')" = "$(cat "$R/verify.host")" ]; then
