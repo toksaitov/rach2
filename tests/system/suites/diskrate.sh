@@ -44,6 +44,8 @@ set -- \
     "send=$(timed exread 'dd if=/e/big of=/dev/null bs=1M 2>/dev/null; dd if=/e/big of=/dev/null bs=1M 2>/dev/null')" "expect=T_exread" \
     "send=$(timed fatwrite 'dd if=/dev/zero of=/f/big bs=1M count=64 2>/dev/null; sync')" "expect=T_fatwrite" \
     "send=$(timed fatread 'dd if=/f/big of=/dev/null bs=1M 2>/dev/null; dd if=/f/big of=/dev/null bs=1M 2>/dev/null')" "expect=T_fatread" \
+    "send=$(timed exsmall 'dd if=/dev/zero of=/e/small bs=4k count=4096; sync')" "expect=T_exsmall" \
+    "send=$(timed fatsmall 'dd if=/dev/zero of=/f/small bs=4k count=4096; sync')" "expect=T_fatsmall" \
     "send=$(timed exfiles 'i=0; while [ $i -lt 200 ]; do dd if=/dev/disk0 of=/e/small-$i bs=4k skip=$i count=8; i=$((i+1)); done; sync')" "expect=T_exfiles" \
     "send=umount /e && umount /f && echo ALL\"\"DONE" "expect=ALLDONE"
 "$HARNESS" --kernel "$KERNEL" --initrd "$OSREAL" \
@@ -73,6 +75,8 @@ row exwrite 20 "64 MiB written into a file on exFAT and synced"
 row exread 20 "the exFAT file read twice, cold and from the cache"
 row fatwrite 40 "64 MiB written into a file on FAT32 and synced"
 row fatread 20 "the FAT32 file read twice, cold and from the cache"
+row exsmall 60 "16 MiB written on exFAT in 4 KiB calls"
+row fatsmall 60 "16 MiB written on FAT32 in 4 KiB calls"
 row exfiles 30 "two hundred 32 KiB files written on exFAT"
 [ "$rc" -eq 0 ] || fail "a row is over its bound"
 echo "diskrate-test: PASS"
