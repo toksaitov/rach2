@@ -1573,11 +1573,24 @@ static int map_alloc(struct ext2_mount *em, struct ext2_node *n, uint32_t index,
                 div *= per;
             }
             if (*slot == 0) {
+                uint64_t at, end;
+                int deferred = 1;
+
                 rc = block_alloc(em, hint, &b);
                 if (rc != 0) {
                     return rc;
                 }
-                rc = write_bytes(em, (uint64_t)b * em->block_size, 0, em->block_size, !em->batch);
+                /* The new pointer block's zeros go first, with the bitmaps:
+                 * the pointer to it, written after, must not reach the disk
+                 * over whatever the block held before. */
+                at = (uint64_t)b * em->block_size;
+                end = at + em->block_size;
+                for (; at < end; at += BCACHE_BLOCK_BYTES) {
+                    if (!meta_deferred(em, at)) {
+                        deferred = 0;
+                    }
+                }
+                rc = write_bytes(em, (uint64_t)b * em->block_size, 0, em->block_size, !deferred);
                 if (rc != 0) {
                     return rc;
                 }

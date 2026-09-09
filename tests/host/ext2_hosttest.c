@@ -1730,6 +1730,23 @@ static int first_write_of(uint64_t blk)
     return -1;
 }
 
+/* The index in the write log of the last write that covers block `blk`,
+   or -1: a pointer block is written twice by a write that makes it, its
+   zeros first with the bitmaps and its pointers after them. */
+static int last_write_of(uint64_t blk)
+{
+    int i, at = -1;
+
+    for (i = 0; i < wlog_n; i++) {
+        uint64_t from = wlog_lba[i] / 8, to = (wlog_lba[i] + wlog_count[i] - 1) / 8;
+
+        if (blk >= from && blk <= to) {
+            at = i;
+        }
+    }
+    return at;
+}
+
 /* Every number that follows `key` in the output of a debugfs command, into
    `out`, at most `cap`; the count. The output goes through a file, since
    the test is compiled freestanding and declares the few host calls it
@@ -1814,7 +1831,7 @@ static void order_row(void)
     check(nptr >= 2 && nbm >= 1,
           "debugfs names the file's pointer blocks and the volume's bitmaps");
     for (i = 0; i < nptr; i++) {
-        int at = first_write_of(ptr[i]);
+        int at = last_write_of(ptr[i]);
 
         if (at < 0) {
             printf("  pointer block %lu was never written\n", (unsigned long)ptr[i]);
@@ -1837,7 +1854,7 @@ static void order_row(void)
         }
     }
     check(ok,
-          "every pointer block reached the disk after the bitmaps and descriptors of its write");
+          "every pointer block's pointers reached the disk after the bitmaps and descriptors of its write");
     check(e2fsck_clean(wimg), "and the volume is clean");
 }
 

@@ -1666,6 +1666,9 @@ static int32_t fat_write(struct vfs_mount *mnt, void *handle, const void *buf, u
         if (rc == 0) {
             rc = fat_set(fm, tail, run_first);
         }
+        if (rc == 0) {
+            rc = block_flush(fm->dev); /* the join on the medium before the size */
+        }
         if (rc != 0) {
             goto undo;
         }
@@ -1673,9 +1676,7 @@ static int32_t fat_write(struct vfs_mount *mnt, void *handle, const void *buf, u
         n->first = run_first; /* published with the size, in the one entry write below */
     }
     if (run_first != 0) {
-        /* The chain now ends at the run's last cluster, which the next
-         * append reaches from here and not by a walk from the first. */
-        n->hint_index = needed - 1;
+        n->hint_index = needed - 1; /* the tail, for the next append's walk */
         n->hint_cluster = run_last;
     }
     if (end > n->size) {

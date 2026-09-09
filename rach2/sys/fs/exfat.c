@@ -470,7 +470,10 @@ static int upcase_fill_low(struct ex_mount *em)
             uint16_t run;
 
             rc = upcase_next(&r, &run);
-            if (rc <= 0) {
+            if (rc < 0) {
+                return rc;
+            }
+            if (rc == 0) {
                 break;
             }
             while (run-- > 0 && u < UPCASE_LOW) {
@@ -1792,6 +1795,13 @@ static int free_chain(struct ex_mount *em, uint32_t first, int nofat, uint64_t l
     uint64_t have = nofat ? clusters_of(em, length) : 0;
     int rc;
 
+    /* What unpublished the chain went through the cache to the device;
+     * a stick with a cache of its own puts it on the medium here, before
+     * a cluster is freed. */
+    rc = block_flush(em->dev);
+    if (rc != 0) {
+        return rc;
+    }
     while (in_heap(em, c) && steps < em->clusters) {
         uint32_t next = 0;
 
@@ -3064,6 +3074,9 @@ static int32_t ex_write(struct vfs_mount *mnt, void *handle, const void *buf, ui
         rc = chain_at(em, n, n->first, 0, 0, (uint32_t)(have - 1), &tail);
         if (rc == 0) {
             rc = fat_set(em, tail, run_first, 1);
+        }
+        if (rc == 0) {
+            rc = block_flush(em->dev); /* the join on the medium before the lengths */
         }
         if (rc != 0) {
             goto undo;
