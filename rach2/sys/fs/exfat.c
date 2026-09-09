@@ -35,6 +35,7 @@
 #define EX_FILE_LIMIT (((uint64_t)0x7FFFFFFFu << 32) | 0xFFFFFFFFu)
 
 #define UPCASE_HELD 16384u /* a stored table up to this size is kept per mount */
+#define UPCASE_LOW  2048u  /* code points whose mapping is kept, walked once */
 #define SET_MAX     19     /* the file entry, the stream, and up to 17 name entries */
 
 struct ex_node {
@@ -79,6 +80,11 @@ struct ex_mount {
      * through the cache from its beginning for every unit. */
     int upcase_form;
     uint8_t upcase_stored[UPCASE_HELD];
+    /* The mappings of the first UPCASE_LOW code points, read once at mount
+     * by one walk of the table, since a name is hashed at every set a
+     * lookup passes and a walk per character is the cost of that scan. */
+    int upcase_low_held;
+    uint16_t upcase_low[UPCASE_LOW];
     int free_known;
     uint32_t free_clusters;
     uint32_t alloc_hint;
@@ -87,6 +93,12 @@ struct ex_mount {
     int nfrozen;
     uint8_t setbuf[256 * 32]; /* one set, other writers' up to 255 secondaries */
     struct ex_node *nodes; /* the nodes in memory, from the heap */
+    /* The last cache block a directory entry was read from, kept so a scan
+     * of a directory costs a cache get per block and not per 32 bytes; a
+     * write of any byte of the block empties it. */
+    int dir_block_held;
+    uint64_t dir_block;
+    uint8_t dir_bytes[BCACHE_BLOCK_BYTES];
 };
 
 /* The way a node leaves the mount's list and the heap. */
@@ -432,8 +444,58 @@ static int upcase_walk(struct ex_mount *em, uint16_t unit, uint16_t *out)
     return 0;
 }
 
+/**
+ * The mappings of the code points below `UPCASE_LOW` into the mount's
+ * record, by one walk of the stored table from its start; a table that
+ * ends before them maps the rest to themselves.
+ */
+static int upcase_fill_low(struct ex_mount *em)
+{
+    struct upcase_reader r;
+    uint32_t u = 0;
+
+    k_memset(&r, 0, sizeof(r));
+    r.em = em;
+    while (u < UPCASE_LOW) {
+        uint16_t w;
+        int rc = upcase_next(&r, &w);
+
+        if (rc < 0) {
+            return rc;
+        }
+        if (rc == 0) {
+            break;
+        }
+        if (w == 0xFFFF && em->upcase_form != 1) {
+            uint16_t run;
+
+            rc = upcase_next(&r, &run);
+            if (rc <= 0) {
+                break;
+            }
+            while (run-- > 0 && u < UPCASE_LOW) {
+                em->upcase_low[u] = (uint16_t)u;
+                u++;
+            }
+        } else {
+            em->upcase_low[u] = w;
+            u++;
+        }
+    }
+    while (u < UPCASE_LOW) {
+        em->upcase_low[u] = (uint16_t)u;
+        u++;
+    }
+    em->upcase_low_held = 1;
+    return 0;
+}
+
 static int ex_upcase(struct ex_mount *em, uint16_t unit, uint16_t *out)
 {
+    if (em->upcase_low_held && unit < UPCASE_LOW) {
+        *out = em->upcase_low[unit];
+        return 0;
+    }
     if (em->upcase_form == 1) {
         uint8_t raw[2];
         int rc = object_read(em, em->upcase_first, 0, (uint64_t)unit * 2, raw, 2);
@@ -470,11 +532,14 @@ static int name_hash(struct ex_mount *em, const uint16_t *units, uint32_t n, uin
 /* ---- directories and sets ---- */
 
 /* Entry `index` of the directory at `first` (the root for 0), read through
- * its chain. 1 with `raw` filled, 0 past the chain's end, or an error. */
+ * its chain from the mount's copy of the entry's cache block, which a scan
+ * reads once per block. 1 with `raw` filled, 0 past the chain's end, or an
+ * error. */
 static int dir_entry(struct ex_mount *em, struct ex_node *d, uint32_t index, uint8_t *raw)
 {
     uint32_t per = cluster_bytes(em) / 32;
     uint32_t c;
+    uint64_t off, blk;
     int rc;
 
     if (d->first == 0) {
@@ -487,8 +552,21 @@ static int dir_entry(struct ex_mount *em, struct ex_node *d, uint32_t index, uin
     if (rc != 0) {
         return rc;
     }
-    rc = ex_read_bytes(em, cluster_offset(em, c) + (uint64_t)(index % per) * 32, raw, 32);
-    return rc == 0 ? 1 : rc;
+    off = cluster_offset(em, c) + (uint64_t)(index % per) * 32;
+    blk = off / BCACHE_BLOCK_BYTES;
+    if (!em->dir_block_held || em->dir_block != blk) {
+        struct bbuf *b = bcache_get(em->dev, blk);
+
+        if (!b) {
+            return -EIO;
+        }
+        k_memcpy(em->dir_bytes, b->data, b->bytes);
+        bcache_release(b);
+        em->dir_block = blk;
+        em->dir_block_held = 1;
+    }
+    k_memcpy(raw, em->dir_bytes + off % BCACHE_BLOCK_BYTES, 32);
+    return 1;
 }
 
 struct ex_set {
@@ -1228,6 +1306,9 @@ static int upcase_check(struct ex_mount *em, uint32_t *sum)
     em->upcase_form = em->upcase_length <= UPCASE_HELD
                           ? 0
                           : (em->upcase_length == 131072 && markers == 0 ? 1 : 2);
+    if (upcase_fill_low(em) != 0) {
+        return -1;
+    }
     /* The mandatory mappings: the first 128 code points are themselves,
      * but a to z are A to Z. */
     for (m = 0; m < 128; m++) {
@@ -1603,6 +1684,9 @@ static int ex_write_bytes(struct ex_mount *em, uint64_t off, const void *src, ui
             in += take;
         } else {
             k_memset(b->data + at, 0, take);
+        }
+        if (em->dir_block_held && em->dir_block == blk) {
+            em->dir_block_held = 0;
         }
         if (through) {
             rc = bcache_write(b);
@@ -2192,14 +2276,17 @@ static int free_slots(struct ex_mount *em, struct ex_node *d, uint32_t count, ui
                     /* The last slot of a sector: an inactive entry fills it,
                      * the end marker included, since a scan stops at the
                      * marker and the set past it would be unseen; the
-                     * zeros past the set are the marker then. */
-                    uint8_t filler[32];
+                     * zeros past the set are the marker then. A filler an
+                     * earlier run left is passed, not written again. */
+                    if (raw[0] == 0x00) {
+                        uint8_t filler[32];
 
-                    k_memset(filler, 0, sizeof(filler));
-                    filler[0] = 0x05;
-                    rc = dir_write(em, d, i, filler, 1);
-                    if (rc != 0) {
-                        return rc;
+                        k_memset(filler, 0, sizeof(filler));
+                        filler[0] = 0x05;
+                        rc = dir_write(em, d, i, filler, 1);
+                        if (rc != 0) {
+                            return rc;
+                        }
                     }
                     i++;
                     continue;
