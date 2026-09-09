@@ -115,20 +115,22 @@ echo "hostcheck: refused: a TCP socket bound on the loopback address" >&2
 exit 1
 HC
 chmod +x "$WORK/bin/hostcheck-refusing"
+rm -f "$WORK/prepared.count" "$WORK/components.count" "$WORK/order.log"
 out=$(RACH2_HOSTCHECK="$WORK/bin/hostcheck-refusing" run passing); rc=$?
 check "a host that refuses a socket bind stops the run" 1 "$rc"
 check "and says so before the build" 1 "$(printf '%s\n' "$out" | grep -c 'the host refuses an operation')"
-check "and nothing was prepared after a refused bind" 0 "$(printf '%s\n' "$out" | grep -c 'run: preparing')"
+check "and no component was built after a refused bind" 0 "$(cat "$WORK/components.count" "$WORK/prepared.count" 2>/dev/null | wc -l | tr -d ' ')"
 cat > "$WORK/bin/hdiutil" <<'HD'
 #!/bin/sh
 echo "hdiutil: create failed - Device not configured" >&2
 exit 1
 HD
 chmod +x "$WORK/bin/hdiutil"
+rm -f "$WORK/prepared.count" "$WORK/components.count" "$WORK/order.log"
 out=$(run imagey); rc=$?
 check "a disk image that cannot be attached stops a suite that needs one" 1 "$rc"
 check "and names the operation" 1 "$(printf '%s\n' "$out" | grep -c 'a disk image created, attached and detached')"
-check "and nothing was prepared after a failed image" 0 "$(printf '%s\n' "$out" | grep -c 'run: preparing')"
+check "and no component was built after a failed image" 0 "$(cat "$WORK/components.count" "$WORK/prepared.count" 2>/dev/null | wc -l | tr -d ' ')"
 rm -f "$WORK/bin/hdiutil"
 out=$(run passing); rc=$?
 check "a suite that needs no image runs beside the failing formatter's absence" 0 "$rc"

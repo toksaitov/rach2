@@ -28,25 +28,27 @@ dd if=/dev/zero of="$FAT" bs=1048576 seek=255 count=1 2>/dev/null || fail "the F
 "$MKMBR" --lba "$FAT" 2048:520192:0c >/dev/null || fail "the FAT32 disk's table"
 mformat -i "$FAT@@1048576" -F -T 520192 -v RATEFAT :: || fail "mformat"
 
-# Each row is one typed line that prints `T_NAME SECONDS`; the machine's
-# clock is read before and after, so the time is the machine's own.
-timed() { # timed NAME COMMAND
-    # shellcheck disable=SC2016
-    printf 's=$(date +%%s); %s; echo T_%s $(( $(date +%%s) - s ))' "$2" "$1"
-}
+# The rows are typed as short lines, since the console takes a line of
+# bounded length: two functions are defined on the machine first. `t NAME
+# COMMAND` runs COMMAND through `eval` and prints `T_NAME SECONDS`, the
+# machine's clock read before and after, or `T_NAME FAIL` when it failed;
+# `moved BYTES COMMAND...` runs a dd that must report BYTES copied.
+# shellcheck disable=SC2016
+DEFS='t() { s=$(date +%s); if eval "$2"; then echo T_$1 $(( $(date +%s) - s )); else echo T_$1 FAIL; fi; }; moved() { n=$1; shift; "$@" 2>/tmp/dd.err && grep -q "^$n bytes" /tmp/dd.err; }; echo DEFS""DONE'
 # shellcheck disable=SC2016
 set -- \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" "expect=# " \
-    "send=$(timed rawread 'dd if=/dev/disk0 of=/dev/null bs=1M count=128')" "expect=T_rawread" \
-    "send=$(timed pipehash 'dd if=/dev/disk0 bs=1M count=64 | sha256sum > /dev/null')" "expect=T_pipehash" \
+    "send=$DEFS" "expect=DEFSDONE" \
+    "send=t rawread 'moved 134217728 dd if=/dev/disk0 of=/dev/null bs=1M count=128'" "expect=T_rawread" \
+    "send=t pipehash 'dd if=/dev/disk0 bs=1M count=64 2>/tmp/dd.err | sha256sum >/dev/null && grep -q \"^67108864 bytes\" /tmp/dd.err'" "expect=T_pipehash" \
     "send=mkdir -p /e /f && mount -t exfat /dev/disk1p1 /e && mount -t vfat /dev/disk2p1 /f && echo MOUNT\"\"ED" "expect=MOUNTED" \
-    "send=$(timed exwrite 'dd if=/dev/zero of=/e/big bs=1M count=64 2>/dev/null; sync')" "expect=T_exwrite" \
-    "send=$(timed exread 'dd if=/e/big of=/dev/null bs=1M 2>/dev/null; dd if=/e/big of=/dev/null bs=1M 2>/dev/null')" "expect=T_exread" \
-    "send=$(timed fatwrite 'dd if=/dev/zero of=/f/big bs=1M count=64 2>/dev/null; sync')" "expect=T_fatwrite" \
-    "send=$(timed fatread 'dd if=/f/big of=/dev/null bs=1M 2>/dev/null; dd if=/f/big of=/dev/null bs=1M 2>/dev/null')" "expect=T_fatread" \
-    "send=$(timed exsmall 'dd if=/dev/zero of=/e/small bs=4k count=4096; sync')" "expect=T_exsmall" \
-    "send=$(timed fatsmall 'dd if=/dev/zero of=/f/small bs=4k count=4096; sync')" "expect=T_fatsmall" \
-    "send=$(timed exfiles 'i=0; while [ $i -lt 200 ]; do dd if=/dev/disk0 of=/e/small-$i bs=4k skip=$i count=8; i=$((i+1)); done; sync')" "expect=T_exfiles" \
+    "send=t exwrite 'moved 67108864 dd if=/dev/zero of=/e/big bs=1M count=64 && sync'" "expect=T_exwrite" \
+    "send=t exread 'moved 67108864 dd if=/e/big of=/dev/null bs=1M && moved 67108864 dd if=/e/big of=/dev/null bs=1M'" "expect=T_exread" \
+    "send=t fatwrite 'moved 67108864 dd if=/dev/zero of=/f/big bs=1M count=64 && sync'" "expect=T_fatwrite" \
+    "send=t fatread 'moved 67108864 dd if=/f/big of=/dev/null bs=1M && moved 67108864 dd if=/f/big of=/dev/null bs=1M'" "expect=T_fatread" \
+    "send=t exsmall 'moved 16777216 dd if=/dev/zero of=/e/small bs=4k count=4096 && sync'" "expect=T_exsmall" \
+    "send=t fatsmall 'moved 16777216 dd if=/dev/zero of=/f/small bs=4k count=4096 && sync'" "expect=T_fatsmall" \
+    "send=t exfiles 'i=0; n=0; while [ \$i -lt 200 ]; do dd if=/dev/disk0 of=/e/small-\$i bs=4k skip=\$i count=8 2>/dev/null && n=\$((n+1)); i=\$((i+1)); done; sync; [ \$n = 200 ] && [ \$(stat -c %s /e/small-199) = 32768 ]'" "expect=T_exfiles" \
     "send=umount /e && umount /f && echo ALL\"\"DONE" "expect=ALLDONE"
 "$HARNESS" --kernel "$KERNEL" --initrd "$OSREAL" \
     --qemu-arg=-cpu --qemu-arg=max --qemu-arg=-m --qemu-arg=512 --append "rach2.diskdiag" \
@@ -56,10 +58,11 @@ set -- \
     --timeout 900 --steptmo 300 --ok "ALLDONE" --log "$LOG" "$@" > /dev/null 2>&1 \
     || fail "the boot did not reach its end; see $LOG"
 
-# A row's time against its bound; the second read of a file is served
-# from the cache, so a read row times a cold read and a warm one together.
+# row NAME BOUND TEXT: the row's time against its bound; a row whose command
+# failed has no time and fails. The second read of a file is served from
+# the cache, so a read row times a cold read and a warm one together.
 rc=0
-row() { # row NAME BOUND TEXT
+row() {
     t=$(tr -d '\r' < "$LOG" | grep -a "^T_$1 [0-9]" | tail -1 | awk '{print $2}')
     [ -n "$t" ] || fail "no time for $1 in $LOG"
     if [ "$t" -le "$2" ]; then

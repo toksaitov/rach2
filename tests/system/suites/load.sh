@@ -37,10 +37,9 @@ else
     fail "the load boot"
 fi
 # The same writer on the polled disk, with nothing to make it sleep: it is
-# inside a system call from one write to the next, and before entry 6 of
-# milestone 50 was fixed it kept the processor, the reader got no line and
-# the probe's own twenty-second sleep never ended. The switch a tick asks
-# for is taken at the call's exit now, so the reader and the probe run.
+# inside a system call from one write to the next. A timer interrupt that
+# lands inside the call requests a switch, and the call's exit takes it, so
+# the reader gets its lines and the probe's own sleep ends.
 if "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
     --qemu-arg=-cpu --qemu-arg=max \
     --drive "file=$DISK,format=raw,if=ide,index=0,media=disk" \

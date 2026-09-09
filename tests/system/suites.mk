@@ -180,7 +180,7 @@ INSTALL_TEST_STICK = $(IMAGES_DIR)/install-test-stick.img
 
 prepare-images: $(DEMO_CREDS) $(BINFIND) $(DEADLINE) $(ELFCHECK) $(HARNESS) $(HOSTPEER) \
                 $(MKFIXTURE) $(MKGPT) $(MKMBR) $(PCAPCHECK) $(PTYDRIVE) $(RUNTESTS) \
-                $(SHA256TOOL) $(WAVCHECK) os-real-image os-simple-image \
+                $(SHA256TOOL) $(WAVCHECK) $(GROWSET) os-real-image os-simple-image \
                 rach2-metal-image rach2-recovery-image $(SEALED_DISK) test-image \
                 $(INSTALL_STICK) $(INSTALL_TEST_STICK)
 prepare-all: components
@@ -1397,11 +1397,15 @@ run-installer: $(DEMO_CREDS) $(INSTALL_STICK) $(INSTALL_TEST_STICK) $(PTYDRIVE) 
 # hashing in the emulator, and one after the other they are the longest suite
 # in the tree.
 INSTALLER_REPAIR_DIR = $(IMAGES_DIR)/installer-repair
-# The rehearsal at the machine's size alone, behind RACH2_REHEARSE_LENOVO;
-# not in the registry, since it is hours.
+# The rehearsal of the sitting: the small form, minutes, in the registry;
+# RACH2_REHEARSE_LENOVO runs the same rows at the machine's size, most of
+# an hour. Its directory is its own, since the suite kills what runs under
+# its directory at its start and the installer suite runs beside it in
+# the pool.
+INSTALLER_REHEARSE_DIR = $(IMAGES_DIR)/installer-rehearse
 run-installer-rehearse: $(DEMO_CREDS) $(INSTALL_STICK) $(INSTALL_TEST_STICK) $(PTYDRIVE) $(HARNESS) $(GROWSET)
 	sh tests/system/suites/installer.sh $(INSTALL_STICK) $(SEALED_DISK) $(HARNESS) \
-	    $(INSTALLER_DIR) "`cat krffs/rach2_demo_password`" $(INSTALL_TEST_STICK) \
+	    $(INSTALLER_REHEARSE_DIR) "`cat krffs/rach2_demo_password`" $(INSTALL_TEST_STICK) \
 	    $(INSTALLER_DISK) $(INSTALLER_PORT) $(PTYDRIVE) krffs/rach2_demo_ed25519 rehearse
 
 run-installer-repair: $(DEMO_CREDS) $(INSTALL_STICK) $(INSTALL_TEST_STICK) $(PTYDRIVE) \

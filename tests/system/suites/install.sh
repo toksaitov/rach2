@@ -209,14 +209,15 @@ token_between() {
         grep -aq -e "$3"
 }
 
+# run_pass P OLDMARK MARK TOKEN: one session of the machine, in two halves.
+# The first proves the slot, plants the marker, builds, installs, proves the
+# armed-commit refusal, reboots into the trial, proves it, commits and stops.
 run_pass() {
     P="$1"
     OLDMARK="$2"
     MARK="$3"
     TOKEN="$4"
 
-    # Session A: prove the slot, plant the marker, build, install, prove the
-    # armed-commit refusal, reboot into the trial, prove it, commit, stop.
     : > "$STEPS"
     step "rach2 login:" 1 "root"
     step "Password:" 1 "$ROOTPASSWORD"

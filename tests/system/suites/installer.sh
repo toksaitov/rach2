@@ -813,6 +813,71 @@ else
     bad "the boot of the machine updated from the archive"
 fi
 
+# ---- 16: an update stopped between the root's write and the accounts'
+#          return. The archive on the recovery partition is what such an
+#          update wrote before the root: the machine's own accounts, marked
+#          as an update in progress. Here the mark is planted on the host
+#          with an account added to the archived passwd, so the retry's
+#          choice shows: it must say the root holds the image's accounts and
+#          take the archive, and the added account must have an empty home
+#          on the new root, since the root's homes were the image's. The
+#          root is written with the image on the host first, which is what
+#          the stopped update left: the image's accounts, homes and keys.
+REC_START=$(od -An -tu4 -j $((446 + 2 * 16 + 8)) -N 4 "$DIR/one.img" | tr -d ' ')
+[ -n "$REC_START" ] && [ "$REC_START" -gt 0 ] || bad "the recovery partition's start could not be read"
+mcopy -i "$DIR/one.img@@$((REC_START * 512))" ::rach2-config/etc/passwd "$DIR/archived-passwd" ||
+    bad "the archived passwd could not be read off the recovery partition"
+echo "extra:x:1001:1001::/home/extra:/bin/sh" >> "$DIR/archived-passwd"
+echo "$(basename "$INSTALLER_EXT2") stopped" > "$DIR/update-in-progress"
+ROOT4_START=$(od -An -tu4 -j $((446 + 3 * 16 + 8)) -N 4 "$DIR/one.img" | tr -d ' ')
+[ -n "$ROOT4_START" ] && [ "$ROOT4_START" -gt 0 ] || bad "the root partition's start could not be read"
+dd if="$INSTALLER_EXT2" of="$DIR/one.img" bs=512 seek="$ROOT4_START" conv=notrunc 2>/dev/null ||
+    bad "the image could not be written onto the root, as the stopped update left it"
+mcopy -o -i "$DIR/one.img@@$((REC_START * 512))" "$DIR/archived-passwd" ::rach2-config/etc/passwd ||
+    bad "the archived passwd could not be written back to the recovery partition"
+mcopy -o -i "$DIR/one.img@@$((REC_START * 512))" "$DIR/update-in-progress" ::rach2-config/update-in-progress ||
+    bad "the mark could not be planted on the recovery partition"
+LOG16="$DIR/stopped-update.log"
+if "$HARNESS" --bios \
+    --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
+    --drive "if=none,id=stick,format=raw,file=$DIR/test-stick.img" \
+    --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=stick,bootindex=0 \
+    --qemu-arg=-drive --qemu-arg="file=$DIR/one.img,format=raw,if=ide,index=0,media=disk" \
+    --timeout 3600 --steptmo 1800 --ok "STOPPEDDONE" --log "$LOG16" \
+    "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
+    "expect=# " "send=mkdir -p /m && mount -t exfat /dev/disk1p2 /m && echo MOUNT\"\"ED" \
+    "expect=MOUNTED" \
+    "send=rach2-install --update /m/$(basename "$INSTALLER_EXT2") /dev/disk0" \
+    "expect=an update was stopped part way, and the root holds the image's accounts; taking the configuration saved on the recovery partition" \
+    "expect=before the root is written" \
+    "expect=what reached the root is the image" \
+    "expect=the configuration is archived on" \
+    "expect=updated:" "send=umount /m; echo STOPPED\"\"DONE" \
+    "expect=STOPPEDDONE" > "$LOG16.harness" 2>&1; then
+    note "an update stopped between the root's write and the accounts' return is retried from the marked archive: OK"
+else
+    sed -n 's/^HARNESS: /installer-test: /p' "$LOG16.harness" >&2
+    bad "the retry of a stopped update"
+fi
+
+LOG17="$DIR/stopped-updated.log"
+if "$HARNESS" --bios --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-drive --qemu-arg="file=$DIR/one.img,format=raw,if=ide,index=0,media=disk" \
+    --timeout 300 --steptmo 120 --ok "STOPPEDUP" --log "$LOG17" \
+    "expect=rach2 login:" "send=root" "expect=Password:" "send=$NEWPASS" \
+    "expect=# " "send=grep -c ^extra: /etc/passwd | sed s/^/EXTRA=/; stat -c %u:%g:%a /home/extra | sed s/^/OWNED=/; test -z \"\$(ls -A /home/extra)\" && test -z \"\$(ls -A /home/test)\" && test ! -e /root/.ssh && echo HOME\"\"MADE" \
+    "expect=EXTRA=1" "expect=OWNED=1001:1001:700" "expect=HOMEMADE" \
+    "send=mkdir -p /r && mount -t vfat /dev/disk0p3 /r && test ! -e /r/rach2-config/update-in-progress && echo MARK\"\"GONE; umount /r" \
+    "expect=MARKGONE" \
+    "send=echo STOPPED\"\"UP" \
+    "expect=STOPPEDUP" > /dev/null 2>&1; then
+    note "and it has the archive's added account with an empty home, the image's home emptied of its key, none of root's, and the mark taken off: OK"
+else
+    bad "the boot of the machine after the retried update"
+fi
+
 fi
 
 # ---- the rehearsal of milestone 50's sitting, at the machine's own size,
@@ -852,7 +917,7 @@ USERNAME=${USERNAME:-alice}
 USERPASS=${USERPASS:-alices-own-password}
 R="$DIR/rehearse"
 rm -rf "$R"; mkdir -p "$R"
-IMAGE_BYTES=$(stat -f %z "$DISK")
+IMAGE_BYTES=$(wc -c < "$DISK" | tr -d ' ')
 IMAGE_SECTORS=$((IMAGE_BYTES / 512))
 # The root's entry in the image's table, the fourth: its first sector from
 # the MBR's bytes.
@@ -871,8 +936,14 @@ dd if="$DISK" of="$R/head.vol" bs=512 skip="$ROOT_START" count=$((128 * 2048)) 2
 NRANGES=$(grep -c . "$R/ranges")
 note "rehearsal: the save set is the image's $IMAGE_SECTORS sectors and $((NRANGES - 1)) ranges of the grow beyond it"
 # The base and the overlay; the backing name is relative to the overlay's
-# own directory, which is where both live.
+# own directory, which is where both live. Each range's first sector on the
+# base names the range, so a save that read another offset, or a restore
+# that put zeros back, shows in the digests the host expects below.
 dd if=/dev/zero of="$R/base.raw" bs=512 seek=$((LENOVO - 1)) count=1 2>/dev/null || bad "the base disk"
+while read -r s c; do
+    printf 'range %s %s\n' "$s" "$c" | dd of="$R/base.raw" bs=512 seek="$s" count=1 conv=notrunc 2>/dev/null ||
+        bad "the range at $s could not be marked on the base disk"
+done < "$R/ranges"
 # Clusters of 4 KiB, so the overlay's map is exact to the eight sectors the
 # grow's ranges are aligned to; the default 64 KiB would show every range
 # rounded up to a cluster and call the rounding a write outside the set.
@@ -895,9 +966,13 @@ cp "$STICK" "$R/product-stick.img" || bad "the product stick's copy"
 # A boot of the recovery system from the product stick, with the overlay disk
 # on IDE as disk0, the save disk on IDE as disk1 and the product stick disk2,
 # which is the order this recovery kernel registers them in; the loops look
-# the target up as the first fixed disk and the save disk up by its label
+# the target up as the first fixed disk and the save disk up as the second
 # rather than trusting the numbers. The steps come from a file, one a line.
-rehearse_boot() { # rehearse_boot LOG TIMEOUT OK STEPFILE
+# rehearse_boot LOG TIMEOUT OK STEPFILE: one boot of the recovery system with
+# the disks above, its steps read from STEPFILE one a line and typed in single
+# quotes, since the loops carry the machine's variables, which the host's
+# shell must not expand. The command line goes to LOG.sh for the record.
+rehearse_boot() {
     {
         printf '"%s" --bios --qemu-arg=-cpu --qemu-arg=max --qemu-arg=-m --qemu-arg=512' "$HARNESS"
         printf ' --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0'
@@ -907,8 +982,6 @@ rehearse_boot() { # rehearse_boot LOG TIMEOUT OK STEPFILE
         printf ' --qemu-arg=-drive --qemu-arg="file=%s/save-stick.img,format=raw,if=ide,index=1,media=disk"' "$R"
         printf ' --timeout %s --steptmo %s --ok "%s" --log "%s"' "$2" "$2" "$3" "$1"
         printf ' "expect=rach2 login:" "send=root" "expect=Password:" "send=%s" "expect=# "' "$PASSWORD"
-        # Single quotes: the loops typed to the machine carry its variables,
-        # which the host's shell must not expand.
         while IFS= read -r step; do
             printf " '%s'" "$step"
         done < "$4"
@@ -975,7 +1048,10 @@ fi
 # own ranges from the overlay's map, and an extent it calls outside must lie
 # inside the image's extent, which the install writes whole.
 qemu-img map --output=json "$R/disk.qcow2" > "$R/after-install.json" || bad "the overlay's map"
-"$GROWSET" --lba "$ROOT_START" --map "$R/after-install.json" "$R/head.vol" $((LENOVO - ROOT_START)) > "$R/after-install.check" 2>&1 || true
+grep -q '"start"' "$R/after-install.json" || bad "the overlay's map lists no extent, and the install wrote"
+growset_rc=0
+"$GROWSET" --lba "$ROOT_START" --map "$R/after-install.json" "$R/head.vol" $((LENOVO - ROOT_START)) > "$R/after-install.check" 2>&1 || growset_rc=$?
+[ "$growset_rc" -eq 0 ] || grep -q '^outside' "$R/after-install.check" || bad "growset failed on the install's map: $(head -1 "$R/after-install.check")"
 if awk -v n="$IMAGE_SECTORS" '$1 == "outside" && $2 + $3 > n { bad = 1 } END { exit bad }' "$R/after-install.check"; then
     note "rehearsal: every sector the install and the grow wrote lies in the save set: OK"
 else
@@ -1008,11 +1084,14 @@ else
     sed -n 's/^HARNESS: /installer-test: /p' "$R/restore.harness" >&2
     bad "the rehearsal's restore"
 fi
-# What the machine read back against what was saved: zeros of each length.
+# What the machine read back against what was saved: each range's mark and
+# then zeros to its length.
 "$REPO/build/tests/host/mkexfatfixture" --check "$R/save-stick.img" 2048 --read /verify > "$R/verify.machine" 2>/dev/null || bad "the digests off the save disk"
 : > "$R/verify.host"
-while read -r _start count; do
-    head -c $((count * 512)) /dev/zero | shasum -a 256 | cut -d' ' -f1 >> "$R/verify.host"
+while read -r start count; do
+    mark="range $start $count"
+    { printf '%s\n' "$mark"; head -c $((count * 512 - ${#mark} - 1)) /dev/zero; } |
+        shasum -a 256 | cut -d' ' -f1 >> "$R/verify.host"
 done < "$R/ranges"
 if [ "$(tr -d '\r' < "$R/verify.machine" | awk '{print $3}')" = "$(cat "$R/verify.host")" ]; then
     note "rehearsal: every range read back as the bytes that were saved: OK"
@@ -1020,7 +1099,9 @@ else
     bad "the ranges read back differ from what was saved"
 fi
 qemu-img map --output=json "$R/disk.qcow2" > "$R/after-restore.json" || bad "the overlay's map after the restore"
-"$GROWSET" --lba "$ROOT_START" --map "$R/after-restore.json" "$R/head.vol" $((LENOVO - ROOT_START)) > "$R/after-restore.check" 2>&1 || true
+growset_rc=0
+"$GROWSET" --lba "$ROOT_START" --map "$R/after-restore.json" "$R/head.vol" $((LENOVO - ROOT_START)) > "$R/after-restore.check" 2>&1 || growset_rc=$?
+[ "$growset_rc" -eq 0 ] || grep -q '^outside' "$R/after-restore.check" || bad "growset failed on the restore's map: $(head -1 "$R/after-restore.check")"
 if awk -v n="$IMAGE_SECTORS" '$1 == "outside" && $2 + $3 > n { bad = 1 } END { exit bad }' "$R/after-restore.check"; then
     note "rehearsal: the restore wrote nothing outside the save set either: OK"
 else

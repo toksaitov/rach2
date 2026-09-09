@@ -556,11 +556,12 @@ fi
 #      only when its next stick is found, so the machine's first stick may be
 #      disk1 for a while. A stick whose table has a Rach2 recovery ISO in it,
 #      entry type 17, is a recovery stick and is refused whatever else is on
-#      it: writing the boot half of the way back into the machine is not a
-#      row. With a serial given, the stick is the one that reports it and no
-#      other. The volume is the first FAT or exFAT partition blkid finds on
-#      the chosen stick, mounted by its node and not by a label another
-#      stick could carry. ----
+#      it, since the acceptance must not write over the stick that boots the
+#      recovery system. With a serial given, the stick is the one that
+#      reports it and no other, and two that report it stop the acceptance.
+#      The volume is the first FAT or exFAT partition blkid finds on the
+#      chosen stick, mounted by its node and not by a label another stick
+#      could carry. ----
 USBLINES="$(run 'cat /proc/usb 2>/dev/null' | grep '^disk[0-9]* ' || true)"
 STICK=""
 USBLINE=""
@@ -579,6 +580,9 @@ else
         if [ -n "$STICK_SERIAL" ] && [ "$serial" != "$STICK_SERIAL" ]; then
             note "stick: /dev/$cand ($serial) is not the stick named, $STICK_SERIAL, and is not written"
             continue
+        fi
+        if [ -n "$STICK" ] && [ -n "$STICK_SERIAL" ]; then
+            bad "stick: /dev/$cand and /dev/$STICK both report the serial $STICK_SERIAL; neither is written"
         fi
         if [ -n "$STICK" ]; then
             note "stick: /dev/$cand ($serial) is a second stick that could be written; the first is"

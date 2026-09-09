@@ -159,10 +159,10 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0,port=2.5 \
     --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0,port=2.6 \
     --timeout 120 --log "$REPO/build/images/usb-sixteen.log" "probe=usbprobe" > /dev/null 2>&1 \
-    && [ "$(grep -ac 'usb: device: port' "$REPO/build/images/usb-sixteen.log")" = 16 ]; then
+    && [ "$(grep -ac 'usb: device: port [0-9.]*: .*class' "$REPO/build/images/usb-sixteen.log")" = 16 ]; then
     note "two hubs with fourteen devices between them, sixteen in all, are every one configured: OK"
 else
-    bad "sixteen devices were not every one configured: $(grep -ac 'usb: device: port' "$REPO/build/images/usb-sixteen.log") records, $(grep -a 'USBPROBE' "$REPO/build/images/usb-sixteen.log" | tr -d '\r' | tail -1)"
+    bad "sixteen devices were not every one configured: $(grep -ac 'usb: device: port [0-9.]*: .*class' "$REPO/build/images/usb-sixteen.log") configured, $(grep -a 'USBPROBE' "$REPO/build/images/usb-sixteen.log" | tr -d '\r' | tail -1)"
 fi
 
 # ---- 7: a device this kernel cannot drive is refused once and left alone,
