@@ -59,9 +59,11 @@ static struct {
     int attached; /* the device is on the bus */
     int max_lun;  /* what Get Max LUN answers */
     int stall_max_lun;
-    int lun_type[4];        /* the SCSI device type of each logical unit */
-    int lun_ready_after[4]; /* how many TEST UNIT READY it fails first */
-    int lun_no_medium[4];   /* its sense says the medium is absent */
+    int lun_type[4];           /* the SCSI device type of each logical unit */
+    const char *lun_serial[4]; /* each unit's serial page, NULL for the default */
+    int no_serial_page;        /* INQUIRY of page 0x80 fails */
+    int lun_ready_after[4];    /* how many TEST UNIT READY it fails first */
+    int lun_no_medium[4];      /* its sense says the medium is absent */
     int tests_seen[4];
     uint32_t last_block; /* what READ CAPACITY reports */
     uint32_t block_size;
@@ -194,10 +196,16 @@ static void scsi_data_in(unsigned char *buffer, uint32_t length)
     switch (cmd.cdb[0]) {
     case 0x12:                /* INQUIRY */
         if (cmd.cdb[1] & 1) { /* the unit serial page, 0x80 */
+            const char *serial = dev.lun_serial[cmd.lun] ? dev.lun_serial[cmd.lun] : "MODEL01";
+            uint32_t n = 0;
+
+            while (serial[n]) {
+                n++;
+            }
             buffer[1] = 0x80;
-            buffer[3] = 7;
-            for (i = 0; i < 7; i++) {
-                buffer[4 + i] = (unsigned char)"MODEL01"[i];
+            buffer[3] = (unsigned char)n;
+            for (i = 0; i < n && 4 + i < length; i++) {
+                buffer[4 + i] = (unsigned char)serial[i];
             }
             return;
         }
@@ -273,6 +281,12 @@ static void scsi_data_out(const unsigned char *buffer, uint32_t length)
 static int scsi_status(void)
 {
     switch (cmd.cdb[0]) {
+    case 0x12: /* INQUIRY, whose serial page a stick may not have */
+        if ((cmd.cdb[1] & 1) && dev.no_serial_page) {
+            dev.sense_key = 0x05; /* illegal request */
+            return 1;
+        }
+        return 0;
     case 0x00: /* TEST UNIT READY */
         dev.tests_seen[cmd.lun]++;
         if (dev.lun_no_medium[cmd.lun]) {
@@ -696,6 +710,36 @@ int main(void)
           msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
     CHECK("and comes up", run_until_settled(200));
     CHECK("on the unit that is a disk and not on the one that is not", dev.capacity_lun == 1);
+
+    /* Each unit's serial is its own, and one longer than the record holds
+       is left empty rather than cut. */
+    model_reset();
+    dev.max_lun = 1;
+    dev.lun_serial[0] = "FIRST-UNIT";
+    dev.lun_serial[1] = "0123456789012345678901234567890123456789012345678901234567890123456789";
+    CHECK("a drive with two units and two serials is taken",
+          msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("and comes up", run_until_settled(200));
+    {
+        struct msc_ident ident;
+
+        CHECK("the first unit reports its own serial",
+              msc_lun_ident(0, 0, &ident) == 0 && ident.serial[0] == 'F' &&
+                  ident.serial[9] == 'T' && ident.serial[10] == '\0');
+        CHECK("and the second, whose serial is seventy characters, reports none",
+              msc_lun_ident(0, 1, &ident) == 0 && ident.serial[0] == '\0');
+    }
+
+    /* A stick without the serial page comes up with an empty serial. */
+    model_reset();
+    dev.no_serial_page = 1;
+    CHECK("a stick without the serial page is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("and comes up", run_until_settled(200));
+    {
+        struct msc_ident ident;
+
+        CHECK("with an empty serial", msc_ident(0, &ident) == 0 && ident.serial[0] == '\0');
+    }
 
     /* A card reader whose first slot is empty. */
     model_reset();

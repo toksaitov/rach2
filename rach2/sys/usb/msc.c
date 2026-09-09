@@ -152,8 +152,13 @@ struct msc_lun {
     uint64_t blocks;
     uint32_t block_size;
     int write_protect;
+    char serial[64]; /* the unit's serial page, or empty when it has none */
     block_device_t block;
 };
+
+/* The longest serial taken from the page: what the record holds less the
+ * terminator, and what the 64-byte answer holds after its header. */
+#define MSC_SERIAL_MAX 60
 
 struct msc_device {
     int used;
@@ -188,14 +193,14 @@ struct msc_device {
     uint32_t residue;
     int status; /* the status byte of the wrapper that ended the command */
     int sense_key;
-    int retried; /* the request in flight has been sent a second time */
-    int sensing; /* the command in flight is the REQUEST SENSE for the request */
+    int retried;     /* the request in flight has been sent a second time */
+    int csw_retried; /* the command in flight had its status wrapper cleared once */
+    int sensing;     /* the command in flight is the REQUEST SENSE for the request */
 
     /* What the stick is, once it is up. INQUIRY's two strings are kept
      * because `scratch` is the next command's buffer as well. */
     char vendor[9];
     char product[17];
-    char serial[21]; /* the unit serial page, or empty when it has none */
     uint32_t flushes; /* SYNCHRONIZE CACHE commands sent, for /proc/usb */
 
     /* What the unit being brought up answered; copied into its record. */
@@ -343,6 +348,7 @@ static int command_begin(struct msc_device *m, const uint8_t *cdb, int cdb_lengt
     struct usb_transfer transfer;
     int i;
 
+    m->csw_retried = 0;
     if (cdb_length < 1 || cdb_length > 16) {
         return -1;
     }
@@ -611,6 +617,11 @@ int msc_ready(int index)
     return sticks[index].used && !sticks[index].closing && sticks[index].state == MSC_STATE_READY;
 }
 
+/**
+ * The identity of unit `lun` of stick `index`, for `/proc/usb` and the
+ * disk registry: INQUIRY's strings, the unit's serial page, its capacity
+ * and its state. -1 for a stick or a unit that is not there.
+ */
 int msc_lun_ident(int index, int lun, struct msc_ident *out)
 {
     struct msc_device *m;
@@ -632,7 +643,7 @@ int msc_lun_ident(int index, int lun, struct msc_ident *out)
         out->product[i] = m->product[i];
     }
     for (i = 0; i < (int)sizeof(out->serial); i++) {
-        out->serial[i] = m->serial[i];
+        out->serial[i] = u->serial[i];
     }
     out->blocks = u->blocks;
     out->flushes = m->flushes;
@@ -744,11 +755,11 @@ int msc_completion(const struct usb_completion *completion)
 
     case STAGE_CSW:
         if (completion->status == USB_XFER_STALLED) {
-            if (m->retried) {
+            if (m->csw_retried) {
                 recover_begin(m, "the status wrapper stalled twice");
                 return 1;
             }
-            m->retried = 1;
+            m->csw_retried = 1;
             m->recover = RECOVER_CLEAR_ONE;
             m->after_recover = m->ep_in;
             m->deadline = MSC_STEP_MS;
@@ -860,6 +871,11 @@ static int send_inquiry_serial(struct msc_device *m)
 {
     uint8_t cdb[6];
 
+    int i;
+
+    for (i = 0; i < (int)sizeof(m->scratch); i++) {
+        m->scratch[i] = 0; /* a short answer leaves blanks, not the last command's bytes */
+    }
     cdb_clear(cdb, 6);
     cdb[0] = SCSI_INQUIRY;
     cdb[1] = 1; /* EVPD */
@@ -1052,7 +1068,7 @@ static void step_command_done(struct msc_device *m)
         }
         take_string(m->vendor, &m->scratch[8], 8);
         take_string(m->product, &m->scratch[16], 16);
-        m->serial[0] = '\0';
+        m->luns[m->lun].serial[0] = '\0';
         m->state = MSC_STATE_SERIAL;
         return;
 
@@ -1060,13 +1076,16 @@ static void step_command_done(struct msc_device *m)
         if (status == CSW_GOOD && m->scratch[1] == 0x80) {
             int len = m->scratch[3];
 
-            take_string(m->serial, &m->scratch[4], len < 20 ? len : 20);
+            if (len > MSC_SERIAL_MAX) {
+                klog(KLOG_INFO, "usbdisk", "device %d: lun %d: a serial of %d characters is not taken",
+                     m->device, m->lun, len);
+            } else {
+                take_string(m->luns[m->lun].serial, &m->scratch[4], len);
+            }
             m->state = MSC_STATE_TEST;
             return;
         }
-        /* No such page: the failure's sense is asked for, as any other, and
-         * the tests go on from there. */
-        m->state = status == CSW_GOOD ? MSC_STATE_TEST : MSC_STATE_SENSE;
+        m->state = status == CSW_GOOD ? MSC_STATE_TEST : MSC_STATE_SENSE; /* no page: its sense next */
         return;
 
     case MSC_STATE_TEST:

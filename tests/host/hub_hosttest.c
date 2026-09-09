@@ -1025,8 +1025,8 @@ static int slot_at_port(int port)
         if (!slot_of[n].open || slot_of[n].where.depth != 1) {
             continue;
         }
-        if (port <= 15 ? slot_of[n].where.route == (uint32_t)port
-                       : (slot_of[n].where.route == 0xFu && slot_of[n].where.tt_port == port)) {
+        if (slot_of[n].where.route == 0xFu ? slot_of[n].where.tt_port == port
+                                           : slot_of[n].where.route == (uint32_t)port) {
             return n;
         }
     }
@@ -1536,13 +1536,9 @@ int main(void)
     pump(2000);
     CHECK("and the next keyboard enumerates", running_count() == 2);
 
-    /* A device behind a hub that found the table full is enumerated once an
-       entry comes free, as one on a root port is. The hub is high-speed and
-       has as many ports as the table has entries, so the hub and all but
-       one of its full-speed keyboards fill the table and the last, on a port
-       the route string writes as fifteen and the translator names, is the
-       one refused. Before milestone 50 the model refused any slot above
-       fifteen, which is what kept the table at twelve (entry 19). */
+    /* The hub and all but one of its keyboards fill the table; the last,
+       on the port the route string writes as fifteen and the translator
+       names, waits for an entry. */
     model_reset();
     model.root_speed = USB_SPEED_HIGH;
     model.hub_protocol = 1;

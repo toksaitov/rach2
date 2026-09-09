@@ -341,7 +341,7 @@ static void bring_up(int n)
         int i;
 
         disk_set_model(d, ident.vendor, ident.product);
-        for (i = 0; i < DISK_SERIAL_CHARS && ident.serial[i]; i++) {
+        for (i = 0; i < DISK_SERIAL_MAX && ident.serial[i]; i++) {
             d->serial[i] = ident.serial[i];
         }
         d->serial[i] = '\0';

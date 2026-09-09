@@ -30,6 +30,9 @@
 #define DISK_MODEL_CHARS    40 /* words 27-46 */
 #define DISK_SERIAL_CHARS   20 /* words 10-19 */
 #define DISK_FIRMWARE_CHARS 8  /* words 23-26 */
+/* A stick's unit serial page can be longer than IDENTIFY's field; one
+ * that does not fit here is not published, since a prefix is no identity. */
+#define DISK_SERIAL_MAX 63
 
 /** A raw window: a partition view and whether its node exists now. */
 struct disk_window {
@@ -44,7 +47,7 @@ struct disk {
     const char *transport;  /* "ahci", "ata" */
     int location;           /* the AHCI port, or the ATA channel and drive */
     char model[DISK_MODEL_CHARS + 1];
-    char serial[DISK_SERIAL_CHARS + 1];
+    char serial[DISK_SERIAL_MAX + 1];
     char firmware[DISK_FIRMWARE_CHARS + 1];
     struct part_table table;
     block_device_t *backing;               /* what the views are cut from */

@@ -34,7 +34,7 @@
 struct msc_ident {
     char vendor[9];
     char product[17];
-    char serial[21]; /* the unit serial page, or empty */
+    char serial[64]; /* the unit's serial page, or empty */
     uint64_t blocks;
     uint32_t block_size;
     uint32_t flushes; /* SYNCHRONIZE CACHE commands sent to it */
