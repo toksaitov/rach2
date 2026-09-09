@@ -302,12 +302,12 @@ static void exec_program(int argc, char *argv[]);
  * loopback delivery, and the interrupt-less console serial drain. Finally
  * Accounts the tick as idle or busy FIRST, before anything below can wake a
  * process: the marker names what the processor was doing when this tick
- * arrived, not what it is about to do. Then
- * reschedules, but only when the
- * current process is not inside kernel syscall code: timer IRQs stay enabled
- * during syscalls so HDA streaming keeps running, yet preempting a process mid
- * syscall is unsafe. Kernel threads (no current_proc, or one not in_syscall)
- * stay preemptible.
+ * arrived, not what it is about to do. Then reschedules through
+ * `sched_preempt`: at once when the current process is not inside a system
+ * call, and at the call's exit when it is, since timer IRQs stay enabled
+ * during a call so HDA streaming keeps running, yet a switch in the middle of
+ * one is unsafe. Kernel threads (no current_proc, or one not in_syscall)
+ * are switched at once.
  */
 static void timer_handler(isr_params_t *params)
 {
@@ -347,9 +347,7 @@ static void timer_handler(isr_params_t *params)
     block_request_tick();
     tty_console_poll();
 
-    if (!current_proc || !current_proc->in_syscall) {
-        schedule();
-    }
+    sched_preempt();
 }
 
 /**

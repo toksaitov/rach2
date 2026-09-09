@@ -12129,7 +12129,10 @@ static uint32_t _enosys_last_pid[SYSCALL_TABLE_SIZE];
  * Looks up _syscall_table[EAX] and calls it, storing the result back in
  * params->eax for popal/iret to return to userspace. Marks the process
  * non-preemptible (in_syscall) around the dispatch and runs the body with
- * interrupts on so the PIT/HDA keep ticking during long syscalls.
+ * interrupts on so the PIT/HDA keep ticking during long syscalls. A switch an
+ * interrupt asked for during the call is taken at its exit, with interrupts
+ * off again and the trapframe whole, so a process that is always inside a
+ * call still gives way at each tick.
  */
 static void _syscall_handler(isr_params_t *params)
 {
@@ -12188,6 +12191,7 @@ static void _syscall_handler(isr_params_t *params)
     if (current_proc) {
         current_proc->in_syscall = 0;
     }
+    sched_take_preempt();
 
     /* Store return value in EAX - will be restored by popal */
     params->eax = (uint32_t)ret;

@@ -159,10 +159,6 @@ static void writer(const char *path)
         if (writer_syncs) {
             syscall1(SYS_SYNC, 0);
         }
-        /* A breath between files: a process that is always inside a system
-           call is never preempted, and the others would not run; entry 6 of
-           milestone 50 records that. */
-        sleep_ms(10);
     }
 }
 

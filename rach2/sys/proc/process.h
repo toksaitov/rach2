@@ -166,6 +166,9 @@ struct process {
     /* Inside `mem_reclaim`: its own allocations, the requests a writeback
      * needs, may take from the reserve. */
     uint32_t reclaiming;
+    /* An interrupt asked for a switch while this process was inside a
+     * system call; the call's exit takes it. */
+    volatile uint32_t need_resched;
 };
 
 typedef struct process process_t;

@@ -21,6 +21,14 @@ void schedule(void);
 /** Voluntarily give up the CPU to the next READY process. */
 void sched_yield(void);
 
+/** From an interrupt handler: switch now, or at the current system call's
+ * exit when the process is inside one; see sched.c. */
+void sched_preempt(void);
+
+/** At a system call's exit, interrupts off: the switch an interrupt asked
+ * for during the call, if one did. */
+void sched_take_preempt(void);
+
 /** A record is about to go: the scheduler must not start its next search
  * from it. */
 void sched_forget(process_t *p);

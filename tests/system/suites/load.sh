@@ -36,4 +36,24 @@ else
     grep -a 'LOADPROBE' "$DISK.log" | tr -d '\r' >&2 || true
     fail "the load boot"
 fi
+# The same writer on the polled disk, with nothing to make it sleep: it is
+# inside a system call from one write to the next, and before entry 6 of
+# milestone 50 was fixed it kept the processor, the reader got no line and
+# the probe's own twenty-second sleep never ended. The switch a tick asks
+# for is taken at the call's exit now, so the reader and the probe run.
+if "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
+    --qemu-arg=-cpu --qemu-arg=max \
+    --drive "file=$DISK,format=raw,if=ide,index=0,media=disk" \
+    --append "rach2.rescue" \
+    --timeout 120 --steptmo 60 --ok "LOADPROBE OK" --never "LOADPROBE FAIL" --log "$DISK.polled.log" \
+    "expect=Type 'help'" "send=exec /loadprobe Wnr" \
+    wait=2 "send=one" wait=2 "send=two" wait=2 "send=three" wait=2 "send=four" \
+    wait=2 "send=five" wait=2 "send=six" \
+    "expect=LOADPROBE" > /dev/null 2>&1; then
+    grep -a 'LOADPROBE timer' "$DISK.polled.log" | tail -1 | tr -d '\r' | sed 's/^/load-test: polled: /'
+    echo "load-test: a writer always inside a system call on the polled disk gives way at each tick: OK"
+else
+    grep -a 'LOADPROBE' "$DISK.polled.log" | tr -d '\r' >&2 || true
+    fail "the polled writer's boot"
+fi
 echo "load-test: PASS"

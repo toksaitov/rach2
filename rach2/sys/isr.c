@@ -20,8 +20,7 @@ extern void terminate_current_process(int32_t signo);
  * woke a reader has to let that reader run, and the trap core need not pull
  * in the whole process header to ask which context it interrupted.
  */
-extern void schedule(void);
-extern int proc_in_syscall(void);
+extern void sched_preempt(void);
 
 /* Every interrupt this kernel has routed through `_irq_router`, which is what
  * /proc/stat's `intr` line reports. */
@@ -296,14 +295,12 @@ void _irq_router(isr_params_t *params)
          * mode, which has no kernel state of its own to be half way through,
          * and one that is not inside a system call, which is the idle loop
          * or a kernel thread and is what the timer already preempts. Kernel
-         * code inside a system call is never preempted here: the exit path
-         * and the scheduler itself both run with interrupts on while their
-         * own bookkeeping is half done, and a switch taken there strands the
-         * process whose state they were in the middle of changing.
+         * code inside a system call is not switched here, since the exit
+         * path and the scheduler itself run with interrupts on while their
+         * own bookkeeping is half done; `sched_preempt` asks the call to
+         * switch at its exit instead.
          */
-        if ((params->cs & 3u) == 3u || !proc_in_syscall()) {
-            schedule();
-        }
+        sched_preempt();
         return;
     }
 

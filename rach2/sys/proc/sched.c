@@ -131,6 +131,37 @@ void sched_yield(void)
     schedule();
 }
 
+/**
+ * Preempt from an interrupt handler.
+ *
+ * A process interrupted in user mode, the idle loop and a kernel thread are
+ * switched at once. A process inside a system call is not: the call's exit
+ * path and the scheduler itself run with interrupts on while their own
+ * bookkeeping is half done, and a switch taken there strands the process
+ * whose state they were in the middle of changing. Before this the request
+ * was dropped, so a process that returned to user mode for one instruction
+ * between two calls was preempted only when the tick landed in that
+ * instruction, and a writer that was always inside a call kept the processor
+ * for as long as it ran (entry 6 of milestone 50). Now the request is kept
+ * on the process and `sched_take_preempt` takes it at the call's exit.
+ */
+void sched_preempt(void)
+{
+    if (current_proc && current_proc->in_syscall) {
+        current_proc->need_resched = 1;
+        return;
+    }
+    schedule();
+}
+
+void sched_take_preempt(void)
+{
+    if (current_proc && current_proc->need_resched) {
+        current_proc->need_resched = 0;
+        schedule();
+    }
+}
+
 /* The idle marker and the two tick counters. `volatile` because the timer
  * handler reads the marker from an interrupt that arrives in the middle of the
  * halt it describes. The counters are 32-bit, which is one aligned store on
