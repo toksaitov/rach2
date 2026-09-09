@@ -386,6 +386,27 @@ case "$OUT" in
     *"committed: the candidate is the saved default"*) ;;
     *) fail "the commit after a trial boot did not report success: $OUT" ;;
 esac
+# The committed candidate becomes the fallback kernel: the slot copied into
+# the fallback file and read back, then tried once through the fallback
+# entry, which the marked kernel's token proves ran from that file.
+OUT="$(machine 'bootctl fallback' || true)"
+case "$OUT" in
+    *"fallback: "*"written from the committed candidate and read back"*) ;;
+    *) fail "the committed candidate was not written as the fallback: $OUT" ;;
+esac
+OUT="$(machine 'bootctl trial fallback' || true)"
+case "$OUT" in
+    *"armed: the next boot tries fallback"*) ;;
+    *) fail "the fallback trial was not armed: $OUT" ;;
+esac
+reboot_machine 3
+OUT="$(machine 'bootctl status' || true)"
+case "$OUT" in
+    *"booted: fallback"*) ;;
+    *) fail "the trial boot did not come from the fallback: $OUT" ;;
+esac
+[ "$(grep -ac "Rach2 SEALED!" "$LOG")" -ge 2 ] ||
+    fail "the fallback file does not carry the committed kernel"
 stop_machine
 
 phase "a destroyed candidate, the fallback, and the repair"

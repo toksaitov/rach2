@@ -783,6 +783,84 @@ int bootslot_install(struct bootslot *bs, const uint8_t *image, uint32_t size, c
                     errlen);
 }
 
+int bootslot_fallback(struct bootslot *bs, char *err, size_t errlen)
+{
+    static uint8_t env[ENV_BYTES];
+    static uint8_t sector[BOOTSLOT_SECTOR];
+    static uint8_t back[BOOTSLOT_SECTOR];
+    static uint8_t head[MULTIBOOT_SEARCH];
+    char idbuf[BOOTSLOT_ENTRY_MAX];
+    char want[BOOTSLOT_ENTRY_MAX + 16];
+    const char *id = entry_id(bs, "candidate", idbuf, sizeof(idbuf));
+    uint32_t nsectors = bs->kernel.size / BOOTSLOT_SECTOR;
+    uint32_t present, s, i, n;
+    int committed = 0;
+
+    if (bs->kernel.size % BOOTSLOT_SECTOR != 0 || bs->fallback.size % BOOTSLOT_SECTOR != 0) {
+        return fail(err, errlen, "a slot is not sector-sized");
+    }
+    if (bs->fallback.size < bs->kernel.size) {
+        return fail(err, errlen,
+                    "the fallback file is shorter than the candidate slot: a disk built "
+                    "before the fallback was rewritable");
+    }
+    /* The saved entry must be the candidate's, with no trial armed: a
+       committed candidate is a kernel that booted and was accepted, and an
+       armed line means the slot was refilled since. */
+    if (bootslot_read_env(bs, env, err, errlen) != 0) {
+        return -1;
+    }
+    memcpy(want, "\nsaved_entry=", 13);
+    n = 13;
+    for (i = 0; id[i] != '\0' && n + 2 < sizeof(want); i++) {
+        want[n++] = id[i];
+    }
+    want[n++] = '\n';
+    want[n] = '\0';
+    for (i = 0; i + n <= ENV_BYTES; i++) {
+        if (memcmp(env + i, want, n) == 0) {
+            committed = 1;
+        }
+        if (i + 13 <= ENV_BYTES && memcmp(env + i, "\nnext_entry=", 12) == 0 &&
+            env[i + 12] != '\n') {
+            return fail(err, errlen, "a trial is armed: the candidate slot is not the kernel "
+                                     "that was committed");
+        }
+    }
+    if (!committed) {
+        return fail(err, errlen, "the candidate is not the saved default; boot and commit it "
+                                 "before it becomes the fallback");
+    }
+    /* The slot's head validated as the install validates the fallback. */
+    present = bs->kernel.size < MULTIBOOT_SEARCH ? bs->kernel.size : MULTIBOOT_SEARCH;
+    for (s = 0; s * BOOTSLOT_SECTOR < present; s++) {
+        if (file_read_sector(bs, &bs->kernel, s, head + s * BOOTSLOT_SECTOR) != 0) {
+            return fail(err, errlen, "the candidate slot does not read");
+        }
+    }
+    if (bootslot_validate_kernel(head, present, bs->kernel.size, err, errlen) != 0) {
+        return -1;
+    }
+    for (s = 0; s < nsectors; s++) {
+        if (file_read_sector(bs, &bs->kernel, s, sector) != 0) {
+            return fail(err, errlen, "the candidate slot does not read");
+        }
+        if (file_write_sector(bs, &bs->fallback, s, sector) != 0) {
+            return fail(err, errlen, "the fallback file does not write");
+        }
+    }
+    for (s = 0; s < nsectors; s++) {
+        if (file_read_sector(bs, &bs->kernel, s, sector) != 0 ||
+            file_read_sector(bs, &bs->fallback, s, back) != 0) {
+            return fail(err, errlen, "the fallback file does not read back");
+        }
+        if (memcmp(sector, back, BOOTSLOT_SECTOR) != 0) {
+            return fail(err, errlen, "the fallback's bytes do not match the candidate's");
+        }
+    }
+    return 0;
+}
+
 int bootslot_commit(struct bootslot *bs, char *err, size_t errlen)
 {
     static uint8_t env[ENV_BYTES];

@@ -115,6 +115,14 @@ int bootslot_install(struct bootslot *bs, const uint8_t *image, uint32_t size, c
  *  slot bytes are the running kernel. */
 int bootslot_commit(struct bootslot *bs, char *err, size_t errlen);
 
+/** Copy the committed candidate slot into the fallback file and read it
+ *  back byte for byte, so a machine whose fallback is old is given the
+ *  kernel it runs. Refused while the saved entry is not the candidate's,
+ *  while a trial is armed, and on a disk whose fallback file is shorter than
+ *  the slot, which every disk built before milestone 50 has. The caller
+ *  boots the new fallback once, `trial fallback`, before trusting it. */
+int bootslot_fallback(struct bootslot *bs, char *err, size_t errlen);
+
 /**
  * Write `size` bytes of `text` into the menu slot, padding the rest.
  *

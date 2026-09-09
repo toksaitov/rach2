@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "bootslot.h"
@@ -83,12 +84,26 @@ static const struct bootslot_io IO = {io_read, io_write, NULL};
  *  failure, which would make every case meaningless. The builder is
  *  compiled here on first use, since this test is compiled and run
  *  directly and has no build system to ask. */
+/** Whether the fixture builder's source is newer than the binary at `path`. */
+static int source_newer_than(const char *path)
+{
+    struct stat src, bin;
+
+    if (stat("tests/host/mkfatfixture.c", &src) != 0 || stat(path, &bin) != 0) {
+        return 1;
+    }
+    return src.st_mtime > bin.st_mtime;
+}
+
 static void load(const char *opt)
 {
     char cmd[256];
     FILE *f;
 
-    if (access(FIXDIR "/mkfatfixture", X_OK) != 0) {
+    /* The builder is rebuilt when its source is newer: the directory
+       outlives a run, and a builder from before an option was added would
+       build the fixture without it. */
+    if (access(FIXDIR "/mkfatfixture", X_OK) != 0 || source_newer_than(FIXDIR "/mkfatfixture")) {
         snprintf(cmd, sizeof(cmd), "cc -O2 -o %s/mkfatfixture tests/host/mkfatfixture.c", FIXDIR);
         if (system(cmd) != 0) {
             fprintf(stderr, "bootctl_hosttest: cannot build the fixture builder\n");
@@ -232,6 +247,86 @@ int main(void)
     CHECK(bootslot_commit(&bs, err, sizeof(err)) == 0, "commit");
     CHECK(env_has("saved_entry=candidate\n"), "commit saves the candidate");
     CHECK(!env_has("saved_entry=fallback\n"), "one saved entry only");
+
+    /* The committed candidate into the fallback file: refused on this
+       image, whose fallback is shorter than the slot as every disk built
+       before the fallback was rewritable is. */
+    CHECK(bootslot_fallback(&bs, err, sizeof(err)) == -1 &&
+              strstr(err, "shorter than the candidate slot") != NULL,
+          "a fallback file shorter than the slot refuses the copy by name");
+
+    /* On an image whose fallback is as long as the slot: refused while the
+       candidate is unproved, armed or merely installed, and after the commit
+       written and read back, the fallback's bytes the candidate's. */
+    load("--fallback-slot");
+    CHECK(bootslot_open(&bs, &IO, err, sizeof(err)) == 0, "the fallback-slot image opens");
+    CHECK(bs.kernel.size == bs.fallback.size, "and its two slots are one length");
+    make_kernel(kernel, 5000);
+    CHECK(bootslot_install(&bs, kernel, 5000, err, sizeof(err)) == 0, "a kernel installs there");
+    CHECK(bootslot_fallback(&bs, err, sizeof(err)) == -1 && strstr(err, "trial is armed") != NULL,
+          "an installed, untried candidate is refused as the fallback's source");
+    {
+        static uint8_t env[1024];
+        long i;
+
+        CHECK(bootslot_read_env(&bs, env, err, sizeof(err)) == 0, "the block reads");
+        for (i = 0; i + 21 <= 1024; i++) {
+            if (memcmp(env + i, "next_entry=candidate\n", 21) == 0) {
+                memmove(env + i + 11, env + i + 20, (size_t)(1024 - i - 20));
+                memset(env + 1024 - 9, '#', 9);
+                break;
+            }
+        }
+        for (i = 0; i < (long)bs.grubenv.chain_len; i++) {
+            long at =
+                ((long)bs.data_start + ((long)bs.grubenv.chain[i] - 2) * bs.cluster_sectors) * 512;
+            long len = (long)bs.cluster_sectors * 512;
+
+            if (i * len < 1024) {
+                memcpy(img.data + at, env + i * len,
+                       (size_t)(1024 - i * len < len ? 1024 - i * len : len));
+            }
+        }
+    }
+    CHECK(bootslot_commit(&bs, err, sizeof(err)) == 0, "the tried candidate commits");
+    CHECK(bootslot_fallback(&bs, err, sizeof(err)) == 0,
+          "the committed candidate becomes the fallback");
+    {
+        int same = 1;
+        uint32_t c;
+
+        for (c = 0; c < bs.kernel.chain_len && c < bs.fallback.chain_len; c++) {
+            long a =
+                ((long)bs.data_start + ((long)bs.kernel.chain[c] - 2) * bs.cluster_sectors) * 512;
+            long b =
+                ((long)bs.data_start + ((long)bs.fallback.chain[c] - 2) * bs.cluster_sectors) * 512;
+
+            if (memcmp(img.data + a, img.data + b, (size_t)bs.cluster_sectors * 512) != 0) {
+                same = 0;
+            }
+        }
+        CHECK(same && bs.kernel.chain_len == bs.fallback.chain_len,
+              "and the fallback file's bytes are the candidate slot's, whole");
+        CHECK(memcmp(img.data + ((long)bs.data_start +
+                                 ((long)bs.fallback.chain[0] - 2) * bs.cluster_sectors) *
+                                    512,
+                     kernel, 5000) == 0,
+              "beginning with the kernel that was installed");
+    }
+    /* A device that says yes to a sector and keeps nothing: the fallback's
+       third sector spoiled and the write that would mend it dropped, the
+       readback is what catches it, so the copy is refused. */
+    memset(img.data +
+               ((long)bs.data_start + ((long)bs.fallback.chain[2] - 2) * bs.cluster_sectors) * 512,
+           0xEE, 512);
+    img.count = 0;
+    img.drop_at = 3;
+    CHECK(bootslot_fallback(&bs, err, sizeof(err)) == -1 &&
+              strstr(err, "do not match the candidate's") != NULL,
+          "a fallback write the device dropped is caught by the readback");
+    img.drop_at = -1;
+    load("");
+    CHECK(bootslot_open(&bs, &IO, err, sizeof(err)) == 0, "the well-formed image opens again");
 
     /* An unknown variable survives both env writers. The insertion point is
        found, not assumed: the byte after the block's last newline. */

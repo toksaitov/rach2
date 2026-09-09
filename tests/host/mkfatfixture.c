@@ -20,6 +20,7 @@
  *     --fats-differ --loop --out-of-range --short-chain --cross-link
  *     --bpb-sector-size --bpb-fat-oversized --bpb-root-out --bpb-overflow
  *     --no-grubenv --small-candidate --fragmented --bad-fallback
+ *     --fallback-slot
  *     --cfg-short --cluster8 --cluster8-past-end --menu-short --menu-odd
  *     --no-menu --vfs --active-second --unmasked --dir-loop
  *     --lost-chain --overlong-chain --bad-dotdot --dup-name --fsinfo
@@ -823,6 +824,12 @@ int main(int argc, char **argv)
     cbytes = spc * SECTOR;
     clusters = (TOTAL - DATA_START) / spc;
     slot_clusters = KERNEL_CLUSTERS / spc;
+    /* A fallback file as long as the candidate slot, which is what a disk
+       built with a rewritable fallback has; the image is too small for two
+       slots of the full size, so both are the fallback's length. */
+    if (is("--fallback-slot")) {
+        slot_clusters = FALLBACK_CLUSTERS / spc;
+    }
     kernel_clusters = is("--small-candidate") ? (spc <= 16 ? 16 / spc : 1) : slot_clusters;
     fallback_clusters = FALLBACK_CLUSTERS / spc;
     kernel_first = KERNEL_FIRST;

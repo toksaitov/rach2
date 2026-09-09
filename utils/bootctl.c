@@ -589,6 +589,31 @@ static int cmd_trial(const char *id)
  * GRUB leaves behind after a trial has actually booted, and `commit` requires
  * it, so writing it here would let a kernel that never ran be made the default.
  */
+/**
+ * Make the committed candidate the fallback kernel too.
+ *
+ * The fallback file is written only by an install that builds the disk,
+ * so a machine that has been updated through the candidate slot for a long
+ * time keeps a fallback as old as its disk. This copies the slot into the
+ * fallback file and reads it back, refused while the candidate is not the
+ * saved default or a trial is armed; `bootctl trial fallback` then boots
+ * the new fallback once before it is relied on.
+ */
+static int cmd_fallback(void)
+{
+    if (open_slot() != 0) {
+        return 1;
+    }
+    if (bootslot_fallback(&bs, errbuf, sizeof(errbuf)) != 0) {
+        fprintf(stderr, "bootctl: %s\n", errbuf);
+        return 1;
+    }
+    printf("bootctl: fallback: %u bytes written from the committed candidate and read back\n",
+           (unsigned)bs.kernel.size);
+    printf("bootctl: run `bootctl trial fallback` to boot it once\n");
+    return 0;
+}
+
 static int cmd_cancel(void)
 {
     if (open_slot() != 0) {
@@ -705,6 +730,7 @@ static void usage(void)
     fprintf(stderr, "       bootctl commit\n");
     fprintf(stderr, "       bootctl trial <entry>\n");
     fprintf(stderr, "       bootctl cancel\n");
+    fprintf(stderr, "       bootctl fallback\n");
     fprintf(stderr, "       bootctl env <key> [value]\n");
     fprintf(stderr, "       bootctl --target <partition> <command> ...\n");
 }
@@ -740,6 +766,8 @@ int main(int argc, char **argv)
         return cmd_commit();
     case BOOTVERB_CANCEL:
         return cmd_cancel();
+    case BOOTVERB_FALLBACK:
+        return cmd_fallback();
     case BOOTVERB_KERNEL:
         return cmd_kernel(arg);
     case BOOTVERB_CONFIG:

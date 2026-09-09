@@ -21,7 +21,8 @@
 # The boot partition is the install surface (dev-log/23-install/plan.md):
 # /boot/kernel is the candidate, the kernel padded with zeros to a fixed
 # 2 MiB slot whose data sectors bootctl rewrites in place on the
-# machine itself; /boot/fallback is the same kernel, never written afterward;
+# machine itself; /boot/fallback is the same kernel, padded the same, which
+# `bootctl fallback` rewrites from a committed candidate and nothing else;
 # and /boot/grub/grubenv is the 1024-byte state block that selects between
 # them, initialized to boot the candidate. The build verifies every staged
 # chain and the four files' disjointness before committing the partition,
@@ -547,7 +548,7 @@ fi
 mmd -i "$TMPD/p1.img" ::/boot
 mmd -i "$TMPD/p1.img" ::/boot/grub
 mcopy -i "$TMPD/p1.img" "$TMPD/candidate.pad" ::/boot/kernel
-mcopy -i "$TMPD/p1.img" "$KERNEL" ::/boot/fallback
+mcopy -i "$TMPD/p1.img" "$TMPD/candidate.pad" ::/boot/fallback
 mcopy -i "$TMPD/p1.img" "$GRUB_CFG" ::/boot/grub/grub.cfg
 # The rewritable menu, empty but full size. A '#' fill, not zeros, because
 # GRUB reads the whole file and a comment is what an empty menu looks like
@@ -593,7 +594,7 @@ CLBYTES=$(( ($1 + $2 * 256) * $3 ))
     echo "mkdisk_grub: the formatted volume reports a zero cluster size" >&2
     exit 1
 }
-awk -v cbytes="$CLBYTES" -v kernel="$SLOT_BYTES" -v fallback="$KBYTES" \
+awk -v cbytes="$CLBYTES" -v kernel="$SLOT_BYTES" -v fallback="$SLOT_BYTES" \
     -v grubcfg="$CFGBYTES" -v grubenv=1024 -v bootcfg="$MENU_BYTES" '
 function need(bytes) { return int((bytes + cbytes - 1) / cbytes) }
 {

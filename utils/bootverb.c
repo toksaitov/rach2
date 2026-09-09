@@ -24,7 +24,8 @@ static const struct {
              {"config", BOOTVERB_CONFIG, 1, 1},
              {"grub", BOOTVERB_GRUB, 1, 1},
              {"trial", BOOTVERB_TRIAL, 1, 1},
-             {"env", BOOTVERB_ENV, 1, 2}};
+             {"env", BOOTVERB_ENV, 1, 2},
+             {"fallback", BOOTVERB_FALLBACK, 0, 0}};
 
 #define VERB_COUNT ((int)(sizeof(verbs) / sizeof(verbs[0])))
 
