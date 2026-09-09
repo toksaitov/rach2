@@ -39,14 +39,16 @@ check() {
 
 # A tree the runner can drive: its own registry, its own suite targets, and a
 # `prepare-all` that does nothing.
-mkdir -p "$WORK/tests/system"
+mkdir -p "$WORK/tests/system" "$WORK/tools/setup"
 cp "$REPO/tests/run" "$WORK/tests/run"
+cp "$REPO/tools/setup/hostcheck.c" "$WORK/tools/setup/hostcheck.c"
 cat > "$WORK/tests/registry" <<'REG'
 # name|tools|tier
 passing|-|core
 failing|-|full
 leaky|-|full
 needy|a-command-that-does-not-exist|full
+imagey|hdiutil|full
 slow1|-|full
 slow2|-|full
 REG
@@ -64,6 +66,8 @@ run-leaky:
 	 i=0; while [ ! -s "$$RACH2_QEMU_LEDGER" ] && [ $$i -lt 100 ]; do sleep 0.1; i=$$((i+1)); done
 run-needy:
 	@echo "needy ran"
+run-imagey:
+	@echo "imagey ran"
 run-slow1:
 	@sleep 2
 run-slow2:
@@ -101,6 +105,33 @@ out=$(run needy); rc=$?
 check "a missing tool refuses before building" 1 "$rc"
 check "and names the tool" 1 "$(printf '%s\n' "$out" | grep -c 'a-command-that-does-not-exist')"
 check "and nothing was prepared" 0 "$(printf '%s\n' "$out" | grep -c 'run: preparing')"
+
+# The host's own refusals, tried and not looked up: a checker that refuses a
+# socket bind stops the run before the build, and so does a disk image that
+# cannot be attached when a suite needs one, through a formatter that fails.
+cat > "$WORK/bin/hostcheck-refusing" <<'HC'
+#!/bin/sh
+echo "hostcheck: refused: a TCP socket bound on the loopback address" >&2
+exit 1
+HC
+chmod +x "$WORK/bin/hostcheck-refusing"
+out=$(RACH2_HOSTCHECK="$WORK/bin/hostcheck-refusing" run passing); rc=$?
+check "a host that refuses a socket bind stops the run" 1 "$rc"
+check "and says so before the build" 1 "$(printf '%s\n' "$out" | grep -c 'the host refuses an operation')"
+check "and nothing was prepared after a refused bind" 0 "$(printf '%s\n' "$out" | grep -c 'run: preparing')"
+cat > "$WORK/bin/hdiutil" <<'HD'
+#!/bin/sh
+echo "hdiutil: create failed - Device not configured" >&2
+exit 1
+HD
+chmod +x "$WORK/bin/hdiutil"
+out=$(run imagey); rc=$?
+check "a disk image that cannot be attached stops a suite that needs one" 1 "$rc"
+check "and names the operation" 1 "$(printf '%s\n' "$out" | grep -c 'a disk image created, attached and detached')"
+check "and nothing was prepared after a failed image" 0 "$(printf '%s\n' "$out" | grep -c 'run: preparing')"
+rm -f "$WORK/bin/hdiutil"
+out=$(run passing); rc=$?
+check "a suite that needs no image runs beside the failing formatter's absence" 0 "$rc"
 
 out=$(run passing failing); rc=$?
 check "a set with one failure exits nonzero" 1 "$rc"
