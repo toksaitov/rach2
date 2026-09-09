@@ -47,6 +47,10 @@ DESCRIPTION
      the confirmation  The disk is described again and its own name must be
                        typed back. Anything else stops without writing.
 
+     The four files are archived on the recovery partition as well, the
+     passwords as the hashes they are, so that an update of a root that no
+     longer reads still has the machine's accounts.
+
      Then, in this order: the image on the stick is read and its SHA-256
      compared with the manifest, so a damaged stick is found before anything is
      destroyed; the image is written to the disk with reflash -p, which says
@@ -72,7 +76,12 @@ DESCRIPTION
      carry /etc/rach2. The account files, the SSH policy, the server's host
      keys and the accounts' own keys, root's included and their absence with
      them, are copied off the root first and written back after the write, so a
-     password changed after the install is still the machine's password.
+     password changed after the install is still the machine's password. A
+     root that does not read is updated from the archive on the recovery
+     partition instead, and the new root goes into the last ext2 partition
+     of the table; where both read and disagree, each file that differs is
+     named and the root's copy is kept. The archive is written again from
+     what was kept, after the write.
 
      The image is judged before the root it replaces is destroyed: its length
      must be a whole number of sectors and must fit the partition, its first

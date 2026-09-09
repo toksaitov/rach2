@@ -37,6 +37,8 @@ set -u
 ME=rach2-install
 MNT=/mnt/install-source
 TARGET_MNT=/mnt/install-root
+RECOVERY_MNT=/mnt/install-recovery
+CONFIG_FILES="etc/passwd etc/group etc/shadow etc/rach2/sshd.conf"
 
 say() { echo "$ME: $1"; }
 die() {
@@ -49,12 +51,14 @@ die() {
 # would keep the disk from being read again.
 mounted_source=""
 mounted_root=""
+mounted_recovery=""
 echo_off=""
 cleanup() {
     # A password question turns the terminal's echo off; a run that ends inside
     # one would otherwise leave a shell nobody can see what they type in.
     [ -n "$echo_off" ] && stty echo 2>/dev/null
     [ -n "$mounted_root" ] && umount "$mounted_root" 2>/dev/null
+    [ -n "$mounted_recovery" ] && umount "$mounted_recovery" 2>/dev/null
     [ -n "$mounted_source" ] && umount "$mounted_source" 2>/dev/null
     return 0
 }
@@ -152,6 +156,45 @@ find_source() {
     return 1
 }
 
+# ---- the archive ----
+#
+# A copy of the four configuration files on the recovery partition, written
+# at the install and refreshed at every update, so that a machine whose root
+# no longer reads can still be updated without losing its accounts. The
+# passwords are the hashes the files already hold. The recovery partition is
+# the FAT32 volume that carries the recovery kernel, found by that kernel and
+# not assumed to be a particular entry.
+
+# Prints the entry number of DISK's recovery partition and leaves it mounted
+# at $RECOVERY_MNT; nothing when the disk has none.
+find_recovery() { # find_recovery DISKNUMBER
+    for p in 1 2 3 4; do
+        [ -e "/dev/disk${1}p${p}" ] || continue
+        mkdir -p "$RECOVERY_MNT" 2>/dev/null
+        mount -t vfat "/dev/disk${1}p${p}" "$RECOVERY_MNT" 2>/dev/null || continue
+        if [ -f "$RECOVERY_MNT/boot/recovery" ]; then
+            echo "$p"
+            return 0
+        fi
+        umount "$RECOVERY_MNT" 2>/dev/null
+    done
+    return 1
+}
+
+# Copies the configuration files under ROOTDIR into the archive on the
+# recovery partition mounted at $RECOVERY_MNT; a file the root does not have
+# is left out of the archive too.
+write_archive() { # write_archive ROOTDIR
+    rm -rf "$RECOVERY_MNT/rach2-config"
+    mkdir -p "$RECOVERY_MNT/rach2-config/etc/rach2" ||
+        die "the archive directory could not be made on the recovery partition"
+    for f in $CONFIG_FILES; do
+        if [ -f "$1/$f" ]; then
+            cp "$1/$f" "$RECOVERY_MNT/rach2-config/$f" || die "$f could not be archived"
+        fi
+    done
+}
+
 # ---- the update ----
 #
 # A machine that is already installed, given a new root file system. The
@@ -196,20 +239,57 @@ $update_disk was not installed from here"
         umount "$TARGET_MNT" || die "${update_disk}p${p} would not unmount"
         mounted_root=""
     done
-    [ -n "$root_entry" ] ||
-        die "$update_disk carries no root of this system that can be read; its accounts are \
-not there to be kept"
-
     keep=/tmp/rach2-update-keep
     rm -rf "$keep"
     mkdir -p "$keep" || die "there is nowhere to keep the machine's configuration"
-    say "copying this machine's accounts, policy and keys off the root"
-    for f in etc/passwd etc/group etc/shadow etc/rach2/sshd.conf; do
-        if [ -f "$TARGET_MNT/$f" ]; then
-            mkdir -p "$keep/$(dirname "$f")"
-            cp "$TARGET_MNT/$f" "$keep/$f" || die "$f could not be kept"
+    recovery_entry=$(find_recovery "$target") || recovery_entry=""
+    [ -n "$recovery_entry" ] && mounted_recovery=$RECOVERY_MNT
+    if [ -z "$root_entry" ]; then
+        # The root does not read. The archive is the configuration then, and
+        # the root's partition is the last ext2 entry of the table, since a
+        # mount cannot say which it is.
+        [ -n "$recovery_entry" ] && [ -f "$RECOVERY_MNT/rach2-config/etc/passwd" ] ||
+            die "$update_disk carries no root of this system that can be read and no \
+configuration archived on its recovery partition; its accounts are not there to be kept"
+        root_entry=$(grep "^part $target " /proc/disk | awk '$6 == "mbr:83" { print $3 }' | tail -1)
+        [ -n "$root_entry" ] || die "$update_disk has no ext2 partition in its table"
+        say "the root does not read; taking the configuration saved on the recovery partition"
+        for f in $CONFIG_FILES; do
+            if [ -f "$RECOVERY_MNT/rach2-config/$f" ]; then
+                mkdir -p "$keep/$(dirname "$f")"
+                cp "$RECOVERY_MNT/rach2-config/$f" "$keep/$f" || die "$f could not be taken from the archive"
+            fi
+        done
+    else
+        say "copying this machine's accounts, policy and keys off the root"
+        for f in $CONFIG_FILES; do
+            if [ -f "$TARGET_MNT/$f" ]; then
+                mkdir -p "$keep/$(dirname "$f")"
+                cp "$TARGET_MNT/$f" "$keep/$f" || die "$f could not be kept"
+            fi
+        done
+        # The archive is a copy of the root's own files; a difference is
+        # reported and the root's copy is what the machine keeps.
+        if [ -n "$recovery_entry" ] && [ -d "$RECOVERY_MNT/rach2-config" ]; then
+            for f in $CONFIG_FILES; do
+                if [ -f "$keep/$f" ] && [ -f "$RECOVERY_MNT/rach2-config/$f" ]; then
+                    cmp -s "$keep/$f" "$RECOVERY_MNT/rach2-config/$f" ||
+                        say "the archive on the recovery partition differs from the root's $f; the root's is kept"
+                elif [ -f "$keep/$f" ] || [ -f "$RECOVERY_MNT/rach2-config/$f" ]; then
+                    say "the archive on the recovery partition differs from the root's $f; the root's is kept"
+                fi
+            done
+        elif [ -n "$recovery_entry" ]; then
+            say "the recovery partition has no archive of the configuration; one is written after the update"
         fi
-    done
+    fi
+    # Nothing of the disk may be mounted while its root is written: the raw
+    # writer refuses a disk with a mount on it. The archive is mounted again
+    # for its refresh once the new root has been written and unmounted.
+    if [ -n "$mounted_recovery" ]; then
+        umount "$RECOVERY_MNT" || die "the recovery partition would not unmount"
+        mounted_recovery=""
+    fi
     # Every copy is checked, because what is not kept here is replaced below by
     # the image's own: a copy that failed and said nothing would take the
     # machine's home directories, or its host keys, away in the name of
@@ -231,8 +311,10 @@ not there to be kept"
         cp -a "$TARGET_MNT/root/.ssh" "$keep/root/.ssh" ||
             die "root's keys could not be kept"
     fi
-    umount "$TARGET_MNT" || die "the root would not unmount"
-    mounted_root=""
+    if [ -n "$mounted_root" ]; then
+        umount "$TARGET_MNT" || die "the root would not unmount"
+        mounted_root=""
+    fi
 
     # Where the root partition is, from the table the machine has now: an
     # update writes that range and nothing else.
@@ -313,6 +395,16 @@ not there to be kept"
     sync
     umount "$TARGET_MNT" || die "the new root would not unmount"
     mounted_root=""
+    # The archive refreshed from what was written back, so the next update
+    # of a root that does not read takes what this one kept.
+    if [ -n "$recovery_entry" ] && [ "$(find_recovery "$target")" = "$recovery_entry" ]; then
+        mounted_recovery=$RECOVERY_MNT
+        write_archive "$keep"
+        sync
+        umount "$RECOVERY_MNT" || die "the recovery partition would not unmount"
+        mounted_recovery=""
+        say "the configuration is archived on ${update_disk}p${recovery_entry}"
+    fi
     rm -rf "$keep"
 
     # One trial boot of the new root: a root that does not come up costs a
@@ -609,6 +701,19 @@ put_file "$root_dir/etc/rach2/sshd.conf" 644 "root-password-login yes
 "
 
 sync
+# The same four files archived on the recovery partition, for an update of
+# a root that no longer reads.
+recovery_entry=$(find_recovery "$target") || recovery_entry=""
+if [ -n "$recovery_entry" ]; then
+    mounted_recovery=$RECOVERY_MNT
+    write_archive "$root_dir"
+    sync
+    umount "$RECOVERY_MNT" || die "the recovery partition would not unmount"
+    mounted_recovery=""
+    say "the configuration is archived on /dev/disk${target}p${recovery_entry}"
+else
+    say "the disk has no recovery partition, so the configuration is not archived"
+fi
 umount "$root_dir" || die "the root would not unmount"
 mounted_root=""
 

@@ -399,9 +399,12 @@ if "$HARNESS" --bios --qemu-arg=-cpu --qemu-arg=max \
     "expect=HOMEMADE" \
     "send=df -k / | tail -1" \
     "expect=/dev/" \
+    "send=mkdir -p /r && mount -t vfat /dev/disk0p3 /r && cmp /r/rach2-config/etc/shadow /etc/shadow && grep -c ^$USERNAME: /r/rach2-config/etc/passwd; umount /r" \
+    "expect=1" \
     "send=echo INSTALLED\"\"UP" \
     "expect=INSTALLEDUP" > /dev/null 2>&1; then
     note "and the disk it wrote boots, refuses the image's own password and takes the new one: OK"
+    note "and the recovery partition carries the archive of its accounts: OK"
 else
     bad "the boot of the installed disk"
 fi
@@ -709,8 +712,10 @@ if "$HARNESS" --bios --qemu-arg=-cpu --qemu-arg=max \
     "send=rm -rf /root/.ssh && mkdir -p /home/$USERNAME && chown 1000:1000 /home/$USERNAME" \
     "send=echo this-machines-own > /home/$USERNAME/mine && chown 1000:1000 /home/$USERNAME/mine" \
     "send=echo a-marked-motd > /etc/motd && echo CHANGED\"\"DONE" \
-    "expect=CHANGEDDONE" > /dev/null 2>&1; then
-    note "the installed machine is given a password, an account's home and a marked file: OK"
+    "expect=CHANGEDDONE" \
+    "send=mkdir -p /r && mount -t vfat /dev/disk0p3 /r && mkdir -p /r/rach2-config/etc && echo tampered:x:99: >> /r/rach2-config/etc/group && umount /r && echo ARCHIVE\"\"TAMPERED" \
+    "expect=ARCHIVETAMPERED" > /dev/null 2>&1; then
+    note "the installed machine is given a password, an account's home and a marked file, and its archive a difference: OK"
 else
     bad "changing the installed machine"
 fi
@@ -729,12 +734,14 @@ if "$HARNESS" --bios \
     "expect=MOUNTED" \
     "send=rach2-install --update /m/$(basename "$INSTALLER_EXT2") /dev/disk0" \
     "expect=copying this machine's accounts" \
+    "expect=differs from the root's etc/group; the root's is kept" \
     "expect=what reached the root is the image" \
     "expect=writing the accounts, the policy and the keys back" \
+    "expect=the configuration is archived on" \
     "expect=armed for one trial boot" \
     "expect=updated:" "send=umount /m; echo UPDATE\"\"DONE" \
     "expect=UPDATEDONE" > "$LOG12.harness" 2>&1; then
-    note "a machine that is already installed takes a new root and keeps its accounts: OK"
+    note "a machine that is already installed takes a new root, keeps its accounts, and names the archive's difference: OK"
 else
     sed -n 's/^HARNESS: /installer-test: /p' "$LOG12.harness" >&2
     bad "the update of an installed machine"
@@ -757,6 +764,53 @@ if "$HARNESS" --bios --qemu-arg=-cpu --qemu-arg=max \
 own motd where the marked one was: OK"
 else
     bad "the boot of the updated machine"
+fi
+
+# ---- 14: the root damaged, and the machine updated from the archive: the
+#          superblock zeroed so the root does not mount, then the update
+#          takes the accounts from the archive the last update refreshed and
+#          writes the image into the last ext2 entry of the table. The
+#          home directories were on the root that does not read, so they
+#          are not kept. ----
+LOG14="$DIR/archive-update.log"
+if "$HARNESS" --bios \
+    --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
+    --drive "if=none,id=stick,format=raw,file=$DIR/test-stick.img" \
+    --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=stick,bootindex=0 \
+    --qemu-arg=-drive --qemu-arg="file=$DIR/one.img,format=raw,if=ide,index=0,media=disk" \
+    --timeout 3600 --steptmo 1800 --ok "ARCHIVEDONE" --log "$LOG14" \
+    "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
+    "expect=# " "send=dd if=/dev/zero of=/dev/disk0p4 bs=1024 seek=1 count=1 && echo DAMA\"\"GED" \
+    "expect=DAMAGED" \
+    "send=mkdir -p /m && mount -t exfat /dev/disk1p2 /m && echo MOUNT\"\"ED" \
+    "expect=MOUNTED" \
+    "send=rach2-install --update /m/$(basename "$INSTALLER_EXT2") /dev/disk0" \
+    "expect=the root does not read; taking the configuration saved on the recovery partition" \
+    "expect=what reached the root is the image" \
+    "expect=writing the accounts, the policy and the keys back" \
+    "expect=the configuration is archived on" \
+    "expect=updated:" "send=umount /m; echo ARCHIVE\"\"DONE" \
+    "expect=ARCHIVEDONE" > "$LOG14.harness" 2>&1; then
+    note "a machine whose root no longer reads is updated from the archive on its recovery partition: OK"
+else
+    sed -n 's/^HARNESS: /installer-test: /p' "$LOG14.harness" >&2
+    bad "the update of a machine whose root does not read"
+fi
+
+LOG15="$DIR/archive-updated.log"
+if "$HARNESS" --bios --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-drive --qemu-arg="file=$DIR/one.img,format=raw,if=ide,index=0,media=disk" \
+    --timeout 300 --steptmo 120 --ok "ARCHIVEUP" --log "$LOG15" \
+    "expect=rach2 login:" "send=root" "expect=Password:" "send=$NEWPASS" \
+    "expect=# " "send=grep -c ^tampered: /etc/group | sed s/^/TAMPERED=/; test ! -e /home/$USERNAME/mine && echo HOME\"\"GONE" \
+    "expect=TAMPERED=0" "expect=HOMEGONE" \
+    "send=echo ARCHIVE\"\"UP" \
+    "expect=ARCHIVEUP" > /dev/null 2>&1; then
+    note "and it takes the password the archive held, the archive refreshed by the last update and not the tampered one, and none of the home the root lost: OK"
+else
+    bad "the boot of the machine updated from the archive"
 fi
 
 fi
