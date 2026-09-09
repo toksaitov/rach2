@@ -46,9 +46,9 @@ struct block_request;
  * a page fault with interrupts off, takes that path instead of a request. */
 #define BLOCK_POLLABLE 0x40u
 /* The device stopped answering: every slot of the request pool it held went
- * through its deadline periods unanswered. Its waiters were released with `EIO` and a
- * new request is refused with `EIO`, until a late answer clears it. Set and
- * cleared by the request pool. */
+ * through its deadline periods unanswered. Its waiters were released with
+ * `EIO` and a new request is refused with `EIO`, until a late answer clears
+ * it. Set and cleared by the request pool. */
 #define BLOCK_STALLED 0x20u
 
 struct block_device {

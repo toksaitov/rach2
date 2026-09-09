@@ -216,8 +216,8 @@ static int fake_write(block_device_t *d, uint64_t lba, uint32_t count, const voi
    silent shift. */
 static block_device_t fake = {
     512, FAKE_SECTORS, BLOCK_FAULT_SAFE, 0, 0, 0, fake_read, fake_write, 0, 0, 0, image_small};
-static block_device_t other = {512, BIG_SECTORS, BLOCK_FAULT_SAFE, 0, 0, 0, fake_read, fake_write, 0,
-                               0,   0,           image_big};
+static block_device_t other = {
+    512, BIG_SECTORS, BLOCK_FAULT_SAFE, 0, 0, 0, fake_read, fake_write, 0, 0, 0, image_big};
 /* A device whose bytes live on `fake`: what a loop device is to the volume
    holding its file. Its own reads and writes go through `fake`, so taking one
    of its blocks and then one of `fake`'s is the order the rules must allow,
@@ -431,7 +431,8 @@ int main(void)
     }
     check(writes_made == 2 && writes_lba[0] == 80 && writes_lba[1] == 88,
           "an evicted after buffer is written after the device's first, the older though it is");
-    check(image_small[10 * 4096] == 0x10 && image_small[11 * 4096] == 0x11, "with both buffers' bytes");
+    check(image_small[10 * 4096] == 0x10 && image_small[11 * 4096] == 0x11,
+          "with both buffers' bytes");
     b = bcache_get(&fake, 11);
     b->data[0] = 0x22;
     bcache_dirty_ordered(b, BCACHE_ORDER_AFTER);

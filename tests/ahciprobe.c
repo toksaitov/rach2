@@ -375,8 +375,8 @@ static void late_row(void)
     if (sys2(SYS_MKDIR, (int)(size_t)"/late", 0755) != 0) {
         fail("mkdir /late");
     }
-    if (sys5(SYS_MOUNT, (int)(size_t)"/dev/disk0p1", (int)(size_t)"/late",
-             (int)(size_t)"ext2", 0, 0) != 0) {
+    if (sys5(SYS_MOUNT, (int)(size_t)"/dev/disk0p1", (int)(size_t)"/late", (int)(size_t)"ext2", 0,
+             0) != 0) {
         fail("the mount of the throttled disk");
     }
     fd = sys3(SYS_OPEN, (int)(size_t)"/late/late.bin", O_WRONLY | O_CREAT | O_TRUNC, 0644);

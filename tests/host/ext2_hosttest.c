@@ -1807,7 +1807,8 @@ static void order_row(void)
     nptr = debugfs_numbers("stat /ordered", "(IND):", ptr, 4);
     nptr += debugfs_numbers("stat /ordered", "(DIND):", ptr + nptr, 4);
     nbm = debugfs_numbers("stats", "block bitmap at ", bm, 8);
-    check(nptr >= 2 && nbm >= 1, "debugfs names the file's pointer blocks and the volume's bitmaps");
+    check(nptr >= 2 && nbm >= 1,
+          "debugfs names the file's pointer blocks and the volume's bitmaps");
     for (i = 0; i < nptr; i++) {
         int at = first_write_of(ptr[i]);
 
@@ -1831,7 +1832,8 @@ static void order_row(void)
             ok = 0;
         }
     }
-    check(ok, "every pointer block reached the disk after the bitmaps and descriptors of its write");
+    check(ok,
+          "every pointer block reached the disk after the bitmaps and descriptors of its write");
     check(e2fsck_clean(wimg), "and the volume is clean");
 }
 
