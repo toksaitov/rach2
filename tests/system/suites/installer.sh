@@ -854,28 +854,23 @@ dd if="$DISK" of="$R/head.vol" bs=512 skip="$ROOT_START" count=$((128 * 2048)) 2
 } > "$R/ranges"
 NRANGES=$(grep -c . "$R/ranges")
 note "rehearsal: the save set is the image's $IMAGE_SECTORS sectors and $((NRANGES - 1)) ranges of the grow beyond it"
-# The base and the overlay.
+# The base and the overlay; the backing name is relative to the overlay's
+# own directory, which is where both live.
 dd if=/dev/zero of="$R/base.raw" bs=512 seek=$((LENOVO - 1)) count=1 2>/dev/null || bad "the base disk"
-qemu-img create -q -f qcow2 -b "$R/base.raw" -F raw "$R/disk.qcow2" || bad "the overlay"
-# The save stick: an exFAT volume with a file for every range, laid down
-# empty here and filled by the machine.
-SAVE_SECTORS=$(( (IMAGE_SECTORS / 2048 + 96) * 2048 ))
-ADD=""
-i=0
-while read -r start count; do
-    dd if=/dev/zero of="$R/range-$i.bin" bs=512 seek=$((count - 1)) count=1 2>/dev/null
-    ADD="$ADD --add range-$i=$R/range-$i.bin"
-    i=$((i + 1))
-done < "$R/ranges"
-# shellcheck disable=SC2086
-"$MKFIX" --make "$R/save.vol" --sectors "$SAVE_SECTORS" --offset 2048 $ADD > /dev/null || bad "the save stick's volume"
-{ dd if=/dev/zero bs=1048576 count=1 2>/dev/null; cat "$R/save.vol"; } > "$R/save-stick.img"
-rm -f "$R/save.vol"
-"$REPO/build/tools/image/mkmbr" --lba "$R/save-stick.img" 2048:$SAVE_SECTORS:07 > /dev/null || bad "the save stick's table"
+(cd "$R" && qemu-img create -q -f qcow2 -b base.raw -F raw disk.qcow2) || bad "the overlay"
+# The save stick: a FAT32 volume with room for every range, made sparse by
+# the host's formatter and written by the machine; the list of ranges goes
+# on it as a file, one `START COUNT` a line, so the machine's own loop reads
+# it and the harness types one line.
+SAVE_SECTORS=$(( (IMAGE_SECTORS / 2048 + 2048 + 32) * 2048 ))
+dd if=/dev/zero of="$R/save-stick.img" bs=512 seek=$((SAVE_SECTORS + 2048 - 1)) count=1 2>/dev/null || bad "the save stick"
+"$REPO/build/tools/image/mkmbr" --lba "$R/save-stick.img" 2048:$SAVE_SECTORS:0c > /dev/null || bad "the save stick's table"
+mformat -i "$R/save-stick.img"@@1048576 -F -T "$SAVE_SECTORS" -v RACH2SAVE :: || bad "the save stick's volume"
+mcopy -i "$R/save-stick.img"@@1048576 "$R/ranges" ::ranges || bad "the range list onto the save stick"
 cp "$STICK" "$R/product-stick.img" || bad "the product stick's copy"
 # A boot of the recovery system from the product stick, with the overlay disk
 # as disk1 and the save stick as disk2; the steps come from a file, one a
-# line, since the ranges make a list no line holds.
+# line.
 rehearse_boot() { # rehearse_boot LOG TIMEOUT OK STEPFILE
     {
         printf '"%s" --bios --qemu-arg=-cpu --qemu-arg=max --qemu-arg=-m --qemu-arg=512' "$HARNESS"
@@ -894,21 +889,19 @@ rehearse_boot() { # rehearse_boot LOG TIMEOUT OK STEPFILE
     } > "$1.sh"
     sh "$1.sh"
 }
-# The save: each range read off the disk onto the save stick.
+# The save: each range read off the disk into a file of its own on the save
+# stick, by the machine's loop over the list.
 {
-    echo 'send=mkdir -p /save && mount -t exfat /dev/disk2p1 /save && echo SAVE""MOUNTED'
+    echo 'send=mkdir -p /save && mount -t vfat /dev/disk2p1 /save && echo SAVE""MOUNTED'
     echo 'expect=SAVEMOUNTED'
-    i=0
-    while read -r start count; do
-        echo "send=dd if=/dev/disk1 of=/save/range-$i bs=512 skip=$start count=$count conv=notrunc 2>&1 | tail -1; echo SAVED\"\"$i"
-        echo "expect=SAVED$i"
-        i=$((i + 1))
-    done < "$R/ranges"
+    echo 'send=i=0; while read s c; do dd if=/dev/disk1 of=/save/range-$i bs=512 skip=$s count=$c 2>/dev/null || echo SAVEFAIL $i; i=$((i + 1)); done < /save/ranges; sync; echo SAVED""ALL $i'
+    echo "expect=SAVEDALL $NRANGES"
     echo 'send=umount /save && echo SAVE""DONE'
     echo 'expect=SAVEDONE'
 } > "$R/save.steps"
 T0=$(date +%s)
-if rehearse_boot "$R/save.log" 14400 SAVEDONE "$R/save.steps" > "$R/save.harness" 2>&1; then
+if rehearse_boot "$R/save.log" 21600 SAVEDONE "$R/save.steps" > "$R/save.harness" 2>&1 &&
+    ! grep -aq SAVEFAIL "$R/save.log"; then
     SAVE_S=$(( $(date +%s) - T0 ))
     note "rehearsal: the save of $NRANGES ranges took $SAVE_S s"
 else
@@ -954,29 +947,39 @@ else
     grep '^outside' "$R/after-install.check" | head -5 >&2
     bad "the install wrote outside the save set"
 fi
-# The restore: each range put back with reflash from the save stick and read
-# back, the digest compared with the host's digest of the saved bytes.
+# The restore: each range put back with reflash from the save stick by the
+# machine's loop, then each read back with `reflash --verify` into a file
+# of digests the host compares with its own digests of the saved bytes,
+# which are zeros of each length.
 {
-    echo 'send=mkdir -p /save && mount -t exfat /dev/disk2p1 /save && echo SAVE""MOUNTED'
+    echo 'send=mkdir -p /save && mount -t vfat /dev/disk2p1 /save && echo SAVE""MOUNTED'
     echo 'expect=SAVEMOUNTED'
-    i=0
-    while read -r start count; do
-        echo "send=reflash /dev/disk1 $((start * 512)) $((count * 512)) < /save/range-$i && echo PUT\"\"$i"
-        echo "expect=PUT$i"
-        echo "send=reflash --verify /dev/disk1 $((start * 512)) $((count * 512))"
-        echo "expect=$(head -c $((count * 512)) /dev/zero | shasum -a 256 | cut -d' ' -f1)"
-        i=$((i + 1))
-    done < "$R/ranges"
+    echo 'send=i=0; while read s c; do reflash /dev/disk1 $((s * 512)) $((c * 512)) < /save/range-$i || echo PUTFAIL $i; i=$((i + 1)); done < /save/ranges; echo PUT""ALL $i'
+    echo "expect=PUTALL $NRANGES"
+    echo 'send=: > /save/verify; while read s c; do reflash --verify /dev/disk1 $((s * 512)) $((c * 512)) >> /save/verify; done < /save/ranges; sync; echo VERIFY""ALL'
+    echo 'expect=VERIFYALL'
     echo 'send=umount /save && echo RESTORE""DONE'
     echo 'expect=RESTOREDONE'
 } > "$R/restore.steps"
 T0=$(date +%s)
-if rehearse_boot "$R/restore.log" 21600 RESTOREDONE "$R/restore.steps" > "$R/restore.harness" 2>&1; then
+if rehearse_boot "$R/restore.log" 21600 RESTOREDONE "$R/restore.steps" > "$R/restore.harness" 2>&1 &&
+    ! grep -aq PUTFAIL "$R/restore.log"; then
     RESTORE_S=$(( $(date +%s) - T0 ))
     note "rehearsal: the restore of $NRANGES ranges and their readback took $RESTORE_S s"
 else
     sed -n 's/^HARNESS: /installer-test: /p' "$R/restore.harness" >&2
     bad "the rehearsal's restore"
+fi
+# What the machine read back against what was saved: zeros of each length.
+mtype -i "$R/save-stick.img"@@1048576 ::verify > "$R/verify.machine" 2>/dev/null || bad "the digests off the save stick"
+: > "$R/verify.host"
+while read -r start count; do
+    head -c $((count * 512)) /dev/zero | shasum -a 256 | cut -d' ' -f1 >> "$R/verify.host"
+done < "$R/ranges"
+if [ "$(tr -d '\r' < "$R/verify.machine" | awk '{print $3}')" = "$(cat "$R/verify.host")" ]; then
+    note "rehearsal: every range read back as the bytes that were saved: OK"
+else
+    bad "the ranges read back differ from what was saved"
 fi
 qemu-img map --output=json "$R/disk.qcow2" > "$R/after-restore.json" || bad "the overlay's map after the restore"
 "$GROWSET" --lba "$ROOT_START" --map "$R/after-restore.json" "$R/head.vol" $((LENOVO - ROOT_START)) > "$R/after-restore.check" 2>&1 || true
