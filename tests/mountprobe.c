@@ -31,6 +31,7 @@ typedef unsigned int size_t;
 #define SYS_EXECVE     11
 #define SYS_CHDIR      12
 #define SYS_MOUNT      21
+#define SYS_PIPE       42
 #define SYS_SETUID     213
 #define SYS_RENAME     38
 #define SYS_MKDIR      39
@@ -430,6 +431,8 @@ static void rows_proc(void)
 static void rows_lifetime(void)
 {
     int fd, d1, d2, d3, dfd, pid;
+    int opened[2];
+    char byte = 0;
 
     fd = sys3(SYS_OPEN, (int)MNT "/hello.txt", O_RDONLY, 0);
     dfd = sys3(SYS_OPEN, (int)MNT, O_RDONLY, 0);
@@ -496,7 +499,15 @@ static void rows_lifetime(void)
     /* A close-on-exec descriptor is dropped by execve: the child holds the
        only description and execs `stdintest`, which blocks on the console
        and stays alive; the mount is busy until the exec and free after it,
-       while the child still runs, which is what shows execve did it. */
+       while the child still runs, which is what shows execve did it. The
+       parent waits for the child's open through a pipe before it tries the
+       unmount, since a first try before the open would find the mount free
+       and the row would then judge the scheduler and not execve. */
+    opened[0] = -1; /* the kernel fills the pair through the cast address */
+    opened[1] = -1;
+    if (sys1(SYS_PIPE, (int)opened) != 0) {
+        fail("a pipe for the exec child");
+    }
     pid = sys1(SYS_FORK, 0);
     if (pid == 0) {
         char *av[2];
@@ -507,9 +518,17 @@ static void rows_lifetime(void)
         if (fd < 0) {
             sys_exit(7);
         }
+        sys3(SYS_WRITE, opened[1], (int)"o", 1);
+        sys1(SYS_CLOSE, opened[1]);
+        sys1(SYS_CLOSE, opened[0]);
         sys3(SYS_EXECVE, (int)"/stdintest", (int)av, (int)av + 4);
         sys_exit(8);
     }
+    sys1(SYS_CLOSE, opened[1]);
+    if (sys3(SYS_READ, opened[0], (int)&byte, 1) != 1) {
+        fail("the exec child did not open the file");
+    }
+    sys1(SYS_CLOSE, opened[0]);
     {
         int tries;
 
