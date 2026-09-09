@@ -829,11 +829,25 @@ fi
 #      restore wrote inside the set too. The times are printed against the
 #      sitting's ten-minute budget, which is the machine's, not the
 #      emulator's. ----
-if { [ "$PART" = "all" ] || [ "$PART" = "install" ] || [ "$PART" = "rehearse" ]; } && [ -n "${RACH2_REHEARSE_LENOVO:-}" ]; then
+if { [ "$PART" = "all" ] || [ "$PART" = "install" ] || [ "$PART" = "rehearse" ]; } &&
+    { [ -n "${RACH2_REHEARSE_LENOVO:-}" ] || [ -n "${RACH2_REHEARSE_SMALL:-}" ]; }; then
 REPO=$(cd "$(dirname "$0")/../../.." && pwd)
 GROWSET="$REPO/build/tools/inspect/growset"
-MKFIX="$REPO/build/tests/host/mkexfatfixture"
-LENOVO=488397168
+# The small form, RACH2_REHEARSE_SMALL: the same steps on a 256 MiB disk
+# with the test stick and its 138 MiB image, minutes where the machine's
+# size is hours, which is what the row is proved on before it runs at size.
+if [ -n "${RACH2_REHEARSE_SMALL:-}" ]; then
+    LENOVO=524288
+    STICK=$TEST_STICK
+    DISK=$TEST_DISK
+else
+    LENOVO=488397168
+fi
+# The answers the installer is given, the install half's when it ran and
+# these when the rehearsal runs alone.
+NEWPASS=${NEWPASS:-an-installed-machine}
+USERNAME=${USERNAME:-alice}
+USERPASS=${USERPASS:-alices-own-password}
 R="$DIR/rehearse"
 rm -rf "$R"; mkdir -p "$R"
 IMAGE_BYTES=$(stat -f %z "$DISK")
@@ -857,7 +871,10 @@ note "rehearsal: the save set is the image's $IMAGE_SECTORS sectors and $((NRANG
 # The base and the overlay; the backing name is relative to the overlay's
 # own directory, which is where both live.
 dd if=/dev/zero of="$R/base.raw" bs=512 seek=$((LENOVO - 1)) count=1 2>/dev/null || bad "the base disk"
-(cd "$R" && qemu-img create -q -f qcow2 -b base.raw -F raw disk.qcow2) || bad "the overlay"
+# Clusters of 4 KiB, so the overlay's map is exact to the eight sectors the
+# grow's ranges are aligned to; the default 64 KiB would show every range
+# rounded up to a cluster and call the rounding a write outside the set.
+(cd "$R" && qemu-img create -q -f qcow2 -o cluster_size=4096 -b base.raw -F raw disk.qcow2) || bad "the overlay"
 # The save stick: a FAT32 volume with room for every range, made sparse by
 # the host's formatter and written by the machine; the list of ranges goes
 # on it as a file, one `START COUNT` a line, so the machine's own loop reads
@@ -894,18 +911,21 @@ rehearse_boot() { # rehearse_boot LOG TIMEOUT OK STEPFILE
     sh "$1.sh"
 }
 # The save: each range read off the disk into a file of its own on the save
-# stick, by the machine's loop over the list.
+# stick, by the machine's loop over the list. The block size is the largest
+# the range's alignment allows, since dd is a system call per block and a
+# range of a gibibyte in 512-byte blocks is hours on the machine as well as
+# in the emulator; the ranges the grow writes are aligned to eight sectors.
 {
     echo 'send=mkdir -p /save && mount -t vfat /dev/disk2p1 /save && echo SAVE""MOUNTED'
     echo 'expect=SAVEMOUNTED'
-    echo 'send=d=$(grep ^identity /proc/disk | grep " fixed " | head -1 | cut -d" " -f2); i=0; while read s c; do dd if=/dev/disk$d of=/save/range-$i bs=512 skip=$s count=$c 2>/dev/null || echo SAVEFAIL $i; i=$((i + 1)); done < /save/ranges; sync; echo SAVED""ALL $i'
+    echo 'send=d=$(grep ^identity /proc/disk | grep " fixed " | head -1 | cut -d" " -f2); i=0; while read s c; do u=1; for t in 2048 8; do if [ $((s % t)) = 0 ] && [ $((c % t)) = 0 ] && [ $u = 1 ]; then u=$t; fi; done; dd if=/dev/disk$d of=/save/range-$i bs=$((u * 512)) skip=$((s / u)) count=$((c / u)) 2>/dev/null || echo SAVEFAIL $i; i=$((i + 1)); done < /save/ranges; sync; echo SAVED""ALL $i'
     echo "expect=SAVEDALL $NRANGES"
     echo 'send=umount /save && echo SAVE""DONE'
     echo 'expect=SAVEDONE'
 } > "$R/save.steps"
 T0=$(date +%s)
 if rehearse_boot "$R/save.log" 21600 SAVEDONE "$R/save.steps" > "$R/save.harness" 2>&1 &&
-    ! grep -aq SAVEFAIL "$R/save.log"; then
+    ! grep -aq "^SAVEFAIL " "$R/save.log"; then
     SAVE_S=$(( $(date +%s) - T0 ))
     note "rehearsal: the save of $NRANGES ranges took $SAVE_S s"
 else
@@ -967,7 +987,7 @@ fi
 } > "$R/restore.steps"
 T0=$(date +%s)
 if rehearse_boot "$R/restore.log" 21600 RESTOREDONE "$R/restore.steps" > "$R/restore.harness" 2>&1 &&
-    ! grep -aq PUTFAIL "$R/restore.log"; then
+    ! grep -aq "^PUTFAIL " "$R/restore.log"; then
     RESTORE_S=$(( $(date +%s) - T0 ))
     note "rehearsal: the restore of $NRANGES ranges and their readback took $RESTORE_S s"
 else
