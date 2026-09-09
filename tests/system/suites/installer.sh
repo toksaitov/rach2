@@ -875,30 +875,34 @@ dd if=/dev/zero of="$R/base.raw" bs=512 seek=$((LENOVO - 1)) count=1 2>/dev/null
 # grow's ranges are aligned to; the default 64 KiB would show every range
 # rounded up to a cluster and call the rounding a write outside the set.
 (cd "$R" && qemu-img create -q -f qcow2 -o cluster_size=4096 -b base.raw -F raw disk.qcow2) || bad "the overlay"
-# The save stick: a FAT32 volume with room for every range, made sparse by
-# the host's formatter and written by the machine; the list of ranges goes
-# on it as a file, one `START COUNT` a line, so the machine's own loop reads
-# it and the harness types one line.
+# The save disk: an exFAT volume with room for every range, the format the
+# sitting's stick has, written by the machine; the list of ranges goes on it
+# as its one file, one `START COUNT` a line, so the machine's own loop reads
+# it and the harness types one line. It is on IDE beside the target and not
+# on USB as the sitting's stick is, since the rehearsal is of the procedure
+# and its set and not of the emulator's buses; the loops find it as the
+# second fixed disk. It is not FAT32: this kernel writes FAT32 through a
+# block at a time, 0.6 MB a second in the emulator, which is entry 25.
 SAVE_SECTORS=$(( (IMAGE_SECTORS / 2048 + 2048 + 32) * 2048 ))
-dd if=/dev/zero of="$R/save-stick.img" bs=512 seek=$((SAVE_SECTORS + 2048 - 1)) count=1 2>/dev/null || bad "the save stick"
-"$REPO/build/tools/image/mkmbr" --lba "$R/save-stick.img" 2048:$SAVE_SECTORS:0c > /dev/null || bad "the save stick's table"
-mformat -i "$R/save-stick.img"@@1048576 -F -T "$SAVE_SECTORS" -v RACH2SAVE :: || bad "the save stick's volume"
-mcopy -i "$R/save-stick.img"@@1048576 "$R/ranges" ::ranges || bad "the range list onto the save stick"
+"$REPO/build/tests/host/mkexfatfixture" --make "$R/save.vol" --sectors "$SAVE_SECTORS" --offset 2048 \
+    --add "ranges=$R/ranges" > /dev/null || bad "the save disk's volume"
+{ dd if=/dev/zero bs=1048576 count=1 2>/dev/null; cat "$R/save.vol"; } > "$R/save-stick.img"
+rm -f "$R/save.vol"
+"$REPO/build/tools/image/mkmbr" --lba "$R/save-stick.img" 2048:$SAVE_SECTORS:07 > /dev/null || bad "the save disk's table"
 cp "$STICK" "$R/product-stick.img" || bad "the product stick's copy"
 # A boot of the recovery system from the product stick, with the overlay disk
-# on IDE as disk0, the product stick disk1 and the save stick disk2, which is
-# the order this recovery kernel registers them in; the loops look the fixed
-# disk up by its identity rather than trusting the number. The steps come
-# from a file, one a line.
+# on IDE as disk0, the save disk on IDE as disk1 and the product stick disk2,
+# which is the order this recovery kernel registers them in; the loops look
+# the target up as the first fixed disk and the save disk up by its label
+# rather than trusting the numbers. The steps come from a file, one a line.
 rehearse_boot() { # rehearse_boot LOG TIMEOUT OK STEPFILE
     {
         printf '"%s" --bios --qemu-arg=-cpu --qemu-arg=max --qemu-arg=-m --qemu-arg=512' "$HARNESS"
         printf ' --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0'
         printf ' --drive "if=none,id=stick,format=raw,file=%s/product-stick.img"' "$R"
         printf ' --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=stick,bootindex=0'
-        printf ' --drive "if=none,id=save,format=raw,file=%s/save-stick.img"' "$R"
-        printf ' --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=save'
         printf ' --qemu-arg=-drive --qemu-arg="file=%s/disk.qcow2,format=qcow2,if=ide,index=0,media=disk"' "$R"
+        printf ' --qemu-arg=-drive --qemu-arg="file=%s/save-stick.img,format=raw,if=ide,index=1,media=disk"' "$R"
         printf ' --timeout %s --steptmo %s --ok "%s" --log "%s"' "$2" "$2" "$3" "$1"
         printf ' "expect=rach2 login:" "send=root" "expect=Password:" "send=%s" "expect=# "' "$PASSWORD"
         # Single quotes: the loops typed to the machine carry its variables,
@@ -916,7 +920,7 @@ rehearse_boot() { # rehearse_boot LOG TIMEOUT OK STEPFILE
 # range of a gibibyte in 512-byte blocks is hours on the machine as well as
 # in the emulator; the ranges the grow writes are aligned to eight sectors.
 {
-    echo 'send=mkdir -p /save && mount -t vfat /dev/disk2p1 /save && echo SAVE""MOUNTED'
+    echo 'send=v=$(grep ^identity /proc/disk | grep " fixed " | sed -n 2p | cut -d" " -f2); mkdir -p /save && mount -t exfat /dev/disk${v}p1 /save && echo SAVE""MOUNTED'
     echo 'expect=SAVEMOUNTED'
     echo 'send=d=$(grep ^identity /proc/disk | grep " fixed " | head -1 | cut -d" " -f2); i=0; while read s c; do u=1; for t in 2048 8; do if [ $((s % t)) = 0 ] && [ $((c % t)) = 0 ] && [ $u = 1 ]; then u=$t; fi; done; dd if=/dev/disk$d of=/save/range-$i bs=$((u * 512)) skip=$((s / u)) count=$((c / u)) 2>/dev/null || echo SAVEFAIL $i; i=$((i + 1)); done < /save/ranges; sync; echo SAVED""ALL $i'
     echo "expect=SAVEDALL $NRANGES"
@@ -976,7 +980,7 @@ fi
 # of digests the host compares with its own digests of the saved bytes,
 # which are zeros of each length.
 {
-    echo 'send=mkdir -p /save && mount -t vfat /dev/disk2p1 /save && echo SAVE""MOUNTED'
+    echo 'send=v=$(grep ^identity /proc/disk | grep " fixed " | sed -n 2p | cut -d" " -f2); mkdir -p /save && mount -t exfat /dev/disk${v}p1 /save && echo SAVE""MOUNTED'
     echo 'expect=SAVEMOUNTED'
     echo 'send=d=$(grep ^identity /proc/disk | grep " fixed " | head -1 | cut -d" " -f2); i=0; while read s c; do reflash /dev/disk$d $((s * 512)) $((c * 512)) < /save/range-$i || echo PUTFAIL $i; i=$((i + 1)); done < /save/ranges; echo PUT""ALL $i'
     echo "expect=PUTALL $NRANGES"
@@ -995,7 +999,7 @@ else
     bad "the rehearsal's restore"
 fi
 # What the machine read back against what was saved: zeros of each length.
-mtype -i "$R/save-stick.img"@@1048576 ::verify > "$R/verify.machine" 2>/dev/null || bad "the digests off the save stick"
+"$REPO/build/tests/host/mkexfatfixture" --check "$R/save-stick.img" 2048 --read /verify > "$R/verify.machine" 2>/dev/null || bad "the digests off the save disk"
 : > "$R/verify.host"
 while read -r start count; do
     head -c $((count * 512)) /dev/zero | shasum -a 256 | cut -d' ' -f1 >> "$R/verify.host"
