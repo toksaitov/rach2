@@ -126,4 +126,4 @@ bootctl: $(SRC_bootctl) $(HDR_bootctl)
 	mv bootctl.new bootctl
 
 clean:
-	rm -f $(UTILITIES) $(SBIN_PROGS)
+	rm -f $(UTILITIES) $(SBIN_PROGS) $(UTILITIES:=.new) $(SBIN_PROGS:=.new)

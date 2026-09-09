@@ -26,4 +26,4 @@ ish: $(OBJS)
 	$(ICC) -m32 -c -o $@ $<
 
 clean:
-	rm -f $(OBJS) ish
+	rm -f $(OBJS) ish ish.new
