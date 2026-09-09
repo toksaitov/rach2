@@ -917,16 +917,19 @@ rehearse_boot() { # rehearse_boot LOG TIMEOUT OK STEPFILE
     sh "$1.sh"
 }
 # The save: each range read off the disk into a file of its own on the save
-# stick, by the machine's loop over the list. The block size is the largest
+# stick, by the machine's loop over the list. The input block is the largest
 # the range's alignment allows, since dd is a system call per block and a
 # range of a gibibyte in 512-byte blocks is hours on the machine as well as
 # in the emulator; the ranges the grow writes are aligned to eight sectors.
+# The output block is a mebibyte whatever the input's, because the file
+# system syncs and flushes the disk at every write call, and a 4 KiB write
+# per call would cost a flush per page of the save.
 {
     # shellcheck disable=SC2016
     echo 'send=v=$(grep ^identity /proc/disk | grep " fixed " | sed -n 2p | cut -d" " -f2); mkdir -p /save && mount -t exfat /dev/disk${v}p1 /save && echo SAVE""MOUNTED'
     echo 'expect=SAVEMOUNTED'
     # shellcheck disable=SC2016
-    echo 'send=d=$(grep ^identity /proc/disk | grep " fixed " | head -1 | cut -d" " -f2); i=0; while read s c; do u=1; for t in 2048 8; do if [ $((s % t)) = 0 ] && [ $((c % t)) = 0 ] && [ $u = 1 ]; then u=$t; fi; done; dd if=/dev/disk$d of=/save/range-$i bs=$((u * 512)) skip=$((s / u)) count=$((c / u)) 2>/dev/null || echo SAVEFAIL $i; i=$((i + 1)); done < /save/ranges; sync; echo SAVED""ALL $i'
+    echo 'send=d=$(grep ^identity /proc/disk | grep " fixed " | head -1 | cut -d" " -f2); i=0; while read s c; do u=1; for t in 2048 8; do if [ $((s % t)) = 0 ] && [ $((c % t)) = 0 ] && [ $u = 1 ]; then u=$t; fi; done; dd if=/dev/disk$d of=/save/range-$i ibs=$((u * 512)) obs=1M skip=$((s / u)) count=$((c / u)) 2>/dev/null || echo SAVEFAIL $i; i=$((i + 1)); done < /save/ranges; sync; echo SAVED""ALL $i'
     echo "expect=SAVEDALL $NRANGES"
     echo 'send=umount /save && echo SAVE""DONE'
     echo 'expect=SAVEDONE'
