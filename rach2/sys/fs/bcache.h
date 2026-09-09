@@ -114,9 +114,10 @@ void bcache_dirty_ordered(struct bbuf *b, int order);
  * or the write's -errno with it dirty and the failure recorded. */
 int bcache_write(struct bbuf *b);
 
-/** Write `dev`'s dirty buffers in ascending block order; 0, or the first
- * write's -errno with that buffer and the rest still dirty for the next
- * call. */
+/** Write `dev`'s dirty buffers, the `first` ones in a pass of their own
+ * and then the rest, each pass in ascending block order and a `first`
+ * dirtied meanwhile still before the next `after`; 0, or the first write's
+ * -errno with that buffer and the rest still dirty for the next call. */
 int bcache_sync(block_device_t *dev);
 
 /** Drop `dev`'s buffers at unmount; -EBUSY while any is held or dirty. */
