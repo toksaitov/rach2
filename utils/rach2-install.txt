@@ -80,8 +80,15 @@ DESCRIPTION
      root that does not read is updated from the archive on the recovery
      partition instead, and the new root goes into the last ext2 partition
      of the table; where both read and disagree, each file that differs is
-     named and the root's copy is kept. The archive is written again from
-     what was kept, after the write.
+     named and the root's copy is kept. The archive is written from what was
+     kept before the root is written, marked as an update in progress, and
+     written again without the mark after the accounts are back, each time
+     whole or not at all; an update that stopped between the two leaves the
+     image's accounts on the root and the mark on the archive, and the next
+     update takes the archive. The recovery partition is mounted with the
+     archive readable by root alone. The image's home directories and the
+     keys in them are removed whatever was kept; an account whose home was
+     not kept gets an empty one.
 
      The image is judged before the root it replaces is destroyed: its length
      must be a whole number of sectors and must fit the partition, its first

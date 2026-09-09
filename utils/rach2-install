@@ -39,6 +39,7 @@ MNT=/mnt/install-source
 TARGET_MNT=/mnt/install-root
 RECOVERY_MNT=/mnt/install-recovery
 CONFIG_FILES="etc/passwd etc/group etc/shadow etc/rach2/sshd.conf"
+ARCHIVE_NEEDS="etc/passwd etc/group etc/shadow"
 
 say() { echo "$ME: $1"; }
 die() {
@@ -166,33 +167,62 @@ find_source() {
 # not assumed to be a particular entry.
 
 # Prints the entry number of DISK's recovery partition and leaves it mounted
-# at $RECOVERY_MNT; nothing when the disk has none.
+# at $RECOVERY_MNT, with the archive's files readable by root alone; nothing
+# when the disk has none. A volume that was mounted to look and will not
+# unmount stops the command, since the raw writer refuses a disk with a
+# mount on it and nothing here would know to unmount it later.
 find_recovery() { # find_recovery DISKNUMBER
     for p in 1 2 3 4; do
         [ -e "/dev/disk${1}p${p}" ] || continue
         mkdir -p "$RECOVERY_MNT" 2>/dev/null
-        mount -t vfat "/dev/disk${1}p${p}" "$RECOVERY_MNT" 2>/dev/null || continue
+        mount -t vfat -o umask=077 "/dev/disk${1}p${p}" "$RECOVERY_MNT" 2>/dev/null || continue
         if [ -f "$RECOVERY_MNT/boot/recovery" ]; then
             echo "$p"
             return 0
         fi
-        umount "$RECOVERY_MNT" 2>/dev/null
+        umount "$RECOVERY_MNT" || die "/dev/disk${1}p${p} was mounted to look for the recovery partition and would not unmount"
     done
     return 1
 }
 
+# Whether the archive on the recovery partition mounted at $RECOVERY_MNT
+# holds every file an update cannot do without.
+archive_complete() {
+    for f in $ARCHIVE_NEEDS; do
+        [ -f "$RECOVERY_MNT/rach2-config/$f" ] || return 1
+    done
+    return 0
+}
+
 # Copies the configuration files under ROOTDIR into the archive on the
-# recovery partition mounted at $RECOVERY_MNT; a file the root does not have
-# is left out of the archive too.
-write_archive() { # write_archive ROOTDIR
-    rm -rf "$RECOVERY_MNT/rach2-config"
-    mkdir -p "$RECOVERY_MNT/rach2-config/etc/rach2" ||
+# recovery partition mounted at $RECOVERY_MNT, whole or not at all: the new
+# archive is built beside the old one and takes its place last, so a stop
+# in between leaves the old one. A file the root does not have is left out,
+# except the account files, without which the archive is not one. With
+# MARK, the archive records that an update of the root is in progress and
+# the hash of the image being written, so a retry after a stop takes the
+# archive and not the root, which is the image's by then.
+write_archive() { # write_archive ROOTDIR [MARK]
+    for f in $ARCHIVE_NEEDS; do
+        [ -f "$1/$f" ] || die "$f is not among the files to archive"
+    done
+    rm -rf "$RECOVERY_MNT/rach2-config.new" || die "an old partial archive could not be removed"
+    mkdir -p "$RECOVERY_MNT/rach2-config.new/etc/rach2" ||
         die "the archive directory could not be made on the recovery partition"
     for f in $CONFIG_FILES; do
         if [ -f "$1/$f" ]; then
-            cp "$1/$f" "$RECOVERY_MNT/rach2-config/$f" || die "$f could not be archived"
+            cp "$1/$f" "$RECOVERY_MNT/rach2-config.new/$f" || die "$f could not be archived"
         fi
     done
+    if [ -n "${2:-}" ]; then
+        echo "$2" > "$RECOVERY_MNT/rach2-config.new/update-in-progress" ||
+            die "the update's mark could not be written to the archive"
+    fi
+    sync
+    rm -rf "$RECOVERY_MNT/rach2-config" || die "the old archive could not be removed"
+    mv "$RECOVERY_MNT/rach2-config.new" "$RECOVERY_MNT/rach2-config" ||
+        die "the new archive could not take the old one's place"
+    sync
 }
 
 # ---- the update ----
@@ -240,20 +270,30 @@ $update_disk was not installed from here"
         mounted_root=""
     done
     keep=/tmp/rach2-update-keep
-    rm -rf "$keep"
-    mkdir -p "$keep" || die "there is nowhere to keep the machine's configuration"
+    rm -rf "$keep" || die "an old copy of the configuration could not be removed"
+    mkdir -p "$keep" && chmod 700 "$keep" || die "there is nowhere to keep the machine's configuration"
     recovery_entry=$(find_recovery "$target") || recovery_entry=""
     [ -n "$recovery_entry" ] && mounted_recovery=$RECOVERY_MNT
-    if [ -z "$root_entry" ]; then
-        # The root does not read. The archive is the configuration then, and
-        # the root's partition is the last ext2 entry of the table, since a
-        # mount cannot say which it is.
-        [ -n "$recovery_entry" ] && [ -f "$RECOVERY_MNT/rach2-config/etc/passwd" ] ||
-            die "$update_disk carries no root of this system that can be read and no \
-configuration archived on its recovery partition; its accounts are not there to be kept"
-        root_entry=$(grep "^part $target " /proc/disk | awk '$6 == "mbr:83" { print $3 }' | tail -1)
-        [ -n "$root_entry" ] || die "$update_disk has no ext2 partition in its table"
-        say "the root does not read; taking the configuration saved on the recovery partition"
+    from_archive=""
+    if [ -n "$recovery_entry" ] && [ -f "$RECOVERY_MNT/rach2-config/update-in-progress" ]; then
+        # An update stopped after it wrote the root and before it wrote the
+        # accounts back: the root reads, and what it holds is the image's.
+        # The archive was written before that root, from the machine's own.
+        from_archive="an update was stopped part way, and the root holds the image's accounts"
+    elif [ -z "$root_entry" ]; then
+        from_archive="the root does not read"
+    fi
+    if [ -n "$from_archive" ]; then
+        # The archive is the configuration, and the root's partition is
+        # the last ext2 entry of the table when no mount could say which.
+        [ -n "$recovery_entry" ] && archive_complete ||
+            die "$update_disk carries no root of this system whose accounts can be taken and no \
+whole configuration archived on its recovery partition; its accounts are not there to be kept"
+        if [ -z "$root_entry" ]; then
+            root_entry=$(grep "^part $target " /proc/disk | awk '$6 == "mbr:83" { print $3 }' | tail -1)
+            [ -n "$root_entry" ] || die "$update_disk has no ext2 partition in its table"
+        fi
+        say "$from_archive; taking the configuration saved on the recovery partition"
         for f in $CONFIG_FILES; do
             if [ -f "$RECOVERY_MNT/rach2-config/$f" ]; then
                 mkdir -p "$keep/$(dirname "$f")"
@@ -280,15 +320,22 @@ configuration archived on its recovery partition; its accounts are not there to 
                 fi
             done
         elif [ -n "$recovery_entry" ]; then
-            say "the recovery partition has no archive of the configuration; one is written after the update"
+            say "the recovery partition has no archive of the configuration; one is written before the update"
         fi
     fi
-    # Nothing of the disk may be mounted while its root is written: the raw
-    # writer refuses a disk with a mount on it. The archive is mounted again
-    # for its refresh once the new root has been written and unmounted.
+    chmod 600 "$keep/etc/shadow" 2>/dev/null || true
+    # The archive is written now, from what is kept, and marked as an
+    # update in progress: a stop between the root's write and the accounts'
+    # return then leaves the machine's own configuration on the recovery
+    # partition for the retry, and not the image's on the root. Nothing of
+    # the disk may be mounted while its root is written, since the raw writer
+    # refuses a disk with a mount on it; the archive is mounted again for its
+    # refresh once the new root has been written and unmounted.
     if [ -n "$mounted_recovery" ]; then
+        write_archive "$keep" "$(basename "$update_image") $(stat -c %s "$update_image")"
         umount "$RECOVERY_MNT" || die "the recovery partition would not unmount"
         mounted_recovery=""
+        say "the configuration is archived on ${update_disk}p${recovery_entry} before the root is written"
     fi
     # Every copy is checked, because what is not kept here is replaced below by
     # the image's own: a copy that failed and said nothing would take the
@@ -296,17 +343,23 @@ configuration archived on its recovery partition; its accounts are not there to 
     # updating it. `-a` keeps the owner and the mode, which `cp` run by root
     # does not do on its own: an account's home restored as root's is a home
     # its owner cannot enter.
-    if [ -d "$TARGET_MNT/etc/dropbear" ]; then
+    if [ -n "$from_archive" ] && [ -n "$mounted_root" ]; then
+        # A root that holds the image's accounts holds the image's homes and
+        # keys too: nothing of it is kept.
+        umount "$TARGET_MNT" || die "${update_disk}p${root_entry} would not unmount"
+        mounted_root=""
+    fi
+    if [ -d "$TARGET_MNT/etc/dropbear" ] && [ -n "$mounted_root" ]; then
         cp -a "$TARGET_MNT/etc/dropbear" "$keep/etc/dropbear" ||
             die "the server's host keys could not be kept"
     fi
-    if [ -d "$TARGET_MNT/home" ]; then
+    if [ -d "$TARGET_MNT/home" ] && [ -n "$mounted_root" ]; then
         cp -a "$TARGET_MNT/home" "$keep/home" || die "the home directories could not be kept"
     fi
     # Root's own keys, and their absence: an install takes the image's
     # demonstration keys off root, and an update that put the image's back
     # would open the machine to whoever holds the demonstration key.
-    if [ -d "$TARGET_MNT/root/.ssh" ]; then
+    if [ -d "$TARGET_MNT/root/.ssh" ] && [ -n "$mounted_root" ]; then
         mkdir -p "$keep/root"
         cp -a "$TARGET_MNT/root/.ssh" "$keep/root/.ssh" ||
             die "root's keys could not be kept"
@@ -374,20 +427,31 @@ configuration archived on its recovery partition; its accounts are not there to 
             cp "$keep/$f" "$TARGET_MNT/$f" || die "$f could not be put back"
         fi
     done
-    chmod 600 "$TARGET_MNT/etc/shadow" 2>/dev/null
+    chmod 600 "$TARGET_MNT/etc/shadow" || die "the shadow file's mode could not be set"
     if [ -d "$keep/etc/dropbear" ]; then
-        rm -rf "$TARGET_MNT/etc/dropbear"
+        rm -rf "$TARGET_MNT/etc/dropbear" || die "the image's host keys could not be removed"
         cp -a "$keep/etc/dropbear" "$TARGET_MNT/etc/dropbear" ||
             die "the server's host keys could not be put back"
     fi
+    # The image's home directories go, with the keys they carry, whether or
+    # not the machine's were kept: an account that has the image's name must
+    # not regain the image's key. Where the machine's homes were not kept,
+    # each account of the archive gets an empty one of its own.
+    rm -rf "$TARGET_MNT/home" || die "the image's home directories could not be removed"
     if [ -d "$keep/home" ]; then
-        rm -rf "$TARGET_MNT/home"
         cp -a "$keep/home" "$TARGET_MNT/home" || die "the home directories could not be put back"
+    else
+        mkdir -p "$TARGET_MNT/home" || die "the home directory could not be made"
+        awk -F: '$3 >= 1000 && $6 ~ /^\/home\// { print $3, $4, $6 }' "$TARGET_MNT/etc/passwd" |
+        while read -r uid gid home; do
+            mkdir -p "$TARGET_MNT$home" && chmod 700 "$TARGET_MNT$home" &&
+                chown "$uid:$gid" "$TARGET_MNT$home" || die "$home could not be made"
+        done
     fi
     # Root's keys are put back as they were, and where there were none the
     # image's are taken off: an update must not open the machine to a key its
     # owner had removed.
-    rm -rf "$TARGET_MNT/root/.ssh"
+    rm -rf "$TARGET_MNT/root/.ssh" || die "the image's keys for root could not be removed"
     if [ -d "$keep/root/.ssh" ]; then
         mkdir -p "$TARGET_MNT/root"
         cp -a "$keep/root/.ssh" "$TARGET_MNT/root/.ssh" || die "root's keys could not be put back"
@@ -395,12 +459,18 @@ configuration archived on its recovery partition; its accounts are not there to 
     sync
     umount "$TARGET_MNT" || die "the new root would not unmount"
     mounted_root=""
-    # The archive refreshed from what was written back, so the next update
-    # of a root that does not read takes what this one kept.
-    if [ -n "$recovery_entry" ] && [ "$(find_recovery "$target")" = "$recovery_entry" ]; then
-        mounted_recovery=$RECOVERY_MNT
+    # The archive refreshed from what was written back and its mark taken
+    # off, so the next update of a root that does not read takes what this
+    # one kept; an archive that was there and cannot be refreshed stops the
+    # update here, with the root written and no trial armed, rather than
+    # leave a stale archive that says an update is in progress.
+    if [ -n "$recovery_entry" ]; then
+        again=$(find_recovery "$target") || again=""
+        [ -n "$again" ] && mounted_recovery=$RECOVERY_MNT
+        [ "$again" = "$recovery_entry" ] ||
+            die "the recovery partition ${update_disk}p${recovery_entry} was not found again; the \
+root is written and its archive still says an update is in progress; run the update once more"
         write_archive "$keep"
-        sync
         umount "$RECOVERY_MNT" || die "the recovery partition would not unmount"
         mounted_recovery=""
         say "the configuration is archived on ${update_disk}p${recovery_entry}"

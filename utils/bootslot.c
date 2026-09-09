@@ -783,6 +783,17 @@ int bootslot_install(struct bootslot *bs, const uint8_t *image, uint32_t size, c
                     errlen);
 }
 
+/**
+ * Copy the committed candidate slot into the fallback file and read it
+ * back. Refused while the candidate is not the saved default or a trial is
+ * armed: a committed candidate is a kernel that booted and was accepted,
+ * and an armed line means the slot was refilled since. The fallback's
+ * first sector, which holds the headers the install validates, is zeroed
+ * before the copy and written last, so a copy that stops part way leaves
+ * a fallback with no header, which the next install refuses by name until
+ * `bootctl fallback` runs again, rather than one with a new head over old
+ * bytes that it would accept.
+ */
 int bootslot_fallback(struct bootslot *bs, char *err, size_t errlen)
 {
     static uint8_t env[ENV_BYTES];
@@ -804,9 +815,6 @@ int bootslot_fallback(struct bootslot *bs, char *err, size_t errlen)
                     "the fallback file is shorter than the candidate slot: a disk built "
                     "before the fallback was rewritable");
     }
-    /* The saved entry must be the candidate's, with no trial armed: a
-       committed candidate is a kernel that booted and was accepted, and an
-       armed line means the slot was refilled since. */
     if (bootslot_read_env(bs, env, err, errlen) != 0) {
         return -1;
     }
@@ -821,8 +829,9 @@ int bootslot_fallback(struct bootslot *bs, char *err, size_t errlen)
         if (memcmp(env + i, want, n) == 0) {
             committed = 1;
         }
-        if (i + 13 <= ENV_BYTES && memcmp(env + i, "\nnext_entry=", 12) == 0 &&
-            env[i + 12] != '\n') {
+    }
+    for (i = 0; i + 13 <= ENV_BYTES; i++) {
+        if (memcmp(env + i, "\nnext_entry=", 12) == 0 && env[i + 12] != '\n') {
             return fail(err, errlen, "a trial is armed: the candidate slot is not the kernel "
                                      "that was committed");
         }
@@ -831,7 +840,6 @@ int bootslot_fallback(struct bootslot *bs, char *err, size_t errlen)
         return fail(err, errlen, "the candidate is not the saved default; boot and commit it "
                                  "before it becomes the fallback");
     }
-    /* The slot's head validated as the install validates the fallback. */
     present = bs->kernel.size < MULTIBOOT_SEARCH ? bs->kernel.size : MULTIBOOT_SEARCH;
     for (s = 0; s * BOOTSLOT_SECTOR < present; s++) {
         if (file_read_sector(bs, &bs->kernel, s, head + s * BOOTSLOT_SECTOR) != 0) {
@@ -841,7 +849,11 @@ int bootslot_fallback(struct bootslot *bs, char *err, size_t errlen)
     if (bootslot_validate_kernel(head, present, bs->kernel.size, err, errlen) != 0) {
         return -1;
     }
-    for (s = 0; s < nsectors; s++) {
+    memset(sector, 0, sizeof(sector));
+    if (file_write_sector(bs, &bs->fallback, 0, sector) != 0) {
+        return fail(err, errlen, "the fallback file does not write");
+    }
+    for (s = nsectors; s-- > 0;) {
         if (file_read_sector(bs, &bs->kernel, s, sector) != 0) {
             return fail(err, errlen, "the candidate slot does not read");
         }

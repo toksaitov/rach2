@@ -80,10 +80,6 @@ static int io_write(void *ctx, uint32_t lba, const void *buf)
 
 static const struct bootslot_io IO = {io_read, io_write, NULL};
 
-/** Build the named fixture and load it; aborts the test run on builder
- *  failure, which would make every case meaningless. The builder is
- *  compiled here on first use, since this test is compiled and run
- *  directly and has no build system to ask. */
 /** Whether the fixture builder's source is newer than the binary at `path`. */
 static int source_newer_than(const char *path)
 {
@@ -95,6 +91,10 @@ static int source_newer_than(const char *path)
     return src.st_mtime > bin.st_mtime;
 }
 
+/** Build the named fixture and load it; aborts the test run on builder
+ *  failure, which would make every case meaningless. The builder is
+ *  compiled here on first use, since this test is compiled and run
+ *  directly and has no build system to ask. */
 static void load(const char *opt)
 {
     char cmd[256];
@@ -289,6 +289,16 @@ int main(void)
         }
     }
     CHECK(bootslot_commit(&bs, err, sizeof(err)) == 0, "the tried candidate commits");
+    /* A copy that stops part way: the fallback's first sector is zeroed
+       before the rest is written and written last, so what is left has no
+       header, and the next install refuses it by name. */
+    img.writes_left = 3;
+    CHECK(bootslot_fallback(&bs, err, sizeof(err)) == -1,
+          "a fallback copy the device stops part way fails");
+    img.writes_left = 0;
+    CHECK(bootslot_install(&bs, kernel, 5000, err, sizeof(err)) == -1 &&
+              strstr(err, "fallback") != NULL,
+          "and the next install refuses the fallback it left, by name");
     CHECK(bootslot_fallback(&bs, err, sizeof(err)) == 0,
           "the committed candidate becomes the fallback");
     {
@@ -315,12 +325,14 @@ int main(void)
     }
     /* A device that says yes to a sector and keeps nothing: the fallback's
        third sector spoiled and the write that would mend it dropped, the
-       readback is what catches it, so the copy is refused. */
+       readback is what catches it, so the copy is refused. The copy zeroes
+       the first sector and then writes from the last sector down, so the
+       third sector's write is the count after the sectors above it. */
     memset(img.data +
                ((long)bs.data_start + ((long)bs.fallback.chain[2] - 2) * bs.cluster_sectors) * 512,
            0xEE, 512);
     img.count = 0;
-    img.drop_at = 3;
+    img.drop_at = 1 + (long)(bs.kernel.size / 512) - 2;
     CHECK(bootslot_fallback(&bs, err, sizeof(err)) == -1 &&
               strstr(err, "do not match the candidate's") != NULL,
           "a fallback write the device dropped is caught by the readback");

@@ -583,13 +583,6 @@ static int cmd_trial(const char *id)
 }
 
 /**
- * Clear an armed trial, so the next boot takes the saved default.
- *
- * The key is removed and not set empty. An empty `next_entry` is the marker
- * GRUB leaves behind after a trial has actually booted, and `commit` requires
- * it, so writing it here would let a kernel that never ran be made the default.
- */
-/**
  * Make the committed candidate the fallback kernel too.
  *
  * The fallback file is written only by an install that builds the disk,
@@ -614,6 +607,13 @@ static int cmd_fallback(void)
     return 0;
 }
 
+/**
+ * Clear an armed trial, so the next boot takes the saved default.
+ *
+ * The key is removed and not set empty. An empty `next_entry` is the marker
+ * GRUB leaves behind after a trial has actually booted, and `commit` requires
+ * it, so writing it here would let a kernel that never ran be made the default.
+ */
 static int cmd_cancel(void)
 {
     if (open_slot() != 0) {
