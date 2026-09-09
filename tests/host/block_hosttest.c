@@ -84,7 +84,7 @@ static int backing_flush(block_device_t *device, struct block_request *request)
     return 0;
 }
 
-static block_device_t backing = {512u,          1000u, BLOCK_FAULT_SAFE, 0, 0, backing_read,
+static block_device_t backing = {512u,          1000u, BLOCK_FAULT_SAFE, 0, 0, 0, backing_read,
                                  backing_write, 0,     backing_flush,    0};
 
 block_device_t *block_lag_backing(block_device_t *dev)

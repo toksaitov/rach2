@@ -111,7 +111,7 @@ static int img_write(block_device_t *d, uint64_t lba, uint32_t count, const void
     return 0;
 }
 
-static block_device_t dev = {512, 8192u, BLOCK_FAULT_SAFE, 0, 0, img_read, img_write, 0, 0, 0};
+static block_device_t dev = {512, 8192u, BLOCK_FAULT_SAFE, 0, 0, 0, img_read, img_write, 0, 0, 0};
 
 int block_request(block_device_t *device, int write, uint64_t lba, uint32_t count, void *data)
 {
