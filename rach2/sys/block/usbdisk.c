@@ -338,7 +338,13 @@ static void bring_up(int n)
         return;
     }
     if (msc_lun_ident(s->slot, s->lun, &ident) == 0) {
+        int i;
+
         disk_set_model(d, ident.vendor, ident.product);
+        for (i = 0; i < DISK_SERIAL_CHARS && ident.serial[i]; i++) {
+            d->serial[i] = ident.serial[i];
+        }
+        d->serial[i] = '\0';
     }
     d->removable = 1;
     s->disk = d;

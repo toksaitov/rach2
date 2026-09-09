@@ -192,7 +192,15 @@ static void scsi_data_in(unsigned char *buffer, uint32_t length)
         buffer[i] = 0;
     }
     switch (cmd.cdb[0]) {
-    case 0x12: /* INQUIRY */
+    case 0x12:                /* INQUIRY */
+        if (cmd.cdb[1] & 1) { /* the unit serial page, 0x80 */
+            buffer[1] = 0x80;
+            buffer[3] = 7;
+            for (i = 0; i < 7; i++) {
+                buffer[4 + i] = (unsigned char)"MODEL01"[i];
+            }
+            return;
+        }
         buffer[0] = (unsigned char)dev.lun_type[cmd.lun];
         buffer[4] = 31;
         return;
@@ -971,6 +979,9 @@ int main(void)
             struct msc_ident ident;
 
             CHECK("and on the stick's own line", msc_ident(0, &ident) == 0 && ident.flushes == 1);
+            CHECK("and the stick's serial is the unit serial page's",
+                  msc_ident(0, &ident) == 0 && ident.serial[0] == 'M' && ident.serial[6] == '1' &&
+                      ident.serial[7] == '\0');
         }
     }
 

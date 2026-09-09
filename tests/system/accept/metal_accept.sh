@@ -39,9 +39,12 @@ set -e
 
 HOST="$1"
 PORT="${2:-22}"
+# The stick this script may write, by its serial as `/proc/disk` reports it;
+# with none given, the first flash drive that is not a Rach2 recovery stick.
+STICK_SERIAL="${3:-}"
 
 if [ -z "$HOST" ]; then
-    echo "usage: metal_accept.sh <host> [port]" >&2
+    echo "usage: metal_accept.sh <host> [port] [stick-serial]" >&2
     exit 2
 fi
 
@@ -551,15 +554,49 @@ fi
 #      room and are in dev-log/40-usbdisk/hardware.md.
 #      The stick is whichever disk slot holds one: the kernel reclaims a slot
 #      only when its next stick is found, so the machine's first stick may be
-#      disk1 for a while. The volume is the first FAT or exFAT partition blkid
-#      finds on it; a Rach2 stick's ISO half is listed and left alone, since
-#      it is the boot half of a recovery stick and takes no file. ----
-USBLINE="$(run 'cat /proc/usb 2>/dev/null' | grep '^disk[0-9]* ' | head -1 || true)"
-if [ -z "$USBLINE" ]; then
+#      disk1 for a while. A stick whose table has a Rach2 recovery ISO in it,
+#      entry type 17, is a recovery stick and is refused whatever else is on
+#      it: writing the boot half of the way back into the machine is not a
+#      row. With a serial given, the stick is the one that reports it and no
+#      other. The volume is the first FAT or exFAT partition blkid finds on
+#      the chosen stick, mounted by its node and not by a label another
+#      stick could carry. ----
+USBLINES="$(run 'cat /proc/usb 2>/dev/null' | grep '^disk[0-9]* ' || true)"
+STICK=""
+USBLINE=""
+if [ -z "$USBLINES" ]; then
     note "no flash drive is plugged in (/proc/usb names no usb disk)"
 else
-    note "stick: $USBLINE"
-    STICK="$(echo "$USBLINE" | awk '{print $1}')"
+    echo "$USBLINES" | while read -r line; do note "stick: $line"; done
+    PARTS="$(run 'cat /proc/disk 2>/dev/null' || true)"
+    for cand in $(echo "$USBLINES" | awk '{print $1}'); do
+        n="${cand#disk}"
+        serial="$(echo "$PARTS" | grep "^identity $n " | head -1 | cut -d' ' -f6-)"
+        if echo "$PARTS" | grep -q "^part $n [0-9]* [0-9]* [0-9]* mbr:17 "; then
+            note "stick: /dev/$cand ($serial) carries a Rach2 recovery ISO in its table and is not written"
+            continue
+        fi
+        if [ -n "$STICK_SERIAL" ] && [ "$serial" != "$STICK_SERIAL" ]; then
+            note "stick: /dev/$cand ($serial) is not the stick named, $STICK_SERIAL, and is not written"
+            continue
+        fi
+        if [ -n "$STICK" ]; then
+            note "stick: /dev/$cand ($serial) is a second stick that could be written; the first is"
+            continue
+        fi
+        STICK="$cand"
+        USBLINE="$(echo "$USBLINES" | grep "^$cand " | head -1)"
+        note "stick: /dev/$cand ($serial) is the one written"
+    done
+fi
+if [ -z "$STICK" ] && [ -n "$USBLINES" ]; then
+    if [ -n "$STICK_SERIAL" ]; then
+        bad "stick: no flash drive reports the serial $STICK_SERIAL that is not a recovery stick"
+    else
+        note "stick: every flash drive plugged in is a recovery stick; none is written"
+    fi
+fi
+if [ -n "$STICK" ]; then
     case "$(run "ls -l /dev/$STICK 2>/dev/null")" in
         b*) note "stick: /dev/$STICK is a block device" ;;
         *)  bad "stick: /dev/$STICK is not a block device, so a label scan cannot find it" ;;
@@ -569,23 +606,24 @@ else
     if echo "$BLKID" | grep -q 'TYPE="iso9660"'; then
         note "stick: the ISO half of a Rach2 stick is on it and is left alone"
     fi
-    LABEL="$(echo "$BLKID" | grep 'TYPE="\(vfat\|exfat\)"' | sed -n 's/.*LABEL="\([^"]*\)".*/\1/p' | head -1 || true)"
-    # The label is the stick's own text and goes into a shell command on the
-    # machine, so only a label of letters, digits, `_` and `-` is used.
+    VOLNODE="$(echo "$BLKID" | grep 'TYPE="\(vfat\|exfat\)"' | sed -n 's/^\(\/dev\/[a-z0-9]*\):.*/\1/p' | head -1 || true)"
+    LABEL="$(echo "$BLKID" | grep "^$VOLNODE:" | sed -n 's/.*LABEL="\([^"]*\)".*/\1/p' | head -1 || true)"
+    # The label is the stick's own text and goes into the record, so only a
+    # label of letters, digits, `_` and `-` is used.
     case "$LABEL" in
-        *[!A-Za-z0-9_-]*) bad "stick: the label has a character this script will not put in a command: $LABEL"; LABEL="" ;;
+        *[!A-Za-z0-9_-]*) bad "stick: the label has a character this script will not put in a record: $LABEL"; VOLNODE="" ;;
     esac
-    if [ -z "$LABEL" ]; then
+    if [ -z "$VOLNODE" ]; then
         bad "stick: no FAT or exFAT volume with a plain label was found on it"
     else
         before="$(echo "$USBLINE" | sed -n 's/.*flushes \([0-9]*\).*/\1/p')"
         # The unmount runs whether or not the write and the read back did, so
         # a failure leaves neither a file nor a mount behind on the stick.
-        CMD="mkdir -p /mnt && mount 'LABEL=$LABEL' /mnt && { f=\$(mktemp /mnt/accept.XXXXXX) && echo accept > \"\$f\" && cat \"\$f\"; rm -f \"\$f\"; umount /mnt; }"
+        CMD="mkdir -p /mnt && mount $VOLNODE /mnt && { f=\$(mktemp /mnt/accept.XXXXXX) && echo accept > \"\$f\" && cat \"\$f\"; rm -f \"\$f\"; umount /mnt; }"
         OUT="$(run "$CMD")"
         after="$(run 'cat /proc/usb 2>/dev/null' | grep "^$STICK " | sed -n 's/.*flushes \([0-9]*\).*/\1/p' || true)"
         if [ "$OUT" = "accept" ]; then
-            note "stick: the volume $LABEL mounts by its label, takes a file and gives it back"
+            note "stick: the volume $LABEL on $VOLNODE mounts, takes a file and gives it back"
         else
             bad "stick: the volume $LABEL did not take a write: $OUT"
         fi

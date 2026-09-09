@@ -102,6 +102,7 @@
 #define MSC_STATE_REFUSED  8
 #define MSC_STATE_GONE     9
 #define MSC_STATE_CAPACITY16 10 /* the ten-byte answer was all ones */
+#define MSC_STATE_SERIAL 11     /* INQUIRY's unit serial page, asked once */
 
 /*
  * Recovery, which the class defines as three things in this order: the reset
@@ -194,6 +195,7 @@ struct msc_device {
      * because `scratch` is the next command's buffer as well. */
     char vendor[9];
     char product[17];
+    char serial[21]; /* the unit serial page, or empty when it has none */
     uint32_t flushes; /* SYNCHRONIZE CACHE commands sent, for /proc/usb */
 
     /* What the unit being brought up answered; copied into its record. */
@@ -629,6 +631,9 @@ int msc_lun_ident(int index, int lun, struct msc_ident *out)
     for (i = 0; i < (int)sizeof(out->product); i++) {
         out->product[i] = m->product[i];
     }
+    for (i = 0; i < (int)sizeof(out->serial); i++) {
+        out->serial[i] = m->serial[i];
+    }
     out->blocks = u->blocks;
     out->flushes = m->flushes;
     out->block_size = u->block_size;
@@ -848,6 +853,21 @@ static int send_inquiry(struct msc_device *m)
     return command_begin(m, cdb, 6, m->scratch, 36, 1);
 }
 
+/** INQUIRY's vital product data page 0x80, the unit serial number, which
+ * is what a person names a stick by; a device without the page answers
+ * with an error, and the serial is left empty. */
+static int send_inquiry_serial(struct msc_device *m)
+{
+    uint8_t cdb[6];
+
+    cdb_clear(cdb, 6);
+    cdb[0] = SCSI_INQUIRY;
+    cdb[1] = 1; /* EVPD */
+    cdb[2] = 0x80;
+    cdb[4] = 64;
+    return command_begin(m, cdb, 6, m->scratch, 64, 1);
+}
+
 static int send_read_capacity(struct msc_device *m)
 {
     uint8_t cdb[10];
@@ -1032,7 +1052,21 @@ static void step_command_done(struct msc_device *m)
         }
         take_string(m->vendor, &m->scratch[8], 8);
         take_string(m->product, &m->scratch[16], 16);
-        m->state = MSC_STATE_TEST;
+        m->serial[0] = '\0';
+        m->state = MSC_STATE_SERIAL;
+        return;
+
+    case MSC_STATE_SERIAL:
+        if (status == CSW_GOOD && m->scratch[1] == 0x80) {
+            int len = m->scratch[3];
+
+            take_string(m->serial, &m->scratch[4], len < 20 ? len : 20);
+            m->state = MSC_STATE_TEST;
+            return;
+        }
+        /* No such page: the failure's sense is asked for, as any other, and
+         * the tests go on from there. */
+        m->state = status == CSW_GOOD ? MSC_STATE_TEST : MSC_STATE_SENSE;
         return;
 
     case MSC_STATE_TEST:
@@ -1170,6 +1204,10 @@ static void step_idle(struct msc_device *m)
 
     case MSC_STATE_INQUIRY:
         (void)send_inquiry(m);
+        return;
+
+    case MSC_STATE_SERIAL:
+        (void)send_inquiry_serial(m);
         return;
 
     case MSC_STATE_TEST:

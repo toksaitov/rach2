@@ -138,6 +138,18 @@ sh "$REPO/krffs/mkimage.sh" "$REPO/krffs/manifests/loopimg-test.manifest" \
     "$STICKVOL" 16 > /dev/null 2>&1 || fail "the KRFFS volume for the stick"
 dd if="$STICKVOL" of="$STICK" bs=512 seek=100352 conv=notrunc 2>/dev/null \
     || fail "putting the KRFFS volume on the stick"
+# Two recovery sticks beside it, each with the ISO half's entry, type 17, and
+# a FAT volume labelled ACCEPT like the real one: the acceptance must take
+# the stick named by its serial and refuse both of these by their tables,
+# whatever their labels say. The ISO half is a few empty sectors here; the
+# table is what the script reads.
+for r in 1 2; do
+    RSTICK="$WORK.rstick$r"
+    dd if=/dev/zero of="$RSTICK" bs=1048576 count=20 2>/dev/null || fail "the recovery stick $r"
+    "$REPO/build/tools/image/mkmbr" --lba "$RSTICK" 1:2047:17 2048:32768:0c \
+        > /dev/null || fail "mkmbr for the recovery stick $r"
+    mformat -i "$RSTICK"@@1048576 -F -T 32768 -v ACCEPT :: || fail "mformat for the recovery stick $r"
+done
 qemu-system-i386 -cpu max -display none -kernel "$KERNEL" \
     -initrd "$WORK" \
     -append "rach2.ip=$GUEST_IP/24 rach2.gateway=$GUEST_GW rach2.netconsole rach2.diskdiag" \
@@ -146,7 +158,11 @@ qemu-system-i386 -cpu max -display none -kernel "$KERNEL" \
     -device qemu-xhci,id=xhci -device usb-hub,bus=xhci.0,port=1 \
     -device usb-kbd,bus=xhci.0,port=1.2 \
     -drive "if=none,id=stick,format=raw,file=$STICK" \
-    -device usb-storage,bus=xhci.0,port=1.3,drive=stick \
+    -device usb-storage,bus=xhci.0,port=1.3,drive=stick,serial=ACCEPT01 \
+    -drive "if=none,id=rstick1,format=raw,file=$WORK.rstick1" \
+    -device usb-storage,bus=xhci.0,port=1.4,drive=rstick1,serial=RECOVERY01 \
+    -drive "if=none,id=rstick2,format=raw,file=$WORK.rstick2" \
+    -device usb-storage,bus=xhci.0,port=1.5,drive=rstick2,serial=RECOVERY02 \
     -serial stdio < /dev/null > "$LOG" 2>&1 &
 QPID=$!
 
@@ -274,7 +290,7 @@ echo "metal-test: the machine handed over its own boot log, from the first line:
 # The acceptance script itself, rehearsed here so it is not being debugged on
 # the laptop. Its baseline comparisons are against a drive this machine does
 # not have, which it reports, not fails on.
-ACCEPT="$(sh "$REPO/tests/system/accept/metal_accept.sh" 127.0.0.1 "$PORT" 2>&1)" || true
+ACCEPT="$(sh "$REPO/tests/system/accept/metal_accept.sh" 127.0.0.1 "$PORT" ACCEPT01 2>&1)" || true
 if ! echo "$ACCEPT" | grep -q '^metal-accept: PASS'; then
     echo "$ACCEPT" | tail -20 >&2
     fail "the acceptance script did not pass against the rehearsal machine"
@@ -285,10 +301,17 @@ if echo "$ACCEPT" | grep -q 'the file system in that file mounts and reads'; the
 else
     fail "the acceptance script's image row did not run against the rehearsal machine"
 fi
-if echo "$ACCEPT" | grep -q 'stick: the volume ACCEPT mounts by its label'; then
+if echo "$ACCEPT" | grep -q 'stick: the volume ACCEPT on /dev/disk[0-9]*p[0-9]* mounts'; then
     echo "metal-test: and its stick section found the stick, wrote it and flushed it: OK"
 else
     fail "the acceptance script's stick section did not run against the stick"
+fi
+if [ "$(echo "$ACCEPT" | grep -c 'carries a Rach2 recovery ISO in its table and is not written')" = 2 ] &&
+    echo "$ACCEPT" | grep -q 'stick: /dev/disk[0-9]* (ACCEPT01) is the one written'; then
+    echo "metal-test: and it took the stick named by its serial and refused both recovery sticks by their tables: OK"
+else
+    echo "$ACCEPT" | grep 'stick:' >&2
+    fail "the acceptance script did not refuse the recovery sticks and take the named one"
 fi
 if echo "$ACCEPT" | grep -q 'stick: the KRFFS volume on .* mounts, reads and takes a write'; then
     echo "metal-test: and its KRFFS section mounted a volume of the stick and wrote it: OK"
