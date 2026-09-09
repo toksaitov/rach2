@@ -432,6 +432,7 @@ int ata_init(void)
             d->dev.sector_size = BLOCK_SECTOR_SIZE;
             d->dev.sector_count = d->sectors;
             d->dev.flags = BLOCK_FAULT_SAFE;
+            d->dev.max_sectors = BLOCK_REQ_MAX_SECTORS;
             d->dev.read = ata_read;
             d->dev.write = ata_write;
             d->dev.drvdata = d;
