@@ -20,6 +20,7 @@ selfbuild|qemu-system-i386,mformat,mmd,mcopy,mshowfat|full
 install|qemu-system-i386,mformat,mmd,mcopy,mshowfat|full
 installer|qemu-system-i386,shasum,ssh,mformat,mcopy,mtype|full
 installer-repair|qemu-system-i386,shasum|full
+installer-rehearse|qemu-system-i386,qemu-img|full
 menu|qemu-system-i386,mformat,mmd,mcopy,mshowfat|full
 drill|qemu-system-i386,ssh,mformat,mmd,mcopy,mshowfat|full
 install-ext2|qemu-system-i386,mformat,mmd,mcopy,mshowfat,mke2fs,debugfs,e2fsck|full
@@ -96,5 +97,6 @@ krffsmount|qemu-system-i386|full
 loopdev|qemu-system-i386,mformat,mcopy,mtype,mke2fs|full
 mount|qemu-system-i386,mformat,mcopy,mdir|core
 fatwrite|qemu-system-i386,mformat,mcopy,mdir,python3|core
+diskrate|qemu-system-i386,mformat|full
 exfat|qemu-system-i386,python3|core
 ext2|qemu-system-i386,mke2fs,e2fsck|core
