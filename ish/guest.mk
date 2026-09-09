@@ -17,7 +17,8 @@ include sources.mk
 OBJS = $(ISH_SRC:.c=.o)
 
 ish: $(OBJS)
-	$(ICC) -m32 -nostdlib -static -o ish $(OBJS)
+	$(ICC) -m32 -nostdlib -static -o ish.new $(OBJS)
+	mv ish.new ish
 
 .SUFFIXES: .o .c
 

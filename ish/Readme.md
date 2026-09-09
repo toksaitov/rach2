@@ -91,7 +91,7 @@ The staged source tree has a POSIX makefile for pdpmake and TinyCC:
 make -f guest.mk
 ```
 
-Run it in a writable copy of `/src/ish`. Root may also build the staged tree in place. `guest.mk` builds the same five objects and links a local `ish` with `-m32 -nostdlib -static`; TinyCC's default i386 text address supplies the address named explicitly by the host build.
+Run it in a writable copy of `/src/ish`. Root may also build the staged tree in place. `guest.mk` builds the same five objects and links a local `ish` with `-m32 -nostdlib -static`, to `ish.new` and then renamed, so a link stopped part way is not taken for a built program; TinyCC's default i386 text address supplies the address named explicitly by the host build.
 
 ## Source map
 

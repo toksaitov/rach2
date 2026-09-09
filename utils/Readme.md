@@ -26,7 +26,7 @@ The native Linux build produces only the 12 portable file utilities under `build
 make -C utils -f Makefile.linux
 ```
 
-Self-building images stage this source tree at `/src/utils`. `guest.mk` uses `cc -static` to build all 29 programs from `programs.mk`, the shared map of programs, companion sources, and compile-time variants the host Makefile includes too. `tools/verify/guestcheck.c` checks that both builds read it.
+Self-building images stage this source tree at `/src/utils`. `guest.mk` uses `cc -static` to build all 29 programs from `programs.mk`, the shared map of programs, companion sources, and compile-time variants the host Makefile includes too; each is linked to a name of its own and renamed into place, so a link the machine stops part way does not leave a program the next make calls built. `tools/verify/guestcheck.c` checks that both builds read the map and that every rule links that way.
 
 ## Portable file utilities
 

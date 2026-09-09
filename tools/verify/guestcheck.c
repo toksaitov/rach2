@@ -875,6 +875,23 @@ static void host_utils_map(struct progmap *map)
     free(text);
 }
 
+/* The rule's recipe is two lines: a link to `NAME.new` and `mv NAME.new
+   NAME`. */
+static void check_links_through_temporary(const char *file, const struct rule *r,
+                                          const char *name)
+{
+    char temp[256], mv[600];
+
+    if (r == NULL)
+        return;
+    snprintf(temp, sizeof(temp), "-o %s.new ", name);
+    snprintf(mv, sizeof(mv), "mv %s.new %s", name, name);
+    if (r->recipe.n != 2 || strstr(r->recipe.item[0], temp) == NULL
+        || strcmp(r->recipe.item[1], mv) != 0)
+        fail("%s %s does not link to %s.new and rename it, so a link stopped "
+             "part way would look built", file, name, name);
+}
+
 static int check_utils(void)
 {
     struct progmap map;
@@ -962,6 +979,15 @@ static int check_utils(void)
                  defines[i].define);
     }
 
+    /* And every program is linked to its own temporary and renamed into
+       place: the compiler writes into its destination, so a link the machine
+       stops part way would leave a file newer than its source that the next
+       make calls built. */
+    for (i = 0; i < map.program.n; i++)
+        check_links_through_temporary("utils/guest.mk",
+                                      rule_find(&rules, map.program.item[i]),
+                                      map.program.item[i]);
+
     count = map.program.n;
     rules_free(&rules);
     macros_free(&m);
@@ -1004,6 +1030,13 @@ static int check_ish(void)
     }
     need_macro(text, "OBJS", &objs_raw);
     expand_tokens(text, &objs_raw, &objs);
+    {
+        struct rules rules = { NULL, 0, 0 };
+
+        rules_of(text, &rules);
+        check_links_through_temporary("ish/guest.mk", rule_find(&rules, "ish"), "ish");
+        rules_free(&rules);
+    }
     if (objs.n != expected.n)
         fail("ish/guest.mk OBJS does not derive from the shared ISH_SRC");
     for (i = 0; i < objs.n; i++)
