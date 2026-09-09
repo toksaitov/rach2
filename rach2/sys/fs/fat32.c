@@ -221,7 +221,6 @@ static int chain_at(struct fat_mount *fm, struct fat_node *node, uint32_t first,
     while (i < index) {
         uint32_t n;
         int rc = fat_next(fm, c, &n);
-
         if (rc != 0) {
             return rc;
         }
@@ -589,6 +588,20 @@ static void put32(uint8_t *p, uint32_t v)
     p[1] = (uint8_t)(v >> 8);
     p[2] = (uint8_t)(v >> 16);
     p[3] = (uint8_t)(v >> 24);
+}
+
+/**
+ * Write back everything dirty on the volume's device and then tell the
+ * device to put it on the medium: the point in the order of writes below
+ * where what came before must be on the disk before what comes after. A
+ * disk that writes through, as this kernel's ATA and AHCI drivers do,
+ * has nothing to flush; a stick with a cache of its own is told.
+ */
+static int sync_disk(struct fat_mount *fm)
+{
+    int rc = bcache_sync(fm->dev);
+
+    return rc != 0 ? rc : block_flush(fm->dev);
 }
 
 /* `len` bytes of `src` at volume offset `off`, written through (`sync`) or
@@ -1560,15 +1573,12 @@ static int put_file_bytes(struct fat_mount *fm, struct fat_node *n, uint32_t fir
 /* Extend the file's chain so that it covers `needed` clusters: the new run
  * is allocated disconnected and zero-filled, and joined to the old tail (or
  * published as the first cluster by the caller's entry write) only after
- * the caller's data is on the disk. Returns the run's first cluster. */
-static int extend_chain(struct fat_mount *fm, struct fat_node *n, uint32_t have, uint32_t needed,
-                        uint32_t *run_first)
+ * the caller's data is on the disk. Returns the run's first and last
+ * clusters. */
+static int extend_chain(struct fat_mount *fm, uint32_t have, uint32_t needed, uint32_t *run_first,
+                        uint32_t *run_last)
 {
-    uint32_t run_last;
-    int rc = alloc_run(fm, needed - have, 1, run_first, &run_last);
-
-    (void)n;
-    return rc;
+    return alloc_run(fm, needed - have, 1, run_first, run_last);
 }
 
 static int32_t fat_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,
@@ -1577,7 +1587,8 @@ static int32_t fat_write(struct vfs_mount *mnt, void *handle, const void *buf, u
     struct fat_mount *fm = fm_of(mnt);
     struct fat_node *n = handle;
     uint32_t cbytes = cluster_bytes(fm);
-    uint32_t have, needed, run_first = 0;
+    uint32_t have, needed, run_first = 0, run_last = 0;
+    struct fat_node run; /* the new run's walk, hinted like a node's */
     uint64_t end;
     int rc;
 
@@ -1587,6 +1598,7 @@ static int32_t fat_write(struct vfs_mount *mnt, void *handle, const void *buf, u
     if (count == 0) {
         return 0;
     }
+    k_memset(&run, 0, sizeof(run));
     if (offset >= 0xFFFFFFFFu || count > 0xFFFFFFFFu - offset) {
         klog(KLOG_WARN, "vfat", "write: offset %d MiB is past the format's limit of 4 GiB",
              (int)(offset >> 20));
@@ -1605,7 +1617,7 @@ static int32_t fat_write(struct vfs_mount *mnt, void *handle, const void *buf, u
     have = n->size == 0 ? 0 : (n->size - 1) / cbytes + 1;
     needed = (uint32_t)(end - 1) / cbytes + 1; /* end fits 32 bits, checked above */
     if (needed > have) {
-        rc = extend_chain(fm, n, have, needed, &run_first);
+        rc = extend_chain(fm, have, needed, &run_first, &run_last);
         if (rc != 0) {
             goto out;
         }
@@ -1634,16 +1646,16 @@ static int32_t fat_write(struct vfs_mount *mnt, void *handle, const void *buf, u
             goto undo;
         }
         if (part < count) {
-            rc = put_file_bytes(fm, 0, run_first, offset + part - (uint64_t)have * cbytes,
+            rc = put_file_bytes(fm, &run, run_first, offset + part - (uint64_t)have * cbytes,
                                 (const uint8_t *)buf + part, count - part);
         }
     } else {
-        rc = put_file_bytes(fm, 0, run_first, offset - (uint64_t)have * cbytes, buf, count);
+        rc = put_file_bytes(fm, &run, run_first, offset - (uint64_t)have * cbytes, buf, count);
     }
     if (rc != 0) {
         goto undo;
     }
-    rc = bcache_sync(fm->dev); /* the data reaches the disk before the chain names it */
+    rc = sync_disk(fm); /* the data reaches the disk before the chain names it */
     if (rc != 0) {
         goto undo;
     }
@@ -1660,6 +1672,12 @@ static int32_t fat_write(struct vfs_mount *mnt, void *handle, const void *buf, u
     } else if (run_first != 0) {
         n->first = run_first; /* published with the size, in the one entry write below */
     }
+    if (run_first != 0) {
+        /* The chain now ends at the run's last cluster, which the next
+         * append reaches from here and not by a walk from the first. */
+        n->hint_index = needed - 1;
+        n->hint_cluster = run_last;
+    }
     if (end > n->size) {
         n->size = (uint32_t)end;
     }
@@ -1668,7 +1686,6 @@ static int32_t fat_write(struct vfs_mount *mnt, void *handle, const void *buf, u
     if (rc != 0) {
         goto out; /* the chain is joined; the size is the walk's surplus */
     }
-    n->hint_cluster = 0;
     vfs_ns_unlock(mnt);
     return (int32_t)count;
 undo:
@@ -1710,10 +1727,10 @@ static int fat_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
     if (size > n->size) {
         /* A grow is a write of zeros: new clusters, zeroed and joined,
          * then the size. */
-        uint32_t run_first = 0;
+        uint32_t run_first = 0, run_last = 0;
 
         if (keep > have) {
-            rc = extend_chain(fm, n, have, keep, &run_first);
+            rc = extend_chain(fm, have, keep, &run_first, &run_last);
             if (rc != 0) {
                 goto out;
             }
@@ -1723,7 +1740,7 @@ static int fat_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
 
             rc = put_file_bytes(fm, n, n->first, n->size, 0, (uint32_t)(gap_end - n->size));
             if (rc == 0) {
-                rc = bcache_sync(fm->dev);
+                rc = sync_disk(fm);
             }
             if (rc != 0) {
                 if (run_first) {
@@ -1735,7 +1752,7 @@ static int fat_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
         if (run_first != 0) {
             /* The run's zeros are on the disk before the link that
              * publishes them, whether or not a gap was filled above. */
-            rc = bcache_sync(fm->dev);
+            rc = sync_disk(fm);
             if (rc != 0) {
                 free_chain(fm, run_first);
                 goto out;
@@ -1860,7 +1877,7 @@ static int fat_fsync(struct vfs_mount *mnt, void *handle)
 
     (void)handle;
     vfs_ns_lock(mnt);
-    rc = bcache_sync(fm->dev);
+    rc = sync_disk(fm);
     vfs_ns_unlock(mnt);
     return rc;
 }
@@ -1878,7 +1895,7 @@ static int fat_sync(struct vfs_mount *mnt)
         vfs_ns_unlock(mnt);
         return 0;
     }
-    rc = bcache_sync(fm->dev);
+    rc = sync_disk(fm);
     if (rc == 0) {
         rc = write_fsinfo(fm);
     }
@@ -2343,7 +2360,7 @@ static int fat_prepare_unmount(struct vfs_mount *mnt)
     if (!fm->writable || (mnt->flags & VFS_MS_RDONLY)) {
         return 0;
     }
-    rc = bcache_sync(fm->dev);
+    rc = sync_disk(fm);
     if (rc == 0 && !fm->free_known && fm->fsinfo_sector != 0) {
         rc = count_free(fm); /* so the count written is exact */
     }
