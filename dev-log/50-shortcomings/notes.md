@@ -34,3 +34,61 @@ The review units, six files each, grouped by contract, with the findings and the
 * Unit 10, the registry, the guest makefiles and the format host tests (`registry`, `utils/guest.mk`, `ish/guest.mk`, the block, exFAT and FAT32 host tests). Fixed: the rehearsal's row lacked `shasum`; the guest makefiles' `clean` left a `.new` behind; the wording findings. Not taken, with the reasons: a host model of pending and durable writes with flush failures, since the host's fake devices write at once and the crash rows of `tests/run exfat` and `fatwrite` judge the order under a real disk in QEMU; deadline rows in the block host test, since the request layer is i386 code and `tests/run queue` and `mount` hold its rows; operation-count rows that would fail the format drivers' performance changes reverted, since `tests/run diskrate` holds those paths under time bounds and the hold-walk mutation fails it. The guest makefiles' recipes are what pdpmake 2.0.4 runs; a link the machine stops leaves `NAME.new` and the next make retries.
 * Unit 2, the formats and the disk drivers (`exfat.c`, `fat32.c`, `ext2.c`, `ata.c`, `lag.c`, the host's `blockmax_host.c`). Fixed: ext2's batch deferred a new pointer block's zeros as an `after`, so a sync in block order could write the pointer to it first and a crash would read the block's old bytes as pointers; the zeros are noted with the bitmaps and go first, or through when the table is full. exFAT's flush after a chain's frees came after the entries that unpublished it, which a stick's own cache may reorder; `free_chain` flushes first, and both formats flush the join before publishing a length. The up-case cache took a failed read of a run's count as the table's end; it now returns the error. Not taken: a host fake device with pending and durable contents to prove the flush order, since the order is proved by the exFAT and FAT32 crash rows in QEMU, where the disk's flush is real; recorded here as the reason.
 
+
+## The sitting, prepared
+
+What the decision "the owner is called once, with everything ready" lists, gathered here; the hashes are of the tree at the final full set's commit, named there. Nothing below has touched the Lenovo.
+
+### The images
+
+Built from the tree at the commit the final full set names, by `make` and `make rach2-install-stick`, and hashed with `shasum -a 256` on the host:
+
+HASHES
+
+The stick image boots in QEMU: `tests/run installer-rehearse` boots it as the recovery system for the save, the install and the restore, and `tests/run installer` installs from it.
+
+### The save set
+
+`growset --lba 1290240 head.vol 487106928` over the sealed disk's root (the 128 MiB head of the fourth entry, which starts at sector 1290240 of the 488397168 the Lenovo's disk has) lists 1861 ranges, 3830008 sectors: the partition table, the root's own head, and every block a grow to the disk's end writes, which are the group bitmaps, the backup superblocks with their descriptors and the new groups' inode tables. The save is the image's whole extent, sectors 0 to 3389440 (1735393280 bytes), and the 3824736 sectors of those ranges that lie beyond it (1958264832 bytes): 3693658112 bytes in all, 3.44 GiB.
+
+The new stick has no room for it: the stick image's exFAT volume is the disk image plus 4 MiB of slack, since `mkinstallstick.sh` sizes it to what it carries. So the save goes onto the third stick, the SanDisk of 61524148224 bytes, formatted as one exFAT volume labelled `RACH2TEST` over its whole size in the sitting's first step, which is what the pull test reads later; its free space after the format is its size less the volume's own structures, more than 57 GiB. The save is read off the disk by the recovery system with the loop the rehearsal types, in 1 MiB write calls, one file per range, and the same bytes go to the host over SSH with `dd` from the recovery system, so the host has a second copy. The rehearsal ran these rows at this size on 2026-09-10 (entry 22): the save in 738 s, the install and grow in 1022 s, the restore and readback in 1291 s, every sector inside the set; the small form is in every full set since.
+
+### The restore, written out twice
+
+Both from the recovery system booted from the new stick, with the third stick mounted at `/save` (`mount -t exfat /dev/diskNp1 /save`, N the stick's number in `/proc/disk`), the disk found as the first fixed disk:
+
+    d=$(grep ^identity /proc/disk | grep " fixed " | head -1 | cut -d" " -f2)
+    i=0; while read s c; do reflash /dev/disk$d $((s * 512)) $((c * 512)) < /save/range-$i || echo FAILED $i; i=$((i + 1)); done < /save/ranges
+    while read s c; do reflash --verify /dev/disk$d $((s * 512)) $((c * 512)); done < /save/ranges
+
+and, for the image's extent alone, which is what a failed install leaves wrong, through the menu: `rach2-recover`, the step that puts a saved image back, given `/save/range-0` and the whole disk, then the readback the menu offers, against the digest the host took of `range-0` at the save. With milestone 43's stick instead, its FAT32 volume `RACH2SAVE` mounted with `mount -t vfat`, the same `reflash` loop reads the same files; that volume is where a copy of `range-0` also goes if the third stick is in doubt, since the FAT32 path now writes at the exFAT path's rate.
+
+### The third stick
+
+One exFAT volume over the whole stick, written on the Mac in the sitting's first step: `diskutil eraseDisk ExFAT RACH2TEST MBR /dev/diskN`, N the number `diskutil list` gives the SanDisk, the owner naming it from that listing. The pull test's read is `ssh -i KEY root@192.168.0.106 'dd if=/dev/diskS of=/dev/null bs=1M'`, S the stick's number in `/proc/disk` on the machine; its readiness signal is the first 64 MiB reported by `dd` on the host's side (`status=progress` where the host's `dd` has it, else a `pv` in the pipe); its deadline is the removal reported by the kernel, `usbdisk: diskS: gone` in the netconsole capture, within one minute of the pull.
+
+### The installer's answers
+
+* The disk: `/dev/disk0`, which the installer describes as AHCI port 0, 488397168 sectors, 238475 MiB, and the owner types back.
+* Root's password and the account's password: in `~/Desktop/rach2-sitting.txt` on the host, one a line, made before the sitting and not in this tree.
+* The first account: `toksaitov`.
+* The account's key: `krffs/rach2_demo_ed25519.pub`, the key the acceptance uses (`RACH2_ACCEPT_KEY`'s default), so the acceptance logs in as that account with the key it has; root's keys are none, and the install refuses the image's for root.
+* Grow the root: yes.
+
+### The commands of the sitting, in order
+
+1. On the host: `sudo dd if=build/images/rach2-install-stick.img of=/dev/rdiskN bs=1m` for the new stick and `diskutil eraseDisk ExFAT RACH2TEST MBR /dev/diskM` for the third, each after `diskutil list` and the owner naming the device; then the new stick read back (`sudo dd if=/dev/rdiskN bs=1m count=1666 | shasum -a 256`, 1746927616 bytes) against the image's hash, and both sticks' identities from `diskutil info` recorded here. Shows: the two hashes equal, the two sticks named.
+2. On the host: the netconsole capture started (`tcpdump -i en0 -w netconsole.pcap ether proto 0x0800 and udp` or the listener milestone 43 used), then the machine powered on with the keyboard, mouse, hub, card and third stick plugged as milestone 43 had them, the new stick chosen at the BIOS boot menu, the first GRUB entry taken. Shows: the recovery login on the screen and the netconsole frames on the host.
+3. On the machine: `rach2-recover` lists the disks; `/dev/disk0` is the Lenovo's, AHCI port 0, 488397168 sectors, with the four entries of the sealed table (boot 2048, KRFFS 133120, recovery 1157120, root 1290240). The memory map from the capture saved for milestone 46's fixture. Shows: the listing as the rule describes; a disk that reads otherwise ends the sitting here.
+4. The save, the owner naming the disk: on the machine, `mkdir /save && mount -t exfat /dev/diskSp1 /save`, the `ranges` file copied onto the stick from the host first (`scp`), then the rehearsal's loop:
+
+       d=$(grep ^identity /proc/disk | grep " fixed " | head -1 | cut -d" " -f2)
+       i=0; while read s c; do u=1; for t in 2048 8; do if [ $((s % t)) = 0 ] && [ $((c % t)) = 0 ] && [ $u = 1 ]; then u=$t; fi; done; dd if=/dev/disk$d of=/save/range-$i ibs=$((u * 512)) obs=1M skip=$((s / u)) count=$((c / u)) 2>/dev/null || echo SAVEFAIL $i; i=$((i + 1)); done < /save/ranges; sync
+
+   and on the host `for` each range `ssh root@192.168.0.106 "dd if=/dev/disk0 bs=512 skip=$s count=$c" > save/range-$i`, then the stick's files hashed on the machine (`sha256sum /save/range-*`) against the host's copies. Shows: 1861 files, the two hash lists equal. A difference ends the sitting with the disk untouched.
+5. `bootctl --target /dev/disk0p1 status`, then recovery made the saved default with the owner's approval (`bootctl --target /dev/disk0p1 trial recovery` and the commit the Readme's "Installing and updating a machine" gives), read back with `status`. Shows: `saved_entry recovery`.
+6. `rach2-install`, the owner naming `/dev/disk0` and giving the answers above; the installer hashes the image on the stick, writes it, reads it back against the manifest, grows the root, arms the candidate for one trial with recovery still the saved default; then `reboot`. Shows: `installed:` and the trial armed; the candidate's login on the screen after the reboot. An install that fails: the restore above, and the sitting ends.
+7. From the running candidate over SSH as `toksaitov` with the key: `cat /proc/disk` (the root's identity), `touch /root-writable && rm /root-writable` through `su`, `df /` (the grown capacity, about 232 GiB), `id` and a login with the password; then `tests/system/accept/metal_accept.sh 192.168.0.106 22 SERIAL` with the third stick's serial from `/proc/disk`; only then `bootctl commit`. Shows: the acceptance's rows OK, `saved_entry candidate`.
+8. The devices: `reboot` from SSH and the login again; the pull test above; the keyboard and the mouse through each socket and the hub, a line typed and the pointer moved at each, the host reading `tests/keylatprobe`'s and `mouseprobe`'s lines over SSH. Shows: each line and movement arriving.
+
+Which boot switch answers which symptom: a machine that does not reach the recovery login boots the new stick's second entry, `rach2.nomsi`; a candidate that does not come up is `bootctl --target /dev/disk0p1 cancel` from recovery, which leaves the saved default; a root that does not mount after the install is the restore above.
