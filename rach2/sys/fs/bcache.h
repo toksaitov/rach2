@@ -68,6 +68,10 @@ struct bbuf {
     int write_failed;      /* its last write failed: not a victim until one succeeds */
     int order;             /* BCACHE_ORDER_FIRST, BCACHE_ORDER_AFTER or 0 */
     wait_queue_t wq;       /* who waits for the hold to end */
+    struct bbuf *hold_next;  /* the next buffer its holder holds */
+    struct bbuf *lru_prev;   /* the keyed buffers in release order, oldest first */
+    struct bbuf *lru_next;
+    struct bbuf *empty_next; /* the next buffer keyed to nothing */
 };
 
 /** Find or read block `blk` of `dev`; returns it held, or NULL on a failed

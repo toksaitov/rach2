@@ -74,6 +74,8 @@ struct wq_waiter {
     struct wq_waiter *next;
 };
 
+struct bbuf; /* the buffer cache's buffer, bcache.h */
+
 struct process {
     uint32_t pid;           /* Process ID */
     proc_state_t state;     /* Current state */
@@ -169,6 +171,9 @@ struct process {
     /* An interrupt asked for a switch while this process was inside a
      * system call; the call's exit takes it. */
     volatile uint32_t need_resched;
+    /* The buffer cache's list of the buffers this process holds, kept by
+     * the cache so its hold rules are checked against them alone. */
+    struct bbuf *bcache_held;
 };
 
 typedef struct process process_t;
