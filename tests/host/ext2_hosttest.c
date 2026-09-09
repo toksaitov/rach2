@@ -43,6 +43,10 @@ extern int open(const char *path, int flags, ...);
 extern int close(int fd);
 extern int unlink(const char *path);
 extern unsigned sleep(unsigned seconds);
+extern long read(int fd, void *buf, unsigned long n);
+extern long write(int fd, const void *buf, unsigned long n);
+extern int kill(int pid, int sig);
+extern int getpid(void);
 extern int atexit(void (*fn)(void));
 extern int memcmp(const void *a, const void *b, unsigned long n);
 extern void *memset(void *s, int c, unsigned long n);
@@ -2755,10 +2759,34 @@ static void matrix_rows(void)
 }
 
 /* One instance at a time over the fixture directory, which is one name for
-   every run: the lock is a file made exclusively, removed at exit. */
+   every run: the lock is a file made exclusively, holding the holder's pid,
+   removed at exit. A lock whose holder is gone, left by an instance that was
+   killed, is taken rather than waited for: on 2026-09-09 a run stopped with
+   the signal that removes nothing left every later instance waiting the
+   whole ten minutes and reported as hung. */
 static void unlock_fixtures(void)
 {
     unlink(FIXDIR ".lock");
+}
+
+static int lock_holder_gone(void)
+{
+    char text[32];
+    long n;
+    int fd = open(FIXDIR ".lock", 0, 0); /* O_RDONLY */
+    long pid;
+
+    if (fd < 0) {
+        return 0;
+    }
+    n = read(fd, text, sizeof(text) - 1);
+    close(fd);
+    if (n <= 0) {
+        return 1; /* no holder recorded: a lock from before pids were kept */
+    }
+    text[n] = '\0';
+    pid = atol(text);
+    return pid > 0 && kill((int)pid, 0) != 0;
 }
 
 static void lock_fixtures(void)
@@ -2768,9 +2796,19 @@ static void lock_fixtures(void)
     for (i = 0; i < 600; i++) {
         fd = open(FIXDIR ".lock", 0x0200 | 0x0800 | 0x0001, 0644); /* O_CREAT|O_EXCL|O_WRONLY */
         if (fd >= 0) {
+            char text[32];
+            int len = snprintf(text, sizeof(text), "%d\n", getpid());
+
+            if (write(fd, text, (unsigned long)len) != len) {
+                printf("ext2_hosttest: the lock's holder could not be recorded\n");
+            }
             close(fd);
             atexit(unlock_fixtures);
             return;
+        }
+        if (lock_holder_gone()) {
+            unlink(FIXDIR ".lock");
+            continue;
         }
         sleep(1);
     }
