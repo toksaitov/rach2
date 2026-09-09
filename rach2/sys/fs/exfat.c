@@ -71,6 +71,7 @@ struct ex_mount {
     int writable;
     uint32_t bitmap_first;
     uint64_t bitmap_length;
+    struct ex_node bitmap_walk; /* the hints of the last walk of the bitmap's chain */
     uint32_t upcase_first;
     uint64_t upcase_length;
     /* 0: the stored form held here and walked; 1: uncompressed, indexed
@@ -320,7 +321,8 @@ static void ex_put(struct vfs_mount *mnt, void *node)
 /* `len` bytes at `off` of a system object whose clusters the FAT chains:
  * the bitmap and the up-case table, whose entries have no flags and so no
  * NoFatChain. */
-static int object_read(struct ex_mount *em, uint32_t first, uint64_t off, void *dst, uint32_t len)
+static int object_read(struct ex_mount *em, uint32_t first, struct ex_node *walk, uint64_t off,
+                       void *dst, uint32_t len)
 {
     uint8_t *out = dst;
     uint32_t cbytes = cluster_bytes(em);
@@ -334,7 +336,7 @@ static int object_read(struct ex_mount *em, uint32_t first, uint64_t off, void *
         if (take > len) {
             take = len;
         }
-        rc = chain_at(em, 0, first, 0, 0, (uint32_t)(off >> (9 + em->spc_shift)), &c);
+        rc = chain_at(em, walk, first, 0, 0, (uint32_t)(off >> (9 + em->spc_shift)), &c);
         if (rc != 0) {
             return rc == -ENXIO ? -EIO : rc;
         }
@@ -375,7 +377,7 @@ static int upcase_next(struct upcase_reader *r, uint16_t *w)
         if (r->em->upcase_form == 0) {
             k_memcpy(r->chunk, r->em->upcase_stored + next, take);
         } else {
-            int rc = object_read(r->em, r->em->upcase_first, next, r->chunk, take);
+            int rc = object_read(r->em, r->em->upcase_first, 0, next, r->chunk, take);
 
             if (rc != 0) {
                 return rc;
@@ -434,7 +436,7 @@ static int ex_upcase(struct ex_mount *em, uint16_t unit, uint16_t *out)
 {
     if (em->upcase_form == 1) {
         uint8_t raw[2];
-        int rc = object_read(em, em->upcase_first, (uint64_t)unit * 2, raw, 2);
+        int rc = object_read(em, em->upcase_first, 0, (uint64_t)unit * 2, raw, 2);
 
         if (rc != 0) {
             return rc;
@@ -1059,7 +1061,7 @@ static int count_free(struct ex_mount *em)
         if (take > sizeof(raw)) {
             take = sizeof(raw);
         }
-        rc = object_read(em, em->bitmap_first, c / 8, raw, take);
+        rc = object_read(em, em->bitmap_first, &em->bitmap_walk, c / 8, raw, take);
         if (rc != 0) {
             return rc;
         }
@@ -1177,7 +1179,7 @@ static int upcase_check(struct ex_mount *em, uint32_t *sum)
         uint32_t take = em->upcase_length - at < sizeof(chunk) ? (uint32_t)(em->upcase_length - at)
                                                                : (uint32_t)sizeof(chunk);
         uint32_t i;
-        int rc = object_read(em, em->upcase_first, at, chunk, take);
+        int rc = object_read(em, em->upcase_first, 0, at, chunk, take);
 
         if (rc != 0) {
             return rc;
@@ -1557,6 +1559,20 @@ static int begin_write(struct vfs_mount *mnt, struct ex_mount *em)
     return 0;
 }
 
+/**
+ * Write back everything dirty on the volume's device and then tell the
+ * device to put it on the medium: the point in the order of writes below
+ * where what came before must be on the disk before what comes after. A
+ * disk that writes through, as this kernel's ATA and AHCI drivers do,
+ * has nothing to flush; a stick with a cache of its own is told.
+ */
+static int sync_disk(struct ex_mount *em)
+{
+    int rc = bcache_sync(em->dev);
+
+    return rc != 0 ? rc : block_flush(em->dev);
+}
+
 static int ex_write_bytes(struct ex_mount *em, uint64_t off, const void *src, uint32_t len,
                           int through)
 {
@@ -1603,8 +1619,9 @@ static int ex_write_bytes(struct ex_mount *em, uint64_t off, const void *src, ui
     return 0;
 }
 
-/* The FAT entry of `c`, written through. */
-static int fat_set(struct ex_mount *em, uint32_t c, uint32_t value)
+/* The FAT entry of `c`, written through, or, for one of a run whose
+ * caller syncs before anything refers to it, set in the cache. */
+static int fat_set(struct ex_mount *em, uint32_t c, uint32_t value, int through)
 {
     uint8_t raw[4];
     uint64_t off =
@@ -1615,16 +1632,18 @@ static int fat_set(struct ex_mount *em, uint32_t c, uint32_t value)
     raw[1] = (uint8_t)(value >> 8);
     raw[2] = (uint8_t)(value >> 16);
     raw[3] = (uint8_t)(value >> 24);
-    return ex_write_bytes(em, off, raw, 4, 1);
+    return ex_write_bytes(em, off, raw, 4, through);
 }
 
-/* The bitmap bit of `c`, written through by way of the bitmap's chain. */
-static int bit_set(struct ex_mount *em, uint32_t c, int on)
+/* The bitmap bit of `c`, by way of the bitmap's chain, written through or
+ * set in the cache as `fat_set` is. */
+static int bit_set(struct ex_mount *em, uint32_t c, int on, int through)
 {
     uint8_t byte;
     uint32_t cl;
     uint64_t at = (uint64_t)(c - 2) / 8;
-    int rc = chain_at(em, 0, em->bitmap_first, 0, 0, (uint32_t)(at >> (9 + em->spc_shift)), &cl);
+    int rc = chain_at(em, &em->bitmap_walk, em->bitmap_first, 0, 0,
+                      (uint32_t)(at >> (9 + em->spc_shift)), &cl);
 
     if (rc != 0) {
         return rc == -ENXIO ? -EIO : rc;
@@ -1638,7 +1657,8 @@ static int bit_set(struct ex_mount *em, uint32_t c, int on)
     } else {
         byte &= (uint8_t)~(1u << ((c - 2) % 8));
     }
-    return ex_write_bytes(em, cluster_offset(em, cl) + (at & (cluster_bytes(em) - 1)), &byte, 1, 1);
+    return ex_write_bytes(em, cluster_offset(em, cl) + (at & (cluster_bytes(em) - 1)), &byte, 1,
+                          through);
 }
 
 /* One free cluster, first-fit from the hint with one wrap, its bit set. */
@@ -1661,12 +1681,12 @@ static int alloc_cluster(struct ex_mount *em, uint32_t *out)
     while (tried < em->clusters) {
         uint8_t byte;
 
-        rc = object_read(em, em->bitmap_first, (uint64_t)(c - 2) / 8, &byte, 1);
+        rc = object_read(em, em->bitmap_first, &em->bitmap_walk, (uint64_t)(c - 2) / 8, &byte, 1);
         if (rc != 0) {
             return rc;
         }
         if (!(byte & (1u << ((c - 2) % 8)))) {
-            rc = bit_set(em, c, 1);
+            rc = bit_set(em, c, 1, 0);
             if (rc != 0) {
                 return rc;
             }
@@ -1702,9 +1722,9 @@ static int free_chain(struct ex_mount *em, uint32_t first, int nofat, uint64_t l
                 return rc;
             }
         }
-        rc = bit_set(em, c, 0);
+        rc = bit_set(em, c, 0, 0);
         if (rc == 0 && !nofat) {
-            rc = fat_set(em, c, 0);
+            rc = fat_set(em, c, 0, 0);
         }
         if (rc != 0) {
             return rc;
@@ -1721,7 +1741,9 @@ static int free_chain(struct ex_mount *em, uint32_t first, int nofat, uint64_t l
         }
         c = next;
     }
-    return 0;
+    /* The bits and entries of the whole chain, set in the cache above,
+     * reach the disk in runs here rather than one write each. */
+    return steps > 0 ? sync_disk(em) : 0;
 }
 
 /* Whether `n` clusters are free, counted once and kept: ENOSPC is decided
@@ -1769,13 +1791,13 @@ static int alloc_run(struct ex_mount *em, uint32_t n, int zero, uint32_t *first,
             rc = ex_write_bytes(em, cluster_offset(em, c), 0, cluster_bytes(em), zero == 2);
         }
         if (rc == 0) {
-            rc = fat_set(em, c, EX_EOC);
+            rc = fat_set(em, c, EX_EOC, 0);
         }
         if (rc == 0 && prev != 0) {
-            rc = fat_set(em, prev, c);
+            rc = fat_set(em, prev, c, 0);
         }
         if (rc != 0) {
-            bit_set(em, c, 0);
+            bit_set(em, c, 0, 0);
             em->free_clusters++;
             break;
         }
@@ -1788,6 +1810,17 @@ static int alloc_run(struct ex_mount *em, uint32_t n, int zero, uint32_t *first,
         free_chain(em, *first, 0, 0);
         *first = 0;
     }
+    /* The run's bits and entries are set in the cache: a caller that
+     * writes its data first syncs before it joins the run, and a run
+     * written through, a directory's, is joined at once, so its sync is
+     * here. */
+    if (rc == 0 && zero == 2) {
+        rc = sync_disk(em);
+        if (rc != 0) {
+            free_chain(em, *first, 0, 0);
+            *first = 0;
+        }
+    }
     *last = prev;
     return rc;
 }
@@ -1799,13 +1832,14 @@ static int chain_into_fat(struct ex_mount *em, uint32_t first, uint64_t length)
     uint64_t n = clusters_of(em, length), i;
 
     for (i = 0; i < n; i++) {
-        int rc = fat_set(em, (uint32_t)(first + i), i + 1 < n ? (uint32_t)(first + i + 1) : EX_EOC);
+        uint32_t next = i + 1 < n ? (uint32_t)(first + i + 1) : EX_EOC;
+        int rc = fat_set(em, (uint32_t)(first + i), next, 0);
 
         if (rc != 0) {
             return rc;
         }
     }
-    return 0;
+    return sync_disk(em); /* the chain is on the disk before the flag is cleared */
 }
 
 /* ---- directory entries and sets ---- */
@@ -2105,7 +2139,7 @@ static int dir_grow(struct ex_mount *em, struct ex_node *d)
     if (rc != 0) {
         return rc;
     }
-    rc = fat_set(em, tail, newc);
+    rc = fat_set(em, tail, newc, 1);
     if (rc != 0) {
         free_chain(em, newc, 0, 0);
         return rc;
@@ -2933,7 +2967,7 @@ static int32_t ex_write(struct vfs_mount *mnt, void *handle, const void *buf, ui
     if (rc != 0) {
         goto undo;
     }
-    rc = bcache_sync(em->dev); /* the data and the zeros reach the disk first */
+    rc = sync_disk(em); /* the data and the zeros reach the disk first */
     if (rc != 0) {
         goto undo;
     }
@@ -2942,7 +2976,7 @@ static int32_t ex_write(struct vfs_mount *mnt, void *handle, const void *buf, ui
 
         rc = chain_at(em, n, n->first, 0, 0, (uint32_t)(have - 1), &tail);
         if (rc == 0) {
-            rc = fat_set(em, tail, run_first);
+            rc = fat_set(em, tail, run_first, 1);
         }
         if (rc != 0) {
             goto undo;
@@ -3019,12 +3053,17 @@ static int ex_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
             if (rc != 0) {
                 goto out;
             }
+            rc = sync_disk(em); /* the run's bits and entries, before the join */
+            if (rc != 0) {
+                free_chain(em, run_first, 0, 0);
+                goto out;
+            }
             if (have > 0) {
                 uint32_t tail;
 
                 rc = chain_at(em, n, n->first, 0, 0, (uint32_t)(have - 1), &tail);
                 if (rc == 0) {
-                    rc = fat_set(em, tail, run_first);
+                    rc = fat_set(em, tail, run_first, 1);
                 }
                 if (rc != 0) {
                     free_chain(em, run_first, 0, 0);
@@ -3076,7 +3115,7 @@ static int ex_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
         n->hint_cluster = 0;
         if (keep < have) {
             if (keep > 0 && !was_nofat) {
-                rc = fat_set(em, tail, EX_EOC);
+                rc = fat_set(em, tail, EX_EOC, 1);
                 if (rc != 0) {
                     goto out;
                 }
@@ -3197,7 +3236,7 @@ static int ex_sync(struct vfs_mount *mnt)
         vfs_ns_unlock(mnt);
         return 0;
     }
-    rc = bcache_sync(em->dev);
+    rc = sync_disk(em);
     if (rc == 0) {
         rc = write_boot_state(em, 1);
     }
@@ -3216,7 +3255,7 @@ static int ex_prepare_unmount(struct vfs_mount *mnt)
     if (!em->writable || (mnt->flags & VFS_MS_RDONLY) || !em->dirty_set) {
         return 0;
     }
-    rc = bcache_sync(em->dev);
+    rc = sync_disk(em);
     if (rc == 0) {
         rc = write_boot_state(em, 0);
     }
@@ -3284,7 +3323,7 @@ static int check_mark(struct check_state *w, uint32_t c)
         w->why = "a cluster reached twice";
         return -1;
     }
-    rc = object_read(w->em, w->em->bitmap_first, (uint64_t)(c - 2) / 8, &byte, 1);
+    rc = object_read(w->em, w->em->bitmap_first, &w->em->bitmap_walk, (uint64_t)(c - 2) / 8, &byte, 1);
     if (rc != 0) {
         w->why = "an unreadable bitmap";
         return -1;
@@ -3650,7 +3689,7 @@ static int ex_check_volume(struct ex_mount *em)
         klog(KLOG_WARN, "exfat", "check: %d orphan secondaries freed", w.norphans);
     }
     for (i = 0; i < w.ntails; i++) {
-        rc = fat_set(em, w.tail_prev[i], EX_EOC);
+        rc = fat_set(em, w.tail_prev[i], EX_EOC, 1);
         if (rc == 0) {
             rc = free_chain(em, w.tail_first[i], 0, 0);
         }
@@ -3666,7 +3705,7 @@ static int ex_check_volume(struct ex_mount *em)
     for (c = 2; c < em->clusters + 2; c++) {
         uint8_t byte;
 
-        rc = object_read(em, em->bitmap_first, (uint64_t)(c - 2) / 8, &byte, 1);
+        rc = object_read(em, em->bitmap_first, &em->bitmap_walk, (uint64_t)(c - 2) / 8, &byte, 1);
         if (rc != 0) {
             w.why = "an unreadable bitmap";
             goto done;
