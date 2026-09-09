@@ -1,0 +1,21 @@
+# Milestone 50: notes
+
+## Where the work stands
+
+Phase 1, the fixes, is done for every entry but 11 and 22: 22's rehearsal at the machine's size is running as this is written, and 11 is set out below for the owner's decision. Phase 2 has not started. Nothing has touched the Lenovo.
+
+## Phase 1: the fixes
+
+Each entry's cause, fix, proof and commit are in `plan.md` beside the entry, since the list is the record the milestone keeps open. What the entries do not say:
+
+* The order was severity first, as the plan asks: the memory refusal (12), the switch at a system call's exit (6), the request deadlines (14), the cache's write order (18), then the device table (19), the guest makefiles (23), the archive (20), the fallback (21), the acceptance's stick (3), the host check (17) and the rebuilt program's image (5). Entries 1, 2 and 16 were closed on the record of what earlier milestones built and the sets since, with the two experiments 2 asked for: a line typed while a foreground job ran arrived whole, and the three install suites' deadlines were doubled since their work was done late and not wrongly.
+* Two faults of the tooling were found and fixed on the way, both in the host tests: the bootctl test built its fixture builder once into `/tmp` and kept it across runs, so an option added to the builder was not there, and the ext2 test's fixture lock had no holder in it, so an instance killed with the signal that removes nothing left every later instance waiting ten minutes; the builder is rebuilt when its source is newer, and the lock names its holder and is taken when that process is gone.
+* The runs were kept small: each entry's smallest suite, one mutation each, and one `style host` before each commit that touched a host test. The one set that lost time was the first run of entries 20 and 21 together, where the update left the recovery partition mounted while it wrote the root and the raw writer refused the disk; the two installer halves ran again after the fix.
+
+### Entry 11, for the owner
+
+A disk with 4096-byte sectors is still refused by name. The fix is the block path's unit: the partition scanner caches 512-byte sectors and the parser addresses the tables in them, the raw windows, the buffer cache, the request buffers, the disk lines and the storage driver's command sizing all count in 512 bytes, about sixty sites, and the two SATA drivers' refusals cannot be proved either way in the emulator, which presents such a disk only as a USB stick. It is a day of work in the code the sitting depends on, with host tests to match. It was not started in phase 1 because it would have gone into the sitting's kernel untested by a sitting of its own; the owner decides whether it is done before the sitting or after it, with the Lenovo's 512-byte disk unaffected either way.
+
+## Phase 2: the review before the machine
+
+Not started.
