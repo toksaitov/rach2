@@ -18,7 +18,8 @@
 #
 # A directory is printed as the files the stager would take from it, and by the
 # same rule the stager uses: `exec-dir` takes the regular executable files of
-# that one directory, `tree` takes every regular file under it. The directory
+# that one directory, `tree` takes every regular file under it, and neither
+# takes a name that begins with a dot. The directory
 # itself is not printed. It would keep its time when a program in it is
 # relinked, and the source trees a `tree` line stages, `utils`, `rach2` and
 # `ish`, are also the names of phony targets, which make holds to be out of
@@ -41,12 +42,12 @@ awk '$1 == "file" || $1 == "optional-file" || $1 == "exec-dir" || $1 == "tree" {
             ;;
         exec-dir)
             [ -d "$p" ] &&
-                find "$p" -maxdepth 1 -type f \
+                find "$p" -maxdepth 1 -type f -not -name '.*' \
                     \( -perm -u+x -o -perm -g+x -o -perm -o+x \)
             ;;
         tree)
             if [ -d "$p" ]; then
-                find "$p" -type f
+                find "$p" -name '.*' -prune -o -type f -print
             elif [ -e "$p" ] || [ "${p#build/}" = "$p" ]; then
                 echo "$p"
             fi

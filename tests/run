@@ -82,13 +82,11 @@ usage_names() {
     echo >&2
 }
 
-# What the host must let the run do, tried and not merely looked up: a
-# restricted session once passed the name checks, built the product, and then
-# lost its suites to socket binds it was refused and a disk image it could not
-# attach (entry 17 of milestone 50). `tools/setup/hostcheck.c` binds a TCP, a
-# UDP and a Unix socket, and attaches a disk image when a chosen suite names
-# hdiutil; a refusal stops the run before the build. `RACH2_HOSTCHECK` names
-# another checker, which is how the runner's own test drives a refusal.
+# What the host must let the run do, tried and not merely looked up.
+# `tools/setup/hostcheck.c` binds a TCP, a UDP and a Unix socket when a chosen
+# suite boots a machine, and attaches a disk image when one names hdiutil; a
+# refusal stops the run before the build. `RACH2_HOSTCHECK` names another
+# checker, which is how the runner's own test drives a refusal.
 check_host() {
     checker="${RACH2_HOSTCHECK:-}"
     if [ -z "$checker" ]; then
@@ -269,12 +267,17 @@ for suite in "$@"; do
     check_tools "$suite" || exit 1
 done
 diskimage=""
+sockets="--no-sockets"
 for suite in "$@"; do
     case ",$(suite_tools "$suite")," in
         *,hdiutil,*) diskimage="--diskimage" ;;
     esac
+    case "$suite" in
+        style|host) ;;
+        *) sockets="" ;;
+    esac
 done
-check_host "$diskimage" || exit 1
+check_host $diskimage $sockets || exit 1
 
 build_components
 if [ "$#" -eq 1 ]; then

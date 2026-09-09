@@ -6,13 +6,15 @@
  * restricted host session passed that check, built the product, and then
  * lost suites to a socket bind the session was not allowed and to a disk
  * image the session could not attach (entry 17 of milestone 50). So the
- * operations are tried, not the names: a TCP and a UDP socket bound on the
- * loopback address, a Unix socket bound in the directory given, and, when
- * `--diskimage` is given on a Mac, a one-megabyte image created, attached
- * without a mount and detached with `hdiutil`. A refusal names the
- * operation; the exit status is nonzero on any.
+ * operations are tried, not the names: unless `--no-sockets` is given, a
+ * TCP and a UDP socket bound on the loopback address and a Unix socket
+ * bound in the directory given, and, when `--diskimage` is given on a Mac,
+ * a sixteen-megabyte image created, attached without a mount and detached
+ * with `hdiutil`. A refusal names the operation; the exit status is
+ * nonzero on any. The directory's name goes into a shell command, so an
+ * apostrophe in it is quoted as the shell wants.
  *
- * Usage: hostcheck DIR [--diskimage]
+ * Usage: hostcheck DIR [--diskimage] [--no-sockets]
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,12 +27,14 @@
 
 static int failed;
 
+/** Record a refused operation by name. */
 static void refused(const char *what)
 {
     fprintf(stderr, "hostcheck: refused: %s\n", what);
     failed = 1;
 }
 
+/** Bind a socket of `type` on the loopback address, or record the refusal. */
 static void try_inet(int type, const char *name)
 {
     struct sockaddr_in a;
@@ -52,6 +56,7 @@ static void try_inet(int type, const char *name)
     close(s);
 }
 
+/** Bind a Unix socket in `dir`, or record the refusal. */
 static void try_unix(const char *dir)
 {
     struct sockaddr_un a;
@@ -77,39 +82,88 @@ static void try_unix(const char *dir)
     close(s);
 }
 
+/** `dir` inside shell single quotes, an apostrophe written as `'\\''`;
+ * 0, or -1 when the quoted form does not fit `out`. */
+static int shell_quote(char *out, size_t size, const char *dir)
+{
+    size_t n = 0;
+    const char *p;
+
+    if (n + 1 >= size) {
+        return -1;
+    }
+    out[n++] = '\'';
+    for (p = dir; *p; p++) {
+        const char *piece = *p == '\'' ? "'\\''" : NULL;
+        size_t len = piece ? strlen(piece) : 1;
+
+        if (n + len + 2 >= size) {
+            return -1;
+        }
+        if (piece) {
+            memcpy(out + n, piece, len);
+        } else {
+            out[n] = *p;
+        }
+        n += len;
+    }
+    out[n++] = '\'';
+    out[n] = '\0';
+    return 0;
+}
+
+/** Create, attach and detach a sixteen-megabyte image in `dir` with
+ * hdiutil, or record the refusal; hdiutil appends `.dmg` to the name it is
+ * given, and sixteen megabytes is the least an ExFAT image takes. */
 static void try_diskimage(const char *dir)
 {
-    char cmd[1024];
+    char q[512];
+    char cmd[3072];
+    int n;
 
-    /* hdiutil appends `.dmg` to the name it is given; sixteen megabytes is
-       the least an ExFAT image takes. */
-    snprintf(cmd, sizeof(cmd),
-             "rm -f '%s/hostcheck.img.dmg' && hdiutil create -quiet -size 16m -layout NONE "
-             "-fs ExFAT -volname HOSTCHECK '%s/hostcheck.img' >/dev/null 2>&1 && "
-             "dev=$(hdiutil attach -nomount '%s/hostcheck.img.dmg' 2>/dev/null | head -1 | "
-             "awk '{print $1}') && [ -n \"$dev\" ] && hdiutil detach \"$dev\" -quiet; rc=$?; "
-             "rm -f '%s/hostcheck.img.dmg'; exit $rc",
-             dir, dir, dir, dir);
+    if (shell_quote(q, sizeof(q), dir) != 0) {
+        refused("a directory name short enough to quote for hdiutil");
+        return;
+    }
+    n = snprintf(cmd, sizeof(cmd),
+                 "rm -f %s/hostcheck.img.dmg && hdiutil create -quiet -size 16m -layout NONE "
+                 "-fs ExFAT -volname HOSTCHECK %s/hostcheck.img >/dev/null 2>&1 && "
+                 "dev=$(hdiutil attach -nomount %s/hostcheck.img.dmg 2>/dev/null | head -1 | "
+                 "awk '{print $1}') && [ -n \"$dev\" ] && hdiutil detach \"$dev\" -quiet; rc=$?; "
+                 "rm -f %s/hostcheck.img.dmg; exit $rc",
+                 q, q, q, q);
+    if (n < 0 || (size_t)n >= sizeof(cmd)) {
+        refused("a directory name short enough for the hdiutil command");
+        return;
+    }
     if (system(cmd) != 0) {
         refused("a disk image created, attached and detached with hdiutil");
     }
 }
 
+/** The check, its operations chosen by the options. */
 int main(int argc, char **argv)
 {
-    int i;
+    int i, sockets = 1, diskimage = 0;
 
     if (argc < 2) {
-        fprintf(stderr, "usage: hostcheck DIR [--diskimage]\n");
+        fprintf(stderr, "usage: hostcheck DIR [--diskimage] [--no-sockets]\n");
         return 2;
     }
-    try_inet(SOCK_STREAM, "a TCP socket bound on the loopback address");
-    try_inet(SOCK_DGRAM, "a UDP socket bound on the loopback address");
-    try_unix(argv[1]);
     for (i = 2; i < argc; i++) {
         if (strcmp(argv[i], "--diskimage") == 0) {
-            try_diskimage(argv[1]);
+            diskimage = 1;
+        } else if (strcmp(argv[i], "--no-sockets") == 0) {
+            sockets = 0;
         }
+    }
+    if (sockets) {
+        try_inet(SOCK_STREAM, "a TCP socket bound on the loopback address");
+        try_inet(SOCK_DGRAM, "a UDP socket bound on the loopback address");
+        try_unix(argv[1]);
+    }
+    if (diskimage) {
+        try_diskimage(argv[1]);
     }
     if (failed) {
         return 1;

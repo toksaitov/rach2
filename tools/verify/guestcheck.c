@@ -875,18 +875,26 @@ static void host_utils_map(struct progmap *map)
     free(text);
 }
 
-/* The rule's recipe is two lines: a link to `NAME.new` and `mv NAME.new
-   NAME`. */
+/**
+ * The rule for `name` in `file` links to `NAME.new` and renames it into
+ * place: the compiler writes into its destination, so a link the machine
+ * stops part way would otherwise leave a file newer than its source that
+ * the next make calls built. The recipe is those two lines, the link not
+ * prefixed with make's `-`, which would carry a failed link on to the
+ * rename; a program with no rule is a fault of the makefile.
+ */
 static void check_links_through_temporary(const char *file, const struct rule *r,
                                           const char *name)
 {
     char temp[256], mv[600];
 
-    if (r == NULL)
+    if (r == NULL) {
+        fail("%s has no rule for %s", file, name);
         return;
+    }
     snprintf(temp, sizeof(temp), "-o %s.new ", name);
     snprintf(mv, sizeof(mv), "mv %s.new %s", name, name);
-    if (r->recipe.n != 2 || strstr(r->recipe.item[0], temp) == NULL
+    if (r->recipe.n != 2 || r->recipe.item[0][0] == '-' || strstr(r->recipe.item[0], temp) == NULL
         || strcmp(r->recipe.item[1], mv) != 0)
         fail("%s %s does not link to %s.new and rename it, so a link stopped "
              "part way would look built", file, name, name);
@@ -979,10 +987,6 @@ static int check_utils(void)
                  defines[i].define);
     }
 
-    /* And every program is linked to its own temporary and renamed into
-       place: the compiler writes into its destination, so a link the machine
-       stops part way would leave a file newer than its source that the next
-       make calls built. */
     for (i = 0; i < map.program.n; i++)
         check_links_through_temporary("utils/guest.mk",
                                       rule_find(&rules, map.program.item[i]),
