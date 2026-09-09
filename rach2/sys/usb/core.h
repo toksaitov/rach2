@@ -18,7 +18,7 @@
  * taken when it appears and given back when it goes, so this bounds the table
  * of records and not the memory they take: a machine with two controllers and
  * hubs on both has room for more than the root ports hold. */
-#define USB_MAX_DEVICES 12
+#define USB_MAX_DEVICES 16
 
 /* The largest descriptor this kernel reads. A configuration descriptor with
  * one interface and one endpoint is 25 bytes; a device with several

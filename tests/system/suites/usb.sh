@@ -136,6 +136,35 @@ else
     bad "with USB switched off the file was not there, or was not empty"
 fi
 
+# ---- 6b: more devices than the table held before milestone 50: two hubs
+#          on two root ports with fourteen devices between them, sixteen in
+#          all, every one configured. A hub's last port is scanned like its
+#          first, which is what a table that fills from behind a hub needs. ----
+if run_harness --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
+    --qemu-arg=-device --qemu-arg=usb-hub,bus=xhci.0,port=1,id=hub1 \
+    --qemu-arg=-device --qemu-arg=usb-hub,bus=xhci.0,port=2,id=hub2 \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0,port=1.1 \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0,port=1.2 \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0,port=1.3 \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0,port=1.4 \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0,port=1.5 \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0,port=1.6 \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0,port=1.7 \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0,port=1.8 \
+    --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0,port=2.1 \
+    --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0,port=2.2 \
+    --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0,port=2.3 \
+    --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0,port=2.4 \
+    --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0,port=2.5 \
+    --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0,port=2.6 \
+    --timeout 120 --log "$REPO/build/images/usb-sixteen.log" "probe=usbprobe" > /dev/null 2>&1 \
+    && [ "$(grep -ac 'usb: device: port' "$REPO/build/images/usb-sixteen.log")" = 16 ]; then
+    note "two hubs with fourteen devices between them, sixteen in all, are every one configured: OK"
+else
+    bad "sixteen devices were not every one configured: $(grep -ac 'usb: device: port' "$REPO/build/images/usb-sixteen.log") records, $(grep -a 'USBPROBE' "$REPO/build/images/usb-sixteen.log" | tr -d '\r' | tail -1)"
+fi
+
 # ---- 7: a device this kernel cannot drive is refused once and left alone,
 #         and the devices beside it are still enumerated. Both halves matter:
 #         the notebook found a device of this kind and the stack enumerated it
@@ -436,8 +465,8 @@ else
     bad "the hub behind a hub"
 fi
 
-# ---- 20: the device table filled: two hubs and eleven devices are twelve
-#          entries, and the thirteenth is refused by name ----
+# ---- 20: the device table filled: two hubs and fifteen devices are sixteen
+#          entries, and the seventeenth is refused by name ----
 if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
     --qemu-arg=-device --qemu-arg=usb-hub,bus=xhci.0,port=1,id=hub \
@@ -453,17 +482,21 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0,port=1.8.2 \
     --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0,port=1.8.3 \
     --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0,port=1.8.4 \
+    --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0,port=1.8.5 \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0,port=1.8.6 \
+    --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0,port=1.8.7 \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0,port=1.8.8 \
     --timeout 120 --steptmo 60 --ok "the device table is full" --log "$IMAGE.hubfull.log" \
     "expect=the device table is full" wait=2 "send=help" "expect=Available commands" \
     > /dev/null 2>&1; then
-    note "twelve devices fill the table and the thirteenth is refused by name: OK"
+    note "sixteen devices fill the table and the seventeenth is refused by name: OK"
 else
     bad "the device table boot"
 fi
-if [ "$(grep -ac 'usb: device: port [0-9.]*: .*class' "$IMAGE.hubfull.log")" = 12 ]; then
-    note "and twelve were configured: OK"
+if [ "$(grep -ac 'usb: device: port [0-9.]*: .*class' "$IMAGE.hubfull.log")" = 16 ]; then
+    note "and sixteen were configured: OK"
 else
-    bad "twelve devices were not configured"
+    bad "sixteen devices were not configured: $(grep -ac 'usb: device: port [0-9.]*: .*class' "$IMAGE.hubfull.log")"
 fi
 
 # ---- two controllers: each is driven from its own record, with its own

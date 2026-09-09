@@ -652,7 +652,8 @@ int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb
     int kind;
     uint32_t i;
 
-    if (device <= 0 || device > 15 || !slot_of[device].open) {
+    if (device <= 0 || device >= (int)(sizeof(slot_of) / sizeof(slot_of[0])) ||
+        !slot_of[device].open) {
         return -1;
     }
     kind = slot_of[device].kind;
@@ -1007,6 +1008,25 @@ static int slot_of_kind(int kind)
 
     for (n = 1; n <= slots_given; n++) {
         if (slot_of[n].open && slot_of[n].kind == kind) {
+            return n;
+        }
+    }
+    return 0;
+}
+
+/** The slot of the open device on hub port `port`, or 0: a port above
+ * fifteen is written as fifteen in the route string and named by the
+ * translator's port. */
+static int slot_at_port(int port)
+{
+    int n;
+
+    for (n = 1; n < (int)(sizeof(slot_of) / sizeof(slot_of[0])); n++) {
+        if (!slot_of[n].open || slot_of[n].where.depth != 1) {
+            continue;
+        }
+        if (port <= 15 ? slot_of[n].where.route == (uint32_t)port
+                       : (slot_of[n].where.route == 0xFu && slot_of[n].where.tt_port == port)) {
             return n;
         }
     }
@@ -1517,9 +1537,16 @@ int main(void)
     CHECK("and the next keyboard enumerates", running_count() == 2);
 
     /* A device behind a hub that found the table full is enumerated once an
-       entry comes free, as one on a root port is. */
+       entry comes free, as one on a root port is. The hub is high-speed and
+       has as many ports as the table has entries, so the hub and all but
+       one of its full-speed keyboards fill the table and the last, on a port
+       the route string writes as fifteen and the translator names, is the
+       one refused. Before milestone 50 the model refused any slot above
+       fifteen, which is what kept the table at twelve (entry 19). */
     model_reset();
-    model.hub_ports = 15;
+    model.root_speed = USB_SPEED_HIGH;
+    model.hub_protocol = 1;
+    model.hub_ports = USB_MAX_DEVICES;
     for (port = 0; port < USB_MAX_DEVICES; port++) {
         model.port_kind[port] = KIND_KBD;
     }
@@ -1532,7 +1559,7 @@ int main(void)
     model_change(1);
     pump(4000);
     CHECK("when one is pulled, the one that waited takes its entry",
-          running_count() == USB_MAX_DEVICES && slot_at_route(USB_MAX_DEVICES) != 0);
+          running_count() == USB_MAX_DEVICES && slot_at_port(USB_MAX_DEVICES) != 0);
 
     /* The power-on retry after an over-current refused: the port is left
        off and not asked again. */

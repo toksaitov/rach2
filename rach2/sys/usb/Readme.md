@@ -82,7 +82,7 @@ It is remembered by port, in a word of bits, and not by holding an entry in the 
 
 | Limit | Value |
 |-------|-------|
-| Device slots the controller is asked for | 12, or fewer on a controller that offers fewer, numbered from one; the device table has twelve entries, shared by hubs, leaf devices, devices being enumerated and devices being closed; the notebook's four soldered devices, a USB 3 hub's two halves, a keyboard, a mouse and a stick are nine |
+| Device slots the controller is asked for | 16, or fewer on a controller that offers fewer, numbered from one; the device table has sixteen entries, shared by hubs, leaf devices, devices being enumerated and devices being closed; the notebook's four soldered devices, a USB 3 hub's two halves, a keyboard, a mouse and a stick are nine |
 | Endpoint numbers reachable on a device | 0 to 15, which is thirty-one directions; a boot device uses two and a stick two |
 | Controllers driven | 4; each one past that is named at its address and not driven |
 | Root ports reached | 16 |

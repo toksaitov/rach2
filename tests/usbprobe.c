@@ -26,7 +26,7 @@ typedef unsigned int size_t;
 
 #define O_RDONLY 0
 
-static char text[512];
+static char text[4096];
 
 static int syscall3(int n, int a, int b, int c)
 {
@@ -233,11 +233,22 @@ void _start(void)
     if (fd < 0) {
         fail("/proc/usb did not open");
     }
-    len = syscall3(SYS_READ, fd, (int)(size_t)text, (int)sizeof(text) - 1);
-    syscall3(SYS_CLOSE, fd, 0, 0);
-    if (len < 0) {
-        fail("/proc/usb did not read");
+    /* Read until the end: sixteen devices are more than one read of the
+       file returns. */
+    len = 0;
+    for (;;) {
+        int got = syscall3(SYS_READ, fd, (int)(size_t)text + len, (int)sizeof(text) - 1 - len);
+
+        if (got < 0) {
+            fail("/proc/usb did not read");
+        }
+        if (got == 0 || len + got >= (int)sizeof(text) - 1) {
+            len += got;
+            break;
+        }
+        len += got;
     }
+    syscall3(SYS_CLOSE, fd, 0, 0);
     text[len] = '\0';
 
     /* A machine booted without USB has this file and it is empty, which is a
