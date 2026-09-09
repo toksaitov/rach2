@@ -89,4 +89,15 @@ rm -rf build/tests/system/imagerace.d
 [ "$stale" = 0 ] || bad "$TESTIMG went out of date for a file written below a staged directory"
 [ "$fails" = 0 ] || exit 1
 say "a file written below a staged directory does not put the image out of date: OK"
+
+# And the other half of entry 5 of milestone 50: a staged program rebuilt on
+# a built tree still restages its image, which is the whole reason the
+# staged paths are prerequisites. The probe is touched, not rebuilt, since
+# make judges by time.
+touch build/tests/vmprobe
+stale=$(MAKEFLAGS= make --no-print-directory -n "$TESTIMG" 2>&1 |
+        grep -E "mkimage\.sh" | grep -c "$TESTIMG")
+[ "$stale" = 1 ] || bad "$TESTIMG is not out of date after a program it stages was rebuilt"
+[ "$fails" = 0 ] || exit 1
+say "an image is out of date once a program it stages is rebuilt: OK"
 say "PASS"
