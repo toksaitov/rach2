@@ -13,10 +13,20 @@
 # That the numbers change with the size is what shows the harness passed
 # the size to the boot.
 #
-# Usage: memory.sh KERNEL IMAGE HARNESS
+# Usage: memory.sh KERNEL IMAGE HARNESS RECOVERY_KERNEL RECOVERY_IMAGE
 set -u
-KERNEL=$1; IMAGE=$2; HARNESS=$3
+KERNEL=$1; IMAGE=$2; HARNESS=$3; RKERNEL=$4; RIMAGE=$5
 fail() { echo "memory-test: FAIL: $1" >&2; exit 1; }
+
+# A machine too small is refused by name in the memory report, not faulted
+# in. The recovery pair is what fits: at 8 MiB the kernel, its 4 MiB image
+# and the tables take everything, and the test image alone is 16 MiB.
+LOG="$IMAGE.memory-8.log"
+"$HARNESS" --kernel "$RKERNEL" --initrd "$RIMAGE" --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-m --qemu-arg=8 --timeout 30 --ok "memory: refused" --never "vm: fault" \
+    --log "$LOG" "expect=memory: refused" > /dev/null 2>&1 \
+    || fail "the boot at 8 MiB was not refused by name: $(grep -a 'memory: refused\|vm: fault\|panic' "$LOG" | head -2 | tr -d '\r' | tr '\n' ' ')"
+echo "memory-test: 8 MiB: refused by name in the memory report, with no fault: OK"
 
 for mib in 64 512 2048 3072 4096; do
     LOG="$IMAGE.memory-$mib.log"

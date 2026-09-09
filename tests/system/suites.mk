@@ -245,8 +245,9 @@ run-fpu: rach2 tests krffs test-image $(HARNESS)
 	    "expect=fpu: fxsr: off" "expect=Type 'help'" "send=exec /fpuprobe x87" "expect=FPUPROBE"
 # `tests/run memory`: the kernel's account of physical memory at five sizes
 # (see tests/system/suites/memory.sh).
-run-memory: rach2 tests krffs test-image $(HARNESS)
-	sh tests/system/suites/memory.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS)
+run-memory: rach2 rach2-recovery tests krffs test-image $(RECOVERY_IMAGE) $(HARNESS)
+	sh tests/system/suites/memory.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) \
+	    $(RECOVERY_KERNEL) $(RECOVERY_IMAGE)
 # `tests/run pools`: the objects that were pools, past the count each pool
 # had, and the heap where it started after a thousand of each (see
 # tests/poolprobe.c).

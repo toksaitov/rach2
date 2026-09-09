@@ -3562,7 +3562,9 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
      * recorded entry by entry, since no record of the Lenovo's exists and
      * the netconsole is how one is taken; then the kernel image with the
      * boot data below it and the modules are reserved, the frame table is
-     * sized from what is left, and the four numbers are reported. */
+     * sized from what is left, and the four numbers are reported. A machine
+     * with less left than `FRAME_MIN_MANAGED_KIB` is refused there, by
+     * name: it would fault in whatever first took a frame. */
     {
         static struct frame_map map;
         const void *mmap = NULL;
@@ -3601,6 +3603,11 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
         klog(KLOG_INFO, "memory", "usable %d KiB, unreachable %d KiB, reserved %d KiB, managed %d KiB",
              (int)(map.usable_bytes / 1024), (int)(map.unreachable_bytes / 1024),
              (int)(map.reserved_bytes / 1024), (int)(frame_total_count() * (PAGE_SIZE / 1024)));
+        if (frame_total_count() * (PAGE_SIZE / 1024) < FRAME_MIN_MANAGED_KIB) {
+            klog(KLOG_ERR, "memory", "refused: %d KiB managed after the kernel's reservations, at least %d KiB needed",
+                 (int)(frame_total_count() * (PAGE_SIZE / 1024)), (int)FRAME_MIN_MANAGED_KIB);
+            k_panic("memory: too little for this kernel");
+        }
     }
     klog(KLOG_INFO, "boot", "paging: ready");
 

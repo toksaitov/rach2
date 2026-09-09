@@ -260,6 +260,12 @@ void paging_mark_reserved(uintptr_t frame);
 /** Total physical frames the pool manages. */
 uint32_t frame_total_count(void);
 
+/** The least memory, in KiB, the kernel boots with once its own image, the
+ * modules and the frame table are reserved. Below it the boot faults in
+ * whatever first takes a frame, so the memory manager refuses such a machine
+ * by name instead; the recovery image on 10 MiB has 1408 KiB and boots. */
+#define FRAME_MIN_MANAGED_KIB 1024u
+
 /** Physical frames currently free, kept as a count by the table's writers. */
 uint32_t frame_free_count(void);
 
