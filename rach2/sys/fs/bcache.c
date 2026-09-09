@@ -256,6 +256,7 @@ static int write_buffer(struct bbuf *b)
     }
     b->dirty = 0;
     b->write_failed = 0;
+    b->order = 0;
     return 0;
 }
 
@@ -297,7 +298,9 @@ static int write_run(struct bbuf *first, uint64_t *last)
     while ((uint32_t)n < most && run_stage && run[n - 1]->bytes == BCACHE_BLOCK_BYTES) {
         struct bbuf *b = index_find(dev, first->blk + (uint64_t)n);
 
-        if (!b || !b->dirty || b->holder != -1) {
+        /* A run has one place in the order: a first and an after in one
+         * request would reach the device together. */
+        if (!b || !b->dirty || b->holder != -1 || b->order != first->order) {
             break;
         }
         run[n++] = b;
@@ -330,6 +333,7 @@ static int write_run(struct bbuf *first, uint64_t *last)
         if (rc == 0) {
             run[i]->dirty = 0;
             run[i]->write_failed = 0;
+            run[i]->order = 0;
         }
         run[i]->holder = -1;
         wq_wake_all(&run[i]->wq);
@@ -351,6 +355,57 @@ static uint32_t block_bytes(block_device_t *dev, uint64_t blk)
 }
 
 static struct bbuf *get(block_device_t *dev, uint64_t blk, int blank);
+
+/**
+ * Whether one of `dev`'s dirty `first` buffers cannot be written now, held
+ * by another process or failed its last write. An `after` buffer of the
+ * device is then not a victim, since its write would pass the first.
+ */
+static int firsts_pending(const block_device_t *dev)
+{
+    const struct bbuf *b;
+
+    for (b = bufs; b; b = b->next) {
+        if (b->dev == dev && b->dirty && b->order == BCACHE_ORDER_FIRST &&
+            (b->holder != -1 || b->write_failed)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Write `dev`'s unheld dirty `first` buffers, each held across its write,
+ * before an `after` buffer of the device is written. Returns 0 with nothing
+ * to write, 1 when something was written, and the first failure's -errno,
+ * which marks that buffer and leaves the rest. Every write sleeps, so the
+ * scan starts over after each one.
+ */
+static int write_firsts(block_device_t *dev)
+{
+    struct bbuf *b;
+    int wrote = 0;
+
+again:
+    for (b = bufs; b; b = b->next) {
+        int rc;
+
+        if (b->dev != dev || !b->dirty || b->order != BCACHE_ORDER_FIRST || b->holder != -1 ||
+            b->write_failed) {
+            continue;
+        }
+        b->holder = caller_pid();
+        rc = write_buffer(b);
+        b->holder = -1;
+        wq_wake_all(&b->wq);
+        if (rc != 0) {
+            return rc;
+        }
+        wrote = 1;
+        goto again;
+    }
+    return wrote;
+}
 
 struct bbuf *bcache_get(block_device_t *dev, uint64_t blk)
 {
@@ -414,6 +469,9 @@ again:
             if (b->dirty && (b->write_failed || !victim_may_be_written(b->dev, dev))) {
                 continue;
             }
+            if (b->dirty && b->order == BCACHE_ORDER_AFTER && firsts_pending(b->dev)) {
+                continue;
+            }
             if (!victim || (int32_t)(b->stamp - victim->stamp) < 0) {
                 victim = b;
             }
@@ -431,6 +489,11 @@ again:
         }
         if (!victim->dirty) {
             break;
+        }
+        if (victim->order == BCACHE_ORDER_AFTER && write_firsts(victim->dev) != 0) {
+            /* The firsts were written, or one failed and is marked: either
+             * way the scan starts over, since the writes slept. */
+            goto again;
         }
         victim->holder = caller_pid(); /* held for the write */
         if (write_buffer(victim) == 0) {
@@ -453,6 +516,7 @@ again:
     victim->blk = blk;
     index_add(victim);
     victim->dirty = 0;
+    victim->order = 0;
     /* A mark left by a device that went while this buffer was held for a
      * fill or a writeback: every buffer changes hands here, so this is the
      * one place the mark must go. */
@@ -504,6 +568,14 @@ void bcache_dirty(struct bbuf *b)
     b->dirty = 1;
 }
 
+void bcache_dirty_ordered(struct bbuf *b, int order)
+{
+    bcache_dirty(b);
+    if (b) {
+        b->order = order;
+    }
+}
+
 int bcache_write(struct bbuf *b)
 {
     if (!b || b->holder != caller_pid()) {
@@ -521,51 +593,60 @@ int bcache_write(struct bbuf *b)
 
 int bcache_sync(block_device_t *dev)
 {
-    uint64_t last = 0;
-    int started = 0;
+    int pass;
 
-    for (;;) {
-        struct bbuf *next = 0;
-        struct bbuf *b;
-        int rc;
+    /* The `first` buffers in the first pass, everything dirty in the second,
+     * each pass in ascending block order. */
+    for (pass = 0; pass < 2; pass++) {
+        uint64_t last = 0;
+        int started = 0;
 
-        /* The place reached is a block number and not a buffer: a buffer let
-         * go of while this waits can be given to another block, and a cutoff
-         * read from it afterwards would step over blocks still to write. */
-        for (b = bufs; b; b = b->next) {
-            if (b->dev == dev && b->dirty && (!started || b->blk > last) &&
-                (!next || b->blk < next->blk)) {
-                next = b;
+        for (;;) {
+            struct bbuf *next = 0;
+            struct bbuf *b;
+            int rc;
+
+            /* The place reached is a block number and not a buffer: a
+             * buffer let go of while this waits can be given to another
+             * block, and a cutoff read from it afterwards would step over
+             * blocks still to write. */
+            for (b = bufs; b; b = b->next) {
+                if (b->dev == dev && b->dirty && (pass == 1 || b->order == BCACHE_ORDER_FIRST) &&
+                    (!started || b->blk > last) && (!next || b->blk < next->blk)) {
+                    next = b;
+                }
             }
+            if (!next) {
+                break;
+            }
+            /* A held dirty buffer is waited for, not passed over: a sync
+             * that returned over one would report clean what is still in
+             * flight. */
+            if (next->holder != -1 && next->holder != caller_pid()) {
+                next->waiters++;
+                wq_wait_event_nointr(&next->wq, busy_gone, next);
+                next->waiters--;
+                continue;
+            }
+            if (next->holder == caller_pid()) {
+                /* Waiting below would be waiting for ourselves: a sync is
+                 * called with nothing of the device held. */
+                k_panic("bcache: hold rule: a sync while holding a block of the device");
+            }
+            if (!victim_may_be_written(next->dev, dev)) {
+                /* A sync is called with nothing else held; one that is not
+                 * would write a block whose device re-enters this cache from
+                 * under a hold that forbids it. */
+                k_panic("bcache: hold rule: a sync while holding a block of another device");
+            }
+            rc = write_run(next, &last);
+            if (rc != 0) {
+                return rc;
+            }
+            started = 1;
         }
-        if (!next) {
-            return 0;
-        }
-        /* A held dirty buffer is waited for, not passed over: a sync that
-         * returned over one would report clean what is still in flight. */
-        if (next->holder != -1 && next->holder != caller_pid()) {
-            next->waiters++;
-            wq_wait_event_nointr(&next->wq, busy_gone, next);
-            next->waiters--;
-            continue;
-        }
-        if (next->holder == caller_pid()) {
-            /* Waiting below would be waiting for ourselves: a sync is called
-             * with nothing of the device held. */
-            k_panic("bcache: hold rule: a sync while holding a block of the device");
-        }
-        if (!victim_may_be_written(next->dev, dev)) {
-            /* A sync is called with nothing else held; one that is not would
-             * write a block whose device re-enters this cache from under a
-             * hold that forbids it. */
-            k_panic("bcache: hold rule: a sync while holding a block of another device");
-        }
-        rc = write_run(next, &last);
-        if (rc != 0) {
-            return rc;
-        }
-        started = 1;
     }
+    return 0;
 }
 
 void bcache_device_gone(block_device_t *dev)
@@ -634,6 +715,9 @@ uint32_t bcache_shrink(uint32_t want, int can_write, uint32_t *written)
                 if (pass == 2 && (b->write_failed || !victim_may_be_written(b->dev, 0))) {
                     continue;
                 }
+                if (pass == 2 && b->order == BCACHE_ORDER_AFTER && firsts_pending(b->dev)) {
+                    continue;
+                }
                 if (!victim || (int32_t)(b->stamp - victim->stamp) < 0) {
                     victim = b;
                 }
@@ -644,6 +728,9 @@ uint32_t bcache_shrink(uint32_t want, int can_write, uint32_t *written)
             if (victim->dirty) {
                 int rc;
 
+                if (victim->order == BCACHE_ORDER_AFTER && write_firsts(victim->dev) != 0) {
+                    continue; /* the firsts went out, or one failed: scan again */
+                }
                 victim->holder = caller_pid();
                 rc = write_buffer(victim);
                 victim->holder = -1;

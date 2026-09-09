@@ -43,6 +43,11 @@
 #define BCACHE_BLOCK_SECTORS 8u
 #define BCACHE_BLOCK_BYTES (BCACHE_BLOCK_SECTORS * BLOCK_SECTOR_SIZE)
 #define BCACHE_HOLD_MAX 4
+/* A dirty buffer's place in its device's writeback: a `first` buffer reaches
+ * the device before any `after` buffer of the device does, whichever path
+ * writes; 0 is no place. The marks clear with the write. */
+#define BCACHE_ORDER_FIRST 1
+#define BCACHE_ORDER_AFTER 2
 
 struct bbuf {
     struct bbuf *next;     /* the cache's list of buffers */
@@ -61,6 +66,7 @@ struct bbuf {
     uint32_t stamp;        /* last release, for least-recently-released */
     int waiters;           /* processes waiting for the hold to end, woken or not */
     int write_failed;      /* its last write failed: not a victim until one succeeds */
+    int order;             /* BCACHE_ORDER_FIRST, BCACHE_ORDER_AFTER or 0 */
     wait_queue_t wq;       /* who waits for the hold to end */
 };
 
@@ -82,8 +88,23 @@ struct bbuf *bcache_get_blank(block_device_t *dev, uint64_t blk);
 /** Let a held buffer go and wake whoever waits for it. */
 void bcache_release(struct bbuf *b);
 
-/** Mark a held buffer for writeback. */
+/** Mark a held buffer for writeback. A place it already has stays. */
 void bcache_dirty(struct bbuf *b);
+
+/**
+ * Mark a held buffer for writeback with a place in its device's order.
+ *
+ * A `BCACHE_ORDER_FIRST` buffer reaches the device before any
+ * `BCACHE_ORDER_AFTER` buffer of the same device does, whichever path
+ * writes: a sync writes the firsts before the rest, in separate requests,
+ * and an eviction or the memory reclaim that chose an `after` buffer writes
+ * the device's firsts before it, or passes it over while one of them is
+ * held or failed its write. The marks clear with the write. An ext2 write's
+ * bitmaps and descriptors are first and its pointer and data blocks after,
+ * so no pointer reaches the disk before the bit of the block it names,
+ * however the cache is pressed while the write runs.
+ */
+void bcache_dirty_ordered(struct bbuf *b, int order);
 
 /** Write a held buffer through to the device now; 0 with the buffer clean,
  * or the write's -errno with it dirty and the failure recorded. */

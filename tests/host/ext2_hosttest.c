@@ -154,6 +154,13 @@ static int img_read(block_device_t *d, uint64_t lba, uint32_t count, void *buf)
 static int writes_made;
 static int stop_after = -1;
 
+/* The writes in the order the device saw them, for the row that reads that
+   order: each one's first sector and its length. */
+#define WLOG_MAX 4096
+static uint64_t wlog_lba[WLOG_MAX];
+static uint32_t wlog_count[WLOG_MAX];
+static int wlog_n;
+
 static int img_write(block_device_t *d, uint64_t lba, uint32_t count, const void *buf)
 {
     (void)d;
@@ -164,6 +171,11 @@ static int img_write(block_device_t *d, uint64_t lba, uint32_t count, const void
         return -5;
     }
     writes_made++;
+    if (wlog_n < WLOG_MAX) {
+        wlog_lba[wlog_n] = lba;
+        wlog_count[wlog_n] = count;
+        wlog_n++;
+    }
     if (fseek(image, (long)(lba * 512), SEEK_SET_) != 0 ||
         fwrite(buf, 1, count * 512, image) != count * 512) {
         return -5;
@@ -177,7 +189,7 @@ void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
     *nanoseconds = 0;
 }
 
-static block_device_t dev = {512, 0, BLOCK_FAULT_SAFE, 0, 0, img_read, img_write, 0, 0, 0};
+static block_device_t dev = {512, 0, BLOCK_FAULT_SAFE, 0, 0, 0, img_read, img_write, 0, 0, 0};
 
 int block_request(block_device_t *device, int write, uint64_t lba, uint32_t count, void *data)
 {
@@ -1698,6 +1710,131 @@ static int oracle_create_write(void)
     return file_is("/new.txt", want, 10100);
 }
 
+/* The index in the write log of the first write that covers block `blk`
+   of a 4 KiB-block volume, or -1. */
+static int first_write_of(uint64_t blk)
+{
+    int i;
+
+    for (i = 0; i < wlog_n; i++) {
+        uint64_t from = wlog_lba[i] / 8, to = (wlog_lba[i] + wlog_count[i] - 1) / 8;
+
+        if (blk >= from && blk <= to) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/* Every number that follows `key` in the output of a debugfs command, into
+   `out`, at most `cap`; the count. The output goes through a file, since
+   the test is compiled freestanding and declares the few host calls it
+   makes. */
+static int debugfs_numbers(const char *cmd, const char *key, uint64_t *out, int cap)
+{
+    char line[512];
+    int n = 0;
+    void *f;
+
+    snprintf(line, sizeof(line),
+             ". tools/setup/e2fsprogs_path.sh; debugfs -R '%s' %s > " FIXDIR
+             "/debugfs.txt 2>/dev/null",
+             cmd, wimg);
+    run(line);
+    f = fopen(FIXDIR "/debugfs.txt", "r");
+    if (!f) {
+        return 0;
+    }
+    while (fgets(line, sizeof(line), f)) {
+        const char *at = line;
+
+        while ((at = strstr(at, key)) != 0) {
+            at += strlen(key);
+            if (n < cap) {
+                out[n++] = strtoul(at, 0, 10);
+            }
+        }
+    }
+    fclose(f);
+    return n;
+}
+
+/* Entry 18 of milestone 50: a pointer block the cache evicts under pressure
+   must not reach the disk before the bitmap whose bit marks the block it
+   names. Thirty-two blocks written from logical block 1035 in one call
+   cross from the single into the double indirection, through a cache cut
+   to sixteen buffers, so the write's pointer blocks are evicted while it
+   runs; the first write of every pointer block must come after the first
+   write of every block bitmap and descriptor block the write touched. The
+   descriptors are block 1 at this block size. */
+static void order_row(void)
+{
+    static unsigned char buf[32 * 4096];
+    uint64_t ptr[8], bm[8];
+    int nptr, nbm, i, j, rc, ok = 1;
+    uint32_t freed = 0;
+    void *f;
+
+    for (i = 0; i < (int)sizeof(buf); i++) {
+        buf[i] = (unsigned char)(i * 13 + 1);
+    }
+    wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
+    use_image(wimg, wbytes);
+    if (bcache_resident() > 16) {
+        bcache_shrink(bcache_resident() - 16, 0, &freed);
+    }
+    bcache_set_limit(16);
+    check(bcache_resident() <= 16, "the cache is cut to sixteen buffers for the sparse write");
+    stop_after = -1;
+    rc = mount_rw();
+    check(rc == 0 && (mnt.flags & VFS_MS_RDONLY) == 0, "the order row's volume mounts for writing");
+    f = rc == 0 ? make_file(mnt.root, "ordered", &rc) : 0;
+    check(f != 0, "a file for the sparse write");
+    if (!f) {
+        printf("  rc %d\n", rc);
+    }
+    wlog_n = 0;
+    if (f) {
+        rc = write_at(f, buf, sizeof(buf), 1035ull * 4096);
+        check(rc == 0, "thirty-two blocks from logical block 1035, written in one call");
+        if (rc != 0) {
+            printf("  rc %d\n", rc);
+        }
+        OPS->put(&mnt, f);
+    }
+    check(unmount_rw() == 0, "the order row's volume unmounts");
+    bcache_set_limit(0);
+    nptr = debugfs_numbers("stat /ordered", "(IND):", ptr, 4);
+    nptr += debugfs_numbers("stat /ordered", "(DIND):", ptr + nptr, 4);
+    nbm = debugfs_numbers("stats", "block bitmap at ", bm, 8);
+    check(nptr >= 2 && nbm >= 1, "debugfs names the file's pointer blocks and the volume's bitmaps");
+    for (i = 0; i < nptr; i++) {
+        int at = first_write_of(ptr[i]);
+
+        if (at < 0) {
+            printf("  pointer block %lu was never written\n", (unsigned long)ptr[i]);
+            ok = 0;
+            continue;
+        }
+        for (j = 0; j < nbm; j++) {
+            int bat = first_write_of(bm[j]);
+
+            if (bat >= 0 && bat > at) {
+                printf("  pointer block %lu written at %d, bitmap %lu at %d\n",
+                       (unsigned long)ptr[i], at, (unsigned long)bm[j], bat);
+                ok = 0;
+            }
+        }
+        if (first_write_of(1) > at) {
+            printf("  pointer block %lu written at %d, the descriptors at %d\n",
+                   (unsigned long)ptr[i], at, first_write_of(1));
+            ok = 0;
+        }
+    }
+    check(ok, "every pointer block reached the disk after the bitmaps and descriptors of its write");
+    check(e2fsck_clean(wimg), "and the volume is clean");
+}
+
 static void write_rows(void)
 {
     int i;
@@ -2670,6 +2807,7 @@ int main(void)
     levels_rows(FIXDIR "/d.ext2", bytes);
     refusal_rows();
     write_rows();
+    order_row();
     refusal_write_rows();
     dirty_rows();
     matrix_rows();

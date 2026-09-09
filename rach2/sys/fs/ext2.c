@@ -346,6 +346,7 @@ static void ext2_hold(struct vfs_mount *mnt, void *node)
 static int release_inode(struct ext2_mount *em, struct ext2_node *n);
 static int sb_store(struct ext2_mount *em);
 static int meta_deferred(struct ext2_mount *em, uint64_t at);
+static int meta_noted(const struct ext2_mount *em, uint64_t blk);
 
 static void mark_error(struct ext2_mount *em);
 
@@ -970,6 +971,8 @@ static int write_bytes(struct ext2_mount *em, uint64_t off, const void *src, uin
         }
         if (sync) {
             rc = bcache_write(b);
+        } else if (em->batch) {
+            bcache_dirty_ordered(b, meta_noted(em, blk) ? BCACHE_ORDER_FIRST : BCACHE_ORDER_AFTER);
         } else {
             bcache_dirty(b);
         }
@@ -1098,11 +1101,28 @@ static int meta_deferred(struct ext2_mount *em, uint64_t at)
     return 1;
 }
 
+/** Whether `blk` is one of the bitmap and descriptor blocks the batch has
+ * noted to write first. */
+static int meta_noted(const struct ext2_mount *em, uint64_t blk)
+{
+    int i;
+
+    for (i = 0; i < em->metas; i++) {
+        if (em->meta[i] == blk) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /**
  * The end of a write's batch: the noted bitmap and descriptor blocks
  * written first, then everything else the write left dirty, data and
  * pointer blocks, so that no pointer reaches the disk before the bit of
- * the block it names.
+ * the block it names. The cache keeps the same order while the batch is
+ * open: its noted blocks are dirtied `first` and everything else the batch
+ * dirties `after`, so an eviction under pressure writes the bitmaps before
+ * a pointer block, and a sync does the same.
  */
 static int batch_end(struct ext2_mount *em)
 {
@@ -1557,7 +1577,7 @@ static int map_alloc(struct ext2_mount *em, struct ext2_node *n, uint32_t index,
                 if (rc != 0) {
                     return rc;
                 }
-                rc = write_bytes(em, (uint64_t)b * em->block_size, 0, em->block_size, 1);
+                rc = write_bytes(em, (uint64_t)b * em->block_size, 0, em->block_size, !em->batch);
                 if (rc != 0) {
                     return rc;
                 }

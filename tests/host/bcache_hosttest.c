@@ -208,20 +208,22 @@ static int fake_write(block_device_t *d, uint64_t lba, uint32_t count, const voi
     return 0;
 }
 
-/* The members in order: the sector size, the count, the flags, the deadline,
-   the two polled calls, the two a sleeping device has, the device this one's
-   bytes live on, and the driver's own pointer. Written out rather than left to position, so that a
-   member added to the structure is a compile error here and not a silent shift. */
+/* The members in order: the sector size, the count, the flags, the deadline's
+   period and its periods, the most sectors a request moves, the two polled
+   calls, the two a sleeping device has, the device this one's bytes live on,
+   and the driver's own pointer. Written out rather than left to position, so
+   that a member added to the structure is a compile error here and not a
+   silent shift. */
 static block_device_t fake = {
-    512, FAKE_SECTORS, BLOCK_FAULT_SAFE, 0, 0, fake_read, fake_write, 0, 0, 0, image_small};
-static block_device_t other = {512, BIG_SECTORS, BLOCK_FAULT_SAFE, 0, 0, fake_read, fake_write, 0,
+    512, FAKE_SECTORS, BLOCK_FAULT_SAFE, 0, 0, 0, fake_read, fake_write, 0, 0, 0, image_small};
+static block_device_t other = {512, BIG_SECTORS, BLOCK_FAULT_SAFE, 0, 0, 0, fake_read, fake_write, 0,
                                0,   0,           image_big};
 /* A device whose bytes live on `fake`: what a loop device is to the volume
    holding its file. Its own reads and writes go through `fake`, so taking one
    of its blocks and then one of `fake`'s is the order the rules must allow,
    and the other way round is the one they must refuse. */
 static block_device_t nested = {
-    512, FAKE_SECTORS, BLOCK_FAULT_SAFE, 0, 0, fake_read, fake_write, 0, 0, 0, image_small};
+    512, FAKE_SECTORS, BLOCK_FAULT_SAFE, 0, 0, 0, fake_read, fake_write, 0, 0, 0, image_small};
 
 int block_request(block_device_t *device, int write, uint64_t lba, uint32_t count, void *data)
 {
@@ -408,6 +410,63 @@ int main(void)
     }
     check(writes_made == 1 && writes_lba[0] == 64 && image_small[8 * 4096] == 0x77,
           "a dirty victim is written before its buffer is reused");
+
+    /* The order a file system asks for: a `first` buffer reaches the device
+       before an `after` one of the same device, at an eviction, at a sync,
+       and not while a first is held by another process. The after is
+       released before the first, so it is the older and the eviction's
+       choice. */
+    b = bcache_get(&fake, 11);
+    b->data[0] = 0x11;
+    bcache_dirty_ordered(b, BCACHE_ORDER_AFTER);
+    bcache_release(b);
+    b = bcache_get(&fake, 10);
+    b->data[0] = 0x10;
+    bcache_dirty_ordered(b, BCACHE_ORDER_FIRST);
+    bcache_release(b);
+    writes_made = 0;
+    for (i = 0; i < BCACHE_BUFFERS; i++) {
+        c = bcache_get(&other, i);
+        bcache_release(c);
+    }
+    check(writes_made == 2 && writes_lba[0] == 80 && writes_lba[1] == 88,
+          "an evicted after buffer is written after the device's first, the older though it is");
+    check(image_small[10 * 4096] == 0x10 && image_small[11 * 4096] == 0x11, "with both buffers' bytes");
+    b = bcache_get(&fake, 11);
+    b->data[0] = 0x22;
+    bcache_dirty_ordered(b, BCACHE_ORDER_AFTER);
+    bcache_release(b);
+    current_proc = &proc_b;
+    d = bcache_get(&fake, 10);
+    d->data[0] = 0x33;
+    bcache_dirty_ordered(d, BCACHE_ORDER_FIRST);
+    current_proc = &proc_a;
+    writes_made = 0;
+    for (i = 0; i < BCACHE_BUFFERS - 4; i++) {
+        c = bcache_get(&other, i);
+        bcache_release(c);
+    }
+    b = bcache_get(&fake, 11);
+    check(writes_made == 0 && b->dirty && b->data[0] == 0x22,
+          "an after buffer is not evicted while another process holds a first of its device");
+    bcache_release(b);
+    current_proc = &proc_b;
+    bcache_release(d);
+    current_proc = &proc_a;
+    b = bcache_get(&fake, 4);
+    b->data[0] = 0x44;
+    bcache_dirty_ordered(b, BCACHE_ORDER_AFTER);
+    bcache_release(b);
+    writes_made = 0;
+    check(bcache_sync(&fake) == 0 && writes_made == 3 && writes_lba[0] == 80 &&
+              writes_lba[1] == 32 && writes_lba[2] == 88,
+          "a sync writes the device's firsts before the rest, and the rest in block order");
+    check(image_small[10 * 4096] == 0x33 && image_small[11 * 4096] == 0x22 &&
+              image_small[4 * 4096] == 0x44,
+          "with every buffer's bytes");
+    b = bcache_get(&fake, 4);
+    check(!b->dirty && b->order == 0, "and the marks clear with the write");
+    bcache_release(b);
 
     /* A failed write is recorded against the device: the mounts on it go
        read-only through vfs_device_failed, and the buffer stays dirty until
