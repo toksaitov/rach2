@@ -212,13 +212,15 @@ prepare() {
 # and nine, each step waited for with a deadline: in the pool they lose a
 # step to the host's load and report a machine that never reached its login
 # prompt, twice in the full runs of 2026-09-04, and each passes alone every
-# time, so they run there too.
+# time, so they run there too. `diskrate` holds the storage paths under
+# time bounds measured on an idle host, and in the pool a row runs three to
+# four times slower than alone.
 run_set() {
     failed=""; serial=""; pooled=""; lone=""
     for suite in $1; do
         case "$suite" in
             style|host) serial="$serial $suite" ;;
-            usb|usbdisk|sealed|mount) lone="$lone $suite" ;;
+            usb|usbdisk|sealed|mount|diskrate) lone="$lone $suite" ;;
             *)          pooled="$pooled $suite" ;;
         esac
     done

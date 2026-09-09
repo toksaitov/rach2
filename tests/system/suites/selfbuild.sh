@@ -347,7 +347,8 @@ if ! build/tools/inspect/elfcheck --kernel --tcc "$KEXTRACT"; then
     fail "the built kernel failed the structural checker"
 fi
 if ! build/tests/system/runtests --kernel "$KEXTRACT" \
-        --initrd build/images/test.krffs --timeout 300 --steptmo 60; then
+        --initrd build/images/test.krffs --timeout 300 --steptmo 60 \
+        --log "$DISK.probes.log"; then
     fail "the probe suite did not pass on the machine-built kernel"
 fi
 
