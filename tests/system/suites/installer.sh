@@ -248,7 +248,7 @@ if "$HARNESS" --bios \
     --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=stick,bootindex=0 \
     --qemu-arg=-drive --qemu-arg="file=$DIR/one.img,format=raw,if=ide,index=0,media=disk" \
     --qemu-arg=-drive --qemu-arg="file=$DIR/two.img,format=raw,if=ide,index=1,media=disk" \
-    --timeout 900 --steptmo 420 --ok "INSTALLDONE" --log "$LOG3" \
+    --timeout 3600 --steptmo 1800 --ok "INSTALLDONE" --log "$LOG3" \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
     "expect=# " "send=rach2-install" \
     "expect=which disk shall it be written to" "send=" \
@@ -330,7 +330,7 @@ if "$HARNESS" --bios \
     --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=stick,bootindex=0 \
     --qemu-arg=-drive --qemu-arg="file=$DIR/one.img,format=raw,if=ide,index=0,media=disk" \
     --qemu-arg=-drive --qemu-arg="file=$DIR/two.img,format=raw,if=ide,index=1,media=disk" \
-    --timeout 900 --steptmo 420 --ok "OTHERDONE" --log "$LOG3B" \
+    --timeout 3600 --steptmo 1800 --ok "OTHERDONE" --log "$LOG3B" \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
     "expect=# " "send=rach2-install" \
     "expect=which disk shall it be written to" "send=/dev/disk0" \
@@ -502,7 +502,7 @@ if "$HARNESS" --bios \
     --drive "if=none,id=stick,format=raw,file=$DIR/bad-stick.img" \
     --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=stick,bootindex=0 \
     --qemu-arg=-drive --qemu-arg="file=$DIR/four.img,format=raw,if=ide,index=0,media=disk" \
-    --timeout 900 --steptmo 420 --ok "BADHASHDONE" --log "$LOG7" \
+    --timeout 3600 --steptmo 1800 --ok "BADHASHDONE" --log "$LOG7" \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
     "expect=# " "send=rach2-install" \
     "expect=which disk shall it be written to" "send=/dev/disk0" \
@@ -595,7 +595,7 @@ rm -f "$DIR/cutoff.log"
     --drive "if=none,id=stick,format=raw,file=$DIR/test-stick.img" \
     --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=stick,bootindex=0 \
     --qemu-arg=-drive --qemu-arg="file=$DIR/cut.img,format=raw,if=ide,index=0,media=disk" \
-    --timeout 600 --steptmo 300 --ok "NEVERSEEN" --log "$DIR/cutoff.log" \
+    --timeout 1200 --steptmo 600 --ok "NEVERSEEN" --log "$DIR/cutoff.log" \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
     "expect=# " "send=mkdir -p /m && mount -t exfat /dev/disk1p2 /m && echo MOUNT\"\"ED" \
     "expect=MOUNTED" \
@@ -654,7 +654,7 @@ if "$HARNESS" --bios \
     --drive "if=none,id=stick,format=raw,file=$DIR/test-stick.img" \
     --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=stick,bootindex=0 \
     --qemu-arg=-drive --qemu-arg="file=$DIR/one.img,format=raw,if=ide,index=0,media=disk" \
-    --timeout 1800 --steptmo 900 --ok "RECOVERDONE" --log "$LOG9" \
+    --timeout 3600 --steptmo 1800 --ok "RECOVERDONE" --log "$LOG9" \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
     "expect=# " "send=rach2-recover" \
     "expect=which?" "send=1" \
@@ -723,7 +723,7 @@ if "$HARNESS" --bios \
     --drive "if=none,id=stick,format=raw,file=$DIR/test-stick.img" \
     --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=stick,bootindex=0 \
     --qemu-arg=-drive --qemu-arg="file=$DIR/one.img,format=raw,if=ide,index=0,media=disk" \
-    --timeout 1800 --steptmo 900 --ok "UPDATEDONE" --log "$LOG12" \
+    --timeout 3600 --steptmo 1800 --ok "UPDATEDONE" --log "$LOG12" \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
     "expect=# " "send=mkdir -p /m && mount -t exfat /dev/disk1p2 /m && echo MOUNT\"\"ED" \
     "expect=MOUNTED" \

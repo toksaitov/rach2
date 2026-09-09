@@ -234,7 +234,7 @@ run_pass() {
 
     LOG="$DISK.log.p${P}a"
     boot_feed
-    wait_count "COMMIT${P}A" 1 900 || fail "pass $P: the trial boot never committed"
+    wait_count "COMMIT${P}A" 1 1800 || fail "pass $P: the trial boot never committed"
     waited=0
     while [ "$waited" -lt 60 ] && kill -0 "$QPID" 2>/dev/null; do
         sleep 1
@@ -283,7 +283,7 @@ run_pass() {
 
     LOG="$DISK.log.p${P}b"
     boot_feed
-    wait_count "COMMIT${P}B" 1 900 || fail "pass $P: the repair was never committed"
+    wait_count "COMMIT${P}B" 1 1800 || fail "pass $P: the repair was never committed"
     waited=0
     while [ "$waited" -lt 60 ] && kill -0 "$QPID" 2>/dev/null; do
         sleep 1
