@@ -220,6 +220,7 @@ block_device_t *block_lag_wrap(block_device_t *backing)
     lag_device.flags &= ~BLOCK_FAULT_SAFE;
     lag_device.max_sectors = 0;      /* a page, the staging it copies through */
     lag_device.deadline_ticks = 500; /* five seconds, the lag its rows are set against */
+    lag_device.deadline_limit = 1;   /* one period: its rows test a device that never answers */
     lag_device.read = 0;
     lag_device.write = 0;
     lag_device.submit = lag_submit;

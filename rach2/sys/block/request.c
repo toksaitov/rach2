@@ -16,15 +16,18 @@
  * Running out is not a failure of the device, and only a transfer that
  * failed answers `EIO`; the deadline of a request starts when it is taken,
  * which is when the transfer starts, and not when the caller began to wait.
- * Two rules keep a waiter from waiting for ever on requests that will never
- * free themselves. Failure is per device, where a device is the one whose
- * `submit` answers, a stick and not each of its partition views: a device
- * whose every request is quarantined past its deadline is stalled, and its
- * waiters and its later callers answer `EIO` until it answers something
- * late. And no device may hold more than half of the limit, so a stalled
- * device leaves the other half to the healthy ones; a waiter that finds
- * every live request quarantined is released with `EIO` too, since nothing
- * but a late answer could free one.
+ * A request past its deadline is still waited for: the deadline is a period,
+ * and only a request unanswered through a bounded number of periods in a
+ * row is given up, since a disk that answers late is not a disk that went
+ * away. Two rules keep a waiter from waiting for ever on requests that will
+ * never free themselves. Failure is per device, where a device is the one
+ * whose `submit` answers, a stick and not each of its partition views: a
+ * device whose every request is quarantined past its periods is stalled,
+ * and its waiters and its later callers answer `EIO` until it answers
+ * something late. And no device may hold more than half of the limit, so a
+ * stalled device leaves the other half to the healthy ones; a waiter that
+ * finds every live request quarantined is released with `EIO` too, since
+ * nothing but a late answer could free one.
  */
 
 #include "block.h"
@@ -46,13 +49,20 @@
  * says otherwise, and the most the option accepts. The limit is what the
  * stall rules divide between devices; it is not a table. */
 #define REQ_LIMIT            16
-/* Two minutes of 100 Hz ticks. The deadline is here to answer a caller
- * whose device has gone, not to judge a slow one: an emulated disk on a
- * host running twenty machines at once has taken more than thirty
- * seconds to answer a write, and the mount was lost to it. A device that
- * truly never answers is what the lag device tests, and it sets its own
- * deadline of five seconds. */
-#define REQ_DEFAULT_DEADLINE 12000u
+/* The deadline's period, thirty seconds of 100 Hz ticks, and how many
+ * periods in a row a request is waited for before it is given up: two
+ * minutes in all. The deadline is here to answer a caller whose device has
+ * gone, not to judge a slow one: an emulated disk on a host running twenty
+ * machines at once has taken more than thirty seconds to answer a write,
+ * and with one period the mount was lost to it; an answer inside the
+ * periods is the answer. A device that truly never answers is what the lag
+ * device tests, and it sets its own period of five seconds, one of them.
+ * `rach2.blockdeadline=S` sets the period in seconds, so a row can see a
+ * request answered after its deadline without waiting thirty seconds. */
+#define REQ_DEFAULT_DEADLINE  3000u
+#define REQ_DEFAULT_DEADLINES 4u
+#define REQ_DEADLINE_MAX_S    600u
+static uint32_t default_deadline = REQ_DEFAULT_DEADLINE;
 
 static struct block_request *reqs; /* every live request */
 static uint32_t live;              /* how many are on the list */
@@ -99,6 +109,20 @@ void block_request_init(void)
         } else {
             n = asked;
             klog(KLOG_INFO, "block", "request pool: %d slots", (int)n);
+        }
+    }
+    if (kcmdline_value("rach2.blockdeadline", value, sizeof(value))) {
+        uint32_t asked = 0;
+
+        for (i = 0; value[i] >= '0' && value[i] <= '9'; i++) {
+            asked = asked * 10u + (uint32_t)(value[i] - '0');
+        }
+        if (i == 0 || value[i] != '\0' || asked == 0 || asked > REQ_DEADLINE_MAX_S) {
+            klog(KLOG_WARN, "block", "rach2.blockdeadline: not a count of 1 to %d seconds; ignored",
+                 (int)REQ_DEADLINE_MAX_S);
+        } else {
+            default_deadline = asked * 100u;
+            klog(KLOG_INFO, "block", "request deadline: %d s a period", (int)asked);
         }
     }
     cap = n / 2;
@@ -263,6 +287,19 @@ static int slot_ready(void *arg)
     return ready;
 }
 
+/** The deadline's period for `device`, in ticks. */
+static uint32_t req_period(const block_device_t *device)
+{
+    return device->deadline_ticks ? device->deadline_ticks : default_deadline;
+}
+
+/** How many periods in a row `device` is waited for before a request is
+ * given up. */
+static uint32_t req_periods(const block_device_t *device)
+{
+    return device->deadline_limit ? device->deadline_limit : REQ_DEFAULT_DEADLINES;
+}
+
 /**
  * A request to submit, or NULL.
  *
@@ -309,8 +346,8 @@ static struct block_request *req_take(block_device_t *device, int write, uint64_
             r->status = -EIO;
             r->state = BLOCK_REQ_IN_FLIGHT;
             r->generation = ++next_generation;
-            r->deadline = req_ticks + (device->deadline_ticks ? device->deadline_ticks
-                                                              : REQ_DEFAULT_DEADLINE);
+            r->deadline = req_ticks + req_period(device);
+            r->overdue = 0;
             r->taken_us = pit_now_us();
             if (waited) {
                 latency_note(LAT_DISK_WAIT, r->taken_us - wait_from);
@@ -597,6 +634,9 @@ void block_request_complete(struct block_request *request, uint32_t generation, 
     latency_note(LAT_DISK, pit_now_us() - request->taken_us);
     req_let_go(request, 0);
     irq_restore(flags);
+    if (request->overdue) {
+        klog(KLOG_INFO, "block", "late answer: taken after %d deadlines", (int)request->overdue);
+    }
     wq_wake_all(&pool_wq);
 }
 
@@ -644,19 +684,30 @@ static int mark_stalled(void)
 void block_request_tick(void)
 {
     struct block_request *r;
+    int overdue = 0;
     int quarantined = 0;
     int stalled;
 
     req_ticks++;
     for (r = reqs; r; r = r->next) {
-        if (r->state == BLOCK_REQ_IN_FLIGHT && (int32_t)(req_ticks - r->deadline) >= 0) {
-            /* The caller is woken with EIO; the request and its page wait
-             * for the device, which still owns them. The generation stays
-             * so the late completion matches. */
-            r->state = BLOCK_REQ_QUARANTINED;
-            quarantined_count++;
-            quarantined++;
+        if (r->state != BLOCK_REQ_IN_FLIGHT || (int32_t)(req_ticks - r->deadline) < 0) {
+            continue;
         }
+        r->overdue++;
+        if (r->overdue < req_periods(r->device)) {
+            r->deadline += req_period(r->device);
+            overdue++;
+            continue;
+        }
+        /* The caller is woken with EIO; the request and its page wait
+         * for the device, which still owns them. The generation stays
+         * so the late completion matches. */
+        r->state = BLOCK_REQ_QUARANTINED;
+        quarantined_count++;
+        quarantined++;
+    }
+    if (overdue) {
+        klog(KLOG_WARN, "block", "request overdue: %d past a deadline, still waited for", overdue);
     }
     if (!quarantined) {
         return;

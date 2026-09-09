@@ -5,7 +5,8 @@
 # fast one finishes while a reader of the slow one is still waiting, and
 # the controller's vector counts the completions. Then the fallback root
 # on the disk, whose faults poll the port, beside a raw reader that keeps a
-# command queued on the same port.
+# command queued on the same port. Then a disk throttled below one request
+# in a deadline period, whose late answers must be taken as the answers.
 #
 # Usage: queue.sh KERNEL IMAGE HARNESS MKMBR DIR
 set -u
@@ -57,3 +58,38 @@ mformat -i "$DIR/root.disk"@@51380224 -F -T 28672 :: || fail "mformat root"
     || fail "the fallback root beside the queue"
 grep -aq 'BLOCKPROBE OK' "$DIR/fault.log" || fail "blockprobe on the root"
 echo "queue-test: the root's faults share the port with the queue: $(grep -a 'AHCIPROBE READ' "$DIR/fault.log" | tr -d '\r' | tr '\n' ' ')OK"
+
+# A request answered after its deadline is the answer, not a failure: the
+# disk is throttled to 16 KiB a second, so a 32 KiB request of an ext2
+# write's end takes two seconds, and the period is set to one second by
+# `rach2.blockdeadline=1`; the request passes its deadline, is answered
+# inside the four periods a request is waited for, and the mount keeps
+# writing. Before entry 14 of milestone 50 the first deadline failed the
+# write with EIO and the mount went read-only. The volume is ext2 and not
+# FAT32 because ext2 writes a file back in runs of 32 KiB where FAT32
+# writes each 4 KiB block through as it is written, under the deadline.
+rm -f "$DIR/late.vol"; : > "$DIR/late.vol"
+E2FSPROGS_FAKE_TIME=1 mke2fs -q -F -t ext2 -b 4096 -I 128 \
+    -O sparse_super,large_file,filetype,^dir_index,resize_inode,^ext_attr,^has_journal,^extent,^64bit,^flex_bg,^metadata_csum,^huge_file,^dir_nlink,^extra_isize \
+    "$DIR/late.vol" 6M > /dev/null 2>&1 || fail "the late volume"
+{
+    dd if=/dev/zero bs=1048576 count=1 2>/dev/null
+    cat "$DIR/late.vol"
+    dd if=/dev/zero bs=1048576 count=1 2>/dev/null
+} > "$DIR/late.disk"
+"$MKMBR" --lba "$DIR/late.disk" 2048:12288:83 > /dev/null || fail "the late disk's table"
+"$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-object --qemu-arg=throttle-group,id=tg1,x-bps-total=16384 \
+    --qemu-arg=-blockdev --qemu-arg="driver=file,filename=$DIR/late.disk,node-name=latefile" \
+    --qemu-arg=-blockdev --qemu-arg=driver=raw,file=latefile,node-name=lateraw \
+    --qemu-arg=-blockdev --qemu-arg=driver=throttle,throttle-group=tg1,file=lateraw,node-name=late \
+    --qemu-arg=-device --qemu-arg=ich9-ahci,id=ahci0 \
+    --qemu-arg=-device --qemu-arg=ide-hd,drive=late,bus=ahci0.0 \
+    --append "rach2.rescue rach2.blockdeadline=1" --timeout 240 --steptmo 180 --log "$DIR/late.log" \
+    --ok "AHCIPROBE OK" --never "AHCIPROBE FAIL" \
+    "expect=Type 'help'" "send=exec /ahciprobe late" "expect=AHCIPROBE" > /dev/null 2>&1 \
+    || fail "the late answers: $(grep -a 'AHCIPROBE FAIL\|read-only\|stalled' "$DIR/late.log" | head -2 | tr -d '\r' | tr '\n' ' ')"
+grep -aq 'block: request overdue' "$DIR/late.log" || fail "no request passed its deadline, so the row shows nothing"
+grep -aq 'block: late answer: taken' "$DIR/late.log" || fail "no late answer was taken"
+if grep -aq 'vfs: read-only' "$DIR/late.log"; then fail "the mount went read-only"; fi
+echo "queue-test: a request answered after its deadline is taken as the answer and the mount keeps writing: $(grep -a -A1 'AHCIPROBE WRITE' "$DIR/late.log" | tr -d '\r' | tr '\n' ' ')OK"

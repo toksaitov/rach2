@@ -96,6 +96,7 @@ void block_partition_init(block_partition_t *partition, block_device_t *backing,
     partition->backing = backing;
     partition->device.flags = backing->flags;
     partition->device.deadline_ticks = backing->deadline_ticks;
+    partition->device.deadline_limit = backing->deadline_limit;
     /* The forwarder is there whatever the backing has now: a disk switched
        to its interrupts after the view was cut gains a `submit` the view
        must follow, and `block_flags` reads the backing's flags for the same

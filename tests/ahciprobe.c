@@ -36,9 +36,16 @@ typedef unsigned int size_t;
 #define SYS_WAITPID       7
 #define SYS_EXECVE        11
 #define SYS_PIPE          42
+#define SYS_SYNC          36
+#define SYS_MKDIR         39
+#define SYS_MOUNT         21
+#define SYS_UMOUNT2       52
 #define SYS_CLOCK_GETTIME 265
 
 #define O_RDONLY        0
+#define O_WRONLY        1
+#define O_CREAT         0x40
+#define O_TRUNC         0x200
 #define CLOCK_MONOTONIC 1
 
 #define SLOW_BYTES  (1024 * 1024)
@@ -66,6 +73,16 @@ static int sys3(int n, int a, int b, int c)
 {
     int r;
     __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(n), "b"(a), "c"(b), "d"(c) : "memory");
+    return r;
+}
+
+static int sys5(int n, int a, int b, int c, int d, int e)
+{
+    int r;
+    __asm__ __volatile__("int $0x80"
+                         : "=a"(r)
+                         : "0"(n), "b"(a), "c"(b), "d"(c), "S"(d), "D"(e)
+                         : "memory");
     return r;
 }
 
@@ -338,6 +355,81 @@ static void fault_row(void)
 
 void probe_main(unsigned int *sp);
 
+/* `ahciprobe late`: the throttled disk's ext2 partition mounted for
+   writing, under a deadline period shorter than one of its requests, which
+   the row sets with `rach2.blockdeadline=1` against a disk of 16 KiB a
+   second. ext2 keeps a write's blocks dirty and writes them back in runs of
+   32 KiB at the end of the call, and such a request takes two seconds:
+   it passes its deadline and is answered after it. The answer must be
+   taken: the write succeeds, the file reads back whole, and the mount is
+   still writable. FAT32 would not do: it writes each block through as it
+   is written, and a 4 KiB request is under the deadline. */
+#define LATE_BYTES (128 * 1024)
+
+static void late_row(void)
+{
+    static unsigned char whole[LATE_BYTES];
+    static unsigned char block[4096];
+    int fd, i, j, start;
+
+    if (sys2(SYS_MKDIR, (int)(size_t)"/late", 0755) != 0) {
+        fail("mkdir /late");
+    }
+    if (sys5(SYS_MOUNT, (int)(size_t)"/dev/disk0p1", (int)(size_t)"/late",
+             (int)(size_t)"ext2", 0, 0) != 0) {
+        fail("the mount of the throttled disk");
+    }
+    fd = sys3(SYS_OPEN, (int)(size_t)"/late/late.bin", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) {
+        fail("create late.bin");
+    }
+    for (i = 0; i < LATE_BYTES; i++) {
+        whole[i] = (unsigned char)((i / (int)sizeof(block)) * 7 + i % (int)sizeof(block));
+    }
+    /* One call, so the file is one batch of ext2's and its blocks go back
+       in runs; a call per block would end a batch per block and write each
+       block, its bitmap and its inode in requests of 4 KiB, all under the
+       deadline. */
+    start = now_ms();
+    if (sys3(SYS_WRITE, fd, (int)(size_t)whole, LATE_BYTES) != LATE_BYTES) {
+        fail("the write of late.bin");
+    }
+    sys1(SYS_CLOSE, fd);
+    puts("AHCIPROBE WRITE ms:");
+    putnum(now_ms() - start);
+    if (sys1(SYS_SYNC, 0) != 0) {
+        fail("the sync after the late answers");
+    }
+    fd = sys3(SYS_OPEN, (int)(size_t)"/late/late.bin", O_RDONLY, 0);
+    if (fd < 0) {
+        fail("open late.bin to read it back");
+    }
+    for (i = 0; i < LATE_BYTES / (int)sizeof(block); i++) {
+        if (sys3(SYS_READ, fd, (int)(size_t)block, (int)sizeof(block)) != (int)sizeof(block)) {
+            fail("a read of late.bin");
+        }
+        for (j = 0; j < (int)sizeof(block); j++) {
+            if (block[j] != (unsigned char)(i * 7 + j)) {
+                fail("the bytes read back are not what was written");
+            }
+        }
+    }
+    sys1(SYS_CLOSE, fd);
+    fd = sys3(SYS_OPEN, (int)(size_t)"/late/again.bin", O_WRONLY | O_CREAT, 0644);
+    if (fd < 0) {
+        fail("the mount is not writable after the late answers");
+    }
+    sys1(SYS_CLOSE, fd);
+    if (sys1(SYS_SYNC, 0) != 0) {
+        fail("the second sync");
+    }
+    if (sys2(SYS_UMOUNT2, (int)(size_t)"/late", 0) != 0) {
+        fail("umount2 /late");
+    }
+    puts("AHCIPROBE OK");
+    sys2(SYS_EXIT, 0, 0);
+}
+
 __asm__(".global _start\n"
         "_start:\n"
         "   mov %esp, %eax\n"
@@ -351,6 +443,9 @@ void probe_main(unsigned int *sp)
 
     if (argc >= 2 && argv[1][0] == 'f') {
         fault_row();
+    }
+    if (argc >= 2 && argv[1][0] == 'l') {
+        late_row();
     }
     slow_row();
 }

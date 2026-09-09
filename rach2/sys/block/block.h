@@ -46,7 +46,7 @@ struct block_request;
  * a page fault with interrupts off, takes that path instead of a request. */
 #define BLOCK_POLLABLE 0x40u
 /* The device stopped answering: every slot of the request pool it held went
- * past its deadline unanswered. Its waiters were released with `EIO` and a
+ * through its deadline periods unanswered. Its waiters were released with `EIO` and a
  * new request is refused with `EIO`, until a late answer clears it. Set and
  * cleared by the request pool. */
 #define BLOCK_STALLED 0x20u
@@ -55,8 +55,11 @@ struct block_device {
     uint32_t sector_size;
     uint64_t sector_count;
     uint32_t flags;          /* BLOCK_FAULT_SAFE, or nothing */
-    uint32_t deadline_ticks; /* sleeping path: give up after this many ticks;
-                              * 0 means the 5-second default */
+    uint32_t deadline_ticks; /* sleeping path: the deadline's period in ticks;
+                              * 0 means the thirty-second default */
+    uint32_t deadline_limit; /* periods in a row a request is waited for
+                              * before it is given up; 0 means the default of
+                              * four */
     uint32_t max_sectors;    /* the most one request may move; 0 means a page */
     int (*read)(block_device_t *device, uint64_t lba, uint32_t count,
                 void *buffer);
@@ -228,7 +231,8 @@ struct block_request {
     int status;            /* 0 or -errno, valid once done */
     volatile int state;    /* BLOCK_REQ_* */
     uint32_t generation;   /* unique to this request */
-    uint32_t deadline;     /* tick at which the wait gives up */
+    uint32_t deadline;     /* tick at which the next period ends */
+    uint32_t overdue;      /* periods passed unanswered */
     int held_by_caller;    /* until the caller has read the answer or given up */
     int held_by_device;    /* until the device has answered */
     uint32_t taken_us;     /* when it was taken, for the completion's delay */
@@ -250,10 +254,11 @@ uint32_t block_max_sectors(block_device_t *device);
  * context, at boot included. On a device with `submit` it runs from syscall
  * context only, splits the transfer into requests of at most a page, waits
  * when as many requests are live as the limit allows or the device holds
- * its share, and sleeps between `submit` and the completion or the device's
- * deadline, which starts when the request is taken. Returns 0 or a negative
- * errno; a deadline is `-EIO` with the request quarantined, and so is a
- * stalled device.
+ * its share, and sleeps between `submit` and the completion or the end of
+ * the device's deadline periods, the first of which starts when the request
+ * is taken. Returns 0 or a negative errno; a request unanswered through its
+ * periods is `-EIO` with the request quarantined, and so is a stalled
+ * device.
  */
 int block_request(block_device_t *device, int write, uint64_t lba,
                   uint32_t count, void *buffer);
