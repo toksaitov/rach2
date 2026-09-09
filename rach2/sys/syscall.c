@@ -12132,7 +12132,7 @@ static uint32_t _enosys_last_pid[SYSCALL_TABLE_SIZE];
  * interrupts on so the PIT/HDA keep ticking during long syscalls. A switch an
  * interrupt asked for during the call is taken at its exit, with interrupts
  * off again and the trapframe whole, so a process that is always inside a
- * call still gives way at each tick.
+ * call gives way once per call; a call that does not return does not.
  */
 static void _syscall_handler(isr_params_t *params)
 {

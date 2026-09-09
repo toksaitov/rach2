@@ -138,12 +138,9 @@ void sched_yield(void)
  * switched at once. A process inside a system call is not: the call's exit
  * path and the scheduler itself run with interrupts on while their own
  * bookkeeping is half done, and a switch taken there strands the process
- * whose state they were in the middle of changing. Before this the request
- * was dropped, so a process that returned to user mode for one instruction
- * between two calls was preempted only when the tick landed in that
- * instruction, and a writer that was always inside a call kept the processor
- * for as long as it ran (entry 6 of milestone 50). Now the request is kept
- * on the process and `sched_take_preempt` takes it at the call's exit.
+ * whose state they were in the middle of changing. The request is kept on
+ * the process, and `sched_take_preempt` takes it at the call's exit, so a
+ * process that is always inside a call still gives way once per call.
  */
 void sched_preempt(void)
 {
@@ -154,6 +151,12 @@ void sched_preempt(void)
     schedule();
 }
 
+/**
+ * Take the switch an interrupt asked for during the system call that is
+ * ending. Called at the call's exit with interrupts off and the trapframe
+ * whole; the request is cleared before the switch, so a request that
+ * arrives during the switch is the next call's.
+ */
 void sched_take_preempt(void)
 {
     if (current_proc && current_proc->need_resched) {

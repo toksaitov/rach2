@@ -288,19 +288,7 @@ void _irq_router(isr_params_t *params)
         }
         irq_dispatch(params);
         lapic_eoi();
-        /*
-         * A handler that woke a reader has to let it run, or the wake is
-         * worth nothing until the next tick and the message bought no
-         * latency at all. Two contexts may be left: one interrupted in user
-         * mode, which has no kernel state of its own to be half way through,
-         * and one that is not inside a system call, which is the idle loop
-         * or a kernel thread and is what the timer already preempts. Kernel
-         * code inside a system call is not switched here, since the exit
-         * path and the scheduler itself run with interrupts on while their
-         * own bookkeeping is half done; `sched_preempt` asks the call to
-         * switch at its exit instead.
-         */
-        sched_preempt();
+        sched_preempt(); /* a woken reader runs now, or at the call's exit */
         return;
     }
 

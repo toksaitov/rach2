@@ -3556,13 +3556,9 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     init_mm();
     klog(KLOG_INFO, "boot", "memory manager: ready");
 
-    /* Physical memory as the firmware's map establishes it: the map is
-     * recorded entry by entry, since no record of the Lenovo's exists and
-     * the netconsole is how one is taken; then the kernel image with the
-     * boot data below it and the modules are reserved, the frame table is
-     * sized from what is left, and the four numbers are reported. A machine
-     * with less left than `FRAME_MIN_MANAGED_KIB` is refused there, by
-     * name: it would fault in whatever first took a frame. */
+    /* The firmware's memory map, entry by entry, then the reservations and
+     * the frame table; below `FRAME_MIN_MANAGED_KIB` the boot is refused
+     * by name there. */
     {
         static struct frame_map map;
         const void *mmap = NULL;
