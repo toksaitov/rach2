@@ -815,6 +815,179 @@ fi
 
 fi
 
+# ---- the rehearsal of milestone 50's sitting, at the machine's own size,
+#      behind RACH2_REHEARSE_LENOVO since it is hours in the emulator: a disk
+#      of the Lenovo's 488397168 sectors as a sparse base under a qcow2
+#      overlay, so that `qemu-img map` afterwards lists exactly the sectors
+#      the rows wrote; the save set computed by `growset` from the product
+#      image's ext2 head and the root's offset, with the image's own extent;
+#      the ranges saved from the disk onto a save stick by the recovery
+#      system, as the sitting saves them; the install through the product
+#      stick with the root grown to the disk's end; every sector written
+#      inside the save set; the saved ranges put back with `reflash` and read
+#      back with the digests the host took of them; and every sector the
+#      restore wrote inside the set too. The times are printed against the
+#      sitting's ten-minute budget, which is the machine's, not the
+#      emulator's. ----
+if { [ "$PART" = "all" ] || [ "$PART" = "install" ]; } && [ -n "${RACH2_REHEARSE_LENOVO:-}" ]; then
+REPO=$(cd "$(dirname "$0")/../../.." && pwd)
+GROWSET="$REPO/build/tools/inspect/growset"
+MKFIX="$REPO/build/tests/host/mkexfatfixture"
+LENOVO=488397168
+R="$DIR/rehearse"
+rm -rf "$R"; mkdir -p "$R"
+IMAGE_BYTES=$(stat -f %z "$DISK")
+IMAGE_SECTORS=$((IMAGE_BYTES / 512))
+# The root's entry in the image's table, the fourth: its first sector from
+# the MBR's bytes.
+ROOT_START=$(od -An -tu4 -j $((446 + 3 * 16 + 8)) -N 4 "$DISK" | tr -d ' ')
+[ -n "$ROOT_START" ] && [ "$ROOT_START" -gt 0 ] || bad "the image's fourth entry has no start"
+dd if="$DISK" of="$R/head.vol" bs=512 skip="$ROOT_START" count=$((128 * 2048)) 2>/dev/null \
+    || bad "the root's head could not be read from the image"
+"$GROWSET" --lba "$ROOT_START" "$R/head.vol" $((LENOVO - ROOT_START)) > "$R/save.set" \
+    || bad "growset did not compute the save set"
+# The ranges to save, `START COUNT` in sectors: the image's extent, then the
+# grow's ranges beyond it; a range inside the extent is saved with it.
+{
+    echo "0 $IMAGE_SECTORS"
+    awk -v n="$IMAGE_SECTORS" '$1 == "range" && $2 + $3 > n { s = $2 < n ? n : $2; print s, $2 + $3 - s }' "$R/save.set"
+} > "$R/ranges"
+NRANGES=$(grep -c . "$R/ranges")
+note "rehearsal: the save set is the image's $IMAGE_SECTORS sectors and $((NRANGES - 1)) ranges of the grow beyond it"
+# The base and the overlay.
+dd if=/dev/zero of="$R/base.raw" bs=512 seek=$((LENOVO - 1)) count=1 2>/dev/null || bad "the base disk"
+qemu-img create -q -f qcow2 -b "$R/base.raw" -F raw "$R/disk.qcow2" || bad "the overlay"
+# The save stick: an exFAT volume with a file for every range, laid down
+# empty here and filled by the machine.
+SAVE_SECTORS=$(( (IMAGE_SECTORS / 2048 + 96) * 2048 ))
+ADD=""
+i=0
+while read -r start count; do
+    dd if=/dev/zero of="$R/range-$i.bin" bs=512 seek=$((count - 1)) count=1 2>/dev/null
+    ADD="$ADD --add range-$i=$R/range-$i.bin"
+    i=$((i + 1))
+done < "$R/ranges"
+# shellcheck disable=SC2086
+"$MKFIX" --make "$R/save.vol" --sectors "$SAVE_SECTORS" --offset 2048 $ADD > /dev/null || bad "the save stick's volume"
+{ dd if=/dev/zero bs=1048576 count=1 2>/dev/null; cat "$R/save.vol"; } > "$R/save-stick.img"
+rm -f "$R/save.vol"
+"$REPO/build/tools/image/mkmbr" --lba "$R/save-stick.img" 2048:$SAVE_SECTORS:07 > /dev/null || bad "the save stick's table"
+cp "$STICK" "$R/product-stick.img" || bad "the product stick's copy"
+# A boot of the recovery system from the product stick, with the overlay disk
+# as disk1 and the save stick as disk2; the steps come from a file, one a
+# line, since the ranges make a list no line holds.
+rehearse_boot() { # rehearse_boot LOG TIMEOUT OK STEPFILE
+    {
+        printf '"%s" --bios --qemu-arg=-cpu --qemu-arg=max --qemu-arg=-m --qemu-arg=512' "$HARNESS"
+        printf ' --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0'
+        printf ' --drive "if=none,id=stick,format=raw,file=%s/product-stick.img"' "$R"
+        printf ' --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=stick,bootindex=0'
+        printf ' --drive "if=none,id=save,format=raw,file=%s/save-stick.img"' "$R"
+        printf ' --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=save'
+        printf ' --qemu-arg=-drive --qemu-arg="file=%s/disk.qcow2,format=qcow2,if=ide,index=0,media=disk"' "$R"
+        printf ' --timeout %s --steptmo %s --ok "%s" --log "%s"' "$2" "$2" "$3" "$1"
+        printf ' "expect=rach2 login:" "send=root" "expect=Password:" "send=%s" "expect=# "' "$PASSWORD"
+        while IFS= read -r step; do
+            printf ' "%s"' "$step"
+        done < "$4"
+        printf '\n'
+    } > "$1.sh"
+    sh "$1.sh"
+}
+# The save: each range read off the disk onto the save stick.
+{
+    echo 'send=mkdir -p /save && mount -t exfat /dev/disk2p1 /save && echo SAVE""MOUNTED'
+    echo 'expect=SAVEMOUNTED'
+    i=0
+    while read -r start count; do
+        echo "send=dd if=/dev/disk1 of=/save/range-$i bs=512 skip=$start count=$count conv=notrunc 2>&1 | tail -1; echo SAVED\"\"$i"
+        echo "expect=SAVED$i"
+        i=$((i + 1))
+    done < "$R/ranges"
+    echo 'send=umount /save && echo SAVE""DONE'
+    echo 'expect=SAVEDONE'
+} > "$R/save.steps"
+T0=$(date +%s)
+if rehearse_boot "$R/save.log" 14400 SAVEDONE "$R/save.steps" > "$R/save.harness" 2>&1; then
+    SAVE_S=$(( $(date +%s) - T0 ))
+    note "rehearsal: the save of $NRANGES ranges took $SAVE_S s"
+else
+    sed -n 's/^HARNESS: /installer-test: /p' "$R/save.harness" >&2
+    bad "the rehearsal's save"
+fi
+# The install, through the product stick, the root grown to the disk's end.
+{
+    echo 'send=rach2-install'
+    echo 'expect=which disk shall it be written to'; echo 'send=/dev/disk1'
+    echo 'expect=the password for root'; echo "send=$NEWPASS"
+    echo 'expect=again'; echo "send=$NEWPASS"
+    echo 'expect=the name of the first account'; echo "send=$USERNAME"
+    echo "expect=the password for $USERNAME"; echo "send=$USERPASS"
+    echo 'expect=again'; echo "send=$USERPASS"
+    echo 'expect=authorized keys'; echo 'send='
+    echo 'expect=grow the root'; echo 'send='
+    echo 'expect=type the name of that disk'; echo 'send=/dev/disk1'
+    echo 'expect=the image on the stick is the one the manifest describes'
+    echo 'expect=what reached the disk is the image'
+    echo 'expect=the table is the one the image carries'
+    echo "expect=the accounts are root and $USERNAME"
+    echo 'expect=growing the root into the rest of the disk'
+    echo 'expect=installed:'; echo 'send=echo INSTALL""DONE'
+    echo 'expect=INSTALLDONE'
+} > "$R/install.steps"
+T0=$(date +%s)
+if rehearse_boot "$R/install.log" 21600 INSTALLDONE "$R/install.steps" > "$R/install.harness" 2>&1; then
+    INSTALL_S=$(( $(date +%s) - T0 ))
+    note "rehearsal: the install and the grow took $INSTALL_S s in the emulator, against the sitting's budget of 600 s on the machine"
+else
+    sed -n 's/^HARNESS: /installer-test: /p' "$R/install.harness" >&2
+    bad "the rehearsal's install"
+fi
+# Every sector the install wrote lies in the save set: growset judges its
+# own ranges from the overlay's map, and an extent it calls outside must lie
+# inside the image's extent, which the install writes whole.
+qemu-img map --output=json "$R/disk.qcow2" > "$R/after-install.json" || bad "the overlay's map"
+"$GROWSET" --lba "$ROOT_START" --map "$R/after-install.json" "$R/head.vol" $((LENOVO - ROOT_START)) > "$R/after-install.check" 2>&1 || true
+if awk -v n="$IMAGE_SECTORS" '$1 == "outside" && $2 + $3 > n { bad = 1 } END { exit bad }' "$R/after-install.check"; then
+    note "rehearsal: every sector the install and the grow wrote lies in the save set: OK"
+else
+    grep '^outside' "$R/after-install.check" | head -5 >&2
+    bad "the install wrote outside the save set"
+fi
+# The restore: each range put back with reflash from the save stick and read
+# back, the digest compared with the host's digest of the saved bytes.
+{
+    echo 'send=mkdir -p /save && mount -t exfat /dev/disk2p1 /save && echo SAVE""MOUNTED'
+    echo 'expect=SAVEMOUNTED'
+    i=0
+    while read -r start count; do
+        echo "send=reflash /dev/disk1 $((start * 512)) $((count * 512)) < /save/range-$i && echo PUT\"\"$i"
+        echo "expect=PUT$i"
+        echo "send=reflash --verify /dev/disk1 $((start * 512)) $((count * 512))"
+        echo "expect=$(head -c $((count * 512)) /dev/zero | shasum -a 256 | cut -d' ' -f1)"
+        i=$((i + 1))
+    done < "$R/ranges"
+    echo 'send=umount /save && echo RESTORE""DONE'
+    echo 'expect=RESTOREDONE'
+} > "$R/restore.steps"
+T0=$(date +%s)
+if rehearse_boot "$R/restore.log" 21600 RESTOREDONE "$R/restore.steps" > "$R/restore.harness" 2>&1; then
+    RESTORE_S=$(( $(date +%s) - T0 ))
+    note "rehearsal: the restore of $NRANGES ranges and their readback took $RESTORE_S s"
+else
+    sed -n 's/^HARNESS: /installer-test: /p' "$R/restore.harness" >&2
+    bad "the rehearsal's restore"
+fi
+qemu-img map --output=json "$R/disk.qcow2" > "$R/after-restore.json" || bad "the overlay's map after the restore"
+"$GROWSET" --lba "$ROOT_START" --map "$R/after-restore.json" "$R/head.vol" $((LENOVO - ROOT_START)) > "$R/after-restore.check" 2>&1 || true
+if awk -v n="$IMAGE_SECTORS" '$1 == "outside" && $2 + $3 > n { bad = 1 } END { exit bad }' "$R/after-restore.check"; then
+    note "rehearsal: the restore wrote nothing outside the save set either: OK"
+else
+    bad "the restore wrote outside the save set"
+fi
+rm -f "$R/base.raw" "$R/disk.qcow2" "$R/save-stick.img" "$R/product-stick.img" "$R"/range-*.bin
+fi
+
 if [ "$fail" -ne 0 ]; then
     echo "installer-test: FAIL" >&2
     exit 1

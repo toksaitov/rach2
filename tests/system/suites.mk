@@ -1380,7 +1380,7 @@ $(INSTALL_TEST_STICK): build/images/rach2-recovery.iso $(INSTALLER_DISK) $(INSTA
 # is what GRUB reads off it.
 INSTALLER_DIR = $(IMAGES_DIR)/installer
 INSTALLER_PORT = 2327
-run-installer: $(DEMO_CREDS) $(INSTALL_STICK) $(INSTALL_TEST_STICK) $(PTYDRIVE) $(HARNESS)
+run-installer: $(DEMO_CREDS) $(INSTALL_STICK) $(INSTALL_TEST_STICK) $(PTYDRIVE) $(HARNESS) $(GROWSET) $(MKEXFATFIXTURE)
 	sh tests/system/suites/installer.sh $(INSTALL_STICK) $(SEALED_DISK) $(HARNESS) \
 	    $(INSTALLER_DIR) "`cat krffs/rach2_demo_password`" $(INSTALL_TEST_STICK) \
 	    $(INSTALLER_DISK) $(INSTALLER_PORT) $(PTYDRIVE) krffs/rach2_demo_ed25519 install
