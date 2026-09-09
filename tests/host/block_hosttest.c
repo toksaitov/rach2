@@ -118,12 +118,13 @@ int disk_scan(struct disk *d, block_device_t *dev)
     return 0;
 }
 
+/** The rows: a 200-sector slice at LBA 100 of the 1000-sector backing,
+ * its reads and writes forwarded with the base added and its bounds kept. */
 int main(void)
 {
     block_partition_t part;
     char buf[512];
 
-    /* A 200-sector slice starting at LBA 100 of the 1000-sector backing. */
     block_partition_init(&part, &backing, 100u, 200u);
     CHECK(part.device.sector_count == 200u);
 

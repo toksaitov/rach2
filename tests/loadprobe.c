@@ -302,9 +302,12 @@ void probe_main(unsigned int *sp)
         syscall2(SYS_KILL, pids[i], SIGKILL);
     }
     for (i = 0; i < 10; i++) {
-        int status;
+        int status = 0;
 
         syscall3(SYS_WAITPID, pids[i], (int)(size_t)&status, 0);
+        if ((status & 0x7F) == 0) {
+            fail("a load process exited on its own before it was killed");
+        }
     }
     while (syscall3(SYS_READ, report[0], (int)(size_t)&byte, 1) == 1) {
         lines++;

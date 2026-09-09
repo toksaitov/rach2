@@ -128,6 +128,9 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 #define BIG_SECTORS    (BCACHE_BUFFERS * 8u + 8u) /* enough blocks to fill it */
 
 static unsigned char image_small[FAKE_SECTORS * 512];
+#define WIDE_BLOCKS  320u /* more than one sync batch of 128 */
+#define WIDE_SECTORS (WIDE_BLOCKS * 8u)
+static unsigned char image_wide[WIDE_SECTORS * 512];
 static unsigned char image_big[BIG_SECTORS * 512];
 static int reads_made, fail_reads, fail_writes;
 /* The device is pulled in the middle of this read: the cache is told it has
@@ -224,6 +227,10 @@ static block_device_t other = {
    and the other way round is the one they must refuse. */
 static block_device_t nested = {
     512, FAKE_SECTORS, BLOCK_FAULT_SAFE, 0, 0, 0, fake_read, fake_write, 0, 0, 0, image_small};
+/* A device that takes 64 sectors a request, as the ATA and AHCI disks do:
+   what the run fill and the runs of a sync are proved on. */
+static block_device_t wide = {
+    512, WIDE_SECTORS, BLOCK_FAULT_SAFE, 0, 0, 64, fake_read, fake_write, 0, 0, 0, image_wide};
 
 int block_request(block_device_t *device, int write, uint64_t lba, uint32_t count, void *data)
 {
@@ -443,8 +450,10 @@ int main(void)
     bcache_dirty_ordered(d, BCACHE_ORDER_FIRST);
     current_proc = &proc_a;
     writes_made = 0;
-    for (i = 0; i < BCACHE_BUFFERS - 4; i++) {
-        c = bcache_get(&other, i);
+    /* Twice the cache's worth of misses, so every unheld buffer the rule
+       does not protect is replaced at least once on the way. */
+    for (i = 0; i < 2 * BCACHE_BUFFERS; i++) {
+        c = bcache_get(&other, i % (BIG_SECTORS / 8));
         bcache_release(c);
     }
     b = bcache_get(&fake, 11);
@@ -763,6 +772,64 @@ int main(void)
     check(writes_made == BCACHE_BUFFERS,
           "a buffer reused after its device went during a writeback keeps its next dirty block");
     bcache_invalidate(&other);
+
+    /* The runs, on the device that takes 64 sectors: a miss at the block
+       after the last fill reads eight blocks in one request, and the seven
+       after it are hits; a sync writes adjacent dirty blocks in requests of
+       eight; and a sync of more dirty blocks than one batch gathers leaves
+       nothing dirty, in ascending order. */
+    for (i = 0; i < (int)sizeof(image_wide); i++) {
+        image_wide[i] = (unsigned char)(i / 4096u);
+    }
+    bcache_set_limit(WIDE_BLOCKS + 8);
+    reads_made = 0;
+    b = bcache_get(&wide, 100);
+    bcache_release(b);
+    check(reads_made == 1 && last_count == 8, "a first miss on the wide device reads one block");
+    b = bcache_get(&wide, 101);
+    check(reads_made == 2 && last_count == 64 && b->data[0] == 101,
+          "the miss at the next block reads a run of eight in one request, the block among them");
+    bcache_release(b);
+    for (i = 102; i < 109; i++) {
+        b = bcache_get(&wide, (uint64_t)i);
+        check(b->data[0] == (unsigned char)i, "and the blocks after it are in the cache");
+        bcache_release(b);
+    }
+    check(reads_made == 2, "with no further read");
+    for (i = 200; i < 216; i++) {
+        b = bcache_get_blank(&wide, (uint64_t)i);
+        b->data[0] = 0x5A;
+        bcache_dirty(b);
+        bcache_release(b);
+    }
+    writes_made = 0;
+    check(bcache_sync(&wide) == 0 && writes_made == 2 && writes_lba[0] == 1600 &&
+              writes_lba[1] == 1664 && last_count == 64,
+          "a sync writes sixteen adjacent dirty blocks as two requests of eight");
+    check(image_wide[200 * 4096] == 0x5A && image_wide[215 * 4096] == 0x5A, "with their bytes");
+    for (i = 0; i < (int)WIDE_BLOCKS; i++) {
+        b = bcache_get_blank(&wide, (uint64_t)(WIDE_BLOCKS - 1 - i));
+        b->data[1] = 0x3C;
+        bcache_dirty(b);
+        bcache_release(b);
+    }
+    writes_made = 0;
+    check(bcache_sync(&wide) == 0 && writes_made == WIDE_BLOCKS / 8 && writes_lba[0] == 0 &&
+              writes_lba[1] == 64,
+          "a sync of more dirty blocks than one batch gathers writes them all, in order");
+    {
+        int dirty_left = 0;
+
+        for (i = 0; i < (int)WIDE_BLOCKS; i++) {
+            b = bcache_get(&wide, (uint64_t)i);
+            dirty_left += b->dirty;
+            bcache_release(b);
+        }
+        check(dirty_left == 0 && image_wide[(WIDE_BLOCKS - 1) * 4096 + 1] == 0x3C,
+              "and leaves nothing dirty");
+    }
+    bcache_invalidate(&wide);
+    bcache_set_limit(BCACHE_BUFFERS);
 
     check(waited_on_host == 0, "no row reached the sleeping wait");
 

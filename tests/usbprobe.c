@@ -242,11 +242,13 @@ void _start(void)
         if (got < 0) {
             fail("/proc/usb did not read");
         }
-        if (got == 0 || len + got >= (int)sizeof(text) - 1) {
-            len += got;
+        if (got == 0) {
             break;
         }
         len += got;
+        if (len >= (int)sizeof(text) - 1) {
+            fail("/proc/usb is longer than the probe's buffer");
+        }
     }
     syscall3(SYS_CLOSE, fd, 0, 0);
     text[len] = '\0';

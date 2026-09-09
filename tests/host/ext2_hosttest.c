@@ -41,6 +41,7 @@ extern unsigned long strtoul(const char *s, char **end, int base);
 extern int strcmp(const char *a, const char *b);
 extern int open(const char *path, int flags, ...);
 extern int close(int fd);
+extern int link(const char *from, const char *to);
 extern int unlink(const char *path);
 extern unsigned sleep(unsigned seconds);
 extern long read(int fd, void *buf, unsigned long n);
@@ -1714,8 +1715,8 @@ static int oracle_create_write(void)
     return file_is("/new.txt", want, 10100);
 }
 
-/* The index in the write log of the first write that covers block `blk`
-   of a 4 KiB-block volume, or -1. */
+/** The index in the write log of the first write that covers block `blk`
+ * of a 4 KiB-block volume, or -1. */
 static int first_write_of(uint64_t blk)
 {
     int i;
@@ -1730,9 +1731,9 @@ static int first_write_of(uint64_t blk)
     return -1;
 }
 
-/* The index in the write log of the last write that covers block `blk`,
-   or -1: a pointer block is written twice by a write that makes it, its
-   zeros first with the bitmaps and its pointers after them. */
+/** The index in the write log of the last write that covers block `blk`,
+ * or -1: a pointer block is written twice by a write that makes it, its
+ * zeros first with the bitmaps and its pointers after them. */
 static int last_write_of(uint64_t blk)
 {
     int i, at = -1;
@@ -1785,9 +1786,10 @@ static int debugfs_numbers(const char *cmd, const char *key, uint64_t *out, int 
    names. Thirty-two blocks written from logical block 1035 in one call
    cross from the single into the double indirection, through a cache cut
    to sixteen buffers, so the write's pointer blocks are evicted while it
-   runs; the first write of every pointer block must come after the first
-   write of every block bitmap and descriptor block the write touched. The
-   descriptors are block 1 at this block size. */
+   runs; the last write of every pointer block, the one that carries its
+   pointers (its first is the zeros that go with the bitmaps), must come
+   after the first write of every block bitmap and descriptor block the
+   write touched. The descriptors are block 1 at this block size. */
 static void order_row(void)
 {
     static unsigned char buf[32 * 4096];
@@ -1853,8 +1855,8 @@ static void order_row(void)
             ok = 0;
         }
     }
-    check(ok,
-          "every pointer block's pointers reached the disk after the bitmaps and descriptors of its write");
+    check(ok, "every pointer block's pointers reached the disk after the bitmaps and descriptors "
+              "of its write");
     check(e2fsck_clean(wimg), "and the volume is clean");
 }
 
@@ -2810,19 +2812,28 @@ static void lock_fixtures(void)
 {
     int i, fd;
 
+    /* The holder's pid is written to a file of this instance's own and
+       that file linked to the lock's name, so the lock never exists without
+       its holder in it, which another instance would take for an abandoned
+       one and remove. */
     for (i = 0; i < 600; i++) {
-        fd = open(FIXDIR ".lock", 0x0200 | 0x0800 | 0x0001, 0644); /* O_CREAT|O_EXCL|O_WRONLY */
-        if (fd >= 0) {
-            char text[32];
-            int len = snprintf(text, sizeof(text), "%d\n", getpid());
+        char mine[256], text[32];
+        int len = snprintf(text, sizeof(text), "%d\n", getpid());
 
+        snprintf(mine, sizeof(mine), FIXDIR ".lock.%d", getpid());
+        fd = open(mine, 0x0200 | 0x0400 | 0x0001, 0644); /* O_CREAT|O_TRUNC|O_WRONLY */
+        if (fd >= 0) {
             if (write(fd, text, (unsigned long)len) != len) {
                 printf("ext2_hosttest: the lock's holder could not be recorded\n");
             }
             close(fd);
+        }
+        if (fd >= 0 && link(mine, FIXDIR ".lock") == 0) {
+            unlink(mine);
             atexit(unlock_fixtures);
             return;
         }
+        unlink(mine);
         if (lock_holder_gone()) {
             unlink(FIXDIR ".lock");
             continue;

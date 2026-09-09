@@ -76,6 +76,7 @@ static int sys3(int n, int a, int b, int c)
     return r;
 }
 
+/** A system call with five arguments. */
 static int sys5(int n, int a, int b, int c, int d, int e)
 {
     int r;
@@ -363,7 +364,11 @@ void probe_main(unsigned int *sp);
    it passes its deadline and is answered after it. The answer must be
    taken: the write succeeds, the file reads back whole, and the mount is
    still writable. FAT32 would not do: it writes each block through as it
-   is written, and a 4 KiB request is under the deadline. */
+   is written, and a 4 KiB request is under the deadline. The file is
+   written in one call, so it is one batch of ext2's and its blocks go back
+   in runs; a call per block would end a batch per block and write each
+   block, its bitmap and its inode in requests of 4 KiB, all under the
+   deadline. */
 #define LATE_BYTES (128 * 1024)
 
 static void late_row(void)
@@ -386,10 +391,6 @@ static void late_row(void)
     for (i = 0; i < LATE_BYTES; i++) {
         whole[i] = (unsigned char)((i / (int)sizeof(block)) * 7 + i % (int)sizeof(block));
     }
-    /* One call, so the file is one batch of ext2's and its blocks go back
-       in runs; a call per block would end a batch per block and write each
-       block, its bitmap and its inode in requests of 4 KiB, all under the
-       deadline. */
     start = now_ms();
     if (sys3(SYS_WRITE, fd, (int)(size_t)whole, LATE_BYTES) != LATE_BYTES) {
         fail("the write of late.bin");

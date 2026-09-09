@@ -17,8 +17,8 @@
  * the volume's up-case table, and in each of the table's three forms.
  * Each malformed variant is refused at mount with the field named, mounts
  * read-only with the reason named, has its set skipped, or fails at the
- * file it damages. The gate: a volume the host's own tools formatted and
- * filled mounts and lists every file in its manifest with the right bytes
+ * file it damages. The last row: a volume the host's own tools formatted
+ * and filled mounts and lists every file in its manifest with the right bytes
  * and times.
  */
 
