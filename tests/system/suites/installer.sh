@@ -829,7 +829,7 @@ fi
 #      restore wrote inside the set too. The times are printed against the
 #      sitting's ten-minute budget, which is the machine's, not the
 #      emulator's. ----
-if { [ "$PART" = "all" ] || [ "$PART" = "install" ]; } && [ -n "${RACH2_REHEARSE_LENOVO:-}" ]; then
+if { [ "$PART" = "all" ] || [ "$PART" = "install" ] || [ "$PART" = "rehearse" ]; } && [ -n "${RACH2_REHEARSE_LENOVO:-}" ]; then
 REPO=$(cd "$(dirname "$0")/../../.." && pwd)
 GROWSET="$REPO/build/tools/inspect/growset"
 MKFIX="$REPO/build/tests/host/mkexfatfixture"
@@ -869,8 +869,10 @@ mformat -i "$R/save-stick.img"@@1048576 -F -T "$SAVE_SECTORS" -v RACH2SAVE :: ||
 mcopy -i "$R/save-stick.img"@@1048576 "$R/ranges" ::ranges || bad "the range list onto the save stick"
 cp "$STICK" "$R/product-stick.img" || bad "the product stick's copy"
 # A boot of the recovery system from the product stick, with the overlay disk
-# as disk1 and the save stick as disk2; the steps come from a file, one a
-# line.
+# on IDE as disk0, the product stick disk1 and the save stick disk2, which is
+# the order this recovery kernel registers them in; the loops look the fixed
+# disk up by its identity rather than trusting the number. The steps come
+# from a file, one a line.
 rehearse_boot() { # rehearse_boot LOG TIMEOUT OK STEPFILE
     {
         printf '"%s" --bios --qemu-arg=-cpu --qemu-arg=max --qemu-arg=-m --qemu-arg=512' "$HARNESS"
@@ -882,8 +884,10 @@ rehearse_boot() { # rehearse_boot LOG TIMEOUT OK STEPFILE
         printf ' --qemu-arg=-drive --qemu-arg="file=%s/disk.qcow2,format=qcow2,if=ide,index=0,media=disk"' "$R"
         printf ' --timeout %s --steptmo %s --ok "%s" --log "%s"' "$2" "$2" "$3" "$1"
         printf ' "expect=rach2 login:" "send=root" "expect=Password:" "send=%s" "expect=# "' "$PASSWORD"
+        # Single quotes: the loops typed to the machine carry its variables,
+        # which the host's shell must not expand.
         while IFS= read -r step; do
-            printf ' "%s"' "$step"
+            printf " '%s'" "$step"
         done < "$4"
         printf '\n'
     } > "$1.sh"
@@ -894,7 +898,7 @@ rehearse_boot() { # rehearse_boot LOG TIMEOUT OK STEPFILE
 {
     echo 'send=mkdir -p /save && mount -t vfat /dev/disk2p1 /save && echo SAVE""MOUNTED'
     echo 'expect=SAVEMOUNTED'
-    echo 'send=i=0; while read s c; do dd if=/dev/disk1 of=/save/range-$i bs=512 skip=$s count=$c 2>/dev/null || echo SAVEFAIL $i; i=$((i + 1)); done < /save/ranges; sync; echo SAVED""ALL $i'
+    echo 'send=d=$(grep ^identity /proc/disk | grep " fixed " | head -1 | cut -d" " -f2); i=0; while read s c; do dd if=/dev/disk$d of=/save/range-$i bs=512 skip=$s count=$c 2>/dev/null || echo SAVEFAIL $i; i=$((i + 1)); done < /save/ranges; sync; echo SAVED""ALL $i'
     echo "expect=SAVEDALL $NRANGES"
     echo 'send=umount /save && echo SAVE""DONE'
     echo 'expect=SAVEDONE'
@@ -911,7 +915,7 @@ fi
 # The install, through the product stick, the root grown to the disk's end.
 {
     echo 'send=rach2-install'
-    echo 'expect=which disk shall it be written to'; echo 'send=/dev/disk1'
+    echo 'expect=which disk shall it be written to'; echo 'send=/dev/disk0'
     echo 'expect=the password for root'; echo "send=$NEWPASS"
     echo 'expect=again'; echo "send=$NEWPASS"
     echo 'expect=the name of the first account'; echo "send=$USERNAME"
@@ -919,7 +923,7 @@ fi
     echo 'expect=again'; echo "send=$USERPASS"
     echo 'expect=authorized keys'; echo 'send='
     echo 'expect=grow the root'; echo 'send='
-    echo 'expect=type the name of that disk'; echo 'send=/dev/disk1'
+    echo 'expect=type the name of that disk'; echo 'send=/dev/disk0'
     echo 'expect=the image on the stick is the one the manifest describes'
     echo 'expect=what reached the disk is the image'
     echo 'expect=the table is the one the image carries'
@@ -954,9 +958,9 @@ fi
 {
     echo 'send=mkdir -p /save && mount -t vfat /dev/disk2p1 /save && echo SAVE""MOUNTED'
     echo 'expect=SAVEMOUNTED'
-    echo 'send=i=0; while read s c; do reflash /dev/disk1 $((s * 512)) $((c * 512)) < /save/range-$i || echo PUTFAIL $i; i=$((i + 1)); done < /save/ranges; echo PUT""ALL $i'
+    echo 'send=d=$(grep ^identity /proc/disk | grep " fixed " | head -1 | cut -d" " -f2); i=0; while read s c; do reflash /dev/disk$d $((s * 512)) $((c * 512)) < /save/range-$i || echo PUTFAIL $i; i=$((i + 1)); done < /save/ranges; echo PUT""ALL $i'
     echo "expect=PUTALL $NRANGES"
-    echo 'send=: > /save/verify; while read s c; do reflash --verify /dev/disk1 $((s * 512)) $((c * 512)) >> /save/verify; done < /save/ranges; sync; echo VERIFY""ALL'
+    echo 'send=: > /save/verify; while read s c; do reflash --verify /dev/disk$d $((s * 512)) $((c * 512)) >> /save/verify; done < /save/ranges; sync; echo VERIFY""ALL'
     echo 'expect=VERIFYALL'
     echo 'send=umount /save && echo RESTORE""DONE'
     echo 'expect=RESTOREDONE'
