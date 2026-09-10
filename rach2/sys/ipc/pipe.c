@@ -191,11 +191,6 @@ static int32_t pipe_read(fd_entry_t *e, char __user *buf, uint32_t count)
  * Write to the write end. Blocks while the FIFO is full (until space frees or
  * every reader closes). A write with no readers raises SIGPIPE and returns
  * -EPIPE. Returns the byte count written, -EAGAIN if O_NONBLOCK and full.
- *
- * A blocked reader is woken when the ring is full and at the end of the
- * call, not after each piece staged into it: a reader woken after every
- * 512 bytes reads 512 bytes a call once the two fall into step, and a
- * copy of 64 MiB through the pipe then took ten times its usual time.
  */
 static int32_t pipe_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
@@ -226,7 +221,6 @@ static int32_t pipe_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 
         space = pipe_free_space(p);
         if (space == 0) {
-            wq_wake_all(&p->read_wq);
             if (fd_is_nonblock(e)) {
                 return (done > 0) ? (int32_t)done : -EAGAIN;
             }
@@ -248,8 +242,9 @@ static int32_t pipe_write(fd_entry_t *e, const char __user *buf, uint32_t count)
         }
         pipe_ring_put(p, kbuf, chunk);
         done += chunk;
+        wq_wake_all(&p->read_wq); /* data available: wake any blocked reader */
     }
-    wq_wake_all(&p->read_wq);
+
     return (int32_t)done;
 }
 
