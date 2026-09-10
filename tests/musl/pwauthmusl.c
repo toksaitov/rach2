@@ -979,7 +979,7 @@ static ssize_t read_verdict(int fd, pid_t leader, char *buffer, size_t n, long m
             filled += (size_t)got;
             continue;
         }
-        if (got == 0 || (got < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
+        if (got == 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) {
             break;
         }
         nap(50);
