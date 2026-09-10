@@ -51,6 +51,8 @@ extern int getpid(void);
 extern int atexit(void (*fn)(void));
 extern int memcmp(const void *a, const void *b, unsigned long n);
 extern void *memset(void *s, int c, unsigned long n);
+extern void *malloc(unsigned long n);
+extern void free(void *p);
 
 #define FIXDIR    "/tmp/rach2_verify/ext2"
 #define SEEK_SET_ 0
@@ -159,12 +161,28 @@ static int img_read(block_device_t *d, uint64_t lba, uint32_t count, void *buf)
 static int writes_made;
 static int stop_after = -1;
 
-/* The writes in the order the device saw them, for the row that reads that
-   order: each one's first sector and its length. */
+/* The writes in the order the device saw them, for the rows that read that
+   order: each one's first sector and its length, and, while `wlog_capture`
+   is set, a copy of its bytes, so the disk can be replayed write by write.
+   A log that overflows says so, since a row judging an order it did not see
+   whole would judge nothing. */
 #define WLOG_MAX 4096
 static uint64_t wlog_lba[WLOG_MAX];
 static uint32_t wlog_count[WLOG_MAX];
-static int wlog_n;
+static unsigned char *wlog_data[WLOG_MAX];
+static int wlog_n, wlog_capture, wlog_overflow;
+
+static void wlog_reset(void)
+{
+    int i;
+
+    for (i = 0; i < wlog_n && i < WLOG_MAX; i++) {
+        free(wlog_data[i]);
+        wlog_data[i] = 0;
+    }
+    wlog_n = 0;
+    wlog_overflow = 0;
+}
 
 static int img_write(block_device_t *d, uint64_t lba, uint32_t count, const void *buf)
 {
@@ -179,7 +197,16 @@ static int img_write(block_device_t *d, uint64_t lba, uint32_t count, const void
     if (wlog_n < WLOG_MAX) {
         wlog_lba[wlog_n] = lba;
         wlog_count[wlog_n] = count;
+        wlog_data[wlog_n] = 0;
+        if (wlog_capture) {
+            wlog_data[wlog_n] = malloc(count * 512);
+            if (wlog_data[wlog_n]) {
+                __builtin_memcpy(wlog_data[wlog_n], buf, count * 512);
+            }
+        }
         wlog_n++;
+    } else {
+        wlog_overflow = 1;
     }
     if (fseek(image, (long)(lba * 512), SEEK_SET_) != 0 ||
         fwrite(buf, 1, count * 512, image) != count * 512) {
@@ -1781,6 +1808,182 @@ static int debugfs_numbers(const char *cmd, const char *key, uint64_t *out, int 
     return n;
 }
 
+/* Every number that follows `key` in the output of a debugfs command, the
+   whole run of them, into `out`: what `ffb` prints, a list on one line. */
+static int debugfs_list(const char *cmd, const char *key, uint64_t *out, int cap)
+{
+    static char text[65536];
+    char line[512];
+    unsigned long got;
+    const char *at;
+    int n = 0;
+    void *f;
+
+    snprintf(line, sizeof(line),
+             ". tools/setup/e2fsprogs_path.sh; debugfs -R '%s' %s > " FIXDIR
+             "/debugfs.txt 2>/dev/null",
+             cmd, wimg);
+    run(line);
+    f = fopen(FIXDIR "/debugfs.txt", "r");
+    if (!f) {
+        return 0;
+    }
+    /* The whole output at once: the list is one line, longer than any
+       line buffer, and a number cut at a buffer's end would be another
+       number. */
+    got = fread(text, 1, sizeof(text) - 1, f);
+    fclose(f);
+    text[got] = '\0';
+    if (got == sizeof(text) - 1) {
+        return 0; /* more than the buffer: nothing rather than a cut list */
+    }
+    at = strstr(text, key);
+    if (!at) {
+        return 0;
+    }
+    at += strlen(key);
+    for (;;) {
+        char *end;
+        unsigned long v;
+
+        while (*at == ' ' || *at == '\n') {
+            at++;
+        }
+        v = strtoul(at, &end, 10);
+        if (end == at) {
+            break;
+        }
+        if (n < cap) {
+            out[n++] = v;
+        }
+        at = end;
+    }
+    return n;
+}
+
+/* Fill the volume's free blocks from block `from` on with bytes that are
+   neither zeros nor pointers into the volume, so a pointer block allocated from
+   them holds stale contents until the driver writes its zeros, as a used
+   disk's would. A publication over those contents is then visible. */
+static int seed_free_blocks(uint64_t from)
+{
+    static uint64_t freeb[3000];
+    static unsigned char junk[4096];
+    char cmd[200];
+    int n, i;
+
+    snprintf(cmd, sizeof(cmd), "ffb 3000 %lu", (unsigned long)from);
+    n = debugfs_list(cmd, "Free blocks found:", freeb, 3000);
+    memset(junk, 0xAB, sizeof(junk));
+    for (i = 0; i < n; i++) {
+        if (fseek(image, (long)(freeb[i] * 4096), SEEK_SET_) != 0 ||
+            fwrite(junk, 1, sizeof(junk), image) != sizeof(junk)) {
+            return -1;
+        }
+    }
+    return n;
+}
+
+/* Whether block `q` is allocated in the shadow's bitmap of group 0. */
+static int shadow_allocated(const unsigned char *shadow, uint64_t bitmap_blk, uint64_t q,
+                            uint64_t blocks)
+{
+    const unsigned char *bm = shadow + bitmap_blk * 4096;
+
+    if (q == 0 || q >= blocks) {
+        return 0;
+    }
+    return (bm[q / 8] >> (q % 8)) & 1;
+}
+
+/* Every nonzero pointer in the shadow's block `blk` names an allocated
+   block; 0 with the first offender in `*bad`. */
+static int shadow_pointers_ok(const unsigned char *shadow, uint64_t blk, uint64_t bitmap_blk,
+                              uint64_t blocks, uint64_t *bad)
+{
+    const unsigned char *p = shadow + blk * 4096;
+    int i;
+
+    for (i = 0; i < 1024; i++) {
+        uint64_t q = (uint64_t)p[i * 4] | ((uint64_t)p[i * 4 + 1] << 8) |
+                     ((uint64_t)p[i * 4 + 2] << 16) | ((uint64_t)p[i * 4 + 3] << 24);
+
+        if (q != 0 && !shadow_allocated(shadow, bitmap_blk, q, blocks)) {
+            *bad = q;
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* Replay the captured writes on a snapshot of the disk taken before them,
+   and at each write that carries a pointer block's pointers require every
+   block they name to be allocated in the bitmap as it stands on the disk
+   then, and a named pointer block's own contents, as they stand then, to
+   be zeros or pointers to allocated blocks: a pointer published over a
+   block whose stale bytes are still on the disk is what the zeros written
+   first are for. */
+static int publication_ok(unsigned char *shadow, uint64_t blocks, const uint64_t *ptr, int nptr,
+                          uint64_t bitmap_blk)
+{
+    int k, i, ok = 1;
+
+    for (k = 0; k < wlog_n; k++) {
+        uint64_t from = wlog_lba[k] / 8, to = (wlog_lba[k] + wlog_count[k] - 1) / 8;
+
+        if (!wlog_data[k]) {
+            printf("  write %d was not captured\n", k);
+            return 0;
+        }
+        __builtin_memcpy(shadow + wlog_lba[k] * 512, wlog_data[k], wlog_count[k] * 512);
+        for (i = 0; i < nptr; i++) {
+            const unsigned char *p;
+            uint64_t bad = 0;
+            int e;
+
+            if (ptr[i] < from || ptr[i] > to) {
+                continue;
+            }
+            if (!shadow_pointers_ok(shadow, ptr[i], bitmap_blk, blocks, &bad)) {
+                int m;
+
+                printf("  write %d publishes pointer block %lu naming block %lu, not allocated\n",
+                       k, (unsigned long)ptr[i], (unsigned long)bad);
+                for (m = 0; m <= k; m++) {
+                    uint64_t f2 = wlog_lba[m] / 8, t2 = (wlog_lba[m] + wlog_count[m] - 1) / 8;
+
+                    if ((bitmap_blk >= f2 && bitmap_blk <= t2) || (ptr[i] >= f2 && ptr[i] <= t2)) {
+                        printf("    write %d: blocks %lu to %lu%s\n", m, (unsigned long)f2,
+                               (unsigned long)t2,
+                               bitmap_blk >= f2 && bitmap_blk <= t2 ? " (the bitmap)" : "");
+                    }
+                }
+                ok = 0;
+                continue;
+            }
+            p = shadow + ptr[i] * 4096;
+            for (e = 0; e < 1024; e++) {
+                uint64_t q = (uint64_t)p[e * 4] | ((uint64_t)p[e * 4 + 1] << 8) |
+                             ((uint64_t)p[e * 4 + 2] << 16) | ((uint64_t)p[e * 4 + 3] << 24);
+                int j;
+
+                if (q == 0) {
+                    continue;
+                }
+                for (j = 0; j < nptr; j++) {
+                    if (ptr[j] == q && !shadow_pointers_ok(shadow, q, bitmap_blk, blocks, &bad)) {
+                        printf("  write %d publishes pointer block %lu naming pointer block %lu "
+                               "whose contents on the disk name block %lu\n",
+                               k, (unsigned long)ptr[i], (unsigned long)q, (unsigned long)bad);
+                        ok = 0;
+                    }
+                }
+            }
+        }
+    }
+    return ok;
+}
+
 /* Entry 18 of milestone 50: a pointer block the cache evicts under pressure
    must not reach the disk before the bitmap whose bit marks the block it
    names. Thirty-two blocks written from logical block 1035 in one call
@@ -1790,33 +1993,41 @@ static int debugfs_numbers(const char *cmd, const char *key, uint64_t *out, int 
    pointers (its first is the zeros that go with the bitmaps), must come
    after the first write of every block bitmap and descriptor block the
    write touched. The descriptors are block 1 at this block size. */
-static void order_row(void)
+static void order_row_under(uint32_t buffers)
 {
     static unsigned char buf[32 * 4096];
     uint64_t ptr[8], bm[8];
     int nptr, nbm, i, j, rc, ok = 1;
     uint32_t freed = 0;
     void *f;
+    unsigned char *shadow;
 
     for (i = 0; i < (int)sizeof(buf); i++) {
         buf[i] = (unsigned char)(i * 13 + 1);
     }
     wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
     use_image(wimg, wbytes);
-    if (bcache_resident() > 16) {
-        bcache_shrink(bcache_resident() - 16, 0, &freed);
+    if (bcache_resident() > buffers) {
+        bcache_shrink(bcache_resident() - buffers, 0, &freed);
     }
-    bcache_set_limit(16);
-    check(bcache_resident() <= 16, "the cache is cut to sixteen buffers for the sparse write");
+    bcache_set_limit(buffers);
+    check(bcache_resident() <= buffers, "the cache is cut for the sparse write");
     stop_after = -1;
+    check(seed_free_blocks(0) > 0, "the free blocks are seeded with stale bytes");
     rc = mount_rw();
     check(rc == 0 && (mnt.flags & VFS_MS_RDONLY) == 0, "the order row's volume mounts for writing");
     f = rc == 0 ? make_file(mnt.root, "ordered", &rc) : 0;
     check(f != 0, "a file for the sparse write");
     if (!f) {
-        printf("  rc %d\n", rc);
+        printf("  rc %d; last warning '%s'; last check '%s'; last log '%s'\n", rc, last_warn,
+               last_check, last_log);
     }
-    wlog_n = 0;
+    shadow = malloc(wbytes);
+    check(shadow != 0 && fseek(image, 0, SEEK_SET_) == 0 &&
+              fread(shadow, 1, wbytes, image) == wbytes,
+          "a snapshot of the disk before the write");
+    wlog_reset();
+    wlog_capture = 1;
     if (f) {
         rc = write_at(f, buf, sizeof(buf), 1035ull * 4096);
         check(rc == 0, "thirty-two blocks from logical block 1035, written in one call");
@@ -1857,7 +2068,25 @@ static void order_row(void)
     }
     check(ok, "every pointer block's pointers reached the disk after the bitmaps and descriptors "
               "of its write");
+    check(!wlog_overflow, "the write log held every write of the row");
+    check(shadow != 0 && nbm >= 1 && publication_ok(shadow, wbytes / 4096, ptr, nptr, bm[0]),
+          "every pointer published names an allocated block whose contents on the disk are "
+          "not stale");
+    wlog_capture = 0;
+    wlog_reset();
+    free(shadow);
     check(e2fsck_clean(wimg), "and the volume is clean");
+}
+
+/* Twice: with the cache cut to sixteen buffers, so the write's blocks are
+   evicted as it runs in the order it touched them; and with room for them
+   all, so they go to the disk at the unmount's sync in block order, which
+   puts a parent pointer block before the child it names. Each order is one
+   a machine can produce, and the publication check must hold in both. */
+static void order_row(void)
+{
+    order_row_under(16);
+    order_row_under(64);
 }
 
 static void write_rows(void)
