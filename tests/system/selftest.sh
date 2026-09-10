@@ -51,12 +51,21 @@ needy|a-command-that-does-not-exist|full
 imagey|hdiutil|full
 slow1|-|full
 slow2|-|full
+stuck|-|full
+editing|-|full
+needsprod1|-|full
+needsprod2|-|full
 REG
+# A script the runner hashes, so a suite that edits one can be tried.
+mkdir -p "$WORK/tests/system"
+echo "# the suites' makefile, as the runner sees it" > "$WORK/tests/system/suites.mk"
 cat > "$WORK/Makefile" <<'MK'
 components:
 	@echo components >> order.log; echo $$PPID >> components.count
-prepare-all:
+prepare-all: product
 	@echo prepared >> order.log; echo $$PPID >> prepared.count
+product:
+	@echo built >> product.count; sleep 0.3; touch product
 run-passing:
 	@echo "passing ran"; echo passing >> order.log; echo $$PPID >> ran.pid
 run-failing:
@@ -69,9 +78,17 @@ run-needy:
 run-imagey:
 	@echo "imagey ran"
 run-slow1:
-	@sleep 2
+	@sleep 2; touch slow1.done
 run-slow2:
 	@sleep 2
+run-stuck:
+	@sh -c 'trap "" TERM; sleep 60 & echo $$! > stuck.pid; wait'
+run-editing:
+	@echo "# edited under the run" >> tests/system/suites.mk
+run-needsprod1: product
+	@echo "needsprod1 ran"; [ -f product ] && echo needsprod1 >> after-product
+run-needsprod2: product
+	@echo "needsprod2 ran"; [ -f product ] && echo needsprod2 >> after-product
 MK
 # A stand-in for QEMU that outlives its suite, so the leak check has something
 # to find. It is on PATH ahead of any real one, and it records its pid where
@@ -195,5 +212,82 @@ check "one worker runs two suites one after the other" 1 \
 check "two workers run them together" 1 \
     "$([ "$two" -lt 4 ] && echo 1 || echo 0)"
 
+
+# What a run owns. One run at a time on a tree: a second is refused with the
+# first named; a lock a dead run left is taken over, unless something of that
+# run's process group is still alive, which is named for the person to stop.
+mkdir -p "$WORK/build"
+rm -rf "$WORK/build/.run.lock"
+( cd "$WORK" && PATH="$WORK/bin:$PATH" RACH2_WORKERS=2 sh tests/run slow1 > "$WORK/first.out" 2>&1 ) &
+first=$!
+sleep 0.7
+out=$(run passing); rc=$?
+check "a second run on a tree with one in flight is refused" 1 "$rc"
+check "and the first is named" 1 "$(printf '%s\n' "$out" | grep -c 'another run holds this tree: [0-9]*, slow1')"
+wait "$first"
+check "and the lock goes with the first run" 0 "$(ls -d "$WORK/build/.run.lock" 2>/dev/null | wc -l | tr -d ' ')"
+mkdir -p "$WORK/build/.run.lock"
+printf 'pid 999999\npgid 999999\nsince long ago\nargs old\n' > "$WORK/build/.run.lock/owner"
+out=$(run passing); rc=$?
+check "a lock whose run is gone is taken over" 0 "$rc"
+check "and says whose it was" 1 "$(printf '%s\n' "$out" | grep -c 'taking over the lock a run left: 999999, old')"
+perl -e 'setpgrp(0, 0); exec "sleep", "20"' &
+survivor=$!
+sleep 0.3
+mkdir -p "$WORK/build/.run.lock"
+printf 'pid 999999\npgid %s\nsince long ago\nargs old\n' "$survivor" > "$WORK/build/.run.lock/owner"
+out=$(run passing); rc=$?
+check "a lock whose run is gone but whose work is not is refused" 1 "$rc"
+check "and the surviving work is named" 1 "$(printf '%s\n' "$out" | grep -c "left work running: pids.*$survivor")"
+kill "$survivor" 2>/dev/null; wait "$survivor" 2>/dev/null
+rm -rf "$WORK/build/.run.lock"
+
+# A run stopped by a signal takes its work with it: the suite's sleep is a
+# grandchild of the runner, in its process group and in no ledger, and it
+# ignores TERM, so only the KILL that follows the group's TERM ends it.
+( cd "$WORK" && PATH="$WORK/bin:$PATH" RACH2_WORKERS=2 sh tests/run stuck > "$WORK/stuck.out" 2>&1 ) &
+stuckrun=$!
+i=0
+while [ ! -s "$WORK/stuck.pid" ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+runner=$(sed -n 's/^pid //p' "$WORK/build/.run.lock/owner" 2>/dev/null)
+kill -TERM "$runner" 2>/dev/null
+wait "$stuckrun"; rc=$?
+sleep 0.5
+check "a run stopped with TERM exits as the signal says" 143 "$rc"
+check "and its suite's work is stopped with it" 0 "$(kill -0 "$(cat "$WORK/stuck.pid" 2>/dev/null)" 2>/dev/null && echo 1 || echo 0)"
+check "and the lock goes" 0 "$(ls -d "$WORK/build/.run.lock" 2>/dev/null | wc -l | tr -d ' ')"
+kill "$(cat "$WORK/stuck.pid" 2>/dev/null)" 2>/dev/null
+
+# A result is bound to what made it: a suite that changes a hashed script
+# under the run voids the run, by the file's name.
+out=$(run editing); rc=$?
+check "a run whose input changed under it fails" 1 "$rc"
+check "and names the file" 1 "$(printf '%s\n' "$out" | grep -c 'voided: tests/system/suites.mk changed during the run')"
+echo "# the suites' makefile, as the runner sees it" > "$WORK/tests/system/suites.mk"
+
+# A pooled suite's result is printed the moment it ends, not when the pool
+# ends: the fast suite's line is seen while the slow one has not written its
+# end marker.
+rm -f "$WORK/slow1.done" "$WORK/stream.out"
+( cd "$WORK" && PATH="$WORK/bin:$PATH" RACH2_WORKERS=2 sh tests/run slow1 passing > "$WORK/stream.out" 2>&1 ) &
+streamrun=$!
+seen=0
+i=0
+while [ "$i" -lt 30 ]; do
+    if grep -q 'run: passing: PASS' "$WORK/stream.out" 2>/dev/null && [ ! -f "$WORK/slow1.done" ]; then
+        seen=1; break
+    fi
+    sleep 0.1; i=$((i + 1))
+done
+wait "$streamrun"
+check "a suite's result is printed while a slower one still runs" 1 "$seen"
+
+# A product two pooled suites name is built once, by the preparation, before
+# either starts.
+rm -f "$WORK/product" "$WORK/product.count" "$WORK/after-product"
+out=$(run needsprod1 needsprod2); rc=$?
+check "two suites that name one product pass" 0 "$rc"
+check "the product was built once" 1 "$(wc -l < "$WORK/product.count" | tr -d ' ')"
+check "and both ran after it" 2 "$(wc -l < "$WORK/after-product" | tr -d ' ')"
 echo "selftest: $((total - fails)) of $total checks passed"
 [ "$fails" -eq 0 ] || exit 1

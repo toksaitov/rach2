@@ -14,6 +14,18 @@
 #
 set -u
 
+# The run is a process group of its own, so that stopping it stops every
+# make, recipe and machine it started and nothing above it: a runner started
+# from a script shares its parent's group, and a signal to that group would
+# take the parent as well. The group is made by an exec through perl, since
+# the shell has no way to make one; without perl the run keeps the group it
+# was given and stops only what its ledgers name.
+if [ -z "${RACH2_RUN_GROUP:-}" ] && command -v perl >/dev/null 2>&1; then
+    RACH2_RUN_GROUP=1; export RACH2_RUN_GROUP
+    exec perl -e 'setpgrp(0, 0); exec @ARGV or die "run: exec: $!\n"' -- sh "$0" "$@"
+fi
+unset RACH2_RUN_GROUP # a runner started under this one makes a group of its own
+
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 # e2fsprogs, where a package manager keeps it off the path; the suites that
 # name mke2fs or e2fsck find them where the build does.
@@ -49,7 +61,94 @@ WORK=$(mktemp -d "${TMPDIR:-/tmp}/rach2-run.XXXXXX")
 # Checked because everything below builds a path on it: an empty value would
 # put the shim at /bin/qemu-system-i386 and delete / on the way out.
 [ -d "$WORK" ] || { echo "run: no scratch directory" >&2; exit 1; }
-trap 'rm -rf "$WORK"' EXIT INT TERM HUP
+
+# What this run owns: every process it starts is in its process group, since
+# a non-interactive shell's jobs, and the makes, recipes and machines under
+# them, inherit it; the machines are in the ledgers besides, since the
+# harness's deadline puts a machine in a group of its own. A signal stops
+# further starts, sends TERM to the group and the ledgers, KILL to what is
+# still there two seconds later, prints what the unfinished suites had
+# written, and only then removes the scratch and the lock. A second signal
+# while that runs is ignored, and the exit is the signal's.
+OWN_PGID=$(ps -o pgid= -p $$ | tr -d ' ')
+PGID=$OWN_PGID
+[ "$PGID" = "$$" ] || PGID="" # not a group of its own: only the ledgers are stopped
+STOPPING=""
+owned_kill() {
+    sig=$1
+    for f in "$WORK"/*.machines; do
+        [ -f "$f" ] || continue
+        while read -r pid; do [ -n "$pid" ] && kill "-$sig" "$pid" 2>/dev/null; done < "$f"
+    done
+    [ -n "$PGID" ] || return 0
+    for pid in $(pgrep -g "$PGID" 2>/dev/null); do
+        [ "$pid" = "$$" ] || kill "-$sig" "$pid" 2>/dev/null
+    done
+}
+SIGNALLED=""
+finish() {
+    trap '' INT TERM HUP
+    STOPPING=1
+    if [ -n "$SIGNALLED" ]; then
+        owned_kill TERM
+        sleep 2
+        owned_kill KILL
+        for suite in $RUNNING_NAMES; do
+            [ -f "$WORK/$suite.out" ] && [ ! -f "$WORK/$suite.rc" ] || continue
+            echo "run: $suite: stopped before its end; its output so far:"
+            cat "$WORK/$suite.out"
+        done
+    fi
+    rm -rf "$WORK"
+    lock_release
+}
+RUNNING=""; RUNNING_NAMES=""
+trap 'finish' EXIT
+trap 'SIGNALLED=1; finish; exit 130' INT
+trap 'SIGNALLED=1; finish; exit 143' TERM HUP
+
+# One run at a time on a tree: two share `build/` and its images, and each
+# suite kills what runs under its directory at its start. The lock is a
+# directory, made atomically, holding the owner's pid, process group and
+# arguments. A lock whose owner is gone is taken over only when nothing of
+# its group is left either: a runner killed with KILL cannot clean up, and
+# its makes and machines may still be running; they are named for the
+# person to stop. The pid alone does not say the owner is alive, since pids
+# are reused; the pid is the owner's while its group is the recorded one.
+LOCK="$REPO/build/.run.lock"
+lock_owner_alive() {
+    opid=$(sed -n 's/^pid //p' "$LOCK/owner" 2>/dev/null)
+    opgid=$(sed -n 's/^pgid //p' "$LOCK/owner" 2>/dev/null)
+    [ -n "$opid" ] && [ "$(ps -o pgid= -p "$opid" 2>/dev/null | tr -d ' ')" = "$opgid" ]
+}
+lock_group_survivors() {
+    opgid=$(sed -n 's/^pgid //p' "$LOCK/owner" 2>/dev/null)
+    [ -n "$opgid" ] && pgrep -g "$opgid" 2>/dev/null | tr '\n' ' '
+}
+lock_take() {
+    mkdir -p "$REPO/build"
+    if mkdir "$LOCK" 2>/dev/null; then
+        :
+    elif lock_owner_alive; then
+        echo "run: another run holds this tree: $(sed -n 's/^pid //p' "$LOCK/owner"), $(sed -n 's/^args //p' "$LOCK/owner"), since $(sed -n 's/^since //p' "$LOCK/owner")" >&2
+        return 1
+    elif [ -n "$(lock_group_survivors)" ]; then
+        echo "run: a run that is gone left work running: pids $(lock_group_survivors); stop them before the next run" >&2
+        return 1
+    else
+        echo "run: taking over the lock a run left: $(sed -n 's/^pid //p' "$LOCK/owner" 2>/dev/null), $(sed -n 's/^args //p' "$LOCK/owner" 2>/dev/null)"
+        rm -rf "$LOCK"
+        mkdir "$LOCK" 2>/dev/null || { echo "run: another run took the tree first" >&2; return 1; }
+    fi
+    { echo "pid $$"; echo "pgid $OWN_PGID"; echo "since $(date '+%Y-%m-%d %H:%M:%S')"; echo "args $*"; } > "$LOCK/owner.new"
+    mv "$LOCK/owner.new" "$LOCK/owner"
+    LOCKED=1
+}
+LOCKED=""
+lock_release() {
+    [ -n "$LOCKED" ] && [ "$(sed -n 's/^pid //p' "$LOCK/owner" 2>/dev/null)" = "$$" ] && rm -rf "$LOCK"
+    LOCKED=""
+}
 
 # Each suite names the machines it starts, so a leaked one can be blamed on the
 # suite that left it. Listing every QEMU on the host works only while one suite
@@ -136,6 +235,15 @@ check_machines() {
     return 1
 }
 
+# A make run under the runner is started in the background and waited for,
+# since the shell runs a trap at once while it waits and only after the
+# command ends while one runs in the foreground: a signal then stops the run
+# at once, and the group kill takes the make and what it started.
+run_make() {
+    make -C "$REPO" --no-print-directory "$@" &
+    wait $!
+}
+
 # The name and the tools were checked before anything was built, so this does
 # not repeat them; it runs the target and then reads the ledger the shim wrote.
 # A suite run on its own builds what its own target names, in parallel, and
@@ -148,9 +256,15 @@ run_one() {
     : > "$RACH2_QEMU_LEDGER"
     rc=0
     if [ "${2-}" = alone ]; then
-        make -C "$REPO" --no-print-directory -j "run-$1" || rc=1
+        # What the target names is built first and hashed, then the suite
+        # runs against those files; one make of both would hash a build in
+        # progress or a suite already run.
+        # shellcheck disable=SC2046 # the prerequisites are one word each
+        run_make -j $(closure "run-$1" | grep '^build/') || rc=1
+        [ "$rc" = 0 ] && take_hashes "run-$1" "$WORK/hashes.before"
+        [ "$rc" = 0 ] && { run_make "run-$1" || rc=1; }
     else
-        make -C "$REPO" --no-print-directory "run-$1" || rc=1
+        run_make "run-$1" || rc=1
     fi
     check_machines "$1" || rc=1
     if [ "$rc" = 0 ]; then
@@ -161,28 +275,122 @@ run_one() {
     return "$rc"
 }
 
-# The given suites, at most $WORKERS at a time, each one's output held and
-# replayed in order at the end: twenty suites writing to one terminal is not a
-# report. The failures are left in POOL_FAILED rather than printed, because a
-# caller reading this through a command substitution would run it in a subshell
-# and the replayed output would go there instead of to the person waiting.
+# The given suites, at most $WORKERS at a time, each one's output held while
+# it runs and printed whole the moment it ends, in the order they end: twenty
+# suites writing to one terminal is not a report, and a report an hour late
+# is not one either. A suite's result is its `.rc` file, written beside and
+# moved into place after its output is closed, so a reader never sees an
+# empty result; a job that is gone with no result failed. The failures are
+# left in POOL_FAILED rather than printed, because a caller reading this
+# through a command substitution would run it in a subshell and the output
+# would go there instead of to the person waiting. With RACH2_STOP_ON_FAIL
+# set, the first failure stops the pool and nothing queued starts.
 POOL_FAILED=""
 run_pool() {
-    POOL_FAILED=""; running=""
-    for suite in $1; do
-        while [ "$(alive "$running")" -ge "$WORKERS" ]; do sleep 0.2; done
-        ( run_one "$suite" > "$WORK/$suite.out" 2>&1; echo $? > "$WORK/$suite.rc" ) &
-        running="$running $!"
+    POOL_FAILED=""; RUNNING=""; RUNNING_NAMES=""; pending="$1"; stopped=""
+    while [ -n "$pending" ] || [ -n "$RUNNING_NAMES" ]; do
+        # Admit while there is room and nothing has stopped the pool.
+        while [ -n "$pending" ] && [ -z "$stopped" ] && [ -z "$STOPPING" ] &&
+              [ "$(alive "$RUNNING")" -lt "$WORKERS" ]; do
+            suite=${pending%% *}
+            case "$pending" in *" "*) pending=${pending#* } ;; *) pending="" ;; esac
+            ( run_one "$suite" > "$WORK/$suite.out" 2>&1; echo $? > "$WORK/$suite.rc.new";
+              mv "$WORK/$suite.rc.new" "$WORK/$suite.rc" ) &
+            echo $! > "$WORK/$suite.job"
+            RUNNING="$RUNNING $!"
+            RUNNING_NAMES="$RUNNING_NAMES $suite"
+        done
+        # Collect what ended, in the order it ended.
+        for suite in $RUNNING_NAMES; do
+            if [ -f "$WORK/$suite.rc" ]; then
+                :
+            elif job_of "$suite"; then
+                continue
+            else
+                echo 1 > "$WORK/$suite.rc" # gone with no result
+                echo "run: $suite: ended without a result" >> "$WORK/$suite.out"
+            fi
+            cat "$WORK/$suite.out" 2>/dev/null
+            read -r rc < "$WORK/$suite.rc"
+            [ "$rc" = 0 ] || POOL_FAILED="$POOL_FAILED $suite"
+            [ "$rc" = 0 ] || [ -z "${RACH2_STOP_ON_FAIL:-}" ] || stopped=1
+            RUNNING_NAMES=$(echo " $RUNNING_NAMES " | sed "s/ $suite / /" | sed 's/^ *//;s/ *$//')
+        done
+        [ -n "$stopped" ] && [ -n "$pending" ] && {
+            echo "run: stopped on the first failure; not started:$(echo " $pending" | sed 's/  */ /g')"
+            POOL_FAILED="$POOL_FAILED $pending"; pending=""
+        }
+        [ -z "$pending" ] && [ -z "$RUNNING_NAMES" ] || sleep 0.2
     done
-    wait
-    for suite in $1; do
-        cat "$WORK/$suite.out" 2>/dev/null
-        rc=1; [ -f "$WORK/$suite.rc" ] && read -r rc < "$WORK/$suite.rc"
-        [ "$rc" = 0 ] || POOL_FAILED="$POOL_FAILED $suite"
-    done
+    RUNNING=""
+}
+
+# Whether the job running `$1` is still alive.
+job_of() {
+    pid=$(cat "$WORK/$1.job" 2>/dev/null)
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
 }
 
 alive() { n=0; for p in $1; do kill -0 "$p" 2>/dev/null && n=$((n + 1)); done; echo "$n"; }
+
+# What a run reads, and must not change while it runs: the scripts that
+# decide a result, the tools that judge one, the kernels, and the products
+# `prepare-all` builds, read from make's own database (`make -pn`), which
+# lists every target with its prerequisites expanded, so the list is what
+# make builds and not a list kept by hand. The files are hashed before the
+# suites start and again at the end; a difference, or a file gone, voids
+# the run by name. Two equal hashes do not say the file stood still in
+# between; they say what the result was made with is what is there now.
+closure() { # closure TARGET: the file prerequisites reachable from TARGET
+    make -C "$REPO" -pn "$1" 2>/dev/null | awk -v root="$1" '
+        /^#/ || /^\t/ || /^$/ { next }
+        /^[^ \t:=]+:[^=]/ {
+            t = $1; sub(/:$/, "", t)
+            n = split($0, f, /[ \t]+/)
+            for (i = 2; i <= n; i++) if (f[i] != "" && f[i] != "|") deps[t] = deps[t] " " f[i]
+        }
+        END {
+            queue[1] = root; head = 1; tail = 1; seen[root] = 1
+            if (root == "prepare-all") {
+                queue[++tail] = "prepare-images"; seen["prepare-images"] = 1
+                queue[++tail] = "prepare-products"; seen["prepare-products"] = 1
+            }
+            while (head <= tail) {
+                t = queue[head++]
+                m = split(deps[t], d, " ")
+                for (i = 1; i <= m; i++) if (d[i] != "" && !(d[i] in seen)) { seen[d[i]] = 1; queue[++tail] = d[i] }
+            }
+            for (x in seen) if (x ~ /^build\// || x ~ /\//) print x
+        }' | sort
+}
+inventory() { # inventory TARGET: the paths hashed for a run of TARGET's suites
+    {
+        echo tests/run; echo tests/registry; echo tests/system/suites.mk; echo Makefile
+        ls mk/*.mk tests/system/*.sh tests/system/suites/*.sh tests/system/accept/*.sh \
+           tools/image/*.sh krffs/*.sh tools/verify/check.sh krffs/manifests/* 2>/dev/null
+        ls build/rach2*/kernel 2>/dev/null
+        closure "$1"
+    } | while read -r f; do [ -f "$REPO/$f" ] && echo "$f"; done | sort -u
+}
+hasher() {
+    if command -v shasum >/dev/null 2>&1; then shasum -a 256; else sha256sum; fi
+}
+take_hashes() { # take_hashes TARGET OUT
+    inventory "$1" > "$WORK/inventory"
+    ( cd "$REPO" && while read -r f; do hasher < "$f" | sed "s|-\$|$f|"; done < "$WORK/inventory" ) > "$2"
+}
+check_hashes() { # check_hashes BEFORE: 0 when nothing hashed differs or is gone
+    ( cd "$REPO" && while read -r f; do
+        if [ -f "$f" ]; then hasher < "$f" | sed "s|-\$|$f|"; else echo "gone  $f"; fi
+      done < "$WORK/inventory" ) > "$WORK/hashes.after"
+    if cmp -s "$1" "$WORK/hashes.after"; then
+        return 0
+    fi
+    diff "$1" "$WORK/hashes.after" | awk '/^>/ {print $3}' | sort -u | while read -r f; do
+        echo "run: voided: $f changed during the run" >&2
+    done
+    return 1
+}
 
 # The components first, in a Make of their own: an image rule that meets a
 # program and the component that builds it in one Make reads the program's
@@ -190,13 +398,13 @@ alive() { n=0; for p in $1; do kill -0 "$p" 2>/dev/null && n=$((n + 1)); done; e
 # set, the product and the test tools once, so no two suites build at once. A
 # suite run alone builds its own images through its own target.
 build_components() {
-    make -C "$REPO" --no-print-directory -j components || {
+    run_make -j components || {
         echo "run: result: the components did not build" >&2; exit 1
     }
 }
 prepare() {
     echo "run: preparing"
-    make -C "$REPO" --no-print-directory -j prepare-all || {
+    run_make -j prepare-all || {
         echo "run: result: preparation failed" >&2; exit 1
     }
 }
@@ -222,9 +430,18 @@ run_set() {
             *)          pooled="$pooled $suite" ;;
         esac
     done
+    RUNNING=serial
     for suite in $serial; do run_one "$suite" || failed="$failed $suite"; done
+    RUNNING=""
+    [ -n "$STOPPING" ] && return 1
     [ -n "$pooled" ] && { run_pool "$pooled"; failed="$failed$POOL_FAILED"; }
-    for suite in $lone; do run_one "$suite" || failed="$failed $suite"; done
+    RUNNING=serial
+    for suite in $lone; do
+        [ -n "$failed" ] && [ -n "${RACH2_STOP_ON_FAIL:-}" ] && { echo "run: stopped on a failure; not started: $suite"; failed="$failed $suite"; continue; }
+        run_one "$suite" || failed="$failed $suite"
+    done
+    RUNNING=""
+    [ -n "$STOPPING" ] && return 1
     [ -z "$failed" ] && return 0
     echo "run: result: failed:$failed" >&2
     return 1
@@ -279,11 +496,17 @@ for suite in "$@"; do
 done
 check_host $diskimage $sockets || exit 1
 
+lock_take "$@" || exit 1
 build_components
 if [ "$#" -eq 1 ]; then
+    RUNNING=serial
     run_one "$1" alone || exit 1
+    RUNNING=""
+    check_hashes "$WORK/hashes.before" || exit 1
 else
     prepare
-    run_set "$*" || exit 1
+    take_hashes prepare-all "$WORK/hashes.before"
+    run_set "$*" || { check_hashes "$WORK/hashes.before"; exit 1; }
+    check_hashes "$WORK/hashes.before" || exit 1
     echo "run: result: all $# suites passed"
 fi
