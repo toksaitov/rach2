@@ -317,10 +317,12 @@ LOG="$DISK.log.after"
 : > "$STEPS"
 step "rach2 login:" 1 "root"
 step "Password:" 1 "$ROOTPASSWORD"
-step "Password:" 1 "bootctl status | busybox grep 'boot.cfg' | busybox sed s/^/SLOTB\"\"=/"
-step "SLOTB=" 1 "poweroff -f"
+step "Password:" 1 "bootctl status | busybox grep 'boot.cfg' | busybox sed s/^/SLOTB\"\"=/; echo SLOTB\"\"DONE"
+step "SLOTBDONE" 1 "poweroff -f"
 boot_feed
-wait_count "SLOTB=" 1 600 || fail "the closing boot never reported the slot back"
+# The token is the one after the line, since a wait that ends at the line's
+# start stops the machine before a slow guest has written the rest of it.
+wait_count "SLOTBDONE" 1 600 || fail "the closing boot never reported the slot back"
 cleanup_boot
 
 SLOTA="$(grep -a 'SLOTA=' "$DISK.log.stage" | head -1 | sed 's/.*first sector //')"

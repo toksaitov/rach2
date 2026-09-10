@@ -523,12 +523,16 @@ prepare() {
 # pools of 2026-09-04, whose steps now wait on their own output rather than
 # the clock; they run in the pool, and one that loses a step to the load in
 # a set is run alone once and, if it passes there, listed here again by hand.
+# `install` builds the kernel inside the guest, twice, which is a computation
+# the emulator runs at a third of its rate beside eleven other machines: it
+# lost that step's 1800 s at twenty and at twelve on 2026-09-10 and passed
+# alone in 778 s, so it runs alone.
 run_set() {
     failed=""; serial=""; pooled=""; lone=""
     for suite in $1; do
         case "$suite" in
             style|host) serial="$serial $suite" ;;
-            usb|diskrate) lone="$lone $suite" ;;
+            usb|diskrate|install) lone="$lone $suite" ;;
             *)          pooled="$pooled $suite" ;;
         esac
     done

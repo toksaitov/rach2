@@ -257,8 +257,11 @@ fi
 # ---- 13: a megabyte left dirty, then memory taken until the caches
 #          give frames back: the buffer cache shrinks, the file reads back
 #          whole after a sync, and the mount still writes ----
+# The boot takes 65 s of the guest's clock, and in a pool the emulator runs
+# at a third of its rate, so the deadline is set from that and not from the
+# boot alone.
 if run --append "rach2.blocklag=1 rach2.rescue" \
-    --timeout 180 --steptmo 90 --ok "LAGPROBE OK" --never "LAGPROBE FAIL" \
+    --timeout 400 --steptmo 200 --ok "LAGPROBE OK" --never "LAGPROBE FAIL" \
     --log "$DISK.dirty.log" \
     "expect=Type 'help'" "send=exec /lagprobe dirty" \
     "expect=memory: reclaim:" \
