@@ -1,0 +1,3 @@
+# The tree `tests/run imagerace` builds for itself: one program, staged to
+# prove that a changed source reaches the image through exactly its target.
+file 0755 /prog build/tests/system/imagerace.tree/prog

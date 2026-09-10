@@ -128,6 +128,12 @@ manifest cred-persist-test
 sentinel /creddisk 0755:0:0
 init none
 
+# The tree `tests/run imagerace` builds for itself: one program, staged to
+# prove that a changed source reaches the image through exactly its target.
+manifest imagerace-tree
+sentinel /prog 0755:0:0
+init none
+
 # The console-login fixtures: the same image but for the init each
 # declares, and neither stages /bin/login. The strict one must refuse and
 # the permissive one must reach a root shell.

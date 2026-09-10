@@ -94,10 +94,63 @@ say "a file written below a staged directory does not put the image out of date:
 # a built tree still restages its image, which is the whole reason the
 # staged paths are prerequisites. The probe is touched, not rebuilt, since
 # make judges by time.
+# The probe's time is put back after, since the shared image must not be
+# out of date for the suites that boot it beside this one.
+touch -r build/tests/vmprobe build/tests/system/imagerace.ref
 touch build/tests/vmprobe
 stale=$(MAKEFLAGS= make --no-print-directory -n "$TESTIMG" 2>&1 |
         grep -E "mkimage\.sh" | grep -c "$TESTIMG")
+touch -r build/tests/system/imagerace.ref build/tests/vmprobe
+rm -f build/tests/system/imagerace.ref
 [ "$stale" = 1 ] || bad "$TESTIMG is not out of date after a program it stages was rebuilt"
 [ "$fails" = 0 ] || exit 1
 say "an image is out of date once a program it stages is rebuilt: OK"
+
+# Source to image, end to end, in a tree of this suite's own: a program, a
+# manifest that stages it, and a makefile with the image rule in the shape
+# of the Makefile's, the manifest's paths from `manifest_deps.sh` as its
+# prerequisites, the component's own make as an order-only one, the `.d`
+# file `mkimage.sh` writes included. The source is changed so the program
+# says something else, exactly the image's target is made, and the image
+# must carry the new words and not the old; made again with nothing
+# changed, it must not be rebuilt. Both dependency mechanisms have to be
+# dropped for the image to go stale: the prerequisites say what the
+# manifest stages by name, and the `.d` file says what the last build read.
+TREE=build/tests/system/imagerace.tree
+MANIFEST=krffs/manifests/imagerace-tree.manifest
+rm -rf "$TREE"
+mkdir -p "$TREE"
+cat > "$TREE/prog.c" <<'EOP'
+int main(void) { return 0; }
+const char words[] = "IMAGERACE FIRST WORDS";
+EOP
+# The image tools run from the repository's root, as the Makefile does, so
+# the tree's makefile is run from there with the tree's paths under build/.
+# The program's rule is in a makefile of its own, as a component's is, so
+# the image's makefile knows the program only by name, as the Makefile does.
+cat > "$TREE/Makefile" <<'EOP'
+IMG = $(TREE)/tree.krffs
+$(IMG): $(MANIFEST) $(shell sh krffs/manifest_deps.sh $(MANIFEST)) | prog
+	sh krffs/mkimage.sh $(MANIFEST) $@ 2
+-include $(IMG).d
+prog:
+	$(MAKE) --no-print-directory -f $(TREE)/prog.mk TREE=$(TREE) $(TREE)/prog
+.PHONY: prog
+EOP
+cat > "$TREE/prog.mk" <<'EOP'
+$(TREE)/prog: $(TREE)/prog.c
+	cc -o $@ $(TREE)/prog.c
+EOP
+treemake() { MAKEFLAGS= make --no-print-directory -f "$TREE/Makefile" TREE="$TREE" MANIFEST="$MANIFEST" "$@" > "$TREE/make.log" 2>&1; }
+treemake "$TREE/tree.krffs" || bad "the tree's first build failed: $(tail -2 "$TREE/make.log" | tr '\n' ' ')"
+grep -aq "IMAGERACE FIRST WORDS" "$TREE/tree.krffs" || bad "the first image does not carry the program's words"
+sleep 1 # make judges by time, and the file systems here keep seconds
+sed -i.bak 's/FIRST WORDS/SECOND WORDS/' "$TREE/prog.c"; rm -f "$TREE/prog.c.bak"
+treemake "$TREE/tree.krffs" || bad "the tree's second build failed: $(tail -2 "$TREE/make.log" | tr '\n' ' ')"
+grep -aq "IMAGERACE SECOND WORDS" "$TREE/tree.krffs" || bad "the image was not rebuilt for the changed source"
+grep -aq "IMAGERACE FIRST WORDS" "$TREE/tree.krffs" && bad "the image still carries the old words"
+treemake "$TREE/tree.krffs" || bad "the tree's third build failed"
+grep -q "mkimage.sh" "$TREE/make.log" && bad "the image was rebuilt with nothing changed"
+[ "$fails" = 0 ] || exit 1
+say "a changed source reaches the image through exactly its target, and an unchanged one does not rebuild it: OK"
 say "PASS"
