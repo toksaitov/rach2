@@ -31,7 +31,7 @@
  * echo waits on the UART's transmitter for 87 microseconds a byte with
  * interrupts off, and a flood typed by a harness is not read by a person. */
 #define TTY_PUMP_BUDGET 64
-#define TTY_ECHO_MAX 64
+#define TTY_ECHO_MAX    64
 
 /* A sink that discards: a tty initialized without one still has a valid (never
  * NULL) sink, so the discipline's echo/output never jumps through NULL. */
@@ -222,12 +222,22 @@ int tty_read(struct tty *t, unsigned char *kbuf, int count, int nonblock)
     }
 }
 
+static void console_sink(void *ctx, unsigned char c);
+
 int tty_write(struct tty *t, const unsigned char *kbuf, int count)
 {
     int i;
 
+    /* A record raised while the console is written waits for the write,
+     * so what a program prints in one write is one line of the log. */
+    if (t->sink == console_sink) {
+        console_write_begin();
+    }
     for (i = 0; i < count; i++) {
         n_tty_output(&t->ldisc, kbuf[i], t->sink, t->sink_ctx);
+    }
+    if (t->sink == console_sink) {
+        console_write_end();
     }
     return count;
 }

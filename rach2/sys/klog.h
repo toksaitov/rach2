@@ -94,6 +94,10 @@ void console_printf(const char *format, ...);
 /** As `console_putc`, for a writer that has expanded the newline itself. */
 void console_putc_raw(char c);
 
+/** Bracket a program's console write: a record raised inside it waits. */
+void console_write_begin(void);
+void console_write_end(void);
+
 /** As `k_puts`: the string and then a newline. */
 void console_puts(const char *str);
 

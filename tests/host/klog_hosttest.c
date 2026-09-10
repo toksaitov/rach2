@@ -180,6 +180,7 @@ static void reset(void)
     serial_offered = 0;
     ring_at_screen = 0;
     klog_delivering = 0;
+    console_writing = 0;
     serial_wedged = 0;
     net_on = 0;
     reenter_from_screen = 0;
@@ -574,6 +575,30 @@ int main(void)
                       "irq: landed: one of a burst\n"));
     CHECK("and ends with the count",
           has(screen, "klog: dropped: 1 record(s) the queue could not hold\n"));
+
+    /* A record raised in the middle of a program's console write waits for
+       the write: the bytes the program wrote in one call reach the port
+       together and the record follows them, whole. Without the bracket the
+       record would end the open line and split a token the harness looks
+       for, which is how the pool of twenty split `AHCIPROBE OK`. */
+    reset();
+    console_write_begin();
+    console_putc_raw('A');
+    klog(KLOG_WARN, "block", "completion dropped: stale generation");
+    ring_text(text, sizeof(text));
+    CHECK("the ring takes the record where it is raised, inside the write",
+          streq(text, "<4>[0.00] block: completion dropped: stale generation\n"));
+    CHECK("and the port has only the write's first byte so far",
+          serial_len == 1 && serial[0] == 'A');
+    console_putc_raw('B');
+    console_putc_raw('\r');
+    console_putc_raw('\n');
+    console_write_end();
+    serial[serial_len] = '\0';
+    CHECK("the write's bytes reach the port together and the record after them",
+          streq(serial, "AB\r\n<4>[0.00] block: completion dropped: stale generation\r\n"));
+    CHECK("and nothing waits or is held once the write has ended",
+          pending_count == 0 && klog_delivering == 0 && console_writing == 0);
 
     /* The brackets: one build, one ring append, and one look at the queue per
        record, balanced. */

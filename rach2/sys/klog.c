@@ -43,8 +43,8 @@ extern volatile uint32_t kernel_ticks;
 
 struct klog_record {
     char text[KLOG_RECORD_MAX];
-    uint32_t len;   /* bytes in `text`, including the newline */
-    uint32_t body;  /* where `subsystem: ` starts, past the prefix */
+    uint32_t len;  /* bytes in `text`, including the newline */
+    uint32_t body; /* where `subsystem: ` starts, past the prefix */
     int level;
 };
 
@@ -124,8 +124,8 @@ static void build_u32(uint32_t v)
  * spaces are dropped first, which is where a format written with a newline of
  * its own goes: `build_putc` has already turned it into one.
  */
-static void klog_build(struct klog_record *r, int level, const char *subsystem,
-                       const char *format, char **args)
+static void klog_build(struct klog_record *r, int level, const char *subsystem, const char *format,
+                       char **args)
 {
     uint32_t ticks = kernel_ticks;
 
@@ -385,17 +385,20 @@ struct klog_dest {
     void (*write)(const struct klog_record *r);
 };
 
-static const struct klog_dest DESTS[] = {
-    { KLOG_DEBUG, dest_ring },
-    { KLOG_INFO,  dest_screen },
-    { KLOG_DEBUG, dest_serial },
-    { KLOG_DEBUG, dest_net }
-};
+static const struct klog_dest DESTS[] = {{KLOG_DEBUG, dest_ring},
+                                         {KLOG_INFO, dest_screen},
+                                         {KLOG_DEBUG, dest_serial},
+                                         {KLOG_DEBUG, dest_net}};
 
 #define KLOG_N_DESTS ((int)(sizeof(DESTS) / sizeof(DESTS[0])))
 
 /* Set while a record is being written out; see `klog_v`. */
 static int klog_delivering;
+
+/* Set while a program's console write is in progress; see
+   `console_write_begin`. A record raised then waits in the queue as one
+   raised inside another record's delivery does. */
+static int console_writing;
 
 /*
  * The records raised while another was being written out, waiting for the
@@ -487,7 +490,6 @@ static void klog_drain(void)
     }
 }
 
-
 /**
  * Build one record and offer it to the destinations that take its level.
  *
@@ -514,7 +516,7 @@ void klog_v(int level, const char *subsystem, const char *format, char **args)
     }
     flags = kirq_save();
     klog_build(&r, level, subsystem, format, args);
-    nested = klog_delivering;
+    nested = klog_delivering || console_writing;
     if (nested) {
         pending_put(&r);
     } else {
@@ -544,6 +546,44 @@ void klog(int level, const char *subsystem, const char *format, ...)
 }
 
 /* ---- the console ---- */
+
+/**
+ * Bracket a program's console write, so that a record raised by an
+ * interrupt in the middle of it waits for the write to end.
+ *
+ * Without the bracket the record ends the open line and begins its own,
+ * and a token a program printed in one write reaches the port as two
+ * lines: in a pool of twenty machines a lag device's record split
+ * `AHCIPROBE OK`, and the harness never saw it. The bracket is taken by
+ * the tty's write of the console, which does not sleep, around each chunk
+ * of at most 256 bytes that `sys_write` hands it, so a record waits for at
+ * most that chunk's bytes, and a token printed within one chunk is one line
+ * of the log; a longer write may still have a record between two chunks.
+ */
+void console_write_begin(void)
+{
+    uint32_t flags = kirq_save();
+
+    console_writing++;
+    kirq_restore(flags);
+}
+
+/**
+ * End the bracket and write out what waited, unless a record's delivery is
+ * in progress, whose drain will take them.
+ */
+void console_write_end(void)
+{
+    uint32_t flags = kirq_save();
+
+    if (--console_writing > 0 || klog_delivering || pending_count == 0) {
+        kirq_restore(flags);
+        return;
+    }
+    klog_delivering = 1;
+    kirq_restore(flags);
+    klog_drain();
+}
 
 /**
  * Write one byte to the screen and the port, expanding the newline.
