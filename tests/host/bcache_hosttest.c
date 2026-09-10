@@ -148,6 +148,16 @@ static uint64_t fill_during_write;
 /* The fault injector: report success and write nothing at write number
    `drop_at`; write only `tear_bytes` at write number `tear_at`. */
 static int drop_at = -1, tear_at = -1, tear_bytes;
+/* The two interleavings. `write_during_fill` is a block written through
+   the cache, synced and dropped from it while a run read that covers it is
+   inside the device, as another process's write lands during the fill's
+   sleep: the read answers the old bytes, and the fill must not put them
+   over the newer ones. `first_during_sync` is a block another process
+   dirties as a `first` while a sync's write of an `after` is inside the
+   device: the sync must write it before its next `after`. */
+static uint64_t write_during_fill;
+static uint64_t first_during_sync;
+static struct process *hook_proc;
 /* What the cache recorded against the device. */
 static block_device_t *failed_dev;
 static uint64_t failed_lba;
@@ -173,6 +183,19 @@ static int fake_read(block_device_t *d, uint64_t lba, uint32_t count, void *buf)
         return -5;
     }
     __builtin_memcpy(buf, (unsigned char *)d->drvdata + lba * 512, count * 512);
+    if (write_during_fill && count > 8 && lba <= write_during_fill * 8 &&
+        write_during_fill * 8 < lba + count) {
+        uint64_t blk = write_during_fill;
+        struct bbuf *w;
+
+        write_during_fill = 0;
+        w = bcache_get_blank(d, blk);
+        w->data[0] = 0xEE;
+        bcache_dirty(w);
+        bcache_release(w);
+        bcache_sync(d);
+        bcache_invalidate(d);
+    }
     return 0;
 }
 
@@ -184,6 +207,19 @@ static int fake_write(block_device_t *d, uint64_t lba, uint32_t count, const voi
     if (gone_during_write) {
         gone_during_write = 0;
         bcache_device_gone(d);
+    }
+    if (first_during_sync) {
+        uint64_t blk = first_during_sync;
+        struct process *was = current_proc;
+        struct bbuf *f;
+
+        first_during_sync = 0;
+        current_proc = hook_proc;
+        f = bcache_get_blank(d, blk);
+        f->data[0] = 0xF1;
+        bcache_dirty_ordered(f, BCACHE_ORDER_FIRST);
+        bcache_release(f);
+        current_proc = was;
     }
     if (fill_during_write) {
         uint64_t blk = fill_during_write;
@@ -828,6 +864,42 @@ int main(void)
         check(dirty_left == 0 && image_wide[(WIDE_BLOCKS - 1) * 4096 + 1] == 0x3C,
               "and leaves nothing dirty");
     }
+    bcache_invalidate(&wide);
+
+    /* A write that lands while a run read is inside the device: the read
+       answered the block's old bytes, another process then wrote the block
+       through the cache, synced it and let the buffer go, and the fill's
+       staged copy is older than the device. The fill must not put it in
+       the cache; the block read afterwards is the device's newer one. */
+    b = bcache_get(&wide, 300);
+    bcache_release(b);
+    write_during_fill = 305;
+    b = bcache_get(&wide, 301);
+    bcache_release(b);
+    check(write_during_fill == 0, "the write landed during the run read");
+    b = bcache_get(&wide, 305);
+    check(b->data[0] == 0xEE && image_wide[305 * 4096] == 0xEE,
+          "a block written during a run read is not overwritten by the fill's older copy");
+    bcache_release(b);
+    bcache_invalidate(&wide);
+
+    /* A `first` dirtied by another process while a sync's write of an
+       `after` is inside the device: the sync writes it before its next
+       `after`, whatever their block numbers. */
+    for (i = 0; i < 3; i++) {
+        b = bcache_get_blank(&wide, (uint64_t)(210 + 10 * i));
+        b->data[0] = 0xA0;
+        bcache_dirty_ordered(b, BCACHE_ORDER_AFTER);
+        bcache_release(b);
+    }
+    hook_proc = &proc_b;
+    first_during_sync = 250;
+    writes_made = 0;
+    check(bcache_sync(&wide) == 0 && first_during_sync == 0 && writes_made == 4,
+          "a sync during which a first was dirtied writes all four blocks");
+    check(writes_lba[0] == 1680 && writes_lba[1] == 2000 && writes_lba[2] == 1760 &&
+              writes_lba[3] == 1840,
+          "and the late first goes to the device before the next after");
     bcache_invalidate(&wide);
     bcache_set_limit(BCACHE_BUFFERS);
 
