@@ -2877,6 +2877,13 @@ rc = -EIO;
         }
     }
     rc = set_retire(em, od, src.index, src.entries);
+    if (rc == 0) {
+        /* The retirements on the medium before the new name is published:
+         * a drive that keeps writes pending could otherwise put the
+         * publication first, and a crash between would leave two names
+         * on one chain, where the order chosen leaves none. */
+        rc = block_flush(em->dev);
+    }
     if (rc != 0) {
         goto out;
     }
@@ -2973,7 +2980,8 @@ static int32_t ex_write(struct vfs_mount *mnt, void *handle, const void *buf, ui
     struct ex_node *n = handle;
     uint32_t cbytes = cluster_bytes(em);
     uint64_t have, needed, end;
-    uint32_t run_first = 0, run_last = 0;
+    uint32_t run_first = 0, run_last = 0, tail = 0;
+    int joined = 0;
     int rc;
 
     if (n->is_dir) {
@@ -3069,11 +3077,10 @@ static int32_t ex_write(struct vfs_mount *mnt, void *handle, const void *buf, ui
         goto undo;
     }
     if (run_first != 0 && have > 0) {
-        uint32_t tail;
-
         rc = chain_at(em, n, n->first, 0, 0, (uint32_t)(have - 1), &tail);
         if (rc == 0) {
             rc = fat_set(em, tail, run_first, 1);
+            joined = rc == 0;
         }
         if (rc == 0) {
             rc = block_flush(em->dev); /* the join on the medium before the lengths */
@@ -3101,6 +3108,13 @@ static int32_t ex_write(struct vfs_mount *mnt, void *handle, const void *buf, ui
     vfs_ns_unlock(mnt);
     return (int32_t)count;
 undo:
+    if (joined && fat_set(em, tail, EX_EOC, 1) != 0) {
+        /* The join is in the cache and may be on the medium: a tail that
+         * cannot be ended again keeps its run, as lost clusters a check
+         * frees, rather than a chain that runs into free ones. The
+         * ending reaches the medium in `free_chain`, before it frees. */
+        goto out;
+    }
     if (run_first != 0) {
         free_chain(em, run_first, 0, 0);
     }
@@ -3165,6 +3179,15 @@ static int ex_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
                 if (rc == 0) {
                     rc = fat_set(em, tail, run_first, 1);
                 }
+                if (rc == 0) {
+                    /* The link on the medium before the length that
+                     * counts on it, or a crash leaves a chain shorter
+                     * than its length. */
+                    rc = block_flush(em->dev);
+                    if (rc != 0) {
+                        (void)fat_set(em, tail, EX_EOC, 1);
+                    }
+                }
                 if (rc != 0) {
                     free_chain(em, run_first, 0, 0);
                     goto out;
@@ -3209,6 +3232,12 @@ static int ex_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
         }
         stamp_mtime(n);
         rc = node_publish(em, n);
+        if (rc == 0) {
+            /* The shorter lengths on the medium before the tail is cut and
+             * freed: a drive that keeps writes pending could otherwise
+             * free the tail under lengths that still cover it. */
+            rc = block_flush(em->dev);
+        }
         if (rc != 0) {
             goto out;
         }
@@ -3288,8 +3317,13 @@ static int ex_setattr(struct vfs_mount *mnt, void *node, int what, const struct 
 
 static int ex_fsync(struct vfs_mount *mnt, void *handle)
 {
+    int rc;
+
     (void)handle;
-    return bcache_sync(em_of(mnt)->dev);
+    vfs_ns_lock(mnt);
+    rc = sync_disk(em_of(mnt));
+    vfs_ns_unlock(mnt);
+    return rc;
 }
 
 /* The main boot sector's flags and percent in use, written through; the

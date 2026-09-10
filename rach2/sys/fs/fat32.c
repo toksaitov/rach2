@@ -948,13 +948,21 @@ static int free_chain(struct fat_mount *fm, uint32_t first)
     struct fat_batch batch;
     uint32_t c = first;
     uint32_t steps = 0;
+    int rc;
 
+    /* What unpublished the chain, a shorter size, a removed entry or an
+     * ended tail, went through the cache to the device; a drive with a
+     * cache of its own puts it on the medium here, before a cluster is
+     * freed, so no name or link reaches a free cluster after a crash. */
+    rc = block_flush(fm->dev);
+    if (rc != 0) {
+        return rc;
+    }
     fat_batch_begin(&batch);
     while (c >= 2 && c < fm->cluster_count + 2 && steps < fm->cluster_count) {
         uint32_t next;
-        int rc = fat_next(fm, c, &next);
 
-        if (rc != 0) {
+        if (fat_next(fm, c, &next) != 0) {
             next = 0;
         }
         rc = fat_batch_set(fm, &batch, c, 0);
@@ -1096,7 +1104,14 @@ static int free_slots(struct fat_mount *fm, struct fat_node *dir, uint32_t first
         if (rc != 0) {
             return rc;
         }
-        rc = fat_set(fm, tail, newc);
+        /* The zeroed cluster and its own entry on the medium before the
+         * chain names it: a drive that keeps writes pending could
+         * otherwise put the link first, and a crash between would leave
+         * whatever the cluster held before as the directory's entries. */
+        rc = sync_disk(fm);
+        if (rc == 0) {
+            rc = fat_set(fm, tail, newc);
+        }
         if (rc != 0) {
             free_chain(fm, newc);
             return rc;
@@ -1587,7 +1602,8 @@ static int32_t fat_write(struct vfs_mount *mnt, void *handle, const void *buf, u
     struct fat_mount *fm = fm_of(mnt);
     struct fat_node *n = handle;
     uint32_t cbytes = cluster_bytes(fm);
-    uint32_t have, needed, run_first = 0, run_last = 0;
+    uint32_t have, needed, run_first = 0, run_last = 0, tail = 0;
+    int joined = 0;
     struct fat_node run; /* the new run's walk, hinted like a node's */
     uint64_t end;
     int rc;
@@ -1660,11 +1676,10 @@ static int32_t fat_write(struct vfs_mount *mnt, void *handle, const void *buf, u
         goto undo;
     }
     if (run_first != 0 && have > 0) {
-        uint32_t tail;
-
         rc = chain_at(fm, n, n->first, have - 1, &tail);
         if (rc == 0) {
             rc = fat_set(fm, tail, run_first);
+            joined = rc == 0;
         }
         if (rc == 0) {
             rc = block_flush(fm->dev); /* the join on the medium before the size */
@@ -1690,6 +1705,12 @@ static int32_t fat_write(struct vfs_mount *mnt, void *handle, const void *buf, u
     vfs_ns_unlock(mnt);
     return (int32_t)count;
 undo:
+    if (joined && fat_set(fm, tail, FAT_EOC_MIN) != 0) {
+        /* The join is in the cache and may be on the medium: a tail that
+         * cannot be ended again keeps its run, as lost clusters a check
+         * frees, rather than a chain that runs into free ones. */
+        goto out;
+    }
     if (run_first != 0) {
         free_chain(fm, run_first);
     }
@@ -1766,6 +1787,14 @@ static int fat_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
             if (rc == 0) {
                 rc = fat_set(fm, tail, run_first);
             }
+            if (rc == 0) {
+                /* The link on the medium before the size that counts on
+                 * it, or a crash leaves a chain shorter than its size. */
+                rc = block_flush(fm->dev);
+                if (rc != 0) {
+                    (void)fat_set(fm, tail, FAT_EOC_MIN);
+                }
+            }
             if (rc != 0) {
                 free_chain(fm, run_first);
                 goto out;
@@ -1791,6 +1820,12 @@ static int fat_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
         }
         stamp_mtime(n);
         rc = write_node_entry(fm, n);
+        if (rc == 0) {
+            /* The shorter size on the medium before the tail is cut and
+             * freed: a drive that keeps writes pending could otherwise
+             * free the tail under a size that still covers it. */
+            rc = block_flush(fm->dev);
+        }
         if (rc != 0) {
             goto out;
         }
@@ -2104,6 +2139,12 @@ static int fat_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_
         rc = free_slots(fm, d, d->first, nn.entries + 1, &index);
     }
     if (rc == 0) {
+        /* The directory's cluster, its chain and its two entries on the
+         * medium before the parent's entry names it: a drive that keeps
+         * writes pending could otherwise put the name first. */
+        rc = sync_disk(fm);
+    }
+    if (rc == 0) {
         n.dir_cluster = parent_cluster;
         n.index = index + nn.entries;
         entry_of(&n, raw);
@@ -2154,6 +2195,12 @@ static int fat_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
     rc = mark_dirty(fm);
     if (rc == 0) {
         rc = free_name_entries(fm, d->first, &sc);
+    }
+    if (rc == 0) {
+        /* The name gone from the medium before its clusters are freed: a
+         * drive that keeps writes pending could otherwise free them under
+         * a name still there. */
+        rc = block_flush(fm->dev);
     }
     if (rc != 0) {
         return rc;
@@ -2310,6 +2357,13 @@ static int fat_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, 
         }
     }
     rc = free_name_entries(fm, od->first, &src);
+    if (rc == 0) {
+        /* The old names freed on the medium before the new ones are
+         * written: a drive that keeps writes pending could otherwise put
+         * the new names first, and a crash between would leave two names
+         * on one chain, where the order chosen leaves none. */
+        rc = block_flush(fm->dev);
+    }
     if (rc != 0) {
         goto out;
     }
@@ -2322,6 +2376,9 @@ static int fat_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, 
             put16(dotdot + 20, nd_cluster >> 16);
             put16(dotdot + 26, nd_cluster & 0xFFFFu);
             rc = fat_put_bytes(fm, cluster_offset(fm, c) + 32, dotdot, 32, 1);
+        }
+        if (rc == 0) {
+            rc = block_flush(fm->dev); /* the new parent link before the new name */
         }
         if (rc != 0) {
             goto out;
