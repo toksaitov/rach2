@@ -671,7 +671,8 @@ run-bootline: rach2 tests krffs
 # `traceroute` itself on the image that has it. The capture is read by the
 # capture checker for the two things a program inside the machine cannot see:
 # the hop limit each datagram left with, and the caller's own checksum.
-run-raw: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(PCAPCHECK) $(HARNESS)
+run-raw: raw-stack
+raw-card: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(PCAPCHECK) $(HARNESS)
 	@rm -f $(RAW_PCAP)
 	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
@@ -680,6 +681,11 @@ run-raw: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(PCAPCHECK) $
 	    --timeout 200 --ok "RAWPROBE OK" --log $(IMAGES_DIR)/raw-test.rawprobe.log \
 	    "expect=Type 'help'" "send=exec /rawprobe" until=60
 	$(PCAPCHECK) rawwire $(RAW_PCAP)
+ifeq ($(NIC),e1000)
+raw-stack: raw-card
+	@echo "raw-test: the rows above the driver, the route that is not there, traceroute and the user's ping, are skipped here; tests/run raw covers them on the first card"
+else
+raw-stack: raw-card
 	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --append "rach2.ip=10.0.2.15/24" \
@@ -707,6 +713,8 @@ run-raw: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(PCAPCHECK) $
 	    "expect=rach2 login:" "send=test" "expect=Password:" \
 	    "send=`cat krffs/rach2_test_password`" wait=5 \
 	    "send=/bin/ping 10.0.2.2 && echo USERPING\"\"OK" wait=15
+endif
+.PHONY: raw-card raw-stack
 # `tests/run netif`: the interface ioctls, which is how a program sets this
 # machine's address. Its own target, like `tests/run ping`: it changes the
 # address out from under the machine and puts it back, and the last thing it
@@ -714,7 +722,8 @@ run-raw: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(PCAPCHECK) $
 TWONIC_LOG = $(TEST_IMAGE).twonic$(NIC_TAG).log
 MIXNIC_LOG = $(TEST_IMAGE).mixnic$(NIC_TAG).log
 NICFAIL_LOG = $(TEST_IMAGE).nicfail$(NIC_TAG).log
-run-netif: rach2 tests krffs test-image $(HARNESS)
+run-netif: netif-stack
+netif-card: rach2 tests krffs test-image $(HARNESS)
 	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --net "user,id=net0,hostfwd=udp::$(NETIF_PORT)-:9999" \
@@ -727,6 +736,11 @@ run-netif: rach2 tests krffs test-image $(HARNESS)
 	    --append "rach2.ip=none" \
 	    --timeout 120 --ok "NETIFPROBE OK" \
 	    "expect=Type 'help'" "send=exec /netifprobe" until=60
+ifeq ($(NIC),e1000)
+netif-stack: netif-card
+	@echo "netif-test: the boots that name their cards, two cards, two models and a refused card, are skipped here; tests/run netif covers them"
+else
+netif-stack: netif-card
 # Two cards on two subnets: each becomes an interface of its own, with its own
 # name, its own station address and its own line in the boot report and in
 # `/proc/net/dev`. The first still carries the traffic, which is what says the
@@ -805,6 +819,8 @@ leaves by the one that reaches the gateway: OK"'
 	    [ "$$n" = "1" ] || \
 	        { echo "netif-test: FAIL: $$n interfaces came up, not one" >&2; exit 1; }; \
 	    echo "netif-test: a card refused at its bring-up leaves the other one serving: OK"'
+endif
+.PHONY: netif-card netif-stack
 # `tests/run dgram`: a connected datagram socket and the permission to
 # broadcast, which is how a DHCP client renews a lease and how it asks for one.
 # Its own target because it broadcasts, and a probe in the suite must not put a
@@ -837,7 +853,8 @@ SIMPLE_LOG = $(IMAGES_DIR)/dhcp-simple$(NIC_TAG).log
 STATIC_PCAP = $(IMAGES_DIR)/static-simple$(NIC_TAG).pcap
 RSTATIC_PCAP = $(IMAGES_DIR)/static-real$(NIC_TAG).pcap
 SIMPLE_NET = user,id=net0,net=10.90.0.0/16,host=10.90.0.2,dhcpstart=10.90.0.20,dns=10.90.0.3
-run-dhcp: $(DEMO_CREDS) rach2 utils busybox krffs os-real-image os-simple-image rach2-metal-image $(PCAPCHECK) $(HARNESS)
+run-dhcp: dhcp-stack
+dhcp-card: $(DEMO_CREDS) rach2 utils busybox krffs os-real-image os-simple-image rach2-metal-image $(PCAPCHECK) $(HARNESS)
 	@rm -f $(DHCP_PCAP)
 	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
 	    --initrd $(OS_REAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
@@ -866,6 +883,11 @@ run-dhcp: $(DEMO_CREDS) rach2 utils busybox krffs os-real-image os-simple-image 
 	# means. Nothing answers 10.9.9.9, and nothing needs to.
 	$(PCAPCHECK) bcast $(DHCP_PCAP) \
 	    --routed-via 192.168.90.2 --routed-dst 10.9.9.9
+ifeq ($(NIC),e1000)
+dhcp-stack: dhcp-card
+	@echo "dhcp-test: the rows above the driver, the disk's two boots, the unattended boot, the server that never answers, os-simple's client and the fixed addresses, are skipped here; tests/run dhcp covers them on the first card"
+else
+dhcp-stack: dhcp-card
 	# And twice on a disk, where /var/run survives a reboot. `ifup` records there
 	# which interfaces it has configured, and the second boot must take a lease
 	# rather than read the first boot's record and decide it is already configured.
@@ -1135,6 +1157,8 @@ run-dhcp: $(DEMO_CREDS) rach2 utils busybox krffs os-real-image os-simple-image 
 	        { echo "dhcp-test: FAIL: nothing reached the server on the second card" >&2; \
 	          exit 1; }; \
 	    echo "dhcp-test: a lease on each interface and the server answering through both: OK"'
+endif
+.PHONY: dhcp-card dhcp-stack
 # `tests/run netconsole`: the kernel log on the wire. The machine this milestone
 # targets has no serial port, so the boot log has to leave over Ethernet or not
 # at all. QEMU's filter-dump writes every frame the guest sends to a libpcap
@@ -1185,12 +1209,12 @@ run-netconsole: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
 #
 # This card is the one QEMU attaches when nobody asks for one, so it is what a
 # person running qemu-system-i386 from a generic command line has. The suites
-# re-run here are the ones whose subject is the wire: the probe boot, ICMP, the
-# packet socket, the interface ioctls, broadcast, netconsole, the raw socket,
-# DHCP, and the SSH capstone, which is the deepest use the TCP path gets. The
-# other suites are about disks, accounts, and building, and running them again
-# on a second card would cost minutes and show nothing.
-# `tests/run e1000`: the card selection itself. The nine network suites that
+# re-run here are the ones whose subject is the wire: ICMP, the packet socket,
+# the interface ioctls, broadcast, netconsole, the raw socket, DHCP, and the
+# SSH capstone, which is the deepest use the TCP path gets. The other suites
+# are about disks, accounts, and building, and running them again on a second
+# card would cost minutes and show nothing.
+# `tests/run e1000`: the card selection itself. The eight network suites that
 # run on this card as well are separate registry entries, `NAME-e1000`, so the
 # pool schedules them beside their first-card twins and can see what each
 # costs. This suite ran them itself with an inner `-j4`, which hid nine jobs
@@ -1737,12 +1761,14 @@ run-imagerace: $(TEST_IMAGE) $(OS_REAL_IMAGE) $(DEMO_CREDS) krffs rach2 tests ut
 	sh tests/system/imagerace.sh krffs/manifests/test.manifest $(IMAGERACE_IMAGE) 10 \
 	    $(TEST_IMAGE) $(OS_REAL_IMAGE)
 
-# The nine network suites again on the second card. Each is the first-card
+# The eight network suites again on the second card. Each is the first-card
 # target with `NIC=e1000`, which picks the tagged files and the second set of
-# forwarded ports, so a pair can run at the same time.
-
-run-default-e1000:
-	$(MAKE) --no-print-directory NIC=e1000 run-default
+# forwarded ports, so a pair can run at the same time. The rows whose subject
+# is above the driver belong to the first card's suite: `netif`, `raw` and
+# `dhcp` are split into a `-card` half, run on both cards, and a `-stack`
+# half that the second card's run skips with a line saying which suite
+# covers it. The probe suite is not repeated at all, since none of its
+# probes sends a frame.
 
 run-ping-e1000:
 	$(MAKE) --no-print-directory NIC=e1000 run-ping

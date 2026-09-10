@@ -76,17 +76,24 @@ spoil_manifest() { # spoil_manifest IMAGE
 
 fail=0
 note() { echo "installer-test: $1"; }
+# The time each row took, printed as it ends, so a set shows where the
+# minutes go: the guest's hashing of the image in the rows that install or
+# restore, and not the setup.
+MARK=$(date +%s)
+mark() { now=$(date +%s); note "$1: $((now - MARK))s"; MARK=$now; }
 bad() {
     echo "installer-test: FAIL: $1" >&2
     fail=1
 }
 
 if [ "$PART" = "all" ] || [ "$PART" = "install" ]; then
+MARK=$(date +%s)
 
 # ---- 1: the stick boots, and the volume it carries holds the image the
 #         manifest declares. No kernel is given to the emulator, so what runs
 #         is what GRUB reads off the stick. ----
 cp "$STICK" "$DIR/install-stick.img" || bad "the stick image could not be copied"
+mark "setup"
 LOG="$DIR/installstick.log"
 BYTES=$(wc -c < "$STICK" | tr -d ' ')
 if "$HARNESS" --bios \
@@ -139,6 +146,7 @@ else
     bad "the stick was not published whole with two partitions"
 fi
 
+mark "row 1"
 # ---- 2: the two halves of a raw write, on the machine that does it. A blank
 #         disk is attached beside the stick; thirty-two mebibytes of the image
 #         are written to it with `reflash -p`, which must say how far it has
@@ -217,6 +225,7 @@ else
     note "and a write not asked for them printed none: OK"
 fi
 
+mark "row 2"
 # ---- 3: the installer, on a machine with two blank disks. It must name both
 #         as candidates and the stick as the source, refuse an answer that is
 #         not one of them, refuse a confirmation that is not the disk's own
@@ -316,6 +325,7 @@ else
     bad "the new table was not published"
 fi
 
+mark "row 3"
 # ---- 3b: the same machine, the other disk. The disks are the same two in the
 #          same order, and the answer names the first this time, so what
 #          decides which disk is written is the name typed and not the
@@ -382,6 +392,7 @@ else
     bad "the grown root is $GROWN sectors and the one left alone is $KEPT"
 fi
 
+mark "row 3b"
 # ---- 4: the machine written in row 3 boots on its own, with no stick and no
 #         kernel given to the emulator. ----
 LOG4="$DIR/installed.log"
@@ -409,6 +420,7 @@ else
     bad "the boot of the installed disk"
 fi
 
+mark "row 4"
 # ---- 5: a disk with something mounted from it is not offered. The stick's own
 #         volume is mounted first, which makes the stick a disk with a mount as
 #         well as the source. ----
@@ -436,6 +448,7 @@ else
     bad "the refusal of a disk with a mount"
 fi
 
+mark "row 5"
 # ---- 6: the accounts an install writes, over SSH. The install in row 3b was
 #         given the recovery system's own authorized keys as the account's, so
 #         the host's demo private key opens that account; root's password is
@@ -488,6 +501,7 @@ case "$OUT" in
 esac
 wait "$QPID" || bad "the installed machine did not stay up for the SSH attempts"
 
+mark "row 6"
 # ---- 7: a stick whose image is not the one its manifest describes. The
 #         manifest's hash is changed on the host, one digit of it, which is
 #         what a stick damaged in the writing or in a pocket looks like from
@@ -531,6 +545,7 @@ else
     bad "the disk was written from a stick whose image did not match its manifest"
 fi
 
+mark "row 7"
 # ---- 8: the stick alone, with no disk to write. The machine must say so and
 #         stop, rather than offering the stick it is running from. ----
 LOG8="$DIR/nodisk.log"
@@ -552,9 +567,11 @@ else
     bad "the machine with no disk to write"
 fi
 
+mark "row 8"
 fi
 
 if [ "$PART" = "all" ] || [ "$PART" = "repair" ]; then
+MARK=$(date +%s)
 
 # The disk this half repairs is a disk with nothing on it: what a person has
 # after a machine's disk was destroyed, or a disk they have just put in. The
@@ -573,6 +590,7 @@ while [ "$i" -lt 256 ]; do
 done
 BOOTIMG=$(dd if="$TEST_DISK" bs=440 count=1 2>/dev/null | shasum -a 256 | cut -d' ' -f1)
 
+mark "setup"
 # ---- 9: a machine whose disk has been destroyed, brought back through the
 #         recovery menu. The first mebibyte of the disk installed in row 3b is
 #         zeroed on the host, which takes its boot code, its table and the
@@ -695,6 +713,7 @@ else
     bad "the boot of the restored disk"
 fi
 
+mark "row 9"
 # ---- 11: a machine changed after it was installed, and then updated. On the
 #          running machine root's password is changed, root's keys are removed
 #          as an install removes them, an account's home is made, and a file
@@ -766,6 +785,7 @@ else
     bad "the boot of the updated machine"
 fi
 
+mark "row 11"
 # ---- 14: the root damaged, and the machine updated from the archive: the
 #          superblock zeroed so the root does not mount, then the update
 #          takes the accounts from the archive the last update refreshed and
@@ -813,6 +833,7 @@ else
     bad "the boot of the machine updated from the archive"
 fi
 
+mark "row 14"
 # ---- 16: an update stopped between the root's write and the accounts'
 #          return. The archive on the recovery partition is what such an
 #          update wrote before the root: the machine's own accounts, marked
@@ -878,6 +899,7 @@ else
     bad "the boot of the machine after the retried update"
 fi
 
+mark "row 16"
 fi
 
 # ---- the rehearsal of milestone 50's sitting, at the machine's own size,
@@ -897,6 +919,7 @@ fi
 if [ "$PART" = "rehearse" ] ||
     { { [ "$PART" = "all" ] || [ "$PART" = "install" ]; } &&
       { [ -n "${RACH2_REHEARSE_LENOVO:-}" ] || [ -n "${RACH2_REHEARSE_SMALL:-}" ]; }; }; then
+MARK=$(date +%s)
 REPO=$(cd "$(dirname "$0")/../../.." && pwd)
 GROWSET="$REPO/build/tools/inspect/growset"
 # The small form, the `rehearse` part's default and RACH2_REHEARSE_SMALL
@@ -935,6 +958,7 @@ dd if="$DISK" of="$R/head.vol" bs=512 skip="$ROOT_START" count=$((128 * 2048)) 2
 } > "$R/ranges"
 NRANGES=$(grep -c . "$R/ranges")
 note "rehearsal: the save set is the image's $IMAGE_SECTORS sectors and $((NRANGES - 1)) ranges of the grow beyond it"
+mark "setup"
 # The base and the overlay; the backing name is relative to the overlay's
 # own directory, which is where both live. Each range's first sector on the
 # base names the range, so a save that read another offset, or a restore
@@ -1108,6 +1132,7 @@ else
     bad "the restore wrote outside the save set"
 fi
 rm -f "$R/base.raw" "$R/disk.qcow2" "$R/save-stick.img" "$R/product-stick.img" "$R"/range-*.bin
+mark "rehearsal"
 fi
 
 if [ "$fail" -ne 0 ]; then

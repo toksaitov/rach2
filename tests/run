@@ -514,23 +514,21 @@ prepare() {
 }
 
 # `style` rebuilds the kernel with its own flags and shares a scratch directory
-# with `host`, so those two run alone, before the pool. `usb` and `usbdisk` plug devices in
-# and out through QEMU's monitor, and on a host saturated by the pool that
-# monitor stops answering `device_add` for a minute or more while the machine
-# runs on; the suite passes every time on its own, so it runs alone, after
-# the pool. `sealed` and `mount` are the longest sequences of boots, twelve
-# and nine, each step waited for with a deadline: in the pool they lose a
-# step to the host's load and report a machine that never reached its login
-# prompt, twice in the full runs of 2026-09-04, and each passes alone every
-# time, so they run there too. `diskrate` holds the storage paths under
-# time bounds measured on an idle host, and in the pool a row runs three to
-# four times slower than alone.
+# with `host`, so those two run alone, before the pool. `usb` plugs devices
+# in and out through QEMU's monitor and loses two rows under host load
+# (entry 36 of milestone 50), so it runs alone, after the pool, until that
+# is fixed. `diskrate` holds the storage paths under time bounds measured on
+# an idle host, and in the pool a row runs three to four times slower than
+# alone. `usbdisk`, `sealed` and `mount` were alone for the load of the
+# pools of 2026-09-04, whose steps now wait on their own output rather than
+# the clock; they run in the pool, and one that loses a step to the load in
+# a set is run alone once and, if it passes there, listed here again by hand.
 run_set() {
     failed=""; serial=""; pooled=""; lone=""
     for suite in $1; do
         case "$suite" in
             style|host) serial="$serial $suite" ;;
-            usb|usbdisk|sealed|mount|diskrate) lone="$lone $suite" ;;
+            usb|diskrate) lone="$lone $suite" ;;
             *)          pooled="$pooled $suite" ;;
         esac
     done
