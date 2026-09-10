@@ -165,6 +165,40 @@ else
     bad "sixteen devices were not every one configured: $(grep -ac 'usb: device: port [0-9.]*: .*class' "$REPO/build/images/usb-sixteen.log") configured, $(grep -a 'USBPROBE' "$REPO/build/images/usb-sixteen.log" | tr -d '\r' | tail -1)"
 fi
 
+# ---- 6c: the same sixteen with the hubs' scans slowed to 300 ms a port
+#          (`rach2.hubslow`), so a device found on an early port settles
+#          while the scan is still reading later ones, as it does on a
+#          loaded host: a connection told to the core before the scan ends
+#          has its reset refused by a hub that cannot take one yet, and the
+#          port is given up. Every device must still be configured; the
+#          probe is run once the slowed scans have had their time. ----
+if run_harness --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
+    --qemu-arg=-device --qemu-arg=usb-hub,bus=xhci.0,port=1,id=hub1 \
+    --qemu-arg=-device --qemu-arg=usb-hub,bus=xhci.0,port=2,id=hub2 \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0,port=1.1 \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0,port=1.2 \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0,port=1.3 \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0,port=1.4 \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0,port=1.5 \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0,port=1.6 \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0,port=1.7 \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0,port=1.8 \
+    --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0,port=2.1 \
+    --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0,port=2.2 \
+    --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0,port=2.3 \
+    --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0,port=2.4 \
+    --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0,port=2.5 \
+    --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0,port=2.6 \
+    --append "rach2.hubslow=300" \
+    --timeout 120 --steptmo 45 --ok "USBPROBE OK" --log "$REPO/build/images/usb-slowscan.log" \
+    "expect=Type 'help'" wait=8 "send=exec usbprobe" "expect=USBPROBE" > /dev/null 2>&1 \
+    && [ "$(grep -ac 'usb: device: port [0-9.]*: .*class' "$REPO/build/images/usb-slowscan.log")" = 16 ]; then
+    note "sixteen devices behind hubs whose scans take 300 ms a port are every one configured: OK"
+else
+    bad "with the hubs' scans slowed, $(grep -ac 'usb: device: port [0-9.]*: .*class' "$REPO/build/images/usb-slowscan.log") of sixteen devices were configured"
+fi
+
 # ---- 7: a device this kernel cannot drive is refused once and left alone,
 #         and the devices beside it are still enumerated. Both halves matter:
 #         the notebook found a device of this kind and the stack enumerated it
@@ -283,11 +317,13 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --timeout 120 --steptmo 45 --ok "KEYLAT OK" \
     "expect=Type 'help'" wait=2 "send=exec /keylatprobe" wait=2 key=ret \
     > /dev/null 2>&1; then
+    # The timer's pump may bring the key before the controller's message,
+    # and the record then says `msi 0`: the wake and the read are judged the
+    # same, and the message's own stages only when the message brought it.
+    # Rows 9 to 11 are where the messages themselves are proved.
     if ! grep -q "usb: latency:" "$LAT_LOG"; then
         bad "the keystroke's path was not recorded at all"
-    elif ! grep -q "usb: latency: msi 1" "$LAT_LOG"; then
-        bad "the keystroke was not brought by a message"
-    elif ! awk '/usb: latency: msi 1/ {
+    elif ! awk '/usb: latency: msi [01]/ {
                     fields = 0;
                     for (i = 1; i <= NF; i++) {
                         if ($i == "entry") { entry = $(i + 1) + 0; fields++; }
@@ -296,7 +332,7 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
                     }
                     if (fields != 3) { short_record = 1; }
                     if (entry < 0) { entry = -entry; }
-                    if (entry > 1000) { late = 1; }
+                    if ($0 ~ /msi 1/ && entry > 1000) { late = 1; }
                     if (read < wake) { backwards = 1; }
                     if (read - wake > 2000) { slow = 1; }
                     seen = 1;
@@ -313,6 +349,46 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     fi
 else
     bad "the latency boot did not read its line"
+fi
+# The log is kept when something failed, since it is the only account of what
+# the machine did.
+[ "$fail" -eq 0 ] && rm -f "$LAT_LOG"
+
+# ---- 12b: the same keystroke with the other tenant inside a large
+#           `getrandom` instead of spinning: a call that filled eight
+#           mebibytes without giving way would hold the reader for the
+#           whole call, and the reader's stage would say so. ----
+LAT_LOG="$IMAGE.latency-random.log"
+rm -f "$LAT_LOG"
+if run_harness --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-machine --qemu-arg=pc,i8042=off \
+    --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci,msi=on \
+    --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
+    --append "rach2.usblatency" --log "$LAT_LOG" \
+    --timeout 120 --steptmo 45 --ok "KEYLAT OK" --never "KEYLAT FAIL" \
+    "expect=Type 'help'" wait=2 "send=exec /keylatprobe random" "expect=KEYLAT HOG" wait=1 key=ret \
+    > /dev/null 2>&1; then
+    if ! grep -q "usb: latency:" "$LAT_LOG"; then
+        bad "the keystroke beside the large call was not recorded: a reader held past twenty milliseconds has no record"
+    elif ! awk '/usb: latency: msi [01]/ {
+                    fields = 0; wake = -1; read = -1;
+                    for (i = 1; i <= NF; i++) {
+                        if ($i == "wake" && $(i + 1) ~ /^[0-9]+,?$/) { wake = $(i + 1) + 0; fields++; }
+                        if ($i == "read" && $(i + 1) ~ /^[0-9]+,?$/) { read = $(i + 1) + 0; fields++; }
+                    }
+                    if (fields != 2) { short_record = 1; }
+                    if (read < wake) { backwards = 1; }
+                    if (read - wake > 2000) { slow = 1; }
+                    seen = 1;
+                }
+                END { exit !(seen && !short_record && !backwards && !slow) }' "$LAT_LOG"; then
+        bad "the reader waited for the large call to end: $(grep 'usb: latency' "$LAT_LOG" | tail -1)"
+    else
+        note "a reader woken beside a large getrandom runs on the wake, since the call gives way: OK"
+        grep "usb: latency" "$LAT_LOG" | sed 's/^/usb-test:   /'
+    fi
+else
+    bad "the latency boot beside a large getrandom did not read its line"
 fi
 # The log is kept when something failed, since it is the only account of what
 # the machine did.

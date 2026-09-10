@@ -34,6 +34,29 @@
 #include "core.h"
 #include "hcd.h"
 #include "xhci.h"
+#include "../cmdline.h"
+
+/* `rach2.hubslow=MS`: the scan waits this long between two ports, so a
+ * device found early settles while the scan goes on, which is what a slow
+ * machine does on its own; 0 is the ordinary scan. Read once. */
+static uint32_t hub_slow_ms;
+static int hub_slow_known;
+
+static uint32_t hub_slow(void)
+{
+    char value[16];
+    int i;
+
+    if (!hub_slow_known) {
+        hub_slow_known = 1;
+        if (kcmdline_value("rach2.hubslow", value, sizeof(value))) {
+            for (i = 0; value[i] >= '0' && value[i] <= '9' && hub_slow_ms < 100000u; i++) {
+                hub_slow_ms = hub_slow_ms * 10u + (uint32_t)(value[i] - '0');
+            }
+        }
+    }
+    return hub_slow_ms;
+}
 
 /* The hub class requests, from the USB 2.0 specification's chapter 11. The
  * request types name the class recipient: the hub for its descriptor and
@@ -110,6 +133,7 @@
 #define HUB_POWER_WAIT 4 /* the power-good time */
 #define HUB_SCAN       5 /* each port's status read once */
 #define HUB_RUNNING    6
+#define HUB_SCAN_WAIT  7 /* `rach2.hubslow`: between two ports of the scan */
 #define HUB_SETTING    7 /* a multi-TT hub's setting selected */
 #define HUB_DEPTH      8 /* a SuperSpeed hub being told its depth */
 
@@ -163,6 +187,7 @@ struct hub_port {
     uint32_t power_on_ms;   /* until the port is powered on again, or 0 */
     int off;                /* left powered off after over-current recurred */
     int warm;               /* a warm reset asked for after a link error */
+    int publish;            /* connected at the scan; told to the core when it ends */
 };
 
 struct hub {
@@ -496,12 +521,16 @@ static void port_read(struct hub *h, int port)
     if (h->state == HUB_SCAN) {
         /* The change bits found by the first scan are acknowledged before
          * the change endpoint is read, or the hub would report the same
-         * connections a second time and each device would arrive twice. */
+         * connections a second time and each device would arrive twice. A
+         * connection is told to the core when the scan ends and not here:
+         * the core gives a connection a fixed time to settle, and a scan
+         * that outlasts it, on a slow machine, would have the port let go
+         * before the hub could report it settled. */
         p->to_clear = change & change_mask(h);
         if (status & PORT_STAT_OVER_CURRENT) {
             over_current(h, port);
         } else if (now) {
-            usb_core_hub_port(h->index, port - 1, 1);
+            p->publish = 1;
         }
         return;
     }
@@ -714,13 +743,27 @@ static void answered(struct hub *h, const struct usb_completion *c)
         }
         port_read(h, port);
         if (h->state == HUB_SCAN) {
+            int i;
+
             h->at++;
             if (h->at > h->ports) {
                 h->state = HUB_RUNNING;
                 klog(KLOG_INFO, "usb", "hub: device %d: %d ports, power mode %d, think time %d",
                      h->device, h->ports, h->lpsm, h->think_time);
-                /* The running arm reads the change endpoint once every
-                 * change bit the scan found has been acknowledged. */
+                /* The connections the scan found, told now that the hub
+                 * can take a reset; the running arm reads the change
+                 * endpoint once every change bit the scan found has been
+                 * acknowledged. */
+                for (i = 0; i < h->ports; i++) {
+                    if (h->port[i].publish) {
+                        h->port[i].publish = 0;
+                        usb_core_hub_port(h->index, i, 1);
+                    }
+                }
+            } else if (hub_slow() != 0) {
+                h->state = HUB_SCAN_WAIT;
+                h->wait_ms = hub_slow();
+                h->wait_fresh = 1;
             } else if (port_status_read(h, h->at) != 0) {
                 give_up(h, "a port's status could not be asked for");
             }
@@ -785,8 +828,13 @@ int hub_completion(const struct usb_completion *completion)
             }
             {
                 unsigned b;
+                unsigned got = completion->length > completion->residual
+                                   ? completion->length - completion->residual
+                                   : 0;
 
-                for (b = 0; b < sizeof(h->bitmap) && b < sizeof(h->changes); b++) {
+                /* Only the bytes the hub sent: a short report leaves the
+                 * rest of the buffer as the last report left it. */
+                for (b = 0; b < got && b < sizeof(h->bitmap) && b < sizeof(h->changes); b++) {
                     h->changes |= (uint32_t)h->bitmap[b] << (8 * b);
                 }
             }
@@ -855,6 +903,20 @@ static void step_hub(struct hub *h, uint32_t elapsed_ms)
             give_up(h, "a port's status could not be asked for");
         }
         return;
+    case HUB_SCAN_WAIT:
+        if (h->wait_fresh) {
+            h->wait_fresh = 0;
+            return;
+        }
+        h->wait_ms = (h->wait_ms > elapsed_ms) ? h->wait_ms - elapsed_ms : 0;
+        if (h->wait_ms != 0) {
+            return;
+        }
+        h->state = HUB_SCAN;
+        if (port_status_read(h, h->at) != 0) {
+            give_up(h, "a port's status could not be asked for");
+        }
+        return;
     case HUB_RUNNING:
         /* A change bit owed an acknowledgement, and a port powered off for
          * over-current owed its power back. */
@@ -891,6 +953,8 @@ static void step_hub(struct hub *h, uint32_t elapsed_ms)
                 if (port_status_read(h, i + 1) == 0) {
                     return;
                 }
+                /* The read could not go out: the bit is owed again. */
+                h->changes |= (uint32_t)1u << (i + 1);
                 h->change_reading = 0;
             }
         }
@@ -1010,7 +1074,10 @@ int hub_port_settled(struct xhci_ctrl *hc, int owner, int port)
         return 0;
     }
     p = &h->port[port];
-    return p->known && (p->status & PORT_STAT_CONNECTION) != 0 &&
+    /* Not before the hub runs: a device that settles while the scan is
+     * still reading later ports would have its reset asked for from a hub
+     * that cannot take one yet, and the core would give the port up. */
+    return h->state == HUB_RUNNING && p->known && (p->status & PORT_STAT_CONNECTION) != 0 &&
            hub_ms - p->connect_ms >= HUB_DEBOUNCE_MS;
 }
 

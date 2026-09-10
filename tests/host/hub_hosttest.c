@@ -43,6 +43,15 @@ extern int printf(const char *fmt, ...);
 
 static int full_records; /* records of a device refused for want of an entry */
 
+/* The command line, which a host test does not have: no knob is set. */
+int kcmdline_value(const char *key, char *out, unsigned int outlen)
+{
+    (void)key;
+    (void)out;
+    (void)outlen;
+    return 0;
+}
+
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     const char *full = "device: port %s.%d: refused: the device table is full";
