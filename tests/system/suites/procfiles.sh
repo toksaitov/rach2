@@ -55,14 +55,32 @@ LOGS="$TEST_IMAGE.ram.log $TEST_IMAGE.window.log $TEST_IMAGE.disk.log $REAL.appl
 rm -f $LOGS
 
 QPID=""
+FEED="$TEST_IMAGE.procfiles.feed"
+
+# The console is driven through tests/system/drive.sh: a line is typed when
+# the output it answers has arrived, under a bound.
+# shellcheck source=tests/system/drive.sh
+. "$REPO/tests/system/drive.sh"
 
 stop() {
     qpid="$QPID"
     QPID=""
+    drive_stop
     if [ -n "$qpid" ]; then
         kill "$qpid" 2>/dev/null || true
         wait "$qpid" 2>/dev/null || true
     fi
+    rm -f "$FEED"
+}
+
+# A machine on the fifo and the log, and the feeder that types at it.
+boot_driven() {
+    rm -f "$FEED"
+    mkfifo "$FEED"
+    qemu-system-i386 -cpu max -display none "$@" -serial stdio < "$FEED" > "$DRIVE_LOG" 2>&1 &
+    QPID=$!
+    DRIVE_FIFO=$FEED
+    drive_feed "$QPID"
 }
 
 # shellcheck disable=SC2086
@@ -90,15 +108,19 @@ wait_serial() {
 
 # One boot of the test image under `$2` of boot options, running the probe in
 # its mount-only mode and leaving its ROOTMOUNT line in `$1`. The command is
-# re-sent because the debug shell drops anything typed before it is listening.
+# typed once the debug shell's prompt has been printed.
 mount_boot() {
     log="$1"
     append="$2"
     shift 2
-    ( sleep 8; i=0; while [ "$i" -lt 3 ]; do printf 'exec /procprobe mount\n'; sleep 9; i=$((i + 1)); done ) \
-        | qemu-system-i386 -cpu max -display none -kernel "$KERNEL" -initrd "$TEST_IMAGE" \
-        -append "$append" "$@" -serial stdio >"$log" 2>&1 &
-    QPID=$!
+    DRIVE_LOG=$log
+    boot_driven -kernel "$KERNEL" -initrd "$TEST_IMAGE" -append "$append" "$@"
+    if ! drive_expect "Type 'help'" 60; then
+        stop
+        echo "procfiles-test: FAIL: no debug shell on the boot with options '$append'" >&2
+        exit 1
+    fi
+    drive_type 'exec /procprobe mount'
     # Waited on the probe's own verdict, which it prints AFTER the mount line:
     # stopping at the mount line would kill the machine part way through
     # writing it, and the value read back would be a prefix.
@@ -147,29 +169,33 @@ fi
 echo "procfiles-test: the three mounts each name their own source: OK"
 
 # And the programs, on the image that has them. The tokens are written split
-# because the console echoes what is typed.
-( sleep 12; printf '%s\n' "$USER_NAME"; sleep 2; printf '%s\n' "$PASSWORD"; sleep 4;
-  printf 'echo "MYPID"":$$"\n'; sleep 2;
-  printf 'ps > /tmp.ps; echo PS""-STATUS:$?; tail -6 /tmp.ps\n'; sleep 3;
-  printf 'df / > /tmp.df; echo DF""-STATUS:$?; tail -1 /tmp.df\n'; sleep 3;
-  printf 'free > /tmp.free; echo FREE""-STATUS:$?; cat /tmp.free\n'; sleep 3;
-  printf 'uptime > /tmp.up; echo UP""-STATUS:$?; cat /tmp.up\n'; sleep 4;
-  printf 'dmesg > /tmp.dm; echo DM""ESG-STATUS:$?; sed -n "1s/^/DM""ESG-FIRST:/p" /tmp.dm\n'; sleep 4;
-  printf 'grep -c "^<[0-9]>\\[" /tmp.dm | sed s/^/DM""ESG-RECORDS:/\n'; sleep 2;
-  printf 'grep -c "Type .help." /tmp.dm | sed s/^/DM""ESG-CONSOLE:/\n'; sleep 2;
-  printf 'dropbearmulti dropbear -R -g -p 22; echo SSH""D-UP\n'; sleep 10;
-  printf 'route -n > /tmp.rt; echo RT""-STATUS:$?; cat /tmp.rt\n'; sleep 10;
-  printf 'netstat -tn > /tmp.ns 2>/tmp.ns6; echo NS""-STATUS:$?; cat /tmp.ns; cat /tmp.ns6\n'; sleep 4;
-  printf 'arp -n > /tmp.arp; echo AR""P-STATUS:$?; cat /tmp.arp\n'; sleep 3;
-  printf 'ifconfig eth0 > /tmp.if; echo IF""-STATUS:$?; cat /tmp.if\n'; sleep 3;
-  printf 'cat /proc/net/dev > /tmp.nd; echo ND""-STATUS:$?; cat /tmp.nd\n'; sleep 4;
-  printf 'cat /proc/interrupts > /tmp.ir; echo IR""-STATUS:$?; cat /tmp.ir\n'; sleep 4;
-  printf 'grep "^intr" /proc/stat | sed s/^/IN""TR:/\n'; sleep 4 ) \
-    | qemu-system-i386 -cpu max -display none \
-    -kernel "$KERNEL" -initrd "$REAL" \
-    -net nic,model=rtl8139 -net "user,hostfwd=tcp::$FWD_PORT-:22" \
-    -serial stdio >"$REAL.applets.log" 2>&1 &
-QPID=$!
+# because the console echoes what is typed; each line is typed once the one
+# before it has answered with its token.
+DRIVE_LOG="$REAL.applets.log"
+boot_driven -kernel "$KERNEL" -initrd "$REAL" \
+    -net nic,model=rtl8139 -net "user,hostfwd=tcp::$FWD_PORT-:22"
+applet() { # applet LINE TOKEN: the line, its token, and the prompt after its output
+    drive_type "$1"
+    if ! drive_expect "$2" 60 || ! drive_prompt 60; then
+        stop
+        echo "procfiles-test: FAIL: the applet run stopped before $2" >&2
+        exit 1
+    fi
+}
+if ! drive_login "$USER_NAME" "$PASSWORD" 90; then
+    stop
+    echo "procfiles-test: FAIL: the real image did not log its user in" >&2
+    exit 1
+fi
+applet 'echo "MYPID"":$$"' 'MYPID:'
+applet 'ps > /tmp.ps; echo PS""-STATUS:$?; tail -6 /tmp.ps' 'PS-STATUS:'
+applet 'df / > /tmp.df; echo DF""-STATUS:$?; tail -1 /tmp.df' 'DF-STATUS:'
+applet 'free > /tmp.free; echo FREE""-STATUS:$?; cat /tmp.free' 'FREE-STATUS:'
+applet 'uptime > /tmp.up; echo UP""-STATUS:$?; cat /tmp.up' 'UP-STATUS:'
+applet 'dmesg > /tmp.dm; echo DM""ESG-STATUS:$?; sed -n "1s/^/DM""ESG-FIRST:/p" /tmp.dm' 'DMESG-FIRST:'
+applet 'grep -c "^<[0-9]>\\[" /tmp.dm | sed s/^/DM""ESG-RECORDS:/' 'DMESG-RECORDS:'
+applet 'grep -c "Type .help." /tmp.dm | sed s/^/DM""ESG-CONSOLE:/' 'DMESG-CONSOLE:'
+applet 'dropbearmulti dropbear -R -g -p 22; echo SSH""D-UP' 'SSHD-UP'
 # A connection opened from OUTSIDE, held open while netstat runs, and still
 # resolved in the cache when `arp` runs after it. The order matters: a machine
 # that has spoken to nobody has an empty cache, and `arp` would then be asked to
@@ -178,22 +204,22 @@ QPID=$!
 # its peer as QEMU's gateway, 10.0.2.2: an address the guest did not choose and
 # the host end really has, which is what makes the row worth checking. The
 # forward reaches the SSH server started above, so this is the shape of a live
-# login and not a contrivance. The wait before it is longer than the steps that
-# come first, since a connection made before the server is listening reaches
-# nothing: QEMU accepts the host side of it either way.
-# The server is started by hand because the image
-# does not run one at boot, and QEMU's user network accepts the host side of a
-# connection whether or not anything inside is listening: without a real
-# listener the row would simply never appear and the check would fail for a
-# reason that has nothing to do with netstat.
-( sleep 42; "$REPO/build/tests/system/hostpeer" hold "$FWD_PORT" 40 ) \
-    >/dev/null 2>&1 &
+# login and not a contrivance. It is opened once the server has been started,
+# since a connection made before the server is listening reaches nothing:
+# QEMU accepts the host side of it either way. The server is started by hand
+# because the image does not run one at boot. The seconds after the open are
+# an interval: the host's connection is accepted by QEMU at once and reaches
+# the guest's server, and its table, a moment later.
+"$REPO/build/tests/system/hostpeer" hold "$FWD_PORT" 90 >/dev/null 2>&1 &
 PEER_PID=$!
-if ! wait_serial "$REAL.applets.log" "INTR:intr" 240; then
-    stop
-    echo "procfiles-test: FAIL: the applet run never finished" >&2
-    exit 1
-fi
+sleep 3
+applet 'route -n > /tmp.rt; echo RT""-STATUS:$?; cat /tmp.rt' 'RT-STATUS:'
+applet 'netstat -tn > /tmp.ns 2>/tmp.ns6; echo NS""-STATUS:$?; cat /tmp.ns; cat /tmp.ns6' 'NS-STATUS:'
+applet 'arp -n > /tmp.arp; echo AR""P-STATUS:$?; cat /tmp.arp' 'ARP-STATUS:'
+applet 'ifconfig eth0 > /tmp.if; echo IF""-STATUS:$?; cat /tmp.if' 'IF-STATUS:'
+applet 'cat /proc/net/dev > /tmp.nd; echo ND""-STATUS:$?; cat /tmp.nd' 'ND-STATUS:'
+applet 'cat /proc/interrupts > /tmp.ir; echo IR""-STATUS:$?; cat /tmp.ir' 'IR-STATUS:'
+applet 'grep "^intr" /proc/stat | sed s/^/IN""TR:/' 'INTR:intr'
 stop
 kill "$PEER_PID" 2>/dev/null || true
 wait "$PEER_PID" 2>/dev/null || true

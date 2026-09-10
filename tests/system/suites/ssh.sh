@@ -96,24 +96,13 @@ fail() {
     exit 1
 }
 
-# A line for the feed to type at the console, published whole: written
-# beside the file the feed takes and renamed into place.
-type_line() {
-    printf '%s\n' "$1" > "$FEED.type.new"
-    mv "$FEED.type.new" "$FEED.type"
-}
-
-wait_token() {
-    i=0
-    while [ "$i" -lt "$2" ]; do
-        if grep -q "$1" "$LOG" 2>/dev/null; then
-            return 0
-        fi
-        sleep 1
-        i=$((i + 1))
-    done
-    return 1
-}
+# The console is driven through tests/system/drive.sh: a line is typed when
+# the output it answers has arrived, and each wait is for fresh output under
+# a bound.
+# shellcheck source=tests/system/drive.sh
+. "$REPO/tests/system/drive.sh"
+type_line() { drive_type "$1"; }
+wait_token() { drive_expect "$1" "$2"; }
 
 
 rm -f "$WORK"
@@ -136,35 +125,21 @@ QPID=$!
 # writer, so QEMU sits in that open until the feed arrives, and neither half
 # misses a line. The feed then holds the console open only while the machine is
 # up, so nothing is left typing at a machine that is gone.
-(
-    sleep 14
-    printf 'root\n'
-    sleep 4
-    printf '%s\n' "$PASSWORD"
-    sleep 6
-    printf 'dropbearmulti dropbear -R -g -p 22\n'
-    held=0
-    while [ "$held" -lt 600 ] && kill -0 "$QPID" 2>/dev/null; do
-        # Lines a later row wants typed at the console arrive in a file, so
-        # the feed's script can stay a script.
-        # Taken by a rename first, so a line being written is never read
-        # half or deleted unread.
-        if [ -f "$FEED.type" ] && mv "$FEED.type" "$FEED.taken" 2>/dev/null; then
-            cat "$FEED.taken"
-            rm -f "$FEED.taken"
-        fi
-        sleep 1
-        held=$((held + 1))
-    done
-) > "$FEED" &
-FPID=$!
+DRIVE_LOG=$LOG
+DRIVE_FIFO=$FEED
+drive_feed "$QPID"
+FPID=$DRIVE_FPID
 
-if ! wait_token "rach2 login" 90; then
-    fail "the machine never reached its login prompt"
+if ! drive_login root "$PASSWORD" 90; then
+    fail "the machine never reached a root prompt at its console"
 fi
-# Dropbear says nothing on success, so what is waited for is the console coming
-# back to a prompt after the command, and then the port answering.
-sleep 25
+type_line 'dropbearmulti dropbear -R -g -p 22'
+# Dropbear's one line on success, printed after the shell's prompt has come
+# back, is what says it is listening; the port answering is what the key
+# login below tries for its own bound.
+if ! wait_token "Running in background" 60; then
+    fail "dropbear did not say it was running after being started"
+fi
 
 # Root, by key. The options are written out, not held in a variable, so
 # nothing here depends on a shell splitting one, and each of the three that
@@ -336,6 +311,8 @@ while [ "$i" -lt 40 ]; do
     FLOOD="$FLOOD $!"
     i=$((i + 1))
 done
+# An interval, not a wait for output: the forty connections reach the guest
+# and are counted only once they have been accepted or refused there.
 sleep 5
 # The flood is real before it is relied on: the guest's own count of
 # established connections, typed at the console session about to end.
@@ -350,15 +327,10 @@ if [ "${established:-0}" -lt 5 ]; then
     fail "the flood held ${established:-0} connections, fewer than the five a flood must reach"
 fi
 type_line 'exit'
-if ! wait_token "rach2 login: .*rach2 login:" 30 && ! [ "$(grep -c 'rach2 login:' "$LOG")" -ge 2 ]; then
+if ! drive_login root "$PASSWORD" 40; then
     for p in $FLOOD; do kill "$p" 2>/dev/null; done
     fail "the console did not come back to a login prompt under the flood"
 fi
-sleep 2
-type_line 'root'
-sleep 4
-type_line "$PASSWORD"
-sleep 4
 type_line 'id; echo FLOOD""LOGIN'
 if ! wait_token "FLOODLOGIN" 40 || ! grep -q 'uid=0' "$LOG"; then
     for p in $FLOOD; do kill "$p" 2>/dev/null; done

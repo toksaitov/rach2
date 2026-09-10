@@ -192,13 +192,24 @@ echo "crash-test: cleanly-halted image is clean: OK"
 FEED="$DISK.feed"
 rm -f "$FEED"
 mkfifo "$FEED"
-( sleep 6; printf 'poweroff\n'; sleep 120 ) > "$FEED" &
-FPID=$!
 qemu-system-i386 -cpu max -display none -kernel "$KERNEL" \
     -append "rach2.fsdisk rach2.rescue" \
     -drive "file=$OFF,format=raw,if=ide,index=0,media=disk" \
     -serial stdio < "$FEED" > "$OFF.log" 2>&1 &
 QPID=$!
+# `poweroff` is typed once the debug shell's prompt has been printed, through
+# tests/system/drive.sh, whose feeder holds the fifo open while the machine
+# lives.
+REPO=$(cd "$(dirname "$0")/../../.." && pwd)
+# shellcheck source=tests/system/drive.sh
+. "$REPO/tests/system/drive.sh"
+DRIVE_LOG="$OFF.log"
+DRIVE_FIFO=$FEED
+drive_feed "$QPID"
+FPID=$DRIVE_FPID
+if drive_expect "Type 'help'" 60; then
+    drive_type poweroff
+fi
 i=0
 while kill -0 "$QPID" 2>/dev/null && [ "$i" -lt 60 ]; do
     sleep 1

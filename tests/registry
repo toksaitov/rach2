@@ -92,6 +92,7 @@ load|qemu-system-i386,mformat|full
 conload|qemu-system-i386,mformat|core
 reset|qemu-system-i386|core
 runner|-|core
+drive|-|core
 imagerace|-|full
 krffscheck|python3|full
 krffsmount|qemu-system-i386|full

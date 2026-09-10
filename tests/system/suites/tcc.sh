@@ -112,6 +112,11 @@ wait_token() {
 # writer, so QEMU sits in that open until the feed arrives, and neither half
 # misses a line. The feed then holds the pipe open only while the machine is up,
 # so nothing is left typing at a machine that is gone.
+# The console is driven through tests/system/drive.sh: a line is typed when
+# the shell's prompt has come back, under a bound.
+REPO=$(cd "$(dirname "$0")/../../.." && pwd)
+# shellcheck source=tests/system/drive.sh
+. "$REPO/tests/system/drive.sh"
 boot_lines() {
     rm -f "$LOG" "$FEED"
     mkfifo "$FEED"
@@ -120,19 +125,18 @@ boot_lines() {
         -drive "file=$WORK,format=raw,if=ide,index=0,media=disk" \
         -serial stdio < "$FEED" > "$LOG" 2>&1 &
     QPID=$!
-    (
-        sleep 12
-        for line in "$@"; do
-            printf '%s\n' "$line"
-            sleep 6
-        done
-        held=0
-        while [ "$held" -lt 300 ] && kill -0 "$QPID" 2>/dev/null; do
-            sleep 1
-            held=$((held + 1))
-        done
-    ) > "$FEED" &
-    FPID=$!
+    DRIVE_LOG=$LOG
+    DRIVE_FIFO=$FEED
+    drive_feed "$QPID"
+    FPID=$DRIVE_FPID
+    # The first two lines are the login; each line after it is typed once
+    # the shell has printed its prompt again.
+    drive_login "$1" "$2" 90 || fail "the machine did not log in at its console"
+    shift 2
+    for line in "$@"; do
+        drive_type "$line"
+        drive_prompt 120 || true
+    done
 }
 
 rm -f "$WORK"

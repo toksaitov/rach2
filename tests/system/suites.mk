@@ -206,7 +206,7 @@ run-addressed: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
 	    --qemu-arg=-object \
 	    --qemu-arg=filter-dump,id=ad0,netdev=net0,file=$(ADDRESSED_PCAP) \
 	    --timeout 120 --ok "PINGTEST OK" \
-	    "expect=Type 'help'" "send=exec /pingtest" wait=60
+	    "expect=Type 'help'" "send=exec /pingtest" until=60
 	$(PCAPCHECK) bcast $(ADDRESSED_PCAP) --source 10.0.2.77 --arp-from 10.0.2.77
 # `tests/run noentropy`: the salt policy's negative half, which no other target
 # can reach. `make test` always boots -cpu max, so the CPU has RDSEED and RDRAND
@@ -222,11 +222,11 @@ run-noentropy: rach2 test-image $(HARNESS)
 	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
 	    --qemu-arg=-cpu --qemu-arg=qemu64 \
 	    --timeout 90 --ok "SALTNOENT OK" \
-	    "expect=Type 'help'" "send=exec /musl/saltnoent" wait=20
+	    "expect=Type 'help'" "send=exec /musl/saltnoent" until=20
 	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
 	    --qemu-arg=-cpu --qemu-arg=qemu64 \
 	    --timeout 180 --ok "PASSWDMUSL OK (fail-closed)" \
-	    "expect=Type 'help'" "send=exec /musl/passwdmusl" wait=60
+	    "expect=Type 'help'" "send=exec /musl/passwdmusl" until=60
 # `tests/run fpu`: the floating-point state of a process is its own. Two
 # boots of `fpuprobe`: with FXSR, where the x87 and XMM registers, the control
 # word and MXCSR are saved by `fxsave`, and with `rach2.nofxsr`, where the x87
@@ -614,17 +614,17 @@ run-cred-persist: rach2 musl-programs krffs $(HARNESS)
 	    --append "rach2.fsdisk rach2.rescue" \
 	    --drive "file=$(CRED_PERSIST_DISK),format=raw,if=ide,index=0,media=disk" \
 	    --timeout 60 --ok "CREDDISK OK (wrote)" \
-	    "expect=Type 'help'" "send=exec /creddisk" wait=15
+	    "expect=Type 'help'" "send=exec /creddisk" until=15
 	$(HARNESS) --kernel build/rach2/kernel \
 	    --append "rach2.fsdisk rach2.rescue" \
 	    --drive "file=$(CRED_PERSIST_DISK),format=raw,if=ide,index=0,media=disk" \
 	    --timeout 60 --ok "CREDDISK OK (released)" \
-	    "expect=Type 'help'" "send=exec /creddisk" wait=15
+	    "expect=Type 'help'" "send=exec /creddisk" until=15
 	$(HARNESS) --kernel build/rach2/kernel \
 	    --append "rach2.fsdisk rach2.rescue" \
 	    --drive "file=$(CRED_PERSIST_DISK),format=raw,if=ide,index=0,media=disk" \
 	    --timeout 60 --ok "CREDDISK OK (read back)" \
-	    "expect=Type 'help'" "send=exec /creddisk" wait=15
+	    "expect=Type 'help'" "send=exec /creddisk" until=15
 # `tests/run crash`: prove the dirty-mount flag detects an unclean shutdown. A
 # crashed boot (killed after mounting) leaves the on-disk dirty bit set for
 # fsck.krffs to report; a clean halt clears it. Its own image so it cannot race
@@ -636,7 +636,7 @@ RAW_PCAP = $(IMAGES_DIR)/raw$(NIC_TAG).pcap
 # rewriting one file while the other boots it.
 BOOTLINE_TEST_IMAGE = $(IMAGES_DIR)/bootline-test.disk
 # `tests/run ping`: the ICMP path against the SLIRP gateway, which is why it is
-# its own target rather than a probe in the suite. The explicit wait= is
+# its own target rather than a probe in the suite. The explicit until= is
 # required: after its last step the harness drains only --grace and then kills
 # QEMU, while the timeout case alone costs four seconds and the child the probe
 # forks lives three to eight, so without it the token would arrive after QEMU
@@ -645,7 +645,7 @@ run-ping: rach2 tests krffs test-image $(HARNESS)
 	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --timeout 120 --ok "PINGTEST OK" \
-	    "expect=Type 'help'" "send=exec /pingtest" wait=60
+	    "expect=Type 'help'" "send=exec /pingtest" until=60
 # `tests/run packet`: the packet socket, which is how a DHCP client sees a reply
 # that arrives before this machine owns an address. Its own target and not a
 # probe in the suite, for the reason `tests/run ping` is: it needs the
@@ -654,7 +654,7 @@ run-packet: rach2 tests krffs test-image $(HARNESS)
 	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --timeout 120 --ok "PACKETPROBE OK" \
-	    "expect=Type 'help'" "send=exec /packetprobe" wait=60
+	    "expect=Type 'help'" "send=exec /packetprobe" until=60
 # `tests/run bootline`: the boot line that contradicts itself. `rach2.nodisk`
 # skips the disk an image rooted on it needs, and the machine would fall to a
 # shell that authenticates nobody, so the kernel refuses that combination; with
@@ -678,13 +678,13 @@ run-raw: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(PCAPCHECK) $
 	    --qemu-arg=-object \
 	    --qemu-arg=filter-dump,id=rw0,netdev=net0,file=$(RAW_PCAP) \
 	    --timeout 200 --ok "RAWPROBE OK" --log $(IMAGES_DIR)/raw-test.rawprobe.log \
-	    "expect=Type 'help'" "send=exec /rawprobe" wait=60
+	    "expect=Type 'help'" "send=exec /rawprobe" until=60
 	$(PCAPCHECK) rawwire $(RAW_PCAP)
 	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --append "rach2.ip=10.0.2.15/24" \
 	    --timeout 200 --ok "RAWPROBE OK" --log $(IMAGES_DIR)/raw-test.static.log \
-	    "expect=Type 'help'" "send=exec /rawprobe" wait=30
+	    "expect=Type 'help'" "send=exec /rawprobe" until=30
 	# And the program the socket was built for. The ping first is not a flourish: a
 	# datagram for an address whose hardware address is not known yet is dropped
 	# while the request goes out, and traceroute sends one probe per hop and does
@@ -721,12 +721,12 @@ run-netif: rach2 tests krffs test-image $(HARNESS)
 	    --timeout 180 --ok "NETIFPROBE OK" \
 	    "expect=Type 'help'" "send=exec /netifprobe" \
 	    "expect=NETIFPROBE DOWN" "udp=$(NETIF_PORT):down" \
-	    "expect=NETIFPROBE UP" "udp=$(NETIF_PORT):up" wait=60
+	    "expect=NETIFPROBE UP" "udp=$(NETIF_PORT):up" until=60
 	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --append "rach2.ip=none" \
 	    --timeout 120 --ok "NETIFPROBE OK" \
-	    "expect=Type 'help'" "send=exec /netifprobe" wait=60
+	    "expect=Type 'help'" "send=exec /netifprobe" until=60
 # Two cards on two subnets: each becomes an interface of its own, with its own
 # name, its own station address and its own line in the boot report and in
 # `/proc/net/dev`. The first still carries the traffic, which is what says the
@@ -741,7 +741,7 @@ run-netif: rach2 tests krffs test-image $(HARNESS)
 	    --log $(TWONIC_LOG) \
 	    --timeout 180 --steptmo 60 --ok "NETIFPROBE OK" \
 	    "expect=Type 'help'" "send=exec /pingtest" "expect=PINGTEST OK" \
-	    "expect=Type 'help'" "send=exec /netifprobe second" wait=60
+	    "expect=Type 'help'" "send=exec /netifprobe second" until=60
 	@sh -c 'l=$(TWONIC_LOG); \
 	    grep -aq "net: eth0: e1000" "$$l" || \
 	        { echo "netif-test: FAIL: the first card did not become eth0" >&2; exit 1; }; \
@@ -774,7 +774,7 @@ run-netif: rach2 tests krffs test-image $(HARNESS)
 rach2.ifaddr=52:54:00:12:34:56,10.0.2.15/24,10.0.2.2" \
 	    --log $(MIXNIC_LOG) \
 	    --timeout 180 --steptmo 60 --ok "PINGTEST OK" \
-	    "expect=Type 'help'" "send=exec /pingtest" wait=60
+	    "expect=Type 'help'" "send=exec /pingtest" until=60
 	@sh -c 'l=$(MIXNIC_LOG); \
 	    grep -aq "net: eth0: RTL8139" "$$l" || \
 	        { echo "netif-test: FAIL: the RTL8139 did not become eth0" >&2; exit 1; }; \
@@ -797,7 +797,7 @@ leaves by the one that reaches the gateway: OK"'
 	    --append "rach2.nicfail=0" \
 	    --log $(NICFAIL_LOG) \
 	    --timeout 120 --ok "PINGTEST OK" \
-	    "expect=Type 'help'" "send=exec /pingtest" wait=60
+	    "expect=Type 'help'" "send=exec /pingtest" until=60
 	@sh -c 'l=$(NICFAIL_LOG); \
 	    grep -aq "net: eth0: refused: rach2.nicfail=0" "$$l" || \
 	        { echo "netif-test: FAIL: the card was not refused" >&2; exit 1; }; \
@@ -1597,7 +1597,7 @@ run-stress: rach2 tests krffs $(HARNESS)
 	    --append "rach2.fsdisk rach2.rescue" \
 	    --drive "file=$(STRESS_DISK),format=raw,if=ide,index=0,media=disk" \
 	    --timeout 150 --ok "STRESSPROBE OK" \
-	    "expect=Type 'help'" "send=exec /stressprobe" wait=130
+	    "expect=Type 'help'" "send=exec /stressprobe" until=130
 # The AHCI variants of the disk tests: identical images and probes, but the disk
 # rides an ich9-ahci HBA (if=none + ide-hd) and rach2.disk=ahci selects the AHCI
 # backend, exercising the same page-cache/KRFFS path through
@@ -1697,7 +1697,7 @@ run-stress-ahci: rach2 tests krffs $(HARNESS)
 	    --drive "file=$(STRESS_AHCI_DISK),format=raw,if=none,id=drv0" \
 	    $(AHCI_ATTACH) \
 	    --timeout 150 --ok "STRESSPROBE OK" \
-	    "expect=Type 'help'" "send=exec /stressprobe" wait=130
+	    "expect=Type 'help'" "send=exec /stressprobe" until=130
 # The style suite (see tools/verify/check.sh): -Werror build, scoped cppcheck,
 # shellcheck, the convention grep, clang-format, and a readelf ABI check.
 # `tests/run style` names this target.
@@ -1716,6 +1716,12 @@ run-host: check-libc $(DEADLINE)
 # machine and reads nothing from the product, so it needs no prerequisites.
 run-runner:
 	@./tests/system/selftest.sh
+
+# The drivers' suite (see tests/system/drivetest.sh): drive.sh and the
+# harness's waits against fake machines that choose when they are ready. It
+# needs the harness and nothing that boots.
+run-drive: $(HARNESS)
+	@./tests/system/drivetest.sh
 
 # `tests/run imagerace`: two builds of one image at the same moment, which a
 # parallel run of the suites produces and which used to take both of them

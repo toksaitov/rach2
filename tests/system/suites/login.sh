@@ -152,22 +152,42 @@ echo "login-test: the strict init refuses and keeps refusing: OK"
 # back. The token is written split, because the console echoes what is typed:
 # a command containing the whole token would put it in the log before it ran,
 # and the wait would match the echo, not the output.
-# The feed is spaced, and that is not politeness: `login` flushes pending input
-# when it puts the line back into canonical mode, so a script written all at
-# once is eaten by the very repair that makes the console usable, and the test
-# would pass having run nothing.
-( sleep 12; printf '%s\n' "$USER_NAME"; sleep 2; printf '%s\n' "$PASSWORD"; sleep 3;
-  printf 'kill -STOP $$; echo CONTINUED""-OK\n'; sleep 25 ) \
-    | qemu-system-i386 -cpu max -display none \
-    -kernel "$KERNEL" -initrd "$REAL" -serial stdio >"$REAL.stop.log" 2>&1 &
+# Each line is typed after the prompt it answers: `login` flushes pending
+# input when it puts the line back into canonical mode, so a script written
+# all at once is eaten by the very repair that makes the console usable, and
+# the test would pass having run nothing.
+FEED="$REAL.stop.feed"
+rm -f "$FEED"
+mkfifo "$FEED"
+qemu-system-i386 -cpu max -display none \
+    -kernel "$KERNEL" -initrd "$REAL" -serial stdio < "$FEED" >"$REAL.stop.log" 2>&1 &
 QPID=$!
+# Each line is typed when the prompt it answers has been printed, through
+# tests/system/drive.sh, whose feeder holds the fifo open while the machine
+# lives.
+REPO=$(cd "$(dirname "$0")/../../.." && pwd)
+# shellcheck source=tests/system/drive.sh
+. "$REPO/tests/system/drive.sh"
+DRIVE_LOG="$REAL.stop.log"
+DRIVE_FIFO=$FEED
+drive_feed "$QPID"
+if ! drive_login "$USER_NAME" "$PASSWORD" 90; then
+    drive_stop
+    stop
+    echo "login-test: FAIL: os-real did not log its user in" >&2
+    exit 1
+fi
+drive_type 'kill -STOP $$; echo CONTINUED""-OK'
 if ! wait_serial "$REAL.stop.log" "CONTINUED-OK" 120; then
+    drive_stop
     stop
     echo "login-test: FAIL: a stopped console session never came back; init must" >&2
     echo "login-test: continue one, since nothing above it can" >&2
     exit 1
 fi
+drive_stop
 stop
+rm -f "$FEED"
 echo "login-test: a stopped console session is continued by init: OK"
 
 # The way back in, against the real image: the kernel never consults the image's

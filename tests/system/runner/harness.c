@@ -34,6 +34,12 @@
  *                    serial as they are, in one stream, which is how a
  *                    flood of lines is typed back to back
  *     wait=SECS      sleep SECS, draining serial
+ *     until=SECS     drain serial for at most SECS, ending half a second
+ *                    after the run's --ok token arrives in output that
+ *                    came after this step began, or when the machine
+ *                    exits: for the wait after `send=exec /probe` whose
+ *                    only purpose is that token, so a probe done in ten
+ *                    seconds does not cost sixty. Never past --timeout
  *     tcp=PORT       open a TCP connection to 127.0.0.1:PORT and close it,
  *                    which a `hostfwd=tcp::PORT-:GUESTPORT` in --net
  *                    forwards to a server inside the guest. This provokes
@@ -1201,6 +1207,19 @@ int main(int argc, char **argv)
             }
         } else if (strncmp(step, "wait=", 5) == 0) {
             pump(now() + atof(step + 5));
+        } else if (strncmp(step, "until=", 6) == 0) {
+            double until = now() + atof(step + 6);
+            size_t from = buf_len;
+
+            if (until > deadline)
+                until = deadline;
+            while (now() < until && child_poll() < 0) {
+                pump(now() + 0.3);
+                if (ok != NULL && buf_len > from && contains(buf + from, buf_len - from, ok)) {
+                    pump(now() + 0.5);
+                    break;
+                }
+            }
         } else if (strncmp(step, "tcp=", 4) == 0) {
             int port = atoi(step + 4);
             int sk = socket(AF_INET, SOCK_STREAM, 0);

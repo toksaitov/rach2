@@ -60,14 +60,45 @@ LOGS="$REAL.exitline.log $TEST_IMAGE.fork.log $TEST_IMAGE.signal.log"
 rm -f $LOGS
 
 QPID=""
+FEED="$TEST_IMAGE.exitline.feed"
+
+# The console is driven through tests/system/drive.sh: a line is typed when
+# the prompt it answers has arrived, under a bound.
+REPO=$(cd "$(dirname "$0")/../../.." && pwd)
+# shellcheck source=tests/system/drive.sh
+. "$REPO/tests/system/drive.sh"
 
 stop() {
     qpid="$QPID"
     QPID=""
+    drive_stop
     if [ -n "$qpid" ]; then
         kill "$qpid" 2>/dev/null || true
         wait "$qpid" 2>/dev/null || true
     fi
+    rm -f "$FEED"
+}
+
+# A machine on the fifo and the log `$1`, and the feeder that types at it.
+boot_driven() {
+    DRIVE_LOG=$1
+    shift
+    rm -f "$FEED"
+    mkfifo "$FEED"
+    qemu-system-i386 -cpu max -display none "$@" -serial stdio < "$FEED" > "$DRIVE_LOG" 2>&1 &
+    QPID=$!
+    DRIVE_FIFO=$FEED
+    drive_feed "$QPID"
+}
+
+# The debug shell's command, typed once its prompt has been printed.
+shell_command() {
+    if ! drive_expect "Type 'help'" 60; then
+        stop
+        echo "exitline-test: FAIL: no debug shell on $DRIVE_LOG" >&2
+        exit 1
+    fi
+    drive_type "$1"
 }
 
 # shellcheck disable=SC2086
@@ -105,11 +136,13 @@ wait_serial() {
 # so its token puts the exit in the past. Both tokens are written split: the
 # console echoes what is typed, and a command holding a whole token would put
 # it in the log before it ran.
-( sleep 12; printf '%s\n' "$USER_NAME"; sleep 2; printf '%s\n' "$PASSWORD"; sleep 3;
-  printf '/bin/busybox echo FORKED""-AND-EXITED; echo REAPED""-OK\n'; sleep 8 ) \
-    | qemu-system-i386 -cpu max -display none \
-    -kernel "$KERNEL" -initrd "$REAL" -serial stdio >"$REAL.exitline.log" 2>&1 &
-QPID=$!
+boot_driven "$REAL.exitline.log" -kernel "$KERNEL" -initrd "$REAL"
+if ! drive_login "$USER_NAME" "$PASSWORD" 90; then
+    stop
+    echo "exitline-test: FAIL: os-real did not log its user in" >&2
+    exit 1
+fi
+drive_type '/bin/busybox echo FORKED""-AND-EXITED; echo REAPED""-OK'
 if ! wait_serial "$REAL.exitline.log" "REAPED-OK" 90; then
     stop
     echo "exitline-test: FAIL: os-real never ran the forked program, so its" >&2
@@ -127,15 +160,10 @@ echo "exitline-test: an image running init prints no plain exit line: OK"
 # 2. The debug shell, where the line is what a person reads. forktest's child
 # exits with a known status and the probe then exits with it, so a working
 # print appears for each. The two are named by their statuses rather than
-# counted, because the command is sent more than once: the shell discards
-# anything typed before it is listening, and a run that fed a probe nothing
-# would report the silence as a missing print, so `the harness` re-sends for the
-# same reason. Counting would then accept two copies of the probe's own exit
-# from a kernel that had stopped printing its children's.
-( sleep 8; i=0; while [ "$i" -lt 3 ]; do printf 'exec /forktest\n'; sleep 7; i=$((i + 1)); done ) \
-    | qemu-system-i386 -cpu max -display none -kernel "$KERNEL" -initrd "$TEST_IMAGE" \
-    -serial stdio >"$TEST_IMAGE.fork.log" 2>&1 &
-QPID=$!
+# counted, so that two copies of the probe's own exit from a kernel that had
+# stopped printing its children's could not pass for the pair.
+boot_driven "$TEST_IMAGE.fork.log" -kernel "$KERNEL" -initrd "$TEST_IMAGE"
+shell_command 'exec /forktest'
 if ! wait_serial "$TEST_IMAGE.fork.log" "$PLAIN 42" 90; then
     stop
     echo "exitline-test: FAIL: the debug shell did not print the forked" >&2
@@ -161,10 +189,8 @@ echo "exitline-test: the debug shell prints it for a child and a probe: OK"
 # neither of which may become so. vmfault writes through a wild pointer on
 # purpose. Each is matched whole, prefix and tail included: a substring would
 # accept a line renamed at either end, and the runner matches the whole thing.
-( sleep 8; i=0; while [ "$i" -lt 3 ]; do printf 'exec /vmfault\n'; sleep 7; i=$((i + 1)); done ) \
-    | qemu-system-i386 -cpu max -display none -kernel "$KERNEL" -initrd "$TEST_IMAGE" \
-    -serial stdio >"$TEST_IMAGE.signal.log" 2>&1 &
-QPID=$!
+boot_driven "$TEST_IMAGE.signal.log" -kernel "$KERNEL" -initrd "$TEST_IMAGE"
+shell_command 'exec /vmfault'
 if ! wait_serial "$TEST_IMAGE.signal.log" "killed by signal" 90; then
     stop
     echo "exitline-test: FAIL: a probe killed by a signal printed no marker," >&2

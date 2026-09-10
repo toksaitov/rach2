@@ -118,6 +118,11 @@ step() {
 # the feed know the machine's pid: opening a fifo for reading waits for a
 # writer, so QEMU sits in that open until the feed arrives. The feed then holds
 # the console open only while the machine is up.
+# The console is driven through tests/system/drive.sh: a line is typed when
+# the output it answers has arrived, under a bound.
+REPO=$(cd "$(dirname "$0")/../../.." && pwd)
+# shellcheck source=tests/system/drive.sh
+. "$REPO/tests/system/drive.sh"
 boot_steps() {
     rm -f "$FEED"
     mkfifo "$FEED"
@@ -126,27 +131,22 @@ boot_steps() {
         -drive "file=$WORK,format=raw,if=ide,index=0,media=disk" \
         -serial stdio < "$FEED" > "$LOG" 2>&1 &
     QPID=$!
-    (
-        sleep 14
-        printf 'test\n'
-        sleep 4
-        printf '%s\n' "$TESTPASSWORD"
-        sleep 6
-        while IFS='	' read -r marker command; do
-            printf '%s\n' "$command"
-            waited=0
-            while [ "$waited" -lt 240 ] && ! grep -q "$marker" "$LOG" 2>/dev/null; do
-                sleep 1
-                waited=$((waited + 1))
-            done
-        done < "$STEPS"
-        held=0
-        while [ "$held" -lt 120 ] && kill -0 "$QPID" 2>/dev/null; do
-            sleep 1
-            held=$((held + 1))
-        done
-    ) > "$FEED" &
-    FPID=$!
+    DRIVE_LOG=$LOG
+    DRIVE_FIFO=$FEED
+    drive_feed "$QPID"
+    FPID=$DRIVE_FPID
+    drive_login test "$TESTPASSWORD" 90 || fail "the machine did not log in at its console"
+    # Each step is typed once the one before it has printed its marker; a
+    # full build sits behind a single marker, so a step's bound is long,
+    # and the run has a budget the steps share, so a hung build fails the
+    # run when the budget is gone and not an hour a marker later.
+    boot_start=$(date +%s)
+    while IFS='	' read -r marker command; do
+        remaining=$(( boot_start + 600 - $(date +%s) ))
+        [ "$remaining" -gt 0 ] || fail "the run's budget was spent before $marker"
+        drive_type "$command"
+        drive_expect "$marker" "$remaining" || fail "the step for $marker never printed it"
+    done < "$STEPS"
 }
 
 rm -f "$WORK"

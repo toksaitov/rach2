@@ -123,17 +123,27 @@ fresh_image() {
     cp "$DISK" "$WORK"
 }
 
+# The line is typed once the shell's prompt has been printed, through
+# tests/system/drive.sh; the feeder holds the console open while the machine
+# lives, since EOF on the serial input stops QEMU by itself.
+REPO=$(cd "$(dirname "$0")/../../.." && pwd)
+# shellcheck source=tests/system/drive.sh
+. "$REPO/tests/system/drive.sh"
 start_boot() {
     rm -f "$LOG" "$FEED"
     mkfifo "$FEED"
-    ( sleep 10; printf '%s\n' "$1"; sleep 180 ) > "$FEED" &
-    FPID=$!
     # shellcheck disable=SC2086
     qemu-system-i386 -cpu max -display none $EXTRA_QEMU -kernel "$KERNEL" \
         -append "rach2.fsdisk" \
         -drive "file=$WORK,format=raw,if=ide,index=0,media=disk" \
         -serial stdio < "$FEED" > "$LOG" 2>&1 &
     QPID=$!
+    DRIVE_LOG=$LOG
+    DRIVE_FIFO=$FEED
+    drive_feed "$QPID"
+    FPID=$DRIVE_FPID
+    drive_prompt 90 || fail "the machine printed no prompt to type '$1' at"
+    drive_type "$1"
 }
 
 # Wait up to $1 seconds for QEMU to end by itself. Returns 1 if it did not.
