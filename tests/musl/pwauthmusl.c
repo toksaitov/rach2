@@ -958,6 +958,39 @@ static int expect_on(int fd, const char *needle, char *buffer, size_t size, long
     return 0;
 }
 
+/**
+ * Read `n` bytes of a leader's verdict from its pipe, within `ms`.
+ *
+ * A leader that hangs, waiting on a reader that neither stops nor ends, would
+ * otherwise hold this probe until the harness kills the machine and the log
+ * says nothing of which case it was; past the bound the leader is killed, so
+ * the caller's `waitpid` returns and its diagnostic names the case.
+ */
+static ssize_t read_verdict(int fd, pid_t leader, char *buffer, size_t n, long ms)
+{
+    size_t filled = 0;
+    long waited = 0;
+
+    fcntl(fd, F_SETFL, O_NONBLOCK);
+    while (filled < n && waited < ms) {
+        ssize_t got = read(fd, buffer + filled, n - filled);
+
+        if (got > 0) {
+            filled += (size_t)got;
+            continue;
+        }
+        if (got == 0 || (got < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
+            break;
+        }
+        nap(50);
+        waited += 50;
+    }
+    if (filled < n) {
+        kill(leader, SIGKILL);
+    }
+    return (ssize_t)filled;
+}
+
 /** Drain whatever `fd` has ready, returning the byte count. */
 static ssize_t drain(int fd, char *buffer, size_t size)
 {
@@ -1267,6 +1300,36 @@ static int check_prompt_burst(void)
  * kernel, so taking the terminal back from a background group needs nothing of
  * the shell dance around it.
  */
+/*
+ * The reader is forked before the leader has given it the terminal, and a
+ * reader that prints its prompt first has the master answering, with an
+ * interrupt or a suspend character, a terminal the leader still owns: the
+ * signal then lands on the leader, which stops and never reports. So the
+ * reader waits on a pipe for the leader's word, given once `tcsetpgrp` has
+ * run. `go_make` opens the pair, `go_wait` is the reader's side and
+ * `go_give` the leader's.
+ */
+static int go_make(int go[2])
+{
+    return pipe(go);
+}
+
+static void go_wait(int go[2])
+{
+    char c;
+
+    close(go[1]);
+    (void)read(go[0], &c, 1);
+    close(go[0]);
+}
+
+static void go_give(int go[2])
+{
+    close(go[0]);
+    (void)write(go[1], "g", 1);
+    close(go[1]);
+}
+
 static void prompt_bg_leader(const char *name, int master, int report)
 {
     struct termios tio;
@@ -1274,6 +1337,7 @@ static void prompt_bg_leader(const char *name, int master, int report)
     pid_t reader;
     int slave = open(name, O_RDWR);
     int status;
+    int go[2];
 
     close(master);
     if (slave < 0) {
@@ -1289,11 +1353,15 @@ static void prompt_bg_leader(const char *name, int master, int report)
         _exit(53);
     }
 
+    if (go_make(go) != 0) {
+        _exit(54);
+    }
     reader = fork();
     if (reader == 0) {
         char password[64];
 
         setpgid(0, 0);
+        go_wait(go);
         pwauth_read_password("Password: ", password, sizeof(password));
         _exit(0);
     }
@@ -1304,6 +1372,7 @@ static void prompt_bg_leader(const char *name, int master, int report)
     if (tcsetpgrp(0, reader) != 0) {
         _exit(55);
     }
+    go_give(go);
     if (waitpid(reader, &status, WUNTRACED) != reader || !WIFSTOPPED(status)) {
         _exit(56);
     }
@@ -1372,6 +1441,7 @@ static void prompt_resume_leader(const char *name, int master, int report)
     pid_t reader;
     int slave = open(name, O_RDWR);
     int status;
+    int go[2];
 
     close(master);
     if (slave < 0) {
@@ -1387,11 +1457,15 @@ static void prompt_resume_leader(const char *name, int master, int report)
         _exit(53);
     }
 
+    if (go_make(go) != 0) {
+        _exit(54);
+    }
     reader = fork();
     if (reader == 0) {
         char password[64];
 
         setpgid(0, 0);
+        go_wait(go);
         Tcg_stop = 1;
         if (pwauth_read_password("Password: ", password, sizeof(password)) != 0) {
             _exit(61);
@@ -1405,6 +1479,7 @@ static void prompt_resume_leader(const char *name, int master, int report)
     if (tcsetpgrp(0, reader) != 0) {
         _exit(55);
     }
+    go_give(go);
     if (waitpid(reader, &status, WUNTRACED) != reader || !WIFSTOPPED(status)) {
         _exit(56);
     }
@@ -1508,6 +1583,7 @@ static void prompt_stale_leader(const char *name, int master, int report)
     pid_t reader;
     int slave = open(name, O_RDWR);
     int status;
+    int go[2];
 
     close(master);
     if (slave < 0) {
@@ -1523,11 +1599,15 @@ static void prompt_stale_leader(const char *name, int master, int report)
         _exit(53);
     }
 
+    if (go_make(go) != 0) {
+        _exit(54);
+    }
     reader = fork();
     if (reader == 0) {
         char password[64];
 
         setpgid(0, 0);
+        go_wait(go);
         Tcg_stop = 1;
         pwauth_read_password("Password: ", password, sizeof(password));
         _exit(0);
@@ -1539,6 +1619,7 @@ static void prompt_stale_leader(const char *name, int master, int report)
     if (tcsetpgrp(0, reader) != 0) {
         _exit(55);
     }
+    go_give(go);
     /* It stops inside the library, one call after it asked who owns this. */
     if (waitpid(reader, &status, WUNTRACED) != reader || !WIFSTOPPED(status)) {
         _exit(56);
@@ -1601,7 +1682,7 @@ static int check_prompt_stale_owner(void)
 
         return fail("could not fork the session leader the stale-owner case needs");
     }
-    got = read(channel[0], verdict, 2);
+    got = read_verdict(channel[0], leader, verdict, 2, 20000);
     close(channel[0]);
     close(master);
     if (waitpid(leader, &status, 0) != leader) {
@@ -1821,7 +1902,7 @@ static int check_prompt_never_owned(void)
 
         return fail("could not fork the session leader the never-foreground case needs");
     }
-    got = read(channel[0], verdict, 2);
+    got = read_verdict(channel[0], leader, verdict, 2, 20000);
     close(channel[0]);
     close(master);
     if (waitpid(leader, &status, 0) != leader) {
