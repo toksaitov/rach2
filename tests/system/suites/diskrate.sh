@@ -34,7 +34,7 @@ mformat -i "$FAT@@1048576" -F -T 520192 -v RATEFAT :: || fail "mformat"
 # machine's clock read before and after, or `T_NAME FAIL` when it failed;
 # `moved BYTES COMMAND...` runs a dd that must report BYTES copied.
 # shellcheck disable=SC2016
-DEFS='t() { s=$(date +%s); if eval "$2"; then echo T_$1 $(( $(date +%s) - s )); else echo T_$1 FAIL; fi; }; moved() { n=$1; shift; "$@" 2>/tmp/dd.err && grep -q "^$n bytes" /tmp/dd.err; }; echo DEFS""DONE'
+DEFS='t() { s=$(date +%s); if eval "$2"; then echo T_$1 $(( $(date +%s) - s )); else echo T_$1 FAIL; fi; }; moved() { n=$1; shift; "$@" 2>/tmp/dd.err && grep -q "^$n bytes" /tmp/dd.err; }; c() { echo C_$1 $(grep -E "^(disk-commands|cache-hits) " /proc/disk | head -2 | awk "{printf \"%s \", \$2}"); }; echo DEFS""DONE'
 # shellcheck disable=SC2016
 set -- \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" "expect=# " \
@@ -44,13 +44,23 @@ set -- \
     "send=t pipehash 'dd if=/dev/disk0 bs=1M count=64 2>/tmp/dd.err | sha256sum >/dev/null && grep -q \"^67108864 bytes\" /tmp/dd.err'" "expect=T_pipehash" \
     "send=t pipehash 'dd if=/dev/disk0 bs=1M count=64 2>/tmp/dd.err | sha256sum >/dev/null && grep -q \"^67108864 bytes\" /tmp/dd.err'" "expect=T_pipehash" \
     "send=mkdir -p /e /f && mount -t exfat /dev/disk1p1 /e && mount -t vfat /dev/disk2p1 /f && echo MOUNT\"\"ED" "expect=MOUNTED" \
+    "send=c exwrite0" "expect=C_exwrite0" \
     "send=t exwrite 'moved 67108864 dd if=/dev/zero of=/e/big bs=1M count=64 && sync'" "expect=T_exwrite" \
+    "send=c exwrite1" "expect=C_exwrite1" \
     "send=t exread 'moved 67108864 dd if=/e/big of=/dev/null bs=1M && moved 67108864 dd if=/e/big of=/dev/null bs=1M'" "expect=T_exread" \
+    "send=c fatwrite0" "expect=C_fatwrite0" \
     "send=t fatwrite 'moved 67108864 dd if=/dev/zero of=/f/big bs=1M count=64 && sync'" "expect=T_fatwrite" \
+    "send=c fatwrite1" "expect=C_fatwrite1" \
     "send=t fatread 'moved 67108864 dd if=/f/big of=/dev/null bs=1M && moved 67108864 dd if=/f/big of=/dev/null bs=1M'" "expect=T_fatread" \
+    "send=c exsmall0" "expect=C_exsmall0" \
     "send=t exsmall 'moved 16777216 dd if=/dev/zero of=/e/small bs=4k count=4096 && sync'" "expect=T_exsmall" \
+    "send=c exsmall1" "expect=C_exsmall1" \
+    "send=c fatsmall0" "expect=C_fatsmall0" \
     "send=t fatsmall 'moved 16777216 dd if=/dev/zero of=/f/small bs=4k count=4096 && sync'" "expect=T_fatsmall" \
+    "send=c fatsmall1" "expect=C_fatsmall1" \
+    "send=c exfiles0" "expect=C_exfiles0" \
     "send=t exfiles 'i=0; n=0; while [ \$i -lt 200 ]; do dd if=/dev/disk0 of=/e/small-\$i bs=4k skip=\$i count=8 2>/dev/null && n=\$((n+1)); i=\$((i+1)); done; sync; [ \$n = 200 ] && [ \$(stat -c %s /e/small-199) = 32768 ]'" "expect=T_exfiles" \
+    "send=c exfiles1" "expect=C_exfiles1" \
     "send=umount /e && umount /f && echo ALL\"\"DONE" "expect=ALLDONE"
 "$HARNESS" --kernel "$KERNEL" --initrd "$OSREAL" \
     --qemu-arg=-cpu --qemu-arg=max --qemu-arg=-m --qemu-arg=512 --append "rach2.diskdiag" \
@@ -68,6 +78,25 @@ set -- \
 # reader's copies thirty times slower for a whole run (entry 26 of
 # milestone 50), and one run of the three at the usual rate is the kernel's.
 rc=0
+# counts NAME CMDS HITS TEXT: the disk commands and the cache hits the row
+# took, from the counters read before and after it, each under its bound.
+# The bounds are from the counts measured, with room above them, and a
+# path that walks a chain from its start for every call, or writes each
+# cluster's entry through, is over them by far.
+counts() {
+    before=$(tr -d '\r' < "$LOG" | grep -a "^C_$1""0 " | tail -1)
+    after=$(tr -d '\r' < "$LOG" | grep -a "^C_$1""1 " | tail -1)
+    [ -n "$before" ] && [ -n "$after" ] || fail "no counters for $1 in $LOG"
+    cmds=$(( $(echo "$after" | awk '{print $2}') - $(echo "$before" | awk '{print $2}') ))
+    hits=$(( $(echo "$after" | awk '{print $3}') - $(echo "$before" | awk '{print $3}') ))
+    # A counter that did not move is an instrument that stopped, not a fast row.
+    if [ "$cmds" -gt 0 ] && [ "$hits" -ge 0 ] && [ "$cmds" -le "$2" ] && [ "$hits" -le "$3" ]; then
+        echo "diskrate-test: $4: $cmds disk commands under $2, $hits cache hits under $3: OK"
+    else
+        echo "diskrate-test: FAIL: $4: $cmds disk commands against $2, $hits cache hits against $3" >&2
+        rc=1
+    fi
+}
 row() {
     t=$(tr -d '\r' < "$LOG" | grep -a "^T_$1 [0-9]" | awk '{print $2}' | sort -n | head -1)
     [ -n "$t" ] || fail "no time for $1 in $LOG"
@@ -87,5 +116,18 @@ row fatread 20 "the FAT32 file read twice, cold and from the cache"
 row exsmall 60 "16 MiB written on exFAT in 4 KiB calls"
 row fatsmall 60 "16 MiB written on FAT32 in 4 KiB calls"
 row exfiles 30 "two hundred 32 KiB files written on exFAT"
+# The hits' bounds are three times the counts measured on 2026-09-10 (exFAT
+# write 131 thousand, FAT32 write 427 thousand, exFAT small 37 thousand,
+# FAT32 small 115 thousand, exFAT files 21 thousand) and far under the
+# counts with a chain hint dropped (2.7 million, 10 million, 8.4 million,
+# 17 million and 356 thousand), where the driver walks a chain from its
+# start for every call. The commands' bounds are twice the counts measured
+# (4618, 7388, 40970, 49764 and 17727) and under the counts with exFAT's
+# run entries written through one at a time.
+counts exwrite 9300 400000 "the exFAT write's counts"
+counts fatwrite 14800 1300000 "the FAT32 write's counts"
+counts exsmall 82000 120000 "the exFAT small writes' counts"
+counts fatsmall 99600 350000 "the FAT32 small writes' counts"
+counts exfiles 35500 65000 "the exFAT files' counts"
 [ "$rc" -eq 0 ] || fail "a row is over its bound"
 echo "diskrate-test: PASS"
