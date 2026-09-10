@@ -62,89 +62,145 @@ WORK=$(mktemp -d "${TMPDIR:-/tmp}/rach2-run.XXXXXX")
 # put the shim at /bin/qemu-system-i386 and delete / on the way out.
 [ -d "$WORK" ] || { echo "run: no scratch directory" >&2; exit 1; }
 
-# What this run owns: every process it starts is in its process group, since
-# a non-interactive shell's jobs, and the makes, recipes and machines under
-# them, inherit it; the machines are in the ledgers besides, since the
-# harness's deadline puts a machine in a group of its own. A signal stops
-# further starts, sends TERM to the group and the ledgers, KILL to what is
-# still there two seconds later, prints what the unfinished suites had
-# written, and only then removes the scratch and the lock. A second signal
-# while that runs is ignored, and the exit is the signal's.
+# What this run owns: its descendants by the process table, which reaches
+# the makes, recipes and machines under it and the ones the harness's
+# deadline put in groups of their own; the members of its process group;
+# and the machines in the ledgers. The end of a run, on a signal or in the
+# ordinary way, stops what is still owned and waits until it is gone: TERM,
+# then KILL two seconds later, five seconds at most, and what is left after
+# that is named. A signal besides stops further starts and prints what the
+# unfinished suites had written; the exit is the signal's. `finish` runs
+# once: the trap calls it and the EXIT trap finds it done.
 OWN_PGID=$(ps -o pgid= -p $$ | tr -d ' ')
 PGID=$OWN_PGID
 [ "$PGID" = "$$" ] || PGID="" # not a group of its own: only the ledgers are stopped
 STOPPING=""
-owned_kill() {
-    sig=$1
+owned() {
+    # The listing's own processes, the substitution's subshell and what it
+    # started, are not the run's: every process under the one that ran `ps`
+    # is left out, whether reached through the table or through the group.
+    ps -axo pid=,ppid= > "$WORK/ps" 2>/dev/null &
+    self=$!; wait "$self"
+    { [ -n "$PGID" ] && pgrep -g "$PGID" 2>/dev/null; :; } > "$WORK/group"
+    awk -v root="$$" -v self="$self" '
+        FILENAME == ARGV[1] { kid[$1] = $2; next }
+        { group[$1] = 1 }
+        END {
+            for (q = self; (q in kid) && q != root; q = kid[q]) skip[q] = 1
+            for (p in kid) {
+                q = p; n = 0
+                while ((q in kid) && q != root && !(q in skip) && n++ < 1000) q = kid[q]
+                if (q in skip) continue
+                if (q == root && p != root || p in group) print p
+            }
+            for (p in group) if (!(p in kid)) print p
+        }' "$WORK/ps" "$WORK/group"
     for f in "$WORK"/*.machines; do
-        [ -f "$f" ] || continue
-        while read -r pid; do [ -n "$pid" ] && kill "-$sig" "$pid" 2>/dev/null; done < "$f"
+        [ -f "$f" ] && cat "$f"
     done
-    [ -n "$PGID" ] || return 0
-    for pid in $(pgrep -g "$PGID" 2>/dev/null); do
-        [ "$pid" = "$$" ] || kill "-$sig" "$pid" 2>/dev/null
+    :
+}
+owned_live() { owned | sort -u | while read -r p; do [ -n "$p" ] && [ "$p" != "$$" ] && kill -0 "$p" 2>/dev/null && echo "$p"; done; }
+owned_kill() {
+    for pid in $(owned_live); do kill "-$1" "$pid" 2>/dev/null; done
+}
+owned_wait() { # owned_wait TENTHS: 0 when nothing owned is left within the time
+    i=0
+    while [ "$i" -lt "$1" ]; do
+        [ -z "$(owned_live)" ] && return 0
+        sleep 0.1; i=$((i + 1))
     done
+    [ -z "$(owned_live)" ]
+}
+owned_stop() {
+    owned_kill TERM
+    owned_wait 20 && return 0
+    owned_kill KILL
+    owned_wait 30 && return 0
+    echo "run: still running after the stop: $(owned_live | tr '\n' ' ')" >&2
+    return 1
 }
 SIGNALLED=""
+FINISHED=""
+# shellcheck disable=SC2329 # run from the traps
 finish() {
+    [ -z "$FINISHED" ] || return 0
+    FINISHED=1
     trap '' INT TERM HUP
     STOPPING=1
-    if [ -n "$SIGNALLED" ]; then
-        owned_kill TERM
-        sleep 2
-        owned_kill KILL
-        for suite in $RUNNING_NAMES; do
-            [ -f "$WORK/$suite.out" ] && [ ! -f "$WORK/$suite.rc" ] || continue
+    for suite in $RUNNING_NAMES; do
+        [ -f "$WORK/$suite.out" ] || continue
+        if [ -f "$WORK/$suite.rc" ]; then
+            cat "$WORK/$suite.out" # ended, not yet reported
+        elif [ -n "$SIGNALLED" ]; then
             echo "run: $suite: stopped before its end; its output so far:"
             cat "$WORK/$suite.out"
-        done
-    fi
+        fi
+    done
+    [ -z "$(owned_live)" ] || owned_stop
     rm -rf "$WORK"
     lock_release
 }
 RUNNING=""; RUNNING_NAMES=""
 trap 'finish' EXIT
 trap 'SIGNALLED=1; finish; exit 130' INT
-trap 'SIGNALLED=1; finish; exit 143' TERM HUP
-
+trap 'SIGNALLED=1; finish; exit 143' TERM
+trap 'SIGNALLED=1; finish; exit 129' HUP
 # One run at a time on a tree: two share `build/` and its images, and each
 # suite kills what runs under its directory at its start. The lock is a
-# directory, made atomically, holding the owner's pid, process group and
-# arguments. A lock whose owner is gone is taken over only when nothing of
-# its group is left either: a runner killed with KILL cannot clean up, and
+# directory, made atomically, holding the owner's pid, process group,
+# scratch directory and arguments. A lock with no owner file yet is one
+# being taken this moment, until it is ten seconds old. A lock whose owner
+# is gone is taken over only when nothing of its group and none of its
+# ledgers' machines is left: a runner killed with KILL cannot clean up, and
 # its makes and machines may still be running; they are named for the
-# person to stop. The pid alone does not say the owner is alive, since pids
-# are reused; the pid is the owner's while its group is the recorded one.
+# person to stop. The takeover moves the old lock aside by rename, which
+# one taker at most can do. The pid alone does not say the owner is alive,
+# since pids are reused; the pid is the owner's while its group is the
+# recorded one.
 LOCK="$REPO/build/.run.lock"
+lock_field() { sed -n "s/^$1 //p" "$LOCK/owner" 2>/dev/null; }
 lock_owner_alive() {
-    opid=$(sed -n 's/^pid //p' "$LOCK/owner" 2>/dev/null)
-    opgid=$(sed -n 's/^pgid //p' "$LOCK/owner" 2>/dev/null)
-    [ -n "$opid" ] && [ "$(ps -o pgid= -p "$opid" 2>/dev/null | tr -d ' ')" = "$opgid" ]
+    opid=$(lock_field pid)
+    [ -n "$opid" ] && [ "$(ps -o pgid= -p "$opid" 2>/dev/null | tr -d ' ')" = "$(lock_field pgid)" ]
 }
-lock_group_survivors() {
-    opgid=$(sed -n 's/^pgid //p' "$LOCK/owner" 2>/dev/null)
-    [ -n "$opgid" ] && pgrep -g "$opgid" 2>/dev/null | tr '\n' ' '
+lock_being_taken() {
+    [ ! -f "$LOCK/owner" ] && [ -n "$(find "$LOCK" -maxdepth 0 -newermt '-10 seconds' 2>/dev/null)" ]
+}
+lock_survivors() {
+    opgid=$(lock_field pgid)
+    {
+        [ -n "$opgid" ] && pgrep -g "$opgid" 2>/dev/null
+        owork=$(lock_field work)
+        [ -n "$owork" ] && cat "$owork"/*.machines 2>/dev/null
+        :
+    } | sort -u | while read -r p; do [ -n "$p" ] && kill -0 "$p" 2>/dev/null && echo "$p"; done | tr '\n' ' '
 }
 lock_take() {
     mkdir -p "$REPO/build"
     if mkdir "$LOCK" 2>/dev/null; then
         :
-    elif lock_owner_alive; then
-        echo "run: another run holds this tree: $(sed -n 's/^pid //p' "$LOCK/owner"), $(sed -n 's/^args //p' "$LOCK/owner"), since $(sed -n 's/^since //p' "$LOCK/owner")" >&2
+    elif lock_being_taken; then
+        echo "run: another run is taking this tree" >&2
         return 1
-    elif [ -n "$(lock_group_survivors)" ]; then
-        echo "run: a run that is gone left work running: pids $(lock_group_survivors); stop them before the next run" >&2
+    elif lock_owner_alive; then
+        echo "run: another run holds this tree: $(lock_field pid), $(lock_field args), since $(lock_field since)" >&2
+        return 1
+    elif [ -n "$(lock_survivors)" ]; then
+        echo "run: a run that is gone left work running: pids $(lock_survivors); stop them before the next run" >&2
         return 1
     else
-        echo "run: taking over the lock a run left: $(sed -n 's/^pid //p' "$LOCK/owner" 2>/dev/null), $(sed -n 's/^args //p' "$LOCK/owner" 2>/dev/null)"
-        rm -rf "$LOCK"
+        echo "run: taking over the lock a run left: $(lock_field pid), $(lock_field args)"
+        mv "$LOCK" "$LOCK.old.$$" 2>/dev/null || { echo "run: another run took the tree first" >&2; return 1; }
+        rm -rf "$LOCK.old.$$"
         mkdir "$LOCK" 2>/dev/null || { echo "run: another run took the tree first" >&2; return 1; }
     fi
-    { echo "pid $$"; echo "pgid $OWN_PGID"; echo "since $(date '+%Y-%m-%d %H:%M:%S')"; echo "args $*"; } > "$LOCK/owner.new"
+    { echo "pid $$"; echo "pgid $OWN_PGID"; echo "work $WORK"; echo "since $(date '+%Y-%m-%d %H:%M:%S')"; echo "args $*"; } > "$LOCK/owner.new"
     mv "$LOCK/owner.new" "$LOCK/owner"
     LOCKED=1
 }
 LOCKED=""
+# shellcheck disable=SC2329 # run from finish, from the traps
 lock_release() {
     [ -n "$LOCKED" ] && [ "$(sed -n 's/^pid //p' "$LOCK/owner" 2>/dev/null)" = "$$" ] && rm -rf "$LOCK"
     LOCKED=""
@@ -240,8 +296,15 @@ check_machines() {
 # command ends while one runs in the foreground: a signal then stops the run
 # at once, and the group kill takes the make and what it started.
 run_make() {
-    make -C "$REPO" --no-print-directory "$@" &
-    wait $!
+    if command -v perl >/dev/null 2>&1; then
+        # A background job of a non-interactive shell ignores INT and QUIT
+        # and would hand that on to every test; perl puts them back.
+        perl -e '$SIG{INT} = "DEFAULT"; $SIG{QUIT} = "DEFAULT"; exec @ARGV or die "run: exec: $!\n"' -- \
+            make -C "$REPO" --no-print-directory "$@" &
+        wait $!
+    else
+        make -C "$REPO" --no-print-directory "$@"
+    fi
 }
 
 # The name and the tools were checked before anything was built, so this does
@@ -259,9 +322,14 @@ run_one() {
         # What the target names is built first and hashed, then the suite
         # runs against those files; one make of both would hash a build in
         # progress or a suite already run.
-        # shellcheck disable=SC2046 # the prerequisites are one word each
-        run_make -j $(closure "run-$1" | grep '^build/') || rc=1
-        [ "$rc" = 0 ] && take_hashes "run-$1" "$WORK/hashes.before"
+        # An e1000 suite's target is a wrapper that runs the plain one with
+        # NIC set, so the products are the plain target's.
+        target="run-$1"
+        case "$1" in *-e1000) target="run-${1%-e1000}" ;; esac
+        products=$(closure "$target" | grep '^build/')
+        # shellcheck disable=SC2086 # the prerequisites are one word each
+        [ -z "$products" ] || run_make -j $products || rc=1
+        [ "$rc" = 0 ] && take_products "$target"
         [ "$rc" = 0 ] && { run_make "run-$1" || rc=1; }
     else
         run_make "run-$1" || rc=1
@@ -284,11 +352,15 @@ run_one() {
 # left in POOL_FAILED rather than printed, because a caller reading this
 # through a command substitution would run it in a subshell and the output
 # would go there instead of to the person waiting. With RACH2_STOP_ON_FAIL
-# set, the first failure stops the pool and nothing queued starts.
+# set, the first failure stops the pool: what is queued does not start, and
+# what is running is stopped and reported as stopped.
 POOL_FAILED=""
 run_pool() {
-    POOL_FAILED=""; RUNNING=""; RUNNING_NAMES=""; pending="$1"; stopped=""
+    POOL_FAILED=""; RUNNING=""; RUNNING_NAMES=""; stopped=""
+    # shellcheck disable=SC2086 # the names are one word each; this drops the leading space
+    set -- $1; pending="$*"
     while [ -n "$pending" ] || [ -n "$RUNNING_NAMES" ]; do
+        pool_collect
         # Admit while there is room and nothing has stopped the pool.
         while [ -n "$pending" ] && [ -z "$stopped" ] && [ -z "$STOPPING" ] &&
               [ "$(alive "$RUNNING")" -lt "$WORKERS" ]; do
@@ -300,31 +372,46 @@ run_pool() {
             RUNNING="$RUNNING $!"
             RUNNING_NAMES="$RUNNING_NAMES $suite"
         done
-        # Collect what ended, in the order it ended.
-        for suite in $RUNNING_NAMES; do
-            if [ -f "$WORK/$suite.rc" ]; then
-                :
-            elif job_of "$suite"; then
-                continue
-            else
-                echo 1 > "$WORK/$suite.rc" # gone with no result
-                echo "run: $suite: ended without a result" >> "$WORK/$suite.out"
-            fi
-            cat "$WORK/$suite.out" 2>/dev/null
-            read -r rc < "$WORK/$suite.rc"
-            [ "$rc" = 0 ] || POOL_FAILED="$POOL_FAILED $suite"
-            [ "$rc" = 0 ] || [ -z "${RACH2_STOP_ON_FAIL:-}" ] || stopped=1
-            RUNNING_NAMES=$(echo " $RUNNING_NAMES " | sed "s/ $suite / /" | sed 's/^ *//;s/ *$//')
-        done
-        [ -n "$stopped" ] && [ -n "$pending" ] && {
-            echo "run: stopped on the first failure; not started:$(echo " $pending" | sed 's/  */ /g')"
-            POOL_FAILED="$POOL_FAILED $pending"; pending=""
-        }
+        pool_collect
+        if [ -n "$stopped" ]; then
+            [ -z "$pending" ] || {
+                echo "run: stopped on the first failure; not started:$(echo " $pending" | sed 's/  */ /g')"
+                POOL_FAILED="$POOL_FAILED $pending"; pending=""
+            }
+            [ -z "$RUNNING_NAMES" ] || {
+                echo "run: stopped on the first failure; stopped part way:$(echo " $RUNNING_NAMES" | sed 's/  */ /g')"
+                owned_stop
+                for suite in $RUNNING_NAMES; do
+                    [ -f "$WORK/$suite.rc" ] || { echo "run: $suite: stopped" >> "$WORK/$suite.out"; echo 1 > "$WORK/$suite.rc"; }
+                done
+                pool_collect
+            }
+        fi
         [ -z "$pending" ] && [ -z "$RUNNING_NAMES" ] || sleep 0.2
     done
     RUNNING=""
 }
 
+# The suites that ended since the last look, each reported once and its
+# held output removed, so an interrupted run does not print it twice.
+pool_collect() {
+    for suite in $RUNNING_NAMES; do
+        if [ -f "$WORK/$suite.rc" ]; then
+            :
+        elif job_of "$suite"; then
+            continue
+        else
+            echo 1 > "$WORK/$suite.rc" # gone with no result
+            echo "run: $suite: ended without a result" >> "$WORK/$suite.out"
+        fi
+        cat "$WORK/$suite.out" 2>/dev/null
+        rm -f "$WORK/$suite.out"
+        read -r rc < "$WORK/$suite.rc"
+        [ "$rc" = 0 ] || POOL_FAILED="$POOL_FAILED $suite"
+        [ "$rc" = 0 ] || [ -z "${RACH2_STOP_ON_FAIL:-}" ] || stopped=1
+        RUNNING_NAMES=$(echo " $RUNNING_NAMES " | sed "s/ $suite / /" | sed 's/^ *//;s/ *$//')
+    done
+}
 # Whether the job running `$1` is still alive.
 job_of() {
     pid=$(cat "$WORK/$1.job" 2>/dev/null)
@@ -334,27 +421,31 @@ job_of() {
 alive() { n=0; for p in $1; do kill -0 "$p" 2>/dev/null && n=$((n + 1)); done; echo "$n"; }
 
 # What a run reads, and must not change while it runs: the scripts that
-# decide a result, the tools that judge one, the kernels, and the products
-# `prepare-all` builds, read from make's own database (`make -pn`), which
-# lists every target with its prerequisites expanded, so the list is what
-# make builds and not a list kept by hand. The files are hashed before the
-# suites start and again at the end; a difference, or a file gone, voids
-# the run by name. Two equal hashes do not say the file stood still in
-# between; they say what the result was made with is what is there now.
+# decide a result and the tools that judge one, hashed when the run starts,
+# and the kernels and the products the run's target builds, hashed once
+# they are built, read from make's own database (`make -pn`), which lists
+# every target with its prerequisites expanded, so the list is what make
+# builds and not a list kept by hand. Both are hashed again at the end,
+# whatever the result; a difference, or a file gone, voids the run by name.
+# Two equal hashes do not say the file stood still in between; they say
+# what the result was made with is what is there now.
 closure() { # closure TARGET: the file prerequisites reachable from TARGET
     make -C "$REPO" -pn "$1" 2>/dev/null | awk -v root="$1" '
-        /^#/ || /^\t/ || /^$/ { next }
+        /^#/ || /^$/ { next }
         /^[^ \t:=]+:[^=]/ {
             t = $1; sub(/:$/, "", t)
             n = split($0, f, /[ \t]+/)
             for (i = 2; i <= n; i++) if (f[i] != "" && f[i] != "|") deps[t] = deps[t] " " f[i]
+            cur = t; next
         }
+        /^\t/ && cur == "prepare-all" { # its halves are named by its recipe
+            n = split($0, f, /[ \t]+/)
+            for (i = 1; i <= n; i++) if (f[i] ~ /^prepare-/) deps[cur] = deps[cur] " " f[i]
+            next
+        }
+        /^\t/ { next }
         END {
             queue[1] = root; head = 1; tail = 1; seen[root] = 1
-            if (root == "prepare-all") {
-                queue[++tail] = "prepare-images"; seen["prepare-images"] = 1
-                queue[++tail] = "prepare-products"; seen["prepare-products"] = 1
-            }
             while (head <= tail) {
                 t = queue[head++]
                 m = split(deps[t], d, " ")
@@ -363,35 +454,46 @@ closure() { # closure TARGET: the file prerequisites reachable from TARGET
             for (x in seen) if (x ~ /^build\// || x ~ /\//) print x
         }' | sort
 }
-inventory() { # inventory TARGET: the paths hashed for a run of TARGET's suites
-    {
+present() { ( cd "$REPO" && while read -r f; do [ -f "$f" ] && echo "$f"; done ) | sort -u; }
+scripts_inventory() {
+    ( cd "$REPO" && {
         echo tests/run; echo tests/registry; echo tests/system/suites.mk; echo Makefile
         ls mk/*.mk tests/system/*.sh tests/system/suites/*.sh tests/system/accept/*.sh \
            tools/image/*.sh krffs/*.sh tools/verify/check.sh krffs/manifests/* 2>/dev/null
-        ls build/rach2*/kernel 2>/dev/null
-        closure "$1"
-    } | while read -r f; do [ -f "$REPO/$f" ] && echo "$f"; done | sort -u
+    } ) | present
+}
+products_inventory() { # products_inventory TARGET
+    ( cd "$REPO" && ls build/rach2*/kernel 2>/dev/null; closure "$1" ) | present
 }
 hasher() {
     if command -v shasum >/dev/null 2>&1; then shasum -a 256; else sha256sum; fi
 }
-take_hashes() { # take_hashes TARGET OUT
-    inventory "$1" > "$WORK/inventory"
-    ( cd "$REPO" && while read -r f; do hasher < "$f" | sed "s|-\$|$f|"; done < "$WORK/inventory" ) > "$2"
-}
-check_hashes() { # check_hashes BEFORE: 0 when nothing hashed differs or is gone
+hash_list() { # hash_list LIST OUT: each file's hash, or `gone` for one missing
     ( cd "$REPO" && while read -r f; do
         if [ -f "$f" ]; then hasher < "$f" | sed "s|-\$|$f|"; else echo "gone  $f"; fi
-      done < "$WORK/inventory" ) > "$WORK/hashes.after"
-    if cmp -s "$1" "$WORK/hashes.after"; then
-        return 0
-    fi
-    diff "$1" "$WORK/hashes.after" | awk '/^>/ {print $3}' | sort -u | while read -r f; do
-        echo "run: voided: $f changed during the run" >&2
-    done
-    return 1
+      done < "$1" ) > "$2"
 }
-
+take_scripts() {
+    scripts_inventory > "$WORK/inventory.scripts"
+    hash_list "$WORK/inventory.scripts" "$WORK/hashes.scripts"
+}
+take_products() { # take_products TARGET
+    products_inventory "$1" > "$WORK/inventory.products"
+    hash_list "$WORK/inventory.products" "$WORK/hashes.products"
+}
+check_hashes() { # 0 when nothing hashed differs or is gone
+    voided=""
+    for kind in scripts products; do
+        [ -f "$WORK/inventory.$kind" ] || continue
+        hash_list "$WORK/inventory.$kind" "$WORK/hashes.$kind.after"
+        cmp -s "$WORK/hashes.$kind" "$WORK/hashes.$kind.after" && continue
+        diff "$WORK/hashes.$kind" "$WORK/hashes.$kind.after" | awk '/^>/ {print $3}' | sort -u | while read -r f; do
+            echo "run: voided: $f changed during the run" >&2
+        done
+        voided=1
+    done
+    [ -z "$voided" ]
+}
 # The components first, in a Make of their own: an image rule that meets a
 # program and the component that builds it in one Make reads the program's
 # time before the component has run, and keeps the old image. Then, for a
@@ -434,6 +536,11 @@ run_set() {
     for suite in $serial; do run_one "$suite" || failed="$failed $suite"; done
     RUNNING=""
     [ -n "$STOPPING" ] && return 1
+    if [ -n "$failed" ] && [ -n "${RACH2_STOP_ON_FAIL:-}" ]; then
+        echo "run: stopped on a failure; not started:$pooled$lone"
+        echo "run: result: failed:$failed" >&2
+        return 1
+    fi
     [ -n "$pooled" ] && { run_pool "$pooled"; failed="$failed$POOL_FAILED"; }
     RUNNING=serial
     for suite in $lone; do
@@ -497,16 +604,18 @@ done
 check_host $diskimage $sockets || exit 1
 
 lock_take "$@" || exit 1
+take_scripts
 build_components
+rc=0
 if [ "$#" -eq 1 ]; then
     RUNNING=serial
-    run_one "$1" alone || exit 1
+    run_one "$1" alone || rc=1
     RUNNING=""
-    check_hashes "$WORK/hashes.before" || exit 1
 else
     prepare
-    take_hashes prepare-all "$WORK/hashes.before"
-    run_set "$*" || { check_hashes "$WORK/hashes.before"; exit 1; }
-    check_hashes "$WORK/hashes.before" || exit 1
-    echo "run: result: all $# suites passed"
+    take_products prepare-all
+    run_set "$*" || rc=1
 fi
+check_hashes || rc=1
+[ "$rc" = 0 ] && [ "$#" -gt 1 ] && echo "run: result: all $# suites passed"
+exit "$rc"

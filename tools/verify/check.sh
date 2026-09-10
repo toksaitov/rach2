@@ -443,19 +443,29 @@ fi
 #     set's pool never has two suites building one at once. Both sides come
 #     from make's own database, prerequisites expanded, and the closure is
 #     transitive, so a product reached through an image counts as prepared.
+#     `prepare-all` builds its halves from its recipe, so the recipe is read
+#     for the targets it names; a half dropped from it is found.
 hr "15/15 run- targets' products against prepare-all"
-make -C "$REPO" -pn prepare-all > "$VDIR/_db.txt" 2>/dev/null
+make -C "$REPO" -pn prepare-all > "$VDIR/_db.txt" 2>/dev/null || { echo "  FAIL: make -pn prepare-all failed"; fail=1; }
 unprepared=$(awk '
-    /^#/ || /^\t/ || /^$/ { next }
+    /^#/ || /^$/ { next }
     /^[^ \t:=]+:[^=]/ {
         t = $1; sub(/:$/, "", t)
         n = split($0, f, /[ \t]+/)
         for (i = 2; i <= n; i++) if (f[i] != "" && f[i] != "|") deps[t] = deps[t] " " f[i]
         if (t ~ /^run-/) runs[t] = 1
+        cur = t; next
     }
+    # prepare-all reaches its two halves through its recipe, not its
+    # prerequisites; only the prepare- targets that recipe names count.
+    /^\t/ && cur == "prepare-all" {
+        n = split($0, f, /[ \t]+/)
+        for (i = 1; i <= n; i++) if (f[i] ~ /^prepare-/) deps[cur] = deps[cur] " " f[i]
+        next
+    }
+    /^\t/ { next }
     END {
-        queue[1] = "prepare-all"; queue[2] = "prepare-images"; queue[3] = "prepare-products"
-        head = 1; tail = 3; seen["prepare-all"] = 1; seen["prepare-images"] = 1; seen["prepare-products"] = 1
+        queue[1] = "prepare-all"; head = 1; tail = 1; seen["prepare-all"] = 1
         while (head <= tail) {
             t = queue[head++]
             m = split(deps[t], d, " ")
