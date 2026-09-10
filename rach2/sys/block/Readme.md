@@ -1,6 +1,6 @@
 # `block/`: disk access
 
-The block layer publishes one whole-disk device as `block0`. The legacy ATA driver and the AHCI driver implement the same synchronous, sector-addressed interface. MBR discovery, KRFFS, the page cache, and the raw disk devices use that interface without selecting a driver. The mounted file systems reach it through `block_request`, the one entry that also serves a device that sleeps its caller.
+The block layer publishes one whole-disk device as `block0`. The legacy ATA driver and the AHCI driver implement the same synchronous, sector-addressed interface. MBR discovery, KRFFS, the page cache, and the raw disk devices use that interface without selecting a driver. The mounted file systems reach it through `block_request`, the one entry that also serves a device that sleeps its caller. The layer, the partition parser, the raw windows and the file systems count in 512-byte sectors, so a drive whose IDENTIFY word 106 says its logical sector is another size is refused by name by both drivers and no node is published; this is a restriction, kept as one, and `ahci_hosttest` proves the refusal with IDENTIFY words that name a 4096-byte sector.
 
 ## Block devices and partitions
 

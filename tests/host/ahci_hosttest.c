@@ -417,6 +417,15 @@ static void complete_command(void)
 
 /* ---- the rows ---- */
 
+static int same_text(const char *a, const char *b)
+{
+    while (*a && *a == *b) {
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
+
 static int fails;
 
 #define CHECK(what, cond)                 \
@@ -592,6 +601,30 @@ int main(void)
        a row that ran the whole of `ahci_init` would pass whenever anything at
        all refused, which is every row on a model that cannot answer an
        IDENTIFY. What a step returned is what is checked. */
+
+    /* IDENTIFY data under the driver's control: a device whose logical
+       sector is not 512 bytes, word 106 with bit 14 valid and bit 12 set and
+       words 117 and 118 giving 2048 words a sector, is refused by name, the
+       restriction the block Readme states; the same words with bit 12 clear
+       are taken, with the sector count read from words 100 to 103. */
+    model_reset();
+    {
+        volatile uint16_t *w = (volatile uint16_t *)ahci_idbuf;
+        int i;
+
+        for (i = 0; i < 256; i++) {
+            w[i] = 0;
+        }
+        w[100] = 0x1000u;
+        w[106] = 0x5000u;
+        w[117] = 0x0800u;
+        w[118] = 0;
+        CHECK("a 4096-byte logical sector is refused", ahci_identify(&ahci_disks[0]) != 0);
+        CHECK("by name", same_text(ahci_err, "the device's logical sector is not 512 bytes"));
+        w[106] = 0x4000u;
+        CHECK("and the same device with 512-byte sectors is taken",
+              ahci_identify(&ahci_disks[0]) == 0 && ahci_disks[0].sectors == 0x1000u);
+    }
 
     /* The controller's own reset. */
     model_reset();
