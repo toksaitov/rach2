@@ -15,6 +15,10 @@
  * reschedule leaves the reader waiting for the next tick, and the record says
  * so.
  *
+ * With the argument `random` the child is inside a large `getrandom`
+ * instead of spinning, which is the loop inside one system call that the
+ * scheduler's service point must break.
+ *
  * Prints "KEYLAT OK" and exits 0. Freestanding; direct int 0x80.
  */
 
@@ -23,11 +27,13 @@ typedef unsigned int size_t;
 #define STDIN_FILENO  0
 #define STDOUT_FILENO 1
 
-#define SYS_EXIT  1
-#define SYS_FORK  2
-#define SYS_READ  3
-#define SYS_WRITE 4
-#define SYS_KILL  37
+#define SYS_EXIT      1
+#define SYS_FORK      2
+#define SYS_READ      3
+#define SYS_WRITE     4
+#define SYS_KILL      37
+#define SYS_GETRANDOM 355
+#define GRND_INSECURE 0x0004u
 
 #define SIGKILL 9
 
@@ -61,10 +67,24 @@ static void puts(const char *s)
     syscall3(SYS_WRITE, STDOUT_FILENO, (int)(size_t)s, (int)strlen(s));
 }
 
-void _start(void)
+/* The other tenant's buffer in the `random` mode: a call that fills it is
+   the loop inside one system call that the service point must break. */
+static unsigned char random_buf[8u << 20];
+
+__asm__(".global _start\n"
+        "_start:\n"
+        "   mov %esp, %eax\n"
+        "   push %eax\n"
+        "   call probe_main\n");
+
+void probe_main(unsigned *sp)
 {
+    int argc = (int)sp[0];
+    char **argv = (char **)(sp + 1);
+    int random_mode = argc > 1 && argv[1][0] == 'r';
     int child;
     int n;
+    unsigned off;
 
     child = syscall3(SYS_FORK, 0, 0, 0);
     if (child < 0) {
@@ -77,7 +97,28 @@ void _start(void)
     }
     if (child == 0) {
         /* The processor's other tenant: it never sleeps, so the reader can
-           only run if something takes the processor away from it. */
+           only run if something takes the processor away from it. In the
+           `random` mode it is inside a system call nearly all the time, a
+           `getrandom` of eight mebibytes made again as soon as it returns,
+           touched first so no page fault is inside the call's time; a
+           reader woken then runs only if the call gives way. */
+        if (random_mode) {
+            for (off = 0; off < sizeof(random_buf); off += 4096) {
+                random_buf[off] = 1;
+            }
+            for (n = 0;; n++) {
+                if (syscall3(SYS_GETRANDOM, (int)(size_t)random_buf, (int)sizeof(random_buf),
+                             GRND_INSECURE) != (int)sizeof(random_buf)) {
+                    puts("KEYLAT FAIL: getrandom did not fill the buffer\n");
+                    sys_exit(1);
+                }
+                if (n == 0) {
+                    /* Said once, so the row knows the tenant is in its loop
+                       before the key is sent. */
+                    puts("KEYLAT HOG\n");
+                }
+            }
+        }
         for (;;) {
             __asm__ __volatile__("" ::: "memory");
         }

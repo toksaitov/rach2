@@ -1,5 +1,7 @@
 #include "sched.h"
 
+#include "../lib/kirq.h"
+
 /** Nonzero once preemptive scheduling is enabled; schedule() is a no-op
  * until then. */
 static volatile int _sched_enabled = 0;
@@ -163,6 +165,24 @@ void sched_take_preempt(void)
         current_proc->need_resched = 0;
         schedule();
     }
+}
+
+/**
+ * Give way inside a system call that does not return for a while.
+ *
+ * A call that loops over a large buffer keeps the processor for the whole
+ * loop, since the tick's switch is taken at the call's exit; a reader woken
+ * by a keystroke then waits for the loop. Between two pieces of such a
+ * loop, with nothing half done, the call takes the switch here as its exit
+ * would: interrupts off, the request cleared before the switch, and the
+ * process still inside its call.
+ */
+void sched_service_point(void)
+{
+    uint32_t flags = kirq_save();
+
+    sched_take_preempt();
+    kirq_restore(flags);
 }
 
 /* The idle marker and the two tick counters. `volatile` because the timer

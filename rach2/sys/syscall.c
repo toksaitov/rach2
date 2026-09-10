@@ -8387,6 +8387,11 @@ static int32_t sys_getrandom(isr_params_t *params)
             return (done > 0) ? (int32_t)done : -EFAULT;
         }
         done += chunk;
+        /* A large call gives way every 4 KiB, between two pieces, so a
+         * reader the tick woke does not wait for the whole call. */
+        if ((done & 4095u) == 0) {
+            sched_service_point();
+        }
     }
     return (int32_t)done;
 }

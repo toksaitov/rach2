@@ -29,6 +29,10 @@ void sched_preempt(void);
  * for during the call, if one did. */
 void sched_take_preempt(void);
 
+/** Inside a long system call, between two of its pieces: the switch the
+ * tick asked for, taken now rather than at the call's exit. */
+void sched_service_point(void);
+
 /** A record is about to go: the scheduler must not start its next search
  * from it. */
 void sched_forget(process_t *p);
