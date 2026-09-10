@@ -30,6 +30,9 @@
  *                    raw mode, where the newline would be read as the
  *                    byte. `\\`, `\n`, `\r`, `\t` and `\xNN` in TEXT stand
  *                    for the bytes they name
+ *     sendfile=PATH  write the bytes of the file at PATH to the guest
+ *                    serial as they are, in one stream, which is how a
+ *                    flood of lines is typed back to back
  *     wait=SECS      sleep SECS, draining serial
  *     tcp=PORT       open a TCP connection to 127.0.0.1:PORT and close it,
  *                    which a `hostfwd=tcp::PORT-:GUESTPORT` in --net
@@ -641,19 +644,42 @@ static int hexval(int c)
     return -1;
 }
 
+/* Write `n` bytes whole, across short writes, reading the guest's output
+   between them so a guest that answers while it takes input is not blocked
+   on a full pipe, and giving up at the deadline; 0 when the pipe is gone or
+   the bytes could not be sent in time. The pipe is non-blocking (set at the
+   start), so a guest that has stopped taking input does not hold the
+   harness past its deadline. */
+static int send_bytes(const char *p, size_t n)
+{
+    while (n > 0) {
+        ssize_t w = write(child_in, p, n);
+
+        if (w < 0 && errno == EINTR)
+            continue;
+        if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            if (now() >= deadline || child_poll() >= 0)
+                return 0;
+            pump(now() + 0.05);
+            continue;
+        }
+        if (w <= 0)
+            return 0;
+        p += w;
+        n -= (size_t)w;
+    }
+    return 1;
+}
+
 static void send_text(const char *text, int newline)
 {
-    size_t n = strlen(text);
-
     if (child_in < 0)
         return;
-    if (write(child_in, text, n) < 0) {
-        /* A closed pipe means the guest is gone; the caller notices. */
+    /* A closed pipe means the guest is gone; the caller notices. */
+    if (!send_bytes(text, strlen(text)))
         return;
-    }
-    if (newline && write(child_in, "\n", 1) < 0) {
-        /* Same. */
-    }
+    if (newline)
+        send_bytes("\n", 1);
 }
 
 static void send_line(const char *text)
@@ -1041,6 +1067,7 @@ int main(int argc, char **argv)
     close(in_pipe[0]);
     close(out_pipe[1]);
     child_out = out_pipe[0];
+    fcntl(child_in, F_SETFL, O_NONBLOCK);
     child_in = in_pipe[1];
     fcntl(child_out, F_SETFL, O_NONBLOCK);
     signal(SIGPIPE, SIG_IGN);
@@ -1089,6 +1116,22 @@ int main(int argc, char **argv)
                         "HARNESS: step '%s' did not reach the "
                         "guest\n",
                         step);
+                step_failures++;
+            }
+        } else if (strncmp(step, "sendfile=", 9) == 0) {
+            FILE *sf = fopen(step + 9, "rb");
+            char chunk[4096];
+            size_t got;
+            int sent = sf != NULL;
+
+            while (sent && (got = fread(chunk, 1, sizeof(chunk), sf)) > 0) {
+                if (child_in < 0 || !send_bytes(chunk, got))
+                    sent = 0;
+            }
+            if (sf)
+                fclose(sf);
+            if (!sent) {
+                fprintf(stderr, "HARNESS: step '%s' did not reach the guest\n", step);
                 step_failures++;
             }
         } else if (strncmp(step, "key=", 4) == 0) {

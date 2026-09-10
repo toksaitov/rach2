@@ -1259,6 +1259,13 @@ LOAD_DISK = $(IMAGES_DIR)/load-test.disk
 run-load: rach2 tests krffs test-image $(MKMBR) $(HARNESS)
 	sh tests/system/suites/load.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(LOAD_DISK)
 
+# `tests/run conload`: every line typed at the console under load arrives,
+# numbered and checksummed, with the reader parked, as type-ahead, after an
+# interrupt character to a foreground child, and across an exec.
+CONLOAD_DISK = $(IMAGES_DIR)/conload-test.disk
+run-conload: rach2 tests krffs test-image $(MKMBR) $(HARNESS)
+	sh tests/system/suites/conload.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(CONLOAD_DISK)
+
 # `tests/run fatwrite`: FAT32 written from a program, read back after a
 # reboot, judged by the host's walk and mtools, taken through a crash and its
 # repair, written from BusyBox, and written by two processes under the lag.

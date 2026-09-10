@@ -83,6 +83,7 @@ Programs that need another boot, disk, network exchange, or result contract have
 * `tests/run crash` kills a machine without a clean unmount, halts one cleanly and powers one off, runs `dirtyprobe`, and checks each image with `fsck.krffs`.
 * `tests/run exitline` uses `vmfault` while checking which process-exit diagnostics are visible.
 * `tests/run console` types at the console for `stdintest` and `ttyprobe`, which block until something is typed, and checks the text they read back.
+* `tests/run conload` runs `conloadprobe` with five spinners and a writer syncing a file on a FAT32 volume, and types 360 lines at it, each numbered and carrying its Adler-32, as one stream per stage: 200 into a reader parked in read, which must all arrive within three seconds and through the port's interrupt; 60 while the probe spins without reading; 60 after an interrupt character typed behind 200 unread lines to a child holding the terminal, which must die of it though the discipline was full; and 40 before the probe execs itself. Every line must arrive in order with its sum, and the `/proc/console` counters are printed at the end.
 * `tests/run fault` runs `vmfault`, `vmro` and `winprobe`, which must be killed rather than served, and then runs a program that prints a token, which a kernel that took the fault with them could not do.
 * `tests/run socket` starts a host peer and runs `tcptest` and `udptest` against it.
 * `tests/run diskfull` fills a disk-backed root and requires `ENOSPC` rather than `EIO`.
