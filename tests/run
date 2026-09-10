@@ -400,6 +400,8 @@ pool_collect() {
             :
         elif job_of "$suite"; then
             continue
+        elif [ -f "$WORK/$suite.rc" ]; then
+            : # it ended, and wrote its result, between the two looks
         else
             echo 1 > "$WORK/$suite.rc" # gone with no result
             echo "run: $suite: ended without a result" >> "$WORK/$suite.out"
