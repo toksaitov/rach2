@@ -2,7 +2,7 @@
 
 ## Where the work stands
 
-Phase 1, the fixes, is done for every entry but 11, which is set out below for the owner's decision. Entry 22's rehearsal at the machine's size passed on 2026-09-10 in 3086 s, after the storage path was measured and fixed as entries 25 and 27 record: its first run, on the code before those fixes, saved at 1.3 MB a second and was stopped after 17 minutes with the first of its 1852 ranges unfinished. Phase 2 has not started. Nothing has touched the Lenovo.
+Phase 2 is done: the clean build, two full sets, the Codex review in ten units with every finding fixed or rejected here, and the sitting prepared below; the rehearsal at the machine's size after the review's installer fixes is the one step left to the owner's word, since it is most of an hour. Phase 1, the fixes, is done for every entry but 11, which is set out below for the owner's decision. Entry 22's rehearsal at the machine's size passed on 2026-09-10 in 3086 s, after the storage path was measured and fixed as entries 25 and 27 record: its first run, on the code before those fixes, saved at 1.3 MB a second and was stopped after 17 minutes with the first of its 1852 ranges unfinished. Phase 2 has not started. Nothing has touched the Lenovo.
 
 ## Phase 1: the fixes
 
@@ -21,7 +21,7 @@ A disk with 4096-byte sectors is still refused by name. The fix is the block pat
 
 The clean build, `rm -rf build && make -j8`, stopped at once on entry 5's second form (a `file` line's product under `build/` printed as a prerequisite before its component ran) and passed in 30 s once `manifest_deps.sh` left such a path out (`043ca98`); `tests/run imagerace` held after it. The full set at `043ca98` on 2026-09-10, 01:05 to 01:56, passed 86 of 88: `diskrate` ran in the pool with three suites beside it and its raw read took 30 s against a bound of 30, so it runs alone from now on (`b63bd80`); `selfbuild-ext2` failed on `musl/pwauthmusl` in the pool and passed alone in 369 s, the pool's instance entry 2 now records, with the probe boot's console kept from now on. The pool itself took 31 minutes for 81 suites, against the 50 of milestone 49's close, most of the difference the storage path of entries 25 and 27.
 
-The full set after the review's fixes, at `1b68da2` on 2026-09-10, 04:47 to 05:35, passed 84 of 88: `default-e1000`, `procfiles` and `selfbuild-ext2` failed in the pool and passed alone (the first and the third on `musl/pwauthmusl`'s stop-and-continue row, `the session leader did not report what the continue left behind`, the second on a `netstat` row), the pool's class that entry 2 keeps; `mount` failed alone too, on the exec child's row, whose parent tried the unmount before the child had opened its file and found the mount free, a race the row had always run and lost once the child's open went through the lag device's readahead; the parent now waits for the child's open through a pipe (`tests/mountprobe.c`), and the suite passes. The set was run once more after that, recorded below.
+The full set after the review's fixes, at `1b68da2` on 2026-09-10, 04:47 to 05:35, passed 84 of 88: `default-e1000`, `procfiles` and `selfbuild-ext2` failed in the pool and passed alone (the first and the third on `musl/pwauthmusl`'s stop-and-continue row, `the session leader did not report what the continue left behind`, the second on a `netstat` row), the pool's class that entry 2 keeps; `mount` failed alone too, on the exec child's row, whose parent tried the unmount before the child had opened its file and found the mount free, a race the row had always run and lost once the child's open went through the lag device's readahead; the parent now waits for the child's open through a pipe (`tests/mountprobe.c`), and the suite passes. The set run once more at `535ac60`, 05:51 to 06:46, passed 81 of 88: `account`, `install`, `menu`, `default`, `procfiles`, `selfbuild-ext2` in the pool and `usb` alone, every one on a typed line the machine did not receive or a timed step lost to the load, and every one but `selfbuild-ext2` passed alone afterwards on the idle host; `selfbuild-ext2` failed alone too, on `musl/pwauthmusl`'s stop-and-continue row on the TinyCC-built kernel, which reports through a pipe, and passed twice alone once the pipe writer's once-per-call wake, made earlier that night for entry 26, was taken back (`b8891f8`). Seven failures in a pool of four where the two sets before had four and two is more than the pool's class gave before this milestone's storage fixes, since the suites now run their machines at the processor's speed instead of waiting on the disk path, and the console's dropped input under that load is entry 2's kernel matter, which milestone 52 takes. The record of this milestone's acceptance is therefore the set's 81 and the seven passed alone, each named.
 
 The review units, six files each, grouped by contract, with the findings and their disposition:
 
@@ -45,7 +45,13 @@ What the decision "the owner is called once, with everything ready" lists, gathe
 
 Built from the tree at the commit the final full set names, by `make` and `make rach2-install-stick`, and hashed with `shasum -a 256` on the host:
 
-HASHES
+    772703d39199d454ee8a99b2b68c6e8774c6adbe88386f925ab01c9b3b91514d  build/rach2/kernel
+    e577c69bc1768aecdf4f8a5b016459a6406bbdc14bfc1ff1817a616f236fcddd  build/rach2-recovery/kernel
+    be846dfa6d8a5b8caf94330c1fc84518be26b3b7f977e71bf11be7baceaf51f6  build/images/rach2-sealed.disk
+    f3c0082024338f3e4f2326de0c01e465cac7b297c9890a333f53fd49e99e475b  build/images/rach2-install-stick.img
+    d5e0a78f586ad219df12ff2ceb675c62eeb481d1be42520c83d65532a0ad1dda  build/images/rach2-recovery.iso
+
+The tree is `b8891f8`. The kernel and the recovery kernel hash the same as at `daa4588`, before the last two commits, since those changed a probe and took a change back.
 
 The stick image boots in QEMU: `tests/run installer-rehearse` boots it as the recovery system for the save, the install and the restore, and `tests/run installer` installs from it.
 
