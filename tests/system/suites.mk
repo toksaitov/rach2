@@ -184,7 +184,7 @@ prepare-images: $(DEMO_CREDS) $(BINFIND) $(DEADLINE) $(ELFCHECK) $(HARNESS) $(HO
                 rach2-metal-image rach2-recovery-image $(SEALED_DISK) test-image \
                 $(INSTALL_STICK) $(INSTALL_TEST_STICK)
 prepare-all: components
-	$(MAKE) --no-print-directory prepare-images
+	$(MAKE) --no-print-directory prepare-images prepare-products
 # `tests/run addressed`: the address named on the boot line, and the proof that
 # it is the one in force. The address is deliberately not the one SLIRP hands
 # out: a kernel that ignored `rach2.ip=` entirely would still hold 10.0.2.15 and
@@ -711,9 +711,9 @@ run-raw: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(PCAPCHECK) $
 # machine's address. Its own target, like `tests/run ping`: it changes the
 # address out from under the machine and puts it back, and the last thing it
 # does is ping the gateway, which needs the network to answer.
-TWONIC_LOG = $(TEST_IMAGE).twonic.log
-MIXNIC_LOG = $(TEST_IMAGE).mixnic.log
-NICFAIL_LOG = $(TEST_IMAGE).nicfail.log
+TWONIC_LOG = $(TEST_IMAGE).twonic$(NIC_TAG).log
+MIXNIC_LOG = $(TEST_IMAGE).mixnic$(NIC_TAG).log
+NICFAIL_LOG = $(TEST_IMAGE).nicfail$(NIC_TAG).log
 run-netif: rach2 tests krffs test-image $(HARNESS)
 	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
@@ -1755,3 +1755,11 @@ run-dhcp-e1000:
 run-ssh-e1000:
 	$(MAKE) --no-print-directory NIC=e1000 run-ssh
 
+
+# The other products a `run-` target names, built with `prepare-images` before
+# a set's pool starts, so that no two pooled suites build one at once; they
+# are named here, after their definitions, since a prerequisite named before
+# its variable is defined expands to nothing. `tools/verify/check.sh` holds
+# every `run-` target's file prerequisites to `prepare-all`'s closure.
+prepare-products: $(MKEXFATFIXTURE) $(MKFATFIXTURE) $(OS_SIMPLE_EXT2) $(OS_REAL_SMALL_EXT2) \
+                  $(STICK_IMAGE) $(SELFBUILD_EXT2_VOL) $(IMAGE_TOOLS)
