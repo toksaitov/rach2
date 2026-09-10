@@ -4,8 +4,9 @@
  * host-deps: rach2/sys/fs/fat32.c rach2/sys/fs/bcache.c rach2/sys/block/chain.c
  * host-deps: rach2/sys/fs/fat32name.c rach2/sys/fs/fatcommon.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
- * host-deps: tests/host/compat/kheap_host.c tests/host/compat/blockmax_host.c
+ * host-deps: tests/host/compat/kheap_host.c tests/host/compat/devmodel.c
  * host-deps: tests/host/compat/pressure_host.c
+ * host-seconds: 150
  *
  * The volumes are mkfatfixture's, built here on first use the way the
  * bootctl test builds them. The well-formed volume (`--vfs`) must read back
@@ -22,6 +23,7 @@
 #include "../../rach2/sys/fs/bcache.h"
 #include "../../rach2/sys/lib/kerrno.h"
 #include "../../rach2/sys/proc/process.h"
+#include "devmodel.h"
 
 extern int printf(const char *fmt, ...);
 extern int snprintf(char *s, unsigned long n, const char *fmt, ...);
@@ -79,36 +81,54 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 
 /* ---- the image as a block device ---- */
 
+/* `image` is what the device answers, its medium with the writes pending
+   since the last barrier over it; `medium` is what a crash keeps, through
+   the model in tests/host/compat/devmodel.c. */
 static unsigned char image[IMG_BYTES];
+static unsigned char medium[IMG_BYTES];
 static unsigned char image_before[IMG_BYTES];
+static unsigned char snap[IMG_BYTES];
+static unsigned char snaps[DEVMODEL_KEEP_MOST + 2][IMG_BYTES]; /* the states at one stop */
+static struct devmodel model;
 static int reads_made;
 
 static int img_read(block_device_t *d, uint64_t lba, uint32_t count, void *buf)
 {
     (void)d;
     reads_made++;
-    if (lba + count > 8192u) {
-        return -5;
-    }
-    __builtin_memcpy(buf, image + lba * 512, count * 512);
-    return 0;
+    return devmodel_read(&model, lba, count, buf);
 }
 
-/* Writes land in the image. `stop_after` is the interruption matrix's
-   crash: the writes after that many fail without touching the image, which
-   leaves it exactly as a machine stopped after the Nth write would. */
+/* Writes go to the model, pending until the driver's next barrier.
+   `stop_after` is the interruption matrix's crash: the writes after that
+   many fail, as a machine stopped after the Nth write would, and what the
+   crash leaves is the model's snapshot. */
 static int writes_made;
 static int stop_after = -1;
 
 static int img_write(block_device_t *d, uint64_t lba, uint32_t count, const void *buf)
 {
     (void)d;
+    int rc;
+
     if (stop_after >= 0 && writes_made >= stop_after) {
         return -5;
     }
     writes_made++;
-    __builtin_memcpy(image + lba * 512, buf, count * 512);
-    return 0;
+    rc = devmodel_write(&model, lba, count, buf);
+    if (stop_after >= 0 && writes_made >= stop_after) {
+        model.stopped = 1; /* the Nth write is the last thing that lands */
+    }
+    return rc;
+}
+
+/* The medium as it stands, with nothing pending: what the tests that judge
+   the image directly see, since a barrier came before them. */
+static void settle(void)
+{
+    if (model.npending) {
+        devmodel_barrier(&model);
+    }
 }
 
 static block_device_t dev = {512, 8192u, BLOCK_FAULT_SAFE, 0, 0, 0, img_read, img_write, 0, 0, 0};
@@ -165,8 +185,9 @@ static void load(const char *opt)
         exit(1);
     }
     /* Whatever the cache still holds of the previous image goes into that
-       image before it is replaced, so the cache empties. */
+       image before it is replaced, so the cache empties; a stop is over. */
     stop_after = -1;
+    model.stopped = 0;
     bcache_sync(&dev);
     f = fopen(FIXDIR "/fat32_case.img", "rb");
     if (!f || fread(image, 1, IMG_BYTES, f) != IMG_BYTES) {
@@ -178,6 +199,7 @@ static void load(const char *opt)
         printf("fat32_hosttest: the cache did not empty for a new fixture\n");
         exit(1);
     }
+    devmodel_load(&model);
 }
 
 static struct vfs_mount mnt;
@@ -738,7 +760,7 @@ static int mount_rw(const char *options)
 }
 
 /* The image to a file and the check over it; its output in `out`. */
-static int run_check(char *out, unsigned long cap)
+static int run_check_on(const unsigned char *what, char *out, unsigned long cap)
 {
     char cmd[300], line[300];
     void *f;
@@ -746,7 +768,7 @@ static int run_check(char *out, unsigned long cap)
     int rc;
 
     f = fopen(FIXDIR "/fat32_write.img", "wb");
-    if (!f || fwrite(image, 1, IMG_BYTES, f) != IMG_BYTES) {
+    if (!f || fwrite(what, 1, IMG_BYTES, f) != IMG_BYTES) {
         printf("fat32_hosttest: cannot dump the image\n");
         exit(1);
     }
@@ -764,6 +786,14 @@ static int run_check(char *out, unsigned long cap)
     }
     rc = pclose(f);
     return rc == -1 ? -1 : (rc >> 8) & 0xff;
+}
+
+/* The image the device answers, settled: what a checker sees after a clean
+   end, where every write reached the medium. */
+static int run_check(char *out, unsigned long cap)
+{
+    settle();
+    return run_check_on(image, out, cap);
 }
 
 /* The findings the driver's own order may leave behind a crash, and the
@@ -1005,6 +1035,12 @@ static int seq_truncate(void)
     if (rc == 0 && OPS->open(&mnt, n, 0, &h) == 0) {
         rc = OPS->truncate(&mnt, h, 700);
         if (rc == 0) {
+            rc = OPS->truncate(&mnt, h, 1000); /* a grow inside the last cluster */
+        }
+        if (rc == 0) {
+            rc = OPS->truncate(&mnt, h, 2600); /* and one across a cluster */
+        }
+        if (rc == 0) {
             rc = OPS->truncate(&mnt, h, 0);
         }
         if (rc == 0) {
@@ -1130,6 +1166,7 @@ static void load_dump(void)
     void *f;
 
     stop_after = -1;
+    model.stopped = 0;
     bcache_sync(&dev);
     f = fopen(FIXDIR "/fat32_write.img", "rb");
     if (!f || fread(image, 1, IMG_BYTES, f) != IMG_BYTES) {
@@ -1138,6 +1175,24 @@ static void load_dump(void)
     }
     fclose(f);
     bcache_invalidate(&dev);
+    devmodel_load(&model);
+}
+
+/* Make `what` the device's whole state, medium and all, for a mount over
+   a crash state. */
+static void load_snapshot(const unsigned char *what)
+{
+    /* What the cache still holds of the stopped run drains into the image
+       about to be replaced, so the cache is empty for the snapshot. */
+    stop_after = -1;
+    model.stopped = 0;
+    bcache_sync(&dev);
+    if (bcache_invalidate(&dev) != 0) {
+        printf("fat32_hosttest: the cache did not empty for a snapshot\n");
+        exit(1);
+    }
+    __builtin_memcpy(image, what, IMG_BYTES);
+    devmodel_load(&model);
 }
 
 /* The content oracle: after a stop, every file a data sequence writes
@@ -1174,6 +1229,8 @@ static int oracle_ok(void)
                 want = i < 10 ? pattern[i] : (i >= 2000 ? pattern[10 + i - 2000] : 0);
             } else if (f == 4 && got == 1500) {
                 want = 0; /* regrown from nothing after the truncate to zero */
+            } else if (f == 4 && (got == 1000 || got == 2600)) {
+                want = i < 700 ? pattern[i] : 0; /* grown from 700 by truncate */
             } else {
                 want = pattern[i];
             }
@@ -1755,13 +1812,84 @@ static void write_rows(void)
 }
 
 /* The interruption matrix: every sequence stopped after each of its
-   writes, the image judged by the walk. */
+   writes, and at each stop the states the medium can be in, with none,
+   the newest one, two, and so on, or all of the writes pending since the
+   driver's last barrier, each judged by the walk and, for the data
+   sequences, by the content oracle. A barrier the driver leaves out widens
+   what is pending at the stops after it, and one of the states then shows
+   the write that should have waited. Then each barrier of the sequence
+   made to fail, the driver's answer whatever it is, and the medium judged
+   with half of what was pending at it; and the machine stopped at each of
+   the four writes after the failure, the states judged again, since what
+   the driver does to undo a failed step has an order of its own. */
+static const char *keep_name(int keep, int pending)
+{
+    static char text[40];
+
+    if (keep == 0) {
+        return "none";
+    }
+    if (keep >= pending) {
+        return "all";
+    }
+    snprintf(text, sizeof(text), "the newest %d", keep);
+    return text;
+}
+
+/* One stop's states, judged: the walk of each, and the oracle where the
+   sequence has one. */
+static void judge_stop(int i, const char *stage)
+{
+    int keeps, keep;
+
+    check(!model.overflow, "the model held every pending write");
+    keeps = model.npending < DEVMODEL_KEEP_MOST ? model.npending : DEVMODEL_KEEP_MOST;
+    /* Every state is taken before any is loaded, since loading one settles
+       the model's pending writes. */
+    for (keep = 0; keep <= keeps; keep++) {
+        devmodel_snapshot(&model, keep, snaps[keep]);
+    }
+    if (keeps < model.npending) {
+        devmodel_snapshot(&model, model.npending, snaps[keeps + 1]);
+        keeps++;
+    }
+    for (keep = 0; keep <= keeps; keep++) {
+        char what[240];
+        const char *name = keep_name(keep, keeps);
+
+        if (run_check_on(snaps[keep], check_out, sizeof(check_out)) < 0 || check_out[0] == '\0') {
+            check(0, "the check ran over the state and said something");
+        }
+        load_snapshot(snaps[keep]);
+        if (i < 5) {
+            /* The content oracle over the crash state, read-only. */
+            snprintf(what, sizeof(what),
+                     "'%s' %s, %s of the pending writes kept, reads only "
+                     "what was written",
+                     sequences[i].name, stage, name);
+            if (mount_image("") == 0) {
+                check(oracle_ok(), what);
+                unmount_image();
+            } else {
+                check(0, what);
+            }
+        }
+        snprintf(what, sizeof(what),
+                 "'%s' %s, %s of the pending writes kept, leaves a consistent volume",
+                 sequences[i].name, stage, name);
+        check(findings_allowed(check_out), what);
+        if (!findings_allowed(check_out)) {
+            printf("fat32_hosttest: the check said:\n%s", check_out);
+        }
+    }
+}
+
 static void matrix_pass(void)
 {
     int i, k, total = 0;
 
     for (i = 0; i < (int)(sizeof(sequences) / sizeof(sequences[0])); i++) {
-        int n;
+        int n, barriers, b;
 
         load("--junk");
         stop_after = -1;
@@ -1774,8 +1902,9 @@ static void matrix_pass(void)
         n = writes_made;
         OPS->put(&mnt, mnt.root);
         OPS->unmount(&mnt);
+        barriers = model.barriers;
         for (k = 1; k <= n; k++) {
-            char what[160];
+            char stage[60];
 
             load("--junk");
             writes_made = 0;
@@ -1788,29 +1917,119 @@ static void matrix_pass(void)
             sequences[i].run();
             OPS->put(&mnt, mnt.root);
             OPS->unmount(&mnt);
-            run_check(check_out, sizeof(check_out));
-            load_dump();
-            if (i < 5) {
-                /* The content oracle over the crash state, read-only. */
-                if (mount_image("") == 0) {
-                    snprintf(what, sizeof(what),
-                             "'%s' stopped after write %d of %d reads only what was written",
-                             sequences[i].name, k, n);
-                    check(oracle_ok(), what);
-                    unmount_image();
-                }
+            snprintf(stage, sizeof(stage), "stopped after write %d of %d", k, n);
+            judge_stop(i, stage);
+            total++;
+        }
+        for (b = 1; b <= barriers; b++) {
+            char what[200];
+            int failed_at, j;
+
+            load("--junk");
+            writes_made = 0;
+            stop_after = -1;
+            model.fail_barrier = b;
+            if (mount_rw("") != 0) {
+                check(0, "the matrix's volume mounts for a failing barrier");
+                model.fail_barrier = 0;
+                return;
             }
+            sequences[i].run();
+            OPS->put(&mnt, mnt.root);
+            OPS->unmount(&mnt);
+            model.fail_barrier = 0;
+            check(model.failed, "the barrier failed as asked");
+            failed_at = model.failed_at;
+            devmodel_snapshot(&model, DEVMODEL_PENDING_MAX, snap);
+            run_check_on(snap, check_out, sizeof(check_out));
             snprintf(what, sizeof(what),
-                     "'%s' stopped after write %d of %d leaves a consistent volume",
-                     sequences[i].name, k, n);
+                     "'%s' with barrier %d of %d failed leaves a consistent volume",
+                     sequences[i].name, b, barriers);
             check(findings_allowed(check_out), what);
             if (!findings_allowed(check_out)) {
                 printf("fat32_hosttest: the check said:\n%s", check_out);
             }
             total++;
+            for (j = 0; j <= 3; j++) {
+                load("--junk");
+                writes_made = 0;
+                stop_after = failed_at + j;
+                model.fail_barrier = b;
+                if (mount_rw("") != 0) {
+                    check(0, "the matrix's volume mounts for a failing barrier and a stop");
+                    model.fail_barrier = 0;
+                    stop_after = -1;
+                    return;
+                }
+                sequences[i].run();
+                OPS->put(&mnt, mnt.root);
+                OPS->unmount(&mnt);
+                model.fail_barrier = 0;
+                snprintf(what, sizeof(what),
+                         "with barrier %d of %d failed and stopped %d writes after", b, barriers,
+                         j);
+                judge_stop(i, what);
+                total++;
+            }
         }
     }
     printf("fat32_hosttest: %d stops walked with %s names\n", total, long_names ? "long" : "short");
+}
+
+/* What a sync promises: a file written and then synced, through `fsync`,
+   the mount's `sync` or the unmount, is on the medium the moment the call
+   returns, so a crash right after, one that keeps nothing of what was
+   still pending, keeps the file. A sync that does not reach the medium
+   passes every other row, since the cache answers the reads. */
+static void durability_row(int how, const char *what)
+{
+    void *n;
+    int err, rc = -1;
+
+    load("--junk");
+    if (mount_rw("") != 0) {
+        check(0, "the durability row's volume mounts");
+        return;
+    }
+    n = make_file(mnt.root, nm("D1.TXT"));
+    if (n && write_at(n, pattern, 3000, 0) == 0) {
+        if (how == 0) {
+            rc = OPS->fsync(&mnt, n);
+        } else if (how == 1) {
+            rc = OPS->sync(&mnt);
+        }
+        OPS->put(&mnt, n);
+        if (how == 2) {
+            rc = OPS->prepare_unmount(&mnt);
+        }
+    } else if (n) {
+        OPS->put(&mnt, n);
+    }
+    check(rc == 0, what);
+    OPS->put(&mnt, mnt.root);
+    OPS->unmount(&mnt);
+    devmodel_snapshot(&model, DEVMODEL_KEEP_NONE, snap);
+    load_snapshot(snap);
+    if (mount_image("") != 0) {
+        check(0, "the medium after the sync mounts");
+        return;
+    }
+    n = walk(nm("/D1.TXT"), &err);
+    check(n != 0 && read_all(n, back, sizeof(back)) == 3000 &&
+              __builtin_memcmp(back, pattern, 3000) == 0,
+          "and the file is on the medium with its bytes, nothing pending kept");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    unmount_image();
+}
+
+static void durability_rows(void)
+{
+    fill_pattern();
+    durability_row(0, "a file is written and fsynced");
+    durability_row(1, "a file is written and the volume synced");
+    durability_row(2, "a file is written and the volume unmounted");
 }
 
 static void matrix_rows(void)
@@ -1921,6 +2140,7 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 int main(void)
 {
     proc_a.pid = 1;
+    devmodel_init(&model, medium, image, IMG_BYTES);
     well_formed_rows();
     small_and_active_rows();
     malformed_rows();
@@ -1930,6 +2150,7 @@ int main(void)
     tree_rows();
     dirty_rows();
     matrix_rows();
+    durability_rows();
     if (fails == 0) {
         printf("fat32_hosttest: OK\n");
     }

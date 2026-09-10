@@ -80,6 +80,11 @@ for t in tests/host/*_hosttest.c; do
     # to compile: their own include directories and the warnings their build
     # turns off. Empty for every kernel test, which the fixed flags cover.
     extra="$(grep -oE 'host-cflags:[^*]*' "$t" | sed 's/host-cflags://' | tr '\n' ' ')"
+    # A test whose rows take longer than the deadline says so in seconds
+    # on a `host-seconds:` line; the two FAT interruption matrices do.
+    secs="$(grep -oE 'host-seconds: *[0-9]+' "$t" | grep -oE '[0-9]+' | head -1)"
+    [ -n "$secs" ] || secs=$WATCHDOG_SECS
+    [ -z "$WATCHDOG" ] || WATCHDOG="$REPO/build/tests/system/deadline $secs"
 
     if ! wrapped_deps "$t" "host-deps:"; then
         echo "hosttest: $t: a host-deps: line is wrapped; repeat the" >&2
@@ -134,7 +139,7 @@ for t in tests/host/*_hosttest.c; do
         if [ "$rc" -eq 0 ]; then
             echo "  PASS: $base"
         elif [ -n "$WATCHDOG" ] && [ "$rc" -eq 124 ]; then
-            echo "  FAIL (hung; killed after ${WATCHDOG_SECS}s; see $VDIR/$base.rlog): $base"
+            echo "  FAIL (hung; killed after ${secs}s; see $VDIR/$base.rlog): $base"
             fail=1
         else
             echo "  FAIL (run; see $VDIR/$base.rlog): $base"; fail=1
