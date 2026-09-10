@@ -1056,6 +1056,53 @@ int main(void)
         mount.grain = 0;
     }
 
+    /* ---- a rename the whole-unit rule refuses changes nothing ---- */
+
+    /* The id field of a node placed across a block, and a rename over an
+       existing name: the rule refuses the id, and it must refuse before
+       the destination is removed, or a refused rename leaves one name where
+       there were two. The spacer's size puts the next node's id at 4092,
+       four of its bytes on each side of the line. */
+    make_image(image, IMAGE_SIZE);
+    check(krffs_create_at(&mount, "/spacer") == 0, "a file to place the next one");
+    check(krffs_truncate_at(&mount, "/spacer", 3375, (uint64_t *)0) == 0,
+          "grown so the next node's id field falls across a block");
+    check(krffs_create_at(&mount, "/across") == 0, "and the file that lands there");
+    check(krffs_create_at(&mount, "/kept") == 0, "and the destination");
+    {
+        uint64_t across = krffs_walk(&mount, "/across");
+        uint64_t kept = krffs_walk(&mount, "/kept");
+        uint64_t new_id = krffs_calculate_djb_hash((const uint8_t *)"kept");
+        uint64_t old_id;
+        char buffer[16];
+        const uint8_t *lo = (const uint8_t *)&new_id;
+        int differs_below = 0, differs_above = 0, i;
+
+        check(across != KRFFS_NO_NODE && kept != KRFFS_NO_NODE, "both are there");
+        check(across + KRFFS_FIELD_ID == 4092, "and the id field straddles the block's end");
+        check(krffs_write_at(&mount, &kept, "keep", 4, 0) == 4, "the destination has its bytes");
+        k_memcpy(&old_id, image + across + KRFFS_FIELD_ID, sizeof(old_id));
+        for (i = 0; i < 8; i++) {
+            if (((const uint8_t *)&old_id)[i] != lo[i]) {
+                if (i < 4) {
+                    differs_below = 1;
+                } else {
+                    differs_above = 1;
+                }
+            }
+        }
+        check(differs_below && differs_above, "the new id changes bytes on both sides of the line");
+        mount.grain = 4096;
+        check(krffs_rename_at(&mount, "/across", "/kept") != 0,
+              "the rename over the name is refused");
+        check(krffs_walk(&mount, "/across") == across, "and the source keeps its name");
+        check(krffs_walk(&mount, "/kept") == kept, "and the destination keeps its name");
+        check(krffs_read_at(&mount, kept, buffer, 4, 0) == 4 && buffer[0] == 'k' &&
+                  buffer[3] == 'p',
+              "and its bytes");
+        mount.grain = 0;
+    }
+
     /* ---- one name on two nodes, when one of them is a directory ---- */
 
     /* A rename that published its new parent and stopped before its new name

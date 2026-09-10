@@ -1594,6 +1594,7 @@ int krffs_rename_at(krffs_mount_t *mount, const char *old_path,
     uint64_t node;
     uint64_t existing;
     uint64_t parent_id;
+    uint64_t new_id;
     krffs_node_t head;
     char dir[KRFFS_FILE_NAME_BUFFER_SIZE];
     char base[KRFFS_FILE_NAME_BUFFER_SIZE];
@@ -1629,6 +1630,19 @@ int krffs_rename_at(krffs_mount_t *mount, const char *old_path,
         return 0;
     }
 
+    /* The id and the parent the rename will write, asked for before anything
+     * is removed: a field whose changed bytes would reach the medium in two
+     * units is refused here, with both names and their bytes as they were,
+     * and not after the destination is gone. */
+    _krffs_strncpy((char *)name, base, KRFFS_FILE_NAME_BUFFER_SIZE);
+    name[KRFFS_FILE_NAME_BUFFER_SIZE - 1] = '\0';
+    new_id = krffs_calculate_djb_hash(name);
+    if (!krffs_write_is_whole(mount, node + KRFFS_FIELD_ID, &new_id, sizeof(new_id)) ||
+        !krffs_write_is_whole(mount, node + KRFFS_FIELD_PARENT, &parent_id, sizeof(parent_id))) {
+        klog(KLOG_WARN, "krffs", "rename: refused: a field of the node at %d would reach the medium in two pieces",
+             (int)node);
+        return -1;
+    }
     /* Replace any existing destination, but never clobber a directory: freeing
      * it would orphan its children. */
     if (existing != KRFFS_NO_NODE) {
@@ -1650,10 +1664,7 @@ int krffs_rename_at(krffs_mount_t *mount, const char *old_path,
      * and they are the same directory in the ordinary case. The node itself
      * kept its contents, so only its attribute-change time moves. */
     krffs_stamp_at(mount, krffs_parent_offset(mount, node), KRFFS_STAMP_DATA);
-    _krffs_strncpy((char *)name, base, KRFFS_FILE_NAME_BUFFER_SIZE);
-    name[KRFFS_FILE_NAME_BUFFER_SIZE - 1] = '\0';
-    if (krffs_put_u64(mount, node, KRFFS_FIELD_ID,
-                      krffs_calculate_djb_hash(name)) != 0 ||
+    if (krffs_put_u64(mount, node, KRFFS_FIELD_ID, new_id) != 0 ||
         krffs_put_u64(mount, node, KRFFS_FIELD_PARENT, parent_id) != 0 ||
         krffs_sync_point(mount) != 0 ||
         krffs_put(mount, node, KRFFS_FIELD_NAME, name,
