@@ -22,6 +22,13 @@
  * through the queue without pause. Both must succeed: every fault found
  * the port with a queued command active, drained it, and took its turn.
  *
+ * Mode `late`: a request answered after its deadline is the answer; mode
+ * `edge`: a request under one period and one over it, the second overdue
+ * once; mode `quarantine`: a request past every period, given up on, whose
+ * late completion must free its slot; mode `pool`: a pool of two slots
+ * held by two slow readers, and a third reader that must wait for one and
+ * succeed. Each says what it needs of the machine at its definition.
+ *
  * Prints "AHCIPROBE OK" or "AHCIPROBE FAIL: reason". Freestanding; int 0x80.
  */
 
@@ -41,6 +48,7 @@ typedef unsigned int size_t;
 #define SYS_MOUNT         21
 #define SYS_UMOUNT2       52
 #define SYS_CLOCK_GETTIME 265
+#define SYS_NANOSLEEP     162
 
 #define O_RDONLY        0
 #define O_WRONLY        1
@@ -138,10 +146,29 @@ static int now_ms(void)
 
 /* Read `bytes` from `node` in chunks; the longest chunk's time in
    milliseconds is left in `*longest`. Returns 0, or -1 on a short read. */
+/* Open `node`, waiting for it: a throttled disk is found seconds into the
+   boot, after the shell has run the probe. */
+static int open_node(const char *node)
+{
+    int fd = -1, tries;
+
+    for (tries = 0; tries < 40 && fd < 0; tries++) {
+        fd = sys3(SYS_OPEN, (int)(size_t)node, O_RDONLY, 0);
+        if (fd < 0) {
+            int ts[2];
+
+            ts[0] = 0;
+            ts[1] = 250000000;
+            sys2(SYS_NANOSLEEP, (int)(size_t)ts, 0);
+        }
+    }
+    return fd;
+}
+
 static int read_node(const char *node, int bytes, int *longest)
 {
     static char buf[CHUNK];
-    int fd = sys3(SYS_OPEN, (int)(size_t)node, O_RDONLY, 0);
+    int fd = open_node(node);
     int done = 0;
 
     buf[0] = 0;
@@ -431,6 +458,148 @@ static void late_row(void)
     sys2(SYS_EXIT, 0, 0);
 }
 
+/* One raw read of `bytes` from `node`, at most a window's request; the
+   syscall's answer, so a request the deadline gave up on shows as a short
+   or failed read. `*ms` is the call's time, and -1 when the node did not
+   open, so that no row reads a time from a request never made. */
+static char read_once_buf[32 * 1024];
+
+static int read_once(const char *node, int bytes, int *ms)
+{
+    int fd = open_node(node);
+    int n, t0;
+
+    *ms = -1;
+    if (fd < 0) {
+        return -1;
+    }
+    t0 = now_ms();
+    n = sys3(SYS_READ, fd, (int)(size_t)read_once_buf, bytes);
+    *ms = now_ms() - t0;
+    sys2(SYS_CLOSE, fd, 0);
+    return n;
+}
+
+static void sleep_ms(int ms)
+{
+    int ts[2];
+
+    ts[0] = ms / 1000;
+    ts[1] = (ms % 1000) * 1000000;
+    sys2(SYS_NANOSLEEP, (int)(size_t)ts, 0);
+}
+
+/* `ahciprobe edge`: the deadline's boundary, one request of 4 KiB on the
+   boot disk behind the lag device, which answers every request an exact
+   number of ticks after it was made. The suite boots it twice under a
+   period of a hundred ticks, `rach2.lagdeadline=100`: with
+   `rach2.blocklag=75` the request is answered inside its period and must
+   not be overdue, and with `rach2.blocklag=125` it is overdue once and
+   taken; the suite reads
+   the kernel's record of which. The request must answer its bytes either
+   way. An emulator's throttle would not do here: it pays for a burst
+   unevenly across the requests after it. */
+static void edge_row(void)
+{
+    int ms, n;
+
+    n = read_once("/dev/disk0p1", 4 * 1024, &ms);
+    if (n != 4 * 1024) {
+        fail("the read at the boundary");
+    }
+    puts("AHCIPROBE EDGE ms:");
+    putnum(ms);
+    puts("AHCIPROBE OK");
+    sys2(SYS_EXIT, 0, 0);
+}
+
+/* `ahciprobe quarantine`: one slot in the pool, `rach2.blockpool=1`, and
+   the lag device answering 500 ticks late under four periods of a hundred:
+   the request is given up on with EIO at the fourth deadline and its slot
+   quarantined. The completion arrives a second after and must free the
+   slot: a request made once it has is the proof, since with one slot in
+   the pool a slot not freed leaves nothing to take. The lag answers that
+   request 500 ticks late as well, so it too is given up on; what tells a
+   slot taken from a slot refused is the time: a request refused for want
+   of a slot answers at once, and one taken waits its four periods. */
+static void quarantine_row(void)
+{
+    int ms, n;
+
+    n = read_once("/dev/disk0p1", 4 * 1024, &ms);
+    if (ms < 0) {
+        fail("the partition did not open");
+    }
+    if (n == 4 * 1024) {
+        fail("a request past every period was answered as if in time");
+    }
+    puts("AHCIPROBE GAVEUP ms:");
+    putnum(ms);
+    sleep_ms(6000); /* the late completion lands in the meantime */
+    n = read_once("/dev/disk0p1", 4 * 1024, &ms);
+    if (ms < 0) {
+        fail("the partition did not open again");
+    }
+    if (n != 4 * 1024 && ms < 3000) {
+        fail("the request after the late completion was refused at once: the slot was not freed");
+    }
+    puts("AHCIPROBE AFTER ms:");
+    putnum(ms);
+    puts("AHCIPROBE OK");
+    sys2(SYS_EXIT, 0, 0);
+}
+
+/* `ahciprobe pool`: two slots in the pool, `rach2.blockpool=2`, two disks
+   throttled to 16 KiB a second and one at full speed. A reader on each
+   slow disk holds a slot for a 64 KiB read; a reader of the fast disk,
+   started once both are in flight, finds the pool full, waits for a slot,
+   and must succeed. The kernel's record of the wait is the suite's. */
+static void pool_row(void)
+{
+    int pipefd[2], readers[2], i, ms, n, status;
+    char byte;
+
+    pipefd[0] = pipefd[1] = -1;
+    if (sys1(SYS_PIPE, (int)(size_t)pipefd) != 0) {
+        fail("pipe");
+    }
+    for (i = 0; i < 2; i++) {
+        readers[i] = sys1(SYS_FORK, 0);
+        if (readers[i] < 0) {
+            fail("fork");
+        }
+        if (readers[i] == 0) {
+            int l;
+
+            sys3(SYS_WRITE, pipefd[1], (int)(size_t)"s", 1);
+            sys2(SYS_EXIT,
+                 read_node(i == 0 ? "/dev/disk0p1" : "/dev/disk1p1", 64 * 1024, &l) == 0 ? 0 : 3,
+                 0);
+        }
+    }
+    sys2(SYS_CLOSE, pipefd[1], 0); /* so a reader that dies first ends the wait */
+    for (i = 0; i < 2; i++) {
+        if (sys3(SYS_READ, pipefd[0], (int)(size_t)&byte, 1) != 1) {
+            fail("a slow reader did not start");
+        }
+    }
+    sleep_ms(300); /* both slow reads are in flight, each holding a slot */
+    n = read_once("/dev/disk2p1", 4 * 1024, &ms);
+    if (n != 4 * 1024) {
+        fail("the reader of the fast disk was refused while the pool was full");
+    }
+    puts("AHCIPROBE WAITED ms:");
+    putnum(ms);
+    for (i = 0; i < 2; i++) {
+        status = 0;
+        if (sys3(SYS_WAITPID, readers[i], (int)(size_t)&status, 0) != readers[i] || status != 0) {
+            fail("a slow reader failed or was killed");
+        }
+    }
+    puts("AHCIPROBE OK");
+    sys2(SYS_EXIT, 0, 0);
+}
+
 __asm__(".global _start\n"
         "_start:\n"
         "   mov %esp, %eax\n"
@@ -447,6 +616,15 @@ void probe_main(unsigned int *sp)
     }
     if (argc >= 2 && argv[1][0] == 'l') {
         late_row();
+    }
+    if (argc >= 2 && argv[1][0] == 'e') {
+        edge_row();
+    }
+    if (argc >= 2 && argv[1][0] == 'q') {
+        quarantine_row();
+    }
+    if (argc >= 2 && argv[1][0] == 'p') {
+        pool_row();
     }
     slow_row();
 }

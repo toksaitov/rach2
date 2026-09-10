@@ -93,3 +93,74 @@ grep -aq 'block: request overdue' "$DIR/late.log" || fail "no request passed its
 grep -aq 'block: late answer: taken' "$DIR/late.log" || fail "no late answer was taken"
 if grep -aq 'vfs: read-only' "$DIR/late.log"; then fail "the mount went read-only"; fi
 echo "queue-test: a request answered after its deadline is taken as the answer and the mount keeps writing: $(grep -a -A1 'AHCIPROBE WRITE' "$DIR/late.log" | tr -d '\r' | tr '\n' ' ')OK"
+
+# The deadline's boundary, on the lag device, which answers a request an
+# exact number of ticks after it was made, where an emulator's throttle
+# pays for a burst unevenly: under a period of a hundred ticks, set on the
+# wrapper itself since it keeps its own, a lag of 75 ticks is answered
+# inside the period and no request is overdue; a lag of 125 is overdue
+# once and taken. The record names which.
+fat_disk "$DIR/edge.disk"
+edge_boot() { # edge_boot LAG OVERDUE
+    "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" --qemu-arg=-cpu --qemu-arg=max \
+        --drive "file=$DIR/edge.disk,format=raw,if=ide,index=0,media=disk" \
+        --append "rach2.rescue rach2.blocklag=$1 rach2.lagdeadline=100 rach2.lagperiods=4" --timeout 120 --steptmo 60 \
+        --log "$DIR/edge$1.log" --ok "AHCIPROBE OK" --never "AHCIPROBE FAIL" \
+        "expect=Type 'help'" "send=exec /ahciprobe edge" "expect=AHCIPROBE OK" > /dev/null 2>&1 \
+        || fail "the boundary at a lag of $1: $(grep -a 'AHCIPROBE FAIL' "$DIR/edge$1.log" | head -1 | tr -d '\r')"
+    overdue=$(grep -ac 'block: request overdue' "$DIR/edge$1.log")
+    [ "$overdue" = "$2" ] || fail "the boundary at a lag of $1: $overdue requests went overdue where $2 should have"
+}
+edge_boot 75 0
+edge_boot 125 1
+grep -aq 'block: late answer: taken after 1 deadlines' "$DIR/edge125.log" || fail "the overdue request was not taken as answered"
+echo "queue-test: a request answered inside its period is not overdue and one answered a quarter past it is overdue once and taken: $(grep -a -A1 'AHCIPROBE EDGE' "$DIR/edge75.log" "$DIR/edge125.log" | tr -d '\r' | grep -o 'ms:$\|^[^:]*-[0-9]*$' | tr '\n' ' ')OK"
+
+# A completion after quarantine frees the slot: one slot in the pool and
+# the lag device answering 500 ticks late under a period of a hundred and
+# four periods, so the one request is given up on with EIO at the fourth
+# deadline and its slot quarantined; the answer arrives a second after and
+# must free the slot: a request made then is the proof, since with one
+# slot in the pool a slot not freed leaves nothing to take. The lag makes
+# that request late as well, so it is taken and waits its periods, where
+# a refused one would answer at once and the pool report itself stalled.
+fat_disk "$DIR/quar.disk"
+"$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" --qemu-arg=-cpu --qemu-arg=max \
+    --drive "file=$DIR/quar.disk,format=raw,if=ide,index=0,media=disk" \
+    --append "rach2.rescue rach2.blocklag=500 rach2.lagdeadline=100 rach2.lagperiods=4 rach2.blockpool=1" \
+    --timeout 120 --steptmo 60 --log "$DIR/quar.log" \
+    --ok "AHCIPROBE OK" --never "AHCIPROBE FAIL" \
+    "expect=Type 'help'" "send=exec /ahciprobe quarantine" "expect=AHCIPROBE OK" > /dev/null 2>&1 \
+    || fail "the completion after quarantine: $(grep -a 'AHCIPROBE FAIL\|stalled' "$DIR/quar.log" | head -1 | tr -d '\r')"
+grep -aq 'quarantined' "$DIR/quar.log" || fail "no request was quarantined, so the row shows nothing"
+grep -aq 'late completion: quarantined slot freed' "$DIR/quar.log" || fail "the late completion did not free the slot"
+if grep -aq 'request pool stalled' "$DIR/quar.log"; then fail "a request after the late completion found the pool stalled"; fi
+echo "queue-test: a request given up on is quarantined, its late completion frees the slot and the next request is admitted: $(grep -a -A1 'AHCIPROBE GAVEUP\|AHCIPROBE AFTER' "$DIR/quar.log" | tr -d '\r' | grep -v '^--' | tr '\n' ' ')OK"
+
+# The pool exhausted: two slots, two disks throttled to 16 KiB a second
+# each holding one for a 64 KiB read, and a reader of a third, unthrottled
+# disk that finds the pool full, waits, and is served.
+fat_disk "$DIR/pool1.disk"
+fat_disk "$DIR/pool2.disk"
+fat_disk "$DIR/pool3.disk"
+"$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-object --qemu-arg=throttle-group,id=tg4,x-bps-total=16384 \
+    --qemu-arg=-object --qemu-arg=throttle-group,id=tg5,x-bps-total=16384 \
+    --qemu-arg=-blockdev --qemu-arg="driver=file,filename=$DIR/pool1.disk,node-name=p1file" \
+    --qemu-arg=-blockdev --qemu-arg=driver=raw,file=p1file,node-name=p1raw \
+    --qemu-arg=-blockdev --qemu-arg=driver=throttle,throttle-group=tg4,file=p1raw,node-name=p1 \
+    --qemu-arg=-blockdev --qemu-arg="driver=file,filename=$DIR/pool2.disk,node-name=p2file" \
+    --qemu-arg=-blockdev --qemu-arg=driver=raw,file=p2file,node-name=p2raw \
+    --qemu-arg=-blockdev --qemu-arg=driver=throttle,throttle-group=tg5,file=p2raw,node-name=p2 \
+    --drive "file=$DIR/pool3.disk,format=raw,if=none,id=drv3" \
+    --qemu-arg=-device --qemu-arg=ich9-ahci,id=ahci0 \
+    --qemu-arg=-device --qemu-arg=ide-hd,drive=p1,bus=ahci0.0 \
+    --qemu-arg=-device --qemu-arg=ide-hd,drive=p2,bus=ahci0.1 \
+    --qemu-arg=-device --qemu-arg=ide-hd,drive=drv3,bus=ahci0.2 \
+    --append "rach2.rescue rach2.blockpool=2" --timeout 120 --steptmo 60 --log "$DIR/pool.log" \
+    --ok "AHCIPROBE OK" --never "AHCIPROBE FAIL" \
+    "expect=Type 'help'" "send=exec /ahciprobe pool" "expect=AHCIPROBE OK" > /dev/null 2>&1 \
+    || fail "the pool exhausted: $(grep -a 'AHCIPROBE FAIL\|stalled' "$DIR/pool.log" | head -1 | tr -d '\r')"
+grep -aq 'request pool: waiting for a slot: the pool is full' "$DIR/pool.log" || fail "no reader waited for the full pool, so the row shows nothing"
+echo "queue-test: a reader that finds the pool full waits for a slot and is served: $(grep -a -A1 'AHCIPROBE WAITED' "$DIR/pool.log" | tr -d '\r' | tr '\n' ' ')OK"
+

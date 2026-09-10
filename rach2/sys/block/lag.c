@@ -172,6 +172,35 @@ block_device_t *block_lag_partition_backing(block_device_t *backing, uint64_t st
     return backing;
 }
 
+/**
+ * Read a row's knob as a whole decimal number from 1 to a million ticks or
+ * periods, into `*out`. A value with anything after its digits, or past
+ * the bound, is refused, since the deadline's arithmetic is signed and a
+ * period near the top of the range would expire a request as it was made.
+ */
+static int lag_knob(const char *name, uint32_t *out)
+{
+    char value[16];
+    uint32_t n = 0;
+    int i;
+
+    if (!kcmdline_value(name, value, sizeof(value))) {
+        return 0;
+    }
+    for (i = 0; value[i] >= '0' && value[i] <= '9'; i++) {
+        n = n * 10u + (uint32_t)(value[i] - '0');
+        if (n > 1000000u) {
+            break;
+        }
+    }
+    if (i == 0 || value[i] != '\0' || n == 0 || n > 1000000u) {
+        klog(KLOG_WARN, "block", "lag: %s: not a count from 1 to 1000000", name);
+        return 0;
+    }
+    *out = n;
+    return 1;
+}
+
 block_device_t *block_lag_wrap(block_device_t *backing)
 {
     char value[16];
@@ -221,6 +250,15 @@ block_device_t *block_lag_wrap(block_device_t *backing)
     lag_device.max_sectors = 0;      /* a page, the staging it copies through */
     lag_device.deadline_ticks = 500; /* five seconds, the lag its rows are set against */
     lag_device.deadline_limit = 1;   /* one period: its rows test a device that never answers */
+    /* A row about the deadline's boundary sets the period and the periods
+     * itself: `rach2.lagdeadline=T` ticks a period, and
+     * `rach2.lagperiods=N` periods before a request is given up. */
+    if (lag_knob("rach2.lagdeadline", &n)) {
+        lag_device.deadline_ticks = n;
+    }
+    if (lag_knob("rach2.lagperiods", &n)) {
+        lag_device.deadline_limit = n;
+    }
     lag_device.read = 0;
     lag_device.write = 0;
     lag_device.submit = lag_submit;
@@ -232,6 +270,6 @@ block_device_t *block_lag_wrap(block_device_t *backing)
         dead_device.drvdata = &dead_device;
     }
     lag_device.drvdata = &lag_device;
-    klog(KLOG_INFO, "block", "lag: %d ticks behind the boot disk", (int)n);
+    klog(KLOG_INFO, "block", "lag: %d ticks behind the boot disk", (int)lag_delay);
     return &lag_device;
 }
