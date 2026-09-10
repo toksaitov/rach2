@@ -130,6 +130,7 @@ static struct pty *pty_alloc(void)
     p->mode = 0620; /* crw--w----, the Unix98 slave default */
     tty_init(&p->slave, pty_slave_sink, p); /* slave.pump stays NULL */
     wait_queue_init(&p->m_read_wq);
+    wait_queue_init(&p->m_write_wq);
     p->next = ptys;
     ptys = p;
     return p;
@@ -202,6 +203,35 @@ static int32_t ptm_read(fd_entry_t *e, char __user *buf, uint32_t count)
     return (int32_t)got;
 }
 
+/* Whether the slave's discipline can take a line: the master's write wait. */
+static int ptm_has_room(void *arg)
+{
+    struct pty *p = (struct pty *)arg;
+
+    return n_tty_has_room(&p->slave.ldisc);
+}
+
+/* The offset of the first signal character in `bytes`, or -1: VINTR, VQUIT
+ * or VSUSP with ISIG on, a disabled (zero) one never matching. */
+static int signal_char_at(const struct n_tty *ld, const uint8_t *bytes, int n)
+{
+    int i;
+
+    if (!(ld->tio.c_lflag & ISIG)) {
+        return -1;
+    }
+    for (i = 0; i < n; i++) {
+        unsigned char c = bytes[i];
+
+        if ((ld->tio.c_cc[VINTR] && c == ld->tio.c_cc[VINTR]) ||
+            (ld->tio.c_cc[VQUIT] && c == ld->tio.c_cc[VQUIT]) ||
+            (ld->tio.c_cc[VSUSP] && c == ld->tio.c_cc[VSUSP])) {
+            return i;
+        }
+    }
+    return -1;
+}
+
 static int32_t ptm_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
     struct pty *p = (struct pty *)e->priv;
@@ -228,6 +258,32 @@ static int32_t ptm_write(fd_entry_t *e, const char __user *buf, uint32_t count)
             return (done > 0) ? (int32_t)done : -EFAULT;
         }
         for (i = 0; i < chunk; i++) {
+            /* The discipline takes a whole line more or nothing. A write
+             * that would overflow it is short; one that fits nothing waits
+             * for the slave to read, or asks a non-blocking writer to. A
+             * signal character in the held bytes is fed over them, since
+             * what it does is discard what came before it. */
+            while (!n_tty_has_room(&p->slave.ldisc)) {
+                int at = signal_char_at(&p->slave.ldisc, kbuf + i, (int)(chunk - i));
+
+                if (at >= 0) {
+                    p->slave.ldisc.counters.flush_bytes += (unsigned int)at;
+                    i += (uint32_t)at;
+                    tty_input_char(&p->slave, kbuf[i]);
+                    i++;
+                    continue;
+                }
+                wq_wake_all(&p->m_read_wq);
+                if (done + i > 0 || (e->ofd && (e->ofd->status_flags & OFD_NONBLOCK))) {
+                    return done + i > 0 ? (int32_t)(done + i) : -EAGAIN;
+                }
+                if (wq_wait_event(&p->m_write_wq, ptm_has_room, p) < 0) {
+                    return -EINTR;
+                }
+            }
+            if (i >= chunk) {
+                break;
+            }
             tty_input_char(&p->slave, kbuf[i]);
         }
         done += chunk;
@@ -252,7 +308,9 @@ static short ptm_poll(fd_entry_t *e, short events, struct wait_queue **wq)
         revents |= POLLHUP; /* every slave hung up */
     }
     /* The master write is always accepted; the slave discipline absorbs it. */
-    revents |= (short)(events & POLLOUT);
+    if (n_tty_has_room(&p->slave.ldisc)) {
+        revents |= (short)(events & POLLOUT);
+    }
     return revents;
 }
 
@@ -390,6 +448,9 @@ static int32_t pts_read(fd_entry_t *e, char __user *buf, uint32_t count)
         n = tty_read(&p->slave, kbuf, (int)want, nonblock);
         if (n == -EAGAIN && master_gone) {
             return 0; /* master closed, nothing buffered: persistent EOF */
+        }
+        if (n > 0) {
+            wq_wake_all(&p->m_write_wq); /* room for a writer held at the queue */
         }
     }
     if (n < 0) {

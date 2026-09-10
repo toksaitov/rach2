@@ -24,7 +24,72 @@ static void rq_push(struct n_tty *t, unsigned char c)
     if (rq_count(t) < N_TTY_READ_MAX) {
         t->rq[t->rq_tail & (N_TTY_READ_MAX - 1)] = c;
         t->rq_tail++;
+        if (rq_count(t) > t->counters.queue_max) {
+            t->counters.queue_max = rq_count(t);
+        }
+    } else {
+        t->counters.queue_drops++;
     }
+}
+
+/**
+ * Whether a whole line more fits: the read queue's free space beyond what
+ * the line under edit will need. A pump that stops here leaves its bytes
+ * where they are, and the sender waits instead of losing them.
+ */
+int n_tty_has_room(const struct n_tty *t)
+{
+    return rq_count(t) + (unsigned int)t->line_len + N_TTY_LINE_MAX <= N_TTY_READ_MAX;
+}
+
+/**
+ * Discard every unread byte: the partial line, the committed lines and a
+ * pending end-of-file, counted as flushed.
+ */
+void n_tty_flush(struct n_tty *t)
+{
+    t->counters.flush_bytes += (unsigned int)t->line_len + rq_count(t);
+    t->line_len = 0;
+    t->rq_head = t->rq_tail;
+    t->eof = 0;
+}
+
+/**
+ * Install a termios. Returns what a read could return now, so the caller
+ * can wake a reader the change made ready: a partial canonical line is
+ * readable the moment ICANON is off, since raw mode has no line to keep it
+ * in and a line left there would be lost, as it was before this kernel read
+ * it (Linux makes the same bytes readable). The line joins the queue behind
+ * what was committed before it, which keeps the order typed; the feeders
+ * stop a whole line short of the queue's end (`n_tty_has_room`), so it
+ * fits. Should it not, it stays in `line` and a raw read takes it once the
+ * queue is empty, behind what was committed before it and, if any arrived
+ * between, behind raw bytes that came later; nothing is dropped.
+ */
+int n_tty_set_termios(struct n_tty *t, const struct ktermios *tio)
+{
+    int was_canon = (t->tio.c_lflag & ICANON) != 0;
+    int i;
+
+    for (i = 0; i < (int)sizeof(struct ktermios); i++) {
+        ((unsigned char *)&t->tio)[i] = ((const unsigned char *)tio)[i];
+    }
+    if (was_canon && !(t->tio.c_lflag & ICANON) && t->line_len > 0 &&
+        rq_count(t) + (unsigned int)t->line_len <= N_TTY_READ_MAX) {
+        for (i = 0; i < t->line_len; i++) {
+            rq_push(t, t->line[i]);
+        }
+        t->counters.partial_moved += (unsigned int)t->line_len;
+        t->line_len = 0;
+    }
+    return n_tty_readable(t);
+}
+
+/* The bytes a raw read has: the queue, and a canonical line left partial
+ * when the mode changed that did not fit the queue then. */
+static unsigned int raw_pending(const struct n_tty *t)
+{
+    return rq_count(t) + (unsigned int)t->line_len;
 }
 
 static unsigned char rq_pop(struct n_tty *t)
@@ -158,6 +223,9 @@ void n_tty_init(struct n_tty *t)
     t->rq_head = 0;
     t->rq_tail = 0;
     t->eof = 0;
+    for (i = 0; i < (int)sizeof(t->counters); i++) {
+        ((unsigned char *)&t->counters)[i] = 0;
+    }
     t->eof_pos = 0;
 }
 
@@ -206,9 +274,7 @@ void n_tty_receive(struct n_tty *t, unsigned char c, n_tty_out_fn out, void *ctx
              * committed-but-unread lines and a pending EOF) so input typed
              * before the signal does not survive it (the default !NOFLSH
              * behaviour). */
-            t->line_len = 0;
-            t->rq_head = t->rq_tail;
-            t->eof = 0;
+            n_tty_flush(t);
             *signo = (c == tio->c_cc[VINTR]) ? NTTY_SIGINT
                                              : (c == tio->c_cc[VQUIT]) ? NTTY_SIGQUIT : NTTY_SIGTSTP;
             return;
@@ -255,6 +321,11 @@ void n_tty_receive(struct n_tty *t, unsigned char c, n_tty_out_fn out, void *ctx
         if (t->line_len < N_TTY_LINE_MAX - 1) {
             t->line[t->line_len++] = c;
             echo(t, out, ctx, c);
+            if ((unsigned int)t->line_len > t->counters.line_max) {
+                t->counters.line_max = (unsigned int)t->line_len;
+            }
+        } else {
+            t->counters.line_drops++;
         }
         return;
     }
@@ -287,12 +358,12 @@ int n_tty_readable(const struct n_tty *t)
     } else {
         unsigned int vmin = t->tio.c_cc[VMIN];
         if (t->eof) {
-            return rq_count(t) > 0 ? (int)rq_count(t) : 1; /* hangup: drain, then 0 */
+            return raw_pending(t) > 0 ? (int)raw_pending(t) : 1; /* hangup: drain, then 0 */
         }
         if (vmin == 0) {
             return 1; /* a polling read never blocks */
         }
-        return rq_count(t) >= vmin ? (int)rq_count(t) : 0;
+        return raw_pending(t) >= vmin ? (int)raw_pending(t) : 0;
     }
 }
 
@@ -305,7 +376,10 @@ int n_tty_readable(const struct n_tty *t)
  */
 int n_tty_inq(const struct n_tty *t)
 {
-    return (int)rq_count(t);
+    if (t->tio.c_lflag & ICANON) {
+        return (int)rq_count(t);
+    }
+    return (int)raw_pending(t);
 }
 
 /**
@@ -343,11 +417,26 @@ int n_tty_read(struct n_tty *t, unsigned char *buf, int count)
                 break; /* a canonical read returns at most one line */
             }
         }
+        t->counters.read_bytes += (unsigned int)n;
         return n;
     }
-    /* raw mode: up to count bytes, no line structure. */
+    /* raw mode: up to count bytes, no line structure; a partial line the
+     * switch could not queue follows the queue. */
     while (n < count && rq_count(t) > 0) {
         buf[n++] = rq_pop(t);
     }
+    if (n < count && t->line_len > 0) {
+        int taken = 0, i;
+
+        while (n < count && taken < t->line_len) {
+            buf[n++] = t->line[taken++];
+        }
+        for (i = taken; i < t->line_len; i++) {
+            t->line[i - taken] = t->line[i];
+        }
+        t->line_len -= taken;
+        t->counters.partial_moved += (unsigned int)taken;
+    }
+    t->counters.read_bytes += (unsigned int)n;
     return n;
 }

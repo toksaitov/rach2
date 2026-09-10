@@ -44,6 +44,7 @@ struct pty {
     uint32_t m_head;            /* bytes consumed by the master read end */
     uint32_t m_tail;            /* bytes produced by the slave sink */
     wait_queue_t m_read_wq;     /* master readers blocked for slave output */
+    wait_queue_t m_write_wq;    /* master writers blocked for the slave to read */
 
     int master_open;            /* the master descriptor is open */
     int slave_opens;            /* count of open slave descriptions (distinct OFDs) */

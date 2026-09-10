@@ -1465,6 +1465,7 @@ static int32_t synth_open(const struct vpath *vp, int flags)
         case VNODE_PROC_USB:
         case VNODE_PROC_FILESYSTEMS:
         case VNODE_PROC_INTERRUPTS:
+        case VNODE_PROC_CONSOLE:
         case VNODE_PROC_NET_ROUTE:
         case VNODE_PROC_NET_ARP:
         case VNODE_PROC_NET_TCP:
@@ -3616,6 +3617,11 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
             kst->st_dev = PROCFS_FSID;
             kst->st_mode = S_IFREG | 0444;
             kst->st_ino = procfs_ino_interrupts();
+            return 0;
+        case VNODE_PROC_CONSOLE:
+            kst->st_dev = PROCFS_FSID;
+            kst->st_mode = S_IFREG | 0444;
+            kst->st_ino = procfs_ino_console();
             return 0;
         case VNODE_PROC_NET_ROUTE:
             kst->st_dev = PROCFS_FSID;
@@ -7854,7 +7860,7 @@ static int synth_dirent_at(int kind, int pid, int n, char *name, uint64_t *ino, 
          * follow, numbered from where the table ends. */
         static const char *const globals[] = {"cmdline", "disk",    "uptime", "stat",
                                               "meminfo", "mounts",  "net",    "self",
-                                              "usb",     "loop"};
+                                              "usb",     "loop",    "console"};
         int count = (int)(sizeof(globals) / sizeof(globals[0]));
 
         if (n < count) {
@@ -7880,8 +7886,14 @@ static int synth_dirent_at(int kind, int pid, int n, char *name, uint64_t *ino, 
             } else if (n == 6) {
                 *ino = procfs_ino_netdir();
                 *dtype = DT_DIR;
+            } else if (n == 8) {
+                *ino = procfs_ino_usb();
+            } else if (n == 9) {
+                *ino = procfs_ino_loop();
+            } else if (n == 10) {
+                *ino = procfs_ino_console();
             } else {
-                *ino = procfs_ino_dir();
+                *ino = procfs_ino_dir(); /* self: a link to the reader's own */
                 *dtype = DT_LNK;
             }
             return 1;

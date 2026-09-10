@@ -65,6 +65,7 @@
 #define PROCFS_INO_FILESYSTEMS 0x10Du
 #define PROCFS_INO_LOOP        0x10Eu
 #define PROCFS_INO_INTERRUPTS 0x10Fu
+#define PROCFS_INO_CONSOLE 0x110u
 #define PROCFS_INO_NETROUTE 0x109u
 #define PROCFS_INO_NETARP  0x10Au
 #define PROCFS_INO_NETTCP  0x10Bu
@@ -117,6 +118,9 @@ static const char *procfs_kind_name(const struct vpath *vp)
     }
     if (vp->kind == VNODE_PROC_INTERRUPTS) {
         return "/proc/interrupts";
+    }
+    if (vp->kind == VNODE_PROC_CONSOLE) {
+        return "/proc/console";
     }
     if (vp->kind == VNODE_PROC_FILESYSTEMS) {
         return "/proc/filesystems";
@@ -491,6 +495,10 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
                     ap_str(t, "/proc/net/tcp");
                     break;
                 }
+                if (pf->origin_file == SYNTH_PROC_CONSOLE) {
+                    ap_str(t, "/proc/console");
+                    break;
+                }
                 ap_str(t, "/proc/");
                 ap_int(t, pf->origin_pid);
                 ap_ch(t, '/');
@@ -604,6 +612,11 @@ uint32_t procfs_ino_interrupts(void)
     return PROCFS_INO_INTERRUPTS;
 }
 
+uint32_t procfs_ino_console(void)
+{
+    return PROCFS_INO_CONSOLE;
+}
+
 
 uint32_t procfs_ino_netroute(void)
 {
@@ -674,6 +687,9 @@ uint32_t procfs_fd_ino(struct fd_entry *e)
     }
     if (pf->origin_file == SYNTH_PROC_INTERRUPTS) {
         return PROCFS_INO_INTERRUPTS;
+    }
+    if (pf->origin_file == SYNTH_PROC_CONSOLE) {
+        return PROCFS_INO_CONSOLE;
     }
     return procfs_ino_pid(pf->origin_pid);
 }
@@ -1018,6 +1034,43 @@ static int procfs_gen_mounts(struct procfs_text *t)
 /* /proc/interrupts: one line per vector that has taken an interrupt, the
  * vector, its count and where it comes from, then the counts the APIC's
  * spurious vector and the timer's fallback pump keep. */
+/* One counter of /proc/console: `name value`. */
+static void ap_counter(struct procfs_text *t, const char *name, uint32_t v)
+{
+    ap_str(t, name);
+    ap_ch(t, ' ');
+    ap_u32(t, v);
+    ap_ch(t, '\n');
+}
+
+/**
+ * Render /proc/console: the serial receive path's counters, from the UART
+ * to the readers, so where a typed byte was lost can be read off the
+ * machine rather than guessed.
+ */
+static int procfs_gen_console(struct procfs_text *t)
+{
+    struct console_counters c;
+
+    tty_console_counters(&c);
+    ap_counter(t, "uart-bytes", c.uart_bytes);
+    ap_counter(t, "uart-overruns", c.uart_overruns);
+    ap_counter(t, "irq-drains", c.irq_drains);
+    ap_counter(t, "tick-drains", c.tick_drains);
+    ap_counter(t, "reader-drains", c.reader_drains);
+    ap_counter(t, "ring-full", c.ring_full);
+    ap_counter(t, "ring-max", c.ring_max);
+    ap_counter(t, "shell-bytes", c.shell_bytes);
+    ap_counter(t, "line-drops", c.ldisc.line_drops);
+    ap_counter(t, "queue-drops", c.ldisc.queue_drops);
+    ap_counter(t, "flush-bytes", c.ldisc.flush_bytes);
+    ap_counter(t, "partial-moved", c.ldisc.partial_moved);
+    ap_counter(t, "read-bytes", c.ldisc.read_bytes);
+    ap_counter(t, "queue-max", c.ldisc.queue_max);
+    ap_counter(t, "line-max", c.ldisc.line_max);
+    return t->len;
+}
+
 static int procfs_gen_interrupts(struct procfs_text *t)
 {
     int v;
@@ -1355,7 +1408,7 @@ int procfs_open(const struct vpath *vp, int flags)
         vp->kind != VNODE_PROC_STAT_SYS && vp->kind != VNODE_PROC_MEMINFO &&
         vp->kind != VNODE_PROC_MOUNTS && vp->kind != VNODE_PROC_USB &&
         vp->kind != VNODE_PROC_FILESYSTEMS && vp->kind != VNODE_PROC_LOOP &&
-        vp->kind != VNODE_PROC_INTERRUPTS &&
+        vp->kind != VNODE_PROC_INTERRUPTS && vp->kind != VNODE_PROC_CONSOLE &&
         vp->kind != VNODE_PROC_NET_ROUTE &&
         vp->kind != VNODE_PROC_NET_ARP && vp->kind != VNODE_PROC_NET_TCP) {
         pid = procfs_resolve_pid(vp->pid);
@@ -1414,6 +1467,8 @@ int procfs_open(const struct vpath *vp, int flags)
         len = procfs_gen_loop(&text);
     } else if (vp->kind == VNODE_PROC_INTERRUPTS) {
         len = procfs_gen_interrupts(&text);
+    } else if (vp->kind == VNODE_PROC_CONSOLE) {
+        len = procfs_gen_console(&text);
     } else if (vp->kind == VNODE_PROC_FILESYSTEMS) {
         len = procfs_gen_filesystems(&text);
     } else if (vp->kind == VNODE_PROC_NET_ROUTE) {
@@ -1461,6 +1516,8 @@ int procfs_open(const struct vpath *vp, int flags)
         f->origin_file = SYNTH_PROC_USB;
     } else if (vp->kind == VNODE_PROC_INTERRUPTS) {
         f->origin_file = SYNTH_PROC_INTERRUPTS;
+    } else if (vp->kind == VNODE_PROC_CONSOLE) {
+        f->origin_file = SYNTH_PROC_CONSOLE;
     } else if (vp->kind == VNODE_PROC_FILESYSTEMS) {
         f->origin_file = SYNTH_PROC_FILESYSTEMS;
     } else if (vp->kind == VNODE_PROC_LOOP) {

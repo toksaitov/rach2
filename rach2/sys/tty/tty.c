@@ -23,21 +23,16 @@
 #include "../lib/kstring.h"
 #include "../lib/kerrno.h"
 
-/* Most serial bytes drained into the discipline per pump call, so a flood
- * cannot hold interrupts off (the drain runs under cli) for an unbounded
- * stretch; a caller that still has input loops and drains the rest on the next
- * pass. */
+/* Most serial bytes drained into the discipline per interrupt-side pump
+ * call, so a flood cannot hold interrupts off for an unbounded stretch. The
+ * reader's own drain empties the ring, since a reader that parks with bytes
+ * still in the ring is woken for them only by the tick; it echoes only when
+ * the ring held no more than a keyboard's worth at its start, because an
+ * echo waits on the UART's transmitter for 87 microseconds a byte with
+ * interrupts off, and a flood typed by a harness is not read by a person. */
 #define TTY_PUMP_BUDGET 64
+#define TTY_ECHO_MAX 64
 
-/* The kernel termios is the 36-byte TCGETS/TCSETS ABI prefix (see n_tty.h). Pin
- * its size so a struct change can never silently desync from musl's view. */
-typedef char ktermios_is_36_bytes[(sizeof(struct ktermios) == 36 && KNCCS == 19) ? 1 : -1];
-
-struct tty console_tty;
-
-/* Save EFLAGS and disable interrupts; restore puts IF back. On this single CPU
- * this is the whole lock between a reader and an input IRQ (same idea as
- * wait_queue.c's). */
 /* A sink that discards: a tty initialized without one still has a valid (never
  * NULL) sink, so the discipline's echo/output never jumps through NULL. */
 static void null_sink(void *ctx, unsigned char c)
@@ -281,18 +276,31 @@ int tty_inq(struct tty *t)
     return n;
 }
 
+/**
+ * Install a termios; with `flush_input`, discard the unread input first.
+ *
+ * Interrupts are off so an input IRQ feeding the discipline never reads a
+ * half-written termios. A switch out of canonical mode can make a partial
+ * line readable, so a reader parked on the tty is woken when the discipline
+ * reports something to read. The console's flush also empties the serial
+ * ring: input taken from the port but not yet in the discipline is input
+ * the program asked to discard.
+ */
 void tty_set_termios(struct tty *t, const struct ktermios *kt, int flush_input)
 {
     uint32_t flags;
+    int readable;
 
-    /* Interrupts off so an input IRQ feeding the discipline never reads a
-     * half-written termios (the 36-byte copy is several stores). */
     flags = kirq_save();
-    k_memcpy(&t->ldisc.tio, kt, sizeof(struct ktermios));
     if (flush_input) {
-        t->ldisc.line_len = 0;
-        t->ldisc.rq_head = t->ldisc.rq_tail;
-        t->ldisc.eof = 0;
+        if (t->pump) {
+            serial_rx_flush();
+        }
+        n_tty_flush(&t->ldisc);
+    }
+    readable = n_tty_set_termios(&t->ldisc, kt);
+    if (readable) {
+        wq_wake_all(&t->input_wq);
     }
     kirq_restore(flags);
 }
@@ -304,9 +312,10 @@ void tty_flush_input(struct tty *t)
     /* Interrupts off so the reset is not split by an input IRQ pushing onto the
      * queue (which would desync head/tail). */
     flags = kirq_save();
-    t->ldisc.line_len = 0;
-    t->ldisc.rq_head = t->ldisc.rq_tail;
-    t->ldisc.eof = 0;
+    if (t->pump) {
+        serial_rx_flush();
+    }
+    n_tty_flush(&t->ldisc);
     kirq_restore(flags);
 }
 
@@ -343,23 +352,90 @@ static void console_sink(void *ctx, unsigned char c)
     console_putc_raw((char)c);
 }
 
-/* The console's polled input source: COM1 is not wired to an IRQ here, so drain
- * the bytes that have arrived into the discipline. Drained (in thread context,
- * where current_proc is the reader/poller, so an ISIG signal targets the right
- * process) from tty_ready_cond before each read-sleep and from tty_poll; the
- * timer only wakes a waiter so this drain happens here, not in the IRQ. Bounded
- * per call so a flood cannot hold interrupts off indefinitely; the caller
- * loops. */
+/* When the discipline has no room for a line, ordinary bytes wait in the
+ * ring; a signal character behind them does not, since what it does first
+ * is discard everything typed before it. The ring is searched for one, the
+ * bytes before it are discarded as the character would have discarded them,
+ * and it is fed. Returns 1 when a byte was fed. */
+static int console_signal_through(struct tty *t, n_tty_out_fn out, void *ctx)
+{
+    const struct ktermios *tio = &t->ldisc.tio;
+    unsigned char set[3];
+    int at, ch, signo = 0;
+
+    if (!(tio->c_lflag & ISIG)) {
+        return 0;
+    }
+    set[0] = tio->c_cc[VINTR];
+    set[1] = tio->c_cc[VQUIT];
+    set[2] = tio->c_cc[VSUSP];
+    at = serial_rx_find(set, 3);
+    if (at < 0) {
+        return 0;
+    }
+    serial_rx_discard(at);
+    t->ldisc.counters.flush_bytes += (unsigned int)at;
+    ch = serial_rx_take();
+    if (ch < 0) {
+        return 0;
+    }
+    n_tty_receive(&t->ldisc, (unsigned char)ch, out, ctx, &signo);
+    if (signo != 0) {
+        tty_deliver_signal(t, signo);
+    }
+    return 1;
+}
+
+/* The kernel termios is the 36-byte TCGETS/TCSETS ABI prefix (see n_tty.h). Pin
+ * its size so a struct change can never silently desync from musl's view. */
+typedef char ktermios_is_36_bytes[(sizeof(struct ktermios) == 36 && KNCCS == 19) ? 1 : -1];
+
+struct tty console_tty;
+
+/* Save EFLAGS and disable interrupts; restore puts IF back. On this single CPU
+ * this is the whole lock between a reader and an input IRQ (same idea as
+ * wait_queue.c's). */
+static uint32_t reader_drains, tick_drains;
+
+/* The console's polled input source: the serial ring, which the port's
+ * interrupt and the tick fill, drained into the discipline with echo. Run in
+ * thread context, where current_proc is the reader/poller, so an ISIG signal
+ * targets the right process, from tty_ready_cond before each read-sleep and
+ * from tty_poll; the interrupt and the timer only wake a waiter, so the
+ * echoing drain happens here and not in an IRQ. Bounded per call so a flood
+ * cannot hold interrupts off indefinitely; the caller loops. */
 static void console_pump(struct tty *t)
 {
-    int budget = TTY_PUMP_BUDGET;
+    int echo = serial_rx_pending() <= TTY_ECHO_MAX;
 
-    while (budget-- > 0 && serial_data_available()) {
-        int ch = serial_try_getc();
+    reader_drains++;
+    for (;;) {
+        int ch, signo = 0;
+
+        if (!n_tty_has_room(&t->ldisc)) {
+            if (console_signal_through(t, echo ? t->sink : null_sink, echo ? t->sink_ctx : NULL)) {
+                continue;
+            }
+            break;
+        }
+        ch = serial_rx_take();
         if (ch < 0) {
             break;
         }
-        tty_input_char(t, (unsigned char)ch);
+        if (echo) {
+            tty_input_char(t, (unsigned char)ch);
+            continue;
+        }
+        n_tty_receive(&t->ldisc, (unsigned char)ch, null_sink, NULL, &signo);
+        if (signo != 0) {
+            tty_deliver_signal(t, signo);
+        }
+    }
+    if (!echo && n_tty_readable(&t->ldisc)) {
+        if (t->ready_us == 0) {
+            t->ready_us = pit_now_us();
+        }
+        wq_wake_all(&t->input_wq);
     }
 }
 
@@ -376,9 +452,17 @@ static void console_pump_irq(struct tty *t)
 {
     int budget = TTY_PUMP_BUDGET;
 
+    tick_drains++;
     while (budget-- > 0 && serial_data_available()) {
-        int ch = serial_try_getc();
-        int signo = 0;
+        int ch, signo = 0;
+
+        if (!n_tty_has_room(&t->ldisc)) {
+            if (console_signal_through(t, null_sink, NULL)) {
+                continue;
+            }
+            break;
+        }
+        ch = serial_rx_take();
 
         if (ch < 0) {
             break;
@@ -390,24 +474,56 @@ static void console_pump_irq(struct tty *t)
     }
 }
 
+/* What runs, with interrupts off, once bytes are in the ring: from the
+ * port's interrupt and from the tick alike, so a parked reader learns of
+ * input at once and a session nobody reads for has its bytes moved into the
+ * discipline at once, and the tick is the fallback for a port whose
+ * interrupt is not enabled. */
+static void console_rx_notify(void)
+{
+    tty_console_poll();
+}
+
 void tty_console_init(void)
 {
     tty_init(&console_tty, console_sink, NULL);
     console_tty.pump = console_pump;
+    serial_set_rx_notify(console_rx_notify);
+}
+
+void tty_console_counters(struct console_counters *out)
+{
+    struct serial_rx_counters rx;
+    uint32_t flags = kirq_save();
+
+    serial_rx_counters(&rx);
+    out->uart_bytes = rx.bytes;
+    out->uart_overruns = rx.overruns;
+    out->irq_drains = rx.irq_services;
+    out->tick_drains = tick_drains;
+    out->reader_drains = reader_drains;
+    out->ring_full = rx.ring_full;
+    out->ring_max = rx.ring_max;
+    out->shell_bytes = rx.polled_bytes;
+    out->ldisc = console_tty.ldisc.counters;
+    kirq_restore(flags);
 }
 
 void tty_console_poll(void)
 {
     /*
-     * Called from the timer IRQ. COM1 has no receive interrupt here, so a
-     * reader or poller parked on the console would never learn of serial
-     * input while another process runs; the wait queue is its only waker.
-     * When someone is waiting AND a byte has arrived, wake them; the woken
-     * thread drains and echoes the port itself (console_pump in its own
-     * context), so no draining, echoing, or signal delivery happens in this
-     * IRQ. Gated on a waiter so it never steals bytes from the kernel debug
-     * shell, which polls COM1 itself.
+     * Called from the timer IRQ and from the port's interrupt. The tick
+     * takes what the port holds first, so a port whose interrupt is not
+     * enabled is still served every ten milliseconds. A reader or poller
+     * parked on the console would never learn of serial input while another
+     * process runs; the wait queue is its only waker. When someone is
+     * waiting AND a byte has arrived, wake them; the woken thread drains and
+     * echoes the ring itself (console_pump in its own context), so no
+     * echoing or signal delivery to the wrong process happens here. Gated on
+     * a waiter so it never steals bytes from the kernel debug shell, which
+     * polls the ring itself.
      */
+    serial_rx_service(TTY_PUMP_BUDGET);
     if (!serial_data_available()) {
         return;
     }

@@ -44,6 +44,7 @@ uint32_t procfs_ino_mounts(void);
 uint32_t procfs_ino_usb(void);
 uint32_t procfs_ino_loop(void);
 uint32_t procfs_ino_interrupts(void);
+uint32_t procfs_ino_console(void);
 uint32_t procfs_ino_filesystems(void);
 uint32_t procfs_ino_netroute(void);
 uint32_t procfs_ino_netarp(void);

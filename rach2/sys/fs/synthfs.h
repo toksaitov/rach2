@@ -44,6 +44,7 @@ enum vnode_kind {
     VNODE_PROC_FILESYSTEMS, /* /proc/filesystems: what mount(2) accepts */
     VNODE_PROC_LOOP,        /* /proc/loop: the files attached to devices */
     VNODE_PROC_INTERRUPTS, /* /proc/interrupts: the count on each vector */
+    VNODE_PROC_CONSOLE, /* /proc/console: the serial receive path's counters */
     VNODE_ENOENT,       /* under a synthetic mount, but no such entry */
     VNODE_ENOTDIR       /* under a synthetic mount, a non-dir used as a directory */
 };
@@ -65,6 +66,7 @@ enum vnode_kind {
 #define SYNTH_PROC_FILESYSTEMS 14
 #define SYNTH_PROC_LOOP     15
 #define SYNTH_PROC_INTERRUPTS 15
+#define SYNTH_PROC_CONSOLE 16
 
 /* PID sentinel meaning "the calling process" (/proc/self), resolved by the
  * glue. */

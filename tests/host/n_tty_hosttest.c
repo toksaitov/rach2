@@ -248,6 +248,71 @@ int main(void)
     n = n_tty_read(&t, buf, sizeof(buf));
     CHECK(n == 2 && buf[0] == 'A' && buf[1] == '\n');
 
+    /* A partial canonical line becomes readable when ICANON goes off: the
+     * bytes typed before a program switched to raw mode are not lost, and
+     * the bytes typed after them follow in order. The counters say what
+     * moved and what was read. */
+    n_tty_init(&t);
+    cap_reset(&cp);
+    feed_str(&t, &cp, "cp b");
+    CHECK(n_tty_readable(&t) == 0);
+    {
+        struct ktermios raw = t.tio;
+        raw.c_lflag &= ~(ICANON | ECHO);
+        CHECK(n_tty_set_termios(&t, &raw) == 4);
+    }
+    feed_str(&t, &cp, "uild\n");
+    n = n_tty_read(&t, buf, sizeof(buf));
+    CHECK(n == 9 && buf[0] == 'c' && buf[3] == 'b' && buf[4] == 'u' && buf[8] == '\n');
+    CHECK(t.counters.partial_moved == 4);
+    CHECK(t.counters.read_bytes == 9);
+    /* A switch that stays canonical makes nothing readable; the order typed
+     * is kept across the switch, a committed line, then the partial one,
+     * then the raw bytes; and FIONREAD counts what a raw read would get. */
+    {
+        struct ktermios cooked = t.tio;
+        struct ktermios raw = t.tio;
+        cooked.c_lflag |= ICANON;
+        raw.c_lflag &= ~ICANON;
+        n_tty_set_termios(&t, &cooked);
+        feed_str(&t, &cp, "old\nnew");
+        CHECK(n_tty_set_termios(&t, &cooked) == 4);
+        CHECK(n_tty_inq(&t) == 4);
+        CHECK(n_tty_set_termios(&t, &raw) == 7);
+        CHECK(n_tty_inq(&t) == 7);
+        feed_str(&t, &cp, "!");
+        n = n_tty_read(&t, buf, sizeof(buf));
+        CHECK(n == 8 && buf[0] == 'o' && buf[3] == '\n' && buf[4] == 'n' && buf[7] == '!');
+        CHECK(t.counters.partial_moved == 7);
+    }
+    /* A partial line the full queue cannot take at the switch is kept and
+     * read after the queue, not dropped. */
+    n_tty_init(&t);
+    cap_reset(&cp);
+    for (i = 0; i < N_TTY_READ_MAX; i++) {
+        feed(&t, &cp, (unsigned char)(i % 16 == 15 ? '\n' : 'x'));
+    }
+    feed_str(&t, &cp, "kept");
+    CHECK(t.counters.queue_drops == 0);
+    {
+        struct ktermios raw = t.tio;
+        raw.c_lflag &= ~(ICANON | ECHO);
+        CHECK(n_tty_set_termios(&t, &raw) == N_TTY_READ_MAX + 4);
+    }
+    for (i = 0; i < N_TTY_READ_MAX / 512; i++) {
+        CHECK(n_tty_read(&t, buf, 512) == 512);
+    }
+    n = n_tty_read(&t, buf, sizeof(buf));
+    CHECK(n == 4 && buf[0] == 'k' && buf[3] == 't');
+    CHECK(t.counters.partial_moved == 4);
+    CHECK(n_tty_readable(&t) == 0);
+    /* A flush counts what it discards: the partial line and the queue. */
+    n_tty_init(&t);
+    feed_str(&t, &cp, "one\ntw");
+    n_tty_flush(&t);
+    CHECK(t.counters.flush_bytes == 6);
+    CHECK(n_tty_readable(&t) == 0);
+
     /* raw mode: every byte immediately readable, gated only by VMIN */
     n_tty_init(&t);
     cap_reset(&cp);

@@ -39,6 +39,22 @@ struct tty {
 /* The system console: VGA + serial, bound to every process's fds 0/1/2. */
 extern struct tty console_tty;
 
+/* The console's receive path, end to end, for `/proc/console`. */
+struct console_counters {
+    uint32_t uart_bytes;    /* taken from the UART */
+    uint32_t uart_overruns; /* overruns the line status reported */
+    uint32_t irq_drains;    /* services run from the port's interrupt */
+    uint32_t tick_drains;   /* drains into the discipline from the tick or the interrupt */
+    uint32_t reader_drains; /* drains by a reader, with echo */
+    uint32_t ring_full;     /* services stopped at a full ring, the sender held */
+    uint32_t ring_max;      /* the most the ring held */
+    uint32_t shell_bytes;   /* taken by the kernel's own polls */
+    struct n_tty_counters ldisc;
+};
+
+/** Copy the console's counters out. */
+void tty_console_counters(struct console_counters *out);
+
 /* Bring a tty up: cooked defaults, empty queue, 25x80 window, the given
  * sink. */
 void tty_init(struct tty *t, n_tty_out_fn sink, void *sink_ctx);

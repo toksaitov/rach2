@@ -67,8 +67,20 @@ struct ktermios {
 #define NTTY_SIGQUIT 3
 #define NTTY_SIGTSTP 20
 
-#define N_TTY_LINE_MAX 256 /* longest editable canonical line */
-#define N_TTY_READ_MAX 512 /* the cooked/raw bytes ready for read() */
+#define N_TTY_LINE_MAX 256  /* longest editable canonical line */
+#define N_TTY_READ_MAX 4096 /* the cooked/raw bytes ready for read(); a power of two */
+
+/* What the discipline did with its input, for `/proc/console`: the bytes
+ * it dropped and why, the bytes it handed to readers, and the most it held. */
+struct n_tty_counters {
+    unsigned int line_drops;    /* bytes dropped from a full canonical line */
+    unsigned int queue_drops;   /* bytes dropped from a full read queue */
+    unsigned int flush_bytes;   /* bytes discarded by a signal, TCSETSF or TCFLSH */
+    unsigned int partial_moved; /* bytes of a partial canonical line made readable in raw mode */
+    unsigned int read_bytes;    /* bytes handed to readers */
+    unsigned int queue_max;     /* the most the read queue held */
+    unsigned int line_max;      /* the longest canonical line held */
+};
 
 /* The sink echo and output bytes are emitted through. Must be non-NULL (the tty
  * layer substitutes a discarding sink when a caller passes none). */
@@ -83,6 +95,7 @@ struct n_tty {
     unsigned int rq_tail;
     int eof;              /* a VEOF on an empty line -> a pending end-of-file */
     unsigned int eof_pos; /* the rq stream position the pending EOF sits at */
+    struct n_tty_counters counters;
 };
 
 /** Reset to default cooked-mode termios and empty buffers. */
@@ -93,6 +106,16 @@ void n_tty_receive(struct n_tty *t, unsigned char c, n_tty_out_fn out, void *ctx
 
 /** Bytes a read could return now, or 0 if it would block. */
 int n_tty_readable(const struct n_tty *t);
+
+/** Whether the discipline can take a whole line more without dropping. */
+int n_tty_has_room(const struct n_tty *t);
+
+/** Install `tio`. Returns what a read could return now, since a partial
+ * canonical line is readable once ICANON is off. */
+int n_tty_set_termios(struct n_tty *t, const struct ktermios *tio);
+
+/** Discard every unread byte, the partial line and a pending EOF. */
+void n_tty_flush(struct n_tty *t);
 
 /** Copy available input into `buf`; returns the byte count, 0 at
  * end-of-file. */

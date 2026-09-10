@@ -3706,6 +3706,7 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     set_isr_handler(33, &keyboard_handler, "kbd"); /* install the IRQ 1 keyboard handler */
     pic_unmask_irq(1); /* now safe to take keyboard interrupts (masked since init_pic) */
     tty_console_init(); /* console_tty: VGA + serial, line discipline for fds 0/1/2 */
+    serial_enable_rx_irq(); /* COM1's bytes taken as they arrive, not at the tick */
     klog(KLOG_INFO, "boot", "keyboard: ready");
 
     if (kcmdline_has("rach2.nomouse")) {
