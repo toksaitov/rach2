@@ -171,7 +171,6 @@ echo "Needed by the GRUB disk suites (grub, menu, install, sealed, drill, selfbu
 opt mformat      "the FAT boot partition" mtools
 opt mmd          "the FAT boot partition" mtools
 opt mcopy        "the FAT boot partition" mtools
-opt mshowfat     "the FAT chain validation" mtools
 
 echo
 echo "Optional (only some tasks need these):"

@@ -152,7 +152,7 @@ if [ ! -f "$KERNEL" ]; then
     echo "mkdisk_grub: kernel not built ($KERNEL); run 'make' first" >&2
     exit 1
 fi
-for t in mformat mmd mcopy mshowfat; do
+for t in mformat mmd mcopy; do
     command -v "$t" >/dev/null 2>&1 || {
         echo "mkdisk_grub: mtools is required (brew install mtools, or apt install mtools)" >&2
         exit 1
@@ -166,6 +166,11 @@ MKMBR="$REPO/build/tools/image/mkmbr"
 if [ ! -x "$MKMBR" ] || [ "$REPO/tools/image/mkmbr.c" -nt "$MKMBR" ]; then
     mkdir -p "${MKMBR%/*}"
     cc -O2 -o "$MKMBR" "$REPO/tools/image/mkmbr.c" || exit 1
+fi
+FATCHAINS="$REPO/build/tools/image/fatchains"
+if [ ! -x "$FATCHAINS" ] || [ "$REPO/tools/image/fatchains.c" -nt "$FATCHAINS" ]; then
+    mkdir -p "${FATCHAINS%/*}"
+    cc -O2 -o "$FATCHAINS" "$REPO/tools/image/fatchains.c" || exit 1
 fi
 GRUBEMBED="$REPO/build/tools/image/grubembed"
 if [ ! -x "$GRUBEMBED" ] || [ "$REPO/tools/image/grubembed.c" -nt "$GRUBEMBED" ]; then
@@ -578,15 +583,12 @@ fi
 
 # Every staged chain, verified before the partition is committed: each of
 # the five files must be whole (its cluster count matching its size) and
-# the extents disjoint. mshowfat prints cluster ranges, the BPB names the
+# the extents disjoint. fatchains prints cluster ranges, the BPB names the
 # cluster size, and the awk below fails closed: a missing record, a wrong
 # count, or a shared cluster stops the build.
 CFGBYTES=$(wc -c < "$GRUB_CFG" | tr -d ' ')
-: > "$TMPD/chains.txt"
-for f in ::/boot/kernel ::/boot/fallback ::/boot/grub/grub.cfg \
-         ::/boot/grub/grubenv ::/boot/boot.cfg; do
-    mshowfat -i "$TMPD/p1.img" "$f" >> "$TMPD/chains.txt"
-done
+"$FATCHAINS" "$TMPD/p1.img" ::/boot/kernel ::/boot/fallback ::/boot/grub/grub.cfg \
+    ::/boot/grub/grubenv ::/boot/boot.cfg > "$TMPD/chains.txt" || exit 1
 # shellcheck disable=SC2046 # od output is exactly three numeric fields
 set -- $(od -An -j 11 -N 3 -t u1 "$TMPD/p1.img")
 CLBYTES=$(( ($1 + $2 * 256) * $3 ))
