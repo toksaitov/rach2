@@ -36,10 +36,15 @@
 #include "xhci.h"
 
 /* The two class requests, addressed to the interface. */
-#define MSC_REQ_RESET   0xFF
-#define MSC_REQ_MAX_LUN 0xFE
-#define TYPE_CLASS_OUT  0x21
-#define TYPE_CLASS_IN   0xA1
+#define MSC_REQ_RESET         0xFF
+#define MSC_REQ_MAX_LUN       0xFE
+#define TYPE_CLASS_OUT        0x21
+#define TYPE_CLASS_IN         0xA1
+/* A standard request to an endpoint (USB 2.0, 9.3.1): CLEAR_FEATURE of
+ * ENDPOINT_HALT clears the device's halt and resets its data toggle. */
+#define TYPE_ENDPOINT_OUT     0x02
+#define REQ_CLEAR_FEATURE     1
+#define FEATURE_ENDPOINT_HALT 0
 
 /* The wrappers. Both are little-endian on the wire, which is the byte order
  * this machine already has, so they are built and read field by field. */
@@ -81,28 +86,30 @@
 #define SENSE_UNIT_ATTENTION  0x06
 
 /* The stages of one command. */
-#define STAGE_IDLE  0
-#define STAGE_CBW   1
-#define STAGE_DATA  2
-#define STAGE_CSW   3
-#define STAGE_DONE  4
+#define STAGE_IDLE    0
+#define STAGE_CBW     1
+#define STAGE_DATA    2
+#define STAGE_CSW     3
+#define STAGE_DONE    4
 /* A class request on the control endpoint, which is one transfer and not a
  * wrapper: `Get Max LUN` and the reset are the two. */
-#define STAGE_CLASS 5
+#define STAGE_CLASS   5
+#define STAGE_FINISH  6 /* the request's transfer retired before it is completed */
+#define STAGE_QUIESCE 7 /* a transfer never answered: the endpoints stopped first */
 
 /* What the driver is doing with the stick as a whole. */
-#define MSC_STATE_FREE     0
-#define MSC_STATE_MAX_LUN  1
-#define MSC_STATE_INQUIRY  2
-#define MSC_STATE_TEST     3
-#define MSC_STATE_SENSE    4
-#define MSC_STATE_CAPACITY 5
-#define MSC_STATE_MODE     6
-#define MSC_STATE_READY    7
-#define MSC_STATE_REFUSED  8
-#define MSC_STATE_GONE     9
+#define MSC_STATE_FREE       0
+#define MSC_STATE_MAX_LUN    1
+#define MSC_STATE_INQUIRY    2
+#define MSC_STATE_TEST       3
+#define MSC_STATE_SENSE      4
+#define MSC_STATE_CAPACITY   5
+#define MSC_STATE_MODE       6
+#define MSC_STATE_READY      7
+#define MSC_STATE_REFUSED    8
+#define MSC_STATE_GONE       9
 #define MSC_STATE_CAPACITY16 10 /* the ten-byte answer was all ones */
-#define MSC_STATE_SERIAL 11     /* INQUIRY's unit serial page, asked once */
+#define MSC_STATE_SERIAL     11 /* INQUIRY's unit serial page, asked once */
 
 /*
  * Recovery, which the class defines as three things in this order: the reset
@@ -114,13 +121,22 @@
  * takes one command at a time for the whole stack, so they go through the
  * core's turn rather than being issued here.
  */
-#define RECOVER_NONE      0
-#define RECOVER_RESET     1
-#define RECOVER_CLEAR_IN  2
-#define RECOVER_CLEAR_OUT 3
+#define RECOVER_NONE          0
+#define RECOVER_RESET         1
+#define RECOVER_CLEAR_IN      2
+#define RECOVER_CLEAR_OUT     3
 /* The lighter recovery a stalled data or status stage takes: one endpoint
  * cleared, and then the status wrapper read. */
-#define RECOVER_CLEAR_ONE 4
+#define RECOVER_CLEAR_ONE     4
+/* The control endpoint halted by a class request the stick stalled: it is
+ * moved on, and the request's answer stands. */
+#define RECOVER_CLEAR_CONTROL 5
+/* Each clear is two halves: the controller's endpoint stopped and moved on
+ * through the core, then the device's halt cleared with a standard
+ * `CLEAR_FEATURE(ENDPOINT_HALT)` request, whose completion moves on. */
+#define RECOVER_CLEAR_IN_DEV  6
+#define RECOVER_CLEAR_OUT_DEV 7
+#define RECOVER_CLEAR_ONE_DEV 8
 
 /* How long any one transfer of a command may take, and how long a stick has
  * to become ready after it is plugged in. */
@@ -220,6 +236,24 @@ struct msc_device {
     int ready_luns;
     struct block_request *request;
     int flushing;
+    /* The controller's hold on the request's pages: set when the data
+     * transfer naming them is given to the controller, cleared only when
+     * the controller driver says the transfer is retired, which a terminal
+     * event, a stop or a reset with its dequeue, or Disable Slot answered
+     * establishes. A request is completed only after; a record is reclaimed
+     * only when the disk layer has let go and the slot has been closed. */
+    int owned;
+    int slot_closed;
+    int disk_released;
+    uint32_t data_gen;   /* the data transfer's generation, held in the controller driver */
+    uint32_t expect_gen; /* the submission a completion must carry */
+    int expect_ep;       /* and the endpoint */
+    uint32_t data_moved; /* bytes the data stage moved, kept apart from the wrapper's residue */
+    int quiescing;       /* a timeout's stop: 1 bulk IN in progress, 2 bulk OUT */
+    int finish_status;   /* the status the request is completed with once its transfer is retired */
+    int finish_then;     /* 1: REQUEST SENSE follows the retirement, before the completion */
+    int finish_command;  /* 1: the command's end is acted on after the retirement */
+    int recover_failed;  /* a clear of the recovery was refused */
     struct block_request *queue[MSC_QUEUE];
     int queue_flush[MSC_QUEUE];
     int queue_lun[MSC_QUEUE]; /* the unit each waiting request is for */
@@ -246,6 +280,8 @@ static int status_begin(struct msc_device *m);
 static void command_end(struct msc_device *m, int status);
 static void queue_drain(struct msc_device *m, int status);
 static void publish(struct msc_device *m, int lun);
+static void refuse(struct msc_device *m, const char *why);
+static void refuse_to_core(struct msc_device *m, const char *why);
 
 /*
  * The stick at `device` on `hc`. Slot numbers start at one on every
@@ -262,6 +298,36 @@ static struct msc_device *by_device(struct xhci_ctrl *hc, int device)
             return &sticks[i];
         }
     }
+    return 0;
+}
+
+/** As `by_device`, a closing record included. */
+static struct msc_device *by_device_any(struct xhci_ctrl *hc, int device)
+{
+    int i;
+
+    for (i = 0; i < MSC_MAX_DEVICES; i++) {
+        if (sticks[i].used && sticks[i].hc == hc && sticks[i].device == device) {
+            return &sticks[i];
+        }
+    }
+    return 0;
+}
+
+/**
+ * Give the controller a transfer under a generation of its own, and keep
+ * the generation and the endpoint a completion must carry to be this
+ * transfer's: a completion for an earlier stage of the same command, on the
+ * same endpoint, is told apart by it.
+ */
+static int submit_expected(struct msc_device *m, int endpoint, struct usb_transfer *transfer)
+{
+    transfer->generation = ++tag_seed;
+    if (xhci_submit(m->hc, m->device, endpoint, transfer) != 0) {
+        return -1;
+    }
+    m->expect_gen = transfer->generation;
+    m->expect_ep = endpoint;
     return 0;
 }
 
@@ -367,6 +433,7 @@ static int command_begin(struct msc_device *m, const uint8_t *cdb, int cdb_lengt
     }
 
     m->data = data;
+    m->data_moved = 0;
     m->data_length = length;
     m->data_in = data_in;
     m->residue = 0;
@@ -376,8 +443,7 @@ static int command_begin(struct msc_device *m, const uint8_t *cdb, int cdb_lengt
     transfer.buffer = m->cbw;
     transfer.length = CBW_BYTES;
     transfer.direction = USB_DIR_OUT;
-    transfer.generation = m->tag;
-    if (xhci_submit(m->hc, m->device, m->ep_out, &transfer) != 0) {
+    if (submit_expected(m, m->ep_out, &transfer) != 0) {
         return -1;
     }
     m->stage = STAGE_CBW;
@@ -394,10 +460,14 @@ static int data_begin(struct msc_device *m)
     transfer.buffer = m->data;
     transfer.length = m->data_length;
     transfer.direction = m->data_in ? USB_DIR_IN : USB_DIR_OUT;
-    transfer.generation = m->tag;
-    if (xhci_submit(m->hc, m->device, m->data_in ? m->ep_in : m->ep_out, &transfer) != 0) {
+    if (submit_expected(m, m->data_in ? m->ep_in : m->ep_out, &transfer) != 0) {
         return -1;
     }
+    /* The buffer is the controller's from here, a request's pages and the
+     * record's own scratch alike: the record is held so the driver can ask
+     * when the transfer is retired, before the buffer is used again. */
+    m->data_gen = transfer.generation;
+    m->owned = xhci_td_hold(m->hc, m->device, m->data_gen) == 0;
     m->stage = STAGE_DATA;
     m->deadline = MSC_STEP_MS;
     return 0;
@@ -416,11 +486,32 @@ static int status_begin(struct msc_device *m)
     transfer.buffer = m->csw;
     transfer.length = CSW_BYTES;
     transfer.direction = USB_DIR_IN;
-    transfer.generation = m->tag;
-    if (xhci_submit(m->hc, m->device, m->ep_in, &transfer) != 0) {
+    if (submit_expected(m, m->ep_in, &transfer) != 0) {
         return -1;
     }
     m->stage = STAGE_CSW;
+    m->deadline = MSC_STEP_MS;
+    return 0;
+}
+
+/**
+ * Ask the device to clear the halt on the endpoint with DCI `dci`: the
+ * standard request, on the control endpoint, expected like any other
+ * transfer. The endpoint address is the number with the direction bit.
+ */
+static int send_clear_halt(struct msc_device *m, int dci)
+{
+    struct usb_transfer transfer;
+    int address = (dci / 2) | ((dci & 1) ? 0x80 : 0);
+
+    setup_fill(m, TYPE_ENDPOINT_OUT, REQ_CLEAR_FEATURE, FEATURE_ENDPOINT_HALT, address, 0);
+    transfer.setup = setup_buffer[m - sticks];
+    transfer.buffer = 0;
+    transfer.length = 0;
+    transfer.direction = USB_DIR_OUT;
+    if (submit_expected(m, 1, &transfer) != 0) {
+        return -1;
+    }
     m->deadline = MSC_STEP_MS;
     return 0;
 }
@@ -446,8 +537,7 @@ static void recover_begin(struct msc_device *m, const char *why)
         transfer.buffer = 0;
         transfer.length = 0;
         transfer.direction = USB_DIR_OUT;
-        transfer.generation = m->tag;
-        if (xhci_submit(m->hc, m->device, 1, &transfer) != 0) {
+        if (submit_expected(m, 1, &transfer) != 0) {
             m->recover = RECOVER_NONE;
             m->stage = STAGE_DONE;
             m->status = CSW_PHASE_ERROR;
@@ -455,6 +545,7 @@ static void recover_begin(struct msc_device *m, const char *why)
         }
     }
     m->recover = RECOVER_RESET;
+    m->recover_failed = 0;
     m->deadline = MSC_STEP_MS;
 }
 
@@ -481,34 +572,50 @@ static int step_recovery(struct msc_device *m)
         return 1; /* the reset request's own completion moves this on */
 
     case RECOVER_CLEAR_IN:
-        answer = usb_core_clear_halt(m->hc, m->device, m->ep_in);
-        if (answer == 0) {
-            return 1;
-        }
-        m->recover = RECOVER_CLEAR_OUT;
-        m->deadline = MSC_STEP_MS;
-        return 1;
-
     case RECOVER_CLEAR_OUT:
-        answer = usb_core_clear_halt(m->hc, m->device, m->ep_out);
-        if (answer == 0) {
-            return 1;
-        }
-        m->recover = RECOVER_NONE;
-        /* Recovery is done and the command it was for is failed: the device
-         * is in a state to take the next one, and this one is lost. */
-        command_end(m, CSW_PHASE_ERROR);
-        return 1;
+    case RECOVER_CLEAR_ONE: {
+        /* The controller's half: the endpoint stopped and moved on. A
+         * refusal leaves an endpoint that carries nothing again, so the
+         * stick is refused and handed to the core, whose port reset
+         * brings it back as a new device. Then the device's half. */
+        int dci = m->recover == RECOVER_CLEAR_IN    ? m->ep_in
+                  : m->recover == RECOVER_CLEAR_OUT ? m->ep_out
+                                                    : m->after_recover;
 
-    case RECOVER_CLEAR_ONE:
-        answer = usb_core_clear_halt(m->hc, m->device, m->after_recover);
+        answer = usb_core_clear_halt(m->hc, m->device, dci);
+        if (answer == 0) {
+            return 1;
+        }
+        if (answer < 0) {
+            refuse_to_core(m, "an endpoint would not clear");
+            return 1;
+        }
+        if (send_clear_halt(m, dci) != 0) {
+            refuse_to_core(m, "the clear of a halt could not be sent");
+            return 1;
+        }
+        m->recover = m->recover == RECOVER_CLEAR_IN    ? RECOVER_CLEAR_IN_DEV
+                     : m->recover == RECOVER_CLEAR_OUT ? RECOVER_CLEAR_OUT_DEV
+                                                       : RECOVER_CLEAR_ONE_DEV;
+        return 1;
+    }
+
+    case RECOVER_CLEAR_IN_DEV:
+    case RECOVER_CLEAR_OUT_DEV:
+    case RECOVER_CLEAR_ONE_DEV:
+        return 1; /* the request's completion moves this on */
+
+    case RECOVER_CLEAR_CONTROL:
+        answer = usb_core_clear_halt(m->hc, m->device, 1);
         if (answer == 0) {
             return 1;
         }
         m->recover = RECOVER_NONE;
-        if (answer < 0 || status_begin(m) != 0) {
-            command_end(m, CSW_PHASE_ERROR);
+        if (answer < 0) {
+            refuse_to_core(m, "the control endpoint would not clear");
+            return 1;
         }
+        command_end(m, CSW_FAILED);
         return 1;
 
     default:
@@ -522,6 +629,126 @@ static void command_end(struct msc_device *m, int status)
 {
     m->stage = STAGE_DONE;
     m->status = status;
+}
+
+static void serve_end(struct msc_device *m, int status);
+static int send_request_sense(struct msc_device *m);
+static void refuse(struct msc_device *m, const char *why);
+static void step_command_done(struct msc_device *m);
+
+/**
+ * Complete the request in flight with `status` once its data transfer is
+ * retired, and first send REQUEST SENSE when `then_sense`.
+ *
+ * A transfer is retired when the controller driver says so; a short one
+ * on a controller that posts no event for its last block, QEMU's, is
+ * retired by a stop and a dequeue of its endpoint, which run here. Until
+ * then nothing is completed and no command starts, so the request's pages
+ * and the stick's record are never reused while the controller can reach
+ * them. The stick is refused when the driver holds no record of the
+ * transfer.
+ */
+static void serve_finish(struct msc_device *m, int status, int then_sense)
+{
+    m->finish_status = status;
+    m->finish_then = then_sense;
+    m->stage = STAGE_FINISH;
+    m->deadline = MSC_STEP_MS;
+}
+
+/** Turn `serve_finish`'s wait: 1 while it goes on. */
+static int step_finish(struct msc_device *m)
+{
+    if (m->stage != STAGE_FINISH) {
+        return 0;
+    }
+    if (m->owned) {
+        int retired = xhci_td_retired(m->hc, m->device, m->data_gen);
+
+        if (retired < 0) {
+            refuse_to_core(m, "the controller driver holds no record of its transfer");
+            return 1;
+        }
+        if (retired == 0) {
+            int q = usb_core_endpoint_quiesce(m->hc, m->device, m->data_in ? m->ep_in : m->ep_out);
+
+            if (q == 0) {
+                return 1;
+            }
+            if (q < 0) {
+                refuse_to_core(m, "its endpoint would not stop");
+                return 1;
+            }
+        }
+        xhci_td_release(m->hc, m->device, m->data_gen);
+        m->owned = 0;
+    }
+    if (m->finish_command) {
+        /* A command of the bring-up, or one whose end is read by state:
+         * its buffer is the driver's again, and its end is acted on now.
+         * A served request's end asks for this finish once more, with
+         * nothing left to retire, and goes on below in the same pass. */
+        m->finish_command = 0;
+        m->stage = STAGE_DONE;
+        step_command_done(m);
+        if (m->stage != STAGE_FINISH) {
+            return 0;
+        }
+    }
+    m->stage = STAGE_IDLE;
+    if (m->finish_then) {
+        m->finish_then = 0;
+        m->sensing = 1;
+        if (send_request_sense(m) == 0) {
+            return 0;
+        }
+        serve_end(m, -EIO);
+        return 0;
+    }
+    serve_end(m, m->finish_status);
+    return 0;
+}
+
+/**
+ * Turn a timeout's stop of the two bulk endpoints: 1 while it goes on.
+ *
+ * Bulk IN first, then bulk OUT, each a stop and a dequeue answered with
+ * success; only then is the request's transfer retired and the class reset
+ * sent. A stop refused refuses the stick with the request kept.
+ */
+static int step_quiesce(struct msc_device *m)
+{
+    int q;
+
+    if (m->quiescing == 0) {
+        return 0;
+    }
+    /* A stop answered at once goes on to the next endpoint in the same
+     * pass, so a pass never charges its whole elapsed time to a deadline
+     * it has just set. */
+    for (;;) {
+        q = usb_core_endpoint_quiesce(m->hc, m->device, m->quiescing == 1 ? m->ep_in : m->ep_out);
+        if (q == 0) {
+            return 1;
+        }
+        if (q < 0) {
+            refuse_to_core(m, "its endpoint would not stop after a transfer never answered");
+            return 1;
+        }
+        if (m->quiescing != 1) {
+            break;
+        }
+        m->quiescing = 2;
+        m->deadline = MSC_STEP_MS;
+    }
+    m->quiescing = 0;
+    if (m->owned) {
+        xhci_td_release(m->hc, m->device, m->data_gen);
+        m->owned = 0;
+    }
+    m->stage = STAGE_IDLE;
+    recover_begin(m, "a transfer never answered");
+    return 0;
 }
 
 /**
@@ -579,17 +806,51 @@ void msc_detach(struct xhci_ctrl *hc, int device)
     if (m == 0) {
         return;
     }
-    request_end(m, -EIO);
+    /* A request whose pages the controller may still reach is kept until
+     * Disable Slot is answered, which `msc_slot_closed` reports; the rest
+     * fail now. Whatever recovery was running is over. */
+    m->recover = RECOVER_NONE;
+    m->quiescing = 0;
+    if (!m->owned) {
+        request_end(m, -EIO);
+    } else if (m->request != 0) {
+        /* The line names the stage, which `tests/run usb` reads: the pull
+         * it arranges lands in the data stage. */
+        klog(KLOG_INFO, "usbdisk", "device %d: its request is kept, its %s in flight", device,
+             m->stage == STAGE_DATA ? "data stage" : "status wrapper");
+    }
     queue_drain(m, -EIO);
     m->state = MSC_STATE_GONE;
     m->stage = STAGE_IDLE;
     /* The slot stays taken. Its block device is what a mount, a description
      * and a held buffer point at, and a second stick given this slot would
      * be given their pointers with it; the disk layer frees the slot when
-     * the last of those has gone. */
+     * the last of those has gone, and the record's own buffers are the
+     * controller's until the slot has been given back. */
     m->closing = 1;
     klog(KLOG_INFO, "usbdisk", "gone: device %d", device);
     usbdisk_left((int)(m - sticks));
+}
+
+void msc_slot_closed(struct xhci_ctrl *hc, int device)
+{
+    struct msc_device *m = by_device_any(hc, device);
+
+    if (m == 0) {
+        return;
+    }
+    m->slot_closed = 1;
+    if (m->request != 0) {
+        /* The line is what `tests/run usb` reads: a request kept through
+         * the pull is failed here and not at the pull. */
+        klog(KLOG_INFO, "usbdisk", "device %d: its request is failed with the slot given back",
+             device);
+        m->owned = 0;
+        request_end(m, -EIO);
+    }
+    if (m->closing && m->disk_released) {
+        k_memset(m, 0, sizeof(*m));
+    }
 }
 
 /**
@@ -606,7 +867,16 @@ void msc_release(int index)
     if (!sticks[index].closing) {
         return;
     }
-    k_memset(&sticks[index], 0, sizeof(sticks[index]));
+    /* The disk layer has let go; the record goes once the controller has
+     * as well, which Disable Slot's answer says. A slot never given back
+     * keeps the record, its request and its pages, and the log says so. */
+    sticks[index].disk_released = 1;
+    if (sticks[index].slot_closed) {
+        k_memset(&sticks[index], 0, sizeof(sticks[index]));
+    } else {
+        klog(KLOG_INFO, "usbdisk", "device %d: the record waits for its slot to be given back",
+             sticks[index].device);
+    }
 }
 
 int msc_ready(int index)
@@ -674,7 +944,7 @@ int msc_count(void)
 
 int msc_completion(const struct usb_completion *completion)
 {
-    struct msc_device *m = by_device(completion->hc, completion->device);
+    struct msc_device *m = by_device_any(completion->hc, completion->device);
 
     if (m == 0 || !m->used) {
         return 0;
@@ -683,20 +953,59 @@ int msc_completion(const struct usb_completion *completion)
         completion->endpoint != 1) {
         return 0;
     }
-    if (completion->generation != m->tag) {
-        /* A completion for a command this driver has given up on. Its buffer
-         * may already be another request's, so it is dropped and recorded. */
-        klog(KLOG_DEBUG, "usbdisk", "late: device %d: a completion for tag %d", m->device,
+    if (m->closing) {
+        /* A stick that has gone: nothing of its moves. Once its slot is
+         * given back the controller can post nothing of its own, and a
+         * completion naming the slot is a new device's. */
+        return m->slot_closed ? 0 : 1;
+    }
+    if (completion->generation != m->expect_gen || completion->endpoint != m->expect_ep) {
+        /* A completion for a submission this driver is not waiting for: an
+         * earlier stage's, or a command given up on. It is dropped and
+         * recorded; the stage it would have moved is told apart by the
+         * generation each submission carries and its endpoint. */
+        klog(KLOG_DEBUG, "usbdisk", "late: device %d: a completion for generation %d", m->device,
              (int)completion->generation);
         return 1;
     }
 
     if (m->recover == RECOVER_RESET) {
-        /* The reset request has answered, well or badly; either way the two
-         * clears follow, because an endpoint left halted is an endpoint that
-         * carries nothing again. */
+        /* The reset request has answered. Refused, it leaves the control
+         * endpoint halted and the stick in a state this driver cannot read:
+         * the stick is handed to the core. Answered, the two clears follow,
+         * because an endpoint left halted carries nothing again. */
+        if (completion->status != USB_XFER_OK) {
+            refuse_to_core(m, "the class reset was refused");
+            return 1;
+        }
         m->recover = RECOVER_CLEAR_IN;
         m->deadline = MSC_STEP_MS;
+        return 1;
+    }
+    if (m->recover == RECOVER_CLEAR_IN_DEV || m->recover == RECOVER_CLEAR_OUT_DEV ||
+        m->recover == RECOVER_CLEAR_ONE_DEV) {
+        /* The device's clear has answered. */
+        int which = m->recover;
+
+        if (completion->status != USB_XFER_OK) {
+            refuse_to_core(m, "the device would not clear its halt");
+            return 1;
+        }
+        if (which == RECOVER_CLEAR_IN_DEV) {
+            m->recover = RECOVER_CLEAR_OUT;
+            m->deadline = MSC_STEP_MS;
+            return 1;
+        }
+        m->recover = RECOVER_NONE;
+        if (which == RECOVER_CLEAR_ONE_DEV) {
+            if (status_begin(m) != 0) {
+                command_end(m, CSW_PHASE_ERROR);
+            }
+            return 1;
+        }
+        /* Recovery is done and the command it was for is failed: the device
+         * is in a state to take the next one, and this one is lost. */
+        command_end(m, CSW_PHASE_ERROR);
         return 1;
     }
     if (m->recover != RECOVER_NONE) {
@@ -706,11 +1015,18 @@ int msc_completion(const struct usb_completion *completion)
     switch (m->stage) {
     case STAGE_CLASS:
         /* A class request is one transfer. A stall is an answer of its own:
-         * a drive that will not say how many logical units it has, has one. */
+         * a drive that will not say how many logical units it has, has one.
+         * It halts the control endpoint, which is moved on before the
+         * next transfer on it (xHCI 1.2, 4.8.3). */
+        m->residue = completion->residual;
+        if (completion->status == USB_XFER_STALLED) {
+            m->recover = RECOVER_CLEAR_CONTROL;
+            m->deadline = MSC_STEP_MS;
+            return 1;
+        }
         command_end(m, (completion->status == USB_XFER_OK || completion->status == USB_XFER_SHORT)
                            ? CSW_GOOD
                            : CSW_FAILED);
-        m->residue = completion->residual;
         return 1;
 
     case STAGE_CBW:
@@ -748,6 +1064,9 @@ int msc_completion(const struct usb_completion *completion)
             return 1;
         }
         m->residue = completion->residual;
+        m->data_moved = completion->length > completion->residual
+                            ? completion->length - completion->residual
+                            : 0;
         if (status_begin(m) != 0) {
             command_end(m, CSW_PHASE_ERROR);
         }
@@ -815,8 +1134,7 @@ static int class_request_in(struct msc_device *m, int request, uint8_t *data, in
     transfer.length = (uint32_t)length;
     transfer.direction = USB_DIR_IN;
     m->tag = ++tag_seed;
-    transfer.generation = m->tag;
-    if (xhci_submit(m->hc, m->device, 1, &transfer) != 0) {
+    if (submit_expected(m, 1, &transfer) != 0) {
         return -1;
     }
     m->stage = STAGE_CLASS;
@@ -925,6 +1243,7 @@ static int send_read_write(struct msc_device *m, struct block_request *r)
     struct msc_lun *u = &m->luns[m->lun];
     uint8_t cdb[16];
 
+    block_count_command(); /* reported by /proc/disk: one per READ or WRITE */
     if (u->blocks > 0xFFFFFFFFull) {
         cdb_clear(cdb, 16);
         cdb[0] = r->write ? SCSI_WRITE_16 : SCSI_READ_16;
@@ -956,8 +1275,45 @@ static void refuse(struct msc_device *m, const char *why)
     klog(KLOG_WARN, "usbdisk", "refused: device %d: %s", m->device, why);
     m->state = MSC_STATE_REFUSED;
     m->stage = STAGE_IDLE;
-    request_end(m, -EIO);
+    m->recover = RECOVER_NONE;
+    m->quiescing = 0;
+    if (m->owned && m->request != 0) {
+        /* The controller may still reach the request's pages: it is kept
+         * until the slot is given back, which the core's close of the
+         * device brings about. */
+        klog(KLOG_WARN, "usbdisk", "device %d: its request waits for the slot to be given back",
+             m->device);
+        usb_core_device_drop(m->hc, m->device, why);
+    } else {
+        request_end(m, -EIO);
+    }
     queue_drain(m, -EIO);
+}
+
+/**
+ * Refuse a stick whose transport is dead and hand it to the core, whose
+ * port reset enumerates it again as a replug would. A refusal that keeps
+ * an owned request has handed it over already.
+ */
+static void refuse_to_core(struct msc_device *m, const char *why)
+{
+    int device = m->device;
+    struct xhci_ctrl *hc = m->hc;
+
+    klog(KLOG_WARN, "usbdisk", "refused: device %d: %s", device, why);
+    m->state = MSC_STATE_REFUSED;
+    m->stage = STAGE_IDLE;
+    m->recover = RECOVER_NONE;
+    m->quiescing = 0;
+    if (m->request != 0) {
+        /* The request is completed when the slot is given back, which the
+         * core's close of the device brings about; nothing of the stick is
+         * trusted to say whether the controller can reach its pages. */
+        klog(KLOG_WARN, "usbdisk", "device %d: its request waits for the slot to be given back",
+             device);
+    }
+    queue_drain(m, -EIO);
+    usb_core_device_drop(hc, device, why);
 }
 
 static void ready(struct msc_device *m);
@@ -1077,15 +1433,17 @@ static void step_command_done(struct msc_device *m)
             int len = m->scratch[3];
 
             if (len > MSC_SERIAL_MAX) {
-                klog(KLOG_INFO, "usbdisk", "device %d: lun %d: a serial of %d characters is not taken",
-                     m->device, m->lun, len);
+                klog(KLOG_INFO, "usbdisk",
+                     "device %d: lun %d: a serial of %d characters is not taken", m->device, m->lun,
+                     len);
             } else {
                 take_string(m->luns[m->lun].serial, &m->scratch[4], len);
             }
             m->state = MSC_STATE_TEST;
             return;
         }
-        m->state = status == CSW_GOOD ? MSC_STATE_TEST : MSC_STATE_SENSE; /* no page: its sense next */
+        m->state =
+            status == CSW_GOOD ? MSC_STATE_TEST : MSC_STATE_SENSE; /* no page: its sense next */
         return;
 
     case MSC_STATE_TEST:
@@ -1197,15 +1555,20 @@ static void step_command_done(struct msc_device *m)
         }
         if (status == CSW_FAILED) {
             /* A check condition: the sense says what it was, and the stick
-             * will not take the next command until it has been asked. */
-            m->sensing = 1;
-            if (send_request_sense(m) == 0) {
-                return;
-            }
-            serve_end(m, -EIO);
+             * will not take the next command until it has been asked; the
+             * request's transfer is retired before that command. */
+            serve_finish(m, -EIO, 1);
             return;
         }
-        serve_end(m, (status == CSW_GOOD && (m->residue == 0 || m->flushing)) ? 0 : -EIO);
+        /* Good only when the wrapper says so and the data stage moved every
+         * byte: a wrapper claiming no residue over a short data stage is
+         * not a whole read. */
+        serve_finish(m,
+                     (status == CSW_GOOD &&
+                      (m->flushing || (m->residue == 0 && m->data_moved == m->data_length)))
+                         ? 0
+                         : -EIO,
+                     0);
         return;
 
     default:
@@ -1281,13 +1644,17 @@ static void step_idle(struct msc_device *m)
 static void step_timeout(struct msc_device *m)
 {
     klog(KLOG_WARN, "usbdisk", "device %d: a transfer never answered", m->device);
-    m->tag = ++tag_seed; /* whatever arrives late is not this command's */
     if (m->state != MSC_STATE_READY) {
         m->stage = STAGE_IDLE;
-        refuse(m, "it stopped answering while it was being brought up");
+        refuse_to_core(m, "it stopped answering while it was being brought up");
         return;
     }
-    recover_begin(m, "a transfer never answered");
+    /* The endpoints are stopped and their rings moved on before the class
+     * reset, so the transfer that never answered cannot reach the request's
+     * pages once it is completed; `step_quiesce` turns it. */
+    m->quiescing = 1;
+    m->stage = STAGE_QUIESCE;
+    m->deadline = MSC_STEP_MS;
 }
 
 void msc_step(uint32_t elapsed_ms)
@@ -1306,28 +1673,39 @@ void msc_step(uint32_t elapsed_ms)
         if (m->state == MSC_STATE_TEST && m->stage == STAGE_IDLE) {
             m->ready_left = (m->ready_left > elapsed_ms) ? m->ready_left - elapsed_ms : 0;
         }
-        if (step_recovery(m)) {
-            /* The deadline still runs while recovery does: a controller that
-             * never answers a clear must not leave the stick here for ever. */
+        if (m->stage == STAGE_DONE && m->owned) {
+            /* The command's data record is retired and released before
+             * its end is acted on, so no buffer is reused while the
+             * controller can reach it. */
+            m->finish_command = 1;
+            m->stage = STAGE_FINISH;
+            m->deadline = MSC_STEP_MS;
+        } else if (m->stage == STAGE_DONE) {
+            step_command_done(m);
+        }
+        if (step_quiesce(m) || step_finish(m)) {
+            /* A stop or a retirement that never answers must not leave the
+             * stick here for ever: past the deadline the stick is refused
+             * with its request kept, and the core closes it. */
             m->deadline = (m->deadline > elapsed_ms) ? m->deadline - elapsed_ms : 0;
-            if (m->deadline == 0) {
-                int device = m->device;
-
-                klog(KLOG_WARN, "usbdisk", "device %d: recovery never finished", device);
+            if (m->deadline == 0 && (m->stage == STAGE_QUIESCE || m->stage == STAGE_FINISH)) {
+                klog(KLOG_WARN, "usbdisk", "device %d: its endpoint never stopped", m->device);
+                m->quiescing = 0;
+                refuse_to_core(m, "its endpoint never stopped");
+            }
+        } else if (step_recovery(m)) {
+            /* The deadline still runs while recovery does: a controller that
+             * never answers a clear must not leave the stick here for ever.
+             * Nothing is completed: the request's pages may still be the
+             * controller's, and the stick is refused with them kept. */
+            m->deadline = (m->deadline > elapsed_ms) ? m->deadline - elapsed_ms : 0;
+            if (m->deadline == 0 && m->recover != RECOVER_NONE) {
+                klog(KLOG_WARN, "usbdisk", "device %d: recovery never finished", m->device);
                 m->recover = RECOVER_NONE;
                 m->stage = STAGE_IDLE;
-                m->tag = ++tag_seed;
-                serve_end(m, -EIO);
-                /* The transport is dead on a device the hub still shows
-                 * connected; the core resets its port and enumerates it
-                 * again, as a replug would. This entry is detached by the
-                 * core's close. */
-                usb_core_device_drop(m->hc, device, "its transport stopped answering");
+                refuse_to_core(m, "its recovery never finished");
             }
         } else {
-            if (m->stage == STAGE_DONE) {
-                step_command_done(m);
-            }
             if (m->stage != STAGE_IDLE) {
                 m->deadline = (m->deadline > elapsed_ms) ? m->deadline - elapsed_ms : 0;
                 if (m->deadline == 0) {
@@ -1489,6 +1867,7 @@ static void publish(struct msc_device *m, int lun)
     u->block.sector_count = u->blocks;
     u->block.flags = u->write_protect ? BLOCK_READ_ONLY : 0u;
     u->block.deadline_ticks = MSC_DEADLINE_TICKS;
+    u->block.max_sectors = BLOCK_REQ_MAX_SECTORS; /* a 32 KiB request as one command */
     u->block.read = 0;
     u->block.write = 0;
     u->block.submit = msc_block_submit;

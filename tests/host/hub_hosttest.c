@@ -506,11 +506,43 @@ int xhci_endpoint_reset(struct xhci_ctrl *hc, int device, int endpoint)
     return 0;
 }
 
-int xhci_endpoint_dequeue(struct xhci_ctrl *hc, int device, int endpoint)
+int xhci_endpoint_stop(struct xhci_ctrl *hc, int device, int endpoint)
 {
     (void)endpoint;
     command_ok(device);
     return 0;
+}
+
+int xhci_endpoint_dequeue_here(struct xhci_ctrl *hc, int device, int endpoint)
+{
+    (void)endpoint;
+    command_ok(device);
+    return 0;
+}
+
+int xhci_endpoint_state(struct xhci_ctrl *hc, int device, int endpoint)
+{
+    (void)device;
+    (void)endpoint;
+    return XHCI_EP_RUNNING;
+}
+
+void xhci_endpoint_quiescing(struct xhci_ctrl *hc, int device, int endpoint, int on)
+{
+    (void)device;
+    (void)endpoint;
+    (void)on;
+}
+
+void xhci_endpoint_retire_all(struct xhci_ctrl *hc, int device, int endpoint)
+{
+    (void)device;
+    (void)endpoint;
+}
+
+void msc_slot_closed(struct xhci_ctrl *hc, int device)
+{
+    (void)device;
 }
 
 void xhci_endpoint_close(struct xhci_ctrl *hc, int device, int endpoint)

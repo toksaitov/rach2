@@ -556,6 +556,15 @@ static uint8_t bump[256 * 1024];
 static unsigned bump_used;
 static unsigned bump_live;
 
+/* The physical address of a page the driver reaches by another one. A row
+   that wants a buffer's pages out of order sets the map; the ordinary answer
+   is the address itself, as the identity window's is. */
+static uintptr_t (*virt_map)(uintptr_t va);
+uintptr_t paging_virt_to_phys(uintptr_t va)
+{
+    return virt_map ? virt_map(va) : va;
+}
+
 void *kalloc_pages(uint32_t count, uintptr_t *phys)
 {
     unsigned i;
@@ -653,7 +662,54 @@ const char *usb_interface_name(uint8_t prog_if)
     }
 }
 
+/* The driver's barrier, watched: a row that checks how a transfer of several
+   blocks is published looks at the ring at the first barrier of a submission,
+   when every block but the first must be visible and the first not. */
+static int watch_publish;
+static uint32_t watch_first; /* the ring index of the first block */
+static uint32_t watch_cycle; /* the producer's cycle bit at submission */
+static const uint32_t *watch_ring;
+static int watch_result;      /* -1 not looked, 1 first invalid and the rest valid, 0 otherwise */
+static unsigned watch_blocks; /* how many blocks the watched transfer has */
+static void model_barrier(void);
+#define xhci_barrier() model_barrier()
+/* The host build has no identity-mapped window: a buffer's address is
+   whatever the loader gave it, so every one goes through the map. The
+   driver takes an address below the window's end as its own physical
+   address, which on the host depended on the load address of this program
+   and made the map rows fail on one run in two. */
+#include "../../rach2/sys/mm/paging.h"
+#undef HARD_MEMORY_LIMIT
+#define HARD_MEMORY_LIMIT 0u
 #include "../../rach2/sys/usb/xhci.c"
+
+static void model_barrier(void)
+{
+    if (watch_publish && watch_result < 0) {
+        /* At the first barrier the first block is not yet valid and every
+           block after it is, the Link included, with the cycle the
+           producer has on each side of the Link. */
+        uint32_t pos = watch_first;
+        uint32_t cycle = watch_cycle;
+        unsigned i;
+        int ok = 1;
+
+        for (i = 0; i < watch_blocks; i++) {
+            uint32_t c;
+
+            if (pos == XHCI_EP_RING_TRBS - 1) {
+                c = watch_ring[pos * TRB_WORDS + 3] & TRB_CYCLE;
+                ok = ok && c == cycle;
+                pos = 0;
+                cycle ^= TRB_CYCLE;
+            }
+            c = watch_ring[pos * TRB_WORDS + 3] & TRB_CYCLE;
+            ok = ok && (i == 0 ? c != cycle : c == cycle);
+            pos++;
+        }
+        watch_result = ok;
+    }
+}
 
 /*
  * The controller under test. Discovery fills the driver's table; every call
@@ -712,6 +768,50 @@ static uint32_t model_cmd_cycle;
    ignored the answer pass. */
 static uint32_t model_next_slot;
 
+static uint32_t model_ep_dequeue[XHCI_SLOTS + 1][XHCI_MAX_DCI];
+static uint32_t model_ep_cycle[XHCI_SLOTS + 1][XHCI_MAX_DCI];
+/* What a bulk transfer moves, and what the controller does to one: the
+   medium the blocks read from or write to, the direction of each endpoint,
+   a short packet at block N of a transfer with the bytes it leaves, whether
+   the last block's event follows a short as the specification says or not as
+   QEMU does, a failure at block N with its code and residual, and the state
+   a failure or a stop leaves the endpoint in. The blocks fetched are kept
+   so a row can require which were executed. */
+static uint8_t medium[64 * 1024];
+static uint32_t medium_at;
+static int model_ep_in[XHCI_SLOTS + 1][XHCI_MAX_DCI];
+static int model_ep_halted[XHCI_SLOTS + 1][XHCI_MAX_DCI];
+static int model_ep_error[XHCI_SLOTS + 1]
+                         [XHCI_MAX_DCI]; /* the Error state: a block it could not run */
+static int model_td_pos;
+static int short_at;
+static uint32_t short_left;
+static int terminal_after_short;
+static int fail_at;
+static uint32_t fail_code;
+static uint32_t fail_left;
+static uint32_t stop_events;
+static int command_answer_code;
+static const uint32_t *model_fetched[64];
+static unsigned model_fetched_n;
+
+static void post_transfer(uint32_t code, uint32_t residual, uint32_t slot, uint32_t dci,
+                          const uint32_t *t)
+{
+    uint32_t *event = &hc->event_ring[model_event_write * TRB_WORDS];
+
+    event[0] = (uint32_t)(uintptr_t)t;
+    event[1] = 0;
+    event[2] = residual | (code << TRB_COMPLETION_SHIFT);
+    event[3] = (TRB_TYPE_TRANSFER_EVENT << TRB_TYPE_SHIFT) | (slot << TRB_SLOT_SHIFT) |
+               (dci << 16) | model_event_cycle;
+    model_event_write++;
+    if (model_event_write == XHCI_RING_TRBS) {
+        model_event_write = 0;
+        model_event_cycle ^= TRB_CYCLE;
+    }
+}
+
 static void doorbell_rung(uint32_t target)
 {
     if (target != 0) {
@@ -740,13 +840,56 @@ static void doorbell_rung(uint32_t target)
         reg[OP(0x18u)] |= M_CRCR_CRR;
         if (command_completes) {
             uint32_t answered = last_command_slot;
+            uint32_t code = TRB_COMPLETION_SUCCESS;
+            uint32_t edci = (t[3] >> 16) & 0x1Fu;
 
             if (last_command_type == TRB_TYPE_ENABLE_SLOT) {
                 answered = model_next_slot;
                 model_next_slot++;
             }
-            post_event(TRB_TYPE_COMMAND_COMPLETE, TRB_COMPLETION_SUCCESS, answered,
-                       (uint32_t)(uintptr_t)t);
+            /* The endpoint commands, with the preconditions a controller
+               enforces: a halted endpoint is not stopped, a running one is
+               not reset (xHCI 1.2, 4.6.9, 4.6.8). A stop posts the Stopped
+               event for the block the endpoint was on, before its own
+               completion; a dequeue moves the controller's pointer to the
+               address and cycle the command carries. */
+            if (last_command_type == TRB_TYPE_STOP_EP && answered <= XHCI_SLOTS &&
+                edci < XHCI_MAX_DCI) {
+                if (model_ep_halted[answered][edci] || model_ep_error[answered][edci]) {
+                    code = TRB_COMPLETION_CTX_STATE;
+                } else if (hc->slots[answered].ring[edci]) {
+                    const uint32_t *at =
+                        &hc->slots[answered]
+                             .ring[edci][model_ep_dequeue[answered][edci] * TRB_WORDS];
+
+                    post_transfer(TRB_COMPLETION_STOPPED, 0, answered, edci, at);
+                    stop_events++;
+                }
+            } else if (last_command_type == TRB_TYPE_RESET_EP && answered <= XHCI_SLOTS &&
+                       edci < XHCI_MAX_DCI) {
+                if (!model_ep_halted[answered][edci]) {
+                    code = TRB_COMPLETION_CTX_STATE;
+                } else {
+                    model_ep_halted[answered][edci] = 0;
+                }
+            } else if (last_command_type == TRB_TYPE_SET_TR_DEQUEUE && answered <= XHCI_SLOTS &&
+                       edci < XHCI_MAX_DCI && hc->slots[answered].ring[edci]) {
+                uintptr_t ring = (uintptr_t)hc->slots[answered].ring[edci];
+                uintptr_t where =
+                    (uintptr_t)(((uint64_t)t[0] | ((uint64_t)t[1] << 32)) & ~(uint64_t)0xFu);
+
+                if (where >= ring && where < ring + XHCI_EP_RING_TRBS * TRB_WORDS * 4u) {
+                    model_ep_dequeue[answered][edci] =
+                        (uint32_t)((where - ring) / (TRB_WORDS * 4u));
+                    model_ep_cycle[answered][edci] = t[0] & TRB_CYCLE;
+                    model_ep_error[answered][edci] = 0; /* Error to Stopped (4.6.10) */
+                }
+            }
+            if (command_answer_code != 0) {
+                code = (uint32_t)command_answer_code;
+                command_answer_code = 0;
+            }
+            post_event(TRB_TYPE_COMMAND_COMPLETE, code, answered, (uint32_t)(uintptr_t)t);
             reg[OP(0x18u)] &= ~M_CRCR_CRR;
         }
         model_cmd_dequeue++;
@@ -761,11 +904,63 @@ static void doorbell_rung(uint32_t target)
    answers a transfer with. A transfer is finished by the block that asks for an
    event; the model finds that block by walking the ring the way a controller
    does, rather than by knowing where the driver put it. */
-static uint32_t model_ep_dequeue[XHCI_SLOTS + 1][XHCI_MAX_DCI];
-static uint32_t model_ep_cycle[XHCI_SLOTS + 1][XHCI_MAX_DCI];
 static int transfer_code;
 static uint32_t transfer_residual;
 static int transfer_answers;
+static int status_code; /* when set, the code the next status stage's event carries */
+/* The controller's step past one block of `slot`'s `dci` ring, Links
+   followed. */
+static void model_ep_advance(uint32_t slot, uint32_t dci)
+{
+    model_ep_dequeue[slot][dci]++;
+    if (model_ep_dequeue[slot][dci] == XHCI_EP_RING_TRBS) {
+        model_ep_dequeue[slot][dci] = 0;
+        model_ep_cycle[slot][dci] ^= TRB_CYCLE;
+    }
+}
+
+/* The driver's addresses are 32 bits wide, the kernel's, and a block names
+   a page by the low word of the host address the test gave it; a row that
+   moves data registers its pages here so the model finds them again. A
+   block naming no registered page moves nothing. */
+static uint8_t *model_pages[64];
+static unsigned model_pages_n;
+static void model_page_register(void *p)
+{
+    if (model_pages_n < 64) {
+        model_pages[model_pages_n++] = (uint8_t *)p;
+    }
+}
+static uint8_t *model_page_lookup(uint32_t lo)
+{
+    unsigned i;
+
+    for (i = 0; i < model_pages_n; i++) {
+        if ((uint32_t)(uintptr_t)model_pages[i] == (lo & ~0xFFFu)) {
+            return model_pages[i] + (lo & 0xFFFu);
+        }
+    }
+    return 0;
+}
+
+static void model_move(uint32_t slot, uint32_t dci, const uint32_t *t, uint32_t bytes)
+{
+    uint8_t *page = model_page_lookup(t[0]);
+    uint32_t i;
+
+    if (!page) {
+        medium_at += bytes;
+        return;
+    }
+    for (i = 0; i < bytes && medium_at + i < sizeof(medium); i++) {
+        if (model_ep_in[slot][dci]) {
+            page[i] = medium[medium_at + i];
+        } else {
+            medium[medium_at + i] = page[i];
+        }
+    }
+    medium_at += bytes;
+}
 
 static void endpoint_doorbell(uint32_t slot, uint32_t dci)
 {
@@ -789,25 +984,86 @@ static void endpoint_doorbell(uint32_t slot, uint32_t dci)
             }
             continue;
         }
-        if ((t[3] & TRB_IOC) && transfer_answers) {
-            uint32_t *event = &hc->event_ring[model_event_write * TRB_WORDS];
+        if (model_ep_halted[slot][dci] || model_ep_error[slot][dci]) {
+            break; /* a halted or errored endpoint fetches nothing until it is moved on */
+        }
+        if (model_fetched_n < 64) {
+            model_fetched[model_fetched_n++] = t;
+        }
+        model_td_pos = (model_td_pos > 0 && (model_fetched_n > 1) &&
+                        (model_fetched[model_fetched_n - 2][3] & TRB_CHAIN))
+                           ? model_td_pos + 1
+                           : 1;
+        if (type == TRB_TYPE_NORMAL) {
+            uint32_t bytes = t[2] & 0x1FFFFu;
 
-            event[0] = (uint32_t)(uintptr_t)t;
-            event[1] = 0;
-            event[2] = transfer_residual | ((uint32_t)transfer_code << TRB_COMPLETION_SHIFT);
-            event[3] = (TRB_TYPE_TRANSFER_EVENT << TRB_TYPE_SHIFT) | (slot << TRB_SLOT_SHIFT) |
-                       (dci << 16) | model_event_cycle;
-            model_event_write++;
-            if (model_event_write == XHCI_RING_TRBS) {
-                model_event_write = 0;
-                model_event_cycle ^= TRB_CYCLE;
+            if (fail_at == model_td_pos) {
+                /* The block fails: its event, and the endpoint halts there,
+                   or enters the Error state for a block the controller
+                   could not run (xHCI 1.2, 4.8.3). */
+                fail_at = 0;
+                post_transfer(fail_code, fail_left, slot, dci, t);
+                if (fail_code == TRB_COMPLETION_STALL || fail_code == TRB_COMPLETION_TXN_ERROR ||
+                    fail_code == TRB_COMPLETION_BABBLE || fail_code == TRB_COMPLETION_SPLIT_ERROR) {
+                    model_ep_halted[slot][dci] = 1;
+                } else {
+                    model_ep_error[slot][dci] = 1;
+                }
+                model_ep_advance(slot, dci);
+                break;
             }
+            if (short_at == model_td_pos) {
+                const uint32_t *last = t;
+
+                short_at = 0;
+                model_move(slot, dci, t, bytes > short_left ? bytes - short_left : 0);
+                if (t[3] & (TRB_ISP | TRB_IOC)) {
+                    post_transfer(TRB_COMPLETION_SHORT, short_left, slot, dci, t);
+                }
+                /* The rest of the transfer is skipped, Links followed, to the
+                   block without a chain bit; its event is posted when the
+                   controller is one that does. */
+                while (last[3] & TRB_CHAIN) {
+                    model_ep_advance(slot, dci);
+                    last = &hc->slots[slot].ring[dci][model_ep_dequeue[slot][dci] * TRB_WORDS];
+                    if (((last[3] >> TRB_TYPE_SHIFT) & TRB_TYPE_MASK) == TRB_TYPE_LINK) {
+                        model_ep_dequeue[slot][dci] = 0;
+                        if (last[3] & TRB_TOGGLE) {
+                            model_ep_cycle[slot][dci] ^= TRB_CYCLE;
+                        }
+                        last = &hc->slots[slot].ring[dci][0];
+                    }
+                    if (model_fetched_n < 64) {
+                        model_fetched[model_fetched_n++] = last;
+                    }
+                }
+                if (terminal_after_short && (last[3] & TRB_IOC)) {
+                    post_transfer(TRB_COMPLETION_SHORT, last[2] & 0x1FFFFu, slot, dci, last);
+                }
+                model_td_pos = 0;
+                model_ep_advance(slot, dci);
+                continue;
+            }
+            model_move(slot, dci, t, bytes);
         }
-        model_ep_dequeue[slot][dci]++;
-        if (model_ep_dequeue[slot][dci] == XHCI_EP_RING_TRBS) {
-            model_ep_dequeue[slot][dci] = 0;
-            model_ep_cycle[slot][dci] ^= TRB_CYCLE;
+        if (type == TRB_TYPE_STATUS && status_code != 0 && transfer_answers) {
+            /* The status stage answered on its own: a stall there halts
+               the endpoint after a data stage that answered well. */
+            post_transfer((uint32_t)status_code, 0, slot, dci, t);
+            if (status_code == TRB_COMPLETION_STALL) {
+                model_ep_halted[slot][dci] = 1;
+            }
+            status_code = 0;
+            model_ep_advance(slot, dci);
+            if (model_ep_halted[slot][dci]) {
+                break;
+            }
+            continue;
         }
+        if ((t[3] & TRB_IOC) && transfer_answers) {
+            post_transfer((uint32_t)transfer_code, transfer_residual, slot, dci, t);
+        }
+        model_ep_advance(slot, dci);
     }
 }
 
@@ -871,9 +1127,27 @@ static void model_reset(void)
             for (di = 0; di < XHCI_MAX_DCI; di++) {
                 model_ep_dequeue[si][di] = 0;
                 model_ep_cycle[si][di] = TRB_CYCLE;
+                model_ep_in[si][di] = 0;
+                model_ep_halted[si][di] = 0;
+                model_ep_error[si][di] = 0;
             }
         }
     }
+    medium_at = 0;
+    model_td_pos = 0;
+    short_at = 0;
+    short_left = 0;
+    terminal_after_short = 1;
+    fail_at = 0;
+    fail_code = 0;
+    fail_left = 0;
+    stop_events = 0;
+    command_answer_code = 0;
+    model_fetched_n = 0;
+    virt_map = 0;
+    model_pages_n = 0;
+    watch_publish = 0;
+    watch_result = -1;
     abort_completes = 1;
     model_cmd_dequeue = 0;
     model_cmd_cycle = TRB_CYCLE;
@@ -938,6 +1212,147 @@ static struct usb_location root_at(int port)
     where.tt_port = 0;
     where.tt_multi = 0;
     return where;
+}
+
+/* ---- a device with a bulk pair, and the buffers the transfer rows use ---- */
+
+/* The rows over a 32 KiB transfer: the buffer the driver is given, whose
+   pages are reached through the map below, and the pages the controller
+   actually moves data to and from, in the order the map chooses. */
+static uint8_t big[16 * 4096] __attribute__((aligned(4096)));
+static uint8_t shadow[16 * 4096] __attribute__((aligned(4096)));
+static unsigned perm[16];
+static int map_fail_at; /* the page whose translation fails, from one; 0 for none */
+
+/* The page of `shadow` that stands for a byte of `big`, by the map, as a
+   host pointer; the driver's addresses are the kernel's 32 bits, so the
+   map works on the low word of the address it is given. */
+static uint8_t *shadow_of(uint32_t lo)
+{
+    uint32_t base = (uint32_t)(uintptr_t)big;
+    unsigned page;
+
+    if (lo - base >= sizeof(big)) {
+        return 0;
+    }
+    page = (unsigned)((lo - base) / 4096);
+    if (map_fail_at != 0 && (int)page + 1 == map_fail_at) {
+        return 0;
+    }
+    return shadow + perm[page] * 4096 + (lo & 0xFFFu);
+}
+
+static uintptr_t permuted_map(uintptr_t va)
+{
+    uint8_t *p = shadow_of((uint32_t)va);
+
+    if ((uint32_t)va - (uint32_t)(uintptr_t)big >= sizeof(big)) {
+        return va;
+    }
+    return (uintptr_t)p;
+}
+
+/* The controller's address of a byte of `big`, as the map gives it. */
+static uint8_t *at_phys(const uint8_t *va)
+{
+    return shadow_of((uint32_t)(uintptr_t)va);
+}
+
+static void bulk_pair_up(void)
+{
+    struct usb_command_result result;
+    struct usb_endpoint ep;
+    struct usb_location where = root_at(0);
+    unsigned i;
+
+    model_reset();
+    xhci_read_caps(hc);
+    xhci_halt_reset(hc);
+    xhci_start(hc);
+    reg[M_PORTSC(0)] |= M_PORTSC_CCS | (3u << 10);
+    xhci_device_open(hc, &where, USB_SPEED_HIGH);
+    xhci_events(hc);
+    xhci_command_done(hc, &result);
+    xhci_device_address(hc, 1);
+    xhci_events(hc);
+    xhci_command_done(hc, &result);
+    ep.number = 1;
+    ep.direction = USB_DIR_IN;
+    ep.type = USB_EP_BULK;
+    ep.max_packet = 512;
+    ep.interval = 0;
+    xhci_endpoint_open(hc, 1, &ep);
+    xhci_events(hc);
+    xhci_command_done(hc, &result);
+    ep.number = 2;
+    ep.direction = USB_DIR_OUT;
+    xhci_endpoint_open(hc, 1, &ep);
+    xhci_events(hc);
+    xhci_command_done(hc, &result);
+    model_ep_in[1][3] = 1;
+    model_ep_in[1][4] = 0;
+    for (i = 0; i < 16; i++) {
+        perm[i] = 15 - i; /* the pages in the reverse order */
+        model_page_register(shadow + i * 4096);
+    }
+    map_fail_at = 0;
+    virt_map = permuted_map;
+    for (i = 0; i < sizeof(medium); i++) {
+        medium[i] = (uint8_t)(i * 7u + 3u);
+    }
+    for (i = 0; i < sizeof(shadow); i++) {
+        shadow[i] = 0;
+    }
+}
+
+/* The ring of `dci` as a driver that filled it up to `upto` in its first lap
+   leaves it: those entries carry the first lap's cycle bit, so that after the
+   Link toggles the cycle they are not valid again. A row that starts a
+   transfer near the ring's end sets this up first. */
+static void ring_lap_one(uint32_t dci, uint32_t upto)
+{
+    uint32_t i;
+
+    for (i = 0; i < upto; i++) {
+        hc->slots[1].ring[dci][i * TRB_WORDS + 3] = TRB_CYCLE;
+    }
+    hc->slots[1].enqueue[dci] = upto;
+    model_ep_dequeue[1][dci] = upto;
+}
+
+/* The block at ring index `at` of endpoint `dci` of device one. */
+static const uint32_t *block(uint32_t dci, uint32_t at)
+{
+    return &hc->slots[1].ring[dci][at * TRB_WORDS];
+}
+
+/* Whether the bytes the controller moved for the transfer at `buffer`,
+   `length` long, match the medium from `from`, page by page where the map
+   put them. */
+static int landed(const uint8_t *buffer, uint32_t length, uint32_t from)
+{
+    uint32_t i;
+
+    for (i = 0; i < length; i++) {
+        if (*at_phys(buffer + i) != medium[from + i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* Whether the medium holds, from `from`, the bytes of the transfer at
+   `buffer` as the map placed them. */
+static int arrived(const uint8_t *buffer, uint32_t length, uint32_t from)
+{
+    uint32_t i;
+
+    for (i = 0; i < length; i++) {
+        if (medium[from + i] != *at_phys(buffer + i)) {
+            return 0;
+        }
+    }
+    return 1;
 }
 
 int main(void)
@@ -1631,11 +2046,13 @@ int main(void)
     /* A halted endpoint is reset and its ring pointed at the block the driver
        will write next. Returning an error and leaving the ring alone would
        leave the endpoint unusable for the rest of the boot. */
+    model_ep_halted[1][3] = 1; /* the controller reported the halt */
     CHECK("a halted endpoint is reset", xhci_endpoint_reset(hc, 1, 3) == 0);
     CHECK("with the command that resets one", last_command_type == TRB_TYPE_RESET_EP);
     xhci_events(hc);
     CHECK("the controller answers", xhci_command_done(hc, &result) == 1);
-    CHECK("and its ring is pointed somewhere again", xhci_endpoint_dequeue(hc, 1, 3) == 0);
+    CHECK("and its ring is pointed at the driver's next block",
+          xhci_endpoint_dequeue_here(hc, 1, 3) == 0);
     CHECK("with the command that points it", last_command_type == TRB_TYPE_SET_TR_DEQUEUE);
     xhci_events(hc);
     CHECK("the controller answers", xhci_command_done(hc, &result) == 1);
@@ -1756,6 +2173,59 @@ int main(void)
         CHECK("a stall is reported", xhci_poll(hc, &completion) == 1);
         CHECK("as a stall, which is the one a caller recovers from",
               completion.status == USB_XFER_STALLED);
+
+        /* The endpoint is halted: nothing is queued on it until it is reset
+           and moved on. */
+        transfer_code = TRB_COMPLETION_SUCCESS;
+        CHECK("nothing is queued on the halted endpoint", xhci_submit(hc, 1, 1, &transfer) != 0);
+        model_ep_halted[1][1] = 1;
+        CHECK("Reset Endpoint is issued", xhci_endpoint_reset(hc, 1, 1) == 0);
+        xhci_events(hc);
+        CHECK("and answered", xhci_command_done(hc, &result) == 1 && result.status == USB_XFER_OK);
+        CHECK("Set TR Dequeue is issued", xhci_endpoint_dequeue_here(hc, 1, 1) == 0);
+        xhci_events(hc);
+        CHECK("and answered", xhci_command_done(hc, &result) == 1 && result.status == USB_XFER_OK);
+        xhci_endpoint_retire_all(hc, 1, 1);
+
+        /* A data stage that answers well under a status stage that stalls:
+           the transfer failed, whatever the data stage said. */
+        status_code = TRB_COMPLETION_STALL;
+        CHECK("a transfer whose status stage stalls is queued",
+              xhci_submit(hc, 1, 1, &transfer) == 0);
+        xhci_events(hc);
+        CHECK("it is reported once as a stall", xhci_poll(hc, &completion) == 1 &&
+                                                    completion.status == USB_XFER_STALLED &&
+                                                    xhci_poll(hc, &completion) == 0);
+        CHECK("and the endpoint is halted", xhci_endpoint_state(hc, 1, 1) == XHCI_EP_HALTED);
+        CHECK("Reset Endpoint is issued", xhci_endpoint_reset(hc, 1, 1) == 0);
+        xhci_events(hc);
+        CHECK("and answered", xhci_command_done(hc, &result) == 1 && result.status == USB_XFER_OK);
+        CHECK("Set TR Dequeue is issued", xhci_endpoint_dequeue_here(hc, 1, 1) == 0);
+        xhci_events(hc);
+        CHECK("and answered", xhci_command_done(hc, &result) == 1 && result.status == USB_XFER_OK);
+        xhci_endpoint_retire_all(hc, 1, 1);
+
+        /* A short data stage under a stalled status stage: the failure is
+           the outcome and the bytes are the data stage's. */
+        transfer_code = TRB_COMPLETION_SHORT;
+        transfer_residual = 6;
+        status_code = TRB_COMPLETION_STALL;
+        CHECK("a transfer short in its data stage and stalled in its status stage is queued",
+              xhci_submit(hc, 1, 1, &transfer) == 0);
+        xhci_events(hc);
+        CHECK("it is reported as a stall with the data stage's residual",
+              xhci_poll(hc, &completion) == 1 && completion.status == USB_XFER_STALLED &&
+                  completion.residual == 6);
+        transfer_code = TRB_COMPLETION_SUCCESS;
+        transfer_residual = 0;
+        model_ep_halted[1][1] = 1;
+        CHECK("Reset Endpoint is issued", xhci_endpoint_reset(hc, 1, 1) == 0);
+        xhci_events(hc);
+        CHECK("and answered", xhci_command_done(hc, &result) == 1 && result.status == USB_XFER_OK);
+        CHECK("Set TR Dequeue is issued", xhci_endpoint_dequeue_here(hc, 1, 1) == 0);
+        xhci_events(hc);
+        CHECK("and answered", xhci_command_done(hc, &result) == 1 && result.status == USB_XFER_OK);
+        xhci_endpoint_retire_all(hc, 1, 1);
 
         /* A transfer the controller never answers. */
         transfer_answers = 0;
@@ -1936,20 +2406,27 @@ int main(void)
        answered outstanding forever, which for a hub's change endpoint is a
        hub that never reports again. */
     {
+        struct usb_transfer transfer;
         struct usb_completion completion;
-        int i;
+        uint8_t buffer[8];
         int got = 0;
 
-        for (i = 0; i < 9; i++) {
-            post_event(TRB_TYPE_TRANSFER_EVENT, TRB_COMPLETION_SUCCESS, 1, 0);
-        }
-        CHECK("a drain of nine transfer events takes eight", xhci_events(hc) == 8);
+        transfer.setup = 0;
+        transfer.buffer = buffer;
+        transfer.length = sizeof(buffer);
+        transfer.direction = USB_DIR_IN;
+        transfer.generation = 0x60;
+        /* The queue is filled by hand, as eight transfers answered at once
+           would fill it, and one more transfer is answered. */
+        hc->completion_head = hc->completion_tail + XHCI_COMPLETIONS;
+        CHECK("a transfer is queued against a full queue", xhci_submit(hc, 1, 3, &transfer) == 0);
+        CHECK("a drain over a full queue takes nothing", xhci_events(hc) == 0);
         while (xhci_poll(hc, &completion) == 1) {
             got++;
         }
-        CHECK("and eight are polled", got == 8);
-        CHECK("the ninth is taken by the next drain", xhci_events(hc) == 1);
-        CHECK("and polled then", xhci_poll(hc, &completion) == 1);
+        CHECK("and the eight are polled", got == 8);
+        CHECK("the event is taken by the next drain", xhci_events(hc) == 1);
+        CHECK("and polled then", xhci_poll(hc, &completion) == 1 && completion.generation == 0x60);
     }
 
     /* A completion for a device that has been closed is dropped: the slot may
@@ -2156,6 +2633,506 @@ int main(void)
     post_event(TRB_TYPE_PORT_CHANGE, TRB_COMPLETION_SUCCESS, 0, 1u << 24);
     CHECK("an event after that raises nothing", model_raises == 0);
     CHECK("and waits for a drain that is not an interrupt's", xhci_events(hc) == 1);
+
+    /* ---- a 32 KiB transfer as one command, its blocks and its bytes ---- */
+
+    /* Nine blocks over nine pages when the buffer starts mid-page, each at
+       the physical page the map gives, with the packets left after it, the
+       chain on all but the last, the short-packet event on the intermediate
+       IN blocks and the event on the last; and the bytes landing page by
+       page where the blocks said. */
+    {
+        struct usb_transfer transfer;
+        struct usb_completion completion;
+        static const uint32_t sizes[9] = {31, 31, 31, 31, 28, 20, 12, 4, 0};
+        static const uint32_t lens[9] = {2048, 4096, 4096, 4096, 4096, 4096, 4096, 4096, 2048};
+        uint32_t first, i, off = 0;
+        int ok_addr = 1, ok_len = 1, ok_size = 1, ok_chain = 1, ok_isp = 1, ok_ioc = 1;
+
+        bulk_pair_up();
+        transfer.setup = 0;
+        transfer.buffer = big + 2048;
+        transfer.length = 32768;
+        transfer.direction = USB_DIR_IN;
+        transfer.generation = 0x100;
+        first = hc->slots[1].enqueue[3];
+        transfer_answers = 1;
+        CHECK("a 32 KiB IN transfer is queued", xhci_submit(hc, 1, 3, &transfer) == 0);
+        for (i = 0; i < 9; i++) {
+            const uint32_t *t = block(3, first + i);
+
+            ok_addr = ok_addr && t[0] == (uint32_t)(uintptr_t)at_phys(big + 2048 + off);
+            ok_len = ok_len && (t[2] & 0x1FFFFu) == lens[i];
+            ok_size = ok_size && ((t[2] >> TRB_TD_SIZE_SHIFT) & 0x1Fu) == sizes[i];
+            ok_chain = ok_chain && ((t[3] & TRB_CHAIN) != 0) == (i < 8);
+            ok_isp = ok_isp && ((t[3] & TRB_ISP) != 0) == (i < 8);
+            ok_ioc = ok_ioc && ((t[3] & TRB_IOC) != 0) == (i == 8);
+            off += lens[i];
+        }
+        CHECK("as nine blocks at the pages the map gives", ok_addr);
+        CHECK("with the pieces' lengths", ok_len);
+        CHECK("and the packets left after each, at most 31, none after the last", ok_size);
+        CHECK("chained on all but the last", ok_chain);
+        CHECK("asking for a short packet's event on the intermediate blocks", ok_isp);
+        CHECK("and the event on the last", ok_ioc);
+        xhci_events(hc);
+        CHECK("it is reported once",
+              xhci_poll(hc, &completion) == 1 && xhci_poll(hc, &completion) == 0);
+        CHECK("as whole", completion.status == USB_XFER_OK && completion.residual == 0 &&
+                              completion.length == 32768 && completion.generation == 0x100);
+        CHECK("and the bytes landed page by page where the blocks said",
+              landed(big + 2048, 32768, 0));
+        CHECK("and the transfer is retired", xhci_td_retired(hc, 1, 0x100) == 1);
+    }
+
+    /* The same OUT: no short-packet events asked for, and the medium holding
+       the bytes from the pages in the map's order. */
+    {
+        struct usb_transfer transfer;
+        struct usb_completion completion;
+        uint32_t first, i;
+        int ok_isp = 1;
+
+        bulk_pair_up();
+        for (i = 0; i < 32768; i++) {
+            /* A pattern that differs from page to page, so two pages
+               swapped in the map would show. */
+            *at_phys(big + 2048 + i) = (uint8_t)(i * 13u + 5u + (i >> 12) * 37u);
+        }
+        transfer.setup = 0;
+        transfer.buffer = big + 2048;
+        transfer.length = 32768;
+        transfer.direction = USB_DIR_OUT;
+        transfer.generation = 0x101;
+        first = hc->slots[1].enqueue[4];
+        CHECK("a 32 KiB OUT transfer is queued", xhci_submit(hc, 1, 4, &transfer) == 0);
+        for (i = 0; i < 9; i++) {
+            ok_isp = ok_isp && (block(4, first + i)[3] & TRB_ISP) == 0;
+        }
+        CHECK("with no short-packet event asked for", ok_isp);
+        xhci_events(hc);
+        CHECK("it is reported whole",
+              xhci_poll(hc, &completion) == 1 && completion.status == USB_XFER_OK);
+        CHECK("and the medium holds the bytes from the pages in the map's order",
+              arrived(big + 2048, 32768, 0));
+    }
+
+    /* A transfer started three blocks before the ring's end: the Link it
+       crosses carries the chain bit, the events land, and the bytes cross
+       the Link and the boundary to the next transfer whole. */
+    {
+        struct usb_transfer transfer;
+        struct usb_completion completion;
+
+        bulk_pair_up();
+        ring_lap_one(3, XHCI_EP_RING_TRBS - 4);
+        transfer.setup = 0;
+        transfer.buffer = big;
+        transfer.length = 16384;
+        transfer.direction = USB_DIR_IN;
+        transfer.generation = 0x102;
+        CHECK("a transfer is queued across the ring's end", xhci_submit(hc, 1, 3, &transfer) == 0);
+        CHECK("the Link carries the chain bit",
+              (block(3, XHCI_EP_RING_TRBS - 1)[3] & TRB_CHAIN) != 0);
+        CHECK("and the block after it is the transfer's last", (block(3, 0)[3] & TRB_IOC) != 0);
+        xhci_events(hc);
+        CHECK("it is reported whole", xhci_poll(hc, &completion) == 1 &&
+                                          completion.status == USB_XFER_OK &&
+                                          completion.residual == 0);
+        CHECK("and the bytes crossed the Link", landed(big, 16384, 0));
+        transfer.buffer = big + 16384;
+        transfer.generation = 0x103;
+        CHECK("the next transfer is queued after it", xhci_submit(hc, 1, 3, &transfer) == 0);
+        xhci_events(hc);
+        CHECK("and reported", xhci_poll(hc, &completion) == 1 && completion.generation == 0x103);
+        CHECK("with its bytes after the first's", landed(big + 16384, 16384, 16384));
+    }
+
+    /* A short packet on the third block, with the last block's event after
+       it as the specification says: one completion, short by the bytes not
+       moved, the transfer retired by the last block's event and not before;
+       then the same with no such event, as QEMU does: the completion
+       delivered, the transfer unretired until it is stopped and dequeued,
+       and a transfer after that completing. */
+    {
+        struct usb_transfer transfer;
+        struct usb_completion completion;
+        struct usb_command_result result;
+
+        bulk_pair_up();
+        transfer.setup = 0;
+        transfer.buffer = big + 2048;
+        transfer.length = 32768;
+        transfer.direction = USB_DIR_IN;
+        transfer.generation = 0x104;
+        short_at = 3;
+        short_left = 1000;
+        terminal_after_short = 1;
+        CHECK("a transfer is queued", xhci_submit(hc, 1, 3, &transfer) == 0);
+        CHECK("and held", xhci_td_hold(hc, 1, 0x104) == 0);
+        xhci_events(hc);
+        CHECK("the short is reported once",
+              xhci_poll(hc, &completion) == 1 && xhci_poll(hc, &completion) == 0);
+        CHECK("as short by the bytes not moved",
+              completion.status == USB_XFER_SHORT &&
+                  completion.residual == 32768 - (2048 + 4096 + 3096));
+        CHECK("and the transfer is retired by the last block's event",
+              xhci_td_retired(hc, 1, 0x104) == 1);
+        xhci_td_release(hc, 1, 0x104);
+
+        transfer.generation = 0x105;
+        short_at = 3;
+        short_left = 1000;
+        terminal_after_short = 0;
+        CHECK("a transfer is queued on a controller that posts no last event",
+              xhci_submit(hc, 1, 3, &transfer) == 0);
+        CHECK("and held", xhci_td_hold(hc, 1, 0x105) == 0);
+        xhci_events(hc);
+        CHECK("the short is reported",
+              xhci_poll(hc, &completion) == 1 && completion.status == USB_XFER_SHORT);
+        CHECK("and the transfer is not retired", xhci_td_retired(hc, 1, 0x105) == 0);
+        CHECK("Stop Endpoint is issued", xhci_endpoint_stop(hc, 1, 3) == 0);
+        xhci_events(hc);
+        CHECK("and answered", xhci_command_done(hc, &result) == 1 && result.status == USB_XFER_OK);
+        CHECK("still not retired", xhci_td_retired(hc, 1, 0x105) == 0);
+        CHECK("Set TR Dequeue is issued at the enqueue pointer",
+              xhci_endpoint_dequeue_here(hc, 1, 3) == 0);
+        xhci_events(hc);
+        CHECK("and answered", xhci_command_done(hc, &result) == 1 && result.status == USB_XFER_OK);
+        xhci_endpoint_retire_all(hc, 1, 3);
+        CHECK("and the transfer is retired by the two", xhci_td_retired(hc, 1, 0x105) == 1);
+        xhci_td_release(hc, 1, 0x105);
+        transfer.generation = 0x106;
+        CHECK("a transfer after the stop is queued", xhci_submit(hc, 1, 3, &transfer) == 0);
+        xhci_events(hc);
+        CHECK("and completes whole", xhci_poll(hc, &completion) == 1 &&
+                                         completion.status == USB_XFER_OK &&
+                                         completion.generation == 0x106);
+    }
+
+    /* A failure on the second block, the controller halting there and
+       posting nothing more: one failed completion with the bytes through
+       the block before plus the failing block's own, the endpoint halted,
+       the transfer owned until the reset and the dequeue are answered. */
+    {
+        struct usb_transfer transfer;
+        struct usb_completion completion;
+        struct usb_command_result result;
+
+        bulk_pair_up();
+        transfer.setup = 0;
+        transfer.buffer = big + 2048;
+        transfer.length = 32768;
+        transfer.direction = USB_DIR_IN;
+        transfer.generation = 0x107;
+        fail_at = 2;
+        fail_code = TRB_COMPLETION_TXN_ERROR;
+        fail_left = 500;
+        CHECK("a transfer is queued", xhci_submit(hc, 1, 3, &transfer) == 0);
+        CHECK("and held", xhci_td_hold(hc, 1, 0x107) == 0);
+        xhci_events(hc);
+        CHECK("the failure is reported once",
+              xhci_poll(hc, &completion) == 1 && xhci_poll(hc, &completion) == 0);
+        CHECK("with the bytes through the block before and the failing block's own",
+              completion.status == USB_XFER_FAILED && completion.residual == 32768 - (2048 + 3596));
+        CHECK("the endpoint is halted", xhci_endpoint_state(hc, 1, 3) == 1);
+        CHECK("and the transfer is owned", xhci_td_retired(hc, 1, 0x107) == 0);
+        CHECK("Reset Endpoint is issued", xhci_endpoint_reset(hc, 1, 3) == 0);
+        xhci_events(hc);
+        CHECK("and answered", xhci_command_done(hc, &result) == 1 && result.status == USB_XFER_OK);
+        CHECK("the transfer is owned between the reset and the dequeue",
+              xhci_td_retired(hc, 1, 0x107) == 0);
+        CHECK("Set TR Dequeue is issued", xhci_endpoint_dequeue_here(hc, 1, 3) == 0);
+        xhci_events(hc);
+        CHECK("and answered", xhci_command_done(hc, &result) == 1 && result.status == USB_XFER_OK);
+        xhci_endpoint_retire_all(hc, 1, 3);
+        CHECK("and retired after", xhci_td_retired(hc, 1, 0x107) == 1);
+        xhci_td_release(hc, 1, 0x107);
+        transfer.generation = 0x108;
+        CHECK("a transfer after the recovery is queued", xhci_submit(hc, 1, 3, &transfer) == 0);
+        xhci_events(hc);
+        CHECK("and completes whole",
+              xhci_poll(hc, &completion) == 1 && completion.status == USB_XFER_OK);
+    }
+
+    /* A translation that fails on the fifth page, and a third transfer with
+       no record free: refused with the ring and its pointer untouched. */
+    {
+        struct usb_transfer transfer;
+        uint32_t before[XHCI_EP_RING_TRBS * TRB_WORDS];
+        uint32_t enqueue, i;
+        int same = 1;
+
+        bulk_pair_up();
+        transfer.setup = 0;
+        transfer.buffer = big + 2048;
+        transfer.length = 32768;
+        transfer.direction = USB_DIR_IN;
+        transfer.generation = 0x109;
+        map_fail_at = 5;
+        enqueue = hc->slots[1].enqueue[3];
+        for (i = 0; i < XHCI_EP_RING_TRBS * TRB_WORDS; i++) {
+            before[i] = hc->slots[1].ring[3][i];
+        }
+        CHECK("a transfer whose fifth page has no frame is refused",
+              xhci_submit(hc, 1, 3, &transfer) != 0);
+        for (i = 0; i < XHCI_EP_RING_TRBS * TRB_WORDS; i++) {
+            same = same && before[i] == hc->slots[1].ring[3][i];
+        }
+        CHECK("with the ring's words as they were", same);
+        CHECK("and the pointer as it was", hc->slots[1].enqueue[3] == enqueue);
+        map_fail_at = 0;
+        transfer_answers = 0;
+        transfer.generation = 0x10A;
+        CHECK("a transfer is queued and not answered", xhci_submit(hc, 1, 3, &transfer) == 0);
+        transfer.generation = 0x10B;
+        CHECK("a second is queued beside it", xhci_submit(hc, 1, 3, &transfer) == 0);
+        for (i = 0; i < XHCI_EP_RING_TRBS * TRB_WORDS; i++) {
+            before[i] = hc->slots[1].ring[3][i];
+        }
+        enqueue = hc->slots[1].enqueue[3];
+        transfer.generation = 0x10C;
+        CHECK("a third, with no record free, is refused", xhci_submit(hc, 1, 3, &transfer) != 0);
+        same = 1;
+        for (i = 0; i < XHCI_EP_RING_TRBS * TRB_WORDS; i++) {
+            same = same && before[i] == hc->slots[1].ring[3][i];
+        }
+        CHECK("with the ring's words and the pointer as they were",
+              same && hc->slots[1].enqueue[3] == enqueue);
+        transfer_answers = 1;
+    }
+
+    /* A stop after a transfer: the dequeue at the enqueue pointer with the
+       producer's cycle, and the next transfer, across the wrap, fetched
+       from there and no old block executed. */
+    {
+        struct usb_transfer transfer;
+        struct usb_completion completion;
+        struct usb_command_result result;
+        unsigned n, i;
+        int only_new = 1;
+
+        bulk_pair_up();
+        ring_lap_one(3, XHCI_EP_RING_TRBS - 6);
+        transfer.setup = 0;
+        transfer.buffer = big;
+        transfer.length = 8192;
+        transfer.direction = USB_DIR_IN;
+        transfer.generation = 0x10D;
+        transfer_answers = 0;
+        CHECK("a transfer is queued and not answered", xhci_submit(hc, 1, 3, &transfer) == 0);
+        CHECK("Stop Endpoint is issued", xhci_endpoint_stop(hc, 1, 3) == 0);
+        xhci_events(hc);
+        CHECK("and answered after a Stopped event",
+              xhci_command_done(hc, &result) == 1 && stop_events == 1);
+        CHECK("Set TR Dequeue is issued", xhci_endpoint_dequeue_here(hc, 1, 3) == 0);
+        xhci_events(hc);
+        CHECK("and answered", xhci_command_done(hc, &result) == 1);
+        CHECK("with the controller's pointer at the driver's",
+              model_ep_dequeue[1][3] == hc->slots[1].enqueue[3] &&
+                  model_ep_cycle[1][3] == hc->slots[1].cycle[3]);
+        xhci_endpoint_retire_all(hc, 1, 3);
+        transfer_answers = 1;
+        model_fetched_n = 0;
+        transfer.buffer = big + 8192;
+        transfer.length = 16384;
+        transfer.generation = 0x10E;
+        n = hc->slots[1].enqueue[3];
+        CHECK("the next transfer is queued across the wrap", xhci_submit(hc, 1, 3, &transfer) == 0);
+        xhci_events(hc);
+        CHECK("and completes", xhci_poll(hc, &completion) == 1 && completion.generation == 0x10E);
+        for (i = 0; i < model_fetched_n; i++) {
+            uint32_t at = (uint32_t)(model_fetched[i] - hc->slots[1].ring[3]) / TRB_WORDS;
+            uint32_t want = (n + i) % (XHCI_EP_RING_TRBS - 1);
+
+            only_new = only_new && at == want;
+        }
+        CHECK("and the controller fetched only its blocks, from the pointer on",
+              only_new && model_fetched_n == 4);
+    }
+
+    /* Stopped events retire nothing and deliver nothing. */
+    {
+        struct usb_transfer transfer;
+        struct usb_completion completion;
+        uint32_t first;
+
+        bulk_pair_up();
+        transfer.setup = 0;
+        transfer.buffer = big;
+        transfer.length = 8192;
+        transfer.direction = USB_DIR_IN;
+        transfer.generation = 0x10F;
+        transfer_answers = 0;
+        first = hc->slots[1].enqueue[3];
+        CHECK("a transfer is queued and not answered", xhci_submit(hc, 1, 3, &transfer) == 0);
+        CHECK("and held", xhci_td_hold(hc, 1, 0x10F) == 0);
+        post_transfer(TRB_COMPLETION_STOPPED, 0, 1, 3, block(3, first));
+        post_transfer(TRB_COMPLETION_STOPPED_SHORT, 100, 1, 3, block(3, first + 1));
+        post_transfer(TRB_COMPLETION_STOPPED_LEN, 0, 1, 3, block(3, first + 1));
+        xhci_events(hc);
+        CHECK("Stopped, Stopped Short and Stopped Length Invalid deliver nothing",
+              xhci_poll(hc, &completion) == 0);
+        CHECK("and retire nothing", xhci_td_retired(hc, 1, 0x10F) == 0);
+        CHECK("and the endpoint is stopped", xhci_endpoint_state(hc, 1, 3) == 2);
+        transfer_answers = 1;
+    }
+
+    /* Two transfers outstanding, the event for the first: its generation,
+       not the latest submission's; and an event for no transfer, dropped
+       and counted. */
+    {
+        struct usb_transfer transfer;
+        struct usb_completion completion;
+        uint32_t first;
+
+        bulk_pair_up();
+        transfer.setup = 0;
+        transfer.buffer = big;
+        transfer.length = 4096;
+        transfer.direction = USB_DIR_IN;
+        transfer.generation = 0x110;
+        transfer_answers = 0;
+        first = hc->slots[1].enqueue[3];
+        CHECK("transfer A is queued", xhci_submit(hc, 1, 3, &transfer) == 0);
+        transfer.buffer = big + 4096;
+        transfer.generation = 0x111;
+        CHECK("transfer B is queued after it", xhci_submit(hc, 1, 3, &transfer) == 0);
+        post_transfer(TRB_COMPLETION_SUCCESS, 0, 1, 3, block(3, first));
+        xhci_events(hc);
+        CHECK("the event for A's block reports A",
+              xhci_poll(hc, &completion) == 1 && completion.generation == 0x110);
+        post_transfer(TRB_COMPLETION_SUCCESS, 0, 1, 3, block(3, first + 10));
+        xhci_events(hc);
+        CHECK("an event for no transfer is dropped", xhci_poll(hc, &completion) == 0);
+        CHECK("and counted", xhci_dropped_events(hc, 1) == 1);
+        transfer_answers = 1;
+    }
+
+    /* An endpoint numbered past the first few: its records are there like
+       any other's. */
+    {
+        struct usb_transfer transfer;
+        struct usb_completion completion;
+        struct usb_command_result result;
+        struct usb_endpoint ep;
+
+        bulk_pair_up();
+        ep.number = 4;
+        ep.direction = USB_DIR_IN;
+        ep.type = USB_EP_BULK;
+        ep.max_packet = 512;
+        ep.interval = 0;
+        CHECK("endpoint 4 IN is opened", xhci_endpoint_open(hc, 1, &ep) == 0);
+        xhci_events(hc);
+        CHECK("and the controller answers", xhci_command_done(hc, &result) == 1);
+        model_ep_in[1][9] = 1;
+        transfer.setup = 0;
+        transfer.buffer = big + 2048;
+        transfer.length = 4096;
+        transfer.direction = USB_DIR_IN;
+        transfer.generation = 0x120;
+        CHECK("a transfer on it is queued", xhci_submit(hc, 1, 9, &transfer) == 0);
+        xhci_events(hc);
+        CHECK("and completes", xhci_poll(hc, &completion) == 1 &&
+                                   completion.status == USB_XFER_OK && completion.endpoint == 9);
+    }
+
+    /* A block the controller could not run: the endpoint is in the Error
+       state, which a Set TR Dequeue alone moves on; nothing is queued on it
+       until then. */
+    {
+        struct usb_transfer transfer;
+        struct usb_completion completion;
+        struct usb_command_result result;
+
+        bulk_pair_up();
+        transfer.setup = 0;
+        transfer.buffer = big + 2048;
+        transfer.length = 32768;
+        transfer.direction = USB_DIR_IN;
+        transfer.generation = 0x121;
+        fail_at = 2;
+        fail_code = 5; /* TRB Error */
+        fail_left = 4096;
+        CHECK("a transfer is queued", xhci_submit(hc, 1, 3, &transfer) == 0);
+        CHECK("and held", xhci_td_hold(hc, 1, 0x121) == 0);
+        xhci_events(hc);
+        CHECK("a block the controller could not run fails the transfer",
+              xhci_poll(hc, &completion) == 1 && completion.status == USB_XFER_FAILED);
+        CHECK("and puts the endpoint in the Error state",
+              xhci_endpoint_state(hc, 1, 3) == XHCI_EP_ERROR);
+        transfer.generation = 0x122;
+        CHECK("on which nothing is queued", xhci_submit(hc, 1, 3, &transfer) != 0);
+        CHECK("Set TR Dequeue is issued", xhci_endpoint_dequeue_here(hc, 1, 3) == 0);
+        xhci_events(hc);
+        CHECK("and answered with success",
+              xhci_command_done(hc, &result) == 1 && result.status == USB_XFER_OK);
+        xhci_endpoint_retire_all(hc, 1, 3);
+        CHECK("which retires the transfer", xhci_td_retired(hc, 1, 0x121) == 1);
+        xhci_td_release(hc, 1, 0x121);
+        CHECK("and the next transfer is queued", xhci_submit(hc, 1, 3, &transfer) == 0);
+        xhci_events(hc);
+        CHECK("and completes", xhci_poll(hc, &completion) == 1 && completion.status == USB_XFER_OK);
+    }
+
+    /* A held record outlives the next submission on its endpoint: the data
+       transfer's record is queryable at its wrapper's completion. */
+    {
+        struct usb_transfer transfer;
+        struct usb_completion completion;
+
+        bulk_pair_up();
+        transfer.setup = 0;
+        transfer.buffer = big + 2048;
+        transfer.length = 32768;
+        transfer.direction = USB_DIR_IN;
+        transfer.generation = 0x123;
+        CHECK("a data transfer is queued", xhci_submit(hc, 1, 3, &transfer) == 0);
+        CHECK("and held", xhci_td_hold(hc, 1, 0x123) == 0);
+        xhci_events(hc);
+        CHECK("and completes whole",
+              xhci_poll(hc, &completion) == 1 && completion.status == USB_XFER_OK);
+        transfer.buffer = big + 40960;
+        transfer.length = 13;
+        transfer.generation = 0x124;
+        CHECK("its wrapper is queued on the same endpoint", xhci_submit(hc, 1, 3, &transfer) == 0);
+        xhci_events(hc);
+        CHECK("and completes with its own generation",
+              xhci_poll(hc, &completion) == 1 && completion.generation == 0x124);
+        CHECK("while the held record still answers retired", xhci_td_retired(hc, 1, 0x123) == 1);
+        xhci_td_release(hc, 1, 0x123);
+        CHECK("and answers nothing once released", xhci_td_retired(hc, 1, 0x123) == -1);
+    }
+
+    /* The blocks are published whole or not at all: at the first barrier of
+       a submission every block but the first is visible and the first is
+       not. */
+    {
+        struct usb_transfer transfer;
+        struct usb_completion completion;
+
+        bulk_pair_up();
+        transfer.setup = 0;
+        transfer.buffer = big + 2048;
+        transfer.length = 32768;
+        transfer.direction = USB_DIR_IN;
+        transfer.generation = 0x112;
+        ring_lap_one(3, XHCI_EP_RING_TRBS - 4); /* the transfer crosses the Link */
+        watch_ring = hc->slots[1].ring[3];
+        watch_first = hc->slots[1].enqueue[3];
+        watch_cycle = hc->slots[1].cycle[3];
+        watch_blocks = 9;
+        watch_result = -1;
+        watch_publish = 1;
+        CHECK("a transfer is queued under watch", xhci_submit(hc, 1, 3, &transfer) == 0);
+        watch_publish = 0;
+        CHECK("at its first barrier the first block was not yet valid and the second was",
+              watch_result == 1);
+        xhci_events(hc);
+        CHECK("and it completes",
+              xhci_poll(hc, &completion) == 1 && completion.status == USB_XFER_OK);
+    }
 
     if (fails == 0) {
         printf("xhci_hosttest: OK\n");

@@ -355,17 +355,64 @@ int xhci_endpoint_open(struct xhci_ctrl *hc, int device, const struct usb_endpoi
 /** Forget an endpoint. */
 void xhci_endpoint_close(struct xhci_ctrl *hc, int device, int endpoint);
 
-/** Clear a halted endpoint. `xhci_endpoint_dequeue` follows it. */
+/* An endpoint's state as the controller last reported it, which decides
+ * the command that stops it: Stop Endpoint on a running one, Reset Endpoint
+ * on a halted one, none on one already stopped. */
+#define XHCI_EP_RUNNING 0
+#define XHCI_EP_HALTED  1
+#define XHCI_EP_STOPPED 2
+/* A block the controller could not execute, a TRB Error or a data buffer
+ * error: the endpoint is in the Error state, which a Set TR Dequeue alone
+ * moves to Stopped (xHCI 1.2, 4.8.3, 4.6.10). */
+#define XHCI_EP_ERROR   3
+
+/** Reset a halted endpoint, a command; `xhci_endpoint_dequeue_here` follows
+ * it once it has answered. The core's `usb_core_endpoint_quiesce` runs the
+ * two. */
 int xhci_endpoint_reset(struct xhci_ctrl *hc, int device, int endpoint);
 
-/** Point a reset endpoint's ring at the block this driver will write next. */
-int xhci_endpoint_dequeue(struct xhci_ctrl *hc, int device, int endpoint);
 
 /** Queue one transfer on an endpoint. */
-int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb_transfer *transfer);
+int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint,
+                const struct usb_transfer *transfer);
 
 /** 1 when a completion was waiting, 0 when none was. */
 int xhci_poll(struct xhci_ctrl *hc, struct usb_completion *out);
+
+/** Whether the transfer submitted under `generation` is retired, so no block
+ * of it can be fetched again: 1, 0, or -1 for a transfer the driver does
+ * not hold, which a caller treats as not retired. */
+int xhci_td_retired(struct xhci_ctrl *hc, int device, uint32_t generation);
+
+/** Hold the record of the transfer just submitted under `generation`, so
+ * it answers `xhci_td_retired` after its events until it is let go; a
+ * record not held is reused once it is retired. -1 for no such transfer. */
+int xhci_td_hold(struct xhci_ctrl *hc, int device, uint32_t generation);
+
+/** The caller is done with the transfer: its record may be reused once it
+ * is retired. */
+void xhci_td_release(struct xhci_ctrl *hc, int device, uint32_t generation);
+
+/** The endpoint's state as the controller last reported it: 0 running, 1
+ * halted by a failure, 2 stopped; -1 for no such endpoint. */
+int xhci_endpoint_state(struct xhci_ctrl *hc, int device, int endpoint);
+
+/** While on, nothing is submitted on the endpoint: the core is stopping it. */
+void xhci_endpoint_quiescing(struct xhci_ctrl *hc, int device, int endpoint, int on);
+
+/** Stop Endpoint, a command; the core awaits it. */
+int xhci_endpoint_stop(struct xhci_ctrl *hc, int device, int endpoint);
+
+/** Set TR Dequeue to the endpoint's enqueue pointer with its cycle, leaving
+ * the driver's own pointer as it is; the core awaits it. */
+int xhci_endpoint_dequeue_here(struct xhci_ctrl *hc, int device, int endpoint);
+
+/** After a stop or a reset and its dequeue were answered with success:
+ * every transfer of the endpoint is retired. */
+void xhci_endpoint_retire_all(struct xhci_ctrl *hc, int device, int endpoint);
+
+/** Transfer events that named no transfer the driver held. */
+uint32_t xhci_dropped_events(struct xhci_ctrl *hc, int device);
 
 /** What was read from the controller, valid after `xhci_read_caps`. */
 const struct xhci_caps *xhci_capabilities(struct xhci_ctrl *hc);

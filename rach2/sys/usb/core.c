@@ -53,7 +53,7 @@
 
 /* How long any one step of enumeration may take. A device that has not
  * answered by then is not going to. */
-#define STEP_MS 500u
+#define STEP_MS   500u
 /* The configuration request alone gets five seconds: a stick's controller is
  * still starting its flash when the request arrives at boot, and the
  * notebook's stick behind the hub answered it after the half second every
@@ -133,7 +133,10 @@ struct usb_device_state {
     int abandoned;
     uint32_t short_by;
     int reporting;
-    int dequeue_asked;
+    /* A quiesce in progress on this device's endpoint `quiesce_dci`: 1 with
+     * the stop or the reset out, 2 with the dequeue out. */
+    int quiesce_stage;
+    int quiesce_dci;
     /* The completions waiting for this device, one for its control endpoint
      * and one for the endpoint it reports on. They are put here by the one
      * drain in `usb_core_step`: a device that polled the controller itself
@@ -704,11 +707,12 @@ static void step_closing(struct usb_device_state *d)
         if (done == 0 && !expired(d)) {
             return;
         }
-        /* Either the controller gave the slot back or it never answered. The
-         * second is recorded; the entry goes either way, because a slot this
-         * kernel cannot get back is one of seven it has lost, and holding the
-         * entry as well would lose a device table row too. */
-        if (done != 1) {
+        /* Either the controller gave the slot back, or the command
+         * completed with an error or was never answered. The second is
+         * recorded and the entry is kept as a tombstone, since the slot,
+         * its rings and the pages its transfers name may still be written
+         * by the controller. */
+        if (done != 1 || result.status != USB_XFER_OK) {
             /*
              * The controller never answered. Its slot, the rings under it and
              * the context it names stay the controller's, because it may
@@ -723,6 +727,11 @@ static void step_closing(struct usb_device_state *d)
             return;
         }
         klog(KLOG_INFO, "usb", "slot: %d: given back", d->slot);
+        if (d->interface.kind == USB_KIND_STORAGE) {
+            /* The controller reaches nothing of the stick's any more: its
+             * request in flight is completed and its record may go. */
+            msc_slot_closed(d->hc, d->slot);
+        }
         xhci_device_closed(d->hc, d->slot);
         d->slot = 0;
         enumerating[bus_of(d)] = -1;
@@ -834,16 +843,14 @@ static void step_running(struct usb_device_state *d)
 
         d->have_report = 0;
         d->reporting = 0;
-        if (completion.status == USB_XFER_STALLED) {
-            /* A halted endpoint keeps its ring until it is reset, and nothing
-             * queued on it moves. Both halves of the recovery are commands,
-             * and the second is issued when the first has answered. */
-            if (xhci_endpoint_reset(d->hc, d->slot, d->ep_dci) == 0) {
-                d->state = ST_HALTED;
-                arm(d);
-                return;
-            }
-        } else if (completion.status == USB_XFER_OK || completion.status == USB_XFER_SHORT) {
+        if (completion.status != USB_XFER_OK && completion.status != USB_XFER_SHORT) {
+            /* A stall halts the endpoint and any other failure leaves it
+             * halted or in the Error state: nothing queued on it moves
+             * until the quiesce has run on the core's turn. */
+            d->state = ST_HALTED;
+            arm(d);
+            return;
+        } else {
             hid_report(d->index + 1, kind, d->report,
                        (int)(completion.length - completion.residual));
         }
@@ -875,7 +882,7 @@ static void step_device(struct usb_device_state *d)
         return;
 
     case ST_HALTED:
-        answer = command_result(d, &result);
+        answer = usb_core_endpoint_quiesce(d->hc, d->slot, d->ep_dci);
         if (answer == 0) {
             return;
         }
@@ -883,18 +890,8 @@ static void step_device(struct usb_device_state *d)
             fail(d, "its halted endpoint would not reset");
             return;
         }
-        if (d->dequeue_asked) {
-            d->dequeue_asked = 0;
-            d->state = ST_RUNNING;
-            d->reporting = 0;
-            return;
-        }
-        if (xhci_endpoint_dequeue(d->hc, d->slot, d->ep_dci) != 0) {
-            fail(d, "its endpoint's ring could not be pointed anywhere");
-            return;
-        }
-        d->dequeue_asked = 1;
-        arm(d);
+        d->state = ST_RUNNING;
+        d->reporting = 0;
         return;
 
     case ST_SETTLING:
@@ -1388,8 +1385,7 @@ void usb_core_device_drop(struct xhci_ctrl *hc, int device, const char *why)
     int i;
 
     for (i = 0; i < USB_MAX_DEVICES; i++) {
-        if (dev_at(i)->state == ST_RUNNING && dev_at(i)->hc == hc &&
-            dev_at(i)->slot == device) {
+        if (dev_at(i)->state == ST_RUNNING && dev_at(i)->hc == hc && dev_at(i)->slot == device) {
             klog(KLOG_WARN, "usb", "device: port %s: %s; its port is enumerated again",
                  path_of(dev_at(i)), why);
             device_gone(i);
@@ -1563,8 +1559,8 @@ void usb_core_step(uint32_t elapsed_ms)
                 continue;
             }
             for (i = 0; i < USB_MAX_DEVICES; i++) {
-                if (dev_at(i)->state != ST_FREE && dev_at(i)->hc == hc &&
-                    dev_at(i)->owner < 0 && dev_at(i)->port == port) {
+                if (dev_at(i)->state != ST_FREE && dev_at(i)->hc == hc && dev_at(i)->owner < 0 &&
+                    dev_at(i)->port == port) {
                     known = 1;
                 }
             }
@@ -1599,7 +1595,8 @@ void usb_core_step(uint32_t elapsed_ms)
                 continue;
             }
             for (j = 0; j < USB_MAX_DEVICES; j++) {
-                if (dev_at(j)->state != ST_FREE && dev_at(j)->owner == i && dev_at(j)->port == port) {
+                if (dev_at(j)->state != ST_FREE && dev_at(j)->owner == i &&
+                    dev_at(j)->port == port) {
                     known = 1;
                 }
             }
@@ -1654,7 +1651,7 @@ void usb_core_reset(void)
  * again, 0 while the controller has not answered, and -1 when it refused or
  * never did.
  */
-int usb_core_clear_halt(struct xhci_ctrl *hc, int device, int endpoint)
+int usb_core_endpoint_quiesce(struct xhci_ctrl *hc, int device, int endpoint)
 {
     int i;
 
@@ -1662,38 +1659,86 @@ int usb_core_clear_halt(struct xhci_ctrl *hc, int device, int endpoint)
         struct usb_device_state *d = dev_at(i);
         struct usb_command_result result;
         int answer;
+        int rc;
 
         if (d->state == ST_FREE || d->hc != hc || d->slot != device) {
             continue;
         }
-        if (enumerating[bus_of(d)] >= 0 && enumerating[bus_of(d)] != i) {
-            return 0; /* another device has this controller's command ring */
-        }
-        enumerating[bus_of(d)] = i;
-        if (!d->closing_asked) {
-            if (xhci_endpoint_reset(d->hc, device, endpoint) != 0) {
+        if (d->quiesce_stage == 0) {
+            int state;
+
+            /* Nothing is submitted on the endpoint from the moment a
+             * quiesce is asked for, the wait for the turn included. */
+            xhci_endpoint_quiescing(d->hc, device, endpoint, 1);
+            if (enumerating[bus_of(d)] >= 0 && enumerating[bus_of(d)] != i) {
+                return 0; /* another device has this controller's command ring */
+            }
+            if (!xhci_command_free(d->hc)) {
+                return 0;
+            }
+            enumerating[bus_of(d)] = i;
+            d->quiesce_dci = endpoint;
+            /* The first command is the endpoint's state's: a running one is
+             * stopped, a halted one reset, a stopped one and one in the
+             * Error state need neither (xHCI 1.2, 4.6.9, 4.6.8, 4.6.10). */
+            state = xhci_endpoint_state(d->hc, device, endpoint);
+            if (state == XHCI_EP_HALTED) {
+                rc = xhci_endpoint_reset(d->hc, device, endpoint);
+                d->quiesce_stage = 1;
+            } else if (state == XHCI_EP_STOPPED || state == XHCI_EP_ERROR) {
+                rc = xhci_endpoint_dequeue_here(d->hc, device, endpoint);
+                d->quiesce_stage = 2;
+            } else {
+                rc = xhci_endpoint_stop(d->hc, device, endpoint);
+                d->quiesce_stage = 1;
+            }
+            if (rc != 0) {
+                d->quiesce_stage = 0;
+                xhci_endpoint_quiescing(d->hc, device, endpoint, 0);
                 enumerating[bus_of(d)] = -1;
                 return -1;
             }
-            d->closing_asked = 1;
             d->deadline = core_ms + STEP_MS;
             return 0;
+        }
+        if (d->quiesce_dci != endpoint) {
+            return 0; /* a quiesce of another endpoint of the device is in progress */
         }
         answer = command_result(d, &result);
         if (answer == 0) {
             return 0;
         }
-        d->closing_asked = 0;
-        enumerating[bus_of(d)] = -1;
-        if (answer < 0) {
+        if (answer < 0 || result.status != USB_XFER_OK) {
+            d->quiesce_stage = 0;
+            xhci_endpoint_quiescing(d->hc, device, endpoint, 0);
+            enumerating[bus_of(d)] = -1;
             return -1;
         }
-        /* The ring is pointed at the block the driver will write next, or
-         * the endpoint is usable and empty and nothing more is needed. */
-        (void)xhci_endpoint_dequeue(d->hc, device, endpoint);
+        if (d->quiesce_stage == 1) {
+            if (xhci_endpoint_dequeue_here(d->hc, device, endpoint) != 0) {
+                d->quiesce_stage = 0;
+                xhci_endpoint_quiescing(d->hc, device, endpoint, 0);
+                enumerating[bus_of(d)] = -1;
+                return -1;
+            }
+            d->quiesce_stage = 2;
+            d->deadline = core_ms + STEP_MS;
+            return 0;
+        }
+        /* Both answered with success: no block of the endpoint's transfers
+         * can be fetched again, and the endpoint is the caller's. */
+        xhci_endpoint_retire_all(d->hc, device, endpoint);
+        xhci_endpoint_quiescing(d->hc, device, endpoint, 0);
+        d->quiesce_stage = 0;
+        enumerating[bus_of(d)] = -1;
         return 1;
     }
     return -1;
+}
+
+int usb_core_clear_halt(struct xhci_ctrl *hc, int device, int endpoint)
+{
+    return usb_core_endpoint_quiesce(hc, device, endpoint);
 }
 
 int usb_core_idle(void)

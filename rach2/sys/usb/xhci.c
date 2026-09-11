@@ -49,9 +49,9 @@
 #define USBCMD_HCRST 0x00000002u
 #define USBCMD_INTE  0x00000004u
 
-#define USBSTS_HCH 0x00000001u
+#define USBSTS_HCH  0x00000001u
 #define USBSTS_EINT 0x00000008u /* an event interrupt; written as one to clear it */
-#define USBSTS_CNR 0x00000800u
+#define USBSTS_CNR  0x00000800u
 
 /*
  * Extended capabilities, a linked list in the aperture whose head
@@ -139,6 +139,40 @@
  * drain, so what it ended as is kept until the layer above asks. */
 #define XHCI_COMPLETIONS 8
 
+/* The endpoints a transfer record is kept for, and the blocks one holds: a
+ * 32 KiB buffer that starts mid-page is nine pieces, a control transfer
+ * three blocks. Two records per endpoint: a stick has a data transfer and
+ * a wrapper on one endpoint at most, and the layer above lets a record go
+ * at its command's end. */
+#define XHCI_TD_DCI     XHCI_MAX_DCI
+#define XHCI_TD_TRBS    12
+#define XHCI_TD_RECORDS 2
+
+/*
+ * One transfer the controller was given: which ring entries it occupies,
+ * what each moves, and what the events said about it so far. The record
+ * outlives the transfer: it is `retired` once no block of it can be fetched
+ * again, which an event naming its last block says, or a stop, a reset with
+ * a dequeue, or Disable Slot answered; and a retired record is free for a
+ * new submission unless its caller holds it, which a caller that asks about
+ * its transfers after their events does until it lets the record go.
+ */
+struct xhci_td {
+    int used;
+    int retired;
+    int held;      /* the caller asks about it until it lets it go */
+    int delivered; /* one completion per transfer */
+    int control;   /* setup, data and status blocks; the data block is `idx[1]` */
+    int outcome;   /* the first outcome an event gave, a USB_XFER_ value, or -1 */
+    int code;
+    uint32_t generation;
+    uint32_t total;             /* bytes asked, the data stage's for a control transfer */
+    uint32_t moved;             /* bytes the events accounted for */
+    uint32_t count;             /* blocks, Links not counted */
+    uint32_t idx[XHCI_TD_TRBS]; /* each block's ring index */
+    uint32_t len[XHCI_TD_TRBS]; /* each block's bytes */
+};
+
 struct xhci_slot {
     int used;
     int port;  /* the root port it is under, numbered from zero */
@@ -168,6 +202,15 @@ struct xhci_slot {
      * goes back in the completion, so a caller that gave up on one can tell
      * the answer to that from the answer to what it is waiting for now. */
     uint32_t generation[XHCI_MAX_DCI];
+    /* The transfers on each endpoint that the controller may still reach:
+     * one record per submission until the caller lets it go, see
+     * `struct xhci_td`. A page's worth, taken when the first endpoint is
+     * opened; a device has endpoints up to index seven. */
+    struct xhci_td *td;
+    uint32_t max_packet[XHCI_MAX_DCI];
+    uint8_t ep_state[XHCI_MAX_DCI];  /* XHCI_EP_RUNNING, _HALTED or _STOPPED */
+    uint8_t quiescing[XHCI_MAX_DCI]; /* the core is stopping it: nothing is submitted */
+    uint32_t dropped_events;         /* transfer events that named no transfer */
 };
 
 /*
@@ -290,7 +333,9 @@ static int nctrls;
  * matters. x86 gives the store ordering; this stops the compiler from
  * reordering or eliding what it cannot see another party doing.
  */
+#ifndef xhci_barrier
 #define xhci_barrier() __asm__ __volatile__("" : : : "memory")
+#endif
 
 /* Where the legacy-support capability is, and what it held before this kernel
  * touched it. Taking a controller from the firmware and then failing would
@@ -317,7 +362,6 @@ static void xhci_mmio_w32(struct xhci_ctrl *hc, uint32_t offset, uint32_t value)
 }
 
 static const struct xhci_io xhci_mmio_io = {xhci_mmio_r32, xhci_mmio_w32, k_udelay};
-
 
 /*
  * The register accessors a controller found from now on will use. A host test
@@ -360,6 +404,7 @@ const struct xhci_caps *xhci_capabilities(struct xhci_ctrl *hc)
 
 static void slot_pages_free(struct xhci_slot *s);
 static void ctrl_free_tables(struct xhci_ctrl *hc);
+static struct xhci_td *td_at(struct xhci_slot *s, uint32_t dci, uint32_t at, uint32_t *k);
 
 /* What the last discovery had to say when it found no controller at all.
  * Before there is a record there is nowhere else to put it. */
@@ -889,7 +934,8 @@ int xhci_read_caps(struct xhci_ctrl *hc)
      * machine this kernel has never met takes the log away and needs the raw
      * values to compare with the datasheet. */
     klog(KLOG_DEBUG, "usb", "caps: hcs1 0x%X hcs2 0x%X hcc1 0x%X pagesize 0x%X",
-         r32(hc, XHCI_HCSPARAMS1), r32(hc, XHCI_HCSPARAMS2), r32(hc, XHCI_HCCPARAMS1), hc->caps.pagesize);
+         r32(hc, XHCI_HCSPARAMS1), r32(hc, XHCI_HCSPARAMS2), r32(hc, XHCI_HCCPARAMS1),
+         hc->caps.pagesize);
     klog(KLOG_DEBUG, "usb", "caps: scratchpads %d, contexts %d bytes, 64-bit %d",
          (int)hc->caps.scratchpads, (int)hc->caps.context_size, hc->caps.ac64);
     if (!(hc->caps.pagesize & 0x1u)) {
@@ -1053,7 +1099,6 @@ static int past(struct xhci_ctrl *hc, uint32_t deadline)
     return (int32_t)(hc->now_ms - deadline) >= 0;
 }
 
-
 /* ---- devices, endpoints and transfers ---- */
 
 /*
@@ -1076,25 +1121,35 @@ static int past(struct xhci_ctrl *hc, uint32_t deadline)
 #define TRB_TYPE_CONFIG_EP      12
 #define TRB_TYPE_EVALUATE_CTX   13
 #define TRB_TYPE_RESET_EP       14
+#define TRB_TYPE_STOP_EP        15
 #define TRB_TYPE_SET_TR_DEQUEUE 16
 
-#define TRB_IOC         0x20u /* raise an event when this block is done */
-#define TRB_IDT         0x40u /* the parameter is the data, not a pointer to it */
-#define TRB_DIR_IN      0x10000u
-#define TRB_TRT_NO_DATA 0u
-#define TRB_TRT_OUT     (2u << 16)
-#define TRB_TRT_IN      (3u << 16)
+#define TRB_IOC           0x20u /* raise an event when this block is done */
+#define TRB_IDT           0x40u /* the parameter is the data, not a pointer to it */
+#define TRB_ISP           0x4u  /* an event for a short packet on this block */
+#define TRB_CHAIN         0x10u /* the next block is part of the same transfer */
+#define TRB_TD_SIZE_SHIFT 17
+#define TRB_DIR_IN        0x10000u
+#define TRB_TRT_NO_DATA   0u
+#define TRB_TRT_OUT       (2u << 16)
+#define TRB_TRT_IN        (3u << 16)
 
 /* Completion codes this driver tells apart from every other refusal. */
-#define TRB_COMPLETION_SHORT 13
-#define TRB_COMPLETION_STALL 6
+#define TRB_COMPLETION_SHORT         13
+#define TRB_COMPLETION_STALL         6
+#define TRB_COMPLETION_TXN_ERROR     4
+#define TRB_COMPLETION_BABBLE        3
+#define TRB_COMPLETION_SPLIT_ERROR   17
+#define TRB_COMPLETION_CTX_STATE     19
+#define TRB_COMPLETION_STOPPED       26
+#define TRB_COMPLETION_STOPPED_LEN   27
+#define TRB_COMPLETION_STOPPED_SHORT 28
 
 /*
  * The contexts and the rings. The input context is one, used for one command
  * at a time, which is all this driver issues. Each device has its own output
  * context and a ring for each endpoint it opens.
  */
-
 
 /* The port and speed a slot is being taken for. The controller decides which
  * slot that will be and does not say so until the command answers, so what the
@@ -1222,7 +1277,8 @@ int xhci_command_issue(struct xhci_ctrl *hc, uint32_t type, uint64_t parameter, 
             return -1;
         }
         hc->command_aborting = 0;
-        op_w32(hc, XHCI_CRCR, (uint32_t)(uintptr_t)trb_at(hc->cmd_ring, hc->cmd_enqueue) | hc->cmd_cycle);
+        op_w32(hc, XHCI_CRCR,
+               (uint32_t)(uintptr_t)trb_at(hc->cmd_ring, hc->cmd_enqueue) | hc->cmd_cycle);
         op_w32(hc, XHCI_CRCR + 4, 0);
     }
 
@@ -1231,7 +1287,10 @@ int xhci_command_issue(struct xhci_ctrl *hc, uint32_t type, uint64_t parameter, 
     trb[0] = (uint32_t)(parameter & 0xFFFFFFFFu);
     trb[1] = (uint32_t)(parameter >> 32);
     trb[2] = 0;
-    trb[3] = ((type & TRB_TYPE_MASK) << TRB_TYPE_SHIFT) | (slot << TRB_SLOT_SHIFT) | hc->cmd_cycle;
+    /* The slot is the top byte; an endpoint command carries its endpoint in
+     * bits 16 to 20, which the callers pass in `slot` above the byte. */
+    trb[3] = ((type & TRB_TYPE_MASK) << TRB_TYPE_SHIFT) | ((slot & 0xFFu) << TRB_SLOT_SHIFT) |
+             (slot & 0x1F0000u) | hc->cmd_cycle;
 
     hc->cmd_enqueue++;
     if (hc->cmd_enqueue == XHCI_RING_TRBS - 1) {
@@ -1252,7 +1311,7 @@ int xhci_command_issue(struct xhci_ctrl *hc, uint32_t type, uint64_t parameter, 
     hc->command_finished = 0;
     hc->command_type = type;
     hc->command_deadline = hc->now_ms + COMMAND_MS;
-    xhci_barrier();     /* the block is written before the controller is told */
+    xhci_barrier();             /* the block is written before the controller is told */
     w32(hc, hc->caps.dboff, 0); /* doorbell zero: the command ring */
     return 0;
 }
@@ -1273,15 +1332,18 @@ void xhci_state_record(struct xhci_ctrl *hc)
     }
     recorded = 1;
     klog(KLOG_WARN, "usb",
-         "state: usbsts %x crcr %x iman %x erdp %x; command running %d finished %d aborting %d type %d; events at %d cycle %d",
-         op_r32(hc, XHCI_USBSTS), op_r32(hc, XHCI_CRCR), r32(hc, hc->caps.rtsoff + XHCI_IR0 + IR_IMAN),
+         "state: usbsts %x crcr %x iman %x erdp %x; command running %d finished %d aborting %d "
+         "type %d; events at %d cycle %d",
+         op_r32(hc, XHCI_USBSTS), op_r32(hc, XHCI_CRCR),
+         r32(hc, hc->caps.rtsoff + XHCI_IR0 + IR_IMAN),
          r32(hc, hc->caps.rtsoff + XHCI_IR0 + IR_ERDP), hc->command_running, hc->command_finished,
          hc->command_aborting, (int)hc->command_type, (int)hc->event_index, (int)hc->event_cycle);
-    klog(KLOG_WARN, "usb", "state: event ring at %x, the block there %x %x %x %x, the one before %x",
-         (unsigned)(uintptr_t)hc->event_ring, trb_at(hc->event_ring, hc->event_index)[0],
-         trb_at(hc->event_ring, hc->event_index)[1], trb_at(hc->event_ring, hc->event_index)[2],
-         trb_at(hc->event_ring, hc->event_index)[3],
-         trb_at(hc->event_ring, hc->event_index == 0 ? XHCI_RING_TRBS - 1 : hc->event_index - 1)[3]);
+    klog(
+        KLOG_WARN, "usb", "state: event ring at %x, the block there %x %x %x %x, the one before %x",
+        (unsigned)(uintptr_t)hc->event_ring, trb_at(hc->event_ring, hc->event_index)[0],
+        trb_at(hc->event_ring, hc->event_index)[1], trb_at(hc->event_ring, hc->event_index)[2],
+        trb_at(hc->event_ring, hc->event_index)[3],
+        trb_at(hc->event_ring, hc->event_index == 0 ? XHCI_RING_TRBS - 1 : hc->event_index - 1)[3]);
 }
 
 int xhci_command_done(struct xhci_ctrl *hc, struct usb_command_result *out)
@@ -1350,17 +1412,19 @@ static void event_dispatch(struct xhci_ctrl *hc, const uint32_t *trb)
         }
         hc->command_running = 0;
         hc->command_finished = 1;
-        hc->command_result.status = (code == TRB_COMPLETION_SUCCESS) ? USB_XFER_OK : USB_XFER_FAILED;
+        hc->command_result.status =
+            (code == TRB_COMPLETION_SUCCESS) ? USB_XFER_OK : USB_XFER_FAILED;
         hc->command_result.code = (int)code;
         hc->command_result.device = (int)((trb[3] >> TRB_SLOT_SHIFT) & 0xFFu);
         if (code != TRB_COMPLETION_SUCCESS) {
-            klog(KLOG_DEBUG, "usb", "command: slot %d refused with code %d", hc->command_result.device,
-                 (int)code);
+            klog(KLOG_DEBUG, "usb", "command: slot %d refused with code %d",
+                 hc->command_result.device, (int)code);
         }
         /* A slot the controller has just given out is recorded here, because
          * this is where its number arrives. */
         if (hc->command_type == TRB_TYPE_ENABLE_SLOT && hc->command_result.status == USB_XFER_OK &&
-            hc->command_result.device > 0 && hc->command_result.device <= (int)hc->nslots && hc->pending_port >= 0) {
+            hc->command_result.device > 0 && hc->command_result.device <= (int)hc->nslots &&
+            hc->pending_port >= 0) {
             struct xhci_slot *s = &hc->slots[hc->command_result.device];
 
             s->used = 1;
@@ -1384,41 +1448,127 @@ static void event_dispatch(struct xhci_ctrl *hc, const uint32_t *trb)
         return;
     }
     if (type == TRB_TYPE_TRANSFER_EVENT) {
-        struct usb_completion *c = &hc->completions[hc->completion_head % XHCI_COMPLETIONS];
+        int device = (int)((trb[3] >> TRB_SLOT_SHIFT) & 0xFFu);
+        uint32_t dci = (trb[3] >> 16) & 0x1Fu;
+        uint32_t residual = trb[2] & 0xFFFFFFu;
+        struct xhci_slot *s;
+        struct xhci_td *t;
+        uint32_t at, k, through, n;
+        int last;
 
-        c->hc = hc;
-        c->device = (int)((trb[3] >> TRB_SLOT_SHIFT) & 0xFFu);
-        c->endpoint = (int)((trb[3] >> 16) & 0x1Fu);
-        if (c->device <= 0 || c->device > (int)hc->nslots || !hc->slots[c->device].used) {
+        if (device <= 0 || device > (int)hc->nslots || !hc->slots[device].used) {
             /* A device that has gone, answering for a transfer nobody is
              * waiting for. Reporting it would let a slot handed to the next
              * device be advanced by the last one's transfer. */
             return;
         }
-        /* What the controller did not move is what it reports; what it did is
-         * the difference. */
-        c->length = (c->endpoint > 0 && c->endpoint < XHCI_MAX_DCI)
-                        ? hc->slots[c->device].asked[c->endpoint]
-                        : 0;
-        c->generation = (c->endpoint > 0 && c->endpoint < XHCI_MAX_DCI)
-                            ? hc->slots[c->device].generation[c->endpoint]
-                            : 0;
-        /* The code the controller reported, kept beside the four answers the
-         * layer above knows: a transfer that failed says only that it failed,
-         * and the code is what names the reason on a machine where it
-         * happens. */
-        c->code = (int)code;
-        if (code == TRB_COMPLETION_SUCCESS) {
-            c->status = USB_XFER_OK;
-        } else if (code == TRB_COMPLETION_SHORT) {
-            c->status = USB_XFER_SHORT;
-        } else if (code == TRB_COMPLETION_STALL) {
-            c->status = USB_XFER_STALLED;
-        } else {
-            c->status = USB_XFER_FAILED;
+        s = &hc->slots[device];
+        if (dci == 0 || dci >= XHCI_MAX_DCI || !s->ring[dci]) {
+            return;
         }
-        c->residual = trb[2] & 0xFFFFFFu;
-        hc->completion_head++;
+        /* The event names the block it is for by its physical address; the
+         * block names the transfer, and the transfer's record says what the
+         * block was to move. An event for no transfer this driver holds is
+         * a stale one, dropped and counted. */
+        at = (uint32_t)((trb[0] - (uint32_t)s->ring_phys[dci]) / (TRB_WORDS * 4u));
+        if (at >= XHCI_EP_RING_TRBS) {
+            s->dropped_events++;
+            return;
+        }
+        t = td_at(s, dci, at, &k);
+        if (!t) {
+            s->dropped_events++;
+            return;
+        }
+        last = k + 1 == t->count;
+        through = 0;
+        for (n = 0; n <= k; n++) {
+            through += t->len[n];
+        }
+        if (code == TRB_COMPLETION_STOPPED || code == TRB_COMPLETION_STOPPED_LEN ||
+            code == TRB_COMPLETION_STOPPED_SHORT) {
+            /* The driver's own Stop Endpoint, answered for the block the
+             * endpoint was on: nothing is retired by it and nothing is
+             * delivered; the command's completion is what the quiesce
+             * waits for, and its length is not a residual. */
+            s->ep_state[dci] = XHCI_EP_STOPPED;
+            return;
+        }
+        if (code == TRB_COMPLETION_SUCCESS || code == TRB_COMPLETION_SHORT) {
+            if (t->outcome < 0) {
+                t->moved = residual <= through ? through - residual : 0;
+                if (t->control && !last && t->len[k] == 0) {
+                    t->moved = 0; /* a setup block moves none of the data */
+                }
+                t->outcome = code == TRB_COMPLETION_SHORT ? USB_XFER_SHORT : USB_XFER_OK;
+                t->code = (int)code;
+            }
+            if (last) {
+                /* An event naming the last block ends the transfer: no block
+                 * of it can be fetched again (4.10.1.1.2). */
+                t->retired = 1;
+                if (t->control && t->outcome == USB_XFER_OK) {
+                    t->moved = t->total; /* the status stage's own bytes are none */
+                }
+            } else if (t->control || code == TRB_COMPLETION_SUCCESS) {
+                /* A control transfer's data stage, or a chained block that
+                 * completed whole: the status stage or the last block still
+                 * comes, and the event for it is the one delivered. */
+                return;
+            }
+            /* A short packet mid-transfer: the layer above is told now, so
+             * it can go on, and the transfer stays the controller's until
+             * the event for its last block, which a conforming controller
+             * posts and QEMU does not, or until a stop. */
+        } else {
+            /* A failure halts the endpoint: the blocks after the failing
+             * one are not fetched until a reset moves the ring on, and that
+             * reset with its dequeue is what retires the transfer. The bytes
+             * are those through the block before it, and the failing
+             * block's own where the code carries a residual. */
+            uint32_t before = through - t->len[k];
+
+            /* A failure on the bus halts the endpoint; one the controller
+             * found in the block itself puts it in the Error state, from
+             * which a Set TR Dequeue alone moves it on (4.8.3). */
+            s->ep_state[dci] = (code == TRB_COMPLETION_STALL || code == TRB_COMPLETION_TXN_ERROR ||
+                                code == TRB_COMPLETION_BABBLE || code == TRB_COMPLETION_SPLIT_ERROR)
+                                   ? XHCI_EP_HALTED
+                                   : XHCI_EP_ERROR;
+            /* A control transfer's status stage failing after its data
+             * stage answered is the transfer failing: the earlier outcome
+             * does not stand. */
+            if (t->outcome < 0) {
+                t->moved = before;
+                if ((code == TRB_COMPLETION_STALL || code == TRB_COMPLETION_TXN_ERROR) &&
+                    residual <= t->len[k]) {
+                    t->moved = before + (t->len[k] - residual);
+                }
+            }
+            if (t->outcome < 0 || t->control) {
+                /* The bytes a control transfer's data stage recorded stand;
+                 * its status stage's failure is the transfer's outcome. */
+                t->outcome = code == TRB_COMPLETION_STALL ? USB_XFER_STALLED : USB_XFER_FAILED;
+                t->code = (int)code;
+            }
+        }
+        if (t->delivered) {
+            return;
+        }
+        {
+            struct usb_completion *c = &hc->completions[hc->completion_head % XHCI_COMPLETIONS];
+
+            c->hc = hc;
+            c->device = device;
+            c->endpoint = (int)dci;
+            c->status = t->outcome;
+            c->code = t->code;
+            c->length = t->total;
+            c->residual = t->total > t->moved ? t->total - t->moved : 0;
+            c->generation = t->generation;
+            t->delivered = 1;
+            hc->completion_head++;
+        }
         return;
     }
 }
@@ -1957,7 +2107,8 @@ int xhci_device_hub(struct xhci_ctrl *hc, int device, int ports, int multi_tt, i
     struct xhci_slot *s;
     uint32_t i;
 
-    if (device <= 0 || device > (int)hc->nslots || !hc->slots[device].used || xhci_command_busy(hc)) {
+    if (device <= 0 || device > (int)hc->nslots || !hc->slots[device].used ||
+        xhci_command_busy(hc)) {
         return -1;
     }
     if (ports < 1 || ports > 255 || think_time < 0 || think_time > 3) {
@@ -2022,6 +2173,10 @@ static void slot_pages_free(struct xhci_slot *s)
         kfree_pages(s->ctx, 1);
         s->ctx = 0;
         s->ctx_phys = 0;
+    }
+    if (s->td) {
+        kfree(s->td);
+        s->td = 0;
     }
 }
 
@@ -2095,7 +2250,8 @@ int xhci_device_packet_size(struct xhci_ctrl *hc, int device, int max_packet)
     uint32_t *ep0;
     uint32_t i;
 
-    if (device <= 0 || device > (int)hc->nslots || !hc->slots[device].used || xhci_command_busy(hc)) {
+    if (device <= 0 || device > (int)hc->nslots || !hc->slots[device].used ||
+        xhci_command_busy(hc)) {
         return -1;
     }
     for (i = 0; i <= XHCI_MAX_DCI; i++) {
@@ -2211,8 +2367,24 @@ int xhci_endpoint_open(struct xhci_ctrl *hc, int device, const struct usb_endpoi
     s->enqueue[dci] = 0;
     s->cycle[dci] = TRB_CYCLE;
     s->open[dci] = 1;
+    s->max_packet[dci] = ep->max_packet ? (uint32_t)ep->max_packet : 512u;
+    s->ep_state[dci] = XHCI_EP_RUNNING;
+    s->quiescing[dci] = 0;
+    if (!s->td) {
+        s->td = kzalloc(sizeof(struct xhci_td) * XHCI_TD_DCI * XHCI_TD_RECORDS);
+        if (!s->td) {
+            s->open[dci] = 0;
+            return -1;
+        }
+    }
+    if (dci < XHCI_TD_DCI) {
+        for (i = 0; i < XHCI_TD_RECORDS; i++) {
+            s->td[dci * XHCI_TD_RECORDS + i].used = 0;
+        }
+    }
     xhci_barrier();
-    return xhci_command_issue(hc, TRB_TYPE_CONFIG_EP, (uint64_t)(uintptr_t)hc->input_ctx, (uint32_t)device);
+    return xhci_command_issue(hc, TRB_TYPE_CONFIG_EP, (uint64_t)(uintptr_t)hc->input_ctx,
+                              (uint32_t)device);
 }
 
 void xhci_endpoint_close(struct xhci_ctrl *hc, int device, int endpoint)
@@ -2234,30 +2406,16 @@ int xhci_endpoint_reset(struct xhci_ctrl *hc, int device, int endpoint)
      * then pointed at where this driver will write next. Both are commands;
      * this issues the first and the caller issues the second when it
      * finishes. */
-    return xhci_command_issue(hc, TRB_TYPE_RESET_EP, 0, (uint32_t)device | ((uint32_t)endpoint << 16));
-}
-
-int xhci_endpoint_dequeue(struct xhci_ctrl *hc, int device, int endpoint)
-{
-    struct xhci_slot *s;
-
-    if (device <= 0 || device > (int)hc->nslots || endpoint <= 0 || endpoint >= XHCI_MAX_DCI) {
-        return -1;
-    }
-    if (!hc->slots[device].used) {
-        return -1;
-    }
-    s = &hc->slots[device];
-    s->enqueue[endpoint] = 0;
-    s->cycle[endpoint] = TRB_CYCLE;
-    return xhci_command_issue(hc, TRB_TYPE_SET_TR_DEQUEUE,
-                              (uint64_t)s->ring_phys[endpoint] | TRB_CYCLE,
+    return xhci_command_issue(hc, TRB_TYPE_RESET_EP, 0,
                               (uint32_t)device | ((uint32_t)endpoint << 16));
 }
 
-/** Put one block on an endpoint's ring, wrapping through its link block. */
-static uint32_t *ring_put(struct xhci_ctrl *hc, int device, uint32_t dci, uint32_t w0,
-                          uint32_t w1, uint32_t w2, uint32_t w3)
+/** Put one block on an endpoint's ring, wrapping through its link block;
+ * `chain` puts the chain bit on a Link written here, so a transfer that
+ * goes on past the ring's end stays one transfer; `hold` writes the block
+ * with the wrong cycle bit, to be published by its caller. */
+static uint32_t *ring_put(struct xhci_ctrl *hc, int device, uint32_t dci, uint32_t w0, uint32_t w1,
+                          uint32_t w2, uint32_t w3, int chain, int hold)
 {
     struct xhci_slot *s = &hc->slots[device];
     uint32_t *ring = s->ring[dci];
@@ -2266,8 +2424,10 @@ static uint32_t *ring_put(struct xhci_ctrl *hc, int device, uint32_t dci, uint32
     trb[0] = w0;
     trb[1] = w1;
     trb[2] = w2;
-    trb[3] = w3 | s->cycle[dci];
-
+    /* A held block is written with the wrong cycle bit: the controller
+     * stops at it until the caller flips the bit, which is how a transfer
+     * of several blocks appears whole or not at all. */
+    trb[3] = w3 | (hold ? (s->cycle[dci] ^ TRB_CYCLE) : s->cycle[dci]);
     s->enqueue[dci]++;
     if (s->enqueue[dci] == XHCI_EP_RING_TRBS - 1) {
         uint32_t *link = &ring[s->enqueue[dci] * TRB_WORDS];
@@ -2277,28 +2437,232 @@ static uint32_t *ring_put(struct xhci_ctrl *hc, int device, uint32_t dci, uint32
         link[0] = (uint32_t)s->ring_phys[dci];
         link[1] = 0;
         link[2] = 0;
-        link[3] = (TRB_TYPE_LINK << TRB_TYPE_SHIFT) | TRB_TOGGLE | s->cycle[dci];
+        link[3] = (TRB_TYPE_LINK << TRB_TYPE_SHIFT) | TRB_TOGGLE | (chain ? TRB_CHAIN : 0u) |
+                  s->cycle[dci];
         s->enqueue[dci] = 0;
         s->cycle[dci] ^= TRB_CYCLE;
     }
     return trb;
 }
 
+/** The records of endpoint `dci`, or NULL for an endpoint that has none. */
+static struct xhci_td *td_records(struct xhci_slot *s, uint32_t dci)
+{
+    if (!s->td || dci >= XHCI_TD_DCI) {
+        return 0;
+    }
+    return &s->td[dci * XHCI_TD_RECORDS];
+}
+
+/** Whether `t` is a transfer the controller may still reach. */
+static int td_outstanding(const struct xhci_td *t)
+{
+    return t->used && !t->retired;
+}
+
+/** A free record of `dci`: unused, or retired and not held by its caller. */
+static struct xhci_td *td_take(struct xhci_slot *s, uint32_t dci)
+{
+    struct xhci_td *r = td_records(s, dci);
+    int i;
+
+    if (!r) {
+        return 0;
+    }
+    for (i = 0; i < XHCI_TD_RECORDS; i++) {
+        if (!r[i].used || (r[i].retired && !r[i].held)) {
+            return &r[i];
+        }
+    }
+    return 0;
+}
+
+/** The outstanding transfer of `dci` with a block at ring index `at`, and
+ * that block's place in it through `*k`. */
+static struct xhci_td *td_at(struct xhci_slot *s, uint32_t dci, uint32_t at, uint32_t *k)
+{
+    struct xhci_td *r = td_records(s, dci);
+    int i;
+    uint32_t n;
+
+    if (!r) {
+        return 0;
+    }
+    for (i = 0; i < XHCI_TD_RECORDS; i++) {
+        if (!td_outstanding(&r[i])) {
+            continue;
+        }
+        for (n = 0; n < r[i].count; n++) {
+            if (r[i].idx[n] == at) {
+                *k = n;
+                return &r[i];
+            }
+        }
+    }
+    return 0;
+}
+
+/** Whether ring index `at` of `dci` belongs to an outstanding transfer. */
+static int td_holds(struct xhci_slot *s, uint32_t dci, uint32_t at)
+{
+    uint32_t k;
+
+    return td_at(s, dci, at, &k) != 0;
+}
+
+/**
+ * The physical address of `va`, for a controller that reads memory by its
+ * physical address: the identity window's addresses as they are, a heap
+ * page's through the kernel directory; 0 for one that has no frame.
+ */
+static uintptr_t td_phys(uintptr_t va)
+{
+    if (va < HARD_MEMORY_LIMIT) {
+        return va;
+    }
+    return paging_virt_to_phys(va);
+}
+
+/**
+ * The TD size field of a block: the packets of the transfer left after it,
+ * counted in the endpoint's packet size, at most 31, and 0 on the last
+ * block (xHCI 1.2, 4.11.2.4).
+ */
+static uint32_t td_size(uint32_t total, uint32_t through, uint32_t max_packet, int last)
+{
+    uint32_t packets, sent, left;
+
+    if (last) {
+        return 0;
+    }
+    packets = (total + max_packet - 1) / max_packet;
+    sent = through / max_packet;
+    left = packets > sent ? packets - sent : 0;
+    return left > 31 ? 31 : left;
+}
+
+/**
+ * Give the controller a transfer.
+ *
+ * A control transfer is a setup block, a data block when there is data and
+ * a status block, one record over the three, with the event asked for on
+ * the data block, which is the one that says how much came, and on the
+ * status block, which is the transfer's last. A bulk transfer is a chain of
+ * Normal blocks, one per page-bounded piece of the buffer, each with the
+ * piece's physical address and the packets left after it, the chain bit
+ * on all but the last, an event on a short packet on the intermediate IN
+ * blocks and on the last block's end (4.10.1.1.2, 4.11.7).
+ *
+ * The record and every translation are taken before a block is written,
+ * and a transfer that cannot be described whole is refused with the ring
+ * untouched. The first block is written with its cycle bit wrong, the rest
+ * and a Link the controller may cross after it, and the first block's
+ * cycle bit last, so a running endpoint cannot fetch part of a transfer
+ * (4.11.7.1); the doorbell follows.
+ */
 int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb_transfer *transfer)
 {
     struct xhci_slot *s;
+    struct xhci_td *t;
     uint32_t dci = (uint32_t)endpoint;
+    uintptr_t phys[XHCI_TD_TRBS];
+    uint32_t len[XHCI_TD_TRBS];
+    uint32_t pieces = 0;
+    uint32_t blocks;
+    uint32_t at;
+    uint32_t i;
+    uint32_t through = 0;
+    uint32_t *first = 0;
 
     if (device <= 0 || device > (int)hc->nslots || dci == 0 || dci >= XHCI_MAX_DCI) {
         return -1;
     }
     s = &hc->slots[device];
-    if (!s->used || !s->open[dci]) {
+    if (!s->used || !s->open[dci] || s->quiescing[dci]) {
         return -1;
     }
-
+    if (s->ep_state[dci] == XHCI_EP_HALTED || s->ep_state[dci] == XHCI_EP_ERROR) {
+        return -1; /* nothing runs until the endpoint is reset or moved on */
+    }
     s->asked[dci] = transfer->length;
     s->generation[dci] = transfer->generation;
+
+    /* The pieces, translated before anything is written. */
+    if (transfer->setup != 0) {
+        if (transfer->length != 0) {
+            phys[0] = td_phys((uintptr_t)transfer->buffer);
+            len[0] = transfer->length;
+            if (phys[0] == 0) {
+                return -1;
+            }
+            pieces = 1;
+        }
+        blocks = 2 + pieces;
+    } else {
+        uint32_t off = 0;
+
+        while (off < transfer->length) {
+            uintptr_t va = (uintptr_t)transfer->buffer + off;
+            uint32_t chunk = PAGE_SIZE - (uint32_t)(va & (PAGE_SIZE - 1));
+
+            if (chunk > transfer->length - off) {
+                chunk = transfer->length - off;
+            }
+            if (pieces == XHCI_TD_TRBS) {
+                return -1;
+            }
+            phys[pieces] = td_phys(va);
+            if (phys[pieces] == 0) {
+                return -1;
+            }
+            len[pieces] = chunk;
+            pieces++;
+            off += chunk;
+        }
+        if (pieces == 0) {
+            return -1;
+        }
+        blocks = pieces;
+    }
+
+    /* The record, and the ring's room: the blocks and a Link after them, none
+     * of them over a transfer the controller may still reach. The control
+     * endpoint is opened by the address command and not by
+     * `xhci_endpoint_open`,
+     * so its records are taken here. */
+    if (!s->td) {
+        s->td = kzalloc(sizeof(struct xhci_td) * XHCI_TD_DCI * XHCI_TD_RECORDS);
+        if (!s->td) {
+            return -1;
+        }
+    }
+    t = td_take(s, dci);
+    if (!t) {
+        return -1;
+    }
+    at = s->enqueue[dci];
+    for (i = 0; i < blocks + 1; i++) {
+        if (td_holds(s, dci, at)) {
+            return -1;
+        }
+        at++;
+        if (at >= XHCI_EP_RING_TRBS - 1) {
+            at = 0;
+        }
+    }
+
+    t->used = 1;
+    t->retired = 0;
+    t->held = 0;
+    t->delivered = 0;
+    t->control = transfer->setup != 0;
+    t->outcome = -1;
+    t->code = 0;
+    t->generation = transfer->generation;
+    t->total = transfer->length;
+    t->moved = 0;
+    t->count = 0;
+    s->ep_state[dci] = XHCI_EP_RUNNING;
 
     if (transfer->setup != 0) {
         uint32_t setup_lo;
@@ -2312,40 +2676,68 @@ int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb
         if (transfer->length != 0) {
             trt = (transfer->direction == USB_DIR_IN) ? TRB_TRT_IN : TRB_TRT_OUT;
         }
-
-        ring_put(hc, device, dci, setup_lo, setup_hi, 8,
-                 (TRB_TYPE_SETUP << TRB_TYPE_SHIFT) | TRB_IDT | trt);
-        if (transfer->length == 0) {
-            /* With no data stage there is nothing to report but the end, so
-             * the status stage carries the event. */
-            ring_put(hc, device, dci, 0, 0, 0,
-                     (TRB_TYPE_STATUS << TRB_TYPE_SHIFT) | TRB_IOC | TRB_DIR_IN);
-            xhci_barrier();
-            w32(hc, hc->caps.dboff + (uint32_t)device * 4u, dci);
-            return 0;
-        }
+        t->idx[t->count] = s->enqueue[dci];
+        t->len[t->count] = 0;
+        t->count++;
+        first = ring_put(hc, device, dci, setup_lo, setup_hi, 8,
+                         (TRB_TYPE_SETUP << TRB_TYPE_SHIFT) | TRB_IDT | trt, 0, 1);
         if (transfer->length != 0) {
-            /* The event is asked for on the data stage rather than the status
+            /* The event is asked for on the data stage as well as the status
              * stage, because it is the data stage's event that says how much
-             * arrived. A transfer whose event came from the status stage
-             * reports nothing about the bytes, and a descriptor read short
-             * would be parsed as if it were whole. */
-            ring_put(hc, device, dci, (uint32_t)(uintptr_t)transfer->buffer, 0, transfer->length,
+             * arrived; the status stage's is the transfer's end. */
+            t->idx[t->count] = s->enqueue[dci];
+            t->len[t->count] = transfer->length;
+            t->count++;
+            ring_put(hc, device, dci, (uint32_t)phys[0], (uint32_t)((uint64_t)phys[0] >> 32),
+                     transfer->length,
                      (TRB_TYPE_DATA << TRB_TYPE_SHIFT) | TRB_IOC |
-                         (transfer->direction == USB_DIR_IN ? TRB_DIR_IN : 0u));
+                         (transfer->direction == USB_DIR_IN ? TRB_DIR_IN : 0u),
+                     0, 0);
         }
-        /* The status stage goes the other way from the data, and carries the
-         * event, so one transfer is one completion however many blocks it
-         * took. */
-        ring_put(hc, 
-            device, dci, 0, 0, 0,
-            (TRB_TYPE_STATUS << TRB_TYPE_SHIFT) |
-                ((transfer->length != 0 && transfer->direction == USB_DIR_IN) ? 0u : TRB_DIR_IN));
+        /* The status stage goes the other way from the data and carries the
+         * event that ends the transfer. */
+        t->idx[t->count] = s->enqueue[dci];
+        t->len[t->count] = 0;
+        t->count++;
+        ring_put(
+            hc, device, dci, 0, 0, 0,
+            (TRB_TYPE_STATUS << TRB_TYPE_SHIFT) | TRB_IOC |
+                ((transfer->length != 0 && transfer->direction == USB_DIR_IN) ? 0u : TRB_DIR_IN),
+            0, 0);
     } else {
-        ring_put(hc, device, dci, (uint32_t)(uintptr_t)transfer->buffer, 0, transfer->length,
-                 (TRB_TYPE_NORMAL << TRB_TYPE_SHIFT) | TRB_IOC);
+        for (i = 0; i < pieces; i++) {
+            int last = i + 1 == pieces;
+            uint32_t flags = TRB_TYPE_NORMAL << TRB_TYPE_SHIFT;
+            uint32_t words; /* the length and, above it, the packets left */
+            uint32_t *trb;
+
+            through += len[i];
+            words = len[i] | (td_size(transfer->length, through, s->max_packet[dci], last)
+                              << TRB_TD_SIZE_SHIFT);
+            if (last) {
+                flags |= TRB_IOC;
+            } else {
+                flags |= TRB_CHAIN;
+                if (transfer->direction == USB_DIR_IN) {
+                    flags |= TRB_ISP;
+                }
+            }
+            t->idx[t->count] = s->enqueue[dci];
+            t->len[t->count] = len[i];
+            t->count++;
+            trb = ring_put(hc, device, dci, (uint32_t)phys[i], (uint32_t)((uint64_t)phys[i] >> 32),
+                           words, flags, !last, i == 0);
+            if (i == 0) {
+                first = trb;
+            }
+        }
     }
 
+    /* Everything but the first block is visible; now the first block's
+     * cycle bit, then the doorbell. Until the flip the transfer is not
+     * there for the controller. */
+    xhci_barrier();
+    first[3] ^= TRB_CYCLE;
     xhci_barrier();
     w32(hc, hc->caps.dboff + (uint32_t)device * 4u, dci);
     return 0;
@@ -2359,4 +2751,138 @@ int xhci_poll(struct xhci_ctrl *hc, struct usb_completion *out)
     *out = hc->completions[hc->completion_tail % XHCI_COMPLETIONS];
     hc->completion_tail++;
     return 1;
+}
+
+/** The record of the transfer submitted under `generation` on `device`, or
+ * NULL when the driver holds none. */
+static struct xhci_td *td_by_generation(struct xhci_ctrl *hc, int device, uint32_t generation)
+{
+    struct xhci_slot *s;
+    uint32_t dci;
+    int i;
+
+    if (device <= 0 || device > (int)hc->nslots || !hc->slots[device].used ||
+        !hc->slots[device].td) {
+        return 0;
+    }
+    s = &hc->slots[device];
+    for (dci = 1; dci < XHCI_TD_DCI; dci++) {
+        struct xhci_td *r = &s->td[dci * XHCI_TD_RECORDS];
+
+        for (i = 0; i < XHCI_TD_RECORDS; i++) {
+            if (r[i].used && r[i].generation == generation) {
+                return &r[i];
+            }
+        }
+    }
+    return 0;
+}
+
+int xhci_td_retired(struct xhci_ctrl *hc, int device, uint32_t generation)
+{
+    struct xhci_td *t = td_by_generation(hc, device, generation);
+
+    if (!t) {
+        return -1;
+    }
+    return t->retired ? 1 : 0;
+}
+
+int xhci_td_hold(struct xhci_ctrl *hc, int device, uint32_t generation)
+{
+    struct xhci_td *t = td_by_generation(hc, device, generation);
+
+    if (!t) {
+        return -1;
+    }
+    t->held = 1;
+    return 0;
+}
+
+void xhci_td_release(struct xhci_ctrl *hc, int device, uint32_t generation)
+{
+    struct xhci_td *t = td_by_generation(hc, device, generation);
+
+    if (t) {
+        t->held = 0;
+        if (t->retired) {
+            t->used = 0; /* nothing answers for this generation again */
+        }
+    }
+}
+
+int xhci_endpoint_state(struct xhci_ctrl *hc, int device, int endpoint)
+{
+    if (device <= 0 || device > (int)hc->nslots || endpoint <= 0 || endpoint >= XHCI_MAX_DCI ||
+        !hc->slots[device].used) {
+        return -1;
+    }
+    return hc->slots[device].ep_state[endpoint];
+}
+
+void xhci_endpoint_quiescing(struct xhci_ctrl *hc, int device, int endpoint, int on)
+{
+    if (device <= 0 || device > (int)hc->nslots || endpoint <= 0 || endpoint >= XHCI_MAX_DCI) {
+        return;
+    }
+    hc->slots[device].quiescing[endpoint] = on ? 1 : 0;
+}
+
+int xhci_endpoint_stop(struct xhci_ctrl *hc, int device, int endpoint)
+{
+    if (device <= 0 || device > (int)hc->nslots || endpoint <= 0 || endpoint >= XHCI_MAX_DCI ||
+        !hc->slots[device].used) {
+        return -1;
+    }
+    return xhci_command_issue(hc, TRB_TYPE_STOP_EP, 0,
+                              (uint32_t)device | ((uint32_t)endpoint << 16));
+}
+
+int xhci_endpoint_dequeue_here(struct xhci_ctrl *hc, int device, int endpoint)
+{
+    struct xhci_slot *s;
+    uint64_t where;
+
+    if (device <= 0 || device > (int)hc->nslots || endpoint <= 0 || endpoint >= XHCI_MAX_DCI ||
+        !hc->slots[device].used || !hc->slots[device].ring[endpoint]) {
+        return -1;
+    }
+    s = &hc->slots[device];
+    /* The enqueue pointer names the entry the driver writes next, whose
+     * cycle bit is the producer's opposite, so the controller pointed there
+     * finds nothing to fetch until the driver writes it; the driver's own
+     * enqueue and cycle stay as they are. */
+    where = (uint64_t)((uint32_t)s->ring_phys[endpoint] + s->enqueue[endpoint] * TRB_WORDS * 4u) |
+            (uint64_t)s->cycle[endpoint];
+    return xhci_command_issue(hc, TRB_TYPE_SET_TR_DEQUEUE, where,
+                              (uint32_t)device | ((uint32_t)endpoint << 16));
+}
+
+void xhci_endpoint_retire_all(struct xhci_ctrl *hc, int device, int endpoint)
+{
+    struct xhci_td *r;
+    int i;
+
+    if (device <= 0 || device > (int)hc->nslots || endpoint <= 0 || endpoint >= XHCI_MAX_DCI ||
+        !hc->slots[device].used) {
+        return;
+    }
+    r = td_records(&hc->slots[device], (uint32_t)endpoint);
+    if (!r) {
+        return;
+    }
+    for (i = 0; i < XHCI_TD_RECORDS; i++) {
+        if (r[i].used) {
+            r[i].retired = 1;
+        }
+    }
+    hc->slots[device].ep_state[endpoint] = XHCI_EP_STOPPED;
+}
+
+uint32_t xhci_dropped_events(struct xhci_ctrl *hc, int device)
+{
+    if (device <= 0 || device > (int)hc->nslots) {
+        return 0;
+    }
+    return hc->slots[device].dropped_events;
 }

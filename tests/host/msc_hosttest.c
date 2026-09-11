@@ -29,11 +29,30 @@ extern int printf(const char *fmt, ...);
 
 /* ---- what the driver reaches for outside itself ---- */
 
+static int waits_logged; /* "the record waits for its slot to be given back" */
+
+/** 1 when `text` contains `words`. */
+static int has_words(const char *text, const char *words)
+{
+    int i, j;
+
+    for (i = 0; text[i] != 0; i++) {
+        for (j = 0; words[j] != 0 && text[i + j] == words[j]; j++) {
+        }
+        if (words[j] == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     (void)level;
     (void)subsystem;
-    (void)format;
+    if (has_words(format, "waits for its slot")) {
+        waits_logged++;
+    }
 }
 
 #include "../../rach2/sys/lib/kstring.h"
@@ -79,15 +98,18 @@ static struct {
     int bad_status; /* a status byte outside 0 to 2 */
     int phase_error;
     int short_status;
-    int residue_over;  /* a residue larger than the transfer */
-    int residue;       /* a residue this many bytes on the next command */
-    int vanish_at;     /* the stage at which the device stops answering */
-    int sense_key;     /* what the next REQUEST SENSE answers with, or 0 */
-    int failed;        /* a command failed and its sense is owed */
-    int senses;        /* REQUEST SENSE commands seen */
-    uint32_t last_tag; /* the tag of the last wrapper taken */
-    int resets;        /* class resets seen */
-    int reset_never;   /* the class reset is never answered */
+    int residue_over;    /* a residue larger than the transfer */
+    int residue;         /* a residue this many bytes on the next command */
+    int vanish_at;       /* the stage at which the device stops answering */
+    int sense_key;       /* what the next REQUEST SENSE answers with, or 0 */
+    int failed;          /* a command failed and its sense is owed */
+    int senses;          /* REQUEST SENSE commands seen */
+    uint32_t last_tag;   /* the tag of the last wrapper taken */
+    int resets;          /* class resets seen */
+    int reset_never;     /* the class reset is never answered */
+    int reset_stalls;    /* the class reset is stalled */
+    int dev_clears;      /* CLEAR_FEATURE(ENDPOINT_HALT) requests seen */
+    int devclear_stalls; /* and they are stalled */
     int cleared_in, cleared_out;
     int clear_order[8];
     int clears;
@@ -151,6 +173,211 @@ static void wr32_be(unsigned char *p, uint32_t v)
     p[3] = (unsigned char)v;
 }
 
+/* The endpoint numbers this model answers on, as the core would have given
+   them: the control endpoint is 1, and the bulk pair is 3 and 4. */
+#define EP_CONTROL 1
+#define EP_IN      3
+#define EP_OUT     4
+
+/* The controller driver's transfer records, as the stick driver asks about
+   them: a data transfer it holds is in flight from its submission until the
+   wire answers it whole, a stop retires every transfer of the endpoint, and
+   a disable retires them all. A row that fails a request completion while a
+   transfer naming its pages is in flight reads `pages_reused`. */
+static struct {
+    uint32_t gen;
+    int endpoint;
+    int used;
+    int retired;
+    int held;
+    const unsigned char *buffer;
+} tds[8];
+static int quiesces;
+static int quiesce_order[8];
+static int quiesce_answer = 1; /* what usb_core_endpoint_quiesce answers once it is asked */
+static int quiesce_answer_for[8] = {1, 1, 1, 1, 1, 1, 1, 1}; /* per endpoint, 2 = the general one */
+static int clear_answer = 1;                                 /* what usb_core_clear_halt answers */
+static int keep_data_td;         /* the data stage is answered but its record stays in flight */
+static int csw_residue_zero;     /* the next status wrapper claims no residue whatever moved */
+static int pages_reused;         /* a buffer completed or submitted again with a record in flight */
+static int completions_at_reset; /* how many requests had completed when the class reset went out */
+
+/* The order of what the driver asked of the core and the wire, as codes:
+   ORDER_QUIESCE plus the endpoint, ORDER_CLEAR plus the endpoint, the class
+   reset, and a command wrapper. */
+#define ORDER_QUIESCE  10
+#define ORDER_RESET    20
+#define ORDER_CLEAR    30
+#define ORDER_WRAPPER  40
+#define ORDER_DEVCLEAR 50 /* the device's CLEAR_FEATURE(ENDPOINT_HALT), plus the endpoint */
+static int order[32];
+static int orders;
+
+static void order_note(int code)
+{
+    if (orders < 32) {
+        order[orders] = code;
+    }
+    orders++;
+}
+
+/** 1 when the order recorded is exactly `want`. */
+static int order_is(const int *want, int n)
+{
+    int i;
+
+    if (orders != n) {
+        return 0;
+    }
+    for (i = 0; i < n; i++) {
+        if (order[i] != want[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/** 1 when a record not yet retired names `buffer`. */
+static int td_names(const unsigned char *buffer)
+{
+    int i;
+
+    for (i = 0; i < 8; i++) {
+        if (tds[i].used && !tds[i].retired && tds[i].buffer == buffer) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void td_track(int endpoint, uint32_t gen, const unsigned char *buffer)
+{
+    int i;
+
+    /* A retired record nobody holds is free; one still held is the
+       driver's until it releases it. */
+    for (i = 0; i < 8; i++) {
+        if (!tds[i].used || (tds[i].retired && !tds[i].held)) {
+            tds[i].used = 1;
+            tds[i].gen = gen;
+            tds[i].endpoint = endpoint;
+            tds[i].retired = 0;
+            tds[i].held = 0;
+            tds[i].buffer = buffer;
+            return;
+        }
+    }
+}
+static void td_retire_all(void)
+{
+    int i;
+
+    for (i = 0; i < 8; i++) {
+        if (tds[i].used) {
+            tds[i].retired = 1;
+        }
+    }
+}
+static void td_retire_gen(uint32_t gen)
+{
+    int i;
+
+    for (i = 0; i < 8; i++) {
+        if (tds[i].used && tds[i].gen == gen) {
+            tds[i].retired = 1;
+        }
+    }
+}
+static void td_retire_endpoint(int endpoint)
+{
+    int i;
+
+    for (i = 0; i < 8; i++) {
+        if (tds[i].used && tds[i].endpoint == endpoint) {
+            tds[i].retired = 1;
+        }
+    }
+}
+static int td_in_flight(void)
+{
+    int i;
+
+    for (i = 0; i < 8; i++) {
+        if (tds[i].used && !tds[i].retired && tds[i].held) {
+            return 1;
+        }
+    }
+    return 0;
+}
+int xhci_td_hold(struct xhci_ctrl *hc, int device, uint32_t generation)
+{
+    int i;
+
+    (void)hc;
+    (void)device;
+    for (i = 0; i < 8; i++) {
+        if (tds[i].used && tds[i].gen == generation) {
+            tds[i].held = 1;
+            return 0;
+        }
+    }
+    return -1;
+}
+int xhci_td_retired(struct xhci_ctrl *hc, int device, uint32_t generation)
+{
+    int i;
+
+    (void)hc;
+    (void)device;
+    for (i = 0; i < 8; i++) {
+        if (tds[i].used && tds[i].gen == generation) {
+            return tds[i].retired;
+        }
+    }
+    return -1;
+}
+void xhci_td_release(struct xhci_ctrl *hc, int device, uint32_t generation)
+{
+    int i;
+
+    (void)hc;
+    (void)device;
+    for (i = 0; i < 8; i++) {
+        if (tds[i].used && tds[i].gen == generation) {
+            tds[i].held = 0;
+            if (tds[i].retired) {
+                tds[i].used = 0;
+            }
+        }
+    }
+}
+int usb_core_endpoint_quiesce(struct xhci_ctrl *hc, int device, int endpoint)
+{
+    int answer =
+        quiesce_answer_for[endpoint & 7] == 2 ? quiesce_answer : quiesce_answer_for[endpoint & 7];
+
+    (void)hc;
+    (void)device;
+    if (quiesces < 8) {
+        quiesce_order[quiesces] = endpoint;
+    }
+    quiesces++;
+    order_note(ORDER_QUIESCE + endpoint);
+    if (answer == 1) {
+        td_retire_endpoint(endpoint);
+    }
+    return answer;
+}
+
+static int stage_of_last; /* the stage of the transfer being answered */
+
+/* The block layer's side, recorded rather than driven. */
+static struct {
+    int completions;
+    int last_status;
+    struct block_request *last;
+} block;
+
 /** Hand the driver the answer to the transfer it submitted. */
 static void answer(int endpoint, int status, uint32_t length, uint32_t residual,
                    uint32_t generation)
@@ -162,13 +389,14 @@ static void answer(int endpoint, int status, uint32_t length, uint32_t residual,
     wire.completion.length = length;
     wire.completion.residual = residual;
     wire.completion.generation = generation;
+    /* A transfer that answered whole or short is retired by its event; a
+       stalled or failed one is the controller's until its endpoint is
+       reset and moved on, which the clear stub does. */
+    if ((status == USB_XFER_OK || status == USB_XFER_SHORT) &&
+        !(keep_data_td && endpoint != EP_CONTROL && stage_of_last == 2)) {
+        td_retire_gen(generation);
+    }
 }
-
-/* The endpoint numbers this model answers on, as the core would have given
-   them: the control endpoint is 1, and the bulk pair is 3 and 4. */
-#define EP_CONTROL 1
-#define EP_IN      3
-#define EP_OUT     4
 
 /** Which stage a transfer on `endpoint` is, for the vanishing knob. */
 static int stage_of(int endpoint, const struct usb_transfer *t)
@@ -342,6 +570,14 @@ int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb
     if (!dev.attached) {
         return -1;
     }
+    if (td_names(transfer->buffer)) {
+        pages_reused++;
+    }
+    td_track(endpoint, transfer->generation, transfer->buffer);
+    stage_of_last = stage;
+    if (stage == 1) {
+        order_note(ORDER_WRAPPER);
+    }
     if (dev.vanish_at != 0 && dev.vanish_at == stage) {
         /* The device is pulled at this stage: the transfer is submitted and
            nothing ever answers it, which is what the driver's deadline is
@@ -370,10 +606,25 @@ int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb
         }
         if (setup != 0 && setup[1] == 0xFF) { /* the class reset */
             dev.resets++;
+            order_note(ORDER_RESET);
+            completions_at_reset = block.completions;
             if (dev.reset_never) {
                 return 0; /* submitted, and nothing ever answers it */
             }
+            if (dev.reset_stalls) {
+                answer(endpoint, USB_XFER_STALLED, 0, 0, transfer->generation);
+                return 0;
+            }
             answer(endpoint, USB_XFER_OK, 0, 0, transfer->generation);
+            return 0;
+        }
+        if (setup != 0 && setup[0] == 0x02 && setup[1] == 1) { /* CLEAR_FEATURE on an endpoint */
+            int dci = (setup[4] & 0x0F) * 2 + ((setup[4] & 0x80) ? 1 : 0);
+
+            dev.dev_clears++;
+            order_note(ORDER_DEVCLEAR + dci);
+            answer(endpoint, dev.devclear_stalls ? USB_XFER_STALLED : USB_XFER_OK, 0, 0,
+                   transfer->generation);
             return 0;
         }
         answer(endpoint, USB_XFER_OK, transfer->length, 0, transfer->generation);
@@ -429,7 +680,8 @@ int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb
 
         wr32(&w[0], dev.bad_signature ? 0x55534253u : 0x53425355u);
         wr32(&w[4], dev.bad_tag ? cmd.tag + 1u : cmd.tag);
-        wr32(&w[8], dev.residue_over ? cmd.length + 512u : cmd.residue);
+        wr32(&w[8], dev.residue_over ? cmd.length + 512u : (csw_residue_zero ? 0u : cmd.residue));
+        csw_residue_zero = 0;
         w[12] = (unsigned char)(dev.bad_status ? 9 : (dev.phase_error ? 2 : status));
         dev.bad_signature = 0;
         dev.bad_tag = 0;
@@ -467,12 +719,16 @@ int usb_core_clear_halt(struct xhci_ctrl *hc, int device, int endpoint)
         dev.clear_order[dev.clears] = endpoint;
     }
     dev.clears++;
+    order_note(ORDER_CLEAR + endpoint);
     if (endpoint == EP_IN) {
         dev.cleared_in++;
     } else {
         dev.cleared_out++;
     }
-    return 1;
+    if (clear_answer == 1) {
+        td_retire_endpoint(endpoint); /* the reset and the dequeue retire them */
+    }
+    return clear_answer;
 }
 
 /*
@@ -517,12 +773,14 @@ void block_count_flush(void)
     flushes_counted++;
 }
 
-/* The block layer's side, recorded rather than driven. */
-static struct {
-    int completions;
-    int last_status;
-    struct block_request *last;
-} block;
+/* The data commands the driver counts for /proc/disk, one per READ or
+   WRITE sent. */
+static int commands_counted;
+
+void block_count_command(void)
+{
+    commands_counted++;
+}
 
 void block_request_complete(struct block_request *request, uint32_t generation, int status)
 {
@@ -530,6 +788,9 @@ void block_request_complete(struct block_request *request, uint32_t generation, 
     block.completions++;
     block.last_status = status;
     block.last = request;
+    if (request != 0 && td_names(request->page)) {
+        pages_reused++;
+    }
     if (request != 0) {
         request->status = status;
         request->state = BLOCK_REQ_DONE;
@@ -572,6 +833,13 @@ static int run_until_settled(int turns)
     return 0;
 }
 
+/** The core's Disable Slot answered: every record of the device is retired. */
+static void close_slot(int device)
+{
+    td_retire_all();
+    msc_slot_closed(0, device);
+}
+
 static void model_reset(void)
 {
     int i;
@@ -606,13 +874,29 @@ static void model_reset(void)
      * holds it, so the reset does what that layer would. */
     for (i = 0; i < MSC_MAX_DEVICES; i++) {
         msc_detach(0, 1 + i);
+        close_slot(1 + i);
     }
     for (i = 0; i < MSC_MAX_DEVICES; i++) {
         msc_release(i);
     }
+    for (i = 0; i < 8; i++) {
+        tds[i].used = 0;
+        quiesce_answer_for[i] = 1;
+    }
+    quiesces = 0;
+    quiesce_answer = 1;
+    clear_answer = 1;
+    keep_data_td = 0;
+    csw_residue_zero = 0;
+    pages_reused = 0;
+    completions_at_reset = 0;
+    orders = 0;
+    drops = 0;
+    waits_logged = 0;
     arrivals = 0;
     departures = 0;
     flushes_counted = 0;
+    commands_counted = 0;
 }
 
 static struct block_request *make_request(int write, uint64_t lba, uint32_t count,
@@ -659,6 +943,7 @@ int main(void)
         CHECK("and completes", block.completions == 1 && block.last_status == 0);
         CHECK("with the medium's own bytes",
               page[0] == dev.medium[2 * SECTOR] && page[SECTOR] == dev.medium[3 * SECTOR]);
+        CHECK("as one command, counted", commands_counted == 1);
     }
     {
         struct block_request *r = make_request(1, 5, 1, page);
@@ -810,8 +1095,8 @@ int main(void)
         pump(1);
         pump(1);
         msc_detach(0, 1);
-        CHECK("the read is failed when the stick goes",
-              block.completions == 1 && block.last_status == -EIO);
+        CHECK("the read is kept when the stick goes, its pages the controller's",
+              block.completions == 0);
         CHECK("and the stick stops serving", msc_count() == 0 && !msc_ready(0));
         CHECK("the disk layer is told once", departures == 1);
         /* The slot is not free yet. A mount, a description and a held buffer
@@ -827,7 +1112,12 @@ int main(void)
               msc_attach(0, 2, 0, EP_IN, EP_OUT) == 0 && msc_block_device(0) != 0 &&
                   msc_block_device(0)->submit(msc_block_device(0), r) == -EIO);
         msc_release(0);
+        CHECK("and is kept while the controller has not given the slot back",
+              msc_block_device(0) != 0);
+        close_slot(1);
         CHECK("the slot goes back when the last hold does", msc_block_device(0) == 0);
+        CHECK("and the read is failed with it",
+              block.completions == 1 && block.last_status == -EIO);
     }
 
     /* Two requests, admitted in the order they arrived. */
@@ -959,16 +1249,27 @@ int main(void)
         dev.vanish_at = 2;
         block.completions = 0;
         CHECK("a read is taken", msc_block_device(0)->submit(msc_block_device(0), r) == 0);
-        for (i = 0; i < 40 && block.completions == 0; i++) {
+        for (i = 0; i < 40 && drops == 0; i++) {
             pump(20000); /* past the driver's own deadline */
         }
-        CHECK("the read fails at the deadline",
+        /* The stick is refused and handed to the core with the request
+           kept; the core's close and port reset bring it back as a fresh
+           stick on the same handle, and the close fails the request. */
+        CHECK("the deadline refuses the stick and hands it to the core",
+              drops == 1 && !msc_ready(0) && block.completions == 0);
+        msc_detach(0, 1);
+        close_slot(1);
+        msc_release(0);
+        CHECK("and the read fails when the core has closed the device",
               block.completions == 1 && block.last_status == -EIO);
+        dev.vanish_at = 0;
+        dev.attached = 1;
+        CHECK("the stick comes back on the same handle",
+              msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0 && run_until_settled(200));
         /* A fresh request, and the abandoned transfer's answer arriving
            while its first stage is in flight. Taken as this command's, it
            would advance a stage that has not happened and the read would
            come back with whatever the page held. */
-        dev.vanish_at = 0;
         r = make_request(0, 3, 1, page);
         page[0] = 0xEE;
         block.completions = 0;
@@ -1156,12 +1457,16 @@ int main(void)
         dev.vanish_at = 2;   /* the data stage is never answered */
         dev.reset_never = 1; /* nor the class reset that follows */
         CHECK("a read is taken", msc_block_device(0)->submit(msc_block_device(0), r) == 0);
-        for (i = 0; i < 3000 && block.completions == 0; i++) {
+        for (i = 0; i < 3000 && drops == 0; i++) {
             pump(10);
         }
-        CHECK("a recovery that never answers fails the request",
-              dev.resets == 1 && block.completions == 1 && block.last_status == -EIO);
-        CHECK("and hands the stick back to the core for its port to be reset", drops == 1);
+        CHECK("a recovery that never answers refuses the stick with the request kept",
+              dev.resets == 1 && block.completions == 0 && drops == 1);
+        msc_detach(0, 1);
+        close_slot(1);
+        msc_release(0);
+        CHECK("and the request fails when the core has closed the device",
+              block.completions == 1 && block.last_status == -EIO);
         dev.vanish_at = 0;
         dev.reset_never = 0;
     }
@@ -1183,6 +1488,7 @@ int main(void)
         }
         first_tag = dev.last_tag;
         msc_detach(0, 1);
+        close_slot(1);
         msc_release(0);
         dev.attached = 1;
         CHECK("a second stick is taken on the same handle",
@@ -1190,6 +1496,564 @@ int main(void)
         CHECK("and comes up", run_until_settled(200));
         CHECK("and its first command's tag is past every tag the first stick used",
               dev.last_tag > first_tag);
+    }
+
+    /* A class request the stick stalls halts the control endpoint: it is
+       moved on before the first command's wrapper goes out. */
+    model_reset();
+    dev.stall_max_lun = 1;
+    orders = 0;
+    CHECK("a stick that stalls Get Max LUN is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("and comes up", run_until_settled(200));
+    CHECK("with its control endpoint moved on before its first command",
+          orders >= 2 && order[0] == ORDER_CLEAR + EP_CONTROL && order[1] == ORDER_WRAPPER);
+
+    /* The bytes a data stage moved are this command's: a read whose data
+       stage stalls, under a wrapper claiming no residue, moved nothing. */
+    model_reset();
+    CHECK("a stick is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("and comes up", run_until_settled(200));
+    {
+        struct block_request *r = make_request(0, 0, 2, page);
+        int i;
+
+        block.completions = 0;
+        CHECK("a read is taken", msc_block_device(0)->submit(msc_block_device(0), r) == 0);
+        for (i = 0; i < 40 && block.completions == 0; i++) {
+            pump(1);
+        }
+        CHECK("and completes", block.completions == 1 && block.last_status == 0);
+        r = make_request(0, 4, 2, page);
+        block.completions = 0;
+        dev.stall_stage = 2;
+        dev.stall_times = 1;
+        CHECK("a second read is taken", msc_block_device(0)->submit(msc_block_device(0), r) == 0);
+        for (i = 0; i < 60 && block.completions == 0; i++) {
+            pump(1);
+        }
+        CHECK("whose stalled data stage under a wrapper claiming no residue fails it",
+              block.completions == 1 && block.last_status == -EIO);
+    }
+
+    /* A command of the bring-up whose data transfer the controller has not
+       retired: its buffer is the record's own, and the endpoint is stopped
+       before the next command's wrapper reuses it. */
+    model_reset();
+    keep_data_td = 1;
+    orders = 0;
+    CHECK("a stick is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("and comes up", run_until_settled(400));
+    CHECK("with each unretired transfer's endpoint stopped before the next wrapper",
+          orders >= 3 && order[0] == ORDER_WRAPPER && order[1] == ORDER_QUIESCE + EP_IN &&
+              order[2] == ORDER_WRAPPER && pages_reused == 0);
+    keep_data_td = 0;
+
+    /* A record kept after its slot was given back claims no completion: a
+       completion naming the slot is the next device's. */
+    model_reset();
+    CHECK("a stick is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("and comes up", run_until_settled(200));
+    {
+        struct block_request *r = make_request(0, 0, 1, page);
+        struct usb_completion next;
+
+        block.completions = 0;
+        dev.vanish_at = 2;
+        CHECK("a read is taken", msc_block_device(0)->submit(msc_block_device(0), r) == 0);
+        pump(1);
+        pump(1);
+        msc_detach(0, 1);
+        close_slot(1);
+        CHECK("the record is kept for the disk layer", msc_block_device(0) != 0);
+        next.hc = 0;
+        next.device = 1;
+        next.endpoint = EP_CONTROL;
+        next.status = USB_XFER_OK;
+        next.length = 8;
+        next.residual = 0;
+        next.generation = 1;
+        CHECK("and a completion naming its slot is not taken", msc_completion(&next) == 0);
+        msc_release(0);
+        dev.vanish_at = 0;
+    }
+
+    /* A wrapper that never answers, with no data transfer held: the stop
+       refused still hands the stick to the core. */
+    model_reset();
+    CHECK("a stick is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("and comes up", run_until_settled(200));
+    {
+        struct block_request *r = make_request(0, 0, 1, page);
+        int i;
+
+        block.completions = 0;
+        dev.vanish_at = 1;
+        quiesce_answer_for[EP_IN] = -1;
+        CHECK("a read is taken", msc_block_device(0)->submit(msc_block_device(0), r) == 0);
+        for (i = 0; i < 40 && drops == 0; i++) {
+            pump(MSC_STEP_MS / 2);
+        }
+        CHECK("a stop refused after a wrapper never answered hands the stick to the core",
+              drops == 1 && !msc_ready(0) && block.completions == 0);
+        msc_detach(0, 1);
+        close_slot(1);
+        msc_release(0);
+        CHECK("and the request fails at the close", block.completions == 1);
+        dev.vanish_at = 0;
+    }
+
+    /* A class reset the stick stalls: the stick is refused and handed to
+       the core rather than served with its control endpoint halted. */
+    model_reset();
+    CHECK("a stick is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("and comes up", run_until_settled(200));
+    {
+        struct block_request *r = make_request(0, 0, 1, page);
+        int i;
+
+        block.completions = 0;
+        dev.phase_error = 1;
+        dev.reset_stalls = 1;
+        CHECK("a read is taken", msc_block_device(0)->submit(msc_block_device(0), r) == 0);
+        for (i = 0; i < 60 && drops == 0; i++) {
+            pump(1);
+        }
+        CHECK("a class reset the stick stalls refuses the stick to the core",
+              dev.resets == 1 && drops == 1 && !msc_ready(0) && dev.dev_clears == 0);
+        dev.reset_stalls = 0;
+    }
+
+    /* A device that will not clear its halt: the same. */
+    model_reset();
+    CHECK("a stick is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("and comes up", run_until_settled(200));
+    {
+        struct block_request *r = make_request(0, 0, 1, page);
+        int i;
+
+        block.completions = 0;
+        dev.phase_error = 1;
+        dev.devclear_stalls = 1;
+        CHECK("a read is taken", msc_block_device(0)->submit(msc_block_device(0), r) == 0);
+        for (i = 0; i < 60 && drops == 0; i++) {
+            pump(1);
+        }
+        CHECK("a device that stalls the clear of its halt is refused to the core",
+              dev.resets == 1 && dev.dev_clears == 1 && drops == 1 && !msc_ready(0));
+        dev.devclear_stalls = 0;
+    }
+
+    /* ---- the request's pages while the controller can reach them ---- */
+
+    /* A stick pulled with a read's data stage in flight: the request is not
+       completed at the pull, since the controller may still write its
+       pages; it fails when the slot is given back, and the record goes
+       when the disk layer and the controller have both let go, in either
+       order. */
+    model_reset();
+    CHECK("a stick is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("and comes up", run_until_settled(200));
+    {
+        struct block_request *r = make_request(0, 0, 1, page);
+
+        block.completions = 0;
+        dev.vanish_at = 2;
+        CHECK("a read is taken", msc_block_device(0)->submit(msc_block_device(0), r) == 0);
+        pump(1);
+        pump(1);
+        CHECK("and its data stage is in flight", sticks[0].stage == STAGE_DATA && sticks[0].owned);
+        msc_detach(0, 1);
+        CHECK("pulled during the data stage, the request is not completed",
+              block.completions == 0 && departures == 1);
+        msc_release(0);
+        CHECK("the disk layer's release keeps the record",
+              msc_block_device(0) != 0 && block.completions == 0);
+        close_slot(1);
+        CHECK("the slot given back fails the request",
+              block.completions == 1 && block.last_status == -EIO);
+        CHECK("and reclaims the record once", msc_block_device(0) == 0 && msc_count() == 0);
+        CHECK("with no page touched while a transfer named it", pages_reused == 0);
+    }
+    /* The other order: the slot given back first, the disk layer after. */
+    model_reset();
+    CHECK("a stick is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("and comes up", run_until_settled(200));
+    {
+        struct block_request *r = make_request(0, 0, 1, page);
+
+        block.completions = 0;
+        dev.vanish_at = 2;
+        CHECK("a read is taken", msc_block_device(0)->submit(msc_block_device(0), r) == 0);
+        pump(1);
+        pump(1);
+        msc_detach(0, 1);
+        close_slot(1);
+        CHECK("the slot given back fails the request",
+              block.completions == 1 && block.last_status == -EIO);
+        CHECK("and keeps the record for the disk layer", msc_block_device(0) != 0);
+        msc_release(0);
+        CHECK("which reclaims it", msc_block_device(0) == 0);
+        CHECK("with no page touched while a transfer named it", pages_reused == 0);
+    }
+    /* Pulled during the command wrapper, the request's pages are not the
+       controller's yet and the request fails at once; pulled during the
+       status wrapper, its data record is retired but still held, and the
+       request waits for the slot as in the data stage. */
+    model_reset();
+    CHECK("a stick is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("and comes up", run_until_settled(200));
+    {
+        struct block_request *r = make_request(0, 0, 1, page);
+
+        block.completions = 0;
+        dev.vanish_at = 1;
+        CHECK("a read is taken", msc_block_device(0)->submit(msc_block_device(0), r) == 0);
+        pump(1);
+        CHECK("and its wrapper is in flight", sticks[0].stage == STAGE_CBW && !sticks[0].owned);
+        msc_detach(0, 1);
+        CHECK("pulled during the command wrapper, the request fails at the pull",
+              block.completions == 1 && block.last_status == -EIO && pages_reused == 0);
+        close_slot(1);
+        msc_release(0);
+    }
+    model_reset();
+    CHECK("a stick is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("and comes up", run_until_settled(200));
+    {
+        struct block_request *r = make_request(0, 0, 1, page);
+
+        block.completions = 0;
+        dev.vanish_at = 3;
+        CHECK("a read is taken", msc_block_device(0)->submit(msc_block_device(0), r) == 0);
+        pump(1);
+        pump(1);
+        pump(1);
+        CHECK("and its status wrapper is in flight",
+              sticks[0].stage == STAGE_CSW && sticks[0].owned);
+        msc_detach(0, 1);
+        CHECK("pulled during the status wrapper, the request is not completed",
+              block.completions == 0);
+        close_slot(1);
+        CHECK("until the slot is given back", block.completions == 1 && block.last_status == -EIO);
+        msc_release(0);
+        CHECK("and the record goes with the disk layer's release", msc_block_device(0) == 0);
+    }
+
+    /* A Disable Slot never answered: the request is never completed, the
+       record is kept, and the log says so. */
+    model_reset();
+    CHECK("a stick is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("and comes up", run_until_settled(200));
+    {
+        struct block_request *r = make_request(0, 0, 1, page);
+        int i;
+
+        block.completions = 0;
+        dev.vanish_at = 2;
+        CHECK("a read is taken", msc_block_device(0)->submit(msc_block_device(0), r) == 0);
+        pump(1);
+        pump(1);
+        msc_detach(0, 1);
+        msc_release(0);
+        for (i = 0; i < 50; i++) {
+            pump(MSC_STEP_MS);
+        }
+        CHECK("with the slot never given back, the request is never completed",
+              block.completions == 0);
+        CHECK("and the record is kept", msc_block_device(0) != 0 && waits_logged == 1);
+        CHECK("and a second stick takes another slot",
+              msc_attach(0, 2, 0, EP_IN, EP_OUT) == 0 && msc_block_device(0) != 0);
+        close_slot(1);
+        CHECK("the slot given back at last fails the request and frees the record",
+              block.completions == 1 && msc_block_device(0) == 0);
+    }
+
+    /* A data stage that never answers: bulk IN is stopped and moved on,
+       then bulk OUT, only then the class reset and the two clears, and the
+       request is failed after all of it, once. */
+    model_reset();
+    CHECK("a stick is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("and comes up", run_until_settled(200));
+    {
+        struct block_request *r = make_request(0, 0, 1, page);
+        int want[8] = {ORDER_WRAPPER,        ORDER_QUIESCE + EP_IN,  ORDER_QUIESCE + EP_OUT,
+                       ORDER_RESET,          ORDER_CLEAR + EP_IN,    ORDER_DEVCLEAR + EP_IN,
+                       ORDER_CLEAR + EP_OUT, ORDER_DEVCLEAR + EP_OUT};
+        int i;
+
+        block.completions = 0;
+        dev.vanish_at = 2;
+        orders = 0;
+        CHECK("a read is taken", msc_block_device(0)->submit(msc_block_device(0), r) == 0);
+        for (i = 0; i < 40 && block.completions == 0; i++) {
+            pump(MSC_STEP_MS / 2);
+        }
+        CHECK("a data stage that never answers fails the read",
+              block.completions == 1 && block.last_status == -EIO);
+        CHECK("after both endpoints were stopped, then the reset, then each clear on the "
+              "controller and on the device",
+              order_is(want, 8));
+        CHECK("and the request was completed after all of them", completions_at_reset == 0);
+        CHECK("and the stick still serves", msc_ready(0));
+        CHECK("with no page touched while a transfer named it", pages_reused == 0);
+        CHECK("and nothing handed to the core", drops == 0);
+    }
+    /* Each refusal on that path leaves the request uncompleted and the
+       record kept, and refuses the stick to the core: a stop of bulk IN
+       refused, of bulk OUT refused, and one never answered. */
+    {
+        int which;
+
+        for (which = 0; which < 3; which++) {
+            struct block_request *r;
+            int i;
+
+            model_reset();
+            CHECK("a stick is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
+            CHECK("and comes up", run_until_settled(200));
+            r = make_request(0, 0, 1, page);
+            block.completions = 0;
+            dev.vanish_at = 2;
+            if (which == 0) {
+                quiesce_answer_for[EP_IN] = -1;
+            } else if (which == 1) {
+                quiesce_answer_for[EP_OUT] = -1;
+            } else {
+                quiesce_answer_for[EP_OUT] = 0;
+            }
+            CHECK("a read is taken", msc_block_device(0)->submit(msc_block_device(0), r) == 0);
+            for (i = 0; i < 40 && drops == 0; i++) {
+                pump(MSC_STEP_MS / 2);
+            }
+            CHECK("a stop refused or never answered refuses the stick",
+                  drops == 1 && !msc_ready(0) && dev.resets == 0);
+            CHECK("with the request uncompleted", block.completions == 0);
+            CHECK("and the record kept", msc_block_device(0) != 0 && sticks[0].owned);
+            msc_detach(0, 1);
+            close_slot(1);
+            msc_release(0);
+            CHECK("until the core has closed the device",
+                  block.completions == 1 && block.last_status == -EIO && msc_block_device(0) == 0 &&
+                      pages_reused == 0);
+        }
+    }
+    /* A clear refused after the reset: the quiesces have retired the pages,
+       so the request fails, and the stick is refused. The recovery's own
+       deadline the same. */
+    {
+        int which;
+
+        for (which = 0; which < 2; which++) {
+            struct block_request *r;
+            int i;
+
+            model_reset();
+            CHECK("a stick is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
+            CHECK("and comes up", run_until_settled(200));
+            r = make_request(0, 0, 1, page);
+            block.completions = 0;
+            dev.vanish_at = 2;
+            if (which == 0) {
+                clear_answer = -1;
+            } else {
+                dev.reset_never = 1;
+            }
+            CHECK("a read is taken", msc_block_device(0)->submit(msc_block_device(0), r) == 0);
+            for (i = 0; i < 40 && drops == 0; i++) {
+                pump(MSC_STEP_MS / 2);
+            }
+            CHECK("a clear refused, or a recovery that never finishes, refuses the stick",
+                  drops == 1 && !msc_ready(0) && dev.resets == 1);
+            CHECK("with the request uncompleted and the record kept",
+                  block.completions == 0 && msc_block_device(0) != 0 && quiesces == 2);
+            msc_detach(0, 1);
+            close_slot(1);
+            msc_release(0);
+            CHECK("until the core has closed the device",
+                  block.completions == 1 && block.last_status == -EIO && msc_block_device(0) == 0 &&
+                      pages_reused == 0);
+            dev.reset_never = 0;
+        }
+    }
+
+    /* The status wrapper against the data stage. */
+    /* A short data stage under a wrapper claiming no residue is not a whole
+       read. */
+    model_reset();
+    CHECK("a stick is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("and comes up", run_until_settled(200));
+    {
+        struct block_request *r = make_request(0, 0, 2, page);
+        int i;
+
+        block.completions = 0;
+        dev.residue = 100;
+        csw_residue_zero = 1;
+        CHECK("a read is taken", msc_block_device(0)->submit(msc_block_device(0), r) == 0);
+        for (i = 0; i < 40 && block.completions == 0; i++) {
+            pump(1);
+        }
+        CHECK("a short data stage under a wrapper claiming no residue fails the read",
+              block.completions == 1 && block.last_status == -EIO && dev.resets == 0);
+    }
+    /* A wrapper over a data record the controller has not retired, QEMU's
+       way with a short transfer: the endpoint is stopped before the next
+       command's wrapper goes out. */
+    model_reset();
+    CHECK("a stick is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("and comes up", run_until_settled(200));
+    {
+        struct block_request *r = make_request(0, 0, 2, page);
+        int want[3] = {ORDER_WRAPPER, ORDER_QUIESCE + EP_IN, ORDER_WRAPPER};
+        int i;
+
+        block.completions = 0;
+        dev.residue = 100;
+        keep_data_td = 1;
+        orders = 0;
+        CHECK("a read is taken", msc_block_device(0)->submit(msc_block_device(0), r) == 0);
+        for (i = 0; i < 40 && block.completions == 0; i++) {
+            pump(1);
+        }
+        CHECK("a short read over an unretired record fails",
+              block.completions == 1 && block.last_status == -EIO);
+        CHECK("with its endpoint stopped first",
+              quiesces == 1 && quiesce_order[0] == EP_IN && pages_reused == 0);
+        keep_data_td = 0;
+        r = make_request(0, 4, 1, page);
+        block.completions = 0;
+        CHECK("the next read is taken", msc_block_device(0)->submit(msc_block_device(0), r) == 0);
+        for (i = 0; i < 40 && block.completions == 0; i++) {
+            pump(1);
+        }
+        CHECK("and completes", block.completions == 1 && block.last_status == 0);
+        CHECK("with its wrapper sent after the stop", order_is(want, 3));
+    }
+    /* A failed wrapper over such a record, then REQUEST SENSE: the stop
+       comes before the sense command, whose wrapper is a record of its
+       own. */
+    model_reset();
+    CHECK("a stick is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("and comes up", run_until_settled(200));
+    {
+        struct block_request *r = make_request(0, 0, 1, page);
+        /* The sense command's own data transfer is unretired too, under the
+           knob, and its endpoint is stopped before the next command. */
+        int want[4] = {ORDER_WRAPPER, ORDER_QUIESCE + EP_IN, ORDER_WRAPPER, ORDER_QUIESCE + EP_IN};
+        int i;
+
+        block.completions = 0;
+        dev.fail_next_data = 1;
+        dev.sense_key = 0x03; /* a medium error: the request fails */
+        keep_data_td = 1;
+        orders = 0;
+        CHECK("a read is taken", msc_block_device(0)->submit(msc_block_device(0), r) == 0);
+        for (i = 0; i < 40 && block.completions == 0; i++) {
+            pump(1);
+        }
+        CHECK("a read the stick failed over an unretired record fails",
+              block.completions == 1 && block.last_status == -EIO);
+        CHECK("after the stop, then the sense command",
+              order_is(want, 4) && dev.senses == 1 && pages_reused == 0);
+    }
+    /* The status wrapper's own transfer outstanding at a timeout: the stops,
+       the recovery, and the request failed once. */
+    model_reset();
+    CHECK("a stick is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("and comes up", run_until_settled(200));
+    {
+        struct block_request *r = make_request(0, 0, 1, page);
+        int want[8] = {ORDER_WRAPPER,        ORDER_QUIESCE + EP_IN,  ORDER_QUIESCE + EP_OUT,
+                       ORDER_RESET,          ORDER_CLEAR + EP_IN,    ORDER_DEVCLEAR + EP_IN,
+                       ORDER_CLEAR + EP_OUT, ORDER_DEVCLEAR + EP_OUT};
+        int i;
+
+        block.completions = 0;
+        dev.vanish_at = 3;
+        orders = 0;
+        CHECK("a read is taken", msc_block_device(0)->submit(msc_block_device(0), r) == 0);
+        for (i = 0; i < 40 && block.completions == 0; i++) {
+            pump(MSC_STEP_MS / 2);
+        }
+        CHECK("a status wrapper that never answers fails the read once, after the recovery",
+              block.completions == 1 && block.last_status == -EIO && order_is(want, 8) &&
+                  msc_ready(0) && pages_reused == 0);
+    }
+    /* A completion delivered twice, or one carrying an earlier stage's
+       generation on the same endpoint, moves nothing. */
+    model_reset();
+    CHECK("a stick is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("and comes up", run_until_settled(200));
+    {
+        struct block_request *r = make_request(0, 0, 1, page);
+        struct usb_completion again;
+        int i;
+
+        block.completions = 0;
+        dev.vanish_at = 3;
+        CHECK("a read is taken", msc_block_device(0)->submit(msc_block_device(0), r) == 0);
+        for (i = 0; i < 10 && sticks[0].stage != STAGE_CSW; i++) {
+            pump(1);
+        }
+        CHECK("and waits for its status wrapper", sticks[0].stage == STAGE_CSW);
+        again.hc = 0;
+        again.device = 1;
+        again.endpoint = EP_IN;
+        again.status = USB_XFER_OK;
+        again.length = SECTOR;
+        again.residual = 0;
+        again.generation = sticks[0].data_gen;
+        CHECK("the data stage's completion delivered again is taken", msc_completion(&again) == 1);
+        CHECK("and moves nothing, though it is on the wrapper's endpoint",
+              sticks[0].stage == STAGE_CSW && sticks[0].recover == RECOVER_NONE &&
+                  block.completions == 0);
+    }
+
+    /* A completion arriving after the stick has gone, and one arriving after
+       its slot, record and request have been reused by a new stick, carrying
+       the old stick's generation: neither moves anything. */
+    model_reset();
+    CHECK("a stick is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("and comes up", run_until_settled(200));
+    {
+        struct block_request *r = make_request(0, 0, 1, page);
+        struct usb_completion old;
+        int i;
+
+        block.completions = 0;
+        dev.vanish_at = 2;
+        CHECK("a read is taken", msc_block_device(0)->submit(msc_block_device(0), r) == 0);
+        pump(1);
+        pump(1);
+        old.hc = 0;
+        old.device = 1;
+        old.endpoint = EP_IN;
+        old.status = USB_XFER_OK;
+        old.length = SECTOR;
+        old.residual = 0;
+        old.generation = sticks[0].data_gen;
+        msc_detach(0, 1);
+        CHECK("a completion for a stick that has gone is taken", msc_completion(&old) == 1);
+        CHECK("and completes nothing", block.completions == 0 && pages_reused == 0);
+        close_slot(1);
+        msc_release(0);
+        CHECK("the slot goes back", msc_block_device(0) == 0 && block.completions == 1);
+        /* The same handle, the same bring-up, the same request. */
+        dev.attached = 1;
+        dev.vanish_at = 0;
+        CHECK("a new stick is taken on the same handle", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
+        CHECK("and comes up", run_until_settled(200));
+        r = make_request(0, 0, 1, page);
+        block.completions = 0;
+        dev.vanish_at = 2;
+        CHECK("its read is taken", msc_block_device(0)->submit(msc_block_device(0), r) == 0);
+        pump(1);
+        pump(1);
+        CHECK("and its data stage is in flight", sticks[0].stage == STAGE_DATA);
+        CHECK("the old stick's completion is taken", msc_completion(&old) == 1);
+        CHECK("and moves the new stick's command nowhere",
+              sticks[0].stage == STAGE_DATA && block.completions == 0);
+        dev.vanish_at = 0;
     }
 
     if (fails == 0) {

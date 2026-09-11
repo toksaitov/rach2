@@ -162,6 +162,17 @@ void usb_core_reset(void);
 int usb_core_clear_halt(struct xhci_ctrl *hc, int device, int endpoint);
 
 /**
+ * Stop an endpoint so that no block of its transfers can be fetched again:
+ * Stop Endpoint on a running one or Reset Endpoint on a halted one, then
+ * Set TR Dequeue at the driver's next block, each awaited and required to
+ * succeed, on the controller's command turn, which is held across both.
+ * 0 while it is pending, 1 when both answered with success and the
+ * endpoint's transfers are retired, -1 on a refusal, a failure or a
+ * deadline, with nothing retired. One step a call; never spins.
+ */
+int usb_core_endpoint_quiesce(struct xhci_ctrl *hc, int device, int endpoint);
+
+/**
  * Give up a running device whose class driver cannot reach it any more.
  *
  * The device is closed as if it had left; its port still shows a

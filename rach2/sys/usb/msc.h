@@ -65,6 +65,11 @@ int msc_attach(struct xhci_ctrl *hc, int device, int interface, int ep_in, int e
  */
 void msc_detach(struct xhci_ctrl *hc, int device);
 
+/** Disable Slot was answered with success for `device`: the controller
+ * reaches nothing of the stick's any more, its request in flight is
+ * completed and its record may go once the disk layer has let go. */
+void msc_slot_closed(struct xhci_ctrl *hc, int device);
+
 /**
  * Step every stick by `elapsed_ms`.
  *
