@@ -53,10 +53,10 @@ DEFS='t() { s=$(date +%s); if eval "$2"; then echo T_$1 $(( $(date +%s) - s )); 
 set -- \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" "expect=# " \
     "send=$DEFS" "expect=DEFSDONE" \
+    "send=t pipehash 'dd if=/dev/disk0 bs=1M count=64 2>/tmp/dd.err | sha256sum >/dev/null && grep -q \"^67108864 bytes\" /tmp/dd.err'" "expect=T_pipehash" \
+    "send=t pipehash 'dd if=/dev/disk0 bs=1M count=64 2>/tmp/dd.err | sha256sum >/dev/null && grep -q \"^67108864 bytes\" /tmp/dd.err'" "expect=T_pipehash" \
+    "send=t pipehash 'dd if=/dev/disk0 bs=1M count=64 2>/tmp/dd.err | sha256sum >/dev/null && grep -q \"^67108864 bytes\" /tmp/dd.err'" "expect=T_pipehash" \
     "send=t rawread 'moved 134217728 dd if=/dev/disk0 of=/dev/null bs=1M count=128'" "expect=T_rawread" \
-    "send=t pipehash 'dd if=/dev/disk0 bs=1M count=64 2>/tmp/dd.err | sha256sum >/dev/null && grep -q \"^67108864 bytes\" /tmp/dd.err'" "expect=T_pipehash" \
-    "send=t pipehash 'dd if=/dev/disk0 bs=1M count=64 2>/tmp/dd.err | sha256sum >/dev/null && grep -q \"^67108864 bytes\" /tmp/dd.err'" "expect=T_pipehash" \
-    "send=t pipehash 'dd if=/dev/disk0 bs=1M count=64 2>/tmp/dd.err | sha256sum >/dev/null && grep -q \"^67108864 bytes\" /tmp/dd.err'" "expect=T_pipehash" \
     "send=mkdir -p /e /f && mount -t exfat /dev/disk1p1 /e && mount -t vfat /dev/disk2p1 /f && echo MOUNT\"\"ED" "expect=MOUNTED" \
     "send=c exwrite0" "expect=C_exwrite0" \
     "send=t exwrite 'moved 67108864 dd if=/dev/zero of=/e/big bs=1M count=64 && sync'" "expect=T_exwrite" \
@@ -88,9 +88,10 @@ set -- \
 # runs where a row runs more than once; a row whose command failed has no
 # time and fails. The second read of a file is served from the cache, so a
 # read row times a cold read and a warm one together. The pipe row runs
-# three times because the emulator, not the kernel, sometimes runs the
-# reader's copies thirty times slower for a whole run (entry 26 of
-# milestone 50), and one run of the three at the usual rate is the kernel's.
+# first in the boot and three times: after other programs have run and
+# exited, a program's buffer may land in a frame that held code, which the
+# emulator keeps on its slow store path (entry 26 of milestone 50), and in
+# the fresh boot the three runs are the kernel's rate; the least is taken.
 rc=0
 # counts NAME CMDS HITS TEXT: the disk commands and the cache hits the row
 # took, from the counters read before and after it, each under its bound.
@@ -198,6 +199,9 @@ PLOG="$DIR/place.log"
     "expect=Type 'help'" "send=exec /placeprobe" "expect=PLACEPROBE OK" > /dev/null 2>&1 \
     || fail "the placement boot did not reach its end; see $PLOG"
 echo "diskrate-test: the pipe row's three times: $(tr -d '\r' < "$DIR/diskrate.log" | grep -a "^T_pipehash [0-9]" | awk '{printf "%s s ", $2}')"
+# Which processes were runnable twenty seconds into the first pipe run: a
+# runnable process beside the pipe's two costs every hand-off a quantum
+# (entry 26), so the record says who it was.
 echo "diskrate-test: $(tr -d '\r' < "$PLOG" | grep -a "^PLACEPROBE code")"
 n=0
 for t in $(tr -d '\r' < "$PLOG" | grep -a "^PLACEPROBE FAR" | awk '{print $3}'); do
