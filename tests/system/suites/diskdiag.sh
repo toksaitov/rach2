@@ -28,6 +28,8 @@
 # [port]
 #
 
+# shellcheck source=tests/system/deadline.sh
+. "$(cd "$(dirname "$0")/../../.." && pwd)/tests/system/deadline.sh"
 set -e
 
 RW_KERNEL="$1"
@@ -137,24 +139,24 @@ qemu-system-i386 -cpu max -display none -kernel "$RO_KERNEL" \
     -serial stdio < /dev/null > "$ROLOG" 2>&1 &
 QPID=$!
 
-wait_token "rach2 login" 90 "$ROLOG" || fail "the diagnostic boot never reached its login prompt"
+wait_token "rach2 login" "$(scaled 90)" "$ROLOG" || fail "the diagnostic boot never reached its login prompt"
 
 ssh_run() {
     ssh -i "$KEY" -p "$PORT" \
         -o StrictHostKeyChecking=no -o UserKnownHostsFile="$KNOWN" \
-        -o ConnectTimeout=10 -o BatchMode=yes \
+        -o "ConnectTimeout=$(scaled 10)" -o BatchMode=yes \
         root@127.0.0.1 "$1" 2>>"$ROLOG"
 }
 
 i=0
-while [ "$i" -lt 60 ]; do
+while [ "$i" -lt "$(scaled 60)" ]; do
     if ssh_run 'echo READY' 2>/dev/null | grep -q READY; then
         break
     fi
     sleep 2
     i=$((i + 2))
 done
-[ "$i" -lt 60 ] || fail "the diagnostic boot never answered SSH"
+[ "$i" -lt "$(scaled 60)" ] || fail "the diagnostic boot never answered SSH"
 
 DISKTXT="$(ssh_run 'cat /proc/disk' | tr -d '\r')"
 for want in "state present" "driver ahci" "policy read-only" "mounted 0" "mbr-signature ok"; do

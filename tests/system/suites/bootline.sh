@@ -16,6 +16,8 @@
 # Usage: bootline_test.sh <kernel> <disk>
 #
 
+# shellcheck source=tests/system/deadline.sh
+. "$(cd "$(dirname "$0")/../../.." && pwd)/tests/system/deadline.sh"
 set -e
 
 KERNEL="$1"
@@ -78,7 +80,7 @@ boot() {
         -serial stdio < /dev/null > "$LOG" 2>&1 &
     QPID=$!
     held=0
-    while [ "$held" -lt 25 ]; do
+    while [ "$held" -lt "$(scaled 25)" ]; do
         if grep -q "$2" "$LOG" 2>/dev/null; then
             break
         fi
@@ -122,7 +124,7 @@ boot_blank() {
         -serial stdio < /dev/null > "$LOG" 2>&1 &
     QPID=$!
     held=0
-    while [ "$held" -lt 30 ]; do
+    while [ "$held" -lt "$(scaled 30)" ]; do
         if grep -q "boot: refused: no file system mounted" "$LOG" 2>/dev/null; then
             break
         fi

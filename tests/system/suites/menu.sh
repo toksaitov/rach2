@@ -43,7 +43,9 @@ if [ -z "$DISK" ] || [ -z "$ROOTPASSWORD" ]; then
     exit 2
 fi
 
-DEADLINE=2400
+# shellcheck source=tests/system/deadline.sh
+. "$REPO/tests/system/deadline.sh"
+DEADLINE=$(scaled 2400)
 START="$(date +%s)"
 
 WORK="$DISK.work"
@@ -125,7 +127,7 @@ boot_feed() {
     (
         while IFS='	' read -r count pattern command; do
             waited=0
-            while [ "$waited" -lt 600 ]; do
+            while [ "$waited" -lt "$(scaled 600)" ]; do
                 seen="$(grep -ac "$pattern" "$LOG" 2>/dev/null)" || true
                 if [ "${seen:-0}" -ge "$count" ]; then
                     break
@@ -143,7 +145,7 @@ boot_feed() {
             printf '%s\n' "$command"
         done < "$STEPS"
         held=0
-        while [ "$held" -lt 120 ] && kill -0 "$QPID" 2>/dev/null; do
+        while [ "$held" -lt "$(scaled 120)" ] && kill -0 "$QPID" 2>/dev/null; do
             sleep 1
             held=$((held + 1))
         done
@@ -159,9 +161,9 @@ boot_watch() {
         -drive "file=$WORK,format=raw,if=ide,index=0,media=disk" \
         -serial stdio < "$FEED" > "$LOG" 2>&1 &
     QPID=$!
-    (sleep 90) > "$FEED" &
+    (sleep "$(scaled 90)") > "$FEED" &
     FPID=$!
-    wait_count "$1" 1 75 || fail "a matrix boot never reached $1"
+    wait_count "$1" 1 "$(scaled 75)" || fail "a matrix boot never reached $1"
     cleanup_boot
 }
 
@@ -188,7 +190,7 @@ step "ENVA=" 1 "bootctl cancel > /dev/null && bootctl env next_entry | busybox s
 step "ENVB=" 1 "S=\$(bootctl status | busybox awk '/^bootctl: candidate: first sector/{print \$5}' | busybox tr -d ,); busybox dd if=/dev/zero of=/dev/bootpart bs=512 seek=\$S count=1 2>/dev/null && echo CORRUPT\"\"OK"
 step "CORRUPTOK" 1 "poweroff -f"
 boot_feed
-wait_count "CORRUPTOK" 1 900 || fail "the staging boot never finished"
+wait_count "CORRUPTOK" 1 "$(scaled 900)" || fail "the staging boot never finished"
 cleanup_boot
 
 grep -aq "STAGEDOK" "$LOG" || fail "the menu did not stage"
@@ -274,7 +276,7 @@ step "Password:" 1 "$ROOTPASSWORD"
 step "Password:" 1 "bootctl trial candidate-static > /dev/null && echo ARMED\"\"OK"
 step "ARMEDOK" 1 "poweroff -f"
 boot_feed
-wait_count "ARMEDOK" 1 600 || fail "the static trial was never armed"
+wait_count "ARMEDOK" 1 "$(scaled 600)" || fail "the static trial was never armed"
 cleanup_boot
 
 LOG="$DISK.log.staticfallback"
@@ -292,7 +294,7 @@ step "Password:" 1 "$ROOTPASSWORD"
 step "Password:" 1 "bootctl env saved_entry candidate-static > /dev/null && echo SAVED\"\"OK"
 step "SAVEDOK" 1 "poweroff -f"
 boot_feed
-wait_count "SAVEDOK" 1 600 || fail "the static default was never saved"
+wait_count "SAVEDOK" 1 "$(scaled 600)" || fail "the static default was never saved"
 cleanup_boot
 
 LOG="$DISK.log.savedstaticboot"
@@ -307,7 +309,7 @@ step "Password:" 1 "$ROOTPASSWORD"
 step "Password:" 1 "bootctl env saved_entry candidate > /dev/null && echo BACK\"\"OK"
 step "BACKOK" 1 "poweroff -f"
 boot_feed
-wait_count "BACKOK" 1 600 || fail "the saved default was never put back"
+wait_count "BACKOK" 1 "$(scaled 600)" || fail "the saved default was never put back"
 cleanup_boot
 
 # The slot's extent, read back after all of it: bootctl overwrote bytes in place
@@ -322,7 +324,7 @@ step "SLOTBDONE" 1 "poweroff -f"
 boot_feed
 # The token is the one after the line, since a wait that ends at the line's
 # start stops the machine before a slow guest has written the rest of it.
-wait_count "SLOTBDONE" 1 600 || fail "the closing boot never reported the slot back"
+wait_count "SLOTBDONE" 1 "$(scaled 600)" || fail "the closing boot never reported the slot back"
 cleanup_boot
 
 SLOTA="$(grep -a 'SLOTA=' "$DISK.log.stage" | head -1 | sed 's/.*first sector //')"

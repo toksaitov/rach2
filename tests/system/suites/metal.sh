@@ -31,6 +31,8 @@
 # Usage: metal_test.sh <kernel> <image> <port>
 #
 
+# shellcheck source=tests/system/deadline.sh
+. "$(cd "$(dirname "$0")/../../.." && pwd)/tests/system/deadline.sh"
 set -e
 
 KERNEL="$1"
@@ -166,7 +168,7 @@ qemu-system-i386 -cpu max -display none -kernel "$KERNEL" \
     -serial stdio < /dev/null > "$LOG" 2>&1 &
 QPID=$!
 
-if ! wait_token "rach2 login" 90; then
+if ! wait_token "rach2 login" "$(scaled 90)"; then
     fail "the machine never reached its login prompt"
 fi
 if ! grep -q "IPv4 $GUEST_IP/24" "$LOG"; then
@@ -184,19 +186,19 @@ fi
 ssh_run() {
     ssh -i "$KEY" -p "$PORT" \
         -o StrictHostKeyChecking=no -o UserKnownHostsFile="$KNOWN" \
-        -o ConnectTimeout=10 -o BatchMode=yes \
+        -o "ConnectTimeout=$(scaled 10)" -o BatchMode=yes \
         root@127.0.0.1 "$1" 2>>"$LOG"
 }
 
 i=0
-while [ "$i" -lt 60 ]; do
+while [ "$i" -lt "$(scaled 60)" ]; do
     if ssh_run 'echo METAL_READY' 2>/dev/null | grep -q METAL_READY; then
         break
     fi
     sleep 2
     i=$((i + 2))
 done
-if [ "$i" -ge 60 ]; then
+if [ "$i" -ge "$(scaled 60)" ]; then
     fail "no SSH answer: init did not bring an unattended server up"
 fi
 echo "metal-test: the machine answered SSH with nobody at its console: OK"
@@ -205,7 +207,7 @@ echo "metal-test: the machine answered SSH with nobody at its console: OK"
 # without one never exercises.
 if ! ssh -i "$KEY" -p "$PORT" -tt \
         -o StrictHostKeyChecking=no -o UserKnownHostsFile="$KNOWN" \
-        -o ConnectTimeout=10 -o BatchMode=yes \
+        -o "ConnectTimeout=$(scaled 10)" -o BatchMode=yes \
         root@127.0.0.1 'tty; exit' 2>>"$LOG" | grep -q '/dev/pts/'; then
     fail "the session did not get a pty"
 fi
@@ -222,7 +224,7 @@ SENT_SUM="$(cksum < "$SEND" | awk '{print $1, $2}')"
 
 if ! ssh -i "$KEY" -p "$PORT" \
         -o StrictHostKeyChecking=no -o UserKnownHostsFile="$KNOWN" \
-        -o ConnectTimeout=10 -o BatchMode=yes \
+        -o "ConnectTimeout=$(scaled 10)" -o BatchMode=yes \
         root@127.0.0.1 'cat > /tmp/metal.in' < "$SEND" 2>>"$LOG"; then
     fail "the file could not be sent"
 fi
@@ -253,7 +255,7 @@ ssh_run "kill -9 $BEFORE" >/dev/null 2>&1 || true
 sleep 2
 i=0
 AFTER=""
-while [ "$i" -lt 60 ]; do
+while [ "$i" -lt "$(scaled 60)" ]; do
     AFTER="$(ssh_run 'pidof dropbearmulti' 2>/dev/null | tr -d '\r' | awk '{print $NF}')"
     if [ -n "$AFTER" ] && ssh_run 'echo METAL_AGAIN' 2>/dev/null | grep -q METAL_AGAIN; then
         break

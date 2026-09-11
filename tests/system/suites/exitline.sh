@@ -32,6 +32,8 @@
 #            <password> <harness-kernel>
 #
 
+# shellcheck source=tests/system/deadline.sh
+. "$(cd "$(dirname "$0")/../../.." && pwd)/tests/system/deadline.sh"
 set -e
 
 KERNEL="$1"
@@ -117,7 +119,7 @@ trap 'cleanup; exit 129' HUP
 # the console has had its say.
 wait_serial() {
     i=0
-    while [ "$i" -lt "$3" ]; do
+    while [ "$i" -lt "$(scaled "$3")" ]; do
         if grep -q "$2" "$1" 2>/dev/null; then
             return 0
         fi

@@ -142,10 +142,10 @@ boot_steps() {
     # run when the budget is gone and not an hour a marker later.
     boot_start=$(date +%s)
     while IFS='	' read -r marker command; do
-        remaining=$(( boot_start + 600 - $(date +%s) ))
+        remaining=$(( boot_start + $(scaled 600) - $(date +%s) ))
         [ "$remaining" -gt 0 ] || fail "the run's budget was spent before $marker"
         drive_type "$command"
-        drive_expect "$marker" "$remaining" || fail "the step for $marker never printed it"
+        drive_expect_raw "$marker" "$remaining" || fail "the step for $marker never printed it"
     done < "$STEPS"
 }
 
@@ -182,72 +182,72 @@ step "FIRSTBOOTDONE" "sync; echo FIRSTBOOT\"\"DONE"
 
 boot_steps
 
-if ! wait_token "FIRSTRC=0" 300; then
+if ! wait_token "FIRSTRC=0" "$(scaled 300)"; then
     fail "make did not build the program from scratch"
 fi
-if ! wait_token "FIRSTRAN=ANSWER 42" 90; then
+if ! wait_token "FIRSTRAN=ANSWER 42" "$(scaled 90)"; then
     fail "the program make built did not run, or printed the wrong thing"
 fi
 
 # A control, not evidence: this passes on a machine with no clock at all, where
 # every timestamp is equal and nothing is ever out of date. It is here so that a
 # failure below can be told from a make that never worked.
-if ! wait_token "IDLE1RC=0 TCC=0 UP=1" 120; then
+if ! wait_token "IDLE1RC=0 TCC=0 UP=1" "$(scaled 120)"; then
     fail "a second make with nothing changed did not report the program up to date"
 fi
 
 # One source changed, and changed BEHAVIOUR. Exactly one object recompiles, the
 # program relinks once, and the program that runs is the new one: a make that
 # rebuilt the object and never relinked would otherwise pass.
-if ! wait_token "ONERC=0 LIB=1 MAIN=0 LINK=1" 180; then
+if ! wait_token "ONERC=0 LIB=1 MAIN=0 LINK=1" "$(scaled 180)"; then
     fail "changing one source did not recompile exactly it and relink once"
 fi
-if ! wait_token "ONERAN=ANSWER 63" 90; then
+if ! wait_token "ONERAN=ANSWER 63" "$(scaled 90)"; then
     fail "the program did not change after its source did"
 fi
 
 # The discriminator. An object nothing stamped stays older than its source, so
 # the same rebuild runs forever; this is the step that fails without the
 # stamping the file system gained in this milestone.
-if ! wait_token "IDLE2RC=0 TCC=0 UP=1" 120; then
+if ! wait_token "IDLE2RC=0 TCC=0 UP=1" "$(scaled 120)"; then
     fail "a make immediately after a rebuild ran the compiler again: nothing stamped the object it wrote"
 fi
 
 # The header both objects include: touching it must rebuild both.
-if ! wait_token "HDRRC=0 LIB=1 MAIN=1" 180; then
+if ! wait_token "HDRRC=0 LIB=1 MAIN=1" "$(scaled 180)"; then
     fail "touching the shared header did not rebuild both objects"
 fi
 
 # And the makefile's own CC, which names a compiler that is not there: a make
 # WITHOUT the override must fail and say so. That is what makes the override on
 # every other step mean something.
-if ! wait_token "NOOVER=" 180; then
+if ! wait_token "NOOVER=" "$(scaled 180)"; then
     fail "the run without a macro override never reported"
 fi
 if grep -q "NOOVER=0 " "$LOG"; then
     fail "a make whose makefile names a compiler that does not exist succeeded"
 fi
-if ! wait_token "SAW=yes" 60; then
+if ! wait_token "SAW=yes" "$(scaled 60)"; then
     fail "the run without the override did not name the compiler it could not find"
 fi
 
-if ! wait_token "CLEANDONE=0 LEFT=0" 120; then
+if ! wait_token "CLEANDONE=0 LEFT=0" "$(scaled 120)"; then
     fail ".PHONY clean did not run, or left its targets, with a file named clean present"
 fi
 
 # One of this project's own programs, built here from the source the image
 # has and compared with the one this machine actually uses.
-if ! wait_token "UTILRC=0" 240; then
+if ! wait_token "UTILRC=0" "$(scaled 240)"; then
     fail "make could not build this project's own cat"
 fi
-if ! wait_token "UTILSAME" 120; then
+if ! wait_token "UTILSAME" "$(scaled 120)"; then
     fail "the cat make built does not agree with the shipped one"
 fi
 
-if ! wait_token "STAMPED=" 180; then
+if ! wait_token "STAMPED=" "$(scaled 180)"; then
     fail "the object's timestamp was never recorded for the reboot"
 fi
-if ! wait_token "FIRSTBOOTDONE" 120; then
+if ! wait_token "FIRSTBOOTDONE" "$(scaled 120)"; then
     fail "the first boot never finished its script"
 fi
 STAMP_BEFORE="$(grep -a -o 'STAMPED=[0-9]*' "$LOG" | tail -1 | cut -d= -f2)"
@@ -272,19 +272,19 @@ step "SECONDBOOTDONE" "sync; echo SECONDBOOT\"\"DONE"
 
 boot_steps
 
-if ! wait_token "KEPT=$STAMP_BEFORE WANTED=$STAMP_BEFORE" 300; then
+if ! wait_token "KEPT=$STAMP_BEFORE WANTED=$STAMP_BEFORE" "$(scaled 300)"; then
     fail "the object's timestamp did not survive the reboot exactly (wanted $STAMP_BEFORE)"
 fi
-if ! wait_token "REBOOTIDLE=0 TCC=0" 180; then
+if ! wait_token "REBOOTIDLE=0 TCC=0" "$(scaled 180)"; then
     fail "a make after a reboot rebuilt something with nothing touched"
 fi
-if ! wait_token "REBOOTRC=0 LIB=1" 180; then
+if ! wait_token "REBOOTRC=0 LIB=1" "$(scaled 180)"; then
     fail "a source changed after a reboot did not rebuild: the clock restarted"
 fi
-if ! wait_token "REBOOTRAN=ANSWER 84" 90; then
+if ! wait_token "REBOOTRAN=ANSWER 84" "$(scaled 90)"; then
     fail "the program rebuilt after the reboot is not the new one"
 fi
-if ! wait_token "SECONDBOOTDONE" 120; then
+if ! wait_token "SECONDBOOTDONE" "$(scaled 120)"; then
     fail "the second boot never finished its script"
 fi
 cleanup_boot

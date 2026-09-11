@@ -45,7 +45,9 @@ if [ -z "$DISK" ] || [ -z "$ROOTPASSWORD" ]; then
 fi
 
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
-DEADLINE=2400
+# shellcheck source=tests/system/deadline.sh
+. "$REPO/tests/system/deadline.sh"
+DEADLINE=$(scaled 2400)
 START="$(date +%s)"
 
 WORK="$DISK.work"
@@ -136,7 +138,7 @@ boot_feed() {
     (
         while IFS='	' read -r count pattern command; do
             waited=0
-            while [ "$waited" -lt 600 ]; do
+            while [ "$waited" -lt "$(scaled 600)" ]; do
                 seen="$(grep -ac "$pattern" "$LOG" 2>/dev/null)" || true
                 if [ "${seen:-0}" -ge "$count" ]; then
                     break
@@ -154,7 +156,7 @@ boot_feed() {
             printf '%s\n' "$command"
         done < "$STEPS"
         held=0
-        while [ "$held" -lt 900 ] && kill -0 "$QPID" 2>/dev/null; do
+        while [ "$held" -lt "$(scaled 900)" ] && kill -0 "$QPID" 2>/dev/null; do
             sleep 1
             held=$((held + 1))
         done
@@ -170,16 +172,16 @@ boot_watch() {
         -drive "file=$WORK,format=raw,if=ide,index=0,media=disk" \
         -serial stdio < "$FEED" > "$LOG" 2>&1 &
     QPID=$!
-    (sleep 120) > "$FEED" &
+    (sleep "$(scaled 120)") > "$FEED" &
     FPID=$!
-    wait_count "$1" 1 100 || fail "the boot never reached $1"
+    wait_count "$1" 1 "$(scaled 100)" || fail "the boot never reached $1"
     cleanup_boot
 }
 
 # ssh into the machine as root by key, with nothing of the runner's own offered.
 machine() {
     ssh -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
-        -o ConnectTimeout=20 -o BatchMode=yes -o IdentitiesOnly=yes \
+        -o "ConnectTimeout=$(scaled 20)" -o BatchMode=yes -o IdentitiesOnly=yes \
         -o PreferredAuthentications=publickey -o PasswordAuthentication=no \
         -i "$REPO/krffs/rach2_demo_ed25519" -p "$PORT" root@localhost "$1" 2>&1
 }
@@ -302,7 +304,7 @@ step "The ISH shell" 1 "reflash /dev/disk0 0 512 < /dev/zero"
 step "$REFUSED_TOOL" 1 "cat /etc/motd > /dev/disk0"
 step "$REFUSED_SHELL" 1 "halt"
 boot_feed
-wait_count "$REFUSED_SHELL" 1 300 || fail "the refusal boot never finished"
+wait_count "$REFUSED_SHELL" 1 "$(scaled 300)" || fail "the refusal boot never finished"
 sleep 3
 cleanup_boot
 grep -aq "$REFUSED_TOOL" "$LOG" || \
@@ -349,10 +351,10 @@ arm_recovery "$WORK"
 LOG="$DISK.log.recovery"
 : > "$STEPS"
 boot_feed net
-wait_count "rach2 login:" 1 200 || fail "the recovery entry never reached a login"
+wait_count "rach2 login:" 1 "$(scaled 200)" || fail "the recovery entry never reached a login"
 # Nothing is typed at that console: the image starts its own server, and the
 # lease and the key login are what say the machine is reachable.
-wait_count "lease of" 1 90 || fail "recovery never took an address"
+wait_count "lease of" 1 "$(scaled 90)" || fail "recovery never took an address"
 
 OUT="$(machine 'test -b /dev/disk0 && echo DISK""NODE' || true)"
 case "$OUT" in
@@ -451,7 +453,7 @@ cleanup_boot
 LOG="$DISK.log.latched"
 : > "$STEPS"
 boot_feed net
-wait_count "rach2 login:" 1 200 || fail "the saved recovery default did not boot recovery"
+wait_count "rach2 login:" 1 "$(scaled 200)" || fail "the saved recovery default did not boot recovery"
 OUT="$(machine 'test -b /dev/disk0 && echo STILL""RECOVERY' || true)"
 case "$OUT" in
     *STILLRECOVERY*) ;;

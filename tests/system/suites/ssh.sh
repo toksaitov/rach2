@@ -27,6 +27,8 @@
 #                    [port] [card]
 #
 
+# shellcheck source=tests/system/deadline.sh
+. "$(cd "$(dirname "$0")/../../.." && pwd)/tests/system/deadline.sh"
 set -e
 
 KERNEL="$1"
@@ -155,7 +157,7 @@ fi
 # it is given a command, so without them dropbear's pty path is never touched
 # and the capstone would pass on a server that could not allocate one.
 OUT=$(ssh -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
-      -o ConnectTimeout=20 -o BatchMode=yes -o IdentitiesOnly=yes \
+      -o "ConnectTimeout=$(scaled 20)" -o BatchMode=yes -o IdentitiesOnly=yes \
       -o PreferredAuthentications=publickey -o PasswordAuthentication=no \
       -i "$REPO/krffs/rach2_demo_ed25519" -tt -p "$PORT" \
       root@localhost 'test -t 0 && test -t 1 && id && echo KEY""LOGIN' 2>&1 || true)
@@ -188,7 +190,7 @@ ssh_password() {
     RACH2_PASSWORD="$2" "$REPO/build/tests/system/ptydrive" \
         --rows 40 --cols 100 --timeout 60 -- \
         ssh -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
-        -o ConnectTimeout=20 -o PubkeyAuthentication=no \
+        -o "ConnectTimeout=$(scaled 20)" -o PubkeyAuthentication=no \
         -o PreferredAuthentications=password \
         -o "NumberOfPasswordPrompts=$3" -tt \
         -p "$PORT" "$1@localhost" "$4" 2>&1
@@ -266,7 +268,7 @@ echo "ssh-test: the session's terminal reports the window and the termios: OK"
 # answer it received. They also run after the two attempts that must work, which
 # is a second reason the same way: the server was answering a moment ago.
 OUT=$(ssh -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
-      -o ConnectTimeout=20 -o BatchMode=yes -o PubkeyAuthentication=no \
+      -o "ConnectTimeout=$(scaled 20)" -o BatchMode=yes -o PubkeyAuthentication=no \
       -o PasswordAuthentication=no -p "$PORT" \
       test@localhost 'echo NOAUTH""RAN' 2>&1 || true)
 case "$OUT" in

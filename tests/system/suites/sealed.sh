@@ -46,7 +46,9 @@ if [ -z "$DISK" ] || [ -z "$ROOTPASSWORD" ]; then
 fi
 
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
-DEADLINE=3600
+# shellcheck source=tests/system/deadline.sh
+. "$REPO/tests/system/deadline.sh"
+DEADLINE=$(scaled 3600)
 START="$(date +%s)"
 PHASE_AT="$START"
 
@@ -134,11 +136,11 @@ start_qemu() {
 # A boot that is expected to reach a login and answer SSH.
 cold_boot() {
     start_qemu "$1"
-    wait_count "rach2 login:" 1 180 || fail "the machine never reached a login prompt"
+    wait_count "rach2 login:" 1 "$(scaled 180)" || fail "the machine never reached a login prompt"
     # The server is started by init after the network, so what is waited for is
     # the port answering, not a line on the console.
     i=0
-    while [ "$i" -lt 60 ]; do
+    while [ "$i" -lt "$(scaled 60)" ]; do
         if machine 'echo up' > /dev/null 2>&1; then
             return 0
         fi
@@ -153,7 +155,7 @@ cold_boot() {
 # reaches no login has no SSH to ask.
 cold_watch() {
     start_qemu "$1"
-    wait_count "$2" 1 150 || fail "the boot never reached: $2"
+    wait_count "$2" 1 "$(scaled 150)" || fail "the boot never reached: $2"
 }
 
 # ssh in as root by key, with nothing of the runner's own offered. Every call is
@@ -162,7 +164,7 @@ cold_watch() {
 # a reason to wait.
 machine() {
     $SSHTMO ssh -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
-        -o ConnectTimeout=20 -o BatchMode=yes -o IdentitiesOnly=yes \
+        -o "ConnectTimeout=$(scaled 20)" -o BatchMode=yes -o IdentitiesOnly=yes \
         -o PreferredAuthentications=publickey -o PasswordAuthentication=no \
         -i "$REPO/krffs/rach2_demo_ed25519" -p "$PORT" root@localhost "$1" 2>&1
 }
@@ -172,11 +174,11 @@ machine() {
 # for is the process going.
 stop_machine() {
     $QUICKTMO ssh -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
-        -o ConnectTimeout=10 -o BatchMode=yes -o IdentitiesOnly=yes \
+        -o "ConnectTimeout=$(scaled 10)" -o BatchMode=yes -o IdentitiesOnly=yes \
         -o PreferredAuthentications=publickey -i "$REPO/krffs/rach2_demo_ed25519" \
         -p "$PORT" root@localhost 'sync; poweroff -f' > /dev/null 2>&1 || true
     i=0
-    while [ "$i" -lt 30 ] && kill -0 "$QPID" 2>/dev/null; do
+    while [ "$i" -lt "$(scaled 30)" ] && kill -0 "$QPID" 2>/dev/null; do
         sleep 1
         i=$((i + 1))
     done
@@ -190,12 +192,12 @@ reboot_machine() {
     # Bounded and its result ignored, for the reason stopping is: the connection
     # dies with the machine, so there is no answer to wait for.
     $QUICKTMO ssh -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
-        -o ConnectTimeout=10 -o BatchMode=yes -o IdentitiesOnly=yes \
+        -o "ConnectTimeout=$(scaled 10)" -o BatchMode=yes -o IdentitiesOnly=yes \
         -o PreferredAuthentications=publickey -i "$REPO/krffs/rach2_demo_ed25519" \
         -p "$PORT" root@localhost 'sync; reboot -f' > /dev/null 2>&1 || true
-    wait_count "rach2 login:" "$want" 180 || fail "the machine did not come back (boot $want)"
+    wait_count "rach2 login:" "$want" "$(scaled 180)" || fail "the machine did not come back (boot $want)"
     i=0
-    while [ "$i" -lt 60 ]; do
+    while [ "$i" -lt "$(scaled 60)" ]; do
         if machine 'echo up' > /dev/null 2>&1; then
             return 0
         fi
@@ -214,8 +216,8 @@ if [ ! -x "$DEADLINE_TOOL" ]; then
     echo "sealed-test: $DEADLINE_TOOL is not built; run make first" >&2
     exit 2
 fi
-SSHTMO="$DEADLINE_TOOL 180"
-QUICKTMO="$DEADLINE_TOOL 20"
+SSHTMO="$DEADLINE_TOOL $(scaled 180)"
+QUICKTMO="$DEADLINE_TOOL $(scaled 20)"
 
 sha256_of() {
     if [ ! -x "$REPO/build/tools/verify/sha256" ]; then

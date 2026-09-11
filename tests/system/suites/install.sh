@@ -60,7 +60,9 @@ if [ -z "$DISK" ] || [ -z "$ROOTPASSWORD" ]; then
     exit 2
 fi
 
-DEADLINE=2400
+# shellcheck source=tests/system/deadline.sh
+. "$REPO/tests/system/deadline.sh"
+DEADLINE=$(scaled 2400)
 START="$(date +%s)"
 
 WORK="$DISK.work"
@@ -142,7 +144,7 @@ boot_feed() {
     (
         while IFS='	' read -r count pattern command; do
             waited=0
-            while [ "$waited" -lt 600 ]; do
+            while [ "$waited" -lt "$(scaled 600)" ]; do
                 seen="$(grep -ac "$pattern" "$LOG" 2>/dev/null)" || true
                 if [ "${seen:-0}" -ge "$count" ]; then
                     break
@@ -160,7 +162,7 @@ boot_feed() {
             printf '%s\n' "$command"
         done < "$STEPS"
         held=0
-        while [ "$held" -lt 120 ] && kill -0 "$QPID" 2>/dev/null; do
+        while [ "$held" -lt "$(scaled 120)" ] && kill -0 "$QPID" 2>/dev/null; do
             sleep 1
             held=$((held + 1))
         done
@@ -176,9 +178,9 @@ boot_watch() {
         -drive "file=$WORK,format=raw,if=ide,index=0,media=disk" \
         -serial stdio < "$FEED" > "$LOG" 2>&1 &
     QPID=$!
-    (sleep 90) > "$FEED" &
+    (sleep "$(scaled 90)") > "$FEED" &
     FPID=$!
-    wait_count "$1" 1 75 || fail "a matrix boot never reached $1"
+    wait_count "$1" 1 "$(scaled 75)" || fail "a matrix boot never reached $1"
     cleanup_boot
 }
 
@@ -235,9 +237,9 @@ run_pass() {
 
     LOG="$DISK.log.p${P}a"
     boot_feed
-    wait_count "COMMIT${P}A" 1 1800 || fail "pass $P: the trial boot never committed"
+    wait_count "COMMIT${P}A" 1 "$(scaled 1800)" || fail "pass $P: the trial boot never committed"
     waited=0
-    while [ "$waited" -lt 60 ] && kill -0 "$QPID" 2>/dev/null; do
+    while [ "$waited" -lt "$(scaled 60)" ] && kill -0 "$QPID" 2>/dev/null; do
         sleep 1
         waited=$((waited + 1))
     done
@@ -284,9 +286,9 @@ run_pass() {
 
     LOG="$DISK.log.p${P}b"
     boot_feed
-    wait_count "COMMIT${P}B" 1 1800 || fail "pass $P: the repair was never committed"
+    wait_count "COMMIT${P}B" 1 "$(scaled 1800)" || fail "pass $P: the repair was never committed"
     waited=0
-    while [ "$waited" -lt 60 ] && kill -0 "$QPID" 2>/dev/null; do
+    while [ "$waited" -lt "$(scaled 60)" ] && kill -0 "$QPID" 2>/dev/null; do
         sleep 1
         waited=$((waited + 1))
     done

@@ -16,6 +16,8 @@
 # Usage: crash_test.sh <kernel> <disk> <fsck.krffs>
 #
 
+# shellcheck source=tests/system/deadline.sh
+. "$(cd "$(dirname "$0")/../../.." && pwd)/tests/system/deadline.sh"
 set -e
 
 KERNEL="$1"
@@ -140,7 +142,7 @@ qemu_disk() {
 # killing QEMU before the phase's disk state has actually been written.
 wait_serial() {
     i=0
-    while [ "$i" -lt 60 ]; do
+    while [ "$i" -lt "$(scaled 60)" ]; do
         if grep -q "$2" "$1" 2>/dev/null; then
             return 0
         fi
@@ -211,7 +213,7 @@ if drive_expect "Type 'help'" 60; then
     drive_type poweroff
 fi
 i=0
-while kill -0 "$QPID" 2>/dev/null && [ "$i" -lt 60 ]; do
+while kill -0 "$QPID" 2>/dev/null && [ "$i" -lt "$(scaled 60)" ]; do
     sleep 1
     i=$((i + 1))
 done

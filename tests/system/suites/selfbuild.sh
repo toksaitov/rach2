@@ -70,7 +70,9 @@ NEED_BYTES=8388608
 
 # The whole run's deadline. A successful run is two kernel builds under
 # emulation; this bounds a hang without cutting a slow build short.
-DEADLINE=9000
+# shellcheck source=tests/system/deadline.sh
+. "$REPO/tests/system/deadline.sh"
+DEADLINE=$(scaled 9000)
 START="$(date +%s)"
 
 WORK="$DISK.work"
@@ -169,7 +171,7 @@ boot_steps() {
         remaining=$(( START + DEADLINE - $(date +%s) ))
         [ "$remaining" -gt 0 ] || fail "the run's budget was spent before $marker"
         drive_type "$command"
-        drive_expect "$marker" "$remaining" || fail "the step for $marker never printed it"
+        drive_expect_raw "$marker" "$remaining" || fail "the step for $marker never printed it"
     done < "$STEPS"
 }
 
@@ -236,21 +238,21 @@ step "SYNCDONE" "sync; echo SYNC\"\"DONE"
 
 boot_steps test "$TESTPASSWORD"
 
-if ! wait_token "COPYONE" 1800; then
+if ! wait_token "COPYONE" "$(scaled 1800)"; then
     fail "the source tree never copied into the workspace"
 fi
-if ! wait_token "BUILDONE=" 3600; then
+if ! wait_token "BUILDONE=" "$(scaled 3600)"; then
     fail "the first kernel build never finished"
 fi
 if ! grep -q "BUILDONE=0" "$LOG"; then
-    wait_token "TAILONE" 60 || true
+    wait_token "TAILONE" "$(scaled 60)" || true
     fail "the first kernel build failed; its last lines are in the kept log"
 fi
 # The size is the last field of the hash line, so waiting for `HASHONE=` and
 # reading the size at once reads a number the machine is still typing: under a
 # loaded pool this returned 3979 for a kernel of 397980 bytes and called it no
 # kernel. The wait is for the marker that follows the value.
-if ! wait_token "SIZEEND" 240; then
+if ! wait_token "SIZEEND" "$(scaled 240)"; then
     fail "the first build's kernel was never hashed"
 fi
 # A sanity floor, not a structure check (the kernel checker is that): the
@@ -260,17 +262,17 @@ SIZEONE="$(grep -a -o 'SIZEONE=[0-9]*' "$LOG" | tail -1 | cut -d= -f2)"
 if [ -z "$SIZEONE" ] || [ "$SIZEONE" -lt 200000 ]; then
     fail "the built kernel is $SIZEONE bytes, which is no kernel"
 fi
-if ! wait_token "KEEPONE" 120; then
+if ! wait_token "KEEPONE" "$(scaled 120)"; then
     fail "the built kernel was never set aside for extraction"
 fi
-if ! wait_token "BUILDTWO=" 3600; then
+if ! wait_token "BUILDTWO=" "$(scaled 3600)"; then
     fail "the second kernel build never finished"
 fi
 if ! grep -q "BUILDTWO=0" "$LOG"; then
-    wait_token "TAILTWO" 60 || true
+    wait_token "TAILTWO" "$(scaled 60)" || true
     fail "the second kernel build failed; its last lines are in the kept log"
 fi
-if ! wait_token "VERDICTDONE" 240; then
+if ! wait_token "VERDICTDONE" "$(scaled 240)"; then
     fail "the two builds' hashes were never compared"
 fi
 if grep -q "HASHDIFFER" "$LOG"; then
@@ -279,28 +281,28 @@ fi
 if ! grep -q "HASHSAME" "$LOG"; then
     fail "the hash comparison never reported"
 fi
-if ! wait_token "UBUILDRC=" 1200; then
+if ! wait_token "UBUILDRC=" "$(scaled 1200)"; then
     fail "the utils build never finished"
 fi
 if ! grep -q "UBUILDRC=0" "$LOG"; then
-    wait_token "UBTAIL" 60 || true
+    wait_token "UBTAIL" "$(scaled 60)" || true
     fail "the utils build failed; its last lines are in the kept log"
 fi
-if ! wait_token "IBUILDRC=" 600; then
+if ! wait_token "IBUILDRC=" "$(scaled 600)"; then
     fail "the ish build never finished"
 fi
 if ! grep -q "IBUILDRC=0" "$LOG"; then
-    wait_token "IBTAIL" 60 || true
+    wait_token "IBTAIL" "$(scaled 60)" || true
     fail "the ish build failed; its last lines are in the kept log"
 fi
 for smoke in SMOKECAT SMOKEECHO SMOKETF SMOKEPWD SMOKELS SMOKETM SMOKEMCR \
              SMOKEYES SMOKEPING SMOKEWEB SMOKEBUILT SMOKELOGIN SMOKESU \
              SMOKESUDO SMOKEPASSWD SMOKEADD SMOKEINSTK SMOKEISH; do
-    if ! wait_token "$smoke" 240; then
+    if ! wait_token "$smoke" "$(scaled 240)"; then
         fail "the userland smoke check $smoke did not pass"
     fi
 done
-if ! wait_token "SYNCDONE" 240; then
+if ! wait_token "SYNCDONE" "$(scaled 240)"; then
     fail "the disk was never synced after the builds"
 fi
 GUEST_SHA="$(grep -a -o 'HASHONE=[0-9a-f]*' "$LOG" | grep -a -oE '[0-9a-f]{64}' | tail -1)"
@@ -375,7 +377,7 @@ bounded() {
 # assembled natively from the pinned GRUB artifacts, so there is nothing to
 # skip.
 GRUB_DISK="$DISK.grub"
-if ! bounded 900 sh tools/image/mkdisk_grub.sh "$KEXTRACT" "$GRUB_DISK"; then
+if ! bounded "$(scaled 900)" sh tools/image/mkdisk_grub.sh "$KEXTRACT" "$GRUB_DISK"; then
     rm -f "$GRUB_DISK"
     fail "the GRUB disk around the built kernel did not assemble inside its bound"
 fi
@@ -387,7 +389,7 @@ qemu-system-i386 -cpu max -display none -rtc base=utc \
 QPID=$!
 grub_ok=1
 waited=0
-while [ "$waited" -lt 120 ]; do
+while [ "$waited" -lt "$(scaled 120)" ]; do
     if grep -aq "login:" "$GLOG" 2>/dev/null; then
         grub_ok=0
         break
@@ -414,11 +416,11 @@ step "INPLACERC" "cd /src/ish && make -f guest.mk > /tmp/ip.out 2>&1; echo INPLA
 step "IPTAIL" "busybox tail -3 /tmp/ip.out; echo IP\"\"TAIL"
 rm -f "$LOG"
 boot_steps root "$ROOTPASSWORD"
-if ! wait_token "INPLACERC=" 600; then
+if ! wait_token "INPLACERC=" "$(scaled 600)"; then
     fail "the in-place root build never reported"
 fi
 if ! grep -q "INPLACERC=0" "$LOG"; then
-    wait_token "IPTAIL" 60 || true
+    wait_token "IPTAIL" "$(scaled 60)" || true
     fail "make -f guest.mk in the staged /src/ish failed; its last lines are in the kept log"
 fi
 cleanup_boot

@@ -24,6 +24,8 @@
 #            <user> <password> <image-mb>
 #
 
+# shellcheck source=tests/system/deadline.sh
+. "$(cd "$(dirname "$0")/../../.." && pwd)/tests/system/deadline.sh"
 set -e
 
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
@@ -124,7 +126,7 @@ mount_boot() {
     # Waited on the probe's own verdict, which it prints AFTER the mount line:
     # stopping at the mount line would kill the machine part way through
     # writing it, and the value read back would be a prefix.
-    if ! wait_serial "$log" "PROCPROBE OK" 150; then
+    if ! wait_serial "$log" "PROCPROBE OK" "$(scaled 150)"; then
         stop
         echo "procfiles-test: FAIL: the probe did not pass on the boot with" >&2
         echo "procfiles-test: options '$append'" >&2

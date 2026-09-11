@@ -29,6 +29,8 @@
 # Usage: tcc_test.sh <kernel> <disk> <root password> <test password>
 #
 
+# shellcheck source=tests/system/deadline.sh
+. "$(cd "$(dirname "$0")/../../.." && pwd)/tests/system/deadline.sh"
 set -e
 
 KERNEL="$1"
@@ -165,10 +167,10 @@ boot_lines \
     "tcc -static -o /tmp/ping /src/utils/ping.c /src/utils/resolv.c && echo TWO\"\"UNITS" \
     "sync; echo DONE\"\"IT"
 
-if ! wait_token "BUILTIT" 240; then
+if ! wait_token "BUILTIT" "$(scaled 240)"; then
     fail "the compiler did not build a program on the machine"
 fi
-if ! wait_token "COMPILEDHERE" 90; then
+if ! wait_token "COMPILEDHERE" "$(scaled 90)"; then
     fail "the program the machine compiled did not run, or printed the wrong thing"
 fi
 
@@ -180,28 +182,28 @@ fi
 # (the shell echoes `$?`, then `cat` prints the file the compiler wrote), so a
 # grep for the reason the moment the status appears is a race, and it is one
 # this suite lost once the machine got slower.
-if ! wait_token "RUNRC=1" 120; then
+if ! wait_token "RUNRC=1" "$(scaled 120)"; then
     fail "-run was not refused"
 fi
-if ! wait_token "mprotect" 30; then
+if ! wait_token "mprotect" "$(scaled 30)"; then
     fail "-run was refused without saying why"
 fi
-if ! wait_token "SHRC=1" 90; then
+if ! wait_token "SHRC=1" "$(scaled 90)"; then
     fail "-shared was not refused"
 fi
-if ! wait_token "shared is not available" 30; then
+if ! wait_token "shared is not available" "$(scaled 30)"; then
     fail "-shared was refused without saying why"
 fi
-if ! wait_token "DYRC=1" 90; then
+if ! wait_token "DYRC=1" "$(scaled 90)"; then
     fail "a link without -static was not refused"
 fi
-if ! wait_token "must be linked with -static" 30; then
+if ! wait_token "must be linked with -static" "$(scaled 30)"; then
     fail "a dynamic link was refused without saying why"
 fi
-if ! wait_token "RWRC=1" 90; then
+if ! wait_token "RWRC=1" "$(scaled 90)"; then
     fail "a raw-image link was not refused"
 fi
-if ! wait_token "must be an ELF" 30; then
+if ! wait_token "must be an ELF" "$(scaled 30)"; then
     fail "a raw-image link was refused without saying why"
 fi
 
@@ -209,13 +211,13 @@ fi
 # guest answers this one itself: the console ends every line with a carriage
 # return, so a pattern anchored here would have matched nothing and passed
 # whatever was there.
-if ! wait_token "NOLEFTOVERS" 90; then
+if ! wait_token "NOLEFTOVERS" "$(scaled 90)"; then
     fail "a refused compile left its output behind, or the check never ran"
 fi
 
 # Compiling to an object is not refused: it produces no program to run, and it
 # is how a multi-step build works.
-if ! wait_token "OBJECTOK" 120; then
+if ! wait_token "OBJECTOK" "$(scaled 120)"; then
     fail "compiling to an object was refused, and it must not be"
 fi
 
@@ -236,16 +238,16 @@ fi
 # perfectly and truncate everything larger, and a cat that stopped after its
 # first argument would never be noticed. The commands are chained with `&&`, so
 # a cat that failed cannot reach the token by leaving an old output in place.
-if ! wait_token "TOOLBUILT" 240; then
+if ! wait_token "TOOLBUILT" "$(scaled 240)"; then
     fail "the machine could not compile this project's own cat"
 fi
-if ! wait_token "INPUTMADE" 120; then
+if ! wait_token "INPUTMADE" "$(scaled 120)"; then
     fail "the multi-block input for the comparison was not made"
 fi
-if ! wait_token "SAMEBYTES" 120; then
+if ! wait_token "SAMEBYTES" "$(scaled 120)"; then
     fail "the cat the machine compiled does not agree with the shipped one"
 fi
-if ! wait_token "BOTHFILES" 120; then
+if ! wait_token "BOTHFILES" "$(scaled 120)"; then
     fail "the cat the machine compiled does not agree over two files"
 fi
 
@@ -254,11 +256,11 @@ fi
 # `#include "netdb.h"` resolves beside it because the whole directory is staged.
 # It is built and not run: this boot has no network, and what the compiler is
 # being asked for here is the link across two objects.
-if ! wait_token "TWOUNITS" 240; then
+if ! wait_token "TWOUNITS" "$(scaled 240)"; then
     fail "the machine could not compile a program from two sources at once"
 fi
 
-if ! wait_token "DONEIT" 90; then
+if ! wait_token "DONEIT" "$(scaled 90)"; then
     fail "the boot never finished its script"
 fi
 

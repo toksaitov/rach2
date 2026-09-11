@@ -22,6 +22,8 @@
 # gibibyte and a half.
 #
 
+# shellcheck source=tests/system/deadline.sh
+. "$(cd "$(dirname "$0")/../../.." && pwd)/tests/system/deadline.sh"
 set -e
 
 STICK="$1"
@@ -465,15 +467,15 @@ LOG6="$DIR/ssh.log"
     --timeout 300 --steptmo 120 --ok "SSHREADY" --log "$LOG6" \
     "expect=rach2 login:" wait=25 \
     "send=" "expect=rach2 login:" "send=root" "expect=Password:" "send=$NEWPASS" \
-    "expect=# " "send=echo SSH\"\"READY" "expect=SSHREADY" wait=90 \
+    "expect=# " "send=echo SSH\"\"READY" "expect=SSHREADY" until=90 \
     > "$LOG6.harness" 2>&1 &
 QPID=$!
 
 # The three attempts, while that machine is up. Each says what it proves.
-sleep 60
+sleep "$(scaled 60)"
 OUT=$(RACH2_PASSWORD="$NEWPASS" "$PTYDRIVE" --rows 40 --cols 100 --timeout 60 -- \
     ssh -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
-    -o ConnectTimeout=20 -o PubkeyAuthentication=no \
+    -o "ConnectTimeout=$(scaled 20)" -o PubkeyAuthentication=no \
     -o PreferredAuthentications=password -o NumberOfPasswordPrompts=3 -tt \
     -p "$PORT" root@localhost 'id -u; echo ROOT""PASSWORD' 2>&1 || true)
 case "$OUT" in
@@ -481,7 +483,7 @@ case "$OUT" in
     *) bad "root's password login over SSH: $OUT" ;;
 esac
 OUT=$(ssh -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
-    -o ConnectTimeout=20 -o BatchMode=yes -o IdentitiesOnly=yes \
+    -o "ConnectTimeout=$(scaled 20)" -o BatchMode=yes -o IdentitiesOnly=yes \
     -o PreferredAuthentications=publickey -o PasswordAuthentication=no \
     -i "$DEMO_KEY" -p "$PORT" "$USERNAME@localhost" 'id -un; echo KEY""LOGIN' 2>&1 || true)
 case "$OUT" in
@@ -489,7 +491,7 @@ case "$OUT" in
     *) bad "the account's key login: $OUT" ;;
 esac
 OUT=$(ssh -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
-    -o ConnectTimeout=20 -o BatchMode=yes -o IdentitiesOnly=yes \
+    -o "ConnectTimeout=$(scaled 20)" -o BatchMode=yes -o IdentitiesOnly=yes \
     -o PreferredAuthentications=publickey -o PasswordAuthentication=no \
     -i "$DEMO_KEY" -p "$PORT" root@localhost 'echo DEMO""KEY' 2>&1 || true)
 # The server must have refused it, not merely failed to answer: a machine that
@@ -625,7 +627,7 @@ rm -f "$DIR/cutoff.log"
 CUTPID=$!
 waited=0
 saw_progress=no
-while [ "$waited" -lt 300 ]; do
+while [ "$waited" -lt "$(scaled 300)" ]; do
     if grep -aq 'reflash: 16777216 of ' "$DIR/cutoff.log" 2>/dev/null; then
         saw_progress=yes
         break
@@ -644,7 +646,7 @@ wait "$CUTPID" 2>/dev/null || true
 # a disk of this row's own, so a machine slow to die holds nothing the rows
 # after it open.
 gone=0
-while [ "$gone" -lt 60 ]; do
+while [ "$gone" -lt "$(scaled 60)" ]; do
     pgrep -f "file=$DIR/cut.img" > /dev/null 2>&1 || break
     sleep 1
     gone=$((gone + 1))
