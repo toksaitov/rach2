@@ -1335,9 +1335,10 @@ run-exfat: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(MKEXFATFIX
 # bounds: the raw device, a file on exFAT and on FAT32 written and read, two
 # hundred small files, and a raw read piped into a hash.
 DISKRATE_DIR = $(IMAGES_DIR)/diskrate
-run-diskrate: $(DEMO_CREDS) rach2 krffs os-real-image $(MKEXFATFIXTURE) $(MKMBR) $(HARNESS) rach2-recovery $(RECOVERY_IMAGE)
+run-diskrate: $(DEMO_CREDS) rach2 tests krffs os-real-image test-image $(MKEXFATFIXTURE) $(MKMBR) $(HARNESS) rach2-recovery $(RECOVERY_IMAGE)
 	sh tests/system/suites/diskrate.sh build/rach2/kernel $(OS_REAL_IMAGE) $(HARNESS) $(DISKRATE_DIR) \
-	    "`cat krffs/rach2_demo_password`" $(MKEXFATFIXTURE) $(MKMBR) $(RECOVERY_KERNEL) $(RECOVERY_IMAGE)
+	    "`cat krffs/rach2_demo_password`" $(MKEXFATFIXTURE) $(MKMBR) $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) \
+	    $(TEST_IMAGE)
 
 # The GUID table writer (tools/image/mkgpt.c), for `tests/run usbdisk`: the
 # tree had no writer and the suite needs a table to read.

@@ -17,11 +17,17 @@
 # image cannot hold 4 MiB, each piece carrying its index, and requires each
 # direction to be exactly 128 commands on the stick.
 #
+# A third boot, of the test image on the ordinary kernel, runs
+# `placeprobe`, entry 26's placement experiment: 32 MiB read through a pipe
+# into a buffer whose first page holds executed code, and into one that
+# holds none, three runs each; the far runs are held to the pipe row's
+# bound and every time is printed beside the pipe row's three.
+#
 # Usage: diskrate.sh KERNEL OSREAL HARNESS DIR PASSWORD MKEXFATFIXTURE MKMBR \
-#        RKERNEL RIMAGE
+#        RKERNEL RIMAGE TESTIMAGE
 set -u
 KERNEL=$1; OSREAL=$2; HARNESS=$3; DIR=$4; PASSWORD=$5; MKEXFAT=$6; MKMBR=$7
-RKERNEL=$8; RIMAGE=$9
+RKERNEL=$8; RIMAGE=$9; TESTIMAGE=${10}
 
 fail() { echo "diskrate-test: FAIL: $1" >&2; exit 1; }
 
@@ -182,5 +188,28 @@ exact stickread stickwrite1 stickread1 128 "the stick read's data commands"
 for r in stickwrite stickread; do
     echo "diskrate-test: $r: $(tr -d '\r' < "$SLOG" | grep -a "^T_$r [0-9]" | tail -1 | awk '{printf "%d s, %d KB/s", $2, ($2 > 0 ? 4096 / $2 : 4096)}')"
 done
+
+# ---- the placement experiment: the pipe read into a page that holds code
+#      and into one that does not, each three times ----
+PLOG="$DIR/place.log"
+"$HARNESS" --kernel "$KERNEL" --initrd "$TESTIMAGE" \
+    --qemu-arg=-cpu --qemu-arg=max \
+    --timeout 900 --steptmo 600 --ok "PLACEPROBE OK" --never "PLACEPROBE FAIL" --log "$PLOG" \
+    "expect=Type 'help'" "send=exec /placeprobe" "expect=PLACEPROBE OK" > /dev/null 2>&1 \
+    || fail "the placement boot did not reach its end; see $PLOG"
+echo "diskrate-test: the pipe row's three times: $(tr -d '\r' < "$DIR/diskrate.log" | grep -a "^T_pipehash [0-9]" | awk '{printf "%s s ", $2}')"
+echo "diskrate-test: $(tr -d '\r' < "$PLOG" | grep -a "^PLACEPROBE code")"
+n=0
+for t in $(tr -d '\r' < "$PLOG" | grep -a "^PLACEPROBE FAR" | awk '{print $3}'); do
+    n=$((n + 1))
+    if [ "$t" -le 30000 ]; then
+        echo "diskrate-test: far run $n: $t ms, under 30 s: OK"
+    else
+        echo "diskrate-test: FAIL: far run $n: $t ms, over 30 s" >&2
+        rc=1
+    fi
+done
+[ "$n" -eq 3 ] || { echo "diskrate-test: FAIL: $n far runs, not 3" >&2; rc=1; }
+echo "diskrate-test: the near runs, the emulator's cost of a buffer in a code page: $(tr -d '\r' < "$PLOG" | grep -a "^PLACEPROBE NEAR" | awk '{printf "%s ms ", $3}')"
 [ "$rc" -eq 0 ] || fail "a row is over its bound"
 echo "diskrate-test: PASS"

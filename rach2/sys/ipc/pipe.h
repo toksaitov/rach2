@@ -32,7 +32,7 @@
 typedef struct pipe {
     struct pipe *next; /* the list of live pipes */
     int in_use;
-    uint32_t inode;        /* its own; never reused within a boot */
+    uint32_t inode; /* its own; never reused within a boot */
     uint8_t buf[PIPE_BUF_SIZE];
     uint32_t head;         /* total bytes consumed by the read end */
     uint32_t tail;         /* total bytes produced by the write end */
@@ -61,5 +61,12 @@ uint32_t pipe_available(const pipe_t *p);
 uint32_t pipe_free_space(const pipe_t *p);
 uint32_t pipe_ring_put(pipe_t *p, const uint8_t *src, uint32_t n);
 uint32_t pipe_ring_get(pipe_t *p, uint8_t *dst, uint32_t n);
+/* The spans: the longest run of readable bytes from the head, or of free
+ * slots from the tail, that does not cross the ring's end, and the counters
+ * advanced after a caller copied straight from or into them. */
+uint32_t pipe_ring_read_span(pipe_t *p, const uint8_t **at);
+uint32_t pipe_ring_write_span(pipe_t *p, uint8_t **at);
+void pipe_ring_consume(pipe_t *p, uint32_t n);
+void pipe_ring_produce(pipe_t *p, uint32_t n);
 
 #endif /* _PIPE_H_ */

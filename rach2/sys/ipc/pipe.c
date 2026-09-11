@@ -132,10 +132,21 @@ static int fd_is_nonblock(fd_entry_t *e)
  * writer has closed (EOF -> 0). Returns the byte count read (may be < count),
  * -EAGAIN if O_NONBLOCK and empty, -EINTR if a signal interrupts the wait.
  */
+/**
+ * The bytes of `n` from `addr` that lie in `addr`'s own page: a copy into
+ * user memory goes a page at a time, so a page that faults leaves the ones
+ * before it moved and reported.
+ */
+static uint32_t page_piece(uint32_t addr, uint32_t n)
+{
+    uint32_t left = 4096u - (addr & 4095u);
+
+    return n < left ? n : left;
+}
+
 static int32_t pipe_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     pipe_t *p = (pipe_t *)e->priv;
-    uint8_t kbuf[512];
     uint32_t done = 0;
     uint32_t to_read;
 
@@ -163,23 +174,27 @@ static int32_t pipe_read(fd_entry_t *e, char __user *buf, uint32_t count)
     }
 
     /* Return what is available now, up to count (POSIX pipe read semantics:
-     * a single batch, not a fill-to-count loop). */
+     * a single batch, not a fill-to-count loop). The bytes go straight
+     * from the ring's spans to the caller, a user page at a time: a page
+     * that faults leaves its bytes in the ring for the next read, and the
+     * bytes before it are reported. */
     to_read = pipe_available(p);
     if (to_read > count) {
         to_read = count;
     }
     while (done < to_read) {
-        uint32_t chunk = to_read - done;
-        if (chunk > sizeof(kbuf)) {
-            chunk = sizeof(kbuf);
+        const uint8_t *at;
+        uint32_t chunk = pipe_ring_read_span(p, &at);
+
+        if (chunk > to_read - done) {
+            chunk = to_read - done;
         }
-        pipe_ring_get(p, kbuf, chunk);
-        if (copy_to_user((void __user *)(buf + done), kbuf, chunk) != 0) {
-            /* Bytes already removed from the ring are reported; the rest are
-             * lost to the bad pointer, matching the return-count convention. */
+        chunk = page_piece((uint32_t)(__force uintptr_t)(buf + done), chunk);
+        if (copy_to_user((void __user *)(buf + done), at, chunk) != 0) {
             wq_wake_all(&p->write_wq);
             return (done > 0) ? (int32_t)done : -EFAULT;
         }
+        pipe_ring_consume(p, chunk);
         done += chunk;
     }
 
@@ -195,7 +210,6 @@ static int32_t pipe_read(fd_entry_t *e, char __user *buf, uint32_t count)
 static int32_t pipe_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
     pipe_t *p = (pipe_t *)e->priv;
-    uint8_t kbuf[512];
     uint32_t done = 0;
 
     if (!(e->flags & FD_FLAG_WRITE)) {
@@ -230,19 +244,29 @@ static int32_t pipe_write(fd_entry_t *e, const char __user *buf, uint32_t count)
             continue;
         }
 
-        chunk = count - done;
-        if (chunk > space) {
-            chunk = space;
+        /* The bytes go straight into the ring's free span, a user page at
+         * a time, and the reader is woken when the ring goes from empty to
+         * holding bytes: that is the transition a reader sleeps on, and a
+         * writer that fills the ring, waits, and fills it again wakes the
+         * reader at each refill. */
+        {
+            uint8_t *at;
+            int was_empty = pipe_available(p) == 0;
+
+            chunk = pipe_ring_write_span(p, &at);
+            if (chunk > count - done) {
+                chunk = count - done;
+            }
+            chunk = page_piece((uint32_t)(__force uintptr_t)(buf + done), chunk);
+            if (copy_from_user(at, (const void __user *)(buf + done), chunk) != 0) {
+                return (done > 0) ? (int32_t)done : -EFAULT;
+            }
+            pipe_ring_produce(p, chunk);
+            done += chunk;
+            if (was_empty) {
+                wq_wake_all(&p->read_wq);
+            }
         }
-        if (chunk > sizeof(kbuf)) {
-            chunk = sizeof(kbuf);
-        }
-        if (copy_from_user(kbuf, (const void __user *)(buf + done), chunk) != 0) {
-            return (done > 0) ? (int32_t)done : -EFAULT;
-        }
-        pipe_ring_put(p, kbuf, chunk);
-        done += chunk;
-        wq_wake_all(&p->read_wq); /* data available: wake any blocked reader */
     }
 
     return (int32_t)done;

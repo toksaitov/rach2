@@ -26,6 +26,12 @@ typedef unsigned int size_t;
 #define SYS_PIPE2        331
 #define SYS_RT_SIGACTION 174
 #define SYS_READLINK     85
+#define SYS_MUNMAP       91
+#define SYS_MMAP2        192
+#define PROT_READ        0x1
+#define PROT_WRITE       0x2
+#define MAP_PRIVATE      0x02
+#define MAP_ANONYMOUS    0x20
 #define SYS_FSTAT64      197
 
 /* i386 struct stat64: st_ino is the 64-bit field at offset 88. */
@@ -180,6 +186,18 @@ static int rd(int fd, char *buf, int n)
 static int wr(int fd, const char *buf, int n)
 {
     return syscall3(SYS_WRITE, fd, (int)(size_t)buf, n);
+}
+
+static unsigned mmap2_anon(unsigned len)
+{
+    unsigned r;
+
+    __asm__ __volatile__("int $0x80"
+                         : "=a"(r)
+                         : "0"(SYS_MMAP2), "b"(0), "c"(len), "d"(PROT_READ | PROT_WRITE),
+                           "S"(MAP_PRIVATE | MAP_ANONYMOUS), "D"(-1)
+                         : "memory");
+    return r;
 }
 
 /**
@@ -359,6 +377,91 @@ void _start(void)
         check(ino[0] != ino[2], "and two pipes are not the same pipe");
         for (k = 0; k < 4; k++) {
             syscall1(SYS_CLOSE, ends[k]);
+        }
+    }
+
+    /* (g) a read whose buffer's second page is unmapped: the first page's
+     * bytes arrive and are counted, the rest stay in the pipe for the next
+     * read, since the kernel copies a user page at a time and a page that
+     * faults is left in the ring. The hole is an anonymous mapping of two
+     * pages with the second unmapped. */
+    {
+        unsigned m = mmap2_anon(8192);
+        char *first = (char *)(size_t)m;
+        char rest[2048];
+        int got;
+        int k;
+
+        check(m != 0 && m < 0xfffff000u, "an anonymous mapping of two pages");
+        check(syscall2(SYS_MUNMAP, (int)(m + 4096), 4096) == 0, "with its second page unmapped");
+        check(do_pipe(p) == 0, "pipe() for the fault test");
+        /* A pattern with no period of 2048, so the second half cannot pass
+           as the first read again. */
+        for (i = 0; i < 4096; i++) {
+            big[i] = (char)((i * 7 + 3) & 0x7f);
+        }
+        check(wr(p[1], big, 4096) == 4096, "a page of bytes written");
+        got = rd(p[0], first + 2048, 4096);
+        check(got == 2048, "a read across the hole returns the bytes before it");
+        for (k = 0; k < 2048 && got == 2048; k++) {
+            if (first[2048 + k] != big[k]) {
+                check(0, "and they are the first bytes");
+                break;
+            }
+        }
+        got = rd(p[0], rest, sizeof(rest));
+        check(got == 2048, "and the bytes after the hole are still in the pipe");
+        for (k = 0; k < 2048 && got == 2048; k++) {
+            if (rest[k] != big[2048 + k]) {
+                check(0, "in order, every one");
+                break;
+            }
+        }
+        syscall1(SYS_CLOSE, p[0]);
+        syscall1(SYS_CLOSE, p[1]);
+    }
+
+    /* (h) one write of three pages and a byte, which fills the pipe and
+     * waits three times while the reader drains: the reader, which sleeps
+     * on the empty pipe between the refills, is woken at every refill and not
+     * once per write call. The write end stays open until the reader says
+     * through a second pipe that every byte arrived, so a reader left
+     * asleep is not rescued by the close; a kernel that wakes it only once
+     * leaves both ends waiting, and the harness times the row out. */
+    {
+        int q[2];
+
+        check(do_pipe(p) == 0 && do_pipe(q) == 0, "two pipes for the refill test");
+        pid = syscall1(SYS_FORK, 0);
+        check(pid >= 0, "fork for the refill test");
+        if (pid == 0) {
+            int total = 0, got;
+            char cb[4096];
+
+            syscall1(SYS_CLOSE, p[1]);
+            syscall1(SYS_CLOSE, q[0]);
+            while (total < 3 * 4096 + 1) {
+                got = rd(p[0], cb, sizeof(cb));
+                if (got <= 0) {
+                    sys_exit(3);
+                }
+                total += got;
+            }
+            wr(q[1], "ok", 2);
+            sys_exit(0);
+        } else {
+            static char threefull[3 * 4096 + 1];
+            char ack[2];
+
+            syscall1(SYS_CLOSE, p[0]);
+            syscall1(SYS_CLOSE, q[1]);
+            check(wr(p[1], threefull, (int)sizeof(threefull)) == (int)sizeof(threefull),
+                  "three pages and a byte written in one call through three full waits");
+            check(rd(q[0], ack, 2) == 2, "and the reader, woken at every refill, read them all");
+            syscall1(SYS_CLOSE, p[1]);
+            syscall1(SYS_CLOSE, q[0]);
+            syscall3(SYS_WAITPID, pid, (int)(size_t)&status, 0);
+            check(((status >> 8) & 0xff) == 0, "and said so");
         }
     }
 
