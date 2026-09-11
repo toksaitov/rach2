@@ -65,8 +65,8 @@ struct netdev *netdev_first(void)
     return &the_iface;
 }
 
-void ethernet_tx(struct netdev *out, const unsigned char *dst, unsigned short type,
-                 const unsigned char *payload, unsigned short plen)
+int ethernet_tx(struct netdev *out, const unsigned char *dst, unsigned short type,
+                const unsigned char *payload, unsigned short plen)
 {
     (void)out;
     unsigned i;
@@ -91,6 +91,7 @@ void ethernet_tx(struct netdev *out, const unsigned char *dst, unsigned short ty
         log_putc('\n');
     }
     tx_depth--;
+    return 0;
 }
 
 /* The kernel's interrupt bracket. On the host there are no interrupts, so the

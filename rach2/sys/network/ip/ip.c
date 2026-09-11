@@ -275,7 +275,9 @@ int ip_tx(uint32_t dst_ip, uint8_t proto,
                  "tx: refused to broadcast a datagram that is not UDP");
             return -EOPNOTSUPP;
         }
-        ethernet_tx(out, all_ones, ETH_TYPE_IP, ip_tx_buf, total_len);
+        if (ethernet_tx(out, all_ones, ETH_TYPE_IP, ip_tx_buf, total_len) != NETDEV_TX_OK) {
+            return -ENOBUFS;
+        }
         return 0;
     }
 
@@ -287,7 +289,9 @@ int ip_tx(uint32_t dst_ip, uint8_t proto,
         return 0;
     }
 
-    ethernet_tx(out, dst_mac, ETH_TYPE_IP, ip_tx_buf, total_len);
+    if (ethernet_tx(out, dst_mac, ETH_TYPE_IP, ip_tx_buf, total_len) != NETDEV_TX_OK) {
+        return -ENOBUFS;
+    }
     return 0;
 }
 

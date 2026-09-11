@@ -54,14 +54,15 @@ void ethernet_rx(struct netdev *nd, const unsigned char *data, unsigned short le
     }
 }
 
-void ethernet_tx(struct netdev *out, const unsigned char *dst, unsigned short type,
-                 const unsigned char *payload, unsigned short plen)
+int ethernet_tx(struct netdev *out, const unsigned char *dst, unsigned short type,
+                const unsigned char *payload, unsigned short plen)
 {
     (void)out;
     (void)dst;
     (void)type;
     (void)payload;
     (void)plen;
+    return 0;
 }
 
 /* The refusal counters the drivers report to. The interface owns them; here

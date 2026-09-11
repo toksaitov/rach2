@@ -19,6 +19,7 @@
  */
 
 #include "../../klog.h"
+#include "../../lib/kerrno.h"
 #include "tcp.h"
 #include "rcvwnd.h"
 #include "../socket/socket.h"
@@ -58,7 +59,7 @@ static uint16_t tcp_checksum(uint32_t src_ip, uint32_t dst_ip,
                              const uint8_t *seg, uint16_t seg_len);
 static void tcp_emit_flags(struct tcb *tcb, uint8_t flags, uint32_t seq);
 static void tcp_send_flags(struct tcb *tcb, uint8_t flags);
-static void tcp_output(struct tcb *tcb);
+static int tcp_output(struct tcb *tcb);
 static void tcp_retransmit(struct tcb *tcb);
 static void tcp_pump(struct tcb *tcb);
 static void tcp_giveup(struct tcb *tcb);
@@ -81,6 +82,18 @@ static uint32_t tcp_isn(uint16_t local_port, uint16_t remote_port)
 void tcp_init(void)
 {
     tcbs = NULL;
+}
+
+/**
+ * The window to offer: the receive ring's free space, clamped to what the
+ * 16-bit field can carry. The ring is larger than the field, so the cast
+ * alone would offer zero for an empty ring.
+ */
+static uint16_t tcp_rcv_window(const struct tcb *tcb)
+{
+    uint32_t free_space = TCP_RING_SIZE - (tcb->recv_tail - tcb->recv_head);
+
+    return free_space > TCP_WINDOW_SIZE ? (uint16_t)TCP_WINDOW_SIZE : (uint16_t)free_space;
 }
 
 static void tcb_init(struct tcb *tcb)
@@ -200,8 +213,19 @@ static void tcp_send_flags(struct tcb *tcb, uint8_t flags)
  * and congestion windows allow (minus the bytes already in flight), so a
  * multi-segment response leaves in one burst, not one segment per round
  * trip.
+ *
+ * A segment the driver would not take (`ip_tx` says -ENOBUFS) stays in the
+ * ring unsent, for the next pump: an acknowledgement, or the tick, which
+ * gives up on a connection whose bytes have been refused since
+ * TCP_REFUSE_GIVEUP_TICKS ago with nothing sent between. Counted as sent it
+ * would wait for a retransmission a second away. Any other refusal is
+ * permanent, and the segment is counted as sent so that the retransmission
+ * timer and its give-up take the connection down.
+ *
+ * Returns 1 when it stopped on a refusal, 0 when it stopped for any other
+ * reason: nothing queued, or a window that allows no more.
  */
-static void tcp_output(struct tcb *tcb)
+static int tcp_output(struct tcb *tcb)
 {
     uint32_t avail, in_flight, window, usable, send_len, i;
     uint16_t seg_len;
@@ -209,7 +233,7 @@ static void tcp_output(struct tcb *tcb)
     for (;;) {
         avail = tcb->send_tail - tcb->send_head;
         if (avail == 0) {
-            return;
+            return 0;
         }
 
         in_flight = tcb->snd_nxt - tcb->snd_una;
@@ -229,7 +253,7 @@ static void tcp_output(struct tcb *tcb)
             if (tcb->snd_wnd == 0 && tcb->zwp_timer == 0) {
                 tcb->zwp_timer = tcb->rto;
             }
-            return;
+            return 0;
         }
 
         write16be(tcp_tx_buf + 0,  tcb->local_port);
@@ -251,7 +275,15 @@ static void tcp_output(struct tcb *tcb)
         write16be(tcp_tx_buf + 16,
                   tcp_checksum(tcb->local_ip, tcb->remote_ip,
                                tcp_tx_buf, seg_len));
-        ip_tx(tcb->remote_ip, IP_PROTO_TCP, tcp_tx_buf, seg_len, IP_TTL_DEFAULT);
+        if (ip_tx(tcb->remote_ip, IP_PROTO_TCP, tcp_tx_buf, seg_len, IP_TTL_DEFAULT) ==
+            -ENOBUFS) {
+            tcb->tx_refused++;
+            if (tcb->refused_since == 0) {
+                tcb->refused_since = kernel_ticks + 1;
+            }
+            return 1;
+        }
+        tcb->refused_since = 0;
 
         tcb->send_head += send_len;
         tcb->snd_nxt   += send_len;
@@ -633,9 +665,81 @@ static void tcp_giveup(struct tcb *tcb)
  * Drive the per-connection timers, called once per kernel tick.
  *
  * Expires TIME_WAIT and FIN_WAIT_2 slots, runs the RTO timer (backing off and
- * retransmitting, or giving up after TCP_MAX_RETX tries), and runs the
- * zero-window probe timer.
+ * retransmitting, or giving up after TCP_MAX_RETX tries), runs the
+ * zero-window probe timer, and pumps the bytes a refused transmit left in
+ * a ring when no acknowledgement has, TCP_TICK_PUMPS connections a tick in
+ * rotation, giving up a connection whose bytes the driver has refused since
+ * TCP_REFUSE_GIVEUP_TICKS ago.
  */
+/* Where the tick's pump rotation continues: the number of connections with
+ * queued bytes to pass over before pumping, advanced past the last pumped. */
+static uint32_t tcp_pump_next;
+
+/**
+ * Pump a connection's queued bytes from the tick: a refusal that has stood
+ * since TCP_REFUSE_GIVEUP_TICKS ago gives the connection up. Returns 1 when
+ * the block was freed and the caller must not touch it.
+ */
+static int tcp_tick_pump(struct tcb *tcb)
+{
+    if (tcp_output(tcb) == 1 && tcb->refused_since != 0 &&
+        kernel_ticks + 1 - tcb->refused_since > TCP_REFUSE_GIVEUP_TICKS) {
+        klog(KLOG_WARN, "tcp", "gave up: the driver refused every transmit for %d ticks",
+             (int)(kernel_ticks + 1 - tcb->refused_since));
+        tcp_giveup(tcb);
+        return 1;
+    }
+    return 0;
+}
+
+/** Whether the tick's pump has anything to do for a connection. */
+static int tcp_pumpable(const struct tcb *tcb)
+{
+    return (tcb->state == TCP_ESTABLISHED || tcb->state == TCP_CLOSE_WAIT) &&
+           tcb->send_tail != tcb->send_head;
+}
+
+/**
+ * The tick's pumps, in rotation: up to TCP_TICK_PUMPS connections with
+ * queued bytes, starting after the last one pumped, so that a connection
+ * behind others that a zero window holds is reached. The connections are
+ * numbered in list order among those with queued bytes; the ones at and
+ * after the rotation's point go first, then the ones before it.
+ */
+static void tcp_tick_pumps(void)
+{
+    struct tcb *tcb, *next;
+    uint32_t start = tcp_pump_next, eligible = 0, pumped = 0, index = 0;
+
+    for (tcb = tcbs; tcb; tcb = next) {
+        next = tcb->next;
+        if (!tcp_pumpable(tcb)) {
+            continue;
+        }
+        if (index >= start && pumped < TCP_TICK_PUMPS) {
+            pumped++;
+            tcp_pump_next = index + 1;
+            (void)tcp_tick_pump(tcb);
+        }
+        index++;
+        eligible++;
+    }
+    index = 0;
+    for (tcb = tcbs; tcb && pumped < TCP_TICK_PUMPS && index < start; tcb = next) {
+        next = tcb->next;
+        if (!tcp_pumpable(tcb)) {
+            continue;
+        }
+        pumped++;
+        tcp_pump_next = index + 1;
+        (void)tcp_tick_pump(tcb);
+        index++;
+    }
+    if (tcp_pump_next >= eligible) {
+        tcp_pump_next = 0;
+    }
+}
+
 void tcp_tick(void)
 {
     struct tcb *tcb, *next;
@@ -714,7 +818,9 @@ void tcp_tick(void)
                 if (tcb->zwp_timer > TCP_RTO_MAX) tcb->zwp_timer = TCP_RTO_MAX;
             }
         }
+
     }
+    tcp_tick_pumps();
 }
 
 /**
@@ -1350,8 +1456,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
         }
 
         if (needs_ack) {
-            tcb->rcv_wnd = (uint16_t)(TCP_RING_SIZE -
-                           (tcb->recv_tail - tcb->recv_head));
+            tcb->rcv_wnd = tcp_rcv_window(tcb);
             tcp_send_flags(tcb, TCP_ACK);
         }
         break;
@@ -1407,8 +1512,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
         }
 
         if (needs_ack) {
-            tcb->rcv_wnd = (uint16_t)(TCP_RING_SIZE -
-                           (tcb->recv_tail - tcb->recv_head));
+            tcb->rcv_wnd = tcp_rcv_window(tcb);
             tcp_send_flags(tcb, TCP_ACK);
         }
         break;
@@ -1438,8 +1542,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
             needs_ack = 1;
         }
         if (needs_ack) {
-            tcb->rcv_wnd = (uint16_t)(TCP_RING_SIZE -
-                           (tcb->recv_tail - tcb->recv_head));
+            tcb->rcv_wnd = tcp_rcv_window(tcb);
             tcp_send_flags(tcb, TCP_ACK);
         }
         break;

@@ -35,6 +35,8 @@
 #include "../../udelay.h"
 #include "../../pci.h"
 #include "../../mm/paging.h"
+#include "../../isr.h"
+#include "../../lapic.h"
 
 /* ------------------------------------------------------------------ */
 /* Register access, behind an indirection the host test can replace.   */
@@ -121,6 +123,19 @@ static uint32_t r8168_rx_errors;
 static uint32_t r8168_rx_dropped;
 static uint32_t r8168_tx_packets;
 static uint32_t r8168_tx_stalls;
+
+/* The card's messages: the vector they arrive on, or -1 while the driver is
+ * polled; how many arrived; how many found nothing to do; and how many times
+ * the handler's bound was reached with the status still set, after which the
+ * sources are masked and the timer's pump alone drives the card. */
+static int      r8168_msi_vector = -1;
+static void     r8168_interrupts_enable(void);
+static uint32_t r8168_msi_entries;
+static uint32_t r8168_msi_idle;
+static uint32_t r8168_msi_deferred; /* entries that left work to the tick */
+static uint32_t r8168_msi_storms;
+static uint32_t r8168_msi_stuck;    /* entries in a row: status left set, no work */
+static uint32_t r8168_tick_work;    /* frames the tick handled with messages on */
 
 /*
  * The rings and their buffers, in .bss, which this kernel places below the
@@ -750,8 +765,9 @@ static int r8168_hw_start(void)
     io->w32(R8168_RXCONFIG, io->r32(R8168_RXCONFIG) & ~(uint32_t)R8168_RXCFG_ACCEPT_ERR_MASK);
     r8168_set_rx_mode();
 
-    /* The interrupt mask stays zero: this driver is polled, and an unmasked
-     * line on a kernel with no handler for it would be an interrupt storm. */
+    /* The mask stays zero through the start: the sources are unmasked by
+     * `r8168_interrupts_enable` once the card is up and a handler serves
+     * its messages, and a card that sends none stays polled. */
     io->w16(R8168_INTRMASK, 0x0000);
     return 1;
 }
@@ -1051,6 +1067,7 @@ static int rtl8168_init(struct netdev *nd, int nth)
     }
 
     r8168_up = 1;
+    r8168_interrupts_enable();
     {
         int b;
 
@@ -1073,7 +1090,7 @@ static int rtl8168_init(struct netdev *nd, int nth)
  * gates it: only after a pass that actually reclaimed something, and only
  * while descriptors are still outstanding.
  */
-static void r8168_tx_reclaim(void)
+static uint32_t r8168_tx_reclaim(void)
 {
     uint32_t reclaimed = 0;
 
@@ -1098,6 +1115,7 @@ static void r8168_tx_reclaim(void)
     if (r8168_tx_tail != r8168_tx_head) {
         io->w8(R8168_TXPOLL, R8168_TXPOLL_NPQ);
     }
+    return reclaimed;
 }
 
 /**
@@ -1187,25 +1205,26 @@ static int rtl8168_tx(void *dev, const uint8_t *data, uint16_t len)
 }
 
 /**
- * Take received frames off the ring and hand them up.
+ * Reclaim sent frames and take received ones off the ring and hand them up.
  *
- * Bounded per call, because this runs on the timer tick and the rest of the
- * machine is waiting. Only whole single-descriptor frames are delivered: a
- * frame split across descriptors would need reassembly this driver does not
- * do, and at a 1500-byte transfer unit against a 16 KB buffer the chip has no
- * reason to split one. The reported length includes the frame check sequence,
- * which is stripped before delivery.
+ * This is the one service routine: the card's message handler runs it, and
+ * so does the timer tick, which is the pump while the card sends no messages
+ * and the fallback while it does. Bounded per call, because both callers run
+ * with the rest of the machine waiting. Only whole single-descriptor frames
+ * are delivered: a frame split across descriptors would need reassembly this
+ * driver does not do, and at a 1500-byte transfer unit against a 16 KB
+ * buffer the chip has no reason to split one. The reported length includes
+ * the frame check sequence, which is stripped before delivery.
  */
-static void rtl8168_poll(void *dev)
+static uint32_t r8168_service(void)
 {
     uint32_t budget;
-
-    (void)dev; /* this driver has one card */
+    uint32_t work;
 
     if (!r8168_up) {
-        return;
+        return 0;
     }
-    r8168_tx_reclaim();
+    work = r8168_tx_reclaim();
     for (budget = 0; budget < R8168_RING_SIZE; budget++) {
         uint32_t idx = r8168_rx_cur % R8168_RING_SIZE;
         uint32_t opts1 = r8168_rx_ring[idx].opts1;
@@ -1232,12 +1251,131 @@ static void rtl8168_poll(void *dev)
             r8168_rx_packets++;
             ethernet_rx(rtl8168_iface, r8168_rx_buf[idx], (uint16_t)(len - 4));
         }
+        work++;
 
         r8168_rx_ring[idx].opts2 = 0;
         __asm__ __volatile__("" : : : "memory");
         r8168_rx_ring[idx].opts1 = R8168_DESC_OWN | eor | R8168_RX_BUF_SIZE;
         r8168_rx_cur++;
     }
+    return work;
+}
+
+/**
+ * The timer's pump: the service routine, every tick. With the card's
+ * messages on this is the fallback, and what it finds is counted, since a
+ * tick that does the work is the sign of a message that did not come or of
+ * a handler that left work behind.
+ */
+static void rtl8168_poll(void *dev)
+{
+    uint32_t work;
+
+    (void)dev; /* this driver has one card */
+    work = r8168_service();
+    if (r8168_msi_vector >= 0) {
+        r8168_tick_work += work;
+    }
+}
+
+/* How many times the handler services the card in one entry. Each round
+ * may hand a ring's worth of frames up through the stack, so the bound is
+ * what keeps the handler short; what is left goes to the tick or to the
+ * next message. */
+#define R8168_ISR_ROUNDS 2
+/* How many entries in a row may find their status still set after the
+ * acknowledgement, with nothing in the rings, before that is taken for a
+ * storm. */
+#define R8168_STORM_ENTRIES 16
+
+/**
+ * The card's message: acknowledge what it reports, then service the rings,
+ * until the status reads clear or the bound is reached.
+ *
+ * The status is acknowledged before the rings are drained, as the xHCI
+ * driver orders it: a frame that arrives while the rings are being drained
+ * raises the bit again and the next round takes it, where a frame arriving
+ * after an acknowledgement that followed the drain would wait for the tick.
+ * A source the acknowledgement does not clear is read back still set at
+ * once, with nothing in the rings through the whole entry;
+ * R8168_STORM_ENTRIES entries in a row of that kind are a storm, and the
+ * sources are masked, counted, and the timer's pump drives the card from
+ * then on. A bound reached with work still announced is not: the status is
+ * acknowledged once more so that the next event raises a message, the entry
+ * is counted as deferred, and the frames wait in the rings for the tick or
+ * that message.
+ */
+static void rtl8168_isr(isr_params_t *params)
+{
+    uint32_t round;
+    uint32_t work = 0;
+    uint16_t status;
+    int stuck = 0;
+
+    (void)params;
+    r8168_msi_entries++;
+    for (round = 0; round < R8168_ISR_ROUNDS; round++) {
+        status = io->r16(R8168_INTRSTATUS);
+        if (status == 0) {
+            if (round == 0) {
+                r8168_msi_idle++;
+            }
+            break;
+        }
+        io->w16(R8168_INTRSTATUS, status);
+        stuck = (io->r16(R8168_INTRSTATUS) & status) == status;
+        work += r8168_service();
+    }
+    if (stuck && work == 0) {
+        if (++r8168_msi_stuck >= R8168_STORM_ENTRIES) {
+            io->w16(R8168_INTRMASK, 0);
+            r8168_msi_storms++;
+            klog(KLOG_WARN, "rtl8168",
+                 "interrupts: a source the acknowledgement does not clear; polled from now on");
+        }
+        return;
+    }
+    r8168_msi_stuck = 0;
+    status = io->r16(R8168_INTRSTATUS);
+    if (status != 0) {
+        io->w16(R8168_INTRSTATUS, status);
+        r8168_msi_deferred++;
+    }
+}
+
+/**
+ * Take the card's messages, when the machine can route them.
+ *
+ * The handler is registered before the device is enabled, so no message can
+ * arrive on a vector nothing serves, and the sources are unmasked last, once
+ * the device is known to send to this vector. A machine with no usable
+ * APIC, no vector to give, or a card that refuses the capability stays
+ * polled, which is what the driver was before this and what the diagnostic
+ * line reports.
+ */
+static void r8168_interrupts_enable(void)
+{
+    int vector;
+
+    r8168_msi_vector = -1;
+    if (!lapic_ready()) {
+        klog(KLOG_INFO, "rtl8168", "interrupts: polled, no usable APIC");
+        return;
+    }
+    vector = isr_alloc_vector();
+    if (vector < 0) {
+        klog(KLOG_INFO, "rtl8168", "interrupts: polled, no vector free");
+        return;
+    }
+    register_isr_handler((uint8_t)vector, rtl8168_isr, "rtl8168");
+    if (pci_msi_enable(&r8168_pci, (uint8_t)vector) != 0) {
+        klog(KLOG_INFO, "rtl8168", "interrupts: polled, the card sends no messages");
+        return;
+    }
+    r8168_msi_vector = vector;
+    io->w16(R8168_INTRSTATUS, 0xffff);
+    io->w16(R8168_INTRMASK, R8168_INTR_ENABLED);
+    klog(KLOG_INFO, "rtl8168", "interrupts: messages on vector %d", vector);
 }
 
 static const char *rtl8168_error(void)
@@ -1293,6 +1431,16 @@ static void rtl8168_print_info(void *dev)
     klog(KLOG_INFO, "rtl8168", "rx %d (%d error, %d dropped), tx %d (%d stalled)",
                   r8168_rx_packets, r8168_rx_errors, r8168_rx_dropped, r8168_tx_packets,
                   r8168_tx_stalls);
+    if (r8168_msi_vector >= 0 && r8168_msi_storms == 0) {
+        klog(KLOG_INFO, "rtl8168", "messages on vector %d: %d, %d idle, %d deferred, %d by the tick",
+             r8168_msi_vector, r8168_msi_entries, r8168_msi_idle, r8168_msi_deferred,
+             r8168_tick_work);
+    } else if (r8168_msi_vector >= 0) {
+        klog(KLOG_INFO, "rtl8168", "messages on vector %d masked after a storm, %d by the tick",
+             r8168_msi_vector, r8168_tick_work);
+    } else {
+        klog(KLOG_INFO, "rtl8168", "polled by the tick");
+    }
 }
 
 /**
@@ -1338,6 +1486,10 @@ static void rtl8168_stop(void *dev)
             io->udelay(R8168_DRAIN_USEC);
         }
         r8168_irq_mask_and_ack();
+        if (r8168_msi_vector >= 0) {
+            pci_msi_disable(&r8168_pci);
+            r8168_msi_vector = -1;
+        }
         if ((r8168_xid & R8168_XID_FAMILY_MASK) == R8168_XID_8168GU) {
             io->w8(R8168_CHIPCMD, 0);
             io->w32(R8168_RXCONFIG,

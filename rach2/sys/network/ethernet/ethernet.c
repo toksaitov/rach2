@@ -103,20 +103,20 @@ void ethernet_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
  * driver `netdev_probe` bound. The payload must fit the 1500-byte MTU; an
  * oversize payload is dropped, not truncated.
  */
-void ethernet_tx(struct netdev *out, const uint8_t *dst_mac, uint16_t ethertype,
+int ethernet_tx(struct netdev *out, const uint8_t *dst_mac, uint16_t ethertype,
                  const uint8_t *payload, uint16_t plen)
 {
     uint16_t total;
 
     if (!out) {
-        return; /* no interface reaches that address */
+        return NETDEV_TX_DROPPED; /* no interface reaches that address */
     }
 
     if (plen > 1500) {
         klog(KLOG_WARN, "eth", "tx: payload of %d bytes is too large, dropped",
                       (int)plen);
         out->tx_dropped++;
-        return;
+        return NETDEV_TX_DROPPED;
     }
     /* An interface an administrator took down has no IP and answers no
        ARP. Netconsole is not gated, and that is deliberate: it is how a machine
@@ -124,7 +124,7 @@ void ethernet_tx(struct netdev *out, const uint8_t *dst_mac, uint16_t ethertype,
        misconfigured is exactly when its log is worth having. */
     if (!out->up && (ethertype == ETH_TYPE_IP || ethertype == ETH_TYPE_ARP)) {
         out->tx_dropped++;
-        return;
+        return NETDEV_TX_DROPPED;
     }
 
     k_memcpy(eth_tx_frame,     dst_mac, 6);
@@ -139,10 +139,11 @@ void ethernet_tx(struct netdev *out, const uint8_t *dst_mac, uint16_t ethertype,
      * error this verdict exists to correct. */
     if (netdev_tx(out, eth_tx_frame, total) != NETDEV_TX_OK) {
         out->tx_dropped++;
-        return;
+        return NETDEV_TX_DROPPED;
     }
     out->tx_packets++;
     out->tx_bytes += total;
+    return NETDEV_TX_OK;
 }
 
 void ethernet_note_rx_error(struct netdev *nd)

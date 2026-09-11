@@ -21,11 +21,22 @@
 #define TCP_HDR_SIZE     20
 #define TCP_MSS          1460
 #define TCP_INIT_CWND    (4 * TCP_MSS)  /* initial congestion window (RFC 6928) */
-/* Policy: a connection's send and receive rings are four kilobytes each,
- * in the control block, and the window offered is the receive ring; a
- * power of two, since the rings' indexes wrap by a mask. */
-#define TCP_WINDOW_SIZE  4096
-#define TCP_RING_SIZE    4096
+/* Policy: a connection's send and receive rings are 64 KiB each, in the
+ * control block, a power of two since the rings' indexes wrap by a mask,
+ * and the largest an unscaled window can name, so that a link's round trip
+ * and not the ring bounds what is in flight. The window offered is the
+ * receive ring's free space clamped to the field's 65535, through
+ * `tcp_rcv_window`, so that an empty ring never advertises zero. */
+#define TCP_WINDOW_SIZE  65535
+#define TCP_RING_SIZE    65536
+/* How long queued bytes may wait from the first transmit the driver
+ * refused to the last, with no segment sent between, before the connection
+ * is given up, in ticks: 30 s, within the retransmission give-up. */
+#define TCP_REFUSE_GIVEUP_TICKS 3000
+/* How many connections with queued bytes the tick pumps, in rotation, so
+ * that a full card does not hold the tick for every blocked connection's
+ * wait and no connection waits behind the others for ever. */
+#define TCP_TICK_PUMPS 4
 
 /* Reliability constants (100 Hz clock). */
 #define TCP_RTO_INIT    100     /* initial RTO  = 1 s (RFC 6298) */
@@ -110,6 +121,8 @@ struct tcb {
     uint32_t send_ack;     /* send ring position of acknowledged data */
     uint32_t timewait_until;
     uint32_t zwp_timer;    /* zero-window probe countdown; 0 = off   */
+    uint32_t tx_refused;   /* segments the driver would not take, kept */
+    uint32_t refused_since; /* ticks+1 at the first refusal still unresolved; 0 = none */
 
     /* Outstanding control segment to retransmit (SYN/SYN-ACK/FIN). */
     uint8_t  retx_flags;   /* 0 = none, else the control flags       */

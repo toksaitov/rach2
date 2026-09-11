@@ -27,6 +27,7 @@ extern int printf(const char *fmt, ...);
 extern void *malloc(unsigned long n);
 
 /* The kernel headers define the fixed-width types themselves. */
+#include "../../rach2/sys/lib/kerrno.h"
 #include "../../rach2/sys/network/tcp/tcp.h"
 #include "../../rach2/sys/network/driver/netdev.h"
 
@@ -47,12 +48,44 @@ static unsigned n_segs;
 static unsigned cb_connected, cb_fin, cb_writable, cb_deliver, cb_accept;
 static unsigned delivered_bytes;
 
+/* How many transmits go through before the driver refuses, how many it
+ * refuses then, and with which error: a full ring's -ENOBUFS, or a
+ * permanent one. */
+static int ip_tx_accept;
+static int ip_tx_refuse;
+static int ip_tx_refuse_err = -ENOBUFS;
+
+/* The stream as sent, put back together by sequence number from every
+ * segment's whole payload, so a byte copied from the wrong place in the
+ * ring shows wherever it lies in a segment. */
+#define STREAM_MAX 80000
+static uint8_t stream_got[STREAM_MAX];
+static uint32_t stream_base;
+static int stream_on;
+uint32_t read32be(const uint8_t *p);
+
 int ip_tx(uint32_t dst, uint8_t proto, const uint8_t *payload, uint16_t len, uint8_t ttl)
 {
     unsigned i;
 
     (void)ttl;
 
+    if (ip_tx_accept > 0) {
+        ip_tx_accept--;
+    } else if (ip_tx_refuse > 0) {
+        ip_tx_refuse--;
+        return ip_tx_refuse_err;
+    }
+    if (stream_on && proto == 6 && len > TCP_HDR_SIZE) {
+        uint32_t off = read32be(payload + 4) - stream_base;
+        uint32_t n = (uint32_t)len - TCP_HDR_SIZE;
+
+        if (off + n <= STREAM_MAX) {
+            for (i = 0; i < n; i++) {
+                stream_got[off + i] = payload[TCP_HDR_SIZE + i];
+            }
+        }
+    }
     if (n_segs < MAX_SEGS) {
         segs[n_segs].dst = dst;
         segs[n_segs].proto = proto;
@@ -330,6 +363,8 @@ int main(void)
         rx((uint16_t)80, lport, peer_seq, iss + 1, (uint8_t)(F_ACK | F_PSH), 4096, "abcd", 4);
         CHECK("data in order is delivered", cb_deliver == 1 && delivered_bytes == 4);
         CHECK("and acknowledged", n_segs >= 1 && (last_flags() & F_ACK) != 0);
+        CHECK("offering the ring clamped to the field, not zero",
+              n_segs >= 1 && read16be(segs[n_segs - 1].data + 14) == 65535);
 
         /* The same segment again is not delivered twice, and is acknowledged
            again so a peer that lost the first acknowledgement stops asking. */
@@ -380,6 +415,215 @@ int main(void)
            0);
         CHECK("a FIN is reported to the socket", cb_fin == 1);
         CHECK("and acknowledged", n_segs >= 1 && (last_flags() & F_ACK) != 0);
+    }
+
+    /* A ring's worth of data: the ring takes it in one call, the bursts are
+       bounded by the windows, every byte leaves in segments of at most one
+       MSS, and a transmit the driver refuses stays in the ring for the next
+       pump rather than being counted as sent. */
+    {
+        struct socket sock;
+        struct tcb *conn;
+        uint32_t iss, peer_seq = 7000;
+        uint16_t lport;
+        static uint8_t big[60000];
+        unsigned rounds = 0, sent_bytes = 0, j, oversize = 0;
+
+        reset_all();
+        k_memset(&sock, 0, sizeof(sock));
+        for (j = 0; j < sizeof(big); j++) {
+            big[j] = (uint8_t)j;
+        }
+        CHECK("a connection for a large transfer can be opened", tcp_connect(&sock, PEER, 82) == 0);
+        conn = sock.tcb;
+        iss = read32be(segs[0].data + 4);
+        lport = read16be(segs[0].data + 0);
+        rx((uint16_t)82, lport, peer_seq, iss + 1, (uint8_t)(F_SYN | F_ACK), 65535, (const char *)0,
+           0);
+        peer_seq++;
+        n_segs = 0;
+        stream_base = iss + 1;
+        stream_on = 1;
+        CHECK("the ring takes 60000 bytes in one call",
+              tcp_send(&sock, big, (int)sizeof(big)) == (int)sizeof(big));
+        CHECK("and the first burst is the initial congestion window",
+              n_segs == TCP_INIT_CWND / TCP_MSS);
+        while (conn->send_head != conn->send_tail && rounds < 40) {
+            for (j = 0; j < n_segs && j < MAX_SEGS; j++) {
+                sent_bytes += segs[j].len - TCP_HDR_SIZE;
+                if (segs[j].len - TCP_HDR_SIZE > TCP_MSS) {
+                    oversize++;
+                }
+            }
+            n_segs = 0;
+            rx((uint16_t)82, lport, peer_seq, conn->snd_nxt, F_ACK, 65535, (const char *)0, 0);
+            rounds++;
+        }
+        for (j = 0; j < n_segs && j < MAX_SEGS; j++) {
+            sent_bytes += segs[j].len - TCP_HDR_SIZE;
+        }
+        CHECK("every byte left in a bounded number of rounds",
+              sent_bytes == sizeof(big) && conn->send_head == conn->send_tail && rounds < 40);
+        CHECK("and no segment was larger than an MSS", oversize == 0);
+        rx((uint16_t)82, lport, peer_seq, conn->snd_nxt, F_ACK, 65535, (const char *)0, 0);
+
+        /* A second transfer takes the ring's indexes past 65536, and every
+           segment recorded carries the byte the stream has at its sequence
+           number, so a wrap that copied from the wrong place would show. */
+        n_segs = 0;
+        {
+            unsigned wrong = 0, seen = 0;
+
+            CHECK("the ring takes 20000 more bytes", tcp_send(&sock, big, 20000) == 20000);
+            rounds = 0;
+            for (;;) {
+                for (j = 0; j < n_segs && j < MAX_SEGS; j++) {
+                    uint32_t off = read32be(segs[j].data + 4) - iss - 1;
+                    uint8_t want = (uint8_t)(off < sizeof(big) ? off : off - sizeof(big));
+
+                    seen++;
+                    if (segs[j].len > TCP_HDR_SIZE && segs[j].data[TCP_HDR_SIZE] != want) {
+                        wrong++;
+                    }
+                }
+                if (conn->send_head == conn->send_tail || rounds >= 40) {
+                    break;
+                }
+                n_segs = 0;
+                rx((uint16_t)82, lport, peer_seq, conn->snd_nxt, F_ACK, 65535, (const char *)0, 0);
+                rounds++;
+            }
+            CHECK("the stream's bytes cross the ring's end in order",
+                  seen > 0 && wrong == 0 && conn->send_head == conn->send_tail);
+            CHECK("and the ring's indexes are past its size", conn->send_tail > TCP_RING_SIZE);
+            for (j = 0; j < STREAM_MAX; j++) {
+                uint8_t want = big[j < sizeof(big) ? j : j - sizeof(big)];
+
+                if (stream_got[j] != want) {
+                    wrong++;
+                }
+            }
+            CHECK(
+                "every byte of the 80000 arrived where the stream has it, the ring's end included",
+                wrong == 0);
+            stream_on = 0;
+            rx((uint16_t)82, lport, peer_seq, conn->snd_nxt, F_ACK, 65535, (const char *)0, 0);
+        }
+
+        n_segs = 0;
+        ip_tx_refuse = 1;
+        CHECK("data is taken while the driver refuses", tcp_send(&sock, big, 3000) == 3000);
+        CHECK("and nothing is counted as sent", n_segs == 0 && conn->send_head == conn->send_ack);
+        CHECK("and the refusal is counted", conn->tx_refused == 1);
+        kernel_ticks++;
+        tcp_tick();
+        CHECK("the tick sends what the driver refused",
+              n_segs == 3 && conn->send_head == conn->send_ack + 3000);
+        rx((uint16_t)82, lport, peer_seq, conn->snd_nxt, F_ACK, 65535, (const char *)0, 0);
+
+        /* A refusal with a segment already out: the first goes, the rest
+           waits, and the acknowledgement of the first pumps the rest. */
+        n_segs = 0;
+        ip_tx_accept = 1;
+        ip_tx_refuse = 1;
+        CHECK("data is taken when the driver refuses the second segment",
+              tcp_send(&sock, big, 4000) == 4000);
+        CHECK("the first segment went and the rest waits",
+              n_segs == 1 && conn->send_head == conn->send_ack + TCP_MSS);
+        n_segs = 0;
+        rx((uint16_t)82, lport, peer_seq, conn->snd_nxt, F_ACK, 65535, (const char *)0, 0);
+        CHECK("the acknowledgement pumps the rest",
+              n_segs == 2 && conn->send_head == conn->send_tail);
+        rx((uint16_t)82, lport, peer_seq, conn->snd_nxt, F_ACK, 65535, (const char *)0, 0);
+
+        /* A permanent error is not a full ring: the segment counts as sent
+           and the retransmission timer, not the tick's pump, owns it. */
+        n_segs = 0;
+        ip_tx_refuse = 1;
+        ip_tx_refuse_err = -ENETUNREACH;
+        CHECK("data is taken under a permanent error", tcp_send(&sock, big, 100) == 100);
+        CHECK("and counted as sent, for the retransmission timer",
+              conn->send_head == conn->send_tail && conn->rto_timer != 0);
+        ip_tx_refuse_err = -ENOBUFS;
+        rx((uint16_t)82, lport, peer_seq, conn->snd_nxt, F_ACK, 65535, (const char *)0, 0);
+
+        /* A driver that refuses for good: the bytes wait, and the connection
+           is given up after the bound rather than kept for ever. */
+        n_segs = 0;
+        cb_fin = 0;
+        ip_tx_refuse = 1000000;
+        CHECK("data is taken while the driver refuses for good", tcp_send(&sock, big, 100) == 100);
+        for (j = 0; j < TCP_REFUSE_GIVEUP_TICKS + 2 && conn->state == TCP_ESTABLISHED; j++) {
+            kernel_ticks++;
+            tcp_tick();
+        }
+        CHECK("the connection is given up after the bound",
+              conn->state == TCP_CLOSED && cb_fin == 1 && j > TCP_REFUSE_GIVEUP_TICKS);
+        ip_tx_refuse = 0;
+    }
+
+    /* A zero window that closes over a refused segment is flow control, not
+       a continuing refusal: the connection is kept through the bound and the
+       segment goes when the window reopens. And a connection last in the
+       list behind four that a zero window holds is still pumped, since the
+       tick's pumps rotate. The list is newest first, so the first opened is
+       the last pumped. */
+    {
+        struct socket socks[6];
+        struct tcb *conns[6];
+        uint16_t lports[6];
+        uint32_t iss6[6], peer_seq = 9000;
+        unsigned c, j;
+        static uint8_t bytes[2000];
+
+        reset_all();
+        for (c = 0; c < 6; c++) {
+            k_memset(&socks[c], 0, sizeof(socks[c]));
+            n_segs = 0;
+            CHECK("a connection of six can be opened",
+                  tcp_connect(&socks[c], PEER, (uint16_t)(90 + c)) == 0);
+            conns[c] = socks[c].tcb;
+            iss6[c] = read32be(segs[0].data + 4);
+            lports[c] = read16be(segs[0].data + 0);
+            rx((uint16_t)(90 + c), lports[c], peer_seq, iss6[c] + 1, (uint8_t)(F_SYN | F_ACK),
+               65535, (const char *)0, 0);
+        }
+        peer_seq++;
+        n_segs = 0;
+        ip_tx_refuse = 1;
+        CHECK("the newest connection's data is refused once",
+              tcp_send(&socks[5], bytes, 100) == 100 && n_segs == 0);
+        rx((uint16_t)95, lports[5], peer_seq, conns[5]->snd_nxt, F_ACK, 0, (const char *)0, 0);
+        CHECK("then the peer closes its window over the refused segment", conns[5]->snd_wnd == 0);
+        for (j = 0; j < TCP_REFUSE_GIVEUP_TICKS + 10; j++) {
+            kernel_ticks++;
+            tcp_tick();
+        }
+        CHECK("a zero window is not a refusal: the connection is kept",
+              conns[5]->state == TCP_ESTABLISHED);
+        n_segs = 0;
+        rx((uint16_t)95, lports[5], peer_seq, conns[5]->snd_nxt, F_ACK, 65535, (const char *)0, 0);
+        CHECK("and the segment goes when the window reopens",
+              n_segs >= 1 && conns[5]->send_head == conns[5]->send_tail);
+        rx((uint16_t)95, lports[5], peer_seq, conns[5]->snd_nxt, F_ACK, 65535, (const char *)0, 0);
+        for (c = 1; c < 5; c++) {
+            rx((uint16_t)(90 + c), lports[c], peer_seq, conns[c]->snd_nxt, F_ACK, 0,
+               (const char *)0, 0);
+            CHECK("a held connection takes data", tcp_send(&socks[c], bytes, 100) == 100);
+        }
+        rx((uint16_t)95, lports[5], peer_seq, conns[5]->snd_nxt, F_ACK, 0, (const char *)0, 0);
+        CHECK("and the newest takes data behind a closed window too",
+              conns[5]->snd_wnd == 0 && tcp_send(&socks[5], bytes, 100) == 100);
+        n_segs = 0;
+        ip_tx_refuse = 1;
+        CHECK("the oldest connection's data is refused once",
+              tcp_send(&socks[0], bytes, 100) == 100 && n_segs == 0);
+        kernel_ticks++;
+        tcp_tick();
+        kernel_ticks++;
+        tcp_tick();
+        CHECK("and the rotation pumps it past the five held ones",
+              n_segs == 1 && conns[0]->send_head == conns[0]->send_tail);
     }
 
     /* A peer that stops answering: the stack retransmits with a doubling

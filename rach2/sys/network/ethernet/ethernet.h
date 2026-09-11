@@ -17,9 +17,11 @@ struct netdev;
 void ethernet_rx(struct netdev *nd, const uint8_t *data, uint16_t len);
 
 /** Build an Ethernet frame and hand it to the driver. `ethertype` is in host
- * byte order (e.g. ETH_TYPE_IP) and is written big-endian on the wire. */
-void ethernet_tx(struct netdev *out, const uint8_t *dst_mac, uint16_t ethertype,
-                 const uint8_t *payload, uint16_t plen);
+ * byte order (e.g. ETH_TYPE_IP) and is written big-endian on the wire.
+ * Returns the driver's answer, `NETDEV_TX_OK` or `NETDEV_TX_DROPPED`, so a
+ * sender that keeps what the card would not take can. */
+int ethernet_tx(struct netdev *out, const uint8_t *dst_mac, uint16_t ethertype,
+                const uint8_t *payload, uint16_t plen);
 
 /* What the interface has carried since boot, and what it refused. Every frame
  * that arrives or leaves passes ethernet_rx or ethernet_tx, so this is where

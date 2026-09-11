@@ -41,26 +41,37 @@ static unsigned rx_calls;
  * inside. */
 struct netdev;
 
+static void (*rx_hook)(void); /* what the test does while a frame is handed up */
+static unsigned rx_first_at;  /* the model log's length at the first delivery */
+static unsigned model_log_len;
+
 void ethernet_rx(struct netdev *nd, const unsigned char *data, unsigned short len)
 {
     (void)nd;
     unsigned i;
 
+    if (rx_calls == 0) {
+        rx_first_at = model_log_len;
+    }
     rx_calls++;
     rx_last_len = len;
+    if (rx_hook) {
+        rx_hook();
+    }
     for (i = 0; i < len && i < sizeof(rx_last); i++) {
         rx_last[i] = data[i];
     }
 }
 
-void ethernet_tx(struct netdev *out, const unsigned char *dst, unsigned short type,
-                 const unsigned char *payload, unsigned short plen)
+int ethernet_tx(struct netdev *out, const unsigned char *dst, unsigned short type,
+                const unsigned char *payload, unsigned short plen)
 {
     (void)out;
     (void)dst;
     (void)type;
     (void)payload;
     (void)plen;
+    return 0;
 }
 
 /* The refusal counters the drivers report to. The interface owns them; here
@@ -136,6 +147,7 @@ void outb(unsigned short port, unsigned char v)
 static int pci_present = 1;
 
 #include "pci.h"
+#include "isr.h"
 #include "network/driver/rtl8168.h"
 
 /* The driver reports what it found through the kernel log, which this test
@@ -181,6 +193,61 @@ int pci_bar_is_64bit(unsigned int bar)
 unsigned int pci_bar_address(unsigned int bar)
 {
     return pci_bar_is_memory(bar) ? (bar & ~0xfu) : (bar & ~0x3u);
+}
+
+/* The card's messages: what the machine offers (an APIC, a vector), what the
+ * driver registers, and what the device is told; a status the test holds
+ * set is a storm. */
+static int model_lapic = 1;
+static int model_vector = 48;
+static int model_msi_refuse;
+static int model_msi_on;
+static int model_msi_vector = -1;
+static isr_handler_t model_handler;
+static int model_handler_vector = -1;
+static int model_msi_enabled_with_handler;
+static unsigned model_msi_disable_at = 0xffffffffu;
+static int model_sticky_status;
+static unsigned model_msi_enable_at = 0xffffffffu;
+static int model_arrive_during_drain; /* frames that arrive while the ring is drained */
+static unsigned model_arrive_slot = 1;
+static unsigned model_log_len;
+
+int lapic_ready(void)
+{
+    return model_lapic;
+}
+
+int isr_alloc_vector(void)
+{
+    return model_vector;
+}
+
+void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *name)
+{
+    (void)name;
+    model_handler = handler;
+    model_handler_vector = vector;
+}
+
+int pci_msi_enable(const pci_device_t *dev, uint8_t vector)
+{
+    (void)dev;
+    model_msi_enable_at = model_log_len;
+    if (model_msi_refuse) {
+        return -1;
+    }
+    model_msi_on = 1;
+    model_msi_vector = vector;
+    model_msi_enabled_with_handler = model_handler != 0 && model_handler_vector == (int)vector;
+    return 0;
+}
+
+void pci_msi_disable(const pci_device_t *dev)
+{
+    (void)dev;
+    model_msi_disable_at = model_log_len;
+    model_msi_on = 0;
 }
 
 static int pci_master_enabled;
@@ -424,6 +491,17 @@ static void m_w8(unsigned off, unsigned char v)
 static void m_w16(unsigned off, unsigned short v)
 {
     model_record(16, off, v);
+    if (off == R8168_INTRSTATUS) {
+        /* A status bit clears when it is written, unless the test holds the
+           status set for a storm. */
+        if (!model_sticky_status) {
+            unsigned cur = m_r16(off) & ~(unsigned)v;
+
+            model_reg[off] = (unsigned char)cur;
+            model_reg[off + 1] = (unsigned char)(cur >> 8);
+        }
+        return;
+    }
     model_reg[off] = (unsigned char)v;
     model_reg[off + 1] = (unsigned char)(v >> 8);
 }
@@ -516,6 +594,20 @@ static void m_udelay(unsigned usec)
 
 #include "network/driver/rtl8168.c"
 
+/* A frame arrives while another is handed up: the chip fills the next
+ * descriptor and raises the receive source again. */
+static void arrive_during_drain(void)
+{
+    if (model_arrive_during_drain > 0) {
+        model_arrive_during_drain--;
+        r8168_rx_ring[model_arrive_slot % R8168_RING_SIZE].opts1 =
+            R8168_DESC_FS | R8168_DESC_LS | (64 + 4);
+        model_arrive_slot++;
+        model_reg[R8168_INTRSTATUS] =
+            (unsigned char)(model_reg[R8168_INTRSTATUS] | R8168_INTR_RXOK);
+    }
+}
+
 static int fails;
 
 /* Declared, not included: the kernel's kint.h and the host's headers
@@ -575,6 +667,21 @@ static void model_reset(void)
         model_phy[i] = 0;
     }
     model_log_len = 0;
+    model_lapic = 1;
+    model_vector = 48;
+    model_msi_refuse = 0;
+    model_msi_on = 0;
+    model_msi_vector = -1;
+    model_handler = 0;
+    model_handler_vector = -1;
+    model_msi_enabled_with_handler = 0;
+    model_msi_disable_at = 0xffffffffu;
+    model_sticky_status = 0;
+    model_msi_enable_at = 0xffffffffu;
+    model_arrive_during_drain = 0;
+    model_arrive_slot = 1;
+    rx_hook = 0;
+    rx_first_at = 0;
     model_stuck_eri = 0;
     model_stuck_ocp = 0;
     model_stuck_linklist = 0;
@@ -1102,5 +1209,130 @@ int main(void)
     (void)c;
     (void)d;
     (void)e;
+
+    /* ---- the card's messages ---- */
+    model_reset();
+    rx_calls = 0;
+    CHECK(rtl8168_init(&model_iface, 0) == NETDEV_UP,
+          "the bring-up completes with messages offered");
+    CHECK(model_msi_vector == 48 && r8168_msi_vector == 48,
+          "the card is told the vector the machine gave");
+    CHECK(model_msi_enabled_with_handler,
+          "the handler was registered before the device was enabled");
+    CHECK(m_r16(R8168_INTRMASK) == R8168_INTR_ENABLED,
+          "the sources are unmasked once the messages are on");
+    CHECK(find_write_value(0, 16, R8168_INTRMASK, R8168_INTR_ENABLED) >= (int)model_msi_enable_at,
+          "and not before the device was enabled");
+    {
+        unsigned len = 64;
+        int ack_at;
+
+        for (i = 0; i < len; i++) {
+            r8168_rx_buf[0][i] = (unsigned char)(i + 3);
+        }
+        r8168_rx_ring[0].opts1 = R8168_DESC_FS | R8168_DESC_LS | (len + 4);
+        model_reg[R8168_INTRSTATUS] = R8168_INTR_RXOK;
+        {
+            unsigned before = model_log_len;
+
+            model_handler(0);
+            ack_at = find_write(before, 16, R8168_INTRSTATUS);
+        }
+        CHECK(rx_calls == 1, "a message delivers the frame on the ring");
+        CHECK(m_r16(R8168_INTRSTATUS) == 0, "and the status is acknowledged");
+        CHECK(ack_at >= 0 && (unsigned)ack_at < rx_first_at,
+              "the status was acknowledged before the ring was drained");
+        CHECK(r8168_msi_entries == 1 && r8168_msi_idle == 0, "the message was counted as work");
+        model_handler(0);
+        CHECK(r8168_msi_entries == 2 && r8168_msi_idle == 1,
+              "a message with nothing to do is counted as idle");
+
+        /* A frame that arrives while the first is handed up raises the
+           source again, and the second round takes it. */
+        rx_calls = 0;
+        rx_hook = arrive_during_drain;
+        r8168_rx_ring[1].opts1 = R8168_DESC_FS | R8168_DESC_LS | (len + 4);
+        model_arrive_slot = 2;
+        model_arrive_during_drain = 1;
+        model_reg[R8168_INTRSTATUS] = R8168_INTR_RXOK;
+        model_handler(0);
+        CHECK(rx_calls == 2 && m_r16(R8168_INTRSTATUS) == 0 && r8168_msi_deferred == 0,
+              "a frame arriving during the drain is taken by the next round");
+
+        /* Frames keep arriving as fast as the rounds drain, past the
+           budget of both: the bound is reached with work still announced,
+           which is not a storm; the status is acknowledged once more and the
+           rest is left to the tick, counted. */
+        rx_calls = 0;
+        r8168_rx_ring[3].opts1 = R8168_DESC_FS | R8168_DESC_LS | (len + 4);
+        model_arrive_slot = 4;
+        model_arrive_during_drain = 3 * R8168_RING_SIZE;
+        model_reg[R8168_INTRSTATUS] = R8168_INTR_RXOK;
+        model_handler(0);
+        CHECK(r8168_msi_storms == 0 && r8168_msi_deferred == 1 && rx_calls == 2 * R8168_RING_SIZE &&
+                  m_r16(R8168_INTRMASK) == R8168_INTR_ENABLED && m_r16(R8168_INTRSTATUS) == 0,
+              "a bound reached with work still announced is deferred, not a storm");
+        rx_calls = 0;
+        rtl8168_poll(model_iface.dev);
+        CHECK(rx_calls >= 1 && r8168_tick_work >= 1, "and the tick takes what was left, counted");
+        model_arrive_during_drain = 0;
+    }
+    {
+        unsigned before = model_log_len;
+
+        /* A status that will not clear while frames arrive is not stuck:
+           the entry's first round did work, whatever the second found. */
+        model_sticky_status = 1;
+        rx_calls = 0;
+        r8168_rx_ring[r8168_rx_cur % R8168_RING_SIZE].opts1 =
+            R8168_DESC_FS | R8168_DESC_LS | (64 + 4);
+        model_reg[R8168_INTRSTATUS] = R8168_INTR_RXOK;
+        model_handler(0);
+        CHECK(rx_calls == 1 && r8168_msi_stuck == 0,
+              "an entry that did work in its first round is not counted as stuck");
+
+        /* A status that will not clear, with nothing in the rings: after
+           enough entries in a row the sources are masked and a storm is
+           counted, and the tick's pump goes on. */
+        model_reg[R8168_INTRSTATUS] = R8168_INTR_RXOK;
+        for (i = 0; i < R8168_STORM_ENTRIES - 1; i++) {
+            model_handler(0);
+        }
+        CHECK(r8168_msi_storms == 0, "entries whose status will not clear are counted first");
+        model_handler(0);
+        CHECK(r8168_msi_storms == 1, "a status that will not clear is a storm");
+        CHECK(find_write_value(before, 16, R8168_INTRMASK, 0) >= 0, "which masks the sources");
+        model_sticky_status = 0;
+        model_reg[R8168_INTRSTATUS] = 0;
+        rx_calls = 0;
+        r8168_rx_ring[r8168_rx_cur % R8168_RING_SIZE].opts1 =
+            R8168_DESC_FS | R8168_DESC_LS | (64 + 4);
+        rtl8168_poll(model_iface.dev);
+        CHECK(rx_calls == 1, "and the tick still drains the ring");
+    }
+    {
+        unsigned before = model_log_len;
+        int mask_at;
+
+        rtl8168_stop(model_iface.dev);
+        mask_at = find_write_value(before, 16, R8168_INTRMASK, 0);
+        CHECK(!model_msi_on && r8168_msi_vector == -1, "the stop turns the messages off");
+        CHECK(mask_at >= 0 && (unsigned)mask_at < model_msi_disable_at,
+              "after the sources were masked");
+    }
+    model_reset();
+    model_msi_refuse = 1;
+    rx_calls = 0;
+    CHECK(rtl8168_init(&model_iface, 0) == NETDEV_UP,
+          "the bring-up completes when the card refuses messages");
+    CHECK(r8168_msi_vector == -1 && m_r16(R8168_INTRMASK) == 0, "and the sources stay masked");
+    r8168_rx_ring[0].opts1 = R8168_DESC_FS | R8168_DESC_LS | (64 + 4);
+    rtl8168_poll(model_iface.dev);
+    CHECK(rx_calls == 1, "and the tick's pump delivers");
+    model_reset();
+    model_lapic = 0;
+    CHECK(rtl8168_init(&model_iface, 0) == NETDEV_UP && r8168_msi_vector == -1,
+          "a machine with no usable APIC stays polled");
+
     return fails;
 }

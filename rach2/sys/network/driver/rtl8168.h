@@ -38,6 +38,16 @@
 #define R8168_TXPOLL          0x38
 #define R8168_INTRMASK        0x3c
 #define R8168_INTRSTATUS      0x3e
+/* The sources the driver takes as messages, the reference's set for this
+ * family: a frame received or in error, a frame sent or in error, and the
+ * link changing. The status register clears a bit when that bit is written. */
+#define R8168_INTR_RXOK       0x0001
+#define R8168_INTR_RXERR      0x0002
+#define R8168_INTR_TXOK       0x0004
+#define R8168_INTR_TXERR      0x0008
+#define R8168_INTR_LINKCHG    0x0020
+#define R8168_INTR_ENABLED    (R8168_INTR_RXOK | R8168_INTR_RXERR | R8168_INTR_TXOK | \
+                               R8168_INTR_TXERR | R8168_INTR_LINKCHG)
 #define R8168_TXCONFIG        0x40
 #define R8168_RXCONFIG        0x44
 #define R8168_CFG9346         0x50
