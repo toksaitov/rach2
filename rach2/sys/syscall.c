@@ -294,10 +294,20 @@ static void init_kstacks(void)
  * A kernel stack, returning its base, or 0 when the heap has none.
  *
  * The caller uses `base + KERNEL_STACK_SIZE` as the stack top.
+ *
+ * QEMU can retain code translations in reused frames. Clear every page
+ * so translations outside the used part of the stack cannot keep stack
+ * stores on its slow write path. Clearing also leaves the child nothing
+ * of the stack's previous owner.
  */
 static uintptr_t kstack_alloc(void)
 {
-    return (uintptr_t)kalloc_pages(KERNEL_STACK_SIZE / PAGE_SIZE, NULL);
+    void *base = kalloc_pages(KERNEL_STACK_SIZE / PAGE_SIZE, NULL);
+
+    if (base != NULL) {
+        k_memset(base, 0, KERNEL_STACK_SIZE);
+    }
+    return (uintptr_t)base;
 }
 
 /** Give back the stack whose top is `top`. */
