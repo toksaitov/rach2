@@ -41,7 +41,17 @@ check() {
 # `prepare-all` that does nothing.
 mkdir -p "$WORK/tests/system" "$WORK/tools/setup"
 cp "$REPO/tests/run" "$WORK/tests/run"
+cp "$REPO/tests/system/deadline.sh" "$WORK/tests/system/deadline.sh"
 cp "$REPO/tools/setup/hostcheck.c" "$WORK/tools/setup/hostcheck.c"
+# The calibration, as a fixture: the numbers a set's calibration would
+# measure are read from two files, so a row chooses the factor a set gets.
+cat > "$WORK/tests/system/calibrate.sh" <<'CAL'
+#!/bin/sh
+echo "calibrated at width $1" >> "$(dirname "$0")/../../calibrations.log"
+echo "compute=$(cat "$(dirname "$0")/../../calib.compute") storage=$(cat "$(dirname "$0")/../../calib.storage") width=$1"
+CAL
+echo 0.5 > "$WORK/calib.compute"
+echo 0.5 > "$WORK/calib.storage"
 cat > "$WORK/tests/registry" <<'REG'
 # name|tools|tier
 passing|-|core
@@ -57,6 +67,9 @@ needsprod1|-|full
 needsprod2|-|full
 escaper|-|full
 rewriter|-|full
+slowtoken|-|full
+notoken|-|full
+install|-|full
 REG
 # A script the runner hashes, so a suite that edits one can be tried.
 mkdir -p "$WORK/tests/system"
@@ -97,7 +110,47 @@ build/thing:
 	@mkdir -p build; echo thing > build/thing
 run-rewriter: build/thing
 	@echo "rewriter ran"; echo changed >> build/thing
+run-slowtoken:
+	@sh bin/slowtoken.sh
+run-notoken:
+	@sh bin/notoken.sh
+run-install:
+	@sh bin/slowtoken.sh
 MK
+# Two suites that judge by a deadline the set scales: one whose token comes
+# after four seconds under a bound written as two, so it passes only with a
+# factor of two or more, by the clock and not by a count of sleeps; one
+# whose token never comes, so its bound is what ends it. Each records that
+# it started, so a row can say a suite never ran. `install` is the runner's
+# lone-suite name, and runs the first script.
+mkdir -p "$WORK/bin"
+cat > "$WORK/bin/slowtoken.sh" <<'SLOW'
+#!/bin/sh
+. tests/system/deadline.sh
+echo "slowtoken started" >> entered.log
+bound=$(scaled 2)
+rm -f token; (sleep 4; : > token) &
+start=$(date +%s)
+while :; do
+    [ -f token ] && [ $(( $(date +%s) - start )) -le "$bound" ] && { echo "slowtoken ran, bound $bound"; exit 0; }
+    [ $(( $(date +%s) - start )) -ge "$bound" ] && break
+    sleep 0.2
+done
+echo "slowtoken: no token within $bound s"; exit 1
+SLOW
+cat > "$WORK/bin/notoken.sh" <<'NONE'
+#!/bin/sh
+. tests/system/deadline.sh
+echo "notoken started" >> entered.log
+bound=$(scaled 2)
+start=$(date +%s)
+while :; do
+    [ -f never ] && exit 0
+    [ $(( $(date +%s) - start )) -ge "$bound" ] && break
+    sleep 0.2
+done
+echo "notoken: no token within $bound s"; exit 1
+NONE
 # A stand-in for QEMU that outlives its suite, so the leak check has something
 # to find. It is on PATH ahead of any real one, and it records its pid where
 # this script can stop it afterwards. It must become the waiting process rather
@@ -220,6 +273,102 @@ check "one worker runs two suites one after the other" 1 \
 check "two workers run them together" 1 \
     "$([ "$two" -lt 4 ] && echo 1 || echo 0)"
 
+
+# The deadlines a set scales. The calibration fixture gives the pool's
+# factor: with computing at twice the reference the factor is 2.0 times the
+# margin, 3.0, and the slow token's one-second bound becomes three; with
+# the host faster than the reference the factor is the margin alone, 1.5,
+# and the token comes too late. A suite run by itself is told nothing,
+# whatever the environment carries. A token that never comes ends at the
+# scaled bound and not later.
+echo 2.4 > "$WORK/calib.compute"; echo 0.5 > "$WORK/calib.storage"
+rm -f "$WORK/calibrations.log" "$WORK/entered.log"
+out=$(run slowtoken passing); rc=$?
+check "a set is calibrated at its width" 1 "$(grep -c 'width 2' "$WORK/calibrations.log")"
+check "and not at width 1 when no suite runs alone after the pool" 0 "$(grep -c 'width 1' "$WORK/calibrations.log")"
+check "and prints the factor it measured" 1 "$(printf '%s\n' "$out" | grep -c 'run: calibration: width 2, computing 2.4 s against 1.2 (2.00), storage 0.5 s against 2.5 (1.00), margin 1.5, factor 3.0')"
+check "a suite whose token comes within the scaled bound passes" 0 "$rc"
+check "with the bound scaled to six" 1 "$(printf '%s\n' "$out" | grep -c 'slowtoken ran, bound 6')"
+rm -f "$WORK/calibrations.log"
+out=$(run slowtoken passing install); rc=$?
+check "a suite that runs alone after the pool has the set calibrated once more at width 1" 1 "$(grep -c 'width 1' "$WORK/calibrations.log")"
+check "and gets that factor" 1 "$(printf '%s\n' "$out" | grep -c 'run: install: PASS')"
+echo 0.5 > "$WORK/calib.compute"
+out=$(run slowtoken passing); rc=$?
+check "a host faster than the reference gets the margin alone" 1 "$(printf '%s\n' "$out" | grep -c 'factor 1.5')"
+check "under which the slow token is late" 1 "$rc"
+check "by its own bound" 1 "$(printf '%s\n' "$out" | grep -c 'slowtoken: no token within 3 s')"
+out=$( (export RACH2_DEADLINES=scaled RACH2_DEADLINE_FACTOR=9.0; run slowtoken) ); rc=$?
+check "a suite run by itself keeps its bound whatever the environment says" 1 "$rc"
+check "as written" 1 "$(printf '%s\n' "$out" | grep -c 'no token within 2 s')"
+out=$( (export RACH2_CALIBRATION_FACTOR=abc; run slowtoken passing) ); rc=$?
+check "a factor given by hand in the wrong form is refused" 1 "$(printf '%s\n' "$out" | grep -c 'must be a decimal')"
+out=$( (export RACH2_CALIBRATION_FACTOR=08.0; run slowtoken passing) ); rc=$?
+check "and one with a leading zero is read as a decimal, not as octal" 1 "$(printf '%s\n' "$out" | grep -c 'factor 8.0 given')"
+out=$( (export RACH2_CALIBRATION_FACTOR=100; run slowtoken passing) ); rc=$?
+check "and one past the envelope is refused" 1 "$(printf '%s\n' "$out" | grep -c 'past the envelope')"
+echo 2.4 > "$WORK/calib.compute"
+# The bound that ends a suite whose token never comes: the set is run under
+# the tree's own watchdog when it is built, so a bound that never ended
+# would be cut and named rather than hang this test.
+WATCH=""
+[ -x "$REPO/build/tests/system/deadline" ] && WATCH="$REPO/build/tests/system/deadline 40"
+t0=$(date +%s); out=$($WATCH sh -c 'cd "$1" && PATH="$1/bin:$PATH" RACH2_WORKERS=2 sh tests/run notoken passing 2>&1' sh "$WORK"); rc=$?; took=$(($(date +%s) - t0))
+check "a token that never comes fails at the scaled bound" 1 "$rc"
+check "which it names" 1 "$(printf '%s\n' "$out" | grep -c 'notoken: no token within 6 s')"
+check "and which ended the suite" 1 "$([ "$took" -lt 30 ] && echo 1 || echo 0)"
+echo 100 > "$WORK/calib.compute"
+rm -f "$WORK/entered.log"
+out=$(run slowtoken passing); rc=$?
+check "a rate past the envelope fails the set by name" 1 "$(printf '%s\n' "$out" | grep -c 'past the envelope')"
+check "with a failing status" 1 "$([ "$rc" -ne 0 ] && echo 1 || echo 0)"
+check "before any suite starts" 0 "$(cat "$WORK/entered.log" 2>/dev/null | wc -l | tr -d ' ')"
+echo 0.5 > "$WORK/calib.compute"
+
+# The consumers of the factor, each a real program of the tree driven by a
+# stand-in for what it waits on: the harness over a machine that prints its
+# token after two and a half seconds, ptydrive over a command that answers
+# after the same, and hostpeer's lifetime; each under a deadline written as
+# one second, which a factor of four makes enough and no factor leaves
+# short, with a second and a half of room each way for the host's
+# scheduling; each row unsets the variables first, since this test may
+# itself be running under a set's factor. The harness's own deadlines are
+# the ones the suite rows use.
+HARNESS_BIN="$REPO/build/tests/system/harness"
+PTYDRIVE_BIN="$REPO/build/tests/system/ptydrive"
+HOSTPEER_BIN="$REPO/build/tests/system/hostpeer"
+if [ -x "$HARNESS_BIN" ] && [ -x "$PTYDRIVE_BIN" ] && [ -x "$HOSTPEER_BIN" ]; then
+    mkdir -p "$WORK/late"
+    cat > "$WORK/late/qemu-system-i386" <<'LATE'
+#!/bin/sh
+# A machine that prints its prompt at once and its token late, whatever it
+# is asked to boot; it reads its console so the harness's typing has a sink.
+printf "Type 'help'\n"
+(sleep 2.5; printf 'LATETOKEN\n') &
+cat > /dev/null
+wait
+LATE
+    chmod +x "$WORK/late/qemu-system-i386"
+    late_run() { ( PATH="$WORK/late:$PATH" "$HARNESS_BIN" --kernel none --initrd none --timeout 1 --steptmo 1 --grace 0.2 --ok LATETOKEN "expect=Type 'help'" "expect=LATETOKEN" > /dev/null 2>&1 ); }
+    (unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR; late_run); rc=$?
+    check "the harness as written gives a late token one second" 1 "$([ "$rc" -ne 0 ] && echo 1 || echo 0)"
+    (export RACH2_DEADLINES=scaled RACH2_DEADLINE_FACTOR=4.0; late_run); rc=$?
+    check "and four under the factor, which is enough" 0 "$rc"
+    (export RACH2_DEADLINES=scaled; unset RACH2_DEADLINE_FACTOR; late_run); rc=$?
+    check "the mode without a factor leaves the harness as written" 1 "$([ "$rc" -ne 0 ] && echo 1 || echo 0)"
+    out=$( (unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR; RACH2_PASSWORD=x "$PTYDRIVE_BIN" --timeout 1 -- sh -c 'sleep 2.5; echo PTYDONE' 2>&1) )
+    check "ptydrive as written times a late command out" 1 "$(printf '%s\n' "$out" | grep -c TIMEDOUT)"
+    out=$( (export RACH2_DEADLINES=scaled RACH2_DEADLINE_FACTOR=4.0 RACH2_PASSWORD=x; "$PTYDRIVE_BIN" --timeout 1 -- sh -c 'sleep 2.5; echo PTYDONE' 2>&1) )
+    check "and under the factor reads its answer" 1 "$(printf '%s\n' "$out" | grep -c PTYDONE)"
+    check "in time" 0 "$(printf '%s\n' "$out" | grep -c TIMEDOUT)"
+    t0=$(date +%s); (unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR; "$HOSTPEER_BIN" echo 47123 1 > /dev/null 2>&1); rc=$?; held=$(($(date +%s) - t0))
+    check "hostpeer as written holds its port for a second" 1 "$([ "$rc" -eq 0 ] && [ "$held" -le 2 ] && echo 1 || echo 0)"
+    t0=$(date +%s); (export RACH2_DEADLINES=scaled RACH2_DEADLINE_FACTOR=4.0; "$HOSTPEER_BIN" echo 47123 1 > /dev/null 2>&1); rc=$?; held=$(($(date +%s) - t0))
+    check "and under the factor for four" 1 "$([ "$rc" -eq 0 ] && [ "$held" -ge 4 ] && [ "$held" -le 8 ] && echo 1 || echo 0)"
+else
+    echo "  SKIP: the harness, ptydrive and hostpeer are not built; their factor rows did not run"
+    fails=$((fails + 1))
+fi
 
 # What a run owns. One run at a time on a tree: a second is refused with the
 # first named; a lock a dead run left is taken over, unless something of that

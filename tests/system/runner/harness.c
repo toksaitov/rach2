@@ -87,6 +87,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/time.h>
+#include <time.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -160,14 +161,17 @@ static int steps_need_monitor(int argc, char **argv)
 static char monitor_reply[512];
 static int monitor_refused;
 
+static double now(void);
+static double scaled(double seconds);
+
 static int monitor_wait_prompt(int seconds)
 {
-    time_t deadline = time(NULL) + seconds;
+    double until = now() + scaled((double)seconds);
     char buf[512];
 
     monitor_reply[0] = '\0';
     monitor_refused = 0;
-    while (time(NULL) <= deadline) {
+    while (now() <= until) {
         ssize_t n = recv(monitor_fd, buf, sizeof(buf) - 1, MSG_DONTWAIT);
 
         if (n > 0) {
@@ -202,7 +206,7 @@ static int monitor_open(void)
     if (monitor_fd >= 0) {
         return 0;
     }
-    for (tries = 0; tries < 100; tries++) {
+    for (tries = 0; tries < (int)scaled(100.0); tries++) {
         monitor_fd = socket(AF_UNIX, SOCK_STREAM, 0);
         if (monitor_fd < 0) {
             return -1;
@@ -291,10 +295,39 @@ static void buf_add(const unsigned char *data, size_t n)
 
 static double now(void)
 {
-    struct timeval tv;
+    /* The monotonic clock: a deadline is a duration, and the wall clock
+       can be set while a run goes on. */
+    struct timespec ts;
 
-    gettimeofday(&tv, NULL);
-    return (double)tv.tv_sec + (double)tv.tv_usec / 1e6;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+}
+
+/* ---- the deadline factor ----
+ *
+ * A set's runner measures the emulator's rate under the load the set makes
+ * and passes `RACH2_DEADLINES=scaled` with `RACH2_DEADLINE_FACTOR=F` to
+ * every suite; a deadline that bounds completion is multiplied by F here.
+ * A process told nothing, or told the mode without a factor, keeps its
+ * numbers as written. */
+static double deadline_factor = 1.0;
+
+static void deadline_factor_read(void)
+{
+    const char *mode = getenv("RACH2_DEADLINES");
+    const char *factor = getenv("RACH2_DEADLINE_FACTOR");
+    double f;
+
+    if (mode == NULL || strcmp(mode, "scaled") != 0 || factor == NULL)
+        return;
+    f = atof(factor);
+    if (f >= 1.0 && f <= 64.0)
+        deadline_factor = f;
+}
+
+static double scaled(double seconds)
+{
+    return seconds * deadline_factor;
 }
 
 /* ---- the trace ---- */
@@ -605,6 +638,20 @@ static void pump(double until)
 
 static double steptmo = 15.0;
 
+/* The stamp file: `MATCH N SECONDS` for each `expect=` matched and
+   `SEND N SECONDS` for each `send=`, N the step's number and SECONDS the
+   host's monotonic clock, for the runner's calibration. */
+static FILE *stampf;
+static int step_number;
+
+static void stamp(const char *what)
+{
+    if (stampf != NULL) {
+        fprintf(stampf, "%s %d %.3f\n", what, step_number, now());
+        fflush(stampf);
+    }
+}
+
 static int expect_pattern(const char *pattern)
 {
     struct regex re;
@@ -897,6 +944,7 @@ int main(int argc, char **argv)
     int n_drives = 0, n_qemu = 0, n_steps = 0;
     double timeout = 60.0, grace = 3.0;
     int no_debug_exit = 0, must_exit = 0;
+    const char *stamp_path = NULL;
     /* Every --drive costs two words, so the command line is wider than
        the option arrays it is built from. */
     char *qemu[MAX_ARGS * 4];
@@ -927,6 +975,7 @@ int main(int argc, char **argv)
         OPT("--device", device)
         OPT("--log", log)
         OPT("--ok", ok)
+        OPT("--stamp", stamp_path)
 #undef OPT
         if (strcmp(arg, "--never") == 0 && i + 1 < argc) {
             if (n_never >= MAX_ARGS)
@@ -1083,16 +1132,31 @@ int main(int argc, char **argv)
         tracef = fopen(trace_path, "w");
     if (log != NULL)
         logf = fopen(log, "wb");
+    if (stamp_path != NULL) {
+        stampf = fopen(stamp_path, "a");
+        if (stampf == NULL) {
+            fprintf(stderr, "HARNESS: cannot write the stamp file %s: %s\n", stamp_path,
+                    strerror(errno));
+            return 2;
+        }
+    }
+    deadline_factor_read();
+    timeout = scaled(timeout);
+    steptmo = scaled(steptmo);
     deadline = now() + timeout;
     buf_add((const unsigned char *)"", 0);
 
     for (i = 0; i < n_steps; i++) {
         const char *step = steps[i];
 
+        step_number = i + 1;
         /* The machine is gone, so every step left is a check that will not
            run. They are counted and named: a run that stopped early and
            reported a pass over the steps it never reached is the report
-           this harness exists to prevent. */
+           this harness exists to prevent. An `until=` step waits for the
+           machine to leave, so one that left already satisfies it. */
+        if (child_poll() >= 0 && strncmp(step, "until=", 6) == 0)
+            continue;
         if (child_poll() >= 0) {
             int left;
 
@@ -1110,8 +1174,11 @@ int main(int argc, char **argv)
 
             if (!got)
                 step_failures++;
+            else
+                stamp("MATCH");
             trace("step %s %s consumed=%lu", step, got ? "ok" : "fail", (unsigned long)consumed);
         } else if (strncmp(step, "send=", 5) == 0) {
+            stamp("SEND");
             send_line(step + 5);
         } else if (strncmp(step, "sendraw=", 8) == 0) {
             char raw[256];
@@ -1207,8 +1274,16 @@ int main(int argc, char **argv)
             }
         } else if (strncmp(step, "wait=", 5) == 0) {
             pump(now() + atof(step + 5));
+        } else if (strncmp(step, "barrier=", 8) == 0) {
+            /* The calibration barrier: every machine of the width waits
+               here until the runner makes the file, so the measured work
+               starts together. A barrier never released is a failed step. */
+            while (now() < deadline && child_poll() < 0 && access(step + 8, F_OK) != 0)
+                pump(now() + 0.05);
+            if (access(step + 8, F_OK) != 0)
+                step_failures++;
         } else if (strncmp(step, "until=", 6) == 0) {
-            double until = now() + atof(step + 6);
+            double until = now() + scaled(atof(step + 6));
             size_t from = buf_len;
 
             if (until > deadline)
@@ -1225,6 +1300,8 @@ int main(int argc, char **argv)
             int sk = socket(AF_INET, SOCK_STREAM, 0);
             struct sockaddr_in addr;
             struct timeval tv;
+            double knock_until;
+            int connected;
 
             memset(&addr, 0, sizeof(addr));
             addr.sin_family = AF_INET;
@@ -1233,7 +1310,24 @@ int main(int argc, char **argv)
             tv.tv_sec = 15;
             tv.tv_usec = 0;
             setsockopt(sk, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-            if (sk >= 0 && connect(sk, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
+            /* A server slow to listen under load is knocked at again for
+               a window scaled as a deadline is, not judged on one try. */
+            knock_until = now() + scaled(30.0);
+            if (knock_until > deadline)
+                knock_until = deadline;
+            connected = sk >= 0 && connect(sk, (struct sockaddr *)&addr, sizeof(addr)) == 0;
+            while (!connected && now() < knock_until && child_poll() < 0) {
+                if (sk >= 0)
+                    close(sk);
+                pump(now() + 1.0);
+                if (child_poll() >= 0)
+                    break;
+                sk = socket(AF_INET, SOCK_STREAM, 0);
+                if (sk >= 0)
+                    setsockopt(sk, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+                connected = sk >= 0 && connect(sk, (struct sockaddr *)&addr, sizeof(addr)) == 0;
+            }
+            if (connected) {
                 printf("HARNESS: knocked on port %d\n", port);
             } else {
                 printf("HARNESS: nothing answered on port %d (%s)\n", port, strerror(errno));
@@ -1303,7 +1397,7 @@ int main(int argc, char **argv)
                command, and stop as soon as harness_exit stops QEMU. */
             int tries = 0;
 
-            while (tries < 6 && child_poll() < 0) {
+            while (tries < (int)scaled(6.0) && child_poll() < 0) {
                 char line[512];
 
                 snprintf(line, sizeof(line), "exec %s", step + 6);

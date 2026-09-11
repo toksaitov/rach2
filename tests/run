@@ -46,6 +46,10 @@ workers_default() {
     [ "$n" -lt 4 ] && n=4
     echo "$n"
 }
+# The deadline variables are this runner's to set: a set measures its own
+# factor, and a suite run by itself keeps its numbers as written, whatever
+# was inherited from the environment.
+unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR
 WORKERS="${RACH2_WORKERS:-$(workers_default)}"
 case "$WORKERS" in
     ''|*[!0-9]*) echo "run: RACH2_WORKERS must be a positive whole number" >&2; exit 2 ;;
@@ -513,6 +517,49 @@ prepare() {
     }
 }
 
+# The deadline factor of a set. `tests/system/calibrate.sh` boots WIDTH
+# machines at once and times fixed work of two kinds, computing and storage,
+# by the host's clock; each kind's factor is its time against the reference
+# measured idle at width 1, and the factor passed is the larger, which
+# bounds both kinds, times a margin for the pool's mixed load, which the
+# calibration's uniform machines do not make, rounded up to a tenth. A factor
+# above the envelope fails the set by name: a host that slow does not run
+# the set in the day, and a longer deadline would only hide it. The
+# references: 2026-09-11, the owner's Mac mini, idle, calibprobe as it is.
+REF_COMPUTE=1.2
+REF_STORAGE=2.5
+CAL_MARGIN=1.5
+CAL_ENVELOPE=8.0
+calibrate() { # calibrate WIDTH -> CAL_FACTOR, or 1 on a failure
+    if [ -n "${RACH2_CALIBRATION_FACTOR:-}" ]; then
+        # A factor given by hand is held to the same form and envelope.
+        case "$RACH2_CALIBRATION_FACTOR" in
+            *[!0-9.]*|.*|*.|*.*.*|'') echo "run: RACH2_CALIBRATION_FACTOR must be a decimal such as 2.5" >&2; return 1 ;;
+        esac
+        CAL_FACTOR=$(awk -v f="$RACH2_CALIBRATION_FACTOR" -v envelope="$CAL_ENVELOPE" 'BEGIN {
+            f = int(f * 10 + 0.999) / 10; if (f < 1) f = 1
+            if (f > envelope) { printf "run: calibration: the factor %.1f given is past the envelope of %.1f; the set is not started\n", f, envelope > "/dev/stderr"; exit 1 }
+            printf "%.1f\n", f }') || return 1
+        echo "run: calibration: width $1, factor $CAL_FACTOR given by RACH2_CALIBRATION_FACTOR"
+        return 0
+    fi
+    out=$(sh "$REPO/tests/system/calibrate.sh" "$1" "$WORK/calibrate.$1") || {
+        echo "run: calibration at width $1 did not finish: $out" >&2; return 1
+    }
+    CAL_FACTOR=$(printf '%s\n' "$out" | awk -v rc="$REF_COMPUTE" -v rs="$REF_STORAGE" -v margin="$CAL_MARGIN" -v envelope="$CAL_ENVELOPE" -v width="$1" '
+        { for (i = 1; i <= NF; i++) { split($i, kv, "="); v[kv[1]] = kv[2] } }
+        END {
+            fc = v["compute"] / rc; if (fc < 1) fc = 1
+            fs = v["storage"] / rs; if (fs < 1) fs = 1
+            f = (fc > fs ? fc : fs) * margin; f = int(f * 10 + 0.999) / 10
+            printf "run: calibration: width %d, computing %.1f s against %.1f (%.2f), storage %.1f s against %.1f (%.2f), margin %.1f, factor %.1f\n", width, v["compute"], rc, fc, v["storage"], rs, fs, margin, f > "/dev/stderr"
+            if (f > envelope) { printf "run: calibration: the emulator runs at 1/%.1f of its idle rate at width %d, past the envelope of %.1f; the set is not started\n", f, width, envelope > "/dev/stderr"; exit 1 }
+            printf "%.1f\n", f
+        }') || return 1
+    [ -n "$CAL_FACTOR" ] || return 1
+    return 0
+}
+
 # `style` rebuilds the kernel with its own flags and shares a scratch directory
 # with `host`, so those two run alone, before the pool. `usb` plugs devices
 # in and out through QEMU's monitor and loses two rows under host load
@@ -545,11 +592,34 @@ run_set() {
         echo "run: result: failed:$failed" >&2
         return 1
     fi
-    [ -n "$pooled" ] && { run_pool "$pooled"; failed="$failed$POOL_FAILED"; }
+    # The pool's factor is measured at the width the pool will run at, the
+    # smaller of the workers and the suites; the lone suites run one at a
+    # time after it and get the factor measured at width 1, which says how
+    # this host compares with the reference.
+    POOL_FACTOR=""; ALONE_FACTOR=""
+    if [ -n "$pooled" ]; then
+        n=$(echo "$pooled" | wc -w | tr -d ' ')
+        width=$WORKERS; [ "$n" -lt "$width" ] && width=$n
+        calibrate "$width" || { echo "run: result: the calibration failed" >&2; return 1; }
+        POOL_FACTOR=$CAL_FACTOR
+    fi
+    if [ -n "$lone" ]; then
+        calibrate 1 || { echo "run: result: the calibration failed" >&2; return 1; }
+        ALONE_FACTOR=$CAL_FACTOR
+    fi
+    if [ -n "$pooled" ]; then
+        RACH2_DEADLINES=scaled; RACH2_DEADLINE_FACTOR=$POOL_FACTOR
+        export RACH2_DEADLINES RACH2_DEADLINE_FACTOR
+        run_pool "$pooled"; failed="$failed$POOL_FAILED"
+        unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR
+    fi
     RUNNING=serial
     for suite in $lone; do
         [ -n "$failed" ] && [ -n "${RACH2_STOP_ON_FAIL:-}" ] && { echo "run: stopped on a failure; not started: $suite"; failed="$failed $suite"; continue; }
+        RACH2_DEADLINES=scaled; RACH2_DEADLINE_FACTOR=$ALONE_FACTOR
+        export RACH2_DEADLINES RACH2_DEADLINE_FACTOR
         run_one "$suite" || failed="$failed $suite"
+        unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR
     done
     RUNNING=""
     [ -n "$STOPPING" ] && return 1

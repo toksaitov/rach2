@@ -704,7 +704,7 @@ raw-stack: raw-card
 	    "send=`cat krffs/rach2_demo_password`" \
 	    "expect=# " \
 	    "send=/bin/ping 10.0.2.2 > /dev/null; traceroute -n -q 1 -m 2 8.8.8.8" \
-	    "expect= 1  10.0.2.2" "send=echo TRACE\"\"DONE" wait=10
+	    "expect= 1  10.0.2.2" "send=echo TRACE\"\"DONE" "expect=TRACEDONE"
 	# The in-house ping is still the one an ordinary account runs: busybox's needs
 	# a raw socket, which is root's, and is not built for that reason.
 	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
@@ -712,7 +712,7 @@ raw-stack: raw-card
 	    --timeout 300 --steptmo 90 --ok "USERPINGOK" \
 	    "expect=rach2 login:" "send=test" "expect=Password:" \
 	    "send=`cat krffs/rach2_test_password`" wait=5 \
-	    "send=/bin/ping 10.0.2.2 && echo USERPING\"\"OK" wait=15
+	    "send=/bin/ping 10.0.2.2 && echo USERPING\"\"OK" "expect=USERPINGOK"
 endif
 .PHONY: raw-card raw-stack
 # `tests/run netif`: the interface ioctls, which is how a program sets this
@@ -876,7 +876,7 @@ dhcp-card: $(DEMO_CREDS) rach2 utils busybox krffs os-real-image os-simple-image
 	    "expect=ARPCACHED" \
 	    "send=ping 10.9.9.9 > /dev/null 2>&1; echo ROUTE\"\"TRIED" \
 	    "expect=ROUTETRIED" "send=echo DHCP\"\"OK" \
-	    wait=10
+	    "expect=DHCPOK"
 	# The address, the netmask and the broadcast are asserted above, and the route
 	# below: a packet for an address on no subnet of this machine's must leave
 	# addressed to the gateway's hardware address, which is what a default route
@@ -904,7 +904,7 @@ dhcp-stack: dhcp-card
 	    "expect=# " "send=ifup -a" \
 	    "expect=lease of 192.168.90.20 obtained" wait=3 \
 	    "send=ifconfig eth0 | grep -q 'addr:192.168.90.20' && echo FIRST\"\"LEASE" \
-	    "expect=FIRSTLEASE" "send=poweroff -f" wait=5
+	    "expect=FIRSTLEASE" "send=poweroff -f" until=15 --must-exit
 	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
 	    --append "rach2.fsdisk rach2.ip=none" \
 	    --drive "file=$(DHCP_DISK),format=raw,if=ide,index=0,media=disk" \
@@ -915,7 +915,7 @@ dhcp-stack: dhcp-card
 	    "expect=# " "send=ifup -a" \
 	    "expect=lease of 192.168.90.20 obtained" wait=3 \
 	    "send=ifconfig eth0 | grep -q 'addr:192.168.90.20' && echo SECOND\"\"LEASE" \
-	    "expect=SECONDLEASE" "send=poweroff -f" wait=5
+	    "expect=SECONDLEASE" "send=poweroff -f" until=15 --must-exit
 	# And unattended, which is how the sealed machine comes up: nothing is typed at
 	# all. The metal init runs `ifup -a` itself, after the console login and before
 	# the SSH server, so the lease must arrive with no console session in it.
@@ -1089,7 +1089,7 @@ dhcp-stack: dhcp-card
 	    "send=`cat krffs/rach2_demo_password`" \
 	    "expect=# " wait=20 \
 	    "send=ifconfig eth0 | grep -q 'addr:192.168.90.50' && echo STATIC\"\"KEPT" \
-	    wait=10
+	    "expect=STATICKEPT"
 	$(HARNESS) --kernel build/rach2/kernel \
 	    --initrd $(METAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --net "hubport,id=net0,hubid=1" --append "rach2.ip=none" \
@@ -1139,7 +1139,7 @@ dhcp-stack: dhcp-card
 	    "expect=TWOLEASES" \
 	    "send=dropbearmulti dropbear -R -g -p 22" wait=25 \
 	    "tcp=$(DHCP_TWO_PORT_A)" wait=3 "tcp=$(DHCP_TWO_PORT_B)" wait=3 \
-	    "send=echo TWONET\"\"OK" wait=5
+	    "send=echo TWONET\"\"OK" "expect=TWONETOK"
 	$(PCAPCHECK) bcast $(TWONET_PCAP_A) --source 192.168.90.20
 	$(PCAPCHECK) bcast $(TWONET_PCAP_B) --source 10.0.7.20
 	# And the server's own record of who reached it. The knock says only that
@@ -1200,7 +1200,7 @@ run-netconsole: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
 	    --qemu-arg=filter-dump,id=nc1,netdev=net0,file=$(NETCONSOLE_STOP_PCAP) \
 	    --append "rach2.netconsole" \
 	    --timeout 90 --ok "Stopping the system" \
-	    "expect=Type 'help'" "send=poweroff" wait=5
+	    "expect=Type 'help'" "send=poweroff" until=15 --must-exit
 	$(PCAPCHECK) netconsole $(NETCONSOLE_STOP_PCAP) --min-frames 4 \
 	    --expect "Stopping the system. Goodbye!" \
 	    --reject "powering off"
@@ -1738,7 +1738,7 @@ run-host: check-libc $(DEADLINE)
 # The runner suite (see tests/system/selftest.sh): tests/run driven against a
 # registry and a makefile of its own, in a temporary directory. It boots no
 # machine and reads nothing from the product, so it needs no prerequisites.
-run-runner:
+run-runner: $(HARNESS) $(PTYDRIVE) $(HOSTPEER)
 	@./tests/system/selftest.sh
 
 # The drivers' suite (see tests/system/drivetest.sh): drive.sh and the

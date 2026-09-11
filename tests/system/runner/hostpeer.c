@@ -74,6 +74,33 @@ static double now(void)
     return tv.tv_sec + tv.tv_usec / 1e6;
 }
 
+/* ---- the deadline factor ----
+ *
+ * A set's runner measures the emulator's rate under the load the set makes
+ * and passes `RACH2_DEADLINES=scaled` with `RACH2_DEADLINE_FACTOR=F` to
+ * every suite; a deadline that bounds completion is multiplied by F here.
+ * A process told nothing, or told the mode without a factor, keeps its
+ * numbers as written. */
+static double deadline_factor = 1.0;
+
+static void deadline_factor_read(void)
+{
+    const char *mode = getenv("RACH2_DEADLINES");
+    const char *factor = getenv("RACH2_DEADLINE_FACTOR");
+    double f;
+
+    if (mode == NULL || strcmp(mode, "scaled") != 0 || factor == NULL)
+        return;
+    f = atof(factor);
+    if (f >= 1.0 && f <= 64.0)
+        deadline_factor = f;
+}
+
+static double scaled(double seconds)
+{
+    return seconds * deadline_factor;
+}
+
 /* Both transports on one descriptor set, because the two probes that need
    this run one after the other in the same boot and the suite starts one
    server for both. One TCP connection is served at a time; the probes make
@@ -210,6 +237,10 @@ int main(int argc, char **argv)
                 "of seconds\n");
         return 2;
     }
+    /* A lifetime covers the work of the machine that uses the peer, so
+       it is scaled as a completion deadline is. */
+    deadline_factor_read();
+    seconds = (long)(scaled((double)seconds) + 0.999);
     if (strcmp(argv[1], "hold") == 0)
         return hold(port, seconds);
     if (strcmp(argv[1], "echo") == 0)

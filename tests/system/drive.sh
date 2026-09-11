@@ -35,6 +35,11 @@ DRIVE_POS=0
 DRIVE_FPID=""
 DRIVE_SEQ=0
 DRIVE_POLL=${DRIVE_POLL:-0.2}
+# The bounds are completion deadlines: under a set they are multiplied by
+# the runner's factor, through `scaled` (see deadline.sh). A caller that
+# passes what is left of a budget it has scaled already uses the raw forms.
+# shellcheck source=tests/system/deadline.sh
+. "$REPO/tests/system/deadline.sh"
 
 # The log's size in bytes, 0 before it exists.
 drive_size() {
@@ -99,6 +104,10 @@ drive_type() {
 # the offsets are the log's own. Fails past the bound with the fresh part's
 # tail on standard error.
 drive_expect() {
+    drive_expect_raw "$1" "$(scaled "$2")"
+}
+
+drive_expect_raw() {
     deadline=$(( $(date +%s) + $2 ))
     while :; do
         found=$(tail -c +"$((DRIVE_POS + 1))" "$DRIVE_LOG" 2>/dev/null | grep -a -b -o -E "$1" 2>/dev/null | head -1)
@@ -124,6 +133,10 @@ drive_expect() {
 # ends the same way and is not a prompt; the word before the prompt's
 # character is what tells them apart.
 drive_prompt() {
+    drive_prompt_raw "$(scaled "$1")"
+}
+
+drive_prompt_raw() {
     deadline=$(( $(date +%s) + $1 ))
     while :; do
         last=$(tail -c +"$((DRIVE_POS + 1))" "$DRIVE_LOG" 2>/dev/null | tr -d '\r' | tail -1)

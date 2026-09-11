@@ -210,6 +210,33 @@ static double now(void)
     return (double) tv.tv_sec + (double) tv.tv_usec / 1e6;
 }
 
+/* ---- the deadline factor ----
+ *
+ * A set's runner measures the emulator's rate under the load the set makes
+ * and passes `RACH2_DEADLINES=scaled` with `RACH2_DEADLINE_FACTOR=F` to
+ * every suite; a deadline that bounds completion is multiplied by F here.
+ * A process told nothing, or told the mode without a factor, keeps its
+ * numbers as written. */
+static double deadline_factor = 1.0;
+
+static void deadline_factor_read(void)
+{
+    const char *mode = getenv("RACH2_DEADLINES");
+    const char *factor = getenv("RACH2_DEADLINE_FACTOR");
+    double f;
+
+    if (mode == NULL || strcmp(mode, "scaled") != 0 || factor == NULL)
+        return;
+    f = atof(factor);
+    if (f >= 1.0 && f <= 64.0)
+        deadline_factor = f;
+}
+
+static double scaled(double seconds)
+{
+    return seconds * deadline_factor;
+}
+
 int main(int argc, char **argv)
 {
     int rows = 40, cols = 100;
@@ -275,7 +302,8 @@ int main(int argc, char **argv)
         _exit(127);
     }
 
-    deadline = now() + timeout;
+    deadline_factor_read();
+    deadline = now() + scaled(timeout);
     for (;;) {
         double remaining = deadline - now();
         fd_set r;
