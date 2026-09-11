@@ -649,10 +649,8 @@ actual=$(stat -c %s "$source_dir/$image")
     die "the manifest says $bytes bytes and $image is $actual"
 
 say "reading the image to check it against the manifest, which takes a few minutes"
-# Read in mebibytes rather than by `sha256sum FILE`, which reads a few
-# kilobytes at a time: through a file system on a stick that is the difference
-# between minutes and an hour.
-got=$(dd if="$source_dir/$image" bs=1048576 2>/dev/null | sha256sum | cut -d' ' -f1)
+# Cache read-ahead avoids a disk request for each small sha256sum read.
+got=$(sha256sum "$source_dir/$image" | cut -d' ' -f1)
 [ "$got" = "$want" ] ||
     die "the image on the stick hashes to $got and the manifest says $want"
 say "the image on the stick is the one the manifest describes"
