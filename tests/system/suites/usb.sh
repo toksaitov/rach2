@@ -494,6 +494,37 @@ else
     bad "the stick behind the hub"
 fi
 
+# ---- 17b: a 32 KiB read in flight when the stick is pulled: the request is
+#           failed only after the controller has given the slot back, since
+#           the request's pages are the controller's until then, which the
+#           driver's line at the close says. The stick's medium is throttled
+#           to 32 KiB a second, so a read's data stage lasts a second and the
+#           pull lands inside it; unthrottled, the emulator completes each
+#           stage inside its doorbell and the pull lands between stages, and
+#           the emulator gives the slot back within a millisecond, so the
+#           order of the process's line and the kernel's proves nothing.
+#           The next stick enumerates after. ----
+if run_shell --qemu-arg=-cpu --qemu-arg=max \
+    --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
+    --qemu-arg=-object --qemu-arg=throttle-group,id=tgs,x-bps-total=32768 \
+    --qemu-arg=-blockdev --qemu-arg="driver=file,filename=$STICK,node-name=stickfile" \
+    --qemu-arg=-blockdev --qemu-arg=driver=raw,file=stickfile,node-name=stickraw \
+    --qemu-arg=-blockdev --qemu-arg=driver=throttle,throttle-group=tgs,file=stickraw,node-name=stick \
+    --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=stick,id=st0 \
+    --timeout 180 --steptmo 60 --ok "USBDISKPROBE OK" --never "USBDISKPROBE FAIL" \
+    --log "$IMAGE.pullread.log" \
+    "expect=Type 'help'" "send=exec /usbdiskprobe pullread" "expect=USBDISKPROBE READING" \
+    wait=1 "usb=del:st0" "expect=its request is kept, its data stage in flight" \
+    "expect=: given back" "expect=its request is failed with the slot given back" \
+    "expect=USBDISKPROBE READ FAILED" \
+    "expect=Type 'help'" \
+    "drive=add:if=none,id=again,format=raw,file=$STICK" \
+    "usb=add:usb-storage,bus=xhci.0,drive=again,id=st1" "expect=: mbr" > /dev/null 2>&1; then
+    note "a 32 KiB read in flight when the stick is pulled fails after the slot is given back, and the next stick enumerates: OK"
+else
+    bad "the read in flight at the pull"
+fi
+
 # ---- 18: the hub pulled with all three behind it: the stick's mount answers
 #          EIO and unmounts once its file is closed, and every device below
 #          the hub goes before the hub does ----

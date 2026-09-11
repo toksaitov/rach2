@@ -25,6 +25,10 @@
  * * `free`: the number of free names `/proc/usb` reports, printed, so the
  *   harness can compare it across a run of plugs and pulls.
  * * `super`: a stick with no partition table mounts through `/dev/disk0`.
+ * * `pullread`: `/dev/disk0` read in 32 KiB pieces, `USBDISKPROBE READING`
+ *   printed first, until a read answers `EIO`, then `USBDISKPROBE READ
+ *   FAILED`; the harness pulls the stick during the reads and reads the
+ *   order of that line and the kernel's `given back` line.
  * * `throughput`: 16 MiB read from `/dev/disk0` in 32 KiB pieces, timed by
  *   the monotonic clock and printed as `USBDISKPROBE THROUGHPUT N KB/s`.
  *   The number is recorded, not judged: it is what this milestone's
@@ -576,6 +580,38 @@ static void part_throughput(void)
     ok();
 }
 
+static void part_pullread(void)
+{
+    int fd = sys3(SYS_OPEN, (int)"/dev/disk0", O_RDONLY, 0);
+    int reads = 0;
+
+    if (fd < 0) {
+        fail("/dev/disk0 would not open");
+    }
+    puts("USBDISKPROBE READING");
+    while (reads < 2000000) {
+        int n = sys3(SYS_READ, fd, (int)big, (int)sizeof(big));
+
+        reads++;
+        if (n == -EIO) {
+            puts("USBDISKPROBE READ FAILED");
+            sys1(SYS_CLOSE, fd);
+            ok();
+        }
+        if (n < 0) {
+            fail("a read of the stick failed with something other than EIO");
+        }
+        if (n == 0) {
+            sys1(SYS_CLOSE, fd);
+            fd = sys3(SYS_OPEN, (int)"/dev/disk0", O_RDONLY, 0);
+            if (fd < 0) {
+                fail("the node went before a read in flight failed");
+            }
+        }
+    }
+    fail("the stick was never pulled out");
+}
+
 static void part_super(void)
 {
     if (mount_at("/dev/disk0", "exfat", MS_RDONLY) != 0) {
@@ -787,6 +823,9 @@ void probe_main(unsigned int *sp)
     }
     if (same(what, "throughput")) {
         part_throughput();
+    }
+    if (same(what, "pullread")) {
+        part_pullread();
     }
     fail("no such part");
 }

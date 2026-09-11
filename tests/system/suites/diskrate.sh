@@ -11,9 +11,17 @@
 # passes. One boot of the os-real
 # image with three IDE disks: a raw one, an exFAT volume and a FAT32 one.
 #
-# Usage: diskrate.sh KERNEL OSREAL HARNESS DIR PASSWORD MKEXFATFIXTURE MKMBR
+# A second boot, of the recovery kernel, which alone writes a whole-disk
+# node, times a 4 MiB raw write and raw read of a USB stick in 32 KiB
+# requests, the write as 128 dd calls of one piece each since the recovery
+# image cannot hold 4 MiB, each piece carrying its index, and requires each
+# direction to be exactly 128 commands on the stick.
+#
+# Usage: diskrate.sh KERNEL OSREAL HARNESS DIR PASSWORD MKEXFATFIXTURE MKMBR \
+#        RKERNEL RIMAGE
 set -u
 KERNEL=$1; OSREAL=$2; HARNESS=$3; DIR=$4; PASSWORD=$5; MKEXFAT=$6; MKMBR=$7
+RKERNEL=$8; RIMAGE=$9
 
 fail() { echo "diskrate-test: FAIL: $1" >&2; exit 1; }
 
@@ -129,5 +137,50 @@ counts fatwrite 14800 1300000 "the FAT32 write's counts"
 counts exsmall 82000 120000 "the exFAT small writes' counts"
 counts fatsmall 99600 350000 "the FAT32 small writes' counts"
 counts exfiles 35500 65000 "the exFAT files' counts"
+
+# ---- the stick: 4 MiB written raw and read raw in 32 KiB requests, from
+#      the recovery kernel, each timed and each exactly 128 commands ----
+STICK="$DIR/stick.img"; SLOG="$DIR/stick.log"
+dd if=/dev/zero of="$STICK" bs=1048576 count=16 2>/dev/null || fail "the stick image"
+# shellcheck disable=SC2016
+SDEFS='t() { s=$(date +%s); if eval "$2"; then echo T_$1 $(( $(date +%s) - s )); else echo T_$1 FAIL; fi; }; moved() { n=$1; shift; "$@" 2>/tmp/dd.err && grep -q "^$n bytes" /tmp/dd.err; }; c() { echo C_$1 $(grep -E "^(disk-commands|cache-hits) " /proc/disk | head -2 | awk "{printf \"%s \", \$2}"); }; echo DEFS""DONE'
+"$HARNESS" --kernel "$RKERNEL" --initrd "$RIMAGE" \
+    --qemu-arg=-cpu --qemu-arg=max --qemu-arg=-m --qemu-arg=512 \
+    --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
+    --drive "if=none,id=stick,format=raw,file=$STICK" \
+    --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=stick,id=st0 \
+    --timeout 600 --steptmo 300 --ok "STICKDONE" --log "$SLOG" \
+    "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" "expect=~ #" \
+    "send=$SDEFS" "expect=DEFSDONE" \
+    "send=yes RATE-STICK-PATTERN-LINE | head -c 32768 > /tmp/base; p() { printf PIECE-%03d- \$1; dd if=/tmp/base bs=32758 count=1 2>/dev/null; }; echo PAT\"\"DONE" "expect=PATDONE" \
+    "send=c stickwrite0" "expect=C_stickwrite0" \
+    "send=t stickwrite 'i=0; while [ \$i -lt 128 ]; do p \$i > /tmp/blk; moved 32768 dd if=/tmp/blk of=/dev/disk0 bs=32k seek=\$((32 + i)) count=1 || break; i=\$((i + 1)); done; sync; [ \$i = 128 ]'" "expect=T_stickwrite" \
+    "send=c stickwrite1" "expect=C_stickwrite1" \
+    "send=t stickread 'dd if=/dev/disk0 bs=32k skip=32 count=128 2>/tmp/dd.err | cksum > /tmp/sum && grep -q \"^4194304 bytes\" /tmp/dd.err'" "expect=T_stickread" \
+    "send=c stickread1" "expect=C_stickread1" \
+    "send=i=0; while [ \$i -lt 128 ]; do p \$i; i=\$((i + 1)); done | cksum > /tmp/want; cmp /tmp/sum /tmp/want && echo SAME; echo STICK\"\"DONE" "expect=STICKDONE" > /dev/null 2>&1 \
+    || fail "the stick boot did not reach its end; see $SLOG"
+grep -aq "^SAME" "$SLOG" || { echo "diskrate-test: FAIL: the stick did not read back what was written" >&2; rc=1; }
+# exact NAME FROM TO N TEXT: the commands between two counter reads, exactly N.
+exact() {
+    before=$(tr -d '\r' < "$SLOG" | grep -a "^C_$2 " | tail -1 | awk '{print $2}')
+    after=$(tr -d '\r' < "$SLOG" | grep -a "^C_$3 " | tail -1 | awk '{print $2}')
+    [ -n "$before" ] && [ -n "$after" ] || fail "no counters for $1 in $SLOG"
+    cmds=$(( after - before ))
+    if [ "$cmds" -eq "$4" ]; then
+        echo "diskrate-test: $5: $cmds commands, exactly $4: OK"
+    else
+        echo "diskrate-test: FAIL: $5: $cmds commands, not $4" >&2
+        rc=1
+    fi
+}
+LOG="$SLOG"
+row stickwrite 120 "4 MiB written raw to the stick in 32 KiB requests"
+row stickread 120 "4 MiB read raw from the stick in 32 KiB requests"
+exact stickwrite stickwrite0 stickwrite1 128 "the stick write's data commands"
+exact stickread stickwrite1 stickread1 128 "the stick read's data commands"
+for r in stickwrite stickread; do
+    echo "diskrate-test: $r: $(tr -d '\r' < "$SLOG" | grep -a "^T_$r [0-9]" | tail -1 | awk '{printf "%d s, %d KB/s", $2, ($2 > 0 ? 4096 / $2 : 4096)}')"
+done
 [ "$rc" -eq 0 ] || fail "a row is over its bound"
 echo "diskrate-test: PASS"

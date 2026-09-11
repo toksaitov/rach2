@@ -342,14 +342,23 @@ else
 fi
 
 # ---- 11: a stick written raw from the recovery kernel: a sector pattern
-#          through its whole node, read back there and on the host ----
+#          through its whole node, read back there and on the host; then
+#          4 MiB of a pattern written in 32 KiB pieces at 5 MiB, one dd a
+#          piece since the recovery image cannot hold 4 MiB, and read back
+#          byte for byte, each direction as 128 commands on the stick, which
+#          /proc/disk counts, so a driver that fell back to a page a command
+#          would show as 512 ----
 cp "$MBR" "$DIR/stick-recovery.img" || fail "the recovery stick's image"
 LOG="$DIR/recovery.log"
+# shellcheck disable=SC2016
+CMDS='grep "^disk-commands " /proc/disk | cut -d" " -f2'
 if run "$DIR/stick-recovery.img" --kernel "$RKERNEL" --initrd "$RIMAGE" \
-    --timeout 180 --steptmo 60 --ok "RAWDONE" --log "$LOG" \
+    --timeout 300 --steptmo 120 --ok "BIGDONE" --log "$LOG" \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" "expect=~ #" \
     "send=yes RACH2RAW | head -c 4096 > /tmp/p; dd if=/tmp/p of=/dev/disk0 bs=512 seek=1000 2>&1; dd if=/dev/disk0 bs=512 skip=1000 count=8 2>/dev/null | cksum; cksum < /tmp/p; echo RAW\"\"DONE" \
-    "expect=RAWDONE" > /dev/null 2>&1; then
+    "expect=RAWDONE" \
+    "send=yes RACH2-BIG-PATTERN-LINE | head -c 32768 > /tmp/base; p() { printf PIECE-%03d- \$1; dd if=/tmp/base bs=32758 count=1 2>/dev/null; }; c0=\$($CMDS); i=0; while [ \$i -lt 128 ]; do p \$i > /tmp/blk; dd if=/tmp/blk of=/dev/disk0 bs=32k seek=\$((160 + i)) count=1 2>/dev/null; i=\$((i + 1)); done; sync; c1=\$($CMDS); dd if=/dev/disk0 bs=32k skip=160 count=128 2>/dev/null | cksum; c2=\$($CMDS); i=0; while [ \$i -lt 128 ]; do p \$i; i=\$((i + 1)); done | cksum; echo BIGCMDS \$((c1-c0)) \$((c2-c1)); echo BIG\"\"DONE" \
+    "expect=BIGDONE" > /dev/null 2>&1; then
     note "the recovery kernel wrote the stick raw: OK"
 else
     fail "the recovery kernel's raw write of the stick"
@@ -359,6 +368,16 @@ WANT=$(yes RACH2RAW | head -c 4096 | cksum | cut -d' ' -f1)
 GOT=$(dd if="$DIR/stick-recovery.img" bs=512 skip=1000 count=8 2>/dev/null | cksum | cut -d' ' -f1)
 [ "$GOT" = "$WANT" ] || fail "the pattern is not on the image"
 note "and the host finds the pattern where it was written: OK"
+# The pieces differ by their index, so a request landing at another
+# piece's sectors shows.
+yes RACH2-BIG-PATTERN-LINE | head -c 32768 > "$DIR/base"
+BIGWANT=$(i=0; while [ $i -lt 128 ]; do printf "PIECE-%03d-" $i; head -c 32758 "$DIR/base"; i=$((i + 1)); done | cksum | cut -d' ' -f1)
+[ "$(grep -ac "^$BIGWANT " "$LOG")" -ge 2 ] || fail "the 4 MiB pattern did not read back whole on the machine"
+BIGGOT=$(dd if="$DIR/stick-recovery.img" bs=32k skip=160 count=128 2>/dev/null | cksum | cut -d' ' -f1)
+[ "$BIGGOT" = "$BIGWANT" ] || fail "the 4 MiB pattern is not on the image"
+BIGCMDS=$(tr -d '\r' < "$LOG" | grep -a "^BIGCMDS " | tail -1)
+[ "$BIGCMDS" = "BIGCMDS 128 128" ] || fail "the 4 MiB write and read were not 128 commands each: $BIGCMDS"
+note "4 MiB written raw in 32 KiB requests and read back byte for byte, 128 commands each way: OK"
 
 # ---- 12: a stick past two terabytes: a sparse image with one partition
 #          starting past sector 2^32, which the sixteen-byte commands reach ----
