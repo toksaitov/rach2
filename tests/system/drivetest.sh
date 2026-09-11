@@ -14,6 +14,10 @@
 # `tests/run drive` runs this. It boots nothing.
 #
 set -u
+# The checks time the harness's and drive.sh's bounds as written, so the
+# set's deadline factor, which scales them, is unset here: this suite is
+# the measurement of the mechanism, not a user of it.
+unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR
 
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/rach2-drive.XXXXXX")
