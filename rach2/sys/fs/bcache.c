@@ -34,11 +34,21 @@ static uint64_t stat_hits, stat_fills, stat_waits;
 
 /* The most buffers the cache makes: half of what the caches together may
  * hold under pressure, and never fewer than the floor, since a file system
- * holds up to four at once and a write of one may take one more. */
+ * holds up to four at once and a write of one may take one more. Each
+ * buffer is a page of the kernel heap, which is KVA_HEAP_SIZE whatever the
+ * machine's memory, so the cache also stops at half the heap's pages: on a
+ * machine with more than 2 GiB the memory share alone is more than the
+ * whole heap, and a cache that took it all left fork with no page for a
+ * stack. */
+#define BCACHE_HEAP_SHARE ((KVA_HEAP_SIZE / PAGE_SIZE) / 2u)
+
 static uint32_t bcache_limit(void)
 {
     uint32_t n = limit_set ? limit_set : mem_cache_target() / 2u;
 
+    if (n > BCACHE_HEAP_SHARE) {
+        n = BCACHE_HEAP_SHARE;
+    }
     return n < BCACHE_MIN_BUFFERS ? BCACHE_MIN_BUFFERS : n;
 }
 
