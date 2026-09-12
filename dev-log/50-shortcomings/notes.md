@@ -262,3 +262,15 @@ SSH is the same story with more work on top: 157 MB out in 6.0 s, 26.2 MB/s, wit
 `vfs_chown_plan` now decides both chowns on a mounted file system (`db580d84`, `40b6f436`): it computes what changes, refuses what the caller may not do, permits a chown that changes nothing, and clears the set-id bits by the rule the boot root uses. On the machine, on the ext2 root, `modeprobe` printed `MODEPROBE OK`, where before the fix it failed on a directory losing its setuid bit.
 
 Two of that probe's rows needed the environment before they could judge the kernel: run over SSH the process keeps root's supplementary group 0 through `setresgid`, so a child that drops to uid 1000 is still in group 0 and the kernel is right to let it store setgid. Run through a wrapper that calls `setgroups(0)` first, the probe passes whole. That is one more of entry 51's environment assumptions, and it is now named there.
+
+### The night's root causes, 2026-09-13
+
+Two things were found by instrumenting rather than guessing, and both are fixed.
+
+The network. A cycle counter around the halves of `ethernet_tx`, built on the machine's own sources and booted there, said where a frame's time went: 291 cycles to assemble the frame and 12330 inside the driver, for one 1514-byte frame. The driver copied the frame into the chip's buffer a byte at a time, and so did the e1000; the kernel is built at -O0, so that loop is three instructions a byte. Replacing both with `k_memcpy` took UDP out from 73 to 119 MB/s, the wire. TCP's own four ring copies had the same shape, and fixing them took TCP out from 79 to 117 MB/s and TCP in to 116. The link is now full in both directions, where it began at 57 out and 69 in. SSH is 37.5 out and 2.7 in, so what is left there is Dropbear's own inbound path, not the kernel's.
+
+Two earlier readings in these notes were wrong and are withdrawn. The pipe does not run at 4.7 MB/s; it runs at 588. A small write did not cost 8.1 ms because of scheduling. Both figures were taken while two Codex units were working the machine, and the load was theirs. The rule that a measurement is worth nothing unless the machine is quiet is now paid for twice.
+
+The disk. The unit that read this path found the second inode store, `ext2.c:2268`, and a defect in the ported e2fsprogs: it tests the caller's buffer address for sector alignment and falls back to one 4 KiB write at a time when it is odd, which is what makes the install's grow take ten minutes. Removing the first inode store takes a 4 KiB write from 494 to 911 KB/s on the machine and its commands from 23996 to 19996 for 2000 writes. The port patch turns a full-size grow's 477659 write calls into 9346.
+
+The machine was lost for a while in the middle of this: two sessions installed trial kernels at once and one of them did not come up, so it sat at the bootloader with no keyboard. The owner power-cycled it and it came back on its fallback slot, which is what that slot is for, and a kernel installed and committed put it back on the installed root. Nothing was lost. One session at a time on the machine from now on.
