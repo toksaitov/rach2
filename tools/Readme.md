@@ -2,6 +2,8 @@
 
 The scripts under `tools/` are grouped by role: `setup/` prepares and reports on a machine, `verify/` implements the style suite, `inspect/` validates built artifacts, `image/` constructs disks and ISOs, and `dev/` holds developer utilities. The root Readme documents the public interface. The Makefile supplies prerequisites and arguments that are easy to omit when calling a script directly. The test runner, suites, capture checkers, and fixtures live under [`tests/system/`](../tests/system/Readme.md).
 
+`dev/machine_load.sh KEY ADDRESS SESSIONS SECONDS [DIR]` runs milestone 46's load row against an installed machine over SSH: each session copies the kernel tree and builds it with the staged TinyCC and pdpmake for the time given, and the sessions start a second apart because Dropbear allows five unauthenticated connections from one address at a time and twenty started together get five.
+
 ## Machine setup
 
 To build and boot Rach2 a machine needs GNU Make, a host C compiler, the
