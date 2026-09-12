@@ -423,8 +423,8 @@ static uint32_t loop_dropped_now(void)
     }
     buf[n] = 0;
     for (i = 0; i + 16 < n; i++) {
-        if (buf[i] == 'l' && mem_eq((const uint8_t *)(buf + i),
-                                    (const uint8_t *)"loopback_dropped ", 17)) {
+        if (buf[i] == 'l' &&
+            mem_eq((const uint8_t *)(buf + i), (const uint8_t *)"loopback_dropped ", 17)) {
             int k = i + 17;
 
             while (k < n && buf[k] >= '0' && buf[k] <= '9') {
@@ -451,37 +451,58 @@ static void tcp_loop_bulk(void)
     }
     dropped_before = loop_dropped_now();
 
-    args[0] = AF_INET; args[1] = SOCK_STREAM; args[2] = 0;
+    args[0] = AF_INET;
+    args[1] = SOCK_STREAM;
+    args[2] = 0;
     ls = socketcall(SC_SOCKET, args);
-    if (ls < 0) fail("bulk listener socket");
+    if (ls < 0)
+        fail("bulk listener socket");
     make_sockaddr(sa, TCP_PORT + 3, 0, 0, 0, 0);
-    args[0] = (uint32_t)ls; args[1] = (uint32_t)sa; args[2] = 16;
-    if (socketcall(SC_BIND, args) != 0) fail("bulk bind");
-    args[0] = (uint32_t)ls; args[1] = 2;
-    if (socketcall(SC_LISTEN, args) != 0) fail("bulk listen");
+    args[0] = (uint32_t)ls;
+    args[1] = (uint32_t)sa;
+    args[2] = 16;
+    if (socketcall(SC_BIND, args) != 0)
+        fail("bulk bind");
+    args[0] = (uint32_t)ls;
+    args[1] = 2;
+    if (socketcall(SC_LISTEN, args) != 0)
+        fail("bulk listen");
 
-    args[0] = AF_INET; args[1] = SOCK_STREAM; args[2] = 0;
+    args[0] = AF_INET;
+    args[1] = SOCK_STREAM;
+    args[2] = 0;
     cs = socketcall(SC_SOCKET, args);
-    if (cs < 0) fail("bulk client socket");
+    if (cs < 0)
+        fail("bulk client socket");
     make_sockaddr(sa, TCP_PORT + 3, 127, 0, 0, 1);
-    args[0] = (uint32_t)cs; args[1] = (uint32_t)sa; args[2] = 16;
-    if (socketcall(SC_CONNECT, args) != 0) fail("bulk connect");
+    args[0] = (uint32_t)cs;
+    args[1] = (uint32_t)sa;
+    args[2] = 16;
+    if (socketcall(SC_CONNECT, args) != 0)
+        fail("bulk connect");
 
-    args[0] = (uint32_t)ls; args[1] = 0; args[2] = 0;
+    args[0] = (uint32_t)ls;
+    args[1] = 0;
+    args[2] = 0;
     as = socketcall(SC_ACCEPT, args);
-    if (as < 0) fail("bulk accept");
+    if (as < 0)
+        fail("bulk accept");
 
-    if (sys_fcntl(cs, F_SETFL, O_NONBLOCK) != 0) fail("bulk client non-blocking");
-    if (sys_fcntl(as, F_SETFL, O_NONBLOCK) != 0) fail("bulk server non-blocking");
+    if (sys_fcntl(cs, F_SETFL, O_NONBLOCK) != 0)
+        fail("bulk client non-blocking");
+    if (sys_fcntl(as, F_SETFL, O_NONBLOCK) != 0)
+        fail("bulk server non-blocking");
 
     while (got < BULK_BYTES && spins < 200000u) {
         spins++;
         if (sent < BULK_BYTES) {
             uint32_t want = BULK_BYTES - sent;
 
-            if (want > sizeof(out)) want = sizeof(out);
+            if (want > sizeof(out))
+                want = sizeof(out);
             n = sys_write(cs, out, (int)want);
-            if (n > 0) sent += (uint32_t)n;
+            if (n > 0)
+                sent += (uint32_t)n;
         }
         n = sys_read(as, in, (int)sizeof(in));
         if (n > 0) {
