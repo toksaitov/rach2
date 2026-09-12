@@ -137,7 +137,11 @@
    contiguous and below 4 GiB. The alignments are AHCI-mandated. */
 #define AHCI_CMDLIST_SIZE  1024 /* 32 command headers of 32 bytes */
 #define AHCI_RECV_FIS_SIZE 256
-#define AHCI_CMDTABLE_SIZE 256 /* 128-byte header plus a 16-byte PRDT entry */
+/* The command table: the 128-byte FIS area and then the PRDT, one 16-byte
+ * entry per page of a heap buffer, so a request of BLOCK_REQ_MAX_SECTORS
+ * that starts mid-page, 257 pieces, has room; 4352 is a multiple of the
+ * 128-byte alignment the table needs. */
+#define AHCI_CMDTABLE_SIZE 4352
 
 /* How many disks one controller may publish. A port beyond the count is
    stopped and left, with a record. */
@@ -222,9 +226,12 @@ static volatile uint8_t ahci_reset_fis[AHCI_RECV_FIS_SIZE] __attribute__((aligne
 #define AHCI_CMD_W       (1u << 6)  /* command header: write direction */
 #define AHCI_PRDTL_ONE   (1u << 16) /* command header: one PRDT entry */
 #define AHCI_PRDT_OFFSET 0x80
-/* The entries the command table has room for after the FIS: eight, so a
- * buffer from the heap, one entry per page, may span 32 KiB. */
+/* The entries the command table has room for after the FIS: 264, so a
+ * buffer from the heap, one entry per page, may span the 1 MiB request. */
 #define AHCI_PRDT_MAX    ((AHCI_CMDTABLE_SIZE - AHCI_PRDT_OFFSET) / 16)
+/* The most one request to the disk may move: the block layer's whole
+ * limit, which the table describes page by page. */
+#define AHCI_REQ_SECTORS BLOCK_REQ_MAX_SECTORS
 #define AHCI_DBC_MASK    0x3FFFFFu /* PRDT byte count, bits 0-21 */
 
 /* Typed overlays on the DMA byte regions: one command-list header (the HBA
@@ -1425,7 +1432,7 @@ int ahci_init(void)
         }
         d->dev.sector_size = BLOCK_SECTOR_SIZE;
         d->dev.sector_count = d->sectors;
-        d->dev.max_sectors = BLOCK_REQ_MAX_SECTORS;
+        d->dev.max_sectors = AHCI_REQ_SECTORS;
         d->dev.flags = BLOCK_FAULT_SAFE | BLOCK_POLLABLE;
         d->dev.read = ahci_read;
         d->dev.write = ahci_write;

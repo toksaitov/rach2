@@ -777,7 +777,7 @@ static uint32_t model_ep_cycle[XHCI_SLOTS + 1][XHCI_MAX_DCI];
    QEMU does, a failure at block N with its code and residual, and the state
    a failure or a stop leaves the endpoint in. The blocks fetched are kept
    so a row can require which were executed. */
-static uint8_t medium[64 * 1024];
+static uint8_t medium[1024 * 1024];
 static uint32_t medium_at;
 static int model_ep_in[XHCI_SLOTS + 1][XHCI_MAX_DCI];
 static int model_ep_halted[XHCI_SLOTS + 1][XHCI_MAX_DCI];
@@ -923,11 +923,13 @@ static void model_ep_advance(uint32_t slot, uint32_t dci)
    a page by the low word of the host address the test gave it; a row that
    moves data registers its pages here so the model finds them again. A
    block naming no registered page moves nothing. */
-static uint8_t *model_pages[64];
+/* A 512 KiB transfer's 129 pieces, and pages beyond them for a refusal. */
+#define BIG_PAGES 260 /* a 512 KiB transfer's 129 pieces, and more for a refusal */
+static uint8_t *model_pages[BIG_PAGES + 64];
 static unsigned model_pages_n;
 static void model_page_register(void *p)
 {
-    if (model_pages_n < 64) {
+    if (model_pages_n < BIG_PAGES + 64) {
         model_pages[model_pages_n++] = (uint8_t *)p;
     }
 }
@@ -1219,9 +1221,9 @@ static struct usb_location root_at(int port)
 /* The rows over a 32 KiB transfer: the buffer the driver is given, whose
    pages are reached through the map below, and the pages the controller
    actually moves data to and from, in the order the map chooses. */
-static uint8_t big[16 * 4096] __attribute__((aligned(4096)));
-static uint8_t shadow[16 * 4096] __attribute__((aligned(4096)));
-static unsigned perm[16];
+static uint8_t big[BIG_PAGES * 4096] __attribute__((aligned(4096)));
+static uint8_t shadow[BIG_PAGES * 4096] __attribute__((aligned(4096)));
+static unsigned perm[BIG_PAGES];
 static int map_fail_at; /* the page whose translation fails, from one; 0 for none */
 
 /* The page of `shadow` that stands for a byte of `big`, by the map, as a
@@ -1291,8 +1293,8 @@ static void bulk_pair_up(void)
     xhci_command_done(hc, &result);
     model_ep_in[1][3] = 1;
     model_ep_in[1][4] = 0;
-    for (i = 0; i < 16; i++) {
-        perm[i] = 15 - i; /* the pages in the reverse order */
+    for (i = 0; i < BIG_PAGES; i++) {
+        perm[i] = BIG_PAGES - 1 - i; /* the pages in the reverse order */
         model_page_register(shadow + i * 4096);
     }
     map_fail_at = 0;
@@ -2715,6 +2717,50 @@ int main(void)
               xhci_poll(hc, &completion) == 1 && completion.status == USB_XFER_OK);
         CHECK("and the medium holds the bytes from the pages in the map's order",
               arrived(big + 2048, 32768, 0));
+    }
+
+    /* ---- a 512 KiB transfer as one descriptor of 129 blocks, and one
+       piece more than a record holds refused before publication ---- */
+    {
+        struct usb_transfer transfer;
+        struct usb_completion completion;
+        uint32_t first, i, chained = 0, ioc_at = 0, total = 0;
+
+        bulk_pair_up();
+        transfer.setup = 0;
+        transfer.buffer = big + 2048;
+        transfer.length = 524288;
+        transfer.direction = USB_DIR_IN;
+        transfer.generation = 0x300;
+        first = hc->slots[1].enqueue[3];
+        transfer_answers = 1;
+        CHECK("a 512 KiB IN transfer is queued", xhci_submit(hc, 1, 3, &transfer) == 0);
+        for (i = 0; i < 129; i++) {
+            const uint32_t *t = block(3, first + i);
+
+            chained += (t[3] & TRB_CHAIN) != 0;
+            if (t[3] & TRB_IOC) {
+                ioc_at = i + 1;
+            }
+            total += t[2] & 0x1FFFFu;
+        }
+        CHECK("as 129 blocks chained on all but the last, the event on the last, the bytes whole",
+              chained == 128 && ioc_at == 129 && total == 524288);
+        xhci_events(hc);
+        CHECK("it is reported once as whole",
+              xhci_poll(hc, &completion) == 1 && completion.status == USB_XFER_OK &&
+                  completion.residual == 0 && completion.length == 524288 &&
+                  completion.generation == 0x300 && xhci_poll(hc, &completion) == 0);
+        CHECK("and the bytes landed page by page where the blocks said",
+              landed(big + 2048, 524288, 0));
+        CHECK("and the transfer is retired", xhci_td_retired(hc, 1, 0x300) == 1);
+
+        transfer.length = 130 * 4096; /* 131 pieces from mid-page */
+        transfer.generation = 0x301;
+        first = hc->slots[1].enqueue[3];
+        CHECK("a transfer of one piece more than a record holds is refused",
+              xhci_submit(hc, 1, 3, &transfer) != 0);
+        CHECK("and nothing of it was published", hc->slots[1].enqueue[3] == first);
     }
 
     /* A transfer started three blocks before the ring's end: the Link it

@@ -91,7 +91,7 @@ static void note(void *ctx, unsigned long long done, unsigned long long total, u
  */
 static int verify(const char *path, unsigned long long offset, unsigned long long count, int show)
 {
-    static unsigned char buf[64 * 1024];
+    static unsigned char buf[1024 * 1024];
     struct sha256 sha;
     unsigned long long done = 0, last = 0;
     unsigned char digest[32];

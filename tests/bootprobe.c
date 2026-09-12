@@ -320,8 +320,8 @@ static void auth_case(int recovery)
         check(proc_disk_field("raw-driver-calls ", &rb), "the call count is readable");
         n = syscall3(SYS_READ, fd, (int)(size_t)big, 200 * SECTOR);
         check(n == 200 * SECTOR, "a 200-sector read of the whole-disk window is taken whole");
-        check(proc_disk_field("raw-driver-calls ", &ra) && ra - rb == 4,
-              "and took four driver calls, so the read loop batches too");
+        check(proc_disk_field("raw-driver-calls ", &ra) && ra - rb == 1,
+              "and took one driver call, the batch holding the whole read");
     }
 
     rc = syscall5(SYS_LLSEEK, fd, off_hi(at), off_lo(at), (int)(size_t)&pos, SEEK_SET);
@@ -341,9 +341,9 @@ static void auth_case(int recovery)
         got_after = proc_disk_field("raw-driver-calls ", &after);
         check(got_before && got_after, "/proc/disk reports a driver-call count");
         check(after > before, "the write is visible in it");
-        check(after - before == 4,
-              "and took four driver calls, not two hundred: 200 sectors at 64 a call");
-        check(proc_disk_field("raw-batch-sectors ", &batch) && batch == 64,
+        check(after - before == 1,
+              "and took one driver call, not two hundred: the batch holds 200 sectors");
+        check(proc_disk_field("raw-batch-sectors ", &batch) && batch == 2048,
               "/proc/disk reports the batch size the count should be read against");
 
         /* The call count says how devfs batched. What the driver did with each
@@ -352,9 +352,9 @@ static void auth_case(int recovery)
            device and required to match. */
         check(proc_disk_field("disk-commands ", &cmd_after), "/proc/disk reports disk commands");
         check(proc_disk_field("disk-flushes ", &flush_after), "and cache flushes");
-        check(cmd_after - cmd_before == 8,
-              "four batched writes cost exactly eight commands, not four hundred");
-        check(flush_after - flush_before == 4, "and exactly four cache flushes, not two hundred");
+        check(cmd_after - cmd_before == 2,
+              "and two disk commands, the write and its flush, not four hundred");
+        check(flush_after - flush_before == 1, "and exactly one cache flush, not two hundred");
     }
     syscall1(SYS_CLOSE, fd);
 }
@@ -381,7 +381,7 @@ static void window_batch_case(void)
     n = syscall3(SYS_READ, fd, (int)(size_t)big, 200 * SECTOR);
     check(n == 200 * SECTOR, "a 200-sector read of the gap is taken whole");
     check(proc_disk_field("raw-driver-calls ", &after), "and the count is readable after");
-    check(after - before == 4, "and took four driver calls, not two hundred");
+    check(after - before == 1, "and took one driver call, not two hundred");
     syscall1(SYS_CLOSE, fd);
 
     fd = syscall3(SYS_OPEN, (int)(size_t)"/dev/grubcore", O_RDWR, 0);
@@ -391,8 +391,8 @@ static void window_batch_case(void)
     check(proc_disk_field("raw-driver-calls ", &before), "the call count is readable again");
     n = syscall3(SYS_WRITE, fd, (int)(size_t)big, 200 * SECTOR);
     check(n == 200 * SECTOR, "a 200-sector write of the gap is taken whole");
-    check(proc_disk_field("raw-driver-calls ", &after) && after - before == 4,
-          "and took four driver calls, so the bounded write loop batches too");
+    check(proc_disk_field("raw-driver-calls ", &after) && after - before == 1,
+          "and took one driver call, so the bounded write loop batches too");
     syscall1(SYS_CLOSE, fd);
 }
 

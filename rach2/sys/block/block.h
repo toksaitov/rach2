@@ -239,9 +239,12 @@ struct block_request {
 };
 
 #define BLOCK_REQ_SECTORS 8u
-/* The most a device may take in one request: 32 KiB, the eight pages of a
- * heap buffer the AHCI command table describes. */
-#define BLOCK_REQ_MAX_SECTORS 64u
+/* The most any device may take in one request: 1 MiB, 256 pages of a heap
+ * buffer described page by page to the controller. Each driver declares
+ * its own limit within this one, and `block_max_sectors` holds it to this:
+ * the AHCI disk takes it whole, the USB stick half of it, the ATA disk 64
+ * sectors, since it moves a sector at a time through a port. */
+#define BLOCK_REQ_MAX_SECTORS 2048u
 
 /** The most one request to `device` may move, in sectors: the backing's
  * `max_sectors` through a partition view, or a page's worth. */
@@ -251,14 +254,15 @@ uint32_t block_max_sectors(block_device_t *device);
  * Transfer `count` whole sectors, sleeping the caller when the device does.
  *
  * On a `BLOCK_FAULT_SAFE` device this calls the vtable and returns, from any
- * context, at boot included. On a device with `submit` it runs from syscall
- * context only, splits the transfer into requests of at most a page, waits
- * when as many requests are live as the limit allows or the device holds
- * its share, and sleeps between `submit` and the completion or the end of
- * the device's deadline periods, the first of which starts when the request
- * is taken. Returns 0 or a negative errno; a request unanswered through its
- * periods is `-EIO` with the request quarantined, and so is a stalled
- * device.
+ * context, at boot included, in calls of at most the device's `max_sectors`.
+ * On a device with `submit` it runs from syscall context only, splits the
+ * transfer into requests of at most the device's `max_sectors`, halving the
+ * size when the heap has no buffer for it down to a page's, waits when as
+ * many requests are live as the limit allows or the device holds its share,
+ * and sleeps between `submit` and the completion or the end of the device's
+ * deadline periods, the first of which starts when the request is taken.
+ * Returns 0 or a negative errno; a request unanswered through its periods
+ * is `-EIO` with the request quarantined, and so is a stalled device.
  */
 int block_request(block_device_t *device, int write, uint64_t lba,
                   uint32_t count, void *buffer);

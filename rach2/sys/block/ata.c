@@ -29,6 +29,11 @@
 #include "../lib/kerrno.h"
 #include "../lib/kint.h"
 
+/* The most one request to the disk may move: 32 KiB, moved a sector at a
+ * time through the data port with interrupts off, so a request is kept
+ * short where the AHCI disk takes the block layer's whole limit. */
+#define ATA_REQ_SECTORS 64u
+
 /* Command-block registers, as offsets from the channel's command base. */
 #define ATA_REG_DATA     0  /* 16-bit data port */
 #define ATA_REG_SECCOUNT 2  /* sector count (0 means 256) */
@@ -432,7 +437,7 @@ int ata_init(void)
             d->dev.sector_size = BLOCK_SECTOR_SIZE;
             d->dev.sector_count = d->sectors;
             d->dev.flags = BLOCK_FAULT_SAFE;
-            d->dev.max_sectors = BLOCK_REQ_MAX_SECTORS;
+            d->dev.max_sectors = ATA_REQ_SECTORS;
             d->dev.read = ata_read;
             d->dev.write = ata_write;
             d->dev.drvdata = d;

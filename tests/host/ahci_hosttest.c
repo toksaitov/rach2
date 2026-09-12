@@ -397,6 +397,13 @@ struct disk *disk_register(block_device_t *dev, const char *transport, int locat
     return 0;
 }
 
+/* The identity window is turned off for the host build, as the xHCI test
+   does: the kernel's 32-bit addresses are the host's low words, so a buffer
+   would otherwise look as if it lay in the window by the accident of its
+   address, and the command table's page walk would never run. */
+#include "../../rach2/sys/mm/paging.h"
+#undef HARD_MEMORY_LIMIT
+#define HARD_MEMORY_LIMIT 0u
 #include "../../rach2/sys/block/ahci.c"
 
 void register_isr_handler(uint8_t vector, isr_handler_t handler, const char *name)
@@ -694,6 +701,43 @@ int main(void)
               ahci_select_port() == 0 && ahci_port_start(&ahci_disks[0]) == 0);
         CHECK("a command that completes is accepted",
               ahci_run_command(&ahci_disks[0], ATA_IDENTIFY, 0, 0, buf, sizeof(buf), 0) == 0);
+
+        /* A request of the block layer's whole limit, from a buffer that
+           starts mid-page: the table describes it as 257 entries, a piece
+           per page, the first and last half pages, the FIS naming the
+           sectors; and a buffer of more pieces than the table has entries
+           for is refused. */
+        {
+            static uint8_t huge[266 * 4096] __attribute__((aligned(4096)));
+            volatile ahci_cmd_header_t *hdr = (volatile ahci_cmd_header_t *)ahci_disks[0].cmdlist;
+            volatile ahci_prdt_t *prdt =
+                (volatile ahci_prdt_t *)(ahci_disks[0].cmdtable + AHCI_PRDT_OFFSET);
+            volatile uint8_t *cfis = ahci_disks[0].cmdtable;
+
+            moved_bytes = 2048 * 512;
+            CHECK("a 2048-sector read from a mid-page buffer is accepted",
+                  ahci_run_command(&ahci_disks[0], ATA_READ_DMA_EXT, 0x12345, 2048, huge + 2048,
+                                   2048 * 512, 0) == 0);
+            CHECK("described as 257 entries", (hdr->dw0 >> 16) == 257);
+            CHECK("the first and the last a half page, the ones between a page",
+                  (prdt[0].dbc & AHCI_DBC_MASK) + 1 == 2048 &&
+                      (prdt[1].dbc & AHCI_DBC_MASK) + 1 == 4096 &&
+                      (prdt[255].dbc & AHCI_DBC_MASK) + 1 == 4096 &&
+                      (prdt[256].dbc & AHCI_DBC_MASK) + 1 == 2048);
+            CHECK("naming 2048 sectors at the address given",
+                  cfis[12] == 0 && cfis[13] == 8 && cfis[4] == 0x45 && cfis[5] == 0x23 &&
+                      cfis[6] == 0x01);
+            moved_bytes = 512;
+            {
+                unsigned issued_before = issued;
+
+                /* 265 pages from mid-page: 266 pieces, past the table's 264. */
+                CHECK("a buffer of more pieces than the table holds is refused",
+                      ahci_run_command(&ahci_disks[0], ATA_READ_DMA_EXT, 0, 2048, huge + 2048,
+                                       265 * 4096, 0) != 0);
+                CHECK("and no command was issued for it", issued == issued_before);
+            }
+        }
 
         model_reset();
         (void)ahci_select_port();

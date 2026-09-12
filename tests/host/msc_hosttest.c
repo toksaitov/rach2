@@ -70,7 +70,7 @@ void *k_memset(void *dst, char value, size_t length)
 
 /* ---- the model ---- */
 
-#define MEDIUM_SECTORS 64u
+#define MEDIUM_SECTORS 2048u
 #define SECTOR         512u
 
 /* What the model answers, one knob per case a row needs. */
@@ -562,6 +562,8 @@ int xhci_number(const struct xhci_ctrl *hc)
     return hc == the_ctrl ? 0 : -1;
 }
 
+static uint32_t largest_length; /* the longest transfer submitted */
+
 int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb_transfer *transfer)
 {
     int stage = stage_of(endpoint, transfer);
@@ -572,6 +574,9 @@ int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb
     }
     if (td_names(transfer->buffer)) {
         pages_reused++;
+    }
+    if (transfer->length > largest_length) {
+        largest_length = transfer->length;
     }
     td_track(endpoint, transfer->generation, transfer->buffer);
     stage_of_last = stage;
@@ -944,6 +949,31 @@ int main(void)
         CHECK("with the medium's own bytes",
               page[0] == dev.medium[2 * SECTOR] && page[SECTOR] == dev.medium[3 * SECTOR]);
         CHECK("as one command, counted", commands_counted == 1);
+    }
+
+    /* A read of the driver's whole request, 1024 sectors, as one command
+       and one data transfer of 512 KiB. */
+    {
+        static unsigned char bigpage[1024 * SECTOR];
+        struct block_request *r = make_request(0, 16, 1024, bigpage);
+        int i;
+
+        block.completions = 0;
+        commands_counted = 0;
+        largest_length = 0;
+        dev.medium[16 * SECTOR] = 0x5A;
+        dev.medium[(16 + 1023) * SECTOR] = 0xA5;
+        CHECK("a 1024-sector read is taken",
+              msc_block_device(0)->submit(msc_block_device(0), r) == 0);
+        for (i = 0; i < 40 && block.completions == 0; i++) {
+            pump(1);
+        }
+        CHECK("and completes", block.completions == 1 && block.last_status == 0);
+        CHECK("as one command with one data transfer of 512 KiB",
+              commands_counted == 1 && largest_length == 1024 * SECTOR);
+        CHECK("with the medium's own bytes, first and last sector",
+              bigpage[0] == dev.medium[16 * SECTOR] &&
+                  bigpage[1023 * SECTOR] == dev.medium[(16 + 1023) * SECTOR]);
     }
     {
         struct block_request *r = make_request(1, 5, 1, page);

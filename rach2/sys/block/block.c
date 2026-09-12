@@ -70,7 +70,11 @@ uint32_t block_max_sectors(block_device_t *device)
     while (device->read == block_partition_read) {
         device = ((block_partition_t *)device)->backing;
     }
-    return device->max_sectors ? device->max_sectors : BLOCK_REQ_SECTORS;
+    if (device->max_sectors == 0) {
+        return BLOCK_REQ_SECTORS;
+    }
+    return device->max_sectors > BLOCK_REQ_MAX_SECTORS ? BLOCK_REQ_MAX_SECTORS
+                                                       : device->max_sectors;
 }
 
 static int block_partition_flush(block_device_t *device, struct block_request *request)

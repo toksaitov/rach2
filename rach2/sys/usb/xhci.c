@@ -140,12 +140,12 @@
 #define XHCI_COMPLETIONS 8
 
 /* The endpoints a transfer record is kept for, and the blocks one holds: a
- * 32 KiB buffer that starts mid-page is nine pieces, a control transfer
+ * 512 KiB buffer that starts mid-page is 129 pieces, a control transfer
  * three blocks. Two records per endpoint: a stick has a data transfer and
  * a wrapper on one endpoint at most, and the layer above lets a record go
  * at its command's end. */
 #define XHCI_TD_DCI     XHCI_MAX_DCI
-#define XHCI_TD_TRBS    12
+#define XHCI_TD_TRBS    130
 #define XHCI_TD_RECORDS 2
 
 /*
@@ -206,7 +206,7 @@ struct xhci_slot {
      * one record per submission until the caller lets it go, see
      * `struct xhci_td`. A page's worth, taken when the first endpoint is
      * opened; a device has endpoints up to index seven. */
-    struct xhci_td *td;
+    struct xhci_td *td[XHCI_TD_DCI]; /* each opened endpoint's records */
     uint32_t max_packet[XHCI_MAX_DCI];
     uint8_t ep_state[XHCI_MAX_DCI];  /* XHCI_EP_RUNNING, _HALTED or _STOPPED */
     uint8_t quiescing[XHCI_MAX_DCI]; /* the core is stopping it: nothing is submitted */
@@ -2174,9 +2174,11 @@ static void slot_pages_free(struct xhci_slot *s)
         s->ctx = 0;
         s->ctx_phys = 0;
     }
-    if (s->td) {
-        kfree(s->td);
-        s->td = 0;
+    for (i = 0; i < XHCI_TD_DCI; i++) {
+        if (s->td[i]) {
+            kfree(s->td[i]);
+            s->td[i] = 0;
+        }
     }
 }
 
@@ -2370,16 +2372,16 @@ int xhci_endpoint_open(struct xhci_ctrl *hc, int device, const struct usb_endpoi
     s->max_packet[dci] = ep->max_packet ? (uint32_t)ep->max_packet : 512u;
     s->ep_state[dci] = XHCI_EP_RUNNING;
     s->quiescing[dci] = 0;
-    if (!s->td) {
-        s->td = kzalloc(sizeof(struct xhci_td) * XHCI_TD_DCI * XHCI_TD_RECORDS);
-        if (!s->td) {
+    if (dci < XHCI_TD_DCI && !s->td[dci]) {
+        s->td[dci] = kzalloc(sizeof(struct xhci_td) * XHCI_TD_RECORDS);
+        if (!s->td[dci]) {
             s->open[dci] = 0;
             return -1;
         }
     }
     if (dci < XHCI_TD_DCI) {
         for (i = 0; i < XHCI_TD_RECORDS; i++) {
-            s->td[dci * XHCI_TD_RECORDS + i].used = 0;
+            s->td[dci][i].used = 0;
         }
     }
     xhci_barrier();
@@ -2448,10 +2450,10 @@ static uint32_t *ring_put(struct xhci_ctrl *hc, int device, uint32_t dci, uint32
 /** The records of endpoint `dci`, or NULL for an endpoint that has none. */
 static struct xhci_td *td_records(struct xhci_slot *s, uint32_t dci)
 {
-    if (!s->td || dci >= XHCI_TD_DCI) {
+    if (dci >= XHCI_TD_DCI || !s->td[dci]) {
         return 0;
     }
-    return &s->td[dci * XHCI_TD_RECORDS];
+    return s->td[dci];
 }
 
 /** Whether `t` is a transfer the controller may still reach. */
@@ -2558,7 +2560,11 @@ static uint32_t td_size(uint32_t total, uint32_t through, uint32_t max_packet, i
  * untouched. The first block is written with its cycle bit wrong, the rest
  * and a Link the controller may cross after it, and the first block's
  * cycle bit last, so a running endpoint cannot fetch part of a transfer
- * (4.11.7.1); the doorbell follows.
+ * (4.11.7.1); the doorbell follows. A transfer whose blocks and Link would
+ * wrap over its own start is refused before anything is published, as one
+ * of more pieces than a record holds is; the control endpoint is opened by
+ * the address command and not by `xhci_endpoint_open`, so its records are
+ * taken here.
  */
 int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb_transfer *transfer)
 {
@@ -2625,19 +2631,17 @@ int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb
         blocks = pieces;
     }
 
-    /* The record, and the ring's room: the blocks and a Link after them, none
-     * of them over a transfer the controller may still reach. The control
-     * endpoint is opened by the address command and not by
-     * `xhci_endpoint_open`,
-     * so its records are taken here. */
-    if (!s->td) {
-        s->td = kzalloc(sizeof(struct xhci_td) * XHCI_TD_DCI * XHCI_TD_RECORDS);
-        if (!s->td) {
+    if (dci < XHCI_TD_DCI && !s->td[dci]) {
+        s->td[dci] = kzalloc(sizeof(struct xhci_td) * XHCI_TD_RECORDS);
+        if (!s->td[dci]) {
             return -1;
         }
     }
     t = td_take(s, dci);
     if (!t) {
+        return -1;
+    }
+    if (blocks + 1 > XHCI_EP_RING_TRBS - 1) {
         return -1;
     }
     at = s->enqueue[dci];
@@ -2761,14 +2765,16 @@ static struct xhci_td *td_by_generation(struct xhci_ctrl *hc, int device, uint32
     uint32_t dci;
     int i;
 
-    if (device <= 0 || device > (int)hc->nslots || !hc->slots[device].used ||
-        !hc->slots[device].td) {
+    if (device <= 0 || device > (int)hc->nslots || !hc->slots[device].used) {
         return 0;
     }
     s = &hc->slots[device];
     for (dci = 1; dci < XHCI_TD_DCI; dci++) {
-        struct xhci_td *r = &s->td[dci * XHCI_TD_RECORDS];
+        struct xhci_td *r = s->td[dci];
 
+        if (!r) {
+            continue;
+        }
         for (i = 0; i < XHCI_TD_RECORDS; i++) {
             if (r[i].used && r[i].generation == generation) {
                 return &r[i];

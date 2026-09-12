@@ -6,9 +6,11 @@
 
 #include "sectorcopy.h"
 
-/* Sixty-four sectors, which is what the disk driver batches into one command:
- * a buffer smaller than that turns one transfer into many. */
-#define CHUNK (64 * SECTORCOPY_SECTOR)
+/* Two thousand and forty-eight sectors, a mebibyte, the most the block layer
+ * moves in one request: a write is gathered to that before it goes, so a
+ * stream that arrives in small pieces still reaches the disk in large
+ * requests. */
+#define CHUNK (2048 * SECTORCOPY_SECTOR)
 
 /** Put a refusal in the caller's buffer, if it asked for one. */
 static void say(char *err, size_t errlen, const char *what)
@@ -148,18 +150,31 @@ int sectorcopy_run(const struct sectorcopy_io *io, unsigned long long count,
             want = (unsigned long)left;
         }
         n = io->read(io->ctx, buf + held, want);
-        if (n < 0) {
-            say(err, errlen, "the stream failed");
-            return -1;
-        }
-        if (n == 0) {
-            say(err, errlen, "the stream ended before the length it declared");
+        if (n <= 0) {
+            /* The whole sectors gathered so far go to the device before the
+             * failure is reported, so that the count written is what the
+             * disk holds. */
+            unsigned long chunk = held - (held % SECTORCOPY_SECTOR);
+            unsigned long off = 0;
+
+            while (off < chunk) {
+                long w = io->write(io->ctx, buf + off, chunk - off);
+
+                if (w <= 0) {
+                    break;
+                }
+                off += (unsigned long)w;
+                done += (unsigned long long)w;
+                *written = done;
+            }
+            say(err, errlen, n < 0 ? "the stream failed" : "the stream ended before the length it declared");
             return -1;
         }
         held += (unsigned long)n;
 
-        /* Whole sectors go now; the tail waits for the rest of its sector. */
-        while (held >= SECTORCOPY_SECTOR) {
+        /* A full batch goes, or the stream's last whole sectors; a partial
+         * batch waits for more of the stream. */
+        while (held >= SECTORCOPY_SECTOR && (held == CHUNK || done + held == count)) {
             unsigned long chunk = held - (held % SECTORCOPY_SECTOR);
             unsigned long off = 0;
 

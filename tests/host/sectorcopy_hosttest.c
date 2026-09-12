@@ -265,12 +265,17 @@ static void check_copy(void)
           "a stream that fails mid-way fails the copy");
     CHECK(strstr(err, "stream failed") != NULL, "and says the stream is what failed");
 
-    /* The transfer size: sixty-four sectors is what the driver batches, and a
-       library that wrote a sector per call would turn one command into many. */
-    load(128 * 1024);
-    CHECK(sectorcopy_run(&IO, 128 * 1024, &written, err, sizeof(err)) == 0, "a large image copies");
-    CHECK(m.largest_write == 64 * SECTORCOPY_SECTOR,
-          "and goes to the device sixty-four sectors at a time");
+    /* The transfer size: 2048 sectors, a mebibyte, is what the block layer
+       moves in one request, and a library that wrote a sector per call, or
+       whatever piece the stream handed it, would turn one command into
+       many; the stream's pieces are gathered to a full batch first. */
+    load(2 * 1024 * 1024 + 32 * 1024);
+    m.per_read = 64 * 1024;
+    CHECK(sectorcopy_run(&IO, 2 * 1024 * 1024 + 32 * 1024, &written, err, sizeof(err)) == 0,
+          "a large image copies");
+    CHECK(m.largest_write == 2048 * SECTORCOPY_SECTOR,
+          "and goes to the device a mebibyte at a time, gathered from smaller reads");
+    CHECK(memcmp(m.device, m.source, 2 * 1024 * 1024 + 32 * 1024) == 0, "byte for byte");
 
     /* The last read, the one that establishes the stream ended where it said.
        A failure there proves nothing, and a copy that reported success on it

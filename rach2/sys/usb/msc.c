@@ -144,9 +144,10 @@
 #define MSC_READY_MS    10000u
 #define MSC_TEST_GAP_MS 100u
 
-/* The most this driver moves in one command, which is the block layer's
- * request page. */
-#define MSC_MAX_SECTORS BLOCK_REQ_SECTORS
+/* The most this driver moves in one command: 512 KiB, whose 129 pieces at
+ * most fit the endpoint ring beside the command's wrapper, where the block
+ * layer's whole limit would not. */
+#define MSC_REQ_SECTORS 1024u
 #define MSC_SECTOR_SIZE 512u
 
 /* How many requests may wait for one stick. The block layer's pool is
@@ -1867,7 +1868,7 @@ static void publish(struct msc_device *m, int lun)
     u->block.sector_count = u->blocks;
     u->block.flags = u->write_protect ? BLOCK_READ_ONLY : 0u;
     u->block.deadline_ticks = MSC_DEADLINE_TICKS;
-    u->block.max_sectors = BLOCK_REQ_MAX_SECTORS; /* a 32 KiB request as one command */
+    u->block.max_sectors = MSC_REQ_SECTORS; /* a 512 KiB request as one command */
     u->block.read = 0;
     u->block.write = 0;
     u->block.submit = msc_block_submit;

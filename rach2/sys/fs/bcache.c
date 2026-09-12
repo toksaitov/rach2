@@ -398,6 +398,10 @@ static int write_buffer(struct bbuf *b)
  * writer that finds it held writes its blocks one at a time. */
 static uint8_t *run_stage;
 static int run_stage_busy;
+/* The block a run is being filled for: not a victim while the run's later
+ * blocks are keyed, since the caller has let it go to key them and would
+ * otherwise find it gone. */
+static struct bbuf *fill_keep;
 #define RUN_BLOCKS (BLOCK_REQ_MAX_SECTORS / BCACHE_BLOCK_SECTORS)
 
 /**
@@ -606,7 +610,7 @@ again:
         }
         if (!victim) {
             for (b = lru_head; b; b = b->lru_next) {
-                if (b->holder != -1) {
+                if (b->holder != -1 || b == fill_keep) {
                     continue;
                 }
                 if (b->dirty && (b->write_failed || !victim_may_be_written(b->dev, dev))) {
@@ -696,7 +700,11 @@ again:
  * device since the staged read, a dirty buffer of the run evicted by one
  * of these gets included, may have made the staged bytes of a block older
  * than the disk's, and no block is filled from them after one: the fill
- * stops, and a buffer keyed fresh for it is emptied again.
+ * stops, and a buffer keyed fresh for it is emptied again. A run is at most
+ * half the cache's limit, so that its last blocks cannot evict its first,
+ * and the caller's block, the first, is no victim until every block is in;
+ * it is not held, since the caller may hold three buffers already and a
+ * fourth would leave none for the run's own keying.
  */
 static int fill_run(block_device_t *dev, uint64_t blk)
 {
@@ -706,6 +714,9 @@ static int fill_run(block_device_t *dev, uint64_t blk)
 
     if (most > RUN_BLOCKS) {
         most = RUN_BLOCKS;
+    }
+    if (most > bcache_limit() / 2u) {
+        most = bcache_limit() / 2u;
     }
     if (most <= 1 || run_stage_busy || blk >= whole) {
         return 0;
@@ -747,8 +758,12 @@ static int fill_run(block_device_t *dev, uint64_t blk)
             k_memcpy(b->data, run_stage + i * BCACHE_BLOCK_BYTES, BCACHE_BLOCK_BYTES);
             stat_fills++;
         }
+        if (i == 0) {
+            fill_keep = b; /* the caller's block: no victim while the run is in */
+        }
         bcache_release(b);
     }
+    fill_keep = 0;
     run_stage_busy = 0;
     ahead_dev = dev;
     ahead_next = blk + n;

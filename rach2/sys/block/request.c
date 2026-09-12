@@ -310,11 +310,15 @@ static uint32_t req_periods(const block_device_t *device)
  * request now.
  */
 static struct block_request *req_take(block_device_t *device, int write, uint64_t lba,
-                                      uint32_t count, int wait)
+                                      uint32_t count, int wait, int *why)
 {
     block_device_t *owner = block_submitter(device);
     int waited = 0;
     uint32_t wait_from = pit_now_us();
+
+    if (why) {
+        *why = -EIO;
+    }
 
     block_request_init();
     for (;;) {
@@ -333,7 +337,10 @@ static struct block_request *req_take(block_device_t *device, int write, uint64_
             r = req_new(count);
             if (!r) {
                 irq_restore(flags);
-                klog(KLOG_WARN, "block", "request: no memory");
+                if (why) {
+                    *why = -ENOMEM;
+                }
+                klog(KLOG_WARN, "block", "request: no memory for %u sectors", (unsigned)count);
                 return NULL;
             }
         }
@@ -396,17 +403,22 @@ static int req_done(void *arg)
  *
  * Sleeps until the completion or the deadline. A signal does not end the
  * wait: the device owns the page until it answers, so the wait is the
- * uninterruptible kind, bounded by the deadline instead.
+ * uninterruptible kind, bounded by the deadline instead. A read's bytes
+ * are copied out with interrupts on, once the device has answered and let
+ * the buffer go: up to a mebibyte, too long to hold the machine's
+ * interrupts for. Returns -ENOMEM when the heap had no buffer for the
+ * request, which the caller may retry smaller.
  */
 static int req_run_one(block_device_t *device, int write, uint64_t lba, uint32_t count,
                        uint8_t *buffer)
 {
-    struct block_request *r = req_take(device, write, lba, count, 1);
+    int why;
+    struct block_request *r = req_take(device, write, lba, count, 1, &why);
     uint32_t flags;
     int status;
 
     if (!r) {
-        return -EIO;
+        return why;
     }
     if (write) {
         k_memcpy(r->page, buffer, count * BLOCK_SECTOR_SIZE);
@@ -430,9 +442,11 @@ static int req_run_one(block_device_t *device, int write, uint64_t lba, uint32_t
         return -EIO;
     }
     status = r->status;
+    irq_restore(flags);
     if (status == 0 && !write) {
         k_memcpy(buffer, r->page, count * BLOCK_SECTOR_SIZE);
     }
+    flags = irq_save();
     req_let_go(r, 1);
     irq_restore(flags);
     wq_wake_all(&pool_wq);
@@ -442,17 +456,27 @@ static int req_run_one(block_device_t *device, int write, uint64_t lba, uint32_t
 int block_request(block_device_t *device, int write, uint64_t lba, uint32_t count, void *buffer)
 {
     uint8_t *bytes = buffer;
-    uint32_t eflags;
+    uint32_t eflags, most;
 
     if (!device || count == 0 || lba >= device->sector_count ||
         count > device->sector_count - lba) {
         return -EIO;
     }
     if (block_flags(device) & BLOCK_FAULT_SAFE) {
-        if (write) {
-            return device->write(device, lba, count, buffer);
+        most = block_max_sectors(device);
+        while (count > 0) {
+            uint32_t chunk = count > most ? most : count;
+            int rc = write ? device->write(device, lba, chunk, bytes)
+                           : device->read(device, lba, chunk, bytes);
+
+            if (rc != 0) {
+                return rc;
+            }
+            lba += chunk;
+            bytes += chunk * BLOCK_SECTOR_SIZE;
+            count -= chunk;
         }
-        return device->read(device, lba, count, buffer);
+        return 0;
     }
     /* A device that sleeps its caller and answers in the same call is called
      * directly and takes no request: the device under it takes one while it
@@ -485,11 +509,18 @@ int block_request(block_device_t *device, int write, uint64_t lba, uint32_t coun
         }
         k_panic("block: a sleeping device was reached outside syscall context");
     }
+    most = block_max_sectors(device);
     while (count > 0) {
-        uint32_t most = block_max_sectors(device);
         uint32_t chunk = count > most ? most : count;
         int rc = req_run_one(device, write, lba, chunk, bytes);
 
+        if (rc == -ENOMEM && chunk > BLOCK_REQ_SECTORS) {
+            most = chunk / 2 < BLOCK_REQ_SECTORS ? BLOCK_REQ_SECTORS : chunk / 2;
+            continue;
+        }
+        if (rc == -ENOMEM) {
+            return -EIO; /* no buffer even at a page's size */
+        }
         if (rc != 0) {
             return rc;
         }
@@ -517,7 +548,7 @@ int block_flush(block_device_t *device)
     if (device->flags & BLOCK_CALLER_SYNC) {
         return device->flush(device, 0); /* answers in this call, no request */
     }
-    r = req_take(device, 1, 0, 1, 1);
+    r = req_take(device, 1, 0, 1, 1, 0);
     if (!r) {
         return -EIO;
     }
@@ -554,7 +585,7 @@ struct block_request *block_request_begin(block_device_t *device, uint64_t lba, 
         lba >= device->sector_count || count > device->sector_count - lba) {
         return NULL;
     }
-    r = req_take(device, 0, lba, count, 0);
+    r = req_take(device, 0, lba, count, 0, 0);
     if (!r) {
         return NULL;
     }

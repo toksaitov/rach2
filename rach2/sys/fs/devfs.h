@@ -108,9 +108,12 @@ void devfs_bootpart_withdraw(void);
 /** Withdraw /dev/grubcore; a no-op when it was never published. */
 void devfs_grubcore_withdraw(void);
 
-/* Sectors carried by one driver call from a raw window. Reported by /proc/disk
- * beside the call count so the two can be compared. */
-#define DEVFS_RAW_BATCH_SECTORS 64
+/* Sectors carried by one driver call from a raw window, a mebibyte, the
+ * block layer's whole request; a driver that takes less splits it. Reported
+ * by /proc/disk beside the call count so the two can be compared. */
+#define DEVFS_RAW_BATCH_SECTORS 2048
+/* The static buffer's sectors, the fallback when the heap has no batch. */
+#define DEVFS_RAW_BATCH_STATIC_SECTORS 64
 
 /**
  * How many driver calls the raw disk windows have made since boot.

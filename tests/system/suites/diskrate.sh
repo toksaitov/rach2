@@ -165,9 +165,11 @@ SDEFS='t() { s=$(date +%s); if eval "$2"; then echo T_$1 $(( $(date +%s) - s ));
     "send=c stickwrite1" "expect=C_stickwrite1" \
     "send=t stickread 'dd if=/dev/disk0 bs=32k skip=32 count=128 2>/tmp/dd.err | cksum > /tmp/sum && grep -q \"^4194304 bytes\" /tmp/dd.err'" "expect=T_stickread" \
     "send=c stickread1" "expect=C_stickread1" \
-    "send=i=0; while [ \$i -lt 128 ]; do p \$i; i=\$((i + 1)); done | cksum > /tmp/want; cmp /tmp/sum /tmp/want && echo SAME; echo STICK\"\"DONE" "expect=STICKDONE" > /dev/null 2>&1 \
+    "send=t stickbig 'dd if=/dev/disk0 bs=512k skip=2 count=8 2>/tmp/dd.err | cksum > /tmp/sumbig && grep -q \"^4194304 bytes\" /tmp/dd.err'" "expect=T_stickbig" \
+    "send=c stickbig1" "expect=C_stickbig1" \
+    "send=i=0; while [ \$i -lt 128 ]; do p \$i; i=\$((i + 1)); done | cksum > /tmp/want; cmp /tmp/sum /tmp/want && echo SAME; cmp /tmp/sumbig /tmp/want && echo SAME\"\"BIG; echo STICK\"\"DONE" "expect=STICKDONE" > /dev/null 2>&1 \
     || fail "the stick boot did not reach its end; see $SLOG"
-grep -aq "^SAME" "$SLOG" || { echo "diskrate-test: FAIL: the stick did not read back what was written" >&2; rc=1; }
+tr -d '\r' < "$SLOG" | grep -aqx "SAME" || { echo "diskrate-test: FAIL: the stick did not read back what was written" >&2; rc=1; }
 # exact NAME FROM TO N TEXT: the commands between two counter reads, exactly N.
 exact() {
     before=$(tr -d '\r' < "$SLOG" | grep -a "^C_$2 " | tail -1 | awk '{print $2}')
@@ -186,9 +188,45 @@ row stickwrite 120 "4 MiB written raw to the stick in 32 KiB requests"
 row stickread 120 "4 MiB read raw from the stick in 32 KiB requests"
 exact stickwrite stickwrite0 stickwrite1 128 "the stick write's data commands"
 exact stickread stickwrite1 stickread1 128 "the stick read's data commands"
+row stickbig 120 "4 MiB read raw from the stick in 512 KiB requests"
+exact stickbig stickread1 stickbig1 8 "the stick read's data commands at 512 KiB a request"
+tr -d '\r' < "$SLOG" | grep -aqx "SAMEBIG" || { echo "diskrate-test: FAIL: the 512 KiB reads did not read what the 32 KiB reads read" >&2; rc=1; }
 for r in stickwrite stickread; do
     echo "diskrate-test: $r: $(tr -d '\r' < "$SLOG" | grep -a "^T_$r [0-9]" | tail -1 | awk '{printf "%d s, %d KB/s", $2, ($2 > 0 ? 4096 / $2 : 4096)}')"
 done
+
+# ---- the AHCI disk, whose requests are the block layer's whole limit: 32
+#      MiB written in 1 MiB calls and read back in 1 MiB and in 32 KiB
+#      calls, the commands counted per call size and the bytes the same ----
+AHCI="$DIR/ahci.img"; ALOG="$DIR/ahci.log"
+dd if=/dev/zero of="$AHCI" bs=1048576 count=64 2>/dev/null || fail "the AHCI image"
+"$HARNESS" --kernel "$RKERNEL" --initrd "$RIMAGE" \
+    --qemu-arg=-cpu --qemu-arg=max --qemu-arg=-m --qemu-arg=512 --append "rach2.disk=ahci" \
+    --drive "file=$AHCI,format=raw,if=none,id=drv0" \
+    --qemu-arg=-device --qemu-arg=ich9-ahci,id=ahci0 \
+    --qemu-arg=-device --qemu-arg=ide-hd,drive=drv0,bus=ahci0.0 \
+    --timeout 900 --steptmo 300 --ok "AHCIDONE" --log "$ALOG" \
+    "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" "expect=~ #" \
+    "send=$SDEFS" "expect=DEFSDONE" \
+    "send=yes RATE-AHCI-PATTERN-LINE | head -c 32768 > /tmp/b32; i=0; while [ \$i -lt 32 ]; do dd if=/tmp/b32 of=/dev/disk0 bs=32k seek=\$((128 + i)) count=1 2>/dev/null; i=\$((i + 1)); done; sync; echo PAT\"\"DONE" "expect=PATDONE" \
+    "send=c ahciwrite0" "expect=C_ahciwrite0" \
+    "send=t ahciwrite 'i=0; while [ \$i -lt 32 ]; do moved 1048576 dd if=/dev/disk0 of=/dev/disk0 bs=1M skip=4 seek=\$((8 + i)) count=1 || break; i=\$((i + 1)); done; sync; [ \$i = 32 ]'" "expect=T_ahciwrite" \
+    "send=c ahciwrite1" "expect=C_ahciwrite1" \
+    "send=t ahciread 'dd if=/dev/disk0 bs=1M skip=8 count=32 2>/tmp/dd.err | cksum > /tmp/suma && grep -q \"^33554432 bytes\" /tmp/dd.err'" "expect=T_ahciread" \
+    "send=c ahciread1" "expect=C_ahciread1" \
+    "send=t ahcismall 'dd if=/dev/disk0 bs=32k skip=256 count=1024 2>/tmp/dd.err | cksum > /tmp/sumb && grep -q \"^33554432 bytes\" /tmp/dd.err'" "expect=T_ahcismall" \
+    "send=c ahcismall1" "expect=C_ahcismall1" \
+    "send=i=0; while [ \$i -lt 32 ]; do dd if=/dev/disk0 bs=1M skip=4 count=1 2>/dev/null; i=\$((i + 1)); done | cksum > /tmp/wanta; cmp /tmp/suma /tmp/wanta && cmp /tmp/sumb /tmp/wanta && echo SAME\"\"AHCI; echo AHCI\"\"DONE" "expect=AHCIDONE" > /dev/null 2>&1 \
+    || fail "the AHCI boot did not reach its end; see $ALOG"
+LOG="$ALOG"
+row ahciwrite 120 "32 MiB written to the AHCI disk in 1 MiB requests"
+row ahciread 120 "32 MiB read from the AHCI disk in 1 MiB requests"
+row ahcismall 120 "32 MiB read from the AHCI disk in 32 KiB requests"
+SLOG="$ALOG"
+exact ahciwrite ahciwrite0 ahciwrite1 96 "the AHCI copy's commands, a read, a write and a flush per mebibyte"
+exact ahciread ahciwrite1 ahciread1 32 "the AHCI read's commands at 1 MiB a request"
+exact ahcismall ahciread1 ahcismall1 1024 "the AHCI read's commands at 32 KiB a request"
+tr -d '\r' < "$ALOG" | grep -aqx "SAMEAHCI" || { echo "diskrate-test: FAIL: the AHCI disk did not read back what was written" >&2; rc=1; }
 
 # ---- the placement experiment: the pipe read into a page that holds code
 #      and into one that does not, each three times ----

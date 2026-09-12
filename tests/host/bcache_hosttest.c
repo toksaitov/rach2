@@ -263,10 +263,15 @@ static block_device_t other = {
    and the other way round is the one they must refuse. */
 static block_device_t nested = {
     512, FAKE_SECTORS, BLOCK_FAULT_SAFE, 0, 0, 0, fake_read, fake_write, 0, 0, 0, image_small};
-/* A device that takes 64 sectors a request, as the ATA and AHCI disks do:
-   what the run fill and the runs of a sync are proved on. */
+/* A device that takes 64 sectors a request, as the ATA disk does: what
+   the run fill and the runs of a sync are proved on. */
 static block_device_t wide = {
     512, WIDE_SECTORS, BLOCK_FAULT_SAFE, 0, 0, 64, fake_read, fake_write, 0, 0, 0, image_wide};
+/* A device that takes 2048 sectors a request, as the AHCI disk does: a
+   fill's run is the cache's most, 256 blocks. */
+static unsigned char image_vast[WIDE_SECTORS * 512];
+static block_device_t vast = {
+    512, WIDE_SECTORS, BLOCK_FAULT_SAFE, 0, 0, 2048, fake_read, fake_write, 0, 0, 0, image_vast};
 
 int block_request(block_device_t *device, int write, uint64_t lba, uint32_t count, void *data)
 {
@@ -908,5 +913,44 @@ int main(void)
     if (fails == 0) {
         printf("bcache_hosttest: OK\n");
     }
+
+    /* The device that takes 2048 sectors: the run after a first miss is the
+       cache's most, 256 blocks in one request, and the blocks of it are
+       hits after. */
+    for (i = 0; i < (int)sizeof(image_vast); i++) {
+        image_vast[i] = (unsigned char)(i / 4096u);
+    }
+    bcache_set_limit(600); /* a run is at most half the limit: room for 256 */
+    reads_made = 0;
+    b = bcache_get(&vast, 1);
+    bcache_release(b);
+    b = bcache_get(&vast, 2);
+    check(reads_made == 2 && last_count == 2048 && b->data[0] == 2,
+          "the miss after a first one on the vast device reads a run of 256 blocks in one request");
+    bcache_release(b);
+    for (i = 3; i < 258; i++) {
+        b = bcache_get(&vast, (uint64_t)i);
+        bcache_release(b);
+    }
+    check(reads_made == 2, "and the 255 blocks after it are hits");
+    b = bcache_get(&vast, 258);
+    check(reads_made == 3 && last_count == (WIDE_BLOCKS - 258) * 8,
+          "the block past the run starts the next run, the device's remainder");
+    bcache_release(b);
+    bcache_invalidate(&vast);
+
+    /* A cache of forty buffers: the run is bounded to half of them, and
+       the block the caller asked for is among the buffers when the run is
+       in, not evicted by the run's own last blocks. */
+    bcache_set_limit(40);
+    reads_made = 0;
+    b = bcache_get(&vast, 1);
+    bcache_release(b);
+    b = bcache_get(&vast, 2);
+    check(reads_made == 2 && last_count == 20 * 8 && b->data[0] == 2,
+          "a small cache bounds the run to half its buffers and keeps the caller's block");
+    bcache_release(b);
+    bcache_invalidate(&vast);
+
     return fails;
 }

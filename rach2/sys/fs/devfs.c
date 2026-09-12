@@ -206,7 +206,8 @@ struct devfs_entry {
  * path may touch it.
  */
 #define RAW_BATCH_SECTORS DEVFS_RAW_BATCH_SECTORS
-static uint8_t raw_batch[RAW_BATCH_SECTORS * BLOCK_SECTOR_SIZE] __attribute__((aligned(4096)));
+static uint8_t raw_batch[DEVFS_RAW_BATCH_STATIC_SECTORS * BLOCK_SECTOR_SIZE]
+    __attribute__((aligned(4096)));
 
 /* How many driver calls the raw windows have made. Batching is otherwise
  * invisible from outside: a transfer of any size returns the same answer
@@ -237,24 +238,52 @@ static int raw_batch_free(void *arg)
  * on two disks run side by side while each sleeps on its own device; the
  * static buffer above when the heap has none, taken in turn.
  */
-static uint8_t *raw_batch_take(void)
-{
-    uint8_t *batch = kalloc_pages(RAW_BATCH_SECTORS * BLOCK_SECTOR_SIZE / PAGE_SIZE, 0);
+/* How many heap batches may be out at once, 8 MiB at the most; a caller
+ * past that takes the static buffer in turn, so that callers waiting for a
+ * request do not hold the heap in staging. */
+#define RAW_BATCH_POOL 8
+static uint32_t raw_batches_out;
 
+/**
+ * A staging buffer for one transfer of `want` sectors to `device`: the
+ * least of the call, the device's largest request and the batch's limit,
+ * from the heap while fewer than RAW_BATCH_POOL are out; else the static
+ * buffer, taken in turn. `*sectors` receives the buffer's size, which
+ * `raw_batch_put` is given back.
+ */
+static uint8_t *raw_batch_take(uint32_t *sectors, uint32_t want, block_device_t *device)
+{
+    uint32_t most = block_max_sectors(device);
+    uint32_t n = want < most ? want : most;
+    uint8_t *batch = 0;
+
+    if (n > RAW_BATCH_SECTORS) {
+        n = RAW_BATCH_SECTORS;
+    }
+    if (n == 0) {
+        n = 1;
+    }
+    if (raw_batches_out < RAW_BATCH_POOL) {
+        batch = kalloc_pages((n * BLOCK_SECTOR_SIZE + PAGE_SIZE - 1) / PAGE_SIZE, 0);
+    }
     if (batch) {
+        raw_batches_out++;
+        *sectors = n;
         return batch;
     }
     while (raw_batch_holder != -1) {
         wq_wait_event_nointr(&raw_batch_wq, raw_batch_free, 0);
     }
     raw_batch_holder = current_proc ? (int)current_proc->pid : 0;
+    *sectors = DEVFS_RAW_BATCH_STATIC_SECTORS;
     return raw_batch;
 }
 
-static void raw_batch_put(uint8_t *batch)
+static void raw_batch_put(uint8_t *batch, uint32_t sectors)
 {
     if (batch != raw_batch) {
-        kfree_pages(batch, RAW_BATCH_SECTORS * BLOCK_SECTOR_SIZE / PAGE_SIZE);
+        kfree_pages(batch, (sectors * BLOCK_SECTOR_SIZE + PAGE_SIZE - 1) / PAGE_SIZE);
+        raw_batches_out--;
         return;
     }
     raw_batch_holder = -1;
@@ -299,6 +328,7 @@ static int32_t raw_window_read(struct disk_window *w, fd_entry_t *e, char __user
     uint64_t lba;
     uint32_t want, done;
     uint8_t *batch;
+    uint32_t batch_sectors;
     int rc = 0;
 
     if (!w->present) {
@@ -316,12 +346,12 @@ static int32_t raw_window_read(struct disk_window *w, fd_entry_t *e, char __user
         want = (uint32_t)(total - lba);
     }
     done = 0;
-    batch = raw_batch_take();
+    batch = raw_batch_take(&batch_sectors, want, part);
     while (done < want) {
         uint32_t chunk = want - done;
 
-        if (chunk > RAW_BATCH_SECTORS) {
-            chunk = RAW_BATCH_SECTORS;
+        if (chunk > batch_sectors) {
+            chunk = batch_sectors;
         }
         raw_calls++;
         rc = block_request(part, 0, lba + done, chunk, batch);
@@ -331,14 +361,14 @@ static int32_t raw_window_read(struct disk_window *w, fd_entry_t *e, char __user
         if (copy_to_user((void __user *)(buf + done * BLOCK_SECTOR_SIZE), batch,
                          chunk * BLOCK_SECTOR_SIZE) != 0) {
             if (done == 0) {
-                raw_batch_put(batch);
+                raw_batch_put(batch, batch_sectors);
                 return -EFAULT;
             }
             break;
         }
         done += chunk;
     }
-    raw_batch_put(batch);
+    raw_batch_put(batch, batch_sectors);
     if (done == 0) {
         return rc; /* the request's own errno: EIO, or what the device said */
     }
@@ -383,6 +413,7 @@ static int32_t raw_window_write(struct disk_window *w, fd_entry_t *e, const char
     uint64_t lba;
     uint32_t want, done;
     uint8_t *batch;
+    uint32_t batch_sectors;
 
     if (!w->present) {
         return -ENXIO;
@@ -402,17 +433,17 @@ static int32_t raw_window_write(struct disk_window *w, fd_entry_t *e, const char
         return -ENOSPC;
     }
     done = 0;
-    batch = raw_batch_take();
+    batch = raw_batch_take(&batch_sectors, want, part);
     while (done < want) {
         uint32_t chunk = want - done;
 
-        if (chunk > RAW_BATCH_SECTORS) {
-            chunk = RAW_BATCH_SECTORS;
+        if (chunk > batch_sectors) {
+            chunk = batch_sectors;
         }
         if (copy_from_user(batch, (const void __user *)(buf + done * BLOCK_SECTOR_SIZE),
                            chunk * BLOCK_SECTOR_SIZE) != 0) {
             if (done == 0) {
-                raw_batch_put(batch);
+                raw_batch_put(batch, batch_sectors);
                 return -EFAULT;
             }
             break;
@@ -423,7 +454,7 @@ static int32_t raw_window_write(struct disk_window *w, fd_entry_t *e, const char
         }
         done += chunk;
     }
-    raw_batch_put(batch);
+    raw_batch_put(batch, batch_sectors);
     if (done == 0) {
         return -EIO;
     }
@@ -558,6 +589,7 @@ static int32_t raw_window_read_bytes(struct disk_window *w, fd_entry_t *e, char 
     uint64_t total = part->sector_count * BLOCK_SECTOR_SIZE;
     uint32_t done = 0;
     uint8_t *batch;
+    uint32_t batch_sectors;
     int rc = 0;
 
     if (off >= total) {
@@ -566,7 +598,7 @@ static int32_t raw_window_read_bytes(struct disk_window *w, fd_entry_t *e, char 
     if ((uint64_t)count > total - off) {
         count = (uint32_t)(total - off);
     }
-    batch = raw_batch_take();
+    batch = raw_batch_take(&batch_sectors, count / BLOCK_SECTOR_SIZE, part);
     while (done < count) {
         uint64_t at = off + done;
         uint64_t lba = at / BLOCK_SECTOR_SIZE;
@@ -575,8 +607,8 @@ static int32_t raw_window_read_bytes(struct disk_window *w, fd_entry_t *e, char 
         uint32_t sectors = (skip + left + BLOCK_SECTOR_SIZE - 1u) / BLOCK_SECTOR_SIZE;
         uint32_t take;
 
-        if (sectors > RAW_BATCH_SECTORS) {
-            sectors = RAW_BATCH_SECTORS;
+        if (sectors > batch_sectors) {
+            sectors = batch_sectors;
         }
         take = sectors * BLOCK_SECTOR_SIZE - skip;
         if (take > left) {
@@ -589,14 +621,14 @@ static int32_t raw_window_read_bytes(struct disk_window *w, fd_entry_t *e, char 
         }
         if (copy_to_user((void __user *)(buf + done), batch + skip, take) != 0) {
             if (done == 0) {
-                raw_batch_put(batch);
+                raw_batch_put(batch, batch_sectors);
                 return -EFAULT;
             }
             break;
         }
         done += take;
     }
-    raw_batch_put(batch);
+    raw_batch_put(batch, batch_sectors);
     if (done == 0) {
         return rc;
     }

@@ -307,7 +307,7 @@ int main(void)
                                      "sector-size 512\n",
                                      "sectors 1953525168\n",
                                      "window-sectors 1953525168\n",
-                                     "raw-batch-sectors 64\n",
+                                     "raw-batch-sectors 2048\n",
                                      "raw-driver-calls 0\n",
                                      "mbr-signature ok\n",
                                      "mbr-id 4905b015\n",
