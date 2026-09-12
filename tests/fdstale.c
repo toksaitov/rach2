@@ -141,6 +141,7 @@ typedef unsigned int u32;
 #define ENOTDIR 20
 #define ENOENT  2
 #define EBADF   9
+#define EBUSY   16
 #define EISDIR  21
 
 #define O_RDONLY    0
@@ -556,31 +557,41 @@ static void orphan_scan_case(void)
  * directory destination, refused after the orphan is taken. The second name
  * survives only because a directory descriptor is not a holder, so it is
  * asserted, not assumed. */
-/* Whether this root performs a directory's rename. The boot root refuses every
- * one of them with EPERM, since its children name their parent by id; ext2
- * moves a directory and answers a rename onto a file with ENOTDIR, which is
- * what POSIX asks for. The row below takes whichever answer its root owes. */
-static int root_moves_directories(void)
+/* Whether the root this probe runs on is the boot root. Two rows below owe
+ * different answers on the two file systems, and each reads the type out of
+ * `/proc/mounts` rather than assuming the one it was written on. A root whose
+ * line cannot be read is taken for the boot root, which is what an image
+ * without `/proc` boots. */
+static int root_is_krffs(void)
 {
     static char mounts[1024];
     int fd = syscall3(SYS_OPEN, (int)"/proc/mounts", O_RDONLY, 0);
     int n, i;
 
     if (fd < 0) {
-        return 0;
+        return 1;
     }
     n = syscall3(SYS_READ, fd, (int)mounts, (int)sizeof(mounts) - 1);
     syscall3(SYS_CLOSE, fd, 0, 0);
     if (n <= 0) {
-        return 0;
+        return 1;
     }
     mounts[n] = 0;
     for (i = 0; i + 8 < n; i++) {
         if (mounts[i] == ' ' && mounts[i + 1] == '/' && mounts[i + 2] == ' ') {
-            return !(mounts[i + 3] == 'k' && mounts[i + 4] == 'r' && mounts[i + 5] == 'f');
+            return mounts[i + 3] == 'k' && mounts[i + 4] == 'r' && mounts[i + 5] == 'f';
         }
     }
-    return 0;
+    return 1;
+}
+
+/* Whether this root performs a directory's rename. The boot root refuses every
+ * one of them with EPERM, since its children name their parent by id; ext2
+ * moves a directory and answers a rename onto a file with ENOTDIR, which is
+ * what POSIX asks for. The row below takes whichever answer its root owes. */
+static int root_moves_directories(void)
+{
+    return !root_is_krffs();
 }
 
 static void failed_rename_case(void)
@@ -887,10 +898,14 @@ static void leak_by_rename_case(void)
     want_eq("remove the replaced name", syscall3(SYS_UNLINK, (int)REPL, 0, 0), 0);
 }
 
-/* The scope line, asserted: a directory descriptor is a name, so rmdir still
- * takes the directory out from under it. Nothing is allocated between the
- * rmdir and the two answers, since a freed node handed out again would be a
- * live node under this descriptor. */
+/* The scope line, asserted, and it is not the same line on the two roots.
+ * On the boot root a directory descriptor is a name, so rmdir takes the
+ * directory out from under it and the descriptor answers EBADF from then on;
+ * nothing is allocated between the rmdir and the two answers, since a freed
+ * node handed out again would be a live node under this descriptor. ext2
+ * refuses a directory a description holds, with EBUSY (`ext2.Readme.md`),
+ * which POSIX permits, so there the row asserts the refusal, that the
+ * descriptor still reads, and that the close is what releases the name. */
 static void directory_scope_case(void)
 {
     static char dbuf[256];
@@ -899,6 +914,15 @@ static void directory_scope_case(void)
     want_eq("mkdir the directory to be removed", syscall3(SYS_MKDIR, (int)DDIR, 0755, 0), 0);
     fd = syscall3(SYS_OPEN, (int)DDIR, O_RDONLY | O_DIRECTORY, 0);
     want_ok("open the directory", fd);
+    if (!root_is_krffs()) {
+        want_eq("rmdir refused under the directory descriptor",
+                syscall3(SYS_RMDIR, (int)DDIR, 0, 0), -EBUSY);
+        want_ok("getdents64 through the held directory",
+                syscall3(SYS_GETDENTS64, fd, (int)dbuf, (int)sizeof(dbuf)));
+        want_eq("close the held directory", syscall3(SYS_CLOSE, fd, 0, 0), 0);
+        want_eq("rmdir once the descriptor is closed", syscall3(SYS_RMDIR, (int)DDIR, 0, 0), 0);
+        return;
+    }
     want_eq("rmdir under the directory descriptor", syscall3(SYS_RMDIR, (int)DDIR, 0, 0), 0);
 
     want_eq("getdents64 through the removed directory",
