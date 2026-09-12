@@ -14,31 +14,64 @@
 # exchange. A second between them is more than the handshake needs and keeps
 # the number of sessions the caller asked for.
 #
-# It reads nothing from the machine but the build's own output, and leaves
-# each session's copy under /tmp/load on it.
+# Each session's build output is kept in its own log beside the report, so a
+# failure can be read afterwards; the copies are left under /tmp/load/<run> on
+# the machine. The exit status is nonzero if any session failed to run, if
+# fewer reported than were asked for, or if any build failed.
 set -u
+[ $# -ge 4 ] && [ $# -le 5 ] || {
+    echo "usage: machine_load.sh KEY ADDRESS SESSIONS SECONDS [DIR]" >&2; exit 2; }
 KEY=$1
 ADDR=$2
 SESSIONS=$3
 SECONDS_EACH=$4
 DIR=${5:-.}
 
+# Both numbers reach the machine inside a shell command, so each is required to
+# be a bounded decimal before anything is sent: an argument that is not one
+# would otherwise run there as root.
+for v in "$SESSIONS" "$SECONDS_EACH"; do
+    case "$v" in
+        ''|*[!0-9]*) echo "machine_load: $v is not a whole number" >&2; exit 2 ;;
+    esac
+done
+[ "$SESSIONS" -ge 1 ] && [ "$SESSIONS" -le 64 ] || {
+    echo "machine_load: SESSIONS must be 1 to 64" >&2; exit 2; }
+[ "$SECONDS_EACH" -ge 1 ] && [ "$SECONDS_EACH" -le 86400 ] || {
+    echo "machine_load: SECONDS must be 1 to 86400" >&2; exit 2; }
 [ -r "$KEY" ] || { echo "machine_load: no key at $KEY" >&2; exit 1; }
+[ -d "$DIR" ] || { echo "machine_load: no directory at $DIR" >&2; exit 1; }
+
+# One run's trees and logs are its own, so two runs cannot delete each other's
+# work or read each other's results.
+RUN=$$
+pids=""
 n=1
 while [ "$n" -le "$SESSIONS" ]; do
     ssh -i "$KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
         -o LogLevel=ERROR -o ServerAliveInterval=30 "root@$ADDR" \
-        "mkdir -p /tmp/load; rm -rf /tmp/load/b$n; cp -r /src/rach2 /tmp/load/b$n; \
-         cd /tmp/load/b$n; built=0; failed=0; \
+        "set -e; mkdir -p /tmp/load/$RUN; rm -rf /tmp/load/$RUN/b$n; \
+         cp -r /src/rach2 /tmp/load/$RUN/b$n; cd /tmp/load/$RUN/b$n; \
+         set +e; built=0; failed=0; \
          end=\$((\$(cut -d. -f1 /proc/uptime) + $SECONDS_EACH)); \
          while [ \$(cut -d. -f1 /proc/uptime) -lt \$end ]; do \
-             make -f guest.mk clean > /dev/null 2>&1; \
-             if make -f guest.mk > /dev/null 2>&1; then built=\$((built+1)); \
+             if make -f guest.mk clean && make -f guest.mk; then built=\$((built+1)); \
              else failed=\$((failed+1)); fi; \
          done; echo \"SESSION $n builds \$built failed \$failed\"" \
-        > "$DIR/session$n.log" 2>&1 &
+        > "$DIR/load-$RUN-session$n.log" 2>&1 &
+    pids="$pids $!"
     n=$((n + 1))
     sleep 1
 done
-wait
-grep -h "^SESSION" "$DIR"/session*.log | sort -k2 -n
+rc=0
+for pid in $pids; do
+    wait "$pid" || rc=1
+done
+reports=$(grep -h "^SESSION" "$DIR"/load-"$RUN"-session*.log | sort -k2 -n)
+echo "$reports"
+count=$(echo "$reports" | grep -c "^SESSION")
+[ "$count" -eq "$SESSIONS" ] || {
+    echo "machine_load: $count sessions reported of $SESSIONS asked for" >&2; rc=1; }
+echo "$reports" | grep -q "failed [1-9]" && {
+    echo "machine_load: a session reported a failed build" >&2; rc=1; }
+exit $rc

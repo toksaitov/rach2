@@ -97,9 +97,9 @@ echo "ext2-test: rach2.root=ext2 mounts the first ext2 partition as the root, wr
 #      are counted through `/proc/disk` and must stay under five a write, so a
 #      second store coming back fails this row rather than passing unnoticed.
 boot_root "$ROOT.cost.log" --ok "COSTDONE" \
-    "send=dd if=/dev/zero of=/root/cost.bin bs=4096 count=1 2>/dev/null; sync; echo MADE\"\"IT" \
+    "send=dd if=/dev/zero of=/root/cost.bin bs=4096 count=1 2>/dev/null && sync && echo MADE\"\"IT" \
     "expect=MADEIT" \
-    "send=a=\$(grep ^disk-commands /proc/disk | cut -d' ' -f2); i=0; while [ \$i -lt 50 ]; do dd if=/dev/zero of=/root/cost.bin bs=4096 count=1 conv=notrunc 2>/dev/null; i=\$((i+1)); done; sync; b=\$(grep ^disk-commands /proc/disk | cut -d' ' -f2); echo COST=\$((b-a))" \
+    "send=a=\$(grep ^disk-commands /proc/disk | cut -d' ' -f2); i=0; ok=1; while [ \$i -lt 50 ]; do dd if=/dev/zero of=/root/cost.bin bs=4096 count=1 conv=notrunc 2>/dev/null || ok=0; i=\$((i+1)); done; sync || ok=0; [ \$(wc -c < /root/cost.bin) -eq 4096 ] || ok=0; b=\$(grep ^disk-commands /proc/disk | cut -d' ' -f2); [ \$ok -eq 1 ] && echo COST=\$((b-a))" \
     "expect=COST=" \
     "send=echo COST\"\"DONE" "expect=COSTDONE" || fail "the small-write cost boot"
 COST=$(grep -a "^COST=[0-9]" "$ROOT.cost.log" | head -1 | tr -d '\r' | cut -d= -f2)
@@ -120,7 +120,7 @@ echo "ext2-test: a 4 KiB rewrite costs the disk no more than five commands ($COS
 #      whole fifty and well inside the bound.
 boot_root "$ROOT.append.log" --ok "APPENDDONE" \
     "send=rm -f /root/grow.bin; sync; echo READY\"\"NOW" "expect=READYNOW" \
-    "send=a=\$(grep ^disk-commands /proc/disk | cut -d' ' -f2); i=0; while [ \$i -lt 50 ]; do dd if=/dev/zero bs=4096 count=1 2>/dev/null >> /root/grow.bin; i=\$((i+1)); done; sync; b=\$(grep ^disk-commands /proc/disk | cut -d' ' -f2); echo APPEND=\$((b-a))" \
+    "send=a=\$(grep ^disk-commands /proc/disk | cut -d' ' -f2); i=0; ok=1; while [ \$i -lt 50 ]; do dd if=/dev/zero bs=4096 count=1 2>/dev/null >> /root/grow.bin || ok=0; i=\$((i+1)); done; sync || ok=0; [ \$(wc -c < /root/grow.bin) -eq 204800 ] || ok=0; b=\$(grep ^disk-commands /proc/disk | cut -d' ' -f2); [ \$ok -eq 1 ] && echo APPEND=\$((b-a))" \
     "expect=APPEND=" \
     "send=echo APPEND\"\"DONE" "expect=APPENDDONE" || fail "the append cost boot"
 APPEND=$(grep -a "^APPEND=[0-9]" "$ROOT.append.log" | head -1 | tr -d '\r' | cut -d= -f2)
@@ -136,10 +136,12 @@ echo "ext2-test: a 4 KiB append costs the disk no more than eleven commands ($AP
 #      it; the probe asserts a directory keeping its bits, a setgid file with
 #      and without group-execute, a privileged change, a permitted group
 #      change, a refused one and both spellings of a request that changes
-#      nothing, each through the pathname call and through the descriptor. It
-#      runs here because the answers must be the file system's, not KRFFS's.
-#      `/etc/group` gives root no supplementary groups, which is what the
-#      probe needs.
+#      nothing; a directory, a setgid file with and without group-execute and
+#      a privileged change are asserted over both the pathname call and the
+#      descriptor, and the rest over the path the caller uses for them. It runs
+#      here because the answers must be the file system's, not KRFFS's. The
+#      probe empties its own supplementary group list, which is what its
+#      escalation row needs.
 boot_root "$ROOT.mode.log" --ok "MODEPROBE OK" \
     "send=/modeprobe /tmp" "expect=MODEPROBE OK" || fail "the set-id rules on the ext2 root"
 echo "ext2-test: the chown and write set-id rules hold on an ext2 root: OK"

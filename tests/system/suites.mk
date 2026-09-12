@@ -1733,7 +1733,10 @@ run-style:
 # on the vendored musl for the same reason krffs does: mkhash_hosttest names the
 # musl crypt in its host-deps, and that source exists only once the tarball is
 # extracted. `tests/run host` names this target.
-run-host: check-libc $(DEADLINE)
+# The e2fsprogs stamp is a dependency because two host tests compile the port's
+# own `unix_io.c` out of the extracted tree: without it they build against
+# whatever that tree last held, or fail to build at all in a fresh checkout.
+run-host: check-libc $(E2FSPROGS_STAMP) $(DEADLINE)
 	@./tests/system/suites/host.sh
 
 # The runner suite (see tests/system/selftest.sh): tests/run driven against a
