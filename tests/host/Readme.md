@@ -8,6 +8,8 @@
 
 Each test declares separately compiled project sources in one or more `host-deps:` comment lines. A test whose rows take longer than the suite's sixty-second deadline declares its own in seconds on a `host-seconds:` line; the two FAT interruption matrices declare a hundred and fifty. The runner rejects a dependency line that was wrapped without repeating the prefix, checks that every named file exists, and passes those files to the compiler. A test that includes a project `.c` file directly to reach its `static` functions leaves `host-deps:` empty.
 
+Tests that need additional compiler flags declare them on repeatable `host-cflags:` comment lines. The e2fsprogs alignment tests use these for their host configuration and the port's headers. They require the extracted e2fsprogs source and its generated headers; they do not build the port.
+
 The runner stores binaries and logs under `/tmp/rach2_verify`. The project `deadline` tool (built by `make`) runs each binary in the foreground with a 60-second limit and kills the whole process group of one that hangs. Exit status 0 passes; a nonzero exit, sanitizer report, compile failure, or timeout fails. Tests may print diagnostics.
 
 The host suite first runs `check-libc`. This ensures that musl's installed library and extracted SHA-512 crypt source exist before the password tests compile.
@@ -43,7 +45,7 @@ Do not wrap a dependency onto an unmarked continuation line. Native tests may us
 
 ## Tests
 
-The suite contains 51 native test programs.
+The suite contains 68 native test programs.
 
 ### Kernel foundations and memory
 
@@ -104,6 +106,8 @@ The suite contains 51 native test programs.
 * `netdev_hosttest.c` runs the driver table against three models whose verdicts it sets. It checks the probe order, that an absent card is stepped over and a failed one stops the walk and is silenced, which reason is kept, and what the interface answers with nothing bound.
 
 ### Boot and host utilities
+
+* `e2fsprogs_alignment_hosttest.c` and `e2fsprogs_alignment64_hosttest.c` include the port's `unix_io.c` with host configuration and I/O stubs, selecting `pread`/`pwrite` and `pread64`/`pwrite64` respectively. Both force an even caller address two bytes past a 512-byte boundary. They check whole-buffer transfers and bytes, 64 KiB aligned reads and writes, sector preservation for short and interior writes, and upstream retries, short counts, read zero fill, and errors through seek plus read or write. The cache, channel opening, guest libc, and kernel are outside these tests. `sh tests/host/e2fsprogs_alignment_mutate.sh` compiles and runs both tests with the patch, changes `BUFFER_ALIGNED` back to `IS_ALIGNED`, requires all fourteen misaligned rows in each test to fail, then restores the source and compiles and runs them again. A shell trap stops the test process before restoring the source on interruption. Each phase uses fresh binaries; the script preserves its logs and saved source in the temporary directory it prints.
 
 * `bootctl_hosttest.c` checks FAT32 discovery, kernel and fallback validation, candidate installation, environment and menu updates, cluster geometry, readback, and interrupted, dropped, or torn writes.
 * `bootverb_hosttest.c` checks every `bootctl` verb, operand count, returned operand, rejection of the old spelling, and exact name matching.

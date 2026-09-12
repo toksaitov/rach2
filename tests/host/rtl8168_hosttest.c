@@ -253,8 +253,8 @@ static unsigned model_link_change_at_ack; /* the ack after which the link change
 /* The chip's message is an edge: it is sent when the sources it may report go
  * from none set to one set. Unmasking with a source already set is that
  * transition, which is what a handler leaves behind for the next entry. */
-static unsigned model_edges;              /* messages the chip would send */
-static unsigned model_source_after_ack;   /* a source set again as the ack lands */
+static unsigned model_edges;            /* messages the chip would send */
+static unsigned model_source_after_ack; /* a source set again as the ack lands */
 static unsigned model_msi_enable_at = 0xffffffffu;
 static int model_arrive_during_drain; /* frames that arrive while the ring is drained */
 static unsigned model_arrive_slot = 1;
@@ -1457,8 +1457,7 @@ int main(void)
         CHECK(r8168_msi_storms == 0, "entries whose status will not clear are counted first");
         model_handler(0);
         CHECK(r8168_msi_storms == 1, "a status that will not clear is a storm");
-        CHECK(find_write_value(before, 16, R8168_INTRMASK, 0) >= 0 &&
-                  m_r16(R8168_INTRMASK) == 0,
+        CHECK(find_write_value(before, 16, R8168_INTRMASK, 0) >= 0 && m_r16(R8168_INTRMASK) == 0,
               "which leaves the sources masked");
         model_sticky_status = 0;
         model_reg[R8168_INTRSTATUS] = 0;
