@@ -54,7 +54,7 @@
 #include "network/ip/icmp.h"
 #include "network/net.h"
 #include "network/netconf.h" /* net_ip_addr for getsockname */
-#include "cmdline.h"    /* kcmdline_has, for the ENOSYS trace flag */
+#include "cmdline.h"         /* kcmdline_has, for the ENOSYS trace flag */
 
 /* User stack base address (stack grows down from here) */
 #define USER_STACK_BASE 0xBFFFF000
@@ -153,7 +153,6 @@ int fs_node_is_held(const krffs_node_t *node)
     return fd_node_holders(node, NULL) > 0;
 }
 
-
 /**
  * Repoint every holder from one node to another, for callers outside this
  * file. The debug shell writes through the file system directly, and a write
@@ -195,9 +194,8 @@ static void fd_release_backing(fd_entry_t *e)
      * closing slot is still populated, which is what `except` is for: the
      * closing descriptor is skipped, not cleared first, so "last holder"
      * needs no ordering rule between two functions. */
-    if (e->type == FD_TYPE_FILE && e->node && krffs_fs &&
-        e->node != krffs_fs->node && e->node->name[0] == '\0' &&
-        fd_node_holders(e->node, e) == 0) {
+    if (e->type == FD_TYPE_FILE && e->node && krffs_fs && e->node != krffs_fs->node &&
+        e->node->name[0] == '\0' && fd_node_holders(e->node, e) == 0) {
         krffs_remove_reserved_node(krffs_fs, e->node);
         e->node = NULL;
     }
@@ -211,8 +209,8 @@ static void fd_release_backing(fd_entry_t *e)
     /* Restore text mode only if THIS process actually owns the framebuffer, so
      * a fork child that merely inherited the fb descriptor cannot clear the
      * parent's graphics mode when the child closes the fd or exits. */
-    if (e->type == FD_TYPE_FRAMEBUFFER && current_proc &&
-        fb_owner_pid == current_proc->pid && e->ofd && e->ofd->refcount == 1) {
+    if (e->type == FD_TYPE_FRAMEBUFFER && current_proc && fb_owner_pid == current_proc->pid &&
+        e->ofd && e->ofd->refcount == 1) {
         vga_mode13h_exit();
         fb_owner_pid = 0;
     }
@@ -227,37 +225,37 @@ static void fd_release_backing(fd_entry_t *e)
 /*
  * ioctl request codes (Linux compatible subset)
  */
-#define KIOCSOUND      0x4B2F  /* Set PC speaker frequency (0 = off) */
-#define TCGETS         0x5401  /* Get terminal attributes (termios) */
-#define TCSETS         0x5402  /* Set terminal attributes now */
-#define TCSETSW        0x5403  /* Set after the output drains */
-#define TCSETSF        0x5404  /* Set after output drains, flush input */
-#define TCFLSH         0x540B  /* Flush input and/or output queues */
-#define FIONREAD       0x541B  /* Bytes available to read */
-#define TIOCGWINSZ     0x5413  /* Get terminal window size */
-#define TIOCSWINSZ     0x5414  /* Set terminal window size */
-#define TIOCSCTTY      0x540E  /* Make this tty the controlling terminal */
-#define TIOCGPGRP      0x540F  /* Get the foreground process group */
-#define TIOCSPGRP      0x5410  /* Set the foreground process group */
-#define TIOCNOTTY      0x5422  /* Detach from the controlling terminal */
-#define FB_MODE_13H    0x4601  /* Switch to VGA Mode 13h */
-#define FB_MODE_TEXT   0x4602  /* Switch back to text mode */
-#define FB_SETPALETTE  0x4603  /* Set 256-color palette (768 bytes) */
+#define KIOCSOUND     0x4B2F /* Set PC speaker frequency (0 = off) */
+#define TCGETS        0x5401 /* Get terminal attributes (termios) */
+#define TCSETS        0x5402 /* Set terminal attributes now */
+#define TCSETSW       0x5403 /* Set after the output drains */
+#define TCSETSF       0x5404 /* Set after output drains, flush input */
+#define TCFLSH        0x540B /* Flush input and/or output queues */
+#define FIONREAD      0x541B /* Bytes available to read */
+#define TIOCGWINSZ    0x5413 /* Get terminal window size */
+#define TIOCSWINSZ    0x5414 /* Set terminal window size */
+#define TIOCSCTTY     0x540E /* Make this tty the controlling terminal */
+#define TIOCGPGRP     0x540F /* Get the foreground process group */
+#define TIOCSPGRP     0x5410 /* Set the foreground process group */
+#define TIOCNOTTY     0x5422 /* Detach from the controlling terminal */
+#define FB_MODE_13H   0x4601 /* Switch to VGA Mode 13h */
+#define FB_MODE_TEXT  0x4602 /* Switch back to text mode */
+#define FB_SETPALETTE 0x4603 /* Set 256-color palette (768 bytes) */
 
 /*
  * Audio ioctl request codes
  */
-#define AUDIO_GET_INFO    0x4101  /* Get audio driver info */
-#define AUDIO_START       0x4102  /* Start audio playback */
-#define AUDIO_STOP        0x4103  /* Stop audio playback */
-#define AUDIO_WRITE       0x4104  /* Write audio samples */
-#define AUDIO_SET_VOLUME  0x4105  /* Set volume (0-100) */
+#define AUDIO_GET_INFO   0x4101 /* Get audio driver info */
+#define AUDIO_START      0x4102 /* Start audio playback */
+#define AUDIO_STOP       0x4103 /* Stop audio playback */
+#define AUDIO_WRITE      0x4104 /* Write audio samples */
+#define AUDIO_SET_VOLUME 0x4105 /* Set volume (0-100) */
 
 /*
  * Audio info structure returned by AUDIO_GET_INFO
  */
 struct audio_info {
-    uint32_t driver_type;   /* AUDIO_DRIVER_NONE, SPEAKER, SB16, HDA */
+    uint32_t driver_type;    /* AUDIO_DRIVER_NONE, SPEAKER, SB16, HDA */
     uint32_t has_real_audio; /* 1 if real audio (not PC speaker) */
 };
 
@@ -265,9 +263,9 @@ struct audio_info {
  * Audio start parameters for AUDIO_START
  */
 struct audio_start_params {
-    uint32_t sample_rate;   /* e.g., 11025, 22050, 44100 */
-    uint32_t format;        /* 0 = U8, 1 = S16LE */
-    uint32_t channels;      /* 1 = mono, 2 = stereo */
+    uint32_t sample_rate; /* e.g., 11025, 22050, 44100 */
+    uint32_t format;      /* 0 = U8, 1 = S16LE */
+    uint32_t channels;    /* 1 = mono, 2 = stereo */
 };
 
 /*
@@ -287,8 +285,7 @@ struct audio_write_params {
  * never the one whose stack it is.
  */
 static void init_kstacks(void)
-{
-}
+{}
 
 /**
  * A kernel stack, returning its base, or 0 when the heap has none.
@@ -486,7 +483,7 @@ static int32_t sys_exit(isr_params_t *params)
      * debug shell is the supervisor (rescue, or the no-init test image) does an
      * exited init instead return to it, below. */
     if (is_init && !debug_shell_is_home) {
-        panic_init_died(exiting_pid);   /* never returns */
+        panic_init_died(exiting_pid); /* never returns */
     }
 
     schedule();
@@ -495,8 +492,8 @@ static int32_t sys_exit(isr_params_t *params)
      * (a real init would have panicked above), so return to it. */
     if (is_init) {
         klog(KLOG_INFO, "sys_exit",
-             "init process %d exited with status %d, returning to kernel shell",
-                      exiting_pid, status);
+             "init process %d exited with status %d, returning to kernel shell", exiting_pid,
+             status);
         console_puts("Init process exited. Returning to kernel debug shell.");
 
         /* Clean up the init process resources. Switch off its address space
@@ -533,15 +530,13 @@ static int32_t sys_exit(isr_params_t *params)
 
         /* Reset ESP to a fresh kernel stack and jump to shell_loop. Safe
          * because we are in kernel mode and init has been torn down. */
-        __asm__ __volatile__(
-            "movl %0, %%esp\n\t"
-            "sti\n\t"
-            "jmp *%1\n\t"
-            :
-            : "r"((uint32_t)stack + KERNEL_STACK_SIZE_LOCAL),
-              "r"((uint32_t)shell_loop)
-            : "memory"
-        );
+        __asm__ __volatile__("movl %0, %%esp\n\t"
+                             "sti\n\t"
+                             "jmp *%1\n\t"
+                             :
+                             : "r"((uint32_t)stack + KERNEL_STACK_SIZE_LOCAL),
+                               "r"((uint32_t)shell_loop)
+                             : "memory");
     }
 
     __asm__ __volatile__("cli; hlt");
@@ -601,8 +596,7 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
             /* socket_tcp_send copies the user buffer into the socket send ring
              * itself, blocking on send-ring space unless the fd is
              * non-blocking; __force strips the __user tag at this boundary. */
-            return socket_tcp_send(entry->sock, (const uint8_t __force *)buf,
-                                   (int)count,
+            return socket_tcp_send(entry->sock, (const uint8_t __force *)buf, (int)count,
                                    entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
         }
         /* A datagram socket writes to the peer it connected to, and has
@@ -617,8 +611,7 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
             if (count > 1500) {
                 return -EMSGSIZE;
             }
-            return dgram_send(entry->sock, entry->sock->remote_ip,
-                              entry->sock->remote_port,
+            return dgram_send(entry->sock, entry->sock->remote_ip, entry->sock->remote_port,
                               (const uint8_t __force *)buf, (uint16_t)count);
         }
         return -EOPNOTSUPP;
@@ -629,7 +622,7 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
         uint32_t done = 0;
 
         if (!(entry->flags & FD_FLAG_WRITE)) {
-            return -EBADF;  /* Not writable (e.g., stdin) */
+            return -EBADF; /* Not writable (e.g., stdin) */
         }
 
         /* A background process writing its controlling terminal is stopped with
@@ -637,8 +630,7 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
          * allowed). As with SIGTTIN, a blocked/ignored SIGTTOU makes it -EIO
          * instead. */
         if ((console_tty.ldisc.tio.c_lflag & TOSTOP) &&
-            tty_is_background(&console_tty, (int)current_proc->sid,
-                              (int)current_proc->pgid)) {
+            tty_is_background(&console_tty, (int)current_proc->sid, (int)current_proc->pgid)) {
             if ((current_proc->sig_blocked & KSIG_BIT(SIGTTOU)) ||
                 current_proc->sigacts[SIGTTOU].handler == KSIG_IGN) {
                 return -EIO;
@@ -674,7 +666,7 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
         int32_t written;
 
         if (!(entry->flags & FD_FLAG_WRITE)) {
-            return -EBADF;  /* Not opened for writing */
+            return -EBADF; /* Not opened for writing */
         }
         if (!ofd || !ofd->vmnt) {
             return -EBADF;
@@ -710,8 +702,7 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
                 ofd->offset = vst.size;
             }
         }
-        written = vfs_write(ofd->vmnt, ofd->fhandle, (const char __force *)buf,
-                            count, ofd->offset);
+        written = vfs_write(ofd->vmnt, ofd->fhandle, (const char __force *)buf, count, ofd->offset);
         if (written > 0) {
             /* Through the UPDATED node pointer: a grow relocates the file and
              * the write repointed every holder, this descriptor included.
@@ -736,7 +727,7 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
         uint32_t to_copy;
 
         if (!vga_graphics_mode) {
-            return -EBADF;  /* Not in graphics mode */
+            return -EBADF; /* Not in graphics mode */
         }
 
         to_copy = count;
@@ -850,10 +841,9 @@ static int32_t sys_writev(isr_params_t *params)
         /* On any fault once bytes were already emitted, report the partial
          * total (a caller that retried would otherwise duplicate output); only
          * report the error itself when nothing has been written yet. */
-        if (copy_from_user(&iov,
-                           (const void __user *)(iov_user +
-                               (uint32_t)i * sizeof(struct kernel_iovec)),
-                           sizeof(iov)) != 0) {
+        if (copy_from_user(
+                &iov, (const void __user *)(iov_user + (uint32_t)i * sizeof(struct kernel_iovec)),
+                sizeof(iov)) != 0) {
             return (total > 0) ? total : -EFAULT;
         }
         if (iov.iov_len == 0) {
@@ -861,8 +851,7 @@ static int32_t sys_writev(isr_params_t *params)
         }
         /* An individual length past the signed range, or a running total that
          * would overflow it, is rejected as Linux does (-EINVAL). */
-        if (iov.iov_len > 0x7FFFFFFFu ||
-            (uint32_t)total > 0x7FFFFFFFu - iov.iov_len) {
+        if (iov.iov_len > 0x7FFFFFFFu || (uint32_t)total > 0x7FFFFFFFu - iov.iov_len) {
             return (total > 0) ? total : -EINVAL;
         }
         if (!user_access_ok(iov.iov_base, iov.iov_len)) {
@@ -875,7 +864,7 @@ static int32_t sys_writev(isr_params_t *params)
         }
         total += r;
         if ((uint32_t)r < iov.iov_len) {
-            break;  /* short write; stop, as writev does */
+            break; /* short write; stop, as writev does */
         }
     }
 
@@ -883,21 +872,21 @@ static int32_t sys_writev(isr_params_t *params)
 }
 
 /* Linux open flags */
-#define O_APPEND   02000    /* every write lands at end-of-file */
-#define O_CREAT    0100
-#define O_EXCL     0200
-#define O_TRUNC    01000
-#define O_NONBLOCK 04000    /* a would-block operation returns -EAGAIN */
-#define O_DIRECTORY 0200000 /* the target must be a directory (else -ENOTDIR) */
-#define O_NOFOLLOW 0400000  /* a symbolic link at the end answers -ELOOP */
-#define O_CLOEXEC  02000000 /* close-on-exec: the fd is dropped across execve */
+#define O_APPEND    02000 /* every write lands at end-of-file */
+#define O_CREAT     0100
+#define O_EXCL      0200
+#define O_TRUNC     01000
+#define O_NONBLOCK  04000    /* a would-block operation returns -EAGAIN */
+#define O_DIRECTORY 0200000  /* the target must be a directory (else -ENOTDIR) */
+#define O_NOFOLLOW  0400000  /* a symbolic link at the end answers -ELOOP */
+#define O_CLOEXEC   02000000 /* close-on-exec: the fd is dropped across execve */
 
 /* Special dir fd for the openat family: resolve relative to the current dir. */
-#define AT_FDCWD (-100)
+#define AT_FDCWD            (-100)
 #define AT_SYMLINK_NOFOLLOW 0x100
-#define AT_SYMLINK_FOLLOW 0x400 /* linkat: follow a symlink source */
-#define AT_EMPTY_PATH 0x1000    /* *at: operate on the dirfd itself */
-#define AT_NO_AUTOMOUNT 0x800   /* fstatat: accepted and meaningless here */
+#define AT_SYMLINK_FOLLOW   0x400  /* linkat: follow a symlink source */
+#define AT_EMPTY_PATH       0x1000 /* *at: operate on the dirfd itself */
+#define AT_NO_AUTOMOUNT     0x800  /* fstatat: accepted and meaningless here */
 
 /**
  * Join base + '/' + rel into pathbuf as an absolute path.
@@ -905,8 +894,8 @@ static int32_t sys_writev(isr_params_t *params)
  * `base` is "/" or "/a/b" with no trailing slash; `rellen` is k_strlen(rel).
  * Returns the length, or -ENAMETOOLONG if it would not fit.
  */
-static int join_abs(char *pathbuf, uint32_t size, const char *base,
-                    const char *rel, uint32_t rellen)
+static int join_abs(char *pathbuf, uint32_t size, const char *base, const char *rel,
+                    uint32_t rellen)
 {
     uint32_t blen = (uint32_t)k_strlen(base);
 
@@ -1102,8 +1091,7 @@ static int fd_node_check(fd_entry_t *entry)
  * copy_path_cwd.
  */
 static int mnt_is_root(const struct vfs_mount *mnt);
-static int copy_path_at(char *pathbuf, uint32_t size, int dirfd,
-                        const char __user *upath)
+static int copy_path_at(char *pathbuf, uint32_t size, int dirfd, const char __user *upath)
 {
     char tmp[256];
     char dirpath[256];
@@ -1236,9 +1224,9 @@ static void cred_kill_setid(krffs_node_t *node)
     if (!node || node == krffs_fs->node || KRFFS_IS_DIR(node->mode)) {
         return;
     }
-    node->mode &= (uint16_t) ~KRFFS_MODE_SUID;
+    node->mode &= (uint16_t)~KRFFS_MODE_SUID;
     if (node->mode & 0010u) {
-        node->mode &= (uint16_t) ~KRFFS_MODE_SGID;
+        node->mode &= (uint16_t)~KRFFS_MODE_SGID;
     }
 }
 
@@ -1264,7 +1252,6 @@ static void vfs_kill_setid(struct vfs_mount *mnt, void *node)
     }
     (void)vfs_setattr(mnt, node, VFS_SET_MODE, &vst);
 }
-
 
 /** Non-zero when `gid` is in the caller's supplementary list. */
 static int cred_in_suppl(uint32_t gid)
@@ -1300,8 +1287,8 @@ static int cred_in_group(uint32_t gid)
  * by the real ids instead, for access(2), the one call that asks who the
  * process really is, not who it is acting as.
  */
-static int32_t cred_access_bits(uint32_t owner, uint32_t group, uint32_t mode,
-                                int want, int use_real)
+static int32_t cred_access_bits(uint32_t owner, uint32_t group, uint32_t mode, int want,
+                                int use_real)
 {
     process_t *p = current_proc;
     uint32_t uid = use_real ? p->ruid : p->euid;
@@ -1312,13 +1299,12 @@ static int32_t cred_access_bits(uint32_t owner, uint32_t group, uint32_t mode,
     }
     if (uid == owner) {
         bits = mode >> 6;
-    } else if ((use_real ? p->rgid : p->egid) == group ||
-               cred_in_suppl(group)) {
+    } else if ((use_real ? p->rgid : p->egid) == group || cred_in_suppl(group)) {
         bits = mode >> 3;
     } else {
         bits = mode;
     }
-    return ((uint32_t) want & ~bits & 7u) ? -EACCES : 0;
+    return ((uint32_t)want & ~bits & 7u) ? -EACCES : 0;
 }
 
 /* Whether `mnt` is the root: its nodes are KRFFS's, read directly; a node on
@@ -1356,22 +1342,15 @@ static int32_t cred_access_ref(const struct vfs_ref *r, int want, int use_real)
  * flag). Executing a regular file demands an execute bit somewhere even for
  * root: root runs programs, not data.
  */
-static int32_t cred_access_node(const krffs_node_t *node, int want,
-                                int use_real)
+static int32_t cred_access_node(const krffs_node_t *node, int want, int use_real)
 {
-    uint32_t mode = (node == krffs_fs->node)
-                        ? 0755u
-                        : (uint32_t) (node->mode & 0777u);
+    uint32_t mode = (node == krffs_fs->node) ? 0755u : (uint32_t)(node->mode & 0777u);
 
-    if ((want & CRED_X) && !KRFFS_IS_DIR(node->mode) &&
-        node != krffs_fs->node && !(mode & 0111u)) {
+    if ((want & CRED_X) && !KRFFS_IS_DIR(node->mode) && node != krffs_fs->node && !(mode & 0111u)) {
         return -EACCES;
     }
     return cred_access_bits(node->uid, node->gid, mode, want, use_real);
 }
-
-
-
 
 /**
  * The sticky rule on removing or renaming `victim` out of directory `dir`.
@@ -1411,100 +1390,96 @@ static int32_t cred_sticky_ok(const krffs_node_t *dir, const krffs_node_t *victi
 static int32_t synth_open(const struct vpath *vp, int flags)
 {
     switch (vp->kind) {
-        case VNODE_DEV: {
-            /* The nine-bit check devices always deserved and only bootpart
-             * needs: every entry is owned root:root, so for the 0666 devices
-             * this grants what it always granted, and the raw boot-partition
-             * window (0600) opens for root alone. */
-            uint32_t dmode;
-            int want;
+    case VNODE_DEV: {
+        /* The nine-bit check devices always deserved and only bootpart
+         * needs: every entry is owned root:root, so for the 0666 devices
+         * this grants what it always granted, and the raw boot-partition
+         * window (0600) opens for root alone. */
+        uint32_t dmode;
+        int want;
 
-            if (devfs_stat(vp->name, &dmode, NULL, NULL) != 0) {
-                return -ENOENT;
-            }
-            switch (flags & 3) {
-                case 1:
-                    want = CRED_W;
-                    break;
-                case 2:
-                    want = CRED_R | CRED_W;
-                    break;
-                default:
-                    want = CRED_R;
-                    break;
-            }
-            {
-                int32_t rc = cred_access_bits(0, 0, dmode & 0777u, want, 0);
-                if (rc != 0) {
-                    return rc;
-                }
-            }
-            return devfs_open(vp->name, flags);
+        if (devfs_stat(vp->name, &dmode, NULL, NULL) != 0) {
+            return -ENOENT;
         }
-        case VNODE_PTS:
-            /* /dev/pts/N: the slave end of pty N (pty_open_slave does its own
-             * fd allocation, and rejects an unallocated/locked pair). The open
-             * is permission-checked against the pty's ownership, so one user
-             * cannot open another's terminal. */
-            if (flags & O_DIRECTORY) {
-                return -ENOTDIR;
+        switch (flags & 3) {
+        case 1:
+            want = CRED_W;
+            break;
+        case 2:
+            want = CRED_R | CRED_W;
+            break;
+        default:
+            want = CRED_R;
+            break;
+        }
+        {
+            int32_t rc = cred_access_bits(0, 0, dmode & 0777u, want, 0);
+            if (rc != 0) {
+                return rc;
             }
-            {
-                struct pty *pt = pty_get(vp->pts_index);
-                if (pt) {
-                    unsigned acc = (unsigned) flags & 3u;
-                    int want = (acc == 0) ? CRED_R
-                                          : (acc == 1) ? CRED_W
-                                                       : (CRED_R | CRED_W);
-                    int32_t rc = cred_access_bits(pt->uid, pt->gid,
-                                                  (uint32_t) (pt->mode & 0777u),
-                                                  want, 0);
-                    if (rc != 0) {
-                        return rc;
-                    }
-                }
-            }
-            return pty_open_slave(vp->pts_index, flags);
-        case VNODE_PROC_FILE:
-        case VNODE_PROC_CMDLINE:
-        case VNODE_PROC_NET_DEV:
-        case VNODE_PROC_UPTIME:
-        case VNODE_PROC_STAT_SYS:
-        case VNODE_PROC_MEMINFO:
-        case VNODE_PROC_MOUNTS:
-        case VNODE_PROC_LOOP:
-        case VNODE_PROC_USB:
-        case VNODE_PROC_FILESYSTEMS:
-        case VNODE_PROC_INTERRUPTS:
-        case VNODE_PROC_CONSOLE:
-        case VNODE_PROC_NET_ROUTE:
-        case VNODE_PROC_NET_ARP:
-        case VNODE_PROC_NET_TCP:
-            return procfs_open(vp, flags);
-        case VNODE_PROC_DISK:
-            /* Root only. The file has the drive's serial number, and an
-             * image that has this file also has an unprivileged account. */
-            {
-                int32_t rc = cred_access_bits(0, 0, 0400u, CRED_R, 0);
+        }
+        return devfs_open(vp->name, flags);
+    }
+    case VNODE_PTS:
+        /* /dev/pts/N: the slave end of pty N (pty_open_slave does its own
+         * fd allocation, and rejects an unallocated/locked pair). The open
+         * is permission-checked against the pty's ownership, so one user
+         * cannot open another's terminal. */
+        if (flags & O_DIRECTORY) {
+            return -ENOTDIR;
+        }
+        {
+            struct pty *pt = pty_get(vp->pts_index);
+            if (pt) {
+                unsigned acc = (unsigned)flags & 3u;
+                int want = (acc == 0) ? CRED_R : (acc == 1) ? CRED_W : (CRED_R | CRED_W);
+                int32_t rc =
+                    cred_access_bits(pt->uid, pt->gid, (uint32_t)(pt->mode & 0777u), want, 0);
                 if (rc != 0) {
                     return rc;
                 }
             }
-            return procfs_open(vp, flags);
-        case VNODE_DEV_DIR:
-        case VNODE_PTS_DIR:
-        case VNODE_PROC_DIR:
-        case VNODE_PROC_NET_DIR:
-        case VNODE_PROC_PID:
-        case VNODE_PROC_FD_DIR:
-            return synth_open_dir(vp, flags);
-        case VNODE_ENOTDIR:
-            return -ENOTDIR;
-        default:
-            return -ENOENT; /* including VNODE_PROC_FD_LINK: read via readlink */
+        }
+        return pty_open_slave(vp->pts_index, flags);
+    case VNODE_PROC_FILE:
+    case VNODE_PROC_CMDLINE:
+    case VNODE_PROC_NET_DEV:
+    case VNODE_PROC_UPTIME:
+    case VNODE_PROC_STAT_SYS:
+    case VNODE_PROC_MEMINFO:
+    case VNODE_PROC_MOUNTS:
+    case VNODE_PROC_LOOP:
+    case VNODE_PROC_USB:
+    case VNODE_PROC_FILESYSTEMS:
+    case VNODE_PROC_INTERRUPTS:
+    case VNODE_PROC_CONSOLE:
+    case VNODE_PROC_NET_ROUTE:
+    case VNODE_PROC_NET_ARP:
+    case VNODE_PROC_NET_TCP:
+        return procfs_open(vp, flags);
+    case VNODE_PROC_DISK:
+        /* Root only. The file has the drive's serial number, and an
+         * image that has this file also has an unprivileged account. */
+        {
+            int32_t rc = cred_access_bits(0, 0, 0400u, CRED_R, 0);
+            if (rc != 0) {
+                return rc;
+            }
+        }
+        return procfs_open(vp, flags);
+    case VNODE_DEV_DIR:
+    case VNODE_PTS_DIR:
+    case VNODE_PROC_DIR:
+    case VNODE_PROC_NET_DIR:
+    case VNODE_PROC_PID:
+    case VNODE_PROC_FD_DIR:
+        return synth_open_dir(vp, flags);
+    case VNODE_ENOTDIR:
+        return -ENOTDIR;
+    default:
+        return -ENOENT; /* including VNODE_PROC_FD_LINK: read via readlink */
     }
 }
-
 
 /* Open a synthetic directory (/dev, /proc, /proc/<pid>, /proc/<pid>/fd). The
  * SYNTH_DIR_* priv encode/decode macros live in synthfs.h. */
@@ -1565,8 +1540,7 @@ static void krffs_stamp_new_node(krffs_node_t *node, uint32_t mode)
 {
     node->uid = current_proc->euid;
     node->gid = current_proc->egid;
-    node->mode = (uint16_t) ((node->mode & ~07777u) |
-                             (mode & 07777u & ~current_proc->umask));
+    node->mode = (uint16_t)((node->mode & ~07777u) | (mode & 07777u & ~current_proc->umask));
 }
 
 /**
@@ -1595,7 +1569,7 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
 
     if (name[0] == 'f' && name[1] == 'b' && name[2] == '\0') {
         if (fb_owner_pid != 0 && fb_owner_pid != current_proc->pid) {
-            return -EBUSY;  /* Already in use */
+            return -EBUSY; /* Already in use */
         }
 
         fd = fd_alloc(&current_proc->fds);
@@ -1617,10 +1591,10 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
         return fd;
     }
 
-    if (name[0] == 'm' && name[1] == 'o' && name[2] == 'u' &&
-        name[3] == 's' && name[4] == 'e' && name[5] == '\0') {
+    if (name[0] == 'm' && name[1] == 'o' && name[2] == 'u' && name[3] == 's' && name[4] == 'e' &&
+        name[5] == '\0') {
         if (!mouse_is_available() && !input_mouse_present()) {
-            return -ENODEV;  /* no mouse of any kind was found */
+            return -ENODEV; /* no mouse of any kind was found */
         }
 
         fd = fd_alloc(&current_proc->fds);
@@ -1643,11 +1617,10 @@ static int32_t do_open(const char *name, int flags, uint32_t mode)
         return -EMFILE; /* known before anything is created or truncated */
     }
 again:
-    rc = vfs_resolve(0, name,
-                     ((flags & O_NOFOLLOW) || ((flags & O_CREAT) && (flags & O_EXCL)))
-                         ? VFS_WALK_NOFOLLOW
-                         : 0,
-                     &ref, 0, 0);
+    rc = vfs_resolve(
+        0, name,
+        ((flags & O_NOFOLLOW) || ((flags & O_CREAT) && (flags & O_EXCL))) ? VFS_WALK_NOFOLLOW : 0,
+        &ref, 0, 0);
     if (rc == -ENOENT && (flags & O_CREAT)) {
         /* The missing-file half of O_CREAT: hold the parent, check its
          * write bit, create under the namespace lock, and stamp the new
@@ -1700,8 +1673,7 @@ again:
             }
             vfs_ref_release(&linkref);
         }
-        rc = vfs_resolve(0, name, VFS_WALK_PARENT, &parent, leafname,
-                         sizeof(leafname));
+        rc = vfs_resolve(0, name, VFS_WALK_PARENT, &parent, leafname, sizeof(leafname));
         if (rc != 0) {
             return rc;
         }
@@ -1842,7 +1814,7 @@ again:
          * read, write, or both, and truncation is a write. */
         {
             int want;
-            unsigned acc = (unsigned) flags & 3u;
+            unsigned acc = (unsigned)flags & 3u;
             int32_t crc;
 
             if (acc == 0) {
@@ -1881,7 +1853,7 @@ setup:
     fd = fd_alloc(&current_proc->fds);
     if (fd < 0) {
         vfs_ref_release(&ref);
-        return -EMFILE;  /* No free fds */
+        return -EMFILE; /* No free fds */
     }
 
     /* Set up the fd entry. A directory opens as a FD_TYPE_DIR (its node is the
@@ -2018,8 +1990,8 @@ static int32_t sys_mount(isr_params_t *params)
         /* A relative target is joined to the working directory the way
          * every other path is. */
         char joined[256];
-        int r = join_abs(joined, sizeof(joined), current_proc->cwd, target,
-                         (uint32_t)k_strlen(target));
+        int r =
+            join_abs(joined, sizeof(joined), current_proc->cwd, target, (uint32_t)k_strlen(target));
 
         if (r < 0) {
             return r;
@@ -2072,8 +2044,8 @@ static int32_t sys_umount2(isr_params_t *params)
     }
     if (target[0] != '/') {
         char joined[256];
-        int r = join_abs(joined, sizeof(joined), current_proc->cwd, target,
-                         (uint32_t)k_strlen(target));
+        int r =
+            join_abs(joined, sizeof(joined), current_proc->cwd, target, (uint32_t)k_strlen(target));
 
         if (r < 0) {
             return r;
@@ -2241,28 +2213,27 @@ static int32_t sys_fsync(isr_params_t *params)
  */
 static int32_t sys_sync(isr_params_t *params)
 {
-    (void) params;
+    (void)params;
     vfs_sync_all();
     pc_sync();
     return 0;
 }
 
-
 /* The magics Linux's reboot(2) demands, which musl passes for the caller: a
  * first word, one of four accepted second words, and then the command. */
-#define REBOOT_MAGIC1     0xfee1deadu
-#define REBOOT_MAGIC2     672274793u  /* 0x28121969 */
-#define REBOOT_MAGIC2A    85072278u   /* 0x05121996 */
-#define REBOOT_MAGIC2B    369367448u  /* 0x16041998 */
-#define REBOOT_MAGIC2C    537993216u  /* 0x20112000 */
+#define REBOOT_MAGIC1  0xfee1deadu
+#define REBOOT_MAGIC2  672274793u /* 0x28121969 */
+#define REBOOT_MAGIC2A 85072278u  /* 0x05121996 */
+#define REBOOT_MAGIC2B 369367448u /* 0x16041998 */
+#define REBOOT_MAGIC2C 537993216u /* 0x20112000 */
 
 /* The commands. Two of them are negative read as a signed int, which is why
  * everything here compares raw 32-bit values. */
-#define REBOOT_CMD_RESTART  0x01234567u
-#define REBOOT_CMD_HALT     0xcdef0123u
+#define REBOOT_CMD_RESTART   0x01234567u
+#define REBOOT_CMD_HALT      0xcdef0123u
 #define REBOOT_CMD_POWER_OFF 0x4321fedcu
-#define REBOOT_CMD_CAD_ON   0x89abcdefu
-#define REBOOT_CMD_CAD_OFF  0x00000000u
+#define REBOOT_CMD_CAD_ON    0x89abcdefu
+#define REBOOT_CMD_CAD_OFF   0x00000000u
 
 /**
  * reboot(2): stop the machine. EBX = magic1, ECX = magic2, EDX = command.
@@ -2286,9 +2257,9 @@ static int32_t sys_sync(isr_params_t *params)
  */
 static int32_t sys_reboot(isr_params_t *params)
 {
-    uint32_t magic1 = (uint32_t) params->ebx;
-    uint32_t magic2 = (uint32_t) params->ecx;
-    uint32_t cmd = (uint32_t) params->edx;
+    uint32_t magic1 = (uint32_t)params->ebx;
+    uint32_t magic2 = (uint32_t)params->ecx;
+    uint32_t cmd = (uint32_t)params->edx;
 
     if (!cred_privileged()) {
         return -EPERM;
@@ -2296,8 +2267,8 @@ static int32_t sys_reboot(isr_params_t *params)
     if (magic1 != REBOOT_MAGIC1) {
         return -EINVAL;
     }
-    if (magic2 != REBOOT_MAGIC2 && magic2 != REBOOT_MAGIC2A &&
-        magic2 != REBOOT_MAGIC2B && magic2 != REBOOT_MAGIC2C) {
+    if (magic2 != REBOOT_MAGIC2 && magic2 != REBOOT_MAGIC2A && magic2 != REBOOT_MAGIC2B &&
+        magic2 != REBOOT_MAGIC2C) {
         return -EINVAL;
     }
 
@@ -2346,17 +2317,17 @@ static int32_t raw_seek_resolve(uint64_t cur, uint64_t size, long long delta, in
     uint64_t mag;
 
     switch (whence) {
-        case 0:
-            base = 0;
-            break;
-        case 1:
-            base = cur;
-            break;
-        case 2:
-            base = size;
-            break;
-        default:
-            return -EINVAL;
+    case 0:
+        base = 0;
+        break;
+    case 1:
+        base = cur;
+        break;
+    case 2:
+        base = size;
+        break;
+    default:
+        return -EINVAL;
     }
 
     if (delta >= 0) {
@@ -2471,17 +2442,17 @@ static int32_t sys_lseek(isr_params_t *params)
         }
         if (devfs_fd_log_size(entry, &log_size)) {
             switch (whence) {
-                case 0: /* SEEK_SET */
-                    new_offset = offset;
-                    break;
-                case 1: /* SEEK_CUR */
-                    new_offset = (int32_t)entry->ofd->offset + offset;
-                    break;
-                case 2: /* SEEK_END */
-                    new_offset = (int32_t)log_size + offset;
-                    break;
-                default:
-                    return -EINVAL;
+            case 0: /* SEEK_SET */
+                new_offset = offset;
+                break;
+            case 1: /* SEEK_CUR */
+                new_offset = (int32_t)entry->ofd->offset + offset;
+                break;
+            case 2: /* SEEK_END */
+                new_offset = (int32_t)log_size + offset;
+                break;
+            default:
+                return -EINVAL;
             }
             if (new_offset < 0) {
                 return -EINVAL;
@@ -2520,20 +2491,20 @@ static int32_t sys_lseek(isr_params_t *params)
     }
 
     switch (whence) {
-        case 0:  /* SEEK_SET */
-            at = (long long)offset;
-            seek_rc = 0;
-            break;
-        case 1:  /* SEEK_CUR */
-            seek_rc = seek_add(entry->ofd->offset, (long long)offset, &at);
-            break;
-        case 2:  /* SEEK_END */
-            seek_rc = seek_add(file_size, (long long)offset, &at);
-            break;
-        default:
-            at = -1;
-            seek_rc = 0;
-            break;
+    case 0: /* SEEK_SET */
+        at = (long long)offset;
+        seek_rc = 0;
+        break;
+    case 1: /* SEEK_CUR */
+        seek_rc = seek_add(entry->ofd->offset, (long long)offset, &at);
+        break;
+    case 2: /* SEEK_END */
+        seek_rc = seek_add(file_size, (long long)offset, &at);
+        break;
+    default:
+        at = -1;
+        seek_rc = 0;
+        break;
     }
     if (seek_rc != 0) {
         fd_ofd_unlock(entry->ofd);
@@ -2623,15 +2594,12 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
          * strips the __user tag at the boundary. */
         if (entry->sock->type == SOCK_DGRAM || entry->sock->type == SOCK_RAW) {
             if (sock_nonblock) {
-                return socket_try_recv(entry->sock, (uint8_t __force *)buf,
-                                       (int)count, NULL, NULL);
+                return socket_try_recv(entry->sock, (uint8_t __force *)buf, (int)count, NULL, NULL);
             }
-            return socket_recv(entry->sock, (uint8_t __force *)buf, (int)count,
-                               NULL, NULL);
+            return socket_recv(entry->sock, (uint8_t __force *)buf, (int)count, NULL, NULL);
         }
         if (sock_nonblock) {
-            return socket_tcp_try_recv(entry->sock, (uint8_t __force *)buf,
-                                       (int)count);
+            return socket_tcp_try_recv(entry->sock, (uint8_t __force *)buf, (int)count);
         }
         return socket_tcp_recv(entry->sock, (uint8_t __force *)buf, (int)count);
     }
@@ -2642,7 +2610,7 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
         int n;
 
         if (!(entry->flags & FD_FLAG_READ)) {
-            return -EBADF;  /* Not readable (e.g., stdout/stderr) */
+            return -EBADF; /* Not readable (e.g., stdout/stderr) */
         }
 
         /*
@@ -2661,7 +2629,7 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
 
         want = count;
         if (want > sizeof(kbuf)) {
-            want = sizeof(kbuf);  /* one line/burst per call; caller loops */
+            want = sizeof(kbuf); /* one line/burst per call; caller loops */
         }
 
         /*
@@ -2682,16 +2650,14 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
          * does not (it would strand the tty on its since-dead leader). Once a
          * session owns the console, the foreground is set by TIOCSPGRP. */
         if (console_tty.sid == 0 && (int)current_proc->sid == (int)current_proc->pid) {
-            tty_make_sole_ctty(&console_tty, (int)current_proc->sid,
-                               (int)current_proc->pgid);
+            tty_make_sole_ctty(&console_tty, (int)current_proc->sid, (int)current_proc->pgid);
         }
         /* A BACKGROUND process reading its controlling terminal is stopped with
          * SIGTTIN (POSIX), unless that would wedge it (SIGTTIN blocked or
          * ignored), in which case the read fails with -EIO. Decided BEFORE
          * marking ourselves the console reader, so an early return leaves no
          * stale flag. */
-        if (tty_is_background(&console_tty, (int)current_proc->sid,
-                              (int)current_proc->pgid)) {
+        if (tty_is_background(&console_tty, (int)current_proc->sid, (int)current_proc->pgid)) {
             if ((current_proc->sig_blocked & KSIG_BIT(SIGTTIN)) ||
                 current_proc->sigacts[SIGTTIN].handler == KSIG_IGN) {
                 return -EIO;
@@ -2704,7 +2670,7 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
                      entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
         stdin_waiting_proc = NULL;
         if (n < 0) {
-            return n;  /* -EINTR: a signal cut the wait short */
+            return n; /* -EINTR: a signal cut the wait short */
         }
         if (copy_to_user(buf, kbuf, (uint32_t)n) != 0) {
             return -EFAULT;
@@ -2718,19 +2684,17 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
 
         packets_requested = (int)(count / sizeof(struct mouse_packet));
         if (packets_requested <= 0) {
-            return 0;  /* Buffer too small for even one packet */
+            return 0; /* Buffer too small for even one packet */
         }
 
         /* Read packets from the mouse ring buffer. mouse_read_packets writes
          * into the user buffer; range-check it, then __force at the boundary.
          */
         if (!user_buffer_ok((uint32_t)buf,
-                            (uint32_t)packets_requested * sizeof(struct mouse_packet),
-                            1)) {
+                            (uint32_t)packets_requested * sizeof(struct mouse_packet), 1)) {
             return -EFAULT;
         }
-        packets_read = mouse_read_packets((struct mouse_packet __force *)buf,
-                                          packets_requested);
+        packets_read = mouse_read_packets((struct mouse_packet __force *)buf, packets_requested);
 
         return packets_read * (int32_t)sizeof(struct mouse_packet);
     }
@@ -2740,7 +2704,7 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
         int32_t bytes_read;
 
         if (!(entry->flags & FD_FLAG_READ)) {
-            return -EBADF;  /* Not opened for reading */
+            return -EBADF; /* Not opened for reading */
         }
         if (!ofd || !ofd->vmnt) {
             return -EBADF;
@@ -2755,8 +2719,7 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
             return -EFAULT;
         }
         fd_ofd_lock(ofd);
-        bytes_read = vfs_read(ofd->vmnt, ofd->fhandle, (char __force *)buf,
-                              count, ofd->offset);
+        bytes_read = vfs_read(ofd->vmnt, ofd->fhandle, (char __force *)buf, count, ofd->offset);
         if (bytes_read > 0) {
             ofd->offset += (uint64_t)bytes_read;
         }
@@ -2792,8 +2755,7 @@ static struct tty *fd_tty(fd_entry_t *e);
  * second line into the next buffer would answer a question the reader did not
  * ask.
  */
-static int32_t read_ready(fd_entry_t *entry, int fd, char __user *buf,
-                          uint32_t count)
+static int32_t read_ready(fd_entry_t *entry, int fd, char __user *buf, uint32_t count)
 {
     if (!entry) {
         return 0;
@@ -2823,11 +2785,9 @@ static int32_t read_ready(fd_entry_t *entry, int fd, char __user *buf,
             return -EFAULT;
         }
         if (entry->sock->type == SOCK_RAW) {
-            return socket_try_recv(entry->sock, (uint8_t __force *)buf,
-                                   (int)count, NULL, NULL);
+            return socket_try_recv(entry->sock, (uint8_t __force *)buf, (int)count, NULL, NULL);
         }
-        r = socket_tcp_try_recv(entry->sock, (uint8_t __force *)buf,
-                                (int)count);
+        r = socket_tcp_try_recv(entry->sock, (uint8_t __force *)buf, (int)count);
 
         return (r == SOCK_EAGAIN) ? 0 : r;
     }
@@ -2870,8 +2830,8 @@ static int32_t read_ready(fd_entry_t *entry, int fd, char __user *buf,
  *
  * Returns the bytes copied, or a negative errno.
  */
-static int32_t readv_dgram(fd_entry_t *entry, uint32_t iov_user, int iovcnt,
-                           uint32_t *src_ip, uint16_t *src_port)
+static int32_t readv_dgram(fd_entry_t *entry, uint32_t iov_user, int iovcnt, uint32_t *src_ip,
+                           uint16_t *src_port)
 {
     uint8_t message[SOCK_RECV_BUF_SIZE];
     struct kernel_iovec iov;
@@ -2898,7 +2858,7 @@ static int32_t readv_dgram(fd_entry_t *entry, uint32_t iov_user, int iovcnt,
     held = net_lock();
     taken = socket_dgram_peek(entry->sock, 0, message, (int)sizeof(message));
     if (taken < 0) {
-        taken = 0;  /* it went between the wait and the hold */
+        taken = 0; /* it went between the wait and the hold */
     }
     socket_dgram_consume(entry->sock, src_ip, src_port);
     net_unlock(held);
@@ -2906,10 +2866,9 @@ static int32_t readv_dgram(fd_entry_t *entry, uint32_t iov_user, int iovcnt,
     for (i = 0; i < iovcnt && (int)offset < taken; i++) {
         uint32_t chunk;
 
-        if (copy_from_user(&iov,
-                           (const void __user *)(iov_user +
-                               (uint32_t)i * sizeof(struct kernel_iovec)),
-                           sizeof(iov)) != 0) {
+        if (copy_from_user(
+                &iov, (const void __user *)(iov_user + (uint32_t)i * sizeof(struct kernel_iovec)),
+                sizeof(iov)) != 0) {
             break;
         }
         if (iov.iov_len == 0) {
@@ -2919,9 +2878,8 @@ static int32_t readv_dgram(fd_entry_t *entry, uint32_t iov_user, int iovcnt,
         if (chunk > iov.iov_len) {
             chunk = iov.iov_len;
         }
-        if (copy_to_user((void __user *)iov.iov_base, message + offset,
-                         chunk) != 0) {
-            break;  /* the caller moved its own buffer out from under itself */
+        if (copy_to_user((void __user *)iov.iov_base, message + offset, chunk) != 0) {
+            break; /* the caller moved its own buffer out from under itself */
         }
         offset += chunk;
         total += (int32_t)chunk;
@@ -3000,10 +2958,9 @@ static int32_t sys_readv(isr_params_t *params)
     }
 
     for (i = 0; i < iovcnt; i++) {
-        if (copy_from_user(&iov,
-                           (const void __user *)(iov_user +
-                               (uint32_t)i * sizeof(struct kernel_iovec)),
-                           sizeof(iov)) != 0) {
+        if (copy_from_user(
+                &iov, (const void __user *)(iov_user + (uint32_t)i * sizeof(struct kernel_iovec)),
+                sizeof(iov)) != 0) {
             return -EFAULT;
         }
         if (iov.iov_len == 0) {
@@ -3023,8 +2980,7 @@ static int32_t sys_readv(isr_params_t *params)
     }
 
     entry = current_proc ? fd_get(&current_proc->fds, fd) : (fd_entry_t *)0;
-    if (entry && entry->type == FD_TYPE_SOCKET && entry->sock &&
-        entry->sock->type == SOCK_DGRAM) {
+    if (entry && entry->type == FD_TYPE_SOCKET && entry->sock && entry->sock->type == SOCK_DGRAM) {
         return readv_dgram(entry, iov_user, iovcnt, 0, 0);
     }
     walk = entry && !entry->ops && entry->type == FD_TYPE_FILE;
@@ -3032,10 +2988,9 @@ static int32_t sys_readv(isr_params_t *params)
     for (i = 0; i < iovcnt; i++) {
         int32_t r;
 
-        if (copy_from_user(&iov,
-                           (const void __user *)(iov_user +
-                               (uint32_t)i * sizeof(struct kernel_iovec)),
-                           sizeof(iov)) != 0) {
+        if (copy_from_user(
+                &iov, (const void __user *)(iov_user + (uint32_t)i * sizeof(struct kernel_iovec)),
+                sizeof(iov)) != 0) {
             return (total > 0) ? total : -EFAULT;
         }
         if (iov.iov_len == 0) {
@@ -3048,8 +3003,7 @@ static int32_t sys_readv(isr_params_t *params)
         /* The first buffer is filled by the ordinary read, which waits if it
          * must; every buffer after it only by one that will not wait. */
         if (total > 0 && !walk) {
-            r = read_ready(entry, fd, (char __user *)iov.iov_base,
-                           iov.iov_len);
+            r = read_ready(entry, fd, (char __user *)iov.iov_base, iov.iov_len);
             if (r <= 0) {
                 break;
             }
@@ -3067,7 +3021,6 @@ static int32_t sys_readv(isr_params_t *params)
 
     return total;
 }
-
 
 /**
  * Duplicate a descriptor onto the lowest free fd (dup(2)).
@@ -3100,12 +3053,12 @@ static int32_t sys_dup(isr_params_t *params)
     entry = fd_get(&current_proc->fds, oldfd);
     dst = &current_proc->fds.entries[newfd];
     fd_ofd_unref(dst->ofd); /* drop the fresh OFD; share oldfd's instead */
-    dst->type  = entry->type;
-    dst->node  = entry->node;
-    dst->sock  = entry->sock;
-    dst->ops   = entry->ops;  /* a dup shares the same backing object + vtable */
-    dst->priv  = entry->priv;
-    dst->ofd   = entry->ofd;
+    dst->type = entry->type;
+    dst->node = entry->node;
+    dst->sock = entry->sock;
+    dst->ops = entry->ops; /* a dup shares the same backing object + vtable */
+    dst->priv = entry->priv;
+    dst->ofd = entry->ofd;
     fd_ofd_ref(dst->ofd);
     dst->flags = entry->flags & ~(uint32_t)FD_FLAG_CLOEXEC;
     if (entry->type == FD_TYPE_SOCKET && entry->sock) {
@@ -3155,12 +3108,12 @@ static int32_t sys_dup2(isr_params_t *params)
      * socket gains another reference too; and dup2 leaves the new fd's CLOEXEC
      * clear. */
     new_entry = &current_proc->fds.entries[newfd];
-    new_entry->type  = old_entry->type;
-    new_entry->node  = old_entry->node;
-    new_entry->sock  = old_entry->sock;
-    new_entry->ops   = old_entry->ops;  /* share the backing object + vtable */
-    new_entry->priv  = old_entry->priv;
-    new_entry->ofd   = old_entry->ofd;
+    new_entry->type = old_entry->type;
+    new_entry->node = old_entry->node;
+    new_entry->sock = old_entry->sock;
+    new_entry->ops = old_entry->ops; /* share the backing object + vtable */
+    new_entry->priv = old_entry->priv;
+    new_entry->ofd = old_entry->ofd;
     fd_ofd_ref(new_entry->ofd);
     new_entry->flags = old_entry->flags & ~(uint32_t)FD_FLAG_CLOEXEC;
 
@@ -3231,12 +3184,10 @@ static int32_t sys_chdir(isr_params_t *params)
                     return -ENOENT;
                 }
             }
-            if (vp.kind == VNODE_DEV_DIR || vp.kind == VNODE_PTS_DIR ||
-                vp.kind == VNODE_PROC_DIR || vp.kind == VNODE_PROC_NET_DIR ||
-                vp.kind == VNODE_PROC_PID ||
+            if (vp.kind == VNODE_DEV_DIR || vp.kind == VNODE_PTS_DIR || vp.kind == VNODE_PROC_DIR ||
+                vp.kind == VNODE_PROC_NET_DIR || vp.kind == VNODE_PROC_PID ||
                 vp.kind == VNODE_PROC_FD_DIR) {
-                synth_dir_path(vp.kind, rpid, current_proc->cwd,
-                               sizeof(current_proc->cwd));
+                synth_dir_path(vp.kind, rpid, current_proc->cwd, sizeof(current_proc->cwd));
                 vfs_cwd_clear(current_proc);
                 return 0;
             }
@@ -3308,8 +3259,7 @@ static int32_t sys_chdir(isr_params_t *params)
         /* Store the canonical absolute path (krffs_node_path follows real
          * parent links, so any '.'/'..' in the request is collapsed). If it
          * does not fit the fixed cwd buffer the cwd is left unchanged. */
-        if (krffs_node_path(node, current_proc->cwd,
-                            sizeof(current_proc->cwd)) != 0) {
+        if (krffs_node_path(node, current_proc->cwd, sizeof(current_proc->cwd)) != 0) {
             vfs_ref_release(&ref);
             return -ENAMETOOLONG;
         }
@@ -3339,7 +3289,7 @@ static int32_t sys_getcwd(isr_params_t *params)
 
     cwd_len = k_strlen(current_proc->cwd);
     if (cwd_len + 1 > size) {
-        return -ERANGE;  /* buffer too small for the path + NUL */
+        return -ERANGE; /* buffer too small for the path + NUL */
     }
 
     if (copy_to_user(buf, current_proc->cwd, cwd_len + 1) != 0) {
@@ -3357,24 +3307,24 @@ static int32_t sys_getcwd(isr_params_t *params)
  * This is the older structure used by ISH and some programs.
  */
 struct linux_stat {
-    unsigned long  st_dev;
-    unsigned long  st_ino;
+    unsigned long st_dev;
+    unsigned long st_ino;
     unsigned short st_mode;
     unsigned short st_nlink;
     unsigned short st_uid;
     unsigned short st_gid;
-    unsigned long  st_rdev;
-    unsigned long  st_size;
-    unsigned long  st_blksize;
-    unsigned long  st_blocks;
-    unsigned long  st_atime;
-    unsigned long  st_atime_nsec;
-    unsigned long  st_mtime;
-    unsigned long  st_mtime_nsec;
-    unsigned long  st_ctime;
-    unsigned long  st_ctime_nsec;
-    unsigned long  __unused4;
-    unsigned long  __unused5;
+    unsigned long st_rdev;
+    unsigned long st_size;
+    unsigned long st_blksize;
+    unsigned long st_blocks;
+    unsigned long st_atime;
+    unsigned long st_atime_nsec;
+    unsigned long st_mtime;
+    unsigned long st_mtime_nsec;
+    unsigned long st_ctime;
+    unsigned long st_ctime_nsec;
+    unsigned long __unused4;
+    unsigned long __unused5;
 };
 
 /*
@@ -3382,30 +3332,30 @@ struct linux_stat {
  */
 struct linux_stat64 {
     unsigned long long st_dev;
-    unsigned char      __pad0[4];
-    unsigned long      __st_ino;
-    unsigned int       st_mode;
-    unsigned int       st_nlink;
-    unsigned long      st_uid;
-    unsigned long      st_gid;
+    unsigned char __pad0[4];
+    unsigned long __st_ino;
+    unsigned int st_mode;
+    unsigned int st_nlink;
+    unsigned long st_uid;
+    unsigned long st_gid;
     unsigned long long st_rdev;
-    unsigned char      __pad3[4];
-    long long          st_size;
-    unsigned long      st_blksize;
+    unsigned char __pad3[4];
+    long long st_size;
+    unsigned long st_blksize;
     unsigned long long st_blocks;
-    unsigned long      st_atime;
-    unsigned long      st_atime_nsec;
-    unsigned long      st_mtime;
-    unsigned long      st_mtime_nsec;
-    unsigned long      st_ctime;
-    unsigned long      st_ctime_nsec;
+    unsigned long st_atime;
+    unsigned long st_atime_nsec;
+    unsigned long st_mtime;
+    unsigned long st_mtime_nsec;
+    unsigned long st_ctime;
+    unsigned long st_ctime_nsec;
     unsigned long long st_ino;
 };
 
 /* File type bits for st_mode */
-#define S_IFMT   0170000
-#define S_IFREG  0100000
-#define S_IFDIR  0040000
+#define S_IFMT  0170000
+#define S_IFREG 0100000
+#define S_IFDIR 0040000
 
 /**
  * Report a node's three times into a stat64.
@@ -3509,8 +3459,7 @@ static void krffs_fill_stat64(struct linux_stat64 *kst, krffs_node_t *node)
          * the filesystem anchor); a path can reach it via "..". */
         kst->st_mode = S_IFDIR | 0755;
     } else {
-        kst->st_mode = (KRFFS_IS_DIR(node->mode) ? S_IFDIR : S_IFREG) |
-                       (node->mode & 07777);
+        kst->st_mode = (KRFFS_IS_DIR(node->mode) ? S_IFDIR : S_IFREG) | (node->mode & 07777);
     }
     kst->st_nlink = 1; /* KRFFS has no hard links */
     kst->st_uid = node->uid;
@@ -3550,190 +3499,190 @@ static int32_t synth_stat(const struct vpath *vp, struct linux_stat64 *kst, int 
     stat64_boot_times(kst);
 
     switch (vp->kind) {
-        case VNODE_DEV_DIR:
-            (void)devfs_stat("", &mode, &rdev, &ino);
-            kst->st_dev = DEVFS_FSID;
-            kst->st_mode = mode;
-            kst->st_ino = ino;
-            return 0;
-        case VNODE_DEV:
-            if (devfs_stat(vp->name, &mode, &rdev, &ino) != 0) {
-                return -ENOENT;
-            }
-            kst->st_dev = DEVFS_FSID;
-            kst->st_mode = mode;
-            kst->st_rdev = rdev;
-            kst->st_ino = ino;
-            return 0;
-        case VNODE_PROC_DIR:
-            kst->st_dev = PROCFS_FSID;
-            kst->st_mode = S_IFDIR | 0555;
-            kst->st_ino = procfs_ino_dir();
-            return 0;
-        case VNODE_PROC_CMDLINE:
-            /* /proc/cmdline: the boot command line, a read-only regular
-             * file. */
-            kst->st_dev = PROCFS_FSID;
-            kst->st_mode = S_IFREG | 0444;
-            kst->st_ino = procfs_ino_cmdline();
-            return 0;
-        case VNODE_PROC_NET_DIR:
-            kst->st_dev = PROCFS_FSID;
-            kst->st_mode = S_IFDIR | 0555;
-            kst->st_ino = procfs_ino_netdir();
-            return 0;
-        case VNODE_PROC_NET_DEV:
-            /* /proc/net/dev: what the interface has carried, anyone's to
-             * read. */
-            kst->st_dev = PROCFS_FSID;
-            kst->st_mode = S_IFREG | 0444;
-            kst->st_ino = procfs_ino_netdev();
-            return 0;
-        case VNODE_PROC_UPTIME:
-            kst->st_dev = PROCFS_FSID;
-            kst->st_mode = S_IFREG | 0444;
-            kst->st_ino = procfs_ino_uptime();
-            return 0;
-        case VNODE_PROC_STAT_SYS:
-            kst->st_dev = PROCFS_FSID;
-            kst->st_mode = S_IFREG | 0444;
-            kst->st_ino = procfs_ino_statsys();
-            return 0;
-        case VNODE_PROC_MEMINFO:
-            kst->st_dev = PROCFS_FSID;
-            kst->st_mode = S_IFREG | 0444;
-            kst->st_ino = procfs_ino_meminfo();
-            return 0;
-        case VNODE_PROC_MOUNTS:
-            kst->st_dev = PROCFS_FSID;
-            kst->st_mode = S_IFREG | 0444;
-            kst->st_ino = procfs_ino_mounts();
-            return 0;
-        case VNODE_PROC_USB:
-            kst->st_dev = PROCFS_FSID;
-            kst->st_mode = S_IFREG | 0444;
-            kst->st_ino = procfs_ino_usb();
-            return 0;
-        case VNODE_PROC_LOOP:
-            kst->st_dev = PROCFS_FSID;
-            kst->st_mode = S_IFREG | 0444;
-            kst->st_ino = procfs_ino_loop();
-            return 0;
-        case VNODE_PROC_FILESYSTEMS:
-            kst->st_dev = PROCFS_FSID;
-            kst->st_mode = S_IFREG | 0444;
-            kst->st_ino = procfs_ino_filesystems();
-            return 0;
-        case VNODE_PROC_INTERRUPTS:
-            kst->st_dev = PROCFS_FSID;
-            kst->st_mode = S_IFREG | 0444;
-            kst->st_ino = procfs_ino_interrupts();
-            return 0;
-        case VNODE_PROC_CONSOLE:
-            kst->st_dev = PROCFS_FSID;
-            kst->st_mode = S_IFREG | 0444;
-            kst->st_ino = procfs_ino_console();
-            return 0;
-        case VNODE_PROC_NET_ROUTE:
-            kst->st_dev = PROCFS_FSID;
-            kst->st_mode = S_IFREG | 0444;
-            kst->st_ino = procfs_ino_netroute();
-            return 0;
-        case VNODE_PROC_NET_ARP:
-            kst->st_dev = PROCFS_FSID;
-            kst->st_mode = S_IFREG | 0444;
-            kst->st_ino = procfs_ino_netarp();
-            return 0;
-        case VNODE_PROC_NET_TCP:
-            kst->st_dev = PROCFS_FSID;
-            kst->st_mode = S_IFREG | 0444;
-            kst->st_ino = procfs_ino_nettcp();
-            return 0;
-        case VNODE_PROC_DISK:
-            /* /proc/disk: what the disk reported, root-readable only. */
-            kst->st_dev = PROCFS_FSID;
-            kst->st_mode = S_IFREG | 0400;
-            kst->st_ino = procfs_ino_disk();
-            return 0;
-        case VNODE_PROC_PID:
-        case VNODE_PROC_FD_DIR:
-            if (procfs_resolve_pid(vp->pid) < 0) {
-                return -ENOENT;
-            }
-            /* /proc/self is a symlink: an un-followed stat (lstat) sees the
-             * link, a followed one resolves to the pid directory.
-             * /proc/<numeric> and /proc/<pid>/fd are real directories. */
-            if (vp->kind == VNODE_PROC_PID && vp->pid == SYNTH_PID_SELF && !follow) {
-                kst->st_dev = PROCFS_FSID;
-                kst->st_mode = 0120777; /* S_IFLNK | 0777 */
-                kst->st_ino = procfs_ino_dir();
-                return 0;
-            }
-            kst->st_dev = PROCFS_FSID;
-            kst->st_mode = S_IFDIR | 0555;
-            kst->st_ino = procfs_ino_pid(procfs_resolve_pid(vp->pid));
-            return 0;
-        case VNODE_PROC_FILE:
-            if (procfs_resolve_pid(vp->pid) < 0) {
-                return -ENOENT;
-            }
-            kst->st_dev = PROCFS_FSID;
-            kst->st_mode = S_IFREG | 0444;
-            kst->st_ino = procfs_ino_pid(procfs_resolve_pid(vp->pid));
-            return 0;
-        case VNODE_PROC_FD_LINK: {
-            char scratch[16];
-            int rpid = procfs_resolve_pid(vp->pid);
-            if (rpid < 0) {
-                return -ENOENT;
-            }
-            /* The link exists only if descriptor procfd is actually open (the
-             * same check readlink makes), so stat and readlink agree. */
-            if (procfs_readlink_fd(rpid, vp->procfd, scratch, (int)sizeof(scratch)) < 0) {
-                return -ENOENT;
-            }
-            if (follow) {
-                /* A followed stat reports the target descriptor's identity. */
-                process_t *p = get_process((uint32_t)rpid);
-                if (p && vp->procfd >= 0 && vp->procfd < fd_table_cap(&p->fds) &&
-                    p->fds.entries[vp->procfd].type != FD_TYPE_NONE) {
-                    fstat_fill(&p->fds.entries[vp->procfd], kst);
-                    return 0;
-                }
-                return -ENOENT;
-            }
+    case VNODE_DEV_DIR:
+        (void)devfs_stat("", &mode, &rdev, &ino);
+        kst->st_dev = DEVFS_FSID;
+        kst->st_mode = mode;
+        kst->st_ino = ino;
+        return 0;
+    case VNODE_DEV:
+        if (devfs_stat(vp->name, &mode, &rdev, &ino) != 0) {
+            return -ENOENT;
+        }
+        kst->st_dev = DEVFS_FSID;
+        kst->st_mode = mode;
+        kst->st_rdev = rdev;
+        kst->st_ino = ino;
+        return 0;
+    case VNODE_PROC_DIR:
+        kst->st_dev = PROCFS_FSID;
+        kst->st_mode = S_IFDIR | 0555;
+        kst->st_ino = procfs_ino_dir();
+        return 0;
+    case VNODE_PROC_CMDLINE:
+        /* /proc/cmdline: the boot command line, a read-only regular
+         * file. */
+        kst->st_dev = PROCFS_FSID;
+        kst->st_mode = S_IFREG | 0444;
+        kst->st_ino = procfs_ino_cmdline();
+        return 0;
+    case VNODE_PROC_NET_DIR:
+        kst->st_dev = PROCFS_FSID;
+        kst->st_mode = S_IFDIR | 0555;
+        kst->st_ino = procfs_ino_netdir();
+        return 0;
+    case VNODE_PROC_NET_DEV:
+        /* /proc/net/dev: what the interface has carried, anyone's to
+         * read. */
+        kst->st_dev = PROCFS_FSID;
+        kst->st_mode = S_IFREG | 0444;
+        kst->st_ino = procfs_ino_netdev();
+        return 0;
+    case VNODE_PROC_UPTIME:
+        kst->st_dev = PROCFS_FSID;
+        kst->st_mode = S_IFREG | 0444;
+        kst->st_ino = procfs_ino_uptime();
+        return 0;
+    case VNODE_PROC_STAT_SYS:
+        kst->st_dev = PROCFS_FSID;
+        kst->st_mode = S_IFREG | 0444;
+        kst->st_ino = procfs_ino_statsys();
+        return 0;
+    case VNODE_PROC_MEMINFO:
+        kst->st_dev = PROCFS_FSID;
+        kst->st_mode = S_IFREG | 0444;
+        kst->st_ino = procfs_ino_meminfo();
+        return 0;
+    case VNODE_PROC_MOUNTS:
+        kst->st_dev = PROCFS_FSID;
+        kst->st_mode = S_IFREG | 0444;
+        kst->st_ino = procfs_ino_mounts();
+        return 0;
+    case VNODE_PROC_USB:
+        kst->st_dev = PROCFS_FSID;
+        kst->st_mode = S_IFREG | 0444;
+        kst->st_ino = procfs_ino_usb();
+        return 0;
+    case VNODE_PROC_LOOP:
+        kst->st_dev = PROCFS_FSID;
+        kst->st_mode = S_IFREG | 0444;
+        kst->st_ino = procfs_ino_loop();
+        return 0;
+    case VNODE_PROC_FILESYSTEMS:
+        kst->st_dev = PROCFS_FSID;
+        kst->st_mode = S_IFREG | 0444;
+        kst->st_ino = procfs_ino_filesystems();
+        return 0;
+    case VNODE_PROC_INTERRUPTS:
+        kst->st_dev = PROCFS_FSID;
+        kst->st_mode = S_IFREG | 0444;
+        kst->st_ino = procfs_ino_interrupts();
+        return 0;
+    case VNODE_PROC_CONSOLE:
+        kst->st_dev = PROCFS_FSID;
+        kst->st_mode = S_IFREG | 0444;
+        kst->st_ino = procfs_ino_console();
+        return 0;
+    case VNODE_PROC_NET_ROUTE:
+        kst->st_dev = PROCFS_FSID;
+        kst->st_mode = S_IFREG | 0444;
+        kst->st_ino = procfs_ino_netroute();
+        return 0;
+    case VNODE_PROC_NET_ARP:
+        kst->st_dev = PROCFS_FSID;
+        kst->st_mode = S_IFREG | 0444;
+        kst->st_ino = procfs_ino_netarp();
+        return 0;
+    case VNODE_PROC_NET_TCP:
+        kst->st_dev = PROCFS_FSID;
+        kst->st_mode = S_IFREG | 0444;
+        kst->st_ino = procfs_ino_nettcp();
+        return 0;
+    case VNODE_PROC_DISK:
+        /* /proc/disk: what the disk reported, root-readable only. */
+        kst->st_dev = PROCFS_FSID;
+        kst->st_mode = S_IFREG | 0400;
+        kst->st_ino = procfs_ino_disk();
+        return 0;
+    case VNODE_PROC_PID:
+    case VNODE_PROC_FD_DIR:
+        if (procfs_resolve_pid(vp->pid) < 0) {
+            return -ENOENT;
+        }
+        /* /proc/self is a symlink: an un-followed stat (lstat) sees the
+         * link, a followed one resolves to the pid directory.
+         * /proc/<numeric> and /proc/<pid>/fd are real directories. */
+        if (vp->kind == VNODE_PROC_PID && vp->pid == SYNTH_PID_SELF && !follow) {
             kst->st_dev = PROCFS_FSID;
             kst->st_mode = 0120777; /* S_IFLNK | 0777 */
-            kst->st_ino = procfs_ino_pid(rpid);
+            kst->st_ino = procfs_ino_dir();
             return 0;
         }
-        case VNODE_PTS_DIR:
-            /* /dev/pts: a directory. */
-            kst->st_dev = DEVFS_FSID;
-            kst->st_mode = S_IFDIR | 0755;
-            kst->st_ino = PTS_INO_DIR;
-            return 0;
-        case VNODE_PTS: {
-            /* /dev/pts/N: a slave terminal (S_IFCHR), only if pty N is
-             * allocated. The rdev is the Linux Unix98 pty slave major 136.
-             * Ownership lives on the pty, where the login server's chown/chmod
-             * put it. */
-            struct pty *pt = pty_get(vp->pts_index);
-            if (!pt) {
-                return -ENOENT;
-            }
-            kst->st_dev = DEVFS_FSID;
-            kst->st_mode = 0020000u | (uint32_t)(pt->mode & 0777u);
-            kst->st_uid = pt->uid;
-            kst->st_gid = pt->gid;
-            kst->st_rdev = (136u << 8) | (uint32_t)vp->pts_index;
-            kst->st_ino = PTS_INO_BASE + (uint32_t)vp->pts_index;
-            return 0;
-        }
-        case VNODE_ENOTDIR:
-            return -ENOTDIR;
-        default:
+        kst->st_dev = PROCFS_FSID;
+        kst->st_mode = S_IFDIR | 0555;
+        kst->st_ino = procfs_ino_pid(procfs_resolve_pid(vp->pid));
+        return 0;
+    case VNODE_PROC_FILE:
+        if (procfs_resolve_pid(vp->pid) < 0) {
             return -ENOENT;
+        }
+        kst->st_dev = PROCFS_FSID;
+        kst->st_mode = S_IFREG | 0444;
+        kst->st_ino = procfs_ino_pid(procfs_resolve_pid(vp->pid));
+        return 0;
+    case VNODE_PROC_FD_LINK: {
+        char scratch[16];
+        int rpid = procfs_resolve_pid(vp->pid);
+        if (rpid < 0) {
+            return -ENOENT;
+        }
+        /* The link exists only if descriptor procfd is actually open (the
+         * same check readlink makes), so stat and readlink agree. */
+        if (procfs_readlink_fd(rpid, vp->procfd, scratch, (int)sizeof(scratch)) < 0) {
+            return -ENOENT;
+        }
+        if (follow) {
+            /* A followed stat reports the target descriptor's identity. */
+            process_t *p = get_process((uint32_t)rpid);
+            if (p && vp->procfd >= 0 && vp->procfd < fd_table_cap(&p->fds) &&
+                p->fds.entries[vp->procfd].type != FD_TYPE_NONE) {
+                fstat_fill(&p->fds.entries[vp->procfd], kst);
+                return 0;
+            }
+            return -ENOENT;
+        }
+        kst->st_dev = PROCFS_FSID;
+        kst->st_mode = 0120777; /* S_IFLNK | 0777 */
+        kst->st_ino = procfs_ino_pid(rpid);
+        return 0;
+    }
+    case VNODE_PTS_DIR:
+        /* /dev/pts: a directory. */
+        kst->st_dev = DEVFS_FSID;
+        kst->st_mode = S_IFDIR | 0755;
+        kst->st_ino = PTS_INO_DIR;
+        return 0;
+    case VNODE_PTS: {
+        /* /dev/pts/N: a slave terminal (S_IFCHR), only if pty N is
+         * allocated. The rdev is the Linux Unix98 pty slave major 136.
+         * Ownership lives on the pty, where the login server's chown/chmod
+         * put it. */
+        struct pty *pt = pty_get(vp->pts_index);
+        if (!pt) {
+            return -ENOENT;
+        }
+        kst->st_dev = DEVFS_FSID;
+        kst->st_mode = 0020000u | (uint32_t)(pt->mode & 0777u);
+        kst->st_uid = pt->uid;
+        kst->st_gid = pt->gid;
+        kst->st_rdev = (136u << 8) | (uint32_t)vp->pts_index;
+        kst->st_ino = PTS_INO_BASE + (uint32_t)vp->pts_index;
+        return 0;
+    }
+    case VNODE_ENOTDIR:
+        return -ENOTDIR;
+    default:
+        return -ENOENT;
     }
 }
 
@@ -3956,14 +3905,14 @@ static int32_t do_stat64(const char __user *path, struct linux_stat64 __user *st
  * target. */
 static int32_t sys_stat64(isr_params_t *params)
 {
-    return do_stat64((const char __user *)params->ebx,
-                     (struct linux_stat64 __user *)params->ecx, 1);
+    return do_stat64((const char __user *)params->ebx, (struct linux_stat64 __user *)params->ecx,
+                     1);
 }
 
 static int32_t sys_lstat64(isr_params_t *params)
 {
-    return do_stat64((const char __user *)params->ebx,
-                     (struct linux_stat64 __user *)params->ecx, 0);
+    return do_stat64((const char __user *)params->ebx, (struct linux_stat64 __user *)params->ecx,
+                     0);
 }
 
 /*
@@ -4065,8 +4014,7 @@ static int32_t statfs_fill_mount(struct linux_statfs64 __user *out, struct vfs_m
 /** Which of the three mounts a classified path belongs to. */
 static uint32_t statfs_magic_for_kind(int kind)
 {
-    if (kind == VNODE_DEV_DIR || kind == VNODE_DEV || kind == VNODE_PTS_DIR ||
-        kind == VNODE_PTS) {
+    if (kind == VNODE_DEV_DIR || kind == VNODE_DEV || kind == VNODE_PTS_DIR || kind == VNODE_PTS) {
         return STATFS_MAGIC_DEVFS;
     }
     if (kind == VNODE_KRFFS) {
@@ -4119,8 +4067,7 @@ static int32_t sys_statfs64(isr_params_t *params)
             return statfs_fill_mount((struct linux_statfs64 __user *)params->edx, m);
         }
         vfs_ref_release(&ref);
-        return statfs_fill((struct linux_statfs64 __user *)params->edx,
-                           magic);
+        return statfs_fill((struct linux_statfs64 __user *)params->edx, magic);
     }
 }
 
@@ -4149,8 +4096,8 @@ static int32_t sys_fstatfs64(isr_params_t *params)
     if (e->type == FD_TYPE_PROC) {
         return statfs_fill((struct linux_statfs64 __user *)params->edx, STATFS_MAGIC_PROC);
     }
-    if (e->type == FD_TYPE_DEVICE || e->type == FD_TYPE_CONSOLE ||
-        e->type == FD_TYPE_PTM || e->type == FD_TYPE_SYNTH_DIR) {
+    if (e->type == FD_TYPE_DEVICE || e->type == FD_TYPE_CONSOLE || e->type == FD_TYPE_PTM ||
+        e->type == FD_TYPE_SYNTH_DIR) {
         return statfs_fill((struct linux_statfs64 __user *)params->edx, STATFS_MAGIC_DEVFS);
     }
     if (e->type != FD_TYPE_FILE && e->type != FD_TYPE_DIR) {
@@ -4433,8 +4380,7 @@ static int32_t do_access(const char *name, int mode)
         }
         /* Synthetic metadata is fixed and root-owned; judge it by the real
          * ids like any other access(2) answer. */
-        return cred_access_bits(s.st_uid, s.st_gid, s.st_mode & 0777u,
-                                mode, 1);
+        return cred_access_bits(s.st_uid, s.st_gid, s.st_mode & 0777u, mode, 1);
     }
     /* R_OK/W_OK/X_OK are the same octal digits the checker takes. */
     if (!mnt_is_root(ref.mnt)) {
@@ -4518,11 +4464,10 @@ static int32_t krffs_chmod_node(krffs_node_t *node, uint32_t mode)
          * same call, so reading it back as a reason to spare the mode would
          * defeat the rule. Setuid needs no rule here: only the owner may chmod,
          * and the setuid grant is that owner's own identity. */
-        if (!cred_privileged() && !KRFFS_IS_DIR(node->mode) &&
-            !cred_in_group(node->gid)) {
-            want &= ~(uint32_t) KRFFS_MODE_SGID;
+        if (!cred_privileged() && !KRFFS_IS_DIR(node->mode) && !cred_in_group(node->gid)) {
+            want &= ~(uint32_t)KRFFS_MODE_SGID;
         }
-        node->mode = (uint16_t) ((node->mode & ~07777u) | want);
+        node->mode = (uint16_t)((node->mode & ~07777u) | want);
         krffs_stamp(node, KRFFS_STAMP_ATTR);
     }
     return 0;
@@ -4537,8 +4482,8 @@ static int32_t krffs_chmod_node(krffs_node_t *node, uint32_t mode)
  */
 static int32_t krffs_chown_node(krffs_node_t *node, uint32_t uid, uint32_t gid)
 {
-    int uid_changes = (uid != (uint32_t) -1 && uid != node->uid);
-    int gid_changes = (gid != (uint32_t) -1 && gid != node->gid);
+    int uid_changes = (uid != (uint32_t)-1 && uid != node->uid);
+    int gid_changes = (gid != (uint32_t)-1 && gid != node->gid);
 
     if (uid_changes && !cred_privileged()) {
         return -EPERM;
@@ -4547,10 +4492,10 @@ static int32_t krffs_chown_node(krffs_node_t *node, uint32_t uid, uint32_t gid)
         (current_proc->euid != node->uid || !cred_in_group(gid))) {
         return -EPERM;
     }
-    if (uid != (uint32_t) -1) {
+    if (uid != (uint32_t)-1) {
         node->uid = uid;
     }
-    if (gid != (uint32_t) -1) {
+    if (gid != (uint32_t)-1) {
         node->gid = gid;
     }
     /* Stamped once, after both fields, and on the same gate the set-id clear
@@ -4570,7 +4515,6 @@ static int32_t krffs_chown_node(krffs_node_t *node, uint32_t uid, uint32_t gid)
     }
     return 0;
 }
-
 
 /**
  * chmod core for the chmod/chown family.
@@ -4606,7 +4550,7 @@ static int32_t do_chmod(const char *name, uint32_t mode)
             if (!cred_privileged() && current_proc->euid != pt->uid) {
                 return -EPERM;
             }
-            pt->mode = (uint16_t) (mode & 0777u);
+            pt->mode = (uint16_t)(mode & 0777u);
             return 0;
         }
         return cred_privileged() ? 0 : -EPERM; /* fixed root-owned metadata */
@@ -4614,6 +4558,7 @@ static int32_t do_chmod(const char *name, uint32_t mode)
     if (!mnt_is_root(ref.mnt)) {
         struct vfs_stat vst;
 
+        vfs_ns_lock(ref.mnt);
         rc = vfs_getattr(ref.mnt, ref.node, &vst);
         if (rc == 0 && !cred_privileged() && current_proc->euid != vst.uid) {
             rc = -EPERM;
@@ -4625,6 +4570,7 @@ static int32_t do_chmod(const char *name, uint32_t mode)
             vst.mode = mode;
             rc = vfs_setattr(ref.mnt, ref.node, VFS_SET_MODE, &vst);
         }
+        vfs_ns_unlock(ref.mnt);
         vfs_ref_release(&ref);
         return rc;
     }
@@ -4661,9 +4607,8 @@ static int vfs_chown_plan(struct vfs_stat *vst, uint32_t uid, uint32_t gid)
     if (what == 0) {
         return 0;
     }
-    if (!cred_privileged() &&
-        (current_proc->euid != vst->uid || (what & VFS_SET_UID) != 0 ||
-         ((what & VFS_SET_GID) != 0 && !cred_in_group(gid)))) {
+    if (!cred_privileged() && (current_proc->euid != vst->uid || (what & VFS_SET_UID) != 0 ||
+                               ((what & VFS_SET_GID) != 0 && !cred_in_group(gid)))) {
         return -EPERM;
     }
     if (what & VFS_SET_UID) {
@@ -4705,22 +4650,21 @@ static int32_t do_chown(const char *name, uint32_t uid, uint32_t gid)
             if (!pt) {
                 return -ENOENT;
             }
-            uid_changes = (uid != (uint32_t) -1 && uid != pt->uid);
-            gid_changes = (gid != (uint32_t) -1 && gid != pt->gid);
+            uid_changes = (uid != (uint32_t)-1 && uid != pt->uid);
+            gid_changes = (gid != (uint32_t)-1 && gid != pt->gid);
             if ((uid_changes || gid_changes) && !cred_privileged()) {
                 return -EPERM; /* the login server that chowns a pty is root */
             }
-            if (uid != (uint32_t) -1) {
+            if (uid != (uint32_t)-1) {
                 pt->uid = uid;
             }
-            if (gid != (uint32_t) -1) {
+            if (gid != (uint32_t)-1) {
                 pt->gid = gid;
             }
             return 0;
         }
         /* Fixed root-owned metadata: a no-change request succeeds. */
-        if ((uid != (uint32_t) -1 && uid != 0) ||
-            (gid != (uint32_t) -1 && gid != 0)) {
+        if ((uid != (uint32_t)-1 && uid != 0) || (gid != (uint32_t)-1 && gid != 0)) {
             return -EPERM;
         }
         return 0;
@@ -4729,11 +4673,21 @@ static int32_t do_chown(const char *name, uint32_t uid, uint32_t gid)
         struct vfs_stat vst;
         int what;
 
+        /* The read, the plan and the store are one step under the mount's
+         * namespace lock. Taking the lock inside `vfs_setattr` would leave the
+         * plan made from attributes another process can change while this one
+         * waits for that lock: a privileged chown planned over a 0755 file
+         * would store the new owner without the set-id clear the file earned
+         * from a chmod that landed in between, which is a set-id program with
+         * an owner the caller chose. The lock is recursive for its holder, so
+         * the calls below take it again for nothing. */
+        vfs_ns_lock(ref.mnt);
         rc = vfs_getattr(ref.mnt, ref.node, &vst);
         if (rc == 0) {
             what = vfs_chown_plan(&vst, uid, gid);
             rc = what < 0 ? what : (what ? vfs_setattr(ref.mnt, ref.node, what, &vst) : 0);
         }
+        vfs_ns_unlock(ref.mnt);
         vfs_ref_release(&ref);
         return rc;
     }
@@ -4746,7 +4700,7 @@ static int32_t do_chown(const char *name, uint32_t uid, uint32_t gid)
 /* chmod(path, mode) and fchmodat(dirfd, path, mode[, flags]) share do_chmod. */
 static int32_t sys_chmod(isr_params_t *params)
 {
-    const char __user *upath = (const char __user *) params->ebx;
+    const char __user *upath = (const char __user *)params->ebx;
     uint32_t mode = params->ecx;
     char pathbuf[256];
     const char *name;
@@ -4768,8 +4722,8 @@ static int32_t sys_chmod(isr_params_t *params)
 
 static int32_t sys_fchmodat(isr_params_t *params)
 {
-    int dirfd = (int) params->ebx;
-    const char __user *upath = (const char __user *) params->ecx;
+    int dirfd = (int)params->ebx;
+    const char __user *upath = (const char __user *)params->ecx;
     uint32_t mode = params->edx;
     char pathbuf[256];
     const char *name;
@@ -4794,7 +4748,7 @@ static int32_t sys_fchmodat(isr_params_t *params)
  */
 static int32_t sys_fchmod(isr_params_t *params)
 {
-    int fd = (int) params->ebx;
+    int fd = (int)params->ebx;
     uint32_t mode = params->ecx;
     fd_entry_t *entry;
 
@@ -4805,16 +4759,17 @@ static int32_t sys_fchmod(isr_params_t *params)
     if (!entry) {
         return -EBADF;
     }
-    if ((entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR) &&
-        entry->node) {
+    if ((entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR) && entry->node) {
         return krffs_chmod_node(entry->node, mode);
     }
     if ((entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR) && entry->ofd &&
         entry->ofd->vmnt && entry->ofd->vnode) {
         /* A node of another type, by the rules chmod(2) keeps for one. */
         struct vfs_stat vst;
-        int rc = vfs_getattr(entry->ofd->vmnt, entry->ofd->vnode, &vst);
+        int rc;
 
+        vfs_ns_lock(entry->ofd->vmnt);
+        rc = vfs_getattr(entry->ofd->vmnt, entry->ofd->vnode, &vst);
         if (rc == 0 && !cred_privileged() && current_proc->euid != vst.uid) {
             rc = -EPERM;
         }
@@ -4825,6 +4780,7 @@ static int32_t sys_fchmod(isr_params_t *params)
             vst.mode = mode;
             rc = vfs_setattr(entry->ofd->vmnt, entry->ofd->vnode, VFS_SET_MODE, &vst);
         }
+        vfs_ns_unlock(entry->ofd->vmnt);
         return rc;
     }
     if (entry->type == FD_TYPE_PTS) {
@@ -4835,7 +4791,7 @@ static int32_t sys_fchmod(isr_params_t *params)
         if (!cred_privileged() && current_proc->euid != pt->uid) {
             return -EPERM;
         }
-        pt->mode = (uint16_t) (mode & 0777u);
+        pt->mode = (uint16_t)(mode & 0777u);
         return 0;
     }
     /* Every other descriptor has fixed root-owned metadata, like its path. */
@@ -4846,7 +4802,7 @@ static int32_t sys_fchmod(isr_params_t *params)
  * here since musl issues the 16-bit chown on i386. */
 static int32_t sys_chown(isr_params_t *params)
 {
-    const char __user *upath = (const char __user *) params->ebx;
+    const char __user *upath = (const char __user *)params->ebx;
     uint32_t uid = params->ecx;
     uint32_t gid = params->edx;
     char pathbuf[256];
@@ -4869,8 +4825,8 @@ static int32_t sys_chown(isr_params_t *params)
 
 static int32_t sys_fchownat(isr_params_t *params)
 {
-    int dirfd = (int) params->ebx;
-    const char __user *upath = (const char __user *) params->ecx;
+    int dirfd = (int)params->ebx;
+    const char __user *upath = (const char __user *)params->ecx;
     uint32_t uid = params->edx;
     uint32_t gid = params->esi;
     char pathbuf[256];
@@ -4895,7 +4851,7 @@ static int32_t sys_fchownat(isr_params_t *params)
  * the id policy is enforced and the call is otherwise a no-op. */
 static int32_t sys_fchown(isr_params_t *params)
 {
-    int fd = (int) params->ebx;
+    int fd = (int)params->ebx;
     uint32_t uid = params->ecx;
     uint32_t gid = params->edx;
     fd_entry_t *entry;
@@ -4907,8 +4863,7 @@ static int32_t sys_fchown(isr_params_t *params)
     if (!entry) {
         return -EBADF;
     }
-    if ((entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR) &&
-        entry->node) {
+    if ((entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR) && entry->node) {
         return krffs_chown_node(entry->node, uid, gid);
     }
     if ((entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR) && entry->ofd &&
@@ -4916,14 +4871,25 @@ static int32_t sys_fchown(isr_params_t *params)
         /* A node of another type, by the rules chown(2) keeps for one. */
         struct vfs_stat vst;
         int what;
-        int rc = vfs_getattr(entry->ofd->vmnt, entry->ofd->vnode, &vst);
+        int rc;
 
+        /* The read, the plan and the store are one step under the mount's
+         * namespace lock. Taking the lock inside `vfs_setattr` would leave the
+         * plan made from attributes another process can change while this one
+         * waits for that lock: a privileged chown planned over a 0755 file
+         * would store the new owner without the set-id clear the file earned
+         * from a chmod that landed in between, which is a set-id program with
+         * an owner the caller chose. The lock is recursive for its holder, so
+         * the calls below take it again for nothing. */
+        vfs_ns_lock(entry->ofd->vmnt);
+        rc = vfs_getattr(entry->ofd->vmnt, entry->ofd->vnode, &vst);
         if (rc == 0) {
             what = vfs_chown_plan(&vst, uid, gid);
-            rc = what < 0 ? what
-                          : (what ? vfs_setattr(entry->ofd->vmnt, entry->ofd->vnode, what, &vst)
-                                  : 0);
+            rc = what < 0
+                     ? what
+                     : (what ? vfs_setattr(entry->ofd->vmnt, entry->ofd->vnode, what, &vst) : 0);
         }
+        vfs_ns_unlock(entry->ofd->vmnt);
         return rc;
     }
     if (entry->type == FD_TYPE_PTS) {
@@ -4933,23 +4899,22 @@ static int32_t sys_fchown(isr_params_t *params)
         if (!pt) {
             return -EBADF;
         }
-        uid_changes = (uid != (uint32_t) -1 && uid != pt->uid);
-        gid_changes = (gid != (uint32_t) -1 && gid != pt->gid);
+        uid_changes = (uid != (uint32_t)-1 && uid != pt->uid);
+        gid_changes = (gid != (uint32_t)-1 && gid != pt->gid);
         if ((uid_changes || gid_changes) && !cred_privileged()) {
             return -EPERM;
         }
-        if (uid != (uint32_t) -1) {
+        if (uid != (uint32_t)-1) {
             pt->uid = uid;
         }
-        if (gid != (uint32_t) -1) {
+        if (gid != (uint32_t)-1) {
             pt->gid = gid;
         }
         return 0;
     }
     /* Every other descriptor has fixed root-owned metadata, like its path:
      * a no-change request succeeds, a change is refused. */
-    if ((uid != (uint32_t) -1 && uid != 0) ||
-        (gid != (uint32_t) -1 && gid != 0)) {
+    if ((uid != (uint32_t)-1 && uid != 0) || (gid != (uint32_t)-1 && gid != 0)) {
         return -EPERM;
     }
     return 0;
@@ -5093,8 +5058,8 @@ static int32_t sys_symlinkat(isr_params_t *params)
 
 static int32_t sys_link(isr_params_t *params)
 {
-    const char __user *uold = (const char __user *) params->ebx;
-    const char __user *unew = (const char __user *) params->ecx;
+    const char __user *uold = (const char __user *)params->ebx;
+    const char __user *unew = (const char __user *)params->ecx;
     char oldbuf[256];
     char newbuf[256];
     const char *name;
@@ -5126,11 +5091,11 @@ static int32_t sys_link(isr_params_t *params)
 
 static int32_t sys_linkat(isr_params_t *params)
 {
-    int olddirfd = (int) params->ebx;
-    const char __user *uold = (const char __user *) params->ecx;
-    int newdirfd = (int) params->edx;
-    const char __user *unew = (const char __user *) params->esi;
-    int flags = (int) params->edi;
+    int olddirfd = (int)params->ebx;
+    const char __user *uold = (const char __user *)params->ecx;
+    int newdirfd = (int)params->edx;
+    const char __user *unew = (const char __user *)params->esi;
+    int flags = (int)params->edi;
     char oldbuf[256];
     char newbuf[256];
     const char *name;
@@ -5232,8 +5197,7 @@ static int32_t sys__llseek(isr_params_t *params)
             if (!devfs_fd_raw_size(entry, &raw_size)) {
                 return -ENXIO; /* the window was withdrawn under an open fd */
             }
-            off = (long long)(((uint64_t)offset_high << 32) |
-                              (uint64_t)offset_low);
+            off = (long long)(((uint64_t)offset_high << 32) | (uint64_t)offset_low);
             rc = raw_seek_resolve(entry->ofd->raw_offset, raw_size, off, whence, &resolved);
             if (rc != 0) {
                 return rc;
@@ -5252,20 +5216,19 @@ static int32_t sys__llseek(isr_params_t *params)
             return 0;
         }
         if (devfs_fd_log_size(entry, &log_size)) {
-            off = (long long)(((uint64_t)offset_high << 32) |
-                              (uint64_t)offset_low);
+            off = (long long)(((uint64_t)offset_high << 32) | (uint64_t)offset_low);
             switch (whence) {
-                case 0: /* SEEK_SET */
-                    new_off = off;
-                    break;
-                case 1: /* SEEK_CUR */
-                    new_off = (long long)entry->ofd->offset + off;
-                    break;
-                case 2: /* SEEK_END */
-                    new_off = (long long)log_size + off;
-                    break;
-                default:
-                    return -EINVAL;
+            case 0: /* SEEK_SET */
+                new_off = off;
+                break;
+            case 1: /* SEEK_CUR */
+                new_off = (long long)entry->ofd->offset + off;
+                break;
+            case 2: /* SEEK_END */
+                new_off = (long long)log_size + off;
+                break;
+            default:
+                return -EINVAL;
             }
             if (new_off < 0 || new_off > (long long)0xFFFFFFFFu) {
                 return -EINVAL;
@@ -5323,19 +5286,19 @@ static int32_t sys__llseek(isr_params_t *params)
         }
     }
     switch (whence) {
-        case 0: /* SEEK_SET */
-            new_off = off;
-            seek_rc = 0;
-            break;
-        case 1: /* SEEK_CUR */
-            seek_rc = seek_add(entry->ofd->offset, off, &new_off);
-            break;
-        case 2: /* SEEK_END */
-            seek_rc = seek_add(size, off, &new_off);
-            break;
-        default:
-            fd_ofd_unlock(entry->ofd);
-            return -EINVAL;
+    case 0: /* SEEK_SET */
+        new_off = off;
+        seek_rc = 0;
+        break;
+    case 1: /* SEEK_CUR */
+        seek_rc = seek_add(entry->ofd->offset, off, &new_off);
+        break;
+    case 2: /* SEEK_END */
+        seek_rc = seek_add(size, off, &new_off);
+        break;
+    default:
+        fd_ofd_unlock(entry->ofd);
+        return -EINVAL;
     }
     if (seek_rc != 0) {
         fd_ofd_unlock(entry->ofd);
@@ -5392,106 +5355,106 @@ static int32_t sys_fcntl64(isr_params_t *params)
     }
 
     switch (cmd) {
-        case F_GETFD:
-            return (entry->flags & FD_FLAG_CLOEXEC) ? 1 : 0; /* 1 == FD_CLOEXEC */
-        case F_SETFD:
-            if (arg & 1) {
-                entry->flags |= FD_FLAG_CLOEXEC;
-            } else {
-                entry->flags &= ~(uint32_t)FD_FLAG_CLOEXEC;
-            }
-            return 0;
-        case F_GETFL: {
-            /* Report the access mode (O_RDONLY=0/O_WRONLY=1/O_RDWR=2) plus the
-             * OFD status flags we track (O_APPEND, O_NONBLOCK). */
-            int rw = entry->flags & (FD_FLAG_READ | FD_FLAG_WRITE);
-            int fl;
-            if (rw == (FD_FLAG_READ | FD_FLAG_WRITE)) {
-                fl = 2;
-            } else if (rw == FD_FLAG_WRITE) {
-                fl = 1;
-            } else {
-                fl = 0;
-            }
-            if (entry->ofd) {
-                fl |= (int)(entry->ofd->status_flags & (OFD_APPEND | OFD_NONBLOCK));
-            }
-            return fl;
+    case F_GETFD:
+        return (entry->flags & FD_FLAG_CLOEXEC) ? 1 : 0; /* 1 == FD_CLOEXEC */
+    case F_SETFD:
+        if (arg & 1) {
+            entry->flags |= FD_FLAG_CLOEXEC;
+        } else {
+            entry->flags &= ~(uint32_t)FD_FLAG_CLOEXEC;
         }
-        case F_SETFL:
-            /* O_APPEND and O_NONBLOCK are the settable status flags; they live
-             * on the open-file description (shared by dup/fork), not the
-             * descriptor. Other bits in arg (access mode, O_CLOEXEC) are
-             * accepted and ignored per POSIX. */
-            if (entry->ofd) {
-                entry->ofd->status_flags = arg & (OFD_APPEND | OFD_NONBLOCK);
-            }
-            return 0;
-        case F_DUPFD:
-        case F_DUPFD_CLOEXEC: {
-            int newfd;
-            fd_entry_t *dst;
-            /* F_DUPFD duplicates onto the LOWEST free fd >= arg (the POSIX
-             * contract). An arg past the table is -EINVAL; no slot at or above
-             * it is -EMFILE. */
-            if (arg >= (uint32_t)current_proc->fds.limit) {
-                return -EINVAL;
-            }
-            newfd = fd_alloc_from(&current_proc->fds, (int)arg);
-            if (newfd < 0) {
-                return -EMFILE;
-            }
-            entry = fd_get(&current_proc->fds, fd); /* the entries may have moved */
-            dst = &current_proc->fds.entries[newfd];
-            /* The duplicate SHARES oldfd's open-file description (so the seek
-             * offset is shared, per POSIX). fd_alloc_from just gave dst a fresh
-             * OFD; drop it and point dst at oldfd's, taking a reference. A
-             * shared socket gains a reference too; FD_CLOEXEC is
-             * per-descriptor. */
-            fd_ofd_unref(dst->ofd);
-            dst->type  = entry->type;
-            dst->node  = entry->node;
-            dst->sock  = entry->sock;
-            dst->ops   = entry->ops;  /* share the backing object + vtable */
-            dst->priv  = entry->priv;
-            dst->ofd   = entry->ofd;
-            fd_ofd_ref(dst->ofd);
-            dst->flags = entry->flags;
-            if (entry->type == FD_TYPE_SOCKET && entry->sock) {
-                socket_ref(entry->sock);
-            }
-            if (cmd == F_DUPFD_CLOEXEC) {
-                dst->flags |= FD_FLAG_CLOEXEC;
-            } else {
-                dst->flags &= ~(uint32_t)FD_FLAG_CLOEXEC;
-            }
-            return newfd;
+        return 0;
+    case F_GETFL: {
+        /* Report the access mode (O_RDONLY=0/O_WRONLY=1/O_RDWR=2) plus the
+         * OFD status flags we track (O_APPEND, O_NONBLOCK). */
+        int rw = entry->flags & (FD_FLAG_READ | FD_FLAG_WRITE);
+        int fl;
+        if (rw == (FD_FLAG_READ | FD_FLAG_WRITE)) {
+            fl = 2;
+        } else if (rw == FD_FLAG_WRITE) {
+            fl = 1;
+        } else {
+            fl = 0;
         }
-        case F_SETLK:
-        case F_SETLKW:
-        case F_SETLK64:
-        case F_SETLKW64:
-            /* Advisory POSIX locks. Rach2 is single-user with no competing
-             * locker, so every lock request is granted (documented no-conflict
-             * semantics), because dropbear and musl lock utmp and lastlog
-             * and must not see -EINVAL or -ENOSYS. */
-            return 0;
-        case F_GETLK:
-        case F_GETLK64:
-            /* Report that no lock would conflict: set l_type (the first short
-             * of the struct flock the caller passed) to F_UNLCK (2). */
-            if (!arg) {
+        if (entry->ofd) {
+            fl |= (int)(entry->ofd->status_flags & (OFD_APPEND | OFD_NONBLOCK));
+        }
+        return fl;
+    }
+    case F_SETFL:
+        /* O_APPEND and O_NONBLOCK are the settable status flags; they live
+         * on the open-file description (shared by dup/fork), not the
+         * descriptor. Other bits in arg (access mode, O_CLOEXEC) are
+         * accepted and ignored per POSIX. */
+        if (entry->ofd) {
+            entry->ofd->status_flags = arg & (OFD_APPEND | OFD_NONBLOCK);
+        }
+        return 0;
+    case F_DUPFD:
+    case F_DUPFD_CLOEXEC: {
+        int newfd;
+        fd_entry_t *dst;
+        /* F_DUPFD duplicates onto the LOWEST free fd >= arg (the POSIX
+         * contract). An arg past the table is -EINVAL; no slot at or above
+         * it is -EMFILE. */
+        if (arg >= (uint32_t)current_proc->fds.limit) {
+            return -EINVAL;
+        }
+        newfd = fd_alloc_from(&current_proc->fds, (int)arg);
+        if (newfd < 0) {
+            return -EMFILE;
+        }
+        entry = fd_get(&current_proc->fds, fd); /* the entries may have moved */
+        dst = &current_proc->fds.entries[newfd];
+        /* The duplicate SHARES oldfd's open-file description (so the seek
+         * offset is shared, per POSIX). fd_alloc_from just gave dst a fresh
+         * OFD; drop it and point dst at oldfd's, taking a reference. A
+         * shared socket gains a reference too; FD_CLOEXEC is
+         * per-descriptor. */
+        fd_ofd_unref(dst->ofd);
+        dst->type = entry->type;
+        dst->node = entry->node;
+        dst->sock = entry->sock;
+        dst->ops = entry->ops; /* share the backing object + vtable */
+        dst->priv = entry->priv;
+        dst->ofd = entry->ofd;
+        fd_ofd_ref(dst->ofd);
+        dst->flags = entry->flags;
+        if (entry->type == FD_TYPE_SOCKET && entry->sock) {
+            socket_ref(entry->sock);
+        }
+        if (cmd == F_DUPFD_CLOEXEC) {
+            dst->flags |= FD_FLAG_CLOEXEC;
+        } else {
+            dst->flags &= ~(uint32_t)FD_FLAG_CLOEXEC;
+        }
+        return newfd;
+    }
+    case F_SETLK:
+    case F_SETLKW:
+    case F_SETLK64:
+    case F_SETLKW64:
+        /* Advisory POSIX locks. Rach2 is single-user with no competing
+         * locker, so every lock request is granted (documented no-conflict
+         * semantics), because dropbear and musl lock utmp and lastlog
+         * and must not see -EINVAL or -ENOSYS. */
+        return 0;
+    case F_GETLK:
+    case F_GETLK64:
+        /* Report that no lock would conflict: set l_type (the first short
+         * of the struct flock the caller passed) to F_UNLCK (2). */
+        if (!arg) {
+            return -EFAULT;
+        }
+        {
+            short unlck = 2; /* F_UNLCK */
+            if (copy_to_user((void __user *)arg, &unlck, sizeof(unlck)) != 0) {
                 return -EFAULT;
             }
-            {
-                short unlck = 2; /* F_UNLCK */
-                if (copy_to_user((void __user *)arg, &unlck, sizeof(unlck)) != 0) {
-                    return -EFAULT;
-                }
-            }
-            return 0;
-        default:
-            return -EINVAL;
+        }
+        return 0;
+    default:
+        return -EINVAL;
     }
 }
 
@@ -5558,9 +5521,9 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
     k_memset(&kst, 0, sizeof(kst));
 
     if ((pathbuf[0] == '/' && pathbuf[1] == '\0') || pathbuf[0] == '\0') {
-        kst.st_mode = S_IFDIR | 0755;  /* drwxr-xr-x */
+        kst.st_mode = S_IFDIR | 0755; /* drwxr-xr-x */
         kst.st_nlink = 1;
-        kst.st_ino = 0;  /* Root inode is 0 */
+        kst.st_ino = 0; /* Root inode is 0 */
         kst.st_blksize = 4096;
         /* The root is a real directory with real times: an entry created in it
          * stamps them, which is how a program watching a directory sees it. */
@@ -5630,9 +5593,9 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
     }
 
     /* The type comes from the node, as it does in the stat64 path. */
-    kst.st_mode = (unsigned short)((KRFFS_IS_DIR(node->mode) ? S_IFDIR : S_IFREG) |
-                                   (node->mode & 07777));
-    kst.st_nlink = 1;                              /* Always 1 for KRFFS */
+    kst.st_mode =
+        (unsigned short)((KRFFS_IS_DIR(node->mode) ? S_IFDIR : S_IFREG) | (node->mode & 07777));
+    kst.st_nlink = 1; /* Always 1 for KRFFS */
     kst.st_uid = (unsigned short)node->uid;
     kst.st_gid = (unsigned short)node->gid;
     kst.st_size = (unsigned long)node->data_size;
@@ -5653,14 +5616,14 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
  */
 static int32_t sys_stat(isr_params_t *params)
 {
-    return do_old_stat((const char __user *)params->ebx,
-                       (struct linux_stat __user *)params->ecx, 1);
+    return do_old_stat((const char __user *)params->ebx, (struct linux_stat __user *)params->ecx,
+                       1);
 }
 
 static int32_t sys_lstat(isr_params_t *params)
 {
-    return do_old_stat((const char __user *)params->ebx,
-                       (struct linux_stat __user *)params->ecx, 0);
+    return do_old_stat((const char __user *)params->ebx, (struct linux_stat __user *)params->ecx,
+                       0);
 }
 
 /**
@@ -5701,7 +5664,7 @@ static int copy_user_pages(process_t *parent, page_dir_t *child_dir)
             uint32_t parent_phys;
 
             if (!(pte & 0x1) || !(pte & 0x4)) {
-                continue;  /* present (0x1) + user (0x4) only */
+                continue; /* present (0x1) + user (0x4) only */
             }
 
             virt_addr = (dir_idx << 22) | (page_idx << 12);
@@ -5732,8 +5695,7 @@ static int copy_user_pages(process_t *parent, page_dir_t *child_dir)
                 }
                 parent_table->pages[page_idx] = (pte & ~0x2u) | PTE_COW;
                 paging_flush_tlb(virt_addr); /* the parent is the current dir */
-            } else if (map_user_frame(child_dir, virt_addr, parent_phys,
-                                      pte & 0xFFFu) != 0) {
+            } else if (map_user_frame(child_dir, virt_addr, parent_phys, pte & 0xFFFu) != 0) {
                 return -1;
             }
             frame_ref(parent_phys);
@@ -5923,7 +5885,7 @@ static void __attribute__((noreturn)) exec_fail_destroyed(int where)
      * a dead PID 1. Only when the debug shell is the supervisor does it return
      * to the shell, below. */
     if (was_init && !debug_shell_is_home) {
-        panic_init_died(current_proc->pid);   /* never returns */
+        panic_init_died(current_proc->pid); /* never returns */
     }
 
     schedule();
@@ -5965,8 +5927,7 @@ static void __attribute__((noreturn)) exec_fail_destroyed(int where)
                          "sti\n\t"
                          "jmp *%1\n\t"
                          :
-                         : "r"((uint32_t)stack + KERNEL_STACK_SIZE_LOCAL),
-                           "r"((uint32_t)shell_loop)
+                         : "r"((uint32_t)stack + KERNEL_STACK_SIZE_LOCAL), "r"((uint32_t)shell_loop)
                          : "memory");
     /* The jmp above never falls through; this loop makes the noreturn
      * contract visible to the compiler, which cannot know that. */
@@ -5999,8 +5960,7 @@ static void __attribute__((noreturn)) exec_fail_destroyed(int where)
  *         errno for one whose first line names nothing.
  */
 static int32_t exec_shebang(struct exec_state *s, int *argc,
-                            int (*read)(void *, void *, uint32_t, uint32_t),
-                            void *ctx)
+                            int (*read)(void *, void *, uint32_t, uint32_t), void *ctx)
 {
     char *interp;
     char *arg = NULL;
@@ -6183,12 +6143,12 @@ static int32_t sys_execve(isr_params_t *params)
             uint32_t arg_ptr = 0;
             int r;
 
-                if (copy_from_user(&arg_ptr, (const void __user *)&user_argv[argc],
-                               sizeof(arg_ptr)) != 0) {
+            if (copy_from_user(&arg_ptr, (const void __user *)&user_argv[argc], sizeof(arg_ptr)) !=
+                0) {
                 return -EFAULT;
             }
             if (arg_ptr == 0) {
-                break;  /* NULL terminator */
+                break; /* NULL terminator */
             }
             /* The storage is exactly full and another argument is waiting:
              * that is a size limit reached, not a bad address. */
@@ -6196,8 +6156,7 @@ static int32_t sys_execve(isr_params_t *params)
                 return -E2BIG;
             }
             s->argv_bufs[argc] = &s->argv_storage[argv_offset];
-            r = strncpy_from_user(&s->argv_storage[argv_offset],
-                                  (const char __user *)arg_ptr,
+            r = strncpy_from_user(&s->argv_storage[argv_offset], (const char __user *)arg_ptr,
                                   sizeof(s->argv_storage) - argv_offset);
             if (r == -EFAULT) {
                 return -EFAULT;
@@ -6212,8 +6171,7 @@ static int32_t sys_execve(isr_params_t *params)
          */
         if (argc == EXEC_MAX_ENTRIES) {
             uint32_t arg_ptr = 0;
-            if (copy_from_user(&arg_ptr,
-                               (const void __user *)&user_argv[EXEC_MAX_ENTRIES],
+            if (copy_from_user(&arg_ptr, (const void __user *)&user_argv[EXEC_MAX_ENTRIES],
                                sizeof(arg_ptr)) != 0) {
                 return -EFAULT;
             }
@@ -6229,19 +6187,18 @@ static int32_t sys_execve(isr_params_t *params)
             uint32_t env_ptr = 0;
             int r;
 
-            if (copy_from_user(&env_ptr, (const void __user *)&user_envp[envc],
-                               sizeof(env_ptr)) != 0) {
+            if (copy_from_user(&env_ptr, (const void __user *)&user_envp[envc], sizeof(env_ptr)) !=
+                0) {
                 return -EFAULT;
             }
             if (env_ptr == 0) {
-                break;  /* NULL terminator */
+                break; /* NULL terminator */
             }
             if (envp_offset >= sizeof(s->envp_storage)) {
                 return -E2BIG;
             }
             s->envp_bufs[envc] = &s->envp_storage[envp_offset];
-            r = strncpy_from_user(&s->envp_storage[envp_offset],
-                                  (const char __user *)env_ptr,
+            r = strncpy_from_user(&s->envp_storage[envp_offset], (const char __user *)env_ptr,
                                   sizeof(s->envp_storage) - envp_offset);
             if (r == -EFAULT) {
                 return -EFAULT;
@@ -6255,8 +6212,7 @@ static int32_t sys_execve(isr_params_t *params)
          * array; fail, not silently drop the tail of the environment. */
         if (envc == EXEC_MAX_ENTRIES) {
             uint32_t env_ptr = 0;
-            if (copy_from_user(&env_ptr,
-                               (const void __user *)&user_envp[EXEC_MAX_ENTRIES],
+            if (copy_from_user(&env_ptr, (const void __user *)&user_envp[EXEC_MAX_ENTRIES],
                                sizeof(env_ptr)) != 0) {
                 return -EFAULT;
             }
@@ -6318,7 +6274,8 @@ static int32_t sys_execve(isr_params_t *params)
             }
             setid_mode = vst.mode & (KRFFS_MODE_SUID | KRFFS_MODE_SGID);
             if (!(vst.mode & 010u)) {
-                setid_mode &= ~KRFFS_MODE_SGID; /* set-gid without group execute is mandatory locking */
+                setid_mode &=
+                    ~KRFFS_MODE_SGID; /* set-gid without group execute is mandatory locking */
             }
             if (xref.mnt->flags & VFS_MS_NOSUID) {
                 setid_mode = 0;
@@ -6355,7 +6312,7 @@ static int32_t sys_execve(isr_params_t *params)
          * group-execute means something else in Unix (the mandatory-locking
          * mark), and nothing here implements that: the lock family is advisory
          * and always granted. */
-        setid_mode = (uint32_t) (prog->mode & KRFFS_MODE_SUID);
+        setid_mode = (uint32_t)(prog->mode & KRFFS_MODE_SUID);
         if ((prog->mode & KRFFS_MODE_SGID) && (prog->mode & 0010u)) {
             setid_mode |= KRFFS_MODE_SGID;
         }
@@ -6363,8 +6320,8 @@ static int32_t sys_execve(isr_params_t *params)
         if (xref.mnt->flags & VFS_MS_NOSUID) {
             setid_mode = 0;
         }
-        file_uid   = prog->uid;
-        file_gid   = prog->gid;
+        file_uid = prog->uid;
+        file_gid = prog->gid;
         vfs_ref_release(&xref);
     }
 checked:
@@ -6390,8 +6347,8 @@ checked:
              * resolved below as any program is. */
             if (exec_vfs_read(&s->vfs, &ehdr, sizeof(ehdr), 0) != (int)sizeof(ehdr) ||
                 !elf_valid_exec(&ehdr, sizeof(ehdr))) {
-                int32_t sb = s->vfs.err ? s->vfs.err
-                                          : exec_shebang(s, &argc, exec_vfs_read, &s->vfs);
+                int32_t sb =
+                    s->vfs.err ? s->vfs.err : exec_shebang(s, &argc, exec_vfs_read, &s->vfs);
 
                 exec_vfs_done(&s->vfs);
                 if (sb < 0) {
@@ -6403,7 +6360,7 @@ checked:
                 script = 1;
             }
         } else if (exec_krffs_read((void *)name, &ehdr, sizeof(ehdr), 0) != (int)sizeof(ehdr) ||
-            !elf_valid_exec(&ehdr, sizeof(ehdr))) {
+                   !elf_valid_exec(&ehdr, sizeof(ehdr))) {
             int32_t sb = exec_shebang(s, &argc, exec_krffs_read,
                                       (void *)(s->path + (s->path[0] == '/' ? 1 : 0)));
 
@@ -6436,8 +6393,7 @@ checked:
                 if (rc != 0) {
                     return rc;
                 }
-                if (vfs_synth_vpath(iref.mnt, iref.node) ||
-                    (iref.mnt->flags & VFS_MS_NOEXEC)) {
+                if (vfs_synth_vpath(iref.mnt, iref.node) || (iref.mnt->flags & VFS_MS_NOEXEC)) {
                     vfs_ref_release(&iref);
                     return -EACCES;
                 }
@@ -6477,8 +6433,7 @@ checked:
                 /* One level only: an interpreter that is itself a script. */
                 return -ENOEXEC;
             }
-interpreter_checked:
-            ;
+        interpreter_checked:;
         }
     }
 
@@ -6503,8 +6458,8 @@ interpreter_checked:
     }
     current_proc->suid = current_proc->euid;
     current_proc->sgid = current_proc->egid;
-    secure = (current_proc->euid != current_proc->ruid) ||
-             (current_proc->egid != current_proc->rgid);
+    secure =
+        (current_proc->euid != current_proc->ruid) || (current_proc->egid != current_proc->rgid);
 
     /* Record the program's basename as comm for /proc/<pid>/stat and ps. */
     proc_set_comm(current_proc, name);
@@ -6544,8 +6499,7 @@ interpreter_checked:
     free_user_pages(proc_dir);
 
     if (elf_load_image(s->vfs.ref.mnt ? exec_vfs_read : exec_krffs_read,
-                       s->vfs.ref.mnt ? (void *)&s->vfs : (void *)name, proc_dir,
-                       &img) != 0) {
+                       s->vfs.ref.mnt ? (void *)&s->vfs : (void *)name, proc_dir, &img) != 0) {
         exec_vfs_done(&s->vfs);
         exec_fail_destroyed(1);
     }
@@ -6582,10 +6536,8 @@ interpreter_checked:
      * host-side (tests/host/uimage_hosttest.c). */
     krandom_bytes(random16, 16);
     {
-        uint32_t user_esp = build_user_stack(stack_page, USER_STACK_BASE,
-                                             PAGE_SIZE, argc, s->argv_bufs,
-                                             s->envp_bufs, &img, random16,
-                                             secure);
+        uint32_t user_esp = build_user_stack(stack_page, USER_STACK_BASE, PAGE_SIZE, argc,
+                                             s->argv_bufs, s->envp_bufs, &img, random16, secure);
 
         kunmap_temp(stack_page);
 
@@ -6630,8 +6582,7 @@ interpreter_checked:
         /* Build the address-space map (VMAs) for the new image so the
          * page-fault handler can demand-page, grow the stack, or segfault. The
          * ELF code/data pages themselves are still eagerly loaded above. */
-        if (elf_setup_vmas(&current_proc->vm, &img, USER_STACK_BASE,
-                           VM_STACK_MAX_GROWTH) != 0) {
+        if (elf_setup_vmas(&current_proc->vm, &img, USER_STACK_BASE, VM_STACK_MAX_GROWTH) != 0) {
             exec_fail_destroyed(5); /* the regions could not be made */
         }
         /* RLIMIT_AS: an image whose regions cover more than the limit does
@@ -6648,11 +6599,9 @@ interpreter_checked:
     /* Reload CR3 to flush the whole TLB: after freeing the old user pages and
      * mapping new stack/code pages, the TLB may hold stale entries from the
      * replaced image. */
-    __asm__ __volatile__ (
-        "movl %%cr3, %%eax\n\t"
-        "movl %%eax, %%cr3"
-        ::: "eax", "memory"
-    );
+    __asm__ __volatile__("movl %%cr3, %%eax\n\t"
+                         "movl %%eax, %%cr3" ::
+                             : "eax", "memory");
 
     /* Exec succeeded: re-publish the controlling terminal we released above,
      * with the unchanged session/group (exec keeps the controlling terminal),
@@ -6759,7 +6708,7 @@ static int32_t sys_fork(isr_params_t *params)
     child->umask = parent->umask; /* the file-creation mask is inherited */
     k_memcpy(child->rlim, parent->rlim, sizeof(child->rlim));
     child->fds.limit = parent->fds.limit;
-    child->ruid = parent->ruid;   /* credentials: the child is who the parent was */
+    child->ruid = parent->ruid; /* credentials: the child is who the parent was */
     child->euid = parent->euid;
     child->suid = parent->suid;
     child->rgid = parent->rgid;
@@ -6816,8 +6765,7 @@ static int32_t sys_fork(isr_params_t *params)
                 continue;
             }
             fd_ofd_ref(child->fds.entries[fdi].ofd);
-            if (child->fds.entries[fdi].type == FD_TYPE_SOCKET &&
-                child->fds.entries[fdi].sock) {
+            if (child->fds.entries[fdi].type == FD_TYPE_SOCKET && child->fds.entries[fdi].sock) {
                 socket_ref(child->fds.entries[fdi].sock);
             }
         }
@@ -6849,13 +6797,13 @@ static int32_t sys_fork(isr_params_t *params)
     --child_sp;
     *child_sp = (uint32_t)isr_return;
     --child_sp;
-    *child_sp = 0;  /* EBP */
+    *child_sp = 0; /* EBP */
     --child_sp;
-    *child_sp = 0;  /* EBX */
+    *child_sp = 0; /* EBX */
     --child_sp;
-    *child_sp = 0;  /* ESI */
+    *child_sp = 0; /* ESI */
     --child_sp;
-    *child_sp = 0;  /* EDI */
+    *child_sp = 0; /* EDI */
 
     child->regs.esp = (uint32_t)child_sp;
     child->state = PROC_READY;
@@ -6874,11 +6822,10 @@ fail_built:
     return -ENOMEM;
 }
 
-
 /* waitpid/wait4 options. */
 #define WNOHANG    1
-#define WUNTRACED  2  /* also report a child that has STOPPED */
-#define WCONTINUED 8  /* also report a child that has CONTINUED */
+#define WUNTRACED  2 /* also report a child that has STOPPED */
+#define WCONTINUED 8 /* also report a child that has CONTINUED */
 
 /* Bytes of struct rusage to zero-fill for wait4 (i386: two 8-byte timevals plus
  * 14 longs). We do not track per-process resource usage yet, so it is reported
@@ -6934,8 +6881,7 @@ static int32_t do_wait(int pid, int __user *status, int options, uint32_t rusage
      * is rejected before any child is reaped; otherwise the copy_to_user below
      * could fail after free_process() has destroyed the zombie, losing it.
      * Prefault for write, since that is how the results are delivered. */
-    if (status &&
-        !user_buffer_ok((uint32_t)(__force uintptr_t)status, sizeof(int), 1)) {
+    if (status && !user_buffer_ok((uint32_t)(__force uintptr_t)status, sizeof(int), 1)) {
         return -EFAULT;
     }
     if (rusage_ptr && !user_buffer_ok(rusage_ptr, RUSAGE_BYTES, 1)) {
@@ -6961,8 +6907,7 @@ static int32_t do_wait(int pid, int __user *status, int options, uint32_t rusage
                 child_pid = p->pid;
                 exit_code = p->exit_code;
                 if (p->cr3 != 0) {
-                    page_dir_t *child_dir =
-                        p->page_dir;
+                    page_dir_t *child_dir = p->page_dir;
                     free_user_pages(child_dir);
                     free_page_directory(child_dir);
                 }
@@ -7040,8 +6985,7 @@ static int32_t do_wait(int pid, int __user *status, int options, uint32_t rusage
  */
 static int32_t sys_waitpid(isr_params_t *params)
 {
-    return do_wait((int)params->ebx, (int __user *)params->ecx,
-                   (int)params->edx, 0);
+    return do_wait((int)params->ebx, (int __user *)params->ecx, (int)params->edx, 0);
 }
 
 /*
@@ -7051,8 +6995,7 @@ static int32_t sys_waitpid(isr_params_t *params)
  */
 static int32_t sys_wait4(isr_params_t *params)
 {
-    return do_wait((int)params->ebx, (int __user *)params->ecx,
-                   (int)params->edx, params->esi);
+    return do_wait((int)params->ebx, (int __user *)params->ecx, (int)params->edx, params->esi);
 }
 
 /*
@@ -7137,8 +7080,7 @@ static int32_t sys_unlink(isr_params_t *params)
         void *found;
         int32_t rc;
 
-        rc = vfs_resolve(0, pathbuf, VFS_WALK_PARENT, &parent, leaf,
-                         sizeof(leaf));
+        rc = vfs_resolve(0, pathbuf, VFS_WALK_PARENT, &parent, leaf, sizeof(leaf));
         if (rc != 0) {
             return rc;
         }
@@ -7168,8 +7110,7 @@ static int32_t sys_unlink(isr_params_t *params)
             vfs_ref_release(&parent);
             return rc;
         }
-        rc = parent.mnt->type->ops->lookup(parent.mnt, parent.node, leaf,
-                                           &found);
+        rc = parent.mnt->type->ops->lookup(parent.mnt, parent.node, leaf, &found);
         if (rc != 0) {
             vfs_ref_release(&parent);
             return rc;
@@ -7243,8 +7184,7 @@ static int32_t sys_mkdir(isr_params_t *params)
         void *found;
         int32_t rc;
 
-        rc = vfs_resolve(0, pathbuf, VFS_WALK_PARENT, &parent, leaf,
-                         sizeof(leaf));
+        rc = vfs_resolve(0, pathbuf, VFS_WALK_PARENT, &parent, leaf, sizeof(leaf));
         if (rc != 0) {
             return rc; /* a missing parent, or a denied ancestor */
         }
@@ -7258,8 +7198,7 @@ static int32_t sys_mkdir(isr_params_t *params)
             vfs_ref_release(&parent);
             return -EEXIST;
         }
-        if (parent.mnt->type->ops->lookup(parent.mnt, parent.node, leaf,
-                                          &found) == 0) {
+        if (parent.mnt->type->ops->lookup(parent.mnt, parent.node, leaf, &found) == 0) {
             if (parent.mnt->type->ops->put) {
                 parent.mnt->type->ops->put(parent.mnt, found);
             }
@@ -7289,8 +7228,7 @@ static int32_t sys_mkdir(isr_params_t *params)
             vfs_ref_release(&parent);
             return rc;
         }
-        if (parent.mnt->type->ops->lookup(parent.mnt, parent.node, leaf,
-                                          &found) == 0) {
+        if (parent.mnt->type->ops->lookup(parent.mnt, parent.node, leaf, &found) == 0) {
             node = found;
             krffs_stamp_new_node(node, params->ecx);
         }
@@ -7326,8 +7264,7 @@ static int32_t sys_rmdir(isr_params_t *params)
         void *found;
         int32_t rc;
 
-        rc = vfs_resolve(0, pathbuf, VFS_WALK_PARENT, &parent, leaf,
-                         sizeof(leaf));
+        rc = vfs_resolve(0, pathbuf, VFS_WALK_PARENT, &parent, leaf, sizeof(leaf));
         if (rc != 0) {
             return rc;
         }
@@ -7349,8 +7286,7 @@ static int32_t sys_rmdir(isr_params_t *params)
             vfs_ref_release(&parent);
             return rc;
         }
-        rc = parent.mnt->type->ops->lookup(parent.mnt, parent.node, leaf,
-                                           &found);
+        rc = parent.mnt->type->ops->lookup(parent.mnt, parent.node, leaf, &found);
         if (rc != 0) {
             vfs_ref_release(&parent);
             return rc;
@@ -7449,8 +7385,7 @@ static int32_t sys_rename(isr_params_t *params)
     /* A rename writes both directories: the entry leaves one and lands in
      * the other. Both write bits are checked before the source is even
      * looked up, as unlink orders it. */
-    rc = vfs_resolve(0, old_buf, VFS_WALK_PARENT, &opar, oleaf,
-                     sizeof(oleaf));
+    rc = vfs_resolve(0, old_buf, VFS_WALK_PARENT, &opar, oleaf, sizeof(oleaf));
     if (rc != 0) {
         return rc;
     }
@@ -7460,8 +7395,7 @@ static int32_t sys_rename(isr_params_t *params)
         vfs_ref_release(&opar);
         return rc;
     }
-    rc = vfs_resolve(0, new_buf, VFS_WALK_PARENT, &npar, nleaf,
-                     sizeof(nleaf));
+    rc = vfs_resolve(0, new_buf, VFS_WALK_PARENT, &npar, nleaf, sizeof(nleaf));
     if (rc != 0) {
         vfs_ref_release(&opar);
         return rc;
@@ -7471,8 +7405,7 @@ static int32_t sys_rename(isr_params_t *params)
     if (rc != 0) {
         goto out;
     }
-    if (vfs_synth_vpath(opar.mnt, opar.node) ||
-        vfs_synth_vpath(npar.mnt, npar.node)) {
+    if (vfs_synth_vpath(opar.mnt, opar.node) || vfs_synth_vpath(npar.mnt, npar.node)) {
         rc = -EROFS;
         goto out;
     }
@@ -7482,8 +7415,7 @@ static int32_t sys_rename(isr_params_t *params)
         rc = -EXDEV;
         goto out;
     }
-    if (vfs_leaf_mount(opar.mnt, opar.node, oleaf) ||
-        vfs_leaf_mount(npar.mnt, npar.node, nleaf)) {
+    if (vfs_leaf_mount(opar.mnt, opar.node, oleaf) || vfs_leaf_mount(npar.mnt, npar.node, nleaf)) {
         rc = -EBUSY; /* a mount point moves for no one */
         goto out;
     }
@@ -7517,8 +7449,7 @@ static int32_t sys_rename(isr_params_t *params)
     }
 
     existing = NULL;
-    if (npar.mnt->type->ops->lookup(npar.mnt, npar.node, nleaf, &found) ==
-        0) {
+    if (npar.mnt->type->ops->lookup(npar.mnt, npar.node, nleaf, &found) == 0) {
         existing = found;
     }
     if (existing && existing != node) {
@@ -7598,8 +7529,7 @@ static int32_t sys_utimensat(isr_params_t *params)
 {
     int dirfd = (int)params->ebx;
     const char __user *user_path = (const char __user *)params->ecx;
-    struct kernel_timespec __user *user_times =
-        (struct kernel_timespec __user *)params->edx;
+    struct kernel_timespec __user *user_times = (struct kernel_timespec __user *)params->edx;
     int flags = (int)params->esi;
     char pathbuf[256];
     struct kernel_timespec ktimes[2];
@@ -7641,8 +7571,8 @@ static int32_t sys_utimensat(isr_params_t *params)
 
     {
         struct vfs_ref ref;
-        int rc = vfs_resolve(0, name, (flags & AT_SYMLINK_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0,
-                             &ref, 0, 0);
+        int rc =
+            vfs_resolve(0, name, (flags & AT_SYMLINK_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0, &ref, 0, 0);
 
         if (rc != 0) {
             return rc; /* missing, not-a-dir, or a denied ancestor */
@@ -7654,8 +7584,8 @@ static int32_t sys_utimensat(isr_params_t *params)
         if (!mnt_is_root(ref.mnt)) {
             struct vfs_stat vst;
             int what = 0;
-            int now_both = times == NULL || (times[0].tv_nsec == UTIME_NOW &&
-                                             times[1].tv_nsec == UTIME_NOW);
+            int now_both =
+                times == NULL || (times[0].tv_nsec == UTIME_NOW && times[1].tv_nsec == UTIME_NOW);
 
             rc = vfs_getattr(ref.mnt, ref.node, &vst);
             if (rc == 0 && times != NULL && times[0].tv_nsec == UTIME_OMIT &&
@@ -7700,12 +7630,10 @@ static int32_t sys_utimensat(isr_params_t *params)
      * needs no right and touches no timestamp (not even ctime). Setting both
      * to "now" (times NULL, or both UTIME_NOW) is the owner's, or anyone with
      * write, or root. Any explicit time is the owner's or root's alone. */
-    if (times != NULL &&
-        times[0].tv_nsec == UTIME_OMIT && times[1].tv_nsec == UTIME_OMIT) {
+    if (times != NULL && times[0].tv_nsec == UTIME_OMIT && times[1].tv_nsec == UTIME_OMIT) {
         return 0;
     }
-    if (times == NULL ||
-        (times[0].tv_nsec == UTIME_NOW && times[1].tv_nsec == UTIME_NOW)) {
+    if (times == NULL || (times[0].tv_nsec == UTIME_NOW && times[1].tv_nsec == UTIME_NOW)) {
         if (!cred_privileged() && current_proc->euid != node->uid &&
             cred_access_node(node, CRED_W, 0) != 0) {
             return -EACCES;
@@ -7754,16 +7682,16 @@ static int32_t sys_utimensat(isr_params_t *params)
  * Linux dirent64 structure for getdents64 syscall
  */
 struct linux_dirent64 {
-    uint64_t       d_ino;     /* 64-bit inode number */
-    int64_t        d_off;     /* offset to next entry */
-    uint16_t       d_reclen;  /* Size of this dirent */
-    uint8_t        d_type;    /* File type */
-    char           d_name[1]; /* Filename (variable length, null-terminated) */
+    uint64_t d_ino;    /* 64-bit inode number */
+    int64_t d_off;     /* offset to next entry */
+    uint16_t d_reclen; /* Size of this dirent */
+    uint8_t d_type;    /* File type */
+    char d_name[1];    /* Filename (variable length, null-terminated) */
 };
 
 /* Directory entry types */
-#define DT_REG  8   /* Regular file */
-#define DT_DIR  4   /* Directory */
+#define DT_REG 8 /* Regular file */
+#define DT_DIR 4 /* Directory */
 #ifndef DT_CHR
 #define DT_CHR 2
 #endif
@@ -7884,9 +7812,9 @@ static int synth_dirent_at(int kind, int pid, int n, char *name, uint64_t *ino, 
         /* The machine's own files come first, in a table so that adding one is
          * a line here and not another index in a chain; the pid directories
          * follow, numbered from where the table ends. */
-        static const char *const globals[] = {"cmdline", "disk",    "uptime", "stat",
-                                              "meminfo", "mounts",  "net",    "self",
-                                              "usb",     "loop",    "console"};
+        static const char *const globals[] = {"cmdline", "disk",   "uptime", "stat",
+                                              "meminfo", "mounts", "net",    "self",
+                                              "usb",     "loop",   "console"};
         int count = (int)(sizeof(globals) / sizeof(globals[0]));
 
         if (n < count) {
@@ -7991,8 +7919,8 @@ static int32_t synth_getdents(fd_entry_t *e, char *buf, uint32_t count)
     while (synth_dirent_at(kind, pid, (int)idx, name, &ino, &dtype)) {
         uint8_t recbuf[64];
         uint32_t name_len = k_strlen(name);
-        uint32_t rec_len = sizeof(uint64_t) + sizeof(int64_t) + sizeof(uint16_t) +
-                           sizeof(uint8_t) + name_len + 1;
+        uint32_t rec_len =
+            sizeof(uint64_t) + sizeof(int64_t) + sizeof(uint16_t) + sizeof(uint8_t) + name_len + 1;
         struct linux_dirent64 *d;
 
         rec_len = (rec_len + 7) & ~7u;
@@ -8068,7 +7996,7 @@ static int32_t sys_getdents64(isr_params_t *params)
         return -EIO;
     }
     if (fd_node_check(entry) != 0) {
-        return -EBADF;  /* the directory was removed out from under this fd */
+        return -EBADF; /* the directory was removed out from under this fd */
     }
 
     /*
@@ -8122,8 +8050,8 @@ static int32_t sys_getdents64(isr_params_t *params)
             name_len = k_strlen(de.name);
             /* Fixed fields (19 bytes) + name + NUL, padded to 8-byte
              * align. */
-            rec_len = sizeof(uint64_t) + sizeof(int64_t) + sizeof(uint16_t) +
-                      sizeof(uint8_t) + name_len + 1;
+            rec_len = sizeof(uint64_t) + sizeof(int64_t) + sizeof(uint16_t) + sizeof(uint8_t) +
+                      name_len + 1;
             rec_len = (rec_len + 7) & ~7;
             if (bytes_written + rec_len > count) {
                 if (bytes_written == 0) {
@@ -8140,8 +8068,7 @@ static int32_t sys_getdents64(isr_params_t *params)
             dirent->d_reclen = (uint16_t)rec_len;
             dirent->d_type = de.is_dir ? DT_DIR : DT_REG;
             k_memcpy(dirent->d_name, de.name, name_len + 1);
-            if (copy_to_user((void __user *)(buf + bytes_written), recbuf,
-                             rec_len) != 0) {
+            if (copy_to_user((void __user *)(buf + bytes_written), recbuf, rec_len) != 0) {
                 fd_ofd_unlock(ofd);
                 return (bytes_written > 0) ? (int32_t)bytes_written : -EFAULT;
             }
@@ -8161,8 +8088,8 @@ static int32_t sys_getdents64(isr_params_t *params)
  * timeval structure for gettimeofday
  */
 struct kernel_timeval {
-    int32_t tv_sec;   /* seconds */
-    int32_t tv_usec;  /* microseconds */
+    int32_t tv_sec;  /* seconds */
+    int32_t tv_usec; /* microseconds */
 };
 
 /*
@@ -8254,10 +8181,8 @@ static int32_t sys_clock_gettime(isr_params_t *params)
  */
 static int32_t sys_nanosleep(isr_params_t *params)
 {
-    const struct kernel_timespec __user *ureq =
-        (const struct kernel_timespec __user *)params->ebx;
-    struct kernel_timespec __user *urem =
-        (struct kernel_timespec __user *)params->ecx;
+    const struct kernel_timespec __user *ureq = (const struct kernel_timespec __user *)params->ebx;
+    struct kernel_timespec __user *urem = (struct kernel_timespec __user *)params->ecx;
     struct kernel_timespec req;
     uint32_t ticks, target;
 
@@ -8302,8 +8227,7 @@ static int32_t sys_nanosleep(isr_params_t *params)
          * and return -EINTR so it is acted on when the syscall returns to user.
          */
         if (signal_pending()) {
-            uint32_t left = ((int32_t)(target - kernel_ticks) > 0)
-                                ? (target - kernel_ticks) : 0u;
+            uint32_t left = ((int32_t)(target - kernel_ticks) > 0) ? (target - kernel_ticks) : 0u;
             current_proc->wakeup_tick = 0;
             current_proc->state = PROC_RUNNING;
             if (urem) {
@@ -8343,22 +8267,22 @@ static int32_t sys_nanosleep(isr_params_t *params)
 static int32_t sys_getuid(isr_params_t *params)
 {
     (void)params;
-    return (int32_t) current_proc->ruid;
+    return (int32_t)current_proc->ruid;
 }
 static int32_t sys_geteuid(isr_params_t *params)
 {
     (void)params;
-    return (int32_t) current_proc->euid;
+    return (int32_t)current_proc->euid;
 }
 static int32_t sys_getgid(isr_params_t *params)
 {
     (void)params;
-    return (int32_t) current_proc->rgid;
+    return (int32_t)current_proc->rgid;
 }
 static int32_t sys_getegid(isr_params_t *params)
 {
     (void)params;
-    return (int32_t) current_proc->egid;
+    return (int32_t)current_proc->egid;
 }
 
 /* getrandom flag bits (Linux). We never block and have one source, so they only
@@ -8433,18 +8357,18 @@ extern void terminate_current_process(int32_t signo);
 static enum ksig_default ksig_default_action(int signo)
 {
     switch (signo) {
-        case SIGCHLD:
-        case SIGURG:
-        case SIGWINCH:
-        case SIGCONT:
-            return KSIG_DEFAULT_IGNORE;
-        case SIGSTOP:
-        case SIGTSTP:
-        case SIGTTIN:
-        case SIGTTOU:
-            return KSIG_DEFAULT_STOP;
-        default:
-            return KSIG_DEFAULT_TERM;
+    case SIGCHLD:
+    case SIGURG:
+    case SIGWINCH:
+    case SIGCONT:
+        return KSIG_DEFAULT_IGNORE;
+    case SIGSTOP:
+    case SIGTSTP:
+    case SIGTTIN:
+    case SIGTTOU:
+        return KSIG_DEFAULT_STOP;
+    default:
+        return KSIG_DEFAULT_TERM;
     }
 }
 
@@ -8510,8 +8434,8 @@ void signal_post(process_t *target, int signo)
          * stopped process so it can take its lethal default. Every other signal
          * stays pending on a stopped process until it is continued. */
         if (signo == SIGCONT) {
-            target->sig_pending &= ~(KSIG_BIT(SIGSTOP) | KSIG_BIT(SIGTSTP) |
-                                     KSIG_BIT(SIGTTIN) | KSIG_BIT(SIGTTOU));
+            target->sig_pending &=
+                ~(KSIG_BIT(SIGSTOP) | KSIG_BIT(SIGTSTP) | KSIG_BIT(SIGTTIN) | KSIG_BIT(SIGTTOU));
             if (target->state == PROC_STOPPED) {
                 process_t *parent = get_process(target->parent_pid);
                 target->state = PROC_READY;
@@ -8526,8 +8450,7 @@ void signal_post(process_t *target, int signo)
             }
         } else if (signo == SIGKILL && target->state == PROC_STOPPED) {
             target->state = PROC_READY;
-        } else if ((signo == SIGSTOP || signo == SIGTSTP || signo == SIGTTIN ||
-                    signo == SIGTTOU)) {
+        } else if ((signo == SIGSTOP || signo == SIGTSTP || signo == SIGTTIN || signo == SIGTTOU)) {
             target->sig_pending &= ~KSIG_BIT(SIGCONT); /* a stop cancels pending cont */
         }
         sig_irq_restore(f);
@@ -8607,10 +8530,8 @@ static int cred_may_signal(const process_t *target, int signo)
     if (signo == SIGCONT && current_proc->sid == target->sid) {
         return 1;
     }
-    return current_proc->ruid == target->ruid ||
-           current_proc->ruid == target->suid ||
-           current_proc->euid == target->ruid ||
-           current_proc->euid == target->suid;
+    return current_proc->ruid == target->ruid || current_proc->ruid == target->suid ||
+           current_proc->euid == target->ruid || current_proc->euid == target->suid;
 }
 
 /* Post signo to a process group: pid==0 is the caller's group, pid<-1 the group
@@ -8814,8 +8735,7 @@ static int32_t sys_rt_sigaction(isr_params_t *params)
         return -EINVAL; /* cannot be caught or ignored */
     }
     if (uold) {
-        if (copy_to_user(uold, &current_proc->sigacts[signo],
-                         sizeof(struct k_sigaction)) != 0) {
+        if (copy_to_user(uold, &current_proc->sigacts[signo], sizeof(struct k_sigaction)) != 0) {
             return -EFAULT;
         }
     }
@@ -8869,17 +8789,17 @@ static int32_t sys_rt_sigprocmask(isr_params_t *params)
         }
         set = (uint64_t)words[0] | ((uint64_t)words[1] << 32);
         switch (how) {
-            case 0: /* SIG_BLOCK */
-                current_proc->sig_blocked |= set;
-                break;
-            case 1: /* SIG_UNBLOCK */
-                current_proc->sig_blocked &= ~set;
-                break;
-            case 2: /* SIG_SETMASK */
-                current_proc->sig_blocked = set;
-                break;
-            default:
-                return -EINVAL;
+        case 0: /* SIG_BLOCK */
+            current_proc->sig_blocked |= set;
+            break;
+        case 1: /* SIG_UNBLOCK */
+            current_proc->sig_blocked &= ~set;
+            break;
+        case 2: /* SIG_SETMASK */
+            current_proc->sig_blocked = set;
+            break;
+        default:
+            return -EINVAL;
         }
         current_proc->sig_blocked &= ~KSIG_UNCATCHABLE; /* never block KILL/STOP */
     }
@@ -8894,15 +8814,15 @@ static int32_t sys_rt_sigprocmask(isr_params_t *params)
  * handlers valid (zeroed) argument pointers.
  */
 struct sig_frame {
-    uint32_t pretcode;     /* return address: the restorer (musl __restore_rt) */
-    uint32_t sig;          /* handler arg 1 */
-    uint32_t pinfo;        /* handler arg 2 (&info) */
-    uint32_t puc;          /* handler arg 3 (&uc) */
-    isr_params_t saved;    /* the interrupted trapframe, restored by sigreturn */
-    uint64_t saved_mask;   /* the blocked mask to restore */
-    uint32_t magic;        /* sanity tag checked by rt_sigreturn */
-    uint8_t info[128];     /* siginfo_t storage (zeroed; si_signo set) */
-    uint8_t uc[128];       /* ucontext storage (zeroed) */
+    uint32_t pretcode;           /* return address: the restorer (musl __restore_rt) */
+    uint32_t sig;                /* handler arg 1 */
+    uint32_t pinfo;              /* handler arg 2 (&info) */
+    uint32_t puc;                /* handler arg 3 (&uc) */
+    isr_params_t saved;          /* the interrupted trapframe, restored by sigreturn */
+    uint64_t saved_mask;         /* the blocked mask to restore */
+    uint32_t magic;              /* sanity tag checked by rt_sigreturn */
+    uint8_t info[128];           /* siginfo_t storage (zeroed; si_signo set) */
+    uint8_t uc[128];             /* ucontext storage (zeroed) */
     uint8_t fpu[FPU_STATE_SIZE]; /* the x87 and SSE state at delivery */
 };
 
@@ -9190,142 +9110,138 @@ static int32_t tty_common_ioctl(struct tty *t, uint32_t request, uint32_t arg, i
 {
     *handled = 1;
     switch (request) {
-        case TCGETS:
-            if (!arg) {
-                return -EFAULT;
-            }
-            if (copy_to_user((void __user *)arg, &t->ldisc.tio,
-                             sizeof(struct ktermios)) != 0) {
-                return -EFAULT;
-            }
-            return 0;
-
-        case FIONREAD: {
-            /* Bytes a read would return right now (a complete cooked line, or
-             * the queued count in raw mode); a pending EOF counts as 0. Drains
-             * the input source first so freshly arrived input is counted. */
-            int navail;
-            if (!arg) {
-                return -EFAULT;
-            }
-            navail = tty_inq(t);
-            if (copy_to_user((void __user *)arg, &navail, sizeof(navail)) != 0) {
-                return -EFAULT;
-            }
-            return 0;
+    case TCGETS:
+        if (!arg) {
+            return -EFAULT;
         }
-
-        case TCSETS:
-        case TCSETSW:
-        case TCSETSF: {
-            struct ktermios kt;
-            if (!arg) {
-                return -EFAULT;
-            }
-            if (copy_from_user(&kt, (const void __user *)arg,
-                               sizeof(struct ktermios)) != 0) {
-                return -EFAULT;
-            }
-            /* Install with interrupts off (vs IRQ-side input); TCSETSF also
-             * discards pending input. */
-            tty_set_termios(t, &kt, request == TCSETSF);
-            return 0;
+        if (copy_to_user((void __user *)arg, &t->ldisc.tio, sizeof(struct ktermios)) != 0) {
+            return -EFAULT;
         }
+        return 0;
 
-        case TCFLSH:
-            /* arg is the queue selector: TCIFLUSH(0)/TCIOFLUSH(2) drop input;
-             * we hold no output queue, so TCOFLUSH(1) is a no-op. Else invalid.
-             */
-            if (arg > 2) {
-                return -EINVAL;
-            }
-            if (arg == 0 || arg == 2) {
-                tty_flush_input(t);
-            }
-            return 0;
-
-        case TIOCGWINSZ:
-            if (!arg) {
-                return -EFAULT;
-            }
-            if (copy_to_user((void __user *)arg, &t->winsize,
-                             sizeof(t->winsize)) != 0) {
-                return -EFAULT;
-            }
-            return 0;
-
-        case TIOCSWINSZ:
-            if (!arg) {
-                return -EFAULT;
-            }
-            if (copy_from_user(&t->winsize, (const void __user *)arg,
-                               sizeof(t->winsize)) != 0) {
-                return -EFAULT;
-            }
-            return 0;
-
-        case TIOCGPGRP: {
-            int pgrp = t->fg_pgid;
-            if (!arg) {
-                return -EFAULT;
-            }
-            if (copy_to_user((void __user *)arg, &pgrp, sizeof(pgrp)) != 0) {
-                return -EFAULT;
-            }
-            return 0;
+    case FIONREAD: {
+        /* Bytes a read would return right now (a complete cooked line, or
+         * the queued count in raw mode); a pending EOF counts as 0. Drains
+         * the input source first so freshly arrived input is counted. */
+        int navail;
+        if (!arg) {
+            return -EFAULT;
         }
-
-        case TIOCSPGRP: {
-            int pgrp;
-            if (!arg) {
-                return -EFAULT;
-            }
-            if (copy_from_user(&pgrp, (const void __user *)arg, sizeof(pgrp)) != 0) {
-                return -EFAULT;
-            }
-            /* The caller must hold this terminal as its controlling terminal
-             * (checked before the argument, as Linux does)... */
-            if (t->sid == 0 || (int)current_proc->sid != t->sid) {
-                return -ENOTTY;
-            }
-            if (pgrp <= 0) {
-                return -EINVAL;
-            }
-            /* ...and the new foreground group must live in that session. */
-            if (!pgrp_in_session(pgrp, t->sid)) {
-                return -EPERM;
-            }
-            t->fg_pgid = pgrp;
-            return 0;
+        navail = tty_inq(t);
+        if (copy_to_user((void __user *)arg, &navail, sizeof(navail)) != 0) {
+            return -EFAULT;
         }
+        return 0;
+    }
 
-        case TIOCSCTTY:
-            /* A session leader with no controlling tty claims this terminal for
-             * its session; re-claiming by the same session is idempotent. */
-            if ((int)current_proc->sid != (int)current_proc->pid) {
-                return -EPERM; /* not a session leader */
-            }
-            if (t->sid != 0 && t->sid != (int)current_proc->sid) {
-                return -EPERM; /* owned by another session */
-            }
-            /* Claim t as this session's SOLE controlling terminal: one atomic
-             * step publishes t (sid + foreground group) AND drops every other
-             * terminal the session held (the console and any other pty), so the
-             * timer-IRQ serial drain never sees a torn or doubled ctty and
-             * /dev/tty resolves to t. */
-            tty_make_sole_ctty(t, (int)current_proc->sid, (int)current_proc->pgid);
-            return 0;
+    case TCSETS:
+    case TCSETSW:
+    case TCSETSF: {
+        struct ktermios kt;
+        if (!arg) {
+            return -EFAULT;
+        }
+        if (copy_from_user(&kt, (const void __user *)arg, sizeof(struct ktermios)) != 0) {
+            return -EFAULT;
+        }
+        /* Install with interrupts off (vs IRQ-side input); TCSETSF also
+         * discards pending input. */
+        tty_set_termios(t, &kt, request == TCSETSF);
+        return 0;
+    }
 
-        case TIOCNOTTY:
-            /* Give up the controlling terminal if it belongs to our session. */
-            if (t->sid == (int)current_proc->sid) {
-                tty_set_session(t, 0, 0);
-            }
-            return 0;
+    case TCFLSH:
+        /* arg is the queue selector: TCIFLUSH(0)/TCIOFLUSH(2) drop input;
+         * we hold no output queue, so TCOFLUSH(1) is a no-op. Else invalid.
+         */
+        if (arg > 2) {
+            return -EINVAL;
+        }
+        if (arg == 0 || arg == 2) {
+            tty_flush_input(t);
+        }
+        return 0;
 
-        default:
-            *handled = 0;
-            return 0;
+    case TIOCGWINSZ:
+        if (!arg) {
+            return -EFAULT;
+        }
+        if (copy_to_user((void __user *)arg, &t->winsize, sizeof(t->winsize)) != 0) {
+            return -EFAULT;
+        }
+        return 0;
+
+    case TIOCSWINSZ:
+        if (!arg) {
+            return -EFAULT;
+        }
+        if (copy_from_user(&t->winsize, (const void __user *)arg, sizeof(t->winsize)) != 0) {
+            return -EFAULT;
+        }
+        return 0;
+
+    case TIOCGPGRP: {
+        int pgrp = t->fg_pgid;
+        if (!arg) {
+            return -EFAULT;
+        }
+        if (copy_to_user((void __user *)arg, &pgrp, sizeof(pgrp)) != 0) {
+            return -EFAULT;
+        }
+        return 0;
+    }
+
+    case TIOCSPGRP: {
+        int pgrp;
+        if (!arg) {
+            return -EFAULT;
+        }
+        if (copy_from_user(&pgrp, (const void __user *)arg, sizeof(pgrp)) != 0) {
+            return -EFAULT;
+        }
+        /* The caller must hold this terminal as its controlling terminal
+         * (checked before the argument, as Linux does)... */
+        if (t->sid == 0 || (int)current_proc->sid != t->sid) {
+            return -ENOTTY;
+        }
+        if (pgrp <= 0) {
+            return -EINVAL;
+        }
+        /* ...and the new foreground group must live in that session. */
+        if (!pgrp_in_session(pgrp, t->sid)) {
+            return -EPERM;
+        }
+        t->fg_pgid = pgrp;
+        return 0;
+    }
+
+    case TIOCSCTTY:
+        /* A session leader with no controlling tty claims this terminal for
+         * its session; re-claiming by the same session is idempotent. */
+        if ((int)current_proc->sid != (int)current_proc->pid) {
+            return -EPERM; /* not a session leader */
+        }
+        if (t->sid != 0 && t->sid != (int)current_proc->sid) {
+            return -EPERM; /* owned by another session */
+        }
+        /* Claim t as this session's SOLE controlling terminal: one atomic
+         * step publishes t (sid + foreground group) AND drops every other
+         * terminal the session held (the console and any other pty), so the
+         * timer-IRQ serial drain never sees a torn or doubled ctty and
+         * /dev/tty resolves to t. */
+        tty_make_sole_ctty(t, (int)current_proc->sid, (int)current_proc->pgid);
+        return 0;
+
+    case TIOCNOTTY:
+        /* Give up the controlling terminal if it belongs to our session. */
+        if (t->sid == (int)current_proc->sid) {
+            tty_set_session(t, 0, 0);
+        }
+        return 0;
+
+    default:
+        *handled = 0;
+        return 0;
     }
 }
 
@@ -9390,13 +9306,12 @@ static int32_t sys_ioctl(isr_params_t *params)
     /* A backing-ops object (pipe/pty/device) owns its remaining ioctls:
      * FIONBIO, and (for the pty master) TIOCGPTN/TIOCSPTLCK/TIOCSWINSZ. */
     if (entry->ops) {
-        return entry->ops->ioctl ? entry->ops->ioctl(entry, request, arg)
-                                 : -ENOTTY;
+        return entry->ops->ioctl ? entry->ops->ioctl(entry, request, arg) : -ENOTTY;
     }
-    if (request == TCGETS || request == TCSETS || request == TCSETSW ||
-        request == TCSETSF || request == TCFLSH || request == TIOCGWINSZ ||
-        request == TIOCSWINSZ || request == TIOCGPGRP || request == TIOCSPGRP ||
-        request == TIOCSCTTY || request == TIOCNOTTY) {
+    if (request == TCGETS || request == TCSETS || request == TCSETSW || request == TCSETSF ||
+        request == TCFLSH || request == TIOCGWINSZ || request == TIOCSWINSZ ||
+        request == TIOCGPGRP || request == TIOCSPGRP || request == TIOCSCTTY ||
+        request == TIOCNOTTY) {
         return -ENOTTY; /* terminal-only requests on a non-terminal fd */
     }
 
@@ -9407,27 +9322,27 @@ static int32_t sys_ioctl(isr_params_t *params)
 
     if (entry->type == FD_TYPE_FRAMEBUFFER) {
         switch (request) {
-            case FB_SETPALETTE:
-                if (arg != 0) {
-                    /* 256 RGB triples = 768 bytes read straight from user. */
-                    if (!user_buffer_ok(arg, 768, 0)) {
-                        return -EFAULT;
-                    }
-                    vga_mode13h_set_palette((const uint8_t *)arg);
-                    return 0;
+        case FB_SETPALETTE:
+            if (arg != 0) {
+                /* 256 RGB triples = 768 bytes read straight from user. */
+                if (!user_buffer_ok(arg, 768, 0)) {
+                    return -EFAULT;
                 }
-                return -EFAULT;
-
-            case FB_MODE_13H:
-                return 0; /* already in mode 13h while fb is open */
-
-            case FB_MODE_TEXT:
-                vga_mode13h_exit();
-                fb_owner_pid = 0;
+                vga_mode13h_set_palette((const uint8_t *)arg);
                 return 0;
+            }
+            return -EFAULT;
 
-            default:
-                return -ENOTTY;
+        case FB_MODE_13H:
+            return 0; /* already in mode 13h while fb is open */
+
+        case FB_MODE_TEXT:
+            vga_mode13h_exit();
+            fb_owner_pid = 0;
+            return 0;
+
+        default:
+            return -ENOTTY;
         }
     }
 
@@ -9442,66 +9357,61 @@ static int32_t sys_ioctl(isr_params_t *params)
         }
 
         switch (request) {
-            case AUDIO_GET_INFO: {
-                struct audio_info kinfo;
-                if (arg) {
-                    k_memset(&kinfo, 0, sizeof(kinfo));
-                    kinfo.driver_type = audio ? audio->type : AUDIO_DRIVER_NONE;
-                    kinfo.has_real_audio = audio_has_real_output() ? 1 : 0;
-                    if (copy_to_user((void __user *)arg, &kinfo,
-                                     sizeof(kinfo)) != 0) {
-                        return -EFAULT;
-                    }
+        case AUDIO_GET_INFO: {
+            struct audio_info kinfo;
+            if (arg) {
+                k_memset(&kinfo, 0, sizeof(kinfo));
+                kinfo.driver_type = audio ? audio->type : AUDIO_DRIVER_NONE;
+                kinfo.has_real_audio = audio_has_real_output() ? 1 : 0;
+                if (copy_to_user((void __user *)arg, &kinfo, sizeof(kinfo)) != 0) {
+                    return -EFAULT;
                 }
+            }
+            return 0;
+        }
+
+        case AUDIO_START: {
+            struct audio_start_params kp;
+            if (!audio || !arg) {
+                return -EFAULT;
+            }
+            if (copy_from_user(&kp, (const void __user *)arg, sizeof(kp)) != 0) {
+                return -EFAULT;
+            }
+            return audio->start(kp.sample_rate, (audio_format_t)kp.format, (int)kp.channels);
+        }
+
+        case AUDIO_STOP:
+            if (audio) {
+                audio->stop();
                 return 0;
             }
+            return -ENODEV;
 
-            case AUDIO_START: {
-                struct audio_start_params kp;
-                if (!audio || !arg) {
-                    return -EFAULT;
-                }
-                if (copy_from_user(&kp, (const void __user *)arg,
-                                   sizeof(kp)) != 0) {
-                    return -EFAULT;
-                }
-                return audio->start(kp.sample_rate, (audio_format_t)kp.format,
-                                    (int)kp.channels);
+        case AUDIO_WRITE: {
+            struct audio_write_params kp;
+            if (!audio || !arg) {
+                return -EFAULT;
             }
-
-            case AUDIO_STOP:
-                if (audio) {
-                    audio->stop();
-                    return 0;
-                }
-                return -ENODEV;
-
-            case AUDIO_WRITE: {
-                struct audio_write_params kp;
-                if (!audio || !arg) {
-                    return -EFAULT;
-                }
-                /* Copy the param struct in through the helper, then range-check
-                 * the PCM buffer it points at before the driver reads it (the
-                 * bulk copy is the driver's, as with the framebuffer/socket
-                 * data paths). */
-                if (copy_from_user(&kp, (const void __user *)arg,
-                                   sizeof(kp)) != 0) {
-                    return -EFAULT;
-                }
-                if (!kp.buffer ||
-                    !user_buffer_ok((uint32_t)(uintptr_t)kp.buffer, kp.size, 0)) {
-                    return -EFAULT;
-                }
-                return audio->write(kp.buffer, kp.size);
+            /* Copy the param struct in through the helper, then range-check
+             * the PCM buffer it points at before the driver reads it (the
+             * bulk copy is the driver's, as with the framebuffer/socket
+             * data paths). */
+            if (copy_from_user(&kp, (const void __user *)arg, sizeof(kp)) != 0) {
+                return -EFAULT;
             }
+            if (!kp.buffer || !user_buffer_ok((uint32_t)(uintptr_t)kp.buffer, kp.size, 0)) {
+                return -EFAULT;
+            }
+            return audio->write(kp.buffer, kp.size);
+        }
 
-            case AUDIO_SET_VOLUME:
-                if (audio) {
-                    audio->set_volume((int)arg);
-                    return 0;
-                }
-                return -ENODEV;
+        case AUDIO_SET_VOLUME:
+            if (audio) {
+                audio->set_volume((int)arg);
+                return 0;
+            }
+            return -ENODEV;
         }
     }
 
@@ -9545,46 +9455,44 @@ static int user_buffer_ok(uint32_t addr, uint32_t len, int write)
 
 /* Read and write the little-endian words of a caller's own structures (a
  * msghdr's pointers and lengths), which are host order and not wire order. */
-#define SC_LE32(p) \
-    (((uint32_t)((uint8_t *)(p))[0]) | \
-     ((uint32_t)((uint8_t *)(p))[1] <<  8) | \
-     ((uint32_t)((uint8_t *)(p))[2] << 16) | \
-     ((uint32_t)((uint8_t *)(p))[3] << 24))
-#define SC_WLE32(p, v) do { \
-    ((uint8_t *)(p))[0] = (uint8_t)(v); \
-    ((uint8_t *)(p))[1] = (uint8_t)((v) >>  8); \
-    ((uint8_t *)(p))[2] = (uint8_t)((v) >> 16); \
-    ((uint8_t *)(p))[3] = (uint8_t)((v) >> 24); \
-} while (0)
+#define SC_LE32(p)                                                            \
+    (((uint32_t)((uint8_t *)(p))[0]) | ((uint32_t)((uint8_t *)(p))[1] << 8) | \
+     ((uint32_t)((uint8_t *)(p))[2] << 16) | ((uint32_t)((uint8_t *)(p))[3] << 24))
+#define SC_WLE32(p, v)                              \
+    do {                                            \
+        ((uint8_t *)(p))[0] = (uint8_t)(v);         \
+        ((uint8_t *)(p))[1] = (uint8_t)((v) >> 8);  \
+        ((uint8_t *)(p))[2] = (uint8_t)((v) >> 16); \
+        ((uint8_t *)(p))[3] = (uint8_t)((v) >> 24); \
+    } while (0)
 
 /* Read and write big-endian sockaddr fields (sin_port, sin_addr). */
-#define SC_BE16(p) \
-    ((uint16_t)(((uint8_t *)(p))[0] << 8 | ((uint8_t *)(p))[1]))
-#define SC_BE32(p) \
-    (((uint32_t)((uint8_t *)(p))[0] << 24) | \
-     ((uint32_t)((uint8_t *)(p))[1] << 16) | \
-     ((uint32_t)((uint8_t *)(p))[2] <<  8) | \
-     ((uint32_t)((uint8_t *)(p))[3]))
-#define SC_WBE16(p, v) do { \
-    ((uint8_t *)(p))[0] = (uint8_t)((v) >> 8); \
-    ((uint8_t *)(p))[1] = (uint8_t)(v); \
-} while (0)
-#define SC_WBE32(p, v) do { \
-    ((uint8_t *)(p))[0] = (uint8_t)((v) >> 24); \
-    ((uint8_t *)(p))[1] = (uint8_t)((v) >> 16); \
-    ((uint8_t *)(p))[2] = (uint8_t)((v) >>  8); \
-    ((uint8_t *)(p))[3] = (uint8_t)(v); \
-} while (0)
+#define SC_BE16(p) ((uint16_t)(((uint8_t *)(p))[0] << 8 | ((uint8_t *)(p))[1]))
+#define SC_BE32(p)                                                                   \
+    (((uint32_t)((uint8_t *)(p))[0] << 24) | ((uint32_t)((uint8_t *)(p))[1] << 16) | \
+     ((uint32_t)((uint8_t *)(p))[2] << 8) | ((uint32_t)((uint8_t *)(p))[3]))
+#define SC_WBE16(p, v)                             \
+    do {                                           \
+        ((uint8_t *)(p))[0] = (uint8_t)((v) >> 8); \
+        ((uint8_t *)(p))[1] = (uint8_t)(v);        \
+    } while (0)
+#define SC_WBE32(p, v)                              \
+    do {                                            \
+        ((uint8_t *)(p))[0] = (uint8_t)((v) >> 24); \
+        ((uint8_t *)(p))[1] = (uint8_t)((v) >> 16); \
+        ((uint8_t *)(p))[2] = (uint8_t)((v) >> 8);  \
+        ((uint8_t *)(p))[3] = (uint8_t)(v);         \
+    } while (0)
 
 /* socketcall sub-function numbers (Linux standard). */
-#define SC_SOCKET       1
-#define SC_BIND         2
-#define SC_CONNECT      3
-#define SC_LISTEN       4
-#define SC_ACCEPT       5
-#define SC_GETSOCKNAME  6
-#define SC_GETPEERNAME  7
-#define SC_SEND         9
+#define SC_SOCKET      1
+#define SC_BIND        2
+#define SC_CONNECT     3
+#define SC_LISTEN      4
+#define SC_ACCEPT      5
+#define SC_GETSOCKNAME 6
+#define SC_GETPEERNAME 7
+#define SC_SEND        9
 #define SC_RECV        10
 #define SC_SENDTO      11
 #define SC_RECVFROM    12
@@ -9595,7 +9503,7 @@ static int user_buffer_ok(uint32_t addr, uint32_t len, int write)
 /* Rach2's private ICMP-echo socketcall. RENUMBERED out of the BSD range (it
  * used to squat on 15 == Linux getsockopt, which a real server needs).
  * Userspace callers (utils/ping.c, tests/pingtest.c) use the same value. */
-#define SC_PING     0x1000
+#define SC_PING        0x1000
 
 /**
  * Canonicalize a destination address at the socket boundary.
@@ -9658,18 +9566,18 @@ static uint8_t raw_send_buf[1500];
 /* The query-only raw descriptor a DHCP client asks the interface through. */
 #define SOCK_RAW     3
 #define IPPROTO_RAW  255
-#define IPPROTO_ICMP   1
+#define IPPROTO_ICMP 1
 
 /* setsockopt(2)/getsockopt(2) at the IP level: the hop limit a socket's
  * datagrams leave with, and the option that would hand the caller the header,
  * which this stack does not implement. */
-#define SOL_IP        0
-#define IP_TTL        2
-#define IP_HDRINCL    3
+#define SOL_IP     0
+#define IP_TTL     2
+#define IP_HDRINCL 3
 
 /* setsockopt levels and the one packet option that is answered. */
-#define SOL_PACKET      263
-#define PACKET_AUXDATA  8
+#define SOL_PACKET     263
+#define PACKET_AUXDATA 8
 
 /* We read sin_family/sin_port/sin_addr from the first 8 sockaddr bytes. */
 #define SOCKADDR_MIN 8
@@ -9687,7 +9595,7 @@ static uint8_t raw_send_buf[1500];
 #define SOCKADDR_LL_PROTOCOL 2
 #define SOCKADDR_LL_IFINDEX  4
 #define SOCKADDR_LL_HATYPE   8
-#define ARPHRD_ETHER         1  /* sll_hatype for an Ethernet interface */
+#define ARPHRD_ETHER         1 /* sll_hatype for an Ethernet interface */
 #define SOCKADDR_LL_HALEN    11
 #define SOCKADDR_LL_ADDR     12
 
@@ -9700,19 +9608,17 @@ static uint8_t raw_send_buf[1500];
  * length (16), the recvfrom(2)/accept(2) truncation semantics. Returns 0 or
  * -EFAULT.
  */
-static int copy_sockaddr_to_user(uint32_t sa_ptr, uint32_t salen_ptr,
-                                 uint16_t port, uint32_t ip)
+static int copy_sockaddr_to_user(uint32_t sa_ptr, uint32_t salen_ptr, uint16_t port, uint32_t ip)
 {
-    uint8_t  sa[16];
+    uint8_t sa[16];
     uint32_t caller_len;
     uint32_t copy_len;
 
     if (!sa_ptr || !salen_ptr) {
-        return 0;  /* caller does not want the address back */
+        return 0; /* caller does not want the address back */
     }
 
-    if (copy_from_user(&caller_len, (const void __user *)salen_ptr,
-                       sizeof(caller_len)) != 0) {
+    if (copy_from_user(&caller_len, (const void __user *)salen_ptr, sizeof(caller_len)) != 0) {
         return -EFAULT;
     }
 
@@ -9727,16 +9633,14 @@ static int copy_sockaddr_to_user(uint32_t sa_ptr, uint32_t salen_ptr,
     SC_WBE32(sa + 4, ip);
 
     copy_len = (caller_len < sizeof(sa)) ? caller_len : (uint32_t)sizeof(sa);
-    if (copy_len > 0 &&
-        copy_to_user((void __user *)sa_ptr, sa, copy_len) != 0) {
+    if (copy_len > 0 && copy_to_user((void __user *)sa_ptr, sa, copy_len) != 0) {
         return -EFAULT;
     }
 
     /* Report the real sockaddr_in length even when the caller's buffer was
      * shorter (and thus the address was truncated). */
     caller_len = (uint32_t)sizeof(sa);
-    if (copy_to_user((void __user *)salen_ptr, &caller_len,
-                     sizeof(caller_len)) != 0) {
+    if (copy_to_user((void __user *)salen_ptr, &caller_len, sizeof(caller_len)) != 0) {
         return -EFAULT;
     }
     return 0;
@@ -9747,8 +9651,8 @@ static int copy_sockaddr_to_user(uint32_t sa_ptr, uint32_t salen_ptr,
 static int32_t do_socket(int domain, int type, int protocol)
 {
     struct socket *sock;
-    fd_entry_t    *entry;
-    int            fd;
+    fd_entry_t *entry;
+    int fd;
 
     /* IPv4, and the packet family the DHCP client needs to see replies that
      * arrive before this machine owns an address. Any other family is refused,
@@ -9813,8 +9717,8 @@ static int32_t do_socket(int domain, int type, int protocol)
     if (domain == AF_PACKET) {
         /* The argument is in network order, as Linux takes it; the socket
          * holds it in host order, which is what the wire comparison uses. */
-        sock->protocol = (uint16_t)(((uint32_t)protocol & 0xffu) << 8 |
-                                    (((uint32_t)protocol >> 8) & 0xffu));
+        sock->protocol =
+            (uint16_t)(((uint32_t)protocol & 0xffu) << 8 | (((uint32_t)protocol >> 8) & 0xffu));
     }
     sock->uid = current_proc->euid;
 
@@ -9824,12 +9728,12 @@ static int32_t do_socket(int domain, int type, int protocol)
         return -EMFILE;
     }
 
-    entry         = &current_proc->fds.entries[fd];
-    entry->type   = FD_TYPE_SOCKET;
-    entry->sock   = sock;
-    entry->node   = NULL;
+    entry = &current_proc->fds.entries[fd];
+    entry->type = FD_TYPE_SOCKET;
+    entry->sock = sock;
+    entry->node = NULL;
     entry->ofd->offset = 0;
-    entry->flags  = FD_FLAG_READ | FD_FLAG_WRITE;
+    entry->flags = FD_FLAG_READ | FD_FLAG_WRITE;
     return fd;
 }
 
@@ -9838,8 +9742,8 @@ static int32_t do_socket(int domain, int type, int protocol)
 static int32_t do_bind(int fd, uint32_t sa_ptr, int addrlen)
 {
     fd_entry_t *entry;
-    uint16_t    port;
-    uint8_t     sa[SOCKADDR_MIN];
+    uint16_t port;
+    uint8_t sa[SOCKADDR_MIN];
 
     /* The caller's declared sockaddr must be at least the header we read; a
      * short or negative addrlen must not make us read past it. */
@@ -9911,8 +9815,7 @@ static int32_t do_bind(int fd, uint32_t sa_ptr, int addrlen)
             return -EOPNOTSUPP;
         }
         want = SC_BE32(sa + 4);
-        if (want != 0 && want != (uint32_t)net_ip_addr &&
-            (want & 0xFF000000UL) != 0x7F000000UL) {
+        if (want != 0 && want != (uint32_t)net_ip_addr && (want & 0xFF000000UL) != 0x7F000000UL) {
             return -EADDRNOTAVAIL;
         }
         return 0;
@@ -9960,13 +9863,12 @@ static int32_t do_bind(int fd, uint32_t sa_ptr, int addrlen)
 /* sendto(2): a stream socket ignores the destination and behaves like send; a
  * datagram socket sends to the sockaddr, binding an ephemeral source port
  * first. */
-static int32_t do_sendto(int fd, uint32_t buf_ptr, int len,
-                         int flags, uint32_t sa_ptr, int addrlen)
+static int32_t do_sendto(int fd, uint32_t buf_ptr, int len, int flags, uint32_t sa_ptr, int addrlen)
 {
     fd_entry_t *entry;
-    uint16_t    dst_port;
-    uint32_t    dst_ip;
-    uint8_t     sa[SOCKADDR_MIN];
+    uint16_t dst_port;
+    uint32_t dst_ip;
+    uint8_t sa[SOCKADDR_MIN];
 
     if (len < 0 || !user_buffer_ok(buf_ptr, (uint32_t)len, 0)) {
         return -EFAULT;
@@ -10010,14 +9912,13 @@ static int32_t do_sendto(int fd, uint32_t buf_ptr, int len,
            then held against a receive interrupt that would build a datagram
            through the same transmit buffers, which is the rule in net.h and
            what udp_tx does for the same reason. */
-        if (copy_from_user(raw_send_buf, (const void __user *)buf_ptr,
-                           (uint32_t)len) != 0) {
+        if (copy_from_user(raw_send_buf, (const void __user *)buf_ptr, (uint32_t)len) != 0) {
             return -EFAULT;
         }
         {
             uint32_t netflags = net_lock();
-            r = ip_tx(raw_dst, (uint8_t)entry->sock->protocol, raw_send_buf,
-                      (uint16_t)len, entry->sock->ip_ttl);
+            r = ip_tx(raw_dst, (uint8_t)entry->sock->protocol, raw_send_buf, (uint16_t)len,
+                      entry->sock->ip_ttl);
             net_unlock(netflags);
         }
         if (r < 0) {
@@ -10031,11 +9932,10 @@ static int32_t do_sendto(int fd, uint32_t buf_ptr, int len,
      * ignored (this is the path musl's send() takes: sendto with a NULL addr).
      */
     if (entry->sock->type == SOCK_STREAM) {
-        int nonblock = (flags & MSG_DONTWAIT) ||
-                       (entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
+        int nonblock =
+            (flags & MSG_DONTWAIT) || (entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
         return (int32_t)socket_tcp_send(
-            entry->sock, (const uint8_t __force *)(const void __user *)buf_ptr, len,
-            nonblock);
+            entry->sock, (const uint8_t __force *)(const void __user *)buf_ptr, len, nonblock);
     }
 
     /* A packet socket sends an IP packet the caller built, to a MAC address it
@@ -10089,13 +9989,12 @@ static int32_t do_sendto(int fd, uint32_t buf_ptr, int len,
             return -EDESTADDRREQ;
         }
         return dgram_send(entry->sock, entry->sock->remote_ip, entry->sock->remote_port,
-                          (const uint8_t __force *)(const void __user *)buf_ptr,
-                          (uint16_t)len);
+                          (const uint8_t __force *)(const void __user *)buf_ptr, (uint16_t)len);
     }
 
     /* Datagram path: a real destination address is required. */
     if (addrlen < SOCKADDR_MIN) {
-        return -EINVAL;  /* declared sockaddr shorter than the header we read */
+        return -EINVAL; /* declared sockaddr shorter than the header we read */
     }
     /* Copy the destination sockaddr into a kernel buffer for the BE helpers. */
     if (copy_from_user(sa, (const void __user *)sa_ptr, SOCKADDR_MIN) != 0) {
@@ -10103,30 +10002,29 @@ static int32_t do_sendto(int fd, uint32_t buf_ptr, int len,
     }
 
     dst_port = SC_BE16(sa + 2);
-    dst_ip   = canonical_dst_ip(SC_BE32(sa + 4));
+    dst_ip = canonical_dst_ip(SC_BE32(sa + 4));
 
     /* One send path, so the broadcast permission and the ephemeral bind are
      * the same here as they are for a write to a connected socket. udp_tx
      * reads the payload itself; __force strips __user at the boundary. */
     return dgram_send(entry->sock, dst_ip, dst_port,
-                      (const uint8_t __force *)(const void __user *)buf_ptr,
-                      (uint16_t)len);
+                      (const uint8_t __force *)(const void __user *)buf_ptr, (uint16_t)len);
 }
 
 /* recvfrom(2): a stream socket behaves like recv (no source writeback); a
  * datagram socket reports the source address, truncated to the caller's
  * capacity. Honors MSG_DONTWAIT and O_NONBLOCK. */
-static int32_t do_recvfrom(int fd, uint32_t buf_ptr, int len,
-                           int flags, uint32_t sa_ptr, uint32_t salen_ptr)
+static int32_t do_recvfrom(int fd, uint32_t buf_ptr, int len, int flags, uint32_t sa_ptr,
+                           uint32_t salen_ptr)
 {
     fd_entry_t *entry;
-    uint32_t    src_ip = 0;
-    uint16_t    src_port = 0;
-    uint32_t    addr_len = 0;
-    uint32_t    addr_give = 0;
-    int         want_addr;
-    int         bytes;
-    int         nonblock;
+    uint32_t src_ip = 0;
+    uint16_t src_port = 0;
+    uint32_t addr_len = 0;
+    uint32_t addr_give = 0;
+    int want_addr;
+    int bytes;
+    int nonblock;
 
     if (len < 0 || !user_buffer_ok(buf_ptr, (uint32_t)len, 1)) {
         return -EFAULT;
@@ -10167,8 +10065,7 @@ static int32_t do_recvfrom(int fd, uint32_t buf_ptr, int len,
 
     /* Receive without blocking when the caller asked per-call (MSG_DONTWAIT) or
      * the descriptor is O_NONBLOCK (an OFD status flag, shared by dup/fork). */
-    nonblock = (flags & MSG_DONTWAIT) ||
-               (entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
+    nonblock = (flags & MSG_DONTWAIT) || (entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
 
     /* On a connected stream socket, recvfrom behaves like recv; the peer is the
      * connection's, so the optional source-address writeback is skipped and a
@@ -10176,24 +10073,21 @@ static int32_t do_recvfrom(int fd, uint32_t buf_ptr, int len,
      * with a NULL addr). */
     if (entry->sock->type == SOCK_STREAM) {
         if (nonblock) {
-            return (int32_t)socket_tcp_try_recv(
-                entry->sock, (uint8_t __force *)(void __user *)buf_ptr, len);
+            return (int32_t)socket_tcp_try_recv(entry->sock,
+                                                (uint8_t __force *)(void __user *)buf_ptr, len);
         }
-        return (int32_t)socket_tcp_recv(entry->sock,
-                                        (uint8_t __force *)(void __user *)buf_ptr,
+        return (int32_t)socket_tcp_recv(entry->sock, (uint8_t __force *)(void __user *)buf_ptr,
                                         len);
     }
 
     /* socket_recv/socket_try_recv write straight into the validated user
      * buffer; __force strips __user at the boundary. */
     if (nonblock) {
-        bytes = socket_try_recv(entry->sock,
-                                (uint8_t __force *)(void __user *)buf_ptr, len,
+        bytes = socket_try_recv(entry->sock, (uint8_t __force *)(void __user *)buf_ptr, len,
                                 &src_ip, &src_port);
     } else {
-        bytes = socket_recv(entry->sock,
-                            (uint8_t __force *)(void __user *)buf_ptr, len,
-                            &src_ip, &src_port);
+        bytes = socket_recv(entry->sock, (uint8_t __force *)(void __user *)buf_ptr, len, &src_ip,
+                            &src_port);
     }
 
     /* A receive that failed leaves the caller's address arguments alone: there
@@ -10240,8 +10134,7 @@ static int32_t do_ping(uint32_t dst_ip)
 static int connect_done(void *arg)
 {
     struct socket *sock = (struct socket *)arg;
-    return sock->tcb == NULL ||
-           sock->tcb->state == TCP_ESTABLISHED ||
+    return sock->tcb == NULL || sock->tcb->state == TCP_ESTABLISHED ||
            sock->tcb->state == TCP_CLOSED;
 }
 
@@ -10257,11 +10150,11 @@ static int accept_ready(void *arg)
 static int32_t do_connect(int fd, uint32_t sa_ptr, int addrlen)
 {
     fd_entry_t *entry;
-    uint32_t    dst_ip;
-    uint16_t    dst_port;
-    uint16_t    family;
-    uint8_t     sa[SOCKADDR_MIN];
-    int         rc;
+    uint32_t dst_ip;
+    uint16_t dst_port;
+    uint16_t family;
+    uint8_t sa[SOCKADDR_MIN];
+    int rc;
 
     /* The family is read first and on its own, because a disconnect is a
      * family and nothing else: `connect(fd, &unspec, sizeof(sa_family_t))` is
@@ -10351,13 +10244,11 @@ static int32_t do_connect(int fd, uint32_t sa_ptr, int addrlen)
         /* A socket that is already listening, connecting, or connected keeps
          * its TCB; a second tcp_connect would allocate another and leak the
          * first, whose stale delivery could reach a since-reused socket. */
-        return (entry->sock->tcb && entry->sock->tcb->state == TCP_SYN_SENT)
-                   ? -EALREADY
-                   : -EISCONN;
+        return (entry->sock->tcb && entry->sock->tcb->state == TCP_SYN_SENT) ? -EALREADY : -EISCONN;
     }
 
     dst_port = SC_BE16(sa + 2);
-    dst_ip   = canonical_dst_ip(SC_BE32(sa + 4));
+    dst_ip = canonical_dst_ip(SC_BE32(sa + 4));
 
     {
         /* Verbatim: the refusal a closed port earns comes from the handshake,
@@ -10397,7 +10288,7 @@ static int32_t do_listen(int fd, int backlog)
 {
     fd_entry_t *entry;
 
-    (void)backlog;   /* a fixed-size accept queue is used */
+    (void)backlog; /* a fixed-size accept queue is used */
 
     entry = fd_get(&current_proc->fds, fd);
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
@@ -10427,11 +10318,11 @@ static int32_t do_listen(int fd, int backlog)
  */
 static int32_t do_accept(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
 {
-    fd_entry_t    *entry;
-    fd_entry_t    *new_entry;
+    fd_entry_t *entry;
+    fd_entry_t *new_entry;
     struct socket *listen_sock;
     struct socket *conn_sock;
-    int            new_fd;
+    int new_fd;
 
     /* The peer-address writeback is validated and truncated to the caller's
      * declared length by copy_sockaddr_to_user below. */
@@ -10461,8 +10352,7 @@ static int32_t do_accept(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
     }
 
     conn_sock = listen_sock->accept_queue[listen_sock->accept_head];
-    listen_sock->accept_head =
-        (listen_sock->accept_head + 1) & (SOCK_ACCEPT_BACKLOG - 1);
+    listen_sock->accept_head = (listen_sock->accept_head + 1) & (SOCK_ACCEPT_BACKLOG - 1);
 
     /* The queued socket already holds the reference created when tcp_rx
      * accepted it; the new descriptor takes ownership of that reference. */
@@ -10471,19 +10361,19 @@ static int32_t do_accept(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
         socket_unref(conn_sock);
         return -EMFILE;
     }
-    new_entry         = &current_proc->fds.entries[new_fd];
-    new_entry->type   = FD_TYPE_SOCKET;
-    new_entry->sock   = conn_sock;
-    new_entry->node   = NULL;
+    new_entry = &current_proc->fds.entries[new_fd];
+    new_entry->type = FD_TYPE_SOCKET;
+    new_entry->sock = conn_sock;
+    new_entry->node = NULL;
     new_entry->ofd->offset = 0;
-    new_entry->flags  = FD_FLAG_READ | FD_FLAG_WRITE;
+    new_entry->flags = FD_FLAG_READ | FD_FLAG_WRITE;
 
     /* Report the peer address, truncated to the caller's declared capacity. On
      * a bad user pointer, tear down the descriptor we just installed (releasing
      * its socket reference) instead of leaking the accepted fd and its socket.
      */
-    if (copy_sockaddr_to_user(sa_ptr, salen_ptr, conn_sock->remote_port,
-                              conn_sock->remote_ip) != 0) {
+    if (copy_sockaddr_to_user(sa_ptr, salen_ptr, conn_sock->remote_port, conn_sock->remote_ip) !=
+        0) {
         fd_release_backing(new_entry);
         fd_free(&current_proc->fds, new_fd);
         return -EFAULT;
@@ -10496,7 +10386,7 @@ static int32_t do_accept(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
 static int32_t do_send(int fd, uint32_t buf_ptr, int len, int flags)
 {
     fd_entry_t *entry;
-    int         nonblock;
+    int nonblock;
 
     if (len < 0 || !user_buffer_ok(buf_ptr, (uint32_t)len, 0)) {
         return -EFAULT;
@@ -10515,11 +10405,9 @@ static int32_t do_send(int fd, uint32_t buf_ptr, int len, int flags)
 
     /* socket_tcp_send copies the payload itself, blocking on send-ring space
      * unless asked not to; __force strips __user at the boundary. */
-    nonblock = (flags & MSG_DONTWAIT) ||
-               (entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
+    nonblock = (flags & MSG_DONTWAIT) || (entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
     return (int32_t)socket_tcp_send(
-        entry->sock, (const uint8_t __force *)(const void __user *)buf_ptr, len,
-        nonblock);
+        entry->sock, (const uint8_t __force *)(const void __user *)buf_ptr, len, nonblock);
 }
 
 /* recv(2): read from a connected stream socket. Honors MSG_DONTWAIT and
@@ -10527,7 +10415,7 @@ static int32_t do_send(int fd, uint32_t buf_ptr, int len, int flags)
 static int32_t do_recv(int fd, uint32_t buf_ptr, int len, int flags)
 {
     fd_entry_t *entry;
-    int         nonblock;
+    int nonblock;
 
     if (len < 0 || !user_buffer_ok(buf_ptr, (uint32_t)len, 1)) {
         return -EFAULT;
@@ -10543,8 +10431,7 @@ static int32_t do_recv(int fd, uint32_t buf_ptr, int len, int flags)
     /* Don't block when the caller asked per-call (MSG_DONTWAIT) or the
      * descriptor is O_NONBLOCK. socket_tcp_*recv write into the validated user
      * buffer; __force strips __user at the boundary. */
-    nonblock = (flags & MSG_DONTWAIT) ||
-               (entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
+    nonblock = (flags & MSG_DONTWAIT) || (entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
 
     /* A datagram socket reads one message with no sender reported, which is
      * what `recv` is: `recvfrom` without the address. Refusing it here would
@@ -10552,22 +10439,20 @@ static int32_t do_recv(int fd, uint32_t buf_ptr, int len, int flags)
      * other three about whether the same queued datagram exists. */
     if (entry->sock->type == SOCK_DGRAM) {
         if (nonblock) {
-            return (int32_t)socket_try_recv(
-                entry->sock, (uint8_t __force *)(void __user *)buf_ptr, len, 0, 0);
+            return (int32_t)socket_try_recv(entry->sock, (uint8_t __force *)(void __user *)buf_ptr,
+                                            len, 0, 0);
         }
-        return (int32_t)socket_recv(entry->sock,
-                                    (uint8_t __force *)(void __user *)buf_ptr, len, 0, 0);
+        return (int32_t)socket_recv(entry->sock, (uint8_t __force *)(void __user *)buf_ptr, len, 0,
+                                    0);
     }
     if (entry->sock->type != SOCK_STREAM) {
         return -EOPNOTSUPP;
     }
     if (nonblock) {
-        return (int32_t)socket_tcp_try_recv(
-            entry->sock, (uint8_t __force *)(void __user *)buf_ptr, len);
+        return (int32_t)socket_tcp_try_recv(entry->sock, (uint8_t __force *)(void __user *)buf_ptr,
+                                            len);
     }
-    return (int32_t)socket_tcp_recv(entry->sock,
-                                    (uint8_t __force *)(void __user *)buf_ptr,
-                                    len);
+    return (int32_t)socket_tcp_recv(entry->sock, (uint8_t __force *)(void __user *)buf_ptr, len);
 }
 
 /* getsockname: the socket's local address, the single NIC IP (net_ip_addr) plus
@@ -10592,12 +10477,11 @@ static int32_t do_getsockname(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
      * back from here and refuses to run without one, so the fields are the
      * machine's real ones and not a shape with zeroes in it. */
     if (entry->sock->family == AF_PACKET) {
-        uint8_t   sll[SOCKADDR_LL_LEN];
-        uint32_t  caller_len, copy_len;
-        int       i;
+        uint8_t sll[SOCKADDR_LL_LEN];
+        uint32_t caller_len, copy_len;
+        int i;
 
-        if (copy_from_user(&caller_len, (const void __user *)salen_ptr,
-                           sizeof(caller_len)) != 0) {
+        if (copy_from_user(&caller_len, (const void __user *)salen_ptr, sizeof(caller_len)) != 0) {
             return -EFAULT;
         }
         k_memset(sll, 0, sizeof(sll));
@@ -10611,21 +10495,17 @@ static int32_t do_getsockname(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
         for (i = 0; i < 6; i++) {
             sll[SOCKADDR_LL_ADDR + i] = net_mac[i];
         }
-        copy_len = caller_len < (uint32_t)SOCKADDR_LL_LEN ? caller_len
-                                                         : (uint32_t)SOCKADDR_LL_LEN;
-        if (copy_len > 0 &&
-            copy_to_user((void __user *)sa_ptr, sll, copy_len) != 0) {
+        copy_len = caller_len < (uint32_t)SOCKADDR_LL_LEN ? caller_len : (uint32_t)SOCKADDR_LL_LEN;
+        if (copy_len > 0 && copy_to_user((void __user *)sa_ptr, sll, copy_len) != 0) {
             return -EFAULT;
         }
         caller_len = (uint32_t)SOCKADDR_LL_LEN; /* the true length, as Linux reports */
-        if (copy_to_user((void __user *)salen_ptr, &caller_len,
-                         sizeof(caller_len)) != 0) {
+        if (copy_to_user((void __user *)salen_ptr, &caller_len, sizeof(caller_len)) != 0) {
             return -EFAULT;
         }
         return 0;
     }
-    return copy_sockaddr_to_user(sa_ptr, salen_ptr, entry->sock->local_port,
-                                 (uint32_t)net_ip_addr);
+    return copy_sockaddr_to_user(sa_ptr, salen_ptr, entry->sock->local_port, (uint32_t)net_ip_addr);
 }
 
 /* getpeername: the connected peer's address (a connected stream socket
@@ -10691,24 +10571,23 @@ static int32_t do_shutdown(int fd, int how)
 }
 
 /* Socket-option levels/names recognized by get/setsockopt. */
-#define SOL_SOCKET    1
-#define SO_REUSEADDR  2
-#define SO_TYPE       3
-#define SO_ERROR      4
-#define SO_BROADCAST  6
+#define SOL_SOCKET      1
+#define SO_REUSEADDR    2
+#define SO_TYPE         3
+#define SO_ERROR        4
+#define SO_BROADCAST    6
 #define SO_BINDTODEVICE 25
-#define IFNAMSIZ     16
-#define SO_KEEPALIVE  9
-#define IPPROTO_TCP   6
-#define TCP_NODELAY   1
+#define IFNAMSIZ        16
+#define SO_KEEPALIVE    9
+#define IPPROTO_TCP     6
+#define TCP_NODELAY     1
 
 /* setsockopt: accept the boolean options a forking server sets (SO_REUSEADDR,
  * TCP_NODELAY, SO_KEEPALIVE) so its setup succeeds. The stack already reuses
  * listen ports and sends promptly, so these are honored-by-behavior or
  * documented no-ops; an unknown option is accepted instead of failing a
  * server's startup. */
-static int32_t do_setsockopt(int fd, int level, int optname, uint32_t optval_ptr,
-                             int optlen)
+static int32_t do_setsockopt(int fd, int level, int optname, uint32_t optval_ptr, int optlen)
 {
     fd_entry_t *entry = fd_get(&current_proc->fds, fd);
     int val = 0;
@@ -10743,8 +10622,7 @@ static int32_t do_setsockopt(int fd, int level, int optname, uint32_t optval_ptr
             take = IFNAMSIZ;
         }
         k_memset(name, 0, sizeof(name));
-        if (!optval_ptr ||
-            copy_from_user(name, (const void __user *)optval_ptr, take) != 0) {
+        if (!optval_ptr || copy_from_user(name, (const void __user *)optval_ptr, take) != 0) {
             return -EFAULT;
         }
         name[IFNAMSIZ - 1] = '\0';
@@ -10896,13 +10774,13 @@ static int32_t do_getsockopt(int fd, int level, int optname, uint32_t optval_ptr
  * not modelled, because a struct here would have to match a layout
  * this kernel does not otherwise depend on.
  */
-#define MSGHDR_LEN         28
-#define MSGHDR_NAME        0
-#define MSGHDR_NAMELEN     4
-#define MSGHDR_IOV         8
-#define MSGHDR_IOVLEN      12
-#define MSGHDR_CONTROLLEN  20
-#define MSGHDR_FLAGS       24
+#define MSGHDR_LEN        28
+#define MSGHDR_NAME       0
+#define MSGHDR_NAMELEN    4
+#define MSGHDR_IOV        8
+#define MSGHDR_IOVLEN     12
+#define MSGHDR_CONTROLLEN 20
+#define MSGHDR_FLAGS      24
 
 /**
  * Receive one datagram into a scatter list (recvmsg, socketcall 17).
@@ -10942,9 +10820,9 @@ static int32_t do_recvmsg(int fd, uint32_t msg_ptr, int flags)
     }
 
     name_ptr = SC_LE32(hdr + MSGHDR_NAME);
-    namelen  = SC_LE32(hdr + MSGHDR_NAMELEN);
+    namelen = SC_LE32(hdr + MSGHDR_NAMELEN);
     iov_user = SC_LE32(hdr + MSGHDR_IOV);
-    iovlen   = SC_LE32(hdr + MSGHDR_IOVLEN);
+    iovlen = SC_LE32(hdr + MSGHDR_IOVLEN);
     if (iovlen > (uint32_t)IOV_MAX_LOCAL) {
         return -EINVAL;
     }
@@ -10961,8 +10839,8 @@ static int32_t do_recvmsg(int fd, uint32_t msg_ptr, int flags)
        AF_INET one sixteen, however much the caller declared. Validating the
        whole declared capacity would refuse a call whose address fits
        perfectly. */
-    addr_len = (entry->sock->family == AF_PACKET) ? (uint32_t)SOCKADDR_LL_LEN
-                                                  : (uint32_t)SOCKADDR_IN_LEN;
+    addr_len =
+        (entry->sock->family == AF_PACKET) ? (uint32_t)SOCKADDR_LL_LEN : (uint32_t)SOCKADDR_IN_LEN;
     addr_give = namelen < addr_len ? namelen : addr_len;
     if (name_ptr && addr_give > 0 && !user_buffer_ok(name_ptr, addr_give, 1)) {
         return -EFAULT;
@@ -10970,10 +10848,9 @@ static int32_t do_recvmsg(int fd, uint32_t msg_ptr, int flags)
     for (i = 0; i < iovlen; i++) {
         struct kernel_iovec iov;
 
-        if (copy_from_user(&iov,
-                           (const void __user *)(iov_user +
-                                                 i * (uint32_t)sizeof(struct kernel_iovec)),
-                           sizeof(iov)) != 0) {
+        if (copy_from_user(
+                &iov, (const void __user *)(iov_user + i * (uint32_t)sizeof(struct kernel_iovec)),
+                sizeof(iov)) != 0) {
             return -EFAULT;
         }
         if (iov.iov_len == 0) {
@@ -11038,30 +10915,48 @@ static int32_t do_recvmsg(int fd, uint32_t msg_ptr, int flags)
  */
 static int32_t sys_socketcall(isr_params_t *params)
 {
-    int      call = (int)params->ebx;
+    int call = (int)params->ebx;
     uint32_t argp = params->ecx;
     uint32_t args[6];
-    int      nargs;
+    int nargs;
 
     switch (call) {
-    case SC_PING:                       nargs = 1; break;
-    case SC_LISTEN: case SC_SHUTDOWN:   nargs = 2; break;
-    case SC_SOCKET: case SC_BIND:
-    case SC_CONNECT: case SC_ACCEPT:
+    case SC_PING:
+        nargs = 1;
+        break;
+    case SC_LISTEN:
+    case SC_SHUTDOWN:
+        nargs = 2;
+        break;
+    case SC_SOCKET:
+    case SC_BIND:
+    case SC_CONNECT:
+    case SC_ACCEPT:
     case SC_GETSOCKNAME:
-    case SC_GETPEERNAME:                nargs = 3; break;
-    case SC_RECVMSG:                    nargs = 3; break;
-    case SC_SEND: case SC_RECV:         nargs = 4; break;
+    case SC_GETPEERNAME:
+        nargs = 3;
+        break;
+    case SC_RECVMSG:
+        nargs = 3;
+        break;
+    case SC_SEND:
+    case SC_RECV:
+        nargs = 4;
+        break;
     case SC_SETSOCKOPT:
-    case SC_GETSOCKOPT:                 nargs = 5; break;
-    case SC_SENDTO: case SC_RECVFROM:   nargs = 6; break;
+    case SC_GETSOCKOPT:
+        nargs = 5;
+        break;
+    case SC_SENDTO:
+    case SC_RECVFROM:
+        nargs = 6;
+        break;
     default:
         return -EINVAL;
     }
 
     /* Pull the argument array out of user memory in one fault-checked copy. */
-    if (copy_from_user(args, (const void __user *)argp,
-                       (uint32_t)nargs * 4) != 0) {
+    if (copy_from_user(args, (const void __user *)argp, (uint32_t)nargs * 4) != 0) {
         return -EFAULT;
     }
 
@@ -11071,11 +10966,9 @@ static int32_t sys_socketcall(isr_params_t *params)
     case SC_BIND:
         return do_bind((int)args[0], args[1], (int)args[2]);
     case SC_SENDTO:
-        return do_sendto((int)args[0], args[1], (int)args[2],
-                         (int)args[3], args[4], (int)args[5]);
+        return do_sendto((int)args[0], args[1], (int)args[2], (int)args[3], args[4], (int)args[5]);
     case SC_RECVFROM:
-        return do_recvfrom((int)args[0], args[1], (int)args[2],
-                           (int)args[3], args[4], args[5]);
+        return do_recvfrom((int)args[0], args[1], (int)args[2], (int)args[3], args[4], args[5]);
     case SC_PING:
         return do_ping(args[0]);
     case SC_CONNECT:
@@ -11091,11 +10984,9 @@ static int32_t sys_socketcall(isr_params_t *params)
     case SC_SHUTDOWN:
         return do_shutdown((int)args[0], (int)args[1]);
     case SC_SETSOCKOPT:
-        return do_setsockopt((int)args[0], (int)args[1], (int)args[2], args[3],
-                             (int)args[4]);
+        return do_setsockopt((int)args[0], (int)args[1], (int)args[2], args[3], (int)args[4]);
     case SC_GETSOCKOPT:
-        return do_getsockopt((int)args[0], (int)args[1], (int)args[2], args[3],
-                             args[4]);
+        return do_getsockopt((int)args[0], (int)args[1], (int)args[2], args[3], args[4]);
     case SC_SEND:
         return do_send((int)args[0], args[1], (int)args[2], (int)args[3]);
     case SC_RECV:
@@ -11124,7 +11015,7 @@ static int32_t sys_set_thread_area(isr_params_t *params)
     uint32_t base = 0;
 
     if (!current_proc) {
-        return -ESRCH;  /* TLS is only meaningful for a user process */
+        return -ESRCH; /* TLS is only meaningful for a user process */
     }
 
     /* Read the descriptor through the fault-checked helper (it range-checks the
@@ -11145,8 +11036,7 @@ static int32_t sys_set_thread_area(isr_params_t *params)
 
     /* Report the allocated slot back (musl reads user_desc.entry_number). */
     desc.entry_number = GDT_TLS_ENTRY;
-    if (copy_to_user((void __user *)uptr, &desc.entry_number,
-                     sizeof(desc.entry_number)) != 0) {
+    if (copy_to_user((void __user *)uptr, &desc.entry_number, sizeof(desc.entry_number)) != 0) {
         return -EFAULT;
     }
 
@@ -11466,8 +11356,7 @@ static void uname_field(char *dst, const char *src)
 
 static int32_t sys_uname(isr_params_t *params)
 {
-    struct kernel_utsname __user *user_uts =
-        (struct kernel_utsname __user *)params->ebx;
+    struct kernel_utsname __user *user_uts = (struct kernel_utsname __user *)params->ebx;
     struct kernel_utsname uts;
 
     k_memset(&uts, 0, sizeof(uts));
@@ -11558,8 +11447,7 @@ static int32_t sys_setreuid(isr_params_t *params)
         if (r != SC_ID_KEEP && new_r != p->ruid && new_r != p->euid) {
             return -EPERM;
         }
-        if (e != SC_ID_KEEP && new_e != p->ruid && new_e != p->euid &&
-            new_e != p->suid) {
+        if (e != SC_ID_KEEP && new_e != p->ruid && new_e != p->euid && new_e != p->suid) {
             return -EPERM;
         }
     }
@@ -11582,8 +11470,7 @@ static int32_t sys_setregid(isr_params_t *params)
         if (r != SC_ID_KEEP && new_r != p->rgid && new_r != p->egid) {
             return -EPERM;
         }
-        if (e != SC_ID_KEEP && new_e != p->rgid && new_e != p->egid &&
-            new_e != p->sgid) {
+        if (e != SC_ID_KEEP && new_e != p->rgid && new_e != p->egid && new_e != p->sgid) {
             return -EPERM;
         }
     }
@@ -11608,8 +11495,7 @@ static int32_t sys_setresuid(isr_params_t *params)
         v[1] = e;
         v[2] = s;
         for (i = 0; i < 3; i++) {
-            if (v[i] != SC_ID_KEEP && v[i] != p->ruid && v[i] != p->euid &&
-                v[i] != p->suid) {
+            if (v[i] != SC_ID_KEEP && v[i] != p->ruid && v[i] != p->euid && v[i] != p->suid) {
                 return -EPERM;
             }
         }
@@ -11639,8 +11525,7 @@ static int32_t sys_setresgid(isr_params_t *params)
         v[1] = e;
         v[2] = s;
         for (i = 0; i < 3; i++) {
-            if (v[i] != SC_ID_KEEP && v[i] != p->rgid && v[i] != p->egid &&
-                v[i] != p->sgid) {
+            if (v[i] != SC_ID_KEEP && v[i] != p->rgid && v[i] != p->egid && v[i] != p->sgid) {
                 return -EPERM;
             }
         }
@@ -11662,12 +11547,9 @@ static int32_t sys_getresuid(isr_params_t *params)
 {
     process_t *p = current_proc;
 
-    if (copy_to_user((void __user *) params->ebx, &p->ruid,
-                     sizeof(p->ruid)) != 0 ||
-        copy_to_user((void __user *) params->ecx, &p->euid,
-                     sizeof(p->euid)) != 0 ||
-        copy_to_user((void __user *) params->edx, &p->suid,
-                     sizeof(p->suid)) != 0) {
+    if (copy_to_user((void __user *)params->ebx, &p->ruid, sizeof(p->ruid)) != 0 ||
+        copy_to_user((void __user *)params->ecx, &p->euid, sizeof(p->euid)) != 0 ||
+        copy_to_user((void __user *)params->edx, &p->suid, sizeof(p->suid)) != 0) {
         return -EFAULT;
     }
     return 0;
@@ -11676,12 +11558,9 @@ static int32_t sys_getresgid(isr_params_t *params)
 {
     process_t *p = current_proc;
 
-    if (copy_to_user((void __user *) params->ebx, &p->rgid,
-                     sizeof(p->rgid)) != 0 ||
-        copy_to_user((void __user *) params->ecx, &p->egid,
-                     sizeof(p->egid)) != 0 ||
-        copy_to_user((void __user *) params->edx, &p->sgid,
-                     sizeof(p->sgid)) != 0) {
+    if (copy_to_user((void __user *)params->ebx, &p->rgid, sizeof(p->rgid)) != 0 ||
+        copy_to_user((void __user *)params->ecx, &p->egid, sizeof(p->egid)) != 0 ||
+        copy_to_user((void __user *)params->edx, &p->sgid, sizeof(p->sgid)) != 0) {
         return -EFAULT;
     }
     return 0;
@@ -11704,9 +11583,7 @@ static int32_t sys_setgroups(isr_params_t *params)
         return -EPERM;
     }
     for (i = 0; i < size; i++) {
-        if (copy_from_user(&tmp[i],
-                           (const void __user *)(list_ptr + i * 4),
-                           sizeof(tmp[i])) != 0) {
+        if (copy_from_user(&tmp[i], (const void __user *)(list_ptr + i * 4), sizeof(tmp[i])) != 0) {
             return -EFAULT;
         }
     }
@@ -11723,22 +11600,22 @@ static int32_t sys_getgroups(isr_params_t *params)
     uint32_t list_ptr = params->ecx;
     uint32_t i;
 
-    if ((int32_t) size < 0) {
+    if ((int32_t)size < 0) {
         return -EINVAL; /* the ABI size is signed; a negative is not a count */
     }
     if (size == 0) {
-        return (int32_t) p->ngroups;
+        return (int32_t)p->ngroups;
     }
     if (size < p->ngroups) {
         return -EINVAL;
     }
     for (i = 0; i < p->ngroups; i++) {
-        if (copy_to_user((void __user *)(list_ptr + i * 4), &p->groups[i],
-                         sizeof(p->groups[i])) != 0) {
+        if (copy_to_user((void __user *)(list_ptr + i * 4), &p->groups[i], sizeof(p->groups[i])) !=
+            0) {
             return -EFAULT;
         }
     }
-    return (int32_t) p->ngroups;
+    return (int32_t)p->ngroups;
 }
 
 /* The resources: three are kept in the record and enforced, RLIMIT_STACK
@@ -11747,7 +11624,7 @@ static int32_t sys_getgroups(isr_params_t *params)
 #define RLIMIT_NPROC_RES  6
 #define RLIMIT_NOFILE_RES 7
 #define RLIMIT_AS_RES     9
-#define RLIM_INF32 RLIM_INFINITY32
+#define RLIM_INF32        RLIM_INFINITY32
 
 /** The record's slot for `resource`, or -1 for one that is not kept. */
 static int rlimit_slot(uint32_t resource)
@@ -11999,8 +11876,8 @@ static int32_t sys_brk(isr_params_t *params)
         /* Extend the region, or create it on the first non-empty break. */
         if (heap) {
             heap->end = new_top;
-        } else if (vm_insert(vm, vm->heap_start, new_top,
-                             VM_PROT_READ | VM_PROT_WRITE, VM_HEAP) != 0) {
+        } else if (vm_insert(vm, vm->heap_start, new_top, VM_PROT_READ | VM_PROT_WRITE, VM_HEAP) !=
+                   0) {
             return (int32_t)vm->brk;
         }
     } else if (new_top < old_top) {
@@ -12039,7 +11916,7 @@ static void vma_exhausted(const char *what)
     }
     current_proc->vma_reported = 1;
     klog(KLOG_WARN, "vm", "%s: pid %d (%s) has used all %d of its mappings", what,
-                  (int)current_proc->pid, current_proc->comm, VMA_LIMIT);
+         (int)current_proc->pid, current_proc->comm, VMA_LIMIT);
 }
 
 /*
@@ -12217,13 +12094,12 @@ static void _syscall_handler(isr_params_t *params)
         const char *who = current_proc ? current_proc->comm : "?";
 
         if (syscall_num >= SYSCALL_TABLE_SIZE) {
-            klog(KLOG_WARN, "syscall",
-                 "%d: not implemented, and past the table (asked for by %s)",
+            klog(KLOG_WARN, "syscall", "%d: not implemented, and past the table (asked for by %s)",
                  (int)syscall_num, who);
         } else if (_enosys_last_pid[syscall_num] != pid) {
             _enosys_last_pid[syscall_num] = pid;
-            klog(KLOG_WARN, "syscall",
-                 "%d: not implemented (asked for by %s)", (int)syscall_num, who);
+            klog(KLOG_WARN, "syscall", "%d: not implemented (asked for by %s)", (int)syscall_num,
+                 who);
         }
     }
 
@@ -12234,14 +12110,15 @@ static void _syscall_handler(isr_params_t *params)
     if (current_proc) {
         current_proc->in_syscall = 0;
     }
-    /* Deliver what this call put on the loopback ring once the ring is half
-     * full, here at its exit rather than only on the next tick: the sender's
-     * own frames are gone, so no delivery runs under them, and a local
-     * transfer is no longer paced at a ring a tick. Below that mark the timer
-     * keeps its turn, which is what lets two datagrams queued in one call
-     * cross. Interrupts are off, the drain refuses to run inside itself, and
-     * it takes a bounded number of datagrams, so whatever is left waits for
-     * the timer as before. */
+    /* Deliver what this call put on the loopback ring, here at its exit rather
+     * than only on the next tick, so a local transfer is not paced at a ring a
+     * tick. The threshold is three datagrams of the ring's 48: at one or two
+     * the delivery is left to the timer, which is what lets the two crossing
+     * SYNs of a simultaneous open both be queued before either is delivered.
+     * The sender's own frames are gone by here, so no delivery runs under
+     * them. Interrupts are off, the drain refuses to run inside itself, and it
+     * takes at most 192 datagrams; what is left is taken by the next call's
+     * exit or by the timer. */
     if (ip_loop_crowded()) {
         ip_loop_drain();
     }
