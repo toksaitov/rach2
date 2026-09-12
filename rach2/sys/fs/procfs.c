@@ -821,6 +821,11 @@ static int procfs_gen_uptime(struct procfs_text *t)
 /**
  * Render /proc/stat: the tick counters, the boot epoch, and the process count.
  *
+ * `loopback_dropped` is the datagrams the loopback ring had no room for, which
+ * the ring logs once and counts thereafter, and `loopback_peak` is the most it
+ * has held at once, which is what says how much room it has over a window's
+ * worth.
+ *
  * The `cpu` line carries user, nice, system and idle in that order. This
  * kernel does not separate user from system time, so what it knows is one
  * busy figure and one idle figure: busy goes in the system column, since that
@@ -870,9 +875,6 @@ static int procfs_gen_statsys(struct procfs_text *t)
     ap_u32(t, latency_max(LAT_DISK_WAIT));
     ap_str(t, "\nlatency_console_us ");
     ap_u32(t, latency_max(LAT_CONSOLE));
-    /* Datagrams the loopback ring had no room for. The ring logs the first
-     * and counts the rest, so this line is where a local transfer that lost
-     * something says so. */
     ap_str(t, "\nloopback_dropped ");
     ap_u32(t, ip_loop_dropped());
     ap_str(t, "\nloopback_peak ");

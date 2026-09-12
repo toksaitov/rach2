@@ -181,7 +181,12 @@ static uint8_t ip_tx_buf[IP_HDR_SIZE + 1500];
  * connection fills it with exactly that before the first acknowledgement can
  * come back: at eight slots a local transfer of any size lost datagrams from
  * its first burst and stalled. */
-#define LOOP_RING_SLOTS 48
+/* The ring's slots. This must be a power of two: `loop_head` and `loop_tail`
+ * are 32-bit counters that wrap, and a size that does not divide 2^32 moves
+ * every slot's place at the wrap, which loses frames and delivers others
+ * twice without refusing anything. 64 is also more than the 45 segments a
+ * window's worth of data puts in the ring in one system call. */
+#define LOOP_RING_SLOTS 64u
 static uint8_t loop_ring[LOOP_RING_SLOTS][IP_HDR_SIZE + 1500];
 static uint16_t loop_ring_len[LOOP_RING_SLOTS];
 
@@ -330,20 +335,14 @@ int ip_tx(uint32_t dst_ip, uint8_t proto, const uint8_t *payload, uint16_t plen,
     return 0;
 }
 
-/**
- * Deliver queued loopback datagrams, called from the 100 Hz timer IRQ.
- *
- * Runs with interrupts off, after any syscall-context sender has left its
- * net_lock critical section, so every delivery sees quiescent stack state:
- * the same discipline under which the NIC hands frames up. A delivery may
- * itself transmit (an ACK, an echo reply) and enqueue onto this ring; the
- * tail advances only after ip_rx returns, so such an enqueue can never
- * overwrite the datagram being read, and the budget bounds one tick's work
- * so a reply chain cannot starve the timer.
- */
 uint32_t ip_loop_dropped(void)
 {
     return loop_dropped;
+}
+
+int ip_loop_pending(void)
+{
+    return loop_head != loop_tail;
 }
 
 uint32_t ip_loop_peak(void)
@@ -361,6 +360,17 @@ int ip_loop_crowded(void)
     return loop_head - loop_tail >= LOOP_DRAIN_AT;
 }
 
+/**
+ * Deliver queued loopback datagrams, called from the 100 Hz timer IRQ.
+ *
+ * Runs with interrupts off, after any syscall-context sender has left its
+ * net_lock critical section, so every delivery sees quiescent stack state:
+ * the same discipline under which the NIC hands frames up. A delivery may
+ * itself transmit (an ACK, an echo reply) and enqueue onto this ring; the
+ * tail advances only after ip_rx returns, so such an enqueue can never
+ * overwrite the datagram being read, and the budget bounds one tick's work
+ * so a reply chain cannot starve the timer.
+ */
 void ip_loop_drain(void)
 {
     unsigned budget = LOOP_RING_SLOTS * 4;

@@ -63,7 +63,7 @@ IPv4 validates the version, header length, total length, and header checksum. Re
 
 Transmit creates a 20-byte header, sets DF, and uses the caller's hop limit. The stack does not fragment. An absent route returns `ENETUNREACH`. UDP broadcast uses the all-ones hardware address and never performs ARP.
 
-There is no `lo` interface. At the socket boundary, a `127/8` destination becomes the current local address. Self-addressed datagrams enter an eight-slot ring and are delivered from the next timer tick, which avoids re-entering TCP in the sender's call frame. A full loopback ring returns `ENOBUFS`. Address-reporting calls return the canonical local address rather than `127.0.0.1`.
+There is no `lo` interface. At the socket boundary, a `127/8` destination becomes the current local address. Self-addressed datagrams enter a 64-slot ring and are delivered at the exit of the system call that queued them once the ring holds three or more, and otherwise from the next timer tick; neither re-enters TCP in the sender's call frame. One or two are left to the timer because a simultaneous open is a pair of crossing SYNs and is only a pair while neither has been delivered. `/proc/stat` reports `loopback_dropped` and `loopback_peak`. A full loopback ring returns `ENOBUFS`. Address-reporting calls return the canonical local address rather than `127.0.0.1`.
 
 ## ICMP and UDP
 

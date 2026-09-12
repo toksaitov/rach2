@@ -46,6 +46,9 @@ int ip_tx(uint32_t dst_ip, uint8_t proto,
 void ip_loop_drain(void);
 
 /** Datagrams the loopback ring had no room for since boot. */
+/** Nonzero while the loopback ring holds anything at all. */
+int ip_loop_pending(void);
+
 uint32_t ip_loop_dropped(void);
 
 /** The most datagrams the loopback ring has held at once, which says how much
@@ -55,8 +58,10 @@ uint32_t ip_loop_peak(void);
 /**
  * Nonzero when the loopback ring holds more than a pair of datagrams.
  *
- * A caller that can deliver outside the interrupt discipline uses this to
- * drain before the ring fills and starts refusing. A pair is left to the
+ * A caller uses this to drain before the ring fills and starts refusing. Two
+ * conditions belong to the caller and not to `ip_loop_drain`: interrupts are
+ * off, and the caller has finished whatever it was doing to the stack, since
+ * a delivery runs the receive path and may transmit. A pair is left to the
  * timer, since a simultaneous open is a pair of crossing SYNs and is only a
  * pair while neither has been delivered.
  */
