@@ -36,7 +36,7 @@ void ip_rx(const uint8_t *data, uint16_t len, int from_loopback);
  * Returns a negative errno for the conditions the caller must hear about:
  * -EMSGSIZE for a payload past the MTU (this stack does not fragment),
  * -ENETUNREACH for an address with no route, -ENOBUFS when the loopback ring
- * is full or the driver would not take the frame, and -EOPNOTSUPP for a
+ * is full or the driver did not take the frame, and -EOPNOTSUPP for a
  * broadcast of anything but UDP.
  */
 int ip_tx(uint32_t dst_ip, uint8_t proto,

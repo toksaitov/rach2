@@ -98,12 +98,22 @@ void raw_rx(uint8_t proto, const uint8_t *data, uint16_t len)
 
 /* The rest of what the two files reach for. None of it is exercised here;
    `ethernet_tx` is `ethernet.c`'s own and is compiled in below. */
+/* The one address the send rows resolve, when `arp_known` says so. */
+static int arp_known;
+
 int arp_lookup(struct netdev *nd, uint32_t ip, uint8_t *mac)
 {
+    unsigned i;
+
     (void)nd;
     (void)ip;
-    (void)mac;
-    return -1;
+    if (!arp_known) {
+        return 0;
+    }
+    for (i = 0; i < 6; i++) {
+        mac[i] = (uint8_t)(0x10 + i);
+    }
+    return 1;
 }
 
 void arp_request(struct netdev *nd, uint32_t ip)
@@ -215,11 +225,17 @@ struct netdev *netdev_first(void)
     return &the_iface;
 }
 
+/* What the driver answers a frame with, and how many it was handed. */
+static int tx_answer;
+static unsigned tx_frames;
+
 int netdev_tx(struct netdev *nd, const uint8_t *frame, uint16_t len)
 {
+    (void)nd;
     (void)frame;
     (void)len;
-    return 0;
+    tx_frames++;
+    return tx_answer;
 }
 
 /* The records these two files raise are not what is under test here. */
@@ -326,9 +342,30 @@ int main(void)
 {
     uint8_t f[256];
     unsigned n;
+    static uint8_t big[1500];
 
     /* A whole frame, so the cases below are read against something that does
        arrive. */
+    /* What a send is told: a driver that did not take the frame gives the
+       sender -ENOBUFS, which it may keep the bytes for; a payload past the
+       frame's 1500 bytes gives -EMSGSIZE and reaches no driver, since no
+       later attempt could send it. */
+    reset();
+    arp_known = 1;
+    tx_answer = NETDEV_TX_OK;
+    tx_frames = 0;
+    CHECK("a send the driver takes is reported sent",
+          ip_tx(0x0A000202u, IP_PROTO_ICMP, big, 100, IP_TTL_DEFAULT) == 0 && tx_frames == 1);
+    tx_answer = NETDEV_TX_DROPPED;
+    CHECK("a send the driver did not take is -ENOBUFS, to be kept and sent again",
+          ip_tx(0x0A000202u, IP_PROTO_ICMP, big, 100, IP_TTL_DEFAULT) == -ENOBUFS &&
+              tx_frames == 2);
+    tx_answer = NETDEV_TX_OK;
+    CHECK("a payload that would pass the frame's 1500 bytes with its header is -EMSGSIZE",
+          ip_tx(0x0A000202u, IP_PROTO_ICMP, big, 1490, IP_TTL_DEFAULT) == -EMSGSIZE);
+    CHECK("and reaches no driver", tx_frames == 2);
+    arp_known = 0;
+
     reset();
     n = build_eth(f, 0x0800);
     n += build_ip(f + n, 17, 8);

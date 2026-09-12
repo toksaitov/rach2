@@ -116,7 +116,7 @@ int ethernet_tx(struct netdev *out, const uint8_t *dst_mac, uint16_t ethertype,
         klog(KLOG_WARN, "eth", "tx: payload of %d bytes is too large, dropped",
                       (int)plen);
         out->tx_dropped++;
-        return NETDEV_TX_DROPPED;
+        return ETHERNET_TX_TOOLONG;
     }
     /* An interface an administrator took down has no IP and answers no
        ARP. Netconsole is not gated, and that is deliberate: it is how a machine

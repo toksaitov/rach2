@@ -16,10 +16,16 @@ struct netdev;
 /** Dispatch a received Ethernet frame to ARP or IP by EtherType. */
 void ethernet_rx(struct netdev *nd, const uint8_t *data, uint16_t len);
 
+/* A payload past the 1500 bytes an Ethernet frame carries: the interface's
+ * own answer, apart from the driver's two, since no later attempt can send
+ * such a frame where a driver's refusal is a full ring that empties. */
+#define ETHERNET_TX_TOOLONG (-2)
+
 /** Build an Ethernet frame and hand it to the driver. `ethertype` is in host
  * byte order (e.g. ETH_TYPE_IP) and is written big-endian on the wire.
- * Returns the driver's answer, `NETDEV_TX_OK` or `NETDEV_TX_DROPPED`, so a
- * sender that keeps what the card would not take can. */
+ * Returns `NETDEV_TX_OK`; `NETDEV_TX_DROPPED` when the driver did not take
+ * the frame, which a sender may keep and send again later; or
+ * `ETHERNET_TX_TOOLONG` for a payload past 1500 bytes. */
 int ethernet_tx(struct netdev *out, const uint8_t *dst_mac, uint16_t ethertype,
                 const uint8_t *payload, uint16_t plen);
 

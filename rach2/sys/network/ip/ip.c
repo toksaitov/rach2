@@ -289,8 +289,15 @@ int ip_tx(uint32_t dst_ip, uint8_t proto,
         return 0;
     }
 
-    if (ethernet_tx(out, dst_mac, ETH_TYPE_IP, ip_tx_buf, total_len) != NETDEV_TX_OK) {
-        return -ENOBUFS;
+    {
+        int sent = ethernet_tx(out, dst_mac, ETH_TYPE_IP, ip_tx_buf, total_len);
+
+        if (sent == ETHERNET_TX_TOOLONG) {
+            return -EMSGSIZE; /* the frame's own limit, which no retry passes */
+        }
+        if (sent != NETDEV_TX_OK) {
+            return -ENOBUFS;
+        }
     }
     return 0;
 }
