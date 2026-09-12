@@ -465,6 +465,43 @@ void _start(void)
         }
     }
 
+    /* (h) every length up to 67 bytes at every alignment of the writer's and
+     * the reader's buffers, through the pipe and compared byte for byte, with
+     * a sentinel on each side of the reader's bytes. The kernel's copies move
+     * words with a tail of bytes, so a wrong tail, a wrong start or a byte
+     * written past the end shows at the length and alignment that has it. */
+    {
+        static char pat[80], got[80];
+        int len, sa, da, bad = 0;
+
+        for (i = 0; i < 80; i++) {
+            pat[i] = (char)(0x21 + (i * 7) % 90);
+        }
+        check(do_pipe(p) == 0, "pipe() for the alignment sweep");
+        for (len = 1; len <= 67 && bad == 0; len++) {
+            for (sa = 0; sa < 4 && bad == 0; sa++) {
+                for (da = 0; da < 4 && bad == 0; da++) {
+                    for (i = 0; i < 80; i++) {
+                        got[i] = (char)0x5a;
+                    }
+                    if (wr(p[1], pat + sa, len) != len) {
+                        bad = 1;
+                    } else if (rd(p[0], got + da, len) != len) {
+                        bad = 2;
+                    } else if (!eqn(got + da, pat + sa, len)) {
+                        bad = 3;
+                    } else if (got[da + len] != (char)0x5a ||
+                               (da > 0 && got[da - 1] != (char)0x5a)) {
+                        bad = 4;
+                    }
+                }
+            }
+        }
+        check(bad == 0, "every length to 67 at every alignment of both buffers arrives intact");
+        syscall1(SYS_CLOSE, p[0]);
+        syscall1(SYS_CLOSE, p[1]);
+    }
+
     if (fails == 0) {
         puts("PIPEPROBE OK");
     } else {

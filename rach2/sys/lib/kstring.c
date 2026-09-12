@@ -30,15 +30,59 @@ void k_strtoupper(char *str)
     while (*str) { *str = k_toupper(*str); ++str; }
 }
 
+/*
+ * The copies and the fill move a machine word at a time through the string
+ * instructions on the kernel's own target. The kernel is built without
+ * optimisation, so a byte loop costs a load, a store and a compare per byte,
+ * and every disk and network path passes each byte through several of them;
+ * on the Lenovo the byte loops bounded the SSD at 90 MB/s. `rep movsl` and
+ * `rep stosl` move the words, a byte loop the tail of up to three, and the
+ * direction flag is cleared first since a user program may leave it set at a
+ * system call. Both compilers that build the kernel take this asm form. On
+ * any other target, the host tests' among them, the byte loop is the whole
+ * function, and the tests of the tail run against it.
+ */
+#if defined(__i386__)
+#define KSTRING_WORDS 1
+#endif
+
 void* k_memset(void *ptr, char c, size_t n)
 {
-    char *str = (char *) ptr; while (n--) { *str++ = c; }; return ptr;
+    char *str = (char *) ptr;
+#ifdef KSTRING_WORDS
+    size_t words = n >> 2;
+
+    if (words) {
+        unsigned int fill = (unsigned char) c;
+
+        fill |= fill << 8;
+        fill |= fill << 16;
+        __asm__ __volatile__("cld; rep stosl"
+                             : "+D"(str), "+c"(words)
+                             : "a"(fill)
+                             : "memory", "cc");
+        n &= 3;
+    }
+#endif
+    while (n--) { *str++ = c; }
+    return ptr;
 }
 
 void* k_memcpy(void *dest, const void *src, size_t n)
 {
     char *d = (char *) dest;
     const char *s = (const char *) src;
+#ifdef KSTRING_WORDS
+    size_t words = n >> 2;
+
+    if (words) {
+        __asm__ __volatile__("cld; rep movsl"
+                             : "+S"(s), "+D"(d), "+c"(words)
+                             :
+                             : "memory", "cc");
+        n &= 3;
+    }
+#endif
     while (n--) { *d++ = *s++; }
     return dest;
 }
@@ -70,8 +114,10 @@ void* k_memmove(void *dest, const void *src, size_t n)
         while (n--) { *--d = *--s; }
         return dest;
     }
-    while (n--) { *d++ = *s++; }
-    return dest;
+    /* A forward copy is safe with the destination below the source or apart
+     * from it, in words as in bytes: each word is read before the word at or
+     * below it is written. */
+    return k_memcpy(dest, src, n);
 }
 
 /**

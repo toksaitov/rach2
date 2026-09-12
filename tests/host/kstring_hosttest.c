@@ -123,6 +123,65 @@ int main(void)
         CHECK(a[0] == '1' && a[7] == '8');
     }
 
+    /* Every length to 67 at every alignment of both buffers, for the copy,
+     * the fill and the forward move: the bytes asked for arrive, and the byte
+     * before and the byte after each buffer are untouched. On the kernel's
+     * target the words go through the string instructions and the tail
+     * through the byte loop; here the byte loop is the whole function, so
+     * this is the tail's test and the other target's proof is the pipe
+     * probe's sweep in QEMU. */
+    {
+        static unsigned char pat[80], got[80];
+        int len, sa, da, i, bad = 0;
+
+        for (i = 0; i < 80; i++) {
+            pat[i] = (unsigned char)(0x21 + (i * 7) % 90);
+        }
+        for (len = 0; len <= 67 && bad == 0; len++) {
+            for (sa = 0; sa < 4 && bad == 0; sa++) {
+                for (da = 1; da < 5 && bad == 0; da++) {
+                    for (i = 0; i < 80; i++) {
+                        got[i] = 0x5a;
+                    }
+                    k_memcpy(got + da, pat + sa, (size_t)len);
+                    for (i = 0; i < len; i++) {
+                        if (got[da + i] != pat[sa + i]) {
+                            bad = 1;
+                        }
+                    }
+                    if (got[da - 1] != 0x5a || got[da + len] != 0x5a) {
+                        bad = 2;
+                    }
+                    for (i = 0; i < 80; i++) {
+                        got[i] = 0x5a;
+                    }
+                    k_memset(got + da, (char)0xa5, (size_t)len);
+                    for (i = 0; i < len; i++) {
+                        if (got[da + i] != 0xa5) {
+                            bad = 3;
+                        }
+                    }
+                    if (got[da - 1] != 0x5a || got[da + len] != 0x5a) {
+                        bad = 4;
+                    }
+                    for (i = 0; i < 80; i++) {
+                        got[i] = pat[i];
+                    }
+                    k_memmove(got + da, got + da + sa + 1, (size_t)len);
+                    for (i = 0; i < len; i++) {
+                        if (got[da + i] != pat[da + sa + 1 + i]) {
+                            bad = 5;
+                        }
+                    }
+                    if (got[da - 1] != pat[da - 1]) {
+                        bad = 6;
+                    }
+                }
+            }
+        }
+        CHECK(bad == 0);
+    }
+
     /* Bounded so the count never wraps to 0 (a false pass) as an exit
      * status. */
     return (fails > 120) ? 120 : fails;
