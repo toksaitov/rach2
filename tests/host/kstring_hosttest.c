@@ -124,12 +124,12 @@ int main(void)
     }
 
     /* Every length to 67 at every alignment of both buffers, for the copy,
-     * the fill and the forward move: the bytes asked for arrive, and the byte
-     * before and the byte after each buffer are untouched. On the kernel's
-     * target the words go through the string instructions and the tail
-     * through the byte loop; here the byte loop is the whole function, so
-     * this is the tail's test and the other target's proof is the pipe
-     * probe's sweep in QEMU. */
+     * the fill and the move both ways: the bytes asked for arrive, and the
+     * byte before and the byte after each buffer are untouched. On the
+     * kernel's target the words go through the string instructions and the
+     * tail through the byte loop; here the byte loop is the whole function,
+     * so this is the tail's test, and the same sweep runs on the target at
+     * every boot as the kernel's strings self-test. */
     {
         static unsigned char pat[80], got[80];
         int len, sa, da, i, bad = 0;
@@ -173,8 +173,20 @@ int main(void)
                             bad = 5;
                         }
                     }
-                    if (got[da - 1] != pat[da - 1]) {
+                    if (got[da - 1] != pat[da - 1] || got[da + len] != pat[da + len]) {
                         bad = 6;
+                    }
+                    for (i = 0; i < 80; i++) {
+                        got[i] = pat[i];
+                    }
+                    k_memmove(got + da + sa + 1, got + da, (size_t)len);
+                    for (i = 0; i < len; i++) {
+                        if (got[da + sa + 1 + i] != pat[da + i]) {
+                            bad = 7;
+                        }
+                    }
+                    if (got[da + sa + 1 + len] != pat[da + sa + 1 + len]) {
+                        bad = 8;
                     }
                 }
             }

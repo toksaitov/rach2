@@ -634,10 +634,19 @@ static bool test_memory(void)
     return true;
 }
 
+/*
+ * The string routines, on this target: the copy, the fill and the move go
+ * through the string instructions with a byte tail here, and the host test
+ * of the same file runs the byte loops only, so every length to 67 at every
+ * alignment of both buffers is swept at boot, with a sentinel on each side
+ * of the destination and the move overlapping by words, both ways.
+ */
 static bool test_strings(void)
 {
+    static unsigned char pat[80], got[80];
     char buf[16];
     size_t i;
+    int len, sa, da;
 
     if (k_strlen("hello") != 5) return false;
     if (k_strlen("") != 0) return false;
@@ -648,6 +657,39 @@ static bool test_strings(void)
         if (buf[i] != 'X') return false;
     }
 
+    for (i = 0; i < 80; i++) {
+        pat[i] = (unsigned char)(0x21 + (i * 7) % 90);
+    }
+    for (len = 0; len <= 67; len++) {
+        for (sa = 0; sa < 4; sa++) {
+            for (da = 1; da < 5; da++) {
+                k_memset(got, 0x5a, 80);
+                k_memcpy(got + da, pat + sa, (size_t)len);
+                for (i = 0; i < (size_t)len; i++) {
+                    if (got[da + i] != pat[sa + i]) return false;
+                }
+                if (got[da - 1] != 0x5a || got[da + len] != 0x5a) return false;
+                k_memset(got, 0x5a, 80);
+                k_memset(got + da, (char)0xa5, (size_t)len);
+                for (i = 0; i < (size_t)len; i++) {
+                    if (got[da + i] != 0xa5) return false;
+                }
+                if (got[da - 1] != 0x5a || got[da + len] != 0x5a) return false;
+                k_memcpy(got, pat, 80);
+                k_memmove(got + da, got + da + sa + 1, (size_t)len);
+                for (i = 0; i < (size_t)len; i++) {
+                    if (got[da + i] != pat[da + sa + 1 + i]) return false;
+                }
+                if (got[da - 1] != pat[da - 1] || got[da + len] != pat[da + len]) return false;
+                k_memcpy(got, pat, 80);
+                k_memmove(got + da + sa + 1, got + da, (size_t)len);
+                for (i = 0; i < (size_t)len; i++) {
+                    if (got[da + sa + 1 + i] != pat[da + i]) return false;
+                }
+                if (got[da + sa + 1 + len] != pat[da + sa + 1 + len]) return false;
+            }
+        }
+    }
     return true;
 }
 
