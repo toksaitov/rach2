@@ -137,11 +137,11 @@ typedef unsigned int u32;
 
 #define STDOUT 1
 
-#define EPERM  1
+#define EPERM   1
 #define ENOTDIR 20
-#define ENOENT 2
-#define EBADF  9
-#define EISDIR 21
+#define ENOENT  2
+#define EBADF   9
+#define EISDIR  21
 
 #define O_RDONLY    0
 #define O_RDWR      2
