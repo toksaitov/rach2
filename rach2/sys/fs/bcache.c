@@ -424,6 +424,12 @@ static int write_run(struct bbuf *first, uint64_t *last)
     if (most > RUN_BLOCKS) {
         most = RUN_BLOCKS;
     }
+    /* Half the cache at most, as a read run is bounded: a run that held
+     * every buffer across the request's sleep would leave a miss meanwhile
+     * with no buffer to take. */
+    if (most > bcache_limit() / 2u) {
+        most = bcache_limit() / 2u;
+    }
     if (!run_stage && most > 1 && !run_stage_busy) {
         run_stage = kalloc_pages_try(RUN_BLOCKS * BCACHE_BLOCK_BYTES / PAGE_SIZE, 0);
     }

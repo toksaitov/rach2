@@ -140,6 +140,7 @@ static int gone_during_read;
 static int gone_during_write;
 static unsigned last_count;
 static uint64_t writes_lba[8];
+static unsigned last_write_count; /* sectors of the last write */
 static int writes_made;
 /* A block another caller keys while this write is inside the device, which
    is what a writeback that sleeps allows. Keyed with a marker byte, so the
@@ -235,6 +236,7 @@ static int fake_write(block_device_t *d, uint64_t lba, uint32_t count, const voi
     if (writes_made < 8) {
         writes_lba[writes_made] = lba;
     }
+    last_write_count = count;
     writes_made++;
     if (writes_made == drop_at) {
         return 0; /* the device says yes and keeps nothing */
@@ -914,9 +916,9 @@ int main(void)
         printf("bcache_hosttest: OK\n");
     }
 
-    /* The device that takes 2048 sectors: the run after a first miss is the
-       cache's most, 256 blocks in one request, and the blocks of it are
-       hits after. */
+    /* The device that takes 2048 sectors: the run after a first miss is
+       the largest run, 256 blocks in one request, and the blocks of it are
+       hits after, each with its own bytes. */
     for (i = 0; i < (int)sizeof(image_vast); i++) {
         image_vast[i] = (unsigned char)(i / 4096u);
     }
@@ -928,28 +930,91 @@ int main(void)
     check(reads_made == 2 && last_count == 2048 && b->data[0] == 2,
           "the miss after a first one on the vast device reads a run of 256 blocks in one request");
     bcache_release(b);
-    for (i = 3; i < 258; i++) {
-        b = bcache_get(&vast, (uint64_t)i);
-        bcache_release(b);
+    {
+        int own = 0;
+
+        for (i = 3; i < 258; i++) {
+            b = bcache_get(&vast, (uint64_t)i);
+            own += b->data[0] == (unsigned char)i && b->data[4095] == (unsigned char)i;
+            bcache_release(b);
+        }
+        check(reads_made == 2 && own == 255, "and the 255 blocks after it are hits, each with its own bytes");
     }
-    check(reads_made == 2, "and the 255 blocks after it are hits");
     b = bcache_get(&vast, 258);
     check(reads_made == 3 && last_count == (WIDE_BLOCKS - 258) * 8,
           "the block past the run starts the next run, the device's remainder");
     bcache_release(b);
     bcache_invalidate(&vast);
 
-    /* A cache of forty buffers: the run is bounded to half of them, and
-       the block the caller asked for is among the buffers when the run is
-       in, not evicted by the run's own last blocks. */
-    bcache_set_limit(40);
-    reads_made = 0;
-    b = bcache_get(&vast, 1);
-    bcache_release(b);
-    b = bcache_get(&vast, 2);
-    check(reads_made == 2 && last_count == 20 * 8 && b->data[0] == 2,
-          "a small cache bounds the run to half its buffers and keeps the caller's block");
-    bcache_release(b);
+    /* Written back the same way: 300 dirty blocks in a row go to the device
+       in a run of 256 blocks, 2048 sectors, and a run of the 44 left. */
+    writes_made = 0;
+    for (i = 1; i <= 300; i++) {
+        b = bcache_get(&vast, (uint64_t)i);
+        b->data[0] = (unsigned char)(i + 1);
+        bcache_dirty(b);
+        bcache_release(b);
+    }
+    check(bcache_sync(&vast) == 0 && writes_made == 2 && writes_lba[0] == 8 &&
+              writes_lba[1] == 8 + 256 * 8 && last_write_count == 44 * 8 &&
+              image_vast[300 * 4096] == (unsigned char)(301) && image_vast[256 * 4096] == 1,
+          "300 dirty blocks are written in a run of 256 and a run of 44");
+    bcache_invalidate(&vast);
+    for (i = 0; i < (int)sizeof(image_vast); i++) {
+        image_vast[i] = (unsigned char)(i / 4096u);
+    }
+
+    /* A cache of forty buffers, made so by freeing every buffer the rows
+       above made and lowering the limit, with twenty-one of them held by
+       six other processes, four each within the hold rule: the run is
+       bounded to half the cache, and when its last blocks find no free
+       buffer the block the caller asked for is not the victim, though it
+       is the least recently released: the run's own earlier blocks are. */
+    {
+        uint32_t written = 0;
+        static process_t holders[6];
+        struct bbuf *held[21];
+
+        check(bcache_shrink(100000, 1, &written) > 0, "the buffers of the rows above are freed");
+        bcache_set_limit(40);
+        for (i = 0; i < 21; i++) {
+            holders[i / 4].pid = 50 + i / 4;
+            current_proc = &holders[i / 4];
+            held[i] = bcache_get(&vast, (uint64_t)(100 + i));
+        }
+        current_proc = &proc_a;
+        reads_made = 0;
+        b = bcache_get(&vast, 1);
+        bcache_release(b);
+        b = bcache_get(&vast, 2);
+        check(reads_made == 2 && last_count == 20 * 8 && b->data[0] == 2,
+              "a small cache bounds the run to half its buffers and keeps the caller's block");
+        bcache_release(b);
+        b = bcache_get(&vast, 21);
+        bcache_release(b);
+        check(reads_made == 2, "and the run's last block is in, keyed on the run's own first blocks");
+        for (i = 0; i < 21; i++) {
+            current_proc = &holders[i / 4];
+            bcache_release(held[i]);
+        }
+        current_proc = &proc_a;
+    }
+
+    /* A write run is bounded the same way: forty dirty blocks, keyed blank
+       so that no read run takes buffers, fill the cache of forty and go to
+       the device in two runs of twenty, not one of forty that would hold
+       every buffer while the request sleeps. */
+    bcache_invalidate(&vast);
+    writes_made = 0;
+    for (i = 1; i <= 40; i++) {
+        b = bcache_get_blank(&vast, (uint64_t)i);
+        bcache_dirty(b);
+        bcache_release(b);
+    }
+    check(writes_made == 0, "forty blank blocks fit the cache of forty without a write");
+    check(bcache_sync(&vast) == 0 && writes_made == 2 && writes_lba[0] == 8 &&
+              writes_lba[1] == 8 + 20 * 8 && last_write_count == 20 * 8,
+          "and are written in two runs of twenty");
     bcache_invalidate(&vast);
 
     return fails;
