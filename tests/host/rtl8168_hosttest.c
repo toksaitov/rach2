@@ -250,6 +250,11 @@ static unsigned model_msi_disable_at = 0xffffffffu;
 static int model_sticky_status;
 static unsigned model_acks;               /* writes to the status register */
 static unsigned model_link_change_at_ack; /* the ack after which the link changes, 0 for none */
+/* The chip's message is an edge: it is sent when the sources it may report go
+ * from none set to one set. Unmasking with a source already set is that
+ * transition, which is what a handler leaves behind for the next entry. */
+static unsigned model_edges;              /* messages the chip would send */
+static unsigned model_source_after_ack;   /* a source set again as the ack lands */
 static unsigned model_msi_enable_at = 0xffffffffu;
 static int model_arrive_during_drain; /* frames that arrive while the ring is drained */
 static unsigned model_arrive_slot = 1;
@@ -565,10 +570,14 @@ static void m_w16(unsigned off, unsigned short v)
             if (model_link_change_at_ack != 0 && model_acks == model_link_change_at_ack) {
                 cur |= R8168_INTR_LINKCHG;
             }
+            cur |= model_source_after_ack;
             model_reg[off] = (unsigned char)cur;
             model_reg[off + 1] = (unsigned char)(cur >> 8);
         }
         return;
+    }
+    if (off == R8168_INTRMASK && v != 0 && (m_r16(R8168_INTRSTATUS) & v) != 0) {
+        model_edges++;
     }
     model_reg[off] = (unsigned char)v;
     model_reg[off + 1] = (unsigned char)(v >> 8);
@@ -795,6 +804,8 @@ static void model_reset(void)
     model_sticky_status = 0;
     model_acks = 0;
     model_link_change_at_ack = 0;
+    model_edges = 0;
+    model_source_after_ack = 0;
     model_msi_enable_at = 0xffffffffu;
     model_arrive_during_drain = 0;
     model_arrive_slot = 1;
@@ -1400,6 +1411,27 @@ int main(void)
         rtl8168_poll(model_iface.dev);
         CHECK(rx_calls >= 1 && r8168_tick_work >= 1, "and the tick takes what was left, counted");
         model_arrive_during_drain = 0;
+
+        /* A source that comes up as the acknowledgement lands leaves the
+           chip's report standing, and the chip's message is an edge. A
+           handler that returned with the sources unmasked and one of them
+           set would be the last one this card ever ran: every frame after it
+           would wait for the tick. The sources are masked while the handler
+           runs and unmasked at its end, and that unmask is the edge the next
+           frame is announced by. */
+        rx_calls = 0;
+        model_edges = 0;
+        model_source_after_ack = R8168_INTR_RXOK;
+        r8168_rx_ring[r8168_rx_cur % R8168_RING_SIZE].opts1 =
+            R8168_DESC_FS | R8168_DESC_LS | (len + 4);
+        model_reg[R8168_INTRSTATUS] = R8168_INTR_RXOK;
+        model_handler(0);
+        model_source_after_ack = 0;
+        CHECK(rx_calls == 1 && (m_r16(R8168_INTRSTATUS) & R8168_INTR_RXOK) != 0,
+              "a source set as the acknowledgement lands stands after the handler");
+        CHECK(m_r16(R8168_INTRMASK) == R8168_INTR_ENABLED && model_edges >= 1,
+              "and the handler's unmask is the edge that arms the next message");
+        model_reg[R8168_INTRSTATUS] = 0;
     }
     {
         unsigned before = model_log_len;
@@ -1425,7 +1457,9 @@ int main(void)
         CHECK(r8168_msi_storms == 0, "entries whose status will not clear are counted first");
         model_handler(0);
         CHECK(r8168_msi_storms == 1, "a status that will not clear is a storm");
-        CHECK(find_write_value(before, 16, R8168_INTRMASK, 0) >= 0, "which masks the sources");
+        CHECK(find_write_value(before, 16, R8168_INTRMASK, 0) >= 0 &&
+                  m_r16(R8168_INTRMASK) == 0,
+              "which leaves the sources masked");
         model_sticky_status = 0;
         model_reg[R8168_INTRSTATUS] = 0;
         rx_calls = 0;

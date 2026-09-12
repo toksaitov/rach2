@@ -278,3 +278,45 @@ The machine was lost for a while in the middle of this: two sessions installed t
 ### What the plan review corrected, 2026-09-13
 
 Astra read the plan against the tree and took out four claims it does not support. Entry 54's cause was stated as the deadline making the timer the only waker; the code does not say that, since the halt ends on any interrupt either way, so what stands is the measurement and not the mechanism. `poll_select_hosttest` was named as its proof and judges bitmap translation, not the poll core, so that entry owes a row of its own. Entry 48 is measured with the pathname chown alone, and the descriptor path and the host rows it promised are not written. Entry 53's 355 seconds is an extrapolation from a rate measured elsewhere, not a timed phase. It also found the SSH deficit assigned to Dropbear without evidence, which is now entry 55 with its cause open, and the first close's Readme and index still describing four entries where there are eight.
+
+The night of 2026-09-13, entry 55. SSH inbound was not Dropbear's and not the cipher's. The
+card stops sending messages. `/proc/interrupts` names the card's vector, and during a 64 MiB
+raw transfer the count did not move at all while 46000 frames arrived; the machine's own
+tally for a 16 MiB SSH transfer was 728 interrupts over 6.85 s, of which 685 were the timer
+at 100 Hz. A capture on the host with `tcpdump -i en0 -s 96` showed what that costs: the
+client sends 24648 bytes in under a millisecond, the machine answers nothing for 9.1 ms, then
+sends all seventeen acknowledgements in 30 us with the window falling by 1460 through them,
+which is the ring being filled at that instant and not earlier. A raw receiver showed the
+same pace without SSH in it: 64 MiB in 1047 reads, 64096 bytes a read, 100 reads a second,
+6.4 MB/s. One receive window a tick is 6.4 MB/s for a socket and 2.4 for Dropbear's
+24576-byte channel window, which is what both measured.
+
+Four kernels built and installed through `bootctl` found the mechanism. The first published
+the driver's counters through the name `/proc/interrupts` prints for the vector: the storm
+test had not fired, the sources were still unmasked at 0x2F, and the messages stopped dead
+at entry 34006 with the tick doing every frame after. The second published the status word
+as the tick finds it: 0x4085 while the card was silent, which is only what accumulated after
+the last acknowledgement. The third published the status left immediately after the
+handler's own acknowledgement: 0x0081, a frame received and the transmit ring empty. That is
+the answer. The chip's message is an edge, sent when the sources it may report go from none
+set to one set; the handler wrote back the bits it had read, a frame arrived between the read
+and the write, and the report never came down again, so no further message was ever sent.
+The transmit-descriptor-unavailable bit is a state, not an event, and it is true whenever the
+transmit ring is empty, which is most of the time.
+
+The fix is the reference's: mask the sources for the length of the handler and unmask at its
+end, and that unmask is the edge that carries whatever arrived meanwhile. A storm, which is
+now the one case the acknowledgement cannot fix, leaves them masked. The fourth kernel
+measured it, and the kernel of this tree measured it again after `bootctl commit`: SSH
+inbound 22.3 MB/s against 2.4, a raw socket 118.3 against 6.4, SSH outbound unchanged at
+35.7. The row in the driver's host test models the edge and fails when the mask and the
+unmask are taken out.
+
+Two things follow. Dropbear's receive window is not the limit: a build with the window at
+262144 bytes reached 6327 KB/s against 2428 at 24576 while the card was in the tick's pace,
+which is the same one-window-a-tick rule and not the window's own cost; the port is unchanged.
+And every inbound measurement in this milestone before this night was taken on a machine
+whose card may already have been in that state, which is why this milestone's remaining rows
+re-measure rather than cite. What is left between SSH inbound at 22.3 and a raw socket at
+118.3 is Dropbear's own path; outbound has the same shape at 35.7, so it is the protocol's
+cost and not a defect.

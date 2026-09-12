@@ -1337,6 +1337,23 @@ static void r8168_note_sources(uint16_t status)
  * The card's message: acknowledge what it reports, then service the rings,
  * until the status reads clear or the bound is reached.
  *
+ * The sources are masked for the length of this handler and unmasked at its
+ * end, and that unmask is what arms the next message. A message is an edge:
+ * the chip sends one when the sources it may report go from none set to one
+ * set, and nothing while one stays set. Acknowledging the bits that were
+ * read cannot be relied on to bring that condition down, because a frame
+ * that arrives between the read and the write leaves a source set, and
+ * because the chip reports states as well as events: transmit-descriptor
+ * unavailable is true whenever the transmit ring is empty. A handler that
+ * returned with a source set would be the last one the card ever ran, and
+ * the machine would take frames at the tick's pace from then on, which is
+ * one receive window every ten milliseconds. Masking first makes the
+ * condition false whatever the status holds, and the unmask makes it true
+ * again for whatever arrived meanwhile, so no event is lost and none is
+ * needed twice. Measured on the Lenovo: without the mask the card stopped
+ * sending messages partway through the first large transfer, leaving the
+ * status at 0x0081, and inbound SSH ran at 2.4 MB/s against 22.9 with it.
+ *
  * The status is acknowledged before the rings are drained, as the xHCI
  * driver orders it: a frame that arrives while the rings are being drained
  * raises the bit again and the next round takes it, where a frame arriving
@@ -1344,11 +1361,11 @@ static void r8168_note_sources(uint16_t status)
  * A source the acknowledgement does not clear is read back still set at
  * once, with nothing in the rings through the whole entry;
  * R8168_STORM_ENTRIES entries in a row of that kind are a storm, and the
- * sources are masked, counted, and the timer's pump drives the card from
- * then on. A bound reached with work still announced is not: the status is
- * acknowledged once more so that the next event raises a message, the entry
- * is counted as deferred, and the frames wait in the rings for the tick or
- * that message.
+ * sources are left masked, counted, and the timer's pump drives the card
+ * from then on. A bound reached with work still announced is not: the status
+ * is acknowledged once more so that the next event raises a message, the
+ * entry is counted as deferred, and the frames wait in the rings for the
+ * tick or that message.
  */
 static void rtl8168_isr(isr_params_t *params)
 {
@@ -1359,6 +1376,7 @@ static void rtl8168_isr(isr_params_t *params)
 
     (void)params;
     r8168_msi_entries++;
+    io->w16(R8168_INTRMASK, 0);
     for (round = 0; round < R8168_ISR_ROUNDS; round++) {
         status = io->r16(R8168_INTRSTATUS);
         if (status == 0) {
@@ -1374,11 +1392,12 @@ static void rtl8168_isr(isr_params_t *params)
     }
     if (stuck && work == 0) {
         if (++r8168_msi_stuck >= R8168_STORM_ENTRIES) {
-            io->w16(R8168_INTRMASK, 0);
             r8168_msi_storms++;
             klog(KLOG_WARN, "rtl8168",
                  "interrupts: a source the acknowledgement does not clear; polled from now on");
+            return; /* the sources stay masked; the tick drives the card */
         }
+        io->w16(R8168_INTRMASK, R8168_INTR_ENABLED);
         return;
     }
     r8168_msi_stuck = 0;
@@ -1388,6 +1407,7 @@ static void rtl8168_isr(isr_params_t *params)
         io->w16(R8168_INTRSTATUS, status);
         r8168_msi_deferred++;
     }
+    io->w16(R8168_INTRMASK, R8168_INTR_ENABLED);
 }
 
 /**
