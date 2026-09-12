@@ -228,3 +228,13 @@ What the machine was then asked to do, and what it said:
 * The kernel's own numbers after entry 47's fix: `latency_disk_us` reads 33580, a delay and not a wrapped negative, which is that entry closed on the machine. The timer ticks at 100 Hz, the longest gap 30 ms. A pipe round trip is 5 us, a plain copy 1.6 GB/s, 4 KiB reads 1.2 GB/s.
 * The card reports `link 1000 Mb/s, full duplex, pause both ways`, and 36 transmit errors since boot which do not grow during a transfer.
 * The guest toolchain: `tcc -static` compiled and ran every program written for these measurements on the machine itself.
+
+### What the machine did after the install
+
+The acceptance, `metal_accept.sh` run as root over SSH against the installed system after a reboot: PASS, 71 rows. The first run of it failed two rows about the boot log, which entry 50 had wrapped.
+
+A reboot from SSH came back in about a minute with the root as it was left. The machine builds its own kernel from clean with the staged TinyCC and pdpmake in 3 seconds, 905884 bytes. The flash drive mounts, takes a 64 MiB file at 21.7 MB/s and gives it back, and reads raw at 43.3 MB/s.
+
+The load row again, five sessions for ten minutes since entry 47's fix now lets the disk figure be read: 80 builds, none failed, the longest timer gap 30 ms, the longest disk delay 14.3 ms, the longest wait for the request limit 0, the console never waiting. On a fresh boot the same figures read 14.7 ms and 4.2 ms, so the record starts sane and grows under load, which is what entry 47 asked for.
+
+Twenty sessions started at once give five: Dropbear allows five unauthenticated connections from one address at a time and closes the rest, which is its own default and not the machine's limit. Started a second apart, twelve more connect on top of the five already building, so the machine carries seventeen sessions without complaint. The load harness must stagger its sessions.
