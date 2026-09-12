@@ -156,6 +156,8 @@ static volatile struct r8168_desc r8168_tx_ring[R8168_RING_SIZE] __attribute__((
 static volatile struct r8168_desc r8168_rx_ring[R8168_RING_SIZE] __attribute__((aligned(256)));
 static uint8_t r8168_rx_buf[R8168_RING_SIZE][R8168_RX_BUF_SIZE + 1] __attribute__((aligned(8)));
 static uint8_t r8168_tx_buf[R8168_RING_SIZE][R8168_FRAME_MAX] __attribute__((aligned(8)));
+/* The block the chip writes its tally counters into on request. */
+static struct r8168_counters r8168_counters __attribute__((aligned(64)));
 
 static uint32_t r8168_tx_head; /* next descriptor to fill */
 static uint32_t r8168_tx_tail; /* oldest descriptor not yet reclaimed */
@@ -1407,6 +1409,60 @@ static int rtl8168_link(void *dev, struct netdev_link *out)
     return 1;
 }
 
+/**
+ * Ask the chip for its tally counters (rtl8169_do_counters with CounterDump):
+ * the block's address goes into the two counter registers with the dump bit
+ * set, and the chip clears the bit once it has written the block. The wait
+ * is bounded as the reference bounds it; a chip that does not answer in
+ * that time leaves the block as it was and this returns 0. The chip is
+ * asked only while it is up: the reference notes that some of these chips
+ * cannot dump with the receiver stopped.
+ */
+static int r8168_counters_dump(void)
+{
+    uint32_t i;
+
+    if (r8168_mmio == 0 || !r8168_up) {
+        return 0;
+    }
+    io->w32(R8168_COUNTERADDRHIGH, 0);
+    io->w32(R8168_COUNTERADDRLOW,
+            (uint32_t)(uintptr_t)&r8168_counters | R8168_COUNTER_DUMP);
+    for (i = 0; i < R8168_COUNTERS_WAIT_STEPS; i++) {
+        if (!(io->r32(R8168_COUNTERADDRLOW) & R8168_COUNTER_DUMP)) {
+            /* The block is read only after the chip says it wrote it. */
+            __asm__ __volatile__("" : : : "memory");
+            return 1;
+        }
+        io->udelay(R8168_COUNTERS_WAIT_USEC);
+    }
+    return 0;
+}
+
+/**
+ * The card's own counts for `/proc/net/dev`, from the tally block, in the
+ * columns Linux's driver puts them: missed frames add to the receive drops,
+ * alignment errors are the frame column, underruns the transmit fifo column,
+ * one-collision and many-collision frames together the collisions, and the
+ * frames the chip gave up on the carrier column.
+ */
+static int rtl8168_counters(void *dev, struct netdev_counters *out)
+{
+    (void)dev; /* this driver has one card */
+
+    if (!r8168_counters_dump()) {
+        return 0;
+    }
+    out->rx_missed     = r8168_counters.rx_missed;
+    out->rx_frame      = r8168_counters.align_errors;
+    out->rx_multicast  = r8168_counters.rx_multicast;
+    out->tx_errors     = r8168_counters.tx_errors_lo;
+    out->tx_fifo       = r8168_counters.tx_underrun;
+    out->tx_collisions = r8168_counters.tx_one_collision + r8168_counters.tx_multi_collision;
+    out->tx_carrier    = r8168_counters.tx_aborted;
+    return 1;
+}
+
 /** The card's detail line under the boot summary. */
 static void rtl8168_print_info(void *dev)
 {
@@ -1505,4 +1561,5 @@ static void rtl8168_stop(void *dev)
 
 const struct netdev_ops rtl8168_netdev = {"RTL8168GU",   rtl8168_init,  rtl8168_tx,
                                           rtl8168_poll,  rtl8168_stop,  rtl8168_link,
-                                          rtl8168_error, rtl8168_print_info};
+                                          rtl8168_error, rtl8168_print_info,
+                                          rtl8168_counters};

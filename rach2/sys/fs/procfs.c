@@ -709,13 +709,18 @@ uint32_t procfs_ino_pid(int pid)
  * lists it only when a device was found: an interface that is not there is not
  * one a program should be told about.
  *
- * Seven of the sixteen are kept: bytes and packets each way, receive errors,
- * receive drops, and transmit drops. The other nine are zero because this
- * machine has nothing to put in them. The three refusal columns were zero too
- * until the drivers could report a refusal: a transmit verdict for the last
- * of them, and two receive-note calls for the first two. Every driver here
- * refuses a frame under some condition, so zero was never the truth.
- * Collisions and carrier remain zero: no driver reports either.
+ * Seven of the sixteen come from the interface: bytes and packets each way,
+ * receive errors, receive drops, and transmit drops. The three refusal
+ * columns were zero too until the drivers could report a refusal: a transmit
+ * verdict for the last of them, and two receive-note calls for the first
+ * two. Every driver here refuses a frame under some condition, so zero was
+ * never the truth. Seven more come from the card, through the driver's
+ * `counters`, in the columns Linux fills from a card's own tallies: frames
+ * the card missed add to the receive drops, alignment errors are the frame
+ * column, multicasts their own, and on the transmit side errors, underruns
+ * (fifo), collisions and the frames the card gave up on (carrier). A card
+ * that keeps no such counts leaves them zero. The two compressed columns
+ * and the receive fifo are zero: nothing here has them.
  */
 static int procfs_gen_netdev(struct procfs_text *t)
 {
@@ -728,7 +733,13 @@ static int procfs_gen_netdev(struct procfs_text *t)
            "bytes    packets errs drop fifo colls carrier compressed\n");
     for (i = 0; i < netdev_count(); i++) {
         const struct netdev *nd = netdev_at(i);
+        struct netdev_counters card = {0, 0, 0, 0, 0, 0, 0};
 
+        if (nd->ops->counters && !nd->ops->counters(nd->dev, &card)) {
+            card.rx_missed = card.rx_frame = card.rx_multicast = 0;
+            card.tx_errors = card.tx_fifo = card.tx_collisions = 0;
+            card.tx_carrier = 0;
+        }
         ap_str(t, "  ");
         ap_str(t, nd->name);
         ap_str(t, ": ");
@@ -738,17 +749,28 @@ static int procfs_gen_netdev(struct procfs_text *t)
         ap_ch(t, ' ');
         ap_u32(t, nd->rx_errors);
         ap_ch(t, ' ');
-        ap_u32(t, nd->rx_dropped);
+        ap_u32(t, nd->rx_dropped + card.rx_missed);
         /* fifo, frame, compressed, multicast */
-        ap_str(t, " 0 0 0 0 ");
+        ap_str(t, " 0 ");
+        ap_u32(t, card.rx_frame);
+        ap_str(t, " 0 ");
+        ap_u32(t, card.rx_multicast);
+        ap_ch(t, ' ');
         ap_u32(t, nd->tx_bytes);
         ap_ch(t, ' ');
         ap_u32(t, nd->tx_packets);
-        /* errs */
-        ap_str(t, " 0 ");
+        ap_ch(t, ' ');
+        ap_u32(t, card.tx_errors);
+        ap_ch(t, ' ');
         ap_u32(t, nd->tx_dropped);
         /* fifo, colls, carrier, compressed */
-        ap_str(t, " 0 0 0 0\n");
+        ap_ch(t, ' ');
+        ap_u32(t, card.tx_fifo);
+        ap_ch(t, ' ');
+        ap_u32(t, card.tx_collisions);
+        ap_ch(t, ' ');
+        ap_u32(t, card.tx_carrier);
+        ap_str(t, " 0\n");
     }
     return t->len;
 }

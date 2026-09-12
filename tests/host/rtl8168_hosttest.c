@@ -378,7 +378,17 @@ static int model_stuck_fifo;     /* the FIFOs never report empty */
    accept and a wait on "all of it" refuses, which is the difference the
    reference's own condition makes. */
 static int model_half_fifo;
-static int model_swallow_doorbell;                 /* the doorbell does nothing */
+static int model_swallow_doorbell; /* the doorbell does nothing */
+/* The tally counter dump: the chip writes the block and clears the bit at
+ * the first read after the request, or never when the test sticks it. The
+ * values it writes are the model's own tallies. */
+static int model_stuck_counters;
+static int model_counter_pending;
+static unsigned model_counter_addr;
+static unsigned
+    model_tally[8]; /* tx errors, underruns, one, many, aborted, missed, align, multicast */
+static unsigned udelay_calls;
+static void model_counters_complete(void);
 static unsigned model_xid_txconfig = 0x509u << 20; /* the revision reported */
 
 /* The recorded write sequence. */
@@ -448,6 +458,11 @@ static unsigned short m_r16(unsigned off)
 
 static unsigned m_r32(unsigned off)
 {
+    if (off == R8168_COUNTERADDRLOW && model_counter_pending && !model_stuck_counters) {
+        model_counters_complete();
+        model_counter_pending = 0;
+        model_w32_raw(off, model_r32_raw(off) & ~R8168_COUNTER_DUMP);
+    }
     if (off == R8168_TXCONFIG) {
         unsigned v = model_r32_raw(off) & 0x000fffffu;
 
@@ -510,6 +525,11 @@ static void m_w32(unsigned off, unsigned v)
 {
     model_record(32, off, v);
     model_w32_raw(off, v);
+
+    if (off == R8168_COUNTERADDRLOW) {
+        model_counter_addr = v;
+        model_counter_pending = (v & R8168_COUNTER_DUMP) != 0;
+    }
 
     /* A command completes here. A write completes by its flag going low, a
        read by the flag going high with the data readable; a window the test
@@ -588,6 +608,7 @@ static void m_w32(unsigned off, unsigned v)
 static void m_udelay(unsigned usec)
 {
     (void)usec;
+    udelay_calls++;
 }
 
 /* ------------------------------------------------------------------ */
@@ -632,6 +653,20 @@ static const struct r8168_io model_io = {m_r8, m_r16, m_r32, m_w8, m_w16, m_w32,
  * from the doorbell write: without it the driver would wait for an ownership
  * bit nothing ever clears, which is exactly what the stall case tests.
  */
+/* The chip writes the block: its tallies, at the address the request named,
+   which here is the driver's own block since the test includes the driver. */
+static void model_counters_complete(void)
+{
+    r8168_counters.tx_errors_lo = model_tally[0];
+    r8168_counters.tx_underrun = (uint16_t)model_tally[1];
+    r8168_counters.tx_one_collision = model_tally[2];
+    r8168_counters.tx_multi_collision = model_tally[3];
+    r8168_counters.tx_aborted = (uint16_t)model_tally[4];
+    r8168_counters.rx_missed = (uint16_t)model_tally[5];
+    r8168_counters.align_errors = (uint16_t)model_tally[6];
+    r8168_counters.rx_multicast = model_tally[7];
+}
+
 static void model_tx_drain(void)
 {
     unsigned n;
@@ -689,6 +724,10 @@ static void model_reset(void)
     model_stuck_fifo = 0;
     model_half_fifo = 0;
     model_swallow_doorbell = 0;
+    model_stuck_counters = 0;
+    model_counter_pending = 0;
+    model_counter_addr = 0;
+    udelay_calls = 0;
     model_xid_txconfig = 0x509u << 20;
     pci_present = 1;
     pci_master_enabled = 0;
@@ -1333,6 +1372,57 @@ int main(void)
     model_lapic = 0;
     CHECK(rtl8168_init(&model_iface, 0) == NETDEV_UP && r8168_msi_vector == -1,
           "a machine with no usable APIC stays polled");
+
+    /* ---- the card's own counts ---- */
+    /* The chip is asked for its tally block at the block's address, and
+       answers with its counts in the columns the interface cannot keep. */
+    model_reset();
+    CHECK(rtl8168_init(&model_iface, 0) == NETDEV_UP, "the bring-up completes for the counters");
+    {
+        struct netdev_counters out;
+        unsigned before = model_log_len;
+
+        model_tally[0] = 5;
+        model_tally[1] = 2;
+        model_tally[2] = 3;
+        model_tally[3] = 4;
+        model_tally[4] = 6;
+        model_tally[5] = 7;
+        model_tally[6] = 8;
+        model_tally[7] = 9;
+        CHECK(rtl8168_netdev.counters == rtl8168_counters, "the table names the counters");
+        udelay_calls = 0;
+        CHECK(rtl8168_counters(model_iface.dev, &out) == 1, "the card answers with its counts");
+        CHECK(find_write(before, 32, R8168_COUNTERADDRLOW) >= 0, "the chip was asked");
+        CHECK((model_counter_addr & 0x3fu) == R8168_COUNTER_DUMP &&
+                  (model_counter_addr & ~0x3fu) == ((unsigned)(uintptr_t)&r8168_counters & ~0x3fu),
+              "for the block at its own address, aligned, with the dump bit alone");
+        CHECK(model_r32_raw(R8168_COUNTERADDRHIGH) == 0,
+              "and the high word of the address is zero");
+        CHECK(out.tx_errors == 5 && out.tx_fifo == 2 && out.tx_collisions == 7 &&
+                  out.tx_carrier == 6,
+              "the transmit columns are the chip's errors, underruns, collisions of both kinds and "
+              "aborts");
+        CHECK(out.rx_missed == 7 && out.rx_frame == 8 && out.rx_multicast == 9,
+              "the receive columns are the chip's missed frames, alignment errors and multicasts");
+        CHECK(udelay_calls == 0, "with no wait when the chip answers at once");
+
+        /* A chip that never writes the block: the wait is bounded and the
+           card is reported as not answering. */
+        model_stuck_counters = 1;
+        udelay_calls = 0;
+        CHECK(rtl8168_counters(model_iface.dev, &out) == 0,
+              "a chip that never writes the block is reported as not answering");
+        CHECK(udelay_calls == R8168_COUNTERS_WAIT_STEPS, "after the bounded wait");
+        model_stuck_counters = 0;
+
+        /* A stopped card is not asked. */
+        rtl8168_stop(model_iface.dev);
+        before = model_log_len;
+        CHECK(rtl8168_counters(model_iface.dev, &out) == 0 &&
+                  find_write(before, 32, R8168_COUNTERADDRLOW) < 0,
+              "a stopped card is not asked");
+    }
 
     return fails;
 }

@@ -1016,4 +1016,4 @@ static void e1000_op_print_info(void *dev)
 
 const struct netdev_ops e1000_netdev = {"e1000",      e1000_init,   e1000_op_tx,
                                         0,            e1000_op_stop, e1000_op_link,
-                                        e1000_error,  e1000_op_print_info};
+                                        e1000_error,  e1000_op_print_info, 0};

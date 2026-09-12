@@ -90,8 +90,27 @@ struct netdev_link {
  * its link at all, leaving `*out` untouched. Both answers are useful and they
  * are not the same: a card that says the link is down is different from a
  * card that cannot say.
+ *
+ * `counters` fills `*out` with what the card counts on its own and returns
+ * 1, or returns 0 when the card keeps no such counts or did not answer; a
+ * driver whose card keeps none leaves it NULL. These are the columns of
+ * `/proc/net/dev` the interface cannot count: frames the card missed for
+ * lack of ring room, frames with an alignment error, multicasts received,
+ * and on the transmit side errors, underruns, collisions and the frames the
+ * card gave up on. A card that lost frames after taking them is otherwise
+ * indistinguishable from a network that lost them.
  */
 struct netdev;
+
+struct netdev_counters {
+    uint32_t rx_missed;
+    uint32_t rx_frame;
+    uint32_t rx_multicast;
+    uint32_t tx_errors;
+    uint32_t tx_fifo;
+    uint32_t tx_collisions;
+    uint32_t tx_carrier;
+};
 
 struct netdev_ops {
     const char *name;
@@ -109,6 +128,7 @@ struct netdev_ops {
     int (*link)(void *dev, struct netdev_link *out);
     const char *(*error)(void);
     void (*print_info)(void *dev);
+    int (*counters)(void *dev, struct netdev_counters *out);
 };
 
 /**

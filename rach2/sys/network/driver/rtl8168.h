@@ -32,6 +32,8 @@
 #define R8168_MAC0            0x00
 #define R8168_MAC4            0x04
 #define R8168_MAR0            0x08
+#define R8168_COUNTERADDRLOW  0x10
+#define R8168_COUNTERADDRHIGH 0x14
 #define R8168_TXDESC_LO       0x20
 #define R8168_TXDESC_HI       0x24
 #define R8168_CHIPCMD         0x37
@@ -49,6 +51,34 @@
 #define R8168_INTR_ENABLED    (R8168_INTR_RXOK | R8168_INTR_RXERR | R8168_INTR_TXOK | \
                                R8168_INTR_TXERR | R8168_INTR_LINKCHG)
 #define R8168_TXCONFIG        0x40
+/* CounterAddrLow's command bits (reference: CounterReset, CounterDump); the
+ * block's address takes the other 26, so the block is 64-byte aligned. */
+#define R8168_COUNTER_RESET   0x00000001u
+#define R8168_COUNTER_DUMP    0x00000008u
+/* The chip clears the dump bit when it has written the block. The reference
+ * waits 10 ms in steps of 10 us (rtl8169_do_counters). */
+#define R8168_COUNTERS_WAIT_STEPS 1000u
+#define R8168_COUNTERS_WAIT_USEC  10u
+
+/* The 64-byte block the chip fills with its tally counters (reference:
+ * struct rtl8169_counters), little-endian, the 64-bit counts as two words.
+ * The low words are what the reports show; the counts wrap at 32 bits as
+ * the interface's own do. */
+struct r8168_counters {
+    uint32_t tx_packets_lo, tx_packets_hi;
+    uint32_t rx_packets_lo, rx_packets_hi;
+    uint32_t tx_errors_lo, tx_errors_hi;
+    uint32_t rx_errors;
+    uint16_t rx_missed;
+    uint16_t align_errors;
+    uint32_t tx_one_collision;
+    uint32_t tx_multi_collision;
+    uint32_t rx_unicast_lo, rx_unicast_hi;
+    uint32_t rx_broadcast_lo, rx_broadcast_hi;
+    uint32_t rx_multicast;
+    uint16_t tx_aborted;
+    uint16_t tx_underrun;
+};
 #define R8168_RXCONFIG        0x44
 #define R8168_CFG9346         0x50
 #define R8168_CONFIG2         0x53
