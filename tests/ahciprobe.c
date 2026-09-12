@@ -385,10 +385,11 @@ void probe_main(unsigned int *sp);
 
 /* `ahciprobe late`: the throttled disk's ext2 partition mounted for
    writing, under a deadline period shorter than one of its requests, which
-   the row sets with `rach2.blockdeadline=1` against a disk of 16 KiB a
-   second. ext2 keeps a write's blocks dirty and writes them back in runs of
-   32 KiB at the end of the call, and such a request takes two seconds:
-   it passes its deadline and is answered after it. The answer must be
+   the row sets with `rach2.blockdeadline=1` against a disk of 512 KiB a
+   second. The cache reads runs of 1 MiB, and ext2 keeps a write's blocks
+   dirty and writes them back in runs at the end of the call; a request of
+   1 MiB takes two seconds: it passes its deadline and is answered after
+   it. The answer must be
    taken: the write succeeds, the file reads back whole, and the mount is
    still writable. FAT32 would not do: it writes each block through as it
    is written, and a 4 KiB request is under the deadline. The file is

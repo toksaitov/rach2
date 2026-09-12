@@ -60,14 +60,19 @@ grep -aq 'BLOCKPROBE OK' "$DIR/fault.log" || fail "blockprobe on the root"
 echo "queue-test: the root's faults share the port with the queue: $(grep -a 'AHCIPROBE READ' "$DIR/fault.log" | tr -d '\r' | tr '\n' ' ')OK"
 
 # A request answered after its deadline is the answer, not a failure: the
-# disk is throttled to 16 KiB a second, so a 32 KiB request of an ext2
-# write's end takes two seconds, and the period is set to one second by
-# `rach2.blockdeadline=1`; the request passes its deadline, is answered
-# inside the four periods a request is waited for, and the mount keeps
-# writing. Before entry 14 of milestone 50 the first deadline failed the
-# write with EIO and the mount went read-only. The volume is ext2 and not
-# FAT32 because ext2 writes a file back in runs of 32 KiB where FAT32
-# writes each 4 KiB block through as it is written, under the deadline.
+# disk is throttled to 512 KiB a second, so a 1 MiB request, which is the
+# cache's read run and the most an ext2 write's end gathers since entry 42
+# of milestone 50 raised a request to 2048 sectors, takes two seconds, and
+# the period is set to one second by `rach2.blockdeadline=1`; the request
+# passes its deadline, is answered inside the four periods a request is
+# waited for, and the mount keeps writing. Before entry 14 of milestone 50
+# the first deadline failed the write with EIO and the mount went
+# read-only. The throttle is set against the largest request: at 16 KiB a
+# second, the figure from the days of 32 KiB requests, a run of 1 MiB
+# outlasts the four periods and the disk is declared stalled. The volume
+# is ext2 and not FAT32 because ext2 writes a file back in runs where
+# FAT32 writes each 4 KiB block through as it is written, under the
+# deadline.
 rm -f "$DIR/late.vol"; : > "$DIR/late.vol"
 E2FSPROGS_FAKE_TIME=1 mke2fs -q -F -t ext2 -b 4096 -I 128 \
     -O sparse_super,large_file,filetype,^dir_index,resize_inode,^ext_attr,^has_journal,^extent,^64bit,^flex_bg,^metadata_csum,^huge_file,^dir_nlink,^extra_isize \
@@ -79,7 +84,7 @@ E2FSPROGS_FAKE_TIME=1 mke2fs -q -F -t ext2 -b 4096 -I 128 \
 } > "$DIR/late.disk"
 "$MKMBR" --lba "$DIR/late.disk" 2048:12288:83 > /dev/null || fail "the late disk's table"
 "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" --qemu-arg=-cpu --qemu-arg=max \
-    --qemu-arg=-object --qemu-arg=throttle-group,id=tg1,x-bps-total=16384 \
+    --qemu-arg=-object --qemu-arg=throttle-group,id=tg1,x-bps-total=524288 \
     --qemu-arg=-blockdev --qemu-arg="driver=file,filename=$DIR/late.disk,node-name=latefile" \
     --qemu-arg=-blockdev --qemu-arg=driver=raw,file=latefile,node-name=lateraw \
     --qemu-arg=-blockdev --qemu-arg=driver=throttle,throttle-group=tg1,file=lateraw,node-name=late \
