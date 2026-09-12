@@ -320,3 +320,34 @@ whose card may already have been in that state, which is why this milestone's re
 re-measure rather than cite. What is left between SSH inbound at 22.3 and a raw socket at
 118.3 is Dropbear's own path; outbound has the same shape at 35.7, so it is the protocol's
 cost and not a defect.
+
+Phase 6, the same night. Entry 48's proof is in `modeprobe`, which had no `fchown`
+row at all: the descriptor path now carries the same four set-id answers as the
+pathname one, and the child's half gains a permitted group change, a refused
+change with its mode and times unmoved, and the no-change call through a
+descriptor in both spellings with the times checked. The probe empties its own
+supplementary group list when it starts as root. That is not tidiness: under the
+test runner the list is empty and the escalation row passes, while under a root
+login the list holds the primary group, so a child that drops to uid 1000 is
+still in the group of a file owned 1000:0 and the kernel is right to let it
+store setgid. The probe failed exactly that way the first time it ran on an ext2
+root, and the failure was the login's, not the file system's. The probe also
+takes the directory to work in, so `tests/run ext2` runs it on an ext2 root with
+the probe and its helper put into the volume by `debugfs`.
+
+Entry 54 is corrected. The ordering change is kept, but the row it owed cannot
+be built and the figure it carried is withdrawn. On one processor nothing can
+run while a poller is halted except an interrupt handler, and the interrupt that
+carries a wake is the one that ends the halt; the loop then rescans and finds
+the data, so the old order lost no wake. Measured with the old order compiled
+back in: two hundred poll round trips over a pair of pipes in under 600 ms,
+where one tick a round trip is two seconds. The 6.4 MB/s that the entry called
+the defect is one 64 KiB receive window a tick, which is the card fault of entry
+55, and that fault was on the machine that night.
+
+Entry 51's hang was not a hang. On an ext2 root the probe stops at its scope
+case, where it required `rmdir` to take a directory out from under an open
+descriptor; ext2 refuses that with EBUSY, which its own Readme states. The probe
+now takes the answer its root owes. What looked like a hang on the machine was
+the leak loops: 16 MiB written in 4 KiB calls on a disk where such a call is
+four commands and two flushes.
