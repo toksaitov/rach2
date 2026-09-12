@@ -413,6 +413,8 @@ static int stage_of(int endpoint, const struct usb_transfer *t)
     return 2;
 }
 
+static int command_mismatches; /* READ(10) counts that disagree with the transfer */
+
 /** The SCSI target: answer one command's data stage into `buffer`. */
 static void scsi_data_in(unsigned char *buffer, uint32_t length)
 {
@@ -472,6 +474,13 @@ static void scsi_data_in(unsigned char *buffer, uint32_t length)
     case 0x28: { /* READ(10) */
         uint32_t lba = rd32_be(&cmd.cdb[2]);
         uint32_t n = length / SECTOR;
+
+        /* The command's own count must agree with the transfer's length: a
+           wrapper naming fewer sectors than the transfer behind it would
+           end with a residue on a stick. */
+        if ((((uint32_t)cmd.cdb[7] << 8) | cmd.cdb[8]) != n) {
+            command_mismatches++;
+        }
 
         for (i = 0; i < n && lba + i < MEDIUM_SECTORS; i++) {
             unsigned int b;
@@ -971,6 +980,9 @@ int main(void)
         CHECK("and completes", block.completions == 1 && block.last_status == 0);
         CHECK("as one command with one data transfer of 512 KiB",
               commands_counted == 1 && largest_length == 1024 * SECTOR);
+        CHECK("whose count names the 1024 sectors the transfer carries", command_mismatches == 0);
+        CHECK("the 1024 sectors the stick's device publishes as its most",
+              msc_block_device(0)->max_sectors == 1024);
         CHECK("with the medium's own bytes, first and last sector",
               bigpage[0] == dev.medium[16 * SECTOR] &&
                   bigpage[1023 * SECTOR] == dev.medium[(16 + 1023) * SECTOR]);

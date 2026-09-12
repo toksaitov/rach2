@@ -1300,7 +1300,9 @@ static void bulk_pair_up(void)
     map_fail_at = 0;
     virt_map = permuted_map;
     for (i = 0; i < sizeof(medium); i++) {
-        medium[i] = (uint8_t)(i * 7u + 3u);
+        /* No two pages alike: the page's number enters each byte, so two
+           pages moved to each other's place are a failure. */
+        medium[i] = (uint8_t)((i * 7u + 3u) ^ (i >> 12));
     }
     for (i = 0; i < sizeof(shadow); i++) {
         shadow[i] = 0;
@@ -2724,7 +2726,7 @@ int main(void)
     {
         struct usb_transfer transfer;
         struct usb_completion completion;
-        uint32_t first, i, chained = 0, ioc_at = 0, total = 0;
+        uint32_t first, i, chained = 0, ioc_at = 0, total = 0, placed = 0, at = 0;
 
         bulk_pair_up();
         transfer.setup = 0;
@@ -2743,9 +2745,18 @@ int main(void)
                 ioc_at = i + 1;
             }
             total += t[2] & 0x1FFFFu;
+            /* Each block names its piece's physical page, as the map placed
+               it, and its length: 2048 bytes of the first page, whole pages
+               between, and 2048 of the last. */
+            if (t[0] == (uint32_t)permuted_map((uintptr_t)(big + 2048 + at)) && t[1] == 0 &&
+                (t[2] & 0x1FFFFu) == (i == 0 || i == 128 ? 2048u : 4096u)) {
+                placed++;
+            }
+            at += t[2] & 0x1FFFFu;
         }
         CHECK("as 129 blocks chained on all but the last, the event on the last, the bytes whole",
               chained == 128 && ioc_at == 129 && total == 524288);
+        CHECK("each block at its piece's own page with its piece's length", placed == 129);
         xhci_events(hc);
         CHECK("it is reported once as whole",
               xhci_poll(hc, &completion) == 1 && completion.status == USB_XFER_OK &&
