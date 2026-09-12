@@ -50,9 +50,14 @@
  * every case passed; any failure names the step and the answer it got, and
  * exits 1. Freestanding; direct int 0x80.
  *
- * Needs: an empty supplementary group list. A child that drops to uid 1000
- * with root's group 0 still in its list is in the file's group, and the
- * kernel is then right to let it store setgid, which one row forbids.
+ * Needs: to start as root, which it uses to empty its own supplementary group
+ * list before anything else; a child that drops to uid 1000 with root's group
+ * 0 still in that list is in the group of a file owned 1000:0, and the kernel
+ * is then right to let it store setgid, which one row forbids. It also
+ * needs a writable directory to work in, and `/suidhelper` to exec. The
+ * fixtures are made in the working directory, and the optional first argument
+ * names one to enter first, so the same rows run on the boot root, on an ext2
+ * root and inside a mounted volume.
  */
 
 typedef unsigned int u32;
@@ -73,13 +78,18 @@ typedef unsigned int u32;
 #define SYS_STAT64      195
 #define SYS_SETRESUID32 208
 #define SYS_SETRESGID32 210
+#define SYS_FCHOWN32    207
 #define SYS_CHOWN32     212
+#define SYS_CHDIR       12
+#define SYS_SETGROUPS32 206
+#define SYS_GETEUID32   201
 
 #define STDOUT 1
 
-#define O_RDONLY 0
-#define O_WRONLY 1
-#define O_TRUNC  01000
+#define O_RDONLY    0
+#define O_WRONLY    1
+#define O_TRUNC     01000
+#define O_DIRECTORY 0200000
 
 /* The chown sentinel that keeps a field: (uid_t)-1 as an unsigned word. */
 #define KEEP 0xFFFFFFFFu
@@ -87,8 +97,12 @@ typedef unsigned int u32;
 /* i386 struct stat64: the 32-bit mode field is at offset 16, and the 64-bit
  * size at 44. Only the low word of the size is read; a KRFFS file cannot reach
  * 4 GB, so the high word is always zero. */
-#define ST_MODE 16
-#define ST_SIZE 44
+#define ST_MODE  16
+#define ST_SIZE  44
+#define ST_MTIME 72
+#define ST_CTIME 80
+
+#define EPERM 1
 
 /* Linux wait-status decode: a normal exit has the low 7 bits clear and the
  * code in bits 8-15; a signal death has the signal in the low 7 bits. */
@@ -96,26 +110,40 @@ typedef unsigned int u32;
 #define WEXITSTATUS(s) (((s) >> 8) & 0xFF)
 
 /* The root parent's own fixtures, all root-owned. */
-#define ROOTSUID "/mp_root"  /* the 04755 baseline and the write exemption */
-#define CHOWNED  "/mp_chown" /* chowned away, so the bit must go */
-#define DIRSUID  "/mp_dir"   /* a directory keeps what a file loses */
-#define NOCHG    "/mp_nochg" /* the no-change chown a uid-1000 child asks for */
+#define ROOTSUID "mp_root"  /* the 04755 baseline and the write exemption */
+#define CHOWNED  "mp_chown" /* chowned away, so the bit must go */
+#define DIRSUID  "mp_dir"   /* a directory keeps what a file loses */
+#define NOCHG    "mp_nochg" /* the no-change chown a uid-1000 child asks for */
 
 /* The relocation pair, minted back to back and in this order (see _start). */
-#define GROW    "/mp_grow"
-#define BLOCKER "/mp_block"
+#define GROW    "mp_grow"
+#define BLOCKER "mp_block"
 
 /* Given to uid 1000, which then modifies each one itself. */
-#define INPLACE "/mp_wr"
-#define TRUNCME "/mp_trunc"
-#define CREATME "/mp_creat"
-#define SGIDX   "/mp_sgid"    /* 02755: group-execute, so setgid goes */
-#define SGIDNOX "/mp_sgid645" /* 02645: other-execute only, so setgid stays */
-#define PLAIN   "/mp_plain"   /* 0755: the control */
+#define INPLACE "mp_wr"
+#define TRUNCME "mp_trunc"
+#define CREATME "mp_creat"
+#define SGIDX   "mp_sgid"    /* 02755: group-execute, so setgid goes */
+#define SGIDNOX "mp_sgid645" /* 02645: other-execute only, so setgid stays */
+#define PLAIN   "mp_plain"   /* 0755: the control */
+
+/* The same rules through a descriptor. `fchown` reaches the same plan by the
+ * other dispatch path, and a plan wired into one path only passes every row
+ * above and fails these. */
+#define FDIRSUID "mp_fdir"     /* a directory keeps its bits through fchown */
+#define FCHOWNED "mp_fchown"   /* a file loses them */
+#define FSGIDX   "mp_fsgid"    /* 02755: group-execute, so setgid goes */
+#define FSGIDNOX "mp_fsgid645" /* 02645: no group-execute, so setgid stays */
+#define FNOCHG   "mp_fnochg"   /* the no-change fchown a uid-1000 child asks */
+
+/* The two answers an unprivileged owner owes: a group it may move the file
+ * into, and an owner it may not. */
+#define GIVEGRP "mp_grp"    /* owned 1000:0, armed; the child moves the group */
+#define REFUSED "mp_refuse" /* owned 1000:1000, armed; the child may not give it away */
 
 /* The escalation: a runnable copy of the staged helper, owned 1000:0. */
 #define HELPER "/suidhelper"
-#define SGID0  "/mp_sgid0"
+#define SGID0  "mp_sgid0"
 
 /* Bigger than one node header (357 bytes), so a write of this size can never
  * fit in the slack a `creat` left behind and must resize the node. */
@@ -244,6 +272,30 @@ static void want_mode(const char *step, const char *path, u32 mode)
         puto(mode);
         puts_(")\n");
         syscall1(SYS_EXIT, 1);
+    }
+}
+
+/* The stored times of the last stat, for the rows that must leave them alone:
+ * a chown that changes nothing changes nothing, and a status time that moved
+ * is a write the kernel had no reason to make. */
+static u32 kept_mtime;
+static u32 kept_ctime;
+
+static void keep_times(const char *path)
+{
+    stat_path(path);
+    kept_mtime = *(u32 *)(statbuf + ST_MTIME);
+    kept_ctime = *(u32 *)(statbuf + ST_CTIME);
+}
+
+static void want_times_kept(const char *step, const char *path)
+{
+    stat_path(path);
+    if (*(u32 *)(statbuf + ST_MTIME) != kept_mtime) {
+        fail(step, (int)*(u32 *)(statbuf + ST_MTIME));
+    }
+    if (*(u32 *)(statbuf + ST_CTIME) != kept_ctime) {
+        fail(step, (int)*(u32 *)(statbuf + ST_CTIME));
     }
 }
 
@@ -417,6 +469,38 @@ static void user_child(void)
     write_bytes("write the plain file", PLAIN, 8);
     want_mode("a write disturbed a plain mode", PLAIN, 0755);
 
+    /* The same no-change gate through the descriptor, both spellings, and the
+     * times with it: a call that changes no field writes nothing, so the
+     * status time may not move either. */
+    fd = syscall3(SYS_OPEN, (int)FNOCHG, O_RDONLY, 0);
+    want_ok("open the root-owned setuid file", fd);
+    keep_times(FNOCHG);
+    want_eq("fchown(-1, -1) on a root-owned setuid file",
+            syscall3(SYS_FCHOWN32, fd, (int)KEEP, (int)KEEP), 0);
+    want_mode("a no-change fchown disarmed the file", FNOCHG, 04755);
+    want_times_kept("a no-change fchown moved the times", FNOCHG);
+    want_eq("fchown(0, 0) on a root-owned setuid file", syscall3(SYS_FCHOWN32, fd, 0, 0), 0);
+    want_mode("naming the ids it already had, through a descriptor, disarmed the file", FNOCHG,
+              04755);
+    want_times_kept("a no-change fchown by name moved the times", FNOCHG);
+    want_eq("close the root-owned setuid file", syscall3(SYS_CLOSE, fd, 0, 0), 0);
+
+    /* A group this caller may move the file into: it owns the file and the
+     * group is its own, so the call is allowed, and an allowed call that moves
+     * a field clears the set-id bits. It has group-execute, so both go. */
+    want_eq("give a file its owner's group", syscall3(SYS_CHOWN32, (int)GIVEGRP, (int)KEEP, 1000),
+            0);
+    want_mode("a permitted group change kept the set-id bits", GIVEGRP, 0755);
+
+    /* And one it may not make: only a privileged caller changes the owner.
+     * The refusal must leave the mode alone, since a clear that runs before
+     * the permission check would disarm a file the caller could not chown. */
+    keep_times(REFUSED);
+    want_eq("give a file away as its unprivileged owner",
+            syscall3(SYS_CHOWN32, (int)REFUSED, 0, (int)KEEP), -EPERM);
+    want_mode("a refused chown took the set-id bits", REFUSED, 04755);
+    want_times_kept("a refused chown moved the times", REFUSED);
+
     syscall1(SYS_EXIT, 0);
 }
 
@@ -490,9 +574,36 @@ static void run_child(void (*body)(void), const char *what)
     }
 }
 
-void _start(void)
+/* The directory the fixtures are made in is the working directory, which the
+ * optional first argument sets. With no argument the probe works where it was
+ * started, which for the test runner is the root of the boot image; a suite
+ * that wants the same rows on another file system passes its mount point. */
+__asm__(".global _start\n"
+        "_start:\n"
+        "   mov %esp, %eax\n"
+        "   push %eax\n"
+        "   call probe_main\n");
+
+void probe_main(unsigned int *sp)
 {
+    int argc = (int)sp[0];
+    char **argv = (char **)(sp + 1);
     int fd;
+
+    if (argc > 1) {
+        want_eq("enter the directory named on the command line",
+                syscall3(SYS_CHDIR, (int)argv[1], 0, 0), 0);
+    }
+    /* The supplementary list is emptied here rather than required of the
+     * caller. A child that drops to uid 1000 with root's group 0 still in its
+     * list is in the group of a file owned 1000:0, and the kernel is then
+     * right to let it store setgid, so the escalation row would pass on a hole
+     * it cannot see. A login shell leaves that list holding the primary group,
+     * which is how this probe failed on a root login and passed under the test
+     * runner. */
+    if (syscall3(SYS_GETEUID32, 0, 0, 0) == 0) {
+        want_eq("empty the supplementary group list", syscall3(SYS_SETGROUPS32, 0, 0, 0), 0);
+    }
 
     /* The relocation pair, first and in this order. `creat` allocates a node
      * with no room for data, so /mp_grow is followed by the remainder of the
@@ -520,12 +631,21 @@ void _start(void)
     mint(SGIDX, 02755, FILL_BYTES, 1000, 1000);
     mint(SGIDNOX, 02645, FILL_BYTES, 1000, 1000);
     mint(PLAIN, 0755, FILL_BYTES, 1000, 1000);
+    mint(FCHOWNED, 04755, FILL_BYTES, 0, 0);
+    mint(FSGIDX, 02755, FILL_BYTES, 0, 0);
+    mint(FSGIDNOX, 02645, FILL_BYTES, 0, 0);
+    mint(FNOCHG, 04755, FILL_BYTES, 0, 0);
+    mint(GIVEGRP, 04755, FILL_BYTES, 1000, 0);
+    mint(REFUSED, 04755, FILL_BYTES, 1000, 1000);
 
     /* A directory is armed after it is made, and chowned after that, so the
      * chown below has a bit to take and visibly does not take it. */
     want_eq("mint the directory", syscall3(SYS_MKDIR, (int)DIRSUID, 0755, 0), 0);
     want_eq("arm the directory", syscall3(SYS_CHMOD, (int)DIRSUID, 04755, 0), 0);
     want_mode("the directory did not take its mode", DIRSUID, 04755);
+    want_eq("mint the descriptor's directory", syscall3(SYS_MKDIR, (int)FDIRSUID, 0755, 0), 0);
+    want_eq("arm the descriptor's directory", syscall3(SYS_CHMOD, (int)FDIRSUID, 04755, 0), 0);
+    want_mode("the descriptor's directory did not take its mode", FDIRSUID, 04755);
 
     /* Root's own half. The write exemption first: a privileged writer keeps the
      * bit, or every root process would disarm the programs it maintains. */
@@ -539,6 +659,33 @@ void _start(void)
     want_mode("a chown kept setuid", CHOWNED, 0755);
     want_eq("chown the directory away", syscall3(SYS_CHOWN32, (int)DIRSUID, 1000, 1000), 0);
     want_mode("a chown took a directory's setuid", DIRSUID, 04755);
+
+    /* The same four answers through the descriptor. One plan decides both, so
+     * a kernel that wired the rule into the pathname call alone passes every
+     * row above and fails these. */
+    fd = syscall3(SYS_OPEN, (int)FCHOWNED, O_WRONLY, 0);
+    want_ok("open the file to be chowned by descriptor", fd);
+    want_eq("fchown a setuid file away", syscall3(SYS_FCHOWN32, fd, 1000, 1000), 0);
+    want_eq("close the file chowned by descriptor", syscall3(SYS_CLOSE, fd, 0, 0), 0);
+    want_mode("an fchown kept setuid", FCHOWNED, 0755);
+
+    fd = syscall3(SYS_OPEN, (int)FDIRSUID, O_RDONLY | O_DIRECTORY, 0);
+    want_ok("open the directory to be chowned by descriptor", fd);
+    want_eq("fchown the directory away", syscall3(SYS_FCHOWN32, fd, 1000, 1000), 0);
+    want_eq("close the directory chowned by descriptor", syscall3(SYS_CLOSE, fd, 0, 0), 0);
+    want_mode("an fchown took a directory's setuid", FDIRSUID, 04755);
+
+    fd = syscall3(SYS_OPEN, (int)FSGIDX, O_WRONLY, 0);
+    want_ok("open the 02755 file", fd);
+    want_eq("fchown the 02755 file away", syscall3(SYS_FCHOWN32, fd, 1000, 1000), 0);
+    want_eq("close the 02755 file", syscall3(SYS_CLOSE, fd, 0, 0), 0);
+    want_mode("an fchown kept setgid with group-execute", FSGIDX, 0755);
+
+    fd = syscall3(SYS_OPEN, (int)FSGIDNOX, O_WRONLY, 0);
+    want_ok("open the 02645 file", fd);
+    want_eq("fchown the 02645 file away", syscall3(SYS_FCHOWN32, fd, 1000, 1000), 0);
+    want_eq("close the 02645 file", syscall3(SYS_CLOSE, fd, 0, 0), 0);
+    want_mode("an fchown took setgid without group-execute", FSGIDNOX, 02645);
 
     run_child(user_child, "the uid-1000 child");
 
@@ -565,7 +712,14 @@ void _start(void)
     want_eq("remove the 02645 file", syscall3(SYS_UNLINK, (int)SGIDNOX, 0, 0), 0);
     want_eq("remove the plain file", syscall3(SYS_UNLINK, (int)PLAIN, 0, 0), 0);
     want_eq("remove the helper copy", syscall3(SYS_UNLINK, (int)SGID0, 0, 0), 0);
+    want_eq("remove the file chowned by descriptor", syscall3(SYS_UNLINK, (int)FCHOWNED, 0, 0), 0);
+    want_eq("remove the descriptor's 02755 file", syscall3(SYS_UNLINK, (int)FSGIDX, 0, 0), 0);
+    want_eq("remove the descriptor's 02645 file", syscall3(SYS_UNLINK, (int)FSGIDNOX, 0, 0), 0);
+    want_eq("remove the descriptor's no-change file", syscall3(SYS_UNLINK, (int)FNOCHG, 0, 0), 0);
+    want_eq("remove the group-change file", syscall3(SYS_UNLINK, (int)GIVEGRP, 0, 0), 0);
+    want_eq("remove the refused file", syscall3(SYS_UNLINK, (int)REFUSED, 0, 0), 0);
     want_eq("remove the directory", syscall3(SYS_RMDIR, (int)DIRSUID, 0, 0), 0);
+    want_eq("remove the descriptor's directory", syscall3(SYS_RMDIR, (int)FDIRSUID, 0, 0), 0);
 
     puts_("MODEPROBE OK\n");
     syscall1(SYS_EXIT, 0);
