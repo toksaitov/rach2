@@ -211,10 +211,8 @@ static int do_poll(struct kernel_pollfd *fds, uint32_t nfds, int has_deadline, u
          * that advances the deadline). sti;hlt;cli is atomic from IF=0. */
         flags = irq_save();
         /* Stay on every queue across the halt: a waker that runs while this
-         * process is halted must be able to find it and make it READY. Leaving
-         * the queues first left the halt to be ended by any interrupt at all,
-         * which with a deadline armed meant the next timer tick, so a poller
-         * with a timeout was woken 100 times a second whatever arrived. */
+         * process is halted must be able to find it and make it READY. The
+         * removes come after, and are no-ops for a record already taken off. */
         if (current_proc->state == PROC_BLOCKED) {
             idle_wait_irq_off();
         }
@@ -393,8 +391,8 @@ int32_t sys_ppoll(struct isr_params *params)
 }
 
 /** Shared select() core over the three fd_sets. nfds is the highest fd + 1. */
-static int32_t select_common(int nfds, uint32_t ur, uint32_t uw, uint32_t ue,
-                             int has_deadline, uint32_t deadline)
+static int32_t select_common(int nfds, uint32_t ur, uint32_t uw, uint32_t ue, int has_deadline,
+                             uint32_t deadline)
 {
     struct kernel_pollfd *fds;
     uint32_t rset[FDSET_WORDS], wset[FDSET_WORDS], eset[FDSET_WORDS];
