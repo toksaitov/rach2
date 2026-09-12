@@ -245,18 +245,23 @@ void _start(void)
             if (d->d_ino == 0) {
                 fail("an entry came back with no inode");
             }
+            if (d->d_reclen == 0) {
+                fail("an entry came back with no length, which would not advance");
+            }
             /* A root with `.` and `..` on the disk returns them; they are not
-             * this directory's children and are not unlinked below. */
+             * this directory's children and are not unlinked below. Each must
+             * come back as a directory: a root that called one of them a
+             * regular file would otherwise be skipped here unjudged. */
             if (d->d_name[0] == '.' &&
                 (d->d_name[1] == '\0' || (d->d_name[1] == '.' && d->d_name[2] == '\0'))) {
+                if (d->d_type != DT_DIR) {
+                    fail("a dot entry came back as something other than a directory");
+                }
                 off += d->d_reclen;
                 continue;
             }
             if (d->d_type != DT_REG) {
                 fail("an entry came back with the wrong type");
-            }
-            if (d->d_reclen == 0) {
-                fail("an entry came back with no length, which would not advance");
             }
 
             while (dir[k]) {

@@ -9,6 +9,10 @@
  * directory SOURCE is -EPERM, the errno POSIX reserves for a rename the file
  * system cannot perform, while a directory DESTINATION under a plain source is
  * -EISDIR. A test that accepted any negative return could not tell them apart.
+ * A directory source is refused with -EPERM on KRFFS, whose children name
+ * their parent by id, and performed on ext2, which rewrites `..`; the probe
+ * reads the root's type from `/proc/mounts`, prints it, and fails the row on
+ * a root that is neither.
  *
  * Freestanding; direct int 0x80.
  */
@@ -138,12 +142,12 @@ static void puts(const char *s)
  * answers are right for their file system. */
 static int root_is_ext2(void)
 {
-    static char mounts[1024];
+    static char mounts[2048];
     int fd = sys_open("/proc/mounts", O_RDONLY);
     int n, i;
 
     if (fd < 0) {
-        return 0;
+        return -1;
     }
     __asm__ __volatile__("int $0x80"
                          : "=a"(n)
@@ -151,15 +155,28 @@ static int root_is_ext2(void)
                          : "memory");
     sys_close(fd);
     if (n <= 0) {
-        return 0;
+        return -1;
     }
     mounts[n] = 0;
-    for (i = 0; i + 8 < n; i++) {
+    /* Each line is "device mountpoint type options 0 0"; the root's is the one
+       whose mount point is a bare slash, and the field after it is the type,
+       which is matched whole. A type this probe does not know is -1, which
+       ends it: the answers below are one file system's or the other's. */
+    for (i = 0; i < n; i++) {
         if (mounts[i] == ' ' && mounts[i + 1] == '/' && mounts[i + 2] == ' ') {
-            return mounts[i + 3] == 'e' && mounts[i + 4] == 'x' && mounts[i + 5] == 't';
+            const char *t = &mounts[i + 3];
+
+            if (t[0] == 'e' && t[1] == 'x' && t[2] == 't' && t[3] == '2' && t[4] == ' ') {
+                return 1;
+            }
+            if (t[0] == 'k' && t[1] == 'r' && t[2] == 'f' && t[3] == 'f' && t[4] == 's' &&
+                t[5] == ' ') {
+                return 0;
+            }
+            return -1;
         }
     }
-    return 0;
+    return -1;
 }
 
 static void print(const char *s)
@@ -184,10 +201,18 @@ void _start(void)
 {
     int fd;
     int result;
+    int root = root_is_ext2();
     int passed = 0;
     int failed = 0;
 
     puts("Rename syscall test starting...");
+    if (root == 1) {
+        puts("mvtest: the root is ext2");
+    } else if (root == 0) {
+        puts("mvtest: the root is krffs");
+    } else {
+        puts("mvtest: the root is neither krffs nor ext2");
+    }
     puts("");
 
     /* Test 1: Create a test file */
@@ -266,11 +291,15 @@ void _start(void)
     /* Test 6b: what a directory's rename answers, which the file system under
      * the probe decides. On the boot root a directory's children reference its
      * id, so moving it would orphan them and KRFFS refuses with EPERM; ext2
-     * rewrites `..` and moves it, as Linux does. The probe reads which root it
-     * is on rather than assuming the image it was written for. */
-    print("Test 6b: rename(a directory, ...) as this root answers it... ");
-    if (sys_mkdir("mvtest.dir", 0755) == 0) {
-        int dir_rename_refused = !root_is_ext2();
+     * rewrites `..` and moves it, as Linux does. The type was read at the top
+     * and printed; a root that is neither fails this row rather than taking
+     * one of the two answers by default. */
+    print("Test 6b: rename of a directory, the answer this root owes... ");
+    if (root == -1) {
+        puts("FAILED (the root is neither krffs nor ext2)");
+        failed++;
+    } else if (sys_mkdir("mvtest.dir", 0755) == 0) {
+        int dir_rename_refused = !root;
 
         result = sys_rename("mvtest.dir", "mvtest.dir2");
         if (dir_rename_refused ? (result == -EPERM) : (result == 0)) {

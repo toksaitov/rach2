@@ -81,6 +81,7 @@ typedef unsigned int u32;
 #define SYS_FCHOWN32    207
 #define SYS_CHOWN32     212
 #define SYS_CHDIR       12
+#define SYS_NANOSLEEP   162
 #define SYS_SETGROUPS32 206
 #define SYS_GETEUID32   201
 
@@ -97,10 +98,14 @@ typedef unsigned int u32;
 /* i386 struct stat64: the 32-bit mode field is at offset 16, and the 64-bit
  * size at 44. Only the low word of the size is read; a KRFFS file cannot reach
  * 4 GB, so the high word is always zero. */
-#define ST_MODE  16
-#define ST_SIZE  44
-#define ST_MTIME 72
-#define ST_CTIME 80
+#define ST_MODE       16
+#define ST_SIZE       44
+#define ST_UID        24
+#define ST_GID        28
+#define ST_MTIME      72
+#define ST_MTIME_NSEC 76
+#define ST_CTIME      80
+#define ST_CTIME_NSEC 84
 
 #define EPERM 1
 
@@ -279,23 +284,54 @@ static void want_mode(const char *step, const char *path, u32 mode)
  * a chown that changes nothing changes nothing, and a status time that moved
  * is a write the kernel had no reason to make. */
 static u32 kept_mtime;
+static u32 kept_mtime_ns;
 static u32 kept_ctime;
+static u32 kept_ctime_ns;
+
+/* Wait until the clock has left the second the times were stamped in, so that
+ * a call which wrongly stores the time of day is caught: ext2 keeps whole
+ * seconds, and a store inside the same second would read back unchanged. */
+static void sleep_past_second(void)
+{
+    u32 ts[2];
+
+    ts[0] = 1;
+    ts[1] = 100000000u; /* 1.1 s */
+    syscall3(SYS_NANOSLEEP, (int)ts, 0, 0);
+}
 
 static void keep_times(const char *path)
 {
     stat_path(path);
     kept_mtime = *(u32 *)(statbuf + ST_MTIME);
+    kept_mtime_ns = *(u32 *)(statbuf + ST_MTIME_NSEC);
     kept_ctime = *(u32 *)(statbuf + ST_CTIME);
+    kept_ctime_ns = *(u32 *)(statbuf + ST_CTIME_NSEC);
+    sleep_past_second();
 }
 
 static void want_times_kept(const char *step, const char *path)
 {
     stat_path(path);
-    if (*(u32 *)(statbuf + ST_MTIME) != kept_mtime) {
-        fail(step, (int)*(u32 *)(statbuf + ST_MTIME));
-    }
-    if (*(u32 *)(statbuf + ST_CTIME) != kept_ctime) {
+    if (*(u32 *)(statbuf + ST_MTIME) != kept_mtime ||
+        *(u32 *)(statbuf + ST_MTIME_NSEC) != kept_mtime_ns ||
+        *(u32 *)(statbuf + ST_CTIME) != kept_ctime ||
+        *(u32 *)(statbuf + ST_CTIME_NSEC) != kept_ctime_ns) {
         fail(step, (int)*(u32 *)(statbuf + ST_CTIME));
+    }
+}
+
+/* The stored owner and group, which a chown row must assert as well as the
+ * mode: a path that stored only the mode would pass a row that reads the mode
+ * alone. */
+static void want_owner(const char *step, const char *path, u32 uid, u32 gid)
+{
+    stat_path(path);
+    if (*(u32 *)(statbuf + ST_UID) != uid) {
+        fail(step, (int)*(u32 *)(statbuf + ST_UID));
+    }
+    if (*(u32 *)(statbuf + ST_GID) != gid) {
+        fail(step, (int)*(u32 *)(statbuf + ST_GID));
     }
 }
 
@@ -478,6 +514,7 @@ static void user_child(void)
     want_eq("fchown(-1, -1) on a root-owned setuid file",
             syscall3(SYS_FCHOWN32, fd, (int)KEEP, (int)KEEP), 0);
     want_mode("a no-change fchown disarmed the file", FNOCHG, 04755);
+    want_owner("a no-change fchown moved the owner", FNOCHG, 0, 0);
     want_times_kept("a no-change fchown moved the times", FNOCHG);
     want_eq("fchown(0, 0) on a root-owned setuid file", syscall3(SYS_FCHOWN32, fd, 0, 0), 0);
     want_mode("naming the ids it already had, through a descriptor, disarmed the file", FNOCHG,
@@ -491,6 +528,7 @@ static void user_child(void)
     want_eq("give a file its owner's group", syscall3(SYS_CHOWN32, (int)GIVEGRP, (int)KEEP, 1000),
             0);
     want_mode("a permitted group change kept the set-id bits", GIVEGRP, 0755);
+    want_owner("a permitted group change did not store the group", GIVEGRP, 1000, 1000);
 
     /* And one it may not make: only a privileged caller changes the owner.
      * The refusal must leave the mode alone, since a clear that runs before
@@ -499,6 +537,7 @@ static void user_child(void)
     want_eq("give a file away as its unprivileged owner",
             syscall3(SYS_CHOWN32, (int)REFUSED, 0, (int)KEEP), -EPERM);
     want_mode("a refused chown took the set-id bits", REFUSED, 04755);
+    want_owner("a refused chown moved the owner", REFUSED, 1000, 1000);
     want_times_kept("a refused chown moved the times", REFUSED);
 
     syscall1(SYS_EXIT, 0);
@@ -635,7 +674,7 @@ void probe_main(unsigned int *sp)
     mint(FSGIDX, 02755, FILL_BYTES, 0, 0);
     mint(FSGIDNOX, 02645, FILL_BYTES, 0, 0);
     mint(FNOCHG, 04755, FILL_BYTES, 0, 0);
-    mint(GIVEGRP, 04755, FILL_BYTES, 1000, 0);
+    mint(GIVEGRP, 06755, FILL_BYTES, 1000, 0);
     mint(REFUSED, 04755, FILL_BYTES, 1000, 1000);
 
     /* A directory is armed after it is made, and chowned after that, so the
@@ -657,6 +696,7 @@ void probe_main(unsigned int *sp)
      * pair is the whole difference between the two rules. */
     want_eq("chown a setuid file away", syscall3(SYS_CHOWN32, (int)CHOWNED, 1000, 1000), 0);
     want_mode("a chown kept setuid", CHOWNED, 0755);
+    want_owner("a chown did not store the owner", CHOWNED, 1000, 1000);
     want_eq("chown the directory away", syscall3(SYS_CHOWN32, (int)DIRSUID, 1000, 1000), 0);
     want_mode("a chown took a directory's setuid", DIRSUID, 04755);
 
@@ -668,24 +708,30 @@ void probe_main(unsigned int *sp)
     want_eq("fchown a setuid file away", syscall3(SYS_FCHOWN32, fd, 1000, 1000), 0);
     want_eq("close the file chowned by descriptor", syscall3(SYS_CLOSE, fd, 0, 0), 0);
     want_mode("an fchown kept setuid", FCHOWNED, 0755);
+    want_owner("an fchown did not store the owner", FCHOWNED, 1000, 1000);
+    want_owner("an fchown did not store the owner", FCHOWNED, 1000, 1000);
+    want_owner("an fchown did not store the owner", FCHOWNED, 1000, 1000);
 
     fd = syscall3(SYS_OPEN, (int)FDIRSUID, O_RDONLY | O_DIRECTORY, 0);
     want_ok("open the directory to be chowned by descriptor", fd);
     want_eq("fchown the directory away", syscall3(SYS_FCHOWN32, fd, 1000, 1000), 0);
     want_eq("close the directory chowned by descriptor", syscall3(SYS_CLOSE, fd, 0, 0), 0);
     want_mode("an fchown took a directory's setuid", FDIRSUID, 04755);
+    want_owner("an fchown did not store a directory's owner", FDIRSUID, 1000, 1000);
 
     fd = syscall3(SYS_OPEN, (int)FSGIDX, O_WRONLY, 0);
     want_ok("open the 02755 file", fd);
     want_eq("fchown the 02755 file away", syscall3(SYS_FCHOWN32, fd, 1000, 1000), 0);
     want_eq("close the 02755 file", syscall3(SYS_CLOSE, fd, 0, 0), 0);
     want_mode("an fchown kept setgid with group-execute", FSGIDX, 0755);
+    want_owner("an fchown did not store the 02755 file's owner", FSGIDX, 1000, 1000);
 
     fd = syscall3(SYS_OPEN, (int)FSGIDNOX, O_WRONLY, 0);
     want_ok("open the 02645 file", fd);
     want_eq("fchown the 02645 file away", syscall3(SYS_FCHOWN32, fd, 1000, 1000), 0);
     want_eq("close the 02645 file", syscall3(SYS_CLOSE, fd, 0, 0), 0);
     want_mode("an fchown took setgid without group-execute", FSGIDNOX, 02645);
+    want_owner("an fchown did not store the 02645 file's owner", FSGIDNOX, 1000, 1000);
 
     run_child(user_child, "the uid-1000 child");
 

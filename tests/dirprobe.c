@@ -1,5 +1,10 @@
 /**
- * Exercises hierarchical KRFFS directories from user space.
+ * Exercises hierarchical directories from user space, on the root it is run on.
+ *
+ * One row depends on the file system: KRFFS does not store `.` and `..` and
+ * does not synthesize them in a directory read, and ext2 has them on the disk
+ * and returns them, as Linux does. The probe reads the root's type from
+ * `/proc/mounts`, prints it, and refuses to judge a root that is neither.
  *
  * Makes a directory, creates and writes a file inside it, and reads it back;
  * rejects a duplicate mkdir and a create in a missing directory; refuses rmdir
@@ -128,14 +133,22 @@ static void puts(const char *s)
 
 static int fails = 0;
 
-/* Whether the root the probe is running on synthesizes `.` and `..` in a
- * directory read. KRFFS does not, and says so in `sys/fs/Readme.md`; ext2
- * has them on the disk and returns them, as Linux does. A row that counts a
- * directory's entries has to know which root it is on, or it judges the
- * image it was written for and nothing else. */
-static int root_has_dot_entries(void)
+/**
+ * The root's file system type, read from `/proc/mounts`: 1 for KRFFS, 2 for
+ * ext2.
+ *
+ * The two owe different answers for a directory's entries, so a probe that
+ * could not read the type would judge whichever image it was written for.
+ * Anything this cannot read, or a type it does not know, ends the probe.
+ */
+#define DT_DIR 4
+
+#define ROOT_KRFFS 1
+#define ROOT_EXT2  2
+
+static int root_type(void)
 {
-    static char mounts[1024];
+    static char mounts[2048];
     int fd = syscall3(SYS_OPEN, (int)(size_t)"/proc/mounts", O_RDONLY, 0);
     int n, i;
 
@@ -148,10 +161,20 @@ static int root_has_dot_entries(void)
         return 0;
     }
     mounts[n] = 0;
-    /* The root's line is the one whose mount point is a bare slash. */
-    for (i = 0; i + 8 < n; i++) {
+    /* Each line is "device mountpoint type options 0 0"; the root's is the one
+       whose mount point is a bare slash, and the field after it is the type. */
+    for (i = 0; i < n; i++) {
         if (mounts[i] == ' ' && mounts[i + 1] == '/' && mounts[i + 2] == ' ') {
-            return !(mounts[i + 3] == 'k' && mounts[i + 4] == 'r' && mounts[i + 5] == 'f');
+            const char *t = &mounts[i + 3];
+
+            if (t[0] == 'k' && t[1] == 'r' && t[2] == 'f' && t[3] == 'f' && t[4] == 's' &&
+                t[5] == ' ') {
+                return ROOT_KRFFS;
+            }
+            if (t[0] == 'e' && t[1] == 'x' && t[2] == 't' && t[3] == '2' && t[4] == ' ') {
+                return ROOT_EXT2;
+            }
+            return 0;
         }
     }
     return 0;
@@ -169,7 +192,17 @@ static void check(int cond, const char *msg)
 void _start(void)
 {
     int fd;
+    int root = root_type();
     char buf[8];
+
+    /* The root's type decides one row below, and a root this probe does not
+       know is not one it can judge. */
+    check(root == ROOT_KRFFS || root == ROOT_EXT2, "the root's type is krffs or ext2");
+    if (root == ROOT_EXT2) {
+        puts("dirprobe: the root is ext2");
+    } else if (root == ROOT_KRFFS) {
+        puts("dirprobe: the root is krffs");
+    }
 
     /* 1. Create a directory; a second mkdir of the same name must fail. */
     check(syscall2(SYS_MKDIR, (int)(size_t)"/d", 0755) == 0, "mkdir /d");
@@ -221,28 +254,37 @@ void _start(void)
         char dbuf[256];
         int n = syscall3(SYS_GETDENTS64, fd, (int)(size_t)dbuf, (int)sizeof dbuf);
         int off = 0, count = 0, saw_a = 0, saw_b = 0;
+        int saw_dot = 0, saw_dotdot = 0, other = 0;
 
         while (off + 19 < n) {
             unsigned short reclen = *(unsigned short *)(dbuf + off + 16);
+            unsigned char type = (unsigned char)dbuf[off + 18];
             const char *nm = dbuf + off + 19;
 
-            if (nm[0] == 'a' && nm[1] == '\0') {
-                saw_a = 1;
+            if (reclen < 20 || off + reclen > n) {
+                break; /* a record that runs past what was read */
             }
-            if (nm[0] == 'b' && nm[1] == '\0') {
-                saw_b = 1;
+            if (nm[0] == 'a' && nm[1] == '\0') {
+                saw_a++;
+            } else if (nm[0] == 'b' && nm[1] == '\0') {
+                saw_b++;
+            } else if (nm[0] == '.' && nm[1] == '\0' && type == DT_DIR) {
+                saw_dot++;
+            } else if (nm[0] == '.' && nm[1] == '.' && nm[2] == '\0' && type == DT_DIR) {
+                saw_dotdot++;
+            } else {
+                other++;
             }
             count++;
-            if (reclen == 0) {
-                break;
-            }
             off += reclen;
         }
-        if (root_has_dot_entries()) {
-            check(count == 4 && saw_a && saw_b,
-                  "getdents /e lists a and b beside the two dot entries this root has");
+        if (root == ROOT_EXT2) {
+            check(count == 4 && saw_a == 1 && saw_b == 1 && saw_dot == 1 && saw_dotdot == 1 &&
+                      other == 0,
+                  "getdents /e on ext2 lists a, b and one each of . and ..");
         } else {
-            check(count == 2 && saw_a && saw_b, "getdents /e lists exactly a and b");
+            check(count == 2 && saw_a == 1 && saw_b == 1 && other == 0,
+                  "getdents /e on the boot root lists exactly a and b");
         }
         syscall1(SYS_CLOSE, fd);
     }

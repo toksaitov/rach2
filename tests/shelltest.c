@@ -111,6 +111,10 @@ static void print_num(int n)
  *
  * The parent forks; the child exec's `hello`; the parent waits and verifies the
  * child exited with status 0.
+ *
+ * The program it execs is staged at the image's root and is named by a path
+ * rather than by a bare word, so a run whose working directory is not the
+ * root fails on what the kernel did and not on where it was started.
  */
 void _start(void)
 {
@@ -119,10 +123,6 @@ void _start(void)
     int child_pid;
     int exec_result;
 
-    /* The program this execs is staged beside this one, so it is named by a
-     * path and not by a bare word: a run whose working directory is not the
-     * one the image stages into would otherwise fail on where it ran rather
-     * than on what the kernel did. */
     const char *program = "/hello";
     char *const argv[] = {"/hello", (char *)0};
     char *const envp[] = {(char *)0};
