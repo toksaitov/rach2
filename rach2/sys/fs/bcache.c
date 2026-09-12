@@ -425,7 +425,7 @@ static int write_run(struct bbuf *first, uint64_t *last)
         most = RUN_BLOCKS;
     }
     if (!run_stage && most > 1 && !run_stage_busy) {
-        run_stage = kalloc_pages(RUN_BLOCKS * BCACHE_BLOCK_BYTES / PAGE_SIZE, 0);
+        run_stage = kalloc_pages_try(RUN_BLOCKS * BCACHE_BLOCK_BYTES / PAGE_SIZE, 0);
     }
     if (run_stage_busy) {
         most = 1;
@@ -722,7 +722,7 @@ static int fill_run(block_device_t *dev, uint64_t blk)
         return 0;
     }
     if (!run_stage) {
-        run_stage = kalloc_pages(RUN_BLOCKS * BCACHE_BLOCK_BYTES / PAGE_SIZE, 0);
+        run_stage = kalloc_pages_try(RUN_BLOCKS * BCACHE_BLOCK_BYTES / PAGE_SIZE, 0);
         if (!run_stage) {
             return 0;
         }

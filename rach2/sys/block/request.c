@@ -256,7 +256,7 @@ static struct block_request *req_new(uint32_t count)
         r->page = (uint8_t *)alloc_kernel_frame();
         pages = 1;
     } else {
-        r->page = kalloc_pages(pages, 0);
+        r->page = kalloc_pages_try(pages, 0); /* the caller halves and asks again */
     }
     if (!r->page) {
         kfree(r);
@@ -338,9 +338,8 @@ static struct block_request *req_take(block_device_t *device, int write, uint64_
             if (!r) {
                 irq_restore(flags);
                 if (why) {
-                    *why = -ENOMEM;
+                    *why = -ENOMEM; /* the caller asks again at half the size */
                 }
-                klog(KLOG_WARN, "block", "request: no memory for %u sectors", (unsigned)count);
                 return NULL;
             }
         }

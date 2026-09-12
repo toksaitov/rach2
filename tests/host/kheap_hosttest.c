@@ -12,10 +12,28 @@
 
 extern int printf(const char *fmt, ...);
 
+/* The kernel's integer types, with the pointer-sized one the host's width,
+   so that a pointer into the region below survives the round trip through
+   it: the region is a static array here, which `kmalloc` writes its headers
+   into, and the kernel's 32-bit type would cut its address. */
+#define _KINT_H_
+typedef signed char int8_t;
+typedef unsigned char uint8_t;
+typedef signed short int16_t;
+typedef unsigned short uint16_t;
+typedef signed int int32_t;
+typedef unsigned int uint32_t;
+typedef signed long long int64_t;
+typedef unsigned long long uint64_t;
+typedef unsigned long uintptr_t;
+
 #include "../../rach2/sys/lib/kerrno.h"
 #include "../../rach2/sys/mm/paging.h"
 #undef KVA_HEAP_SIZE
 #define KVA_HEAP_SIZE (32u * 1024u * 1024u)
+static unsigned char heap_mem[KVA_HEAP_SIZE] __attribute__((aligned(4096)));
+#undef KVA_HEAP
+#define KVA_HEAP ((uintptr_t)heap_mem)
 
 /* The frames: a counter of those out, and a limit past which none is
    given, for the row about a shortage inside a run. */
@@ -62,11 +80,14 @@ void unmap_kernel_frame(uintptr_t va)
     unmaps++;
 }
 
+static unsigned klogs;
+
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     (void)level;
     (void)subsystem;
     (void)format;
+    klogs++;
 }
 
 #include "../../rach2/sys/mm/kheap.c"
@@ -87,7 +108,7 @@ static int fails;
 
 static void *singles[REGION_PAGES];
 
-/* Take single pages until the heap refuses; the count taken. */
+/* Take single pages until `kalloc_pages` returns NULL; the count taken. */
 static unsigned take_singles(void)
 {
     unsigned n = 0;
@@ -142,8 +163,16 @@ int main(void)
         runs[k] = kalloc_pages(KHEAP_RUN_PAGES, 0);
     }
     for (k = 0; k < KHEAP_RUNS; k++) {
+        unsigned j;
+
         CHECK(runs[k] != 0, "a run of 256 pages comes from the reserve beside the scatter");
         CHECK(runs[k] == 0 || (uintptr_t)runs[k] >= RESERVE_BASE, "and lies in the reserve");
+        for (j = 0; j < k; j++) {
+            uintptr_t a = (uintptr_t)runs[k], b = (uintptr_t)runs[j];
+
+            CHECK(a >= b + KHEAP_RUN_PAGES * PAGE_SIZE || b >= a + KHEAP_RUN_PAGES * PAGE_SIZE,
+                  "and apart from every other run");
+        }
     }
     CHECK(runs[KHEAP_RUNS] == 0, "the seventeenth run is refused");
     kfree_pages(runs[3], KHEAP_RUN_PAGES);
@@ -160,6 +189,40 @@ int main(void)
           "single pages still do not enter the reserve after its runs came back");
     give_singles(n);
     CHECK(frames_out == 0, "and every frame went back after the scatter");
+
+    /* A large object of `kmalloc` beside the scatter comes from the reserve
+       too, and its `kfree` gives the run back and keeps the reserve closed:
+       the two ways pages leave the heap agree. */
+    kheap_init();
+    n = take_singles();
+    for (i = 0; i < n; i += 2) {
+        kfree_pages(singles[i], 1);
+        singles[i] = 0;
+    }
+    {
+        void *big = kmalloc(KHEAP_RUN_LEAST * PAGE_SIZE);
+
+        CHECK(big != 0 && (uintptr_t)big >= RESERVE_BASE,
+              "a large object beside the scatter comes from the reserve");
+        CHECK(run_bits != 0, "taking a run");
+        kfree(big);
+        CHECK(run_bits == 0, "and its free gives the run back");
+        for (i = 0; i < n; i += 2) {
+            singles[i] = kalloc_pages(1, 0);
+        }
+        CHECK(kalloc_pages(1, 0) == 0, "with the reserve still closed to single pages");
+    }
+    give_singles(n);
+    CHECK(frames_out == 0, "and every frame went back after the large object");
+
+    /* A refusal is logged by `kalloc_pages` and not by `kalloc_pages_try`,
+       whose callers go on with less. */
+    kheap_init();
+    n = take_singles();
+    klogs = 0;
+    CHECK(kalloc_pages(1, 0) == 0 && klogs == 1, "a refusal is logged once");
+    CHECK(kalloc_pages_try(1, 0) == 0 && klogs == 1, "and not by the quiet form");
+    give_singles(n);
 
     /* With room below the reserve, a large run is taken there and the
        reserve stays whole. */

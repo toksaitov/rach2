@@ -50,6 +50,13 @@ void kfree(void *p);
  */
 void *kalloc_pages(uint32_t count, uintptr_t *phys);
 
+/**
+ * As `kalloc_pages`, but a refusal is not logged: for a caller that goes
+ * on with a smaller size or a buffer of its own, so that a size the heap
+ * cannot give at the moment is not an error in the log.
+ */
+void *kalloc_pages_try(uint32_t count, uintptr_t *phys);
+
 /** Give back what `kalloc_pages` returned. */
 void kfree_pages(void *p, uint32_t count);
 

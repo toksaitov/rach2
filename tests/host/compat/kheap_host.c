@@ -34,6 +34,11 @@ void *kalloc_pages(uint32_t count, uintptr_t *phys)
     return count ? malloc(4096ul * count) : NULL;
 }
 
+void *kalloc_pages_try(uint32_t count, uintptr_t *phys)
+{
+    return kalloc_pages(count, phys);
+}
+
 void kfree_pages(void *p, uint32_t count)
 {
     (void)count;

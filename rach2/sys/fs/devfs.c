@@ -264,7 +264,7 @@ static uint8_t *raw_batch_take(uint32_t *sectors, uint32_t want, block_device_t 
         n = 1;
     }
     if (raw_batches_out < RAW_BATCH_POOL) {
-        batch = kalloc_pages((n * BLOCK_SECTOR_SIZE + PAGE_SIZE - 1) / PAGE_SIZE, 0);
+        batch = kalloc_pages_try((n * BLOCK_SECTOR_SIZE + PAGE_SIZE - 1) / PAGE_SIZE, 0);
     }
     if (batch) {
         raw_batches_out++;

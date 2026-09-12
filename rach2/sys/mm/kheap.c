@@ -27,12 +27,13 @@ static const uint32_t class_size[KHEAP_CLASSES] = {16, 32, 64, 128, 256, 512, 10
 /* The reserve of runs for large allocations, at the top of the region:
  * KHEAP_RUNS runs of KHEAP_RUN_PAGES pages that the ordinary search never
  * enters, so that a region whose free pages the cache has scattered can
- * still give a run of a megabyte, which is what a raw batch and a request
- * of the largest size ask for. The reserve costs no frame until a run is
- * taken, since a page is mapped only when it is allocated; a run is taken
- * only for an allocation of KHEAP_RUN_LEAST pages or more that the rest of
- * the region cannot give, so a small allocation never spends a run, and it
- * is given back when its pages are freed. */
+ * still give a run of a megabyte, the size of a raw batch and of a request
+ * of the largest size. The reserve costs no frame until a run is taken,
+ * since a page is mapped only when it is allocated; a run is taken only for
+ * an allocation of KHEAP_RUN_LEAST pages or more that the rest of the
+ * region cannot give, so a small allocation never uses a run, and it is
+ * given back when its pages are freed, by `kfree_pages` or by `kfree` of a
+ * large object, both of which go through `release_run`. */
 #define KHEAP_RUN_PAGES     256u
 #define KHEAP_RUNS          16u
 #define KHEAP_RUN_LEAST     64u
@@ -192,17 +193,23 @@ static void reserve_close(uint32_t page, uint32_t count, int release)
     }
 }
 
-void *kalloc_pages(uint32_t count, uintptr_t *phys)
+/* Interrupts off. Unmap a run and, when it lies in the reserve, give the
+ * run back: the one way pages leave the heap, whoever allocated them. */
+static void release_run(uint32_t page, uint32_t count)
 {
-    uint32_t flags = irq_save();
-    uint32_t page;
-    void *va;
-
-    if (count == 0 || count > KHEAP_PAGES) {
-        irq_restore(flags);
-        return NULL;
+    unmap_run(page, count);
+    if (page >= KHEAP_RESERVE_FIRST) {
+        reserve_close(page, count, 1);
     }
-    page = find_run(count);
+}
+
+/* Interrupts off. `count` pages from the ordinary region or, for a run of
+ * KHEAP_RUN_LEAST or more, from the reserve; KHEAP_PAGES when neither has
+ * them or the frames ran out. */
+static uint32_t take_pages(uint32_t count)
+{
+    uint32_t page = find_run(count);
+
     if (page >= KHEAP_PAGES && count >= KHEAP_RUN_LEAST) {
         page = reserve_take(count);
         if (page < KHEAP_PAGES && map_run(page, count) != 0) {
@@ -212,9 +219,28 @@ void *kalloc_pages(uint32_t count, uintptr_t *phys)
     } else if (page < KHEAP_PAGES && map_run(page, count) != 0) {
         page = KHEAP_PAGES;
     }
+    return page;
+}
+
+/* `count` pages as kalloc_pages gives them; `quiet` leaves a refusal out of
+ * the log, for a caller that has a smaller size or a static buffer to go
+ * on with. */
+static void *pages_or_null(uint32_t count, uintptr_t *phys, int quiet)
+{
+    uint32_t flags = irq_save();
+    uint32_t page;
+    void *va;
+
+    if (count == 0 || count > KHEAP_PAGES) {
+        irq_restore(flags);
+        return NULL;
+    }
+    page = take_pages(count);
     if (page >= KHEAP_PAGES) {
         irq_restore(flags);
-        klog(KLOG_ERR, "kheap", "%d pages: no room or no frame", (int)count);
+        if (!quiet) {
+            klog(KLOG_ERR, "kheap", "%d pages: no room or no frame", (int)count);
+        }
         return NULL;
     }
     va = (void *)(KVA_HEAP + page * PAGE_SIZE);
@@ -223,6 +249,16 @@ void *kalloc_pages(uint32_t count, uintptr_t *phys)
     }
     irq_restore(flags);
     return va;
+}
+
+void *kalloc_pages(uint32_t count, uintptr_t *phys)
+{
+    return pages_or_null(count, phys, 0);
+}
+
+void *kalloc_pages_try(uint32_t count, uintptr_t *phys)
+{
+    return pages_or_null(count, phys, 1);
 }
 
 void kfree_pages(void *p, uint32_t count)
@@ -235,10 +271,7 @@ void kfree_pages(void *p, uint32_t count)
         return;
     }
     flags = irq_save();
-    unmap_run((va - KVA_HEAP) / PAGE_SIZE, count);
-    if ((va - KVA_HEAP) / PAGE_SIZE >= KHEAP_RESERVE_FIRST) {
-        reserve_close((va - KVA_HEAP) / PAGE_SIZE, count, 1);
-    }
+    release_run((va - KVA_HEAP) / PAGE_SIZE, count);
     irq_restore(flags);
 }
 
@@ -362,7 +395,7 @@ void kfree(void *p)
 
         bytes_used -= hdr->used;
         hdr->magic = 0;
-        unmap_run(((uintptr_t)hdr - KVA_HEAP) / PAGE_SIZE, count);
+        release_run(((uintptr_t)hdr - KVA_HEAP) / PAGE_SIZE, count);
         irq_restore(flags);
         return;
     }
@@ -378,7 +411,7 @@ void kfree(void *p)
     if (hdr->used == 0) {
         drop_class_page((uint8_t *)hdr, hdr->cls);
         hdr->magic = 0;
-        unmap_run(((uintptr_t)hdr - KVA_HEAP) / PAGE_SIZE, 1);
+        release_run(((uintptr_t)hdr - KVA_HEAP) / PAGE_SIZE, 1);
     }
     irq_restore(flags);
 }
