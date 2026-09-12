@@ -47,6 +47,7 @@ static struct {
     int write_fails_after;   /* -1 never; otherwise the write that fails */
     int writes_done;
     unsigned long largest_write;
+    unsigned long write_sizes[8]; /* the first writes, in order */
 } m;
 
 static long m_read(void *ctx, unsigned char *buf, unsigned long n)
@@ -91,6 +92,9 @@ static long m_write(void *ctx, const unsigned char *buf, unsigned long n)
     }
     if (n > m.largest_write) {
         m.largest_write = n;
+    }
+    if (m.writes_done <= 8) {
+        m.write_sizes[m.writes_done - 1] = n;
     }
     memcpy(m.device + m.device_pos, buf, n);
     m.device_pos += n;
@@ -275,6 +279,9 @@ static void check_copy(void)
           "a large image copies");
     CHECK(m.largest_write == 2048 * SECTORCOPY_SECTOR,
           "and goes to the device a mebibyte at a time, gathered from smaller reads");
+    CHECK(m.writes_done == 3 && m.write_sizes[0] == 2048 * SECTORCOPY_SECTOR &&
+              m.write_sizes[1] == 2048 * SECTORCOPY_SECTOR && m.write_sizes[2] == 32 * 1024,
+          "in exactly three writes: a mebibyte, a mebibyte and the 32 KiB left");
     CHECK(memcmp(m.device, m.source, 2 * 1024 * 1024 + 32 * 1024) == 0, "byte for byte");
 
     /* The last read, the one that establishes the stream ended where it said.

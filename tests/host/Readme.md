@@ -111,4 +111,4 @@ The suite contains 51 native test programs.
 * `mkhash_hosttest.c` checks the vendored musl SHA-512 crypt against published vectors and rejects a malformed setting.
 * `pwauth_hosttest.c` checks password comparison, salt-byte mapping, credential-file replacement, locking, flush failures, fork and exit cleanup, signal state, and terminal teardown.
 * `pwauthatexit_hosttest.c` checks that a transaction fails and leaves no lock when the library cannot register both exit handlers.
-* `sectorcopy_hosttest.c` checks decimal size parsing, 64-bit disk bounds, whole-sector streaming, short and long input, partial I/O, errors, and 64-sector write batches.
+* `sectorcopy_hosttest.c` checks decimal size parsing, 64-bit disk bounds, whole-sector streaming, short and long input, partial I/O, errors, and the 2048-sector write batches, exactly three of 1 MiB, 1 MiB and 32 KiB for a 2 MiB + 32 KiB image.

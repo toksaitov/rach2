@@ -396,9 +396,9 @@ void _start(void)
         check(syscall2(SYS_MUNMAP, (int)(m + 4096), 4096) == 0, "with its second page unmapped");
         check(do_pipe(p) == 0, "pipe() for the fault test");
         /* A pattern with no period of 2048, so the second half cannot pass
-           as the first read again. */
+           as the first read again: the byte's 128-byte block enters it. */
         for (i = 0; i < 4096; i++) {
-            big[i] = (char)((i * 7 + 3) & 0x7f);
+            big[i] = (char)(((i * 7 + 3) ^ (i >> 7)) & 0x7f);
         }
         check(wr(p[1], big, 4096) == 4096, "a page of bytes written");
         got = rd(p[0], first + 2048, 4096);
@@ -480,7 +480,7 @@ void _start(void)
         check(do_pipe(p) == 0, "pipe() for the alignment sweep");
         for (len = 1; len <= 67 && bad == 0; len++) {
             for (sa = 0; sa < 4 && bad == 0; sa++) {
-                for (da = 0; da < 4 && bad == 0; da++) {
+                for (da = 1; da <= 4 && bad == 0; da++) {
                     for (i = 0; i < 80; i++) {
                         got[i] = (char)0x5a;
                     }
@@ -490,8 +490,7 @@ void _start(void)
                         bad = 2;
                     } else if (!eqn(got + da, pat + sa, len)) {
                         bad = 3;
-                    } else if (got[da + len] != (char)0x5a ||
-                               (da > 0 && got[da - 1] != (char)0x5a)) {
+                    } else if (got[da + len] != (char)0x5a || got[da - 1] != (char)0x5a) {
                         bad = 4;
                     }
                 }

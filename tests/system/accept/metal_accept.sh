@@ -207,9 +207,9 @@ else
         # The baseline describes ONE drive. Against that drive every number
         # must agree, and a disagreement is the finding this script exists for.
         # Against any other drive, including the one QEMU provides when this
-        # script is rehearsed, there is nothing to compare and saying so is the
-        # honest answer; a script that failed there would be a script nobody
-        # could rehearse.
+        # script is rehearsed, there is nothing to compare, and the note says
+        # so; a script that failed there would be a script nobody could
+        # rehearse.
         if [ "$model" = "$BASELINE_MODEL" ]; then
             note "disk: this is the drive the baseline describes; comparing"
             [ "$sectors" = "$BASELINE_SECTORS" ] \
@@ -296,7 +296,7 @@ else
     # here is the failure and there is no zero to test for.
     case "$timer" in
         ''|*[!0-9]*) bad "the timer's vector has no line, so the 8259's interrupts are not arriving" ;;
-        *) note "interrupts: the timer has taken $timer, so the 8259's road is open" ;;
+        *) note "interrupts: the timer has taken $timer, so the 8259's interrupts arrive" ;;
     esac
     note "interrupts: usb vector ${usb_vector:-none}, audio vector ${audio_vector:-none}"
     note "interrupts: spurious ${spurious:-none}, usb fallback ${fallback:-none}"
@@ -409,7 +409,7 @@ else
                 if [ "$count" = "0" ]; then
                     bad "partitions: the shell counted nothing while the read slept through the lag"
                 elif [ "$ticks" -lt $((16 * LAGN)) ]; then
-                    bad "partitions: the 64 KiB read took $ticks ticks, under the $((16 * LAGN)) the lag of $LAGN owes"
+                    bad "partitions: the 64 KiB read took $ticks ticks, under the $((16 * LAGN)) the lag of $LAGN requires"
                 else
                     note "partitions: the shell counted to $count while a 64 KiB read slept $ticks ticks through the lag of $LAGN"
                 fi
@@ -565,6 +565,7 @@ fi
 #      could carry. ----
 USBLINES="$(run 'cat /proc/usb 2>/dev/null' | grep '^disk[0-9]* ' || true)"
 STICK=""
+STICK_DUP=""
 USBLINE=""
 if [ -z "$USBLINES" ]; then
     note "no flash drive is plugged in (/proc/usb names no usb disk)"
@@ -582,8 +583,14 @@ else
             note "stick: /dev/$cand ($serial) is not the stick named, $STICK_SERIAL, and is not written"
             continue
         fi
+        if [ -n "$STICK_DUP" ]; then
+            continue
+        fi
         if [ -n "$STICK" ] && [ -n "$STICK_SERIAL" ]; then
             bad "stick: /dev/$cand and /dev/$STICK both report the serial $STICK_SERIAL; neither is written"
+            STICK=""
+            STICK_DUP=1
+            continue
         fi
         if [ -n "$STICK" ]; then
             note "stick: /dev/$cand ($serial) is a second stick that could be written; the first is"

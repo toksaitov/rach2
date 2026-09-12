@@ -85,11 +85,17 @@ boot_driven() {
     drive_feed "$QPID"
 }
 
+# The logs are removed only after a pass: a failed row leaves them for the
+# reader, since the failure's explanation is in them.
 # shellcheck disable=SC2086
 cleanup() {
     stop
-    rm -f $LOGS
+    if [ -n "$PASSED" ]; then
+        rm -f $LOGS
+    fi
 }
+PASSED=""
+
 
 trap 'cleanup' EXIT
 trap 'cleanup; exit 130' INT
@@ -486,4 +492,5 @@ if [ "$intr" -lt "$vector_sum" ]; then
     exit 1
 fi
 echo "procfiles-test: /proc/stat counts at least what the vectors' lines add up to ($intr against $vector_sum): OK"
+PASSED=1
 echo "procfiles-test: PASS"

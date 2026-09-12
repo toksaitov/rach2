@@ -386,18 +386,18 @@ void probe_main(unsigned int *sp);
 /* `ahciprobe late`: the throttled disk's ext2 partition mounted for
    writing, under a deadline period shorter than one of its requests, which
    the row sets with `rach2.blockdeadline=1` against a disk of 512 KiB a
-   second. The cache reads runs of 1 MiB, and ext2 keeps a write's blocks
-   dirty and writes them back in runs at the end of the call; a request of
-   1 MiB takes two seconds: it passes its deadline and is answered after
-   it. The answer must be
-   taken: the write succeeds, the file reads back whole, and the mount is
-   still writable. FAT32 would not do: it writes each block through as it
-   is written, and a 4 KiB request is under the deadline. The file is
-   written in one call, so it is one batch of ext2's and its blocks go back
-   in runs; a call per block would end a batch per block and write each
-   block, its bitmap and its inode in requests of 4 KiB, all under the
-   deadline. */
-#define LATE_BYTES (128 * 1024)
+   second. ext2 keeps a write's blocks dirty and writes them back in runs
+   at the end of the call, a run being at most a request of 1 MiB; the
+   file is longer than one, so its first run is a request of 1 MiB, which
+   takes two seconds: it passes its deadline and is answered after it. The
+   answer must be taken: the write succeeds, the file reads back whole, and
+   the mount is still writable. FAT32 would not do: it writes each block
+   through as it is written, and a 4 KiB request is under the deadline.
+   The file is written in one call, so it is one batch of ext2's and its
+   blocks go back in runs; a call per block would end a batch per block
+   and write each block, its bitmap and its inode in requests of 4 KiB,
+   all under the deadline. */
+#define LATE_BYTES (1280 * 1024)
 
 static void late_row(void)
 {

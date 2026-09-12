@@ -155,6 +155,10 @@ static char statbuf[96];
 static char fstatbuf[96];
 static char sector[SECTOR];
 static char big[200 * SECTOR];
+/* More than one batch of 2048 sectors: a read or write of this many is two
+   driver calls, and the bytes at the boundary between them are checked. */
+#define PAST_SECTORS 2100
+static char past[PAST_SECTORS * SECTOR];
 
 /**
  * The high and low halves `_llseek` takes its offset in.
@@ -355,6 +359,52 @@ static void auth_case(int recovery)
         check(cmd_after - cmd_before == 2,
               "and two disk commands, the write and its flush, not four hundred");
         check(flush_after - flush_before == 1, "and exactly one cache flush, not two hundred");
+    }
+
+    /* A transfer longer than one batch: two driver calls, two commands
+       with their two flushes, and the bytes on both sides of the boundary
+       between the calls are the ones written. */
+    rc = syscall5(SYS_LLSEEK, fd, off_hi(at), off_lo(at), (int)(size_t)&pos, SEEK_SET);
+    check(rc == 0, "seek back for a transfer past one batch");
+    {
+        unsigned long long before = 0, after = 0, cmd_before = 0, cmd_after = 0;
+        unsigned long long flush_before = 0, flush_after = 0;
+        long i;
+        int ok = 1;
+
+        for (i = 0; i < PAST_SECTORS * SECTOR; i++) {
+            past[i] = (char)((i / SECTOR) * 13 + (i % SECTOR) * 7 + 1);
+        }
+        (void)proc_disk_field("raw-driver-calls ", &before);
+        (void)proc_disk_field("disk-commands ", &cmd_before);
+        (void)proc_disk_field("disk-flushes ", &flush_before);
+        n = syscall3(SYS_WRITE, fd, (int)(size_t)past, PAST_SECTORS * SECTOR);
+        check(n == PAST_SECTORS * SECTOR, "a 2100-sector write is taken whole");
+        check(proc_disk_field("raw-driver-calls ", &after) && after - before == 2,
+              "and took two driver calls, a batch of 2048 and one of 52");
+        check(proc_disk_field("disk-commands ", &cmd_after) && cmd_after - cmd_before == 4,
+              "and four disk commands, two writes and their two flushes");
+        check(proc_disk_field("disk-flushes ", &flush_after) && flush_after - flush_before == 2,
+              "and two cache flushes, one per batch");
+        rc = syscall5(SYS_LLSEEK, fd, off_hi(at), off_lo(at), (int)(size_t)&pos, SEEK_SET);
+        check(rc == 0, "seek back to read it");
+        for (i = 0; i < PAST_SECTORS * SECTOR; i++) {
+            past[i] = 0;
+        }
+        (void)proc_disk_field("raw-driver-calls ", &before);
+        n = syscall3(SYS_READ, fd, (int)(size_t)past, PAST_SECTORS * SECTOR);
+        check(n == PAST_SECTORS * SECTOR, "a 2100-sector read is taken whole");
+        check(proc_disk_field("raw-driver-calls ", &after) && after - before == 2,
+              "in two driver calls");
+        for (i = 0; i < PAST_SECTORS * SECTOR; i++) {
+            if (past[i] != (char)((i / SECTOR) * 13 + (i % SECTOR) * 7 + 1)) {
+                ok = 0;
+                break;
+            }
+        }
+        check(ok, "and the bytes are the ones written, across the boundary between the batches");
+        check(ok || i / SECTOR < 2047 || i / SECTOR > 2049,
+              "the first wrong byte, if any, is not at the boundary");
     }
     syscall1(SYS_CLOSE, fd);
 }

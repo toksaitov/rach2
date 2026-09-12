@@ -198,7 +198,7 @@ int sectorcopy_run(const struct sectorcopy_io *io, unsigned long long count,
     }
     if (held != 0) {
         /* Only reachable for a count that is not a whole number of sectors,
-           which the bounds refuse, so this is the belt and not the braces. */
+           which the bounds refuse; kept as a second check of the same fact. */
         say(err, errlen, "the stream ended inside a sector");
         return -1;
     }
