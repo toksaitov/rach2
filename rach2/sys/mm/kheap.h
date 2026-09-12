@@ -22,6 +22,13 @@
  * allocate at all. A request the heap cannot meet answers NULL with a
  * record, and the caller answers its own caller with ENOMEM or the error
  * its contract names.
+ *
+ * The top 16 MiB of the region is a reserve of sixteen runs of 256 pages
+ * that allocations under 64 pages never enter. A run of 64 pages or more
+ * that the rest of the region cannot give, because a cache that takes and
+ * returns pages one at a time has scattered its free pages, comes from
+ * there, so that a raw batch or a request of the largest size is had
+ * beside a full cache. The reserve costs no frame until a run is taken.
  */
 
 /** Set up the heap; the page tables of the region exist since init_paging. */

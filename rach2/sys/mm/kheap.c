@@ -23,24 +23,47 @@ struct page_hdr {
 };
 
 static const uint32_t class_size[KHEAP_CLASSES] = {16, 32, 64, 128, 256, 512, 1024, 2048};
+
+/* The reserve of runs for large allocations, at the top of the region:
+ * KHEAP_RUNS runs of KHEAP_RUN_PAGES pages that the ordinary search never
+ * enters, so that a region whose free pages the cache has scattered can
+ * still give a run of a megabyte, which is what a raw batch and a request
+ * of the largest size ask for. The reserve costs no frame until a run is
+ * taken, since a page is mapped only when it is allocated; a run is taken
+ * only for an allocation of KHEAP_RUN_LEAST pages or more that the rest of
+ * the region cannot give, so a small allocation never spends a run, and it
+ * is given back when its pages are freed. */
+#define KHEAP_RUN_PAGES     256u
+#define KHEAP_RUNS          16u
+#define KHEAP_RUN_LEAST     64u
+#define KHEAP_RESERVE_FIRST (KHEAP_PAGES - KHEAP_RUNS * KHEAP_RUN_PAGES)
+static uint32_t run_bits; /* set where a reserve run is taken */
 static void *free_list[KHEAP_CLASSES];
 static uint32_t page_bits[KHEAP_PAGES / 32]; /* set where a page is mapped */
 static uint32_t next_page;
 static uint32_t pages_held;
 static uint32_t bytes_used;
 
+/* The masking of interrupts around the map; on any other target, the host
+ * tests' among them, there are none to mask. */
 static uint32_t irq_save(void)
 {
-    uint32_t flags;
+    uint32_t flags = 0;
+#if defined(__i386__)
     __asm__ __volatile__("pushfl; popl %0; cli" : "=r"(flags)::"memory");
+#endif
     return flags;
 }
 
 static void irq_restore(uint32_t flags)
 {
+#if defined(__i386__)
     if (flags & 0x200) {
         __asm__ __volatile__("sti");
     }
+#else
+    (void)flags;
+#endif
 }
 
 static int page_taken(uint32_t page)
@@ -121,11 +144,52 @@ static void unmap_run(uint32_t page, uint32_t count)
 
 void kheap_init(void)
 {
+    uint32_t i;
+
     k_memset(page_bits, 0, sizeof(page_bits));
     k_memset(free_list, 0, sizeof(free_list));
     next_page = 0;
     pages_held = 0;
     bytes_used = 0;
+    /* The reserve's pages read as taken to the ordinary search from the
+     * start; the run bits say which runs are out. */
+    for (i = KHEAP_RESERVE_FIRST; i < KHEAP_PAGES; i++) {
+        page_set(i, 1);
+    }
+    run_bits = 0;
+}
+
+/* Interrupts off. The first page of a free reserve run, marked taken, or
+ * KHEAP_PAGES when every run is out or `count` is more than a run. */
+static uint32_t reserve_take(uint32_t count)
+{
+    uint32_t r;
+
+    if (count > KHEAP_RUN_PAGES) {
+        return KHEAP_PAGES;
+    }
+    for (r = 0; r < KHEAP_RUNS; r++) {
+        if (!(run_bits & (1u << r))) {
+            run_bits |= 1u << r;
+            return KHEAP_RESERVE_FIRST + r * KHEAP_RUN_PAGES;
+        }
+    }
+    return KHEAP_PAGES;
+}
+
+/* Interrupts off. A reserve run whose pages `map_run` or `unmap_run` left
+ * clear is closed to the ordinary search again and, when `release` says
+ * so, given back to the reserve. */
+static void reserve_close(uint32_t page, uint32_t count, int release)
+{
+    uint32_t i;
+
+    for (i = 0; i < count; i++) {
+        page_set(page + i, 1);
+    }
+    if (release) {
+        run_bits &= ~(1u << ((page - KHEAP_RESERVE_FIRST) / KHEAP_RUN_PAGES));
+    }
 }
 
 void *kalloc_pages(uint32_t count, uintptr_t *phys)
@@ -139,7 +203,16 @@ void *kalloc_pages(uint32_t count, uintptr_t *phys)
         return NULL;
     }
     page = find_run(count);
-    if (page >= KHEAP_PAGES || map_run(page, count) != 0) {
+    if (page >= KHEAP_PAGES && count >= KHEAP_RUN_LEAST) {
+        page = reserve_take(count);
+        if (page < KHEAP_PAGES && map_run(page, count) != 0) {
+            reserve_close(page, count, 1);
+            page = KHEAP_PAGES;
+        }
+    } else if (page < KHEAP_PAGES && map_run(page, count) != 0) {
+        page = KHEAP_PAGES;
+    }
+    if (page >= KHEAP_PAGES) {
         irq_restore(flags);
         klog(KLOG_ERR, "kheap", "%d pages: no room or no frame", (int)count);
         return NULL;
@@ -163,6 +236,9 @@ void kfree_pages(void *p, uint32_t count)
     }
     flags = irq_save();
     unmap_run((va - KVA_HEAP) / PAGE_SIZE, count);
+    if ((va - KVA_HEAP) / PAGE_SIZE >= KHEAP_RESERVE_FIRST) {
+        reserve_close((va - KVA_HEAP) / PAGE_SIZE, count, 1);
+    }
     irq_restore(flags);
 }
 
