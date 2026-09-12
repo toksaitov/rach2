@@ -178,13 +178,13 @@ boot_driven -kernel "$KERNEL" -initrd "$REAL" \
     -net nic,model=rtl8139 -net "user,hostfwd=tcp::$FWD_PORT-:22"
 applet() { # applet LINE TOKEN: the line, its token, and the prompt after its output
     drive_type "$1"
-    if ! drive_expect "$2" 60 || ! drive_prompt 60; then
+    if ! drive_expect "$2" "$(scaled 60)" || ! drive_prompt "$(scaled 60)"; then
         stop
         echo "procfiles-test: FAIL: the applet run stopped before $2" >&2
         exit 1
     fi
 }
-if ! drive_login "$USER_NAME" "$PASSWORD" 90; then
+if ! drive_login "$USER_NAME" "$PASSWORD" "$(scaled 90)"; then
     stop
     echo "procfiles-test: FAIL: the real image did not log its user in" >&2
     exit 1
