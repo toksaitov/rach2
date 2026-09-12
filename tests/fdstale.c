@@ -138,6 +138,7 @@ typedef unsigned int u32;
 #define STDOUT 1
 
 #define EPERM  1
+#define ENOTDIR 20
 #define ENOENT 2
 #define EBADF  9
 #define EISDIR 21
@@ -407,6 +408,12 @@ static int dir_entries(const char *step, const char *dirpath, const char *forbid
             fail(step, pos);
         }
         pos += reclen;
+        /* A root that keeps `.` and `..` on the disk returns them; the boot
+         * root synthesizes neither. What this counts is the children, so the
+         * two are stepped over on whichever root they appear. */
+        if (streq(name, ".") || streq(name, "..")) {
+            continue;
+        }
         seen++;
     }
     want_eq(step, syscall3(SYS_CLOSE, fd, 0, 0), 0);
@@ -549,6 +556,33 @@ static void orphan_scan_case(void)
  * directory destination, refused after the orphan is taken. The second name
  * survives only because a directory descriptor is not a holder, so it is
  * asserted, not assumed. */
+/* Whether this root performs a directory's rename. The boot root refuses every
+ * one of them with EPERM, since its children name their parent by id; ext2
+ * moves a directory and answers a rename onto a file with ENOTDIR, which is
+ * what POSIX asks for. The row below takes whichever answer its root owes. */
+static int root_moves_directories(void)
+{
+    static char mounts[1024];
+    int fd = syscall3(SYS_OPEN, (int)"/proc/mounts", O_RDONLY, 0);
+    int n, i;
+
+    if (fd < 0) {
+        return 0;
+    }
+    n = syscall3(SYS_READ, fd, (int)mounts, (int)sizeof(mounts) - 1);
+    syscall3(SYS_CLOSE, fd, 0, 0);
+    if (n <= 0) {
+        return 0;
+    }
+    mounts[n] = 0;
+    for (i = 0; i + 8 < n; i++) {
+        if (mounts[i] == ' ' && mounts[i + 1] == '/' && mounts[i + 2] == ' ') {
+            return !(mounts[i + 3] == 'k' && mounts[i + 4] == 'r' && mounts[i + 5] == 'f');
+        }
+    }
+    return 0;
+}
+
 static void failed_rename_case(void)
 {
     int len = (int)slen(KEEP_LINE);
@@ -562,7 +596,7 @@ static void failed_rename_case(void)
     want_ok("open the refused rename's destination", fd);
 
     want_eq("rename a directory onto a held name", syscall3(SYS_RENAME, (int)RDIR, (int)KEEP, 0),
-            -EPERM);
+            root_moves_directories() ? -ENOTDIR : -EPERM);
     want_bytes("read the spared file through the held descriptor", fd, KEEP_LINE, len);
     want_named_bytes("read the spared file by name", KEEP, KEEP_LINE, len);
 

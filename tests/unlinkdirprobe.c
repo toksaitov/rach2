@@ -245,7 +245,14 @@ void _start(void)
             if (d->d_ino == 0) {
                 fail("an entry came back with no inode");
             }
-            if (d->d_type != DT_REG && !(d->d_type == DT_DIR && d->d_name[0] == '.')) {
+            /* A root with `.` and `..` on the disk returns them; they are not
+             * this directory's children and are not unlinked below. */
+            if (d->d_name[0] == '.' &&
+                (d->d_name[1] == '\0' || (d->d_name[1] == '.' && d->d_name[2] == '\0'))) {
+                off += d->d_reclen;
+                continue;
+            }
+            if (d->d_type != DT_REG) {
                 fail("an entry came back with the wrong type");
             }
             if (d->d_reclen == 0) {
