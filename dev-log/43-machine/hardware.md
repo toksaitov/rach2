@@ -337,3 +337,22 @@ The machine the milestone leaves plays the tree's own shareware IWAD as
 `/freedoom1.wad` for the music comparison.
 
 `tests/run all` on the final tree: 70 suites, all passed.
+
+## Milestone 50: the sitting
+
+The disk installed again from the stick's image of the tree at
+`ea61e916` with `rach2-install` on 2026-09-12, the root grown to
+487106928 sectors, the accounts root and `toksaitov`, the kernel
+updated afterwards through `bootctl` to the tree's at `59b99e5a`,
+hash `840a8504...`, committed as the saved default. The scripted
+acceptance passes as root.
+
+Measured on the installed system with that kernel: the SSD reads
+328 MB/s raw in 1 MiB commands, 174 MB/s beside a full heap; the stick
+44 MB/s; the network port at 1000 Mbit full duplex with pause both
+ways, a copy over SSH at 11 MB/s bounded above the kernel. Under
+twenty SSH sessions building the kernel for an hour, 361 builds: the
+longest timer gap 30 ms, the longest wait for the request limit 27 ms,
+the console never waiting, memory steady. The disk's longest delay is
+entry 47's wrapped figure until that entry is fixed.
+
