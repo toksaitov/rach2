@@ -1,0 +1,74 @@
+Rach2 stages user buffers in the kernel. Preserve sector offset and length
+checks, and use the bounce path only when those need it.
+
+--- a/lib/ext2fs/unix_io.c
++++ b/lib/ext2fs/unix_io.c
+@@ -75,6 +75,14 @@
+ #include "ext2fs.h"
+ #include "ext2fsP.h"
+ 
++/* Rach2 stages user bytes in the kernel. Only the offset and length
++ * must be sector aligned; O_DIRECT on other systems still checks buffers. */
++#ifdef __rach2__
++#define BUFFER_ALIGNED(buf, align) 1
++#else
++#define BUFFER_ALIGNED(buf, align) IS_ALIGNED(buf, align)
++#endif
++
+ static inline int find_last_bit_set(int x)
+ {
+ 	int r = 32;
+@@ -241,7 +249,7 @@
+ #ifdef HAVE_PREAD64
+ 	/* Try an aligned pread */
+ 	if ((channel->align == 0) ||
+-	    (IS_ALIGNED(buf, channel->align) &&
++	    (BUFFER_ALIGNED(buf, channel->align) &&
+ 	     IS_ALIGNED(location, channel->align) &&
+ 	     IS_ALIGNED(size, channel->align))) {
+ 		actual = pread64(data->dev, buf, size, location);
+@@ -253,7 +261,7 @@
+ 	/* Try an aligned pread */
+ 	if ((sizeof(off_t) >= sizeof(ext2_loff_t)) &&
+ 	    ((channel->align == 0) ||
+-	     (IS_ALIGNED(buf, channel->align) &&
++	     (BUFFER_ALIGNED(buf, channel->align) &&
+ 	      IS_ALIGNED(location, channel->align) &&
+ 	      IS_ALIGNED(size, channel->align)))) {
+ 		actual = pread(data->dev, buf, size, location);
+@@ -264,7 +272,7 @@
+ #endif /* HAVE_PREAD */
+ 
+ 	if ((channel->align == 0) ||
+-	    (IS_ALIGNED(buf, channel->align) &&
++	    (BUFFER_ALIGNED(buf, channel->align) &&
+ 	     IS_ALIGNED(location, channel->align) &&
+ 	     IS_ALIGNED(size, channel->align))) {
+ 		mutex_lock(data, BOUNCE_MTX);
+@@ -381,7 +389,7 @@
+ #ifdef HAVE_PWRITE64
+ 	/* Try an aligned pwrite */
+ 	if ((channel->align == 0) ||
+-	    (IS_ALIGNED(buf, channel->align) &&
++	    (BUFFER_ALIGNED(buf, channel->align) &&
+ 	     IS_ALIGNED(location, channel->align) &&
+ 	     IS_ALIGNED(size, channel->align))) {
+ 		actual = pwrite64(data->dev, buf, size, location);
+@@ -392,7 +400,7 @@
+ 	/* Try an aligned pwrite */
+ 	if ((sizeof(off_t) >= sizeof(ext2_loff_t)) &&
+ 	    ((channel->align == 0) ||
+-	     (IS_ALIGNED(buf, channel->align) &&
++	     (BUFFER_ALIGNED(buf, channel->align) &&
+ 	      IS_ALIGNED(location, channel->align) &&
+ 	      IS_ALIGNED(size, channel->align)))) {
+ 		actual = pwrite(data->dev, buf, size, location);
+@@ -402,7 +410,7 @@
+ #endif /* HAVE_PWRITE */
+ 
+ 	if ((channel->align == 0) ||
+-	    (IS_ALIGNED(buf, channel->align) &&
++	    (BUFFER_ALIGNED(buf, channel->align) &&
+ 	     IS_ALIGNED(location, channel->align) &&
+ 	     IS_ALIGNED(size, channel->align))) {
+ 		if (!(flags & RAW_WRITE_NOLOCK))

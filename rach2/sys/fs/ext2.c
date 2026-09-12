@@ -2256,11 +2256,7 @@ static int32_t ext2_write(struct vfs_mount *mnt, void *handle, const void *buf, 
     if (rc != 0) {
         goto out;
     }
-    /* The pointers and i_blocks, then the size. */
-    rc = inode_store(em, n);
-    if (rc != 0) {
-        goto out;
-    }
+    /* The batch has written the allocations, pointers and data. */
     if (end > n->size) {
         n->size = end;
     }

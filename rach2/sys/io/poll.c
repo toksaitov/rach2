@@ -210,11 +210,16 @@ static int do_poll(struct kernel_pollfd *fds, uint32_t nfds, int has_deadline, u
          * (still BLOCKED), idle until the next interrupt (a wake or the tick
          * that advances the deadline). sti;hlt;cli is atomic from IF=0. */
         flags = irq_save();
-        for (i = 0; i < nfds; i++) {
-            wq_poll_remove(wqs[i], &recs[i]);
-        }
+        /* Stay on every queue across the halt: a waker that runs while this
+         * process is halted must be able to find it and make it READY. Leaving
+         * the queues first left the halt to be ended by any interrupt at all,
+         * which with a deadline armed meant the next timer tick, so a poller
+         * with a timeout was woken 100 times a second whatever arrived. */
         if (current_proc->state == PROC_BLOCKED) {
             idle_wait_irq_off();
+        }
+        for (i = 0; i < nfds; i++) {
+            wq_poll_remove(wqs[i], &recs[i]);
         }
         current_proc->state = PROC_RUNNING;
     }
