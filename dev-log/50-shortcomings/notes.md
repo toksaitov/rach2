@@ -242,3 +242,21 @@ Twenty sessions started at once give five: Dropbear allows five unauthenticated 
 ### The review of these findings
 
 Astra read the five findings above against the tree on 2026-09-12 and corrected four of them; entries 48 to 51 as they now stand are the corrected text. What it took out: that the chown rule is POSIX's, where POSIX allows either rule and what is wrong is the tree holding both; that `bcache_sync` flushes the drive, which it does not; that 0.53 ms measured a drive flush, when `fsync` with nothing dirty issues no command; that ext2 batching could account for the grow's ten minutes, when `resize2fs` writes through the raw window where a 4 KiB call is already one command; and that a setgid directory passes its group on here, which `ext2.c:2034` shows it does not. What it added: the second inode store at `ext2.c:2268` as the missing cost of every write call; the same chown defect in `fchown` at `syscall.c:4905`; the control path at `tcp.c:191` that drops a refused acknowledgement where the data path keeps it; the drain's limit of 32 datagrams a tick; and the list of what a batch spanning calls would have to prove before it is taken. Its own summary of what this sitting should have measured and did not is the measurement plan for entry 49 and for the network gap: a trace of each command's role, size and latency for the four write cases, the grow measured per phase, and the transfer programs kept with their captures and counter deltas.
+
+### The send path, measured on the machine
+
+With a C sender compiled on the machine, not BusyBox `nc`, outbound TCP runs at 57 to 59 MB/s, and the write size hardly matters: 49 MB/s at 4 KiB, 54 at 16 KiB, 55 to 59 above. So the 38.8 MB/s of the first measurement was the application's, not the kernel's.
+
+The processor is what runs out. Across a 3.5 s outbound transfer the machine spends 3.49 s in system time and 0.03 s idle, and `/proc/net/tcp` shows only 8 to 12 KiB unsent, so the connection is neither window-limited nor waiting on the card: it is burning a core.
+
+UDP tells us where the core goes. The same sender over UDP reaches 73 MB/s at 1400 bytes a datagram, also at 100 percent, so TCP itself adds about a fifth and the rest is the path both protocols share. Sweeping the datagram size, 33 MB/s at 256 bytes, 56 at 512 and 77 at 1400, fits a fixed cost of about 5.3 us a frame plus about 9 ns a byte, which is 110 MB/s of per-byte work. A gigabit at full frames needs a frame every 12.3 us and this path spends 18.
+
+`ip_checksum` was one of the per-byte costs: a byte-at-a-time loop folding the carry every two bytes, which measured 343 MB/s on the machine's own processor against 584 for four bytes a turn into a 32-bit accumulator folded once at the end. That change is taken (`f55cae53`), the netconsole host test cross-checks the answer, and booting it moved the transfer from 55 to 57 MB/s, about 4 percent. It is a real cost and not the cause.
+
+What is left to place is the 5.3 us a frame. Two units are instrumenting the send path stage by stage to say where it goes.
+
+### Entry 48 is fixed and proved on the machine
+
+`vfs_chown_plan` now decides both chowns on a mounted file system (`db580d84`, `40b6f436`): it computes what changes, refuses what the caller may not do, permits a chown that changes nothing, and clears the set-id bits by the rule the boot root uses. On the machine, on the ext2 root, `modeprobe` printed `MODEPROBE OK`, where before the fix it failed on a directory losing its setuid bit.
+
+Two of that probe's rows needed the environment before they could judge the kernel: run over SSH the process keeps root's supplementary group 0 through `setresgid`, so a child that drops to uid 1000 is still in group 0 and the kernel is right to let it store setgid. Run through a wrapper that calls `setgroups(0)` first, the probe passes whole. That is one more of entry 51's environment assumptions, and it is now named there.
