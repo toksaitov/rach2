@@ -53,24 +53,24 @@
 
 /* Inode namespace for /proc: the directory, the boot command line, then a
  * per-pid base. */
-#define PROCFS_INO_DIR 0x100u
-#define PROCFS_INO_CMDLINE 0x101u
-#define PROCFS_INO_DISK    0x102u
-#define PROCFS_INO_NETDIR  0x103u
-#define PROCFS_INO_NETDEV  0x104u
-#define PROCFS_INO_UPTIME  0x105u
-#define PROCFS_INO_STATSYS 0x106u
-#define PROCFS_INO_MEMINFO 0x107u
-#define PROCFS_INO_MOUNTS  0x108u
-#define PROCFS_INO_USB     0x10Cu
+#define PROCFS_INO_DIR         0x100u
+#define PROCFS_INO_CMDLINE     0x101u
+#define PROCFS_INO_DISK        0x102u
+#define PROCFS_INO_NETDIR      0x103u
+#define PROCFS_INO_NETDEV      0x104u
+#define PROCFS_INO_UPTIME      0x105u
+#define PROCFS_INO_STATSYS     0x106u
+#define PROCFS_INO_MEMINFO     0x107u
+#define PROCFS_INO_MOUNTS      0x108u
+#define PROCFS_INO_USB         0x10Cu
 #define PROCFS_INO_FILESYSTEMS 0x10Du
 #define PROCFS_INO_LOOP        0x10Eu
-#define PROCFS_INO_INTERRUPTS 0x10Fu
-#define PROCFS_INO_CONSOLE 0x110u
-#define PROCFS_INO_NETROUTE 0x109u
-#define PROCFS_INO_NETARP  0x10Au
-#define PROCFS_INO_NETTCP  0x10Bu
-#define PROCFS_INO_PID_BASE 0x200u
+#define PROCFS_INO_INTERRUPTS  0x10Fu
+#define PROCFS_INO_CONSOLE     0x110u
+#define PROCFS_INO_NETROUTE    0x109u
+#define PROCFS_INO_NETARP      0x10Au
+#define PROCFS_INO_NETTCP      0x10Bu
+#define PROCFS_INO_PID_BASE    0x200u
 
 /*
  * A text is built in the heap and grows as it is appended to, so a report
@@ -79,16 +79,20 @@
  * of the size it is given, truncating; a text it filled to the end is
  * refused with `-EOVERFLOW` rather than served short.
  */
-#define PROCFS_MAX_DISK (768 + DISKINFO_DISKS_BYTES) /* diskinfo_format's widest record, then the disks */
+#define PROCFS_MAX_DISK \
+    (768 + DISKINFO_DISKS_BYTES) /* diskinfo_format's widest record, then the disks */
 
 /* The header line of each network table. */
-#define PROCFS_NETROUTE_HEADER "Iface\tDestination\tGateway \tFlags\tRefCnt" \
-                               "\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n"
-#define PROCFS_NETARP_HEADER   "IP address       HW type     Flags       " \
-                               "HW address            Mask     Device\n"
-#define PROCFS_NETTCP_HEADER   "  sl  local_address rem_address   st tx_queue" \
-                               " rx_queue tr tm->when retrnsmt   uid  timeout" \
-                               " inode\n"
+#define PROCFS_NETROUTE_HEADER                    \
+    "Iface\tDestination\tGateway \tFlags\tRefCnt" \
+    "\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n"
+#define PROCFS_NETARP_HEADER                    \
+    "IP address       HW type     Flags       " \
+    "HW address            Mask     Device\n"
+#define PROCFS_NETTCP_HEADER                        \
+    "  sl  local_address rem_address   st tx_queue" \
+    " rx_queue tr tm->when retrnsmt   uid  timeout" \
+    " inode\n"
 
 /** The file's name, for the diagnostic of a text that could not be built. */
 static const char *procfs_kind_name(const struct vpath *vp)
@@ -292,15 +296,15 @@ int procfs_resolve_pid(int pid)
 static char proc_state_char(proc_state_t s)
 {
     switch (s) {
-        case PROC_RUNNING:
-        case PROC_READY:
-            return 'R';
-        case PROC_BLOCKED:
-            return 'S';
-        case PROC_ZOMBIE:
-            return 'Z';
-        default:
-            return 'R';
+    case PROC_RUNNING:
+    case PROC_READY:
+        return 'R';
+    case PROC_BLOCKED:
+        return 'S';
+    case PROC_ZOMBIE:
+        return 'Z';
+    default:
+        return 'R';
     }
 }
 
@@ -322,8 +326,8 @@ static int procfs_gen_stat(struct procfs_text *t, int pid)
         return -ENOENT;
     }
 
-    ap_int(t, pid);             /* 1 pid */
-    ap_str(t, " (");            /* 2 comm */
+    ap_int(t, pid);  /* 1 pid */
+    ap_str(t, " ("); /* 2 comm */
     if (p->comm[0]) {
         for (i = 0; i < (int)sizeof(p->comm) && p->comm[i]; i++) {
             char c = p->comm[i];
@@ -340,13 +344,13 @@ static int procfs_gen_stat(struct procfs_text *t, int pid)
     ap_int(t, (int)p->pgid); /* 5 pgrp */
     ap_ch(t, ' ');
     ap_int(t, (int)p->sid); /* 6 session */
-    ap_str(t, " 0 -1"); /* 7 tty_nr, 8 tpgid (not modeled) */
+    ap_str(t, " 0 -1");     /* 7 tty_nr, 8 tpgid (not modeled) */
     /* 9..13 flags,minflt,cminflt,majflt,cmajflt;
        14..17 utime,stime,cutime,cstime */
     ap_str(t, " 0 0 0 0 0 0 0 0 0");
-    ap_str(t, " 20 0"); /* 18 priority, 19 nice */
+    ap_str(t, " 20 0");  /* 18 priority, 19 nice */
     ap_str(t, " 1 0 0"); /* 20 num_threads, 21 itrealvalue, 22 starttime */
-    ap_str(t, " 0 0"); /* 23 vsize, 24 rss */
+    ap_str(t, " 0 0");   /* 23 vsize, 24 rss */
     ap_ch(t, '\n');
     t->buf[t->len] = '\0';
     return t->len;
@@ -410,106 +414,106 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
     }
 
     switch (e->type) {
-        case FD_TYPE_CONSOLE:
-            ap_str(t, "/dev/console");
-            break;
-        case FD_TYPE_DEVICE:
-            ap_str(t, "/dev/");
-            ap_str(t, devfs_fd_name(e));
-            break;
-        case FD_TYPE_PIPE: {
-            pipe_t *pp = (pipe_t *)e->priv;
-            ap_str(t, "pipe:[");
-            ap_u32(t, pp ? pp->inode : 0u);
-            ap_ch(t, ']');
-            break;
-        }
-        case FD_TYPE_PTS:
-            /* a pty slave: /dev/pts/N (so musl ttyname_r can match it). */
-            ap_str(t, "/dev/pts/");
-            ap_int(t, pty_slave_index(e));
-            break;
-        case FD_TYPE_PTM:
-            ap_str(t, "/dev/ptmx");
-            break;
-        case FD_TYPE_SOCKET:
-            ap_str(t, "socket:[");
-            ap_u32(t, e->sock ? e->sock->inode : 0u);
-            ap_ch(t, ']');
-            break;
-        case FD_TYPE_FILE:
-        case FD_TYPE_DIR:
-            if (e->node && e->node->type == KRFFS_RESERVED_NODE) {
-                char path[256]; /* the same path capacity the syscall layer uses */
-                /* Reconstruct the path only from a node still live and
-                 * reachable; a stale fd (its node unlinked or relocated) would
-                 * otherwise parse freed free-list bytes into the link target.
-                 */
-                if (krffs_node_path(e->node, path, sizeof(path)) == 0 &&
-                    krffs_resolve(path) == e->node) {
-                    ap_str(t, path); /* the full absolute path */
-                } else {
-                    ap_ch(t, '/'); /* unresolvable or stale */
-                }
-            } else if (e->ofd && e->ofd->vmnt && e->ofd->dirpath[0]) {
-                ap_str(t, e->ofd->dirpath); /* a node of another type, by the path it was opened by */
+    case FD_TYPE_CONSOLE:
+        ap_str(t, "/dev/console");
+        break;
+    case FD_TYPE_DEVICE:
+        ap_str(t, "/dev/");
+        ap_str(t, devfs_fd_name(e));
+        break;
+    case FD_TYPE_PIPE: {
+        pipe_t *pp = (pipe_t *)e->priv;
+        ap_str(t, "pipe:[");
+        ap_u32(t, pp ? pp->inode : 0u);
+        ap_ch(t, ']');
+        break;
+    }
+    case FD_TYPE_PTS:
+        /* a pty slave: /dev/pts/N (so musl ttyname_r can match it). */
+        ap_str(t, "/dev/pts/");
+        ap_int(t, pty_slave_index(e));
+        break;
+    case FD_TYPE_PTM:
+        ap_str(t, "/dev/ptmx");
+        break;
+    case FD_TYPE_SOCKET:
+        ap_str(t, "socket:[");
+        ap_u32(t, e->sock ? e->sock->inode : 0u);
+        ap_ch(t, ']');
+        break;
+    case FD_TYPE_FILE:
+    case FD_TYPE_DIR:
+        if (e->node && e->node->type == KRFFS_RESERVED_NODE) {
+            char path[256]; /* the same path capacity the syscall layer uses */
+            /* Reconstruct the path only from a node still live and
+             * reachable; a stale fd (its node unlinked or relocated) would
+             * otherwise parse freed free-list bytes into the link target.
+             */
+            if (krffs_node_path(e->node, path, sizeof(path)) == 0 &&
+                krffs_resolve(path) == e->node) {
+                ap_str(t, path); /* the full absolute path */
             } else {
-                ap_ch(t, '/'); /* the root directory, or a stale fd */
+                ap_ch(t, '/'); /* unresolvable or stale */
             }
-            break;
-        case FD_TYPE_SYNTH_DIR: {
-            /* a /dev or /proc directory fd: its reconstructed path */
-            struct synth_dir *sd = (struct synth_dir *)e->priv;
-            char path[64];
-            if (sd) {
-                synth_dir_path(sd->kind, sd->pid, path, (int)sizeof(path));
-                ap_str(t, path);
-            }
-            break;
+        } else if (e->ofd && e->ofd->vmnt && e->ofd->dirpath[0]) {
+            ap_str(t, e->ofd->dirpath); /* a node of another type, by the path it was opened by */
+        } else {
+            ap_ch(t, '/'); /* the root directory, or a stale fd */
         }
-        case FD_TYPE_PROC: {
-            /* a /proc snapshot fd: its origin path (a pid file or the global
-             * boot command line) */
-            struct procfs_file *pf = (struct procfs_file *)e->priv;
-            if (pf) {
-                if (pf->origin_file == SYNTH_PROC_BOOTLINE) {
-                    ap_str(t, "/proc/cmdline");
-                    break;
-                }
-                if (pf->origin_file == SYNTH_PROC_DISKINFO) {
-                    ap_str(t, "/proc/disk");
-                    break;
-                }
-                if (pf->origin_file == SYNTH_PROC_NETDEV) {
-                    ap_str(t, "/proc/net/dev");
-                    break;
-                }
-                if (pf->origin_file == SYNTH_PROC_NETROUTE) {
-                    ap_str(t, "/proc/net/route");
-                    break;
-                }
-                if (pf->origin_file == SYNTH_PROC_NETARP) {
-                    ap_str(t, "/proc/net/arp");
-                    break;
-                }
-                if (pf->origin_file == SYNTH_PROC_NETTCP) {
-                    ap_str(t, "/proc/net/tcp");
-                    break;
-                }
-                if (pf->origin_file == SYNTH_PROC_CONSOLE) {
-                    ap_str(t, "/proc/console");
-                    break;
-                }
-                ap_str(t, "/proc/");
-                ap_int(t, pf->origin_pid);
-                ap_ch(t, '/');
-                ap_str(t, pf->origin_file == SYNTH_PROC_CMDLINE ? "cmdline" : "stat");
-            }
-            break;
+        break;
+    case FD_TYPE_SYNTH_DIR: {
+        /* a /dev or /proc directory fd: its reconstructed path */
+        struct synth_dir *sd = (struct synth_dir *)e->priv;
+        char path[64];
+        if (sd) {
+            synth_dir_path(sd->kind, sd->pid, path, (int)sizeof(path));
+            ap_str(t, path);
         }
-        default:
-            ap_str(t, "anon_inode:[device]"); /* fb/mouse: best effort */
-            break;
+        break;
+    }
+    case FD_TYPE_PROC: {
+        /* a /proc snapshot fd: its origin path (a pid file or the global
+         * boot command line) */
+        struct procfs_file *pf = (struct procfs_file *)e->priv;
+        if (pf) {
+            if (pf->origin_file == SYNTH_PROC_BOOTLINE) {
+                ap_str(t, "/proc/cmdline");
+                break;
+            }
+            if (pf->origin_file == SYNTH_PROC_DISKINFO) {
+                ap_str(t, "/proc/disk");
+                break;
+            }
+            if (pf->origin_file == SYNTH_PROC_NETDEV) {
+                ap_str(t, "/proc/net/dev");
+                break;
+            }
+            if (pf->origin_file == SYNTH_PROC_NETROUTE) {
+                ap_str(t, "/proc/net/route");
+                break;
+            }
+            if (pf->origin_file == SYNTH_PROC_NETARP) {
+                ap_str(t, "/proc/net/arp");
+                break;
+            }
+            if (pf->origin_file == SYNTH_PROC_NETTCP) {
+                ap_str(t, "/proc/net/tcp");
+                break;
+            }
+            if (pf->origin_file == SYNTH_PROC_CONSOLE) {
+                ap_str(t, "/proc/console");
+                break;
+            }
+            ap_str(t, "/proc/");
+            ap_int(t, pf->origin_pid);
+            ap_ch(t, '/');
+            ap_str(t, pf->origin_file == SYNTH_PROC_CMDLINE ? "cmdline" : "stat");
+        }
+        break;
+    }
+    default:
+        ap_str(t, "anon_inode:[device]"); /* fb/mouse: best effort */
+        break;
     }
     if (t->nomem) {
         kfree(t->buf);
@@ -618,7 +622,6 @@ uint32_t procfs_ino_console(void)
     return PROCFS_INO_CONSOLE;
 }
 
-
 uint32_t procfs_ino_netroute(void)
 {
     return PROCFS_INO_NETROUTE;
@@ -700,7 +703,6 @@ uint32_t procfs_ino_pid(int pid)
     return PROCFS_INO_PID_BASE + (uint32_t)(pid & 0xffff);
 }
 
-
 /**
  * Render /proc/net/dev.
  *
@@ -727,11 +729,10 @@ static int procfs_gen_netdev(struct procfs_text *t)
 {
     int i;
 
-    ap_str(t,
-           "Inter-|   Receive                                                |"
-           "  Transmit\n"
-           " face |bytes    packets errs drop fifo frame compressed multicast|"
-           "bytes    packets errs drop fifo colls carrier compressed\n");
+    ap_str(t, "Inter-|   Receive                                                |"
+              "  Transmit\n"
+              " face |bytes    packets errs drop fifo frame compressed multicast|"
+              "bytes    packets errs drop fifo colls carrier compressed\n");
     for (i = 0; i < netdev_count(); i++) {
         const struct netdev *nd = netdev_at(i);
         struct netdev_counters card = {0, 0, 0, 0, 0, 0, 0};
@@ -874,6 +875,8 @@ static int procfs_gen_statsys(struct procfs_text *t)
      * something says so. */
     ap_str(t, "\nloopback_dropped ");
     ap_u32(t, ip_loop_dropped());
+    ap_str(t, "\nloopback_peak ");
+    ap_u32(t, ip_loop_peak());
     ap_ch(t, '\n');
     for (p = proc_list; p; p = p->next) {
         if (p->state == PROC_RUNNING || p->state == PROC_READY) {
@@ -1209,8 +1212,9 @@ static void ap_hex(struct procfs_text *t, uint32_t v, int width)
  */
 static void ap_ip_hex(struct procfs_text *t, uint32_t ip)
 {
-    ap_hex(t, ((ip & 0xFFu) << 24) | ((ip & 0xFF00u) << 8) | ((ip >> 8) & 0xFF00u) |
-                  ((ip >> 24) & 0xFFu),
+    ap_hex(t,
+           ((ip & 0xFFu) << 24) | ((ip & 0xFF00u) << 8) | ((ip >> 8) & 0xFF00u) |
+               ((ip >> 24) & 0xFFu),
            8);
 }
 
@@ -1455,8 +1459,8 @@ int procfs_open(const struct vpath *vp, int flags)
         vp->kind != VNODE_PROC_MOUNTS && vp->kind != VNODE_PROC_USB &&
         vp->kind != VNODE_PROC_FILESYSTEMS && vp->kind != VNODE_PROC_LOOP &&
         vp->kind != VNODE_PROC_INTERRUPTS && vp->kind != VNODE_PROC_CONSOLE &&
-        vp->kind != VNODE_PROC_NET_ROUTE &&
-        vp->kind != VNODE_PROC_NET_ARP && vp->kind != VNODE_PROC_NET_TCP) {
+        vp->kind != VNODE_PROC_NET_ROUTE && vp->kind != VNODE_PROC_NET_ARP &&
+        vp->kind != VNODE_PROC_NET_TCP) {
         pid = procfs_resolve_pid(vp->pid);
         if (pid < 0) {
             return -ENOENT;

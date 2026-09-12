@@ -52,7 +52,7 @@ uint16_t ip_checksum(const uint8_t *buf, uint16_t len)
     for (; i + 1 < len; i = (uint16_t)(i + 2)) {
         sum += (uint32_t)(((uint32_t)buf[i] << 8) | buf[i + 1]);
     }
-    if (len & 1) {           /* odd length: pad the last byte with zero */
+    if (len & 1) { /* odd length: pad the last byte with zero */
         sum += (uint32_t)buf[len - 1] << 8;
     }
     while (sum >> 16) {
@@ -80,7 +80,7 @@ uint16_t ip_checksum(const uint8_t *buf, uint16_t len)
  */
 void ip_rx(const uint8_t *data, uint16_t len, int from_loopback)
 {
-    uint8_t  ihl, proto;
+    uint8_t ihl, proto;
     uint16_t total_len, hdr_len, frag;
     uint32_t src_ip, dst_ip;
     int to_broadcast;
@@ -95,7 +95,7 @@ void ip_rx(const uint8_t *data, uint16_t len, int from_loopback)
     }
 
     /* IHL is in 32-bit words; minimum 5 (20 bytes). Options are skipped. */
-    ihl     = data[0] & 0x0F;
+    ihl = data[0] & 0x0F;
     hdr_len = (uint16_t)(ihl * 4);
     if (hdr_len < IP_HDR_SIZE || hdr_len > len) {
         return;
@@ -123,19 +123,18 @@ void ip_rx(const uint8_t *data, uint16_t len, int from_loopback)
        like a packet addressed to this machine. */
     to_broadcast = netdev_is_broadcast(dst_ip);
     if (!netdev_owns(dst_ip) && !to_broadcast) {
-        return;   /* not addressed to us */
+        return; /* not addressed to us */
     }
 
     src_ip = read32be(data + 12);
 
     /* Reject a martian source off the wire: our own address, or 127/8, from a
      * peer is a spoof (only a loopback delivery legitimately has these). */
-    if (!from_loopback &&
-        (netdev_owns(src_ip) || (src_ip & 0xFF000000u) == 0x7F000000u)) {
+    if (!from_loopback && (netdev_owns(src_ip) || (src_ip & 0xFF000000u) == 0x7F000000u)) {
         return;
     }
 
-    proto  = data[9];
+    proto = data[9];
 
     /* A broadcast is delivered to UDP and to nothing else. The two broadcasts
        are how a DHCP server answers a machine that has no address yet and how
@@ -183,14 +182,17 @@ static uint8_t ip_tx_buf[IP_HDR_SIZE + 1500];
  * come back: at eight slots a local transfer of any size lost datagrams from
  * its first burst and stalled. */
 #define LOOP_RING_SLOTS 48
-static uint8_t  loop_ring[LOOP_RING_SLOTS][IP_HDR_SIZE + 1500];
+static uint8_t loop_ring[LOOP_RING_SLOTS][IP_HDR_SIZE + 1500];
 static uint16_t loop_ring_len[LOOP_RING_SLOTS];
 
 /* Datagrams the ring had no room for, and whether the first has been
  * logged. A line for every one of them is what wrapped the whole kernel log,
  * and the boot record with it, the first time a local transfer ran. */
 static uint32_t loop_dropped;
-static int      loop_drop_logged;
+/* The most the ring has ever held at once. The ring is sized above what one
+ * system call can put in it, and this is what says by how much. */
+static uint32_t loop_peak;
+static int loop_drop_logged;
 
 /* Nonzero while `ip_loop_drain` is running, so a delivery that sends a reply
  * onto the ring cannot drain it again from inside itself. */
@@ -217,17 +219,15 @@ static uint32_t loop_head, loop_tail;
  * The return value is contracted in ip.h: the conditions a caller must hear
  * about are errnos, and the ARP miss is not one of them.
  */
-int ip_tx(uint32_t dst_ip, uint8_t proto,
-          const uint8_t *payload, uint16_t plen, uint8_t ttl)
+int ip_tx(uint32_t dst_ip, uint8_t proto, const uint8_t *payload, uint16_t plen, uint8_t ttl)
 {
     uint16_t total_len;
-    uint8_t  dst_mac[6];
+    uint8_t dst_mac[6];
     uint32_t route_ip;
     struct netdev *out;
 
     if (plen > 1500) {
-        klog(KLOG_WARN, "ip", "tx: payload of %d bytes is too large, refused",
-             (int)plen);
+        klog(KLOG_WARN, "ip", "tx: payload of %d bytes is too large, refused", (int)plen);
         return -EMSGSIZE;
     }
 
@@ -248,14 +248,14 @@ int ip_tx(uint32_t dst_ip, uint8_t proto,
         }
     }
 
-    ip_tx_buf[0] = 0x45;                         /* version 4, IHL 5 */
-    ip_tx_buf[1] = 0x00;                         /* DSCP/ECN */
-    write16be(ip_tx_buf + 2,  total_len);
-    write16be(ip_tx_buf + 4,  ip_id_counter++);
-    write16be(ip_tx_buf + 6,  0x4000);           /* DF set, no fragments */
-    ip_tx_buf[8]  = ttl;                         /* hop limit */
-    ip_tx_buf[9]  = proto;
-    write16be(ip_tx_buf + 10, 0x0000);           /* checksum, filled below */
+    ip_tx_buf[0] = 0x45; /* version 4, IHL 5 */
+    ip_tx_buf[1] = 0x00; /* DSCP/ECN */
+    write16be(ip_tx_buf + 2, total_len);
+    write16be(ip_tx_buf + 4, ip_id_counter++);
+    write16be(ip_tx_buf + 6, 0x4000); /* DF set, no fragments */
+    ip_tx_buf[8] = ttl;               /* hop limit */
+    ip_tx_buf[9] = proto;
+    write16be(ip_tx_buf + 10, 0x0000); /* checksum, filled below */
     /* The source is the address of the interface this datagram leaves by,
      * which is the only address a reply can come back to. */
     write32be(ip_tx_buf + 12, out ? out->ip : net_ip_addr);
@@ -280,6 +280,9 @@ int ip_tx(uint32_t dst_ip, uint8_t proto,
         k_memcpy(loop_ring[slot], ip_tx_buf, total_len);
         loop_ring_len[slot] = total_len;
         loop_head++;
+        if (loop_head - loop_tail > loop_peak) {
+            loop_peak = loop_head - loop_tail;
+        }
         return 0;
     }
 
@@ -297,8 +300,7 @@ int ip_tx(uint32_t dst_ip, uint8_t proto,
            claimed. Whether a datagram may be broadcast at all is the socket's
            permission, checked before it gets here. */
         if (proto != IP_PROTO_UDP) {
-            klog(KLOG_WARN, "ip",
-                 "tx: refused to broadcast a datagram that is not UDP");
+            klog(KLOG_WARN, "ip", "tx: refused to broadcast a datagram that is not UDP");
             return -EOPNOTSUPP;
         }
         if (ethernet_tx(out, all_ones, ETH_TYPE_IP, ip_tx_buf, total_len) != NETDEV_TX_OK) {
@@ -342,6 +344,11 @@ int ip_tx(uint32_t dst_ip, uint8_t proto,
 uint32_t ip_loop_dropped(void)
 {
     return loop_dropped;
+}
+
+uint32_t ip_loop_peak(void)
+{
+    return loop_peak;
 }
 
 /* More than a pair queued: a simultaneous open is a pair of crossing SYNs and

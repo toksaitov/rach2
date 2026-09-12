@@ -48,6 +48,10 @@ void ip_loop_drain(void);
 /** Datagrams the loopback ring had no room for since boot. */
 uint32_t ip_loop_dropped(void);
 
+/** The most datagrams the loopback ring has held at once, which says how much
+ * room the ring has over what one system call can put in it. */
+uint32_t ip_loop_peak(void);
+
 /**
  * Nonzero when the loopback ring holds more than a pair of datagrams.
  *
