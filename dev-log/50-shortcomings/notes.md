@@ -351,3 +351,42 @@ descriptor; ext2 refuses that with EBUSY, which its own Readme states. The probe
 now takes the answer its root owes. What looked like a hang on the machine was
 the leak loops: 16 MiB written in 4 KiB calls on a disk where such a call is
 four commands and two flushes.
+
+The close, 2026-09-13. The first set was voided by the runner: a subagent's
+edits to `hub.c` landed while the set ran, and a later suite's make rebuilt the
+kernel under it. The rule already covers this and it was still broken: nothing
+in the tree may change while a set is in flight, edits included, because the
+runner builds per suite.
+
+Astra read the whole diff since `01d02656` in seven units grouped by contract.
+What it found, and what was done:
+
+* The read, the plan and the store of a chown or a chmod were three steps with
+  a lock taken only by the last. A privileged chown planned over a file whose
+  owner then chmods it to 04755 would store the new owner without the set-id
+  clear, which is a set-id program with an owner the caller chose. All four
+  paths now hold the mount's namespace lock across the three.
+* The loopback ring held 48 slots, which does not divide 2^32, so the 32-bit
+  head and tail move every slot's place at the wrap and lose frames. It is 64.
+* A block in TIME_WAIT owed an acknowledgement the tick never sent, because
+  that state's branch returns before the retry. And a piggybacked
+  acknowledgement did not pay the debt, so the tick sent a second one.
+* The host test's model counted a mask write rather than the transition it
+  stands for, so removing the handler's entry mask would still have passed it.
+* Two comments taught something the code does not do: the poller's order was
+  credited with the 100 Hz rescanning, which is entry 55's card fault, and the
+  drain's threshold was called half full where it is three of 64.
+* Rows that could pass without proving their claim: the disk-cost rows ignored
+  every `dd` status, the time rows stamped and compared inside one second on a
+  file system that keeps whole seconds, the chown rows never read the owner
+  back, the group-change fixture had no setgid bit to lose, the loopback
+  pattern repeated every 256 bytes, and the probes that read the root's type
+  fell back to the boot root's answers whenever they could not read it. Each
+  now judges what it claims and names the root it is on.
+* The load harness put its arguments into a shell command on the machine
+  without checking them, shared its directories and logs between runs, and
+  reported success when every session had failed.
+
+The e2fsprogs alignment tests compile the port's extracted source, so
+`run-host` now depends on the port's stamp; without it they could pass against
+a tree the tracked patch no longer matches.
