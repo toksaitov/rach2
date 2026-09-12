@@ -97,8 +97,8 @@ struct netdev_link {
  * driver whose card keeps none leaves it NULL. These are the columns of
  * `/proc/net/dev` the interface cannot count: frames the card missed for
  * lack of ring room, frames with an alignment error, multicasts received,
- * and on the transmit side errors, underruns, collisions and the frames the
- * card gave up on. A card that lost frames after taking them is otherwise
+ * and on the transmit side errors, underruns, collisions and the
+ * transmissions the card aborted. A card that lost frames after taking them is otherwise
  * indistinguishable from a network that lost them.
  */
 struct netdev;

@@ -1459,8 +1459,8 @@ int main(void)
 
     /* ---- the link: what is advertised, and a change logged ---- */
     /* The port advertises pause in both directions with its speeds, so a
-       switch with a slower far port holds this one rather than dropping a
-       run of frames; a link change the card reports is logged with the
+       switch with a slower far port asks this one to wait rather than
+       dropping a run of frames; a link change the card reports is logged with the
        speed, duplex and pause resolved, and is not taken for a stuck source. */
     model_reset();
     CHECK(rtl8168_init(&model_iface, 0) == NETDEV_UP, "the bring-up completes for the link rows");
