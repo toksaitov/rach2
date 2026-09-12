@@ -1265,6 +1265,7 @@ static void vfs_kill_setid(struct vfs_mount *mnt, void *node)
     (void)vfs_setattr(mnt, node, VFS_SET_MODE, &vst);
 }
 
+
 /** Non-zero when `gid` is in the caller's supplementary list. */
 static int cred_in_suppl(uint32_t gid)
 {
@@ -4633,6 +4634,54 @@ static int32_t do_chmod(const char *name, uint32_t mode)
     return rc;
 }
 
+/**
+ * What a chown changes on a mounted file system, and the set-id bits it
+ * takes with it.
+ *
+ * `vst` is read from the node and updated in place; the return is the
+ * `VFS_SET_*` mask to apply, 0 when the call changes nothing, or `-EPERM`
+ * when this caller may not make the change. A chown that changes neither
+ * owner is permitted to every caller, as it is on the boot root: a value
+ * that changes nothing needs no right, and a refusal there would stop
+ * `chown(path, -1, -1)`. The set-id clear is `vfs_kill_setid`'s rule, which
+ * is `cred_kill_setid`'s rule for the boot root: a directory keeps its bits,
+ * and a file without group-execute keeps setgid, since there the bit marks
+ * mandatory locking and grants nobody anything.
+ */
+static int vfs_chown_plan(struct vfs_stat *vst, uint32_t uid, uint32_t gid)
+{
+    int what = 0;
+
+    if (uid != (uint32_t)-1 && uid != vst->uid) {
+        what |= VFS_SET_UID;
+    }
+    if (gid != (uint32_t)-1 && gid != vst->gid) {
+        what |= VFS_SET_GID;
+    }
+    if (what == 0) {
+        return 0;
+    }
+    if (!cred_privileged() &&
+        (current_proc->euid != vst->uid || (what & VFS_SET_UID) != 0 ||
+         ((what & VFS_SET_GID) != 0 && !cred_in_group(gid)))) {
+        return -EPERM;
+    }
+    if (what & VFS_SET_UID) {
+        vst->uid = uid;
+    }
+    if (what & VFS_SET_GID) {
+        vst->gid = gid;
+    }
+    if ((vst->mode & 06000u) && (vst->mode & 0170000u) != 0040000u) {
+        vst->mode &= ~04000u;
+        if (vst->mode & 0010u) {
+            vst->mode &= ~02000u;
+        }
+        what |= VFS_SET_MODE;
+    }
+    return what;
+}
+
 static int32_t do_chown(const char *name, uint32_t uid, uint32_t gid)
 {
     struct vpath vp;
@@ -4681,27 +4730,9 @@ static int32_t do_chown(const char *name, uint32_t uid, uint32_t gid)
         int what = 0;
 
         rc = vfs_getattr(ref.mnt, ref.node, &vst);
-        if (rc == 0 && !cred_privileged()) {
-            if (current_proc->euid != vst.uid ||
-                (uid != (uint32_t)-1 && uid != vst.uid) ||
-                (gid != (uint32_t)-1 && gid != vst.gid && !cred_in_group(gid))) {
-                rc = -EPERM;
-            }
-        }
         if (rc == 0) {
-            if (uid != (uint32_t)-1 && uid != vst.uid) {
-                vst.uid = uid;
-                what |= VFS_SET_UID;
-            }
-            if (gid != (uint32_t)-1 && gid != vst.gid) {
-                vst.gid = gid;
-                what |= VFS_SET_GID;
-            }
-            if (what != 0 && (vst.mode & 06000u)) {
-                vst.mode &= ~06000u; /* an owner change clears the set-id bits, for root too */
-                what |= VFS_SET_MODE;
-            }
-            rc = what ? vfs_setattr(ref.mnt, ref.node, what, &vst) : 0;
+            what = vfs_chown_plan(&vst, uid, gid);
+            rc = what < 0 ? what : (what ? vfs_setattr(ref.mnt, ref.node, what, &vst) : 0);
         }
         vfs_ref_release(&ref);
         return rc;
@@ -4887,26 +4918,11 @@ static int32_t sys_fchown(isr_params_t *params)
         int what = 0;
         int rc = vfs_getattr(entry->ofd->vmnt, entry->ofd->vnode, &vst);
 
-        if (rc == 0 && !cred_privileged()) {
-            if (current_proc->euid != vst.uid || (uid != (uint32_t)-1 && uid != vst.uid) ||
-                (gid != (uint32_t)-1 && gid != vst.gid && !cred_in_group(gid))) {
-                rc = -EPERM;
-            }
-        }
         if (rc == 0) {
-            if (uid != (uint32_t)-1 && uid != vst.uid) {
-                vst.uid = uid;
-                what |= VFS_SET_UID;
-            }
-            if (gid != (uint32_t)-1 && gid != vst.gid) {
-                vst.gid = gid;
-                what |= VFS_SET_GID;
-            }
-            if (what != 0 && (vst.mode & 06000u)) {
-                vst.mode &= ~06000u;
-                what |= VFS_SET_MODE;
-            }
-            rc = what ? vfs_setattr(entry->ofd->vmnt, entry->ofd->vnode, what, &vst) : 0;
+            what = vfs_chown_plan(&vst, uid, gid);
+            rc = what < 0 ? what
+                          : (what ? vfs_setattr(entry->ofd->vmnt, entry->ofd->vnode, what, &vst)
+                                  : 0);
         }
         return rc;
     }
