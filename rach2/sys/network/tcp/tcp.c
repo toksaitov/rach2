@@ -62,6 +62,7 @@ static void tcp_send_flags(struct tcb *tcb, uint8_t flags);
 static int tcp_output(struct tcb *tcb);
 static int  tcp_resend(struct tcb *tcb, uint32_t seq, uint32_t most);
 static int  tcp_recover_send(struct tcb *tcb);
+static void tcp_ack_grow(struct tcb *tcb);
 static void tcp_pump(struct tcb *tcb);
 static void tcp_giveup(struct tcb *tcb);
 static struct tcb    *tcp_find(uint16_t local_port,
@@ -226,6 +227,19 @@ static void tcp_send_flags(struct tcb *tcb, uint8_t flags)
  * Returns 1 when it stopped on a refusal, 0 when it stopped for any other
  * reason: nothing queued, or a window that allows no more.
  */
+/*
+ * Start the zero-window probe timer when the peer's window is closed over
+ * bytes this side still has to send or has sent unacknowledged, and the
+ * timer is not running. A window update lost on the way is then found by
+ * the probe rather than waited for.
+ */
+static void tcp_arm_zwp(struct tcb *tcb)
+{
+    if (tcb->snd_wnd == 0 && tcb->zwp_timer == 0 && tcb->send_tail != tcb->send_ack) {
+        tcb->zwp_timer = tcb->rto;
+    }
+}
+
 static int tcp_output(struct tcb *tcb)
 {
     uint32_t avail, in_flight, window, usable, send_len, i;
@@ -250,10 +264,7 @@ static int tcp_output(struct tcb *tcb)
         if (send_len > usable)  send_len = usable;
 
         if (send_len == 0) {
-            /* Window closed: probe if the peer advertised a zero window. */
-            if (tcb->snd_wnd == 0 && tcb->zwp_timer == 0) {
-                tcb->zwp_timer = tcb->rto;
-            }
+            tcp_arm_zwp(tcb); /* a closed window is probed, not waited for */
             return 0;
         }
 
@@ -379,7 +390,7 @@ static int tcp_recover_send(struct tcb *tcb)
 
         if (tcb->cwnd < window) window = tcb->cwnd;
         if (out >= window) {
-            return 0;
+            return 0; /* a zero window is probed by the acknowledgement path */
         }
         n = tcp_resend(tcb, tcb->retx_nxt, window - out);
         if (n < 0) {
@@ -440,7 +451,7 @@ static void tcp_enter_fast_recovery(struct tcb *tcb)
     tcb->recovering = TCP_RECOVER_FAST;
     tcb->recover    = sent_end;
     tcb->rtt_start  = 0;
-    (void)tcp_resend(tcb, tcb->snd_una, TCP_MSS);
+    tcb->fast_pending = tcp_resend(tcb, tcb->snd_una, TCP_MSS) < 0;
     tcb->cwnd = new_ss + TCP_DUP_ACKS * TCP_MSS;
 }
 
@@ -450,6 +461,14 @@ static void tcp_enter_fast_recovery(struct tcb *tcb)
  */
 static int tcp_send_more(struct tcb *tcb)
 {
+    if (tcb->fast_pending) {
+        /* The hole the third duplicate named, which the driver refused
+         * then: sent before anything else. */
+        if (tcp_resend(tcb, tcb->snd_una, TCP_MSS) < 0) {
+            return 1;
+        }
+        tcb->fast_pending = 0;
+    }
     if (tcp_recover_send(tcb)) {
         return 1;
     }
@@ -663,7 +682,9 @@ static void tcp_send_zwp(struct tcb *tcb)
 {
     uint16_t seg_len;
 
-    if (tcb->send_tail == tcb->send_head) return;
+    /* The byte probed is the oldest unacknowledged one, so the probe has a
+     * byte to carry whether the ring holds unsent bytes or only sent ones. */
+    if (tcb->send_tail == tcb->send_ack) return;
 
     write16be(tcp_tx_buf + 0,  tcb->local_port);
     write16be(tcp_tx_buf + 2,  tcb->remote_port);
@@ -761,6 +782,8 @@ static void tcp_giveup(struct tcb *tcb)
     tcb->retx_flags = 0;
     tcb->rto_timer  = 0;
     tcb->zwp_timer  = 0;
+    tcb->recovering = 0;
+    tcb->fast_pending = 0;
 
     if (tcb->sock) {
         socket_tcp_connected(tcb->sock);
@@ -809,6 +832,13 @@ static int tcp_tick_pump(struct tcb *tcb)
  */
 static int tcp_pumpable(const struct tcb *tcb)
 {
+    if (tcb->state == TCP_CLOSED || tcb->state == TCP_LISTEN || tcb->state == TCP_TIME_WAIT ||
+        tcb->state == TCP_SYN_SENT || tcb->state == TCP_SYN_RCVD) {
+        return 0;
+    }
+    if (tcb->fast_pending) {
+        return 1;
+    }
     if (tcb->recovering == TCP_RECOVER_RTO &&
         (int32_t)(tcb->retx_nxt - tcb->recover) < 0) {
         return 1;
@@ -915,6 +945,7 @@ void tcp_tick(void)
                     /* No data in flight; a control segment
                      * (SYN/SYN-ACK/FIN). */
                     tcp_emit_flags(tcb, tcb->retx_flags, tcb->retx_seq);
+                    tcb->retransmits++;
                     tcb->rto_timer = tcb->rto;
                 }
             }
@@ -1215,6 +1246,7 @@ static void tcp_ack_data(struct tcb *tcb, uint32_t ack_num)
     tcb->send_ack += (acked < ring) ? acked : ring;
     tcb->snd_una   = ack_num;
     tcb->dup_acks  = 0;
+    tcb->fast_pending = 0; /* the hole owed was at the old snd_una */
     if (tcb->recovering == TCP_RECOVER_RTO &&
         (int32_t)(tcb->retx_nxt - ack_num) < 0) {
         tcb->retx_nxt = ack_num;
@@ -1224,6 +1256,72 @@ static void tcp_ack_data(struct tcb *tcb, uint32_t ack_num)
             tcb->cwnd = tcb->ssthresh;
         }
         tcb->recovering = 0;
+    } else if (!tcb->recovering) {
+        /* Outside a recovery the mark moves up with the data, so the test
+         * that keeps duplicates of a recovery's last acknowledgement from
+         * beginning another stays in range over any length of stream. */
+        tcb->recover = ack_num - 1;
+    }
+}
+
+/*
+ * Take an acknowledgement of new data, in any state that carries data: the
+ * round-trip sample it ends, the ring and the sequence space, the peer's
+ * window, the congestion window's growth or the recovery's next step, the
+ * timer, and then whatever can be sent. The caller has checked that the
+ * acknowledgement is inside (snd_una, snd_nxt].
+ */
+static void tcp_take_ack(struct tcb *tcb, uint32_t ack_num, uint16_t window)
+{
+    uint32_t acked = ack_num - tcb->snd_una;
+    int was_fast = tcb->recovering == TCP_RECOVER_FAST;
+
+    if (tcb->rtt_start != 0 && (int32_t)(ack_num - tcb->rtt_seq) >= 0) {
+        uint32_t rtt = kernel_ticks - (tcb->rtt_start - 1);
+        uint32_t new_rto, delta;
+        if (rtt == 0) rtt = 1;
+        if (tcb->srtt == 0) {
+            tcb->srtt   = rtt << 3;
+            tcb->rttvar = rtt << 1;
+        } else {
+            delta = ((tcb->srtt >> 3) > rtt)
+                    ? (tcb->srtt >> 3) - rtt
+                    : rtt - (tcb->srtt >> 3);
+            tcb->rttvar = tcb->rttvar - (tcb->rttvar >> 2) + delta;
+            tcb->srtt   = tcb->srtt   - (tcb->srtt   >> 3) + rtt;
+        }
+        new_rto = (tcb->srtt >> 3) + tcb->rttvar;
+        if (new_rto < TCP_RTO_MIN) new_rto = TCP_RTO_MIN;
+        if (new_rto > TCP_RTO_MAX) new_rto = TCP_RTO_MAX;
+        tcb->rto       = new_rto;
+        tcb->rtt_start = 0;
+    }
+
+    tcp_ack_data(tcb, ack_num); /* ends a recovery it reaches */
+    tcb->snd_wnd     = window;
+    tcb->rto_backoff = 0;
+
+    if (was_fast) {
+        if (tcb->recovering) {
+            /* Partial: the next hole, at once, and the window deflated by
+             * what left the network (RFC 6582). */
+            tcb->cwnd = (tcb->cwnd > acked ? tcb->cwnd - acked : 0) + TCP_MSS;
+            tcb->fast_pending = tcp_resend(tcb, tcb->snd_una, TCP_MSS) < 0;
+        }
+    } else {
+        tcp_ack_grow(tcb);
+    }
+
+    if (tcb->snd_una == tcb->snd_nxt) {
+        tcb->rto_timer = 0; /* everything acknowledged */
+        tcb->zwp_timer = 0;
+    } else {
+        tcb->rto_timer = tcb->rto;
+    }
+    tcp_arm_zwp(tcb);
+    tcp_pump(tcb);
+    if (tcb->sock) {
+        socket_tcp_writable(tcb->sock); /* freed send-ring space */
     }
 }
 
@@ -1374,6 +1472,9 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
             tcb->state      = TCP_CLOSED;
             tcb->retx_flags = 0;
             tcb->rto_timer  = 0;
+            tcb->zwp_timer  = 0;
+            tcb->recovering = 0;
+            tcb->fast_pending = 0;
             if (tcb->sock) {
                 socket_tcp_connected(tcb->sock);
                 socket_tcp_fin(tcb->sock);
@@ -1510,58 +1611,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
         if (flags & TCP_ACK) {
             if ((int32_t)(ack_num - tcb->snd_una) > 0 &&
                 (int32_t)(ack_num - tcb->snd_nxt) <= 0) {
-                uint32_t acked = ack_num - tcb->snd_una;
-                int was_fast = tcb->recovering == TCP_RECOVER_FAST;
-
-                /* RTT sample, ended by the ACK that covers the sampled
-                 * segment; none runs after a loss (Karn's algorithm). */
-                if (tcb->rtt_start != 0 &&
-                    (int32_t)(ack_num - tcb->rtt_seq) >= 0) {
-                    uint32_t rtt = kernel_ticks - (tcb->rtt_start - 1);
-                    uint32_t new_rto, delta;
-                    if (rtt == 0) rtt = 1;
-                    if (tcb->srtt == 0) {
-                        tcb->srtt   = rtt << 3;
-                        tcb->rttvar = rtt << 1;
-                    } else {
-                        delta = ((tcb->srtt >> 3) > rtt)
-                                ? (tcb->srtt >> 3) - rtt
-                                : rtt - (tcb->srtt >> 3);
-                        tcb->rttvar = tcb->rttvar - (tcb->rttvar >> 2) + delta;
-                        tcb->srtt   = tcb->srtt   - (tcb->srtt   >> 3) + rtt;
-                    }
-                    new_rto = (tcb->srtt >> 3) + tcb->rttvar;
-                    if (new_rto < TCP_RTO_MIN) new_rto = TCP_RTO_MIN;
-                    if (new_rto > TCP_RTO_MAX) new_rto = TCP_RTO_MAX;
-                    tcb->rto       = new_rto;
-                    tcb->rtt_start = 0;
-                }
-
-                tcp_ack_data(tcb, ack_num); /* ends a recovery it reaches */
-                tcb->snd_wnd     = window;
-                tcb->rto_backoff = 0;
-
-                if (was_fast) {
-                    if (tcb->recovering) {
-                        /* Partial: the next hole, at once, and the window
-                         * deflated by what left the network (RFC 6582). */
-                        tcb->cwnd = (tcb->cwnd > acked ? tcb->cwnd - acked : 0)
-                                    + TCP_MSS;
-                        (void)tcp_resend(tcb, tcb->snd_una, TCP_MSS);
-                    }
-                } else {
-                    tcp_ack_grow(tcb);
-                }
-
-                if (tcb->snd_una == tcb->snd_nxt) {
-                    tcb->rto_timer = 0;   /* everything acknowledged */
-                    tcb->zwp_timer = 0;
-                } else {
-                    tcb->rto_timer = tcb->rto;
-                }
-
-                tcp_pump(tcb);
-                socket_tcp_writable(tcb->sock); /* freed send-ring space */
+                tcp_take_ack(tcb, ack_num, window);
             } else if (ack_num == tcb->snd_una && payload_len == 0 &&
                        window == tcb->snd_wnd &&
                        !(flags & (TCP_SYN | TCP_FIN)) &&
@@ -1584,6 +1634,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
             } else if (window != tcb->snd_wnd) {
                 /* Pure window update. */
                 tcb->snd_wnd = window;
+                tcp_arm_zwp(tcb);
                 tcp_pump(tcb);
             }
         }
@@ -1639,9 +1690,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
         if ((flags & TCP_ACK) &&
             (int32_t)(ack_num - tcb->snd_una) > 0 &&
             (int32_t)(ack_num - tcb->snd_nxt) <= 0) {
-            tcp_ack_data(tcb, ack_num);
-            tcp_ack_grow(tcb);
-            (void)tcp_recover_send(tcb);
+            tcp_take_ack(tcb, ack_num, window);
             if (ack_num == tcb->snd_nxt) {
                 tcb->state          = TCP_FIN_WAIT_2;
                 tcb->retx_flags     = 0;
@@ -1723,9 +1772,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
             if ((flags & TCP_ACK) &&
                 (int32_t)(ack_num - tcb->snd_una) > 0 &&
                 (int32_t)(ack_num - tcb->snd_nxt) < 0) {
-                tcp_ack_data(tcb, ack_num); /* a data-only ACK frees the ring */
-                tcp_ack_grow(tcb);
-                (void)tcp_recover_send(tcb);
+                tcp_take_ack(tcb, ack_num, window); /* a data-only ACK frees the ring */
             }
             if (flags & TCP_FIN) {
                 tcp_send_flags(tcb, TCP_ACK); /* re-ACK a retransmitted FIN */
@@ -1740,9 +1787,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
             if ((flags & TCP_ACK) &&
                 (int32_t)(ack_num - tcb->snd_una) > 0 &&
                 (int32_t)(ack_num - tcb->snd_nxt) < 0) {
-                tcp_ack_data(tcb, ack_num); /* a data-only ACK frees the ring */
-                tcp_ack_grow(tcb);
-                (void)tcp_recover_send(tcb);
+                tcp_take_ack(tcb, ack_num, window); /* a data-only ACK frees the ring */
             }
             if (flags & TCP_FIN) {
                 tcp_send_flags(tcb, TCP_ACK); /* re-ACK a retransmitted FIN */
@@ -1751,21 +1796,16 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
         break;
 
     case TCP_CLOSE_WAIT:
-        /* Acknowledge our sent data and keep draining a pending FIN. */
+        /* Acknowledge our sent data as in ESTABLISHED and keep draining a
+         * pending FIN. */
         if ((flags & TCP_ACK) &&
             (int32_t)(ack_num - tcb->snd_una) > 0 &&
             (int32_t)(ack_num - tcb->snd_nxt) <= 0) {
-            tcb->send_ack += ack_num - tcb->snd_una;
-            tcb->snd_una   = ack_num;
-            tcb->snd_wnd   = window;
-            if (tcb->snd_una == tcb->snd_nxt) {
-                tcb->rto_timer = 0;
-            }
-            tcp_pump(tcb);
-            socket_tcp_writable(tcb->sock); /* freed send-ring space */
+            tcp_take_ack(tcb, ack_num, window);
             break;
         } else if ((flags & TCP_ACK) && window != tcb->snd_wnd) {
             tcb->snd_wnd = window; /* a pure window update reopens a closed window */
+            tcp_arm_zwp(tcb);
         }
         tcp_pump(tcb);
         break;

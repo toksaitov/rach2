@@ -140,6 +140,7 @@ struct tcb {
      * on: the sample ends at the acknowledgement that covers it. */
     uint8_t  recovering;   /* 0, TCP_RECOVER_RTO or TCP_RECOVER_FAST  */
     uint8_t  dup_acks;     /* duplicate acknowledgements in a row     */
+    uint8_t  fast_pending; /* a fast resend the driver refused, owed  */
     uint32_t recover;      /* sequence number that ends the recovery  */
     uint32_t retx_nxt;     /* next sequence number to send again      */
     uint32_t rtt_seq;      /* the sample ends at an ACK covering this */
