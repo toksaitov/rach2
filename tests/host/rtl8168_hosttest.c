@@ -2,6 +2,7 @@
  * Host test for the RTL8168GU driver (sys/network/driver/rtl8168.c).
  *
  * host-deps:
+ * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  *
  * The chip is not emulated by QEMU or anything else on the development host,
  * so this driver's first execution is on the laptop. That makes this test the

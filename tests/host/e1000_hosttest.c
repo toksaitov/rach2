@@ -405,6 +405,18 @@ void *k_memset(void *ptr, char c, size_t n)
     return ptr;
 }
 
+void *k_memcpy(void *dest, const void *src, size_t n)
+{
+    unsigned char *d = (unsigned char *)dest;
+    const unsigned char *s = (const unsigned char *)src;
+    size_t i;
+
+    for (i = 0; i < n; i++) {
+        d[i] = s[i];
+    }
+    return dest;
+}
+
 bool pci_find_nth_by_id(uint16_t vendor, uint16_t device, int nth, pci_device_t *out)
 {
     return nth == 0 ? pci_find_device_by_id(vendor, device, out) : false;
