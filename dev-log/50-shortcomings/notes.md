@@ -253,7 +253,9 @@ UDP tells us where the core goes. The same sender over UDP reaches 73 MB/s at 14
 
 `ip_checksum` was one of the per-byte costs: a byte-at-a-time loop folding the carry every two bytes, which measured 343 MB/s on the machine's own processor against 584 for four bytes a turn into a 32-bit accumulator folded once at the end. That change is taken (`f55cae53`), the netconsole host test cross-checks the answer, and booting it moved the transfer from 55 to 57 MB/s, about 4 percent. It is a real cost and not the cause.
 
-What is left to place is the 5.3 us a frame. Two units are instrumenting the send path stage by stage to say where it goes.
+The fixed cost is measured directly by sending small datagrams: 65536 of 64 bytes leave in 0.45 s, 145600 a second, 6.9 us each, so about 6 us goes before a byte of payload is touched. A gigabit at full frames allows 12.3 us a frame, so half the budget is spent on the frame itself. What is left is to say where those 6 us go, which two units are instrumenting stage by stage.
+
+SSH is the same story with more work on top: 157 MB out in 6.0 s, 26.2 MB/s, with 6.16 s of system time and 0.02 s idle. Every path here ends at one saturated core.
 
 ### Entry 48 is fixed and proved on the machine
 
