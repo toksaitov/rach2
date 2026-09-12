@@ -9,6 +9,10 @@
  * running this, so what arrives here came in over USB and out of the shared
  * queue.
  *
+ * With the argument `any`, for a person at a machine, any movement in any
+ * direction passes and the movement seen is printed; without it the suite's
+ * rule holds, right and up by different amounts.
+ *
  * Prints "MOUSEPROBE OK" and exits 0. Freestanding; direct int 0x80.
  */
 
@@ -16,11 +20,12 @@ typedef unsigned int size_t;
 
 #define STDOUT_FILENO 1
 
-#define SYS_EXIT  1
-#define SYS_READ  3
-#define SYS_WRITE 4
-#define SYS_OPEN  5
-#define SYS_CLOSE 6
+#define SYS_EXIT      1
+#define SYS_READ      3
+#define SYS_WRITE     4
+#define SYS_OPEN      5
+#define SYS_CLOSE     6
+#define SYS_NANOSLEEP 162
 
 #define O_RDONLY 0
 
@@ -63,8 +68,39 @@ static void fail(const char *why)
     sys_exit(1);
 }
 
-void _start(void)
+static void put_int(int v)
 {
+    char digits[12];
+    int i = 0;
+
+    if (v < 0) {
+        puts("-");
+        v = -v;
+    }
+    do {
+        digits[i++] = (char)('0' + v % 10);
+        v /= 10;
+    } while (v > 0);
+    while (i > 0) {
+        char one[2];
+
+        one[0] = digits[--i];
+        one[1] = 0;
+        puts(one);
+    }
+}
+
+__asm__(".global _start\n"
+        "_start:\n"
+        "   mov %esp, %eax\n"
+        "   push %eax\n"
+        "   call probe_main\n");
+
+void probe_main(unsigned int *sp)
+{
+    int argc = (int)sp[0];
+    char **argv = (char **)(sp + 1);
+    int any = argc >= 2 && argv[1][0] == 'a';
     int fd;
     int n;
     int tries;
@@ -79,10 +115,13 @@ void _start(void)
 
     /* Opening the device empties the queue, so the movement has to arrive
        after this point rather than before it: the suite moves the mouse while
-       this is already reading. The count is a bound on waiting, not a
-       measure of anything; each turn is a system call, so the machine is not
-       held. */
-    for (tries = 0; tries < 2000000 && !moved; tries++) {
+       this is already reading, and a person at a machine is told to. The
+       wait is fifteen seconds in turns of ten milliseconds, long enough for
+       a hand and short enough for a suite that never moves the mouse. */
+    puts("MOUSEPROBE: move the mouse");
+    for (tries = 0; tries < 1500 && !moved; tries++) {
+        static const int pause[2] = {0, 10000000};
+
         n = syscall3(SYS_READ, fd, (int)(size_t)packet, (int)sizeof(packet));
         if (n < 0) {
             syscall3(SYS_CLOSE, fd, 0, 0);
@@ -99,11 +138,23 @@ void _start(void)
                 }
             }
         }
+        if (!moved) {
+            syscall3(SYS_NANOSLEEP, (int)(size_t)pause, 0, 0);
+        }
     }
     syscall3(SYS_CLOSE, fd, 0, 0);
 
     if (!moved) {
         fail("no movement arrived");
+    }
+    if (any) {
+        puts("MOUSEPROBE: moved x ");
+        put_int(total_x);
+        puts(" y ");
+        put_int(total_y);
+        puts("\n");
+        puts("MOUSEPROBE OK\n");
+        sys_exit(0);
     }
     /* The suite moves the mouse right and up, by different amounts, so that
        axes swapped for each other or a sign turned the wrong way is a failure
