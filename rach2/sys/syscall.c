@@ -12234,6 +12234,17 @@ static void _syscall_handler(isr_params_t *params)
     if (current_proc) {
         current_proc->in_syscall = 0;
     }
+    /* Deliver what this call put on the loopback ring once the ring is half
+     * full, here at its exit rather than only on the next tick: the sender's
+     * own frames are gone, so no delivery runs under them, and a local
+     * transfer is no longer paced at a ring a tick. Below that mark the timer
+     * keeps its turn, which is what lets two datagrams queued in one call
+     * cross. Interrupts are off, the drain refuses to run inside itself, and
+     * it takes a bounded number of datagrams, so whatever is left waits for
+     * the timer as before. */
+    if (ip_loop_crowded()) {
+        ip_loop_drain();
+    }
     sched_take_preempt();
 
     /* Store return value in EAX - will be restored by popal */

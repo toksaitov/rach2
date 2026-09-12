@@ -25,6 +25,7 @@ typedef unsigned char uint8_t;
 #define SYS_READ       3
 #define SYS_WRITE      4
 #define SYS_CLOSE      6
+#define SYS_OPEN       5
 #define SYS_SOCKETCALL 102
 #define SYS_NANOSLEEP  162
 #define SYS_FCNTL64    221
@@ -81,6 +82,18 @@ static int sys_read(int fd, void *buf, size_t count)
     __asm__ __volatile__("int $0x80"
                          : "=a"(r)
                          : "0"(SYS_READ), "b"(fd), "c"(buf), "d"(count)
+                         : "memory");
+    return r;
+}
+
+#define O_RDONLY 0
+
+static int sys_open(const char *path, int flags, int mode)
+{
+    int r;
+    __asm__ __volatile__("int $0x80"
+                         : "=a"(r)
+                         : "0"(SYS_OPEN), "b"(path), "c"(flags), "d"(mode)
                          : "memory");
     return r;
 }
@@ -376,6 +389,117 @@ static void tcp_loop(void)
         fail("tcp peer port");
     }
 
+    sys_close(cs);
+    sys_close(as);
+    sys_close(ls);
+}
+
+/* More bytes than the ring holds, through the ring, in one process.
+ *
+ * The loopback ring is a few dozen frames deep. A transfer larger than it is
+ * exactly the case that used to stall: the sender filled the ring, every
+ * datagram after it was dropped with a line in the log, and the reader waited
+ * for bytes that were never delivered. The sender here writes without
+ * blocking and the reader takes whatever has arrived, so the two make progress
+ * in turn within the one process; what the row requires is that every byte
+ * arrives and that the kernel's count of refused datagrams does not rise.
+ * Entry 50 of milestone 50. */
+#define BULK_BYTES (256u * 1024u)
+
+static uint32_t loop_dropped_now(void)
+{
+    char buf[4096];
+    int fd = sys_open("/proc/stat", O_RDONLY, 0);
+    int n, i;
+    uint32_t v = 0;
+
+    if (fd < 0) {
+        return 0;
+    }
+    n = sys_read(fd, buf, (int)sizeof(buf) - 1);
+    sys_close(fd);
+    if (n <= 0) {
+        return 0;
+    }
+    buf[n] = 0;
+    for (i = 0; i + 16 < n; i++) {
+        if (buf[i] == 'l' && mem_eq((const uint8_t *)(buf + i),
+                                    (const uint8_t *)"loopback_dropped ", 17)) {
+            int k = i + 17;
+
+            while (k < n && buf[k] >= '0' && buf[k] <= '9') {
+                v = v * 10u + (uint32_t)(buf[k] - '0');
+                k++;
+            }
+            return v;
+        }
+    }
+    return 0;
+}
+
+static void tcp_loop_bulk(void)
+{
+    uint32_t args[6];
+    uint8_t sa[16];
+    static char out[4096], in[4096];
+    uint32_t sent = 0, got = 0, spins = 0;
+    uint32_t dropped_before, dropped_after;
+    int ls, cs, as, n, i;
+
+    for (i = 0; i < (int)sizeof(out); i++) {
+        out[i] = (char)(i * 7 + 1);
+    }
+    dropped_before = loop_dropped_now();
+
+    args[0] = AF_INET; args[1] = SOCK_STREAM; args[2] = 0;
+    ls = socketcall(SC_SOCKET, args);
+    if (ls < 0) fail("bulk listener socket");
+    make_sockaddr(sa, TCP_PORT + 3, 0, 0, 0, 0);
+    args[0] = (uint32_t)ls; args[1] = (uint32_t)sa; args[2] = 16;
+    if (socketcall(SC_BIND, args) != 0) fail("bulk bind");
+    args[0] = (uint32_t)ls; args[1] = 2;
+    if (socketcall(SC_LISTEN, args) != 0) fail("bulk listen");
+
+    args[0] = AF_INET; args[1] = SOCK_STREAM; args[2] = 0;
+    cs = socketcall(SC_SOCKET, args);
+    if (cs < 0) fail("bulk client socket");
+    make_sockaddr(sa, TCP_PORT + 3, 127, 0, 0, 1);
+    args[0] = (uint32_t)cs; args[1] = (uint32_t)sa; args[2] = 16;
+    if (socketcall(SC_CONNECT, args) != 0) fail("bulk connect");
+
+    args[0] = (uint32_t)ls; args[1] = 0; args[2] = 0;
+    as = socketcall(SC_ACCEPT, args);
+    if (as < 0) fail("bulk accept");
+
+    if (sys_fcntl(cs, F_SETFL, O_NONBLOCK) != 0) fail("bulk client non-blocking");
+    if (sys_fcntl(as, F_SETFL, O_NONBLOCK) != 0) fail("bulk server non-blocking");
+
+    while (got < BULK_BYTES && spins < 200000u) {
+        spins++;
+        if (sent < BULK_BYTES) {
+            uint32_t want = BULK_BYTES - sent;
+
+            if (want > sizeof(out)) want = sizeof(out);
+            n = sys_write(cs, out, (int)want);
+            if (n > 0) sent += (uint32_t)n;
+        }
+        n = sys_read(as, in, (int)sizeof(in));
+        if (n > 0) {
+            for (i = 0; i < n; i++) {
+                if (in[i] != (char)(((got + (uint32_t)i) % sizeof(out)) * 7 + 1)) {
+                    fail("bulk bytes came back wrong");
+                }
+            }
+            got += (uint32_t)n;
+        }
+    }
+    if (got != BULK_BYTES) {
+        fail("a transfer larger than the loopback ring did not arrive whole");
+    }
+    dropped_after = loop_dropped_now();
+    if (dropped_after != dropped_before) {
+        fail("the loopback ring refused a datagram during the transfer");
+    }
     sys_close(cs);
     sys_close(as);
     sys_close(ls);
@@ -713,6 +837,7 @@ void _start(void)
 {
     udp_loop();
     tcp_loop();
+    tcp_loop_bulk();
     tcp_refused();
     tcp_ports();
     tcp_simultaneous();

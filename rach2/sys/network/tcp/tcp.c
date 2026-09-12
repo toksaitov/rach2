@@ -57,7 +57,7 @@ extern volatile uint32_t kernel_ticks;
 
 static uint16_t tcp_checksum(uint32_t src_ip, uint32_t dst_ip,
                              const uint8_t *seg, uint16_t seg_len);
-static void tcp_emit_flags(struct tcb *tcb, uint8_t flags, uint32_t seq);
+static int tcp_emit_flags(struct tcb *tcb, uint8_t flags, uint32_t seq);
 static void tcp_send_flags(struct tcb *tcb, uint8_t flags);
 static int tcp_output(struct tcb *tcb);
 static int  tcp_resend(struct tcb *tcb, uint32_t seq, uint32_t most);
@@ -162,7 +162,7 @@ static uint16_t tcp_checksum(uint32_t src_ip, uint32_t dst_ip,
 
 /* Build and send a segment with the given control flags at the given sequence,
  * without any retransmission bookkeeping or sequence advance. */
-static void tcp_emit_flags(struct tcb *tcb, uint8_t flags, uint32_t seq)
+static int tcp_emit_flags(struct tcb *tcb, uint8_t flags, uint32_t seq)
 {
     uint8_t  hdr_len;
     uint16_t seg_len;
@@ -188,7 +188,7 @@ static void tcp_emit_flags(struct tcb *tcb, uint8_t flags, uint32_t seq)
     seg_len = hdr_len;
     write16be(tcp_tx_buf + 16,
               tcp_checksum(tcb->local_ip, tcb->remote_ip, tcp_tx_buf, seg_len));
-    ip_tx(tcb->remote_ip, IP_PROTO_TCP, tcp_tx_buf, seg_len, IP_TTL_DEFAULT);
+    return ip_tx(tcb->remote_ip, IP_PROTO_TCP, tcp_tx_buf, seg_len, IP_TTL_DEFAULT);
 }
 
 
@@ -233,8 +233,18 @@ static void ring_get(uint8_t *dst, const uint8_t *ring, uint32_t size, uint32_t 
 static void tcp_send_flags(struct tcb *tcb, uint8_t flags)
 {
     uint32_t seq = tcb->snd_nxt;
+    int rc = tcp_emit_flags(tcb, flags, seq);
 
-    tcp_emit_flags(tcb, flags, seq);
+    /* An answer the interface would not take is owed, not lost. A bare
+     * acknowledgement is owed as a fact and not as a copy: the tick sends a
+     * fresh one, which carries the receive state as it is then, so a run of
+     * refusals costs one segment and not a queue of stale ones. A SYN or a FIN
+     * is kept by the retransmission below, which holds its own sequence
+     * number. Any refusal but a full ring is permanent and is left to the
+     * retransmission timer and its give-up. */
+    if (!(flags & (TCP_SYN | TCP_FIN))) {
+        tcb->ack_owed = (rc == -ENOBUFS) ? 1 : 0;
+    }
 
     if (flags & (TCP_SYN | TCP_FIN)) {
         tcb->retx_flags = flags;
@@ -934,6 +944,16 @@ void tcp_tick(void)
                 tcb_free(tcb);
             }
             continue;
+        }
+
+        /* An acknowledgement the interface refused is sent again here, as a
+         * fresh one carrying the receive state as it now stands. The state
+         * says whether an acknowledgement means anything: a connection that
+         * has not opened or has gone has nothing to acknowledge. */
+        if (tcb->ack_owed && tcb->state != TCP_CLOSED && tcb->state != TCP_LISTEN &&
+            tcb->state != TCP_SYN_SENT) {
+            tcb->ack_owed = 0;
+            tcp_send_flags(tcb, TCP_ACK);
         }
 
         /*

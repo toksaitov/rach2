@@ -14,6 +14,7 @@
 #include "procfs.h"
 
 #include "../latency.h"
+#include "../network/ip/ip.h"
 #include "../mm/kheap.h"
 #include "../mm/pagecache.h"
 #include "bcache.h"
@@ -868,6 +869,11 @@ static int procfs_gen_statsys(struct procfs_text *t)
     ap_u32(t, latency_max(LAT_DISK_WAIT));
     ap_str(t, "\nlatency_console_us ");
     ap_u32(t, latency_max(LAT_CONSOLE));
+    /* Datagrams the loopback ring had no room for. The ring logs the first
+     * and counts the rest, so this line is where a local transfer that lost
+     * something says so. */
+    ap_str(t, "\nloopback_dropped ");
+    ap_u32(t, ip_loop_dropped());
     ap_ch(t, '\n');
     for (p = proc_list; p; p = p->next) {
         if (p->state == PROC_RUNNING || p->state == PROC_READY) {

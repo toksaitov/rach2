@@ -148,6 +148,7 @@ struct tcb {
 
     /* Outstanding control segment to retransmit (SYN/SYN-ACK/FIN). */
     uint8_t  retx_flags;   /* 0 = none, else the control flags       */
+    uint8_t  ack_owed;     /* a bare acknowledgement the ring refused  */
     uint32_t retx_seq;     /* sequence number the control occupies   */
 
     struct socket *sock;   /* owning socket (NULL once detached)     */

@@ -191,6 +191,10 @@ static uint16_t loop_ring_len[LOOP_RING_SLOTS];
  * and the boot record with it, the first time a local transfer ran. */
 static uint32_t loop_dropped;
 static int      loop_drop_logged;
+
+/* Nonzero while `ip_loop_drain` is running, so a delivery that sends a reply
+ * onto the ring cannot drain it again from inside itself. */
+static int loop_draining;
 static uint32_t loop_head, loop_tail;
 
 /**
@@ -340,14 +344,29 @@ uint32_t ip_loop_dropped(void)
     return loop_dropped;
 }
 
+/* More than a pair queued: a simultaneous open is a pair of crossing SYNs and
+ * is only a pair while neither has been delivered, so a pair is left to the
+ * timer; past that the queue is a transfer and is delivered at once. */
+#define LOOP_DRAIN_AT 3u
+
+int ip_loop_crowded(void)
+{
+    return loop_head - loop_tail >= LOOP_DRAIN_AT;
+}
+
 void ip_loop_drain(void)
 {
     unsigned budget = LOOP_RING_SLOTS * 4;
 
+    if (loop_draining) {
+        return; /* a reply built inside a delivery: the outer drain takes it */
+    }
+    loop_draining = 1;
     while (loop_tail != loop_head && budget--) {
         uint32_t slot = loop_tail % LOOP_RING_SLOTS;
 
         ip_rx(loop_ring[slot], loop_ring_len[slot], 1);
         loop_tail++;
     }
+    loop_draining = 0;
 }

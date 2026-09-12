@@ -48,6 +48,16 @@ void ip_loop_drain(void);
 /** Datagrams the loopback ring had no room for since boot. */
 uint32_t ip_loop_dropped(void);
 
+/**
+ * Nonzero when the loopback ring holds more than a pair of datagrams.
+ *
+ * A caller that can deliver outside the interrupt discipline uses this to
+ * drain before the ring fills and starts refusing. A pair is left to the
+ * timer, since a simultaneous open is a pair of crossing SYNs and is only a
+ * pair while neither has been delivered.
+ */
+int ip_loop_crowded(void);
+
 /** 16-bit one's complement checksum over `len` bytes of `buf`. */
 uint16_t ip_checksum(const uint8_t *buf, uint16_t len);
 
