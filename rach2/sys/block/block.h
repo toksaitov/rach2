@@ -203,11 +203,13 @@ void block_partition_init(
 #define BLOCK_REQ_QUARANTINED 3
 
 /**
- * One request on a sleeping device: at most a page, in the request's own page.
+ * One request on a sleeping device, in pages of its own.
  *
- * The request is allocated for the transfer and its page is a frame of the
- * identity-mapped window, whose address the device is given for DMA. A write
- * is copied into the page before `submit` and a read is copied out after a
+ * The request is allocated for the transfer with a buffer of its own: one
+ * page from the identity-mapped window for a transfer of a page, or `pages`
+ * heap pages for a larger one, whose physical addresses the device is given
+ * for DMA. A write is copied into the buffer before `submit` and a read is
+ * copied out after a
  * successful completion, so a completion that arrives after the deadline
  * lands in the request's page and not in memory the caller reused. The
  * request is held by its caller and by its device and freed when both have
@@ -241,9 +243,9 @@ struct block_request {
 #define BLOCK_REQ_SECTORS 8u
 /* The most any device may take in one request: 1 MiB, 256 pages of a heap
  * buffer described page by page to the controller. Each driver declares
- * its own limit within this one, and `block_max_sectors` holds it to this:
- * the AHCI disk takes it whole, the USB stick half of it, the ATA disk 64
- * sectors, since it moves a sector at a time through a port. */
+ * its own limit within this one, and `block_max_sectors` caps it here: the
+ * AHCI disk's limit is the whole 2048, the USB stick's 1024, the ATA
+ * disk's 64, since it moves a sector at a time through a port. */
 #define BLOCK_REQ_MAX_SECTORS 2048u
 
 /** The most one request to `device` may move, in sectors: the backing's

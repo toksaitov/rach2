@@ -356,7 +356,7 @@ static struct block_request *req_take(block_device_t *device, int write, uint64_
             r->overdue = 0;
             r->taken_us = pit_now_us();
             if (waited) {
-                latency_note(LAT_DISK_WAIT, r->taken_us - wait_from);
+                latency_span(LAT_DISK_WAIT, wait_from, r->taken_us);
             }
             irq_restore(flags);
             return r;
@@ -661,7 +661,7 @@ void block_request_complete(struct block_request *request, uint32_t generation, 
     }
     request->status = status;
     request->state = BLOCK_REQ_DONE;
-    latency_note(LAT_DISK, pit_now_us() - request->taken_us);
+    latency_span(LAT_DISK, request->taken_us, pit_now_us());
     req_let_go(request, 0);
     irq_restore(flags);
     if (request->overdue) {

@@ -24,6 +24,14 @@
 /** Record a delay of `us` for `kind` if it is the longest so far. */
 void latency_note(int kind, uint32_t us);
 
+/**
+ * Record the delay from the reading `from` of `pit_now_us` to the later
+ * reading `to`. A reading taken later that answers less is a step of the
+ * clock backwards within a tick, which the subtraction would turn into the
+ * largest delay ever seen; such a pair is dropped.
+ */
+void latency_span(int kind, uint32_t from, uint32_t to);
+
 /** The longest delay recorded for `kind`, in microseconds. */
 uint32_t latency_max(int kind);
 

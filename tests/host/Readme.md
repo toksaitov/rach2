@@ -64,6 +64,7 @@ The suite contains 51 native test programs.
 * `klog_hosttest.c` drives the kernel log against recorders in place of its four destinations. It checks the record's shape and every conversion, one newline however the format ended, the truncation mark, the level each destination takes, the order they are written in with a serial port that never drains, whole-record eviction when the ring wraps, that console output reaches the screen and the port and neither the ring nor the wire, and that a record raised from inside the delivery of another leaves both whole.
 * `krandom_hosttest.c` checks deterministic reseeding, seed separation, byte filling, the all-zero seed, and a fixed monobit sanity case for the ChaCha20 stream.
 * `kstd_hosttest.c` checks kernel integer formatting across bases, signed limits, buffer limits, return counts, and invalid radices.
+* `latency_hosttest.c` drives the kernel's record of its longest delays with a clock the test sets: a delay is the difference of two readings, a pair whose later reading is the smaller is dropped rather than kept as a delay of nearly 2^32 microseconds, and the timer's own gap follows the same rule.
 * `kstring_hosttest.c` checks the kernel string, memory, case-conversion, reverse, and overlapping `memmove` routines.
 * `modlayout_hosttest.c` checks boot-module bounds and overlap rules, accepted edge placements, and bounded diagnostic formatting.
 * `rtc_hosttest.c` checks CMOS BCD, binary, and 12-hour decoding; invalid clock state; leap dates; stable samples; and time-from-anchor arithmetic.

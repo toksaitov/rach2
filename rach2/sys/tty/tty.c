@@ -208,7 +208,7 @@ int tty_read(struct tty *t, unsigned char *kbuf, int count, int nonblock)
         if (n_tty_readable(&t->ldisc)) {
             n = n_tty_read(&t->ldisc, kbuf, count);
             if (t->ready_us) {
-                latency_note(LAT_CONSOLE, pit_now_us() - t->ready_us);
+                latency_span(LAT_CONSOLE, t->ready_us, pit_now_us());
                 t->ready_us = 0;
             }
             kirq_restore(flags);

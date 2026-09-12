@@ -29,6 +29,7 @@ extern void _exit(int status);
 
 #include "../../rach2/sys/block/ahci.h"
 #include "../../rach2/sys/block/block.h"
+#include "../../rach2/sys/latency.h"
 
 /* ---- the model ---- */
 
@@ -369,10 +370,16 @@ int lapic_ready(void)
     return 0;
 }
 
-void latency_note(int which, uint32_t us)
+static int disk_spans;         /* delays noted for the disk */
+static uint32_t disk_span_from; /* the last one's start */
+
+void latency_span(int which, uint32_t from, uint32_t to)
 {
-    (void)which;
-    (void)us;
+    if (which == LAT_DISK) {
+        disk_spans++;
+        disk_span_from = from;
+    }
+    (void)to;
 }
 
 int pci_msi_enable(const pci_device_t *dev, uint8_t vector)
@@ -574,8 +581,12 @@ static void quick_completions(void)
     CHECK("the next request is active", ahci_disks[0].active == &queued_request);
     CHECK("the next completion keeps both interrupt bits pending",
           (reg[P0 + P_IS] & 1) && (reg[R_IS] & 1));
+    queued_request.taken_us = 4200;
+    disk_spans = 0;
     ahci_handler(0);
     CHECK("the next request completes", completed == 2 && !ahci_disks[0].active);
+    CHECK("and its delay is noted from the time it was taken",
+          disk_spans == 1 && disk_span_from == 4200);
     CHECK("the other port remains pending", reg[R_IS] == 2);
 }
 

@@ -873,7 +873,7 @@ static int ahci_io_error(struct ahci_disk *d)
  * HARD_MEMORY_LIMIT is identity-mapped and physically contiguous, and goes
  * in one PRDT entry; one above it is a heap buffer, whose pages may lie
  * anywhere, and gets an entry per page with the page's physical address,
- * up to the eight the table holds. Returns 0 on success, `-EIO` on error,
+ * up to the AHCI_PRDT_MAX the table holds. Returns 0 on success, `-EIO` on error,
  * expiry, or a buffer the table cannot describe. */
 /**
  * Build the command in `d`'s slot: the header, the FIS and the PRDT, and
@@ -1077,8 +1077,9 @@ static int ahci_polled_failed(struct ahci_disk *d)
 /*
  * The interrupt-driven path.
  *
- * A request is at most a page in the identity-mapped window, so its page is
- * one PRDT entry with the physical address the virtual one is. One command
+ * A request's buffer is one PRDT entry when it is a page of the
+ * identity-mapped window and an entry per page when it is heap pages, as
+ * the polled path describes them. One command
  * is active per port; the rest wait in the port's queue. The port's
  * interrupt completes the active request and starts the next, so the
  * processor runs someone else during a transfer and two disks progress
@@ -1141,7 +1142,7 @@ static void ahci_finish_active(struct ahci_disk *d)
         rc = -EIO;
     }
     d->active = 0;
-    latency_note(LAT_DISK, pit_now_us() - r->taken_us);
+    latency_span(LAT_DISK, r->taken_us, pit_now_us());
     block_request_complete(r, d->active_generation, rc);
 }
 
