@@ -152,15 +152,31 @@ static int pci_present = 1;
 
 /* The driver reports what it found through the kernel log, which this test
    has no use for; the records are dropped. */
-/* The format of the last line the driver logged, for the rows that expect
-   one. */
+/* The format of the last line the driver logged, and the values of a link
+   line, for the rows that expect one. The argument list is read with the
+   compiler's own header, which names no type the kernel's disagree with. */
+#include <stdarg.h>
 static const char *last_klog;
+static int last_link_mbps;
+static const char *last_link_duplex;
+static const char *last_link_pause;
+
+static int has(const char *s, const char *sub);
 
 void klog(int level, const char *subsystem, const char *format, ...)
 {
+    va_list ap;
+
     (void)level;
     (void)subsystem;
     last_klog = format;
+    if (has(format, "link %d Mb/s")) {
+        va_start(ap, format);
+        last_link_mbps = va_arg(ap, int);
+        last_link_duplex = va_arg(ap, const char *);
+        last_link_pause = va_arg(ap, const char *);
+        va_end(ap);
+    }
 }
 
 /* Whether `s` contains `sub`; written out, since this test pulls in no host
@@ -231,6 +247,8 @@ static int model_handler_vector = -1;
 static int model_msi_enabled_with_handler;
 static unsigned model_msi_disable_at = 0xffffffffu;
 static int model_sticky_status;
+static unsigned model_acks;               /* writes to the status register */
+static unsigned model_link_change_at_ack; /* the ack after which the link changes, 0 for none */
 static unsigned model_msi_enable_at = 0xffffffffu;
 static int model_arrive_during_drain; /* frames that arrive while the ring is drained */
 static unsigned model_arrive_slot = 1;
@@ -407,7 +425,9 @@ static int model_swallow_doorbell; /* the doorbell does nothing */
  * values it writes are the model's own tallies. */
 static int model_stuck_counters;
 static int model_counter_pending;
+static int model_counter_addressed; /* the low word was written as the address alone */
 static unsigned model_counter_addr;
+static unsigned model_counter_high_read; /* readbacks of the high word */
 static unsigned
     model_tally[8]; /* tx errors, underruns, one, many, aborted, missed, align, multicast */
 static unsigned udelay_calls;
@@ -481,6 +501,9 @@ static unsigned short m_r16(unsigned off)
 
 static unsigned m_r32(unsigned off)
 {
+    if (off == R8168_COUNTERADDRHIGH) {
+        model_counter_high_read++;
+    }
     if (off == R8168_COUNTERADDRLOW && model_counter_pending && !model_stuck_counters) {
         model_counters_complete();
         model_counter_pending = 0;
@@ -535,6 +558,12 @@ static void m_w16(unsigned off, unsigned short v)
         if (!model_sticky_status) {
             unsigned cur = m_r16(off) & ~(unsigned)v;
 
+            /* The link changes the moment after an acknowledgement, so the
+               source is set in a status the driver has just cleared. */
+            model_acks++;
+            if (model_link_change_at_ack != 0 && model_acks == model_link_change_at_ack) {
+                cur |= R8168_INTR_LINKCHG;
+            }
             model_reg[off] = (unsigned char)cur;
             model_reg[off + 1] = (unsigned char)(cur >> 8);
         }
@@ -550,8 +579,18 @@ static void m_w32(unsigned off, unsigned v)
     model_w32_raw(off, v);
 
     if (off == R8168_COUNTERADDRLOW) {
-        model_counter_addr = v;
-        model_counter_pending = (v & R8168_COUNTER_DUMP) != 0;
+        /* The chip dumps only when the command arrives after the address was
+           written on its own and the high word read back, which is the
+           reference's order; a command with the address in the same write,
+           or one that never read the high word, dumps to the old address in
+           the reference's experience, and here to nowhere. */
+        if (!(v & R8168_COUNTER_DUMP)) {
+            model_counter_addr = v;
+            model_counter_addressed = 1;
+        } else if (model_counter_addressed && model_counter_high_read &&
+                   (v & ~0x3fu) == (model_counter_addr & ~0x3fu)) {
+            model_counter_pending = 1;
+        }
     }
 
     /* A command completes here. A write completes by its flag going low, a
@@ -678,16 +717,34 @@ static const struct r8168_io model_io = {m_r8, m_r16, m_r32, m_w8, m_w16, m_w32,
  */
 /* The chip writes the block: its tallies, at the address the request named,
    which here is the driver's own block since the test includes the driver. */
+/* The block's layout is the reference's, by byte offset, so a driver
+   struct that drifted from it would read the wrong fields here. */
+static void model_put32(unsigned char *block, unsigned off, unsigned v)
+{
+    block[off] = (unsigned char)v;
+    block[off + 1] = (unsigned char)(v >> 8);
+    block[off + 2] = (unsigned char)(v >> 16);
+    block[off + 3] = (unsigned char)(v >> 24);
+}
+
+static void model_put16(unsigned char *block, unsigned off, unsigned v)
+{
+    block[off] = (unsigned char)v;
+    block[off + 1] = (unsigned char)(v >> 8);
+}
+
 static void model_counters_complete(void)
 {
-    r8168_counters.tx_errors_lo = model_tally[0];
-    r8168_counters.tx_underrun = (uint16_t)model_tally[1];
-    r8168_counters.tx_one_collision = model_tally[2];
-    r8168_counters.tx_multi_collision = model_tally[3];
-    r8168_counters.tx_aborted = (uint16_t)model_tally[4];
-    r8168_counters.rx_missed = (uint16_t)model_tally[5];
-    r8168_counters.align_errors = (uint16_t)model_tally[6];
-    r8168_counters.rx_multicast = model_tally[7];
+    unsigned char *block = (unsigned char *)&r8168_counters;
+
+    model_put32(block, 16, model_tally[0]); /* tx_errors, low word */
+    model_put16(block, 62, model_tally[1]); /* tx_underrun */
+    model_put32(block, 32, model_tally[2]); /* tx_one_collision */
+    model_put32(block, 36, model_tally[3]); /* tx_multi_collision */
+    model_put16(block, 60, model_tally[4]); /* tx_aborted */
+    model_put16(block, 28, model_tally[5]); /* rx_missed */
+    model_put16(block, 30, model_tally[6]); /* align_errors */
+    model_put32(block, 56, model_tally[7]); /* rx_multicast */
 }
 
 static void model_tx_drain(void)
@@ -735,6 +792,8 @@ static void model_reset(void)
     model_msi_enabled_with_handler = 0;
     model_msi_disable_at = 0xffffffffu;
     model_sticky_status = 0;
+    model_acks = 0;
+    model_link_change_at_ack = 0;
     model_msi_enable_at = 0xffffffffu;
     model_arrive_during_drain = 0;
     model_arrive_slot = 1;
@@ -749,6 +808,8 @@ static void model_reset(void)
     model_swallow_doorbell = 0;
     model_stuck_counters = 0;
     model_counter_pending = 0;
+    model_counter_addressed = 0;
+    model_counter_high_read = 0;
     model_counter_addr = 0;
     udelay_calls = 0;
     model_xid_txconfig = 0x509u << 20;
@@ -1386,7 +1447,7 @@ int main(void)
     model_msi_refuse = 1;
     rx_calls = 0;
     CHECK(rtl8168_init(&model_iface, 0) == NETDEV_UP,
-          "the bring-up completes when the card refuses messages");
+          "the bring-up completes when the card's messages do not enable");
     CHECK(r8168_msi_vector == -1 && m_r16(R8168_INTRMASK) == 0, "and the sources stay masked");
     r8168_rx_ring[0].opts1 = R8168_DESC_FS | R8168_DESC_LS | (64 + 4);
     rtl8168_poll(model_iface.dev);
@@ -1434,6 +1495,9 @@ int main(void)
         r8168_msi_storms = 0;
         model_handler(0);
         CHECK(has(last_klog, "link %d Mb/s"), "a link change the card reports is logged");
+        CHECK(last_link_mbps == 1000 && has(last_link_duplex, "full") &&
+                  has(last_link_pause, "both"),
+              "with the speed, the duplex and the pause of that one sample");
         CHECK(r8168_msi_stuck == 0 && r8168_msi_storms == 0, "and is not taken for a stuck source");
         model_reg[R8168_PHYSTATUS] = 0;
         model_reg[R8168_INTRSTATUS] = (unsigned char)R8168_INTR_LINKCHG;
@@ -1457,6 +1521,76 @@ int main(void)
         CHECK(0, "the bring-up registered a handler for the link rows");
     }
 
+    /* ---- the storm rule against the driver's own frames ---- */
+    /* A source the acknowledgement does not clear, with nothing received: a
+       frame of the driver's own that the chip returns meanwhile, the log's
+       netconsole line among them, is not evidence that the source clears,
+       so the entry counts as stuck. */
+    model_reset();
+    CHECK(rtl8168_init(&model_iface, 0) == NETDEV_UP, "the bring-up completes for the storm rows");
+    if (model_handler) {
+        static const uint8_t frame[64] = {0};
+
+        r8168_msi_stuck = 0;
+        r8168_msi_storms = 0;
+        model_swallow_doorbell = 1;
+        CHECK(rtl8168_tx(model_iface.dev, frame, sizeof(frame)) == NETDEV_TX_OK,
+              "a frame of the driver's own is outstanding");
+        model_swallow_doorbell = 0;
+        model_sticky_status = 1;
+        model_reg[R8168_INTRSTATUS] = R8168_INTR_TXOK;
+        model_reg[R8168_INTRSTATUS + 1] = 0;
+        model_tx_drain(); /* the chip returns the frame as the handler runs */
+        model_handler(0);
+        CHECK(r8168_msi_stuck == 1,
+              "a source that stays set is stuck though the driver's own frame came back");
+        model_sticky_status = 0;
+        model_reg[R8168_INTRSTATUS] = 0;
+        r8168_msi_stuck = 0;
+
+        /* A frame arrives during the first round's drain, so the second
+           round, the last, acknowledges the receive source again, and the
+           link changes right after that acknowledgement: the rounds are
+           used up, and only the acknowledgement after them can find the
+           link source. It is logged there, not lost with the status it
+           clears. */
+        model_reg[R8168_INTRSTATUS] = R8168_INTR_RXOK;
+        model_reg[R8168_PHYSTATUS] = R8168_PHY_LINK | R8168_PHY_100M | R8168_PHY_FULLDUP;
+        r8168_rx_ring[r8168_rx_cur % R8168_RING_SIZE].opts1 =
+            R8168_DESC_FS | R8168_DESC_LS | (64 + 4);
+        model_arrive_during_drain = 1;
+        model_arrive_slot = r8168_rx_cur + 1;
+        model_acks = 0;
+        model_link_change_at_ack = R8168_ISR_ROUNDS;
+        last_klog = 0;
+        r8168_msi_deferred = 0;
+        rx_hook = arrive_during_drain;
+        model_handler(0);
+        rx_hook = 0;
+        model_arrive_during_drain = 0;
+        model_link_change_at_ack = 0;
+        CHECK(model_acks == R8168_ISR_ROUNDS + 1 && r8168_msi_deferred == 1 &&
+                  has(last_klog, "link %d Mb/s") && last_link_mbps == 100,
+              "a link change after the last round's acknowledgement is logged by the "
+              "acknowledgement after the rounds");
+    } else {
+        CHECK(0, "the bring-up registered a handler for the storm rows");
+    }
+
+    /* A card whose messages do not enable is polled, and the tick reads the
+       status and logs a link change as the handler would. */
+    model_reset();
+    model_msi_refuse = 1;
+    CHECK(rtl8168_init(&model_iface, 0) == NETDEV_UP, "the bring-up completes polled");
+    model_reg[R8168_PHYSTATUS] = R8168_PHY_LINK | R8168_PHY_10M;
+    model_reg[R8168_INTRSTATUS] = (unsigned char)R8168_INTR_LINKCHG;
+    model_reg[R8168_INTRSTATUS + 1] = 0;
+    last_klog = 0;
+    rtl8168_poll(model_iface.dev);
+    CHECK(has(last_klog, "link %d Mb/s") && last_link_mbps == 10 && has(last_link_duplex, "half"),
+          "the tick logs a link change on a polled card, with the speed and the duplex");
+    CHECK(m_r16(R8168_INTRSTATUS) == 0, "and acknowledges the status");
+
     /* ---- the card's own counts ---- */
     /* The chip is asked for its tally block at the block's address, and
        answers with its counts in the columns the interface cannot keep. */
@@ -1477,10 +1611,20 @@ int main(void)
         CHECK(rtl8168_netdev.counters == rtl8168_counters, "the table names the counters");
         udelay_calls = 0;
         CHECK(rtl8168_counters(model_iface.dev, &out) == 1, "the card answers with its counts");
-        CHECK(find_write(before, 32, R8168_COUNTERADDRLOW) >= 0, "the chip was asked");
-        CHECK((model_counter_addr & 0x3fu) == R8168_COUNTER_DUMP &&
+        {
+            int hi = find_write_value(before, 32, R8168_COUNTERADDRHIGH, 0);
+            int lo = find_write_value(before, 32, R8168_COUNTERADDRLOW, model_counter_addr);
+            int cmd = find_write_value(before, 32, R8168_COUNTERADDRLOW,
+                                       model_counter_addr | R8168_COUNTER_DUMP);
+
+            CHECK(hi >= 0 && lo > hi && cmd > lo,
+                  "the chip was given the high word, the address alone, then the command, in "
+                  "the reference's order");
+            CHECK(model_counter_high_read >= 1, "with the high word read back between");
+        }
+        CHECK((model_counter_addr & 0x3fu) == 0 &&
                   (model_counter_addr & ~0x3fu) == ((unsigned)(uintptr_t)&r8168_counters & ~0x3fu),
-              "for the block at its own address, aligned, with the dump bit alone");
+              "for the block at its own address, aligned, the address written on its own");
         CHECK(model_r32_raw(R8168_COUNTERADDRHIGH) == 0,
               "and the high word of the address is zero");
         CHECK(out.tx_errors == 5 && out.tx_fifo == 2 && out.tx_collisions == 7 &&

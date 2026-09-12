@@ -22,10 +22,10 @@
  * bring-up against a software model of the chip that asserts the sequence
  * step by step.
  *
- * Deliberately absent, for the whole of this milestone: MSI and MSI-X (this
- * kernel is PIC-only), device interrupts of any kind (the mask stays zero and
- * the driver is polled from the timer tick), jumbo frames, every offload,
- * RSS, VLAN, Wake-on-LAN and runtime power management.
+ * The card's messages are taken on a vector of the driver's own where the
+ * machine routes them, with the timer tick as the fallback pump, and alone on
+ * a machine that cannot route them. Deliberately absent: MSI-X, jumbo frames,
+ * every offload, RSS, VLAN, Wake-on-LAN and runtime power management.
  */
 
 /* Register offsets in the memory window (reference: enum rtl_registers). */

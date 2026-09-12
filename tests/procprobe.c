@@ -431,6 +431,59 @@ static void fd_path_of(char *dst, int fd)
     dst[i] = '\0';
 }
 
+/* Whether the last row of /proc/net/tcp has the retrnsmt column as eight hex
+   digits after the timer field and every one of the stack's own fields
+   with a digit after its name. */
+static int last_row_has_fields(const char *text, int n)
+{
+    int i, start = 0, hex = 0;
+    const char *names[] = {
+        " wnd=", " cwnd=", " flight=", " unsent=", " rto=", " zwp=", " refused=", " for="};
+    unsigned k;
+
+    for (i = 0; i + 1 < n; i++) {
+        if (text[i] == '\n') {
+            start = i + 1;
+        }
+    }
+    for (i = start; i + 21 < n; i++) {
+        if (text[i] == ' ' && text[i + 1] == '0' && text[i + 2] == '0' && text[i + 3] == ':') {
+            int j;
+
+            for (j = i + 13; j < i + 21; j++) {
+                char c = text[j];
+
+                if ((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F')) {
+                    hex++;
+                }
+            }
+            break;
+        }
+    }
+    if (hex != 8) {
+        return 0;
+    }
+    for (k = 0; k < sizeof(names) / sizeof(names[0]); k++) {
+        int found = 0;
+
+        for (i = start; i < n && !found; i++) {
+            const char *p = names[k];
+            int j = 0;
+
+            while (p[j] && i + j < n && text[i + j] == p[j]) {
+                j++;
+            }
+            if (!p[j] && i + j < n && text[i + j] >= '0' && text[i + j] <= '9') {
+                found = 1;
+            }
+        }
+        if (!found) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 /**
  * The inode on the last row of /proc/net/tcp.
  *
@@ -970,6 +1023,9 @@ void probe_main(unsigned int *sp)
         check(lines_in(buf, n) >= 2, "/proc/net/tcp lists the listening socket");
         check(ends_with(buf, n, "\n") && contains(buf, n, " 100 0 0 10 0 wnd="),
               "/proc/net/tcp's last row runs past the inode, which netstat needs");
+        check(last_row_has_fields(buf, n),
+              "/proc/net/tcp's last row has an eight-digit retransmission count and the "
+              "stack's own fields with values");
         /* The listener's row is the one whose local port is 1F90. Its inode is
          * the last number before the trailing fixed columns. */
         row_inode = last_row_inode(buf, n);

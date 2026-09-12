@@ -15,9 +15,10 @@
  * There are three drivers, and where they differ the interface says so rather
  * than hiding it. They differ in how packets arrive: the RTL8139 and the
  * e1000 take an interrupt and deliver from the handler, so their `poll` is
- * NULL; the RTL8168GU runs with its interrupts masked and is driven from the
- * 100 Hz timer tick, so its `poll` does the work. A caller polls through
- * `netdev_poll`, which does nothing for a device that does not need it.
+ * NULL; the RTL8168GU takes its messages when the machine routes them and
+ * is pumped from the 100 Hz timer tick as well, so its `poll` does that
+ * work. A caller polls through `netdev_poll`, which does nothing for a
+ * device that does not need it.
  *
  * Every member here has a consumer. `tx` reports a verdict because all three
  * drivers drop frames under conditions they cannot avoid, and `/proc/net/dev`
@@ -75,9 +76,9 @@ struct netdev_link {
  * driver configure a machine whose card already failed. On anything but
  * `NETDEV_UP`, `error` names the reason. `tx` sends one Ethernet frame
  * (destination MAC through payload, no FCS; the chip appends it) and reports
- * `NETDEV_TX_OK` or `NETDEV_TX_DROPPED`. `poll` is NULL for an
- * interrupt-driven device. `print_info` writes the indented detail under the
- * boot line.
+ * `NETDEV_TX_OK` or `NETDEV_TX_DROPPED`. `poll` is NULL for a device that
+ * needs no pump from the tick. `print_info` writes the indented detail under
+ * the boot line.
  *
  * `stop` silences the device: receiver and transmitter off, interrupts
  * masked, and PCI bus mastering cleared, which is the write that ends DMA

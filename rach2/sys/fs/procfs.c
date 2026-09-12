@@ -718,7 +718,7 @@ uint32_t procfs_ino_pid(int pid)
  * `counters`, in the columns Linux fills from a card's own tallies: frames
  * the card missed add to the receive drops, alignment errors are the frame
  * column, multicasts their own, and on the transmit side errors, underruns
- * (fifo), collisions and the frames the card gave up on (carrier). A card
+ * (fifo), collisions and the transmissions the card aborted (carrier). A card
  * that keeps no such counts leaves them zero. The two compressed columns
  * and the receive fifo are zero: nothing here has them.
  */

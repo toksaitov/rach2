@@ -111,6 +111,7 @@ static uint16_t r8168_cp_cmd;
 static const char *r8168_err = "no RTL8168 present";
 static int r8168_up;
 static void r8168_log_link(void);
+static void r8168_note_sources(uint16_t status);
 
 /* The PHY page base the MDIO shim is on, the reference's tp->ocp_base. */
 #define R8168_OCP_STD_PHY_BASE 0xa400
@@ -925,10 +926,9 @@ static int r8168_phy_init(void)
 #define R8168_PHY_FULLDUP 0x01
 
 /** The negotiated speed in megabits, or 0 with no link. */
-static uint32_t r8168_link_speed(void)
+/* The link's speed as one PHYstatus sample `st` says it, 0 for no link. */
+static uint32_t r8168_speed_of(uint8_t st)
 {
-    uint8_t st = io->r8(R8168_PHYSTATUS);
-
     if (!(st & R8168_PHY_LINK)) {
         return 0;
     }
@@ -1235,7 +1235,11 @@ static uint32_t r8168_service(void)
     if (!r8168_up) {
         return 0;
     }
-    work = r8168_tx_reclaim();
+    /* Only frames received count as work: a frame this driver sent and
+     * reclaims, the log's own netconsole line among them, is not evidence
+     * that a source left set is one that clears. */
+    (void)r8168_tx_reclaim();
+    work = 0;
     for (budget = 0; budget < R8168_RING_SIZE; budget++) {
         uint32_t idx = r8168_rx_cur % R8168_RING_SIZE;
         uint32_t opts1 = r8168_rx_ring[idx].opts1;
@@ -1283,9 +1287,40 @@ static void rtl8168_poll(void *dev)
     uint32_t work;
 
     (void)dev; /* this driver has one card */
+    if (r8168_mmio != 0 && r8168_up && (r8168_msi_vector < 0 || r8168_msi_storms != 0)) {
+        /* No handler acknowledges the status here, so the tick does, and
+         * notes what it says: a link change on a polled card is logged too. */
+        uint16_t status = io->r16(R8168_INTRSTATUS);
+
+        if (status != 0) {
+            r8168_note_sources(status);
+            io->w16(R8168_INTRSTATUS, status);
+        }
+    }
     work = r8168_service();
     if (r8168_msi_vector >= 0) {
         r8168_tick_work += work;
+    }
+}
+
+/*
+ * Note what a status word says besides the rings, before the acknowledgement
+ * clears it: the error sources are counted, since a frame the chip failed to
+ * send has no other record, a descriptor coming back the same either way,
+ * and a link change is logged. Every acknowledgement passes through here,
+ * the handler's rounds, its last one for what arrived meanwhile, and the
+ * tick's on a machine whose messages are off or masked.
+ */
+static void r8168_note_sources(uint16_t status)
+{
+    if (status & R8168_INTR_TXERR) {
+        r8168_txerr_reports++;
+    }
+    if (status & R8168_INTR_RXERR) {
+        r8168_rxerr_reports++;
+    }
+    if (status & R8168_INTR_LINKCHG) {
+        r8168_log_link();
     }
 }
 
@@ -1335,18 +1370,7 @@ static void rtl8168_isr(isr_params_t *params)
         }
         io->w16(R8168_INTRSTATUS, status);
         stuck = (io->r16(R8168_INTRSTATUS) & status) == status;
-        /* The error sources are counted before the status is lost to the
-         * acknowledgement: a frame the chip failed to send has no other
-         * record, since a descriptor comes back the same either way. */
-        if (status & R8168_INTR_TXERR) {
-            r8168_txerr_reports++;
-        }
-        if (status & R8168_INTR_RXERR) {
-            r8168_rxerr_reports++;
-        }
-        if (status & R8168_INTR_LINKCHG) {
-            r8168_log_link();
-        }
+        r8168_note_sources(status);
         work += r8168_service();
     }
     if (stuck && work == 0) {
@@ -1361,6 +1385,7 @@ static void rtl8168_isr(isr_params_t *params)
     r8168_msi_stuck = 0;
     status = io->r16(R8168_INTRSTATUS);
     if (status != 0) {
+        r8168_note_sources(status);
         io->w16(R8168_INTRSTATUS, status);
         r8168_msi_deferred++;
     }
@@ -1372,7 +1397,7 @@ static void rtl8168_isr(isr_params_t *params)
  * The handler is registered before the device is enabled, so no message can
  * arrive on a vector nothing serves, and the sources are unmasked last, once
  * the device is known to send to this vector. A machine with no usable
- * APIC, no vector to give, or a card that refuses the capability stays
+ * APIC, no vector to give, or a capability that does not enable stays
  * polled, which is what the driver was before this and what the diagnostic
  * line reports.
  */
@@ -1442,8 +1467,8 @@ static const char *r8168_pause_words(uint8_t st)
  */
 static void r8168_log_link(void)
 {
-    uint8_t st = io->r8(R8168_PHYSTATUS);
-    uint32_t speed = r8168_link_speed();
+    uint8_t st = io->r8(R8168_PHYSTATUS); /* one sample: every field of one state */
+    uint32_t speed = r8168_speed_of(st);
 
     if (speed == 0) {
         klog(KLOG_INFO, "rtl8168", "link down");
@@ -1456,21 +1481,23 @@ static void r8168_log_link(void)
 static int rtl8168_link(void *dev, struct netdev_link *out)
 {
     uint32_t speed;
+    uint8_t st;
 
     (void)dev; /* this driver has one card */
 
     if (r8168_mmio == 0) {
         return 0;
     }
-    speed = r8168_link_speed();
+    st = io->r8(R8168_PHYSTATUS); /* one sample: every field of one state */
+    speed = r8168_speed_of(st);
     out->up = speed != 0;
     out->mbps = (uint16_t)speed;
-    out->full_duplex = (io->r8(R8168_PHYSTATUS) & R8168_PHY_FULLDUP) ? 1 : 0;
+    out->full_duplex = (st & R8168_PHY_FULLDUP) ? 1 : 0;
     return 1;
 }
 
 /**
- * Ask the chip for its tally counters (rtl8169_do_counters with CounterDump):
+ * Request the chip's tally counters (rtl8169_do_counters with CounterDump):
  * the block's address goes into the two counter registers with the dump bit
  * set, and the chip clears the bit once it has written the block. The wait
  * is bounded as the reference bounds it; a chip that does not answer in
@@ -1485,7 +1512,13 @@ static int r8168_counters_dump(void)
     if (r8168_mmio == 0 || !r8168_up) {
         return 0;
     }
+    /* The reference's order: the high word, read back so the write has
+     * landed, the low word as the address alone, then the address with the
+     * command; a chip given the command with the address in the same write
+     * has, in the reference's experience, dumped to the old address. */
     io->w32(R8168_COUNTERADDRHIGH, 0);
+    (void)io->r32(R8168_COUNTERADDRHIGH);
+    io->w32(R8168_COUNTERADDRLOW, (uint32_t)(uintptr_t)&r8168_counters);
     io->w32(R8168_COUNTERADDRLOW,
             (uint32_t)(uintptr_t)&r8168_counters | R8168_COUNTER_DUMP);
     for (i = 0; i < R8168_COUNTERS_WAIT_STEPS; i++) {
@@ -1504,7 +1537,7 @@ static int r8168_counters_dump(void)
  * columns Linux's driver puts them: missed frames add to the receive drops,
  * alignment errors are the frame column, underruns the transmit fifo column,
  * one-collision and many-collision frames together the collisions, and the
- * frames the chip gave up on the carrier column.
+ * transmissions the chip aborted the carrier column.
  */
 static int rtl8168_counters(void *dev, struct netdev_counters *out)
 {
@@ -1552,8 +1585,10 @@ static void rtl8168_print_info(void *dev)
              r8168_msi_vector, r8168_msi_entries, r8168_msi_idle, r8168_msi_deferred,
              r8168_tick_work);
     } else if (r8168_msi_vector >= 0) {
-        klog(KLOG_INFO, "rtl8168", "messages on vector %d masked after a storm, %d by the tick",
-             r8168_msi_vector, r8168_tick_work);
+        klog(KLOG_INFO, "rtl8168",
+             "messages on vector %d: %d, %d idle, %d deferred, masked after %d storm(s), %d by the tick",
+             r8168_msi_vector, r8168_msi_entries, r8168_msi_idle, r8168_msi_deferred,
+             r8168_msi_storms, r8168_tick_work);
     } else {
         klog(KLOG_INFO, "rtl8168", "polled by the tick");
     }
