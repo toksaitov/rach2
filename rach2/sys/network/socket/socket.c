@@ -576,6 +576,38 @@ int socket_tcp_send(struct socket *sock, const uint8_t *buf, int len, int nonblo
     }
 }
 
+/* The receive ring's copies, in at most two calls each: the ring's size is a
+ * power of two and its index wraps through a mask, so a run that crosses the
+ * end is two straight runs. A byte at a time cost a load, a store and a mask
+ * for every byte of every segment. */
+static void recv_ring_put(struct tcb *tcb, uint32_t at, const uint8_t *src, uint32_t n)
+{
+    uint32_t head = at & (TCP_RING_SIZE - 1);
+    uint32_t first = TCP_RING_SIZE - head;
+
+    if (first > n) {
+        first = n;
+    }
+    k_memcpy(tcb->recv_buf + head, src, first);
+    if (n > first) {
+        k_memcpy(tcb->recv_buf, src + first, n - first);
+    }
+}
+
+static void recv_ring_get(uint8_t *dst, struct tcb *tcb, uint32_t at, uint32_t n)
+{
+    uint32_t head = at & (TCP_RING_SIZE - 1);
+    uint32_t first = TCP_RING_SIZE - head;
+
+    if (first > n) {
+        first = n;
+    }
+    k_memcpy(dst, tcb->recv_buf + head, first);
+    if (n > first) {
+        k_memcpy(dst + first, tcb->recv_buf, n - first);
+    }
+}
+
 /**
  * Copy received stream bytes into the TCB receive ring and wake a reader.
  *
@@ -588,7 +620,7 @@ int socket_tcp_send(struct socket *sock, const uint8_t *buf, int len, int nonblo
 uint16_t socket_tcp_deliver(struct socket *sock, const uint8_t *data, uint16_t len)
 {
     struct tcb *tcb;
-    uint32_t free_space, copy_len, i;
+    uint32_t free_space, copy_len;
 
     if (!sock || !sock->tcb) return 0;
     tcb = sock->tcb;
@@ -597,9 +629,7 @@ uint16_t socket_tcp_deliver(struct socket *sock, const uint8_t *data, uint16_t l
     copy_len   = (uint32_t)len;
     if (copy_len > free_space) copy_len = free_space;
 
-    for (i = 0; i < copy_len; i++) {
-        tcb->recv_buf[(tcb->recv_tail + i) & (TCP_RING_SIZE - 1)] = data[i];
-    }
+    recv_ring_put(tcb, tcb->recv_tail, data, copy_len);
     tcb->recv_tail += copy_len;
 
     wq_wake_all(&sock->waiters);
@@ -617,7 +647,7 @@ uint16_t socket_tcp_deliver(struct socket *sock, const uint8_t *data, uint16_t l
 int socket_tcp_recv(struct socket *sock, uint8_t *buf, int len)
 {
     struct tcb *tcb;
-    uint32_t avail, copy_len, i;
+    uint32_t avail, copy_len;
     int rc;
 
     if (!sock || !sock->tcb) return -1;
@@ -642,9 +672,7 @@ int socket_tcp_recv(struct socket *sock, uint8_t *buf, int len)
     copy_len = avail;
     if (copy_len > (uint32_t)len) copy_len = (uint32_t)len;
 
-    for (i = 0; i < copy_len; i++) {
-        buf[i] = tcb->recv_buf[(tcb->recv_head + i) & (TCP_RING_SIZE - 1)];
-    }
+    recv_ring_get(buf, tcb, tcb->recv_head, copy_len);
     tcb->recv_head += copy_len;
 
     tcp_window_update(sock);
@@ -660,7 +688,7 @@ int socket_tcp_recv(struct socket *sock, uint8_t *buf, int len)
 int socket_tcp_try_recv(struct socket *sock, uint8_t *buf, int len)
 {
     struct tcb *tcb;
-    uint32_t avail, copy_len, i;
+    uint32_t avail, copy_len;
 
     if (!sock || !sock->tcb) return -1;
     tcb = sock->tcb;
@@ -674,9 +702,7 @@ int socket_tcp_try_recv(struct socket *sock, uint8_t *buf, int len)
 
     copy_len = avail;
     if (copy_len > (uint32_t)len) copy_len = (uint32_t)len;
-    for (i = 0; i < copy_len; i++) {
-        buf[i] = tcb->recv_buf[(tcb->recv_head + i) & (TCP_RING_SIZE - 1)];
-    }
+    recv_ring_get(buf, tcb, tcb->recv_head, copy_len);
     tcb->recv_head += copy_len;
 
     tcp_window_update(sock);

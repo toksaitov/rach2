@@ -191,6 +191,43 @@ static void tcp_emit_flags(struct tcb *tcb, uint8_t flags, uint32_t seq)
     ip_tx(tcb->remote_ip, IP_PROTO_TCP, tcp_tx_buf, seg_len, IP_TTL_DEFAULT);
 }
 
+
+/**
+ * Copy `n` bytes into the ring at `at`, and out of it, in at most two calls.
+ *
+ * The ring is a power of two and the index wraps through a mask, so a run
+ * that crosses the end is two straight runs. A byte at a time here, which is
+ * what these were, costs a load, a store and a mask for every byte of every
+ * segment; the kernel's own copy moves words.
+ */
+static void ring_put(uint8_t *ring, uint32_t size, uint32_t at, const uint8_t *src, uint32_t n)
+{
+    uint32_t head = at & (size - 1);
+    uint32_t first = size - head;
+
+    if (first > n) {
+        first = n;
+    }
+    k_memcpy(ring + head, src, first);
+    if (n > first) {
+        k_memcpy(ring, src + first, n - first);
+    }
+}
+
+static void ring_get(uint8_t *dst, const uint8_t *ring, uint32_t size, uint32_t at, uint32_t n)
+{
+    uint32_t head = at & (size - 1);
+    uint32_t first = size - head;
+
+    if (first > n) {
+        first = n;
+    }
+    k_memcpy(dst, ring + head, first);
+    if (n > first) {
+        k_memcpy(dst + first, ring, n - first);
+    }
+}
+
 /* Send a control segment at snd_nxt. SYN and FIN consume a sequence number and
  * are marked for retransmission until acknowledged. */
 static void tcp_send_flags(struct tcb *tcb, uint8_t flags)
@@ -242,7 +279,7 @@ static void tcp_arm_zwp(struct tcb *tcb)
 
 static int tcp_output(struct tcb *tcb)
 {
-    uint32_t avail, in_flight, window, usable, send_len, i;
+    uint32_t avail, in_flight, window, usable, send_len;
     uint16_t seg_len;
 
     for (;;) {
@@ -278,10 +315,8 @@ static int tcp_output(struct tcb *tcb)
         write16be(tcp_tx_buf + 16, 0);
         write16be(tcp_tx_buf + 18, 0);
 
-        for (i = 0; i < send_len; i++) {
-            tcp_tx_buf[TCP_HDR_SIZE + i] =
-                tcb->send_buf[(tcb->send_head + i) & (TCP_RING_SIZE - 1)];
-        }
+        ring_get(tcp_tx_buf + TCP_HDR_SIZE, tcb->send_buf, TCP_RING_SIZE,
+                 tcb->send_head, send_len);
 
         seg_len = (uint16_t)(TCP_HDR_SIZE + send_len);
         write16be(tcp_tx_buf + 16,
@@ -506,7 +541,7 @@ static void tcp_pump(struct tcb *tcb)
 int tcp_send(struct socket *sock, const uint8_t *buf, int len)
 {
     struct tcb *tcb;
-    uint32_t free_space, copy_len, i, flags;
+    uint32_t free_space, copy_len, flags;
 
     if (!sock || !sock->tcb || len < 0) {
         return -1;
@@ -528,9 +563,7 @@ int tcp_send(struct socket *sock, const uint8_t *buf, int len)
     if (copy_len > free_space) copy_len = free_space;
 
     if (copy_len > 0) {
-        for (i = 0; i < copy_len; i++) {
-            tcb->send_buf[(tcb->send_tail + i) & (TCP_RING_SIZE - 1)] = buf[i];
-        }
+        ring_put(tcb->send_buf, TCP_RING_SIZE, tcb->send_tail, buf, copy_len);
         tcb->send_tail += copy_len;
         tcp_output(tcb);
     }
