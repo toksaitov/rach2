@@ -79,6 +79,26 @@ boot_root "$ROOT.first.log" --ok "ROOTDONE" \
     "send=dd if=/dev/zero of=/dev/disk0p2 bs=512 count=1; echo DD\"\"DONE" "expect=DDDONE" \
     "send=echo ROOT\"\"DONE" "expect=ROOTDONE" || fail "the ext2 root boot"
 echo "ext2-test: rach2.root=ext2 mounts the first ext2 partition as the root, writable: OK"
+
+# ---- 2b: what one small write costs the disk, which is entry 49 of milestone
+#      50. A 4 KiB rewrite in place is one data write and one inode store, each
+#      followed by the drive's cache flush, so four commands. The inode was
+#      stored twice a call until `7d94137d`, which made it six. Fifty rewrites
+#      are counted through `/proc/disk` and must stay under five a write, so a
+#      second store coming back fails this row rather than passing unnoticed.
+boot_root "$ROOT.cost.log" --ok "COSTDONE" \
+    "send=dd if=/dev/zero of=/root/cost.bin bs=4096 count=1 2>/dev/null; sync; echo MADE\"\"IT" \
+    "expect=MADEIT" \
+    "send=a=\$(grep ^disk-commands /proc/disk | cut -d' ' -f2); i=0; while [ \$i -lt 50 ]; do dd if=/dev/zero of=/root/cost.bin bs=4096 count=1 conv=notrunc 2>/dev/null; i=\$((i+1)); done; sync; b=\$(grep ^disk-commands /proc/disk | cut -d' ' -f2); echo COST=\$((b-a))" \
+    "expect=COST=" \
+    "send=echo COST\"\"DONE" "expect=COSTDONE" || fail "the small-write cost boot"
+COST=$(grep -a "^COST=[0-9]" "$ROOT.cost.log" | head -1 | tr -d '\r' | cut -d= -f2)
+[ -n "$COST" ] || fail "no command count for the 4 KiB rewrites"
+if [ "$COST" -gt 250 ]; then
+    echo "ext2-test: FAIL: 50 rewrites of 4 KiB took $COST disk commands, over the 250 that five a write allows" >&2
+    exit 1
+fi
+echo "ext2-test: a 4 KiB rewrite costs the disk no more than five commands ($COST for 50): OK"
 ROOT_LINE=$(grep -an 'ext2: root: /dev/disk0p1' "$ROOT.first.log" | head -1 | cut -d: -f1)
 USB_LINE=$(grep -an 'usb: started' "$ROOT.first.log" | head -1 | cut -d: -f1)
 [ -n "$ROOT_LINE" ] && [ -n "$USB_LINE" ] && [ "$ROOT_LINE" -lt "$USB_LINE" ] \
