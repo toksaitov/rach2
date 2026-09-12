@@ -873,7 +873,8 @@ static int ahci_io_error(struct ahci_disk *d)
  * HARD_MEMORY_LIMIT is identity-mapped and physically contiguous, and goes
  * in one PRDT entry; one above it is a heap buffer, whose pages may lie
  * anywhere, and gets an entry per page with the page's physical address,
- * up to the AHCI_PRDT_MAX the table holds. Returns 0 on success, `-EIO` on error,
+ * up to the AHCI_PRDT_MAX entries of the table. Returns 0 on success,
+ * `-EIO` on error,
  * expiry, or a buffer the table cannot describe. */
 /**
  * Build the command in `d`'s slot: the header, the FIS and the PRDT, and

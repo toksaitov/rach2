@@ -938,7 +938,8 @@ int main(void)
             own += b->data[0] == (unsigned char)i && b->data[4095] == (unsigned char)i;
             bcache_release(b);
         }
-        check(reads_made == 2 && own == 255, "and the 255 blocks after it are hits, each with its own bytes");
+        check(reads_made == 2 && own == 255,
+              "and the 255 blocks after it are hits, each with its own bytes");
     }
     b = bcache_get(&vast, 258);
     check(reads_made == 3 && last_count == (WIDE_BLOCKS - 258) * 8,
@@ -992,7 +993,8 @@ int main(void)
         bcache_release(b);
         b = bcache_get(&vast, 21);
         bcache_release(b);
-        check(reads_made == 2, "and the run's last block is in, keyed on the run's own first blocks");
+        check(reads_made == 2,
+              "and the run's last block is in, keyed on the run's own first blocks");
         for (i = 0; i < 21; i++) {
             current_proc = &holders[i / 4];
             bcache_release(held[i]);

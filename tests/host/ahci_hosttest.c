@@ -370,7 +370,7 @@ int lapic_ready(void)
     return 0;
 }
 
-static int disk_spans;         /* delays noted for the disk */
+static int disk_spans;          /* delays noted for the disk */
 static uint32_t disk_span_from; /* the last one's start */
 
 void latency_span(int which, uint32_t from, uint32_t to)

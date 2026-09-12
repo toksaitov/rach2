@@ -573,13 +573,18 @@ calibrate() { # calibrate WIDTH -> CAL_FACTOR, or 1 on a failure
 # `install` builds the kernel inside the guest, twice, which is a computation
 # the emulator runs at a third of its rate beside eleven other machines: it
 # lost that step's 1800 s at twenty and at twelve on 2026-09-10 and passed
-# alone in 778 s, so it runs alone.
+# alone in 778 s, so it runs alone. `imagerace` asks make whether a shared
+# image is out of date, and every other worker in the pool runs make on the
+# same tree: on 2026-09-12 one rebuilt the test image between this suite's
+# touch of a staged program and its question, so the answer was that the
+# image was current and the suite failed a check that passes alone. It is
+# entry 28's rule for a question rather than an artifact, so it runs alone.
 run_set() {
     failed=""; serial=""; pooled=""; lone=""
     for suite in $1; do
         case "$suite" in
             style|host) serial="$serial $suite" ;;
-            usb|diskrate|install) lone="$lone $suite" ;;
+            usb|diskrate|install|imagerace) lone="$lone $suite" ;;
             *)          pooled="$pooled $suite" ;;
         esac
     done

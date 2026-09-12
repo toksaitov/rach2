@@ -22,12 +22,12 @@ extern int printf(const char *fmt, ...);
 
 static int fails;
 
-#define CHECK(cond, what)                       \
-    do {                                        \
-        if (!(cond)) {                          \
-            printf("  FAIL: %s\n", what);       \
-            fails++;                            \
-        }                                       \
+#define CHECK(cond, what)                 \
+    do {                                  \
+        if (!(cond)) {                    \
+            printf("  FAIL: %s\n", what); \
+            fails++;                      \
+        }                                 \
     } while (0)
 
 int main(void)
