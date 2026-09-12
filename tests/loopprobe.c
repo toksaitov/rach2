@@ -134,6 +134,28 @@ static void print(const char *s)
     sys_write(STDOUT_FILENO, s, strlen(s));
 }
 
+static void print_u32(uint32_t v)
+{
+    char d[12];
+    int n = 0;
+
+    if (v == 0) {
+        print("0");
+        return;
+    }
+    while (v > 0 && n < 12) {
+        d[n++] = (char)('0' + (v % 10u));
+        v /= 10u;
+    }
+    while (n > 0) {
+        char one[2];
+
+        one[0] = d[--n];
+        one[1] = 0;
+        print(one);
+    }
+}
+
 static void fail(const char *what)
 {
     print("LOOPPROBE FAIL (");
@@ -404,44 +426,61 @@ static void tcp_loop(void)
  * in turn within the one process; what the row requires is that every byte
  * arrives and that the kernel's count of refused datagrams does not rise.
  * Entry 50 of milestone 50. */
-#define BULK_BYTES (256u * 1024u)
+#define BULK_BYTES      (256u * 1024u)
+/* The ring's slots, from ip.c, and the least this transfer must reach in it.
+ * The floor is what makes the row a measurement and not a hope: a transfer
+ * that never pressed the ring proves nothing about its room. */
+#define LOOP_RING_SLOTS 48u
+#define LOOP_PEAK_FLOOR 8u
 
-static uint32_t loop_dropped_now(void)
+/* One unsigned counter of /proc/stat, by name. */
+static uint32_t proc_stat_u32(const char *key, int keylen)
 {
-    char buf[4096];
     int fd = sys_open("/proc/stat", O_RDONLY, 0);
-    int n, i;
+    static char buf[2048];
     uint32_t v = 0;
+    int n, i;
 
     if (fd < 0) {
-        return 0;
+        fail("opening /proc/stat");
     }
     n = sys_read(fd, buf, (int)sizeof(buf) - 1);
     sys_close(fd);
     if (n <= 0) {
-        return 0;
+        fail("reading /proc/stat");
     }
     buf[n] = 0;
-    for (i = 0; i + 16 < n; i++) {
-        if (buf[i] == 'l' &&
-            mem_eq((const uint8_t *)(buf + i), (const uint8_t *)"loopback_dropped ", 17)) {
-            int k = i + 17;
+    for (i = 0; i + keylen < n; i++) {
+        if ((i == 0 || buf[i - 1] == '\n') &&
+            mem_eq((const uint8_t *)(buf + i), (const uint8_t *)key, keylen)) {
+            int k = i + keylen;
 
-            while (k < n && buf[k] >= '0' && buf[k] <= '9') {
+            while (buf[k] >= '0' && buf[k] <= '9') {
                 v = v * 10u + (uint32_t)(buf[k] - '0');
                 k++;
             }
             return v;
         }
     }
+    fail("/proc/stat has no such counter");
     return 0;
+}
+
+static uint32_t loop_dropped_now(void)
+{
+    return proc_stat_u32("loopback_dropped ", 17);
+}
+
+static uint32_t loop_peak_now(void)
+{
+    return proc_stat_u32("loopback_peak ", 14);
 }
 
 static void tcp_loop_bulk(void)
 {
     uint32_t args[6];
     uint8_t sa[16];
-    static char out[4096], in[4096];
+    static char out[65536], in[16384];
     uint32_t sent = 0, got = 0, spins = 0;
     uint32_t dropped_before, dropped_after;
     int ls, cs, as, n, i;
@@ -496,11 +535,17 @@ static void tcp_loop_bulk(void)
     while (got < BULK_BYTES && spins < 200000u) {
         spins++;
         if (sent < BULK_BYTES) {
-            uint32_t want = BULK_BYTES - sent;
+            /* The stream is `out` repeated, so a write starts where the last
+             * one stopped. A write that takes less than it was offered is
+             * ordinary on a non-blocking socket, and starting again at the
+             * beginning of the buffer would send bytes the reader below is
+             * not expecting and call the kernel wrong for it. */
+            uint32_t at = sent % sizeof(out);
+            uint32_t want = (uint32_t)sizeof(out) - at;
 
-            if (want > sizeof(out))
-                want = sizeof(out);
-            n = sys_write(cs, out, (int)want);
+            if (want > BULK_BYTES - sent)
+                want = BULK_BYTES - sent;
+            n = sys_write(cs, out + at, (int)want);
             if (n > 0)
                 sent += (uint32_t)n;
         }
@@ -521,6 +566,21 @@ static void tcp_loop_bulk(void)
     if (dropped_after != dropped_before) {
         fail("the loopback ring refused a datagram during the transfer");
     }
+    /* The writes above are a window's worth each, which is the largest a
+     * single call can put in the ring: 65535 bytes in segments of 1460 is 45
+     * of the 48 slots, and every call's exit drains the ring before the next
+     * call runs, so this is the pressure the ring is sized for. The high-water
+     * mark says how much room was left. A ring that no longer has that room
+     * refuses a frame here rather than in a boot nobody is watching. */
+    if (loop_peak_now() >= LOOP_RING_SLOTS) {
+        fail("the loopback ring filled to its last slot during the transfer");
+    }
+    if (loop_peak_now() < LOOP_PEAK_FLOOR) {
+        fail("the transfer never pressed the loopback ring");
+    }
+    print("LOOPPROBE ring peak ");
+    print_u32(loop_peak_now());
+    print(" of 48\n");
     sys_close(cs);
     sys_close(as);
     sys_close(ls);
