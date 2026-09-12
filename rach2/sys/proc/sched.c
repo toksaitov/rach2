@@ -1,6 +1,7 @@
 #include "sched.h"
 
 #include "../lib/kirq.h"
+#include "../network/ip/ip.h"
 
 /** Nonzero once preemptive scheduling is enabled; schedule() is a no-op
  * until then. */
@@ -227,9 +228,26 @@ void sched_account_tick(void)
  * during the check, because the interrupt fires the instant after `hlt` and
  * never before it. The marker is set while interrupts are still off, so no
  * tick can be delivered between setting it and the halt it describes.
+ *
+ * Anything on the loopback ring is delivered before the processor is parked,
+ * and this returns without halting so the caller checks its condition again.
+ * Those datagrams are this machine's own, a delivery can be what makes a
+ * process runnable, and nothing else is going to run to deliver them. A
+ * system call's exit delivers only once the ring holds three or more, since
+ * one or two may be the crossing SYNs of a simultaneous open; a single
+ * datagram, which is what a window update or a bare acknowledgement is, would
+ * otherwise wait for the timer, and a local connection would turn over one
+ * window every ten milliseconds. Interrupts are off here, which is the
+ * discipline the drain needs, and a caller that is about to halt holds nothing
+ * and is between operations, which is the state the timer's drain relies on
+ * too.
  */
 void idle_wait_irq_off(void)
 {
+    if (ip_loop_pending()) {
+        ip_loop_drain();
+        return;
+    }
     _in_idle_wait = 1;
     __asm__ __volatile__("sti; hlt; cli");
     _in_idle_wait = 0;
