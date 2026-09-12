@@ -215,10 +215,22 @@ struct tcp_row {
     uint32_t remote_ip;
     uint16_t remote_port;
     int      state;
-    uint32_t txq;   /* bytes queued to send */
+    uint32_t txq;   /* bytes queued to send, sent and unacknowledged included */
     uint32_t rxq;   /* bytes queued to read */
     uint32_t uid;
     uint32_t inode;
+    /* This stack's own view, after Linux's columns: the peer's window, the
+     * congestion window, the bytes in flight, the bytes not yet sent, the
+     * retransmission and zero-window timers, the transmits the driver
+     * refused and how long ago the standing refusal began, in ticks. */
+    uint32_t snd_wnd;
+    uint32_t cwnd;
+    uint32_t in_flight;
+    uint32_t unsent;
+    uint32_t rto_timer;
+    uint32_t zwp_timer;
+    uint32_t tx_refused;
+    uint32_t refused_for;
 };
 
 /**

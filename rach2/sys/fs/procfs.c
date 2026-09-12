@@ -1305,7 +1305,23 @@ static int procfs_gen_nettcp(struct procfs_text *t)
         ap_u32(t, row.uid);
         ap_str(t, "        0 ");
         ap_u32(t, row.inode);
-        ap_str(t, " 1 0000000000000000 100 0 0 10 0\n");
+        ap_str(t, " 1 0000000000000000 100 0 0 10 0 wnd=");
+        ap_u32(t, row.snd_wnd);
+        ap_str(t, " cwnd=");
+        ap_u32(t, row.cwnd);
+        ap_str(t, " flight=");
+        ap_u32(t, row.in_flight);
+        ap_str(t, " unsent=");
+        ap_u32(t, row.unsent);
+        ap_str(t, " rto=");
+        ap_u32(t, row.rto_timer);
+        ap_str(t, " zwp=");
+        ap_u32(t, row.zwp_timer);
+        ap_str(t, " refused=");
+        ap_u32(t, row.tx_refused);
+        ap_str(t, " for=");
+        ap_u32(t, row.refused_for);
+        ap_ch(t, '\n');
     }
     kfree(rows);
     return t->len;

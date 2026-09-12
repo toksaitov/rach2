@@ -441,7 +441,7 @@ static void fd_path_of(char *dst, int fd)
  */
 static int last_row_inode(const char *b, int n)
 {
-    const char *tail = " 1 0000000000000000 100 0 0 10 0\n";
+    const char *tail = " 1 0000000000000000 100 0 0 10 0 wnd=";
     int taillen = (int)strlen(tail);
     int i, end, start, v = 0;
 
@@ -477,7 +477,7 @@ static int last_row_inode(const char *b, int n)
 /** Count rows whose uid field is `want`, and rows whose uid is 0. */
 static void count_row_owners(const char *b, int n, int want, int *matching, int *root)
 {
-    const char *tail = " 1 0000000000000000 100 0 0 10 0\n";
+    const char *tail = " 1 0000000000000000 100 0 0 10 0 wnd=";
     int taillen = (int)strlen(tail);
     int i, j;
 
@@ -577,7 +577,7 @@ static int line_field(const char *b, int n, const char *needle, int idx, char *o
 
 static int no_row_has_zero_inode(const char *b, int n)
 {
-    const char *tail = " 1 0000000000000000 100 0 0 10 0\n";
+    const char *tail = " 1 0000000000000000 100 0 0 10 0 wnd=";
     int taillen = (int)strlen(tail);
     int i, j;
 
@@ -968,7 +968,7 @@ void probe_main(unsigned int *sp)
         check(n > 0 && buf[n - 1] == '\n', "/proc/net/tcp ends with its newline");
         check(contains(buf, n, "inode\n"), "/proc/net/tcp carries its whole header");
         check(lines_in(buf, n) >= 2, "/proc/net/tcp lists the listening socket");
-        check(ends_with(buf, n, " 100 0 0 10 0\n"),
+        check(ends_with(buf, n, "\n") && contains(buf, n, " 100 0 0 10 0 wnd="),
               "/proc/net/tcp's last row runs past the inode, which netstat needs");
         /* The listener's row is the one whose local port is 1F90. Its inode is
          * the last number before the trailing fixed columns. */
@@ -1078,7 +1078,8 @@ void probe_main(unsigned int *sp)
         check(n < (int)sizeof(buf) - 1, "and the whole file fit in one read, so nothing was cut");
         check(lines_in(buf, n) == MAX_TCP_ROWS + 1,
               "a full pool prints a header and one row for every block");
-        check(ends_with(buf, n, " 100 0 0 10 0\n"), "and the last of them is a whole row");
+        check(ends_with(buf, n, "\n") && contains(buf, n, " 100 0 0 10 0 wnd="),
+              "and the last of them is a whole row");
 
         for (i = 0; i < FILL_HERE; i++) {
             syscall1(SYS_CLOSE, fds[i]);
@@ -1162,7 +1163,7 @@ void probe_main(unsigned int *sp)
 
         /* Capacity: the table must come back whole however many rows it has,
          * which is what the bound is for. */
-        check(ends_with(buf, n, " 100 0 0 10 0\n"),
+        check(ends_with(buf, n, "\n") && contains(buf, n, " 100 0 0 10 0 wnd="),
               "a table with several rows still ends with a whole row");
 
         syscall1(SYS_CLOSE, cfd);

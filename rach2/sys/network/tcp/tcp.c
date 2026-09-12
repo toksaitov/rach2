@@ -1650,6 +1650,14 @@ int tcp_snapshot(struct tcp_row **rows)
         out[n].rxq         = t->recv_tail - t->recv_head;
         out[n].uid         = t->uid;
         out[n].inode       = t->inode;
+        out[n].snd_wnd     = t->snd_wnd;
+        out[n].cwnd        = t->cwnd;
+        out[n].in_flight   = t->snd_nxt - t->snd_una;
+        out[n].unsent      = t->send_tail - t->send_head;
+        out[n].rto_timer   = t->rto_timer;
+        out[n].zwp_timer   = t->zwp_timer;
+        out[n].tx_refused  = t->tx_refused;
+        out[n].refused_for = t->refused_since ? kernel_ticks + 1 - t->refused_since : 0;
         n++;
     }
     net_unlock(flags);
