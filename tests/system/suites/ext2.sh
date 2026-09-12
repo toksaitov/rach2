@@ -44,6 +44,16 @@ VOL2="$ROOT.p2"
 PASSWORD=$(cat "$REPO/krffs/rach2_demo_password")
 sh "$REPO/tools/image/mkext2.sh" "$REPO/krffs/manifests/os-real.manifest" "$VOL" 96 > /dev/null 2>&1 \
     || fail "the os-real ext2 volume"
+# The set-id probe and the helper it execs are test programs and are not in the
+# shipped image, so they are put into this volume here rather than into the
+# manifest. `write` stores a file with the mode of the host's copy, which is
+# not what these two need, so each mode is set after it.
+for prog in modeprobe suidhelper; do
+    debugfs -w -R "write $REPO/build/tests/$prog $prog" "$VOL" > /dev/null 2>&1 \
+        || fail "staging $prog in the ext2 volume"
+    debugfs -w -R "sif $prog mode 0100755" "$VOL" > /dev/null 2>&1 \
+        || fail "the mode of $prog in the ext2 volume"
+done
 rm -f "$VOL2"; : > "$VOL2"
 E2FSPROGS_FAKE_TIME=1 mke2fs -q -F -t ext2 -b 4096 -I 128 \
     -O sparse_super,large_file,filetype,^dir_index,resize_inode,^ext_attr,^has_journal,^extent,^64bit,^flex_bg,^metadata_csum,^huge_file,^dir_nlink,^extra_isize \
@@ -99,6 +109,40 @@ if [ "$COST" -gt 250 ]; then
     exit 1
 fi
 echo "ext2-test: a 4 KiB rewrite costs the disk no more than five commands ($COST for 50): OK"
+
+# ---- 2c: the same count for an append, which is the other half of entry 49.
+#      A 4 KiB write that grows the file adds the group's bitmap and its
+#      descriptor to the rewrite's pair, so ten commands with their flushes
+#      where the rewrite has four; the second inode store made it twelve. The
+#      bound is eleven a write, which the fix meets at ten and the second store
+#      fails at twelve. The file crosses from the direct pointers into the
+#      first indirect block on the way, which is a few commands more in the
+#      whole fifty and well inside the bound.
+boot_root "$ROOT.append.log" --ok "APPENDDONE" \
+    "send=rm -f /root/grow.bin; sync; echo READY\"\"NOW" "expect=READYNOW" \
+    "send=a=\$(grep ^disk-commands /proc/disk | cut -d' ' -f2); i=0; while [ \$i -lt 50 ]; do dd if=/dev/zero bs=4096 count=1 2>/dev/null >> /root/grow.bin; i=\$((i+1)); done; sync; b=\$(grep ^disk-commands /proc/disk | cut -d' ' -f2); echo APPEND=\$((b-a))" \
+    "expect=APPEND=" \
+    "send=echo APPEND\"\"DONE" "expect=APPENDDONE" || fail "the append cost boot"
+APPEND=$(grep -a "^APPEND=[0-9]" "$ROOT.append.log" | head -1 | tr -d '\r' | cut -d= -f2)
+[ -n "$APPEND" ] || fail "no command count for the 4 KiB appends"
+if [ "$APPEND" -gt 550 ]; then
+    echo "ext2-test: FAIL: 50 appends of 4 KiB took $APPEND disk commands, over the 550 that eleven a write allows" >&2
+    exit 1
+fi
+echo "ext2-test: a 4 KiB append costs the disk no more than eleven commands ($APPEND for 50): OK"
+
+# ---- 2d: the set-id rules on this file system, which is entry 48 of milestone
+#      50. One plan decides what a chown clears, and both dispatch paths reach
+#      it; the probe asserts a directory keeping its bits, a setgid file with
+#      and without group-execute, a privileged change, a permitted group
+#      change, a refused one and both spellings of a request that changes
+#      nothing, each through the pathname call and through the descriptor. It
+#      runs here because the answers must be the file system's, not KRFFS's.
+#      `/etc/group` gives root no supplementary groups, which is what the
+#      probe needs.
+boot_root "$ROOT.mode.log" --ok "MODEPROBE OK" \
+    "send=/modeprobe /tmp" "expect=MODEPROBE OK" || fail "the set-id rules on the ext2 root"
+echo "ext2-test: the chown and write set-id rules hold on an ext2 root: OK"
 ROOT_LINE=$(grep -an 'ext2: root: /dev/disk0p1' "$ROOT.first.log" | head -1 | cut -d: -f1)
 USB_LINE=$(grep -an 'usb: started' "$ROOT.first.log" | head -1 | cut -d: -f1)
 [ -n "$ROOT_LINE" ] && [ -n "$USB_LINE" ] && [ "$ROOT_LINE" -lt "$USB_LINE" ] \
