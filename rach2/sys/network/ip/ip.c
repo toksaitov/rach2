@@ -176,10 +176,21 @@ static uint8_t ip_tx_buf[IP_HDR_SIZE + 1500];
  * delivered by the timer tick. head is the next slot to fill, tail the next to
  * deliver; both only grow, so head - tail is the queue depth and the indices
  * wrap through the modulo. A full ring drops the datagram, exactly as a full
- * NIC ring would. */
-#define LOOP_RING_SLOTS 8
+ * NIC ring would.
+ *
+ * The ring holds a send window's worth of full frames, since a local TCP
+ * connection fills it with exactly that before the first acknowledgement can
+ * come back: at eight slots a local transfer of any size lost datagrams from
+ * its first burst and stalled. */
+#define LOOP_RING_SLOTS 48
 static uint8_t  loop_ring[LOOP_RING_SLOTS][IP_HDR_SIZE + 1500];
 static uint16_t loop_ring_len[LOOP_RING_SLOTS];
+
+/* Datagrams the ring had no room for, and whether the first has been
+ * logged. A line for every one of them is what wrapped the whole kernel log,
+ * and the boot record with it, the first time a local transfer ran. */
+static uint32_t loop_dropped;
+static int      loop_drop_logged;
 static uint32_t loop_head, loop_tail;
 
 /**
@@ -253,7 +264,12 @@ int ip_tx(uint32_t dst_ip, uint8_t proto,
         uint32_t slot;
 
         if (loop_head - loop_tail == LOOP_RING_SLOTS) {
-            klog(KLOG_WARN, "ip", "loopback: the ring is full, dropped");
+            loop_dropped++;
+            if (!loop_drop_logged) {
+                loop_drop_logged = 1;
+                klog(KLOG_WARN, "ip",
+                     "loopback: the ring is full, dropped; further drops are counted");
+            }
             return -ENOBUFS;
         }
         slot = loop_head % LOOP_RING_SLOTS;
@@ -319,6 +335,11 @@ int ip_tx(uint32_t dst_ip, uint8_t proto,
  * overwrite the datagram being read, and the budget bounds one tick's work
  * so a reply chain cannot starve the timer.
  */
+uint32_t ip_loop_dropped(void)
+{
+    return loop_dropped;
+}
+
 void ip_loop_drain(void)
 {
     unsigned budget = LOOP_RING_SLOTS * 4;

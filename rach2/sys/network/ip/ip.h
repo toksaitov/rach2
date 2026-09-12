@@ -45,6 +45,9 @@ int ip_tx(uint32_t dst_ip, uint8_t proto,
 /** Deliver queued loopback datagrams; called from the timer IRQ each tick. */
 void ip_loop_drain(void);
 
+/** Datagrams the loopback ring had no room for since boot. */
+uint32_t ip_loop_dropped(void);
+
 /** 16-bit one's complement checksum over `len` bytes of `buf`. */
 uint16_t ip_checksum(const uint8_t *buf, uint16_t len);
 
