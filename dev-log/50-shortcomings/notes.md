@@ -211,3 +211,20 @@ u9, the probes and the acceptance. Fixed in `0ea54fd5`: two sticks reporting the
 The second set, at `7bf21b09`, was 87 of 89. `style` failed on two comment lines over 80 columns, in `ahci.c` and `netdev.h`, and on three host test files that had drifted from `.clang-format`; all five are formatting and are fixed in `a175a75e`. `imagerace` failed on its last check, which touches a staged program and asks make whether the shared test image is out of date: one of the fifteen other workers rebuilt that image in between, so the suite read it as current. It passes alone, and it now runs alone, with the reason in `tests/run` and the instance written into entry 28. The third set, at `a175a75e`, passed all 89 suites: 10907 s of suite time in 37 minutes of wall clock, the pool at sixteen measuring a factor of 7.2 against the reference host.
 
 The milestone's Readme and the index entry came after that set, with the accepted commit, the build options, the image hashes, the runs and the hardware. The project Readme's hardware paragraph now records the install, the grown root, the acceptance's 66 rows and the load row.
+
+## The second sitting, 2026-09-12 evening
+
+The owner asked for a fresh install of the current tree from the stick, watched at the console, and then for the machine to be exercised. The stick was written on the Mac from `01d02656` (`631c1a05...`, the image hashing as its manifest says), its third volume formatted again, and the save list and the account's key put on it. The save is the same 1852 ranges, 3693658112 bytes: written to the stick in 4.5 minutes, every range hashed on the machine against the disk, 1852 of 1852, and a second copy pulled to the Mac and hashed again there, 1852 of 1852. The at-size rehearsal ran on the Mac beside it and passed: the same save set, the install and the grow in 795 s, every sector written inside the set, the restore read back as saved.
+
+The owner ran `rach2-install` at the console. It wrote the image, grew the root to 487106928 sectors and armed the candidate; the machine booted the disk on its own and answered SSH with the account's key. The grow took about ten minutes, which is entry 49.
+
+What the machine was then asked to do, and what it said:
+
+* The probes of the test image, copied over and run as root: 39 of 53 passed. The failures are entry 51; none of them is a fault of the kernel except the one below.
+* `modeprobe` found entry 48, a chown taking a directory's set-id bits, reproduced in two shell lines.
+* The disk: 1 MiB writes to a file run at 66.7 MB/s and 4 KiB writes at 494 KB/s, with twelve disk commands and six flushes for each 4 KiB write, which is entry 49. A bare flush is 0.53 ms. Raw reads run at 43.3 MB/s from the stick.
+* The network, with both ends at a gigabit at last: SSH carries 19.7 MB/s inbound and 22.5 MB/s outbound, raw TCP 69 MB/s inbound and 38.8 MB/s outbound, against the wire's 118. A 3.67 GB transfer over SSH completed with no stall. The 11 MB/s of the first sitting was the Mac's 100 Mbit cable, whose ceiling is 11.9; Dropbear's crypto is a real but smaller cost, since the cipher alone moves the rate, 21.9 MB/s with ChaCha20-Poly1305 against 17.5 with AES-128-CTR and 16.3 with AES-256-CTR. What remains, a gigabit link delivering a third of itself to a raw socket, is not explained and is not yet an entry.
+* The loopback address: a small exchange works, a bulk one stalls and writes a kernel line per dropped datagram. That is entry 50, and it wrapped the boot log, which is why the acceptance failed its two boot-log rows.
+* The kernel's own numbers after entry 47's fix: `latency_disk_us` reads 33580, a delay and not a wrapped negative, which is that entry closed on the machine. The timer ticks at 100 Hz, the longest gap 30 ms. A pipe round trip is 5 us, a plain copy 1.6 GB/s, 4 KiB reads 1.2 GB/s.
+* The card reports `link 1000 Mb/s, full duplex, pause both ways`, and 36 transmit errors since boot which do not grow during a transfer.
+* The guest toolchain: `tcc -static` compiled and ran every program written for these measurements on the machine itself.

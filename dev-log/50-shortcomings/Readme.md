@@ -1,6 +1,6 @@
 # Milestone 50: the machine and the shortcomings
 
-The Lenovo runs the system built in milestones 45 through 49, installed from the stick with its root grown into the SSD. The install, the device checks and an hour of twenty-session load are done, and all 47 entries of `plan.md` are fixed or closed. This was the first run on the machine of the new kernel, the disk registry, the AHCI interrupt path, the per-controller USB stack, the installer and the stick, and it took one sitting of the owner's.
+The Lenovo runs the system built in milestones 45 through 49, installed from the stick with its root grown into the SSD. The install, the device checks and an hour of twenty-session load are done, and the 47 entries `plan.md` held at the first close are fixed. A second sitting on the evening of 2026-09-12, a fresh install of the tree at `01d02656` watched at the console and a day's worth of work on the installed machine, added four more: entries 48 to 51, which are open. The milestone is therefore open again, since nothing here is deferred. This was the first run on the machine of the new kernel, the disk registry, the AHCI interrupt path, the per-controller USB stack, the installer and the stick, and it took one sitting of the owner's.
 
 ## What was fixed
 
@@ -29,6 +29,7 @@ The load row ran unattended: twenty SSH sessions as root, each copying `/src/rac
 ## What was accepted
 
 * Commit: `a175a75e`, the last change of the code; this record came after it.
+* Reopened: the second sitting's entries 48 to 51 are not in the runs below; `notes.md` records what the machine was asked to do and what it answered.
 * Build options: the repository's default kernel builds, `-ansi` with `-Werror` and `-Wdeclaration-after-statement`, and no libgcc. The host tests are compiled natively with `-std=c99`, `-fsanitize=address,undefined` and `-fno-sanitize-recover=all`. The suites run at `RACH2_WORKERS=16`, whose pool measured a factor of 7.2 against the reference host and 1.7 at width one.
 * SHA-256 of the kernels and images the closing set used:
   * `952f23d1b4330a8055f7c5274d3d0b29888646d7ef164ac59eb8f4fc3c08c5ec` `build/rach2/kernel`
