@@ -48,25 +48,24 @@ static uint8_t tcp_tx_buf[TCP_HDR_SIZE + 4 + TCP_MSS];
 static uint8_t tcp_cksum_buf[12 + TCP_HDR_SIZE + 4 + TCP_MSS];
 
 /* Largest TCP segment we accept (fits tcp_cksum_buf). */
-#define TCP_SEG_MAX  (TCP_HDR_SIZE + 4 + TCP_MSS)
+#define TCP_SEG_MAX (TCP_HDR_SIZE + 4 + TCP_MSS)
 
 /* Ephemeral source port for active opens. */
 static uint16_t next_ephemeral = 49152;
 
 extern volatile uint32_t kernel_ticks;
 
-static uint16_t tcp_checksum(uint32_t src_ip, uint32_t dst_ip,
-                             const uint8_t *seg, uint16_t seg_len);
+static uint16_t tcp_checksum(uint32_t src_ip, uint32_t dst_ip, const uint8_t *seg,
+                             uint16_t seg_len);
 static int tcp_emit_flags(struct tcb *tcb, uint8_t flags, uint32_t seq);
 static void tcp_send_flags(struct tcb *tcb, uint8_t flags);
 static int tcp_output(struct tcb *tcb);
-static int  tcp_resend(struct tcb *tcb, uint32_t seq, uint32_t most);
-static int  tcp_recover_send(struct tcb *tcb);
+static int tcp_resend(struct tcb *tcb, uint32_t seq, uint32_t most);
+static int tcp_recover_send(struct tcb *tcb);
 static void tcp_ack_grow(struct tcb *tcb);
 static void tcp_pump(struct tcb *tcb);
 static void tcp_giveup(struct tcb *tcb);
-static struct tcb    *tcp_find(uint16_t local_port,
-                               uint32_t remote_ip, uint16_t remote_port);
+static struct tcb *tcp_find(uint16_t local_port, uint32_t remote_ip, uint16_t remote_port);
 static struct socket *tcp_find_listen_sock(uint16_t local_port);
 
 /**
@@ -77,8 +76,7 @@ static struct socket *tcp_find_listen_sock(uint16_t local_port);
  */
 static uint32_t tcp_isn(uint16_t local_port, uint16_t remote_port)
 {
-    return kernel_ticks * 1103515245UL + 12345UL +
-           ((uint32_t)local_port << 16) + remote_port;
+    return kernel_ticks * 1103515245UL + 12345UL + ((uint32_t)local_port << 16) + remote_port;
 }
 
 void tcp_init(void)
@@ -100,12 +98,12 @@ static uint16_t tcp_rcv_window(const struct tcb *tcb)
 
 static void tcb_init(struct tcb *tcb)
 {
-    tcb->in_use   = 1;
-    tcb->state    = TCP_CLOSED;
-    tcb->rcv_wnd  = TCP_WINDOW_SIZE;
+    tcb->in_use = 1;
+    tcb->state = TCP_CLOSED;
+    tcb->rcv_wnd = TCP_WINDOW_SIZE;
     tcb->ssthresh = 65535;
-    tcb->cwnd     = TCP_INIT_CWND;
-    tcb->rto      = TCP_RTO_INIT;
+    tcb->cwnd = TCP_INIT_CWND;
+    tcb->rto = TCP_RTO_INIT;
 }
 
 /**
@@ -148,8 +146,7 @@ void tcb_free(struct tcb *tcb)
  * Compute the TCP checksum over a 12-byte pseudo-header (source IP, dest IP,
  * zero, protocol 6, segment length) followed by the segment.
  */
-static uint16_t tcp_checksum(uint32_t src_ip, uint32_t dst_ip,
-                             const uint8_t *seg, uint16_t seg_len)
+static uint16_t tcp_checksum(uint32_t src_ip, uint32_t dst_ip, const uint8_t *seg, uint16_t seg_len)
 {
     write32be(tcp_cksum_buf + 0, src_ip);
     write32be(tcp_cksum_buf + 4, dst_ip);
@@ -164,15 +161,16 @@ static uint16_t tcp_checksum(uint32_t src_ip, uint32_t dst_ip,
  * without any retransmission bookkeeping or sequence advance. */
 static int tcp_emit_flags(struct tcb *tcb, uint8_t flags, uint32_t seq)
 {
-    uint8_t  hdr_len;
+    uint8_t hdr_len;
     uint16_t seg_len;
+    int rc;
 
-    hdr_len = (flags & TCP_SYN) ? 24 : 20;   /* SYN has an MSS option */
+    hdr_len = (flags & TCP_SYN) ? 24 : 20; /* SYN has an MSS option */
 
-    write16be(tcp_tx_buf + 0,  tcb->local_port);
-    write16be(tcp_tx_buf + 2,  tcb->remote_port);
-    write32be(tcp_tx_buf + 4,  seq);
-    write32be(tcp_tx_buf + 8,  (flags & TCP_ACK) ? tcb->rcv_nxt : 0);
+    write16be(tcp_tx_buf + 0, tcb->local_port);
+    write16be(tcp_tx_buf + 2, tcb->remote_port);
+    write32be(tcp_tx_buf + 4, seq);
+    write32be(tcp_tx_buf + 8, (flags & TCP_ACK) ? tcb->rcv_nxt : 0);
     tcp_tx_buf[12] = (uint8_t)((hdr_len >> 2) << 4);
     tcp_tx_buf[13] = flags;
     write16be(tcp_tx_buf + 14, tcb->rcv_wnd);
@@ -186,11 +184,13 @@ static int tcp_emit_flags(struct tcb *tcb, uint8_t flags, uint32_t seq)
     }
 
     seg_len = hdr_len;
-    write16be(tcp_tx_buf + 16,
-              tcp_checksum(tcb->local_ip, tcb->remote_ip, tcp_tx_buf, seg_len));
-    return ip_tx(tcb->remote_ip, IP_PROTO_TCP, tcp_tx_buf, seg_len, IP_TTL_DEFAULT);
+    write16be(tcp_tx_buf + 16, tcp_checksum(tcb->local_ip, tcb->remote_ip, tcp_tx_buf, seg_len));
+    rc = ip_tx(tcb->remote_ip, IP_PROTO_TCP, tcp_tx_buf, seg_len, IP_TTL_DEFAULT);
+    if (rc == 0 && (flags & TCP_ACK)) {
+        tcb->ack_owed = 0; /* this segment carried the acknowledgement owed */
+    }
+    return rc;
 }
-
 
 /**
  * Copy `n` bytes into the ring at `at`, and out of it, in at most two calls.
@@ -228,33 +228,41 @@ static void ring_get(uint8_t *dst, const uint8_t *ring, uint32_t size, uint32_t 
     }
 }
 
-/* Send a control segment at snd_nxt. SYN and FIN consume a sequence number and
- * are marked for retransmission until acknowledged. */
+/*
+ * Send a control segment at snd_nxt. SYN and FIN consume a sequence number and
+ * are marked for retransmission until acknowledged.
+ *
+ * The two are kept differently when the interface will not take the segment.
+ * A SYN or a FIN is held by the retransmission below, which keeps its own
+ * sequence number and its give-up. A bare acknowledgement is recorded as a
+ * debt instead, and the next tick sends a fresh one carrying the receive state
+ * as it then stands, so a run of refusals costs one segment rather than a
+ * queue of stale ones; any segment that carries an acknowledgement out in the
+ * meantime pays the debt. A refusal other than a full ring leaves no debt: it
+ * is permanent, and the connection is taken down by the retransmission timer
+ * or by its next failure, not by a bare acknowledgement that would fail the
+ * same way.
+ */
 static void tcp_send_flags(struct tcb *tcb, uint8_t flags)
 {
     uint32_t seq = tcb->snd_nxt;
     int rc = tcp_emit_flags(tcb, flags, seq);
 
-    /* An answer the interface would not take is owed, not lost. A bare
-     * acknowledgement is owed as a fact and not as a copy: the tick sends a
-     * fresh one, which carries the receive state as it is then, so a run of
-     * refusals costs one segment and not a queue of stale ones. A SYN or a FIN
-     * is kept by the retransmission below, which holds its own sequence
-     * number. Any refusal but a full ring is permanent and is left to the
-     * retransmission timer and its give-up. */
     if (!(flags & (TCP_SYN | TCP_FIN))) {
         tcb->ack_owed = (rc == -ENOBUFS) ? 1 : 0;
     }
 
     if (flags & (TCP_SYN | TCP_FIN)) {
         tcb->retx_flags = flags;
-        tcb->retx_seq   = seq;
+        tcb->retx_seq = seq;
         if (tcb->rto_timer == 0) {
             tcb->rto_timer = tcb->rto;
         }
     }
-    if (flags & TCP_SYN) tcb->snd_nxt++;
-    if (flags & TCP_FIN) tcb->snd_nxt++;
+    if (flags & TCP_SYN)
+        tcb->snd_nxt++;
+    if (flags & TCP_FIN)
+        tcb->snd_nxt++;
 }
 
 /*
@@ -307,33 +315,32 @@ static int tcp_output(struct tcb *tcb)
         usable = (window > in_flight) ? (window - in_flight) : 0;
 
         send_len = avail;
-        if (send_len > TCP_MSS) send_len = TCP_MSS;
-        if (send_len > usable)  send_len = usable;
+        if (send_len > TCP_MSS)
+            send_len = TCP_MSS;
+        if (send_len > usable)
+            send_len = usable;
 
         if (send_len == 0) {
             tcp_arm_zwp(tcb); /* a closed window is probed, not waited for */
             return 0;
         }
 
-        write16be(tcp_tx_buf + 0,  tcb->local_port);
-        write16be(tcp_tx_buf + 2,  tcb->remote_port);
-        write32be(tcp_tx_buf + 4,  tcb->snd_nxt);
-        write32be(tcp_tx_buf + 8,  tcb->rcv_nxt);
+        write16be(tcp_tx_buf + 0, tcb->local_port);
+        write16be(tcp_tx_buf + 2, tcb->remote_port);
+        write32be(tcp_tx_buf + 4, tcb->snd_nxt);
+        write32be(tcp_tx_buf + 8, tcb->rcv_nxt);
         tcp_tx_buf[12] = (uint8_t)((TCP_HDR_SIZE >> 2) << 4);
         tcp_tx_buf[13] = TCP_ACK | TCP_PSH;
         write16be(tcp_tx_buf + 14, tcb->rcv_wnd);
         write16be(tcp_tx_buf + 16, 0);
         write16be(tcp_tx_buf + 18, 0);
 
-        ring_get(tcp_tx_buf + TCP_HDR_SIZE, tcb->send_buf, TCP_RING_SIZE,
-                 tcb->send_head, send_len);
+        ring_get(tcp_tx_buf + TCP_HDR_SIZE, tcb->send_buf, TCP_RING_SIZE, tcb->send_head, send_len);
 
         seg_len = (uint16_t)(TCP_HDR_SIZE + send_len);
         write16be(tcp_tx_buf + 16,
-                  tcp_checksum(tcb->local_ip, tcb->remote_ip,
-                               tcp_tx_buf, seg_len));
-        if (ip_tx(tcb->remote_ip, IP_PROTO_TCP, tcp_tx_buf, seg_len, IP_TTL_DEFAULT) ==
-            -ENOBUFS) {
+                  tcp_checksum(tcb->local_ip, tcb->remote_ip, tcp_tx_buf, seg_len));
+        if (ip_tx(tcb->remote_ip, IP_PROTO_TCP, tcp_tx_buf, seg_len, IP_TTL_DEFAULT) == -ENOBUFS) {
             tcb->tx_refused++;
             if (tcb->refused_since == 0) {
                 tcb->refused_since = kernel_ticks + 1;
@@ -341,9 +348,10 @@ static int tcp_output(struct tcb *tcb)
             return 1;
         }
         tcb->refused_since = 0;
+        tcb->ack_owed = 0; /* the segment carried the acknowledgement owed */
 
         tcb->send_head += send_len;
-        tcb->snd_nxt   += send_len;
+        tcb->snd_nxt += send_len;
 
         if (tcb->rto_timer == 0) {
             tcb->rto_timer = tcb->rto;
@@ -352,7 +360,7 @@ static int tcp_output(struct tcb *tcb)
          * by the acknowledgement that covers this segment. */
         if (tcb->rtt_start == 0 && !tcb->recovering) {
             tcb->rtt_start = kernel_ticks + 1; /* +1 keeps 0 = no sample */
-            tcb->rtt_seq   = tcb->snd_nxt;
+            tcb->rtt_seq = tcb->snd_nxt;
         }
     }
 }
@@ -381,13 +389,15 @@ static int tcp_resend(struct tcb *tcb, uint32_t seq, uint32_t most)
         return 0;
     }
     send_len = sent_end - seq;
-    if (send_len > TCP_MSS) send_len = TCP_MSS;
-    if (send_len > most) send_len = most;
+    if (send_len > TCP_MSS)
+        send_len = TCP_MSS;
+    if (send_len > most)
+        send_len = most;
 
-    write16be(tcp_tx_buf + 0,  tcb->local_port);
-    write16be(tcp_tx_buf + 2,  tcb->remote_port);
-    write32be(tcp_tx_buf + 4,  seq);
-    write32be(tcp_tx_buf + 8,  tcb->rcv_nxt);
+    write16be(tcp_tx_buf + 0, tcb->local_port);
+    write16be(tcp_tx_buf + 2, tcb->remote_port);
+    write32be(tcp_tx_buf + 4, seq);
+    write32be(tcp_tx_buf + 8, tcb->rcv_nxt);
     tcp_tx_buf[12] = (uint8_t)((TCP_HDR_SIZE >> 2) << 4);
     tcp_tx_buf[13] = TCP_ACK | TCP_PSH;
     write16be(tcp_tx_buf + 14, tcb->rcv_wnd);
@@ -395,15 +405,12 @@ static int tcp_resend(struct tcb *tcb, uint32_t seq, uint32_t most)
     write16be(tcp_tx_buf + 18, 0);
 
     for (i = 0; i < send_len; i++) {
-        tcp_tx_buf[TCP_HDR_SIZE + i] =
-            tcb->send_buf[(from + i) & (TCP_RING_SIZE - 1)];
+        tcp_tx_buf[TCP_HDR_SIZE + i] = tcb->send_buf[(from + i) & (TCP_RING_SIZE - 1)];
     }
 
     seg_len = (uint16_t)(TCP_HDR_SIZE + send_len);
-    write16be(tcp_tx_buf + 16,
-              tcp_checksum(tcb->local_ip, tcb->remote_ip, tcp_tx_buf, seg_len));
-    if (ip_tx(tcb->remote_ip, IP_PROTO_TCP, tcp_tx_buf, seg_len, IP_TTL_DEFAULT) ==
-        -ENOBUFS) {
+    write16be(tcp_tx_buf + 16, tcp_checksum(tcb->local_ip, tcb->remote_ip, tcp_tx_buf, seg_len));
+    if (ip_tx(tcb->remote_ip, IP_PROTO_TCP, tcp_tx_buf, seg_len, IP_TTL_DEFAULT) == -ENOBUFS) {
         tcb->tx_refused++;
         if (tcb->refused_since == 0) {
             tcb->refused_since = kernel_ticks + 1;
@@ -411,6 +418,7 @@ static int tcp_resend(struct tcb *tcb, uint32_t seq, uint32_t most)
         return -1;
     }
     tcb->refused_since = 0;
+    tcb->ack_owed = 0; /* the segment carried the acknowledgement owed */
     tcb->retransmits++;
     return (int)send_len;
 }
@@ -427,13 +435,13 @@ static int tcp_resend(struct tcb *tcb, uint32_t seq, uint32_t most)
  */
 static int tcp_recover_send(struct tcb *tcb)
 {
-    while (tcb->recovering == TCP_RECOVER_RTO &&
-           (int32_t)(tcb->retx_nxt - tcb->recover) < 0) {
+    while (tcb->recovering == TCP_RECOVER_RTO && (int32_t)(tcb->retx_nxt - tcb->recover) < 0) {
         uint32_t window = tcb->snd_wnd;
         uint32_t out = tcb->retx_nxt - tcb->snd_una;
         int n;
 
-        if (tcb->cwnd < window) window = tcb->cwnd;
+        if (tcb->cwnd < window)
+            window = tcb->cwnd;
         if (out >= window) {
             return 0; /* a zero window is probed by the acknowledgement path */
         }
@@ -464,14 +472,15 @@ static void tcp_enter_rto_recovery(struct tcb *tcb)
     uint32_t flight = tcb->recovering ? tcb->cwnd : sent_end - tcb->snd_una;
     uint32_t new_ss = flight / 2u;
 
-    if (new_ss < 2u * TCP_MSS) new_ss = 2u * TCP_MSS;
-    tcb->ssthresh   = new_ss;
-    tcb->cwnd       = TCP_MSS;
+    if (new_ss < 2u * TCP_MSS)
+        new_ss = 2u * TCP_MSS;
+    tcb->ssthresh = new_ss;
+    tcb->cwnd = TCP_MSS;
     tcb->recovering = TCP_RECOVER_RTO;
-    tcb->recover    = sent_end;
-    tcb->retx_nxt   = tcb->snd_una;
-    tcb->dup_acks   = 0;
-    tcb->rtt_start  = 0;
+    tcb->recover = sent_end;
+    tcb->retx_nxt = tcb->snd_una;
+    tcb->dup_acks = 0;
+    tcb->rtt_start = 0;
     (void)tcp_recover_send(tcb);
     tcb->rto_timer = tcb->rto;
 }
@@ -491,11 +500,12 @@ static void tcp_enter_fast_recovery(struct tcb *tcb)
     uint32_t sent_end = tcb->snd_una + (tcb->send_head - tcb->send_ack);
     uint32_t new_ss = (sent_end - tcb->snd_una) / 2u;
 
-    if (new_ss < 2u * TCP_MSS) new_ss = 2u * TCP_MSS;
-    tcb->ssthresh   = new_ss;
+    if (new_ss < 2u * TCP_MSS)
+        new_ss = 2u * TCP_MSS;
+    tcb->ssthresh = new_ss;
     tcb->recovering = TCP_RECOVER_FAST;
-    tcb->recover    = sent_end;
-    tcb->rtt_start  = 0;
+    tcb->recover = sent_end;
+    tcb->rtt_start = 0;
     tcb->fast_pending = tcp_resend(tcb, tcb->snd_una, TCP_MSS) < 0;
     tcb->cwnd = new_ss + TCP_DUP_ACKS * TCP_MSS;
 }
@@ -569,8 +579,9 @@ int tcp_send(struct socket *sock, const uint8_t *buf, int len)
     /* Free space is measured from the acknowledged position so unacked bytes
      * stay in the ring for retransmission. */
     free_space = TCP_RING_SIZE - (tcb->send_tail - tcb->send_ack);
-    copy_len   = (uint32_t)len;
-    if (copy_len > free_space) copy_len = free_space;
+    copy_len = (uint32_t)len;
+    if (copy_len > free_space)
+        copy_len = free_space;
 
     if (copy_len > 0) {
         ring_put(tcb->send_buf, TCP_RING_SIZE, tcb->send_tail, buf, copy_len);
@@ -638,8 +649,8 @@ static int tcp_pair_in_use(uint16_t local_port, uint32_t remote_ip, uint16_t rem
     const struct tcb *t;
 
     for (t = tcbs; t; t = t->next) {
-        if (t->state != TCP_LISTEN && t->local_port == local_port &&
-            t->remote_ip == remote_ip && t->remote_port == remote_port) {
+        if (t->state != TCP_LISTEN && t->local_port == local_port && t->remote_ip == remote_ip &&
+            t->remote_port == remote_port) {
             return 1;
         }
     }
@@ -660,23 +671,23 @@ static void tcp_send_rst_unmatched(uint32_t local_ip, uint32_t remote_ip, uint16
                                    uint16_t remote_port, uint8_t seg_flags, uint32_t seg_seq,
                                    uint32_t seg_ack, uint32_t seg_occupied)
 {
-    uint8_t  flags;
+    uint8_t flags;
     uint32_t seq, ack;
 
     if (seg_flags & TCP_ACK) {
         flags = TCP_RST;
-        seq   = seg_ack;
-        ack   = 0;
+        seq = seg_ack;
+        ack = 0;
     } else {
         flags = TCP_RST | TCP_ACK;
-        seq   = 0;
-        ack   = seg_seq + seg_occupied;
+        seq = 0;
+        ack = seg_seq + seg_occupied;
     }
 
-    write16be(tcp_tx_buf + 0,  local_port);
-    write16be(tcp_tx_buf + 2,  remote_port);
-    write32be(tcp_tx_buf + 4,  seq);
-    write32be(tcp_tx_buf + 8,  ack);
+    write16be(tcp_tx_buf + 0, local_port);
+    write16be(tcp_tx_buf + 2, remote_port);
+    write32be(tcp_tx_buf + 4, seq);
+    write32be(tcp_tx_buf + 8, ack);
     tcp_tx_buf[12] = (uint8_t)((TCP_HDR_SIZE >> 2) << 4);
     tcp_tx_buf[13] = flags;
     write16be(tcp_tx_buf + 14, 0);
@@ -688,14 +699,14 @@ static void tcp_send_rst_unmatched(uint32_t local_ip, uint32_t remote_ip, uint16
 
 /* Find the TCB for an incoming segment: an exact tuple match in a non-LISTEN
  * state, else the LISTEN TCB for the port. */
-static struct tcb *tcp_find(uint16_t local_port,
-                            uint32_t remote_ip, uint16_t remote_port)
+static struct tcb *tcp_find(uint16_t local_port, uint32_t remote_ip, uint16_t remote_port)
 {
     struct tcb *t;
     struct tcb *listen_tcb = NULL;
 
     for (t = tcbs; t; t = t->next) {
-        if (t->local_port != local_port) continue;
+        if (t->local_port != local_port)
+            continue;
 
         if (t->state == TCP_LISTEN) {
             listen_tcb = t;
@@ -727,12 +738,13 @@ static void tcp_send_zwp(struct tcb *tcb)
 
     /* The byte probed is the oldest unacknowledged one, so the probe has a
      * byte to carry whether the ring holds unsent bytes or only sent ones. */
-    if (tcb->send_tail == tcb->send_ack) return;
+    if (tcb->send_tail == tcb->send_ack)
+        return;
 
-    write16be(tcp_tx_buf + 0,  tcb->local_port);
-    write16be(tcp_tx_buf + 2,  tcb->remote_port);
-    write32be(tcp_tx_buf + 4,  tcb->snd_una);
-    write32be(tcp_tx_buf + 8,  tcb->rcv_nxt);
+    write16be(tcp_tx_buf + 0, tcb->local_port);
+    write16be(tcp_tx_buf + 2, tcb->remote_port);
+    write32be(tcp_tx_buf + 4, tcb->snd_una);
+    write32be(tcp_tx_buf + 8, tcb->rcv_nxt);
     tcp_tx_buf[12] = (uint8_t)((TCP_HDR_SIZE >> 2) << 4);
     tcp_tx_buf[13] = TCP_ACK;
     write16be(tcp_tx_buf + 14, tcb->rcv_wnd);
@@ -741,8 +753,7 @@ static void tcp_send_zwp(struct tcb *tcb)
     tcp_tx_buf[TCP_HDR_SIZE] = tcb->send_buf[tcb->send_ack & (TCP_RING_SIZE - 1)];
     seg_len = TCP_HDR_SIZE + 1;
 
-    write16be(tcp_tx_buf + 16,
-              tcp_checksum(tcb->local_ip, tcb->remote_ip, tcp_tx_buf, seg_len));
+    write16be(tcp_tx_buf + 16, tcp_checksum(tcb->local_ip, tcb->remote_ip, tcp_tx_buf, seg_len));
     ip_tx(tcb->remote_ip, IP_PROTO_TCP, tcp_tx_buf, seg_len, IP_TTL_DEFAULT);
 }
 
@@ -773,8 +784,7 @@ void tcp_local_addr_changed(uint32_t new_ip)
             tcb->local_ip = new_ip;
             continue;
         }
-        klog(KLOG_INFO, "tcp",
-             "address changed: aborting a connection opened from the old one");
+        klog(KLOG_INFO, "tcp", "address changed: aborting a connection opened from the old one");
         /* A half-open passive block owns a socket nobody has accepted yet and
            no descriptor refers to, so waking it would leave both to be reclaimed
            by nothing. It is released the way a reset releases it. */
@@ -789,11 +799,11 @@ void tcp_local_addr_changed(uint32_t new_ip)
             tcb_free(tcb);
             continue;
         }
-        tcb->state      = TCP_CLOSED;
-        tcb->so_error   = ENETRESET;
+        tcb->state = TCP_CLOSED;
+        tcb->so_error = ENETRESET;
         tcb->retx_flags = 0;
-        tcb->rto_timer  = 0;
-        tcb->zwp_timer  = 0;
+        tcb->rto_timer = 0;
+        tcb->zwp_timer = 0;
         if (tcb->sock) {
             socket_tcp_connected(tcb->sock);
             socket_tcp_fin(tcb->sock);
@@ -820,11 +830,11 @@ static void tcp_giveup(struct tcb *tcb)
         return;
     }
     klog(KLOG_INFO, "tcp", "connect: timed out, giving up");
-    tcb->state      = TCP_CLOSED;
-    tcb->so_error   = ETIMEDOUT; /* surfaced by SO_ERROR and POLLERR */
+    tcb->state = TCP_CLOSED;
+    tcb->so_error = ETIMEDOUT; /* surfaced by SO_ERROR and POLLERR */
     tcb->retx_flags = 0;
-    tcb->rto_timer  = 0;
-    tcb->zwp_timer  = 0;
+    tcb->rto_timer = 0;
+    tcb->zwp_timer = 0;
     tcb->recovering = 0;
     tcb->fast_pending = 0;
 
@@ -882,8 +892,7 @@ static int tcp_pumpable(const struct tcb *tcb)
     if (tcb->fast_pending) {
         return 1;
     }
-    if (tcb->recovering == TCP_RECOVER_RTO &&
-        (int32_t)(tcb->retx_nxt - tcb->recover) < 0) {
+    if (tcb->recovering == TCP_RECOVER_RTO && (int32_t)(tcb->retx_nxt - tcb->recover) < 0) {
         return 1;
     }
     return (tcb->state == TCP_ESTABLISHED || tcb->state == TCP_CLOSE_WAIT) &&
@@ -942,6 +951,15 @@ void tcp_tick(void)
         if (tcb->state == TCP_TIME_WAIT) {
             if (kernel_ticks >= tcb->timewait_until) {
                 tcb_free(tcb);
+                continue;
+            }
+            /* The acknowledgement of the peer's FIN is owed from here as well:
+             * a connection reaches this state by sending it, and a refusal
+             * there would otherwise wait for the peer to send its FIN again,
+             * which this block may not outlive. */
+            if (tcb->ack_owed) {
+                tcb->ack_owed = 0;
+                tcp_send_flags(tcb, TCP_ACK);
             }
             continue;
         }
@@ -979,10 +997,11 @@ void tcp_tick(void)
                 }
 
                 tcb->rto <<= 1;
-                if (tcb->rto > TCP_RTO_MAX) tcb->rto = TCP_RTO_MAX;
+                if (tcb->rto > TCP_RTO_MAX)
+                    tcb->rto = TCP_RTO_MAX;
 
-                klog(KLOG_DEBUG, "tcp", "retransmit: rto %d, try %d",
-                              (unsigned)tcb->rto, (int)tcb->rto_backoff);
+                klog(KLOG_DEBUG, "tcp", "retransmit: rto %d, try %d", (unsigned)tcb->rto,
+                     (int)tcb->rto_backoff);
 
                 if (tcb->send_head != tcb->send_ack) {
                     /*
@@ -1009,10 +1028,10 @@ void tcp_tick(void)
             if (tcb->zwp_timer == 0 && tcb->snd_wnd == 0) {
                 tcp_send_zwp(tcb);
                 tcb->zwp_timer = tcb->rto << 1;
-                if (tcb->zwp_timer > TCP_RTO_MAX) tcb->zwp_timer = TCP_RTO_MAX;
+                if (tcb->zwp_timer > TCP_RTO_MAX)
+                    tcb->zwp_timer = TCP_RTO_MAX;
             }
         }
-
     }
     tcp_tick_pumps();
 }
@@ -1073,13 +1092,13 @@ int tcp_listen(struct socket *sock, uint16_t port)
         return -ENOBUFS;
     }
 
-    tcb->local_ip   = net_ip_addr;
+    tcb->local_ip = net_ip_addr;
     tcb->local_port = port;
-    tcb->state      = TCP_LISTEN;
-    tcb->sock       = sock;
-    tcb->uid        = sock->uid;
-    tcb->inode      = sock->inode;
-    sock->tcb       = tcb;
+    tcb->state = TCP_LISTEN;
+    tcb->sock = sock;
+    tcb->uid = sock->uid;
+    tcb->inode = sock->inode;
+    sock->tcb = tcb;
 
     net_unlock(flags);
     return 0;
@@ -1130,7 +1149,8 @@ int tcp_connect(struct socket *sock, uint32_t dst_ip, uint16_t dst_port)
 
         do {
             local = next_ephemeral++;
-            if (next_ephemeral < 49152) next_ephemeral = 49152;
+            if (next_ephemeral < 49152)
+                next_ephemeral = 49152;
             if (++tries > 16384) {
                 net_unlock(flags);
                 return -EADDRNOTAVAIL; /* every ephemeral port is in use */
@@ -1152,20 +1172,20 @@ int tcp_connect(struct socket *sock, uint32_t dst_ip, uint16_t dst_port)
 
         tcb->local_ip = out ? out->ip : net_ip_addr;
     }
-    tcb->local_port  = local;
-    tcb->remote_ip   = dst_ip;
+    tcb->local_port = local;
+    tcb->remote_ip = dst_ip;
     tcb->remote_port = dst_port;
-    tcb->iss         = tcp_isn(tcb->local_port, dst_port);
-    tcb->snd_nxt     = tcb->iss;
-    tcb->snd_una     = tcb->iss;
-    tcb->recover     = tcb->iss;
-    tcb->sock        = sock;
-    tcb->uid        = sock->uid;
-    tcb->inode      = sock->inode;
+    tcb->iss = tcp_isn(tcb->local_port, dst_port);
+    tcb->snd_nxt = tcb->iss;
+    tcb->snd_una = tcb->iss;
+    tcb->recover = tcb->iss;
+    tcb->sock = sock;
+    tcb->uid = sock->uid;
+    tcb->inode = sock->inode;
 
-    sock->tcb         = tcb;
-    sock->local_port  = tcb->local_port;
-    sock->remote_ip   = dst_ip;
+    sock->tcb = tcb;
+    sock->local_port = tcb->local_port;
+    sock->remote_ip = dst_ip;
     sock->remote_port = dst_port;
 
     tcp_send_flags(tcb, TCP_SYN);
@@ -1188,7 +1208,8 @@ void tcp_close(struct socket *sock)
     struct tcb *tcb;
     uint32_t flags;
 
-    if (!sock || !sock->tcb) return;
+    if (!sock || !sock->tcb)
+        return;
     tcb = sock->tcb;
 
     /* Reachable from syscall context (close/exit) and from IRQ context (a reset
@@ -1273,8 +1294,7 @@ void tcp_window_update(struct socket *sock)
     flags = net_lock();
     tcb = sock->tcb;
     if (tcb && tcb->state == TCP_ESTABLISHED) {
-        wnd = rcvwnd_update(tcb->rcv_wnd, tcb->recv_tail - tcb->recv_head,
-                            TCP_RING_SIZE, TCP_MSS);
+        wnd = rcvwnd_update(tcb->rcv_wnd, tcb->recv_tail - tcb->recv_head, TCP_RING_SIZE, TCP_MSS);
         if (wnd != 0u) {
             tcb->rcv_wnd = wnd;
             tcp_send_flags(tcb, TCP_ACK);
@@ -1294,14 +1314,13 @@ void tcp_window_update(struct socket *sock)
 static void tcp_ack_data(struct tcb *tcb, uint32_t ack_num)
 {
     uint32_t acked = ack_num - tcb->snd_una;
-    uint32_t ring  = tcb->send_head - tcb->send_ack;
+    uint32_t ring = tcb->send_head - tcb->send_ack;
 
     tcb->send_ack += (acked < ring) ? acked : ring;
-    tcb->snd_una   = ack_num;
-    tcb->dup_acks  = 0;
+    tcb->snd_una = ack_num;
+    tcb->dup_acks = 0;
     tcb->fast_pending = 0; /* the hole owed was at the old snd_una */
-    if (tcb->recovering == TCP_RECOVER_RTO &&
-        (int32_t)(tcb->retx_nxt - ack_num) < 0) {
+    if (tcb->recovering == TCP_RECOVER_RTO && (int32_t)(tcb->retx_nxt - ack_num) < 0) {
         tcb->retx_nxt = ack_num;
     }
     if (tcb->recovering && (int32_t)(ack_num - tcb->recover) >= 0) {
@@ -1332,26 +1351,27 @@ static void tcp_take_ack(struct tcb *tcb, uint32_t ack_num, uint16_t window)
     if (tcb->rtt_start != 0 && (int32_t)(ack_num - tcb->rtt_seq) >= 0) {
         uint32_t rtt = kernel_ticks - (tcb->rtt_start - 1);
         uint32_t new_rto, delta;
-        if (rtt == 0) rtt = 1;
+        if (rtt == 0)
+            rtt = 1;
         if (tcb->srtt == 0) {
-            tcb->srtt   = rtt << 3;
+            tcb->srtt = rtt << 3;
             tcb->rttvar = rtt << 1;
         } else {
-            delta = ((tcb->srtt >> 3) > rtt)
-                    ? (tcb->srtt >> 3) - rtt
-                    : rtt - (tcb->srtt >> 3);
+            delta = ((tcb->srtt >> 3) > rtt) ? (tcb->srtt >> 3) - rtt : rtt - (tcb->srtt >> 3);
             tcb->rttvar = tcb->rttvar - (tcb->rttvar >> 2) + delta;
-            tcb->srtt   = tcb->srtt   - (tcb->srtt   >> 3) + rtt;
+            tcb->srtt = tcb->srtt - (tcb->srtt >> 3) + rtt;
         }
         new_rto = (tcb->srtt >> 3) + tcb->rttvar;
-        if (new_rto < TCP_RTO_MIN) new_rto = TCP_RTO_MIN;
-        if (new_rto > TCP_RTO_MAX) new_rto = TCP_RTO_MAX;
-        tcb->rto       = new_rto;
+        if (new_rto < TCP_RTO_MIN)
+            new_rto = TCP_RTO_MIN;
+        if (new_rto > TCP_RTO_MAX)
+            new_rto = TCP_RTO_MAX;
+        tcb->rto = new_rto;
         tcb->rtt_start = 0;
     }
 
     tcp_ack_data(tcb, ack_num); /* ends a recovery it reaches */
-    tcb->snd_wnd     = window;
+    tcb->snd_wnd = window;
     tcb->rto_backoff = 0;
 
     if (was_fast) {
@@ -1387,10 +1407,12 @@ static void tcp_ack_grow(struct tcb *tcb)
 {
     if (tcb->cwnd < tcb->ssthresh) {
         tcb->cwnd += TCP_MSS;
-        if (tcb->cwnd > tcb->ssthresh) tcb->cwnd = tcb->ssthresh;
+        if (tcb->cwnd > tcb->ssthresh)
+            tcb->cwnd = tcb->ssthresh;
     } else {
         uint32_t inc = (uint32_t)TCP_MSS * TCP_MSS / tcb->cwnd;
-        if (inc == 0) inc = 1;
+        if (inc == 0)
+            inc = 1;
         tcb->cwnd += inc;
     }
 }
@@ -1437,15 +1459,14 @@ static uint16_t tcp_accept_data(struct tcb *tcb, const uint8_t *payload, uint16_
  * wakes that `connect` (there is no listener to queue it on) and a reset is a
  * refused connect, leaving the socket for its descriptor to close.
  */
-void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
-            const uint8_t *data, uint16_t len)
+void tcp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len)
 {
     uint16_t src_port, dst_port;
     uint32_t seq, ack_num;
-    uint8_t  data_off, flags;
+    uint8_t data_off, flags;
     uint16_t window, hdr_len;
-    struct tcb    *tcb;
-    struct tcb    *conn_tcb;
+    struct tcb *tcb;
+    struct tcb *conn_tcb;
     struct socket *conn_sock;
     struct socket *listen_sock;
 
@@ -1463,11 +1484,11 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
 
     src_port = read16be(data + 0);
     dst_port = read16be(data + 2);
-    seq      = read32be(data + 4);
-    ack_num  = read32be(data + 8);
+    seq = read32be(data + 4);
+    ack_num = read32be(data + 8);
     data_off = (data[12] >> 4) & 0xF;
-    flags    = data[13];
-    window   = read16be(data + 14);
+    flags = data[13];
+    window = read16be(data + 14);
 
     hdr_len = (uint16_t)(data_off * 4);
     if (hdr_len < TCP_HDR_SIZE || hdr_len > len) {
@@ -1479,10 +1500,12 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
         if (!(flags & TCP_RST)) {
             uint32_t occupied = (uint32_t)(len - hdr_len);
 
-            if (flags & TCP_SYN) occupied++;
-            if (flags & TCP_FIN) occupied++;
-            tcp_send_rst_unmatched(dst_ip, src_ip, dst_port, src_port,
-                                   flags, seq, ack_num, occupied);
+            if (flags & TCP_SYN)
+                occupied++;
+            if (flags & TCP_FIN)
+                occupied++;
+            tcp_send_rst_unmatched(dst_ip, src_ip, dst_port, src_port, flags, seq, ack_num,
+                                   occupied);
         }
         return;
     }
@@ -1500,14 +1523,17 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
             if (tcb->passive) {
                 struct socket *s = tcb->sock;
                 tcb->sock = NULL;
-                if (s) { s->tcb = NULL; socket_unref(s); }
+                if (s) {
+                    s->tcb = NULL;
+                    socket_unref(s);
+                }
                 tcb_free(tcb);
                 return;
             }
-            tcb->so_error   = ECONNREFUSED;
-            tcb->state      = TCP_CLOSED;
+            tcb->so_error = ECONNREFUSED;
+            tcb->state = TCP_CLOSED;
             tcb->retx_flags = 0;
-            tcb->rto_timer  = 0;
+            tcb->rto_timer = 0;
             if (tcb->sock) {
                 socket_tcp_connected(tcb->sock);
                 socket_tcp_fin(tcb->sock);
@@ -1521,11 +1547,11 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
             /* A reset during the active open is a refused connect; later it is
              * a reset connection. Either is surfaced by SO_ERROR and POLLERR.
              */
-            tcb->so_error   = (tcb->state == TCP_SYN_SENT) ? ECONNREFUSED : ECONNRESET;
-            tcb->state      = TCP_CLOSED;
+            tcb->so_error = (tcb->state == TCP_SYN_SENT) ? ECONNREFUSED : ECONNRESET;
+            tcb->state = TCP_CLOSED;
             tcb->retx_flags = 0;
-            tcb->rto_timer  = 0;
-            tcb->zwp_timer  = 0;
+            tcb->rto_timer = 0;
+            tcb->zwp_timer = 0;
             tcb->recovering = 0;
             tcb->fast_pending = 0;
             if (tcb->sock) {
@@ -1539,17 +1565,17 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
     }
 
     switch (tcb->state) {
-
     case TCP_LISTEN:
-        if (!(flags & TCP_SYN)) return;
+        if (!(flags & TCP_SYN))
+            return;
 
         /* A listener whose backlog is full refuses before anything is
            allocated for the connection; and a machine whose free memory is
            inside the reserve drops the SYN, since a handler's allocation
            would take from what root's login needs, and the peer will send
            it again. */
-        if (tcb->sock && ((tcb->sock->accept_tail + 1) & (SOCK_ACCEPT_BACKLOG - 1)) ==
-                             tcb->sock->accept_head) {
+        if (tcb->sock &&
+            ((tcb->sock->accept_tail + 1) & (SOCK_ACCEPT_BACKLOG - 1)) == tcb->sock->accept_head) {
             tcp_send_rst_unmatched(dst_ip, src_ip, dst_port, src_port, flags, seq, ack_num, 1);
             return;
         }
@@ -1562,48 +1588,44 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
            the answer that says the port is there and cannot serve it now. */
         conn_tcb = tcb_alloc();
         if (!conn_tcb) {
-            klog(KLOG_WARN, "tcp",
-                 "accept: no control block for a connection to port %d",
+            klog(KLOG_WARN, "tcp", "accept: no control block for a connection to port %d",
                  (int)dst_port);
-            tcp_send_rst_unmatched(dst_ip, src_ip, dst_port, src_port, flags, seq,
-                                   ack_num, 1);
+            tcp_send_rst_unmatched(dst_ip, src_ip, dst_port, src_port, flags, seq, ack_num, 1);
             return;
         }
         conn_sock = socket_alloc(SOCK_STREAM);
         if (!conn_sock) {
             tcb_free(conn_tcb);
-            klog(KLOG_WARN, "tcp",
-                 "accept: no socket for a connection to port %d", (int)dst_port);
-            tcp_send_rst_unmatched(dst_ip, src_ip, dst_port, src_port, flags, seq,
-                                   ack_num, 1);
+            klog(KLOG_WARN, "tcp", "accept: no socket for a connection to port %d", (int)dst_port);
+            tcp_send_rst_unmatched(dst_ip, src_ip, dst_port, src_port, flags, seq, ack_num, 1);
             return;
         }
 
         /* Receive context has no caller, so the owner is the listener's. */
-        conn_sock->uid         = tcb->sock ? tcb->sock->uid : tcb->uid;
+        conn_sock->uid = tcb->sock ? tcb->sock->uid : tcb->uid;
 
-        conn_tcb->passive      = 1;
+        conn_tcb->passive = 1;
         /* The address this connection is on is the one the SYN was addressed
            to. A listener answers whatever address this machine has, and a
            machine with two cards has two. */
-        conn_tcb->local_ip     = dst_ip;
-        conn_tcb->local_port   = tcb->local_port;
-        conn_tcb->remote_ip    = src_ip;
-        conn_tcb->remote_port  = src_port;
-        conn_tcb->irs          = seq;
-        conn_tcb->rcv_nxt      = seq + 1;
-        conn_tcb->snd_wnd      = window;
-        conn_tcb->iss          = tcp_isn(tcb->local_port, src_port);
-        conn_tcb->snd_nxt      = conn_tcb->iss;
-        conn_tcb->snd_una      = conn_tcb->iss;
-        conn_tcb->recover      = conn_tcb->iss;
-        conn_tcb->sock         = conn_sock;
-        conn_tcb->uid          = conn_sock->uid;
-        conn_tcb->inode        = conn_sock->inode;
+        conn_tcb->local_ip = dst_ip;
+        conn_tcb->local_port = tcb->local_port;
+        conn_tcb->remote_ip = src_ip;
+        conn_tcb->remote_port = src_port;
+        conn_tcb->irs = seq;
+        conn_tcb->rcv_nxt = seq + 1;
+        conn_tcb->snd_wnd = window;
+        conn_tcb->iss = tcp_isn(tcb->local_port, src_port);
+        conn_tcb->snd_nxt = conn_tcb->iss;
+        conn_tcb->snd_una = conn_tcb->iss;
+        conn_tcb->recover = conn_tcb->iss;
+        conn_tcb->sock = conn_sock;
+        conn_tcb->uid = conn_sock->uid;
+        conn_tcb->inode = conn_sock->inode;
 
-        conn_sock->tcb         = conn_tcb;
-        conn_sock->local_port  = conn_tcb->local_port;
-        conn_sock->remote_ip   = src_ip;
+        conn_sock->tcb = conn_tcb;
+        conn_sock->local_port = conn_tcb->local_port;
+        conn_sock->remote_ip = src_ip;
         conn_sock->remote_port = src_port;
 
         tcp_send_flags(conn_tcb, TCP_SYN | TCP_ACK);
@@ -1611,14 +1633,16 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
         break;
 
     case TCP_SYN_RCVD:
-        if (!(flags & TCP_ACK)) return;
-        if (ack_num != tcb->snd_nxt) return;
+        if (!(flags & TCP_ACK))
+            return;
+        if (ack_num != tcb->snd_nxt)
+            return;
 
-        tcb->snd_una    = ack_num;
-        tcb->snd_wnd    = window;
-        tcb->state      = TCP_ESTABLISHED;
+        tcb->snd_una = ack_num;
+        tcb->snd_wnd = window;
+        tcb->state = TCP_ESTABLISHED;
         tcb->retx_flags = 0;
-        tcb->rto_timer  = 0;
+        tcb->rto_timer = 0;
 
         if (tcb->passive) {
             listen_sock = tcp_find_listen_sock(tcb->local_port);
@@ -1632,7 +1656,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
 
     case TCP_SYN_SENT:
         if ((flags & TCP_SYN) && !(flags & TCP_ACK)) {
-            tcb->irs     = seq;
+            tcb->irs = seq;
             tcb->rcv_nxt = seq + 1;
             tcb->snd_wnd = window;
             tcb->snd_nxt = tcb->iss;
@@ -1640,35 +1664,33 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
             tcb->state = TCP_SYN_RCVD;
             return;
         }
-        if (!((flags & TCP_SYN) && (flags & TCP_ACK))) return;
-        if (ack_num != tcb->snd_nxt) return;
+        if (!((flags & TCP_SYN) && (flags & TCP_ACK)))
+            return;
+        if (ack_num != tcb->snd_nxt)
+            return;
 
-        tcb->irs        = seq;
-        tcb->rcv_nxt    = seq + 1;
-        tcb->snd_una    = ack_num;
-        tcb->snd_wnd    = window;
-        tcb->state      = TCP_ESTABLISHED;
+        tcb->irs = seq;
+        tcb->rcv_nxt = seq + 1;
+        tcb->snd_una = ack_num;
+        tcb->snd_wnd = window;
+        tcb->state = TCP_ESTABLISHED;
         tcb->retx_flags = 0;
-        tcb->rto_timer  = 0;
+        tcb->rto_timer = 0;
 
         tcp_send_flags(tcb, TCP_ACK);
         socket_tcp_connected(tcb->sock);
         break;
 
-    case TCP_ESTABLISHED:
-    {
-        uint16_t       payload_len = (uint16_t)(len - hdr_len);
-        const uint8_t *payload     = data + hdr_len;
-        int            needs_ack   = 0;
+    case TCP_ESTABLISHED: {
+        uint16_t payload_len = (uint16_t)(len - hdr_len);
+        const uint8_t *payload = data + hdr_len;
+        int needs_ack = 0;
 
         if (flags & TCP_ACK) {
-            if ((int32_t)(ack_num - tcb->snd_una) > 0 &&
-                (int32_t)(ack_num - tcb->snd_nxt) <= 0) {
+            if ((int32_t)(ack_num - tcb->snd_una) > 0 && (int32_t)(ack_num - tcb->snd_nxt) <= 0) {
                 tcp_take_ack(tcb, ack_num, window);
-            } else if (ack_num == tcb->snd_una && payload_len == 0 &&
-                       window == tcb->snd_wnd &&
-                       !(flags & (TCP_SYN | TCP_FIN)) &&
-                       tcb->send_head != tcb->send_ack) {
+            } else if (ack_num == tcb->snd_una && payload_len == 0 && window == tcb->snd_wnd &&
+                       !(flags & (TCP_SYN | TCP_FIN)) && tcb->send_head != tcb->send_ack) {
                 /* A duplicate (RFC 5681, section 2): the peer took a segment
                  * past a hole. Three in a row mean the hole is a loss, and
                  * each one during the recovery means a segment has left the
@@ -1678,7 +1700,8 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
                     tcb->cwnd += TCP_MSS;
                     tcp_pump(tcb);
                 } else if (tcb->recovering == 0) {
-                    if (tcb->dup_acks < TCP_DUP_ACKS) tcb->dup_acks++;
+                    if (tcb->dup_acks < TCP_DUP_ACKS)
+                        tcb->dup_acks++;
                     if (tcb->dup_acks == TCP_DUP_ACKS &&
                         (int32_t)(tcb->snd_una - tcb->recover) > 0) {
                         tcp_enter_fast_recovery(tcb);
@@ -1707,8 +1730,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
          * rcv_nxt holds only when the whole payload was accepted, so a FIN
          * riding a truncated segment does not signal EOF before its data is
          * delivered. */
-        if ((flags & TCP_FIN) && !tcb->fin_received &&
-            seq + payload_len == tcb->rcv_nxt) {
+        if ((flags & TCP_FIN) && !tcb->fin_received && seq + payload_len == tcb->rcv_nxt) {
             tcb->rcv_nxt++;
             tcb->fin_received = 1;
             /* The ACK handling above may have already drained a close's queued
@@ -1716,8 +1738,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
              * within this same segment; the peer's FIN then completes a
              * simultaneous close into CLOSING, not CLOSE_WAIT, so the later ACK
              * of our FIN is handled in the state that expects it. */
-            tcb->state = (tcb->state == TCP_FIN_WAIT_1) ? TCP_CLOSING
-                                                        : TCP_CLOSE_WAIT;
+            tcb->state = (tcb->state == TCP_FIN_WAIT_1) ? TCP_CLOSING : TCP_CLOSE_WAIT;
             socket_tcp_fin(tcb->sock);
             needs_ack = 1;
         }
@@ -1729,25 +1750,23 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
         break;
     }
 
-    case TCP_FIN_WAIT_1:
-    {
-        uint16_t       payload_len = (uint16_t)(len - hdr_len);
-        const uint8_t *payload     = data + hdr_len;
-        int            needs_ack   = 0;
+    case TCP_FIN_WAIT_1: {
+        uint16_t payload_len = (uint16_t)(len - hdr_len);
+        const uint8_t *payload = data + hdr_len;
+        int needs_ack = 0;
 
         /* Accept only an ACK within the window (snd_una < ack <= snd_nxt); a
          * higher ack_num would push snd_una past the transmit high-water mark.
          * Advance send_ack by the acknowledged DATA only (capped at the ring's
          * sent bytes), so a lost FIN does not leave RTO retransmitting
          * already-acked data. */
-        if ((flags & TCP_ACK) &&
-            (int32_t)(ack_num - tcb->snd_una) > 0 &&
+        if ((flags & TCP_ACK) && (int32_t)(ack_num - tcb->snd_una) > 0 &&
             (int32_t)(ack_num - tcb->snd_nxt) <= 0) {
             tcp_take_ack(tcb, ack_num, window);
             if (ack_num == tcb->snd_nxt) {
-                tcb->state          = TCP_FIN_WAIT_2;
-                tcb->retx_flags     = 0;
-                tcb->rto_timer      = 0;
+                tcb->state = TCP_FIN_WAIT_2;
+                tcb->retx_flags = 0;
+                tcb->rto_timer = 0;
                 tcb->timewait_until = kernel_ticks + TCP_FIN_WAIT2_TICKS;
             }
         }
@@ -1769,8 +1788,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
         if (flags & TCP_FIN) {
             if (seq + payload_len == tcb->rcv_nxt) {
                 tcb->rcv_nxt++;
-                tcb->state = (tcb->state == TCP_FIN_WAIT_2) ? TCP_TIME_WAIT
-                                                            : TCP_CLOSING;
+                tcb->state = (tcb->state == TCP_FIN_WAIT_2) ? TCP_TIME_WAIT : TCP_CLOSING;
                 if (tcb->state == TCP_TIME_WAIT) {
                     tcb->timewait_until = kernel_ticks + TCP_2MSL_TICKS;
                 }
@@ -1785,11 +1803,10 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
         break;
     }
 
-    case TCP_FIN_WAIT_2:
-    {
-        uint16_t       payload_len = (uint16_t)(len - hdr_len);
-        const uint8_t *payload     = data + hdr_len;
-        int            needs_ack   = 0;
+    case TCP_FIN_WAIT_2: {
+        uint16_t payload_len = (uint16_t)(len - hdr_len);
+        const uint8_t *payload = data + hdr_len;
+        int needs_ack = 0;
 
         /* As in FIN_WAIT_1, the application is usually gone, so accept and
          * discard in-order data (advancing rcv_nxt to acknowledge it); a
@@ -1803,7 +1820,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
         if (flags & TCP_FIN) {
             if (seq + payload_len == tcb->rcv_nxt) {
                 tcb->rcv_nxt++;
-                tcb->state          = TCP_TIME_WAIT;
+                tcb->state = TCP_TIME_WAIT;
                 tcb->timewait_until = kernel_ticks + TCP_2MSL_TICKS;
             }
             needs_ack = 1;
@@ -1817,13 +1834,12 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
 
     case TCP_CLOSING:
         if ((flags & TCP_ACK) && ack_num == tcb->snd_nxt) {
-            tcb->retx_flags     = 0;
-            tcb->rto_timer      = 0;
-            tcb->state          = TCP_TIME_WAIT;
+            tcb->retx_flags = 0;
+            tcb->rto_timer = 0;
+            tcb->state = TCP_TIME_WAIT;
             tcb->timewait_until = kernel_ticks + TCP_2MSL_TICKS;
         } else {
-            if ((flags & TCP_ACK) &&
-                (int32_t)(ack_num - tcb->snd_una) > 0 &&
+            if ((flags & TCP_ACK) && (int32_t)(ack_num - tcb->snd_una) > 0 &&
                 (int32_t)(ack_num - tcb->snd_nxt) < 0) {
                 tcp_take_ack(tcb, ack_num, window); /* a data-only ACK frees the ring */
             }
@@ -1837,8 +1853,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
         if ((flags & TCP_ACK) && ack_num == tcb->snd_nxt) {
             tcb_free(tcb);
         } else {
-            if ((flags & TCP_ACK) &&
-                (int32_t)(ack_num - tcb->snd_una) > 0 &&
+            if ((flags & TCP_ACK) && (int32_t)(ack_num - tcb->snd_una) > 0 &&
                 (int32_t)(ack_num - tcb->snd_nxt) < 0) {
                 tcp_take_ack(tcb, ack_num, window); /* a data-only ACK frees the ring */
             }
@@ -1851,8 +1866,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
     case TCP_CLOSE_WAIT:
         /* Acknowledge our sent data as in ESTABLISHED and keep draining a
          * pending FIN. */
-        if ((flags & TCP_ACK) &&
-            (int32_t)(ack_num - tcb->snd_una) > 0 &&
+        if ((flags & TCP_ACK) && (int32_t)(ack_num - tcb->snd_una) > 0 &&
             (int32_t)(ack_num - tcb->snd_nxt) <= 0) {
             tcp_take_ack(tcb, ack_num, window);
             break;
@@ -1903,22 +1917,22 @@ int tcp_snapshot(struct tcp_row **rows)
     n = 0;
     flags = net_lock();
     for (t = tcbs; t && n < room; t = t->next) {
-        out[n].local_ip    = t->local_ip;
-        out[n].local_port  = t->local_port;
-        out[n].remote_ip   = t->remote_ip;
+        out[n].local_ip = t->local_ip;
+        out[n].local_port = t->local_port;
+        out[n].remote_ip = t->remote_ip;
         out[n].remote_port = t->remote_port;
-        out[n].state       = (int)t->state;
-        out[n].txq         = t->send_tail - t->send_ack;
-        out[n].rxq         = t->recv_tail - t->recv_head;
-        out[n].uid         = t->uid;
-        out[n].inode       = t->inode;
-        out[n].snd_wnd     = t->snd_wnd;
-        out[n].cwnd        = t->cwnd;
-        out[n].in_flight   = t->snd_nxt - t->snd_una;
-        out[n].unsent      = t->send_tail - t->send_head;
-        out[n].rto_timer   = t->rto_timer;
-        out[n].zwp_timer   = t->zwp_timer;
-        out[n].tx_refused  = t->tx_refused;
+        out[n].state = (int)t->state;
+        out[n].txq = t->send_tail - t->send_ack;
+        out[n].rxq = t->recv_tail - t->recv_head;
+        out[n].uid = t->uid;
+        out[n].inode = t->inode;
+        out[n].snd_wnd = t->snd_wnd;
+        out[n].cwnd = t->cwnd;
+        out[n].in_flight = t->snd_nxt - t->snd_una;
+        out[n].unsent = t->send_tail - t->send_head;
+        out[n].rto_timer = t->rto_timer;
+        out[n].zwp_timer = t->zwp_timer;
+        out[n].tx_refused = t->tx_refused;
         out[n].retransmits = t->retransmits;
         out[n].refused_for = t->refused_since ? kernel_ticks + 1 - t->refused_since : 0;
         n++;
@@ -1931,17 +1945,29 @@ int tcp_snapshot(struct tcp_row **rows)
 int tcp_state_to_linux(int state)
 {
     switch ((tcp_state_t)state) {
-        case TCP_ESTABLISHED: return 1;
-        case TCP_SYN_SENT:    return 2;
-        case TCP_SYN_RCVD:    return 3;
-        case TCP_FIN_WAIT_1:  return 4;
-        case TCP_FIN_WAIT_2:  return 5;
-        case TCP_TIME_WAIT:   return 6;
-        case TCP_CLOSED:      return 7;
-        case TCP_CLOSE_WAIT:  return 8;
-        case TCP_LAST_ACK:    return 9;
-        case TCP_LISTEN:      return 10;
-        case TCP_CLOSING:     return 11;
-        default:              return 7;
+    case TCP_ESTABLISHED:
+        return 1;
+    case TCP_SYN_SENT:
+        return 2;
+    case TCP_SYN_RCVD:
+        return 3;
+    case TCP_FIN_WAIT_1:
+        return 4;
+    case TCP_FIN_WAIT_2:
+        return 5;
+    case TCP_TIME_WAIT:
+        return 6;
+    case TCP_CLOSED:
+        return 7;
+    case TCP_CLOSE_WAIT:
+        return 8;
+    case TCP_LAST_ACK:
+        return 9;
+    case TCP_LISTEN:
+        return 10;
+    case TCP_CLOSING:
+        return 11;
+    default:
+        return 7;
     }
 }
