@@ -38,19 +38,25 @@
 uint16_t ip_checksum(const uint8_t *buf, uint16_t len)
 {
     uint32_t sum = 0;
-    uint16_t i;
+    uint16_t i = 0;
 
-    for (i = 0; i + 1 < len; i += 2) {
-        sum += (uint32_t)(((uint16_t)buf[i] << 8) | buf[i + 1]);
-        if (sum > 0xFFFF) {
-            sum -= 0xFFFF;   /* fold the carry back in (one's complement) */
-        }
+    /* Four bytes a turn into a 32-bit accumulator, which cannot overflow
+     * before 65536 words, and one fold at the end. The fold inside the loop
+     * this replaces made the sum cost a compare and a branch for every two
+     * bytes, and every byte sent and received passes through here. */
+    while ((uint32_t)len - i >= 4u) {
+        sum += (uint32_t)(((uint32_t)buf[i] << 8) | buf[i + 1]) +
+               (uint32_t)(((uint32_t)buf[i + 2] << 8) | buf[i + 3]);
+        i = (uint16_t)(i + 4);
+    }
+    for (; i + 1 < len; i = (uint16_t)(i + 2)) {
+        sum += (uint32_t)(((uint32_t)buf[i] << 8) | buf[i + 1]);
     }
     if (len & 1) {           /* odd length: pad the last byte with zero */
-        sum += (uint32_t)((uint16_t)buf[len - 1] << 8);
-        if (sum > 0xFFFF) {
-            sum -= 0xFFFF;
-        }
+        sum += (uint32_t)buf[len - 1] << 8;
+    }
+    while (sum >> 16) {
+        sum = (sum & 0xFFFFu) + (sum >> 16);
     }
 
     return (uint16_t)(~sum & 0xFFFF);
