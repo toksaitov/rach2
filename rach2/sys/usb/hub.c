@@ -183,6 +183,7 @@ struct hub_port {
     uint32_t reset_ms;      /* how long the reset has run */
     uint32_t poll_ms;       /* until the next status read in a reset */
     uint16_t to_clear;      /* the change bits acknowledged one by one */
+    int recheck;            /* the status read again after an acknowledgement */
     int over_current_tries; /* how many times the port was powered on again */
     uint32_t power_on_ms;   /* until the port is powered on again, or 0 */
     int off;                /* left powered off after over-current recurred */
@@ -579,8 +580,20 @@ static void port_read(struct hub *h, int port)
     }
 }
 
-/** Acknowledge the next change bit owed on a port; 1 when a request went
- * out. */
+/**
+ * Acknowledge the next change bit owed on a port; 1 when a request went
+ * out.
+ *
+ * The hub clears the latch this request names at the time the request
+ * arrives, and the bit was chosen from a status read that came earlier. A
+ * change the port latched between the two is cleared unread, and the hub
+ * then leaves the port out of its change bitmap: a device that arrived in
+ * that time would stay plugged in and unknown. The first scan is where the
+ * two are furthest apart, since the bits it records are acknowledged only
+ * once every port has been read. So a port whose change bits are
+ * acknowledged is read once more, and the core's pass over the hub's ports
+ * acts on the record that read leaves.
+ */
 static int clear_next(struct hub *h, int port)
 {
     struct hub_port *p = &h->port[port - 1];
@@ -618,8 +631,12 @@ static int clear_next(struct hub *h, int port)
     } else {
         return 0;
     }
-    return request(h, TYPE_CLASS_PORT_OUT, REQ_CLEAR_FEATURE, feature, port, 0, REQ_CHANGE_CLEAR,
-                   port) == 0;
+    if (request(h, TYPE_CLASS_PORT_OUT, REQ_CLEAR_FEATURE, feature, port, 0, REQ_CHANGE_CLEAR,
+                port) != 0) {
+        return 0;
+    }
+    p->recheck = 1;
+    return 1;
 }
 
 /** The answer to the request in flight. */
@@ -927,6 +944,16 @@ static void step_hub(struct hub *h, uint32_t elapsed_ms)
                 if (clear_next(h, i + 1)) {
                     return;
                 }
+            }
+            if (p->to_clear == 0 && p->recheck) {
+                p->recheck = 0;
+                h->change_reading = i + 1;
+                if (port_status_read(h, i + 1) == 0) {
+                    return;
+                }
+                /* The read could not go out: it is owed again. */
+                h->change_reading = 0;
+                p->recheck = 1;
             }
             if (p->power_on_ms != 0) {
                 p->power_on_ms = (p->power_on_ms > elapsed_ms) ? p->power_on_ms - elapsed_ms : 0;

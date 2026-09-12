@@ -18,12 +18,14 @@
  * carrying the hub as its translator, a full-speed hub giving none; ganged,
  * per-port and unswitched power; the power-good wait before the first port
  * is looked at; the scan finding a device already present and the core
- * enumerating it at its location; a reset that completes and one that never
- * does, with the port refused and forgotten when its device leaves; the
- * speed read from the status word; a disconnection closing the device
- * below; a hub pulled with two devices below closing both children before
- * itself; a hub with twenty ports publishing fifteen; and a hub that will
- * not give its descriptor refused by name.
+ * enumerating it at its location; a device that lands on a port the scan
+ * has just read, whose connection change the scan's acknowledgement would
+ * clear unread; a reset that completes and one that never does, with the
+ * port refused and forgotten when its device leaves; the speed read from
+ * the status word; a disconnection closing the device below; a hub pulled
+ * with two devices below closing both children before itself; a hub with
+ * twenty ports publishing fifteen; and a hub that will not give its
+ * descriptor refused by name.
  *
  * No hosted headers: the kernel headers define the fixed-width types, and
  * the libc calls are declared by hand as the other host tests declare them.
@@ -159,6 +161,7 @@ static struct {
     int alt_refuse;      /* SET_INTERFACE is stalled */
     int power_on_refuse; /* SET_FEATURE(PORT_POWER) on a port that is off is stalled */
     int pull_on_open;    /* the next device opened is pulled while its Enable Slot is out */
+    int connect_on_read; /* a device lands on this port just after its status is read */
     int hold_commands;   /* no command answers while set */
     int slot_cap;        /* the slots the controller has, 0 for fifteen */
     int long_config;     /* a device whose configuration is 115 bytes */
@@ -894,6 +897,13 @@ int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb
         buf[2] = (unsigned char)(model.port_change[port - 1] & 0xFF);
         buf[3] = (unsigned char)(model.port_change[port - 1] >> 8);
         answer(device, 1, USB_XFER_OK, 4, 0, transfer->generation);
+        if (model.connect_on_read == port) {
+            /* The contact settles just after the read: the port reads
+               connected from here, and the connection change already
+               latched is this device's. */
+            model.connect_on_read = 0;
+            model.port_kind[port - 1] = KIND_KBD;
+        }
         return 0;
     }
     if (setup[0] == 0x23 && setup[1] == 3) { /* SET_PORT_FEATURE */
@@ -1502,6 +1512,18 @@ int main(void)
     pump(500);
     CHECK("a hub-status change is read and its local-power change cleared",
           model.hub_status_reads == 1 && model.hub_clears == 1 && model.hub_change == 0);
+
+    /* A port the scan reads as disconnected with a connection change
+       already latched, whose device lands the moment after that read: the
+       change acknowledged from the scan's bits is the new device's, so the
+       port is read again after the acknowledgement. */
+    model_reset();
+    model.port_change[1] = 1u; /* C_PORT_CONNECTION, from a contact that bounced */
+    model.connect_on_read = 2;
+    pump(2000);
+    kbd = slot_of_kind(KIND_KBD);
+    CHECK("a device that connects during the scan, after its port was read, is enumerated",
+          kbd != 0 && slot_of[kbd].where.route == 0x2u && running_count() == 2);
 
     /* A swap: a connection change with the status still connected closes the
        old device before the new one is enumerated. */
