@@ -20,6 +20,7 @@ typedef unsigned int size_t;
 /* Syscall numbers (32-bit Linux / Rach2 compatible) */
 #define SYS_EXIT   1
 #define SYS_WRITE  4
+#define SYS_READ   3
 #define SYS_OPEN   5
 #define SYS_CLOSE  6
 #define SYS_CREAT  8
@@ -29,8 +30,8 @@ typedef unsigned int size_t;
 #define SYS_RMDIR  40
 
 /* The errno values the negative cases name. */
-#define ENOENT  2
-#define EPERM   1
+#define ENOENT 2
+#define EPERM  1
 #define EISDIR 21
 #define EINVAL 22
 
@@ -44,105 +45,77 @@ typedef unsigned int size_t;
 static int sys_write(int fd, const void *buf, size_t count)
 {
     int result;
-    __asm__ __volatile__ (
-        "int $0x80"
-        : "=a"(result)
-        : "0"(SYS_WRITE), "b"(fd), "c"(buf), "d"(count)
-        : "memory"
-    );
+    __asm__ __volatile__("int $0x80"
+                         : "=a"(result)
+                         : "0"(SYS_WRITE), "b"(fd), "c"(buf), "d"(count)
+                         : "memory");
     return result;
 }
 
 static void sys_exit(int status)
 {
-    __asm__ __volatile__ (
-        "int $0x80"
-        :
-        : "a"(SYS_EXIT), "b"(status)
-    );
+    __asm__ __volatile__("int $0x80" : : "a"(SYS_EXIT), "b"(status));
     __builtin_unreachable();
 }
 
 static int sys_creat(const char *path, unsigned int mode)
 {
     int result;
-    __asm__ __volatile__ (
-        "int $0x80"
-        : "=a"(result)
-        : "0"(SYS_CREAT), "b"(path), "c"(mode)
-        : "memory"
-    );
+    __asm__ __volatile__("int $0x80"
+                         : "=a"(result)
+                         : "0"(SYS_CREAT), "b"(path), "c"(mode)
+                         : "memory");
     return result;
 }
 
 static int sys_open(const char *path, int flags)
 {
     int result;
-    __asm__ __volatile__ (
-        "int $0x80"
-        : "=a"(result)
-        : "0"(SYS_OPEN), "b"(path), "c"(flags)
-        : "memory"
-    );
+    __asm__ __volatile__("int $0x80"
+                         : "=a"(result)
+                         : "0"(SYS_OPEN), "b"(path), "c"(flags)
+                         : "memory");
     return result;
 }
 
 static int sys_close(int fd)
 {
     int result;
-    __asm__ __volatile__ (
-        "int $0x80"
-        : "=a"(result)
-        : "0"(SYS_CLOSE), "b"(fd)
-    );
+    __asm__ __volatile__("int $0x80" : "=a"(result) : "0"(SYS_CLOSE), "b"(fd));
     return result;
 }
 
 static int sys_unlink(const char *path)
 {
     int result;
-    __asm__ __volatile__ (
-        "int $0x80"
-        : "=a"(result)
-        : "0"(SYS_UNLINK), "b"(path)
-        : "memory"
-    );
+    __asm__ __volatile__("int $0x80" : "=a"(result) : "0"(SYS_UNLINK), "b"(path) : "memory");
     return result;
 }
 
 static int sys_mkdir(const char *path, int mode)
 {
     int result;
-    __asm__ __volatile__ (
-        "int $0x80"
-        : "=a"(result)
-        : "0"(SYS_MKDIR), "b"(path), "c"(mode)
-        : "memory"
-    );
+    __asm__ __volatile__("int $0x80"
+                         : "=a"(result)
+                         : "0"(SYS_MKDIR), "b"(path), "c"(mode)
+                         : "memory");
     return result;
 }
 
 static int sys_rmdir(const char *path)
 {
     int result;
-    __asm__ __volatile__ (
-        "int $0x80"
-        : "=a"(result)
-        : "0"(SYS_RMDIR), "b"(path)
-        : "memory"
-    );
+    __asm__ __volatile__("int $0x80" : "=a"(result) : "0"(SYS_RMDIR), "b"(path) : "memory");
     return result;
 }
 
 static int sys_rename(const char *oldpath, const char *newpath)
 {
     int result;
-    __asm__ __volatile__ (
-        "int $0x80"
-        : "=a"(result)
-        : "0"(SYS_RENAME), "b"(oldpath), "c"(newpath)
-        : "memory"
-    );
+    __asm__ __volatile__("int $0x80"
+                         : "=a"(result)
+                         : "0"(SYS_RENAME), "b"(oldpath), "c"(newpath)
+                         : "memory");
     return result;
 }
 
@@ -159,6 +132,34 @@ static void puts(const char *s)
 {
     sys_write(STDOUT_FILENO, s, strlen(s));
     sys_write(STDOUT_FILENO, "\n", 1);
+}
+/* Whether the root under the probe is ext2, read from the mount table rather
+ * than assumed: the two roots answer a directory's rename differently and both
+ * answers are right for their file system. */
+static int root_is_ext2(void)
+{
+    static char mounts[1024];
+    int fd = sys_open("/proc/mounts", O_RDONLY);
+    int n, i;
+
+    if (fd < 0) {
+        return 0;
+    }
+    __asm__ __volatile__("int $0x80"
+                         : "=a"(n)
+                         : "0"(SYS_READ), "b"(fd), "c"(mounts), "d"(sizeof(mounts) - 1)
+                         : "memory");
+    sys_close(fd);
+    if (n <= 0) {
+        return 0;
+    }
+    mounts[n] = 0;
+    for (i = 0; i + 8 < n; i++) {
+        if (mounts[i] == ' ' && mounts[i + 1] == '/' && mounts[i + 2] == ' ') {
+            return mounts[i + 3] == 'e' && mounts[i + 4] == 'x' && mounts[i + 5] == 't';
+        }
+    }
+    return 0;
 }
 
 static void print(const char *s)
@@ -262,13 +263,17 @@ void _start(void)
         failed++;
     }
 
-    /* Test 6b: A directory source is -EPERM. Its children reference its id, so
-     * moving it would orphan them; the file system cannot perform the rename at
-     * all, which is what EPERM says here. */
-    print("Test 6b: rename(a directory, ...) == -EPERM... ");
+    /* Test 6b: what a directory's rename answers, which the file system under
+     * the probe decides. On the boot root a directory's children reference its
+     * id, so moving it would orphan them and KRFFS refuses with EPERM; ext2
+     * rewrites `..` and moves it, as Linux does. The probe reads which root it
+     * is on rather than assuming the image it was written for. */
+    print("Test 6b: rename(a directory, ...) as this root answers it... ");
     if (sys_mkdir("mvtest.dir", 0755) == 0) {
+        int dir_rename_refused = !root_is_ext2();
+
         result = sys_rename("mvtest.dir", "mvtest.dir2");
-        if (result == -EPERM) {
+        if (dir_rename_refused ? (result == -EPERM) : (result == 0)) {
             puts("OK");
             passed++;
         } else {

@@ -8,6 +8,10 @@
  * console. Prints "DEVPROBE OK" when every check passes.
  *
  * Freestanding; direct int 0x80.
+ *
+ * Needs: the console as stdin. One row reads /proc/self/fd/0 and requires it
+ * to name /dev/console, which is true of a console session and not of one
+ * carried over SSH.
  */
 
 typedef unsigned int size_t;

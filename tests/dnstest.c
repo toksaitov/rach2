@@ -7,6 +7,10 @@
  * resolution through SLIRP and needs host internet.
  *
  * Linked against the ported musl, the same libc utils/resolv.c uses.
+ *
+ * Needs: the emulator's /etc/hosts, whose addresses the resolver rows expect.
+ * On a machine with its own hosts file those three rows read that file and
+ * fail on its contents, not on the resolver.
  */
 
 #include <stdio.h>

@@ -43,6 +43,7 @@ typedef unsigned int size_t;
 #define O_DIRECTORY 0200000
 
 #define DT_REG 8
+#define DT_DIR 4
 
 /* Enough files that one small read cannot hold them all, so the listing takes
    several calls and the cursor has to survive the unlinks between them. */
@@ -244,7 +245,7 @@ void _start(void)
             if (d->d_ino == 0) {
                 fail("an entry came back with no inode");
             }
-            if (d->d_type != DT_REG) {
+            if (d->d_type != DT_REG && !(d->d_type == DT_DIR && d->d_name[0] == '.')) {
                 fail("an entry came back with the wrong type");
             }
             if (d->d_reclen == 0) {

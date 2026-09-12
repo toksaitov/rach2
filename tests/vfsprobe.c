@@ -12,6 +12,10 @@
  * lexical resolver succeeds and a physical one must not. It flipped to 1
  * in the migration commit that removed the lexical step.
  *
+ * Needs: a KRFFS root. The rows below state what that file system promises,
+ * including a link refused with EPERM and the KRFFS magic from statfs, so a
+ * run on another root judges the root and not the kernel.
+ *
  * Prints "VFSPROBE OK". Freestanding; direct int 0x80.
  */
 

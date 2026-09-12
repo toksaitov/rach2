@@ -128,6 +128,35 @@ static void puts(const char *s)
 
 static int fails = 0;
 
+/* Whether the root the probe is running on synthesizes `.` and `..` in a
+ * directory read. KRFFS does not, and says so in `sys/fs/Readme.md`; ext2
+ * has them on the disk and returns them, as Linux does. A row that counts a
+ * directory's entries has to know which root it is on, or it judges the
+ * image it was written for and nothing else. */
+static int root_has_dot_entries(void)
+{
+    static char mounts[1024];
+    int fd = syscall3(SYS_OPEN, (int)(size_t)"/proc/mounts", O_RDONLY, 0);
+    int n, i;
+
+    if (fd < 0) {
+        return 0;
+    }
+    n = syscall3(SYS_READ, fd, (int)(size_t)mounts, (int)sizeof(mounts) - 1);
+    syscall1(SYS_CLOSE, fd);
+    if (n <= 0) {
+        return 0;
+    }
+    mounts[n] = 0;
+    /* The root's line is the one whose mount point is a bare slash. */
+    for (i = 0; i + 8 < n; i++) {
+        if (mounts[i] == ' ' && mounts[i + 1] == '/' && mounts[i + 2] == ' ') {
+            return !(mounts[i + 3] == 'k' && mounts[i + 4] == 'r' && mounts[i + 5] == 'f');
+        }
+    }
+    return 0;
+}
+
 static void check(int cond, const char *msg)
 {
     if (!cond) {
@@ -209,7 +238,12 @@ void _start(void)
             }
             off += reclen;
         }
-        check(count == 2 && saw_a && saw_b, "getdents /e lists exactly a and b");
+        if (root_has_dot_entries()) {
+            check(count == 4 && saw_a && saw_b,
+                  "getdents /e lists a and b beside the two dot entries this root has");
+        } else {
+            check(count == 2 && saw_a && saw_b, "getdents /e lists exactly a and b");
+        }
         syscall1(SYS_CLOSE, fd);
     }
     syscall1(SYS_UNLINK, (int)(size_t)"/e/a");

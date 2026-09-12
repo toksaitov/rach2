@@ -49,6 +49,10 @@
  * crashed child as a passing one. Prints "MODEPROBE OK" and exits 0 only when
  * every case passed; any failure names the step and the answer it got, and
  * exits 1. Freestanding; direct int 0x80.
+ *
+ * Needs: an empty supplementary group list. A child that drops to uid 1000
+ * with root's group 0 still in its list is in the file's group, and the
+ * kernel is then right to let it store setgid, which one row forbids.
  */
 
 typedef unsigned int u32;

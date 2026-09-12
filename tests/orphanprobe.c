@@ -16,6 +16,10 @@
  * reaped both.
  *
  * Freestanding; direct int 0x80.
+ *
+ * Needs: to be process 1. It reaps the orphan itself, which only the reaper
+ * of orphans does; started from a shell under init the orphan goes to init
+ * and this probe waits for a child it will never see.
  */
 
 typedef unsigned int size_t;
