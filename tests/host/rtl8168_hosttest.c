@@ -576,8 +576,17 @@ static void m_w16(unsigned off, unsigned short v)
         }
         return;
     }
-    if (off == R8168_INTRMASK && v != 0 && (m_r16(R8168_INTRSTATUS) & v) != 0) {
-        model_edges++;
+    if (off == R8168_INTRMASK) {
+        /* The chip's interrupt output is the status masked by this register,
+           and a message is sent when that output goes from none set to one
+           set. Counting a write instead of a transition would let a handler
+           that never masked anything pass the row below. */
+        unsigned short before = m_r16(R8168_INTRSTATUS) & m_r16(R8168_INTRMASK);
+        unsigned short after = m_r16(R8168_INTRSTATUS) & v;
+
+        if (before == 0 && after != 0) {
+            model_edges++;
+        }
     }
     model_reg[off] = (unsigned char)v;
     model_reg[off + 1] = (unsigned char)(v >> 8);
@@ -1429,8 +1438,15 @@ int main(void)
         model_source_after_ack = 0;
         CHECK(rx_calls == 1 && (m_r16(R8168_INTRSTATUS) & R8168_INTR_RXOK) != 0,
               "a source set as the acknowledgement lands stands after the handler");
-        CHECK(m_r16(R8168_INTRMASK) == R8168_INTR_ENABLED && model_edges >= 1,
+        CHECK(m_r16(R8168_INTRMASK) == R8168_INTR_ENABLED && model_edges == 1,
               "and the handler's unmask is the edge that arms the next message");
+        /* The edge is the transition and not the write: the sources are
+           already unmasked here, so writing the same mask again over the same
+           set source sends nothing, and a handler that returned without
+           masking would arm nothing either. */
+        model_edges = 0;
+        m_w16(R8168_INTRMASK, R8168_INTR_ENABLED);
+        CHECK(model_edges == 0, "an unmask that changes nothing is not an edge");
         model_reg[R8168_INTRSTATUS] = 0;
     }
     {

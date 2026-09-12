@@ -54,9 +54,18 @@ typedef unsigned char uint8_t;
 #define BOUND_CLIENT_PORT 7301
 
 /* Where the simultaneous-open case's port pairs start; each round takes two. */
-#define SIM_PORT_A  7310
-#define TCP_PORT    7200
-#define CLOSED_PORT 7300
+#define SIM_PORT_A        7310
+#define TCP_PORT          7200
+#define SYS_FORK          2
+#define SYS_WAITPID       7
+#define SYS_GETTIMEOFDAY  78
+/* Round trips of one byte, and the time they may take. With a single queued
+   datagram left to the 100 Hz timer each leg costs a tick, so these take four
+   seconds; delivered when the processor would otherwise park, they take
+   milliseconds. The bound sits far from both. */
+#define PINGPONG_ROUNDS   200
+#define PINGPONG_LIMIT_MS 1000
+#define CLOSED_PORT       7300
 
 #define EADDRINUSE  98
 #define EINPROGRESS 115
@@ -192,6 +201,31 @@ static void make_sockaddr(uint8_t *sa, uint16_t port, uint8_t a, uint8_t b, uint
 
 /* The canonical address every loopback peer must read back as: 10.0.2.15. */
 static const uint8_t canon_ip[4] = {10, 0, 2, 15};
+
+/* The three system calls the round-trip row needs, in this file's shape. */
+static int sys_fork(void)
+{
+    int r;
+
+    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_FORK));
+    return r;
+}
+
+static int sys_waitpid(int pid, int *status)
+{
+    int r;
+
+    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_WAITPID), "b"(pid), "c"(status), "d"(0));
+    return r;
+}
+
+static int sys_gettimeofday(uint32_t *tv)
+{
+    int r;
+
+    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_GETTIMEOFDAY), "b"(tv), "c"(0));
+    return r;
+}
 
 static int sys_fcntl(int fd, int cmd, int arg)
 {
@@ -476,6 +510,14 @@ static uint32_t loop_peak_now(void)
     return proc_stat_u32("loopback_peak ", 14);
 }
 
+/* The byte the stream carries at offset `n`. Every eight-bit window of the
+   offset reaches the result, so two blocks of the buffer differ wherever their
+   offsets do. */
+static char stream_byte(uint32_t n)
+{
+    return (char)((n * 7u + (n >> 8) * 31u + (n >> 16) * 131u + 1u) & 0xFFu);
+}
+
 static void tcp_loop_bulk(void)
 {
     uint32_t args[6];
@@ -485,8 +527,12 @@ static void tcp_loop_bulk(void)
     uint32_t dropped_before, dropped_after;
     int ls, cs, as, n, i;
 
+    /* The byte at stream offset n is derived from the whole of n, not from
+       its low bits: a pattern that repeats every 256 bytes would let a
+       replayed buffer, or a copy taken from the wrong place in the ring, pass
+       every comparison below. */
     for (i = 0; i < (int)sizeof(out); i++) {
-        out[i] = (char)(i * 7 + 1);
+        out[i] = stream_byte((uint32_t)i);
     }
     dropped_before = loop_dropped_now();
 
@@ -552,7 +598,7 @@ static void tcp_loop_bulk(void)
         n = sys_read(as, in, (int)sizeof(in));
         if (n > 0) {
             for (i = 0; i < n; i++) {
-                if (in[i] != (char)(((got + (uint32_t)i) % sizeof(out)) * 7 + 1)) {
+                if (in[i] != stream_byte((got + (uint32_t)i) % (uint32_t)sizeof(out))) {
                     fail("bulk bytes came back wrong");
                 }
             }
@@ -568,19 +614,17 @@ static void tcp_loop_bulk(void)
     }
     /* The writes above are a window's worth each, which is the largest a
      * single call can put in the ring: 65535 bytes in segments of 1460 is 45
-     * of the 48 slots, and every call's exit drains the ring before the next
-     * call runs, so this is the pressure the ring is sized for. The high-water
-     * mark says how much room was left. A ring that no longer has that room
-     * refuses a frame here rather than in a boot nobody is watching. */
-    if (loop_peak_now() >= LOOP_RING_SLOTS) {
-        fail("the loopback ring filled to its last slot during the transfer");
-    }
+     * of the 64 slots, and a call's exit drains the ring once it holds three
+     * or more, so this is the pressure the ring is sized for. The refusal
+     * count above is the assertion; the high-water mark below is a mark since
+     * boot, so it can say that the ring has been pressed but not that this
+     * transfer is what pressed it, and it is reported rather than judged. */
     if (loop_peak_now() < LOOP_PEAK_FLOOR) {
-        fail("the transfer never pressed the loopback ring");
+        fail("the loopback ring was never pressed in this boot");
     }
     print("LOOPPROBE ring peak ");
     print_u32(loop_peak_now());
-    print(" of 48\n");
+    print(" of 64 since boot\n");
     sys_close(cs);
     sys_close(as);
     sys_close(ls);
@@ -588,6 +632,96 @@ static void tcp_loop_bulk(void)
 
 /* A closed loopback port must refuse promptly (the RFC 793 reset), not
  * black-hole the SYN until the retransmissions give up. */
+/*
+ * A round trip of one byte each way, two hundred times, between two processes
+ * over the loopback.
+ *
+ * Each leg queues one datagram, which is below the threshold a system call's
+ * exit delivers at, so the only thing that can deliver it before the next tick
+ * is the idle path: the sender blocks in its read, nothing else is runnable,
+ * and the processor is about to be parked. Without that, every leg waits for
+ * the timer and a local connection turns over one window per tick, which
+ * measured 6.0 MB/s on the machine whatever the write size.
+ */
+static void tcp_loop_pingpong(void)
+{
+    uint32_t args[6];
+    uint8_t sa[16];
+    uint32_t t0[2], t1[2];
+    char one = 'p';
+    int ls, cs, as, pid, status = 0, round, ms;
+
+    args[0] = AF_INET;
+    args[1] = SOCK_STREAM;
+    args[2] = 0;
+    ls = socketcall(SC_SOCKET, args);
+    if (ls < 0)
+        fail("ping-pong listener socket");
+    make_sockaddr(sa, TCP_PORT + 5, 0, 0, 0, 0);
+    args[0] = (uint32_t)ls;
+    args[1] = (uint32_t)sa;
+    args[2] = 16;
+    if (socketcall(SC_BIND, args) != 0)
+        fail("ping-pong bind");
+    args[0] = (uint32_t)ls;
+    args[1] = 2;
+    if (socketcall(SC_LISTEN, args) != 0)
+        fail("ping-pong listen");
+
+    pid = sys_fork();
+    if (pid < 0)
+        fail("ping-pong fork");
+    if (pid == 0) {
+        args[0] = AF_INET;
+        args[1] = SOCK_STREAM;
+        args[2] = 0;
+        cs = socketcall(SC_SOCKET, args);
+        if (cs < 0)
+            sys_exit(1);
+        make_sockaddr(sa, TCP_PORT + 5, 127, 0, 0, 1);
+        args[0] = (uint32_t)cs;
+        args[1] = (uint32_t)sa;
+        args[2] = 16;
+        if (socketcall(SC_CONNECT, args) != 0)
+            sys_exit(1);
+        for (round = 0; round < PINGPONG_ROUNDS; round++) {
+            if (sys_read(cs, &one, 1) != 1)
+                sys_exit(1);
+            if (sys_write(cs, &one, 1) != 1)
+                sys_exit(1);
+        }
+        sys_close(cs);
+        sys_exit(0);
+    }
+
+    args[0] = (uint32_t)ls;
+    args[1] = 0;
+    args[2] = 0;
+    as = socketcall(SC_ACCEPT, args);
+    if (as < 0)
+        fail("ping-pong accept");
+    sys_gettimeofday(t0);
+    for (round = 0; round < PINGPONG_ROUNDS; round++) {
+        if (sys_write(as, &one, 1) != 1)
+            fail("ping-pong write");
+        if (sys_read(as, &one, 1) != 1)
+            fail("ping-pong read");
+    }
+    sys_gettimeofday(t1);
+    sys_waitpid(pid, &status);
+    if (status != 0)
+        fail("the ping-pong child did not finish");
+    sys_close(as);
+    sys_close(ls);
+    ms = (int)((t1[0] - t0[0]) * 1000u + (t1[1] - t0[1]) / 1000u);
+    print("LOOPPROBE ping-pong ");
+    print_u32((uint32_t)ms);
+    print(" ms for 200 round trips\n");
+    if (ms < 0 || ms >= PINGPONG_LIMIT_MS) {
+        fail("a local round trip waits for the timer");
+    }
+}
+
 static void tcp_refused(void)
 {
     uint32_t args[6];
@@ -919,6 +1053,7 @@ void _start(void)
     udp_loop();
     tcp_loop();
     tcp_loop_bulk();
+    tcp_loop_pingpong();
     tcp_refused();
     tcp_ports();
     tcp_simultaneous();
