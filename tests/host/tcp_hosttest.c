@@ -296,6 +296,53 @@ static uint8_t last_flags(void)
     return segs[n_segs - 1].data[13];
 }
 
+/* Open a connection on `port` with a 65535 window; the peer's sequence
+   number is set past the SYN. */
+static struct tcb *open_conn(struct socket *sock, uint16_t port, uint32_t *peer_seq,
+                             uint16_t *lport)
+{
+    struct tcb *conn;
+    uint32_t iss;
+
+    k_memset(sock, 0, sizeof(*sock));
+    n_segs = 0;
+    CHECK("a connection can be opened", tcp_connect(sock, PEER, port) == 0);
+    conn = sock->tcb;
+    iss = read32be(segs[0].data + 4);
+    *lport = read16be(segs[0].data + 0);
+    rx(port, *lport, *peer_seq, iss + 1, (uint8_t)(F_SYN | F_ACK), 65535, (const char *)0, 0);
+    (*peer_seq)++;
+    n_segs = 0;
+    return conn;
+}
+
+/* Grow a connection's congestion window to `want` bytes: 40000 bytes are
+   offered and every segment is acknowledged on its own, each
+   acknowledgement adding a segment to the window, and what remains is
+   acknowledged whole at the end, so the ring is empty and nothing is in
+   flight. */
+static void grow_window(struct socket *sock, struct tcb *conn, uint16_t port, uint16_t lport,
+                        uint32_t peer_seq, uint32_t want)
+{
+    static uint8_t bytes[40000];
+    unsigned k = 0;
+
+    n_segs = 0;
+    CHECK("the ring takes 40000 bytes to grow the window",
+          tcp_send(sock, bytes, (int)sizeof(bytes)) == (int)sizeof(bytes));
+    while (conn->cwnd < want && k < n_segs && k < MAX_SEGS) {
+        uint32_t end = read32be(segs[k].data + 4) + (segs[k].len - TCP_HDR_SIZE);
+
+        rx(port, lport, peer_seq, end, F_ACK, 65535, (const char *)0, 0);
+        k++;
+    }
+    while (conn->send_head != conn->send_tail || conn->snd_una != conn->snd_nxt) {
+        rx(port, lport, peer_seq, conn->snd_nxt, F_ACK, 65535, (const char *)0, 0);
+    }
+    CHECK("the window grew as asked", conn->cwnd >= want);
+    n_segs = 0;
+}
+
 int main(void)
 {
     struct tcb *t;
@@ -624,6 +671,245 @@ int main(void)
         tcp_tick();
         CHECK("and the rotation pumps it past the five held ones",
               n_segs == 1 && conns[0]->send_head == conns[0]->send_tail);
+    }
+
+    /* A burst lost whole. The timer fires once, and from then on the
+       acknowledgements drive the resend: one segment at the timeout, two
+       when it is acknowledged, then three, then four, a segment more per
+       acknowledgement, until everything sent before the loss is on the wire
+       again, with no further wait on the timer and every segment sent again
+       once, in order. The timeout the loss doubled is measured again once
+       new data is acknowledged. */
+    {
+        struct socket sock;
+        struct tcb *conn;
+        uint32_t peer_seq = 11000, lost_from, lost_to, want, rto_before;
+        uint16_t lport;
+        static uint8_t bytes[24000];
+        unsigned j, ticks = 0, rounds = 0, resent = 0, misplaced = 0;
+        unsigned batches[8];
+
+        reset_all();
+        conn = open_conn(&sock, 83, &peer_seq, &lport);
+        grow_window(&sock, conn, 83, lport, peer_seq, 20 * TCP_MSS);
+        rto_before = conn->rto;
+        CHECK("a burst of 24000 bytes is taken", tcp_send(&sock, bytes, 24000) == 24000);
+        CHECK("and goes out whole, seventeen segments",
+              n_segs == 17 && conn->send_head == conn->send_tail);
+        lost_from = conn->snd_una;
+        lost_to = conn->snd_nxt;
+        n_segs = 0;
+        while (n_segs == 0 && ticks < 2 * TCP_RTO_MAX) {
+            kernel_ticks++;
+            tcp_tick();
+            ticks++;
+        }
+        CHECK("the timer fired after the timeout", ticks == rto_before);
+        CHECK("and sent one segment again", n_segs == 1);
+        CHECK("the oldest unacknowledged one",
+              n_segs == 1 && read32be(segs[0].data + 4) == lost_from);
+        CHECK("with the window down to one segment", conn->cwnd == TCP_MSS);
+        CHECK("and the timeout doubled", conn->rto == 2 * rto_before);
+        CHECK("in the recovery that a timeout begins", conn->recovering == TCP_RECOVER_RTO);
+        want = lost_from;
+        while (conn->snd_una != lost_to && rounds < 8) {
+            uint32_t acked_to = want;
+
+            for (j = 0; j < n_segs && j < MAX_SEGS; j++) {
+                uint32_t seq = read32be(segs[j].data + 4);
+
+                if (seq != want) {
+                    misplaced++;
+                }
+                want = seq + (segs[j].len - TCP_HDR_SIZE);
+                acked_to = want;
+                resent++;
+            }
+            batches[rounds] = n_segs;
+            n_segs = 0;
+            rx(83, lport, peer_seq, acked_to, F_ACK, 65535, (const char *)0, 0);
+            rounds++;
+        }
+        CHECK("every acknowledgement sent the next segments at once, one more each time",
+              rounds == 6 && batches[0] == 1 && batches[1] == 2 && batches[2] == 3 &&
+                  batches[3] == 4 && batches[4] == 5 && batches[5] == 2);
+        CHECK("the segments sent again were in order", misplaced == 0);
+        CHECK("and every one was sent again once", resent == 17 && conn->retransmits == 17);
+        CHECK("with no tick between the first and the last", ticks == rto_before);
+        CHECK("the burst is acknowledged and the recovery is over",
+              conn->snd_una == lost_to && conn->recovering == 0);
+        CHECK("with the window grown a segment per acknowledgement, under the threshold",
+              conn->cwnd == 7 * TCP_MSS && conn->cwnd <= conn->ssthresh);
+        n_segs = 0;
+        CHECK("new data is taken after the recovery", tcp_send(&sock, bytes, 100) == 100);
+        CHECK("and goes out at once", n_segs == 1);
+        kernel_ticks += 2;
+        rx(83, lport, peer_seq, conn->snd_nxt, F_ACK, 65535, (const char *)0, 0);
+        CHECK("and its acknowledgement measures the timeout again", conn->rto == rto_before);
+    }
+
+    /* One segment lost from the middle of a burst: the third duplicate
+       acknowledgement sends it again at once, without a tick, in a recovery
+       with the window halved plus the three segments the duplicates say
+       have left; a further duplicate adds a segment; the acknowledgement of
+       everything ends the recovery at the threshold. The two duplicates
+       before the third send nothing. */
+    {
+        struct socket sock;
+        struct tcb *conn;
+        uint32_t peer_seq = 12000, hole, hole_len, sent_end, ss;
+        uint16_t lport;
+        static uint8_t bytes[14600];
+
+        reset_all();
+        conn = open_conn(&sock, 84, &peer_seq, &lport);
+        grow_window(&sock, conn, 84, lport, peer_seq, 12 * TCP_MSS);
+        CHECK("a burst of ten segments is taken",
+              tcp_send(&sock, bytes, 14600) == 14600 && n_segs == 10);
+        hole = read32be(segs[1].data + 4);
+        hole_len = segs[1].len - TCP_HDR_SIZE;
+        sent_end = conn->snd_nxt;
+        rx(84, lport, peer_seq, hole, F_ACK, 65535, (const char *)0, 0);
+        n_segs = 0;
+        rx(84, lport, peer_seq, hole, F_ACK, 65535, (const char *)0, 0);
+        rx(84, lport, peer_seq, hole, F_ACK, 65535, (const char *)0, 0);
+        CHECK("two duplicates send nothing",
+              n_segs == 0 && conn->recovering == 0 && conn->dup_acks == 2);
+        rx(84, lport, peer_seq, hole, F_ACK, 65535, (const char *)0, 0);
+        CHECK("the third sends the hole again at once",
+              n_segs == 1 && read32be(segs[0].data + 4) == hole);
+        CHECK("whole", n_segs == 1 && segs[0].len == TCP_HDR_SIZE + hole_len);
+        CHECK("beginning the recovery duplicates begin", conn->recovering == TCP_RECOVER_FAST);
+        ss = (sent_end - hole) / 2u;
+        CHECK("with the threshold at half the flight", conn->ssthresh == ss);
+        CHECK("and the window at the threshold plus three segments",
+              conn->cwnd == ss + 3 * TCP_MSS);
+        rx(84, lport, peer_seq, hole, F_ACK, 65535, (const char *)0, 0);
+        CHECK("a further duplicate adds a segment", conn->cwnd == ss + 4 * TCP_MSS);
+        rx(84, lport, peer_seq, sent_end, F_ACK, 65535, (const char *)0, 0);
+        CHECK("the acknowledgement of everything ends the recovery",
+              conn->recovering == 0 && conn->snd_una == sent_end && conn->rto_timer == 0);
+        CHECK("at the threshold", conn->cwnd == ss);
+        CHECK("one segment was sent again", conn->retransmits == 1);
+        n_segs = 0;
+        rx(84, lport, peer_seq, sent_end, F_ACK, 65535, (const char *)0, 0);
+        rx(84, lport, peer_seq, sent_end, F_ACK, 65535, (const char *)0, 0);
+        rx(84, lport, peer_seq, sent_end, F_ACK, 65535, (const char *)0, 0);
+        CHECK("duplicates of the acknowledgement that ended it begin no recovery",
+              n_segs == 0 && conn->recovering == 0);
+    }
+
+    /* Two segments lost from one burst: the third duplicate sends the first
+       again, the acknowledgement that then stops at the second hole sends
+       the second again at once, in the same recovery, and the
+       acknowledgement of everything ends it. */
+    {
+        struct socket sock;
+        struct tcb *conn;
+        uint32_t peer_seq = 13000, hole1, hole2, sent_end;
+        uint16_t lport;
+        static uint8_t bytes[14600];
+
+        reset_all();
+        conn = open_conn(&sock, 85, &peer_seq, &lport);
+        grow_window(&sock, conn, 85, lport, peer_seq, 12 * TCP_MSS);
+        CHECK("a burst of ten segments is taken",
+              tcp_send(&sock, bytes, 14600) == 14600 && n_segs == 10);
+        hole1 = read32be(segs[1].data + 4);
+        hole2 = read32be(segs[4].data + 4);
+        sent_end = conn->snd_nxt;
+        rx(85, lport, peer_seq, hole1, F_ACK, 65535, (const char *)0, 0);
+        n_segs = 0;
+        rx(85, lport, peer_seq, hole1, F_ACK, 65535, (const char *)0, 0);
+        rx(85, lport, peer_seq, hole1, F_ACK, 65535, (const char *)0, 0);
+        rx(85, lport, peer_seq, hole1, F_ACK, 65535, (const char *)0, 0);
+        CHECK("the third duplicate sends the first hole again",
+              n_segs == 1 && read32be(segs[0].data + 4) == hole1);
+        n_segs = 0;
+        rx(85, lport, peer_seq, hole2, F_ACK, 65535, (const char *)0, 0);
+        CHECK("the partial acknowledgement sends the second hole again at once",
+              n_segs == 1 && read32be(segs[0].data + 4) == hole2);
+        CHECK("in the same recovery",
+              conn->recovering == TCP_RECOVER_FAST && conn->snd_una == hole2);
+        rx(85, lport, peer_seq, sent_end, F_ACK, 65535, (const char *)0, 0);
+        CHECK("and the acknowledgement of everything ends it",
+              conn->recovering == 0 && conn->snd_una == sent_end && conn->retransmits == 2);
+    }
+
+    /* A close with a lost burst in flight: the FIN waits behind the data,
+       the recovery goes on from the acknowledgements in FIN_WAIT_1, and a
+       segment the driver refuses there is sent by the tick. */
+    {
+        struct socket sock;
+        struct tcb *conn;
+        uint32_t peer_seq = 14000, lost_from, lost_to;
+        uint16_t lport;
+        static uint8_t bytes[8760];
+        unsigned ticks = 0;
+
+        reset_all();
+        conn = open_conn(&sock, 86, &peer_seq, &lport);
+        grow_window(&sock, conn, 86, lport, peer_seq, 12 * TCP_MSS);
+        CHECK("a burst of six segments is taken",
+              tcp_send(&sock, bytes, 8760) == 8760 && n_segs == 6);
+        lost_from = conn->snd_una;
+        lost_to = conn->snd_nxt;
+        n_segs = 0;
+        tcp_close(&sock);
+        CHECK("the close sends the FIN behind the burst",
+              n_segs == 1 && (last_flags() & F_FIN) != 0 && conn->state == TCP_FIN_WAIT_1);
+        n_segs = 0;
+        while (n_segs == 0 && ticks < 2 * TCP_RTO_MAX) {
+            kernel_ticks++;
+            tcp_tick();
+            ticks++;
+        }
+        CHECK("the timeout sends the oldest segment again, not the FIN",
+              n_segs == 1 && read32be(segs[0].data + 4) == lost_from &&
+                  (last_flags() & F_FIN) == 0);
+        n_segs = 0;
+        ip_tx_refuse = 1;
+        rx(86, lport, peer_seq, lost_from + TCP_MSS, F_ACK, 65535, (const char *)0, 0);
+        CHECK("its acknowledgement in FIN_WAIT_1 sends the next, which the driver refuses",
+              n_segs == 0 && conn->tx_refused == 1 && conn->recovering == TCP_RECOVER_RTO);
+        n_segs = 0;
+        kernel_ticks++;
+        tcp_tick();
+        CHECK("and the tick sends the two the grown window allows",
+              n_segs == 2 && read32be(segs[0].data + 4) == lost_from + TCP_MSS &&
+                  read32be(segs[1].data + 4) == lost_from + 2 * TCP_MSS);
+        rx(86, lport, peer_seq, lost_to, F_ACK, 65535, (const char *)0, 0);
+        CHECK("the burst acknowledged ends the recovery",
+              conn->recovering == 0 && conn->snd_una == lost_to);
+    }
+
+    /* A round-trip sample ends at the acknowledgement that covers the
+       sampled segment, not at the first acknowledgement after it. */
+    {
+        struct socket sock;
+        struct tcb *conn;
+        uint32_t peer_seq = 15000, a_end, b_end;
+        uint16_t lport;
+        static uint8_t bytes[2920];
+
+        reset_all();
+        conn = open_conn(&sock, 87, &peer_seq, &lport);
+        CHECK("two segments go out", tcp_send(&sock, bytes, 2920) == 2920 && n_segs == 2);
+        a_end = read32be(segs[0].data + 4) + TCP_MSS;
+        b_end = a_end + TCP_MSS;
+        CHECK("the sample is on the first", conn->rtt_start != 0 && conn->rtt_seq == a_end);
+        kernel_ticks++;
+        rx(87, lport, peer_seq, a_end, F_ACK, 65535, (const char *)0, 0);
+        CHECK("and its acknowledgement ends the sample", conn->rtt_start == 0);
+        n_segs = 0;
+        CHECK("a third segment goes out", tcp_send(&sock, bytes, 1460) == 1460 && n_segs == 1);
+        CHECK("with a sample on it", conn->rtt_start != 0 && conn->rtt_seq == b_end + TCP_MSS);
+        kernel_ticks++;
+        rx(87, lport, peer_seq, b_end, F_ACK, 65535, (const char *)0, 0);
+        CHECK("the acknowledgement of the second does not end it", conn->rtt_start != 0);
+        kernel_ticks += 9;
+        rx(87, lport, peer_seq, conn->snd_nxt, F_ACK, 65535, (const char *)0, 0);
+        CHECK("the acknowledgement of the third does", conn->rtt_start == 0);
     }
 
     /* A peer that stops answering: the stack retransmits with a doubling

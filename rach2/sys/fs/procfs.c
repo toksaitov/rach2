@@ -1301,7 +1301,9 @@ static int procfs_gen_nettcp(struct procfs_text *t)
         ap_hex(t, row.txq, 8);
         ap_ch(t, ':');
         ap_hex(t, row.rxq, 8);
-        ap_str(t, " 00:00000000 00000000 ");
+        ap_str(t, " 00:00000000 ");
+        ap_hex(t, row.retransmits, 8); /* Linux's retrnsmt column */
+        ap_ch(t, ' ');
         ap_u32(t, row.uid);
         ap_str(t, "        0 ");
         ap_u32(t, row.inode);

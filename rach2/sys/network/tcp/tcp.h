@@ -46,6 +46,15 @@
 #define TCP_FIN_WAIT2_TICKS 1000 /* FIN_WAIT_2  = 10 s (peer-FIN backstop) */
 #define TCP_MAX_RETX    7       /* give up after this many retransmissions */
 
+/* Loss recovery (RFC 5681, RFC 6582). The third duplicate acknowledgement
+ * in a row means a segment was lost and the ones after it arrived. After a
+ * timeout the unacknowledged data is sent again from the oldest byte as
+ * the congestion window grows; after duplicates the hole is sent again at
+ * once and each partial acknowledgement names the next. */
+#define TCP_DUP_ACKS     3
+#define TCP_RECOVER_RTO  1
+#define TCP_RECOVER_FAST 2
+
 /* TCP connection states (RFC 793). */
 typedef enum {
     TCP_CLOSED = 0,
@@ -123,6 +132,18 @@ struct tcb {
     uint32_t zwp_timer;    /* zero-window probe countdown; 0 = off   */
     uint32_t tx_refused;   /* segments the driver would not take, kept */
     uint32_t refused_since; /* ticks+1 at the first refusal still unresolved; 0 = none */
+
+    /* Loss recovery. `recover` is the end of the data sent when the loss
+     * was found, and the recovery lasts until an acknowledgement reaches
+     * it; after a timeout `retx_nxt` walks the unacknowledged data again.
+     * `rtt_seq` is the end of the segment the round-trip sample was started
+     * on: the sample ends at the acknowledgement that covers it. */
+    uint8_t  recovering;   /* 0, TCP_RECOVER_RTO or TCP_RECOVER_FAST  */
+    uint8_t  dup_acks;     /* duplicate acknowledgements in a row     */
+    uint32_t recover;      /* sequence number that ends the recovery  */
+    uint32_t retx_nxt;     /* next sequence number to send again      */
+    uint32_t rtt_seq;      /* the sample ends at an ACK covering this */
+    uint32_t retransmits;  /* segments sent again, for the report     */
 
     /* Outstanding control segment to retransmit (SYN/SYN-ACK/FIN). */
     uint8_t  retx_flags;   /* 0 = none, else the control flags       */
@@ -231,6 +252,7 @@ struct tcp_row {
     uint32_t zwp_timer;
     uint32_t tx_refused;
     uint32_t refused_for;
+    uint32_t retransmits;
 };
 
 /**

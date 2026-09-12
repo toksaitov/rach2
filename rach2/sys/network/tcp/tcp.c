@@ -60,7 +60,8 @@ static uint16_t tcp_checksum(uint32_t src_ip, uint32_t dst_ip,
 static void tcp_emit_flags(struct tcb *tcb, uint8_t flags, uint32_t seq);
 static void tcp_send_flags(struct tcb *tcb, uint8_t flags);
 static int tcp_output(struct tcb *tcb);
-static void tcp_retransmit(struct tcb *tcb);
+static int  tcp_resend(struct tcb *tcb, uint32_t seq, uint32_t most);
+static int  tcp_recover_send(struct tcb *tcb);
 static void tcp_pump(struct tcb *tcb);
 static void tcp_giveup(struct tcb *tcb);
 static struct tcb    *tcp_find(uint16_t local_port,
@@ -290,43 +291,46 @@ static int tcp_output(struct tcb *tcb)
 
         if (tcb->rto_timer == 0) {
             tcb->rto_timer = tcb->rto;
-            if (tcb->rtt_start == 0) {
-                tcb->rtt_start = kernel_ticks + 1; /* +1 keeps 0 = no sample */
-            }
+        }
+        /* One round-trip sample at a time, on fresh data only (Karn), ended
+         * by the acknowledgement that covers this segment. */
+        if (tcb->rtt_start == 0 && !tcb->recovering) {
+            tcb->rtt_start = kernel_ticks + 1; /* +1 keeps 0 = no sample */
+            tcb->rtt_seq   = tcb->snd_nxt;
         }
     }
 }
 
 /*
- * Resend the oldest unacknowledged segment (the MSS at snd_una) after a
- * timeout. Unlike tcp_output this reads from the acknowledged ring position
- * and leaves snd_nxt and send_head untouched, so snd_nxt stays the true
+ * Send one segment of already-sent data again: up to an MSS from `seq`,
+ * bounded by the data sent and by `most`. Unlike tcp_output this reads the
+ * ring at the acknowledged position plus the distance from snd_una, and
+ * leaves snd_nxt and send_head untouched, so snd_nxt stays the true
  * high-water mark of transmitted data: an ACK for anything already sent
- * therefore still satisfies the (ack_num <= snd_nxt) window test and advances
- * the connection instead of being rejected. As ACKs arrive, send_ack moves up
- * and tcp_output resumes sending new data from send_head.
+ * therefore still satisfies the (ack_num <= snd_nxt) window test and
+ * advances the connection instead of being rejected.
+ *
+ * Returns the bytes sent; 0 when `seq` is at or past the data sent or `most`
+ * is 0; -1 when the driver refused the segment, counted as tcp_output counts
+ * a refusal so that the tick's pump sends it later.
  */
-static void tcp_retransmit(struct tcb *tcb)
+static int tcp_resend(struct tcb *tcb, uint32_t seq, uint32_t most)
 {
-    uint32_t data_len, send_len, i;
+    uint32_t sent_end = tcb->snd_una + (tcb->send_head - tcb->send_ack);
+    uint32_t from = tcb->send_ack + (seq - tcb->snd_una);
+    uint32_t send_len, i;
     uint16_t seg_len;
 
-    /* Bound by the SENT-but-unacknowledged data, [send_ack, send_head): not
-     * snd_nxt - snd_una (which also counts an outstanding FIN's sequence) and
-     * not send_tail - send_ack (which also counts queued-but-unsent data past
-     * snd_nxt). Either would transmit bytes the peer could ACK beyond snd_nxt,
-     * wedging the stream. */
-    data_len = tcb->send_head - tcb->send_ack;
-    if (data_len == 0) {
-        return;
+    if ((int32_t)(sent_end - seq) <= 0 || most == 0) {
+        return 0;
     }
-
-    send_len = data_len;
+    send_len = sent_end - seq;
     if (send_len > TCP_MSS) send_len = TCP_MSS;
+    if (send_len > most) send_len = most;
 
     write16be(tcp_tx_buf + 0,  tcb->local_port);
     write16be(tcp_tx_buf + 2,  tcb->remote_port);
-    write32be(tcp_tx_buf + 4,  tcb->snd_una);
+    write32be(tcp_tx_buf + 4,  seq);
     write32be(tcp_tx_buf + 8,  tcb->rcv_nxt);
     tcp_tx_buf[12] = (uint8_t)((TCP_HDR_SIZE >> 2) << 4);
     tcp_tx_buf[13] = TCP_ACK | TCP_PSH;
@@ -336,15 +340,120 @@ static void tcp_retransmit(struct tcb *tcb)
 
     for (i = 0; i < send_len; i++) {
         tcp_tx_buf[TCP_HDR_SIZE + i] =
-            tcb->send_buf[(tcb->send_ack + i) & (TCP_RING_SIZE - 1)];
+            tcb->send_buf[(from + i) & (TCP_RING_SIZE - 1)];
     }
 
     seg_len = (uint16_t)(TCP_HDR_SIZE + send_len);
     write16be(tcp_tx_buf + 16,
               tcp_checksum(tcb->local_ip, tcb->remote_ip, tcp_tx_buf, seg_len));
-    ip_tx(tcb->remote_ip, IP_PROTO_TCP, tcp_tx_buf, seg_len, IP_TTL_DEFAULT);
+    if (ip_tx(tcb->remote_ip, IP_PROTO_TCP, tcp_tx_buf, seg_len, IP_TTL_DEFAULT) ==
+        -ENOBUFS) {
+        tcb->tx_refused++;
+        if (tcb->refused_since == 0) {
+            tcb->refused_since = kernel_ticks + 1;
+        }
+        return -1;
+    }
+    tcb->refused_since = 0;
+    tcb->retransmits++;
+    return (int)send_len;
+}
 
+/*
+ * After a timeout, send the unacknowledged data again from `retx_nxt` up to
+ * `recover`, as far as the windows allow with the bytes sent again counted
+ * as the bytes in flight: everything else in flight is presumed lost (RFC
+ * 5681, section 3.1). Each acknowledgement grows the congestion window and
+ * comes back here through tcp_pump, so data lost in a burst is on the wire
+ * again within a few round trips, one segment, then two, then four, rather
+ * than one segment per timeout. Returns 1 when the driver refused a segment,
+ * which the tick's pump retries.
+ */
+static int tcp_recover_send(struct tcb *tcb)
+{
+    while (tcb->recovering == TCP_RECOVER_RTO &&
+           (int32_t)(tcb->retx_nxt - tcb->recover) < 0) {
+        uint32_t window = tcb->snd_wnd;
+        uint32_t out = tcb->retx_nxt - tcb->snd_una;
+        int n;
+
+        if (tcb->cwnd < window) window = tcb->cwnd;
+        if (out >= window) {
+            return 0;
+        }
+        n = tcp_resend(tcb, tcb->retx_nxt, window - out);
+        if (n < 0) {
+            return 1;
+        }
+        if (n == 0) {
+            return 0;
+        }
+        tcb->retx_nxt += (uint32_t)n;
+    }
+    return 0;
+}
+
+/*
+ * Begin recovery after a timeout (RFC 5681, section 3.1): the threshold is
+ * half of what was in flight, at least two segments; the congestion window
+ * is one segment; the resend starts at the oldest unacknowledged byte. In a
+ * recovery already under way the flight is the congestion window, since the
+ * data beyond it was presumed lost when that recovery began. No round-trip
+ * sample is taken from data sent again (Karn's algorithm). The caller has
+ * doubled the timeout, and it is restarted here.
+ */
+static void tcp_enter_rto_recovery(struct tcb *tcb)
+{
+    uint32_t sent_end = tcb->snd_una + (tcb->send_head - tcb->send_ack);
+    uint32_t flight = tcb->recovering ? tcb->cwnd : sent_end - tcb->snd_una;
+    uint32_t new_ss = flight / 2u;
+
+    if (new_ss < 2u * TCP_MSS) new_ss = 2u * TCP_MSS;
+    tcb->ssthresh   = new_ss;
+    tcb->cwnd       = TCP_MSS;
+    tcb->recovering = TCP_RECOVER_RTO;
+    tcb->recover    = sent_end;
+    tcb->retx_nxt   = tcb->snd_una;
+    tcb->dup_acks   = 0;
+    tcb->rtt_start  = 0;
+    (void)tcp_recover_send(tcb);
     tcb->rto_timer = tcb->rto;
+}
+
+/*
+ * Begin recovery at the third duplicate acknowledgement (RFC 5681, section
+ * 3.2; RFC 6582): the segment the peer keeps asking for is sent again at
+ * once, without waiting for the timer; the threshold is half of what is in
+ * flight; the congestion window is the threshold plus the three segments
+ * the duplicates say have left the network. Each further duplicate adds a
+ * segment, a partial acknowledgement sends the next hole again, and the
+ * acknowledgement of everything sent before the loss ends the recovery at
+ * the threshold.
+ */
+static void tcp_enter_fast_recovery(struct tcb *tcb)
+{
+    uint32_t sent_end = tcb->snd_una + (tcb->send_head - tcb->send_ack);
+    uint32_t new_ss = (sent_end - tcb->snd_una) / 2u;
+
+    if (new_ss < 2u * TCP_MSS) new_ss = 2u * TCP_MSS;
+    tcb->ssthresh   = new_ss;
+    tcb->recovering = TCP_RECOVER_FAST;
+    tcb->recover    = sent_end;
+    tcb->rtt_start  = 0;
+    (void)tcp_resend(tcb, tcb->snd_una, TCP_MSS);
+    tcb->cwnd = new_ss + TCP_DUP_ACKS * TCP_MSS;
+}
+
+/*
+ * Send what a connection can: the data a timeout's recovery sends again
+ * first, then new data. Returns 1 when the driver refused a segment.
+ */
+static int tcp_send_more(struct tcb *tcb)
+{
+    if (tcp_recover_send(tcb)) {
+        return 1;
+    }
+    return tcp_output(tcb);
 }
 
 /*
@@ -355,7 +464,7 @@ static void tcp_retransmit(struct tcb *tcb)
  */
 static void tcp_pump(struct tcb *tcb)
 {
-    tcp_output(tcb);
+    (void)tcp_send_more(tcb);
 
     if (tcb->fin_pending && tcb->send_head == tcb->send_tail) {
         tcb->fin_pending = 0;
@@ -682,7 +791,7 @@ static uint32_t tcp_pump_next;
  */
 static int tcp_tick_pump(struct tcb *tcb)
 {
-    if (tcp_output(tcb) == 1 && tcb->refused_since != 0 &&
+    if (tcp_send_more(tcb) == 1 && tcb->refused_since != 0 &&
         kernel_ticks + 1 - tcb->refused_since > TCP_REFUSE_GIVEUP_TICKS) {
         klog(KLOG_WARN, "tcp", "gave up: the driver refused every transmit for %d ticks",
              (int)(kernel_ticks + 1 - tcb->refused_since));
@@ -692,9 +801,18 @@ static int tcp_tick_pump(struct tcb *tcb)
     return 0;
 }
 
-/** Whether the tick's pump has anything to do for a connection. */
+/**
+ * Whether the tick's pump has anything to do for a connection: queued bytes
+ * in a state that sends them, or a timeout's recovery with data still to
+ * send again, in any state, since a close with a lost segment in flight
+ * would otherwise wait a timeout per segment.
+ */
 static int tcp_pumpable(const struct tcb *tcb)
 {
+    if (tcb->recovering == TCP_RECOVER_RTO &&
+        (int32_t)(tcb->retx_nxt - tcb->recover) < 0) {
+        return 1;
+    }
     return (tcb->state == TCP_ESTABLISHED || tcb->state == TCP_CLOSE_WAIT) &&
            tcb->send_tail != tcb->send_head;
 }
@@ -786,21 +904,13 @@ void tcp_tick(void)
                 if (tcb->send_head != tcb->send_ack) {
                     /*
                      * Sent-but-unacknowledged data (with or without a FIN
-                     * queued behind it): collapse the window (RFC 5681) and
-                     * resend the oldest unacknowledged data segment. A FIN
+                     * queued behind it): recover from the oldest byte. A FIN
                      * sent by close() must not preempt this, or a lost data
                      * segment is never retransmitted and the teardown
                      * stalls; the FIN's own retransmit resumes once the data
-                     * is acknowledged (send_ack reaches send_head). snd_nxt
-                     * is left untouched so it stays the high-water mark and
-                     * ACKs for data in flight still validate.
+                     * is acknowledged (send_ack reaches send_head).
                      */
-                    uint32_t new_ss = tcb->cwnd >> 1;
-                    if (new_ss < 2u * TCP_MSS) new_ss = 2u * TCP_MSS;
-                    tcb->ssthresh  = new_ss;
-                    tcb->cwnd      = TCP_MSS;
-                    tcb->rtt_start = 0;   /* Karn: no RTT sample on a retransmit */
-                    tcp_retransmit(tcb);
+                    tcp_enter_rto_recovery(tcb);
                 } else if (tcb->retx_flags) {
                     /* No data in flight; a control segment
                      * (SYN/SYN-ACK/FIN). */
@@ -964,6 +1074,7 @@ int tcp_connect(struct socket *sock, uint32_t dst_ip, uint16_t dst_port)
     tcb->iss         = tcp_isn(tcb->local_port, dst_port);
     tcb->snd_nxt     = tcb->iss;
     tcb->snd_una     = tcb->iss;
+    tcb->recover     = tcb->iss;
     tcb->sock        = sock;
     tcb->uid        = sock->uid;
     tcb->inode      = sock->inode;
@@ -1103,6 +1214,34 @@ static void tcp_ack_data(struct tcb *tcb, uint32_t ack_num)
 
     tcb->send_ack += (acked < ring) ? acked : ring;
     tcb->snd_una   = ack_num;
+    tcb->dup_acks  = 0;
+    if (tcb->recovering == TCP_RECOVER_RTO &&
+        (int32_t)(tcb->retx_nxt - ack_num) < 0) {
+        tcb->retx_nxt = ack_num;
+    }
+    if (tcb->recovering && (int32_t)(ack_num - tcb->recover) >= 0) {
+        if (tcb->recovering == TCP_RECOVER_FAST) {
+            tcb->cwnd = tcb->ssthresh;
+        }
+        tcb->recovering = 0;
+    }
+}
+
+/*
+ * Grow the congestion window for an acknowledgement of new data (RFC
+ * 5681): a segment per acknowledgement in slow start, up to the threshold,
+ * and a segment per window after it.
+ */
+static void tcp_ack_grow(struct tcb *tcb)
+{
+    if (tcb->cwnd < tcb->ssthresh) {
+        tcb->cwnd += TCP_MSS;
+        if (tcb->cwnd > tcb->ssthresh) tcb->cwnd = tcb->ssthresh;
+    } else {
+        uint32_t inc = (uint32_t)TCP_MSS * TCP_MSS / tcb->cwnd;
+        if (inc == 0) inc = 1;
+        tcb->cwnd += inc;
+    }
 }
 
 /*
@@ -1303,6 +1442,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
         conn_tcb->iss          = tcp_isn(tcb->local_port, src_port);
         conn_tcb->snd_nxt      = conn_tcb->iss;
         conn_tcb->snd_una      = conn_tcb->iss;
+        conn_tcb->recover      = conn_tcb->iss;
         conn_tcb->sock         = conn_sock;
         conn_tcb->uid          = conn_sock->uid;
         conn_tcb->inode        = conn_sock->inode;
@@ -1371,9 +1511,12 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
             if ((int32_t)(ack_num - tcb->snd_una) > 0 &&
                 (int32_t)(ack_num - tcb->snd_nxt) <= 0) {
                 uint32_t acked = ack_num - tcb->snd_una;
+                int was_fast = tcb->recovering == TCP_RECOVER_FAST;
 
-                /* RTT sample (skipped after a retransmit, Karn's algorithm). */
-                if (tcb->rtt_start != 0) {
+                /* RTT sample, ended by the ACK that covers the sampled
+                 * segment; none runs after a loss (Karn's algorithm). */
+                if (tcb->rtt_start != 0 &&
+                    (int32_t)(ack_num - tcb->rtt_seq) >= 0) {
                     uint32_t rtt = kernel_ticks - (tcb->rtt_start - 1);
                     uint32_t new_rto, delta;
                     if (rtt == 0) rtt = 1;
@@ -1394,20 +1537,21 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
                     tcb->rtt_start = 0;
                 }
 
-                /* Congestion control: slow start then congestion avoidance. */
-                if (tcb->cwnd < tcb->ssthresh) {
-                    tcb->cwnd += TCP_MSS;
-                    if (tcb->cwnd > tcb->ssthresh) tcb->cwnd = tcb->ssthresh;
-                } else {
-                    uint32_t inc = (uint32_t)TCP_MSS * TCP_MSS / tcb->cwnd;
-                    if (inc == 0) inc = 1;
-                    tcb->cwnd += inc;
-                }
-
-                tcb->snd_una     = ack_num;
+                tcp_ack_data(tcb, ack_num); /* ends a recovery it reaches */
                 tcb->snd_wnd     = window;
-                tcb->send_ack   += acked;
                 tcb->rto_backoff = 0;
+
+                if (was_fast) {
+                    if (tcb->recovering) {
+                        /* Partial: the next hole, at once, and the window
+                         * deflated by what left the network (RFC 6582). */
+                        tcb->cwnd = (tcb->cwnd > acked ? tcb->cwnd - acked : 0)
+                                    + TCP_MSS;
+                        (void)tcp_resend(tcb, tcb->snd_una, TCP_MSS);
+                    }
+                } else {
+                    tcp_ack_grow(tcb);
+                }
 
                 if (tcb->snd_una == tcb->snd_nxt) {
                     tcb->rto_timer = 0;   /* everything acknowledged */
@@ -1418,6 +1562,25 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
 
                 tcp_pump(tcb);
                 socket_tcp_writable(tcb->sock); /* freed send-ring space */
+            } else if (ack_num == tcb->snd_una && payload_len == 0 &&
+                       window == tcb->snd_wnd &&
+                       !(flags & (TCP_SYN | TCP_FIN)) &&
+                       tcb->send_head != tcb->send_ack) {
+                /* A duplicate (RFC 5681, section 2): the peer took a segment
+                 * past a hole. Three in a row mean the hole is a loss, and
+                 * each one during the recovery means a segment has left the
+                 * network. The recovery is not begun again for duplicates
+                 * of the acknowledgement that ended the last one. */
+                if (tcb->recovering == TCP_RECOVER_FAST) {
+                    tcb->cwnd += TCP_MSS;
+                    tcp_pump(tcb);
+                } else if (tcb->recovering == 0) {
+                    if (tcb->dup_acks < TCP_DUP_ACKS) tcb->dup_acks++;
+                    if (tcb->dup_acks == TCP_DUP_ACKS &&
+                        (int32_t)(tcb->snd_una - tcb->recover) > 0) {
+                        tcp_enter_fast_recovery(tcb);
+                    }
+                }
             } else if (window != tcb->snd_wnd) {
                 /* Pure window update. */
                 tcb->snd_wnd = window;
@@ -1477,6 +1640,8 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
             (int32_t)(ack_num - tcb->snd_una) > 0 &&
             (int32_t)(ack_num - tcb->snd_nxt) <= 0) {
             tcp_ack_data(tcb, ack_num);
+            tcp_ack_grow(tcb);
+            (void)tcp_recover_send(tcb);
             if (ack_num == tcb->snd_nxt) {
                 tcb->state          = TCP_FIN_WAIT_2;
                 tcb->retx_flags     = 0;
@@ -1559,6 +1724,8 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
                 (int32_t)(ack_num - tcb->snd_una) > 0 &&
                 (int32_t)(ack_num - tcb->snd_nxt) < 0) {
                 tcp_ack_data(tcb, ack_num); /* a data-only ACK frees the ring */
+                tcp_ack_grow(tcb);
+                (void)tcp_recover_send(tcb);
             }
             if (flags & TCP_FIN) {
                 tcp_send_flags(tcb, TCP_ACK); /* re-ACK a retransmitted FIN */
@@ -1574,6 +1741,8 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip,
                 (int32_t)(ack_num - tcb->snd_una) > 0 &&
                 (int32_t)(ack_num - tcb->snd_nxt) < 0) {
                 tcp_ack_data(tcb, ack_num); /* a data-only ACK frees the ring */
+                tcp_ack_grow(tcb);
+                (void)tcp_recover_send(tcb);
             }
             if (flags & TCP_FIN) {
                 tcp_send_flags(tcb, TCP_ACK); /* re-ACK a retransmitted FIN */
@@ -1657,6 +1826,7 @@ int tcp_snapshot(struct tcp_row **rows)
         out[n].rto_timer   = t->rto_timer;
         out[n].zwp_timer   = t->zwp_timer;
         out[n].tx_refused  = t->tx_refused;
+        out[n].retransmits = t->retransmits;
         out[n].refused_for = t->refused_since ? kernel_ticks + 1 - t->refused_since : 0;
         n++;
     }
