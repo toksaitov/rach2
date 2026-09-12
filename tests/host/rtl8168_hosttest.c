@@ -152,11 +152,34 @@ static int pci_present = 1;
 
 /* The driver reports what it found through the kernel log, which this test
    has no use for; the records are dropped. */
+/* The format of the last line the driver logged, for the rows that expect
+   one. */
+static const char *last_klog;
+
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     (void)level;
     (void)subsystem;
-    (void)format;
+    last_klog = format;
+}
+
+/* Whether `s` contains `sub`; written out, since this test pulls in no host
+   header. */
+static int has(const char *s, const char *sub)
+{
+    unsigned i, j;
+
+    if (!s) {
+        return 0;
+    }
+    for (i = 0; s[i]; i++) {
+        for (j = 0; sub[j] && s[i + j] == sub[j]; j++) {
+        }
+        if (!sub[j]) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 int pci_find_device_by_id(unsigned short vendor, unsigned short device, pci_device_t *out)
@@ -1372,6 +1395,67 @@ int main(void)
     model_lapic = 0;
     CHECK(rtl8168_init(&model_iface, 0) == NETDEV_UP && r8168_msi_vector == -1,
           "a machine with no usable APIC stays polled");
+
+    /* ---- the link: what is advertised, and a change logged ---- */
+    /* The port advertises pause in both directions with its speeds, so a
+       switch with a slower far port holds this one rather than dropping a
+       run of frames; a link change the card reports is logged with the
+       speed, duplex and pause resolved, and is not taken for a stuck source. */
+    model_reset();
+    CHECK(rtl8168_init(&model_iface, 0) == NETDEV_UP, "the bring-up completes for the link rows");
+    CHECK(model_phy[R8168_OCP_STD_PHY_BASE + 2 * R8168_MII_ADVERTISE] == 0x0de1,
+          "the port advertises 10 and 100 in both duplexes with pause both ways");
+    CHECK(model_phy[R8168_OCP_STD_PHY_BASE + 2 * R8168_MII_CTRL1000] == 0x0200,
+          "and 1000 full duplex");
+    {
+        int adv = find_write_value(
+            0, 32, R8168_GPHY_OCP,
+            R8168_OCP_FLAG | ((R8168_OCP_STD_PHY_BASE + 2 * R8168_MII_ADVERTISE) << 15) | 0x0de1u);
+        int restart = find_write_value(0, 32, R8168_GPHY_OCP,
+                                       R8168_OCP_FLAG |
+                                           ((R8168_OCP_STD_PHY_BASE + 2 * R8168_MII_BMCR) << 15) |
+                                           (R8168_BMCR_ANENABLE | R8168_BMCR_ANRESTART));
+
+        CHECK(adv >= 0 && restart >= 0 && adv < restart,
+              "the advertisement is written before negotiation is restarted");
+    }
+    CHECK(has(r8168_pause_words(R8168_PHY_TXFLOW | R8168_PHY_RXFLOW), "both") &&
+              has(r8168_pause_words(R8168_PHY_TXFLOW), "sent") &&
+              has(r8168_pause_words(R8168_PHY_RXFLOW), "taken") &&
+              has(r8168_pause_words(0), "none"),
+          "the pause resolved is named in both directions, one, or none");
+    if (model_handler) {
+        model_reg[R8168_PHYSTATUS] = R8168_PHY_LINK | R8168_PHY_1000F | R8168_PHY_FULLDUP |
+                                     R8168_PHY_TXFLOW | R8168_PHY_RXFLOW;
+        model_reg[R8168_INTRSTATUS] = (unsigned char)R8168_INTR_LINKCHG;
+        model_reg[R8168_INTRSTATUS + 1] = 0;
+        last_klog = 0;
+        r8168_msi_stuck = 0;
+        r8168_msi_storms = 0;
+        model_handler(0);
+        CHECK(has(last_klog, "link %d Mb/s"), "a link change the card reports is logged");
+        CHECK(r8168_msi_stuck == 0 && r8168_msi_storms == 0, "and is not taken for a stuck source");
+        model_reg[R8168_PHYSTATUS] = 0;
+        model_reg[R8168_INTRSTATUS] = (unsigned char)R8168_INTR_LINKCHG;
+        last_klog = 0;
+        model_handler(0);
+        CHECK(has(last_klog, "link down"), "a link that dropped is logged as down");
+
+        /* The error sources are counted before the acknowledgement loses
+           them: a frame the chip could not send has no other record. */
+        r8168_txerr_reports = 0;
+        r8168_rxerr_reports = 0;
+        model_reg[R8168_INTRSTATUS] = (unsigned char)(R8168_INTR_TXERR | R8168_INTR_TXOK);
+        model_handler(0);
+        CHECK(r8168_txerr_reports == 1 && r8168_rxerr_reports == 0,
+              "a message with the transmit error source is counted");
+        model_reg[R8168_INTRSTATUS] = (unsigned char)R8168_INTR_RXERR;
+        model_handler(0);
+        CHECK(r8168_txerr_reports == 1 && r8168_rxerr_reports == 1,
+              "and one with the receive error source");
+    } else {
+        CHECK(0, "the bring-up registered a handler for the link rows");
+    }
 
     /* ---- the card's own counts ---- */
     /* The chip is asked for its tally block at the block's address, and

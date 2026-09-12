@@ -110,6 +110,7 @@ static uint32_t r8168_xid;
 static uint16_t r8168_cp_cmd;
 static const char *r8168_err = "no RTL8168 present";
 static int r8168_up;
+static void r8168_log_link(void);
 
 /* The PHY page base the MDIO shim is on, the reference's tp->ocp_base. */
 #define R8168_OCP_STD_PHY_BASE 0xa400
@@ -133,6 +134,8 @@ static void     r8168_interrupts_enable(void);
 static uint32_t r8168_msi_entries;
 static uint32_t r8168_msi_idle;
 static uint32_t r8168_msi_deferred; /* entries that left work to the tick */
+static uint32_t r8168_txerr_reports; /* messages with the transmit error source set */
+static uint32_t r8168_rxerr_reports; /* messages with the receive error source set */
 static uint32_t r8168_msi_storms;
 static uint32_t r8168_msi_stuck;    /* entries in a row: status left set, no work */
 static uint32_t r8168_tick_work;    /* frames the tick handled with messages on */
@@ -828,8 +831,12 @@ static void r8168_tx_clear(void)
 #define R8168_BMCR_ANRESTART 0x0200
 
 /* Everything this port advertises: 10 and 100 in both duplexes with the
- * 802.3 selector, and 1000 full duplex. */
-#define R8168_ADVERTISE_VALUE 0x01e1
+ * 802.3 selector and pause in both directions (bits 10 and 11, which the
+ * reference advertises through phylib), and 1000 full duplex. Pause is what
+ * lets a switch hold this port instead of dropping a run of frames when the
+ * far port is slower, which the Lenovo's switch did at 100 Mbit against
+ * this port's 1000. */
+#define R8168_ADVERTISE_VALUE 0x0de1
 #define R8168_CTRL1000_VALUE  0x0200
 
 /**
@@ -909,6 +916,8 @@ static int r8168_phy_init(void)
 }
 
 /* PHYstatus bits (reference: enum rtl_register_content). */
+#define R8168_PHY_TXFLOW  0x40
+#define R8168_PHY_RXFLOW  0x20
 #define R8168_PHY_LINK    0x02
 #define R8168_PHY_1000F   0x10
 #define R8168_PHY_100M    0x08
@@ -1326,6 +1335,18 @@ static void rtl8168_isr(isr_params_t *params)
         }
         io->w16(R8168_INTRSTATUS, status);
         stuck = (io->r16(R8168_INTRSTATUS) & status) == status;
+        /* The error sources are counted before the status is lost to the
+         * acknowledgement: a frame the chip failed to send has no other
+         * record, since a descriptor comes back the same either way. */
+        if (status & R8168_INTR_TXERR) {
+            r8168_txerr_reports++;
+        }
+        if (status & R8168_INTR_RXERR) {
+            r8168_rxerr_reports++;
+        }
+        if (status & R8168_INTR_LINKCHG) {
+            r8168_log_link();
+        }
         work += r8168_service();
     }
     if (stuck && work == 0) {
@@ -1393,6 +1414,45 @@ static const char *rtl8168_error(void)
  *
  * @return 1 with `*out` filled; 0 only when no window is mapped.
  */
+/**
+ * The pause the link resolved, as PHYstatus reports it: whether this port
+ * sends pause frames when its ring is full and whether it holds when the
+ * far end sends them.
+ */
+static const char *r8168_pause_words(uint8_t st)
+{
+    if ((st & (R8168_PHY_TXFLOW | R8168_PHY_RXFLOW)) ==
+        (R8168_PHY_TXFLOW | R8168_PHY_RXFLOW)) {
+        return "both ways";
+    }
+    if (st & R8168_PHY_TXFLOW) {
+        return "sent only";
+    }
+    if (st & R8168_PHY_RXFLOW) {
+        return "taken only";
+    }
+    return "none";
+}
+
+/**
+ * Log the link as the MAC's summary has it: speed, duplex and pause, or
+ * that it is down. Written at bring-up and at every link change the card
+ * reports, so that a link that drops and returns, or one that came up at
+ * a speed or without the pause expected, is in the log with its time.
+ */
+static void r8168_log_link(void)
+{
+    uint8_t st = io->r8(R8168_PHYSTATUS);
+    uint32_t speed = r8168_link_speed();
+
+    if (speed == 0) {
+        klog(KLOG_INFO, "rtl8168", "link down");
+        return;
+    }
+    klog(KLOG_INFO, "rtl8168", "link %d Mb/s, %s duplex, pause %s", (int)speed,
+         (st & R8168_PHY_FULLDUP) ? "full" : "half", r8168_pause_words(st));
+}
+
 static int rtl8168_link(void *dev, struct netdev_link *out)
 {
     uint32_t speed;
@@ -1479,14 +1539,14 @@ static void rtl8168_print_info(void *dev)
         (unsigned)(rtl8168_mac[3] & 0xF), (unsigned)(rtl8168_mac[4] >> 4), (unsigned)(rtl8168_mac[4] & 0xF),
         (unsigned)(rtl8168_mac[5] >> 4), (unsigned)(rtl8168_mac[5] & 0xF));
     if (rtl8168_link(0, &link) && link.up) {
-        klog(KLOG_INFO, "rtl8168", "link %d Mb/s, %s duplex", (int)link.mbps,
-             link.full_duplex ? "full" : "half");
+        r8168_log_link();
     } else {
         klog(KLOG_INFO, "rtl8168", "no link yet");
     }
-    klog(KLOG_INFO, "rtl8168", "rx %d (%d error, %d dropped), tx %d (%d stalled)",
-                  r8168_rx_packets, r8168_rx_errors, r8168_rx_dropped, r8168_tx_packets,
-                  r8168_tx_stalls);
+    klog(KLOG_INFO, "rtl8168",
+         "rx %d (%d error, %d dropped, %d error reports), tx %d (%d stalled, %d error reports)",
+         r8168_rx_packets, r8168_rx_errors, r8168_rx_dropped, r8168_rxerr_reports,
+         r8168_tx_packets, r8168_tx_stalls, r8168_txerr_reports);
     if (r8168_msi_vector >= 0 && r8168_msi_storms == 0) {
         klog(KLOG_INFO, "rtl8168", "messages on vector %d: %d, %d idle, %d deferred, %d by the tick",
              r8168_msi_vector, r8168_msi_entries, r8168_msi_idle, r8168_msi_deferred,
