@@ -4727,7 +4727,7 @@ static int32_t do_chown(const char *name, uint32_t uid, uint32_t gid)
     }
     if (!mnt_is_root(ref.mnt)) {
         struct vfs_stat vst;
-        int what = 0;
+        int what;
 
         rc = vfs_getattr(ref.mnt, ref.node, &vst);
         if (rc == 0) {
@@ -4915,7 +4915,7 @@ static int32_t sys_fchown(isr_params_t *params)
         entry->ofd->vmnt && entry->ofd->vnode) {
         /* A node of another type, by the rules chown(2) keeps for one. */
         struct vfs_stat vst;
-        int what = 0;
+        int what;
         int rc = vfs_getattr(entry->ofd->vmnt, entry->ofd->vnode, &vst);
 
         if (rc == 0) {
