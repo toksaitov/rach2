@@ -172,10 +172,11 @@ else
     # Two kernels answer here. The stick's, milestone 25's, is built
     # read-only because the disk under it may be somebody's Windows, and it
     # mounts nothing from that disk. The installed one, whose boot line names
-    # its root with rach2.root=disk or rach2.root=ext2, writes that root and
-    # is built read-write; a read-only kernel there would be a system that
-    # cannot take a file.
-    if run 'cat /proc/cmdline' | grep -q 'rach2.root=\(disk\|ext2\)'; then
+    # its root with rach2.root=disk, rach2.root=ext2 or, since the installer
+    # names the disk by its table's id, rach2.root=MBRID=ID,N, writes that
+    # root and is built read-write; a read-only kernel there would be a
+    # system that cannot take a file.
+    if run 'cat /proc/cmdline' | grep -q 'rach2.root=\(disk\|ext2\|MBRID=\)'; then
         INSTALLED=1
         [ "$policy" = "read-write" ] || bad "the installed kernel is not the read-write build"
     else
