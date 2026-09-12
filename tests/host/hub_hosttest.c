@@ -20,12 +20,13 @@
  * is looked at; the scan finding a device already present and the core
  * enumerating it at its location; a device that lands on a port the scan
  * has just read, whose connection change the scan's acknowledgement would
- * clear unread; a reset that completes and one that never does, with the
- * port refused and forgotten when its device leaves; the speed read from
- * the status word; a disconnection closing the device below; a hub pulled
- * with two devices below closing both children before itself; a hub with
- * twenty ports publishing fifteen; and a hub that will not give its
- * descriptor refused by name.
+ * clear unread, with the hub closed when the read that follows the
+ * acknowledgement comes back short; a reset that completes and one that
+ * never does, with the port refused and forgotten when its device leaves;
+ * the speed read from the status word; a disconnection closing the device
+ * below; a hub pulled with two devices below closing both children before
+ * itself; a hub with twenty ports publishing fifteen; and a hub that will
+ * not give its descriptor refused by name.
  *
  * No hosted headers: the kernel headers define the fixed-width types, and
  * the libc calls are declared by hand as the other host tests declare them.
@@ -158,15 +159,17 @@ static struct {
     int port_powered_off[MODEL_PORTS];
     unsigned int hub_status;
     unsigned int hub_change;
-    int alt_refuse;      /* SET_INTERFACE is stalled */
-    int power_on_refuse; /* SET_FEATURE(PORT_POWER) on a port that is off is stalled */
-    int pull_on_open;    /* the next device opened is pulled while its Enable Slot is out */
-    int connect_on_read; /* a device lands on this port just after its status is read */
-    int hold_commands;   /* no command answers while set */
-    int slot_cap;        /* the slots the controller has, 0 for fifteen */
-    int long_config;     /* a device whose configuration is 115 bytes */
-    int config_claims;   /* what its header claims, 0 for the truth */
-    int change_stall;    /* the change endpoint answers with a stall */
+    int alt_refuse;        /* SET_INTERFACE is stalled */
+    int power_on_refuse;   /* SET_FEATURE(PORT_POWER) on a port that is off is stalled */
+    int pull_on_open;      /* the next device opened is pulled while its Enable Slot is out */
+    int connect_on_read;   /* a device lands on this port just after its status is read */
+    int short_after_clear; /* the status read after a clear on this port is short */
+    int short_clear_seen;  /* that clear has arrived; the next read is the short one */
+    int hold_commands;     /* no command answers while set */
+    int slot_cap;          /* the slots the controller has, 0 for fifteen */
+    int long_config;       /* a device whose configuration is 115 bytes */
+    int config_claims;     /* what its header claims, 0 for the truth */
+    int change_stall;      /* the change endpoint answers with a stall */
     /* The transfer outstanding on the change endpoint. */
     int change_device;
     unsigned char *change_buffer;
@@ -883,6 +886,15 @@ int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb
         if (model.status_reads == 1) {
             model.first_status_ms = model.now_ms;
         }
+        if (model.short_clear_seen && model.short_after_clear == port) {
+            /* One byte where four were asked for: the hub answered, and
+               said nothing the driver can read. */
+            model.short_clear_seen = 0;
+            model.short_after_clear = 0;
+            buf[0] = (unsigned char)(port_status_word(port) & 0xFF);
+            answer(device, 1, USB_XFER_SHORT, 4, 3, transfer->generation);
+            return 0;
+        }
         if (model.port_in_reset[port - 1] && !model.port_reset_never[port - 1]) {
             model.port_reset_reads[port - 1]++;
             if (model.port_reset_reads[port - 1] >= 2) {
@@ -978,6 +990,9 @@ int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb
         if (feature == 8 && port >= 1 && port <= MODEL_PORTS) {
             model.power_offs++;
             model.port_powered_off[port - 1] = 1;
+        }
+        if (model.short_after_clear == port) {
+            model.short_clear_seen = 1;
         }
         answer(device, 1, USB_XFER_OK, 0, 0, transfer->generation);
         return 0;
@@ -1524,6 +1539,18 @@ int main(void)
     kbd = slot_of_kind(KIND_KBD);
     CHECK("a device that connects during the scan, after its port was read, is enumerated",
           kbd != 0 && slot_of[kbd].where.route == 0x2u && running_count() == 2);
+
+    /* The same port, with that second read answered in one byte: the
+       acknowledgement has already cleared the latch and the hub leaves the
+       port out of its bitmap, so nothing would ask again and the device
+       would stay unknown. The hub is closed instead. */
+    model_reset();
+    model.port_change[1] = 1u;
+    model.connect_on_read = 2;
+    model.short_after_clear = 2;
+    pump(2000);
+    CHECK("a hub whose read after an acknowledgement comes back short is closed",
+          cleared(16, 2) && closes == 1 && running_count() == 0 && slot_of_kind(KIND_KBD) == 0);
 
     /* A swap: a connection change with the status still connected closes the
        old device before the new one is enumerated. */

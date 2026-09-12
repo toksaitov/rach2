@@ -539,6 +539,7 @@ static void port_read(struct hub *h, int port)
         return; /* a read for a reset, which its own arm judges */
     }
     h->change_reading = 0;
+    p->recheck = 0;
     p->to_clear = change & change_mask(h);
     if (change & C_PORT_OVER_CURRENT_BIT) {
         if (status & PORT_STAT_OVER_CURRENT) {
@@ -593,6 +594,12 @@ static void port_read(struct hub *h, int port)
  * once every port has been read. So a port whose change bits are
  * acknowledged is read once more, and the core's pass over the hub's ports
  * acts on the record that read leaves.
+ *
+ * That read is the only thing left that can find such a change: the latch
+ * is clear, and the hub leaves the port out of its bitmap, so nothing asks
+ * again. A hub that answers it with an error or with fewer than four bytes
+ * is closed with everything below it, since a hub kept running on an answer
+ * that says nothing would leave a device plugged in and unknown.
  */
 static int clear_next(struct hub *h, int port)
 {
@@ -751,6 +758,10 @@ static void answered(struct hub *h, const struct usb_completion *c)
         if (!ok || got < 4) {
             if (h->state == HUB_SCAN) {
                 give_up(h, "it would not say what is on a port");
+                return;
+            }
+            if (h->port[port - 1].recheck) {
+                give_up(h, "it would not say what is on a port after a change was acknowledged");
                 return;
             }
             if (h->port[port - 1].reset == RESET_POLL) {
@@ -946,14 +957,12 @@ static void step_hub(struct hub *h, uint32_t elapsed_ms)
                 }
             }
             if (p->to_clear == 0 && p->recheck) {
-                p->recheck = 0;
                 h->change_reading = i + 1;
                 if (port_status_read(h, i + 1) == 0) {
                     return;
                 }
                 /* The read could not go out: it is owed again. */
                 h->change_reading = 0;
-                p->recheck = 1;
             }
             if (p->power_on_ms != 0) {
                 p->power_on_ms = (p->power_on_ms > elapsed_ms) ? p->power_on_ms - elapsed_ms : 0;
