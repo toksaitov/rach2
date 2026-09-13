@@ -878,8 +878,10 @@ int main(int argc, char **argv)
            that adds without checking would wrap past the total. */
         w16(bpb + 14, 0xFFF0);
     }
-    bpb[510] = 0x55;
-    bpb[511] = 0xAA;
+    if (!is("--no-signature")) {
+        bpb[510] = 0x55;
+        bpb[511] = 0xAA;
+    }
 
     /* The FAT: chains for the directories and files. */
     link_cluster(0, 0x0FFFFFF8u);

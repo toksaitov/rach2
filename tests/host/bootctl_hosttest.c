@@ -384,6 +384,7 @@ int main(void)
     expect_open_error("--out-of-range", "a chain leaves the volume");
     expect_open_error("--short-chain", "size does not match its chain");
     expect_open_error("--cross-link", "two chains share a cluster");
+    expect_open_error("--no-signature", "this is not a boot partition");
     expect_open_error("--bpb-sector-size", "sector size is not 512");
     expect_open_error("--bpb-fat-oversized", "FAT region is out of bounds");
     expect_open_error("--bpb-root-out", "root cluster is out of range");

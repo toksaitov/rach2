@@ -222,7 +222,11 @@ static int open_slot(void)
     io.write = dev_write;
     io.ctx = NULL;
     if (bootslot_open(&bs, &io, errbuf, sizeof(errbuf)) != 0) {
-        fprintf(stderr, "bootctl: %s\n", errbuf);
+        fprintf(stderr, "bootctl: %s: %s\n", boot_partition, errbuf);
+        if (boot_partition != default_boot_partition) {
+            fprintf(stderr, "bootctl: this machine's own boot partition is %s\n",
+                    default_boot_partition);
+        }
         return -1;
     }
     /* An install and a commit keep the machine in the pair it is running from:

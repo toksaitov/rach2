@@ -318,10 +318,12 @@ int bootslot_open(struct bootslot *bs, const struct bootslot_io *io, char *err, 
     bs->io = *io;
 
     if (io->read(io->ctx, 0, bpb) != 0) {
-        return fail(err, errlen, "the boot sector does not read");
+        return fail(err, errlen, "the first sector does not read, so the device is gone "
+                                 "or failing");
     }
     if (bpb[510] != 0x55 || bpb[511] != 0xAA) {
-        return fail(err, errlen, "no boot-sector signature");
+        return fail(err, errlen, "this is not a boot partition: its first sector has no "
+                                 "FAT signature");
     }
     bytes_per_sector = le16(bpb + 11);
     bs->cluster_sectors = bpb[13];
