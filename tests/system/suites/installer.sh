@@ -263,31 +263,34 @@ if "$HARNESS" --bios \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
     "expect=# " "send=rach2-install" \
     "expect=which disk shall it be written to" "send=" \
-    "expect=is not one of the disks offered" \
-    "expect=# " "send=rach2-install" \
+    "expect=nothing was typed" \
     "expect=which disk shall it be written to" "send=/dev/disk9" \
-    "expect=is not one of the disks offered" \
-    "expect=# " "send=rach2-install" \
-    "expect=which disk shall it be written to" "send=/dev/disk1" \
+    "expect=is not in the list" \
+    "expect=which disk shall it be written to" "send=2" \
+    "expect=the password for root" "send=$NEWPASS" \
+    "expect=again" "send=different" \
+    "expect=those two were different" \
+    "expect=the password for root" "send=" \
+    "expect=again" "send=" \
+    "expect=an empty password will not do" \
     "expect=the password for root" "send=$NEWPASS" \
     "expect=again" "send=$NEWPASS" \
     "expect=the name of the first account" "send=ROOT" \
-    "expect=is not a name this system takes" \
-    "expect=# " "send=rach2-install" \
-    "expect=which disk shall it be written to" "send=/dev/disk1" \
-    "expect=the password for root" "send=$NEWPASS" \
-    "expect=again" "send=different" \
-    "expect=the two do not match" \
-    "expect=# " "send=rach2-install" \
-    "expect=which disk shall it be written to" "send=/dev/disk1" \
-    "expect=the password for root" "send=$NEWPASS" \
-    "expect=again" "send=$NEWPASS" \
+    "expect=names are lowercase" \
+    "expect=the name of the first account" "send=root" \
+    "expect=root is made by this install already" \
     "expect=the name of the first account" "send=$USERNAME" \
     "expect=the password for $USERNAME" "send=$USERPASS" \
     "expect=again" "send=$USERPASS" \
+    "expect=authorized keys" "send=/no/such/key" \
+    "expect=is not a file" \
     "expect=authorized keys" "send=" \
     "expect=grow the root" "send=no" \
-    "expect=type the name of that disk" "send=yes" \
+    "expect=this is what will be done" \
+    "expect=root     left at the size the image has" \
+    "expect=to go on, or stop to stop" "send=yes" \
+    "expect=that is not /dev/disk1" \
+    "expect=to go on, or stop to stop" "send=stop" \
     "expect=nothing was written" \
     "expect=# " "send=rach2-install" \
     "expect=which disk shall it be written to" "send=/dev/disk1" \
@@ -298,7 +301,8 @@ if "$HARNESS" --bios \
     "expect=again" "send=$USERPASS" \
     "expect=authorized keys" "send=" \
     "expect=grow the root" "send=" \
-    "expect=type the name of that disk" "send=/dev/disk1" \
+    "expect=this is what will be done" \
+    "expect=to go on, or stop to stop" "send=/dev/disk1" \
     "expect=the image on the stick is the one the manifest describes" \
     "expect=what reached the disk is the image" \
     "expect=the table is the one the image carries" \
@@ -306,7 +310,7 @@ if "$HARNESS" --bios \
     "expect=growing the root into the rest of the disk" \
     "expect=installed:" "send=echo INSTALL\"\"DONE" \
     "expect=INSTALLDONE" > "$LOG3.harness" 2>&1; then
-    note "the installer refuses an answer and a confirmation, and writes the disk it was told: OK"
+    note "the installer says what is wrong and asks again, stops when told to, and writes the disk it was told: OK"
 else
     sed -n 's/^HARNESS: /installer-test: /p' "$LOG3.harness" >&2
     bad "the install onto the second of two disks"
@@ -353,7 +357,7 @@ if "$HARNESS" --bios \
     "expect=again" "send=$USERPASS" \
     "expect=authorized keys" "send=/root/.ssh/authorized_keys" \
     "expect=grow the root" "send=no" \
-    "expect=type the name of that disk" "send=/dev/disk0" \
+    "expect=to go on, or stop to stop" "send=/dev/disk0" \
     "expect=the image on the stick is the one the manifest describes" \
     "expect=what reached the disk is the image" \
     "expect=installed:" "send=echo OTHER\"\"DONE" \
@@ -532,7 +536,7 @@ if "$HARNESS" --bios \
     "expect=again" "send=$USERPASS" \
     "expect=authorized keys" "send=" \
     "expect=grow the root" "send=no" \
-    "expect=type the name of that disk" "send=/dev/disk0" \
+    "expect=to go on, or stop to stop" "send=/dev/disk0" \
     "expect=and the manifest says" \
     "expect=# " "send=echo BADHASH\"\"DONE" \
     "expect=BADHASHDONE" > "$LOG7.harness" 2>&1; then
@@ -685,7 +689,7 @@ if "$HARNESS" --bios \
     "expect=which?" "send=3" \
     "expect=which disk shall be restored" "send=/dev/disk0" \
     "expect=the image to put on it" "send=" \
-    "expect=type the name of that disk" "send=/dev/disk0" \
+    "expect=to go on, or stop to stop" "send=/dev/disk0" \
     "expect=reading the image to check it against its hash" \
     "expect=reflash: 16777216 of " \
     "expect=restored and read back" \
@@ -1053,7 +1057,7 @@ fi
     echo 'expect=again'; echo "send=$USERPASS"
     echo 'expect=authorized keys'; echo 'send='
     echo 'expect=grow the root'; echo 'send='
-    echo 'expect=type the name of that disk'; echo 'send=/dev/disk0'
+    echo 'expect=to go on, or stop to stop'; echo 'send=/dev/disk0'
     echo 'expect=the image on the stick is the one the manifest describes'
     echo 'expect=what reached the disk is the image'
     echo 'expect=the table is the one the image carries'

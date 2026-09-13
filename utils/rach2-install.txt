@@ -20,20 +20,26 @@ DESCRIPTION
 
      Every question is asked before anything is written, and the last of them
      is the confirmation, so a person who changes their mind has not left a
-     disk half written. The questions, in order:
+     disk half written. Since nothing is at stake until then, no answer ends
+     the run: an answer that will not do is met with what is wrong with it and
+     the same question again. The questions, in order:
 
      which disk        A disk is offered when it is fixed, nothing is mounted
                        from it, its sector is 512 bytes, it is not the stick
                        this is running from, and it is at least as large as the
-                       image. Each disk that is not offered is named with the
-                       reason. The answer is the disk's own node, /dev/diskN.
+                       image. The offered disks are numbered; the disks passed
+                       over are listed after them, each with its reason. The
+                       answer is a number from the list or the disk's own node,
+                       /dev/diskN.
 
-     root's password   Typed twice, with the terminal's echo off. The two must
-                       match and neither may be empty.
+     root's password   Typed twice, with the terminal's echo off. An empty
+                       password and two that differ are each said and asked
+                       again.
 
-     the first account The name must begin with a letter and hold only letters,
-                       digits, hyphen and underscore, at most 32 characters,
-                       and it may not be root.
+     the first account The name must begin with a lowercase letter and hold
+                       only letters, digits, hyphen and underscore, at most 32
+                       characters, and it may not be root. A name that breaks
+                       one of those is told which one.
 
      its password      Twice, as root's.
 
@@ -48,8 +54,12 @@ DESCRIPTION
                        default is yes; no leaves the root the size the image
                        has.
 
-     the confirmation  The disk is described again and its own name must be
-                       typed back. Anything else stops without writing.
+     the confirmation  Everything that was answered is shown together: the
+                       disk and what it is, the account, the keys, and whether
+                       the root will be grown. The disk's own name must then be
+                       typed back. The word stop stops without writing;
+                       anything else is said to be wrong and asked again, so a
+                       typo does not throw away the answers above it.
 
      The four files are archived on the recovery partition as well, the
      passwords as the hashes they are, so that an update of a root that no

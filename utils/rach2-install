@@ -54,7 +54,20 @@ mounted_source=""
 mounted_root=""
 mounted_recovery=""
 echo_off=""
+screen_level=""
+# The screen is shared with the kernel's own record, and a routine note from a
+# disk or a file system arriving in the middle of a question reads, to the
+# person answering it, as something having gone wrong. The records are still
+# kept and still go out the serial port; only the screen is turned down, and
+# only while this is asking. A panic is below the floor the kernel accepts and
+# shows whatever is set here.
+quiet_screen() {
+    [ -w /dev/screenlog ] || return 0
+    screen_level=$(cat /dev/screenlog 2>/dev/null) || screen_level=""
+    echo 3 > /dev/screenlog 2>/dev/null || screen_level=""
+}
 cleanup() {
+    [ -n "$screen_level" ] && echo "$screen_level" > /dev/screenlog 2>/dev/null
     # A password question turns the terminal's echo off; a run that ends inside
     # one would otherwise leave a shell nobody can see what they type in.
     [ -n "$echo_off" ] && stty echo 2>/dev/null
@@ -70,6 +83,7 @@ trap cleanup EXIT
 trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
 trap 'cleanup; exit 129' HUP
+quiet_screen
 
 source_dir=""
 update_image=""
@@ -520,39 +534,50 @@ say "the image is $image, $bytes bytes"
 #
 # A disk is a candidate when it is fixed, nothing is mounted from it, its
 # sector is 512 bytes, it is not the stick this is running from, and it is
-# large enough. Each refusal is printed with its reason.
+# large enough. The ones it could take are numbered first, since those are what
+# the next question is about; the ones it passed over come after, with the
+# reason for each, because a person at a machine with two disks in it needs to
+# know which was left out and why.
 
+say "the disks this can be written to:"
 candidates=""
+skipped=""
+disk_count=0
 for n in $(disk_numbers); do
     sectors=$(disk_field "$n" 5)
     size=$((sectors * 512))
     what="/dev/disk$n ($(disk_model "$n"), serial $(disk_serial "$n"), $size bytes, \
 $(disk_field "$n" 3), $(identity_field "$n" "$FIXED_OR_NOT"), table $(disk_field "$n" 6))"
     if [ "$n" = "$source_disk" ]; then
-        say "not offered: /dev/disk$n is the stick this is running from"
+        skipped="$skipped\n  /dev/disk$n is the stick this is running from"
         continue
     fi
     if [ "$(identity_field "$n" "$FIXED_OR_NOT")" = "removable" ]; then
         # A disk that can be pulled out is not one this system boots from:
         # the firmware and the kernel both take their root from a fixed one.
-        say "not offered: /dev/disk$n can be pulled out, and this system does not boot from one"
+        skipped="$skipped\n  /dev/disk$n can be pulled out, and this system does not boot from one"
         continue
     fi
     if [ "$(identity_field "$n" "$MOUNT_STATE")" = "mounted" ]; then
-        say "not offered: /dev/disk$n has something mounted from it"
+        skipped="$skipped\n  /dev/disk$n has something mounted from it"
         continue
     fi
     if [ "$(identity_field "$n" "$SECTOR_SIZE")" != "512" ]; then
-        say "not offered: /dev/disk$n counts in $(identity_field "$n" "$SECTOR_SIZE")-byte sectors, not 512"
+        skipped="$skipped\n  /dev/disk$n counts in $(identity_field "$n" "$SECTOR_SIZE")-byte sectors, not 512"
         continue
     fi
     if [ "$size" -lt "$bytes" ]; then
-        say "not offered: /dev/disk$n holds $size bytes and the image is $bytes"
+        skipped="$skipped\n  /dev/disk$n holds $size bytes and the image is $bytes"
         continue
     fi
-    echo "  $what"
+    disk_count=$((disk_count + 1))
+    echo "  $disk_count) $what"
     candidates="$candidates $n"
 done
+if [ -n "$skipped" ]; then
+    say "disks it passed over:"
+    printf '%b\n' "$skipped" | sed '/^$/d'
+fi
 [ -n "$candidates" ] && [ "$candidates" != " " ] ||
     die "no disk of this machine can take the image"
 
@@ -565,18 +590,27 @@ done
 # A password, twice, with the terminal's echo off. `stty` is put back however
 # this ends, since a shell left with no echo is a shell nobody can use.
 ask_password() { # ask_password PROMPT
-    echo_off=yes
-    stty -echo 2>/dev/null
-    printf '%s: %s: ' "$ME" "$1"
-    read -r pw1
-    printf '\n%s: %s again: ' "$ME" "$1"
-    read -r pw2
-    stty echo 2>/dev/null
-    echo_off=""
-    printf '\n'
-    [ "$pw1" = "$pw2" ] || die "the two do not match"
-    [ -n "$pw1" ] || die "an empty password is not one"
-    password=$pw1
+    while :; do
+        echo_off=yes
+        stty -echo 2>/dev/null
+        printf '%s: %s: ' "$ME" "$1"
+        read -r pw1
+        printf '\n%s: %s again: ' "$ME" "$1"
+        read -r pw2
+        stty echo 2>/dev/null
+        echo_off=""
+        printf '\n'
+        if [ -z "$pw1" ]; then
+            say "an empty password will not do; type one"
+            continue
+        fi
+        if [ "$pw1" != "$pw2" ]; then
+            say "those two were different; type it again"
+            continue
+        fi
+        password=$pw1
+        return 0
+    done
 }
 
 # The name rules are the ones every account file here is read under: a letter
@@ -593,20 +627,54 @@ check_name() { # check_name NAME
     return 0
 }
 
-printf '%s: which disk shall it be written to? ' "$ME"
-read -r answer
+# Why a name was refused, in one clause, naming the rule it broke rather than
+# reciting all of them: a person who typed `ROOT` is helped by being told that
+# names are lowercase and not by the whole sentence about letters and digits.
+name_fault() { # name_fault NAME
+    case "$1" in
+        "") echo "a name cannot be empty" ;;
+        *[A-Z]*) echo "names are lowercase" ;;
+        [!a-z]*) echo "a name starts with a letter" ;;
+        *[!a-z0-9_-]*) echo "a name takes letters, digits, - and _ only" ;;
+        *)
+            if [ "$1" = "root" ]; then
+                echo "root is made by this install already"
+            elif [ "${#1}" -gt 32 ]; then
+                echo "a name is at most 32 characters and that is ${#1}"
+            else
+                echo "that is not a name this system takes"
+            fi
+            ;;
+    esac
+}
+
 target=""
-for n in $candidates; do
-    [ "$answer" = "/dev/disk$n" ] && target=$n
+while :; do
+    printf '%s: which disk shall it be written to? a number above, or its name: ' "$ME"
+    read -r answer
+    i=0
+    for n in $candidates; do
+        i=$((i + 1))
+        if [ "$answer" = "/dev/disk$n" ] || [ "$answer" = "$i" ]; then
+            target=$n
+        fi
+    done
+    [ -n "$target" ] && break
+    if [ -z "$answer" ]; then
+        say "nothing was typed; answer 1 to $disk_count, or the disk's name"
+    else
+        say "$answer is not in the list; answer 1 to $disk_count, or the disk's name"
+    fi
 done
-[ -n "$target" ] || die "$answer is not one of the disks offered"
 
 ask_password "the password for root"
 root_password=$password
-printf '%s: the name of the first account: ' "$ME"
-read -r user_name
-check_name "$user_name" ||
-    die "$user_name is not a name this system takes: a letter, then letters, digits, - and _"
+while :; do
+    printf '%s: the name of the first account: ' "$ME"
+    read -r user_name
+    check_name "$user_name" && break
+    say "$(name_fault "$user_name"); try another"
+done
 ask_password "the password for $user_name"
 user_password=$password
 # The keys are offered, not demanded. A person at a console should not have to
@@ -664,13 +732,38 @@ case "$grow_answer" in
     *) grow=no ;;
 esac
 
-say "everything on /dev/disk$target will be overwritten:"
-say "  $(disk_model "$target"), serial $(disk_serial "$target"),"
-say "  $(($(disk_field "$target" 5) * 512)) bytes, $(disk_field "$target" 3),"
-say "  $(identity_field "$target" "$FIXED_OR_NOT"), table $(disk_field "$target" 6)"
-printf '%s: type the name of that disk to go on, anything else to stop: ' "$ME"
-read -r confirm
-[ "$confirm" = "/dev/disk$target" ] || die "nothing was written"
+# Everything that was answered, on one screen, before the one step that cannot
+# be taken back. A person who has answered six questions in a row should not
+# have to remember what they said to know what is about to happen.
+say "this is what will be done:"
+say "  disk     /dev/disk$target"
+say "           $(disk_model "$target"), serial $(disk_serial "$target")"
+say "           $(($(disk_field "$target" 5) * 512)) bytes, $(disk_field "$target" 3), \
+$(identity_field "$target" "$FIXED_OR_NOT"), table $(disk_field "$target" 6)"
+say "  account  $user_name, and root"
+if [ -n "$user_keys" ]; then
+    say "  keys     $user_keys, for $user_name"
+else
+    say "  keys     none; both accounts log in with their passwords"
+fi
+if [ "$grow" = "yes" ]; then
+    say "  root     grown into the rest of the disk, which takes some minutes"
+else
+    say "  root     left at the size the image has"
+fi
+say "everything on /dev/disk$target will be overwritten."
+# A typo here should cost a retype and not the six answers above, so a wrong
+# word asks again; stopping is a word of its own rather than anything that is
+# not the disk's name.
+while :; do
+    printf '%s: type /dev/disk%s to go on, or stop to stop: ' "$ME" "$target"
+    read -r confirm
+    [ "$confirm" = "/dev/disk$target" ] && break
+    case "$confirm" in
+        stop | STOP | Stop | quit | q) die "nothing was written" ;;
+    esac
+    say "that is not /dev/disk$target"
+done
 
 # The generation the answer was given about. A disk that goes and comes back
 # takes a fresh record, so the write below is refused rather than landing on
@@ -692,7 +785,10 @@ actual=$(stat -c %s "$source_dir/$image")
 [ "$actual" = "$bytes" ] ||
     die "the manifest says $bytes bytes and $image is $actual"
 
-say "reading the image to check it against the manifest, which takes a few minutes"
+# A step with nothing to show is one a person reads as a machine that has
+# stopped, so what it is doing and that it will be quiet are said first.
+say "checking the image against the manifest: reading all $bytes bytes, which takes \
+a few minutes and prints nothing until it is done"
 # Cache read-ahead avoids a disk request for each small sha256sum read.
 got=$(sha256sum "$source_dir/$image" | cut -d' ' -f1)
 [ "$got" = "$want" ] ||
@@ -842,7 +938,8 @@ say "the accounts are root and $user_name, and root may log in over SSH with a p
 
 if [ "$grow" = "yes" ]; then
     id=$(diskctl id "/dev/disk$target") || die "the disk's identity could not be read"
-    say "growing the root into the rest of the disk"
+    say "growing the root into the rest of the disk: a check, a repair pass and the \
+resize, each of which takes minutes and is quiet while it runs"
     growroot "MBRID=$id,$root_entry" ||
         die "the root was not grown; the disk carries the image and boots as it is"
 fi
