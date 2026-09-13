@@ -314,19 +314,33 @@ while [ "$i" -lt 40 ]; do
     i=$((i + 1))
 done
 # An interval, not a wait for output: the forty connections reach the guest
-# and are counted only once they have been accepted or refused there.
-sleep 5
+# and are counted only once they have been accepted or refused there. The
+# interval is scaled, since a guest sharing its host with a pool of machines
+# gets through less of the flood in the same wall clock.
+sleep "$(scaled 5)"
 # The flood is real before it is relied on: the guest's own count of
-# established connections, typed at the console session about to end.
-type_line 'netstat -tn 2>/dev/null | grep -c ESTABLISHED; echo FLOOD""COUNT'
-if ! wait_token "FLOODCOUNT" 30; then
+# established connections, typed at the console session about to end. It is
+# counted up to four times and the highest is the reading. A host with more
+# machines on it than processors can only hold the guest back from taking a
+# connection, never make it take one it did not; a single count at a moment
+# the guest had not caught up failed a set on 2026-09-13 at four.
+established=0
+attempt=0
+while [ "$attempt" -lt 4 ]; do
+    attempt=$((attempt + 1))
+    type_line 'netstat -tn 2>/dev/null | grep -c ESTABLISHED; echo FLOOD""COUNT'
+    if ! wait_token "FLOODCOUNT" 30; then
+        for p in $FLOOD; do kill "$p" 2>/dev/null; done
+        fail "the console did not answer while the flood was on"
+    fi
+    seen=$(tr -d '\r' < "$LOG" | grep -B1 'FLOODCOUNT' | tail -2 | head -1 | tr -dc '0-9')
+    [ "${seen:-0}" -gt "$established" ] && established=${seen:-0}
+    [ "$established" -ge 5 ] && break
+    sleep "$(scaled 2)"
+done
+if [ "$established" -lt 5 ]; then
     for p in $FLOOD; do kill "$p" 2>/dev/null; done
-    fail "the console did not answer while the flood was on"
-fi
-established=$(tr -d '\r' < "$LOG" | grep -B1 'FLOODCOUNT' | head -1 | tr -dc '0-9')
-if [ "${established:-0}" -lt 5 ]; then
-    for p in $FLOOD; do kill "$p" 2>/dev/null; done
-    fail "the flood held ${established:-0} connections, fewer than the five a flood must reach"
+    fail "the flood held $established connections, fewer than the five a flood must reach"
 fi
 type_line 'exit'
 if ! drive_login root "$PASSWORD" 40; then

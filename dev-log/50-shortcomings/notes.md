@@ -527,3 +527,11 @@ changes must stop there, and a rate past the envelope must be measured twice
 and then refused. Each row was run against its change reverted and each failed.
 The fourth is judged by the readings themselves: 190 ms on a quiet host and
 240 ms under ten spinners, where one wait had read 390 ms in the set.
+
+A fifth load-induced failure, on 2026-09-14: the `ssh` suite's flood row read
+four established connections where it requires five, in a pool of twenty and
+nowhere else. It passes alone in 15 s and under fourteen spinners in 27. A host
+with more machines on it than processors can only hold the guest back from
+taking a connection, never make it take one it did not, so the count is now
+taken up to four times and the highest is the reading, with the interval before
+it scaled by the pool's own factor as the suite's other waits are.
