@@ -390,3 +390,30 @@ What it found, and what was done:
 The e2fsprogs alignment tests compile the port's extracted source, so
 `run-host` now depends on the port's stamp; without it they could pass against
 a tree the tracked patch no longer matches.
+
+The machine at the close, 2026-09-13. The kernel of this tree was installed
+through `bootctl` and committed, and the netconsole was already on its command
+line, which the sitting's notes had wrong: `rach2.netconsole` is there, the
+machine broadcasts every kernel record on ethertype 0x88b5, and a `tcpdump` on
+the host decodes them. That capture is now kept while the machine is worked, so
+the next hang leaves its last lines on the host rather than on a screen nobody
+is reading.
+
+Entry 56 did not reproduce. The sequence that took the machine down, the probe
+killed with SIGKILL in its leak loop and started again over its leftovers, was
+run in the emulator on an ext2 root over IDE and over AHCI, and on the machine
+itself twice, and every run finished with the machine answering. Nor is there a
+leak to find: forty connections moved the kernel's heap use both up and down,
+13 pages in all, which is fragmentation and not growth. What is known is in the
+entry, and the capture is the thing that will name it next time.
+
+Entry 53's figure is withdrawn. The controlled grow, named at last, is the
+recovery system on a 16 GiB disk with a 1 GiB ext2 volume, `growroot
+MBRID=47470001,1` over the partition node, with `/proc/disk` read either side:
+9595 disk commands and 8 seconds with the port as it stands, and 9595 commands
+and 9 seconds with the alignment test put back. A file-backed grow on the
+machine says the same. The patch does what the host test proves it does, and it
+does not change what a grow costs; the install's ten minutes are entry 58.
+
+Entry 51's last item, the probe set run on the machine, found four probes that
+can pass only on the test image and one that carried the emulator's address.
