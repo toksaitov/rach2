@@ -82,8 +82,15 @@ struct disk *disk_register(block_device_t *dev, const char *transport, int locat
     if (!again) {
         devfs_disk_nodes(d);
     }
-    klog(KLOG_INFO, "disk", "disk%d: %s %d: %d sectors, model %s", d->number, transport, location,
-         (uint32_t)dev->sector_count, d->model);
+    /* A USB stick often gives no model string, and "model " with nothing after
+       it reads as a truncated line rather than as a drive that did not say. */
+    if (d->model[0] != '\0') {
+        klog(KLOG_INFO, "disk", "disk%d: %s %d: %d sectors, model %s", d->number, transport,
+             location, (uint32_t)dev->sector_count, d->model);
+    } else {
+        klog(KLOG_INFO, "disk", "disk%d: %s %d: %d sectors, and it gives no model", d->number,
+             transport, location, (uint32_t)dev->sector_count);
+    }
     return d;
 }
 

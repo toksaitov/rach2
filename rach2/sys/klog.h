@@ -88,7 +88,9 @@ uint32_t klog_len(void);
  * kept and sent whatever this is, so turning the screen down loses nothing
  * that a later reader of `/dev/bootlog` or a capture on the port would want.
  * What it decides is how much of the machine's own record a person standing
- * at it has to read. `KLOG_CRIT` is the floor, so a panic always shows.
+ * at it has to read. The default keeps the boot log and drops `KLOG_DEBUG`;
+ * a program talking to a person turns it down for its own run and puts it
+ * back. `KLOG_CRIT` is the floor, so a panic always shows.
  */
 void klog_set_screen_level(int level);
 

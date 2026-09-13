@@ -616,6 +616,15 @@ static int subtree_closing(int hub)
 }
 
 /** Give up on a device, with the reason. */
+/*
+ * Give up on a device, saying which port and why, and record the controller's
+ * registers once so the first failure after bring-up can be diagnosed.
+ *
+ * `unsupported` below is the other half of this: a device this kernel has no
+ * driver for has not failed at anything, and putting it through here told a
+ * person at a laptop that its camera and card reader were faults and dumped
+ * three lines of xHCI registers after each one.
+ */
 static void fail(struct usb_device_state *d, const char *why)
 {
     klog(KLOG_WARN, "usb", "device: port %s: %s", path_of(d), why);
@@ -637,6 +646,40 @@ static void fail(struct usb_device_state *d, const char *why)
      * this kernel cannot drive would otherwise spend its whole table on them
      * and have none left for what a person plugs in. A hub's ports are
      * remembered on the hub's own record. */
+    if (d->port >= 0 && d->port < 32) {
+        if (d->owner >= 0) {
+            dev_at(d->owner)->refused |= (uint32_t)1u << d->port;
+        } else {
+            port_refused[bus_of(d)] |= (uint32_t)1u << d->port;
+        }
+    }
+    if (d->slot > 0) {
+        d->state = ST_CLOSING;
+        d->deadline = core_ms + STEP_MS;
+        return;
+    }
+    d->state = ST_FREE;
+}
+
+/*
+ * A device this kernel has no driver for: an ordinary note, and the same
+ * teardown a failure gets.
+ *
+ * A laptop has a camera, a card reader and a fingerprint sensor on its
+ * internal hub, and none of them is a fault. Reporting each as one, at warning
+ * level and followed by a dump of the controller's registers, is what the
+ * machine did until 2026-09-14 and what made a normal boot look broken. The
+ * port is still remembered so the table is not spent on devices that will
+ * never be driven.
+ */
+static void unsupported(struct usb_device_state *d)
+{
+    klog(KLOG_INFO, "usb", "device: port %s: %x:%x, class %d: no driver for it here",
+         path_of(d), (int)d->vendor, (int)d->product, (int)d->interface.class_code);
+    if (enumerating[bus_of(d)] == d->index) {
+        enumerating[bus_of(d)] = -1;
+    }
+    hid_gone(d->index + 1);
     if (d->port >= 0 && d->port < 32) {
         if (d->owner >= 0) {
             dev_at(d->owner)->refused |= (uint32_t)1u << d->port;
@@ -1150,7 +1193,7 @@ static void step_device(struct usb_device_state *d)
          * is walked only as far as it answered. */
         usb_parse_config(d->buffer, (int)(d->config_length - d->short_by), &d->interface);
         if (!d->interface.found) {
-            fail(d, "it offers no interface this kernel can drive");
+            unsupported(d);
             return;
         }
         {

@@ -289,12 +289,17 @@ static int screen_line_open;
  * The screen is not the log. The ring keeps every record whatever this is set
  * to, and so do the serial port and netconsole, so nothing is lost by turning
  * the screen down; what changes is only what a person standing at the machine
- * is made to read. A machine's routine notes are for whoever is diagnosing it
- * later, and a person installing a system has no way to tell them from the
- * words addressed to them. The default shows warnings and worse. `k_panic`
- * and its kind raise `KLOG_CRIT`, which no setting can hide.
+ * is made to read.
+ *
+ * The default keeps the boot log, which is `KLOG_INFO`, because a screen that
+ * says nothing while a machine starts cannot be told from a machine that has
+ * stopped. What it drops is `KLOG_DEBUG`. A program that is talking to a
+ * person turns it down further for its own run and puts it back: that is what
+ * `rach2-install` does, since a routine note arriving in the middle of a
+ * question reads as something having gone wrong. `k_panic` and its kind raise
+ * `KLOG_CRIT`, which no setting can hide.
  */
-static int screen_level = KLOG_WARN;
+static int screen_level = KLOG_INFO;
 static int serial_line_open;
 
 /* ---- destination 2: the screen ---- */
