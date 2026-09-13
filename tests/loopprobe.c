@@ -252,11 +252,13 @@ static void learn_canon_ip(void)
 }
 
 /* The three system calls the round-trip row needs, in this file's shape. */
-static int sys_pipe(int fds[2])
+/* The two descriptors are written by the kernel through `fds`, which is why
+   the operand is an output as well as an input. */
+static int sys_pipe(int *fds)
 {
     int r;
 
-    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_PIPE), "b"(fds) : "memory");
+    __asm__ __volatile__("int $0x80" : "=a"(r), "=m"(*(int (*)[2])fds) : "0"(SYS_PIPE), "b"(fds));
     return r;
 }
 
