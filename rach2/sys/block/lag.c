@@ -242,7 +242,7 @@ block_device_t *block_lag_wrap(block_device_t *backing)
             dead_start = (uint64_t)e[8] | ((uint64_t)e[9] << 8) | ((uint64_t)e[10] << 16) |
                          ((uint64_t)e[11] << 24);
             dead_set = 1;
-            klog(KLOG_INFO, "block", "lag: partition %u never answers", p);
+            klog(KLOG_INFO, "block", "lag: partition %d never answers", (int)p);
         }
     }
     lag_device = *backing;

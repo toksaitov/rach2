@@ -3549,8 +3549,8 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
     if (em->groups == 0 || em->groups > 0xFFFFFFFFu / 32 || em->blocks <= em->first_data ||
         (em->groups * 32 + em->block_size - 1) / em->block_size >
             em->blocks - em->first_data - 1) {
-        klog(KLOG_WARN, "ext2", "refused: %u groups do not fit a table on %u blocks",
-             (unsigned)em->groups, (unsigned)em->blocks);
+        klog(KLOG_WARN, "ext2", "refused: %d groups do not fit a table on %d blocks",
+             (int)em->groups, (int)em->blocks);
         return -EINVAL;
     }
     em->gd = kmalloc(em->groups * 32);

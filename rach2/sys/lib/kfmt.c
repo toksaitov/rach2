@@ -8,9 +8,17 @@
  * Supported conversions are `%d` (signed decimal), `%b`, `%o`, `%x`, `%X`
  * (binary, octal, lower- and upper-case hex), `%s` (a string, with a NULL
  * pointer rendered as `(null)`), `%c` (a character), and `%%` (a literal
- * percent). An unknown conversion is emitted verbatim. `args` points at the
- * first argument and is consumed left to right; each consumed slot is one
- * stack word, which is why integers and characters are read as `int`.
+ * percent). A numeric conversion takes an optional `0` flag
+ * and an optional single-digit width between the percent and the letter, so
+ * `%02x` writes a byte as two hex digits. `args` points at the first argument
+ * and is consumed left to right; each consumed slot is one stack word, which
+ * is why integers and characters are read as `int`.
+ *
+ * An unknown conversion is emitted verbatim AND CONSUMES NOTHING, so every
+ * argument after it in the same call is read one slot early. That is why the
+ * style check refuses a format string this cannot do: a message that asked
+ * for `%02x` before the flag and width were understood printed the literal
+ * text `02x` and then read the wrong value for every field after it.
  */
 void k_vprintf(putc_fn_t putc_fn, const char *format, char **args)
 {
@@ -22,7 +30,18 @@ void k_vprintf(putc_fn_t putc_fn, const char *format, char **args)
 
     while ((c = *(format++))) {
         if (c == '%') {
+            char fill = ' ';
+            int width = 0;
+
             c = *(format++);
+            if (c == '0') {
+                fill = '0';
+                c = *(format++);
+            }
+            while (c >= '1' && c <= '9' && width == 0) {
+                width = c - '0';
+                c = *(format++);
+            }
 
             switch (c) {
             case 'd':
@@ -45,6 +64,19 @@ void k_vprintf(putc_fn_t putc_fn, const char *format, char **args)
                     str = "(null)";
 
             string:
+                {
+                    /* The pad is counted here rather than in `k_itoa`, so one
+                       rule covers every conversion and the converter keeps
+                       its own contract. */
+                    size_t len = 0;
+
+                    while (str[len])
+                        len++;
+                    while ((int)len < width) {
+                        putc_fn(fill);
+                        width--;
+                    }
+                }
                 while (*str)
                     putc_fn(*str++);
                 break;

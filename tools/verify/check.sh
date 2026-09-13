@@ -135,7 +135,7 @@ done
 if [ "$miss" -eq 0 ]; then echo "  PASS"; else echo "  FAIL"; fail=1; fi
 
 # 1. kernel build (-Werror)
-hr "1/15 kernel build (-Werror)"
+hr "1/16 kernel build (-Werror)"
 if make -C rach2 >"$VDIR/verify_build.log" 2>&1; then
     echo "  PASS (0 warnings/errors)"
 else
@@ -144,7 +144,7 @@ fi
 
 # 2. cppcheck: --error-exitcode makes a finding a real non-zero exit, so a
 #    crash or a finding both fail (a silent 0-count cannot mask either).
-hr "2/15 cppcheck (c89, warning+style)"
+hr "2/16 cppcheck (c89, warning+style)"
 find "$REPO/rach2/sys" -name '*.c' >"$VDIR/_srcs.txt"
 echo "$REPO/rach2/kernel.c" >>"$VDIR/_srcs.txt"
 ls "$REPO"/tests/*probe.c >>"$VDIR/_srcs.txt" 2>/dev/null || true
@@ -175,7 +175,7 @@ fi
 #    legacy QEMU run/build scripts waive SC2086 (option word-splitting is
 #    intentional) and SC2034 (vars shared across sourced fragments); SC1091
 #    covers the dynamic source path in both.
-hr "3/15 shellcheck"
+hr "3/16 shellcheck"
 sc=0
 # shellcheck disable=SC2046
 shellcheck -x -e SC1091 $(ls tests/run tests/system/suites/*.sh tests/system/accept/*.sh tools/*/*.sh vendor/musl/*.sh vendor/*/build_*.sh 2>/dev/null) \
@@ -187,7 +187,7 @@ shellcheck -x -e SC1091 -e SC2034 -e SC2086 \
 if [ "$sc" -eq 0 ]; then echo "  PASS"; else echo "  FAIL: see $VDIR/verify_shellcheck.log"; fail=1; fi
 
 # 4. convention grep (no //, ASCII only, _NAME_H_ guards)
-hr "4/15 conventions (no //, ASCII, header guards, marked idle wait)"
+hr "4/16 conventions (no //, ASCII, header guards, marked idle wait)"
 cv=0
 if inhouse_ch | xargs grep -nE '(^|[^:"])//' 2>/dev/null | grep -vE 'https?://|://' | grep -q .; then
     echo "  // comment found:"; inhouse_ch | xargs grep -nE '(^|[^:"])//' 2>/dev/null | grep -vE 'https?://|://' | head -3 | sed 's/^/    /'; cv=1
@@ -218,7 +218,7 @@ if [ "$cv" -eq 0 ]; then echo "  PASS"; else fail=1; fi
 
 # 5. clang-format. HARD on new-code dirs + named args; advisory on the legacy
 # tree. Uses --Werror so a real run failure is a real failure (not a 0 count).
-hr "5/15 clang-format"
+hr "5/16 clang-format"
 strict_fail=0
 # shellcheck disable=SC2046
 for f in $(newcode_ch) "$@"; do
@@ -236,7 +236,7 @@ done
 echo "  advisory: $drift in-house files differ from .clang-format (legacy not reformatted)"
 
 # 6. readelf ABI on a freshly linked musl binary (no stale-artifact dependency).
-hr "6/15 readelf ABI (fresh musl link)"
+hr "6/16 readelf ABI (fresh musl link)"
 if [ -f "$LIBC/lib/libc.a" ]; then
     printf 'int main(void){return 0;}\n' >"$VDIR/_abi.c"
     if i686-elf-gcc -static -nostdlib -nostartfiles -isystem "$LIBC/include" \
@@ -267,7 +267,7 @@ fi
 
 # 7. kernel source-list guard: every rach2 .c on disk must be listed in C_SRC,
 #    so a newly added kernel source cannot be silently dropped from the build.
-hr "7/15 kernel source list (C_SRC vs disk) and the guest build lists"
+hr "7/16 kernel source list (C_SRC vs disk) and the guest build lists"
 if "$REPO/tools/verify/check_sources.sh" >"$VDIR/verify_sources.log" 2>&1 &&
    "$GUESTCHECK" "$REPO" >>"$VDIR/verify_sources.log" 2>&1; then
     echo "  PASS"
@@ -278,7 +278,7 @@ fi
 # Text style: the mechanical natural-text checks (tools/verify/textcheck.sh). It
 # catches non-ASCII bytes, faked em-dashes, and `-` list bullets in the in-house
 # tree.
-hr "8/15 text style"
+hr "8/16 text style"
 if "$REPO/tools/verify/textcheck.sh" >"$VDIR/verify_text.log" 2>&1; then
     echo "  PASS (textcheck)"
 else
@@ -315,7 +315,22 @@ fi
 # escape decoder, which turns a step's text into the bytes a guest is given. A
 # regression in either is invisible in the place that would otherwise catch it,
 # because both are what that place reads its answer from.
-hr "9/15 runner rules (runtests and harness selftests)"
+# Message formats. The kernel's own formatter takes a fixed set of
+# conversions, and one it does not know is written out verbatim while
+# consuming no argument, so every field after it in that message is read one
+# slot early. That printed `at 02x:02x.0` on the machine and, worse, the wrong
+# numbers beside it.
+hr "9/16 message formats"
+if "$REPO/tools/verify/fmtcheck.sh" >"$VDIR/verify_fmt.log" 2>&1; then
+    echo "  PASS (fmtcheck)"
+else
+    fc=$(sed -n 's/^fmtcheck: \([0-9]*\) file.*/\1/p' "$VDIR/verify_fmt.log")
+    [ -n "$fc" ] || fc='?'
+    echo "  FAIL: $fc file(s) with a message the formatter cannot print; see $VDIR/verify_fmt.log"
+    fail=1
+fi
+
+hr "10/16 runner rules (runtests and harness selftests)"
 HARNESSBIN="$REPO/build/tests/system/harness"
 make -C "$REPO" --no-print-directory build/tests/system/harness >/dev/null || exit 1
 if "$RUNTESTS" --selftest >"$VDIR/verify_score.log" 2>&1 &&
@@ -329,7 +344,7 @@ fi
 # This half reads sources only, so it belongs with the source checks; the image
 # inventory that reads a built artifact runs from mkimage.sh and mkdisk.sh
 # instead.
-hr "10/15 set-id guard (selftest + manifest sweep)"
+hr "11/16 set-id guard (selftest + manifest sweep)"
 setid=0
 # The self-test first: it covers the failure cases no current manifest
 # exercises, so without it a regression in, say, the image walk or the path
@@ -353,7 +368,7 @@ fi
 #     twice with the real host tools, so those are BUILT here first, the way
 #     step 1 builds the kernel it checks: a check that tested whatever binary
 #     happened to be lying in build/ would report on another day's source.
-hr "11/15 image reproducibility (one tree, one image)"
+hr "12/16 image reproducibility (one tree, one image)"
 if ! make -C "$REPO/krffs" >"$VDIR/verify_repro_build.log" 2>&1; then
     echo "  FAIL: the krffs host tools did not build; see $VDIR/verify_repro_build.log"
     fail=1
@@ -374,7 +389,7 @@ fi
 #     can come to describe two different machines, and the compilation-database
 #     generator must join wrapped recipes, select only compile commands, and
 #     refuse to publish an invalid database.
-hr "12/15 checker selftests"
+hr "13/16 checker selftests"
 ELFCHECK="$REPO/build/tools/inspect/elfcheck"
 if [ ! -x "$ELFCHECK" ] || [ "$REPO/tools/inspect/elfcheck.c" -nt "$ELFCHECK" ]; then
     mkdir -p "${ELFCHECK%/*}"
@@ -397,7 +412,7 @@ fi
 #     so every finished milestone must have an entry, the entries must be in the
 #     directories' numeric order, and a directory holding only a plan must have
 #     none. The selftest proves the rules reject; the run proves this index.
-hr "13/15 dev-log index"
+hr "14/16 dev-log index"
 if "$PROSECHECK" devlog >"$VDIR/verify_devlog.log" 2>&1; then
     echo "  PASS"
 else
@@ -409,7 +424,7 @@ fi
 #     suite nothing runs. Neither shows up anywhere else: make accepts an
 #     unknown goal only by failing, which happens on the day someone asks for
 #     that suite, and a target no one names is silent forever.
-hr "14/15 test registry against tests/system/suites.mk"
+hr "15/16 test registry against tests/system/suites.mk"
 {
     awk -F'|' '!/^#/ && NF > 1 { print $1 }' "$REPO/tests/registry" | sort > "$VDIR/_reg.txt"
     grep -o '^run-[a-z0-9-]*' "$REPO/tests/system/suites.mk" | sed 's/^run-//' \
@@ -445,7 +460,7 @@ fi
 #     transitive, so a product reached through an image counts as prepared.
 #     `prepare-all` builds its halves from its recipe, so the recipe is read
 #     for the targets it names; a half dropped from it is found.
-hr "15/15 run- targets' products against prepare-all"
+hr "16/16 run- targets' products against prepare-all"
 make -C "$REPO" -pn prepare-all > "$VDIR/_db.txt" 2>/dev/null || { echo "  FAIL: make -pn prepare-all failed"; fail=1; }
 unprepared=$(awk '
     /^#/ || /^$/ { next }

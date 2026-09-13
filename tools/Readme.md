@@ -104,7 +104,7 @@ prefix works; one built for another target does not.
 
 ## `tests/run style`
 
-`verify/check.sh` runs a preflight followed by fourteen numbered checks:
+`verify/check.sh` runs a preflight followed by fifteen numbered checks:
 
 * Build the kernel with warnings treated as errors.
 * Run scoped cppcheck with `verify/cppcheck.suppress`.
@@ -114,6 +114,7 @@ prefix works; one built for another target does not.
 * Link a fresh musl program and inspect its ELF ABI.
 * Check the shared source manifests and the guest build descriptions.
 * Run the mechanical text, comment-width, and banned-prose checks.
+* Check every kernel message against the conversions its formatter has.
 * Run the probe scorer's self-test.
 * Run the set-id checker's self-test and manifest sweep.
 * Build the KRFFS host tools and test deterministic image staging.
@@ -127,6 +128,8 @@ The supporting files under `verify/` have narrower jobs:
 * `guestcheck.c` checks five contracts: each component's host and guest builds derive from its shared source manifest (`rach2/sources.mk`, `utils/programs.mk`, `ish/sources.mk`), the kernel response file and link line, the utility program-to-source map, the guest file-descriptor and command-size limits, and the three source trees staged under `/src`.
 * `asciiscan.c` reports every line holding a byte outside tab, newline, carriage return, and the printable range 0x20 through 0x7e, which is the set the text checks enforce. `textcheck.sh` and `check.sh` compile it on first use and run it over the files they check.
 * `sha256.c` prints the SHA-256 digest of each file it is given. The vendor builds refuse a tarball whose digest is wrong and the suites compare staged artifacts by digest, so this is plain C compiled on first use rather than a dependency on `sha256sum`.
+* `fmtcheck.sh` reads the text inside every `klog`, `console_printf` and `k_printf` call and refuses a conversion `k_vprintf` does not have. The formatter takes `%d %b %o %x %X %s %c %%`, each with an optional `0` flag and one digit of width. It writes an unknown conversion out verbatim and consumes no argument, so every field after it in that message is read one slot early: the laptop printed `audio: not driven: 8086:a0c at 02x:02x.0` from `%x:%x at %02x:%02x.%d`, with three of its five fields wrong.
+
 * `textcheck.sh` checks ASCII, prose uses of spaced `--`, Markdown bullet form, and development-phase tags. Its default Markdown scope includes root documents and documents below `rach2/`, `ish/`, `utils/`, `tests/`, `krffs/`, `tools/`, `mk/`, and `vendor/`. It excludes `dev-log/` and all of `ports/doom/`.
 * `prosecheck.c` holds the prose rules. `columns` checks 80-column comment wrapping in the in-house C, shell, Make, and Python files, including the project glue under `ports/doom/` and excluding `ports/doom/src/`. `banned` checks the mechanically prohibited vocabulary in comments, messages, and Markdown; its default scope is the root documents and the in-house source roots, including the Doom glue but excluding `vendor/` and `dev-log/`, and a path argument checks a file outside that default. `count` reports the word and phrase totals `prose_report.sh` tabulates, and `devlog` requires the dev-log index to name every finished milestone once, in directory order, and to omit plan-only milestones (it accepts `Readme.md` and milestone 6's `results.md` as completion records).
 * `prose_report.sh` compares watched phrase rates with the pinned upstream corpus without failing the build; `--baseline` and `--fixture` compare with the committed records or rewrite them.
