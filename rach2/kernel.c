@@ -3598,6 +3598,19 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
         kcmdline_capture((const char *)info->cmdline);
     }
 
+    /* How much of its own record the screen shows. The ring and the port keep
+     * everything either way; this is only what a person in front of the
+     * machine is made to read, and a boot being brought up wants all of it
+     * because the screen is then the only instrument there is. */
+    {
+        char level[8];
+
+        if (kcmdline_value("rach2.loglevel", level, sizeof(level)) && level[0] >= '0' &&
+            level[0] <= '9' && level[1] == '\0') {
+            klog_set_screen_level(level[0] - '0');
+        }
+    }
+
     /* With `rach2.netconsole` the serial stream is buffered from here on, so
      * the memory layout and the device probes below are in the first frames
      * the network device sends once it comes up. Nothing is transmitted until

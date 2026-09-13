@@ -33,6 +33,7 @@ The namespace is fixed. Creation, removal, rename, and timestamp operations belo
 | `/dev/usb0p1` to `/dev/usb1p4` | 240:17 to 240:25 | 0400 | One window per partition the stick's table describes. |
 | `/dev/loop0` to `/dev/loop3` | 240:32 to 240:35 | 0400 | A block device over a regular file, and the source `mount(2)` takes for a file system in a file. |
 | `/dev/loop-control` | 240:36 | 0600 | Attaches a file to a loop device and detaches one, a command per write. |
+| `/dev/screenlog` | 240:38 | 0600 | The lowest-priority record the screen shows: one digit, read or written. |
 
 `null`, `zero`, and `full` seek to offset zero. Random devices, terminals, and pty endpoints are streams and return `ESPIPE`. `/dev/bootlog` uses an ordinary offset and supports seeks relative to the current ring length. All synthetic nodes use stable timestamps from the RTC reading taken during startup, or zero when no RTC reading was accepted.
 
@@ -43,6 +44,8 @@ Pty pairs are allocated from the heap without a fixed count. Each pair receives 
 A loop device is reached through a mount and nowhere else: its node reads and writes nothing, and is there for `mount(2)` to name. `/dev/loop-control` takes one command per write, `attach N /path`, `attach - /path`, `attach ro N /path` and `detach N`; the node is root's, which is what says who may attach anything, and what the commands mean is in [block/Readme.md](../block/Readme.md). `/proc/loop` has a line per attached device: the device, its size in bytes, whether it takes writes, how many writes it has made and how many it has synced, and the path it was attached by.
 
 The stick nodes are block devices in `stat`, and the disk's windows are character devices. That is what `blkid`, `findfs` and `mount LABEL=` walk `/dev` for, so a volume on a stick is found by its label rather than by the order the sticks were plugged in. The nodes are read-only: a stick is written through a file system mounted on it. Unlike the disk's windows, they read any byte range, because `blkid`'s probers ask for the size of a superblock structure at whatever offset it lives and a block device node on Linux answers that; the covering sectors are read and the bytes asked for copied out.
+
+`/dev/screenlog` decides how much of the kernel's own record reaches the screen, and nothing else: the ring, the serial port and netconsole keep every record whatever it says, so `/dev/bootlog` and a capture on the port are unaffected. A read gives the current level as one digit and a newline; a write of one digit sets it, clamped to `KLOG_CRIT` at the low end so a panic can never be hidden and to `KLOG_DEBUG` at the high end. The default is `KLOG_WARN`, and `rach2.loglevel=N` on the boot line sets it for a boot being brought up, when the screen is the only instrument there is. It exists because the screen is shared: `rach2-install` talks to a person through it and has no other way to keep the machine's routine notes out of the middle of its questions.
 
 `/dev/bootlog` is always present. It hands out the kernel log's ring, which holds records and not console text: whole records are dropped from the oldest end to make room, so what comes back never begins mid-line. The os-real `dmesg` script reads this device because Rach2 has no `klogctl` interface.
 

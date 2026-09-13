@@ -82,6 +82,20 @@ uint32_t klog_read(char *buf, uint32_t cap, uint32_t offset);
 uint32_t klog_len(void);
 
 /**
+ * Set the lowest-priority record the screen shows.
+ *
+ * The ring, the serial port and netconsole are not affected: every record is
+ * kept and sent whatever this is, so turning the screen down loses nothing
+ * that a later reader of `/dev/bootlog` or a capture on the port would want.
+ * What it decides is how much of the machine's own record a person standing
+ * at it has to read. `KLOG_CRIT` is the floor, so a panic always shows.
+ */
+void klog_set_screen_level(int level);
+
+/** The level the screen is showing down to. */
+int klog_screen_level(void);
+
+/**
  * The debug shell's own output: the screen and the serial port, nothing else.
  *
  * A prompt is not a diagnostic. It does not belong in the machine's log, and

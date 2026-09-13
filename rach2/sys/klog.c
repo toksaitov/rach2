@@ -282,6 +282,19 @@ uint32_t klog_read(char *buf, uint32_t cap, uint32_t offset)
  * prompt.
  */
 static int screen_line_open;
+
+/*
+ * The lowest-priority record the screen shows.
+ *
+ * The screen is not the log. The ring keeps every record whatever this is set
+ * to, and so do the serial port and netconsole, so nothing is lost by turning
+ * the screen down; what changes is only what a person standing at the machine
+ * is made to read. A machine's routine notes are for whoever is diagnosing it
+ * later, and a person installing a system has no way to tell them from the
+ * words addressed to them. The default shows warnings and worse. `k_panic`
+ * and its kind raise `KLOG_CRIT`, which no setting can hide.
+ */
+static int screen_level = KLOG_WARN;
 static int serial_line_open;
 
 /* ---- destination 2: the screen ---- */
@@ -315,6 +328,9 @@ static void dest_screen(const struct klog_record *r)
 {
     uint32_t i;
 
+    if (r->level > screen_level) {
+        return;
+    }
     if (screen_line_open) {
         k_putc('\n');
         screen_line_open = 0;
@@ -583,6 +599,30 @@ void console_write_end(void)
     klog_delivering = 1;
     kirq_restore(flags);
     klog_drain();
+}
+
+/**
+ * Set the lowest-priority record the screen shows; see `screen_level`.
+ *
+ * `KLOG_CRIT` is the floor, so a panic reaches the screen whatever a caller
+ * asks for: a machine that has stopped must be able to say so to the person
+ * in front of it. A level above `KLOG_DEBUG` is taken as `KLOG_DEBUG`.
+ */
+void klog_set_screen_level(int level)
+{
+    if (level < KLOG_CRIT) {
+        level = KLOG_CRIT;
+    }
+    if (level > KLOG_DEBUG) {
+        level = KLOG_DEBUG;
+    }
+    screen_level = level;
+}
+
+/** The level the screen is showing down to. */
+int klog_screen_level(void)
+{
+    return screen_level;
 }
 
 /**

@@ -830,6 +830,58 @@ static int32_t dev_bootlog_read(fd_entry_t *e, char __user *buf, uint32_t count)
     return (int32_t)done;
 }
 
+/*
+ * /dev/screenlog: how much of the machine's own record the screen shows.
+ *
+ * Reading gives the level as one digit and a newline; writing one digit sets
+ * it. The ring, the serial port and netconsole are not affected, so nothing a
+ * later reader wants is lost by turning the screen down. It exists because the
+ * screen is shared: a program that is talking to a person, `rach2-install`
+ * above all, has no other way to stop the kernel's routine notes arriving in
+ * the middle of its questions.
+ */
+static int32_t dev_screenlog_read(fd_entry_t *e, char __user *buf, uint32_t count)
+{
+    char text[2];
+
+    text[0] = (char)('0' + klog_screen_level());
+    text[1] = '\n';
+    if (e->ofd->offset >= (int32_t)sizeof(text)) {
+        return 0;
+    }
+    if (count > sizeof(text) - (uint32_t)e->ofd->offset) {
+        count = (uint32_t)sizeof(text) - (uint32_t)e->ofd->offset;
+    }
+    if (copy_to_user((void __user *)buf, text + e->ofd->offset, count) != 0) {
+        return -EFAULT;
+    }
+    e->ofd->offset += (int32_t)count;
+    return (int32_t)count;
+}
+
+static int32_t dev_screenlog_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+{
+    char digit;
+
+    (void)e;
+    if (count == 0) {
+        return 0;
+    }
+    if (copy_from_user(&digit, buf, 1) != 0) {
+        return -EFAULT;
+    }
+    if (digit < '0' || digit > '9') {
+        return -EINVAL;
+    }
+    klog_set_screen_level(digit - '0');
+    /* The whole write is taken, so a caller that wrote "4\n" is not asked to
+       write the newline again. */
+    return (int32_t)count;
+}
+
+static const struct file_ops screenlog_ops = {dev_screenlog_read, dev_screenlog_write, dev_poll,
+                                              dev_ioctl, NULL};
+
 static const struct file_ops grubcore_ops = {dev_grubcore_read, dev_grubcore_write, dev_poll,
                                              dev_ioctl, dev_grubcore_close};
 static const struct file_ops bootpart_ops = {dev_bootpart_read, dev_bootpart_write, dev_poll,
@@ -917,7 +969,8 @@ static const struct devfs_entry dev_table[] = {{"null", 1, 3, 1, 0666, &null_ops
                                                {"loop2", 240, 34, 0, 0400, &loop_ops},
                                                {"loop3", 240, 35, 0, 0400, &loop_ops},
                                                {"loop-control", 240, 36, 0, 0600, &loopctl_ops},
-                                               {"framefail", 240, 37, 0, 0600, &framefail_ops}};
+                                               {"framefail", 240, 37, 0, 0600, &framefail_ops},
+                                               {"screenlog", 240, 38, 0, 0600, &screenlog_ops}};
 
 #define DEVFS_NDEV ((int)(sizeof(dev_table) / sizeof(dev_table[0])))
 
