@@ -71,7 +71,7 @@ static const char *const PROBES[] = {
     "dnstest",
     "trapprobe", "ofdprobe", "waitprobe", "pipeprobe", "pollprobe",
     "devprobe", "jobprobe", "miscprobe", "ptyprobe", "rngprobe",
-    "orphanprobe", "loopprobe", "procprobe",
+    "orphanprobe", "loopprobe", "zombieprobe", "procprobe",
     "suidprobe", "sudoprobe", "modeprobe",
     /* The musl-linked identity and permission walks: prove the id family
        and the deny paths through the real libc syscall selection, not just

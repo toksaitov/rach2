@@ -468,11 +468,21 @@ void terminate_current_process(int32_t signo)
             : "memory"
         );
     } else {
-        /* Do not free_process here: the zombie must survive for the parent's
-         * waitpid to find, collect, and free the slot. */
+        /* The state is asserted again here, after the teardown above, because
+         * a step of it can wait: an ext2 close takes the mount's namespace
+         * lock, and a wait leaves the process RUNNING when it ends, whatever
+         * it was before. A dying process left RUNNING is made READY by the
+         * switch below and picked again, and it then returns from `schedule`
+         * into the halt that follows, with interrupts off and nothing able to
+         * end it: no keyboard, no timer, no network, and no record of why.
+         * Do not free_process here either: the zombie must survive for the
+         * parent's waitpid to find, collect, and free the slot. */
+        current_proc->state = PROC_ZOMBIE;
         schedule();
 
-        __asm__ __volatile__("cli; hlt");
+        /* `schedule` does not return to a zombie. Reaching this is the fault
+         * above coming back, and it is said rather than halted on. */
+        k_panic("a dying process was scheduled again");
     }
 }
 

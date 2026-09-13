@@ -48,7 +48,7 @@ sh "$REPO/tools/image/mkext2.sh" "$REPO/krffs/manifests/os-real.manifest" "$VOL"
 # shipped image, so they are put into this volume here rather than into the
 # manifest. `write` stores a file with the mode of the host's copy, which is
 # not what these two need, so each mode is set after it.
-for prog in modeprobe suidhelper; do
+for prog in modeprobe suidhelper zombieprobe; do
     debugfs -w -R "write $REPO/build/tests/$prog $prog" "$VOL" > /dev/null 2>&1 \
         || fail "staging $prog in the ext2 volume"
     debugfs -w -R "sif $prog mode 0100755" "$VOL" > /dev/null 2>&1 \
@@ -145,6 +145,21 @@ echo "ext2-test: a 4 KiB append costs the disk no more than eleven commands ($AP
 boot_root "$ROOT.mode.log" --ok "MODEPROBE OK" \
     "send=/modeprobe /tmp" "expect=MODEPROBE OK" || fail "the set-id rules on the ext2 root"
 echo "ext2-test: the chown and write set-id rules hold on an ext2 root: OK"
+
+# ---- 2e: a process killed while its teardown has to wait, which is entry 56
+#      of milestone 50. A signal death marks the process a zombie before its
+#      descriptors are closed, and an ext2 close takes the mount's namespace
+#      lock; a wait ends with the waiter RUNNING whatever it was before, so the
+#      dying process was made READY again, picked again, and returned from its
+#      last `schedule` into a halt taken with interrupts off, which no
+#      keyboard, timer or frame can end. The probe kills forty such processes
+#      while another writes the same file system. A kernel with the fault stops
+#      the machine here and this row fails on its deadline with nothing more
+#      printed.
+boot_root "$ROOT.zombie.log" --ok "ZOMBIEPROBE OK" \
+    "send=cd /tmp && /zombieprobe" "expect=ZOMBIEPROBE OK" \
+    || fail "a process killed while its teardown waits"
+echo "ext2-test: forty processes killed while their teardown waits, and the machine goes on: OK"
 ROOT_LINE=$(grep -an 'ext2: root: /dev/disk0p1' "$ROOT.first.log" | head -1 | cut -d: -f1)
 USB_LINE=$(grep -an 'usb: started' "$ROOT.first.log" | head -1 | cut -d: -f1)
 [ -n "$ROOT_LINE" ] && [ -n "$USB_LINE" ] && [ "$ROOT_LINE" -lt "$USB_LINE" ] \

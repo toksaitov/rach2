@@ -417,3 +417,28 @@ does not change what a grow costs; the install's ten minutes are entry 58.
 
 Entry 51's last item, the probe set run on the machine, found four probes that
 can pass only on the test image and one that carried the emulator's address.
+
+Entry 56's mechanism, found by Astra at the close and checked here line by line.
+A process killed by a signal is marked a zombie before its descriptors are
+closed, and closing one on a mounted file system can wait: an ext2 close takes
+the mount's namespace lock, and a wait ends with the waiter RUNNING whatever it
+was before. The scheduler then makes a RUNNING process READY, so the dying
+process is picked again, returns from its last `schedule`, and runs the bare
+`cli; hlt` that followed it. Nothing can end that halt: not the keyboard, not
+the timer, not a frame, and it writes no record. A machine with its screen lit
+answering nothing is what that looks like, which is what was seen twice.
+
+The termination path now asserts the zombie again after its teardown, and the
+halt after `schedule` is a panic that names the fault rather than a silent stop.
+The same re-assertion was written into the failed-exec teardown and then taken
+out again: that path frees the process outright and installs the idle one
+before the point it would have gone, so it would have marked the idle process a
+zombie. The checker's `redundantAssignment` is what caught it, which is the
+second time in this close that a checker caught a fault a reading had missed.
+
+`tests/zombieprobe.c` was written to provoke the wait: forty processes killed
+while they hold six unlinked files each, with another process writing the same
+file system. It passes with the fault compiled back in, on the boot root and on
+an ext2 root, so it does not separate the two kernels and it is not the proof.
+It is kept as the stress the machine was under, and entry 56 stays open for a
+row that does provoke the wait.
