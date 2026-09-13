@@ -629,6 +629,32 @@ calibrate_again() { # calibrate_again WIDTH
     calibrate "$1"
 }
 
+# The width the host can carry, which is not always the width it was asked
+# for. A machine whose emulator runs slower than the envelope allows at the
+# width given is not a machine that cannot run the set: it is one that cannot
+# run it that wide. The width comes down a quarter at a time until the
+# measurement fits, down to a floor, and the set runs at what fits and says so.
+# Refusing instead costs everything the set would have told, and on the host
+# this was written on the default width measured 8.1 and 8.2 against an
+# envelope of 8.0, so half the sets were refused for a tenth.
+CAL_FLOOR=${RACH2_CALIBRATION_FLOOR:-4}
+calibrate_fit() { # calibrate_fit WIDTH -> CAL_WIDTH, CAL_FACTOR
+    CAL_WIDTH=$1
+    calibrate "$CAL_WIDTH" && return 0
+    # The one wait is here, for a host that was busy for a minute. Narrowing
+    # after it costs a measurement each and no more waiting: a host that is
+    # steadily too slow for this width says so at once.
+    calibrate_again "$CAL_WIDTH" && return 0
+    [ -z "${RACH2_CALIBRATION_FACTOR:-}" ] || return 1
+    while [ "$CAL_WIDTH" -gt "$CAL_FLOOR" ]; do
+        CAL_WIDTH=$((CAL_WIDTH * 3 / 4))
+        [ "$CAL_WIDTH" -lt "$CAL_FLOOR" ] && CAL_WIDTH=$CAL_FLOOR
+        echo "run: calibration: narrowing the pool to $CAL_WIDTH and measuring again" >&2
+        calibrate "$CAL_WIDTH" && return 0
+    done
+    return 1
+}
+
 run_set() {
     failed=""; serial=""; pooled=""; lone=""
     for suite in $1; do
@@ -655,8 +681,10 @@ run_set() {
     if [ -n "$pooled" ]; then
         n=$(echo "$pooled" | wc -w | tr -d ' ')
         width=$WORKERS; [ "$n" -lt "$width" ] && width=$n
-        calibrate "$width" || calibrate_again "$width" || {
+        calibrate_fit "$width" || {
             echo "run: result: the calibration failed" >&2; return 1; }
+        width=$CAL_WIDTH
+        WORKERS=$width
         POOL_FACTOR=$CAL_FACTOR
     fi
     if [ -n "$lone" ]; then

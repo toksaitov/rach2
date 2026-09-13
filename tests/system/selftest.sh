@@ -47,8 +47,17 @@ cp "$REPO/tools/setup/hostcheck.c" "$WORK/tools/setup/hostcheck.c"
 # measure are read from two files, so a row chooses the factor a set gets.
 cat > "$WORK/tests/system/calibrate.sh" <<'CAL'
 #!/bin/sh
-echo "calibrated at width $1" >> "$(dirname "$0")/../../calibrations.log"
-echo "compute=$(cat "$(dirname "$0")/../../calib.compute") storage=$(cat "$(dirname "$0")/../../calib.storage") width=$1"
+# `calib.fitat` holds a compute time and the widest pool it is reported at:
+# wider than that, the slow time in `calib.compute` is reported instead. It is
+# how a row makes a host that is too slow for the width it was given.
+root="$(dirname "$0")/../.."
+echo "calibrated at width $1" >> "$root/calibrations.log"
+compute=$(cat "$root/calib.compute")
+if [ -f "$root/calib.fitat" ]; then
+    set -- "$1" $(cat "$root/calib.fitat")
+    [ "$1" -le "$3" ] && compute=$2
+fi
+echo "compute=$compute storage=$(cat "$root/calib.storage") width=$1"
 CAL
 echo 0.5 > "$WORK/calib.compute"
 echo 0.5 > "$WORK/calib.storage"
@@ -342,6 +351,19 @@ out=$( (cd "$WORK" && PATH="$WORK/bin:$PATH" RACH2_WORKERS=2 \
 check "a rate past the envelope is measured again" 1 "$(printf '%s\n' "$out" | grep -c 'measuring again in 1 s')"
 check "and the set is refused when the second says the same" 1 "$rc"
 check "with the rate named by each measurement" 2 "$(printf '%s\n' "$out" | grep -c 'past the envelope')"
+
+# And a host that is steadily too slow for the width it was given is not a host
+# that cannot run the set: the pool narrows until the measurement fits. The
+# fixture reports a rate that fits only at two or fewer, so the set runs there
+# and says so.
+echo 100 > "$WORK/calib.compute"
+echo "2.4 2" > "$WORK/calib.fitat"
+out=$( (cd "$WORK" && PATH="$WORK/bin:$PATH" RACH2_WORKERS=8 \
+        RACH2_CALIBRATION_RETRY=0 RACH2_CALIBRATION_FLOOR=1 \
+        sh tests/run slow1 slow2 passing 2>&1) ); rc=$?
+check "a host too slow for the width narrows the pool" 1 "$(printf '%s\n' "$out" | grep -c 'narrowing the pool to')"
+check "and the set then runs" 0 "$rc"
+rm -f "$WORK/calib.fitat"
 echo 2.4 > "$WORK/calib.compute"
 # The bound that ends a suite whose token never comes: the set is run under
 # the tree's own watchdog when it is built, so a bound that never ended
