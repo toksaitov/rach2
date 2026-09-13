@@ -442,3 +442,12 @@ file system. It passes with the fault compiled back in, on the boot root and on
 an ext2 root, so it does not separate the two kernels and it is not the proof.
 It is kept as the stress the machine was under, and entry 56 stays open for a
 row that does provoke the wait.
+
+The acceptance at the close, on the accepted kernel installed through `bootctl`
+and committed: every row but one. The ext2 root's own check reports five lost
+blocks and four orphan inodes. They are what the processes killed on that root
+the night before left behind, under the kernel that still had entry 56's fault:
+a teardown that was cut short leaves the inode's blocks unaccounted. The kernel
+now on the machine does not make more of them. The repair is `e2fsck -y` from
+the recovery system, a write to the owner's disk, and it waits for the owner to
+name the device.
