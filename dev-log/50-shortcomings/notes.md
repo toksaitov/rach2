@@ -451,3 +451,17 @@ a teardown that was cut short leaves the inode's blocks unaccounted. The kernel
 now on the machine does not make more of them. The repair is `e2fsck -y` from
 the recovery system, a write to the owner's disk, and it waits for the owner to
 name the device.
+
+How the changed userland reached the machine at the close, since a kernel
+installed through `bootctl` carries none of it: the probes were copied into
+`/tmp/p3` over SSH and run from there, and the port's `resize2fs` into `/tmp`
+with an `/etc/mtab` made beside it, because the installed root carries neither
+it nor `e2fsck`. Dropbear is unchanged: the wider receive window was an
+experiment and its `localoptions.h` was put back before anything was built for
+the close. Nothing was written to a partition of the machine's disk; every
+measurement there used a file on the root or a socket.
+
+Of the two changes made to work the machine, `network_access` in
+`~/.codex/config.toml` is back to false. The demonstration key in root's
+`authorized_keys` on the notebook stays until the root's repair is done, since
+that is how the repair is driven, and it goes when the machine's work ends.
