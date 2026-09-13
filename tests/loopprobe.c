@@ -29,6 +29,7 @@ typedef unsigned char uint8_t;
 #define SYS_SOCKETCALL 102
 #define SYS_NANOSLEEP  162
 #define SYS_FCNTL64    221
+#define SYS_PIPE       42
 
 #define SC_SOCKET      1
 #define SC_BIND        2
@@ -60,12 +61,16 @@ typedef unsigned char uint8_t;
 #define SYS_FORK          2
 #define SYS_WAITPID       7
 #define SYS_GETTIMEOFDAY  78
-/* Round trips of one byte, and the time they may take. With a single queued
-   datagram left to the 100 Hz timer each leg costs a tick, so these take four
-   seconds; delivered when the processor would otherwise park, they take
-   milliseconds. The bound sits far from both. */
+/* Round trips of one byte. The same rounds run over a pipe first, which waits
+   for no ring, so the loopback is judged against this machine's own cost of a
+   round trip rather than against a clock: a host running twenty emulators at
+   once slows both alike. With a single queued datagram left to the 100 Hz
+   timer each loopback leg costs a tick, which is two hundred times the pipe's
+   pace, and delivered when the processor would otherwise park it is within a
+   small factor of it. */
 #define PINGPONG_ROUNDS   200
-#define PINGPONG_LIMIT_MS 1000
+#define PINGPONG_FACTOR   8
+#define PINGPONG_SLACK_MS 200
 #define CLOSED_PORT       7300
 
 #define EADDRINUSE  98
@@ -247,6 +252,14 @@ static void learn_canon_ip(void)
 }
 
 /* The three system calls the round-trip row needs, in this file's shape. */
+static int sys_pipe(int fds[2])
+{
+    int r;
+
+    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_PIPE), "b"(fds) : "memory");
+    return r;
+}
+
 static int sys_fork(void)
 {
     int r;
@@ -261,6 +274,17 @@ static int sys_waitpid(int pid, int *status)
 
     __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_WAITPID), "b"(pid), "c"(status), "d"(0));
     return r;
+}
+
+/* The milliseconds from `a` to `b`, both as `gettimeofday` fills them. The
+   microseconds are subtracted as signed values, so a second that borrows does
+   not wrap through zero and report four billion. */
+static int elapsed_ms(const uint32_t *a, const uint32_t *b)
+{
+    int sec = (int)(b[0] - a[0]);
+    int usec = (int)b[1] - (int)a[1];
+
+    return sec * 1000 + usec / 1000;
 }
 
 static int sys_gettimeofday(uint32_t *tv)
@@ -687,13 +711,69 @@ static void tcp_loop_bulk(void)
  * the timer and a local connection turns over one window per tick, which
  * measured 6.0 MB/s on the machine whatever the write size.
  */
+static int pipe_pingpong_ms(void)
+{
+    int up[2], down[2];
+    uint32_t t0[2], t1[2];
+    char one = 'p';
+    int pid, status = 0, round;
+
+    if (sys_pipe(up) != 0 || sys_pipe(down) != 0)
+        fail("pipes for the round-trip calibration");
+    pid = sys_fork();
+    if (pid < 0)
+        fail("fork for the round-trip calibration");
+    if (pid == 0) {
+        sys_close(up[0]);
+        sys_close(down[1]);
+        for (round = 0; round < PINGPONG_ROUNDS; round++) {
+            if (sys_read(down[0], &one, 1) != 1)
+                sys_exit(1);
+            if (sys_write(up[1], &one, 1) != 1)
+                sys_exit(1);
+        }
+        sys_exit(0);
+    }
+    sys_close(up[1]);
+    sys_close(down[0]);
+    sys_gettimeofday(t0);
+    for (round = 0; round < PINGPONG_ROUNDS; round++) {
+        if (sys_write(down[1], &one, 1) != 1)
+            fail("writing to the child in the round-trip calibration");
+        if (sys_read(up[0], &one, 1) != 1)
+            fail("reading from the child in the round-trip calibration");
+    }
+    sys_gettimeofday(t1);
+    sys_waitpid(pid, &status);
+    if (status != 0)
+        fail("the calibration child did not finish");
+    sys_close(up[0]);
+    sys_close(down[1]);
+    return elapsed_ms(t0, t1);
+}
+
+/*
+ * A round trip of one byte each way, two hundred times, between two processes
+ * over the loopback, against the same rounds over a pipe.
+ *
+ * Each loopback leg queues one datagram, which is below the threshold a system
+ * call's exit delivers at, so the only thing that can deliver it before the
+ * next tick is the idle path: the sender blocks in its read, nothing else is
+ * runnable, and the processor is about to be parked. Without that, every leg
+ * waits for the timer and a local connection turns over one window per tick,
+ * which measured 6.0 MB/s on the machine whatever the write size. The pipe
+ * rounds are the same shape without a ring, so their time is what a round trip
+ * costs this machine now, and the loopback's is judged against it.
+ */
 static void tcp_loop_pingpong(void)
 {
     uint32_t args[6];
     uint8_t sa[16];
     uint32_t t0[2], t1[2];
     char one = 'p';
-    int ls, cs, as, pid, status = 0, round, ms;
+    int ls, cs, as, pid, status = 0, round, ms, base, limit;
+
+    base = pipe_pingpong_ms();
 
     args[0] = AF_INET;
     args[1] = SOCK_STREAM;
@@ -757,11 +837,14 @@ static void tcp_loop_pingpong(void)
         fail("the ping-pong child did not finish");
     sys_close(as);
     sys_close(ls);
-    ms = (int)((t1[0] - t0[0]) * 1000u + (t1[1] - t0[1]) / 1000u);
+    ms = elapsed_ms(t0, t1);
+    limit = base * PINGPONG_FACTOR + PINGPONG_SLACK_MS;
     print("LOOPPROBE ping-pong ");
     print_u32((uint32_t)ms);
-    print(" ms for 200 round trips\n");
-    if (ms < 0 || ms >= PINGPONG_LIMIT_MS) {
+    print(" ms over the loopback, ");
+    print_u32((uint32_t)base);
+    print(" over a pipe, for 200 round trips\n");
+    if (ms < 0 || base < 0 || ms > limit) {
         fail("a local round trip waits for the timer");
     }
 }
