@@ -12,6 +12,10 @@
  * This gates the coursework: a student's own sudo passes the same probe the
  * reference does. Prints "SUDOPROBE OK" and exits 0 on success. Freestanding;
  * direct int 0x80.
+ *
+ * Needs: the test image's sudo arrangement, the staged `sudo` with its
+ * policy file and the accounts it names. A run on an installed machine
+ * needs them put there first.
  */
 
 typedef unsigned int u32;

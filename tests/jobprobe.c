@@ -15,6 +15,13 @@
  *
  * Children report each check via exit status; the parent decodes WEXITSTATUS.
  * Prints "JOBPROBE OK" or "JOBPROBE FAIL". Freestanding; direct int 0x80.
+ *
+ * Needs: a shell with job control, which makes each command its own
+ * process group with the terminal's foreground group set. A run from a
+ * non-interactive shell, which is what an SSH command line is, leaves the
+ * probe in its parent's group with no terminal of its own, and the rows
+ * for the foreground group, a background read and `setsid` by a group
+ * leader all read the arrangement rather than the kernel.
  */
 
 typedef unsigned int size_t;

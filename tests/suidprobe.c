@@ -16,6 +16,11 @@
  *
  * The helper is staged by the manifest; this probe only drives it. Prints
  * "SUIDPROBE OK" and exits 0 on success. Freestanding; direct int 0x80.
+ *
+ * Needs: the set-id fixtures the test image stages at its root,
+ * `/suidhelper` and the `.suid`, `.u5` and `.sgid` copies beside it. They
+ * are not in the shipped system image, so a run on an installed machine
+ * needs them put there first.
  */
 
 typedef unsigned int u32;

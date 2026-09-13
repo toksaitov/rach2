@@ -28,6 +28,10 @@
  * not differ between those boots and runs once, in the shared probe boot.
  *
  * Prints "PROCPROBE OK" and exits 0. Freestanding; direct int 0x80.
+ *
+ * Needs: the machine to itself. The rows over `/proc/net/tcp` and the
+ * connection pool count what the whole machine has open, so a login over
+ * SSH, or anything else holding a socket, fails them on its own presence.
  */
 
 typedef unsigned int size_t;

@@ -35,6 +35,7 @@ typedef unsigned char uint8_t;
 #define SC_CONNECT     3
 #define SC_LISTEN      4
 #define SC_ACCEPT      5
+#define SC_GETSOCKNAME 6
 #define SC_GETPEERNAME 7
 #define SC_SENDTO      11
 #define MSG_DONTWAIT   0x40
@@ -199,8 +200,51 @@ static void make_sockaddr(uint8_t *sa, uint16_t port, uint8_t a, uint8_t b, uint
     sa[7] = d;
 }
 
-/* The canonical address every loopback peer must read back as: 10.0.2.15. */
-static const uint8_t canon_ip[4] = {10, 0, 2, 15};
+/* The canonical address every loopback peer must read back as. It is the
+   machine's own, which this probe asks for rather than assuming the
+   emulator's: a UDP socket connected to 127.0.0.1 reports it through
+   `getsockname`, which is the same rule the rows below judge. */
+static uint8_t canon_ip[4];
+
+static void learn_canon_ip(void)
+{
+    uint32_t args[6];
+    uint8_t sa[16];
+    uint8_t me[16];
+    int len = 16;
+    int fd;
+    int i;
+
+    for (i = 0; i < 16; i++) {
+        me[i] = 0; /* the kernel fills this; a refusal must not read as an address */
+    }
+
+    args[0] = AF_INET;
+    args[1] = SOCK_DGRAM;
+    args[2] = 0;
+    fd = socketcall(SC_SOCKET, args);
+    if (fd < 0)
+        fail("a socket to learn the local address");
+    make_sockaddr(sa, 9, 127, 0, 0, 1);
+    args[0] = (uint32_t)fd;
+    args[1] = (uint32_t)sa;
+    args[2] = 16;
+    if (socketcall(SC_CONNECT, args) != 0)
+        fail("connecting to learn the local address");
+    args[0] = (uint32_t)fd;
+    args[1] = (uint32_t)me;
+    args[2] = (uint32_t)&len;
+    if (socketcall(SC_GETSOCKNAME, args) != 0)
+        fail("getsockname to learn the local address");
+    sys_close(fd);
+    canon_ip[0] = me[4];
+    canon_ip[1] = me[5];
+    canon_ip[2] = me[6];
+    canon_ip[3] = me[7];
+    if (canon_ip[0] == 127 || (canon_ip[0] | canon_ip[1] | canon_ip[2] | canon_ip[3]) == 0) {
+        fail("the local address read back as a loopback or a zero address");
+    }
+}
 
 /* The three system calls the round-trip row needs, in this file's shape. */
 static int sys_fork(void)
@@ -1050,6 +1094,7 @@ static void tcp_simultaneous(void)
 
 void _start(void)
 {
+    learn_canon_ip();
     udp_loop();
     tcp_loop();
     tcp_loop_bulk();
