@@ -300,6 +300,12 @@ static int screen_line_open;
  * `KLOG_CRIT`, which no setting can hide.
  */
 static int screen_level = KLOG_INFO;
+
+/* Whether the boot line named a level. A boot brought up with
+   `rach2.loglevel=` asked to watch the machine, and the handover to init
+   leaves that alone rather than taking the screen back off the person who
+   asked for it. */
+static int screen_level_asked_for;
 static int serial_line_open;
 
 /* ---- destination 2: the screen ---- */
@@ -622,6 +628,19 @@ void klog_set_screen_level(int level)
         level = KLOG_DEBUG;
     }
     screen_level = level;
+}
+
+/** As `klog_set_screen_level`, and record that a boot line asked for it. */
+void klog_set_screen_level_from_cmdline(int level)
+{
+    klog_set_screen_level(level);
+    screen_level_asked_for = 1;
+}
+
+/** Whether the boot line named the level. */
+int klog_screen_level_was_asked_for(void)
+{
+    return screen_level_asked_for;
 }
 
 /** The level the screen is showing down to. */

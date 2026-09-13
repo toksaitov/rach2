@@ -313,7 +313,6 @@ static void memory_map_line(char *buf, uint32_t buflen, uint64_t addr, uint64_t 
 
 static bool test_memory(void);
 static bool test_strings(void);
-static void test_display(void);
 static bool test_timer(void);
 static bool test_udelay(uint32_t *measured_ms);
 static bool test_clock(uint32_t *measured_us, const char **why, uint32_t *walk_clock,
@@ -739,25 +738,6 @@ static bool test_strings(void)
         }
     }
     return true;
-}
-
-static void test_display(void)
-{
-    console_printf("  Display colors:     ");
-    set_fore_color(red);
-    console_printf("Red ");
-    set_fore_color(green);
-    console_printf("Green ");
-    set_fore_color(cyan);
-    console_printf("Cyan ");
-    set_fore_color(light_magenta);
-    console_printf("Magenta ");
-    set_fore_color(light_brown);
-    console_printf("Yellow ");
-    set_fore_color(white);
-    console_printf("White");
-    set_fore_color(light_grey);
-    console_puts("");
 }
 
 static bool test_timer(void)
@@ -1779,7 +1759,30 @@ static void boot_init_process(void)
         vfs_ref_release(&ref);
     }
 
-    k_cls();
+    /* The console changes hands here. What follows on the screen is the login
+     * prompt and whatever the person at it runs, so the kernel stops writing
+     * there and keeps to the ring, the serial port and netconsole, which lose
+     * nothing. `KLOG_CRIT` is the floor the setter enforces, so a panic still
+     * reaches the person in front of the machine: this hands over the screen,
+     * it does not promise the machine is well.
+     *
+     * Three boots keep their messages. A boot line that named a level asked
+     * for them and is left alone. A recovery boot that is checking file
+     * systems has minutes of work to show, and a screen that went quiet there
+     * would read as a machine that had stopped. A root mounted read-only is a
+     * machine whose owner needs to know before they try to work on it.
+     *
+     * The screen is not cleared. The boot log is what a person has just read,
+     * and the login prompt appears under it.
+     */
+    {
+        struct vfs_mount *root = vfs_root_mount();
+        int root_read_only = root != NULL && (root->flags & VFS_MS_RDONLY) != 0;
+
+        if (!klog_screen_level_was_asked_for() && !kcmdline_has("rach2.fsck") && !root_read_only) {
+            klog_set_screen_level(KLOG_CRIT);
+        }
+    }
     klog(KLOG_INFO, "boot", "starting /sbin/init");
 
     /* Only now, past the point where this boot is certainly starting init, so
@@ -2852,6 +2855,35 @@ static void selftest_note(const char *name, int passed)
     }
 }
 
+/*
+ * Whether this boot hands the machine to `/sbin/init`.
+ *
+ * The same two questions `boot_init_process` asks later, asked here because
+ * the checks below are skipped on a boot that init will run and kept on one
+ * where the debug shell is the whole interface. Asking twice is cheaper than
+ * carrying the answer across everything that happens in between, and a root
+ * that gained or lost an init in those milliseconds is not a case this has.
+ */
+static int boot_runs_init(void)
+{
+    struct vfs_ref ref;
+
+    if (kcmdline_has("rach2.rescue") || kcmdline_has("init=rescue")) {
+        return 0;
+    }
+    /* Nothing mounted is the blank-disk boot, and the resolver reads
+       `mounts[0]->state` without checking, so asking it here would fault
+       before the boot path prints why it is refusing. */
+    if (!vfs_root_mounted()) {
+        return 0;
+    }
+    if (vfs_resolve(0, "/sbin/init", 0, &ref, 0, 0) != 0) {
+        return 0;
+    }
+    vfs_ref_release(&ref);
+    return 1;
+}
+
 static void run_self_tests(void)
 {
     selftest_ran = 0;
@@ -2973,8 +3005,6 @@ static void run_self_tests(void)
     }
 
     selftest_note("page cache", test_pagecache());
-
-    test_display();
 
     if (selftest_failed == 0) {
         klog(KLOG_INFO, "selftest", "result: passed: %d", selftest_ran);
@@ -3645,7 +3675,7 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
 
         if (kcmdline_value("rach2.loglevel", level, sizeof(level)) && level[0] >= '0' &&
             level[0] <= '9' && level[1] == '\0') {
-            klog_set_screen_level(level[0] - '0');
+            klog_set_screen_level_from_cmdline(level[0] - '0');
         }
     }
 
@@ -3658,25 +3688,25 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
 
     k_cls();
 
-    klog(KLOG_INFO, "boot", "Initializing system components");
+    klog(KLOG_DEBUG, "boot", "Initializing system components");
 
     init_gdt();
-    klog(KLOG_INFO, "boot", "gdt: ready");
+    klog(KLOG_DEBUG, "boot", "gdt: ready");
 
     init_tss((uint32_t)stack + KERNEL_STACK_SIZE);
-    klog(KLOG_INFO, "boot", "tss: ready");
+    klog(KLOG_DEBUG, "boot", "tss: ready");
 
     init_idt();
-    klog(KLOG_INFO, "boot", "idt: ready");
+    klog(KLOG_DEBUG, "boot", "idt: ready");
 
     init_isr();
-    klog(KLOG_INFO, "boot", "isr: ready");
+    klog(KLOG_DEBUG, "boot", "isr: ready");
 
     fpu_init();
     block_request_init();
 
     init_mm();
-    klog(KLOG_INFO, "boot", "memory manager: ready");
+    klog(KLOG_DEBUG, "boot", "memory manager: ready");
 
     /* The firmware's memory map, entry by entry, then the reservations and
      * the frame table; below `FRAME_MIN_MANAGED_KIB` the boot is refused
@@ -3730,12 +3760,12 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
             k_panic("memory: too little for this kernel");
         }
     }
-    klog(KLOG_INFO, "boot", "paging: ready");
+    klog(KLOG_DEBUG, "boot", "paging: ready");
 
     /* Reserve the cache frames and pre-map the disk window in the kernel
      * directory, before the first fork copies the kernel PDEs. */
     init_pagecache();
-    klog(KLOG_INFO, "boot", "page cache: ready");
+    klog(KLOG_DEBUG, "boot", "page cache: ready");
 
     /* The boot report, after every boot-time reservation and before any driver
      * has configured a device. After, because the page cache reserves frames
@@ -3785,12 +3815,12 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
             }
         }
     }
-    klog(KLOG_INFO, "boot", "timer: ready");
+    klog(KLOG_DEBUG, "boot", "timer: ready");
 
 
     rtc_init();
     if (rtc_is_anchored()) {
-        klog(KLOG_INFO, "clock", "ready");
+        klog(KLOG_DEBUG, "clock", "ready");
     } else {
         klog(KLOG_WARN, "clock", "none: times run from the epoch");
     }
@@ -3834,15 +3864,15 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     pic_unmask_irq(1); /* now safe to take keyboard interrupts (masked since init_pic) */
     tty_console_init(); /* console_tty: VGA + serial, line discipline for fds 0/1/2 */
     serial_enable_rx_irq(); /* COM1's bytes taken as they arrive, not at the tick */
-    klog(KLOG_INFO, "boot", "keyboard: ready");
+    klog(KLOG_DEBUG, "boot", "keyboard: ready");
 
     if (kcmdline_has("rach2.nomouse")) {
         klog(KLOG_INFO, "mouse", "skipped: rach2.nomouse");
     } else {
-        klog(KLOG_INFO, "mouse", "started");
+        klog(KLOG_DEBUG, "mouse", "started");
         if (init_mouse() == 0) {
             input_mouse_found();
-            klog(KLOG_INFO, "mouse", "ready");
+            klog(KLOG_DEBUG, "mouse", "ready");
         } else {
             klog(KLOG_WARN, "mouse", "absent: nothing answered the probe");
         }
@@ -3850,7 +3880,7 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
 
 
     init_syscall();
-    klog(KLOG_INFO, "boot", "syscall: ready");
+    klog(KLOG_DEBUG, "boot", "syscall: ready");
 
     init_proc();
     {
@@ -3865,15 +3895,15 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
             current_proc = proc0;
         }
     }
-    klog(KLOG_INFO, "boot", "process: ready");
+    klog(KLOG_DEBUG, "boot", "process: ready");
 
     init_sched();
-    klog(KLOG_INFO, "boot", "scheduler: ready");
+    klog(KLOG_DEBUG, "boot", "scheduler: ready");
 
     if (kcmdline_has("rach2.noaudio")) {
         klog(KLOG_INFO, "audio", "skipped: rach2.noaudio");
     } else {
-        klog(KLOG_INFO, "audio", "started");
+        klog(KLOG_DEBUG, "audio", "started");
         init_audio();
         if (audio) {
             klog(KLOG_INFO, "audio", "ready: %s", audio_get_boot_status());
@@ -4049,7 +4079,31 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
         }
     }
 
-    run_self_tests();
+    /*
+     * The full set of checks is no longer part of an ordinary boot. It cost
+     * 0.96 s of a 3.9 s boot on the machine this targets, and it proves
+     * things that running the system proves anyway: paging, system calls and
+     * context switching are exercised by the first program that starts.
+     *
+     * It is not deleted, because two of its checks measure the hardware
+     * rather than the code. The clock check found a real fault on this
+     * laptop, where an interrupt handler took a PIT latch between two
+     * samples and 2000 us read as 1361 (dev-log/43-machine/notes.md). A
+     * machine can boot and log in with its delays wrong, so that check has
+     * to be run deliberately, not assumed.
+     *
+     * It runs on a boot that asks for it, on a boot with no init, where the
+     * debug shell is the interface and there is nothing else to prove the
+     * machine by, and from the debug shell's `test` command. A boot that
+     * skipped them says so, so a reader of the log is never left to guess
+     * whether a missing result means passed or not run.
+     */
+    if (kcmdline_has("rach2.selftest") || !boot_runs_init()) {
+        run_self_tests();
+    } else {
+        klog(KLOG_INFO, "selftest", "not run: boot with rach2.selftest, or run "
+                                    "test in the debug shell");
+    }
 
     /*
      * Decide the boot home. A normal boot runs the persistent /sbin/init as

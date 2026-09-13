@@ -325,6 +325,12 @@ static void power_reset(void)
  */
 void power_stop(int how)
 {
+    /* The screen comes back. It was handed to the login when init started, and
+     * what follows is the end of the machine: either it stops and says so, or
+     * the hardware refuses and the person is looking at a laptop that is still
+     * on with no way left to ask why. There is no log to read afterwards. */
+    klog_set_screen_level(KLOG_INFO);
+
     if (how == POWER_OFF) {
         power_acpi_off();
     } else if (how == POWER_RESTART) {
