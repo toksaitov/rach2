@@ -465,3 +465,36 @@ Of the two changes made to work the machine, `network_access` in
 `~/.codex/config.toml` is back to false. The demonstration key in root's
 `authorized_keys` on the notebook stays until the root's repair is done, since
 that is how the repair is driven, and it goes when the machine's work ends.
+
+The owner asked at the close whether the network fixes reached the emulator's
+two drivers as well, and then for Astra to read them rather than take my answer.
+The answer to the first is that the frame copy did, and the checksum, TCP's ring
+copies, the loopback ring and the poller are below the drivers and reach all
+three; the handler's mask and unmask is the RTL8168's alone, because it is the
+only one of the three on message-signalled interrupts, which are edges. The
+other two are on a legacy line, which is level, so a condition left asserted
+re-enters the handler rather than being lost.
+
+Astra's reading agreed on that and found three faults of its own, all taken:
+
+* The e1000 unmasked its sources, and enabled its receiver, before it set the
+  flag its own handler tests; an interrupt in that window is taken, does
+  nothing, and leaves the level asserted, which on a level line is a machine
+  that never finishes its bring-up. The flag is now set before the unmask.
+* The RTL8139's drain ran until the ring read empty, with no bound, inside the
+  handler with interrupts off. Space goes back through `CAPR` after every frame
+  and the emulated card offers a queued packet the moment it does, so under
+  sustained input that loop need never end, starving the timer and every other
+  line. It now takes what the card had written when it was asked, read from
+  `CBR`, and leaves the rest to raise the source again.
+* The RTL8139's overflow recovery reset the receiver, on the belief that the
+  ring's contents were already lost. They are not: the card reports the
+  overflow instead of writing the packet that would not fit, so the frames in
+  the ring are whole and the reset threw them away. It drains and returns the
+  space instead; a ring that is actually desynced is still caught by the header
+  check, which resets.
+
+It also corrected two of my premises. Registering `32 + irq` does not itself
+make a line level-triggered; that comes from the firmware's routing, which the
+emulator keeps. And the e1000's read-to-clear does not take a cause that races
+the read: the card keeps it, and the handler's loop is what makes that safe.

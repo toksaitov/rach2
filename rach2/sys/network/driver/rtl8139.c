@@ -126,12 +126,12 @@ int rtl8139_init(struct netdev *nd, int nth)
     /* The MAC address is latched at I/O offsets 0x00-0x05 after reset. */
     mac_lo = inl(iobase + RTL_MAC0);
     mac_hi = inw(iobase + RTL_MAC4);
-    rtl8139_mac[0] = (uint8_t)(mac_lo >>  0);
-    rtl8139_mac[1] = (uint8_t)(mac_lo >>  8);
+    rtl8139_mac[0] = (uint8_t)(mac_lo >> 0);
+    rtl8139_mac[1] = (uint8_t)(mac_lo >> 8);
     rtl8139_mac[2] = (uint8_t)(mac_lo >> 16);
     rtl8139_mac[3] = (uint8_t)(mac_lo >> 24);
-    rtl8139_mac[4] = (uint8_t)(mac_hi >>  0);
-    rtl8139_mac[5] = (uint8_t)(mac_hi >>  8);
+    rtl8139_mac[4] = (uint8_t)(mac_hi >> 0);
+    rtl8139_mac[5] = (uint8_t)(mac_hi >> 8);
 
     /* Allocate the RX ring from kernel memory (page-aligned, which also
      * satisfies the chip's DMA alignment). Point the chip at it; Rach2 is
@@ -164,8 +164,8 @@ int rtl8139_init(struct netdev *nd, int nth)
 
     /* Clear any stale interrupt status, then unmask the events we handle. */
     outw(iobase + RTL_ISR, 0xFFFF);
-    outw(iobase + RTL_IMR, RTL_ISR_ROK | RTL_ISR_TOK | RTL_ISR_RER |
-                           RTL_ISR_TER | RTL_ISR_RXOVW | RTL_ISR_FOVW);
+    outw(iobase + RTL_IMR,
+         RTL_ISR_ROK | RTL_ISR_TOK | RTL_ISR_RER | RTL_ISR_TER | RTL_ISR_RXOVW | RTL_ISR_FOVW);
 
     register_isr_handler((uint8_t)(32 + rtl_pci.irq), rtl8139_irq, "rtl8139");
 
@@ -187,9 +187,18 @@ int rtl8139_init(struct netdev *nd, int nth)
 }
 
 /* Boot-summary accessors (see net_print_info). */
-uint16_t rtl8139_iobase(void)   { return iobase; }
-uint8_t  rtl8139_irq_line(void) { return rtl_pci.irq; }
-const char *rtl8139_error(void) { return rtl_err; }
+uint16_t rtl8139_iobase(void)
+{
+    return iobase;
+}
+uint8_t rtl8139_irq_line(void)
+{
+    return rtl_pci.irq;
+}
+const char *rtl8139_error(void)
+{
+    return rtl_err;
+}
 
 /**
  * Write this card's detail line under the boot summary.
@@ -204,15 +213,14 @@ static void rtl8139_print_info(void *dev)
 
     (void)dev; /* this driver has one card */
 
-    klog(KLOG_INFO, "rtl8139",
-         "IRQ %d, I/O 0x%X, MAC %X%X:%X%X:%X%X:%X%X:%X%X:%X%X",
-                  (int)rtl_pci.irq, (unsigned)iobase,
-                  (unsigned)(rtl8139_mac[0] >> 4), (unsigned)(rtl8139_mac[0] & 0xF),
-                  (unsigned)(rtl8139_mac[1] >> 4), (unsigned)(rtl8139_mac[1] & 0xF),
-                  (unsigned)(rtl8139_mac[2] >> 4), (unsigned)(rtl8139_mac[2] & 0xF),
-                  (unsigned)(rtl8139_mac[3] >> 4), (unsigned)(rtl8139_mac[3] & 0xF),
-                  (unsigned)(rtl8139_mac[4] >> 4), (unsigned)(rtl8139_mac[4] & 0xF),
-                  (unsigned)(rtl8139_mac[5] >> 4), (unsigned)(rtl8139_mac[5] & 0xF));
+    klog(KLOG_INFO, "rtl8139", "IRQ %d, I/O 0x%X, MAC %X%X:%X%X:%X%X:%X%X:%X%X:%X%X",
+         (int)rtl_pci.irq, (unsigned)iobase, (unsigned)(rtl8139_mac[0] >> 4),
+         (unsigned)(rtl8139_mac[0] & 0xF), (unsigned)(rtl8139_mac[1] >> 4),
+         (unsigned)(rtl8139_mac[1] & 0xF), (unsigned)(rtl8139_mac[2] >> 4),
+         (unsigned)(rtl8139_mac[2] & 0xF), (unsigned)(rtl8139_mac[3] >> 4),
+         (unsigned)(rtl8139_mac[3] & 0xF), (unsigned)(rtl8139_mac[4] >> 4),
+         (unsigned)(rtl8139_mac[4] & 0xF), (unsigned)(rtl8139_mac[5] >> 4),
+         (unsigned)(rtl8139_mac[5] & 0xF));
     if (rtl8139_link(0, &link) && link.up) {
         klog(KLOG_INFO, "rtl8139", "link %d Mb/s, %s duplex", (int)link.mbps,
              link.full_duplex ? "full" : "half");
@@ -285,9 +293,9 @@ static int rtl8139_link(void *dev, struct netdev_link *out)
 }
 
 /* The card's entry in the driver table. `poll` is NULL: this one interrupts. */
-const struct netdev_ops rtl8139_netdev = {"RTL8139",    rtl8139_init,  rtl8139_tx,
-                                          0,            rtl8139_stop,  rtl8139_link,
-                                          rtl8139_error, rtl8139_print_info, 0};
+const struct netdev_ops rtl8139_netdev = {
+    "RTL8139",    rtl8139_init,  rtl8139_tx,         0, rtl8139_stop,
+    rtl8139_link, rtl8139_error, rtl8139_print_info, 0};
 
 /**
  * Copy a frame into the next TX descriptor and start its DMA.
@@ -315,8 +323,7 @@ int rtl8139_tx(void *dev, const uint8_t *data, uint16_t len)
     (void)dev; /* this driver has one card */
 
     if (len > RTL_TX_BUF_SIZE) {
-        klog(KLOG_WARN, "rtl8139", "tx: frame of %d bytes is too large, dropped",
-                      (int)len);
+        klog(KLOG_WARN, "rtl8139", "tx: frame of %d bytes is too large, dropped", (int)len);
         return NETDEV_TX_DROPPED;
     }
 
@@ -369,10 +376,26 @@ static void rtl8139_rx(void)
     uint16_t status;
     uint16_t pkt_len;
     uint32_t advance;
+    uint32_t bound;
+    uint32_t taken;
+
+    /* What the card had written when this call began, and no further. Space
+     * goes back through CAPR after every frame, and the emulated card offers
+     * a queued packet the moment it does, so a drain that ran to an empty ring
+     * need never end while frames keep arriving: the handler would hold the
+     * processor with interrupts off and starve the timer, the scheduler and
+     * every other line. Whatever arrives past this mark raises the source
+     * again and is taken by the next entry. */
+    bound = (uint32_t)inw(iobase + RTL_CBR) % RTL_RX_RING;
+    taken = 0;
 
     while (!(inb(iobase + RTL_CHIPCMD) & RTL_CMD_RXEMPTY)) {
+        if (taken > 0 && rx_ptr == bound) {
+            break;
+        }
+        taken++;
         /* The 4-byte ring header is little-endian: status then length. */
-        status  = (uint16_t)(rx_buf[rx_ptr] | (rx_buf[rx_ptr + 1] << 8));
+        status = (uint16_t)(rx_buf[rx_ptr] | (rx_buf[rx_ptr + 1] << 8));
         pkt_len = (uint16_t)(rx_buf[rx_ptr + 2] | (rx_buf[rx_ptr + 3] << 8));
 
         /* The length reads as a sentinel while the chip is still DMAing this
@@ -384,11 +407,9 @@ static void rtl8139_rx(void)
         /* A non-OK status or an out-of-range length means the header is an
          * error packet or the ring has desynced. Trusting the length would
          * advance rx_ptr by garbage, so resync the receiver instead. */
-        if (!(status & RTL_ISR_ROK) ||
-            pkt_len < RTL_RX_PKT_MIN || pkt_len > RTL_RX_PKT_MAX) {
-            klog(KLOG_WARN, "rtl8139",
-                 "rx: bad header status 0x%X len %d, resynchronising",
-                          (unsigned)status, (int)pkt_len);
+        if (!(status & RTL_ISR_ROK) || pkt_len < RTL_RX_PKT_MIN || pkt_len > RTL_RX_PKT_MAX) {
+            klog(KLOG_WARN, "rtl8139", "rx: bad header status 0x%X len %d, resynchronising",
+                 (unsigned)status, (int)pkt_len);
             ethernet_note_rx_error(rtl8139_iface);
             rtl8139_rx_reset();
             return;
@@ -400,15 +421,15 @@ static void rtl8139_rx(void)
         /* Advance past header + packet, rounded up to the next dword, and wrap
          * within the ring. CAPR trails the read pointer by 16 bytes. */
         advance = (uint32_t)pkt_len + 4 + 3;
-        rx_ptr  = (rx_ptr + advance) & ~3UL;
+        rx_ptr = (rx_ptr + advance) & ~3UL;
         rx_ptr %= RTL_RX_RING;
         outw(iobase + RTL_CAPR, (uint16_t)(rx_ptr - 16));
     }
 }
 
 /* Interrupt sources this driver acts on (TOK is unmasked but needs no work). */
-#define RTL_ISR_HANDLED  (RTL_ISR_ROK | RTL_ISR_TOK | RTL_ISR_RER | \
-                          RTL_ISR_TER | RTL_ISR_RXOVW | RTL_ISR_FOVW)
+#define RTL_ISR_HANDLED \
+    (RTL_ISR_ROK | RTL_ISR_TOK | RTL_ISR_RER | RTL_ISR_TER | RTL_ISR_RXOVW | RTL_ISR_FOVW)
 
 /**
  * Service the card until its interrupt status reads clear.
@@ -433,7 +454,7 @@ static void rtl8139_irq(isr_params_t *params)
         if ((isr_val & RTL_ISR_HANDLED) == 0) {
             break;
         }
-        outw(iobase + RTL_ISR, isr_val);   /* write-1-to-clear acknowledge */
+        outw(iobase + RTL_ISR, isr_val); /* write-1-to-clear acknowledge */
 
         if (isr_val & RTL_ISR_ROK) {
             rtl8139_rx();
@@ -443,11 +464,17 @@ static void rtl8139_irq(isr_params_t *params)
             ethernet_note_rx_error(rtl8139_iface);
         }
         if (isr_val & (RTL_ISR_RXOVW | RTL_ISR_FOVW)) {
-            klog(KLOG_WARN, "rtl8139", "rx: overflow, resynchronising");
-            /* The ring filled while the machine was elsewhere; what it held
-             * is gone, and the resync is the recovery. */
+            /* The ring filled while the machine was elsewhere. What it holds
+             * is not gone: the card reports the overflow instead of writing
+             * the packet that would not fit, so the frames already in the ring
+             * are whole. Taking them and giving the space back is the whole
+             * recovery, and a reset here would throw away frames that had
+             * arrived since, including any this entry's drain has not reached.
+             * A ring that is actually desynced is caught by the header check
+             * in the drain, which does reset. */
+            klog(KLOG_WARN, "rtl8139", "rx: the ring filled; draining it");
             ethernet_note_rx_drop(rtl8139_iface);
-            rtl8139_rx_reset();
+            rtl8139_rx();
         }
         if (isr_val & RTL_ISR_TER) {
             klog(KLOG_WARN, "rtl8139", "tx: the card reported an error");

@@ -392,8 +392,9 @@ static void e1000_tx_setup(struct e1000 *e)
     io->w32(e, E1000_TDLEN, E1000_RING_BYTES);
     io->w32(e, E1000_TDH, 0);
     io->w32(e, E1000_TDT, 0);
-    io->w32(e, E1000_TIPG, E1000_TIPG_IPGT | (E1000_TIPG_IPGR1 << E1000_TIPG_IPGR1_SHIFT) |
-                            (E1000_TIPG_IPGR2 << E1000_TIPG_IPGR2_SHIFT));
+    io->w32(e, E1000_TIPG,
+            E1000_TIPG_IPGT | (E1000_TIPG_IPGR1 << E1000_TIPG_IPGR1_SHIFT) |
+                (E1000_TIPG_IPGR2 << E1000_TIPG_IPGR2_SHIFT));
 }
 
 /**
@@ -604,14 +605,21 @@ static int e1000_init(struct netdev *nd, int nth)
     pci_enable_bus_master(&e->pci);
 
     register_isr_handler((uint8_t)(32 + e->pci.irq), e1000_irq, "e1000");
-    io->w32(e, E1000_IMS, E1000_INT_MASK);
 
     io->w32(e, E1000_RCTL, E1000_RCTL_EN | E1000_RCTL_BAM | E1000_RCTL_SZ_2048 | E1000_RCTL_SECRC);
-    io->w32(e, E1000_TCTL, E1000_TCTL_EN | E1000_TCTL_PSP | E1000_TCTL_RTLC |
-                            ((uint32_t)E1000_TCTL_CT_DEFAULT << E1000_TCTL_CT_SHIFT) |
-                            ((uint32_t)E1000_TCTL_COLD_FD << E1000_TCTL_COLD_SHIFT));
+    io->w32(e, E1000_TCTL,
+            E1000_TCTL_EN | E1000_TCTL_PSP | E1000_TCTL_RTLC |
+                ((uint32_t)E1000_TCTL_CT_DEFAULT << E1000_TCTL_CT_SHIFT) |
+                ((uint32_t)E1000_TCTL_COLD_FD << E1000_TCTL_COLD_SHIFT));
 
+    /* The card is serviceable before its sources are unmasked, and not the
+     * other way round. The handler passes over a card whose `up` is clear, so
+     * an interrupt raised between the unmask and this assignment would be
+     * taken, do nothing, and leave the line asserted; on a level line that is
+     * a machine that never finishes its own bring-up. The bring-up runs with
+     * interrupts enabled, so that window is real. */
     e->up = 1;
+    io->w32(e, E1000_IMS, E1000_INT_MASK);
     return NETDEV_UP;
 }
 
@@ -678,8 +686,7 @@ static int e1000_tx_frame(struct e1000 *e, const uint8_t *data, uint16_t len)
 
     if (!e->up || len == 0 || len > E1000_FRAME_MAX) {
         if (len > E1000_FRAME_MAX) {
-            klog(KLOG_WARN, "e1000", "tx: frame of %d bytes is too large, dropped",
-                 (int)len);
+            klog(KLOG_WARN, "e1000", "tx: frame of %d bytes is too large, dropped", (int)len);
         }
         return NETDEV_TX_DROPPED;
     }
@@ -718,8 +725,8 @@ static int e1000_tx_frame(struct e1000 *e, const uint8_t *data, uint16_t len)
     e->tx_ring[idx].addr_lo = (uint32_t)(uintptr_t)e->tx_buf[idx];
     e->tx_ring[idx].addr_hi = 0;
     e->tx_ring[idx].upper = 0; /* clear DD; the card sets it when done */
-    e->tx_ring[idx].lower = E1000_TXD_LOWER(
-        total, E1000_TXD_CMD_EOP | E1000_TXD_CMD_IFCS | E1000_TXD_CMD_RS);
+    e->tx_ring[idx].lower =
+        E1000_TXD_LOWER(total, E1000_TXD_CMD_EOP | E1000_TXD_CMD_IFCS | E1000_TXD_CMD_RS);
 
     /* Every field of the descriptor must be visible before the tail moves,
      * because the tail is what tells the card to read it. */
@@ -966,24 +973,20 @@ static void e1000_print_info(struct e1000 *e)
 {
     struct netdev_link link;
 
-    klog(KLOG_INFO, "e1000",
-         "82540EM, MMIO 0x%X, IRQ %d, MAC %X%X:%X%X:%X%X:%X%X:%X%X:%X%X",
-                  (unsigned)(uintptr_t)e->mmio, (int)e->pci.irq,
-                  (unsigned)(e->mac[0] >> 4), (unsigned)(e->mac[0] & 0xF),
-                  (unsigned)(e->mac[1] >> 4), (unsigned)(e->mac[1] & 0xF),
-                  (unsigned)(e->mac[2] >> 4), (unsigned)(e->mac[2] & 0xF),
-                  (unsigned)(e->mac[3] >> 4), (unsigned)(e->mac[3] & 0xF),
-                  (unsigned)(e->mac[4] >> 4), (unsigned)(e->mac[4] & 0xF),
-                  (unsigned)(e->mac[5] >> 4), (unsigned)(e->mac[5] & 0xF));
+    klog(KLOG_INFO, "e1000", "82540EM, MMIO 0x%X, IRQ %d, MAC %X%X:%X%X:%X%X:%X%X:%X%X:%X%X",
+         (unsigned)(uintptr_t)e->mmio, (int)e->pci.irq, (unsigned)(e->mac[0] >> 4),
+         (unsigned)(e->mac[0] & 0xF), (unsigned)(e->mac[1] >> 4), (unsigned)(e->mac[1] & 0xF),
+         (unsigned)(e->mac[2] >> 4), (unsigned)(e->mac[2] & 0xF), (unsigned)(e->mac[3] >> 4),
+         (unsigned)(e->mac[3] & 0xF), (unsigned)(e->mac[4] >> 4), (unsigned)(e->mac[4] & 0xF),
+         (unsigned)(e->mac[5] >> 4), (unsigned)(e->mac[5] & 0xF));
     if (e1000_link(e, &link) && link.up) {
         klog(KLOG_INFO, "e1000", "link %d Mb/s, %s duplex", (int)link.mbps,
              link.full_duplex ? "full" : "half");
     } else {
         klog(KLOG_INFO, "e1000", "no link yet");
     }
-    klog(KLOG_INFO, "e1000", "rx %d (%d error, %d dropped), tx %d (%d stalled)",
-                  e->rx_packets, e->rx_errors, e->rx_dropped, e->tx_packets,
-                  e->tx_stalls);
+    klog(KLOG_INFO, "e1000", "rx %d (%d error, %d dropped), tx %d (%d stalled)", e->rx_packets,
+         e->rx_errors, e->rx_dropped, e->tx_packets, e->tx_stalls);
 }
 
 /* The card's entry in the driver table. `poll` is NULL: this one
@@ -1013,6 +1016,6 @@ static void e1000_op_print_info(void *dev)
     e1000_print_info((struct e1000 *)dev);
 }
 
-const struct netdev_ops e1000_netdev = {"e1000",      e1000_init,   e1000_op_tx,
-                                        0,            e1000_op_stop, e1000_op_link,
-                                        e1000_error,  e1000_op_print_info, 0};
+const struct netdev_ops e1000_netdev = {"e1000",     e1000_init,          e1000_op_tx,
+                                        0,           e1000_op_stop,       e1000_op_link,
+                                        e1000_error, e1000_op_print_info, 0};
