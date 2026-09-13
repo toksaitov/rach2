@@ -153,7 +153,7 @@ int lapic_init(void)
         klog(KLOG_WARN, "lapic", "lint0 was 0x%x; set to an unmasked external interrupt", lint0);
     }
     ready = 1;
-    klog(KLOG_INFO, "lapic", "ready: id %d, version 0x%x, base 0x%x", (int)apic_id,
+    klog(KLOG_DEBUG, "lapic", "ready: id %d, version 0x%x, base 0x%x", (int)apic_id,
          apic_read(LAPIC_VERSION) & 0xFFu, base);
     return 0;
 }

@@ -973,7 +973,10 @@ static void e1000_print_info(struct e1000 *e)
 {
     struct netdev_link link;
 
-    klog(KLOG_INFO, "e1000", "82540EM, MMIO 0x%X, IRQ %d, MAC %X%X:%X%X:%X%X:%X%X:%X%X:%X%X",
+    /* The window and the vector are for whoever is debugging the card; the
+       station address is on the `net: eth0:` line above, where a person looks
+       for it. */
+    klog(KLOG_DEBUG, "e1000", "82540EM, MMIO 0x%X, IRQ %d, MAC %X%X:%X%X:%X%X:%X%X:%X%X:%X%X",
          (unsigned)(uintptr_t)e->mmio, (int)e->pci.irq, (unsigned)(e->mac[0] >> 4),
          (unsigned)(e->mac[0] & 0xF), (unsigned)(e->mac[1] >> 4), (unsigned)(e->mac[1] & 0xF),
          (unsigned)(e->mac[2] >> 4), (unsigned)(e->mac[2] & 0xF), (unsigned)(e->mac[3] >> 4),
@@ -985,8 +988,12 @@ static void e1000_print_info(struct e1000 *e)
     } else {
         klog(KLOG_INFO, "e1000", "no link yet");
     }
-    klog(KLOG_INFO, "e1000", "rx %d (%d error, %d dropped), tx %d (%d stalled)", e->rx_packets,
-         e->rx_errors, e->rx_dropped, e->tx_packets, e->tx_stalls);
+    /* Worth a line once they count something; at bring-up they are all zero
+       and the line says nothing. */
+    if (e->rx_packets || e->rx_errors || e->rx_dropped || e->tx_packets || e->tx_stalls) {
+        klog(KLOG_INFO, "e1000", "rx %d (%d error, %d dropped), tx %d (%d stalled)", e->rx_packets,
+             e->rx_errors, e->rx_dropped, e->tx_packets, e->tx_stalls);
+    }
 }
 
 /* The card's entry in the driver table. `poll` is NULL: this one

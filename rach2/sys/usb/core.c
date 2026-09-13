@@ -769,7 +769,7 @@ static void step_closing(struct usb_device_state *d)
             d->state = ST_TOMBSTONE;
             return;
         }
-        klog(KLOG_INFO, "usb", "slot: %d: given back", d->slot);
+        klog(KLOG_DEBUG, "usb", "slot: %d: given back", d->slot);
         if (d->interface.kind == USB_KIND_STORAGE) {
             /* The controller reaches nothing of the stick's any more: its
              * request in flight is completed and its record may go. */

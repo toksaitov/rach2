@@ -1582,7 +1582,9 @@ static void rtl8168_print_info(void *dev)
 
     (void)dev; /* this driver has one card */
 
-    klog(KLOG_INFO, "rtl8168",
+    /* The chip revision and the window are for whoever is debugging the card.
+       The station address is on the `net: eth0:` line above. */
+    klog(KLOG_DEBUG, "rtl8168",
          "RTL8168GU: xid 0x%X, MMIO 0x%X, "
          "MAC %X%X:%X%X:%X%X:%X%X:%X%X:%X%X",
         r8168_xid, (unsigned)(uintptr_t)r8168_mmio, (unsigned)(rtl8168_mac[0] >> 4),
@@ -1595,15 +1597,22 @@ static void rtl8168_print_info(void *dev)
     } else {
         klog(KLOG_INFO, "rtl8168", "no link yet");
     }
-    klog(KLOG_INFO, "rtl8168",
-         "rx %d (%d error, %d dropped, %d error reports), tx %d (%d stalled, %d error reports)",
-         r8168_rx_packets, r8168_rx_errors, r8168_rx_dropped, r8168_rxerr_reports,
-         r8168_tx_packets, r8168_tx_stalls, r8168_txerr_reports);
-    if (r8168_msi_vector >= 0 && r8168_msi_storms == 0) {
+    /* The counters are worth a line once they count something. This report is
+       printed at bring-up as well as on demand, and at bring-up every one of
+       them is zero, which told a person reading a boot nothing and took two
+       lines to do it. */
+    if (r8168_rx_packets || r8168_rx_errors || r8168_rx_dropped || r8168_rxerr_reports ||
+        r8168_tx_packets || r8168_tx_stalls || r8168_txerr_reports) {
+        klog(KLOG_INFO, "rtl8168",
+             "rx %d (%d error, %d dropped, %d error reports), tx %d (%d stalled, %d error reports)",
+             r8168_rx_packets, r8168_rx_errors, r8168_rx_dropped, r8168_rxerr_reports,
+             r8168_tx_packets, r8168_tx_stalls, r8168_txerr_reports);
+    }
+    if (r8168_msi_vector >= 0 && r8168_msi_storms == 0 && r8168_msi_entries > 0) {
         klog(KLOG_INFO, "rtl8168", "messages on vector %d: %d, %d idle, %d deferred, %d by the tick",
              r8168_msi_vector, r8168_msi_entries, r8168_msi_idle, r8168_msi_deferred,
              r8168_tick_work);
-    } else if (r8168_msi_vector >= 0) {
+    } else if (r8168_msi_vector >= 0 && r8168_msi_storms > 0) {
         klog(KLOG_INFO, "rtl8168",
              "messages on vector %d: %d, %d idle, %d deferred, masked after %d storm(s), %d by the tick",
              r8168_msi_vector, r8168_msi_entries, r8168_msi_idle, r8168_msi_deferred,

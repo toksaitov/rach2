@@ -107,7 +107,7 @@ void usb_report_controllers(void)
     }
 
     if (found == 0) {
-        klog(KLOG_INFO, "usb", "controller: none");
+        klog(KLOG_DEBUG, "usb", "controller: none");
     }
 }
 
@@ -232,10 +232,14 @@ static void report_ports(void)
                 continue;
             }
             if (status.connected) {
+                /* One line per occupied port, before anything is known about
+                   what is on it. A laptop has six of these and the lines that
+                   follow name the devices themselves, so this is for whoever
+                   is debugging enumeration. */
                 if (status.speed == USB_SPEED_LOW) {
-                    klog(KLOG_INFO, "usb", "port: xhci%d.%d: a low-speed device", n, port + 1);
+                    klog(KLOG_DEBUG, "usb", "port: xhci%d.%d: a low-speed device", n, port + 1);
                 } else {
-                    klog(KLOG_INFO, "usb",
+                    klog(KLOG_DEBUG, "usb",
                          "port: xhci%d.%d: a device; its reset tells full from high speed", n,
                          port + 1);
                 }

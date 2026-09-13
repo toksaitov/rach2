@@ -578,7 +578,7 @@ int pci_msi_enable(const pci_device_t *dev, uint8_t vector)
     /* And the enable bit last, when everything it acts on is written. */
     pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(cap + 2),
                        (uint16_t)(control | PCI_MSI_ENABLE));
-    klog(KLOG_INFO, "pci", "msi: %x:%x.%d on vector %d", dev->bus, dev->device, dev->function,
+    klog(KLOG_DEBUG, "pci", "msi: %x:%x.%d on vector %d", dev->bus, dev->device, dev->function,
          vector);
     return 0;
 }

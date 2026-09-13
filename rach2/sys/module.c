@@ -34,16 +34,19 @@ uint32_t init_modules(multiboot_uint32_t magic, multiboot_info_t *info)
     }
 
     if (!(info->flags & MULTIBOOT_INFO_MODS)) {
-        klog(KLOG_INFO, "module", "none: the loader set no module flag");
+        klog(KLOG_DEBUG, "module", "none: the loader set no module flag");
         return 0;
     }
 
     if (info->mods_count == 0) {
-        klog(KLOG_INFO, "module", "none: the loader carried no module");
+        klog(KLOG_DEBUG, "module", "none: the loader carried no module");
         return 0;
     }
 
-    klog(KLOG_INFO, "module", "found %d", info->mods_count);
+    /* The loader's view. `modules:` later says what the machine made of them,
+       which is the line a person wants; two subsystems reporting the same
+       count under near-identical names is what a boot log looked like. */
+    klog(KLOG_DEBUG, "module", "found %d", info->mods_count);
 
     mods = (multiboot_module_t *)info->mods_addr;
 
@@ -55,7 +58,9 @@ uint32_t init_modules(multiboot_uint32_t magic, multiboot_info_t *info)
         module_table[i].cmdline = (mods[i].cmdline != 0) ?
                                   (const char *)mods[i].cmdline : NULL;
 
-        klog(KLOG_INFO, "module", "%d: 0x%X to 0x%X, %d bytes [%s]", i,
+        /* The empty brackets at the end of this line are a module with no
+           command line, which is every module this loader is given. */
+        klog(KLOG_DEBUG, "module", "%d: 0x%X to 0x%X, %d bytes [%s]", i,
              module_table[i].start, module_table[i].end, module_table[i].size,
              module_table[i].cmdline ? module_table[i].cmdline : "");
 

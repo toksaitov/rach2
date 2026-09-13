@@ -123,7 +123,7 @@ void fpu_init(void)
     } else {
         __asm__ __volatile__("fnsave (%0); frstor (%0)" : : "r"(initial_state) : "memory");
     }
-    klog(KLOG_INFO, "fpu", "fxsr: %s, sse: %s", use_fxsr ? "on" : "off",
+    klog(KLOG_DEBUG, "fpu", "fxsr: %s, sse: %s", use_fxsr ? "on" : "off",
          have_sse ? "on" : "off");
 }
 

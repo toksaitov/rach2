@@ -549,7 +549,15 @@ static int ahci_port_comreset(int port)
     ahci_write32(sctl_off, sctl | AHCI_SCTL_DET_NONE);
 
     /* The link then has to negotiate. A port with nothing on it never reaches
-     * DET=3, so this is bounded and its expiry is an ordinary answer. */
+     * DET=3, so this is bounded and its expiry is an ordinary answer.
+     *
+     * How long that costs is recorded rather than assumed. Each empty port
+     * spends the whole of AHCI_LINK_STEPS here, a second, and the machine
+     * this targets showed 2.19 s between the first port and the disk being
+     * reported. Which ports those were, and what their status said while they
+     * waited, is what decides whether the wait can be cut, so the driver says
+     * so instead of leaving the next reader to guess.
+     */
     for (spin = 0; spin < AHCI_LINK_STEPS; ++spin) {
         if ((ahci_read32(ssts_off) & AHCI_DET_MASK) == AHCI_DET_PRESENT) {
             /* The errors a link-up necessarily raises are ours to clear, and
@@ -561,6 +569,11 @@ static int ahci_port_comreset(int port)
         }
         k_udelay(AHCI_RESET_POLL_US);
     }
+    klog(KLOG_DEBUG, "ahci",
+         "port %d: no link after %d ms; SStatus 0x%X, DET %d (0 is nothing attached, "
+         "1 is a device that did not negotiate)",
+         port, (int)((AHCI_LINK_STEPS * AHCI_RESET_POLL_US) / 1000u),
+         ahci_read32(ssts_off), (int)(ahci_read32(ssts_off) & AHCI_DET_MASK));
     return -1;
 }
 
