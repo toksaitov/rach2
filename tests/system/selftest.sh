@@ -57,12 +57,14 @@ cat > "$WORK/tests/registry" <<'REG'
 passing|-|core
 failing|-|full
 leaky|-|full
+parting|-|full
 needy|a-command-that-does-not-exist|full
 imagey|hdiutil|full
 slow1|-|full
 slow2|-|full
 stuck|-|full
 editing|-|full
+slowish|-|full
 needsprod1|-|full
 needsprod2|-|full
 escaper|-|full
@@ -88,6 +90,9 @@ run-failing:
 run-leaky:
 	@qemu-system-i386 --selftest-hold & \
 	 i=0; while [ ! -s "$$RACH2_QEMU_LEDGER" ] && [ $$i -lt 100 ]; do sleep 0.1; i=$$((i+1)); done
+run-parting:
+	@qemu-system-i386 --selftest-part & \
+	 i=0; while [ ! -s "$$RACH2_QEMU_LEDGER" ] && [ $$i -lt 100 ]; do sleep 0.1; i=$$((i+1)); done
 run-needy:
 	@echo "needy ran"
 run-imagey:
@@ -100,6 +105,8 @@ run-stuck:
 	@sh -c 'trap "" TERM; sleep 60 & echo $$! > stuck.pid; wait'
 run-editing:
 	@echo "# edited under the run" >> tests/system/suites.mk
+run-slowish:
+	@sleep 8
 run-needsprod1: product
 	@echo "needsprod1 ran"; [ -f product ] && echo needsprod1 >> after-product
 run-needsprod2: product
@@ -160,12 +167,21 @@ mkdir -p "$WORK/bin"
 cat > "$WORK/bin/qemu-system-i386" <<'Q'
 #!/bin/sh
 echo $$ >> "$(dirname "$0")/../machines"
+# A machine asked to part goes a moment after the suite that started it
+# returns, which is what a real one does: it flushes what it was given first.
+case "$*" in
+    *--selftest-part*) exec sleep 2 ;;
+esac
 exec sleep 30
 Q
 chmod +x "$WORK/bin/qemu-system-i386"
 : > "$WORK/machines"
 
-run() { ( cd "$WORK" && PATH="$WORK/bin:$PATH" RACH2_WORKERS="${W:-2}" sh tests/run "$@" 2>&1 ); }
+# The rows below judge what the runner does with one measurement, so the
+# second measurement it would otherwise take is turned off; one row turns it
+# back on and judges that instead.
+run() { ( cd "$WORK" && PATH="$WORK/bin:$PATH" RACH2_WORKERS="${W:-2}" \
+          RACH2_CALIBRATION_RETRY=0 sh tests/run "$@" 2>&1 ); }
 
 out=$(run passing); rc=$?
 check "a passing suite exits zero" 0 "$rc"
@@ -226,6 +242,14 @@ check "and not the others" 0 "$(printf '%s\n' "$out" | grep -c 'run: failing:')"
 out=$(run leaky); rc=$?
 check "a suite that leaks a machine fails" 1 "$rc"
 check "and is named as the owner" 1 "$(printf '%s\n' "$out" | grep -c 'run: leaky: left')"
+
+# A machine on its way out is not a machine left behind. The suite's rows have
+# passed and its machine has been told to stop; asking once, the instant the
+# suite returns, fails a suite for a race with a process that is already
+# leaving, which is what it cost on 2026-09-13.
+out=$(run parting); rc=$?
+check "a suite whose machine is still leaving passes" 0 "$rc"
+check "and is not named as an owner" 0 "$(printf '%s\n' "$out" | grep -c 'run: parting: left')"
 
 out=$(W=0 run passing); rc=$?
 check "a worker count of zero is refused" 2 "$rc"
@@ -307,6 +331,17 @@ out=$( (export RACH2_CALIBRATION_FACTOR=08.0; run slowtoken passing) ); rc=$?
 check "and one with a leading zero is read as a decimal, not as octal" 1 "$(printf '%s\n' "$out" | grep -c 'factor 8.0 given')"
 out=$( (export RACH2_CALIBRATION_FACTOR=100; run slowtoken passing) ); rc=$?
 check "and one past the envelope is refused" 1 "$(printf '%s\n' "$out" | grep -c 'past the envelope')"
+
+# The second measurement, which an ordinary run takes: a host busy for a minute
+# is not a host that cannot run the set, and refusing it costs everything the
+# set would have told. A rate that is past the envelope both times is still
+# refused, and the wait is named.
+echo 100 > "$WORK/calib.compute"
+out=$( (cd "$WORK" && PATH="$WORK/bin:$PATH" RACH2_WORKERS=2 \
+        RACH2_CALIBRATION_RETRY_WAIT=1 sh tests/run slowtoken passing 2>&1) ); rc=$?
+check "a rate past the envelope is measured again" 1 "$(printf '%s\n' "$out" | grep -c 'measuring again in 1 s')"
+check "and the set is refused when the second says the same" 1 "$rc"
+check "with the rate named by each measurement" 2 "$(printf '%s\n' "$out" | grep -c 'past the envelope')"
 echo 2.4 > "$WORK/calib.compute"
 # The bound that ends a suite whose token never comes: the set is run under
 # the tree's own watchdog when it is built, so a bound that never ended
@@ -467,6 +502,14 @@ rm -rf "$WORK/build/.run.lock" "$WORK/oldwork"
 out=$(run editing); rc=$?
 check "a run whose input changed under it fails" 1 "$rc"
 check "and names the file" 1 "$(printf '%s\n' "$out" | grep -c 'voided: tests/system/suites.mk changed during the run')"
+
+# And it stops there rather than at the end. A set is an hour and more; a
+# source changed in its first minute cost the whole of it until the check ran
+# as the set went, which is what it cost on 2026-09-13.
+echo "# the suites' makefile, as the runner sees it" > "$WORK/tests/system/suites.mk"
+out=$(run editing slowish); rc=$?
+check "a set whose source changes under it is stopped there" 1 "$(printf '%s\n' "$out" | grep -c 'stopping the set: the tree changed under it')"
+check "and the set fails" 1 "$rc"
 echo "# the suites' makefile, as the runner sees it" > "$WORK/tests/system/suites.mk"
 rm -f "$WORK/build/thing"
 out=$(run rewriter); rc=$?

@@ -282,11 +282,23 @@ check_tools() {
 check_machines() {
     ledger="$WORK/$1.machines"
     [ -f "$ledger" ] || return 0
-    leaked=""
-    while read -r pid; do
-        [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && leaked="$leaked $pid"
-    done < "$ledger"
-    [ -z "$leaked" ] && return 0
+    # A machine told to stop takes a moment to go: it flushes what it was
+    # given and writes its own records first. Asking once, the instant the
+    # suite's last command returns, calls that a machine left behind and fails
+    # a suite whose every row passed, which is what this check cost on
+    # 2026-09-13. A few seconds turn the race into a check, and a machine that
+    # really was left is still there after them.
+    tries=0
+    while :; do
+        leaked=""
+        while read -r pid; do
+            [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && leaked="$leaked $pid"
+        done < "$ledger"
+        [ -z "$leaked" ] && return 0
+        [ "$tries" -ge 5 ] && break
+        tries=$((tries + 1))
+        sleep 1
+    done
     echo "run: $1: left$leaked running; a suite must stop every machine it starts" >&2
     # Stopped here as well as reported. The suite failed either way, and a
     # machine left behind costs a processor and a few hundred megabytes until
@@ -360,7 +372,7 @@ run_one() {
 # what is running is stopped and reported as stopped.
 POOL_FAILED=""
 run_pool() {
-    POOL_FAILED=""; RUNNING=""; RUNNING_NAMES=""; stopped=""
+    POOL_FAILED=""; RUNNING=""; RUNNING_NAMES=""; stopped=""; poll_turns=0
     # shellcheck disable=SC2086 # the names are one word each; this drops the leading space
     set -- $1; pending="$*"
     while [ -n "$pending" ] || [ -n "$RUNNING_NAMES" ]; do
@@ -390,6 +402,11 @@ run_pool() {
                 done
                 pool_collect
             }
+        fi
+        poll_turns=$((poll_turns + 1))
+        if [ "$((poll_turns % 10))" -eq 0 ] && [ -z "$stopped" ] && ! check_scripts_now; then
+            echo "run: stopping the set: the tree changed under it" >&2
+            stopped=1
         fi
         [ -z "$pending" ] && [ -z "$RUNNING_NAMES" ] || sleep 0.2
     done
@@ -487,6 +504,22 @@ take_products() { # take_products TARGET
     products_inventory "$1" > "$WORK/inventory.products"
     hash_list "$WORK/inventory.products" "$WORK/hashes.products"
 }
+# The sources are checked as the set runs, not only at its end. A file changed
+# under a run voids it, and learning that ninety minutes later costs the whole
+# run; on 2026-09-13 it cost one. Hashing the scripts is cheap and it is the
+# case that happens: a product changes because a source did, and the products
+# are large, so they are left to the check at the end.
+check_scripts_now() { # 0 when no source has changed since the set began
+    [ -f "$WORK/hashes.scripts" ] || return 0
+    hash_list "$WORK/inventory.scripts" "$WORK/hashes.scripts.now"
+    cmp -s "$WORK/hashes.scripts" "$WORK/hashes.scripts.now" && return 0
+    diff "$WORK/hashes.scripts" "$WORK/hashes.scripts.now" |
+        awk '/^>/ {print $3}' | sort -u | while read -r f; do
+            echo "run: voided: $f changed during the run" >&2
+        done
+    return 1
+}
+
 check_hashes() { # 0 when nothing hashed differs or is gone
     voided=""
     for kind in scripts products; do
@@ -530,6 +563,13 @@ REF_COMPUTE=1.2
 REF_STORAGE=2.5
 CAL_MARGIN=1.5
 CAL_ENVELOPE=8.0
+# A host busy for a minute is not a host that cannot run the set, and refusing
+# the set costs everything it would have told. A measurement past the envelope
+# is taken again once, after a wait, before the set is refused. A factor given
+# by hand is not measured and is never retried. `RACH2_CALIBRATION_RETRY=0`
+# turns the retry off, which is what a test of the refusal itself wants.
+CAL_RETRY=${RACH2_CALIBRATION_RETRY:-1}
+CAL_RETRY_WAIT=${RACH2_CALIBRATION_RETRY_WAIT:-60}
 calibrate() { # calibrate WIDTH -> CAL_FACTOR, or 1 on a failure
     if [ -n "${RACH2_CALIBRATION_FACTOR:-}" ]; then
         # A factor given by hand is held to the same form and envelope.
@@ -579,6 +619,16 @@ calibrate() { # calibrate WIDTH -> CAL_FACTOR, or 1 on a failure
 # touch of a staged program and its question, so the answer was that the
 # image was current and the suite failed a check that passes alone. It is
 # entry 28's rule for a question rather than an artifact, so it runs alone.
+# The second measurement, when the first was past the envelope. A factor given
+# by hand was not measured, so it is refused as it stands.
+calibrate_again() { # calibrate_again WIDTH
+    [ -z "${RACH2_CALIBRATION_FACTOR:-}" ] || return 1
+    [ "$CAL_RETRY" != 0 ] || return 1
+    echo "run: calibration: the host was busy; measuring again in $CAL_RETRY_WAIT s" >&2
+    sleep "$CAL_RETRY_WAIT"
+    calibrate "$1"
+}
+
 run_set() {
     failed=""; serial=""; pooled=""; lone=""
     for suite in $1; do
@@ -605,11 +655,13 @@ run_set() {
     if [ -n "$pooled" ]; then
         n=$(echo "$pooled" | wc -w | tr -d ' ')
         width=$WORKERS; [ "$n" -lt "$width" ] && width=$n
-        calibrate "$width" || { echo "run: result: the calibration failed" >&2; return 1; }
+        calibrate "$width" || calibrate_again "$width" || {
+            echo "run: result: the calibration failed" >&2; return 1; }
         POOL_FACTOR=$CAL_FACTOR
     fi
     if [ -n "$lone" ]; then
-        calibrate 1 || { echo "run: result: the calibration failed" >&2; return 1; }
+        calibrate 1 || calibrate_again 1 || {
+            echo "run: result: the calibration failed" >&2; return 1; }
         ALONE_FACTOR=$CAL_FACTOR
     fi
     if [ -n "$pooled" ]; then
