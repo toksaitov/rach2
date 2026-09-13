@@ -67,6 +67,8 @@ text 0644 /etc/network/interfaces.static auto eth0\niface eth0 inet static\n    
 # empties it at boot, so a record from a machine that was switched off does not
 # outlive it.
 dir 0755 /var
+# Where init puts what its services print, once the console is the login's.
+dir 0755 /var/log
 dir 0755 /var/run
 
 # The homes. root's is root's; the test account's is owned by it and closed to

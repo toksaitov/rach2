@@ -36,6 +36,7 @@
 #include <string.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 
 extern char **environ;
 
@@ -162,6 +163,84 @@ static void shutdown_handler(int sig)
  * it hands a fresh one to each shell it spawns, exactly as a real init
  * delegates a terminal through getty.
  */
+/* Where a service's output goes once the console belongs to the person at it.
+ *
+ * The kernel stops writing to the screen when init starts, and a service that
+ * kept the console would undo that from the other side: the DHCP client and
+ * the SSH server printed over the login prompt, which is what a person at this
+ * machine reported. They write here instead, and `logread` is a person's way
+ * back to it.
+ *
+ * What this is NOT is a bounded log. The size is looked at once, at boot,
+ * and the file is removed and begun again when the last boots left it at the
+ * threshold; within one boot it grows without limit. Rotating it properly
+ * needs a collector that owns the writing, because renaming a file does not
+ * move the descriptors the running services already hold, and that is a design
+ * this does not have yet.
+ *
+ * Nor does it hold everything a service says. BusyBox's `udhcpc` is started
+ * with `-b`, and once it has a lease it backgrounds itself and replaces its
+ * own descriptors with /dev/null, so renewals and lease losses reach neither
+ * this file nor the screen. What is here is what a service printed before it
+ * backgrounded. Both limits are written down in utils/Readme.md.
+ */
+#define SERVICE_LOG      "/var/log/services"
+#define SERVICE_LOG_CAP  (256 * 1024)
+
+static int service_log_fd = -1;
+static int service_null_fd = -1;
+
+/* Open the service log, emptying it first when the last boots left it at the
+ * cap. A machine with no writable /var keeps -1 and its services are silenced
+ * rather than allowed back onto the console, since the console is the one
+ * thing this is protecting. */
+static void open_service_log(void)
+{
+    struct stat st;
+
+    /* Writable, because it stands in for the log when there is no log, and a
+       service redirected onto a read-only descriptor would fail every write
+       rather than discard it. */
+    service_null_fd = open("/dev/null", O_RDWR);
+    if (service_null_fd >= 0) {
+        (void)fcntl(service_null_fd, F_SETFD, FD_CLOEXEC);
+    }
+
+    if (stat(SERVICE_LOG, &st) == 0 && st.st_size >= SERVICE_LOG_CAP) {
+        (void)unlink(SERVICE_LOG);
+    }
+    service_log_fd = open(SERVICE_LOG, O_WRONLY | O_CREAT | O_APPEND, 0600);
+    if (service_log_fd >= 0) {
+        /* Init's own copy is not part of any child's inheritance; a child that
+           needs it is given it by `service_output` on purpose. */
+        (void)fcntl(service_log_fd, F_SETFD, FD_CLOEXEC);
+    }
+}
+
+/* Where a service's output goes: the log when there is one, and the null
+ * device when there is not. Never the console. A machine with no writable
+ * /var still owes the person at it an undisturbed login. */
+static int service_sink(void)
+{
+    return service_log_fd >= 0 ? service_log_fd : service_null_fd;
+}
+
+/* In a child, before its exec: nothing on stdin, and both output streams into
+ * the log. A service that finds the console on stdin can read the keystrokes
+ * meant for the login. */
+static void service_output(void)
+{
+    int sink = service_sink();
+
+    if (service_null_fd >= 0) {
+        (void)dup2(service_null_fd, 0);
+    }
+    if (sink >= 0) {
+        (void)dup2(sink, 1);
+        (void)dup2(sink, 2);
+    }
+}
+
 static pid_t spawn_shell(void)
 {
     pid_t pid = fork();
@@ -432,6 +511,7 @@ static pid_t spawn_sshd(void)
     if (pid != 0) {
         return pid; /* init (the parent), or -1 if fork failed */
     }
+    service_output();
     {
         char *argv[8];
         int n = 0;
@@ -525,6 +605,7 @@ static pid_t spawn_update(void)
     if (pid != 0) {
         return pid;
     }
+    service_output();
     {
         char *argv[2];
 
@@ -635,6 +716,7 @@ int main(void)
 
     clear_var_run();
     apply_limits();
+    open_service_log();
 #ifdef INIT_METAL
     if (boot_line_has("rach2.fsck")) {
         check_ext2_partitions();
@@ -667,7 +749,37 @@ int main(void)
         if (!network_done) {
             network_done = 1;
             if (boot_wants_userland_network()) {
+                /* This runs after the login shell is on the console, so its
+                   own diagnostics go where the services' do.
+                   
+                   Both descriptors are saved before either stream moves. With
+                   a low file limit the second `dup` can fail, and redirecting
+                   anyway would leave the log on init's stderr for good: every
+                   later login inherits fd 2, and its cleanup keeps it, so an
+                   unprivileged shell would hold a writable descriptor onto a
+                   root-owned file. If either save fails, nothing is
+                   redirected and the output stays where it is. */
+                int sink = service_sink();
+                int saved_out = dup(1);
+                int saved_err = saved_out >= 0 ? dup(2) : -1;
+                int moved = 0;
+
+                if (saved_out >= 0 && saved_err >= 0 && sink >= 0) {
+                    (void)fcntl(saved_out, F_SETFD, FD_CLOEXEC);
+                    (void)fcntl(saved_err, F_SETFD, FD_CLOEXEC);
+                    moved = dup2(sink, 1) >= 0 && dup2(sink, 2) >= 0;
+                }
                 configure_network();
+                if (moved) {
+                    (void)dup2(saved_out, 1);
+                    (void)dup2(saved_err, 2);
+                }
+                if (saved_out >= 0) {
+                    (void)close(saved_out);
+                }
+                if (saved_err >= 0) {
+                    (void)close(saved_err);
+                }
             }
         }
 

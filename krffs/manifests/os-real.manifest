@@ -117,7 +117,7 @@ text 0644 /hello.txt hello, world\n
 
 dir 0755 /etc
 dir 0700 /etc/dropbear
-text 0644 /etc/motd Welcome to Rach2 (os-real). busybox ash; ssh in as root or test; su for root.\n
+text 0644 /etc/motd Rach2\n\nThe log of this boot is in /dev/bootlog, for root.\nWhat the services print is in /var/log/services.\nType su to become root.\n\n
 text 0644 /etc/hostname rach2\n
 text 0644 /etc/passwd root:x:0:0:root:/root:/bin/sh\ntest:x:1000:1000:test:/home/test:/bin/sh\n
 file 0600 /etc/shadow krffs/shadow
@@ -150,6 +150,8 @@ dir 0755 /etc/network/if-post-down.d
 # /var/run: where `ifup` records which interfaces it has brought up. It writes
 # the file through a temporary beside it, so the directory must be there.
 dir 0755 /var
+# Where init puts what its services print, once the console is the login's.
+dir 0755 /var/log
 dir 0755 /var/run
 
 dir 0755 /usr

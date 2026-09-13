@@ -81,6 +81,8 @@ dir 0755 /etc/network/if-post-down.d
 # /var/run: where `ifup` records which interfaces it has brought up. It writes
 # the file through a temporary beside it, so the directory must be there.
 dir 0755 /var
+# Where init puts what its services print, once the console is the login's.
+dir 0755 /var/log
 dir 0755 /var/run
 
 dir 0755 /usr
