@@ -609,11 +609,54 @@ check_name "$user_name" ||
     die "$user_name is not a name this system takes: a letter, then letters, digits, - and _"
 ask_password "the password for $user_name"
 user_password=$password
-printf '%s: a file of authorized keys for %s, or nothing: ' "$ME" "$user_name"
-read -r user_keys
-if [ -n "$user_keys" ]; then
-    [ -f "$user_keys" ] || die "$user_keys is not a file"
+# The keys are offered, not demanded. A person at a console should not have to
+# type a path from memory, and a path typed wrong should not throw away the
+# answers already given: what this can find is listed and chosen by number, a
+# path still works for anything it did not find, nothing means no keys, and a
+# wrong answer is asked again rather than ending the run.
+key_choices=""
+key_count=0
+for d in "$source_dir" /root /root/.ssh /tmp /; do
+    [ -d "$d" ] || continue
+    for f in "$d"/*.pub "$d"/authorized_keys; do
+        [ -f "$f" ] || continue
+        case " $key_choices " in *" $f "*) continue ;; esac
+        key_count=$((key_count + 1))
+        key_choices="$key_choices $f"
+    done
+done
+if [ "$key_count" -gt 0 ]; then
+    say "authorized keys found on this machine:"
+    i=0
+    for f in $key_choices; do
+        i=$((i + 1))
+        say "  $i) $f"
+    done
 fi
+user_keys=""
+while :; do
+    if [ "$key_count" -gt 0 ]; then
+        printf '%s: authorized keys for %s: a number above, a path, or nothing: ' "$ME" "$user_name"
+    else
+        printf '%s: a file of authorized keys for %s, or nothing: ' "$ME" "$user_name"
+    fi
+    read -r user_keys
+    [ -z "$user_keys" ] && break
+    case "$user_keys" in
+        *[!0-9]*) ;;
+        *)
+            if [ "$user_keys" -ge 1 ] && [ "$user_keys" -le "$key_count" ]; then
+                i=0
+                for f in $key_choices; do
+                    i=$((i + 1))
+                    [ "$i" = "$user_keys" ] && user_keys=$f && break
+                done
+            fi
+            ;;
+    esac
+    [ -f "$user_keys" ] && break
+    say "$user_keys is not a file; try again, or nothing for no keys"
+done
 printf '%s: grow the root into the whole disk? [yes] ' "$ME"
 read -r grow_answer
 case "$grow_answer" in

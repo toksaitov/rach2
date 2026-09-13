@@ -37,7 +37,11 @@ DESCRIPTION
 
      its password      Twice, as root's.
 
-     its keys          A file of authorized keys, or nothing. Given, the file
+     its keys          The keys this machine can find are listed first, from
+                       the stick and from the recovery system's own root, and
+                       the answer is one of their numbers, a path to any other
+                       file, or nothing for no keys. A path that is not a file
+                       is asked again rather than ending the run. What is given
                        is copied into the account's ~/.ssh/authorized_keys.
 
      the root's size   Whether to grow the root into the whole disk. The
