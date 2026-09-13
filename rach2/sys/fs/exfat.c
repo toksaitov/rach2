@@ -1196,6 +1196,23 @@ static int refused(const char *field)
     return -EINVAL;
 }
 
+/*
+ * The volume is not exFAT at all, which is an answer and not a fault.
+ *
+ * A mount is how a caller asks a file system whether a volume is its own, and
+ * the installer asks every partition of every removable disk that way to find
+ * the one holding its image. A driver that warned on the console each time it
+ * was asked about a partition that was never its own would put
+ * `exfat: refused: FileSystemName` in front of a person installing a machine,
+ * which is what it did until 2026-09-14. The fields that only say "not this
+ * file system" answer quietly; a volume that claims to be exFAT and is broken
+ * still says so through `refused`.
+ */
+static int not_exfat(void)
+{
+    return -EINVAL;
+}
+
 /* The boot checksum of the region at sector `first`: the rotate-and-add
  * sum over its eleven sectors, skipping VolumeFlags and PercentInUse. */
 static int boot_checksum(struct ex_mount *em, uint64_t first, uint32_t *sum)
@@ -1400,11 +1417,11 @@ static int ex_mount_on(struct ex_mount *em, struct vfs_mount *mnt, block_device_
     }
     for (i = 0; i < 8; i++) {
         if (b[3 + i] != (uint8_t)"EXFAT   "[i]) {
-            return refused("FileSystemName");
+            return not_exfat();
         }
     }
     if (b[0] != 0xEB || b[1] != 0x76 || b[2] != 0x90) {
-        return refused("JumpBoot");
+        return not_exfat();
     }
     for (i = 11; i < 64; i++) {
         if (b[i] != 0) {
@@ -1412,7 +1429,7 @@ static int ex_mount_on(struct ex_mount *em, struct vfs_mount *mnt, block_device_
         }
     }
     if (le16(b + 510) != 0xAA55) {
-        return refused("BootSignature");
+        return not_exfat();
     }
     if (b[108] != 9) {
         return refused("BytesPerSectorShift"); /* a valid exFAT this kernel does not read */

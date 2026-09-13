@@ -495,6 +495,7 @@ if [ -n "$source_dir" ]; then
     [ -f "$source_dir/rach2-install.manifest" ] ||
         die "$source_dir holds no rach2-install.manifest"
 else
+    say "looking for the image on the removable disks"
     found=$(find_source)
     case "$?" in
         0) ;;
