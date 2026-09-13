@@ -122,15 +122,19 @@ volatile process_t *stdin_waiting_proc = NULL;
  * the clone copied the directory entries and the tables behind them are
  * shared.
  */
-static int test_heap(void)
+/*
+ * Take and give back every size class a thousand times, and say whether the
+ * heap came back to where it started.
+ *
+ * Returns 1 when every object was allocated and read back as written. The
+ * caller compares the heap's totals either side of this.
+ */
+static int heap_churn(void)
 {
-    uint32_t pages0, bytes0, pages1, bytes1;
     uint32_t i, j;
     void *held[16];
-    int ok = 1;
 
-    kheap_stats(&pages0, &bytes0);
-    for (i = 0; i < 1000 && ok; i++) {
+    for (i = 0; i < 1000; i++) {
         uint32_t sizes[16];
 
         for (j = 0; j < 16; j++) {
@@ -144,30 +148,64 @@ static int test_heap(void)
             sizes[j] = size;
             held[j] = kmalloc(size);
             if (!held[j]) {
-                ok = 0;
-                break;
+                return 0;
             }
             k_memset(held[j], (int)(j + i), size);
         }
         for (j = 0; j < 16; j++) {
             uint32_t k;
 
-            if (!held[j]) {
-                continue;
-            }
             for (k = 0; k < sizes[j]; k++) {
                 if (((uint8_t *)held[j])[k] != (uint8_t)(j + i)) {
-                    ok = 0;
-                    break;
+                    return 0;
                 }
             }
             kfree(held[j]);
         }
     }
-    kheap_stats(&pages1, &bytes1);
-    if (pages1 != pages0 || bytes1 != bytes0) {
-        klog(KLOG_ERR, "selftest", "heap: %d pages and %d bytes held, then %d and %d",
-             (int)pages0, (int)bytes0, (int)pages1, (int)bytes1);
+    return 1;
+}
+
+static int test_heap(void)
+{
+    uint32_t pages0, bytes0, pages1, bytes1;
+    int attempt;
+    int settled = 0;
+    int ok = 1;
+
+    /* `kheap_stats` counts the whole kernel's heap, not this test's share of
+       it, so a driver allocating while the loop runs moves the total and is
+       indistinguishable here from a leak of our own. That is not
+       hypothetical: on the laptop the USB stack is still enumerating the
+       built-in camera and card reader across these milliseconds, and this
+       reported three pages leaked at every boot, while QEMU, with nothing else
+       allocating, passed.
+
+       Repetition separates the two. Each pass takes and gives back the same
+       objects, so a leak of our own moves the total by the same amount every
+       time and no pass is ever clean; another subsystem's allocation is
+       occasional, and a pass that does not overlap one comes back level. Five
+       passes, and the first clean one settles it. */
+    for (attempt = 0; attempt < 5 && ok && !settled; attempt++) {
+        kheap_stats(&pages0, &bytes0);
+        if (!heap_churn()) {
+            ok = 0;
+            break;
+        }
+        kheap_stats(&pages1, &bytes1);
+        if (pages1 == pages0 && bytes1 == bytes0) {
+            settled = 1;
+        } else if (attempt > 0) {
+            klog(KLOG_INFO, "selftest",
+                 "heap: something else took %d pages and %d bytes while this ran; trying again",
+                 (int)(pages1 - pages0), (int)(bytes1 - bytes0));
+        }
+    }
+    if (ok && !settled) {
+        klog(KLOG_ERR, "selftest",
+             "heap: five passes each left the heap higher, last by %d pages and %d bytes, "
+             "so this loop is not giving back what it takes",
+             (int)(pages1 - pages0), (int)(bytes1 - bytes0));
         ok = 0;
     }
     {
@@ -3658,8 +3696,13 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
         for (m = 0; frame_map_entry(mmap, mmap_len, m, &addr, &len, &type); m++) {
             char line[64];
 
+            /* One line per firmware range, which on a laptop is a score of
+               them and is what a person reading a boot has to scroll past to
+               reach anything addressed to them. The summary below says what
+               the machine has; these say where, which is a question only
+               somebody debugging the allocator asks. */
             memory_map_line(line, sizeof(line), addr, len, type);
-            klog(KLOG_INFO, "memory", "map: %s", line);
+            klog(KLOG_DEBUG, "memory", "map: %s", line);
         }
         if (frame_map_build(&map, mmap, mmap_len,
                             (info->flags & MULTIBOOT_INFO_MEMORY) ? info->mem_upper : 0) != 0) {
