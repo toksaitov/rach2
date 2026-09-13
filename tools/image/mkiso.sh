@@ -104,25 +104,25 @@ if [ "$IMAGE" = rach2-metal ]; then
     # it probes the SATA controller and resets its link, and that path has less
     # standing on this board than the rest. A boot that stops there should cost
     # a different menu choice, not a reinstall.
-    METAL_ENTRIES="menuentry \"Rach2 (metal) - with the disk diagnostic\" {
+    METAL_ENTRIES="menuentry \"Start Rach2, and probe the disk controller\" {
     multiboot /boot/kernel $METAL_NET rach2.disk=ahci rach2.diskdiag
     module /boot/rach2-metal.krffs
     boot
 }
 
-menuentry \"Rach2 (metal) - diagnostics, held on screen\" {
+menuentry \"Start Rach2, and hold the diagnostics on screen\" {
     multiboot /boot/kernel $METAL_NET rach2.diag
     module /boot/rach2-metal.krffs
     boot
 }
 
-menuentry \"Rach2 (metal) - address from DHCP\" {
+menuentry \"Start Rach2, and ask the network for an address\" {
     multiboot /boot/kernel rach2.ip=none rach2.netconsole
     module /boot/rach2-metal.krffs
     boot
 }
 
-menuentry \"Rach2 (metal) - no network configuration\" {
+menuentry \"Start Rach2 with no network\" {
     multiboot /boot/kernel
     module /boot/rach2-metal.krffs
     boot
@@ -135,7 +135,7 @@ elif [ "$IMAGE" = rach2-recovery ]; then
     # repairs is behind an AHCI controller on the machine this is for. The
     # default entry repairs nothing: `rach2.fsck`, which makes init run
     # `e2fsck -p` on every ext2 partition first, is the second entry's.
-    METAL_ENTRIES="menuentry \"Rach2 ($IMAGE) - repairs the ext2 partitions first\" {
+    METAL_ENTRIES="menuentry \"Install or repair, and check the disks first\" {
     multiboot /boot/kernel rach2.ip=none rach2.disk=ahci rach2.fsck
     module /boot/$IMAGE.krffs
     boot
@@ -147,18 +147,27 @@ else
     METAL_DEFAULT_ARGS=''
 fi
 
+# The first entry is what a person is here to do, said in those words: the
+# recovery stick is how a machine is installed and repaired, and the others
+# are that system started for their own reasons.
+if [ "$IMAGE" = rach2-recovery ]; then
+    FIRST_TITLE="Install Rach2, or repair a computer"
+else
+    FIRST_TITLE="Start Rach2 ($IMAGE)"
+fi
+
 cat > "$ISODIR/boot/grub/grub.cfg" <<CFG
 set timeout=3
 set default=0
 
-menuentry "Rach2 ($IMAGE)" {
+menuentry "$FIRST_TITLE" {
     multiboot /boot/kernel $METAL_DEFAULT_ARGS
     module /boot/$IMAGE.krffs
     boot
 }
 
 $METAL_ENTRIES
-menuentry "Rach2 ($IMAGE) - rescue (kernel debug shell)" {
+menuentry "Start the kernel debug shell" {
     multiboot /boot/kernel rach2.rescue
     module /boot/$IMAGE.krffs
     boot

@@ -210,7 +210,10 @@ LOG="$DISK.log.fallback"
 boot_watch "rach2 login:"
 grep -aq "stagedone" "$LOG" || fail "the staged menu's entries are not in the menu at all"
 grep -aq "stagedtwo" "$LOG" || fail "the staged menu's second entry is missing"
-grep -aq "Falling back to .Rach2 (fallback kernel)" "$LOG" || \
+# The closing quote is part of the pattern. Without it this matches the
+# static entry too, whose title begins with these same words, and the check
+# would pass whichever of the two GRUB chose.
+grep -aq "Falling back to .Start the backup system'" "$LOG" || \
     fail "the fallback number did not select the stub's own fallback entry"
 
 # The whole list, in order, because every index is a contract and only one of
@@ -223,14 +226,14 @@ grep -aq "Falling back to .Rach2 (fallback kernel)" "$LOG" || \
 SEEN="$(tr '\033' '\n' < "$LOG" | sed -n 's/^\[[0-9][0-9]*;3H//p' |
     sed 's/^[ *]*//; s/[ ]*$//' | grep -a -v '^$' |
     awk '!seen[$0]++')"
-WANT="Rach2
-Rach2 (fallback kernel)
-Rach2 (static address)
-Rach2 (fallback kernel, static address)
-Rach2 (kernel debug shell)
-Rach2 (recovery, not yet built)
-Rach2 (recovery, static address, not yet built)
-Rach2 (recovery, repairs the ext2 partitions, not yet built)
+WANT="Start Rach2
+Start the backup system
+Start Rach2 with a fixed network address
+Start the backup system with a fixed network address
+Start the kernel debug shell
+Repair this computer (not yet built)
+Repair this computer, fixed network address (not yet built)
+Repair this computer, check its disks first (not yet built)
 stagedone
 stagedtwo"
 [ "$SEEN" = "$WANT" ] || \
@@ -281,7 +284,7 @@ cleanup_boot
 
 LOG="$DISK.log.staticfallback"
 boot_watch "rach2 login:"
-grep -aq "Falling back to .Rach2 (fallback kernel, static address)" "$LOG" || \
+grep -aq "Falling back to .Start the backup system with a fixed network address'" "$LOG" || \
     fail "a static-address trial fell back to the ordinary fallback entry"
 
 # The other way a static entry is chosen: not one boot but every boot, which is
@@ -299,7 +302,7 @@ cleanup_boot
 
 LOG="$DISK.log.savedstaticboot"
 boot_watch "rach2 login:"
-grep -aq "Falling back to .Rach2 (fallback kernel, static address)" "$LOG" || \
+grep -aq "Falling back to .Start the backup system with a fixed network address'" "$LOG" || \
     fail "a saved static default did not select the static entries"
 
 LOG="$DISK.log.savedback"

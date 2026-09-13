@@ -240,31 +240,31 @@ load_env
 #   0 candidate   1 fallback   2 candidate-static   3 fallback-static
 #   4 debug       5 recovery   6 recovery-static    7 recovery-fsck
 
-menuentry "Rach2" --id candidate {
+menuentry "Start Rach2" --id candidate {
     search --no-floppy --fs-uuid --set=root RACH2_BOOT_SERIAL
     multiboot /boot/kernel rach2.root=RACH2_CANDIDATE_ROOT rach2.boot=RACH2_BOOT_PART rach2.slot=candidate RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
     boot
 }
 
-menuentry "Rach2 (fallback kernel)" --id fallback {
+menuentry "Start the backup system" --id fallback {
     search --no-floppy --fs-uuid --set=root RACH2_BOOT_SERIAL
     multiboot /boot/fallback rach2.root=RACH2_FALLBACK_ROOT rach2.boot=RACH2_BOOT_PART rach2.slot=fallback RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
     boot
 }
 
-menuentry "Rach2 (static address)" --id candidate-static {
+menuentry "Start Rach2 with a fixed network address" --id candidate-static {
     search --no-floppy --fs-uuid --set=root RACH2_BOOT_SERIAL
     multiboot /boot/kernel rach2.root=RACH2_CANDIDATE_ROOT rach2.boot=RACH2_BOOT_PART rach2.slot=candidate RACH2_APPEND_TOKENS RACH2_STATIC_TOKENS
     boot
 }
 
-menuentry "Rach2 (fallback kernel, static address)" --id fallback-static {
+menuentry "Start the backup system with a fixed network address" --id fallback-static {
     search --no-floppy --fs-uuid --set=root RACH2_BOOT_SERIAL
     multiboot /boot/fallback rach2.root=RACH2_FALLBACK_ROOT rach2.boot=RACH2_BOOT_PART rach2.slot=fallback RACH2_APPEND_TOKENS RACH2_STATIC_TOKENS
     boot
 }
 
-menuentry "Rach2 (kernel debug shell)" --id debug {
+menuentry "Start the kernel debug shell" --id debug {
     search --no-floppy --fs-uuid --set=root RACH2_BOOT_SERIAL
     multiboot /boot/fallback rach2.root=RACH2_FALLBACK_ROOT rach2.boot=RACH2_BOOT_PART rach2.slot=fallback rach2.rescue RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
     boot
@@ -437,13 +437,13 @@ done
 sedq() { printf '%s' "$1" | sed 's/[\\&|]/\\&/g'; }
 # A FAT serial as GRUB's `search --fs-uuid` names it: XXXX-XXXX, upper case.
 fat_uuid() { printf '%s' "$1" | tr 'a-f' 'A-F' | sed 's/^\(....\)\(....\)$/\1-\2/'; }
-RECOVERY_TITLE="Rach2 (recovery, not yet built)"
-RECOVERY_STATIC_TITLE="Rach2 (recovery, static address, not yet built)"
-RECOVERY_FSCK_TITLE="Rach2 (recovery, repairs the ext2 partitions, not yet built)"
+RECOVERY_TITLE="Repair this computer (not yet built)"
+RECOVERY_STATIC_TITLE="Repair this computer, fixed network address (not yet built)"
+RECOVERY_FSCK_TITLE="Repair this computer, check its disks first (not yet built)"
 if [ -n "$RECOVERY_KERNEL" ] && [ -n "$RECOVERY_IMAGE" ]; then
-    RECOVERY_TITLE="Rach2 (recovery, rewrites this disk)"
-    RECOVERY_STATIC_TITLE="Rach2 (recovery, static address)"
-    RECOVERY_FSCK_TITLE="Rach2 (recovery, repairs the ext2 partitions first)"
+    RECOVERY_TITLE="Repair this computer"
+    RECOVERY_STATIC_TITLE="Repair this computer, fixed network address"
+    RECOVERY_FSCK_TITLE="Repair this computer, check its disks first"
 fi
 sed -e "s|RACH2_STATIC_TOKENS|$(sedq "$STATIC_APPEND")|" \
     -e "s|RACH2_DHCP_TOKENS|$(sedq "$DHCP_APPEND")|" \
@@ -469,13 +469,13 @@ search --no-floppy --fs-uuid --set=root RACH2_RECOVERY_SERIAL
 set timeout=3
 set default=0
 
-menuentry "Rach2 (recovery, partition 1 unreadable)" --id recovery {
+menuentry "Repair this computer (its boot partition does not read)" --id recovery {
     multiboot /boot/recovery rach2.root=ram rach2.boot=RACH2_BOOT_PART rach2.slot=recovery RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
     module /boot/recovery.krffs
     boot
 }
 
-menuentry "Rach2 (recovery, partition 1 unreadable, static address)" --id recovery-static {
+menuentry "Repair this computer, fixed address (boot partition does not read)" --id recovery-static {
     multiboot /boot/recovery rach2.root=ram rach2.boot=RACH2_BOOT_PART rach2.slot=recovery RACH2_APPEND_TOKENS RACH2_STATIC_TOKENS
     module /boot/recovery.krffs
     boot
