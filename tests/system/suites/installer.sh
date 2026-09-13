@@ -262,46 +262,46 @@ if "$HARNESS" --bios \
     --timeout 3600 --steptmo 1800 --ok "INSTALLDONE" --log "$LOG3" \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
     "expect=# " "send=rach2-install" \
-    "expect=which disk shall it be written to" "send=" \
-    "expect=nothing was typed" \
-    "expect=which disk shall it be written to" "send=/dev/disk9" \
+    "expect=disk shall Rach2 be written to" "send=" \
+    "expect=Nothing was typed" \
+    "expect=disk shall Rach2 be written to" "send=/dev/disk9" \
     "expect=is not in the list" \
-    "expect=which disk shall it be written to" "send=2" \
+    "expect=disk shall Rach2 be written to" "send=2" \
     "expect=the password for root" "send=$NEWPASS" \
     "expect=again" "send=different" \
-    "expect=those two were different" \
+    "expect=Those two were different" \
     "expect=the password for root" "send=" \
     "expect=again" "send=" \
-    "expect=an empty password will not do" \
+    "expect=An empty password will not do" \
     "expect=the password for root" "send=$NEWPASS" \
     "expect=again" "send=$NEWPASS" \
-    "expect=the name of the first account" "send=ROOT" \
+    "expect=The name of the first account" "send=ROOT" \
     "expect=names are lowercase" \
-    "expect=the name of the first account" "send=root" \
+    "expect=The name of the first account" "send=root" \
     "expect=root is made by this install already" \
-    "expect=the name of the first account" "send=$USERNAME" \
+    "expect=The name of the first account" "send=$USERNAME" \
     "expect=the password for $USERNAME" "send=$USERPASS" \
     "expect=again" "send=$USERPASS" \
-    "expect=authorized keys" "send=/no/such/key" \
+    "expect=uthorized keys" "send=/no/such/key" \
     "expect=is not a file" \
-    "expect=authorized keys" "send=" \
-    "expect=grow the root" "send=no" \
-    "expect=this is what will be done" \
-    "expect=root     left at the size the image has" \
+    "expect=uthorized keys" "send=" \
+    "expect=row the root" "send=no" \
+    "expect=Check this before you go on" \
+    "expect=Root partition: left at the size" \
     "expect=to go on, or stop to stop" "send=yes" \
-    "expect=that is not /dev/disk1" \
+    "expect=That is not /dev/disk1" \
     "expect=to go on, or stop to stop" "send=stop" \
     "expect=nothing was written" \
     "expect=# " "send=rach2-install" \
-    "expect=which disk shall it be written to" "send=/dev/disk1" \
+    "expect=disk shall Rach2 be written to" "send=/dev/disk1" \
     "expect=the password for root" "send=$NEWPASS" \
     "expect=again" "send=$NEWPASS" \
-    "expect=the name of the first account" "send=$USERNAME" \
+    "expect=The name of the first account" "send=$USERNAME" \
     "expect=the password for $USERNAME" "send=$USERPASS" \
     "expect=again" "send=$USERPASS" \
-    "expect=authorized keys" "send=" \
-    "expect=grow the root" "send=" \
-    "expect=this is what will be done" \
+    "expect=uthorized keys" "send=" \
+    "expect=row the root" "send=" \
+    "expect=Check this before you go on" \
     "expect=to go on, or stop to stop" "send=/dev/disk1" \
     "expect=the image on the stick is the one the manifest describes" \
     "expect=what reached the disk is the image" \
@@ -349,14 +349,14 @@ if "$HARNESS" --bios \
     --timeout 3600 --steptmo 1800 --ok "OTHERDONE" --log "$LOG3B" \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
     "expect=# " "send=rach2-install" \
-    "expect=which disk shall it be written to" "send=/dev/disk0" \
+    "expect=disk shall Rach2 be written to" "send=/dev/disk0" \
     "expect=the password for root" "send=$NEWPASS" \
     "expect=again" "send=$NEWPASS" \
-    "expect=the name of the first account" "send=$USERNAME" \
+    "expect=The name of the first account" "send=$USERNAME" \
     "expect=the password for $USERNAME" "send=$USERPASS" \
     "expect=again" "send=$USERPASS" \
-    "expect=authorized keys" "send=/root/.ssh/authorized_keys" \
-    "expect=grow the root" "send=no" \
+    "expect=uthorized keys" "send=/root/.ssh/authorized_keys" \
+    "expect=row the root" "send=no" \
     "expect=to go on, or stop to stop" "send=/dev/disk0" \
     "expect=the image on the stick is the one the manifest describes" \
     "expect=what reached the disk is the image" \
@@ -528,14 +528,14 @@ if "$HARNESS" --bios \
     --timeout 3600 --steptmo 1800 --ok "BADHASHDONE" --log "$LOG7" \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
     "expect=# " "send=rach2-install" \
-    "expect=which disk shall it be written to" "send=/dev/disk0" \
+    "expect=disk shall Rach2 be written to" "send=/dev/disk0" \
     "expect=the password for root" "send=$NEWPASS" \
     "expect=again" "send=$NEWPASS" \
-    "expect=the name of the first account" "send=$USERNAME" \
+    "expect=The name of the first account" "send=$USERNAME" \
     "expect=the password for $USERNAME" "send=$USERPASS" \
     "expect=again" "send=$USERPASS" \
-    "expect=authorized keys" "send=" \
-    "expect=grow the root" "send=no" \
+    "expect=uthorized keys" "send=" \
+    "expect=row the root" "send=no" \
     "expect=to go on, or stop to stop" "send=/dev/disk0" \
     "expect=and the manifest says" \
     "expect=# " "send=echo BADHASH\"\"DONE" \
@@ -1049,14 +1049,14 @@ fi
 # The install, through the product stick, the root grown to the disk's end.
 {
     echo 'send=rach2-install'
-    echo 'expect=which disk shall it be written to'; echo 'send=/dev/disk0'
+    echo 'expect=disk shall Rach2 be written to'; echo 'send=/dev/disk0'
     echo 'expect=the password for root'; echo "send=$NEWPASS"
     echo 'expect=again'; echo "send=$NEWPASS"
-    echo 'expect=the name of the first account'; echo "send=$USERNAME"
+    echo 'expect=The name of the first account'; echo "send=$USERNAME"
     echo "expect=the password for $USERNAME"; echo "send=$USERPASS"
     echo 'expect=again'; echo "send=$USERPASS"
-    echo 'expect=authorized keys'; echo 'send='
-    echo 'expect=grow the root'; echo 'send='
+    echo 'expect=uthorized keys'; echo 'send='
+    echo 'expect=row the root'; echo 'send='
     echo 'expect=to go on, or stop to stop'; echo 'send=/dev/disk0'
     echo 'expect=the image on the stick is the one the manifest describes'
     echo 'expect=what reached the disk is the image'

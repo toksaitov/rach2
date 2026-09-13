@@ -42,6 +42,12 @@ CONFIG_FILES="etc/passwd etc/group etc/shadow etc/rach2/sshd.conf"
 ARCHIVE_NEEDS="etc/passwd etc/group etc/shadow"
 
 say() { echo "$ME: $1"; }
+# Text addressed to the person, with no `rach2-install: ` in front of it. The
+# prefix is for a diagnostic, which says which program is reporting a fault; a
+# question or an explanation is neither. It also costs fifteen columns of an
+# eighty-column screen, and an earlier version of the summary below wrapped
+# because of it and made a mess of the one screen that has to be read.
+tell() { echo "$1"; }
 die() {
     echo "$ME: $1" >&2
     exit 1
@@ -64,7 +70,11 @@ screen_level=""
 quiet_screen() {
     [ -w /dev/screenlog ] || return 0
     screen_level=$(cat /dev/screenlog 2>/dev/null) || screen_level=""
-    echo 3 > /dev/screenlog 2>/dev/null || screen_level=""
+    # 2 is the floor the kernel enforces, so a panic still reaches the screen.
+    # Asking for the floor rather than a middle value matters: by the time the
+    # installer runs, the kernel has usually handed the screen over already and
+    # is quieter than this, and a plain set would make it noisier.
+    echo 2 > /dev/screenlog 2>/dev/null || screen_level=""
 }
 cleanup() {
     [ -n "$screen_level" ] && echo "$screen_level" > /dev/screenlog 2>/dev/null
@@ -84,6 +94,17 @@ trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
 trap 'cleanup; exit 129' HUP
 quiet_screen
+
+greet() {
+    tell "Rach2 installer"
+    tell ""
+    tell "This program puts Rach2 on a disk in this computer."
+    tell "It asks you which disk, and it asks you to make two accounts."
+    tell "It erases everything on the disk you choose."
+    tell "It writes nothing until you type the name of that disk at the end."
+    tell "To stop before then, hold Control and press C."
+    tell ""
+}
 
 source_dir=""
 update_image=""
@@ -509,6 +530,7 @@ if [ -n "$source_dir" ]; then
     [ -f "$source_dir/rach2-install.manifest" ] ||
         die "$source_dir holds no rach2-install.manifest"
 else
+    greet
     say "looking for the image on the removable disks"
     found=$(find_source)
     case "$?" in
@@ -539,15 +561,21 @@ say "the image is $image, $bytes bytes"
 # reason for each, because a person at a machine with two disks in it needs to
 # know which was left out and why.
 
-say "the disks this can be written to:"
+tell "Rach2 can be written to these disks:"
 candidates=""
 skipped=""
 disk_count=0
 for n in $(disk_numbers); do
     sectors=$(disk_field "$n" 5)
     size=$((sectors * 512))
-    what="/dev/disk$n ($(disk_model "$n"), serial $(disk_serial "$n"), $size bytes, \
-$(disk_field "$n" 3), $(identity_field "$n" "$FIXED_OR_NOT"), table $(disk_field "$n" 6))"
+    # Everything this knows about the disk, on three lines rather than one. A
+    # model of forty characters beside a serial of twenty and a size in bytes
+    # made a single line of 132 columns, which an eighty-column screen folds in
+    # the middle of whichever field it reaches first.
+    what="/dev/disk$n, $size bytes"
+    what_model="$(disk_model "$n")"
+    what_more="$(disk_field "$n" 3), $(identity_field "$n" "$FIXED_OR_NOT"), \
+table $(disk_field "$n" 6), serial $(disk_serial "$n")"
     if [ "$n" = "$source_disk" ]; then
         skipped="$skipped\n  /dev/disk$n is the stick this is running from"
         continue
@@ -572,10 +600,12 @@ $(disk_field "$n" 3), $(identity_field "$n" "$FIXED_OR_NOT"), table $(disk_field
     fi
     disk_count=$((disk_count + 1))
     echo "  $disk_count) $what"
+    echo "     $what_model"
+    echo "     $what_more"
     candidates="$candidates $n"
 done
 if [ -n "$skipped" ]; then
-    say "disks it passed over:"
+    tell "These disks were passed over:"
     printf '%b\n' "$skipped" | sed '/^$/d'
 fi
 [ -n "$candidates" ] && [ "$candidates" != " " ] ||
@@ -593,19 +623,19 @@ ask_password() { # ask_password PROMPT
     while :; do
         echo_off=yes
         stty -echo 2>/dev/null
-        printf '%s: %s: ' "$ME" "$1"
+        printf '%s: ' "$1"
         read -r pw1
-        printf '\n%s: %s again: ' "$ME" "$1"
+        printf '\n%s again: ' "$1"
         read -r pw2
         stty echo 2>/dev/null
         echo_off=""
         printf '\n'
         if [ -z "$pw1" ]; then
-            say "an empty password will not do; type one"
+            tell "An empty password will not do. Type one."
             continue
         fi
         if [ "$pw1" != "$pw2" ]; then
-            say "those two were different; type it again"
+            tell "Those two were different. Type it again."
             continue
         fi
         password=$pw1
@@ -650,7 +680,7 @@ name_fault() { # name_fault NAME
 
 target=""
 while :; do
-    printf '%s: which disk shall it be written to? a number above, or its name: ' "$ME"
+    printf 'Which disk shall Rach2 be written to? A number above, or its name: '
     read -r answer
     i=0
     for n in $candidates; do
@@ -661,19 +691,19 @@ while :; do
     done
     [ -n "$target" ] && break
     if [ -z "$answer" ]; then
-        say "nothing was typed; answer 1 to $disk_count, or the disk's name"
+        tell "Nothing was typed. Answer 1 to $disk_count, or the disk's name."
     else
-        say "$answer is not in the list; answer 1 to $disk_count, or the disk's name"
+        tell "$answer is not in the list. Answer 1 to $disk_count, or the disk's name."
     fi
 done
 
 ask_password "the password for root"
 root_password=$password
 while :; do
-    printf '%s: the name of the first account: ' "$ME"
+    printf 'The name of the first account: '
     read -r user_name
     check_name "$user_name" && break
-    say "$(name_fault "$user_name"); try another"
+    tell "$(name_fault "$user_name"). Try another."
 done
 ask_password "the password for $user_name"
 user_password=$password
@@ -694,19 +724,21 @@ for d in "$source_dir" /root /root/.ssh /tmp /; do
     done
 done
 if [ "$key_count" -gt 0 ]; then
-    say "authorized keys found on this machine:"
+    tell "These keys are on this machine:"
     i=0
     for f in $key_choices; do
         i=$((i + 1))
-        say "  $i) $f"
+        tell "  $i) $f"
     done
 fi
 user_keys=""
 while :; do
     if [ "$key_count" -gt 0 ]; then
-        printf '%s: authorized keys for %s: a number above, a path, or nothing: ' "$ME" "$user_name"
+        tell "Authorized keys for $user_name:"
+        printf 'A number above, a path, or nothing: '
     else
-        printf '%s: a file of authorized keys for %s, or nothing: ' "$ME" "$user_name"
+        tell "A file of authorized keys for $user_name:"
+        printf 'A path, or nothing: '
     fi
     read -r user_keys
     [ -z "$user_keys" ] && break
@@ -723,9 +755,9 @@ while :; do
             ;;
     esac
     [ -f "$user_keys" ] && break
-    say "$user_keys is not a file; try again, or nothing for no keys"
+    tell "$user_keys is not a file. Try again, or type nothing for no keys."
 done
-printf '%s: grow the root into the whole disk? [yes] ' "$ME"
+printf 'Grow the root into the whole disk? [yes] '
 read -r grow_answer
 case "$grow_answer" in
     "" | y | yes) grow=yes ;;
@@ -735,34 +767,46 @@ esac
 # Everything that was answered, on one screen, before the one step that cannot
 # be taken back. A person who has answered six questions in a row should not
 # have to remember what they said to know what is about to happen.
-say "this is what will be done:"
-say "  disk     /dev/disk$target"
-say "           $(disk_model "$target"), serial $(disk_serial "$target")"
-say "           $(($(disk_field "$target" 5) * 512)) bytes, $(disk_field "$target" 3), \
-$(identity_field "$target" "$FIXED_OR_NOT"), table $(disk_field "$target" 6)"
-say "  account  $user_name, and root"
+# What was answered, before the one step that cannot be taken back. One fact a
+# line, and no column that a long model name or serial can push past the edge:
+# the screen is eighty columns, a disk identifies itself in as many characters
+# as it likes, and a line that wraps in the middle of a serial number is worse
+# than no line. Nothing here is shortened to fit.
+tell ""
+tell "Check this before you go on."
+tell ""
+tell "Disk to erase: /dev/disk$target"
+tell "  model:  $(disk_model "$target")"
+tell "  serial: $(disk_serial "$target")"
+tell "  size:   $(($(disk_field "$target" 5) * 512)) bytes"
+tell "  bus:    $(disk_field "$target" 3)"
+tell "  now:    $(identity_field "$target" "$FIXED_OR_NOT"), partition table $(disk_field "$target" 6)"
+tell "Accounts to make: root, and $user_name"
 if [ -n "$user_keys" ]; then
-    say "  keys     $user_keys, for $user_name"
+    tell "Keys for $user_name:"
+    tell "  $user_keys"
 else
-    say "  keys     none; both accounts log in with their passwords"
+    tell "Keys for $user_name: none"
+    tell "  Both accounts use their passwords."
 fi
 if [ "$grow" = "yes" ]; then
-    say "  root     grown into the rest of the disk, which takes some minutes"
+    tell "Root partition: grown to fill the disk. This takes some minutes."
 else
-    say "  root     left at the size the image has"
+    tell "Root partition: left at the size the image has"
 fi
-say "everything on /dev/disk$target will be overwritten."
+tell ""
+tell "Everything on /dev/disk$target is erased."
 # A typo here should cost a retype and not the six answers above, so a wrong
 # word asks again; stopping is a word of its own rather than anything that is
 # not the disk's name.
 while :; do
-    printf '%s: type /dev/disk%s to go on, or stop to stop: ' "$ME" "$target"
+    printf 'Type /dev/disk%s to go on, or stop to stop: ' "$target"
     read -r confirm
     [ "$confirm" = "/dev/disk$target" ] && break
     case "$confirm" in
         stop | STOP | Stop | quit | q) die "nothing was written" ;;
     esac
-    say "that is not /dev/disk$target"
+    tell "That is not /dev/disk$target."
 done
 
 # The generation the answer was given about. A disk that goes and comes back
