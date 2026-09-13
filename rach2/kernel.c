@@ -752,17 +752,36 @@ static bool test_timer(void)
  * measured between 180 and 280 ms, and nine of them would have failed a band
  * of ten percent. Wider than the measurement by a quarter at each end, and no
  * wider: a delay off by half or double is what a bring-up sequence would
- * notice, and it still fails here.
+ * notice, and it still fails here. Twenty machines at once reached 390 ms on
+ * 2026-09-13 and failed a whole set for the host's load, which is why the
+ * reading is the shortest of a few waits rather than one.
  */
 static bool test_udelay(uint32_t *measured_ms)
 {
-    uint32_t start = kernel_ticks;
-    uint32_t elapsed;
+    uint32_t best = 0xFFFFFFFFu;
+    int attempt;
 
-    k_udelay(200000);
-    elapsed = kernel_ticks - start;
-    *measured_ms = elapsed * 10;
-    return elapsed >= 15 && elapsed <= 35;
+    /* The shortest of a few waits is the reading, which is what the clock
+     * test beside this one does and for the same reason: a host with more
+     * machines on it than processors stops this one part way through a wait,
+     * and the ticks it was not running for are delivered afterwards, so the
+     * wait is counted long. Nothing can make a wait read short. One wait in
+     * the band ends this, so an unloaded boot pays for one. */
+    for (attempt = 0; attempt < 5; attempt++) {
+        uint32_t start = kernel_ticks;
+        uint32_t elapsed;
+
+        k_udelay(200000);
+        elapsed = kernel_ticks - start;
+        if (elapsed < best) {
+            best = elapsed;
+        }
+        if (best >= 15 && best <= 35) {
+            break;
+        }
+    }
+    *measured_ms = best * 10;
+    return best >= 15 && best <= 35;
 }
 
 /**

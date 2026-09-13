@@ -498,3 +498,32 @@ It also corrected two of my premises. Registering `32 + irq` does not itself
 make a line level-triggered; that comes from the firmware's routing, which the
 emulator keeps. And the e1000's read-to-clear does not take a cause that races
 the read: the card keeps it, and the handler's loop is what makes that safe.
+
+The runner, which is what the owner has complained of most in this milestone.
+Four things in this close cost an hour each and none of them was the system
+under test: a set voided by an edit made under it, a set refused because the
+host was busy for a minute, a suite failed for a machine that was still
+leaving, and a boot's own delay test failed because twenty emulators at once
+stretched what it measured. Each is now dealt with where it happens.
+
+* The scripts are hashed every two seconds while a pool runs, so a source
+  changed under a set stops it there and names the file, instead of the set
+  running its full hour and being voided at the end.
+* A machine in a suite's ledger is asked for up to five seconds before it is
+  called one left behind. A machine told to stop flushes what it was given
+  first; asking once, the instant the suite returns, failed `mount` with every
+  one of its rows passed.
+* A calibration past the envelope is measured once more, after a minute,
+  before the set is refused. A factor given by hand is never re-measured.
+* The boot's `udelay` test takes the shortest of up to five waits rather than
+  one. Nothing can make a wait read short, and a host that stops the machine
+  part way through one makes it read long: at width twenty it read 390 ms
+  against a band of 150 to 350 and failed a whole set. The clock test beside it
+  has always done this; now both do. An unloaded boot still pays for one wait.
+
+The first three are proved in the runner's own suite, which had no row for any
+of them: a suite whose machine is still leaving must pass, a set whose source
+changes must stop there, and a rate past the envelope must be measured twice
+and then refused. Each row was run against its change reverted and each failed.
+The fourth is judged by the readings themselves: 190 ms on a quiet host and
+240 ms under ten spinners, where one wait had read 390 ms in the set.
