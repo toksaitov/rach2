@@ -210,10 +210,9 @@ LOG="$DISK.log.fallback"
 boot_watch "rach2 login:"
 grep -aq "stagedone" "$LOG" || fail "the staged menu's entries are not in the menu at all"
 grep -aq "stagedtwo" "$LOG" || fail "the staged menu's second entry is missing"
-# The closing quote is part of the pattern. Without it this matches the
-# static entry too, whose title begins with these same words, and the check
-# would pass whichever of the two GRUB chose.
-grep -aq "Falling back to .Start the backup system'" "$LOG" || \
+# The closing quote is part of the pattern, so a title that begins with these
+# same words cannot satisfy it.
+grep -aq "Falling back to .Start Rach2 with the previous kernel'" "$LOG" || \
     fail "the fallback number did not select the stub's own fallback entry"
 
 # The whole list, in order, because every index is a contract and only one of
@@ -227,17 +226,12 @@ SEEN="$(tr '\033' '\n' < "$LOG" | sed -n 's/^\[[0-9][0-9]*;3H//p' |
     sed 's/^[ *]*//; s/[ ]*$//' | grep -a -v '^$' |
     awk '!seen[$0]++')"
 WANT="Start Rach2
-Start the backup system
-Start Rach2 with a fixed network address
-Start the backup system with a fixed network address
-Start the kernel debug shell
-Repair this computer (not yet built)
-Repair this computer, fixed network address (not yet built)
-Repair this computer, check its disks first (not yet built)
+Start Rach2 with the previous kernel
+Start the Rach2 recovery system (not yet built)
 stagedone
 stagedtwo"
 [ "$SEEN" = "$WANT" ] || \
-    fail "the eight stub entries are not in the order their numbers assume, or the staged two are not after them"
+    fail "the three stub entries are not in the order their numbers assume, or the staged two are not after them"
 if grep -a "Falling back to" "$LOG" | grep -aq "staged"; then
     fail "the fallback number selected a staged entry, so the stub's entries no longer hold the low indices"
 fi
@@ -266,54 +260,12 @@ if grep -a "Falling back to" "$LOG" | grep -aq "staged"; then
     fail "a truncated menu still reached one of its own entries"
 fi
 
-# A trial of the static-address candidate must fall back to the static-address
-# fallback, entry 3, and not to the ordinary one. The two carry different
-# command lines on a machine whose network has no DHCP server, which is the only
-# reason the static entries exist, so falling back to entry 1 there is a machine
-# that boots and cannot be reached. The candidate is still corrupt from above,
-# so arming the trial is enough to reach the fallback.
-LOG="$DISK.log.armstatic"
-: > "$STEPS"
-step "rach2 login:" 1 "root"
-step "Password:" 1 "$ROOTPASSWORD"
-step "Password:" 1 "bootctl trial candidate-static > /dev/null && echo ARMED\"\"OK"
-step "ARMEDOK" 1 "poweroff -f"
-boot_feed
-wait_count "ARMEDOK" 1 "$(scaled 600)" || fail "the static trial was never armed"
-cleanup_boot
-
-LOG="$DISK.log.staticfallback"
-boot_watch "rach2 login:"
-grep -aq "Falling back to .Start the backup system with a fixed network address'" "$LOG" || \
-    fail "a static-address trial fell back to the ordinary fallback entry"
-
-# The other way a static entry is chosen: not one boot but every boot, which is
-# a machine left on a network with no DHCP server. The saved default has to
-# name it, and its fallback has to be the static one for the same reason.
-LOG="$DISK.log.savestatic"
-: > "$STEPS"
-step "rach2 login:" 1 "root"
-step "Password:" 1 "$ROOTPASSWORD"
-step "Password:" 1 "bootctl env saved_entry candidate-static > /dev/null && echo SAVED\"\"OK"
-step "SAVEDOK" 1 "poweroff -f"
-boot_feed
-wait_count "SAVEDOK" 1 "$(scaled 600)" || fail "the static default was never saved"
-cleanup_boot
-
-LOG="$DISK.log.savedstaticboot"
-boot_watch "rach2 login:"
-grep -aq "Falling back to .Start the backup system with a fixed network address'" "$LOG" || \
-    fail "a saved static default did not select the static entries"
-
-LOG="$DISK.log.savedback"
-: > "$STEPS"
-step "rach2 login:" 1 "root"
-step "Password:" 1 "$ROOTPASSWORD"
-step "Password:" 1 "bootctl env saved_entry candidate > /dev/null && echo BACK\"\"OK"
-step "BACKOK" 1 "poweroff -f"
-boot_feed
-wait_count "BACKOK" 1 "$(scaled 600)" || fail "the saved default was never put back"
-cleanup_boot
+# The static-address entries were removed on 2026-09-14 and the two sections
+# that were here went with them: a trial of the static candidate falling back to
+# the static fallback, and a machine left on the static default selecting them
+# every boot. A fixed address is a property of where a machine lives and is now
+# configuration rather than a pair of boot choices, so there is no second pair
+# to fall between and `set fallback=3` is gone with them.
 
 # The slot's extent, read back after all of it: bootctl overwrote bytes in place
 # instead of rewriting a file, so the chain found when the volume opened is the
@@ -336,5 +288,5 @@ if [ -z "$SLOTA" ] || [ "$SLOTA" != "$SLOTB" ]; then
     fail "the menu slot's extent changed across a staged write: [$SLOTA] then [$SLOTB]"
 fi
 
-echo "menu-test: a staged menu's entries reached the menu, the fallback number still named the stub's own entry, a static trial and a saved static default both fell back to the static fallback, a truncated menu left the machine booting, and the slot never moved: OK"
+echo "menu-test: a staged menu's entries reached the menu, the fallback number still named the stub's own entry, a truncated menu left the machine booting, and the slot never moved: OK"
 echo "menu-test: PASS"

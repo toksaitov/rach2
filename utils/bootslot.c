@@ -855,8 +855,7 @@ int bootslot_commit(struct bootslot *bs, char *err, size_t errlen)
     int consumed = 0;
 
     /* Three trial states live in the block. A line with a value
-       (next_entry=candidate, or candidate-static on the machine running from
-       the fixed-address pair) means an install happened after this machine
+       (next_entry=candidate) means an install happened after this machine
        booted, so the slot no longer has the running kernel. The empty line
        (next_entry=, the value GRUB's scripted consumption saves) means the
        running candidate came through a trial boot; only that state may commit.

@@ -44,7 +44,8 @@ struct bootslot_file {
     uint32_t chain[BOOTSLOT_MAX_FILE_CLUSTERS];
 };
 
-/* The longest menu id the install writes: `candidate-static` and its NUL. */
+/* Room for the longest menu id an install writes, `candidate`, and its NUL,
+   with the margin a longer id would need; the block's keys are short. */
 #define BOOTSLOT_ENTRY_MAX 24
 
 /** The opened volume: validated geometry, one FAT, the four files. */

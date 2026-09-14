@@ -730,38 +730,11 @@ int main(void)
     CHECK(bootslot_install(&bs, kernel, 60 * 512, err, sizeof(err)) == -1,
           "a torn env write fails the install");
 
-    /* The fixed-address pair. A machine whose network has no DHCP server runs
-       from the two menu entries that carry an address, and an install or a
-       commit must keep it there: writing the other pair's ids would move it, on
-       the next boot, to entries that ask for a lease nobody answers. */
-    load("");
-    CHECK(bootslot_open(&bs, &IO, err, sizeof(err)) == 0, "reopen for the static pair");
-    bootslot_use_static_entries(&bs, 1);
-    make_kernel(kernel, 5000);
-    CHECK(bootslot_install(&bs, kernel, 5000, err, sizeof(err)) == 0,
-          "an install runs in the fixed-address pair");
-    CHECK(env_has("saved_entry=fallback-static\n"),
-          "the saved default is the fixed-address fallback");
-    CHECK(env_has("next_entry=candidate-static\n"), "the trial arms the fixed-address candidate");
-    CHECK(!env_has("saved_entry=fallback\n"), "and not the other pair's fallback");
-    CHECK(bootslot_commit(&bs, err, sizeof(err)) == -1,
-          "a commit with that trial still armed is refused, as the other pair's is");
-    CHECK(bootslot_env_set(&bs, "next_entry", "", err, sizeof(err)) == 0,
-          "the trial boot consumes the key");
-    CHECK(bootslot_commit(&bs, err, sizeof(err)) == 0,
-          "and the commit then runs in the fixed-address pair");
-    CHECK(env_has("saved_entry=candidate-static\n"),
-          "the commit saves the fixed-address candidate");
-    CHECK(!env_has("saved_entry=candidate\n"), "and not the other pair's candidate");
-
-    /* The same machine told it is running from the ordinary pair writes the
-       ordinary ids, which is what says the flag is what decides. */
-    load("");
-    CHECK(bootslot_open(&bs, &IO, err, sizeof(err)) == 0, "reopen for the ordinary pair");
-    bootslot_use_static_entries(&bs, 0);
-    CHECK(bootslot_install(&bs, kernel, 5000, err, sizeof(err)) == 0, "an install runs");
-    CHECK(env_has("next_entry=candidate\n"), "the ordinary candidate is armed");
-    CHECK(!env_has("next_entry=candidate-static\n"), "and not the fixed-address one");
+    /* Two pairs of kernel entries, one of them carrying a fixed address, were
+       checked here until 2026-09-14, with the flag that chose between them.
+       The menu has one pair now, so there is no choice to make and no flag:
+       an install writes `candidate` and `fallback` whatever the boot line
+       says, which every row above already requires. */
 
     if (fails) {
         fprintf(stderr, "bootctl_hosttest: %d failure(s)\n", fails);

@@ -366,24 +366,21 @@ static const char *const ENV_KEYS[] = {"saved_entry", "next_entry"};
 /* The menu ids `trial` may arm. Every one of these is an entry the stub both
  * defines and consumes a trial for; a value the stub does not consume would
  * stay in the block forever, arming nothing and blocking every later commit.
- * The three recovery ids are here now that partition 3 has the kernel and the
- * RAM image they name: arming one is how a machine that still boots is sent to
- * the image that can rewrite its root, which is the only way in when the root
- * is damaged but the machine is not yet stopped; `recovery-fsck` is the one
- * whose init runs `e2fsck -p` on every ext2 partition first. A disk built
- * without those files still defines the entries, and arming one there costs
- * a boot that falls back, not a machine that will not start. */
+ * `recovery` is here now that partition 3 has the kernel and the RAM image it
+ * names: arming it is how a machine that still boots is sent to the image that
+ * can rewrite its root, which is the only way in when the root is damaged but
+ * the machine is not yet stopped. A disk built without those files still
+ * defines the entry, and arming it there costs a boot that falls back, not a
+ * machine that will not start. */
 static const char *const ENTRY_IDS[] = {"candidate", "fallback", "recovery"};
 
-/* What `saved_entry` may hold, which is not quite the same set. The stub reads
- * the saved default for the four kernel entries and for the two recovery ones,
- * because a repair is not one boot: rewriting a root takes minutes, and a
- * machine that lost power in the middle of one has to come back to the image
- * that was doing the rewriting, not to a kernel that cannot mount what
- * is there. Two entries are a boot and never a default. `debug`: leaving a
- * machine saved into the kernel shell would leave it with no init and
- * no way in. `recovery-fsck`: a repair is one boot, and a machine saved
- * into it would repair its partitions at every start. */
+/* What `saved_entry` may hold, which is the same set. The stub reads the saved
+ * default for the two kernel entries and for recovery, because a repair is not
+ * one boot: rewriting a root takes minutes, and a machine that lost power in
+ * the middle of one has to come back to the image that was doing the
+ * rewriting, not to a kernel that cannot mount what is there. The kernel debug
+ * shell is not in either list: it is reached by adding `rach2.rescue` to a boot
+ * line, and a machine saved into it would have no init and no way in. */
 static const char *const SAVED_IDS[] = {"candidate", "fallback", "recovery"};
 #define ENTRY_ID_COUNT ((int)(sizeof(ENTRY_IDS) / sizeof(ENTRY_IDS[0])))
 #define SAVED_ID_COUNT ((int)(sizeof(SAVED_IDS) / sizeof(SAVED_IDS[0])))

@@ -75,7 +75,7 @@ ask_device() { # ask_device PROMPT
 # ---- the steps ----
 
 check_volume() {
-    ask_device "which partition shall be checked, for example /dev/disk0p4" || return 0
+    ask_device "which partition shall be checked, for example /dev/disk0p3" || return 0
     say "checking $device without writing to it"
     if e2fsck -f -n "$device"; then
         say "$device: the file system is clean"

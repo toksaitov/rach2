@@ -248,8 +248,7 @@ load_env
 # missing, truncated mid-write or wrong leaves these standing and the machine
 # still boots.
 #
-#   0 candidate   1 fallback   2 candidate-static   3 fallback-static
-#   4 debug       5 recovery   6 recovery-static    7 recovery-fsck
+#   0 candidate   1 fallback   2 recovery
 
 menuentry "Start Rach2" --id candidate {
     search --no-floppy --fs-uuid --set=root RACH2_BOOT_SERIAL
@@ -283,14 +282,14 @@ menuentry "RACH2_RECOVERY_TITLE" --id recovery {
 }
 
 
-# Recovery with the repair: `rach2.fsck` makes its init run `e2fsck -p` on
-# every ext2 partition before anything else starts. The two entries above
-# have no `rach2.fsck` on their lines, so a recovery booted to look at a
-# disk, or to write one, changes nothing a person did not ask for; this one
-# is chosen for the repair. `bootctl trial recovery-fsck` arms it for one
-# boot, which is how a root that mounted read-only is repaired from the
-# running system; it is never a saved default, since a repair is one boot
-# and a machine left saved into it would repair at every start.
+# Recovery changes nothing a person did not ask for: its line carries no
+# `rach2.fsck`, so nothing is checked or repaired by the act of booting it.
+# `e2fsck` is there, and a person who came to repair a root runs it. A second
+# recovery entry that ran the check at boot was removed on 2026-09-14, with the
+# two entries that carried a fixed address: a menu of eight entries asked a
+# person at a broken machine to choose between things only its author could
+# tell apart. `bootctl trial recovery` arms recovery for one boot, which is how
+# a machine that still starts is sent to the image that can rewrite its root.
 
 # The rewritable half. `configfile` would open a new environment context, show
 # its own menu on the spot and never come back here; `source` merges into this
@@ -374,12 +373,8 @@ sedq() { printf '%s' "$1" | sed 's/[\\&|]/\\&/g'; }
 # A FAT serial as GRUB's `search --fs-uuid` names it: XXXX-XXXX, upper case.
 fat_uuid() { printf '%s' "$1" | tr 'a-f' 'A-F' | sed 's/^\(....\)\(....\)$/\1-\2/'; }
 RECOVERY_TITLE="Start the Rach2 recovery system (not yet built)"
-RECOVERY_STATIC_TITLE="Repair this computer, fixed network address (not yet built)"
-RECOVERY_FSCK_TITLE="Repair this computer, check its disks first (not yet built)"
 if [ -n "$RECOVERY_KERNEL" ] && [ -n "$RECOVERY_IMAGE" ]; then
     RECOVERY_TITLE="Start the Rach2 recovery system"
-    RECOVERY_STATIC_TITLE="Repair this computer, fixed network address"
-    RECOVERY_FSCK_TITLE="Repair this computer, check its disks first"
 fi
 sed -e "s|RACH2_STATIC_TOKENS|$(sedq "$STATIC_APPEND")|" \
     -e "s|RACH2_DHCP_TOKENS|$(sedq "$DHCP_APPEND")|" \
@@ -388,8 +383,6 @@ sed -e "s|RACH2_STATIC_TOKENS|$(sedq "$STATIC_APPEND")|" \
     -e "s|RACH2_BOOT_PART|MBRID=$MBR_ID,1|" \
     -e "s|RACH2_BOOT_SERIAL|$(fat_uuid $FAT_SERIAL)|" \
     -e "s|RACH2_RECOVERY_SERIAL|$(fat_uuid $RECOVERY_SERIAL)|" \
-    -e "s|RACH2_RECOVERY_STATIC_TITLE|$(sedq "$RECOVERY_STATIC_TITLE")|" \
-    -e "s|RACH2_RECOVERY_FSCK_TITLE|$(sedq "$RECOVERY_FSCK_TITLE")|" \
     -e "s|RACH2_RECOVERY_TITLE|$(sedq "$RECOVERY_TITLE")|" \
     -e "s|RACH2_APPEND_TOKENS|$(sedq "$EXTRA_APPEND")|" \
     "$GRUB_CFG" > "$GRUB_CFG.new"

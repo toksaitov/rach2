@@ -432,15 +432,13 @@ esac
 # is healthy, so nothing falls through to partition 3, and the ordinary kernel
 # cannot mount what is half written. So recovery can be the saved default too,
 # and this leaves it there before stopping the machine the way a power cut
-# would. The default to put back afterwards is whatever this machine had, which
-# is not always `candidate`: one on a network with no DHCP server runs from the
-# fixed-address entries, and restoring the wrong one would boot a kernel that
-# asks for a lease nobody answers. So it is read first, the way the instructions
-# say to.
+# would. The default to put back afterwards is whatever this machine had, so it
+# is read first, the way the instructions say to, and not assumed to be
+# `candidate`.
 machine 'bootctl env saved_entry candidate' > /dev/null 2>&1 || true
 PREV="$(machine 'bootctl env saved_entry' | sed -n 's/^bootctl: saved_entry: //p' | tr -d '\r')"
 case "$PREV" in
-    candidate|fallback|candidate-static|fallback-static) ;;
+    candidate|fallback) ;;
     *) fail "the saved default could not be read back before the repair: '$PREV'" ;;
 esac
 OUT="$(machine 'bootctl env saved_entry recovery && bootctl env saved_entry' || true)"
@@ -501,24 +499,20 @@ mv "$WORK.save" "$WORK"
 # so if that network has no DHCP server there is no entry to select and no
 # operator to select it. The image waits for a lease and takes the fixed address
 # when none arrives; this is that path, on a hub port with nothing else on it.
-# What that machine then installs has to be armed in the entries that carry the
-# fixed address, or the reboot comes back with none. Its command line asked for
-# a lease, so the address it is running on is the only thing that says which
-# pair it is on, and the image records that where `bootctl` reads it. The client
-# that did not get a lease has to be gone as well: one that answered later would
-# replace the address while the record went on naming it.
+# The address is what a person beside the machine connects to, so it has to be
+# the one written down. The client that did not get a lease has to be gone as
+# well: one that answered later would replace the address under a session
+# already using it.
 if ! "$REPO/build/tests/system/harness" --kernel "$REPO/build/rach2-recovery/kernel" \
-        --initrd "$REPO/build/images/rach2-recovery.krffs" --qemu-arg=-cpu --qemu-arg=max \
+        --initrd "$RECOVERY" --qemu-arg=-cpu --qemu-arg=max \
         --drive "file=$WORK,format=raw,if=ide,index=0,media=disk" \
         --net "hubport,id=net0,hubid=1" \
         --append "rach2.root=ram rach2.slot=recovery rach2.ip=none" \
-        --timeout 300 --steptmo 120 --ok "the fixed-address entries" \
-        "expect=rach2 login:" wait=45 "send=root" "expect=Password:" \
-        "send=$ROOTPASSWORD" "expect=# " \
+        --timeout 300 --steptmo 120 --ok "NOCLIENT" \
+        "expect=recovery image" "expect=# " wait=45 \
         "send=ifconfig eth0 | grep -q 'addr:192.168.0.105' && ! pidof udhcpc > /dev/null && echo NO\"\"CLIENT" \
-        "expect=NOCLIENT" "send=bootctl status | grep booted" \
-        "expect=the fixed-address entries" wait=3 > /dev/null 2>&1; then
-    fail "recovery on a network with no server did not take the fixed address, stop the client, and say so"
+        "expect=NOCLIENT" wait=3 > /dev/null 2>&1; then
+    fail "recovery on a network with no server did not take the fixed address and stop the client"
 fi
 
 # And the case partition 1 cannot answer at all. The stub, the menu and every

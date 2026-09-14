@@ -548,20 +548,27 @@ cold_watch dirty "rach2 login:"
 grep -aq "ext2: check: clean" "$LOG" || fail "the dirty root was not checked clean"
 cleanup_boot
 landed_in_recovery after-dirty dirty
-# The repair and the return: the recovery entry whose command line includes
-# `rach2.fsck` is armed, its init checks every ext2 partition, and the
-# candidate, tried once more, comes up clean and is committed, which is the
-# state the run continues in.
+# The repair and the return: recovery is armed, the check is run there by hand,
+# and the candidate, tried once more, comes up clean and is committed, which is
+# the state the run continues in.
+#
+# A second recovery entry whose command line carried `rach2.fsck` did this at
+# boot until 2026-09-14. It is gone: `e2fsck` is a program, a person in
+# recovery runs it, and a boot menu is the wrong place to ask a question the
+# repair tool asks better.
 cold_boot arm-recovery
-OUT="$(machine 'bootctl trial recovery-fsck && bootctl status' || true)"
+OUT="$(machine 'bootctl trial recovery && bootctl status' || true)"
 case "$OUT" in
-    *"next_entry: recovery-fsck"*) ;;
+    *"next_entry: recovery"*) ;;
     *) fail "recovery could not be armed for the repair: $OUT" ;;
 esac
 stop_machine
 cold_boot repair
-grep -aq "init: e2fsck: /dev/disk0p3: status [01]" "$LOG" || \
-    fail "recovery's init did not check the ext2 root"
+OUT="$(machine 'e2fsck -y /dev/disk0p3; echo FSCK""=$?' || true)"
+case "$OUT" in
+    *FSCK=0*|*FSCK=1*) ;;
+    *) fail "the check of the ext2 root did not repair it: $OUT" ;;
+esac
 OUT="$(machine 'bootctl trial candidate && bootctl status' || true)"
 case "$OUT" in
     *"next_entry: candidate"*) ;;
