@@ -143,14 +143,49 @@ drive_login root secret 20; rc=$?
 check "a machine ready at once logs in" 0 "$rc"
 stop
 
-# A machine that never becomes ready fails the step within its bound.
+# A missing prompt fails the real console exchange.
 boot 60
-t0=$(date +%s)
 drive_expect 'login:' 3 2>/dev/null; rc=$?
-took=$(( $(date +%s) - t0 ))
 check "a prompt that never comes fails the step" 1 "$rc"
-check "within its bound" 1 "$([ "$took" -ge 3 ] && [ "$took" -le 5 ] && echo 1 || echo 0)"
 stop
+
+# Check the deadline independently of host scheduling. The clock reaches
+# the deadline exactly, then overshoots it in a separate run. A further
+# poll exits with 99, so a missing deadline check cannot hang this fixture.
+# The wall clock was judged here until 2026-09-15, which required the host to
+# schedule this shell within two seconds of the deadline: forty machines on
+# one host do not, and no wider window would have been safe either.
+for clock_end in 3 9; do
+    : > "$WORK/missing.log"
+    printf '0\n' > "$WORK/wait.clock"
+    (
+        DRIVE_LOG="$WORK/missing.log"
+        DRIVE_POS=0
+
+        # Supply the clock read by the driver's deadline checks.
+        # shellcheck disable=SC2329
+        drive_now() {
+            cat "$WORK/wait.clock"
+        }
+
+        # Advance time when the driver asks for its next poll.
+        # shellcheck disable=SC2329
+        sleep() {
+            read -r clock_tick < "$WORK/wait.clock"
+            case "$clock_tick" in
+                0) clock_tick=1 ;;
+                1) clock_tick=2 ;;
+                2) clock_tick=$clock_end ;;
+                *) exit 99 ;;
+            esac
+            printf '%s\n' "$clock_tick" > "$WORK/wait.clock"
+        }
+
+        drive_expect 'login:' 3 2>/dev/null
+    ); rc=$?
+    check "the wait expires at clock value $clock_end" \
+        "1:$clock_end" "$rc:$(cat "$WORK/wait.clock")"
+done
 
 # A token the machine printed before the step began does not satisfy it: the
 # console prints MARKER once at its start, and the search begins after the
