@@ -13,6 +13,7 @@
 # build.
 #
 set -u
+unset RACH2_TIMEOUT_FACTOR RACH2_IDLE_TIMEOUT RACH2_STOP_ON_FAIL
 
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/rach2-selftest.XXXXXX")
@@ -34,33 +35,27 @@ check() {
     else
         echo "  FAIL: $1: expected [$2], got [$3]"
         fails=$((fails + 1))
+        printf '%s\n' "${out:-}" | tail -30
     fi
 }
 
 # A tree the runner can drive: its own registry, its own suite targets, and a
 # `prepare-all` that does nothing.
-mkdir -p "$WORK/tests/system" "$WORK/tools/setup"
+mkdir -p "$WORK/tests/system/runner" "$WORK/tools/setup"
 cp "$REPO/tests/run" "$WORK/tests/run"
+cp "$REPO/tests/system/runner/runutil.c" "$WORK/tests/system/runner/runutil.c"
+cc -O2 -Wall -Wextra -o "$WORK/runutil" "$REPO/tests/system/runner/runutil.c" || exit 1
+SELFTEST_UTIL=$WORK/runutil
+now() { "$SELFTEST_UTIL" now; }
+sleep() { "$SELFTEST_UTIL" sleep "$1"; }
 cp "$REPO/tests/system/deadline.sh" "$WORK/tests/system/deadline.sh"
 cp "$REPO/tools/setup/hostcheck.c" "$WORK/tools/setup/hostcheck.c"
-# The calibration, as a fixture: the numbers a set's calibration would
-# measure are read from two files, so a row chooses the factor a set gets.
+# Calibration must never be invoked, even when the host would measure slowly.
 cat > "$WORK/tests/system/calibrate.sh" <<'CAL'
 #!/bin/sh
-# `calib.fitat` holds a compute time and the widest pool it is reported at:
-# wider than that, the slow time in `calib.compute` is reported instead. It is
-# how a row makes a host that is too slow for the width it was given.
-root="$(dirname "$0")/../.."
-echo "calibrated at width $1" >> "$root/calibrations.log"
-compute=$(cat "$root/calib.compute")
-if [ -f "$root/calib.fitat" ]; then
-    set -- "$1" $(cat "$root/calib.fitat")
-    [ "$1" -le "$3" ] && compute=$2
-fi
-echo "compute=$compute storage=$(cat "$root/calib.storage") width=$1"
+echo called >> "$(dirname "$0")/../../calibrations.log"
+exit 1
 CAL
-echo 0.5 > "$WORK/calib.compute"
-echo 0.5 > "$WORK/calib.storage"
 cat > "$WORK/tests/registry" <<'REG'
 # name|tools|tier
 passing|-|core
@@ -81,6 +76,14 @@ rewriter|-|full
 slowtoken|-|full
 notoken|-|full
 install|-|full
+silent|-|full
+consolebusy|-|full
+outputbusy|-|full
+consolestuck|-|full
+style|-|full
+usb|-|full
+reporting|-|full
+killed|-|full
 REG
 # A script the runner hashes, so a suite that edits one can be tried.
 mkdir -p "$WORK/tests/system"
@@ -92,6 +95,22 @@ prepare-all: product
 	@echo prepared >> order.log; echo $$PPID >> prepared.count
 product:
 	@echo built >> product.count; sleep 0.3; touch product
+run-silent:
+	@echo suite-last-line; sleep 30
+run-outputbusy:
+	@i=0; while [ $$i -lt 6 ]; do echo suite-progress; sleep 1; i=$$((i+1)); done
+run-consolebusy:
+	@qemu-system-i386 --selftest-busy > console.log 2>&1
+run-consolestuck:
+	@qemu-system-i386 --selftest-stuck > console.log 2>&1
+run-reporting:
+	@i=0; while [ $$i -lt 63 ]; do echo reporting-progress; sleep 1; i=$$((i+1)); done
+run-killed:
+	@rm -f kill-ready; qemu-system-i386 --selftest-killed & p=$$!; \
+	 i=0; while [ ! -s kill-ready ] && [ $$i -lt 100 ]; do sleep 0.1; i=$$((i+1)); done; \
+	 kill -KILL $$p; wait $$p 2>/dev/null || :
+run-style: run-silent
+run-usb: run-silent
 run-passing:
 	@echo "passing ran"; echo passing >> order.log; echo $$PPID >> ran.pid
 run-failing:
@@ -107,9 +126,9 @@ run-needy:
 run-imagey:
 	@echo "imagey ran"
 run-slow1:
-	@sleep 2; touch slow1.done
+	@echo slow1-start >> events; sleep 2; echo slow1-end >> events; touch slow1.done
 run-slow2:
-	@sleep 2
+	@echo slow2-start >> events; sleep 2; echo slow2-end >> events
 run-stuck:
 	@sh -c 'trap "" TERM; sleep 60 & echo $$! > stuck.pid; wait'
 run-editing:
@@ -121,7 +140,7 @@ run-needsprod1: product
 run-needsprod2: product
 	@echo "needsprod2 ran"; [ -f product ] && echo needsprod2 >> after-product
 run-escaper:
-	@perl -e 'setpgrp(0, 0); exec "sh", "-c", "trap \"\" TERM; sleep 60 & echo \$$! > escaper.pid; wait"'
+	@"$$RACH2_RUN_UTIL" group sh -c 'trap "" TERM; sleep 60 & echo $$! > escaper.pid; wait'
 build/thing:
 	@mkdir -p build; echo thing > build/thing
 run-rewriter: build/thing
@@ -143,13 +162,15 @@ mkdir -p "$WORK/bin"
 cat > "$WORK/bin/slowtoken.sh" <<'SLOW'
 #!/bin/sh
 . tests/system/deadline.sh
+now() { "$RACH2_RUN_UTIL" now; }
+sleep() { "$RACH2_RUN_UTIL" sleep "$1"; }
 echo "slowtoken started" >> entered.log
 bound=$(scaled 2)
 rm -f token; (sleep 4; : > token) &
-start=$(date +%s)
+start=$(now)
 while :; do
-    [ -f token ] && [ $(( $(date +%s) - start )) -le "$bound" ] && { echo "slowtoken ran, bound $bound"; exit 0; }
-    [ $(( $(date +%s) - start )) -ge "$bound" ] && break
+    [ -f token ] && [ $(( $(now) - start )) -le "$bound" ] && { echo "slowtoken ran, bound $bound"; exit 0; }
+    [ $(( $(now) - start )) -ge "$bound" ] && break
     sleep 0.2
 done
 echo "slowtoken: no token within $bound s"; exit 1
@@ -157,12 +178,14 @@ SLOW
 cat > "$WORK/bin/notoken.sh" <<'NONE'
 #!/bin/sh
 . tests/system/deadline.sh
+now() { "$RACH2_RUN_UTIL" now; }
+sleep() { "$RACH2_RUN_UTIL" sleep "$1"; }
 echo "notoken started" >> entered.log
 bound=$(scaled 2)
-start=$(date +%s)
+start=$(now)
 while :; do
     [ -f never ] && exit 0
-    [ $(( $(date +%s) - start )) -ge "$bound" ] && break
+    [ $(( $(now) - start )) -ge "$bound" ] && break
     sleep 0.2
 done
 echo "notoken: no token within $bound s"; exit 1
@@ -180,21 +203,61 @@ echo $$ >> "$(dirname "$0")/../machines"
 # returns, which is what a real one does: it flushes what it was given first.
 case "$*" in
     *--selftest-part*) exec sleep 2 ;;
+    *--selftest-killed*) echo $$ > "$(dirname "$0")/../kill-ready"; exec sleep 30 ;;
+    *--selftest-busy*)
+        i=0; while [ "$i" -lt 6 ]; do echo console-progress; sleep 1; i=$((i+1)); done
+        exit 0 ;;
+    *--selftest-stuck*) echo console-last-line; trap '' TERM; exec sleep 30 ;;
 esac
 exec sleep 30
 Q
 chmod +x "$WORK/bin/qemu-system-i386"
+cat > "$WORK/bin/sleep" <<'SLEEP'
+#!/bin/sh
+exec "$RACH2_SELFTEST_UTIL" sleep "$1"
+SLEEP
+chmod +x "$WORK/bin/sleep"
+RACH2_SELFTEST_UTIL=$SELFTEST_UTIL; export RACH2_SELFTEST_UTIL
+PATH="$WORK/bin:$PATH"; export PATH
 : > "$WORK/machines"
 
-# The rows below judge what the runner does with one measurement, so the
-# second measurement it would otherwise take is turned off; one row turns it
-# back on and judges that instead.
 run() { ( cd "$WORK" && PATH="$WORK/bin:$PATH" RACH2_WORKERS="${W:-2}" \
-          RACH2_CALIBRATION_RETRY=0 sh tests/run "$@" 2>&1 ); }
+          sh tests/run "$@" 2>&1 ); }
 
 out=$(run passing); rc=$?
 check "a passing suite exits zero" 0 "$rc"
 check "and says so" 1 "$(printf '%s\n' "$out" | grep -c 'run: passing: PASS')"
+check "and starts exactly once" 1 "$(printf '%s\n' "$out" | grep -c '^run: starting:')"
+check "and does not void an unchanged tree" 0 "$(printf '%s\n' "$out" | grep -c 'run: voided:')"
+
+# The suite supervisor observes both output channels, isolates their clocks,
+# and applies the same rule at every position in the schedule.
+for value in 0 00 -1 nope 1.5; do
+    out=$(RACH2_IDLE_TIMEOUT=$value run passing); rc=$?
+    check "an invalid silence limit ($value) is refused" 2 "$rc"
+done
+t0=$(now)
+out=$(RACH2_IDLE_TIMEOUT=2 run silent); rc=$?
+check "a silent single suite fails" 1 "$rc"
+check "and is named with its silence limit" 1 "$(printf '%s\n' "$out" | grep -c 'run: silent: no output for 2 s')"
+check "and repeats its last output" 2 "$(printf '%s\n' "$out" | grep -c '^suite-last-line$')"
+check "and stops within seconds" 1 "$([ $(($(now) - t0)) -lt 12 ] && echo 1 || echo 0)"
+out=$(RACH2_IDLE_TIMEOUT=2 run consolebusy); rc=$?
+check "console output keeps a quiet suite alive" 0 "$rc"
+out=$(RACH2_IDLE_TIMEOUT=2 run outputbusy); rc=$?
+check "suite output keeps a quiet machine alive" 0 "$rc"
+out=$(RACH2_IDLE_TIMEOUT=2 run consolestuck); rc=$?
+check "a stopped console fails its suite" 1 "$rc"
+check "and prints the console's last output" 1 "$(printf '%s\n' "$out" | grep -c '^console-last-line$')"
+out=$(RACH2_IDLE_TIMEOUT=2 run silent consolebusy passing); rc=$?
+check "one suite's console cannot keep another suite alive" 1 "$(printf '%s\n' "$out" | grep -c 'run: silent: no output for 2 s')"
+check "the active neighbour still passes" 1 "$(printf '%s\n' "$out" | grep -c 'run: consolebusy: PASS')"
+check "and the queued suite still runs" 1 "$(printf '%s\n' "$out" | grep -c 'run: passing: PASS')"
+out=$(RACH2_IDLE_TIMEOUT=2 run style passing usb); rc=$?
+check "a serial suite before the pool has the silence bound" 1 "$(printf '%s\n' "$out" | grep -c 'run: style: no output for 2 s')"
+check "a serial suite after the pool has the same bound" 1 "$(printf '%s\n' "$out" | grep -c 'run: usb: no output for 2 s')"
+out=$(RACH2_IDLE_TIMEOUT=2 RACH2_TIMEOUT_FACTOR=8 run silent); rc=$?
+check "the silence bound is never scaled" 1 "$(printf '%s\n' "$out" | grep -c 'run: silent: no output for 2 s')"
 
 out=$(run failing); rc=$?
 check "a failing suite exits nonzero" 1 "$rc"
@@ -252,6 +315,10 @@ out=$(run leaky); rc=$?
 check "a suite that leaks a machine fails" 1 "$rc"
 check "and is named as the owner" 1 "$(printf '%s\n' "$out" | grep -c 'run: leaky: left')"
 
+# A suite's recorded PID must still be the machine's, even with a relay.
+out=$(run killed); rc=$?
+check "killing the machine PID stops the actual machine" 0 "$rc"
+check "and leaves no machine or console relay behind" 0 "$(printf '%s\n' "$out" | grep -c 'run: killed: left')"
 # A machine on its way out is not a machine left behind. The suite's rows have
 # passed and its machine has been told to stop; asking once, the instant the
 # suite returns, fails a suite for a race with a process that is already
@@ -284,103 +351,120 @@ rm -f "$WORK/prepared.count" "$WORK/components.count" "$WORK/order.log"
 out=$(run passing failing)
 check "a run of two suites prepares once" 1 \
     "$(wc -l < "$WORK/prepared.count" | tr -d ' ')"
-check "after the components" components "$(head -1 "$WORK/order.log")"
+check "after the components" components "$(head -n 1 "$WORK/order.log")"
 check "in a make of their own" 1 \
     "$([ "$(cat "$WORK/components.count")" != "$(cat "$WORK/prepared.count")" ] && echo 1 || echo 0)"
 rm -f "$WORK/prepared.count" "$WORK/components.count" "$WORK/order.log" "$WORK/ran.pid"
 out=$(run passing)
 check "a suite run alone does not prepare the whole product" 0 \
     "$(cat "$WORK/prepared.count" 2>/dev/null | wc -l | tr -d ' ')"
-check "but builds the components first" components "$(head -1 "$WORK/order.log")"
+check "but builds the components first" components "$(head -n 1 "$WORK/order.log")"
 check "in a make of their own" 1 \
     "$([ "$(cat "$WORK/components.count")" != "$(cat "$WORK/ran.pid")" ] && echo 1 || echo 0)"
 check "and still runs" 1 "$(printf '%s\n' "$out" | grep -c 'passing ran')"
 
-# The worker count is a limit, not a suggestion. Two suites that each take two
-# seconds take four one at a time and two together, so the wall clock says
-# whether the pool honoured it.
-t0=$(date +%s); out=$(W=1 run slow1 slow2); one=$(($(date +%s) - t0))
-t0=$(date +%s); out=$(W=2 run slow1 slow2); two=$(($(date +%s) - t0))
-check "one worker runs two suites one after the other" 1 \
-    "$([ "$one" -ge 4 ] && echo 1 || echo 0)"
-check "two workers run them together" 1 \
-    "$([ "$two" -lt 4 ] && echo 1 || echo 0)"
+# Scheduling is judged inside the suites. Compiler startup and cleanup are
+# outside the measured interval and cannot turn overlap into a failure.
+rm -f "$WORK/events"
+out=$(W=1 run slow1 slow2); rc=$?
+check "one worker runs two suites one after the other" 'slow1-start slow1-end slow2-start slow2-end ' \
+    "$(tr '\n' ' ' < "$WORK/events")"
+rm -f "$WORK/events"
+out=$(W=2 run slow1 slow2); rc=$?
+overlap=$(awk '/-start$/ { active++; if (active > peak) peak = active }
+              /-end$/ { active-- } END { print peak + 0 }' "$WORK/events")
+check "two workers run them together" 2 "$overlap"
+check "both concurrent fixtures complete" 4 "$(wc -l < "$WORK/events" | tr -d ' ')"
+check "and each concurrent suite is announced" 2 "$(printf '%s\n' "$out" | grep -c '^run: slow[12]: starting')"
 
-
-# The deadlines a set scales. The calibration fixture gives the pool's
-# factor: with computing at twice the reference the factor is 2.0 times the
-# margin, 3.0, and the slow token's one-second bound becomes three; with
-# the host faster than the reference the factor is the margin alone, 1.5,
-# and the token comes too late. A suite run by itself is told nothing,
-# whatever the environment carries. A token that never comes ends at the
-# scaled bound and not later.
-echo 2.4 > "$WORK/calib.compute"; echo 0.5 > "$WORK/calib.storage"
-rm -f "$WORK/calibrations.log" "$WORK/entered.log"
-out=$(run slowtoken passing); rc=$?
-check "a set is calibrated at its width" 1 "$(grep -c 'width 2' "$WORK/calibrations.log")"
-check "and not at width 1 when no suite runs alone after the pool" 0 "$(grep -c 'width 1' "$WORK/calibrations.log")"
-check "and prints the factor it measured" 1 "$(printf '%s\n' "$out" | grep -c 'run: calibration: width 2, computing 2.4 s against 1.2 (2.00), storage 0.5 s against 2.5 (1.00), margin 1.5, factor 3.0')"
-check "a suite whose token comes within the scaled bound passes" 0 "$rc"
-check "with the bound scaled to six" 1 "$(printf '%s\n' "$out" | grep -c 'slowtoken ran, bound 6')"
+# Host speed does not decide whether a set starts. An explicit factor changes
+# only completion bounds, for one suite and for every part of a set alike.
 rm -f "$WORK/calibrations.log"
-out=$(run slowtoken passing install); rc=$?
-check "a suite that runs alone after the pool has the set calibrated once more at width 1" 1 "$(grep -c 'width 1' "$WORK/calibrations.log")"
-check "and gets that factor" 1 "$(printf '%s\n' "$out" | grep -c 'run: install: PASS')"
-echo 0.5 > "$WORK/calib.compute"
-out=$(run slowtoken passing); rc=$?
-check "a host faster than the reference gets the margin alone" 1 "$(printf '%s\n' "$out" | grep -c 'factor 1.5')"
-check "under which the slow token is late" 1 "$rc"
-check "by its own bound" 1 "$(printf '%s\n' "$out" | grep -c 'slowtoken: no token within 3 s')"
+out=$(run passing slow1); rc=$?
+check "a set runs without calibration" 0 "$rc"
+check "and never invokes the calibration script" 0 "$([ -f "$WORK/calibrations.log" ] && echo 1 || echo 0)"
+out=$(RACH2_TIMEOUT_FACTOR=3 run slowtoken passing install); rc=$?
+check "an explicit factor applies to pooled and serial suites" 0 "$rc"
+check "and is recorded at the start" 1 "$(printf '%s\n' "$out" | grep -c 'timeout factor 3.0')"
+check "both suites receive the bound once" 2 "$(printf '%s\n' "$out" | grep -c 'slowtoken ran, bound 6')"
+out=$(RACH2_TIMEOUT_FACTOR=3 run slowtoken); rc=$?
+check "the same explicit factor applies to a single suite" 0 "$rc"
+out=$(RACH2_TIMEOUT_FACTOR=8.2 run passing slow1); rc=$?
+check "a factor above the former envelope still runs" 0 "$rc"
+out=$(RACH2_TIMEOUT_FACTOR=08.0 run passing); rc=$?
+check "a factor with leading zeros is decimal" 0 "$rc"
+check "and is printed as a decimal" 1 "$(printf '%s\n' "$out" | grep -c 'timeout factor 8.0')"
+out=$(RACH2_TIMEOUT_FACTOR=abc run passing); rc=$?
+check "a malformed explicit factor is refused" 2 "$rc"
+out=$(RACH2_TIMEOUT_FACTOR=0 run passing); rc=$?
+check "a zero explicit factor is refused" 2 "$rc"
+out=$(RACH2_TIMEOUT_FACTOR=65 run passing); rc=$?
+check "a factor beyond the consumers' range is refused" 2 "$rc"
 out=$( (export RACH2_DEADLINES=scaled RACH2_DEADLINE_FACTOR=9.0; run slowtoken) ); rc=$?
-check "a suite run by itself keeps its bound whatever the environment says" 1 "$rc"
-check "as written" 1 "$(printf '%s\n' "$out" | grep -c 'no token within 2 s')"
-out=$( (export RACH2_CALIBRATION_FACTOR=abc; run slowtoken passing) ); rc=$?
-check "a factor given by hand in the wrong form is refused" 1 "$(printf '%s\n' "$out" | grep -c 'must be a decimal')"
-out=$( (export RACH2_CALIBRATION_FACTOR=08.0; run slowtoken passing) ); rc=$?
-check "and one with a leading zero is read as a decimal, not as octal" 1 "$(printf '%s\n' "$out" | grep -c 'factor 8.0 given')"
-out=$( (export RACH2_CALIBRATION_FACTOR=100; run slowtoken passing) ); rc=$?
-check "and one past the envelope is refused" 1 "$(printf '%s\n' "$out" | grep -c 'past the envelope')"
+check "an inherited internal factor is ignored" 1 "$rc"
+check "and the written bound is used by default" 1 "$(printf '%s\n' "$out" | grep -c 'no token within 2 s')"
+out=$(RACH2_TIMEOUT_FACTOR=3 run notoken passing); rc=$?
+check "a missing token fails at the explicit bound" 1 "$rc"
+check "and names that bound" 1 "$(printf '%s\n' "$out" | grep -c 'notoken: no token within 6 s')"
 
-# The second measurement, which an ordinary run takes: a host busy for a minute
-# is not a host that cannot run the set, and refusing it costs everything the
-# set would have told. A rate that is past the envelope both times is still
-# refused, and the wait is named.
-echo 100 > "$WORK/calib.compute"
-out=$( (cd "$WORK" && PATH="$WORK/bin:$PATH" RACH2_WORKERS=2 \
-        RACH2_CALIBRATION_RETRY_WAIT=1 sh tests/run slowtoken passing 2>&1) ); rc=$?
-check "a rate past the envelope is measured again" 1 "$(printf '%s\n' "$out" | grep -c 'measuring again in 1 s')"
-check "and the set is refused when the second says the same" 1 "$rc"
-check "with the rate named by each measurement" 2 "$(printf '%s\n' "$out" | grep -c 'past the envelope')"
-
-# And a host that is steadily too slow for the width it was given is not a host
-# that cannot run the set: the pool narrows until the measurement fits. The
-# fixture reports a rate that fits only at two or fewer, so the set runs there
-# and says so.
-echo 100 > "$WORK/calib.compute"
-echo "2.4 2" > "$WORK/calib.fitat"
-out=$( (cd "$WORK" && PATH="$WORK/bin:$PATH" RACH2_WORKERS=8 \
-        RACH2_CALIBRATION_RETRY=0 RACH2_CALIBRATION_FLOOR=1 \
-        sh tests/run slow1 slow2 passing 2>&1) ); rc=$?
-check "a host too slow for the width narrows the pool" 1 "$(printf '%s\n' "$out" | grep -c 'narrowing the pool to')"
-check "and the set then runs" 0 "$rc"
-rm -f "$WORK/calib.fitat"
-echo 2.4 > "$WORK/calib.compute"
-# The bound that ends a suite whose token never comes: the set is run under
-# the tree's own watchdog when it is built, so a bound that never ended
-# would be cut and named rather than hang this test.
-WATCH=""
-[ -x "$REPO/build/tests/system/deadline" ] && WATCH="$REPO/build/tests/system/deadline 40"
-t0=$(date +%s); out=$($WATCH sh -c 'cd "$1" && PATH="$1/bin:$PATH" RACH2_WORKERS=2 sh tests/run notoken passing 2>&1' sh "$WORK"); rc=$?; took=$(($(date +%s) - t0))
-check "a token that never comes fails at the scaled bound" 1 "$rc"
-check "which it names" 1 "$(printf '%s\n' "$out" | grep -c 'notoken: no token within 6 s')"
-check "and which ended the suite" 1 "$([ "$took" -lt 30 ] && echo 1 || echo 0)"
-echo 100 > "$WORK/calib.compute"
-rm -f "$WORK/entered.log"
-out=$(run slowtoken passing); rc=$?
-check "a rate past the envelope fails the set by name" 1 "$(printf '%s\n' "$out" | grep -c 'past the envelope')"
-check "with a failing status" 1 "$([ "$rc" -ne 0 ] && echo 1 || echo 0)"
-check "before any suite starts" 0 "$(cat "$WORK/entered.log" 2>/dev/null | wc -l | tr -d ' ')"
-echo 0.5 > "$WORK/calib.compute"
+# Driver bounds are already elapsed seconds. The enclosing supervisor keeps
+# a mutation that scales them again from holding this selftest indefinitely.
+cat > "$WORK/driver-bound.sh" <<'DRIVER'
+#!/bin/sh
+REPO=$1
+. "$REPO/tests/system/drive.sh"
+DRIVE_LOG=$2
+: > "$DRIVE_LOG"
+drive_expect missing "$(scaled 1)"
+DRIVER
+out=$(RACH2_DEADLINES=scaled RACH2_DEADLINE_FACTOR=2 RACH2_RUN_UTIL="$SELFTEST_UTIL" \
+    "$SELFTEST_UTIL" watch driver 3 "$WORK/driver.machines" \
+    sh "$WORK/driver-bound.sh" "$REPO" "$WORK/driver.log" 2>&1); rc=$?
+check "a driver bound supplied by scaled is applied once" 1 "$(printf '%s\n' "$out" | grep -c "no 'missing' within 2 s")"
+check "the driver's bound ends the wait" 1 "$rc"
+(
+    REPO=$REPO
+    . "$REPO/tests/system/drive.sh"
+    DRIVE_LOG=$WORK/driver.log
+    printf '~ # Running in background\r\nother daemon output\r\n' > "$DRIVE_LOG"
+    drive_prompt 1
+); rc=$?
+check "a daemon's output after a prompt leaves the prompt reachable" 0 "$rc"
+(
+    . "$REPO/tests/system/drive.sh"
+    DRIVE_LOG=$WORK/driver.log
+    printf '~ # Running in background\r\n' > "$DRIVE_LOG"
+    drive_prompt 1 && drive_expect 'Running in background' 1
+); rc=$?
+check "matching a prompt preserves the daemon's following token" 0 "$rc"
+(
+    . "$REPO/tests/system/drive.sh"
+    DRIVE_LOG=$WORK/driver.log
+    printf 'printf x > ' > "$DRIVE_LOG"
+    drive_prompt 1 2>/dev/null
+); rc=$?
+check "a command echo paused at redirection is not a prompt" 1 "$rc"
+(
+    . "$REPO/tests/system/drive.sh"
+    DRIVE_LOG=$WORK/driver.log
+    DRIVE_FIFO=$WORK/driver.fifo
+    DRIVE_FPID=$$
+    printf 'OLDTOKEN\n' > "$DRIVE_LOG"
+    drive_type 'true'
+    drive_expect OLDTOKEN 1 2>/dev/null
+); rc=$?
+check "a token before the command is not its answer" 1 "$rc"
+(
+    . "$REPO/tests/system/drive.sh"
+    DRIVE_LOG=$WORK/driver.log
+    DRIVE_FIFO=$WORK/driver.fifo
+    DRIVE_FPID=$$
+    : > "$DRIVE_LOG"
+    drive_type 'true'
+    printf 'FASTTOKEN\n# ' >> "$DRIVE_LOG"
+    drive_expect FASTTOKEN 1 && drive_prompt 1
+); rc=$?
+check "a reply and prompt that arrive before the wait are preserved" 0 "$rc"
 
 # The consumers of the factor, each a real program of the tree driven by a
 # stand-in for what it waits on: the harness over a machine that prints its
@@ -418,14 +502,62 @@ LATE
     out=$( (export RACH2_DEADLINES=scaled RACH2_DEADLINE_FACTOR=4.0 RACH2_PASSWORD=x; "$PTYDRIVE_BIN" --timeout 1 -- sh -c 'sleep 2.5; echo PTYDONE' 2>&1) )
     check "and under the factor reads its answer" 1 "$(printf '%s\n' "$out" | grep -c PTYDONE)"
     check "in time" 0 "$(printf '%s\n' "$out" | grep -c TIMEDOUT)"
-    t0=$(date +%s); (unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR; "$HOSTPEER_BIN" echo 47123 1 > /dev/null 2>&1); rc=$?; held=$(($(date +%s) - t0))
+    t0=$(now); (unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR; "$HOSTPEER_BIN" echo 47123 1 > /dev/null 2>&1); rc=$?; held=$(($(now) - t0))
     check "hostpeer as written holds its port for a second" 1 "$([ "$rc" -eq 0 ] && [ "$held" -le 2 ] && echo 1 || echo 0)"
-    t0=$(date +%s); (export RACH2_DEADLINES=scaled RACH2_DEADLINE_FACTOR=4.0; "$HOSTPEER_BIN" echo 47123 1 > /dev/null 2>&1); rc=$?; held=$(($(date +%s) - t0))
+    t0=$(now); (export RACH2_DEADLINES=scaled RACH2_DEADLINE_FACTOR=4.0; "$HOSTPEER_BIN" echo 47123 1 > /dev/null 2>&1); rc=$?; held=$(($(now) - t0))
     check "and under the factor for four" 1 "$([ "$rc" -eq 0 ] && [ "$held" -ge 4 ] && [ "$held" -le 8 ] && echo 1 || echo 0)"
 else
     echo "  SKIP: the harness, ptydrive and hostpeer are not built; their factor rows did not run"
     fails=$((fails + 1))
 fi
+
+# The harness also starts its search before sending a command. Old output
+# may still be in its pipe, and a fast new reply may precede expect itself.
+mkdir -p "$WORK/fresh"
+cat > "$WORK/fresh/qemu-system-i386" <<'FRESH'
+#!/bin/sh
+printf 'READY\nOLDTOKEN\n'
+while IFS= read -r line; do
+    case "$line" in
+        fresh) printf 'FASTTOKEN\nNEXTTOKEN\n' ;;
+        second) printf 'SECONDREPLY\n' ;;
+    esac
+done
+FRESH
+chmod +x "$WORK/fresh/qemu-system-i386"
+(
+    unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR
+    PATH="$WORK/fresh:$PATH" "$HARNESS_BIN" --kernel none --timeout 5 --steptmo 1 \
+        --ok READY expect=READY wait=1 send=true expect=OLDTOKEN > /dev/null 2>&1
+); rc=$?
+check "the harness cannot use an old token after a new send" 1 "$([ "$rc" -ne 0 ] && echo 1 || echo 0)"
+(
+    unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR
+    PATH="$WORK/fresh:$PATH" "$HARNESS_BIN" --kernel none --timeout 5 --steptmo 1 \
+        --ok FASTTOKEN expect=READY send=fresh wait=1 expect=FASTTOKEN expect=NEXTTOKEN > /dev/null 2>&1
+); rc=$?
+check "the harness preserves fast replies and consecutive tokens" 0 "$rc"
+
+(
+    unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR
+    PATH="$WORK/fresh:$PATH" "$HARNESS_BIN" --kernel none --timeout 5 --steptmo 1 \
+        --ok FASTTOKEN expect=READY send=fresh wait=1 until=20 send=second expect=SECONDREPLY \
+        > /dev/null 2>&1
+); rc=$?
+check "an until preserves a fast reply to the current command" 0 "$rc"
+
+# The native lock excludes another owner even before the owner record exists.
+rm -f "$WORK/lock-entered"
+"$SELFTEST_UTIL" lock "$WORK/guard" "$WORK/no-owner" sh -c 'echo ready > "$1"; sleep 2' sh "$WORK/lock-entered" &
+lockrun=$!
+i=0
+while [ ! -f "$WORK/lock-entered" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i+1)); done
+out=$("$SELFTEST_UTIL" lock "$WORK/guard" "$WORK/no-owner" sh -c 'echo entered'); rc=$?
+check "the record lock excludes a concurrent owner" 1 "$rc"
+check "and the second command never starts" 0 "$(printf '%s\n' "$out" | grep -c '^entered$')"
+wait "$lockrun"
+out=$("$SELFTEST_UTIL" lock "$WORK/guard" "$WORK/no-owner" sh -c 'echo entered'); rc=$?
+check "the record lock is released at exit" 0 "$rc"
 
 # What a run owns. One run at a time on a tree: a second is refused with the
 # first named; a lock a dead run left is taken over, unless something of that
@@ -445,7 +577,7 @@ printf 'pid 999999\npgid 999999\nsince long ago\nargs old\n' > "$WORK/build/.run
 out=$(run passing); rc=$?
 check "a lock whose run is gone is taken over" 0 "$rc"
 check "and says whose it was" 1 "$(printf '%s\n' "$out" | grep -c 'taking over the lock a run left: 999999, old')"
-perl -e 'setpgrp(0, 0); exec "sleep", "20"' &
+"$SELFTEST_UTIL" group sleep 20 &
 survivor=$!
 sleep 0.3
 mkdir -p "$WORK/build/.run.lock"
@@ -525,7 +657,7 @@ rm -rf "$WORK/build/.run.lock" "$WORK/oldwork"
 # session sat idle for eight hours.
 mkdir -p "$WORK/build/.run.lock"
 printf 'pid %s\npgid %s\nwork %s\nsince now\nargs holding\n' \
-    "$$" "$(ps -o pgid= -p $$ | tr -d ' ')" "$WORK" > "$WORK/build/.run.lock/owner"
+    "$$" "$("$SELFTEST_UTIL" pgid $$)" "$WORK" > "$WORK/build/.run.lock/owner"
 out=$(run passing); rc=$?
 check "a run refused by a live lock exits non-zero" 1 "$rc"
 check "and ends with a result line" 1 "$(printf '%s\n' "$out" | grep -c '^run: result: refused:')"
@@ -552,6 +684,7 @@ echo "# the suites' makefile, as the runner sees it" > "$WORK/tests/system/suite
 out=$(run editing slowish); rc=$?
 check "a set whose source changes under it is stopped there" 1 "$(printf '%s\n' "$out" | grep -c 'stopping the set: the tree changed under it')"
 check "and the set fails" 1 "$rc"
+check "and the live check names the changed path" 1 "$(printf '%s\n' "$out" | grep -q '^run: voided: tests/system/suites.mk changed during the run' && echo 1 || echo 0)"
 echo "# the suites' makefile, as the runner sees it" > "$WORK/tests/system/suites.mk"
 rm -f "$WORK/build/thing"
 out=$(run rewriter); rc=$?
@@ -561,12 +694,12 @@ check "and names the product" 1 "$(printf '%s\n' "$out" | grep -c 'voided: build
 # With RACH2_STOP_ON_FAIL, the first failure stops the pool: the suite still
 # running is stopped and named, and the run ends well before it would have.
 rm -f "$WORK/slow1.done"
-t0=$(date +%s)
+t0=$(now)
 out=$(cd "$WORK" && PATH="$WORK/bin:$PATH" RACH2_WORKERS=2 RACH2_STOP_ON_FAIL=1 sh tests/run failing slow1 slow2 2>&1); rc=$?
 check "a set stopped on its first failure fails" 1 "$rc"
 check "the running suite is stopped and named" 1 "$(printf '%s\n' "$out" | grep -c 'stopped part way: slow1')"
 check "the queued suite is named" 1 "$(printf '%s\n' "$out" | grep -c 'not started: slow2')"
-check "and the run ended early" 1 "$([ $(($(date +%s) - t0)) -lt 4 ] && echo 1 || echo 0)"
+check "and the run ended early" 1 "$([ $(($(now) - t0)) -lt 4 ] && echo 1 || echo 0)"
 check "and the running suite did not reach its end" 0 "$(ls "$WORK/slow1.done" 2>/dev/null | wc -l | tr -d ' ')"
 
 # A pooled suite's result is printed the moment it ends, not when the pool
@@ -585,6 +718,41 @@ while [ "$i" -lt 30 ]; do
 done
 wait "$streamrun"
 check "a suite's result is printed while a slower one still runs" 1 "$seen"
+
+# Progress goes to the run log while suite output is held. The bound here
+# exceeds the report interval, and the fixture remains active throughout.
+(cd "$WORK" && RACH2_WORKERS=2 sh tests/run reporting passing > "$WORK/progress.out" 2>&1) &
+progressrun=$!
+seen=0
+until_time=$(($(now) + 75))
+while [ "$(now)" -lt "$until_time" ]; do
+    if grep -q '^run: reporting: working for ' "$WORK/progress.out" &&
+       ! grep -q '^run: reporting: PASS' "$WORK/progress.out"; then
+        seen=1; break
+    fi
+    kill -0 "$progressrun" 2>/dev/null || break
+    sleep 1
+done
+wait "$progressrun"; rc=$?
+check "progress is visible before a pooled suite finishes" 1 "$seen"
+check "the reporting suite still completes" 0 "$rc"
+check "each pooled suite publishes one result" 2 "$(grep -c '^run: .*: PASS in ' "$WORK/progress.out")"
+
+# None of these optional host commands is part of the runner's runtime.
+for tool in perl pgrep stat lsof md5 shasum sha256sum; do
+    cat > "$WORK/bin/$tool" <<'UNAVAILABLE'
+#!/bin/sh
+echo "$0" >> "$RACH2_UNAVAILABLE_LOG"
+exit 99
+UNAVAILABLE
+    chmod +x "$WORK/bin/$tool"
+done
+RACH2_UNAVAILABLE_LOG=$WORK/unavailable.log; export RACH2_UNAVAILABLE_LOG
+out=$(run passing slow1); rc=$?
+check "the runner works without platform-specific utility extensions" 0 "$rc"
+check "and does not invoke the unavailable tools" 0 "$([ -f "$WORK/unavailable.log" ] && echo 1 || echo 0)"
+rm -f "$WORK/bin/perl" "$WORK/bin/pgrep" "$WORK/bin/stat" "$WORK/bin/lsof" \
+    "$WORK/bin/md5" "$WORK/bin/shasum" "$WORK/bin/sha256sum"
 
 # A product two pooled suites name is built once, by the preparation, before
 # either starts.

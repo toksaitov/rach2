@@ -535,3 +535,11 @@ with more machines on it than processors can only hold the guest back from
 taking a connection, never make it take one it did not, so the count is now
 taken up to four times and the highest is the reading, with the interval before
 it scaled by the pool's own factor as the suite's other waits are.
+
+### Runner follow-up, 2026-09-15
+
+The owner replaced the calibration policy above after repeated refusals and silent suites cost most of a week. `tests/run` no longer calibrates, retries a measurement or narrows the pool. Completion bounds use their written seconds unless the caller supplies `RACH2_TIMEOUT_FACTOR`, from 1 through 64. Each suite has a separate silence limit, `RACH2_IDLE_TIMEOUT`, default 300 elapsed seconds, which counts both its output and its machines' console output. A silent suite fails by name with the last output and the set continues. Start, minute-by-minute progress and final result lines distinguish an active run from one that never started or has ended.
+
+The POSIX host helper supplies the monotonic clock, fractional sleeps, process groups, record lock and console relay. The relay preserves QEMU's PID because real suites signal it directly, including with KILL. The shell driver takes elapsed bounds and never scales them internally; its callers scale once. A prompt remains valid when a daemon writes after it. Both drivers discard output before a new command and preserve replies that arrive before its wait starts.
+
+The selftest fixtures cover silence, console activity, isolation between suites, continuation, cleanup, explicit factors, lock exclusion, source checksums, prompt matching and token freshness. Scheduling is checked from start and end events inside the fixtures, since elapsed time for the whole runner includes compiler startup and cleanup. Small mutation checks reject a serialized pool, a disabled silence check, a disabled record lock, repeated driver scaling, the old prompt rule, reuse of a pre-command token and loss of a fast reply at `until=`. Each restored copy passes. These checks compile temporary copies and do not change the repository during a run.

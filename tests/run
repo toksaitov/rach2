@@ -14,19 +14,26 @@
 #
 set -u
 
-# The run is a process group of its own, so that stopping it stops every
-# make, recipe and machine it started and nothing above it: a runner started
-# from a script shares its parent's group, and a signal to that group would
-# take the parent as well. The group is made by an exec through perl, since
-# the shell has no way to make one; without perl the run keeps the group it
-# was given and stops only what its ledgers name.
-if [ -z "${RACH2_RUN_GROUP:-}" ] && command -v perl >/dev/null 2>&1; then
-    RACH2_RUN_GROUP=1; export RACH2_RUN_GROUP
-    exec perl -e 'setpgrp(0, 0); exec @ARGV or die "run: exec: $!\n"' -- sh "$0" "$@"
-fi
-unset RACH2_RUN_GROUP # a runner started under this one makes a group of its own
-
 REPO=$(cd "$(dirname "$0")/.." && pwd)
+# Compile the host helper in private scratch before making a process group.
+# No product or shared build file is written by this bootstrap.
+if [ "${RACH2_RUN_GROUP:-}" != "$$" ]; then
+    WORK=$(mktemp -d "${TMPDIR:-/tmp}/rach2-run.XXXXXX") || exit 1
+    if ! cc -O2 -Wall -Wextra -o "$WORK/runutil" "$REPO/tests/system/runner/runutil.c"; then
+        echo "run: result: refused: the runner helper did not compile" >&2
+        rm -rf "$WORK"; exit 1
+    fi
+    RACH2_RUN_GROUP=$$; RACH2_RUN_WORK=$WORK; RACH2_RUN_UTIL=$WORK/runutil
+    export RACH2_RUN_GROUP RACH2_RUN_WORK RACH2_RUN_UTIL
+    exec "$RACH2_RUN_UTIL" group sh "$0" "$@"
+fi
+WORK=$RACH2_RUN_WORK
+trap 'rm -rf "$WORK"' 0
+unset RACH2_RUN_GROUP RACH2_RUN_WORK RACH2_PROGRESS_FD
+LC_ALL=C; export LC_ALL
+now() { "$RACH2_RUN_UTIL" now; }
+sleep() { "$RACH2_RUN_UTIL" sleep "$1"; }
+
 # e2fsprogs, where a package manager keeps it off the path; the suites that
 # name mke2fs or e2fsck find them where the build does.
 # Where the tree has it; the runner's own self-test drives a tree that does not.
@@ -46,9 +53,8 @@ workers_default() {
     [ "$n" -lt 4 ] && n=4
     echo "$n"
 }
-# The deadline variables are this runner's to set: a set measures its own
-# factor, and a suite run by itself keeps its numbers as written, whatever
-# was inherited from the environment.
+# Internal deadline variables belong to this run. Only the explicit public
+# override is inherited; it applies equally to single suites and sets.
 unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR
 WORKERS="${RACH2_WORKERS:-$(workers_default)}"
 case "$WORKERS" in
@@ -56,15 +62,10 @@ case "$WORKERS" in
 esac
 # `00` is digits and is zero, and a pool of zero waits for a worker that never
 # frees. The value is compared as a number from here on, so it is made one.
-WORKERS=$((WORKERS + 0))
+WORKERS=$(awk -v n="$WORKERS" 'BEGIN {if (n < 1 || n > 1024) exit 1; printf "%.0f\n", n}') || {
+    echo "run: result: refused: RACH2_WORKERS must be between 1 and 1024" >&2; rm -rf "$WORK"; exit 2;
+}
 [ "$WORKERS" -ge 1 ] || { echo "run: result: refused: RACH2_WORKERS must be a positive whole number" >&2; exit 2; }
-
-# Scratch for this run: one ledger per suite, the held output of each pooled
-# suite, and the shim that writes the ledgers.
-WORK=$(mktemp -d "${TMPDIR:-/tmp}/rach2-run.XXXXXX")
-# Checked because everything below builds a path on it: an empty value would
-# put the shim at /bin/qemu-system-i386 and delete / on the way out.
-[ -d "$WORK" ] || { echo "run: result: refused: no scratch directory" >&2; exit 1; }
 
 # What this run owns: its descendants by the process table, which reaches
 # the makes, recipes and machines under it and the ones the harness's
@@ -75,7 +76,7 @@ WORK=$(mktemp -d "${TMPDIR:-/tmp}/rach2-run.XXXXXX")
 # that is named. A signal besides stops further starts and prints what the
 # unfinished suites had written; the exit is the signal's. `finish` runs
 # once: the trap calls it and the EXIT trap finds it done.
-OWN_PGID=$(ps -o pgid= -p $$ | tr -d ' ')
+OWN_PGID=$("$RACH2_RUN_UTIL" pgid $$)
 PGID=$OWN_PGID
 [ "$PGID" = "$$" ] || PGID="" # not a group of its own: only the ledgers are stopped
 STOPPING=""
@@ -83,9 +84,15 @@ owned() {
     # The listing's own processes, the substitution's subshell and what it
     # started, are not the run's: every process under the one that ran `ps`
     # is left out, whether reached through the table or through the group.
-    ps -axo pid=,ppid= > "$WORK/ps" 2>/dev/null &
+    ps -A -o pid= -o ppid= -o pgid= > "$WORK/ps" 2>/dev/null &
     self=$!; wait "$self"
-    { [ -n "$PGID" ] && pgrep -g "$PGID" 2>/dev/null; :; } > "$WORK/group"
+    awk -v group="$PGID" '$3 == group {print $1}' "$WORK/ps" > "$WORK/group"
+    for f in "$WORK"/*.groups; do
+        [ -f "$f" ] || continue
+        while read -r group; do
+            awk -v group="$group" '$3 == group {print $1}' "$WORK/ps" >> "$WORK/group"
+        done < "$f"
+    done
     awk -v root="$$" -v self="$self" '
         FILENAME == ARGV[1] { kid[$1] = $2; next }
         { group[$1] = 1 }
@@ -99,7 +106,7 @@ owned() {
             }
             for (p in group) if (!(p in kid)) print p
         }' "$WORK/ps" "$WORK/group"
-    for f in "$WORK"/*.machines; do
+    for f in "$WORK"/*.machines "$WORK"/*.jobs; do
         [ -f "$f" ] && cat "$f"
     done
     :
@@ -111,15 +118,35 @@ owned_kill() {
 owned_wait() { # owned_wait TENTHS: 0 when nothing owned is left within the time
     i=0
     while [ "$i" -lt "$1" ]; do
-        [ -z "$(owned_live)" ] && return 0
+        [ -z "$(owned_live)$(groups_live)" ] && return 0
         sleep 0.1; i=$((i + 1))
     done
-    [ -z "$(owned_live)" ]
+    [ -z "$(owned_live)$(groups_live)" ]
+}
+# Group ledgers also reach reparented children when ps is unavailable.
+groups_kill() {
+    for f in "$WORK"/*.groups; do
+        [ -f "$f" ] || continue
+        while read -r group; do "$RACH2_RUN_UTIL" killgroup "$group" "$1" 2>/dev/null || :; done < "$f"
+    done
+}
+groups_live() {
+    for f in "$WORK"/*.groups; do
+        [ -f "$f" ] || continue
+        while read -r group; do
+            "$RACH2_RUN_UTIL" killgroup "$group" 0 2>/dev/null && echo "$group"
+        done < "$f"
+    done
+    :
 }
 owned_stop() {
-    owned_kill TERM
+    owned_live > "$WORK/stopping"
+    groups_kill 15
+    while read -r pid; do kill -TERM "$pid" 2>/dev/null; done < "$WORK/stopping"
     owned_wait 20 && return 0
+    while read -r pid; do kill -KILL "$pid" 2>/dev/null; done < "$WORK/stopping"
     owned_kill KILL
+    groups_kill 9
     owned_wait 30 && return 0
     echo "run: still running after the stop: $(owned_live | tr '\n' ' ')" >&2
     return 1
@@ -141,15 +168,15 @@ finish() {
             cat "$WORK/$suite.out"
         fi
     done
-    [ -z "$(owned_live)" ] || owned_stop
-    rm -rf "$WORK"
+    [ -z "$(owned_live)$(groups_live)" ] || owned_stop
     lock_release
+    rm -rf "$WORK"
 }
 RUNNING=""; RUNNING_NAMES=""
 trap 'finish' EXIT
-trap 'SIGNALLED=1; finish; exit 130' INT
-trap 'SIGNALLED=1; finish; exit 143' TERM
-trap 'SIGNALLED=1; finish; exit 129' HUP
+trap 'SIGNALLED=1; finish; echo "run: result: interrupted by int" >&2; exit 130' INT
+trap 'SIGNALLED=1; finish; echo "run: result: interrupted by term" >&2; exit 143' TERM
+trap 'SIGNALLED=1; finish; echo "run: result: interrupted by hup" >&2; exit 129' HUP
 # One run at a time on a tree: two share `build/` and its images, and each
 # suite kills what runs under its directory at its start. The lock is a
 # directory, made atomically, holding the owner's pid, process group,
@@ -166,22 +193,36 @@ LOCK="$REPO/build/.run.lock"
 lock_field() { sed -n "s/^$1 //p" "$LOCK/owner" 2>/dev/null; }
 lock_owner_alive() {
     opid=$(lock_field pid)
-    [ -n "$opid" ] && [ "$(ps -o pgid= -p "$opid" 2>/dev/null | tr -d ' ')" = "$(lock_field pgid)" ]
+    [ -n "$opid" ] && [ "$("$RACH2_RUN_UTIL" pgid "$opid" 2>/dev/null)" = "$(lock_field pgid)" ]
 }
 lock_being_taken() {
-    [ ! -f "$LOCK/owner" ] && [ -n "$(find "$LOCK" -maxdepth 0 -newermt '-10 seconds' 2>/dev/null)" ]
+    [ ! -f "$LOCK/owner" ] && "$RACH2_RUN_UTIL" young "$LOCK" 10
 }
 lock_survivors() {
     opgid=$(lock_field pgid)
     {
-        [ -n "$opgid" ] && pgrep -g "$opgid" 2>/dev/null
+        ps -A -o pid= -o pgid= | awk -v group="$opgid" '$2 == group {print $1}'
         owork=$(lock_field work)
-        [ -n "$owork" ] && cat "$owork"/*.machines 2>/dev/null
+        if [ -n "$owork" ]; then
+            cat "$owork"/*.machines 2>/dev/null
+            for f in "$owork"/*.groups; do
+                [ -f "$f" ] || continue
+                while read -r group; do
+                    "$RACH2_RUN_UTIL" killgroup "$group" 0 2>/dev/null && echo "$group"
+                done < "$f"
+            done
+        fi
         :
     } | sort -u | while read -r p; do [ -n "$p" ] && kill -0 "$p" 2>/dev/null && echo "$p"; done | tr '\n' ' '
 }
 lock_take() {
     mkdir -p "$REPO/build"
+    if [ "${RACH2_RUN_LOCK:-}" != "$$" ]; then
+        RACH2_RUN_LOCK=$$; RACH2_RUN_GROUP=$$; RACH2_RUN_WORK=$WORK
+        export RACH2_RUN_LOCK RACH2_RUN_GROUP RACH2_RUN_WORK
+        exec "$RACH2_RUN_UTIL" lock "$REPO/build/.run.guard" "$LOCK/owner" sh "$0" "$@"
+    fi
+    unset RACH2_RUN_LOCK
     if mkdir "$LOCK" 2>/dev/null; then
         :
     elif lock_being_taken; then
@@ -209,26 +250,6 @@ lock_release() {
     [ -n "$LOCKED" ] && [ "$(sed -n 's/^pid //p' "$LOCK/owner" 2>/dev/null)" = "$$" ] && rm -rf "$LOCK"
     LOCKED=""
 }
-
-# Each suite names the machines it starts, so a leaked one can be blamed on the
-# suite that left it. Listing every QEMU on the host works only while one suite
-# runs at a time; with twenty running, each would see the other nineteen. So a
-# shim named `qemu-system-i386` goes first on PATH, writes its own pid to the
-# ledger of the suite that is running, and then becomes the real QEMU. The
-# harness reaches QEMU through execvp and the shell suites through their own
-# PATH lookup, so this covers both without either knowing about it.
-QEMU_REAL=$(command -v qemu-system-i386 2>/dev/null || true)
-if [ -n "$QEMU_REAL" ]; then
-    mkdir -p "$WORK/bin"
-    {
-        echo "#!/bin/sh"
-        # shellcheck disable=SC2016 # the shim expands these, not this script
-        echo 'test -n "${RACH2_QEMU_LEDGER:-}" && echo $$ >> "$RACH2_QEMU_LEDGER"'
-        echo "exec '$QEMU_REAL' \"\$@\""
-    } > "$WORK/bin/qemu-system-i386"
-    chmod +x "$WORK/bin/qemu-system-i386"
-    PATH="$WORK/bin:$PATH"; export PATH
-fi
 
 # The registry, one field at a time. Order in the file is the schedule order.
 suite_names()  { awk -F'|' '!/^#/ && NF > 1 { print $1 }' "$REGISTRY"; }
@@ -312,15 +333,21 @@ check_machines() {
 # command ends while one runs in the foreground: a signal then stops the run
 # at once, and the group kill takes the make and what it started.
 run_make() {
-    if command -v perl >/dev/null 2>&1; then
-        # A background job of a non-interactive shell ignores INT and QUIT
-        # and would hand that on to every test; perl puts them back.
-        perl -e '$SIG{INT} = "DEFAULT"; $SIG{QUIT} = "DEFAULT"; exec @ARGV or die "run: exec: $!\n"' -- \
-            make -C "$REPO" --no-print-directory "$@" &
-        wait $!
-    else
-        make -C "$REPO" --no-print-directory "$@"
-    fi
+    "$RACH2_RUN_UTIL" group make -C "$REPO" --no-print-directory "$@" &
+    make_pid=$!
+    echo "$make_pid" >> "$WORK/build.groups"
+    echo "$make_pid" >> "$WORK/run.jobs"
+    wait "$make_pid"
+}
+
+# A suite has the same supervisor in every scheduling position. Its output
+# and its machines' output reset only its own silence clock.
+suite_make() {
+    "$RACH2_RUN_UTIL" watch "$1" "$IDLE_SECONDS" "$RACH2_QEMU_LEDGER" \
+        make -C "$REPO" --no-print-directory "run-$1" &
+    suite_pid=$!
+    echo "$suite_pid" >> "$WORK/run.jobs"
+    wait "$suite_pid"
 }
 
 # The name and the tools were checked before anything was built, so this does
@@ -330,9 +357,10 @@ run_make() {
 # five images and two ISOs first. In a set, `prepare` has built everything.
 # The components were built before either, in a Make of their own.
 run_one() {
-    start=$(date +%s)
+    start=$(now)
     RACH2_QEMU_LEDGER="$WORK/$1.machines"; export RACH2_QEMU_LEDGER
     : > "$RACH2_QEMU_LEDGER"
+    [ "${2-}" = pooled ] || echo "run: $1: starting (silence limit $IDLE_SECONDS s)"
     rc=0
     if [ "${2-}" = alone ]; then
         # What the target names is built first and hashed, then the suite
@@ -346,15 +374,15 @@ run_one() {
         # shellcheck disable=SC2086 # the prerequisites are one word each
         [ -z "$products" ] || run_make -j $products || rc=1
         [ "$rc" = 0 ] && take_products "$target"
-        [ "$rc" = 0 ] && { run_make "run-$1" || rc=1; }
+        [ "$rc" = 0 ] && { suite_make "$1" || rc=1; }
     else
-        run_make "run-$1" || rc=1
+        suite_make "$1" || rc=1
     fi
     check_machines "$1" || rc=1
     if [ "$rc" = 0 ]; then
-        echo "run: $1: PASS in $(($(date +%s) - start))s"
+        echo "run: $1: PASS in $(($(now) - start))s"
     else
-        echo "run: $1: FAIL in $(($(date +%s) - start))s" >&2
+        echo "run: $1: FAIL in $(($(now) - start))s" >&2
     fi
     return "$rc"
 }
@@ -379,11 +407,13 @@ run_pool() {
         pool_collect
         # Admit while there is room and nothing has stopped the pool.
         while [ -n "$pending" ] && [ -z "$stopped" ] && [ -z "$STOPPING" ] &&
-              [ "$(alive "$RUNNING")" -lt "$WORKERS" ]; do
+              [ "$(active_count)" -lt "$WORKERS" ]; do
             suite=${pending%% *}
             case "$pending" in *" "*) pending=${pending#* } ;; *) pending="" ;; esac
-            ( run_one "$suite" > "$WORK/$suite.out" 2>&1; echo $? > "$WORK/$suite.rc.new";
-              mv "$WORK/$suite.rc.new" "$WORK/$suite.rc" ) &
+            echo "run: $suite: starting (silence limit $IDLE_SECONDS s)"
+            ( RACH2_PROGRESS_FD=3; export RACH2_PROGRESS_FD
+              run_one "$suite" pooled > "$WORK/$suite.out" 2>&1; echo $? > "$WORK/$suite.rc.new";
+              mv "$WORK/$suite.rc.new" "$WORK/$suite.rc" ) 3>&1 &
             echo $! > "$WORK/$suite.job"
             RUNNING="$RUNNING $!"
             RUNNING_NAMES="$RUNNING_NAMES $suite"
@@ -427,6 +457,7 @@ pool_collect() {
             echo 1 > "$WORK/$suite.rc" # gone with no result
             echo "run: $suite: ended without a result" >> "$WORK/$suite.out"
         fi
+        wait "$(cat "$WORK/$suite.job")" 2>/dev/null || :
         cat "$WORK/$suite.out" 2>/dev/null
         rm -f "$WORK/$suite.out"
         read -r rc < "$WORK/$suite.rc"
@@ -441,7 +472,11 @@ job_of() {
     [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
 }
 
-alive() { n=0; for p in $1; do kill -0 "$p" 2>/dev/null && n=$((n + 1)); done; echo "$n"; }
+active_count() {
+    # shellcheck disable=SC2086 # suite names have no whitespace
+    set -- $RUNNING_NAMES
+    echo "$#"
+}
 
 # What a run reads, and must not change while it runs: the scripts that
 # decide a result and the tools that judge one, hashed when the run starts,
@@ -481,7 +516,7 @@ present() { ( cd "$REPO" && while read -r f; do [ -f "$f" ] && echo "$f"; done )
 scripts_inventory() {
     ( cd "$REPO" && {
         echo tests/run; echo tests/registry; echo tests/system/suites.mk; echo Makefile
-        ls mk/*.mk tests/system/*.sh tests/system/suites/*.sh tests/system/accept/*.sh \
+        ls mk/*.mk tests/system/runner/*.c tests/system/*.sh tests/system/suites/*.sh tests/system/accept/*.sh \
            tools/image/*.sh krffs/*.sh tools/verify/check.sh krffs/manifests/* 2>/dev/null
     } ) | present
 }
@@ -489,11 +524,11 @@ products_inventory() { # products_inventory TARGET
     ( cd "$REPO" && ls build/rach2*/kernel 2>/dev/null; closure "$1" ) | present
 }
 hasher() {
-    if command -v shasum >/dev/null 2>&1; then shasum -a 256; else sha256sum; fi
+    cksum
 }
 hash_list() { # hash_list LIST OUT: each file's hash, or `gone` for one missing
     ( cd "$REPO" && while read -r f; do
-        if [ -f "$f" ]; then hasher < "$f" | sed "s|-\$|$f|"; else echo "gone  $f"; fi
+        if [ -f "$f" ]; then hasher < "$f" | awk -v file="$f" '{print $1 ":" $2, file}'; else echo "gone $f"; fi
       done < "$1" ) > "$2"
 }
 take_scripts() {
@@ -550,109 +585,24 @@ prepare() {
     }
 }
 
-# The deadline factor of a set. `tests/system/calibrate.sh` boots WIDTH
-# machines at once and times fixed work of two kinds, computing and storage,
-# by the host's clock; each kind's factor is its time against the reference
-# measured idle at width 1, and the factor passed is the larger, which
-# bounds both kinds, times a margin for the pool's mixed load, which the
-# calibration's uniform machines do not make, rounded up to a tenth. A factor
-# above the envelope fails the set by name: a host that slow does not run
-# the set in the day, and a longer deadline would only hide it. The
-# references: 2026-09-11, the owner's Mac mini, idle, calibprobe as it is.
-REF_COMPUTE=1.2
-REF_STORAGE=2.5
-CAL_MARGIN=1.5
-CAL_ENVELOPE=8.0
-# A host busy for a minute is not a host that cannot run the set, and refusing
-# the set costs everything it would have told. A measurement past the envelope
-# is taken again once, after a wait, before the set is refused. A factor given
-# by hand is not measured and is never retried. `RACH2_CALIBRATION_RETRY=0`
-# turns the retry off, which is what a test of the refusal itself wants.
-CAL_RETRY=${RACH2_CALIBRATION_RETRY:-1}
-CAL_RETRY_WAIT=${RACH2_CALIBRATION_RETRY_WAIT:-60}
-calibrate() { # calibrate WIDTH -> CAL_FACTOR, or 1 on a failure
-    if [ -n "${RACH2_CALIBRATION_FACTOR:-}" ]; then
-        # A factor given by hand is held to the same form and envelope.
-        case "$RACH2_CALIBRATION_FACTOR" in
-            *[!0-9.]*|.*|*.|*.*.*|'') echo "run: RACH2_CALIBRATION_FACTOR must be a decimal such as 2.5" >&2; return 1 ;;
-        esac
-        CAL_FACTOR=$(awk -v f="$RACH2_CALIBRATION_FACTOR" -v envelope="$CAL_ENVELOPE" 'BEGIN {
-            f = int(f * 10 + 0.999) / 10; if (f < 1) f = 1
-            if (f > envelope) { printf "run: result: refused: the factor %.1f given is past the envelope of %.1f\n", f, envelope > "/dev/stderr"; exit 1 }
-            printf "%.1f\n", f }') || return 1
-        echo "run: calibration: width $1, factor $CAL_FACTOR given by RACH2_CALIBRATION_FACTOR"
-        return 0
-    fi
-    out=$(sh "$REPO/tests/system/calibrate.sh" "$1" "$WORK/calibrate.$1") || {
-        echo "run: calibration at width $1 did not finish: $out" >&2; return 1
+# Completion bounds keep their written values unless the caller supplies a
+# factor. The runner never measures host speed or changes the pool width.
+set_factor() {
+    CAL_FACTOR=${RACH2_TIMEOUT_FACTOR:-1}
+    case "$CAL_FACTOR" in
+        *[!0-9.]*|.*|*.|*.*.*|'')
+            echo "run: result: refused: RACH2_TIMEOUT_FACTOR must be a positive decimal" >&2
+            return 1 ;;
+    esac
+    CAL_FACTOR=$(awk -v f="$CAL_FACTOR" 'BEGIN {
+        if (f < 1 || f > 64) exit 1
+        printf "%.1f\n", int(f * 10 + 0.999) / 10
+    }') || {
+        echo "run: result: refused: RACH2_TIMEOUT_FACTOR must be between 1 and 64" >&2
+        return 1
     }
-    CAL_FACTOR=$(printf '%s\n' "$out" | awk -v rc="$REF_COMPUTE" -v rs="$REF_STORAGE" -v margin="$CAL_MARGIN" -v envelope="$CAL_ENVELOPE" -v width="$1" '
-        { for (i = 1; i <= NF; i++) { split($i, kv, "="); v[kv[1]] = kv[2] } }
-        END {
-            fc = v["compute"] / rc; if (fc < 1) fc = 1
-            fs = v["storage"] / rs; if (fs < 1) fs = 1
-            f = (fc > fs ? fc : fs) * margin; f = int(f * 10 + 0.999) / 10
-            printf "run: calibration: width %d, computing %.1f s against %.1f (%.2f), storage %.1f s against %.1f (%.2f), margin %.1f, factor %.1f\n", width, v["compute"], rc, fc, v["storage"], rs, fs, margin, f > "/dev/stderr"
-            if (f > envelope) { printf "run: result: refused: the emulator runs at 1/%.1f of its idle rate at width %d, past the envelope of %.1f\n", f, width, envelope > "/dev/stderr"; exit 1 }
-            printf "%.1f\n", f
-        }') || return 1
-    [ -n "$CAL_FACTOR" ] || return 1
-    return 0
-}
-
-# `style` rebuilds the kernel with its own flags and shares a scratch directory
-# with `host`, so those two run alone, before the pool. `usb` plugs devices
-# in and out through QEMU's monitor and loses two rows under host load
-# (entry 36 of milestone 50), so it runs alone, after the pool, until that
-# is fixed. `diskrate` holds the storage paths under time bounds measured on
-# an idle host, and in the pool a row runs three to four times slower than
-# alone. `usbdisk`, `sealed` and `mount` were alone for the load of the
-# pools of 2026-09-04, whose steps now wait on their own output rather than
-# the clock; they run in the pool, and one that loses a step to the load in
-# a set is run alone once and, if it passes there, listed here again by hand.
-# `install` builds the kernel inside the guest, twice, which is a computation
-# the emulator runs at a third of its rate beside eleven other machines: it
-# lost that step's 1800 s at twenty and at twelve on 2026-09-10 and passed
-# alone in 778 s, so it runs alone. `imagerace` asks make whether a shared
-# image is out of date, and every other worker in the pool runs make on the
-# same tree: on 2026-09-12 one rebuilt the test image between this suite's
-# touch of a staged program and its question, so the answer was that the
-# image was current and the suite failed a check that passes alone. It is
-# entry 28's rule for a question rather than an artifact, so it runs alone.
-# The second measurement, when the first was past the envelope. A factor given
-# by hand was not measured, so it is refused as it stands.
-calibrate_again() { # calibrate_again WIDTH
-    [ -z "${RACH2_CALIBRATION_FACTOR:-}" ] || return 1
-    [ "$CAL_RETRY" != 0 ] || return 1
-    echo "run: calibration: the host was busy; measuring again in $CAL_RETRY_WAIT s" >&2
-    sleep "$CAL_RETRY_WAIT"
-    calibrate "$1"
-}
-
-# The width the host can carry, which is not always the width it was asked
-# for. A machine whose emulator runs slower than the envelope allows at the
-# width given is not a machine that cannot run the set: it is one that cannot
-# run it that wide. The width comes down a quarter at a time until the
-# measurement fits, down to a floor, and the set runs at what fits and says so.
-# Refusing instead costs everything the set would have told, and on the host
-# this was written on the default width measured 8.1 and 8.2 against an
-# envelope of 8.0, so half the sets were refused for a tenth.
-CAL_FLOOR=${RACH2_CALIBRATION_FLOOR:-4}
-calibrate_fit() { # calibrate_fit WIDTH -> CAL_WIDTH, CAL_FACTOR
-    CAL_WIDTH=$1
-    calibrate "$CAL_WIDTH" && return 0
-    # The one wait is here, for a host that was busy for a minute. Narrowing
-    # after it costs a measurement each and no more waiting: a host that is
-    # steadily too slow for this width says so at once.
-    calibrate_again "$CAL_WIDTH" && return 0
-    [ -z "${RACH2_CALIBRATION_FACTOR:-}" ] || return 1
-    while [ "$CAL_WIDTH" -gt "$CAL_FLOOR" ]; do
-        CAL_WIDTH=$((CAL_WIDTH * 3 / 4))
-        [ "$CAL_WIDTH" -lt "$CAL_FLOOR" ] && CAL_WIDTH=$CAL_FLOOR
-        echo "run: calibration: narrowing the pool to $CAL_WIDTH and measuring again" >&2
-        calibrate "$CAL_WIDTH" && return 0
-    done
-    return 1
+    RACH2_DEADLINES=scaled; RACH2_DEADLINE_FACTOR=$CAL_FACTOR
+    export RACH2_DEADLINES RACH2_DEADLINE_FACTOR
 }
 
 run_set() {
@@ -673,38 +623,13 @@ run_set() {
         echo "run: result: failed:$failed" >&2
         return 1
     fi
-    # The pool's factor is measured at the width the pool will run at, the
-    # smaller of the workers and the suites; the lone suites run one at a
-    # time after it and get the factor measured at width 1, which says how
-    # this host compares with the reference.
-    POOL_FACTOR=""; ALONE_FACTOR=""
     if [ -n "$pooled" ]; then
-        n=$(echo "$pooled" | wc -w | tr -d ' ')
-        width=$WORKERS; [ "$n" -lt "$width" ] && width=$n
-        calibrate_fit "$width" || {
-            echo "run: result: the calibration failed" >&2; return 1; }
-        width=$CAL_WIDTH
-        WORKERS=$width
-        POOL_FACTOR=$CAL_FACTOR
-    fi
-    if [ -n "$lone" ]; then
-        calibrate 1 || calibrate_again 1 || {
-            echo "run: result: the calibration failed" >&2; return 1; }
-        ALONE_FACTOR=$CAL_FACTOR
-    fi
-    if [ -n "$pooled" ]; then
-        RACH2_DEADLINES=scaled; RACH2_DEADLINE_FACTOR=$POOL_FACTOR
-        export RACH2_DEADLINES RACH2_DEADLINE_FACTOR
         run_pool "$pooled"; failed="$failed$POOL_FAILED"
-        unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR
     fi
     RUNNING=serial
     for suite in $lone; do
         [ -n "$failed" ] && [ -n "${RACH2_STOP_ON_FAIL:-}" ] && { echo "run: stopped on a failure; not started: $suite"; failed="$failed $suite"; continue; }
-        RACH2_DEADLINES=scaled; RACH2_DEADLINE_FACTOR=$ALONE_FACTOR
-        export RACH2_DEADLINES RACH2_DEADLINE_FACTOR
         run_one "$suite" || failed="$failed $suite"
-        unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR
     done
     RUNNING=""
     [ -n "$STOPPING" ] && return 1
@@ -762,7 +687,34 @@ for suite in "$@"; do
 done
 check_host $diskimage $sockets || { echo "run: result: refused: this host cannot run the set" >&2; exit 1; }
 
+IDLE_SECONDS=${RACH2_IDLE_TIMEOUT:-300}
+case "$IDLE_SECONDS" in
+    ''|*[!0-9]*) echo "run: result: refused: RACH2_IDLE_TIMEOUT must be a positive whole number" >&2; exit 2 ;;
+esac
+IDLE_SECONDS=$(awk -v n="$IDLE_SECONDS" 'BEGIN {if (n < 1 || n > 86400) exit 1; printf "%.0f\n", n}') || {
+    echo "run: result: refused: RACH2_IDLE_TIMEOUT must be between 1 and 86400 seconds" >&2; exit 2;
+}
+set_factor || exit 2
 lock_take "$@" || { echo "run: result: refused: the tree is not free" >&2; exit 1; }
+# Each suite names the machines it starts, so a leaked one can be blamed on the
+# suite that left it. Listing every QEMU on the host works only while one suite
+# runs at a time; with twenty running, each would see the other nineteen. So a
+# shim named `qemu-system-i386` goes first on PATH, writes its own pid to the
+# ledger of the suite that is running, and then becomes the real QEMU. The
+# harness reaches QEMU through execvp and the shell suites through their own
+# PATH lookup, so this covers both without either knowing about it.
+QEMU_REAL=$(command -v qemu-system-i386 2>/dev/null || true)
+if [ -n "$QEMU_REAL" ]; then
+    mkdir -p "$WORK/bin"
+    export QEMU_REAL
+    cat > "$WORK/bin/qemu-system-i386" <<'QEMU'
+#!/bin/sh
+exec "$RACH2_RUN_UTIL" machine "${RACH2_QEMU_LEDGER:?}" "$QEMU_REAL" "$@"
+QEMU
+    chmod +x "$WORK/bin/qemu-system-i386"
+    PATH="$WORK/bin:$PATH"; export PATH
+fi
+
 # A sweep of the process table for another runner stood here for an hour on
 # 2026-09-14 and was removed: a runner of another tree looks exactly like a
 # runner of this one on a command line, so the runner's own selftest, which
@@ -770,7 +722,7 @@ lock_take "$@" || { echo "run: result: refused: the tree is not free" >&2; exit 
 # knows which tree a run holds, and it names the run that holds it.
 # The line that says this run began. Everything below it belongs to this run,
 # and a log without it is a run that never started.
-echo "run: starting: $* (pid $$, $(date '+%Y-%m-%d %H:%M:%S'))"
+echo "run: starting: $* (pid $$, $(date '+%Y-%m-%d %H:%M:%S'), workers $WORKERS, timeout factor $CAL_FACTOR)"
 # The recovery system starts an SSH server only where a key was built into it,
 # and the suites that repair or update a machine do that work through recovery
 # over SSH. The key is minted here: after the names are checked and the tree is
@@ -799,5 +751,9 @@ else
     run_set "$*" || rc=1
 fi
 check_hashes || rc=1
-[ "$rc" = 0 ] && [ "$#" -gt 1 ] && echo "run: result: all $# suites passed"
+if [ "$rc" = 0 ]; then
+    echo "run: result: all $# suites passed"
+else
+    echo "run: result: failed"
+fi
 exit "$rc"
