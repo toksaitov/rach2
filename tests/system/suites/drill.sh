@@ -6,7 +6,7 @@
 # This is the day the machine's root will not mount. Nobody is going to open the
 # case, so the repair has to arrive over the network, and the only thing that
 # can write a partition nothing is mounting is a kernel that boots from
-# somewhere else. That is what partition 3 has: the recovery build, which is
+# somewhere else. That is what partition 2 has: the recovery build, which is
 # the only one whose /dev/disk0 accepts a write, and a RAM image with an SSH
 # server and two tools in it.
 #
@@ -429,7 +429,7 @@ esac
 
 # A repair is not one boot, and a machine that lost power in the middle of one
 # must come back to the image that was doing the repairing: the boot partition
-# is healthy, so nothing falls through to partition 3, and the ordinary kernel
+# is healthy, so nothing falls through to recovery, and the ordinary kernel
 # cannot mount what is half written. So recovery can be the saved default too,
 # and this leaves it there before stopping the machine the way a power cut
 # would. The default to put back afterwards is whatever this machine had, so it
@@ -479,14 +479,14 @@ grep -aq "$ROOT_UP" "$LOG" || \
     fail "the repaired machine did not mount its root"
 
 # A recovery payload that will not load must not stop the machine. GRUB does not
-# put `root` back when an entry fails, and the recovery entries set it to
-# partition 3, so a fallback that assumed the root it started with would look
+# put `root` back when an entry fails, and the recovery entry sets it to
+# partition 2, so a fallback that assumed the root it started with would look
 # for the ordinary kernel there and fail too. Every entry names its own root for
-# that reason, and this is the proof: partition 3 is destroyed on a copy, the
+# that reason, and this is the proof: partition 2 is destroyed on a copy, the
 # recovery entry is armed, and the machine must fall back to a kernel on
-# partition 1 and mount its root from the disk.
+# partition 1 and mount its ext2 root from partition 3.
 cp "$WORK" "$WORK.save"
-wipe_partition "$WORK" 3 $((1024 * 1024))
+wipe_partition "$WORK" 2 $((1024 * 1024))
 arm_recovery "$WORK"
 LOG="$DISK.log.norecovery"
 boot_watch "rach2 login:"
@@ -518,7 +518,7 @@ fi
 # And the case partition 1 cannot answer at all. The stub, the menu and every
 # entry live there, so a damaged boot partition takes every way in with it; what
 # is left is the core image in the gap, which has two lines of its own. The
-# first opens partition 1's menu and the second opens partition 3's, and the
+# first opens partition 1's menu and the second opens partition 2's, and the
 # early parser those run through has no `if`, which is why they are an ordered
 # pair, not a test. Nothing on partition 1 can boot now, so a machine
 # that reaches a login has come through the second line.
@@ -528,5 +528,5 @@ boot_watch "recovery image"
 grep -aq "modules: found 1" "$LOG" || \
     fail "the boot with partition 1 destroyed did not load a RAM image, so it was not recovery"
 
-echo "drill-test: the everyday kernel refused to write its disk and wrote nothing, a destroyed root stopped the boot, recovery came up on partition 3 and answered SSH, the whole root arrived through one pipe and hashed identically on the platter, and the machine booted from it, a recovery entry that would not load fell back to a kernel on partition 1, a machine stopped with recovery saved as its default came back to recovery, and a disk whose boot partition was destroyed still reached recovery through the core image's own configuration: OK"
+echo "drill-test: the everyday kernel refused to write its disk and wrote nothing, a destroyed root stopped the boot, recovery came up on partition 2 and answered SSH, the whole root arrived through one pipe and hashed identically on the platter, and the machine booted from it, a recovery entry that would not load fell back to a kernel on partition 1, a machine stopped with recovery saved as its default came back to recovery, and a disk whose boot partition was destroyed still reached recovery through the core image's own configuration: OK"
 echo "drill-test: PASS"

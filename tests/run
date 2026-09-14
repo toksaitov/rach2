@@ -40,7 +40,10 @@ REGISTRY="$REPO/tests/registry"
 # from its presence what the recovery artifacts are called, so a key that
 # appeared while make was running would name the artifacts of the run before it.
 # A plain `make` mints nothing, which is what keeps the absence meaningful.
-if [ ! -f "$REPO/krffs/recovery_authorized_keys" ]; then
+# The tree the runner's own selftest drives has neither, which is why the
+# manifest is looked for rather than the key alone.
+if [ -f "$REPO/krffs/manifests/rach2-recovery.manifest" ] &&
+   [ ! -f "$REPO/krffs/recovery_authorized_keys" ]; then
     make -C "$REPO" --no-print-directory recovery-key || {
         echo "run: the recovery system's key could not be made" >&2; exit 1
     }

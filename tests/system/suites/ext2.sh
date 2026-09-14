@@ -221,7 +221,7 @@ BEFORE=$(cksum < "$ROOT")
 "$HARNESS" --kernel "$RKERNEL" --initrd "$RIMAGE" --qemu-arg=-cpu --qemu-arg=max \
     --drive "file=$ROOT,format=raw,if=ide,index=0,media=disk" \
     --timeout 150 --steptmo 40 --ok "LOOKDONE" --log "$ROOT.look.log" \
-    "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" "expect=~ #" \
+    "expect=recovery image" "expect=~ #" \
     "send=echo LOOK\"\"DONE" "expect=LOOKDONE" > /dev/null 2>&1 || fail "the recovery boot without the repair"
 [ "$(cksum < "$ROOT")" = "$BEFORE" ] || fail "a recovery boot without rach2.fsck changed the disk"
 grep -aq 'init: e2fsck' "$ROOT.look.log" && fail "a recovery boot without rach2.fsck ran e2fsck"
@@ -229,7 +229,7 @@ echo "ext2-test: a recovery boot without rach2.fsck leaves the disk as it was: O
 "$HARNESS" --kernel "$RKERNEL" --initrd "$RIMAGE" --qemu-arg=-cpu --qemu-arg=max \
     --drive "file=$ROOT,format=raw,if=ide,index=0,media=disk" --append "rach2.fsck" \
     --timeout 150 --steptmo 40 --ok "RECDONE" --log "$ROOT.recovery.log" \
-    "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" "expect=~ #" \
+    "expect=recovery image" "expect=~ #" \
     "send=dd if=/dev/disk0p2 of=/tmp/s bs=512 count=1 skip=16383 && printf 'rach2 wrote this sector%%s' '' | dd of=/tmp/w bs=512 count=1 conv=sync 2>/dev/null && dd if=/tmp/w of=/dev/disk0p2 bs=512 count=1 seek=16383 && dd if=/dev/disk0p2 bs=512 count=1 skip=16383 | head -c 23 && dd if=/tmp/s of=/dev/disk0p2 bs=512 count=1 seek=16383 && echo BACK\"\"OK" \
     "expect=rach2 wrote this sector" "expect=BACKOK" "send=echo REC\"\"DONE" "expect=RECDONE" > /dev/null 2>&1 || fail "the recovery boot"
 grep -aq 'init: e2fsck: /dev/disk0p1: status 1' "$ROOT.recovery.log" || fail "e2fsck's repair of the root"

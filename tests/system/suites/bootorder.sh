@@ -37,7 +37,7 @@ dd if=/dev/zero of="$BLANK" bs=1048576 count=8 2>/dev/null || fail "the blank di
     --qemu-arg=-device --qemu-arg=ide-hd,drive=drv0,bus=ahci0.0 \
     --qemu-arg=-device --qemu-arg=ide-hd,drive=drv1,bus=ahci0.1,bootindex=0 \
     --timeout 150 --steptmo 120 --log "$DISK.log" \
-    --ok "root: MBRID=1acef00d,2: /dev/disk1p2, KRFFS" \
+    --ok "root: MBRID=1acef00d,3: /dev/disk1p3, ext2" \
     "expect=login:" > /dev/null 2>&1 || fail "the boot behind another disk"
 grep -aq 'disk: disk1: ahci 1: ' "$DISK.log" || fail "the Rach2 disk is not disk 1"
 echo "bootorder-test: the disk behind another disk boots, and its root is found as disk 1: OK"

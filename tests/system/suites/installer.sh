@@ -389,9 +389,9 @@ else
 fi
 # The disk that was grown has a larger root than the image; the one that was
 # not has the image's own. The entry's sector count is at offset 12 of the
-# fourth entry, which begins at 446 + 48.
-GROWN=$(dd if="$DIR/two.img" bs=1 skip=506 count=4 2>/dev/null | od -An -tu4 | tr -d ' ')
-KEPT=$(dd if="$DIR/one.img" bs=1 skip=506 count=4 2>/dev/null | od -An -tu4 | tr -d ' ')
+# third entry, which begins at 446 + 32.
+GROWN=$(dd if="$DIR/two.img" bs=1 skip=490 count=4 2>/dev/null | od -An -tu4 | tr -d ' ')
+KEPT=$(dd if="$DIR/one.img" bs=1 skip=490 count=4 2>/dev/null | od -An -tu4 | tr -d ' ')
 if [ -n "$GROWN" ] && [ "$GROWN" -gt "$KEPT" ]; then
     note "and the root of the disk that was told to grow is larger than the one that was not: OK"
 else
@@ -850,15 +850,15 @@ mark "row 14"
 #          on the new root, since the root's homes were the image's. The
 #          root is written with the image on the host first, which is what
 #          the stopped update left: the image's accounts, homes and keys.
-REC_START=$(od -An -tu4 -j $((446 + 2 * 16 + 8)) -N 4 "$DIR/one.img" | tr -d ' ')
+REC_START=$(od -An -tu4 -j $((446 + 1 * 16 + 8)) -N 4 "$DIR/one.img" | tr -d ' ')
 [ -n "$REC_START" ] && [ "$REC_START" -gt 0 ] || bad "the recovery partition's start could not be read"
 mcopy -i "$DIR/one.img@@$((REC_START * 512))" ::rach2-config/etc/passwd "$DIR/archived-passwd" ||
     bad "the archived passwd could not be read off the recovery partition"
 echo "extra:x:1001:1001::/home/extra:/bin/sh" >> "$DIR/archived-passwd"
 echo "$(basename "$INSTALLER_EXT2") stopped" > "$DIR/update-in-progress"
-ROOT4_START=$(od -An -tu4 -j $((446 + 3 * 16 + 8)) -N 4 "$DIR/one.img" | tr -d ' ')
-[ -n "$ROOT4_START" ] && [ "$ROOT4_START" -gt 0 ] || bad "the root partition's start could not be read"
-dd if="$INSTALLER_EXT2" of="$DIR/one.img" bs=512 seek="$ROOT4_START" conv=notrunc 2>/dev/null ||
+ROOT3_START=$(od -An -tu4 -j $((446 + 2 * 16 + 8)) -N 4 "$DIR/one.img" | tr -d ' ')
+[ -n "$ROOT3_START" ] && [ "$ROOT3_START" -gt 0 ] || bad "the root partition's start could not be read"
+dd if="$INSTALLER_EXT2" of="$DIR/one.img" bs=512 seek="$ROOT3_START" conv=notrunc 2>/dev/null ||
     bad "the image could not be written onto the root, as the stopped update left it"
 mcopy -o -i "$DIR/one.img@@$((REC_START * 512))" "$DIR/archived-passwd" ::rach2-config/etc/passwd ||
     bad "the archived passwd could not be written back to the recovery partition"
@@ -950,7 +950,7 @@ IMAGE_BYTES=$(wc -c < "$DISK" | tr -d ' ')
 IMAGE_SECTORS=$((IMAGE_BYTES / 512))
 # The root's entry in the image's table, the fourth: its first sector from
 # the MBR's bytes.
-ROOT_START=$(od -An -tu4 -j $((446 + 3 * 16 + 8)) -N 4 "$DISK" | tr -d ' ')
+ROOT_START=$(od -An -tu4 -j $((446 + 2 * 16 + 8)) -N 4 "$DISK" | tr -d ' ')
 [ -n "$ROOT_START" ] && [ "$ROOT_START" -gt 0 ] || bad "the image's fourth entry has no start"
 dd if="$DISK" of="$R/head.vol" bs=512 skip="$ROOT_START" count=$((128 * 2048)) 2>/dev/null \
     || bad "the root's head could not be read from the image"

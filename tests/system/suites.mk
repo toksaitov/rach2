@@ -471,11 +471,15 @@ run-bootorder: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krf
 # stub with GRUB's parse error in the log; and the slot's extent read back to
 # prove bootctl overwrote bytes in place rather than rewriting a file.
 MENU_TEST_DISK = $(IMAGES_DIR)/menu-test.disk
-run-menu: $(DEMO_CREDS) rach2 utils krffs $(OS_SIMPLE_EXT2) check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(BINFIND)
+# The root is os-real's, not os-simple's, because every line this suite types
+# at the machine is a busybox command and os-simple carries no busybox: with
+# that root the first command printed nothing and the suite waited out its
+# deadline.
+run-menu: $(DEMO_CREDS) rach2 utils krffs $(OS_REAL_SMALL_EXT2) check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(BINFIND)
 	@mkdir -p $(IMAGES_DIR)
 	RACH2_DISK_RECOVERY_MB=8 \
-	RACH2_DISK_EXT2_MB=16 \
-	RACH2_DISK_EXT2_IMAGE=$(OS_SIMPLE_EXT2) \
+	RACH2_DISK_EXT2_MB=96 \
+	RACH2_DISK_EXT2_IMAGE=$(OS_REAL_SMALL_EXT2) \
 	    sh tools/image/mkdisk_grub.sh build/rach2/kernel $(MENU_TEST_DISK)
 	sh tests/system/suites/menu.sh $(MENU_TEST_DISK) \
 	    "`cat krffs/rach2_demo_password`"
