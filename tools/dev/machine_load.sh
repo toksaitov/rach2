@@ -15,7 +15,7 @@
 # the number of sessions the caller asked for.
 #
 # Each session's build output is kept in its own log beside the report, so a
-# failure can be read afterwards; the copies are left under /tmp/load/<run> on
+# failure can be read afterwards; the copies are left in a private directory on
 # the machine. The exit status is nonzero if any session failed to run, if
 # fewer reported than were asked for, or if any build failed.
 set -u
@@ -26,6 +26,11 @@ ADDR=$2
 SESSIONS=$3
 SECONDS_EACH=$4
 DIR=${5:-.}
+LOAD_USER=${RACH2_LOAD_USER:-root}
+case "$LOAD_USER" in
+    ''|-*|*[!A-Za-z0-9_.-]*)
+        echo "machine_load: invalid account name: $LOAD_USER" >&2; exit 2 ;;
+esac
 
 # Both numbers reach the machine inside a shell command, so each is required to
 # be a bounded decimal before anything is sent: an argument that is not one
@@ -45,13 +50,24 @@ done
 # One run's trees and logs are its own, so two runs cannot delete each other's
 # work or read each other's results.
 RUN=$$
+REMOTE="$(ssh -i "$KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    -o LogLevel=ERROR -o ConnectTimeout=10 -o BatchMode=yes "$LOAD_USER@$ADDR" \
+    'mktemp -d /tmp/rach2-load.XXXXXX')" || exit 1
+case "$REMOTE" in
+    /tmp/rach2-load.*) ;;
+    *) echo "machine_load: the machine did not create a work directory" >&2; exit 1 ;;
+esac
+case "$REMOTE" in
+    *[!A-Za-z0-9_./-]*) echo "machine_load: invalid work directory" >&2; exit 1 ;;
+esac
+echo "machine_load: working: $LOAD_USER@$ADDR $REMOTE, logs $DIR/load-$RUN-sessionN.log"
 pids=""
 n=1
 while [ "$n" -le "$SESSIONS" ]; do
     ssh -i "$KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-        -o LogLevel=ERROR -o ServerAliveInterval=30 "root@$ADDR" \
-        "set -e; mkdir -p /tmp/load/$RUN; rm -rf /tmp/load/$RUN/b$n; \
-         cp -r /src/rach2 /tmp/load/$RUN/b$n; cd /tmp/load/$RUN/b$n; \
+        -o LogLevel=ERROR -o ServerAliveInterval=30 -o ServerAliveCountMax=2 \
+        -o ConnectTimeout=10 -o BatchMode=yes "$LOAD_USER@$ADDR" \
+        "set -e; cp -r /src/rach2 $REMOTE/b$n; cd $REMOTE/b$n; \
          set +e; built=0; failed=0; \
          end=\$((\$(cut -d. -f1 /proc/uptime) + $SECONDS_EACH)); \
          while [ \$(cut -d. -f1 /proc/uptime) -lt \$end ]; do \
