@@ -427,6 +427,12 @@ int main(void)
         diskinfo_format_disks(text, (int)sizeof(text));
         CHECK(strstr(text, "identity 1 4096 removable free S 1\n") != 0,
               "and a disk nothing mounts is free");
+        fake[1].present = 0;
+        fake_claimed = 1;
+        diskinfo_format_disks(text, (int)sizeof(text));
+        CHECK(strstr(text, "disk 1 ") == 0 && strstr(text, "identity 1 ") == 0,
+              "a removed disk is hidden while its mount still holds the record");
+        CHECK(strstr(text, "disk 0 ahci ") != 0, "the other disk stays listed");
         fake_count = 0;
     }
 

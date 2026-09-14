@@ -319,7 +319,7 @@ int diskinfo_format_disks(char *buf, int cap)
     for (i = 0; i < disk_count(); i++) {
         const struct disk *d = disk_at(i);
 
-        if (!d) {
+        if (!d || !d->present) {
             continue;
         }
         put(buf, &n, cap, "disk ");

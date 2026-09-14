@@ -123,6 +123,15 @@ struct vfs_mount *vfs_root_mount(void)
     return mounts[0];
 }
 
+/**
+ * Test both the mounted view and its backing device for removal.
+ * Partition views can be invalidated before the physical record is released.
+ */
+int vfs_mount_gone(const struct vfs_mount *mnt)
+{
+    return mnt->dev && ((mnt->dev->flags | block_flags(mnt->dev)) & BLOCK_GONE);
+}
+
 /* ---- reference and transient counts ---- */
 
 void vfs_ref_hold(const struct vfs_ref *r)
@@ -371,10 +380,11 @@ static int walk_move(struct vfs_ref *cur, struct vfs_mount *mnt, void *node)
  * component at a time and handles four cases: `.`, `..`, a mount whose type
  * takes the rest of the path in one call, and the ordinary lookup of one
  * name, after which a symbolic link is followed and a covering mount is
- * crossed.
+ * crossed. An unmount may resolve a removed mount at the final component
+ * only, so it can release that mount without permitting lookup inside it.
  */
-int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct vfs_ref *out,
-                char *leaf, uint32_t leafcap)
+static int resolve_path(const struct vfs_ref *start, const char *path, int flags,
+                        struct vfs_ref *out, char *leaf, uint32_t leafcap, int unmount)
 {
     struct vfs_ref cur;
     const char *p = path;
@@ -435,6 +445,10 @@ int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct
         }
         if (*p == '\0' || (last_comp && p >= last_comp)) {
             break;
+        }
+        if (vfs_mount_gone(cur.mnt)) {
+            rc = -EIO;
+            goto out_err;
         }
 
         /* The rest-taking mounts: the whole remainder in one call, with a
@@ -636,6 +650,10 @@ int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct
         }
     }
 
+    if (vfs_mount_gone(cur.mnt) && !unmount) {
+        rc = -EIO;
+        goto out_err;
+    }
     if (flags & VFS_WALK_PARENT) {
         rc = may_search(cur.mnt, cur.node, use_real);
         if (rc != 0) {
@@ -653,6 +671,13 @@ out_err:
         vfs_leave(was);
     }
     return rc;
+}
+
+/** Resolve a path only while its mount's device is present. */
+int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct vfs_ref *out,
+                char *leaf, uint32_t leafcap)
+{
+    return resolve_path(start, path, flags, out, leaf, leafcap, 0);
 }
 
 void vfs_ref_release(struct vfs_ref *r)
@@ -725,6 +750,9 @@ void vfs_repoint(struct vfs_mount *mnt, void *from, void *to)
 
 int32_t vfs_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count, uint64_t offset)
 {
+    if (vfs_mount_gone(mnt)) {
+        return -EIO;
+    }
     if (!mnt->type->ops->read) {
         return -EINVAL;
     }
@@ -734,6 +762,9 @@ int32_t vfs_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count,
 int32_t vfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,
                   uint64_t offset)
 {
+    if (vfs_mount_gone(mnt)) {
+        return -EIO;
+    }
     if ((mnt->flags & VFS_MS_RDONLY) || !mnt->type->ops->write) {
         return -EROFS;
     }
@@ -742,6 +773,9 @@ int32_t vfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t
 
 int vfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
 {
+    if (vfs_mount_gone(mnt)) {
+        return -EIO;
+    }
     /* The length of a file that backs a loop device is that device's sector
      * count, so nothing changes it here either: `open(O_TRUNC)` reaches this
      * with the node as its handle, and a descriptor's `ftruncate` reaches it
@@ -759,6 +793,9 @@ int vfs_fsync(struct vfs_mount *mnt, void *handle)
 {
     int rc;
 
+    if (vfs_mount_gone(mnt)) {
+        return -EIO;
+    }
     if (!mnt->type->ops->fsync) {
         rc = mnt->dev ? bcache_sync(mnt->dev) : 0;
     } else {
@@ -809,7 +846,7 @@ int vfs_sync_all(void)
     for (i = 0; i < mount_slots; i++) {
         struct vfs_mount *m = mounts[i];
 
-        if (!m || m->state != VFS_ACTIVE || !m->dev || vfs_enter(m) != 0) {
+        if (!m || m->state != VFS_ACTIVE || !m->dev || vfs_mount_gone(m) || vfs_enter(m) != 0) {
             continue;
         }
         if (m->type->ops->sync) {
@@ -825,6 +862,9 @@ int vfs_sync_all(void)
 
 int vfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 {
+    if (vfs_mount_gone(mnt)) {
+        return -EIO;
+    }
     if (!mnt->type->ops->getattr) {
         return -EINVAL;
     }
@@ -833,6 +873,9 @@ int vfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 
 int vfs_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_stat *st)
 {
+    if (vfs_mount_gone(mnt)) {
+        return -EIO;
+    }
     /* The length of a file that backs a loop device is the device's sector
      * count: nothing may change it while the device is attached. */
     if ((what & VFS_SET_SIZE) && loop_backs(mnt, node)) {
@@ -848,6 +891,9 @@ int vfs_open_node(struct vfs_mount *mnt, void *node, int flags, void **handle)
 {
     int rc;
 
+    if (vfs_mount_gone(mnt)) {
+        return -EIO;
+    }
     if (mnt->type->ops->open) {
         rc = mnt->type->ops->open(mnt, node, flags, handle);
         if (rc != 0) {
@@ -870,6 +916,9 @@ void vfs_release(struct vfs_mount *mnt, void *handle)
 
 int vfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor, struct vfs_dirent *ent)
 {
+    if (vfs_mount_gone(mnt)) {
+        return -EIO;
+    }
     if (!mnt->type->ops->readdir) {
         return -EINVAL;
     }
@@ -878,6 +927,9 @@ int vfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor, struct vf
 
 int vfs_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode, void **node)
 {
+    if (vfs_mount_gone(mnt)) {
+        return -EIO;
+    }
     if ((mnt->flags & VFS_MS_RDONLY) || !mnt->type->ops->create) {
         return -EROFS;
     }
@@ -886,6 +938,9 @@ int vfs_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode
 
 int vfs_unlink_name(struct vfs_mount *mnt, void *dir, const char *name)
 {
+    if (vfs_mount_gone(mnt)) {
+        return -EIO;
+    }
     if ((mnt->flags & VFS_MS_RDONLY) || !mnt->type->ops->unlink) {
         return -EROFS;
     }
@@ -894,6 +949,9 @@ int vfs_unlink_name(struct vfs_mount *mnt, void *dir, const char *name)
 
 int vfs_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode)
 {
+    if (vfs_mount_gone(mnt)) {
+        return -EIO;
+    }
     if ((mnt->flags & VFS_MS_RDONLY) || !mnt->type->ops->mkdir) {
         return -EROFS;
     }
@@ -902,6 +960,9 @@ int vfs_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode)
 
 int vfs_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
 {
+    if (vfs_mount_gone(mnt)) {
+        return -EIO;
+    }
     if ((mnt->flags & VFS_MS_RDONLY) || !mnt->type->ops->rmdir) {
         return -EROFS;
     }
@@ -911,6 +972,9 @@ int vfs_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
 int vfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *newdir,
                const char *newname)
 {
+    if (vfs_mount_gone(mnt)) {
+        return -EIO;
+    }
     if ((mnt->flags & VFS_MS_RDONLY) || !mnt->type->ops->rename) {
         return -EROFS;
     }
@@ -919,6 +983,9 @@ int vfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *n
 
 int vfs_link(struct vfs_mount *mnt, void *dir, const char *name, void *node)
 {
+    if (vfs_mount_gone(mnt)) {
+        return -EIO;
+    }
     if (mnt->flags & VFS_MS_RDONLY) {
         return -EROFS;
     }
@@ -930,6 +997,9 @@ int vfs_link(struct vfs_mount *mnt, void *dir, const char *name, void *node)
 
 int vfs_symlink(struct vfs_mount *mnt, void *dir, const char *name, const char *target)
 {
+    if (vfs_mount_gone(mnt)) {
+        return -EIO;
+    }
     if (mnt->flags & VFS_MS_RDONLY) {
         return -EROFS;
     }
@@ -941,6 +1011,9 @@ int vfs_symlink(struct vfs_mount *mnt, void *dir, const char *name, const char *
 
 int vfs_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
 {
+    if (vfs_mount_gone(mnt)) {
+        return -EIO;
+    }
     if (!mnt->type->ops->statfs) {
         return -EINVAL;
     }
@@ -1810,7 +1883,7 @@ int vfs_do_umount(const char *target)
     struct vfs_ref cov;
     int rc;
 
-    rc = vfs_resolve(0, target, 0, &tref, 0, 0);
+    rc = resolve_path(0, target, 0, &tref, 0, 0, 1);
     if (rc != 0) {
         return rc;
     }

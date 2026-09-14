@@ -150,11 +150,12 @@ fi
 #         first one reclaimed once the mount went. The emulator drops the
 #         medium with the device it was under, so the replug makes the
 #         medium again before the device. ----
+for hold in hold holdexfat; do
 cp "$MBR" "$DIR/stick-pull.img" || fail "the pull image"
-LOG="$DIR/pull.log"
+LOG="$DIR/pull-$hold.log"
 if run "$DIR/stick-pull.img" --timeout 180 --steptmo 60 --ok "USBDISKPROBE OK" --never "USBDISKPROBE FAIL" \
     --log "$LOG" \
-    "expect=Type 'help'" "send=exec /usbdiskprobe hold" "expect=USBDISKPROBE HOLDING" \
+    "expect=Type 'help'" "send=exec /usbdiskprobe $hold" "expect=USBDISKPROBE HOLDING" \
     wait=1 "usb=del:st0" "expect=USBDISKPROBE OK" \
     "expect=Type 'help'" "send=exec /usbdiskprobe free" "expect=USBDISKPROBE FREE 8" \
     "expect=Type 'help'" \
@@ -171,6 +172,8 @@ if grep -aq "usbdisk: disk0: reclaimed" "$LOG"; then
 else
     fail "the pulled stick was never reclaimed"
 fi
+
+done
 
 # ---- 6: a stick plugged in and pulled out without being opened, ten times:
 #         reclaimed at once each time, and every name free afterwards ----

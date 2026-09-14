@@ -13,13 +13,10 @@
  * * `write`: a file written to the FAT volume, synced, unmounted, and read
  *   back after the volume is mounted again; the unmount must have flushed
  *   the stick's own cache, which the stick's line in `/proc/usb` counts.
- * * `hold`: the volume is mounted, a file is opened on it for reading and
- *   one for writing, `USBDISKPROBE HOLDING` is printed so the harness can
- *   pull the stick, and the whole node is read in a loop, which has no cache
- *   in front of it, so the process is inside a request on the stick when
- *   the stick goes. That read answers `EIO`; so do a read and a write of
- *   the mounted files and an open on the mount; `umount2` is `EBUSY` while
- *   the files are open and succeeds once they are closed.
+ * * `hold` and `holdexfat`: warm FAT32 or exFAT caches, then signal the pull
+ *   with `USBDISKPROBE HOLDING` and read the uncached disk until `EIO`.
+ *   File access and cached lookup must then fail; the listings omit the disk
+ *   and mount. Unmount is busy while files are open and succeeds after close.
  * * `replug`: the volume mounts again and the file is still there, on a
  *   stick that inherits nothing from the one before it.
  * * `free`: the number of free names `/proc/usb` reports, printed, so the
@@ -45,6 +42,7 @@ typedef unsigned int size_t;
 #define SYS_WRITE         4
 #define SYS_OPEN          5
 #define SYS_CLOSE         6
+#define SYS_LSEEK         19
 #define SYS_UNLINK        10
 #define SYS_MOUNT         21
 #define SYS_MKDIR         39
@@ -52,6 +50,7 @@ typedef unsigned int size_t;
 #define SYS_SYNC          36
 #define SYS_FSYNC         118
 #define SYS_STAT64        195
+#define SYS_GETDENTS64    220
 #define SYS_NANOSLEEP     162
 #define SYS_CLOCK_GETTIME 265
 
@@ -437,33 +436,42 @@ static void part_write(void)
     ok();
 }
 
-static void part_hold(void)
+/** Keep file and directory cache entries across a pull on either volume. */
+static void part_hold(const char *source, const char *type)
 {
     int fd;
+    int dir;
     int raw;
     int rw;
     int reads = 0;
     int gone = 0;
     char buf[512];
 
-    if (mount_at("/dev/disk0p1", "vfat", 0) != 0) {
+    if (mount_at(source, type, 0) != 0) {
         fail("the volume would not mount");
-    }
-    fd = sys3(SYS_OPEN, (int)MNT "/pattern.bin", O_RDONLY, 0);
-    if (fd < 0) {
-        fail("the file on the volume would not open");
     }
     rw = sys3(SYS_OPEN, (int)MNT "/held.txt", O_RDWR | O_CREAT, 0644);
     if (rw < 0) {
         fail("a file for writing would not be created on the volume");
     }
+    if (sys3(SYS_WRITE, rw, (int)"kept\n", 5) != 5 || sys1(SYS_FSYNC, rw) != 0) {
+        fail("the held file would not write and sync");
+    }
+    fd = sys3(SYS_OPEN, (int)MNT "/held.txt", O_RDONLY, 0);
+    if (fd < 0 || sys3(SYS_READ, fd, (int)buf, 5) != 5 || sys3(SYS_LSEEK, fd, 0, 0) != 0) {
+        fail("the held file would not read before removal");
+    }
+    dir = sys3(SYS_OPEN, (int)MNT, O_RDONLY, 0);
+    if (dir < 0 || sys3(SYS_GETDENTS64, dir, (int)buf, (int)sizeof(buf)) <= 0) {
+        fail("the directory would not list before removal");
+    }
     /* The reads that meet the pull go to the whole node, which has no cache
        in front of it: every one of them is a request on the stick, so the
        process is inside such a request when the stick goes. The file stays
        open on the mount meanwhile, which is what the unmount must refuse. */
-    raw = sys3(SYS_OPEN, (int)"/dev/disk0p1", O_RDONLY, 0);
+    raw = sys3(SYS_OPEN, (int)source, O_RDONLY, 0);
     if (raw < 0) {
-        fail("/dev/disk0p1 would not open");
+        fail("the partition would not open");
     }
     puts("USBDISKPROBE HOLDING");
     while (reads < 2000000) {
@@ -479,7 +487,7 @@ static void part_hold(void)
         }
         if (n == 0) {
             sys1(SYS_CLOSE, raw);
-            raw = sys3(SYS_OPEN, (int)"/dev/disk0p1", O_RDONLY, 0);
+            raw = sys3(SYS_OPEN, (int)source, O_RDONLY, 0);
             if (raw < 0) {
                 gone = 1; /* the node went with the stick */
                 break;
@@ -489,13 +497,27 @@ static void part_hold(void)
     if (!gone) {
         fail("the stick was never pulled out");
     }
+    if (sys3(SYS_GETDENTS64, dir, (int)buf, (int)sizeof(buf)) != -EIO) {
+        fail("a cached directory listed after removal");
+    }
+    if (sys3(SYS_OPEN, (int)MNT, O_RDONLY, 0) != -EIO ||
+        sys2(SYS_STAT64, (int)MNT, (int)buf) != -EIO) {
+        fail("the removed mount still resolves");
+    }
+    if (slurp("/proc/disk") < 0 || contains(text, "disk 0 ") || contains(text, "identity 0 ") ||
+        contains(text, "part 0 ")) {
+        fail("the removed stick is still listed as a disk");
+    }
+    if (slurp("/proc/mounts") < 0 || contains(text, " " MNT " ")) {
+        fail("the removed volume is still listed as mounted");
+    }
     if (sys3(SYS_READ, fd, (int)buf, (int)sizeof(buf)) != -EIO) {
         fail("a read of the mounted file after the pull did not answer EIO");
     }
     if (sys3(SYS_WRITE, rw, (int)"gone\n", 5) != -EIO) {
         fail("a write to the mounted file after the pull did not answer EIO");
     }
-    if (sys3(SYS_OPEN, (int)MNT "/hello.txt", O_RDONLY, 0) != -EIO) {
+    if (sys3(SYS_OPEN, (int)MNT "/held.txt", O_RDONLY, 0) != -EIO) {
         fail("an open on the pulled stick's mount did not answer EIO");
     }
     if (sys2(SYS_UMOUNT2, (int)MNT, 0) != -EBUSY) {
@@ -503,6 +525,7 @@ static void part_hold(void)
     }
     sys1(SYS_CLOSE, fd);
     sys1(SYS_CLOSE, rw);
+    sys1(SYS_CLOSE, dir);
     if (raw >= 0) {
         sys1(SYS_CLOSE, raw);
     }
@@ -810,7 +833,10 @@ void probe_main(unsigned int *sp)
         part_write();
     }
     if (same(what, "hold")) {
-        part_hold();
+        part_hold(fat_node, "vfat");
+    }
+    if (same(what, "holdexfat")) {
+        part_hold(exfat_node, "exfat");
     }
     if (same(what, "replug")) {
         part_replug();

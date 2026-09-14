@@ -1028,7 +1028,7 @@ static int procfs_gen_mounts(struct procfs_text *t)
     for (i = 3; i < vfs_mount_slots(); i++) {
         struct vfs_mount *m = vfs_mount_at(i);
 
-        if (!m || m->state != VFS_ACTIVE) {
+        if (!m || m->state != VFS_ACTIVE || vfs_mount_gone(m)) {
             continue;
         }
         ap_str(t, m->source);

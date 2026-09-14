@@ -301,6 +301,9 @@ struct vfs_mount *vfs_mount_at(int idx);
 /** The three permanent entries, for the syscall layer's direct needs. */
 struct vfs_mount *vfs_root_mount(void);
 
+/** Whether the mount's backing device has been removed. */
+int vfs_mount_gone(const struct vfs_mount *mnt);
+
 /** Whether a root is installed at entry zero, of any type. */
 int vfs_root_mounted(void);
 

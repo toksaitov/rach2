@@ -10,6 +10,8 @@ A mount point is the covered directory's node. The directory a mount covers is h
 
 An entry is free, mounting, active or unmounting. Only an active mount takes new work; the two transitional states answer `EBUSY`. A namespace change sees a mounting entry as a mount point already, so a directory cannot be removed or renamed while a constructor sleeps on its device.
 
+Removal of a backing device makes lookup, metadata, directory and data operations answer `EIO`, including those whose answer was cached. The broken mount is omitted from `/proc/mounts` but retains its references until it can be unmounted. `umount2` may resolve the removed mount's root for this purpose; it still answers `EBUSY` while a file, working directory or child mount holds it, then releases it without writing to the absent device.
+
 ## The resolver
 
 Every path-taking syscall calls `vfs_resolve`, which walks one component at a time: one name in one directory on one mount. Before each step the common layer checks the caller's search permission on that directory, so the check is made once per component and the same way for every type. `..` is physical: at a mount root the resolver moves to the covered directory and resolves the same `..` there, in the parent mount, at the root of the root it stays, and anywhere else it is a `lookup` of `..`. A path that names a missing or unsearchable directory before its `..` fails, as on Linux. The spelling `/x/../proc` reaches `/proc` through `/x` when `/x` is a searchable directory and fails otherwise; neither answer bypasses anything.
