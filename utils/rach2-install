@@ -28,8 +28,10 @@
 # files, the SSH policy, the server's host keys and the accounts' own keys are
 # copied off the root first and written back afterwards, so a password changed
 # after the install is still the machine's password. The root is grown again
-# into its partition, and the new root is armed for one trial boot, so an
-# update that does not come up costs a reboot rather than a journey.
+# into its partition. The machine is saved to its recovery system for the whole
+# of the write and the new root is armed for one trial boot, so an update cut
+# off by a power cut, or one that does not come up, costs a reboot into
+# recovery rather than a journey.
 #
 
 set -u
@@ -433,14 +435,23 @@ whole configuration archived on its recovery partition; its accounts are not the
     [ "$magic" = "53ef" ] ||
         die "$update_image does not begin with an ext2 file system"
 
-    # The machine is put on the entries it can come back to before its root is
-    # replaced: `trial` arms one boot and leaves the saved default alone, so a
-    # machine already saved to the candidate would boot a root that hangs again
-    # at every reboot, and a write cut off by a power cut would leave it there
-    # with no root at all.
-    bootctl --target "${update_disk}p1" env saved_entry fallback > /dev/null ||
-        die "the saved boot entry could not be moved to the fallback; nothing was written"
-    say "the machine is saved to its fallback entries until the new root is tried"
+    # The machine is put where it can come back from before its root is
+    # replaced, and that is the recovery system. It used to be the fallback
+    # entry, which was safe while that entry booted a KRFFS root of its own;
+    # both entries boot this root now, so a write cut off by a power cut would
+    # leave the machine with two ways to start a half-written root and no third
+    # way at all. Recovery runs from RAM and needs no root, so it comes up
+    # whatever state this write leaves behind.
+    #
+    # A trial arms one boot and leaves the saved default alone, so this must be
+    # the saved default and not a trial: a machine that lost power during the
+    # write has already spent its one boot.
+    bootctl --target "${update_disk}p1" env saved_entry recovery > /dev/null ||
+        die "the saved boot entry could not be moved to recovery; nothing was written"
+    # Any trial already armed would consume itself on the next boot and take the
+    # machine off recovery in the middle of this.
+    bootctl --target "${update_disk}p1" cancel > /dev/null 2>&1 || true
+    say "the machine is saved to its recovery system until the new root is tried"
 
     say "writing $bytes bytes into ${update_disk}p${root_entry}, at $at"
     reflash -p "$update_disk" "$at" "$bytes" < "$update_image" ||
@@ -512,8 +523,10 @@ root is written and its archive still says an update is in progress; run the upd
     fi
     rm -rf "$keep"
 
-    # One trial boot of the new root: a root that does not come up costs a
-    # reboot and the machine is back on the entries it was on.
+    # One trial boot of the new root. The saved default is still recovery, so a
+    # root that does not come up costs a reboot and the machine lands in the
+    # system that can repair it; `bootctl commit` from the booted new root is
+    # what finally makes it the default.
     if bootctl --target "${update_disk}p1" trial candidate; then
         say "the new root is armed for one trial boot"
     else
