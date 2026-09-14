@@ -106,6 +106,9 @@ init-login: $(SRC_init_login)
 init-metal: $(SRC_init_metal)
 	$(UCC) $(UFLAGS) $(DEF_init_metal) -o init-metal.new $(SRC_init_metal)
 	mv init-metal.new init-metal
+init-recovery: $(SRC_init_recovery)
+	$(UCC) $(UFLAGS) $(DEF_init_recovery) -o init-recovery.new $(SRC_init_recovery)
+	mv init-recovery.new init-recovery
 login: $(SRC_login) $(HDR_login)
 	$(UCC) $(UFLAGS) -o login.new $(SRC_login)
 	mv login.new login
