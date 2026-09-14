@@ -439,6 +439,29 @@ table, so it cannot move an installation from four partitions to three, and the
 new menu must never be applied to the old layout. The owner's decision is that
 the next stick installs fresh over whatever is there.
 
+**Two faults of the build itself came out of the close, both of the same
+shape.** A component was reachable by two routes with no edge between them, so
+`make -j` took both: the name `rach2` ran a sub-make and the kernel's file rule
+ran another, and a clean parallel build compiled every kernel object twice into
+the same files and linked one that a second job was still writing
+(`undefined reference to krandom_seed`). `ish` had it too, and the three KRFFS
+tools share one rule, which make reads as a rule per target, so three missing
+files were three sub-makes of one directory. Each component now has one file
+rule that asks its sub-make, and the component name asks for that file. The
+second fault was the allowlist: the two init programs were declared against
+each other's manifest, so no image could be staged at all, and `utils/guest.mk`
+had no rule for `init-recovery`, so the guest build of the utilities did not
+build it. Both are the kind a clean build finds and an incremental one hides.
+
+**The string sweep came back as a boot option.** It was one of the eleven
+checks removed from every boot, and the only exhaustive exercise of the word
+moves in `sys/lib/kstring.c`, which are i386 instructions the host test beside
+that file cannot run. `rach2.strings` runs it: 68 lengths at four source and
+four destination alignments, copy, fill and move both ways, with the bytes
+around each range required to be untouched. `tests/run memory` boots it once.
+The copy's byte tail removed reports the first length that is not a multiple of
+four; restored, it passes again.
+
 Then the suites that name a partition number, `tests/run all`, a review of the
 whole diff, and the stick.
 
