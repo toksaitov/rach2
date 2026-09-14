@@ -51,7 +51,8 @@ LOG="$IMAGE.metal.log"
 KNOWN="$IMAGE.metal.known"
 SEND="$IMAGE.metal.send"
 BACK="$IMAGE.metal.back"
-rm -f "$WORK" "$LOG" "$KNOWN" "$SEND" "$BACK"
+ACCEPT_LOG="$IMAGE.metal.accept.log"
+rm -f "$WORK" "$LOG" "$KNOWN" "$SEND" "$BACK" "$ACCEPT_LOG"
 
 QPID=""
 
@@ -292,30 +293,56 @@ echo "metal-test: the machine handed over its own boot log, from the first line:
 # The acceptance script itself, rehearsed here so it is not being debugged on
 # the laptop. Its baseline comparisons are against a drive this machine does
 # not have, which it reports, not fails on.
-ACCEPT="$(sh "$REPO/tests/system/accept/metal_accept.sh" 127.0.0.1 "$PORT" ACCEPT01 2>&1)" || true
-if ! echo "$ACCEPT" | grep -q '^metal-accept: PASS'; then
-    echo "$ACCEPT" | tail -20 >&2
-    fail "the acceptance script did not pass against the rehearsal machine"
+RACH2_ACCEPT_PASSWORD=$(cat "$REPO/krffs/rach2_demo_password")
+export RACH2_ACCEPT_PASSWORD
+SU_COMMAND="$REPO/tests/system/accept/su_command.sh"
+TEST_KEY="$REPO/krffs/rach2_test_ed25519"
+rc=0
+OUT="$(sh "$SU_COMMAND" "$TEST_KEY" 127.0.0.1 "$PORT" test "$KNOWN" \
+    "printf '%s\\n' \"a 'quote' and a dollar \\\$\"; exit 7")" || rc=$?
+if [ "$rc" -ne 7 ] || [ "$OUT" != "a 'quote' and a dollar \$" ]; then
+    fail "the su transport changed a quoted command, its output or its status"
+fi
+echo "metal-test: su preserves a quoted command and its nonzero status: OK"
+stick_before=$(shasum -a 256 "$STICK")
+UNNAMED="$(sh "$REPO/tests/system/accept/metal_accept.sh" 127.0.0.1 "$PORT" 2>&1)" || true
+if ! echo "$UNNAMED" | grep -q '^metal-accept: PASS' ||
+    ! echo "$UNNAMED" | grep -q 'was not named by the owner and is not written' ||
+    echo "$UNNAMED" | grep -q 'is the one written'; then
+    echo "$UNNAMED" >&2
+    fail "the acceptance selected a stick without a serial"
+fi
+[ "$stick_before" = "$(shasum -a 256 "$STICK")" ] || fail "the unnamed stick was changed"
+echo "metal-test: acceptance without a serial leaves the stick unchanged: OK"
+accept_status=0
+RACH2_ACCEPT_SU=1 RACH2_ACCEPT_USER=test RACH2_ACCEPT_KEY="$TEST_KEY" \
+    sh "$REPO/tests/system/accept/metal_accept.sh" 127.0.0.1 "$PORT" ACCEPT01 \
+    > "$ACCEPT_LOG" 2>&1 || accept_status=$?
+unset RACH2_ACCEPT_PASSWORD
+if [ "$accept_status" -ne 0 ] || ! grep -q '^metal-accept: PASS' "$ACCEPT_LOG"; then
+    cat "$ACCEPT_LOG" >&2
+    fail "the acceptance script did not pass against the rehearsal machine (status $accept_status)"
 fi
 echo "metal-test: the acceptance script runs clean against the rehearsal machine: OK"
-if echo "$ACCEPT" | grep -q 'the file system in that file mounts and reads'; then
+if grep -q 'the file system in that file mounts and reads' "$ACCEPT_LOG"; then
     echo "metal-test: and its image row attached a file, mounted it and read it: OK"
 else
+    cat "$ACCEPT_LOG" >&2
     fail "the acceptance script's image row did not run against the rehearsal machine"
 fi
-if echo "$ACCEPT" | grep -q 'stick: the volume ACCEPT on /dev/disk[0-9]*p[0-9]* mounts'; then
+if grep -q 'stick: the volume ACCEPT on /dev/disk[0-9]*p[0-9]* mounts' "$ACCEPT_LOG"; then
     echo "metal-test: and its stick section found the stick, wrote it and flushed it: OK"
 else
     fail "the acceptance script's stick section did not run against the stick"
 fi
-if [ "$(echo "$ACCEPT" | grep -c 'carries a Rach2 recovery ISO in its table and is not written')" = 2 ] &&
-    echo "$ACCEPT" | grep -q 'stick: /dev/disk[0-9]* (ACCEPT01) is the one written'; then
+if [ "$(grep -c 'carries a Rach2 recovery ISO in its table and is not written' "$ACCEPT_LOG")" = 2 ] &&
+    grep -q 'stick: /dev/disk[0-9]* (ACCEPT01) is the one written' "$ACCEPT_LOG"; then
     echo "metal-test: and it took the stick named by its serial and refused both recovery sticks by their tables: OK"
 else
-    echo "$ACCEPT" | grep 'stick:' >&2
+    grep 'stick:' "$ACCEPT_LOG" >&2
     fail "the acceptance script did not refuse the recovery sticks and take the named one"
 fi
-if echo "$ACCEPT" | grep -q 'stick: the KRFFS volume on .* mounts, reads and takes a write'; then
+if grep -q 'stick: the KRFFS volume on .* mounts, reads and takes a write' "$ACCEPT_LOG"; then
     echo "metal-test: and its KRFFS section mounted a volume of the stick and wrote it: OK"
 else
     fail "the acceptance script's KRFFS section did not run against the stick"
@@ -330,8 +357,9 @@ dd if="$STICK" of="$STICK.vol" bs=512 skip=100352 count=32768 2>/dev/null \
 grep -q written-on-the-stick "$STICK.accept" \
     || fail "the bytes the machine wrote to the stick's volume"
 echo "metal-test: and the host finds that volume clean with the machine's bytes in it: OK"
-if echo "$ACCEPT" | grep -q 'behind a hub: port' && echo "$ACCEPT" | grep -q 'hub: device [0-9]*: [0-9]* ports'; then
-    echo "metal-test: and its hub section found the hub and the two devices behind it: OK"
+if grep -q 'behind a hub: port' "$ACCEPT_LOG" &&
+    grep -q 'hub: device [0-9]*: [0-9]* ports' "$ACCEPT_LOG"; then
+    echo "metal-test: and its hub section found the hub and the devices behind it: OK"
 else
     fail "the acceptance script's hub section did not run against the hub"
 fi

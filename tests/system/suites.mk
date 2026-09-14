@@ -77,6 +77,7 @@ WAVCHECK        = build/tests/system/wavcheck
 HARNESS         = build/tests/system/harness
 RUNTESTS        = build/tests/system/runtests
 PTYDRIVE        = build/tests/system/ptydrive
+RUNUTIL         = build/tests/system/runutil
 # The stick and disk tools (their rules are with the usbdisk suite), named
 # here because a prerequisite list expands its variables where it is read.
 MKGPT           = build/tools/image/mkgpt
@@ -136,6 +137,9 @@ $(RUNTESTS): tests/system/runner/runtests.c
 $(PTYDRIVE): tests/system/runner/ptydrive.c
 	@mkdir -p $(dir $@)
 	cc -O2 -Wall -Wextra -o $@ $<
+$(RUNUTIL): tests/system/runner/runutil.c
+	@mkdir -p $(dir $@)
+	cc -O2 -Wall -Wextra -o $@ $<
 # `make test`: the automated end-to-end pass over the test image. Boots it
 # headless (-cpu max) and runs every probe, failing if any does not exit 0. The
 # few probes with a special contract (fork-exit-code, stdin, faults, network)
@@ -181,7 +185,7 @@ INSTALL_STICK = $(IMAGES_DIR)/rach2-install-stick$(RECOVERY_KEY_TAG).img
 INSTALL_TEST_STICK = $(IMAGES_DIR)/install-test-stick.img
 
 prepare-images: $(DEMO_CREDS) $(BINFIND) $(DEADLINE) $(ELFCHECK) $(HARNESS) $(HOSTPEER) \
-                $(MKFIXTURE) $(MKGPT) $(MKMBR) $(PCAPCHECK) $(PTYDRIVE) $(RUNTESTS) \
+                $(MKFIXTURE) $(MKGPT) $(MKMBR) $(PCAPCHECK) $(PTYDRIVE) $(RUNTESTS) $(RUNUTIL) \
                 $(SHA256TOOL) $(WAVCHECK) $(GROWSET) os-real-image os-simple-image \
                 rach2-metal-image rach2-recovery-image $(SEALED_DISK) test-image \
                 $(INSTALL_STICK) $(INSTALL_TEST_STICK)
@@ -1495,7 +1499,7 @@ run-diskpolicy: rach2 rach2-metal $(HARNESS)
 # key authentication, a pty, and a file crossing intact each way are all one
 # test. It kills the server once as well, because a supervisor that starts a
 # daemon and does not restart it has not been tested.
-run-metal: rach2-metal rach2-metal-image $(MKMBR)
+run-metal: rach2-metal rach2-metal-image $(MKMBR) $(PTYDRIVE) $(RUNUTIL)
 	sh tests/system/suites/metal.sh $(METAL_KERNEL) $(METAL_IMAGE) $(METAL_PORT)
 # `tests/run account`: accounts created, authenticated, changed and deleted on
 # both images, since both have account tools now and they are different code.

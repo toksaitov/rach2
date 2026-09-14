@@ -14,8 +14,7 @@
 # answers, and it is run against QEMU first so that the script itself is not
 # being debugged on the machine it is meant to measure. Nearly everything it
 # does is a read, and it issues no command the read-only build's allowlist
-# would refuse; the two exceptions, a file written to the scratch partition
-# and one to a plugged-in stick, are each read back, removed and unmounted.
+# would refuse; its file writes use the root and the selected test stick.
 #
 # Its output is a record, not a verdict on everything. Where a baseline exists
 # (dev-log/24-metal/baseline.md, what Windows measured before Rach2 existed on
@@ -24,15 +23,12 @@
 #
 # The key is the demonstration one the RAM images carry, unless
 # `RACH2_ACCEPT_KEY` names another, and the account is root unless
-# `RACH2_ACCEPT_USER` names another. A machine installed by `rach2-install` has
-# no demonstration key on it and root's keys are whatever its owner put there:
-# the acceptance of such a machine is run with that account's name and key in
-# the environment rather than with this script edited. The account must be able
-# to run the acceptance's commands, which read and write the whole disk, so it
-# is root's key on an installed machine or the account's on one where root's
-# keys were left in place.
+# `RACH2_ACCEPT_USER` names another. On an installed machine, root may have no
+# key. RACH2_ACCEPT_SU=1 authenticates the account by its key
+# and uses su for root commands. The owner sets RACH2_ACCEPT_PASSWORD in the
+# environment; it is never put in a command argument or printed.
 #
-# Usage: metal_accept.sh <host> [port]
+# Usage: metal_accept.sh <host> [port] [stick-serial]
 #
 
 set -e
@@ -40,7 +36,7 @@ set -e
 HOST="$1"
 PORT="${2:-22}"
 # The stick this script may write, by its serial as `/proc/disk` reports it;
-# with none given, the first flash drive that is not a Rach2 recovery stick.
+# with none given, no stick is written.
 STICK_SERIAL="${3:-}"
 
 if [ -z "$HOST" ]; then
@@ -51,6 +47,11 @@ fi
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 KEY="${RACH2_ACCEPT_KEY:-$REPO/krffs/rach2_demo_ed25519}"
 USER_NAME="${RACH2_ACCEPT_USER:-root}"
+USE_SU="${RACH2_ACCEPT_SU:-0}"
+if [ "$USE_SU" = 1 ] && [ -z "${RACH2_ACCEPT_PASSWORD:-}" ]; then
+    echo 'metal-accept: RACH2_ACCEPT_SU needs RACH2_ACCEPT_PASSWORD in the environment' >&2
+    exit 2
+fi
 if [ ! -f "$KEY" ]; then
     echo "metal_accept.sh: $KEY is not a file: name the machine's own key in" \
          "RACH2_ACCEPT_KEY" >&2
@@ -75,6 +76,7 @@ BASELINE_MODEL="Samsung SSD 870 EVO 1TB"
 MACHINE_TMP=""
 MACHINE_MOUNTED=""
 MACHINE_LOOP=""
+TRANSFER_TMP=""
 cleanup() {
     if [ -n "$MACHINE_MOUNTED" ]; then
         run "umount $MACHINE_MOUNTED; rmdir $MACHINE_MOUNTED" > /dev/null 2>&1 || true
@@ -84,6 +86,9 @@ cleanup() {
     fi
     if [ -n "$MACHINE_TMP" ]; then
         run "rm -rf $MACHINE_TMP" > /dev/null 2>&1 || true
+    fi
+    if [ -n "$TRANSFER_TMP" ]; then
+        account "rm -rf $TRANSFER_TMP" > /dev/null 2>&1 || true
     fi
     rm -f "$KNOWN"
     return 0
@@ -107,27 +112,67 @@ bad() {
     echo "  FAIL: $1"
 }
 
-run() {
+account() {
     ssh -i "$KEY" -p "$PORT" \
         -o StrictHostKeyChecking=no -o UserKnownHostsFile="$KNOWN" \
         -o ConnectTimeout=10 -o BatchMode=yes \
-        "$USER_NAME@$HOST" "$1" 2>/dev/null | tr -d '\r'
+        "$USER_NAME@$HOST" "$1" 2>/dev/null
+}
+
+run() {
+    if [ "$USE_SU" = 1 ]; then
+        sh "$REPO/tests/system/accept/su_command.sh" \
+            "$KEY" "$HOST" "$PORT" "$USER_NAME" "$KNOWN" "$1"
+    else
+        account "$1" | tr -d '\r'
+    fi
+}
+
+transfer_directory() {
+    TRANSFER_TMP=$(account 'mktemp -d /tmp/accept-transfer.XXXXXX') || return 1
+    case "$TRANSFER_TMP" in
+        /tmp/accept-transfer.*) ;;
+        *) return 1 ;;
+    esac
+    case "$TRANSFER_TMP" in
+        *[!A-Za-z0-9_./-]*) return 1 ;;
+    esac
 }
 
 # The machine has no sftp server, so a file goes over as the standard input of
 # a command that writes it, and comes back as the standard output of one that
-# reads it.
+# reads it. Both temporary directories are on /tmp's file system: moving the
+# image avoids a second MiB on a small RAM root, where KRFFS has no hard links.
 put() {
-    ssh -i "$KEY" -p "$PORT" \
-        -o StrictHostKeyChecking=no -o UserKnownHostsFile="$KNOWN" \
-        -o ConnectTimeout=10 -o BatchMode=yes \
-        "$USER_NAME@$HOST" "cat > $2" < "$1" 2>/dev/null
+    if [ "$USE_SU" != 1 ]; then
+        account "cat > $2" < "$1"
+        return
+    fi
+    transfer_directory || return 1
+    transfer_status=0
+    if ! account "cat > $TRANSFER_TMP/data" < "$1" ||
+        ! run "mv $TRANSFER_TMP/data $2"; then
+        transfer_status=1
+    fi
+    account "rm -rf $TRANSFER_TMP" || transfer_status=1
+    TRANSFER_TMP=""
+    return "$transfer_status"
 }
 get() {
-    ssh -i "$KEY" -p "$PORT" \
-        -o StrictHostKeyChecking=no -o UserKnownHostsFile="$KNOWN" \
-        -o ConnectTimeout=10 -o BatchMode=yes \
-        "$USER_NAME@$HOST" "cat $1" > "$2" 2>/dev/null
+    if [ "$USE_SU" != 1 ]; then
+        account "cat $1" > "$2"
+        return
+    fi
+    transfer_directory || return 1
+    transfer_status=0
+    if ! run "mv $1 $TRANSFER_TMP/data && chmod 644 $TRANSFER_TMP/data" ||
+        ! account "cat $TRANSFER_TMP/data" > "$2"; then
+        transfer_status=1
+    fi
+    run "if [ -f $TRANSFER_TMP/data ]; then mv $TRANSFER_TMP/data $1; fi" || transfer_status=1
+    account "rm -rf $TRANSFER_TMP" || transfer_status=1
+    TRANSFER_TMP=""
+    return "$transfer_status"
 }
 
 echo "metal-accept: $HOST:$PORT"
@@ -138,6 +183,10 @@ if [ "$(run 'echo ALIVE')" != "ALIVE" ]; then
     exit 1
 fi
 note "SSH answers"
+if [ "$(run 'id -u')" != 0 ]; then
+    echo 'metal-accept: root commands are required; use a root key or RACH2_ACCEPT_SU=1' >&2
+    exit 1
+fi
 
 # ---- what it says it is ----
 note "uname: $(run 'uname -a')"
@@ -335,7 +384,7 @@ note "(the saved boot log above is the whole of what this machine printed)"
 #      note there; a machine whose bootctl answers has the sealed layout and
 #      owes its three partitions. ----
 NODES="$(run 'ls /dev 2>/dev/null' | grep '^disk0p[1-4]$' | tr '\n' ' ')"
-SLOTS="$(run 'bootctl status 2>/dev/null')"
+SLOTS="$(run 'bootctl status 2>/dev/null' || true)"
 if [ -z "$NODES" ]; then
     if [ -n "$SLOTS" ]; then
         bad "partitions: bootctl reports slots and there are no partition nodes"
@@ -419,7 +468,7 @@ else
 fi
 
 # ---- the ext2 root, once milestone 43 has made it: the candidate's command
-#      line names it, the mount table has it writable on the fourth partition,
+#      line names it, the mount table has it writable on the third partition,
 #      the boot came from the candidate slot, the boot log shows either no
 #      check or a clean one, and the volume takes a write that survives a
 #      sync. A boot after a power cut checks the root and records
@@ -429,7 +478,7 @@ fi
 if run 'cat /proc/cmdline' | grep -q 'rach2.rootfstype=ext2'; then
     OUT="$(run 'cat /proc/mounts')"
     case "$OUT" in
-        *"/dev/disk0p4 / ext2 rw,relatime"*) note "the ext2 root is mounted writable from /dev/disk0p4" ;;
+        *"/dev/disk0p3 / ext2 rw,relatime"*) note "the ext2 root is mounted writable from /dev/disk0p3" ;;
         *) bad "the ext2 root is not the mounted root: $OUT" ;;
     esac
     OUT="$(run 'bootctl status')"
@@ -459,22 +508,7 @@ else
     note "the root is not ext2 yet (rach2.rootfstype=ext2 absent from the command line)"
 fi
 
-# ---- the scratch partition, before milestone 43 makes the fourth partition
-#      the ext2 root: mounted for writing, a file written and read back, the
-#      mount taken away. Absent, or ext2 already, this is a note. ----
-if run 'cat /proc/cmdline' | grep -q 'rach2.rootfstype=ext2'; then
-    note "the fourth partition is the ext2 root now; no scratch partition"
-elif run 'ls /dev/disk0p4 2>/dev/null' | grep -q disk0p4; then
-    # shellcheck disable=SC2016 # the machine expands these, not this script
-    OUT="$(run 'mkdir -p /mnt && mount -t vfat /dev/disk0p4 /mnt && f=$(mktemp /mnt/accept.XXXXXX) && echo accept > "$f" && cat "$f"; rm -f "$f"; umount /mnt')"
-    if [ "$OUT" = "accept" ]; then
-        note "the scratch partition mounts for writing, takes a file and gives it back"
-    else
-        bad "the scratch partition did not take a write: $OUT"
-    fi
-else
-    note "no scratch partition yet (/dev/disk0p4 absent)"
-fi
+note "scratch: the image row uses a temporary file on the root"
 
 # ---- a file system in a file, which milestone 44 made possible: an image on
 #      the root, attached to a loop device, mounted, written, read back,
@@ -498,8 +532,10 @@ else
         note "the machine gave no temporary directory; no image row"
     elif ! put "$IMG" "$MACHINE_TMP/loop.img" ||
         [ "$(run "wc -c < $MACHINE_TMP/loop.img")" != "1048576" ]; then
+        note "image: the transfer failed or did not produce 1048576 bytes"
+        run "df -k /tmp; ls -ld $MACHINE_TMP; ls -l $MACHINE_TMP/loop.img" || true
         run "rm -rf $MACHINE_TMP"; MACHINE_TMP=""
-        note "the root has no room for a 1 MiB image; no image row"
+        note "the image transfer did not complete; no image row"
     else
         MACHINE_LOOP=0
         OUT="$(run "loopctl attach 0 $MACHINE_TMP/loop.img && grep -c '^loop0 ' /proc/loop")"
@@ -528,18 +564,21 @@ else
         else
             bad "the unmount or the detach left something behind: $OUT"
         fi
-        get "$MACHINE_TMP/loop.img" "$IMG.after"
-        if "$REPO/build/krffs/fsck.krffs" "$IMG.after" --strict >/dev/null 2>&1; then
-            note "the host's checker finds the image the machine wrote clean"
+        if ! get "$MACHINE_TMP/loop.img" "$IMG.after"; then
+            bad "the image the machine wrote could not be downloaded"
         else
-            bad "the host's checker finds the image the machine wrote faulty"
-        fi
-        if "$REPO/build/krffs/readfile.krffs" "$IMG.after" /accept.txt \
-            "$IMG.accept" >/dev/null 2>&1 &&
-            grep -q written-on-the-machine "$IMG.accept"; then
-            note "with the file the machine wrote inside it"
-        else
-            bad "the file the machine wrote is not in the image"
+            if "$REPO/build/krffs/fsck.krffs" "$IMG.after" --strict >/dev/null 2>&1; then
+                note "the host's checker finds the image the machine wrote clean"
+            else
+                bad "the host's checker finds the image the machine wrote faulty"
+            fi
+            if "$REPO/build/krffs/readfile.krffs" "$IMG.after" /accept.txt \
+                "$IMG.accept" >/dev/null 2>&1 &&
+                grep -q written-on-the-machine "$IMG.accept"; then
+                note "with the file the machine wrote inside it"
+            else
+                bad "the file the machine wrote is not in the image"
+            fi
         fi
         run "rm -rf $MACHINE_TMP"; MACHINE_TMP=""
     fi
@@ -558,7 +597,7 @@ fi
 #      disk1 for a while. A stick whose table has a Rach2 recovery ISO in it,
 #      entry type 17, is a recovery stick and is refused whatever else is on
 #      it, since the acceptance must not write over the stick that boots the
-#      recovery system. With a serial given, the stick is the one that
+#      recovery system. A serial is required; the stick is the one that
 #      reports it and no other, and two that report it stop the acceptance.
 #      The volume is the first FAT or exFAT partition blkid finds on the
 #      chosen stick, mounted by its node and not by a label another stick
@@ -575,25 +614,25 @@ else
     for cand in $(echo "$USBLINES" | awk '{print $1}'); do
         n="${cand#disk}"
         serial="$(echo "$PARTS" | grep "^identity $n " | head -1 | cut -d' ' -f6-)"
-        if echo "$PARTS" | grep -q "^part $n [0-9]* [0-9]* [0-9]* mbr:17 "; then
+        if echo "$PARTS" | grep -q "^part $n [0-9]* [0-9]* [0-9]* mbr:17\\( \\|$\\)"; then
             note "stick: /dev/$cand ($serial) carries a Rach2 recovery ISO in its table and is not written"
             continue
         fi
-        if [ -n "$STICK_SERIAL" ] && [ "$serial" != "$STICK_SERIAL" ]; then
+        if [ -z "$STICK_SERIAL" ]; then
+            note "stick: /dev/$cand ($serial) was not named by the owner and is not written"
+            continue
+        fi
+        if [ "$serial" != "$STICK_SERIAL" ]; then
             note "stick: /dev/$cand ($serial) is not the stick named, $STICK_SERIAL, and is not written"
             continue
         fi
         if [ -n "$STICK_DUP" ]; then
             continue
         fi
-        if [ -n "$STICK" ] && [ -n "$STICK_SERIAL" ]; then
+        if [ -n "$STICK" ]; then
             bad "stick: /dev/$cand and /dev/$STICK both report the serial $STICK_SERIAL; neither is written"
             STICK=""
             STICK_DUP=1
-            continue
-        fi
-        if [ -n "$STICK" ]; then
-            note "stick: /dev/$cand ($serial) is a second stick that could be written; the first is"
             continue
         fi
         STICK="$cand"
@@ -601,12 +640,8 @@ else
         note "stick: /dev/$cand ($serial) is the one written"
     done
 fi
-if [ -z "$STICK" ] && [ -n "$USBLINES" ]; then
-    if [ -n "$STICK_SERIAL" ]; then
-        bad "stick: no flash drive reports the serial $STICK_SERIAL that is not a recovery stick"
-    else
-        note "stick: every flash drive plugged in is a recovery stick; none is written"
-    fi
+if [ -z "$STICK" ] && [ -n "$STICK_SERIAL" ]; then
+    bad "stick: no flash drive reports the serial $STICK_SERIAL that is not a recovery stick"
 fi
 if [ -n "$STICK" ]; then
     case "$(run "ls -l /dev/$STICK 2>/dev/null")" in
