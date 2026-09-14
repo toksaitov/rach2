@@ -416,7 +416,7 @@ if "$HARNESS" --bios --qemu-arg=-cpu --qemu-arg=max \
     "expect=HOMEMADE" \
     "send=df -k / | tail -1" \
     "expect=/dev/" \
-    "send=mkdir -p /r && mount -t vfat /dev/disk0p3 /r && cmp /r/rach2-config/etc/shadow /etc/shadow && grep -c ^$USERNAME: /r/rach2-config/etc/passwd; umount /r" \
+    "send=mkdir -p /r && mount -t vfat /dev/disk0p2 /r && cmp /r/rach2-config/etc/shadow /etc/shadow && grep -c ^$USERNAME: /r/rach2-config/etc/passwd; umount /r" \
     "expect=1" \
     "send=echo INSTALLED\"\"UP" \
     "expect=INSTALLEDUP" > /dev/null 2>&1; then
@@ -738,7 +738,7 @@ if "$HARNESS" --bios --qemu-arg=-cpu --qemu-arg=max \
     "send=echo this-machines-own > /home/$USERNAME/mine && chown 1000:1000 /home/$USERNAME/mine" \
     "send=echo a-marked-motd > /etc/motd && echo CHANGED\"\"DONE" \
     "expect=CHANGEDDONE" \
-    "send=mkdir -p /r && mount -t vfat /dev/disk0p3 /r && mkdir -p /r/rach2-config/etc && echo tampered:x:99: >> /r/rach2-config/etc/group && umount /r && echo ARCHIVE\"\"TAMPERED" \
+    "send=mkdir -p /r && mount -t vfat /dev/disk0p2 /r && mkdir -p /r/rach2-config/etc && echo tampered:x:99: >> /r/rach2-config/etc/group && umount /r && echo ARCHIVE\"\"TAMPERED" \
     "expect=ARCHIVETAMPERED" > /dev/null 2>&1; then
     note "the installed machine is given a password, an account's home and a marked file, and its archive a difference: OK"
 else
@@ -808,7 +808,7 @@ if "$HARNESS" --bios \
     --qemu-arg=-drive --qemu-arg="file=$DIR/one.img,format=raw,if=ide,index=0,media=disk" \
     --timeout 3600 --steptmo 1800 --ok "ARCHIVEDONE" --log "$LOG14" \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
-    "expect=# " "send=dd if=/dev/zero of=/dev/disk0p4 bs=1024 seek=1 count=1 && echo DAMA\"\"GED" \
+    "expect=# " "send=dd if=/dev/zero of=/dev/disk0p3 bs=1024 seek=1 count=1 && echo DAMA\"\"GED" \
     "expect=DAMAGED" \
     "send=mkdir -p /m && mount -t exfat /dev/disk1p2 /m && echo MOUNT\"\"ED" \
     "expect=MOUNTED" \
@@ -896,7 +896,7 @@ if "$HARNESS" --bios --qemu-arg=-cpu --qemu-arg=max \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$NEWPASS" \
     "expect=# " "send=grep -c ^extra: /etc/passwd | sed s/^/EXTRA=/; stat -c %u:%g:%a /home/extra | sed s/^/OWNED=/; test -z \"\$(ls -A /home/extra)\" && test -z \"\$(ls -A /home/test)\" && test ! -e /root/.ssh && echo HOME\"\"MADE" \
     "expect=EXTRA=1" "expect=OWNED=1001:1001:700" "expect=HOMEMADE" \
-    "send=mkdir -p /r && mount -t vfat /dev/disk0p3 /r && test ! -e /r/rach2-config/update-in-progress && echo MARK\"\"GONE; umount /r" \
+    "send=mkdir -p /r && mount -t vfat /dev/disk0p2 /r && test ! -e /r/rach2-config/update-in-progress && echo MARK\"\"GONE; umount /r" \
     "expect=MARKGONE" \
     "send=echo STOPPED\"\"UP" \
     "expect=STOPPEDUP" > /dev/null 2>&1; then

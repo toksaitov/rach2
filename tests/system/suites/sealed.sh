@@ -16,15 +16,15 @@
 # root the candidate entries carry and answers a key login; a new kernel
 # arrives over the same connection, is installed as a one-boot trial, proves
 # itself by a marker in its own boot, and is committed; a candidate destroyed
-# from the host is caught by the fallback, which is the KRFFS root, and
-# repaired from the machine that fell back; the ext2 root is made missing,
-# faulty and dirty in turn under an armed trial and each falls back to the
-# KRFFS root, after which recovery repairs it and the candidate is committed
-# again; a menu is staged and then truncated from the host, which the stub
+# from the host is caught by the fallback, which boots the same root on the
+# previous kernel, and repaired from the machine that fell back; the root is
+# made missing, faulty and dirty in turn under an armed trial and each lands in
+# the recovery system, after which recovery repairs it and the candidate is
+# committed again; a menu is staged and then truncated from the host, which the stub
 # must survive; the boot loader is replaced with a marked core and put back;
-# and finally the KRFFS root is destroyed with the machine stopped and
-# rewritten from recovery through an ssh pipe, after which the machine boots
-# from what arrived.
+# and finally the root is destroyed with the machine stopped and rewritten from
+# recovery through an ssh pipe, after which the machine boots from what
+# arrived.
 #
 # The control run is the same artifact with no faults injected and no deliberate
 # entry into recovery, and it asserts that no fallback and no recovery token
@@ -246,43 +246,29 @@ echo "sealed-test: artifact $DISK_SHA ($(wc -c < "$DISK") bytes)"
 # The partitions, read off the artifact's own table. Everything this run writes
 # or destroys is placed by these numbers and not by the sizes the build was
 # given, because what is being rehearsed is the disk as it is.
-# The root is found the way the kernel finds it: by reading each entry's first
-# sector and taking the first that has a KRFFS root node, not by trusting an
-# entry number or a type byte. What is destroyed below has to be the partition
-# the machine actually mounts.
-# The first partition is the boot partition; the root is whichever
-# partition begins with a KRFFS root node, which is its first three bytes:
-# the magic 0x4b52 little-endian and the root type 0. Probed rather than
-# assumed, because what follows destroys and rewrites this partition.
+# The root is found the way the kernel finds it, by its superblock magic and
+# not by an entry number or a type byte: the first partition whose superblock,
+# at byte 1024, has 0xEF53 at byte 56. What is destroyed below has to be the
+# partition the machine actually mounts. The first partition is the boot one.
+#
+# There were two roots here until 2026-09-14, a KRFFS one the fallback booted
+# and this ext2 one, each discovered separately. The disk has one.
+BOOT_LBA="$("$REPO/build/tools/image/mkmbr" --list "$WORK" |
+    awk 'NR == 1 { print $3 / 512; exit }')"
 EXTENTS="$("$REPO/build/tools/image/mkmbr" --list "$WORK" |
-    while read -r idx type start size; do
-        [ -n "$idx" ] || continue
-        head3="$(dd if="$WORK" bs=512 skip=$((start / 512)) count=1 \
-            status=none | od -An -tx1 -N3 | tr -d ' ')"
-        printf '%s %s %s %s\n' "$type" "$start" "$size" "$head3"
-    done | awk '
-        NR == 1 { boot = $2 }
-        $4 == "524b00" && root == "" { root = $2; rootsz = $3 }
-        END {
-            if (root == "") exit 1
-            print boot / 512, root / 512, rootsz / 512
-        }')" || fail "no partition on the artifact has a KRFFS root"
-BOOT_LBA="$(echo "$EXTENTS" | cut -d' ' -f1)"
-ROOT_LBA="$(echo "$EXTENTS" | cut -d' ' -f2)"
-ROOT_SECTORS="$(echo "$EXTENTS" | cut -d' ' -f3)"
-# The ext2 root, found by its magic the way the kernel finds it: the first
-# partition whose superblock, at byte 1024, has 0xEF53 at byte 56.
-EXT2_LBA="$("$REPO/build/tools/image/mkmbr" --list "$WORK" |
     while read -r idx type start size; do
         [ -n "$idx" ] || continue
         magic="$(dd if="$WORK" bs=512 skip=$((start / 512 + 2)) count=1 \
             status=none | od -An -tx1 -j 56 -N 2 | tr -d ' ')"
         if [ "$magic" = "53ef" ]; then
-            echo $((start / 512))
+            printf '%s %s\n' $((start / 512)) $((size / 512))
             break
         fi
     done)"
-[ -n "$EXT2_LBA" ] || fail "no partition on the artifact has an ext2 root"
+[ -n "$EXTENTS" ] || fail "no partition on the artifact has an ext2 root"
+ROOT_LBA="$(echo "$EXTENTS" | cut -d' ' -f1)"
+ROOT_SECTORS="$(echo "$EXTENTS" | cut -d' ' -f2)"
+EXT2_LBA="$ROOT_LBA"
 EXT2_OFF=$((EXT2_LBA * 512))
 if [ -z "$ROOT_LBA" ] || [ "$ROOT_LBA" -eq 0 ]; then
     fail "the artifact's partition table names no root"
@@ -318,7 +304,7 @@ case "$OUT" in
     *) fail "the first boot did not come from the candidate slot: $OUT" ;;
 esac
 # The candidate's root is the ext2 partition, by its own command line and by
-# the mount table; the fallback's is proved KRFFS when the fallback boots.
+# the mount table; the fallback boots the same one.
 ROOTS="$(machine 'cat /proc/cmdline; cat /proc/mounts' || true)"
 case "$ROOTS" in
     *"rach2.root=MBRID="*",4 rach2.rootfstype=ext2"*) ;;
@@ -425,14 +411,18 @@ case "$OUT" in
     *"booted: fallback"*) ;;
     *) fail "the machine did not come up on the fallback: $OUT" ;;
 esac
+# The fallback boots the machine's own root, which is what makes it useful: a
+# kernel that will not load costs the previous kernel and nothing else. It
+# booted a KRFFS root of its own until 2026-09-14, so falling back also meant
+# losing the person's files and landing in the demonstration accounts.
 ROOTS="$(machine 'cat /proc/cmdline; cat /proc/mounts' || true)"
 case "$ROOTS" in
-    *"rach2.root=MBRID="*",2 rach2.rootfstype=krffs"*) ;;
-    *) fail "the fallback's command line does not name the KRFFS root: $ROOTS" ;;
+    *"rach2.root=MBRID="*",3 rach2.rootfstype=ext2"*) ;;
+    *) fail "the fallback's command line does not name the installed root: $ROOTS" ;;
 esac
 case "$ROOTS" in
-    *"/dev/disk0p2 / krffs"*) ;;
-    *) fail "the fallback did not mount the KRFFS root: $ROOTS" ;;
+    *"/dev/disk0p3 / ext2"*) ;;
+    *) fail "the fallback did not mount the installed root: $ROOTS" ;;
 esac
 
 # The repair is the same install, from the machine that fell back.
@@ -455,42 +445,45 @@ case "$OUT" in
 esac
 stop_machine
 
-phase "the ext2 root missing, faulty and dirty, each falling back"
+phase "the root missing, faulty and dirty, each landing in recovery"
 # The trial is what makes a root that does not come up recoverable without a
-# person: the saved default goes back to the fallback and the candidate is
-# armed for one boot, as an installer leaves a machine; the candidate's root
-# is then damaged from the host with the machine stopped, and the boot after
-# the damaged one must be the fallback, with the KRFFS root, and nothing
-# armed. Three damages: the superblock gone, so no ext2 partition is found
-# and the kernel halts with nothing mounted; a reached inode the bitmap
-# calls free, a fault, so the root mounts read-only; and the valid bit alone
-# clear, so the root is checked and mounts. None is committed, since nothing
-# commits a candidate but a person. The superblock is kept from the host copy
-# and put back before the next damage.
+# person, and what it falls to changed on 2026-09-14. Both kernel entries now
+# boot the same root, so a damaged root is damaged for both of them and GRUB
+# cannot save the machine: its automatic fallback fires when a kernel image
+# will not load, not when a kernel loads and finds no file system. The saved
+# default is therefore the recovery system for the whole of a root write, which
+# is what `rach2-install --update` now leaves behind, and the candidate is
+# armed for one boot on top of it.
+#
+# So each damage is two boots: the armed one, which must fail to mount and
+# reach no login, and the one after it, which must be recovery with nothing
+# still armed. Three damages: the superblock gone, so no ext2 partition is
+# found; a reached inode the bitmap calls free, a fault, so the root mounts
+# read-only; and the valid bit alone clear, so the root is checked and mounts.
+# None is committed, since nothing commits a candidate but a person. The
+# superblock is kept from the host copy and put back before the next damage.
 dd if="$WORK" of="$WORK.sb" bs=512 skip=$((EXT2_LBA + 2)) count=2 status=none
 arm_candidate_trial() {
     cold_boot "$1"
-    OUT="$(machine 'bootctl env saved_entry fallback && bootctl trial candidate && bootctl status' || true)"
+    OUT="$(machine 'bootctl env saved_entry recovery && bootctl trial candidate && bootctl status' || true)"
     case "$OUT" in
         *"next_entry: candidate"*) ;;
         *) fail "the candidate trial could not be armed: $OUT" ;;
     esac
     stop_machine
 }
-fell_back() {
+# The boot after a damaged one: the saved default, which is recovery, with the
+# trial spent. Recovery runs from RAM, so it comes up whatever the root is in.
+landed_in_recovery() {
     cold_boot "$1"
     OUT="$(machine 'bootctl status; cat /proc/mounts' || true)"
     case "$OUT" in
-        *"booted: fallback"*) ;;
-        *) fail "the boot after a $2 candidate root was not the fallback: $OUT" ;;
+        *"booted: recovery"*) ;;
+        *) fail "the boot after a $2 root was not recovery: $OUT" ;;
     esac
     case "$OUT" in
         *"next_entry: absent"*|*"next_entry: empty"*) ;;
-        *) fail "the trial was still armed after a $2 candidate root: $OUT" ;;
-    esac
-    case "$OUT" in
-        *"/dev/disk0p2 / krffs"*) ;;
-        *) fail "the fallback after a $2 candidate root did not mount KRFFS: $OUT" ;;
+        *) fail "the trial was still armed after a $2 root: $OUT" ;;
     esac
     stop_machine
 }
@@ -498,12 +491,12 @@ fell_back() {
 # nothing and halts, which is the state the trial exists for.
 arm_candidate_trial arm-missing
 dd if=/dev/zero of="$WORK" bs=512 seek=$((EXT2_LBA + 2)) count=2 conv=notrunc status=none
-cold_watch missing "root: MBRID=1acef00d,4: /dev/disk0p4 has no ext2 file system this kernel mounts"
+cold_watch missing "root: MBRID=1acef00d,3: /dev/disk0p3 has no ext2 file system this kernel mounts"
 if grep -aq "rach2 login:" "$LOG"; then
     fail "a candidate whose ext2 root is missing still reached a login"
 fi
 cleanup_boot
-fell_back after-missing missing
+landed_in_recovery after-missing missing
 dd if="$WORK.sb" of="$WORK" bs=512 seek=$((EXT2_LBA + 2)) count=2 conv=notrunc status=none
 # Faulty: a reached inode's bit cleared, with the valid bit clear so that the
 # check runs. The root mounts read-only with the fault named; the machine
@@ -522,7 +515,7 @@ cold_watch faulty "ext2: mounted read-only: the check found a fault"
 grep -aq "ext2: check: inode [0-9]*: a reached inode the bitmap calls free" "$LOG" || \
     fail "the faulty root's fault was not named"
 cleanup_boot
-fell_back after-faulty faulty
+landed_in_recovery after-faulty faulty
 # Dirty: the valid bit clear over a consistent volume. The check passes and
 # the root mounts writable; still nothing commits it.
 dd if="$WORK" of="$EXT2IMG" bs=512 skip="$EXT2_LBA" count="$EXT2_SECTORS" status=none
@@ -539,7 +532,7 @@ dd if="$EXT2IMG" of="$WORK" bs=512 seek="$EXT2_LBA" conv=notrunc status=none
 cold_watch dirty "rach2 login:"
 grep -aq "ext2: check: clean" "$LOG" || fail "the dirty root was not checked clean"
 cleanup_boot
-fell_back after-dirty dirty
+landed_in_recovery after-dirty dirty
 # The repair and the return: the recovery entry whose command line includes
 # `rach2.fsck` is armed, its init checks every ext2 partition, and the
 # candidate, tried once more, comes up clean and is committed, which is the
@@ -689,18 +682,17 @@ arm_next() {
     dd if="$WORK.env" of="$WORK" bs=1 seek="$ENV_AT" conv=notrunc status=none
     rm -f "$WORK.env"
 }
-# The KRFFS root's first sector, destroyed with the machine stopped, and the
-# recovery entry armed the way an operator arms it from the console: this is
-# the one damage that leaves the fallback with no way in of its own.
-dd if=/dev/zero of="$WORK" bs=512 seek=$((ROOT_OFF / 512)) count=1 \
+# The root's superblock, destroyed with the machine stopped: an ext2 volume's
+# identity is the third and fourth sectors of its partition. This is the damage
+# no kernel entry can survive, since both boot this root.
+dd if=/dev/zero of="$WORK" bs=512 seek=$((ROOT_OFF / 512 + 2)) count=2 \
     conv=notrunc status=none
-# The damage is proved before it is repaired: the fallback entry, armed for
-# one boot since the saved default is the candidate on the other root, must
-# fail to mount and offer nothing, which is the state an operator would find
-# the machine in. Booting straight into recovery would prove the repair
-# without ever showing that anything was broken.
+# The damage is proved before it is repaired: the fallback entry, armed for one
+# boot, must fail to mount and offer nothing, which is the state an operator
+# would find the machine in. Booting straight into recovery would prove the
+# repair without ever showing that anything was broken.
 arm_next fallback
-cold_watch broken "root: MBRID=1acef00d,2: /dev/disk0p2 has no KRFFS file system this kernel mounts"
+cold_watch broken "root: MBRID=1acef00d,3: /dev/disk0p3 has no ext2 file system this kernel mounts"
 if grep -aq "rach2 login:" "$LOG"; then
     fail "a machine whose root is destroyed still reached a login"
 fi
@@ -777,5 +769,5 @@ esac
 stop_machine
 
 phase ""
-echo "sealed-test: the sealed artifact came up on AHCI on its ext2 root and answered a key login; a kernel sent down that connection was installed, tried and committed; a destroyed candidate was caught by the fallback on the KRFFS root and repaired from it; the ext2 root made missing, faulty and dirty under an armed trial each fell back, recovery's init repaired it and the candidate was committed again; a staged menu reached the machine and a torn one left it booting; the boot loader was replaced with a marked core and then with another in the other tail, and the machine booted each; the KRFFS root was destroyed and rewritten from recovery through one pipe, hashing identically on the platter; and a control copy did all of the ordinary work with no fallback and no recovery anywhere: OK"
+echo "sealed-test: the sealed artifact came up on AHCI on its ext2 root and answered a key login; a kernel sent down that connection was installed, tried and committed; a destroyed candidate was caught by the fallback on the previous kernel and repaired from it; the root made missing, faulty and dirty under an armed trial each landed in recovery, whose init repaired it and the candidate was committed again; a staged menu reached the machine and a torn one left it booting; the boot loader was replaced with a marked core and then with another in the other tail, and the machine booted each; the root was destroyed and rewritten from recovery through one pipe, hashing identically on the platter; and a control copy did all of the ordinary work with no fallback and no recovery anywhere: OK"
 echo "sealed-test: PASS"

@@ -171,12 +171,11 @@ static void shutdown_handler(int sig)
  * machine reported. They write here instead, and `logread` is a person's way
  * back to it.
  *
- * What this is NOT is a bounded log. The size is looked at once, at boot,
- * and the file is removed and begun again when the last boots left it at the
- * threshold; within one boot it grows without limit. Rotating it properly
- * needs a collector that owns the writing, because renaming a file does not
- * move the descriptors the running services already hold, and that is a design
- * this does not have yet.
+ * It is bounded, not rotated: `bound_service_log` empties it in place when it
+ * reaches the cap, which the services' append descriptors survive. Rotation
+ * would keep the older records instead of dropping them, and needs a collector
+ * that owns the writing, because renaming a file does not move the descriptors
+ * running services already hold.
  *
  * Nor does it hold everything a service says. BusyBox's `udhcpc` is started
  * with `-b`, and once it has a lease it backgrounds itself and replaces its
@@ -186,9 +185,55 @@ static void shutdown_handler(int sig)
  */
 #define SERVICE_LOG      "/var/log/services"
 #define SERVICE_LOG_CAP  (256 * 1024)
+/* How often init looks at the log's size while services are running. Its loop
+   otherwise waits for a child to die, and a service that reports a failure in a
+   tight loop dies never, so without a wake of its own the cap would only be
+   read at a boot. */
+#define SERVICE_LOG_CHECK_SECONDS 60
 
 static int service_log_fd = -1;
 static int service_null_fd = -1;
+
+/* Set by the alarm, read by the loop. `volatile sig_atomic_t` because a handler
+   and the code it interrupts are the two halves of this. */
+static volatile sig_atomic_t service_log_due;
+
+static void service_log_alarm(int sig)
+{
+    (void)sig;
+    service_log_due = 1;
+}
+
+/*
+ * Empty the log when it has reached its cap, leaving a line that says so.
+ *
+ * The services hold descriptors opened `O_APPEND`, so truncating the file to
+ * nothing is enough: their next write lands at the start of it and nothing has
+ * to be reopened or renamed. Rotation would need the opposite, a new file the
+ * running services cannot be moved onto, which is the collector this does not
+ * have yet.
+ *
+ * What is lost is the older half of a boot's records. What is kept is a root
+ * that does not fill because one service is repeating itself, and on the
+ * recovery system that root is memory.
+ */
+static void bound_service_log(void)
+{
+    struct stat st;
+    static const char note[] = "init: the service log reached its limit and was emptied\n";
+
+    service_log_due = 0;
+    alarm(SERVICE_LOG_CHECK_SECONDS);
+    if (service_log_fd < 0 || fstat(service_log_fd, &st) != 0) {
+        return;
+    }
+    if (st.st_size < SERVICE_LOG_CAP) {
+        return;
+    }
+    if (ftruncate(service_log_fd, 0) == 0) {
+        (void)write(service_log_fd, note, sizeof(note) - 1);
+    }
+}
 
 /* Open the service log, emptying it first when the last boots left it at the
  * cap. A machine with no writable /var keeps -1 and its services are silenced
@@ -717,6 +762,8 @@ int main(void)
     clear_var_run();
     apply_limits();
     open_service_log();
+    signal(SIGALRM, service_log_alarm);
+    alarm(SERVICE_LOG_CHECK_SECONDS);
 #ifdef INIT_METAL
     if (boot_line_has("rach2.fsck")) {
         check_ext2_partitions();
@@ -807,6 +854,12 @@ int main(void)
          * reboot. `SIGSTOP` cannot be caught at all, so no amount of care in
          * the child covers this; the recovery has to live in the parent. */
         reaped = waitpid(-1, &status, WUNTRACED);
+        if (service_log_due) {
+            bound_service_log();
+        }
+        if (reaped < 0 && errno == EINTR) {
+            continue; /* the alarm, not a child */
+        }
         if (reaped > 0 && WIFSTOPPED(status)) {
             kill(reaped, SIGCONT);
             continue;

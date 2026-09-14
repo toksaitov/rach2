@@ -47,7 +47,6 @@ file 0755 /bin/rach2-install utils/rach2-install
 # The recovery menu beside it: what the machine has, a file system checked, a
 # saved image put back, a kernel installed, and a shell.
 file 0755 /bin/rach2-recover utils/rach2-recover
-file 0755 /bin/dropbearmulti build/vendor/dropbear/dropbearmulti
 
 dir 0755 /sbin
 # The ext2 checker, for the day the machine's own root was not unmounted:
@@ -58,19 +57,25 @@ dir 0755 /sbin
 # the uses recovery has for it.
 file 0755 /sbin/e2fsck build/vendor/e2fsprogs/e2fsck
 file 0755 /sbin/resize2fs build/vendor/e2fsprogs/resize2fs
-file 0755 /sbin/init build/utils/sbin/init-metal
+# The recovery system boots to a shell. A login here was never a boundary: the
+# person choosing this entry has the machine in their hands, and the image has
+# no accounts of the machine's to check against anyway. What it did instead was
+# stand between someone whose machine will not start and the tools that repair
+# it. The installed system keeps its login; this is not that system.
+file 0755 /sbin/init build/utils/sbin/init-shell
 # The periodic sync init keeps running: sleep thirty seconds, sync(2), for ever.
 file 0755 /bin/update build/utils/update
 
 dir 0755 /etc
-dir 0700 /etc/dropbear
 text 0644 /etc/motd Rach2 recovery. This machine mounts nothing from the disk it is repairing: /dev/disk0 is the whole drive and reflash writes it.\n
 text 0644 /etc/hostname rach2\n
 # An empty mount table: e2fsck reads it to see whether its device is mounted,
 # and complains on every run when the file is missing.
 text 0644 /etc/mtab \n
 text 0644 /etc/passwd root:x:0:0:root:/root:/bin/sh\ntest:x:1000:1000:test:/home/test:/bin/sh\n
-file 0600 /etc/shadow krffs/shadow
+# No stored password: nothing in this image authenticates anybody. The account
+# files remain because the tools run as somebody and the shell reads them.
+text 0600 /etc/shadow root:*:0:0:99999:7:::\ntest:*:0:0:99999:7:::\n
 text 0644 /etc/group root:x:0:\ntest:x:1000:\n
 text 0644 /etc/shells /bin/sh\n
 # The stub resolver reads these two (utils/resolv.c). Without them a name is
@@ -122,11 +127,7 @@ dir 0755 /usr/share/udhcpc
 file 0755 /usr/share/udhcpc/default.script krffs/udhcpc-default.script
 
 dir 0755 /root
-dir 0700 /root/.ssh
-file 0600 /root/.ssh/authorized_keys krffs/authorized_keys
 
 dir 1777 /tmp
 dir 0755 /home
 dir 0700:1000:1000 /home/test
-dir 0700:1000:1000 /home/test/.ssh
-file 0600:1000:1000 /home/test/.ssh/authorized_keys krffs/test_authorized_keys
