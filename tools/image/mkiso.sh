@@ -20,11 +20,20 @@ set -e
 IMAGE="$1"
 # Allowlist the image name before it reaches the destructive rm -rf below.
 case "$IMAGE" in
-    test|os-simple|os-real|rach2-metal|rach2-recovery) ;;
+    test|os-simple|os-real|rach2-metal|rach2-recovery|rach2-recovery-with-key) ;;
     *)
-        echo "usage: mkiso.sh <test|os-simple|os-real|rach2-metal|rach2-recovery>" >&2
+        echo "usage: mkiso.sh <test|os-simple|os-real|rach2-metal|rach2-recovery[-with-key]>" >&2
         exit 2
         ;;
+esac
+
+# `rach2-recovery-with-key` is the recovery system with an authorized key staged
+# in it, which is what makes it start an SSH server. It is built under a name of
+# its own so that a stick made from it says what it answers; everything below
+# treats the two the same.
+case "$IMAGE" in
+    rach2-recovery*) RECOVERY=yes ;;
+    *)               RECOVERY=no ;;
 esac
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -38,7 +47,7 @@ REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
 if [ "$IMAGE" = rach2-metal ]; then
     KERNEL="$REPO/build/rach2-metal/kernel"
     POLICY=read-only
-elif [ "$IMAGE" = rach2-recovery ]; then
+elif [ "$RECOVERY" = yes ]; then
     # The recovery kernel and its RAM image on a stick: a machine boots it
     # without its disk and reaches reflash. The disk policy is read-write,
     # since writing the disk is what recovery is for.
@@ -129,12 +138,12 @@ menuentry \"Start Rach2 with no network\" {
 }
 "
     METAL_DEFAULT_ARGS="$METAL_NET"
-elif [ "$IMAGE" = rach2-recovery ]; then
+elif [ "$RECOVERY" = yes ]; then
     # The stick takes an address from DHCP and answers SSH on it, which is
     # how reflash is reached from a host beside the machine; the disk it
-    # repairs is behind an AHCI controller on the machine this is for. The
-    # default entry repairs nothing: `rach2.fsck`, which makes init run
-    # `e2fsck -p` on every ext2 partition first, is the second entry's.
+    # repairs is behind an AHCI controller on the machine this is for. There
+    # is one entry: a repair is a program a person runs from the shell it
+    # gives them, not a thing to choose from a boot menu.
     METAL_ENTRIES=""
     METAL_DEFAULT_ARGS='rach2.ip=none rach2.disk=ahci'
 else
@@ -145,7 +154,7 @@ fi
 # The first entry is what a person is here to do, said in those words: the
 # recovery stick is how a machine is installed and repaired, and the others
 # are that system started for their own reasons.
-if [ "$IMAGE" = rach2-recovery ]; then
+if [ "$RECOVERY" = yes ]; then
     FIRST_TITLE="Install Rach2"
 else
     FIRST_TITLE="Start Rach2 ($IMAGE)"

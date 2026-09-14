@@ -175,7 +175,9 @@ components: harness-kernel busybox check-busybox check-dropbearmulti check-libc 
 # The install sticks, named here because `prepare-images` below names them and
 # make expands a prerequisite when it reads the rule. Their own rules are with
 # the suite that reads them.
-INSTALL_STICK = $(IMAGES_DIR)/rach2-install-stick.img
+# The stick takes the recovery ISO's name with it: a stick whose recovery
+# answers this tree's key is not the stick anybody else runs.
+INSTALL_STICK = $(IMAGES_DIR)/rach2-install-stick$(RECOVERY_KEY_TAG).img
 INSTALL_TEST_STICK = $(IMAGES_DIR)/install-test-stick.img
 
 prepare-images: $(DEMO_CREDS) $(BINFIND) $(DEADLINE) $(ELFCHECK) $(HARNESS) $(HOSTPEER) \
@@ -1377,12 +1379,12 @@ build/images/rach2-metal.iso: $(METAL_KERNEL) $(METAL_IMAGE) tools/image/mkiso.s
 # and neither would find what it wrote. They still name it, so a suite run on
 # its own builds what it needs.
 rach2-install-stick: $(INSTALL_STICK)
-$(INSTALL_STICK): build/images/rach2-recovery.iso $(SEALED_DISK) tools/image/mkinstallstick.sh \
+$(INSTALL_STICK): $(RECOVERY_ISO) $(SEALED_DISK) tools/image/mkinstallstick.sh \
                   $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK)
-	sh tools/image/mkinstallstick.sh build/images/rach2-recovery.iso $(SEALED_DISK) $@ \
+	sh tools/image/mkinstallstick.sh $(RECOVERY_ISO) $(SEALED_DISK) $@ \
 	    $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK)
-build/images/rach2-recovery.iso: $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) tools/image/mkiso.sh
-	sh tools/image/mkiso.sh rach2-recovery
+$(RECOVERY_ISO): $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) tools/image/mkiso.sh
+	sh tools/image/mkiso.sh $(RECOVERY_NAME)
 # A stick of the same shape carrying a 138 MiB disk instead of the sealed one,
 # so the rows that install do not each write a gibibyte and a half. The image
 # it carries has the shape the sealed disk has, a boot partition, a KRFFS root,
@@ -1410,9 +1412,9 @@ $(INSTALLER_DISK): $(DEMO_CREDS) $(INSTALLER_EXT2) $(RECOVERY_IMAGE) tools/image
 	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
 	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
 	    sh tools/image/mkdisk_grub.sh build/rach2/kernel $@
-$(INSTALL_TEST_STICK): build/images/rach2-recovery.iso $(INSTALLER_DISK) $(INSTALLER_EXT2) \
+$(INSTALL_TEST_STICK): $(RECOVERY_ISO) $(INSTALLER_DISK) $(INSTALLER_EXT2) \
                        tools/image/mkinstallstick.sh $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK)
-	sh tools/image/mkinstallstick.sh build/images/rach2-recovery.iso $(INSTALLER_DISK) $@ \
+	sh tools/image/mkinstallstick.sh $(RECOVERY_ISO) $(INSTALLER_DISK) $@ \
 	    $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK) $(INSTALLER_EXT2)
 # `tests/run installer`: the install stick and the program on it. The stick is
 # booted through the firmware with no kernel given to the emulator, so what runs

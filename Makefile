@@ -414,24 +414,30 @@ krffs/shadow:
 	sh krffs/gen_demo_password.sh
 
 # `make recovery-key`: put this tree's own key into the recovery system, so a
-# machine built here can be updated over the network. Nothing generates
-# `krffs/recovery_authorized_keys`, which is what lets its absence mean
-# something: an image built without it starts no SSH server at all, and the
-# only way in is the keyboard. Remove the file to build that image.
+# machine built here can be updated over the network. An image built without
+# that key starts no SSH server at all and the only way in is the keyboard,
+# which is what its absence means. `tests/run` mints it before it builds
+# anything, since the suites that update a machine do it through recovery over
+# SSH; a plain `make` does not, so an image built by hand answers nobody unless
+# somebody asked for a key.
 .PHONY: recovery-key
-recovery-key: krffs/authorized_keys
-	cp krffs/authorized_keys krffs/recovery_authorized_keys
-	@# The image cannot depend on a file that may not exist, so adding or
-	@# removing the key does not make it stale by itself. Removing what
-	@# embeds it is what makes the next build stage the new answer.
-	rm -f $(RECOVERY_IMAGE) $(SEALED_DISK) build/images/rach2-recovery.iso
+recovery-key: krffs/recovery_authorized_keys
 	@echo "recovery-key: the recovery system will answer this tree's key"
 
+krffs/recovery_authorized_keys: krffs/authorized_keys
+	cp krffs/authorized_keys $@
+
 # `make no-recovery-key`: the other direction, for an image somebody else runs.
+# The images that embed the key are removed as well. Make reads the name of a
+# keyed artifact when it starts, so removing the key does not make one stale,
+# and an image left behind under the keyed name would be written to a stick by
+# a later command that named it.
 .PHONY: no-recovery-key
 no-recovery-key:
 	rm -f krffs/recovery_authorized_keys
-	rm -f $(RECOVERY_IMAGE) $(SEALED_DISK) build/images/rach2-recovery.iso
+	rm -f $(IMAGES_DIR)/rach2-recovery-with-key.krffs \
+	      $(IMAGES_DIR)/rach2-recovery-with-key.iso \
+	      $(IMAGES_DIR)/rach2-install-stick-with-key.img $(SEALED_DISK)
 	@echo "no-recovery-key: the recovery system will answer nobody"
 
 DEMO_CREDS = krffs/authorized_keys krffs/shadow
@@ -531,7 +537,20 @@ rach2-metal-image: $(METAL_IMAGE)
 # The recovery RAM image: what the recovery kernel loads as its root. It is the
 # metal profile plus the two programs that repair a disk, and it mounts nothing
 # from the disk it is repairing, which is what lets it rewrite that disk's root.
-RECOVERY_IMAGE = $(IMAGES_DIR)/rach2-recovery.krffs
+#
+# A recovery image that carries a key and one that carries none are identical
+# from outside a booted machine, so the difference is in the name of every
+# artifact that carries it: with a key the image is `rach2-recovery-with-key`,
+# and so are the ISO and the install stick built from it. A person about to
+# write a stick reads the name of the file being written.
+RECOVERY_NAME = rach2-recovery
+RECOVERY_KEY_TAG =
+ifneq ($(wildcard krffs/recovery_authorized_keys),)
+RECOVERY_NAME = rach2-recovery-with-key
+RECOVERY_KEY_TAG = -with-key
+endif
+RECOVERY_IMAGE = $(IMAGES_DIR)/$(RECOVERY_NAME).krffs
+RECOVERY_ISO = $(IMAGES_DIR)/$(RECOVERY_NAME).iso
 $(RECOVERY_IMAGE): $(DEMO_CREDS) krffs/manifests/rach2-recovery.manifest $(shell sh krffs/manifest_deps.sh krffs/manifests/rach2-recovery.manifest) $(IMAGE_TOOLS) | preflight krffs rach2 rach2-recovery utils check-busybox check-setid check-dropbearmulti check-e2fsck
 	$(MKIMAGE) krffs/manifests/rach2-recovery.manifest $@ 4
 
@@ -692,7 +711,7 @@ os-real-iso: os-real-image
 rach2-metal-iso: rach2-metal rach2-metal-image
 	sh tools/image/mkiso.sh rach2-metal
 rach2-recovery-iso: rach2-recovery rach2-recovery-image
-	sh tools/image/mkiso.sh rach2-recovery
+	sh tools/image/mkiso.sh $(RECOVERY_NAME)
 
 # The staged capstone binaries are the REAL prerequisites of the os-real image.
 # A stamp only proves its build RAN; the artifact can be deleted OR truncated
