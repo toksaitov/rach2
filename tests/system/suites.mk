@@ -435,10 +435,15 @@ GRUB_TEST_DISK = $(IMAGES_DIR)/grub-test.disk
 # and the root waits for them.
 GRUB_CORE_A = $(IMAGES_DIR)/core-a.img
 GRUB_CORE_B = $(IMAGES_DIR)/core-b.img
-$(GRUB_CORE_A): tools/image/mkgrubcore.sh
+# The pinned core and the manifest it is verified against are inputs of these
+# fixtures, not just the script that copies them: a regenerated core with the
+# script unchanged would otherwise leave the marked pair as it was.
+GRUB_CORE_DEPS = tools/image/mkgrubcore.sh vendor/grub/verify_grub.sh \
+                 vendor/grub/manifest.txt
+$(GRUB_CORE_A): $(GRUB_CORE_DEPS) vendor/grub/disk-core-a.img
 	@mkdir -p $(IMAGES_DIR)
 	sh tools/image/mkgrubcore.sh A $@
-$(GRUB_CORE_B): tools/image/mkgrubcore.sh
+$(GRUB_CORE_B): $(GRUB_CORE_DEPS) vendor/grub/disk-core-b.img
 	@mkdir -p $(IMAGES_DIR)
 	sh tools/image/mkgrubcore.sh B $@
 
@@ -941,8 +946,10 @@ dhcp-stack: dhcp-card
 	# through the address the lease gave, and the capture must then hold packets
 	# sent FROM that address, which only a machine holding it can send. The knock
 	# alone proves nothing, because QEMU's user network accepts the host side of a
-	# connection before it knows whether the guest is there.
-	$(PCAPCHECK) bcast $(METAL_PCAP) --source 192.168.90.20
+	# connection before it knows whether the guest is there. The asking is on the
+	# wire too, as a broadcast to port 67, and is required here: without it a
+	# machine given that address by hand would satisfy the rest of this row.
+	$(PCAPCHECK) bcast $(METAL_PCAP) --port 67 --source 192.168.90.20
 	# And on a network with no server at all, which is a cable plugged in later or
 	# a switch that has not started forwarding. The client must go to the
 	# background and keep asking rather than give up, because a machine that gave
@@ -1390,9 +1397,11 @@ build/images/rach2-metal.iso: $(METAL_KERNEL) $(METAL_IMAGE) tools/image/mkiso.s
 rach2-install-stick: $(INSTALL_STICK)
 $(INSTALL_STICK): $(RECOVERY_ISO) $(SEALED_DISK) tools/image/mkinstallstick.sh \
                   $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK)
+	@sh tools/image/keyname.sh $@
 	sh tools/image/mkinstallstick.sh $(RECOVERY_ISO) $(SEALED_DISK) $@ \
 	    $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK)
-$(RECOVERY_ISO): $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) tools/image/mkiso.sh
+$(RECOVERY_ISO): $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) tools/image/mkiso.sh tools/image/keyname.sh
+	@sh tools/image/keyname.sh $@
 	sh tools/image/mkiso.sh $(RECOVERY_NAME)
 # A stick of the same shape carrying a 138 MiB disk instead of the sealed one,
 # so the rows that install do not each write a gibibyte and a half. The image

@@ -442,20 +442,27 @@ krffs/shadow:
 recovery-key: krffs/recovery_authorized_keys
 	@echo "recovery-key: the recovery system will answer this tree's key"
 
-krffs/recovery_authorized_keys: krffs/authorized_keys
+# An order-only prerequisite, so the demo key being newer never overwrites a
+# key somebody put here by hand: this rule mints one where there is none and
+# leaves an existing one alone.
+krffs/recovery_authorized_keys: | krffs/authorized_keys
 	cp krffs/authorized_keys $@
 
 # `make no-recovery-key`: the other direction, for an image somebody else runs.
-# The images that embed the key are removed as well. Make reads the name of a
-# keyed artifact when it starts, so removing the key does not make one stale,
-# and an image left behind under the keyed name would be written to a stick by
-# a later command that named it.
+# Every artifact that can embed a key goes with it, under both names. Make
+# reads the name of a keyed artifact when it starts, so removing the key does
+# not make one stale; and an image built before this name existed, or built in
+# the same command that minted the key, carries a key under the plain name.
+# One left behind would be written to a stick by a later command that named it.
 .PHONY: no-recovery-key
 no-recovery-key:
 	rm -f krffs/recovery_authorized_keys
 	rm -f $(IMAGES_DIR)/rach2-recovery-with-key.krffs \
 	      $(IMAGES_DIR)/rach2-recovery-with-key.iso \
-	      $(IMAGES_DIR)/rach2-install-stick-with-key.img $(SEALED_DISK)
+	      $(IMAGES_DIR)/rach2-install-stick-with-key.img \
+	      $(IMAGES_DIR)/rach2-recovery.krffs $(IMAGES_DIR)/rach2-recovery.iso \
+	      $(IMAGES_DIR)/rach2-install-stick.img \
+	      $(IMAGES_DIR)/install-test-stick.img $(SEALED_DISK)
 	@echo "no-recovery-key: the recovery system will answer nobody"
 
 DEMO_CREDS = krffs/authorized_keys krffs/shadow
@@ -569,7 +576,8 @@ RECOVERY_KEY_TAG = -with-key
 endif
 RECOVERY_IMAGE = $(IMAGES_DIR)/$(RECOVERY_NAME).krffs
 RECOVERY_ISO = $(IMAGES_DIR)/$(RECOVERY_NAME).iso
-$(RECOVERY_IMAGE): $(DEMO_CREDS) krffs/manifests/rach2-recovery.manifest $(shell sh krffs/manifest_deps.sh krffs/manifests/rach2-recovery.manifest) $(IMAGE_TOOLS) | preflight krffs rach2 rach2-recovery utils check-busybox check-setid check-dropbearmulti check-e2fsck
+$(RECOVERY_IMAGE): $(DEMO_CREDS) krffs/manifests/rach2-recovery.manifest $(shell sh krffs/manifest_deps.sh krffs/manifests/rach2-recovery.manifest) $(IMAGE_TOOLS) tools/image/keyname.sh | preflight krffs rach2 rach2-recovery utils check-busybox check-setid check-dropbearmulti check-e2fsck
+	@sh tools/image/keyname.sh $@
 	$(MKIMAGE) krffs/manifests/rach2-recovery.manifest $@ 4
 
 rach2-recovery-image: $(RECOVERY_IMAGE)

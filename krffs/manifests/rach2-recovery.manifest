@@ -16,11 +16,14 @@ dir 0755 /bin
 file 0755 /bin/busybox build/vendor/busybox/busybox
 file 0755 /bin/sh build/vendor/busybox/busybox
 
-# The three applets that need the set-id bit come from busybox's second build,
-# which holds only login, passwd and su, exactly as os-real stages them.
+# Two of the set-id applets come from busybox's second build, which holds only
+# login, passwd and su. `login` is not staged: this system says it has no login
+# program, and a set-id one sitting in the image would be a claim the image did
+# not keep. Every account here has `*` for a password, so it could authenticate
+# nobody in any case; `su` and `passwd` stay because a person at the shell uses
+# them on the machine they are repairing.
 file 04755:0:0 /bin/su build/vendor/busybox/busybox-suid
 file 04755:0:0 /bin/passwd build/vendor/busybox/busybox-suid
-file 04755:0:0 /bin/login build/vendor/busybox/busybox-suid
 
 file 0755 /bin/ping build/utils/ping
 # The boot log, under the name a person expects. This machine has no

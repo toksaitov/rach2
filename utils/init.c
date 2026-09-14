@@ -306,9 +306,13 @@ static int anyone_to_let_in(void)
     char line[512];
     int usable = 0;
 
-    /* A regular file with at least one line that names a key type. A file of
-       comments or blank lines is not a credential, and neither is a directory
-       that happens to be there. */
+    /* A regular file with something on a line of its own. A file of comments
+       and blank lines is not a credential, and neither is a directory that
+       happens to be there. What a line has to hold is the server's question,
+       not this one: an entry may begin with options (`no-port-forwarding
+       ssh-ed25519 ...`), and a line that names a type nothing implements
+       authenticates nobody. Reading it any more closely here would refuse
+       entries Dropbear accepts and admit lines it does not. */
     if (stat(RECOVERY_KEYS, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size <= 0) {
         return 0;
     }
@@ -317,8 +321,12 @@ static int anyone_to_let_in(void)
         return 0;
     }
     while (!usable && fgets(line, sizeof(line), f)) {
-        if (strncmp(line, "ssh-", 4) == 0 || strncmp(line, "ecdsa-", 6) == 0 ||
-            strncmp(line, "sk-", 3) == 0) {
+        char *p = line;
+
+        while (*p == ' ' || *p == '\t') {
+            p++;
+        }
+        if (*p != '\0' && *p != '\n' && *p != '\r' && *p != '#') {
             usable = 1;
         }
     }
@@ -793,7 +801,7 @@ int main(void)
     time_t sshd_spawned = 0;
     int network_done = 0;
 #endif
-    int idle_turns = 0;
+    time_t log_checked = time(0);
 
     /* The three shutdown requests, installed before the first child so a
      * request that arrives early is answered instead of defaulting to a
@@ -911,13 +919,18 @@ int main(void)
            has, so the wait is a poll with a second between turns. A child's
            death is then noticed within that second rather than at once, which
            costs a login shell a second to respawn and nothing else. */
+        /* The log is looked at by the clock and not by the turn, because a
+           machine whose children keep dying and respawning never takes the
+           idle path: every turn would reap one, and a service filling the log
+           beside them would never be bounded. `time` moves whatever init is
+           doing. */
+        if (time(0) - log_checked >= SERVICE_LOG_CHECK_SECONDS) {
+            log_checked = time(0);
+            bound_service_log();
+        }
         reaped = waitpid(-1, &status, WUNTRACED | WNOHANG);
         if (reaped == 0) {
             sleep(1);
-            if (++idle_turns >= SERVICE_LOG_CHECK_SECONDS) {
-                idle_turns = 0;
-                bound_service_log();
-            }
             continue;
         }
         if (reaped < 0 && errno == EINTR) {

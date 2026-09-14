@@ -75,7 +75,6 @@ setid /bin/su 04755:0:0 build/vendor/busybox/busybox-suid
 trusted file 0755:0:0 /bin/dropbearmulti build/vendor/dropbear/dropbearmulti
 trusted optional-file 0600:0:0 /root/.ssh/authorized_keys krffs/recovery_authorized_keys
 setid /bin/passwd 04755:0:0 build/vendor/busybox/busybox-suid
-setid /bin/login 04755:0:0 build/vendor/busybox/busybox-suid
 trusted file 0755:0:0 /bin/busybox build/vendor/busybox/busybox
 trusted file 0755:0:0 /bin/sh build/vendor/busybox/busybox
 trusted text 0644:0:0 /etc/passwd root:x:0:0:root:/root:/bin/sh\ntest:x:1000:1000:test:/home/test:/bin/sh\n

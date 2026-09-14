@@ -564,9 +564,11 @@ case "$OUT" in
 esac
 stop_machine
 cold_boot repair
-OUT="$(machine 'e2fsck -y /dev/disk0p3; echo FSCK""=$?' || true)"
+# The status is read whole: `FSCK=1` is a prefix of `FSCK=16`, which e2fsck
+# returns for a usage error, so the token carries a terminator.
+OUT="$(machine 'e2fsck -y /dev/disk0p3; echo FSCK""=$?.' || true)"
 case "$OUT" in
-    *FSCK=0*|*FSCK=1*) ;;
+    *FSCK=0.*|*FSCK=1.*) ;;
     *) fail "the check of the ext2 root did not repair it: $OUT" ;;
 esac
 OUT="$(machine 'bootctl trial candidate && bootctl status' || true)"

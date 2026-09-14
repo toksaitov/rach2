@@ -527,7 +527,16 @@ fi
 # that reaches a login has come through the second line.
 wipe_partition "$WORK" 1 $((2 * 1024 * 1024))
 LOG="$DISK.log.p1dead"
-boot_watch "recovery image"
+# What is waited for is a command run at that machine's shell, not the line
+# init prints before it starts one: init announces the image and then execs
+# the shell, so an image whose shell never came up would pass a wait for the
+# announcement.
+: > "$STEPS"
+step "~ #" 1 "echo P1\"\"DEAD"
+boot_feed
+wait_count "P1DEAD" 1 "$(scaled 200)" || \
+    fail "the boot with partition 1 destroyed never reached a shell that answers"
+cleanup_boot
 grep -aq "modules: found 1" "$LOG" || \
     fail "the boot with partition 1 destroyed did not load a RAM image, so it was not recovery"
 
