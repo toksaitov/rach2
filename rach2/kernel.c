@@ -119,7 +119,6 @@ static void check_strings(void);
 void shell_loop(void);
 void shell_reset_input(void);
 void panic_init_died(uint32_t pid);  /* called from syscall.c too; never returns */
-void release_fd_table(fd_table_t *table);  /* defined in syscall.c */
 static void process_command(const char *cmd);
 static void timer_handler(isr_params_t *params);
 static void keyboard_handler(isr_params_t *params);
@@ -282,7 +281,6 @@ static void timer_handler(isr_params_t *params)
  */
 void terminate_current_process(int32_t signo)
 {
-    process_t *parent;
     bool is_init;
     uint32_t pid;
 
@@ -307,28 +305,7 @@ void terminate_current_process(int32_t signo)
 
     fb_release_if_owner(pid);
 
-    current_proc->state = PROC_ZOMBIE;
-    current_proc->exit_code = signo & 0x7F;
-
-    /* A reaper handler relies on SIGCHLD for signal-killed children too, not
-     * just normal exits. */
-    parent = get_process(current_proc->parent_pid);
-    if (parent) {
-        signal_post(parent, SIGCHLD);
-        if (parent->state == PROC_BLOCKED) {
-            parent->state = PROC_READY;
-            klog(KLOG_INFO, "terminate", "woke parent process %d", parent->pid);
-        }
-    }
-
-    /* Hand any surviving children to init before this slot is reaped, so a
-     * signal-killed parent never strands an orphan on a dead pid. */
-    reparent_children(pid);
-
-    /* Same descriptor-table teardown sys_exit does, so a signal-killed process
-     * leaks no sockets, open-file descriptions or working-directory holds. */
-    release_fd_table(&current_proc->fds);
-    vfs_cwd_clear(current_proc);
+    proc_exit_cleanup(signo & 0x7F);
 
     /* Switch off the dying address space BEFORE freeing its page directory:
      * free_page_directory refuses to free whatever is currently loaded in CR3,
@@ -380,20 +357,7 @@ void terminate_current_process(int32_t signo)
             : "memory"
         );
     } else {
-        /* The state is asserted again here, after the teardown above, because
-         * a step of it can wait: an ext2 close takes the mount's namespace
-         * lock, and a wait leaves the process RUNNING when it ends, whatever
-         * it was before. A dying process left RUNNING is made READY by the
-         * switch below and picked again, and it then returns from `schedule`
-         * into the halt that follows, with interrupts off and nothing able to
-         * end it: no keyboard, no timer, no network, and no record of why.
-         * Do not free_process here either: the zombie must survive for the
-         * parent's waitpid to find, collect, and free the slot. */
-        current_proc->state = PROC_ZOMBIE;
         schedule();
-
-        /* `schedule` does not return to a zombie. Reaching this is the fault
-         * above coming back, and it is said rather than halted on. */
         k_panic("a dying process was scheduled again");
     }
 }

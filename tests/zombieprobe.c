@@ -1,34 +1,12 @@
 /**
- * Kills processes whose teardown has to wait, and requires the machine to go
- * on running.
+ * Stress signal teardown beside a writer on the same file system.
  *
- * A process killed by a signal is marked a zombie before its descriptors are
- * closed, and closing one on a mounted file system can wait: an ext2 close
- * takes the mount's namespace lock, which another process may hold. A wait
- * ends with the waiter RUNNING whatever it was before, so the dying process
- * was made READY again, picked again, and returned from its last `schedule`
- * into a halt taken with interrupts off. Nothing could end that halt: no
- * keyboard, no timer, no network, and no record of why. That is what this
- * probe makes happen, on purpose, many times over.
+ * Forty children open and unlink files, then die by SIGKILL while another
+ * child writes. This does not force a contended close and is not a mutation
+ * proof. exit_hosttest forces the cleanup waits and checks the terminal state.
  *
- * The arrangement: one child writes the same file system in a loop, which is
- * what the other child's teardown has to wait for; the other fills six files,
- * unlinks each while it is still open, and is then killed with SIGKILL, so its
- * teardown has six inodes to free before it can end, and is reaped.
- * A kernel with the fault stops the machine somewhere in these rounds, and the
- * suite that runs this probe fails on its deadline with nothing more printed.
- *
- * What this row does not do is prove the repair. The wait it is built to
- * provoke did not happen in any run of it, on the boot root or on an ext2
- * root, with the fault compiled back in: forty rounds passed either way. It is
- * kept as the stress the machine was under when it stopped, not as the proof,
- * and what the repair rests on is the reading recorded with entry 56.
- *
- * Prints "ZOMBIEPROBE OK" when every round was reaped. Freestanding; direct
- * int 0x80.
- *
- * Needs: a writable working directory. It makes its files there and removes
- * them.
+ * Needs a writable working directory. Prints "ZOMBIEPROBE OK" after all
+ * children are reaped. Freestanding; direct int 0x80.
  */
 
 typedef unsigned int size_t;

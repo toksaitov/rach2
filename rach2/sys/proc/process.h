@@ -216,6 +216,9 @@ process_t *get_process(uint32_t pid);
  */
 void reparent_children(uint32_t dead_pid);
 
+/** Release files, publish the encoded exit status, and wake the parent. */
+void proc_exit_cleanup(int32_t status);
+
 /** Set a process's `comm` name from the final component of `path`. */
 void proc_set_comm(process_t *p, const char *path);
 

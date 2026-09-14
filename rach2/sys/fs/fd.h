@@ -148,6 +148,9 @@ typedef struct fd_table {
     int limit; /* the process's RLIMIT_NOFILE, at most FD_TABLE_LIMIT */
 } fd_table_t;
 
+/** Close every descriptor's backing object before releasing its slot. */
+void release_fd_table(fd_table_t *table);
+
 /** Give a fresh table its first entries; 0, or -1 when the heap has none. */
 int fd_table_init(fd_table_t *table);
 

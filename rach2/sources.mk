@@ -77,6 +77,7 @@ C_SRC = kernel.c \
     sys/diag.c \
         sys/udelay.c \
         sys/proc/process.c \
+        sys/proc/exit.c \
         sys/proc/fpu.c \
         sys/proc/sched.c \
         sys/proc/wait_queue.c \

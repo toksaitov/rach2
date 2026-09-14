@@ -404,18 +404,12 @@ void release_fd_table(fd_table_t *table)
 static int32_t sys_exit(isr_params_t *params)
 {
     int status = (int)params->ebx;
-    process_t *parent;
     bool is_init = false;
     uint32_t exiting_pid;
 
     if (current_proc && fb_owner_pid == current_proc->pid) {
         vga_mode13h_exit();
         fb_owner_pid = 0;
-    }
-
-    if (current_proc) {
-        release_fd_table(&current_proc->fds);
-        vfs_cwd_clear(current_proc);
     }
 
     if (debug_shell_is_home) {
@@ -445,6 +439,8 @@ static int32_t sys_exit(isr_params_t *params)
      * a later session can claim the same /dev/pts/N. */
     pty_release_leader((int)current_proc->sid, (int)current_proc->pid);
 
+    proc_exit_cleanup((status & 0xFF) << 8);
+
 #ifdef RACH2_HARNESS
     /* Harness build: the instant the probe (run as init) exits, report its
      * status to QEMU's isa-debug-exit device and stop, BEFORE schedule() can
@@ -454,28 +450,6 @@ static int32_t sys_exit(isr_params_t *params)
         harness_exit((uint8_t)status);
     }
 #endif
-
-    /* Mark process a zombie and store the Linux wait-status encoding of a
-     * normal exit (the parent's waitpid/wait4 copies exit_code straight out):
-     * the low 8 bits of the code go in bits 8-15, so WIFEXITED is true and
-     * WEXITSTATUS returns the code. (harness_exit above still gets the raw
-     * status byte.) */
-    current_proc->state = PROC_ZOMBIE;
-    current_proc->exit_code = (status & 0xFF) << 8;
-
-    /* Notify the parent: post SIGCHLD (ignored by default, but a shell installs
-     * a reaper handler) and wake it if it is blocked in waitpid. */
-    parent = get_process(current_proc->parent_pid);
-    if (parent) {
-        signal_post(parent, SIGCHLD);
-        if (parent->state == PROC_BLOCKED) {
-            parent->state = PROC_READY;
-        }
-    }
-
-    /* Hand any surviving children to init before this slot is reaped, so an
-     * exit never strands an orphan on a dead parent. */
-    reparent_children(exiting_pid);
 
     /* A real /sbin/init must never exit; if it does there is no reaper, so the
      * kernel panics. Halt BEFORE schedule(), or a still-READY process would
@@ -5840,7 +5814,6 @@ static void __attribute__((noreturn)) exec_fail_destroyed(int where)
     /* The process cannot report this itself: its image is gone and its
      * parent sees only a death by signal. The record says which step of
      * the load failed, so a machine that dies here says why. */
-    process_t *parent;
     page_dir_t *dir;
     int was_init = (current_proc->pid == init_pid && init_pid != 0);
 
@@ -5859,26 +5832,7 @@ static void __attribute__((noreturn)) exec_fail_destroyed(int where)
      * a later session can claim the same /dev/pts/N. */
     pty_release_leader((int)current_proc->sid, (int)current_proc->pid);
 
-    current_proc->state = PROC_ZOMBIE;
-    /* A failed exec destroyed the image; report it as a SIGKILL death (Linux
-     * wait-status: low 7 bits = the signal) so the parent's waitpid sees an
-     * abnormal termination, not a bogus exit code. */
-    current_proc->exit_code = SIGKILL & 0x7F;
-
-    /* Wake a parent blocked in wait() so the scheduler has a target. */
-    parent = get_process(current_proc->parent_pid);
-    if (parent && parent->state == PROC_BLOCKED) {
-        parent->state = PROC_READY;
-    }
-
-    /* Children go to init, as they do on every other death path. */
-    reparent_children(current_proc->pid);
-
-    /* Release the descriptor table (socket refs + open-file descriptions), the
-     * same teardown sys_exit and terminate do, so a failed-exec death leaks no
-     * sockets or OFDs. */
-    release_fd_table(&current_proc->fds);
-    vfs_cwd_clear(current_proc);
+    proc_exit_cleanup(SIGKILL & 0x7F);
 
     /* A real /sbin/init whose exec failed is a fatal init death; halt BEFORE
      * schedule(), or a still-READY process would mask the panic and run on with
