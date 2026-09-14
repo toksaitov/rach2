@@ -8,7 +8,7 @@
 UTILITIES = true false echo yes cat pwd touch mkdir rm mv cp ls ping nc \
             httpd dhcpc netup reflash halt update loopctl growroot diskctl
 
-SBIN_PROGS = init-shell init-login init-metal login su sudo passwd adduser \
+SBIN_PROGS = init-shell init-login init-metal init-recovery login su sudo passwd adduser \
              adduser-crash bootctl
 
 SRC_ping = ping.c resolv.c
@@ -26,6 +26,14 @@ SRC_init_login = init.c
 DEF_init_login = -DINIT_CONSOLE_LOGIN
 SRC_init_metal = init.c
 DEF_init_metal = -DINIT_CONSOLE_LOGIN -DINIT_METAL
+# The recovery system's init: a shell at the console, and the rest of the metal
+# init beside it, which is the network and the optional SSH server. Neither of
+# the other two does both. `init-shell` gives a shell and supervises nothing;
+# `init-metal` supervises everything and demands a login that a system with no
+# passwords cannot answer, which would have left the rescue system impossible
+# to enter by any route.
+SRC_init_recovery = init.c
+DEF_init_recovery = -DINIT_METAL -DINIT_RECOVERY
 SRC_login = login.c pwauth.c
 HDR_login = pwauth.h
 SRC_su = su.c pwauth.c

@@ -162,6 +162,11 @@ $(BUILD)/sbin/init-metal: $(SRC_init_metal)
 	$(CC) $(CFLAGS) $(DEF_init_metal) -MF $(BUILD)/sbin/init-metal.d -o $@ \
 	    $(LINK_PRE) $(SRC_init_metal) $(LINK_POST)
 
+$(BUILD)/sbin/init-recovery: $(SRC_init_recovery)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(DEF_init_recovery) -MF $(BUILD)/sbin/init-recovery.d -o $@ \
+	    $(LINK_PRE) $(SRC_init_recovery) $(LINK_POST)
+
 # login links the credential library: it is the console's authentication.
 $(BUILD)/sbin/login: $(SRC_login) $(HDR_login)
 	@mkdir -p $(dir $@)

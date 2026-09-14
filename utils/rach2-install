@@ -449,8 +449,12 @@ whole configuration archived on its recovery partition; its accounts are not the
     bootctl --target "${update_disk}p1" env saved_entry recovery > /dev/null ||
         die "the saved boot entry could not be moved to recovery; nothing was written"
     # Any trial already armed would consume itself on the next boot and take the
-    # machine off recovery in the middle of this.
-    bootctl --target "${update_disk}p1" cancel > /dev/null 2>&1 || true
+    # machine off recovery in the middle of this, so this has to succeed before
+    # a byte is written. `cancel` on a machine with nothing armed is not a
+    # failure, and `bootctl` says so by succeeding, so a refusal here is a real
+    # one and the write does not start.
+    bootctl --target "${update_disk}p1" cancel > /dev/null ||
+        die "an armed trial could not be cancelled, so recovery would not hold; nothing was written"
     say "the machine is saved to its recovery system until the new root is tried"
 
     say "writing $bytes bytes into ${update_disk}p${root_entry}, at $at"

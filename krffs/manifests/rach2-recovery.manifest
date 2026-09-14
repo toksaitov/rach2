@@ -63,13 +63,17 @@ file 0755 /sbin/resize2fs build/vendor/e2fsprogs/resize2fs
 # stand between someone whose machine will not start and the tools that repair
 # it. The installed system keeps its login; this is not that system.
 #
-# The metal init, not the shell one: it supervises the SSH server, and whether
-# that server runs is decided by whether this image was built with a key. A
-# root update cannot be done from the running system, since the kernel refuses
-# to write a partition whose file system is mounted, so a recovery that answers
-# nothing can only be updated at its keyboard. That is right for an image built
-# for somebody else and wrong for one built to work on.
-file 0755 /sbin/init build/utils/sbin/init-metal
+# The recovery init: a shell at the console, and the network and the optional
+# SSH server beside it. Neither of the other two variants does both, and using
+# the metal one here asked for a login this image has no password to answer,
+# which would have left the rescue system impossible to enter by any route.
+#
+# Whether the server runs is decided by whether this image was built with a
+# key. A root update cannot be done from the running system, since the kernel
+# refuses to write a partition whose file system is mounted, so a recovery that
+# answers nothing can only be updated at its keyboard: right for an image built
+# for somebody else, wrong for one built to work on.
+file 0755 /sbin/init build/utils/sbin/init-recovery
 file 0755 /bin/dropbearmulti build/vendor/dropbear/dropbearmulti
 dir 0700 /etc/dropbear
 dir 0755 /root

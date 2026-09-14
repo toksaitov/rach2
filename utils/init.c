@@ -194,16 +194,6 @@ static void shutdown_handler(int sig)
 static int service_log_fd = -1;
 static int service_null_fd = -1;
 
-/* Set by the alarm, read by the loop. `volatile sig_atomic_t` because a handler
-   and the code it interrupts are the two halves of this. */
-static volatile sig_atomic_t service_log_due;
-
-static void service_log_alarm(int sig)
-{
-    (void)sig;
-    service_log_due = 1;
-}
-
 /*
  * Empty the log when it has reached its cap, leaving a line that says so.
  *
@@ -222,8 +212,6 @@ static void bound_service_log(void)
     struct stat st;
     static const char note[] = "init: the service log reached its limit and was emptied\n";
 
-    service_log_due = 0;
-    alarm(SERVICE_LOG_CHECK_SECONDS);
     if (service_log_fd < 0 || fstat(service_log_fd, &st) != 0) {
         return;
     }
@@ -286,6 +274,9 @@ static void service_output(void)
     }
 }
 
+#ifdef INIT_METAL
+#define RECOVERY_KEYS "/root/.ssh/authorized_keys"
+
 /*
  * Whether this image has anybody to let in.
  *
@@ -302,10 +293,40 @@ static void service_output(void)
  */
 static int anyone_to_let_in(void)
 {
+#ifndef INIT_RECOVERY
+    /* An installed system's policy is its own and this does not touch it: the
+       installer decides who may log in, puts the account's key in the
+       account's own directory and writes the SSH policy for root, and root's
+       directory is empty by its design. Asking about root's keys here would
+       have left every freshly installed machine with no server at all. */
+    return 1;
+#else
     struct stat st;
+    FILE *f;
+    char line[512];
+    int usable = 0;
 
-    return stat("/root/.ssh/authorized_keys", &st) == 0 && st.st_size > 0;
+    /* A regular file with at least one line that names a key type. A file of
+       comments or blank lines is not a credential, and neither is a directory
+       that happens to be there. */
+    if (stat(RECOVERY_KEYS, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size <= 0) {
+        return 0;
+    }
+    f = fopen(RECOVERY_KEYS, "r");
+    if (!f) {
+        return 0;
+    }
+    while (!usable && fgets(line, sizeof(line), f)) {
+        if (strncmp(line, "ssh-", 4) == 0 || strncmp(line, "ecdsa-", 6) == 0 ||
+            strncmp(line, "sk-", 3) == 0) {
+            usable = 1;
+        }
+    }
+    fclose(f);
+    return usable;
+#endif
 }
+#endif /* INIT_METAL */
 
 static pid_t spawn_shell(void)
 {
@@ -772,6 +793,7 @@ int main(void)
     time_t sshd_spawned = 0;
     int network_done = 0;
 #endif
+    int idle_turns = 0;
 
     /* The three shutdown requests, installed before the first child so a
      * request that arrives early is answered instead of defaulting to a
@@ -783,15 +805,15 @@ int main(void)
     clear_var_run();
     apply_limits();
     open_service_log();
-    /* A development image and one built for anybody else are identical from
-       outside, so the machine says which it is. */
+#ifdef INIT_RECOVERY
+    /* A recovery image built to work on and one built for anybody else are
+       identical from outside, so the machine says which it is. */
     if (anyone_to_let_in()) {
-        printf("init: a key was built into this image, so SSH is on\n");
+        printf("init: a key was built into this recovery image, so SSH is on\n");
     } else {
-        printf("init: no key was built into this image, so SSH is off\n");
+        printf("init: no key was built into this recovery image, so SSH is off\n");
     }
-    signal(SIGALRM, service_log_alarm);
-    alarm(SERVICE_LOG_CHECK_SECONDS);
+#endif
 #ifdef INIT_METAL
     if (boot_line_has("rach2.fsck")) {
         check_ext2_partitions();
@@ -881,12 +903,25 @@ int main(void)
          * simply go on blocking and the console would be gone until the next
          * reboot. `SIGSTOP` cannot be caught at all, so no amount of care in
          * the child covers this; the recovery has to live in the parent. */
-        reaped = waitpid(-1, &status, WUNTRACED);
-        if (service_log_due) {
-            bound_service_log();
+        /* A bounded wait rather than a blocking one, because init has to look
+           at the service log while its children are alive and well. There is
+           no timer to ask for a signal with: this kernel has no `setitimer`,
+           so `alarm` returns ENOSYS, musl hides it and nothing ever fires,
+           which is what the first version of this did. `nanosleep` is what it
+           has, so the wait is a poll with a second between turns. A child's
+           death is then noticed within that second rather than at once, which
+           costs a login shell a second to respawn and nothing else. */
+        reaped = waitpid(-1, &status, WUNTRACED | WNOHANG);
+        if (reaped == 0) {
+            sleep(1);
+            if (++idle_turns >= SERVICE_LOG_CHECK_SECONDS) {
+                idle_turns = 0;
+                bound_service_log();
+            }
+            continue;
         }
         if (reaped < 0 && errno == EINTR) {
-            continue; /* the alarm, not a child */
+            continue;
         }
         if (reaped > 0 && WIFSTOPPED(status)) {
             kill(reaped, SIGCONT);

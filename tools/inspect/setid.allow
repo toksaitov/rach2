@@ -54,7 +54,7 @@ trusted text 0644:0:0 /etc/group root:x:0:\ntest:x:1000:\n
 trusted text 0644:0:0 /etc/shells /bin/sh\n
 trusted text 0644:0:0 /etc/profile export PATH=/bin:/usr/bin\nexport HOME="${HOME:-/root}"\ncd "$HOME"\n
 trusted file 0600:0:0 /root/.ssh/authorized_keys krffs/authorized_keys
-init init-metal
+init init-recovery
 
 # The recovery profile. It copied the metal one until 2026-09-14 and now
 # stands on its own, because it is the one image that authenticates nobody:
