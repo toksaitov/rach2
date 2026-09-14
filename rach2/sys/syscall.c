@@ -12042,6 +12042,10 @@ static int32_t sys_munmap(isr_params_t *params)
  * not before. */
 static int _trace_enosys = 0;
 static uint32_t _enosys_last_pid[SYSCALL_TABLE_SIZE];
+/* The last number past the table and who asked for it, which is the same
+   suppression the array above gives the numbers inside it. */
+static uint32_t _enosys_big_num = 0;
+static uint32_t _enosys_big_pid = 0xFFFFFFFFu;
 
 /**
  * The syscall trap handler: dispatch on the number in EAX.
@@ -12094,8 +12098,17 @@ static void _syscall_handler(isr_params_t *params)
         const char *who = current_proc ? current_proc->comm : "?";
 
         if (syscall_num >= SYSCALL_TABLE_SIZE) {
-            klog(KLOG_WARN, "syscall", "%d: not implemented, and past the table (asked for by %s)",
-                 (int)syscall_num, who);
+            /* Said once per number per process, as an in-table one is: musl
+               asks for `clock_gettime64` before every `clock_gettime`, so a
+               program that reads the clock in a loop printed a line a second
+               and the console could not be read. */
+            if (_enosys_big_num != syscall_num || _enosys_big_pid != pid) {
+                _enosys_big_num = syscall_num;
+                _enosys_big_pid = pid;
+                klog(KLOG_WARN, "syscall",
+                     "%d: not implemented, and past the table (asked for by %s)",
+                     (int)syscall_num, who);
+            }
         } else if (_enosys_last_pid[syscall_num] != pid) {
             _enosys_last_pid[syscall_num] = pid;
             klog(KLOG_WARN, "syscall", "%d: not implemented (asked for by %s)", (int)syscall_num,

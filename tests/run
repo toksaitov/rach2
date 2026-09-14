@@ -32,7 +32,7 @@ REPO=$(cd "$(dirname "$0")/.." && pwd)
 # Where the tree has it; the runner's own self-test drives a tree that does not.
 [ -f "$REPO/tools/setup/e2fsprogs_path.sh" ] && . "$REPO/tools/setup/e2fsprogs_path.sh"
 REGISTRY="$REPO/tests/registry"
-[ -f "$REGISTRY" ] || { echo "run: missing $REGISTRY" >&2; exit 1; }
+[ -f "$REGISTRY" ] || { echo "run: result: refused: missing $REGISTRY" >&2; exit 1; }
 
 # How many suites run at once. A suite spends most of its life waiting for an
 # emulated machine rather than computing, so the useful count is above the
@@ -52,19 +52,19 @@ workers_default() {
 unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR
 WORKERS="${RACH2_WORKERS:-$(workers_default)}"
 case "$WORKERS" in
-    ''|*[!0-9]*) echo "run: RACH2_WORKERS must be a positive whole number" >&2; exit 2 ;;
+    ''|*[!0-9]*) echo "run: result: refused: RACH2_WORKERS must be a positive whole number" >&2; exit 2 ;;
 esac
 # `00` is digits and is zero, and a pool of zero waits for a worker that never
 # frees. The value is compared as a number from here on, so it is made one.
 WORKERS=$((WORKERS + 0))
-[ "$WORKERS" -ge 1 ] || { echo "run: RACH2_WORKERS must be a positive whole number" >&2; exit 2; }
+[ "$WORKERS" -ge 1 ] || { echo "run: result: refused: RACH2_WORKERS must be a positive whole number" >&2; exit 2; }
 
 # Scratch for this run: one ledger per suite, the held output of each pooled
 # suite, and the shim that writes the ledgers.
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/rach2-run.XXXXXX")
 # Checked because everything below builds a path on it: an empty value would
 # put the shim at /bin/qemu-system-i386 and delete / on the way out.
-[ -d "$WORK" ] || { echo "run: no scratch directory" >&2; exit 1; }
+[ -d "$WORK" ] || { echo "run: result: refused: no scratch directory" >&2; exit 1; }
 
 # What this run owns: its descendants by the process table, which reaches
 # the makes, recipes and machines under it and the ones the harness's
@@ -540,13 +540,13 @@ check_hashes() { # 0 when nothing hashed differs or is gone
 # suite run alone builds its own images through its own target.
 build_components() {
     run_make -j components || {
-        echo "run: result: the components did not build" >&2; exit 1
+        echo "run: result: refused: the components did not build" >&2; exit 1
     }
 }
 prepare() {
     echo "run: preparing"
     run_make -j prepare-all || {
-        echo "run: result: preparation failed" >&2; exit 1
+        echo "run: result: refused: preparation failed" >&2; exit 1
     }
 }
 
@@ -578,7 +578,7 @@ calibrate() { # calibrate WIDTH -> CAL_FACTOR, or 1 on a failure
         esac
         CAL_FACTOR=$(awk -v f="$RACH2_CALIBRATION_FACTOR" -v envelope="$CAL_ENVELOPE" 'BEGIN {
             f = int(f * 10 + 0.999) / 10; if (f < 1) f = 1
-            if (f > envelope) { printf "run: calibration: the factor %.1f given is past the envelope of %.1f; the set is not started\n", f, envelope > "/dev/stderr"; exit 1 }
+            if (f > envelope) { printf "run: result: refused: the factor %.1f given is past the envelope of %.1f\n", f, envelope > "/dev/stderr"; exit 1 }
             printf "%.1f\n", f }') || return 1
         echo "run: calibration: width $1, factor $CAL_FACTOR given by RACH2_CALIBRATION_FACTOR"
         return 0
@@ -593,7 +593,7 @@ calibrate() { # calibrate WIDTH -> CAL_FACTOR, or 1 on a failure
             fs = v["storage"] / rs; if (fs < 1) fs = 1
             f = (fc > fs ? fc : fs) * margin; f = int(f * 10 + 0.999) / 10
             printf "run: calibration: width %d, computing %.1f s against %.1f (%.2f), storage %.1f s against %.1f (%.2f), margin %.1f, factor %.1f\n", width, v["compute"], rc, fc, v["storage"], rs, fs, margin, f > "/dev/stderr"
-            if (f > envelope) { printf "run: calibration: the emulator runs at 1/%.1f of its idle rate at width %d, past the envelope of %.1f; the set is not started\n", f, width, envelope > "/dev/stderr"; exit 1 }
+            if (f > envelope) { printf "run: result: refused: the emulator runs at 1/%.1f of its idle rate at width %d, past the envelope of %.1f\n", f, width, envelope > "/dev/stderr"; exit 1 }
             printf "%.1f\n", f
         }') || return 1
     [ -n "$CAL_FACTOR" ] || return 1
@@ -716,13 +716,13 @@ run_set() {
 case "${1-}" in
     '')
         echo "usage: tests/run NAME [NAME...] | core | all" >&2
-        echo "run: valid suites are:" >&2; usage_names; exit 2 ;;
+        echo "run: result: refused: no suite named" >&2; usage_names; exit 2 ;;
     all|core)
         # A set and a name in one command would read as "the set and also
         # this", and the set is not being added to. Refused rather than
         # silently dropped.
         [ "$#" -eq 1 ] || {
-            echo "run: '$1' is a whole set; it takes no other names" >&2; exit 2
+            echo "run: result: refused: '$1' is a whole set; it takes no other names" >&2; exit 2
         }
         if [ "$1" = all ]; then
             # shellcheck disable=SC2046 # a suite name is one word by format
@@ -735,19 +735,19 @@ esac
 
 # Every name and every tool, before a single object is built: a run that is
 # going to refuse the last suite should refuse it now rather than in an hour.
-[ "$#" -gt 0 ] || { echo "run: no suites in that set" >&2; exit 2; }
+[ "$#" -gt 0 ] || { echo "run: result: refused: no suites in that set" >&2; exit 2; }
 seen=""
 for suite in "$@"; do
     suite_known "$suite" || {
-        echo "run: unknown suite '$suite'; valid suites are:" >&2; usage_names; exit 2
+        echo "run: result: refused: unknown suite '$suite'" >&2; usage_names; exit 2
     }
     # Twice in one command means two runs sharing one ledger and one held
     # output, where the second result overwrites the first.
     case " $seen " in
-        *" $suite "*) echo "run: $suite is named twice" >&2; exit 2 ;;
+        *" $suite "*) echo "run: result: refused: $suite is named twice" >&2; exit 2 ;;
     esac
     seen="$seen $suite"
-    check_tools "$suite" || exit 1
+    check_tools "$suite" || { echo "run: result: refused: $suite has no tools to run with" >&2; exit 1; }
 done
 diskimage=""
 sockets="--no-sockets"
@@ -760,9 +760,20 @@ for suite in "$@"; do
         *) sockets="" ;;
     esac
 done
-check_host $diskimage $sockets || exit 1
+check_host $diskimage $sockets || { echo "run: result: refused: this host cannot run the set" >&2; exit 1; }
 
-lock_take "$@" || exit 1
+# A runner whose lock is gone but whose processes are not: the lock covers
+# the ordinary case, and this covers the tree whose lock was removed by hand
+# while a set was still running.
+others=$(pgrep -f "sh $0" 2>/dev/null | grep -v "^$$\$" | tr '\n' ' ' | sed 's/ $//')
+if [ -n "$others" ]; then
+    echo "run: result: refused: another runner is still running: pids $others" >&2
+    exit 1
+fi
+lock_take "$@" || { echo "run: result: refused: the tree is not free" >&2; exit 1; }
+# The line that says this run began. Everything below it belongs to this run,
+# and a log without it is a run that never started.
+echo "run: starting: $* (pid $$, $(date '+%Y-%m-%d %H:%M:%S'))"
 # The recovery system starts an SSH server only where a key was built into it,
 # and the suites that repair or update a machine do that work through recovery
 # over SSH. The key is minted here: after the names are checked and the tree is

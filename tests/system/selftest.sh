@@ -518,6 +518,26 @@ check "and the machine is named" 1 "$(printf '%s\n' "$out" | grep -c "left work 
 kill "$machine" 2>/dev/null; wait "$machine" 2>/dev/null
 rm -rf "$WORK/build/.run.lock" "$WORK/oldwork"
 
+# Every way out of the runner says `run: result:`, and a run that began says
+# `run: starting:`. A reader waiting for the result of a run cannot otherwise
+# tell a refusal from a run still going: on 2026-09-14 a refused run left one
+# line in a log, a watcher waited for a result that would never come, and a
+# session sat idle for eight hours.
+mkdir -p "$WORK/build/.run.lock"
+printf 'pid %s\npgid %s\nwork %s\nsince now\nargs holding\n' "$$" "$$" "$WORK" \
+    > "$WORK/build/.run.lock/owner"
+out=$(run passing); rc=$?
+check "a run refused by a live lock exits non-zero" 1 "$rc"
+check "and ends with a result line" 1 "$(printf '%s\n' "$out" | grep -c '^run: result: refused:')"
+check "and never says it started" 0 "$(printf '%s\n' "$out" | grep -c '^run: starting:')"
+rm -rf "$WORK/build/.run.lock"
+out=$(run nosuchsuite); rc=$?
+check "a run refused for an unknown name ends with a result line" 1 \
+    "$(printf '%s\n' "$out" | grep -c '^run: result: refused:')"
+out=$(run passing); rc=$?
+check "a run that began says so" 1 "$(printf '%s\n' "$out" | grep -c '^run: starting: passing')"
+check "and still ends with its own result" 1 "$(printf '%s\n' "$out" | grep -c '^run: passing: PASS')"
+
 # A result is bound to what made it: a suite that changes a hashed script
 # under the run voids the run, by the file's name; so does one that changes
 # a product it was run against.

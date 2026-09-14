@@ -189,7 +189,9 @@ static void shutdown_handler(int sig)
    otherwise waits for a child to die, and a service that reports a failure in a
    tight loop dies never, so without a wake of its own the cap would only be
    read at a boot. */
-#define SERVICE_LOG_CHECK_SECONDS 60
+/* Turns of init's loop between two looks at the service log. An idle turn is a
+   second, so this is about a minute on a quiet machine and less on a busy one. */
+#define SERVICE_LOG_CHECK_TURNS 60
 
 static int service_log_fd = -1;
 static int service_null_fd = -1;
@@ -801,7 +803,7 @@ int main(void)
     time_t sshd_spawned = 0;
     int network_done = 0;
 #endif
-    time_t log_checked = time(0);
+    unsigned turns = 0;
 
     /* The three shutdown requests, installed before the first child so a
      * request that arrives early is answered instead of defaulting to a
@@ -919,13 +921,17 @@ int main(void)
            has, so the wait is a poll with a second between turns. A child's
            death is then noticed within that second rather than at once, which
            costs a login shell a second to respawn and nothing else. */
-        /* The log is looked at by the clock and not by the turn, because a
+        /* Counted on every turn and not only on the idle one, because a
            machine whose children keep dying and respawning never takes the
            idle path: every turn would reap one, and a service filling the log
-           beside them would never be bounded. `time` moves whatever init is
-           doing. */
-        if (time(0) - log_checked >= SERVICE_LOG_CHECK_SECONDS) {
-            log_checked = time(0);
+           beside them would never be bounded. The count is of turns and not of
+           seconds: an idle turn is the second this loop sleeps, and a busy one
+           is shorter, which is when the log grows fastest. `time` is not asked
+           here at all, since musl reaches it through a syscall this kernel
+           answers only after refusing another, and a refusal a second is a
+           console nobody can read. */
+        if (++turns >= SERVICE_LOG_CHECK_TURNS) {
+            turns = 0;
             bound_service_log();
         }
         reaped = waitpid(-1, &status, WUNTRACED | WNOHANG);
