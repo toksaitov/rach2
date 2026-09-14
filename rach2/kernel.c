@@ -114,126 +114,7 @@ volatile size_t stdin_pos = 0;
 volatile bool stdin_ready = false;
 volatile process_t *stdin_waiting_proc = NULL;
 
-/**
- * The heap: objects of every class and of pages taken and given back, a
- * thousand times, and the heap's pages and bytes where they started; a
- * block written whole and read back; and a mapping made in the kernel's
- * gigabyte after a directory was cloned, seen through that clone, since
- * the clone copied the directory entries and the tables behind them are
- * shared.
- */
-/*
- * Take and give back every size class a thousand times, and say whether the
- * heap came back to where it started.
- *
- * Returns 1 when every object was allocated and read back as written. The
- * caller compares the heap's totals either side of this.
- */
-static int heap_churn(void)
-{
-    uint32_t i, j;
-    void *held[16];
-
-    for (i = 0; i < 1000; i++) {
-        uint32_t sizes[16];
-
-        for (j = 0; j < 16; j++) {
-            held[j] = NULL;
-        }
-        /* Every class from 16 to 2048 bytes, a byte or so short of it, and
-           a large object past the classes: sixteen objects, two per class. */
-        for (j = 0; j < 16; j++) {
-            uint32_t size = (j == 15) ? 3000 + i : (16u << (j % 8)) - (i % 5);
-
-            sizes[j] = size;
-            held[j] = kmalloc(size);
-            if (!held[j]) {
-                return 0;
-            }
-            k_memset(held[j], (int)(j + i), size);
-        }
-        for (j = 0; j < 16; j++) {
-            uint32_t k;
-
-            for (k = 0; k < sizes[j]; k++) {
-                if (((uint8_t *)held[j])[k] != (uint8_t)(j + i)) {
-                    return 0;
-                }
-            }
-            kfree(held[j]);
-        }
-    }
-    return 1;
-}
-
-static int test_heap(void)
-{
-    uint32_t pages0, bytes0, pages1, bytes1;
-    int attempt;
-    int settled = 0;
-    int ok = 1;
-
-    /* `kheap_stats` counts the whole kernel's heap, not this test's share of
-       it, so a driver allocating while the loop runs moves the total and is
-       indistinguishable here from a leak of our own. That is not
-       hypothetical: on the laptop the USB stack is still enumerating the
-       built-in camera and card reader across these milliseconds, and this
-       reported three pages leaked at every boot, while QEMU, with nothing else
-       allocating, passed.
-
-       Repetition separates the two. Each pass takes and gives back the same
-       objects, so a leak of our own moves the total by the same amount every
-       time and no pass is ever clean; another subsystem's allocation is
-       occasional, and a pass that does not overlap one comes back level. Five
-       passes, and the first clean one settles it. */
-    for (attempt = 0; attempt < 5 && ok && !settled; attempt++) {
-        kheap_stats(&pages0, &bytes0);
-        if (!heap_churn()) {
-            ok = 0;
-            break;
-        }
-        kheap_stats(&pages1, &bytes1);
-        if (pages1 == pages0 && bytes1 == bytes0) {
-            settled = 1;
-        } else if (attempt > 0) {
-            klog(KLOG_INFO, "selftest",
-                 "heap: something else took %d pages and %d bytes while this ran; trying again",
-                 (int)(pages1 - pages0), (int)(bytes1 - bytes0));
-        }
-    }
-    if (ok && !settled) {
-        klog(KLOG_ERR, "selftest",
-             "heap: five passes each left the heap higher, last by %d pages and %d bytes, "
-             "so this loop is not giving back what it takes",
-             (int)(pages1 - pages0), (int)(bytes1 - bytes0));
-        ok = 0;
-    }
-    {
-        page_dir_t *clone = clone_page_directory();
-        uintptr_t phys = 0;
-        volatile uint32_t *page = kalloc_pages(1, &phys);
-
-        if (!clone || !page) {
-            ok = 0;
-        } else {
-            page[0] = 0x5EEDu;
-            switch_page_directory(clone);
-            if (page[0] != 0x5EEDu) {
-                ok = 0;
-            }
-            switch_page_directory(_kernel_dir);
-        }
-        if (page) {
-            kfree_pages((void *)page, 1);
-        }
-        if (clone) {
-            free_page_directory(clone);
-        }
-    }
-    return ok;
-}
-
-static void run_self_tests(void);
+static void check_timing(void);
 void shell_loop(void);
 void shell_reset_input(void);
 void panic_init_died(uint32_t pid);  /* called from syscall.c too; never returns */
@@ -311,20 +192,13 @@ static void memory_map_line(char *buf, uint32_t buflen, uint64_t addr, uint64_t 
     buf[pos] = '\0';
 }
 
-static bool test_memory(void);
-static bool test_strings(void);
 static bool test_timer(void);
 static bool test_udelay(uint32_t *measured_ms);
 static bool test_clock(uint32_t *measured_us, const char **why, uint32_t *walk_clock,
                        uint32_t *walk_tick);
-static bool test_syscall(void);
 static bool test_usermode(void);
 static void test_switch(void);
 static void test_preempt(void);
-static bool test_isolation(void);
-static bool test_krffs_write(void);
-static bool test_elf(void);
-static bool test_pagecache(void);
 static void exec_program(int argc, char *argv[]);
 
 /* Top of the user stack; it grows down from here. */
@@ -658,88 +532,6 @@ static bool str_starts_with(const char *str, const char *prefix)
     return true;
 }
 
-static bool test_memory(void)
-{
-    uintptr_t addr;
-    uint8_t *ptr;
-    size_t i;
-    const size_t test_size = 256;
-
-    addr = mem_reserve(test_size, false);
-    ptr = (uint8_t *) addr;
-
-    for (i = 0; i < test_size; ++i) {
-        ptr[i] = (uint8_t) (i & 0xFF);
-    }
-
-    for (i = 0; i < test_size; ++i) {
-        if (ptr[i] != (uint8_t) (i & 0xFF)) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
-/*
- * The string routines, on this target: the copy, the fill and the move go
- * through the string instructions with a byte tail here, and the host test
- * of the same file runs the byte loops only, so every length to 67 at every
- * alignment of both buffers is swept at boot, with a sentinel on each side
- * of the destination and the move overlapping by words, both ways.
- */
-static bool test_strings(void)
-{
-    static unsigned char pat[80], got[80];
-    char buf[16];
-    size_t i;
-    int len, sa, da;
-
-    if (k_strlen("hello") != 5) return false;
-    if (k_strlen("") != 0) return false;
-
-    k_memset(buf, 'X', 10);
-    buf[10] = '\0';
-    for (i = 0; i < 10; ++i) {
-        if (buf[i] != 'X') return false;
-    }
-
-    for (i = 0; i < 80; i++) {
-        pat[i] = (unsigned char)(0x21 + (i * 7) % 90);
-    }
-    for (len = 0; len <= 67; len++) {
-        for (sa = 0; sa < 4; sa++) {
-            for (da = 1; da < 5; da++) {
-                k_memset(got, 0x5a, 80);
-                k_memcpy(got + da, pat + sa, (size_t)len);
-                for (i = 0; i < (size_t)len; i++) {
-                    if (got[da + i] != pat[sa + i]) return false;
-                }
-                if (got[da - 1] != 0x5a || got[da + len] != 0x5a) return false;
-                k_memset(got, 0x5a, 80);
-                k_memset(got + da, (char)0xa5, (size_t)len);
-                for (i = 0; i < (size_t)len; i++) {
-                    if (got[da + i] != 0xa5) return false;
-                }
-                if (got[da - 1] != 0x5a || got[da + len] != 0x5a) return false;
-                k_memcpy(got, pat, 80);
-                k_memmove(got + da, got + da + sa + 1, (size_t)len);
-                for (i = 0; i < (size_t)len; i++) {
-                    if (got[da + i] != pat[da + sa + 1 + i]) return false;
-                }
-                if (got[da - 1] != pat[da - 1] || got[da + len] != pat[da + len]) return false;
-                k_memcpy(got, pat, 80);
-                k_memmove(got + da + sa + 1, got + da, (size_t)len);
-                for (i = 0; i < (size_t)len; i++) {
-                    if (got[da + sa + 1 + i] != pat[da + i]) return false;
-                }
-                if (got[da + sa + 1 + len] != pat[da + sa + 1 + len]) return false;
-            }
-        }
-    }
-    return true;
-}
-
 static bool test_timer(void)
 {
     uint32_t start_ticks;
@@ -884,23 +676,6 @@ static bool test_clock(uint32_t *measured_us, const char **why, uint32_t *walk_c
     }
     *why = "three walks each disagreed with the tick by more than a quarter";
     return false;
-}
-
-static bool test_syscall(void)
-{
-    /* write(1, msg, 20): syscall number in EAX, args in EBX/ECX/EDX. */
-    const char *msg = "Hello from syscall! ";
-    uint32_t len = 20;
-
-    __asm__ __volatile__(
-        "int $0x80"
-        :
-        : "a"(4), "b"(1), "c"(msg), "d"(len)
-        : "memory"
-    );
-
-    /* Reaching here without a fault means the syscall path works. */
-    return true;
 }
 
 /* Ring-3 test message; must live in user-accessible memory. */
@@ -1276,144 +1051,6 @@ static bool test_isolation(void)
     isolation_proc_b = NULL;
 
     return (isolation_result_a == 0xAAAAAAAA && isolation_result_b == 0xBBBBBBBB);
-}
-
-/**
- * Exercise the KRFFS write path: create, write, read, rename, unlink.
- *
- * Returns true (treated as a pass) when no file system is mounted, so a
- * diskless boot does not fail the self-test.
- */
-static bool test_krffs_write(void)
-{
-    const char *test_filename = "krffs_test.tmp";
-    const char *renamed_filename = "krffs_renamed.tmp";
-    const char *test_data = "Test data for KRFFS write";
-    char read_buffer[64];
-    int bytes_read;
-    int bytes_written;
-
-    if (!krffs_fs) {
-        return true;
-    }
-
-    if (krffs_create(test_filename) != 0) {
-        console_printf("KRFFS write test: create failed\n");
-        return false;
-    }
-
-    bytes_written = krffs_write(test_filename, test_data, k_strlen(test_data), 0);
-    if (bytes_written != (int)k_strlen(test_data)) {
-        console_printf("KRFFS write test: write failed (%d)\n", bytes_written);
-        krffs_unlink(test_filename);
-        return false;
-    }
-
-    bytes_read = krffs_read(test_filename, read_buffer, 63, 0);
-    read_buffer[bytes_read > 0 ? bytes_read : 0] = '\0';
-    if (bytes_read != (int)k_strlen(test_data) || !str_equal(read_buffer, test_data)) {
-        console_printf("KRFFS write test: read verify failed\n");
-        krffs_unlink(test_filename);
-        return false;
-    }
-
-    if (krffs_rename(test_filename, renamed_filename) != 0) {
-        console_printf("KRFFS write test: rename failed\n");
-        krffs_unlink(test_filename);
-        return false;
-    }
-
-    bytes_read = krffs_read(renamed_filename, read_buffer, 63, 0);
-    read_buffer[bytes_read > 0 ? bytes_read : 0] = '\0';
-    if (!str_equal(read_buffer, test_data)) {
-        console_printf("KRFFS write test: rename verify failed\n");
-        krffs_unlink(renamed_filename);
-        return false;
-    }
-
-    if (krffs_unlink(renamed_filename) != 0) {
-        console_printf("KRFFS write test: unlink failed\n");
-        return false;
-    }
-
-    if (krffs_open(renamed_filename) == 0) {
-        console_printf("KRFFS write test: file still exists after unlink\n");
-        return false;
-    }
-
-    return true;
-}
-
-/**
- * Validate, parse, and load an ELF image from KRFFS without executing it.
- *
- * Reads the "hello" binary, checks its header, then loads its segments into a
- * throwaway page directory to exercise elf_load. Returns true (a pass) when no
- * file system is mounted or the file is absent, so its absence is not a
- * failure.
- */
-static bool test_elf(void)
-{
-    const char *elf_filename = "hello";
-    char _exec_elf_buffer[8192];
-    int bytes_read;
-    uint32_t file_size;
-    uint32_t entry_point;
-    uint16_t phdr_count;
-    Elf32_Phdr *phdrs;
-
-    if (!krffs_fs) {
-        return true;
-    }
-
-    if (krffs_open(elf_filename) != 0) {
-        return true;
-    }
-
-    file_size = krffs_get_file_size(elf_filename);
-    if (file_size > sizeof(_exec_elf_buffer)) {
-        return false;
-    }
-
-    bytes_read = krffs_read(elf_filename, _exec_elf_buffer, file_size, 0);
-    if (bytes_read != (int)file_size) {
-        return false;
-    }
-
-    if (!elf_check(_exec_elf_buffer, file_size)) {
-        return false;
-    }
-
-    entry_point = elf_entry_point(_exec_elf_buffer);
-    phdrs = elf_program_headers(_exec_elf_buffer);
-    phdr_count = elf_program_header_count(_exec_elf_buffer);
-
-    if (!phdrs || phdr_count == 0 || entry_point == 0) {
-        return false;
-    }
-
-    {
-        page_dir_t *test_dir;
-        uintptr_t stack_phys;
-
-        test_dir = clone_page_directory();
-        if (!test_dir) {
-            return false;
-        }
-
-        if (elf_load(_exec_elf_buffer, file_size, test_dir) != 0) {
-            return false;
-        }
-
-        stack_phys = alloc_user_page(test_dir, USER_STACK_BASE);
-        if (stack_phys == 0) {
-            return false;
-        }
-
-        /* The directory leaks: the bump allocator has no free. */
-    }
-
-    return true;
 }
 
 /* elf_read_fn over a KRFFS file; ctx is the path. Used by the segment
@@ -1808,93 +1445,6 @@ static void boot_init_process(void)
     }
 }
 
-/* A small RAM stand-in disk for the page-cache self-test. */
-#define PC_TEST_PAGES 16u
-static uint8_t pc_test_disk[PC_TEST_PAGES][PAGE_SIZE];
-
-static int pc_test_backing_read(uint32_t off, void *page)
-{
-    uint32_t p = off / PAGE_SIZE;
-    if (p >= PC_TEST_PAGES) {
-        return -1;
-    }
-    k_memcpy(page, pc_test_disk[p], PAGE_SIZE);
-    return 0;
-}
-
-static int pc_test_backing_write(uint32_t off, const void *page)
-{
-    uint32_t p = off / PAGE_SIZE;
-    if (p >= PC_TEST_PAGES) {
-        return -1;
-    }
-    k_memcpy(pc_test_disk[p], page, PAGE_SIZE);
-    return 0;
-}
-
-/**
- * Exercises the page cache over a RAM stub through the real window and fault
- * handler: reads every stub page back, writes a distinct marker to each,
- * flushes, and confirms each marker survives a real fault, eviction,
- * writeback, and re-read. A capacity of four frames forces eviction; a
- * misaligned store crosses a page boundary to fault two adjacent pages.
- * Prints the VMPROBE token, then restores the cache so the default module
- * path never faults the window.
- */
-static bool test_pagecache(void)
-{
-    volatile uint8_t *win = (volatile uint8_t *) PCWIN_BASE;
-    uint32_t i;
-    bool ok = true;
-
-    /* Skip when the window is too small for the probe, or already backs a live
-       file system (driving the stub through it would clobber that mount). */
-    if (pc_window_size() < PC_TEST_PAGES * PAGE_SIZE || pc_has_backing()) {
-        klog(KLOG_DEBUG, "pagecache",
-             "VMPROBE PAGECACHE OK n=0 evict=0 wb=0 (skipped)");
-        return true;
-    }
-
-    for (i = 0; i < PC_TEST_PAGES; ++i) {
-        k_memset(pc_test_disk[i], 0, PAGE_SIZE);
-        pc_test_disk[i][0] = (uint8_t) i;
-    }
-
-    pc_set_backing(pc_test_backing_read, pc_test_backing_write,
-                   PC_TEST_PAGES * PAGE_SIZE);
-    pc_set_capacity(4);
-
-    for (i = 0; i < PC_TEST_PAGES; ++i) {
-        if (win[i * PAGE_SIZE] != (uint8_t) i) {
-            ok = false;
-        }
-    }
-    for (i = 0; i < PC_TEST_PAGES; ++i) {
-        win[i * PAGE_SIZE] = (uint8_t) (0x80u + i);
-    }
-    pc_sync();
-    for (i = 0; i < PC_TEST_PAGES; ++i) {
-        if (win[i * PAGE_SIZE] != (uint8_t) (0x80u + i)) {
-            ok = false;
-        }
-    }
-
-    /* A misaligned store across the page-0/page-1 boundary faults both
-     * pages. */
-    *(volatile uint32_t *) (win + PAGE_SIZE - 2) = 0x44443333u;
-    pc_sync();
-    if (win[PAGE_SIZE - 1] != 0x33u || win[PAGE_SIZE] != 0x44u) {
-        ok = false;
-    }
-
-    klog(KLOG_DEBUG, "pagecache", "VMPROBE PAGECACHE %s n=%d evict=%d wb=%d",
-                  ok ? "OK" : "FAIL", (int) pc_stat_reads(),
-                  (int) pc_stat_evictions(), (int) pc_stat_writebacks());
-
-    pc_set_backing(0, 0, 0);
-    pc_set_capacity(PC_SLOTS);
-    return ok;
-}
 
 /* RAM-disk stub backing for the page cache: with KRFFS mounted on the window,
    the file system reads and writes the module image through these page-grained
@@ -2827,190 +2377,49 @@ static int init_root_by_identity(const char *spec, int *krffs_mounted)
 /* How many self-tests ran and how many failed, which the summary reports and
    `tests/run default` reads. Counted rather than listed because two of the
    checks below are inline blocks with detail of their own to report. */
-static int selftest_ran;
-static int selftest_failed;
-
-static void selftest_count(int passed)
-{
-    selftest_ran++;
-    if (!passed) {
-        selftest_failed++;
-    }
-}
-
-/**
- * Record one self-test's outcome and count it.
- *
- * A failure is an `ERR` record, which is what the probe runner looks for: it
- * refuses a boot with any error record between the first self-test record and
- * the summary, so a kernel whose own checks fail cannot pass the suite.
- */
-static void selftest_note(const char *name, int passed)
-{
-    selftest_count(passed);
-    if (passed) {
-        klog(KLOG_INFO, "selftest", "%s: passed", name);
-    } else {
-        klog(KLOG_ERR, "selftest", "%s: failed", name);
-    }
-}
 
 /*
- * Whether this boot hands the machine to `/sbin/init`.
+ * What the machine says about time, measured on the hardware it runs on.
  *
- * The same two questions `boot_init_process` asks later, asked here because
- * the checks below are skipped on a boot that init will run and kept on one
- * where the debug shell is the whole interface. Asking twice is cheaper than
- * carrying the answer across everything that happens in between, and a root
- * that gained or lost an init in those milliseconds is not a case this has.
+ * Three things a program cannot check for itself and a host test cannot check
+ * at all: that the tick arrives at the rate it claims, that a delay of a given
+ * length takes that long, and that the clock and the tick agree. The last
+ * earned its place on the laptop this targets, where an interrupt handler took
+ * a PIT latch between two samples and 2000 us read as 1361 us
+ * (dev-log/43-machine/notes.md).
+ *
+ * The numbers are printed rather than a verdict. A machine whose delays run a
+ * third short boots and logs in perfectly well, and the fault appears months
+ * later as a device that fails now and then; a line with the measurements in
+ * it is something a person can read and disbelieve.
+ *
+ * The eleven other checks that ran here are gone. Paging, system calls,
+ * context switching, isolation, the heap, the file system and the loader are
+ * exercised by the first program that starts, and are covered by the host
+ * tests and the probe suites in a way these never were: the memory check read
+ * 256 bytes and the page-cache one ran against a RAM disk.
  */
-static int boot_runs_init(void)
+static void check_timing(void)
 {
-    struct vfs_ref ref;
+    uint32_t measured_ms = 0;
+    uint32_t measured_us = 0;
+    uint32_t walk_clock = 0, walk_tick = 0;
+    const char *why = "";
+    int delay_ok, clock_ok, tick_ok;
 
-    if (kcmdline_has("rach2.rescue") || kcmdline_has("init=rescue")) {
-        return 0;
+    tick_ok = test_timer();
+    delay_ok = test_udelay(&measured_ms);
+    clock_ok = test_clock(&measured_us, &why, &walk_clock, &walk_tick);
+
+    klog((tick_ok && delay_ok && clock_ok) ? KLOG_INFO : KLOG_ERR, "timing",
+         "tick %d Hz, 200 ms delay measured %d ms, 2000 us wait measured %d us",
+         (int)(1193182u / pit_reload), (int)measured_ms, (int)measured_us);
+    if (!tick_ok) {
+        klog(KLOG_ERR, "timing", "the tick did not arrive at the rate it claims");
     }
-    /* Nothing mounted is the blank-disk boot, and the resolver reads
-       `mounts[0]->state` without checking, so asking it here would fault
-       before the boot path prints why it is refusing. */
-    if (!vfs_root_mounted()) {
-        return 0;
-    }
-    if (vfs_resolve(0, "/sbin/init", 0, &ref, 0, 0) != 0) {
-        return 0;
-    }
-    vfs_ref_release(&ref);
-    return 1;
-}
-
-static void run_self_tests(void)
-{
-    selftest_ran = 0;
-    selftest_failed = 0;
-    klog(KLOG_INFO, "selftest", "started");
-
-    selftest_note("memory", test_memory());
-    selftest_note("heap", test_heap());
-    selftest_note("strings", test_strings());
-    selftest_note("timer", test_timer());
-
-    {
-        uint32_t measured_ms = 0;
-        int passed = test_udelay(&measured_ms);
-
-        selftest_count(passed);
-        klog(passed ? KLOG_INFO : KLOG_ERR, "selftest",
-             passed ? "udelay: passed: 200 ms asked, %d ms seen"
-                    : "udelay: failed: 200 ms asked, %d ms seen",
-             (int)measured_ms);
-    }
-
-    {
-        uint32_t measured_us = 0;
-        uint32_t walk_clock, walk_tick;
-        const char *why;
-        int passed = test_clock(&measured_us, &why, &walk_clock, &walk_tick);
-
-        selftest_count(passed);
-        if (passed) {
-            klog(KLOG_INFO, "selftest", "clock: passed: 2000 us asked, %d us seen",
-                 (int)measured_us);
-        } else {
-            /* The record names the check that failed and the last walk's two
-               readings, so a boot log says what to look at. */
-            klog(KLOG_ERR, "selftest",
-                 "clock: failed: 2000 us asked, %d us seen; %s; last walk %d us by the clock, %d by the tick",
-                 (int)measured_us, why, (int)walk_clock, (int)walk_tick);
-        }
-    }
-
-    /* Reaching this line at all is the check: the code is running from mapped
-       addresses through a page directory the kernel built. */
-    selftest_note("paging", 1);
-    selftest_note("syscall", test_syscall());
-
-    {
-        process_t *test_a = current_proc;
-        process_t *test_b = alloc_process();
-
-        if (test_b) {
-            uintptr_t test_stack = mem_reserve(KERNEL_STACK_SIZE, true);
-            test_b->kernel_stack = test_stack + KERNEL_STACK_SIZE;
-            test_b->cr3 = 0;
-
-            switch_proc_a = test_a;
-            switch_proc_b = test_b;
-            switch_count = 0;
-            setup_process_stack(test_b, proc_b_entry);
-
-            switch_count = 10; /* at the limit, so proc_b_entry's loop is skipped */
-            switch_context(test_a, test_b);
-
-            free_process(test_b);
-        }
-        selftest_note("context switch", test_b != 0);
-    }
-
-    {
-        process_t *pa, *pb;
-        uintptr_t sa, sb;
-        int passed = 0;
-
-        preempt_done = 0;
-        preempt_count_a = 0;
-        preempt_count_b = 0;
-
-        pa = alloc_process();
-        pb = alloc_process();
-        if (pa && pb) {
-            sa = mem_reserve(KERNEL_STACK_SIZE, true);
-            sb = mem_reserve(KERNEL_STACK_SIZE, true);
-            pa->kernel_stack = sa + KERNEL_STACK_SIZE;
-            pb->kernel_stack = sb + KERNEL_STACK_SIZE;
-            pa->cr3 = 0;
-            pb->cr3 = 0;
-            pa->parent_pid = current_proc->pid;
-            pb->parent_pid = current_proc->pid;
-            setup_process_stack(pa, preempt_proc_a);
-            setup_process_stack(pb, preempt_proc_b);
-
-            sched_enable();
-            while (!preempt_done) {
-                __asm__ __volatile__("hlt");
-            }
-            sched_disable();
-            free_process(pa);
-            free_process(pb);
-            passed = preempt_count_a > 0 && preempt_count_b > 0;
-            /* The two processes wrote their letters with no newline, so the
-               record below would begin in the middle of that line and a
-               reader looking for records at a line start would not see it. */
-            console_putc('\n');
-        }
-        selftest_count(passed);
-        klog(passed ? KLOG_INFO : KLOG_ERR, "selftest",
-             passed ? "round robin: passed: a ran %d times, b %d"
-                    : "round robin: failed: a ran %d times, b %d",
-             preempt_count_a, preempt_count_b);
-    }
-
-    selftest_note("memory isolation", test_isolation());
-
-    /* Only where there is a file system to write to and read a program out
-       of; a machine booted without one is not failing these. */
-    if (krffs_fs) {
-        selftest_note("krffs write", test_krffs_write());
-        selftest_note("elf load", test_elf());
-    }
-
-    selftest_note("page cache", test_pagecache());
-
-    if (selftest_failed == 0) {
-        klog(KLOG_INFO, "selftest", "result: passed: %d", selftest_ran);
-    } else {
-        klog(KLOG_ERR, "selftest", "result: failed: %d of %d", selftest_failed,
-             selftest_ran);
+    if (!clock_ok) {
+        klog(KLOG_ERR, "timing", "%s; last walk %d us by the clock, %d by the tick", why,
+             (int)walk_clock, (int)walk_tick);
     }
 }
 
@@ -3429,7 +2838,7 @@ static void process_command(const char *cmd)
             }
         }
     } else if (str_equal(cmd, "test")) {
-        run_self_tests();
+        check_timing();
     } else if (str_equal(cmd, "clear")) {
         k_cls();
     } else if (str_equal(cmd, "switch")) {
@@ -4079,31 +3488,7 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
         }
     }
 
-    /*
-     * The full set of checks is no longer part of an ordinary boot. It cost
-     * 0.96 s of a 3.9 s boot on the machine this targets, and it proves
-     * things that running the system proves anyway: paging, system calls and
-     * context switching are exercised by the first program that starts.
-     *
-     * It is not deleted, because two of its checks measure the hardware
-     * rather than the code. The clock check found a real fault on this
-     * laptop, where an interrupt handler took a PIT latch between two
-     * samples and 2000 us read as 1361 (dev-log/43-machine/notes.md). A
-     * machine can boot and log in with its delays wrong, so that check has
-     * to be run deliberately, not assumed.
-     *
-     * It runs on a boot that asks for it, on a boot with no init, where the
-     * debug shell is the interface and there is nothing else to prove the
-     * machine by, and from the debug shell's `test` command. A boot that
-     * skipped them says so, so a reader of the log is never left to guess
-     * whether a missing result means passed or not run.
-     */
-    if (kcmdline_has("rach2.selftest") || !boot_runs_init()) {
-        run_self_tests();
-    } else {
-        klog(KLOG_INFO, "selftest", "not run: boot with rach2.selftest, or run "
-                                    "test in the debug shell");
-    }
+    check_timing();
 
     /*
      * Decide the boot home. A normal boot runs the persistent /sbin/init as

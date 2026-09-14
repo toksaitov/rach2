@@ -343,94 +343,43 @@ static long find_level_between(const unsigned char *hay, size_t from, size_t to)
 }
 
 /**
- * Score the kernel's own checks: 1 when the group passed, with the count
- * in `detail`, 0 with the reason in `detail` otherwise. The kernel runs a
- * dozen of them at every boot and reports each as a record.
+ * Score what the kernel says about time: 1 when it reported its measurements,
+ * with them in `detail`, 0 with the reason otherwise.
  *
- * Two things are required. The summary must be there, which a boot that
- * stopped part way through the group would not have. And no error record
- * may appear between the group's first record and that summary, which is
- * where a failed check reports itself. The interval is what makes the
- * second check usable at all: the fault probes later in this run print
- * error records on purpose, and a rule over the whole log would refuse
- * every passing run.
+ * The kernel prints one record at every boot, `timing: tick N Hz, ...`, at
+ * level 6 when the tick, the delay and the clock all agree and at level 3 when
+ * any of them does not, so the record's level is the verdict and the rest of
+ * the line is the evidence.
+ *
+ * This replaced a scorer over the dozen checks the kernel used to run at boot.
+ * Those are gone: what they proved is exercised by the first program that
+ * starts and covered by the host tests and these suites, and the interval rule
+ * this needed, to tell a failing check from a fault probe's own error record,
+ * went with them.
  */
-static int score_kernel_selftest(const unsigned char *buf, size_t buf_len,
-                                 char *detail, size_t size)
+static int score_kernel_timing(const unsigned char *buf, size_t buf_len,
+                               char *detail, size_t size)
 {
-    int ok = 0;
+    static const char *const MARK = "] timing: ";
+    long said = find_text(buf, buf_len, 0, "<6>[", MARK);
+    int ok = 1;
 
-    snprintf(detail, size,
-             "the kernel ran none");
+    if (said < 0) {
+        said = find_text(buf, buf_len, 0, "<3>[", MARK);
+        ok = 0;
+    }
+    if (said < 0) {
+        snprintf(detail, size, "the kernel said nothing about time");
+        return 0;
+    }
     {
-        long start = find_text(buf, buf_len, 0, "<6>[", "] selftest: started");
-        long summary = -1;
-        long bad = -1;
+        const char *from = strstr((const char *) buf + said, MARK) + strlen(MARK);
+        size_t n = 0;
 
-        if (start >= 0) {
-            /* A summary that says failed is an error record, so it is looked
-               for at that level as well as at the level a passing one has. */
-            long said = find_text(buf, buf_len, (size_t) start, "<6>[",
-                                  "] selftest: result: ");
-
-            if (said < 0)
-                said = find_text(buf, buf_len, (size_t) start, "<3>[",
-                                 "] selftest: result: ");
-
-            summary = find_text(buf, buf_len, (size_t) start, "<6>[",
-                                "] selftest: result: passed: ");
-            if (summary < 0) {
-                /* The summary the kernel printed, if it printed one: "failed:
-                   2 of 12" says which run this was, and "no summary record"
-                   says the group did not finish. */
-                if (said >= 0) {
-                    /* Past the timestamp, whose width is not fixed. */
-                    const char *from = strstr((const char *) buf + said,
-                                              "] selftest: result: ") +
-                                       strlen("] selftest: result: ");
-                    size_t n = 0;
-
-                    while (from[n] != '\0' && from[n] != '\n' && from[n] != '\r' &&
-                           n + 1 < size)
-                        n++;
-                    snprintf(detail, size,
-                             "%.*s", (int) n, from);
-                } else {
-                    snprintf(detail, size,
-                             "no summary record");
-                }
-            } else {
-                const char *count_at = (const char *) buf + summary;
-                long said;
-
-                /* The count is the last field of the summary, so it is read
-                   from the text rather than counted from the offset: the
-                   timestamp between the two halves is not a fixed width. */
-                while (*count_at != '\n' &&
-                       memcmp(count_at, "passed: ", 8) != 0)
-                    count_at++;
-                said = strtol(count_at + 8, (char **) 0, 10);
-                long held = count_records(buf, (size_t) start,
-                                          (size_t) summary, "] selftest: ");
-
-                bad = find_level_between(buf, (size_t) start,
-                                         (size_t) summary);
-                if (bad >= 0) {
-                    snprintf(detail, size,
-                             "a check reported an error");
-                } else if (said + 1 != held) {
-                    /* One record per check, and one for the group's start.
-                       A kernel that printed the summary without running the
-                       checks, or that lost some of them, disagrees here. */
-                    snprintf(detail, size,
-                             "%ld checks said, %ld records", said, held - 1);
-                } else {
-                    ok = 1;
-                    snprintf(detail, size,
-                             "%ld of the kernel's own", said);
-                }
-            }
+        while (from[n] != '\0' && from[n] != '\n' && from[n] != '\r' && n + 1 < size) {
+            n++;
         }
+        snprintf(detail, size, "%.*s", (int) n, from);
     }
     return ok;
 }
@@ -555,39 +504,27 @@ static int selftest(void)
             const char *want_detail;
             int want_ok;
         } groups[] = {
-            { "a passing group",
-              "<6>[0.26] selftest: started\n"
-              "<6>[0.27] selftest: memory: passed\n"
-              "<6>[0.28] selftest: timer: passed\n"
-              "<6>[1.11] selftest: result: passed: 2\n", "2 of the kernel's own",
-              1 },
-            { "a failing group's summary is an error record",
-              "<6>[0.51] selftest: started\n"
-              "<6>[0.53] selftest: memory: passed\n"
-              "<3>[0.93] selftest: clock: failed: 2000 us asked, 2001 us seen\n"
-              "<3>[10.84] selftest: result: failed: 1 of 2\n", "failed: 1 of 2",
-              0 },
-            { "a group that never finished",
-              "<6>[0.26] selftest: started\n"
-              "<6>[0.27] selftest: memory: passed\n", "no summary record", 0 },
-            { "an error record inside a passing group",
-              "<6>[0.26] selftest: started\n"
-              "<3>[0.27] pit: lost a period\n"
-              "<6>[0.28] selftest: memory: passed\n"
-              "<6>[1.11] selftest: result: passed: 1\n",
-              "a check reported an error", 0 },
-            { "a summary that counts more than it ran",
-              "<6>[0.26] selftest: started\n"
-              "<6>[0.28] selftest: memory: passed\n"
-              "<6>[1.11] selftest: result: passed: 3\n", "3 checks said, 1 records",
-              0 },
-            { "no group at all", "boot\n", "the kernel ran none", 0 }
+            { "the machine agrees with itself about time",
+              "<6>[0.51] timing: tick 100 Hz, 200 ms delay measured 200 ms, "
+              "2000 us wait measured 2001 us\n",
+              "tick 100 Hz, 200 ms delay measured 200 ms, 2000 us wait measured 2001 us", 1 },
+            { "a measurement that does not agree is an error record",
+              "<3>[0.51] timing: tick 100 Hz, 200 ms delay measured 200 ms, "
+              "2000 us wait measured 1361 us\n",
+              "tick 100 Hz, 200 ms delay measured 200 ms, 2000 us wait measured 1361 us", 0 },
+            { "the record is taken from this boot and not from a probe's text",
+              "<6>[1.20] probe: timing: tick 1 Hz, 200 ms delay measured 9 ms, "
+              "2000 us wait measured 9 us\n"
+              "<6>[1.21] timing: tick 100 Hz, 200 ms delay measured 200 ms, "
+              "2000 us wait measured 2001 us\n",
+              "tick 100 Hz, 200 ms delay measured 200 ms, 2000 us wait measured 2001 us", 1 },
+            { "nothing said at all", "boot\n", "the kernel said nothing about time", 0 }
         };
         int k, group_n = (int) (sizeof(groups) / sizeof(groups[0]));
 
         for (k = 0; k < group_n; k++) {
             char detail[128];
-            int ok = score_kernel_selftest((const unsigned char *) groups[k].log,
+            int ok = score_kernel_timing((const unsigned char *) groups[k].log,
                                            strlen(groups[k].log), detail,
                                            sizeof(detail));
 
@@ -992,7 +929,7 @@ int main(int argc, char **argv)
         }
     }
 
-    selftest_ok = score_kernel_selftest(buf, buf_len, selftest_detail,
+    selftest_ok = score_kernel_timing(buf, buf_len, selftest_detail,
                                         sizeof(selftest_detail));
 
     for (i = 0; i < n_results; i++) {
@@ -1037,7 +974,7 @@ int main(int argc, char **argv)
 
     /* Reported beside the probes, not as one, so the count stays the count
        of probes. */
-    printf("  %-12s %-18s %s\n", "selftest", selftest_detail,
+    printf("  %-12s %-18s %s\n", "timing", selftest_detail,
            selftest_ok ? "PASS" : "FAIL");
     if (!selftest_ok)
         fails++;
