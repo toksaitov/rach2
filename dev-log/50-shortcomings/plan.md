@@ -258,6 +258,164 @@ The milestone closed once at `01d02656` and was reopened by the second sitting, 
 
 Two changes made to work the machine are not part of the tree and are undone at the close: `network_access` in `~/.codex/config.toml`, which let a Codex unit reach the machine, and the demonstration key in root's `authorized_keys` on the notebook, which let it work without the password file.
 
+### Phase 8: the first run
+
+The third sitting reported five things about what a person meets the first time
+they use this system, and they are one piece of work rather than five entries: a
+line of coloured text at the end of every boot that vanished before it could be
+read, the kernel's checks costing about a second of every boot, messages still
+arriving on the screen after the login prompt, an installer that never said what
+it was or what it would do, and boot menus of eight and three entries written in
+words only this project uses.
+
+What was decided, with the owner, and built.
+
+**The screen has three phases.** The kernel writes to it during boot and stops
+when a real `/sbin/init` starts; after that only a panic reaches it. Everything
+still goes to the ring, the serial port and netconsole, so nothing is lost, and
+`/dev/screenlog` reads and sets the level. Three boots keep their messages: one
+whose line named a level, a `rach2.fsck` recovery boot, which has minutes of
+work to show, and a read-only root, which the owner needs to know about before
+working on the machine. `power_stop` takes the screen back, because a machine
+that has stopped must be able to say so and there is no log to read afterwards.
+The screen is no longer cleared at init, so the login prompt appears under the
+boot the person has just read.
+
+**The boot log is what a person can act on.** About a hundred records moved to
+debug: the lines that only say a step of initialisation finished, the per-port
+USB detail, the message-signalling vectors, the card identity dumps and the
+counters that are all zero at bring-up. The `X: started` lines for slow work
+stayed, because a boot that hangs is named by the line that did not finish. 122
+visible lines became about 25.
+
+**The checks at boot are the ones only the hardware can answer.** Eleven went:
+memory, heap, strings, paging, system calls, context switching, isolation, round
+robin, KRFFS write, ELF load, page cache. Each is exercised by the first program
+that starts and covered by the host tests and the probe suites; the memory one
+read 256 bytes and the page-cache one ran against a RAM disk. Three stayed, run
+at every boot, and print their measurements rather than a verdict:
+
+    timing: tick 100 Hz, 200 ms delay measured 200 ms, 2000 us wait measured 2001 us
+
+A machine whose delays run short boots and logs in perfectly well and fails
+months later as an intermittent device fault. The clock check earned its place
+on this laptop, where an interrupt handler took a PIT latch between two samples
+and 2000 us read as 1361 (`dev-log/43-machine/notes.md`).
+
+**The menus name what they do.** The stick has one entry, `Install Rach2`:
+installing is why a person boots it, and repairing is what that system offers
+once they are in. The installed disk has three, all of them saying Rach2 because
+all three are Rach2, each of the other two saying how it differs:
+
+    Start Rach2
+    Start Rach2 with the previous kernel
+    Start the Rach2 recovery system
+
+Earlier drafts failed on exactly that. "Repair this computer" promises the boot
+repairs something; "Start the repair tools" promises tools start; "Start the
+recovery system" reads as not-Rach2. Five entries went. The kernel debug shell
+came off both menus, since it authenticates nobody and was a root shell one
+keypress from an installed machine's boot menu; its code stays, because the test
+image boots into it and 22 of the 44 suites depend on that. The check-disks
+entry went, since it set a boot token to run `e2fsck` before anything else and
+`e2fsck` is a program a person runs from recovery. The three fixed-address
+entries went, since a fixed network address is a property of where a machine
+lives and not a choice made at every boot.
+
+Removing that pair removed the machinery serving it: `running_static_entries`,
+`bootslot_use_static_entries`, the `-static` decoration of entry ids, and the
+`set fallback=3` in `grub.cfg`. That last one mattered. GRUB 2.12 parses
+`fallback` as a number and discards a name, so the order of the entries is part
+of the file's contract, and the draft that replaced the number with an id would
+have disabled the automatic fallback silently. Codex found that before it was
+written.
+
+**The disk has three partitions.** The KRFFS root is gone: a second complete
+system with the demonstration accounts, which the fallback entry booted so a
+machine came up to something when the installed root would not mount. The
+recovery system does that and more, from RAM, with the tools to repair the
+machine. So the fallback slot now guards the one failure GRUB detects by itself,
+a kernel image that will not load, and boots the person's own root with it,
+which is also what makes the entry nameable.
+
+The two FAT partitions stay separate. A merge was considered and rejected: GRUB's
+core lives in the gap before the first partition and can reach either file
+system, the boot partition is written at every kernel install and every trial
+while the recovery partition is written at an install and an update, and
+`grub-embed.cfg` already falls through to the second when the first cannot be
+read. Keeping the rescue path out of the volume that gets written is protection
+against the likeliest damage.
+
+**The installer speaks to a person.** It greets, says it writes nothing until
+the last question, and says how to stop. No question ends the run: a wrong
+answer says what is wrong and asks again, since nothing is written until the
+confirmation. Disks are numbered. Text addressed to a person carries no
+`rach2-install: ` prefix, which is a diagnostic's, and no line runs past 80
+columns: the key prompt was 90, the no-keys summary 85 with a legal account
+name, and the disk list row 132.
+
+What this phase still owes, after a review of the plan by Codex and the owner's
+decisions on what it found. The review opened with "I would not build phase 8 as
+written", and six of its findings changed the work.
+
+**The interrupted update has nowhere to land, and that is a regression this
+phase caused.** `rach2-install` saves the `fallback` entry before it overwrites
+the root and arms `candidate` afterwards. That was safe while the fallback
+booted the KRFFS root; both entries now boot the ext2 root, so a power cut
+during the write leaves neither usable, where before the machine still came up.
+The installer must save `recovery` before any root write, keep it saved through
+the write and the readback, and let only an explicit commit make the candidate
+permanent. The second FAT partition does not cover this: `grub-embed.cfg`
+reaches it when the boot partition cannot be read, and a readable menu loading a
+kernel whose root is broken never goes down that path.
+
+**Two disk targets are leftovers and two are live suites.** `os-real-grub-disk`
+and `rach2-metal-grub-disk` are from before the installer existed, when a
+machine got Rach2 by imaging a disk over a USB adapter and swapping it in; they
+go, with their documentation. `run-grub` and `run-drill` are the `grub` and
+`drill` suites, `grub` in the core tier, and they built disks whose root was the
+KRFFS partition. They need a root supplied, as `run-drill-ext2` already does,
+and the builder must refuse to build a disk with no root rather than produce one
+that boots nothing.
+
+**Recovery has no login, no SSH and no keys, on the stick and on the disk.** The
+password this phase planned would not have been a boundary: the recovery image
+still stages the demonstration keys and starts SSH regardless of what happens at
+the console, and a person at the GRUB menu can still add `rach2.rescue` to a
+boot line. Closing only the menu entry would have invited trust the arrangement
+could not carry. The archived account files cannot authenticate either: they are
+refreshed at an install and an update and not when root runs `passwd`, so they
+can hold a password the owner has replaced; they carry nothing that says which
+installation they came from; and `write_archive` removes the old copy before
+renaming the new one, so a stop between the two leaves none. They stay what they
+were built to be, the copy that puts accounts back after an update.
+
+So both recovery systems boot to a shell and start no network service, no image
+carries a demonstration key from now on, and the documentation says plainly that
+physical access to a machine is control of it. The installed system is
+unchanged: SSH with the account's key, and root by password.
+
+**The `sealed` suite is rewritten, not renumbered.** It damages the ext2 root
+and then requires a working KRFFS system, and later destroys and repairs that
+partition. Those rows are about the thing this phase removed. They become what
+the machine now does: damage the root, land in recovery, repair from there.
+
+**Two of the three known problems block the close.** The metal kernel is built
+by a phony target while the disk images depend on the file it leaves behind,
+with no rule between them, so editing `kernel.c` does not rebuild the kernel
+that ships; it shipped a stale one today, caught by reading a boot log rather
+than by a check. And `/var/log/services` must have a bound within a boot, since
+a service that fails in a loop can fill an installed root or a recovery
+system's memory. The AHCI second per empty port stays measured and accepted.
+
+**Machines on the old layout are not migrated.** `--update` keeps the partition
+table, so it cannot move an installation from four partitions to three, and the
+new menu must never be applied to the old layout. The owner's decision is that
+the next stick installs fresh over whatever is there.
+
+Then the suites that name a partition number, `tests/run all`, a review of the
+whole diff, and the stick.
+
 ## Risks
 
 * Notify the owner when a severe problem is added. One entry that loses data matters more than twenty that do not.
