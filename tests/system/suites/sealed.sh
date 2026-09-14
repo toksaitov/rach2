@@ -20,8 +20,9 @@
 # previous kernel, and repaired from the machine that fell back; the root is
 # made missing, faulty and dirty in turn under an armed trial and each lands in
 # the recovery system, after which recovery repairs it and the candidate is
-# committed again; a menu is staged and then truncated from the host, which the stub
-# must survive; the boot loader is replaced with a marked core and put back;
+# committed again; a menu is staged and then truncated from the host, which the
+# stub must survive; the boot loader is replaced with a marked core and put
+# back;
 # and finally the root is destroyed with the machine stopped and rewritten from
 # recovery through an ssh pipe, after which the machine boots from what
 # arrived.
@@ -256,7 +257,7 @@ echo "sealed-test: artifact $DISK_SHA ($(wc -c < "$DISK") bytes)"
 BOOT_LBA="$("$REPO/build/tools/image/mkmbr" --list "$WORK" |
     awk 'NR == 1 { print $3 / 512; exit }')"
 EXTENTS="$("$REPO/build/tools/image/mkmbr" --list "$WORK" |
-    while read -r idx type start size; do
+    while read -r idx _type start size; do
         [ -n "$idx" ] || continue
         magic="$(dd if="$WORK" bs=512 skip=$((start / 512 + 2)) count=1 \
             status=none | od -An -tx1 -j 56 -N 2 | tr -d ' ')"

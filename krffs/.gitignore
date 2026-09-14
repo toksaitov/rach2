@@ -22,4 +22,4 @@ shadow.tmp
 # demo key by gen_demo_key.sh. Not the project's, so not committed.
 authorized_keys.extra
 test_authorized_keys.extra
-krffs/recovery_authorized_keys
+recovery_authorized_keys
