@@ -372,13 +372,13 @@ os-real-image: build/images/os-real.checked
 # --- component sub-makes + the build-order DAG ---
 #
 # `rach2`, `ish` and `krffs` are not here: each has a file rule above that
-# runs its sub-make, and a component name that ran one as well gave two routes to the
-# same sub-make with no edge between them. Under `make -j` both ran at once,
-# compiled every object twice into the same files, and the link read an object
-# the other job was writing: a clean parallel build on 2026-09-14 ended in
-# `undefined reference to krandom_seed`. Each of the three
-# now asks for its file, and every one of those file rules asks its sub-make on
-# each invocation, which is what keeps an edited source built.
+# runs its sub-make, and a component name that ran one as well gave two
+# routes to the same sub-make with no edge between them. Under `make -j`
+# both ran at once, compiled every object twice into the same files, and the
+# link read an object the other job was writing: a clean parallel build on
+# 2026-09-14 ended in `undefined reference to krandom_seed`. Each of the
+# three now asks for its file, and every one of those file rules asks its
+# sub-make on each invocation, which is what keeps an edited source built.
 $(filter-out rach2 ish krffs,$(BASE_DIRS)) $(FULL_DIRS):
 	@echo "$(notdir $@): building"
 	@$(MAKE) --no-print-directory -C $@
