@@ -265,7 +265,7 @@ menuentry "Start Rach2 with the previous kernel" --id fallback {
 
 
 
-# The recovery kernel and its RAM image, on partition 3. It mounts nothing from
+# The recovery kernel and its RAM image, on partition 2. It mounts nothing from
 # this disk, which is what lets it rewrite the root; its title says so when the
 # two files are there and says they are not when they are not, since the entry
 # is defined either way (the numbers above are a contract and adding an entry

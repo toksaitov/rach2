@@ -734,7 +734,20 @@ int main(void)
        checked here until 2026-09-14, with the flag that chose between them.
        The menu has one pair now, so there is no choice to make and no flag:
        an install writes `candidate` and `fallback` whatever the boot line
-       says, which every row above already requires. */
+       says, which every row above already requires.
+
+       What went with those rows was the only call to `bootslot_env_set`, the
+       setter `bootctl env` and `bootctl trial` are built on. A setter that
+       reported success and wrote nothing would leave every row above passing,
+       so one write and its readback stay here. */
+    load("");
+    CHECK(bootslot_open(&bs, &IO, err, sizeof(err)) == 0, "reopen for the setter");
+    CHECK(bootslot_env_set(&bs, "saved_entry", "recovery", err, sizeof(err)) == 0,
+          "the setter writes a menu id");
+    CHECK(env_has("saved_entry=recovery\n"), "and the block holds what it wrote");
+    CHECK(bootslot_env_set(&bs, "next_entry", "", err, sizeof(err)) == 0,
+          "the setter writes the empty value a consumed trial leaves");
+    CHECK(env_has("next_entry=\n"), "and that line is there too");
 
     if (fails) {
         fprintf(stderr, "bootctl_hosttest: %d failure(s)\n", fails);

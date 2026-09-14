@@ -2446,9 +2446,9 @@ static void check_strings(void)
 {
     static unsigned char pat[80], got[80];
     static const unsigned char fills[2] = { 0xa5, 0x58 };
-    const char *what = "";
+    const char *what;
     size_t i;
-    int len, sa, da, f, src = 0, dst = 0;
+    int len, sa, da, f, src, dst;
 
     for (i = 0; i < sizeof(pat); i++) {
         pat[i] = (unsigned char)(0x21 + (i * 7) % 90);

@@ -864,7 +864,7 @@ int bootslot_commit(struct bootslot *bs, char *err, size_t errlen)
        consumed marker would save bytes that never booted.
 
        What is matched is the key and not any particular value, so a trial of
-       either pair is seen. The leading newline makes it a whole line and not a
+       any entry is seen. The leading newline makes it a whole line and not a
        suffix of some other key: the writer preserves lines it does not know, so
        a block could hold an `x_next_entry=candidate` that is nobody's trial
        state, and the block's header line guarantees every real variable has a

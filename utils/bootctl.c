@@ -156,10 +156,8 @@ static int open_slot(void)
     struct bootslot_io io;
 
     /* Before the device is open, while there is still a descriptor to read it
-       with: which pair of menu entries this machine is running from decides
-       what an install and a commit write, and guessing it is how a machine on
-       a network with no DHCP server ends up on the entries that ask for a
-       lease. */
+       with: `booted` reads the line, and an install that could not say which
+       entry is running would have nothing to check a commit against. */
     if (cmdline_load() != 0) {
         fprintf(stderr, "bootctl: cannot read /proc/cmdline, so which menu entries this "
                         "machine booted from is unknown: %s\n", strerror(errno));
@@ -186,9 +184,6 @@ static int open_slot(void)
         }
         return -1;
     }
-    /* An install and a commit keep the machine in the pair it is running from:
-       moving a machine on a network with no DHCP server back to the pair that
-       asks for a lease would leave it with no address at all. */
     return 0;
 }
 
@@ -256,14 +251,12 @@ static void print_env(const uint8_t *env, const char *key, int trial_marker)
  */
 static void print_booted(void)
 {
-    const char *pair = "";
-
     if (cmdline_has("rach2.slot=candidate")) {
-        printf("bootctl: booted: candidate%s\n", pair);
+        printf("bootctl: booted: candidate\n");
     } else if (cmdline_has("rach2.slot=fallback")) {
-        printf("bootctl: booted: fallback%s\n", pair);
+        printf("bootctl: booted: fallback\n");
     } else if (cmdline_has("rach2.slot=recovery")) {
-        printf("bootctl: booted: recovery%s, from partition 3 and neither slot\n", pair);
+        printf("bootctl: booted: recovery, from the recovery partition and neither slot\n");
     } else {
         printf("bootctl: booted: not from a slot (no rach2.slot= on /proc/cmdline)\n");
     }
@@ -490,9 +483,8 @@ static int cmd_env(const char *key, const char *value)
             fprintf(stderr, "bootctl: not a menu entry this tool arms: '%s'\n", value);
             return 1;
         }
-        /* And the saved default takes fewer of them than a trial does. The stub
-           reads it for the four kernel entries alone, so saving anything else
-           would report a default the machine then ignores. */
+        /* The stub reads the saved default for the entries it defines, so
+           saving anything else would report a default the machine ignores. */
         if (strcmp(key, "saved_entry") == 0 && !allowed(SAVED_IDS, SAVED_ID_COUNT, value)) {
             fprintf(stderr, "bootctl: '%s' is a boot and not a default; arm it for one "
                             "boot with `bootctl trial %s`\n", value, value);

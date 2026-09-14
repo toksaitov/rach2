@@ -69,7 +69,7 @@ QEMU is the primary development and test environment. Rach2 also runs on a Lenov
 
 ## What a fresh disk holds
 
-`make rach2-sealed-disk` builds a disk image of four partitions, each with a `/hello.txt` in it reading `hello, world`, so that every partition has something to read after a mount. What each partition is:
+`make rach2-sealed-disk` builds a disk image of three partitions, each with a `/hello.txt` in it reading `hello, world`, so that every partition has something to read after a mount. What each partition is:
 
 | Device | What it is | Type |
 | --- | --- | --- |
@@ -77,13 +77,12 @@ QEMU is the primary development and test environment. Rach2 also runs on a Lenov
 | `/dev/disk0p2` | the recovery system | FAT32 |
 | `/dev/disk0p3` | the root | ext2 |
 
-Everything below is done as root. `cat /proc/mounts` says which root is running; both kernel entries boot the same one, so the fallback entry is the previous kernel and not another system. Read the running root's copy with `cat /hello.txt`, and mount each other partition read-only to read its own:
+Everything below is done as root. `cat /proc/mounts` says which root is running; both kernel entries boot the same one, so the fallback entry is the previous kernel and not another system. Partition 3 is that root and is already mounted, so read its copy with `cat /hello.txt`; the other two are FAT volumes and are mounted read-only to read theirs:
 
 ```sh
 mkdir -p /mnt/x
 mount -t vfat -o ro /dev/disk0p1 /mnt/x && cat /mnt/x/hello.txt && umount /mnt/x
-mount -t krffs -o ro /dev/disk0p2 /mnt/x && cat /mnt/x/hello.txt && umount /mnt/x
-mount -t vfat -o ro /dev/disk0p3 /mnt/x && cat /mnt/x/hello.txt && umount /mnt/x
+mount -t vfat -o ro /dev/disk0p2 /mnt/x && cat /mnt/x/hello.txt && umount /mnt/x
 ```
 
 The root also has `/demo`: four file system images, `fat32.img`, `exfat.img`, `ext2.img` and `krffs.img`, one of each kind this kernel mounts, each with a `hello.txt` in it, and `empty.krffs`, a formatted KRFFS image with no files. `/demo/Readme.txt` on the machine has the same commands as this section. An image file is mounted by attaching it to a loop device and mounting the device. `loopctl` with no arguments says which of the four are taken; use a free number in both commands:
@@ -149,18 +148,20 @@ ssh -i IKEY USER@ADDRESS 'bootctl status'        # and the slot report
 ssh -i IKEY USER@ADDRESS 'bootctl commit'        # only when both say what they should
 ```
 
-`--update` copies the account files, the SSH policy and the host keys off the root before it writes and writes them back after, or takes the account files and the policy from the archive the install left on the recovery partition when the root no longer reads, naming each file where the two disagree, grows the root into its partition again, moves the saved entry to the fallback before the write and arms one trial boot after it; the machine that comes back is either the new root, which `commit` then makes the default, or the fallback, which needs nothing done to it. `commit` is a person's decision after reading the mount table and the slot report, as it is for a kernel: a root that mounted read-only answers SSH too, and `bootctl` reads the slot and the command line, not the mount. The raw path `--update` is built on, for a partition it does not know about:
+`--update` copies the account files, the SSH policy and the host keys off the root before it writes and writes them back after, or takes the account files and the policy from the archive the install left on the recovery partition when the root no longer reads, naming each file where the two disagree, grows the root into its partition again, makes recovery the saved default before the write, cancels any trial already armed, and arms one trial boot of the new root after it; the machine that comes back is either the new root, which `commit` then makes the default, or recovery, which is where a write cut in half returns. The fallback entry cannot save a root: both kernel entries mount the same one, and the fallback is the previous kernel. `commit` is a person's decision after reading the mount table and the slot report, as it is for a kernel: a root that mounted read-only answers SSH too, and `bootctl` reads the slot and the command line, not the mount. The raw path `--update` is built on, for a partition it does not know about:
+
+The partition `--update` does not know about is the recovery one, and this is how that is written. It is done from the disk's own recovery entry, which runs from RAM, so the partition being written is not mounted; the saved default stays the candidate for this one write, because what is being overwritten is the system a torn write would otherwise return to. If it does tear, the stick is the way back.
 
 ```sh
-dd if=build/images/rach2-sealed.disk of=root.img bs=512 skip=133120 count=1024000
-ssh -i $KEY root@ADDRESS 'bootctl env saved_entry recovery' && ssh -i $KEY root@ADDRESS reboot
+dd if=build/images/rach2-sealed.disk of=recovery.img bs=512 skip=133120 count=131072
+ssh -i $KEY root@ADDRESS 'bootctl trial recovery' && ssh -i $KEY root@ADDRESS reboot
 # recovery boots a RAM root, takes a DHCP address, and answers SSH on it
-gzip -c root.img | ssh -i $KEY root@ADDRESS 'gunzip | reflash /dev/disk0 68157440 524288000'
-ssh -i $KEY root@ADDRESS 'dd if=/dev/disk0 bs=512 skip=266240 count=2097152 | sha256sum'
-ssh -i $KEY root@ADDRESS 'bootctl env saved_entry candidate' && ssh -i $KEY root@ADDRESS reboot
+gzip -c recovery.img | ssh -i $KEY root@ADDRESS 'gunzip | reflash /dev/disk0 68157440 67108864'
+ssh -i $KEY root@ADDRESS 'dd if=/dev/disk0 bs=512 skip=133120 count=131072 | sha256sum'
+ssh -i $KEY root@ADDRESS reboot
 ```
 
-Recovery is made the saved default before the write and put back after it, so a write cut in half returns to the system that can finish it rather than to the half-written root. The offsets are the sealed layout that `make rach2-sealed-disk` fixes: a 1 MiB gap, a 64 MiB FAT boot partition, a 64 MiB recovery partition, a spare MiB, and the 1 GiB ext2 root at byte 136314880, sector 266240. A 500 MiB KRFFS root stood between the boot and recovery partitions until 2026-09-14 and the root began at byte 660602880; a command with the old number writes 500 MiB inside the root this layout has, which is why these numbers are read from here and not remembered. Compare the hash the machine reports with `shasum -a 256 root.img` on the host before rebooting.
+The offsets are the sealed layout that `make rach2-sealed-disk` fixes: a 1 MiB gap, a 64 MiB FAT boot partition at byte 1048576, a 64 MiB recovery partition at byte 68157440, sector 133120, a spare MiB, and the 1 GiB ext2 root at byte 136314880, sector 266240. A 500 MiB KRFFS root stood between the boot and recovery partitions until 2026-09-14, and the ext2 root began at byte 660602880; a command with an old number writes into the middle of a partition this layout has, which is why these numbers are read from here and not remembered. Compare the hash the machine reports with `shasum -a 256 recovery.img` on the host before rebooting.
 
 The ext2 root, from recovery, the same way with its own offsets, and checked there before anything boots it:
 
@@ -174,7 +175,7 @@ ssh -i $KEY root@ADDRESS 'cat /proc/mounts && bootctl status'
 ssh -i $KEY root@ADDRESS 'bootctl commit'
 ```
 
-Both kernel entries boot the same root, so a root that does not come up is not something the fallback can save: the saved default is recovery for the whole of a write, and the boot after a failed trial is recovery with nothing armed. `commit` is a person's decision after reading the mount table and the slot report, because `bootctl` checks the slot and the command line and not the mount: a root the check mounted read-only answers SSH too, and committing it would make a read-only system the default. A root that mounts read-only because its check found a fault is repaired by recovery's `init`, which runs `e2fsck -p` on every ext2 partition before it starts anything when booted through the menu's repair entry, `rach2.fsck` on its line, and by hand from any recovery boot with `e2fsck -y /dev/disk0p3`. The recovery on the laptop's own second partition is the tree's since milestone 43, with `e2fsck` and the USB stack; a recovery partition is rewritten the way the boot partition is, under "Working the machine from the host".
+Both kernel entries boot the same root, so a root that does not come up is not something the fallback can save: the saved default is recovery for the whole of a write, and the boot after a failed trial is recovery with nothing armed. `commit` is a person's decision after reading the mount table and the slot report, because `bootctl` checks the slot and the command line and not the mount: a root the check mounted read-only answers SSH too, and committing it would make a read-only system the default. A root that mounts read-only because its check found a fault is repaired from recovery with `e2fsck -y /dev/disk0p3`, which is a program a person runs at the shell recovery gives them. There is no menu entry that repairs: a boot is not a repair tool, and one that checked every ext2 partition on the way past would do it at every start. `rach2.fsck` still makes recovery's `init` run `e2fsck -p` on every ext2 partition before it starts anything, for a machine whose console is the only way in: add it to the recovery entry's line at the GRUB menu with `e`. The recovery on the laptop's own second partition is the tree's since milestone 43, with `e2fsck` and the USB stack; a recovery partition is rewritten the way the boot partition is, under "Working the machine from the host".
 
 ### Working the machine from the host
 
