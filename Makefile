@@ -495,8 +495,8 @@ $(OS_REAL_EXT2): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(shell sh krffs
 METAL_KERNEL = build/rach2-metal/kernel
 $(METAL_KERNEL): ask-the-kernel-make
 	@$(MAKE) --no-print-directory -C rach2 COMPONENT=rach2-metal KEXTRA=-DRACH2_DISK_READONLY
-rach2-metal: krffs
-	$(MAKE) -C rach2 COMPONENT=rach2-metal KEXTRA=-DRACH2_DISK_READONLY
+# One invocation, in the file rule above; see the note on `rach2-recovery`.
+rach2-metal: krffs $(METAL_KERNEL)
 	sh tools/inspect/check_diskpolicy.sh $(METAL_KERNEL) read-only
 
 # The recovery kernel: the same sources, built with the authority to write any
@@ -510,8 +510,11 @@ rach2-metal: krffs
 RECOVERY_KERNEL = build/rach2-recovery/kernel
 $(RECOVERY_KERNEL): ask-the-kernel-make
 	@$(MAKE) --no-print-directory -C rach2 COMPONENT=rach2-recovery KEXTRA=-DRACH2_RECOVERY
-rach2-recovery: krffs rach2
-	$(MAKE) -C rach2 COMPONENT=rach2-recovery KEXTRA=-DRACH2_RECOVERY
+# The file rule above is the only place this kernel is built. Running the
+# sub-make here as well gave two invocations with no edge between them, and a
+# parallel build could reach both: they write the same object files, so one
+# could link while the other rewrote an object under it.
+rach2-recovery: krffs rach2 $(RECOVERY_KERNEL)
 	sh tools/inspect/check_recovery.sh $(RECOVERY_KERNEL) recovery
 	sh tools/inspect/check_recovery.sh build/rach2/kernel ordinary
 	sh tools/inspect/check_diskpolicy.sh $(RECOVERY_KERNEL) read-write
