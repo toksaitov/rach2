@@ -490,8 +490,11 @@ wipe_partition "$WORK" 2 $((1024 * 1024))
 arm_recovery "$WORK"
 LOG="$DISK.log.norecovery"
 boot_watch "rach2 login:"
-grep -aq "(disk)" "$LOG" || \
+grep -aq "$ROOT_UP" "$LOG" || \
     fail "a recovery entry that could not load did not fall back to a kernel on partition 1"
+if grep -aq "modules: found" "$LOG"; then
+    fail "the fallback loaded a RAM image, so it was recovery and not a kernel on partition 1"
+fi
 mv "$WORK.save" "$WORK"
 
 # And the network with nothing on it. A machine that reached recovery through

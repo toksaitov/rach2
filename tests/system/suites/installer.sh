@@ -779,7 +779,7 @@ if "$HARNESS" --bios --qemu-arg=-cpu --qemu-arg=max \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
     "expect=incorrect" \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$NEWPASS" \
-    "expect=# " "send=cat /etc/motd" "expect=Welcome to Rach2" \
+    "expect=# " "send=cat /etc/motd" "expect=The log of this boot is in /dev/bootlog" \
     "send=test ! -d /root/.ssh && echo KEYS\"\"GONE" "expect=KEYSGONE" \
     "send=cat /home/$USERNAME/mine; stat -c %u /home/$USERNAME/mine" \
     "expect=this-machines-own" "expect=1000" \
