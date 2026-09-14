@@ -173,7 +173,7 @@ REPO=$(cd "$(dirname "$0")/../../.." && pwd)
 DRIVE_LOG="$REAL.stop.log"
 DRIVE_FIFO=$FEED
 drive_feed "$QPID"
-if ! drive_login "$USER_NAME" "$PASSWORD" 90; then
+if ! drive_login "$USER_NAME" "$PASSWORD" "$(scaled 90)"; then
     drive_stop
     stop
     echo "login-test: FAIL: os-real did not log its user in" >&2

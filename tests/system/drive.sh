@@ -35,11 +35,16 @@ DRIVE_POS=0
 DRIVE_FPID=""
 DRIVE_SEQ=0
 DRIVE_POLL=${DRIVE_POLL:-0.2}
-# The bounds are completion deadlines: under a set they are multiplied by
-# the runner's factor, through `scaled` (see deadline.sh). A caller that
-# passes what is left of a budget it has scaled already uses the raw forms.
+# Every bound is elapsed seconds. Callers apply `scaled` once, if wanted;
+# the driver never applies a factor, including in its compatibility aliases.
 # shellcheck source=tests/system/deadline.sh
 . "$REPO/tests/system/deadline.sh"
+
+# The runner supplies a monotonic clock. Direct suite invocations can use
+# the epoch format provided by both BSD date on macOS and GNU date on Linux.
+drive_now() {
+    if [ -n "${RACH2_RUN_UTIL:-}" ]; then "$RACH2_RUN_UTIL" now; else date +%s; fi
+}
 
 # The log's size in bytes, 0 before it exists.
 drive_size() {
@@ -104,20 +109,25 @@ drive_type() {
 # the offsets are the log's own. Fails past the bound with the fresh part's
 # tail on standard error.
 drive_expect() {
-    drive_expect_raw "$1" "$(scaled "$2")"
+    drive_expect_raw "$1" "$2"
 }
 
 drive_expect_raw() {
-    deadline=$(( $(date +%s) + $2 ))
+    deadline=$(( $(drive_now) + $2 ))
     while :; do
-        found=$(tail -c +"$((DRIVE_POS + 1))" "$DRIVE_LOG" 2>/dev/null | grep -a -b -o -E "$1" 2>/dev/null | head -1)
+        found=$(tail -c +"$((DRIVE_POS + 1))" "$DRIVE_LOG" 2>/dev/null |
+            DRIVE_PATTERN="$1" LC_ALL=C awk '
+                BEGIN { pattern = ENVIRON["DRIVE_PATTERN"] }
+                match($0, pattern) { print offset + RSTART - 1, RLENGTH; exit }
+                { offset += length($0) + 1 }
+            ')
         if [ -n "$found" ]; then
-            offset=${found%%:*}
-            match=${found#*:}
-            DRIVE_POS=$((DRIVE_POS + offset + ${#match}))
+            offset=${found%% *}
+            length=${found#* }
+            DRIVE_POS=$((DRIVE_POS + offset + length))
             return 0
         fi
-        if [ "$(date +%s)" -ge "$deadline" ]; then
+        if [ "$(drive_now)" -ge "$deadline" ]; then
             echo "drive: no '$1' within $2 s; the console's last lines:" >&2
             tail -c +"$((DRIVE_POS + 1))" "$DRIVE_LOG" 2>/dev/null | tr -d '\r' | tail -5 >&2
             return 1
@@ -126,31 +136,15 @@ drive_expect_raw() {
     done
 }
 
-# Wait up to $1 seconds for a shell prompt to be the last thing printed
-# after the cursor: root's `# `, a user's `$ `, or the debug shell's `> `,
-# with at most the directory before it, on a line of its own. A typed
-# command's echo that stops for a moment at a redirection, `printf x > `,
-# ends the same way and is not a prompt; the word before the prompt's
-# character is what tells them apart.
+# A prompt begins a line, optionally after an absolute or home directory.
+# A daemon can append output after the prompt without making it disappear.
+# Advance only past the prompt, preserving any following output for a wait.
 drive_prompt() {
-    drive_prompt_raw "$(scaled "$1")"
+    drive_expect_raw '^((/|~)[^ ]* )?[#$>] ' "$1"
 }
 
 drive_prompt_raw() {
-    deadline=$(( $(date +%s) + $1 ))
-    while :; do
-        last=$(tail -c +"$((DRIVE_POS + 1))" "$DRIVE_LOG" 2>/dev/null | tr -d '\r' | tail -1)
-        if printf '%s\n' "$last" | grep -q -E '^([^ ]* )?[#$>] ?$'; then
-            DRIVE_POS=$(drive_size)
-            return 0
-        fi
-        if [ "$(date +%s)" -ge "$deadline" ]; then
-            echo "drive: no prompt within $1 s; the console's last lines:" >&2
-            tail -c +"$((DRIVE_POS + 1))" "$DRIVE_LOG" 2>/dev/null | tr -d '\r' | tail -5 >&2
-            return 1
-        fi
-        sleep "$DRIVE_POLL"
-    done
+    drive_prompt "$1"
 }
 
 # Log in as $1 with password $2, each step within $3 seconds, to a prompt.

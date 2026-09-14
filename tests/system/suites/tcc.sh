@@ -133,11 +133,11 @@ boot_lines() {
     FPID=$DRIVE_FPID
     # The first two lines are the login; each line after it is typed once
     # the shell has printed its prompt again.
-    drive_login "$1" "$2" 90 || fail "the machine did not log in at its console"
+    drive_login "$1" "$2" "$(scaled 90)" || fail "the machine did not log in at its console"
     shift 2
     for line in "$@"; do
         drive_type "$line"
-        drive_prompt 120 || true
+        drive_prompt "$(scaled 120)" || true
     done
 }
 

@@ -104,7 +104,7 @@ fail() {
 # shellcheck source=tests/system/drive.sh
 . "$REPO/tests/system/drive.sh"
 type_line() { drive_type "$1"; }
-wait_token() { drive_expect "$1" "$2"; }
+wait_token() { drive_expect "$1" "$(scaled "$2")"; }
 
 
 rm -f "$WORK"
@@ -132,7 +132,7 @@ DRIVE_FIFO=$FEED
 drive_feed "$QPID"
 FPID=$DRIVE_FPID
 
-if ! drive_login root "$PASSWORD" 90; then
+if ! drive_login root "$PASSWORD" "$(scaled 90)"; then
     fail "the machine never reached a root prompt at its console"
 fi
 type_line 'dropbearmulti dropbear -R -g -p 22'
@@ -343,7 +343,7 @@ if [ "$established" -lt 5 ]; then
     fail "the flood held $established connections, fewer than the five a flood must reach"
 fi
 type_line 'exit'
-if ! drive_login root "$PASSWORD" 40; then
+if ! drive_login root "$PASSWORD" "$(scaled 40)"; then
     for p in $FLOOD; do kill "$p" 2>/dev/null; done
     fail "the console did not come back to a login prompt under the flood"
 fi

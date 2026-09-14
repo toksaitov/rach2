@@ -162,7 +162,7 @@ boot_steps() {
     DRIVE_FIFO=$FEED
     drive_feed "$QPID"
     FPID=$DRIVE_FPID
-    drive_login "$login_name" "$login_password" 90 || fail "the machine did not log in at its console"
+    drive_login "$login_name" "$login_password" "$(scaled 90)" || fail "the machine did not log in at its console"
     # Each step is typed once the one before it has printed its marker; a
     # full build sits behind a single marker, so a step's bound is long,
     # and the run has a budget the steps share, so a hung build fails the

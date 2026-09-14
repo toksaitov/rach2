@@ -123,7 +123,7 @@ mount_boot() {
     shift 2
     DRIVE_LOG=$log
     boot_driven -kernel "$KERNEL" -initrd "$TEST_IMAGE" -append "$append" "$@"
-    if ! drive_expect "Type 'help'" 60; then
+    if ! drive_expect "Type 'help'" "$(scaled 60)"; then
         stop
         echo "procfiles-test: FAIL: no debug shell on the boot with options '$append'" >&2
         exit 1
@@ -182,19 +182,16 @@ echo "procfiles-test: the three mounts each name their own source: OK"
 DRIVE_LOG="$REAL.applets.log"
 boot_driven -kernel "$KERNEL" -initrd "$REAL" \
     -net nic,model=rtl8139 -net "user,hostfwd=tcp::$FWD_PORT-:22"
-# The seconds below are the plain ones: `drive_expect`, `drive_prompt` and
-# `drive_login` scale what they are given. Scaling them here as well made a
-# 60-second bound 64 minutes on a busy host, and on 2026-09-14 a machine that
-# stopped answering held a whole set for an hour before that bound could fire.
+# Each applet waits for its token and prompt under an explicit bound.
 applet() { # applet LINE TOKEN [SECONDS]: the line, its token, and the prompt
     drive_type "$1"
-    if ! drive_expect "$2" "${3:-60}" || ! drive_prompt "${3:-60}"; then
+    if ! drive_expect "$2" "$(scaled "${3:-60}")" || ! drive_prompt "$(scaled "${3:-60}")"; then
         stop
         echo "procfiles-test: FAIL: the applet run stopped before $2" >&2
         exit 1
     fi
 }
-if ! drive_login "$USER_NAME" "$PASSWORD" 90; then
+if ! drive_login "$USER_NAME" "$PASSWORD" "$(scaled 90)"; then
     stop
     echo "procfiles-test: FAIL: the real image did not log its user in" >&2
     exit 1
@@ -207,22 +204,9 @@ applet 'uptime > /tmp.up; echo UP""-STATUS:$?; cat /tmp.up' 'UP-STATUS:'
 applet 'dmesg > /tmp.dm; echo DM""ESG-STATUS:$?; sed -n "1s/^/DM""ESG-FIRST:/p" /tmp.dm' 'DMESG-FIRST:'
 applet 'grep -c "^<[0-9]>\\[" /tmp.dm | sed s/^/DM""ESG-RECORDS:/' 'DMESG-RECORDS:'
 applet 'grep -c "Type .help." /tmp.dm | sed s/^/DM""ESG-CONSOLE:/' 'DMESG-CONSOLE:'
-# The one line whose cost is not the machine's to choose: `-R` mints the host
-# keys, which is minutes of an emulator on a host running twenty of them. It is
-# also the one line that answers after its own prompt: the daemon forks, the
-# shell draws `~ #`, and dropbear then writes "Running in background" onto that
-# line, so the console no longer ends in a bare prompt and `applet` would wait
-# out its bound for one that cannot come. So the token is waited for here, the
-# daemon is given a moment to say its piece, and a plain echo puts a prompt
-# back at the end for the applets that follow.
-drive_type 'dropbearmulti dropbear -R -g -p 22; echo SSH""D-UP'
-if ! drive_expect 'SSHD-UP' 300; then
-    stop
-    echo "procfiles-test: FAIL: the SSH server never started" >&2
-    exit 1
-fi
-sleep 3
-applet 'echo SSHD""-SETTLED' 'SSHD-SETTLED'
+# Key generation can take minutes in emulation. Dropbear may write after
+# the shell's prompt; the driver still recognises that prompt.
+applet 'dropbearmulti dropbear -R -g -p 22; echo SSH""D-UP' 'SSHD-UP' 300
 # A connection opened from OUTSIDE, held open while netstat runs, and still
 # resolved in the cache when `arp` runs after it. The order matters: a machine
 # that has spoken to nobody has an empty cache, and `arp` would then be asked to

@@ -209,7 +209,7 @@ DRIVE_LOG="$OFF.log"
 DRIVE_FIFO=$FEED
 drive_feed "$QPID"
 FPID=$DRIVE_FPID
-if drive_expect "Type 'help'" 60; then
+if drive_expect "Type 'help'" "$(scaled 60)"; then
     drive_type poweroff
 fi
 i=0

@@ -144,7 +144,7 @@ start_boot() {
     DRIVE_FIFO=$FEED
     drive_feed "$QPID"
     FPID=$DRIVE_FPID
-    drive_prompt 90 || fail "the machine printed no prompt to type '$1' at"
+    drive_prompt "$(scaled 90)" || fail "the machine printed no prompt to type '$1' at"
     drive_type "$1"
 }
 

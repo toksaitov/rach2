@@ -95,7 +95,7 @@ boot_driven() {
 
 # The debug shell's command, typed once its prompt has been printed.
 shell_command() {
-    if ! drive_expect "Type 'help'" 60; then
+    if ! drive_expect "Type 'help'" "$(scaled 60)"; then
         stop
         echo "exitline-test: FAIL: no debug shell on $DRIVE_LOG" >&2
         exit 1
@@ -139,7 +139,7 @@ wait_serial() {
 # console echoes what is typed, and a command holding a whole token would put
 # it in the log before it ran.
 boot_driven "$REAL.exitline.log" -kernel "$KERNEL" -initrd "$REAL"
-if ! drive_login "$USER_NAME" "$PASSWORD" 90; then
+if ! drive_login "$USER_NAME" "$PASSWORD" "$(scaled 90)"; then
     stop
     echo "exitline-test: FAIL: os-real did not log its user in" >&2
     exit 1

@@ -35,8 +35,8 @@
  *                    flood of lines is typed back to back
  *     wait=SECS      sleep SECS, draining serial
  *     until=SECS     drain serial for at most SECS, ending half a second
- *                    after the run's --ok token arrives in output that
- *                    came after this step began, or when the machine
+ *                    after the run's --ok token appears in unconsumed
+ *                    output from the current command, or when the machine
  *                    exits: for the wait after `send=exec /probe` whose
  *                    only purpose is that token, so a probe done in ten
  *                    seconds does not cost sixty. Never past --timeout
@@ -636,6 +636,33 @@ static void pump(double until)
     }
 }
 
+/** Read bytes already available without waiting for new output. */
+static void drain_ready(void)
+{
+    unsigned char chunk[BUF_GROW];
+    ssize_t n;
+
+    while (now() < deadline) {
+        n = read(child_out, chunk, sizeof(chunk));
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n <= 0)
+            break;
+        buf_add(chunk, (size_t)n);
+        if (logf != NULL) {
+            fwrite(chunk, 1, (size_t)n, logf);
+            fflush(logf);
+        }
+    }
+}
+
+/** Start a new exchange before publishing input, preserving fast replies. */
+static void begin_input(void)
+{
+    drain_ready();
+    consumed = buf_len;
+}
+
 static double steptmo = 15.0;
 
 /* The stamp file: `MATCH N SECONDS` for each `expect=` matched and
@@ -728,6 +755,7 @@ static void send_text(const char *text, int newline)
 {
     if (child_in < 0)
         return;
+    begin_input();
     /* A closed pipe means the guest is gone; the caller notices. */
     if (!send_bytes(text, strlen(text)))
         return;
@@ -800,16 +828,22 @@ static int unescape(const char *in, char *out, size_t cap)
 
 /* ---- main ---- */
 
-static int contains(const unsigned char *hay, size_t len, const char *needle)
+/** End of the first literal token at or after `from`, or -1. */
+static long token_end(const unsigned char *hay, size_t len, const char *needle, size_t from)
 {
     size_t n = strlen(needle), i;
 
     if (n == 0 || n > len)
-        return 0;
-    for (i = 0; i + n <= len; i++)
+        return -1;
+    for (i = from; i <= len - n; i++)
         if (memcmp(hay + i, needle, n) == 0)
-            return 1;
-    return 0;
+            return (long)(i + n);
+    return -1;
+}
+
+static int contains(const unsigned char *hay, size_t len, const char *needle)
+{
+    return token_end(hay, len, needle, 0) >= 0;
 }
 
 /* The escape decoder, against the cases the suites depend on and the ones
@@ -1184,6 +1218,7 @@ int main(int argc, char **argv)
             char raw[256];
             int n = unescape(step + 8, raw, sizeof(raw));
 
+            begin_input();
             if (n < 0 || child_in < 0 || write(child_in, raw, (size_t)n) != n) {
                 fprintf(stderr,
                         "HARNESS: step '%s' did not reach the "
@@ -1197,6 +1232,7 @@ int main(int argc, char **argv)
             size_t got;
             int sent = sf != NULL;
 
+            begin_input();
             while (sent && (got = fread(chunk, 1, sizeof(chunk), sf)) > 0) {
                 if (child_in < 0 || !send_bytes(chunk, got))
                     sent = 0;
@@ -1284,13 +1320,17 @@ int main(int argc, char **argv)
                 step_failures++;
         } else if (strncmp(step, "until=", 6) == 0) {
             double until = now() + scaled(atof(step + 6));
-            size_t from = buf_len;
+            size_t from = consumed;
 
+            drain_ready();
             if (until > deadline)
                 until = deadline;
             while (now() < until && child_poll() < 0) {
                 pump(now() + 0.3);
-                if (ok != NULL && buf_len > from && contains(buf + from, buf_len - from, ok)) {
+                long end = ok ? token_end(buf, buf_len, ok, from) : -1;
+
+                if (end >= 0) {
+                    consumed = (size_t)end;
                     pump(now() + 0.5);
                     break;
                 }
