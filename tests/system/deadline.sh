@@ -9,9 +9,10 @@
 # this file and writes each bound that limits how long a step may take as
 # `$(scaled N)`, N the seconds it takes on an idle host; the result is N
 # times F rounded up, or N when the run asked for no factor. The runner's own
-# bound on a silent suite is never scaled by any of this. A number that asserts a rate, an interval a row
-# holds a load for, or a deadline a row means to run out is written as it
-# is. The factor is kept in tenths, since the shell's arithmetic is whole.
+# bound on a silent suite is never scaled by any of this. A number that
+# asserts a rate, an interval a row holds a load for, or a deadline a row
+# means to run out is written as it is. The factor is kept in tenths, since
+# the shell's arithmetic is whole.
 deadline_tenths=10
 if [ "${RACH2_DEADLINES:-}" = scaled ] && [ -n "${RACH2_DEADLINE_FACTOR:-}" ]; then
     case "$RACH2_DEADLINE_FACTOR" in
