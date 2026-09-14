@@ -582,7 +582,7 @@ run-drill: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krffs c
 	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
 	    sh tools/image/mkdisk_grub.sh build/rach2/kernel $(DRILL_DISK)
 	sh tests/system/suites/drill.sh $(DRILL_DISK) \
-	    "`cat krffs/rach2_demo_password`" $(DRILL_PORT)
+	    "`cat krffs/rach2_demo_password`" $(DRILL_PORT) $(RECOVERY_IMAGE)
 # `tests/run persist`: fsync durability across a reboot. Builds a disk holding
 # persistprobe, boots it twice against the SAME image: the first boot writes and
 # fsyncs /persist.txt, the second reads it back. The second boot passes only if
@@ -927,16 +927,17 @@ dhcp-stack: dhcp-card
 	    --qemu-arg=-object \
 	    --qemu-arg=filter-dump,id=mt0,netdev=net0,file=$(METAL_PCAP) \
 	    --append "rach2.ip=none" \
-	    --timeout 180 --steptmo 60 --ok "lease of 192.168.90.20 obtained" \
-	    "expect=lease of 192.168.90.20 obtained" wait=8 \
+	    --timeout 180 --steptmo 60 --ok "rach2 login:" \
+	    "expect=rach2 login:" wait=20 \
 	    "tcp=$(DHCP_SSH_PORT)" wait=5
-	# The lease line is printed before the script runs, so on its own it proves
-	# only that a lease arrived. What proves the machine was configured is the
-	# wire: the step above knocks on the SSH port through the address the lease
-	# gave it, and the capture must then hold packets sent FROM that address, which
-	# only a machine holding it can send. The knock alone proves nothing, because
-	# QEMU's user network accepts the host side of a connection before it knows
-	# whether the guest is there. Nothing was typed at the console in any of it.
+	# Since 2026-09-14 what init starts writes to `/var/log/services` and not to
+	# the console, so the client's lease line is not on this serial at all and the
+	# console can only say the machine got as far as a login. Nothing is typed
+	# here, so the wire is the whole proof: the step above knocks on the SSH port
+	# through the address the lease gave, and the capture must then hold packets
+	# sent FROM that address, which only a machine holding it can send. The knock
+	# alone proves nothing, because QEMU's user network accepts the host side of a
+	# connection before it knows whether the guest is there.
 	$(PCAPCHECK) bcast $(METAL_PCAP) --source 192.168.90.20
 	# And on a network with no server at all, which is a cable plugged in later or
 	# a switch that has not started forwarding. The client must go to the
@@ -1094,12 +1095,16 @@ dhcp-stack: dhcp-card
 	$(HARNESS) --kernel build/rach2/kernel \
 	    --initrd $(METAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --net "hubport,id=net0,hubid=1" --append "rach2.ip=none" \
-	    --timeout 180 --steptmo 90 --ok "no lease, forking to background" \
+	    --timeout 180 --steptmo 90 --ok "NOLEASEOK" \
 	    "expect=rach2 login:" "send=root" "expect=Password:" \
 	    "send=`cat krffs/rach2_demo_password`" \
 	    "expect=# " "send=echo CONSOLE\"\"UP" \
 	    "expect=CONSOLEUP" \
-	    "expect=no lease, forking to background" wait=30
+	    "send=for i in 1 2 3 4 5 6 7 8 9 10 11 12; do grep -q 'no lease, forking to background' /var/log/services && { echo NOLEASE\"\"OK; break; }; sleep 5; done" \
+	    "expect=NOLEASEOK"
+	# The client's giving up is read from the service log and not from this
+	# console: init gives what it starts `/var/log/services`, so that a client
+	# retrying for minutes does not write over the login prompt.
 	# Two cards on two networks, each with a server of its own: a lease on each
 	# interface, asked for by name, and a server answering through both. The
 	# second client is `udhcpc -i eth1`, which is how an administrator configures
@@ -1698,7 +1703,7 @@ GROW_DIR = $(IMAGES_DIR)/grow
 run-grow: $(DEMO_CREDS) rach2 tests krffs test-image $(MKMBR) $(GROWSET) $(HARNESS) \
           utils check-busybox check-dropbearmulti rach2-recovery $(RECOVERY_IMAGE)
 	sh tests/system/suites/grow.sh $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(HARNESS) $(MKMBR) $(GROWSET) \
-	    $(GROW_DIR) "`cat krffs/rach2_demo_password`"
+	    $(GROW_DIR)
 # `tests/run queue`: the AHCI disks on their interrupts: a throttled disk
 # beside a fast one, and the fallback root's faults beside the queue.
 QUEUE_DIR = $(IMAGES_DIR)/queue

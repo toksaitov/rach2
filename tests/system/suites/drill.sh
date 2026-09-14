@@ -37,13 +37,21 @@ set -e
 DISK="$1"
 ROOTPASSWORD="$2"
 PORT="${3:-2298}"
+RECOVERY="${4:-}"
 
 if [ -z "$DISK" ] || [ -z "$ROOTPASSWORD" ]; then
-    echo "usage: drill_test.sh <grub-disk> <root password> [ssh port]" >&2
+    echo "usage: drill_test.sh <grub-disk> <root password> [ssh port] [recovery image]" >&2
     exit 2
 fi
 
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
+# The recovery image is named for what it carries: the one with a key in it
+# answers SSH, which this suite needs, and is what make builds when a key was
+# minted. Run by hand with neither built, the name make would have chosen.
+if [ -z "$RECOVERY" ]; then
+    RECOVERY="$REPO/build/images/rach2-recovery-with-key.krffs"
+    [ -f "$RECOVERY" ] || RECOVERY="$REPO/build/images/rach2-recovery.krffs"
+fi
 # shellcheck source=tests/system/deadline.sh
 . "$REPO/tests/system/deadline.sh"
 DEADLINE=$(scaled 2400)
@@ -273,11 +281,11 @@ fi
 # that waited to be asked would be a build that could not repair anything. This
 # boot mounts nothing from the disk and writes nothing to it.
 if ! "$REPO/build/tests/system/harness" --kernel "$REPO/build/rach2-recovery/kernel" \
-        --initrd "$REPO/build/images/rach2-recovery.krffs" --qemu-arg=-cpu --qemu-arg=max \
+        --initrd "$RECOVERY" --qemu-arg=-cpu --qemu-arg=max \
         --drive "file=$WORK,format=raw,if=ide,index=0,media=disk" \
         --append "rach2.root=ram" --timeout 180 --steptmo 60 --ok "NODETHERE" \
-        "expect=rach2 login:" "send=root" "expect=Password:" "send=$ROOTPASSWORD" \
-        "expect=# " "send=test -b /dev/disk0 && echo NODE\"\"THERE" \
+        "expect=recovery image" "expect=# " \
+        "send=test -b /dev/disk0 && echo NODE\"\"THERE" \
         "expect=NODETHERE" wait=3 > /dev/null 2>&1; then
     fail "the recovery kernel did not publish /dev/disk0 without rach2.diskdiag"
 fi
@@ -336,10 +344,23 @@ arm_recovery "$WORK"
 LOG="$DISK.log.recovery"
 : > "$STEPS"
 boot_feed net
-wait_count "rach2 login:" 1 "$(scaled 200)" || fail "the recovery entry never reached a login"
+wait_count "recovery image" 1 "$(scaled 200)" || fail "the recovery entry never came up"
 # Nothing is typed at that console: the image starts its own server, and the
-# lease and the key login are what say the machine is reachable.
-wait_count "lease of" 1 "$(scaled 90)" || fail "recovery never took an address"
+# key login is what says the machine is reachable. The lease itself is read from
+# the machine, since init gives what it starts `/var/log/services` rather than
+# the console; answering at all is the other half of the proof, because this
+# connection runs over the address that lease gave.
+i=0
+while :; do
+    case "$(machine 'cat /var/log/services' || true)" in
+        *"lease of"*) break ;;
+    esac
+    i=$((i + 1))
+    if [ "$i" -ge "$(scaled 30)" ]; then
+        fail "recovery never took an address"
+    fi
+    sleep 3
+done
 
 OUT="$(machine 'test -b /dev/disk0 && echo DISK""NODE' || true)"
 case "$OUT" in
@@ -438,7 +459,7 @@ cleanup_boot
 LOG="$DISK.log.latched"
 : > "$STEPS"
 boot_feed net
-wait_count "rach2 login:" 1 "$(scaled 200)" || fail "the saved recovery default did not boot recovery"
+wait_count "recovery image" 1 "$(scaled 200)" || fail "the saved recovery default did not boot recovery"
 OUT="$(machine 'test -b /dev/disk0 && echo STILL""RECOVERY' || true)"
 case "$OUT" in
     *STILLRECOVERY*) ;;
@@ -509,7 +530,7 @@ fi
 # that reaches a login has come through the second line.
 wipe_partition "$WORK" 1 $((2 * 1024 * 1024))
 LOG="$DISK.log.p1dead"
-boot_watch "rach2 login:"
+boot_watch "recovery image"
 grep -aq "modules: found 1" "$LOG" || \
     fail "the boot with partition 1 destroyed did not load a RAM image, so it was not recovery"
 

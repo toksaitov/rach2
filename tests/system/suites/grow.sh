@@ -25,9 +25,9 @@
 #    7 MiB the grow needs, so the row runs growroot built for the host,
 #    where `/proc/meminfo` does not exist and the memory reads as none.
 #
-# Usage: grow.sh RKERNEL RIMAGE HARNESS MKMBR GROWSET DIR PASSWORD
+# Usage: grow.sh RKERNEL RIMAGE HARNESS MKMBR GROWSET DIR
 set -u
-RKERNEL=$1; RIMAGE=$2; HARNESS=$3; MKMBR=$4; GROWSET=$5; DIR=$6; PASSWORD=$7
+RKERNEL=$1; RIMAGE=$2; HARNESS=$3; MKMBR=$4; GROWSET=$5; DIR=$6
 REPO=$(cd "$(dirname "$0")/../../.." && pwd)
 fail() { echo "grow-test: FAIL: $1" >&2; exit 1; }
 mkdir -p "$DIR"
@@ -68,15 +68,16 @@ overlay() {
     qemu-img create -q -f qcow2 -o cluster_size=4096 -b "$(cd "$(dirname "$2")" && pwd)/$(basename "$2")" \
         -F raw "$1" || fail "the overlay $1"
 }
-# A recovery boot on overlay $1 with $2 MiB, logged in as root, the log $3,
-# then the steps.
+# A recovery boot on overlay $1 with $2 MiB, the log $3, then the steps.
+# Recovery gives a root shell at the console with nothing typed, so what is
+# waited for is its own first line and then the prompt.
 boot() {
     over=$1; mib=$2; log=$3; shift 3
     "$HARNESS" --kernel "$RKERNEL" --initrd "$RIMAGE" --qemu-arg=-cpu --qemu-arg=max \
         --qemu-arg=-m --qemu-arg="$mib" \
         --drive "file=$over,format=qcow2,if=ide,index=0,media=disk,discard=unmap,detect-zeroes=unmap" \
         --timeout 7200 --steptmo 3000 --log "$log" --ok "ROWDONE" \
-        "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" "expect=~ #" "$@" \
+        "expect=recovery image" "expect=~ #" "$@" \
         > /dev/null 2>&1
 }
 GROWN="growroot: result: /dev/disk0p1 grown to $END sectors"

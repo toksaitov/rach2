@@ -157,7 +157,7 @@ SDEFS='t() { s=$(date +%s); if eval "$2"; then echo T_$1 $(( $(date +%s) - s ));
     --drive "if=none,id=stick,format=raw,file=$STICK" \
     --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=stick,id=st0 \
     --timeout 600 --steptmo 300 --ok "STICKDONE" --log "$SLOG" \
-    "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" "expect=~ #" \
+    "expect=recovery image" "expect=~ #" \
     "send=$SDEFS" "expect=DEFSDONE" \
     "send=yes RATE-STICK-PATTERN-LINE | head -c 32768 > /tmp/base; p() { printf PIECE-%03d- \$1; dd if=/tmp/base bs=32758 count=1 2>/dev/null; }; echo PAT\"\"DONE" "expect=PATDONE" \
     "send=c stickwrite0" "expect=C_stickwrite0" \
@@ -206,7 +206,7 @@ dd if=/dev/zero of="$AHCI" bs=1048576 count=64 2>/dev/null || fail "the AHCI ima
     --qemu-arg=-device --qemu-arg=ich9-ahci,id=ahci0 \
     --qemu-arg=-device --qemu-arg=ide-hd,drive=drv0,bus=ahci0.0 \
     --timeout 900 --steptmo 300 --ok "AHCIDONE" --never "PATFAIL" --log "$ALOG" \
-    "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" "expect=~ #" \
+    "expect=recovery image" "expect=~ #" \
     "send=$SDEFS" "expect=DEFSDONE" \
     "send=yes RATE-AHCI-PATTERN-LINE | head -c 32768 > /tmp/b32; i=0; while [ \$i -lt 32 ]; do dd if=/tmp/b32 of=/dev/disk0 bs=32k seek=\$((128 + i)) count=1 2>/dev/null || break; i=\$((i + 1)); done; sync; if [ \$i = 32 ]; then echo PAT\"\"DONE; else echo PAT\"\"FAIL; fi" "expect=PATDONE" \
     "send=c ahciwrite0" "expect=C_ahciwrite0" \

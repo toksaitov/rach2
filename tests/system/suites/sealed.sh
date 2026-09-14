@@ -134,10 +134,14 @@ start_qemu() {
     QPID=$!
 }
 
-# A boot that is expected to reach a login and answer SSH.
+# A boot that is expected to come up and answer SSH. What says it is up depends
+# on which of the two systems booted: the installed one starts a login, and
+# recovery starts a shell and says at its first line whether a key was built
+# into it. Either line will do, since what is waited for after it is the port.
+UP="rach2 login:\|recovery image"
 cold_boot() {
     start_qemu "$1"
-    wait_count "rach2 login:" 1 "$(scaled 180)" || fail "the machine never reached a login prompt"
+    wait_count "$UP" 1 "$(scaled 180)" || fail "the machine never came up"
     # The server is started by init after the network, so what is waited for is
     # the port answering, not a line on the console.
     i=0
@@ -744,7 +748,10 @@ case "$OUT" in
     *"booted: candidate"*) ;;
     *) fail "the repaired machine did not boot its candidate: $OUT" ;;
 esac
-grep -aq "lease of" "$LOG" || fail "the repaired machine did not take a lease"
+case "$(machine 'cat /var/log/services' || true)" in
+    *"lease of"*) ;;
+    *) fail "the repaired machine did not record taking a lease" ;;
+esac
 stop_machine
 
 # ---------------------------------------------------------- the control run
@@ -770,7 +777,10 @@ fi
 if grep -aq "modules: found" "$LOG"; then
     fail "the control run reached recovery with nothing injected"
 fi
-grep -aq "lease of" "$LOG" || fail "the control run took no lease"
+case "$(machine 'cat /var/log/services' || true)" in
+    *"lease of"*) ;;
+    *) fail "the control run recorded no lease" ;;
+esac
 # And nothing about it left a trial armed or a default moved.
 OUT="$(machine 'bootctl status' || true)"
 case "$OUT" in
