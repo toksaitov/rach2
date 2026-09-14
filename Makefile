@@ -279,15 +279,20 @@ $(E2FSCK_BIN) $(RESIZE2FS_BIN): $(E2FSPROGS_STAMP)
 # Without this the rules fired only when the file was missing. On 2026-09-14 a
 # disk image shipped a kernel older than the tree, and what caught it was a
 # person reading a boot log for a message that had been deleted.
-.PHONY: ask-the-kernel-make
-ask-the-kernel-make:
+.PHONY: ask-the-sub-make
+ask-the-sub-make:
 
-build/rach2/kernel: ask-the-kernel-make
+build/rach2/kernel: ask-the-sub-make
 	@$(MAKE) --no-print-directory -C rach2
-build/ish/ish:
+build/ish/ish: ask-the-sub-make
 	@$(MAKE) --no-print-directory -C ish
-build/krffs/mkfs.krffs build/krffs/stageimage.krffs build/krffs/fsck.krffs: | check-libc
+# One of the three asks the sub-make and the other two wait for it. A rule with
+# several targets is a rule per target to make, so the three missing files of a
+# clean build were three sub-makes of one directory at once.
+build/krffs/mkfs.krffs: ask-the-sub-make | check-libc
 	@$(MAKE) --no-print-directory -C krffs
+build/krffs/stageimage.krffs build/krffs/fsck.krffs: build/krffs/mkfs.krffs
+	@:
 
 # The binary byte searcher (tools/inspect/binfind.c), replacing strings(1) piped
 # to grep in the TinyCC policy check.
@@ -365,9 +370,22 @@ os-simple-image: build/images/os-simple.checked
 os-real-image: build/images/os-real.checked
 
 # --- component sub-makes + the build-order DAG ---
-$(BASE_DIRS) $(FULL_DIRS):
+#
+# `rach2`, `ish` and `krffs` are not here: each has a file rule above that
+# runs its sub-make, and a component name that ran one as well gave two routes to the
+# same sub-make with no edge between them. Under `make -j` both ran at once,
+# compiled every object twice into the same files, and the link read an object
+# the other job was writing: a clean parallel build on 2026-09-14 ended in
+# `undefined reference to krandom_seed`. Each of the three
+# now asks for its file, and every one of those file rules asks its sub-make on
+# each invocation, which is what keeps an edited source built.
+$(filter-out rach2 ish krffs,$(BASE_DIRS)) $(FULL_DIRS):
 	@echo "$(notdir $@): building"
 	@$(MAKE) --no-print-directory -C $@
+
+rach2: build/rach2/kernel
+ish: build/ish/ish
+krffs: build/krffs/mkfs.krffs
 
 # krffs waits on the vendored musl because mkhash compiles its SHA-512 crypt
 # from that source, which exists only once build_libc.sh has extracted the
@@ -499,7 +517,7 @@ $(OS_REAL_EXT2): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(shell sh krffs
 # policy back off the artifact, since there is nothing to check for by absence:
 # the commands are numbers and the functions that issue them are static.
 METAL_KERNEL = build/rach2-metal/kernel
-$(METAL_KERNEL): ask-the-kernel-make
+$(METAL_KERNEL): ask-the-sub-make
 	@$(MAKE) --no-print-directory -C rach2 COMPONENT=rach2-metal KEXTRA=-DRACH2_DISK_READONLY
 # One invocation, in the file rule above; see the note on `rach2-recovery`.
 rach2-metal: krffs $(METAL_KERNEL)
@@ -514,7 +532,7 @@ rach2-metal: krffs $(METAL_KERNEL)
 # boot partition too, which recovery needs to do. check_recovery.sh reads the
 # authority back off the artifact in both directions.
 RECOVERY_KERNEL = build/rach2-recovery/kernel
-$(RECOVERY_KERNEL): ask-the-kernel-make
+$(RECOVERY_KERNEL): ask-the-sub-make
 	@$(MAKE) --no-print-directory -C rach2 COMPONENT=rach2-recovery KEXTRA=-DRACH2_RECOVERY
 # The file rule above is the only place this kernel is built. Running the
 # sub-make here as well gave two invocations with no edge between them, and a
