@@ -12,23 +12,21 @@
 #
 # Order is the schedule order: the pool starts at the top, and a pool finishes
 # when its longest member does, so the long suites are listed first.
-install|qemu-system-i386,mformat,mmd,mcopy|full
+install|qemu-system-i386,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full
 selfbuild|qemu-system-i386,mformat,mmd,mcopy|full
 installer-repair|qemu-system-i386,shasum|full
 installer|qemu-system-i386,shasum,ssh,mformat,mcopy,mtype|full
-menu|qemu-system-i386,mformat,mmd,mcopy|full
+menu|qemu-system-i386,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full
 installer-rehearse|qemu-system-i386,qemu-img,shasum|full
 selfbuild-ext2|qemu-system-i386,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full
 sealed|qemu-system-i386,ssh,mformat,mmd,mcopy|full
 dhcp-e1000|qemu-system-i386|full
 dhcp|qemu-system-i386|full
-install-ext2|qemu-system-i386,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full
 netif|qemu-system-i386|full
 netif-e1000|qemu-system-i386|full
 mount|qemu-system-i386,mformat,mcopy,mdir|core
 grow|qemu-system-i386,mke2fs,e2fsck,qemu-img|full
-drill|qemu-system-i386,ssh,mformat,mmd,mcopy|full
-drill-ext2|qemu-system-i386,ssh,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full
+drill|qemu-system-i386,ssh,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full
 account|qemu-system-i386|full
 large|qemu-system-i386,mke2fs,e2fsck,mformat,hdiutil,newfs_exfat,fsck_exfat|full
 usb|qemu-system-i386|core

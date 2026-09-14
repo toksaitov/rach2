@@ -44,16 +44,11 @@ REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 DISK="$1"
 ROOTPASSWORD="$2"
 
-# With INSTALL_ROOT=ext2 the candidate entries boot the ext2 root on the
-# fourth partition and the fallback boots the KRFFS one, so the kernel built
-# on the candidate is not on the fallback's root: the repair mounts the ext2
-# partition and installs from there, which is what a person at the fallback
-# would do.
-if [ "${INSTALL_ROOT:-krffs}" = ext2 ]; then
-    REPAIR_CD="busybox mkdir -p /mnt && busybox mount -t ext2 /dev/disk0p4 /mnt && cd /mnt/src/rach2"
-else
-    REPAIR_CD="cd /src/rach2"
-fi
+# Both entries boot the same root, so the kernel built under the candidate is
+# on the fallback's root as well and the repair is done where it stands. Until
+# 2026-09-14 the fallback booted a KRFFS root of its own and this suite ran
+# twice, once per root type; the disk has one root now.
+REPAIR_CD="cd /src/rach2"
 
 if [ -z "$DISK" ] || [ -z "$ROOTPASSWORD" ]; then
     echo "usage: install_test.sh <grub-disk> <root password>" >&2

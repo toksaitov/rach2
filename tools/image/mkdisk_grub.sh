@@ -3,20 +3,26 @@
 #
 # mkdisk_grub.sh: build a BIOS-bootable disk image with kernel slots.
 #
-# The disk has two MBR partitions, three when a recovery partition is asked
-# for, and four when an ext2 root is: partition 1 is a FAT32 boot file system
-# holding GRUB and two kernels, partition 2 is a KRFFS image, partition 4, when
+# The disk has one MBR partition, two when a recovery partition is asked for,
+# and three when an ext2 root is. Partition 1 is a FAT32 boot file system
+# holding GRUB and two kernel slots. Partition 2, when RACH2_DISK_RECOVERY_MB
+# is nonzero, is a FAT32 volume for the recovery kernel and its RAM image, in a
+# file system of its own so that a boot partition damaged by the writes an
+# install makes still leaves a way to repair the machine. Partition 3, when
 # RACH2_DISK_EXT2_MB is set, is the ext2 image RACH2_DISK_EXT2_IMAGE names,
-# which the candidate entries then boot as their root (rach2.root=ext2) while
-# the fallback entries keep the KRFFS one (rach2.root=disk), so that a
-# candidate root that does not come up falls back through the trial to a
-# system that does, and partition 3, when RACH2_DISK_RECOVERY_MB is
-# nonzero, is an empty FAT32 volume for the recovery kernel and its RAM image.
+# which both kernel entries boot as their root.
+#
+# There was a KRFFS root between them until 2026-09-14: a second complete
+# system with the demonstration accounts, which the fallback entry booted so
+# that a machine came up to something when the installed root would not mount.
+# The recovery system does that and more, from RAM, and reaches the machine
+# whether or not the boot partition reads; the fallback slot now guards the one
+# failure GRUB can detect by itself, a kernel image that will not load, and
+# boots the person's own root with it.
 #
 # GRUB's boot.img goes in the MBR and core.img in the post-MBR gap (partition 1
 # starts at 1 MiB), so a real machine, or QEMU with no -kernel, boots
-# BIOS -> MBR -> GRUB -> the Multiboot kernel, which then mounts KRFFS from
-# partition 2 (rach2.root=disk).
+# BIOS -> MBR -> GRUB -> the Multiboot kernel.
 #
 # The boot partition is the install surface (dev-log/23-install/plan.md):
 # /boot/kernel is the candidate, the kernel padded with zeros to a fixed
@@ -31,7 +37,7 @@
 #
 # The disk is assembled on the host with mtools, the project MBR writer, and
 # the pinned GRUB artifacts under vendor/grub/, so no GRUB toolchain and no
-# Docker is needed. The KRFFS partition image is built first with mkimage.sh.
+# Docker is needed.
 # Build the kernel and the capstones first (make).
 #
 # Usage: ./mkdisk_grub.sh
@@ -47,17 +53,14 @@ REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
 KERNEL="${1:-$REPO/build/rach2/kernel}"
 OUT="${2:-$REPO/build/images/os-real-grub.disk}"
 
-# Three knobs for a disk aimed at a particular machine, each defaulting to
-# exactly what this script always built so no existing caller changes:
-# the manifest staged into the KRFFS partition, that partition's size, and
-# extra kernel command-line tokens appended to every menu entry (a real
+# Knobs for a disk aimed at a particular machine, each defaulting to exactly
+# what this script always built so no existing caller changes: extra kernel
+# command-line tokens appended to every menu entry (a real
 # machine needs its address and its disk driver named; QEMU's defaults need
 # neither). The network tokens are separate from those, and in two sets: the
 # ordinary entries take one and the static-address entries take the other,
 # because the kernel refuses an address given twice, so a line carrying
 # `rach2.ip=none` cannot have a fixed address appended to it.
-MANIFEST="${RACH2_DISK_MANIFEST:-$REPO/krffs/manifests/os-real.manifest}"
-KRFFS_MB="${RACH2_DISK_KRFFS_MB:-47}"
 EXTRA_APPEND="${RACH2_DISK_APPEND:-}"
 DHCP_APPEND="${RACH2_DISK_DHCP_APPEND:-}"
 STATIC_APPEND="${RACH2_DISK_STATIC_APPEND:-}"
@@ -82,12 +85,20 @@ RECOVERY_MB="${RACH2_DISK_RECOVERY_MB:-0}"
 HELLO="${RACH2_DISK_HELLO:-}"
 RECOVERY_KERNEL="${RACH2_DISK_RECOVERY_KERNEL:-}"
 RECOVERY_IMAGE="${RACH2_DISK_RECOVERY_IMAGE:-}"
-# The fourth partition: an ext2 root image, at most EXT2_MB in size, and the
-# candidate entries' root when it is there.
+# The third partition: the ext2 root image, at most EXT2_MB in size, which
+# both kernel entries boot.
 EXT2_MB="${RACH2_DISK_EXT2_MB:-0}"
 EXT2_IMAGE="${RACH2_DISK_EXT2_IMAGE:-}"
+# Every disk this builds has a root, because both kernel entries name one and a
+# disk without it boots to nothing. The KRFFS root that used to stand in for it
+# is gone, and the callers that relied on it were found by this check rather
+# than by booting the disks they produced.
+if [ "$EXT2_MB" -le 0 ]; then
+    echo "mkdisk_grub: this disk would have no root; set RACH2_DISK_EXT2_MB and RACH2_DISK_EXT2_IMAGE" >&2
+    exit 1
+fi
 if [ "$EXT2_MB" -gt 0 ] && [ "$RECOVERY_MB" -le 0 ]; then
-    echo "mkdisk_grub: the ext2 partition is the fourth; RACH2_DISK_RECOVERY_MB must be set with it" >&2
+    echo "mkdisk_grub: the ext2 partition is the third; RACH2_DISK_RECOVERY_MB must be set with it" >&2
     exit 1
 fi
 if [ "$EXT2_MB" -gt 0 ] && [ ! -f "$EXT2_IMAGE" ]; then
@@ -105,16 +116,21 @@ FAT_SERIAL=1acef00d
 RECOVERY_SERIAL=1acef003
 BOOT_LABEL=RACH2BOOT
 RECOVERY_LABEL=RACH2RECOV
-# The roots by identity: the disk id and the entry, with the type beside
-# it, so a clone of this disk behind it is not taken for it and a partition
-# of the wrong kind is refused by name. The candidate is the ext2 root in
-# entry 4 when there is one, else the KRFFS root in entry 2 with the
-# fallback.
-CANDIDATE_ROOT="MBRID=$MBR_ID,2 rach2.rootfstype=krffs"
-if [ "$EXT2_MB" -gt 0 ]; then
-    CANDIDATE_ROOT="MBRID=$MBR_ID,4 rach2.rootfstype=ext2"
-fi
-FALLBACK_ROOT="MBRID=$MBR_ID,2 rach2.rootfstype=krffs"
+# The root by identity: the disk id and the entry, with the type beside it, so
+# a clone of this disk behind it is not taken for it and a partition of the
+# wrong kind is refused by name.
+#
+# Both kernel entries take the same root, the ext2 one. They used to differ:
+# the fallback booted a KRFFS root of its own in a partition of its own, a
+# second complete system with the demonstration accounts, kept so a machine
+# came up to something when the installed root would not mount. The recovery
+# system does that job and does it better, from RAM, with the tools to repair
+# the thing, and it is reached whether or not the boot partition reads. So the
+# fallback slot now guards the one failure it can actually catch, a kernel
+# image that will not load: GRUB falls into it by itself and the machine comes
+# back on the previous kernel with the person's own files.
+CANDIDATE_ROOT="MBRID=$MBR_ID,3 rach2.rootfstype=ext2"
+FALLBACK_ROOT="MBRID=$MBR_ID,3 rach2.rootfstype=ext2"
 
 # The FAT half of this disk used to differ between two builds of one tree, in
 # two places that have nothing to do with its contents: mformat picks a random
@@ -142,10 +158,10 @@ MENU_BYTES=8192
 # The ext2 partition begins after the spare MiB, where the installed machine's
 # fourth partition already begins, so the sealed image and the machine agree
 # on its offset; a second spare MiB then ends the disk.
-EXT2_START_MB=$((GAP_MB + BOOT_MB + KRFFS_MB + RECOVERY_MB + 1))
+EXT2_START_MB=$((GAP_MB + BOOT_MB + RECOVERY_MB + 1))
 DISK_MB=$((EXT2_START_MB + EXT2_MB + 1))
 if [ "$EXT2_MB" -le 0 ]; then
-    DISK_MB=$((GAP_MB + BOOT_MB + KRFFS_MB + RECOVERY_MB + 1))
+    DISK_MB=$((GAP_MB + BOOT_MB + RECOVERY_MB + 1))
 fi
 
 if [ ! -f "$KERNEL" ]; then
@@ -189,7 +205,6 @@ TMPD="$(mktemp -d "$REPO/build/images/mkdisk.XXXXXX")"
 # installer-repair suites went down that way, six and twelve seconds each.
 NEW="$OUT.$$.new"
 trap 'rm -rf "$TMPD" "$NEW"' EXIT
-KRFFS_BIN="$TMPD/grub-krffs.bin"
 GRUB_CFG="$TMPD/grub-disk.cfg"
 RECOVERY_CFG="$TMPD/grub-recovery.cfg"
 EMBED_CFG="$TMPD/grub-embed.cfg"
@@ -203,10 +218,6 @@ cp "$REPO/vendor/grub/disk-core.img" "$TMPD/disk-core.img"
 sh "$REPO/vendor/grub/verify_grub.sh" \
     "bios-boot.img=$TMPD/bios-boot.img" \
     "disk-core.img=$TMPD/disk-core.img"
-
-# The KRFFS partition image, sized to partition 2, built with the host tools.
-sh "$REPO/krffs/mkimage.sh" "$MANIFEST" \
-    "$KRFFS_BIN" "$KRFFS_MB"
 
 # The install contract (dev-log/23-install/plan.md): /boot/kernel is the
 # candidate slot bootctl rewrites, /boot/fallback the untouched copy,
@@ -444,16 +455,13 @@ export TZ=UTC
 dd if=/dev/zero of="$NEW" bs=1048576 count="$DISK_MB" 2>/dev/null
 if [ "$EXT2_MB" -gt 0 ]; then
     "$MKMBR" --id "$MBR_ID" "$NEW" "${GAP_MB}:${BOOT_MB}:0c:boot" \
-        "$((GAP_MB + BOOT_MB)):${KRFFS_MB}:83" \
-        "$((GAP_MB + BOOT_MB + KRFFS_MB)):${RECOVERY_MB}:0c" \
+        "$((GAP_MB + BOOT_MB)):${RECOVERY_MB}:0c" \
         "${EXT2_START_MB}:${EXT2_MB}:83"
 elif [ "$RECOVERY_MB" -gt 0 ]; then
     "$MKMBR" --id "$MBR_ID" "$NEW" "${GAP_MB}:${BOOT_MB}:0c:boot" \
-        "$((GAP_MB + BOOT_MB)):${KRFFS_MB}:83" \
-        "$((GAP_MB + BOOT_MB + KRFFS_MB)):${RECOVERY_MB}:0c"
+        "$((GAP_MB + BOOT_MB)):${RECOVERY_MB}:0c"
 else
-    "$MKMBR" --id "$MBR_ID" "$NEW" "${GAP_MB}:${BOOT_MB}:0c:boot" \
-        "$((GAP_MB + BOOT_MB)):${KRFFS_MB}:83"
+    "$MKMBR" --id "$MBR_ID" "$NEW" "${GAP_MB}:${BOOT_MB}:0c:boot"
 fi
 
 KBYTES=$(wc -c < "$KERNEL" | tr -d ' ')
@@ -578,10 +586,8 @@ dd if="$TMPD/p1.img" of="$NEW" bs=1048576 seek="$GAP_MB" conv=notrunc 2>/dev/nul
 
 "$GRUBEMBED" "$NEW" "$TMPD/bios-boot.img" "$TMPD/disk-core.img"
 
-dd if="$KRFFS_BIN" of="$NEW" bs=1048576 seek=$((GAP_MB + BOOT_MB)) \
-    conv=notrunc 2>/dev/null
 
-# Partition 3, when asked for: a FAT32 volume holding the recovery kernel
+# Partition 2, when asked for: a FAT32 volume holding the recovery kernel
 # and its RAM image, or the empty directories they will live in when this
 # build was not given them.
 if [ "$RECOVERY_MB" -gt 0 ]; then
@@ -604,13 +610,13 @@ if [ "$RECOVERY_MB" -gt 0 ]; then
         mcopy -i "$TMPD/p3.img" "$HELLO" ::/hello.txt
     fi
     dd if="$TMPD/p3.img" of="$NEW" bs=1048576 \
-        seek=$((GAP_MB + BOOT_MB + KRFFS_MB)) conv=notrunc 2>/dev/null
+        seek=$((GAP_MB + BOOT_MB)) conv=notrunc 2>/dev/null
 fi
-# Partition 4, when asked for: the ext2 root image, which must fit.
+# Partition 3, when asked for: the ext2 root image, which must fit.
 if [ "$EXT2_MB" -gt 0 ]; then
     EXT2_BYTES=$(wc -c < "$EXT2_IMAGE" | tr -d ' ')
     if [ "$EXT2_BYTES" -gt $((EXT2_MB * 1048576)) ]; then
-        echo "mkdisk_grub: the ext2 image is $EXT2_BYTES bytes and partition 4 has $((EXT2_MB * 1048576))" >&2
+        echo "mkdisk_grub: the ext2 image is $EXT2_BYTES bytes and partition 3 has $((EXT2_MB * 1048576))" >&2
         rm -f "$NEW"
         exit 1
     fi
