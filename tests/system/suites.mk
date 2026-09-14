@@ -427,13 +427,24 @@ GRUB_TEST_DISK = $(IMAGES_DIR)/grub-test.disk
 # The root this disk boots. It was a KRFFS partition carrying grub-test.manifest
 # until 2026-09-14; the same manifest, as the ext2 root the disk now has, so the
 # guest commands this suite types still find what they expect.
+# The two marked cores the root's manifest stages. They were made inside the
+# `run-grub` recipe, which ran after the root was staged, so a clean build
+# staged nothing and a used tree staged the previous pair: rules of their own,
+# and the root waits for them.
+GRUB_CORE_A = $(IMAGES_DIR)/core-a.img
+GRUB_CORE_B = $(IMAGES_DIR)/core-b.img
+$(GRUB_CORE_A): tools/image/mkgrubcore.sh
+	@mkdir -p $(IMAGES_DIR)
+	sh tools/image/mkgrubcore.sh A $@
+$(GRUB_CORE_B): tools/image/mkgrubcore.sh
+	@mkdir -p $(IMAGES_DIR)
+	sh tools/image/mkgrubcore.sh B $@
+
 GRUB_TEST_EXT2 = $(IMAGES_DIR)/grub-test.ext2
-$(GRUB_TEST_EXT2): $(DEMO_CREDS) krffs/manifests/grub-test.manifest $(shell sh krffs/manifest_deps.sh krffs/manifests/grub-test.manifest) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-setid
+$(GRUB_TEST_EXT2): $(DEMO_CREDS) $(GRUB_CORE_A) $(GRUB_CORE_B) krffs/manifests/grub-test.manifest $(shell sh krffs/manifest_deps.sh krffs/manifests/grub-test.manifest) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-setid
 	sh tools/image/mkext2.sh krffs/manifests/grub-test.manifest $@ 48
 run-grub: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krffs $(GRUB_TEST_EXT2) check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	@mkdir -p $(IMAGES_DIR)
-	sh tools/image/mkgrubcore.sh A $(IMAGES_DIR)/core-a.img
-	sh tools/image/mkgrubcore.sh B $(IMAGES_DIR)/core-b.img
 	sed -e '/^#/d' -e '/^$$/d' -e '\|^file 0644 /core-[ab]\.img|d' \
 	    krffs/manifests/grub-test.manifest > $(IMAGES_DIR)/grub-test.manifest.stripped
 	sed -e '/^#/d' -e '/^$$/d' krffs/manifests/os-real.manifest \
