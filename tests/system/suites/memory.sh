@@ -87,4 +87,17 @@ for mib in 64 4096; do
         || fail "memprobe fail at $mib MiB"
     echo "memory-test: a frame allocation failing at each step of fork and exec at $mib MiB: OK"
 done
+# The kernel's own copies, fill and move, swept on the processor that runs
+# them: `rach2.strings` makes the boot walk 68 lengths at four source and four
+# destination alignments before anything else starts. The host test beside
+# `kstring.c` runs the C the host compiler writes; the `rep movsl` and
+# `rep stosl` in that file are i386's, and this is where they run.
+LOG="$IMAGE.strings.log"
+"$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" --qemu-arg=-cpu --qemu-arg=max \
+    --append "rach2.rescue rach2.strings" --timeout 90 --ok "Type 'help'" \
+    --never "strings: wrong" --log "$LOG" "expect=Type 'help'" > /dev/null 2>&1 \
+    || fail "the boot that sweeps the string routines"
+grep -aq "strings: swept" "$LOG" || \
+    fail "the sweep of the string routines did not report: $(grep -a 'strings:' "$LOG" | head -1)"
+echo "memory-test: the copies, the fill and the move swept at every length and alignment: OK"
 echo "memory-test: PASS"

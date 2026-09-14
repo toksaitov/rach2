@@ -115,6 +115,7 @@ volatile bool stdin_ready = false;
 volatile process_t *stdin_waiting_proc = NULL;
 
 static void check_timing(void);
+static void check_strings(void);
 void shell_loop(void);
 void shell_reset_input(void);
 void panic_init_died(uint32_t pid);  /* called from syscall.c too; never returns */
@@ -2423,6 +2424,91 @@ static void check_timing(void)
     }
 }
 
+/*
+ * Sweep the word-at-a-time copies, the fill and the move both ways, on this
+ * processor, when `rach2.strings` is on the boot line.
+ *
+ * `k_memcpy`, `k_memset` and `k_memmove` move their words with `rep movsl` and
+ * `rep stosl` and the last bytes with a loop (sys/lib/kstring.c). That asm is
+ * i386's, so the host test beside it (tests/host/kstring_hosttest.c) runs the C
+ * the compiler writes for the host and never the instructions the machine runs.
+ * Every boot uses these routines constantly, which finds a broken one at once
+ * and says nothing about the length or the alignment that breaks a rarely
+ * taken tail.
+ *
+ * So the sweep is here, where the instructions are, and not at every boot: 68
+ * lengths at four source alignments and four destination alignments, each
+ * copied, filled and moved in both directions, with the bytes on each side of
+ * the range required to be untouched. It ran at every boot until 2026-09-14
+ * and cost a second of every one of them.
+ */
+static void check_strings(void)
+{
+    static unsigned char pat[80], got[80];
+    size_t i;
+    int len, sa, da;
+
+    for (i = 0; i < sizeof(pat); i++) {
+        pat[i] = (unsigned char)(0x21 + (i * 7) % 90);
+    }
+    for (len = 0; len <= 67; len++) {
+        for (sa = 0; sa < 4; sa++) {
+            for (da = 1; da < 5; da++) {
+                k_memset(got, 0x5a, sizeof(got));
+                k_memcpy(got + da, pat + sa, (size_t)len);
+                for (i = 0; i < (size_t)len; i++) {
+                    if (got[da + i] != pat[sa + i]) {
+                        goto broken;
+                    }
+                }
+                if (got[da - 1] != 0x5a || got[da + len] != 0x5a) {
+                    goto broken;
+                }
+                k_memset(got, 0x5a, sizeof(got));
+                k_memset(got + da, (char)0xa5, (size_t)len);
+                for (i = 0; i < (size_t)len; i++) {
+                    if (got[da + i] != 0xa5) {
+                        goto broken;
+                    }
+                }
+                if (got[da - 1] != 0x5a || got[da + len] != 0x5a) {
+                    goto broken;
+                }
+                k_memcpy(got, pat, sizeof(got));
+                k_memmove(got + da, got + da + sa + 1, (size_t)len);
+                for (i = 0; i < (size_t)len; i++) {
+                    if (got[da + i] != pat[da + sa + 1 + i]) {
+                        goto broken;
+                    }
+                }
+                if (got[da - 1] != pat[da - 1] || got[da + len] != pat[da + len]) {
+                    goto broken;
+                }
+                k_memcpy(got, pat, sizeof(got));
+                k_memmove(got + da + sa + 1, got + da, (size_t)len);
+                for (i = 0; i < (size_t)len; i++) {
+                    if (got[da + sa + 1 + i] != pat[da + i]) {
+                        goto broken;
+                    }
+                }
+                if (got[da + sa + 1 + len] != pat[da + sa + 1 + len]) {
+                    goto broken;
+                }
+            }
+        }
+    }
+    if (k_strlen("hello") != 5 || k_strlen("") != 0) {
+        klog(KLOG_ERR, "strings", "k_strlen is wrong about a string it was given");
+        return;
+    }
+    klog(KLOG_INFO, "strings", "swept 68 lengths at 4 source and 4 destination alignments: ok");
+    return;
+
+broken:
+    klog(KLOG_ERR, "strings", "wrong at length %d, source align %d, destination align %d",
+         len, sa, da);
+}
+
 static void process_command(const char *cmd)
 {
     if (str_equal(cmd, "help")) {
@@ -3489,6 +3575,9 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     }
 
     check_timing();
+    if (kcmdline_has("rach2.strings")) {
+        check_strings();
+    }
 
     /*
      * Decide the boot home. A normal boot runs the persistent /sbin/init as
