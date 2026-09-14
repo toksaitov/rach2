@@ -447,7 +447,7 @@ run-grub: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krffs $(
 # `tests/run bootorder`: the GRUB disk on the second AHCI port behind a
 # disk holding nothing, booted by the firmware, its root found as disk 1.
 BOOTORDER_DISK = $(IMAGES_DIR)/bootorder-test.disk
-run-bootorder: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(HARNESS)
+run-bootorder: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krffs $(GRUB_TEST_EXT2) check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(HARNESS)
 	sh tests/system/suites/bootorder.sh build/rach2/kernel $(HARNESS) $(BOOTORDER_DISK)
 # `tests/run menu`: the boot menu that can be rewritten, and the stub that
 # cannot. Four boots of one GRUB disk: a two-entry menu staged through `bootctl
@@ -460,6 +460,7 @@ run-bootorder: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdp
 MENU_TEST_DISK = $(IMAGES_DIR)/menu-test.disk
 run-menu: $(DEMO_CREDS) rach2 utils krffs $(OS_SIMPLE_EXT2) check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(BINFIND)
 	@mkdir -p $(IMAGES_DIR)
+	RACH2_DISK_RECOVERY_MB=8 \
 	RACH2_DISK_EXT2_MB=16 \
 	RACH2_DISK_EXT2_IMAGE=$(OS_SIMPLE_EXT2) \
 	    sh tools/image/mkdisk_grub.sh build/rach2/kernel $(MENU_TEST_DISK)
@@ -1515,7 +1516,7 @@ run-make: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake 
 # workspaces; the two kernels must hash equal. Every wait is bounded, and the
 # whole run carries one deadline over the per-step ones.
 SELFBUILD_DISK = $(IMAGES_DIR)/selfbuild-test.disk
-run-selfbuild: $(DEMO_CREDS) rach2 utils krffs test-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(ELFCHECK) $(RUNTESTS)
+run-selfbuild: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krffs test-image $(OS_SIMPLE_EXT2) check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(ELFCHECK) $(RUNTESTS)
 	@mkdir -p $(IMAGES_DIR)
 	$(MKDISK) krffs/manifests/os-real.manifest $(SELFBUILD_DISK) 64 48
 	sh tests/system/suites/selfbuild.sh build/rach2/kernel $(SELFBUILD_DISK) \

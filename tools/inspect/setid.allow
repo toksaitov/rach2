@@ -58,8 +58,9 @@ init init-metal
 
 # The recovery profile. It copied the metal one until 2026-09-14 and now
 # stands on its own, because it is the one image that authenticates nobody:
-# it boots to a shell, carries no keys, no stored password and no SSH server,
-# and nothing on it decides who a person is. That is deliberate. Whoever
+# it boots to a shell, carries no stored password, and nothing on it decides
+# who a person is at its console. Whether it answers the network is decided by
+# whether the build had a key to stage: no key, no server. That is deliberate. Whoever
 # chooses this entry has the machine in their hands, a password here would
 # have stood between somebody whose machine will not start and the tools that
 # repair it, and the image has none of that machine's accounts to check
@@ -71,6 +72,8 @@ init init-metal
 # any sector.
 manifest rach2-recovery
 setid /bin/su 04755:0:0 build/vendor/busybox/busybox-suid
+trusted file 0755:0:0 /bin/dropbearmulti build/vendor/dropbear/dropbearmulti
+trusted optional-file 0600:0:0 /root/.ssh/authorized_keys krffs/recovery_authorized_keys
 setid /bin/passwd 04755:0:0 build/vendor/busybox/busybox-suid
 setid /bin/login 04755:0:0 build/vendor/busybox/busybox-suid
 trusted file 0755:0:0 /bin/busybox build/vendor/busybox/busybox
@@ -83,7 +86,7 @@ trusted text 0644:0:0 /etc/profile export PATH=/bin:/usr/bin\nexport HOME="${HOM
 trusted file 0755:0:0 /bin/reflash build/utils/reflash
 trusted file 0755:0:0 /bin/rescue-static krffs/rescue-static.script
 trusted file 0755:0:0 /bin/bootctl build/utils/sbin/bootctl
-init init-shell
+init init-metal
 
 # The laptop's own-disk profile: os-real with the metal init and nothing
 # else changed, exactly as its manifest is built.

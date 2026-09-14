@@ -311,7 +311,7 @@ struct setid_decl {
 struct trusted_decl {
     char *path;
     unsigned long mode, uid, gid;
-    char *verb;   /* "file" or "text" */
+    char *verb;   /* "file", "optional-file" or "text" */
     char *value;  /* the host path, or the pre-unescape payload */
 };
 
@@ -519,10 +519,17 @@ static struct allow *read_allow(const char *path)
 
             if (cur == NULL)
                 allow_fail(path, lineno, "no manifest entry is open");
-            if (n != 5 || strcmp(fields[1], "file") != 0 ||
-                !parse_mode(fields[2], &mode, &uid, &gid))
+            /* `optional-file` is the one an image may be built without: the
+               key that decides whether a recovery system answers the network.
+               A build that has one stages it and it is checked like any other
+               trusted file; a build that has none stages nothing, and that is
+               the difference between an image somebody can reach and one
+               nobody can. Every other declaration must be staged. */
+            if (n != 5 || !parse_mode(fields[2], &mode, &uid, &gid) ||
+                (strcmp(fields[1], "file") != 0 &&
+                 strcmp(fields[1], "optional-file") != 0))
                 allow_fail(path, lineno, "malformed trusted line");
-            entry_add_trusted(cur, fields[3], mode, uid, gid, "file",
+            entry_add_trusted(cur, fields[3], mode, uid, gid, fields[1],
                               fields[4]);
         } else if (strcmp(fields[0], "sentinel") == 0) {
             unsigned long mode, uid, gid;
@@ -1145,6 +1152,9 @@ static void check_manifest(const char *path, const struct allow *allow,
             if (strcmp(e->trusted[j].path, sorted.items[i]) == 0)
                 t = &e->trusted[j];
         s = staged_find(&staged, t->path);
+        if (s == NULL && strcmp(t->verb, "optional-file") == 0) {
+            continue; /* a build without the key it would have staged */
+        }
         if (s == NULL) {
             addf(problems, "%s: %s is not staged; the allowlist requires "
                  "it to be present, unprivileged and exactly as declared",
@@ -2270,6 +2280,9 @@ static void check_image(const char *image, const char *manifest,
             if (strcmp(e->trusted[j].path, sorted.items[i]) == 0)
                 t = &e->trusted[j];
         tn = path_find(&im, t->path);
+        if (tn == NULL && strcmp(t->verb, "optional-file") == 0) {
+            continue; /* a build that had no key to stage; see the parser */
+        }
         if (tn == NULL)
             addf(problems, "%s: %s is not in the image; the allowlist "
                  "requires it to be present and unprivileged", iname,

@@ -413,6 +413,27 @@ krffs/authorized_keys:
 krffs/shadow:
 	sh krffs/gen_demo_password.sh
 
+# `make recovery-key`: put this tree's own key into the recovery system, so a
+# machine built here can be updated over the network. Nothing generates
+# `krffs/recovery_authorized_keys`, which is what lets its absence mean
+# something: an image built without it starts no SSH server at all, and the
+# only way in is the keyboard. Remove the file to build that image.
+.PHONY: recovery-key
+recovery-key: krffs/authorized_keys
+	cp krffs/authorized_keys krffs/recovery_authorized_keys
+	@# The image cannot depend on a file that may not exist, so adding or
+	@# removing the key does not make it stale by itself. Removing what
+	@# embeds it is what makes the next build stage the new answer.
+	rm -f $(RECOVERY_IMAGE) $(SEALED_DISK) build/images/rach2-recovery.iso
+	@echo "recovery-key: the recovery system will answer this tree's key"
+
+# `make no-recovery-key`: the other direction, for an image somebody else runs.
+.PHONY: no-recovery-key
+no-recovery-key:
+	rm -f krffs/recovery_authorized_keys
+	rm -f $(RECOVERY_IMAGE) $(SEALED_DISK) build/images/rach2-recovery.iso
+	@echo "no-recovery-key: the recovery system will answer nobody"
+
 DEMO_CREDS = krffs/authorized_keys krffs/shadow
 
 IMAGE_TOOLS = krffs/mkimage.sh $(SETIDCHECK) tools/inspect/setid.allow \

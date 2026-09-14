@@ -333,7 +333,17 @@ if grep -aq "Falling back to" "$LOG"; then
 fi
 # The address is the building's to give, and the machine asked for it: the disk
 # has rach2.ip=none and init runs the client.
-grep -aq "lease of" "$LOG" || fail "the machine did not take a lease"
+#
+# The evidence is read from the machine and not from this console. Since
+# 2026-09-14 init gives every service it starts `/var/log/services` instead of
+# the console, so that the login prompt is not written over by a DHCP client;
+# the client's own record of the lease is therefore in that file. Reaching the
+# machine at all to read it is the other half of the proof, since this suite
+# connects over the network the lease provides.
+case "$(machine 'cat /var/log/services' || true)" in
+    *"lease of"*) ;;
+    *) fail "the machine did not record taking a lease" ;;
+esac
 
 phase "kernel over ssh, trial, commit"
 # The update arrives the way every update will: down the same connection.

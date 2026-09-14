@@ -377,7 +377,14 @@ bounded() {
 # assembled natively from the pinned GRUB artifacts, so there is nothing to
 # skip.
 GRUB_DISK="$DISK.grub"
-if ! bounded "$(scaled 900)" sh tools/image/mkdisk_grub.sh "$KEXTRACT" "$GRUB_DISK"; then
+# The root the disk boots. It was a KRFFS partition built from the default
+# manifest until 2026-09-14; every disk carries an ext2 root now, and what this
+# proves is the guest-built kernel booting through GRUB, not what it mounts.
+if ! bounded "$(scaled 900)" env \
+        RACH2_DISK_RECOVERY_MB=8 \
+        RACH2_DISK_EXT2_MB=16 \
+        RACH2_DISK_EXT2_IMAGE="$REPO/build/images/os-simple.ext2" \
+        sh tools/image/mkdisk_grub.sh "$KEXTRACT" "$GRUB_DISK"; then
     rm -f "$GRUB_DISK"
     fail "the GRUB disk around the built kernel did not assemble inside its bound"
 fi

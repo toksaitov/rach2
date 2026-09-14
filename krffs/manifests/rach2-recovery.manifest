@@ -62,7 +62,27 @@ file 0755 /sbin/resize2fs build/vendor/e2fsprogs/resize2fs
 # no accounts of the machine's to check against anyway. What it did instead was
 # stand between someone whose machine will not start and the tools that repair
 # it. The installed system keeps its login; this is not that system.
-file 0755 /sbin/init build/utils/sbin/init-shell
+#
+# The metal init, not the shell one: it supervises the SSH server, and whether
+# that server runs is decided by whether this image was built with a key. A
+# root update cannot be done from the running system, since the kernel refuses
+# to write a partition whose file system is mounted, so a recovery that answers
+# nothing can only be updated at its keyboard. That is right for an image built
+# for somebody else and wrong for one built to work on.
+file 0755 /sbin/init build/utils/sbin/init-metal
+file 0755 /bin/dropbearmulti build/vendor/dropbear/dropbearmulti
+dir 0700 /etc/dropbear
+dir 0755 /root
+dir 0700 /root/.ssh
+# The key, when this build has one, and a file nothing generates: that is the
+# point of it. `krffs/authorized_keys` is made by `gen_demo_key.sh` whenever it
+# is missing, so its absence could never mean anything; this one is absent
+# until a person puts a key in it. `optional-file` stages it when it is there
+# and says nothing when it is not, which is the whole difference between a
+# recovery system that answers the network and one that does not.
+#
+# For development: `make recovery-key` copies this tree's own key into it.
+optional-file 0600 /root/.ssh/authorized_keys krffs/recovery_authorized_keys
 # The periodic sync init keeps running: sleep thirty seconds, sync(2), for ever.
 file 0755 /bin/update build/utils/update
 
@@ -126,7 +146,6 @@ dir 0755 /usr/share
 dir 0755 /usr/share/udhcpc
 file 0755 /usr/share/udhcpc/default.script krffs/udhcpc-default.script
 
-dir 0755 /root
 
 dir 1777 /tmp
 dir 0755 /home

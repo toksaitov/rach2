@@ -390,10 +390,36 @@ installation they came from; and `write_archive` removes the old copy before
 renaming the new one, so a stop between the two leaves none. They stay what they
 were built to be, the copy that puts accounts back after an update.
 
-So both recovery systems boot to a shell and start no network service, no image
-carries a demonstration key from now on, and the documentation says plainly that
-physical access to a machine is control of it. The installed system is
-unchanged: SSH with the account's key, and root by password.
+So both recovery systems boot to a shell, no image carries a standing
+demonstration key, and the documentation says plainly that physical access to a
+machine is control of it. The installed system is unchanged: SSH with the
+account's key, and root by password.
+
+Whether a recovery system answers the network is decided by one rule, and the
+rule is not a mode: **the SSH server starts only where there is an authorized
+key, so no key means no server.** A credential is a build input rather than a
+property of the code, which is what makes this work for the three cases at
+once. A stick built for development has the owner's key and updates a machine
+remotely the way it does now. A stick built for anybody else has none, starts
+nothing, and is reachable only after a person puts a key on it. The recovery
+partition of an installed disk has none either, so the installer offers to
+place one, and a machine nobody administers remotely has no door.
+
+This matters because a root update cannot be done from the running system: the
+update overwrites the whole root partition and the kernel refuses to open a
+partition whose file system is mounted, with `EBUSY`, which is the fault
+`tests/run drill` proves. So a root update runs from recovery, and a recovery
+that answers nothing is a machine that can only be updated at its keyboard. A
+kernel update is not affected, since `bootctl` writes the boot partition.
+
+The danger of that rule is that a development image and a release image are
+identical from outside, so the difference has to be visible. Two guards are
+built here: the machine says at boot whether a key was built into it, and a
+development build writes its image under a name that says so. A third, a build
+that refuses to produce a release image while a key is present, is the real
+guard and is not built: this repository has no release procedure to hang it on.
+It belongs to the release engineering that does not exist yet, and is written
+down here so that work finds it.
 
 **The `sealed` suite is rewritten, not renumbered.** It damages the ext2 root
 and then requires a working KRFFS system, and later destroys and repairs that

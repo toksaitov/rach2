@@ -286,6 +286,27 @@ static void service_output(void)
     }
 }
 
+/*
+ * Whether this image has anybody to let in.
+ *
+ * The server starts where there is an authorized key and nowhere else, which
+ * makes a credential a property of the image rather than a switch in the code.
+ * A stick built for development carries the owner's key and can update a
+ * machine remotely; one built for anybody else carries none, answers nothing,
+ * and is reachable only after a person puts a key on it. The recovery
+ * partition of an installed disk is the same: no key, no door.
+ *
+ * Root's own file is the one that counts. `--update` and a repair are done as
+ * root, and an image that let an unprivileged account in but had no root key
+ * could not do either.
+ */
+static int anyone_to_let_in(void)
+{
+    struct stat st;
+
+    return stat("/root/.ssh/authorized_keys", &st) == 0 && st.st_size > 0;
+}
+
 static pid_t spawn_shell(void)
 {
     pid_t pid = fork();
@@ -762,6 +783,13 @@ int main(void)
     clear_var_run();
     apply_limits();
     open_service_log();
+    /* A development image and one built for anybody else are identical from
+       outside, so the machine says which it is. */
+    if (anyone_to_let_in()) {
+        printf("init: a key was built into this image, so SSH is on\n");
+    } else {
+        printf("init: no key was built into this image, so SSH is off\n");
+    }
     signal(SIGALRM, service_log_alarm);
     alarm(SERVICE_LOG_CHECK_SECONDS);
 #ifdef INIT_METAL
@@ -835,7 +863,7 @@ int main(void)
          * session above is the machine's other way in, and holding this loop
          * to retry a daemon would delay reaping the orphans that are the whole
          * reason a process table filled up. */
-        if (sshd < 0) {
+        if (sshd < 0 && anyone_to_let_in()) {
             sshd = spawn_sshd();
             if (sshd >= 0) {
                 sshd_spawned = time(0);

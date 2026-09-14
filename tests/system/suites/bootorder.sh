@@ -18,7 +18,13 @@ REPO=$(cd "$(dirname "$0")/../../.." && pwd)
 fail() { echo "bootorder-test: FAIL: $1" >&2; exit 1; }
 BLANK="$DISK.blank"
 
-RACH2_DISK_APPEND="rach2.disk=ahci" RACH2_DISK_MANIFEST="$REPO/krffs/manifests/grub-test.manifest" \
+# The root this disk boots. It was a KRFFS partition built from a manifest
+# until 2026-09-14; the same tree as an ext2 root, which the builder now
+# requires of every disk.
+RACH2_DISK_APPEND="rach2.disk=ahci" \
+RACH2_DISK_RECOVERY_MB=8 \
+RACH2_DISK_EXT2_MB=48 \
+RACH2_DISK_EXT2_IMAGE="$REPO/build/images/grub-test.ext2" \
     sh "$REPO/tools/image/mkdisk_grub.sh" "$KERNEL" "$DISK" > "$DISK.mkdisk.log" 2>&1 \
     || fail "mkdisk_grub"
 rm -f "$BLANK"
