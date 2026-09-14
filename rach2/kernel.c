@@ -2445,8 +2445,10 @@ static void check_timing(void)
 static void check_strings(void)
 {
     static unsigned char pat[80], got[80];
+    static const unsigned char fills[2] = { 0xa5, 0x58 };
+    const char *what = "";
     size_t i;
-    int len, sa, da;
+    int len, sa, da, f, src = 0, dst = 0;
 
     for (i = 0; i < sizeof(pat); i++) {
         pat[i] = (unsigned char)(0x21 + (i * 7) % 90);
@@ -2454,6 +2456,9 @@ static void check_strings(void)
     for (len = 0; len <= 67; len++) {
         for (sa = 0; sa < 4; sa++) {
             for (da = 1; da < 5; da++) {
+                what = "copy";
+                src = sa;
+                dst = da;
                 k_memset(got, 0x5a, sizeof(got));
                 k_memcpy(got + da, pat + sa, (size_t)len);
                 for (i = 0; i < (size_t)len; i++) {
@@ -2464,16 +2469,28 @@ static void check_strings(void)
                 if (got[da - 1] != 0x5a || got[da + len] != 0x5a) {
                     goto broken;
                 }
-                k_memset(got, 0x5a, sizeof(got));
-                k_memset(got + da, (char)0xa5, (size_t)len);
-                for (i = 0; i < (size_t)len; i++) {
-                    if (got[da + i] != 0xa5) {
+                /* Two fill bytes, one with the top bit set and one without: a
+                   fill that sign-extended its byte, or took the tail from the
+                   wrong end of the word, shows in one and not the other. */
+                what = "fill";
+                src = 0;
+                dst = da;
+                for (f = 0; f < 2; f++) {
+                    k_memset(got, 0x5a, sizeof(got));
+                    k_memset(got + da, (char)fills[f], (size_t)len);
+                    for (i = 0; i < (size_t)len; i++) {
+                        if (got[da + i] != fills[f]) {
+                            goto broken;
+                        }
+                    }
+                    if (got[da - 1] != 0x5a || got[da + len] != 0x5a) {
                         goto broken;
                     }
                 }
-                if (got[da - 1] != 0x5a || got[da + len] != 0x5a) {
-                    goto broken;
-                }
+                /* The move, both ways, over ranges that overlap by sa + 1. */
+                what = "move down";
+                src = da + sa + 1;
+                dst = da;
                 k_memcpy(got, pat, sizeof(got));
                 k_memmove(got + da, got + da + sa + 1, (size_t)len);
                 for (i = 0; i < (size_t)len; i++) {
@@ -2484,6 +2501,9 @@ static void check_strings(void)
                 if (got[da - 1] != pat[da - 1] || got[da + len] != pat[da + len]) {
                     goto broken;
                 }
+                what = "move up";
+                src = da;
+                dst = da + sa + 1;
                 k_memcpy(got, pat, sizeof(got));
                 k_memmove(got + da + sa + 1, got + da, (size_t)len);
                 for (i = 0; i < (size_t)len; i++) {
@@ -2491,7 +2511,11 @@ static void check_strings(void)
                         goto broken;
                     }
                 }
-                if (got[da + sa + 1 + len] != pat[da + sa + 1 + len]) {
+                /* Both sides of the range this one wrote: a backward copy that
+                   went one byte too far leaves the byte before it changed, and
+                   the next round would put the pattern back over it. */
+                if (got[da + sa] != pat[da + sa] ||
+                    got[da + sa + 1 + len] != pat[da + sa + 1 + len]) {
                     goto broken;
                 }
             }
@@ -2501,12 +2525,12 @@ static void check_strings(void)
         klog(KLOG_ERR, "strings", "k_strlen is wrong about a string it was given");
         return;
     }
-    klog(KLOG_INFO, "strings", "swept 68 lengths at 4 source and 4 destination alignments: ok");
+    klog(KLOG_INFO, "strings", "swept 68 lengths at 4 source and 4 destination offsets: ok");
     return;
 
 broken:
-    klog(KLOG_ERR, "strings", "wrong at length %d, source align %d, destination align %d",
-         len, sa, da);
+    klog(KLOG_ERR, "strings", "%s wrong at length %d, source offset %d, destination offset %d",
+         what, len, src, dst);
 }
 
 static void process_command(const char *cmd)

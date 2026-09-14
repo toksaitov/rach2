@@ -34,21 +34,6 @@ REPO=$(cd "$(dirname "$0")/.." && pwd)
 REGISTRY="$REPO/tests/registry"
 [ -f "$REGISTRY" ] || { echo "run: missing $REGISTRY" >&2; exit 1; }
 
-# The recovery system starts an SSH server only where a key was built into it,
-# and the suites that repair or update a machine do that work through recovery
-# over SSH. The key is minted here, before the first make reads it: make decides
-# from its presence what the recovery artifacts are called, so a key that
-# appeared while make was running would name the artifacts of the run before it.
-# A plain `make` mints nothing, which is what keeps the absence meaningful.
-# The tree the runner's own selftest drives has neither, which is why the
-# manifest is looked for rather than the key alone.
-if [ -f "$REPO/krffs/manifests/rach2-recovery.manifest" ] &&
-   [ ! -f "$REPO/krffs/recovery_authorized_keys" ]; then
-    make -C "$REPO" --no-print-directory recovery-key || {
-        echo "run: the recovery system's key could not be made" >&2; exit 1
-    }
-fi
-
 # How many suites run at once. A suite spends most of its life waiting for an
 # emulated machine rather than computing, so the useful count is above the
 # core count: on a ten-core machine the full run takes 1286s at four workers,
@@ -778,6 +763,21 @@ done
 check_host $diskimage $sockets || exit 1
 
 lock_take "$@" || exit 1
+# The recovery system starts an SSH server only where a key was built into it,
+# and the suites that repair or update a machine do that work through recovery
+# over SSH. The key is minted here: after the names are checked and the tree is
+# this run's, so two runners cannot mint at once, and before the first make,
+# because make decides from the key's presence what the recovery artifacts are
+# called. A plain `make` mints nothing, which is what keeps the absence
+# meaningful; the tree the runner's own selftest drives has no recovery system
+# at all, which is why the manifest is looked for and not the key alone.
+if [ -f "$REPO/krffs/manifests/rach2-recovery.manifest" ] &&
+   [ ! -f "$REPO/krffs/recovery_authorized_keys" ]; then
+    make -C "$REPO" --no-print-directory recovery-key || {
+        echo "run: the recovery system's key could not be made" >&2
+        exit 1
+    }
+fi
 take_scripts
 build_components
 rc=0
