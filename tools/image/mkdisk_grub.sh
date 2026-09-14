@@ -246,29 +246,14 @@ menuentry "Start Rach2" --id candidate {
     boot
 }
 
-menuentry "Start the backup system" --id fallback {
+menuentry "Start Rach2 with the previous kernel" --id fallback {
     search --no-floppy --fs-uuid --set=root RACH2_BOOT_SERIAL
     multiboot /boot/fallback rach2.root=RACH2_FALLBACK_ROOT rach2.boot=RACH2_BOOT_PART rach2.slot=fallback RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
     boot
 }
 
-menuentry "Start Rach2 with a fixed network address" --id candidate-static {
-    search --no-floppy --fs-uuid --set=root RACH2_BOOT_SERIAL
-    multiboot /boot/kernel rach2.root=RACH2_CANDIDATE_ROOT rach2.boot=RACH2_BOOT_PART rach2.slot=candidate RACH2_APPEND_TOKENS RACH2_STATIC_TOKENS
-    boot
-}
 
-menuentry "Start the backup system with a fixed network address" --id fallback-static {
-    search --no-floppy --fs-uuid --set=root RACH2_BOOT_SERIAL
-    multiboot /boot/fallback rach2.root=RACH2_FALLBACK_ROOT rach2.boot=RACH2_BOOT_PART rach2.slot=fallback RACH2_APPEND_TOKENS RACH2_STATIC_TOKENS
-    boot
-}
 
-menuentry "Start the kernel debug shell" --id debug {
-    search --no-floppy --fs-uuid --set=root RACH2_BOOT_SERIAL
-    multiboot /boot/fallback rach2.root=RACH2_FALLBACK_ROOT rach2.boot=RACH2_BOOT_PART rach2.slot=fallback rach2.rescue RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
-    boot
-}
 
 # The recovery kernel and its RAM image, on partition 3. It mounts nothing from
 # this disk, which is what lets it rewrite the root; its title says so when the
@@ -286,12 +271,6 @@ menuentry "RACH2_RECOVERY_TITLE" --id recovery {
     boot
 }
 
-menuentry "RACH2_RECOVERY_STATIC_TITLE" --id recovery-static {
-    search --no-floppy --fs-uuid --set=root RACH2_RECOVERY_SERIAL
-    multiboot /boot/recovery rach2.root=ram rach2.boot=RACH2_BOOT_PART rach2.slot=recovery RACH2_APPEND_TOKENS RACH2_STATIC_TOKENS
-    module /boot/recovery.krffs
-    boot
-}
 
 # Recovery with the repair: `rach2.fsck` makes its init run `e2fsck -p` on
 # every ext2 partition before anything else starts. The two entries above
@@ -301,12 +280,6 @@ menuentry "RACH2_RECOVERY_STATIC_TITLE" --id recovery-static {
 # boot, which is how a root that mounted read-only is repaired from the
 # running system; it is never a saved default, since a repair is one boot
 # and a machine left saved into it would repair at every start.
-menuentry "RACH2_RECOVERY_FSCK_TITLE" --id recovery-fsck {
-    search --no-floppy --fs-uuid --set=root RACH2_RECOVERY_SERIAL
-    multiboot /boot/recovery rach2.root=ram rach2.boot=RACH2_BOOT_PART rach2.slot=recovery rach2.fsck RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
-    module /boot/recovery.krffs
-    boot
-}
 
 # The rewritable half. `configfile` would open a new environment context, show
 # its own menu on the spot and never come back here; `source` merges into this
@@ -336,35 +309,21 @@ fi
 # and any other value selects the fallback entry, because the block has no
 # checksum and a torn write can still load; next_entry is consumed here, the
 # one-boot trial, since this GRUB does not consume it built-in.
-# The fallback is set before the choices below, so the static entries can move
-# it: GRUB reads this file top to bottom and the last assignment wins.
+# Entry 1 is the previous kernel, and GRUB takes a number here and not an id:
+# `get_and_remove_first_entry_number` parses this and discards anything that is
+# not one, so a name would leave the machine with no automatic fallback at all.
+# The order of the entries above is therefore part of this file's contract.
 set default=fallback
 set fallback=1
 if [ "${saved_entry}" = "candidate" ]; then set default=candidate; fi
-# A machine whose network has no DHCP server is left on a static entry, so the
-# saved default takes those two as well; each also moves the fallback to the
-# static one, since falling back from a fixed address to no address is the
-# failure these entries exist to prevent.
-if [ "${saved_entry}" = "candidate-static" ]; then
-    set default=candidate-static
-    set fallback=3
-fi
-if [ "${saved_entry}" = "fallback-static" ]; then
-    set default=fallback-static
-    set fallback=3
-fi
 # A repair is not one boot. Rewriting a root takes minutes, and a machine that
 # lost power in the middle of one would come back to a kernel that cannot mount
 # what is there and starts no way in; the boot partition is healthy, so nothing
-# falls through to partition 3 either. So recovery can be the saved default as
-# well as a one-boot trial, and an administrator leaves it there until the
-# repair is finished. Each falls back to the kernel pair with its own network.
+# falls through to the kernel entries either. So recovery can be the saved
+# default as well as a one-boot trial, and an administrator leaves it there
+# until the repair is finished.
 if [ "${saved_entry}" = "recovery" ]; then
     set default=recovery
-fi
-if [ "${saved_entry}" = "recovery-static" ]; then
-    set default=recovery-static
-    set fallback=3
 fi
 if [ "${next_entry}" = "candidate" ]; then
     set default=candidate
@@ -376,42 +335,8 @@ if [ "${next_entry}" = "fallback" ]; then
     set next_entry=
     save_env next_entry
 fi
-# A trial on a network with no DHCP server falls back to the kernel that also
-# has the fixed address, entry 3. Falling back to entry 1 there is a machine
-# that boots and cannot be reached, which is the one thing a fallback exists to
-# prevent. The static recovery entry answers to the same rule: a recovery
-# payload that will not load must not drop the machine onto a kernel that asks
-# for a lease nobody answers.
-if [ "${next_entry}" = "candidate-static" ]; then
-    set default=candidate-static
-    set fallback=3
-    set next_entry=
-    save_env next_entry
-fi
-if [ "${next_entry}" = "fallback-static" ]; then
-    set default=fallback-static
-    set fallback=3
-    set next_entry=
-    save_env next_entry
-fi
-if [ "${next_entry}" = "debug" ]; then
-    set default=debug
-    set next_entry=
-    save_env next_entry
-fi
 if [ "${next_entry}" = "recovery" ]; then
     set default=recovery
-    set next_entry=
-    save_env next_entry
-fi
-if [ "${next_entry}" = "recovery-static" ]; then
-    set default=recovery-static
-    set fallback=3
-    set next_entry=
-    save_env next_entry
-fi
-if [ "${next_entry}" = "recovery-fsck" ]; then
-    set default=recovery-fsck
     set next_entry=
     save_env next_entry
 fi
@@ -437,11 +362,11 @@ done
 sedq() { printf '%s' "$1" | sed 's/[\\&|]/\\&/g'; }
 # A FAT serial as GRUB's `search --fs-uuid` names it: XXXX-XXXX, upper case.
 fat_uuid() { printf '%s' "$1" | tr 'a-f' 'A-F' | sed 's/^\(....\)\(....\)$/\1-\2/'; }
-RECOVERY_TITLE="Repair this computer (not yet built)"
+RECOVERY_TITLE="Start the Rach2 recovery system (not yet built)"
 RECOVERY_STATIC_TITLE="Repair this computer, fixed network address (not yet built)"
 RECOVERY_FSCK_TITLE="Repair this computer, check its disks first (not yet built)"
 if [ -n "$RECOVERY_KERNEL" ] && [ -n "$RECOVERY_IMAGE" ]; then
-    RECOVERY_TITLE="Repair this computer"
+    RECOVERY_TITLE="Start the Rach2 recovery system"
     RECOVERY_STATIC_TITLE="Repair this computer, fixed network address"
     RECOVERY_FSCK_TITLE="Repair this computer, check its disks first"
 fi
@@ -469,17 +394,12 @@ search --no-floppy --fs-uuid --set=root RACH2_RECOVERY_SERIAL
 set timeout=3
 set default=0
 
-menuentry "Repair this computer (its boot partition does not read)" --id recovery {
+menuentry "Start the Rach2 recovery system (the boot partition does not read)" --id recovery {
     multiboot /boot/recovery rach2.root=ram rach2.boot=RACH2_BOOT_PART rach2.slot=recovery RACH2_APPEND_TOKENS RACH2_DHCP_TOKENS
     module /boot/recovery.krffs
     boot
 }
 
-menuentry "Repair this computer, fixed address (boot partition does not read)" --id recovery-static {
-    multiboot /boot/recovery rach2.root=ram rach2.boot=RACH2_BOOT_PART rach2.slot=recovery RACH2_APPEND_TOKENS RACH2_STATIC_TOKENS
-    module /boot/recovery.krffs
-    boot
-}
 RCFG
 
 sed -e "s|RACH2_STATIC_TOKENS|$(sedq "$STATIC_APPEND")|" \

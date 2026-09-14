@@ -135,12 +135,7 @@ elif [ "$IMAGE" = rach2-recovery ]; then
     # repairs is behind an AHCI controller on the machine this is for. The
     # default entry repairs nothing: `rach2.fsck`, which makes init run
     # `e2fsck -p` on every ext2 partition first, is the second entry's.
-    METAL_ENTRIES="menuentry \"Install or repair, and check the disks first\" {
-    multiboot /boot/kernel rach2.ip=none rach2.disk=ahci rach2.fsck
-    module /boot/$IMAGE.krffs
-    boot
-}
-"
+    METAL_ENTRIES=""
     METAL_DEFAULT_ARGS='rach2.ip=none rach2.disk=ahci'
 else
     METAL_ENTRIES=''
@@ -151,7 +146,7 @@ fi
 # recovery stick is how a machine is installed and repaired, and the others
 # are that system started for their own reasons.
 if [ "$IMAGE" = rach2-recovery ]; then
-    FIRST_TITLE="Install Rach2, or repair a computer"
+    FIRST_TITLE="Install Rach2"
 else
     FIRST_TITLE="Start Rach2 ($IMAGE)"
 fi
@@ -167,11 +162,6 @@ menuentry "$FIRST_TITLE" {
 }
 
 $METAL_ENTRIES
-menuentry "Start the kernel debug shell" {
-    multiboot /boot/kernel rach2.rescue
-    module /boot/$IMAGE.krffs
-    boot
-}
 CFG
 
 command -v xorriso >/dev/null 2>&1 || {

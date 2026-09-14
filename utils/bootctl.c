@@ -148,49 +148,6 @@ static int cmdline_has(const char *token)
     return 0;
 }
 
-/**
- * Whether this machine is running from the fixed-address pair of menu entries.
- *
- * The menu's four kernel entries are two pairs: one takes whatever the network
- * gives it (`rach2.ip=none`) and one has a fixed address for a network with
- * no DHCP server. Which pair is running is read off the command line rather
- * than from a token of its own, because the address IS the difference between
- * them: a line naming an address that is not `none` is the fixed-address pair,
- * and a line naming none of it at all is a disk built without network tokens,
- * which has one pair in effect.
- *
- * The one case the command line cannot answer is recovery on a network with no
- * DHCP server: that entry asked for a lease, did not get one, and took the
- * fixed address anyway. The image leaves a marker in `/var/run` when it does
- * that, and this reads it.
- */
-static int running_static_entries(void)
-{
-    char *p;
-
-    if (cmdline_load() != 0) {
-        return 0; /* callers load it first and refuse if it is not there */
-    }
-    /* The recovery image takes the fixed address itself when no lease arrives,
-       and says so here. Its command line asked for a lease, so nothing else
-       would tell: a kernel installed from such a machine has to be armed in the
-       entries that carry that address, or the machine comes back with none.
-       `access` opens nothing, so this costs no descriptor at the moment the
-       slot device wants one. */
-    if (access(RESCUE_MARKER, F_OK) == 0) {
-        return 1;
-    }
-    for (p = cmdline; *p != '\0'; p++) {
-        if ((p == cmdline || p[-1] == ' ') && strncmp(p, "rach2.ip=", 9) == 0) {
-            const char *v = p + 9;
-            int is_none =
-                strncmp(v, "none", 4) == 0 && (v[4] == ' ' || v[4] == '\n' || v[4] == '\0');
-
-            return !is_none;
-        }
-    }
-    return 0;
-}
 
 static struct bootslot bs;
 
@@ -232,7 +189,6 @@ static int open_slot(void)
     /* An install and a commit keep the machine in the pair it is running from:
        moving a machine on a network with no DHCP server back to the pair that
        asks for a lease would leave it with no address at all. */
-    bootslot_use_static_entries(&bs, running_static_entries());
     return 0;
 }
 
@@ -300,7 +256,7 @@ static void print_env(const uint8_t *env, const char *key, int trial_marker)
  */
 static void print_booted(void)
 {
-    const char *pair = running_static_entries() ? " (the fixed-address entries)" : "";
+    const char *pair = "";
 
     if (cmdline_has("rach2.slot=candidate")) {
         printf("bootctl: booted: candidate%s\n", pair);
@@ -417,9 +373,7 @@ static const char *const ENV_KEYS[] = {"saved_entry", "next_entry"};
  * whose init runs `e2fsck -p` on every ext2 partition first. A disk built
  * without those files still defines the entries, and arming one there costs
  * a boot that falls back, not a machine that will not start. */
-static const char *const ENTRY_IDS[] = {"candidate",       "fallback", "candidate-static",
-                                        "fallback-static", "debug",    "recovery",
-                                        "recovery-static", "recovery-fsck"};
+static const char *const ENTRY_IDS[] = {"candidate", "fallback", "recovery"};
 
 /* What `saved_entry` may hold, which is not quite the same set. The stub reads
  * the saved default for the four kernel entries and for the two recovery ones,
@@ -430,8 +384,7 @@ static const char *const ENTRY_IDS[] = {"candidate",       "fallback", "candidat
  * machine saved into the kernel shell would leave it with no init and
  * no way in. `recovery-fsck`: a repair is one boot, and a machine saved
  * into it would repair its partitions at every start. */
-static const char *const SAVED_IDS[] = {"candidate", "fallback",        "candidate-static",
-                                        "fallback-static", "recovery", "recovery-static"};
+static const char *const SAVED_IDS[] = {"candidate", "fallback", "recovery"};
 #define ENTRY_ID_COUNT ((int)(sizeof(ENTRY_IDS) / sizeof(ENTRY_IDS[0])))
 #define SAVED_ID_COUNT ((int)(sizeof(SAVED_IDS) / sizeof(SAVED_IDS[0])))
 

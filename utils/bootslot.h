@@ -62,7 +62,6 @@ struct bootslot {
     struct bootslot_file grubenv;
     struct bootslot_file menu;
     int have_menu;      /* a disk built before the menu slot existed has none */
-    int static_entries; /* the machine is running from the fixed-address pair */
     uint8_t visited[BOOTSLOT_MAX_CLUSTERS / 8];
 };
 
@@ -71,19 +70,6 @@ struct bootslot {
  * in `err` (always NUL-terminated, `errlen` its capacity) naming the cause.
  */
 
-/**
- * Say that this machine is running from the fixed-address menu entries.
- *
- * The menu has two pairs: `candidate` and `fallback` take whatever the
- * network gives them, and `candidate-static` and `fallback-static` carry a
- * fixed address for a network with no DHCP server. Which pair a machine is
- * running from is the caller's to determine (`bootctl` reads it off
- * `/proc/cmdline`), and it decides which ids the install arms and the commit
- * saves: a machine left on the fixed address must not be moved back to the
- * other pair by an install, since on that network the other pair comes up with
- * no address at all.
- */
-void bootslot_use_static_entries(struct bootslot *bs, int on);
 
 /** Read and validate the volume: the BPB, both FATs (compared whole), and the
  *  namespace walk that resolves the four files and requires every reachable

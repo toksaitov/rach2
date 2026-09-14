@@ -527,33 +527,7 @@ int bootslot_validate_kernel(const uint8_t *image, uint32_t present, uint32_t si
     return 0;
 }
 
-/** Say which pair of menu entries this machine is running from; see the
- *  header for what that decides. */
-void bootslot_use_static_entries(struct bootslot *bs, int on)
-{
-    bs->static_entries = on ? 1 : 0;
-}
 
-/**
- * The menu id for one half of the pair this machine is running from.
- *
- * `base` is `candidate` or `fallback`, and the answer is that name or that name
- * with `-static` after it. The buffer must hold BOOTSLOT_ENTRY_MAX bytes.
- */
-static const char *entry_id(const struct bootslot *bs, const char *base, char *buf, size_t n)
-{
-    size_t len = strlen(base);
-
-    if (!bs->static_entries) {
-        return base;
-    }
-    if (len + 8 >= n) {
-        return base;
-    }
-    memcpy(buf, base, len);
-    memcpy(buf + len, "-static", 8);
-    return buf;
-}
 
 /**
  * Set `key=value` in the environment block: read the 1024 bytes, require
@@ -717,7 +691,6 @@ int bootslot_install(struct bootslot *bs, const uint8_t *image, uint32_t size, c
 {
     static uint8_t sector[BOOTSLOT_SECTOR];
     static uint8_t head[MULTIBOOT_SEARCH];
-    char idbuf[BOOTSLOT_ENTRY_MAX];
     uint32_t slot_bytes = bs->kernel.size;
     uint32_t nsectors = slot_bytes / BOOTSLOT_SECTOR;
     uint32_t s, b, want;
@@ -748,7 +721,7 @@ int bootslot_install(struct bootslot *bs, const uint8_t *image, uint32_t size, c
     /* One transition: the saved default moves to the fallback AND any stale
        next_entry from an earlier install is dropped, so a retry cannot leave
        a half-written slot armed for the next boot. */
-    if (env_edit(bs, "saved_entry", entry_id(bs, "fallback", idbuf, sizeof(idbuf)), "next_entry",
+    if (env_edit(bs, "saved_entry", "fallback", "next_entry",
                  err, errlen) != 0) {
         return -1;
     }
@@ -781,7 +754,7 @@ int bootslot_install(struct bootslot *bs, const uint8_t *image, uint32_t size, c
         }
     }
 
-    return env_edit(bs, "next_entry", entry_id(bs, "candidate", idbuf, sizeof(idbuf)), NULL, err,
+    return env_edit(bs, "next_entry", "candidate", NULL, err,
                     errlen);
 }
 
@@ -802,9 +775,8 @@ int bootslot_fallback(struct bootslot *bs, char *err, size_t errlen)
     static uint8_t sector[BOOTSLOT_SECTOR];
     static uint8_t back[BOOTSLOT_SECTOR];
     static uint8_t head[MULTIBOOT_SEARCH];
-    char idbuf[BOOTSLOT_ENTRY_MAX];
     char want[BOOTSLOT_ENTRY_MAX + 16];
-    const char *id = entry_id(bs, "candidate", idbuf, sizeof(idbuf));
+    const char *id = "candidate";
     uint32_t nsectors = bs->kernel.size / BOOTSLOT_SECTOR;
     uint32_t present, s, i, n;
     int committed = 0;
@@ -878,7 +850,6 @@ int bootslot_fallback(struct bootslot *bs, char *err, size_t errlen)
 int bootslot_commit(struct bootslot *bs, char *err, size_t errlen)
 {
     static uint8_t env[ENV_BYTES];
-    char idbuf[BOOTSLOT_ENTRY_MAX];
     uint32_t i;
 
     int consumed = 0;
@@ -919,6 +890,6 @@ int bootslot_commit(struct bootslot *bs, char *err, size_t errlen)
                     "no consumed trial in the environment block; install and "
                     "boot a candidate before committing");
     }
-    return env_edit(bs, "saved_entry", entry_id(bs, "candidate", idbuf, sizeof(idbuf)), NULL, err,
+    return env_edit(bs, "saved_entry", "candidate", NULL, err,
                     errlen);
 }
