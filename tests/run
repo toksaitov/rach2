@@ -762,15 +762,17 @@ for suite in "$@"; do
 done
 check_host $diskimage $sockets || { echo "run: result: refused: this host cannot run the set" >&2; exit 1; }
 
-# A runner whose lock is gone but whose processes are not: the lock covers
-# the ordinary case, and this covers the tree whose lock was removed by hand
-# while a set was still running.
-others=$(pgrep -f "sh $0" 2>/dev/null | grep -v "^$$\$" | tr '\n' ' ' | sed 's/ $//')
+lock_take "$@" || { echo "run: result: refused: the tree is not free" >&2; exit 1; }
+# A runner whose lock is gone but whose processes are not. The lock is the
+# first check and says more, naming the run that holds the tree; this is the
+# tree whose lock was removed by hand while a set was still running, where
+# there is nothing to read but the process table.
+others=$(pgrep -f "$0" 2>/dev/null | grep -v "^$$\$" | tr '\n' ' ' | sed 's/ *$//')
 if [ -n "$others" ]; then
-    echo "run: result: refused: another runner is still running: pids $others" >&2
+    echo "run: result: refused: a runner with no lock of its own is still running: pids $others" >&2
+    lock_release
     exit 1
 fi
-lock_take "$@" || { echo "run: result: refused: the tree is not free" >&2; exit 1; }
 # The line that says this run began. Everything below it belongs to this run,
 # and a log without it is a run that never started.
 echo "run: starting: $* (pid $$, $(date '+%Y-%m-%d %H:%M:%S'))"

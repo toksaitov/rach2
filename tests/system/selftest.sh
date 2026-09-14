@@ -524,8 +524,8 @@ rm -rf "$WORK/build/.run.lock" "$WORK/oldwork"
 # line in a log, a watcher waited for a result that would never come, and a
 # session sat idle for eight hours.
 mkdir -p "$WORK/build/.run.lock"
-printf 'pid %s\npgid %s\nwork %s\nsince now\nargs holding\n' "$$" "$$" "$WORK" \
-    > "$WORK/build/.run.lock/owner"
+printf 'pid %s\npgid %s\nwork %s\nsince now\nargs holding\n' \
+    "$$" "$(ps -o pgid= -p $$ | tr -d ' ')" "$WORK" > "$WORK/build/.run.lock/owner"
 out=$(run passing); rc=$?
 check "a run refused by a live lock exits non-zero" 1 "$rc"
 check "and ends with a result line" 1 "$(printf '%s\n' "$out" | grep -c '^run: result: refused:')"
