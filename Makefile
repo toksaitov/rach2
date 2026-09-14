@@ -91,8 +91,8 @@ SHA256TOOL      = build/tools/verify/sha256
 MKDISK          = krffs/mkdisk.sh
 
 .PHONY: all clean distclean images musl-programs test preflight check-sources prepare-all \
-        test-image os-simple-image os-real-image os-real-disk os-real-grub-disk \
-        rach2-metal rach2-metal-image rach2-metal-grub-disk \
+        test-image os-simple-image os-real-image os-real-disk \
+        rach2-metal rach2-metal-image \
         rach2-sealed-disk rach2-recovery rach2-recovery-image \
         isos test-iso os-simple-iso os-real-iso rach2-metal-iso \
         check-busybox check-setid check-dropbearmulti check-libc check-tcc \
@@ -270,7 +270,19 @@ $(E2FSCK_BIN) $(RESIZE2FS_BIN): $(E2FSPROGS_STAMP)
 #     kernel.o would match make's builtin link rule and be relinked by the
 #     host cc. The rules run only when the file is missing; the ordinary
 #     refresh still happens through the order-only component recursion. ---
-build/rach2/kernel:
+# The three kernels are built by sub-makes that do their own dependency
+# tracking. These rules have no prerequisites of their own, so they ask the
+# sub-make on every invocation and let it decide: it relinks only when a source
+# changed, which moves the file's timestamp only then, so an image naming the
+# file rebuilds exactly when the kernel really changed and not otherwise.
+#
+# Without this the rules fired only when the file was missing. On 2026-09-14 a
+# disk image shipped a kernel older than the tree, and what caught it was a
+# person reading a boot log for a message that had been deleted.
+.PHONY: ask-the-kernel-make
+ask-the-kernel-make:
+
+build/rach2/kernel: ask-the-kernel-make
 	@$(MAKE) --no-print-directory -C rach2
 build/ish/ish:
 	@$(MAKE) --no-print-directory -C ish
@@ -460,6 +472,8 @@ $(OS_REAL_EXT2): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(shell sh krffs
 # policy back off the artifact, since there is nothing to check for by absence:
 # the commands are numbers and the functions that issue them are static.
 METAL_KERNEL = build/rach2-metal/kernel
+$(METAL_KERNEL): ask-the-kernel-make
+	@$(MAKE) --no-print-directory -C rach2 COMPONENT=rach2-metal KEXTRA=-DRACH2_DISK_READONLY
 rach2-metal: krffs
 	$(MAKE) -C rach2 COMPONENT=rach2-metal KEXTRA=-DRACH2_DISK_READONLY
 	sh tools/inspect/check_diskpolicy.sh $(METAL_KERNEL) read-only
@@ -473,6 +487,8 @@ rach2-metal: krffs
 # boot partition too, which recovery needs to do. check_recovery.sh reads the
 # authority back off the artifact in both directions.
 RECOVERY_KERNEL = build/rach2-recovery/kernel
+$(RECOVERY_KERNEL): ask-the-kernel-make
+	@$(MAKE) --no-print-directory -C rach2 COMPONENT=rach2-recovery KEXTRA=-DRACH2_RECOVERY
 rach2-recovery: krffs rach2
 	$(MAKE) -C rach2 COMPONENT=rach2-recovery KEXTRA=-DRACH2_RECOVERY
 	sh tools/inspect/check_recovery.sh $(RECOVERY_KERNEL) recovery
@@ -503,28 +519,6 @@ rach2-recovery-image: $(RECOVERY_IMAGE)
 # can later prove an on-disk file system bigger than what fits in RAM at once.
 os-real-disk: krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	$(MKDISK) krffs/manifests/os-real.manifest $(OS_REAL_DISK) 64 48
-
-# A BIOS-bootable disk: GRUB in the MBR and a FAT boot partition holding the
-# kernel, plus a KRFFS partition with the os-real tree. It boots a real machine
-# (or QEMU with no -kernel/-initrd) BIOS -> MBR -> GRUB -> kernel -> KRFFS on
-# the disk. Assembled natively with mtools and the pinned GRUB artifacts.
-os-real-grub-disk: krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
-	sh tools/image/mkdisk_grub.sh
-
-# `make rach2-metal-grub-disk`: the disk that goes INTO the laptop, imaged over
-# a USB adapter and swapped in place of the Windows disk. The full os-real
-# machine (/src, the compilers, the installer) with the metal init supervising
-# dropbear, the LAN address and the AHCI driver named in every menu entry, and a
-# KRFFS partition sized for real work rather than for a test. The kernel is the
-# ordinary read-write build, which is safe for one reason only: this image is
-# written to a disk the project owns, and it boots in the laptop only after the
-# Windows disk is physically out.
-METAL_GRUB_DISK = build/images/rach2-metal-grub.disk
-rach2-metal-grub-disk: krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
-	RACH2_DISK_MANIFEST=krffs/manifests/rach2-metal-disk.manifest \
-	RACH2_DISK_KRFFS_MB=500 \
-	RACH2_DISK_APPEND="rach2.disk=ahci rach2.ip=192.168.0.105/24 rach2.gateway=192.168.0.1 rach2.netconsole" \
-	    sh tools/image/mkdisk_grub.sh build/rach2/kernel $(METAL_GRUB_DISK)
 
 # `make rach2-sealed-disk`: the disk milestone 25 seals into the laptop, written
 # once over a USB adapter and not removed again. Its geometry is the milestone's
@@ -623,10 +617,8 @@ $(SEALED_DISK): build/rach2/kernel $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(SEALED
                 tools/image/mkdisk_grub.sh $(CFGCHECK)
 	@$(CFGCHECK) sealednet $(SEALED_ADDRESS) $(SEALED_PREFIX) \
 	    $(SEALED_MASK) $(SEALED_GATEWAY) krffs/rescue-static.script
-	RACH2_DISK_MANIFEST=krffs/manifests/rach2-metal-disk.manifest \
 	RACH2_DISK_BOOT_MB=64 \
 	RACH2_DISK_CLUSTER=8 \
-	RACH2_DISK_KRFFS_MB=500 \
 	RACH2_DISK_RECOVERY_MB=64 \
 	RACH2_DISK_APPEND="rach2.disk=ahci rach2.netconsole" \
 	RACH2_DISK_DHCP_APPEND="rach2.ip=none" \

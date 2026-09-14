@@ -424,7 +424,13 @@ run-bootpart: rach2 tests krffs test-image $(MKFIXTURE) $(HARNESS)
 # from inside the running core, because reading the pointer back would prove
 # only bytes at rest.
 GRUB_TEST_DISK = $(IMAGES_DIR)/grub-test.disk
-run-grub: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+# The root this disk boots. It was a KRFFS partition carrying grub-test.manifest
+# until 2026-09-14; the same manifest, as the ext2 root the disk now has, so the
+# guest commands this suite types still find what they expect.
+GRUB_TEST_EXT2 = $(IMAGES_DIR)/grub-test.ext2
+$(GRUB_TEST_EXT2): $(DEMO_CREDS) krffs/manifests/grub-test.manifest $(shell sh krffs/manifest_deps.sh krffs/manifests/grub-test.manifest) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-setid
+	sh tools/image/mkext2.sh krffs/manifests/grub-test.manifest $@ 48
+run-grub: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krffs $(GRUB_TEST_EXT2) check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	@mkdir -p $(IMAGES_DIR)
 	sh tools/image/mkgrubcore.sh A $(IMAGES_DIR)/core-a.img
 	sh tools/image/mkgrubcore.sh B $(IMAGES_DIR)/core-b.img
@@ -432,7 +438,9 @@ run-grub: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake 
 	    krffs/manifests/grub-test.manifest > $(IMAGES_DIR)/grub-test.manifest.stripped
 	sed -e '/^#/d' -e '/^$$/d' krffs/manifests/os-real.manifest \
 	    | diff - $(IMAGES_DIR)/grub-test.manifest.stripped
-	RACH2_DISK_MANIFEST=krffs/manifests/grub-test.manifest \
+	RACH2_DISK_EXT2_MB=48 \
+	RACH2_DISK_EXT2_IMAGE=$(GRUB_TEST_EXT2) \
+	RACH2_DISK_RECOVERY_MB=8 \
 	    sh tools/image/mkdisk_grub.sh build/rach2/kernel $(GRUB_TEST_DISK)
 	sh tests/system/suites/grub.sh $(GRUB_TEST_DISK) \
 	    "`cat krffs/rach2_demo_password`"
@@ -450,9 +458,11 @@ run-bootorder: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdp
 # stub with GRUB's parse error in the log; and the slot's extent read back to
 # prove bootctl overwrote bytes in place rather than rewriting a file.
 MENU_TEST_DISK = $(IMAGES_DIR)/menu-test.disk
-run-menu: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(BINFIND)
+run-menu: $(DEMO_CREDS) rach2 utils krffs $(OS_SIMPLE_EXT2) check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(BINFIND)
 	@mkdir -p $(IMAGES_DIR)
-	sh tools/image/mkdisk_grub.sh build/rach2/kernel $(MENU_TEST_DISK)
+	RACH2_DISK_EXT2_MB=16 \
+	RACH2_DISK_EXT2_IMAGE=$(OS_SIMPLE_EXT2) \
+	    sh tools/image/mkdisk_grub.sh build/rach2/kernel $(MENU_TEST_DISK)
 	sh tests/system/suites/menu.sh $(MENU_TEST_DISK) \
 	    "`cat krffs/rach2_demo_password`"
 # `tests/run authority`: which kernel may write the whole disk. Two boots of one
@@ -490,29 +500,22 @@ run-authority: rach2 rach2-recovery tests krffs test-image $(MKFIXTURE) $(HARNES
 # installer-named extent, recovered through the fallback and repaired from
 # inside. The interruption matrix's determinate states are then booted from
 # host-crafted environment blocks.
-INSTALL_TEST_DISK = $(IMAGES_DIR)/install-test.disk
-run-install: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(BINFIND)
-	@mkdir -p $(IMAGES_DIR)
-	sh tools/image/mkdisk_grub.sh build/rach2/kernel $(INSTALL_TEST_DISK)
-	sh tests/system/suites/install.sh $(INSTALL_TEST_DISK) \
-	    "`cat krffs/rach2_demo_password`"
-# `tests/run install-ext2`: the same suite on a disk whose candidate entries
-# boot an ext2 root on the fourth partition, the os-real system at 96 MiB,
-# while the fallback keeps the KRFFS root. The kernel is built on the ext2
-# root and installed from it, and the fallback boots are the KRFFS root.
+# `tests/run install`: the suite on a disk whose entries boot the ext2 root,
+# the os-real system at 96 MiB. The kernel is built on that root and installed
+# from it. It ran twice until 2026-09-14, once per root type.
 OS_REAL_SMALL_EXT2 = $(IMAGES_DIR)/os-real-small.ext2
 $(OS_REAL_SMALL_EXT2): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(shell sh krffs/manifest_deps.sh krffs/manifests/os-real.manifest) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	sh tools/image/mkext2.sh krffs/manifests/os-real.manifest $@ 96
-INSTALL_EXT2_DISK = $(IMAGES_DIR)/install-ext2-test.disk
-run-install-ext2: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(BINFIND) rach2-recovery $(RECOVERY_IMAGE) $(OS_REAL_SMALL_EXT2)
+INSTALL_TEST_DISK = $(IMAGES_DIR)/install-test.disk
+run-install: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(BINFIND) rach2-recovery $(RECOVERY_IMAGE) $(OS_REAL_SMALL_EXT2)
 	@mkdir -p $(IMAGES_DIR)
 	RACH2_DISK_RECOVERY_MB=8 \
 	RACH2_DISK_EXT2_MB=96 \
 	RACH2_DISK_EXT2_IMAGE=$(OS_REAL_SMALL_EXT2) \
 	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
 	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
-	    sh tools/image/mkdisk_grub.sh build/rach2/kernel $(INSTALL_EXT2_DISK)
-	INSTALL_ROOT=ext2 sh tests/system/suites/install.sh $(INSTALL_EXT2_DISK) \
+	    sh tools/image/mkdisk_grub.sh build/rach2/kernel $(INSTALL_TEST_DISK)
+	sh tests/system/suites/install.sh $(INSTALL_TEST_DISK) \
 	    "`cat krffs/rach2_demo_password`"
 # `tests/run sealed`: the disk that goes into the laptop, operated the way it
 # will be operated once it is in there. Two runs of one artifact on separate
@@ -546,32 +549,16 @@ run-sealed: $(DEMO_CREDS) $(SEALED_DISK) $(DEADLINE) $(ELFCHECK) $(BINFIND) $(MK
 # rather than on one where the node is simply absent. The sealed disk carries no
 # such flag, so there the everyday entries have no whole-disk node at all, and
 # the recovery build publishes its own whatever the command line says.
-DRILL_DISK = $(IMAGES_DIR)/drill-test.disk
-run-drill: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krffs check-setid $(BINFIND) $(MKMBR) $(HARNESS)
-	@mkdir -p $(IMAGES_DIR)
-	RACH2_DISK_MANIFEST=krffs/manifests/os-simple.manifest \
-	RACH2_DISK_KRFFS_MB=16 \
-	RACH2_DISK_RECOVERY_MB=8 \
-	RACH2_DISK_APPEND="rach2.diskdiag" \
-	RACH2_DISK_DHCP_APPEND="rach2.ip=none" \
-	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
-	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
-	    sh tools/image/mkdisk_grub.sh build/rach2/kernel $(DRILL_DISK)
-	sh tests/system/suites/drill.sh $(DRILL_DISK) \
-	    "`cat krffs/rach2_demo_password`" $(DRILL_PORT)
-# `tests/run drill-ext2`: the drill with the ext2 root on the fourth partition
-# as the candidate's root: it is the root the everyday kernel must refuse to
-# write, that is destroyed, that recovery rewrites through the pipe, and that
-# the last boot mounts again.
+# `tests/run drill`: the root the everyday kernel must refuse to write, that is
+# destroyed, that recovery rewrites through the pipe, and that the last boot
+# mounts again. It ran twice until 2026-09-14, once per root type; the disk has
+# one root now.
 OS_SIMPLE_EXT2 = $(IMAGES_DIR)/os-simple.ext2
 $(OS_SIMPLE_EXT2): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(shell sh krffs/manifest_deps.sh krffs/manifests/os-simple.manifest) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-setid
 	sh tools/image/mkext2.sh krffs/manifests/os-simple.manifest $@ 16
-DRILL_EXT2_DISK = $(IMAGES_DIR)/drill-ext2-test.disk
-DRILL_EXT2_PORT = 2300
-run-drill-ext2: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krffs check-setid $(BINFIND) $(MKMBR) $(HARNESS) $(OS_SIMPLE_EXT2)
+DRILL_DISK = $(IMAGES_DIR)/drill-test.disk
+run-drill: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krffs check-setid $(BINFIND) $(MKMBR) $(HARNESS) $(OS_SIMPLE_EXT2)
 	@mkdir -p $(IMAGES_DIR)
-	RACH2_DISK_MANIFEST=krffs/manifests/os-simple.manifest \
-	RACH2_DISK_KRFFS_MB=16 \
 	RACH2_DISK_RECOVERY_MB=8 \
 	RACH2_DISK_EXT2_MB=16 \
 	RACH2_DISK_EXT2_IMAGE=$(OS_SIMPLE_EXT2) \
@@ -579,9 +566,9 @@ run-drill-ext2: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils kr
 	RACH2_DISK_DHCP_APPEND="rach2.ip=none" \
 	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
 	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
-	    sh tools/image/mkdisk_grub.sh build/rach2/kernel $(DRILL_EXT2_DISK)
-	DRILL_ROOT=ext2 sh tests/system/suites/drill.sh $(DRILL_EXT2_DISK) \
-	    "`cat krffs/rach2_demo_password`" $(DRILL_EXT2_PORT)
+	    sh tools/image/mkdisk_grub.sh build/rach2/kernel $(DRILL_DISK)
+	sh tests/system/suites/drill.sh $(DRILL_DISK) \
+	    "`cat krffs/rach2_demo_password`" $(DRILL_PORT)
 # `tests/run persist`: fsync durability across a reboot. Builds a disk holding
 # persistprobe, boots it twice against the SAME image: the first boot writes and
 # fsyncs /persist.txt, the second reads it back. The second boot passes only if
@@ -1805,4 +1792,5 @@ run-ssh-e1000:
 # its variable is defined expands to nothing. `tools/verify/check.sh` holds
 # every `run-` target's file prerequisites to `prepare-all`'s closure.
 prepare-products: $(MKEXFATFIXTURE) $(MKFATFIXTURE) $(OS_SIMPLE_EXT2) $(OS_REAL_SMALL_EXT2) \
+                  $(GRUB_TEST_EXT2) \
                   $(STICK_IMAGE) $(SELFBUILD_EXT2_VOL) $(IMAGE_TOOLS)
