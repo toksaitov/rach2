@@ -307,11 +307,11 @@ esac
 # the mount table; the fallback boots the same one.
 ROOTS="$(machine 'cat /proc/cmdline; cat /proc/mounts' || true)"
 case "$ROOTS" in
-    *"rach2.root=MBRID="*",4 rach2.rootfstype=ext2"*) ;;
+    *"rach2.root=MBRID="*",3 rach2.rootfstype=ext2"*) ;;
     *) fail "the candidate's command line does not name the ext2 root: $ROOTS" ;;
 esac
 case "$ROOTS" in
-    *"/dev/disk0p4 / ext2 rw,relatime"*) ;;
+    *"/dev/disk0p3 / ext2 rw,relatime"*) ;;
     *) fail "the candidate did not mount the ext2 root writable: $ROOTS" ;;
 esac
 if grep -aq "ext2: check" "$LOG"; then
@@ -545,7 +545,7 @@ case "$OUT" in
 esac
 stop_machine
 cold_boot repair
-grep -aq "init: e2fsck: /dev/disk0p4: status [01]" "$LOG" || \
+grep -aq "init: e2fsck: /dev/disk0p3: status [01]" "$LOG" || \
     fail "recovery's init did not check the ext2 root"
 OUT="$(machine 'bootctl trial candidate && bootctl status' || true)"
 case "$OUT" in
@@ -563,7 +563,7 @@ case "$OUT" in
     *) fail "the repaired candidate did not boot: $OUT" ;;
 esac
 case "$OUT" in
-    *"/dev/disk0p4 / ext2 rw,relatime"*) ;;
+    *"/dev/disk0p3 / ext2 rw,relatime"*) ;;
     *) fail "the repaired candidate did not mount the ext2 root writable: $OUT" ;;
 esac
 OUT="$(machine 'bootctl commit' || true)"
