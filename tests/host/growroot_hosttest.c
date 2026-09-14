@@ -1,0 +1,242 @@
+/**
+ * Check the sector growroot validates and writes through its writer.
+ *
+ * host-deps:
+ *
+ * Device calls use memory; proc files use temporary host streams. The table
+ * reread ioctl stops the program after the write, before either ext2 tool.
+ */
+#define _POSIX_C_SOURCE 200809L
+#include <errno.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/ioctl.h>
+#include <sys/wait.h>
+#include <time.h>
+#include <unistd.h>
+
+static unsigned char initial[512], current[512], written[512];
+static int read_fault, writer_reads, writes, rereads, failures, opens;
+
+#define CHECK(condition, detail)                                  \
+    do {                                                          \
+        if (!(condition)) {                                       \
+            fprintf(stderr, "growroot-test: fail: %s\n", detail); \
+            failures++;                                           \
+        }                                                         \
+    } while (0)
+
+/** Supply the inventory from before the writer opened the device. */
+static FILE *fake_fopen(const char *path, const char *mode)
+{
+    FILE *f = tmpfile();
+
+    CHECK(strcmp(mode, "r") == 0, "proc files are only read");
+    if (!f) {
+        perror("growroot-test: tmpfile");
+        exit(2);
+    }
+    if (strcmp(path, "/proc/meminfo") == 0) {
+        fputs("MemTotal: 65536 kB\n", f);
+    } else if (strcmp(path, "/proc/disk") == 0) {
+        fputs("disk 0 ahci 0 131072 mbr fixture\n"
+              "part 0 1 2048 16384 mbr:83\n",
+              f);
+    } else {
+        CHECK(0, "only the memory and disk inventories are opened");
+    }
+    rewind(f);
+    return f;
+}
+
+/** Distinguish the discovery descriptors from the writer's descriptor. */
+static int fake_open(const char *path, int flags, ...)
+{
+    opens++;
+    if (strcmp(path, "/dev/disk0") == 0) {
+        return flags == O_RDWR ? 12 : 10;
+    }
+    CHECK(strcmp(path, "/dev/disk0p1") == 0 && flags == O_RDONLY,
+          "the ext2 magic is read from the selected partition");
+    return 11;
+}
+
+/** Fail the writer's first read, then make a retry succeed if one occurs. */
+static ssize_t fake_read(int fd, void *buffer, size_t size)
+{
+    unsigned char *bytes = buffer;
+
+    CHECK(size == 512, "each device read requests one sector");
+    if (fd == 11) {
+        memset(bytes, 0, size);
+        bytes[56] = 0x53;
+        bytes[57] = 0xEF;
+    } else if (fd == 10) {
+        memcpy(bytes, initial, size);
+    } else {
+        CHECK(fd == 12, "only the writer reads the current table");
+        writer_reads++;
+        if (writer_reads == 1 && read_fault == 1) {
+            errno = EIO;
+            return -1;
+        }
+        memcpy(bytes, current, size);
+        if (writer_reads == 1 && read_fault == 2) {
+            return 511;
+        }
+    }
+    return (ssize_t)size;
+}
+
+/** Capture the only device write, without opening a host device. */
+static ssize_t fake_write(int fd, const void *buffer, size_t size)
+{
+    CHECK(fd == 12 && size == 512, "only a whole MBR sector is written");
+    writes++;
+    memcpy(written, buffer, size);
+    return (ssize_t)size;
+}
+
+/** Accept the magic read's offset and rewinds of the table descriptor. */
+static off_t fake_lseek(int fd, off_t offset, int whence)
+{
+    CHECK(whence == SEEK_SET && ((fd == 11 && offset == 1024) || (fd == 12 && offset == 0)),
+          "device seeks use the superblock or the first sector");
+    return offset;
+}
+
+/** Stop after publication so no child process or ext2 tool can run. */
+static int fake_ioctl(int fd, unsigned long request, ...)
+{
+    CHECK(fd == 12 && request == 0x125Fu, "the kernel is asked to reread the table");
+    rereads++;
+    errno = EBUSY;
+    return -1;
+}
+
+/** Count releases of the three substituted descriptors. */
+static int fake_close(int fd)
+{
+    CHECK(fd >= 10 && fd <= 12, "only substituted descriptors are closed");
+    opens--;
+    return 0;
+}
+
+#define fopen fake_fopen
+#define open  fake_open
+#define read  fake_read
+#define write fake_write
+#define lseek fake_lseek
+#define ioctl fake_ioctl
+#define close fake_close
+#define main  growroot_main
+#include "growroot.c"
+#undef main
+#undef close
+#undef ioctl
+#undef lseek
+#undef write
+#undef read
+#undef open
+#undef fopen
+
+/** Write the fixture's little-endian fields independently of growroot. */
+static void put32(unsigned char *p, unsigned long value)
+{
+    int i;
+
+    for (i = 0; i < 4; i++) {
+        p[i] = (unsigned char)(value >> (i * 8));
+    }
+}
+
+/** Reset discovery and device state for an 8 MiB partition on 64 MiB. */
+static void fixture(void)
+{
+    memset(initial, 0, sizeof(initial));
+    memset(initial, 0x5A, 440);
+    put32(initial + 440, 1);
+    initial[446 + 4] = 0x83;
+    put32(initial + 446 + 8, 2048);
+    put32(initial + 446 + 12, 16384);
+    initial[510] = 0x55;
+    initial[511] = 0xAA;
+    memcpy(current, initial, sizeof(current));
+    memset(written, 0, sizeof(written));
+    read_fault = writer_reads = writes = rereads = opens = 0;
+    nparts = ndisks = 0;
+    memset(parts, 0, sizeof(parts));
+    memset(disk_sectors, 0, sizeof(disk_sectors));
+    memset(disk_table, 0, sizeof(disk_table));
+}
+
+/** Run the real decision and require every descriptor to be released. */
+static void invoke(void)
+{
+    char *args[] = {"growroot", "MBRID=1,1", NULL};
+
+    CHECK(growroot_main(2, args) == 1, "validation or the simulated busy disk stops the run");
+    CHECK(opens == 0, "all device descriptors close");
+}
+
+/** A changed table must not reach either the write or the table reread. */
+static void refused(const char *detail)
+{
+    invoke();
+    CHECK(writes == 0 && rereads == 0, detail);
+}
+
+/** Cover successful publication, read failures and each checked table field. */
+int main(void)
+{
+    unsigned char expected[512];
+    int fault;
+
+    fixture();
+    memcpy(expected, initial, sizeof(expected));
+    expected[446 + 5] = 0xFE;
+    expected[446 + 6] = expected[446 + 7] = 0xFF;
+    put32(expected + 446 + 12, 129024);
+    invoke();
+    CHECK(writer_reads == 1, "the writer uses the sector it checked without rereading");
+    CHECK(writes == 1 && rereads == 1, "a valid table is written and reread once");
+    CHECK(memcmp(written, expected, sizeof(expected)) == 0,
+          "only the target length and ending CHS bytes change");
+    for (fault = 1; fault <= 2; fault++) {
+        fixture();
+        read_fault = fault;
+        refused("a failed or short writer read makes no write");
+    }
+    fixture();
+    current[440] ^= 1;
+    refused("a changed disk identity makes no write");
+    fixture();
+    current[510] = 0;
+    refused("an invalid MBR signature makes no write");
+    fixture();
+    current[446 + 4] = 0x0C;
+    refused("a changed partition type makes no write");
+    fixture();
+    put32(current + 446 + 8, 4096);
+    refused("a changed partition start makes no write");
+    fixture();
+    put32(current + 446 + 12, 32768);
+    refused("a changed partition length makes no write");
+    fixture();
+    current[462 + 4] = 0x83;
+    put32(current + 462 + 8, 20000);
+    put32(current + 462 + 12, 4096);
+    refused("a new partition in the grow space makes no write");
+    fixture();
+    current[462 + 4] = 0x0F;
+    put32(current + 462 + 8, 20000);
+    put32(current + 462 + 12, 4096);
+    refused("an extended partition in the grow space makes no write");
+    if (failures) {
+        return 1;
+    }
+    puts("growroot-test: result: ten table cases passed");
+    return 0;
+}

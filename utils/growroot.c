@@ -1,6 +1,6 @@
 /**
  * Grow a root partition and its ext2 file system into the free space after
- * it: `growroot MBRID=ID,N`.
+ * it: `growroot MBRID=ID,N [--measure]`.
  *
  * The partition is named by identity, the disk's MBR signature and the
  * entry number, as the kernel's `rach2.root=` is, so a clone of the disk
@@ -26,6 +26,7 @@
  * measured to need is refused by name before anything is read.
  */
 
+#define _POSIX_C_SOURCE 200809L
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -33,6 +34,7 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 extern char **environ;
@@ -65,6 +67,7 @@ static int nparts;
 static unsigned long long disk_sectors[16];
 static char disk_table[16][12];
 static int ndisks;
+static int measure;
 
 static int fail(const char *what, const char *detail)
 {
@@ -74,6 +77,48 @@ static int fail(const char *what, const char *detail)
         fprintf(stderr, "growroot: %s\n", what);
     }
     return 1;
+}
+
+/**
+ * Record each phase against the same monotonic clock and disk counters.
+ * The counters cover the machine, so recovery must have no other disk work
+ * running for their differences to describe this grow alone.
+ */
+static int measured(const char *phase, const char *edge)
+{
+    FILE *f;
+    struct timespec t;
+    char line[256];
+    unsigned long long commands = 0, flushes = 0, us;
+    int seen = 0, error;
+
+    if (!measure) {
+        return 0;
+    }
+    if (clock_gettime(CLOCK_MONOTONIC, &t) != 0) {
+        return fail("measurement clock", strerror(errno));
+    }
+    f = fopen("/proc/disk", "r");
+    if (!f) {
+        return fail("measurement counters", strerror(errno));
+    }
+    while (fgets(line, sizeof(line), f)) {
+        if (sscanf(line, "disk-commands %llu", &commands) == 1) {
+            seen |= 1;
+        } else if (sscanf(line, "disk-flushes %llu", &flushes) == 1) {
+            seen |= 2;
+        }
+    }
+    error = ferror(f);
+    fclose(f);
+    if (error || seen != 3) {
+        return fail("measurement counters", "commands or flushes did not read");
+    }
+    us = (unsigned long long)t.tv_sec * 1000000 + (unsigned long)t.tv_nsec / 1000;
+    printf("growroot: measure: %s %s monotonic-us %llu disk-commands %llu disk-flushes %llu\n",
+           phase, edge, us, commands, flushes);
+    fflush(stdout);
+    return 0;
 }
 
 /** `/proc/disk`: the disks and the partition entries the kernel found. */
@@ -208,8 +253,9 @@ int main(int argc, char **argv)
     char dev[32], part_node[32];
     char text[128];
 
-    if (argc != 2 || sscanf(argv[1], "MBRID=%lx,%d", &want_id, &entry) != 2) {
-        fprintf(stderr, "usage: growroot MBRID=ID,N\n");
+    measure = argc == 3 && strcmp(argv[2], "--measure") == 0;
+    if ((argc != 2 && !measure) || sscanf(argv[1], "MBRID=%lx,%d", &want_id, &entry) != 2) {
+        fprintf(stderr, "usage: growroot MBRID=ID,N [--measure]\n");
         return 2;
     }
     if (entry < 1 || entry > 4) {
@@ -284,6 +330,9 @@ int main(int argc, char **argv)
         return fail(part_node, "the entry ends past the disk");
     }
     new_count = limit - p->start;
+    if (measured("table", "before")) {
+        return 1;
+    }
     if (new_count == p->count) {
         printf("growroot: entry: %s already fills the %llu sectors after it\n", part_node,
                new_count);
@@ -300,7 +349,11 @@ int main(int argc, char **argv)
          * the identity and the entry were read through descriptors that are
          * closed by now and another writer on this system could have put a
          * different table there in between. */
-        if (read(fd, sector, sizeof(sector)) == (ssize_t)sizeof(sector)) {
+        if (read(fd, sector, sizeof(sector)) != (ssize_t)sizeof(sector)) {
+            close(fd);
+            return fail(dev, "the first sector did not read; nothing written");
+        }
+        {
             unsigned long now_id = (unsigned long)sector[440] |
                                    ((unsigned long)sector[441] << 8) |
                                    ((unsigned long)sector[442] << 16) |
@@ -310,10 +363,15 @@ int main(int argc, char **argv)
                                            ((unsigned long long)e0[9] << 8) |
                                            ((unsigned long long)e0[10] << 16) |
                                            ((unsigned long long)e0[11] << 24);
+            unsigned long long was_count = (unsigned long long)e0[12] |
+                                           ((unsigned long long)e0[13] << 8) |
+                                           ((unsigned long long)e0[14] << 16) |
+                                           ((unsigned long long)e0[15] << 24);
 
             int other;
 
-            if (now_id != want_id || was_start != p->start) {
+            if (sector[510] != 0x55 || sector[511] != 0xAA || now_id != want_id ||
+                e0[4] != p->type || was_start != p->start || was_count != p->count) {
                 close(fd);
                 return fail(dev, "the table changed while this was deciding; nothing written");
             }
@@ -339,11 +397,6 @@ int main(int argc, char **argv)
                                      "nothing written");
                 }
             }
-        }
-        if (lseek(fd, 0, SEEK_SET) != 0 ||
-            read(fd, sector, sizeof(sector)) != (ssize_t)sizeof(sector)) {
-            close(fd);
-            return fail(dev, "the first sector did not read");
         }
         e = sector + MBR_ENTRIES + 16 * (entry - 1);
         e[5] = 0xFE; /* the end in CHS: the "use the LBA" sentinel */
@@ -381,13 +434,22 @@ int main(int argc, char **argv)
             return fail(part_node, "the table read again does not show the new size");
         }
     }
+    if (measured("table", "after")) {
+        return 1;
+    }
     /* A repairing pass writes wherever the damage is, and `growset`
      * computes only the blocks a grow itself writes, so a volume that
      * needs repair cannot be undone from the set saved before this. It is
      * checked read-only first and refused rather than repaired. */
     printf("growroot: check: e2fsck -f -n %s\n", part_node);
     fflush(stdout);
+    if (measured("check-readonly", "before")) {
+        return 1;
+    }
     rc = run("/sbin/e2fsck", "-fn", part_node);
+    if (measured("check-readonly", "after")) {
+        return 1;
+    }
     if (rc != 0) {
         snprintf(text, sizeof(text), "e2fsck -fn status %d; repair it first, since a repair "
                                      "writes outside the saved set", rc);
@@ -395,14 +457,26 @@ int main(int argc, char **argv)
     }
     printf("growroot: check: e2fsck -f -p %s\n", part_node);
     fflush(stdout);
+    if (measured("check-repair", "before")) {
+        return 1;
+    }
     rc = run("/sbin/e2fsck", "-fp", part_node);
+    if (measured("check-repair", "after")) {
+        return 1;
+    }
     if (rc < 0 || rc > 2) {
         snprintf(text, sizeof(text), "e2fsck status %d; the volume is not grown", rc);
         return fail(part_node, text);
     }
     printf("growroot: grow: resize2fs %s\n", part_node);
     fflush(stdout);
+    if (measured("resize", "before")) {
+        return 1;
+    }
     rc = run("/sbin/resize2fs", 0, part_node);
+    if (measured("resize", "after")) {
+        return 1;
+    }
     if (rc != 0) {
         snprintf(text, sizeof(text), "resize2fs status %d", rc);
         return fail(part_node, text);

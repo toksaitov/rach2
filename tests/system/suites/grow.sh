@@ -26,6 +26,7 @@
 #    where `/proc/meminfo` does not exist and the memory reads as none.
 #
 # Usage: grow.sh RKERNEL RIMAGE HARNESS MKMBR GROWSET DIR
+# RACH2_GROW_SMALL=1 runs the measured grow and restoration on 64 MiB only.
 set -u
 RKERNEL=$1; RIMAGE=$2; HARNESS=$3; MKMBR=$4; GROWSET=$5; DIR=$6
 REPO=$(cd "$(dirname "$0")/../../.." && pwd)
@@ -36,6 +37,12 @@ mkdir -p "$DIR"
 DISK_SECTORS=$([ -n "${RACH2_GROW_LENOVO:-}" ] && echo 1953525168 || echo 33554432)
 START=2048
 SIZE=2097152
+GROUP_BLOCKS=32768
+if [ "${RACH2_GROW_SMALL:-0}" = 1 ]; then
+    DISK_SECTORS=131072
+    SIZE=16384
+    GROUP_BLOCKS=1024
+fi
 END=$((DISK_SECTORS - START))
 ID=47470001
 # The smallest machine on which the recovery system boots and the grow of
@@ -51,13 +58,14 @@ BASE="$DIR/base.raw"
 FULL="$DIR/full.raw"
 rm -f "$BASE" "$FULL"
 dd if=/dev/zero of="$BASE" bs=512 count=1 seek=$((DISK_SECTORS - 1)) 2>/dev/null || fail "the base disk"
-E2FSPROGS_FAKE_TIME=1 mke2fs -q -F -t ext2 -b 4096 -I 128 \
+E2FSPROGS_FAKE_TIME=1 mke2fs -q -F -t ext2 -b 4096 -g "$GROUP_BLOCKS" -I 128 \
     -O sparse_super,large_file,filetype,^dir_index,resize_inode,^ext_attr,^has_journal,^extent,^64bit,^flex_bg,^metadata_csum,^huge_file,^dir_nlink,^extra_isize \
     -E offset=$((START * 512)) "$BASE" $((SIZE / 2048))M > /dev/null 2>&1 || fail "the volume"
 "$MKMBR" --lba --id $ID "$BASE" $START:$SIZE:83 > /dev/null || fail "mkmbr"
 # The head of the volume, for growset: the superblock, the descriptors and
 # the resize inode's blocks all lie in the first group.
-dd if="$BASE" of="$DIR/head.vol" bs=1048576 skip=1 count=128 2>/dev/null || fail "the volume's head"
+HEAD_MIB=$((GROUP_BLOCKS / 256))
+dd if="$BASE" of="$DIR/head.vol" bs=1048576 skip=1 count="$HEAD_MIB" 2>/dev/null || fail "the volume's head"
 "$GROWSET" --lba $START "$DIR/head.vol" $END > "$DIR/set.txt" || fail "growset"
 grep '^total\|^blocks' "$DIR/set.txt" | sed 's/^/grow-test: set: /'
 
@@ -84,16 +92,46 @@ GROWN="growroot: result: /dev/disk0p1 grown to $END sectors"
 FSCK="send=/sbin/e2fsck -fn /dev/disk0p1 > /dev/null 2>&1; echo FSCK\"\"\$?"
 
 # ---- 1: the grow, its writes inside the set, and a file near the end ----
+grep -aq 'growroot: measure:' "$RIMAGE" || fail "the recovery image has no grow measurements"
 overlay "$DIR/one.qcow2" "$BASE"
 boot "$DIR/one.qcow2" $MEM "$DIR/one.log" \
-    "send=growroot MBRID=$ID,1" "expect=$GROWN" \
+    "send=growroot MBRID=$ID,1 --measure" "expect=$GROWN" \
     "$FSCK" "expect=FSCK0" "send=echo ROW\"\"DONE" "expect=ROWDONE" || fail "the grow"
 grep -aq "growroot: entry: /dev/disk0p1 from $SIZE to $END sectors" "$DIR/one.log" || fail "the entry's record"
 qemu-img map --output=json "$DIR/one.qcow2" > "$DIR/one.map" || fail "qemu-img map"
 "$GROWSET" --lba $START --map "$DIR/one.map" "$DIR/head.vol" $END > "$DIR/one.cover" \
     || { grep '^outside\|^coverage' "$DIR/one.cover" | head -5 >&2; fail "a sector written outside the grow set"; }
 grep '^coverage' "$DIR/one.cover" | sed 's/^/grow-test: /'
-echo "grow-test: a 1 GiB root grown to $END sectors at $MEM MiB, every write inside the grow set, e2fsck clean: OK"
+echo "grow-test: a $((SIZE / 2048)) MiB root grown to $END sectors at $MEM MiB, every write inside the grow set, e2fsck clean: OK"
+tr -d '\r' < "$DIR/one.log" > "$DIR/one.text"
+awk '
+    BEGIN { split("table check-readonly check-repair resize", phases, " ") }
+    $1 == "growroot:" && $2 == "measure:" {
+        n++
+        if (NF != 10 || $3 != phases[int((n + 1) / 2)] ||
+            $4 != (n % 2 ? "before" : "after") ||
+            $5 != "monotonic-us" || $7 != "disk-commands" || $9 != "disk-flushes" ||
+            $6 !~ /^[0-9]+$/ || $8 !~ /^[0-9]+$/ || $10 !~ /^[0-9]+$/ ||
+            $6 + 0 < time || $8 + 0 < commands || $10 + 0 < flushes) bad = 1
+        print
+        if (n % 2 == 0)
+            printf "grow-test: phase: %s %.0f us %.0f commands %.0f flushes\n",
+                $3, $6 - time, $8 - commands, $10 - flushes
+        time = $6 + 0; commands = $8 + 0; flushes = $10 + 0
+    }
+    END { exit bad || n != 8 }
+' "$DIR/one.text" || fail "the four phases need ordered time, command and flush readings"
+if [ "${RACH2_GROW_SMALL:-0}" = 1 ]; then
+    qemu-img convert -f qcow2 -O raw "$DIR/one.qcow2" "$DIR/restored.raw" || fail "the grown disk"
+    while read -r tag first count _; do
+        [ "$tag" = range ] || continue
+        dd if="$BASE" of="$DIR/restored.raw" bs=512 skip="$first" seek="$first" \
+            count="$count" conv=notrunc 2>/dev/null || fail "restoring sectors $first+$count"
+    done < "$DIR/set.txt"
+    cmp "$BASE" "$DIR/restored.raw" || fail "restoring the saved ranges did not restore the disk"
+    echo "grow-test: result: measured grow and complete disk restoration passed on 64 MiB"
+    exit 0
+fi
 # The grown volume: mounted, a file placed in its last group, read back.
 LAST=$(sed -n 's/^blocks \([0-9]*\) .*/\1/p' "$DIR/set.txt")
 boot "$DIR/one.qcow2" $MEM "$DIR/end.log" \

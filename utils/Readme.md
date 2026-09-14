@@ -89,7 +89,9 @@ The remaining account and system programs are:
 
 ## Boot and recovery programs
 
-The sealed disk's candidate entries boot the ext2 root on the fourth partition and its fallback entries the KRFFS root; both live in the fixed half of `grub.cfg`, which `bootctl` never writes, so they survive a staged menu that is absent, torn or wrong. A staged menu is GRUB script and a valid one can direct a boot, root included, which is the authority `bootctl kernel` already has. `bootctl trial candidate` after `bootctl env saved_entry fallback` is how a new root is tried with the old one a reboot away.
+The sealed disk has three partitions: boot, recovery and the ext2 root. The candidate and fallback entries boot the same root on partition 3 with different kernels. The recovery entry boots its RAM system from partition 2. These entries live in the fixed half of `grub.cfg`, which `bootctl` never writes. A staged menu is GRUB script and can direct a boot, root included. A root update keeps recovery as the saved default until the trial root has been verified; the fallback kernel cannot restore an overwritten root.
+
+`growroot MBRID=ID,N [--measure]` grows a primary ext2 partition into the free space after it, from recovery with the disk unmounted. It requires a complete table read through the writer's descriptor, checks the disk signature, target type, start, count and free space, and rewrites that checked sector. It then asks the kernel to read the table again, checks the volume read-only, runs the repairing check only if the read-only check was clean, and calls `resize2fs`. `--measure` records monotonic microseconds and `/proc/disk`'s command and flush counts before and after the table change, the two checks and the resize. The counts cover all disk activity; use an otherwise idle recovery system to attribute their differences to the phases. These readings do not replace the saved sectors and owner approval required for a hardware write.
 
 `bootctl` accepts these exact forms:
 
