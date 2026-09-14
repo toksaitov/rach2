@@ -654,17 +654,27 @@ static bool test_clock(uint32_t *measured_us, const char **why, uint32_t *walk_c
         uint32_t ticks_before = kernel_ticks;
         uint32_t clock_before = pit_now_us();
         uint32_t by_clock, by_tick;
+        int stepped_back = 0;
 
         previous = clock_before;
         for (i = 0; i < 50; i++) {
             uint32_t now = pit_now_us();
 
             if (now < previous) {
-                *why = "the clock stepped backwards inside a walk";
-                return false;
+                stepped_back = 1;
+                break;
             }
             previous = now;
             k_udelay(1000);
+        }
+        /* One backwards reading ends this walk and not the check, for the
+           reason the three walks exist: an interrupt taken between two reads
+           of the counter has been seen to give one backwards reading on this
+           laptop and under a busy emulator, and a clock that really runs
+           backwards does it in every walk. */
+        if (stepped_back) {
+            *why = "three walks each saw the clock step backwards";
+            continue;
         }
         by_clock = pit_now_us() - clock_before;
         by_tick = (kernel_ticks - ticks_before) * 10000u;
@@ -674,8 +684,8 @@ static bool test_clock(uint32_t *measured_us, const char **why, uint32_t *walk_c
             by_clock <= by_tick + by_tick / 4u) {
             return true;
         }
+        *why = "three walks each disagreed with the tick by more than a quarter";
     }
-    *why = "three walks each disagreed with the tick by more than a quarter";
     return false;
 }
 

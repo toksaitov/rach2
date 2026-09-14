@@ -182,15 +182,19 @@ echo "procfiles-test: the three mounts each name their own source: OK"
 DRIVE_LOG="$REAL.applets.log"
 boot_driven -kernel "$KERNEL" -initrd "$REAL" \
     -net nic,model=rtl8139 -net "user,hostfwd=tcp::$FWD_PORT-:22"
+# The seconds below are the plain ones: `drive_expect`, `drive_prompt` and
+# `drive_login` scale what they are given. Scaling them here as well made a
+# 60-second bound 64 minutes on a busy host, and on 2026-09-14 a machine that
+# stopped answering held a whole set for an hour before that bound could fire.
 applet() { # applet LINE TOKEN: the line, its token, and the prompt after its output
     drive_type "$1"
-    if ! drive_expect "$2" "$(scaled 60)" || ! drive_prompt "$(scaled 60)"; then
+    if ! drive_expect "$2" 60 || ! drive_prompt 60; then
         stop
         echo "procfiles-test: FAIL: the applet run stopped before $2" >&2
         exit 1
     fi
 }
-if ! drive_login "$USER_NAME" "$PASSWORD" "$(scaled 90)"; then
+if ! drive_login "$USER_NAME" "$PASSWORD" 90; then
     stop
     echo "procfiles-test: FAIL: the real image did not log its user in" >&2
     exit 1
