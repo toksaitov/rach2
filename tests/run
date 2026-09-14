@@ -763,16 +763,11 @@ done
 check_host $diskimage $sockets || { echo "run: result: refused: this host cannot run the set" >&2; exit 1; }
 
 lock_take "$@" || { echo "run: result: refused: the tree is not free" >&2; exit 1; }
-# A runner whose lock is gone but whose processes are not. The lock is the
-# first check and says more, naming the run that holds the tree; this is the
-# tree whose lock was removed by hand while a set was still running, where
-# there is nothing to read but the process table.
-others=$(pgrep -f "$0" 2>/dev/null | grep -v "^$$\$" | tr '\n' ' ' | sed 's/ *$//')
-if [ -n "$others" ]; then
-    echo "run: result: refused: a runner with no lock of its own is still running: pids $others" >&2
-    lock_release
-    exit 1
-fi
+# A sweep of the process table for another runner stood here for an hour on
+# 2026-09-14 and was removed: a runner of another tree looks exactly like a
+# runner of this one on a command line, so the runner's own selftest, which
+# drives a tree of its own while a set runs, refused itself. The lock is what
+# knows which tree a run holds, and it names the run that holds it.
 # The line that says this run began. Everything below it belongs to this run,
 # and a log without it is a run that never started.
 echo "run: starting: $* (pid $$, $(date '+%Y-%m-%d %H:%M:%S'))"
