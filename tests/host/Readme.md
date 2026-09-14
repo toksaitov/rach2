@@ -45,7 +45,7 @@ Do not wrap a dependency onto an unmarked continuation line. Native tests may us
 
 ## Tests
 
-The suite contains 69 native test programs.
+The suite contains 71 native test programs.
 
 ### Kernel foundations and memory
 
@@ -90,6 +90,7 @@ The suite contains 69 native test programs.
 * `tls_hosttest.c` checks `user_desc` validation and TLS base resolution for `set_thread_area`.
 * `uimage_hosttest.c` checks the i386 initial stack, argument and environment arrays, auxiliary vectors, random bytes, `AT_SECURE`, alignment, and oversized input.
 * `usb_hosttest.c` walks configuration descriptors in buffers allocated to exactly their length, so a read past the end is a failure rather than a byte of whatever follows. It checks a boot keyboard's interface found with its configuration value, class, endpoint and interval; an unknown descriptor stepped over by its length; interfaces refused for their class, their missing boot protocol, an alternate setting, a configuration numbered zero, or an endpoint that reports nothing; and descriptors that give a length of zero, run past the buffer, or stop short of their own header.
+* `exit_hosttest.c` runs the shared exit cleanup with file-close and working-directory callbacks that wait on the real wait queue. Its scheduler substitute releases a contended lock only after finding the dying process blocked on that queue. Five cases force six waits and check that death and `SIGCHLD` are published after cleanup, the encoded status is retained, the parent is woken, and no waiter remains. `sh tests/host/exit_mutate.sh` compiles private fixed, early-zombie and restored copies; the early-zombie copy must fail both the publication and final-state checks.
 * `wait_queue_hosttest.c` checks fixed-slot enqueue, idempotent dequeue, queue capacity, and wake-all state changes.
 
 ### Network
@@ -107,6 +108,8 @@ The suite contains 69 native test programs.
 * `netdev_hosttest.c` runs the driver table against three models whose verdicts it sets. It checks the probe order, that an absent card is stepped over and a failed one stops the walk and is silenced, which reason is kept, and what the interface answers with nothing bound.
 
 ### Boot and host utilities
+
+* `growroot_hosttest.c` includes the real grow program with device calls replaced by memory and proc files by temporary streams. Ten cases check one validated sector written without a reread, unchanged bytes outside the target length and CHS fields, failed and short reads, changed disk and partition fields, and newly occupied grow space. The ioctl substitute stops before either ext2 tool runs. `sh tests/host/growroot_mutate.sh` builds private copies with the fixed order, the old order and the source restored; the old order must fail the checks for a refused write and a sector read once.
 
 * `e2fsprogs_alignment_hosttest.c` and `e2fsprogs_alignment64_hosttest.c` include the port's `unix_io.c` with host configuration and I/O stubs, selecting `pread`/`pwrite` and `pread64`/`pwrite64` respectively. Both force an even caller address two bytes past a 512-byte boundary. They check whole-buffer transfers and bytes, 64 KiB aligned reads and writes, sector preservation for short and interior writes, and upstream retries, short counts, read zero fill, and errors through seek plus read or write. The cache, channel opening, guest libc, and kernel are outside these tests. `sh tests/host/e2fsprogs_alignment_mutate.sh` compiles and runs both tests with the patch, changes `BUFFER_ALIGNED` back to `IS_ALIGNED`, requires all fourteen misaligned rows in each test to fail, then restores the source and compiles and runs them again. A shell trap stops the test process before restoring the source on interruption. Each phase uses fresh binaries; the script preserves its logs and saved source in the temporary directory it prints.
 
