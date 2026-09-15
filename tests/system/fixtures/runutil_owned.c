@@ -23,7 +23,7 @@ static void release_worker(int sig)
  * The PID file is solely for the fixture's assertions and final cleanup.
  * It is never a runner ledger. An alarm bounds a broken test's worker.
  */
-static void worker(const char *path, unsigned int limit, int parting)
+static void worker(const char *path, unsigned int limit, int seconds, int term_exit)
 {
     FILE *fp;
     int nullfd = open("/dev/null", O_RDWR);
@@ -31,7 +31,7 @@ static void worker(const char *path, unsigned int limit, int parting)
         _exit(125);
     if (nullfd > 2)
         close(nullfd);
-    signal(SIGTERM, SIG_IGN);
+    signal(SIGTERM, term_exit ? release_worker : SIG_IGN);
     signal(SIGUSR1, release_worker);
     alarm(limit);
     fp = fopen(path, "w");
@@ -40,8 +40,10 @@ static void worker(const char *path, unsigned int limit, int parting)
     fprintf(fp, "%ld\n", (long)getpid());
     if (fclose(fp) != 0)
         _exit(125);
-    if (parting) {
-        struct timespec delay = {1, 0};
+    if (seconds) {
+        struct timespec delay;
+        delay.tv_sec = seconds;
+        delay.tv_nsec = 0;
         while (nanosleep(&delay, &delay) != 0 && errno == EINTR)
             ;
         _exit(0);
@@ -65,15 +67,16 @@ int main(int argc, char **argv)
     if (argc != 3)
         return 125;
     if (!strcmp(argv[1], "sentinel"))
-        worker(argv[2], 120, 0);
+        worker(argv[2], 300, 0, 0);
     pid = fork();
     if (pid < 0)
         return 125;
     if (!pid) {
-        if (!strcmp(argv[1], "group")) {
+        if (!strcmp(argv[1], "group") || !strcmp(argv[1], "recorded")) {
             if (setpgid(0, 0) != 0)
                 _exit(125);
-        } else {
+        } else if (strcmp(argv[1], "ingroup") && strcmp(argv[1], "draining") &&
+                   strcmp(argv[1], "stubborn")) {
             if (setsid() < 0)
                 _exit(125);
             if (!strcmp(argv[1], "session")) {
@@ -84,7 +87,9 @@ int main(int argc, char **argv)
                     _exit(0);
             }
         }
-        worker(argv[2], 20, !strcmp(argv[1], "parting"));
+        worker(argv[2], 60,
+               !strcmp(argv[1], "draining") ? 6 : (!strcmp(argv[1], "parting") ? 1 : 0),
+               !strcmp(argv[1], "ingroup") || !strcmp(argv[1], "recorded"));
     }
     for (i = 0; i < 200; i++) {
         struct timespec delay = {0, 10000000};
@@ -99,13 +104,27 @@ int main(int argc, char **argv)
     if (!strcmp(argv[1], "interrupted"))
         for (;;)
             pause();
-    if (!strcmp(argv[1], "parting")) {
+    if (!strcmp(argv[1], "parting") || !strcmp(argv[1], "recorded")) {
         const char *ledger = getenv("RACH2_QEMU_LEDGER");
-        if (!ledger || !(fp = fopen(ledger, "a")))
+        char *groups, *slash;
+        if (!ledger)
             return 125;
-        fprintf(fp, "%ld\n", (long)pid);
+        groups = malloc(strlen(ledger) + 20);
+        if (!groups)
+            return 125;
+        strcpy(groups, ledger);
+        slash = strrchr(groups, '/');
+        if (!slash)
+            return 125;
+        strcpy(slash + 1, "peer.groups");
+        fp = fopen(groups, "a");
+        free(groups);
+        if (!fp)
+            return 125;
+        fprintf(fp, "%ld\n", (long)getpgid(pid));
         return fclose(fp) == 0 ? 0 : 125;
     }
+
     if (strcmp(argv[1], "clean"))
         return 0;
     if (kill(pid, SIGUSR1) != 0)

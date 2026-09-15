@@ -14,8 +14,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <glob.h>
 #ifdef __APPLE__
 #include <libproc.h>
+#include <sys/proc.h>
 #else
 #include <dirent.h>
 #endif
@@ -148,6 +150,200 @@ static struct process *descendants(pid_t root, size_t *count)
     return list;
 }
 
+struct identity {
+    pid_t group;
+    unsigned long long start, fraction;
+    int zombie;
+    char command[64];
+};
+
+/** Read a PID's start time and state without treating a zombie as live.
+ * A PID alone can identify an unrelated process after reuse. Zero means
+ * gone; minus one means inspection was unavailable, not a live process.
+ */
+static int process_identity(pid_t pid, struct identity *id)
+{
+    memset(id, 0, sizeof(*id));
+#ifdef __APPLE__
+    struct proc_bsdinfo info;
+    int bytes;
+    errno = 0;
+    bytes = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, sizeof(info));
+    if (bytes != sizeof(info))
+        return errno == ESRCH ? 0 : -1;
+    id->group = (pid_t)info.pbi_pgid;
+    id->start = info.pbi_start_tvsec;
+    id->fraction = info.pbi_start_tvusec;
+    id->zombie = info.pbi_status == SZOMB;
+    snprintf(id->command, sizeof(id->command), "%.*s", (int)sizeof(info.pbi_name), info.pbi_name);
+#else
+    char path[64], text[4096], *end, *word, *saved;
+    FILE *fp;
+    size_t bytes;
+    int field;
+    snprintf(path, sizeof(path), "/proc/%ld/stat", (long)pid);
+    fp = fopen(path, "r");
+    if (!fp)
+        return errno == ENOENT ? 0 : -1;
+    bytes = fread(text, 1, sizeof(text) - 1, fp);
+    fclose(fp);
+    text[bytes] = 0;
+    end = strrchr(text, ')');
+    word = strchr(text, '(');
+    if (!end || !word || word >= end)
+        return -1;
+    *end = 0;
+    snprintf(id->command, sizeof(id->command), "%.63s", word + 1);
+    for (field = 3, word = strtok_r(end + 1, " ", &saved); word;
+         field++, word = strtok_r(NULL, " ", &saved)) {
+        if (field == 3)
+            id->zombie = *word == 'Z' || *word == 'X';
+        else if (field == 5)
+            id->group = (pid_t)strtol(word, NULL, 10);
+        else if (field == 22) {
+            id->start = strtoull(word, NULL, 10);
+            return 1;
+        }
+    }
+    return -1;
+#endif
+#ifdef __APPLE__
+    return 1;
+#endif
+}
+
+/** Record identities beside the PID ledger before the machine execs. */
+static int record_identity(const char *ledger, pid_t machine, pid_t relay)
+{
+    char *path = malloc(strlen(ledger) + 16);
+    FILE *fp;
+    pid_t pids[2] = {machine, relay};
+    int i, result = 0;
+    if (!path)
+        return -1;
+    sprintf(path, "%s.identity", ledger);
+    fp = fopen(path, "a");
+    free(path);
+    if (!fp)
+        return -1;
+    for (i = 0; i < 2; i++) {
+        struct identity id;
+        if (process_identity(pids[i], &id) != 1) {
+            fprintf(stderr, "runutil: machine identity unavailable for pid %ld\n", (long)pids[i]);
+            continue;
+        }
+        if (fprintf(fp, "%ld %ld %llu %llu\n", (long)pids[i], (long)id.group, id.start,
+                    id.fraction) < 0)
+            result = -1;
+    }
+    if (fclose(fp) != 0)
+        result = -1;
+    return result;
+}
+
+/** Match a registered process before signalling a retained ledger PID.
+ * A missing identity file permits legacy PID-only ledgers used by the
+ * lock recovery fixtures. Every new machine writes an identity file.
+ */
+static int registered_machine(const char *ledger, pid_t pid)
+{
+    char *path = malloc(strlen(ledger) + 16);
+    FILE *fp;
+    long saved_pid, group;
+    unsigned long long start, fraction;
+    struct identity id;
+    int result = 0;
+    if (!path)
+        return 0;
+    sprintf(path, "%s.identity", ledger);
+    fp = fopen(path, "r");
+    free(path);
+    if (!fp)
+        return errno == ENOENT;
+    if (process_identity(pid, &id) == 1 && !id.zombie)
+        while (fscanf(fp, "%ld %ld %llu %llu", &saved_pid, &group, &start, &fraction) == 4)
+            if (saved_pid == pid && id.group == group && id.start == start &&
+                id.fraction == fraction) {
+                result = 1;
+                break;
+            }
+    fclose(fp);
+    return result;
+}
+
+/** List current registered PIDs for the outer runner's cleanup. */
+static void registered_pids(const char *ledger)
+{
+    FILE *fp = fopen(ledger, "r");
+    long pid;
+    if (!fp)
+        return;
+    while (fscanf(fp, "%ld", &pid) == 1)
+        if (pid > 1 && registered_machine(ledger, (pid_t)pid))
+            printf("%ld\n", pid);
+    fclose(fp);
+}
+
+/** Check current identities after TERM, allowing fifteen seconds to stop.
+ * Old machine and relay PIDs remain in the ledger across many boots.
+ * Exited processes and reused PIDs cannot fail or be signalled by this
+ * check. A failure prints the matching PID, group, start time and command.
+ */
+static int check_machines(const char *name, const char *ledger)
+{
+    char *path = malloc(strlen(ledger) + 16);
+    double started = now();
+    int signalled = 0, failed = 0, unknown = 0;
+    if (!path)
+        return 0;
+    sprintf(path, "%s.identity", ledger);
+    for (;;) {
+        FILE *fp = fopen(path, "r");
+        long pid, group;
+        unsigned long long start, fraction;
+        int live = 0;
+        if (!fp) {
+            if (errno != ENOENT)
+                unknown = 1;
+            break;
+        }
+        while (fscanf(fp, "%ld %ld %llu %llu", &pid, &group, &start, &fraction) == 4) {
+            struct identity id;
+            int found = process_identity((pid_t)pid, &id);
+            if (found < 0)
+                unknown = 1;
+            if (found != 1 || id.zombie || id.group != group || id.start != start ||
+                id.fraction != fraction)
+                continue;
+            live = 1;
+            if (!signalled)
+                kill((pid_t)pid, SIGTERM);
+            else if (now() - started >= 15) {
+                fprintf(stderr,
+                        "run: %s: machine survivor: pid %ld, group %ld, start %llu.%llu, %s\n",
+                        name, pid, group, start, fraction, id.command);
+                kill((pid_t)pid, SIGKILL);
+                failed = 1;
+            }
+        }
+        if (!feof(fp) || ferror(fp))
+            unknown = 1;
+        fclose(fp);
+        if (!live || failed)
+            break;
+        if (!signalled) {
+            fprintf(stderr, "run: %s: stopping registered machines (15 s grace)\n", name);
+            started = now();
+            signalled = 1;
+        }
+        pause_for(0.1);
+    }
+    if (unknown)
+        fprintf(stderr, "run: %s: machine identity inspection incomplete\n", name);
+    free(path);
+    return failed;
+}
+
 /** Signal the command group, saved descendants, and registered machines. */
 static void signal_owned(pid_t root, struct process *list, size_t n, const char *ledger, int sig)
 {
@@ -161,7 +357,7 @@ static void signal_owned(pid_t root, struct process *list, size_t n, const char 
     fp = ledger ? fopen(ledger, "r") : NULL;
     if (fp) {
         while (fscanf(fp, "%ld", &pid) == 1)
-            if (pid > 1 && pid != getpid()) {
+            if (pid > 1 && pid != getpid() && registered_machine(ledger, (pid_t)pid)) {
                 kill((pid_t)pid, sig);
                 if (getpgid((pid_t)pid) == pid)
                     kill((pid_t)-pid, sig);
@@ -171,8 +367,8 @@ static void signal_owned(pid_t root, struct process *list, size_t n, const char 
 }
 
 /** Match a pipe writer by its kernel identity, not its descriptor number.
- * Inspection is for cleanup only. Failure to inspect a process cannot
- * turn an open liveness pipe into a passing result.
+ * An open pipe asks for inspection. Only identified live holders can
+ * affect the verdict; a vanished or unreadable process cannot fail it.
  */
 static int holds_token(pid_t pid, const struct stat *token)
 {
@@ -223,22 +419,25 @@ static int holds_token(pid_t pid, const struct stat *token)
 #endif
 }
 
-/** List and signal current pipe holders, including reparented workers.
- * The supervisor owns only the reader and is excluded. Rechecking the
- * pipe before each signal avoids using the earlier descendant snapshot
- * as authority for a detached worker's PID.
+/** Collect current pipe holders with valid process groups.
+ * The group is read between two descriptor checks. An exiting process
+ * whose group or descriptors disappeared is not a named live holder.
+ * Inspection can be incomplete; the caller must not infer a failure
+ * from an empty result, even when the pipe is still open.
  */
-static void token_holders(const struct stat *token, int sig, const char *name)
+static struct process *token_holders(const struct stat *token, size_t *count)
 {
+    struct process *list = NULL;
+    *count = 0;
 #ifdef __APPLE__
     pid_t *pids;
     int size = proc_listpids(PROC_ALL_PIDS, 0, NULL, 0), bytes, i;
     if (size <= 0)
-        return;
+        return NULL;
     size += 4096 * (int)sizeof(*pids);
     pids = malloc((size_t)size);
     if (!pids)
-        return;
+        return NULL;
     bytes = proc_listpids(PROC_ALL_PIDS, 0, pids, size);
     for (i = 0; i < bytes / (int)sizeof(*pids); i++) {
         pid_t pid = pids[i];
@@ -246,37 +445,107 @@ static void token_holders(const struct stat *token, int sig, const char *name)
     struct dirent *entry;
     DIR *dir = opendir("/proc");
     if (!dir)
-        return;
+        return NULL;
     while ((entry = readdir(dir)) != NULL) {
         pid_t pid = (pid_t)strtol(entry->d_name, NULL, 10);
 #endif
+        pid_t group;
+        struct process *next;
         if (pid <= 1 || pid == getpid() || !holds_token(pid, token))
             continue;
-        if (name)
-            fprintf(stderr, "run: %s: token holder pid %ld, group %ld\n", name, (long)pid,
-                    (long)getpgid(pid));
-        if (sig && holds_token(pid, token))
-            kill(pid, sig);
+        group = getpgid(pid);
+        if (group <= 1 || !holds_token(pid, token))
+            continue;
+        next = realloc(list, (*count + 1) * sizeof(*list));
+        if (!next)
+            break;
+        list = next;
+        list[*count].pid = pid;
+        list[*count].group = group;
+        list[*count].parent = 0;
+        list[*count].owned = 0;
+        (*count)++;
     }
 #ifdef __APPLE__
     free(pids);
 #else
     closedir(dir);
 #endif
+    return list;
+}
+
+/** Signal newly inspected holders, rechecking identity before each kill. */
+static void signal_token(const struct stat *token, int sig)
+{
+    size_t count, i;
+    struct process *list = token_holders(token, &count);
+    for (i = 0; i < count; i++)
+        if (getpgid(list[i].pid) == list[i].group && holds_token(list[i].pid, token))
+            kill(list[i].pid, sig);
+    free(list);
+}
+
+/** Mark holders in the runner's group or any of its recorded groups.
+ * All ledgers beside the suite's machine ledger belong to the same run.
+ * A failed ledger read prevents an outside-group verdict: the checker
+ * cannot establish that such a group was never recorded.
+ */
+static int recorded_holders(struct process *list, size_t count, pid_t root, const char *ledger)
+{
+    char *pattern, *slash;
+    glob_t paths;
+    size_t i, j;
+    int result;
+    for (i = 0; i < count; i++)
+        list[i].owned = list[i].group == root || list[i].group == getpgrp();
+    pattern = malloc(strlen(ledger) + 16);
+    if (!pattern)
+        return -1;
+    strcpy(pattern, ledger);
+    slash = strrchr(pattern, '/');
+    if (slash)
+        strcpy(slash + 1, "*.groups");
+    else
+        strcpy(pattern, "*.groups");
+    memset(&paths, 0, sizeof(paths));
+    result = glob(pattern, 0, NULL, &paths);
+    free(pattern);
+    if (result != 0 && result != GLOB_NOMATCH) {
+        globfree(&paths);
+        return -1;
+    }
+    result = 0;
+    for (i = 0; i < paths.gl_pathc; i++) {
+        FILE *fp = fopen(paths.gl_pathv[i], "r");
+        long group;
+        if (!fp) {
+            result = -1;
+            break;
+        }
+        while (fscanf(fp, "%ld", &group) == 1)
+            for (j = 0; j < count; j++)
+                if (list[j].group == group)
+                    list[j].owned = 1;
+        if (!feof(fp) || ferror(fp))
+            result = -1;
+        fclose(fp);
+    }
+    globfree(&paths);
+    return result;
 }
 
 /** Stop a command, escalating after two seconds without losing its children. */
-static void stop_owned(pid_t root, const char *ledger, const struct stat *token, const char *name)
+static void stop_owned(pid_t root, const char *ledger, const struct stat *token)
 {
     size_t n;
     struct process *list = descendants(root, &n);
     signal_owned(root, list, n, ledger, SIGTERM);
     if (token)
-        token_holders(token, SIGTERM, name);
+        signal_token(token, SIGTERM);
     pause_for(2);
     signal_owned(root, list, n, ledger, SIGKILL);
     if (token)
-        token_holders(token, SIGKILL, NULL);
+        signal_token(token, SIGKILL);
     free(list);
 }
 
@@ -293,54 +562,78 @@ static int token_open(int fd)
     return n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) ? 1 : 2;
 }
 
-/** Allow registered machines their existing five seconds to finish. */
-static int machines_live(const char *ledger)
-{
-    FILE *fp = fopen(ledger, "r");
-    long pid;
-    int live = 0;
-    if (!fp)
-        return 0;
-    while (fscanf(fp, "%ld", &pid) == 1)
-        if (pid > 1 && kill((pid_t)pid, 0) == 0)
-            live = 1;
-    fclose(fp);
-    return live;
-}
-
-/** Fail a completed suite whose descendants still hold its pipe writer.
- * The pipe is made before fork, without an environment variable. The
- * writer survives exec, setsid, setpgid and reparenting. Deliberately
- * closing it, or execing a program that closes inherited descriptors,
- * escapes this check. It is a liveness token, not process containment.
- * Listing failures affect cleanup and diagnostics, never the verdict.
+/** Inspect a completed suite without mistaking shutdown for detachment.
+ * The inherited writer survives exec, setsid, setpgid and reparenting.
+ * Closing inherited descriptors escapes this check. An open pipe with
+ * no identifiable holder is inconclusive and cannot fail the suite.
+ * A holder outside every recorded group fails immediately, with its PID
+ * and group. Recorded groups receive TERM and fifteen seconds to stop,
+ * including a QEMU still shutting down under the twenty-worker pool.
+ * Only an identified survivor fails when that grace expires.
  */
 static int check_token(int fd, const struct stat *token, pid_t root, const char *ledger,
                        const char *name, int stopped)
 {
     double started = now();
-    int state = token_open(fd);
-    while (state == 1 && !stopped && machines_live(ledger) && now() - started < 5 && !interrupted) {
-        pause_for(0.02);
-        state = token_open(fd);
+    int signalled = stopped, failed = 0;
+    while (token_open(fd)) {
+        struct process *list;
+        size_t count, i;
+        int complete;
+        list = token_holders(token, &count);
+        if (!count) {
+            free(list);
+            if (token_open(fd))
+                fprintf(stderr, "run: %s: token inspection found no current holder; inconclusive\n",
+                        name);
+            return 0;
+        }
+        complete = recorded_holders(list, count, root, ledger);
+        if (complete != 0) {
+            free(list);
+            fprintf(stderr, "run: %s: group ledgers could not be read; token check inconclusive\n",
+                    name);
+            return 0;
+        }
+        for (i = 0; i < count; i++) {
+            if (getpgid(list[i].pid) != list[i].group || !holds_token(list[i].pid, token))
+                continue;
+            if ((!list[i].owned && complete == 0) || (signalled && now() - started >= 15)) {
+                fprintf(stderr, "run: %s: %s: pid %ld, group %ld\n", name,
+                        list[i].owned ? "recorded group did not stop within 15 s"
+                                      : "holder outside recorded groups",
+                        (long)list[i].pid, (long)list[i].group);
+                failed = 1;
+            }
+        }
+        if (!signalled && !failed && !interrupted) {
+            fprintf(stderr, "run: %s: stopping recorded groups (15 s grace)\n", name);
+            signal_owned(root, NULL, 0, ledger, SIGTERM);
+            for (i = 0; i < count; i++)
+                if (list[i].owned && list[i].group != getpgrp() &&
+                    getpgid(list[i].pid) == list[i].group && holds_token(list[i].pid, token))
+                    kill(-list[i].group, SIGTERM);
+            signal_token(token, SIGTERM);
+            started = now();
+            signalled = 1;
+        }
+        free(list);
+        if (failed || interrupted) {
+            stop_owned(root, ledger, token);
+            break;
+        }
+        pause_for(0.1);
     }
-    if (!state)
-        return 0;
-    if (!stopped)
-        stop_owned(root, ledger, token, name);
-    started = now();
-    while (token_open(fd) && now() - started < 2) {
-        token_holders(token, SIGKILL, NULL);
-        pause_for(0.02);
+    if (failed || stopped || interrupted) {
+        started = now();
+        while (token_open(fd) && now() - started < 2) {
+            signal_token(token, SIGKILL);
+            pause_for(0.02);
+        }
+        if (!token_open(fd))
+            fprintf(stderr, "run: %s: all identified pipe holders stopped\n", name);
     }
-    fprintf(stderr, "run: %s: left its liveness token open; the suite failed\n", name);
-    if (token_open(fd)) {
-        fprintf(stderr, "run: %s: pipe holders remain or cannot be inspected\n", name);
-        token_holders(token, 0, name);
-    } else {
-        fprintf(stderr, "run: %s: all pipe holders stopped\n", name);
-    }
-    return 1;
+    return failed;
 }
 
 /** Read a file's size; an absent file has no output yet. */
@@ -498,7 +791,7 @@ static int supervise(char **cmd, const char *name, double idle, const char *ledg
             timedout = 1;
         }
         if (interrupted || timedout) {
-            stop_owned(child, ledger, suite ? &token : NULL, name);
+            stop_owned(child, ledger, suite ? &token : NULL);
             break;
         }
         if (done) {
@@ -582,8 +875,10 @@ static int machine_exec(const char *ledger, char **cmd)
     close(pipes[0]);
     close(logfd);
     fp = fopen(ledger, "a");
-    if (!fp) {
+    if (!fp || record_identity(ledger, machine, relay) != 0) {
         perror("runutil: machine ledger");
+        if (fp)
+            fclose(fp);
         close(pipes[1]);
         kill(relay, SIGTERM);
         waitpid(relay, NULL, 0);
@@ -689,6 +984,12 @@ int main(int argc, char **argv)
     if (argc >= 6 && (!strcmp(argv[1], "watch") || !strcmp(argv[1], "suite")))
         return supervise(argv + 5, argv[2], strtod(argv[3], NULL), argv[4],
                          !strcmp(argv[1], "suite"));
+    if (argc == 3 && !strcmp(argv[1], "registered")) {
+        registered_pids(argv[2]);
+        return 0;
+    }
+    if (argc == 4 && !strcmp(argv[1], "machines"))
+        return check_machines(argv[2], argv[3]);
     if (argc >= 4 && !strcmp(argv[1], "machine"))
         return machine_exec(argv[2], argv + 3);
     fprintf(stderr, "runutil: invalid arguments\n");

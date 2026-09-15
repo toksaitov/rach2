@@ -13,9 +13,9 @@
 # built under a temporary name and renamed into place only after every step
 # passes, so no unchecked image ever exists under the target's name.
 #
-# Usage: ./mkext2.sh <manifest> <output.ext2> [size_in_megabytes]
+# Usage: ./mkext2.sh <manifest> <output.ext2> [size_mb] [blocks_per_group]
 #
-# The default size is 1024 MiB, the size of the sealed disk's fourth partition;
+# The default size is 1024 MiB, the size of the sealed disk's third partition;
 # the file is sparse on the host. Run from anywhere; the manifest's `build/...`
 # host paths resolve because this cd's to the repo root first.
 #
@@ -30,10 +30,25 @@ SETIDCHECK="$REPO/build/tools/inspect/setidcheck"
 MANIFEST="$1"
 OUT="$2"
 SIZE="${3:-1024}"
+GROUP_BLOCKS="${4:-}"
 
 if [ -z "$MANIFEST" ] || [ -z "$OUT" ]; then
-    echo "usage: mkext2.sh <manifest> <output.ext2> [size_mb]" >&2
+    echo "usage: mkext2.sh <manifest> <output.ext2> [size_mb] [blocks_per_group]" >&2
     exit 2
+fi
+set --
+if [ -n "$GROUP_BLOCKS" ]; then
+    case "$GROUP_BLOCKS" in
+        *[!0-9]*) echo "mkext2: invalid blocks per group: $GROUP_BLOCKS" >&2; exit 2 ;;
+    esac
+    GROUP_BLOCKS=$(awk -v n="$GROUP_BLOCKS" 'BEGIN {
+        if (n < 256 || n > 32768 || n % 8) exit 1
+        printf "%.0f", n
+    }') || {
+        echo "mkext2: blocks per group must be a multiple of 8 from 256 to 32768" >&2
+        exit 2
+    }
+    set -- -g "$GROUP_BLOCKS"
 fi
 if [ ! -x "$STAGEIMAGE" ]; then
     echo "mkext2: $STAGEIMAGE is missing; run 'make -C krffs' first" >&2
@@ -71,7 +86,7 @@ trap 'rm -rf "$WORK"' EXIT INT TERM
 # with dir_index off, are fixed, so that one manifest makes one image.
 PROFILE="sparse_super,large_file,filetype,^dir_index,resize_inode,^ext_attr,^has_journal,^extent,^64bit,^flex_bg,^metadata_csum,^huge_file,^dir_nlink,^extra_isize"
 : > "$TMP"
-E2FSPROGS_FAKE_TIME=1 mke2fs -q -F -t ext2 -b 4096 -I 128 -O "$PROFILE" \
+E2FSPROGS_FAKE_TIME=1 mke2fs -q -F -t ext2 -b 4096 -I 128 -O "$PROFILE" "$@" \
     -E hash_seed=52616368-3200-4578-7432-000000000002 \
     -U 52616368-3200-4578-7432-000000000001 -L rach2 -d "$TREE" "$TMP" "${SIZE}M" \
     > "$MKLOG" 2>&1
@@ -87,6 +102,10 @@ sb16() { od -A n -t u2 -j "$((1024 + $1))" -N 2 "$TMP" | tr -d ' '; }
 [ "$(sb16 56)" = "61267" ] || { echo "mkext2: no ext2 magic in the image" >&2; exit 1; }
 [ "$(sb 76)" = "1" ] || { echo "mkext2: revision $(sb 76), not 1" >&2; exit 1; }
 [ "$(sb 24)" = "2" ] || { echo "mkext2: block size log $(sb 24), not 2 (4096)" >&2; exit 1; }
+if [ -n "$GROUP_BLOCKS" ] && [ "$(sb 32)" != "$GROUP_BLOCKS" ]; then
+    echo "mkext2: blocks per group $(sb 32), expected $GROUP_BLOCKS" >&2
+    exit 1
+fi
 [ "$(sb16 88)" = "128" ] || { echo "mkext2: inode size $(sb16 88), not 128" >&2; exit 1; }
 [ "$(sb 92)" = "16" ] || { echo "mkext2: compatible features $(sb 92), not resize_inode alone" >&2; exit 1; }
 [ "$(sb 96)" = "2" ] || { echo "mkext2: incompatible features $(sb 96), not filetype alone" >&2; exit 1; }

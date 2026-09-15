@@ -1409,21 +1409,22 @@ $(RECOVERY_ISO): $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) tools/image/mkiso.sh tools
 	sh tools/image/mkiso.sh $(RECOVERY_NAME)
 # A stick of the same shape carrying a 138 MiB disk instead of the sealed one,
 # so the rows that install do not each write a gibibyte and a half. The image
-# it carries has the shape the sealed disk has, a boot partition, a KRFFS root,
+# it carries has the shape the sealed disk has, a boot partition,
 # a recovery partition and a 64 MiB ext2 root; a machine written from it boots,
 # and that ext2 root is what the installer writes accounts into.
 # The ext2 root the installer's own disk carries: the same manifest the sealed
 # disk's root is built from, since its `init` is the one that starts the SSH
 # server and reads the policy the installer writes. It is 64 MiB, the smallest
 # that holds it, because every row that installs reads and hashes the whole
-# image and the emulator hashes at a megabyte or two a second.
+# image and the emulator hashes at a megabyte or two a second. Its 16384-block
+# groups fill the first 64 MiB group, as growset requires.
 INSTALLER_EXT2 = $(IMAGES_DIR)/installer-root.ext2
 $(INSTALLER_EXT2): $(FS_DEMO_IMAGES) $(DEMO_CREDS) krffs/manifests/rach2-metal-disk.manifest \
                    $(shell sh krffs/manifest_deps.sh krffs/manifests/rach2-metal-disk.manifest) \
                    tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils \
                    check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti \
                    ports/doom
-	sh tools/image/mkext2.sh krffs/manifests/rach2-metal-disk.manifest $@ 64
+	sh tools/image/mkext2.sh krffs/manifests/rach2-metal-disk.manifest $@ 64 16384
 INSTALLER_DISK = $(IMAGES_DIR)/installer-test.disk
 $(INSTALLER_DISK): $(DEMO_CREDS) $(INSTALLER_EXT2) $(RECOVERY_IMAGE) tools/image/mkdisk_grub.sh \
                    | rach2 rach2-recovery utils krffs

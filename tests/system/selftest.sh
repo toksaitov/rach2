@@ -211,6 +211,7 @@ echo $$ >> "$(dirname "$0")/../machines"
 # returns, which is what a real one does: it flushes what it was given first.
 case "$*" in
     *--selftest-part*) exec sleep 2 ;;
+    *--selftest-hold*) trap '' TERM; exec sleep 60 ;;
     *--selftest-killed*) echo $$ > "$(dirname "$0")/../kill-ready"; exec sleep 30 ;;
     *--selftest-busy*)
         i=0; while [ "$i" -lt 6 ]; do echo console-progress; sleep 1; i=$((i+1)); done
@@ -321,7 +322,7 @@ check "and not the others" 0 "$(printf '%s\n' "$out" | grep -c 'run: failing:')"
 
 out=$(run leaky); rc=$?
 check "a suite that leaks a machine fails" 1 "$rc"
-check "and is named as the owner" 1 "$(printf '%s\n' "$out" | grep -c 'run: leaky: left')"
+check "and is named as the owner" 1 "$(printf '%s\n' "$out" | grep -c 'run: leaky: recorded group did not stop within 15 s: pid ')"
 
 # A suite's recorded PID must still be the machine's, even with a relay.
 out=$(run killed); rc=$?

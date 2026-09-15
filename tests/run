@@ -106,7 +106,10 @@ owned() {
             }
             for (p in group) if (!(p in kid)) print p
         }' "$WORK/ps" "$WORK/group"
-    for f in "$WORK"/*.machines "$WORK"/*.jobs; do
+    for f in "$WORK"/*.machines; do
+        [ -f "$f" ] && "$RACH2_RUN_UTIL" registered "$f"
+    done
+    for f in "$WORK"/*.jobs; do
         [ -f "$f" ] && cat "$f"
     done
     :
@@ -206,7 +209,9 @@ lock_survivors() {
         ps -A -o pid= -o pgid= | awk -v group="$opgid" '$2 == group {print $1}'
         owork=$(lock_field work)
         if [ -n "$owork" ]; then
-            cat "$owork"/*.machines 2>/dev/null
+            for f in "$owork"/*.machines; do
+                [ -f "$f" ] && "$RACH2_RUN_UTIL" registered "$f"
+            done
             for f in "$owork"/*.groups; do
                 [ -f "$f" ] || continue
                 while read -r group; do
@@ -299,35 +304,10 @@ check_tools() {
     IFS=$oldifs
 }
 
-# A suite must stop every machine it starts. One left running costs a
-# processor and a few hundred megabytes until the host reboots, and nothing
-# else notices: the suite passed, and the pid now belongs to init.
+# A registered machine may close inherited descriptors. Check its saved
+# start time as well as its PID; old ledger entries can have been reused.
 check_machines() {
-    ledger="$WORK/$1.machines"
-    [ -f "$ledger" ] || return 0
-    # A machine told to stop takes a moment to go: it flushes what it was
-    # given and writes its own records first. Asking once, the instant the
-    # suite's last command returns, calls that a machine left behind and fails
-    # a suite whose every row passed, which is what this check cost on
-    # 2026-09-13. A few seconds turn the race into a check, and a machine that
-    # really was left is still there after them.
-    tries=0
-    while :; do
-        leaked=""
-        while read -r pid; do
-            [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && leaked="$leaked $pid"
-        done < "$ledger"
-        [ -z "$leaked" ] && return 0
-        [ "$tries" -ge 5 ] && break
-        tries=$((tries + 1))
-        sleep 1
-    done
-    echo "run: $1: left$leaked running; a suite must stop every machine it starts" >&2
-    # Stopped here as well as reported. The suite failed either way, and a
-    # machine left behind costs a processor and a few hundred megabytes until
-    # the host reboots.
-    for pid in $leaked; do kill "$pid" 2>/dev/null; done
-    return 1
+    "$RACH2_RUN_UTIL" machines "$1" "$WORK/$1.machines"
 }
 
 # A make run under the runner is started in the background and waited for,

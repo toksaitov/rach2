@@ -948,14 +948,14 @@ R="$DIR/rehearse"
 rm -rf "$R"; mkdir -p "$R"
 IMAGE_BYTES=$(wc -c < "$DISK" | tr -d ' ')
 IMAGE_SECTORS=$((IMAGE_BYTES / 512))
-# The root's entry in the image's table, the fourth: its first sector from
+# The root's entry in the image's table, the third: its first sector from
 # the MBR's bytes.
 ROOT_START=$(od -An -tu4 -j $((446 + 2 * 16 + 8)) -N 4 "$DISK" | tr -d ' ')
-[ -n "$ROOT_START" ] && [ "$ROOT_START" -gt 0 ] || bad "the image's fourth entry has no start"
+[ -n "$ROOT_START" ] && [ "$ROOT_START" -gt 0 ] || { bad "the image's third entry has no start"; exit 1; }
 dd if="$DISK" of="$R/head.vol" bs=512 skip="$ROOT_START" count=$((128 * 2048)) 2>/dev/null \
-    || bad "the root's head could not be read from the image"
+    || { bad "the root's head could not be read from the image"; exit 1; }
 "$GROWSET" --lba "$ROOT_START" "$R/head.vol" $((LENOVO - ROOT_START)) > "$R/save.set" \
-    || bad "growset did not compute the save set"
+    || { bad "growset did not compute the save set"; exit 1; }
 # The ranges to save, `START COUNT` in sectors: the image's extent, then the
 # grow's ranges beyond it; a range inside the extent is saved with it.
 {

@@ -52,6 +52,8 @@ rm -f "$WORK" "$LOG" "$FEED" "$KNOWN"
 
 QPID=""
 FPID=""
+FLOOD_PIDS=""
+FLOOD_DIR="$DISK.work.flood"
 
 # Everything this run started, ended. It is written to be safe to call twice,
 # because the ordinary paths call it and the trap calls it again: a script that
@@ -78,7 +80,33 @@ cleanup_boot() {
     rm -f "$FEED"
 }
 
+# Each connection has two direct children, with a FIFO between them. Killing
+# a pipeline's shell would leave its sleep running for the full five minutes.
+flood_start() {
+    mkdir -p "$FLOOD_DIR"
+    flood_i=0
+    while [ "$flood_i" -lt 40 ]; do
+        flood_fifo="$FLOOD_DIR/$flood_i"
+        mkfifo "$flood_fifo"
+        (exec sleep 300 > "$flood_fifo") &
+        FLOOD_PIDS="$FLOOD_PIDS $!"
+        (exec nc localhost "$PORT" < "$flood_fifo" >/dev/null 2>&1) &
+        FLOOD_PIDS="$FLOOD_PIDS $!"
+        flood_i=$((flood_i + 1))
+    done
+}
+
+# Reap both children of every connection, including after partial setup.
+flood_stop() {
+    flood_pids=$FLOOD_PIDS
+    FLOOD_PIDS=""
+    for flood_pid in $flood_pids; do kill -KILL "$flood_pid" 2>/dev/null || :; done
+    for flood_pid in $flood_pids; do wait "$flood_pid" 2>/dev/null || :; done
+    rm -rf "$FLOOD_DIR"
+}
+
 cleanup() {
+    flood_stop
     cleanup_boot
     rm -f "$WORK" "$LOG" "$FEED" "$KNOWN"
 }
@@ -306,13 +334,7 @@ require_denied "$OUT" "root's password attempt"
 # counted, so the login must come back to a shell that answers `id` with
 # uid 0; what the backlog cannot hold is refused with a reset, and the rest
 # are dropbear's to refuse.
-FLOOD=""
-i=0
-while [ "$i" -lt 40 ]; do
-    (sleep 300 | nc localhost "$PORT" >/dev/null 2>&1) &
-    FLOOD="$FLOOD $!"
-    i=$((i + 1))
-done
+flood_start
 # An interval, not a wait for output: the forty connections reach the guest
 # and are counted only once they have been accepted or refused there. The
 # interval is scaled, since a guest sharing its host with a pool of machines
@@ -330,7 +352,6 @@ while [ "$attempt" -lt 4 ]; do
     attempt=$((attempt + 1))
     type_line 'netstat -tn 2>/dev/null | grep -c ESTABLISHED; echo FLOOD""COUNT'
     if ! wait_token "FLOODCOUNT" 30; then
-        for p in $FLOOD; do kill "$p" 2>/dev/null; done
         fail "the console did not answer while the flood was on"
     fi
     seen=$(tr -d '\r' < "$LOG" | grep -B1 'FLOODCOUNT' | tail -2 | head -1 | tr -dc '0-9')
@@ -339,20 +360,17 @@ while [ "$attempt" -lt 4 ]; do
     sleep "$(scaled 2)"
 done
 if [ "$established" -lt 5 ]; then
-    for p in $FLOOD; do kill "$p" 2>/dev/null; done
     fail "the flood held $established connections, fewer than the five a flood must reach"
 fi
 type_line 'exit'
 if ! drive_login root "$PASSWORD" "$(scaled 40)"; then
-    for p in $FLOOD; do kill "$p" 2>/dev/null; done
     fail "the console did not come back to a login prompt under the flood"
 fi
 type_line 'id; echo FLOOD""LOGIN'
 if ! wait_token "FLOODLOGIN" 40 || ! grep -q 'uid=0' "$LOG"; then
-    for p in $FLOOD; do kill "$p" 2>/dev/null; done
     fail "root could not log in on the console under a connection flood"
 fi
-for p in $FLOOD; do kill "$p" 2>/dev/null; done
+flood_stop
 echo "ssh-test: root logs in on the console under a flood of forty connections: OK"
 
 cleanup_boot
