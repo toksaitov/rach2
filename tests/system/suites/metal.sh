@@ -96,6 +96,7 @@ fail_ssh() {
 }
 
 sh "$REPO/tests/system/accept/transport_test.sh" || fail "the acceptance transport checks"
+sh "$REPO/tests/system/accept/password_test.sh" || fail "the acceptance password checks"
 
 wait_token() {
     i=0

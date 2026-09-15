@@ -45,6 +45,12 @@ case "$command" in
     'cat /proc/disk'*)
         printf '%s\n' 'policy read-only' 'disk 0 usb 0 1000 mbr fixture' \
             'identity 0 512 removable free FIXTURE'
+        if [ "$ACCEPT_CASE" = disk-prefix ]; then
+            printf '%s\n' 'disk 1 usb 0 1000 mbr approved' \
+                'identity 1 512 removable free APPROVED01' \
+                'disk 10 usb 0 1000 mbr unapproved' \
+                'identity 10 512 removable free UNAPPROVED10'
+        fi
         ;;
     'if [ -b /dev/disk0 ]'*) echo published ;;
     *'accept-mbr.'*)
@@ -85,7 +91,32 @@ case "$command" in
     'cat /tmp/accept-transfer.fixture/data') echo image ;;
     'mv /tmp/accept-'*|'mv /tmp/accept.'*|'if [ -f /tmp/accept-transfer.'*) : ;;
     'rm -rf '*|'df -k /tmp;'*) : ;;
-    'cat /proc/usb'*) : ;;
+    'cat /proc/usb'*)
+        if [ "$ACCEPT_CASE" = disk-prefix ]; then
+            for disk in disk1 disk10; do
+                flushes=0
+                cmp -s "$ACCEPT_FIXTURE/$disk.img" "$ACCEPT_FIXTURE/$disk.before" || flushes=1
+                echo "$disk device 1 flushes $flushes"
+            done
+        fi
+        ;;
+    'ls -l /dev/disk1 2>/dev/null') echo 'brw------- disk1' ;;
+    'blkid 2>/dev/null')
+        printf '%s\n' '/dev/disk10p1: LABEL="TESTVOL" TYPE="vfat"' \
+            '/dev/disk1p1: LABEL="TESTVOL" TYPE="vfat"'
+        ;;
+    'mkdir -p /mnt && mount '*)
+        node=${command#*mount }
+        node=${node%% *}
+        case "$node" in
+            /dev/disk1p1) disk=disk1 ;;
+            /dev/disk10p1) disk=disk10 ;;
+            *) exit 99 ;;
+        esac
+        printf 'accept\n' >> "$ACCEPT_FIXTURE/$disk.img"
+        echo accept
+        ;;
+    'if [ -b /dev/disk1p'*) : ;;
     *) echo "accept-fixture: unexpected command: $command" >&2; exit 99 ;;
 esac
 SSH
@@ -121,7 +152,22 @@ check()
     export ACCEPT_CASE
     status=0
     log="$work/$phase.$RACH2_ACCEPT_SU.$ACCEPT_CASE.log"
-    sh "$copy/metal_accept.sh" fixture > "$log" 2>&1 || status=$?
+    if [ "$ACCEPT_CASE" = disk-prefix ]; then
+        for disk in disk1 disk10; do
+            printf '%s original bytes\n' "$disk" > "$work/$disk.img"
+            cp "$work/$disk.img" "$work/$disk.before"
+        done
+        sh "$copy/metal_accept.sh" fixture 22 APPROVED01 > "$log" 2>&1 || status=$?
+        if ! cmp -s "$work/disk10.img" "$work/disk10.before"; then
+            echo "accept-transport: $phase/$RACH2_ACCEPT_SU/disk-prefix: disk10 was written" >&2
+            return 1
+        fi
+        printf 'disk1 original bytes\naccept\n' > "$work/disk1.expected"
+        cmp -s "$work/disk1.img" "$work/disk1.expected" || return 1
+        grep -q 'stick: the volume TESTVOL on /dev/disk1p1 mounts' "$log" || return 1
+    else
+        sh "$copy/metal_accept.sh" fixture > "$log" 2>&1 || status=$?
+    fi
     if { [ "$expected" -eq 1 ] && [ "$status" -eq 0 ]; } ||
         { [ "$expected" -ne 1 ] && [ "$status" -ne "$expected" ]; }; then
         cat "$log" >&2
@@ -149,6 +195,7 @@ cases()
             check "$fault" 1 || return 1
         done
         check live-clean 0 || return 1
+        check disk-prefix 0 || return 1
         RACH2_ACCEPT_DD=/tmp/reader
         export RACH2_ACCEPT_DD
         check reader-override 2 || return 1
@@ -158,7 +205,7 @@ cases()
         check saved-bootlog 2 || return 1
         unset RACH2_ACCEPT_BOOTLOG
     done
-    echo "accept-transport: $phase: 24 checks passed"
+    echo "accept-transport: $phase: 26 checks passed"
 }
 
 printf '%s\n' 'boot: Rach2 Booting' 'ext2: check: clean' > "$work/healthy-bootlog"
@@ -179,6 +226,20 @@ case "${1:-}" in
         echo 'accept-transport: mutation: the missing failure record was detected'
         cp "$copy/original.sh" "$copy/metal_accept.sh"
         phase=restored
+        cases
+        # shellcheck disable=SC2016 # Match the private source's variable.
+        sed 's@grep -E "\^/dev/\$STICK(p\[0-9\]+)?:"@grep "^/dev/$STICK"@' \
+            "$copy/original.sh" > "$copy/metal_accept.sh"
+        cmp -s "$copy/original.sh" "$copy/metal_accept.sh" && exit 1
+        phase='disk-mutated'
+        if cases > "$work/disk-mutation.log" 2>&1; then
+            echo 'accept-transport: the disk prefix mutation was not detected' >&2
+            exit 1
+        fi
+        grep -q 'disk-prefix: disk10 was written' "$work/disk-mutation.log"
+        echo 'accept-transport: mutation: the disk prefix match wrote disk10 and was detected'
+        cp "$copy/original.sh" "$copy/metal_accept.sh"
+        phase='disk-restored'
         cases
         ;;
     *) echo 'accept-transport: usage: [--mutate]' >&2; exit 2 ;;

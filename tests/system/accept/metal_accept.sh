@@ -746,7 +746,7 @@ if [ -n "$STICK" ]; then
         b*) note "stick: /dev/$STICK is a block device" ;;
         *)  bad "stick: /dev/$STICK is not a block device, so a label scan cannot find it" ;;
     esac
-    BLKID="$(run 'blkid 2>/dev/null' | grep "^/dev/$STICK")"
+    BLKID="$(run 'blkid 2>/dev/null' | grep -E "^/dev/$STICK(p[0-9]+)?:")"
     echo "$BLKID" | while read -r line; do note "stick: $line"; done
     if echo "$BLKID" | grep -q 'TYPE="iso9660"'; then
         note "stick: the ISO half of a Rach2 stick is on it and is left alone"

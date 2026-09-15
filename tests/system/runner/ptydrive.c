@@ -1,27 +1,23 @@
 /**
- * ptydrive: run a command on a pseudo-terminal and answer its password
- * prompts.
+ * Run a command on a sized pseudo-terminal and answer one password prompt.
  *
- * The SSH suites need a client that reads a password from a terminal, on a
- * terminal with a known size, because a session's window size is part of
- * what they prove. This driver replaces the Expect script that did that:
- * it spawns the command on a pty sized `--rows` by `--cols`, answers every
- * prompt matching `--prompt-re` with the value of the environment variable
- * named by `--password-env` (the environment, not an argument, so the
- * secret never shows in a process listing), and relays everything the
- * command writes to standard output.
+ * The password comes from --password-env and is removed from the child's
+ * environment before exec. A second prompt stops the command without an
+ * answer and returns failure. Matching proceeds byte by byte, including
+ * across reads and through several prompts in one read.
  *
- * Two tokens end the transcript, and the suites read both. `TIMEDOUT`
- * appears when `--timeout` seconds pass before the command exits;
- * `PROMPTED=N` counts the prompts that were answered, so a server that let
- * a login in without asking cannot be read as a password login. The driver
- * exits 0 when it ran the command to completion (whatever the command's
- * own outcome), and nonzero when it could not run it at all, the
- * distinction the suites need between "the server said no" and "the
- * question was never asked".
+ * Output is filtered before stdout: complete passwords are redacted, a
+ * possible prefix stays in memory, and an unfinished prefix is redacted at
+ * EOF or termination. Carriage returns are omitted before filtering.
+ * Empty passwords and passwords containing control bytes are refused.
  *
- * The prompt pattern is matched by the same small matcher the harness
- * uses; the default `[Pp]assword:` is a character class and a literal.
+ * PROMPTED=N counts prompts seen; ANSWERED=N counts complete answers sent.
+ * The driver does not propagate the child's exit status. A timeout emits
+ * TIMEDOUT; a repeated prompt or driver error returns nonzero. The suites
+ * judge the command's output and the authentication counters separately.
+ *
+ * --prompt-re uses the harness's small pattern syntax. The default
+ * [Pp]assword: is a character class followed by a literal.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -43,6 +39,66 @@
 #endif
 
 #define TAIL_BYTES 256
+
+struct secret_filter {
+    const unsigned char *password;
+    unsigned char *pending;
+    size_t length;
+    size_t used;
+};
+
+/**
+ * Relay text without emitting the password, including across read boundaries.
+ *
+ * A possible prefix stays in memory until it matches or differs. Carriage
+ * returns are omitted before matching so later CR removal cannot join two
+ * visible fragments into the password. Passwords contain no control bytes.
+ */
+static void secret_byte(struct secret_filter *filter, unsigned char byte)
+{
+    if (byte == '\r')
+        return;
+    filter->pending[filter->used++] = byte;
+    while (filter->used != 0 && memcmp(filter->pending, filter->password, filter->used) != 0) {
+        putchar(filter->pending[0]);
+        filter->used--;
+        memmove(filter->pending, filter->pending + 1, filter->used);
+    }
+    if (filter->used == filter->length) {
+        fputs("[redacted]", stdout);
+        filter->used = 0;
+    }
+}
+
+/**
+ * Discard a possible password prefix at EOF, timeout or forced termination.
+ */
+static void secret_finish(struct secret_filter *filter)
+{
+    if (filter->used != 0) {
+        fputs("[redacted]", stdout);
+        filter->used = 0;
+    }
+    fflush(stdout);
+}
+
+/**
+ * Send every byte of one answer, retrying interrupted and partial writes.
+ */
+static int answer_write(int master, const char *text, size_t length)
+{
+    while (length != 0) {
+        ssize_t written = write(master, text, length);
+
+        if (written < 0 && errno == EINTR)
+            continue;
+        if (written <= 0)
+            return -1;
+        text += written;
+        length -= (size_t)written;
+    }
+    return 0;
+}
 
 /* ---- the prompt matcher ----
  *
@@ -244,13 +300,14 @@ int main(int argc, char **argv)
     const char *prompt_re = "[Pp]assword:";
     const char *password_env = "RACH2_PASSWORD";
     const char *password;
+    struct secret_filter filter;
     char **command = NULL;
     int master, i;
     pid_t pid;
     struct winsize ws;
     unsigned char tail[TAIL_BYTES];
     size_t tail_len = 0;
-    int asked = 0, timed_out = 0;
+    int asked = 0, answered = 0, timed_out = 0, failed = 0;
     double deadline;
 
     for (i = 1; i < argc; i++) {
@@ -282,8 +339,22 @@ int main(int argc, char **argv)
         return 2;
     }
     password = getenv(password_env);
-    if (password == NULL) {
-        fprintf(stderr, "ptydrive: %s is not set\n", password_env);
+    if (password == NULL || password[0] == '\0') {
+        fprintf(stderr, "ptydrive: the password variable is unset or empty\n");
+        return 2;
+    }
+    filter.password = (const unsigned char *)password;
+    filter.length = strlen(password);
+    filter.used = 0;
+    for (i = 0; password[i] != '\0'; i++) {
+        if ((unsigned char)password[i] < 32 || (unsigned char)password[i] == 127) {
+            fprintf(stderr, "ptydrive: the password contains a control byte\n");
+            return 2;
+        }
+    }
+    filter.pending = malloc(filter.length);
+    if (filter.pending == NULL) {
+        fprintf(stderr, "ptydrive: cannot allocate the output filter\n");
         return 2;
     }
     compile_prompt(prompt_re);
@@ -295,9 +366,12 @@ int main(int argc, char **argv)
     pid = forkpty(&master, NULL, NULL, &ws);
     if (pid < 0) {
         fprintf(stderr, "ptydrive: cannot open a pty: %s\n", strerror(errno));
+        free(filter.pending);
         return 2;
     }
     if (pid == 0) {
+        if (unsetenv(password_env) != 0)
+            _exit(127);
         execvp(command[0], command);
         _exit(127);
     }
@@ -310,6 +384,7 @@ int main(int argc, char **argv)
         struct timeval tv;
         unsigned char data[4096];
         ssize_t n;
+        size_t at;
 
         if (remaining <= 0) {
             timed_out = 1;
@@ -328,32 +403,38 @@ int main(int argc, char **argv)
                how the command's exit reaches here. */
             break;
         }
-        fwrite(data, 1, (size_t) n, stdout);
-        fflush(stdout);
-        /* A bounded tail across read boundaries, so a prompt split between
-           two reads is still answered. */
-        {
-            size_t keep = tail_len + (size_t) n > TAIL_BYTES
-                ? TAIL_BYTES : tail_len + (size_t) n;
-            unsigned char merged[TAIL_BYTES + 4096];
-
-            memcpy(merged, tail, tail_len);
-            memcpy(merged + tail_len, data, (size_t) n);
-            memcpy(tail, merged + (tail_len + (size_t) n) - keep, keep);
-            tail_len = keep;
-        }
-        if (prompt_seen(tail, tail_len)) {
-            asked++;
-            if (write(master, password, strlen(password)) < 0 ||
-                write(master, "\r", 1) < 0) {
-                /* The command is gone; the loop's next read reports it. */
+        for (at = 0; at < (size_t)n; at++) {
+            secret_byte(&filter, data[at]);
+            if (tail_len == TAIL_BYTES) {
+                memmove(tail, tail + 1, TAIL_BYTES - 1);
+                tail_len--;
             }
-            tail_len = 0;
+            tail[tail_len++] = data[at];
+            if (prompt_seen(tail, tail_len)) {
+                asked++;
+                tail_len = 0;
+                if (asked > 1) {
+                    failed = 1;
+                    break;
+                }
+                if (answer_write(master, password, filter.length) != 0 ||
+                    answer_write(master, "\r", 1) != 0) {
+                    failed = 1;
+                    break;
+                }
+                answered++;
+            }
         }
+        fflush(stdout);
+        if (failed)
+            break;
     }
 
-    if (timed_out) {
-        printf("TIMEDOUT\n");
+    secret_finish(&filter);
+    free(filter.pending);
+    if (timed_out)
+        printf("\nTIMEDOUT\n");
+    if (timed_out || failed) {
         /* forkpty puts the command in its own session, so the negative pid
            reaches whatever it started as well. A command that ignores the
            signal, or a descendant holding the pty, would otherwise keep
@@ -380,6 +461,6 @@ int main(int argc, char **argv)
             usleep(50000);
         }
     }
-    printf("PROMPTED=%d\n", asked ? 1 : 0);
-    return 0;
+    printf("\nPROMPTED=%d\nANSWERED=%d\n", asked, answered);
+    return failed ? 1 : 0;
 }

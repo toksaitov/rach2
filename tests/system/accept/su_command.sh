@@ -39,6 +39,7 @@ quote()
 
 token="RACH2_ACCEPT_$(basename "$work")"
 command="{ printf '\\n%s\\n' '$token-begin'; /bin/sh -c $(quote "$6") 2>/dev/null; accept_status=\$?; printf '\\n%s %s\\n' '$token-end' \"\$accept_status\"; } | cat"
+# The driver filters credential bytes before either transcript is written.
 "$runner" watch accept-su 100 "$work/jobs" \
     "$driver" --rows 40 --cols 120 --timeout 90 \
     --password-env RACH2_ACCEPT_PASSWORD ssh -tt -i "$1" -p "$3" \
@@ -54,7 +55,11 @@ if [ "$rc" -ne 0 ]; then
     exit 1
 fi
 tr -d '\r' < "$work/raw" > "$work/text"
-if ! grep -qx 'PROMPTED=1' "$work/text" || grep -qx TIMEDOUT "$work/text"; then
+if ! awk '
+    /^PROMPTED=/ { prompts++; if ($0 != "PROMPTED=1") bad = 1 }
+    /^ANSWERED=/ { answers++; if ($0 != "ANSWERED=1") bad = 1 }
+    END { exit bad || prompts != 1 || answers != 1 }
+' "$work/text" || grep -qx TIMEDOUT "$work/text"; then
     echo 'accept-su: password authentication did not complete' >&2
     exit 1
 fi
