@@ -52,6 +52,7 @@ KNOWN="$IMAGE.metal.known"
 SEND="$IMAGE.metal.send"
 BACK="$IMAGE.metal.back"
 ACCEPT_LOG="$IMAGE.metal.accept.log"
+SAVED_BOOTLOG="$(cd "$(dirname "$IMAGE")" && pwd)/$(basename "$IMAGE").metal.bootlog"
 rm -f "$WORK" "$LOG" "$KNOWN" "$SEND" "$BACK" "$ACCEPT_LOG"
 
 QPID=""
@@ -72,7 +73,7 @@ cleanup_boot() {
 
 cleanup() {
     cleanup_boot
-    rm -f "$WORK" "$LOG" "$KNOWN" "$SEND" "$BACK"
+    rm -f "$WORK" "$KNOWN" "$SEND" "$BACK"
 }
 
 trap 'cleanup' EXIT
@@ -81,13 +82,18 @@ trap 'cleanup; exit 143' TERM
 trap 'cleanup; exit 129' HUP
 
 fail() {
+    cleanup_boot
     if [ -f "$LOG" ]; then
         cp "$LOG" "$IMAGE.metal.fail.log" 2>/dev/null || true
     fi
-    cleanup_boot
     echo "metal-test: FAIL: $1" >&2
     echo "metal-test: the failing boot's console log: $IMAGE.metal.fail.log" >&2
     exit 1
+}
+
+fail_ssh() {
+    cat "$LOG" >&2 || true
+    fail "$1"
 }
 
 wait_token() {
@@ -155,7 +161,7 @@ for r in 1 2; do
 done
 qemu-system-i386 -cpu max -display none -kernel "$KERNEL" \
     -initrd "$WORK" \
-    -append "rach2.ip=$GUEST_IP/24 rach2.gateway=$GUEST_GW rach2.netconsole rach2.diskdiag" \
+    -append "rach2.ip=$GUEST_IP/24 rach2.gateway=$GUEST_GW rach2.netconsole" \
     -netdev "user,id=n0,net=$GUEST_NET,host=$GUEST_GW,hostfwd=tcp::$PORT-$GUEST_IP:22" \
     -device rtl8139,netdev=n0 \
     -device qemu-xhci,id=xhci -device usb-hub,bus=xhci.0,port=1 \
@@ -314,8 +320,11 @@ if ! echo "$UNNAMED" | grep -q '^metal-accept: PASS' ||
 fi
 [ "$stick_before" = "$(shasum -a 256 "$STICK")" ] || fail "the unnamed stick was changed"
 echo "metal-test: acceptance without a serial leaves the stick unchanged: OK"
+cp "$REPO/build/images/metal-bootlog.txt" "$SAVED_BOOTLOG" \
+    || fail "saving the first acceptance's boot log"
 accept_status=0
-RACH2_ACCEPT_SU=1 RACH2_ACCEPT_USER=test RACH2_ACCEPT_KEY="$TEST_KEY" \
+RACH2_ACCEPT_BOOTLOG="$SAVED_BOOTLOG" RACH2_ACCEPT_SU=1 \
+    RACH2_ACCEPT_USER=test RACH2_ACCEPT_KEY="$TEST_KEY" \
     sh "$REPO/tests/system/accept/metal_accept.sh" 127.0.0.1 "$PORT" ACCEPT01 \
     > "$ACCEPT_LOG" 2>&1 || accept_status=$?
 unset RACH2_ACCEPT_PASSWORD
@@ -324,6 +333,14 @@ if [ "$accept_status" -ne 0 ] || ! grep -q '^metal-accept: PASS' "$ACCEPT_LOG"; 
     fail "the acceptance script did not pass against the rehearsal machine (status $accept_status)"
 fi
 echo "metal-test: the acceptance script runs clean against the rehearsal machine: OK"
+if grep -q 'disk: disk 0 usb ' "$ACCEPT_LOG" &&
+    grep -q 'disk: identity 0 512 removable free ACCEPT01' "$ACCEPT_LOG" &&
+    grep -q 'disk: the MBR hashes to ' "$ACCEPT_LOG"; then
+    echo "metal-test: and its disk row reads the registry without the boot diagnostic: OK"
+else
+    cat "$ACCEPT_LOG" >&2
+    fail "the acceptance script's disk row did not read the registry"
+fi
 if grep -q 'the file system in that file mounts and reads' "$ACCEPT_LOG"; then
     echo "metal-test: and its image row attached a file, mounted it and read it: OK"
 else
@@ -363,6 +380,64 @@ if grep -q 'behind a hub: port' "$ACCEPT_LOG" &&
 else
     fail "the acceptance script's hub section did not run against the hub"
 fi
+
+dd if="$STICK" of="$WORK.mbr" bs=512 count=1 2>/dev/null || fail "the host's MBR read"
+[ "$(wc -c < "$WORK.mbr" | tr -d ' ')" = 512 ] || fail "the host's MBR read was short"
+mbr_sum=$(shasum -a 256 "$WORK.mbr") || fail "hashing the host's MBR"
+mbr_sum=${mbr_sum%% *}
+grep -q "disk: the MBR hashes to $mbr_sum" "$ACCEPT_LOG" \
+    || fail "the acceptance did not hash the same sector as the host"
+
+# Standalone ash can run dd without a file in PATH. Only the MBR row uses
+# this explicit path; a successful empty read must fail before it is hashed.
+shim_dir=$(ssh_run 'mktemp -d /tmp/accept-shim.XXXXXX') \
+    || fail_ssh "creating the MBR reader's directory"
+case "$shim_dir" in
+    /tmp/accept-shim.*) ;;
+    *) fail "the MBR reader's directory has an unexpected path" ;;
+esac
+case "$shim_dir" in
+    *[!A-Za-z0-9_./-]*) fail "the MBR reader's directory has an unsafe path" ;;
+esac
+if ! ssh_run "cat > '$shim_dir/dd' && chmod 755 '$shim_dir/dd'" <<'SHORT_DD'
+#!/bin/sh
+exec /bin/busybox dd "$@" count=0
+SHORT_DD
+then
+    fail_ssh "installing the emulated MBR reader"
+fi
+short_status=0
+RACH2_ACCEPT_BOOTLOG="$SAVED_BOOTLOG" RACH2_ACCEPT_DD="$shim_dir/dd" \
+    sh "$REPO/tests/system/accept/metal_accept.sh" 127.0.0.1 "$PORT" \
+    > "$WORK.short-mbr.log" 2>&1 || short_status=$?
+ssh_run "rm '$shim_dir/dd' && rmdir '$shim_dir'" \
+    || fail_ssh "removing the emulated MBR reader"
+if [ "$short_status" -ne 1 ] ||
+    ! grep -q 'FAIL: disk: the published whole-disk window did not supply one complete sector' "$WORK.short-mbr.log" ||
+    grep -q 'disk: the MBR hashes to ' "$WORK.short-mbr.log"; then
+    cat "$WORK.short-mbr.log" >&2
+    fail "the acceptance did not reject an empty MBR read"
+fi
+echo "metal-test: acceptance rejects a successful read of zero MBR bytes: OK"
+restored_status=0
+RACH2_ACCEPT_BOOTLOG="$SAVED_BOOTLOG" \
+    sh "$REPO/tests/system/accept/metal_accept.sh" 127.0.0.1 "$PORT" \
+    > "$WORK.restored-mbr.log" 2>&1 || restored_status=$?
+if [ "$restored_status" -ne 0 ] ||
+    ! grep -q '^metal-accept: PASS' "$WORK.restored-mbr.log" ||
+    ! grep -q "disk: the MBR hashes to $mbr_sum" "$WORK.restored-mbr.log"; then
+    cat "$WORK.restored-mbr.log" >&2
+    fail "the acceptance did not pass after the MBR reader was restored"
+fi
+echo "metal-test: the restored MBR read matches the host's sector and acceptance passes: OK"
+
+ssh_run 'cat /dev/bootlog' > "$WORK.final-bootlog" \
+    || fail_ssh "reading the live boot log after acceptance traffic"
+for want in 'boot: Rach2 Booting' 'usb: controller:' 'lapic:'; do
+    grep -q "$want" "$WORK.final-bootlog" \
+        || fail "the live boot log lost '$want' during acceptance traffic"
+done
+echo "metal-test: the live boot log retains the early inventory after acceptance traffic: OK"
 
 cleanup_boot
 echo "metal-test: PASS"

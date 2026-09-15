@@ -48,6 +48,28 @@ REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 KEY="${RACH2_ACCEPT_KEY:-$REPO/krffs/rach2_demo_ed25519}"
 USER_NAME="${RACH2_ACCEPT_USER:-root}"
 USE_SU="${RACH2_ACCEPT_SU:-0}"
+SAVED_BOOTLOG="${RACH2_ACCEPT_BOOTLOG:-}"
+if [ -n "$SAVED_BOOTLOG" ]; then
+    case "$SAVED_BOOTLOG" in
+        /*) ;;
+        *) echo 'metal-accept: RACH2_ACCEPT_BOOTLOG must be an absolute path' >&2; exit 2 ;;
+    esac
+    if [ ! -f "$SAVED_BOOTLOG" ] || [ ! -r "$SAVED_BOOTLOG" ] || [ ! -s "$SAVED_BOOTLOG" ]; then
+        echo 'metal-accept: RACH2_ACCEPT_BOOTLOG must be a readable, nonempty file' >&2
+        exit 2
+    fi
+fi
+MBR_DD="${RACH2_ACCEPT_DD:-dd}"
+case "$MBR_DD" in
+    dd|/*) ;;
+    *) echo 'metal-accept: RACH2_ACCEPT_DD must be an absolute path' >&2; exit 2 ;;
+esac
+case "$MBR_DD" in
+    *[!A-Za-z0-9_./-]*)
+        echo 'metal-accept: RACH2_ACCEPT_DD contains an unsafe path character' >&2
+        exit 2
+        ;;
+esac
 if [ "$USE_SU" = 1 ] && [ -z "${RACH2_ACCEPT_PASSWORD:-}" ]; then
     echo 'metal-accept: RACH2_ACCEPT_SU needs RACH2_ACCEPT_PASSWORD in the environment' >&2
     exit 2
@@ -209,15 +231,16 @@ fi
 # ---- the disk, read and compared against the baseline ----
 DISK="$(run 'cat /proc/disk 2>/dev/null')"
 if [ -z "$DISK" ]; then
-    bad "/proc/disk is not there; the boot line needs rach2.diskdiag"
+    bad "/proc/disk gave no disk report"
 else
-    state="$(echo "$DISK" | awk '/^state /{print $2}')"
     policy="$(echo "$DISK" | awk '/^policy /{print $2}')"
-    mounted="$(echo "$DISK" | awk '/^mounted /{print $2}')"
-    sectors="$(echo "$DISK" | awk '/^sectors /{print $2}')"
-    model="$(echo "$DISK" | sed -n 's/^model //p')"
+    disk0="$(echo "$DISK" | awk '$1 == "disk" && $2 == 0')"
+    identity0="$(echo "$DISK" | awk '$1 == "identity" && $2 == 0')"
+    sectors="$(echo "$disk0" | awk '{print $5}')"
+    model="$(echo "$disk0" | sed 's/^disk 0 [^ ]* [^ ]* [^ ]* [^ ]* //')"
+    mounted="$(echo "$identity0" | awk '{print $5}')"
 
-    note "disk: state=$state policy=$policy"
+    note "disk: policy=$policy"
     # Two kernels answer here. The stick's, milestone 25's, is built
     # read-only because the disk under it may be somebody's Windows, and it
     # mounts nothing from that disk. The installed one, whose boot line names
@@ -233,25 +256,55 @@ else
         [ "$policy" = "read-only" ] || bad "the running kernel is not the read-only build"
     fi
 
-    # A machine with no disk reports that and stops there, which is a complete
-    # answer and not a failure: this script is rehearsed against exactly such a
-    # machine. What would be a failure is a disk that is present AND mounted
-    # under the stick's kernel.
-    if [ "$state" != "present" ]; then
-        note "disk: none answered, so there is nothing further to read"
-    else
-        note "disk: model [$model], $sectors sectors, mounted=$mounted"
+    # The registry is current; the optional boot diagnostic may be not-asked
+    # even when the installed root is mounted from this disk.
+    if [ -z "$disk0" ]; then
         if [ "$INSTALLED" = 1 ]; then
+            bad "disk: the installed root has no disk0 in the registry"
+        else
+            note "disk: no disk0 in the registry"
+        fi
+    else
+        note "disk: $disk0"
+        note "disk: $identity0"
+        case "$mounted" in
+            mounted|free) ;;
+            *) bad "disk: disk0 has no valid identity record" ;;
+        esac
+        if [ "$INSTALLED" = 1 ]; then
+            [ "$mounted" = mounted ] || bad "disk: the installed root's disk is not mounted"
             note "disk: the installed system's root is on it"
         else
-            [ "$mounted" = "0" ] || bad "the disk is mounted, which the stick's kernel forbids"
+            [ "$mounted" = free ] || bad "the disk is mounted before the acceptance's mount rows"
         fi
     fi
 
-    if [ "$state" = "present" ]; then
-        mbr="$(run 'dd if=/dev/disk0 bs=512 count=1 2>/dev/null | sha256sum' | awk '{print $1}')"
-        note "disk: the MBR hashes to $mbr"
-        echo "$DISK" | grep '^part' | while read -r line; do note "disk: $line"; done
+    if [ -n "$disk0" ]; then
+        mbr=""
+        window="$(run 'if [ -b /dev/disk0 ]; then echo published; else echo absent; fi')"
+        case "$window" in
+            published)
+                # A hash of a pipe can succeed after dd fails or reads nothing.
+                # Keep the sector until its read status and length are checked.
+                # shellcheck disable=SC2016
+                sector="$(run 'f=$(mktemp /tmp/accept-mbr.XXXXXX) || exit 1; trap '"'"'rm -f "$f"'"'"' EXIT; '"$MBR_DD"' if=/dev/disk0 of="$f" bs=512 count=1 2>/dev/null && [ "$(wc -c < "$f")" = 512 ] && sha256sum "$f"')" || sector=""
+                mbr="$(printf '%s\n' "$sector" | awk '{print $1}')"
+                case "$mbr" in
+                    ''|*[!0-9a-f]*) mbr="" ;;
+                esac
+                if [ "${#mbr}" -eq 64 ]; then
+                    note "disk: the MBR hashes to $mbr"
+                else
+                    mbr=""
+                    bad "disk: the published whole-disk window did not supply one complete sector"
+                fi
+                ;;
+            absent)
+                note "disk: /dev/disk0 is not published; no MBR read on this boot"
+                ;;
+            *) bad "disk: the whole-disk window check gave no answer" ;;
+        esac
+        echo "$DISK" | awk '$1 == "part" && $2 == 0' | while read -r line; do note "disk: $line"; done
 
         # The baseline describes ONE drive. Against that drive every number
         # must agree, and a disagreement is the finding this script exists for.
@@ -263,7 +316,9 @@ else
             note "disk: this is the drive the baseline describes; comparing"
             [ "$sectors" = "$BASELINE_SECTORS" ] \
                 || bad "the sector count is $sectors and the baseline says $BASELINE_SECTORS"
-            if [ "$mbr" = "$BASELINE_MBR_SHA256" ]; then
+            if [ -z "$mbr" ]; then
+                note "disk: no MBR comparison without a complete sector read"
+            elif [ "$mbr" = "$BASELINE_MBR_SHA256" ]; then
                 note "disk: the MBR is what Windows measured before Rach2 ran here"
             else
                 bad "the MBR does not match the baseline: a wrong sector was read, or something has written it"
@@ -274,15 +329,22 @@ else
     fi
 fi
 
-# ---- the machine's own boot log, saved, not read ----
-BOOTLOG_OUT="$REPO/build/images/metal-bootlog.txt"
-if run 'cat /dev/bootlog' > "$BOOTLOG_OUT" 2>/dev/null && [ -s "$BOOTLOG_OUT" ]; then
-    note "boot log: $(wc -l < "$BOOTLOG_OUT" | tr -d ' ') lines saved to $BOOTLOG_OUT"
+# Repeated rows may use an explicit snapshot from this boot; never replace it.
+if [ -n "$SAVED_BOOTLOG" ]; then
+    BOOTLOG_OUT="$SAVED_BOOTLOG"
+    note "boot log: using saved copy $BOOTLOG_OUT"
+else
+    BOOTLOG_OUT="$REPO/build/images/metal-bootlog.txt"
+    if run 'cat /dev/bootlog' > "$BOOTLOG_OUT" 2>/dev/null && [ -s "$BOOTLOG_OUT" ]; then
+        note "boot log: $(wc -l < "$BOOTLOG_OUT" | tr -d ' ') lines saved to $BOOTLOG_OUT"
+    else
+        bad "/dev/bootlog gave nothing; this kernel predates it, or the log is empty"
+    fi
+fi
+if [ -s "$BOOTLOG_OUT" ]; then
     if grep -q "refused command" "$BOOTLOG_OUT"; then
         bad "the boot log records a refused disk command; something strayed off the read path"
     fi
-else
-    bad "/dev/bootlog gave nothing; this kernel predates it, or the log is empty"
 fi
 
 # ---- the USB hardware, read out of the log this machine already wrote. The
@@ -371,7 +433,7 @@ else
 fi
 
 # ---- and that nothing on this machine has been refused a command ----
-note "(the saved boot log above is the whole of what this machine printed)"
+note "boot log: inventory checks used the snapshot above"
 
 # ---- the partitions as mounts. Written for milestone 36 and run in milestone
 #      43: the partition nodes the MBR gives this machine, the boot partition
