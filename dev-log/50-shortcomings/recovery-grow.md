@@ -2,11 +2,11 @@
 
 The source and host/QEMU verification are accepted at `78ad9d96` on 2026-09-15. The clean build passed; six read-only review units examined `baea1e65..eb3db0a8`, with every finding closed or explicitly carried; and the final `tests/run all` passed all 87 suites from the committed tree with no overrides or rebuild during suite execution. Unit C's corrected small rehearsal passed all four interruption cases, save, grow, restore and boot repair, in 634 seconds, restoring original bytes and booting the target without USB. Unit D repeated the matrix in 620 seconds. Those matrix runs used `RACH2_GROW_SMALL=1` and are separate from the ordinary full set. [Readme.md](Readme.md#third-close-2026-09-15) records the accepted artifacts and test results.
 
-The hardware procedure has not run; entries 53 and 58 remain the sitting's work. The operator prepares the stick, obtains the owner's fresh approval of the reported devices and runs the commands below step by step with him present. No host disk node is inferred from the notebook's `/dev/disk1`.
+The hardware procedure ran on 2026-09-16 and supplied entries 53 and 58's measurements. The first restore exhausted the RAM root; the successful retry moved the transcript and helper work directory to the stick. The original root is restored and clean, recovery remains saved and no candidate trial is armed. Entries 94 through 96 reopen technical work. The repository helper is unchanged: the commands below describe the procedure used, but are not ready for reuse until its storage handling and diagnostics are fixed and proved. The [sitting record](notes.md#recovery-sitting-2026-09-16) contains the measurements and the [required rehearsal](notes.md#recovery-rehearsal-required-by-entries-94-through-96) describes the missing space-pressure cases. No host disk node is inferred from the notebook's `/dev/disk1`.
 
 The target last reported by the notebook is `/dev/disk0`, AHCI, internal, Samsung SSD 870 EVO 250GB, serial `S6P2NX0T381638Z`, 488397168 sectors of 512 bytes, 250059350016 bytes. MBR identifier `1acef00d`; partition 1 starts at 2048 for 131072 sectors, FAT type 0c; partition 2 starts at 133120 for 131072 sectors, FAT type 0c; partition 3 starts at 266240 for 488130928 sectors, ext2 type 83. The disk stays in its bay.
 
-The stick last reported there is the removable USB SanDisk 3.2Gen1, serial `00014101091624031318`, 120164352 sectors of 512 bytes. It currently has the acceptance's FAT volume and no recovery system. Rebuilding and booting recovery on this stick precedes any SSD write.
+The stick recorded for this procedure is the removable USB SanDisk 3.2Gen1, serial `00014101091624031318`, 120164352 sectors of 512 bytes. It was rebuilt as the prepared recovery stick and booted for this sitting. Its backup remains part of the recovery arrangement; do not rebuild it over that copy. The recorded identities do not supply approval for a later write.
 
 ## Contents and host preparation
 
@@ -36,7 +36,7 @@ shasum -a 256 build/rach2-recovery/kernel \
 cat build/machine-50/recovery-grow/artifacts.sha256
 ```
 
-The `with-key` files require the already prepared `krffs/recovery_authorized_keys`. Check its public key against the intended recovery key before the build. Do not enable a demonstration key on the installed root. The preparation must use the recovery binaries identified by `programs.sha256`, including `/bin/growset` and `/bin/growboot`; the helper verifies them on the booted recovery system before saving or writing. Recovery uses a 4 MiB RAM file system. Only sector lists, the prepared environment and small logs go there; complete boot comparisons stream through reflash. The archive omits the host-only grow-set.txt to preserve scratch space. The saved GRUB environment must occupy one cluster; preparation checks this before publishing a backup.
+The `with-key` files require the already prepared `krffs/recovery_authorized_keys`. Check its public key against the intended recovery key before the build. Do not enable a demonstration key on the installed root. The preparation must use the recovery binaries identified by `programs.sha256`, including `/bin/growset` and `/bin/growboot`; the helper verifies them on the booted recovery system before saving or writing. Recovery uses a 4 MiB RAM file system. Complete boot comparisons stream through reflash, and the archive omits the host-only grow-set.txt. These measures did not bound the combined cost of plans, work files and transcripts across the sitting. Entries 94 and 95 require measured scratch limits and persistent storage outside that RAM root. The saved GRUB environment must occupy one cluster; preparation checks this before publishing a backup.
 
 Connect the stick to the Mac and run `diskutil list external physical`, then `diskutil info` for the whole disk it reports. Present its node, byte size, USB bus, external and whole-disk status and partition table to the owner. After the owner approves that node, set `stick_device` to exactly that `/dev/diskN`. These commands write only that approved stick:
 
@@ -71,7 +71,7 @@ df -k /mnt/grow
 cd /
 ```
 
-Require the seed checksum and at least 4194304 KiB available before saving. Run the helper at the recovery console, or under `nohup` with its complete output saved under `/tmp` and watched from the host. It prints the directory containing its checks and command logs. `save` reads the SSD and writes the stick:
+The original procedure required the seed checksum and at least 4194304 KiB available on the store before saving. That check did not cover RAM scratch. Its instruction to save a detached helper's complete output under `/tmp` is withdrawn after the failed restore. Persistent work and transcripts need a checked non-target destination, with bounded scratch while grow unmounts the store; entry 95 must resolve that unmount before revised commands can be used. The helper prints its work directory. `save` reads the SSD and writes the stick:
 
 ```sh
 sh /tmp/grow-plan/machine_grow.sh save /dev/disk0 /mnt/grow /tmp/grow-plan
