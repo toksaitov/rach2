@@ -351,7 +351,9 @@ Measured on the installed system with that kernel: the SSD reads
 328 MB/s raw in 1 MiB commands, 174 MB/s beside a full heap; the stick
 44 MB/s; the network port at 1000 Mbit full duplex with pause both
 ways, a copy over SSH at 11 MB/s bounded above the kernel. Under
-twenty SSH sessions building the kernel for an hour, 361 builds: the
+twenty SSH sessions with separate 3600-second guest-tick windows, 361
+successful build completions, including final builds completed after their
+deadlines. This is not a common wall-clock hour. During those runs, the
 longest timer gap 30 ms, the longest wait for the request limit 27 ms,
 the console never waiting, memory steady. The disk's longest delay is
 entry 47's wrapped figure until that entry is fixed.
