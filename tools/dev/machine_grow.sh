@@ -1,10 +1,39 @@
 #!/bin/sh
 # Run from recovery after the owner approves the reported devices.
-# The plan stays in RAM; the backup volume is unmounted during the measurement.
+# Work and command logs stay beside the backup; only the plan lives in RAM.
 set -eu
 umask 077
+work=
 
-fail() { echo "machine-grow: failed: $*" >&2; exit 1; }
+# A full transcript must not hide a failure. The console is independent of
+# redirected stdout/stderr and needs no space on either file system.
+alert()
+{
+    printf 'machine-grow: failed: %s\n' "$*" >&2 || :
+    if [ -c /dev/console ]; then
+        printf 'machine-grow: failed: %s\n' "$*" > /dev/console || :
+    fi
+}
+fail() { alert "$*"; exit 1; }
+finish()
+{
+    result=$?
+    trap - EXIT
+    if [ -n "${work:-}" ]; then
+        if ! printf '%s\n' "$result" > "$work/result.status"; then
+            alert "writing $work/result.status"
+            result=1
+        fi
+    fi
+    if [ "$result" != 0 ]; then
+        alert "stopped with status $result; logs: ${work:-not created}"
+    fi
+    exit "$result"
+}
+trap finish EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 [ "$#" = 4 ] || fail 'usage: machine_grow.sh save|grow|restore DISK STORE PLAN-DIRECTORY'
 action=$1
 disk=$2
@@ -17,10 +46,32 @@ case "$store" in /*) ;; *) fail 'the store must be an absolute mount point' ;; e
 [ "$(id -u)" = 0 ] || fail 'root is required'
 [ -b "$disk" ] || fail 'the whole-disk window is not published'
 number=${disk#/dev/disk}
-work=$(mktemp -d /tmp/machine-grow.XXXXXX) || fail 'temporary directory'
-echo "machine-grow: logs: $work"
-cp "$plan/grow.plan" "$work/grow.plan"
-cp "$plan/ranges.txt" "$work/ranges.txt"
+# Check the mount before creating anything below it. An unmounted directory
+# or a symlink into the target must never become the work destination.
+# Allocate and release a MiB before a target write; a free-space estimate
+# alone does not prove allocation. Later writes still check errors.
+prepare_work()
+{
+    store=$(CDPATH='' cd -- "$store" && pwd -P) || fail 'the store directory'
+    store=${store%/}
+    source_device=$(awk -v m="$store" '$2 == m && $3 == "exfat" {print $1}' /proc/mounts) \
+        || fail 'reading the store mount'
+    case "$source_device" in
+        "$disk"|"$disk"p*) fail 'the backup volume is on the target disk' ;;
+        /dev/disk[0-9]|/dev/disk[0-9]p[0-9]) ;;
+        *) fail 'the store must be a mounted exFAT volume on another disk' ;;
+    esac
+    cd / || fail 'leaving the store before measurement'
+    work=$(mktemp -d "$store/machine-grow.XXXXXX") || fail "creating work directory on $store"
+    echo "machine-grow: logs: $work"
+    cp "$plan/grow.plan" "$work/grow.plan" || fail "writing $work/grow.plan"
+    cp "$plan/ranges.txt" "$work/ranges.txt" || fail "writing $work/ranges.txt"
+    dd if=/dev/zero of="$work/space.reserve" bs=65536 count=16 2>"$work/space.log" \
+        || fail "reserving log space on $store"
+    [ "$(wc -c < "$work/space.reserve" | tr -d ' ')" = 1048576 ] || fail 'short log-space reservation'
+    rm "$work/space.reserve" || fail 'releasing the log-space reservation'
+}
+prepare_work
 sha256sum -c "$plan/programs.sha256" || fail 'the recovery programs differ from the prepared binaries'
 read -r sectors serial start seed count disk_id seed_hash extra < "$work/grow.plan"
 [ -z "${extra:-}" ] || fail 'extra plan fields'
@@ -44,8 +95,8 @@ bytes=$(awk -v end="$sectors" -v root="$start" -v seed="$seed" '
 ' "$work/ranges.txt") || fail 'invalid saved ranges'
 
 # Identity survives a torn table, so restoration does not require that table.
-cat /proc/disk > "$work/disk.before"
-cat /proc/mounts > "$work/mounts.before"
+cat /proc/disk > "$work/disk.before" || fail "writing $work/disk.before"
+cat /proc/mounts > "$work/mounts.before" || fail "writing $work/mounts.before"
 awk -v d="$number" -v n="$sectors" '
     $1 == "disk" && $2 == d { found++; if ($5 != n) exit 1 }
     END { if (found != 1) exit 1 }
@@ -56,12 +107,6 @@ awk -v d="$number" -v serial="$serial" '
     }
     END { if (found != 1) exit 1 }
 ' "$work/disk.before" || fail 'disk serial, sector size or mount state changed'
-source_device=$(awk -v m="$store" '$2 == m && $3 == "exfat" {print $1}' "$work/mounts.before")
-case "$source_device" in
-    "$disk"|"$disk"p*) fail 'the backup volume is on the target disk' ;;
-    /dev/disk[0-9]|/dev/disk[0-9]p[0-9]) ;;
-    *) fail 'the store must be a mounted exFAT volume on another disk' ;;
-esac
 if [ "$action" != restore ]; then
     [ "$(diskctl id "$disk")" = "$disk_id" ] || fail 'disk identifier changed'
     awk -v d="$number" -v s="$start" -v n="$count" '
@@ -126,7 +171,10 @@ check_plan()
     [ "$(wc -c < "$store/seed.ext2" | tr -d ' ')" = "$((seed * 512))" ] || fail 'seed length'
     [ "$(hash_file "$store/seed.ext2")" = "$seed_hash" ] || fail 'seed checksum'
     /bin/growset --save --ranges --lba "$start" "$store/seed.ext2" "$count" \
-        > "$work/expected-ranges.txt" || fail 'the seed geometry is not supported'
+        > "$work/expected-ranges.txt" 2> "$work/growset.log" || {
+            cat "$work/growset.log" >&2 || :
+            fail "creating $work/expected-ranges.txt; growset failed (see $work/growset.log)"
+        }
     cmp "$work/ranges.txt" "$work/expected-ranges.txt" || fail 'ranges differ from the seed and target geometry'
     rm "$work/expected-ranges.txt"
 }
@@ -153,7 +201,7 @@ check_boot_copy()
     [ "$actual_boot" = "$expected_boot" ] || fail 'the boot backup differs from the disk'
 }
 
-# Only the 1024-byte prepared environment is created in RAM. growboot reads
+# Only the 1024-byte prepared environment is copied. growboot reads
 # the saved FAT layout and runs bootctl's editor against a memory overlay.
 prepare_boot()
 {
@@ -225,16 +273,57 @@ keep_recovery()
     grep -q '^bootctl: next_entry: absent$' "$work/boot.status" || fail 'a trial is still armed'
 }
 
+# tee checks every output write; the status file separately checks the
+# producer. Append permits thousands of restore calls without one file each.
 run_logged()
 {
     log_name=$1
     shift
     rm -f "$work/command.status"
     if (if "$@"; then echo 0 > "$work/command.status"; else echo "$?" > "$work/command.status"; fi) 2>&1 \
-        | tee "$work/$log_name"; then
-        [ "$(cat "$work/command.status")" = 0 ] || fail "$log_name"
+        | tee -a "$work/$log_name" > /dev/null; then
+        [ "$(cat "$work/command.status")" = 0 ] || fail "command failed; see $work/$log_name"
     else
-        fail "saving $log_name"
+        fail "writing $work/$log_name"
+    fi
+}
+
+# Keep the global disk counters free of backup-volume log writes. No file
+# descriptor on the store is held during this bounded in-memory capture.
+# A missing final status or output beyond 64 KiB fails after remounting.
+run_measured()
+{
+    umount -n "$store" || fail 'unmounting the backup volume before timing'
+    measured_output=$(
+        { if growroot "MBRID=$disk_id,3" --measure; then code=0; else code=$?; fi
+          printf '\nmachine-grow-status: %s\n' "$code"
+        } 2>&1 | head -c 65537
+    ) || { mount -n -t exfat "$source_device" "$store"; fail 'capturing the grow output'; }
+    mount -n -t exfat "$source_device" "$store" || fail 'remounting the backup volume; measurement is not saved'
+    printf '%s\n' "$measured_output" | tee "$work/grow.log" > /dev/null \
+        || fail "writing $work/grow.log"
+    [ "${#measured_output}" -le 65536 ] || fail "grow output exceeds 64 KiB; see $work/grow.log"
+    measured_status=${measured_output##*'
+'}
+    [ "$measured_status" = 'machine-grow-status: 0' ] || fail "measured grow failed; see $work/grow.log"
+    printf '%s\n' "$measured_output" || fail 'writing the grow report'
+    unset measured_output
+}
+
+# Keep both pipe endpoints' failures, including a status-file write failure.
+# reflash's complete per-range output goes to persistent restore.log.
+restore_range()
+{
+    rm -f "$work/restore-read.status" || return 1
+    if (if dd status=none if="$saved/backup.bin" bs=1048576 skip="$offset" count="$amount" \
+            iflag=skip_bytes,count_bytes 2>>"$work/restore-reads.log"; then
+            echo 0 > "$work/restore-read.status"
+        else
+            echo 1 > "$work/restore-read.status"
+        fi) | reflash "$disk" "$((first * 512))" "$amount"; then
+        [ "$(cat "$work/restore-read.status")" = 0 ] || return 1
+    else
+        return 1
     fi
 }
 
@@ -271,6 +360,8 @@ case "$action" in
         cmp -s "$saved/SHA256SUMS" "$saved/host.sha256" || fail 'host verification is absent'
         check_disk_copy
         check_boot_copy
+        umount -n "$store" || fail 'the store is busy; close its files before grow'
+        mount -n -t exfat "$source_device" "$store" || fail 'remounting the store before grow'
         prepare_boot
         dd status=none if="$saved/backup.bin" of="$work/mbr" bs=512 count=1 \
             2>"$work/mbr-read.log" || fail 'saved MBR'
@@ -283,7 +374,7 @@ case "$action" in
         dd status=none if="$work/count" of="$work/mbr" bs=1 seek=490 count=4 conv=notrunc \
             2>"$work/mbr-edit.log" || fail 'preparing the temporary table'
         keep_recovery
-        reflash -p "$disk" "$((start * 512))" "$((seed * 512))" < "$store/seed.ext2" \
+        run_logged seed-write.log reflash -p "$disk" "$((start * 512))" "$((seed * 512))" < "$store/seed.ext2" \
             || fail 'writing the temporary seed; restore from the backup'
         seed_result=$(reflash --verify "$disk" "$((start * 512))" "$((seed * 512))") \
             || fail 'reading back the temporary seed'
@@ -292,10 +383,8 @@ case "$action" in
             || fail 'the temporary seed differs; restore from the backup'
         reflash "$disk" 0 512 < "$work/mbr" || fail 'writing the temporary table'
         diskctl reread "$disk" || fail 'rereading the temporary table'
-        umount "$store" || fail 'unmounting the backup volume before timing'
-        run_logged grow.log growroot "MBRID=$disk_id,3" --measure
+        run_measured
         run_logged grown-check.log /sbin/e2fsck -fn "${disk}p3"
-        mount -t exfat "$source_device" "$store" || fail 'remounting the backup volume'
         echo 'machine-grow: result: the measured grow and read-only check passed; recovery remains saved'
         echo 'machine-grow: next: restore the saved ranges before booting the installed system'
         ;;
@@ -308,16 +397,9 @@ case "$action" in
         while read -r first length; do
             row=$((row + 1))
             amount=$((length * 512))
-            if (if dd status=none if="$saved/backup.bin" bs=1048576 skip="$offset" count="$amount" \
-                    iflag=skip_bytes,count_bytes 2>>"$work/restore-reads.log"; then
-                    echo 0 > "$work/restore-read.status"
-                else
-                    echo 1 > "$work/restore-read.status"
-                fi) \
-                | reflash "$disk" "$((first * 512))" "$amount"; then
-                [ "$(cat "$work/restore-read.status")" = 0 ] || fail 'reading a backup range'
-            else
-                fail "restoring sectors $first+$length; recovery remains saved"
+            run_logged restore.log restore_range
+            if [ "$((row % 128))" = 1 ]; then
+                echo "machine-grow: restored: range $row, sector $first"
             fi
             offset=$((offset + amount))
             if [ "$first" = 0 ]; then

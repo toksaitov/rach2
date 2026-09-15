@@ -1725,6 +1725,7 @@ run-grow: $(DEMO_CREDS) rach2 tests krffs test-image $(MKMBR) $(GROWSET) $(HARNE
 	sh tests/system/grow_measure_test.sh
 	sh tests/system/machine_grow_check.sh
 	sh tests/system/machine_grow_boot.sh
+	sh tests/system/machine_grow_space_test.sh
 	sh tests/system/suites/grow.sh $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(HARNESS) $(MKMBR) $(GROWSET) \
 	    $(GROW_DIR)
 	sh tests/system/grow_machine.sh $(HARNESS) $(RECOVERY_ISO) $(INSTALLER_DISK) $(SEALED_DISK) $(GROW_DIR)

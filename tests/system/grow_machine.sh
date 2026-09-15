@@ -99,6 +99,9 @@ dd if=/dev/zero of="$work/store.img" bs=1048576 count=1 2>"$work/store-prefix.lo
 cat "$work/store.vol" >> "$work/store.img"
 "$mkmbr" --lba "$work/store.img" 2048:262144:07 > "$work/store-mbr.log"
 cp "$work/store.img" "$work/store.initial.img"
+if [ "${6:-}" = space ] || [ "${6:-}" = space-mutate ]; then
+    exec sh tests/system/machine_grow_space.sh "$harness" "$work" "$6"
+fi
 qemu-img create -q -f qcow2 -o cluster_size=4096 -F raw \
     -b "$work/base.raw" "$work/disk.qcow2"
 
@@ -303,3 +306,8 @@ for point in save grow restore repair; do
     echo "grow-machine-test: interrupted $point: original bytes restored and target boots without USB: OK"
 done
 echo "grow-machine-test: result: interruption matrix completed in $(($(date +%s) - started)) seconds"
+
+# The space proof keeps all phases in one full RAM root. Its extra boots
+# and full native transfer remain outside the ordinary tier.
+sh tests/system/machine_grow_full_test.sh
+sh tests/system/machine_grow_space.sh "$harness" "$work" space

@@ -45,6 +45,7 @@
  */
 #define _POSIX_C_SOURCE 200809L
 #include <sys/types.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -408,7 +409,7 @@ int main(int argc, char **argv)
     }
     result = map ? check_map(map) : 0;
     if (fflush(stdout) != 0 || ferror(stdout)) {
-        fprintf(stderr, "growset: writing the range list failed\n");
+        fprintf(stderr, "growset: writing the range list failed: %s\n", strerror(errno));
         return 1;
     }
     return result;
