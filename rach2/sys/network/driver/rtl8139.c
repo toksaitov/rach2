@@ -9,8 +9,8 @@
  *
  * RX: one linear ring buffer. The chip prefixes each frame with a 4-byte header
  * (little-endian status word and length word). We validate that header before
- * trusting the length, and resync the receiver if it ever looks wrong or the
- * ring overflows.
+ * trusting the length, and resync the receiver if it ever looks wrong. An
+ * overflow drains the complete frames already in the ring.
  *
  * IRQ: registered at vector 32 + IRQ line. The shared IRQ router sends the
  * PIC EOI before calling us, so this driver must not touch the PIC. The card
@@ -43,6 +43,7 @@ static int tx_idx = 0;
  * with the software read pointer. */
 static uint8_t *rx_buf;
 static uint32_t rx_ptr = 0;
+static int rx_overflow_logged;
 
 /* Reason the most recent rtl8139_init() returned 0, surfaced via
  * rtl8139_error() for the boot banner. The success path prints nothing (see
@@ -327,7 +328,7 @@ int rtl8139_tx(void *dev, const uint8_t *data, uint16_t len)
         return NETDEV_TX_DROPPED;
     }
 
-    __asm__ __volatile__("pushfl; popl %0; cli" : "=r"(eflags) : : "memory");
+    eflags = net_lock();
 
     k_memcpy(tx_buf[tx_idx], data, len);
 
@@ -342,12 +343,12 @@ int rtl8139_tx(void *dev, const uint8_t *data, uint16_t len)
 
     tx_idx = (tx_idx + 1) & 3;
 
-    __asm__ __volatile__("pushl %0; popfl" : : "r"(eflags) : "memory", "cc");
+    net_unlock(eflags);
     return NETDEV_TX_OK;
 }
 
 /**
- * Resync the receiver after an overflow or a desynced ring header.
+ * Resync the receiver after a desynced ring header.
  *
  * Disables RX, resets the software read pointer, reprograms the ring (which
  * also resets the chip's internal write pointer), then re-enables RX.
@@ -441,6 +442,9 @@ static void rtl8139_rx(void)
  * stranded for the next IRQ. The guard bounds the loop should a status bit ever
  * stick. The shared IRQ router has already sent the PIC EOI, so this handler
  * must not touch the PIC.
+ *
+ * Overflow is counted on every entry but logged only once per boot, so
+ * sustained traffic cannot evict the boot inventory with repeated warnings.
  */
 static void rtl8139_irq(isr_params_t *params)
 {
@@ -472,7 +476,11 @@ static void rtl8139_irq(isr_params_t *params)
              * arrived since, including any this entry's drain has not reached.
              * A ring that is actually desynced is caught by the header check
              * in the drain, which does reset. */
-            klog(KLOG_WARN, "rtl8139", "rx: the ring filled; draining it");
+            if (!rx_overflow_logged) {
+                rx_overflow_logged = 1;
+                klog(KLOG_WARN, "rtl8139",
+                     "rx: the ring filled; draining it; further overflows are counted");
+            }
             ethernet_note_rx_drop(rtl8139_iface);
             rtl8139_rx();
         }

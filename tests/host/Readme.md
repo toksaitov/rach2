@@ -95,6 +95,8 @@ The suite contains 71 native test programs.
 
 ### Network
 
+* `rtl8139_hosttest.c` supplies 1024 alternating receive-ring and FIFO overflow events to the compiled driver. Every event must be counted, every retained frame delivered intact and released, and only the first overflow logged. A later receive error must still warn. A transmit must start with interrupts bracketed and restore the saved flag. `sh tests/host/rtl8139_mutate.sh` compiles the fixed driver, removes the warning guard in a private copy and requires the test to fail, then restores the source and compiles and runs it again. The model does not test PCI discovery or DMA.
+
 * `arp_hosttest.c` checks ARP cache filtering, replacement and use order, counter wrap, mapping changes, request replies, and network-lock balance.
 * `dhcpmsg_hosttest.c` checks DHCP discover and request construction, IPv4 and UDP validation, reply parsing, hostile options, lease validation, and renewal arithmetic.
 * `netcfg_hosttest.c` checks the `/etc/network/interfaces` reader for DHCP and static stanzas, selection rules, limits, malformed files, and address validation.
