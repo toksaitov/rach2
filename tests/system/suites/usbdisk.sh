@@ -26,6 +26,8 @@ fi
 KERNEL=$1; IMAGE=$2; HARNESS=$3; DIR=$4; OSREAL=$5; PASSWORD=$6; MKFIX=$7; STICKIMAGE=$8
 RKERNEL=$9; RIMAGE=${10}
 REPO=$(cd "$(dirname "$0")/../../.." && pwd)
+sh "$REPO/tests/system/vfs_unmount_test.sh" || exit 1
+sh "$REPO/tests/system/usbdisk_script_test.sh" || exit 1
 MKMBR="$REPO/build/tools/image/mkmbr"
 MKGPT="$REPO/build/tools/image/mkgpt"
 
@@ -150,7 +152,7 @@ fi
 #         first one reclaimed once the mount went. The emulator drops the
 #         medium with the device it was under, so the replug makes the
 #         medium again before the device. ----
-for hold in hold holdexfat; do
+for hold in holdnested holdnestedexfat; do
 cp "$MBR" "$DIR/stick-pull.img" || fail "the pull image"
 LOG="$DIR/pull-$hold.log"
 if run "$DIR/stick-pull.img" --timeout 180 --steptmo 60 --ok "USBDISKPROBE OK" --never "USBDISKPROBE FAIL" \
@@ -163,7 +165,7 @@ if run "$DIR/stick-pull.img" --timeout 180 --steptmo 60 --ok "USBDISKPROBE OK" -
     "usb=add:usb-storage,bus=xhci.0,drive=again,id=st1" "expect=usbdisk: disk0: mbr" \
     "send=exec /usbdiskprobe replug" "expect=USBDISKPROBE OK" \
     > /dev/null 2>&1; then
-    note "a pulled stick answers EIO, unmounts after its file closes, and mounts again when plugged back: OK"
+    note "$hold: a pulled stick releases child then parent and mounts again when plugged back: OK"
 else
     fail "the pull and replug boot"
 fi

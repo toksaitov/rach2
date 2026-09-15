@@ -91,6 +91,8 @@ The suite contains 71 native test programs.
 * `uimage_hosttest.c` checks the i386 initial stack, argument and environment arrays, auxiliary vectors, random bytes, `AT_SECURE`, alignment, and oversized input.
 * `usb_hosttest.c` walks configuration descriptors in buffers allocated to exactly their length, so a read past the end is a failure rather than a byte of whatever follows. It checks a boot keyboard's interface found with its configuration value, class, endpoint and interval; an unknown descriptor stepped over by its length; interfaces refused for their class, their missing boot protocol, an alternate setting, a configuration numbered zero, or an endpoint that reports nothing; and descriptors that give a length of zero, run past the buffer, or stop short of their own header.
 * `exit_hosttest.c` runs the shared exit cleanup with file-close and working-directory callbacks that wait on the real wait queue. Its scheduler substitute releases a contended lock only after finding the dying process blocked on that queue. Five cases force six waits and check that death and `SIGCHLD` are published after cleanup, the encoded status is retained, the parent is woken, and no waiter remains. `sh tests/host/exit_mutate.sh` compiles private fixed, early-zombie and restored copies; the early-zombie copy must fail both the publication and final-state checks.
+The exit host test proves the shared helper's intermediate ordering with substituted callers, resources and scheduling. It does not run the three production death paths or a real parent reaper, and cannot detect deleting the helper call from one of those paths.
+
 * `wait_queue_hosttest.c` checks fixed-slot enqueue, idempotent dequeue, queue capacity, and wake-all state changes.
 
 ### Network

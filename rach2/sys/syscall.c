@@ -390,9 +390,11 @@ void release_fd_table(fd_table_t *table)
 /**
  * Terminate the current process (exit(2)/exit_group(2)). Does not return.
  *
- * EBX has the exit status. Marks the process a zombie, reparents its children
- * to init, wakes the parent if it waits, and reschedules. A real init's exit is
- * fatal (panic_init_died); an init exiting under the debug shell returns to it.
+ * EBX has the exit status. Releases files and cwd, reparents children to init,
+ * publishes the zombie and wakes its parent, then reschedules. A normal child
+ * leaves its mappings, descriptor-table storage, record and stack to do_wait.
+ * A real init's exit is fatal (panic_init_died); an init exiting under the
+ * debug shell returns to it.
  *
  * The plain status line goes out only where the debug shell is the supervisor.
  * There it is how a person, and the harness in its no-token mode, read a

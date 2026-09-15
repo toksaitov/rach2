@@ -17,6 +17,8 @@
  *   with `USBDISKPROBE HOLDING` and read the uncached disk until `EIO`.
  *   File access and cached lookup must then fail; the listings omit the disk
  *   and mount. Unmount is busy while files are open and succeeds after close.
+ * * `holdnested` and `holdnestedexfat`: the same with the other volume mounted
+ *   below the first. The child must unmount before the parent can be released.
  * * `replug`: the volume mounts again and the file is still there, on a
  *   stick that inherits nothing from the one before it.
  * * `free`: the number of free names `/proc/usb` reports, printed, so the
@@ -437,18 +439,30 @@ static void part_write(void)
 }
 
 /** Keep file and directory cache entries across a pull on either volume. */
-static void part_hold(const char *source, const char *type)
+static void part_hold(const char *source, const char *type, int children)
 {
     int fd;
     int dir;
     int raw;
     int rw;
+    int nested = -1;
     int reads = 0;
     int gone = 0;
     char buf[512];
 
     if (mount_at(source, type, 0) != 0) {
         fail("the volume would not mount");
+    }
+    if (children) {
+        if (sys2(SYS_MKDIR, (int)MNT "/nested", 0755) != 0 ||
+            sys5(SYS_MOUNT, (int)(source == fat_node ? exfat_node : fat_node), (int)MNT "/nested",
+                 (int)(source == fat_node ? "exfat" : "vfat"), MS_RDONLY, 0) != 0) {
+            fail("the child volume would not mount");
+        }
+        nested = sys3(SYS_OPEN, (int)MNT "/nested", O_RDONLY, 0);
+        if (nested < 0) {
+            fail("the child mount would not open");
+        }
     }
     rw = sys3(SYS_OPEN, (int)MNT "/held.txt", O_RDWR | O_CREAT, 0644);
     if (rw < 0) {
@@ -528,6 +542,18 @@ static void part_hold(const char *source, const char *type)
     sys1(SYS_CLOSE, dir);
     if (raw >= 0) {
         sys1(SYS_CLOSE, raw);
+    }
+    if (children) {
+        if (sys2(SYS_UMOUNT2, (int)MNT, 0) != -EBUSY) {
+            fail("the parent unmounted while its child mount remained");
+        }
+        if (sys2(SYS_UMOUNT2, (int)MNT "/nested", 0) != -EBUSY) {
+            fail("the removed child mount did not retain its open description");
+        }
+        sys1(SYS_CLOSE, nested);
+        if (sys2(SYS_UMOUNT2, (int)MNT "/nested", 0) != 0) {
+            fail("the child mount would not unmount below its removed parent");
+        }
     }
     if (sys2(SYS_UMOUNT2, (int)MNT, 0) != 0) {
         fail("the mount would not unmount after its files were closed");
@@ -833,10 +859,16 @@ void probe_main(unsigned int *sp)
         part_write();
     }
     if (same(what, "hold")) {
-        part_hold(fat_node, "vfat");
+        part_hold(fat_node, "vfat", 0);
     }
     if (same(what, "holdexfat")) {
-        part_hold(exfat_node, "exfat");
+        part_hold(exfat_node, "exfat", 0);
+    }
+    if (same(what, "holdnested")) {
+        part_hold(fat_node, "vfat", 1);
+    }
+    if (same(what, "holdnestedexfat")) {
+        part_hold(exfat_node, "exfat", 1);
     }
     if (same(what, "replug")) {
         part_replug();

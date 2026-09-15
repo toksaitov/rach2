@@ -1859,12 +1859,46 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
  */
 static void unmount_abandoned(struct vfs_mount *m)
 {
-    if (m->dev && (m->dev->flags & BLOCK_GONE)) {
+    if (vfs_mount_gone(m)) {
         return; /* nothing was written and nothing can be */
     }
     if (m->type->ops->abort_unmount) {
         m->type->ops->abort_unmount(m);
     }
+}
+
+/**
+ * Find a mount by its recorded target when a removed ancestor blocks lookup.
+ *
+ * Removal must not make a child mount's reference on its parent permanent.
+ * The recorded spelling is the recovery name; no lookup on the missing
+ * medium is needed. Only a unique active mount below a gone ancestor is
+ * eligible. Ordinary lookup errors and mounts on present ancestors retain
+ * their usual pathname rules.
+ */
+static struct vfs_mount *unmount_below_gone(const char *target)
+{
+    struct vfs_mount *found = NULL;
+    struct vfs_mount *m;
+    struct vfs_mount *parent;
+    int i;
+
+    for (i = 3; i < mount_slots; i++) {
+        m = mounts[i];
+        if (!m || m->state != VFS_ACTIVE || !streq(m->covered_path, target)) {
+            continue;
+        }
+        for (parent = m->parent; parent; parent = parent->parent) {
+            if (vfs_mount_gone(parent)) {
+                if (found) {
+                    return NULL;
+                }
+                found = m;
+                break;
+            }
+        }
+    }
+    return found;
 }
 
 /**
@@ -1884,19 +1918,22 @@ int vfs_do_umount(const char *target)
     int rc;
 
     rc = resolve_path(0, target, 0, &tref, 0, 0, 1);
-    if (rc != 0) {
+    m = rc == -EIO ? unmount_below_gone(target) : NULL;
+    if (rc != 0 && !m) {
         return rc;
     }
-    m = tref.mnt;
-    if (tref.node != m->root) {
+    if (rc == 0) {
+        m = tref.mnt;
+        if (tref.node != m->root) {
+            vfs_ref_release(&tref);
+            return -EINVAL; /* not a mount point */
+        }
+        if (m == mounts[0] || m == mounts[1] || m == mounts[2]) {
+            vfs_ref_release(&tref);
+            return -EBUSY; /* the permanent three */
+        }
         vfs_ref_release(&tref);
-        return -EINVAL; /* not a mount point */
     }
-    if (m == mounts[0] || m == mounts[1] || m == mounts[2]) {
-        vfs_ref_release(&tref);
-        return -EBUSY; /* the permanent three */
-    }
-    vfs_ref_release(&tref);
     if (m->state != VFS_ACTIVE) {
         return -EBUSY;
     }
@@ -1913,7 +1950,7 @@ int vfs_do_umount(const char *target)
      * not attempted: each would fail, and an unmount that fails on a stick
      * that is no longer there would leave the mount for good. What it held
      * is let go of, and that is the whole of the unmount. */
-    gone = m->dev && (m->dev->flags & BLOCK_GONE);
+    gone = vfs_mount_gone(m);
     if (!gone && m->type->ops->sync) {
         rc = m->type->ops->sync(m);
         if (rc != 0) {
