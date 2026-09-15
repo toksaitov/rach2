@@ -48,28 +48,10 @@ REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 KEY="${RACH2_ACCEPT_KEY:-$REPO/krffs/rach2_demo_ed25519}"
 USER_NAME="${RACH2_ACCEPT_USER:-root}"
 USE_SU="${RACH2_ACCEPT_SU:-0}"
-SAVED_BOOTLOG="${RACH2_ACCEPT_BOOTLOG:-}"
-if [ -n "$SAVED_BOOTLOG" ]; then
-    case "$SAVED_BOOTLOG" in
-        /*) ;;
-        *) echo 'metal-accept: RACH2_ACCEPT_BOOTLOG must be an absolute path' >&2; exit 2 ;;
-    esac
-    if [ ! -f "$SAVED_BOOTLOG" ] || [ ! -r "$SAVED_BOOTLOG" ] || [ ! -s "$SAVED_BOOTLOG" ]; then
-        echo 'metal-accept: RACH2_ACCEPT_BOOTLOG must be a readable, nonempty file' >&2
-        exit 2
-    fi
+if [ "${RACH2_ACCEPT_BOOTLOG+x}" = x ] || [ "${RACH2_ACCEPT_DD+x}" = x ]; then
+    echo 'metal-accept: RACH2_ACCEPT_BOOTLOG and RACH2_ACCEPT_DD are no longer supported' >&2
+    exit 2
 fi
-MBR_DD="${RACH2_ACCEPT_DD:-dd}"
-case "$MBR_DD" in
-    dd|/*) ;;
-    *) echo 'metal-accept: RACH2_ACCEPT_DD must be an absolute path' >&2; exit 2 ;;
-esac
-case "$MBR_DD" in
-    *[!A-Za-z0-9_./-]*)
-        echo 'metal-accept: RACH2_ACCEPT_DD contains an unsafe path character' >&2
-        exit 2
-        ;;
-esac
 if [ "$USE_SU" = 1 ] && [ -z "${RACH2_ACCEPT_PASSWORD:-}" ]; then
     echo 'metal-accept: RACH2_ACCEPT_SU needs RACH2_ACCEPT_PASSWORD in the environment' >&2
     exit 2
@@ -80,6 +62,8 @@ if [ ! -f "$KEY" ]; then
     exit 2
 fi
 KNOWN="$REPO/build/images/metal-accept.known"
+umask 077
+LOCAL_TMP=$(mktemp -d "${TMPDIR:-/tmp}/rach2-accept.XXXXXX")
 
 # The MBR's SHA-256 as Windows measured it, from dev-log/24-metal/baseline.md.
 # Kept here, not read from the document so this script is one file to
@@ -113,6 +97,7 @@ cleanup() {
         account "rm -rf $TRANSFER_TMP" > /dev/null 2>&1 || true
     fi
     rm -f "$KNOWN"
+    rm -rf "$LOCAL_TMP"
     return 0
 }
 trap 'cleanup' EXIT
@@ -141,12 +126,33 @@ account() {
         "$USER_NAME@$HOST" "$1" 2>/dev/null
 }
 
-run() {
+try_run() {
     if [ "$USE_SU" = 1 ]; then
-        sh "$REPO/tests/system/accept/su_command.sh" \
-            "$KEY" "$HOST" "$PORT" "$USER_NAME" "$KNOWN" "$1"
+        if run_output=$(sh "$REPO/tests/system/accept/su_command.sh" \
+            "$KEY" "$HOST" "$PORT" "$USER_NAME" "$KNOWN" "$1"); then
+            printf '%s\n' "$run_output"
+        else
+            return "$?"
+        fi
     else
-        account "$1" | tr -d '\r'
+        if run_output=$(account "$1"); then
+            printf '%s\n' "$run_output" | tr -d '\r'
+        else
+            return "$?"
+        fi
+    fi
+}
+
+# A file retains failure across subshells and pipelines. Required commands
+# cannot become successful verdicts when a caller tests only their output.
+run() {
+    if try_run "$1"; then
+        return 0
+    else
+        run_status=$?
+        : > "$LOCAL_TMP/command-failed"
+        echo "metal-accept: a required remote command failed (status $run_status)" >&2
+        return "$run_status"
     fi
 }
 
@@ -209,17 +215,37 @@ if [ "$(run 'id -u')" != 0 ]; then
     echo 'metal-accept: root commands are required; use a root key or RACH2_ACCEPT_SU=1' >&2
     exit 1
 fi
+CMDLINE=$(run 'cat /proc/cmdline')
+[ -n "$CMDLINE" ] || { echo 'metal-accept: the command line is empty' >&2; exit 1; }
+MOUNTS=$(run 'cat /proc/mounts')
+ROOT_TYPE=$(printf '%s\n' "$MOUNTS" | awk '$2 == "/" { print $3 }')
+case "$ROOT_TYPE" in
+    ext2|krffs) ;;
+    *) echo 'metal-accept: the mount table has no supported root type' >&2; exit 1 ;;
+esac
+case " $CMDLINE " in
+    *' rach2.rootfstype=ext2 '*|*' rach2.root=ext2 '*)
+        [ "$ROOT_TYPE" = ext2 ] || {
+            echo 'metal-accept: the requested ext2 root is not mounted' >&2
+            exit 1
+        }
+        ;;
+esac
+INSTALLED=0
+if printf '%s\n' "$CMDLINE" | grep -q 'rach2.root=\(disk\|ext2\|MBRID=\)'; then
+    INSTALLED=1
+fi
 
 # ---- what it says it is ----
 note "uname: $(run 'uname -a')"
-note "uptime ticks: $(run 'cat /proc/uptime 2>/dev/null || echo unavailable')"
-note "boot line: $(run 'cat /proc/cmdline')"
+note "uptime ticks: $(run 'cat /proc/uptime')"
+note "boot line: $CMDLINE"
 note "identity: $(run 'id')"
 
 # ---- the network, which is the thing that was ported. The address is on the
 #      boot line, since this kernel publishes no interface file, and the fact
 #      that this session exists at all is the stronger evidence anyway. ----
-note "address given: $(run 'cat /proc/cmdline' | tr ' ' '\n' | grep '^rach2.ip=' || echo none)"
+note "address given: $(printf '%s\n' "$CMDLINE" | tr ' ' '\n' | grep '^rach2.ip=' || echo none)"
 
 # ---- entropy, which dropbear's host key depends on ----
 if run 'dd if=/dev/urandom bs=16 count=1 2>/dev/null | wc -c' | grep -q '^ *16$'; then
@@ -248,11 +274,9 @@ else
     # names the disk by its table's id, rach2.root=MBRID=ID,N, writes that
     # root and is built read-write; a read-only kernel there would be a
     # system that cannot take a file.
-    if run 'cat /proc/cmdline' | grep -q 'rach2.root=\(disk\|ext2\|MBRID=\)'; then
-        INSTALLED=1
+    if [ "$INSTALLED" = 1 ]; then
         [ "$policy" = "read-write" ] || bad "the installed kernel is not the read-write build"
     else
-        INSTALLED=0
         [ "$policy" = "read-only" ] || bad "the running kernel is not the read-only build"
     fi
 
@@ -287,7 +311,7 @@ else
                 # A hash of a pipe can succeed after dd fails or reads nothing.
                 # Keep the sector until its read status and length are checked.
                 # shellcheck disable=SC2016
-                sector="$(run 'f=$(mktemp /tmp/accept-mbr.XXXXXX) || exit 1; trap '"'"'rm -f "$f"'"'"' EXIT; '"$MBR_DD"' if=/dev/disk0 of="$f" bs=512 count=1 2>/dev/null && [ "$(wc -c < "$f")" = 512 ] && sha256sum "$f"')" || sector=""
+                sector="$(run 'f=$(mktemp /tmp/accept-mbr.XXXXXX) || exit 1; trap '"'"'rm -f "$f"'"'"' EXIT; /bin/busybox dd if=/dev/disk0 of="$f" bs=512 count=1 >/dev/null 2>&1 && [ "$(wc -c < "$f")" = 512 ] && sha256sum "$f"')" || sector=""
                 mbr="$(printf '%s\n' "$sector" | awk '{print $1}')"
                 case "$mbr" in
                     ''|*[!0-9a-f]*) mbr="" ;;
@@ -329,17 +353,12 @@ else
     fi
 fi
 
-# Repeated rows may use an explicit snapshot from this boot; never replace it.
-if [ -n "$SAVED_BOOTLOG" ]; then
-    BOOTLOG_OUT="$SAVED_BOOTLOG"
-    note "boot log: using saved copy $BOOTLOG_OUT"
+# Each invocation reads the running machine, including after rehearsal faults.
+BOOTLOG_OUT="$REPO/build/images/metal-bootlog.txt"
+if run 'cat /dev/bootlog' > "$BOOTLOG_OUT" 2>/dev/null && [ -s "$BOOTLOG_OUT" ]; then
+    note "boot log: $(wc -l < "$BOOTLOG_OUT" | tr -d ' ') lines saved to $BOOTLOG_OUT"
 else
-    BOOTLOG_OUT="$REPO/build/images/metal-bootlog.txt"
-    if run 'cat /dev/bootlog' > "$BOOTLOG_OUT" 2>/dev/null && [ -s "$BOOTLOG_OUT" ]; then
-        note "boot log: $(wc -l < "$BOOTLOG_OUT" | tr -d ' ') lines saved to $BOOTLOG_OUT"
-    else
-        bad "/dev/bootlog gave nothing; this kernel predates it, or the log is empty"
-    fi
+    bad "/dev/bootlog gave nothing; this kernel predates it, or the log is empty"
 fi
 if [ -s "$BOOTLOG_OUT" ]; then
     if grep -q "refused command" "$BOOTLOG_OUT"; then
@@ -446,7 +465,11 @@ note "boot log: inventory checks used the snapshot above"
 #      note there; a machine whose bootctl answers has the sealed layout and
 #      owes its three partitions. ----
 NODES="$(run 'ls /dev 2>/dev/null' | grep '^disk0p[1-4]$' | tr '\n' ' ')"
-SLOTS="$(run 'bootctl status 2>/dev/null' || true)"
+if [ "$INSTALLED" = 1 ]; then
+    SLOTS=$(run 'bootctl status 2>/dev/null')
+else
+    SLOTS=$(run 'bootctl status 2>/dev/null || :')
+fi
 if [ -z "$NODES" ]; then
     if [ -n "$SLOTS" ]; then
         bad "partitions: bootctl reports slots and there are no partition nodes"
@@ -463,7 +486,15 @@ else
             esac
         done
     fi
-    OUT="$(run 'mkdir -p /mnt/accept-boot && mount -r -t vfat /dev/disk0p1 /mnt/accept-boot && grep "^/dev/disk0p1 /mnt/accept-boot vfat ro" /proc/mounts && ls -l /mnt/accept-boot/boot /mnt/accept-boot/boot/grub; umount /mnt/accept-boot; rmdir /mnt/accept-boot')"
+    # A RAM boot may have a data stick at disk0. An installed boot requires
+    # its boot files; cleanup must preserve any failure in reading them.
+    # shellcheck disable=SC2016 # The remote shell preserves its read status.
+    BOOT_COMMAND='mkdir -p /mnt/accept-boot && mount -r -t vfat /dev/disk0p1 /mnt/accept-boot && grep "^/dev/disk0p1 /mnt/accept-boot vfat ro" /proc/mounts && ls -l /mnt/accept-boot/boot /mnt/accept-boot/boot/grub; status=$?; umount /mnt/accept-boot || status=1; rmdir /mnt/accept-boot || status=1; exit "$status"'
+    if [ "$INSTALLED" = 1 ] || [ -n "$SLOTS" ]; then
+        OUT=$(run "$BOOT_COMMAND")
+    else
+        OUT=$(run "( $BOOT_COMMAND ) || :")
+    fi
     if [ -z "$OUT" ]; then
         note "partitions: /dev/disk0p1 is not a FAT volume this kernel mounts"
     else
@@ -477,7 +508,11 @@ else
         case "$OUT" in
             *" kernel"*) ;;
             *)
-                note "partitions: /dev/disk0p1 is a FAT volume without a kernel, so not this machine's boot partition"
+                if [ "$INSTALLED" = 1 ] || [ -n "$SLOTS" ]; then
+                    bad "partitions: the boot partition has no kernel"
+                else
+                    note "partitions: /dev/disk0p1 is a FAT volume without a kernel, so not this machine's boot partition"
+                fi
                 OUT="" ;;
         esac
     fi
@@ -498,7 +533,7 @@ else
             fi
         done
     fi
-    LAGN="$(run 'cat /proc/cmdline' | tr ' ' '\n' | sed -n 's/^rach2.blocklag=//p' | head -1)"
+    LAGN="$(printf '%s\n' "$CMDLINE" | tr ' ' '\n' | sed -n 's/^rach2.blocklag=//p' | head -1)"
     case "$LAGN" in
         ''|*[!0-9]*)
             note "partitions: the lag check needs rach2.blocklag=N on the boot line"
@@ -535,10 +570,9 @@ fi
 #      check or a clean one, and the volume takes a write that survives a
 #      sync. A boot after a power cut checks the root and records
 #      `ext2: check: clean`; a check that found lost blocks, orphans or a fault
-#      is the failure. Before the ext2 root the command line says
-#      rach2.rootfstype=krffs and this is a note, not a failure. ----
-if run 'cat /proc/cmdline' | grep -q 'rach2.rootfstype=ext2'; then
-    OUT="$(run 'cat /proc/mounts')"
+#      is the failure. A krffs root in the mount table skips this row. ----
+if [ "$ROOT_TYPE" = ext2 ]; then
+    OUT="$MOUNTS"
     case "$OUT" in
         *"/dev/disk0p3 / ext2 rw,relatime"*) note "the ext2 root is mounted writable from /dev/disk0p3" ;;
         *) bad "the ext2 root is not the mounted root: $OUT" ;;
@@ -549,7 +583,7 @@ if run 'cat /proc/cmdline' | grep -q 'rach2.rootfstype=ext2'; then
         *) bad "the ext2 root boot did not come from the candidate slot: $OUT" ;;
     esac
     if [ -s "$BOOTLOG_OUT" ] && grep -q "ext2: check" "$BOOTLOG_OUT"; then
-        if grep -q "ext2: check: clean" "$BOOTLOG_OUT"; then
+        if ! grep 'ext2: check' "$BOOTLOG_OUT" | grep -v 'ext2: check: clean$' >/dev/null; then
             note "the ext2 root was checked at this boot and found clean; it was not unmounted the time before"
         else
             bad "the ext2 root's check found a fault: $(grep 'ext2: check' "$BOOTLOG_OUT" | head -1)"
@@ -567,7 +601,7 @@ if run 'cat /proc/cmdline' | grep -q 'rach2.rootfstype=ext2'; then
         bad "the ext2 root did not take a write: $OUT"
     fi
 else
-    note "the root is not ext2 yet (rach2.rootfstype=ext2 absent from the command line)"
+    note "the mount table identifies a krffs root; no ext2 root row"
 fi
 
 note "scratch: the image row uses a temporary file on the root"
@@ -577,10 +611,13 @@ note "scratch: the image row uses a temporary file on the root"
 #      unmounted, detached, and judged here by the host's own checker. The
 #      image is built here and taken away again, so the machine is left as it
 #      was found. ----
-if ! run 'grep -q krffs /proc/filesystems && echo LISTED' | grep -q LISTED; then
+FILESYSTEMS=$(run 'cat /proc/filesystems')
+if [ -z "$FILESYSTEMS" ]; then
+    bad "the machine gave no file-system list"
+elif ! printf '%s\n' "$FILESYSTEMS" | grep -qw krffs; then
     note "this kernel does not take the krffs type; no image row"
 elif [ ! -x "$REPO/build/krffs/mkfs.krffs" ]; then
-    note "no host KRFFS tools built; no image row"
+    bad "the host KRFFS tools required for the image row are not built"
 else
     IMG="$REPO/build/images/metal-loop.krffs"
     TREE="$REPO/build/tests/system/loopimg"
@@ -589,15 +626,14 @@ else
     dd if=/dev/zero of="$TREE/inner.bin" bs=512 count=8 2>/dev/null
     if ! sh "$REPO/krffs/mkimage.sh" "$REPO/krffs/manifests/loopimg-test.manifest" \
         "$IMG" 1 >/dev/null 2>&1; then
-        note "the image could not be built here; no image row"
+        bad "the image could not be built here"
     elif ! MACHINE_TMP="$(run 'mktemp -d /tmp/accept.XXXXXX')" || [ -z "$MACHINE_TMP" ]; then
-        note "the machine gave no temporary directory; no image row"
+        bad "the machine gave no temporary directory for the image row"
     elif ! put "$IMG" "$MACHINE_TMP/loop.img" ||
         [ "$(run "wc -c < $MACHINE_TMP/loop.img")" != "1048576" ]; then
-        note "image: the transfer failed or did not produce 1048576 bytes"
+        bad "image: the transfer failed or did not produce 1048576 bytes"
         run "df -k /tmp; ls -ld $MACHINE_TMP; ls -l $MACHINE_TMP/loop.img" || true
         run "rm -rf $MACHINE_TMP"; MACHINE_TMP=""
-        note "the image transfer did not complete; no image row"
     else
         MACHINE_LOOP=0
         OUT="$(run "loopctl attach 0 $MACHINE_TMP/loop.img && grep -c '^loop0 ' /proc/loop")"
@@ -748,9 +784,9 @@ if [ -n "$STICK" ]; then
     KVOL=""
     for part in 1 2 3 4; do
         node="/dev/${STICK}p${part}"
-        if [ -n "$(run "ls $node 2>/dev/null")" ] &&
+        if [ "$(run "if [ -b $node ]; then echo PRESENT; fi")" = PRESENT ] &&
             ! echo "$BLKID" | grep -q "^$node:" &&
-            [ "$(run "mkdir -p /mnt/k && mount -t krffs $node /mnt/k && echo MOUNTED")" \
+            [ "$(run "mkdir -p /mnt/k || exit 1; if mount -t krffs $node /mnt/k; then echo MOUNTED; fi")" \
                 = "MOUNTED" ]; then
             KVOL="$node"
             break
@@ -825,6 +861,9 @@ else
     fi
 fi
 
+if [ -f "$LOCAL_TMP/command-failed" ]; then
+    bad "a required remote command failed; its output is not acceptance evidence"
+fi
 if [ "$fails" -gt 0 ]; then
     echo "metal-accept: FAIL ($fails)" >&2
     exit 1

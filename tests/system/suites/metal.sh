@@ -52,7 +52,6 @@ KNOWN="$IMAGE.metal.known"
 SEND="$IMAGE.metal.send"
 BACK="$IMAGE.metal.back"
 ACCEPT_LOG="$IMAGE.metal.accept.log"
-SAVED_BOOTLOG="$(cd "$(dirname "$IMAGE")" && pwd)/$(basename "$IMAGE").metal.bootlog"
 rm -f "$WORK" "$LOG" "$KNOWN" "$SEND" "$BACK" "$ACCEPT_LOG"
 
 QPID=""
@@ -95,6 +94,8 @@ fail_ssh() {
     cat "$LOG" >&2 || true
     fail "$1"
 }
+
+sh "$REPO/tests/system/accept/transport_test.sh" || fail "the acceptance transport checks"
 
 wait_token() {
     i=0
@@ -320,10 +321,8 @@ if ! echo "$UNNAMED" | grep -q '^metal-accept: PASS' ||
 fi
 [ "$stick_before" = "$(shasum -a 256 "$STICK")" ] || fail "the unnamed stick was changed"
 echo "metal-test: acceptance without a serial leaves the stick unchanged: OK"
-cp "$REPO/build/images/metal-bootlog.txt" "$SAVED_BOOTLOG" \
-    || fail "saving the first acceptance's boot log"
 accept_status=0
-RACH2_ACCEPT_BOOTLOG="$SAVED_BOOTLOG" RACH2_ACCEPT_SU=1 \
+RACH2_ACCEPT_SU=1 \
     RACH2_ACCEPT_USER=test RACH2_ACCEPT_KEY="$TEST_KEY" \
     sh "$REPO/tests/system/accept/metal_accept.sh" 127.0.0.1 "$PORT" ACCEPT01 \
     > "$ACCEPT_LOG" 2>&1 || accept_status=$?
@@ -388,30 +387,24 @@ mbr_sum=${mbr_sum%% *}
 grep -q "disk: the MBR hashes to $mbr_sum" "$ACCEPT_LOG" \
     || fail "the acceptance did not hash the same sector as the host"
 
-# Standalone ash can run dd without a file in PATH. Only the MBR row uses
-# this explicit path; a successful empty read must fail before it is hashed.
-shim_dir=$(ssh_run 'mktemp -d /tmp/accept-shim.XXXXXX') \
-    || fail_ssh "creating the MBR reader's directory"
-case "$shim_dir" in
-    /tmp/accept-shim.*) ;;
-    *) fail "the MBR reader's directory has an unexpected path" ;;
-esac
-case "$shim_dir" in
-    *[!A-Za-z0-9_./-]*) fail "the MBR reader's directory has an unsafe path" ;;
-esac
-if ! ssh_run "cat > '$shim_dir/dd' && chmod 755 '$shim_dir/dd'" <<'SHORT_DD'
-#!/bin/sh
-exec /bin/busybox dd "$@" count=0
-SHORT_DD
-then
-    fail_ssh "installing the emulated MBR reader"
-fi
+# Mutate only a private host script. The production reader has no override.
+ACCEPT_ROOT=$(mktemp -d "$REPO/build/tests/metal-accept.XXXXXX")
+ACCEPT_COPY="$ACCEPT_ROOT/tests/system/accept"
+mkdir -p "$ACCEPT_COPY"
+for directory in build krffs; do
+    ln -s "$REPO/$directory" "$ACCEPT_COPY/../../../$directory"
+done
+cp "$REPO/tests/system/accept/metal_accept.sh" "$ACCEPT_COPY/original.sh"
+cp "$REPO/tests/system/accept/su_command.sh" "$ACCEPT_COPY/su_command.sh"
+trap 'cleanup; cp "$ACCEPT_COPY/original.sh" "$ACCEPT_COPY/metal_accept.sh"' EXIT
+# shellcheck disable=SC2016 # Match the guest variable in the private source.
+sed 's@/bin/busybox dd if=/dev/disk0 of="\$f" bs=512 count=1@/bin/busybox dd if=/dev/disk0 of="$f" bs=512 count=0@' \
+    "$ACCEPT_COPY/original.sh" > "$ACCEPT_COPY/metal_accept.sh"
+cmp -s "$ACCEPT_COPY/original.sh" "$ACCEPT_COPY/metal_accept.sh" \
+    && fail "the empty-read mutation did not change the private script"
 short_status=0
-RACH2_ACCEPT_BOOTLOG="$SAVED_BOOTLOG" RACH2_ACCEPT_DD="$shim_dir/dd" \
-    sh "$REPO/tests/system/accept/metal_accept.sh" 127.0.0.1 "$PORT" \
+sh "$ACCEPT_COPY/metal_accept.sh" 127.0.0.1 "$PORT" \
     > "$WORK.short-mbr.log" 2>&1 || short_status=$?
-ssh_run "rm '$shim_dir/dd' && rmdir '$shim_dir'" \
-    || fail_ssh "removing the emulated MBR reader"
 if [ "$short_status" -ne 1 ] ||
     ! grep -q 'FAIL: disk: the published whole-disk window did not supply one complete sector' "$WORK.short-mbr.log" ||
     grep -q 'disk: the MBR hashes to ' "$WORK.short-mbr.log"; then
@@ -419,9 +412,9 @@ if [ "$short_status" -ne 1 ] ||
     fail "the acceptance did not reject an empty MBR read"
 fi
 echo "metal-test: acceptance rejects a successful read of zero MBR bytes: OK"
+cp "$ACCEPT_COPY/original.sh" "$ACCEPT_COPY/metal_accept.sh"
 restored_status=0
-RACH2_ACCEPT_BOOTLOG="$SAVED_BOOTLOG" \
-    sh "$REPO/tests/system/accept/metal_accept.sh" 127.0.0.1 "$PORT" \
+sh "$ACCEPT_COPY/metal_accept.sh" 127.0.0.1 "$PORT" \
     > "$WORK.restored-mbr.log" 2>&1 || restored_status=$?
 if [ "$restored_status" -ne 0 ] ||
     ! grep -q '^metal-accept: PASS' "$WORK.restored-mbr.log" ||
