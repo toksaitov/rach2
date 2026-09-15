@@ -1,0 +1,68 @@
+metal-accept: 192.168.0.106:22
+  SSH answers
+  uname: Rach2 rach2 1.0.0 Rach2 musl port i686 GNU/Linux
+  uptime ticks: 2684.31 2679.80
+  boot line: rach2.root=MBRID=1acef00d,3 rach2.rootfstype=ext2 rach2.boot=MBRID=1acef00d,1 rach2.slot=candidate rach2.disk=ahci rach2.netconsole rach2.ip=none
+  identity: uid=0(root) gid=0(root) groups=0(root)
+  address given: rach2.ip=none
+  the random pool is trusted (16 bytes read from /dev/urandom)
+  disk: policy=read-write
+  disk: disk 0 ahci 0 488397168 mbr Samsung SSD 870 EVO 250GB
+  disk: identity 0 512 fixed mounted S6P2NX0T381638Z
+  disk: the installed system's root is on it
+  disk: the MBR hashes to e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  disk: part 0 1 2048 131072 mbr:0c
+  disk: part 0 2 133120 131072 mbr:0c
+  disk: part 0 3 266240 488130928 mbr:83
+  disk: not the drive the baseline describes, so nothing is compared
+  boot log: 72 lines saved to /Users/toksaitov/Desktop/rach2/build/images/metal-bootlog.txt
+  usb: controller: 0:14.0 xhci interface 0x30 8086:9c31 bar0 0xC0600004
+  usb: controller: 0:1d.0 ehci interface 0x20 8086:9c26 bar0 0xC061C000
+  usb: routing: usb2 0xA of 0x1FF, usb3 0x1 of 0xF, as the firmware left it
+  usb: routing: usb2 0x1FF of 0x1FF, usb3 0xF of 0xF, taken
+  usb: ready: xhci0: version 100, 13 ports, 32 slots, 32-byte
+  usb: the controller came up and nothing was enumerated on it
+  interrupts: 32:	268607	PIC	pit
+  interrupts: 33:	1	PIC	kbd
+  interrupts: 44:	1	PIC	mouse
+  interrupts: 49:	5441	MSI	xhci
+  interrupts: 50:	1214	MSI	ahci
+  interrupts: 51:	6188	MSI	rtl8168
+  interrupts: SPU:	0	spurious
+  interrupts: FBK:	0	usb fallback
+  interrupts: the timer has taken 268607, so the 8259's interrupts arrive
+  interrupts: usb vector 5441, audio vector none
+  interrupts: spurious 0, usb fallback 0
+  interrupts: lapic: ready: id 0, version 0x15, base 0xfee00000
+  (the saved boot log above is the whole of what this machine printed)
+  partitions: disk0p1 disk0p2 disk0p3
+  partitions: /dev/disk0p1 mounted read-only, as asked
+  partitions: /boot/kernel is 2097152 bytes on the mount and in the slot report
+  partitions: /boot/fallback is 2097152 bytes on the mount and in the slot report
+  partitions: /boot/boot.cfg is 8192 bytes on the mount and in the slot report
+  partitions: /boot/grubenv is 1024 bytes on the mount and in the slot report
+  partitions: the lag check needs rach2.blocklag=N on the boot line
+  the ext2 root is mounted writable from /dev/disk0p3
+  the ext2 root boot came from the candidate slot
+  the ext2 root takes a file and gives it back
+  scratch: the image row uses a temporary file on the root
+  an image on the root is attached to /dev/loop0
+  the file system in that file mounts and reads
+  and takes a write
+  and unmounts and detaches, leaving no device attached
+  the host's checker finds the image the machine wrote clean
+  with the file the machine wrote inside it
+  stick: disk1  USB  SanDisk 3.2Gen1 120164352 sectors 1 parts ready flushes 0
+  stick: /dev/disk1 (00014101091624031318) is the one written
+  stick: /dev/disk1 is a block device
+  stick: /dev/disk1p1: LABEL="RACH2TEST" UUID="C84E-0F0F" TYPE="vfat"
+  stick: the volume RACH2TEST on /dev/disk1p1 mounts, takes a file and gives it back
+  stick: the unmount flushed its cache (0 to 6)
+  stick: no KRFFS volume on it (no partition of it mounts as krffs)
+
+  hub: port 2 high 35d6:2510 class 9 protocol 1
+  hub: port 10 super 35d6:3510 class 9 protocol 0
+  behind a hub: port 2.1 low 46d:c077 class 3 protocol 2
+  behind a hub: port 2.2 low 46d:c34b class 3 protocol 1
+  hub: a low-speed device behind a hub is driven, which is the translator's case
+metal-accept: PASS
