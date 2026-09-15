@@ -1716,11 +1716,14 @@ run-large: rach2 tests krffs test-image $(MKMBR) $(HARNESS)
 # system to a partition the size of the installed machine's disk, its
 # writes checked against the grow set, a grow killed and repaired, one
 # interrupted between the entry and the grow, and the memory it needs.
+# Both modes also rehearse the machine's save, grow and restore on a small root.
 GROW_DIR = $(IMAGES_DIR)/grow
 run-grow: $(DEMO_CREDS) rach2 tests krffs test-image $(MKMBR) $(GROWSET) $(HARNESS) \
-          utils check-busybox check-dropbearmulti rach2-recovery $(RECOVERY_IMAGE)
+          utils check-busybox check-dropbearmulti rach2-recovery $(RECOVERY_IMAGE) \
+          $(SEALED_DISK) $(INSTALL_TEST_STICK) $(MKEXFATFIXTURE)
 	sh tests/system/suites/grow.sh $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(HARNESS) $(MKMBR) $(GROWSET) \
 	    $(GROW_DIR)
+	sh tests/system/grow_machine.sh $(HARNESS) $(RECOVERY_ISO) $(INSTALLER_DISK) $(SEALED_DISK) $(GROW_DIR)
 # `tests/run queue`: the AHCI disks on their interrupts: a throttled disk
 # beside a fast one, and the fallback root's faults beside the queue.
 QUEUE_DIR = $(IMAGES_DIR)/queue

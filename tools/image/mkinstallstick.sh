@@ -14,8 +14,8 @@
 # writes anything, and hashes the disk after it has written it, so a stick
 # damaged in either direction is found rather than installed.
 #
-# The volume is as large as the image plus four megabytes for the file system's
-# own structures, rounded up to a mebibyte. The MBR gets two entries: the ISO
+# The volume includes the input files and FREE-MIB for metadata and free space,
+# rounded up to a mebibyte. The MBR gets two entries: the ISO
 # from sector 1, of type 0x17, and the volume, of type 0x07. The boot code
 # around the table is GRUB's, as the ISO wrote it.
 #
@@ -25,9 +25,12 @@
 # An EXTRA file, if one is given, is placed in the volume beside the image: the
 # root file system an update writes, which `rach2-install --update` takes.
 #
-# Usage: mkinstallstick.sh ISO DISK OUT MKEXFATFIXTURE MKMBR STICKCHECK [EXTRA]
+# FREE-MIB is four by default; recovery backups need a larger value.
+# Usage: mkinstallstick.sh ISO DISK OUT MKEXFATFIXTURE MKMBR STICKCHECK
+#                         [EXTRA [FREE-MIB]]
 set -e
 ISO=$1; DISK=$2; OUT=$3; MKFIX=$4; MKMBR=$5; CHECK=$6; EXTRA=${7:-}
+FREE_MIB=${8:-4}
 
 if [ -z "$CHECK" ]; then
     echo "usage: mkinstallstick.sh ISO DISK OUT MKEXFATFIXTURE MKMBR STICKCHECK" >&2
@@ -35,7 +38,14 @@ if [ -z "$CHECK" ]; then
 fi
 
 MIB_SECTORS=2048
-SLACK_SECTORS=8192
+case "$FREE_MIB" in
+    ''|*[!0-9]*|0*) echo 'mkinstallstick: invalid free-space size' >&2; exit 2 ;;
+esac
+if [ "${#FREE_MIB}" -gt 4 ] || [ "$FREE_MIB" -lt 4 ] || [ "$FREE_MIB" -gt 8192 ]; then
+    echo 'mkinstallstick: free space must be 4 through 8192 MiB' >&2
+    exit 2
+fi
+SLACK_SECTORS=$((FREE_MIB * MIB_SECTORS))
 
 name=$(basename "$DISK")
 iso_bytes=$(wc -c < "$ISO" | tr -d ' ')
