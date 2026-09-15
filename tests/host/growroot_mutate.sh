@@ -1,5 +1,5 @@
 #!/bin/sh
-# Exercise the table read order in private, freshly compiled copies.
+# Exercise table validation and phase measurements in private builds.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
@@ -45,6 +45,9 @@ run_phase()
         [ "$status" -eq 1 ] &&
             grep -q 'growroot-test: fail: a failed or short writer read makes no write' "$binary.log" &&
             grep -q 'growroot-test: fail: the writer uses the sector it checked without rereading' "$binary.log" || exit 1
+    elif [ "$phase" = zero ] || [ "$phase" = attribution ]; then
+        [ "$status" -eq 1 ] &&
+            grep -q 'growroot-test: fail: phase samples match the independent operation counters' "$binary.log" || exit 1
     else
         [ "$status" -eq 0 ] || exit 1
     fi
@@ -84,3 +87,30 @@ run_phase mutated
 cleanup
 run_phase restored
 cmp "$work/growroot.saved" "$work/growroot.c"
+
+for mutation in zero attribution; do
+    python3 - "$work/growroot.c" "$mutation" <<'PYTHON'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+source = path.read_text()
+if sys.argv[2] == "zero":
+    before = '    printf("growroot: measure:'
+    after = '    us = commands = flushes = 0;\n' + before
+else:
+    before = '    rc = run("/sbin/e2fsck", "-fn", part_node);\n'
+    marker = '    if (measured("check-readonly", "after")) {\n        return 1;\n    }\n'
+    if source.count(marker) != 1:
+        sys.exit("growroot-mutation: measurement block no longer matches")
+    before += marker
+    after = marker + '    rc = run("/sbin/e2fsck", "-fn", part_node);\n'
+if source.count(before) != 1:
+    sys.exit("growroot-mutation: source no longer matches")
+path.write_text(source.replace(before, after))
+PYTHON
+    run_phase "$mutation"
+    cleanup
+    run_phase "restored-$mutation"
+    cmp "$work/growroot.saved" "$work/growroot.c"
+done

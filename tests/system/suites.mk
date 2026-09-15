@@ -1721,6 +1721,7 @@ GROW_DIR = $(IMAGES_DIR)/grow
 run-grow: $(DEMO_CREDS) rach2 tests krffs test-image $(MKMBR) $(GROWSET) $(HARNESS) \
           utils check-busybox check-dropbearmulti rach2-recovery $(RECOVERY_IMAGE) \
           $(SEALED_DISK) $(INSTALL_TEST_STICK) $(MKEXFATFIXTURE)
+	sh tests/system/grow_measure_test.sh
 	sh tests/system/machine_grow_check.sh
 	sh tests/system/machine_grow_boot.sh
 	sh tests/system/suites/grow.sh $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(HARNESS) $(MKMBR) $(GROWSET) \
@@ -1765,6 +1766,7 @@ run-style:
 # own `unix_io.c` out of the extracted tree: without it they build against
 # whatever that tree last held, or fail to build at all in a fresh checkout.
 run-host: check-libc $(E2FSPROGS_STAMP) $(DEADLINE)
+	@sh tests/system/machine_measure_test.sh
 	@./tests/system/suites/host.sh
 
 # The runner suite (see tests/system/selftest.sh): tests/run driven against a

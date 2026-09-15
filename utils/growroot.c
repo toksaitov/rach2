@@ -82,7 +82,9 @@ static int fail(const char *what, const char *detail)
 /**
  * Record each phase against the same monotonic clock and disk counters.
  * The counters cover the machine, so recovery must have no other disk work
- * running for their differences to describe this grow alone.
+ * running for their differences to describe this grow alone. Rach2 time
+ * counts delivered 10 ms ticks; masked interrupts can lose ticks, so these
+ * timestamps do not independently establish wall time.
  */
 static int measured(const char *phase, const char *edge)
 {
@@ -260,6 +262,10 @@ int main(int argc, char **argv)
     }
     if (entry < 1 || entry > 4) {
         return fail(argv[1], "the entry is not a primary one; only entries 1 to 4 grow");
+    }
+    if (measure) {
+        puts("growroot: clock: CLOCK_MONOTONIC uses delivered 10 ms ticks on Rach2; "
+             "lost ticks can undercount elapsed time");
     }
     /* Before the disk is even looked for: a machine too small is told so
      * with nothing read and nothing written. */

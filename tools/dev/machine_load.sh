@@ -4,8 +4,8 @@
 #
 # The load row of milestone 46, run against an installed machine over SSH:
 # SESSIONS sessions, each copying the kernel tree and building it with the
-# staged TinyCC and pdpmake over and over for SECONDS, with a report a
-# session. DIR is where the logs go, the current directory by default.
+# staged TinyCC and pdpmake, each for SECONDS seconds on the guest clock.
+# Each session reports separately. DIR holds the logs; it defaults to the cwd.
 #
 # The sessions start a second apart. Dropbear allows five unauthenticated
 # connections from one address at a time (MAX_UNAUTH_PER_IP in the port's
@@ -50,6 +50,8 @@ done
 # One run's trees and logs are its own, so two runs cannot delete each other's
 # work or read each other's results.
 RUN=$$
+SESSION_SCRIPT=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)/machine_load_session.sh
+[ -r "$SESSION_SCRIPT" ] || exit 1
 REMOTE="$(ssh -i "$KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
     -o LogLevel=ERROR -o ConnectTimeout=10 -o BatchMode=yes "$LOAD_USER@$ADDR" \
     'mktemp -d /tmp/rach2-load.XXXXXX')" || exit 1
@@ -60,6 +62,7 @@ esac
 case "$REMOTE" in
     *[!A-Za-z0-9_./-]*) echo "machine_load: invalid work directory" >&2; exit 1 ;;
 esac
+echo 'machine_load: clock: guest delivered ticks; separate session windows; late successes counted separately'
 echo "machine_load: working: $LOAD_USER@$ADDR $REMOTE, logs $DIR/load-$RUN-sessionN.log"
 pids=""
 n=1
@@ -67,13 +70,8 @@ while [ "$n" -le "$SESSIONS" ]; do
     ssh -i "$KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
         -o LogLevel=ERROR -o ServerAliveInterval=30 -o ServerAliveCountMax=2 \
         -o ConnectTimeout=10 -o BatchMode=yes "$LOAD_USER@$ADDR" \
-        "set -e; cp -r /src/rach2 $REMOTE/b$n; cd $REMOTE/b$n; \
-         set +e; built=0; failed=0; \
-         end=\$((\$(cut -d. -f1 /proc/uptime) + $SECONDS_EACH)); \
-         while [ \$(cut -d. -f1 /proc/uptime) -lt \$end ]; do \
-             if make -f guest.mk clean && make -f guest.mk; then built=\$((built+1)); \
-             else failed=\$((failed+1)); fi; \
-         done; echo \"SESSION $n builds \$built failed \$failed\"" \
+        "sh -s -- $n $SECONDS_EACH $REMOTE/b$n" \
+        < "$SESSION_SCRIPT" \
         > "$DIR/load-$RUN-session$n.log" 2>&1 &
     pids="$pids $!"
     n=$((n + 1))

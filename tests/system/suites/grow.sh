@@ -94,8 +94,20 @@ FSCK="send=/sbin/e2fsck -fn /dev/disk0p1 > /dev/null 2>&1; echo FSCK\"\"\$?"
 # ---- 1: the grow, its writes inside the set, and a file near the end ----
 grep -aq 'growroot: measure:' "$RIMAGE" || fail "the recovery image has no grow measurements"
 overlay "$DIR/one.qcow2" "$BASE"
-boot "$DIR/one.qcow2" $MEM "$DIR/one.log" \
+# The wrappers live only in this boot's RAM root and invoke the real tools.
+# Encode one small script for the console; no ext2 binary is copied in RAM.
+set -- 'send=: > /tmp/grow-tool.b64' 'expect=~ #'
+for chunk in $(base64 < "$REPO/tests/system/fixtures/grow_tool.sh" | tr -d '\n' | fold -w 160); do
+    set -- "$@" "send=echo '$chunk' >> /tmp/grow-tool.b64" 'expect=~ #'
+done
+boot "$DIR/one.qcow2" $MEM "$DIR/one.log" "$@" \
+    'send=base64 -d /tmp/grow-tool.b64 > /tmp/grow-tool && chmod +x /tmp/grow-tool' 'expect=~ #' \
+    'send=mv /sbin/e2fsck /sbin/e2fsck.actual && cp /tmp/grow-tool /sbin/e2fsck' 'expect=~ #' \
+    'send=mv /sbin/resize2fs /sbin/resize2fs.actual && cp /tmp/grow-tool /sbin/resize2fs' 'expect=~ #' \
+    'send=/tmp/grow-tool whole before' 'expect=~ #' \
     "send=growroot MBRID=$ID,1 --measure" "expect=$GROWN" \
+    'send=/tmp/grow-tool whole after' 'expect=~ #' \
+    "send=mv /sbin/e2fsck.actual /sbin/e2fsck && mv /sbin/resize2fs.actual /sbin/resize2fs" \
     "$FSCK" "expect=FSCK0" "send=echo ROW\"\"DONE" "expect=ROWDONE" || fail "the grow"
 grep -aq "growroot: entry: /dev/disk0p1 from $SIZE to $END sectors" "$DIR/one.log" || fail "the entry's record"
 qemu-img map --output=json "$DIR/one.qcow2" > "$DIR/one.map" || fail "qemu-img map"
@@ -104,23 +116,8 @@ qemu-img map --output=json "$DIR/one.qcow2" > "$DIR/one.map" || fail "qemu-img m
 grep '^coverage' "$DIR/one.cover" | sed 's/^/grow-test: /'
 echo "grow-test: a $((SIZE / 2048)) MiB root grown to $END sectors at $MEM MiB, every write inside the grow set, e2fsck clean: OK"
 tr -d '\r' < "$DIR/one.log" > "$DIR/one.text"
-awk '
-    BEGIN { split("table check-readonly check-repair resize", phases, " ") }
-    $1 == "growroot:" && $2 == "measure:" {
-        n++
-        if (NF != 10 || $3 != phases[int((n + 1) / 2)] ||
-            $4 != (n % 2 ? "before" : "after") ||
-            $5 != "monotonic-us" || $7 != "disk-commands" || $9 != "disk-flushes" ||
-            $6 !~ /^[0-9]+$/ || $8 !~ /^[0-9]+$/ || $10 !~ /^[0-9]+$/ ||
-            $6 + 0 < time || $8 + 0 < commands || $10 + 0 < flushes) bad = 1
-        print
-        if (n % 2 == 0)
-            printf "grow-test: phase: %s %.0f us %.0f commands %.0f flushes\n",
-                $3, $6 - time, $8 - commands, $10 - flushes
-        time = $6 + 0; commands = $8 + 0; flushes = $10 + 0
-    }
-    END { exit bad || n != 8 }
-' "$DIR/one.text" || fail "the four phases need ordered time, command and flush readings"
+awk -f "$REPO/tests/system/checkers/grow_measure.awk" "$DIR/one.text" ||
+    fail "the phase samples must match independent tool counters and show work"
 if [ "${RACH2_GROW_SMALL:-0}" = 1 ]; then
     qemu-img convert -f qcow2 -O raw "$DIR/one.qcow2" "$DIR/restored.raw" || fail "the grown disk"
     while read -r tag first count _; do

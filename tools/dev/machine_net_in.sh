@@ -74,6 +74,10 @@ cleanup()
         kill -TERM "$receiver" 2>/dev/null || :
         wait "$receiver" 2>/dev/null || :
     fi
+    # Remove only our scratch file, after the last cleanup connection uses it.
+    if [ -z "${RACH2_NET_KNOWN:-}" ]; then
+        rm -f "$known"
+    fi
 }
 trap cleanup EXIT
 trap 'exit 129' HUP

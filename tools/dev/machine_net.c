@@ -62,7 +62,7 @@ static unsigned number(const char *s, unsigned low, unsigned high)
     return (unsigned)value;
 }
 
-/** Read the monotonic clock in microseconds. */
+/** Rach2 counts delivered 10 ms ticks; lost ticks shorten this interval. */
 static uint64_t usec(void)
 {
     struct timespec t;
@@ -205,7 +205,9 @@ static void receive(int listener, uint64_t bytes, unsigned timeout)
         }
         sender = -1;
     }
-    printf("machine-net: result: %llu bytes %llu us %lu reads select-timeout %u\n",
+    printf("machine-net: result: %llu bytes %llu us %lu reads select-timeout %u "
+           "clock CLOCK_MONOTONIC (Rach2: delivered 10 ms ticks; "
+           "lost ticks can inflate rates)\n",
            (unsigned long long)total, (unsigned long long)elapsed, reads, timeout);
 }
 
