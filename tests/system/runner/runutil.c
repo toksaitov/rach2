@@ -66,13 +66,20 @@ static void reset_signals(void)
     signal(SIGPIPE, SIG_DFL);
 }
 
-/** Execute a command, optionally in a process group of its own. */
+/** Execute a command, optionally in a process group of its own.
+ * After a failed setpgid, existing membership decides whether exec is safe.
+ */
 static void execute(char **argv, int group)
 {
     reset_signals();
     if (group && setpgid(0, 0) != 0) {
-        perror("runutil: setpgid");
-        exit(2);
+        int error = errno;
+        pid_t pid = getpid(), actual = getpgrp();
+        if (actual != pid) {
+            fprintf(stderr, "runutil: setpgid: pid %ld, group %ld: %s\n", (long)pid,
+                    (long)actual, strerror(error));
+            exit(2);
+        }
     }
     execvp(argv[0], argv);
     perror("runutil: exec");
@@ -194,6 +201,8 @@ static void last_output(const char *path)
  * suite alive.
  * The suite's clock is never scaled. Its child group is stopped on silence
  * or a signal, and output from another suite cannot reset its clock.
+ * The parent tries to establish the group before cleanup can need it. The
+ * child checks membership before exec; the parent's call may lose to exec.
  */
 static int supervise(char **cmd, const char *name, double idle, const char *ledger)
 {
@@ -234,7 +243,7 @@ static int supervise(char **cmd, const char *name, double idle, const char *ledg
         close(pipes[1]);
         execute(cmd, 1);
     }
-    setpgid(child, child);
+    (void)setpgid(child, child);
     close(pipes[1]);
     fcntl(pipes[0], F_SETFL, O_NONBLOCK);
     {
