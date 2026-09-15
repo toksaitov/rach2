@@ -91,7 +91,7 @@ pack()
         if [ "$((row % 128))" = 1 ]; then
             echo "machine-grow: reading: range $row, sector $first" >&2
         fi
-        dd if="$disk" bs=1048576 skip="$((first * 512))" count="$((length * 512))" \
+        dd status=none if="$disk" bs=1048576 skip="$((first * 512))" count="$((length * 512))" \
             iflag=skip_bytes,count_bytes 2>>"$work/reads.log" || return 1
     done < "$work/ranges.txt"
 }
@@ -120,14 +120,109 @@ check_backup()
     backup_hash=$(hash_file "$saved/backup.bin") || fail 'hashing the backup'
 }
 
+# The seed and actual device size determine the set, not its supplied digest.
+check_plan()
+{
+    [ "$(wc -c < "$store/seed.ext2" | tr -d ' ')" = "$((seed * 512))" ] || fail 'seed length'
+    [ "$(hash_file "$store/seed.ext2")" = "$seed_hash" ] || fail 'seed checksum'
+    /bin/growset --save --ranges --lba "$start" "$store/seed.ext2" "$count" \
+        > "$work/expected-ranges.txt" || fail 'the seed geometry is not supported'
+    cmp "$work/ranges.txt" "$work/expected-ranges.txt" || fail 'ranges differ from the seed and target geometry'
+    rm "$work/expected-ranges.txt"
+}
+
+# reflash's verifier requires every byte of the declared extent to read.
+# Its bounded buffer needs no copy in recovery's four MiB RAM file system.
+hash_slice()
+{
+    slice_result=$(reflash --verify "$1" "$2" "$3") || return 1
+    printf '%s\n' "$slice_result" | awk -v offset="$2" -v count="$3" '
+        { n++ }
+        NF != 8 || $1 != "reflash:" || $2 != "sha256" || length($3) != 64 ||
+            $3 ~ /[^0-9a-f]/ || $4 != "of" || $5 != count || $6 != "bytes" ||
+            $7 != "at" || $8 != offset { bad = 1 }
+        { digest = $3 }
+        END { if (bad || n != 1) exit 1; print digest }
+    '
+}
+
+check_boot_copy()
+{
+    expected_boot=$(hash_file "$saved/boot.img") || fail 'hashing the boot backup'
+    actual_boot=$(hash_slice "$disk" 1048576 67108864) || fail 'reading the complete boot partition'
+    [ "$actual_boot" = "$expected_boot" ] || fail 'the boot backup differs from the disk'
+}
+
+# Only the 1024-byte prepared environment is created in RAM. growboot reads
+# the saved FAT layout and runs bootctl's editor against a memory overlay.
+prepare_boot()
+{
+    /bin/growboot "$saved/boot.img" "$work/recovery.env" > "$work/prepared-boot.status" || fail 'preparing recovery from boot.img'
+    env_sector=$(awk '$1 == "growboot:" && $2 == "environment:" {n++; sector=$3}
+        END {if (n != 1) exit 1; print sector}' "$work/prepared-boot.status") || fail 'saved environment extent'
+    case "$env_sector" in ''|*[!0-9]*) fail 'invalid saved environment extent' ;; esac
+    [ "$env_sector" -gt 0 ] && [ "$env_sector" -le 131070 ] || fail 'saved environment bounds'
+    [ "$(wc -c < "$work/recovery.env" | tr -d ' ')" = 1024 ] || fail 'prepared environment length'
+    env_offset=$((env_sector * 512))
+}
+
+# Compare the environment separately so verified recovery is never rewritten
+# while another boot extent is repaired. Invalid headers need not parse:
+# every repair byte comes from the verified backup or its prepared environment.
 keep_recovery()
 {
-    bootctl --target "${disk}p1" env saved_entry recovery || fail 'saving recovery'
-    bootctl --target "${disk}p1" cancel || fail 'cancelling the trial'
-    bootctl --target "${disk}p1" status > "$work/boot.status" || fail 'reading boot state'
+    for part in prefix environment suffix; do
+        source_file="$saved/boot.img"
+        case "$part" in
+            prefix) at=0; amount=$env_offset ;;
+            environment) at=$env_offset; amount=1024; source_file="$work/recovery.env" ;;
+            suffix) at=$((env_offset + 1024)); amount=$((67108864 - at)) ;;
+        esac
+        source_at=$at
+        [ "$part" != environment ] || source_at=0
+        [ "$amount" -gt 0 ] || continue
+        if [ "$part" = environment ]; then
+            dd status=none if="$disk" of="$work/boot-current" bs=1048576 skip="$((1048576 + at))" count=1024 \
+                iflag=skip_bytes,count_bytes 2>"$work/env-read.log" || fail 'reading the environment'
+            [ "$(wc -c < "$work/boot-current" | tr -d ' ')" = 1024 ] || fail 'short environment read'
+            LC_ALL=C tr -d '\012\040-\176' < "$work/boot-current" > "$work/boot-nontext" || fail 'checking environment bytes'
+            if [ ! -s "$work/boot-nontext" ] && awk '
+                NR == 1 { if ($0 != "# GRUB Environment Block") bad = 1; next }
+                /^#[ -~]*$/ { next }
+                /^saved_entry=recovery$/ { saved++; next }
+                /^(saved_entry|next_entry)=/ { bad = 1; next }
+                /^[A-Za-z_][A-Za-z0-9_]*=[ -~]*$/ { next }
+                { bad = 1 }
+                END { exit (bad || saved != 1) }
+            ' "$work/boot-current"; then
+                cp "$work/boot-current" "$work/recovery.env" || fail 'preserving recovery state'
+            fi
+        fi
+        wanted=$(hash_slice "$source_file" "$source_at" "$amount") || fail 'reading the saved boot extent'
+        current=$(hash_slice "$disk" "$((1048576 + at))" "$amount") || fail 'reading the current boot extent'
+        if [ "$wanted" = "$current" ]; then
+            echo "machine-grow: boot $part unchanged"
+        else
+            rm -f "$work/boot-write.status"
+            if (if dd status=none if="$source_file" bs=1048576 skip="$source_at" count="$amount" \
+                    iflag=skip_bytes,count_bytes 2>>"$work/boot-write.log"; then
+                    echo 0 > "$work/boot-write.status"
+                else
+                    echo 1 > "$work/boot-write.status"
+                fi) | reflash "$disk" "$((1048576 + at))" "$amount"; then
+                [ "$(cat "$work/boot-write.status")" = 0 ] || fail 'reading the boot repair source'
+            else
+                fail "repairing boot $part"
+            fi
+            current=$(hash_slice "$disk" "$((1048576 + at))" "$amount") || fail 'reading back the boot repair'
+            [ "$wanted" = "$current" ] || fail 'boot repair readback differs'
+            echo "machine-grow: boot $part repaired from boot.img"
+        fi
+    done
+    bootctl --target "${disk}p1" status > "$work/boot.status" || fail 'boot status'
     cat "$work/boot.status"
     grep -q '^bootctl: saved_entry: recovery$' "$work/boot.status" || fail 'recovery is not saved'
-    grep -q '^bootctl: next_entry: absent$' "$work/boot.status" || fail 'a trial remains armed'
+    grep -q '^bootctl: next_entry: absent$' "$work/boot.status" || fail 'a trial is still armed'
 }
 
 run_logged()
@@ -143,14 +238,18 @@ run_logged()
     fi
 }
 
+check_plan
+
 case "$action" in
     save)
         run_logged original-check.log /sbin/e2fsck -fn "${disk}p3"
-        mkdir "$saved" || fail 'the backup directory already exists or cannot be created'
+        [ ! -e "$saved" ] || fail 'the backup directory already exists'
+        saved="$store/saved.pending"
+        mkdir "$saved" || fail 'preserve the interrupted saved.pending directory before saving again'
         cp "$work/grow.plan" "$work/ranges.txt" "$saved/"
         pack > "$saved/backup.bin" || fail 'saving disk ranges'
         [ "$(wc -c < "$saved/backup.bin")" = "$bytes" ] || fail 'short range copy'
-        dd if="$disk" of="$saved/boot.img" bs=1048576 skip=1048576 count=67108864 \
+        dd status=none if="$disk" of="$saved/boot.img" bs=1048576 skip=1048576 count=67108864 \
             iflag=skip_bytes,count_bytes 2>"$work/boot-read.log" || fail 'saving the boot partition'
         [ "$(wc -c < "$saved/boot.img")" = 67108864 ] || fail 'short boot copy'
         bootctl --target "${disk}p1" status > "$saved/boot.status" || fail 'original boot state'
@@ -158,6 +257,12 @@ case "$action" in
         (cd "$saved" && sha256sum backup.bin boot.img grow.plan ranges.txt > SHA256SUMS)
         check_backup
         check_disk_copy
+        check_boot_copy
+        prepare_boot
+        sync
+        mv "$saved" "$store/saved" || fail 'publishing the checked backup'
+        sync
+        saved="$store/saved"
         echo "machine-grow: result: $bytes range bytes and 67108864 boot bytes saved and checked"
         echo "machine-grow: next: copy saved to the host, check SHA256SUMS there, then return it as host.sha256"
         ;;
@@ -165,9 +270,9 @@ case "$action" in
         check_backup
         cmp -s "$saved/SHA256SUMS" "$saved/host.sha256" || fail 'host verification is absent'
         check_disk_copy
-        [ "$(wc -c < "$store/seed.ext2")" = "$((seed * 512))" ] || fail 'seed size'
-        [ "$(hash_file "$store/seed.ext2")" = "$seed_hash" ] || fail 'seed checksum'
-        dd if="$saved/backup.bin" of="$work/mbr" bs=512 count=1 \
+        check_boot_copy
+        prepare_boot
+        dd status=none if="$saved/backup.bin" of="$work/mbr" bs=512 count=1 \
             2>"$work/mbr-read.log" || fail 'saved MBR'
         [ "$(wc -c < "$work/mbr")" = 512 ] || fail 'short saved MBR'
         for shift in 0 8 16 24; do
@@ -175,7 +280,7 @@ case "$action" in
             printf '%b' "\\$octal"
         done > "$work/count"
         [ "$(wc -c < "$work/count")" = 4 ] || fail 'partition count encoding'
-        dd if="$work/count" of="$work/mbr" bs=1 seek=490 count=4 conv=notrunc \
+        dd status=none if="$work/count" of="$work/mbr" bs=1 seek=490 count=4 conv=notrunc \
             2>"$work/mbr-edit.log" || fail 'preparing the temporary table'
         keep_recovery
         reflash -p "$disk" "$((start * 512))" "$((seed * 512))" < "$store/seed.ext2" \
@@ -197,10 +302,13 @@ case "$action" in
     restore)
         check_backup
         cmp -s "$saved/SHA256SUMS" "$saved/host.sha256" || fail 'host verification is absent'
+        prepare_boot
         offset=0
+        row=0
         while read -r first length; do
+            row=$((row + 1))
             amount=$((length * 512))
-            if (if dd if="$saved/backup.bin" bs=1048576 skip="$offset" count="$amount" \
+            if (if dd status=none if="$saved/backup.bin" bs=1048576 skip="$offset" count="$amount" \
                     iflag=skip_bytes,count_bytes 2>>"$work/restore-reads.log"; then
                     echo 0 > "$work/restore-read.status"
                 else

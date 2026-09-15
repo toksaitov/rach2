@@ -32,21 +32,12 @@ seed_hash=${sum_line%% *}
 printf '%s %s %s %s %s %s %s\n' \
     "$sectors" "$serial" "$start" "$seed_sectors" "$count" "$disk_id" "$seed_hash" \
     > "$directory/grow.plan"
-"$repo/build/tools/inspect/growset" --lba "$start" "$seed" "$count" \
+"$repo/build/tools/inspect/growset" --save --lba "$start" "$seed" "$count" \
     > "$directory/grow-set.txt" || fail 'growset'
-printf '%s %s\n' "$start" "$seed_sectors" > "$directory/ranges.unsorted"
-awk '$1 == "range" {print $2, $3}' "$directory/grow-set.txt" >> "$directory/ranges.unsorted"
-sort -n -k1,1 "$directory/ranges.unsorted" > "$directory/ranges.sorted"
-awk '
-    NR == 1 { first = $1; end = $1 + $2; next }
-    $1 <= end { if ($1 + $2 > end) end = $1 + $2; next }
-    { printf "%.0f %.0f\n", first, end - first; first = $1; end = $1 + $2 }
-    END { printf "%.0f %.0f\n", first, end - first }
-' "$directory/ranges.sorted" > "$directory/ranges.txt"
-rm "$directory/ranges.sorted" "$directory/ranges.unsorted"
+awk '$1 == "range" {print $2, $3}' "$directory/grow-set.txt" > "$directory/ranges.txt"
 cp "$repo/tools/dev/machine_grow.sh" "$directory/machine_grow.sh"
 printf '%s  seed.ext2\n' "$seed_hash" > "$directory/seed.sha256"
-for pair in utils/growroot:/bin/growroot utils/reflash:/bin/reflash \
+for pair in utils/growboot:/bin/growboot utils/growset:/bin/growset utils/growroot:/bin/growroot utils/reflash:/bin/reflash \
     utils/diskctl:/bin/diskctl utils/sbin/bootctl:/bin/bootctl \
     vendor/e2fsprogs/e2fsck:/sbin/e2fsck vendor/e2fsprogs/resize2fs:/sbin/resize2fs; do
     sum_line=$(shasum -a 256 "$repo/build/${pair%%:*}") || fail 'recovery program checksum'

@@ -93,6 +93,10 @@ The sealed disk has three partitions: boot, recovery and the ext2 root. The cand
 
 `growroot MBRID=ID,N [--measure]` grows a primary ext2 partition into the free space after it, from recovery with the disk unmounted. It requires a complete table read through the writer's descriptor, checks the disk signature, target type, start, count and free space, and rewrites that checked sector. It then asks the kernel to read the table again, checks the volume read-only, runs the repairing check only if the read-only check was clean, and calls `resize2fs`. `--measure` records monotonic microseconds and `/proc/disk`'s command and flush counts before and after the table change, the two checks and the resize. The counts cover all disk activity; use an otherwise idle recovery system to attribute their differences to the phases. These readings do not replace the saved sectors and owner approval required for a hardware write.
 
+`growset [--save] [--ranges] [--lba START] [--map JSON] VOLUME SECTORS` computes the supported ext2 grow's write ranges without writing the volume. The host tool includes this utility's source so the plan and recovery use the same calculation. `--save` also includes the full seed overwrite and requires the file length to equal the superblock's block count. The machine helper compares the resulting list with the supplied ranges before saving or writing. `--ranges` prints only the sector pairs, without descriptions or totals. `--map` checks QEMU's written extents against the calculated grow set. The supported profile has 4096-byte blocks, a resize inode with enough descriptor reserve, no RAID stride and the checked plain bitmap layout. Other feature sets and layouts are refused.
+
+`growboot BOOT.IMG ENV.IMG` prepares recovery state from a complete 64 MiB boot-partition backup without changing that input. It reads the saved FAT layout through the boot-slot library and requires the 1024-byte GRUB environment to occupy one cluster. The library's editor sets recovery and removes the trial in a two-sector memory copy. The tool creates the new environment file exclusively and prints its partition-relative sector. An existing output path, including the input itself, is refused. The machine helper streams larger extents from the backup; its 4 MiB RAM file system cannot hold a complete boot image.
+
 `bootctl` accepts these exact forms:
 
 ```
@@ -131,7 +135,7 @@ The lock serializes writers but cannot make `adduser`'s four publications atomic
 
 ## Image selection
 
-os-simple stages all 19 ordinary programs into `/bin` with one `exec-dir` manifest entry. Five `file` entries stage `init-login`, `login`, `su`, `passwd`, and `adduser`. os-real uses BusyBox for most of these jobs and stages selected project programs such as `ping` and `bootctl`. The metal and recovery manifests select `init-metal`; recovery also selects `reflash` and `bootctl`.
+os-simple stages all ordinary programs into `/bin` with one `exec-dir` manifest entry. Five `file` entries stage `init-login`, `login`, `su`, `passwd`, and `adduser`. os-real uses BusyBox for most of these jobs and stages selected project programs such as `ping` and `bootctl`. The metal and recovery manifests select `init-metal`; recovery also selects `reflash` and `bootctl`.
 
 The `sbin` output directory prevents a privileged or policy-sensitive program from entering an image through the ordinary sweep. the set-id guard (`tools/inspect/setidcheck.c`) checks the explicit set-id paths.
 

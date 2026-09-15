@@ -201,6 +201,10 @@ $(BUILD)/reflash: $(SRC_reflash) $(HDR_reflash)
 	$(CC) $(CFLAGS) -MF $(BUILD)/reflash.d -o $@ $(LINK_PRE) $(SRC_reflash) \
 	    $(LINK_POST)
 
+$(BUILD)/growboot: $(SRC_growboot) $(HDR_growboot)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -MF $(BUILD)/growboot.d -o $@ $(LINK_PRE) $(SRC_growboot) $(LINK_POST)
+
 $(BUILD)/netup: $(SRC_netup) $(HDR_netup)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MF $(BUILD)/netup.d -o $@ $(LINK_PRE) $(SRC_netup) \

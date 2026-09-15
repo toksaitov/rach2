@@ -72,6 +72,14 @@ growroot: growroot.c
 	$(UCC) $(UFLAGS) -o growroot.new growroot.c
 	mv growroot.new growroot
 
+growset: growset.c
+	$(UCC) $(UFLAGS) -o growset.new growset.c
+	mv growset.new growset
+
+growboot: $(SRC_growboot) $(HDR_growboot)
+	$(UCC) $(UFLAGS) -o growboot.new $(SRC_growboot)
+	mv growboot.new growboot
+
 diskctl: diskctl.c
 	$(UCC) $(UFLAGS) -o diskctl.new diskctl.c
 	mv diskctl.new diskctl

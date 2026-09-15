@@ -1368,7 +1368,7 @@ $(MKGPT): tools/image/mkgpt.c
 	cc -O2 -Wall -Wextra -o $@ $<
 # The grow set (tools/inspect/growset.c), for `tests/run grow`: the sectors
 # a grow writes, checked against what the grow in QEMU changed.
-$(GROWSET): tools/inspect/growset.c
+$(GROWSET): tools/inspect/growset.c utils/growset.c
 	@mkdir -p $(dir $@)
 	cc -O2 -Wall -Wextra -o $@ $<
 # The MBR writer, which krffs/mkdisk.sh builds on demand as well; named here
@@ -1721,6 +1721,8 @@ GROW_DIR = $(IMAGES_DIR)/grow
 run-grow: $(DEMO_CREDS) rach2 tests krffs test-image $(MKMBR) $(GROWSET) $(HARNESS) \
           utils check-busybox check-dropbearmulti rach2-recovery $(RECOVERY_IMAGE) \
           $(SEALED_DISK) $(INSTALL_TEST_STICK) $(MKEXFATFIXTURE)
+	sh tests/system/machine_grow_check.sh
+	sh tests/system/machine_grow_boot.sh
 	sh tests/system/suites/grow.sh $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(HARNESS) $(MKMBR) $(GROWSET) \
 	    $(GROW_DIR)
 	sh tests/system/grow_machine.sh $(HARNESS) $(RECOVERY_ISO) $(INSTALLER_DISK) $(SEALED_DISK) $(GROW_DIR)

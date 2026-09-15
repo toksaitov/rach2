@@ -41,6 +41,8 @@ file 0755 /bin/bootctl build/utils/sbin/bootctl
 # `growroot` enlarges the root's partition entry into the free space after it
 # and runs the checker and the resizer under /sbin on the volume.
 file 0755 /bin/growroot build/utils/growroot
+file 0755 /bin/growset build/utils/growset
+file 0755 /bin/growboot build/utils/growboot
 # `diskctl reread` is the step of that which an install without a grow still
 # needs: the kernel reads the table a whole-disk write has just replaced.
 file 0755 /bin/diskctl build/utils/diskctl
