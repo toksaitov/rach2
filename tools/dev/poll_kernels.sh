@@ -34,6 +34,8 @@ build()
 {
     order=$1
     echo "poll-kernels: building $order"
+    # A source change within the object's timestamp unit must still compile.
+    rm -f "$work/build/rach2/sys/io/poll.o" "$work/build/rach2/kernel"
     "$runner" watch poll-kernels 120 "$work/$order.jobs" \
         make -s -C "$work/rach2" -j4 "ELFCHECK=$checker" &
     child=$!
@@ -82,8 +84,13 @@ cp "$poll" "$work/poll.before-halt.c"
 diff -u "$work/poll.saved" "$poll" > "$work/poll-order.diff" || [ "$?" -eq 1 ]
 cat "$work/poll-order.diff"
 build poll-before-halt
+if cmp -s "$work/poll-after-halt.kernel" "$work/poll-before-halt.kernel"; then
+    echo 'poll-kernels: the changed poll order produced the same kernel' >&2
+    exit 1
+fi
 cleanup
 build poll-restored
 cmp "$work/poll-after-halt.kernel" "$work/poll-restored.kernel"
 cmp "$work/poll-after-halt.config" "$work/poll-before-halt.config"
+cmp "$work/poll-after-halt.config" "$work/poll-restored.config"
 echo 'poll-kernels: result: both orders built; restored kernel matches'

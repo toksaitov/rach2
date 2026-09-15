@@ -102,20 +102,23 @@ static ssize_t read_some(int fd, void *data, size_t count)
     return n;
 }
 
-/** Listen on a requested port, or return the port chosen for a local run. */
+/** Listen on an explicit port; Rach2 does not assign one at TCP listen. */
 static int listen_on(struct sockaddr_in *address, unsigned port, int local)
 {
-    socklen_t size = sizeof(*address);
     int fd = socket(AF_INET, SOCK_STREAM, 0);
+    int reuse = 1;
 
     if (fd < 0)
         fail("socket");
+    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) != 0)
+        fail("setsockopt SO_REUSEADDR");
     memset(address, 0, sizeof(*address));
     address->sin_family = AF_INET;
     address->sin_addr.s_addr = htonl(local ? 0x7f000001u : INADDR_ANY);
     address->sin_port = htons((uint16_t)port);
-    if (bind(fd, (struct sockaddr *)address, sizeof(*address)) != 0 || listen(fd, 1) != 0 ||
-        getsockname(fd, (struct sockaddr *)address, &size) != 0)
+    if (bind(fd, (struct sockaddr *)address, sizeof(*address)) != 0)
+        fail("bind");
+    if (listen(fd, 1) != 0)
         fail("listen");
     return fd;
 }
@@ -227,7 +230,7 @@ int main(int argc, char **argv)
         bytes = (uint64_t)number(argv[2], 1, 4096) * 1048576;
         chunk = number(argv[3], 1, sizeof(buffer));
         timeout = number(argv[4], 0, 60);
-        fd = listen_on(&address, 0, 1);
+        fd = listen_on(&address, 27157, 1);
         sender = fork();
         if (sender < 0)
             fail("fork");
