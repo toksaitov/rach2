@@ -1,6 +1,6 @@
 # The third close's recovery grow
 
-The small procedure passed on 2026-09-15: `RACH2_GROW_SMALL=1 tests/run style grow` returned 0, style in 46 seconds and grow in 136 seconds. Its three recovery boots checked the two backups, refused a grow without host verification, grew the temporary seed, erased the table and restored the complete original root with recovery saved. The hardware procedure has not run. Phase 7 requires the closing build, full set, review of the writer and restoration, and the second full set before the SSD write. The commands below become the hardware procedure only after those results and fresh approval of the reported devices. The owner runs them. No host disk node is inferred from the notebook's `/dev/disk1`.
+The earlier three-boot procedure passed on 2026-09-15: `RACH2_GROW_SMALL=1 tests/run style grow` returned 0, style in 46 seconds and grow in 136 seconds. That result predates the range, boot-backup and interruption corrections. The revised native mutation proofs pass locally; the revised QEMU rehearsal and shared suites remain pending. The hardware procedure has not run. Phase 7 requires the closing build, full set, review of the writer and restoration, and second full set before the SSD write. The commands below become the hardware procedure only after those results and fresh approval of the reported devices. The owner runs them. No host disk node is inferred from the notebook's `/dev/disk1`.
 
 The target last reported by the notebook is `/dev/disk0`, AHCI, internal, Samsung SSD 870 EVO 250GB, serial `S6P2NX0T381638Z`, 488397168 sectors of 512 bytes, 250059350016 bytes. MBR identifier `1acef00d`; partition 1 starts at 2048 for 131072 sectors, FAT type 0c; partition 2 starts at 133120 for 131072 sectors, FAT type 0c; partition 3 starts at 266240 for 488130928 sectors, ext2 type 83. The disk stays in its bay.
 
@@ -8,18 +8,18 @@ The stick last reported there is the removable USB SanDisk 3.2Gen1, serial `0001
 
 ## Contents and host preparation
 
-The prepared stick contains the recovery ISO with `reflash`, `bootctl`, `diskctl`, `growroot`, `e2fsck` and `resize2fs`; the sealed install disk and its manifest; and `grow-tools.tar`, containing the plan, ranges, helper and checksums. Its exFAT volume reserves 5152 MiB beyond the input files for metadata, a 1 GiB extracted seed and the backups. After extracting the seed it must have at least 4 GiB free. The saved range union is 5932200 sectors, 3037286400 bytes; the additional complete boot partition is 67108864 bytes. Each backup copy is therefore 3104395264 bytes before its small records. One copy stays on the stick and one on the Mac.
+The prepared stick contains the recovery ISO with `reflash`, `bootctl`, `diskctl`, `growroot`, `growset`, `growboot`, `e2fsck` and `resize2fs`; the sealed install disk and its manifest; and `grow-tools.tar`, containing the plan, ranges, helper and checksums. Its exFAT volume reserves 5152 MiB beyond the input files for metadata, a 1 GiB extracted seed and the backups. After extracting the seed it must have at least 4 GiB free. The saved range union is 5932200 sectors, 3037286400 bytes; the additional complete boot partition is 67108864 bytes. Each backup copy is therefore 3104395264 bytes before its small records. One copy stays on the stick and one on the Mac.
 
 The builder allocates the exFAT volume in memory, about 6.2 GiB at this geometry. Read `sysctl -n hw.memsize` and `df -k .` on the Mac before the large build. Allow space for the generated image, its readback, the backup archive and the extracted host backup, in addition to the build tree. The directory below must be new. Run these host-file commands after the small proof and rebuild them if the reviewed sources change:
 
 ```sh
 cd /Users/toksaitov/Desktop/rach2
-make rach2-install-stick
+make build/tools/inspect/growset rach2-install-stick
 sh tools/dev/machine_grow_plan.sh \
     build/images/rach2-metal-disk.ext2 488397168 S6P2NX0T381638Z 1acef00d \
     build/machine-50/recovery-grow
 tar -C build/machine-50/recovery-grow -cf build/machine-50/grow-tools.tar \
-    grow.plan ranges.txt machine_grow.sh seed.sha256 programs.sha256 grow-set.txt
+    grow.plan ranges.txt machine_grow.sh seed.sha256 programs.sha256
 sh tools/image/mkinstallstick.sh \
     build/images/rach2-recovery-with-key.iso build/images/rach2-sealed.disk \
     build/machine-50/recovery-grow-stick-with-key.img \
@@ -34,7 +34,7 @@ shasum -a 256 build/rach2-recovery/kernel \
 cat build/machine-50/recovery-grow/artifacts.sha256
 ```
 
-The `with-key` files require the already prepared `krffs/recovery_authorized_keys`. Check its public key against the intended recovery key before the build. Do not enable a demonstration key on the installed root. The preparation must use the recovery binaries identified by `programs.sha256`; the helper verifies those binaries on the booted recovery system before saving or writing.
+The `with-key` files require the already prepared `krffs/recovery_authorized_keys`. Check its public key against the intended recovery key before the build. Do not enable a demonstration key on the installed root. The preparation must use the recovery binaries identified by `programs.sha256`, including `/bin/growset` and `/bin/growboot`; the helper verifies them on the booted recovery system before saving or writing. Recovery uses a 4 MiB RAM file system. Only sector lists, the prepared environment and small logs go there; complete boot comparisons stream through reflash. The archive omits the host-only grow-set.txt to preserve scratch space. The saved GRUB environment must occupy one cluster; preparation checks this before publishing a backup.
 
 Connect the stick to the Mac and run `diskutil list external physical`, then `diskutil info` for the whole disk it reports. Present its node, byte size, USB bus, external and whole-disk status and partition table to the owner. After the owner approves that node, set `stick_device` to exactly that `/dev/diskN`. These commands write only that approved stick:
 
@@ -99,13 +99,13 @@ The verified files stay on both machines. Returning `host.sha256` is the acknowl
 
 ## The measured write and restoration
 
-Read `/proc/disk` and `/proc/mounts` again and present the SSD and mounted backup volume to the owner. The grow command writes the SSD's boot environment, the 1 GiB temporary root seed, the partition table and the computed grow ranges. It verifies the backup, the host acknowledgement, the unchanged SSD ranges and the seed before its first SSD write. Ask for approval of this write to the reported `/dev/disk0` before running it:
+Read `/proc/disk` and `/proc/mounts` again and present the SSD and mounted backup volume to the owner. The grow command writes the SSD's boot environment, the 1 GiB temporary root seed, the partition table and the computed grow ranges. It verifies the backup, the host acknowledgement, the unchanged SSD ranges and complete boot partition, and the seed before its first SSD write. Every action recomputes the ranges at the machine from the verified seed and target geometry; a self-checksummed list with missing ranges is refused. Ask for approval of this write to the reported `/dev/disk0` before running it:
 
 ```sh
 sh /tmp/grow-plan/machine_grow.sh grow /dev/disk0 /mnt/grow /tmp/grow-plan
 ```
 
-The helper saves recovery as the default and cancels a trial before writing the seed. It edits only partition 3's count in a checked copy of the saved MBR, then uses `growroot --measure` to rewrite the table to the disk's full geometry, check the volume and resize it. The exFAT store is unmounted during those measurements. Record the monotonic time, disk commands and disk flushes before and after each of the four phases. These are the figures entries 53 and 58 need. Name the phase which takes the time before attributing it to any lower layer.
+The helper prepares the 1024-byte recovery environment from the verified `boot.img`, with no trial, before writing the seed. It reads the backup without changing it. It preserves an already valid recovery environment byte for byte and repairs any changed boot parts from that backup and prepared environment, with complete readback. It edits only partition 3's count in a checked copy of the saved MBR, then uses `growroot --measure` to rewrite the table to the disk's full geometry, check the volume and resize it. The exFAT store is unmounted during those measurements. Record the monotonic time, disk commands and disk flushes before and after each of the four phases. These are the figures entries 53 and 58 need. Name the phase which takes the time before attributing it to any lower layer.
 
 Do not boot the temporary root. After the measurements, or after any failed write, return to the recovery console and inspect the disk and mounts. If the store is unmounted, mount the confirmed stick partition at `/mnt/grow` again. With the owner's approval of the restoration to the same reported SSD, run:
 
@@ -113,7 +113,31 @@ Do not boot the temporary root. After the measurements, or after any failed writ
 sh /tmp/grow-plan/machine_grow.sh restore /dev/disk0 /mnt/grow /tmp/grow-plan
 ```
 
-Restoration requires the serial and sector count but can operate with a damaged partition table. It restores the table first, rereads it, saves recovery again, then restores the remaining ranges. It requires their complete digest to match the backup and a read-only check of the restored root to pass. The boot partition backup remains available on both machines; ordinary restoration changes only its GRUB environment through `bootctl`, leaving recovery saved. A failure stays in recovery and retains both backups and all logs.
+Restoration requires the serial, sector count, verified seed and both backup checks, and can operate with a damaged partition table. It prepares only the recovery environment in RAM from the saved boot image, restores the table, rereads it, repairs the boot partition, then restores the remaining ranges. The live environment need not parse: the repair source is the verified saved image. The prefix, environment and suffix are compared separately, and unchanged parts are not written. A torn repair or range write can be replayed. The range digest must match the backup and the restored root must pass a read-only check. Both backup copies remain available. RAM logs remain only while this recovery session is powered.
+
+### Resuming after power loss
+
+A new recovery boot has no `/tmp/grow-plan` and none of the previous session's RAM logs. Boot the USB stick manually if the interrupted table or environment prevents automatic recovery. Identify the SSD and store again from `/proc/disk` and `/proc/mounts`; the commands below assume the confirmed nodes still match those above. Remount and extract the tools again:
+
+```sh
+mkdir -p /mnt/grow /tmp/grow-plan
+mount -t exfat /dev/disk1p2 /mnt/grow
+tar -C /tmp/grow-plan -xf /mnt/grow/grow-tools.tar
+sha256sum -c /tmp/grow-plan/programs.sha256
+(cd /mnt/grow && sha256sum -c /tmp/grow-plan/seed.sha256)
+```
+
+If save was interrupted, the SSD was not written. `saved.pending` is incomplete and cannot authorize grow. Preserve it under an unused name such as `saved.interrupted-01`, then repeat save and the complete host-copy verification. Do not manufacture `host.sha256` from a partial backup. If `saved` was already published, verify its manifest and host copy before proceeding; publication alone is not host acknowledgement.
+
+If grow or restoration was interrupted, keep `saved`, `host.sha256` and the seed intact. With fresh approval of restoration to the reported SSD, resume directly at restore, without repeating save or grow:
+
+```sh
+sh /tmp/grow-plan/machine_grow.sh restore /dev/disk0 /mnt/grow /tmp/grow-plan
+```
+
+An incomplete or corrupt backup is refused. Recover the verified files from the host copy before retrying if the stick copy is damaged. The helper still checks the seed, geometry, program identities and host manifest on this new boot. The original boot image on both machines is unchanged by preparation or repair.
+
+### Returning to the installed root
 
 Copy every printed `/tmp/machine-grow.*` directory and the live boot log to the host before rebooting. After the complete restoration report, inspect `bootctl --target /dev/disk0p1 status`; require recovery saved and no trial. The owner then approves one candidate trial on that reported boot partition:
 
