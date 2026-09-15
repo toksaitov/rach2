@@ -72,7 +72,7 @@ WORKERS=$(awk -v n="$WORKERS" 'BEGIN {if (n < 1 || n > 1024) exit 1; printf "%.0
 # deadline put in groups of their own; the members of its process group;
 # and the machines in the ledgers. The end of a run, on a signal or in the
 # ordinary way, stops what is still owned and waits until it is gone: TERM,
-# then KILL two seconds later, five seconds at most, and what is left after
+# then KILL five seconds later, eight seconds at most, and what is left after
 # that is named. A signal besides stops further starts and prints what the
 # unfinished suites had written; the exit is the signal's. `finish` runs
 # once: the trap calls it and the EXIT trap finds it done.
@@ -143,7 +143,9 @@ owned_stop() {
     owned_live > "$WORK/stopping"
     groups_kill 15
     while read -r pid; do kill -TERM "$pid" 2>/dev/null; done < "$WORK/stopping"
-    owned_wait 20 && return 0
+    # Let suite supervisors finish their two-second TERM and token cleanup
+    # before escalating against the supervisors themselves.
+    owned_wait 50 && return 0
     while read -r pid; do kill -KILL "$pid" 2>/dev/null; done < "$WORK/stopping"
     owned_kill KILL
     groups_kill 9
@@ -343,7 +345,7 @@ run_make() {
 # A suite has the same supervisor in every scheduling position. Its output
 # and its machines' output reset only its own silence clock.
 suite_make() {
-    "$RACH2_RUN_UTIL" watch "$1" "$IDLE_SECONDS" "$RACH2_QEMU_LEDGER" \
+    "$RACH2_RUN_UTIL" suite "$1" "$IDLE_SECONDS" "$RACH2_QEMU_LEDGER" \
         make -C "$REPO" --no-print-directory "run-$1" &
     suite_pid=$!
     echo "$suite_pid" >> "$WORK/run.jobs"

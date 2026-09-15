@@ -1,4 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
+#ifdef __APPLE__
+#define _DARWIN_C_SOURCE
+#endif
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -11,6 +14,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef __APPLE__
+#include <libproc.h>
+#else
+#include <dirent.h>
+#endif
 
 static volatile sig_atomic_t interrupted;
 
@@ -76,8 +84,8 @@ static void execute(char **argv, int group)
         int error = errno;
         pid_t pid = getpid(), actual = getpgrp();
         if (actual != pid) {
-            fprintf(stderr, "runutil: setpgid: pid %ld, group %ld: %s\n", (long)pid,
-                    (long)actual, strerror(error));
+            fprintf(stderr, "runutil: setpgid: pid %ld, group %ld: %s\n", (long)pid, (long)actual,
+                    strerror(error));
             exit(2);
         }
     }
@@ -162,15 +170,177 @@ static void signal_owned(pid_t root, struct process *list, size_t n, const char 
     }
 }
 
+/** Match a pipe writer by its kernel identity, not its descriptor number.
+ * Inspection is for cleanup only. Failure to inspect a process cannot
+ * turn an open liveness pipe into a passing result.
+ */
+static int holds_token(pid_t pid, const struct stat *token)
+{
+#ifdef __APPLE__
+    struct proc_fdinfo *fds;
+    int size, bytes, i, found = 0;
+    size = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, NULL, 0);
+    if (size <= 0)
+        return 0;
+    size += 256 * (int)sizeof(*fds);
+    fds = malloc((size_t)size);
+    if (!fds)
+        return 0;
+    bytes = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, fds, size);
+    for (i = 0; i < bytes / (int)sizeof(*fds); i++) {
+        struct pipe_fdinfo info;
+        if (fds[i].proc_fdtype == PROX_FDTYPE_PIPE &&
+            proc_pidfdinfo(pid, fds[i].proc_fd, PROC_PIDFDPIPEINFO, &info, sizeof(info)) ==
+                sizeof(info) &&
+            info.pipeinfo.pipe_handle == (uint64_t)token->st_ino) {
+            found = 1;
+            break;
+        }
+    }
+    free(fds);
+    return found;
+#else
+    char path[128];
+    struct dirent *entry;
+    DIR *dir;
+    int found = 0;
+    snprintf(path, sizeof(path), "/proc/%ld/fd", (long)pid);
+    dir = opendir(path);
+    if (!dir)
+        return 0;
+    while ((entry = readdir(dir)) != NULL) {
+        struct stat st;
+        if (entry->d_name[0] == '.')
+            continue;
+        if (fstatat(dirfd(dir), entry->d_name, &st, 0) == 0 && S_ISFIFO(st.st_mode) &&
+            st.st_dev == token->st_dev && st.st_ino == token->st_ino) {
+            found = 1;
+            break;
+        }
+    }
+    closedir(dir);
+    return found;
+#endif
+}
+
+/** List and signal current pipe holders, including reparented workers.
+ * The supervisor owns only the reader and is excluded. Rechecking the
+ * pipe before each signal avoids using the earlier descendant snapshot
+ * as authority for a detached worker's PID.
+ */
+static void token_holders(const struct stat *token, int sig, const char *name)
+{
+#ifdef __APPLE__
+    pid_t *pids;
+    int size = proc_listpids(PROC_ALL_PIDS, 0, NULL, 0), bytes, i;
+    if (size <= 0)
+        return;
+    size += 4096 * (int)sizeof(*pids);
+    pids = malloc((size_t)size);
+    if (!pids)
+        return;
+    bytes = proc_listpids(PROC_ALL_PIDS, 0, pids, size);
+    for (i = 0; i < bytes / (int)sizeof(*pids); i++) {
+        pid_t pid = pids[i];
+#else
+    struct dirent *entry;
+    DIR *dir = opendir("/proc");
+    if (!dir)
+        return;
+    while ((entry = readdir(dir)) != NULL) {
+        pid_t pid = (pid_t)strtol(entry->d_name, NULL, 10);
+#endif
+        if (pid <= 1 || pid == getpid() || !holds_token(pid, token))
+            continue;
+        if (name)
+            fprintf(stderr, "run: %s: token holder pid %ld, group %ld\n", name, (long)pid,
+                    (long)getpgid(pid));
+        if (sig && holds_token(pid, token))
+            kill(pid, sig);
+    }
+#ifdef __APPLE__
+    free(pids);
+#else
+    closedir(dir);
+#endif
+}
+
 /** Stop a command, escalating after two seconds without losing its children. */
-static void stop_owned(pid_t root, const char *ledger)
+static void stop_owned(pid_t root, const char *ledger, const struct stat *token, const char *name)
 {
     size_t n;
     struct process *list = descendants(root, &n);
     signal_owned(root, list, n, ledger, SIGTERM);
+    if (token)
+        token_holders(token, SIGTERM, name);
     pause_for(2);
     signal_owned(root, list, n, ledger, SIGKILL);
+    if (token)
+        token_holders(token, SIGKILL, NULL);
     free(list);
+}
+
+/** Return zero for EOF, one for a writer, or two for data or a read error. */
+static int token_open(int fd)
+{
+    char byte;
+    ssize_t n;
+    do {
+        n = read(fd, &byte, 1);
+    } while (n < 0 && errno == EINTR);
+    if (!n)
+        return 0;
+    return n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) ? 1 : 2;
+}
+
+/** Allow registered machines their existing five seconds to finish. */
+static int machines_live(const char *ledger)
+{
+    FILE *fp = fopen(ledger, "r");
+    long pid;
+    int live = 0;
+    if (!fp)
+        return 0;
+    while (fscanf(fp, "%ld", &pid) == 1)
+        if (pid > 1 && kill((pid_t)pid, 0) == 0)
+            live = 1;
+    fclose(fp);
+    return live;
+}
+
+/** Fail a completed suite whose descendants still hold its pipe writer.
+ * The pipe is made before fork, without an environment variable. The
+ * writer survives exec, setsid, setpgid and reparenting. Deliberately
+ * closing it, or execing a program that closes inherited descriptors,
+ * escapes this check. It is a liveness token, not process containment.
+ * Listing failures affect cleanup and diagnostics, never the verdict.
+ */
+static int check_token(int fd, const struct stat *token, pid_t root, const char *ledger,
+                       const char *name, int stopped)
+{
+    double started = now();
+    int state = token_open(fd);
+    while (state == 1 && !stopped && machines_live(ledger) && now() - started < 5 && !interrupted) {
+        pause_for(0.02);
+        state = token_open(fd);
+    }
+    if (!state)
+        return 0;
+    if (!stopped)
+        stop_owned(root, ledger, token, name);
+    started = now();
+    while (token_open(fd) && now() - started < 2) {
+        token_holders(token, SIGKILL, NULL);
+        pause_for(0.02);
+    }
+    fprintf(stderr, "run: %s: left its liveness token open; the suite failed\n", name);
+    if (token_open(fd)) {
+        fprintf(stderr, "run: %s: pipe holders remain or cannot be inspected\n", name);
+        token_holders(token, 0, name);
+    } else {
+        fprintf(stderr, "run: %s: all pipe holders stopped\n", name);
+    }
+    return 1;
 }
 
 /** Read a file's size; an absent file has no output yet. */
@@ -204,9 +374,11 @@ static void last_output(const char *path)
  * The parent tries to establish the group before cleanup can need it. The
  * child checks membership before exec; the parent's call may lose to exec.
  */
-static int supervise(char **cmd, const char *name, double idle, const char *ledger)
+static int supervise(char **cmd, const char *name, double idle, const char *ledger, int suite)
 {
     int pipes[2], status = 0, done = 0, eof = 0, timedout = 0;
+    int life[2] = {-1, -1}, leaked = 0;
+    struct stat token;
     int progressfd = STDERR_FILENO;
     const char *progress = getenv("RACH2_PROGRESS_FD");
     pid_t child;
@@ -224,6 +396,12 @@ static int supervise(char **cmd, const char *name, double idle, const char *ledg
         return 2;
     }
     snprintf(console, len, "%s.console", ledger);
+    if (suite &&
+        (pipe(life) != 0 || fstat(life[1], &token) != 0 ||
+         fcntl(life[0], F_SETFD, FD_CLOEXEC) != 0 || fcntl(life[0], F_SETFL, O_NONBLOCK) != 0)) {
+        perror("runutil: liveness pipe");
+        return 2;
+    }
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = on_signal;
     sigemptyset(&sa.sa_mask);
@@ -237,6 +415,8 @@ static int supervise(char **cmd, const char *name, double idle, const char *ledg
         return 2;
     }
     if (child == 0) {
+        if (suite)
+            close(life[0]);
         close(pipes[0]);
         dup2(pipes[1], STDOUT_FILENO);
         dup2(pipes[1], STDERR_FILENO);
@@ -244,6 +424,8 @@ static int supervise(char **cmd, const char *name, double idle, const char *ledg
         execute(cmd, 1);
     }
     (void)setpgid(child, child);
+    if (suite)
+        close(life[1]);
     close(pipes[1]);
     fcntl(pipes[0], F_SETFL, O_NONBLOCK);
     {
@@ -316,7 +498,7 @@ static int supervise(char **cmd, const char *name, double idle, const char *ledg
             timedout = 1;
         }
         if (interrupted || timedout) {
-            stop_owned(child, ledger);
+            stop_owned(child, ledger, suite ? &token : NULL, name);
             break;
         }
         if (done) {
@@ -331,12 +513,18 @@ static int supervise(char **cmd, const char *name, double idle, const char *ledg
     if (!done)
         while (waitpid(child, &status, 0) < 0 && errno == EINTR)
             ;
+    if (suite) {
+        leaked = check_token(life[0], &token, child, ledger, name, interrupted || timedout);
+        close(life[0]);
+    }
     close(pipes[0]);
     free(console);
     if (timedout)
         return 124;
     if (interrupted)
         return 128 + interrupted;
+    if (leaked)
+        return 1;
     return WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
 }
 
@@ -498,8 +686,9 @@ int main(int argc, char **argv)
             return 1;
         return difftime(time(NULL), st.st_mtime) < strtod(argv[3], NULL) ? 0 : 1;
     }
-    if (argc >= 6 && !strcmp(argv[1], "watch"))
-        return supervise(argv + 5, argv[2], strtod(argv[3], NULL), argv[4]);
+    if (argc >= 6 && (!strcmp(argv[1], "watch") || !strcmp(argv[1], "suite")))
+        return supervise(argv + 5, argv[2], strtod(argv[3], NULL), argv[4],
+                         !strcmp(argv[1], "suite"));
     if (argc >= 4 && !strcmp(argv[1], "machine"))
         return machine_exec(argv[2], argv + 3);
     fprintf(stderr, "runutil: invalid arguments\n");
