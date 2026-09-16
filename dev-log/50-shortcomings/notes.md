@@ -2,7 +2,7 @@
 
 ## Where the work stands
 
-Milestone 50 is accepted at source `8ce6fbd5` on 2026-09-16. The full set at `78ad9d96` passed all 87 suites; the recovery sitting closes entries 53 and 58; and the subsequent fixes, focused suites, mutations and closing review close entries 94 through 96. No blocking entry remains. Entries 84, 85 and 87 retain the coverage extensions explicitly carried during review. The [final results](#final-third-close-2026-09-16) complete the earlier recovery-space record; [Readme.md](Readme.md#third-close-2026-09-16) is the accepted record of source, options, hashes, tests and hardware.
+Milestone 50 is accepted at source `8ce6fbd5` on 2026-09-16. The full set at `78ad9d96` passed all 87 suites. Two physical grows reproduce entries 53 and 58's command and flush counts, at 14.75 and 14.81 guest-tick seconds. Entries 94 through 96 now have the complete save/grow/restore cycle with committed code on the Lenovo and real stick, as well as the focused suites, mutations and review. No blocking entry remains. Entries 84, 85 and 87 retain the coverage extensions explicitly carried during review. The [host/QEMU results](#final-third-close-2026-09-16) and [second recovery sitting](#second-recovery-sitting-with-committed-code) complete the recovery-space record; [Readme.md](Readme.md#third-close-2026-09-16) is the accepted record of source, options, hashes, tests and hardware.
 
 The owner's original root is restored and clean, with the same e2fsck counts before and after the grow: `10201/15261696 files` and `524764/61016366 blocks`. Recovery is saved and no candidate trial is armed. The notebook's last recorded installed kernel is `e1eec90c`; this close claims no later candidate boot or installed-system acceptance. The earlier physical acceptance's 63-row PASS supplies no valid MBR measurement. The reported 400-build count covers separate guest-tick windows and includes late completions, while the transfer logs omit running-kernel identity and independent wall time. Unit D withdrew the poll comparison and corrected those measurement claims. The sections below retain the earlier results with their dates.
 
@@ -912,8 +912,43 @@ The owner supplied the completed validation of the recovery-space fixes at accep
 * `sh tests/system/machine_grow_space_test.sh --mutate`: status 0. The fixed functions pass ten cases; RAM work, ignored log-write failure and false geometry diagnostic mutations each fail; every restoration passes ten cases.
 * `sh tests/system/machine_grow_full_test.sh`: status 0. All 5932200 sectors and 1856 completion records pass, with every restored byte and gap boundary checked on host files.
 
-These results complete the previously blocked focused runner and guest mutation proofs. They supplement the full-set pass at `78ad9d96`; no full set at `8ce6fbd5` is claimed. The new code and proof scripts were reviewed at this close against entries 94 through 96, including mount identity before work allocation, independent producer and logger status, console failure reporting, bounded measurement output, calculator diagnostics and the mutations' pre-write assertions. No blocking finding remains. The native replay proves the full transfer; the guest proof establishes the 4 MiB allocation behavior. Neither claims a full-size QEMU restoration or another hardware run.
+These results complete the previously blocked focused runner and guest mutation proofs. They supplement the full-set pass at `78ad9d96`; no full set at `8ce6fbd5` is claimed. The new code and proof scripts were reviewed at this close against entries 94 through 96, including mount identity before work allocation, independent producer and logger status, console failure reporting, bounded measurement output, calculator diagnostics and the mutations' pre-write assertions. No blocking finding remains. The native replay proves the full transfer; the guest proof establishes the 4 MiB allocation behavior. These tests do not claim a full-size QEMU restoration. The later physical cycle is recorded below.
 
 The sitting's original and restored e2fsck logs were compared while writing the accepted record: both report `10201/15261696 files (40.9% non-contiguous), 524764/61016366 blocks`. Its retained phase samples give 14.75 guest-tick seconds in total and 14.54 for resize. Entry 77's tick-resolution and undercount limits still apply, and the flush ratio supplies no alignment-speedup evidence. Artifact hashes were read without rebuilding at `8ce6fbd5` and recorded separately from the full-set hashes in the Readme.
 
-Entries 53 and 58 are closed by the sitting, and entries 94 through 96 by the fixes and completed proofs above. Entries 84, 85 and 87 retain only the previously accepted coverage extensions. Entry 49's batching across calls remains a future design. The machine remains in recovery with its original installation restored; a later candidate boot and installed-system acceptance are not results of this close. Under the owner's closing scope, no further milestone work remains. This final disposition supersedes the earlier statements that recovery-space review and focused validation were pending.
+The record at `425d4fdf` accepted entries 94 through 96 on their reviewed fixes and host/QEMU proofs, before a complete cycle with those fixes on the machine. That close lacked the hardware proof supplied by the second sitting below. Entries 84, 85 and 87 retain the previously accepted coverage extensions, and entry 49's batching across calls remains a future design.
+
+
+### Second recovery sitting with committed code
+
+The Lenovo booted a freshly written recovery stick carrying the committed fixes in `00a93ace`, recorded at source `8ce6fbd5`. The operator checked the changed strings in growset and the helper on the notebook before the run. This identifies the fixes in the running recovery environment; timestamps were not used as that proof. `save.log` also records successful checks of all eight recovery programs against the prepared manifest. The disk is the same internal Samsung SSD 870 EVO 250GB, serial `S6P2NX0T381638Z`, and the stick is the SanDisk, serial `00014101091624031318`.
+
+The logs are retained under `build/machine-50/sitting2/`. The four work directories and their recorded `result.status` values are:
+
+| Action | Work directory on the stick | Status |
+| --- | --- | ---: |
+| save | `/mnt/grow/machine-grow.ImEKhD` | 0 |
+| refused grow | `/mnt/grow/machine-grow.EGmooh` | 1 |
+| completed grow | `/mnt/grow/machine-grow.ghNlAl` | 0 |
+| restore | `/mnt/grow/machine-grow.DJKnmh` | 0 |
+
+`save.log` reports 3037286400 range bytes and 67108864 boot bytes saved and checked. The operator verified the host copy's `backup.bin`, `boot.img`, `grow.plan` and `ranges.txt`, then returned `host.sha256`. Work remained on the stick. The operator reports that the RAM root stayed at 222 KiB free throughout save.
+
+The first grow was refused because the operator redirected its detached output to `/mnt/grow/grow.log`, leaving a file open on the store. The procedure already requires detached output to `/dev/console` and forbids an open store transcript during grow. The reported diagnostic was `machine-grow: failed: the store is busy; close its files before grow`. The retained work directory records status 1. The helper's unmount check precedes `prepare_boot`, `keep_recovery`, the seed write and the table write; the operator reports the SSD was untouched. This is a successful pre-write refusal with the operator error identified. It is not a failed resize or an unsupported geometry.
+
+The second grow sent its detached output to `/dev/console`, completed with status 0, unmounted the store for measurement and remounted it afterwards. Its `grow.log` ends with `machine-grow-status: 0`. The subsequent read-only check passed. Comparing the phase samples with `build/machine-50/sitting/machine-grow.caIiGM/grow.log` gives:
+
+| Phase | First run, guest us | Second run, guest us | Commands, both runs | Flushes, both runs |
+| --- | ---: | ---: | ---: | ---: |
+| table | 10000 | 10000 | 4 | 1 |
+| check-readonly | 100000 | 100000 | 463 | 0 |
+| check-repair | 100000 | 100000 | 469 | 2 |
+| resize | 14540000 | 14600000 | 18751 | 9366 |
+
+The independent runs total 14.75 and 14.81 guest-tick seconds. The difference is 60000 microseconds, six ticks of the 10 ms clock. Entry 77 still limits both readings: the clock advances on delivered ticks, masked interrupts can lose ticks, and the short phases occupy one or ten ticks. These are not independent wall-time measurements. The identical command and flush counts reproduce the work measured by those counters. AHCI includes flushes in its command count and both builds remove the buffer-address check; the ratio supplies no evidence of an unaligned-buffer split or of a speedup from that patch.
+
+Restore completed with status 0 in the operator's reported 870 seconds. All 1856 reflash completion records match `ranges.txt` in order, for 3037286400 restored bytes. The range digest in all four work directories is `d12b44f1686b0a1d73e525ebab5137b99b03c0c0e67ff740893629544c84cff2`. The pre-grow `original-check.log` and final `restored-check.log` are byte-for-byte identical, including `rach2: 10201/15261696 files (40.9% non-contiguous), 524764/61016366 blocks`. The operator reports the table and MBR identifier unchanged and the RAM root never full, ending at 194 KiB free. The saved plan and disk inventories identify MBR `1acef00d`; final boot status records recovery saved, no next entry, and candidate and fallback present.
+
+This completes the machine proof for entries 94 through 96 on the real stick and the owner's own installation. The restore that failed with the old code on 2026-09-16 completed with the committed fixes on the same disk. The busy-store refusal exercises the hardware pre-write check and its diagnosis; the native partial-write mutation remains the specific proof of entry 96's output-write error. The reproduced measurements close entries 53 and 58 with the existing clock and alignment limits intact.
+
+Milestone 50 is closed. No blocking entry remains. Entries 84, 85 and 87 retain their agreed additional coverage, and entry 49 retains its future design. The restored machine remains in recovery with no trial armed; the record claims no later candidate boot or installed-system acceptance. This supersedes the earlier limitation to host/QEMU evidence for the committed recovery fixes.
