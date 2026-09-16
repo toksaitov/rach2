@@ -65,7 +65,7 @@ ports/doom/doom1.wad
 
 Another Doom IWAD, including Freedoom Phase 1, may use the same staged filename. The helper reports its digest but cannot verify its identity.
 
-The os-real, GRUB-test, and metal-disk manifests declare both `/bin/doom` and `/doom1.wad` as optional files. Image construction reports and skips an absent optional file. The normal image targets build the executable first, but a fresh clone still lacks the WAD.
+The os-real, GRUB-test, and metal-disk manifests declare both `/bin/doom` and `/demo/doom1.wad` as optional files. Image construction reports and skips an absent optional file. The normal image targets build the executable first, but a fresh clone still lacks the WAD.
 
 ## Run
 

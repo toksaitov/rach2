@@ -487,8 +487,8 @@ void DG_Shutdown(void)
  */
 int main(int argc, char **argv)
 {
-    /* Force -iwad argument to find doom1.wad directly */
-    static char *doom_argv[] = { "doom", "-iwad", "doom1.wad", NULL };
+    /* The staged wad, named absolutely so any working directory serves. */
+    static char *doom_argv[] = { "doom", "-iwad", "/demo/doom1.wad", NULL };
     int doom_argc = 3;
 
     (void)argc;

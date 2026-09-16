@@ -78,4 +78,5 @@ dir 0755 /home
 dir 0700:1000:1000 /home/test
 dir 1777 /tmp
 
-text 0644 /hello.txt hello, world\n
+dir 0755 /demo
+text 0644 /demo/hello.txt hello, world\n

@@ -113,7 +113,8 @@ file 0755 /bin/bootctl build/utils/sbin/bootctl
 # passwd keeps world-readable x fields, which is what the split shadow exists
 # for.
 # A file to read on a fresh system, the same one the sealed disk carries.
-text 0644 /hello.txt hello, world\n
+dir 0755 /demo
+text 0644 /demo/hello.txt hello, world\n
 
 dir 0755 /etc
 dir 0700 /etc/dropbear
@@ -181,4 +182,4 @@ dir 0755 /home
 dir 0700:1000:1000 /home/test
 dir 0700:1000:1000 /home/test/.ssh
 file 0600:1000:1000 /home/test/.ssh/authorized_keys krffs/test_authorized_keys
-optional-file 0644 /doom1.wad ports/doom/doom1.wad
+optional-file 0644 /demo/doom1.wad ports/doom/doom1.wad

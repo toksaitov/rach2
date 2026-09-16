@@ -108,12 +108,13 @@ file 0755 /bin/bootctl build/utils/sbin/bootctl
 # passwd keeps world-readable x fields, which is what the split shadow exists
 # for.
 # What a person who sits down at this machine can look at and change: a
-# hello.txt in the root, and one file system of each kind this kernel mounts,
+# a hello.txt in /demo, and one file system of each kind this kernel mounts,
 # in a file, for a loop device to stand on. `empty.krffs` is formatted and
 # holds nothing, which is what a person copies to make an image of their own,
 # since the machine has no formatter. `demo/Readme.txt` has the commands.
-text 0644 /hello.txt hello, world\n
+
 dir 0755 /demo
+text 0644 /demo/hello.txt hello, world\n
 file 0644 /demo/Readme.txt krffs/demo/Readme.txt
 file 0644 /demo/fat32.img build/images/fs-demo/fat32.img
 file 0644 /demo/exfat.img build/images/fs-demo/exfat.img
@@ -192,4 +193,4 @@ dir 0755 /home
 dir 0700:1000:1000 /home/test
 dir 0700:1000:1000 /home/test/.ssh
 file 0600:1000:1000 /home/test/.ssh/authorized_keys krffs/test_authorized_keys
-optional-file 0644 /doom1.wad ports/doom/doom1.wad
+optional-file 0644 /demo/doom1.wad ports/doom/doom1.wad

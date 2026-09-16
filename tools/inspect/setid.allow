@@ -118,7 +118,7 @@ trusted text 0644:0:0 /etc/passwd root:x:0:0:root:/root:/bin/ish\ntest:x:1000:10
 trusted file 0600:0:0 /etc/shadow krffs/shadow
 trusted text 0644:0:0 /etc/group root:x:0:\ntest:x:1000:\n
 trusted text 0644:0:0 /etc/shells /bin/ish\n/bin/sh\n
-sentinel /hello.txt 0644:0:0
+sentinel /demo/hello.txt 0644:0:0
 init init-login
 
 manifest disk-test

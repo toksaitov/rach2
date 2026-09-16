@@ -16,7 +16,7 @@ if "$HARNESS" --kernel "$KERNEL" --append "rach2.fsdisk rach2.diskdiag" \
     --drive "file=$DISK,format=raw,if=ide,index=0,media=disk" \
     --timeout 120 --steptmo 60 --ok "DOOMDONE" --log "$LOG" \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
-    "expect=# " "send=cd / && A=\$(sed -n 's/^disk-commands //p' /proc/disk) && (doom > /tmp/doom.txt 2>&1 &) && sleep 10 && B=\$(sed -n 's/^disk-commands //p' /proc/disk) && echo DOOMRUNNING=\$(ps | grep -c '[d]oom') && echo DOOMCOMMANDS=\$((B-A)) && grep -a 'zone memory' /tmp/doom.txt | sed 's/^/DOOM/' ; echo DOOM\"\"DONE" \
+    "expect=# " "send=cd && A=\$(sed -n 's/^disk-commands //p' /proc/disk) && (doom > /tmp/doom.txt 2>&1 &) && sleep 10 && B=\$(sed -n 's/^disk-commands //p' /proc/disk) && echo DOOMRUNNING=\$(ps | grep -c '[d]oom') && echo DOOMCOMMANDS=\$((B-A)) && grep -a 'zone memory' /tmp/doom.txt | sed 's/^/DOOM/' ; echo DOOM\"\"DONE" \
     "expect=DOOMDONE" > /dev/null 2>&1; then
     :
 else
