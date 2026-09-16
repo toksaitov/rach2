@@ -16,7 +16,7 @@ if "$HARNESS" --kernel "$KERNEL" --append "rach2.fsdisk rach2.diskdiag" \
     --drive "file=$DISK,format=raw,if=ide,index=0,media=disk" \
     --timeout 120 --steptmo 60 --ok "DOOMDONE" --log "$LOG" \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
-    "expect=# " "send=cd && A=\$(sed -n 's/^disk-commands //p' /proc/disk) && (doom > /tmp/doom.txt 2>&1 &) && sleep 10 && B=\$(sed -n 's/^disk-commands //p' /proc/disk) && echo DOOMRUNNING=\$(ps | grep -c '[d]oom') && echo DOOMCOMMANDS=\$((B-A)) && grep -a 'zone memory' /tmp/doom.txt | sed 's/^/DOOM/' ; echo DOOM\"\"DONE" \
+    "expect=# " "send=cd /root && A=\$(sed -n 's/^disk-commands //p' /proc/disk) && (doom > /tmp/doom.txt 2>&1 &) && sleep 10 && B=\$(sed -n 's/^disk-commands //p' /proc/disk) && echo DOOMRUNNING=\$(ps | grep -c '[d]oom') && echo DOOMCOMMANDS=\$((B-A)) && grep -a 'zone memory' /tmp/doom.txt | sed 's/^/DOOM/' ; echo DOOMFB=\$(grep -ac 'framebuffer: x_res' /tmp/doom.txt) ; echo DOOMFBFAIL=\$(grep -ac 'Failed to open framebuffer' /tmp/doom.txt) ; echo DOOM\"\"DONE" \
     "expect=DOOMDONE" > /dev/null 2>&1; then
     :
 else
@@ -26,6 +26,10 @@ RUNNING="$(grep -a '^DOOMRUNNING=' "$LOG" | tail -1 | tr -d '\r' | cut -d= -f2)"
 COMMANDS="$(grep -a '^DOOMCOMMANDS=' "$LOG" | tail -1 | tr -d '\r' | cut -d= -f2)"
 ZONE="$(grep -a '^DOOMzone memory' "$LOG" | tail -1 | tr -d '\r' | sed -n 's/.*, \([0-9a-f]*\) allocated.*/\1/p')"
 [ "${RUNNING:-0}" -ge 1 ] || fail "the game was not running after ten seconds"
+FB="$(grep -a '^DOOMFB=' "$LOG" | tail -1 | tr -d '\r' | cut -d= -f2)"
+FBFAIL="$(grep -a '^DOOMFBFAIL=' "$LOG" | tail -1 | tr -d '\r' | cut -d= -f2)"
+[ "${FBFAIL:-1}" = 0 ] || fail "the game could not open the framebuffer from /root"
+[ "${FB:-0}" -ge 1 ] || fail "the game reported no framebuffer geometry"
 echo "doom-test: the game runs on the disk root and cost the disk ${COMMANDS:-?} commands in ten seconds: OK"
 [ -n "$ZONE" ] || fail "the game printed no zone line"
 if [ "$((0x$ZONE))" -ge "$((10 * 1024 * 1024))" ]; then

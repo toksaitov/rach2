@@ -987,8 +987,8 @@ static int canonicalize_abs(char *path)
  * already honors '.'/'..') walks the right tree. Same return contract as
  * strncpy_from_user: the resulting length on success, or a negative errno (a
  * join that overruns the buffer is -ENAMETOOLONG). The "fb"/"mouse" device
- * names resolve correctly only from cwd "/", which is the case because programs
- * open them at startup.
+ * names resolve only when the joined path has no directory part, so a program
+ * names them absolutely rather than relying on its working directory.
  */
 static int copy_path_cwd(char *pathbuf, uint32_t size, const char __user *upath)
 {

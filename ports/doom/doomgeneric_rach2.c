@@ -329,8 +329,10 @@ void DG_Init(void)
 
     size_zone();
 
-    /* Open framebuffer device - this switches to Mode 13h */
-    fb_fd = open("fb", O_RDWR);
+    /* Open framebuffer device - this switches to Mode 13h. The name is
+     * absolute: a relative one resolves against the working directory, so
+     * the game would run only from the root. */
+    fb_fd = open("/fb", O_RDWR);
     if (fb_fd < 0) {
         /* Can't proceed without framebuffer */
         write(2, "Failed to open framebuffer\n", 27);
@@ -338,7 +340,7 @@ void DG_Init(void)
     }
 
     /* Open mouse device (optional - game works without it) */
-    mouse_fd = open("mouse", O_RDONLY);
+    mouse_fd = open("/mouse", O_RDONLY);
     /* No error message if mouse not available - keyboard still works */
 
     /* Clear screen buffer */
