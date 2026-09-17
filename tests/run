@@ -569,6 +569,28 @@ prepare() {
 
 # Completion bounds keep their written values unless the caller supplies a
 # factor. The runner never measures host speed or changes the pool width.
+set_accel() {
+    case "${RACH2_QEMU_ACCEL:-}" in
+        '')
+            if [ -r /dev/kvm ] && [ -w /dev/kvm ] &&
+                ! grep -q '^flags.*[[:space:]]hypervisor\([[:space:]]\|$\)' /proc/cpuinfo 2>/dev/null; then
+                RACH2_QEMU_ACCEL=kvm
+            elif [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = x86_64 ] &&
+                [ "$(sysctl -n kern.hv_support 2>/dev/null)" = 1 ]; then
+                RACH2_QEMU_ACCEL=hvf
+            else
+                RACH2_QEMU_ACCEL=tcg
+            fi
+            ;;
+        kvm|hvf|tcg) ;;
+        *)
+            echo "run: result: refused: RACH2_QEMU_ACCEL must be kvm, hvf or tcg" >&2
+            return 1
+            ;;
+    esac
+    export RACH2_QEMU_ACCEL
+}
+
 set_factor() {
     CAL_FACTOR=${RACH2_TIMEOUT_FACTOR:-1}
     case "$CAL_FACTOR" in
@@ -677,6 +699,7 @@ IDLE_SECONDS=$(awk -v n="$IDLE_SECONDS" 'BEGIN {if (n < 1 || n > 86400) exit 1; 
     echo "run: result: refused: RACH2_IDLE_TIMEOUT must be between 1 and 86400 seconds" >&2; exit 2;
 }
 set_factor || exit 2
+set_accel || exit 2
 lock_take "$@" || { echo "run: result: refused: the tree is not free" >&2; exit 1; }
 # Each suite names the machines it starts, so a leaked one can be blamed on the
 # suite that left it. Listing every QEMU on the host works only while one suite
@@ -685,13 +708,20 @@ lock_take "$@" || { echo "run: result: refused: the tree is not free" >&2; exit 
 # ledger of the suite that is running, and then becomes the real QEMU. The
 # harness reaches QEMU through execvp and the shell suites through their own
 # PATH lookup, so this covers both without either knowing about it.
+# The shim also chooses the accelerator, so every suite boots the same kind
+# of machine and none names one: KVM where /dev/kvm can be opened on a host
+# that is not itself a guest, HVF on an x86 Mac that reports it, the
+# emulator otherwise. A nested KVM, the WSL case, is refused because the
+# ATA driver moves data by port I/O and every port access then crosses two
+# hypervisors: measured on 2026-09-18, a 64 MiB write took 217 s under
+# nested KVM and 12 s emulated. `RACH2_QEMU_ACCEL` names one outright.
 QEMU_REAL=$(command -v qemu-system-i386 2>/dev/null || true)
 if [ -n "$QEMU_REAL" ]; then
     mkdir -p "$WORK/bin"
-    export QEMU_REAL
+    export QEMU_REAL RACH2_QEMU_ACCEL
     cat > "$WORK/bin/qemu-system-i386" <<'QEMU'
 #!/bin/sh
-exec "$RACH2_RUN_UTIL" machine "${RACH2_QEMU_LEDGER:?}" "$QEMU_REAL" "$@"
+exec "$RACH2_RUN_UTIL" machine "${RACH2_QEMU_LEDGER:?}" "$QEMU_REAL" -accel "${RACH2_QEMU_ACCEL:?}" "$@"
 QEMU
     chmod +x "$WORK/bin/qemu-system-i386"
     PATH="$WORK/bin:$PATH"; export PATH
@@ -704,7 +734,7 @@ fi
 # knows which tree a run holds, and it names the run that holds it.
 # The line that says this run began. Everything below it belongs to this run,
 # and a log without it is a run that never started.
-echo "run: starting: $* (pid $$, $(date '+%Y-%m-%d %H:%M:%S'), workers $WORKERS, timeout factor $CAL_FACTOR)"
+echo "run: starting: $* (pid $$, $(date '+%Y-%m-%d %H:%M:%S'), workers $WORKERS, timeout factor $CAL_FACTOR, accelerator $RACH2_QEMU_ACCEL)"
 # The recovery system starts an SSH server only where a key was built into it,
 # and the suites that repair or update a machine do that work through recovery
 # over SSH. The key is minted here: after the names are checked and the tree is

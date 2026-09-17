@@ -113,6 +113,13 @@ WSL starts through `wsl.exe`; `dev/testing.sh` does that for the sync and the
 run, and is the way to reach the copy. Its home directory is on WSL's own
 file system, not under `/mnt/c`, which is slow for a build.
 
+The machine has `/dev/kvm`, since `nestedVirtualization=true` is set in the
+Windows user's `.wslconfig` and the account is in the `kvm` group, but the
+runner boots every machine in the emulator there and says so on its start
+line. A KVM under WSL is nested, and the ATA driver's port I/O then crosses
+two hypervisors on every access: a 64 MiB write measured 217 s that way and
+12 s emulated. `RACH2_QEMU_ACCEL=kvm` asks for it anyway.
+
 The target prefix is not negotiable: `vendor/musl/build_libc.sh` configures
 with `CROSS_COMPILE=i686-elf-` and both `muslgcc` wrappers call
 `i686-elf-gcc` by name. A toolchain installed elsewhere under that same
