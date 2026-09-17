@@ -14,7 +14,7 @@ CC := $(CROSS_CC)
 DOOMGENERIC_DIR = src
 
 # Compiler flags
-CFLAGS = -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000
+CFLAGS = -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -Wl,--build-id=none
 # Our stub headers MUST come first to override system headers
 CFLAGS += -I./include -I$(DOOMGENERIC_DIR) -I.
 CFLAGS += -DNORMALUNIX -DCMAP256 -DDOOMGENERIC_RESX=320 -DDOOMGENERIC_RESY=200

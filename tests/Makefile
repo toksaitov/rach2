@@ -12,7 +12,7 @@ include ../mk/deps.mk
 include ../mk/build.mk
 CC := $(CROSS_CC)
 
-CFLAGS = -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 $(DEPFLAGS)
+CFLAGS = -m32 -nostdlib -static -ffreestanding -Wl,-Ttext=0x08048000 -Wl,--build-id=none $(DEPFLAGS)
 
 # The musl link for dnstest: i686-elf-gcc specifically (for the 32-bit libgcc),
 # the ported musl headers and crt objects, exactly as utils/Makefile links.

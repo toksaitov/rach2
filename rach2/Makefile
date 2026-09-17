@@ -32,7 +32,9 @@ LD := $(CROSS_LD)
 # transient debugging.
 WERROR ?= -Werror
 CFLAGS  = -m32 -mno-sse -mno-sse2 -g -Wall -Wextra -Wdeclaration-after-statement $(WERROR) -ansi -nostdlib -nostartfiles -nodefaultlibs $(DEPFLAGS)
-LDFLAGS = -m elf_i386 -T $(LINKER_SCRIPT).ld
+# -z noseparate-code: newer binutils split read-only data into a third
+# PT_LOAD by default; the loader and elfcheck take the two-segment layout.
+LDFLAGS = -m elf_i386 -z noseparate-code -T $(LINKER_SCRIPT).ld
 
 # Harness build (`make HARNESS=1`): the kernel reports each process exit status
 # to QEMU's isa-debug-exit device so the test harness reads a real exit code.

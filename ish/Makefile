@@ -10,7 +10,7 @@ include ../mk/build.mk
 CC := $(CROSS_CC)
 
 CFLAGS = -m32 -ffreestanding $(DEPFLAGS)
-LDFLAGS = -m32 -nostdlib -static -Wl,-Ttext=0x08048000
+LDFLAGS = -m32 -nostdlib -static -Wl,-Ttext=0x08048000 -Wl,--build-id=none
 
 # Everything builds out of tree under $(BUILD) (build/ish/, from mk/build.mk):
 # the objects and the ish binary the RAM-disk staging picks up. The source list

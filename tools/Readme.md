@@ -65,34 +65,24 @@ The archive has everything except the cross toolchain.
 `xorriso` builds the optional ISOs, and `pkg-config` with `libfuse-dev` lets
 `make -C krffs mount` mount an image; neither is needed to build or test.
 
-No Debian package provides an `i686-elf` toolchain, so build one. It installs
-under your home directory and touches nothing the distribution owns.
+No Debian package provides an `i686-elf` toolchain by that name, but the
+`i686-linux-gnu` cross compiler in the archive builds this tree: the kernel and
+the guest programs are freestanding, and the ported musl, BusyBox and Dropbear
+link against the libgcc it carries. The tree calls the tools by their
+`i686-elf-` names, so link them under those names on your path.
 
-    sudo apt install curl bison flex texinfo libgmp-dev libmpfr-dev libmpc-dev
+    sudo apt install gcc-i686-linux-gnu binutils-i686-linux-gnu
+    mkdir -p "$HOME/bin"
+    for t in gcc ld ar objcopy strip nm objdump readelf as ranlib; do
+        ln -sf "/usr/bin/i686-linux-gnu-$t" "$HOME/bin/i686-elf-$t"
+    done
 
-    export PREFIX="$HOME/opt/cross" TARGET=i686-elf
-    export PATH="$PREFIX/bin:$PATH"
-
-    curl -LO https://ftp.gnu.org/gnu/binutils/binutils-2.43.tar.xz
-    tar xf binutils-2.43.tar.xz
-    mkdir build-binutils && cd build-binutils
-    ../binutils-2.43/configure --target=$TARGET --prefix="$PREFIX" \
-        --with-sysroot --disable-nls --disable-werror
-    make && make install && cd ..
-
-    curl -LO https://ftp.gnu.org/gnu/gcc/gcc-14.2.0/gcc-14.2.0.tar.xz
-    tar xf gcc-14.2.0.tar.xz
-    mkdir build-gcc && cd build-gcc
-    ../gcc-14.2.0/configure --target=$TARGET --prefix="$PREFIX" \
-        --disable-nls --enable-languages=c --without-headers
-    make all-gcc all-target-libgcc
-    make install-gcc install-target-libgcc && cd ..
-
-Build `all-target-libgcc` and not the compiler alone. The kernel is linked
-`-nostdlib` and uses no libgcc, but the ported musl, BusyBox, and Dropbear
-link it through the `muslgcc` wrappers, so a toolchain without it builds the
-kernel and then fails in the userland. Put `$PREFIX/bin` on the path of every
-shell that builds Rach2.
+The archive's version is the lower bound this tree supports: GCC 15.2 and
+binutils 2.46 on Ubuntu 26.04. Two of that toolchain's defaults differ from an
+`i686-elf` build and the makefiles allow for both: the linker's
+`-z separate-code`, which would give the kernel a third `PT_LOAD` segment, and
+the compiler's `--build-id`, whose note section would land on the `.text` of a
+program linked at a fixed address.
 
 ### The testing host
 
