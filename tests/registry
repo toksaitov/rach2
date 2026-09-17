@@ -28,7 +28,7 @@ mount|qemu-system-i386,mformat,mcopy,mdir|core
 grow|qemu-system-i386,mke2fs,e2fsck,qemu-img|full
 drill|qemu-system-i386,ssh,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full
 account|qemu-system-i386|full
-large|qemu-system-i386,mke2fs,e2fsck,mformat,hdiutil,newfs_exfat,fsck_exfat|full
+large|qemu-system-i386,mke2fs,e2fsck,mformat|full
 usb|qemu-system-i386|core
 raw-e1000|qemu-system-i386|full
 raw|qemu-system-i386|full

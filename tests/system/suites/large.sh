@@ -32,8 +32,15 @@ P3=25167872;    P3N=131072
 END=$((P3 + P3N + 2048))
 
 . "$REPO/tools/setup/e2fsprogs_path.sh"
-if ! command -v hdiutil >/dev/null 2>&1 || ! command -v newfs_exfat >/dev/null 2>&1; then
-    fail "the exFAT volume needs the host's hdiutil and newfs_exfat"
+# The exFAT volume is made and checked with what the host has: macOS attaches
+# the raw image and works on its second slice, Linux works on a copy of the
+# slice with exfatprogs and writes it back.
+if command -v hdiutil >/dev/null 2>&1 && command -v newfs_exfat >/dev/null 2>&1; then
+    EXFAT_HOST=mac
+elif command -v mkfs.exfat >/dev/null 2>&1 && command -v fsck.exfat >/dev/null 2>&1; then
+    EXFAT_HOST=linux
+else
+    fail "the exFAT volume needs hdiutil and newfs_exfat, or mkfs.exfat and fsck.exfat"
 fi
 
 rm -f "$DISK"
@@ -42,11 +49,20 @@ dd if=/dev/zero of="$DISK" bs=512 count=1 seek=$((END - 1)) 2>/dev/null || fail 
 E2FSPROGS_FAKE_TIME=1 mke2fs -q -F -t ext2 -b 4096 -I 128 \
     -O sparse_super,large_file,filetype,^dir_index,resize_inode,^ext_attr,^has_journal,^extent,^64bit,^flex_bg,^metadata_csum,^huge_file,^dir_nlink,^extra_isize \
     -E offset=$((P1 * 512)) "$DISK" $((P1N / 2048))M > /dev/null 2>&1 || fail "the ext2 volume"
-DEV=$(hdiutil attach -nomount -imagekey diskimage-class=CRawDiskImage "$DISK" 2>/dev/null \
-    | awk 'NR == 1 {print $1}')
-[ -n "$DEV" ] || fail "attaching the disk for newfs_exfat"
-newfs_exfat -v LARGEX "${DEV}s2" > /dev/null 2>&1 || { hdiutil detach "$DEV" > /dev/null 2>&1; fail "newfs_exfat"; }
-hdiutil detach "$DEV" > /dev/null 2>&1 || fail "detaching the disk"
+if [ "$EXFAT_HOST" = mac ]; then
+    DEV=$(hdiutil attach -nomount -imagekey diskimage-class=CRawDiskImage "$DISK" 2>/dev/null \
+        | awk 'NR == 1 {print $1}')
+    [ -n "$DEV" ] || fail "attaching the disk for newfs_exfat"
+    newfs_exfat -v LARGEX "${DEV}s2" > /dev/null 2>&1 || { hdiutil detach "$DEV" > /dev/null 2>&1; fail "newfs_exfat"; }
+    hdiutil detach "$DEV" > /dev/null 2>&1 || fail "detaching the disk"
+else
+    rm -f "$DISK.slice"
+    truncate -s $((P2N * 512)) "$DISK.slice" || fail "the exFAT slice"
+    mkfs.exfat -L LARGEX "$DISK.slice" > /dev/null 2>&1 || fail "mkfs.exfat"
+    dd if="$DISK.slice" of="$DISK" bs=1048576 seek=$((P2 / 2048)) conv=notrunc,sparse 2>/dev/null \
+        || fail "writing the exFAT slice"
+    rm -f "$DISK.slice"
+fi
 mformat -i "$DISK"@@$((P3 * 512)) -F -T $P3N -v LARGEFAT :: || fail "mformat"
 
 # One boot of the rescue shell on the disk, the probe run once; the log is
@@ -78,11 +94,18 @@ done
 run "$DIR/ext2-sparse.log" "sparse /dev/disk0p1 ext2 0" || fail "the sparse file astride 4 GiB on ext2"
 echo "large-test: a mebibyte astride the 4 GiB line of a sparse ext2 file reads back with its hole zero: OK"
 e2fsck -fn "$DISK?offset=$((P1 * 512))" > "$DIR/ext2.fsck" 2>&1 || fail "e2fsck on the ext2 volume after the file"
-DEV=$(hdiutil attach -nomount -imagekey diskimage-class=CRawDiskImage "$DISK" 2>/dev/null \
-    | awk 'NR == 1 {print $1}')
-[ -n "$DEV" ] || fail "attaching the disk for fsck_exfat"
-fsck_exfat -n "${DEV}s2" > "$DIR/exfat.fsck" 2>&1; rc=$?
-hdiutil detach "$DEV" > /dev/null 2>&1
+if [ "$EXFAT_HOST" = mac ]; then
+    DEV=$(hdiutil attach -nomount -imagekey diskimage-class=CRawDiskImage "$DISK" 2>/dev/null \
+        | awk 'NR == 1 {print $1}')
+    [ -n "$DEV" ] || fail "attaching the disk for fsck_exfat"
+    fsck_exfat -n "${DEV}s2" > "$DIR/exfat.fsck" 2>&1; rc=$?
+    hdiutil detach "$DEV" > /dev/null 2>&1
+else
+    dd if="$DISK" of="$DISK.slice" bs=1048576 skip=$((P2 / 2048)) count=$((P2N / 2048)) 2>/dev/null \
+        || fail "reading the exFAT slice"
+    fsck.exfat -n "$DISK.slice" > "$DIR/exfat.fsck" 2>&1; rc=$?
+    rm -f "$DISK.slice"
+fi
 [ "$rc" -eq 0 ] || { cat "$DIR/exfat.fsck" >&2; fail "fsck_exfat on the exFAT volume after the file"; }
 echo "large-test: the host's checkers find both volumes consistent: OK"
 
