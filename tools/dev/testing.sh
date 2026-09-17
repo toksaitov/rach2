@@ -7,7 +7,9 @@
 #        testing.sh sh
 #
 # `sync` replaces the copy of this tree on the testing host with the tree
-# here, `build/` and the host-specific compilation database excluded. `run`
+# here; whatever `.gitignore` names, `build/`, the extracted vendor trees and
+# their stamps, the compilation database, is neither sent nor kept there,
+# so the host builds the ports with its own compiler. `run`
 # syncs and then runs COMMAND in the copy; the command is passed to the remote
 # shell as one string, so quote it as that shell will see it. `sh` opens an
 # interactive shell in the copy.
@@ -25,7 +27,7 @@ RSYNC_PATH='MSYS_NO_PATHCONV=1 wsl.exe -- rsync'
 
 sync_tree()
 {
-    rsync -a --delete --exclude /build/ --exclude /compile_commands.json \
+    rsync -a --delete --delete-excluded --filter=':- .gitignore' \
         --rsync-path="$RSYNC_PATH" -e 'ssh -o BatchMode=yes' \
         "$REPO/" "$HOST:$DEST/"
 }

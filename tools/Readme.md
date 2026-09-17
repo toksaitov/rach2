@@ -73,16 +73,30 @@ link against the libgcc it carries. The tree calls the tools by their
 
     sudo apt install gcc-i686-linux-gnu binutils-i686-linux-gnu
     mkdir -p "$HOME/bin"
-    for t in gcc ld ar objcopy strip nm objdump readelf as ranlib; do
+    for t in ld ar objcopy strip nm objdump readelf as ranlib size strings; do
         ln -sf "/usr/bin/i686-linux-gnu-$t" "$HOME/bin/i686-elf-$t"
     done
 
+The compiler itself is not linked but wrapped, because the archive's is a
+Linux-targeting GCC: it defines `__linux__`, compiles for PIE, adds the stack
+protector, control-flow protection, stack-clash probes and unwind tables, and
+sets `_FORTIFY_SOURCE`. A bare `i686-elf-gcc` does none of that, and the
+ports and the guest programs are written for the bare one: a `tcc` compiled
+for PIE and linked static reads its globals through a table the link never
+made, and faults at address 0x1c. `$HOME/bin/i686-elf-gcc` is this script:
+
+    #!/bin/sh
+    exec /usr/bin/i686-linux-gnu-gcc \
+        -fno-pie -no-pie -fno-stack-protector -fcf-protection=none \
+        -fno-stack-clash-protection -fno-asynchronous-unwind-tables \
+        -fno-unwind-tables -U_FORTIFY_SOURCE -U__linux__ -U__gnu_linux__ -Ulinux \
+        "$@"
+
 The archive's version is the lower bound this tree supports: GCC 15.2 and
-binutils 2.46 on Ubuntu 26.04. Two of that toolchain's defaults differ from an
-`i686-elf` build and the makefiles allow for both: the linker's
-`-z separate-code`, which would give the kernel a third `PT_LOAD` segment, and
-the compiler's `--build-id`, whose note section would land on the `.text` of a
-program linked at a fixed address.
+binutils 2.46 on Ubuntu 26.04. Two defaults of that binutils are answered in
+the makefiles rather than the wrapper: the linker's `-z separate-code`, which
+would give the kernel a third `PT_LOAD` segment, and `--build-id`, whose note
+section would land on the `.text` of a program linked at a fixed address.
 
 ### The testing host
 
