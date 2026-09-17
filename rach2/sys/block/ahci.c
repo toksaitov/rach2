@@ -338,7 +338,7 @@ static uint32_t ahci_clflush_size = 64;
  */
 static void ahci_detect_cache(void)
 {
-#if defined(__i386__) || defined(__x86_64__)
+#if defined(__i386__)
     uint32_t eax = 0, ebx = 0, ecx = 0, edx = 0;
     uint32_t sz;
 
@@ -363,7 +363,7 @@ static void ahci_dma_sync(const volatile void *addr, uint32_t size)
     if (!addr || size == 0) {
         return;
     }
-#if defined(__i386__) || defined(__x86_64__)
+#if defined(__i386__)
     if (ahci_have_clflush && ahci_clflush_size != 0) {
         uintptr_t line = (uintptr_t)ahci_clflush_size;
         uintptr_t p = (uintptr_t)addr & ~(line - 1u);
@@ -379,8 +379,8 @@ static void ahci_dma_sync(const volatile void *addr, uint32_t size)
         __asm__ __volatile__("wbinvd" ::: "memory");
     }
 #else
-    /* The instructions above are x86's, and where they do not exist there is
-       no controller either: what runs there is a model of one. */
+    /* The instructions above are 32-bit x86's, and where they do not run
+       there is no controller either: what runs there is a model of one. */
     (void)addr;
     (void)size;
 #endif

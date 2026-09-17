@@ -722,8 +722,10 @@ static void malformed_rows(void)
     load("");
     {
         int rc1 = mount_image("umask=0");
-        int rc2 = mount_image("nosuch=1");
+        int rc2;
 
+        unmount_image();
+        rc2 = mount_image("nosuch=1");
         if (rc1 != 0 || rc2 != -EINVAL) {
             printf("fat32_hosttest: umask=0 mounted %d, nosuch=1 mounted %d\n", rc1, rc2);
         }
@@ -1792,9 +1794,10 @@ static void write_rows(void)
         void *f;
         unsigned long got;
 
-        snprintf(cmd, sizeof(cmd),
-                 "mcopy -i %s/fat32_write.img ::/BOOT/R3.TXT %s/fat32_mtools.out >/dev/null 2>&1",
-                 FIXDIR, FIXDIR);
+        snprintf(
+            cmd, sizeof(cmd),
+            "mcopy -n -i %s/fat32_write.img ::/BOOT/R3.TXT %s/fat32_mtools.out >/dev/null 2>&1",
+            FIXDIR, FIXDIR);
         check(system(cmd) == 0, "mtools copies a file this driver wrote");
         f = fopen(FIXDIR "/fat32_mtools.out", "rb");
         got = f ? fread(back, 1, sizeof(back), f) : 0;

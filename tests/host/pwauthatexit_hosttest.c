@@ -82,6 +82,20 @@ static void keep_marker(int sig)
  * The host's `getspnam(3)` and `getrandom(2)`, as `pwauth_hosttest` supplies
  * them: neither is reached by an acquire, and both must resolve for the link.
  */
+char *__crypt_sha512(const char *key, const char *setting, char *output);
+
+/**
+ * The host's `crypt(3)`: the vendored musl SHA-512 the guest verifies with,
+ * so the link is the same on a host whose libc keeps `crypt` in a separate
+ * library, or has only the DES one.
+ */
+char *crypt(const char *key, const char *setting)
+{
+    static char output[256];
+
+    return __crypt_sha512(key, setting, output);
+}
+
 struct spwd *getspnam(const char *name)
 {
     (void)name;

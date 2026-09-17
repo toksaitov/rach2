@@ -130,8 +130,16 @@ for t in tests/host/*_hosttest.c; do
     # per-function -fno-builtin-memset is not enough on clang, whose
     # loop-idiom pass is gated on the whole of -fno-builtin. The cross
     # compiler makes no such transformation, so the kernel is unaffected.
+    # -std=c99 is the language; -D_DEFAULT_SOURCE is the library namespace,
+    # which glibc narrows to ISO C under a strict -std unless a feature macro
+    # says otherwise, hiding popen, strnlen, syscall and SIGWINCH. Darwin
+    # ignores the macro and declares everything by default. -D_FORTIFY_SOURCE=0
+    # is the one spelling both hosts accept for switching the checked string
+    # calls off: Ubuntu's compiler adds level 3 unless the command line sets
+    # the macro, and Darwin's headers make snprintf a macro at any level above
+    # zero, which a test that supplies its own snprintf cannot compile against.
     # shellcheck disable=SC2086
-    if $CC -std=c99 $SAN -g -O1 -Wno-empty-body $FREESTANDING $INC $extra -o "$out" "$t" $deps \
+    if $CC -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 $SAN -g -O1 -Wno-empty-body $FREESTANDING $INC $extra -o "$out" "$t" $deps \
          >"$VDIR/$base.clog" 2>&1; then
         # shellcheck disable=SC2086
         $WATCHDOG "$out" >"$VDIR/$base.rlog" 2>&1

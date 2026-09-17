@@ -188,6 +188,7 @@ int main(void)
           samples >= 70000 && samples <= 4096 * 25);
     CHECK("and the song, which does not loop, has stopped", OPLMusic_IsPlaying() == 0);
 
+    OPLMusic_UnRegisterSong(song);
     OPLMusic_Shutdown();
     if (fails == 0) {
         printf("oplmusic_hosttest: ok\n");
