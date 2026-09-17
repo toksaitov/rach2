@@ -40,6 +40,7 @@ extern int printf(const char *fmt, ...);
 extern int fork(void);
 extern int waitpid(int pid, int *status, int options);
 extern void _exit(int status);
+extern void exit(int status);
 
 /* ---- stubs for what the cache reaches outside itself ---- */
 

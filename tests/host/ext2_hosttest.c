@@ -3012,6 +3012,18 @@ static void matrix_rows(void)
    killed, is taken rather than waited for: on 2026-09-09 a run stopped with
    the signal that removes nothing left every later instance waiting the
    whole ten minutes and reported as hung. */
+/* The open flags by host, since <fcntl.h> cannot be included beside the
+ * kernel's headers: Darwin puts O_CREAT at 0x0200 and O_TRUNC at 0x0400,
+ * Linux at 0x40 and 0x200. */
+#ifdef __APPLE__
+#define HOST_O_CREAT 0x0200
+#define HOST_O_TRUNC 0x0400
+#else
+#define HOST_O_CREAT 0x40
+#define HOST_O_TRUNC 0x200
+#endif
+#define HOST_O_WRONLY 0x0001
+
 static void unlock_fixtures(void)
 {
     unlink(FIXDIR ".lock");
@@ -3050,7 +3062,7 @@ static void lock_fixtures(void)
         int len = snprintf(text, sizeof(text), "%d\n", getpid());
 
         snprintf(mine, sizeof(mine), FIXDIR ".lock.%d", getpid());
-        fd = open(mine, 0x0200 | 0x0400 | 0x0001, 0644); /* O_CREAT|O_TRUNC|O_WRONLY */
+        fd = open(mine, HOST_O_CREAT | HOST_O_TRUNC | HOST_O_WRONLY, 0644);
         if (fd >= 0) {
             if (write(fd, text, (unsigned long)len) != len) {
                 printf("ext2_hosttest: the lock's holder could not be recorded\n");

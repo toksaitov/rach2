@@ -3,6 +3,7 @@
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/paging_host.c
+ * host-deps: tests/host/compat/kcpu_host.c
  *
  * The disk suites boot this driver against QEMU's ich9-ahci, which works: it
  * resets when told, answers the handoff, brings its link up and completes

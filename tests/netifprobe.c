@@ -487,7 +487,7 @@ struct sockaddr_ll_probe {
 static void packet_on_second(int raw_fd)
 {
     uint32_t args[6];
-    struct sockaddr_ll_probe to, from;
+    struct sockaddr_ll_probe to, from = {0};
     uint8_t mac[6];
     uint8_t arp[28];
     uint8_t buf[64];

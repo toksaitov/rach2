@@ -325,9 +325,8 @@ static void damage_handler(int sig)
     int k;
 
     (void)sig;
-    for (k = 0; k < 4; k++) {
-        ((unsigned char *)&magic)[k] = frame[100 + k];
-    }
+    magic = (unsigned)frame[100] | ((unsigned)frame[101] << 8) | ((unsigned)frame[102] << 16) |
+            ((unsigned)frame[103] << 24);
     if (magic != SIG_FRAME_MAGIC) {
         puts("FPUPROBE FAIL: the frame's magic word is not where the layout puts it");
         sys_exit(1);
