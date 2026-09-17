@@ -14,6 +14,19 @@ The guest build uses three POSIX `guest.mk` files for the kernel, utilities, and
 
 Image build targets do not run QEMU. The run scripts under `rach2/` boot an image directly, while test targets invoke QEMU through their test scripts.
 
+## Hosts
+
+Two hosts, two jobs. Code is written, reviewed and committed on the Mac mini, in this tree. Every test suite, every set and every analysis runs on the testing host, reached as `ssh testing`: a Windows machine with an AMD Ryzen 9 7950X3D, 32 threads and 200 GB of memory, whose WSL2 distribution, Ubuntu 26.04, holds a copy of this tree at `/home/testing/rach2`. The copy is never edited there; it is replaced by rsync before every run:
+
+    rsync -a --delete --exclude /build/ --rsync-path='MSYS_NO_PATHCONV=1 wsl.exe -- rsync' \
+        /Users/toksaitov/Desktop/rach2/ testing:/home/testing/rach2/
+
+The ssh server on that host answers in an MSYS shell, so `--rsync-path` starts the receiving rsync inside WSL and the variable stops MSYS rewriting the destination path. A command runs there through the same door:
+
+    ssh testing "wsl.exe -- bash -lc 'cd /home/testing/rach2 && tests/run style'"
+
+`tools/dev/testing.sh` wraps the sync and the run and is the form to use: `testing.sh run tests/run all`. The Mac builds only what editing needs, a compile or one host test; a run a person waits for, a suite, the host tier, the full set, `make analyze`, is not started on the Mac. Every rule in Verification applies on the testing host unchanged: the whole log is written to a file there and read whole, the run is watched, a rebuild there while a set runs voids the set. The versions of the judges on the testing host, compilers, analysers, formatter and QEMU, are the ones a milestone's Readme records. The Lenovo is on the Mac's network, not the testing host's, so hardware sittings and stick writes stay on the Mac. Setting the host up is in `tools/Readme.md`.
+
 ## Writing
 
 All written language reads as if one careful author wrote it. The model for voice is the prose of Kernighan and Ritchie, Kernighan and Pike, W. Richard Stevens, and Knuth, the Unix manual pages for reference docs, and Lions' Commentary for explaining kernel code. Terse, exact, concrete. Explain the part that is not obvious and stop. No slogans, no marketing words, no development diary, no notes to oneself.
