@@ -94,6 +94,21 @@ link it through the `muslgcc` wrappers, so a toolchain without it builds the
 kernel and then fails in the userland. Put `$PREFIX/bin` on the path of every
 shell that builds Rach2.
 
+### The testing host
+
+The suites, the sets and the analyses run on the testing host that `CLAUDE.md`
+names, reached as `ssh testing`: Ubuntu 26.04 under WSL2 on a Windows machine
+with 32 threads and 200 GB of memory, with a copy of this tree at
+`/home/testing/rach2`. It is set up as any Debian or Ubuntu host above, with
+the analysers the audit milestone runs added:
+
+    sudo apt install clang clang-tidy clang-tools sparse pmccabe mandoc xorriso
+
+The ssh server on that machine answers in an MSYS shell, so anything meant for
+WSL starts through `wsl.exe`; `dev/testing.sh` does that for the sync and the
+run, and is the way to reach the copy. Its home directory is on WSL's own
+file system, not under `/mnt/c`, which is slow for a build.
+
 The target prefix is not negotiable: `vendor/musl/build_libc.sh` configures
 with `CROSS_COMPILE=i686-elf-` and both `muslgcc` wrappers call
 `i686-elf-gcc` by name. A toolchain installed elsewhere under that same
@@ -167,6 +182,8 @@ The inspectors under `inspect/` validate built artifacts; the validation stamps 
 * `cfgcheck.c` checks the two configuration files a sealed disk depends on. `grubembed` requires exactly four commands in `image/grub-embed.cfg`, in order: `search --no-floppy --label RACH2BOOT --set=root`, `configfile ($root)/boot/grub/grub.cfg`, `search --no-floppy --label RACH2RECOV --set=root`, and `configfile ($root)/boot/grub/recovery.cfg`. Comments and blank lines are allowed. Both GRUB core builders use this configuration. `sealednet` checks that the sealed disk's address, prefix, mask, gateway, and recovery fallback script describe one valid network configuration. The checker's self-test has 24 cases.
 
 ## clangd database
+
+`dev/testing.sh sync | run COMMAND... | sh` puts this tree on the testing host and runs a command in the copy there. `sync` replaces `/home/testing/rach2` with the tree here, `build/` and the compilation database excluded, through an rsync whose receiving side starts inside WSL; `run` syncs and then runs COMMAND in the copy, passing it to the remote shell as one string; `sh` opens a shell there. The suites and the analyses are run through it, as `CLAUDE.md` says: `tools/dev/testing.sh run tests/run all`.
 
 `dev/gen_compile_commands.sh` builds the clangd database. Run it directly. It dry-runs the builds in `rach2/`, `tests/`, `ish/`, and `utils/`, joins wrapped recipe lines, selects the cross-compile commands by their first word, and publishes `compile_commands.json` only after the finished file passes a line-by-line JSON validation and the kernel coverage check. Its `--selftest` exercises the join, selection, escaping, and validation stages on fixtures and runs under `tests/run style`. See [the shared Make documentation](../mk/Readme.md) for the clangd settings.
 
