@@ -96,7 +96,8 @@ trap 'exit 143' TERM
 build_probe()
 {
     "${CROSS_CC:-i686-elf-gcc}" -m32 -nostdlib -static -ffreestanding \
-        -ansi -Werror -Wdeclaration-after-statement -Wl,-Ttext=0x08048000 \
+        -ansi -Werror -Wdeclaration-after-statement \
+        -Wl,-Ttext=0x08048000 -Wl,--build-id=none \
         -o "$work/usbdiskprobe" "$work/usbdiskprobe.c"
     awk -v probe="$work/usbdiskprobe" '
         $1 == "file" && $3 == "/usbdiskprobe" {$4 = probe}
