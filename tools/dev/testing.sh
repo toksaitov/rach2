@@ -6,10 +6,13 @@
 #        testing.sh run COMMAND...
 #        testing.sh sh
 #
-# `sync` replaces the copy of this tree on the testing host with the tree
-# here; whatever `.gitignore` names, `build/`, the extracted vendor trees and
-# their stamps, the compilation database, is neither sent nor kept there,
-# so the host builds the ports with its own compiler. `run`
+# `sync` replaces the tracked files of the copy on the testing host with the
+# tree here. Whatever `.gitignore` names, `build/`, the extracted vendor trees
+# and their stamps, the compilation database, is not sent, so the host
+# builds with its own compiler, and what it built is left in place, so a run
+# after a small edit rebuilds only what the edit touched. The one ignored
+# file that is sent is the shareware WAD `ports/doom/fetch_wad.sh` downloads,
+# because the Doom suite reads it from the image. `run`
 # syncs and then runs COMMAND in the copy; the command is passed to the remote
 # shell as one string, so quote it as that shell will see it. `sh` opens an
 # interactive shell in the copy.
@@ -18,6 +21,10 @@
 # shell on Windows; the copy lives in the WSL distribution, so the receiving
 # rsync and the command both start through `wsl.exe`, and MSYS's rewriting of
 # POSIX paths is switched off for the rsync it launches.
+#
+# The rsync here must be the real one, 3.x from Homebrew. macOS ships
+# openrsync under the same name, and it deletes on the host what the filter
+# excludes, the whole build and every vendor tree, on every sync.
 set -e
 
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
@@ -27,7 +34,16 @@ RSYNC_PATH='MSYS_NO_PATHCONV=1 wsl.exe -- rsync'
 
 sync_tree()
 {
-    rsync -a --delete --delete-excluded --filter=':- .gitignore' \
+    case "$(rsync --version 2>/dev/null | head -n 1)" in
+        "rsync  version 3"*) ;;
+        *)
+            echo "testing: rsync is not rsync 3; install it (brew install rsync):" >&2
+            echo "testing: openrsync deletes the host's build and vendor trees" >&2
+            exit 2
+            ;;
+    esac
+    rsync -a --delete \
+        --filter='+ /ports/doom/doom1.wad' --filter=':- .gitignore' \
         --rsync-path="$RSYNC_PATH" -e 'ssh -o BatchMode=yes' \
         "$REPO/" "$HOST:$DEST/"
 }

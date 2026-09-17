@@ -49,7 +49,7 @@ installer prints, because it does not put `brew` on the path itself.
     eval "$(/opt/homebrew/bin/brew shellenv)"
 
     brew install i686-elf-gcc i686-elf-binutils qemu mtools e2fsprogs \
-                 cppcheck shellcheck clang-format
+                 cppcheck shellcheck clang-format rsync
 
 `ssh-keygen` ships with macOS. `xorriso` builds the optional ISOs
 (`make isos`), and `pkg-config` with the `fuse-t` cask lets `make -C krffs

@@ -18,8 +18,11 @@ Image build targets do not run QEMU. The run scripts under `rach2/` boot an imag
 
 Two hosts, two jobs. Code is written, reviewed and committed on the Mac mini, in this tree. Every test suite, every set and every analysis runs on the testing host, reached as `ssh testing`: a Windows machine with an AMD Ryzen 9 7950X3D, 32 threads and 200 GB of memory, whose WSL2 distribution, Ubuntu 26.04, holds a copy of this tree at `/home/testing/rach2`. The copy is never edited there; it is replaced by rsync before every run:
 
-    rsync -a --delete --exclude /build/ --rsync-path='MSYS_NO_PATHCONV=1 wsl.exe -- rsync' \
+    rsync -a --delete --filter='+ /ports/doom/doom1.wad' --filter=':- .gitignore' \
+        --rsync-path='MSYS_NO_PATHCONV=1 wsl.exe -- rsync' \
         /Users/toksaitov/Desktop/rach2/ testing:/home/testing/rach2/
+
+What `.gitignore` names is not sent and is left alone there, so the host keeps its own build and its own vendor trees; the shareware WAD is the one ignored file sent, since the Doom suite stages it. The rsync is Homebrew's: macOS's openrsync deletes on the host what the filter excludes.
 
 The ssh server on that host answers in an MSYS shell, so `--rsync-path` starts the receiving rsync inside WSL and the variable stops MSYS rewriting the destination path. A command runs there through the same door:
 
