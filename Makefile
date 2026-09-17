@@ -149,7 +149,7 @@ LIBC_PATCHES = vendor/musl/patches/series $(wildcard vendor/musl/patches/*.patch
 
 $(LIBC_STAMP): vendor/musl/build_libc.sh $(LIBC_TARBALL) $(LIBC_PATCHES)
 	@rm -f $@ vendor/musl/install/lib/libc.a
-	+@t0=$$(date +%s); ./vendor/musl/build_libc.sh && echo "libc: result: built in $$(($$(date +%s)-t0))s"
+	+@if [ -n "$(findstring n,$(firstword $(MAKEFLAGS)))" ]; then echo "$@: dry run"; else t0=$$(date +%s); ./vendor/musl/build_libc.sh && echo "libc: result: built in $$(($$(date +%s)-t0))s"; fi
 	@test -s vendor/musl/install/lib/libc.a || { echo "libc: build produced no libc.a" >&2; exit 1; }
 	@{ find vendor/musl/install -type f | sort; echo $(MUSL_CRYPT_SRC); } > vendor/musl/.outputs
 	@touch $@
@@ -171,7 +171,7 @@ $(BUSYBOX_STAMP): vendor/busybox/build_busybox.sh vendor/busybox/rach2.config \
 	    build/vendor/busybox/applet_tables-suid.h \
 	    build/vendor/busybox/config-main \
 	    build/vendor/busybox/config-suid
-	+@t0=$$(date +%s); ./vendor/busybox/build_busybox.sh && echo "busybox: result: built in $$(($$(date +%s)-t0))s"
+	+@if [ -n "$(findstring n,$(firstword $(MAKEFLAGS)))" ]; then echo "$@: dry run"; else t0=$$(date +%s); ./vendor/busybox/build_busybox.sh && echo "busybox: result: built in $$(($$(date +%s)-t0))s"; fi
 	@test -s $(BUSYBOX_BIN) || { echo "busybox: build produced no $(BUSYBOX_BIN)" >&2; exit 1; }
 	@touch $@
 
@@ -179,7 +179,7 @@ $(TCC_STAMP): vendor/tcc/build_tcc.sh vendor/tcc/rach2-output-policy.patch \
               vendor/busybox/muslgcc $(TCC_TARBALL) $(LIBC_STAMP)
 	@rm -f $@ $(TCC_BIN) build/vendor/tcc/libtcc1.a \
 	    build/vendor/tcc/include/stdarg.h
-	+@t0=$$(date +%s); ./vendor/tcc/build_tcc.sh && echo "tcc: result: built in $$(($$(date +%s)-t0))s"
+	+@if [ -n "$(findstring n,$(firstword $(MAKEFLAGS)))" ]; then echo "$@: dry run"; else t0=$$(date +%s); ./vendor/tcc/build_tcc.sh && echo "tcc: result: built in $$(($$(date +%s)-t0))s"; fi
 	@test -s $(TCC_BIN) || { echo "tcc: build produced no $(TCC_BIN)" >&2; exit 1; }
 	@find build/vendor/tcc -type f | sort > vendor/tcc/.outputs
 	@touch $@
@@ -191,7 +191,7 @@ $(TCC_STAMP): vendor/tcc/build_tcc.sh vendor/tcc/rach2-output-policy.patch \
 $(PDPMAKE_STAMP): vendor/pdpmake/build_pdpmake.sh $(PDPMAKE_PATCHES) \
                   vendor/busybox/muslgcc $(PDPMAKE_TARBALL) $(LIBC_STAMP)
 	@rm -f $@ $(PDPMAKE_BIN)
-	+@t0=$$(date +%s); ./vendor/pdpmake/build_pdpmake.sh && echo "pdpmake: result: built in $$(($$(date +%s)-t0))s"
+	+@if [ -n "$(findstring n,$(firstword $(MAKEFLAGS)))" ]; then echo "$@: dry run"; else t0=$$(date +%s); ./vendor/pdpmake/build_pdpmake.sh && echo "pdpmake: result: built in $$(($$(date +%s)-t0))s"; fi
 	@test -s $(PDPMAKE_BIN) || { echo "pdpmake: build produced no $(PDPMAKE_BIN)" >&2; exit 1; }
 	@touch $@
 
@@ -200,7 +200,7 @@ $(PDPMAKE_STAMP): vendor/pdpmake/build_pdpmake.sh $(PDPMAKE_PATCHES) \
 $(E2FSPROGS_STAMP): vendor/e2fsprogs/build_e2fsprogs.sh vendor/e2fsprogs/muslgcc \
                     $(E2FSPROGS_PATCHES) $(E2FSPROGS_TARBALL) $(LIBC_STAMP)
 	@rm -f $@ $(E2FSCK_BIN) $(RESIZE2FS_BIN)
-	+@t0=$$(date +%s); ./vendor/e2fsprogs/build_e2fsprogs.sh && echo "e2fsprogs: result: built in $$(($$(date +%s)-t0))s"
+	+@if [ -n "$(findstring n,$(firstword $(MAKEFLAGS)))" ]; then echo "$@: dry run"; else t0=$$(date +%s); ./vendor/e2fsprogs/build_e2fsprogs.sh && echo "e2fsprogs: result: built in $$(($$(date +%s)-t0))s"; fi
 	@test -s $(E2FSCK_BIN) || { echo "e2fsprogs: build produced no $(E2FSCK_BIN)" >&2; exit 1; }
 	@test -s $(RESIZE2FS_BIN) || { echo "e2fsprogs: build produced no $(RESIZE2FS_BIN)" >&2; exit 1; }
 	@touch $@
@@ -213,7 +213,7 @@ DROPBEAR_PATCHES = vendor/dropbear/patches/series $(wildcard vendor/dropbear/pat
 $(DROPBEAR_STAMP): vendor/dropbear/build_dropbear.sh vendor/dropbear/localoptions.h vendor/dropbear/muslgcc \
                    $(DROPBEAR_PATCHES) $(DROPBEAR_TARBALL) $(LIBC_STAMP)
 	@rm -f $@ $(DROPBEAR_BIN)
-	+@t0=$$(date +%s); ./vendor/dropbear/build_dropbear.sh && echo "dropbear: result: built in $$(($$(date +%s)-t0))s"
+	+@if [ -n "$(findstring n,$(firstword $(MAKEFLAGS)))" ]; then echo "$@: dry run"; else t0=$$(date +%s); ./vendor/dropbear/build_dropbear.sh && echo "dropbear: result: built in $$(($$(date +%s)-t0))s"; fi
 	@test -s $(DROPBEAR_BIN) || { echo "dropbear: build produced no $(DROPBEAR_BIN)" >&2; exit 1; }
 	@touch $@
 
@@ -428,7 +428,10 @@ os-real-ext2: $(OS_REAL_EXT2)
 krffs/authorized_keys:
 	sh krffs/gen_demo_key.sh
 
-krffs/shadow:
+# The password hashes are minted by the krffs hasher, so a tree with no build
+# directory yet builds the krffs tools before it mints; order-only, since a
+# rebuilt hasher must not remint hashes the images already carry.
+krffs/shadow: | build/krffs/mkfs.krffs
 	sh krffs/gen_demo_password.sh
 
 # `make recovery-key`: put this tree's own key into the recovery system, so a
