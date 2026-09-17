@@ -254,11 +254,32 @@ _ := $(shell [ ! -f $(LIBC_STAMP) ] || [ -s vendor/musl/install/lib/libc.a ] || 
 _ := $(shell [ ! -f $(TCC_STAMP) ] || [ -s $(TCC_BIN) ] || rm -f $(TCC_STAMP))
 _ := $(shell [ ! -f $(BUSYBOX_STAMP) ] || { [ -s $(BUSYBOX_BIN) ] && [ -s $(BUSYBOX_SUID_BIN) ]; } || rm -f $(BUSYBOX_STAMP))
 
-ifneq ($(MUSL_OUTPUTS),)
-$(MUSL_OUTPUTS): $(LIBC_STAMP)
+# Before the first build there is no .outputs list, yet the manifests already
+# name staged files as prerequisites of the images, and a parallel make from
+# a clean tree reached an image before the stamp and stopped with no rule
+# for libc.a. The staged files the manifests name are read from the
+# manifests here, so they are known targets from the first make on. These
+# rules have no recipe on purpose: a rule with one, even an empty one, marks
+# the file remade whenever the stamp is newer, and the stamp is always newer
+# than what it staged, so every image would be restaged by every make.
+# The files each manifest stages, read once here and used by every rule that
+# builds an image from that manifest.
+MANIFEST_DEPS_test := $(shell sh krffs/manifest_deps.sh krffs/manifests/test.manifest)
+MANIFEST_DEPS_os_simple := $(shell sh krffs/manifest_deps.sh krffs/manifests/os-simple.manifest)
+MANIFEST_DEPS_os_real := $(shell sh krffs/manifest_deps.sh krffs/manifests/os-real.manifest)
+MANIFEST_DEPS_rach2_metal := $(shell sh krffs/manifest_deps.sh krffs/manifests/rach2-metal.manifest)
+MANIFEST_DEPS_rach2_recovery := $(shell sh krffs/manifest_deps.sh krffs/manifests/rach2-recovery.manifest)
+MANIFEST_DEPS_rach2_metal_disk := $(shell sh krffs/manifest_deps.sh krffs/manifests/rach2-metal-disk.manifest)
+MANIFEST_DEPS_grub_test := $(shell sh krffs/manifest_deps.sh krffs/manifests/grub-test.manifest)
+STAGED_IN_MANIFESTS = $(sort $(filter vendor/musl/install/% build/vendor/tcc/%, \
+    $(MANIFEST_DEPS_test) $(MANIFEST_DEPS_os_simple) $(MANIFEST_DEPS_os_real) $(MANIFEST_DEPS_rach2_metal) $(MANIFEST_DEPS_rach2_recovery) $(MANIFEST_DEPS_rach2_metal_disk) $(MANIFEST_DEPS_grub_test)))
+MUSL_KNOWN = $(sort $(MUSL_OUTPUTS) $(filter vendor/musl/install/%,$(STAGED_IN_MANIFESTS)))
+TCC_KNOWN = $(sort $(TCC_OUTPUTS) $(filter build/vendor/tcc/%,$(STAGED_IN_MANIFESTS)))
+ifneq ($(MUSL_KNOWN),)
+$(MUSL_KNOWN): $(LIBC_STAMP)
 endif
-ifneq ($(TCC_OUTPUTS),)
-$(TCC_OUTPUTS): $(TCC_STAMP)
+ifneq ($(TCC_KNOWN),)
+$(TCC_KNOWN): $(TCC_STAMP)
 endif
 $(BUSYBOX_OUTPUTS): $(BUSYBOX_STAMP)
 $(DROPBEAR_BIN): $(DROPBEAR_STAMP)
@@ -428,6 +449,13 @@ os-real-ext2: $(OS_REAL_EXT2)
 krffs/authorized_keys:
 	sh krffs/gen_demo_key.sh
 
+# The same generator writes the test account's key, which the images name
+# too. The rule is ordered behind the root key so the two never mint at once,
+# and a run of the generator leaves a key that is there alone, so this mints
+# only a test key that is missing on its own.
+krffs/test_authorized_keys: | krffs/authorized_keys
+	sh krffs/gen_demo_key.sh
+
 # The password hashes are minted by the krffs hasher, so a tree with no build
 # directory yet builds the krffs tools before it mints; order-only, since a
 # rebuilt hasher must not remint hashes the images already carry.
@@ -482,7 +510,7 @@ musl-programs: $(LIBC_STAMP)
 
 # The test image: the freestanding syscall probes plus the musl integration
 # programs. `make test` boots it and asserts every probe's success token.
-$(TEST_IMAGE): $(DEMO_CREDS) krffs/manifests/test.manifest $(shell sh krffs/manifest_deps.sh krffs/manifests/test.manifest) $(IMAGE_TOOLS) | preflight krffs rach2 tests musl-programs utils ish
+$(TEST_IMAGE): $(DEMO_CREDS) krffs/manifests/test.manifest $(MANIFEST_DEPS_test) $(IMAGE_TOOLS) | preflight krffs rach2 tests musl-programs utils ish
 	$(MKIMAGE) krffs/manifests/test.manifest $@ 10
 
 # The os-simple image: a small Unix built out of this project's own code. init
@@ -490,7 +518,7 @@ $(TEST_IMAGE): $(DEMO_CREDS) krffs/manifests/test.manifest $(shell sh krffs/mani
 # gen_demo_password.sh mints them when krffs/shadow is absent and does nothing
 # when it is there, and it is the same file os-real stages, so one password
 # opens either image.
-$(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(shell sh krffs/manifest_deps.sh krffs/manifests/os-simple.manifest) $(IMAGE_TOOLS) | preflight krffs rach2 ish utils
+$(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_DEPS_os_simple) $(IMAGE_TOOLS) | preflight krffs rach2 ish utils
 	$(MKIMAGE) krffs/manifests/os-simple.manifest $@ 10
 
 # The os-real image: a real Unix-like environment (busybox shell + coreutils,
@@ -501,7 +529,7 @@ $(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(shell sh 
 # login keys and gen_demo_password.sh the account passwords and /etc/shadow,
 # each when absent; the check targets ensure the busybox/dropbear binaries are
 # real.
-$(OS_REAL_IMAGE): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(shell sh krffs/manifest_deps.sh krffs/manifests/os-real.manifest) $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+$(OS_REAL_IMAGE): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	$(MKIMAGE) krffs/manifests/os-real.manifest $@ 16
 
 # The same manifest as an ext2 volume, the sealed disk's fourth partition and
@@ -511,7 +539,7 @@ $(OS_REAL_IMAGE): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(shell sh krff
 # sets the owners with debugfs, and passes it through e2fsck and the set-id
 # guard's own ext2 reader before it is named. The prerequisites are the KRFFS
 # image's, so the two are built from one tree.
-$(OS_REAL_EXT2): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(shell sh krffs/manifest_deps.sh krffs/manifests/os-real.manifest) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+$(OS_REAL_EXT2): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	sh tools/image/mkext2.sh krffs/manifests/os-real.manifest $@ 1024
 
 # The metal image: what the Lenovo G50-70 boots from a USB stick. A RAM-only
@@ -557,7 +585,7 @@ rach2-recovery: krffs rach2 $(RECOVERY_KERNEL)
 # $(TEST_IMAGE) above already uses. As a phony target this rebuilt the image on
 # every invocation, so three suites that merely boot it each restaged it, and
 # two of them running at once restaged it under each other.
-$(METAL_IMAGE): $(DEMO_CREDS) krffs/manifests/rach2-metal.manifest $(shell sh krffs/manifest_deps.sh krffs/manifests/rach2-metal.manifest) $(IMAGE_TOOLS) | preflight krffs rach2 rach2-metal utils check-busybox check-setid check-dropbearmulti
+$(METAL_IMAGE): $(DEMO_CREDS) krffs/manifests/rach2-metal.manifest $(MANIFEST_DEPS_rach2_metal) $(IMAGE_TOOLS) | preflight krffs rach2 rach2-metal utils check-busybox check-setid check-dropbearmulti
 	$(MKIMAGE) krffs/manifests/rach2-metal.manifest $@ 4
 
 rach2-metal-image: $(METAL_IMAGE)
@@ -579,7 +607,7 @@ RECOVERY_KEY_TAG = -with-key
 endif
 RECOVERY_IMAGE = $(IMAGES_DIR)/$(RECOVERY_NAME).krffs
 RECOVERY_ISO = $(IMAGES_DIR)/$(RECOVERY_NAME).iso
-$(RECOVERY_IMAGE): $(DEMO_CREDS) krffs/manifests/rach2-recovery.manifest $(shell sh krffs/manifest_deps.sh krffs/manifests/rach2-recovery.manifest) $(IMAGE_TOOLS) tools/image/keyname.sh | preflight krffs rach2 rach2-recovery utils check-busybox check-setid check-dropbearmulti check-e2fsck
+$(RECOVERY_IMAGE): $(DEMO_CREDS) krffs/manifests/rach2-recovery.manifest $(MANIFEST_DEPS_rach2_recovery) $(IMAGE_TOOLS) tools/image/keyname.sh | preflight krffs rach2 rach2-recovery utils check-busybox check-setid check-dropbearmulti check-e2fsck
 	@sh tools/image/keyname.sh $@
 	$(MKIMAGE) krffs/manifests/rach2-recovery.manifest $@ 4
 
@@ -675,7 +703,7 @@ $(FS_DEMO_DIR)/empty.krffs: krffs/mkfs.krffs.c | krffs
 fs-demo-images: $(FS_DEMO_IMAGES)
 .PHONY: fs-demo-images
 SEALED_EXT2 = build/images/rach2-metal-disk.ext2
-$(SEALED_EXT2): $(FS_DEMO_IMAGES) $(DEMO_CREDS) krffs/manifests/rach2-metal-disk.manifest $(shell sh krffs/manifest_deps.sh krffs/manifests/rach2-metal-disk.manifest) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+$(SEALED_EXT2): $(FS_DEMO_IMAGES) $(DEMO_CREDS) krffs/manifests/rach2-metal-disk.manifest $(MANIFEST_DEPS_rach2_metal_disk) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	sh tools/image/mkext2.sh krffs/manifests/rach2-metal-disk.manifest $@ 1024
 # The alias builds everything the disk is made of, then asks for the disk
 # itself. The two are separate because the components are phony targets, which

@@ -452,7 +452,7 @@ $(GRUB_CORE_B): $(GRUB_CORE_DEPS) vendor/grub/disk-core-b.img
 	sh tools/image/mkgrubcore.sh B $@
 
 GRUB_TEST_EXT2 = $(IMAGES_DIR)/grub-test.ext2
-$(GRUB_TEST_EXT2): $(DEMO_CREDS) $(GRUB_CORE_A) $(GRUB_CORE_B) krffs/manifests/grub-test.manifest $(shell sh krffs/manifest_deps.sh krffs/manifests/grub-test.manifest) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-setid
+$(GRUB_TEST_EXT2): $(DEMO_CREDS) $(GRUB_CORE_A) $(GRUB_CORE_B) krffs/manifests/grub-test.manifest $(MANIFEST_DEPS_grub_test) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-setid
 	sh tools/image/mkext2.sh krffs/manifests/grub-test.manifest $@ 48
 run-grub: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krffs $(GRUB_TEST_EXT2) check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	@mkdir -p $(IMAGES_DIR)
@@ -531,7 +531,7 @@ run-authority: rach2 rach2-recovery tests krffs test-image $(MKFIXTURE) $(HARNES
 # the os-real system at 96 MiB. The kernel is built on that root and installed
 # from it. It ran twice until 2026-09-14, once per root type.
 OS_REAL_SMALL_EXT2 = $(IMAGES_DIR)/os-real-small.ext2
-$(OS_REAL_SMALL_EXT2): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(shell sh krffs/manifest_deps.sh krffs/manifests/os-real.manifest) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+$(OS_REAL_SMALL_EXT2): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	sh tools/image/mkext2.sh krffs/manifests/os-real.manifest $@ 96
 INSTALL_TEST_DISK = $(IMAGES_DIR)/install-test.disk
 run-install: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(BINFIND) rach2-recovery $(RECOVERY_IMAGE) $(OS_REAL_SMALL_EXT2)
@@ -581,7 +581,7 @@ run-sealed: $(DEMO_CREDS) $(SEALED_DISK) $(DEADLINE) $(ELFCHECK) $(BINFIND) $(MK
 # mounts again. It ran twice until 2026-09-14, once per root type; the disk has
 # one root now.
 OS_SIMPLE_EXT2 = $(IMAGES_DIR)/os-simple.ext2
-$(OS_SIMPLE_EXT2): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(shell sh krffs/manifest_deps.sh krffs/manifests/os-simple.manifest) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-setid
+$(OS_SIMPLE_EXT2): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_DEPS_os_simple) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-setid
 	sh tools/image/mkext2.sh krffs/manifests/os-simple.manifest $@ 16
 DRILL_DISK = $(IMAGES_DIR)/drill-test.disk
 run-drill: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krffs check-setid $(BINFIND) $(MKMBR) $(HARNESS) $(OS_SIMPLE_EXT2)
@@ -1420,7 +1420,7 @@ $(RECOVERY_ISO): $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) tools/image/mkiso.sh tools
 # groups fill the first 64 MiB group, as growset requires.
 INSTALLER_EXT2 = $(IMAGES_DIR)/installer-root.ext2
 $(INSTALLER_EXT2): $(FS_DEMO_IMAGES) $(DEMO_CREDS) krffs/manifests/rach2-metal-disk.manifest \
-                   $(shell sh krffs/manifest_deps.sh krffs/manifests/rach2-metal-disk.manifest) \
+                   $(MANIFEST_DEPS_rach2_metal_disk) \
                    tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils \
                    check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti \
                    ports/doom
@@ -1564,7 +1564,7 @@ run-selfbuild: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krf
 # builds are the most the ext2 root is read and written in one sitting.
 SELFBUILD_EXT2_VOL = $(IMAGES_DIR)/selfbuild-ext2.vol
 SELFBUILD_EXT2_DISK = $(IMAGES_DIR)/selfbuild-ext2-test.disk
-$(SELFBUILD_EXT2_VOL): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(shell sh krffs/manifest_deps.sh krffs/manifests/os-real.manifest) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
+$(SELFBUILD_EXT2_VOL): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	sh tools/image/mkext2.sh krffs/manifests/os-real.manifest $@ 48
 run-selfbuild-ext2: $(DEMO_CREDS) rach2 utils krffs test-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(ELFCHECK) $(RUNTESTS) $(SELFBUILD_EXT2_VOL) build/tools/image/mkmbr
 	@mkdir -p $(IMAGES_DIR)
