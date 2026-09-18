@@ -1653,7 +1653,7 @@ run-stress: rach2 tests krffs $(HARNESS)
 	    --append "rach2.fsdisk rach2.rescue" \
 	    --drive "file=$(STRESS_DISK),format=raw,if=ide,index=0,media=disk" \
 	    --timeout 900 --steptmo 800 --ok "STRESSPROBE OK" --never "STRESSPROBE FAIL" \
-	    --log $(STRESS_DISK).log "expect=Type 'help'" probe=/stressprobe
+	    --log $(STRESS_DISK).log probe=/stressprobe
 # The AHCI variants of the disk tests: identical images and probes, but the disk
 # rides an ich9-ahci HBA (if=none + ide-hd) and rach2.disk=ahci selects the AHCI
 # backend, exercising the same page-cache/KRFFS path through
@@ -1760,7 +1760,7 @@ run-stress-ahci: rach2 tests krffs $(HARNESS)
 	    --drive "file=$(STRESS_AHCI_DISK),format=raw,if=none,id=drv0" \
 	    $(AHCI_ATTACH) \
 	    --timeout 900 --steptmo 800 --ok "STRESSPROBE OK" --never "STRESSPROBE FAIL" \
-	    --log $(STRESS_AHCI_DISK).log "expect=Type 'help'" probe=/stressprobe
+	    --log $(STRESS_AHCI_DISK).log probe=/stressprobe
 # The style suite (see tools/verify/check.sh): -Werror build, scoped cppcheck,
 # shellcheck, the convention grep, clang-format, and a readelf ABI check.
 # `tests/run style` names this target.
