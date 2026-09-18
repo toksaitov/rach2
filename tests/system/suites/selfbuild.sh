@@ -108,11 +108,14 @@ cleanup_boot() {
 # The console log is kept as the failing boot's when the run did not pass,
 # which a stop by the runner is: it is the only account of what the machine
 # did.
+# The disk the machine wrote is kept beside it, so the state a failure
+# left in the file system can be read on the host.
 PASSED=""
 cleanup() {
     cleanup_boot
     if [ -z "$PASSED" ] && [ -f "$LOG" ]; then
         cp "$LOG" "$DISK.fail.log" 2>/dev/null || true
+        mv "$WORK" "$DISK.fail.work" 2>/dev/null || true
     fi
     rm -f "$WORK" "$WORK.p1" "$LOG" "$FEED" "$STEPS" "$KEXTRACT"
 }
@@ -205,14 +208,14 @@ step "BUILDONE" "cd /home/test/kbuild/rach2 && make -f guest.mk > /tmp/kb1.out 2
 step "TAILONE" "busybox tail -4 /tmp/kb1.out; echo TAIL\"\"ONE"
 step "HASHONE" "cd /home/test/kbuild/rach2 && busybox sha256sum kernel > /tmp/k1.sha; K1=\$(busybox cat /tmp/k1.sha); echo HASH\"\"ONE=\$K1 SIZE\"\"ONE=\$(busybox stat -c %s kernel) SIZE\"\"END"
 step "KEEPONE" "cp /home/test/kbuild/rach2/kernel /home/test/kernel.selfbuilt && echo KEEP\"\"ONE"
-step "DUONE" "busybox du -sk /home/test/kbuild /tmp /home/test/kernel.selfbuilt; echo DU\"\"ONE"
+step "DUONE" "busybox du -sk /home/test/kbuild /tmp /home/test/kernel.selfbuilt; busybox df -k /home/test; echo DU\"\"ONE"
 # The second build, the hash comparison, the userland builds and their
 # smoke checks are the KRFFS suite's: the ext2 root proves itself with one
 # clean build of the kernel and the boot of what it built, and the programs
 # do not care which root they were built on.
 if [ "$ROOT_TYPE" = krffs ]; then
 step "COPYTWO" "cd /home/test/kbuild && rm -rf rach2 && cp -r /src/rach2 . && echo COPY\"\"TWO"
-step "DUTWO" "busybox du -sk /home/test/kbuild /tmp; echo DU\"\"TWO"
+step "DUTWO" "busybox du -sk /home/test/kbuild /tmp; busybox df -k /home/test; echo DU\"\"TWO"
 step "BUILDTWO" "cd /home/test/kbuild/rach2 && make -f guest.mk > /tmp/kb2.out 2>&1; echo BUILD\"\"TWO=\$?"
 step "TAILTWO" "busybox tail -4 /tmp/kb2.out; echo TAIL\"\"TWO"
 step "HASHTWO" "cd /home/test/kbuild/rach2 && busybox sha256sum kernel > /tmp/k2.sha; K2=\$(busybox cat /tmp/k2.sha); echo HASH\"\"TWO=\$K2"
