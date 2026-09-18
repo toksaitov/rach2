@@ -256,15 +256,26 @@ static int pc_evict(uint32_t slot)
         return 0;
     }
     if (e->dirty) {
+        /* Read-only and clean before the write, not after: the device's
+           write may sleep, and a process that writes the page meanwhile
+           faults, which marks it dirty again and maps it writable, so the
+           bytes the disk did not get are written next time. Cleared after
+           the write, they would be marked clean and dropped. */
+        pc_platform_map(PCWIN_BASE + e->disk_off, e->phys, 0);
+        e->dirty = 0;
         if (pc_write(e->disk_off, e->page) != 0) {
             /* Said here, since every caller goes on: a page kept dirty
                is right, and a disk that refused a write is news. */
             klog(KLOG_ERR, "pagecache", "writeback failed at disk offset 0x%X; the page stays dirty",
                  e->disk_off);
+            e->dirty = 1;
             return -1;
         }
-        e->dirty = 0;
         ++pc_writebacks;
+        if (e->dirty) {
+            /* Written to while the disk took it: it stays, dirty. */
+            return -1;
+        }
     }
     pc_platform_unmap(PCWIN_BASE + e->disk_off);
     /* Clear valid before removing from the hash: pc_hash_remove may rebuild the
@@ -415,16 +426,18 @@ int pc_sync(void)
     for (i = 0; i < PC_SLOTS; ++i) {
         struct pc_entry *e = &pc_slots[i];
         if (e->valid && e->dirty) {
-            int wrote = (pc_write(e->disk_off, e->page) == 0);
-            if (wrote) {
-                e->dirty = 0;
+            /* Read-only and clean before the write, as `pc_evict` does: a
+               write to the page while the device sleeps faults and marks
+               it dirty again, so nothing the disk did not get is called
+               clean. */
+            pc_platform_map(PCWIN_BASE + e->disk_off, e->phys, 0);
+            e->dirty = 0;
+            if (pc_write(e->disk_off, e->page) == 0) {
                 ++pc_writebacks;
             } else {
-                result = -1;  /* leave it dirty for a later retry */
+                e->dirty = 1; /* kept for a later retry */
+                result = -1;
             }
-            /* Re-protect read-only either way, so a future write faults and
-               re-dirties (a still-dirty page just re-dirties redundantly). */
-            pc_platform_map(PCWIN_BASE + e->disk_off, e->phys, 0);
         }
     }
 
