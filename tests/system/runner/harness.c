@@ -56,8 +56,10 @@
  *     exec=NAME|MARK run "exec NAME", re-sending if the shell drops it,
  *                    until MARK
  *     probe=NAME     boot, run "exec NAME", and let the kernel's
- *                    harness_exit stop QEMU; the process exit code is then
- *                    decoded from QEMU's.
+ *                    harness_exit stop QEMU, under the step's limit; the
+ *                    process exit code is then decoded from QEMU's. The
+ *                    line is typed again only while the shell answers it
+ *                    with nothing, which is the shell dropping it.
  *
  * Exit code: 0 if the guest process exited 0 (QEMU returned an odd code
  * via isa-debug-exit); 1 if it exited non-zero; 2 if QEMU failed to
