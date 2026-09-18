@@ -151,12 +151,10 @@ start_boot() {
 }
 
 # Wait up to $1 seconds for QEMU to end by itself. Returns 1 if it did not.
+# Gone is ended, reaped or not: the caller reaps the machine and reads its
+# status, which is the phase's subject.
 wait_stop() {
     "$RUNUTIL" gone "$QPID" "$1"
-    if kill -0 "$QPID" 2>/dev/null; then
-        return 1
-    fi
-    return 0
 }
 
 # Wait up to $2 seconds for the token $1 to appear in the log.
