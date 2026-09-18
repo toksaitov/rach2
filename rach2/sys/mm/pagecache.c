@@ -29,6 +29,7 @@ static void pc_platform_unmap(uint32_t va)
 
 #include "paging.h"
 #include "pressure.h"
+#include "../klog.h"
 #include "../panic.h"
 #include "../pci.h"
 
@@ -246,6 +247,10 @@ static int pc_evict(uint32_t slot)
     }
     if (e->dirty) {
         if (pc_write(e->disk_off, e->page) != 0) {
+            /* Said here, since every caller goes on: a page kept dirty
+               is right, and a disk that refused a write is news. */
+            klog(KLOG_ERR, "pagecache", "writeback failed at disk offset 0x%X; the page stays dirty",
+                 e->disk_off);
             return -1;
         }
         e->dirty = 0;

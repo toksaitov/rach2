@@ -695,8 +695,8 @@ static void _page_fault_handler(isr_params_t *params)
     /* A fault in kernel mode (or with no user context) is a kernel bug. The
      * fault-aware usercopy path returns -EFAULT before the kernel ever touches
      * a bad user pointer, so reaching here means the kernel itself faulted. */
-    klog(KLOG_CRIT, "vm", "fault: in kernel mode at 0x%X (err 0x%X)",
-         fault_address, params->error_code);
+    klog(KLOG_CRIT, "vm", "fault: in kernel mode at 0x%X (err 0x%X), eip 0x%X",
+         fault_address, params->error_code, params->eip);
 
     k_panic("Unrecoverable error: page fault while in kernel mode.");
 }
