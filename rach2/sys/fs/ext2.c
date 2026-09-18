@@ -1557,6 +1557,12 @@ static int punch(struct ext2_mount *em, struct ext2_node *n, uint32_t keep)
 {
     int rc, end;
 
+    /* A device that refused a write is not written to again: the batch's
+       blocks go to the cache first and would reach the device at the sync
+       that ends it, past the check a write-through makes. */
+    if (em->dev->flags & BLOCK_WRITE_FAILED) {
+        return -EIO;
+    }
     em->batch = BATCH_FREE;
     rc = punch_from(em, n, keep);
     end = batch_end(em);

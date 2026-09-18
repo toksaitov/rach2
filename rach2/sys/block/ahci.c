@@ -1061,8 +1061,12 @@ static int ahci_run_command(struct ahci_disk *d, uint8_t command, uint64_t lba, 
 
     spin = AHCI_CMD_STEPS;
     while (ahci_read32(ci_off) & (1u << AHCI_SLOT)) {
+        uint32_t is;
+
         block_count_poll();
-        if (ahci_read32(is_off) & AHCI_PxIS_FATAL) {
+        is = ahci_read32(is_off);
+        block_count_poll();
+        if (is & AHCI_PxIS_FATAL) {
             return ahci_polled_failed(d);
         }
         if (--spin == 0) {
@@ -1208,9 +1212,19 @@ static void ahci_drain(struct ahci_disk *d)
     while (d->active) {
         uint32_t spin = AHCI_CMD_STEPS;
 
-        while ((ahci_read32(ci_off) & (1u << AHCI_SLOT)) &&
-               !(ahci_read32(is_off) & AHCI_PxIS_FATAL)) {
+        for (;;) {
+            uint32_t ci = ahci_read32(ci_off);
+            uint32_t is;
+
             block_count_poll();
+            if (!(ci & (1u << AHCI_SLOT))) {
+                break;
+            }
+            is = ahci_read32(is_off);
+            block_count_poll();
+            if (is & AHCI_PxIS_FATAL) {
+                break;
+            }
             if (--spin == 0) {
                 break;
             }
