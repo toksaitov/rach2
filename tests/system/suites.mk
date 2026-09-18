@@ -340,7 +340,7 @@ run-audio: rach2 tests krffs test-image $(HARNESS) $(WAVCHECK)
 	    --log $(AUDIO_LOG) \
 	    --timeout 120 --ok "INTRPROBE OK" --never "INTRPROBE FAIL" \
 	    "expect=Type 'help'" "send=exec /intrprobe" "expect=INTRPROBE OK" \
-	    "send=audio test scale 2000" "expect=Done." wait=3 \
+	    "expect=Type 'help'" "send=audio test scale 2000" "expect=Done." \
 	    "send=exec /intrprobe" "expect=INTRPROBE OK"
 	$(WAVCHECK) scale $(AUDIO_WAV) 262 294 330 349 392
 	@awk '/INTRPROBE READ/ { \
