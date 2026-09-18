@@ -16,15 +16,22 @@
  * sectors lie below 2^28 and in their 48-bit forms above, on a drive that
  * has them; a write is followed by a cache flush.
  *
- * The bus master is the PIIX form: a table of physical descriptors, each
- * a piece of the buffer that lies in one page and does not cross a 64 KiB
- * boundary, its address in one register and its start bit in another, and
- * the drive's interrupt at the end. A buffer below the identity map's
- * limit is its own physical address; one on the heap is described a page
- * at a time. The processor's cache is coherent with this DMA, so nothing
- * is flushed. The data port path costs a completion a sector, and under a
- * hypervisor each is a round trip through it: a 64 MiB write measured 217
- * s that way and 25 s emulated, which is what the bus master is here for.
+ * The bus master is the PIIX form: a physical region descriptor naming
+ * the transfer's memory, its address in one register and its start bit in
+ * another, and the drive's interrupt at the end. The memory is the
+ * channel's own bounce buffer, one request's worth, aligned so it lies in
+ * one 64 KiB region as the bus master requires and static so it lies below
+ * the identity map's limit, where its address is its physical address. A
+ * caller's buffer is copied into it before a write and out of it after a
+ * read, in the caller's own context: a fault-safe device's transfer may
+ * not schedule against the caller's memory, since the page cache's window
+ * may evict or remap that memory while another process runs, and a
+ * sleeping transfer straight into it corrupted a 256 MiB ext2 write and
+ * the disk suites' roots on 2026-09-18. The processor's cache is coherent
+ * with this DMA, so nothing is flushed. The data port path costs a
+ * completion a sector, and under a hypervisor each is a round trip through
+ * it: a 64 MiB write measured 217 s that way and 25 s emulated, which is
+ * what the bus master is here for.
  *
  * A channel takes one command at a time. A caller that may sleep owns the
  * channel from its first register write to its last, sleeping on the
@@ -57,7 +64,7 @@
 #include "../kio.h"
 #include "../isr.h"
 #include "../lib/kirq.h"
-#include "../mm/paging.h"
+#include "../lib/kstring.h"
 #include "../pci.h"
 #include "../proc/process.h"
 #include "../proc/wait_queue.h"
@@ -111,16 +118,15 @@
 /* IDENTIFY word 49 bit 8: the drive does DMA. */
 #define ATA_ID_CAP_DMA 0x0100u
 
-/* A physical region descriptor: a piece of the buffer in one page, so at
-   most 4 KiB, its byte count 0 meaning 64 KiB, and the end flag on the
-   last. A request of ATA_REQ_SECTORS starting mid-page is nine pieces. */
+/* A physical region descriptor: the bounce buffer's address, the byte
+   count, 0 meaning 64 KiB, and the end flag. One describes a request. */
 struct ata_prd {
     uint32_t phys;
     uint16_t bytes;
     uint16_t flags;
 };
 #define ATA_PRD_EOT 0x8000
-#define ATA_PRD_MAX 16
+#define ATA_BOUNCE_BYTES (ATA_REQ_SECTORS * BLOCK_SECTOR_SIZE)
 #define ATA_CMD_FLUSH      0xE7
 #define ATA_CMD_FLUSH_EXT  0xEA
 #define ATA_CMD_IDENTIFY   0xEC
@@ -174,10 +180,11 @@ struct ata_channel {
     uint32_t irqs;           /* interrupts taken on this channel */
     int owner;               /* a sleeping caller holds the channel */
     uint16_t bm;             /* the bus master's registers, or 0 for none */
-    /* The descriptor table: 128 bytes aligned to 128, so it lies in one
-       64 KiB region as the bus master requires, in .bss below the identity
-       map's limit, so its address is its physical address. */
-    struct ata_prd prd[ATA_PRD_MAX] __attribute__((aligned(128)));
+    /* The descriptor, aligned to its size, and the bounce buffer, aligned
+       to its own so it lies in one 64 KiB region; both in .bss below the
+       identity map's limit, so their addresses are their physical ones. */
+    struct ata_prd prd __attribute__((aligned(8)));
+    uint8_t bounce[ATA_BOUNCE_BYTES] __attribute__((aligned(ATA_BOUNCE_BYTES)));
 };
 
 /* A sleeping wait: the channel, what the status must show, when the wait
@@ -206,8 +213,8 @@ struct ata_drive {
 };
 
 static struct ata_channel channels[2] = {
-    {0x1F0, 0x3F6, "primary", ATA_IRQ_PRIMARY, {0}, 0, 0, 0, 0, {{0, 0, 0}}},
-    {0x170, 0x376, "secondary", ATA_IRQ_SECONDARY, {0}, 0, 0, 0, 0, {{0, 0, 0}}}};
+    {0x1F0, 0x3F6, "primary", ATA_IRQ_PRIMARY, {0}, 0, 0, 0, 0, {0, 0, 0}, {0}},
+    {0x170, 0x376, "secondary", ATA_IRQ_SECONDARY, {0}, 0, 0, 0, 0, {0, 0, 0}, {0}}};
 static struct ata_drive drives[4];
 
 static int ata_read(block_device_t *device, uint64_t lba, uint32_t count, void *buffer);
@@ -460,60 +467,36 @@ static uint8_t ata_program(const struct ata_drive *d, uint64_t lba, uint32_t cou
 }
 
 /**
- * Describe `bytes` of `buffer` to the channel's bus master, a page at
- * most per descriptor and none across a 64 KiB boundary. Returns 0, or
- * `-EIO` for a buffer the table cannot describe.
- */
-static int ata_describe(struct ata_channel *ch, const void *buffer, uint32_t bytes)
-{
-    uint32_t off = 0, n = 0;
-
-    while (off < bytes) {
-        uintptr_t va = (uintptr_t)buffer + off;
-        uintptr_t phys = va < HARD_MEMORY_LIMIT ? va : paging_virt_to_phys(va);
-        uint32_t chunk = PAGE_SIZE - (uint32_t)(va & (PAGE_SIZE - 1));
-
-        if (chunk > bytes - off) {
-            chunk = bytes - off;
-        }
-        if (chunk > 0x10000u - (uint32_t)(phys & 0xFFFFu)) {
-            chunk = 0x10000u - (uint32_t)(phys & 0xFFFFu);
-        }
-        if (phys == 0 || n >= ATA_PRD_MAX) {
-            return -EIO;
-        }
-        ch->prd[n].phys = (uint32_t)phys;
-        ch->prd[n].bytes = (uint16_t)chunk;
-        ch->prd[n].flags = 0;
-        n++;
-        off += chunk;
-    }
-    ch->prd[n - 1].flags = ATA_PRD_EOT;
-    return 0;
-}
-
-/**
  * Move `count` sectors at `lba` through the bus master, one command and
- * one completion: the table written, the direction set, the command
- * issued, the engine started, and the drive waited for. Returns 0, or
- * `-EIO` for a transfer the drive or the bus master reported failed.
+ * one completion: a write's bytes copied into the bounce buffer first, the
+ * descriptor written, the direction set, the command issued, the engine
+ * started, the drive waited for, and a read's bytes copied out after.
+ * Returns 0, or `-EIO` for a transfer the drive or the bus master
+ * reported failed. `count` is at most ATA_REQ_SECTORS, the bounce's size.
  */
 static int ata_dma_transfer(struct ata_drive *d, uint64_t lba, uint32_t count, void *buffer,
                             int write)
 {
     struct ata_channel *ch = d->channel;
+    uint32_t bytes = count * BLOCK_SECTOR_SIZE;
     uint8_t status;
     int rc;
 
-    if (ata_describe(ch, buffer, count * BLOCK_SECTOR_SIZE) != 0) {
+    if (count > ATA_REQ_SECTORS) {
         return -EIO;
     }
+    if (write) {
+        k_memcpy(ch->bounce, buffer, bytes);
+    }
+    ch->prd.phys = (uint32_t)(uintptr_t)ch->bounce;
+    ch->prd.bytes = (uint16_t)bytes;
+    ch->prd.flags = ATA_PRD_EOT;
     if (ata_wait_not_busy(ch) != 0) {
         return -EIO;
     }
     outb(ch->bm + ATA_BM_CMD, 0);
     outb(ch->bm + ATA_BM_STATUS, ATA_BM_ERROR | ATA_BM_INTR);
-    outd(ch->bm + ATA_BM_PRD, (uint32_t)(uintptr_t)ch->prd);
+    outd(ch->bm + ATA_BM_PRD, (uint32_t)(uintptr_t)&ch->prd);
     outb(ch->bm + ATA_BM_CMD, write ? 0 : ATA_BM_READ);
     if (!ata_command(ch, ata_program(d, lba, count, write, 1))) {
         return write ? -EPERM : -EIO;
@@ -526,6 +509,9 @@ static int ata_dma_transfer(struct ata_drive *d, uint64_t lba, uint32_t count, v
     outb(ch->bm + ATA_BM_STATUS, ATA_BM_ERROR | ATA_BM_INTR);
     if (rc != 0 || (status & ATA_BM_ERROR)) {
         return -EIO;
+    }
+    if (!write) {
+        k_memcpy(buffer, ch->bounce, bytes);
     }
     return 0;
 }
@@ -540,7 +526,12 @@ static int ata_read_on(struct ata_drive *d, uint64_t lba, uint32_t count, void *
         uint32_t i;
 
         if (d->dma && owned) {
-            int rc = ata_dma_transfer(d, lba, chunk, out, 0);
+            int rc;
+
+            if (chunk > ATA_REQ_SECTORS) {
+                chunk = ATA_REQ_SECTORS;
+            }
+            rc = ata_dma_transfer(d, lba, chunk, out, 0);
 
             if (rc != 0) {
                 return rc;
@@ -598,7 +589,12 @@ static int ata_write_on(struct ata_drive *d, uint64_t lba, uint32_t count, const
         uint32_t i;
 
         if (d->dma && owned) {
-            int rc = ata_dma_transfer(d, lba, chunk, (void *)in, 1);
+            int rc;
+
+            if (chunk > ATA_REQ_SECTORS) {
+                chunk = ATA_REQ_SECTORS;
+            }
+            rc = ata_dma_transfer(d, lba, chunk, (void *)in, 1);
 
             if (rc != 0) {
                 return rc;
