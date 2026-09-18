@@ -61,11 +61,11 @@ struct pollfd {
     short revents;
 };
 
-#define LINES_A    200
-#define LINES_B    60
-#define LINES_C    60
-#define LINES_D    40
-#define LINES_ALL  (LINES_A + LINES_B + LINES_C + LINES_D)
+#define LINES_A   200
+#define LINES_B   60
+#define LINES_C   60
+#define LINES_D   40
+#define LINES_ALL (LINES_A + LINES_B + LINES_C + LINES_D)
 
 static int syscall1(int n, int a)
 {
