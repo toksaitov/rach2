@@ -16,12 +16,14 @@
 # Usage: memory.sh KERNEL IMAGE HARNESS RECOVERY_KERNEL RECOVERY_IMAGE
 set -u
 KERNEL=$1; IMAGE=$2; HARNESS=$3; RKERNEL=$4; RIMAGE=$5
+# What this suite writes under the images directory carries its name.
+OUT="$(dirname "$IMAGE")/memory-test"
 fail() { echo "memory-test: FAIL: $1" >&2; exit 1; }
 
 # A machine too small is refused by name in the memory report, not faulted
 # in. The recovery pair is what fits: at 8 MiB the kernel, its 4 MiB image
 # and the tables take everything, and the test image alone is 16 MiB.
-LOG="$IMAGE.memory-8.log"
+LOG="$OUT.memory-8.log"
 "$HARNESS" --kernel "$RKERNEL" --initrd "$RIMAGE" --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-m --qemu-arg=8 --timeout 30 --ok "memory: refused" --never "vm: fault" \
     --log "$LOG" "expect=memory: refused" > /dev/null 2>&1 \
@@ -29,7 +31,7 @@ LOG="$IMAGE.memory-8.log"
 echo "memory-test: 8 MiB: refused by name in the memory report, with no fault: OK"
 
 for mib in 64 512 2048 3072 4096; do
-    LOG="$IMAGE.memory-$mib.log"
+    LOG="$OUT.memory-$mib.log"
     "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" --qemu-arg=-cpu --qemu-arg=max \
         --qemu-arg=-m --qemu-arg="$mib" --append "rach2.rescue" \
         --timeout 60 --ok "Type 'help'" --log "$LOG" "expect=Type 'help'" > /dev/null 2>&1 \
@@ -66,7 +68,7 @@ done
 # it, execs and frees it.
 for spec in "64 24" "4096 1024"; do
     mib=${spec% *}; map=${spec#* }
-    LOG="$IMAGE.memprobe-$mib.log"
+    LOG="$OUT.memprobe-$mib.log"
     "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" --qemu-arg=-cpu --qemu-arg=max \
         --qemu-arg=-m --qemu-arg="$mib" --append "rach2.rescue" \
         --timeout 300 --steptmo 240 --ok "MEMPROBE OK" --never "MEMPROBE FAIL" --log "$LOG" \
@@ -78,7 +80,7 @@ done
 # A frame allocation failing at each step of fork and of exec, at the two
 # ends: the caller answers ENOMEM, nothing leaks, nothing surviving changes.
 for mib in 64 4096; do
-    LOG="$IMAGE.framefail-$mib.log"
+    LOG="$OUT.framefail-$mib.log"
     "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" --qemu-arg=-cpu --qemu-arg=max \
         --qemu-arg=-m --qemu-arg="$mib" --append "rach2.rescue rach2.framefail" \
         --timeout 240 --steptmo 180 --ok "MEMPROBE OK" --never "MEMPROBE FAIL" --log "$LOG" \
@@ -92,7 +94,7 @@ done
 # destination alignments before anything else starts. The host test beside
 # `kstring.c` runs the C the host compiler writes; the `rep movsl` and
 # `rep stosl` in that file are i386's, and this is where they run.
-LOG="$IMAGE.strings.log"
+LOG="$OUT.strings.log"
 "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" --qemu-arg=-cpu --qemu-arg=max \
     --append "rach2.rescue rach2.strings" --timeout 90 --ok "Type 'help'" \
     --never "strings: wrong" --log "$LOG" "expect=Type 'help'" > /dev/null 2>&1 \

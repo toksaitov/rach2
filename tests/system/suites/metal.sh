@@ -39,6 +39,8 @@ set -e
 
 KERNEL="$1"
 IMAGE="$2"
+# What this suite writes under the images directory carries its name.
+OUT="$(dirname "$IMAGE")/metal-test"
 PORT="${3:-2223}"
 
 if [ -z "$KERNEL" ] || [ -z "$IMAGE" ]; then
@@ -48,12 +50,12 @@ fi
 
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 KEY="$REPO/krffs/rach2_demo_ed25519"
-WORK="$IMAGE.metal.work"
-LOG="$IMAGE.metal.log"
-KNOWN="$IMAGE.metal.known"
-SEND="$IMAGE.metal.send"
-BACK="$IMAGE.metal.back"
-ACCEPT_LOG="$IMAGE.metal.accept.log"
+WORK="$OUT.metal.work"
+LOG="$OUT.metal.log"
+KNOWN="$OUT.metal.known"
+SEND="$OUT.metal.send"
+BACK="$OUT.metal.back"
+ACCEPT_LOG="$OUT.metal.accept.log"
 rm -f "$WORK" "$LOG" "$KNOWN" "$SEND" "$BACK" "$ACCEPT_LOG"
 
 QPID=""
@@ -85,7 +87,7 @@ trap 'cleanup; exit 129' HUP
 fail() {
     cleanup_boot
     if [ -f "$LOG" ]; then
-        cp "$LOG" "$IMAGE.metal.fail.log" 2>/dev/null || true
+        cp "$LOG" "$OUT.metal.fail.log" 2>/dev/null || true
     fi
     echo "metal-test: FAIL: $1" >&2
     echo "metal-test: the failing boot's console log: $IMAGE.metal.fail.log" >&2
@@ -198,9 +200,9 @@ while [ "$i" -lt "$(scaled 60)" ]; do
     if ssh_run 'echo METAL_READY' 2>/dev/null | grep -q METAL_READY; then
         break
     fi
+    # interval: a try of SSH every two seconds until the server answers
     sleep 2
     i=$((i + 2))
-    # interval: a try of SSH every two seconds until the server answers
 done
 if [ "$i" -ge "$(scaled 60)" ]; then
     fail "no SSH answer: init did not bring an unattended server up"
@@ -264,9 +266,9 @@ while [ "$i" -lt "$(scaled 60)" ]; do
         break
     fi
     AFTER=""
+    # interval: a try of SSH every two seconds until the server answers
     sleep 2
     i=$((i + 2))
-    # interval: a try of SSH every two seconds until the server answers
 done
 if [ -z "$AFTER" ]; then
     fail "the SSH server was killed and init did not bring it back"

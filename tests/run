@@ -263,6 +263,57 @@ suite_names()  { awk -F'|' '!/^#/ && NF > 1 { print $1 }' "$REGISTRY"; }
 suite_tools()  { awk -F'|' -v s="$1" '!/^#/ && $1 == s { print $2 }' "$REGISTRY"; }
 suite_known()  { [ -n "$(suite_tools "$1")" ]; }
 tier_names()   { awk -F'|' -v t="$1" '!/^#/ && $3 == t { print $1 }' "$REGISTRY"; }
+suite_images() { awk -F'|' -v s="$1" '!/^#/ && $1 == s { print $4 }' "$REGISTRY"; }
+
+# What a suite writes under build/images, as globs from the registry's
+# fourth field; a suite that declares nothing owns the files named after
+# it, `NAME-test*`, `NAME.*`, `NAME-*` and `NAME/*`, and a second-card twin,
+# `NAME-e1000`, owns the plain suite's names with `-e1000` before the
+# extension. A file made during a run that no suite of the run owns, or
+# that two own, fails the run by name: pooled suites share nothing, and
+# the declarations are the inventory of what they touch.
+image_patterns() { # image_patterns NAME: one glob a line
+    p=$(suite_images "$1")
+    if [ -n "$p" ]; then
+        printf '%s\n' "$p" | tr ',' '\n'
+    else
+        case "$1" in
+            *-e1000) b=${1%-e1000}; printf '%s\n' "$b*-e1000.*" "$b*-e1000-*" "$b*-e1000/*" ;;
+            *) printf '%s\n' "$1-test*" "$1.*" "$1-*" "$1/*" ;;
+        esac
+    fi
+}
+image_table() { # image_table NAMES: lines of "NAME GLOB"
+    for s in $1; do image_patterns "$s" | sed "s/^/$s /"; done
+}
+check_declarations() { # a glob two suites declare is refused before anything runs
+    dup=$(image_table "$(suite_names)" | awk '{print $2}' | sort | uniq -d | head -3)
+    [ -z "$dup" ] || { echo "run: result: refused: two suites declare the same images:$(echo "$dup" | tr '\n' ' ')" >&2; return 1; }
+}
+images_stamp() { : > "$WORK/images.stamp"; }
+check_images() { # check_images NAMES: 0 when every file made belongs to one of them
+    [ -f "$WORK/images.stamp" ] || return 0
+    image_table "$1" > "$WORK/images.patterns"
+    ( cd "$REPO/build/images" 2>/dev/null && find . -type f -newer "$WORK/images.stamp" | sed 's|^\./||' | sort ) > "$WORK/images.made"
+    bad=""
+    while IFS= read -r f; do
+        owners=""
+        while read -r s g; do
+            case "$s" in
+                *-e1000) ;;
+                *) case "$f" in *-e1000.*|*-e1000-*|*-e1000/*) continue ;; esac ;;
+            esac
+            # shellcheck disable=SC2254 # the glob is the pattern
+            case "$f" in $g) case " $owners " in *" $s "*) ;; *) owners="$owners $s" ;; esac ;; esac
+        done < "$WORK/images.patterns"
+        case "$(echo "$owners" | wc -w | tr -d ' ')" in
+            1) ;;
+            0) echo "run: images: undeclared: build/images/$f" >&2; bad=1 ;;
+            *) echo "run: images: shared: build/images/$f:$owners" >&2; bad=1 ;;
+        esac
+    done < "$WORK/images.made"
+    [ -z "$bad" ]
+}
 
 usage_names() {
     suite_names | tr '\n' ' ' | sed 's/^/  /;s/ $//' >&2
@@ -356,6 +407,7 @@ run_one() {
         # shellcheck disable=SC2086 # the prerequisites are one word each
         [ -z "$products" ] || run_make -j $products || rc=1
         [ "$rc" = 0 ] && take_products "$target"
+        images_stamp
         [ "$rc" = 0 ] && { suite_make "$1" || rc=1; }
     else
         suite_make "$1" || rc=1
@@ -609,11 +661,10 @@ set_factor() {
 }
 
 run_set() {
-    failed=""; serial=""; pooled=""; lone=""
+    failed=""; serial=""; pooled=""
     for suite in $1; do
         case "$suite" in
             style|host) serial="$serial $suite" ;;
-            usb|diskrate|install|imagerace) lone="$lone $suite" ;;
             *)          pooled="$pooled $suite" ;;
         esac
     done
@@ -622,19 +673,13 @@ run_set() {
     RUNNING=""
     [ -n "$STOPPING" ] && return 1
     if [ -n "$failed" ] && [ -n "${RACH2_STOP_ON_FAIL:-}" ]; then
-        echo "run: stopped on a failure; not started:$pooled$lone"
+        echo "run: stopped on a failure; not started:$pooled"
         echo "run: result: failed:$failed" >&2
         return 1
     fi
     if [ -n "$pooled" ]; then
         run_pool "$pooled"; failed="$failed$POOL_FAILED"
     fi
-    RUNNING=serial
-    for suite in $lone; do
-        [ -n "$failed" ] && [ -n "${RACH2_STOP_ON_FAIL:-}" ] && { echo "run: stopped on a failure; not started: $suite"; failed="$failed $suite"; continue; }
-        run_one "$suite" || failed="$failed $suite"
-    done
-    RUNNING=""
     [ -n "$STOPPING" ] && return 1
     [ -z "$failed" ] && return 0
     echo "run: result: failed:$failed" >&2
@@ -746,6 +791,7 @@ if [ -f "$REPO/krffs/manifests/rach2-recovery.manifest" ] &&
         exit 1
     }
 fi
+check_declarations || exit 1
 take_scripts
 build_components
 rc=0
@@ -756,9 +802,11 @@ if [ "$#" -eq 1 ]; then
 else
     prepare
     take_products prepare-all
+    images_stamp
     run_set "$*" || rc=1
 fi
 check_hashes || rc=1
+check_images "$*" || { echo "run: result: failed: images" >&2; rc=1; }
 if [ "$rc" = 0 ]; then
     echo "run: result: all $# suites passed"
 else

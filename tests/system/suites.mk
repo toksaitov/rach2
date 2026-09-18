@@ -155,7 +155,7 @@ $(RUNUTIL): tests/system/runner/runutil.c
 # `tests/run default` both land here; the registry in tests/registry names it.
 run-default: rach2 test-image $(RUNTESTS)
 	$(RUNTESTS) $(NIC_DEV) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
-	    --timeout 300 --steptmo 60 --log $(TEST_IMAGE).default.log
+	    --timeout 300 --steptmo 60 --log $(IMAGES_DIR)/default-test.log
 # Everything every suite needs, in one target, so `tests/run all` can build once
 # through one Make and then run the suites at the same time. Two suites each
 # invoking their own build would be two Makes against one `build/` tree; with
@@ -242,12 +242,12 @@ run-fpu: rach2 tests krffs test-image $(HARNESS)
 	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
 	    --qemu-arg=-cpu --qemu-arg=max --append "rach2.rescue" \
 	    --timeout 90 --steptmo 30 --ok "FPUPROBE OK" --never "FPUPROBE FAIL" \
-	    --log $(TEST_IMAGE).fpu.log \
+	    --log $(IMAGES_DIR)/fpu-test.log \
 	    "expect=fpu: fxsr: on" "expect=Type 'help'" "send=exec /fpuprobe" "expect=FPUPROBE"
 	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
 	    --qemu-arg=-cpu --qemu-arg=max --append "rach2.rescue rach2.nofxsr" \
 	    --timeout 90 --steptmo 30 --ok "FPUPROBE OK" --never "FPUPROBE FAIL" \
-	    --log $(TEST_IMAGE).fpu-x87.log \
+	    --log $(IMAGES_DIR)/fpu-test.x87.log \
 	    "expect=fpu: fxsr: off" "expect=Type 'help'" "send=exec /fpuprobe x87" "expect=FPUPROBE"
 # `tests/run memory`: the kernel's account of physical memory at five sizes
 # (see tests/system/suites/memory.sh).
@@ -261,7 +261,7 @@ run-pools: rach2 tests krffs test-image $(HARNESS)
 	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
 	    --qemu-arg=-cpu --qemu-arg=max --append "rach2.rescue" \
 	    --timeout 120 --steptmo 60 --ok "POOLPROBE OK" --never "POOLPROBE FAIL" \
-	    --log $(TEST_IMAGE).pools.log \
+	    --log $(IMAGES_DIR)/pools-test.log \
 	    "expect=Type 'help'" "send=exec /poolprobe" "expect=POOLPROBE"
 # `tests/run fault`: the three probes whose whole claim is that the kernel
 # killed them. vmfault writes through a pointer in no mapping, vmro writes a
@@ -733,9 +733,9 @@ endif
 # machine's address. Its own target, like `tests/run ping`: it changes the
 # address out from under the machine and puts it back, and the last thing it
 # does is ping the gateway, which needs the network to answer.
-TWONIC_LOG = $(TEST_IMAGE).twonic$(NIC_TAG).log
-MIXNIC_LOG = $(TEST_IMAGE).mixnic$(NIC_TAG).log
-NICFAIL_LOG = $(TEST_IMAGE).nicfail$(NIC_TAG).log
+TWONIC_LOG = $(IMAGES_DIR)/raw-test.twonic$(NIC_TAG).log
+MIXNIC_LOG = $(IMAGES_DIR)/raw-test.mixnic$(NIC_TAG).log
+NICFAIL_LOG = $(IMAGES_DIR)/raw-test.nicfail$(NIC_TAG).log
 run-netif: netif-stack
 netif-card: rach2 tests krffs test-image $(HARNESS)
 	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \

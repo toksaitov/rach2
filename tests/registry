@@ -1,11 +1,18 @@
 # tests/registry: the suites tests/run reads. One per line:
 #
-#   name|runtime tools|tier
+#   name|runtime tools|tier|images
 #
 # The make target is `run-` and the name, so it is not written here. The
 # runtime tools are the external commands the suite needs beyond the build
 # toolchain; `-` means none. The tier is `core` for the set `make test` runs
-# and `full` for the rest; `tests/run all` runs both. The core tier is chosen
+# and `full` for the rest; `tests/run all` runs both. The images are what
+# the suite writes under build/images, as globs separated by commas, and
+# the field is left out for a suite whose files are named after it:
+# `NAME-test*`, `NAME.*`, `NAME-*` and `NAME/*`, and for a second-card
+# twin, `NAME-e1000`, the plain suite's names with `-e1000` before the
+# extension. The runner refuses a glob two suites declare, and fails a run
+# in which a file was made that no suite of the run owns, or that two own,
+# so this column is the inventory of what the suites touch. The core tier is chosen
 # by two rules: every subsystem of the kernel is exercised at least once, and
 # the tier finishes in under two minutes through the pool, which means no
 # member may take longer than that on its own.
@@ -15,13 +22,13 @@
 install|qemu-system-i386,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full
 selfbuild|qemu-system-i386,mformat,mmd,mcopy|full
 installer-repair|qemu-system-i386,shasum|full
-installer|qemu-system-i386,shasum,ssh,mformat,mcopy,mtype|full
+installer|qemu-system-i386,shasum,ssh,mformat,mcopy,mtype|full|installer-test*,installer.*,installer/*
 menu|qemu-system-i386,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full
 installer-rehearse|qemu-system-i386,qemu-img,shasum|full
 selfbuild-ext2|qemu-system-i386,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full
 sealed|qemu-system-i386,ssh,mformat,mmd,mcopy|full
-dhcp-e1000|qemu-system-i386|full
-dhcp|qemu-system-i386|full
+dhcp-e1000|qemu-system-i386|full|dhcp*-e1000.*,dhcp*-e1000-*,twonet*-e1000.*,static-*-e1000.*
+dhcp|qemu-system-i386|full|dhcp-test*,dhcp.*,dhcp-*,twonet.*,twonet-*,static-*
 netif|qemu-system-i386|full
 netif-e1000|qemu-system-i386|full
 mount|qemu-system-i386,mformat,mcopy,mdir|core
@@ -60,7 +67,7 @@ ping|qemu-system-i386|full
 packet|qemu-system-i386|full
 ping-e1000|qemu-system-i386|full
 load|qemu-system-i386,mformat|full
-authority|qemu-system-i386|core
+authority|qemu-system-i386|core|authority-test*,authority.*,authority-*,authority/*,auth-test.*
 queue|qemu-system-i386,mformat,mke2fs|core
 persist-ahci|qemu-system-i386|full
 subset|qemu-system-i386|core
@@ -88,7 +95,7 @@ bootorder|qemu-system-i386,mformat,mmd,mcopy|full
 reset|qemu-system-i386|core
 netconsole-e1000|qemu-system-i386|full
 disks|qemu-system-i386,mformat,mtype|core
-audio|qemu-system-i386|core
+audio|qemu-system-i386|core|audio-test*,audio-scale.*
 netconsole|qemu-system-i386|core
 crash|qemu-system-i386|core
 pools|qemu-system-i386|core

@@ -21,6 +21,8 @@ set -u
 
 KERNEL="$1"
 IMAGE="$2"
+# What this suite writes under the images directory carries its name.
+OUT="$(dirname "$IMAGE")/socket-test"
 HARNESS="$3"
 HOSTPEER="$4"
 PORT=7777
@@ -31,7 +33,7 @@ if [ ! -x "$HARNESS" ] || [ ! -x "$HOSTPEER" ]; then
 fi
 
 PEER=""
-PEER_LOG="$IMAGE.peer.log"
+PEER_LOG="$OUT.peer.log"
 stop() {
     [ -n "$PEER" ] && kill "$PEER" 2>/dev/null
     [ -n "$PEER" ] && wait "$PEER" 2>/dev/null

@@ -20,6 +20,8 @@ set -u
 
 KERNEL=$1
 IMAGE=$2
+# What this suite writes under the images directory carries its name.
+OUT="$(dirname "$IMAGE")/usb-test"
 HARNESS=$3
 REPO=$(cd "$(dirname "$0")/../../.." && pwd)
 
@@ -232,7 +234,7 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=usb-tablet,bus=xhci.0 \
     --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
     --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0,id=themouse \
-    --log "$IMAGE.replug.log" \
+    --log "$OUT.replug.log" \
     --timeout 120 --steptmo 45 --ok "class 3 protocol 2, endpoint 1" \
     "expect=usb: devices: 2 configured" \
     "usb=del:themouse" "expect=: gone" \
@@ -309,7 +311,7 @@ fi
 #          wake, which is what says the message's wake put it on the processor
 #          instead of the next tick. The program reads once and writes
 #          afterwards, so no time of its own is inside the numbers. ----
-LAT_LOG="$IMAGE.latency.log"
+LAT_LOG="$OUT.latency.log"
 rm -f "$LAT_LOG"
 if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-machine --qemu-arg=pc,i8042=off \
@@ -361,7 +363,7 @@ fi
 #           `getrandom` instead of spinning: a call that filled eight
 #           mebibytes without giving way would hold the reader for the
 #           whole call, and the reader's stage would say so. ----
-LAT_LOG="$IMAGE.latency-random.log"
+LAT_LOG="$OUT.latency-random.log"
 rm -f "$LAT_LOG"
 if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-machine --qemu-arg=pc,i8042=off \
@@ -467,7 +469,7 @@ fi
 
 # ---- 17: a stick behind the hub mounts, takes a write, is pulled from under
 #          a mount through the monitor, and plugged back in mounts again ----
-STICK="$IMAGE.hubstick.img"
+STICK="$OUT.hubstick.img"
 if [ -f "$REPO/build/images/usbdisk/stick-mbr.img" ]; then
     cp "$REPO/build/images/usbdisk/stick-mbr.img" "$STICK"
 else
@@ -486,7 +488,7 @@ if run_shell --qemu-arg=-cpu --qemu-arg=max \
     --drive "if=none,id=stick,format=raw,file=$STICK" \
     --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,port=1.4,drive=stick,id=st0 \
     --timeout 180 --steptmo 60 --ok "USBDISKPROBE OK" --never "USBDISKPROBE FAIL" \
-    --log "$IMAGE.hubstick.log" \
+    --log "$OUT.hubstick.log" \
     "expect=Type 'help'" "send=exec /usbdiskprobe write" "expect=USBDISKPROBE OK" \
     "expect=Type 'help'" "send=exec /usbdiskprobe hold" "expect=USBDISKPROBE HOLDING" \
     "usb=del:st0" "expect=USBDISKPROBE OK" \
@@ -517,7 +519,7 @@ if run_shell --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-blockdev --qemu-arg=driver=throttle,throttle-group=tgs,file=stickraw,node-name=stick \
     --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,drive=stick,id=st0 \
     --timeout 180 --steptmo 60 --ok "USBDISKPROBE OK" --never "USBDISKPROBE FAIL" \
-    --log "$IMAGE.pullread.log" \
+    --log "$OUT.pullread.log" \
     "expect=Type 'help'" "send=exec /usbdiskprobe pullread" "expect=USBDISKPROBE READING" \
     "usb=del:st0" "expect=its request is kept, its data stage in flight" \
     "expect=: given back" "expect=its request is failed with the slot given back" \
@@ -541,21 +543,21 @@ if run_shell --qemu-arg=-cpu --qemu-arg=max \
     --drive "if=none,id=stick,format=raw,file=$STICK" \
     --qemu-arg=-device --qemu-arg=usb-storage,bus=xhci.0,port=1.4,drive=stick,id=st0 \
     --timeout 180 --steptmo 60 --ok "USBDISKPROBE OK" --never "USBDISKPROBE FAIL" \
-    --log "$IMAGE.hubpull.log" \
+    --log "$OUT.hubpull.log" \
     "expect=Type 'help'" "send=exec /usbdiskprobe hold" "expect=USBDISKPROBE HOLDING" \
     "usb=del:hub" "expect=USBDISKPROBE OK" > /dev/null 2>&1; then
     note "the hub pulled with three devices behind it: the stick's mount answers EIO and unmounts: OK"
 else
     bad "the hub pulled with three devices behind it"
 fi
-if [ "$(grep -ac 'usb: device: port [0-9]*\.[0-9]*: gone' "$IMAGE.hubpull.log")" = 3 ] && \
-   grep -a 'gone' "$IMAGE.hubpull.log" | tail -1 | grep -aq 'port [0-9]*: gone'; then
+if [ "$(grep -ac 'usb: device: port [0-9]*\.[0-9]*: gone' "$OUT.hubpull.log")" = 3 ] && \
+   grep -a 'gone' "$OUT.hubpull.log" | tail -1 | grep -aq 'port [0-9]*: gone'; then
     note "and the three below went before the hub: OK"
 else
     bad "the devices below the hub did not all go before it"
 fi
-if [ "$(grep -ac 'usb: slot: [0-9]*: given back' "$IMAGE.hubpull.log")" = 4 ] && \
-   ! grep -aq 'the entry is lost' "$IMAGE.hubpull.log"; then
+if [ "$(grep -ac 'usb: slot: [0-9]*: given back' "$OUT.hubpull.log")" = 4 ] && \
+   ! grep -aq 'the entry is lost' "$OUT.hubpull.log"; then
     note "and all four slots were given back: OK"
 else
     bad "the four slots were not all given back"
@@ -568,10 +570,10 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=usb-hub,bus=xhci.0,port=1,id=hub \
     --qemu-arg=-device --qemu-arg=usb-hub,bus=xhci.0,port=1.1,id=hub2 \
     --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0,port=1.1.2 \
-    --timeout 120 --steptmo 45 --ok "Available commands" --log "$IMAGE.hubhub.log" \
-    "expect=Type 'help'" wait=3 key=h key=e key=l key=p key=ret \
+    --timeout 120 --steptmo 45 --ok "Available commands" --log "$OUT.hubhub.log" \
+    "expect=class 3 protocol 1" "expect=Type 'help'" key=h key=e key=l key=p key=ret \
     "expect=Available commands" > /dev/null 2>&1 && \
-   grep -aq 'usb: device: port [0-9]*\.1\.2: 627:1, class 3 protocol 1' "$IMAGE.hubhub.log"; then
+   grep -aq 'usb: device: port [0-9]*\.1\.2: 627:1, class 3 protocol 1' "$OUT.hubhub.log"; then
     note "a keyboard behind a hub behind a hub is at its path and types: OK"
 else
     bad "the hub behind a hub"
@@ -598,17 +600,17 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0,port=1.8.6 \
     --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0,port=1.8.7 \
     --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0,port=1.8.8 \
-    --timeout 120 --steptmo 60 --ok "the device table is full" --log "$IMAGE.hubfull.log" \
-    "expect=the device table is full" wait=2 "send=help" "expect=Available commands" \
+    --timeout 120 --steptmo 60 --ok "the device table is full" --log "$OUT.hubfull.log" \
+    "expect=the device table is full" "expect=Type 'help'" "send=help" "expect=Available commands" \
     > /dev/null 2>&1; then
     note "sixteen devices fill the table and the seventeenth is refused by name: OK"
 else
     bad "the device table boot"
 fi
-if [ "$(grep -ac 'usb: device: port [0-9.]*: .*class' "$IMAGE.hubfull.log")" = 16 ]; then
+if [ "$(grep -ac 'usb: device: port [0-9.]*: .*class' "$OUT.hubfull.log")" = 16 ]; then
     note "and sixteen were configured: OK"
 else
-    bad "sixteen devices were not configured: $(grep -ac 'usb: device: port [0-9.]*: .*class' "$IMAGE.hubfull.log")"
+    bad "sixteen devices were not configured: $(grep -ac 'usb: device: port [0-9.]*: .*class' "$OUT.hubfull.log")"
 fi
 
 # ---- two controllers: each is driven from its own record, with its own
@@ -626,19 +628,19 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=usb-hub,bus=xhci1.0,port=1,id=hub3 \
     --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci1.0,port=1.1 \
     --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci1.0,port=1.2 \
-    --timeout 120 --steptmo 60 --ok "Available commands" --log "$IMAGE.twohc.log" \
-    "expect=Type 'help'" wait=3 key=h key=e key=l key=p key=ret \
+    --timeout 120 --steptmo 60 --ok "Available commands" --log "$OUT.twohc.log" \
+    "expect=class 3 protocol 1" "expect=Type 'help'" key=h key=e key=l key=p key=ret \
     "expect=Available commands" > /dev/null 2>&1; then
     note "the only keyboard, behind a hub on the second controller, types: OK"
 else
     bad "the two-controller boot"
 fi
-if [ "$(grep -ac 'usb: ready: xhci[01]:' "$IMAGE.twohc.log")" = 2 ]; then
+if [ "$(grep -ac 'usb: ready: xhci[01]:' "$OUT.twohc.log")" = 2 ]; then
     note "and both controllers came up, each named by its own number: OK"
 else
     bad "both controllers did not come up"
 fi
-if [ "$(grep -ac 'usb: device: port .*class' "$IMAGE.twohc.log")" = 4 ]; then
+if [ "$(grep -ac 'usb: device: port .*class' "$OUT.twohc.log")" = 4 ]; then
     note "and all four devices were configured across them: OK"
 else
     bad "the four devices across two controllers were not all configured"
@@ -646,10 +648,10 @@ fi
 # Each controller has an interrupt of its own, by message or by line: two
 # controllers on one vector cannot both be told to stop. A controller the timer
 # pumps has none at all, which the boot says in as many words.
-v0="$(sed -n 's/.*interrupts: xhci0: .*vector \([0-9]*\).*/\1/p' "$IMAGE.twohc.log" | head -1)"
-v1="$(sed -n 's/.*interrupts: xhci1: .*vector \([0-9]*\).*/\1/p' "$IMAGE.twohc.log" | head -1)"
+v0="$(sed -n 's/.*interrupts: xhci0: .*vector \([0-9]*\).*/\1/p' "$OUT.twohc.log" | head -1)"
+v1="$(sed -n 's/.*interrupts: xhci1: .*vector \([0-9]*\).*/\1/p' "$OUT.twohc.log" | head -1)"
 if [ -n "$v0" ] && [ -n "$v1" ] && [ "$v0" != "$v1" ] &&
-    ! grep -aq 'the timer pumps this controller' "$IMAGE.twohc.log"; then
+    ! grep -aq 'the timer pumps this controller' "$OUT.twohc.log"; then
     note "and each takes an interrupt of its own, $v0 and $v1: OK"
 else
     bad "the two controllers did not each take an interrupt of their own"
@@ -663,7 +665,7 @@ fi
 #      that the pull answers the reader that held it and leaves the stick on
 #      the other controller mounting and reading. ----
 for i in 0 1 2; do
-    cp "$STICK" "$IMAGE.twohc-stick-$i.img" || bad "the two-controller sticks"
+    cp "$STICK" "$OUT.twohc-stick-$i.img" || bad "the two-controller sticks"
 done
 twohc_sticks() {
     where0=$1
@@ -686,7 +688,7 @@ twohc_sticks() {
 # controller's first stick, and pulling it leaves the first controller's.
 if twohc_sticks xhci0 xhci1 xhci1 \
     --timeout 180 --steptmo 60 --ok "USBDISKPROBE OK" --never "USBDISKPROBE FAIL" \
-    --log "$IMAGE.twohcstick.log" \
+    --log "$OUT.twohcstick.log" \
     "expect=Type 'help'" "send=exec /usbdiskprobe three" "expect=USBDISKPROBE OK" \
     "expect=Type 'help'" "send=exec /usbdiskprobe pullone" "expect=USBDISKPROBE HOLDING" \
     "usb=del:st1" "expect=USBDISKPROBE OK" > /dev/null 2>&1; then
@@ -700,7 +702,7 @@ fi
 # stick, and pulling it leaves a stick on each controller behind.
 if twohc_sticks xhci0 xhci0 xhci1 \
     --timeout 180 --steptmo 60 --ok "USBDISKPROBE OK" --never "USBDISKPROBE FAIL" \
-    --log "$IMAGE.twohcstick2.log" \
+    --log "$OUT.twohcstick2.log" \
     "expect=Type 'help'" "send=exec /usbdiskprobe three" "expect=USBDISKPROBE OK" \
     "expect=Type 'help'" "send=exec /usbdiskprobe pullone 2" "expect=USBDISKPROBE HOLDING" \
     "usb=del:st1" "expect=USBDISKPROBE OK" > /dev/null 2>&1; then
@@ -722,20 +724,20 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci0.0 \
     --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci1.0 \
     --append "rach2.hcfail=0" \
-    --timeout 120 --steptmo 60 --ok "Available commands" --log "$IMAGE.hcfail.log" \
-    "expect=Type 'help'" wait=3 key=h key=e key=l key=p key=ret \
+    --timeout 120 --steptmo 60 --ok "Available commands" --log "$OUT.hcfail.log" \
+    "expect=class 3 protocol 1" "expect=Type 'help'" key=h key=e key=l key=p key=ret \
     "expect=Available commands" > /dev/null 2>&1; then
     note "a controller refused at its bring-up leaves the other one serving: OK"
 else
     bad "the refused-controller boot"
 fi
-if grep -aq 'usb: refused: xhci0: rach2.hcfail=0' "$IMAGE.hcfail.log" &&
-    [ "$(grep -ac 'usb: ready: xhci' "$IMAGE.hcfail.log")" = 1 ]; then
+if grep -aq 'usb: refused: xhci0: rach2.hcfail=0' "$OUT.hcfail.log" &&
+    [ "$(grep -ac 'usb: ready: xhci' "$OUT.hcfail.log")" = 1 ]; then
     note "and it was named with its reason while one controller came up: OK"
 else
     bad "the refusal was not recorded, or the wrong number of controllers came up"
 fi
-if [ "$(grep -ac 'usb: device: port .*class' "$IMAGE.hcfail.log")" = 1 ]; then
+if [ "$(grep -ac 'usb: device: port .*class' "$OUT.hcfail.log")" = 1 ]; then
     note "and only the device on the controller that came up was enumerated: OK"
 else
     bad "the devices behind a refused controller were enumerated anyway"
