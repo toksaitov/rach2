@@ -890,6 +890,11 @@ __asm__(".global _start\n"
         "   push %eax\n"
         "   call probe_main\n");
 
+/*
+ * The pull row writes until the stick is not there any more, then once
+ * more; `KRFFSPROBE HOLDING` is said after the first write, so the pull the
+ * suite makes on the word lands on a process writing.
+ */
 void probe_main(unsigned int *sp)
 {
     int argc = (int)sp[0];
@@ -1035,9 +1040,6 @@ void probe_main(unsigned int *sp)
             }
             sys1(SYS_CLOSE, fd);
         }
-        /* Write until the stick is not there any more, then once more; the
-           hold is said after the first write, so the pull lands on a process
-           writing. */
         for (;;) {
             int fd = sys3(SYS_OPEN, (int)"/k/pulled.bin", O_WRONLY | O_CREAT | O_TRUNC, 0644);
             int wrote;
@@ -1047,7 +1049,7 @@ void probe_main(unsigned int *sp)
             }
             wrote = sys3(SYS_WRITE, fd, (int)"pull\n", 5);
             sys1(SYS_FSYNC, fd);
-            if (writes++ == 1) {
+            if (++writes == 1) {
                 puts("KRFFSPROBE HOLDING");
             }
             sys1(SYS_CLOSE, fd);

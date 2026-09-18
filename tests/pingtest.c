@@ -7,11 +7,12 @@
  * with a child pinging an address nobody answers:
  *
  * Progress. The parent samples the clock in a loop while the child is inside
- * that four-second call, and the samples taken while it was alive must span at
- * least two seconds. On a wait that polls with sti/hlt from inside a syscall
- * the parent gets no CPU at all for the child's whole call, so its live-window
- * samples span milliseconds; this is the assertion the kernel change exists
- * for.
+ * that four-second call, and at least one sample must be taken while the
+ * child is alive. On a wait that polls with sti/hlt from inside a syscall
+ * the parent gets no CPU at all for the child's whole call and samples
+ * nothing; this is the assertion the kernel change exists for. The child
+ * measures its own call and reports the milliseconds through the pipe, and
+ * the call may not have returned before the kernel's four hundred ticks.
  *
  * Serialization. The child writes a byte immediately before its ping; the
  * parent reads it, waits for the child to be certainly inside the call, and
@@ -62,10 +63,10 @@ typedef unsigned int uint32_t;
 
 /* A ping at a dead address costs ICMP_PING_ATTEMPTS * ICMP_PING_WAIT, four
  * hundred ticks, which is the kernel's own clock and the same on every
- * machine: the call may not return before them, less the tick the
- * handshake with the child may cost. How long it took past them is the
- * machine's and is printed; a call that never returns is the harness's
- * to end. */
+ * machine: the call may not return before them, less the tick the clock's
+ * reading may lose, measured by the child around its own call. How long it
+ * took past them is the machine's and is printed; a call that never
+ * returns is the harness's to end. */
 #define PING_MIN_MS 3990
 
 struct timeval_probe {
@@ -276,6 +277,7 @@ void _start(void)
         int reaped;
         int busy;
         long began, ended, live_span = 0, last_live = 0;
+        long child_began, child_ms = 0;
         char token = 0;
         int ok = 1;
         const char *why = "";
@@ -290,8 +292,14 @@ void _start(void)
                 /* The byte goes out immediately before the call, so what the
                  * parent waits on is the child being about to be inside it. */
                 sys_write(ready[1], "p", 1);
-                sys_close(ready[1]);
+                child_began = now_ms();
                 rtt = ping(UNREACHABLE_IP);
+                child_ms = now_ms() - child_began;
+                /* The call's own length goes back through the pipe, since
+                 * a status carries eight bits and the parent's clock
+                 * starts after the child is already inside the call. */
+                sys_write(ready[1], &child_ms, sizeof(child_ms));
+                sys_close(ready[1]);
                 /* Exactly the timeout, not merely a failure: a wrong errno
                  * here would otherwise be scored as a pass. */
                 sys_exit(rtt == PING_ETIMEDOUT ? 0 : 3);
@@ -305,7 +313,6 @@ void _start(void)
                     ok = 0;
                     why = "FAILED (the child never reached its ping)";
                 }
-                sys_close(ready[0]);
                 began = now_ms();
                 if (ok) {
                     /* Certainly inside the call, then the claim must be
@@ -343,6 +350,12 @@ void _start(void)
                     reaped = sys_waitpid(child, &status, 0);
                 }
                 ended = now_ms();
+                child_ms = 0;
+                if (sys_read(ready[0], &child_ms, sizeof(child_ms)) != (int)sizeof(child_ms)) {
+                    ok = 0;
+                    why = "FAILED (the child did not report its call's length)";
+                }
+                sys_close(ready[0]);
                 if (ok && (reaped != child || (status & 0x7f) != 0)) {
                     ok = 0;
                     why = "FAILED (the pinging child did not exit normally)";
@@ -351,7 +364,13 @@ void _start(void)
                     ok = 0;
                     why = "FAILED (the child's ping did not return ETIMEDOUT)";
                 }
-                if (ok && ended - began < PING_MIN_MS) {
+                puts("PINGTEST dead-address call ms:");
+                print_num((int)child_ms);
+                puts("");
+                puts("PINGTEST parent's wait ms:");
+                print_num((int)(ended - began));
+                puts("");
+                if (ok && child_ms < PING_MIN_MS) {
                     ok = 0;
                     why = "FAILED (the wait ended before the kernel's four hundred ticks)";
                 }

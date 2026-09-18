@@ -11,7 +11,10 @@
  *
  * A child is forked first and left spinning in user mode, because the number
  * that matters is what happens to a reader that is not the context the
- * message interrupted. With the child on the processor, a wake that does not
+ * message interrupted. `KEYLAT READING` is printed before the read, and the
+ * kernel, with `rach2.usblatency` on, says when the reader has parked; the
+ * suite types on the kernel's line, so the key finds a parked reader and
+ * not one still printing. With the child on the processor, a wake that does not
  * reschedule leaves the reader waiting for the next tick, and the record says
  * so.
  *
@@ -67,8 +70,8 @@ static void puts(const char *s)
     syscall3(SYS_WRITE, STDOUT_FILENO, (int)(size_t)s, (int)strlen(s));
 }
 
-/* The other tenant's buffer in the `random` mode: a call that fills it is
-   the loop inside one system call that the service point must break. */
+/* The child's buffer in the `random` mode: a call that fills it is the
+   loop inside one system call that the service point must break. */
 static unsigned char random_buf[8u << 20];
 
 __asm__(".global _start\n"
@@ -96,8 +99,8 @@ void probe_main(unsigned *sp)
         sys_exit(1);
     }
     if (child == 0) {
-        /* The processor's other tenant: it never sleeps, so the reader can
-           only run if something takes the processor away from it. In the
+        /* The child keeps the processor: it never sleeps, so the reader
+           runs only if something takes the processor from it. In the
            `random` mode it is inside a system call nearly all the time, a
            `getrandom` of eight mebibytes made again as soon as it returns,
            touched first so no page fault is inside the call's time; a
@@ -124,8 +127,6 @@ void probe_main(unsigned *sp)
         }
     }
 
-    /* Said before the read, so the key the suite sends on the word finds
-       the reader waiting and the other tenant forked. */
     puts("KEYLAT READING\n");
     n = syscall3(SYS_READ, STDIN_FILENO, (int)(size_t)line, (int)sizeof(line));
     if (syscall3(SYS_KILL, child, SIGKILL, 0) != 0) {

@@ -97,6 +97,11 @@ static int elapsed_ms(const struct timespec *a, const struct timespec *b)
     return (b->tv_sec - a->tv_sec) * 1000 + (b->tv_nsec - a->tv_nsec) / 1000000;
 }
 
+/*
+ * The sleep of 150 ms is fifteen ticks; two reads of a clock that moves
+ * in ticks can straddle two of them, so the bound is 130. How far the sleep
+ * overshot is the machine's and is printed.
+ */
 void _start(void)
 {
     struct timespec t0, t1, before, after;
@@ -156,8 +161,6 @@ void _start(void)
     }
 
     slept_ms = elapsed_ms(&before, &after);
-    /* 150 ms is fifteen ticks; two reads of a clock that moves in ticks can
-     * straddle two of them. How far the sleep overshot is the machine's. */
     check(slept_ms >= 130, "nanosleep waited at least ~150ms");
 
     {

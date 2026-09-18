@@ -181,6 +181,12 @@ static int read_part(unsigned len)
     return r;
 }
 
+/*
+ * The sleep row: a reader of sixteen pages through the lag device, each
+ * answered after its lag, with a sibling that must run while the reader
+ * sleeps. The lag device counts the answers, so the count is the proof and
+ * the time is only printed.
+ */
 static void run_sleep(void)
 {
     int fds[2];
@@ -229,8 +235,6 @@ static void run_sleep(void)
     elapsed = now_ms() - start;
     got = syscall3(SYS_READ, fds[0], (int)(size_t)sector_buf, 64);
     syscall2(SYS_KILL, pid, 9);
-    /* 16 page requests, each answered after its lag: the lag device counts
-     * the answers, so the count is the proof and the time is only printed. */
     puts("LAGPROBE sleep ms:");
     putnum(elapsed);
     puts("");
@@ -246,15 +250,27 @@ static void run_sleep(void)
 /* The lag is 700 ticks, the deadline 500: each read must fail with EIO
  * because the deadline quarantined its request, which the block layer
  * counts, and not because the lag answered, which would have returned the
- * sector. */
+ * sector; and each request must have been in flight for the deadline's
+ * ticks, which the layer counts too. */
+#define DEADLINE_TICKS 500
 static void run_deadline(void)
 {
     int quarantines = disk_counter("disk-quarantines ");
     int releases = disk_counter("disk-releases ");
+    int waited = disk_counter("disk-wait-ticks ");
     unsigned start;
 
     if (read_part(512) != -EIO) {
         fail("the first read past the deadline was not EIO");
+    }
+    /* The request was in flight for the whole deadline before it was
+       quarantined, which the block layer counts in ticks: a deadline cut
+       short would fail the read sooner, with the same EIO and the same
+       records. */
+    puts("LAGPROBE first read: ticks in flight:");
+    say_numbers((unsigned)(disk_counter("disk-wait-ticks ") - waited), 0, 0, 0);
+    if (disk_counter("disk-wait-ticks ") - waited < DEADLINE_TICKS) {
+        fail("the first read was failed before the deadline's ticks");
     }
     /* At least one of each: the read's own. The boot's own lagged requests
        and their late answers may land inside the window too, so an exact
@@ -273,8 +289,12 @@ static void run_deadline(void)
     }
     quarantines = disk_counter("disk-quarantines ");
     releases = disk_counter("disk-releases ");
+    waited = disk_counter("disk-wait-ticks ");
     if (read_part(512) != -EIO) {
         fail("the second read past the deadline was not EIO");
+    }
+    if (disk_counter("disk-wait-ticks ") - waited < DEADLINE_TICKS) {
+        fail("the second read was failed before the deadline's ticks");
     }
     puts("LAGPROBE second read: quarantined, released:");
     say_numbers((unsigned)(disk_counter("disk-quarantines ") - quarantines),

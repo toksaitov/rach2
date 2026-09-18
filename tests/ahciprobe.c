@@ -132,6 +132,9 @@ static void fail(const char *why)
     sys2(SYS_EXIT, 1, 0);
 }
 
+/* A counter of /proc/disk by its label, defined with the file readers below. */
+static int disk_counter(const char *label);
+
 static int now_ms(void)
 {
     int ts[2];
@@ -255,7 +258,7 @@ static void slow_row(void)
 {
     static char text[4096];
     int pipefd[2];
-    int slow, fast, status, t0, t_fast, longest, slow_running;
+    int slow, fast, status, t0, t_fast, longest, slow_running, reaped, overlaps;
     char byte;
 
     /* A vector that has counted nothing is not listed, so the controller's
@@ -267,6 +270,7 @@ static void slow_row(void)
     /* The clock starts before the slow reader, since a driver that holds
        the processor through its transfers would hold this process too, and
        a clock started after its word would start after its whole read. */
+    overlaps = disk_counter("disk-overlaps ");
     t0 = now_ms();
     slow = sys1(SYS_FORK, 0);
     if (slow < 0) {
@@ -301,22 +305,31 @@ static void slow_row(void)
     if (longest == 200) {
         fail("the fast disk's read");
     }
-    /* The order: the slow reader has not ended when the fast one has. */
+    /* The order: the slow reader has not ended when the fast one has. The
+       one wait that reaps it is the one whose status is read. */
     status = -1;
-    slow_running = sys3(SYS_WAITPID, slow, (int)(size_t)&status, WNOHANG) == 0;
+    reaped = sys3(SYS_WAITPID, slow, (int)(size_t)&status, WNOHANG);
+    slow_running = reaped == 0;
     puts("AHCIPROBE READ fast reader ms:");
     putnum(t_fast);
     puts(" longest read ms:");
     putnum(longest);
     puts(slow_running ? " slow reader still reading" : " slow reader already done");
+    puts(" overlaps:");
+    putnum(disk_counter("disk-overlaps ") - overlaps);
     puts("");
     if (!slow_running) {
-        status = -1;
-        if (sys3(SYS_WAITPID, slow, (int)(size_t)&status, 0) != slow ||
-            ((status >> 8) & 0xFF) != 0) {
+        if (reaped != slow || ((status >> 8) & 0xFF) != 0) {
             fail("the slow disk's read");
         }
         fail("the fast reader ended after the slow disk's read, so it waited behind it");
+    }
+    /* And the requests overlapped: the fast disk's completed while the
+       slow disk's were in flight, which the block layer counts. An order
+       alone would pass a driver that serialized the two and let the fast
+       reader finish first by its fewer reads. */
+    if (disk_counter("disk-overlaps ") - overlaps < 1) {
+        fail("no request of the fast disk completed while the slow disk's was in flight");
     }
     status = -1;
     if (sys3(SYS_WAITPID, slow, (int)(size_t)&status, 0) != slow || ((status >> 8) & 0xFF) != 0) {

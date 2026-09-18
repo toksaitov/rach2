@@ -301,8 +301,10 @@ static void check_block(int fd, u64 at, const char *what)
     }
 }
 
-/* The disk layer's command count from /proc/disk, or -1. */
-static int disk_commands(void)
+/* The disk layer's command count from /proc/disk into `out`, a total
+   since the boot that outgrows an int on a long run; -1 when the file
+   cannot be read or has no such line. */
+static int disk_commands(u64 *out)
 {
     static char text[2048];
     const char *label = "disk-commands ";
@@ -322,19 +324,28 @@ static int disk_commands(void)
         for (j = 0; label[j] && text[i + j] == label[j]; j++) {
         }
         if (!label[j]) {
-            int v = 0;
+            u64 v = 0;
 
             i += j;
             while (text[i] >= '0' && text[i] <= '9') {
-                v = v * 10 + (text[i] - '0');
+                v = v * 10 + (u64)(text[i] - '0');
                 i++;
             }
-            return v;
+            *out = v;
+            return 0;
         }
     }
     return -1;
 }
 
+/*
+ * The write mode: the file is written whole, read back, shrunk to three
+ * quarters and grown by a mebibyte. The shrink frees a quarter of the file,
+ * and the disk's commands around it are counted: a driver that frees its
+ * blocks in a batch needs a few requests per pointer block of 4 MiB and a
+ * few for the bitmaps, and one that writes each block's pointer, bit and
+ * descriptor through needs thousands, which the bound refuses.
+ */
 static void write_mode(u64 mib)
 {
     u64 total = mib << 20, done = 0, three_quarters = (total >> 2) * 3;
@@ -342,7 +353,7 @@ static void write_mode(u64 mib)
        a measurement, is probed at its middle instead. */
     u64 line = total > ((u64)1 << 32) + CHUNK ? (u64)1 << 32 : total >> 1;
     int fd, fd2, fd3;
-    int before, after;
+    u64 before, after;
     unsigned t0, t1;
     long long got;
 
@@ -422,24 +433,20 @@ static void write_mode(u64 mib)
     sys1(SYS_CLOSE, fd2);
     /* Three quarters, then a mebibyte appended at the end. */
     put("bigfile: read back\n");
-    /* The shrink frees a quarter of the file. A driver that frees its
-       blocks in a batch needs a few requests per pointer block of 4 MiB
-       and a few for the bitmaps; one that writes each block's pointer, bit
-       and descriptor through needs thousands, and took a hundred seconds
-       for 64 MiB on an emulated disk. */
-    before = disk_commands();
+    if (disk_commands(&before) != 0) {
+        fail("reading /proc/disk before the truncate");
+    }
     if (ftruncate64(fd, three_quarters) != 0) {
         fail("the truncate to three quarters");
     }
-    after = disk_commands();
-    put("bigfile: truncated: ");
-    put_u64((u64)(after - before));
-    put(" commands\n");
-    if (before < 0 || after < 0) {
-        fail("reading /proc/disk around the truncate");
+    if (disk_commands(&after) != 0) {
+        fail("reading /proc/disk after the truncate");
     }
-    if ((u64)(after - before) > 8 * ((total - three_quarters) >> 22) + 64) {
-        fail_with("the truncate's commands", after - before);
+    put("bigfile: truncated: ");
+    put_u64(after - before);
+    put(" commands\n");
+    if (after - before > 8 * ((total - three_quarters) >> 22) + 64) {
+        fail_with("the truncate's commands", (int)(after - before));
     }
     got = size_of(fd);
     if (got != (long long)three_quarters) {

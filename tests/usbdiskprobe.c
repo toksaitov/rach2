@@ -40,6 +40,8 @@
 typedef unsigned int size_t;
 
 #define SYS_EXIT          1
+#define SYS_FORK          2
+#define SYS_WAITPID       7
 #define SYS_READ          3
 #define SYS_WRITE         4
 #define SYS_OPEN          5
@@ -200,6 +202,33 @@ static int contains(const char *hay, const char *needle)
 static char text[2048];
 
 /** Read a whole small file into `text`; the length, or a negative errno. */
+static int slurp(const char *path);
+
+/* A counter of /proc/disk by its label, or 0 when it is not there. */
+static int disk_counter(const char *label)
+{
+    int i, j;
+
+    if (slurp("/proc/disk") <= 0) {
+        return 0;
+    }
+    for (i = 0; text[i]; i++) {
+        for (j = 0; label[j] && text[i + j] == label[j]; j++) {
+        }
+        if (!label[j]) {
+            int v = 0;
+
+            i += j;
+            while (text[i] >= '0' && text[i] <= '9') {
+                v = v * 10 + (text[i] - '0');
+                i++;
+            }
+            return v;
+        }
+    }
+    return 0;
+}
+
 static int slurp(const char *path)
 {
     int fd = sys3(SYS_OPEN, (int)path, O_RDONLY, 0);
@@ -438,7 +467,11 @@ static void part_write(void)
     ok();
 }
 
-/** Keep file and directory cache entries across a pull on either volume. */
+/** Keep file and directory cache entries across a pull on either volume.
+ * `USBDISKPROBE HOLDING` is said after the first read has completed, so
+ * the pull the suite makes on the word lands on a process already reading
+ * the stick.
+ */
 static void part_hold(const char *source, const char *type, int children)
 {
     int fd;
@@ -487,8 +520,6 @@ static void part_hold(const char *source, const char *type, int children)
     if (raw < 0) {
         fail("the partition would not open");
     }
-    /* Said after the first read has completed, so the pull the suite makes
-       on the word lands on a process already reading the stick. */
     while (reads < 2000000) {
         int n = sys3(SYS_READ, raw, (int)buf, (int)sizeof(buf));
 
@@ -633,40 +664,70 @@ static void part_throughput(void)
     ok();
 }
 
+/*
+ * The pull during a transfer: a child reads the stick in large calls until
+ * one fails, and `USBDISKPROBE READING` is said once the block layer counts
+ * a request in flight, `disk-in-flight` in /proc/disk, so the pull the
+ * suite makes on the word lands on a data stage and not between two calls.
+ */
 static void part_pullread(void)
 {
     int fd = sys3(SYS_OPEN, (int)"/dev/disk0", O_RDONLY, 0);
     int reads = 0;
+    int child, status, tries;
 
     if (fd < 0) {
         fail("/dev/disk0 would not open");
     }
-    /* Said after the first read has completed, so the pull lands on a
-       process already reading. */
-    while (reads < 2000000) {
-        int n = sys3(SYS_READ, fd, (int)big, (int)sizeof(big));
+    child = sys1(SYS_FORK, 0);
+    if (child < 0) {
+        fail("no child to read the stick");
+    }
+    if (child == 0) {
+        while (reads < 2000000) {
+            int n = sys3(SYS_READ, fd, (int)big, (int)sizeof(big));
 
-        reads++;
-        if (n == -EIO) {
-            puts("USBDISKPROBE READ FAILED");
-            sys1(SYS_CLOSE, fd);
-            ok();
-        }
-        if (n < 0) {
-            fail("a read of the stick failed with something other than EIO");
-        }
-        if (reads == 1) {
-            puts("USBDISKPROBE READING");
-        }
-        if (n == 0) {
-            sys1(SYS_CLOSE, fd);
-            fd = sys3(SYS_OPEN, (int)"/dev/disk0", O_RDONLY, 0);
-            if (fd < 0) {
-                fail("the node went before a read in flight failed");
+            reads++;
+            if (n == -EIO) {
+                sys1(SYS_EXIT, 0);
+            }
+            if (n < 0) {
+                sys1(SYS_EXIT, 3);
+            }
+            if (n == 0) {
+                sys1(SYS_CLOSE, fd);
+                fd = sys3(SYS_OPEN, (int)"/dev/disk0", O_RDONLY, 0);
+                if (fd < 0) {
+                    sys1(SYS_EXIT, 4);
+                }
             }
         }
+        sys1(SYS_EXIT, 5);
     }
-    fail("the stick was never pulled out");
+    sys1(SYS_CLOSE, fd);
+    for (tries = 0; tries < 2000000; tries++) {
+        if (disk_counter("disk-in-flight ") > 0) {
+            break;
+        }
+    }
+    if (tries == 2000000) {
+        fail("no request of the child's was in flight to be pulled");
+    }
+    puts("USBDISKPROBE READING");
+    if (sys3(SYS_WAITPID, child, (int)&status, 0) != child) {
+        fail("waiting for the reading child");
+    }
+    switch ((status >> 8) & 0xFF) {
+    case 0:
+        puts("USBDISKPROBE READ FAILED");
+        ok();
+    case 3:
+        fail("a read of the stick failed with something other than EIO");
+    case 4:
+        fail("the node went before a read in flight failed");
+    default:
+        fail("the stick was never pulled out");
+    }
 }
 
 static void part_super(void)
@@ -712,6 +773,10 @@ static void part_three(void)
  * names another: a machine with two controllers numbers its disks in the order
  * they were enumerated across both, so which disk is on which controller is
  * the caller's to say.
+ * The pull of one stick among three: the reads run until the stick is
+ * gone, and `USBDISKPROBE HOLDING` is said after the eighth successful
+ * read, which is the fewest the row requires before the pull, so the suite
+ * pulls on the word and the count holds whenever the pull lands.
  */
 static void part_pullone(int which)
 {
@@ -742,7 +807,7 @@ static void part_pullone(int which)
         n = sys3(SYS_READ, fd, (int)sector, 512);
         if (n == 512) {
             reads++;
-            if (reads == 1) {
+            if (reads == 8) {
                 puts("USBDISKPROBE HOLDING");
             }
             continue;

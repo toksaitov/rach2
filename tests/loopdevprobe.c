@@ -293,6 +293,10 @@ __asm__(".global _start\n"
         "   push %eax\n"
         "   call probe_main\n");
 
+/*
+ * The pull row reads until the stick is not there any more; the hold is
+ * said after the first read, so the pull lands on a process reading.
+ */
 void probe_main(unsigned int *sp)
 {
     int argc = (int)sp[0];
@@ -453,8 +457,6 @@ void probe_main(unsigned int *sp)
         }
         expect_file("/l/hello.txt", "hello from inside an image");
 
-        /* Read until the stick is not there any more; the hold is said
-           after the first read, so the pull lands on a process reading. */
         for (;;) {
             int fd2 = sys3(SYS_OPEN, (int)"/l/hello.txt", O_RDONLY, 0);
 

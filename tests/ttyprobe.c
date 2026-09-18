@@ -122,6 +122,10 @@ static void show(const char *tag, const char *buf, int n)
     out("]\n", 2);
 }
 
+/*
+ * `TTYPROBE RAW` is said once the terminal is raw, so the byte the suite
+ * types on the word reaches a raw terminal and not the cooked one before it.
+ */
 void _start(void)
 {
     struct ktermios t;
@@ -165,8 +169,6 @@ void _start(void)
     check(do_ioctl(0, TCGETS, &t2) == 0, "TCGETS after TCSETS ok");
     check((t2.c_lflag & ICANON) == 0, "TCSETS cleared ICANON (round-trip)");
     check((t2.c_lflag & ECHO) == 0, "TCSETS cleared ECHO (round-trip)");
-    /* Said once the terminal is raw, so the driver's byte is typed at a
-       raw terminal and not at the cooked one before it. */
     puts("TTYPROBE RAW");
     /* the fields we did not touch survive the round-trip unchanged; the kernel
      * stored exactly the 36-byte prefix we sent. */

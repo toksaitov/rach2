@@ -276,6 +276,12 @@ __asm__(".global _start\n"
         "   push %eax\n"
         "   call probe_main\n");
 
+/**
+ * The probe: read the USB device table and say what it lists. With an
+ * argument N the machine was given N devices and a slowed scan may still
+ * be configuring them, so the file is read again until it lists that many,
+ * a bounded number of times, and the count is said.
+ */
 void probe_main(unsigned int *sp)
 {
     int argc = (int)sp[0];
@@ -285,9 +291,6 @@ void probe_main(unsigned int *sp)
     int lines = 0;
     int i;
 
-    /* `usbprobe N`: the machine was given N devices and a slowed scan may
-       still be configuring them, so the file is read again until it lists
-       that many, a bounded number of times, and the count is said. */
     if (argc >= 2) {
         for (i = 0; argv[1][i] >= '0' && argv[1][i] <= '9'; i++) {
             want = want * 10 + (argv[1][i] - '0');

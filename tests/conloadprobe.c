@@ -511,7 +511,7 @@ void probe_main(unsigned int *sp)
     int argc = (int)sp[0];
     char **argv = (char **)(sp + 1);
     int good, child, status, pgid;
-    unsigned start, irq_before;
+    unsigned start, irq_before, uart_before;
 
     if (argc >= 2 && argv[1][0] == 'D') {
         /* The image after the exec: the lines typed before it are read. */
@@ -533,7 +533,8 @@ void probe_main(unsigned int *sp)
     start_load();
 
     /* A: the reader parked while the flood arrives. */
-    irq_before = counter("irq-drains ");
+    irq_before = counter("irq-bytes ");
+    uart_before = counter("uart-bytes ");
     puts("CONLOAD A");
     if (!read_line()) {
         fail("end of file on the console");
@@ -550,10 +551,12 @@ void probe_main(unsigned int *sp)
     print("\n");
     print_counters();
     /* The bytes came in through the port's interrupt, not only the tick:
-     * the service that does not depend on what is scheduled is the one
-     * that ran, during this stage and not only for the command that
-     * started the probe. */
-    if (irq_before == 0xFFFFFFFFu || counter("irq-drains ") <= irq_before) {
+     * at least half of what the port took in this stage was taken by the
+     * interrupt's service, which does not depend on what is scheduled. A
+     * service count would pass one interrupt that took nothing while the
+     * tick took every byte. */
+    if (irq_before == 0xFFFFFFFFu || uart_before == 0xFFFFFFFFu ||
+        counter("irq-bytes ") - irq_before < (counter("uart-bytes ") - uart_before) / 2) {
         print_counters();
         fail("the port's interrupt served no bytes during stage A");
     }

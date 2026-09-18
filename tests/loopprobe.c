@@ -61,13 +61,12 @@ typedef unsigned char uint8_t;
 #define SYS_FORK         2
 #define SYS_WAITPID      7
 #define SYS_GETTIMEOFDAY 78
-/* Round trips of one byte. The same rounds run over a pipe first, which waits
-   for no ring, so the loopback is judged against this machine's own cost of a
-   round trip rather than against a clock: a host running twenty emulators at
-   once slows both alike. With a single queued datagram left to the 100 Hz
-   timer each loopback leg costs a tick, which is two hundred times the pipe's
-   pace, and delivered when the processor would otherwise park it is within a
-   small factor of it. */
+/* Round trips of one byte. The same rounds run over a pipe first, and both
+   times are printed for a person; the verdict is the kernel's count of who
+   delivered the loopback's datagrams: with a single queued datagram left to
+   the 100 Hz timer each leg would cost a tick, and the idle path, which
+   drains the queue when the processor would otherwise park, is where the
+   legs must be delivered. */
 #define PINGPONG_ROUNDS  200
 /* The round trips over the loopback may not wait for the timer: fewer than
  * a tick, ten milliseconds, each, on any machine. The pipe's time is printed
@@ -758,7 +757,9 @@ static int pipe_pingpong_ms(void)
 
 /*
  * A round trip of one byte each way, two hundred times, between two processes
- * over the loopback, against the same rounds over a pipe.
+ * over the loopback, beside the same rounds over a pipe, whose time is
+ * printed for a person; the verdict is the kernel's count of the legs the
+ * idle path delivered against the legs the timer did.
  *
  * Each loopback leg queues one datagram, which is below the threshold a system
  * call's exit delivers at, so the only thing that can deliver it before the
@@ -775,7 +776,8 @@ static void tcp_loop_pingpong(void)
     uint8_t sa[16];
     uint32_t t0[2], t1[2];
     char one = 'p';
-    int ls, cs, as, pid, status = 0, round, ms, base, limit;
+    int ls, cs, as, pid, status = 0, round, ms, base;
+    uint32_t idle, tick;
 
     base = pipe_pingpong_ms();
 
@@ -828,6 +830,8 @@ static void tcp_loop_pingpong(void)
     as = socketcall(SC_ACCEPT, args);
     if (as < 0)
         fail("ping-pong accept");
+    idle = proc_stat_u32("loopback_delivered_idle ", 24);
+    tick = proc_stat_u32("loopback_delivered_tick ", 24);
     sys_gettimeofday(t0);
     for (round = 0; round < PINGPONG_ROUNDS; round++) {
         if (sys_write(as, &one, 1) != 1)
@@ -842,13 +846,21 @@ static void tcp_loop_pingpong(void)
     sys_close(as);
     sys_close(ls);
     ms = elapsed_ms(t0, t1);
-    limit = PINGPONG_ROUNDS * PINGPONG_TICK_MS;
+    idle = proc_stat_u32("loopback_delivered_idle ", 24) - idle;
+    tick = proc_stat_u32("loopback_delivered_tick ", 24) - tick;
     print("LOOPPROBE ping-pong ");
     print_u32((uint32_t)ms);
     print(" ms over the loopback, ");
     print_u32((uint32_t)base);
-    print(" over a pipe, for 200 round trips\n");
-    if (ms < 0 || base < 0 || ms >= limit) {
+    print(" over a pipe, for 200 round trips; delivered by the idle path ");
+    print_u32(idle);
+    print(", by the timer ");
+    print_u32(tick);
+    print("\n");
+    /* Four hundred legs: at least half delivered by the idle path, and
+       fewer by the timer than by it. A machine that parks a datagram for
+       the tick fails here whatever the clock says. */
+    if (ms < 0 || base < 0 || idle < 2 * PINGPONG_ROUNDS / 2 || tick > idle) {
         fail("a local round trip waits for the timer");
     }
 }
