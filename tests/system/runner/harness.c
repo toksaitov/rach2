@@ -1006,6 +1006,123 @@ static int too_many(const char *what, int limit)
     return 2;
 }
 
+/**
+ * The `tcp=PORT` step: connect to the port on the loopback, which a
+ * `hostfwd` forwards into the guest, and read the first bytes its server
+ * sends. QEMU's user network accepts the host's side of a connection
+ * before the guest's side exists, so a connection proves nothing; bytes
+ * from the guest, an SSH server's banner, prove its server answered. A
+ * server slow to listen under load, or one whose connection the guest
+ * resets, is connected to again until a window scaled as a deadline is
+ * runs out. Returns 1 when the guest answered, 0 when nothing did.
+ */
+static int step_tcp(int port)
+{
+        int sk = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in addr;
+    struct timeval tv;
+    double knock_until;
+    int connected, answered = 0;
+
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons((unsigned short)port);
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    tv.tv_sec = 15;
+    tv.tv_usec = 0;
+    setsockopt(sk, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    knock_until = now() + scaled(30.0);
+    if (knock_until > deadline)
+        knock_until = deadline;
+    connected = sk >= 0 && connect(sk, (struct sockaddr *)&addr, sizeof(addr)) == 0;
+    while (!connected && now() < knock_until && child_poll() < 0) {
+        if (sk >= 0)
+            close(sk);
+        pump(now() + 1.0);
+        if (child_poll() >= 0)
+            break;
+        sk = socket(AF_INET, SOCK_STREAM, 0);
+        if (sk >= 0)
+            setsockopt(sk, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+        connected = sk >= 0 && connect(sk, (struct sockaddr *)&addr, sizeof(addr)) == 0;
+    }
+    while (connected && now() < knock_until && child_poll() < 0) {
+        char answer[64];
+        ssize_t got;
+        struct timeval rv;
+
+        rv.tv_sec = 1;
+        rv.tv_usec = 0;
+        setsockopt(sk, SOL_SOCKET, SO_RCVTIMEO, &rv, sizeof(rv));
+        got = recv(sk, answer, sizeof(answer), 0);
+        if (got > 0) {
+            answered = 1;
+            break;
+        }
+        if (got < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            pump(now() + 0.1);
+            continue;
+        }
+        close(sk);
+        pump(now() + 1.0);
+        sk = socket(AF_INET, SOCK_STREAM, 0);
+        if (sk >= 0)
+            setsockopt(sk, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+        connected = sk >= 0 && connect(sk, (struct sockaddr *)&addr, sizeof(addr)) == 0;
+    }
+    if (answered) {
+        printf("HARNESS: port %d answered\n", port);
+    } else {
+        printf("HARNESS: nothing answered on port %d (%s)\n", port, strerror(errno));
+    }
+    if (sk >= 0)
+        close(sk);
+    return answered;
+}
+
+/**
+ * The `execq=NAME` step: type `exec NAME` at the shell's prompt, which the
+ * step before it has waited for, and stop as soon as `harness_exit` stops
+ * QEMU, under the step's limit. The line is typed again when the shell has
+ * printed nothing past its echo of it for three seconds, which is the
+ * shell dropping the line, or when it answered that it does not know the
+ * command, which is a line typed before the shell was reading and missing
+ * its first bytes; a probe that is running is not typed at twice, since
+ * the shell would run it again when it ends. Under `ok`, the run's token,
+ * the step ends when the token has arrived since the line was typed: a
+ * machine that stays at its prompt afterwards is not waited for to the
+ * limit, which a set's factor can put past the runner's idle limit.
+ */
+static void step_execq(const char *name, const char *ok)
+{
+    double step_end = now() + steptmo;
+    double sent = 0;
+    size_t mark = 0;
+    char line[512];
+
+    snprintf(line, sizeof(line), "exec %s", name);
+    while (child_poll() < 0 && now() < step_end && now() < deadline) {
+        int lines = 0, refused;
+        size_t i;
+
+        /* The shell's echo of the line is one line ending; a
+           second is the program's, or the shell's answer. */
+        for (i = mark; i < buf_len; i++) {
+            if (buf[i] == '\n')
+                lines++;
+        }
+        refused = contains(buf + mark, buf_len - mark, "Unknown command");
+        if (sent == 0 || refused || (lines < 2 && now() - sent >= 3.0)) {
+            send_line(line);
+            sent = now();
+            mark = buf_len;
+        }
+        pump(now() + 0.5);
+        if (ok != NULL && contains(buf + mark, buf_len - mark, ok))
+            break;
+    }
+}
+
 int main(int argc, char **argv)
 {
     const char *kernel = NULL, *initrd = NULL, *append = NULL;
@@ -1404,74 +1521,8 @@ int main(int argc, char **argv)
                 }
             }
         } else if (strncmp(step, "tcp=", 4) == 0) {
-            int port = atoi(step + 4);
-            int sk = socket(AF_INET, SOCK_STREAM, 0);
-            struct sockaddr_in addr;
-            struct timeval tv;
-            double knock_until;
-            int connected, answered = 0;
-
-            memset(&addr, 0, sizeof(addr));
-            addr.sin_family = AF_INET;
-            addr.sin_port = htons((unsigned short)port);
-            addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-            tv.tv_sec = 15;
-            tv.tv_usec = 0;
-            setsockopt(sk, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-            /* A server slow to listen under load is knocked at again for
-               a window scaled as a deadline is, not judged on one try. */
-            knock_until = now() + scaled(30.0);
-            if (knock_until > deadline)
-                knock_until = deadline;
-            connected = sk >= 0 && connect(sk, (struct sockaddr *)&addr, sizeof(addr)) == 0;
-            while (!connected && now() < knock_until && child_poll() < 0) {
-                if (sk >= 0)
-                    close(sk);
-                pump(now() + 1.0);
-                if (child_poll() >= 0)
-                    break;
-                sk = socket(AF_INET, SOCK_STREAM, 0);
-                if (sk >= 0)
-                    setsockopt(sk, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-                connected = sk >= 0 && connect(sk, (struct sockaddr *)&addr, sizeof(addr)) == 0;
-            }
-            /* QEMU's user network accepts the host side of a connection
-               before it knows whether the guest is there, so a connection
-               proves nothing; what proves the guest answered is bytes from
-               it, an SSH server's banner. A connection the guest resets is
-               knocked again, under the same window. */
-            while (connected && now() < knock_until && child_poll() < 0) {
-                char answer[64];
-                ssize_t got;
-                struct timeval rv;
-
-                rv.tv_sec = 1;
-                rv.tv_usec = 0;
-                setsockopt(sk, SOL_SOCKET, SO_RCVTIMEO, &rv, sizeof(rv));
-                got = recv(sk, answer, sizeof(answer), 0);
-                if (got > 0) {
-                    answered = 1;
-                    break;
-                }
-                if (got < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-                    pump(now() + 0.1);
-                    continue;
-                }
-                close(sk);
-                pump(now() + 1.0);
-                sk = socket(AF_INET, SOCK_STREAM, 0);
-                if (sk >= 0)
-                    setsockopt(sk, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-                connected = sk >= 0 && connect(sk, (struct sockaddr *)&addr, sizeof(addr)) == 0;
-            }
-            if (answered) {
-                printf("HARNESS: port %d answered\n", port);
-            } else {
-                printf("HARNESS: nothing answered on port %d (%s)\n", port, strerror(errno));
+            if (!step_tcp(atoi(step + 4)))
                 step_failures++;
-            }
-            if (sk >= 0)
-                close(sk);
         } else if (strncmp(step, "udp=", 4) == 0) {
             const char *colon = strchr(step + 4, ':');
             int port = atoi(step + 4);
@@ -1530,45 +1581,7 @@ int main(int argc, char **argv)
                 step_failures++;
             trace("step %s %s consumed=%lu", step, seen ? "ok" : "fail", (unsigned long)consumed);
         } else if (strncmp(step, "execq=", 6) == 0) {
-            /* Run a probe and stop as soon as harness_exit stops QEMU, under
-               the step's limit. The command is typed again when the shell
-               has printed nothing past its echo of the line for three
-               seconds, which is the shell dropping the command, or when it
-               answered that it does not know the command, which is a line
-               typed before the shell was reading and missing its first
-               bytes; a probe that is running is not typed at twice, since
-               the shell would run it again when it ends. */
-            double step_end = now() + steptmo;
-            double sent = 0;
-            size_t mark = 0;
-            char line[512];
-
-            snprintf(line, sizeof(line), "exec %s", step + 6);
-            while (child_poll() < 0 && now() < step_end && now() < deadline) {
-                int lines = 0, refused;
-                size_t i;
-
-                /* The shell's echo of the line is one line ending; a
-                   second is the program's, or the shell's answer. */
-                for (i = mark; i < buf_len; i++) {
-                    if (buf[i] == '\n')
-                        lines++;
-                }
-                refused = contains(buf + mark, buf_len - mark, "Unknown command");
-                if (sent == 0 || refused || (lines < 2 && now() - sent >= 3.0)) {
-                    send_line(line);
-                    sent = now();
-                    mark = buf_len;
-                }
-                pump(now() + 0.5);
-                /* A run judged by its token is over when the token has
-                   arrived since the line was typed: a machine that stays
-                   at its prompt afterwards is not waited for to the limit,
-                   which a set's factor can put past the runner's idle
-                   limit. */
-                if (ok != NULL && contains(buf + mark, buf_len - mark, ok))
-                    break;
-            }
+            step_execq(step + 6, ok);
         } else {
             fprintf(stderr, "unknown step: %s\n", step);
             step_failures++;
