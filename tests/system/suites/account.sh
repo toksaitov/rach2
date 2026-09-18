@@ -228,8 +228,8 @@ cp "$DISK" "$WORK"
 run_simple_arc() {
     boot_with \
         "send=pwd" "expect=/root" \
-        "send=adduser $SIMPLEUSER" "expect=New password:" "send=$SIMPLEPASS" \
-        "expect=Retype new password:" "send=$SIMPLEPASS" "expect=created with uid" \
+        "send=adduser $SIMPLEUSER" "expect=created with uid" "expect=New password:" "send=$SIMPLEPASS" \
+        "expect=Retype new password:" "send=$SIMPLEPASS" "expect=password changed for $SIMPLEUSER" \
         "send=cat /etc/passwd" "expect=$SIMPLEUSER:x:" \
         "send=exit" "expect=rach2 login:" "send=test" "expect=Password:" "send=$TESTPASSWORD" \
         "send=pwd" "expect=/home/test" \
