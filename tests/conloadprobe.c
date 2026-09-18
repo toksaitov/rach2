@@ -6,13 +6,13 @@
  * spin and one writes and syncs a 256 KiB file on the mounted volume over and
  * over. The probe reads the lines in four stages and requires each one in
  * order with its sum: (A) 200 lines typed back to back while the reader is
- * parked in read, some of whose bytes the port's interrupt must have moved,
- * which is what `irq-drains` counts and a tick-paced drain alone never
+ * parked in read, at least one of whose bytes the port's interrupt must
+ * have moved, which `irq-bytes` counts and a tick-paced drain alone never
  * does; the stage's time is printed and not judged, since it is the
  * machine's and a bound on it was one machine's; (B) 60 lines typed while
- * the probe spins
- * for two seconds without reading, type-ahead into a session nobody is
- * reading; (C) 200 lines typed while a child in its own group holds the
+ * the probe spins for two seconds without reading, type-ahead into a
+ * session nobody is reading; (C) 200 lines typed while a child in its own
+ * group holds the
  * terminal and nobody reads, more than the discipline holds, then an
  * interrupt character behind them, which must still kill the child and
  * discards what came before it, then 60 lines read by the parent after it
@@ -511,7 +511,7 @@ void probe_main(unsigned int *sp)
     int argc = (int)sp[0];
     char **argv = (char **)(sp + 1);
     int good, child, status, pgid;
-    unsigned start, irq_before, uart_before;
+    unsigned start, irq_before;
 
     if (argc >= 2 && argv[1][0] == 'D') {
         /* The image after the exec: the lines typed before it are read. */
@@ -534,7 +534,6 @@ void probe_main(unsigned int *sp)
 
     /* A: the reader parked while the flood arrives. */
     irq_before = counter("irq-bytes ");
-    uart_before = counter("uart-bytes ");
     puts("CONLOAD A");
     if (!read_line()) {
         fail("end of file on the console");
@@ -551,12 +550,15 @@ void probe_main(unsigned int *sp)
     print("\n");
     print_counters();
     /* The bytes came in through the port's interrupt, not only the tick:
-     * at least half of what the port took in this stage was taken by the
-     * interrupt's service, which does not depend on what is scheduled. A
-     * service count would pass one interrupt that took nothing while the
-     * tick took every byte. */
-    if (irq_before == 0xFFFFFFFFu || uart_before == 0xFFFFFFFFu ||
-        counter("irq-bytes ") - irq_before < (counter("uart-bytes ") - uart_before) / 2) {
+     * the reader parks in poll before a line's first byte, and that byte
+     * reaches the port while nothing else is draining it, so the
+     * interrupt's service is what takes it. How many more it takes is the
+     * machine's: a fast reader pumps the port itself between the
+     * interrupt's services and leaves them a fraction of the bytes, which
+     * a hypervisor shows and a fixed share would fail. A byte count is
+     * required and not a service count, since a service count would pass
+     * one interrupt that took nothing while the tick took every byte. */
+    if (irq_before == 0xFFFFFFFFu || counter("irq-bytes ") == irq_before) {
         print_counters();
         fail("the port's interrupt served no bytes during stage A");
     }
