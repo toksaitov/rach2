@@ -55,9 +55,65 @@ static uint32_t sweep_us(void)
  * counter behind where the last reading left it counts the wrap itself, and
  * the tick counts one only when no reading beat it to it.
  */
-static uint32_t clock_periods;
-static uint32_t clock_last_phase;
-static int clock_wrapped;
+struct pit_clock {
+    uint32_t periods;    /* whole periods counted since the boot */
+    uint32_t last_phase; /* where the last reading or tick found the counter */
+    int wrapped;         /* a reading counted the period the next tick sees */
+};
+
+static struct pit_clock clock;
+
+/**
+ * A reading that found the counter at `phase` microseconds into its period:
+ * a phase behind the last one is the counter wrapped since, which the
+ * reading counts so that the tick to come does not count it again. Returns
+ * the microseconds since the boot for a period of `period_us`.
+ */
+static uint32_t pit_clock_read(struct pit_clock *c, uint32_t phase, uint32_t period_us)
+{
+    if (phase < c->last_phase) {
+        c->periods++;
+        c->wrapped = 1;
+    }
+    c->last_phase = phase;
+    return c->periods * period_us + phase;
+}
+
+/** The tick at `phase`: one period, counted by whichever saw the wrap first. */
+static void pit_clock_tick(struct pit_clock *c, uint32_t phase)
+{
+    if (!c->wrapped) {
+        c->periods++;
+    }
+    c->wrapped = 0;
+    c->last_phase = phase;
+}
+
+int pit_clock_check(void)
+{
+    struct pit_clock c;
+    int ok = 1;
+
+    c.periods = 0;
+    c.last_phase = 0;
+    c.wrapped = 0;
+    /* Two readings inside one period: the phase moves and no period is
+       added, a reload at the half seen as the second sweep included. */
+    ok = ok && pit_clock_read(&c, 3000, 10000) == 3000;
+    ok = ok && pit_clock_read(&c, 8000, 10000) == 8000;
+    /* The tick with no reading ahead of it: one period, exactly. */
+    pit_clock_tick(&c, 100);
+    ok = ok && pit_clock_read(&c, 500, 10000) == 10500;
+    /* A reading that finds the counter behind the last one counts the
+       wrap; the tick that follows sees it counted and adds nothing. */
+    ok = ok && pit_clock_read(&c, 50, 10000) == 20050;
+    pit_clock_tick(&c, 120);
+    ok = ok && pit_clock_read(&c, 900, 10000) == 20900;
+    /* The next tick, with no wrap read before it, counts its period. */
+    pit_clock_tick(&c, 30);
+    ok = ok && pit_clock_read(&c, 40, 10000) == 30040;
+    return ok;
+}
 
 /** Where the counter is inside its period, in microseconds. */
 static uint32_t clock_phase(void)
@@ -92,13 +148,8 @@ static uint32_t clock_phase(void)
 void pit_tick_clock(void)
 {
     uint32_t flags = kirq_save();
-    uint32_t phase = clock_phase();
 
-    if (!clock_wrapped) {
-        clock_periods++;
-    }
-    clock_wrapped = 0;
-    clock_last_phase = phase;
+    pit_clock_tick(&clock, clock_phase());
     kirq_restore(flags);
 }
 
@@ -121,15 +172,8 @@ void pit_tick_clock(void)
 uint32_t pit_now_us(void)
 {
     uint32_t flags = kirq_save();
-    uint32_t phase = clock_phase();
-    uint32_t periods;
+    uint32_t now = pit_clock_read(&clock, clock_phase(), 2u * sweep_us());
 
-    if (phase < clock_last_phase) {
-        clock_periods++;
-        clock_wrapped = 1;
-    }
-    clock_last_phase = phase;
-    periods = clock_periods;
     kirq_restore(flags);
-    return periods * 2u * sweep_us() + phase;
+    return now;
 }

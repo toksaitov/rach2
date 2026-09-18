@@ -347,10 +347,11 @@ static long find_level_between(const unsigned char *hay, size_t from, size_t to)
  * with them in `detail`, 0 with the reason otherwise.
  *
  * The kernel prints one record at every boot, `timing: tick N Hz, ...`, at
- * level 6 when its clock's two readings of the 8254 agree and at level 3 when
- * they do not, so the record's level is the verdict and the rest of the line
- * is the evidence; the delay and the tick in it are measured against time
- * the host owns and are printed for a person, not judged.
+ * level 6 when its clock's period accounting passes its check on fixed
+ * readings and at level 3 when it does not, so the record's level is the
+ * verdict and the rest of the line is the evidence; the delay, the wait and
+ * the walk against the tick are measured against time the host owns and are
+ * printed for a person, not judged.
  *
  * This replaced a scorer over the dozen checks the kernel used to run at boot.
  * Those are gone: what they proved is exercised by the first program that

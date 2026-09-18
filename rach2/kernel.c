@@ -2378,12 +2378,15 @@ static int init_root_by_identity(const char *spec, int *krffs_mounted)
  * tests and the probe suites in a way these never were: the memory check read
  * 256 bytes and the page-cache one ran against a RAM disk.
  *
- * The record's level is the clock's verdict alone: the two readings of the
- * 8254 agree or the clock is wrong on this machine. The delay and the tick
- * are measured against time the host owns: a hypervisor that stops the
- * machine and then delivers the ticks it missed reads a 200 ms delay as
- * twice that, and a suite that judged it would be judging the host's load.
- * Those two are printed, and a person reads them.
+ * The record's level is the clock's period accounting, checked on fixed
+ * readings by `pit_clock_check`: a sweep counted as a period, or a period
+ * counted twice, fails it on every machine and a stopped machine cannot.
+ * The delay, the wait and the walk are measured against time the host
+ * owns: a hypervisor that stops the machine and then delivers the ticks it
+ * missed reads a 200 ms delay as twice that, or puts the missed ticks
+ * inside a walk and not its clock readings, and a suite that judged them
+ * would be judging the host's load. They are printed, and a person reads
+ * them.
  */
 static void check_timing(void)
 {
@@ -2391,11 +2394,12 @@ static void check_timing(void)
     uint32_t measured_us = 0;
     uint32_t walk_clock = 0, walk_tick = 0;
     const char *why = "";
-    int delay_ok, clock_ok, tick_ok;
+    int delay_ok, walk_ok, clock_ok, tick_ok;
 
     tick_ok = test_timer();
     delay_ok = test_udelay(&measured_ms);
-    clock_ok = test_clock(&measured_us, &why, &walk_clock, &walk_tick);
+    walk_ok = test_clock(&measured_us, &why, &walk_clock, &walk_tick);
+    clock_ok = pit_clock_check();
 
     klog(clock_ok ? KLOG_INFO : KLOG_ERR, "timing",
          "tick %d Hz, 200 ms delay measured %d ms, 2000 us wait measured %d us",
@@ -2406,9 +2410,12 @@ static void check_timing(void)
     if (!delay_ok) {
         klog(KLOG_WARN, "timing", "the 200 ms delay was not 150 to 350 ms by the tick");
     }
-    if (!clock_ok) {
-        klog(KLOG_ERR, "timing", "%s; last walk %d us by the clock, %d by the tick", why,
+    if (!walk_ok) {
+        klog(KLOG_WARN, "timing", "%s; last walk %d us by the clock, %d by the tick", why,
              (int)walk_clock, (int)walk_tick);
+    }
+    if (!clock_ok) {
+        klog(KLOG_ERR, "timing", "the clock's period accounting failed its check on fixed readings");
     }
 }
 
