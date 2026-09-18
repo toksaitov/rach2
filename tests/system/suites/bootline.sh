@@ -84,7 +84,9 @@ boot() {
 
 # The two spellings of a disk root, each of which must be refused.
 for tokens in "rach2.nodisk rach2.fsdisk" "rach2.nodisk rach2.root=disk"; do
-    boot "$tokens" "boot: refused" 10
+    # The last of the refusal's four lines is the one waited for: under a
+    # loaded host the lines come seconds apart.
+    boot "$tokens" "and no rach2.rescue" 10
     grep -q "boot: refused: rach2.nodisk with rach2.fsdisk or rach2.root=disk" "$LOG" ||
         fail "$tokens was not refused, or the refusal did not name both tokens"
     # And the machine stopped there, ten seconds later. The debug shell
