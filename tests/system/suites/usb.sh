@@ -372,7 +372,7 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --append "rach2.usblatency" --log "$LAT_LOG" \
     --timeout 120 --steptmo 45 --ok "KEYLAT OK" --never "KEYLAT FAIL" \
     "seen=class 3 protocol 1" "seen=Type 'help'" "send=exec /keylatprobe random" \
-    "expect=KEYLAT HOG" "expect=usb: latency: reader waiting" key=ret \
+    "seen=KEYLAT HOG" "seen=usb: latency: reader waiting" key=ret \
     > /dev/null 2>&1; then
     if ! grep -q "usb: latency:" "$LAT_LOG"; then
         bad "the keystroke beside the large call was not recorded: a reader held past twenty milliseconds has no record"
