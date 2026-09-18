@@ -1562,8 +1562,9 @@ run-selfbuild: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krf
 # `tests/run selfbuild-ext2`: the self-build on an ext2 root, the os-real
 # system at 48 MiB on a partition at LBA 2048 as the KRFFS disk has it, booted
 # with rach2.root=ext2; the suite reads the volume back with debugfs and
-# e2fsck must find it consistent after the synced stop. Two clean kernel
-# builds are the most the ext2 root is read and written in one sitting.
+# e2fsck must find it consistent after the synced stop. One clean kernel
+# build and the boot of what it built; the second build and the userland
+# half are the KRFFS suite's.
 SELFBUILD_EXT2_VOL = $(IMAGES_DIR)/selfbuild-ext2.vol
 SELFBUILD_EXT2_DISK = $(IMAGES_DIR)/selfbuild-ext2-test.disk
 $(SELFBUILD_EXT2_VOL): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom

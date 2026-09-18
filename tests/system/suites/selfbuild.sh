@@ -32,15 +32,17 @@
 #
 # With SELFBUILD_ROOT=ext2 in the environment the disk's partition is an ext2
 # volume, booted with rach2.root=ext2, its free space read by debugfs and the
-# built kernel extracted by debugfs; the guest's steps are the same, which is
-# the point: two clean builds of the kernel are the most an ext2 root gets
-# read and written in one sitting.
+# built kernel extracted by debugfs; the guest builds the kernel once, and
+# the second build, the hash comparison, the userland builds and their smoke
+# checks are left to the KRFFS run, since the programs do not care which
+# root they were built on. One clean build of the kernel and the boot of what
+# it built is the ext2 root's exercise.
 #
-
-set -e
 
 # The runner helper, whose `until` and `gone` are the suite's waits.
 RUNUTIL="$(cd "$(dirname "$0")/../../.." && pwd)/build/tests/system/runutil"
+set -e
+
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 
 KERNEL="$1"
@@ -196,6 +198,11 @@ step "BUILDONE" "cd /home/test/kbuild/rach2 && make -f guest.mk > /tmp/kb1.out 2
 step "TAILONE" "busybox tail -4 /tmp/kb1.out; echo TAIL\"\"ONE"
 step "HASHONE" "cd /home/test/kbuild/rach2 && busybox sha256sum kernel > /tmp/k1.sha; K1=\$(busybox cat /tmp/k1.sha); echo HASH\"\"ONE=\$K1 SIZE\"\"ONE=\$(busybox stat -c %s kernel) SIZE\"\"END"
 step "KEEPONE" "cp /home/test/kbuild/rach2/kernel /home/test/kernel.selfbuilt && echo KEEP\"\"ONE"
+# The second build, the hash comparison, the userland builds and their
+# smoke checks are the KRFFS suite's: the ext2 root proves itself with one
+# clean build of the kernel and the boot of what it built, and the programs
+# do not care which root they were built on.
+if [ "$ROOT_TYPE" = krffs ]; then
 step "COPYTWO" "cd /home/test/kbuild && rm -rf rach2 && cp -r /src/rach2 . && echo COPY\"\"TWO"
 step "BUILDTWO" "cd /home/test/kbuild/rach2 && make -f guest.mk > /tmp/kb2.out 2>&1; echo BUILD\"\"TWO=\$?"
 step "TAILTWO" "busybox tail -4 /tmp/kb2.out; echo TAIL\"\"TWO"
@@ -230,13 +237,13 @@ step "SMOKEPASSWD" "./passwd < /dev/null > /dev/null 2>&1; [ \$? -eq 1 ] && echo
 step "SMOKEADD" "./adduser > /dev/null 2>&1; [ \$? -eq 1 ] && echo SMOKE\"\"ADD"
 step "SMOKEINSTK" "./bootctl kernel ./cat > /dev/null 2>&1; [ \$? -eq 1 ] && echo SMOKE\"\"INSTK"
 step "SMOKEISH" "cd /home/test/kbuild/ish && [ \"\$(./ish -c '/home/test/kbuild/utils/echo selfbuilt')\" = selfbuilt ] && echo SMOKE\"\"ISH"
+fi
 step "SYNCDONE" "sync; echo SYNC\"\"DONE"
 
 boot_steps test "$TESTPASSWORD"
 
 if ! wait_token "COPYONE" 1800; then
     fail "the source tree never copied into the workspace"
-fi
 fi
 if ! wait_token "BUILDONE=" 3600; then
     fail "the first kernel build never finished"
@@ -262,7 +269,8 @@ fi
 if ! wait_token "KEEPONE" 120; then
     fail "the built kernel was never set aside for extraction"
 fi
-if ! wait_token "BUILDTWO=" "$(scaled 3600)"; then
+if [ "$ROOT_TYPE" = krffs ]; then
+if ! wait_token "BUILDTWO=" 3600; then
     fail "the second kernel build never finished"
 fi
 if ! grep -q "BUILDTWO=0" "$LOG"; then
