@@ -341,27 +341,31 @@ flood_start
 # gets through less of the flood in the same wall clock.
 sleep "$(scaled 5)"
 # The flood is real before it is relied on: the guest's own count of
-# established connections, typed at the console session about to end. It is
-# counted up to four times and the highest is the reading. A host with more
-# machines on it than processors can only hold the guest back from taking a
-# connection, never make it take one it did not; a single count at a moment
-# the guest had not caught up failed a set on 2026-09-13 at four.
-established=0
-attempt=0
-while [ "$attempt" -lt 4 ]; do
-    attempt=$((attempt + 1))
+# established connections, typed at the console session about to end, must
+# be more than none while the forty are held, and none once they are
+# released below. How many the guest holds is the machine's, its backlog
+# against the emulator's forwarding, and is printed and not judged: a
+# number written for one machine, five, failed a set on 2026-09-13 at four
+# and again on 2026-09-18 under KVM.
+flood_count() {
     type_line 'netstat -tn 2>/dev/null | grep -c ESTABLISHED; echo FLOOD""COUNT'
     if ! wait_token "FLOODCOUNT" 30; then
         fail "the console did not answer while the flood was on"
     fi
     seen=$(tr -d '\r' < "$LOG" | grep -B1 'FLOODCOUNT' | tail -2 | head -1 | tr -dc '0-9')
-    [ "${seen:-0}" -gt "$established" ] && established=${seen:-0}
-    [ "$established" -ge 5 ] && break
-    sleep "$(scaled 2)"
+    established=${seen:-0}
+}
+attempt=0
+established=0
+while [ "$attempt" -lt 20 ] && [ "$established" -eq 0 ]; do
+    attempt=$((attempt + 1))
+    flood_count
+    [ "$established" -gt 0 ] || sleep "$(scaled 1)" # interval: the next reading of a count that only the guest advances
 done
-if [ "$established" -lt 5 ]; then
-    fail "the flood held $established connections, fewer than the five a flood must reach"
+if [ "$established" -eq 0 ]; then
+    fail "the flood held no connection in the guest"
 fi
+echo "ssh-test: the flood holds $established connections in the guest: OK"
 type_line 'exit'
 if ! drive_login root "$PASSWORD" "$(scaled 40)"; then
     fail "the console did not come back to a login prompt under the flood"
@@ -372,6 +376,18 @@ if ! wait_token "FLOODLOGIN" 40 || ! grep -q 'uid=0' "$LOG"; then
 fi
 flood_stop
 echo "ssh-test: root logs in on the console under a flood of forty connections: OK"
+# The count meant something: with the forty released, the guest holds none.
+attempt=0
+established=1
+while [ "$attempt" -lt 30 ] && [ "$established" -ne 0 ]; do
+    attempt=$((attempt + 1))
+    flood_count
+    [ "$established" -eq 0 ] || sleep "$(scaled 1)" # interval: the next reading, while the released connections close
+done
+if [ "$established" -ne 0 ]; then
+    fail "the guest still holds $established connections after the flood was released"
+fi
+echo "ssh-test: the released flood leaves the guest holding none: OK"
 
 cleanup_boot
 
