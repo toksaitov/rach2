@@ -522,8 +522,46 @@ static int32_t sys_exit(isr_params_t *params)
                              : "memory");
     }
 
-    __asm__ __volatile__("cli; hlt");
-    return 0;
+    /* A zombie whose parent is gone woke nobody, and nothing may be ready
+     * now: a leftover of a program the shell ran, exiting while the program
+     * after it sleeps. The processor idles here until an interrupt makes a
+     * process ready, and leaves through the scheduler, which never picks
+     * this zombie again. The timer's preemption is deferred inside a call,
+     * so the loop schedules on its own. A halt with interrupts off here
+     * kept the machine forever. */
+    for (;;) {
+        __asm__ __volatile__("cli");
+        schedule();
+        idle_wait_irq_off();
+    }
+}
+
+/**
+ * Free every zombie whose parent is gone.
+ *
+ * Such a zombie has no reaper: its parent, a program the debug shell ran,
+ * exited before it did. A zombie has released its files and its working
+ * directory, waits on nothing, and runs on a stack nothing switches back
+ * to, so its pages, its kernel stack and its record go here, as `wait`
+ * would take them. The shell calls this between programs.
+ */
+void proc_free_orphan_zombies(void)
+{
+    process_t *p = proc_list;
+
+    while (p) {
+        process_t *next = p->next;
+
+        if (p->state == PROC_ZOMBIE && get_process(p->parent_pid) == NULL) {
+            if (p->cr3 != 0) {
+                free_user_pages(p->page_dir);
+                free_page_directory(p->page_dir);
+            }
+            kstack_free(p->kernel_stack);
+            free_process(p);
+        }
+        p = next;
+    }
 }
 
 /* Re-validate a descriptor's cached KRFFS node before a file op (defined below

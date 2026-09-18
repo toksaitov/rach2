@@ -7,9 +7,12 @@
  * give the child the processor, and the exited init, a zombie, would never
  * be picked again to make the return, so the shell never came back and the
  * runner scored a hang. The child is frozen while the shell has the
- * machine, finishes under the next program the shell starts, and stays a
- * zombie, since its parent is gone; one record of the process table, on a
- * machine that is discarded after the run.
+ * machine and finishes under the next program the shell starts, which is
+ * the second thing the leftover proves: its exit wakes no parent, and when
+ * that program is asleep nothing is ready, so the exit must idle for the
+ * next interrupt and not halt with interrupts off, which kept the machine
+ * under the emulator once. Its parent is gone, so the shell frees its
+ * record before the program after that.
  *
  * Prints "SURVIVORPROBE OK" before exiting. The verdict is the kernel's
  * return record, which the runner requires after the probe's own exit.

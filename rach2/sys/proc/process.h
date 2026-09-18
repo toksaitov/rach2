@@ -216,6 +216,10 @@ process_t *get_process(uint32_t pid);
  */
 void reparent_children(uint32_t dead_pid);
 
+/** Free every zombie whose parent is gone; the debug shell calls it between
+ * programs. Defined in syscall.c beside `wait`, whose release it repeats. */
+void proc_free_orphan_zombies(void);
+
 /** Release files, publish the encoded exit status, and wake the parent. */
 void proc_exit_cleanup(int32_t status);
 

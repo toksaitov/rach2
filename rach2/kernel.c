@@ -1166,6 +1166,9 @@ static void exec_program(int argc, char *argv[])
         return;
     }
 
+    /* A zombie whose parent is gone has no reaper: a program the shell ran
+     * left it behind, and it goes before the next program starts. */
+    proc_free_orphan_zombies();
     user_proc = alloc_process();
     if (!user_proc) {
         console_puts("exec: Failed to allocate process");
