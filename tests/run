@@ -342,7 +342,7 @@ run_one() {
     start=$(now)
     RACH2_QEMU_LEDGER="$WORK/$1.machines"; export RACH2_QEMU_LEDGER
     : > "$RACH2_QEMU_LEDGER"
-    [ "${2-}" = pooled ] || echo "run: $1: starting (silence limit $IDLE_SECONDS s)"
+    [ "${2-}" = pooled ] || echo "run: $1: starting (idle limit $IDLE_SECONDS s)"
     rc=0
     if [ "${2-}" = alone ]; then
         # What the target names is built first and hashed, then the suite
@@ -392,7 +392,7 @@ run_pool() {
               [ "$(active_count)" -lt "$WORKERS" ]; do
             suite=${pending%% *}
             case "$pending" in *" "*) pending=${pending#* } ;; *) pending="" ;; esac
-            echo "run: $suite: starting (silence limit $IDLE_SECONDS s)"
+            echo "run: $suite: starting (idle limit $IDLE_SECONDS s)"
             ( RACH2_PROGRESS_FD=3; export RACH2_PROGRESS_FD
               run_one "$suite" pooled > "$WORK/$suite.out" 2>&1; echo $? > "$WORK/$suite.rc.new";
               mv "$WORK/$suite.rc.new" "$WORK/$suite.rc" ) 3>&1 &

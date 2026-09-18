@@ -243,12 +243,12 @@ check "and does not void an unchanged tree" 0 "$(printf '%s\n' "$out" | grep -c 
 # and applies the same rule at every position in the schedule.
 for value in 0 00 -1 nope 1.5; do
     out=$(RACH2_IDLE_TIMEOUT=$value run passing); rc=$?
-    check "an invalid silence limit ($value) is refused" 2 "$rc"
+    check "an invalid idle limit ($value) is refused" 2 "$rc"
 done
 t0=$(now)
 out=$(RACH2_IDLE_TIMEOUT=2 run silent); rc=$?
 check "a silent single suite fails" 1 "$rc"
-check "and is named with its silence limit" 1 "$(printf '%s\n' "$out" | grep -c 'run: silent: no output for 2 s')"
+check "and is named with its idle limit" 1 "$(printf '%s\n' "$out" | grep -c 'run: silent: no output for 2 s')"
 check "and repeats its last output" 2 "$(printf '%s\n' "$out" | grep -c '^suite-last-line$')"
 check "and stops within seconds" 1 "$([ $(($(now) - t0)) -lt 12 ] && echo 1 || echo 0)"
 out=$(RACH2_IDLE_TIMEOUT=2 run consolebusy); rc=$?
@@ -263,10 +263,10 @@ check "one suite's console cannot keep another suite alive" 1 "$(printf '%s\n' "
 check "the active neighbour still passes" 1 "$(printf '%s\n' "$out" | grep -c 'run: consolebusy: PASS')"
 check "and the queued suite still runs" 1 "$(printf '%s\n' "$out" | grep -c 'run: passing: PASS')"
 out=$(RACH2_IDLE_TIMEOUT=2 run style passing usb); rc=$?
-check "a serial suite before the pool has the silence bound" 1 "$(printf '%s\n' "$out" | grep -c 'run: style: no output for 2 s')"
-check "a serial suite after the pool has the same bound" 1 "$(printf '%s\n' "$out" | grep -c 'run: usb: no output for 2 s')"
+check "a serial suite before the pool has the idle limit" 1 "$(printf '%s\n' "$out" | grep -c 'run: style: no output for 2 s')"
+check "a pooled suite has the same bound" 1 "$(printf '%s\n' "$out" | grep -c 'run: usb: no output for 2 s')"
 out=$(RACH2_IDLE_TIMEOUT=2 RACH2_TIMEOUT_FACTOR=8 run silent); rc=$?
-check "the silence bound is never scaled" 1 "$(printf '%s\n' "$out" | grep -c 'run: silent: no output for 2 s')"
+check "the idle limit is never scaled" 1 "$(printf '%s\n' "$out" | grep -c 'run: silent: no output for 2 s')"
 
 out=$(run failing); rc=$?
 check "a failing suite exits nonzero" 1 "$rc"

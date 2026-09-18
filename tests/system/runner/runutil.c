@@ -101,6 +101,82 @@ struct process {
     int owned;
 };
 
+/** Parse ps's cumulative processor time, `[[dd-]hh:]mm:ss`, into seconds. */
+static double cpu_seconds(const char *text)
+{
+    long days = 0, hours = 0, mins = 0, secs = 0;
+    const char *p = strchr(text, '-');
+    if (p) {
+        days = atol(text);
+        text = p + 1;
+    }
+    if (sscanf(text, "%ld:%ld:%ld", &hours, &mins, &secs) != 3) {
+        hours = 0;
+        if (sscanf(text, "%ld:%ld", &mins, &secs) != 2)
+            return 0;
+    }
+    return ((days * 24.0 + hours) * 60 + mins) * 60 + secs;
+}
+
+/* The processor time the children a process has already waited for used,
+ * from Linux's /proc, in seconds; 0 where there is no such file. A shell
+ * that runs one short command after another keeps no time of its own, so
+ * the time its children took is what says it is working. */
+static double reaped_cpu(long pid)
+{
+    char path[64], text[1024];
+    FILE *fp;
+    const char *after;
+    long utime, stime, cutime, cstime;
+    size_t got;
+    int field;
+
+    snprintf(path, sizeof(path), "/proc/%ld/stat", pid);
+    fp = fopen(path, "r");
+    if (!fp)
+        return 0;
+    got = fread(text, 1, sizeof(text) - 1, fp);
+    fclose(fp);
+    text[got] = 0;
+    /* The command name, in parentheses, may hold spaces; the fields are
+       counted from after its closing one. */
+    after = strrchr(text, ')');
+    if (!after)
+        return 0;
+    for (field = 3; field < 14 && after; field++)
+        after = strchr(after + 1, ' ');
+    if (!after || sscanf(after, "%ld %ld %ld %ld", &utime, &stime, &cutime, &cstime) != 4)
+        return 0;
+    return (cutime + cstime) / (double)sysconf(_SC_CLK_TCK);
+}
+
+/** The processor time the command's group has used, root and every process
+ * in its group, from POSIX ps, with the time of the children each has
+ * already reaped where the system reports it, plus the number of processes
+ * in the group into `count`; -1 when ps cannot be read. A suite whose
+ * machines still burn processor time is working, however silent, and so is
+ * one whose processes come and go. */
+static double group_cpu(pid_t root, int *count)
+{
+    FILE *fp = popen("ps -A -o pid= -o pgid= -o time=", "r");
+    char line[256], timetext[64];
+    long pid, group;
+    double total = 0;
+    *count = 0;
+    if (!fp)
+        return -1;
+    while (fgets(line, sizeof(line), fp)) {
+        if (sscanf(line, "%ld %ld %63s", &pid, &group, timetext) != 3)
+            continue;
+        if (pid == root || group == root) {
+            total += cpu_seconds(timetext) + reaped_cpu(pid);
+            (*count)++;
+        }
+    }
+    pclose(fp);
+    return total;
+}
+
 /** Save descendants before TERM reparents them, including separate groups.
  * POSIX ps supplies the same fields on macOS and Linux. The command group
  * and machine ledger remain usable if process inspection fails.
@@ -659,11 +735,14 @@ static void last_output(const char *path)
     write_all(STDERR_FILENO, "\n", 1);
 }
 
-/** Supervise a command, counting its output and its console transcript.
- * Console relays append independently, so an active guest keeps a silent
- * suite alive.
- * The suite's clock is never scaled. Its child group is stopped on silence
- * or a signal, and output from another suite cannot reset its clock.
+/** Supervise a command, counting its output, its console transcript and
+ * its group's processor time. Console relays append independently, so an
+ * active guest keeps a silent suite alive, and so does a group that still
+ * burns processor time: a suite is stopped as hung only when it has been
+ * silent and idle for the whole limit, since a slow machine writes for
+ * minutes without a word and an idle one burns nothing.
+ * The suite's clock is never scaled. Its child group is stopped on a signal
+ * too, and output from another suite cannot reset its clock.
  * The parent tries to establish the group before cleanup can need it. The
  * child checks membership before exec; the parent's call may lose to exec.
  */
@@ -678,6 +757,8 @@ static int supervise(char **cmd, const char *name, double idle, const char *ledg
     char *console, buf[8192], recent[4096];
     size_t recent_len = 0;
     double started = now(), active = started, report = started;
+    double busy = started, sampled = started, cpu_at_busy = -1;
+    int count_last = -1;
     off_t previous = 0;
     struct sigaction sa;
     size_t len = strlen(ledger) + 16;
@@ -776,13 +857,32 @@ static int supervise(char **cmd, const char *name, double idle, const char *ledg
             active = now();
         }
         t = now();
+        if (!done && t - sampled >= 10) {
+            int count;
+            double cpu = group_cpu(child, &count);
+            /* Working is more than a tenth of a processor over the span
+               since the group was last seen working, or a process come or
+               gone: a halted machine still takes a few percent for its
+               timer, under either accelerator, and is not working. */
+            if (cpu < 0 || cpu_at_busy < 0 || count != count_last ||
+                cpu - cpu_at_busy > 0.1 * (t - busy)) {
+                busy = t;
+                cpu_at_busy = cpu;
+            }
+            count_last = count;
+            sampled = t;
+        }
         if (t - report >= 60) {
-            dprintf(progressfd, "run: %s: working for %.0f s; last output %.0f s ago\n", name,
-                    t - started, t - active);
+            dprintf(progressfd,
+                    "run: %s: working for %.0f s; last output %.0f s ago; busy %.0f s ago\n", name,
+                    t - started, t - active, t - busy);
             report = t;
         }
-        if (!done && t - active >= idle) {
-            fprintf(stderr, "run: %s: no output for %.0f s; stopping the suite\n", name, idle);
+        if (!done && t - active >= idle && t - busy >= idle) {
+            fprintf(
+                stderr,
+                "run: %s: no output for %.0f s and next to no processor time; stopping the suite\n",
+                name, idle);
             fprintf(stderr, "run: %s: the suite's last output:\n", name);
             write_all(STDERR_FILENO, recent, recent_len);
             write_all(STDERR_FILENO, "\n", 1);
