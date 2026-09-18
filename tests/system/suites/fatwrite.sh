@@ -78,7 +78,8 @@ fi
 
 # ---- 3: read back after a reboot ----
 if run --append "rach2.rescue" --timeout 90 --steptmo 60 --ok "FATWRITE OK (read back)" \
-    --never "FATWRITE FAIL" "expect=Type 'help'" "send=exec /fatwriteprobe readback" \
+    --never "FATWRITE FAIL" --log "$DISK.readback.log" \
+    "expect=Type 'help'" "send=exec /fatwriteprobe readback" \
     "expect=FATWRITE" > /dev/null 2>&1; then
     echo "fatwrite-test: every byte and name reads back after a reboot: OK"
 else
@@ -87,7 +88,8 @@ fi
 
 # ---- 4: a crash in the middle of a write sequence, then the mount's check ----
 run --append "rach2.rescue" --timeout 60 --steptmo 30 --ok "FATWRITE WRITING" \
-    --never "FATWRITE FAIL" "expect=Type 'help'" "send=exec /fatwriteprobe crash" \
+    --never "FATWRITE FAIL" --log "$DISK.crash.log" \
+    "expect=Type 'help'" "send=exec /fatwriteprobe crash" \
     "expect=FATWRITE WRITING" > /dev/null 2>&1 || fail "the crash boot"
 "$MKFIXTURE" --check "$DISK" 100352 > "$DISK.crashed" 2>&1
 grep -q 'check: dirty:' "$DISK.crashed" || fail "the killed machine left the volume marked clean"
@@ -142,7 +144,7 @@ echo "fatwrite-test: the program BusyBox copied reads identically through mtools
 
 # ---- 6: two writers and a sync at once, under the lag ----
 if run --append "rach2.blocklag=3 rach2.rescue" --timeout 180 --steptmo 120 \
-    --ok "LAGPROBE OK" --never "LAGPROBE FAIL" \
+    --ok "LAGPROBE OK" --never "LAGPROBE FAIL" --log "$DISK.writers.log" \
     "expect=Type 'help'" "send=exec /lagprobe writers" "expect=LAGPROBE" > /dev/null 2>&1; then
     echo "fatwrite-test: two writers and a sync interleave under the lag and each file is whole: OK"
 else
