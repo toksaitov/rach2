@@ -90,7 +90,7 @@ fail() {
         cp "$LOG" "$OUT.metal.fail.log" 2>/dev/null || true
     fi
     echo "metal-test: FAIL: $1" >&2
-    echo "metal-test: the failing boot's console log: $IMAGE.metal.fail.log" >&2
+    echo "metal-test: the failing boot's console log: $OUT.metal.fail.log" >&2
     exit 1
 }
 

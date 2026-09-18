@@ -675,9 +675,9 @@ twohc_sticks() {
     run_shell --qemu-arg=-cpu --qemu-arg=max \
         --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci0 \
         --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci1 \
-        --drive "if=none,id=stick0,format=raw,file=$IMAGE.twohc-stick-0.img" \
-        --drive "if=none,id=stick1,format=raw,file=$IMAGE.twohc-stick-1.img" \
-        --drive "if=none,id=stick2,format=raw,file=$IMAGE.twohc-stick-2.img" \
+        --drive "if=none,id=stick0,format=raw,file=$OUT.twohc-stick-0.img" \
+        --drive "if=none,id=stick1,format=raw,file=$OUT.twohc-stick-1.img" \
+        --drive "if=none,id=stick2,format=raw,file=$OUT.twohc-stick-2.img" \
         --qemu-arg=-device --qemu-arg="usb-storage,bus=$where0.0,drive=stick0,id=st0" \
         --qemu-arg=-device --qemu-arg="usb-storage,bus=$where1.0,drive=stick1,id=st1" \
         --qemu-arg=-device --qemu-arg="usb-storage,bus=$where2.0,drive=stick2,id=st2" \
