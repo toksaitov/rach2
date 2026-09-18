@@ -212,6 +212,7 @@ struct ata_wait {
 #define ATA_WANT_NOT_BUSY 0
 #define ATA_WANT_READY    1
 #define ATA_WANT_DATA     2
+#define ATA_WANT_IDLE     3
 
 struct ata_drive {
     struct ata_channel *channel;
@@ -271,6 +272,17 @@ static int ata_status_done(const struct ata_channel *ch, int want, int *rc)
         return 0;
     }
     if (want == ATA_WANT_NOT_BUSY) {
+        *rc = 0;
+        return 1;
+    }
+    /* Idle is no command in any phase: a drive in a data phase, PIO or
+       DMA, shows DRQ with BSY clear, and a command written to it then is
+       refused or, worse, answered with the other command's data. The error
+       bits are another command's and are not read here. */
+    if (want == ATA_WANT_IDLE) {
+        if (status & ATA_SR_DRQ) {
+            return 0;
+        }
         *rc = 0;
         return 1;
     }
@@ -412,6 +424,21 @@ static int ata_wait_not_busy(struct ata_channel *ch)
     return ata_wait_for(ch, ATA_WANT_NOT_BUSY);
 }
 
+/**
+ * Wait until the drive has no command in any phase; an error is `-EIO`.
+ *
+ * This is the wait before a command from a caller that does not own the
+ * channel: the owner's command may be in flight, and its data phase, DRQ
+ * with BSY clear, is where a second command is refused or answered with
+ * the first one's data. The owner's DMA is issued and started with
+ * interrupts off, so a caller here sees it either not yet issued or
+ * running, never issued and waiting for its engine.
+ */
+static int ata_wait_idle(struct ata_channel *ch)
+{
+    return ata_wait_for(ch, ATA_WANT_IDLE);
+}
+
 /** Wait until the drive is idle with no data pending; an error is `-EIO`. */
 static int ata_wait_ready(struct ata_channel *ch)
 {
@@ -510,6 +537,7 @@ static int ata_dma_transfer(struct ata_drive *d, uint64_t lba, uint32_t count, v
 {
     struct ata_channel *ch = d->channel;
     uint32_t bytes = count * BLOCK_SECTOR_SIZE;
+    uint32_t flags;
     uint8_t status;
     int rc;
 
@@ -529,11 +557,18 @@ static int ata_dma_transfer(struct ata_drive *d, uint64_t lba, uint32_t count, v
     outb(ch->bm + ATA_BM_STATUS, ATA_BM_ERROR | ATA_BM_INTR);
     outd(ch->bm + ATA_BM_PRD, (uint32_t)(uintptr_t)&ch->prd);
     outb(ch->bm + ATA_BM_CMD, write ? 0 : ATA_BM_READ);
+    /* From the command to the engine's start with interrupts off: a drive
+       that has the command and not the engine shows DRQ and waits, and a
+       caller that cannot sleep, arriving on a tick between the two, would
+       wait for that DRQ to clear until its bound and then fail. */
+    flags = kirq_save();
     if (!ata_command(ch, ata_program(d, lba, count, write, 1))) {
+        kirq_restore(flags);
         return write ? -EPERM : -EIO;
     }
     ata_settle(ch);
     outb(ch->bm + ATA_BM_CMD, (uint8_t)((write ? 0 : ATA_BM_READ) | ATA_BM_START));
+    kirq_restore(flags);
     rc = ata_wait_ready(ch);
     status = inb(ch->bm + ATA_BM_STATUS);
     outb(ch->bm + ATA_BM_CMD, 0);
@@ -551,6 +586,7 @@ static int ata_read_on(struct ata_drive *d, uint64_t lba, uint32_t count, void *
 {
     struct ata_channel *ch = d->channel;
     uint8_t *out = (uint8_t *)buffer;
+    uint32_t flags;
 
     while (count > 0) {
         uint32_t chunk = (count > ATA_MAX_SECTORS_PER_CMD) ? ATA_MAX_SECTORS_PER_CMD : count;
@@ -572,20 +608,28 @@ static int ata_read_on(struct ata_drive *d, uint64_t lba, uint32_t count, void *
             count -= chunk;
             continue;
         }
-        if (ata_wait_not_busy(ch) != 0) {
+        /* The data port's sequence runs with interrupts off, whoever the
+           caller is: a chunk left in its data phase while another caller
+           ran would hand that caller its sectors. */
+        flags = kirq_save();
+        if (ata_wait_idle(ch) != 0) {
+            kirq_restore(flags);
             return -EIO;
         }
         if (!ata_command(ch, ata_program(d, lba, chunk, 0, 0))) {
+            kirq_restore(flags);
             return -EIO;
         }
         ata_settle(ch);
         for (i = 0; i < chunk; ++i) {
             if (ata_wait_data(ch) != 0) {
+                kirq_restore(flags);
                 return -EIO;
             }
             insw(ch->io + ATA_REG_DATA, out, ATA_WORDS_PER_SECTOR);
             out += BLOCK_SECTOR_SIZE;
         }
+        kirq_restore(flags);
         lba += chunk;
         count -= chunk;
     }
@@ -614,6 +658,7 @@ static int ata_write_on(struct ata_drive *d, uint64_t lba, uint32_t count, const
 {
     struct ata_channel *ch = d->channel;
     const uint8_t *in = (const uint8_t *)buffer;
+    uint32_t flags;
 
     while (count > 0) {
         uint32_t chunk = (count > ATA_MAX_SECTORS_PER_CMD) ? ATA_MAX_SECTORS_PER_CMD : count;
@@ -632,23 +677,34 @@ static int ata_write_on(struct ata_drive *d, uint64_t lba, uint32_t count, const
             }
             in += chunk * BLOCK_SECTOR_SIZE;
         } else {
-            if (ata_wait_not_busy(ch) != 0) {
+            flags = kirq_save();
+            if (ata_wait_idle(ch) != 0) {
+                kirq_restore(flags);
                 return -EIO;
             }
             if (!ata_command(ch, ata_program(d, lba, chunk, 1, 0))) {
+                kirq_restore(flags);
                 return -EPERM;
             }
             ata_settle(ch);
             for (i = 0; i < chunk; ++i) {
                 if (ata_wait_data(ch) != 0) {
+                    kirq_restore(flags);
                     return -EIO;
                 }
                 outsw(ch->io + ATA_REG_DATA, in, ATA_WORDS_PER_SECTOR);
                 in += BLOCK_SECTOR_SIZE;
             }
             if (ata_wait_ready(ch) != 0) {
+                kirq_restore(flags);
                 return -EIO;
             }
+            kirq_restore(flags);
+        }
+        /* The flush waits for the drive idle first, so a caller without
+           the channel flushes behind the owner's command, not into it. */
+        if (ata_wait_idle(ch) != 0) {
+            return -EIO;
         }
         if (!ata_command(ch, d->lba48 ? ATA_CMD_FLUSH_EXT : ATA_CMD_FLUSH)) {
             return -EPERM;
