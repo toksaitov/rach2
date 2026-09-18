@@ -137,6 +137,15 @@ struct ata_prd {
 #define ATA_DRIVE_LBA    0x40
 #define ATA_DRIVE_SLAVE  0x10
 
+/* The machine's ports, and whatever a test put in their place. */
+static const struct ata_io ata_port_io = {inb, outb, outd, insw, outsw};
+static const struct ata_io *ata_io = &ata_port_io;
+
+void ata_set_io(const struct ata_io *ops)
+{
+    ata_io = ops ? ops : &ata_port_io;
+}
+
 /* One command moves at most 256 sectors: the legacy count register is
    8-bit, with 0 meaning 256, and the 48-bit form is kept to the same. */
 #define ATA_MAX_SECTORS_PER_CMD 256
@@ -244,7 +253,7 @@ static int ata_command(const struct ata_channel *ch, uint8_t command)
     if (command == ATA_CMD_FLUSH || command == ATA_CMD_FLUSH_EXT) {
         block_count_flush();
     }
-    outb(ch->io + ATA_REG_STATUS, command);
+    ata_io->out8(ch->io + ATA_REG_STATUS, command);
     return 1;
 }
 
@@ -252,10 +261,10 @@ static int ata_command(const struct ata_channel *ch, uint8_t command)
  * means anything: four reads of the alternate status register. */
 static void ata_settle(const struct ata_channel *ch)
 {
-    inb(ch->ctrl);
-    inb(ch->ctrl);
-    inb(ch->ctrl);
-    inb(ch->ctrl);
+    ata_io->in8(ch->ctrl);
+    ata_io->in8(ch->ctrl);
+    ata_io->in8(ch->ctrl);
+    ata_io->in8(ch->ctrl);
 }
 
 /**
@@ -265,7 +274,7 @@ static void ata_settle(const struct ata_channel *ch)
  */
 static int ata_status_done(const struct ata_channel *ch, int want, int *rc)
 {
-    uint8_t status = inb(ch->io + ATA_REG_STATUS);
+    uint8_t status = ata_io->in8(ch->io + ATA_REG_STATUS);
 
     block_count_poll();
     if (status & ATA_SR_BSY) {
@@ -304,13 +313,25 @@ static int ata_status_done(const struct ata_channel *ch, int want, int *rc)
     return 1;
 }
 
-/** Whether a wait here may sleep: interrupts on, inside a system call. */
-static int ata_can_sleep(void)
+/* Whether interrupts are on: the flag register's, or a host test's, whose
+   `kirq_save` is a stand-in that reads no register. */
+#ifdef ATA_HOSTTEST
+int ata_hosttest_interrupts_on(void);
+#define ata_interrupts_on ata_hosttest_interrupts_on
+#else
+static int ata_interrupts_on(void)
 {
     uint32_t eflags;
 
     __asm__ __volatile__("pushfl; popl %0" : "=r"(eflags));
-    return (eflags & 0x200) != 0 && proc_in_syscall();
+    return (eflags & 0x200) != 0;
+}
+#endif
+
+/** Whether a wait here may sleep: interrupts on, inside a system call. */
+static int ata_can_sleep(void)
+{
+    return ata_interrupts_on() && proc_in_syscall();
 }
 
 /* The condition for a channel's owner to leave. */
@@ -358,8 +379,8 @@ static int ata_wait_cond(void *arg)
     }
     if (w->ch->ticks - w->t0 > ATA_WAIT_TICKS) {
         klog(KLOG_WARN, "ata", "%s: no answer in %d ticks: status 0x%X, bus master 0x%X, want %d",
-             w->ch->name, ATA_WAIT_TICKS, (unsigned)inb(w->ch->io + ATA_REG_STATUS),
-             w->ch->bm ? (unsigned)inb(w->ch->bm + ATA_BM_STATUS) : 0u, w->want);
+             w->ch->name, ATA_WAIT_TICKS, (unsigned)ata_io->in8(w->ch->io + ATA_REG_STATUS),
+             w->ch->bm ? (unsigned)ata_io->in8(w->ch->bm + ATA_BM_STATUS) : 0u, w->want);
         w->rc = -EIO;
         return 1;
     }
@@ -369,11 +390,19 @@ static int ata_wait_cond(void *arg)
 /** Stay off the device for a while, without touching a timer either. */
 static void ata_pause(void)
 {
+#ifdef ATA_HOSTTEST
+    /* A host test's model of the emulator, whose completion arrives while
+       the driver is off the device; the host may not be an x86. */
+    void ata_hosttest_paused(void);
+
+    ata_hosttest_paused();
+#else
     uint32_t n;
 
     for (n = 0; n < ATA_PAUSE_LOOPS; n++) {
         __asm__ __volatile__("pause");
     }
+#endif
 }
 
 /**
@@ -407,8 +436,8 @@ static int ata_wait_for(struct ata_channel *ch, int want)
             }
         }
         klog(KLOG_ERR, "ata", "%s: no answer to a polled wait after %d reads: status 0x%X, bus master 0x%X, want %d",
-             ch->name, ATA_POLL_PLAIN + ATA_POLL_LIMIT, (unsigned)inb(ch->io + ATA_REG_STATUS),
-             ch->bm ? (unsigned)inb(ch->bm + ATA_BM_STATUS) : 0u, want);
+             ch->name, ATA_POLL_PLAIN + ATA_POLL_LIMIT, (unsigned)ata_io->in8(ch->io + ATA_REG_STATUS),
+             ch->bm ? (unsigned)ata_io->in8(ch->bm + ATA_BM_STATUS) : 0u, want);
         return -EIO;
     }
     w.ch = ch;
@@ -459,7 +488,7 @@ static void ata_irq(isr_params_t *params)
 {
     struct ata_channel *ch = &channels[params->vector == ATA_VECTOR_BASE + ATA_IRQ_PRIMARY ? 0 : 1];
 
-    inb(ch->io + ATA_REG_STATUS);
+    ata_io->in8(ch->io + ATA_REG_STATUS);
     ch->irqs++;
     wq_wake_all(&ch->wq);
 }
@@ -496,12 +525,12 @@ static uint8_t ata_program(const struct ata_drive *d, uint64_t lba, uint32_t cou
     uint8_t slave = d->slave ? ATA_DRIVE_SLAVE : 0;
 
     if (lba + count <= ATA_LBA28_SECTORS) {
-        outb(ch->io + ATA_REG_DRIVE,
+        ata_io->out8(ch->io + ATA_REG_DRIVE,
              (uint8_t)(ATA_DRIVE_SELECT | ATA_DRIVE_LBA | slave | ((lba >> 24) & 0x0F)));
-        outb(ch->io + ATA_REG_SECCOUNT, count == ATA_MAX_SECTORS_PER_CMD ? 0 : (uint8_t)count);
-        outb(ch->io + ATA_REG_LBA_LOW, (uint8_t)lba);
-        outb(ch->io + ATA_REG_LBA_MID, (uint8_t)(lba >> 8));
-        outb(ch->io + ATA_REG_LBA_HIGH, (uint8_t)(lba >> 16));
+        ata_io->out8(ch->io + ATA_REG_SECCOUNT, count == ATA_MAX_SECTORS_PER_CMD ? 0 : (uint8_t)count);
+        ata_io->out8(ch->io + ATA_REG_LBA_LOW, (uint8_t)lba);
+        ata_io->out8(ch->io + ATA_REG_LBA_MID, (uint8_t)(lba >> 8));
+        ata_io->out8(ch->io + ATA_REG_LBA_HIGH, (uint8_t)(lba >> 16));
         if (dma) {
             return write ? ATA_CMD_WRITE_DMA : ATA_CMD_READ_DMA;
         }
@@ -509,15 +538,15 @@ static uint8_t ata_program(const struct ata_drive *d, uint64_t lba, uint32_t cou
     }
     /* The 48-bit form: each register is written twice, the high byte first,
        and the drive register has no address bits. */
-    outb(ch->io + ATA_REG_DRIVE, (uint8_t)(ATA_DRIVE_SELECT | ATA_DRIVE_LBA | slave));
-    outb(ch->io + ATA_REG_SECCOUNT, (uint8_t)(count >> 8));
-    outb(ch->io + ATA_REG_LBA_LOW, (uint8_t)(lba >> 24));
-    outb(ch->io + ATA_REG_LBA_MID, (uint8_t)(lba >> 32));
-    outb(ch->io + ATA_REG_LBA_HIGH, (uint8_t)(lba >> 40));
-    outb(ch->io + ATA_REG_SECCOUNT, (uint8_t)count);
-    outb(ch->io + ATA_REG_LBA_LOW, (uint8_t)lba);
-    outb(ch->io + ATA_REG_LBA_MID, (uint8_t)(lba >> 8));
-    outb(ch->io + ATA_REG_LBA_HIGH, (uint8_t)(lba >> 16));
+    ata_io->out8(ch->io + ATA_REG_DRIVE, (uint8_t)(ATA_DRIVE_SELECT | ATA_DRIVE_LBA | slave));
+    ata_io->out8(ch->io + ATA_REG_SECCOUNT, (uint8_t)(count >> 8));
+    ata_io->out8(ch->io + ATA_REG_LBA_LOW, (uint8_t)(lba >> 24));
+    ata_io->out8(ch->io + ATA_REG_LBA_MID, (uint8_t)(lba >> 32));
+    ata_io->out8(ch->io + ATA_REG_LBA_HIGH, (uint8_t)(lba >> 40));
+    ata_io->out8(ch->io + ATA_REG_SECCOUNT, (uint8_t)count);
+    ata_io->out8(ch->io + ATA_REG_LBA_LOW, (uint8_t)lba);
+    ata_io->out8(ch->io + ATA_REG_LBA_MID, (uint8_t)(lba >> 8));
+    ata_io->out8(ch->io + ATA_REG_LBA_HIGH, (uint8_t)(lba >> 16));
     if (dma) {
         return write ? ATA_CMD_WRITE_DMA_EXT : ATA_CMD_READ_DMA_EXT;
     }
@@ -553,10 +582,10 @@ static int ata_dma_transfer(struct ata_drive *d, uint64_t lba, uint32_t count, v
     if (ata_wait_not_busy(ch) != 0) {
         return -EIO;
     }
-    outb(ch->bm + ATA_BM_CMD, 0);
-    outb(ch->bm + ATA_BM_STATUS, ATA_BM_ERROR | ATA_BM_INTR);
-    outd(ch->bm + ATA_BM_PRD, (uint32_t)(uintptr_t)&ch->prd);
-    outb(ch->bm + ATA_BM_CMD, write ? 0 : ATA_BM_READ);
+    ata_io->out8(ch->bm + ATA_BM_CMD, 0);
+    ata_io->out8(ch->bm + ATA_BM_STATUS, ATA_BM_ERROR | ATA_BM_INTR);
+    ata_io->out32(ch->bm + ATA_BM_PRD, (uint32_t)(uintptr_t)&ch->prd);
+    ata_io->out8(ch->bm + ATA_BM_CMD, write ? 0 : ATA_BM_READ);
     /* From the command to the engine's start with interrupts off: a drive
        that has the command and not the engine shows DRQ and waits, and a
        caller that cannot sleep, arriving on a tick between the two, would
@@ -567,12 +596,12 @@ static int ata_dma_transfer(struct ata_drive *d, uint64_t lba, uint32_t count, v
         return write ? -EPERM : -EIO;
     }
     ata_settle(ch);
-    outb(ch->bm + ATA_BM_CMD, (uint8_t)((write ? 0 : ATA_BM_READ) | ATA_BM_START));
+    ata_io->out8(ch->bm + ATA_BM_CMD, (uint8_t)((write ? 0 : ATA_BM_READ) | ATA_BM_START));
     kirq_restore(flags);
     rc = ata_wait_ready(ch);
-    status = inb(ch->bm + ATA_BM_STATUS);
-    outb(ch->bm + ATA_BM_CMD, 0);
-    outb(ch->bm + ATA_BM_STATUS, ATA_BM_ERROR | ATA_BM_INTR);
+    status = ata_io->in8(ch->bm + ATA_BM_STATUS);
+    ata_io->out8(ch->bm + ATA_BM_CMD, 0);
+    ata_io->out8(ch->bm + ATA_BM_STATUS, ATA_BM_ERROR | ATA_BM_INTR);
     if (rc != 0 || (status & ATA_BM_ERROR)) {
         return -EIO;
     }
@@ -626,7 +655,7 @@ static int ata_read_on(struct ata_drive *d, uint64_t lba, uint32_t count, void *
                 kirq_restore(flags);
                 return -EIO;
             }
-            insw(ch->io + ATA_REG_DATA, out, ATA_WORDS_PER_SECTOR);
+            ata_io->ins16(ch->io + ATA_REG_DATA, out, ATA_WORDS_PER_SECTOR);
             out += BLOCK_SECTOR_SIZE;
         }
         kirq_restore(flags);
@@ -692,7 +721,7 @@ static int ata_write_on(struct ata_drive *d, uint64_t lba, uint32_t count, const
                     kirq_restore(flags);
                     return -EIO;
                 }
-                outsw(ch->io + ATA_REG_DATA, in, ATA_WORDS_PER_SECTOR);
+                ata_io->outs16(ch->io + ATA_REG_DATA, in, ATA_WORDS_PER_SECTOR);
                 in += BLOCK_SECTOR_SIZE;
             }
             if (ata_wait_ready(ch) != 0) {
@@ -759,30 +788,30 @@ static int ata_identify(struct ata_drive *d, uint16_t *identify)
     struct ata_channel *ch = d->channel;
     uint8_t status;
 
-    outb(ch->io + ATA_REG_DRIVE, (uint8_t)(ATA_DRIVE_SELECT | (d->slave ? ATA_DRIVE_SLAVE : 0)));
+    ata_io->out8(ch->io + ATA_REG_DRIVE, (uint8_t)(ATA_DRIVE_SELECT | (d->slave ? ATA_DRIVE_SLAVE : 0)));
     ata_settle(ch);
-    outb(ch->io + ATA_REG_SECCOUNT, 0);
-    outb(ch->io + ATA_REG_LBA_LOW, 0);
-    outb(ch->io + ATA_REG_LBA_MID, 0);
-    outb(ch->io + ATA_REG_LBA_HIGH, 0);
+    ata_io->out8(ch->io + ATA_REG_SECCOUNT, 0);
+    ata_io->out8(ch->io + ATA_REG_LBA_LOW, 0);
+    ata_io->out8(ch->io + ATA_REG_LBA_MID, 0);
+    ata_io->out8(ch->io + ATA_REG_LBA_HIGH, 0);
     if (!ata_command(ch, ATA_CMD_IDENTIFY)) {
         return -1;
     }
     ata_settle(ch);
-    status = inb(ch->io + ATA_REG_STATUS);
+    status = ata_io->in8(ch->io + ATA_REG_STATUS);
     if (status == 0 || status == 0xFF) {
         return -1;
     }
     if (ata_wait_not_busy(ch) != 0) {
         return -1;
     }
-    if (inb(ch->io + ATA_REG_LBA_MID) != 0 || inb(ch->io + ATA_REG_LBA_HIGH) != 0) {
+    if (ata_io->in8(ch->io + ATA_REG_LBA_MID) != 0 || ata_io->in8(ch->io + ATA_REG_LBA_HIGH) != 0) {
         return -1;
     }
     if (ata_wait_data(ch) != 0) {
         return -1;
     }
-    insw(ch->io + ATA_REG_DATA, identify, ATA_WORDS_PER_SECTOR);
+    ata_io->ins16(ch->io + ATA_REG_DATA, identify, ATA_WORDS_PER_SECTOR);
     if ((identify[106] & 0x4000u) != 0 && (identify[106] & 0x1000u) != 0) {
         klog(KLOG_ERR, "ata", "%s %s: refused: the logical sector is not 512 bytes", ch->name,
              d->slave ? "slave" : "master");
@@ -870,7 +899,7 @@ int ata_init(void)
            its interrupt, and the router's vector for its line takes it. */
         wait_queue_init(&ch->wq);
         register_isr_handler((uint8_t)(ATA_VECTOR_BASE + ch->irq), ata_irq, "ata");
-        outb(ch->ctrl, 0x00);
+        ata_io->out8(ch->ctrl, 0x00);
         for (s = 0; s < 2; s++) {
             struct ata_drive *d = &drives[c * 2 + s];
 
