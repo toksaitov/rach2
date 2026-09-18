@@ -170,6 +170,18 @@ void block_count_command(void);
 void block_count_flush(void);
 
 /**
+ * The drivers' waits: a poll is one read of a status register while a
+ * command is in flight, a wait tick one tick a caller slept for one. A
+ * driver that spins reads the status thousands of times a command; one that
+ * sleeps reads it a few times and is woken. `/proc/disk` prints both, so a
+ * test can require the sleep and not the seconds.
+ */
+uint64_t block_polls(void);
+uint64_t block_wait_ticks(void);
+void block_count_poll(void);
+void block_count_wait_tick(void);
+
+/**
  * A partition: the sector range `[start_lba, start_lba + sector_count)` of a
  * backing device, presented as its own `block_device`.
  *
@@ -327,6 +339,16 @@ int block_device_holds(block_device_t *device);
 
 /** Advance the request deadlines; the timer calls it once per tick. */
 void block_request_tick(void);
+
+/** Quarantines made, callers released with EIO, and the tick of the last
+ * release, cumulative since boot, for /proc/disk. */
+uint32_t block_quarantines(void);
+uint32_t block_releases(void);
+uint32_t block_release_tick(void);
+
+/** Answers the lag device delivered after their lag, cumulative, for
+ * /proc/disk: a probe that reads sixteen pages through it expects sixteen. */
+uint32_t block_lag_completions(void);
 
 /**
  * Read `rach2.blockpool` and set the limit on live requests, once, before

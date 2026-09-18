@@ -195,6 +195,29 @@ uint64_t block_flushes(void)
     return flush_count;
 }
 
+static uint64_t poll_count;
+static uint64_t wait_tick_count;
+
+void block_count_poll(void)
+{
+    poll_count++;
+}
+
+void block_count_wait_tick(void)
+{
+    wait_tick_count++;
+}
+
+uint64_t block_polls(void)
+{
+    return poll_count;
+}
+
+uint64_t block_wait_ticks(void)
+{
+    return wait_tick_count;
+}
+
 block_device_t *block_submitter(block_device_t *dev)
 {
     while (dev && dev->submit == block_partition_submit) {

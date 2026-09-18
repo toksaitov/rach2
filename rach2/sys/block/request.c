@@ -70,6 +70,12 @@ static uint32_t next_generation;   /* no two live requests share one */
 static wait_queue_t pool_wq; /* woken on any completion, freed request or quarantine */
 static volatile uint32_t req_ticks;
 static uint32_t quarantined_count;
+/* Cumulative, for /proc/disk: quarantines made, callers released with EIO
+ * by a deadline or a stalled device, and the tick of the last release, so a
+ * test can require two callers to have been released on one tick. */
+static uint32_t quarantine_total;
+static uint32_t release_total;
+static uint32_t release_tick;
 static uint32_t pool_size;       /* the limit: REQ_LIMIT, or rach2.blockpool=N */
 static uint32_t device_cap;      /* the most requests one device may hold */
 
@@ -327,6 +333,10 @@ static struct block_request *req_take(block_device_t *device, int write, uint64_
         int share_taken;
 
         if (owner->flags & BLOCK_STALLED) {
+            if (waited) {
+                release_total++;
+                release_tick = req_ticks;
+            }
             irq_restore(flags);
             klog(KLOG_WARN, "block", "device stalled: %s",
                  waited ? "waiter released with EIO" : "request refused");
@@ -436,6 +446,8 @@ static int req_run_one(block_device_t *device, int write, uint64_t lba, uint32_t
     /* Quarantined: the device still owns the page, and the request is the
      * late completion's to free. */
     if (r->state == BLOCK_REQ_QUARANTINED) {
+        release_total++;
+        release_tick = req_ticks;
         req_let_go(r, 1);
         irq_restore(flags);
         return -EIO;
@@ -563,6 +575,8 @@ int block_flush(block_device_t *device)
     }
     flags = irq_save();
     if (r->state == BLOCK_REQ_QUARANTINED) {
+        release_total++;
+        release_tick = req_ticks;
         req_let_go(r, 1);
         irq_restore(flags);
         return -EIO;
@@ -711,6 +725,21 @@ static int mark_stalled(void)
     return marked;
 }
 
+uint32_t block_quarantines(void)
+{
+    return quarantine_total;
+}
+
+uint32_t block_releases(void)
+{
+    return release_total;
+}
+
+uint32_t block_release_tick(void)
+{
+    return release_tick;
+}
+
 void block_request_tick(void)
 {
     struct block_request *r;
@@ -734,6 +763,7 @@ void block_request_tick(void)
          * so the late completion matches. */
         r->state = BLOCK_REQ_QUARANTINED;
         quarantined_count++;
+        quarantine_total++;
         quarantined++;
     }
     if (overdue) {

@@ -12,4 +12,7 @@
  */
 int ata_init(void);
 
+/** The tick's call: the channels' clocks and the sleepers' wake. */
+void ata_tick(void);
+
 #endif

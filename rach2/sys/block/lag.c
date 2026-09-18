@@ -49,6 +49,7 @@ static block_device_t *lag_backing;
 static struct lag_entry queue[LAG_QUEUE];
 static uint32_t lag_ticks;
 static uint32_t lag_delay;
+static uint32_t lag_completions; /* answers delivered after their lag, for /proc/disk */
 static uint32_t fail_write_at; /* rach2.blockfail=N: the Nth write answers EIO */
 static uint32_t writes_seen;
 static block_device_t dead_device; /* rach2.blockdead=P: the partition's own device */
@@ -146,6 +147,7 @@ void block_lag_tick(void)
         if (!e->delivered) {
             e->delivered = 1;
             e->due = lag_ticks + 2;
+            lag_completions++;
             if (e->flush) {
                 klog(KLOG_INFO, "block", "lag: flush answered");
             } else if (!r->write && e->status == 0) {
@@ -157,6 +159,11 @@ void block_lag_tick(void)
         e->used = 0;
         block_request_complete(r, e->generation, -EIO);
     }
+}
+
+uint32_t block_lag_completions(void)
+{
+    return lag_completions;
 }
 
 block_device_t *block_lag_backing(block_device_t *dev)

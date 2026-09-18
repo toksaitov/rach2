@@ -153,6 +153,18 @@ int diskinfo_format(const struct diskinfo *d, char *buf, int cap)
     put_dec(buf, &n, cap, block_commands());
     put(buf, &n, cap, "\ndisk-flushes ");
     put_dec(buf, &n, cap, block_flushes());
+    put(buf, &n, cap, "\ndisk-polls ");
+    put_dec(buf, &n, cap, block_polls());
+    put(buf, &n, cap, "\ndisk-wait-ticks ");
+    put_dec(buf, &n, cap, block_wait_ticks());
+    put(buf, &n, cap, "\ndisk-quarantines ");
+    put_dec(buf, &n, cap, block_quarantines());
+    put(buf, &n, cap, "\ndisk-releases ");
+    put_dec(buf, &n, cap, block_releases());
+    put(buf, &n, cap, "\ndisk-release-tick ");
+    put_dec(buf, &n, cap, block_release_tick());
+    put(buf, &n, cap, "\nlag-completions ");
+    put_dec(buf, &n, cap, block_lag_completions());
     put(buf, &n, cap, "\ncache-hits ");
     put_dec(buf, &n, cap, bcache_stat_hits());
     put(buf, &n, cap, "\ncache-fills ");

@@ -80,7 +80,7 @@
  * refused with `-EOVERFLOW` rather than served short.
  */
 #define PROCFS_MAX_DISK \
-    (768 + DISKINFO_DISKS_BYTES) /* diskinfo_format's widest record, then the disks */
+    (DISKINFO_RECORD_BYTES + DISKINFO_DISKS_BYTES) /* the widest record, then the disks */
 
 /* The header line of each network table. */
 #define PROCFS_NETROUTE_HEADER                    \

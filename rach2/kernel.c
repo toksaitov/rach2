@@ -44,6 +44,7 @@
 #include "sys/usb/usb.h"
 #include "sys/block/block.h"
 #include "sys/block/ahci.h"
+#include "sys/block/ata.h"
 #include "sys/display/vga_text.h"
 #include "sys/audio/audio.h"
 #include "sys/audio/audio_debug.h"
@@ -256,6 +257,7 @@ static void timer_handler(isr_params_t *params)
     usb_poll();
     block_lag_tick();
     block_request_tick();
+    ata_tick();
     tty_console_poll();
 
     sched_preempt();

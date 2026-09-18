@@ -51,6 +51,36 @@ uint64_t block_flushes(void)
     return 0;
 }
 
+uint64_t block_polls(void)
+{
+    return 0;
+}
+
+uint64_t block_wait_ticks(void)
+{
+    return 0;
+}
+
+uint32_t block_quarantines(void)
+{
+    return 0;
+}
+
+uint32_t block_releases(void)
+{
+    return 0;
+}
+
+uint32_t block_release_tick(void)
+{
+    return 0;
+}
+
+uint32_t block_lag_completions(void)
+{
+    return 0;
+}
+
 uint64_t devfs_raw_calls(void)
 {
     /* The rendered text has a live count; the fixture pins it so the
@@ -152,7 +182,7 @@ int main(void)
 {
     static uint16_t id[256];
     char out[64];
-    char buf[512];
+    char buf[DISKINFO_RECORD_BYTES];
     struct diskinfo d;
     int i;
 
@@ -243,21 +273,36 @@ int main(void)
     d.state = DISKINFO_NOT_ASKED;
     d.driver = "none";
     diskinfo_format(&d, buf, (int)sizeof(buf));
-    CHECK(strcmp(buf, "state not-asked\ndriver none\npolicy read-write\ndisk-commands 0\n"
-                      "disk-flushes 0\ncache-hits 0\ncache-fills 0\ncache-waits 0\n") == 0,
-          "a kernel that was never asked says so and stops there");
+    CHECK(
+        strcmp(
+            buf,
+            "state not-asked\ndriver none\npolicy read-write\ndisk-commands 0\n"
+            "disk-flushes 0\ndisk-polls 0\ndisk-wait-ticks 0\ndisk-quarantines 0\ndisk-releases 0\n"
+            "disk-release-tick 0\nlag-completions 0\ncache-hits 0\ncache-fills 0\ncache-waits "
+            "0\n") == 0,
+        "a kernel that was never asked says so and stops there");
 
     d.state = DISKINFO_NO_DEVICE;
     diskinfo_format(&d, buf, (int)sizeof(buf));
-    CHECK(strcmp(buf, "state no-device\ndriver none\npolicy read-write\ndisk-commands 0\n"
-                      "disk-flushes 0\ncache-hits 0\ncache-fills 0\ncache-waits 0\n") == 0,
-          "a kernel that asked and got nothing says a different thing");
+    CHECK(
+        strcmp(
+            buf,
+            "state no-device\ndriver none\npolicy read-write\ndisk-commands 0\n"
+            "disk-flushes 0\ndisk-polls 0\ndisk-wait-ticks 0\ndisk-quarantines 0\ndisk-releases 0\n"
+            "disk-release-tick 0\nlag-completions 0\ncache-hits 0\ncache-fills 0\ncache-waits "
+            "0\n") == 0,
+        "a kernel that asked and got nothing says a different thing");
 
     policy_now = DISKCMD_READ_ONLY;
     diskinfo_format(&d, buf, (int)sizeof(buf));
-    CHECK(strcmp(buf, "state no-device\ndriver none\npolicy read-only\ndisk-commands 0\n"
-                      "disk-flushes 0\ncache-hits 0\ncache-fills 0\ncache-waits 0\n") == 0,
-          "the file names the build policy the kernel is running");
+    CHECK(
+        strcmp(
+            buf,
+            "state no-device\ndriver none\npolicy read-only\ndisk-commands 0\n"
+            "disk-flushes 0\ndisk-polls 0\ndisk-wait-ticks 0\ndisk-quarantines 0\ndisk-releases 0\n"
+            "disk-release-tick 0\nlag-completions 0\ncache-hits 0\ncache-fills 0\ncache-waits "
+            "0\n") == 0,
+        "the file names the build policy the kernel is running");
     policy_now = DISKCMD_READ_WRITE;
 
     d.state = DISKINFO_PRESENT;
