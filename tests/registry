@@ -20,7 +20,7 @@
 # Order is the schedule order: the pool starts at the top, and a pool finishes
 # when its longest member does, so the long suites are listed first.
 install|qemu-system-i386,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full
-selfbuild|qemu-system-i386,mformat,mmd,mcopy|full
+selfbuild|qemu-system-i386,mformat,mmd,mcopy|full|selfbuild-test*,selfbuild.*,selfbuild/*
 installer-repair|qemu-system-i386,shasum|full
 installer|qemu-system-i386,shasum,ssh,mformat,mcopy,mtype|full|installer-test*,installer.*,installer/*
 menu|qemu-system-i386,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full
@@ -86,7 +86,7 @@ disk-ahci|qemu-system-i386|core
 grub|qemu-system-i386,mformat,mmd,mcopy|core
 disk-q35|qemu-system-i386|full
 doom|qemu-system-i386|full
-disk|qemu-system-i386|core
+disk|qemu-system-i386|core|disk-test.*,disk.*,disk/*,wide-test.*
 diskpolicy|qemu-system-i386|full
 console|qemu-system-i386|core
 fpu|qemu-system-i386|core
