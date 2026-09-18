@@ -390,6 +390,7 @@ grep -q "disk: the MBR hashes to $mbr_sum" "$ACCEPT_LOG" \
 # directory made under build/tests changes that directory's time, which the
 # test image depends on, and a pooled suite would restage it.
 ACCEPT_ROOT=$(mktemp -d "$OUT.accept.XXXXXX")
+trap 'cleanup; rm -rf "$ACCEPT_ROOT"' EXIT
 ACCEPT_COPY="$ACCEPT_ROOT/tests/system/accept"
 mkdir -p "$ACCEPT_COPY"
 for directory in build krffs; do
@@ -397,7 +398,6 @@ for directory in build krffs; do
 done
 cp "$REPO/tests/system/accept/metal_accept.sh" "$ACCEPT_COPY/original.sh"
 cp "$REPO/tests/system/accept/su_command.sh" "$ACCEPT_COPY/su_command.sh"
-trap 'cleanup; cp "$ACCEPT_COPY/original.sh" "$ACCEPT_COPY/metal_accept.sh"' EXIT
 # shellcheck disable=SC2016 # Match the guest variable in the private source.
 sed 's@/bin/busybox dd if=/dev/disk0 of="\$f" bs=512 count=1@/bin/busybox dd if=/dev/disk0 of="$f" bs=512 count=0@' \
     "$ACCEPT_COPY/original.sh" > "$ACCEPT_COPY/metal_accept.sh"
@@ -434,5 +434,4 @@ done
 echo "metal-test: the live boot log retains the early inventory after acceptance traffic: OK"
 
 cleanup_boot
-rm -rf "$ACCEPT_ROOT"
 echo "metal-test: PASS"
