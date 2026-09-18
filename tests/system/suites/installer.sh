@@ -466,15 +466,19 @@ mark "row 5"
 #         image's demonstration keys are not this machine's. The SSH server is
 #         started by `init` and not by hand, which is what puts the policy the
 #         installer wrote under test: without it dropbear runs with `-g` and
-#         refuses root a password. ----
+#         refuses root a password. The machine stays up until the attempts
+#         are over: the last of them writes a token on the machine's console,
+#         which ends the harness's run, so the wait is for that token and not
+#         for a number of seconds, which a set's factor would stretch past the
+#         runner's idle limit. ----
 rm -f "$KNOWN"
 LOG6="$DIR/ssh.log"
 "$HARNESS" --bios --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-drive --qemu-arg="file=$DIR/one.img,format=raw,if=ide,index=0,media=disk" \
     --net "user,id=net0,hostfwd=tcp::$PORT-:22" --device "rtl8139,netdev=net0" \
-    --timeout 300 --steptmo 120 --ok "SSHREADY" --log "$LOG6" \
+    --timeout 300 --steptmo 120 --ok "SSHDONE" --log "$LOG6" \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$NEWPASS" \
-    "expect=# " "send=echo SSH\"\"READY" "expect=SSHREADY" until=90 \
+    "expect=# " "send=echo SSH\"\"READY" "expect=SSHREADY" "expect=SSHDONE" \
     > "$LOG6.harness" 2>&1 &
 QPID=$!
 
@@ -508,6 +512,18 @@ case "$OUT" in
     *DEMOKEY*) bad "the image's demonstration key still opens root on the installed machine" ;;
     *"Permission denied"*) note "and the image's own key is refused for root: OK" ;;
     *) bad "the demonstration key's attempt neither ran nor was refused: $OUT" ;;
+esac
+# The attempts are over: root writes the token on the console, which ends
+# the harness's run. A machine that cannot be told is stopped, so the
+# failure is reported now and not at the run's limit.
+OUT=$(RACH2_PASSWORD="$NEWPASS" "$PTYDRIVE" --rows 40 --cols 100 --timeout 60 -- \
+    ssh -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
+    -o "ConnectTimeout=$(scaled 20)" -o PubkeyAuthentication=no \
+    -o PreferredAuthentications=password -o NumberOfPasswordPrompts=3 -tt \
+    -p "$PORT" root@localhost 'echo SSH""DONE > /dev/console; echo TOLD' 2>&1 || true)
+case "$OUT" in
+    *TOLD*) ;;
+    *) kill -TERM "$QPID" 2>/dev/null; bad "the installed machine could not be told the attempts are over: $OUT" ;;
 esac
 wait "$QPID" || bad "the installed machine did not stay up for the SSH attempts"
 
