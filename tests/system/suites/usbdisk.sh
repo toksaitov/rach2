@@ -362,7 +362,9 @@ if run "$DIR/stick-recovery.img" --kernel "$RKERNEL" --initrd "$RIMAGE" \
     "expect=recovery image" "expect=~ #" \
     "send=yes RACH2RAW | head -c 4096 > /tmp/p; dd if=/tmp/p of=/dev/disk0 bs=512 seek=1000 2>&1; dd if=/dev/disk0 bs=512 skip=1000 count=8 2>/dev/null | cksum; cksum < /tmp/p; echo RAW\"\"DONE" \
     "expect=RAWDONE" \
-    "send=yes RACH2-BIG-PATTERN-LINE | head -c 32768 > /tmp/base; p() { printf PIECE-%03d- \$1; dd if=/tmp/base bs=32758 count=1 2>/dev/null; }; c0=\$($CMDS); i=0; while [ \$i -lt 128 ]; do p \$i > /tmp/blk; dd if=/tmp/blk of=/dev/disk0 bs=32k seek=\$((160 + i)) count=1 2>/dev/null; i=\$((i + 1)); done; sync; c1=\$($CMDS); dd if=/dev/disk0 bs=32k skip=160 count=128 2>/dev/null | cksum; c2=\$($CMDS); i=0; while [ \$i -lt 128 ]; do p \$i; i=\$((i + 1)); done | cksum; echo BIGCMDS \$((c1-c0)) \$((c2-c1)); echo BIG\"\"DONE" \
+    "send=yes RACH2-BIG-PATTERN-LINE | head -c 32768 > /tmp/base; p() { printf PIECE-%03d- \$1; dd if=/tmp/base bs=32758 count=1 2>/dev/null; }; c0=\$($CMDS); echo BIG\"\"START" "expect=BIGSTART" \
+    "send=i=0; while [ \$i -lt 128 ]; do p \$i > /tmp/blk; dd if=/tmp/blk of=/dev/disk0 bs=32k seek=\$((160 + i)) count=1 2>/dev/null; i=\$((i + 1)); done; sync; c1=\$($CMDS); echo BIG\"\"WROTE" "expect=BIGWROTE" \
+    "send=dd if=/dev/disk0 bs=32k skip=160 count=128 2>/dev/null | cksum; c2=\$($CMDS); i=0; while [ \$i -lt 128 ]; do p \$i; i=\$((i + 1)); done | cksum; echo BIGCMDS \$((c1-c0)) \$((c2-c1)); echo BIG\"\"DONE" \
     "expect=BIGDONE" > /dev/null 2>&1; then
     note "the recovery kernel wrote the stick raw: OK"
 else

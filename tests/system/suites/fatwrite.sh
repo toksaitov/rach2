@@ -122,7 +122,8 @@ if "$HARNESS" --kernel "$KERNEL" --initrd "$OSREAL" \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
     "expect=# " "send=mkdir /mnt && mount -t vfat /dev/disk0p2 /mnt && echo MOUNT\"\"ED" \
     "expect=MOUNTED" "send=cp /bin/busybox /mnt/bb && mkdir /mnt/d && mv /mnt/bb '/mnt/d/Busy Box' && echo hi > /mnt/d/h.txt && rm /mnt/renamed.txt && cmp '/mnt/d/Busy Box' /bin/busybox && echo SAME\"\"BYTES" \
-    "expect=SAMEBYTES" "send=A=\$(sed -n 's/^disk-commands //p' /proc/disk); dd if=/dev/zero of=/mnt/big.bin bs=64k count=64 2>/dev/null; sync; B=\$(sed -n 's/^disk-commands //p' /proc/disk); rm /mnt/big.bin; sync; C=\$(sed -n 's/^disk-commands //p' /proc/disk); echo COMMANDS \$((B-A)) \$((C-B)); echo COUNT\"\"ED" \
+    "expect=SAMEBYTES" "send=A=\$(sed -n 's/^disk-commands //p' /proc/disk); dd if=/dev/zero of=/mnt/big.bin bs=64k count=64 2>/dev/null; sync; B=\$(sed -n 's/^disk-commands //p' /proc/disk); echo BIG\"\"WRITTEN" \
+    "expect=BIGWRITTEN" "send=rm /mnt/big.bin; sync; C=\$(sed -n 's/^disk-commands //p' /proc/disk); echo COMMANDS \$((B-A)) \$((C-B)); echo COUNT\"\"ED" \
     "expect=COUNTED" "send=umount /mnt && echo UN\"\"MOUNTED" \
     "expect=UNMOUNTED" "send=echo BB\"\"DONE" "expect=BBDONE" > /dev/null 2>&1; then
     echo "fatwrite-test: BusyBox copies, moves, writes and removes on the volume: OK"

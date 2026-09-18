@@ -99,7 +99,9 @@ echo "ext2-test: rach2.root=ext2 mounts the first ext2 partition as the root, wr
 boot_root "$ROOT.cost.log" --ok "COSTDONE" \
     "send=dd if=/dev/zero of=/root/cost.bin bs=4096 count=1 2>/dev/null && sync && echo MADE\"\"IT" \
     "expect=MADEIT" \
-    "send=a=\$(grep ^disk-commands /proc/disk | cut -d' ' -f2); i=0; ok=1; while [ \$i -lt 50 ]; do dd if=/dev/zero of=/root/cost.bin bs=4096 count=1 conv=notrunc 2>/dev/null || ok=0; i=\$((i+1)); done; sync || ok=0; [ \$(wc -c < /root/cost.bin) -eq 4096 ] || ok=0; b=\$(grep ^disk-commands /proc/disk | cut -d' ' -f2); [ \$ok -eq 1 ] && echo COST=\$((b-a))" \
+    "send=a=\$(grep ^disk-commands /proc/disk | cut -d' ' -f2); i=0; ok=1; echo COST\"\"START" "expect=COSTSTART" \
+    "send=while [ \$i -lt 50 ]; do dd if=/dev/zero of=/root/cost.bin bs=4096 count=1 conv=notrunc 2>/dev/null || ok=0; i=\$((i+1)); done; sync || ok=0; echo COST\"\"WROTE" "expect=COSTWROTE" \
+    "send=[ \$(wc -c < /root/cost.bin) -eq 4096 ] || ok=0; b=\$(grep ^disk-commands /proc/disk | cut -d' ' -f2); [ \$ok -eq 1 ] && echo COST=\$((b-a))" \
     "expect=COST=" \
     "send=echo COST\"\"DONE" "expect=COSTDONE" || fail "the small-write cost boot"
 COST=$(grep -a "^COST=[0-9]" "$ROOT.cost.log" | head -1 | tr -d '\r' | cut -d= -f2)
@@ -120,7 +122,9 @@ echo "ext2-test: a 4 KiB rewrite costs the disk no more than five commands ($COS
 #      whole fifty and well inside the bound.
 boot_root "$ROOT.append.log" --ok "APPENDDONE" \
     "send=rm -f /root/grow.bin; sync; echo READY\"\"NOW" "expect=READYNOW" \
-    "send=a=\$(grep ^disk-commands /proc/disk | cut -d' ' -f2); i=0; ok=1; while [ \$i -lt 50 ]; do dd if=/dev/zero bs=4096 count=1 2>/dev/null >> /root/grow.bin || ok=0; i=\$((i+1)); done; sync || ok=0; [ \$(wc -c < /root/grow.bin) -eq 204800 ] || ok=0; b=\$(grep ^disk-commands /proc/disk | cut -d' ' -f2); [ \$ok -eq 1 ] && echo APPEND=\$((b-a))" \
+    "send=a=\$(grep ^disk-commands /proc/disk | cut -d' ' -f2); i=0; ok=1; echo APPEND\"\"START" "expect=APPENDSTART" \
+    "send=while [ \$i -lt 50 ]; do dd if=/dev/zero bs=4096 count=1 2>/dev/null >> /root/grow.bin || ok=0; i=\$((i+1)); done; sync || ok=0; echo APPEND\"\"WROTE" "expect=APPENDWROTE" \
+    "send=[ \$(wc -c < /root/grow.bin) -eq 204800 ] || ok=0; b=\$(grep ^disk-commands /proc/disk | cut -d' ' -f2); [ \$ok -eq 1 ] && echo APPEND=\$((b-a))" \
     "expect=APPEND=" \
     "send=echo APPEND\"\"DONE" "expect=APPENDDONE" || fail "the append cost boot"
 APPEND=$(grep -a "^APPEND=[0-9]" "$ROOT.append.log" | head -1 | tr -d '\r' | cut -d= -f2)
@@ -222,7 +226,8 @@ echo "ext2-test: a recovery boot without rach2.fsck leaves the disk as it was: O
     --drive "file=$ROOT,format=raw,if=ide,index=0,media=disk" --append "rach2.fsck" \
     --timeout 150 --steptmo 40 --ok "RECDONE" --log "$ROOT.recovery.log" \
     "expect=recovery image" "expect=~ #" \
-    "send=dd if=/dev/disk0p2 of=/tmp/s bs=512 count=1 skip=16383 && printf 'rach2 wrote this sector%%s' '' | dd of=/tmp/w bs=512 count=1 conv=sync 2>/dev/null && dd if=/tmp/w of=/dev/disk0p2 bs=512 count=1 seek=16383 && dd if=/dev/disk0p2 bs=512 count=1 skip=16383 | head -c 23 && dd if=/tmp/s of=/dev/disk0p2 bs=512 count=1 seek=16383 && echo BACK\"\"OK" \
+    "send=dd if=/dev/disk0p2 of=/tmp/s bs=512 count=1 skip=16383 && printf 'rach2 wrote this sector%%s' '' | dd of=/tmp/w bs=512 count=1 conv=sync 2>/dev/null && echo SAVED\"\"IT" "expect=SAVEDIT" \
+    "send=dd if=/tmp/w of=/dev/disk0p2 bs=512 count=1 seek=16383 && dd if=/dev/disk0p2 bs=512 count=1 skip=16383 | head -c 23 && dd if=/tmp/s of=/dev/disk0p2 bs=512 count=1 seek=16383 && echo BACK\"\"OK" \
     "expect=rach2 wrote this sector" "expect=BACKOK" "send=echo REC\"\"DONE" "expect=RECDONE" > /dev/null 2>&1 || fail "the recovery boot"
 grep -aq 'init: e2fsck: /dev/disk0p1: status 1' "$ROOT.recovery.log" || fail "e2fsck's repair of the root"
 grep -aq 'init: e2fsck: /dev/disk0p2: status 0' "$ROOT.recovery.log" || fail "e2fsck's pass over the second partition"

@@ -168,7 +168,7 @@ prefix works; one built for another target does not.
 * Check the dev-log index against the finished milestone directories.
 * Check `tests/registry` against `tests/system/suites.mk`: every suite has a target and every target is a suite.
 * Check that every product a `run-` target names is built by `prepare-all`.
-* Check the suites' waits and criteria with `verify/suitecheck.sh`: no `sleep` for a number of seconds, no `wait=` harness step, no upper bound on a duration in a probe, except an interval marked with a reason that `tests/system/intervals` lists.
+* Check the suites' waits and criteria with `verify/suitecheck.sh`: no `sleep` for a number of seconds, no `wait=` harness step, no typed line longer than the console keeps, no upper bound on a duration in a probe, except an interval marked with a reason that `tests/system/intervals` lists.
 
 The supporting files under `verify/` have narrower jobs:
 

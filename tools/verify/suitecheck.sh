@@ -9,6 +9,8 @@
 #
 #   * `sleep N` in a suite, on the host or typed into the guest
 #   * `wait=N`, a harness step that slept
+#   * a `send=` step whose text is longer than 240 characters: the console's
+#     line discipline keeps 255 of a line and drops the rest
 #   * an upper bound on a duration in a probe: `ms`, an identifier ending
 #     in `_ms`, `_MS` or `secs`, one with `elapsed` in it, or `took`, against
 #     a literal of three digits or more: `x < 3000`, `x <= 3000`, `x > 3000`,
@@ -68,6 +70,9 @@ scan() {
         if (kind == "suite") {
             if ($0 ~ /wait=[0-9]/) {
                 print file ":" NR ": a wait= step; wait for a token"
+            }
+            if (match($0, /"send=[^"]*"/) && RLENGTH - 7 > 240) {
+                print file ":" NR ": a typed line of " RLENGTH - 7 " characters; the console keeps 255"
             }
             if ($0 ~ /(^|[^A-Za-z_.\/-])sleep[ \t]+[0-9]/) {
                 refuse("a sleep for a number of seconds")
@@ -169,6 +174,10 @@ sleep 2' 'int x;' 'tests/system/suites/a.sh: the load runs for two seconds'
     case_ 1 waitmarked
     tree usleep 'usleep 200' 'int x;' ''
     case_ 0 usleep
+    tree longline "\"send=$(printf 'x%.0s' $(seq 1 250))\"" 'int x;' ''
+    case_ 1 longline
+    tree shortline "\"send=$(printf 'x%.0s' $(seq 1 200))\"" 'int x;' ''
+    case_ 0 shortline
     tree upper 'echo' 'if (ms < 3000) { fail(); }' ''
     case_ 1 upper
     tree upperle 'echo' 'if (took <= 1500) { fail(); }' ''
