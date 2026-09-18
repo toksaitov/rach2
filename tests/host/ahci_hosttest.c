@@ -327,6 +327,9 @@ void block_count_command(void)
 void block_count_flush(void)
 {}
 
+void block_count_poll(void)
+{}
+
 void block_count_batch(uint32_t sectors)
 {
     (void)sectors;

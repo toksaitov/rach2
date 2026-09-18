@@ -1045,6 +1045,7 @@ static int ahci_run_command(struct ahci_disk *d, uint8_t command, uint64_t lba, 
     /* The task file must be idle before a command issues (AHCI 5.5.1). */
     spin = AHCI_CMD_STEPS;
     while (ahci_read32(tfd_off) & (AHCI_PxTFD_BSY | AHCI_PxTFD_DRQ)) {
+        block_count_poll();
         if (--spin == 0) {
             return ahci_polled_failed(d);
         }
@@ -1060,6 +1061,7 @@ static int ahci_run_command(struct ahci_disk *d, uint8_t command, uint64_t lba, 
 
     spin = AHCI_CMD_STEPS;
     while (ahci_read32(ci_off) & (1u << AHCI_SLOT)) {
+        block_count_poll();
         if (ahci_read32(is_off) & AHCI_PxIS_FATAL) {
             return ahci_polled_failed(d);
         }
@@ -1208,6 +1210,7 @@ static void ahci_drain(struct ahci_disk *d)
 
         while ((ahci_read32(ci_off) & (1u << AHCI_SLOT)) &&
                !(ahci_read32(is_off) & AHCI_PxIS_FATAL)) {
+            block_count_poll();
             if (--spin == 0) {
                 break;
             }

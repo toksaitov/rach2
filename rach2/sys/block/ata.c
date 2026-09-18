@@ -419,7 +419,6 @@ void ata_tick(void)
 
         ch->ticks++;
         if (wq_active(&ch->wq)) {
-            block_count_wait_tick();
             wq_wake_all(&ch->wq);
         }
     }

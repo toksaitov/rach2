@@ -749,7 +749,14 @@ void block_request_tick(void)
 
     req_ticks++;
     for (r = reqs; r; r = r->next) {
-        if (r->state != BLOCK_REQ_IN_FLIGHT || (int32_t)(req_ticks - r->deadline) < 0) {
+        if (r->state != BLOCK_REQ_IN_FLIGHT) {
+            continue;
+        }
+        /* A tick a request spends in flight is a tick its caller waits;
+           the count, per command, is what the suites hold under a bound
+           on every device. */
+        block_count_wait_tick();
+        if ((int32_t)(req_ticks - r->deadline) < 0) {
             continue;
         }
         r->overdue++;
