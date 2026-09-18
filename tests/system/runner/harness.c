@@ -1461,17 +1461,34 @@ int main(int argc, char **argv)
                 step_failures++;
             trace("step %s %s consumed=%lu", step, seen ? "ok" : "fail", (unsigned long)consumed);
         } else if (strncmp(step, "execq=", 6) == 0) {
-            /* Run a probe, re-sending if the kernel shell drops the
-               command, and stop as soon as harness_exit stops QEMU. */
-            int tries = 0;
+            /* Run a probe and stop as soon as harness_exit stops QEMU, under
+               the step's limit. The command is typed again only while the
+               shell has printed nothing past its echo of the line for three
+               seconds, which is the shell dropping the command; a probe that
+               is running is not typed at twice, since the shell would run it
+               again when it ends. */
+            double step_end = now() + steptmo;
+            double sent = 0;
+            size_t mark = 0;
+            char line[512];
 
-            while (tries < (int)scaled(6.0) && child_poll() < 0) {
-                char line[512];
+            snprintf(line, sizeof(line), "exec %s", step + 6);
+            while (child_poll() < 0 && now() < step_end && now() < deadline) {
+                int lines = 0;
+                size_t i;
 
-                snprintf(line, sizeof(line), "exec %s", step + 6);
-                send_line(line);
-                pump(now() + 3.0);
-                tries++;
+                /* The shell's echo of the line is one line ending; a
+                   second is the program's, or the shell's answer. */
+                for (i = mark; i < buf_len; i++) {
+                    if (buf[i] == '\n')
+                        lines++;
+                }
+                if (sent == 0 || (lines < 2 && now() - sent >= 3.0)) {
+                    send_line(line);
+                    sent = now();
+                    mark = buf_len;
+                }
+                pump(now() + 0.5);
             }
         } else {
             fprintf(stderr, "unknown step: %s\n", step);
