@@ -178,6 +178,10 @@ if ! wait_serial "$TEST_IMAGE.fork.log" "$PLAIN 0" 30; then
     echo "exitline-test: not the probe's own" >&2
     exit 1
 fi
+# The hand-back line follows the probe's exit line, so the machine is given
+# time to print it before it is stopped: a stop on the exit line alone lost
+# the hand-back under KVM, where the kill landed between the two.
+wait_serial "$TEST_IMAGE.fork.log" "returning to kernel shell" 30 || true
 stop
 if ! grep -qE "^<[0-9]>\[[0-9]+\.[0-9][0-9]\] sys_exit: init process [0-9]+ exited with status 0, returning to kernel shell" \
         "$TEST_IMAGE.fork.log"; then
