@@ -7,8 +7,9 @@
  * with its own number, then stats it, seeks to its end and back, reads
  * blocks near the end and at the 4 GiB line, opens a second descriptor
  * and a duplicate of the first to see one offset shared and one apart,
- * truncates it to three quarters, appends a mebibyte at the end and reads
- * that back, and reports the write's rate.
+ * truncates it to three quarters, which may take a few disk commands per
+ * pointer block freed and not one per block, appends a mebibyte at the
+ * end and reads that back, and reports the write's rate.
  *
  * `verify MIB`: after a remount, reads the whole of `/big/big.bin` and
  * checks every block's number against the size `write` left, three
@@ -300,6 +301,40 @@ static void check_block(int fd, u64 at, const char *what)
     }
 }
 
+/* The disk layer's command count from /proc/disk, or -1. */
+static int disk_commands(void)
+{
+    static char text[2048];
+    const char *label = "disk-commands ";
+    int fd = sys3(SYS_OPEN, (int)"/proc/disk", O_RDONLY, 0);
+    int n, i, j;
+
+    if (fd < 0) {
+        return -1;
+    }
+    n = sys3(SYS_READ, fd, (int)text, sizeof(text) - 1);
+    sys1(SYS_CLOSE, fd);
+    if (n <= 0) {
+        return -1;
+    }
+    text[n] = 0;
+    for (i = 0; text[i]; i++) {
+        for (j = 0; label[j] && text[i + j] == label[j]; j++) {
+        }
+        if (!label[j]) {
+            int v = 0;
+
+            i += j;
+            while (text[i] >= '0' && text[i] <= '9') {
+                v = v * 10 + (text[i] - '0');
+                i++;
+            }
+            return v;
+        }
+    }
+    return -1;
+}
+
 static void write_mode(u64 mib)
 {
     u64 total = mib << 20, done = 0, three_quarters = (total >> 2) * 3;
@@ -307,6 +342,7 @@ static void write_mode(u64 mib)
        a measurement, is probed at its middle instead. */
     u64 line = total > ((u64)1 << 32) + CHUNK ? (u64)1 << 32 : total >> 1;
     int fd, fd2, fd3;
+    int before, after;
     unsigned t0, t1;
     long long got;
 
@@ -332,10 +368,12 @@ static void write_mode(u64 mib)
     put("bigfile: rate: ");
     put_u64(t1 > t0 ? (unsigned)mib / (t1 - t0) : (unsigned)mib);
     put(" MiB/s\n");
+    put("bigfile: synced\n");
     got = size_of(fd);
     if (got != (long long)total) {
         fail_with("the size after the write", got);
     }
+    put("bigfile: sized\n");
     got = seek(fd, 0, SEEK_END);
     if (got != (long long)total) {
         fail_with("a seek to the end", got);
@@ -383,8 +421,25 @@ static void write_mode(u64 mib)
     sys1(SYS_CLOSE, fd3);
     sys1(SYS_CLOSE, fd2);
     /* Three quarters, then a mebibyte appended at the end. */
+    put("bigfile: read back\n");
+    /* The shrink frees a quarter of the file. A driver that frees its
+       blocks in a batch needs a few requests per pointer block of 4 MiB
+       and a few for the bitmaps; one that writes each block's pointer, bit
+       and descriptor through needs thousands, and took a hundred seconds
+       for 64 MiB on an emulated disk. */
+    before = disk_commands();
     if (ftruncate64(fd, three_quarters) != 0) {
         fail("the truncate to three quarters");
+    }
+    after = disk_commands();
+    put("bigfile: truncated: ");
+    put_u64((u64)(after - before));
+    put(" commands\n");
+    if (before < 0 || after < 0) {
+        fail("reading /proc/disk around the truncate");
+    }
+    if ((u64)(after - before) > 8 * ((total - three_quarters) >> 22) + 64) {
+        fail_with("the truncate's commands", after - before);
     }
     got = size_of(fd);
     if (got != (long long)three_quarters) {
@@ -405,6 +460,7 @@ static void write_mode(u64 mib)
     if (sys1(SYS_FSYNC, fd) != 0) {
         fail("fsync after the append");
     }
+    put("bigfile: appended and synced\n");
     sys1(SYS_CLOSE, fd);
 }
 
