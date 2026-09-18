@@ -206,8 +206,11 @@ FPID=$DRIVE_FPID
 if drive_expect "Type 'help'" "$(scaled 60)"; then
     drive_type poweroff
 fi
-"$RUNUTIL" gone "$QPID" 60 || true
-if kill -0 "$QPID" 2>/dev/null; then
+# The wait's own verdict decides: it reports the machine ended as soon as
+# its process is a zombie, before this shell has reaped it, and a zombie can
+# still be signalled, so asking the process here called a machine that had
+# stopped one that had not, once under a loaded host.
+if ! "$RUNUTIL" gone "$QPID" 60; then
     kill -9 "$QPID" 2>/dev/null || true
     stop
     rm -f "$FEED"
