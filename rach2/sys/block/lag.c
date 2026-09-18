@@ -23,6 +23,7 @@
 #include "../lib/kstring.h"
 
 #include "../cmdline.h"
+#include "../lib/kirq.h"
 #include "../klog.h"
 #include "../lib/kerrno.h"
 
@@ -38,6 +39,7 @@ struct lag_entry {
     int delivered;
     int flush; /* a flush, recorded when answered */
     int used;
+    int ready; /* the transfer has run; the tick may deliver */
     /* A read lands here at submit and is copied into the request's page
      * only when the completion is delivered, so a kernel that copied out
      * before the completion would read what the page held before. */
@@ -56,25 +58,48 @@ static block_device_t dead_device; /* rach2.blockdead=P: the partition's own dev
 static uint64_t dead_start;        /* where that partition starts, or 0 for none */
 static int dead_set;
 
-/** Hold a flush, to be answered after the lag: nothing under it to flush. */
-static int lag_flush(block_device_t *device, struct block_request *request)
+/**
+ * Claim a free slot for `request` before anything runs for it.
+ *
+ * The claim comes first because a transfer can sleep in the driver under
+ * it, and a second caller entering meanwhile would otherwise find the same
+ * slot free, take it, and one of the two requests would never be answered.
+ * A claimed slot is not the tick's to deliver until `ready` is set.
+ */
+static struct lag_entry *lag_claim(struct block_request *request, int flush)
 {
+    uint32_t flags = kirq_save();
     int i;
 
-    (void)device;
     for (i = 0; i < LAG_QUEUE; i++) {
         if (!queue[i].used) {
+            queue[i].used = 1;
+            queue[i].ready = 0;
             queue[i].status = 0;
             queue[i].request = request;
             queue[i].generation = request->generation;
-            queue[i].due = lag_ticks + lag_delay;
             queue[i].delivered = 0;
-            queue[i].flush = 1;
-            queue[i].used = 1;
-            return 0;
+            queue[i].flush = flush;
+            kirq_restore(flags);
+            return &queue[i];
         }
     }
-    return -EIO;
+    kirq_restore(flags);
+    return NULL;
+}
+
+/** Hold a flush, to be answered after the lag: nothing under it to flush. */
+static int lag_flush(block_device_t *device, struct block_request *request)
+{
+    struct lag_entry *e = lag_claim(request, 1);
+
+    (void)device;
+    if (!e) {
+        return -EIO;
+    }
+    e->due = lag_ticks + lag_delay;
+    e->ready = 1;
+    return 0;
 }
 
 /** The never-answering device: every request is accepted and none ends. */
@@ -87,39 +112,30 @@ static int dead_submit(block_device_t *device, struct block_request *request)
 
 static int lag_submit(block_device_t *device, struct block_request *request)
 {
-    int i;
+    struct lag_entry *e = lag_claim(request, 0);
 
     (void)device;
-    for (i = 0; i < LAG_QUEUE; i++) {
-        if (!queue[i].used) {
-            /* The transfer runs now, polled, in the caller's context; only
-             * the answer is held back. The timer must not touch the disk:
-             * a polled ATA read inside the tick handler waits on a clock
-             * that cannot advance there. */
-            if (request->write && fail_write_at && ++writes_seen == fail_write_at) {
-                queue[i].status = -EIO; /* the write the boot option fails */
-            } else if (request->write) {
-                queue[i].status = lag_backing->write(lag_backing, request->lba,
-                                                     request->count,
-                                                     request->page);
-            } else {
-                /* The page is scrubbed so a copy-out before the completion
-                 * returns this and not what the page held before. */
-                k_memset(request->page, 0xEE, request->count * BLOCK_SECTOR_SIZE);
-                queue[i].status = lag_backing->read(lag_backing, request->lba,
-                                                    request->count,
-                                                    queue[i].staged);
-            }
-            queue[i].request = request;
-            queue[i].generation = request->generation;
-            queue[i].due = lag_ticks + lag_delay;
-            queue[i].delivered = 0;
-            queue[i].flush = 0;
-            queue[i].used = 1;
-            return 0;
-        }
+    if (!e) {
+        return -EIO;
     }
-    return -EIO;
+    /* The transfer runs now, in the caller's context, which the driver may
+     * put to sleep; only the answer is held back. The timer must not touch
+     * the disk: a polled ATA read inside the tick handler waits on a clock
+     * that cannot advance there. */
+    if (request->write && fail_write_at && ++writes_seen == fail_write_at) {
+        e->status = -EIO; /* the write the boot option fails */
+    } else if (request->write) {
+        e->status = lag_backing->write(lag_backing, request->lba, request->count,
+                                       request->page);
+    } else {
+        /* The page is scrubbed so a copy-out before the completion
+         * returns this and not what the page held before. */
+        k_memset(request->page, 0xEE, request->count * BLOCK_SECTOR_SIZE);
+        e->status = lag_backing->read(lag_backing, request->lba, request->count, e->staged);
+    }
+    e->due = lag_ticks + lag_delay;
+    e->ready = 1;
+    return 0;
 }
 
 void block_lag_tick(void)
@@ -134,7 +150,7 @@ void block_lag_tick(void)
         struct lag_entry *e = &queue[i];
         struct block_request *r;
 
-        if (!e->used || (int32_t)(lag_ticks - e->due) < 0) {
+        if (!e->used || !e->ready || (int32_t)(lag_ticks - e->due) < 0) {
             continue;
         }
         r = e->request;

@@ -78,6 +78,7 @@ The suite contains 73 native test programs.
 ### Processes, files, and I/O
 
 * `block_hosttest.c` checks partition-view bounds, LBA translation, zero-length rejection, and clamping to the backing device.
+* `lag_hosttest.c` runs the lag wrapper's queue with a backing device that enters the wrapper again from inside a transfer, which is what a caller put to sleep by the driver and overtaken by another looks like to the queue: both requests must be answered after the lag and once more with the duplicate's error, a read's page is scrubbed until its completion, a flush takes a slot the same way, and every slot is free at the end. The slot is claimed before the transfer; the committed wrapper before the claim answered one request of the two.
 * `diskcmd_hosttest.c` checks all 256 ATA command bytes under read-write and read-only policies; exactly four commands are allowed by the read-only policy.
 * `diskinfo_hosttest.c` checks ATA string decoding, control-byte filtering, 48-bit sector-count formatting, raw-window bounds, and `/proc/disk` rendering.
 * `elf_hosttest.c` checks that malformed ELF headers and load segments are rejected before page allocation. It also completes a second ELF load inside the first load's segment-read callback and checks that both retain their own segment addresses, program-header address and data.
