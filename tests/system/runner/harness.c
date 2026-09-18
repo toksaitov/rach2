@@ -1194,6 +1194,23 @@ int main(int argc, char **argv)
            machine to leave, so one that left already satisfies it. */
         if (child_poll() >= 0 && strncmp(step, "until=", 6) == 0)
             continue;
+        if (child_poll() >= 0 && strncmp(step, "expect=", 7) == 0) {
+            /* A token the machine printed on its way out satisfies the
+               step that waited for it: a probe's last lines and the exit
+               its kernel makes for it arrive together, and the output is
+               what the check is about. What the pipe still holds is read
+               first. */
+            struct regex re;
+            long end;
+
+            pump(now() + 0.05);
+            regex_compile(&re, step + 7);
+            end = regex_search(&re, buf, buf_len, consumed);
+            if (end >= 0) {
+                consumed = (size_t)end;
+                continue;
+            }
+        }
         if (child_poll() >= 0) {
             int left;
 

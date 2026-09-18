@@ -557,6 +557,29 @@ check "the harness preserves fast replies and consecutive tokens" 0 "$rc"
 ); rc=$?
 check "an until preserves a fast reply to the current command" 0 "$rc"
 
+# A machine that prints its last lines and leaves at once: the steps that
+# waited for those lines are satisfied by them, since the output is what the
+# check is about, and only a token that never came is a step that never ran.
+mkdir -p "$WORK/leaving"
+cat > "$WORK/leaving/qemu-system-i386" <<'LEAVING'
+#!/bin/sh
+printf 'READY\nFIRST\nLAST\n'
+exit 0
+LEAVING
+chmod +x "$WORK/leaving/qemu-system-i386"
+(
+    unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR
+    PATH="$WORK/leaving:$PATH" "$HARNESS_BIN" --kernel none --timeout 5 --steptmo 1 \
+        --ok LAST expect=READY expect=FIRST expect=LAST > /dev/null 2>&1
+); rc=$?
+check "the tokens a leaving machine printed satisfy the steps that waited for them" 0 "$rc"
+(
+    unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR
+    PATH="$WORK/leaving:$PATH" "$HARNESS_BIN" --kernel none --timeout 5 --steptmo 1 \
+        --ok LAST expect=READY expect=NEVER > /dev/null 2>&1
+); rc=$?
+check "and a token it never printed is a step that never ran" 1 "$([ "$rc" -ne 0 ] && echo 1 || echo 0)"
+
 # The native lock excludes another owner even before the owner record exists.
 rm -f "$WORK/lock-entered"
 "$SELFTEST_UTIL" lock "$WORK/guard" "$WORK/no-owner" sh -c 'echo ready > "$1"; sleep 2' sh "$WORK/lock-entered" &
