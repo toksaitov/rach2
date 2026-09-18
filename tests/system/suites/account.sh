@@ -32,10 +32,11 @@
 #
 # Three mistakes this repo has already paid for, avoided by every phase here:
 # the console echoes what is typed, so a token that appears in a command would
-# be matched from its own echo and each is written split; a feed written all at
-# once is eaten by anything that flushes its input, so every feed is spaced; and
-# a previous run's logs hold every token this run waits for, so they go before
-# the first boot, not only in the trap.
+# be matched from its own echo and each is written split; a line typed before
+# the program that reads it is asking is eaten by one that flushes its input,
+# as login does, so every line is typed at the prompt or the marker it
+# answers; and a previous run's logs hold every token this run waits for, so
+# they go before the first boot, not only in the trap.
 #
 # Usage: account_test.sh <kernel> <image> <password> [real|simple]
 #
@@ -61,8 +62,8 @@ fi
 # a module in RAM. Deliberately unquoted where it is used, since it is several
 # arguments and QEMU refuses an empty one.
 case "$FLAVOR" in
-    real)   MEDIA="-append rach2.fsdisk -drive file=$DISK.work,format=raw,if=ide,index=0,media=disk" ;;
-    simple) MEDIA="-initrd $DISK.work" ;;
+    real)   HARNESS_MEDIA="--append rach2.fsdisk --drive file=$DISK.work,format=raw,if=ide,index=0,media=disk" ;;
+    simple) HARNESS_MEDIA="--initrd $DISK.work" ;;
     *)
         echo "account_test.sh: $FLAVOR: the flavor is real or simple" >&2
         exit 2
@@ -71,11 +72,9 @@ esac
 
 WORK="$DISK.work"
 LOG="$DISK.work.log"
-FEED="$DISK.work.feed"
-rm -f "$WORK" "$LOG" "$FEED"
+rm -f "$WORK" "$LOG"
 
 QPID=""
-FPID=""
 
 # The accounts this creates and destroys. Their passwords are fixed test
 # credentials, not secrets. The second account is a system one, so the two
@@ -113,18 +112,11 @@ REG_ID_HIGH=60000
 # longer owns is one the host may since have given to somebody else.
 cleanup_boot() {
     qpid="$QPID"
-    fpid="$FPID"
     QPID=""
-    FPID=""
     if [ -n "$qpid" ]; then
         kill -9 "$qpid" 2>/dev/null || true
         wait "$qpid" 2>/dev/null || true
     fi
-    if [ -n "$fpid" ]; then
-        kill -9 "$fpid" 2>/dev/null || true
-        wait "$fpid" 2>/dev/null || true
-    fi
-    rm -f "$FEED"
 }
 
 # The console log is kept as the failing boot's when the run did not pass,
@@ -136,7 +128,7 @@ cleanup() {
     if [ -z "$PASSED" ] && [ -f "$LOG" ]; then
         cp "$LOG" "$DISK.fail.log" 2>/dev/null || true
     fi
-    rm -f "$WORK" "$LOG" "$FEED"
+    rm -f "$WORK" "$LOG"
 }
 
 trap 'cleanup' EXIT
@@ -170,79 +162,25 @@ wait_count() {
     "$RUNUTIL" until "$LOG" "$1" "$3" "$2"
 }
 
-# Wait until the console has said nothing for $1 tenths of a second, giving up
-# after $2 seconds and going on anyway.
-#
-# Used for the wait before the first line and nowhere else. The delays between
-# fed lines cannot become this: the lines are typed AHEAD of the prompts that
-# read them, and the console's line discipline queues them until each prompt
-# arrives, which is what lets a password answer a prompt no shell printed. A
-# feeder that waited for quiet would be waiting for the prompt, and `passwd`
-# reads its prompts back to back with nothing printed between them, so the
-# queue would be empty when it asked and the passwords would land at the shell
-# instead. That failure is what this comment is made of.
-#
-# An empty log is not quiet, only unstarted, so stillness is counted only once
-# something has been printed.
-feed_settle() {
-    quiet=$1
-    cap=$2
-    last=-1
-    still=0
-    i=0
-    while [ "$i" -lt "$((cap * 10))" ]; do
-        size=$(wc -c < "$LOG" 2>/dev/null || echo 0)
-        size=$(printf '%s' "$size" | tr -d ' ')
-        if [ "$size" != "0" ] && [ "$size" = "$last" ]; then
-            still=$((still + 1))
-            [ "$still" -ge "$quiet" ] && return 0
-        else
-            still=0
-            last=$size
-        fi
-        # interval: the log is read every tenth of a second until it is still
-        sleep 0.1
-        i=$((i + 1))
-    done
-    return 0
-}
 
-# Boot the working image and feed it the script on standard input, one line per
-# argument. The image logs in at the console first, since os-real's console is
-# behind a login.
-#
-# A password answers a prompt no shell printed, so it is fed as a line of its
-# own like any other: the console's line discipline queues what is typed ahead
-# of the prompt, and `bb_ask` reads it when it gets there instead of flushing
-# it away.
-boot_lines() {
-    rm -f "$LOG" "$FEED"
-    mkfifo "$FEED"
-    (
-        # The machine is ready when its console stops changing, not after a
-        # fixed twelve seconds. The cap is far above what a boot takes, so a
-        # slow host degrades to the old behaviour instead of racing.
-        feed_settle 12 "$(scaled 90)"
-        for line in "$@"; do
-            printf '%s\n' "$line"
-            # interval: fed lines go six seconds apart, ahead of their prompts
-            sleep 6
-        done
-        # Not a delay: this holds the console open while the checks read the
-        # log, and the machine is killed as soon as they are done.
-        sleep "$(scaled 240)"
-    ) > "$FEED" &
-    FPID=$!
+# Boot the working image and type the arc at its console through the
+# harness: each line is typed once the output it answers has arrived, a
+# login prompt, a password prompt or a marker the line before printed, so
+# no line is eaten by a program that flushes its input before asking. The
+# machine ends with the last step; the log stays for the checks.
+HARNESS="$(cd "$(dirname "$0")/../../.." && pwd)/build/tests/system/harness"
+boot_steps() {
+    rm -f "$LOG"
     # shellcheck disable=SC2086
-    qemu-system-i386 -cpu max -display none -kernel "$KERNEL" $MEDIA \
-        -serial stdio < "$FEED" > "$LOG" 2>&1 &
-    QPID=$!
+    "$HARNESS" --kernel "$KERNEL" $HARNESS_MEDIA --qemu-arg=-cpu --qemu-arg=max \
+        --timeout 300 --steptmo 60 --log "$LOG" "$@" > /dev/null 2>&1 \
+        || fail "the machine did not answer every line of the arc; the log says which"
 }
 
-# The same, for a script that starts from root's shell: the console login is
+# The same, for an arc that starts from root's shell: the console login is
 # answered first.
 boot_with() {
-    boot_lines "root" "$PASSWORD" "$@"
+    boot_steps "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" "$@"
 }
 
 # Take an account's uid from a /etc/passwd record and fail unless it lands
@@ -278,39 +216,28 @@ cp "$DISK" "$WORK"
 # not root, and `passwd` needs its set-id bit only when the caller is not root,
 # so neither is proved by anything root types.
 run_simple_arc() {
-    boot_lines \
-        "root" \
-        "$PASSWORD" \
-        "pwd" \
-        "adduser $SIMPLEUSER" \
-        "$SIMPLEPASS" \
-        "$SIMPLEPASS" \
-        "cat /etc/passwd" \
-        "exit" \
-        "test" \
-        "$TESTPASSWORD" \
-        "pwd" \
-        "echo TRYWRONG" \
-        "su - $SIMPLEUSER -c pwd" \
-        "$WRONGPASS" \
-        "echo TRYRIGHT" \
-        "su - $SIMPLEUSER -c pwd" \
-        "$SIMPLEPASS" \
-        "echo TRYDONE" \
-        "passwd" \
-        "$TESTPASSWORD" \
-        "$NEXTPASS" \
-        "$NEXTPASS" \
-        "echo TRYOLD" \
-        "su - test -c pwd" \
-        "$TESTPASSWORD" \
-        "echo TRYOTHER" \
-        "su - $SIMPLEUSER -c pwd" \
-        "$NEXTPASS" \
-        "echo TRYNEW" \
-        "su - test -c pwd" \
-        "$NEXTPASS" \
-        "echo TRYEND"
+    boot_with \
+        "send=pwd" "expect=/root" \
+        "send=adduser $SIMPLEUSER" "expect=New password:" "send=$SIMPLEPASS" \
+        "expect=Retype new password:" "send=$SIMPLEPASS" "expect=created with uid" \
+        "send=cat /etc/passwd" "expect=$SIMPLEUSER:x:" \
+        "send=exit" "expect=rach2 login:" "send=test" "expect=Password:" "send=$TESTPASSWORD" \
+        "send=pwd" "expect=/home/test" \
+        "send=echo TRYWRONG" "expect=TRYWRONG" \
+        "send=su - $SIMPLEUSER -c pwd" "expect=Password:" "send=$WRONGPASS" \
+        "send=echo TRYRIGHT" "expect=TRYRIGHT" \
+        "send=su - $SIMPLEUSER -c pwd" "expect=Password:" "send=$SIMPLEPASS" \
+        "send=echo TRYDONE" "expect=TRYDONE" \
+        "send=passwd" "expect=Old password:" "send=$TESTPASSWORD" \
+        "expect=New password:" "send=$NEXTPASS" "expect=Retype new password:" "send=$NEXTPASS" \
+        "expect=password changed" \
+        "send=echo TRYOLD" "expect=TRYOLD" \
+        "send=su - test -c pwd" "expect=Password:" "send=$TESTPASSWORD" \
+        "send=echo TRYOTHER" "expect=TRYOTHER" \
+        "send=su - $SIMPLEUSER -c pwd" "expect=Password:" "send=$NEXTPASS" \
+        "send=echo TRYNEW" "expect=TRYNEW" \
+        "send=su - test -c pwd" "expect=Password:" "send=$NEXTPASS" \
+        "send=echo TRY\"\"END" "expect=TRYEND"
 
     if ! wait_token "^/root[[:space:]]*\$" 150; then
         fail "a bare command name after login found nothing; the PATH login builds is wrong"
@@ -412,21 +339,16 @@ run_real_arc() {
     # are joined with `&&` and not `;`, so the token cannot be printed by a run
     # in which one of them failed.
     boot_with \
-        "adduser -D $NEWUSER && addgroup $EXTRAGROUP && addgroup $NEWUSER $EXTRAGROUP && echo MADE\"\"IT" \
-        "adduser -S -D -H -G $EXTRAGROUP $SYSUSER && echo SYS\"\"IT" \
-        "echo $NEWUSER:$NEWPASS | chpasswd && echo SET\"\"IT" \
-        "su $NEWUSER -c \"su $NEWUSER -c id && echo AUTH\"\"IT\"" \
-        "$NEWPASS" \
-        "su $NEWUSER -c \"su root -c id && echo CLIM\"\"BED; echo TRIED\"\"IT\"" \
-        "$WRONGPASS" \
-        "su $NEWUSER -c \"passwd 2>&1 | grep -q Incorrect && echo REFU\"\"SED\"" \
-        "$WRONGPASS" \
-        "su $NEWUSER -c \"passwd root 2>&1 | grep -q change && echo NOT\"\"MINE\"" \
-        "su $NEWUSER -c \"passwd && echo CHANGED\"\"IT\"" \
-        "$NEWPASS" \
-        "$NEXTPASS" \
-        "$NEXTPASS" \
-        "sync; echo SYNC\"\"IT"
+        "send=adduser -D $NEWUSER && addgroup $EXTRAGROUP && addgroup $NEWUSER $EXTRAGROUP && echo MADE\"\"IT" "expect=MADEIT" \
+        "send=adduser -S -D -H -G $EXTRAGROUP $SYSUSER && echo SYS\"\"IT" "expect=SYSIT" \
+        "send=echo $NEWUSER:$NEWPASS | chpasswd && echo SET\"\"IT" "expect=SETIT" \
+        "send=su $NEWUSER -c \"su $NEWUSER -c id && echo AUTH\"\"IT\"" "expect=Password:" "send=$NEWPASS" "expect=AUTHIT" \
+        "send=su $NEWUSER -c \"su root -c id && echo CLIM\"\"BED; echo TRIED\"\"IT\"" "expect=Password:" "send=$WRONGPASS" "expect=TRIEDIT" \
+        "send=su $NEWUSER -c \"echo ASK\"\"OLD; passwd 2>&1 | grep -q Incorrect && echo REFU\"\"SED\"" "expect=ASKOLD" "send=$WRONGPASS" "expect=REFUSED" \
+        "send=su $NEWUSER -c \"passwd root 2>&1 | grep -q change && echo NOT\"\"MINE\"" "expect=NOTMINE" \
+        "send=su $NEWUSER -c \"passwd && echo CHANGED\"\"IT\"" "expect=Old password:" "send=$NEWPASS" \
+        "expect=New password:" "send=$NEXTPASS" "expect=Retype password:" "send=$NEXTPASS" "expect=CHANGEDIT" \
+        "send=sync; echo SYNC\"\"IT" "expect=SYNCIT"
 
     if ! wait_token "MADEIT" 150; then
         fail "the account, the group, or the account's membership of it was never made"
@@ -498,18 +420,17 @@ run_real_arc() {
     # the platter and one that lived in a cache. Then the databases are read
     # back, and the accounts deleted.
     boot_with \
-        "su $NEWUSER -c \"su $NEWUSER -c id && echo AGAIN\"\"IT\"" \
-        "$NEXTPASS" \
-        "mkdir -p /www; echo SERVED\"\"OK > /www/index.html" \
-        "httpd -m hunter2 > /tmp/webhash; cat /tmp/webhash" \
-        "echo /:webuser:\$(cat /tmp/webhash) > /etc/httpd.conf; httpd -p 8080 -h /www" \
-        "echo ANON\"\"BEGIN; wget -q -O - http://127.0.0.1:8080/index.html 2>&1; echo ANON\"\"END" \
-        "echo AUTH\"\"BEGIN; wget -q -O - http://webuser:hunter2@127.0.0.1:8080/index.html 2>&1; echo AUTH\"\"END" \
-        "mkpasswd -m sha512 -S abcdefgh hunter2; echo MK\"\"END" \
-        "echo BEG\"\"IN; cat /etc/passwd; echo PW\"\"END" \
-        "cat /etc/shadow; echo SH\"\"END" \
-        "cat /etc/group; echo GR\"\"END" \
-        "deluser $NEWUSER && deluser $SYSUSER && sync && echo GONE\"\"IT"
+        "send=su $NEWUSER -c \"su $NEWUSER -c id && echo AGAIN\"\"IT\"" "expect=Password:" "send=$NEXTPASS" "expect=AGAINIT" \
+        "send=mkdir -p /www; echo SERVED\"\"OK > /www/index.html; echo MADE\"\"WWW" "expect=MADEWWW" \
+        "send=httpd -m hunter2 > /tmp/webhash; cat /tmp/webhash; echo HASH\"\"ED" "expect=HASHED" \
+        "send=echo /:webuser:\$(cat /tmp/webhash) > /etc/httpd.conf; httpd -p 8080 -h /www; echo SERV\"\"ING" "expect=SERVING" \
+        "send=echo ANON\"\"BEGIN; wget -q -O - http://127.0.0.1:8080/index.html 2>&1; echo ANON\"\"END" "expect=ANONEND" \
+        "send=echo AUTH\"\"BEGIN; wget -q -O - http://webuser:hunter2@127.0.0.1:8080/index.html 2>&1; echo AUTH\"\"END" "expect=AUTHEND" \
+        "send=mkpasswd -m sha512 -S abcdefgh hunter2; echo MK\"\"END" "expect=MKEND" \
+        "send=echo BEG\"\"IN; cat /etc/passwd; echo PW\"\"END" "expect=PWEND" \
+        "send=cat /etc/shadow; echo SH\"\"END" "expect=SHEND" \
+        "send=cat /etc/group; echo GR\"\"END" "expect=GREND" \
+        "send=deluser $NEWUSER && deluser $SYSUSER && sync && echo GONE\"\"IT" "expect=GONEIT"
 
     if ! wait_token "AGAINIT" 180; then
         fail "the changed password did not authenticate after a reboot"
@@ -591,9 +512,9 @@ run_real_arc() {
 
     # The third boot, the only boot that shows what the delete left on disk.
     boot_with \
-        "echo BEG\"\"IN; cat /etc/passwd; echo PW\"\"END" \
-        "cat /etc/shadow; echo SH\"\"END" \
-        "cat /etc/group; echo GR\"\"END"
+        "send=echo BEG\"\"IN; cat /etc/passwd; echo PW\"\"END" "expect=PWEND" \
+        "send=cat /etc/shadow; echo SH\"\"END" "expect=SHEND" \
+        "send=cat /etc/group; echo GR\"\"END" "expect=GREND"
 
     if ! wait_token "GREND" 180; then
         fail "the third boot could not read the databases back"

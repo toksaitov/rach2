@@ -1513,7 +1513,7 @@ run-metal: rach2-metal rach2-metal-image $(MKMBR) $(PTYDRIVE) $(RUNUTIL)
 # password and would pass over a wrong hash and an unusable set-id `passwd`
 # alike.
 ACCOUNT_TEST_DISK = $(IMAGES_DIR)/account-test.disk
-run-account: $(DEMO_CREDS) rach2 utils krffs busybox ish check-tcc check-pdpmake os-simple-image
+run-account: $(DEMO_CREDS) rach2 utils krffs busybox ish check-tcc check-pdpmake os-simple-image $(HARNESS)
 	$(MKDISK) krffs/manifests/os-real.manifest $(ACCOUNT_TEST_DISK) 64 48
 	sh tests/system/suites/account.sh build/rach2/kernel $(ACCOUNT_TEST_DISK) \
 	    "`cat krffs/rach2_demo_password`" real
