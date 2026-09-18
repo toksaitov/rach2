@@ -1803,7 +1803,6 @@ static int ext2_open(struct ext2 *fs, const char *path, long offset,
         unsigned long it = rd32(fs->gd + g * 32 + 8);
         unsigned long it_blocks = (fs->ipg * EXT2_INODE + EXT2_BLOCK - 1) /
                                   EXT2_BLOCK;
-        unsigned long p;
 
         if (bb >= fs->blocks || ib >= fs->blocks || it >= fs->blocks ||
             it + it_blocks > fs->blocks)
@@ -3054,7 +3053,9 @@ static int selftest(struct allow *allow);
 
 static char *allow_path_beside(const char *argv0)
 {
-    static char path[1024];
+    /* Room for the directory, the walk up to the tree and the name, so the
+       compiler can see the path is never cut. */
+    static char path[2048];
     char dir[1024];
     const char *slash = strrchr(argv0, '/');
 
