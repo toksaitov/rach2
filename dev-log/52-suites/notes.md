@@ -21,6 +21,7 @@ In progress on 2026-09-18. The counters, the kernel faults the two accelerators 
 * `tools/verify/suitecheck.sh` in `tests/run style`: no `sleep N`, no `wait=`, no upper bound on a duration in a probe, unless marked `interval: REASON` and listed in `tests/system/intervals`; fourteen intervals are listed, each a load period, a holder, a file time or a poll of a server. Twenty-two self-test cases.
 * Pooled suites share nothing: the registry's fourth column declares what each suite writes under `build/images`; the runner refuses a shared glob and fails a run in which a file was made that no suite owns or two own. The usb, memory, metal and socket suites name their outputs after themselves now, as do the default, fpu, pools and raw targets.
 * The lone list is deleted: usb, diskrate, install and imagerace run in the pool.
+* The declarations found the shared test image restaged in the middle of two sets, by whichever suite's make came next: the metal suite made its acceptance copy with `mktemp` under `build/tests`, whose directory time the image depends on through the manifest's tree line. The copy lives under the images directory with the suite's name now and is removed at the end.
 
 ## Phase 5: the cuts
 
