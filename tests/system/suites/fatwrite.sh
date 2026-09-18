@@ -118,12 +118,13 @@ LOG="$DISK.busybox.log"
 if "$HARNESS" --kernel "$KERNEL" --initrd "$OSREAL" \
     --qemu-arg=-cpu --qemu-arg=max --append "rach2.diskdiag" \
     --drive "file=$DISK,format=raw,if=ide,index=0,media=disk" \
-    --timeout 240 --steptmo 60 --ok "BBDONE" --log "$LOG" \
+    --timeout 240 --steptmo 60 --ok "BBDONE" --never "DDFAILED" --never "BIGFAILED" --never "COUNTFAILED" --log "$LOG" \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
     "expect=# " "send=mkdir /mnt && mount -t vfat /dev/disk0p2 /mnt && echo MOUNT\"\"ED" \
     "expect=MOUNTED" "send=cp /bin/busybox /mnt/bb && mkdir /mnt/d && mv /mnt/bb '/mnt/d/Busy Box' && echo hi > /mnt/d/h.txt && rm /mnt/renamed.txt && cmp '/mnt/d/Busy Box' /bin/busybox && echo SAME\"\"BYTES" \
-    "expect=SAMEBYTES" "send=A=\$(sed -n 's/^disk-commands //p' /proc/disk); dd if=/dev/zero of=/mnt/big.bin bs=64k count=64 2>/dev/null; sync; B=\$(sed -n 's/^disk-commands //p' /proc/disk); echo BIG\"\"WRITTEN" \
-    "expect=BIGWRITTEN" "send=rm /mnt/big.bin; sync; C=\$(sed -n 's/^disk-commands //p' /proc/disk); echo COMMANDS \$((B-A)) \$((C-B)); echo COUNT\"\"ED" \
+    "expect=SAMEBYTES" "send=A=\$(sed -n 's/^disk-commands //p' /proc/disk); dd if=/dev/zero of=/mnt/big.bin bs=64k count=64 2>/dev/null && sync && echo DD\"\"OK || echo DD\"\"FAILED" \
+    "expect=DDOK" "send=if [ \"\$(stat -c %s /mnt/big.bin)\" = 4194304 ]; then B=\$(sed -n 's/^disk-commands //p' /proc/disk); echo BIG\"\"WRITTEN; else echo BIG\"\"FAILED; fi" \
+    "expect=BIGWRITTEN" "send=if rm /mnt/big.bin && sync && [ ! -e /mnt/big.bin ]; then C=\$(sed -n 's/^disk-commands //p' /proc/disk); echo COMMANDS \$((B-A)) \$((C-B)); echo COUNT\"\"ED; else echo COUNT\"\"FAILED; fi" \
     "expect=COUNTED" "send=umount /mnt && echo UN\"\"MOUNTED" \
     "expect=UNMOUNTED" "send=echo BB\"\"DONE" "expect=BBDONE" > /dev/null 2>&1; then
     echo "fatwrite-test: BusyBox copies, moves, writes and removes on the volume: OK"
@@ -132,7 +133,7 @@ else
 fi
 WROTE="$(grep -a '^COMMANDS [0-9]' "$LOG" | tail -1 | tr -d '\r' | awk '{print $2}')"
 FREED="$(grep -a '^COMMANDS [0-9]' "$LOG" | tail -1 | tr -d '\r' | awk '{print $3}')"
-if [ -n "$WROTE" ] && [ "$WROTE" -gt 0 ] && [ "$WROTE" -lt 5000 ] && [ -n "$FREED" ] && [ "$FREED" -lt 256 ]; then
+if [ -n "$WROTE" ] && [ "$WROTE" -gt 0 ] && [ "$WROTE" -lt 5000 ] && [ -n "$FREED" ] && [ "$FREED" -gt 0 ] && [ "$FREED" -lt 256 ]; then
     echo "fatwrite-test: a 4 MiB write costs the disk $WROTE commands and its removal $FREED, the FAT written by blocks: OK"
 else
     fail "a 4 MiB write cost the disk ${WROTE:-?} commands and its removal ${FREED:-?}; the FAT is written an entry at a time"

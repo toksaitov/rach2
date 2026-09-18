@@ -169,7 +169,7 @@ if "$HARNESS" --kernel "$KERNEL" --initrd "$OSREAL" \
     "expect=# " "send=mkdir /mnt && mount -t vfat -o ro /dev/disk0p2 /mnt && echo MOUNT\"\"ED" \
     "expect=MOUNTED" "send=ls /mnt | sort | tr '\\n' ' '; echo; echo LIST\"\"DONE" \
     "expect=LISTDONE" "send=cat /mnt/hello.txt; cksum /mnt/hello /mnt/again.bin /mnt/hello.txt; echo SUMS\"\"DONE" \
-    "expect=SUMSDONE" "send=exec 3< /mnt/hello.txt; (sleep 5 <&3; echo HOLDER\"\"DONE) & exec 3<&-; umount /mnt; echo UMOUNT\"\"RC=\$?" \
+    "expect=SUMSDONE" "send=exec 3< /mnt/hello.txt; (sleep 5 <&3; exec 3<&-; echo HOLDER\"\"DONE) & exec 3<&-; umount /mnt; echo UMOUNT\"\"RC=\$?" \
     "expect=UMOUNTRC=1" "expect=HOLDERDONE" "send=umount /mnt && echo UN\"\"MOUNTED" \
     "expect=UNMOUNTED" "send=[ \"\$(grep -c vfat /proc/mounts)\" = 0 ] && echo BB\"\"DONE" \
     "expect=BBDONE" > /dev/null 2>&1; then

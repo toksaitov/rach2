@@ -21,7 +21,7 @@ set -u
 
 KERNEL="$1"
 IMAGE="$2"
-# What this suite writes under the images directory carries its name.
+# What this suite writes under the images directory starts with `socket-test`.
 OUT="$(dirname "$IMAGE")/socket-test"
 HARNESS="$3"
 HOSTPEER="$4"
@@ -46,11 +46,13 @@ rm -f "$PEER_LOG"
 PEER=$!
 # The server must be listening before the machine boots: a datagram that
 # arrives at a closed port is discarded, and the probe would spend its retries
-# on nothing. What is waited for is a connection that succeeds, not a process
-# that exists: the shell has a pid for the child before the child has run
-# `hostpeer`, let alone bound anything.
-"$RUNUTIL" until "$PEER_LOG" "hostpeer: echoing" 30 || true
-if ! "$HOSTPEER" hold "$PORT" 0 >/dev/null 2>&1; then
+# on nothing. What is waited for is the server's own word once it has bound
+# and listens, not a process that exists: the shell has a pid for the child
+# before the child has run `hostpeer`, let alone bound anything. No
+# connection is made from here: the server's record of a peer closing its
+# end is the machine's close, and a connection of this script's would leave
+# the same record.
+if ! "$RUNUTIL" until "$PEER_LOG" "hostpeer: echoing" 30; then
     echo "socket-test: FAIL: nothing is listening on port $PORT" >&2
     exit 1
 fi

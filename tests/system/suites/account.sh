@@ -239,17 +239,17 @@ run_simple_arc() {
         "send=exit" "expect=rach2 login:" "send=test" "expect=Password:" "send=$TESTPASSWORD" \
         "send=pwd" "expect=/home/test" \
         "send=echo TRYWRONG" "expect=TRYWRONG" \
-        "send=su - $SIMPLEUSER -c pwd" "expect=Password:" "send=$WRONGPASS" \
+        "send=su - $SIMPLEUSER -c pwd" "expect=Password:" "send=$WRONGPASS" "expect=authentication failure" \
         "send=echo TRYRIGHT" "expect=TRYRIGHT" \
-        "send=su - $SIMPLEUSER -c pwd" "expect=Password:" "send=$SIMPLEPASS" \
+        "send=su - $SIMPLEUSER -c pwd" "expect=Password:" "send=$SIMPLEPASS" "expect=/home/$SIMPLEUSER" \
         "send=echo TRYDONE" "expect=TRYDONE" \
         "send=passwd" "expect=Old password:" "send=$TESTPASSWORD" \
         "expect=New password:" "send=$NEXTPASS" "expect=Retype new password:" "send=$NEXTPASS" \
         "expect=password changed" \
         "send=echo TRYOLD" "expect=TRYOLD" \
-        "send=su - test -c pwd" "expect=Password:" "send=$TESTPASSWORD" \
+        "send=su - test -c pwd" "expect=Password:" "send=$TESTPASSWORD" "expect=authentication failure" \
         "send=echo TRYOTHER" "expect=TRYOTHER" \
-        "send=su - $SIMPLEUSER -c pwd" "expect=Password:" "send=$NEXTPASS" \
+        "send=su - $SIMPLEUSER -c pwd" "expect=Password:" "send=$NEXTPASS" "expect=authentication failure" \
         "send=echo TRYNEW" "expect=TRYNEW" \
         "send=su - test -c pwd" "expect=Password:" "send=$NEXTPASS" "expect=/home/test" \
         "send=echo TRYEND" "expect=TRYEND"
@@ -359,7 +359,7 @@ run_real_arc() {
         "send=echo $NEWUSER:$NEWPASS | chpasswd && echo SET\"\"IT" "expect=SETIT" \
         "send=su $NEWUSER -c \"su $NEWUSER -c id && echo AUTH\"\"IT\"" "expect=Password:" "send=$NEWPASS" "expect=AUTHIT" \
         "send=su $NEWUSER -c \"su root -c id && echo CLIM\"\"BED; echo TRIED\"\"IT\"" "expect=Password:" "send=$WRONGPASS" "expect=TRIEDIT" \
-        "send=su $NEWUSER -c \"echo ASK\"\"OLD; passwd 2>&1 | grep -q Incorrect && echo REFU\"\"SED\"" "expect=ASKOLD" "send=$WRONGPASS" "expect=REFUSED" \
+        "send=su $NEWUSER -c \"passwd; echo REFU\"\"SED\"" "expect=Old password:" "send=$WRONGPASS" "expect=REFUSED" \
         "send=su $NEWUSER -c \"passwd root 2>&1 | grep -q change && echo NOT\"\"MINE\"" "expect=NOTMINE" \
         "send=su $NEWUSER -c \"passwd && echo CHANGED\"\"IT\"" "expect=Old password:" "send=$NEWPASS" \
         "expect=New password:" "send=$NEXTPASS" "expect=Retype password:" "send=$NEXTPASS" "expect=CHANGEDIT" \

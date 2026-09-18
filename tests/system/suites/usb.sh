@@ -320,7 +320,7 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --append "rach2.usblatency" --log "$LAT_LOG" \
     --timeout 120 --steptmo 45 --ok "KEYLAT OK" \
     "seen=class 3 protocol 1" "seen=Type 'help'" "send=exec /keylatprobe" \
-    "expect=KEYLAT READING" key=ret \
+    "expect=KEYLAT READING" "expect=usb: latency: reader waiting" key=ret \
     > /dev/null 2>&1; then
     # The timer's pump may bring the key before the controller's message,
     # and the record then says `msi 0`: the wake and the read are judged the
@@ -372,7 +372,7 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --append "rach2.usblatency" --log "$LAT_LOG" \
     --timeout 120 --steptmo 45 --ok "KEYLAT OK" --never "KEYLAT FAIL" \
     "seen=class 3 protocol 1" "seen=Type 'help'" "send=exec /keylatprobe random" \
-    "expect=KEYLAT HOG" key=ret \
+    "expect=KEYLAT HOG" "expect=usb: latency: reader waiting" key=ret \
     > /dev/null 2>&1; then
     if ! grep -q "usb: latency:" "$LAT_LOG"; then
         bad "the keystroke beside the large call was not recorded: a reader held past twenty milliseconds has no record"
@@ -469,19 +469,18 @@ fi
 
 # ---- 17: a stick behind the hub mounts, takes a write, is pulled from under
 #          a mount through the monitor, and plugged back in mounts again ----
+# The stick is this suite's own: the usbdisk suite writes its images in
+# place while it runs, and a copy of one taken beside it could be half
+# written.
 STICK="$OUT.hubstick.img"
-if [ -f "$REPO/build/images/usbdisk/stick-mbr.img" ]; then
-    cp "$REPO/build/images/usbdisk/stick-mbr.img" "$STICK"
-else
-    dd if=/dev/zero of="$STICK" bs=1048576 count=80 2>/dev/null
-    "$REPO/build/tools/image/mkmbr" --lba "$STICK" 2048:98304:0c > /dev/null
-    mformat -i "$STICK"@@1048576 -F -T 98304 -v STICKFAT ::
-    echo "hello from the stick" > "$STICK.hello"
-    mcopy -i "$STICK"@@1048576 "$STICK.hello" ::/hello.txt
-    awk 'BEGIN { for (i = 0; i < 128; i++) for (j = 0; j < 128; j++) printf "%03d.", i }' \
-        > "$STICK.pattern"
-    mcopy -i "$STICK"@@1048576 "$STICK.pattern" ::/pattern.bin
-fi
+dd if=/dev/zero of="$STICK" bs=1048576 count=80 2>/dev/null
+"$REPO/build/tools/image/mkmbr" --lba "$STICK" 2048:98304:0c > /dev/null
+mformat -i "$STICK"@@1048576 -F -T 98304 -v STICKFAT ::
+echo "hello from the stick" > "$STICK.hello"
+mcopy -i "$STICK"@@1048576 "$STICK.hello" ::/hello.txt
+awk 'BEGIN { for (i = 0; i < 128; i++) for (j = 0; j < 128; j++) printf "%03d.", i }' \
+    > "$STICK.pattern"
+mcopy -i "$STICK"@@1048576 "$STICK.pattern" ::/pattern.bin
 if run_shell --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
     --qemu-arg=-device --qemu-arg=usb-hub,bus=xhci.0,port=1,id=hub \

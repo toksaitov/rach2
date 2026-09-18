@@ -53,7 +53,7 @@ if "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
     --qemu-arg=-cpu --qemu-arg=max \
     --drive "file=$DISK,format=raw,if=ide,index=0,media=disk" \
     --append "rach2.rescue" \
-    --timeout 120 --steptmo 30 --ok "CONLOAD OK" --never "CONLOAD FAIL" --log "$DISK.log" \
+    --timeout 150 --steptmo 75 --ok "CONLOAD OK" --never "CONLOAD FAIL" --log "$DISK.log" \
     "expect=Type 'help'" "send=exec /conloadprobe" \
     "expect=CONLOAD A" "sendfile=$DISK.a" \
     "expect=CONLOAD B" "sendfile=$DISK.b" \

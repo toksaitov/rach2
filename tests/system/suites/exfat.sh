@@ -48,13 +48,11 @@ walk_repaired() {
 
 # The external checker, where the host has one: macOS's fsck_exfat over a copy
 # of the volume, or exfatprogs' fsck.exfat over the same. It reports without
-# modifying; `$2` non-empty says the volume carries the lost clusters the
+# modifying; `$2` non-empty says the volume holds the lost clusters the
 # mount's check counts and leaves, and the checker is then given its repair
-# and must call the repaired copy clean. Whether it reports the lost
-# clusters before is its own: exfatprogs 1.3.2 called a volume with one
-# clean, on 2026-09-18, where macOS's checker had reported it, so what is
-# required is what both agree on,
-# and a copy it repairs must then be clean.
+# and must call the repaired copy clean. The two checkers differ on whether
+# a lost cluster is reported before the repair, so that report is not
+# required; the clean copy after the repair is.
 external_check() {
     dd if="$DISK" of="$DISK.vol" bs=512 skip=$PART count=$SECTORS 2>/dev/null \
         || fail "copying the volume for the external checker"

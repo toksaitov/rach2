@@ -33,19 +33,21 @@ if "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
     "send=five" "expect=LOADPROBE read" "send=six" "expect=LOADPROBE read" \
     "expect=LOADPROBE" > /dev/null 2>&1; then
     grep -a 'LOADPROBE timer' "$DISK.log" | tail -1 | tr -d '\r' | sed 's/^/load-test: /'
-    echo "load-test: twenty seconds of spinning, writing, pinging and typing, with every delay within its bound: OK"
+    echo "load-test: twenty seconds of spinning, writing, pinging and typing: every line read, the counters printed, nothing quarantined: OK"
 else
     grep -a 'LOADPROBE' "$DISK.log" | tr -d '\r' >&2 || true
     fail "the load boot"
 fi
-# The same writer on the polled disk, with nothing to make it sleep: it is
-# inside a system call from one write to the next. A timer interrupt that
-# lands inside the call requests a switch, and the call's exit takes it, so
-# the reader gets its lines and the probe's own sleep ends.
+# The same writer on a disk whose driver cannot sleep: `rach2.atapio` keeps
+# the ATA driver on the data port, whose transfers run with interrupts off,
+# so the writer is inside a system call from one write to the next. A timer
+# interrupt that lands inside the call requests a switch, and the call's
+# exit takes it, so the reader gets its lines and the probe's own sleep
+# ends.
 if "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
     --qemu-arg=-cpu --qemu-arg=max \
     --drive "file=$DISK,format=raw,if=ide,index=0,media=disk" \
-    --append "rach2.rescue" \
+    --append "rach2.rescue rach2.atapio" \
     --timeout 120 --steptmo 60 --ok "LOADPROBE OK" --never "LOADPROBE FAIL" --log "$DISK.polled.log" \
     "expect=Type 'help'" "send=exec /loadprobe Wnr" \
     "send=one" "expect=LOADPROBE read" "send=two" "expect=LOADPROBE read" \

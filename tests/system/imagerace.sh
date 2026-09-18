@@ -92,16 +92,12 @@ say "a file written below a staged directory does not put the image out of date:
 
 # And the other half of entry 5 of milestone 50: a staged program rebuilt on
 # a built tree still restages its image, which is the whole reason the
-# staged paths are prerequisites. The probe is touched, not rebuilt, since
-# make judges by time.
-# The probe's time is put back after, since the shared image must not be
-# out of date for the suites that boot it beside this one.
-touch -r build/tests/vmprobe build/tests/system/imagerace.ref
-touch build/tests/vmprobe
-stale=$(MAKEFLAGS= make --no-print-directory -n "$TESTIMG" 2>&1 |
+# staged paths are prerequisites. The probe is not touched: make is asked
+# what it would do if it had been, with `-W`, so the shared image stays up
+# to date for the suites that boot it beside this one, whose own make would
+# otherwise restage it in the moment the probe looked new.
+stale=$(MAKEFLAGS= make --no-print-directory -n -W build/tests/vmprobe "$TESTIMG" 2>&1 |
         grep -E "mkimage\.sh" | grep -c "$TESTIMG")
-touch -r build/tests/system/imagerace.ref build/tests/vmprobe
-rm -f build/tests/system/imagerace.ref
 [ "$stale" = 1 ] || bad "$TESTIMG is not out of date after a program it stages was rebuilt"
 [ "$fails" = 0 ] || exit 1
 say "an image is out of date once a program it stages is rebuilt: OK"

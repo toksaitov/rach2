@@ -211,8 +211,8 @@ step "KEEPONE" "cp /home/test/kbuild/rach2/kernel /home/test/kernel.selfbuilt &&
 step "DUONE" "busybox du -sk /home/test/kbuild /tmp /home/test/kernel.selfbuilt; busybox df -k /home/test; echo DU\"\"ONE"
 # The second build, the hash comparison, the userland builds and their
 # smoke checks are the KRFFS suite's: the ext2 root proves itself with one
-# clean build of the kernel and the boot of what it built, and the programs
-# do not care which root they were built on.
+# clean build of the kernel and the boot of what it built, and a program's
+# bytes are the same whichever root it was built on.
 if [ "$ROOT_TYPE" = krffs ]; then
 step "COPYTWO" "cd /home/test/kbuild && rm -rf rach2 && cp -r /src/rach2 . && echo COPY\"\"TWO"
 step "DUTWO" "busybox du -sk /home/test/kbuild /tmp; busybox df -k /home/test; echo DU\"\"TWO"
@@ -439,6 +439,10 @@ if ! grep -q "INPLACERC=0" "$LOG"; then
 fi
 cleanup_boot
 
-echo "selfbuild-test: the machine built its kernel twice from clean trees (hash $GUEST_SHA, $SIZEONE bytes), its utilities and its shell, and root rebuilt the staged /src/ish in place; the exact kernel bytes passed the checker and the probe suite $GRUB_NOTE: OK"
+if [ "$ROOT_TYPE" = krffs ]; then
+    echo "selfbuild-test: the machine built its kernel twice from clean trees (hash $GUEST_SHA, $SIZEONE bytes), its utilities and its shell, and root rebuilt the staged /src/ish in place; the exact kernel bytes passed the checker and the probe suite $GRUB_NOTE: OK"
+else
+    echo "selfbuild-test: the machine built its kernel once from a clean tree on the ext2 root (hash $GUEST_SHA, $SIZEONE bytes); the exact kernel bytes passed the checker and the probe suite $GRUB_NOTE: OK"
+fi
 PASSED=1
 echo "selfbuild-test: PASS"

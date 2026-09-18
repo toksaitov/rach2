@@ -39,7 +39,7 @@ set -e
 
 KERNEL="$1"
 IMAGE="$2"
-# What this suite writes under the images directory carries its name.
+# What this suite writes under the images directory starts with `metal-test`.
 OUT="$(dirname "$IMAGE")/metal-test"
 PORT="${3:-2223}"
 
@@ -303,9 +303,9 @@ export RACH2_ACCEPT_PASSWORD
 SU_COMMAND="$REPO/tests/system/accept/su_command.sh"
 TEST_KEY="$REPO/krffs/rach2_test_ed25519"
 rc=0
-OUT="$(sh "$SU_COMMAND" "$TEST_KEY" 127.0.0.1 "$PORT" test "$KNOWN" \
+GOT="$(sh "$SU_COMMAND" "$TEST_KEY" 127.0.0.1 "$PORT" test "$KNOWN" \
     "printf '%s\\n' \"a 'quote' and a dollar \\\$\"; exit 7")" || rc=$?
-if [ "$rc" -ne 7 ] || [ "$OUT" != "a 'quote' and a dollar \$" ]; then
+if [ "$rc" -ne 7 ] || [ "$GOT" != "a 'quote' and a dollar \$" ]; then
     fail "the su transport changed a quoted command, its output or its status"
 fi
 echo "metal-test: su preserves a quoted command and its nonzero status: OK"

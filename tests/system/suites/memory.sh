@@ -16,7 +16,7 @@
 # Usage: memory.sh KERNEL IMAGE HARNESS RECOVERY_KERNEL RECOVERY_IMAGE
 set -u
 KERNEL=$1; IMAGE=$2; HARNESS=$3; RKERNEL=$4; RIMAGE=$5
-# What this suite writes under the images directory carries its name.
+# What this suite writes under the images directory starts with `memory-test`.
 OUT="$(dirname "$IMAGE")/memory-test"
 fail() { echo "memory-test: FAIL: $1" >&2; exit 1; }
 
