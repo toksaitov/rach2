@@ -379,7 +379,7 @@ run-disk: rach2 tests krffs $(HARNESS)
 	$(HARNESS) --kernel build/rach2/kernel \
 	    --append "rach2.fsdisk rach2.rescue" \
 	    --drive "file=$(DISK_TEST_IMAGE),format=raw,if=ide,index=0,media=disk" \
-	    --timeout 90 --ok "BLOCKPROBE OK" probe=blockprobe
+	    --timeout 90 --ok "BLOCKPROBE OK" --log $(DISK_TEST_IMAGE).log probe=blockprobe
 # `tests/run bootpart`: /proc/cmdline and the level-one disk devices. Three
 # boots of one disk: as mkdisk built it there is a single KRFFS partition, so
 # /dev/bootpart must be absent from stat and open; after the boot fixture adds a
@@ -1670,7 +1670,7 @@ run-disk-ahci: rach2 tests krffs $(HARNESS)
 	    --append "rach2.disk=ahci rach2.fsdisk rach2.rescue" \
 	    --drive "file=$(DISK_TEST_AHCI_IMAGE),format=raw,if=none,id=drv0" \
 	    $(AHCI_ATTACH) \
-	    --timeout 90 --ok "BLOCKPROBE OK" probe=blockprobe
+	    --timeout 90 --ok "BLOCKPROBE OK" --log $(DISK_TEST_AHCI_IMAGE).log probe=blockprobe
 # `tests/run disk-q35`: the same disk proof on the q35 machine, whose AHCI
 # controller is built in at 0:31.2, function 2 of the multi-function device 31.
 # That is the laptop's exact topology, and no other test exercises it: every
@@ -1684,7 +1684,7 @@ run-disk-q35: rach2 tests krffs $(HARNESS)
 	    --drive "file=$(DISK_TEST_Q35_IMAGE),format=raw,if=none,id=drv0" \
 	    --qemu-arg=-machine --qemu-arg=q35 --qemu-arg=-cpu --qemu-arg=max \
 	    --qemu-arg=-device --qemu-arg=ide-hd,drive=drv0,bus=ide.0 \
-	    --timeout 90 --ok "BLOCKPROBE OK" probe=blockprobe
+	    --timeout 90 --ok "BLOCKPROBE OK" --log $(DISK_TEST_Q35_IMAGE).log probe=blockprobe
 # `tests/run disks`: two disks of different sizes on one AHCI controller,
 # both in /proc/disk with their ports and sizes, both with nodes, a
 # partition of each mounted and written, and the second disk's file found
