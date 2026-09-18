@@ -13,6 +13,16 @@
 
 static uint8_t pc_host_pages[PC_SLOTS][PC_PAGE_SIZE];
 
+/* The record a failed write-back raises has no reader here: the test
+   counts the write it sees fail. */
+#define KLOG_ERR 3
+static void klog(int level, const char *subsystem, const char *format, ...)
+{
+    (void) level;
+    (void) subsystem;
+    (void) format;
+}
+
 static void pc_platform_map(uint32_t va, uintptr_t phys, int writable)
 {
     (void) va;
