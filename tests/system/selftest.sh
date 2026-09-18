@@ -580,6 +580,27 @@ check "the tokens a leaving machine printed satisfy the steps that waited for th
 ); rc=$?
 check "and a token it never printed is a step that never ran" 1 "$([ "$rc" -ne 0 ] && echo 1 || echo 0)"
 
+# A shell that did not know the command: a line typed before the shell was
+# reading arrives without its first bytes, and the shell's answer is neither
+# silence nor a running probe. The probe step types the line again on it.
+mkdir -p "$WORK/refusing"
+cat > "$WORK/refusing/qemu-system-i386" <<'REFUSING'
+#!/bin/sh
+printf 'READY\n'
+read -r line
+printf 'Unknown command: %s\n' "$line"
+read -r line
+printf '> %s\n<6>[0.10] process: exited with status 0\n' "$line"
+exit 1
+REFUSING
+chmod +x "$WORK/refusing/qemu-system-i386"
+(
+    unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR
+    PATH="$WORK/refusing:$PATH" "$HARNESS_BIN" --kernel none --timeout 5 --steptmo 3 \
+        execq=/hello > /dev/null 2>&1
+); rc=$?
+check "a probe command the shell did not know is typed again" 0 "$rc"
+
 # The native lock excludes another owner even before the owner record exists.
 rm -f "$WORK/lock-entered"
 "$SELFTEST_UTIL" lock "$WORK/guard" "$WORK/no-owner" sh -c 'echo ready > "$1"; sleep 2' sh "$WORK/lock-entered" &

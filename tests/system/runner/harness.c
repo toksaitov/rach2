@@ -59,7 +59,9 @@
  *                    harness_exit stop QEMU, under the step's limit; the
  *                    process exit code is then decoded from QEMU's. The
  *                    line is typed again only while the shell answers it
- *                    with nothing, which is the shell dropping it.
+ *                    with nothing, which is the shell dropping it, or
+ *                    with "Unknown command", which is a line typed before
+ *                    the shell was reading and missing its first bytes.
  *
  * Exit code: 0 if the guest process exited 0 (QEMU returned an odd code
  * via isa-debug-exit); 1 if it exited non-zero; 2 if QEMU failed to
@@ -1481,11 +1483,13 @@ int main(int argc, char **argv)
             trace("step %s %s consumed=%lu", step, seen ? "ok" : "fail", (unsigned long)consumed);
         } else if (strncmp(step, "execq=", 6) == 0) {
             /* Run a probe and stop as soon as harness_exit stops QEMU, under
-               the step's limit. The command is typed again only while the
-               shell has printed nothing past its echo of the line for three
-               seconds, which is the shell dropping the command; a probe that
-               is running is not typed at twice, since the shell would run it
-               again when it ends. */
+               the step's limit. The command is typed again when the shell
+               has printed nothing past its echo of the line for three
+               seconds, which is the shell dropping the command, or when it
+               answered that it does not know the command, which is a line
+               typed before the shell was reading and missing its first
+               bytes; a probe that is running is not typed at twice, since
+               the shell would run it again when it ends. */
             double step_end = now() + steptmo;
             double sent = 0;
             size_t mark = 0;
@@ -1493,7 +1497,7 @@ int main(int argc, char **argv)
 
             snprintf(line, sizeof(line), "exec %s", step + 6);
             while (child_poll() < 0 && now() < step_end && now() < deadline) {
-                int lines = 0;
+                int lines = 0, refused;
                 size_t i;
 
                 /* The shell's echo of the line is one line ending; a
@@ -1502,7 +1506,8 @@ int main(int argc, char **argv)
                     if (buf[i] == '\n')
                         lines++;
                 }
-                if (sent == 0 || (lines < 2 && now() - sent >= 3.0)) {
+                refused = contains(buf + mark, buf_len - mark, "Unknown command");
+                if (sent == 0 || refused || (lines < 2 && now() - sent >= 3.0)) {
                     send_line(line);
                     sent = now();
                     mark = buf_len;
