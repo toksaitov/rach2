@@ -31,6 +31,7 @@ int diskcmd_allowed_under(int policy, uint8_t command)
     switch (command) {
     case DISKCMD_READ_SECTORS:
     case DISKCMD_READ_SECTORS_EXT:
+    case DISKCMD_READ_DMA:
     case DISKCMD_READ_DMA_EXT:
     case DISKCMD_IDENTIFY:
         return 1;

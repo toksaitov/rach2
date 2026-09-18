@@ -34,6 +34,7 @@
 /* ATA commands this kernel knows how to issue, by their numbers on the wire. */
 #define DISKCMD_READ_SECTORS     0x20u
 #define DISKCMD_READ_SECTORS_EXT 0x24u
+#define DISKCMD_READ_DMA         0xC8u
 #define DISKCMD_READ_DMA_EXT     0x25u
 #define DISKCMD_WRITE_SECTORS    0x30u
 #define DISKCMD_WRITE_DMA_EXT    0x35u

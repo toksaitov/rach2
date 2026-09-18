@@ -8,7 +8,7 @@
  * Windows installation nobody has backed up. So the interesting half of the
  * table is not the commands it permits but the ones it does not, and the
  * sweep below is exhaustive, not a sample: all 256 command bytes are
- * offered under the read-only policy, and exactly four may be accepted.
+ * offered under the read-only policy, and exactly five may be accepted.
  *
  * The compiled-in policy is only half of it. This build is whatever the host
  * compiler's default is, so the table is exercised through
@@ -49,8 +49,9 @@ int main(void)
     /* ---- read-only permits four commands and no others ---- */
     for (c = 0; c < 256u; c++) {
         int allowed = diskcmd_allowed_under(DISKCMD_READ_ONLY, (uint8_t)c);
-        int expected = (c == DISKCMD_READ_SECTORS || c == DISKCMD_READ_SECTORS_EXT ||
-                        c == DISKCMD_READ_DMA_EXT || c == DISKCMD_IDENTIFY);
+        int expected =
+            (c == DISKCMD_READ_SECTORS || c == DISKCMD_READ_SECTORS_EXT || c == DISKCMD_READ_DMA ||
+             c == DISKCMD_READ_DMA_EXT || c == DISKCMD_IDENTIFY);
 
         if (allowed) {
             permitted++;
@@ -61,7 +62,7 @@ int main(void)
             break;
         }
     }
-    CHECK(permitted == 4, "read-only permits exactly four of the 256 command bytes");
+    CHECK(permitted == 5, "read-only permits exactly five of the 256 command bytes");
 
     /* ---- and the two that would reach the platter, named ---- */
     CHECK(!diskcmd_allowed_under(DISKCMD_READ_ONLY, DISKCMD_WRITE_DMA_EXT),
@@ -71,6 +72,8 @@ int main(void)
     CHECK(!diskcmd_allowed_under(DISKCMD_READ_ONLY, DISKCMD_FLUSH_CACHE_EXT),
           "FLUSH CACHE EXT is refused");
     CHECK(!diskcmd_allowed_under(DISKCMD_READ_ONLY, DISKCMD_FLUSH_CACHE), "FLUSH CACHE is refused");
+    CHECK(diskcmd_allowed_under(DISKCMD_READ_ONLY, DISKCMD_READ_DMA),
+          "read-only allows READ DMA, the 28-bit form the driver uses below 2^28");
     CHECK(diskcmd_allowed_under(DISKCMD_READ_ONLY, DISKCMD_READ_DMA_EXT),
           "READ DMA EXT is permitted, since a read-only kernel still reads");
     CHECK(diskcmd_allowed_under(DISKCMD_READ_ONLY, DISKCMD_IDENTIFY),

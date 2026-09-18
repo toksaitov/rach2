@@ -98,6 +98,13 @@ void klog(int level, const char *subsystem, const char *format, ...)
 
 const char diskcmd_policy_banner[] = "host test";
 
+/* The boot line, which names no option here. */
+int kcmdline_has(const char *flag)
+{
+    (void)flag;
+    return 0;
+}
+
 int diskcmd_allowed(uint8_t command)
 {
     (void)command;
@@ -106,7 +113,21 @@ int diskcmd_allowed(uint8_t command)
 
 block_device_t *block0;
 
+/* The scheduler runs unless a row stops it, as a shutdown does. */
+static int scheduler_on = 1;
+
+int sched_is_enabled(void)
+{
+    return scheduler_on;
+}
+
 static uint32_t polls;
+static uint32_t wait_ticks;
+
+void block_count_wait_tick(void)
+{
+    wait_ticks++;
+}
 
 void block_count_command(void)
 {}
@@ -214,6 +235,9 @@ static int bm_active, bm_intr;
 static uint8_t disk[SECTORS][SECTOR];
 static uint32_t status_reads, refused, garbage_reads, garbage_writes, commands;
 static int masked_at_dma_cmd, masked_at_start, masked_at_pio_cmd, masked_at_last_data;
+static int dma_fails;      /* the running DMA ends in ERR */
+static int error_pending;  /* ERR shows in the status until the next command */
+static int drive_at_flush; /* the drive register's value at the last flush */
 static void (*on_sleep)(void);
 static int sleeps;
 static uint32_t reads_at_sleep; /* the status reads when the owner came to sleep */
@@ -227,7 +251,7 @@ static uint8_t model_status(void)
 {
     switch (phase) {
     case IDLE:
-        return 0x50;
+        return (uint8_t)(0x50 | (error_pending ? 0x01 : 0));
     case PIO_READ_BUSY:
     case PIO_WRITE_BUSY:
     case FLUSH_BUSY:
@@ -251,13 +275,17 @@ static void model_advance(void)
         phase = IDLE;
         break;
     case DMA_RUN:
-        for (i = 0; i < sectors_left; i++) {
-            uint8_t *sector = disk[(cmd_lba + i) % SECTORS];
+        if (dma_fails) {
+            error_pending = 1;
+        } else {
+            for (i = 0; i < sectors_left; i++) {
+                uint8_t *sector = disk[(cmd_lba + i) % SECTORS];
 
-            if (cmd_write) {
-                k_memcpy(sector, model_bounce() + i * SECTOR, SECTOR);
-            } else {
-                k_memcpy(model_bounce() + i * SECTOR, sector, SECTOR);
+                if (cmd_write) {
+                    k_memcpy(sector, model_bounce() + i * SECTOR, SECTOR);
+                } else {
+                    k_memcpy(model_bounce() + i * SECTOR, sector, SECTOR);
+                }
             }
         }
         phase = IDLE;
@@ -303,6 +331,10 @@ static void model_command(uint8_t command)
         return;
     }
     commands++;
+    error_pending = 0;
+    if (command == 0xE7 || command == 0xEA) {
+        drive_at_flush = cur[6];
+    }
     switch (command) {
     case 0x20: /* READ SECTORS */
     case 0x30: /* WRITE SECTORS */
@@ -543,6 +575,11 @@ static void model_reset(int answer)
     bm_intr = 0;
     status_reads = refused = garbage_reads = garbage_writes = commands = 0;
     masked_at_dma_cmd = masked_at_start = masked_at_pio_cmd = masked_at_last_data = -1;
+    dma_fails = 0;
+    error_pending = 0;
+    drive_at_flush = -1;
+    scheduler_on = 1;
+    wait_ticks = 0;
     dma_written_not_started = 0;
     unmasked_between = 0;
     on_sleep = 0;
@@ -602,6 +639,13 @@ static void polled_read_while_owner_sleeps(void)
     polled_rc = ata_read(&drives[0].dev, 200, 1, polled_buf);
     masked = was_masked;
     in_syscall = was_in_syscall;
+}
+
+/* The tick, twice, while the owner sleeps. */
+static void two_ticks_while_asleep(void)
+{
+    ata_tick();
+    ata_tick();
 }
 
 int main(void)
@@ -701,6 +745,52 @@ int main(void)
           "a data-port transfer runs with interrupts off from its command to its last sector");
     CHECK(refused == 0 && garbage_writes == 0, "the data-port write was taken as written");
     d->dma = 1;
+
+    /* 6. The owner's DMA fails, and a polled read runs inside its sleep,
+          whose own command clears the drive's error bits: the owner's
+          answer is still the failure. */
+    model_reset(2);
+    dma_on_reads = 0;
+    dma_fails = 1;
+    on_sleep = polled_read_while_owner_sleeps;
+    rc = ata_read(&d->dev, 100, 8, owner_buf);
+    CHECK(rc == -EIO, "a failed DMA is reported failed although a polled command followed it");
+    CHECK(polled_rc == 0 && sector_is(polled_buf, 200),
+          "and the polled read inside it still succeeds");
+
+    /* 7. A write's flush selects its own drive again: the writer is the
+          slave, and the polled read inside its sleep selected the
+          master. */
+    model_reset(2);
+    dma_on_reads = 0;
+    drives[1] = drives[0];
+    drives[1].slave = 1;
+    drives[1].dev.drvdata = &drives[1];
+    on_sleep = polled_read_while_owner_sleeps;
+    k_memset(owner_buf, 0x3C, SECTOR);
+    rc = ata_write(&drives[1].dev, 11, 1, owner_buf);
+    CHECK(rc == 0, "the slave's write returns 0 around a polled read of the master");
+    CHECK(drive_at_flush >= 0 && (drive_at_flush & 0x10) != 0,
+          "the flush after the write went to the slave, not the drive the polled read selected");
+
+    /* 8. With the scheduler stopped, as at a shutdown, a caller in a
+          system call polls instead of sleeping for a channel it might
+          wait on forever. */
+    model_reset(2);
+    scheduler_on = 0;
+    rc = ata_read(&d->dev, 5, 1, polled_buf);
+    CHECK(rc == 0 && sector_is(polled_buf, 5),
+          "a read with the scheduler stopped returns its sector");
+    CHECK(sleeps == 0, "and did not sleep");
+
+    /* 9. The tick counts a sleeper's wait: two ticks while the owner
+          sleeps are two ticks in `disk-wait-ticks`. */
+    model_reset(2);
+    dma_on_reads = 0;
+    on_sleep = two_ticks_while_asleep;
+    rc = ata_read(&d->dev, 100, 8, owner_buf);
+    CHECK(rc == 0, "the owner's DMA read returns 0 with two ticks inside its sleep");
+    CHECK(wait_ticks == 2, "the two ticks the owner slept through are counted");
 
     if (fails) {
         printf("ata-test: %d failure(s)\n", fails);

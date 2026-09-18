@@ -26,8 +26,8 @@
  * read, in the caller's own context: a fault-safe device's transfer may
  * not schedule against the caller's memory, since the page cache's window
  * may evict or remap that memory while another process runs, and a
- * sleeping transfer straight into it corrupted a 256 MiB ext2 write and
- * the disk suites' roots on 2026-09-18. The processor's cache is coherent
+ * sleeping transfer straight into it would move whatever page is there
+ * when the engine runs. The processor's cache is coherent
  * with this DMA, so nothing is flushed. The data port path costs a
  * completion a sector, and under a hypervisor each is a round trip through
  * it: a 64 MiB write measured 217 s that way and 25 s emulated, which is
@@ -55,6 +55,7 @@
  * emulated; the polls and the ticks waited are counted for `/proc/disk`.
  */
 
+#include "../cmdline.h"
 #include "../klog.h"
 #include "block.h"
 #include "ata.h"
@@ -67,6 +68,7 @@
 #include "../lib/kstring.h"
 #include "../pci.h"
 #include "../proc/process.h"
+#include "../proc/sched.h"
 #include "../proc/wait_queue.h"
 #include "../serial.h"
 
@@ -162,9 +164,8 @@ void ata_set_io(const struct ata_io *ops)
    of microseconds on the slowest of these machines, so the bound is at
    least five seconds. The pause is what lets an emulator answer: under a
    hypervisor every status read is a trap that takes the emulator's lock,
-   and a loop of nothing but reads on a loaded host held the emulator's
-   own completion out for the whole of the first form's ten million reads,
-   after which the page cache panicked on the fault. */
+   and a loop of nothing but reads can hold the emulator's own completion
+   out for as long as the loop runs. */
 #define ATA_POLL_PLAIN  256
 #define ATA_PAUSE_LOOPS 10000
 #define ATA_POLL_LIMIT  200000
@@ -199,6 +200,8 @@ struct ata_channel {
     volatile uint32_t ticks; /* counted by ata_tick, the sleeping wait's clock */
     uint32_t irqs;           /* interrupts taken on this channel */
     int owner;               /* a sleeping caller holds the channel */
+    int sleepers;            /* callers asleep for a command, for the tick's count */
+    int error_seen;          /* a caller without the channel found ERR or DF, which are the owner's */
     uint16_t bm;             /* the bus master's registers, or 0 for none */
     /* The descriptor, aligned to its size, and the bounce buffer, aligned
        to its own so it lies in one 64 KiB region; both in .bss below the
@@ -234,8 +237,8 @@ struct ata_drive {
 };
 
 static struct ata_channel channels[2] = {
-    {0x1F0, 0x3F6, "primary", ATA_IRQ_PRIMARY, {0}, 0, 0, 0, 0, {0, 0, 0}, {0}},
-    {0x170, 0x376, "secondary", ATA_IRQ_SECONDARY, {0}, 0, 0, 0, 0, {0, 0, 0}, {0}}};
+    {0x1F0, 0x3F6, "primary", ATA_IRQ_PRIMARY, {0}, 0, 0, 0, 0, 0, 0, {0, 0, 0}, {0}},
+    {0x170, 0x376, "secondary", ATA_IRQ_SECONDARY, {0}, 0, 0, 0, 0, 0, 0, {0, 0, 0}, {0}}};
 static struct ata_drive drives[4];
 
 static int ata_read(block_device_t *device, uint64_t lba, uint32_t count, void *buffer);
@@ -272,7 +275,7 @@ static void ata_settle(const struct ata_channel *ch)
  * 1 with `*rc` set, 0 or `-EIO`, when it is, and 0 while the drive is
  * still busy or, for a wait for data, has none yet.
  */
-static int ata_status_done(const struct ata_channel *ch, int want, int *rc)
+static int ata_status_done(struct ata_channel *ch, int want, int *rc)
 {
     uint8_t status = ata_io->in8(ch->io + ATA_REG_STATUS);
 
@@ -287,10 +290,14 @@ static int ata_status_done(const struct ata_channel *ch, int want, int *rc)
     /* Idle is no command in any phase: a drive in a data phase, PIO or
        DMA, shows DRQ with BSY clear, and a command written to it then is
        refused or, worse, answered with the other command's data. The error
-       bits are another command's and are not read here. */
+       bits are the owner's command's: they are noted for it, since the
+       command written next clears them. */
     if (want == ATA_WANT_IDLE) {
         if (status & ATA_SR_DRQ) {
             return 0;
+        }
+        if (status & (ATA_SR_ERR | ATA_SR_DF)) {
+            ch->error_seen = 1;
         }
         *rc = 0;
         return 1;
@@ -328,10 +335,15 @@ static int ata_interrupts_on(void)
 }
 #endif
 
-/** Whether a wait here may sleep: interrupts on, inside a system call. */
+/**
+ * Whether a wait here may sleep: interrupts on, inside a system call, and
+ * the scheduler running. A shutdown stops the scheduler before it flushes
+ * the root, and a wait then for another process, the channel's owner or
+ * the tick, would never end, since nothing runs it.
+ */
 static int ata_can_sleep(void)
 {
-    return ata_interrupts_on() && proc_in_syscall();
+    return ata_interrupts_on() && proc_in_syscall() && sched_is_enabled();
 }
 
 /* The condition for a channel's owner to leave. */
@@ -444,7 +456,9 @@ static int ata_wait_for(struct ata_channel *ch, int want)
     w.want = want;
     w.t0 = ch->ticks;
     w.rc = -EIO;
+    ch->sleepers++;
     wq_wait_event_nointr(&ch->wq, ata_wait_cond, &w);
+    ch->sleepers--;
     return w.rc;
 }
 
@@ -481,8 +495,8 @@ static int ata_wait_data(struct ata_channel *ch)
 }
 
 /**
- * The channel's interrupt: reading the status register is the
- * acknowledgement the drive wants, and the sleepers re-read it themselves.
+ * The channel's interrupt: reading the status register clears the drive's
+ * interrupt request, and the sleepers re-read it themselves.
  */
 static void ata_irq(isr_params_t *params)
 {
@@ -502,6 +516,14 @@ void ata_tick(void)
 {
     int c;
 
+    for (c = 0; c < 2; c++) {
+        if (channels[c].sleepers > 0) {
+            /* The counter `/proc/disk` reports as `disk-wait-ticks`: this
+               driver's transfers take no request of the block layer, so
+               the tick counts their sleepers here. */
+            block_count_wait_tick();
+        }
+    }
     for (c = 0; c < 2; c++) {
         struct ata_channel *ch = &channels[c];
 
@@ -591,6 +613,7 @@ static int ata_dma_transfer(struct ata_drive *d, uint64_t lba, uint32_t count, v
        caller that cannot sleep, arriving on a tick between the two, would
        wait for that DRQ to clear until its bound and then fail. */
     flags = kirq_save();
+    ch->error_seen = 0;
     if (!ata_command(ch, ata_program(d, lba, count, write, 1))) {
         kirq_restore(flags);
         return write ? -EPERM : -EIO;
@@ -602,7 +625,10 @@ static int ata_dma_transfer(struct ata_drive *d, uint64_t lba, uint32_t count, v
     status = ata_io->in8(ch->bm + ATA_BM_STATUS);
     ata_io->out8(ch->bm + ATA_BM_CMD, 0);
     ata_io->out8(ch->bm + ATA_BM_STATUS, ATA_BM_ERROR | ATA_BM_INTR);
-    if (rc != 0 || (status & ATA_BM_ERROR)) {
+    /* A caller without the channel may have run a command of its own
+       while this one slept, and the status it found first was this
+       command's: an error it saw is this command's failure. */
+    if (rc != 0 || (status & ATA_BM_ERROR) || ch->error_seen) {
         return -EIO;
     }
     if (!write) {
@@ -731,10 +757,15 @@ static int ata_write_on(struct ata_drive *d, uint64_t lba, uint32_t count, const
             kirq_restore(flags);
         }
         /* The flush waits for the drive idle first, so a caller without
-           the channel flushes behind the owner's command, not into it. */
+           the channel flushes behind the owner's command, not into it; and
+           it selects its drive again, since that caller may have selected
+           the other one. */
         if (ata_wait_idle(ch) != 0) {
             return -EIO;
         }
+        ata_io->out8(ch->io + ATA_REG_DRIVE,
+                     (uint8_t)(ATA_DRIVE_SELECT | (d->slave ? ATA_DRIVE_SLAVE : 0)));
+        ata_settle(ch);
         if (!ata_command(ch, d->lba48 ? ATA_CMD_FLUSH_EXT : ATA_CMD_FLUSH)) {
             return -EPERM;
         }
@@ -917,7 +948,11 @@ int ata_init(void)
                 continue;
             }
             d->present = 1;
-            d->dma = ch->bm != 0 && (identify[c * 2 + s][49] & ATA_ID_CAP_DMA) != 0;
+            /* `rach2.atapio` keeps a drive on the data port, whose transfers
+               run with interrupts off: a suite that needs a writer that
+               never sleeps in the driver boots with it. */
+            d->dma = ch->bm != 0 && (identify[c * 2 + s][49] & ATA_ID_CAP_DMA) != 0 &&
+                     !kcmdline_has("rach2.atapio");
             d->dev.sector_size = BLOCK_SECTOR_SIZE;
             d->dev.sector_count = d->sectors;
             d->dev.flags = BLOCK_FAULT_SAFE;
