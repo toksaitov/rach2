@@ -1,29 +1,34 @@
 #!/bin/sh
 # diskrate.sh: the rate of the storage paths, each timed in the machine and
-# held under a multiple of the raw device read the same boot measures: a
-# file written and read back on exFAT and on FAT32, two hundred small
-# files, sixteen mebibytes in 4 KiB calls, and a raw read through a pipe
-# into a hash. The boot asks for the whole-disk nodes, which the ordinary
-# kernel publishes only then and lets only the recovery build write, so
-# the raw device is read and not written here. One boot of the os-real
-# image with three IDE disks: a raw one, an exFAT volume and a FAT32 one.
+# held under a multiple of a baseline the same boot measures: a file
+# written and read back on exFAT and on FAT32, two hundred small files,
+# sixteen mebibytes in 4 KiB calls, and a raw read through a pipe into a
+# hash. The boot asks for the whole-disk nodes, which the ordinary kernel
+# publishes only then and lets only the recovery build write, so the raw
+# device is read and not written here. One boot of the os-real image with
+# three IDE disks: a raw one, an exFAT volume and a FAT32 one.
 #
-# A row's time is judged against the raw read of that boot, not against
-# seconds written for one machine, so the suite passes on any host whose
-# emulator is slower or faster as a whole: the raw read is the machine's
-# rate through the block layer, and a file system path costs a multiple of
-# it that does not depend on the machine. The multiples have room of two
-# and a half times over the worst of the two hosts measured on 2026-09-18,
-# an Apple M-series Mac and a Ryzen under WSL, both emulating; the worst
-# of the two was 0.74 for the pipe, 0.61 for the exFAT write, 1.03 and
-# 1.04 for the two reads, 1.16 for the FAT32 write, 2.59 and 3.39 for the
-# 4 KiB writes and 1.24 for the files. So a path that waits or spins fails
-# by an order of magnitude while a slow host passes: a delay of 50 ms on
-# each FAT32 write, 4096 of them, puts that row past twelve on both. A
-# path that falls back to a page a request, a walk of the chain per block
-# or a write through per cluster is caught by the command and cache-hit
-# counts below, which do not depend on the machine at all. Times are read
-# from /proc/uptime in hundredths of a second.
+# A row is judged against the same kind of work in the same boot, not
+# against seconds written for one machine, so the suite passes on any host
+# whatever its speed and whatever its hypervisor does to reads and to
+# writes: a read row against the raw device read, the machine's read rate
+# through the block layer, and a write row against the 64 MiB sequential
+# write on exFAT, the plainest write path there is, one run of clusters
+# and one command a mebibyte. Under a nested KVM a write costs many times
+# a read, since the driver polls a port after every sector and each poll
+# exits through two hypervisors, and a write judged against a read would
+# fail there for no fault of its own. The multiples have room of two and a
+# half times over the worst of the two hosts measured on 2026-09-18, an
+# Apple M-series Mac and a Ryzen under WSL, both emulating: the worst was
+# 0.74 for the pipe and 1.03 and 1.04 for the two reads against the raw
+# read, and 2.10 for the FAT32 write, 4.27 and 5.58 for the 4 KiB writes
+# and 2.04 for the files against the exFAT write. So a path that waits or
+# spins fails by an order of magnitude while a slow host passes: a delay
+# of 50 ms on each FAT32 write, 4096 of them, puts that row past fourteen
+# on both. A path that falls back to a page a request, a walk of the chain
+# per block or a write through per cluster is caught by the command and
+# cache-hit counts below, which do not depend on the machine at all. Times
+# are read from /proc/uptime in hundredths of a second.
 #
 # A second boot, of the recovery kernel, which alone writes a whole-disk
 # node, times a 4 MiB raw write and raw read of a USB stick in 32 KiB
@@ -103,8 +108,9 @@ set -- \
 least() {
     tr -d '\r' < "$LOG" | grep -a "^T_$1 [0-9]" | awk '{print $2}' | sort -n | head -1
 }
-# row NAME MULTIPLE TEXT: the row's time against MULTIPLE times the raw
-# read of the same boot; a row whose command failed has no time and fails.
+# row NAME MULTIPLE TEXT: the row's time against MULTIPLE times the
+# baseline in BASE, named in BASENAME; a row whose command failed has no
+# time and fails.
 # The second read of a file is served from the cache, so a read row times a
 # cold read and a warm one together. The pipe row runs first in the boot
 # and three times: after other programs have run and exited, a program's
@@ -116,9 +122,9 @@ row() {
     t=$(least "$1")
     [ -n "$t" ] || fail "no time for $1 in $LOG"
     if awk -v t="$t" -v b="$BASE" -v m="$2" 'BEGIN {exit !(t <= m * b)}'; then
-        echo "diskrate-test: $3: $(awk -v t="$t" -v b="$BASE" -v m="$2" 'BEGIN {printf "%.2f s, %.2f times the raw read, under %s", t / 100, t / b, m}'): OK"
+        echo "diskrate-test: $3: $(awk -v t="$t" -v b="$BASE" -v m="$2" -v n="$BASENAME" 'BEGIN {printf "%.2f s, %.2f times the %s, under %s", t / 100, t / b, n, m}'): OK"
     else
-        echo "diskrate-test: FAIL: $3: $(awk -v t="$t" -v b="$BASE" -v m="$2" 'BEGIN {printf "%.2f s, %.2f times the raw read, over %s", t / 100, t / b, m}')" >&2
+        echo "diskrate-test: FAIL: $3: $(awk -v t="$t" -v b="$BASE" -v m="$2" -v n="$BASENAME" 'BEGIN {printf "%.2f s, %.2f times the %s, over %s", t / 100, t / b, n, m}')" >&2
         rc=1
     fi
 }
@@ -156,21 +162,25 @@ counts() {
         rc=1
     fi
 }
-# The raw read is the baseline. It must have moved its bytes and taken
-# time, since a zero would make every multiple pass; there is no rate it
-# is held to, because it is the machine's.
-BASE=$(least rawread)
-[ -n "$BASE" ] || fail "no time for rawread in $LOG"
-[ "$BASE" -gt 0 ] || fail "the raw read took no measurable time, so nothing can be judged against it"
-echo "diskrate-test: 128 MiB read from the raw device in $(awk -v b="$BASE" 'BEGIN {printf "%.2f s, %.0f", b / 100, 131072 / b * 100}') KiB/s: the boot's baseline"
+# baseline NAME TEXT: a baseline row. It must have moved its bytes and
+# taken time, since a zero would make every multiple pass; there is no
+# rate it is held to, because it is the machine's.
+baseline() {
+    BASE=$(least "$1")
+    [ -n "$BASE" ] || fail "no time for $1 in $LOG"
+    [ "$BASE" -gt 0 ] || fail "the $2 took no measurable time, so nothing can be judged against it"
+    BASENAME=$2
+    echo "diskrate-test: $3 in $(awk -v b="$BASE" -v k="$4" 'BEGIN {printf "%.2f s, %.0f", b / 100, k / b * 100}') KiB/s: the boot's $2"
+}
+baseline rawread "raw read" "128 MiB read from the raw device" 131072
 row pipehash 2 "64 MiB read raw through a pipe into sha256sum"
-row exwrite 2 "64 MiB written into a file on exFAT and synced"
 row exread 3 "the exFAT file read twice, cold and from the cache"
-row fatwrite 4 "64 MiB written into a file on FAT32 and synced"
 row fatread 3 "the FAT32 file read twice, cold and from the cache"
-row exsmall 8 "16 MiB written on exFAT in 4 KiB calls"
-row fatsmall 12 "16 MiB written on FAT32 in 4 KiB calls"
-row exfiles 4 "two hundred 32 KiB files written on exFAT"
+baseline exwrite "exFAT write" "64 MiB written into a file on exFAT and synced" 65536
+row fatwrite 6 "64 MiB written into a file on FAT32 and synced"
+row exsmall 11 "16 MiB written on exFAT in 4 KiB calls"
+row fatsmall 14 "16 MiB written on FAT32 in 4 KiB calls"
+row exfiles 6 "two hundred 32 KiB files written on exFAT"
 # The hits' bounds are three times the counts measured on 2026-09-10 (exFAT
 # write 131 thousand, FAT32 write 427 thousand, exFAT small 37 thousand,
 # FAT32 small 115 thousand, exFAT files 21 thousand) and far under the
