@@ -347,9 +347,11 @@ static void dest_screen(const struct klog_record *r)
         screen_line_open = 0;
     }
     set_fore_color(screen_color(r->level));
+    vga_text_hold();
     for (i = r->body; i < r->len; i++) {
         k_putc(r->text[i]);
     }
+    vga_text_release();
     set_fore_color(VGA_TEXT_DEFAULT_FG);
 }
 
@@ -586,12 +588,15 @@ void klog(int level, const char *subsystem, const char *format, ...)
  * of at most 256 bytes that `sys_write` hands it, so a record waits for at
  * most that chunk's bytes, and a token printed within one chunk is one line
  * of the log; a longer write may still have a record between two chunks.
+ * The bracket also holds the screen's cursor, which is then placed once for
+ * the chunk instead of after every byte.
  */
 void console_write_begin(void)
 {
     uint32_t flags = kirq_save();
 
     console_writing++;
+    vga_text_hold();
     kirq_restore(flags);
 }
 
@@ -603,6 +608,7 @@ void console_write_end(void)
 {
     uint32_t flags = kirq_save();
 
+    vga_text_release();
     if (--console_writing > 0 || klog_delivering || pending_count == 0) {
         kirq_restore(flags);
         return;
@@ -700,10 +706,12 @@ void console_puts(const char *str)
     if (str == 0) {
         return;
     }
+    vga_text_hold();
     while (*str != '\0') {
         console_putc(*str++);
     }
     console_putc('\n');
+    vga_text_release();
 }
 
 void console_printf(const char *format, ...)
@@ -711,5 +719,7 @@ void console_printf(const char *format, ...)
     char **args = (char **)&format;
 
     ++args;
+    vga_text_hold();
     k_vprintf(console_putc, format, args);
+    vga_text_release();
 }

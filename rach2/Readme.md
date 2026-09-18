@@ -208,7 +208,7 @@ The commands are grouped here by purpose:
 * Kernel exercises: `switch`, `preempt`, `isolate`, `usermode`, `netping`, `netbad`, and the `audio` command family.
 * Stops: `halt`, `poweroff`, and `reboot` flush the mounted disk root before stopping. `fault` deliberately panics the kernel. A restart asks the machine three ways, most of the machine first: the firmware's own reset command, the chipset reset register, then the keyboard controller's pulse. The first is sent only where the firmware's SMBIOS table names the firmware that command belongs to; on every other machine it is skipped with the name that was read instead.
 
-The VGA text console keeps scrollback. `PageUp`, `PageDown`, `Home`, and `End` move through it; typing returns to the live prompt. COM1 carries the same boot and shell output to QEMU's `-serial stdio` path.
+The VGA text console keeps scrollback. `PageUp`, `PageDown`, `Home`, and `End` move through it; typing returns to the live prompt. Each byte of live output is one write to the adapter's memory, and a scroll moves the display's start address rather than rewriting the screen, since that memory is slow on hardware and a trapped access under a hypervisor. COM1 carries the same boot and shell output to QEMU's `-serial stdio` path.
 
 ## Source map
 

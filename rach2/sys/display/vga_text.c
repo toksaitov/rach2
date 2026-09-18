@@ -9,7 +9,20 @@
  * live (bottom) area where new text lands; `_viewport_top_line` is the line at
  * the top of what is currently displayed. They differ while the user scrolls
  * back through history; `_follow_live` is true when the viewport tracks live
- * output. vga_text_sync() blits the viewport's lines to the hardware buffer.
+ * output.
+ *
+ * The adapter's memory is slow: every cell written to it is an uncached bus
+ * cycle on hardware and a trapped access under a hypervisor, microseconds
+ * where a store to memory is nanoseconds, and a screen is two thousand
+ * cells. So the driver writes each cell once. A byte of live output
+ * goes to its one cell, and a scroll moves the display's start address
+ * through the 32 KiB the adapter maps at VGA_TEXT_BUFFER, which holds eight
+ * screens, and writes only the new blank line; the rows that stay are
+ * copied to the front of that memory once every 179 lines, when the window
+ * reaches its end. `_hw_top` is the cell the display starts at. Only a
+ * viewport that moves, a scroll back through history or a clear, is blitted
+ * whole by vga_text_sync(). The cursor's position is two port writes per
+ * register, and a write of many bytes holds it and places it once at the end.
  */
 
 #include "vga_text.h"
@@ -17,6 +30,11 @@
 
 #define VGA_TEXT_SCROLLBACK_LINES 512
 #define VGA_TEXT_BLANK_CHAR       ' '
+
+/* The cells the adapter maps at VGA_TEXT_BUFFER, 32 KiB of two-byte cells,
+ * and the cells of one screen. */
+#define VGA_TEXT_CELLS        16384u
+#define VGA_TEXT_SCREEN_CELLS (VGA_TEXT_ROWS * VGA_TEXT_COLS)
 
 unsigned int x;
 unsigned int y;
@@ -30,6 +48,35 @@ static uint32_t _history_line_count = 0;
 static uint32_t _live_top_line = 0;
 static uint32_t _viewport_top_line = 0;
 static bool _follow_live = true;
+
+/* The cell of the adapter's memory the display starts at, and whether the
+ * start address has been written since boot. */
+static uint32_t _hw_top = 0;
+static bool _hw_started = false;
+
+/* Writers holding the cursor, and whether it moved while held. */
+static unsigned int _hold = 0;
+static bool _cursor_stale = false;
+
+static volatile uint16_t *vga_text_memory(void)
+{
+    return (volatile uint16_t *)VGA_TEXT_BUFFER;
+}
+
+/**
+ * Point the display at cell `cell` of the adapter's memory.
+ *
+ * CRTC registers 0x0C and 0x0D hold the start address, high byte first, in
+ * cells. The port at 0x3D4 selects the register and 0x3D5 writes it.
+ */
+static void vga_text_set_start(uint32_t cell)
+{
+    outb(0x3D4, 0x0C);
+    outb(0x3D5, (uint8_t)(cell >> 8));
+    outb(0x3D4, 0x0D);
+    outb(0x3D5, (uint8_t)cell);
+    _hw_started = true;
+}
 
 static uint16_t vga_text_make_cell(char c, uint8_t attr)
 {
@@ -135,8 +182,9 @@ static void vga_text_reset_history(void)
  *
  * The cursor sits at (x, y) of the live area while following live output.
  * When scrolled back it is placed at the corresponding cell only if that cell
- * is on screen; otherwise it is parked in the last cell so it stays visible
- * but out of the way.
+ * is on screen; otherwise it is parked at the bottom-right corner. The
+ * registers count cells from the start of the adapter's memory, not from the
+ * display's start address, so `_hw_top` is added.
  */
 static void vga_text_update_cursor(void)
 {
@@ -144,28 +192,72 @@ static void vga_text_update_cursor(void)
     uint16_t cursor_pos;
 
     if (_follow_live) {
-        cursor_pos = (uint16_t)(y * VGA_TEXT_COLS + x);
+        cursor_pos = (uint16_t)(_hw_top + y * VGA_TEXT_COLS + x);
     } else if (cursor_line >= _viewport_top_line &&
                cursor_line < _viewport_top_line + VGA_TEXT_ROWS) {
-        cursor_pos = (uint16_t)((cursor_line - _viewport_top_line) * VGA_TEXT_COLS + x);
+        cursor_pos = (uint16_t)(_hw_top + (cursor_line - _viewport_top_line) * VGA_TEXT_COLS + x);
     } else {
-        cursor_pos = (uint16_t)(VGA_TEXT_ROWS * VGA_TEXT_COLS - 1);
+        cursor_pos = (uint16_t)(_hw_top + VGA_TEXT_SCREEN_CELLS - 1);
     }
 
     /* CRTC port 0x3D4 selects a register, 0x3D5 reads/writes it; cursor
-       location is the 16-bit value in registers 0xE (high) and 0xF (low). */
+     * location is registers 0xE (high byte) and 0xF (low byte). */
     outb(0x3D4, 0xE);
     outb(0x3D5, cursor_pos >> 8);
     outb(0x3D4, 0xF);
     outb(0x3D5, cursor_pos);
+    _cursor_stale = false;
 }
 
 /**
- * Blit the current viewport to the VGA text buffer and update the cursor.
+ * Place the hardware cursor where the next byte will land, or note that it
+ * moved when a writer holds it.
+ */
+void vga_text_place_cursor(void)
+{
+    if (_hold > 0) {
+        _cursor_stale = true;
+        return;
+    }
+    vga_text_update_cursor();
+}
+
+/**
+ * Hold the cursor for a write of many bytes.
+ *
+ * Each byte of output moves the cursor, and placing it is four port writes;
+ * a line placed once at the end costs the same as one byte placed on its own.
+ * Holds nest, so a record an interrupt raises inside a program's write takes
+ * its own hold and the cursor is placed when the outermost writer releases.
+ * An interrupt's hold and release are balanced, so a count it interrupts
+ * between the load and the store is stored as it would have been, and a
+ * cursor the interrupt moved is placed by the writer it interrupted.
+ */
+void vga_text_hold(void)
+{
+    _hold++;
+}
+
+/** Release a hold, placing the cursor if it moved while held. */
+void vga_text_release(void)
+{
+    if (_hold > 0) {
+        _hold--;
+    }
+    if (_hold == 0 && _cursor_stale) {
+        vga_text_update_cursor();
+    }
+}
+
+/**
+ * Blit the current viewport to the adapter's memory and place the cursor.
  *
  * Each on-screen row is filled from its scrollback line; rows mapping to lines
- * that do not exist (above the start of history) are filled with blanks. Call
- * this after any change to the history or viewport pointers to make it visible.
+ * that do not exist (above the start of history) are filled with blanks. The
+ * rows go to the window at `_hw_top`, which the display is then pointed at.
+ * This is the whole screen, two thousand cells, so it is for a viewport that
+ * moved: a scroll back through history, or a clear. Live output does not
+ * come here.
  */
 void vga_text_sync(void)
 {
@@ -174,7 +266,7 @@ void vga_text_sync(void)
     unsigned int row;
     unsigned int col;
 
-    video_memory = (volatile uint16_t *)VGA_TEXT_BUFFER;
+    video_memory = vga_text_memory() + _hw_top;
     for (row = 0; row < VGA_TEXT_ROWS; ++row) {
         line = _viewport_top_line + row;
 
@@ -191,7 +283,38 @@ void vga_text_sync(void)
         }
     }
 
-    vga_text_update_cursor();
+    vga_text_set_start(_hw_top);
+    vga_text_place_cursor();
+}
+
+/**
+ * Scroll the display one line without rewriting it.
+ *
+ * The start address moves down a line, and the line that comes into view at
+ * the bottom is written blank. When the window would pass the end of the
+ * adapter's memory, the twenty-four rows that stay are copied to its front
+ * first; that copy is the one whole-screen cost, and it comes once every 179
+ * lines. The source of the copy begins past the destination's end, so a
+ * forward copy is safe.
+ */
+static void vga_text_scroll_hardware(void)
+{
+    volatile uint16_t *video_memory = vga_text_memory();
+    uint16_t blank = vga_text_blank_cell();
+    uint32_t i;
+
+    if (_hw_top + VGA_TEXT_SCREEN_CELLS + VGA_TEXT_COLS > VGA_TEXT_CELLS) {
+        for (i = 0; i < VGA_TEXT_SCREEN_CELLS - VGA_TEXT_COLS; i++) {
+            video_memory[i] = video_memory[_hw_top + VGA_TEXT_COLS + i];
+        }
+        _hw_top = 0;
+    } else {
+        _hw_top += VGA_TEXT_COLS;
+    }
+    for (i = 0; i < VGA_TEXT_COLS; i++) {
+        video_memory[_hw_top + VGA_TEXT_SCREEN_CELLS - VGA_TEXT_COLS + i] = blank;
+    }
+    vga_text_set_start(_hw_top);
 }
 
 void k_cls(void)
@@ -205,9 +328,10 @@ void k_cls(void)
 /**
  * Scroll the live area down by one line.
  *
- * Appends a fresh blank line and advances the live top. The viewport follows
- * only when tracking live output; a user scrolled back into history stays put,
- * except that it is pulled forward if its line has just been evicted.
+ * Appends a fresh blank line and advances the live top. A viewport following
+ * live output scrolls with the display's start address; a user scrolled back
+ * into history stays put, except that it is pulled forward, and redrawn, if
+ * its line has just been evicted.
  */
 void k_scroll_down(void)
 {
@@ -216,11 +340,11 @@ void k_scroll_down(void)
 
     if (_follow_live) {
         _viewport_top_line = _live_top_line;
+        vga_text_scroll_hardware();
     } else if (_viewport_top_line < _history_start_line) {
         _viewport_top_line = _history_start_line;
+        vga_text_sync();
     }
-
-    vga_text_sync();
 }
 
 /**
@@ -228,12 +352,16 @@ void k_scroll_down(void)
  *
  * Coordinates are relative to the live top, not the viewport. Out-of-range
  * coordinates and missing history lines are ignored. The write lands in the
- * history ring; vga_text_sync() is needed to make it visible.
+ * history ring and, while the viewport follows live output, in the one cell
+ * of the adapter's memory that shows it. The first such write points the
+ * display at the front of that memory, where the firmware may not have left
+ * it.
  */
 void vga_text_write_cell(unsigned int col, unsigned int row, char c, uint8_t attr)
 {
     uint32_t line = _live_top_line + row;
     uint16_t *cells;
+    uint16_t cell;
 
     if (col >= VGA_TEXT_COLS || row >= VGA_TEXT_ROWS) {
         return;
@@ -243,8 +371,15 @@ void vga_text_write_cell(unsigned int col, unsigned int row, char c, uint8_t att
         return;
     }
 
+    cell = vga_text_make_cell(c, attr);
     cells = vga_text_line_ptr(line);
-    cells[col] = vga_text_make_cell(c, attr);
+    cells[col] = cell;
+    if (_follow_live) {
+        if (!_hw_started) {
+            vga_text_set_start(_hw_top);
+        }
+        vga_text_memory()[_hw_top + row * VGA_TEXT_COLS + col] = cell;
+    }
 }
 
 void set_fore_color(display_color_t color)

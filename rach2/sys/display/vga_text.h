@@ -14,7 +14,10 @@
  */
 #define VGA_TEXT_COLS           80
 #define VGA_TEXT_ROWS           25
+/* A host test stands its own memory in for the adapter's. */
+#ifndef VGA_TEXT_BUFFER
 #define VGA_TEXT_BUFFER         0xB8000
+#endif
 
 #define VGA_TEXT_DEFAULT_FG     0x07    /* Light grey */
 #define VGA_TEXT_DEFAULT_BG     0x00    /* Black */
@@ -68,8 +71,17 @@ void k_cls(void);
 /** Write one character cell at (col, row) of the live area. */
 void vga_text_write_cell(unsigned int col, unsigned int row, char c, uint8_t attr);
 
-/** Blit the current viewport to the VGA text buffer and update the cursor. */
+/** Blit the current viewport to the adapter's memory and place the cursor. */
 void vga_text_sync(void);
+
+/** Place the hardware cursor where the next byte will land. */
+void vga_text_place_cursor(void);
+
+/** Hold the cursor across a write of many bytes; holds nest. */
+void vga_text_hold(void);
+
+/** Release a hold, placing the cursor if it moved while held. */
+void vga_text_release(void);
 
 /*
  * Set the foreground (text) color for subsequent output.

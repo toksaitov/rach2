@@ -251,8 +251,9 @@ static void vt_dispatch_csi(char c)
  * final letter and is executed by `vt_dispatch_csi`; a private CSI (`ESC [ ?`,
  * as in the alternate-screen and cursor-visibility toggles) is swallowed; a
  * charset selector (`ESC (` and kin) swallows its next byte; an OSC (`ESC ]`)
- * is swallowed to its terminating BEL. The hardware cursor is synced after
- * every byte, so a cursor-only sequence still moves the on-screen caret.
+ * is swallowed to its terminating BEL. The hardware cursor is placed after
+ * every byte, so a cursor-only sequence still moves the on-screen caret; a
+ * writer of many bytes holds it and it is placed once at the release.
  */
 void k_putc(char c)
 {
@@ -335,20 +336,25 @@ void k_putc(char c)
             break;
     }
 
-    vga_text_sync();
+    vga_text_place_cursor();
 }
 
 void k_puts(const char *str)
 {
     if (str == NULL) return;
 
+    vga_text_hold();
     while (*str) { k_putc(*str++); } k_putc(CHAR_LF);
+    vga_text_release();
 }
 
 void k_printf(const char *format, ...)
 {
     char **args = (char **) &format; ++args;
+
+    vga_text_hold();
     k_vprintf(k_putc, format, args);
+    vga_text_release();
 }
 
 void outb(uint16_t port, uint8_t val)

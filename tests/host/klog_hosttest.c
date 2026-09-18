@@ -148,6 +148,14 @@ void set_fore_color(display_color_t color)
     (void)color;
 }
 
+/* The cursor holds the screen's writes take: the ring's order is what is
+   tested, and the cursor has no part in it. */
+void vga_text_hold(void)
+{}
+
+void vga_text_release(void)
+{}
+
 unsigned int kirq_save(void)
 {
     irq_depth++;
