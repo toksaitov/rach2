@@ -24,4 +24,5 @@ In progress on 2026-09-18. The counters, the kernel faults the two accelerators 
 
 ## Phase 5: the cuts
 
-* `selfbuild-ext2` builds the kernel once; the second build, the hash comparison and the userland half are the KRFFS run's. The three installer suites are partitions of one script and not repetitions. The account suite's 62 fed lines at six seconds each are its whole cost, 400 s; converting the feed to the harness's prompts is the cut still to make.
+* `selfbuild-ext2` builds the kernel once; the second build, the hash comparison and the userland half are the KRFFS run's. The three installer suites are partitions of one script and not repetitions. The account suite's 62 fed lines at six seconds each were its whole cost, 400 s, and under KVM the feed lost lines to `login`, which flushes its input before asking: the arcs are typed through the harness now, each line at the prompt or the marker it answers.
+* A line typed at the console longer than 255 characters is cut by the line discipline, which KVM showed in six rows the emulator had passed by the shell's own editing; the lines are split and `style` refuses a `send=` over 240 characters.
