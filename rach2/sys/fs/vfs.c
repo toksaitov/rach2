@@ -15,6 +15,7 @@
 #include "../mm/pagecache.h"
 #include "../panic.h"
 #include "../proc/process.h"
+#include "../proc/sched.h"
 #include "bcache.h"
 #include "devfs.h"
 #include "fat32.h"
@@ -207,15 +208,27 @@ void vfs_ns_lock(struct vfs_mount *mnt)
     mnt->ns_depth = 1;
 }
 
+/*
+ * Release the lock, and hand it on: a waiter is woken and given the
+ * processor before this process can take the lock again, since a writer
+ * that locks for every call would otherwise take it back each time before
+ * the waiter ran, and the waiter would starve until the writer stopped.
+ */
 void vfs_ns_unlock(struct vfs_mount *mnt)
 {
+    int waited;
+
     if (mnt->ns_depth > 1) {
         mnt->ns_depth--;
         return;
     }
     mnt->ns_depth = 0;
     mnt->ns_holder = -1;
+    waited = wq_active(&mnt->ns_wq);
     wq_wake_all(&mnt->ns_wq);
+    if (waited && current_proc && sched_is_enabled()) {
+        sched_yield();
+    }
 }
 
 /* ---- the permission the resolver charges ---- */
