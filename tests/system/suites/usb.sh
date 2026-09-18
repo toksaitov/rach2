@@ -70,7 +70,7 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
     --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
     --timeout 90 --ok "Available commands" \
-    "expect=class 3 protocol 1" "expect=Type 'help'" key=h key=e key=l key=p key=ret \
+    "seen=class 3 protocol 1" "seen=Type 'help'" key=h key=e key=l key=p key=ret \
     "expect=Available commands" > /dev/null 2>&1; then
     note "a key typed on the USB keyboard reaches the shell: OK"
 else
@@ -86,7 +86,7 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
     --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
     --timeout 120 --steptmo 45 --ok "All stdin syscalls passed" \
-    "expect=class 3 protocol 1" "expect=Type 'help'" "send=exec /stdintest" \
+    "seen=class 3 protocol 1" "seen=Type 'help'" "send=exec /stdintest" \
     "expect=Test 1: read from stdin" \
     key=a key=b key=ret key=c key=d key=ret key=e key=f key=ret \
     > /dev/null 2>&1; then
@@ -257,7 +257,7 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci,msi=on \
     --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
     --timeout 120 --steptmo 45 --ok "INTRPROBE OK" --never "INTRPROBE FAIL" \
-    "expect=class 3 protocol 1" "expect=Type 'help'" key=h key=e key=l key=p key=ret \
+    "seen=class 3 protocol 1" "seen=Type 'help'" key=h key=e key=l key=p key=ret \
     "expect=Available commands" "send=exec /intrprobe" "expect=INTRPROBE OK" \
     > /dev/null 2>&1; then
     note "the controller's messages arrive and are counted: OK"
@@ -273,7 +273,7 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max --append "rach2.nomsi" \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci,msi=on \
     --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
     --timeout 120 --steptmo 45 --ok "INTRPROBE OK" --never "INTRPROBE FAIL" \
-    "expect=class 3 protocol 1" "expect=Type 'help'" key=h key=e key=l key=p key=ret \
+    "seen=class 3 protocol 1" "seen=Type 'help'" key=h key=e key=l key=p key=ret \
     "expect=Available commands" "send=exec /intrprobe" "expect=INTRPROBE OK" \
     > /dev/null 2>&1; then
     note "with rach2.nomsi the controller's line carries its interrupts and typing still works: OK"
@@ -319,7 +319,7 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
     --append "rach2.usblatency" --log "$LAT_LOG" \
     --timeout 120 --steptmo 45 --ok "KEYLAT OK" \
-    "expect=class 3 protocol 1" "expect=Type 'help'" "send=exec /keylatprobe" \
+    "seen=class 3 protocol 1" "seen=Type 'help'" "send=exec /keylatprobe" \
     "expect=KEYLAT READING" key=ret \
     > /dev/null 2>&1; then
     # The timer's pump may bring the key before the controller's message,
@@ -371,7 +371,7 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
     --append "rach2.usblatency" --log "$LAT_LOG" \
     --timeout 120 --steptmo 45 --ok "KEYLAT OK" --never "KEYLAT FAIL" \
-    "expect=class 3 protocol 1" "expect=Type 'help'" "send=exec /keylatprobe random" \
+    "seen=class 3 protocol 1" "seen=Type 'help'" "send=exec /keylatprobe random" \
     "expect=KEYLAT HOG" key=ret \
     > /dev/null 2>&1; then
     if ! grep -q "usb: latency:" "$LAT_LOG"; then
@@ -408,7 +408,7 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci,msi=on \
     --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
     --timeout 120 --steptmo 45 --ok "KEYLAT OK" --never "usb: latency:" \
-    "expect=class 3 protocol 1" "expect=Type 'help'" "send=exec /keylatprobe" \
+    "seen=class 3 protocol 1" "seen=Type 'help'" "send=exec /keylatprobe" \
     "expect=KEYLAT READING" key=ret \
     > /dev/null 2>&1; then
     note "without rach2.usblatency the key is read and no path is printed: OK"
@@ -425,7 +425,7 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max --append "rach2.msidrop=3" \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci,msi=on \
     --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
     --timeout 120 --steptmo 45 --ok "INTRPROBE OK" --never "INTRPROBE FAIL" \
-    "expect=class 3 protocol 1" "expect=Type 'help'" key=h key=e key=l key=p key=ret \
+    "seen=class 3 protocol 1" "seen=Type 'help'" key=h key=e key=l key=p key=ret \
     "expect=Available commands" "send=exec /intrprobe" "expect=INTRPROBE OK" \
     > /dev/null 2>&1; then
     note "a machine whose messages stop keeps typing on the timer's pump: OK"
@@ -459,7 +459,7 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0,port=1.3 \
     --append "rach2.hubtree" \
     --timeout 120 --steptmo 45 --ok "USBPROBE OK" --never "USBPROBE FAIL" \
-    "expect=class 3 protocol 1" "expect=Type 'help'" key=h key=e key=l key=p key=ret \
+    "seen=class 3 protocol 1" "seen=Type 'help'" key=h key=e key=l key=p key=ret \
     "expect=Available commands" "send=exec /usbprobe" "expect=USBPROBE OK" \
     > /dev/null 2>&1; then
     note "a keyboard and a mouse behind a hub are listed with their path and the keyboard types: OK"
@@ -571,7 +571,7 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=usb-hub,bus=xhci.0,port=1.1,id=hub2 \
     --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0,port=1.1.2 \
     --timeout 120 --steptmo 45 --ok "Available commands" --log "$OUT.hubhub.log" \
-    "expect=class 3 protocol 1" "expect=Type 'help'" key=h key=e key=l key=p key=ret \
+    "seen=class 3 protocol 1" "seen=Type 'help'" key=h key=e key=l key=p key=ret \
     "expect=Available commands" > /dev/null 2>&1 && \
    grep -aq 'usb: device: port [0-9]*\.1\.2: 627:1, class 3 protocol 1' "$OUT.hubhub.log"; then
     note "a keyboard behind a hub behind a hub is at its path and types: OK"
@@ -629,7 +629,7 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci1.0,port=1.1 \
     --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci1.0,port=1.2 \
     --timeout 120 --steptmo 60 --ok "Available commands" --log "$OUT.twohc.log" \
-    "expect=class 3 protocol 1" "expect=Type 'help'" key=h key=e key=l key=p key=ret \
+    "seen=class 3 protocol 1" "seen=Type 'help'" key=h key=e key=l key=p key=ret \
     "expect=Available commands" > /dev/null 2>&1; then
     note "the only keyboard, behind a hub on the second controller, types: OK"
 else
@@ -725,7 +725,7 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci1.0 \
     --append "rach2.hcfail=0" \
     --timeout 120 --steptmo 60 --ok "Available commands" --log "$OUT.hcfail.log" \
-    "expect=class 3 protocol 1" "expect=Type 'help'" key=h key=e key=l key=p key=ret \
+    "seen=class 3 protocol 1" "seen=Type 'help'" key=h key=e key=l key=p key=ret \
     "expect=Available commands" > /dev/null 2>&1; then
     note "a controller refused at its bring-up leaves the other one serving: OK"
 else

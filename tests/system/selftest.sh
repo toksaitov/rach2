@@ -579,6 +579,18 @@ check "the tokens a leaving machine printed satisfy the steps that waited for th
         --ok LAST expect=READY expect=NEVER > /dev/null 2>&1
 ); rc=$?
 check "and a token it never printed is a step that never ran" 1 "$([ "$rc" -ne 0 ] && echo 1 || echo 0)"
+(
+    unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR
+    PATH="$WORK/leaving:$PATH" "$HARNESS_BIN" --kernel none --timeout 5 --steptmo 1 \
+        --ok LAST seen=FIRST seen=READY expect=LAST > /dev/null 2>&1
+); rc=$?
+check "two seen steps are satisfied in either order" 0 "$rc"
+(
+    unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR
+    PATH="$WORK/leaving:$PATH" "$HARNESS_BIN" --kernel none --timeout 5 --steptmo 1 \
+        --ok LAST expect=FIRST expect=READY expect=LAST > /dev/null 2>&1
+); rc=$?
+check "and two expect steps only in theirs" 1 "$([ "$rc" -ne 0 ] && echo 1 || echo 0)"
 
 # A shell that did not know the command: a line typed before the shell was
 # reading arrives without its first bytes, and the shell's answer is neither

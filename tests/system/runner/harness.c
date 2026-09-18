@@ -25,6 +25,9 @@
  *
  *   STEP forms:
  *     expect=REGEX   wait until REGEX appears (per-step cap = --steptmo)
+ *     seen=REGEX     wait until REGEX has appeared since the last send,
+ *                    wherever it lies: two seen= steps are satisfied in
+ *                    either order, two expect= steps only in theirs
  *     send=TEXT      write TEXT and a newline to the guest serial
  *     sendraw=TEXT   write TEXT with no newline, for a guest terminal in
  *                    raw mode, where the newline would be read as the
@@ -281,6 +284,8 @@ static int monitor_send(const char *command)
 static unsigned char *buf;
 static size_t buf_len, buf_cap;
 static size_t consumed;
+/* Where the last send began, which a `seen=` step searches from. */
+static size_t exchange;
 
 static void buf_add(const unsigned char *data, size_t n)
 {
@@ -667,6 +672,7 @@ static void begin_input(void)
 {
     drain_ready();
     consumed = buf_len;
+    exchange = buf_len;
 }
 
 static double steptmo = 15.0;
@@ -711,6 +717,36 @@ static int expect_pattern(const char *pattern)
             consumed = (size_t)end;
             return 1;
         }
+    }
+    return 0;
+}
+
+/**
+ * Wait until `pattern` has appeared since the last send, wherever it lies:
+ * two `seen=` steps are satisfied in either order, where two `expect=`
+ * steps are satisfied in theirs. The cursor moves past the match only
+ * when the match is beyond it, so a later `expect=` still searches on.
+ */
+static int seen_pattern(const char *pattern)
+{
+    struct regex re;
+    double stop;
+
+    regex_compile(&re, pattern);
+    stop = now() + steptmo;
+    if (stop > deadline)
+        stop = deadline;
+    for (;;) {
+        long end = regex_search(&re, buf, buf_len, exchange);
+
+        if (end >= 0) {
+            if ((size_t)end > consumed)
+                consumed = (size_t)end;
+            return 1;
+        }
+        if (now() >= stop || child_poll() >= 0)
+            break;
+        pump(now() + 0.3);
     }
     return 0;
 }
@@ -1197,7 +1233,8 @@ int main(int argc, char **argv)
            machine to leave, so one that left already satisfies it. */
         if (child_poll() >= 0 && strncmp(step, "until=", 6) == 0)
             continue;
-        if (child_poll() >= 0 && strncmp(step, "expect=", 7) == 0) {
+        if (child_poll() >= 0 &&
+            (strncmp(step, "expect=", 7) == 0 || strncmp(step, "seen=", 5) == 0)) {
             /* A token the machine printed on its way out satisfies the
                step that waited for it: a probe's last lines and the exit
                its kernel makes for it arrive together, and the output is
@@ -1205,12 +1242,14 @@ int main(int argc, char **argv)
                first. */
             struct regex re;
             long end;
+            int seen = step[0] == 's';
 
             pump(now() + 0.05);
-            regex_compile(&re, step + 7);
-            end = regex_search(&re, buf, buf_len, consumed);
+            regex_compile(&re, step + (seen ? 5 : 7));
+            end = regex_search(&re, buf, buf_len, seen ? exchange : consumed);
             if (end >= 0) {
-                consumed = (size_t)end;
+                if (!seen || (size_t)end > consumed)
+                    consumed = (size_t)end;
                 continue;
             }
         }
@@ -1228,6 +1267,14 @@ int main(int argc, char **argv)
         }
         if (strncmp(step, "expect=", 7) == 0) {
             int got = expect_pattern(step + 7);
+
+            if (!got)
+                step_failures++;
+            else
+                stamp("MATCH");
+            trace("step %s %s consumed=%lu", step, got ? "ok" : "fail", (unsigned long)consumed);
+        } else if (strncmp(step, "seen=", 5) == 0) {
+            int got = seen_pattern(step + 5);
 
             if (!got)
                 step_failures++;
