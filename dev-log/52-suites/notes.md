@@ -1,0 +1,26 @@
+# Milestone 52: notes
+
+## Where the work stands
+
+In progress on 2026-09-18. The counters, the kernel faults the two accelerators showed, the runner, the harness, the checker and the suites' waits are written; the full sets under the emulator and under KVM are the proof in flight, and the commits follow them.
+
+## Phase 1: the counters and the kernel faults
+
+* The ext2 truncate cost three synchronous requests for every block it freed: the pointer slot, the bitmap byte and the group descriptor each written through, since a free ran outside the batch a write opens, whose order is the wrong one for a free. A 64 MiB shrink was 49000 commands and a hundred seconds alone on the emulated disk, and the large suite stalled after its rate line under both full sets. Entry 100 of the shortcomings list. The fix is a free batch with the order reversed, the pointer blocks and the inode `first` and the bitmaps and descriptors `after`; `bigfileprobe` counts the disk's commands around its truncate and holds them under a few per pointer block freed. Fixed 129 s, mutated 135 s failing on the bound, restored 128 s, on the testing host; the ext2 host test's 329 stops walk clean.
+* The wait-tick counter was the ATA driver's alone; it is counted in the request layer now, a tick for every request in flight, on every device, and the polled AHCI driver counts its polls. The disk rate suite's device rows are held under ticks in flight per command and no quarantine instead of 120 s. The emulator's full set measured the boot's driver at 65 status reads and 0 ticks in flight a command, and every device row at 0.
+* Under KVM the USB key latency rows dropped their record: the reader ran 20.4 ms after its wake, two ticks, where the emulator runs it in 0.4 ms. The message's handler wakes the reader inside its pump and `sched_preempt` follows; the switch does not happen under KVM. An instrumented boot is queued behind the full sets to say what the preempt found.
+* The boot's timing record judged the 200 ms delay and the tick against time the host owns; under KVM in a full pool the delay read 410 ms, since a hypervisor that stops a machine delivers the ticks it missed afterwards, and the default suite failed on it. The record's level is the clock's self-agreement alone now, and the delay and the tick are printed as warnings when they disagree.
+* Under KVM the mount suite's dirty row takes 800 s where the emulator takes 65 s: a flush answered and a duplicate completion dropped every 0.55 s for the whole run, and nothing between them in the log. The counters around the row, under both accelerators, are queued behind the full sets.
+
+## Phase 2: the harness and the checker
+
+* The runner stops a suite as hung only when it is idle: no output, no console output, and next to no processor time in its group, under a tenth of a processor over the silent span, the time of reaped children counted from `/proc` and the group's process count watched, since a shell running one short command after another keeps no time of its own. The rate is there because a halted machine still takes a few percent for its timer under either accelerator: the KVM set of round 7 held three suites for half an hour at three percent each, silent, and the first form of the check, any growth at all, called that work. The self-test passes on the testing host.
+* `runutil until FILE PATTERN SECS [COUNT]` and `runutil gone PID SECS` are the suites' waits; every hand-rolled loop of `grep` and `sleep 1` in nineteen suites became one of them, and the callers' `$(scaled N)` went with them, since the helper scales.
+* The harness's `wait=` step is gone; `tcp=` reads the first bytes the guest's server sends and knocks again until they come, so a capture is complete when the step ends. The suites' 68 `wait=` steps are tokens: the kernel's new `net: eth0: IPv4 a.b.c.d/p` and `IPv4 none` lines for an address set or dropped, the USB device line before the prompt, the probes' words for a pending read (`KEYLAT READING`, `TTYPROBE RAW`, `LOADPROBE read`) and for a hold established after its first request (`USBDISKPROBE HOLDING` and its kin), ping's reply count, a second renewal, and `tail -f | grep -m 1` of a service log in the guest.
+* `tools/verify/suitecheck.sh` in `tests/run style`: no `sleep N`, no `wait=`, no upper bound on a duration in a probe, unless marked `interval: REASON` and listed in `tests/system/intervals`; fourteen intervals are listed, each a load period, a holder, a file time or a poll of a server. Twenty-two self-test cases.
+* Pooled suites share nothing: the registry's fourth column declares what each suite writes under `build/images`; the runner refuses a shared glob and fails a run in which a file was made that no suite owns or two own. The usb, memory, metal and socket suites name their outputs after themselves now, as do the default, fpu, pools and raw targets.
+* The lone list is deleted: usb, diskrate, install and imagerace run in the pool.
+
+## Phase 5: the cuts
+
+* `selfbuild-ext2` builds the kernel once; the second build, the hash comparison and the userland half are the KRFFS run's. The three installer suites are partitions of one script and not repetitions. The account suite's 62 fed lines at six seconds each are its whole cost, 400 s; converting the feed to the harness's prompts is the cut still to make.
