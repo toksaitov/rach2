@@ -386,7 +386,10 @@ grep -q "disk: the MBR hashes to $mbr_sum" "$ACCEPT_LOG" \
     || fail "the acceptance did not hash the same sector as the host"
 
 # Mutate only a private host script. The production reader has no override.
-ACCEPT_ROOT=$(mktemp -d "$REPO/build/tests/metal-accept.XXXXXX")
+# The copy lives under the images directory with this suite's name: a
+# directory made under build/tests changes that directory's time, which the
+# test image depends on, and a pooled suite would restage it.
+ACCEPT_ROOT=$(mktemp -d "$OUT.accept.XXXXXX")
 ACCEPT_COPY="$ACCEPT_ROOT/tests/system/accept"
 mkdir -p "$ACCEPT_COPY"
 for directory in build krffs; do
@@ -431,4 +434,5 @@ done
 echo "metal-test: the live boot log retains the early inventory after acceptance traffic: OK"
 
 cleanup_boot
+rm -rf "$ACCEPT_ROOT"
 echo "metal-test: PASS"
