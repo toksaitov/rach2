@@ -246,8 +246,8 @@ run_simple_arc() {
         "send=echo TRYOTHER" "expect=TRYOTHER" \
         "send=su - $SIMPLEUSER -c pwd" "expect=Password:" "send=$NEXTPASS" \
         "send=echo TRYNEW" "expect=TRYNEW" \
-        "send=su - test -c pwd" "expect=Password:" "send=$NEXTPASS" \
-        "send=echo TRY\"\"END" "expect=TRYEND"
+        "send=su - test -c pwd" "expect=Password:" "send=$NEXTPASS" "expect=/home/test" \
+        "send=echo TRYEND" "expect=TRYEND"
 
     if ! wait_token "^/root[[:space:]]*\$" 150; then
         fail "a bare command name after login found nothing; the PATH login builds is wrong"
