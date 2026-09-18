@@ -83,6 +83,9 @@ cleanup_boot() {
 # Each connection has two direct children, with a FIFO between them. Killing
 # a pipeline's shell would leave its sleep running for the full five minutes.
 flood_start() {
+    # A run killed mid-flood leaves its fifos; the next run's mkfifo would
+    # fail on them, so the directory is made afresh, not reused.
+    rm -rf "$FLOOD_DIR"
     mkdir -p "$FLOOD_DIR"
     flood_i=0
     while [ "$flood_i" -lt 40 ]; do
