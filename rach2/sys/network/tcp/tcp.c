@@ -1052,6 +1052,11 @@ int tcp_port_listening(uint16_t port)
     return held;
 }
 
+/* The first connection a full backlog refused is recorded, so a log that
+ * shows a reset before a session says why; the rest are not, since a
+ * listener that stays behind would fill the log. */
+static int backlog_refusal_logged;
+
 /**
  * Bind a socket to a port in the LISTEN state for passive opens.
  *
@@ -1576,6 +1581,13 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len)
            it again. */
         if (tcb->sock &&
             ((tcb->sock->accept_tail + 1) & (SOCK_ACCEPT_BACKLOG - 1)) == tcb->sock->accept_head) {
+            if (!backlog_refusal_logged) {
+                backlog_refusal_logged = 1;
+                klog(KLOG_WARN, "tcp",
+                     "accept: the backlog of port %d is full and the connection is refused; "
+                     "later refusals are not recorded",
+                     (int)dst_port);
+            }
             tcp_send_rst_unmatched(dst_ip, src_ip, dst_port, src_port, flags, seq, ack_num, 1);
             return;
         }
