@@ -1641,15 +1641,19 @@ run-crash: rach2 tests krffs $(RUNUTIL)
 	sh tests/system/suites/crash.sh build/rach2/kernel $(CRASH_TEST_IMAGE) build/krffs/fsck.krffs
 # `tests/run stress`: prove an on-disk KRFFS larger than physical RAM works.
 # Boots a 64 MB disk with a 48 MB partition and runs stressprobe, which writes
-# and re-reads 33 MiB (past the 32 MiB RAM cap) through the 4 MiB cache.
+# and re-reads 33 MiB (past the 32 MiB RAM cap) through the 4 MiB cache. The
+# run ends on the probe's token; the bound is the run's budget and not its
+# cost, since the 33 MiB take about 130 s under either accelerator and a
+# bound of 150 s cut a loaded emulator's run short. A hang is the runner's
+# idle limit to catch.
 STRESS_DISK = $(IMAGES_DIR)/stress-test.disk
 run-stress: rach2 tests krffs $(HARNESS)
 	$(MKDISK) krffs/manifests/stress-test.manifest $(STRESS_DISK) 64 48
 	$(HARNESS) --kernel build/rach2/kernel \
 	    --append "rach2.fsdisk rach2.rescue" \
 	    --drive "file=$(STRESS_DISK),format=raw,if=ide,index=0,media=disk" \
-	    --timeout 150 --ok "STRESSPROBE OK" \
-	    "expect=Type 'help'" "send=exec /stressprobe" until=130
+	    --timeout 900 --steptmo 800 --ok "STRESSPROBE OK" --never "STRESSPROBE FAIL" \
+	    --log $(STRESS_DISK).log "expect=Type 'help'" probe=/stressprobe
 # The AHCI variants of the disk tests: identical images and probes, but the disk
 # rides an ich9-ahci HBA (if=none + ide-hd) and rach2.disk=ahci selects the AHCI
 # backend, exercising the same page-cache/KRFFS path through
@@ -1755,8 +1759,8 @@ run-stress-ahci: rach2 tests krffs $(HARNESS)
 	    --append "rach2.disk=ahci rach2.fsdisk rach2.rescue" \
 	    --drive "file=$(STRESS_AHCI_DISK),format=raw,if=none,id=drv0" \
 	    $(AHCI_ATTACH) \
-	    --timeout 150 --ok "STRESSPROBE OK" \
-	    "expect=Type 'help'" "send=exec /stressprobe" until=130
+	    --timeout 900 --steptmo 800 --ok "STRESSPROBE OK" --never "STRESSPROBE FAIL" \
+	    --log $(STRESS_AHCI_DISK).log "expect=Type 'help'" probe=/stressprobe
 # The style suite (see tools/verify/check.sh): -Werror build, scoped cppcheck,
 # shellcheck, the convention grep, clang-format, and a readelf ABI check.
 # `tests/run style` names this target.
