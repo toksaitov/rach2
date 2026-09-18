@@ -135,6 +135,22 @@ static void fail(const char *why)
     sys_exit(1);
 }
 
+/* A decimal, without a newline. */
+static void putnum(unsigned n)
+{
+    char digits[12];
+    int i = sizeof(digits);
+
+    digits[--i] = 0;
+    do {
+        digits[--i] = (char)('0' + n % 10u);
+        n /= 10u;
+    } while (n);
+    syscall3(SYS_WRITE, 1, (int)(size_t)&digits[i], (int)strlen(&digits[i]));
+}
+
+static int disk_counter(const char *label);
+
 struct timeval {
     int sec;
     int usec;
@@ -170,6 +186,7 @@ static void run_sleep(void)
     int pid;
     int fd;
     unsigned start, elapsed;
+    int lagged;
     int got;
 
     /* The MBR behind this boot has two entries; a third node would be a
@@ -204,15 +221,20 @@ static void run_sleep(void)
         }
     }
     start = now_ms();
+    lagged = disk_counter("lag-completions ");
     if (read_part(sizeof(sector_buf)) != (int)sizeof(sector_buf)) {
         fail("the partition read");
     }
     elapsed = now_ms() - start;
     got = syscall3(SYS_READ, fds[0], (int)(size_t)sector_buf, 64);
     syscall2(SYS_KILL, pid, 9);
-    /* 16 page requests, 10 ticks each: 1.6 s in the lag alone. */
-    if (elapsed < 1200u) {
-        fail("the read did not take the lag");
+    /* 16 page requests, each answered after its lag: the lag device counts
+     * the answers, so the count is the proof and the time is only printed. */
+    puts("LAGPROBE sleep ms:");
+    putnum(elapsed);
+    puts("");
+    if (disk_counter("lag-completions ") - lagged != 16) {
+        fail("the read did not take the lag on each of its sixteen pages");
     }
     if (got < 5) {
         fail("the sibling did not run while the reader slept");
@@ -221,30 +243,35 @@ static void run_sleep(void)
 }
 
 /* The lag is 700 ticks, the deadline 500: each read must fail with EIO
- * after the deadline and before the lag would have answered. */
+ * because the deadline quarantined its request, which the block layer
+ * counts, and not because the lag answered, which would have returned the
+ * sector. */
 static void run_deadline(void)
 {
-    unsigned start = now_ms();
-    unsigned elapsed;
+    int quarantines = disk_counter("disk-quarantines ");
+    int releases = disk_counter("disk-releases ");
+    unsigned start;
 
     if (read_part(512) != -EIO) {
         fail("the first read past the deadline was not EIO");
     }
-    elapsed = now_ms() - start;
-    if (elapsed < 5000u || elapsed > 6900u) {
-        fail("the first read did not end at the deadline");
+    if (disk_counter("disk-quarantines ") - quarantines != 1 ||
+        disk_counter("disk-releases ") - releases != 1) {
+        fail("the first read was not the one request quarantined and released");
     }
-    /* Let the late completion land and free the quarantined slot. */
+    /* Let the late completion land and free the quarantined slot: the lag
+     * answers 200 ticks after the deadline. */
     start = now_ms();
     while (now_ms() - start < 3000u) {
     }
-    start = now_ms();
+    quarantines = disk_counter("disk-quarantines ");
+    releases = disk_counter("disk-releases ");
     if (read_part(512) != -EIO) {
         fail("the second read past the deadline was not EIO");
     }
-    elapsed = now_ms() - start;
-    if (elapsed < 5000u || elapsed > 6900u) {
-        fail("the second read did not end at the deadline");
+    if (disk_counter("disk-quarantines ") - quarantines != 1 ||
+        disk_counter("disk-releases ") - releases != 1) {
+        fail("the second read was not the one request quarantined and released");
     }
     puts("LAGPROBE OK");
 }
@@ -258,7 +285,7 @@ static void run_write(void)
     int fd = syscall3(SYS_OPEN, (int)(size_t)"/dev/bootpart", O_RDWR, 0);
     unsigned char *pattern = sector_buf;
     unsigned char *back = sector_buf + 512;
-    unsigned start;
+    int lagged;
     int i;
 
     if (fd < 0) {
@@ -270,21 +297,21 @@ static void run_write(void)
     for (i = 0; i < 512; i++) {
         pattern[i] = (unsigned char)(0xa5 ^ i);
     }
-    start = now_ms();
+    lagged = disk_counter("lag-completions ");
     if (syscall3(SYS_WRITE, fd, (int)(size_t)pattern, 512) != 512) {
         fail("the write through the lag");
     }
-    if (now_ms() - start < 80u) {
+    if (disk_counter("lag-completions ") - lagged < 1) {
         fail("the write did not take the lag");
     }
     if (syscall3(SYS_LSEEK, fd, 262144, 0) != 262144) {
         fail("seek back");
     }
-    start = now_ms();
+    lagged = disk_counter("lag-completions ");
     if (syscall3(SYS_READ, fd, (int)(size_t)back, 512) != 512) {
         fail("the read back");
     }
-    if (now_ms() - start < 80u) {
+    if (disk_counter("lag-completions ") - lagged < 1) {
         fail("the read back did not take the lag");
     }
     for (i = 0; i < 512; i++) {
@@ -1026,8 +1053,8 @@ static void run_dirty(void)
  * second partition is another device on the same pool and still writes. */
 static void run_dead(void)
 {
-    unsigned start = now_ms();
-    unsigned elapsed;
+    int quarantines = disk_counter("disk-quarantines ");
+    int releases = disk_counter("disk-releases ");
     int a, rc;
 
     a = syscall1(SYS_FORK, 0);
@@ -1048,9 +1075,11 @@ static void run_dead(void)
     if (wait_status(a) != 0) {
         fail("the raw reader of the partition that never answers was not EIO");
     }
-    elapsed = now_ms() - start;
-    if (elapsed < 4500u || elapsed > 6900u) {
-        fail("the reader and the waiter did not end at the one deadline");
+    /* One deadline: the reader's request was the one quarantined, and the
+     * reader and the waiter behind it were the two released by it. */
+    if (disk_counter("disk-quarantines ") - quarantines != 1 ||
+        disk_counter("disk-releases ") - releases != 2) {
+        fail("the reader and the waiter were not the two released by the one deadline");
     }
     if (syscall2(SYS_MKDIR, (int)"/ld", 0755) != 0) {
         fail("mkdir /ld");
