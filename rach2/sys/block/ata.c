@@ -79,25 +79,25 @@
 #define ATA_REQ_SECTORS 64u
 
 /* Command-block registers, as offsets from the channel's command base. */
-#define ATA_REG_DATA     0  /* 16-bit data port */
-#define ATA_REG_SECCOUNT 2  /* sector count (0 means 256) */
-#define ATA_REG_LBA_LOW  3  /* LBA bits 0-7 */
-#define ATA_REG_LBA_MID  4  /* LBA bits 8-15 */
-#define ATA_REG_LBA_HIGH 5  /* LBA bits 16-23 */
-#define ATA_REG_DRIVE    6  /* drive select + LBA bits 24-27 */
-#define ATA_REG_STATUS   7  /* status (read) / command (write) */
+#define ATA_REG_DATA     0 /* 16-bit data port */
+#define ATA_REG_SECCOUNT 2 /* sector count (0 means 256) */
+#define ATA_REG_LBA_LOW  3 /* LBA bits 0-7 */
+#define ATA_REG_LBA_MID  4 /* LBA bits 8-15 */
+#define ATA_REG_LBA_HIGH 5 /* LBA bits 16-23 */
+#define ATA_REG_DRIVE    6 /* drive select + LBA bits 24-27 */
+#define ATA_REG_STATUS   7 /* status (read) / command (write) */
 
 /* Status register bits. */
-#define ATA_SR_BSY 0x80  /* busy */
-#define ATA_SR_DF  0x20  /* device fault */
-#define ATA_SR_DRQ 0x08  /* data request ready */
-#define ATA_SR_ERR 0x01  /* error */
+#define ATA_SR_BSY 0x80 /* busy */
+#define ATA_SR_DF  0x20 /* device fault */
+#define ATA_SR_DRQ 0x08 /* data request ready */
+#define ATA_SR_ERR 0x01 /* error */
 
 /* The commands this driver issues. */
-#define ATA_CMD_READ       0x20
-#define ATA_CMD_READ_EXT   0x24
-#define ATA_CMD_WRITE      0x30
-#define ATA_CMD_WRITE_EXT  0x34
+#define ATA_CMD_READ          0x20
+#define ATA_CMD_READ_EXT      0x24
+#define ATA_CMD_WRITE         0x30
+#define ATA_CMD_WRITE_EXT     0x34
 #define ATA_CMD_READ_DMA      0xC8
 #define ATA_CMD_READ_DMA_EXT  0x25
 #define ATA_CMD_WRITE_DMA     0xCA
@@ -105,14 +105,14 @@
 
 /* The bus master's registers, from its base in the controller's fifth
    base address register: the primary channel's at 0, the secondary's at 8. */
-#define ATA_BM_CMD    0 /* start, and the direction: 1 reads the disk into memory */
-#define ATA_BM_STATUS 2 /* active, error, interrupt; the last two clear when written */
-#define ATA_BM_PRD    4 /* the descriptor table's physical address */
-#define ATA_BM_START  0x01
-#define ATA_BM_READ   0x08
-#define ATA_BM_ERROR  0x02
-#define ATA_BM_INTR   0x04
-#define ATA_BM_SECONDARY 8
+#define ATA_BM_CMD            0 /* start, and the direction: 1 reads the disk into memory */
+#define ATA_BM_STATUS         2 /* active, error, interrupt; the last two clear when written */
+#define ATA_BM_PRD            4 /* the descriptor table's physical address */
+#define ATA_BM_START          0x01
+#define ATA_BM_READ           0x08
+#define ATA_BM_ERROR          0x02
+#define ATA_BM_INTR           0x04
+#define ATA_BM_SECONDARY      8
 #define ATA_PROGIF_BUS_MASTER 0x80
 
 /* IDENTIFY word 49 bit 8: the drive does DMA. */
@@ -125,11 +125,11 @@ struct ata_prd {
     uint16_t bytes;
     uint16_t flags;
 };
-#define ATA_PRD_EOT 0x8000
-#define ATA_BOUNCE_BYTES (ATA_REQ_SECTORS * BLOCK_SECTOR_SIZE)
-#define ATA_CMD_FLUSH      0xE7
-#define ATA_CMD_FLUSH_EXT  0xEA
-#define ATA_CMD_IDENTIFY   0xEC
+#define ATA_PRD_EOT       0x8000
+#define ATA_BOUNCE_BYTES  (ATA_REQ_SECTORS * BLOCK_SECTOR_SIZE)
+#define ATA_CMD_FLUSH     0xE7
+#define ATA_CMD_FLUSH_EXT 0xEA
+#define ATA_CMD_IDENTIFY  0xEC
 
 /* The drive register: bit 4 selects the slave, bit 6 LBA addressing, and
    in LBA28 the low four bits are LBA bits 24-27. */
@@ -165,8 +165,8 @@ struct ata_prd {
 
 /* The IDE controller class, and the prog-if bits that say a channel is in
    native mode, with its ports in the base address registers. */
-#define PCI_CLASS_STORAGE 0x01
-#define PCI_SUBCLASS_IDE  0x01
+#define PCI_CLASS_STORAGE           0x01
+#define PCI_SUBCLASS_IDE            0x01
 #define ATA_PROGIF_PRIMARY_NATIVE   0x01
 #define ATA_PROGIF_SECONDARY_NATIVE 0x04
 
@@ -744,12 +744,14 @@ static void ata_native_ports(void)
         }
     }
     if (progif & ATA_PROGIF_PRIMARY_NATIVE) {
-        channels[0].io = (uint16_t)(pci_read_config32(ide.bus, ide.device, ide.function, 0x10) & ~3u);
+        channels[0].io =
+            (uint16_t)(pci_read_config32(ide.bus, ide.device, ide.function, 0x10) & ~3u);
         channels[0].ctrl =
             (uint16_t)((pci_read_config32(ide.bus, ide.device, ide.function, 0x14) & ~3u) + 2);
     }
     if (progif & ATA_PROGIF_SECONDARY_NATIVE) {
-        channels[1].io = (uint16_t)(pci_read_config32(ide.bus, ide.device, ide.function, 0x18) & ~3u);
+        channels[1].io =
+            (uint16_t)(pci_read_config32(ide.bus, ide.device, ide.function, 0x18) & ~3u);
         channels[1].ctrl =
             (uint16_t)((pci_read_config32(ide.bus, ide.device, ide.function, 0x1C) & ~3u) + 2);
     }
@@ -794,7 +796,8 @@ int ata_init(void)
             /* A channel with a master alone answers for its slave with the
              * master's own registers on some controllers; a slave that
              * IDENTIFYs as its master is that echo, not a second disk. */
-            if (s == 1 && drives[c * 2].present && same_drive(identify[c * 2], identify[c * 2 + 1])) {
+            if (s == 1 && drives[c * 2].present &&
+                same_drive(identify[c * 2], identify[c * 2 + 1])) {
                 continue;
             }
             d->present = 1;
