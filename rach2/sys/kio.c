@@ -1,4 +1,5 @@
 #include "kio.h"
+#include "lib/kirq.h"
 
 /*
  * VT100/ANSI terminal state for the VGA console.
@@ -253,12 +254,21 @@ static void vt_dispatch_csi(char c)
  * charset selector (`ESC (` and kin) swallows its next byte; an OSC (`ESC ]`)
  * is swallowed to its terminating BEL. The hardware cursor is placed after
  * every byte, so a cursor-only sequence still moves the on-screen caret; a
- * writer of many bytes holds it and it is placed once at the release.
+ * writer of many bytes holds it and it is placed once at the release. The
+ * byte's work runs with interrupts off, since a keyboard's echo arrives
+ * through this path from its interrupt.
  */
 void k_putc(char c)
 {
     unsigned char uc = (unsigned char) c;
+    uint32_t flags;
 
+    /* With interrupts off: a keyboard's echo comes from its interrupt and
+       through this same path, and a scroll or an escape sequence cut in
+       two by it would leave the cursor and the display's start apart. A
+       byte is one cell and a scroll one line; the copy at the memory's end
+       is the one long piece, once in 180 lines. */
+    flags = kirq_save();
     switch (vt_state) {
         case VT_NORMAL:
             if (uc == 0x1b) vt_state = VT_ESC;
@@ -337,6 +347,7 @@ void k_putc(char c)
     }
 
     vga_text_place_cursor();
+    kirq_restore(flags);
 }
 
 void k_puts(const char *str)
@@ -357,6 +368,9 @@ void k_printf(const char *format, ...)
     vga_text_release();
 }
 
+/* The port instructions, which a host test that includes this file stands
+   in for, since its host need not be an x86. */
+#ifndef KIO_HOSTTEST
 void outb(uint16_t port, uint8_t val)
 {
     __asm__ __volatile__ ("outb %1, %0" : : "dN" (port) , "a" (val));
@@ -436,3 +450,4 @@ void outsw(uint16_t port, const void *buffer, uint32_t count)
         : "memory", "cc"
     );
 }
+#endif

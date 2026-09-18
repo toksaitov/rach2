@@ -18,14 +18,21 @@
  * goes to its one cell, and a scroll moves the display's start address
  * through the 32 KiB the adapter maps at VGA_TEXT_BUFFER, which holds eight
  * screens, and writes only the new blank line; the rows that stay are
- * copied to the front of that memory once every 179 lines, when the window
- * reaches its end. `_hw_top` is the cell the display starts at. Only a
- * viewport that moves, a scroll back through history or a clear, is blitted
- * whole by vga_text_sync(). The cursor's position is two port writes per
- * register, and a write of many bytes holds it and places it once at the end.
+ * copied to the front of that memory once every 180 scrolls, when the
+ * window would pass its end. `_hw_top` is the cell the display starts at.
+ * Only a viewport that moves, a scroll back through history or a clear, is
+ * blitted whole by vga_text_sync(). The cursor's position is two port
+ * writes per register, and a write of many bytes holds it and places it
+ * once at the end. While the adapter is in a graphics mode the start
+ * address is left alone, since it is the picture's then; the text mode's
+ * restore redraws the screen and sets it again.
+ *
+ * The caller keeps interrupts off around a byte's work here: k_putc does,
+ * and a keyboard's echo comes through k_putc from its interrupt.
  */
 
 #include "vga_text.h"
+#include "vga_gfx.h"
 #include "../kio.h"
 
 #define VGA_TEXT_SCROLLBACK_LINES 512
@@ -63,6 +70,19 @@ static volatile uint16_t *vga_text_memory(void)
     return (volatile uint16_t *)VGA_TEXT_BUFFER;
 }
 
+/* One cell to the adapter's memory: the only store there, so a host test
+   can count them. */
+#ifdef VGA_TEXT_HOSTTEST
+void vga_text_hosttest_stored(void);
+#endif
+static void vga_text_store(uint32_t at, uint16_t cell)
+{
+    vga_text_memory()[at] = cell;
+#ifdef VGA_TEXT_HOSTTEST
+    vga_text_hosttest_stored();
+#endif
+}
+
 /**
  * Point the display at cell `cell` of the adapter's memory.
  *
@@ -71,6 +91,9 @@ static volatile uint16_t *vga_text_memory(void)
  */
 static void vga_text_set_start(uint32_t cell)
 {
+    if (vga_graphics_mode) {
+        return;
+    }
     outb(0x3D4, 0x0C);
     outb(0x3D5, (uint8_t)(cell >> 8));
     outb(0x3D4, 0x0D);
@@ -261,24 +284,22 @@ void vga_text_release(void)
  */
 void vga_text_sync(void)
 {
-    volatile uint16_t *video_memory;
     uint32_t line;
     unsigned int row;
     unsigned int col;
 
-    video_memory = vga_text_memory() + _hw_top;
     for (row = 0; row < VGA_TEXT_ROWS; ++row) {
         line = _viewport_top_line + row;
 
         if (vga_text_has_line(line)) {
             uint16_t *cells = vga_text_line_ptr(line);
             for (col = 0; col < VGA_TEXT_COLS; ++col) {
-                video_memory[row * VGA_TEXT_COLS + col] = cells[col];
+                vga_text_store(_hw_top + row * VGA_TEXT_COLS + col, cells[col]);
             }
         } else {
             uint16_t blank = vga_text_blank_cell();
             for (col = 0; col < VGA_TEXT_COLS; ++col) {
-                video_memory[row * VGA_TEXT_COLS + col] = blank;
+                vga_text_store(_hw_top + row * VGA_TEXT_COLS + col, blank);
             }
         }
     }
@@ -293,8 +314,9 @@ void vga_text_sync(void)
  * The start address moves down a line, and the line that comes into view at
  * the bottom is written blank. When the window would pass the end of the
  * adapter's memory, the twenty-four rows that stay are copied to its front
- * first; that copy is the one whole-screen cost, and it comes once every 179
- * lines. The source of the copy begins past the destination's end, so a
+ * first; that copy is the one whole-screen cost, and it comes once every
+ * 180 scrolls, since the window moves 179 times before it would pass the
+ * end. The source of the copy begins past the destination's end, so a
  * forward copy is safe.
  */
 static void vga_text_scroll_hardware(void)
@@ -305,22 +327,24 @@ static void vga_text_scroll_hardware(void)
 
     if (_hw_top + VGA_TEXT_SCREEN_CELLS + VGA_TEXT_COLS > VGA_TEXT_CELLS) {
         for (i = 0; i < VGA_TEXT_SCREEN_CELLS - VGA_TEXT_COLS; i++) {
-            video_memory[i] = video_memory[_hw_top + VGA_TEXT_COLS + i];
+            vga_text_store(i, video_memory[_hw_top + VGA_TEXT_COLS + i]);
         }
         _hw_top = 0;
     } else {
         _hw_top += VGA_TEXT_COLS;
     }
     for (i = 0; i < VGA_TEXT_COLS; i++) {
-        video_memory[_hw_top + VGA_TEXT_SCREEN_CELLS - VGA_TEXT_COLS + i] = blank;
+        vga_text_store(_hw_top + VGA_TEXT_SCREEN_CELLS - VGA_TEXT_COLS + i, blank);
     }
     vga_text_set_start(_hw_top);
 }
 
+/** Clear the screen: the history starts over, and so does the window. */
 void k_cls(void)
 {
     x = 0;
     y = 0;
+    _hw_top = 0;
     vga_text_reset_history();
     vga_text_sync();
 }
@@ -331,18 +355,20 @@ void k_cls(void)
  * Appends a fresh blank line and advances the live top. A viewport following
  * live output scrolls with the display's start address; a user scrolled back
  * into history stays put, except that it is pulled forward, and redrawn, if
- * its line has just been evicted.
+ * its line has just been evicted, which the append does to the viewport
+ * itself.
  */
 void k_scroll_down(void)
 {
+    uint32_t viewport_was = _viewport_top_line;
+
     vga_text_append_blank_line();
     _live_top_line++;
 
     if (_follow_live) {
         _viewport_top_line = _live_top_line;
         vga_text_scroll_hardware();
-    } else if (_viewport_top_line < _history_start_line) {
-        _viewport_top_line = _history_start_line;
+    } else if (_viewport_top_line != viewport_was) {
         vga_text_sync();
     }
 }
@@ -378,7 +404,7 @@ void vga_text_write_cell(unsigned int col, unsigned int row, char c, uint8_t att
         if (!_hw_started) {
             vga_text_set_start(_hw_top);
         }
-        vga_text_memory()[_hw_top + row * VGA_TEXT_COLS + col] = cell;
+        vga_text_store(_hw_top + row * VGA_TEXT_COLS + col, cell);
     }
 }
 

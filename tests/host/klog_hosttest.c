@@ -148,13 +148,21 @@ void set_fore_color(display_color_t color)
     (void)color;
 }
 
-/* The cursor holds the screen's writes take: the ring's order is what is
-   tested, and the cursor has no part in it. */
+/* The cursor holds the screen's writes take, counted: a record delivered
+   to the screen and a program's console write each hold once and release
+   once, and the count is what says the writers still bracket their
+   bytes. */
+static int holds, releases;
+
 void vga_text_hold(void)
-{}
+{
+    holds++;
+}
 
 void vga_text_release(void)
-{}
+{
+    releases++;
+}
 
 unsigned int kirq_save(void)
 {
@@ -185,6 +193,7 @@ static void reset(void)
 
     screen_len = serial_len = net_len = order_len = 0;
     screen_calls = serial_calls = net_calls = 0;
+    holds = releases = 0;
     serial_offered = 0;
     ring_at_screen = 0;
     klog_delivering = 0;
@@ -410,6 +419,7 @@ int main(void)
     screen[screen_len] = '\0';
     CHECK("an informational record reaches the screen", streq(screen, "i: event: for a person\n"));
     CHECK("without the priority and the timestamp", !has(screen, "<6>"));
+    CHECK("and held the cursor once for its bytes", holds == 1 && releases == 1);
 
     /* The serial port takes every level, and netconsole only when it is on. */
     reset();
