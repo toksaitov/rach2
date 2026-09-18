@@ -5,13 +5,20 @@
  * child writes. This does not force a contended close and is not a mutation
  * proof. exit_hosttest forces the cleanup waits and checks the terminal state.
  *
- * Needs a writable working directory. Prints "ZOMBIEPROBE OK" after all
- * children are reaped. Freestanding; direct int 0x80.
+ * Every writer rewrites its file in place, so the file system never fills:
+ * a fast machine fills a small module in the victim's first milliseconds,
+ * and its creates then fail for space, which is not what the probe is
+ * about. A child whose open fails exits with the error's number, so the
+ * kernel's exit record says why. Needs a writable working directory. Prints
+ * "ZOMBIEPROBE OK" after all children are reaped. Freestanding; direct
+ * int 0x80.
  */
 
 typedef unsigned int size_t;
 
 #define SYS_EXIT      1
+#define SYS_LSEEK     19
+#define SEEK_SET      0
 #define SYS_FORK      2
 #define SYS_WRITE     4
 #define SYS_OPEN      5
@@ -64,11 +71,19 @@ static void print(const char *s)
     sys3(SYS_WRITE, 1, (int)(size_t)s, (int)slen(s));
 }
 
+static int wpid; /* the writer, stopped on a failure so the shell returns */
+
 static void fail(const char *what)
 {
+    int status = 0;
+
     print("ZOMBIEPROBE FAIL: ");
     print(what);
     print("\n");
+    if (wpid > 0) {
+        sys2(SYS_KILL, wpid, SIGKILL);
+        sys3(SYS_WAITPID, wpid, (int)(size_t)&status, 0);
+    }
     sys1(SYS_EXIT, 1);
 }
 
@@ -89,7 +104,7 @@ static void victim(void)
     for (i = 0; i < HOLDERS; i++) {
         fds[i] = sys3(SYS_OPEN, (int)(size_t)names[i], O_RDWR | O_CREAT | O_TRUNC, 0644);
         if (fds[i] < 0) {
-            sys1(SYS_EXIT, 1);
+            sys1(SYS_EXIT, -fds[i]);
         }
         for (j = 0; j < 16; j++) {
             sys3(SYS_WRITE, fds[i], (int)(size_t)buf, (int)sizeof(buf));
@@ -97,7 +112,10 @@ static void victim(void)
         sys1(SYS_UNLINK, (int)(size_t)names[i]);
     }
     for (;;) {
-        sys3(SYS_WRITE, fds[0], (int)(size_t)buf, (int)sizeof(buf));
+        for (j = 0; j < 16; j++) {
+            sys3(SYS_WRITE, fds[0], (int)(size_t)buf, (int)sizeof(buf));
+        }
+        sys3(SYS_LSEEK, fds[0], 0, SEEK_SET);
     }
 }
 
@@ -109,19 +127,22 @@ static void writer(void)
     int i;
 
     if (fd < 0) {
-        sys1(SYS_EXIT, 1);
+        sys1(SYS_EXIT, -fd);
     }
     for (i = 0; i < (int)sizeof(buf); i++) {
         buf[i] = (char)(i & 0x7F);
     }
     for (;;) {
-        sys3(SYS_WRITE, fd, (int)(size_t)buf, (int)sizeof(buf));
+        for (i = 0; i < 64; i++) {
+            sys3(SYS_WRITE, fd, (int)(size_t)buf, (int)sizeof(buf));
+        }
+        sys3(SYS_LSEEK, fd, 0, SEEK_SET);
     }
 }
 
 void _start(void)
 {
-    int wpid, vpid, status, round;
+    int vpid, status, round;
 
     wpid = sys1(SYS_FORK, 0);
     if (wpid < 0) {
