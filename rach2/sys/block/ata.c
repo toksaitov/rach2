@@ -145,15 +145,26 @@ struct ata_prd {
 /* The largest LBA the 28-bit commands address, plus one. */
 #define ATA_LBA28_SECTORS 0x10000000ull
 
-/* A bound on every polled status wait, so a drive that never answers
-   cannot leave the machine hanging. With interrupts off there is no timer
-   to bound by, so the watchdog counts iterations instead of time. */
-#define ATA_SPIN_LIMIT 10000000
+/* A polled wait reads the status this many times plainly, which is what
+   the emulator's DMA needs, and then in rounds of a pause off the device
+   and a read; the bound is the number of rounds. With interrupts off
+   there is no timer to bound by, so the watchdog counts rounds instead of
+   time: a round's pause is ten thousand `pause` instructions, a few tens
+   of microseconds on the slowest of these machines, so the bound is at
+   least five seconds. The pause is what lets an emulator answer: under a
+   hypervisor every status read is a trap that takes the emulator's lock,
+   and a loop of nothing but reads on a loaded host held the emulator's
+   own completion out for the whole of the first form's ten million reads,
+   after which the page cache panicked on the fault. */
+#define ATA_POLL_PLAIN  256
+#define ATA_PAUSE_LOOPS 10000
+#define ATA_POLL_LIMIT  200000
 
 /* How many times a wait that may sleep reads the status first: the
-   emulator answers a command within these, and the first sector of a
-   write is ready without an interrupt. */
-#define ATA_SPIN_BEFORE_SLEEP 64
+   first sector of a write is ready within these without an interrupt,
+   and a DMA command is not, on the emulator or the hardware, so the rest
+   of the wait is the sleep. Each read is a trap under a hypervisor. */
+#define ATA_SPIN_BEFORE_SLEEP 8
 
 /* A sleeping wait's bound in ticks, five seconds at 100 Hz. */
 #define ATA_WAIT_TICKS 500
@@ -343,11 +354,23 @@ static int ata_wait_cond(void *arg)
     return 0;
 }
 
+/** Stay off the device for a while, without touching a timer either. */
+static void ata_pause(void)
+{
+    uint32_t n;
+
+    for (n = 0; n < ATA_PAUSE_LOOPS; n++) {
+        __asm__ __volatile__("pause");
+    }
+}
+
 /**
  * Wait until the drive's status shows `want`; an error, or a drive that
  * never answers, is `-EIO`. A few polls first, then a sleep on the
  * channel's queue where sleeping is allowed and a polled wait where it is
- * not.
+ * not, whose reads past the first few hundred are each preceded by a
+ * pause off the device. A polled wait that gives up says so, since the
+ * caller's answer to it may be a panic with no record of its own.
  */
 static int ata_wait_for(struct ata_channel *ch, int want)
 {
@@ -360,11 +383,20 @@ static int ata_wait_for(struct ata_channel *ch, int want)
         }
     }
     if (!ata_can_sleep()) {
-        for (; spin < ATA_SPIN_LIMIT; spin++) {
+        for (spin = 0; spin < ATA_POLL_PLAIN; spin++) {
             if (ata_status_done(ch, want, &rc)) {
                 return rc;
             }
         }
+        for (spin = 0; spin < ATA_POLL_LIMIT; spin++) {
+            ata_pause();
+            if (ata_status_done(ch, want, &rc)) {
+                return rc;
+            }
+        }
+        klog(KLOG_ERR, "ata", "%s: no answer to a polled wait after %d reads: status 0x%X, bus master 0x%X, want %d",
+             ch->name, ATA_POLL_PLAIN + ATA_POLL_LIMIT, (unsigned)inb(ch->io + ATA_REG_STATUS),
+             ch->bm ? (unsigned)inb(ch->bm + ATA_BM_STATUS) : 0u, want);
         return -EIO;
     }
     w.ch = ch;
