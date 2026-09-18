@@ -8,27 +8,25 @@
 # device is read and not written here. One boot of the os-real image with
 # three IDE disks: a raw one, an exFAT volume and a FAT32 one.
 #
-# A row is judged against the same kind of work in the same boot, not
-# against seconds written for one machine, so the suite passes on any host
-# whatever its speed and whatever its hypervisor does to reads and to
-# writes: a read row against the raw device read, the machine's read rate
-# through the block layer, and a write row against the 64 MiB sequential
-# write on exFAT, the plainest write path there is, one run of clusters
-# and one command a mebibyte. Under a nested KVM a write costs many times
-# a read, since the driver polls a port after every sector and each poll
-# exits through two hypervisors, and a write judged against a read would
-# fail there for no fault of its own. The multiples have room of two and a
-# half times over the worst of the two hosts measured on 2026-09-18, an
-# Apple M-series Mac and a Ryzen under WSL, both emulating: the worst was
-# 0.74 for the pipe and 1.03 and 1.04 for the two reads against the raw
-# read, and 2.10 for the FAT32 write, 4.27 and 5.58 for the 4 KiB writes
-# and 2.04 for the files against the exFAT write. So a path that waits or
-# spins fails by an order of magnitude while a slow host passes: a delay
-# of 50 ms on each FAT32 write, 4096 of them, puts that row past fourteen
-# on both. A path that falls back to a page a request, a walk of the chain
-# per block or a write through per cluster is caught by the command and
-# cache-hit counts below, which do not depend on the machine at all. Times
-# are read from /proc/uptime in hundredths of a second.
+# No row is judged by its time. The times are printed, with the rates,
+# for the record of the machine; what a slow row would have meant is
+# counted by the kernel and judged as a count, the same on every machine.
+# A path that falls back to a page a request, a walk of the chain per
+# block or a write through per cluster shows in the disk commands and the
+# cache hits each row costs, which /proc/disk counts and the rows below
+# hold under bounds set from the counts measured. A driver that spins on
+# the drive or waits out a deadline shows in the status reads it makes and
+# the ticks its callers sleep per command, which /proc/disk counts as
+# disk-polls and disk-wait-ticks: this driver reads the status a few dozen
+# times before it sleeps and is woken by the interrupt, so the boot's
+# polls per command stay under a hundred and its wait ticks per command
+# under two, where a polled driver reads thousands and a waited-out
+# deadline sleeps hundreds. Multiples of a measured baseline were tried on
+# 2026-09-18 and dropped the same day: the 4 KiB write rows cost four
+# times the exFAT write in the emulator and twenty-one under KVM, since
+# they are command counts times a per-command latency the machine sets,
+# and no multiple fits both. Times are read from /proc/uptime in
+# hundredths of a second.
 #
 # A second boot, of the recovery kernel, which alone writes a whole-disk
 # node, times a 4 MiB raw write and raw read of a USB stick in 32 KiB
@@ -67,11 +65,12 @@ mformat -i "$FAT@@1048576" -F -T 520192 -v RATEFAT :: || fail "mformat"
 # machine's clock read before and after, or `T_NAME FAIL` when it failed;
 # `moved BYTES COMMAND...` runs a dd that must report BYTES copied.
 # shellcheck disable=SC2016
-DEFS='now() { read -r u _ < /proc/uptime; echo $(( ${u%.*} * 100 + 1${u#*.} - 100 )); }; t() { s=$(now); if eval "$2"; then echo T_$1 $(( $(now) - s )); else echo T_$1 FAIL; fi; }; moved() { n=$1; shift; "$@" 2>/tmp/dd.err && grep -q "^$n bytes" /tmp/dd.err; }; c() { echo C_$1 $(grep -E "^(disk-commands|cache-hits) " /proc/disk | head -2 | awk "{printf \"%s \", \$2}"); }; echo DEFS""DONE'
+DEFS='now() { read -r u _ < /proc/uptime; echo $(( ${u%.*} * 100 + 1${u#*.} - 100 )); }; t() { s=$(now); if eval "$2"; then echo T_$1 $(( $(now) - s )); else echo T_$1 FAIL; fi; }; moved() { n=$1; shift; "$@" 2>/tmp/dd.err && grep -q "^$n bytes" /tmp/dd.err; }; c() { echo C_$1 $(grep -E "^(disk-commands|disk-polls|disk-wait-ticks|cache-hits) " /proc/disk | head -4 | awk "{printf \"%s \", \$2}"); }; echo DEFS""DONE'
 # shellcheck disable=SC2016
 set -- \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" "expect=# " \
     "send=$DEFS" "expect=DEFSDONE" \
+    "send=c boot0" "expect=C_boot0" \
     "send=t pipehash 'dd if=/dev/disk0 bs=1M count=64 2>/tmp/dd.err | sha256sum >/dev/null && grep -q \"^67108864 bytes\" /tmp/dd.err'" "expect=T_pipehash" \
     "send=t pipehash 'dd if=/dev/disk0 bs=1M count=64 2>/tmp/dd.err | sha256sum >/dev/null && grep -q \"^67108864 bytes\" /tmp/dd.err'" "expect=T_pipehash" \
     "send=t pipehash 'dd if=/dev/disk0 bs=1M count=64 2>/tmp/dd.err | sha256sum >/dev/null && grep -q \"^67108864 bytes\" /tmp/dd.err'" "expect=T_pipehash" \
@@ -108,23 +107,36 @@ set -- \
 least() {
     tr -d '\r' < "$LOG" | grep -a "^T_$1 [0-9]" | awk '{print $2}' | sort -n | head -1
 }
-# row NAME MULTIPLE TEXT: the row's time against MULTIPLE times the
-# baseline in BASE, named in BASENAME; a row whose command failed has no
-# time and fails.
-# The second read of a file is served from the cache, so a read row times a
-# cold read and a warm one together. The pipe row runs first in the boot
-# and three times: after other programs have run and exited, a program's
-# buffer may land in a frame that held code, which the emulator keeps on
-# its slow store path (entry 26 of milestone 50), and in the fresh boot the
-# three runs are the kernel's rate; the least is taken.
+# row NAME KIB TEXT: the row's time and rate, printed for the record; a
+# row whose command failed has no time and fails, since its bytes were not
+# moved. The second read of a file is served from the cache, so a read row
+# times a cold read and a warm one together. The pipe row runs first in
+# the boot and three times: after other programs have run and exited, a
+# program's buffer may land in a frame that held code, which the emulator
+# keeps on its slow store path (entry 26 of milestone 50), and in the fresh
+# boot the three runs are the kernel's rate; the least is taken.
 rc=0
 row() {
     t=$(least "$1")
     [ -n "$t" ] || fail "no time for $1 in $LOG"
-    if awk -v t="$t" -v b="$BASE" -v m="$2" 'BEGIN {exit !(t <= m * b)}'; then
-        echo "diskrate-test: $3: $(awk -v t="$t" -v b="$BASE" -v m="$2" -v n="$BASENAME" 'BEGIN {printf "%.2f s, %.2f times the %s, under %s", t / 100, t / b, n, m}'): OK"
+    echo "diskrate-test: $3: $(awk -v t="$t" -v k="$2" 'BEGIN {if (t > 0) printf "%.2f s, %.0f KiB/s", t / 100, k / t * 100; else printf "%.2f s", t / 100}')"
+}
+# sleeps FROM TO TEXT: between two counter reads, the status reads the
+# driver made per command and the ticks its callers slept per command,
+# each under its bound; a driver that spins or waits out a deadline is over
+# by orders of magnitude.
+sleeps() {
+    before=$(tr -d '\r' < "$LOG" | grep -a "^C_$1 " | tail -1)
+    after=$(tr -d '\r' < "$LOG" | grep -a "^C_$2 " | tail -1)
+    [ -n "$before" ] && [ -n "$after" ] || fail "no counters for $1 or $2 in $LOG"
+    cmds=$(( $(echo "$after" | awk '{print $2}') - $(echo "$before" | awk '{print $2}') ))
+    polls=$(( $(echo "$after" | awk '{print $3}') - $(echo "$before" | awk '{print $3}') ))
+    waits=$(( $(echo "$after" | awk '{print $4}') - $(echo "$before" | awk '{print $4}') ))
+    [ "$cmds" -gt 0 ] || fail "no disk command between $1 and $2"
+    if [ "$polls" -le "$(( cmds * 100 ))" ] && [ "$waits" -le "$(( cmds * 2 ))" ]; then
+        echo "diskrate-test: $3: $cmds commands, $(( polls / cmds )) status reads and $(( waits / cmds )) wait ticks a command, under 100 and 2: OK"
     else
-        echo "diskrate-test: FAIL: $3: $(awk -v t="$t" -v b="$BASE" -v m="$2" -v n="$BASENAME" 'BEGIN {printf "%.2f s, %.2f times the %s, over %s", t / 100, t / b, n, m}')" >&2
+        echo "diskrate-test: FAIL: $3: $cmds commands, $(( polls / cmds )) status reads and $(( waits / cmds )) wait ticks a command, against 100 and 2" >&2
         rc=1
     fi
 }
@@ -153,7 +165,7 @@ counts() {
     after=$(tr -d '\r' < "$LOG" | grep -a "^C_$1""1 " | tail -1)
     [ -n "$before" ] && [ -n "$after" ] || fail "no counters for $1 in $LOG"
     cmds=$(( $(echo "$after" | awk '{print $2}') - $(echo "$before" | awk '{print $2}') ))
-    hits=$(( $(echo "$after" | awk '{print $3}') - $(echo "$before" | awk '{print $3}') ))
+    hits=$(( $(echo "$after" | awk '{print $5}') - $(echo "$before" | awk '{print $5}') ))
     # A counter that did not move is an instrument that stopped, not a fast row.
     if [ "$cmds" -gt 0 ] && [ "$hits" -ge 0 ] && [ "$cmds" -le "$2" ] && [ "$hits" -le "$3" ]; then
         echo "diskrate-test: $4: $cmds disk commands under $2, $hits cache hits under $3: OK"
@@ -162,25 +174,16 @@ counts() {
         rc=1
     fi
 }
-# baseline NAME TEXT: a baseline row. It must have moved its bytes and
-# taken time, since a zero would make every multiple pass; there is no
-# rate it is held to, because it is the machine's.
-baseline() {
-    BASE=$(least "$1")
-    [ -n "$BASE" ] || fail "no time for $1 in $LOG"
-    [ "$BASE" -gt 0 ] || fail "the $2 took no measurable time, so nothing can be judged against it"
-    BASENAME=$2
-    echo "diskrate-test: $3 in $(awk -v b="$BASE" -v k="$4" 'BEGIN {printf "%.2f s, %.0f", b / 100, k / b * 100}') KiB/s: the boot's $2"
-}
-baseline rawread "raw read" "128 MiB read from the raw device" 131072
-row pipehash 2 "64 MiB read raw through a pipe into sha256sum"
-row exread 3 "the exFAT file read twice, cold and from the cache"
-row fatread 3 "the FAT32 file read twice, cold and from the cache"
-baseline exwrite "exFAT write" "64 MiB written into a file on exFAT and synced" 65536
-row fatwrite 6 "64 MiB written into a file on FAT32 and synced"
-row exsmall 11 "16 MiB written on exFAT in 4 KiB calls"
-row fatsmall 14 "16 MiB written on FAT32 in 4 KiB calls"
-row exfiles 6 "two hundred 32 KiB files written on exFAT"
+row rawread 131072 "128 MiB read from the raw device"
+row pipehash 65536 "64 MiB read raw through a pipe into sha256sum"
+row exwrite 65536 "64 MiB written into a file on exFAT and synced"
+row exread 131072 "the exFAT file read twice, cold and from the cache"
+row fatwrite 65536 "64 MiB written into a file on FAT32 and synced"
+row fatread 131072 "the FAT32 file read twice, cold and from the cache"
+row exsmall 16384 "16 MiB written on exFAT in 4 KiB calls"
+row fatsmall 16384 "16 MiB written on FAT32 in 4 KiB calls"
+row exfiles 6400 "two hundred 32 KiB files written on exFAT"
+sleeps boot0 exfiles1 "the boot's driver waits"
 # The hits' bounds are three times the counts measured on 2026-09-10 (exFAT
 # write 131 thousand, FAT32 write 427 thousand, exFAT small 37 thousand,
 # FAT32 small 115 thousand, exFAT files 21 thousand) and far under the
@@ -200,7 +203,7 @@ counts exfiles 35500 65000 "the exFAT files' counts"
 STICK="$DIR/stick.img"; SLOG="$DIR/stick.log"
 dd if=/dev/zero of="$STICK" bs=1048576 count=16 2>/dev/null || fail "the stick image"
 # shellcheck disable=SC2016
-SDEFS='now() { read -r u _ < /proc/uptime; echo $(( ${u%.*} * 100 + 1${u#*.} - 100 )); }; t() { s=$(now); if eval "$2"; then echo T_$1 $(( $(now) - s )); else echo T_$1 FAIL; fi; }; moved() { n=$1; shift; "$@" 2>/tmp/dd.err && grep -q "^$n bytes" /tmp/dd.err; }; c() { echo C_$1 $(grep -E "^(disk-commands|cache-hits) " /proc/disk | head -2 | awk "{printf \"%s \", \$2}"); }; echo DEFS""DONE'
+SDEFS='now() { read -r u _ < /proc/uptime; echo $(( ${u%.*} * 100 + 1${u#*.} - 100 )); }; t() { s=$(now); if eval "$2"; then echo T_$1 $(( $(now) - s )); else echo T_$1 FAIL; fi; }; moved() { n=$1; shift; "$@" 2>/tmp/dd.err && grep -q "^$n bytes" /tmp/dd.err; }; c() { echo C_$1 $(grep -E "^(disk-commands|disk-polls|disk-wait-ticks|cache-hits) " /proc/disk | head -4 | awk "{printf \"%s \", \$2}"); }; echo DEFS""DONE'
 "$HARNESS" --kernel "$RKERNEL" --initrd "$RIMAGE" \
     --qemu-arg=-cpu --qemu-arg=max --qemu-arg=-m --qemu-arg=512 \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
@@ -291,21 +294,12 @@ echo "diskrate-test: the pipe row's three times: $(tr -d '\r' < "$DIR/diskrate.l
 # runnable process beside the pipe's two costs every hand-off a quantum
 # (entry 26), so the record says who it was.
 echo "diskrate-test: $(tr -d '\r' < "$PLOG" | grep -a "^PLACEPROBE code")"
-# A far run reads half the pipe row's bytes through the same pipe and
-# hashes nothing, so it is held under the pipe row's own time, the least
-# of the three from the os-real boot on this machine.
-LOG="$DIR/diskrate.log"
-PIPE=$(least pipehash)
-[ -n "$PIPE" ] || fail "no time for pipehash in $LOG"
+# The far runs are printed beside the near ones: the experiment's record,
+# not a judgement, since what it measures is the emulator's store path.
 n=0
 for t in $(tr -d '\r' < "$PLOG" | grep -a "^PLACEPROBE FAR" | awk '{print $3}'); do
     n=$((n + 1))
-    if [ "$t" -le "$(( PIPE * 10 ))" ]; then
-        echo "diskrate-test: far run $n: $t ms, under the pipe row's $(( PIPE * 10 )) ms: OK"
-    else
-        echo "diskrate-test: FAIL: far run $n: $t ms, over the pipe row's $(( PIPE * 10 )) ms" >&2
-        rc=1
-    fi
+    echo "diskrate-test: far run $n: $t ms"
 done
 [ "$n" -eq 3 ] || { echo "diskrate-test: FAIL: $n far runs, not 3" >&2; rc=1; }
 echo "diskrate-test: the near runs, the emulator's cost of a buffer in a code page: $(tr -d '\r' < "$PLOG" | grep -a "^PLACEPROBE NEAR" | awk '{printf "%s ms ", $3}')"
