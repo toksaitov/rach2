@@ -25,6 +25,13 @@
 # The rsync here must be the real one, 3.x from Homebrew. macOS ships
 # openrsync under the same name, and it deletes on the host what the filter
 # excludes, the whole build and every vendor tree, on every sync.
+#
+# `run` asks the runner for the emulator. The host's KVM is nested under
+# Hyper-V, and the ATA driver polls a port after every sector it writes, so
+# each poll exits through two hypervisors: a 64 MiB write measured 236 s
+# under that KVM and 25 s emulated on 2026-09-18, and the 4 KiB write rows
+# ran past the runner's silence limit. This is the host's setting, as the
+# worker count is; the runner itself takes KVM wherever it opens.
 set -e
 
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
@@ -59,7 +66,7 @@ case "${1:-}" in
             exit 2
         fi
         sync_tree
-        ssh -o BatchMode=yes "$HOST" "wsl.exe -- bash -lc 'cd $DEST && $*'"
+        ssh -o BatchMode=yes "$HOST" "wsl.exe -- bash -lc 'cd $DEST && export RACH2_QEMU_ACCEL=tcg && $*'"
         ;;
     sh)
         ssh -t "$HOST" "wsl.exe -- bash -lc 'cd $DEST && exec bash'"

@@ -114,11 +114,13 @@ run, and is the way to reach the copy. Its home directory is on WSL's own
 file system, not under `/mnt/c`, which is slow for a build.
 
 The machine has `/dev/kvm`, since `nestedVirtualization=true` is set in the
-Windows user's `.wslconfig` and the account is in the `kvm` group, but the
-runner boots every machine in the emulator there and says so on its start
-line. A KVM under WSL is nested, and the ATA driver's port I/O then crosses
-two hypervisors on every access: a 64 MiB write measured 217 s that way and
-12 s emulated. `RACH2_QEMU_ACCEL=kvm` asks for it anyway.
+Windows user's `.wslconfig` and the account is in the `kvm` group, and the
+runner takes it when nothing says otherwise. `dev/testing.sh run` says
+otherwise, with `RACH2_QEMU_ACCEL=tcg`: that KVM is nested under Hyper-V,
+and the ATA driver polls a port after every sector it writes, each poll an
+exit through two hypervisors, so a 64 MiB write measured 236 s there and
+25 s emulated, and the 4 KiB write rows outran the runner's silence limit.
+That is the host's setting, like its worker count, not the runner's rule.
 
 The target prefix is not negotiable: `vendor/musl/build_libc.sh` configures
 with `CROSS_COMPILE=i686-elf-` and both `muslgcc` wrappers call

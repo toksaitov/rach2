@@ -572,8 +572,7 @@ prepare() {
 set_accel() {
     case "${RACH2_QEMU_ACCEL:-}" in
         '')
-            if [ -r /dev/kvm ] && [ -w /dev/kvm ] &&
-                ! grep -q '^flags.*[[:space:]]hypervisor\([[:space:]]\|$\)' /proc/cpuinfo 2>/dev/null; then
+            if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
                 RACH2_QEMU_ACCEL=kvm
             elif [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = x86_64 ] &&
                 [ "$(sysctl -n kern.hv_support 2>/dev/null)" = 1 ]; then
@@ -709,12 +708,9 @@ lock_take "$@" || { echo "run: result: refused: the tree is not free" >&2; exit 
 # harness reaches QEMU through execvp and the shell suites through their own
 # PATH lookup, so this covers both without either knowing about it.
 # The shim also chooses the accelerator, so every suite boots the same kind
-# of machine and none names one: KVM where /dev/kvm can be opened on a host
-# that is not itself a guest, HVF on an x86 Mac that reports it, the
-# emulator otherwise. A nested KVM, the WSL case, is refused because the
-# ATA driver moves data by port I/O and every port access then crosses two
-# hypervisors: measured on 2026-09-18, a 64 MiB write took 217 s under
-# nested KVM and 12 s emulated. `RACH2_QEMU_ACCEL` names one outright.
+# of machine and none names one: KVM where /dev/kvm can be opened, HVF on
+# an x86 Mac that reports it, the emulator otherwise. `RACH2_QEMU_ACCEL`
+# names one outright, and `tcg` is how a KVM host is measured without it.
 QEMU_REAL=$(command -v qemu-system-i386 2>/dev/null || true)
 if [ -n "$QEMU_REAL" ]; then
     mkdir -p "$WORK/bin"
