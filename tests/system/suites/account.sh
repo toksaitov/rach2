@@ -127,8 +127,15 @@ cleanup_boot() {
     rm -f "$FEED"
 }
 
+# The console log is kept as the failing boot's when the run did not pass,
+# which a stop by the runner is: it is the only account of what the machine
+# did.
+PASSED=""
 cleanup() {
     cleanup_boot
+    if [ -z "$PASSED" ] && [ -f "$LOG" ]; then
+        cp "$LOG" "$DISK.fail.log" 2>/dev/null || true
+    fi
     rm -f "$WORK" "$LOG" "$FEED"
 }
 
@@ -394,6 +401,7 @@ run_simple_arc() {
     cleanup_boot
 
     echo "account-test: an account was created, authenticated and changed with our own tools: OK"
+    PASSED=1
     echo "account-test: PASS"
 }
 
@@ -624,6 +632,7 @@ run_real_arc() {
     esac
 
     echo "account-test: two accounts were created, authenticated, changed and deleted without trace: OK"
+    PASSED=1
     echo "account-test: PASS"
 
 }
