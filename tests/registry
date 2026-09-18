@@ -82,9 +82,9 @@ dgram-e1000|qemu-system-i386|full
 dgram|qemu-system-i386|core
 diskdiag|qemu-system-i386,ssh|full
 e1000|qemu-system-i386,ssh|core
-disk-ahci|qemu-system-i386|core
+disk-ahci|qemu-system-i386|core|disk-ahci-test*,disk-ahci.*,disk-ahci/*,disk-test-ahci.*
 grub|qemu-system-i386,mformat,mmd,mcopy|core
-disk-q35|qemu-system-i386|full
+disk-q35|qemu-system-i386|full|disk-q35-test*,disk-q35.*,disk-q35/*,disk-test-q35.*
 doom|qemu-system-i386|full
 disk|qemu-system-i386|core|disk-test.*,disk.*,disk/*,wide-test.*
 diskpolicy|qemu-system-i386|full
