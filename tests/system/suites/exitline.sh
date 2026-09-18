@@ -175,7 +175,7 @@ fi
 # The line that returns the shell follows the process's exit line, and the
 # machine is stopped only once it has printed it whole; a stop on the exit
 # line alone could cut the second line.
-wait_serial "$TEST_IMAGE.fork.log" "returning to kernel shell\$" 30 || true
+wait_serial "$TEST_IMAGE.fork.log" "returning to kernel shell[[:space:]]*\$" 30 || true
 stop
 if ! grep -qE "^<[0-9]>\[[0-9]+\.[0-9][0-9]\] sys_exit: init process [0-9]+ exited with status 0, returning to kernel shell" \
         "$TEST_IMAGE.fork.log"; then
@@ -191,7 +191,7 @@ echo "exitline-test: the debug shell prints it for a child and a probe: OK"
 # accept a line renamed at either end, and the runner matches the whole thing.
 boot_driven "$TEST_IMAGE.signal.log" -kernel "$KERNEL" -initrd "$TEST_IMAGE"
 shell_command 'exec /vmfault'
-if ! wait_serial "$TEST_IMAGE.signal.log" "killed by signal 11, returning to kernel shell\$" 90; then
+if ! wait_serial "$TEST_IMAGE.signal.log" "killed by signal 11, returning to kernel shell[[:space:]]*\$" 90; then
     stop
     echo "exitline-test: FAIL: a probe killed by a signal printed no marker," >&2
     echo "exitline-test: so the probe runner would score it as never having run" >&2
