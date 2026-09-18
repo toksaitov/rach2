@@ -62,6 +62,7 @@
  *                    with nothing, which is the shell dropping it, or
  *                    with "Unknown command", which is a line typed before
  *                    the shell was reading and missing its first bytes.
+ *                    With --ok the step ends when the token has arrived.
  *
  * Exit code: 0 if the guest process exited 0 (QEMU returned an odd code
  * via isa-debug-exit); 1 if it exited non-zero; 2 if QEMU failed to
@@ -1513,6 +1514,13 @@ int main(int argc, char **argv)
                     mark = buf_len;
                 }
                 pump(now() + 0.5);
+                /* A run judged by its token is over when the token has
+                   arrived since the line was typed: a machine that stays
+                   at its prompt afterwards is not waited for to the limit,
+                   which a set's factor can put past the runner's idle
+                   limit. */
+                if (ok != NULL && contains(buf + mark, buf_len - mark, ok))
+                    break;
             }
         } else {
             fprintf(stderr, "unknown step: %s\n", step);

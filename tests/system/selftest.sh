@@ -601,6 +601,28 @@ chmod +x "$WORK/refusing/qemu-system-i386"
 ); rc=$?
 check "a probe command the shell did not know is typed again" 0 "$rc"
 
+# A machine that prints the run's token and stays at its prompt: the probe
+# step ends on the token, not at its limit, which a set's factor can put
+# past the runner's idle limit.
+mkdir -p "$WORK/staying"
+cat > "$WORK/staying/qemu-system-i386" <<'STAYING'
+#!/bin/sh
+printf "Type 'help' for available commands.\n"
+read -r line
+printf '> %s\nBLOCKPROBE OK\n<6>[1.00] process: exited with status 0\n>' "$line"
+sleep 30
+STAYING
+chmod +x "$WORK/staying/qemu-system-i386"
+t0=$(now)
+(
+    unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR
+    PATH="$WORK/staying:$PATH" "$HARNESS_BIN" --kernel none --timeout 40 --steptmo 30 \
+        --ok "BLOCKPROBE OK" probe=blockprobe > /dev/null 2>&1
+); rc=$?
+held=$(($(now) - t0))
+check "a probe step ends on the run's token" 0 "$rc"
+check "and not at its limit" 1 "$([ "$held" -lt 15 ] && echo 1 || echo 0)"
+
 # The native lock excludes another owner even before the owner record exists.
 rm -f "$WORK/lock-entered"
 "$SELFTEST_UTIL" lock "$WORK/guard" "$WORK/no-owner" sh -c 'echo ready > "$1"; sleep 2' sh "$WORK/lock-entered" &
