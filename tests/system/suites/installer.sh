@@ -471,8 +471,11 @@ mark "row 5"
 #         which ends the harness's run, so the wait is for that token and not
 #         for a number of seconds, which a set's factor would stretch past the
 #         runner's idle limit. ----
+# The log is removed first: the wait below would take the token from a
+# previous run's log before the harness truncates it.
 rm -f "$KNOWN"
 LOG6="$DIR/ssh.log"
+rm -f "$LOG6" "$LOG6.harness"
 "$HARNESS" --bios --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-drive --qemu-arg="file=$DIR/one.img,format=raw,if=ide,index=0,media=disk" \
     --net "user,id=net0,hostfwd=tcp::$PORT-:22" --device "rtl8139,netdev=net0" \
