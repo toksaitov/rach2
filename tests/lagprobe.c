@@ -1044,6 +1044,17 @@ static void run_dirty(void)
     if (syscall2(SYS_UMOUNT2, (int)"/ly", 0) != 0) {
         fail("umount2 of the volume");
     }
+    /* The row's cost, for the record: the commands, the flushes, the ticks
+       requests spent in flight and the lag's answers. */
+    puts("LAGPROBE dirty: commands ");
+    putnum(disk_counter("disk-commands "));
+    puts(" flushes ");
+    putnum(disk_counter("disk-flushes "));
+    puts(" wait-ticks ");
+    putnum(disk_counter("disk-wait-ticks "));
+    puts(" lag-completions ");
+    putnum(disk_counter("lag-completions "));
+    puts("\n");
     puts("LAGPROBE OK");
 }
 

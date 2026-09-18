@@ -62,6 +62,7 @@ fi
 #         next request ----
 if run --append "rach2.blocklag=700 rach2.rescue" \
     --timeout 120 --steptmo 60 --ok "LAGPROBE OK" --never "LAGPROBE FAIL" \
+    --log "$DISK.deadline.log" \
     "expect=Type 'help'" "send=exec /lagprobe deadline" \
     "expect=quarantined" "expect=late completion" \
     "expect=LAGPROBE OK" > /dev/null 2>&1; then
@@ -73,7 +74,7 @@ fi
 # ---- 3: the root mounts through the real device while the partitions are on
 #         the lag, and /proc/mounts names the partition as the root ----
 if run --append "rach2.blocklag=3 rach2.fsdisk rach2.rescue" \
-    --timeout 90 --ok "LAGPROBE OK" --never "LAGPROBE FAIL" \
+    --timeout 90 --ok "LAGPROBE OK" --never "LAGPROBE FAIL" --log "$DISK.root.log" \
     "expect=Type 'help'" "send=exec /lagprobe root" \
     "expect=LAGPROBE" > /dev/null 2>&1; then
     echo "mount-test: the root is on the real device beside the lag: OK"
@@ -124,6 +125,7 @@ fi
 #         the real disk while the partitions are on the lag ----
 if run --append "rach2.blocklag=3 rach2.diskdiag rach2.rescue" \
     --timeout 120 --steptmo 60 --ok "LAGPROBE OK" --never "LAGPROBE FAIL" \
+    --log "$DISK.mounted.log" \
     "expect=Type 'help'" "send=exec /lagprobe mounted" \
     "expect=LAGPROBE" > /dev/null 2>&1; then
     echo "mount-test: the mounted half sleeps, waits and shares as it should: OK"
@@ -158,6 +160,7 @@ fi
 #         so the unmount that must find it busy cannot run first, as it did
 #         on a loaded host when the sleeper opened the file itself. ----
 LOG="$DISK.busybox.log"
+# interval: a sleeper holds the file open across the umount that must fail
 if "$HARNESS" --kernel "$KERNEL" --initrd "$OSREAL" \
     --qemu-arg=-cpu --qemu-arg=max \
     --drive "file=$DISK,format=raw,if=ide,index=0,media=disk" \
@@ -166,8 +169,8 @@ if "$HARNESS" --kernel "$KERNEL" --initrd "$OSREAL" \
     "expect=# " "send=mkdir /mnt && mount -t vfat -o ro /dev/disk0p2 /mnt && echo MOUNT\"\"ED" \
     "expect=MOUNTED" "send=ls /mnt | sort | tr '\\n' ' '; echo; echo LIST\"\"DONE" \
     "expect=LISTDONE" "send=cat /mnt/hello.txt; cksum /mnt/hello /mnt/again.bin /mnt/hello.txt; echo SUMS\"\"DONE" \
-    "expect=SUMSDONE" "send=exec 3< /mnt/hello.txt; sleep 5 <&3 & exec 3<&-; umount /mnt; echo UMOUNT\"\"RC=\$?" \
-    "expect=UMOUNTRC=1" wait=6 "send=umount /mnt && echo UN\"\"MOUNTED" \
+    "expect=SUMSDONE" "send=exec 3< /mnt/hello.txt; (sleep 5 <&3; echo HOLDER\"\"DONE) & exec 3<&-; umount /mnt; echo UMOUNT\"\"RC=\$?" \
+    "expect=UMOUNTRC=1" "expect=HOLDERDONE" "send=umount /mnt && echo UN\"\"MOUNTED" \
     "expect=UNMOUNTED" "send=[ \"\$(grep -c vfat /proc/mounts)\" = 0 ] && echo BB\"\"DONE" \
     "expect=BBDONE" > /dev/null 2>&1; then
     echo "mount-test: BusyBox mounts, lists, reads and unmounts: OK"

@@ -82,7 +82,7 @@ boot() {
         --drive "file=$2,format=raw,if=ide,index=0,media=disk" \
         --append "rach2.fsdisk rach2.rescue" \
         --timeout 90 --log "$3" --ok "Type 'help'" \
-        "expect=Type 'help'" wait=3 >/dev/null 2>&1 || true
+        "expect=disk: policy:" "expect=Type 'help'" >/dev/null 2>&1 || true
 }
 
 # The read-write kernel: it mounts, and mounting stamps the dirty flag, so the

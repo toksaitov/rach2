@@ -41,6 +41,8 @@
 #
 
 # shellcheck source=tests/system/deadline.sh
+# The runner helper, whose `until` and `gone` are the suite's waits.
+RUNUTIL="$(cd "$(dirname "$0")/../../.." && pwd)/build/tests/system/runutil"
 . "$(cd "$(dirname "$0")/../../.." && pwd)/tests/system/deadline.sh"
 set -e
 
@@ -149,15 +151,7 @@ fail() {
 # end allows trailing space, since the console ends its lines with a carriage
 # return and the token would otherwise never be the last character.
 wait_token() {
-    i=0
-    while [ "$i" -lt "$2" ]; do
-        if grep -q "$1" "$LOG" 2>/dev/null; then
-            return 0
-        fi
-        sleep 1
-        i=$((i + 1))
-    done
-    return 1
+    "$RUNUTIL" until "$LOG" "$1" "$2"
 }
 
 # Wait up to $3 seconds for the pattern $1 to appear at least $2 times. Counting
@@ -166,15 +160,7 @@ wait_token() {
 # the way it is in a busybox shell and every token it prints would be matched
 # from the console's echo of the command that printed it.
 wait_count() {
-    i=0
-    while [ "$i" -lt "$3" ]; do
-        if [ "$(grep -c "$1" "$LOG" 2>/dev/null)" -ge "$2" ]; then
-            return 0
-        fi
-        sleep 1
-        i=$((i + 1))
-    done
-    return 1
+    "$RUNUTIL" until "$LOG" "$1" "$3" "$2"
 }
 
 # Wait until the console has said nothing for $1 tenths of a second, giving up
@@ -207,6 +193,7 @@ feed_settle() {
             still=0
             last=$size
         fi
+        # interval: the log is read every tenth of a second until it is still
         sleep 0.1
         i=$((i + 1))
     done
@@ -231,6 +218,7 @@ boot_lines() {
         feed_settle 12 "$(scaled 90)"
         for line in "$@"; do
             printf '%s\n' "$line"
+            # interval: fed lines go six seconds apart, ahead of their prompts
             sleep 6
         done
         # Not a delay: this holds the console open while the checks read the
@@ -317,13 +305,13 @@ run_simple_arc() {
         "$NEXTPASS" \
         "echo TRYEND"
 
-    if ! wait_token "^/root[[:space:]]*\$" "$(scaled 150)"; then
+    if ! wait_token "^/root[[:space:]]*\$" 150; then
         fail "a bare command name after login found nothing; the PATH login builds is wrong"
     fi
-    if ! wait_token "created with uid" "$(scaled 120)"; then
+    if ! wait_token "created with uid" 120; then
         fail "adduser never created the account"
     fi
-    if ! wait_token "^$SIMPLEUSER:x:[0-9]" "$(scaled 120)"; then
+    if ! wait_token "^$SIMPLEUSER:x:[0-9]" 120; then
         fail "the new account never reached /etc/passwd"
     fi
     if ! grep -q "^$SIMPLEUSER:x:[0-9]*:[0-9]*:.*:/home/${SIMPLEUSER}:/bin/sh[[:space:]]*\$" "$LOG"; then
@@ -331,14 +319,14 @@ run_simple_arc() {
     fi
 
     # The unprivileged half.
-    if ! wait_token "^/home/test[[:space:]]*\$" "$(scaled 180)"; then
+    if ! wait_token "^/home/test[[:space:]]*\$" 180; then
         fail "the test account never reached a shell of its own"
     fi
     # The two attempts are read inside their own markers for the reason every
     # other pair here is: a refusal that ran the command anyway leaves the same
     # log as a refusal that did not, once the successful attempt beside it has
     # printed the same line.
-    if ! wait_token "TRYDONE" "$(scaled 240)"; then
+    if ! wait_token "TRYDONE" 240; then
         fail "the account's own password was never tried"
     fi
     wrong_try=$(sed -n '/TRYWRONG/,/TRYRIGHT/p' "$LOG")
@@ -354,7 +342,7 @@ run_simple_arc() {
         *"/home/$SIMPLEUSER"*) ;;
         *) fail "the account never authenticated with its own password" ;;
     esac
-    if ! wait_token "password changed for test" "$(scaled 180)"; then
+    if ! wait_token "password changed for test" 180; then
         fail "the account could not change its own password through the set-id passwd"
     fi
 
@@ -372,7 +360,7 @@ run_simple_arc() {
     # quote removal and a split token would arrive with its quotes in it; the
     # console's echo of the command lands immediately before the output it
     # delimits, so it does not separate an attempt from its own result.
-    if ! wait_token "TRYEND" "$(scaled 240)"; then
+    if ! wait_token "TRYEND" 240; then
         fail "the attempts after the password change never finished"
     fi
     old_try=$(sed -n '/TRYOLD/,/TRYOTHER/p' "$LOG")
@@ -432,13 +420,13 @@ run_real_arc() {
         "$NEXTPASS" \
         "sync; echo SYNC\"\"IT"
 
-    if ! wait_token "MADEIT" "$(scaled 150)"; then
+    if ! wait_token "MADEIT" 150; then
         fail "the account, the group, or the account's membership of it was never made"
     fi
-    if ! wait_token "SYSIT" "$(scaled 60)"; then
+    if ! wait_token "SYSIT" 60; then
         fail "the system account was never created"
     fi
-    if ! wait_token "SETIT" "$(scaled 90)"; then
+    if ! wait_token "SETIT" 90; then
         fail "the password was never set"
     fi
     if ! grep -q "password for '$NEWUSER' changed" "$LOG"; then
@@ -455,13 +443,13 @@ run_real_arc() {
     # succeeded and by no other. That is also why `id` is not run anywhere else
     # in this boot: a `uid=` line from some other command would answer this
     # assertion just as well.
-    if ! wait_token "AUTHIT" "$(scaled 120)"; then
+    if ! wait_token "AUTHIT" 120; then
         fail "the account never authenticated with its own password"
     fi
     if ! grep -q "uid=[0-9][0-9]*($NEWUSER)" "$LOG"; then
         fail "su did not become the account"
     fi
-    if ! wait_token "TRIEDIT" "$(scaled 120)"; then
+    if ! wait_token "TRIEDIT" 120; then
         fail "the wrong-password attempt never returned"
     fi
     if ! grep -qi "incorrect password" "$LOG"; then
@@ -480,19 +468,19 @@ run_real_arc() {
     # complaint, so a `passwd` that changed the password without saying anything
     # prints neither. The refusal of another account's record needs no password
     # at all, since busybox checks who is asking before it asks for one.
-    if ! wait_token "REFUSED" "$(scaled 180)"; then
+    if ! wait_token "REFUSED" 180; then
         fail "passwd took a wrong old password, or refused it without saying so"
     fi
-    if ! wait_token "NOTMINE" "$(scaled 120)"; then
+    if ! wait_token "NOTMINE" 120; then
         fail "passwd let an account change another account's password"
     fi
-    if ! wait_token "CHANGEDIT" "$(scaled 180)"; then
+    if ! wait_token "CHANGEDIT" 180; then
         fail "passwd never returned"
     fi
     if ! grep -q "password for $NEWUSER changed by $NEWUSER" "$LOG"; then
         fail "passwd did not report the account changing its own password"
     fi
-    if ! wait_token "SYNCIT" "$(scaled 60)"; then
+    if ! wait_token "SYNCIT" 60; then
         fail "the first boot never reached its sync"
     fi
     cleanup_boot
@@ -515,10 +503,10 @@ run_real_arc() {
         "cat /etc/group; echo GR\"\"END" \
         "deluser $NEWUSER && deluser $SYSUSER && sync && echo GONE\"\"IT"
 
-    if ! wait_token "AGAINIT" "$(scaled 180)"; then
+    if ! wait_token "AGAINIT" 180; then
         fail "the changed password did not authenticate after a reboot"
     fi
-    if ! wait_token "GREND" "$(scaled 180)"; then
+    if ! wait_token "GREND" 180; then
         fail "the second boot could not read the databases back"
     fi
 
@@ -588,7 +576,7 @@ run_real_arc() {
         fail "the account never joined the shared group"
     fi
 
-    if ! wait_token "GONEIT" "$(scaled 120)"; then
+    if ! wait_token "GONEIT" 120; then
         fail "the accounts were never deleted"
     fi
     cleanup_boot
@@ -599,7 +587,7 @@ run_real_arc() {
         "cat /etc/shadow; echo SH\"\"END" \
         "cat /etc/group; echo GR\"\"END"
 
-    if ! wait_token "GREND" "$(scaled 180)"; then
+    if ! wait_token "GREND" 180; then
         fail "the third boot could not read the databases back"
     fi
     cleanup_boot

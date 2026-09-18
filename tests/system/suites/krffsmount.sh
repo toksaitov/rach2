@@ -321,7 +321,7 @@ if "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
     --append "rach2.rescue" --timeout 150 --steptmo 120 \
     --ok "KRFFSPROBE OK (pull)" --never "KRFFSPROBE FAIL" --log "$DISK.pull.log" \
     "expect=Type 'help'" "send=exec /krffsprobe pull" \
-    "expect=KRFFSPROBE HOLDING" wait=1 "usb=del:kst0" \
+    "expect=KRFFSPROBE HOLDING" "usb=del:kst0" \
     "expect=KRFFSPROBE GONE" \
     "drive=add:if=none,id=kst2,format=raw,file=$STICK" \
     "usb=add:usb-storage,bus=xhci.0,drive=kst2,id=kst1" \

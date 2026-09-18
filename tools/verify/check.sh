@@ -27,6 +27,10 @@
 #  13. the dev-log index (prosecheck devlog): it names every finished
 #      milestone, and names the newest last
 #  14. the test registry against the run- targets in tests/system/suites.mk
+#  16. the suites' waits and criteria (tools/verify/suitecheck.sh): no sleep
+#      for a number of seconds, no wait= step, no upper bound on a duration
+#      in a probe, except an interval marked with a reason the file
+#      tests/system/intervals lists
 #
 # Usage:
 #     ./check.sh [file.c ...]      # extra files to hard clang-format check
@@ -135,7 +139,7 @@ done
 if [ "$miss" -eq 0 ]; then echo "  PASS"; else echo "  FAIL"; fail=1; fi
 
 # 1. kernel build (-Werror)
-hr "1/16 kernel build (-Werror)"
+hr "1/17 kernel build (-Werror)"
 if make -C rach2 >"$VDIR/verify_build.log" 2>&1; then
     echo "  PASS (0 warnings/errors)"
 else
@@ -144,7 +148,7 @@ fi
 
 # 2. cppcheck: --error-exitcode makes a finding a real non-zero exit, so a
 #    crash or a finding both fail (a silent 0-count cannot mask either).
-hr "2/16 cppcheck (c89, warning+style)"
+hr "2/17 cppcheck (c89, warning+style)"
 find "$REPO/rach2/sys" -name '*.c' >"$VDIR/_srcs.txt"
 echo "$REPO/rach2/kernel.c" >>"$VDIR/_srcs.txt"
 ls "$REPO"/tests/*probe.c >>"$VDIR/_srcs.txt" 2>/dev/null || true
@@ -175,7 +179,7 @@ fi
 #    legacy QEMU run/build scripts waive SC2086 (option word-splitting is
 #    intentional) and SC2034 (vars shared across sourced fragments); SC1091
 #    covers the dynamic source path in both.
-hr "3/16 shellcheck"
+hr "3/17 shellcheck"
 sc=0
 # shellcheck disable=SC2046
 shellcheck -x -e SC1091 $(ls tests/run tests/system/suites/*.sh tests/system/accept/*.sh tests/system/grow_machine.sh tools/*/*.sh vendor/musl/*.sh vendor/*/build_*.sh 2>/dev/null) \
@@ -187,7 +191,7 @@ shellcheck -x -e SC1091 -e SC2034 -e SC2086 \
 if [ "$sc" -eq 0 ]; then echo "  PASS"; else echo "  FAIL: see $VDIR/verify_shellcheck.log"; fail=1; fi
 
 # 4. convention grep (no //, ASCII only, _NAME_H_ guards)
-hr "4/16 conventions (no //, ASCII, header guards, marked idle wait)"
+hr "4/17 conventions (no //, ASCII, header guards, marked idle wait)"
 cv=0
 if inhouse_ch | xargs grep -nE '(^|[^:"])//' 2>/dev/null | grep -vE 'https?://|://' | grep -q .; then
     echo "  // comment found:"; inhouse_ch | xargs grep -nE '(^|[^:"])//' 2>/dev/null | grep -vE 'https?://|://' | head -3 | sed 's/^/    /'; cv=1
@@ -218,7 +222,7 @@ if [ "$cv" -eq 0 ]; then echo "  PASS"; else fail=1; fi
 
 # 5. clang-format. HARD on new-code dirs + named args; advisory on the legacy
 # tree. Uses --Werror so a real run failure is a real failure (not a 0 count).
-hr "5/16 clang-format"
+hr "5/17 clang-format"
 strict_fail=0
 # shellcheck disable=SC2046
 for f in $(newcode_ch) "$@"; do
@@ -236,7 +240,7 @@ done
 echo "  advisory: $drift in-house files differ from .clang-format (legacy not reformatted)"
 
 # 6. readelf ABI on a freshly linked musl binary (no stale-artifact dependency).
-hr "6/16 readelf ABI (fresh musl link)"
+hr "6/17 readelf ABI (fresh musl link)"
 if [ -f "$LIBC/lib/libc.a" ]; then
     printf 'int main(void){return 0;}\n' >"$VDIR/_abi.c"
     if i686-elf-gcc -static -nostdlib -nostartfiles -isystem "$LIBC/include" \
@@ -267,7 +271,7 @@ fi
 
 # 7. kernel source-list guard: every rach2 .c on disk must be listed in C_SRC,
 #    so a newly added kernel source cannot be silently dropped from the build.
-hr "7/16 kernel source list (C_SRC vs disk) and the guest build lists"
+hr "7/17 kernel source list (C_SRC vs disk) and the guest build lists"
 if "$REPO/tools/verify/check_sources.sh" >"$VDIR/verify_sources.log" 2>&1 &&
    "$GUESTCHECK" "$REPO" >>"$VDIR/verify_sources.log" 2>&1; then
     echo "  PASS"
@@ -278,7 +282,7 @@ fi
 # Text style: the mechanical natural-text checks (tools/verify/textcheck.sh). It
 # catches non-ASCII bytes, faked em-dashes, and `-` list bullets in the in-house
 # tree.
-hr "8/16 text style"
+hr "8/17 text style"
 if "$REPO/tools/verify/textcheck.sh" >"$VDIR/verify_text.log" 2>&1; then
     echo "  PASS (textcheck)"
 else
@@ -320,7 +324,7 @@ fi
 # consuming no argument, so every field after it in that message is read one
 # slot early. That printed `at 02x:02x.0` on the machine and, worse, the wrong
 # numbers beside it.
-hr "9/16 message formats"
+hr "9/17 message formats"
 if "$REPO/tools/verify/fmtcheck.sh" >"$VDIR/verify_fmt.log" 2>&1; then
     echo "  PASS (fmtcheck)"
 else
@@ -330,7 +334,7 @@ else
     fail=1
 fi
 
-hr "10/16 runner rules (runtests and harness selftests)"
+hr "10/17 runner rules (runtests and harness selftests)"
 HARNESSBIN="$REPO/build/tests/system/harness"
 make -C "$REPO" --no-print-directory build/tests/system/harness >/dev/null || exit 1
 if "$RUNTESTS" --selftest >"$VDIR/verify_score.log" 2>&1 &&
@@ -344,7 +348,7 @@ fi
 # This half reads sources only, so it belongs with the source checks; the image
 # inventory that reads a built artifact runs from mkimage.sh and mkdisk.sh
 # instead.
-hr "11/16 set-id guard (selftest + manifest sweep)"
+hr "11/17 set-id guard (selftest + manifest sweep)"
 setid=0
 # The self-test first: it covers the failure cases no current manifest
 # exercises, so without it a regression in, say, the image walk or the path
@@ -368,7 +372,7 @@ fi
 #     twice with the real host tools, so those are BUILT here first, the way
 #     step 1 builds the kernel it checks: a check that tested whatever binary
 #     happened to be lying in build/ would report on another day's source.
-hr "12/16 image reproducibility (one tree, one image)"
+hr "12/17 image reproducibility (one tree, one image)"
 if ! make -C "$REPO/krffs" >"$VDIR/verify_repro_build.log" 2>&1; then
     echo "  FAIL: the krffs host tools did not build; see $VDIR/verify_repro_build.log"
     fail=1
@@ -386,10 +390,11 @@ fi
 #     loader would misload, the GRUB one must accept the configuration a core
 #     image has and refuse every way of losing the recovery path, the
 #     sealed-network one must refuse every way the menu and the recovery script
-#     can come to describe two different machines, and the compilation-database
+#     can come to describe two different machines, the compilation-database
 #     generator must join wrapped recipes, select only compile commands, and
-#     refuse to publish an invalid database.
-hr "13/16 checker selftests"
+#     refuse to publish an invalid database, and the suite checker must refuse
+#     each form of a guessed duration and accept each marked interval.
+hr "13/17 checker selftests"
 ELFCHECK="$REPO/build/tools/inspect/elfcheck"
 if [ ! -x "$ELFCHECK" ] || [ "$REPO/tools/inspect/elfcheck.c" -nt "$ELFCHECK" ]; then
     mkdir -p "${ELFCHECK%/*}"
@@ -402,7 +407,8 @@ if [ ! -x "$CFGCHECK" ] || [ "$REPO/tools/inspect/cfgcheck.c" -nt "$CFGCHECK" ];
 fi
 if "$ELFCHECK" --selftest >"$VDIR/verify_kernelck.log" 2>&1 &&
    "$CFGCHECK" --selftest >>"$VDIR/verify_kernelck.log" 2>&1 &&
-   sh "$REPO/tools/dev/gen_compile_commands.sh" --selftest >>"$VDIR/verify_kernelck.log" 2>&1; then
+   sh "$REPO/tools/dev/gen_compile_commands.sh" --selftest >>"$VDIR/verify_kernelck.log" 2>&1 &&
+   sh "$REPO/tools/verify/suitecheck.sh" --selftest >>"$VDIR/verify_kernelck.log" 2>&1; then
     echo "  PASS"
 else
     echo "  FAIL: see $VDIR/verify_kernelck.log"; fail=1
@@ -412,7 +418,7 @@ fi
 #     so every finished milestone must have an entry, the entries must be in the
 #     directories' numeric order, and a directory holding only a plan must have
 #     none. The selftest proves the rules reject; the run proves this index.
-hr "14/16 dev-log index"
+hr "14/17 dev-log index"
 if "$PROSECHECK" devlog >"$VDIR/verify_devlog.log" 2>&1; then
     echo "  PASS"
 else
@@ -424,7 +430,7 @@ fi
 #     suite nothing runs. Neither shows up anywhere else: make accepts an
 #     unknown goal only by failing, which happens on the day someone asks for
 #     that suite, and a target no one names is silent forever.
-hr "15/16 test registry against tests/system/suites.mk"
+hr "15/17 test registry against tests/system/suites.mk"
 {
     awk -F'|' '!/^#/ && NF > 1 { print $1 }' "$REPO/tests/registry" | sort > "$VDIR/_reg.txt"
     grep -o '^run-[a-z0-9-]*' "$REPO/tests/system/suites.mk" | sed 's/^run-//' \
@@ -460,7 +466,7 @@ fi
 #     transitive, so a product reached through an image counts as prepared.
 #     `prepare-all` builds its halves from its recipe, so the recipe is read
 #     for the targets it names; a half dropped from it is found.
-hr "16/16 run- targets' products against prepare-all"
+hr "16/17 run- targets' products against prepare-all"
 make -C "$REPO" -pn prepare-all > "$VDIR/_db.txt" 2>/dev/null || { echo "  FAIL: make -pn prepare-all failed"; fail=1; }
 unprepared=$(awk '
     /^#/ || /^$/ { next }
@@ -496,6 +502,19 @@ if [ -z "$unprepared" ]; then
 else
     echo "  FAIL: a run- target names a product prepare-all does not build:"
     echo "$unprepared" | sed 's/^/    /'
+    fail=1
+fi
+
+# 17. the suites wait for tokens and assert on counts. A `sleep N` in a
+#     suite, a `wait=N` harness step and an upper bound on a duration in a
+#     probe are guesses at a machine's speed; each is refused unless it is
+#     an interval marked with a reason that tests/system/intervals lists.
+hr "17/17 suites' waits and criteria (suitecheck)"
+if sh "$REPO/tools/verify/suitecheck.sh" >"$VDIR/verify_suites.log" 2>&1; then
+    echo "  PASS"
+else
+    echo "  FAIL: a suite guesses a duration; see $VDIR/verify_suites.log:"
+    head -5 "$VDIR/verify_suites.log" | sed 's/^/    /'
     fail=1
 fi
 

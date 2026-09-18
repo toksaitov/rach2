@@ -76,7 +76,7 @@ for skip in 0 1 2; do
         --append "rach2.rescue rach2.resetskip=$skip" \
         --timeout 90 --log "$LOG" --ok "reboot: restarting" \
         --must-exit --never "<2>" \
-        "expect=Type 'help'" "send=reboot" wait=6 >"$LOG.harness" 2>&1 && rc=0 || rc=$?
+        "expect=Type 'help'" "send=reboot" until=10 >"$LOG.harness" 2>&1 && rc=0 || rc=$?
 
     if [ "$rc" -ne 0 ]; then
         echo "reset-test: FAIL: with $what, the machine did not restart:" >&2
@@ -104,7 +104,7 @@ done
 # command belongs to. QEMU publishes the name; the write itself is inert there,
 # and the machine still restarts through the chipset register after it.
 rm -f "$LOG"
-"$REPO/build/tests/system/harness" --kernel "$KERNEL" --initrd "$IMAGE"     --qemu-arg=-cpu --qemu-arg=max     --qemu-arg=-smbios --qemu-arg="type=0,vendor=Insyde Corp."     --append "rach2.rescue rach2.resetskip=0"     --timeout 90 --log "$LOG" --ok "reboot: restarting"     --must-exit --never "<2>"     "expect=Type 'help'" "send=reboot" wait=6 >"$LOG.harness" 2>&1 && rc=0 || rc=$?
+"$REPO/build/tests/system/harness" --kernel "$KERNEL" --initrd "$IMAGE"     --qemu-arg=-cpu --qemu-arg=max     --qemu-arg=-smbios --qemu-arg="type=0,vendor=Insyde Corp."     --append "rach2.rescue rach2.resetskip=0"     --timeout 90 --log "$LOG" --ok "reboot: restarting"     --must-exit --never "<2>"     "expect=Type 'help'" "send=reboot" until=10 >"$LOG.harness" 2>&1 && rc=0 || rc=$?
 
 if [ "$rc" -ne 0 ]; then
     echo "reset-test: FAIL: the machine naming an Insyde firmware did not restart:" >&2

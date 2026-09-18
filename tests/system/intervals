@@ -1,0 +1,20 @@
+# The intervals the suites keep on purpose, one per line as FILE: REASON,
+# in the words of the `interval:` mark on the line; tools/verify/suitecheck.sh
+# refuses a sleep without one. A person reads this list.
+tests/system/suites.mk: the machine is asked every second until init has started SSH
+tests/system/suites.mk: the service log is read every second until the client gives up
+tests/system/suites/account.sh: fed lines go six seconds apart, ahead of their prompts
+tests/system/suites/account.sh: the log is read every tenth of a second until it is still
+tests/system/suites/bootline.sh: the machine runs on after the line to show it stopped there
+tests/system/suites/diskdiag.sh: a try of SSH every two seconds until the server answers
+tests/system/suites/doom.sh: doom runs for ten seconds; the row counts its disk commands
+tests/system/suites/drill.sh: the service log is read every second for recovery's fixed address
+tests/system/suites/drill.sh: the service log is read every three seconds for the lease
+tests/system/suites/grow.sh: the resizer is killed after its period; the row proves the repair
+tests/system/suites/make.sh: the file's time must pass the second, which make compares whole
+tests/system/suites/metal.sh: a try of SSH every two seconds until the server answers
+tests/system/suites/mount.sh: a sleeper holds the file open across the umount that must fail
+tests/system/suites/procfiles.sh: the guest's table is read every second for the host's connection
+tests/system/suites/sealed.sh: a try of SSH every two seconds until the server answers
+tests/system/suites/selfbuild.sh: the self-built server is asked every second until it answers
+tests/system/suites/ssh.sh: a holder keeps a flood writer open until the flood is killed

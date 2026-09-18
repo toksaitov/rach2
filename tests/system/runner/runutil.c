@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <glob.h>
+#include <regex.h>
 #ifdef __APPLE__
 #include <libproc.h>
 #include <sys/proc.h>
@@ -49,6 +50,113 @@ static void pause_for(double seconds)
     ts.tv_nsec = (long)((seconds - ts.tv_sec) * 1000000000.0);
     while (nanosleep(&ts, &ts) != 0 && errno == EINTR && !interrupted)
         ;
+}
+
+/* A completion bound multiplied by the set's deadline factor,
+ * `RACH2_DEADLINE_FACTOR` under `RACH2_DEADLINES=scaled`, as the harness
+ * multiplies its own; a process told nothing keeps the number as written. */
+static double bound(double seconds)
+{
+    const char *mode = getenv("RACH2_DEADLINES");
+    const char *factor = getenv("RACH2_DEADLINE_FACTOR");
+
+    if (mode != NULL && !strcmp(mode, "scaled") && factor != NULL) {
+        double f = atof(factor);
+
+        if (f >= 1.0 && f <= 64.0)
+            return seconds * f;
+    }
+    return seconds;
+}
+
+/* The lines of the file at `path` that match `re`, or 0 for a file not
+ * there yet, which is one with nothing in it. The file is read whole at
+ * each look, since a serial log grows at its end and a token may straddle
+ * two reads. */
+static int matching_lines(const char *path, const regex_t *re)
+{
+    FILE *f = fopen(path, "r");
+    long len;
+    char *text, *line, *next;
+    int n = 0;
+
+    if (f == NULL)
+        return 0;
+    if (fseek(f, 0, SEEK_END) != 0 || (len = ftell(f)) < 0 ||
+        (text = malloc((size_t)len + 1)) == NULL) {
+        fclose(f);
+        return 0;
+    }
+    rewind(f);
+    len = (long)fread(text, 1, (size_t)len, f);
+    text[len] = 0;
+    fclose(f);
+    /* A NUL in a serial log, a line the guest never finished, ends a line
+       and not the text. */
+    for (line = text; line < text + len; line++)
+        if (*line == 0)
+            *line = '\n';
+    for (line = text; *line != 0; line = next) {
+        next = strchr(line, '\n');
+        if (next == NULL)
+            next = line + strlen(line);
+        else
+            *next++ = 0;
+        if (regexec(re, line, 0, NULL, 0) == 0)
+            n++;
+    }
+    free(text);
+    return n;
+}
+
+/**
+ * `runutil until FILE PATTERN SECS [COUNT]`: the suites' wait for a token.
+ * Return 0 as soon as `COUNT` lines of `FILE` (one, unsaid) match the basic
+ * regular expression `PATTERN`, 1 when `SECS` seconds, a completion bound
+ * under the set's factor, pass first, 2 for a pattern that does not
+ * compile. The look every fifth of a second is the runner's interval, not
+ * a suite's.
+ */
+static int until_token(const char *path, const char *pattern, double seconds, int count)
+{
+    regex_t re;
+    double end;
+
+    if (regcomp(&re, pattern, REG_NOSUB | REG_NEWLINE) != 0) {
+        fprintf(stderr, "runutil: until: bad pattern: %s\n", pattern);
+        return 2;
+    }
+    end = now() + bound(seconds);
+    for (;;) {
+        if (matching_lines(path, &re) >= count) {
+            regfree(&re);
+            return 0;
+        }
+        if (now() >= end || interrupted) {
+            regfree(&re);
+            return 1;
+        }
+        pause_for(0.2);
+    }
+}
+
+/**
+ * `runutil gone PID SECS`: the suites' wait for a process to end. Return 0
+ * as soon as no process `PID` can be signalled, 1 when `SECS` seconds, a
+ * completion bound under the set's factor, pass first. A child of the
+ * caller's is gone once the caller has waited for it, so the caller reaps
+ * what it started before asking.
+ */
+static int until_gone(pid_t pid, double seconds)
+{
+    double end = now() + bound(seconds);
+
+    while (kill(pid, 0) == 0 || errno == EPERM) {
+        if (now() >= end || interrupted)
+            return 1;
+        pause_for(0.2);
+    }
+    return 0;
 }
 
 /** Write all bytes, returning failure for a closed destination. */
@@ -1068,6 +1176,11 @@ int main(int argc, char **argv)
         pause_for(strtod(argv[2], NULL));
         return 0;
     }
+    if ((argc == 5 || argc == 6) && !strcmp(argv[1], "until"))
+        return until_token(argv[2], argv[3], strtod(argv[4], NULL),
+                           argc == 6 ? (int)strtol(argv[5], NULL, 10) : 1);
+    if (argc == 4 && !strcmp(argv[1], "gone"))
+        return until_gone((pid_t)strtol(argv[2], NULL, 10), strtod(argv[3], NULL));
     if (argc == 3 && !strcmp(argv[1], "pgid")) {
         pid_t group = getpgid((pid_t)strtol(argv[2], NULL, 10));
         if (group < 0)

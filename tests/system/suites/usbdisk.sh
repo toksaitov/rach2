@@ -158,7 +158,7 @@ LOG="$DIR/pull-$hold.log"
 if run "$DIR/stick-pull.img" --timeout 180 --steptmo 60 --ok "USBDISKPROBE OK" --never "USBDISKPROBE FAIL" \
     --log "$LOG" \
     "expect=Type 'help'" "send=exec /usbdiskprobe $hold" "expect=USBDISKPROBE HOLDING" \
-    wait=1 "usb=del:st0" "expect=USBDISKPROBE OK" \
+    "usb=del:st0" "expect=USBDISKPROBE OK" \
     "expect=Type 'help'" "send=exec /usbdiskprobe free" "expect=USBDISKPROBE FREE 8" \
     "expect=Type 'help'" \
     "drive=add:if=none,id=again,format=raw,file=$DIR/stick-pull.img" \
@@ -335,7 +335,7 @@ LOG="$DIR/three.log"
 if three --timeout 180 --steptmo 60 --ok "USBDISKPROBE OK" --never "USBDISKPROBE FAIL" --log "$LOG" \
     "expect=Type 'help'" "send=exec /usbdiskprobe three" "expect=USBDISKPROBE OK" \
     "expect=Type 'help'" "send=exec /usbdiskprobe pullone" "expect=USBDISKPROBE HOLDING" \
-    wait=1 "usb=del:st1" "expect=USBDISKPROBE OK" > /dev/null 2>&1; then
+    "usb=del:st1" "expect=USBDISKPROBE OK" > /dev/null 2>&1; then
     note "three sticks at once each mount, and the middle one pulled under a reader leaves the others unharmed: OK"
 else
     fail "the three sticks boot"

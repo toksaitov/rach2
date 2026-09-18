@@ -26,6 +26,8 @@
 #
 
 # shellcheck source=tests/system/deadline.sh
+# The runner helper, whose `until` and `gone` are the suite's waits.
+RUNUTIL="$(cd "$(dirname "$0")/../../.." && pwd)/build/tests/system/runutil"
 . "$(cd "$(dirname "$0")/../../.." && pwd)/tests/system/deadline.sh"
 set -e
 
@@ -65,15 +67,7 @@ boot() {
 # after $3 seconds and return 1. Gating on a token, not on a fixed sleep
 # keeps a loaded host from killing QEMU before the console has had its say.
 wait_serial() {
-    i=0
-    while [ "$i" -lt "$3" ]; do
-        if grep -q "$2" "$1" 2>/dev/null; then
-            return 0
-        fi
-        sleep 1
-        i=$((i + 1))
-    done
-    return 1
+    "$RUNUTIL" until "$1" "$2" "$3"
 }
 
 stop() {
@@ -102,7 +96,7 @@ trap 'cleanup; exit 129' HUP
 # The permissive image first, so a failure to boot at all is reported against
 # the half that is supposed to succeed, not as a false pass of the other.
 boot "$SHELL_IMAGE.log" "$SHELL_IMAGE" ""
-if ! wait_serial "$SHELL_IMAGE.log" "uid=0" "$(scaled 60)"; then
+if ! wait_serial "$SHELL_IMAGE.log" "uid=0" 60; then
     stop
     echo "login-test: FAIL: the permissive init never reached a root shell, so" >&2
     echo "login-test: the strict init's refusal would prove nothing" >&2
@@ -115,20 +109,13 @@ echo "login-test: the permissive init reaches a root shell: OK"
 # has to appear at least twice, since a single failure followed by silence is a
 # dead init, not one that keeps the console closed.
 boot "$STRICT.log" "$STRICT" ""
-if ! wait_serial "$STRICT.log" "init: cannot exec /bin/login" "$(scaled 60)"; then
+if ! wait_serial "$STRICT.log" "init: cannot exec /bin/login" 60; then
     stop
     echo "login-test: FAIL: the strict init did not report the missing program" >&2
     exit 1
 fi
-i=0
-while [ "$i" -lt "$(scaled 60)" ]; do
-    said=$(grep -c "init: cannot exec /bin/login" "$STRICT.log" 2>/dev/null || echo 0)
-    if [ "$said" -ge 2 ]; then
-        break
-    fi
-    sleep 1
-    i=$((i + 1))
-done
+"$RUNUTIL" until "$STRICT.log" "init: cannot exec /bin/login" 60 2 || true
+said=$(grep -c "init: cannot exec /bin/login" "$STRICT.log" 2>/dev/null || echo 0)
 stop
 if [ "$said" -lt 2 ]; then
     echo "login-test: FAIL: the strict init said it once and stopped; init must" >&2
@@ -180,7 +167,7 @@ if ! drive_login "$USER_NAME" "$PASSWORD" "$(scaled 90)"; then
     exit 1
 fi
 drive_type 'kill -STOP $$; echo CONTINUED""-OK'
-if ! wait_serial "$REAL.stop.log" "CONTINUED-OK" "$(scaled 120)"; then
+if ! wait_serial "$REAL.stop.log" "CONTINUED-OK" 120; then
     drive_stop
     stop
     echo "login-test: FAIL: a stopped console session never came back; init must" >&2
@@ -195,7 +182,7 @@ echo "login-test: a stopped console session is continued by init: OK"
 # The way back in, against the real image: the kernel never consults the image's
 # init in rescue mode, so a broken os-real is repairable in place.
 boot "$REAL.rescue.log" "$REAL" "rach2.rescue"
-if ! wait_serial "$REAL.rescue.log" "rescue mode" "$(scaled 60)"; then
+if ! wait_serial "$REAL.rescue.log" "rescue mode" 60; then
     stop
     echo "login-test: FAIL: rach2.rescue did not reach the kernel debug shell" >&2
     exit 1

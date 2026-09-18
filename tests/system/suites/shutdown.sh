@@ -23,6 +23,8 @@
 #
 
 # shellcheck source=tests/system/deadline.sh
+# The runner helper, whose `until` and `gone` are the suite's waits.
+RUNUTIL="$(cd "$(dirname "$0")/../../.." && pwd)/build/tests/system/runutil"
 . "$(cd "$(dirname "$0")/../../.." && pwd)/tests/system/deadline.sh"
 set -e
 
@@ -90,7 +92,7 @@ fsck_says_dirty() {
 # not take, so a halt that fell back through one of those would otherwise look
 # like a halt that was asked for.
 require_clean_halt() {
-    if ! wait_token "halt: system halted" "$(scaled 120)"; then
+    if ! wait_token "halt: system halted" 120; then
         fail "$1: never reported a halt"
     fi
     if ! grep -q "shutdown: clean unmount: dirty-mount flag cleared" "$LOG"; then
@@ -150,11 +152,7 @@ start_boot() {
 
 # Wait up to $1 seconds for QEMU to end by itself. Returns 1 if it did not.
 wait_stop() {
-    i=0
-    while kill -0 "$QPID" 2>/dev/null && [ "$i" -lt "$1" ]; do
-        sleep 1
-        i=$((i + 1))
-    done
+    "$RUNUTIL" gone "$QPID" "$1"
     if kill -0 "$QPID" 2>/dev/null; then
         return 1
     fi
@@ -163,15 +161,7 @@ wait_stop() {
 
 # Wait up to $2 seconds for the token $1 to appear in the log.
 wait_token() {
-    i=0
-    while [ "$i" -lt "$2" ]; do
-        if grep -q "$1" "$LOG" 2>/dev/null; then
-            return 0
-        fi
-        sleep 1
-        i=$((i + 1))
-    done
-    return 1
+    "$RUNUTIL" until "$LOG" "$1" "$2"
 }
 
 # Everything this run started, ended. It is written to be safe to call twice,
@@ -222,7 +212,7 @@ fail() {
 # both end QEMU with a clean image, so without it a `reboot` that powered the
 # machine off instead would pass. $3 is the path that must NOT appear.
 require_clean_stop() {
-    if ! wait_stop "$(scaled 90)"; then
+    if ! wait_stop 90; then
         fail "$1: the machine did not stop"
     fi
     # The status is read before the pid is forgotten, because it is the machine
@@ -269,7 +259,7 @@ require_clean_stop "poweroff -n -f stops the machine and flushes it" \
 # when it evicts one, so on a busier boot the page might arrive that way. The
 # assertion is that a write made immediately before a stop survives it.
 start_boot 'cat /root/marker; echo READ""BACK'
-if ! wait_token "READBACK" "$(scaled 90)"; then
+if ! wait_token "READBACK" 90; then
     fail "the second boot never reported"
 fi
 if ! grep -q "^marker" "$LOG"; then
@@ -326,7 +316,7 @@ EXTRA_QEMU=""
 # machine must still be there afterwards to say so.
 fresh_image
 start_boot 'su test -c halt; echo STILL""HERE'
-if ! wait_token "STILLHERE" "$(scaled 120)"; then
+if ! wait_token "STILLHERE" 120; then
     fail "the machine did not survive an unprivileged halt"
 fi
 if ! grep -q "Operation not permitted" "$LOG"; then

@@ -15,6 +15,8 @@
 #
 # Usage: socket.sh <kernel> <image> <harness> <hostpeer>
 #
+# The runner helper, whose `until` and `gone` are the suite's waits.
+RUNUTIL="$(cd "$(dirname "$0")/../../.." && pwd)/build/tests/system/runutil"
 set -u
 
 KERNEL="$1"
@@ -45,14 +47,7 @@ PEER=$!
 # on nothing. What is waited for is a connection that succeeds, not a process
 # that exists: the shell has a pid for the child before the child has run
 # `hostpeer`, let alone bound anything.
-i=0
-while [ "$i" -lt 50 ]; do
-    if "$HOSTPEER" hold "$PORT" 0 >/dev/null 2>&1; then
-        break
-    fi
-    i=$((i + 1))
-    sleep 0.1
-done
+"$RUNUTIL" until "$PEER_LOG" "hostpeer: echoing" 30 || true
 if ! "$HOSTPEER" hold "$PORT" 0 >/dev/null 2>&1; then
     echo "socket-test: FAIL: nothing is listening on port $PORT" >&2
     exit 1

@@ -35,6 +35,8 @@
 # Usage: sealed_test.sh <sealed-disk> <root password> [ssh port]
 #
 
+# The runner helper, whose `until` and `gone` are the suite's waits.
+RUNUTIL="$(cd "$(dirname "$0")/../../.." && pwd)/build/tests/system/runutil"
 set -e
 
 DISK="$1"
@@ -103,18 +105,10 @@ phase() {
 
 # Wait up to $3 seconds until the log has at least $2 occurrences of $1.
 wait_count() {
-    i=0
-    while [ "$i" -lt "$3" ]; do
-        n="$(grep -ac "$1" "$LOG" 2>/dev/null)" || true
-        if [ "${n:-0}" -ge "$2" ]; then
-            return 0
-        fi
-        if [ "$(($(date +%s) - START))" -gt "$DEADLINE" ]; then
-            fail "the run passed its ${DEADLINE}s deadline waiting for $1"
-        fi
-        sleep 1
-        i=$((i + 1))
-    done
+    "$RUNUTIL" until "$LOG" "$1" "$3" "$2" && return 0
+    if [ "$(($(date +%s) - START))" -gt "$DEADLINE" ]; then
+        fail "the run passed its ${DEADLINE}s deadline waiting for $1"
+    fi
     return 1
 }
 
@@ -141,7 +135,7 @@ start_qemu() {
 UP="rach2 login:\|recovery image"
 cold_boot() {
     start_qemu "$1"
-    wait_count "$UP" 1 "$(scaled 180)" || fail "the machine never came up"
+    wait_count "$UP" 1 180 || fail "the machine never came up"
     # The server is started by init after the network, so what is waited for is
     # the port answering, not a line on the console.
     i=0
@@ -149,6 +143,7 @@ cold_boot() {
         if machine 'echo up' > /dev/null 2>&1; then
             return 0
         fi
+        # interval: a try of SSH every two seconds until the server answers
         sleep 2
         i=$((i + 2))
     done
@@ -160,7 +155,7 @@ cold_boot() {
 # reaches no login has no SSH to ask.
 cold_watch() {
     start_qemu "$1"
-    wait_count "$2" 1 "$(scaled 150)" || fail "the boot never reached: $2"
+    wait_count "$2" 1 150 || fail "the boot never reached: $2"
 }
 
 # ssh in as root by key, with nothing of the runner's own offered. Every call is
@@ -182,11 +177,7 @@ stop_machine() {
         -o "ConnectTimeout=$(scaled 10)" -o BatchMode=yes -o IdentitiesOnly=yes \
         -o PreferredAuthentications=publickey -i "$REPO/krffs/rach2_demo_ed25519" \
         -p "$PORT" root@localhost 'sync; poweroff -f' > /dev/null 2>&1 || true
-    i=0
-    while [ "$i" -lt "$(scaled 30)" ] && kill -0 "$QPID" 2>/dev/null; do
-        sleep 1
-        i=$((i + 1))
-    done
+    "$RUNUTIL" gone "$QPID" 30 || true
     cleanup_boot
 }
 
@@ -200,12 +191,13 @@ reboot_machine() {
         -o "ConnectTimeout=$(scaled 10)" -o BatchMode=yes -o IdentitiesOnly=yes \
         -o PreferredAuthentications=publickey -i "$REPO/krffs/rach2_demo_ed25519" \
         -p "$PORT" root@localhost 'sync; reboot -f' > /dev/null 2>&1 || true
-    wait_count "rach2 login:" "$want" "$(scaled 180)" || fail "the machine did not come back (boot $want)"
+    wait_count "rach2 login:" "$want" 180 || fail "the machine did not come back (boot $want)"
     i=0
     while [ "$i" -lt "$(scaled 60)" ]; do
         if machine 'echo up' > /dev/null 2>&1; then
             return 0
         fi
+        # interval: a try of SSH every two seconds until the server answers
         sleep 2
         i=$((i + 2))
     done

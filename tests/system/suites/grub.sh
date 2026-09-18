@@ -20,6 +20,8 @@
 # Usage: grub_test.sh <grub-disk> <root password>
 #
 
+# The runner helper, whose `until` and `gone` are the suite's waits.
+RUNUTIL="$(cd "$(dirname "$0")/../../.." && pwd)/build/tests/system/runutil"
 set -e
 
 DISK="$1"
@@ -81,18 +83,10 @@ fail() {
 
 # Wait up to $3 seconds until the log has at least $2 occurrences of $1.
 wait_count() {
-    i=0
-    while [ "$i" -lt "$3" ]; do
-        n="$(grep -ac "$1" "$LOG" 2>/dev/null)" || true
-        if [ "${n:-0}" -ge "$2" ]; then
-            return 0
-        fi
-        if [ "$(($(date +%s) - START))" -gt "$DEADLINE" ]; then
-            fail "the run passed its ${DEADLINE}s deadline waiting for $1"
-        fi
-        sleep 1
-        i=$((i + 1))
-    done
+    "$RUNUTIL" until "$LOG" "$1" "$3" "$2" && return 0
+    if [ "$(($(date +%s) - START))" -gt "$DEADLINE" ]; then
+        fail "the run passed its ${DEADLINE}s deadline waiting for $1"
+    fi
     return 1
 }
 
@@ -114,29 +108,14 @@ boot_feed() {
     QPID=$!
     (
         while IFS='	' read -r count pattern command; do
-            waited=0
-            while [ "$waited" -lt "$(scaled 600)" ]; do
-                seen="$(grep -ac "$pattern" "$LOG" 2>/dev/null)" || true
-                if [ "${seen:-0}" -ge "$count" ]; then
-                    break
-                fi
-                if [ "$(($(date +%s) - START))" -gt "$DEADLINE" ]; then
-                    break
-                fi
-                sleep 1
-                waited=$((waited + 1))
-            done
+            "$RUNUTIL" until "$LOG" "$pattern" 600 "$count" || true
             seen="$(grep -ac "$pattern" "$LOG" 2>/dev/null)" || true
             if [ "${seen:-0}" -lt "$count" ]; then
                 break
             fi
             printf '%s\n' "$command"
         done < "$STEPS"
-        held=0
-        while [ "$held" -lt "$(scaled 120)" ] && kill -0 "$QPID" 2>/dev/null; do
-            sleep 1
-            held=$((held + 1))
-        done
+        "$RUNUTIL" gone "$QPID" 120 || true
     ) > "$FEED" &
     FPID=$!
 }
@@ -151,7 +130,7 @@ boot_watch() {
     QPID=$!
     (sleep "$(scaled 90)") > "$FEED" &
     FPID=$!
-    wait_count "$1" 1 "$(scaled 75)" || fail "a matrix boot never reached $1"
+    wait_count "$1" 1 75 || fail "a matrix boot never reached $1"
     cleanup_boot
 }
 
@@ -171,7 +150,7 @@ step "GRUBAOK" 1 "( exec 7</dev/grubcore; exec 8</dev/grubcore ) 2>&1 | grep -qi
 step "SECONDBUSY" 1 "( exec 7</dev/grubcore ) && echo AGAIN\"\"OK"
 step "AGAINOK" 1 "poweroff -f"
 boot_feed
-wait_count "AGAINOK" 1 "$(scaled 900)" || fail "the boot loader swap never completed"
+wait_count "AGAINOK" 1 900 || fail "the boot loader swap never completed"
 cleanup_boot
 
 grep -aq "GRUBBOK" "$LOG" || fail "installing core B failed"

@@ -487,7 +487,8 @@ static void part_hold(const char *source, const char *type, int children)
     if (raw < 0) {
         fail("the partition would not open");
     }
-    puts("USBDISKPROBE HOLDING");
+    /* Said after the first read has completed, so the pull the suite makes
+       on the word lands on a process already reading the stick. */
     while (reads < 2000000) {
         int n = sys3(SYS_READ, raw, (int)buf, (int)sizeof(buf));
 
@@ -498,6 +499,9 @@ static void part_hold(const char *source, const char *type, int children)
         }
         if (n < 0) {
             fail("a read of the stick failed with something other than EIO");
+        }
+        if (reads == 1) {
+            puts("USBDISKPROBE HOLDING");
         }
         if (n == 0) {
             sys1(SYS_CLOSE, raw);
@@ -637,7 +641,8 @@ static void part_pullread(void)
     if (fd < 0) {
         fail("/dev/disk0 would not open");
     }
-    puts("USBDISKPROBE READING");
+    /* Said after the first read has completed, so the pull lands on a
+       process already reading. */
     while (reads < 2000000) {
         int n = sys3(SYS_READ, fd, (int)big, (int)sizeof(big));
 
@@ -649,6 +654,9 @@ static void part_pullread(void)
         }
         if (n < 0) {
             fail("a read of the stick failed with something other than EIO");
+        }
+        if (reads == 1) {
+            puts("USBDISKPROBE READING");
         }
         if (n == 0) {
             sys1(SYS_CLOSE, fd);
@@ -730,11 +738,13 @@ static void part_pullone(int which)
     if (fd < 0) {
         fail("the stick to be pulled would not open");
     }
-    puts("USBDISKPROBE HOLDING");
     for (;;) {
         n = sys3(SYS_READ, fd, (int)sector, 512);
         if (n == 512) {
             reads++;
+            if (reads == 1) {
+                puts("USBDISKPROBE HOLDING");
+            }
             continue;
         }
         if (n == 0) {

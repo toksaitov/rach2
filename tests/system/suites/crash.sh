@@ -17,6 +17,8 @@
 #
 
 # shellcheck source=tests/system/deadline.sh
+# The runner helper, whose `until` and `gone` are the suite's waits.
+RUNUTIL="$(cd "$(dirname "$0")/../../.." && pwd)/build/tests/system/runutil"
 . "$(cd "$(dirname "$0")/../../.." && pwd)/tests/system/deadline.sh"
 set -e
 
@@ -141,15 +143,7 @@ qemu_disk() {
 # prints, not on a fixed sleep, keeps a loaded or slow host from
 # killing QEMU before the phase's disk state has actually been written.
 wait_serial() {
-    i=0
-    while [ "$i" -lt "$(scaled 60)" ]; do
-        if grep -q "$2" "$1" 2>/dev/null; then
-            return 0
-        fi
-        sleep 1
-        i=$((i + 1))
-    done
-    return 1
+    "$RUNUTIL" until "$1" "$2" 60
 }
 
 # Crash: boot, wait for the mount (which sets the dirty bit write-through
@@ -212,11 +206,7 @@ FPID=$DRIVE_FPID
 if drive_expect "Type 'help'" "$(scaled 60)"; then
     drive_type poweroff
 fi
-i=0
-while kill -0 "$QPID" 2>/dev/null && [ "$i" -lt "$(scaled 60)" ]; do
-    sleep 1
-    i=$((i + 1))
-done
+"$RUNUTIL" gone "$QPID" 60 || true
 if kill -0 "$QPID" 2>/dev/null; then
     kill -9 "$QPID" 2>/dev/null || true
     stop

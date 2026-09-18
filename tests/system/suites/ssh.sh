@@ -91,6 +91,7 @@ flood_start() {
     while [ "$flood_i" -lt 40 ]; do
         flood_fifo="$FLOOD_DIR/$flood_i"
         mkfifo "$flood_fifo"
+        # interval: a holder keeps a flood writer open until the flood is killed
         (exec sleep 300 > "$flood_fifo") &
         FLOOD_PIDS="$FLOOD_PIDS $!"
         (exec nc localhost "$PORT" < "$flood_fifo" >/dev/null 2>&1) &

@@ -68,7 +68,7 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
     --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
     --timeout 90 --ok "Available commands" \
-    "expect=Type 'help'" wait=2 key=h key=e key=l key=p key=ret \
+    "expect=class 3 protocol 1" "expect=Type 'help'" key=h key=e key=l key=p key=ret \
     "expect=Available commands" > /dev/null 2>&1; then
     note "a key typed on the USB keyboard reaches the shell: OK"
 else
@@ -84,7 +84,8 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
     --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
     --timeout 120 --steptmo 45 --ok "All stdin syscalls passed" \
-    "expect=Type 'help'" wait=2 "send=exec /stdintest" wait=2 \
+    "expect=class 3 protocol 1" "expect=Type 'help'" "send=exec /stdintest" \
+    "expect=Test 1: read from stdin" \
     key=a key=b key=ret key=c key=d key=ret key=e key=f key=ret \
     > /dev/null 2>&1; then
     note "a key typed on the USB keyboard is read by a program: OK"
@@ -103,7 +104,8 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
     --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0 \
     --timeout 90 --ok "MOUSEPROBE OK" \
-    "expect=Type 'help'" wait=2 "send=exec /mouseprobe" wait=1 \
+    "expect=class 3 protocol 2" "expect=Type 'help'" "send=exec /mouseprobe" \
+    "expect=MOUSEPROBE: move the mouse" \
     mouse=20,-8,0 > /dev/null 2>&1; then
     note "a mouse moved over USB arrives at /dev/mouse: OK"
 else
@@ -191,8 +193,8 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0,port=2.5 \
     --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0,port=2.6 \
     --append "rach2.hubslow=300" \
-    --timeout 120 --steptmo 45 --ok "USBPROBE OK" --log "$REPO/build/images/usb-slowscan.log" \
-    "expect=Type 'help'" wait=8 "send=exec usbprobe" "expect=USBPROBE" > /dev/null 2>&1 \
+    --timeout 240 --steptmo 120 --ok "USBPROBE OK" --log "$REPO/build/images/usb-slowscan.log" \
+    "expect=Type 'help'" "send=exec usbprobe 16" "expect=USBPROBE settled" "expect=USBPROBE OK" > /dev/null 2>&1 \
     && [ "$(grep -ac 'usb: device: port [0-9.]*: .*class' "$REPO/build/images/usb-slowscan.log")" = 16 ]; then
     note "sixteen devices behind hubs whose scans take 300 ms a port are every one configured: OK"
 else
@@ -253,7 +255,7 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci,msi=on \
     --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
     --timeout 120 --steptmo 45 --ok "INTRPROBE OK" --never "INTRPROBE FAIL" \
-    "expect=Type 'help'" wait=2 key=h key=e key=l key=p key=ret \
+    "expect=class 3 protocol 1" "expect=Type 'help'" key=h key=e key=l key=p key=ret \
     "expect=Available commands" "send=exec /intrprobe" "expect=INTRPROBE OK" \
     > /dev/null 2>&1; then
     note "the controller's messages arrive and are counted: OK"
@@ -269,7 +271,7 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max --append "rach2.nomsi" \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci,msi=on \
     --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
     --timeout 120 --steptmo 45 --ok "INTRPROBE OK" --never "INTRPROBE FAIL" \
-    "expect=Type 'help'" wait=2 key=h key=e key=l key=p key=ret \
+    "expect=class 3 protocol 1" "expect=Type 'help'" key=h key=e key=l key=p key=ret \
     "expect=Available commands" "send=exec /intrprobe" "expect=INTRPROBE OK" \
     > /dev/null 2>&1; then
     note "with rach2.nomsi the controller's line carries its interrupts and typing still works: OK"
@@ -290,8 +292,8 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci,msi=on \
     --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0 \
     --timeout 120 --steptmo 45 --ok "INTRPROBE OK" --never "INTRPROBE FAIL" \
-    "expect=Type 'help'" wait=2 \
-    mouse=20,-8,0 mouse=-12,6,0 mouse=8,8,1 wait=1 \
+    "expect=class 3 protocol 2" "expect=Type 'help'" \
+    mouse=20,-8,0 mouse=-12,6,0 mouse=8,8,1 \
     "send=exec /intrprobe" "expect=INTRPROBE OK" > /dev/null 2>&1; then
     note "a mouse moved over messages has its reports counted on the vector: OK"
 else
@@ -315,7 +317,8 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
     --append "rach2.usblatency" --log "$LAT_LOG" \
     --timeout 120 --steptmo 45 --ok "KEYLAT OK" \
-    "expect=Type 'help'" wait=2 "send=exec /keylatprobe" wait=2 key=ret \
+    "expect=class 3 protocol 1" "expect=Type 'help'" "send=exec /keylatprobe" \
+    "expect=KEYLAT READING" key=ret \
     > /dev/null 2>&1; then
     # The timer's pump may bring the key before the controller's message,
     # and the record then says `msi 0`: the wake and the read are judged the
@@ -366,7 +369,8 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
     --append "rach2.usblatency" --log "$LAT_LOG" \
     --timeout 120 --steptmo 45 --ok "KEYLAT OK" --never "KEYLAT FAIL" \
-    "expect=Type 'help'" wait=2 "send=exec /keylatprobe random" "expect=KEYLAT HOG" wait=1 key=ret \
+    "expect=class 3 protocol 1" "expect=Type 'help'" "send=exec /keylatprobe random" \
+    "expect=KEYLAT HOG" key=ret \
     > /dev/null 2>&1; then
     if ! grep -q "usb: latency:" "$LAT_LOG"; then
         bad "the keystroke beside the large call was not recorded: a reader held past twenty milliseconds has no record"
@@ -402,7 +406,8 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci,msi=on \
     --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
     --timeout 120 --steptmo 45 --ok "KEYLAT OK" --never "usb: latency:" \
-    "expect=Type 'help'" wait=2 "send=exec /keylatprobe" wait=2 key=ret \
+    "expect=class 3 protocol 1" "expect=Type 'help'" "send=exec /keylatprobe" \
+    "expect=KEYLAT READING" key=ret \
     > /dev/null 2>&1; then
     note "without rach2.usblatency the key is read and no path is printed: OK"
 else
@@ -418,7 +423,7 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max --append "rach2.msidrop=3" \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci,msi=on \
     --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0 \
     --timeout 120 --steptmo 45 --ok "INTRPROBE OK" --never "INTRPROBE FAIL" \
-    "expect=Type 'help'" wait=2 key=h key=e key=l key=p key=ret \
+    "expect=class 3 protocol 1" "expect=Type 'help'" key=h key=e key=l key=p key=ret \
     "expect=Available commands" "send=exec /intrprobe" "expect=INTRPROBE OK" \
     > /dev/null 2>&1; then
     note "a machine whose messages stop keeps typing on the timer's pump: OK"
@@ -433,7 +438,7 @@ fi
 if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci,msi=on \
     --timeout 120 --steptmo 45 --ok "INTRPROBE OK" --never "INTRPROBE FAIL" \
-    "expect=Type 'help'" wait=2 key=h key=e key=l key=p key=ret \
+    "expect=Type 'help'" key=h key=e key=l key=p key=ret \
     "expect=Available commands" "send=exec /intrprobe" "expect=INTRPROBE OK" \
     > /dev/null 2>&1; then
     note "with the APIC enabled the 8259's keyboard and timer still arrive: OK"
@@ -452,7 +457,7 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0,port=1.3 \
     --append "rach2.hubtree" \
     --timeout 120 --steptmo 45 --ok "USBPROBE OK" --never "USBPROBE FAIL" \
-    "expect=Type 'help'" wait=2 key=h key=e key=l key=p key=ret \
+    "expect=class 3 protocol 1" "expect=Type 'help'" key=h key=e key=l key=p key=ret \
     "expect=Available commands" "send=exec /usbprobe" "expect=USBPROBE OK" \
     > /dev/null 2>&1; then
     note "a keyboard and a mouse behind a hub are listed with their path and the keyboard types: OK"
@@ -484,7 +489,7 @@ if run_shell --qemu-arg=-cpu --qemu-arg=max \
     --log "$IMAGE.hubstick.log" \
     "expect=Type 'help'" "send=exec /usbdiskprobe write" "expect=USBDISKPROBE OK" \
     "expect=Type 'help'" "send=exec /usbdiskprobe hold" "expect=USBDISKPROBE HOLDING" \
-    wait=1 "usb=del:st0" "expect=USBDISKPROBE OK" \
+    "usb=del:st0" "expect=USBDISKPROBE OK" \
     "expect=Type 'help'" \
     "drive=add:if=none,id=again,format=raw,file=$STICK" \
     "usb=add:usb-storage,bus=xhci.0,port=1.4,drive=again,id=st1" "expect=usbdisk: disk0: mbr" \
@@ -514,7 +519,7 @@ if run_shell --qemu-arg=-cpu --qemu-arg=max \
     --timeout 180 --steptmo 60 --ok "USBDISKPROBE OK" --never "USBDISKPROBE FAIL" \
     --log "$IMAGE.pullread.log" \
     "expect=Type 'help'" "send=exec /usbdiskprobe pullread" "expect=USBDISKPROBE READING" \
-    wait=1 "usb=del:st0" "expect=its request is kept, its data stage in flight" \
+    "usb=del:st0" "expect=its request is kept, its data stage in flight" \
     "expect=: given back" "expect=its request is failed with the slot given back" \
     "expect=USBDISKPROBE READ FAILED" \
     "expect=Type 'help'" \
@@ -538,7 +543,7 @@ if run_shell --qemu-arg=-cpu --qemu-arg=max \
     --timeout 180 --steptmo 60 --ok "USBDISKPROBE OK" --never "USBDISKPROBE FAIL" \
     --log "$IMAGE.hubpull.log" \
     "expect=Type 'help'" "send=exec /usbdiskprobe hold" "expect=USBDISKPROBE HOLDING" \
-    wait=1 "usb=del:hub" "expect=USBDISKPROBE OK" > /dev/null 2>&1; then
+    "usb=del:hub" "expect=USBDISKPROBE OK" > /dev/null 2>&1; then
     note "the hub pulled with three devices behind it: the stick's mount answers EIO and unmounts: OK"
 else
     bad "the hub pulled with three devices behind it"
@@ -684,7 +689,7 @@ if twohc_sticks xhci0 xhci1 xhci1 \
     --log "$IMAGE.twohcstick.log" \
     "expect=Type 'help'" "send=exec /usbdiskprobe three" "expect=USBDISKPROBE OK" \
     "expect=Type 'help'" "send=exec /usbdiskprobe pullone" "expect=USBDISKPROBE HOLDING" \
-    wait=1 "usb=del:st1" "expect=USBDISKPROBE OK" > /dev/null 2>&1; then
+    "usb=del:st1" "expect=USBDISKPROBE OK" > /dev/null 2>&1; then
     note "three sticks across two controllers mount, and one pulled from the second leaves the first's reading: OK"
 else
     bad "the sticks across two controllers"
@@ -698,7 +703,7 @@ if twohc_sticks xhci0 xhci0 xhci1 \
     --log "$IMAGE.twohcstick2.log" \
     "expect=Type 'help'" "send=exec /usbdiskprobe three" "expect=USBDISKPROBE OK" \
     "expect=Type 'help'" "send=exec /usbdiskprobe pullone 2" "expect=USBDISKPROBE HOLDING" \
-    wait=1 "usb=del:st1" "expect=USBDISKPROBE OK" > /dev/null 2>&1; then
+    "usb=del:st1" "expect=USBDISKPROBE OK" > /dev/null 2>&1; then
     note "and one pulled from the first controller leaves the second's reading: OK"
 else
     bad "the stick pulled from the first controller"

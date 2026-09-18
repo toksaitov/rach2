@@ -29,6 +29,8 @@
 #
 
 # shellcheck source=tests/system/deadline.sh
+# The runner helper, whose `until` and `gone` are the suite's waits.
+RUNUTIL="$(cd "$(dirname "$0")/../../.." && pwd)/build/tests/system/runutil"
 . "$(cd "$(dirname "$0")/../../.." && pwd)/tests/system/deadline.sh"
 set -e
 
@@ -82,15 +84,7 @@ fail() {
 }
 
 wait_token() {
-    i=0
-    while [ "$i" -lt "$2" ]; do
-        if grep -q "$1" "$3" 2>/dev/null; then
-            return 0
-        fi
-        sleep 1
-        i=$((i + 1))
-    done
-    return 1
+    "$RUNUTIL" until "$3" "$1" "$2"
 }
 
 if [ ! -f "$KEY" ]; then
@@ -116,7 +110,7 @@ cp "$BASE" "$RW"
     --drive "file=$RW,format=raw,if=ide,index=0,media=disk" \
     --append "rach2.fsdisk rach2.rescue" \
     --timeout 90 --log "$RWLOG" --ok "Type 'help'" \
-    "expect=Type 'help'" wait=3 >/dev/null 2>&1 || true
+    "expect=krffs: mounted:" "expect=Type 'help'" >/dev/null 2>&1 || true
 if ! grep -q "krffs: mounted:" "$RWLOG"; then
     fail "the control boot did not mount the disk, so the comparisons prove nothing"
 fi
@@ -139,7 +133,7 @@ qemu-system-i386 -cpu max -display none -kernel "$RO_KERNEL" \
     -serial stdio < /dev/null > "$ROLOG" 2>&1 &
 QPID=$!
 
-wait_token "rach2 login" "$(scaled 90)" "$ROLOG" || fail "the diagnostic boot never reached its login prompt"
+wait_token "rach2 login" 90 "$ROLOG" || fail "the diagnostic boot never reached its login prompt"
 
 ssh_run() {
     ssh -i "$KEY" -p "$PORT" \
@@ -153,6 +147,7 @@ while [ "$i" -lt "$(scaled 60)" ]; do
     if ssh_run 'echo READY' 2>/dev/null | grep -q READY; then
         break
     fi
+    # interval: a try of SSH every two seconds until the server answers
     sleep 2
     i=$((i + 2))
 done
@@ -205,7 +200,7 @@ echo "diskdiag-test: the whole session left the disk byte for byte: OK"
     --initrd "$IMG" --qemu-arg=-cpu --qemu-arg=max \
     --append "rach2.diskdiag rach2.rescue" \
     --timeout 90 --log "$NOLOG" --ok "diskdiag: " \
-    "expect=Type 'help'" wait=3 >/dev/null 2>&1 || true
+    "expect=diskdiag: absent" "expect=Type 'help'" >/dev/null 2>&1 || true
 grep -q "diskdiag: absent: no disk answered" "$NOLOG" \
     || fail "with no drive the diagnostic did not report an absent disk"
 echo "diskdiag-test: with no drive at all it says so instead of pretending: OK"

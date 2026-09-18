@@ -33,6 +33,8 @@
 #
 
 # shellcheck source=tests/system/deadline.sh
+# The runner helper, whose `until` and `gone` are the suite's waits.
+RUNUTIL="$(cd "$(dirname "$0")/../../.." && pwd)/build/tests/system/runutil"
 . "$(cd "$(dirname "$0")/../../.." && pwd)/tests/system/deadline.sh"
 set -e
 
@@ -118,15 +120,7 @@ trap 'cleanup; exit 129' HUP
 # a token rather than a fixed sleep keeps a loaded host from killing QEMU before
 # the console has had its say.
 wait_serial() {
-    i=0
-    while [ "$i" -lt "$(scaled "$3")" ]; do
-        if grep -q "$2" "$1" 2>/dev/null; then
-            return 0
-        fi
-        sleep 1
-        i=$((i + 1))
-    done
-    return 1
+    "$RUNUTIL" until "$1" "$2" "$3"
 }
 
 # 1. The quiet boot. `echo` is an ash builtin and would not fork at all, so the

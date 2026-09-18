@@ -521,7 +521,9 @@ else
 fi
 
 # The harness also starts its search before sending a command. Old output
-# may still be in its pipe, and a fast new reply may precede expect itself.
+# may still be in its pipe, and a fast new reply may precede expect itself;
+# `until=1` after a consumed token is the second's delay, since the harness
+# has no step that only sleeps.
 mkdir -p "$WORK/fresh"
 cat > "$WORK/fresh/qemu-system-i386" <<'FRESH'
 #!/bin/sh
@@ -537,20 +539,20 @@ chmod +x "$WORK/fresh/qemu-system-i386"
 (
     unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR
     PATH="$WORK/fresh:$PATH" "$HARNESS_BIN" --kernel none --timeout 5 --steptmo 1 \
-        --ok READY expect=READY wait=1 send=true expect=OLDTOKEN > /dev/null 2>&1
+        --ok READY expect=READY until=1 send=true expect=OLDTOKEN > /dev/null 2>&1
 ); rc=$?
 check "the harness cannot use an old token after a new send" 1 "$([ "$rc" -ne 0 ] && echo 1 || echo 0)"
 (
     unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR
     PATH="$WORK/fresh:$PATH" "$HARNESS_BIN" --kernel none --timeout 5 --steptmo 1 \
-        --ok FASTTOKEN expect=READY send=fresh wait=1 expect=FASTTOKEN expect=NEXTTOKEN > /dev/null 2>&1
+        --ok FASTTOKEN expect=READY send=fresh expect=FASTTOKEN expect=NEXTTOKEN > /dev/null 2>&1
 ); rc=$?
 check "the harness preserves fast replies and consecutive tokens" 0 "$rc"
 
 (
     unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR
     PATH="$WORK/fresh:$PATH" "$HARNESS_BIN" --kernel none --timeout 5 --steptmo 1 \
-        --ok FASTTOKEN expect=READY send=fresh wait=1 until=20 send=second expect=SECONDREPLY \
+        --ok FASTTOKEN expect=READY send=fresh until=20 send=second expect=SECONDREPLY \
         > /dev/null 2>&1
 ); rc=$?
 check "an until preserves a fast reply to the current command" 0 "$rc"

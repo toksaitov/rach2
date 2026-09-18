@@ -124,6 +124,9 @@ void probe_main(unsigned *sp)
         }
     }
 
+    /* Said before the read, so the key the suite sends on the word finds
+       the reader waiting and the other tenant forked. */
+    puts("KEYLAT READING\n");
     n = syscall3(SYS_READ, STDIN_FILENO, (int)(size_t)line, (int)sizeof(line));
     if (syscall3(SYS_KILL, child, SIGKILL, 0) != 0) {
         puts("KEYLAT FAIL: the child would not be killed\n");

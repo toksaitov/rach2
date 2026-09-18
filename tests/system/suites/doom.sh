@@ -11,6 +11,7 @@ set -u
 KERNEL=$1; DISK=$2; HARNESS=$3; PASSWORD=$4
 fail() { echo "doom-test: FAIL: $1" >&2; exit 1; }
 LOG="$DISK.doom.log"
+# interval: doom runs for ten seconds; the row counts its disk commands
 if "$HARNESS" --kernel "$KERNEL" --append "rach2.fsdisk rach2.diskdiag" \
     --qemu-arg=-cpu --qemu-arg=max \
     --drive "file=$DISK,format=raw,if=ide,index=0,media=disk" \

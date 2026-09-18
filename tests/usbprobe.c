@@ -1,6 +1,10 @@
 /**
  * Reads `/proc/usb` and requires the devices the machine was given.
  *
+ * `usbprobe N` reads the file again, a bounded number of times, until it
+ * lists N devices, and says so: a slowed scan of the hubs may still be
+ * configuring them when the shell runs the probe.
+ *
  * The stack's own records say what the kernel found; this is the guest's view
  * of the same thing, which is what a program on the machine can act on. It
  * requires the file to open, a line per device, a keyboard and a mouse among
@@ -18,11 +22,12 @@ typedef unsigned int size_t;
 
 #define STDOUT_FILENO 1
 
-#define SYS_EXIT  1
-#define SYS_READ  3
-#define SYS_WRITE 4
-#define SYS_OPEN  5
-#define SYS_CLOSE 6
+#define SYS_EXIT      1
+#define SYS_READ      3
+#define SYS_WRITE     4
+#define SYS_OPEN      5
+#define SYS_CLOSE     6
+#define SYS_NANOSLEEP 162
 
 #define O_RDONLY 0
 
@@ -222,20 +227,16 @@ static int within(const char *needle, int from, int to)
     return 0;
 }
 
-void _start(void)
+/* Read /proc/usb whole into `text`, until its end: sixteen devices are more
+   than one read of the file returns. Returns the length. */
+static int read_usb(void)
 {
-    int fd;
-    int len;
-    int lines = 0;
-    int i;
+    int fd = syscall3(SYS_OPEN, (int)(size_t)"/proc/usb", O_RDONLY, 0);
+    int len = 0;
 
-    fd = syscall3(SYS_OPEN, (int)(size_t)"/proc/usb", O_RDONLY, 0);
     if (fd < 0) {
         fail("/proc/usb did not open");
     }
-    /* Read until the end: sixteen devices are more than one read of the
-       file returns. */
-    len = 0;
     for (;;) {
         int got = syscall3(SYS_READ, fd, (int)(size_t)text + len, (int)sizeof(text) - 1 - len);
 
@@ -252,6 +253,61 @@ void _start(void)
     }
     syscall3(SYS_CLOSE, fd, 0, 0);
     text[len] = '\0';
+    return len;
+}
+
+static int count_lines(int len)
+{
+    int i, lines = 0;
+
+    for (i = 0; i < len; i++) {
+        if (text[i] == '\n') {
+            lines++;
+        }
+    }
+    return lines;
+}
+
+void probe_main(unsigned int *sp);
+
+__asm__(".global _start\n"
+        "_start:\n"
+        "   mov %esp, %eax\n"
+        "   push %eax\n"
+        "   call probe_main\n");
+
+void probe_main(unsigned int *sp)
+{
+    int argc = (int)sp[0];
+    char **argv = (char **)(sp + 1);
+    int want = 0;
+    int len;
+    int lines = 0;
+    int i;
+
+    /* `usbprobe N`: the machine was given N devices and a slowed scan may
+       still be configuring them, so the file is read again until it lists
+       that many, a bounded number of times, and the count is said. */
+    if (argc >= 2) {
+        for (i = 0; argv[1][i] >= '0' && argv[1][i] <= '9'; i++) {
+            want = want * 10 + (argv[1][i] - '0');
+        }
+    }
+    len = read_usb();
+    if (want > 0) {
+        int tries;
+
+        for (tries = 0; count_lines(len) < want && tries < 600; tries++) {
+            static const int pause[2] = {0, 100000000};
+
+            syscall3(SYS_NANOSLEEP, (int)(size_t)pause, 0, 0);
+            len = read_usb();
+        }
+        if (count_lines(len) < want) {
+            fail("fewer devices than the machine was given, after the wait");
+        }
+        puts("USBPROBE settled: the devices the machine was given are listed\n");
+    }
 
     /* A machine booted without USB has this file and it is empty, which is a
        different answer from the file not being there and the one a program
@@ -268,11 +324,7 @@ void _start(void)
         fail("/proc/usb is empty and USB was not switched off");
     }
 
-    for (i = 0; i < len; i++) {
-        if (text[i] == '\n') {
-            lines++;
-        }
-    }
+    lines = count_lines(len);
     if (lines < 2) {
         fail("fewer than two devices are listed");
     }

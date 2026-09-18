@@ -314,7 +314,7 @@ run-console: rach2 tests krffs test-image $(HARNESS)
 	    "expect=Type 'help'" "send=exec /ttyprobe" \
 	    "expect=TTYPROBE START" \
 	    'sendraw=ab\x7f\x7fcd\n' \
-	    "expect=COOKED:" wait=2 \
+	    "expect=COOKED:" "expect=TTYPROBE RAW" \
 	    'sendraw=X' \
 	    "expect=RAW:"
 # `tests/run audio`: what the machine actually played. The debug shell's
@@ -379,7 +379,7 @@ run-disk: rach2 tests krffs $(HARNESS)
 	$(HARNESS) --kernel build/rach2/kernel \
 	    --append "rach2.fsdisk rach2.rescue" \
 	    --drive "file=$(DISK_TEST_IMAGE),format=raw,if=ide,index=0,media=disk" \
-	    --timeout 90 --ok "BLOCKPROBE OK" --log $(DISK_TEST_IMAGE).log probe=blockprobe
+	    --timeout 120 --steptmo 90 --ok "BLOCKPROBE OK" --log $(DISK_TEST_IMAGE).log probe=blockprobe
 # `tests/run bootpart`: /proc/cmdline and the level-one disk devices. Three
 # boots of one disk: as mkdisk built it there is a single KRFFS partition, so
 # /dev/bootpart must be absent from stat and open; after the boot fixture adds a
@@ -725,7 +725,7 @@ raw-stack: raw-card
 	    --initrd $(OS_REAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --timeout 300 --steptmo 90 --ok "USERPINGOK" \
 	    "expect=rach2 login:" "send=test" "expect=Password:" \
-	    "send=`cat krffs/rach2_test_password`" wait=5 \
+	    "send=`cat krffs/rach2_test_password`" "expect=[$$] " \
 	    "send=/bin/ping 10.0.2.2 && echo USERPING\"\"OK" "expect=USERPINGOK"
 endif
 .PHONY: raw-card raw-stack
@@ -849,7 +849,7 @@ run-dgram: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
 	    --qemu-arg=filter-dump,id=dg0,netdev=net0,file=$(DGRAM_PCAP) \
 	    --timeout 180 --ok "DGRAMPROBE OK" \
 	    "expect=Type 'help'" "send=exec /dgramprobe" \
-	    "expect=DGRAMPROBE OUTSIDE" "udp=$(DGRAM_PORT):outsider" wait=30
+	    "expect=DGRAMPROBE OUTSIDE" "udp=$(DGRAM_PORT):outsider" "expect=DGRAMPROBE OK"
 	$(PCAPCHECK) bcast $(DGRAM_PCAP) --port 7500 --dst-ip 255.255.255.255
 # `tests/run dhcp`: the machine taking an address it was not told, with the
 # client os-real carries. It boots with `rach2.ip=none`, so IPv4 is unset and
@@ -881,7 +881,7 @@ dhcp-card: $(DEMO_CREDS) rach2 utils busybox krffs os-real-image os-simple-image
 	    "send=`cat krffs/rach2_demo_password`" \
 	    "expect=# " "send=ifconfig eth0 | grep -q 'addr:0.0.0.0' && echo UNSET\"\"OK" \
 	    "expect=UNSETOK" "send=ifup -a" \
-	    "expect=lease of 192.168.90.20 obtained" wait=3 \
+	    "expect=lease of 192.168.90.20 obtained" "expect=net: eth0: IPv4 192.168.90.20/" \
 	    "send=ifconfig eth0 > /tmp/if; grep -q 'addr:192.168.90.20' /tmp/if && grep -q 'Bcast:192.168.90.255' /tmp/if && grep -q 'Mask:255.255.255.0' /tmp/if && grep -q '192.168.90.3' /etc/resolv.conf && ping 192.168.90.2 > /dev/null && echo LEASE\"\"OK" \
 	    "expect=LEASEOK" \
 	    "send=arping -f -w 5 192.168.90.2 > /tmp/ap 2>&1; echo ARPING\"\"-STATUS:$$?; cat /tmp/ap" \
@@ -916,7 +916,7 @@ dhcp-stack: dhcp-card
 	    "expect=rach2 login:" "send=root" "expect=Password:" \
 	    "send=`cat krffs/rach2_demo_password`" \
 	    "expect=# " "send=ifup -a" \
-	    "expect=lease of 192.168.90.20 obtained" wait=3 \
+	    "expect=lease of 192.168.90.20 obtained" "expect=net: eth0: IPv4 192.168.90.20/" \
 	    "send=ifconfig eth0 | grep -q 'addr:192.168.90.20' && echo FIRST\"\"LEASE" \
 	    "expect=FIRSTLEASE" "send=poweroff -f" until=15 --must-exit
 	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
@@ -927,7 +927,7 @@ dhcp-stack: dhcp-card
 	    "expect=rach2 login:" "send=root" "expect=Password:" \
 	    "send=`cat krffs/rach2_demo_password`" \
 	    "expect=# " "send=ifup -a" \
-	    "expect=lease of 192.168.90.20 obtained" wait=3 \
+	    "expect=lease of 192.168.90.20 obtained" "expect=net: eth0: IPv4 192.168.90.20/" \
 	    "send=ifconfig eth0 | grep -q 'addr:192.168.90.20' && echo SECOND\"\"LEASE" \
 	    "expect=SECONDLEASE" "send=poweroff -f" until=15 --must-exit
 	# And unattended, which is how the sealed machine comes up: nothing is typed at
@@ -941,8 +941,8 @@ dhcp-stack: dhcp-card
 	    --qemu-arg=filter-dump,id=mt0,netdev=net0,file=$(METAL_PCAP) \
 	    --append "rach2.ip=none" \
 	    --timeout 180 --steptmo 60 --ok "rach2 login:" \
-	    "expect=rach2 login:" wait=20 \
-	    "tcp=$(DHCP_SSH_PORT)" wait=5
+	    "expect=net: eth0: IPv4 192.168.90.20/" \
+	    "tcp=$(DHCP_SSH_PORT)"
 	# Since 2026-09-14 what init starts writes to `/var/log/services` and not to
 	# the console, so the client's lease line is not on this serial at all and the
 	# console can only say the machine got as far as a login. Nothing is typed
@@ -982,14 +982,14 @@ dhcp-stack: dhcp-card
 	    "expect=rach2 login:" "send=root" "expect=Password:" \
 	    "send=`cat krffs/rach2_demo_password`" \
 	    "expect=The ISH shell" "send=netup -a" \
-	    "expect=lease of 10.90.0.20 netmask 255.255.0.0" wait=3 \
+	    "expect=lease of 10.90.0.20 netmask 255.255.0.0" \
 	    "send=ping 10.90.0.2" "expect=4/4 replies" \
 	    "send=cat /etc/resolv.conf" "expect=nameserver 10.90.0.3" \
 	    "send=netup -a" "expect=is already holding it" \
-	    "send=ping 10.200.0.1" wait=20 \
-	    "send=dhcpc -i eth0 -k" "expect=stopped process" wait=2 \
+	    "send=ping 10.200.0.1" "expect=0/4 replies" \
+	    "send=dhcpc -i eth0 -k" "expect=net: eth0: IPv4 none" "expect=stopped process" \
 	    "send=ping 10.90.0.2" "expect=0/4 replies" \
-	    "send=netup -a" "expect=lease of 10.90.0.20 netmask 255.255.0.0" wait=3 \
+	    "send=netup -a" "expect=lease of 10.90.0.20 netmask 255.255.0.0" \
 	    "send=ping 10.90.0.2" "expect=4/4 replies"
 	# The last four steps are the way back off a lease. A client holds an address
 	# for as long as it renews it, so an address is taken off by stopping its
@@ -1024,13 +1024,13 @@ dhcp-stack: dhcp-card
 	    "expect=rach2 login:" "send=root" "expect=Password:" \
 	    "send=`cat krffs/rach2_demo_password`" \
 	    "expect=The ISH shell" "send=netup -a" \
-	    "expect=lease of 10.90.0.20 netmask 255.255.0.0" wait=3 \
+	    "expect=lease of 10.90.0.20 netmask 255.255.0.0" \
 	    "send=cp /etc/network/interfaces.static /etc/network/interfaces" \
 	    "send=netup -a" "expect=is holding it with a lease" \
-	    "send=dhcpc -i eth0 -k" "expect=stopped process" wait=2 \
-	    "send=netup -a" "expect=configured from /etc/network/interfaces" wait=2 \
+	    "send=dhcpc -i eth0 -k" "expect=net: eth0: IPv4 none" "expect=stopped process" \
+	    "send=netup -a" "expect=configured from /etc/network/interfaces" \
 	    "send=ping 10.90.0.2" "expect=4/4 replies" \
-	    "send=ping 10.200.0.1" wait=20
+	    "send=ping 10.200.0.1" "expect=0/4 replies"
 	# The address is the fixed one and not the leased one, which the capture says:
 	# packets sent FROM 10.90.0.50, and the off-subnet packet addressed to the
 	# gateway's hardware address, which is the route the stanza asked for. Neither
@@ -1055,10 +1055,10 @@ dhcp-stack: dhcp-card
 	    "send=`cat krffs/rach2_demo_password`" \
 	    "expect=# " \
 	    "send=printf 'auto eth0\niface eth0 inet static\naddress 10.90.0.50\nnetmask 255.255.0.0\ngateway 10.90.0.2\n' > /etc/network/interfaces" \
-	    "send=ifup -a" wait=5 \
+	    "send=ifup -a" "expect=net: eth0: IPv4 10.90.0.50/" \
 	    "send=ifconfig eth0 > /tmp/if; grep -q 'addr:10.90.0.50' /tmp/if && grep -q 'Mask:255.255.0.0' /tmp/if && ping 10.90.0.2 > /dev/null && echo REALSTATIC\"\"OK" \
 	    "expect=REALSTATICOK" "send=ping 10.200.0.1 > /dev/null 2>&1; echo DONE" \
-	    "expect=DONE" wait=5
+	    "expect=DONE" "send=poweroff -f" until=15 --must-exit
 	$(PCAPCHECK) bcast $(RSTATIC_PCAP) --source 10.90.0.50 \
 	    --routed-via 10.90.0.2 --routed-dst 10.200.0.1
 
@@ -1075,7 +1075,7 @@ dhcp-stack: dhcp-card
 	    "expect=rach2 login:" "send=root" "expect=Password:" \
 	    "send=`cat krffs/rach2_demo_password`" \
 	    "expect=The ISH shell" "send=dhcpc -i eth0 -l 20" \
-	    "expect=renewed for 20 seconds" wait=30
+	    "expect=renewed for 20 seconds" "expect=renewed for 20 seconds"
 	# A renewal and a fresh lease are different things, and the difference is what
 	# this checks: the client must say it renewed, and it must have asked for an
 	# address exactly once. A client that let every lease lapse and discovered
@@ -1097,6 +1097,7 @@ dhcp-stack: dhcp-card
 	# begin by taking that address off and might never put one back. This one is
 	# asked at the console rather than read off the wire, because what is being
 	# tested is that nothing happened.
+# interval: the machine is asked every second until init has started SSH
 	$(HARNESS) --kernel build/rach2/kernel \
 	    --initrd $(METAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --net "$(DHCP_NET)" \
@@ -1104,9 +1105,10 @@ dhcp-stack: dhcp-card
 	    --timeout 180 --steptmo 60 --ok "STATICKEPT" \
 	    "expect=rach2 login:" "send=root" "expect=Password:" \
 	    "send=`cat krffs/rach2_demo_password`" \
-	    "expect=# " wait=20 \
-	    "send=ifconfig eth0 | grep -q 'addr:192.168.90.50' && echo STATIC\"\"KEPT" \
+	    "expect=# " \
+	    "send=until pidof dropbearmulti > /dev/null; do sleep 1; done; ifconfig eth0 | grep -q 'addr:192.168.90.50' && echo STATIC\"\"KEPT" \
 	    "expect=STATICKEPT"
+# interval: the service log is read every second until the client gives up
 	$(HARNESS) --kernel build/rach2/kernel \
 	    --initrd $(METAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --net "hubport,id=net0,hubid=1" --append "rach2.ip=none" \
@@ -1115,7 +1117,7 @@ dhcp-stack: dhcp-card
 	    "send=`cat krffs/rach2_demo_password`" \
 	    "expect=# " "send=echo CONSOLE\"\"UP" \
 	    "expect=CONSOLEUP" \
-	    "send=for i in 1 2 3 4 5 6 7 8 9 10 11 12; do grep -q 'no lease, forking to background' /var/log/services && { echo NOLEASE\"\"OK; break; }; sleep 5; done" \
+	    "send=until grep -q 'no lease, forking to background' /var/log/services; do sleep 1; done; echo NOLEASE\"\"OK" \
 	    "expect=NOLEASEOK"
 	# The client's giving up is read from the service log and not from this
 	# console: init gives what it starts `/var/log/services`, so that a client
@@ -1153,13 +1155,13 @@ dhcp-stack: dhcp-card
 	    "expect=rach2 login:" "send=root" "expect=Password:" \
 	    "send=`cat krffs/rach2_demo_password`" \
 	    "expect=# " "send=ifup -a" \
-	    "expect=lease of 192.168.90.20 obtained" wait=3 \
+	    "expect=lease of 192.168.90.20 obtained" "expect=net: eth0: IPv4 192.168.90.20/" \
 	    "send=udhcpc -i eth1 -n -q" \
-	    "expect=lease of 10.0.7.20 obtained" wait=3 \
+	    "expect=lease of 10.0.7.20 obtained" "expect=net: eth1: IPv4 10.0.7.20/" \
 	    "send=ifconfig eth0 > /tmp/i0; ifconfig eth1 > /tmp/i1; grep -q 'addr:192.168.90.20' /tmp/i0 && grep -q 'addr:10.0.7.20' /tmp/i1 && echo TWO\"\"LEASES" \
 	    "expect=TWOLEASES" \
-	    "send=dropbearmulti dropbear -R -g -p 22" wait=25 \
-	    "tcp=$(DHCP_TWO_PORT_A)" wait=3 "tcp=$(DHCP_TWO_PORT_B)" wait=3 \
+	    "send=dropbearmulti dropbear -R -g -p 22" \
+	    "tcp=$(DHCP_TWO_PORT_A)" "tcp=$(DHCP_TWO_PORT_B)" \
 	    "send=echo TWONET\"\"OK" "expect=TWONETOK"
 	$(PCAPCHECK) bcast $(TWONET_PCAP_A) --source 192.168.90.20
 	$(PCAPCHECK) bcast $(TWONET_PCAP_B) --source 10.0.7.20
@@ -1202,7 +1204,7 @@ run-netconsole: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
 	    --qemu-arg=-object \
 	    --qemu-arg=filter-dump,id=nc0,netdev=net0,file=$(NETCONSOLE_PCAP) \
 	    --append "rach2.netconsole" \
-	    --timeout 90 --ok "Type 'help'" "expect=Type 'help'" wait=3
+	    --timeout 90 --ok "Type 'help'" "expect=Type 'help'"
 	$(PCAPCHECK) netconsole $(NETCONSOLE_PCAP) --min-frames 4 \
 	    --expect "] boot: Initializing system components" \
 	    --expect "] net: ready:" \
@@ -1258,16 +1260,16 @@ run-e1000: rach2 tests krffs test-image $(HARNESS)
 	    --qemu-arg=-netdev --qemu-arg=user,id=net1 \
 	    --qemu-arg=-device --qemu-arg=e1000,netdev=net1 \
 	    --timeout 90 --ok "Type 'help'" \
-	    "expect=rtl8139: IRQ" "expect=Type 'help'" wait=2
+	    "expect=rtl8139: IRQ" "expect=Type 'help'"
 	$(HARNESS) --device e1000,netdev=net0 --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --timeout 90 --ok "Type 'help'" \
-	    "expect=e1000: 82540EM" "expect=Type 'help'" wait=2
+	    "expect=e1000: 82540EM" "expect=Type 'help'"
 	$(HARNESS) --device e1000e,netdev=net0 --kernel build/rach2/kernel \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --timeout 90 --ok "Type 'help'" \
 	    "expect=no supported network card" \
-	    "expect=Type 'help'" wait=2
+	    "expect=Type 'help'"
 # `tests/run reset`: each reset mechanism on its own. The kernel tries three,
 # most of the machine first, and the order was chosen for a laptop whose chipset
 # register may not act; the risk in that choice is that only the first one is
@@ -1670,7 +1672,7 @@ run-disk-ahci: rach2 tests krffs $(HARNESS)
 	    --append "rach2.disk=ahci rach2.fsdisk rach2.rescue" \
 	    --drive "file=$(DISK_TEST_AHCI_IMAGE),format=raw,if=none,id=drv0" \
 	    $(AHCI_ATTACH) \
-	    --timeout 90 --ok "BLOCKPROBE OK" --log $(DISK_TEST_AHCI_IMAGE).log probe=blockprobe
+	    --timeout 120 --steptmo 90 --ok "BLOCKPROBE OK" --log $(DISK_TEST_AHCI_IMAGE).log probe=blockprobe
 # `tests/run disk-q35`: the same disk proof on the q35 machine, whose AHCI
 # controller is built in at 0:31.2, function 2 of the multi-function device 31.
 # That is the laptop's exact topology, and no other test exercises it: every
@@ -1684,7 +1686,7 @@ run-disk-q35: rach2 tests krffs $(HARNESS)
 	    --drive "file=$(DISK_TEST_Q35_IMAGE),format=raw,if=none,id=drv0" \
 	    --qemu-arg=-machine --qemu-arg=q35 --qemu-arg=-cpu --qemu-arg=max \
 	    --qemu-arg=-device --qemu-arg=ide-hd,drive=drv0,bus=ide.0 \
-	    --timeout 90 --ok "BLOCKPROBE OK" --log $(DISK_TEST_Q35_IMAGE).log probe=blockprobe
+	    --timeout 120 --steptmo 90 --ok "BLOCKPROBE OK" --log $(DISK_TEST_Q35_IMAGE).log probe=blockprobe
 # `tests/run disks`: two disks of different sizes on one AHCI controller,
 # both in /proc/disk with their ports and sizes, both with nodes, a
 # partition of each mounted and written, and the second disk's file found

@@ -25,6 +25,8 @@
 #
 
 # shellcheck source=tests/system/deadline.sh
+# The runner helper, whose `until` and `gone` are the suite's waits.
+RUNUTIL="$(cd "$(dirname "$0")/../../.." && pwd)/build/tests/system/runutil"
 . "$(cd "$(dirname "$0")/../../.." && pwd)/tests/system/deadline.sh"
 set -e
 
@@ -103,15 +105,7 @@ trap 'cleanup; exit 143' TERM
 trap 'cleanup; exit 129' HUP
 
 wait_serial() {
-    i=0
-    while [ "$i" -lt "$3" ]; do
-        if grep -q "$2" "$1" 2>/dev/null; then
-            return 0
-        fi
-        sleep 1
-        i=$((i + 1))
-    done
-    return 1
+    "$RUNUTIL" until "$1" "$2" "$3"
 }
 
 # One boot of the test image under `$2` of boot options, running the probe in
@@ -132,7 +126,7 @@ mount_boot() {
     # Waited on the probe's own verdict, which it prints AFTER the mount line:
     # stopping at the mount line would kill the machine part way through
     # writing it, and the value read back would be a prefix.
-    if ! wait_serial "$log" "PROCPROBE OK" "$(scaled 150)"; then
+    if ! wait_serial "$log" "PROCPROBE OK" 150; then
         stop
         echo "procfiles-test: FAIL: the probe did not pass on the boot with" >&2
         echo "procfiles-test: options '$append'" >&2
@@ -223,7 +217,9 @@ applet 'dropbearmulti dropbear -R -g -p 22; echo SSH""D-UP' 'SSHD-UP' 300
 # the guest's server, and its table, a moment later.
 "$REPO/build/tests/system/hostpeer" hold "$FWD_PORT" 90 >/dev/null 2>&1 &
 PEER_PID=$!
-sleep 3
+# shellcheck disable=SC2016
+# interval: the guest's table is read every second for the host's connection
+applet 'i=0; until netstat -tn 2>/dev/null | grep -q ESTABLISHED || [ $i -ge 60 ]; do i=$((i + 1)); sleep 1; done; echo CONN""-SEEN' 'CONN-SEEN'
 applet 'route -n > /tmp.rt; echo RT""-STATUS:$?; cat /tmp.rt' 'RT-STATUS:'
 applet 'netstat -tn > /tmp.ns 2>/tmp.ns6; echo NS""-STATUS:$?; cat /tmp.ns; cat /tmp.ns6' 'NS-STATUS:'
 applet 'arp -n > /tmp.arp; echo AR""P-STATUS:$?; cat /tmp.arp' 'ARP-STATUS:'

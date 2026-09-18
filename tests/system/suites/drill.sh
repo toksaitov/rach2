@@ -32,6 +32,8 @@
 # repair, so the last boot mounts the ext2 root again.
 #
 
+# The runner helper, whose `until` and `gone` are the suite's waits.
+RUNUTIL="$(cd "$(dirname "$0")/../../.." && pwd)/build/tests/system/runutil"
 set -e
 
 DISK="$1"
@@ -105,18 +107,10 @@ fail() {
 
 # Wait up to $3 seconds until the log has at least $2 occurrences of $1.
 wait_count() {
-    i=0
-    while [ "$i" -lt "$3" ]; do
-        n="$(grep -ac "$1" "$LOG" 2>/dev/null)" || true
-        if [ "${n:-0}" -ge "$2" ]; then
-            return 0
-        fi
-        if [ "$(($(date +%s) - START))" -gt "$DEADLINE" ]; then
-            fail "the run passed its ${DEADLINE}s deadline waiting for $1"
-        fi
-        sleep 1
-        i=$((i + 1))
-    done
+    "$RUNUTIL" until "$LOG" "$1" "$3" "$2" && return 0
+    if [ "$(($(date +%s) - START))" -gt "$DEADLINE" ]; then
+        fail "the run passed its ${DEADLINE}s deadline waiting for $1"
+    fi
     return 1
 }
 
@@ -144,29 +138,14 @@ boot_feed() {
     QPID=$!
     (
         while IFS='	' read -r count pattern command; do
-            waited=0
-            while [ "$waited" -lt "$(scaled 600)" ]; do
-                seen="$(grep -ac "$pattern" "$LOG" 2>/dev/null)" || true
-                if [ "${seen:-0}" -ge "$count" ]; then
-                    break
-                fi
-                if [ "$(($(date +%s) - START))" -gt "$DEADLINE" ]; then
-                    break
-                fi
-                sleep 1
-                waited=$((waited + 1))
-            done
+            "$RUNUTIL" until "$LOG" "$pattern" 600 "$count" || true
             seen="$(grep -ac "$pattern" "$LOG" 2>/dev/null)" || true
             if [ "${seen:-0}" -lt "$count" ]; then
                 break
             fi
             printf '%s\n' "$command"
         done < "$STEPS"
-        held=0
-        while [ "$held" -lt "$(scaled 900)" ] && kill -0 "$QPID" 2>/dev/null; do
-            sleep 1
-            held=$((held + 1))
-        done
+        "$RUNUTIL" gone "$QPID" 900 || true
     ) > "$FEED" &
     FPID=$!
 }
@@ -181,7 +160,7 @@ boot_watch() {
     QPID=$!
     (sleep "$(scaled 120)") > "$FEED" &
     FPID=$!
-    wait_count "$1" 1 "$(scaled 100)" || fail "the boot never reached $1"
+    wait_count "$1" 1 100 || fail "the boot never reached $1"
     cleanup_boot
 }
 
@@ -286,7 +265,7 @@ if ! "$REPO/build/tests/system/harness" --kernel "$REPO/build/rach2-recovery/ker
         --append "rach2.root=ram" --timeout 180 --steptmo 60 --ok "NODETHERE" \
         "expect=recovery image" "expect=# " \
         "send=test -b /dev/disk0 && echo NODE\"\"THERE" \
-        "expect=NODETHERE" wait=3 > /dev/null 2>&1; then
+        "expect=NODETHERE" > /dev/null 2>&1; then
     fail "the recovery kernel did not publish /dev/disk0 without rach2.diskdiag"
 fi
 
@@ -303,8 +282,8 @@ step "The ISH shell" 1 "reflash /dev/disk0 0 512 < /dev/zero"
 step "$REFUSED_TOOL" 1 "cat /etc/motd > /dev/disk0"
 step "$REFUSED_SHELL" 1 "halt"
 boot_feed
-wait_count "$REFUSED_SHELL" 1 "$(scaled 300)" || fail "the refusal boot never finished"
-sleep 3
+wait_count "$REFUSED_SHELL" 1 300 || fail "the refusal boot never finished"
+wait_count "$REFUSED_TOOL" 1 30 || true
 cleanup_boot
 grep -aq "$REFUSED_TOOL" "$LOG" || \
     fail "reflash was not refused by the everyday kernel"
@@ -344,7 +323,7 @@ arm_recovery "$WORK"
 LOG="$DISK.log.recovery"
 : > "$STEPS"
 boot_feed net
-wait_count "recovery image" 1 "$(scaled 200)" || fail "the recovery entry never came up"
+wait_count "recovery image" 1 200 || fail "the recovery entry never came up"
 # Nothing is typed at that console: the image starts its own server, and the
 # key login is what says the machine is reachable. The lease itself is read from
 # the machine, since init gives what it starts `/var/log/services` rather than
@@ -359,6 +338,7 @@ while :; do
     if [ "$i" -ge "$(scaled 30)" ]; then
         fail "recovery never took an address"
     fi
+    # interval: the service log is read every three seconds for the lease
     sleep 3
 done
 
@@ -448,7 +428,7 @@ case "$OUT" in
 esac
 
 machine 'sync; poweroff -f' > /dev/null 2>&1 || true
-sleep 5
+"$RUNUTIL" gone "$QPID" 60 || true
 cleanup_boot
 
 # The boot after that power cut: recovery again, with nothing armed for one boot
@@ -457,7 +437,7 @@ cleanup_boot
 LOG="$DISK.log.latched"
 : > "$STEPS"
 boot_feed net
-wait_count "recovery image" 1 "$(scaled 200)" || fail "the saved recovery default did not boot recovery"
+wait_count "recovery image" 1 200 || fail "the saved recovery default did not boot recovery"
 OUT="$(machine 'test -b /dev/disk0 && echo STILL""RECOVERY' || true)"
 case "$OUT" in
     *STILLRECOVERY*) ;;
@@ -469,7 +449,7 @@ case "$OUT" in
     *) fail "the saved default could not be put back to what it was: $OUT" ;;
 esac
 machine 'sync; poweroff -f' > /dev/null 2>&1 || true
-sleep 5
+"$RUNUTIL" gone "$QPID" 60 || true
 cleanup_boot
 
 # Boot 4: the ordinary entry again. The disk is whole.
@@ -506,15 +486,16 @@ mv "$WORK.save" "$WORK"
 # the one written down. The client that did not get a lease has to be gone as
 # well: one that answered later would replace the address under a session
 # already using it.
+# interval: the service log is read every second for recovery's fixed address
 if ! "$REPO/build/tests/system/harness" --kernel "$REPO/build/rach2-recovery/kernel" \
         --initrd "$RECOVERY" --qemu-arg=-cpu --qemu-arg=max \
         --drive "file=$WORK,format=raw,if=ide,index=0,media=disk" \
         --net "hubport,id=net0,hubid=1" \
         --append "rach2.root=ram rach2.slot=recovery rach2.ip=none" \
         --timeout 300 --steptmo 120 --ok "NOCLIENT" \
-        "expect=recovery image" "expect=# " wait=45 \
-        "send=ifconfig eth0 | grep -q 'addr:192.168.0.105' && ! pidof udhcpc > /dev/null && echo NO\"\"CLIENT" \
-        "expect=NOCLIENT" wait=3 > /dev/null 2>&1; then
+        "expect=recovery image" "expect=# " \
+        "send=until grep -q 'rescue: eth0: 192.168.0.105' /var/log/services; do sleep 1; done; ifconfig eth0 | grep -q 'addr:192.168.0.105' && ! pidof udhcpc > /dev/null && echo NO\"\"CLIENT" \
+        "expect=NOCLIENT" > /dev/null 2>&1; then
     fail "recovery on a network with no server did not take the fixed address and stop the client"
 fi
 
@@ -534,7 +515,7 @@ LOG="$DISK.log.p1dead"
 : > "$STEPS"
 step "~ #" 1 "echo P1\"\"DEAD"
 boot_feed
-wait_count "P1DEAD" 1 "$(scaled 200)" || \
+wait_count "P1DEAD" 1 200 || \
     fail "the boot with partition 1 destroyed never reached a shell that answers"
 cleanup_boot
 grep -aq "modules: found 1" "$LOG" || \

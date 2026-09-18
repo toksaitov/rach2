@@ -437,6 +437,7 @@ void probe_main(unsigned int *sp)
 
     if (streq(type, "pull")) {
         int reads = 0;
+        int opens = 0;
 
         rc = sys5(SYS_MOUNT, (int)"/dev/disk0p1", (int)"/m", (int)"vfat", 0, 0);
         if (rc != 0) {
@@ -451,14 +452,17 @@ void probe_main(unsigned int *sp)
             fail_with("mounting an image on a stick", rc);
         }
         expect_file("/l/hello.txt", "hello from inside an image");
-        puts("LOOPPROBE HOLDING");
 
-        /* Read until the stick is not there any more. */
+        /* Read until the stick is not there any more; the hold is said
+           after the first read, so the pull lands on a process reading. */
         for (;;) {
             int fd2 = sys3(SYS_OPEN, (int)"/l/hello.txt", O_RDONLY, 0);
 
             if (fd2 < 0) {
                 break;
+            }
+            if (opens++ == 1) {
+                puts("LOOPPROBE HOLDING");
             }
             {
                 char one[8];

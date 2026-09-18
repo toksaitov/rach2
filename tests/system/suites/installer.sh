@@ -23,6 +23,8 @@
 #
 
 # shellcheck source=tests/system/deadline.sh
+# The runner helper, whose `until` and `gone` are the suite's waits.
+RUNUTIL="$(cd "$(dirname "$0")/../../.." && pwd)/build/tests/system/runutil"
 . "$(cd "$(dirname "$0")/../../.." && pwd)/tests/system/deadline.sh"
 set -e
 
@@ -51,8 +53,10 @@ mkdir -p "$DIR"
 # A machine left running by an earlier run of this suite holds the images this
 # one writes, and QEMU refuses to open a file another process has locked. Any
 # such machine is this suite's own, since the paths are its own.
-pkill -f "$DIR/" 2>/dev/null || true
-sleep 2
+for left in $(pgrep -f "$DIR/" 2>/dev/null || true); do
+    kill "$left" 2>/dev/null || true
+    "$RUNUTIL" gone "$left" 30 || true
+done
 
 # Change one digit of the hash the manifest on a stick image declares. The
 # manifest is a few lines of text in the volume, so its bytes are found in the
@@ -469,8 +473,7 @@ LOG6="$DIR/ssh.log"
     --qemu-arg=-drive --qemu-arg="file=$DIR/one.img,format=raw,if=ide,index=0,media=disk" \
     --net "user,id=net0,hostfwd=tcp::$PORT-:22" --device "rtl8139,netdev=net0" \
     --timeout 300 --steptmo 120 --ok "SSHREADY" --log "$LOG6" \
-    "expect=rach2 login:" wait=25 \
-    "send=" "expect=rach2 login:" "send=root" "expect=Password:" "send=$NEWPASS" \
+    "expect=rach2 login:" "send=root" "expect=Password:" "send=$NEWPASS" \
     "expect=# " "send=echo SSH\"\"READY" "expect=SSHREADY" until=90 \
     > "$LOG6.harness" 2>&1 &
 QPID=$!
@@ -629,16 +632,10 @@ rm -f "$DIR/cutoff.log"
     "send=dd if=/m/$(basename "$TEST_DISK") bs=1048576 count=96 2>/dev/null | reflash -p /dev/disk0 0 100663296" \
     "expect=NEVERSEEN" > /dev/null 2>&1 &
 CUTPID=$!
-waited=0
 saw_progress=no
-while [ "$waited" -lt "$(scaled 300)" ]; do
-    if grep -aq 'reflash: 16777216 of ' "$DIR/cutoff.log" 2>/dev/null; then
-        saw_progress=yes
-        break
-    fi
-    sleep 2
-    waited=$((waited + 2))
-done
+if "$RUNUTIL" until "$DIR/cutoff.log" 'reflash: 16777216 of ' 300; then
+    saw_progress=yes
+fi
 # The harness's own child holds the disk and the stick; both are named, since a
 # machine left running would hold them for every later row. Every one of these
 # may find nothing left to kill, which is not a failure of the row.
@@ -649,13 +646,9 @@ wait "$CUTPID" 2>/dev/null || true
 # is what QEMU has flushed; the disk is read after that process has gone. It is
 # a disk of this row's own, so a machine slow to die holds nothing the rows
 # after it open.
-gone=0
-while [ "$gone" -lt "$(scaled 60)" ]; do
-    pgrep -f "file=$DIR/cut.img" > /dev/null 2>&1 || break
-    sleep 1
-    gone=$((gone + 1))
+for left in $(pgrep -f "file=$DIR/cut.img" 2>/dev/null || true); do
+    "$RUNUTIL" gone "$left" 60 || true
 done
-sleep 2
 # What is judged is the ninety-six mebibytes the write asked for: it must have
 # begun, so those bytes are not what was there before, and it must not have
 # finished, so they are not the image's either. A comparison of the whole disk

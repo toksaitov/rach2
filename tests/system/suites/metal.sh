@@ -32,6 +32,8 @@
 #
 
 # shellcheck source=tests/system/deadline.sh
+# The runner helper, whose `until` and `gone` are the suite's waits.
+RUNUTIL="$(cd "$(dirname "$0")/../../.." && pwd)/build/tests/system/runutil"
 . "$(cd "$(dirname "$0")/../../.." && pwd)/tests/system/deadline.sh"
 set -e
 
@@ -99,15 +101,7 @@ sh "$REPO/tests/system/accept/transport_test.sh" || fail "the acceptance transpo
 sh "$REPO/tests/system/accept/password_test.sh" || fail "the acceptance password checks"
 
 wait_token() {
-    i=0
-    while [ "$i" -lt "$2" ]; do
-        if grep -q "$1" "$LOG" 2>/dev/null; then
-            return 0
-        fi
-        sleep 1
-        i=$((i + 1))
-    done
-    return 1
+    "$RUNUTIL" until "$LOG" "$1" "$2"
 }
 
 if [ ! -f "$KEY" ]; then
@@ -177,7 +171,7 @@ qemu-system-i386 -cpu max -display none -kernel "$KERNEL" \
     -serial stdio < /dev/null > "$LOG" 2>&1 &
 QPID=$!
 
-if ! wait_token "rach2 login" "$(scaled 90)"; then
+if ! wait_token "rach2 login" 90; then
     fail "the machine never reached its login prompt"
 fi
 if ! grep -q "IPv4 $GUEST_IP/24" "$LOG"; then
@@ -206,6 +200,7 @@ while [ "$i" -lt "$(scaled 60)" ]; do
     fi
     sleep 2
     i=$((i + 2))
+    # interval: a try of SSH every two seconds until the server answers
 done
 if [ "$i" -ge "$(scaled 60)" ]; then
     fail "no SSH answer: init did not bring an unattended server up"
@@ -261,7 +256,6 @@ if [ -z "$BEFORE" ]; then
     fail "could not find the SSH server's pid on the machine, so killing it would prove nothing"
 fi
 ssh_run "kill -9 $BEFORE" >/dev/null 2>&1 || true
-sleep 2
 i=0
 AFTER=""
 while [ "$i" -lt "$(scaled 60)" ]; do
@@ -272,6 +266,7 @@ while [ "$i" -lt "$(scaled 60)" ]; do
     AFTER=""
     sleep 2
     i=$((i + 2))
+    # interval: a try of SSH every two seconds until the server answers
 done
 if [ -z "$AFTER" ]; then
     fail "the SSH server was killed and init did not bring it back"

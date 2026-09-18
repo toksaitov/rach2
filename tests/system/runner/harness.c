@@ -33,20 +33,21 @@
  *     sendfile=PATH  write the bytes of the file at PATH to the guest
  *                    serial as they are, in one stream, which is how a
  *                    flood of lines is typed back to back
- *     wait=SECS      sleep SECS, draining serial
  *     until=SECS     drain serial for at most SECS, ending half a second
  *                    after the run's --ok token appears in unconsumed
  *                    output from the current command, or when the machine
  *                    exits: for the wait after `send=exec /probe` whose
  *                    only purpose is that token, so a probe done in ten
  *                    seconds does not cost sixty. Never past --timeout
- *     tcp=PORT       open a TCP connection to 127.0.0.1:PORT and close it,
- *                    which a `hostfwd=tcp::PORT-:GUESTPORT` in --net
- *                    forwards to a server inside the guest. This provokes
- *                    traffic; it does not prove the guest answered,
- *                    because QEMU's user network accepts the host side of
- *                    the connection before it knows whether anything is
- *                    there. What the guest did is read from a capture.
+ *     tcp=PORT       open a TCP connection to 127.0.0.1:PORT, which a
+ *                    `hostfwd=tcp::PORT-:GUESTPORT` in --net forwards to
+ *                    a server inside the guest, read the first bytes the
+ *                    server sends, an SSH banner, and close. The step
+ *                    fails when nothing arrives within the knocking
+ *                    window: QEMU's user network accepts the host side of
+ *                    a connection before it knows whether anything is
+ *                    there, so only bytes from the guest prove it
+ *                    answered, and they are on the wire by then.
  *     udp=PORT:TEXT  send TEXT as one UDP datagram to 127.0.0.1:PORT,
  *                    which a `hostfwd=udp::PORT-:GUESTPORT` forwards into
  *                    the guest. This is the only way a test can put a
@@ -1308,8 +1309,6 @@ int main(int argc, char **argv)
             if (monitor_send(command) != 0) {
                 step_failures++;
             }
-        } else if (strncmp(step, "wait=", 5) == 0) {
-            pump(now() + atof(step + 5));
         } else if (strncmp(step, "barrier=", 8) == 0) {
             /* The calibration barrier: every machine of the width waits
                here until the runner makes the file, so the measured work
@@ -1341,7 +1340,7 @@ int main(int argc, char **argv)
             struct sockaddr_in addr;
             struct timeval tv;
             double knock_until;
-            int connected;
+            int connected, answered = 0;
 
             memset(&addr, 0, sizeof(addr));
             addr.sin_family = AF_INET;
@@ -1367,8 +1366,37 @@ int main(int argc, char **argv)
                     setsockopt(sk, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
                 connected = sk >= 0 && connect(sk, (struct sockaddr *)&addr, sizeof(addr)) == 0;
             }
-            if (connected) {
-                printf("HARNESS: knocked on port %d\n", port);
+            /* QEMU's user network accepts the host side of a connection
+               before it knows whether the guest is there, so a connection
+               proves nothing; what proves the guest answered is bytes from
+               it, an SSH server's banner. A connection the guest resets is
+               knocked again, under the same window. */
+            while (connected && now() < knock_until && child_poll() < 0) {
+                char answer[64];
+                ssize_t got;
+                struct timeval rv;
+
+                rv.tv_sec = 1;
+                rv.tv_usec = 0;
+                setsockopt(sk, SOL_SOCKET, SO_RCVTIMEO, &rv, sizeof(rv));
+                got = recv(sk, answer, sizeof(answer), 0);
+                if (got > 0) {
+                    answered = 1;
+                    break;
+                }
+                if (got < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                    pump(now() + 0.1);
+                    continue;
+                }
+                close(sk);
+                pump(now() + 1.0);
+                sk = socket(AF_INET, SOCK_STREAM, 0);
+                if (sk >= 0)
+                    setsockopt(sk, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+                connected = sk >= 0 && connect(sk, (struct sockaddr *)&addr, sizeof(addr)) == 0;
+            }
+            if (answered) {
+                printf("HARNESS: port %d answered\n", port);
             } else {
                 printf("HARNESS: nothing answered on port %d (%s)\n", port, strerror(errno));
                 step_failures++;

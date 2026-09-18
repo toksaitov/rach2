@@ -8,8 +8,9 @@
 # fake prints its prompt or its token, and the checks are about time: a
 # machine ready later than a clock-typed feeder would have allowed still
 # gets its line; one that never becomes ready fails the step within its
-# bound; a token printed before the step began does not satisfy it; and the
-# harness's `until=` ends when the run's token arrives while `wait=` does not.
+# bound; a token printed before the step began does not satisfy it; the
+# harness's `until=` ends when the run's token arrives; and a `wait=` step,
+# which slept for a number of seconds, is refused as unknown.
 #
 # `tests/run drive` runs this. It boots nothing.
 #
@@ -200,9 +201,9 @@ drive_expect 'MARKER' 10; rc=$?
 check "and the same token printed after it is" 0 "$rc"
 stop
 
-# The harness: `until=60` ends when the run's token arrives; `wait=4` does
-# not; a token printed before the until began does not end it; and an until
-# never outlives the run's timeout.
+# The harness: `until=60` ends when the run's token arrives; a `wait=` step
+# is refused; a token printed before the until began does not end it; and an
+# until never outlives the run's timeout.
 harness() {
     ( cd "$WORK" && PATH="$WORK/bin:$PATH" "$HARNESS" --kernel none --timeout 90 --grace 0.2 --ok "FAKE OK" "$@" > /dev/null 2>&1 )
 }
@@ -211,10 +212,8 @@ QEMU_TOKEN_AT=2 harness "expect=Type 'help'" "send=exec /fake" until=60; rc=$?
 took=$(( $(date +%s) - t0 ))
 check "an until ends when the run's token arrives" 0 "$rc"
 check "well before its time" 1 "$([ "$took" -lt 8 ] && echo 1 || echo 0)"
-t0=$(date +%s)
 QEMU_TOKEN_AT=1 harness "expect=Type 'help'" "send=exec /fake" wait=4; rc=$?
-took=$(( $(date +%s) - t0 ))
-check "a wait runs its time whatever arrives" 1 "$([ "$took" -ge 4 ] && echo 1 || echo 0)"
+check "a wait= step is refused" 1 "$([ "$rc" -ne 0 ] && echo 1 || echo 0)"
 t0=$(date +%s)
 QEMU_TOKEN_AT=0 harness "expect=Type 'help'" "send=exec /fake" "expect=FAKE OK" until=4; rc=$?
 took=$(( $(date +%s) - t0 ))

@@ -4,7 +4,8 @@
  * Six children spin, two write a file of 256 KiB on the mounted volume and
  * sync it over and over, one pings the gateway through the kernel's own
  * ping every fifty milliseconds, and one reads lines from the console,
- * which the harness types every two seconds, for twenty seconds. Then the
+ * which the harness types one after another, each once the reader has
+ * said it took the last, for twenty seconds. Then the
  * parent kills them all, reads `/proc/stat`, and prints the four delays the
  * kernel kept as its longest: the gap between two timer ticks, a block
  * request from its taking to its completion, a wait for the request limit,
@@ -173,7 +174,9 @@ static void pinger(void)
     }
 }
 
-/* The console reader: lines counted into the report pipe, one byte each. */
+/* The console reader: lines counted into the report pipe, one byte each,
+ * and each said on the console, which is what the harness types the next
+ * line after. */
 static void reader(int report)
 {
     char c;
@@ -181,6 +184,7 @@ static void reader(int report)
     for (;;) {
         if (syscall3(SYS_READ, 0, (int)(size_t)&c, 1) == 1 && c == '\n') {
             syscall3(SYS_WRITE, report, (int)(size_t)"l", 1);
+            puts("LOADPROBE read");
         }
     }
 }

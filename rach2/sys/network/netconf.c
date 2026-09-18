@@ -528,6 +528,14 @@ static void addr_publish(struct netdev *nd, uint32_t ip, uint32_t mask)
     }
 
     if (ip != old) {
+        char addr[16];
+
+        if (ip != 0) {
+            netconf_format(ip, addr);
+            klog(KLOG_INFO, "net", "%s: IPv4 %s/%d", nd->name, addr, netconf_prefix_of(mask));
+        } else {
+            klog(KLOG_INFO, "net", "%s: IPv4 none", nd->name);
+        }
         if (is_machine(nd)) {
             /* Every mapping in the cache was learned by a machine at the old
                address, and every open connection recorded it. */

@@ -156,7 +156,7 @@ if "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
     --append "rach2.rescue" --timeout 150 --steptmo 120 \
     --ok "LOOPPROBE OK (pull)" --never "LOOPPROBE FAIL" --log "$DISK.pull.log" \
     "expect=Type 'help'" "send=exec /loopdevprobe pull" \
-    "expect=LOOPPROBE HOLDING" wait=1 "usb=del:st0" "expect=LOOPPROBE OK" \
+    "expect=LOOPPROBE HOLDING" "usb=del:st0" "expect=LOOPPROBE OK" \
     > /dev/null 2>&1; then
     echo "loopdev-test: a stick pulled from under a mounted image takes the device with it: OK"
 else

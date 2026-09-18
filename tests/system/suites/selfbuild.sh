@@ -39,6 +39,8 @@
 
 set -e
 
+# The runner helper, whose `until` and `gone` are the suite's waits.
+RUNUTIL="$(cd "$(dirname "$0")/../../.." && pwd)/build/tests/system/runutil"
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 
 KERNEL="$1"
@@ -123,17 +125,10 @@ fail() {
 
 # Wait up to $2 seconds for the token $1 in the log, under the run deadline.
 wait_token() {
-    i=0
-    while [ "$i" -lt "$2" ]; do
-        if grep -q "$1" "$LOG" 2>/dev/null; then
-            return 0
-        fi
-        if [ "$(($(date +%s) - START))" -gt "$DEADLINE" ]; then
-            fail "the run passed its ${DEADLINE}s deadline waiting for $1"
-        fi
-        sleep 1
-        i=$((i + 1))
-    done
+    "$RUNUTIL" until "$LOG" "$1" "$2" && return 0
+    if [ "$(($(date +%s) - START))" -gt "$DEADLINE" ]; then
+        fail "the run passed its ${DEADLINE}s deadline waiting for $1"
+    fi
     return 1
 }
 
@@ -222,7 +217,8 @@ step "SMOKEYES" "./yes | busybox head -n 1 | busybox grep -qx y && echo SMOKE\"\
 step "SMOKEPING" "./ping 127.0.0.1 > /dev/null 2>&1 && echo SMOKE\"\"PING"
 # Port 8080 and not 80: these steps run as an ordinary user, and a port below
 # 1024 is root's, so the self-built server is asked for one this user may have.
-step "SMOKEWEB" "./httpd 8080 > /dev/null 2>&1 & sleep 2; printf 'GET / HTTP/1.0\r\n\r\n' | ./nc 127.0.0.1 8080 | busybox grep -q HTTP/ && echo SMOKE\"\"WEB; kill %% 2>/dev/null"
+# interval: the self-built server is asked every second until it answers
+step "SMOKEWEB" "./httpd 8080 > /dev/null 2>&1 & i=0; until printf 'GET / HTTP/1.0\r\n\r\n' | ./nc 127.0.0.1 8080 2>/dev/null | busybox grep -q 200 || [ \$i -ge 30 ]; do i=\$((i + 1)); sleep 1; done; printf 'GET / HTTP/1.0\r\n\r\n' | ./nc 127.0.0.1 8080 | busybox grep -q HTTP/ && echo SMOKE\"\"WEB; kill %% 2>/dev/null"
 # The refusal statuses above are exact (1 for each credential refusal, and
 # sudo run against its permission check, not only its usage line), so an exec
 # failure (126, 127) or a crash (128 plus a signal) cannot pass as a refusal.
@@ -238,21 +234,22 @@ step "SYNCDONE" "sync; echo SYNC\"\"DONE"
 
 boot_steps test "$TESTPASSWORD"
 
-if ! wait_token "COPYONE" "$(scaled 1800)"; then
+if ! wait_token "COPYONE" 1800; then
     fail "the source tree never copied into the workspace"
 fi
-if ! wait_token "BUILDONE=" "$(scaled 3600)"; then
+fi
+if ! wait_token "BUILDONE=" 3600; then
     fail "the first kernel build never finished"
 fi
 if ! grep -q "BUILDONE=0" "$LOG"; then
-    wait_token "TAILONE" "$(scaled 60)" || true
+    wait_token "TAILONE" 60 || true
     fail "the first kernel build failed; its last lines are in the kept log"
 fi
 # The size is the last field of the hash line, so waiting for `HASHONE=` and
 # reading the size at once reads a number the machine is still typing: under a
 # loaded pool this returned 3979 for a kernel of 397980 bytes and called it no
 # kernel. The wait is for the marker that follows the value.
-if ! wait_token "SIZEEND" "$(scaled 240)"; then
+if ! wait_token "SIZEEND" 240; then
     fail "the first build's kernel was never hashed"
 fi
 # A sanity floor, not a structure check (the kernel checker is that): the
@@ -262,17 +259,17 @@ SIZEONE="$(grep -a -o 'SIZEONE=[0-9]*' "$LOG" | tail -1 | cut -d= -f2)"
 if [ -z "$SIZEONE" ] || [ "$SIZEONE" -lt 200000 ]; then
     fail "the built kernel is $SIZEONE bytes, which is no kernel"
 fi
-if ! wait_token "KEEPONE" "$(scaled 120)"; then
+if ! wait_token "KEEPONE" 120; then
     fail "the built kernel was never set aside for extraction"
 fi
 if ! wait_token "BUILDTWO=" "$(scaled 3600)"; then
     fail "the second kernel build never finished"
 fi
 if ! grep -q "BUILDTWO=0" "$LOG"; then
-    wait_token "TAILTWO" "$(scaled 60)" || true
+    wait_token "TAILTWO" 60 || true
     fail "the second kernel build failed; its last lines are in the kept log"
 fi
-if ! wait_token "VERDICTDONE" "$(scaled 240)"; then
+if ! wait_token "VERDICTDONE" 240; then
     fail "the two builds' hashes were never compared"
 fi
 if grep -q "HASHDIFFER" "$LOG"; then
@@ -281,28 +278,29 @@ fi
 if ! grep -q "HASHSAME" "$LOG"; then
     fail "the hash comparison never reported"
 fi
-if ! wait_token "UBUILDRC=" "$(scaled 1200)"; then
+if ! wait_token "UBUILDRC=" 1200; then
     fail "the utils build never finished"
 fi
 if ! grep -q "UBUILDRC=0" "$LOG"; then
-    wait_token "UBTAIL" "$(scaled 60)" || true
+    wait_token "UBTAIL" 60 || true
     fail "the utils build failed; its last lines are in the kept log"
 fi
-if ! wait_token "IBUILDRC=" "$(scaled 600)"; then
+if ! wait_token "IBUILDRC=" 600; then
     fail "the ish build never finished"
 fi
 if ! grep -q "IBUILDRC=0" "$LOG"; then
-    wait_token "IBTAIL" "$(scaled 60)" || true
+    wait_token "IBTAIL" 60 || true
     fail "the ish build failed; its last lines are in the kept log"
 fi
 for smoke in SMOKECAT SMOKEECHO SMOKETF SMOKEPWD SMOKELS SMOKETM SMOKEMCR \
              SMOKEYES SMOKEPING SMOKEWEB SMOKEBUILT SMOKELOGIN SMOKESU \
              SMOKESUDO SMOKEPASSWD SMOKEADD SMOKEINSTK SMOKEISH; do
-    if ! wait_token "$smoke" "$(scaled 240)"; then
+    if ! wait_token "$smoke" 240; then
         fail "the userland smoke check $smoke did not pass"
     fi
 done
-if ! wait_token "SYNCDONE" "$(scaled 240)"; then
+fi
+if ! wait_token "SYNCDONE" 240; then
     fail "the disk was never synced after the builds"
 fi
 GUEST_SHA="$(grep -a -o 'HASHONE=[0-9a-f]*' "$LOG" | grep -a -oE '[0-9a-f]{64}' | tail -1)"
@@ -360,11 +358,7 @@ bounded() {
     shift
     "$@" &
     bpid=$!
-    bwaited=0
-    while [ "$bwaited" -lt "$limit" ] && kill -0 "$bpid" 2>/dev/null; do
-        sleep 1
-        bwaited=$((bwaited + 1))
-    done
+    "$RUNUTIL" gone "$bpid" "$limit" || true
     if kill -0 "$bpid" 2>/dev/null; then
         kill -9 "$bpid" 2>/dev/null || true
         wait "$bpid" 2>/dev/null || true
@@ -380,7 +374,7 @@ GRUB_DISK="$DISK.grub"
 # The root the disk boots. It was a KRFFS partition built from the default
 # manifest until 2026-09-14; every disk carries an ext2 root now, and what this
 # proves is the guest-built kernel booting through GRUB, not what it mounts.
-if ! bounded "$(scaled 900)" env \
+if ! bounded 900 env \
         RACH2_DISK_RECOVERY_MB=8 \
         RACH2_DISK_EXT2_MB=16 \
         RACH2_DISK_EXT2_IMAGE="$REPO/build/images/os-simple.ext2" \
@@ -395,15 +389,9 @@ qemu-system-i386 -cpu max -display none -rtc base=utc \
     -serial stdio < /dev/null > "$GLOG" 2>&1 &
 QPID=$!
 grub_ok=1
-waited=0
-while [ "$waited" -lt "$(scaled 120)" ]; do
-    if grep -aq "login:" "$GLOG" 2>/dev/null; then
-        grub_ok=0
-        break
-    fi
-    sleep 1
-    waited=$((waited + 1))
-done
+if "$RUNUTIL" until "$GLOG" "login:" 120; then
+    grub_ok=0
+fi
 cleanup_boot
 if [ "$grub_ok" -ne 0 ]; then
     cp "$GLOG" "$DISK.fail.log" 2>/dev/null || true
@@ -423,11 +411,11 @@ step "INPLACERC" "cd /src/ish && make -f guest.mk > /tmp/ip.out 2>&1; echo INPLA
 step "IPTAIL" "busybox tail -3 /tmp/ip.out; echo IP\"\"TAIL"
 rm -f "$LOG"
 boot_steps root "$ROOTPASSWORD"
-if ! wait_token "INPLACERC=" "$(scaled 600)"; then
+if ! wait_token "INPLACERC=" 600; then
     fail "the in-place root build never reported"
 fi
 if ! grep -q "INPLACERC=0" "$LOG"; then
-    wait_token "IPTAIL" "$(scaled 60)" || true
+    wait_token "IPTAIL" 60 || true
     fail "make -f guest.mk in the staged /src/ish failed; its last lines are in the kept log"
 fi
 cleanup_boot

@@ -523,9 +523,42 @@ static void edge_row(void)
    request 500 ticks late as well, so it too is given up on; what tells a
    slot taken from a slot refused is the time: a request refused for want
    of a slot answers at once, and one taken waits its four periods. */
+/* A counter of /proc/disk by its label, or -1 when the file cannot be read. */
+static int disk_counter(const char *label)
+{
+    static char text[2048];
+    int fd = sys3(SYS_OPEN, (int)(size_t)"/proc/disk", O_RDONLY, 0);
+    int n, i, j;
+
+    if (fd < 0) {
+        return -1;
+    }
+    n = sys3(SYS_READ, fd, (int)(size_t)text, sizeof(text) - 1);
+    sys1(SYS_CLOSE, fd);
+    if (n <= 0) {
+        return -1;
+    }
+    text[n] = 0;
+    for (i = 0; text[i]; i++) {
+        for (j = 0; label[j] && text[i + j] == label[j]; j++) {
+        }
+        if (!label[j]) {
+            int v = 0;
+
+            i += j;
+            while (text[i] >= '0' && text[i] <= '9') {
+                v = v * 10 + (text[i] - '0');
+                i++;
+            }
+            return v;
+        }
+    }
+    return -1;
+}
+
 static void quarantine_row(void)
 {
-    int ms, n;
+    int ms, n, quarantined;
 
     n = read_once("/dev/disk0p1", 4 * 1024, &ms);
     if (ms < 0) {
@@ -537,11 +570,17 @@ static void quarantine_row(void)
     puts("AHCIPROBE GAVEUP ms:");
     putnum(ms);
     sleep_ms(6000); /* the late completion lands in the meantime */
+    /* The request after the late completion is taken, which is what shows
+       the slot was freed: with one slot in the pool a slot not freed leaves
+       nothing to take and the request is refused at once. Taken, it waits
+       its periods under the same lag and is quarantined in its turn, which
+       the kernel counts; a refusal counts nothing. */
+    quarantined = disk_counter("disk-quarantines ");
     n = read_once("/dev/disk0p1", 4 * 1024, &ms);
     if (ms < 0) {
         fail("the partition did not open again");
     }
-    if (n != 4 * 1024 && ms < 3000) {
+    if (n != 4 * 1024 && disk_counter("disk-quarantines ") <= quarantined) {
         fail("the request after the late completion was refused at once: the slot was not freed");
     }
     puts("AHCIPROBE AFTER ms:");

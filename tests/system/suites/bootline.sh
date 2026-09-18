@@ -17,6 +17,8 @@
 #
 
 # shellcheck source=tests/system/deadline.sh
+# The runner helper, whose `until` and `gone` are the suite's waits.
+RUNUTIL="$(cd "$(dirname "$0")/../../.." && pwd)/build/tests/system/runutil"
 . "$(cd "$(dirname "$0")/../../.." && pwd)/tests/system/deadline.sh"
 set -e
 
@@ -42,12 +44,7 @@ stop_boot() {
     QPID=""
     if [ -n "$qpid" ]; then
         kill "$qpid" 2>/dev/null || true
-        held=0
-        while [ "$held" -lt 5 ] && kill -0 "$qpid" 2>/dev/null; do
-            sleep 1
-            held=$((held + 1))
-        done
-        kill -9 "$qpid" 2>/dev/null || true
+        "$RUNUTIL" gone "$qpid" 5 || kill -9 "$qpid" 2>/dev/null || true
         wait "$qpid" 2>/dev/null || true
     fi
 }
@@ -79,19 +76,9 @@ boot() {
         -drive "file=$WORK,format=raw,if=ide,index=0,media=disk" \
         -serial stdio < /dev/null > "$LOG" 2>&1 &
     QPID=$!
-    held=0
-    while [ "$held" -lt "$(scaled 25)" ]; do
-        if grep -q "$2" "$LOG" 2>/dev/null; then
-            break
-        fi
-        sleep 1
-        held=$((held + 1))
-    done
-    held=0
-    while [ "$held" -lt "$3" ]; do
-        sleep 1
-        held=$((held + 1))
-    done
+    "$RUNUTIL" until "$LOG" "$2" 25 || true
+    # interval: the machine runs on after the line to show it stopped there
+    sleep "$3"
     stop_boot
 }
 
@@ -123,19 +110,9 @@ boot_blank() {
         -drive "file=$WORK.blank,format=raw,if=ide,index=0,media=disk" \
         -serial stdio < /dev/null > "$LOG" 2>&1 &
     QPID=$!
-    held=0
-    while [ "$held" -lt "$(scaled 30)" ]; do
-        if grep -q "boot: refused: no file system mounted" "$LOG" 2>/dev/null; then
-            break
-        fi
-        sleep 1
-        held=$((held + 1))
-    done
-    held=0
-    while [ "$held" -lt 10 ]; do
-        sleep 1
-        held=$((held + 1))
-    done
+    "$RUNUTIL" until "$LOG" "boot: refused: no file system mounted" 30 || true
+    # interval: the machine runs on after the line to show it stopped there
+    sleep 10
     stop_boot
 }
 boot_blank "rach2.fsdisk"
