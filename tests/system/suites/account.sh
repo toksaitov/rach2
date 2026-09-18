@@ -57,21 +57,26 @@ if [ -z "$KERNEL" ] || [ -z "$DISK" ] || [ -z "$PASSWORD" ]; then
     exit 2
 fi
 
+# What this suite writes is named after the suite, under the images
+# directory: the os-simple image is shared, and a copy or a log named after
+# it would be a file no suite declares.
+OUT="$(dirname "$DISK")/account-$FLAVOR"
+WORK="$OUT.work"
+LOG="$OUT.work.log"
+
 # How the image is attached, which is the one thing the two arcs boot
 # differently: os-real is a disk the kernel mounts and writes back, os-simple is
 # a module in RAM. Deliberately unquoted where it is used, since it is several
 # arguments and QEMU refuses an empty one.
 case "$FLAVOR" in
-    real)   HARNESS_MEDIA="--append rach2.fsdisk --drive file=$DISK.work,format=raw,if=ide,index=0,media=disk" ;;
-    simple) HARNESS_MEDIA="--initrd $DISK.work" ;;
+    real)   HARNESS_MEDIA="--append rach2.fsdisk --drive file=$WORK,format=raw,if=ide,index=0,media=disk" ;;
+    simple) HARNESS_MEDIA="--initrd $WORK" ;;
     *)
         echo "account_test.sh: $FLAVOR: the flavor is real or simple" >&2
         exit 2
         ;;
 esac
 
-WORK="$DISK.work"
-LOG="$DISK.work.log"
 rm -f "$WORK" "$LOG"
 
 QPID=""
@@ -126,7 +131,7 @@ PASSED=""
 cleanup() {
     cleanup_boot
     if [ -z "$PASSED" ] && [ -f "$LOG" ]; then
-        cp "$LOG" "$DISK.fail.log" 2>/dev/null || true
+        cp "$LOG" "$OUT.fail.log" 2>/dev/null || true
     fi
     rm -f "$WORK" "$LOG"
 }
@@ -138,11 +143,11 @@ trap 'cleanup; exit 129' HUP
 
 fail() {
     if [ -f "$LOG" ]; then
-        cp "$LOG" "$DISK.fail.log" 2>/dev/null || true
+        cp "$LOG" "$OUT.fail.log" 2>/dev/null || true
     fi
     cleanup_boot
     echo "account-test: FAIL: $1" >&2
-    echo "account-test: the failing boot's console log: $DISK.fail.log" >&2
+    echo "account-test: the failing boot's console log: $OUT.fail.log" >&2
     exit 1
 }
 
