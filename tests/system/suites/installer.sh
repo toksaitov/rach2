@@ -852,7 +852,7 @@ mark "row 14"
 #          the stopped update left: the image's accounts, homes and keys.
 REC_START=$(od -An -tu4 -j $((446 + 1 * 16 + 8)) -N 4 "$DIR/one.img" | tr -d ' ')
 [ -n "$REC_START" ] && [ "$REC_START" -gt 0 ] || bad "the recovery partition's start could not be read"
-mcopy -i "$DIR/one.img@@$((REC_START * 512))" ::rach2-config/etc/passwd "$DIR/archived-passwd" ||
+mcopy -n -i "$DIR/one.img@@$((REC_START * 512))" ::rach2-config/etc/passwd "$DIR/archived-passwd" ||
     bad "the archived passwd could not be read off the recovery partition"
 echo "extra:x:1001:1001::/home/extra:/bin/sh" >> "$DIR/archived-passwd"
 echo "$(basename "$INSTALLER_EXT2") stopped" > "$DIR/update-in-progress"

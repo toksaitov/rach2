@@ -167,7 +167,7 @@ grep -aq "loop: loop0: the device under its file has gone" "$DISK.pull.log" \
 
 # The KRFFS image the machine wrote, judged by the host's own checker: what a
 # volume that was mounted, written and unmounted owes is a clean image.
-mcopy -i "$DISK"@@$((PART * 512)) ::/krffs.img "$DISK.krffs.after" || fail "mcopy krffs back"
+mcopy -n -i "$DISK"@@$((PART * 512)) ::/krffs.img "$DISK.krffs.after" || fail "mcopy krffs back"
 "$REPO/build/krffs/fsck.krffs" "$DISK.krffs.after" --strict > "$DISK.fsck" 2>&1 \
     || { cat "$DISK.fsck" >&2; fail "the checker finds the image faulty after the boots"; }
 # And the file the machine wrote inside it, read out of the image by the host's
@@ -180,7 +180,7 @@ echo "loopdev-test: the host's checker finds the KRFFS image clean, with the fil
 
 # What the machine wrote inside the image is in the image file the host reads,
 # which is what says the writes went through the file and not past it.
-mcopy -i "$DISK"@@$((PART * 512)) ::/fat.img "$DISK.fat.after" || fail "mcopy back"
+mcopy -n -i "$DISK"@@$((PART * 512)) ::/fat.img "$DISK.fat.after" || fail "mcopy back"
 mtype -i "$DISK.fat.after" ::/made.txt > "$DISK.made" 2>/dev/null || fail "mtype made.txt"
 grep -q "written through a loop device" "$DISK.made" \
     || fail "the host does not find what the machine wrote inside the image"

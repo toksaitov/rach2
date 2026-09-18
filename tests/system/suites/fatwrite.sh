@@ -58,7 +58,7 @@ walk_clean "the volume is not consistent after the write boot"
 echo "fatwrite-test: the host's walk finds the written volume consistent: OK"
 
 # ---- 2: the host reads what was written, with mtools ----
-mcopy -i "$VOL" ::/pattern.bin "$DISK.pattern" >/dev/null 2>&1 || fail "mcopy of the pattern file"
+mcopy -n -i "$VOL" ::/pattern.bin "$DISK.pattern" >/dev/null 2>&1 || fail "mcopy of the pattern file"
 python3 - "$DISK.pattern" <<'PY' || fail "the pattern file's bytes through mtools"
 import sys
 b = open(sys.argv[1], 'rb').read()
@@ -135,7 +135,7 @@ else
     fail "a 4 MiB write cost the disk ${WROTE:-?} commands and its removal ${FREED:-?}; the FAT is written an entry at a time"
 fi
 walk_clean "the volume is not consistent after BusyBox"
-mcopy -i "$VOL" "::/d/Busy Box" "$DISK.bb" >/dev/null 2>&1 || fail "mcopy of the copied program"
+mcopy -n -i "$VOL" "::/d/Busy Box" "$DISK.bb" >/dev/null 2>&1 || fail "mcopy of the copied program"
 "$REPO/build/krffs/readfile.krffs" "$OSREAL" /bin/busybox "$DISK.bb.want" >/dev/null 2>&1 || fail "readfile of busybox"
 cmp -s "$DISK.bb" "$DISK.bb.want" || fail "the program BusyBox copied differs through mtools"
 echo "fatwrite-test: the program BusyBox copied reads identically through mtools: OK"
