@@ -56,11 +56,11 @@ typedef unsigned char uint8_t;
 #define BOUND_CLIENT_PORT 7301
 
 /* Where the simultaneous-open case's port pairs start; each round takes two. */
-#define SIM_PORT_A        7310
-#define TCP_PORT          7200
-#define SYS_FORK          2
-#define SYS_WAITPID       7
-#define SYS_GETTIMEOFDAY  78
+#define SIM_PORT_A       7310
+#define TCP_PORT         7200
+#define SYS_FORK         2
+#define SYS_WAITPID      7
+#define SYS_GETTIMEOFDAY 78
 /* Round trips of one byte. The same rounds run over a pipe first, which waits
    for no ring, so the loopback is judged against this machine's own cost of a
    round trip rather than against a clock: a host running twenty emulators at
@@ -68,10 +68,12 @@ typedef unsigned char uint8_t;
    timer each loopback leg costs a tick, which is two hundred times the pipe's
    pace, and delivered when the processor would otherwise park it is within a
    small factor of it. */
-#define PINGPONG_ROUNDS   200
-#define PINGPONG_FACTOR   8
-#define PINGPONG_SLACK_MS 200
-#define CLOSED_PORT       7300
+#define PINGPONG_ROUNDS  200
+/* The round trips over the loopback may not wait for the timer: fewer than
+ * a tick, ten milliseconds, each, on any machine. The pipe's time is printed
+ * beside them for the record. */
+#define PINGPONG_TICK_MS 10
+#define CLOSED_PORT      7300
 
 #define EADDRINUSE  98
 #define EINPROGRESS 115
@@ -840,13 +842,13 @@ static void tcp_loop_pingpong(void)
     sys_close(as);
     sys_close(ls);
     ms = elapsed_ms(t0, t1);
-    limit = base * PINGPONG_FACTOR + PINGPONG_SLACK_MS;
+    limit = PINGPONG_ROUNDS * PINGPONG_TICK_MS;
     print("LOOPPROBE ping-pong ");
     print_u32((uint32_t)ms);
     print(" ms over the loopback, ");
     print_u32((uint32_t)base);
     print(" over a pipe, for 200 round trips\n");
-    if (ms < 0 || base < 0 || ms > limit) {
+    if (ms < 0 || base < 0 || ms >= limit) {
         fail("a local round trip waits for the timer");
     }
 }

@@ -6,9 +6,9 @@
 # their writes go through the request layer, whose delays are the ones
 # recorded, the harness's own card for the pinger, and the harness typing a
 # line at the console every two seconds for the reader; `loadprobe` runs the
-# load for twenty seconds and prints the four
-# delays `/proc/stat` keeps as its longest, which this suite requires within
-# their bounds and prints, since the numbers are the record.
+# load for twenty seconds and prints the four delays `/proc/stat` keeps as
+# its longest, the record of the machine, and requires what it counts: three
+# lines read and no request quarantined by its deadline under the load.
 #
 # Usage: load.sh KERNEL IMAGE HARNESS DISK
 set -u
