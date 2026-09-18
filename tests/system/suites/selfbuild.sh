@@ -105,8 +105,15 @@ cleanup_boot() {
     rm -f "$FEED"
 }
 
+# The console log is kept as the failing boot's when the run did not pass,
+# which a stop by the runner is: it is the only account of what the machine
+# did.
+PASSED=""
 cleanup() {
     cleanup_boot
+    if [ -z "$PASSED" ] && [ -f "$LOG" ]; then
+        cp "$LOG" "$DISK.fail.log" 2>/dev/null || true
+    fi
     rm -f "$WORK" "$WORK.p1" "$LOG" "$FEED" "$STEPS" "$KEXTRACT"
 }
 
@@ -366,8 +373,7 @@ bounded() {
     shift
     "$@" &
     bpid=$!
-    "$RUNUTIL" gone "$bpid" "$limit" || true
-    if kill -0 "$bpid" 2>/dev/null; then
+    if ! "$RUNUTIL" gone "$bpid" "$limit"; then
         kill -9 "$bpid" 2>/dev/null || true
         wait "$bpid" 2>/dev/null || true
         return 124
@@ -429,4 +435,5 @@ fi
 cleanup_boot
 
 echo "selfbuild-test: the machine built its kernel twice from clean trees (hash $GUEST_SHA, $SIZEONE bytes), its utilities and its shell, and root rebuilt the staged /src/ish in place; the exact kernel bytes passed the checker and the probe suite $GRUB_NOTE: OK"
+PASSED=1
 echo "selfbuild-test: PASS"

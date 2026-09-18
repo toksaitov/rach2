@@ -140,18 +140,44 @@ static int until_token(const char *path, const char *pattern, double seconds, in
     }
 }
 
+/* Whether `pid` is a process that has ended and waits to be reaped: a
+ * child of the caller's stays so until the caller waits for it, and can
+ * still be signalled, so `kill` alone would call it alive. POSIX ps says. */
+static int is_zombie(pid_t pid)
+{
+    char cmd[64], state[16];
+    FILE *fp;
+    int zombie = 0;
+
+    snprintf(cmd, sizeof(cmd), "ps -o stat= -p %ld", (long)pid);
+    fp = popen(cmd, "r");
+    if (!fp)
+        return 0;
+    if (fgets(state, sizeof(state), fp)) {
+        const char *s = state;
+        while (*s == ' ')
+            s++;
+        zombie = *s == 'Z';
+    }
+    pclose(fp);
+    return zombie;
+}
+
 /**
  * `runutil gone PID SECS`: the suites' wait for a process to end. Return 0
- * as soon as no process `PID` can be signalled, 1 when `SECS` seconds, a
- * completion bound under the set's factor, pass first. A child of the
- * caller's is gone once the caller has waited for it, so the caller reaps
- * what it started before asking.
+ * as soon as no process `PID` can be signalled, or the one that can is
+ * ended and waiting to be reaped, 1 when `SECS` seconds, a completion
+ * bound under the set's factor, pass first. A child of the caller's is
+ * reported gone before the caller has waited for it, so the caller waits
+ * afterwards for the status.
  */
 static int until_gone(pid_t pid, double seconds)
 {
     double end = now() + bound(seconds);
 
     while (kill(pid, 0) == 0 || errno == EPERM) {
+        if (is_zombie(pid))
+            return 0;
         if (now() >= end || interrupted)
             return 1;
         pause_for(0.2);
