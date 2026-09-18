@@ -16,6 +16,14 @@
 #include <string.h>
 #include <glob.h>
 #include <regex.h>
+
+/* A basic regular expression's alternation, `\|`, is an extension: GNU
+   takes it as written, and macOS only with REG_ENHANCED. */
+#ifdef REG_ENHANCED
+#define RUNUTIL_REG_EXTRA REG_ENHANCED
+#else
+#define RUNUTIL_REG_EXTRA 0
+#endif
 #ifdef __APPLE__
 #include <libproc.h>
 #include <sys/proc.h>
@@ -52,7 +60,7 @@ static void pause_for(double seconds)
         ;
 }
 
-/* A completion bound multiplied by the set's deadline factor,
+/** A completion bound multiplied by the set's deadline factor,
  * `RACH2_DEADLINE_FACTOR` under `RACH2_DEADLINES=scaled`, as the harness
  * multiplies its own; a process told nothing keeps the number as written. */
 static double bound(double seconds)
@@ -69,7 +77,7 @@ static double bound(double seconds)
     return seconds;
 }
 
-/* The lines of the file at `path` that match `re`, or 0 for a file not
+/** The lines of the file at `path` that match `re`, or 0 for a file not
  * there yet, which is one with nothing in it. The file is read whole at
  * each look, since a serial log grows at its end and a token may straddle
  * two reads. */
@@ -122,7 +130,7 @@ static int until_token(const char *path, const char *pattern, double seconds, in
     regex_t re;
     double end;
 
-    if (regcomp(&re, pattern, REG_NOSUB | REG_NEWLINE) != 0) {
+    if (regcomp(&re, pattern, REG_NOSUB | REG_NEWLINE | RUNUTIL_REG_EXTRA) != 0) {
         fprintf(stderr, "runutil: until: bad pattern: %s\n", pattern);
         return 2;
     }
@@ -140,7 +148,7 @@ static int until_token(const char *path, const char *pattern, double seconds, in
     }
 }
 
-/* Whether `pid` is a process that has ended and waits to be reaped: a
+/** Whether `pid` is a process that has ended and waits to be reaped: a
  * child of the caller's stays so until the caller waits for it, and can
  * still be signalled, so `kill` alone would call it alive. POSIX ps says. */
 static int is_zombie(pid_t pid)
@@ -252,7 +260,7 @@ static double cpu_seconds(const char *text)
     return ((days * 24.0 + hours) * 60 + mins) * 60 + secs;
 }
 
-/* The processor time the children a process has already waited for used,
+/** The processor time the children a process has already waited for used,
  * from Linux's /proc, in seconds; 0 where there is no such file. A shell
  * that runs one short command after another keeps no time of its own, so
  * the time its children took is what says it is working. */
@@ -261,7 +269,7 @@ static double reaped_cpu(long pid)
     char path[64], text[1024];
     FILE *fp;
     const char *after;
-    long utime, stime, cutime, cstime;
+    long cutime, cstime;
     size_t got;
     int field;
 
@@ -277,9 +285,12 @@ static double reaped_cpu(long pid)
     after = strrchr(text, ')');
     if (!after)
         return 0;
-    for (field = 3; field < 14 && after; field++)
+    /* Fields 16 and 17 of /proc/PID/stat are cutime and cstime, the
+       reaped children's user and system time; the separator found on the
+       loop's last pass is the one before field 16. */
+    for (field = 3; field < 17 && after; field++)
         after = strchr(after + 1, ' ');
-    if (!after || sscanf(after, "%ld %ld %ld %ld", &utime, &stime, &cutime, &cstime) != 4)
+    if (!after || sscanf(after, "%ld %ld", &cutime, &cstime) != 2)
         return 0;
     return (cutime + cstime) / (double)sysconf(_SC_CLK_TCK);
 }
@@ -874,7 +885,11 @@ static void last_output(const char *path)
  * active guest keeps a silent suite alive, and so does a group that still
  * burns processor time: a suite is stopped as hung only when it has been
  * silent and idle for the whole limit, since a slow machine writes for
- * minutes without a word and an idle one burns nothing.
+ * minutes without a word and an idle one burns nothing. Working is more
+ * than a tenth of a processor over the span since the group was last seen
+ * working, or a process come or gone, sampled every ten seconds or twice
+ * within a shorter limit: a halted machine still takes a few percent for
+ * its timer, under either accelerator, and is not working.
  * The suite's clock is never scaled. Its child group is stopped on a signal
  * too, and output from another suite cannot reset its clock.
  * The parent tries to establish the group before cleanup can need it. The
@@ -891,7 +906,8 @@ static int supervise(char **cmd, const char *name, double idle, const char *ledg
     char *console, buf[8192], recent[4096];
     size_t recent_len = 0;
     double started = now(), active = started, report = started;
-    double busy = started, sampled = started, cpu_at_busy = -1;
+    double period = idle < 20 ? (idle < 2 ? 1 : idle / 2) : 10;
+    double busy = started, sampled = started - period, cpu_at_busy = -1;
     int count_last = -1;
     off_t previous = 0;
     struct sigaction sa;
@@ -991,13 +1007,10 @@ static int supervise(char **cmd, const char *name, double idle, const char *ledg
             active = now();
         }
         t = now();
-        if (!done && t - sampled >= 10) {
+        if (!done && t - sampled >= period) {
             int count;
             double cpu = group_cpu(child, &count);
-            /* Working is more than a tenth of a processor over the span
-               since the group was last seen working, or a process come or
-               gone: a halted machine still takes a few percent for its
-               timer, under either accelerator, and is not working. */
+
             if (cpu < 0 || cpu_at_busy < 0 || count != count_last ||
                 cpu - cpu_at_busy > 0.1 * (t - busy)) {
                 busy = t;
