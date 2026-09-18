@@ -462,10 +462,17 @@ static int32_t sys_exit(isr_params_t *params)
         panic_init_died(exiting_pid); /* never returns */
     }
 
-    schedule();
+    /* A process that is not init leaves here: it is a zombie now, is never
+     * scheduled again, and its parent reaps it. The init that exited under
+     * the debug shell (a real init would have panicked above) does not
+     * schedule before its return: a child it left runnable would take the
+     * processor, and this zombie would never be picked again to make the
+     * return. The shell's resume disables the scheduler, so what init left
+     * behind runs no further, as after a signal death. */
+    if (!is_init) {
+        schedule();
+    }
 
-    /* No other process is READY. The init that exited ran under the debug shell
-     * (a real init would have panicked above), so return to it. */
     if (is_init) {
         klog(KLOG_INFO, "sys_exit",
              "init process %d exited with status %d, returning to kernel shell", exiting_pid,
