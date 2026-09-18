@@ -1095,8 +1095,8 @@ static int kfs_sync(struct vfs_mount *mnt)
     return pc_sync() == 0 ? 0 : -EIO;
 }
 
-static int32_t kfs_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count,
-                        uint64_t offset)
+static int32_t kfs_read_locked(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count,
+                               uint64_t offset)
 {
     int n;
 
@@ -1110,8 +1110,8 @@ static int32_t kfs_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t
 
 /* A grow can relocate the node; every holder, this writer's description
  * included, is repointed before the byte count returns. */
-static int32_t kfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,
-                         uint64_t offset)
+static int32_t kfs_write_locked(struct vfs_mount *mnt, void *handle, const void *buf,
+                                uint32_t count, uint64_t offset)
 {
     krffs_node_t *n = handle;
     int written;
@@ -1134,7 +1134,7 @@ static int32_t kfs_write(struct vfs_mount *mnt, void *handle, const void *buf, u
 
 /* A grow can relocate the node, as in `kfs_write`; the path call reports
  * only status, so the node is looked up again and every holder repointed. */
-static int kfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
+static int kfs_truncate_locked(struct vfs_mount *mnt, void *handle, uint64_t size)
 {
     char path[256];
     krffs_node_t *n;
@@ -1155,7 +1155,7 @@ static int kfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
     return 0;
 }
 
-static int kfs_fsync(struct vfs_mount *mnt, void *handle)
+static int kfs_fsync_locked(struct vfs_mount *mnt, void *handle)
 {
     (void)mnt;
     (void)handle;
@@ -1166,8 +1166,8 @@ static int kfs_fsync(struct vfs_mount *mnt, void *handle)
  * deletion between calls never renumbers the survivors; the traversal
  * visits nodes in ascending offsets, so the first match at or past the
  * cursor is the next entry. */
-static int kfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
-                       struct vfs_dirent *ent)
+static int kfs_readdir_locked(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
+                              struct vfs_dirent *ent)
 {
     krffs_node_t *dirn = handle;
     uint64_t dir_id = (dirn == krffs_fs->node) ? (uint64_t)KRFFS_ROOT_ID : dirn->id;
@@ -1304,6 +1304,70 @@ static int kfs_create(struct vfs_mount *mnt, void *dir, const char *name, uint32
     }
     *node = n;
     return 0;
+}
+
+/*
+ * The data operations under the mount's lock. The namespace operations
+ * arrive locked from the common layer; these did not, and did not need to
+ * while the disk driver polled, since a process in a system call was not
+ * switched away from. The driver sleeps for its commands now, inside a
+ * write's sync points, and a second process entering the ring then, to
+ * grow a file of its own, moves nodes under the first one's feet: a file
+ * whose node had moved went on being written at the old place, over the
+ * header of the node after it. The lock is the same one the namespace
+ * operations hold, so a create and a write cannot interleave either.
+ */
+static int32_t kfs_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count,
+                        uint64_t offset)
+{
+    int32_t rc;
+
+    vfs_ns_lock(mnt);
+    rc = kfs_read_locked(mnt, handle, buf, count, offset);
+    vfs_ns_unlock(mnt);
+    return rc;
+}
+
+static int32_t kfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,
+                         uint64_t offset)
+{
+    int32_t rc;
+
+    vfs_ns_lock(mnt);
+    rc = kfs_write_locked(mnt, handle, buf, count, offset);
+    vfs_ns_unlock(mnt);
+    return rc;
+}
+
+static int kfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
+{
+    int rc;
+
+    vfs_ns_lock(mnt);
+    rc = kfs_truncate_locked(mnt, handle, size);
+    vfs_ns_unlock(mnt);
+    return rc;
+}
+
+static int kfs_fsync(struct vfs_mount *mnt, void *handle)
+{
+    int rc;
+
+    vfs_ns_lock(mnt);
+    rc = kfs_fsync_locked(mnt, handle);
+    vfs_ns_unlock(mnt);
+    return rc;
+}
+
+static int kfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
+                       struct vfs_dirent *ent)
+{
+    int rc;
+
+    vfs_ns_lock(mnt);
+    rc = kfs_readdir_locked(mnt, handle, cursor, ent);
+    vfs_ns_unlock(mnt);
+    return rc;
 }
 
 static const struct vfs_ops krffs_ops = {
