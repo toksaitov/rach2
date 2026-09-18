@@ -879,6 +879,12 @@ static int procfs_gen_statsys(struct procfs_text *t)
     ap_u32(t, ip_loop_dropped());
     ap_str(t, "\nloopback_peak ");
     ap_u32(t, ip_loop_peak());
+    ap_str(t, "\nloopback_delivered_tick ");
+    ap_u32(t, ip_loop_delivered(IP_LOOP_FROM_TICK));
+    ap_str(t, "\nloopback_delivered_idle ");
+    ap_u32(t, ip_loop_delivered(IP_LOOP_FROM_IDLE));
+    ap_str(t, "\nloopback_delivered_call ");
+    ap_u32(t, ip_loop_delivered(IP_LOOP_FROM_CALL));
     ap_ch(t, '\n');
     for (p = proc_list; p; p = p->next) {
         if (p->state == PROC_RUNNING || p->state == PROC_READY) {
@@ -1089,6 +1095,7 @@ static int procfs_gen_console(struct procfs_text *t)
     ap_counter(t, "uart-bytes", c.uart_bytes);
     ap_counter(t, "uart-overruns", c.uart_overruns);
     ap_counter(t, "irq-drains", c.irq_drains);
+    ap_counter(t, "irq-bytes", c.irq_bytes);
     ap_counter(t, "tick-drains", c.tick_drains);
     ap_counter(t, "reader-drains", c.reader_drains);
     ap_counter(t, "ring-full", c.ring_full);

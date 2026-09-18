@@ -662,6 +662,11 @@ void usb_stamp_read(void)
          by_msi, by_msi ? (int)(entry - event) : 0, (int)(wake - event), (int)(read_us - event));
 }
 
+int usb_stamp_recording(void)
+{
+    return stamp_record;
+}
+
 void usb_stop(void)
 {
     int n;

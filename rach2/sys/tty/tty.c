@@ -193,6 +193,13 @@ int tty_read(struct tty *t, unsigned char *kbuf, int count, int nonblock)
         return -EAGAIN;
     }
     for (;;) {
+        /* The record's other end: a suite that measures a key's path to a
+           parked reader types on this line, which says the reader is about
+           to park, and not on the program's own word, which it prints
+           before it calls. Only with the record on. */
+        if (usb_stamp_recording() && !tty_ready_cond(t)) {
+            klog(KLOG_INFO, "usb", "latency: reader waiting");
+        }
         rc = wq_wait_event(&t->input_wq, tty_ready_cond, t);
         if (rc != 0) {
             return rc; /* -EINTR: a signal cut the wait short */
@@ -510,6 +517,7 @@ void tty_console_counters(struct console_counters *out)
     out->uart_bytes = rx.bytes;
     out->uart_overruns = rx.overruns;
     out->irq_drains = rx.irq_services;
+    out->irq_bytes = rx.irq_bytes;
     out->tick_drains = tick_drains;
     out->reader_drains = reader_drains;
     out->ring_full = rx.ring_full;

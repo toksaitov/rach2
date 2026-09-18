@@ -342,6 +342,10 @@ void block_request_tick(void);
 
 /** Quarantines made, callers released with EIO, and the tick of the last
  * release, cumulative since boot, for /proc/disk. */
+/** Completions that found another request in flight, see `disk-overlaps`. */
+uint32_t block_overlaps(void);
+/** Requests in flight now, see `disk-in-flight`. */
+uint32_t block_in_flight(void);
 uint32_t block_quarantines(void);
 uint32_t block_releases(void);
 uint32_t block_release_tick(void);

@@ -12089,7 +12089,7 @@ static void _syscall_handler(isr_params_t *params)
      * takes at most 192 datagrams; what is left is taken by the next call's
      * exit or by the timer. */
     if (ip_loop_crowded()) {
-        ip_loop_drain();
+        ip_loop_drain_from(IP_LOOP_FROM_CALL);
     }
     sched_take_preempt();
 

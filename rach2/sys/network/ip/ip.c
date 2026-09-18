@@ -371,7 +371,14 @@ int ip_loop_crowded(void)
  * overwrite the datagram being read, and the budget bounds one tick's work
  * so a reply chain cannot starve the timer.
  */
-void ip_loop_drain(void)
+static uint32_t loop_delivered[3];
+
+uint32_t ip_loop_delivered(int from)
+{
+    return from >= 0 && from < 3 ? loop_delivered[from] : 0;
+}
+
+void ip_loop_drain_from(int from)
 {
     unsigned budget = LOOP_RING_SLOTS * 4;
 
@@ -384,6 +391,14 @@ void ip_loop_drain(void)
 
         ip_rx(loop_ring[slot], loop_ring_len[slot], 1);
         loop_tail++;
+        if (from >= 0 && from < 3) {
+            loop_delivered[from]++;
+        }
     }
     loop_draining = 0;
+}
+
+void ip_loop_drain(void)
+{
+    ip_loop_drain_from(IP_LOOP_FROM_TICK);
 }

@@ -68,6 +68,9 @@ void usb_stamp_wake(void);
  */
 void usb_stamp_read(void);
 
+/** Whether `rach2.usblatency` is on, which is when the record is printed. */
+int usb_stamp_recording(void);
+
 /**
  * The name of a USB controller's register interface, from its PCI interface
  * byte: `uhci`, `ohci`, `ehci`, `xhci`, or `other` for a byte this kernel does

@@ -70,6 +70,7 @@ static uint32_t next_generation;   /* no two live requests share one */
 static wait_queue_t pool_wq; /* woken on any completion, freed request or quarantine */
 static volatile uint32_t req_ticks;
 static uint32_t quarantined_count;
+static uint32_t overlap_count; /* completions with another request in flight */
 /* Cumulative, for /proc/disk: quarantines made, callers released with EIO
  * by a deadline or a stalled device, and the tick of the last release, so a
  * test can require two callers to have been released on one tick. */
@@ -676,6 +677,20 @@ void block_request_complete(struct block_request *request, uint32_t generation, 
     request->status = status;
     request->state = BLOCK_REQ_DONE;
     latency_span(LAT_DISK, request->taken_us, pit_now_us());
+    {
+        /* A completion with another request in flight is a request the
+           layer did not serialize behind it, which `disk-overlaps` counts
+           for a row that proves one device's queue did not wait on
+           another's. */
+        const struct block_request *r;
+
+        for (r = reqs; r; r = r->next) {
+            if (r != request && r->state == BLOCK_REQ_IN_FLIGHT) {
+                overlap_count++;
+                break;
+            }
+        }
+    }
     req_let_go(request, 0);
     irq_restore(flags);
     if (request->overdue) {
@@ -723,6 +738,26 @@ static int mark_stalled(void)
         }
     }
     return marked;
+}
+
+uint32_t block_overlaps(void)
+{
+    return overlap_count;
+}
+
+uint32_t block_in_flight(void)
+{
+    uint32_t flags = irq_save();
+    const struct block_request *r;
+    uint32_t n = 0;
+
+    for (r = reqs; r; r = r->next) {
+        if (r->state == BLOCK_REQ_IN_FLIGHT) {
+            n++;
+        }
+    }
+    irq_restore(flags);
+    return n;
 }
 
 uint32_t block_quarantines(void)

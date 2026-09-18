@@ -245,7 +245,7 @@ void sched_account_tick(void)
 void idle_wait_irq_off(void)
 {
     if (ip_loop_pending()) {
-        ip_loop_drain();
+        ip_loop_drain_from(IP_LOOP_FROM_IDLE);
         return;
     }
     _in_idle_wait = 1;

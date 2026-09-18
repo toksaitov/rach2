@@ -201,7 +201,7 @@ static void _serial_rx_handler(isr_params_t *params)
 {
     (void)params;
     _rx.irq_services++;
-    serial_rx_service(64);
+    _rx.irq_bytes += (uint32_t)serial_rx_service(64);
     if (_rx_notify && _rx_count() > 0) {
         _rx_notify();
     }

@@ -2374,6 +2374,13 @@ static int init_root_by_identity(const char *spec, int *krffs_mounted)
  * exercised by the first program that starts, and are covered by the host
  * tests and the probe suites in a way these never were: the memory check read
  * 256 bytes and the page-cache one ran against a RAM disk.
+ *
+ * The record's level is the clock's verdict alone: the two readings of the
+ * 8254 agree or the clock is wrong on this machine. The delay and the tick
+ * are measured against time the host owns: a hypervisor that stops the
+ * machine and then delivers the ticks it missed reads a 200 ms delay as
+ * twice that, and a suite that judged it would be judging the host's load.
+ * Those two are printed, and a person reads them.
  */
 static void check_timing(void)
 {
@@ -2387,12 +2394,6 @@ static void check_timing(void)
     delay_ok = test_udelay(&measured_ms);
     clock_ok = test_clock(&measured_us, &why, &walk_clock, &walk_tick);
 
-    /* The record's level is the clock's verdict alone: the two readings of
-     * the 8254 agree or the clock is wrong on this machine. The delay and
-     * the tick are measured against time the host owns: a hypervisor that
-     * stops the machine and then delivers the ticks it missed reads a 200 ms
-     * delay as twice that, and a suite that judged it would be judging the
-     * host's load. Those two are printed, and a person reads them. */
     klog(clock_ok ? KLOG_INFO : KLOG_ERR, "timing",
          "tick %d Hz, 200 ms delay measured %d ms, 2000 us wait measured %d us",
          (int)(1193182u / pit_reload), (int)measured_ms, (int)measured_us);

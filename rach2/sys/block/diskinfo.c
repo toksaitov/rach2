@@ -157,6 +157,10 @@ int diskinfo_format(const struct diskinfo *d, char *buf, int cap)
     put_dec(buf, &n, cap, block_polls());
     put(buf, &n, cap, "\ndisk-wait-ticks ");
     put_dec(buf, &n, cap, block_wait_ticks());
+    put(buf, &n, cap, "\ndisk-in-flight ");
+    put_dec(buf, &n, cap, block_in_flight());
+    put(buf, &n, cap, "\ndisk-overlaps ");
+    put_dec(buf, &n, cap, block_overlaps());
     put(buf, &n, cap, "\ndisk-quarantines ");
     put_dec(buf, &n, cap, block_quarantines());
     put(buf, &n, cap, "\ndisk-releases ");

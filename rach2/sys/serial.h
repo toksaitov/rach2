@@ -14,6 +14,7 @@ struct serial_rx_counters {
     uint32_t bytes;        /* bytes taken from the UART */
     uint32_t overruns;     /* times the line status reported an overrun */
     uint32_t irq_services; /* services run from the port's interrupt */
+    uint32_t irq_bytes;    /* bytes those services took */
     uint32_t ring_full;    /* services that stopped at a full ring */
     uint32_t ring_max;     /* the most the ring held */
     uint32_t polled_bytes; /* bytes taken by the kernel's own polls */

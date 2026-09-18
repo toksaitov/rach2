@@ -519,6 +519,7 @@ static int is_machine(const struct netdev *nd)
 static void addr_publish(struct netdev *nd, uint32_t ip, uint32_t mask)
 {
     uint32_t old = nd->ip;
+    uint32_t old_mask = nd->mask;
 
     nd->ip = ip;
     nd->mask = mask;
@@ -527,7 +528,10 @@ static void addr_publish(struct netdev *nd, uint32_t ip, uint32_t mask)
         net_ip_mask = mask;
     }
 
-    if (ip != old) {
+    /* A mask set after its address is a change of the record too: an
+       address set alone is published with the classful mask, and the mask
+       that follows it corrects the prefix. */
+    if (ip != old || (ip != 0 && mask != old_mask)) {
         char addr[16];
 
         if (ip != 0) {

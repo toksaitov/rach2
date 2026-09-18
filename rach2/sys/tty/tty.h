@@ -44,6 +44,7 @@ struct console_counters {
     uint32_t uart_bytes;    /* taken from the UART */
     uint32_t uart_overruns; /* overruns the line status reported */
     uint32_t irq_drains;    /* services run from the port's interrupt */
+    uint32_t irq_bytes;     /* bytes those services took */
     uint32_t tick_drains;   /* drains into the discipline from the tick or the interrupt */
     uint32_t reader_drains; /* drains by a reader, with echo */
     uint32_t ring_full;     /* services stopped at a full ring, the sender held */

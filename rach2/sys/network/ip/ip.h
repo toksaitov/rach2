@@ -45,6 +45,14 @@ int ip_tx(uint32_t dst_ip, uint8_t proto,
 /** Deliver queued loopback datagrams; called from the timer IRQ each tick. */
 void ip_loop_drain(void);
 
+/* Who drains the loopback: the tick, the idle wait, or a system call's
+   exit; `ip_loop_delivered` counts the datagrams each delivered. */
+#define IP_LOOP_FROM_TICK 0
+#define IP_LOOP_FROM_IDLE 1
+#define IP_LOOP_FROM_CALL 2
+void ip_loop_drain_from(int from);
+uint32_t ip_loop_delivered(int from);
+
 /** Datagrams the loopback ring had no room for since boot. */
 /** Nonzero while the loopback ring holds anything at all. */
 int ip_loop_pending(void);
