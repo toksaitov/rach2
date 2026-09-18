@@ -119,11 +119,27 @@ bad() {
     echo "  FAIL: $1"
 }
 
+# A connection the machine reset or refused before its session began is
+# tried again, a few times: a machine slow to answer, under a loaded
+# emulator in the rehearsal, says nothing about what the command would have
+# printed. A session that ran is never repeated, since the command may have
+# written something.
 account() {
-    ssh -i "$KEY" -p "$PORT" \
-        -o StrictHostKeyChecking=no -o UserKnownHostsFile="$KNOWN" \
-        -o ConnectTimeout=10 -o BatchMode=yes \
-        "$USER_NAME@$HOST" "$1" 2>/dev/null
+    tries=0
+    while :; do
+        ssh -i "$KEY" -p "$PORT" \
+            -o StrictHostKeyChecking=no -o UserKnownHostsFile="$KNOWN" \
+            -o ConnectTimeout=10 -o BatchMode=yes \
+            "$USER_NAME@$HOST" "$1" 2>"$LOCAL_TMP/ssh.err"
+        status=$?
+        if [ "$status" -ne 255 ] || [ "$tries" -ge 5 ] ||
+            ! grep -q 'kex_exchange_identification\|Connection reset by\|Connection refused\|Connection timed out' "$LOCAL_TMP/ssh.err"; then
+            return "$status"
+        fi
+        tries=$((tries + 1))
+        # interval: a reset before the session is tried again after a second
+        sleep 1
+    done
 }
 
 try_run() {

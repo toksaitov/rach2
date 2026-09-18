@@ -23,3 +23,5 @@ tests/system/suites/drill.sh: a holder keeps the console's feed open while the m
 tests/system/suites/grub.sh: a holder keeps the console's feed open while the machine runs
 tests/system/suites/install.sh: a holder keeps the console's feed open while the machine runs
 tests/system/suites/menu.sh: a holder keeps the console's feed open while the machine runs
+tests/system/suites/metal.sh: a reset before the session is tried again after a second
+tests/system/accept/metal_accept.sh: a reset before the session is tried again after a second

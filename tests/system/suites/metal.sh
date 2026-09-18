@@ -188,11 +188,28 @@ fi
 
 # Nothing has been typed and nothing will be. The SSH server is up because init
 # started it, or it is not up at all.
+# A connection the machine reset or refused before its session began is
+# tried again, a few times: a machine slow to answer under a loaded
+# emulator says nothing about what the command would have printed, and the
+# harness tries a port again the same way. A session that ran is never
+# repeated, since the command may have written something.
 ssh_run() {
-    ssh -i "$KEY" -p "$PORT" \
-        -o StrictHostKeyChecking=no -o UserKnownHostsFile="$KNOWN" \
-        -o "ConnectTimeout=$(scaled 10)" -o BatchMode=yes \
-        root@127.0.0.1 "$1" 2>>"$LOG"
+    tries=0
+    while :; do
+        ssh -i "$KEY" -p "$PORT" \
+            -o StrictHostKeyChecking=no -o UserKnownHostsFile="$KNOWN" \
+            -o "ConnectTimeout=$(scaled 10)" -o BatchMode=yes \
+            root@127.0.0.1 "$1" 2>"$LOG.ssh"
+        status=$?
+        cat "$LOG.ssh" >> "$LOG"
+        if [ "$status" -ne 255 ] || [ "$tries" -ge "$(scaled 5)" ] ||
+            ! grep -q 'kex_exchange_identification\|Connection reset by\|Connection refused\|Connection timed out' "$LOG.ssh"; then
+            return "$status"
+        fi
+        tries=$((tries + 1))
+        # interval: a reset before the session is tried again after a second
+        sleep 1
+    done
 }
 
 i=0
