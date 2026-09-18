@@ -167,13 +167,23 @@ wait_count() {
 # harness: each line is typed once the output it answers has arrived, a
 # login prompt, a password prompt or a marker the line before printed, so
 # no line is eaten by a program that flushes its input before asking. The
-# machine ends with the last step; the log stays for the checks.
+# arc's last step is the token it waits for, and the harness ends the
+# machine once that token has been printed; the log stays for the checks.
 HARNESS="$(cd "$(dirname "$0")/../../.." && pwd)/build/tests/system/harness"
 boot_steps() {
+    last=""
+    for step; do
+        last="$step"
+    done
+    case "$last" in
+        expect=*) ;;
+        *) fail "an arc must end with the token it waits for, not '$last'" ;;
+    esac
     rm -f "$LOG"
     # shellcheck disable=SC2086
     "$HARNESS" --kernel "$KERNEL" $HARNESS_MEDIA --qemu-arg=-cpu --qemu-arg=max \
-        --timeout 300 --steptmo 60 --log "$LOG" "$@" > /dev/null 2>&1 \
+        --timeout 300 --steptmo 60 --log "$LOG" --ok "${last#expect=}" "$@" \
+        > /dev/null 2>&1 \
         || fail "the machine did not answer every line of the arc; the log says which"
 }
 
