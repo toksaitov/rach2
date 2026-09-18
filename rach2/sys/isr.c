@@ -299,6 +299,14 @@ void _irq_router(isr_params_t *params)
     reset_master_pic();
 
     irq_dispatch(params);
+    /* A process a device woke runs now, or at its call's exit, as on the
+     * APIC path above: a disk's caller that slept for its command and was
+     * woken only at the next tick got one command a scheduler round, and
+     * under five spinners wrote nothing in a stage of the console-load
+     * probe. The timer's own handler takes its switch itself. */
+    if (params->vector != 32) {
+        sched_preempt();
+    }
 }
 
 /**
