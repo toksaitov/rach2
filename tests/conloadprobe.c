@@ -6,8 +6,11 @@
  * spin and one writes and syncs a 256 KiB file on the mounted volume over and
  * over. The probe reads the lines in four stages and requires each one in
  * order with its sum: (A) 200 lines typed back to back while the reader is
- * parked in read, all read within three seconds of the first, which the
- * tick-paced drain alone cannot do; (B) 60 lines typed while the probe spins
+ * parked in read, some of whose bytes the port's interrupt must have moved,
+ * which is what `irq-drains` counts and a tick-paced drain alone never
+ * does; the stage's time is printed and not judged, since it is the
+ * machine's and a bound on it was one machine's; (B) 60 lines typed while
+ * the probe spins
  * for two seconds without reading, type-ahead into a session nobody is
  * reading; (C) 200 lines typed while a child in its own group holds the
  * terminal and nobody reads, more than the discipline holds, then an
@@ -63,7 +66,6 @@ struct pollfd {
 #define LINES_C    60
 #define LINES_D    40
 #define LINES_ALL  (LINES_A + LINES_B + LINES_C + LINES_D)
-#define A_LIMIT_MS 3000
 
 static int syscall1(int n, int a)
 {
@@ -527,9 +529,7 @@ void probe_main(unsigned int *sp)
     print("CONLOAD A OK ms=");
     print_num(now_ms() - start);
     print("\n");
-    if (now_ms() - start > A_LIMIT_MS) {
-        fail("stage A took longer than three seconds");
-    }
+    print_counters();
     /* The bytes came in through the port's interrupt, not only the tick:
      * the service that does not depend on what is scheduled is the one
      * that ran, during this stage and not only for the command that

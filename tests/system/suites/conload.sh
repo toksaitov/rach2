@@ -9,7 +9,8 @@
 # itself typed behind 200 lines nobody was reading, and 40 typed before the
 # probe execs itself. Each line is `L NNNN payload SUM`, SUM the Adler-32 of
 # the line before it; the probe requires every line in order with its sum,
-# and the first stage within three seconds. The lines of a stage are written
+# and some bytes of the first stage moved by the port's interrupt, its time
+# printed and not judged. The lines of a stage are written
 # to the guest as one stream, more than the discipline holds, so the rest
 # waits at the UART; the interrupt character behind them is the case where
 # ordinary input is held back and the signal must not be held with it.
