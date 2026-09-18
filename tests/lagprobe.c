@@ -150,6 +150,7 @@ static void putnum(unsigned n)
 }
 
 static int disk_counter(const char *label);
+static void say_numbers(unsigned a, unsigned b, unsigned c, unsigned d);
 
 struct timeval {
     int sec;
@@ -257,6 +258,9 @@ static void run_deadline(void)
     }
     if (disk_counter("disk-quarantines ") - quarantines != 1 ||
         disk_counter("disk-releases ") - releases != 1) {
+        puts("LAGPROBE first read: quarantined, released:");
+        say_numbers((unsigned)(disk_counter("disk-quarantines ") - quarantines),
+                    (unsigned)(disk_counter("disk-releases ") - releases), 0, 0);
         fail("the first read was not the one request quarantined and released");
     }
     /* Let the late completion land and free the quarantined slot: the lag
@@ -1046,15 +1050,10 @@ static void run_dirty(void)
     }
     /* The row's cost, for the record: the commands, the flushes, the ticks
        requests spent in flight and the lag's answers. */
-    puts("LAGPROBE dirty: commands ");
-    putnum(disk_counter("disk-commands "));
-    puts(" flushes ");
-    putnum(disk_counter("disk-flushes "));
-    puts(" wait-ticks ");
-    putnum(disk_counter("disk-wait-ticks "));
-    puts(" lag-completions ");
-    putnum(disk_counter("lag-completions "));
-    puts("\n");
+    puts("LAGPROBE dirty: commands, flushes, wait ticks, lag completions:");
+    say_numbers((unsigned)disk_counter("disk-commands "), (unsigned)disk_counter("disk-flushes "),
+                (unsigned)disk_counter("disk-wait-ticks "),
+                (unsigned)disk_counter("lag-completions "));
     puts("LAGPROBE OK");
 }
 
