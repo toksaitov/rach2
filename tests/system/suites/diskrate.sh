@@ -83,11 +83,15 @@ set -- \
     "send=c exwrite0" "expect=C_exwrite0" \
     "send=t exwrite 'moved 67108864 dd if=/dev/zero of=/e/big bs=1M count=64 && sync'" "expect=T_exwrite" \
     "send=c exwrite1" "expect=C_exwrite1" \
+    "send=c exread0" "expect=C_exread0" \
     "send=t exread 'moved 67108864 dd if=/e/big of=/dev/null bs=1M && moved 67108864 dd if=/e/big of=/dev/null bs=1M'" "expect=T_exread" \
+    "send=c exread1" "expect=C_exread1" \
     "send=c fatwrite0" "expect=C_fatwrite0" \
     "send=t fatwrite 'moved 67108864 dd if=/dev/zero of=/f/big bs=1M count=64 && sync'" "expect=T_fatwrite" \
     "send=c fatwrite1" "expect=C_fatwrite1" \
+    "send=c fatread0" "expect=C_fatread0" \
     "send=t fatread 'moved 67108864 dd if=/f/big of=/dev/null bs=1M && moved 67108864 dd if=/f/big of=/dev/null bs=1M'" "expect=T_fatread" \
+    "send=c fatread1" "expect=C_fatread1" \
     "send=c exsmall0" "expect=C_exsmall0" \
     "send=t exsmall 'moved 16777216 dd if=/dev/zero of=/e/small bs=4k count=4096 && sync'" "expect=T_exsmall" \
     "send=c exsmall1" "expect=C_exsmall1" \
@@ -204,6 +208,8 @@ sleeps boot0 exfiles1 "the boot's driver waits"
 # (4618, 7388, 40970, 49764 and 17727) and under the counts with exFAT's
 # run entries written through one at a time.
 counts exwrite 9300 400000 "the exFAT write's counts"
+counts exread 9300 400000 "the exFAT reads' counts"
+counts fatread 14800 1300000 "the FAT32 reads' counts"
 counts fatwrite 14800 1300000 "the FAT32 write's counts"
 counts exsmall 82000 120000 "the exFAT small writes' counts"
 counts fatsmall 99600 350000 "the FAT32 small writes' counts"
@@ -272,7 +278,8 @@ dd if=/dev/zero of="$AHCI" bs=1048576 count=64 2>/dev/null || fail "the AHCI ima
     --timeout 900 --steptmo 300 --ok "AHCIDONE" --never "PATFAIL" --log "$ALOG" \
     "expect=recovery image" "expect=~ #" \
     "send=$SDEFS" "expect=DEFSDONE" \
-    "send=yes RATE-AHCI-PATTERN-LINE | head -c 32768 > /tmp/b32; i=0; while [ \$i -lt 32 ]; do dd if=/tmp/b32 of=/dev/disk0 bs=32k seek=\$((128 + i)) count=1 2>/dev/null || break; i=\$((i + 1)); done; sync; if [ \$i = 32 ]; then echo PAT\"\"DONE; else echo PAT\"\"FAIL; fi" "expect=PATDONE" \
+    "send=yes RATE-AHCI-PATTERN-LINE | head -c 32768 > /tmp/b32; echo B32\"\"DONE" "expect=B32DONE" \
+    "send=i=0; while [ \$i -lt 32 ]; do dd if=/tmp/b32 of=/dev/disk0 bs=32k seek=\$((128 + i)) count=1 2>/dev/null || break; i=\$((i + 1)); done; sync; if [ \$i = 32 ]; then echo PAT\"\"DONE; else echo PAT\"\"FAIL; fi" "expect=PATDONE" \
     "send=c ahciwrite0" "expect=C_ahciwrite0" \
     "send=t ahciwrite 'i=0; while [ \$i -lt 32 ]; do moved 1048576 dd if=/dev/disk0 of=/dev/disk0 bs=1M skip=4 seek=\$((8 + i)) count=1 || break; i=\$((i + 1)); done; sync; [ \$i = 32 ]'" "expect=T_ahciwrite" \
     "send=c ahciwrite1" "expect=C_ahciwrite1" \

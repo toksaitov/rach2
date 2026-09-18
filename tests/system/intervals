@@ -16,3 +16,10 @@ tests/system/suites/procfiles.sh: the guest's table is read every second for the
 tests/system/suites/sealed.sh: a try of SSH every two seconds until the server answers
 tests/system/suites/selfbuild.sh: the self-built server is asked every second until it answers
 tests/system/suites/ssh.sh: a holder keeps a flood writer open until the flood is killed
+tests/system/suites/ssh.sh: the forty connections are counted once the guest has taken them
+tests/system/suites/ssh.sh: the next reading of a count that only the guest advances
+tests/system/suites/ssh.sh: the next reading, while the released connections close
+tests/system/suites/drill.sh: a holder keeps the console's feed open while the machine runs
+tests/system/suites/grub.sh: a holder keeps the console's feed open while the machine runs
+tests/system/suites/install.sh: a holder keeps the console's feed open while the machine runs
+tests/system/suites/menu.sh: a holder keeps the console's feed open while the machine runs

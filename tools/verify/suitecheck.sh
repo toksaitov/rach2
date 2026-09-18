@@ -71,10 +71,10 @@ scan() {
             if ($0 ~ /wait=[0-9]/) {
                 print file ":" NR ": a wait= step; wait for a token"
             }
-            if (match($0, /"send=[^"]*"/) && RLENGTH - 7 > 240) {
+            if (match($0, /"send=([^"\\]|\\.)*"/) && RLENGTH - 7 > 240) {
                 print file ":" NR ": a typed line of " RLENGTH - 7 " characters; the console keeps 255"
             }
-            if ($0 ~ /(^|[^A-Za-z_.\/-])sleep[ \t]+[0-9]/) {
+            if ($0 ~ /(^|[^A-Za-z0-9_.\/-])sleep[ \t]+("?\$|[0-9])/) {
                 refuse("a sleep for a number of seconds")
             }
         } else {
@@ -174,6 +174,13 @@ sleep 2' 'int x;' 'tests/system/suites/a.sh: the load runs for two seconds'
     case_ 1 waitmarked
     tree usleep 'usleep 200' 'int x;' ''
     case_ 0 usleep
+    tree sleepscaled 'sleep "$(scaled 5)"' 'int x;' ''
+    case_ 1 sleepscaled
+    tree sleepword '# a fixed sleep keeps the host waiting
+fail "the lag sleep boot"' 'int x;' ''
+    case_ 0 sleepword
+    tree longescaped '"send=echo \"'"$(printf 'x%.0s' $(seq 1 236))"'\"; echo DONE"' 'int x;' ''
+    case_ 1 longescaped
     tree longline "\"send=$(printf 'x%.0s' $(seq 1 250))\"" 'int x;' ''
     case_ 1 longline
     tree shortline "\"send=$(printf 'x%.0s' $(seq 1 200))\"" 'int x;' ''

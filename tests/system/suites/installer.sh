@@ -478,8 +478,9 @@ LOG6="$DIR/ssh.log"
     > "$LOG6.harness" 2>&1 &
 QPID=$!
 
-# The three attempts, while that machine is up. Each says what it proves.
-sleep "$(scaled 60)"
+# The three attempts, once the machine has said it is up. Each says what
+# it proves.
+"$RUNUTIL" until "$LOG6" "SSHREADY" 120 || fail "the machine never said it was up for the SSH attempts"
 OUT=$(RACH2_PASSWORD="$NEWPASS" "$PTYDRIVE" --rows 40 --cols 100 --timeout 60 -- \
     ssh -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
     -o "ConnectTimeout=$(scaled 20)" -o PubkeyAuthentication=no \

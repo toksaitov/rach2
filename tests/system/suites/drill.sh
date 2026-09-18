@@ -107,7 +107,15 @@ fail() {
 
 # Wait up to $3 seconds until the log has at least $2 occurrences of $1.
 wait_count() {
-    "$RUNUTIL" until "$LOG" "$1" "$3" "$2" && return 0
+    # The wait's bound is its own or what is left of the run's budget,
+    # whichever is less, so a run cannot pass its deadline inside a wait.
+    remaining=$((START + DEADLINE - $(date +%s)))
+    if [ "$remaining" -le 0 ]; then
+        fail "the run passed its ${DEADLINE}s deadline waiting for $1"
+    fi
+    bound=$3
+    [ "$bound" -le "$remaining" ] || bound=$remaining
+    "$RUNUTIL" until "$LOG" "$1" "$bound" "$2" && return 0
     if [ "$(($(date +%s) - START))" -gt "$DEADLINE" ]; then
         fail "the run passed its ${DEADLINE}s deadline waiting for $1"
     fi
@@ -158,7 +166,7 @@ boot_watch() {
         -drive "file=$WORK,format=raw,if=ide,index=0,media=disk" \
         -serial stdio < "$FEED" > "$LOG" 2>&1 &
     QPID=$!
-    (sleep "$(scaled 120)") > "$FEED" &
+    (sleep "$(scaled 120)") > "$FEED" & # interval: a holder keeps the console's feed open while the machine runs
     FPID=$!
     wait_count "$1" 1 100 || fail "the boot never reached $1"
     cleanup_boot

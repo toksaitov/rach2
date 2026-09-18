@@ -82,9 +82,9 @@ cleanup_boot() {
 
 # Each connection has two direct children, with a FIFO between them. Killing
 # a pipeline's shell would leave its sleep running for the full five minutes.
+# The directory is made afresh: a run killed mid-flood leaves its fifos,
+# and the next run's mkfifo would fail on them.
 flood_start() {
-    # A run killed mid-flood leaves its fifos; the next run's mkfifo would
-    # fail on them, so the directory is made afresh, not reused.
     rm -rf "$FLOOD_DIR"
     mkdir -p "$FLOOD_DIR"
     flood_i=0
@@ -343,21 +343,25 @@ flood_start
 # and are counted only once they have been accepted or refused there. The
 # interval is scaled, since a guest sharing its host with a pool of machines
 # gets through less of the flood in the same wall clock.
-sleep "$(scaled 5)"
+sleep "$(scaled 5)" # interval: the forty connections are counted once the guest has taken them
 # The flood is real before it is relied on: the guest's own count of
 # established connections, typed at the console session about to end, must
 # be more than none while the forty are held, and none once they are
 # released below. How many the guest holds is the machine's, its backlog
-# against the emulator's forwarding, and is printed and not judged: a
-# number written for one machine, five, failed a set on 2026-09-13 at four
-# and again on 2026-09-18 under KVM.
+# against the emulator's forwarding, and is printed and not judged. The
+# reading is taken only from a table the guest could list: a `netstat`
+# that failed answers no number, and no number is not zero.
 flood_count() {
-    type_line 'netstat -tn 2>/dev/null | grep -c ESTABLISHED; echo FLOOD""COUNT'
+    # shellcheck disable=SC2016 # The guest's shell expands the count.
+    type_line 'if netstat -tn > /tmp/ns 2>&1; then echo FLOOD""N=$(grep -c ESTABLISHED /tmp/ns); else echo FLOOD""N=none; fi; echo FLOOD""COUNT'
     if ! wait_token "FLOODCOUNT" 30; then
         fail "the console did not answer while the flood was on"
     fi
-    seen=$(tr -d '\r' < "$LOG" | grep -B1 'FLOODCOUNT' | tail -2 | head -1 | tr -dc '0-9')
-    established=${seen:-0}
+    seen=$(tr -d '\r' < "$LOG" | grep -a '^FLOODN=' | tail -1 | sed 's/^FLOODN=//')
+    case "$seen" in
+        ''|*[!0-9]*) fail "the guest could not list its connections: '$seen'" ;;
+    esac
+    established=$seen
 }
 attempt=0
 established=0

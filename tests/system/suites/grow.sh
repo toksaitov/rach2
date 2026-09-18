@@ -150,7 +150,8 @@ echo "grow-test: a file written in the grown volume's last group reads back and 
 overlay "$DIR/two.qcow2" "$BASE"
 # interval: the resizer is killed after its period; the row proves the repair
 boot "$DIR/two.qcow2" $MEM "$DIR/two.log" \
-    "send=growroot MBRID=$ID,1 > /tmp/g.log 2>&1 & sleep $KILL_AFTER; pidof resize2fs > /tmp/r.pid; kill \$!; killall resize2fs; sleep 2; cat /tmp/g.log; test -s /tmp/r.pid && echo WAS\"\"RESIZING; pidof resize2fs || echo NO\"\"RESIZER; echo KILL\"\"DONE" \
+    "send=growroot MBRID=$ID,1 > /tmp/g.log 2>&1 & sleep $KILL_AFTER; pidof resize2fs > /tmp/r.pid; kill \$!; killall resize2fs; sleep 2; echo KILL\"\"ED" "expect=KILLED" \
+    "send=cat /tmp/g.log; test -s /tmp/r.pid && echo WAS\"\"RESIZING; pidof resize2fs || echo NO\"\"RESIZER; echo KILL\"\"DONE" \
     "expect=WASRESIZING" "expect=NORESIZER" "expect=KILLDONE" \
     "send=growroot MBRID=$ID,1" "expect=$GROWN" \
     "$FSCK" "expect=FSCK0" "send=echo ROW\"\"DONE" "expect=ROWDONE" || fail "the grow killed and run again"
