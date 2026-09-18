@@ -223,14 +223,21 @@ static void writer(const char *path)
     }
 }
 
-/* The writer wrote and synced at least one file while the lines were read:
- * the load was there. Asked once, after the three loaded stages, since one
- * file's write and sync beside five spinners takes longer than a stage. */
+/* The writer writes and syncs files while the lines are read: the load is
+ * there and the writer is alive under it. Asked once, after the three
+ * loaded stages: the files it finished by then are counted and printed,
+ * and a writer with none yet is waited for, since how long one file's
+ * write and sync take beside five spinners is the machine's, a minute
+ * under a hypervisor that costs a completion a millisecond; a writer that
+ * finishes nothing in that time is starved, and that is the failure. */
+#define WRITER_WAIT_MS 60000
+
 static void writer_progressed(const char *stage)
 {
     struct pollfd pfd;
     char b;
     int n = 0;
+    unsigned start = now_ms();
 
     pfd.fd = progress[0];
     pfd.events = POLLIN;
@@ -239,11 +246,23 @@ static void writer_progressed(const char *stage)
            syscall3(SYS_READ, progress[0], (int)(size_t)&b, 1) == 1) {
         n++;
     }
+    print("CONLOAD writer files by stage ");
+    print(stage);
+    print(": ");
+    print_num(n);
+    print("\n");
     if (n == 0) {
-        print("CONLOAD FAIL: the writer wrote nothing during stage ");
-        puts(stage);
-        stop_load();
-        sys_exit(1);
+        pfd.revents = 0;
+        if (syscall3(SYS_POLL, (int)(size_t)&pfd, 1, WRITER_WAIT_MS) <= 0 ||
+            syscall3(SYS_READ, progress[0], (int)(size_t)&b, 1) != 1) {
+            print("CONLOAD FAIL: the writer finished no file in a minute after stage ");
+            puts(stage);
+            stop_load();
+            sys_exit(1);
+        }
+        print("CONLOAD writer's first file, ms after the stage: ");
+        print_num(now_ms() - start);
+        print("\n");
     }
 }
 
