@@ -106,7 +106,7 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
     --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0 \
     --timeout 90 --ok "MOUSEPROBE OK" \
-    "expect=class 3 protocol 2" "expect=Type 'help'" "send=exec /mouseprobe" \
+    "seen=class 3 protocol 2" "seen=Type 'help'" "send=exec /mouseprobe" \
     "expect=MOUSEPROBE: move the mouse" \
     mouse=20,-8,0 > /dev/null 2>&1; then
     note "a mouse moved over USB arrives at /dev/mouse: OK"
@@ -294,7 +294,7 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci,msi=on \
     --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0 \
     --timeout 120 --steptmo 45 --ok "INTRPROBE OK" --never "INTRPROBE FAIL" \
-    "expect=class 3 protocol 2" "expect=Type 'help'" \
+    "seen=class 3 protocol 2" "seen=Type 'help'" \
     mouse=20,-8,0 mouse=-12,6,0 mouse=8,8,1 \
     "send=exec /intrprobe" "expect=INTRPROBE OK" > /dev/null 2>&1; then
     note "a mouse moved over messages has its reports counted on the vector: OK"
@@ -601,7 +601,7 @@ if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0,port=1.8.7 \
     --qemu-arg=-device --qemu-arg=usb-kbd,bus=xhci.0,port=1.8.8 \
     --timeout 120 --steptmo 60 --ok "the device table is full" --log "$OUT.hubfull.log" \
-    "expect=the device table is full" "expect=Type 'help'" "send=help" "expect=Available commands" \
+    "seen=the device table is full" "seen=Type 'help'" "send=help" "expect=Available commands" \
     > /dev/null 2>&1; then
     note "sixteen devices fill the table and the seventeenth is refused by name: OK"
 else
