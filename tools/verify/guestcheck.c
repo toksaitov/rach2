@@ -280,10 +280,9 @@ static int read_macro(const char *text, const char *name, struct list *out)
     while (*p != '\0') {
         const char *end = strchr(p, '\n');
         size_t len = end != NULL ? (size_t) (end - p) : strlen(p);
-        const char *q = p;
 
         if (strncmp(p, name, nlen) == 0) {
-            q = p + nlen;
+            const char *q = p + nlen;
             while (*q == ' ' || *q == '\t')
                 q++;
             if (*q == '=') {
