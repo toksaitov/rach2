@@ -23,7 +23,8 @@ void k_strreverse(char *str)
     if (len == 0) {
         return;
     }
-    for (i = 0, j = len - 1; i < j; ++i, --j) {
+    j = len - 1;
+    for (i = 0; i < j; ++i, --j) {
         c = str[i];
         str[i] = str[j];
         str[j] = c;

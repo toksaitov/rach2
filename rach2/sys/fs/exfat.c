@@ -883,7 +883,7 @@ static int units_match(struct ex_mount *em, const uint16_t *a, const uint16_t *b
     uint32_t i;
 
     for (i = 0; i < n; i++) {
-        uint16_t ua, ub;
+        uint16_t ua = 0, ub = 0;
         int rc = ex_upcase(em, a[i], &ua);
 
         if (rc == 0) {
@@ -1350,7 +1350,7 @@ static int ex_mount_on(struct ex_mount *em, struct vfs_mount *mnt, block_device_
                        uint32_t flags, const char *options)
 {
     uint8_t b[512], b2[512];
-    uint32_t main_sum, backup_sum, stored_main, stored_backup;
+    uint32_t main_sum = 0, backup_sum = 0, stored_main = 0, stored_backup = 0;
     uint32_t rev;
     uint32_t i, per;
     uint64_t heap_end;
@@ -2544,7 +2544,7 @@ static int ex_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t
     struct ex_mount *em = em_of(mnt);
     struct ex_node *d = dir ? dir : mnt->root;
     struct ex_set set;
-    uint32_t count, index, c, unused;
+    uint32_t count, index = 0, c, unused;
     int rc = writable_dir(mnt, em, d);
 
     (void)mode;

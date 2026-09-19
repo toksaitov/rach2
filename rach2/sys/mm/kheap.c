@@ -88,7 +88,8 @@ static uint32_t find_run(uint32_t count)
 {
     uint32_t run = 0, i, n;
 
-    for (n = 0, i = next_page; n < 2 * KHEAP_PAGES; n++, i++) {
+    i = next_page;
+    for (n = 0; n < 2 * KHEAP_PAGES; n++, i++) {
         if (i >= KHEAP_PAGES) {
             i = 0;
             run = 0;

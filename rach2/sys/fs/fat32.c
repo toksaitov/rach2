@@ -1948,7 +1948,7 @@ static int fat_create(struct vfs_mount *mnt, void *dir, const char *name, uint32
     struct fat_node *n;
     static struct new_name nn; /* one create at a time, under the lock */
     uint8_t raw[32];
-    uint32_t index;
+    uint32_t index = 0;
     int rc;
 
     (void)mode;
@@ -2088,7 +2088,7 @@ static int fat_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_
     uint32_t parent_cluster = d->first == fm->root_cluster ? 0 : d->first;
     struct fat_node n;
     static struct new_name nn;
-    uint32_t c, unused, index;
+    uint32_t c, unused, index = 0;
     uint8_t raw[64];
     int rc;
 
@@ -2956,7 +2956,7 @@ static int fat_mount_on(struct fat_mount *fm, struct vfs_mount *mnt, block_devic
     fm->mnt = mnt;
     {
         uint8_t raw[4];
-        uint8_t byte;
+        uint8_t byte = 0;
         int dirty;
 
         rc = fat_read_bytes(fm, fat_offset(fm, fm->active_fat, 1), raw, 4);

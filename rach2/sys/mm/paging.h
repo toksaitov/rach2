@@ -97,7 +97,7 @@ typedef struct page_table page_table_t;
 struct page_dir {
     page_table_t *logical_page_tables[1024];
     uint32_t phys_page_tables[1024];
-} __attribute__((packed));
+};
 
 typedef struct page_dir page_dir_t;
 
