@@ -140,7 +140,7 @@ directory, the root included, is EISDIR.
 
 unlink(2): EBX = path. Returns 0 or -errno.
 Every refusal is decided here, not below, because `krffs_unlink`
-answers all of them with a bare -1 that userspace decodes as `EPERM`
+answers all of them with a bare -1, which the wrapper reports as `EIO`
 whatever went wrong. A missing component gives `-ENOENT` and a plain file
 in the middle of the path `-ENOTDIR`, both from the reporting resolver;
 the root and any directory give `-EISDIR`, which is what tells a caller

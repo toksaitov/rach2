@@ -26,4 +26,4 @@ console and a pty slave share one implementation. Sets *handled = 1 and
 returns the result for a recognized terminal request; sets *handled = 0
 (return value unused) otherwise, so the caller falls through to its own
 handling. TCGETS/TCSETS exchange the 36-byte kernel termios (n_tty.h);
-TCSETSF and TCFLSH flush the unread input.
+TCSETSF flushes the unread input; TCFLSH does for selectors 0 and 2, and selector 1 does nothing since there is no output queue.
