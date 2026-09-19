@@ -16,9 +16,10 @@ Sources: the handler comments below, extracted from rach2/sys/syscall.c (read th
 
 ## openat: number 295, handler sys_openat
 
-openat (syscall 295): EBX=dirfd, ECX=path, EDX=flags, ESI=mode. musl
-issues openat (not the legacy open) for every <stdio.h> file open. An
-absolute path is taken as-is, a relative path resolves against the cwd
+openat (syscall 295): EBX=dirfd, ECX=path, EDX=flags, ESI=mode. musl's
+openat() issues it; its open() and <stdio.h> use the legacy open on i386,
+which has the number. An absolute path is taken as-is, a relative path
+resolves against the cwd
 (AT_FDCWD) or against the directory the dirfd refers to (see
 copy_path_at).
 
