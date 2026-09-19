@@ -303,6 +303,14 @@ cp "$REPO/build/rach2/kernel" "$MARKED"
 phase "first cold boot"
 cold_boot fault
 
+# The periodic sync init keeps running: the sealed root went without it until
+# the manual's proofreading found the manifest short of `update` (entry 109 of
+# the shortcomings), with init forking a failing exec every second instead.
+case "$(machine 'ps' || true)" in
+    *update*) ;;
+    *) fail "the installed root runs no update process" ;;
+esac
+
 OUT="$(machine 'bootctl status' || true)"
 case "$OUT" in
     *"booted: candidate"*) ;;
