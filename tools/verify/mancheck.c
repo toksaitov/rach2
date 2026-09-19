@@ -20,7 +20,8 @@
  * recovery manifest. The programs the test images alone stage are not in the
  * inventory: only the manifests named on the command line are read.
  *
- *   mancheck MANDIR SYSCALL_H SYSCALL_C APPLETS PROGRAMS_MK RECOVERY_MANIFEST MANIFEST...
+ *   mancheck MANDIR SYSCALL_H SYSCALL_C APPLETS PROGRAMS_MK RECOVERY_MANIFEST
+ *            MANIFEST...
  *
  * Exit status: 0 when every name has a page, 1 otherwise, 2 for a file that
  * cannot be read.
