@@ -176,21 +176,21 @@ static double scaled(double seconds);
 static int monitor_wait_prompt(int seconds)
 {
     double until = now() + scaled((double)seconds);
-    char buf[512];
+    char chunk[512];
 
     monitor_reply[0] = '\0';
     monitor_refused = 0;
     while (now() <= until) {
-        ssize_t n = recv(monitor_fd, buf, sizeof(buf) - 1, MSG_DONTWAIT);
+        ssize_t n = recv(monitor_fd, chunk, sizeof(chunk) - 1, MSG_DONTWAIT);
 
         if (n > 0) {
-            buf[n] = '\0';
+            chunk[n] = '\0';
             if (!monitor_refused &&
-                (strstr(buf, "Error") != NULL || strstr(buf, "error:") != NULL)) {
-                memcpy(monitor_reply, buf, (size_t)n + 1);
+                (strstr(chunk, "Error") != NULL || strstr(chunk, "error:") != NULL)) {
+                memcpy(monitor_reply, chunk, (size_t)n + 1);
                 monitor_refused = 1;
             }
-            if (strstr(buf, "(qemu)") != NULL) {
+            if (strstr(chunk, "(qemu)") != NULL) {
                 return 0;
             }
             continue;
