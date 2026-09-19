@@ -173,24 +173,16 @@ for t in mformat mmd mcopy; do
     }
 done
 
-# The MBR writer beside this script, compiled when missing or older than
-# its source; it writes the same bytes parted wrote in the retired
-# container, CHS fields included. The GRUB embedder is built the same way.
+# The MBR writer beside this script, built by make when missing or older
+# than its source; it writes the same bytes parted wrote in the retired
+# container, CHS fields included. The chain reader and the GRUB embedder are
+# built the same way.
 MKMBR="$REPO/build/tools/image/mkmbr"
-if [ ! -x "$MKMBR" ] || [ "$REPO/tools/image/mkmbr.c" -nt "$MKMBR" ]; then
-    mkdir -p "${MKMBR%/*}"
-    cc -O2 -o "$MKMBR" "$REPO/tools/image/mkmbr.c" || exit 1
-fi
+make -s -C "$REPO" build/tools/image/mkmbr || exit 1
 FATCHAINS="$REPO/build/tools/image/fatchains"
-if [ ! -x "$FATCHAINS" ] || [ "$REPO/tools/image/fatchains.c" -nt "$FATCHAINS" ]; then
-    mkdir -p "${FATCHAINS%/*}"
-    cc -O2 -o "$FATCHAINS" "$REPO/tools/image/fatchains.c" || exit 1
-fi
+make -s -C "$REPO" build/tools/image/fatchains || exit 1
 GRUBEMBED="$REPO/build/tools/image/grubembed"
-if [ ! -x "$GRUBEMBED" ] || [ "$REPO/tools/image/grubembed.c" -nt "$GRUBEMBED" ]; then
-    mkdir -p "${GRUBEMBED%/*}"
-    cc -O2 -o "$GRUBEMBED" "$REPO/tools/image/grubembed.c" || exit 1
-fi
+make -s -C "$REPO" build/tools/image/grubembed || exit 1
 
 # Every intermediate lives in this run's own directory, so two profiles
 # building in parallel (the suites do) cannot overwrite each other's

@@ -19,14 +19,11 @@ set -u
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 
-# The byte scanner beside this script, compiled when missing or older than
-# its source: the shell text tools disagree across platforms about NUL and
-# high bytes, and C does not.
+# The byte scanner beside this script, built by make when missing or older
+# than its source: the shell text tools disagree across platforms about NUL
+# and high bytes, and C does not.
 ASCIISCAN="$REPO/build/tools/verify/asciiscan"
-if [ ! -x "$ASCIISCAN" ] || [ "$REPO/tools/verify/asciiscan.c" -nt "$ASCIISCAN" ]; then
-    mkdir -p "${ASCIISCAN%/*}"
-    cc -O2 -o "$ASCIISCAN" "$REPO/tools/verify/asciiscan.c" || exit 1
-fi
+make -s -C "$REPO" build/tools/verify/asciiscan || exit 1
 cd "$REPO" || exit 1
 
 findings=$(mktemp)

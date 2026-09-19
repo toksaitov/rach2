@@ -12,9 +12,18 @@
 # builder and reader, which the exfat suite uses too and which the sticks'
 # volume is written with.
 MKMBR           = build/tools/image/mkmbr
+FATCHAINS       = build/tools/image/fatchains
+GRUBEMBED       = build/tools/image/grubembed
 STICKCHECK      = build/tools/image/stickcheck
+DISK_TOOLS      = $(MKMBR) $(FATCHAINS) $(GRUBEMBED)
 MKEXFATFIXTURE  = build/tests/host/mkexfatfixture
 $(MKMBR): tools/image/mkmbr.c
+	@mkdir -p $(dir $@)
+	$(HOST_LINK)
+$(FATCHAINS): tools/image/fatchains.c
+	@mkdir -p $(dir $@)
+	$(HOST_LINK)
+$(GRUBEMBED): tools/image/grubembed.c
 	@mkdir -p $(dir $@)
 	$(HOST_LINK)
 $(STICKCHECK): tools/image/stickcheck.c rach2/sys/block/mbr.c rach2/sys/block/mbr.h

@@ -109,7 +109,7 @@ MKDISK          = krffs/mkdisk.sh
 # images, and the validators that judge them. It builds no test tool. The tools
 # are the means of checking the product, they live in tests/system/suites.mk,
 # and each suite target builds the ones it invokes.
-all: images $(BINFIND) $(ELFCHECK) $(SHA256TOOL)
+all: images host-tools
 
 # The cached tool check (tools/setup/preflight.sh): a missing or changed build
 # tool fails here, named, before any compilation. It is an order-only
@@ -342,6 +342,24 @@ $(CFGCHECK): tools/inspect/cfgcheck.c
 # The prose checks (tools/verify/prosecheck.c): comment width, the banned
 # vocabulary, the phrase counts the report tabulates, and the dev-log index.
 $(PROSECHECK): tools/verify/prosecheck.c
+	@mkdir -p $(dir $@)
+	$(HOST_LINK)
+
+# The byte scanner (tools/verify/asciiscan.c) the text checks run, the host
+# check (tools/setup/hostcheck.c) `tests/run` compiles for itself before a
+# build, and the TCP measurer (tools/dev/machine_net.c) of the machine
+# runs. They are built here so a `make` compiles them under the host flags
+# and the compilation database lists them.
+ASCIISCAN  = build/tools/verify/asciiscan
+HOSTCHECK  = build/tools/setup/hostcheck
+MACHINENET = build/tools/dev/machine_net
+$(ASCIISCAN): tools/verify/asciiscan.c
+	@mkdir -p $(dir $@)
+	$(HOST_LINK)
+$(HOSTCHECK): tools/setup/hostcheck.c
+	@mkdir -p $(dir $@)
+	$(HOST_LINK)
+$(MACHINENET): tools/dev/machine_net.c
 	@mkdir -p $(dir $@)
 	$(HOST_LINK)
 
@@ -731,7 +749,7 @@ rach2-sealed-disk: krffs rach2 utils rach2-recovery rach2-recovery-image check-b
 
 $(SEALED_DISK): build/rach2/kernel $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(SEALED_EXT2) \
                 krffs/manifests/rach2-metal-disk.manifest krffs/rescue-static.script \
-                tools/image/mkdisk_grub.sh $(CFGCHECK)
+                tools/image/mkdisk_grub.sh $(DISK_TOOLS) $(CFGCHECK)
 	@$(CFGCHECK) sealednet $(SEALED_ADDRESS) $(SEALED_PREFIX) \
 	    $(SEALED_MASK) $(SEALED_GATEWAY) krffs/rescue-static.script
 	RACH2_DISK_BOOT_MB=64 \
@@ -876,6 +894,19 @@ check-libc: $(LIBC_STAMP) $(MUSL_OUTPUTS)
 include mk/host.mk
 include mk/images.mk
 include tests/system/suites.mk
+
+# Every host program the tree compiles, for the compilation database
+# generator, which dry-runs their rules; named after the includes that
+# define them.
+HOST_TOOLS = $(BINFIND) $(ELFCHECK) $(SETIDCHECK) $(CFGCHECK) $(PROSECHECK) $(GUESTCHECK) \
+             $(SHA256TOOL) $(MANCHECK) $(MKMBR) $(FATCHAINS) $(GRUBEMBED) $(STICKCHECK) \
+             $(MKEXFATFIXTURE) $(DEADLINE) $(PCAPCHECK) $(MKFIXTURE) $(MKFATFIXTURE) \
+             $(HOSTPEER) $(WAVCHECK) $(HARNESS) $(RUNTESTS) $(PTYDRIVE) $(RUNUTIL) \
+             $(MKGPT) $(GROWSET) $(ASCIISCAN) $(HOSTCHECK) $(MACHINENET)
+.PHONY: host-tools print-host-tools
+host-tools: $(HOST_TOOLS)
+print-host-tools:
+	@echo $(HOST_TOOLS)
 
 # Fail if a rach2 .c on disk is missing from C_SRC, so a new kernel source
 # cannot be dropped from the build without anybody noticing. `tests/run style`

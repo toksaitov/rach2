@@ -441,7 +441,7 @@ $(GRUB_CORE_B): $(GRUB_CORE_DEPS) vendor/grub/disk-core-b.img
 GRUB_TEST_EXT2 = $(IMAGES_DIR)/grub-test.ext2
 $(GRUB_TEST_EXT2): $(DEMO_CREDS) $(GRUB_CORE_A) $(GRUB_CORE_B) krffs/manifests/grub-test.manifest $(MANIFEST_DEPS_grub_test) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-setid
 	sh tools/image/mkext2.sh krffs/manifests/grub-test.manifest $@ 48
-run-grub: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krffs $(GRUB_TEST_EXT2) check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(RUNUTIL)
+run-grub: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krffs $(GRUB_TEST_EXT2) check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(RUNUTIL) $(DISK_TOOLS)
 	@mkdir -p $(IMAGES_DIR)
 	sed -e '/^#/d' -e '/^$$/d' -e '\|^file 0644 /core-[ab]\.img|d' \
 	    krffs/manifests/grub-test.manifest > $(IMAGES_DIR)/grub-test.manifest.stripped
@@ -471,7 +471,7 @@ MENU_TEST_DISK = $(IMAGES_DIR)/menu-test.disk
 # at the machine is a busybox command and os-simple carries no busybox: with
 # that root the first command printed nothing and the suite waited out its
 # deadline.
-run-menu: $(DEMO_CREDS) rach2 utils krffs $(OS_REAL_SMALL_EXT2) check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(BINFIND) $(RUNUTIL)
+run-menu: $(DEMO_CREDS) rach2 utils krffs $(OS_REAL_SMALL_EXT2) check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(BINFIND) $(RUNUTIL) $(DISK_TOOLS)
 	@mkdir -p $(IMAGES_DIR)
 	RACH2_DISK_RECOVERY_MB=8 \
 	RACH2_DISK_EXT2_MB=96 \
@@ -521,7 +521,7 @@ OS_REAL_SMALL_EXT2 = $(IMAGES_DIR)/os-real-small.ext2
 $(OS_REAL_SMALL_EXT2): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
 	sh tools/image/mkext2.sh krffs/manifests/os-real.manifest $@ 96
 INSTALL_TEST_DISK = $(IMAGES_DIR)/install-test.disk
-run-install: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(BINFIND) rach2-recovery $(RECOVERY_IMAGE) $(OS_REAL_SMALL_EXT2) $(RUNUTIL)
+run-install: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(BINFIND) rach2-recovery $(RECOVERY_IMAGE) $(OS_REAL_SMALL_EXT2) $(RUNUTIL) $(DISK_TOOLS)
 	@mkdir -p $(IMAGES_DIR)
 	RACH2_DISK_RECOVERY_MB=8 \
 	RACH2_DISK_EXT2_MB=96 \
@@ -571,7 +571,7 @@ OS_SIMPLE_EXT2 = $(IMAGES_DIR)/os-simple.ext2
 $(OS_SIMPLE_EXT2): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_DEPS_os_simple) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-setid
 	sh tools/image/mkext2.sh krffs/manifests/os-simple.manifest $@ 16
 DRILL_DISK = $(IMAGES_DIR)/drill-test.disk
-run-drill: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krffs check-setid $(BINFIND) $(MKMBR) $(HARNESS) $(OS_SIMPLE_EXT2) $(RUNUTIL)
+run-drill: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krffs check-setid $(BINFIND) $(MKMBR) $(HARNESS) $(OS_SIMPLE_EXT2) $(RUNUTIL) $(DISK_TOOLS)
 	@mkdir -p $(IMAGES_DIR)
 	RACH2_DISK_RECOVERY_MB=8 \
 	RACH2_DISK_EXT2_MB=16 \
@@ -1381,7 +1381,7 @@ $(INSTALLER_EXT2): $(FS_DEMO_IMAGES) $(DEMO_CREDS) krffs/manifests/rach2-metal-d
                    ports/doom
 	sh tools/image/mkext2.sh krffs/manifests/rach2-metal-disk.manifest $@ 64 16384
 INSTALLER_DISK = $(IMAGES_DIR)/installer-test.disk
-$(INSTALLER_DISK): $(DEMO_CREDS) $(INSTALLER_EXT2) $(RECOVERY_IMAGE) tools/image/mkdisk_grub.sh \
+$(INSTALLER_DISK): $(DEMO_CREDS) $(INSTALLER_EXT2) $(RECOVERY_IMAGE) tools/image/mkdisk_grub.sh $(DISK_TOOLS) \
                    | rach2 rach2-recovery utils krffs
 	@mkdir -p $(IMAGES_DIR)
 	RACH2_DISK_RECOVERY_MB=8 \
