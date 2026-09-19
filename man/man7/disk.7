@@ -74,6 +74,9 @@ A partition node.
 Exactly one partition must match.
 A root identity that matches none or more than one mounts no root and
 produces a diagnostic.
+A boot identity must resolve to the first primary entry of an MBR disk
+that passes the boot-window checks; otherwise neither boot device is
+published.
 .Xr growroot 8
 uses the
 .Ql MBRID=XXXXXXXX,M

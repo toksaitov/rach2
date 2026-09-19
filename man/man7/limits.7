@@ -11,8 +11,8 @@ Each has an enforced soft value and a hard value that bounds the soft value.
 maintains them;
 .Fn getrlimit ,
 .Fn setrlimit
-and
-.Fn ugetrlimit
+and the kernel call
+.Xr ugetrlimit 2
 use the same table.
 Fork inherits both values and exec preserves them.
 .Bl -tag -width RLIMIT_NOFILE
@@ -70,11 +70,11 @@ built-in in
 reads and lowers limits.
 .Ss Other limits
 Process records are allocated from the kernel heap.
-A fork that the heap cannot serve returns
+If the kernel cannot allocate a process record, fork returns
 .Er ENOMEM .
 Sockets and TCP control blocks also come from the heap.
 These allocations are outside the resource-limit table.
-Other fixed capacities are the loopback ring, 48 frames;
+Other fixed capacities are the loopback ring, 64 frames;
 the USB table, twelve entries; and the disk registry, eight records.
 .Sh FILES
 .Bl -tag -width /etc/rach2/limits

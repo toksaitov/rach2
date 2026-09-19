@@ -56,8 +56,8 @@ In the source tree,
 checks memory accounting.
 .Ql tests/run pools
 opens and closes a pipe, a pty and a socket a thousand times each and
-checks that the heap bytes in use return to their starting value and
-the heap pages to within two of it.
+checks that the heap bytes in use return to their initial value and that
+the heap page count differs from its initial count by at most two.
 .Sh FILES
 .Bl -tag -width /proc/meminfo
 .It Pa /proc/meminfo

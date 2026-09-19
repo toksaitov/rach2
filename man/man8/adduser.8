@@ -14,7 +14,8 @@
 .Nm
 .Op Ar OPTIONS
 .Ar USER
-.Op Ar GROUP
+.Nm
+.Ar USER GROUP
 .Sh DESCRIPTION
 On os-simple,
 .Nm
@@ -58,7 +59,7 @@ On os-real,
 is the BusyBox applet.
 It creates
 .Ar USER ,
-or adds an existing
+or, with no options, adds an existing
 .Ar USER
 to
 .Ar GROUP .
@@ -68,10 +69,11 @@ Its options differ from those of the os-simple program.
 .Bl -tag -width Ds
 .It Fl u Ar UID
 Use this number for the user and group IDs.
-It must be unused in both databases.
+It must be decimal, from 1 through 60000, and unused in both databases.
 .It Fl s Ar SHELL
 Use this login shell instead of
-.Pa /bin/sh .
+.Pa /bin/sh ;
+a shell with a colon or a newline is refused.
 .El
 .Ss os-real
 .Bl -tag -width Ds

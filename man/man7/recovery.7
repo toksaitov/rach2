@@ -17,8 +17,10 @@ The recovery kernel permits root to write
 and uses the read-write driver policy.
 The recovery system mounts nothing from the disk it repairs.
 .Ss Startup
-The recovery system's init is
-.Pa init-recovery .
+The recovery system runs
+.Pa /sbin/init
+built as
+.Ql init-recovery .
 It starts a shell on the console without a login: the image has no
 accounts of the machine's to check against.
 It starts the SSH server only when a key was built into the image, and
@@ -71,7 +73,8 @@ and run
 .It Root file system
 From recovery, run
 .Ql rach2-install --update IMAGE /dev/diskN .
-This preserves accounts, SSH policy and host keys.
+This preserves the accounts and the SSH policy, and the host keys when the
+old root could be read; the recovery archive holds no host keys.
 Recovery remains the saved default until the trial root has been verified;
 then run
 .Ql bootctl commit .
