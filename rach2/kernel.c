@@ -1,3 +1,4 @@
+#include "kernel.h"
 #include "vendor/multiboot.h"
 
 #include "sys/kio.h"

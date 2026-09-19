@@ -13,7 +13,8 @@
 KWARN = -Wpedantic -Wno-long-long \
         -Wshadow -Wstrict-prototypes -Wpointer-arith -Wundef -Wlogical-op \
         -Wduplicated-cond -Wjump-misses-init -Wformat-security \
-        -Wformat-signedness -Wnested-externs -Winit-self
+        -Wformat-signedness -Wnested-externs -Winit-self \
+        -Wmissing-prototypes
 
 # Rejected, with the reason:
 #

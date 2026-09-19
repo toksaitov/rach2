@@ -12,7 +12,7 @@
  * process layer. Declared here, as in the page-fault handler, so the trap core
  * need not pull in the whole process header.
  */
-extern void terminate_current_process(int32_t signo);
+#include "../kernel.h"
 
 /*
  * The scheduler, and whether this processor is inside a system call.

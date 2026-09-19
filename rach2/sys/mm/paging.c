@@ -18,7 +18,7 @@
  * regains control). Kills a process that faulted illegally without taking
  * the machine down. Mirrors the CTRL+C kill path.
  */
-extern void terminate_current_process(int32_t signo);
+#include "../../kernel.h"
 
 page_dir_t *_kernel_dir;
 page_dir_t *_curr_dir;

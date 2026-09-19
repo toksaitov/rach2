@@ -1,3 +1,4 @@
+#include "../kernel.h"
 #include "mm/kheap.h"
 #include "klog.h"
 #include "syscall.h"
@@ -345,7 +346,6 @@ extern void shell_reset_input(void);
  */
 extern bool debug_shell_is_home;
 extern void panic_init_died(uint32_t pid);
-extern void kernel_shutdown(int how);
 
 /* Kernel stack from loader.s */
 extern char stack[];
@@ -8386,7 +8386,6 @@ static int32_t sys_getrandom(isr_params_t *params)
  * return-to-user via a frame on the user stack, and rt_sigreturn.
  * ======================================================================== */
 
-extern void terminate_current_process(int32_t signo);
 
 /* The default action for a signal whose disposition is SIG_DFL. */
 static enum ksig_default ksig_default_action(int signo)
