@@ -1,0 +1,70 @@
+.Dd September 19, 2026
+.Dt GROWSET 8
+.Os
+.Sh NAME
+.Nm growset
+.Nd compute the sector ranges written by an ext2 grow
+.Sh SYNOPSIS
+.Nm
+.Op Fl -save
+.Op Fl -ranges
+.Op Fl -lba Ar START
+.Op Fl -map Ar JSON
+.Ar VOLUME SECTORS
+.Sh DESCRIPTION
+.Nm
+reads the ext2 superblock and descriptors from
+.Ar VOLUME
+and computes the grown volume's geometry as resize2fs does.
+.Ar VOLUME
+is a file containing the volume, either an image or a partition copied
+from a disk.
+.Ar SECTORS
+is the partition's size after the grow.
+.Pp
+The output contains one line per run of sectors written by the grow:
+.Dl range START COUNT WHAT
+The ranges are sorted and merged.
+Sector numbers are relative to the start of the volume unless
+.Fl -lba
+is given.
+The ranges are followed by
+.Ql total SECTORS
+and the grown volume's geometry.
+.Pp
+The host recovery-plan tool includes this program's source, so the plan
+and recovery use the same calculation.
+The machine helper compares the calculated list with the supplied ranges
+before saving or writing.
+.Sh OPTIONS
+.Bl -tag -width Ds
+.It Fl -save
+Include the full seed overwrite.
+The input file's length must match the volume size given by the
+superblock's block count.
+.It Fl -ranges
+Format each range as a sector pair, without its description.
+Suppress totals and geometry.
+With
+.Fl -map ,
+the map check's results follow the pairs.
+.It Fl -lba Ar START
+Use disk-relative sector numbers, with the volume starting at
+.Ar START .
+Include the disk's first page, where growroot
+rewrites the partition entry.
+.It Fl -map Ar JSON
+Check QEMU's written extents in
+.Ar JSON
+against the calculated set.
+.El
+.Sh EXAMPLES
+.Dl growset --lba 266240 root.ext2 471040
+.Pp
+In the source tree,
+.Ql tests/run grow
+exercises this command.
+.Sh SEE ALSO
+.Xr recovery 7 ,
+.Xr growboot 8 ,
+.Xr growroot 8
