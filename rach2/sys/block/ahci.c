@@ -1348,7 +1348,8 @@ static int ahci_identify(struct ahci_disk *d)
 {
     volatile uint16_t *w = ahci_idbuf;
 
-    if (ahci_run_command(d, ATA_IDENTIFY, 0, 0, (volatile uint8_t *)ahci_idbuf, BLOCK_SECTOR_SIZE, 0) != 0) {
+    if (ahci_run_command(d, ATA_IDENTIFY, 0, 0, (volatile uint8_t *)ahci_idbuf, BLOCK_SECTOR_SIZE,
+                         0) != 0) {
         ahci_err = "the device did not answer IDENTIFY";
         return -1;
     }

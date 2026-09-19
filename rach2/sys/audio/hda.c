@@ -95,8 +95,7 @@ static volatile uint16_t rirb_rp = 0;
 #define HDA_BUFFER_SIZE 16384
 #define HDA_NUM_BUFFERS 2 /* Double-buffered like SB16 */
 static volatile hda_bdl_entry_t bdl[HDA_NUM_BUFFERS] __attribute__((aligned(1024)));
-static int16_t audio_buffer[HDA_BUFFER_SIZE * HDA_NUM_BUFFERS / 2]
-    __attribute__((aligned(128)));
+static int16_t audio_buffer[HDA_BUFFER_SIZE * HDA_NUM_BUFFERS / 2] __attribute__((aligned(128)));
 
 /* Ring buffer for the write() audio path (Doom). */
 #define HDA_RING_SIZE 8192 /* sized to tolerate bursty writes */

@@ -131,14 +131,14 @@ struct open_file {
 struct devfs_entry;
 
 typedef struct fd_entry {
-    fd_type_t type;             /* Type of this fd (NONE, CONSOLE, FILE) */
-    struct krffs_node *node;    /* Pointer to KRFFS node (for FILE type) */
-    struct socket *sock;        /* Pointer to socket (for SOCKET type) */
-    struct open_file *ofd;      /* Shared open-file description (offset+flags) */
-    const struct file_ops *ops; /* Backing ops (pipes/ttys/...); NULL = enum dispatch */
-    void *priv;                 /* Backing private object (e.g. a pipe end) */
+    fd_type_t type;                /* Type of this fd (NONE, CONSOLE, FILE) */
+    struct krffs_node *node;       /* Pointer to KRFFS node (for FILE type) */
+    struct socket *sock;           /* Pointer to socket (for SOCKET type) */
+    struct open_file *ofd;         /* Shared open-file description (offset+flags) */
+    const struct file_ops *ops;    /* Backing ops (pipes/ttys/...); NULL = enum dispatch */
+    void *priv;                    /* Backing private object (e.g. a pipe end) */
     const struct devfs_entry *dev; /* The device table row, for a DEVICE fd */
-    uint32_t flags;             /* Per-fd flags (READ, WRITE, CLOEXEC) */
+    uint32_t flags;                /* Per-fd flags (READ, WRITE, CLOEXEC) */
 } fd_entry_t;
 
 /*
