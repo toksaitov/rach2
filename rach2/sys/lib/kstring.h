@@ -26,6 +26,11 @@ void *k_memcpy(void *dest, const void *src, size_t n);
 /** Copies `n` bytes from `src` to `dest`; the regions may overlap. */
 void *k_memmove(void *dest, const void *src, size_t n);
 
+/* The compilers emit a call to `strlen` on their own at -O2, as they emit
+   the memory calls declared with the others; kstring.c defines it over
+   `k_strlen`, with the size type the builtin prototype expects. */
+__SIZE_TYPE__ strlen(const char *s);
+
 /*
  * The standard names, defined in kstring.c because the compilers emit calls
  * to them (gcc for struct copies and large initializers, tcc for struct

@@ -1982,9 +1982,9 @@ void xhci_stop(struct xhci_ctrl *hc)
 }
 
 /** A context entry, whose size the controller decides. */
-static uint32_t *context_entry(struct xhci_ctrl *hc, uint8_t *base, uint32_t index)
+static uint32_t *context_entry(struct xhci_ctrl *hc, void *base, uint32_t index)
 {
-    return (uint32_t *)((uintptr_t)base + index * hc->caps.context_size);
+    return (uint32_t *)base + index * (hc->caps.context_size / sizeof(uint32_t));
 }
 
 /** Zero a context entry, whatever size the controller uses. */

@@ -157,6 +157,11 @@ void *memcpy(void *dest, const void *src, __SIZE_TYPE__ n)
     return k_memcpy(dest, src, (size_t)n);
 }
 
+__SIZE_TYPE__ strlen(const char *s)
+{
+    return k_strlen(s);
+}
+
 void *memmove(void *dest, const void *src, __SIZE_TYPE__ n)
 {
     return k_memmove(dest, src, (size_t)n);

@@ -97,7 +97,7 @@ for t in tests/host/*_hosttest.c; do
     # and compile nothing: the compilation database generator reads them.
     if [ -n "${HOST_PRINT_COMMANDS:-}" ]; then
         # shellcheck disable=SC2086
-        echo "$CC -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 $SAN -g -O1 -Wno-empty-body $FREESTANDING $INC $extra -o $out $t $deps"
+        echo "$CC -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST $SAN -g -O1 -Wno-empty-body $FREESTANDING $INC $extra -o $out $t $deps"
         continue
     fi
     # Name a missing dep here: passed on to the compiler it would surface as a
@@ -146,7 +146,7 @@ for t in tests/host/*_hosttest.c; do
     # the macro, and Darwin's headers make snprintf a macro at any level above
     # zero, which a test that supplies its own snprintf cannot compile against.
     # shellcheck disable=SC2086
-    if $CC -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 $SAN -g -O1 -Wno-empty-body $FREESTANDING $INC $extra -o "$out" "$t" $deps \
+    if $CC -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST $SAN -g -O1 -Wno-empty-body $FREESTANDING $INC $extra -o "$out" "$t" $deps \
          >"$VDIR/$base.clog" 2>&1; then
         # shellcheck disable=SC2086
         $WATCHDOG "$out" >"$VDIR/$base.rlog" 2>&1

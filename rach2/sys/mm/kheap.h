@@ -34,14 +34,14 @@
 /** Set up the heap; the page tables of the region exist since init_paging. */
 void kheap_init(void);
 
-/** `size` bytes, or NULL; the memory is not zeroed. */
-void *kmalloc(size_t size);
-
-/** `size` bytes zeroed, or NULL. */
-void *kzalloc(size_t size);
-
 /** Give back what `kmalloc` returned; NULL is accepted and ignored. */
 void kfree(void *p);
+
+/** `size` bytes, or NULL; the memory is not zeroed. */
+void *kmalloc(size_t size) K_MALLOC(kfree);
+
+/** `size` bytes zeroed, or NULL. */
+void *kzalloc(size_t size) K_MALLOC(kfree);
 
 /**
  * `count` pages, virtually contiguous and page-aligned, or NULL. `phys`,

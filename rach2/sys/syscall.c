@@ -7977,14 +7977,14 @@ static int32_t synth_getdents(fd_entry_t *e, char *buf, uint32_t count)
             }
             break;
         }
-        k_memset(&recbuf, 0, rec_len);
+        k_memset(recbuf.bytes, 0, rec_len);
         d = &recbuf.rec;
         d->d_ino = ino;
         d->d_off = (int64_t)(idx + 1);
         d->d_reclen = (uint16_t)rec_len;
         d->d_type = dtype;
         k_memcpy(d->d_name, name, name_len + 1);
-        if (copy_to_user((void __user *)(buf + written), &recbuf, rec_len) != 0) {
+        if (copy_to_user((void __user *)(buf + written), recbuf.bytes, rec_len) != 0) {
             return written > 0 ? (int32_t)written : -EFAULT;
         }
         written += rec_len;
@@ -8111,14 +8111,14 @@ static int32_t sys_getdents64(isr_params_t *params)
             }
             /* Build the record in kernel memory, then copy it out through
              * the helper (no raw write into user space). */
-            k_memset(&recbuf, 0, rec_len);
+            k_memset(recbuf.bytes, 0, rec_len);
             dirent = &recbuf.rec;
             dirent->d_ino = de.ino;
             dirent->d_off = (int64_t)cursor; /* next position */
             dirent->d_reclen = (uint16_t)rec_len;
             dirent->d_type = de.is_dir ? DT_DIR : DT_REG;
             k_memcpy(dirent->d_name, de.name, name_len + 1);
-            if (copy_to_user((void __user *)(buf + bytes_written), &recbuf, rec_len) != 0) {
+            if (copy_to_user((void __user *)(buf + bytes_written), recbuf.bytes, rec_len) != 0) {
                 fd_ofd_unlock(ofd);
                 return (bytes_written > 0) ? (int32_t)bytes_written : -EFAULT;
             }

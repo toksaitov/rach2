@@ -432,7 +432,11 @@ static int e1000_pages(struct e1000 *e)
             return -1;
         }
         e->rx_ring = (volatile struct e1000_rx_desc *)page;
-        e->tx_ring = (volatile struct e1000_tx_desc *)((uintptr_t)page + 2048);
+        /* The transmit ring is in the page's second half, counted in
+         * receive descriptors so the arithmetic is pointer arithmetic on
+         * any host. */
+        e->tx_ring =
+            (volatile struct e1000_tx_desc *)(e->rx_ring + 2048 / sizeof(struct e1000_rx_desc));
     }
     for (i = 0; i < E1000_RING_SIZE; i += 2) {
         if (!e->rx_buf[i]) {

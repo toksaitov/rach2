@@ -88,7 +88,7 @@ display_color_t _fail_image[] = {
     1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,
     1,  1,  1,  1,  1,  1,  1,  1};
 
-extern void k_stop(void);
+extern void k_stop(void) K_NORETURN;
 
 /**
  * Report what stopped the machine, then stop it.

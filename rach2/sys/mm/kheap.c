@@ -303,15 +303,16 @@ static int add_class_page(uint32_t cls)
 
 /* Interrupts off. Take every block of the page at `base` off its class's
  * free list, so the page can go back. */
-static void drop_class_page(uintptr_t base, uint32_t cls)
+static void drop_class_page(void *base, uint32_t cls)
 {
     void **link = &free_list[cls];
+    char *lo = base;
 
     while (*link) {
         void *block = *link;
-        uintptr_t at = (uintptr_t)block;
+        char *at = block;
 
-        if (at >= base && at < base + PAGE_SIZE) {
+        if (at >= lo && at < lo + PAGE_SIZE) {
             *link = *(void **)block;
         } else {
             link = block;
@@ -410,7 +411,7 @@ void kfree(void *p)
     hdr->used--;
     bytes_used -= class_size[hdr->cls];
     if (hdr->used == 0) {
-        drop_class_page((uintptr_t)hdr, hdr->cls);
+        drop_class_page(hdr, hdr->cls);
         hdr->magic = 0;
         release_run(((uintptr_t)hdr - KVA_HEAP) / PAGE_SIZE, 1);
     }
