@@ -15,7 +15,6 @@
 #include "../mm/pagecache.h"
 #include "../panic.h"
 #include "../proc/process.h"
-#include "../proc/sched.h"
 #include "bcache.h"
 #include "devfs.h"
 #include "fat32.h"
@@ -173,10 +172,15 @@ void vfs_leave(struct vfs_mount *mnt)
 
 /* ---- the namespace lock ---- */
 
-static int ns_free(void *arg)
+struct ns_turn {
+    struct vfs_mount *mnt;
+    uint32_t place;
+};
+
+static int ns_my_turn(void *arg)
 {
-    struct vfs_mount *mnt = arg;
-    return mnt->ns_holder == -1;
+    const struct ns_turn *t = arg;
+    return t->mnt->ns_holder == -1 && t->mnt->ns_serving == t->place;
 }
 
 int vfs_ns_held_by_caller(void)
@@ -193,42 +197,48 @@ int vfs_ns_held_by_caller(void)
     return 0;
 }
 
+/**
+ * Take the mount's lock, in the order the callers asked for it.
+ *
+ * A caller takes a place in the line and waits until the lock is free and
+ * its place is served, so a process that releases the lock and asks again
+ * waits behind everyone who asked meanwhile: a writer that locks for every
+ * call cannot take the lock back before a waiter has had it, which starved
+ * the waiter until the writer stopped. The order costs no switch of its
+ * own; a caller gives way only where it waited before, so no path that
+ * releases the lock and goes on with a pointer it took under it, as `open`
+ * does until its descriptor is registered, is interrupted by the release.
+ * A caller that holds the lock takes it again without a place.
+ */
 void vfs_ns_lock(struct vfs_mount *mnt)
 {
     int me = current_proc ? (int)current_proc->pid : 0;
+    struct ns_turn turn;
 
     if (mnt->ns_holder == me && mnt->ns_depth > 0) {
         mnt->ns_depth++;
         return;
     }
-    while (mnt->ns_holder != -1) {
-        wq_wait_event_nointr(&mnt->ns_wq, ns_free, mnt);
+    turn.mnt = mnt;
+    turn.place = mnt->ns_next++;
+    while (!ns_my_turn(&turn)) {
+        wq_wait_event_nointr(&mnt->ns_wq, ns_my_turn, &turn);
     }
     mnt->ns_holder = me;
     mnt->ns_depth = 1;
 }
 
-/*
- * Release the lock, and hand it on: a waiter is woken and given the
- * processor before this process can take the lock again, since a writer
- * that locks for every call would otherwise take it back each time before
- * the waiter ran, and the waiter would starve until the writer stopped.
- */
+/** Release the lock and serve the next place in the line. */
 void vfs_ns_unlock(struct vfs_mount *mnt)
 {
-    int waited;
-
     if (mnt->ns_depth > 1) {
         mnt->ns_depth--;
         return;
     }
     mnt->ns_depth = 0;
     mnt->ns_holder = -1;
-    waited = wq_active(&mnt->ns_wq);
+    mnt->ns_serving++;
     wq_wake_all(&mnt->ns_wq);
-    if (waited && current_proc && sched_is_enabled()) {
-        sched_yield();
-    }
 }
 
 /* ---- the permission the resolver charges ---- */
@@ -1650,6 +1660,8 @@ static void install(int idx, const struct vfs_type *type, const char *path,
     m->inprogress = 0;
     m->ns_holder = -1;
     m->ns_depth = 0;
+    m->ns_next = 0;
+    m->ns_serving = 0;
     wait_queue_init(&m->ns_wq);
     m->priv = 0;
     m->opens = 0;
@@ -1895,6 +1907,8 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
     m->covered = tref.node;
     m->ns_holder = -1;
     m->ns_depth = 0;
+    m->ns_next = 0;
+    m->ns_serving = 0;
     wait_queue_init(&m->ns_wq);
     m->claim = claim;
     k_strncpy(m->covered_path,

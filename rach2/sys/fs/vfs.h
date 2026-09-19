@@ -223,8 +223,10 @@ struct vfs_mount {
     char covered_path[VFS_COVERED_PATH_MAX];
     uint32_t refs;
     uint32_t inprogress;
-    int ns_holder; /* pid holding the namespace lock, or -1 */
-    int ns_depth;  /* how many times the holder has taken it */
+    int ns_holder;       /* pid holding the namespace lock, or -1 */
+    int ns_depth;        /* how many times the holder has taken it */
+    uint32_t ns_next;    /* the next place in the line for the lock */
+    uint32_t ns_serving; /* the place whose turn it is */
     wait_queue_t ns_wq;
     void *root; /* the mount's root node, held for the mount's life */
     void *priv;
