@@ -917,6 +917,7 @@ static int supervise(char **cmd, const char *name, double idle, const char *ledg
     console = malloc(len);
     if (!console || pipe(pipes) != 0) {
         perror("runutil: pipe or allocation");
+        free(console);
         return 2;
     }
     snprintf(console, len, "%s.console", ledger);
@@ -924,6 +925,7 @@ static int supervise(char **cmd, const char *name, double idle, const char *ledg
         (pipe(life) != 0 || fstat(life[1], &token) != 0 ||
          fcntl(life[0], F_SETFD, FD_CLOEXEC) != 0 || fcntl(life[0], F_SETFL, O_NONBLOCK) != 0)) {
         perror("runutil: liveness pipe");
+        free(console);
         return 2;
     }
     memset(&sa, 0, sizeof(sa));
@@ -936,6 +938,7 @@ static int supervise(char **cmd, const char *name, double idle, const char *ledg
     child = fork();
     if (child < 0) {
         perror("runutil: fork");
+        free(console);
         return 2;
     }
     if (child == 0) {
