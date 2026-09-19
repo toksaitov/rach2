@@ -162,7 +162,8 @@ else
     missing=$((missing + 1))
 fi
 
-req mandoc       mandoc
+# mandoc has no version option; it is probed by rendering empty input.
+reqx mandoc mandoc -T ascii
 req cppcheck     cppcheck
 req shellcheck   shellcheck
 req clang-format clang-format
