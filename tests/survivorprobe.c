@@ -1,18 +1,11 @@
 /**
  * An init that exits with a runnable child returns to the debug shell.
  *
- * The probe forks a child that spins for a bounded count and then exits,
- * and exits itself while the child is still runnable. The kernel must
- * return to the debug shell at once: an exit that first scheduled would
- * give the child the processor, and the exited init, a zombie, would never
- * be picked again to make the return, so the shell never came back and the
- * runner scored a hang. The child is frozen while the shell has the
- * machine and finishes under the next program the shell starts, which is
- * the second thing the leftover proves: its exit wakes no parent, and when
- * that program is asleep nothing is ready, so the exit must idle for the
- * next interrupt and not halt with interrupts off, which kept the machine
- * under the emulator once. Its parent is gone, so the shell frees its
- * record before the program after that.
+ * The probe forks a child that runs in user mode until the kernel ends it,
+ * and exits while the child runs. The kernel ends the child and returns
+ * to the shell: an exit that scheduled the child instead ran it and never
+ * returned, since the exited init, a zombie, was never picked again, and a
+ * return that left the child frozen would run it under the next program.
  *
  * Prints "SURVIVORPROBE OK" before exiting. The verdict is the kernel's
  * return record, which the runner requires after the probe's own exit.
@@ -24,10 +17,6 @@ typedef unsigned int size_t;
 #define SYS_EXIT  1
 #define SYS_FORK  2
 #define SYS_WRITE 4
-
-/* Spins of the child: long enough for the parent to exit meanwhile on any
-   machine, short enough to end under the next program. */
-#define SPINS 20000000u
 
 static int sys1(int n, int a)
 {
@@ -66,11 +55,8 @@ void _start(void)
         sys1(SYS_EXIT, 1);
     }
     if (pid == 0) {
-        volatile unsigned i;
-
-        for (i = 0; i < SPINS; i++) {
+        for (;;) {
         }
-        sys1(SYS_EXIT, 0);
     }
     print("SURVIVORPROBE OK\n");
     sys1(SYS_EXIT, 0);

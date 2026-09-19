@@ -388,6 +388,53 @@ void release_fd_table(fd_table_t *table)
 }
 
 /**
+ * End every other user process before init returns the machine to the shell.
+ *
+ * What the program left running is killed and reaped here while init is
+ * still a live process the scheduler runs: a leftover asleep in the disk
+ * driver with a mount's lock held finishes its call and releases the lock
+ * before the signal ends it, and a leftover spinning in user mode takes the
+ * signal at its next interrupt, since signals are delivered on the return
+ * from an interrupt as well. The shell's resume disables the scheduler, so
+ * anything left runnable or holding a lock then would run no further, and
+ * the next program would wait on it forever. A zombie is reaped as `wait`
+ * reaps one. Kernel threads and the idle record are not user processes
+ * and stay.
+ */
+static void proc_end_others(void)
+{
+    for (;;) {
+        process_t *p, *next;
+        int alive = 0;
+
+        for (p = proc_list; p; p = next) {
+            next = p->next;
+            if (p == current_proc || p == proc_idle) {
+                continue;
+            }
+            if (p->state == PROC_ZOMBIE) {
+                if (p->cr3 != 0) {
+                    free_user_pages(p->page_dir);
+                    free_page_directory(p->page_dir);
+                }
+                kstack_free(p->kernel_stack);
+                free_process(p);
+                continue;
+            }
+            if (p->cr3 == 0) {
+                continue;
+            }
+            signal_post(p, SIGKILL);
+            alive++;
+        }
+        if (!alive) {
+            return;
+        }
+        schedule();
+    }
+}
+
+/**
  * Terminate the current process (exit(2)/exit_group(2)). Does not return.
  *
  * EBX has the exit status. Releases files and cwd, reparents children to init,
@@ -402,6 +449,16 @@ void release_fd_table(fd_table_t *table)
  * every process exit would print it, a forked child's included, and the shell
  * already answers the question through `$?`. The line that hands the shell back
  * below is not gated: the probe runner scores probes from that one.
+ *
+ * An init exiting under the debug shell first ends every other user process
+ * through `proc_end_others`, then returns without scheduling: a child left
+ * runnable would take the processor, and the exited init, a zombie, would
+ * never be picked again to make the return. A process that is not init
+ * leaves through the scheduler as a zombie its parent reaps; when nothing is
+ * ready at that moment, since its parent may be gone, it idles for the next
+ * interrupt with interrupts off between checks and schedules on its own,
+ * because the timer's preemption is deferred inside a call. A halt there
+ * kept the machine forever.
  */
 static int32_t sys_exit(isr_params_t *params)
 {
@@ -441,6 +498,9 @@ static int32_t sys_exit(isr_params_t *params)
      * a later session can claim the same /dev/pts/N. */
     pty_release_leader((int)current_proc->sid, (int)current_proc->pid);
 
+    if (is_init && debug_shell_is_home) {
+        proc_end_others();
+    }
     proc_exit_cleanup((status & 0xFF) << 8);
 
 #ifdef RACH2_HARNESS
@@ -462,13 +522,6 @@ static int32_t sys_exit(isr_params_t *params)
         panic_init_died(exiting_pid); /* never returns */
     }
 
-    /* A process that is not init leaves here: it is a zombie now, is never
-     * scheduled again, and its parent reaps it. The init that exited under
-     * the debug shell (a real init would have panicked above) does not
-     * schedule before its return: a child it left runnable would take the
-     * processor, and this zombie would never be picked again to make the
-     * return. The shell's resume disables the scheduler, so what init left
-     * behind runs no further, as after a signal death. */
     if (!is_init) {
         schedule();
     }
@@ -522,45 +575,10 @@ static int32_t sys_exit(isr_params_t *params)
                              : "memory");
     }
 
-    /* A zombie whose parent is gone woke nobody, and nothing may be ready
-     * now: a leftover of a program the shell ran, exiting while the program
-     * after it sleeps. The processor idles here until an interrupt makes a
-     * process ready, and leaves through the scheduler, which never picks
-     * this zombie again. The timer's preemption is deferred inside a call,
-     * so the loop schedules on its own. A halt with interrupts off here
-     * kept the machine forever. */
     for (;;) {
         __asm__ __volatile__("cli");
         schedule();
         idle_wait_irq_off();
-    }
-}
-
-/**
- * Free every zombie whose parent is gone.
- *
- * Such a zombie has no reaper: its parent, a program the debug shell ran,
- * exited before it did. A zombie has released its files and its working
- * directory, waits on nothing, and runs on a stack nothing switches back
- * to, so its pages, its kernel stack and its record go here, as `wait`
- * would take them. The shell calls this between programs.
- */
-void proc_free_orphan_zombies(void)
-{
-    process_t *p = proc_list;
-
-    while (p) {
-        process_t *next = p->next;
-
-        if (p->state == PROC_ZOMBIE && get_process(p->parent_pid) == NULL) {
-            if (p->cr3 != 0) {
-                free_user_pages(p->page_dir);
-                free_page_directory(p->page_dir);
-            }
-            kstack_free(p->kernel_stack);
-            free_process(p);
-        }
-        p = next;
     }
 }
 
