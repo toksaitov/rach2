@@ -894,7 +894,7 @@ int xhci_read_caps(struct xhci_ctrl *hc)
         return -1;
     }
 
-    if (hc->caps.max_ports == 0 || hc->caps.max_ports > XHCI_MAX_PORTS) {
+    if (hc->caps.max_ports > XHCI_MAX_PORTS) {
         hc->err = "the controller says it has a number of ports the standard does not allow";
         return -1;
     }
