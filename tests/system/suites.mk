@@ -1606,6 +1606,13 @@ run-login: $(DEMO_CREDS) rach2 utils krffs busybox os-real-image $(RUNUTIL)
 	$(MKIMAGE) krffs/manifests/login-test-shell.manifest $(LOGIN_TEST_SHELL) 10
 	sh tests/system/suites/login.sh build/rach2/kernel $(LOGIN_TEST_STRICT) \
 	    $(LOGIN_TEST_SHELL) $(OS_REAL_IMAGE) root "`cat krffs/rach2_demo_password`"
+# `tests/run man`: the manual pages on the machine. Boots os-real, logs in and
+# reads rach2(7) through a pipe, which must be the staged page byte for byte,
+# and on the console under the pager, whose first and last lines must appear;
+# `man`'s exit status proves nothing, since it ignores its pager's.
+run-man: $(DEMO_CREDS) rach2 krffs busybox os-real-image $(HARNESS)
+	sh tests/system/suites/man.sh build/rach2/kernel $(OS_REAL_IMAGE) $(HARNESS) \
+	    "`cat krffs/rach2_demo_password`" build/man/cat7/rach2.7 $(IMAGES_DIR)/man-test.log
 # `tests/run procfiles`: the machine's own /proc files, on the boots that differ
 # and through the programs that read them. Three boots of the test image, one
 # per mount source, each of which must name its own; then `ps`, `df`, `free` and

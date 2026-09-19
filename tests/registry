@@ -74,6 +74,7 @@ subset|qemu-system-i386|core
 bus|qemu-system-i386,mformat,mtype|full
 exitline|qemu-system-i386|full
 login|qemu-system-i386|core
+man|qemu-system-i386|core
 metal|qemu-system-i386,ssh,mformat|core
 bootline|qemu-system-i386|full
 persist|qemu-system-i386|core|persist-test.*,persist.*,persist/*
