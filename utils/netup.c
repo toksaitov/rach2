@@ -38,13 +38,8 @@
 #include "netcfg.h"
 
 #define INTERFACES "/etc/network/interfaces"
-#define RUN_DIR "/var/run"
+#define RUN_DIR    "/var/run"
 #define MAX_IFACES 8
-
-
-
-
-
 
 /** Put an interface's name into an ifreq, bounded and terminated. */
 static void set_ifr_name(struct ifreq *ifr, const char *name)
@@ -145,14 +140,16 @@ static int apply_static(const struct netcfg_iface *s)
         long holder = dhcp_holder(s->name);
 
         if (holder > 0) {
-            fprintf(stderr, "netup: %s: process %ld is holding it with a lease; stop it "
-                            "with `dhcpc -i %s -k` before configuring a fixed address\n",
+            fprintf(stderr,
+                    "netup: %s: process %ld is holding it with a lease; stop it "
+                    "with `dhcpc -i %s -k` before configuring a fixed address\n",
                     s->name, holder, s->name);
             return -1;
         }
         if (holder < 0) {
-            fprintf(stderr, "netup: %s: a DHCP client is claiming it; stop it with "
-                            "`dhcpc -i %s -k` before configuring a fixed address\n",
+            fprintf(stderr,
+                    "netup: %s: a DHCP client is claiming it; stop it with "
+                    "`dhcpc -i %s -k` before configuring a fixed address\n",
                     s->name, s->name);
             return -1;
         }
@@ -208,8 +205,7 @@ static int apply_static(const struct netcfg_iface *s)
         set_ifr_name(&ifr, s->name);
         set_ifr_addr(&ifr, s->netmask);
         if (ioctl(fd, SIOCSIFNETMASK, &ifr) < 0) {
-            fprintf(stderr, "netup: %s: cannot set the netmask: %s\n", s->name,
-                    strerror(errno));
+            fprintf(stderr, "netup: %s: cannot set the netmask: %s\n", s->name, strerror(errno));
             restore(fd, s->name, had_address, had_netmask);
             close(fd);
             return -1;
@@ -256,8 +252,10 @@ static int apply_static(const struct netcfg_iface *s)
                no call that reads the one in force, so there is nothing to put
                back from. Say so: a machine on its own subnet is still reachable
                and an administrator can set the route by hand. */
-            fprintf(stderr, "netup: %s: the address in force is back; set the default "
-                            "route by hand if the machine needs one\n", s->name);
+            fprintf(stderr,
+                    "netup: %s: the address in force is back; set the default "
+                    "route by hand if the machine needs one\n",
+                    s->name);
             close(fd);
             return -1;
         }
@@ -328,8 +326,7 @@ int main(int argc, char **argv)
             }
             memset(&want[count], 0, sizeof(want[count]));
             if (!netcfg_name_ok(argv[i])) {
-                fprintf(stderr, "netup: '%s' is not a name an interface can have\n",
-                        argv[i]);
+                fprintf(stderr, "netup: '%s' is not a name an interface can have\n", argv[i]);
                 return 2;
             }
             netcfg_set_name(want[count].name, argv[i]);
@@ -356,8 +353,7 @@ int main(int argc, char **argv)
             continue;
         }
         if (want[i].bad) {
-            fprintf(stderr, "netup: %s: its stanza has something this cannot use\n",
-                    want[i].name);
+            fprintf(stderr, "netup: %s: its stanza has something this cannot use\n", want[i].name);
             failures++;
             continue;
         }

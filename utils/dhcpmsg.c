@@ -13,9 +13,9 @@
 /* The hardware type BOOTP gives Ethernet, from the ARP table. */
 #define ARPHRD_ETHER 1
 
-#define OPT_SUBNET     1
-#define OPT_ROUTER     3
-#define OPT_DNS        6
+#define OPT_SUBNET    1
+#define OPT_ROUTER    3
+#define OPT_DNS       6
 #define OPT_DOMAIN    15
 #define OPT_REQUESTED 50
 #define OPT_LEASE     51
@@ -24,7 +24,7 @@
 #define OPT_MSGTYPE   53
 #define OPT_SERVERID  54
 #define OPT_PARAMS    55
-#define OPT_END      255
+#define OPT_END       255
 
 /** Read a big-endian 16-bit field. */
 static unsigned int be16(const unsigned char *p)
@@ -35,8 +35,8 @@ static unsigned int be16(const unsigned char *p)
 /** Read a big-endian 32-bit field as a host-order number. */
 static unsigned long be32(const unsigned char *p)
 {
-    return ((unsigned long)p[0] << 24) | ((unsigned long)p[1] << 16) |
-           ((unsigned long)p[2] << 8) | (unsigned long)p[3];
+    return ((unsigned long)p[0] << 24) | ((unsigned long)p[1] << 16) | ((unsigned long)p[2] << 8) |
+           (unsigned long)p[3];
 }
 
 static void put_be16(unsigned char *p, unsigned int v)
@@ -94,8 +94,7 @@ static unsigned int fold(unsigned long sum)
  * @param outlen the room in `out`, which must be at least `DHCP_MAX`.
  * @return the length written, or 0 when there is not enough room.
  */
-unsigned int dhcp_build(unsigned char *out, unsigned int outlen,
-                        const struct dhcp_request *r)
+unsigned int dhcp_build(unsigned char *out, unsigned int outlen, const struct dhcp_request *r)
 {
     unsigned char *ip = out;
     unsigned char *udp = out + 20;
@@ -357,8 +356,8 @@ int dhcp_parse(const unsigned char *msg, unsigned int len, unsigned long xid,
             for (k = 0; k < take; k++) {
                 unsigned char c = o[i + 2 + k];
 
-                if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-                      (c >= '0' && c <= '9') || c == '.' || c == '-')) {
+                if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+                      c == '.' || c == '-')) {
                     take = 0;
                     break;
                 }
@@ -438,8 +437,7 @@ unsigned long dhcp_sane_lease(unsigned long seconds, unsigned long max)
  * lease must be at least `DHCP_MIN_LEASE`, which is what `dhcp_sane_lease`
  * guarantees; shorter than that, the two defaults are the same moment.
  */
-void dhcp_boundaries(const struct dhcp_lease *l, time_t from, time_t *t1,
-                     time_t *t2, time_t *end)
+void dhcp_boundaries(const struct dhcp_lease *l, time_t from, time_t *t1, time_t *t2, time_t *end)
 {
     unsigned long a = l->t1 ? l->t1 : l->seconds / 2;
     unsigned long b = l->t2 ? l->t2 : (l->seconds * 7) / 8;

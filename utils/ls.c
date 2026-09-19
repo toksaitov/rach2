@@ -11,10 +11,18 @@ static void print_entry(const char *name, unsigned char d_type)
     char type;
 
     switch (d_type) {
-        case DT_DIR: type = 'd'; break;
-        case DT_REG: type = '-'; break;
-        case DT_LNK: type = 'l'; break;
-        default:     type = '?'; break;
+    case DT_DIR:
+        type = 'd';
+        break;
+    case DT_REG:
+        type = '-';
+        break;
+    case DT_LNK:
+        type = 'l';
+        break;
+    default:
+        type = '?';
+        break;
     }
     /* No stat() detail; show the type flag and a fixed rw- placeholder. */
     printf("%crw- %s\n", type, name);

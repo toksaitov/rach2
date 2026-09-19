@@ -42,8 +42,7 @@ int hosts_find(const char *buf, int len, const char *name, unsigned int *out_ip)
  * Returns the query length in bytes, or -1 on error (name too long, empty
  * label, or buffer too small).
  */
-int dns_build_query(unsigned char *buf, int cap, const char *name,
-                    unsigned short id);
+int dns_build_query(unsigned char *buf, int cap, const char *name, unsigned short id);
 
 /**
  * Parse a DNS response in `resp[0..len)` that answers query `id`.
@@ -53,8 +52,7 @@ int dns_build_query(unsigned char *buf, int cap, const char *name,
  * record, or a malformed/truncated message). The input is untrusted, so every
  * field is bounds-checked.
  */
-int dns_parse_a(const unsigned char *resp, int len, unsigned short id,
-                unsigned int *out_ip);
+int dns_parse_a(const unsigned char *resp, int len, unsigned short id, unsigned int *out_ip);
 
 /**
  * Resolve `host` (numeric literal, then the hosts file, then DNS) to a

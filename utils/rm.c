@@ -34,8 +34,7 @@ static int remove_dir_contents(const char *dir_path)
         size_t pos;
 
         if (de->d_name[0] == '.' &&
-            (de->d_name[1] == '\0' ||
-             (de->d_name[1] == '.' && de->d_name[2] == '\0'))) {
+            (de->d_name[1] == '\0' || (de->d_name[1] == '.' && de->d_name[2] == '\0'))) {
             continue;
         }
 

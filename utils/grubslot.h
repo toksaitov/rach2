@@ -28,9 +28,9 @@
  * that fits is 1024 sectors, of which 1023 go in a tail.
  */
 
-#define GRUBSLOT_TAIL_A_LBA 2u
-#define GRUBSLOT_TAIL_B_LBA 1025u
-#define GRUBSLOT_TAIL_SECTORS 1023u
+#define GRUBSLOT_TAIL_A_LBA        2u
+#define GRUBSLOT_TAIL_B_LBA        1025u
+#define GRUBSLOT_TAIL_SECTORS      1023u
 #define GRUBSLOT_MAX_IMAGE_SECTORS 1024u
 
 /* Where the blocklist lives in the entry sector: an 8-byte LBA at 0x1f4, a

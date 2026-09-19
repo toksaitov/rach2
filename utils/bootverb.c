@@ -17,14 +17,10 @@ static const struct {
     enum bootverb verb;
     int min_operands;
     int max_operands;
-} verbs[] = {{"status", BOOTVERB_STATUS, 0, 0},
-             {"commit", BOOTVERB_COMMIT, 0, 0},
-             {"cancel", BOOTVERB_CANCEL, 0, 0},
-             {"kernel", BOOTVERB_KERNEL, 1, 1},
-             {"config", BOOTVERB_CONFIG, 1, 1},
-             {"grub", BOOTVERB_GRUB, 1, 1},
-             {"trial", BOOTVERB_TRIAL, 1, 1},
-             {"env", BOOTVERB_ENV, 1, 2},
+} verbs[] = {{"status", BOOTVERB_STATUS, 0, 0},    {"commit", BOOTVERB_COMMIT, 0, 0},
+             {"cancel", BOOTVERB_CANCEL, 0, 0},    {"kernel", BOOTVERB_KERNEL, 1, 1},
+             {"config", BOOTVERB_CONFIG, 1, 1},    {"grub", BOOTVERB_GRUB, 1, 1},
+             {"trial", BOOTVERB_TRIAL, 1, 1},      {"env", BOOTVERB_ENV, 1, 2},
              {"fallback", BOOTVERB_FALLBACK, 0, 0}};
 
 #define VERB_COUNT ((int)(sizeof(verbs) / sizeof(verbs[0])))

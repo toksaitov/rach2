@@ -125,8 +125,9 @@ int grubslot_patch(uint8_t *image, uint32_t sectors, uint32_t tail_lba, char *er
        leave a machine that cannot boot and cannot be repaired remotely. */
     if ((uint32_t)le16(image + GRUBSLOT_BLOCKLIST_LEN_OFF) != sectors - 1u) {
         if (err && errlen) {
-            strncpy(err, "that core image is not the length it declares; it is truncated or "
-                         "is not a core image",
+            strncpy(err,
+                    "that core image is not the length it declares; it is truncated or "
+                    "is not a core image",
                     errlen - 1);
             err[errlen - 1] = '\0';
         }
@@ -179,9 +180,10 @@ int grubslot_install(void *ctx, grubslot_io_fn io, uint8_t *image, uint32_t sect
         return say(err, errlen, "the entry sector did not read");
     }
     if (grubslot_active(scratch, &active) != 0) {
-        return say(err, errlen, "the entry sector's blocklist names neither tail slot, or is "
-                                "longer than one; this disk does not have the layout an "
-                                "install needs");
+        return say(err, errlen,
+                   "the entry sector's blocklist names neither tail slot, or is "
+                   "longer than one; this disk does not have the layout an "
+                   "install needs");
     }
     target = grubslot_other(active);
     if (grubslot_patch(image, sectors, target, err, errlen) != 0) {
@@ -204,14 +206,16 @@ int grubslot_install(void *ctx, grubslot_io_fn io, uint8_t *image, uint32_t sect
         }
         if (n + 1u < sectors) {
             if (memcmp(scratch, image + (n + 1u) * BOOTSLOT_SECTOR, BOOTSLOT_SECTOR) != 0) {
-                return say(err, errlen, "the tail slot did not read back what was written; "
-                                        "the running boot loader is untouched");
+                return say(err, errlen,
+                           "the tail slot did not read back what was written; "
+                           "the running boot loader is untouched");
             }
         } else {
             for (i = 0; i < BOOTSLOT_SECTOR; i++) {
                 if (scratch[i] != 0) {
-                    return say(err, errlen, "the tail slot's fill did not read back; "
-                                            "the running boot loader is untouched");
+                    return say(err, errlen,
+                               "the tail slot's fill did not read back; "
+                               "the running boot loader is untouched");
                 }
             }
         }

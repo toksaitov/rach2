@@ -61,13 +61,13 @@
 #endif
 
 #define RESOLV_CONF "/etc/resolv.conf"
-#define RUN_DIR "/var/run"
+#define RUN_DIR     "/var/run"
 
 /* The discover schedule: four tries, then a rest, forever. A machine plugged
  * into a switch that has not started forwarding must keep asking, because the
  * alternative is a machine nobody can reach until somebody walks to it. */
 #define DISCOVER_TRIES 4
-#define REST_SECONDS  30
+#define REST_SECONDS   30
 
 /* How long `-k` waits for the client it signalled to let go. A client wakes
  * from its poll on the signal, so this is a bound on a client that is stuck,
@@ -134,12 +134,6 @@ static unsigned long random_xid(void)
     return ((unsigned long)time(0) << 8) ^ (unsigned long)getpid();
 }
 
-
-
-
-
-
-
 /** Ask the interface for its index and hardware address. */
 static int read_interface(void)
 {
@@ -170,7 +164,6 @@ static int read_interface(void)
     close(fd);
     return 0;
 }
-
 
 /**
  * Build one message from this client's state and return its length.
@@ -213,8 +206,6 @@ static int transmit(int fd, const unsigned char *mac, unsigned int len)
     }
     return 0;
 }
-
-
 
 /**
  * Read one reply for us from the packet socket, or answer that none came before
@@ -292,12 +283,11 @@ static int receive(int fd, struct dhcp_lease *out_lease, int want, time_t deadli
     }
 }
 
-
 /** Format an address as dotted quad into `buf`, which needs 16 bytes. */
 static void format_ip(unsigned long ip, char *buf)
 {
-    sprintf(buf, "%lu.%lu.%lu.%lu", (ip >> 24) & 0xff, (ip >> 16) & 0xff,
-            (ip >> 8) & 0xff, ip & 0xff);
+    sprintf(buf, "%lu.%lu.%lu.%lu", (ip >> 24) & 0xff, (ip >> 16) & 0xff, (ip >> 8) & 0xff,
+            ip & 0xff);
 }
 
 /** Put an IPv4 address into an ifreq's sockaddr. */
@@ -351,8 +341,7 @@ static int write_resolv(const struct dhcp_lease *l)
     }
     if (rename(tmp, RESOLV_CONF) != 0) {
         remove(tmp);
-        fprintf(stderr, "dhcpc: resolver: cannot replace %s: %s\n", RESOLV_CONF,
-                strerror(errno));
+        fprintf(stderr, "dhcpc: resolver: cannot replace %s: %s\n", RESOLV_CONF, strerror(errno));
         return -1;
     }
     return 0;
@@ -380,16 +369,14 @@ static unsigned long holding;
 static int write_claim(int fd, long pid, unsigned long addr)
 {
     char text[48];
-    int n = snprintf(text, sizeof(text), "%ld\n%lu.%lu.%lu.%lu\n", pid,
-                     (addr >> 24) & 0xff, (addr >> 16) & 0xff, (addr >> 8) & 0xff,
-                     addr & 0xff);
+    int n = snprintf(text, sizeof(text), "%ld\n%lu.%lu.%lu.%lu\n", pid, (addr >> 24) & 0xff,
+                     (addr >> 16) & 0xff, (addr >> 8) & 0xff, addr & 0xff);
 
     if (n <= 0 || write(fd, text, (size_t)n) != n) {
         return -1;
     }
     return 0;
 }
-
 
 /**
  * Whether a process exists.
@@ -523,8 +510,7 @@ static int drop_recorded_address(unsigned long addr)
     }
     fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0) {
-        fprintf(stderr, "dhcpc: %s: no socket to clean up with: %s\n", ifname,
-                strerror(errno));
+        fprintf(stderr, "dhcpc: %s: no socket to clean up with: %s\n", ifname, strerror(errno));
         return -1;
     }
     memset(&ifr, 0, sizeof(ifr));
@@ -545,12 +531,10 @@ static int drop_recorded_address(unsigned long addr)
     strncpy(ifr.ifr_name, ifname, sizeof(ifr.ifr_name) - 1);
     set_ifr_addr(&ifr, 0);
     if (ioctl(fd, SIOCSIFADDR, &ifr) == 0) {
-        fprintf(stderr, "dhcpc: %s: took off %s, left by a client that is gone\n",
-                ifname, a);
+        fprintf(stderr, "dhcpc: %s: took off %s, left by a client that is gone\n", ifname, a);
         rc = 0;
     } else {
-        fprintf(stderr, "dhcpc: %s: cannot take off %s: %s\n", ifname, a,
-                strerror(errno));
+        fprintf(stderr, "dhcpc: %s: cannot take off %s: %s\n", ifname, a, strerror(errno));
     }
     close(fd);
     return rc;
@@ -585,8 +569,7 @@ static int stop_client(void)
         pid = claim_pid(&present);
         if (pid <= 0) {
             if (present) {
-                fprintf(stderr,
-                        "dhcpc: %s: the claim names no process; leaving it alone\n",
+                fprintf(stderr, "dhcpc: %s: the claim names no process; leaving it alone\n",
                         ifname);
             } else {
                 fprintf(stderr, "dhcpc: %s: no client is holding it\n", ifname);
@@ -604,13 +587,12 @@ static int stop_client(void)
            the claim is the only record of which address that is, so a claim
            removed before it would leave an address nothing can find. */
         if (drop_recorded_address(left) != 0) {
-            fprintf(stderr, "dhcpc: %s: the claim of process %ld is left in place\n",
-                    ifname, pid);
+            fprintf(stderr, "dhcpc: %s: the claim of process %ld is left in place\n", ifname, pid);
             return 1;
         }
         if (remove(pidpath) != 0) {
-            fprintf(stderr, "dhcpc: %s: cannot remove the claim of process %ld: %s\n",
-                    ifname, pid, strerror(errno));
+            fprintf(stderr, "dhcpc: %s: cannot remove the claim of process %ld: %s\n", ifname, pid,
+                    strerror(errno));
             return 1;
         }
         printf("dhcpc: %s: process %ld was gone; its claim is removed\n", ifname, pid);
@@ -618,13 +600,14 @@ static int stop_client(void)
         return 0;
     }
     if (!pid_alive(pid)) {
-        fprintf(stderr, "dhcpc: %s: the claim keeps changing hands; nothing was "
-                        "stopped\n", ifname);
+        fprintf(stderr,
+                "dhcpc: %s: the claim keeps changing hands; nothing was "
+                "stopped\n",
+                ifname);
         return 1;
     }
     if (kill((pid_t)pid, SIGTERM) != 0) {
-        fprintf(stderr, "dhcpc: %s: cannot stop process %ld: %s\n", ifname, pid,
-                strerror(errno));
+        fprintf(stderr, "dhcpc: %s: cannot stop process %ld: %s\n", ifname, pid, strerror(errno));
         return 1;
     }
     for (i = 0; i < STOP_WAIT_SECONDS; i++) {
@@ -649,8 +632,8 @@ static int stop_client(void)
             }
         }
     }
-    fprintf(stderr, "dhcpc: %s: process %ld has not let go after %d seconds\n", ifname,
-            pid, STOP_WAIT_SECONDS);
+    fprintf(stderr, "dhcpc: %s: process %ld has not let go after %d seconds\n", ifname, pid,
+            STOP_WAIT_SECONDS);
     return 1;
 }
 
@@ -697,8 +680,7 @@ static int claim_is_ours(int strict)
         return 1;
     }
     if (who > 0 && pid_alive(who)) {
-        fprintf(stderr, "dhcpc: %s: process %ld holds the claim on it now\n", ifname,
-                who);
+        fprintf(stderr, "dhcpc: %s: process %ld holds the claim on it now\n", ifname, who);
         holds_interface = 0; /* not ours to release */
         return 0;
     }
@@ -721,19 +703,17 @@ static int claim_is_ours(int strict)
 
         close(fd);
         if (ok) {
-            fprintf(stderr, "dhcpc: %s: the claim had gone; it is written again\n",
-                    ifname);
+            fprintf(stderr, "dhcpc: %s: the claim had gone; it is written again\n", ifname);
             return 1;
         }
         remove(pidpath);
-        fprintf(stderr, "dhcpc: %s: the claim had gone and cannot be written again: %s\n",
-                ifname, strerror(errno));
+        fprintf(stderr, "dhcpc: %s: the claim had gone and cannot be written again: %s\n", ifname,
+                strerror(errno));
         return !strict;
     }
     who = claim_pid(0);
     if (who > 0 && who != (long)getpid() && pid_alive(who)) {
-        fprintf(stderr, "dhcpc: %s: process %ld holds the claim on it now\n", ifname,
-                who);
+        fprintf(stderr, "dhcpc: %s: process %ld holds the claim on it now\n", ifname, who);
         holds_interface = 0;
         return 0;
     }
@@ -802,8 +782,7 @@ static int claim_interface(void)
             return -1;
         }
         if (pid_alive(other)) {
-            fprintf(stderr, "dhcpc: %s: process %ld is already holding it\n", ifname,
-                    other);
+            fprintf(stderr, "dhcpc: %s: process %ld is already holding it\n", ifname, other);
             return -1;
         }
         /* Read once more, immediately before removing it: between the first
@@ -818,8 +797,8 @@ static int claim_interface(void)
            which address that is, so removing the claim before the address
            would leave one nothing can find. */
         if (drop_recorded_address(left) != 0) {
-            fprintf(stderr, "dhcpc: %s: the claim of process %ld is left in place\n",
-                    ifname, other);
+            fprintf(stderr, "dhcpc: %s: the claim of process %ld is left in place\n", ifname,
+                    other);
             return -1;
         }
         remove(pidpath); /* the client that left this behind is gone */
@@ -864,8 +843,8 @@ static int apply(int fd, const struct dhcp_lease *l, int strict)
        renewal goes on, because the address is already there and stopping would
        leave it with nobody at all. */
     if (record_claim((long)getpid(), l->address) != 0) {
-        fprintf(stderr, "dhcpc: %s: cannot record the address in the claim: %s\n",
-                ifname, strerror(errno));
+        fprintf(stderr, "dhcpc: %s: cannot record the address in the claim: %s\n", ifname,
+                strerror(errno));
         if (strict) {
             return -1;
         }
@@ -1050,7 +1029,7 @@ static int obtain(int fd, struct dhcp_lease *l, time_t *asked)
  * @return the message type, 0 on silence, or -1 on a socket that failed.
  */
 static int renew_unicast(struct dhcp_lease *l, struct dhcp_lease *got, unsigned int bootp_len,
-                        time_t limit)
+                         time_t limit)
 {
     struct sockaddr_in local, peer;
     struct pollfd p;
@@ -1104,7 +1083,6 @@ static int renew_unicast(struct dhcp_lease *l, struct dhcp_lease *got, unsigned 
     close(fd);
     return type;
 }
-
 
 /**
  * Wait a little before asking again, and never past the next boundary.
@@ -1211,8 +1189,10 @@ static int hold(int fd, struct dhcp_lease *l, time_t asked)
                 if (dhcp_lease_usable(&got, why, sizeof(why)) != 0) {
                     /* The lease in force stays: it is working, and this answer
                        is one the machine cannot be configured from. */
-                    fprintf(stderr, "dhcpc: the renewal cannot be used: %s; the lease "
-                                    "in force is unchanged\n", why);
+                    fprintf(stderr,
+                            "dhcpc: the renewal cannot be used: %s; the lease "
+                            "in force is unchanged\n",
+                            why);
                     rest_until(limit);
                     continue;
                 }
@@ -1357,8 +1337,10 @@ static int go_background(void)
     }
     close(handshake[0]);
     if (answer != 'y') {
-        fprintf(stderr, "dhcpc: %s: the claim was never handed over; giving the "
-                        "address up\n", ifname);
+        fprintf(stderr,
+                "dhcpc: %s: the claim was never handed over; giving the "
+                "address up\n",
+                ifname);
         /* Who holds the claim is asked first, and nothing is touched unless
            the answer is still the parent this was forked from. By now another
            client may have taken the interface over and been given the same
@@ -1377,8 +1359,10 @@ static int go_background(void)
             if (holding == 0 || drop_recorded_address(holding) == 0) {
                 remove(pidpath);
             } else {
-                fprintf(stderr, "dhcpc: %s: the claim is left in place for the next "
-                                "client to finish\n", ifname);
+                fprintf(stderr,
+                        "dhcpc: %s: the claim is left in place for the next "
+                        "client to finish\n",
+                        ifname);
             }
         }
         holds_interface = 0;
@@ -1427,17 +1411,16 @@ int main(int argc, char **argv)
 
             errno = 0;
             v = strtoul(argv[++i], &end, 10);
-            if (errno != 0 || !end || *end != '\0' || argv[i][0] == '-' ||
-                v < DHCP_MIN_LEASE || v > HARD_MAX_LEASE) {
+            if (errno != 0 || !end || *end != '\0' || argv[i][0] == '-' || v < DHCP_MIN_LEASE ||
+                v > HARD_MAX_LEASE) {
                 fprintf(stderr, "dhcpc: -l takes %d to %lu seconds\n", DHCP_MIN_LEASE,
                         (unsigned long)HARD_MAX_LEASE);
                 return 2;
             }
             max_lease = v;
         } else {
-            fprintf(stderr,
-                    "usage: dhcpc [-i interface] [-b] [-l seconds]\n"
-                    "       dhcpc [-i interface] -k\n");
+            fprintf(stderr, "usage: dhcpc [-i interface] [-b] [-l seconds]\n"
+                            "       dhcpc [-i interface] -k\n");
             return 2;
         }
     }

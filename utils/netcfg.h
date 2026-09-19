@@ -25,8 +25,8 @@
 /** One interface, as the file describes it. */
 struct netcfg_iface {
     char name[NETCFG_NAME_MAX];
-    int dhcp;  /* the method is dhcp, not static */
-    int bad;   /* a line in this stanza was refused; do not configure it */
+    int dhcp; /* the method is dhcp, not static */
+    int bad;  /* a line in this stanza was refused; do not configure it */
     unsigned long address;
     unsigned long netmask;
     unsigned long gateway;
@@ -35,8 +35,7 @@ struct netcfg_iface {
 
 int netcfg_name_ok(const char *name);
 void netcfg_set_name(char *dst, const char *src);
-int netcfg_read(const char *path, struct netcfg_iface *want, int count, int max,
-                int add_auto);
+int netcfg_read(const char *path, struct netcfg_iface *want, int count, int max, int add_auto);
 int netcfg_check_static(const struct netcfg_iface *s, char *err, size_t errlen);
 
 #endif /* NETCFG_H */

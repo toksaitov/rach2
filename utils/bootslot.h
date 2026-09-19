@@ -62,7 +62,7 @@ struct bootslot {
     struct bootslot_file fallback;
     struct bootslot_file grubenv;
     struct bootslot_file menu;
-    int have_menu;      /* a disk built before the menu slot existed has none */
+    int have_menu; /* a disk built before the menu slot existed has none */
     uint8_t visited[BOOTSLOT_MAX_CLUSTERS / 8];
 };
 
@@ -70,7 +70,6 @@ struct bootslot {
  * Every entry point returns 0 on success or -1 with one lowercase diagnostic
  * in `err` (always NUL-terminated, `errlen` its capacity) naming the cause.
  */
-
 
 /** Read and validate the volume: the BPB, both FATs (compared whole), and the
  *  namespace walk that resolves the four files and requires every reachable

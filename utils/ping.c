@@ -51,8 +51,7 @@ int main(int argc, char **argv)
         }
     }
 
-    printf("PING %u.%u.%u.%u\n", (ip >> 24) & 0xFF, (ip >> 16) & 0xFF, (ip >> 8) & 0xFF,
-           ip & 0xFF);
+    printf("PING %u.%u.%u.%u\n", (ip >> 24) & 0xFF, (ip >> 16) & 0xFF, (ip >> 8) & 0xFF, ip & 0xFF);
 
     for (i = 0; i < PING_COUNT; i++) {
         int rtt = ping_once(ip);

@@ -129,8 +129,7 @@ int main(int argc, char **argv)
      * user. The order is forced: each step needs a privilege the uid drop
      * removes, and the image's accounts carry no supplementary groups, so
      * clearing the list is the whole of it. */
-    if (setgroups(0, NULL) != 0 ||
-        setgid(pw->pw_gid) != 0 || setuid(pw->pw_uid) != 0) {
+    if (setgroups(0, NULL) != 0 || setgid(pw->pw_gid) != 0 || setuid(pw->pw_uid) != 0) {
         fprintf(stderr, "su: cannot assume the target identity\n");
         return 1;
     }
@@ -147,9 +146,7 @@ int main(int argc, char **argv)
      * caller's environment is discarded, not patched). */
     {
         static char home[128], shell[128], usr[96], logname[96], dashed[128];
-        char *const env[] = {
-            (char *) "PATH=/bin:/usr/bin", home, shell, usr, logname, NULL
-        };
+        char *const env[] = {(char *)"PATH=/bin:/usr/bin", home, shell, usr, logname, NULL};
 
         snprintf(home, sizeof(home), "HOME=%s", pw->pw_dir);
         snprintf(shell, sizeof(shell), "SHELL=%s", pw->pw_shell);
@@ -163,9 +160,9 @@ int main(int argc, char **argv)
         }
 
         if (command) {
-            execle(pw->pw_shell, arg0, "-c", command, (char *) 0, env);
+            execle(pw->pw_shell, arg0, "-c", command, (char *)0, env);
         } else {
-            execle(pw->pw_shell, arg0, (char *) 0, env);
+            execle(pw->pw_shell, arg0, (char *)0, env);
         }
     }
     fprintf(stderr, "su: cannot exec %s\n", pw->pw_shell);

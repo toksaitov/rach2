@@ -144,7 +144,6 @@ static int cmdline_has(const char *token)
     return 0;
 }
 
-
 static struct bootslot bs;
 
 static int open_slot(void)
@@ -155,8 +154,10 @@ static int open_slot(void)
        with: `booted` reads the line, and an install that could not say which
        entry is running would have nothing to check a commit against. */
     if (cmdline_load() != 0) {
-        fprintf(stderr, "bootctl: cannot read /proc/cmdline, so which menu entries this "
-                        "machine booted from is unknown: %s\n", strerror(errno));
+        fprintf(stderr,
+                "bootctl: cannot read /proc/cmdline, so which menu entries this "
+                "machine booted from is unknown: %s\n",
+                strerror(errno));
         return -1;
     }
     devfd = open(boot_partition, O_RDWR);
@@ -482,8 +483,10 @@ static int cmd_env(const char *key, const char *value)
         /* The stub reads the saved default for the entries it defines, so
            saving anything else would report a default the machine ignores. */
         if (strcmp(key, "saved_entry") == 0 && !allowed(SAVED_IDS, SAVED_ID_COUNT, value)) {
-            fprintf(stderr, "bootctl: '%s' is a boot and not a default; arm it for one "
-                            "boot with `bootctl trial %s`\n", value, value);
+            fprintf(stderr,
+                    "bootctl: '%s' is a boot and not a default; arm it for one "
+                    "boot with `bootctl trial %s`\n",
+                    value, value);
             return 1;
         }
     }
@@ -650,8 +653,7 @@ static int cmd_grub(const char *path)
         fprintf(stderr, "bootctl: this machine has no boot loader window (no /dev/grubcore)\n");
         return 1;
     }
-    rc = grubslot_install(&fd, grubcore_io, core, sectors, back, &target, errbuf,
-                          sizeof(errbuf));
+    rc = grubslot_install(&fd, grubcore_io, core, sectors, back, &target, errbuf, sizeof(errbuf));
     close(fd);
     if (rc != 0) {
         fprintf(stderr, "bootctl: %s\n", errbuf);
@@ -694,8 +696,9 @@ int main(int argc, char **argv)
          * and `commit` accepts the running kernel, which came from the booted
          * disk. Either would act on one disk while reporting the other. */
         if (argc >= 2 && (strcmp(argv[1], "grub") == 0 || strcmp(argv[1], "commit") == 0)) {
-            fprintf(stderr, "bootctl: --target does not take '%s': it acts on the disk this "
-                            "machine booted from\n",
+            fprintf(stderr,
+                    "bootctl: --target does not take '%s': it acts on the disk this "
+                    "machine booted from\n",
                     argv[1]);
             return 1;
         }

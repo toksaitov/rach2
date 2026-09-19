@@ -183,8 +183,8 @@ static void shutdown_handler(int sig)
  * this file nor the screen. What is here is what a service printed before it
  * backgrounded. Both limits are written down in utils/Readme.md.
  */
-#define SERVICE_LOG      "/var/log/services"
-#define SERVICE_LOG_CAP  (256 * 1024)
+#define SERVICE_LOG             "/var/log/services"
+#define SERVICE_LOG_CAP         (256 * 1024)
 /* How often init looks at the log's size while services are running. Its loop
    otherwise waits for a child to die, and a service that reports a failure in a
    tight loop dies never, so without a wake of its own the cap would only be
@@ -548,7 +548,8 @@ static void configure_network(void)
     }
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         if (WIFEXITED(status)) {
-            fprintf(stderr, "init: network: ifup -a did not configure the interface (status %d%s)\n",
+            fprintf(stderr,
+                    "init: network: ifup -a did not configure the interface (status %d%s)\n",
                     WEXITSTATUS(status), WEXITSTATUS(status) == 127 ? ", not executed" : "");
         } else if (WIFSIGNALED(status)) {
             fprintf(stderr, "init: network: ifup -a was killed by signal %d\n", WTERMSIG(status));
@@ -718,7 +719,7 @@ static pid_t spawn_update(void)
  * A word that is not one of those, a negative number, or one past what the
  * type holds is `LIMIT_BAD`.
  */
-#define LIMIT_BAD ((rlim_t)-2)
+#define LIMIT_BAD ((rlim_t) - 2)
 static rlim_t limit_value(const char *word)
 {
     char *end;
@@ -858,7 +859,7 @@ int main(void)
             if (boot_wants_userland_network()) {
                 /* This runs after the login shell is on the console, so its
                    own diagnostics go where the services' do.
-                   
+
                    Both descriptors are saved before either stream moves. With
                    a low file limit the second `dup` can fail, and redirecting
                    anyway would leave the log on init's stderr for good: every

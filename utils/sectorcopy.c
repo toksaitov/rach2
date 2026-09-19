@@ -167,7 +167,8 @@ int sectorcopy_run(const struct sectorcopy_io *io, unsigned long long count,
                 done += (unsigned long long)w;
                 *written = done;
             }
-            say(err, errlen, n < 0 ? "the stream failed" : "the stream ended before the length it declared");
+            say(err, errlen,
+                n < 0 ? "the stream failed" : "the stream ended before the length it declared");
             return -1;
         }
         held += (unsigned long)n;

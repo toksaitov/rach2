@@ -318,12 +318,14 @@ int bootslot_open(struct bootslot *bs, const struct bootslot_io *io, char *err, 
     bs->io = *io;
 
     if (io->read(io->ctx, 0, bpb) != 0) {
-        return fail(err, errlen, "the first sector does not read, so the device is gone "
-                                 "or failing");
+        return fail(err, errlen,
+                    "the first sector does not read, so the device is gone "
+                    "or failing");
     }
     if (bpb[510] != 0x55 || bpb[511] != 0xAA) {
-        return fail(err, errlen, "this is not a boot partition: its first sector has no "
-                                 "FAT signature");
+        return fail(err, errlen,
+                    "this is not a boot partition: its first sector has no "
+                    "FAT signature");
     }
     bytes_per_sector = le16(bpb + 11);
     bs->cluster_sectors = bpb[13];
@@ -412,9 +414,8 @@ int bootslot_open(struct bootslot *bs, const struct bootslot_io *io, char *err, 
                      errlen) != 0 ||
         resolve_file(bs, st.grubenv_cluster, st.grubenv_size, &bs->grubenv, "grubenv", err,
                      errlen) != 0 ||
-        (st.have_menu &&
-         resolve_file(bs, st.menu_cluster, st.menu_size, &bs->menu, "boot.cfg", err, errlen) !=
-             0)) {
+        (st.have_menu && resolve_file(bs, st.menu_cluster, st.menu_size, &bs->menu, "boot.cfg", err,
+                                      errlen) != 0)) {
         return -1;
     }
     bs->have_menu = st.have_menu;
@@ -422,8 +423,7 @@ int bootslot_open(struct bootslot *bs, const struct bootslot_io *io, char *err, 
        whole, and one of no size cannot be rewritten at all. Either is a disk
        built wrong, not a menu written wrong, so it is refused here where
        the volume is judged, not later where a write would half-succeed. */
-    if (bs->have_menu &&
-        (bs->menu.size == 0 || (bs->menu.size % BOOTSLOT_SECTOR) != 0)) {
+    if (bs->have_menu && (bs->menu.size == 0 || (bs->menu.size % BOOTSLOT_SECTOR) != 0)) {
         return fail(err, errlen, "the menu slot is not a whole number of sectors");
     }
     if (bs->grubenv.size != ENV_BYTES) {
@@ -526,8 +526,6 @@ int bootslot_validate_kernel(const uint8_t *image, uint32_t present, uint32_t si
     }
     return 0;
 }
-
-
 
 /**
  * Set `key=value` in the environment block: read the 1024 bytes, require
@@ -721,8 +719,7 @@ int bootslot_install(struct bootslot *bs, const uint8_t *image, uint32_t size, c
     /* One transition: the saved default moves to the fallback AND any stale
        next_entry from an earlier install is dropped, so a retry cannot leave
        a half-written slot armed for the next boot. */
-    if (env_edit(bs, "saved_entry", "fallback", "next_entry",
-                 err, errlen) != 0) {
+    if (env_edit(bs, "saved_entry", "fallback", "next_entry", err, errlen) != 0) {
         return -1;
     }
 
@@ -754,8 +751,7 @@ int bootslot_install(struct bootslot *bs, const uint8_t *image, uint32_t size, c
         }
     }
 
-    return env_edit(bs, "next_entry", "candidate", NULL, err,
-                    errlen);
+    return env_edit(bs, "next_entry", "candidate", NULL, err, errlen);
 }
 
 /**
@@ -806,13 +802,15 @@ int bootslot_fallback(struct bootslot *bs, char *err, size_t errlen)
     }
     for (i = 0; i + 13 <= ENV_BYTES; i++) {
         if (memcmp(env + i, "\nnext_entry=", 12) == 0 && env[i + 12] != '\n') {
-            return fail(err, errlen, "a trial is armed: the candidate slot is not the kernel "
-                                     "that was committed");
+            return fail(err, errlen,
+                        "a trial is armed: the candidate slot is not the kernel "
+                        "that was committed");
         }
     }
     if (!committed) {
-        return fail(err, errlen, "the candidate is not the saved default; boot and commit it "
-                                 "before it becomes the fallback");
+        return fail(err, errlen,
+                    "the candidate is not the saved default; boot and commit it "
+                    "before it becomes the fallback");
     }
     present = bs->kernel.size < MULTIBOOT_SEARCH ? bs->kernel.size : MULTIBOOT_SEARCH;
     for (s = 0; s * BOOTSLOT_SECTOR < present; s++) {
@@ -889,6 +887,5 @@ int bootslot_commit(struct bootslot *bs, char *err, size_t errlen)
                     "no consumed trial in the environment block; install and "
                     "boot a candidate before committing");
     }
-    return env_edit(bs, "saved_entry", "candidate", NULL, err,
-                    errlen);
+    return env_edit(bs, "saved_entry", "candidate", NULL, err, errlen);
 }

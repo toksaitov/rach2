@@ -50,11 +50,11 @@ extern char **environ;
 #endif
 #define GROWROOT_MEMORY_KIB (GROWROOT_MEMORY_MIB * 1024u)
 
-#define BLKRRPART 0x125Fu
+#define BLKRRPART   0x125Fu
 #define MBR_ENTRIES 446
 /* One past the largest sector an entry can address: a count and an end are
  * both exclusive here, and the last addressable sector is 0xFFFFFFFF. */
-#define MBR_REACH 0x100000000ull
+#define MBR_REACH   0x100000000ull
 
 struct part {
     int disk, number;
@@ -239,8 +239,9 @@ static int is_ext2(const char *node)
     if (fd < 0) {
         return 0;
     }
-    ok = lseek(fd, 1024, SEEK_SET) == 1024 && read(fd, sector, sizeof(sector)) == (ssize_t)sizeof(sector) &&
-         sector[56] == 0x53 && sector[57] == 0xEF;
+    ok = lseek(fd, 1024, SEEK_SET) == 1024 &&
+         read(fd, sector, sizeof(sector)) == (ssize_t)sizeof(sector) && sector[56] == 0x53 &&
+         sector[57] == 0xEF;
     close(fd);
     return ok;
 }
@@ -271,8 +272,8 @@ int main(int argc, char **argv)
      * with nothing read and nothing written. */
     mem = memory_kib();
     if (mem < GROWROOT_MEMORY_KIB) {
-        snprintf(text, sizeof(text), "%lu MiB of memory; growing a root needs %u MiB",
-                 mem / 1024, GROWROOT_MEMORY_MIB);
+        snprintf(text, sizeof(text), "%lu MiB of memory; growing a root needs %u MiB", mem / 1024,
+                 GROWROOT_MEMORY_MIB);
         return fail("refused", text);
     }
     if (read_disks() != 0) {
@@ -345,8 +346,7 @@ int main(int argc, char **argv)
     } else {
         unsigned char *e;
 
-        printf("growroot: entry: %s from %llu to %llu sectors\n", part_node, p->count,
-               new_count);
+        printf("growroot: entry: %s from %llu to %llu sectors\n", part_node, p->count, new_count);
         fd = open(dev, O_RDWR);
         if (fd < 0) {
             return fail(dev, strerror(errno));
@@ -360,19 +360,16 @@ int main(int argc, char **argv)
             return fail(dev, "the first sector did not read; nothing written");
         }
         {
-            unsigned long now_id = (unsigned long)sector[440] |
-                                   ((unsigned long)sector[441] << 8) |
+            unsigned long now_id = (unsigned long)sector[440] | ((unsigned long)sector[441] << 8) |
                                    ((unsigned long)sector[442] << 16) |
                                    ((unsigned long)sector[443] << 24);
             const unsigned char *e0 = sector + MBR_ENTRIES + 16 * (entry - 1);
-            unsigned long long was_start = (unsigned long long)e0[8] |
-                                           ((unsigned long long)e0[9] << 8) |
-                                           ((unsigned long long)e0[10] << 16) |
-                                           ((unsigned long long)e0[11] << 24);
-            unsigned long long was_count = (unsigned long long)e0[12] |
-                                           ((unsigned long long)e0[13] << 8) |
-                                           ((unsigned long long)e0[14] << 16) |
-                                           ((unsigned long long)e0[15] << 24);
+            unsigned long long was_start =
+                (unsigned long long)e0[8] | ((unsigned long long)e0[9] << 8) |
+                ((unsigned long long)e0[10] << 16) | ((unsigned long long)e0[11] << 24);
+            unsigned long long was_count =
+                (unsigned long long)e0[12] | ((unsigned long long)e0[13] << 8) |
+                ((unsigned long long)e0[14] << 16) | ((unsigned long long)e0[15] << 24);
 
             int other;
 
@@ -412,18 +409,22 @@ int main(int argc, char **argv)
         e[13] = (unsigned char)(new_count >> 8);
         e[14] = (unsigned char)(new_count >> 16);
         e[15] = (unsigned char)(new_count >> 24);
-        if (lseek(fd, 0, SEEK_SET) != 0 || write(fd, sector, sizeof(sector)) != (ssize_t)sizeof(sector)) {
+        if (lseek(fd, 0, SEEK_SET) != 0 ||
+            write(fd, sector, sizeof(sector)) != (ssize_t)sizeof(sector)) {
             rc = errno;
             close(fd);
-            return fail(dev, rc == EACCES || rc == EPERM || rc == EROFS
-                                 ? "the table write was refused; only the recovery kernel writes a whole disk"
-                                 : strerror(rc));
+            return fail(
+                dev,
+                rc == EACCES || rc == EPERM || rc == EROFS
+                    ? "the table write was refused; only the recovery kernel writes a whole disk"
+                    : strerror(rc));
         }
         if (ioctl(fd, BLKRRPART, 0) != 0) {
             rc = errno;
             close(fd);
-            return fail(dev, rc == EBUSY ? "the table was written but not read again: the disk is in use"
-                                         : strerror(rc));
+            return fail(dev, rc == EBUSY
+                                 ? "the table was written but not read again: the disk is in use"
+                                 : strerror(rc));
         }
         close(fd);
         nparts = 0;
@@ -457,8 +458,10 @@ int main(int argc, char **argv)
         return 1;
     }
     if (rc != 0) {
-        snprintf(text, sizeof(text), "e2fsck -fn status %d; repair it first, since a repair "
-                                     "writes outside the saved set", rc);
+        snprintf(text, sizeof(text),
+                 "e2fsck -fn status %d; repair it first, since a repair "
+                 "writes outside the saved set",
+                 rc);
         return fail(part_node, text);
     }
     printf("growroot: check: e2fsck -f -p %s\n", part_node);
