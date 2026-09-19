@@ -18,7 +18,8 @@ KWARN = -Wpedantic -Wno-long-long \
         -Wwrite-strings \
         -Wredundant-decls \
         -Wduplicated-branches \
-        -Wswitch-default
+        -Wswitch-default \
+        -Wswitch-enum
 
 # Rejected, with the reason:
 #

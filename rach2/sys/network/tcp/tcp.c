@@ -1233,6 +1233,15 @@ void tcp_close(struct socket *sock)
         tcb->fin_pending = 1;
         tcp_pump(tcb);
         break;
+    case TCP_CLOSED:
+    case TCP_LISTEN:
+    case TCP_SYN_SENT:
+    case TCP_SYN_RCVD:
+    case TCP_FIN_WAIT_1:
+    case TCP_FIN_WAIT_2:
+    case TCP_CLOSING:
+    case TCP_LAST_ACK:
+    case TCP_TIME_WAIT:
     default:
         tcb_free(tcb);
         break;
@@ -1547,6 +1556,14 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len)
             }
             return;
         }
+        case TCP_CLOSED:
+        case TCP_SYN_SENT:
+        case TCP_ESTABLISHED:
+        case TCP_FIN_WAIT_1:
+        case TCP_FIN_WAIT_2:
+        case TCP_CLOSE_WAIT:
+        case TCP_CLOSING:
+        case TCP_LAST_ACK:
         default:
             klog(KLOG_INFO, "tcp", "rx: reset, the connection is closed");
             /* A reset during the active open is a refused connect; later it is
@@ -1898,6 +1915,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len)
         }
         break;
 
+    case TCP_CLOSED:
     default:
         break;
     }

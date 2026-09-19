@@ -303,6 +303,8 @@ static char proc_state_char(proc_state_t s)
         return 'S';
     case PROC_ZOMBIE:
         return 'Z';
+    case PROC_STOPPED:
+    case PROC_UNUSED:
     default:
         return 'R';
     }
@@ -511,6 +513,9 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
         }
         break;
     }
+    case FD_TYPE_FRAMEBUFFER:
+    case FD_TYPE_MOUSE:
+    case FD_TYPE_NONE:
     default:
         ap_str(t, "anon_inode:[device]"); /* fb/mouse: best effort */
         break;
