@@ -126,7 +126,7 @@ uint32_t build_user_stack(void *page, uint32_t base_vaddr, uint32_t page_size, i
         return 0;
     }
 
-    w = (uint32_t *)(mem + (esp - base_vaddr));
+    w = (uint32_t *)page + (esp - base_vaddr) / sizeof(uint32_t);
     *w++ = (uint32_t)argc;
     for (i = 0; i < argc; i++) {
         *w++ = argv_v[i];

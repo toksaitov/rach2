@@ -270,7 +270,7 @@ typedef struct {
 /* The mapped ABAR, NULL until ahci_init succeeds. MMIO, so volatile. The
    first port with a disk, -1 until bring-up. */
 static pci_device_t ahci_pci;
-static volatile uint8_t *ahci_base;
+static uintptr_t ahci_base;
 static int ahci_port = -1;
 
 /*
@@ -464,7 +464,7 @@ static int ahci_discover(void)
         ahci_err = "the ABAR window could not be mapped";
         return -1;
     }
-    ahci_base = (volatile uint8_t *)mapped;
+    ahci_base = mapped;
 
     /* Decode MMIO now. Bus-master DMA is enabled only after the selected port's
        DMA bases are programmed. */
@@ -1338,7 +1338,7 @@ uint32_t ahci_interrupts(void)
 }
 
 /* The last IDENTIFY answer, which the registry reads the strings from. */
-static volatile uint8_t ahci_idbuf[BLOCK_SECTOR_SIZE] __attribute__((aligned(2)));
+static volatile uint16_t ahci_idbuf[BLOCK_SECTOR_SIZE / 2];
 
 /** IDENTIFY `d` and record its 48-bit sector count (words 100-103).
    Rejects a device whose logical sector is not 512 bytes (IDENTIFY word 106
@@ -1346,9 +1346,9 @@ static volatile uint8_t ahci_idbuf[BLOCK_SECTOR_SIZE] __attribute__((aligned(2))
    -1 on a failed IDENTIFY or a bad device. */
 static int ahci_identify(struct ahci_disk *d)
 {
-    volatile uint16_t *w = (volatile uint16_t *)ahci_idbuf;
+    volatile uint16_t *w = ahci_idbuf;
 
-    if (ahci_run_command(d, ATA_IDENTIFY, 0, 0, ahci_idbuf, BLOCK_SECTOR_SIZE, 0) != 0) {
+    if (ahci_run_command(d, ATA_IDENTIFY, 0, 0, (volatile uint8_t *)ahci_idbuf, BLOCK_SECTOR_SIZE, 0) != 0) {
         ahci_err = "the device did not answer IDENTIFY";
         return -1;
     }
@@ -1474,7 +1474,7 @@ int ahci_init(void)
             block0 = &d->dev;
             ahci_port = d->port;
         }
-        disk_register(&d->dev, "ahci", d->port, (volatile uint16_t *)ahci_idbuf);
+        disk_register(&d->dev, "ahci", d->port, ahci_idbuf);
         klog(KLOG_INFO, "ahci", "port %d: %d sectors, %d MiB", d->port, (uint32_t)d->sectors,
              (uint32_t)(d->sectors / 2048));
         published++;

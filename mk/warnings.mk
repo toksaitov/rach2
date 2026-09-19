@@ -21,7 +21,8 @@ KWARN = -Wpedantic -Wno-long-long \
         -Wswitch-default \
         -Wswitch-enum \
         -Wbad-function-cast \
-        -Wcast-qual
+        -Wcast-qual \
+        -Wcast-align=strict
 
 # Rejected, with the reason:
 #

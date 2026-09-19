@@ -34,7 +34,7 @@ static pci_device_t hda_pci;
 /* The vector the controller's messages arrive on, given by `isr_alloc_vector`
  * when they are enabled; -1 before. */
 static int msi_vector = -1;
-static volatile uint8_t *hda_base = NULL;
+static uintptr_t hda_base;
 
 /* Controller capabilities */
 static uint16_t num_input_streams = 0;
@@ -95,7 +95,7 @@ static volatile uint16_t rirb_rp = 0;
 #define HDA_BUFFER_SIZE 16384
 #define HDA_NUM_BUFFERS 2 /* Double-buffered like SB16 */
 static volatile hda_bdl_entry_t bdl[HDA_NUM_BUFFERS] __attribute__((aligned(1024)));
-static uint8_t audio_buffer[HDA_BUFFER_SIZE * HDA_NUM_BUFFERS]
+static int16_t audio_buffer[HDA_BUFFER_SIZE * HDA_NUM_BUFFERS / 2]
     __attribute__((aligned(128)));
 
 /* Ring buffer for the write() audio path (Doom). */
@@ -548,7 +548,7 @@ static void hda_service_stream(void)
     uint32_t lpib_mod;
     uint32_t hw_period;
     int current_buf, next_buf;
-    uint8_t *next_buffer;
+    int16_t *next_buffer;
 
     if (!playing || !stream_started || !hda_base) {
         return;
@@ -591,14 +591,14 @@ static void hda_service_stream(void)
     current_buf =
         (HDA_BUFFER_SIZE != 0) ? ((int)(lpib_mod / HDA_BUFFER_SIZE) % HDA_NUM_BUFFERS) : 0;
     next_buf = (current_buf + 1) % HDA_NUM_BUFFERS;
-    next_buffer = audio_buffer + (next_buf * HDA_BUFFER_SIZE);
+    next_buffer = audio_buffer + (next_buf * HDA_BUFFER_SIZE) / 2;
 
     if (user_callback) {
         user_callback(next_buffer, HDA_BUFFER_SIZE);
     } else {
         uint32_t out_ch = (current_hw_channels > 0) ? (uint32_t)current_hw_channels : 1;
         uint32_t frames = HDA_BUFFER_SIZE / (2u * out_ch);
-        ring_render_to_hw_buffer((int16_t *)next_buffer, frames);
+        ring_render_to_hw_buffer(next_buffer, frames);
     }
 
     /* Ensure the controller sees freshly written samples on real hardware. */
@@ -639,7 +639,7 @@ static void hda_enable_eapd_all(void)
 
 static uint8_t hda_read8(uint32_t offset)
 {
-    return hda_base[offset];
+    return *(volatile uint8_t *)(hda_base + offset);
 }
 
 static uint16_t hda_read16(uint32_t offset)
@@ -654,7 +654,7 @@ static uint32_t hda_read32(uint32_t offset)
 
 static void hda_write8(uint32_t offset, uint8_t value)
 {
-    hda_base[offset] = value;
+    *(volatile uint8_t *)(hda_base + offset) = value;
 }
 
 static void hda_write16(uint32_t offset, uint16_t value)
@@ -1666,7 +1666,7 @@ static int hda_init(void)
     }
     hda_probe_log("OK\n");
 
-    hda_base = (volatile uint8_t *)mapped;
+    hda_base = mapped;
 
     /* Detect CLFLUSH support for DMA coherency (no-ops in emulators). */
     hda_cpu_detect_cache();
@@ -1752,7 +1752,7 @@ static void hda_shutdown(void)
     hda_write32(HDA_INTCTL, 0); /* disable all interrupts */
     hda_write32(HDA_GCTL, 0);   /* assert controller reset */
 
-    hda_base = NULL;
+    hda_base = 0;
 }
 
 /* The codec dump, which the `audio` shell command prints for a person who
@@ -2088,7 +2088,7 @@ void hda_debug_dump(void)
     intctl = hda_read32(HDA_INTCTL);
     intsts = hda_read32(HDA_INTSTS);
 
-    hda_log("  MMIO base: 0x%x\n", (uint32_t)(uintptr_t)hda_base);
+    hda_log("  MMIO base: 0x%x\n", (uint32_t)hda_base);
     hda_log("  GCAP: 0x%x\n", gcap);
     hda_log("  GCTL: 0x%x\n", gctl);
     hda_log("  STATESTS: 0x%x\n", statests);
@@ -2489,11 +2489,11 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
 
     if (user_callback) {
         for (i = 0; i < HDA_NUM_BUFFERS; i++) {
-            user_callback(audio_buffer + (i * HDA_BUFFER_SIZE), HDA_BUFFER_SIZE);
+            user_callback((uint8_t *)audio_buffer + (i * HDA_BUFFER_SIZE), HDA_BUFFER_SIZE);
         }
     } else {
         /* Write path silence is signed 16-bit zeros. */
-        fill_silence(audio_buffer, HDA_BUFFER_SIZE * HDA_NUM_BUFFERS, true);
+        fill_silence((uint8_t *)audio_buffer, HDA_BUFFER_SIZE * HDA_NUM_BUFFERS, true);
     }
 
     /* Push initial samples to RAM for DMA (matters on some laptops). */

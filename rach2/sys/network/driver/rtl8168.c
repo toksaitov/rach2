@@ -64,7 +64,7 @@ struct r8168_io {
 };
 
 /* The mapped window; the real accessors read and write through it. */
-static volatile uint8_t *r8168_mmio;
+static uintptr_t r8168_mmio;
 
 static uint8_t mmio_r8(uint32_t off)
 {
@@ -1011,7 +1011,7 @@ static int rtl8168_init(struct netdev *nd, int nth)
         r8168_err = "the RTL8168 window would not map";
         return NETDEV_FAILED;
     }
-    r8168_mmio = (volatile uint8_t *)mapped;
+    r8168_mmio = mapped;
     pci_enable_memory_space(&r8168_pci);
 
     /* The chip's own revision, which is what decides whether this driver may
@@ -1585,7 +1585,7 @@ static void rtl8168_print_info(void *dev)
     klog(KLOG_DEBUG, "rtl8168",
          "RTL8168GU: xid 0x%X, MMIO 0x%X, "
          "MAC %X%X:%X%X:%X%X:%X%X:%X%X:%X%X",
-         r8168_xid, (unsigned)(uintptr_t)r8168_mmio, (unsigned)(rtl8168_mac[0] >> 4),
+         r8168_xid, (unsigned)r8168_mmio, (unsigned)(rtl8168_mac[0] >> 4),
          (unsigned)(rtl8168_mac[0] & 0xF), (unsigned)(rtl8168_mac[1] >> 4),
          (unsigned)(rtl8168_mac[1] & 0xF), (unsigned)(rtl8168_mac[2] >> 4),
          (unsigned)(rtl8168_mac[2] & 0xF), (unsigned)(rtl8168_mac[3] >> 4),

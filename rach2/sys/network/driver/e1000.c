@@ -89,7 +89,7 @@ struct e1000 {
 
     /* The mapped memory window and the I/O port window; the accessors read
      * and write through them. */
-    volatile uint8_t *mmio;
+    uintptr_t mmio;
     uint16_t iobase;
 
     pci_device_t pci;
@@ -432,7 +432,7 @@ static int e1000_pages(struct e1000 *e)
             return -1;
         }
         e->rx_ring = (volatile struct e1000_rx_desc *)page;
-        e->tx_ring = (volatile struct e1000_tx_desc *)((uint8_t *)page + 2048);
+        e->tx_ring = (volatile struct e1000_tx_desc *)((uintptr_t)page + 2048);
     }
     for (i = 0; i < E1000_RING_SIZE; i += 2) {
         if (!e->rx_buf[i]) {
@@ -544,7 +544,7 @@ static int e1000_init(struct netdev *nd, int nth)
         e1000_err = "the e1000 window would not map";
         return NETDEV_FAILED;
     }
-    e->mmio = (volatile uint8_t *)mapped;
+    e->mmio = mapped;
     pci_enable_memory_space(&e->pci);
 
     /* A window that answers every read with all ones is a card that is not

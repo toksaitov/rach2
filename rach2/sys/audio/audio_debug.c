@@ -117,10 +117,10 @@ static bool audio_parse_uint(const char *str, uint32_t *out)
  * `i + 1 < samples16` guard writes a final lone sample to one channel only, so
  * the buffer is never overrun.
  */
-static void audio_test_callback(uint8_t *buffer, size_t size)
+static void audio_test_callback(void *buffer, size_t size)
 {
     size_t i;
-    int16_t *out = (int16_t *)buffer;
+    int16_t *out = buffer;
     size_t samples16 = size / 2;
 
     for (i = 0; i < samples16;) {

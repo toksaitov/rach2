@@ -238,7 +238,7 @@ struct xhci_ctrl {
     uint32_t legacy_saved_ctl;
     int legacy_taken;
 
-    volatile uint8_t *base;
+    uintptr_t base;
     struct xhci_caps caps;
     const char *err;
 
@@ -534,7 +534,7 @@ static int discover_one(struct xhci_ctrl *hc, pci_device_t *dev)
         hc->err = "the controller's aperture could not be mapped";
         return -1;
     }
-    hc->base = (volatile uint8_t *)mapped;
+    hc->base = mapped;
 
     klog(KLOG_INFO, "usb", "found: xhci%d: %x:%x at %d:%d.%d, aperture 0x%X", hc->number,
          (int)dev->vendor_id, (int)dev->device_id, (int)dev->bus, (int)dev->device,
@@ -1984,7 +1984,7 @@ void xhci_stop(struct xhci_ctrl *hc)
 /** A context entry, whose size the controller decides. */
 static uint32_t *context_entry(struct xhci_ctrl *hc, uint8_t *base, uint32_t index)
 {
-    return (uint32_t *)(base + index * hc->caps.context_size);
+    return (uint32_t *)((uintptr_t)base + index * hc->caps.context_size);
 }
 
 /** Zero a context entry, whatever size the controller uses. */

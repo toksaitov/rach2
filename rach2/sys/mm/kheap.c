@@ -281,14 +281,14 @@ static int add_class_page(uint32_t cls)
 {
     uint32_t page = find_run(1);
     struct page_hdr *hdr;
-    uint8_t *base;
+    uintptr_t base;
     uint32_t size = class_size[cls];
     uint32_t off;
 
     if (page >= KHEAP_PAGES || map_run(page, 1) != 0) {
         return -1;
     }
-    base = (uint8_t *)(KVA_HEAP + page * PAGE_SIZE);
+    base = KVA_HEAP + page * PAGE_SIZE;
     hdr = (struct page_hdr *)base;
     hdr->magic = KHEAP_MAGIC;
     hdr->cls = cls;
@@ -296,24 +296,25 @@ static int add_class_page(uint32_t cls)
     hdr->pages = 1;
     for (off = KHEAP_HDR; off + size <= PAGE_SIZE; off += size) {
         *(void **)(base + off) = free_list[cls];
-        free_list[cls] = base + off;
+        free_list[cls] = (void *)(base + off);
     }
     return 0;
 }
 
 /* Interrupts off. Take every block of the page at `base` off its class's
  * free list, so the page can go back. */
-static void drop_class_page(uint8_t *base, uint32_t cls)
+static void drop_class_page(uintptr_t base, uint32_t cls)
 {
     void **link = &free_list[cls];
 
     while (*link) {
-        uint8_t *block = *link;
+        void *block = *link;
+        uintptr_t at = (uintptr_t)block;
 
-        if (block >= base && block < base + PAGE_SIZE) {
+        if (at >= base && at < base + PAGE_SIZE) {
             *link = *(void **)block;
         } else {
-            link = (void **)block;
+            link = block;
         }
     }
 }
@@ -328,13 +329,13 @@ void *kmalloc(size_t size)
     }
     if (size > class_size[KHEAP_CLASSES - 1]) {
         uint32_t count = (uint32_t)((size + KHEAP_HDR + PAGE_SIZE - 1) / PAGE_SIZE);
-        uint8_t *base = kalloc_pages(count, NULL);
+        void *base = kalloc_pages(count, NULL);
         struct page_hdr *hdr;
 
         if (!base) {
             return NULL;
         }
-        hdr = (struct page_hdr *)base;
+        hdr = base;
         hdr->magic = KHEAP_MAGIC;
         hdr->cls = KHEAP_LARGE;
         hdr->used = (uint32_t)size;
@@ -342,7 +343,7 @@ void *kmalloc(size_t size)
         flags = irq_save();
         bytes_used += (uint32_t)size;
         irq_restore(flags);
-        return base + KHEAP_HDR;
+        return (uint8_t *)base + KHEAP_HDR;
     }
     for (cls = 0; class_size[cls] < size; cls++) {
     }
@@ -409,7 +410,7 @@ void kfree(void *p)
     hdr->used--;
     bytes_used -= class_size[hdr->cls];
     if (hdr->used == 0) {
-        drop_class_page((uint8_t *)hdr, hdr->cls);
+        drop_class_page((uintptr_t)hdr, hdr->cls);
         hdr->magic = 0;
         release_run(((uintptr_t)hdr - KVA_HEAP) / PAGE_SIZE, 1);
     }

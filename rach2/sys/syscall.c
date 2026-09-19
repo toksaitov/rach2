@@ -7961,7 +7961,10 @@ static int32_t synth_getdents(fd_entry_t *e, char *buf, uint32_t count)
     uint8_t dtype;
 
     while (synth_dirent_at(kind, pid, (int)idx, name, &ino, &dtype)) {
-        uint8_t recbuf[64];
+        union {
+            struct linux_dirent64 rec;
+            uint8_t bytes[64];
+        } recbuf;
         uint32_t name_len = k_strlen(name);
         uint32_t rec_len =
             sizeof(uint64_t) + sizeof(int64_t) + sizeof(uint16_t) + sizeof(uint8_t) + name_len + 1;
@@ -7974,14 +7977,14 @@ static int32_t synth_getdents(fd_entry_t *e, char *buf, uint32_t count)
             }
             break;
         }
-        k_memset(recbuf, 0, rec_len);
-        d = (struct linux_dirent64 *)recbuf;
+        k_memset(&recbuf, 0, rec_len);
+        d = &recbuf.rec;
         d->d_ino = ino;
         d->d_off = (int64_t)(idx + 1);
         d->d_reclen = (uint16_t)rec_len;
         d->d_type = dtype;
         k_memcpy(d->d_name, name, name_len + 1);
-        if (copy_to_user((void __user *)(buf + written), recbuf, rec_len) != 0) {
+        if (copy_to_user((void __user *)(buf + written), &recbuf, rec_len) != 0) {
             return written > 0 ? (int32_t)written : -EFAULT;
         }
         written += rec_len;
@@ -8081,7 +8084,10 @@ static int32_t sys_getdents64(isr_params_t *params)
         cursor = (uint32_t)ofd->offset;
         for (;;) {
             struct vfs_dirent de;
-            uint8_t recbuf[VFS_NAME_MAX + 1 + 32];
+            union {
+                struct linux_dirent64 rec;
+                uint8_t bytes[VFS_NAME_MAX + 1 + 32];
+            } recbuf;
             int got = vfs_readdir(ofd->vmnt, ofd->fhandle, &cursor, &de);
 
             if (got == 0) {
@@ -8105,14 +8111,14 @@ static int32_t sys_getdents64(isr_params_t *params)
             }
             /* Build the record in kernel memory, then copy it out through
              * the helper (no raw write into user space). */
-            k_memset(recbuf, 0, rec_len);
-            dirent = (struct linux_dirent64 *)recbuf;
+            k_memset(&recbuf, 0, rec_len);
+            dirent = &recbuf.rec;
             dirent->d_ino = de.ino;
             dirent->d_off = (int64_t)cursor; /* next position */
             dirent->d_reclen = (uint16_t)rec_len;
             dirent->d_type = de.is_dir ? DT_DIR : DT_REG;
             k_memcpy(dirent->d_name, de.name, name_len + 1);
-            if (copy_to_user((void __user *)(buf + bytes_written), recbuf, rec_len) != 0) {
+            if (copy_to_user((void __user *)(buf + bytes_written), &recbuf, rec_len) != 0) {
                 fd_ofd_unlock(ofd);
                 return (bytes_written > 0) ? (int32_t)bytes_written : -EFAULT;
             }

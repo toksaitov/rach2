@@ -34,7 +34,7 @@ typedef enum {
  * Pull callback: the driver calls it when it needs more samples to play.
  * `buffer` receives `size` bytes of audio samples to fill.
  */
-typedef void (*audio_callback_t)(uint8_t *buffer, size_t size);
+typedef void (*audio_callback_t)(void *buffer, size_t size);
 
 /* Audio driver interface; each hardware backend supplies these ops. */
 typedef struct audio_driver {
