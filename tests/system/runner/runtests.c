@@ -295,53 +295,6 @@ static long find_text(const unsigned char *hay, size_t len, size_t from,
     return -1;
 }
 
-/* How many records between `from` and `to` carry `what` after their prefix.
-   Counted at a line start, so a probe that printed the text of a record
-   inside its own output does not add to the count. */
-static long count_records(const unsigned char *hay, size_t from, size_t to,
-                          const char *what)
-{
-    size_t wlen = strlen(what), at;
-    long n = 0;
-
-    for (at = from; at < to; at++) {
-        if (at != 0 && hay[at - 1] != '\n')
-            continue;
-        if (hay[at] != '<')
-            continue;
-        {
-            size_t p = at;
-
-            while (p + wlen <= to && hay[p] != '\n') {
-                if (memcmp(hay + p, what, wlen) == 0) {
-                    n++;
-                    break;
-                }
-                p++;
-            }
-        }
-    }
-    return n;
-}
-
-/* The offset of the first error or worse record between `from` and `to`, or
-   -1. A record's level is the digit its line begins with, so only a line
-   start counts: a probe that printed the text of a record inside its own
-   output cannot make one. */
-static long find_level_between(const unsigned char *hay, size_t from, size_t to)
-{
-    size_t at;
-
-    for (at = from; at + 2 < to; at++) {
-        if (at != 0 && hay[at - 1] != '\n')
-            continue;
-        if (hay[at] == '<' && hay[at + 2] == '>' &&
-            (hay[at + 1] == '2' || hay[at + 1] == '3'))
-            return (long) at;
-    }
-    return -1;
-}
-
 /**
  * Score what the kernel says about time: 1 when it reported its measurements,
  * with them in `detail`, 0 with the reason otherwise.
