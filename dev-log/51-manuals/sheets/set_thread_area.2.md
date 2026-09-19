@@ -22,6 +22,7 @@ pointer/request.
 
 ## set_tid_address: number 258, handler sys_set_tid_address
 
-Record the clear-child-tid pointer and return the tid (set_tid_address(2)).
+Return the caller's tid, ignoring the clear-child-tid pointer
+(set_tid_address(2)).
 Rach2 has no threads, so this only returns the caller's PID as its thread id;
 the pointer (EBX) is accepted and ignored.

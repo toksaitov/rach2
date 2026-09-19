@@ -20,6 +20,8 @@ server's startup. */
 
 ## getsockopt: socketcall 15, handler do_getsockopt
 
-getsockopt: report the integer options programs read at setup: SO_ERROR (no
-async error is tracked, so 0), SO_TYPE (the real socket type), and the
-boolean options as 0 (off). Always reports a 4-byte int result. */
+getsockopt: report the options programs read at setup: SO_ERROR (the
+pending connection error, cleared by the read), SO_TYPE (the real socket
+type), SO_REUSEADDR and SO_BROADCAST as stored, and SO_BINDTODEVICE as the
+interface name. An int result is truncated to the caller's capacity, and
+the length written is what was copied. */

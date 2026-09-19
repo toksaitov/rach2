@@ -10712,9 +10712,11 @@ static int32_t do_setsockopt(int fd, int level, int optname, uint32_t optval_ptr
     return 0;
 }
 
-/* getsockopt: report the integer options programs read at setup: SO_ERROR (no
- * async error is tracked, so 0), SO_TYPE (the real socket type), and the
- * boolean options as 0 (off). Always reports a 4-byte int result. */
+/* getsockopt: report the options programs read at setup: SO_ERROR (the
+ * pending connection error, cleared by the read), SO_TYPE (the real socket
+ * type), SO_REUSEADDR and SO_BROADCAST as stored, and SO_BINDTODEVICE as the
+ * interface name. An int result is truncated to the caller's capacity, and
+ * the length written is what was copied. */
 static int32_t do_getsockopt(int fd, int level, int optname, uint32_t optval_ptr,
                              uint32_t optlen_ptr)
 {
@@ -11336,7 +11338,8 @@ static int32_t sys_sysinfo(isr_params_t *params)
 }
 
 /**
- * Record the clear-child-tid pointer and return the tid (set_tid_address(2)).
+ * Return the caller's tid, ignoring the clear-child-tid pointer
+ * (set_tid_address(2)).
  *
  * Rach2 has no threads, so this only returns the caller's PID as its thread id;
  * the pointer (EBX) is accepted and ignored.

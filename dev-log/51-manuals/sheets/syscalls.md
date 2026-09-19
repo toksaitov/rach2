@@ -1338,7 +1338,8 @@ pointer/request.
 
 ## 258 set_tid_address -> sys_set_tid_address
 
-Record the clear-child-tid pointer and return the tid (set_tid_address(2)).
+Return the caller's tid, ignoring the clear-child-tid pointer
+(set_tid_address(2)).
 Rach2 has no threads, so this only returns the caller's PID as its thread id;
 the pointer (EBX) is accepted and ignored.
 
@@ -1650,9 +1651,11 @@ server's startup. */
 
 ### SC_GETSOCKOPT = 15 -> do_getsockopt
 
-getsockopt: report the integer options programs read at setup: SO_ERROR (no
-async error is tracked, so 0), SO_TYPE (the real socket type), and the
-boolean options as 0 (off). Always reports a 4-byte int result. */
+getsockopt: report the options programs read at setup: SO_ERROR (the
+pending connection error, cleared by the read), SO_TYPE (the real socket
+type), SO_REUSEADDR and SO_BROADCAST as stored, and SO_BINDTODEVICE as the
+interface name. An int result is truncated to the caller's capacity, and
+the length written is what was copied. */
 
 
 ### SC_RECVMSG = 17 -> do_recvmsg
