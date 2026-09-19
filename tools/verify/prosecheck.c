@@ -1505,19 +1505,11 @@ static int selftest(void)
               "* `24-metal`: a sentence.\n* `25-sealed`: a sentence.\n"
               "```\n* `26-portable`: a sentence.\n```\n", 3, NULL }
         };
-        struct milestone dirs[3];
+        struct milestone dirs[3] = {
+            { "24-metal", 24, 1 }, { "25-sealed", 25, 1 }, { "26-portable", 26, 0 }
+        };
         char entries[64][128];
         int i;
-
-        snprintf(dirs[0].name, sizeof(dirs[0].name), "24-metal");
-        dirs[0].number = 24;
-        dirs[0].finished = 1;
-        snprintf(dirs[1].name, sizeof(dirs[1].name), "25-sealed");
-        dirs[1].number = 25;
-        dirs[1].finished = 1;
-        snprintf(dirs[2].name, sizeof(dirs[2].name), "26-portable");
-        dirs[2].number = 26;
-        dirs[2].finished = 0;
 
         for (i = 0; i < (int) (sizeof(cases) / sizeof(cases[0])); i++) {
             struct spans problems = { NULL, 0, 0 };
