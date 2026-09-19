@@ -1095,12 +1095,15 @@ static void normalize_path(char *path)
     int absolute = path[0] == '/';
 
     while (p != NULL && *p != '\0') {
+        size_t plen;
+
         slash = strchr(p, '/');
+        plen = slash != NULL ? (size_t) (slash - p) : strlen(p);
         if (slash != NULL)
             *slash = '\0';
-        if (strcmp(p, ".") == 0 || *p == '\0') {
+        if (plen == 0 || (plen == 1 && p[0] == '.')) {
             /* nothing */
-        } else if (strcmp(p, "..") == 0) {
+        } else if (plen == 2 && p[0] == '.' && p[1] == '.') {
             if (n > 0)
                 n--;
         } else if (n < 128) {
