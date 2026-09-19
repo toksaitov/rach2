@@ -63,6 +63,8 @@ struct pit_clock {
 
 static struct pit_clock clock;
 
+static uint32_t pit_phase_from(uint32_t count, uint8_t status);
+
 /**
  * A reading that found the counter at `phase` microseconds into its period:
  * a phase behind the last one is the counter wrapped since, which the
@@ -89,36 +91,69 @@ static void pit_clock_tick(struct pit_clock *c, uint32_t phase)
     c->last_phase = phase;
 }
 
+/**
+ * The clock's arithmetic on fixed inputs, as `pit.h` describes.
+ *
+ * The rows: the period of two sweeps agrees with the reload and the
+ * crystal to a hundredth; a count at the reload is the start of the period
+ * and, with OUT low, the start of the second sweep; a count a quarter in
+ * reads a quarter of a sweep; a count above the reload reads as the start;
+ * two readings inside one period add no period; a tick with no reading
+ * ahead of it adds one; a reading behind the last one counts the wrap and
+ * the tick after it adds nothing; and the next tick, with no wrap read
+ * before it, adds its period.
+ */
 int pit_clock_check(void)
 {
+    uint32_t p = 2u * sweep_us();
+    uint32_t want = pit_reload * 8381u / 10000u; /* 1193182 counts a second */
+    uint32_t quarter = pit_phase_from(pit_reload - pit_reload / 4u, 0x80);
     struct pit_clock c;
     int ok = 1;
 
+    ok = ok && p >= want - want / 100u && p <= want + want / 100u;
+    ok = ok && pit_phase_from(pit_reload, 0x80) == 0u;
+    ok = ok && pit_phase_from(pit_reload, 0x00) == sweep_us();
+    ok = ok && quarter + 2u >= sweep_us() / 4u && quarter <= sweep_us() / 4u + 2u;
+    ok = ok && pit_phase_from(pit_reload + 5u, 0x80) == 0u;
     c.periods = 0;
     c.last_phase = 0;
     c.wrapped = 0;
-    /* Two readings inside one period: the phase moves and no period is
-       added, a reload at the half seen as the second sweep included. */
-    ok = ok && pit_clock_read(&c, 3000, 10000) == 3000;
-    ok = ok && pit_clock_read(&c, 8000, 10000) == 8000;
-    /* The tick with no reading ahead of it: one period, exactly. */
-    pit_clock_tick(&c, 100);
-    ok = ok && pit_clock_read(&c, 500, 10000) == 10500;
-    /* A reading that finds the counter behind the last one counts the
-       wrap; the tick that follows sees it counted and adds nothing. */
-    ok = ok && pit_clock_read(&c, 50, 10000) == 20050;
-    pit_clock_tick(&c, 120);
-    ok = ok && pit_clock_read(&c, 900, 10000) == 20900;
-    /* The next tick, with no wrap read before it, counts its period. */
-    pit_clock_tick(&c, 30);
-    ok = ok && pit_clock_read(&c, 40, 10000) == 30040;
+    ok = ok && pit_clock_read(&c, 3000u, p) == 3000u;
+    ok = ok && pit_clock_read(&c, 8000u, p) == 8000u;
+    pit_clock_tick(&c, 100u);
+    ok = ok && pit_clock_read(&c, 500u, p) == p + 500u;
+    ok = ok && pit_clock_read(&c, 50u, p) == 2u * p + 50u;
+    pit_clock_tick(&c, 120u);
+    ok = ok && pit_clock_read(&c, 900u, p) == 2u * p + 900u;
+    pit_clock_tick(&c, 30u);
+    ok = ok && pit_clock_read(&c, 40u, p) == 3u * p + 40u;
     return ok;
 }
 
-/** Where the counter is inside its period, in microseconds. */
+/**
+ * Where the counter is inside its period, in microseconds, from a latched
+ * count and the read-back status. Mode 3 sweeps the count to zero twice per
+ * period, and OUT is low through the second sweep, which the status says. A
+ * count above the reload is a reload seen mid-latch and reads as the start.
+ */
+static uint32_t pit_phase_from(uint32_t count, uint8_t status)
+{
+    uint32_t phase;
+
+    if (count > pit_reload) {
+        count = pit_reload;
+    }
+    phase = (pit_reload - count) * US_PER_COUNT_THOUSANDTHS / 1000u;
+    if ((status & 0x80u) == 0) {
+        phase += sweep_us();
+    }
+    return phase;
+}
+
+/** Where the counter is inside its period now, in microseconds. */
 static uint32_t clock_phase(void)
 {
-    uint32_t count, phase;
     uint8_t status, lo, hi;
 
     outb(0x43, 0xE2); /* read back channel 0's status, leaving the count */
@@ -126,16 +161,7 @@ static uint32_t clock_phase(void)
     outb(0x43, 0x00); /* latch the count */
     lo = inb(0x40);
     hi = inb(0x40);
-
-    count = ((uint32_t)hi << 8) | (uint32_t)lo;
-    if (count > pit_reload) {
-        count = pit_reload; /* a reload seen mid-latch reads as the start */
-    }
-    phase = (pit_reload - count) * US_PER_COUNT_THOUSANDTHS / 1000u;
-    if ((status & 0x80u) == 0) {
-        phase += sweep_us(); /* OUT is low through the second half */
-    }
-    return phase;
+    return pit_phase_from(((uint32_t)hi << 8) | (uint32_t)lo, status);
 }
 
 /**

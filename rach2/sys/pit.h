@@ -43,12 +43,14 @@ void pit_tick_clock(void);
 /**
  * Whether the clock's period accounting is right, on fixed readings.
  *
- * The same arithmetic `pit_now_us` and `pit_tick_clock` run, fed a
- * sequence of phases and ticks whose answer is known: a sweep counted as a
- * period, or a period counted twice, fails it on every machine, and a
- * machine a hypervisor stops cannot fail it, since the readings are not
- * taken from the counter. The boot's timing record takes its level from
- * this. Nonzero when every answer is right.
+ * The same arithmetic `pit_now_us` and `pit_tick_clock` run: the count and
+ * status of the 8254 converted to a phase, the period of two sweeps against
+ * the reload and the crystal, and the period accounting fed a sequence of
+ * phases and ticks whose answer is known. A sweep counted as a period, a
+ * period counted twice, or a second sweep read as the first fails it on
+ * every machine, and a machine a hypervisor stops cannot fail it, since
+ * nothing here is read from the counter. The boot's timing record takes
+ * its level from this. Nonzero when every answer is right.
  */
 int pit_clock_check(void);
 
