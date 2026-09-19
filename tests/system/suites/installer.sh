@@ -479,7 +479,7 @@ rm -f "$LOG6" "$LOG6.harness"
 "$HARNESS" --bios --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-drive --qemu-arg="file=$DIR/one.img,format=raw,if=ide,index=0,media=disk" \
     --net "user,id=net0,hostfwd=tcp::$PORT-:22" --device "rtl8139,netdev=net0" \
-    --timeout 300 --steptmo 120 --ok "SSHDONE" --log "$LOG6" \
+    --timeout 600 --steptmo 480 --ok "SSHDONE" --log "$LOG6" \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$NEWPASS" \
     "expect=# " "send=echo SSH\"\"READY" "expect=SSHREADY" "expect=SSHDONE" \
     > "$LOG6.harness" 2>&1 &
@@ -516,19 +516,25 @@ case "$OUT" in
     *"Permission denied"*) note "and the image's own key is refused for root: OK" ;;
     *) bad "the demonstration key's attempt neither ran nor was refused: $OUT" ;;
 esac
-# The attempts are over: root writes the token on the console, which ends
-# the harness's run. A machine that cannot be told is stopped, so the
-# failure is reported now and not at the run's limit.
+# The attempts are over: root answers this session first and then writes
+# the token on the console, which ends the harness's run, so the reply is
+# in hand before the machine can be stopped. The run's budget of 480 s a
+# step covers the four connections of this row together. A machine that
+# cannot be told is stopped, harness and machine, so the failure is
+# reported now and not at the run's limit.
 OUT=$(RACH2_PASSWORD="$NEWPASS" "$PTYDRIVE" --rows 40 --cols 100 --timeout 60 -- \
     ssh -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
     -o "ConnectTimeout=$(scaled 20)" -o PubkeyAuthentication=no \
     -o PreferredAuthentications=password -o NumberOfPasswordPrompts=3 -tt \
-    -p "$PORT" root@localhost 'echo SSH""DONE > /dev/console; echo TOLD' 2>&1 || true)
+    -p "$PORT" root@localhost 'echo TOLD; echo SSH""DONE > /dev/console' 2>&1 || true)
 case "$OUT" in
-    *TOLD*) ;;
-    *) kill -TERM "$QPID" 2>/dev/null; bad "the installed machine could not be told the attempts are over: $OUT" ;;
+    *TOLD*) wait "$QPID" || bad "the installed machine did not stay up for the SSH attempts" ;;
+    *)
+        kill -TERM "$QPID" 2>/dev/null || true
+        wait "$QPID" 2>/dev/null || true
+        bad "the installed machine could not be told the attempts are over: $OUT"
+        ;;
 esac
-wait "$QPID" || bad "the installed machine did not stay up for the SSH attempts"
 
 mark "row 6"
 # ---- 7: a stick whose image is not the one its manifest describes. The
