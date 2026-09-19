@@ -282,6 +282,7 @@ void probe_main(unsigned int *sp)
             if (i < 6) {
                 if (wanted(arg, 's')) {
                     for (;;) {
+                        __asm__ __volatile__("" ::: "memory"); /* a spin, meant to last */
                     }
                 }
             } else if (i < 8) {

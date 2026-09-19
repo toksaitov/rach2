@@ -56,6 +56,7 @@ void _start(void)
     }
     if (pid == 0) {
         for (;;) {
+            __asm__ __volatile__("" ::: "memory"); /* a spin, meant to last */
         }
     }
     print("SURVIVORPROBE OK\n");
