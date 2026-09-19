@@ -1,0 +1,829 @@
+.Dd September 19, 2026
+.Dt BUSYBOX-UTIL-LINUX 1
+.Os
+.Sh NAME
+.Nm busybox-util-linux ,
+.Nm blkid ,
+.Nm cal ,
+.Nm chrt ,
+.Nm fallocate ,
+.Nm fatattr ,
+.Nm fbset ,
+.Nm fdflush ,
+.Nm fdformat ,
+.Nm fdisk ,
+.Nm findfs ,
+.Nm flock ,
+.Nm freeramdisk ,
+.Nm fsck.minix ,
+.Nm getopt ,
+.Nm hd ,
+.Nm hexdump ,
+.Nm hwclock ,
+.Nm ipcrm ,
+.Nm ipcs ,
+.Nm last ,
+.Nm linux32 ,
+.Nm linux64 ,
+.Nm lspci ,
+.Nm lsusb ,
+.Nm mesg ,
+.Nm mkfs.minix ,
+.Nm mkswap ,
+.Nm more ,
+.Nm mount ,
+.Nm mountpoint ,
+.Nm nologin ,
+.Nm nsenter ,
+.Nm pivot_root ,
+.Nm rdate ,
+.Nm rdev ,
+.Nm readprofile ,
+.Nm renice ,
+.Nm rev ,
+.Nm rtcwake ,
+.Nm script ,
+.Nm scriptreplay ,
+.Nm setarch ,
+.Nm setsid ,
+.Nm swapoff ,
+.Nm swapon ,
+.Nm taskset ,
+.Nm umount ,
+.Nm unshare ,
+.Nm xxd
+.Nd BusyBox system utilities
+.Sh SYNOPSIS
+.Nm blkid
+.Op Ar BLOCKDEV
+.Ar ...
+.Nm cal
+.Op Fl jmy
+.Op Oo Ar MONTH Oc Ar YEAR
+.Nm chrt
+.Fl m | Fl p Op Ar PRIO
+.Ar PID | Op Fl rfobi
+.Ar PRIO PROG ARGS
+.Nm fallocate
+.Op Fl o Ar OFS
+.Fl l Ar LEN
+.Ar FILE
+.Nm fatattr
+.Op Fl +rhsvda
+.Ar FILE ...
+.Nm fbset
+.Op Ar OPTIONS
+.Op Ar MODE
+.Nm fdflush
+.Ar DEVICE
+.Nm fdformat
+.Op Fl n
+.Ar DEVICE
+.Nm fdisk
+.Op Fl ul
+.Op Fl C Ar CYLINDERS
+.Op Fl H Ar HEADS
+.Op Fl S Ar SECTORS
+.Op Fl b Ar SSZ
+.Ar DISK
+.Nm findfs
+.Cm LABEL Ns = Ns Ar label
+.Cm or UUID Ns = Ns Ar uuid
+.Nm flock
+.Op Fl sxun
+.Ar FD |
+.Bro Ar FILE
+.Op Fl c
+.Ar PROG ARGS
+.Brc
+.Nm freeramdisk
+.Ar DEVICE
+.Nm fsck.minix
+.Op Fl larvsmf
+.Ar BLOCKDEV
+.Nm getopt
+.Op Ar OPTIONS
+.Op Fl -
+.Ar OPTSTRING PARAMS
+.Nm hd
+.Ar FILE ...
+.Nm hexdump
+.Op Fl bcdoxCv
+.Op Fl e Ar FMT
+.Op Fl f Ar FMT_FILE
+.Op Fl n Ar LEN
+.Op Fl s Ar OFS
+.Op Ar FILE
+.Ar ...
+.Nm hwclock
+.Op Fl swul
+.Op Fl -systz
+.Op Fl f Ar DEV
+.Nm ipcrm
+.Op Fl MQS Ar key
+.Op Fl mqs Ar id
+.Nm ipcs
+.Oo
+.Op Fl smq
+.Fl i Ar SHMID
+.Oc
+|
+.Oo
+.Op Fl asmq
+.Op Fl tcplu
+.Oc
+.Nm last
+.Op Fl HW
+.Op Fl f Ar FILE
+.Nm linux32
+.Op Fl R
+.Ar PROG ARGS
+.Nm linux64
+.Op Fl R
+.Ar PROG ARGS
+.Nm lspci
+.Op Fl mk
+.Nm lsusb
+.Nm mesg
+.Op Cm y Ns | Ns Cm n
+.Nm mkfs.minix
+.Op Fl c | Fl l Ar FILE
+.Op Fl n Ns Ar XX
+.Op Fl i Ns Ar XX
+.Ar BLOCKDEV
+.Op Ar KBYTES
+.Nm mkswap
+.Op Fl L Ar LBL
+.Ar BLOCKDEV
+.Op Ar KBYTES
+.Nm more
+.Op Ar FILE
+.Ar ...
+.Nm mount
+.Op Ar OPTIONS
+.Op Fl o Ar OPT
+.Ar DEVICE NODE
+.Nm mountpoint
+.Op Fl q
+.Bro Op Fl dn
+.Ar DIR | Fl x Ar DEVICE Brc
+.Nm nologin
+.Nm nsenter
+.Op Ar OPTIONS
+.Op Ar PROG ARGS
+.Nm pivot_root
+.Ar NEW_ROOT PUT_OLD
+.Nm rdate
+.Op Fl s Ns / Ns Fl p
+.Ar HOST
+.Nm rdev
+.Nm readprofile
+.Op Ar OPTIONS
+.Nm renice
+.Op Fl n
+.Ar PRIORITY
+.Oo Oo Fl p Ns | Ns Cm g Ns | Ns Cm u Oc
+.Ar ID ... Oc Ns ...
+.Nm rev
+.Op Ar FILE
+.Ar ...
+.Nm rtcwake
+.Op Fl a | Fl l | Fl u
+.Op Fl d Ar DEV
+.Op Fl m Ar MODE
+.Op Fl s Ar SEC | Fl t Ar TIME
+.Nm script
+.Op Fl afq
+.Op Fl t Ns Op Ar FILE
+.Op Fl c Ar PROG
+.Op Ar OUTFILE
+.Nm scriptreplay
+.Ar TIMINGFILE
+.Op Ar TYPESCRIPT Op Ar DIVISOR
+.Nm setarch
+.Ar PERSONALITY
+.Op Fl R
+.Ar PROG ARGS
+.Nm setsid
+.Op Fl c
+.Ar PROG ARGS
+.Nm swapoff
+.Op Fl a
+.Op Ar DEVICE
+.Nm swapon
+.Op Fl a
+.Op Fl e
+.Op Fl d Ns Op Ar POL
+.Op Fl p Ar PRI
+.Op Ar DEVICE
+.Nm taskset
+.Op Fl ap
+.Op Ar HEXMASK | Fl c Ar LIST
+.Brq Ar PID | PROG ARGS
+.Nm umount
+.Op Fl rlfa
+.Op Fl t Ar FSTYPE
+.Ar FILESYSTEM Ns | Ns Ar DIRECTORY
+.Nm unshare
+.Op Ar OPTIONS
+.Op Ar PROG ARGS
+.Nm xxd
+.Op Fl pri
+.Op Fl g Ar N
+.Op Fl c Ar N
+.Op Fl l Ar LEN
+.Op Fl s Ar OFS
+.Op Fl o Ar OFS
+.Op Ar FILE
+.Sh DESCRIPTION
+These are the util-linux applets of BusyBox 1.36.1 as built for Rach2.
+.Bl -tag -width scriptreplay
+.It Nm blkid
+Print file system UUIDs.
+Read volumes through the disk nodes described in
+.Xr disk 4 .
+.It Nm cal
+Display a calendar.
+.It Nm chrt
+Request a scheduling priority and class for a process.
+.It Nm fallocate
+Preallocate space for a file.
+.It Nm fatattr
+Change FAT file attributes.
+.It Nm fbset
+Show or modify frame buffer settings.
+.It Nm fdflush
+Request that a floppy drive detect a disk change.
+.It Nm fdformat
+Format a floppy disk.
+.It Nm fdisk
+Read or change a partition table.
+Writing a table requires the recovery kernel.
+.It Nm findfs
+Find a file system device by label or UUID.
+Read volumes through the disk nodes described in
+.Xr disk 4 .
+.It Nm flock
+Request a lock or unlock on a file descriptor, or lock a file and run a program.
+Rach2 registers no
+.Fn flock
+system call, so the request fails.
+.It Nm freeramdisk
+Request that all memory used by a RAM disk be freed.
+.It Nm fsck.minix
+Check a MINIX file system and optionally repair it.
+.It Nm getopt
+Parse command options for a shell script.
+.It Nm hd
+An alias for
+.Ql hexdump -C .
+.It Nm hexdump
+Display files, or standard input, in a specified format.
+.It Nm hwclock
+Request a read or update of the hardware real-time clock (RTC).
+Rach2 publishes no RTC device node, so the applet fails.
+.It Nm ipcrm
+Remove System V shared memory segments, message queues, or semaphores.
+.It Nm ipcs
+Display System V shared memory, message queue, or semaphore information.
+.It Nm last
+List the last users who logged in.
+.It Nm linux32 , Nm linux64
+Aliases for
+.Ql setarch linux32
+and
+.Ql setarch linux64 .
+.It Nm lspci
+List PCI devices from
+.Pa /sys/bus/pci/devices ,
+which Rach2 does not have; nothing is listed.
+.It Nm lsusb
+List USB buses and attached devices from
+.Pa /sys/bus/usb/devices ,
+which Rach2 does not have; nothing is listed.
+.It Nm mesg
+Control write access to the terminal.
+The argument
+.Cm y
+allows access;
+.Cm n
+disallows it.
+.It Nm mkfs.minix
+Create a MINIX file system.
+.It Nm mkswap
+Prepare a device as a swap partition.
+Rach2 does not support swap.
+.It Nm more
+Display files, or standard input, one screen at a time.
+.It Nm mount
+Mount a file system; see
+.Xr mount 8 .
+File system autodetection requires
+.Pa /proc .
+.It Nm mountpoint
+Check whether a directory is a mount point.
+.It Nm nologin
+Refuse a login.
+.It Nm nsenter
+Request entry into namespaces and run a program.
+.It Nm pivot_root
+Request that the current root file system be moved to
+.Ar PUT_OLD
+and
+.Ar NEW_ROOT
+be made the root file system.
+.It Nm rdate
+Set and print the time from
+.Ar HOST
+using RFC 868.
+.It Nm rdev
+Print the device node for the file system mounted at
+.Pa / .
+.It Nm readprofile
+Read kernel profiling counters.
+.It Nm renice
+Request a change to a running process's scheduling priority.
+.It Nm rev
+Reverse the characters in each line of a file.
+.It Nm rtcwake
+Request a system sleep state until a specified wakeup time.
+.It Nm script
+Record a terminal session in
+.Ar OUTFILE ,
+which defaults to
+.Pa typescript .
+.It Nm scriptreplay
+Play back a terminal session using its timing information.
+.It Nm setarch
+Run a program with the selected uname emulation:
+.Cm linux32
+for 32 bits or
+.Cm linux64
+for 64 bits.
+.It Nm setsid
+Run a program in a new session without a controlling terminal.
+Keyboard signals such as Ctrl-C do not affect the program.
+.It Nm swapoff , Nm swapon
+Request that swapping on a device stop or start, respectively.
+Rach2 does not support swap.
+.It Nm taskset
+Set or get CPU affinity.
+.It Nm umount
+Unmount file systems; see
+.Xr mount 8 .
+.It Nm unshare
+Request separate namespaces for a program.
+.It Nm xxd
+Display a hexadecimal dump of a file or standard input.
+.El
+.Pp
+The
+.Nm losetup
+applet is not built.
+Use
+.Xr loopctl 8
+to configure Rach2 loop devices.
+.Sh OPTIONS
+.Ss cal
+.Bl -tag -width "-j"
+.It Fl j
+Use Julian dates.
+.It Fl m
+Start the week on Monday.
+.It Fl y
+Display the whole year.
+.El
+.Ss chrt
+.Bl -tag -width "-p"
+.It Fl m
+Show minimum and maximum priorities.
+.It Fl p
+Operate on
+.Ar PID .
+.It Fl r
+Select SCHED_RR.
+.It Fl f
+Select SCHED_FIFO.
+.It Fl o
+Select SCHED_OTHER.
+.It Fl b
+Select SCHED_BATCH.
+.It Fl i
+Select SCHED_IDLE.
+.El
+.Ss fatattr
+Prefix attributes with
+.Ql -
+to clear them or
+.Ql +
+to set them.
+The attributes are:
+.Bl -tag -width r -compact
+.It Cm r
+Read only.
+.It Cm h
+Hidden.
+.It Cm s
+System.
+.It Cm v
+Volume label.
+.It Cm d
+Directory.
+.It Cm a
+Archive.
+.El
+.Ss fdformat
+.Fl n
+omits verification after formatting.
+.Ss fdisk
+.Bl -tag -width "-C CYLINDERS"
+.It Fl u
+Display start and end positions in sectors instead of cylinders.
+.It Fl l
+Display each disk's partition table and exit.
+.It Fl b Ar SSZ
+Select the sector size;
+.Fl b Cm 2048
+selects 2048-byte sectors for certain magneto-optical disks.
+.It Fl C Ar CYLINDERS
+Set the cylinder count.
+.It Fl H Ar HEADS
+Set the head count, typically 255.
+.It Fl S Ar SECTORS
+Set the sector count, typically 63.
+.El
+.Ss flock
+.Bl -tag -width "-x"
+.It Fl s
+Request a shared lock.
+.It Fl x
+Request an exclusive lock; this is the default.
+.It Fl u
+Unlock the file descriptor.
+.It Fl n
+Fail instead of waiting for a lock.
+.El
+.Ss fsck.minix
+.Bl -tag -width "-l"
+.It Fl l
+List all file names.
+.It Fl a
+Repair automatically.
+.It Fl r
+Repair interactively.
+.It Fl v
+Produce verbose output.
+.It Fl s
+Print superblock information.
+.It Fl m
+Show
+.Ql mode not cleared
+warnings.
+.It Fl f
+Force a file system check.
+.El
+.Ss getopt
+.Bl -tag -width "-o OPTSTRING"
+.It Fl a
+Allow long options beginning with a single hyphen.
+.It Fl l Ar LOPT Ns Op ,...
+Specify the long options to recognize.
+.It Fl n Ar PROGNAME
+Use this program name in error messages.
+.It Fl o Ar OPTSTRING
+Specify the short options to recognize.
+.It Fl q
+Suppress error messages for unrecognized options.
+.It Fl Q
+Suppress normal output.
+.It Fl s Ar SHELL
+Select shell quoting conventions.
+.It Fl T
+Test the version; exit with status 4.
+.It Fl u
+Do not quote output.
+.El
+.Ss hexdump
+.Bl -tag -width "-f FMT_FILE"
+.It Fl b
+Display bytes in octal.
+.It Fl c
+Display bytes as characters.
+.It Fl d
+Display two-byte units in decimal.
+.It Fl o
+Display two-byte units in octal.
+.It Fl x
+Display two-byte units in hexadecimal.
+.It Fl C
+Display hexadecimal and ASCII, 16 bytes per line.
+.It Fl v
+Display all input without folding duplicate lines.
+.It Fl e Ar FMT
+Use the format string, for example:
+.Dl '16/1 \(dq%02x|\(dq\(dq\en\(dq'
+.It Fl f Ar FMT_FILE
+Read the format from a file.
+.El
+.Ss ipcrm
+Uppercase options select an object by key; lowercase options select it by ID.
+.Bl -tag -width "-m, -M"
+.It Fl m , Fl M
+Remove a shared memory segment after the last detach.
+.It Fl q , Fl Q
+Remove a message queue.
+.It Fl s , Fl S
+Remove a semaphore.
+.El
+.Ss ipcs
+.Bl -tag -width "-i ID"
+.It Fl i Ar ID
+Show a specific resource.
+.It Fl m
+Show shared memory segments.
+.It Fl q
+Show message queues.
+.It Fl s
+Show semaphore arrays.
+.It Fl a
+Show all resources; this is the default.
+.It Fl t
+Show times.
+.It Fl c
+Show creators.
+.It Fl p
+Show process IDs.
+.It Fl l
+Show limits.
+.It Fl u
+Show a summary.
+.El
+.Ss lspci
+.Fl m
+selects parsable output;
+.Fl k
+shows the driver.
+.Ss mkfs.minix
+.Bl -tag -width "-i INODES"
+.It Fl c
+Check for bad blocks.
+.It Fl l Ar FILE
+Read the bad block list from a file.
+.It Fl n Ar XX
+Set the maximum file name length to 14 or 30.
+.It Fl i Ar XX
+Set the inode count.
+.It Fl v
+Create a version 2 file system.
+.El
+.Ss mkswap
+.Fl L Ar LBL
+sets the label.
+.Ss mount
+.Bl -tag -width "-a"
+.It Fl a
+Mount all file systems in fstab.
+.It Fl f
+Perform a dry run.
+.It Fl v
+Produce verbose output.
+.El
+.Pp
+See
+.Xr mount 8
+for Rach2 mount options and restrictions.
+.Ss mountpoint
+.Bl -tag -width "-x DEVICE"
+.It Fl q
+Suppress output.
+.It Fl d
+Print the file system's major and minor device numbers.
+.It Fl n
+Print the file system's device name.
+.El
+.Ss nsenter
+.Bl -tag -width "--preserve-credentials"
+.It Fl t Ar PID
+Get namespaces from the target process.
+.It Fl m Ns Op Ar FILE
+Enter the mount namespace.
+.It Fl u Ns Op Ar FILE
+Enter the UTS namespace, which includes the host name.
+.It Fl i Ns Op Ar FILE
+Enter the System V IPC namespace.
+.It Fl n Ns Op Ar FILE
+Enter the network namespace.
+.It Fl p Ns Op Ar FILE
+Enter the process ID namespace.
+.It Fl U Ns Op Ar FILE
+Enter the user namespace.
+.It Fl S Ar UID
+Set the user ID in the entered namespace.
+.It Fl G Ar GID
+Set the group ID in the entered namespace.
+.It Fl -preserve-credentials
+Leave user and group IDs unchanged.
+.It Fl r Ns Op Ar DIR
+Set the root directory.
+.It Fl w Ns Op Ar DIR
+Set the working directory.
+.It Fl F
+Do not fork before executing the program.
+.El
+.Ss rdate
+.Fl s
+only sets the system time;
+.Fl p
+only prints the time.
+.Ss readprofile
+.Bl -tag -width "-p PROFILE"
+.It Fl m Ar MAPFILE
+Select the map file; the default is
+.Pa /boot/System.map .
+.It Fl p Ar PROFILE
+Select the profile file; the default is
+.Pa /proc/profile .
+.It Fl M Ar NUM
+Set the profiling multiplier.
+.It Fl i
+Print only information about the sampling step.
+.It Fl v
+Produce verbose output.
+.It Fl a
+Print all symbols, including those with zero counts.
+.It Fl b
+Print individual histogram bin counts.
+.It Fl s
+Print individual counters within functions.
+.It Fl r
+Reset all counters; requires root.
+.It Fl n
+Disable byte order autodetection.
+.El
+.Ss renice
+.Bl -tag -width "-n"
+.It Fl n
+Add
+.Ar PRIORITY
+to the current nice value.
+Without this option, set the nice value to
+.Ar PRIORITY .
+.It Fl p
+Interpret IDs as process IDs; this is the default.
+.It Fl g
+Interpret IDs as process group IDs.
+.It Fl u
+Interpret IDs as user names.
+.El
+.Ss rtcwake
+.Bl -tag -width "-m MODE"
+.It Fl a
+Read the clock mode from
+.Pa /etc/adjtime ;
+this is the default.
+.It Fl l
+Treat the RTC as local time.
+.It Fl u
+Treat the RTC as UTC.
+.It Fl d Ar DEV
+Select the RTC device.
+.It Fl m Ar MODE
+Select the sleep state; the default is
+.Cm standby .
+.It Fl s Ar SEC
+Set the wakeup time to this many seconds from now.
+.It Fl t Ar TIME
+Set the wakeup time in seconds since the epoch.
+.El
+.Ss script
+.Bl -tag -width "-t[FILE]"
+.It Fl a
+Append output.
+.It Fl c Ar PROG
+Run the program instead of the shell.
+.El
+.Ss setarch , linux32 , linux64
+.Fl R
+requests that address space randomization be disabled.
+.Ss setsid
+.Fl c
+sets the controlling terminal to standard input.
+.Ss swapoff
+.Fl a
+requests that swapping stop on all swap devices.
+.Ss swapon
+.Bl -tag -width "-d[POL]"
+.It Fl a
+Start swapping on all swap devices.
+.It Fl e
+Silently skip devices that do not exist.
+.It Fl d Ns Op Ar POL
+Discard blocks when swapping starts if
+.Ar POL
+is
+.Cm once ,
+when blocks are freed if it is
+.Cm pages ,
+or at both times if omitted.
+.It Fl p Ar PRI
+Set the swap device priority.
+.El
+.Ss taskset
+.Bl -tag -width "-c LIST"
+.It Fl p
+Operate on
+.Ar PID .
+.It Fl a
+Operate on all threads.
+.It Fl c Ar LIST
+Specify affinity as a list instead of a hexadecimal mask.
+.El
+.Ss umount
+.Bl -tag -width "-t FSTYPE[,...]"
+.It Fl a
+Unmount all file systems.
+.It Fl r
+Remount read-only if the device is busy.
+.It Fl l
+Request a lazy unmount, detaching the file system.
+.It Fl f
+Force an unmount, for example for an unreachable NFS server.
+.It Fl t Ar FSTYPE Ns Op ,...
+Unmount only the specified file system types.
+.El
+.Pp
+See
+.Xr mount 8
+for Rach2 unmount restrictions.
+.Ss unshare
+.Bl -tag -width "--propagation MODE"
+.It Fl m , Fl -mount Ns Op = Ns Ar FILE
+Unshare the mount namespace.
+.It Fl u , Fl -uts Ns Op = Ns Ar FILE
+Unshare the UTS namespace, which includes the host name.
+.It Fl i , Fl -ipc Ns Op = Ns Ar FILE
+Unshare the System V IPC namespace.
+.It Fl n , Fl -net Ns Op = Ns Ar FILE
+Unshare the network namespace.
+.It Fl p , Fl -pid Ns Op = Ns Ar FILE
+Unshare the process ID namespace.
+.It Fl U , Fl -user Ns Op = Ns Ar FILE
+Unshare the user namespace.
+.It Fl f
+Fork before executing the program.
+.It Fl r
+Map the current user to root; implies
+.Fl U .
+.It Fl -mount-proc Ns Op = Ns Ar DIR
+Mount
+.Pa /proc
+first; implies
+.Fl m .
+.It Fl -propagation Ar MODE
+Set mount propagation to
+.Cm slave , shared , private ,
+or
+.Cm unchanged .
+.It Fl -setgroups Cm allow Ns | Ns Cm deny
+Control the setgroups system call in user namespaces.
+.El
+.Ss xxd
+.Bl -tag -width "-l LEN"
+.It Fl g Ar N
+Set the bytes per group.
+.It Fl c Ar N
+Set the bytes per line.
+.It Fl p
+Print only hexadecimal bytes; assumes
+.Fl c Ns Cm 30 .
+.It Fl i
+Use C include file format.
+.El
+.Sh FILES
+.Bl -tag -width /boot/System.map
+.It Pa /boot/System.map
+Default map file for
+.Nm readprofile .
+.It Pa /proc/profile
+Default profile file for
+.Nm readprofile .
+.It Pa /etc/adjtime
+Default clock mode file for
+.Nm rtcwake .
+.It Pa typescript
+Default output file for
+.Nm script .
+.El
+.Sh EXAMPLES
+Read kernel messages one screen at a time:
+.Dl dmesg | more
+.Pp
+Find a device by its file system label:
+.Dl findfs LABEL=MyDevice
+.Sh SEE ALSO
+.Xr disk 4 ,
+.Xr loopctl 8 ,
+.Xr mount 8
+.Sh HISTORY
+The applet descriptions and usage are adapted from BusyBox 1.36.1
+documentation, licensed under GPL-2.0.
