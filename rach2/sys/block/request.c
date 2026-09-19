@@ -48,7 +48,7 @@
 /* Policy: how many requests may be live at once unless `rach2.blockpool`
  * says otherwise, and the most the option accepts. The limit is what the
  * stall rules divide between devices; it is not a table. */
-#define REQ_LIMIT            16
+#define REQ_LIMIT             16
 /* The deadline's period, thirty seconds of 100 Hz ticks, and how many
  * periods in a row a request is waited for before it is given up: two
  * minutes in all. The deadline is here to answer a caller whose device has
@@ -67,7 +67,7 @@ static uint32_t default_deadline = REQ_DEFAULT_DEADLINE;
 static struct block_request *reqs; /* every live request */
 static uint32_t live;              /* how many are on the list */
 static uint32_t next_generation;   /* no two live requests share one */
-static wait_queue_t pool_wq; /* woken on any completion, freed request or quarantine */
+static wait_queue_t pool_wq;       /* woken on any completion, freed request or quarantine */
 static volatile uint32_t req_ticks;
 static uint32_t quarantined_count;
 static uint32_t overlap_count; /* completions with another request in flight */
@@ -77,8 +77,8 @@ static uint32_t overlap_count; /* completions with another request in flight */
 static uint32_t quarantine_total;
 static uint32_t release_total;
 static uint32_t release_tick;
-static uint32_t pool_size;       /* the limit: REQ_LIMIT, or rach2.blockpool=N */
-static uint32_t device_cap;      /* the most requests one device may hold */
+static uint32_t pool_size;  /* the limit: REQ_LIMIT, or rach2.blockpool=N */
+static uint32_t device_cap; /* the most requests one device may hold */
 
 static uint32_t irq_save(void)
 {
@@ -111,8 +111,7 @@ void block_request_init(void)
             asked = asked * 10u + (uint32_t)(value[i] - '0');
         }
         if (i == 0 || value[i] != '\0' || asked == 0 || asked > REQ_LIMIT) {
-            klog(KLOG_WARN, "block", "rach2.blockpool: not a count of 1 to %d; ignored",
-                 REQ_LIMIT);
+            klog(KLOG_WARN, "block", "rach2.blockpool: not a count of 1 to %d; ignored", REQ_LIMIT);
         } else {
             n = asked;
             klog(KLOG_INFO, "block", "request pool: %d slots", (int)n);
@@ -500,8 +499,7 @@ int block_request(block_device_t *device, int write, uint64_t lba, uint32_t coun
             k_panic("block: a sleeping device was reached outside syscall context");
         }
         if (write) {
-            return device->write ? device->write(device, lba, count, buffer)
-                                 : -EIO;
+            return device->write ? device->write(device, lba, count, buffer) : -EIO;
         }
         return device->read ? device->read(device, lba, count, buffer) : -EIO;
     }

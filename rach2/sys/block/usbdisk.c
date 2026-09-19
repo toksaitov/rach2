@@ -156,7 +156,7 @@ int usbdisk_holds(int n)
 #define SCAN_CACHE_SECTORS 96 /* sector 0, two headers and arrays, the EBR chain */
 
 static struct {
-    int n;    /* the record being read, -1 for none */
+    int n; /* the record being read, -1 for none */
     int cached;
     uint64_t lba[SCAN_CACHE_SECTORS];
     uint8_t sector[SCAN_CACHE_SECTORS][BLOCK_SECTOR_SIZE];
@@ -292,8 +292,8 @@ static void scan_advance(void)
         }
         scan.request = 0;
         if (status != 0) {
-            klog(KLOG_WARN, "usbdisk", "slot %d lun %d: its table could not be read", sticks[n].slot,
-                 sticks[n].lun);
+            klog(KLOG_WARN, "usbdisk", "slot %d lun %d: its table could not be read",
+                 sticks[n].slot, sticks[n].lun);
             scan.table.kind = PART_UNREAD;
             scan.table.count = 0;
             scan_done(n);

@@ -12,13 +12,13 @@
 
 /* One boot module the bootloader handed us. */
 struct module_info {
-    uint32_t start;     /* Where the kernel reads the module: its physical
-                           address until the boot maps it, then the address
-                           in the module region of the kernel's layout */
-    uint32_t end;       /* One past the module, in the same terms */
-    uint32_t size;      /* Size in bytes (end - start) */
-    uint32_t phys;      /* Physical start address, wherever the loader put it */
-    const char *cmdline;/* Module command line (may be NULL) */
+    uint32_t start;      /* Where the kernel reads the module: its physical
+                            address until the boot maps it, then the address
+                            in the module region of the kernel's layout */
+    uint32_t end;        /* One past the module, in the same terms */
+    uint32_t size;       /* Size in bytes (end - start) */
+    uint32_t phys;       /* Physical start address, wherever the loader put it */
+    const char *cmdline; /* Module command line (may be NULL) */
 };
 
 typedef struct module_info module_info_t;

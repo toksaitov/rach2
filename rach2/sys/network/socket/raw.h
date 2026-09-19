@@ -31,7 +31,6 @@ struct socket;
  * transport layer checked.
  */
 
-
 /**
  * Register `sock` to receive IPv4 protocol `proto`, or return a negative errno.
  *

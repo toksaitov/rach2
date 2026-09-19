@@ -22,7 +22,7 @@
    reply behind a burst of other people's frames while the client is being
    scheduled. */
 #define PACKET_QUEUE_SLOTS 8
-#define PACKET_SLOT_SIZE 1500
+#define PACKET_SLOT_SIZE   1500
 
 struct packet_queue {
     uint8_t buf[PACKET_QUEUE_SLOTS][PACKET_SLOT_SIZE];

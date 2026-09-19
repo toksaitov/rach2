@@ -12,15 +12,15 @@
 /*
  * VGA Text Mode constants (Mode 3: 80x25, 16 colors)
  */
-#define VGA_TEXT_COLS           80
-#define VGA_TEXT_ROWS           25
+#define VGA_TEXT_COLS 80
+#define VGA_TEXT_ROWS 25
 /* A host test stands its own memory in for the adapter's. */
 #ifndef VGA_TEXT_BUFFER
-#define VGA_TEXT_BUFFER         0xB8000
+#define VGA_TEXT_BUFFER 0xB8000
 #endif
 
-#define VGA_TEXT_DEFAULT_FG     0x07    /* Light grey */
-#define VGA_TEXT_DEFAULT_BG     0x00    /* Black */
+#define VGA_TEXT_DEFAULT_FG 0x07 /* Light grey */
+#define VGA_TEXT_DEFAULT_BG 0x00 /* Black */
 
 /*
  * Aliases for the constants above.

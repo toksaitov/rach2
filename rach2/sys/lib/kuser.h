@@ -10,13 +10,13 @@
  * the annotation away inside the helpers, the only place that is allowed.
  */
 #ifdef __CHECKER__
-# define __user   __attribute__((noderef, address_space(1)))
-# define __kernel __attribute__((address_space(0)))
-# define __force  __attribute__((force))
+#define __user   __attribute__((noderef, address_space(1)))
+#define __kernel __attribute__((address_space(0)))
+#define __force  __attribute__((force))
 #else
-# define __user
-# define __kernel
-# define __force
+#define __user
+#define __kernel
+#define __force
 #endif
 
 #endif /* _KUSER_H_ */

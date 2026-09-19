@@ -16,12 +16,11 @@
  * (deterministic) stream, not an all-zero block.
  */
 static uint32_t cc_state[16] = {
-    0x61707865u, 0x3320646eu, 0x79622d32u, 0x6b206574u, /* "expand 32-byte k" */
-    0x9e3779b9u, 0x243f6a88u, 0xb7e15162u, 0xdeadbeefu, /* default key */
-    0x9e3779b9u, 0x243f6a88u, 0xb7e15162u, 0xdeadbeefu,
-    0u, 0u, 0u, 0u /* counter | nonce */
+    0x61707865u, 0x3320646eu, 0x79622d32u, 0x6b206574u,                /* "expand 32-byte k" */
+    0x9e3779b9u, 0x243f6a88u, 0xb7e15162u, 0xdeadbeefu,                /* default key */
+    0x9e3779b9u, 0x243f6a88u, 0xb7e15162u, 0xdeadbeefu, 0u, 0u, 0u, 0u /* counter | nonce */
 };
-static uint32_t cc_out[16];     /* current keystream block */
+static uint32_t cc_out[16];       /* current keystream block */
 static uint32_t cc_byte_pos = 64; /* byte cursor into cc_out (64 == exhausted) */
 
 /* The entropy source the last krandom_seed() used (KRANDOM_SRC_*); the
@@ -31,20 +30,20 @@ static int cc_src = KRANDOM_SRC_JITTER;
 
 #define ROTL32(x, n) (((x) << (n)) | ((x) >> (32 - (n))))
 
-#define QR(a, b, c, d)             \
-    do {                           \
-        (a) += (b);                \
-        (d) ^= (a);                \
-        (d) = ROTL32((d), 16);     \
-        (c) += (d);                \
-        (b) ^= (c);                \
-        (b) = ROTL32((b), 12);     \
-        (a) += (b);                \
-        (d) ^= (a);                \
-        (d) = ROTL32((d), 8);      \
-        (c) += (d);                \
-        (b) ^= (c);                \
-        (b) = ROTL32((b), 7);      \
+#define QR(a, b, c, d)         \
+    do {                       \
+        (a) += (b);            \
+        (d) ^= (a);            \
+        (d) = ROTL32((d), 16); \
+        (c) += (d);            \
+        (b) ^= (c);            \
+        (b) = ROTL32((b), 12); \
+        (a) += (b);            \
+        (d) ^= (a);            \
+        (d) = ROTL32((d), 8);  \
+        (c) += (d);            \
+        (b) ^= (c);            \
+        (b) = ROTL32((b), 7);  \
     } while (0)
 
 /**

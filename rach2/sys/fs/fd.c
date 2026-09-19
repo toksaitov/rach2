@@ -251,12 +251,12 @@ void fd_init_stdio(fd_table_t *table)
     }
 
     for (i = FD_STDIN; i <= FD_STDERR; i++) {
-        table->entries[i].type  = FD_TYPE_CONSOLE;
-        table->entries[i].node  = NULL;
-        table->entries[i].sock  = NULL;
-        table->entries[i].ofd   = ofd_alloc();
-        table->entries[i].ops   = NULL;
-        table->entries[i].priv  = NULL;
+        table->entries[i].type = FD_TYPE_CONSOLE;
+        table->entries[i].node = NULL;
+        table->entries[i].sock = NULL;
+        table->entries[i].ofd = ofd_alloc();
+        table->entries[i].ops = NULL;
+        table->entries[i].priv = NULL;
         table->entries[i].flags = (i == FD_STDIN) ? FD_FLAG_READ : FD_FLAG_WRITE;
     }
 }
@@ -293,8 +293,8 @@ int fd_alloc_from(fd_table_t *table, int minfd)
         if (!ofd) {
             return -1;
         }
-        table->entries[i].ofd  = ofd;
-        table->entries[i].ops  = NULL;
+        table->entries[i].ofd = ofd;
+        table->entries[i].ops = NULL;
         table->entries[i].priv = NULL;
     }
     return i;
@@ -324,13 +324,13 @@ int fd_free(fd_table_t *table, int fd)
     }
 
     fd_ofd_unref(table->entries[fd].ofd);
-    table->entries[fd].type   = FD_TYPE_NONE;
-    table->entries[fd].node   = NULL;
-    table->entries[fd].sock   = NULL;
-    table->entries[fd].ofd    = NULL;
-    table->entries[fd].ops    = NULL;
-    table->entries[fd].priv   = NULL;
-    table->entries[fd].flags  = 0;
+    table->entries[fd].type = FD_TYPE_NONE;
+    table->entries[fd].node = NULL;
+    table->entries[fd].sock = NULL;
+    table->entries[fd].ofd = NULL;
+    table->entries[fd].ops = NULL;
+    table->entries[fd].priv = NULL;
+    table->entries[fd].flags = 0;
 
     return 0;
 }

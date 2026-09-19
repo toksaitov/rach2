@@ -23,12 +23,12 @@ static struct bbuf *bufs;     /* every buffer, newest first */
 static uint32_t nbufs;        /* how many */
 static struct bbuf *lru_head; /* the keyed buffers, least recently released first */
 static struct bbuf *lru_tail;
-static struct bbuf *empties;  /* the buffers keyed to nothing */
-static struct bbuf *kernel_held; /* held with no process current */
+static struct bbuf *empties;      /* the buffers keyed to nothing */
+static struct bbuf *kernel_held;  /* held with no process current */
 static block_device_t *ahead_dev; /* the device and block a sequential reader */
 static uint64_t ahead_next;       /* reaches next; a miss there fills a run */
 static uint32_t write_gen;        /* counts the writes that reached a device */
-static uint32_t limit_set;    /* a limit given by `bcache_set_limit`, or 0 */
+static uint32_t limit_set;        /* a limit given by `bcache_set_limit`, or 0 */
 static uint32_t clock_stamp;
 static uint64_t stat_hits, stat_fills, stat_waits;
 
@@ -106,7 +106,8 @@ static struct bbuf *bhash[BHASH];
 
 static unsigned bucket_of(const block_device_t *dev, uint64_t blk)
 {
-    return (unsigned)(((uintptr_t)dev >> 4) ^ (uintptr_t)blk ^ (uintptr_t)(blk >> 12)) & (BHASH - 1);
+    return (unsigned)(((uintptr_t)dev >> 4) ^ (uintptr_t)blk ^ (uintptr_t)(blk >> 12)) &
+           (BHASH - 1);
 }
 
 static void index_add(struct bbuf *b)
@@ -739,7 +740,8 @@ static int fill_run(block_device_t *dev, uint64_t blk)
     }
     run_stage_busy = 1;
     gen = write_gen;
-    if (block_request(dev, 0, blk * BCACHE_BLOCK_SECTORS, n * BCACHE_BLOCK_SECTORS, run_stage) != 0) {
+    if (block_request(dev, 0, blk * BCACHE_BLOCK_SECTORS, n * BCACHE_BLOCK_SECTORS, run_stage) !=
+        0) {
         run_stage_busy = 0;
         return 0;
     }
@@ -856,8 +858,7 @@ static struct bbuf *first_dirty(const block_device_t *dev)
  * of the batch sleeps, and a buffer let go of meanwhile can be given to
  * another block or to the heap.
  */
-static int gather_dirty(block_device_t *dev, int pass, int started, uint64_t after,
-                        uint64_t *out)
+static int gather_dirty(block_device_t *dev, int pass, int started, uint64_t after, uint64_t *out)
 {
     const struct bbuf *b;
     int n = 0;

@@ -14,44 +14,44 @@
 /*
  * PCI configuration space offsets
  */
-#define PCI_VENDOR_ID       0x00    /* 16 bits */
-#define PCI_DEVICE_ID       0x02    /* 16 bits */
-#define PCI_COMMAND         0x04    /* 16 bits */
-#define PCI_STATUS          0x06    /* 16 bits */
-#define PCI_REVISION_ID     0x08    /* 8 bits */
-#define PCI_PROG_IF         0x09    /* 8 bits */
-#define PCI_SUBCLASS        0x0A    /* 8 bits */
-#define PCI_CLASS           0x0B    /* 8 bits */
-#define PCI_CACHE_LINE_SIZE 0x0C    /* 8 bits */
-#define PCI_LATENCY_TIMER   0x0D    /* 8 bits */
-#define PCI_HEADER_TYPE     0x0E    /* 8 bits */
-#define PCI_BIST            0x0F    /* 8 bits */
-#define PCI_BAR0            0x10    /* 32 bits */
-#define PCI_BAR1            0x14    /* 32 bits */
-#define PCI_BAR2            0x18    /* 32 bits */
-#define PCI_BAR3            0x1C    /* 32 bits */
-#define PCI_BAR4            0x20    /* 32 bits */
-#define PCI_BAR5            0x24    /* 32 bits */
-#define PCI_INTERRUPT_LINE  0x3C    /* 8 bits */
-#define PCI_INTERRUPT_PIN   0x3D    /* 8 bits */
+#define PCI_VENDOR_ID       0x00 /* 16 bits */
+#define PCI_DEVICE_ID       0x02 /* 16 bits */
+#define PCI_COMMAND         0x04 /* 16 bits */
+#define PCI_STATUS          0x06 /* 16 bits */
+#define PCI_REVISION_ID     0x08 /* 8 bits */
+#define PCI_PROG_IF         0x09 /* 8 bits */
+#define PCI_SUBCLASS        0x0A /* 8 bits */
+#define PCI_CLASS           0x0B /* 8 bits */
+#define PCI_CACHE_LINE_SIZE 0x0C /* 8 bits */
+#define PCI_LATENCY_TIMER   0x0D /* 8 bits */
+#define PCI_HEADER_TYPE     0x0E /* 8 bits */
+#define PCI_BIST            0x0F /* 8 bits */
+#define PCI_BAR0            0x10 /* 32 bits */
+#define PCI_BAR1            0x14 /* 32 bits */
+#define PCI_BAR2            0x18 /* 32 bits */
+#define PCI_BAR3            0x1C /* 32 bits */
+#define PCI_BAR4            0x20 /* 32 bits */
+#define PCI_BAR5            0x24 /* 32 bits */
+#define PCI_INTERRUPT_LINE  0x3C /* 8 bits */
+#define PCI_INTERRUPT_PIN   0x3D /* 8 bits */
 
 /*
  * PCI class codes
  */
-#define PCI_CLASS_MULTIMEDIA    0x04
-#define PCI_SUBCLASS_AUDIO      0x03    /* HD Audio */
-#define PCI_CLASS_MASS_STORAGE  0x01
-#define PCI_SUBCLASS_SATA       0x06    /* AHCI when prog-if is 0x01 */
-#define PCI_CLASS_SERIAL_BUS    0x0C
-#define PCI_SUBCLASS_USB        0x03    /* xHCI when prog-if is 0x30 */
+#define PCI_CLASS_MULTIMEDIA   0x04
+#define PCI_SUBCLASS_AUDIO     0x03 /* HD Audio */
+#define PCI_CLASS_MASS_STORAGE 0x01
+#define PCI_SUBCLASS_SATA      0x06 /* AHCI when prog-if is 0x01 */
+#define PCI_CLASS_SERIAL_BUS   0x0C
+#define PCI_SUBCLASS_USB       0x03 /* xHCI when prog-if is 0x30 */
 
 /*
  * PCI command register bits
  */
-#define PCI_CMD_IO_SPACE        0x0001
-#define PCI_CMD_MEMORY_SPACE    0x0002
-#define PCI_CMD_BUS_MASTER      0x0004
-#define PCI_CMD_INTERRUPT_DIS   0x0400
+#define PCI_CMD_IO_SPACE      0x0001
+#define PCI_CMD_MEMORY_SPACE  0x0002
+#define PCI_CMD_BUS_MASTER    0x0004
+#define PCI_CMD_INTERRUPT_DIS 0x0400
 
 /*
  * PCI device information structure
@@ -59,15 +59,15 @@
 typedef struct {
     uint16_t vendor_id;
     uint16_t device_id;
-    uint8_t  class_code;
-    uint8_t  subclass;
-    uint8_t  prog_if;
-    uint8_t  revision;
-    uint8_t  bus;
-    uint8_t  device;
-    uint8_t  function;
-    uint8_t  irq;
-    uint32_t bar[6];        /* Base Address Registers */
+    uint8_t class_code;
+    uint8_t subclass;
+    uint8_t prog_if;
+    uint8_t revision;
+    uint8_t bus;
+    uint8_t device;
+    uint8_t function;
+    uint8_t irq;
+    uint32_t bar[6]; /* Base Address Registers */
 } pci_device_t;
 
 /** Read a 32-bit dword from PCI configuration space. */
@@ -80,10 +80,12 @@ uint16_t pci_read_config16(uint8_t bus, uint8_t device, uint8_t function, uint8_
 uint8_t pci_read_config8(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset);
 
 /** Write a 32-bit dword to PCI configuration space. */
-void pci_write_config32(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset, uint32_t value);
+void pci_write_config32(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset,
+                        uint32_t value);
 
 /** Write a 16-bit word to PCI configuration space. */
-void pci_write_config16(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset, uint16_t value);
+void pci_write_config16(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset,
+                        uint16_t value);
 
 /** Find the first device by class and subclass; true and fills `out` on a
  * match. */
@@ -91,7 +93,8 @@ bool pci_find_device(uint8_t class_code, uint8_t subclass, pci_device_t *out);
 
 /** Find the next class/subclass match after `skip_dev`; NULL `skip_dev`
  * starts from the first slot. */
-bool pci_find_device_skip(uint8_t class_code, uint8_t subclass, pci_device_t *skip_dev, pci_device_t *out);
+bool pci_find_device_skip(uint8_t class_code, uint8_t subclass, pci_device_t *skip_dev,
+                          pci_device_t *out);
 
 /** Find the first device by vendor and device ID; true and fills `out` on a
  * match. */
@@ -113,12 +116,12 @@ bool pci_find_nth_by_id(uint16_t vendor_id, uint16_t device_id, int nth, pci_dev
  * the only safe way to read it, because a device answering its own pointer
  * field with garbage would otherwise loop forever.
  */
-#define PCI_STATUS_CAP_LIST 0x0010
-#define PCI_CAP_PTR 0x34
-#define PCI_CAP_ID_MSI 0x05
-#define PCI_CAP_ID_MSIX 0x11
-#define PCI_CAP_ID_PCIE 0x10
-#define PCIE_LINK_CONTROL 0x10 /* offset within the PCIe capability */
+#define PCI_STATUS_CAP_LIST     0x0010
+#define PCI_CAP_PTR             0x34
+#define PCI_CAP_ID_MSI          0x05
+#define PCI_CAP_ID_MSIX         0x11
+#define PCI_CAP_ID_PCIE         0x10
+#define PCIE_LINK_CONTROL       0x10 /* offset within the PCIe capability */
 #define PCIE_LINK_CTL_ASPM_MASK 0x0003
 
 /**
@@ -132,12 +135,12 @@ uint8_t pci_find_capability(uint8_t bus, uint8_t device, uint8_t function, uint8
 /* The MSI capability's control word, and the address a message is written
  * to: the local APIC's page, with the destination processor in bits 12 to
  * 19 and the vector in the data. */
-#define PCI_MSI_ENABLE 0x0001u
+#define PCI_MSI_ENABLE          0x0001u
 #define PCI_MSI_MULTIPLE_ENABLE 0x0070u
-#define PCI_MSI_64BIT 0x0080u
-#define PCI_MSI_PER_VECTOR    0x0100u /* the device can mask its own vectors */
-#define PCI_MSIX_ENABLE 0x8000u
-#define PCI_MSI_ADDRESS_BASE 0xFEE00000u
+#define PCI_MSI_64BIT           0x0080u
+#define PCI_MSI_PER_VECTOR      0x0100u /* the device can mask its own vectors */
+#define PCI_MSIX_ENABLE         0x8000u
+#define PCI_MSI_ADDRESS_BASE    0xFEE00000u
 
 /** Program one message on `dev` and enable it: 0, or -1 with the reason in
  * the log. The local APIC must be ready. */

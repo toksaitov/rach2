@@ -61,7 +61,7 @@ typedef struct vma {
 
 /* The per-process address space. */
 typedef struct vm_space {
-    vma_t *vmas;          /* `cap` entries in the heap, `count` of them in use */
+    vma_t *vmas; /* `cap` entries in the heap, `count` of them in use */
     uint32_t cap;
     uint32_t count;
     uint32_t heap_start;  /* initial program break (base of the heap VMA) */

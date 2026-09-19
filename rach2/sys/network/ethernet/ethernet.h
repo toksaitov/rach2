@@ -4,11 +4,11 @@
 #include "../../lib/kint.h"
 
 /* Ethernet header: destination MAC, source MAC, EtherType. */
-#define ETH_HDR_SIZE    14
+#define ETH_HDR_SIZE 14
 
 /* EtherType values. */
-#define ETH_TYPE_IP     0x0800
-#define ETH_TYPE_ARP    0x0806
+#define ETH_TYPE_IP  0x0800
+#define ETH_TYPE_ARP 0x0806
 
 /* The interface a frame arrived on, or whose counters are asked about. */
 struct netdev;

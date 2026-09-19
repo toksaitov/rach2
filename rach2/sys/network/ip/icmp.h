@@ -13,8 +13,8 @@
  * (e.g. to the gateway 10.0.2.2).
  */
 
-#define ICMP_ECHO_REQUEST   8
-#define ICMP_ECHO_REPLY     0
+#define ICMP_ECHO_REQUEST 8
+#define ICMP_ECHO_REPLY   0
 
 /** Handle one received ICMP datagram (IP header already stripped). */
 void icmp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len);

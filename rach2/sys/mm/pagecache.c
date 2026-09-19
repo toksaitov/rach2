@@ -18,21 +18,21 @@ static uint8_t pc_host_pages[PC_SLOTS][PC_PAGE_SIZE];
 #define KLOG_ERR 3
 static void klog(int level, const char *subsystem, const char *format, ...)
 {
-    (void) level;
-    (void) subsystem;
-    (void) format;
+    (void)level;
+    (void)subsystem;
+    (void)format;
 }
 
 static void pc_platform_map(uint32_t va, uintptr_t phys, int writable)
 {
-    (void) va;
-    (void) phys;
-    (void) writable;
+    (void)va;
+    (void)phys;
+    (void)writable;
 }
 
 static void pc_platform_unmap(uint32_t va)
 {
-    (void) va;
+    (void)va;
 }
 
 #else
@@ -43,7 +43,7 @@ static void pc_platform_unmap(uint32_t va)
 #include "../panic.h"
 #include "../pci.h"
 
-#define PC_PAGE_SIZE PAGE_SIZE
+#define PC_PAGE_SIZE  PAGE_SIZE
 
 /* The default cap on the window when no device MMIO BAR sits below it:
    512 MiB, which is the ceiling on a mounted disk file system, sized for the
@@ -87,10 +87,10 @@ static struct pc_entry pc_slots[PC_SLOTS];
 static int32_t pc_hash[PC_HASH_SIZE];
 static uint32_t pc_tombs;
 
-static uint32_t pc_capacity = PC_SLOTS;  /* live slots; the test may shrink this */
-static uint32_t pc_clock;                /* clock hand over [0, pc_capacity) */
-static uint32_t pc_window_span;          /* pre-mapped window bytes */
-static uint32_t pc_fs_size;              /* backed size; 0 means no backing */
+static uint32_t pc_capacity = PC_SLOTS; /* live slots; the test may shrink this */
+static uint32_t pc_clock;               /* clock hand over [0, pc_capacity) */
+static uint32_t pc_window_span;         /* pre-mapped window bytes */
+static uint32_t pc_fs_size;             /* backed size; 0 means no backing */
 
 static pc_read_fn pc_read;
 static pc_write_fn pc_write;
@@ -172,7 +172,7 @@ static void pc_hash_rebuild(void)
             while (pc_hash[h] != PC_HASH_EMPTY) {
                 h = (h + 1u) & (PC_HASH_SIZE - 1u);
             }
-            pc_hash[h] = (int32_t) i;
+            pc_hash[h] = (int32_t)i;
         }
     }
 }
@@ -188,8 +188,7 @@ static int32_t pc_hash_find(uint32_t disk_off)
 
     while (pc_hash[h] != PC_HASH_EMPTY && probes < PC_HASH_SIZE) {
         int32_t s = pc_hash[h];
-        if (s >= 0 && pc_slots[s].valid &&
-            pc_page_of(pc_slots[s].disk_off) == page) {
+        if (s >= 0 && pc_slots[s].valid && pc_page_of(pc_slots[s].disk_off) == page) {
             return s;
         }
         h = (h + 1u) & (PC_HASH_SIZE - 1u);
@@ -214,7 +213,7 @@ static void pc_hash_insert(uint32_t disk_off, uint32_t slot)
     if (pc_hash[h] == PC_HASH_DELETED && pc_tombs > 0) {
         --pc_tombs;
     }
-    pc_hash[h] = (int32_t) slot;
+    pc_hash[h] = (int32_t)slot;
 }
 
 /**
@@ -266,8 +265,8 @@ static int pc_evict(uint32_t slot)
         if (pc_write(e->disk_off, e->page) != 0) {
             /* Said here, since every caller goes on: a page kept dirty
                is right, and a disk that refused a write is news. */
-            klog(KLOG_ERR, "pagecache", "writeback failed at disk offset 0x%X; the page stays dirty",
-                 e->disk_off);
+            klog(KLOG_ERR, "pagecache",
+                 "writeback failed at disk offset 0x%X; the page stays dirty", e->disk_off);
             e->dirty = 1;
             return -1;
         }
@@ -303,12 +302,12 @@ static int32_t pc_get_slot(void)
        when no frame can be had, a resident page gives way below. */
     for (i = 0; i < pc_capacity; ++i) {
         if (!pc_slots[i].valid && !pc_slots[i].pinned && PC_HAS_STORAGE(&pc_slots[i])) {
-            return (int32_t) i;
+            return (int32_t)i;
         }
     }
     for (i = 0; i < pc_capacity; ++i) {
         if (!pc_slots[i].valid && !pc_slots[i].pinned && pc_slot_storage(&pc_slots[i])) {
-            return (int32_t) i;
+            return (int32_t)i;
         }
     }
 
@@ -323,7 +322,7 @@ static int32_t pc_get_slot(void)
             continue;
         }
         if (pc_evict(v) == 0) {
-            return (int32_t) v;
+            return (int32_t)v;
         }
         /* Writeback failed: leave the page dirty and try another victim. */
     }
@@ -343,7 +342,7 @@ int pc_fault(uint32_t fault_address, int write)
     }
     disk_off = page_va - PCWIN_BASE;
     if (disk_off >= pc_fs_size) {
-        return 0;  /* past the backed size: a wild kernel pointer */
+        return 0; /* past the backed size: a wild kernel pointer */
     }
 
     slot = pc_hash_find(disk_off);
@@ -361,19 +360,19 @@ int pc_fault(uint32_t fault_address, int write)
 
     slot = pc_get_slot();
     if (slot < 0) {
-        return 0;  /* a dirty victim could not be written back */
+        return 0; /* a dirty victim could not be written back */
     }
     e = &pc_slots[slot];
     e->pinned = 1;
     e->disk_off = disk_off;
     if (pc_read(disk_off, e->page) != 0) {
         e->pinned = 0;
-        return 0;  /* the fill read failed */
+        return 0; /* the fill read failed */
     }
     e->valid = 1;
-    e->dirty = (uint8_t) (write ? 1 : 0);
+    e->dirty = (uint8_t)(write ? 1 : 0);
     e->accessed = 1;
-    pc_hash_insert(disk_off, (uint32_t) slot);
+    pc_hash_insert(disk_off, (uint32_t)slot);
     pc_platform_map(page_va, e->phys, write ? 1 : 0);
     e->pinned = 0;
     ++pc_reads;
@@ -578,15 +577,14 @@ static uint32_t pc_probe_window_size(void)
             uint8_t fn;
             for (fn = 0; fn < 8; ++fn) {
                 uint8_t bari;
-                if (pci_read_config16((uint8_t) bus, dev, fn, 0) == 0xFFFF) {
+                if (pci_read_config16((uint8_t)bus, dev, fn, 0) == 0xFFFF) {
                     if (fn == 0) {
                         break;
                     }
                     continue;
                 }
                 for (bari = 0; bari < 6; ++bari) {
-                    uint32_t bar = pci_read_config32((uint8_t) bus, dev, fn,
-                                                     0x10 + bari * 4u);
+                    uint32_t bar = pci_read_config32((uint8_t)bus, dev, fn, 0x10 + bari * 4u);
                     uint32_t base;
                     int above_4g = 0;
                     if (!pci_bar_is_memory(bar)) {
@@ -596,8 +594,8 @@ static uint32_t pc_probe_window_size(void)
                     if (pci_bar_is_64bit(bar)) {
                         /* The high dword is the next BAR slot; a non-zero high
                            puts the BAR above 4 GiB, past the 32-bit window. */
-                        uint32_t high = pci_read_config32(
-                            (uint8_t) bus, dev, fn, 0x10 + (bari + 1u) * 4u);
+                        uint32_t high =
+                            pci_read_config32((uint8_t)bus, dev, fn, 0x10 + (bari + 1u) * 4u);
                         above_4g = (high != 0);
                         ++bari;
                     }
@@ -612,7 +610,7 @@ static uint32_t pc_probe_window_size(void)
     /* Floor to a page: a clamping BAR base need only be 16-byte aligned, but
        the window span must be page-aligned so a page-rounded file-system size never
        exceeds it. */
-    limit &= ~(uint32_t) (PC_PAGE_SIZE - 1u);
+    limit &= ~(uint32_t)(PC_PAGE_SIZE - 1u);
 
     return limit - PCWIN_BASE;
 }

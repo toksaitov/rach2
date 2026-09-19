@@ -98,7 +98,7 @@ struct ext2_mount {
     uint32_t state;
     int writable;
     uint64_t free_blocks, free_inodes;
-    int valid_cleared;   /* the superblock's valid bit was cleared by this mount */
+    int valid_cleared; /* the superblock's valid bit was cleared by this mount */
     /* A write or a free in progress: the bitmap bytes, descriptors and
      * pointer slots it touches are marked dirty and written together at
      * its end. `BATCH_ALLOC` puts the bitmaps and descriptors first, so no
@@ -111,8 +111,8 @@ struct ext2_mount {
     int batch;
     uint64_t meta[16];
     int metas;
-    uint32_t alloc_hint; /* the block after the last one given out */
-    uint8_t *gd; /* the group descriptors, `groups * 32` bytes, from the heap */
+    uint32_t alloc_hint;     /* the block after the last one given out */
+    uint8_t *gd;             /* the group descriptors, `groups * 32` bytes, from the heap */
     struct ext2_node *nodes; /* the nodes in memory, from the heap */
 };
 
@@ -2139,9 +2139,10 @@ static int ext2_setattr(struct vfs_mount *mnt, void *node, int what, const struc
  */
 static int past_limit(const struct ext2_mount *em, const char *op, uint64_t offset)
 {
-    klog(KLOG_WARN, "ext2", "%s: offset %d MiB is past the file limit of %d MiB "
-         "for %d-byte blocks", op, (int)(offset >> 20), (int)(em->file_limit >> 20),
-         (int)em->block_size);
+    klog(KLOG_WARN, "ext2",
+         "%s: offset %d MiB is past the file limit of %d MiB "
+         "for %d-byte blocks",
+         op, (int)(offset >> 20), (int)(em->file_limit >> 20), (int)em->block_size);
     return -EFBIG;
 }
 
@@ -3590,8 +3591,7 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
      * to bound it, the product wraps and the check below reads past what
      * was allocated. */
     if (em->groups == 0 || em->groups > 0xFFFFFFFFu / 32 || em->blocks <= em->first_data ||
-        (em->groups * 32 + em->block_size - 1) / em->block_size >
-            em->blocks - em->first_data - 1) {
+        (em->groups * 32 + em->block_size - 1) / em->block_size > em->blocks - em->first_data - 1) {
         klog(KLOG_WARN, "ext2", "refused: %d groups do not fit a table on %d blocks",
              (int)em->groups, (int)em->blocks);
         return -EINVAL;
@@ -3625,8 +3625,10 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
         if (bb < lo || bb >= hi || ib < lo || ib >= hi || it < lo || tables == 0 ||
             (uint64_t)it + tables > hi || bb == ib || (bb >= it && bb < it + tables) ||
             (ib >= it && ib < it + tables)) {
-            klog(KLOG_WARN, "ext2", "refused: group %d: bitmaps at %d and %d, table at %d, "
-                 "in blocks %d to %d", (int)g, (int)bb, (int)ib, (int)it, (int)lo, (int)hi);
+            klog(KLOG_WARN, "ext2",
+                 "refused: group %d: bitmaps at %d and %d, table at %d, "
+                 "in blocks %d to %d",
+                 (int)g, (int)bb, (int)ib, (int)it, (int)lo, (int)hi);
             return -EINVAL;
         }
         /* Against the group's own size: the last group is often short. */
@@ -3700,13 +3702,33 @@ static int ext2_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags
 }
 
 static const struct vfs_ops ext2_ops = {
-    ext2_lookup, 0, /* lookup_rest */
-    ext2_hold,   ext2_put,   ext2_getattr,         ext2_setattr, ext2_open,    ext2_release,
-    ext2_read,   ext2_write, ext2_truncate,        ext2_fsync,   ext2_readdir, ext2_create,
-    ext2_unlink, ext2_mkdir, ext2_rmdir,           ext2_rename,  ext2_link,    ext2_readlink,
-    ext2_statfs, ext2_sync,  ext2_prepare_unmount,
+    ext2_lookup,
+    0, /* lookup_rest */
+    ext2_hold,
+    ext2_put,
+    ext2_getattr,
+    ext2_setattr,
+    ext2_open,
+    ext2_release,
+    ext2_read,
+    ext2_write,
+    ext2_truncate,
+    ext2_fsync,
+    ext2_readdir,
+    ext2_create,
+    ext2_unlink,
+    ext2_mkdir,
+    ext2_rmdir,
+    ext2_rename,
+    ext2_link,
+    ext2_readlink,
+    ext2_statfs,
+    ext2_sync,
+    ext2_prepare_unmount,
     0, /* abort_unmount */
-    ext2_unmount, ext2_path,    ext2_symlink,
+    ext2_unmount,
+    ext2_path,
+    ext2_symlink,
 };
 
 const struct vfs_type vfs_ext2_type = {"ext2", ext2_mount, &ext2_ops};

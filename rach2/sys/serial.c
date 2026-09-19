@@ -19,7 +19,7 @@
 #define SERIAL_LSR_THRE 0x20 /* Transmit holding register empty */
 
 /* Interrupt enable register bits */
-#define SERIAL_IER_RDA  0x01 /* Received data available */
+#define SERIAL_IER_RDA 0x01 /* Received data available */
 
 #define SERIAL_IRQ    4
 #define SERIAL_VECTOR 36

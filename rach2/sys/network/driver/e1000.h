@@ -105,7 +105,7 @@
 /* The station address registers. AV marks RAH0 as holding a real address,
    which is how a card that loaded it from its own EEPROM at power-on is told
    apart from one whose registers are still clear. */
-#define E1000_RAH_AV     0x80000000u
+#define E1000_RAH_AV      0x80000000u
 #define E1000_MTA_ENTRIES 128u
 
 /* Receive control. Broadcast is accepted because ARP and DHCP need it;
@@ -129,8 +129,8 @@
    half-duplex link is reported as a successful transmission rather than
    retried, which is a frame lost with nothing to show for it. */
 #define E1000_TCTL_RTLC       0x01000000u
-#define E1000_TCTL_CT_SHIFT   4           /* collision threshold */
-#define E1000_TCTL_COLD_SHIFT 12          /* collision distance */
+#define E1000_TCTL_CT_SHIFT   4  /* collision threshold */
+#define E1000_TCTL_COLD_SHIFT 12 /* collision distance */
 #define E1000_TCTL_CT_DEFAULT 0x0fu
 #define E1000_TCTL_COLD_FD    0x40u /* full duplex distance, in byte times */
 
@@ -153,7 +153,7 @@
 #define E1000_INT_RXDMT0 0x00000010u /* receive ring at its low threshold */
 #define E1000_INT_RXO    0x00000040u /* receive overrun */
 #define E1000_INT_RXT0   0x00000080u /* receive timer expired */
-#define E1000_INT_MASK (E1000_INT_LSC | E1000_INT_RXDMT0 | E1000_INT_RXO | E1000_INT_RXT0)
+#define E1000_INT_MASK   (E1000_INT_LSC | E1000_INT_RXDMT0 | E1000_INT_RXO | E1000_INT_RXT0)
 
 /* Receive descriptor status and error bits. A descriptor can report DD and
    EOP and still carry an error, which is why both bytes are read. */
@@ -170,7 +170,7 @@
 
 /* The rings. 32 descriptors each, so both rings are 512 bytes, which
    satisfies the requirement that RDLEN and TDLEN be a multiple of 128. */
-#define E1000_RING_SIZE 32
+#define E1000_RING_SIZE  32
 #define E1000_RING_BYTES (E1000_RING_SIZE * 16)
 
 /* Receive buffers are the 2048 bytes RCTL_SZ_2048 selects. The largest frame
@@ -232,10 +232,10 @@ struct e1000_tx_desc {
 
 /* The accessors take a volatile pointer because the rings are shared with
    the card; see the declaration in e1000.c. */
-#define E1000_RXD_LEN(d)    ((d)->len_csum & 0xffffu)
-#define E1000_RXD_STATUS(d) ((uint8_t)((d)->sta_err & 0xffu))
-#define E1000_RXD_ERRORS(d) ((uint8_t)(((d)->sta_err >> 8) & 0xffu))
-#define E1000_TXD_STATUS(d) ((uint8_t)((d)->upper & 0xffu))
+#define E1000_RXD_LEN(d)          ((d)->len_csum & 0xffffu)
+#define E1000_RXD_STATUS(d)       ((uint8_t)((d)->sta_err & 0xffu))
+#define E1000_RXD_ERRORS(d)       ((uint8_t)(((d)->sta_err >> 8) & 0xffu))
+#define E1000_TXD_STATUS(d)       ((uint8_t)((d)->upper & 0xffu))
 #define E1000_TXD_LOWER(len, cmd) (((uint32_t)(len)) | ((uint32_t)(cmd) << 24))
 
 /** This driver's entry in the device table (driver/netdev.h). */

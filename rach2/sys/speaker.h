@@ -15,9 +15,9 @@
 #define SPEAKER_PIT_BASE_FREQ 1193182
 
 /* I/O ports */
-#define SPEAKER_PORT    0x61
-#define PIT_CHANNEL2    0x42
-#define PIT_COMMAND     0x43
+#define SPEAKER_PORT 0x61
+#define PIT_CHANNEL2 0x42
+#define PIT_COMMAND  0x43
 
 /** Drive the PC speaker at `frequency` Hz; 0 silences it. */
 void speaker_on(uint32_t frequency);

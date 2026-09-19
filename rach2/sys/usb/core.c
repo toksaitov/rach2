@@ -674,8 +674,8 @@ static void fail(struct usb_device_state *d, const char *why)
  */
 static void unsupported(struct usb_device_state *d)
 {
-    klog(KLOG_INFO, "usb", "device: port %s: %x:%x, class %d: no driver for it here",
-         path_of(d), (int)d->vendor, (int)d->product, (int)d->interface.class_code);
+    klog(KLOG_INFO, "usb", "device: port %s: %x:%x, class %d: no driver for it here", path_of(d),
+         (int)d->vendor, (int)d->product, (int)d->interface.class_code);
     if (enumerating[bus_of(d)] == d->index) {
         enumerating[bus_of(d)] = -1;
     }

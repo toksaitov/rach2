@@ -371,7 +371,6 @@ void xhci_endpoint_close(struct xhci_ctrl *hc, int device, int endpoint);
  * two. */
 int xhci_endpoint_reset(struct xhci_ctrl *hc, int device, int endpoint);
 
-
 /** Queue one transfer on an endpoint. */
 int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint,
                 const struct usb_transfer *transfer);

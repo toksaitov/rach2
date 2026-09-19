@@ -16,15 +16,15 @@
 #include "../lib/kdef.h"
 
 /* DMA transfer modes. */
-#define DMA_MODE_DEMAND     0x00    /* Demand transfer mode */
-#define DMA_MODE_SINGLE     0x40    /* Single transfer mode (most common) */
-#define DMA_MODE_BLOCK      0x80    /* Block transfer mode */
-#define DMA_MODE_CASCADE    0xC0    /* Cascade mode */
+#define DMA_MODE_DEMAND  0x00 /* Demand transfer mode */
+#define DMA_MODE_SINGLE  0x40 /* Single transfer mode (most common) */
+#define DMA_MODE_BLOCK   0x80 /* Block transfer mode */
+#define DMA_MODE_CASCADE 0xC0 /* Cascade mode */
 
-#define DMA_MODE_READ       0x08    /* Memory to device (read from memory) */
-#define DMA_MODE_WRITE      0x04    /* Device to memory (write to memory) */
+#define DMA_MODE_READ  0x08 /* Memory to device (read from memory) */
+#define DMA_MODE_WRITE 0x04 /* Device to memory (write to memory) */
 
-#define DMA_MODE_AUTOINIT   0x10    /* Auto-initialize after transfer */
+#define DMA_MODE_AUTOINIT 0x10 /* Auto-initialize after transfer */
 
 /** Program a single DMA transfer on a channel; 0 ok, -1 on error. */
 int dma_start(uint8_t channel, uint32_t buffer, uint32_t length, uint8_t mode);

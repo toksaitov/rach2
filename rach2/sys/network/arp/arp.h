@@ -13,14 +13,14 @@
  */
 
 /* ARP operation codes (the op field of an ARP packet). */
-#define ARP_OP_REQUEST  1
-#define ARP_OP_REPLY    2
+#define ARP_OP_REQUEST 1
+#define ARP_OP_REPLY   2
 
 /* A cache: eight IP-to-MAC mappings, which is small for a real network, so
  * what fills them matters: addresses no neighbour can have are refused, and
  * a full cache replaces the mapping gone longest without use. Nothing is
  * refused for its being full. */
-#define ARP_CACHE_SIZE  8
+#define ARP_CACHE_SIZE 8
 
 /* The interface a mapping was learned on, or a request goes out by. */
 struct netdev;

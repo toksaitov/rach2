@@ -119,8 +119,8 @@ void raw_rx(uint8_t proto, const uint8_t *data, uint16_t total_len)
     if (total_len < IP_HDR_SIZE) {
         return;
     }
-    src = ((uint32_t)data[12] << 24) | ((uint32_t)data[13] << 16) |
-          ((uint32_t)data[14] << 8) | (uint32_t)data[15];
+    src = ((uint32_t)data[12] << 24) | ((uint32_t)data[13] << 16) | ((uint32_t)data[14] << 8) |
+          (uint32_t)data[15];
 
     /* Runs in the receive interrupt, where interrupts are already off; the
        table and the queues are touched without taking net_lock again. Every
@@ -141,8 +141,7 @@ void raw_rx(uint8_t proto, const uint8_t *data, uint16_t total_len)
             q->dropped++;
             if (!q->reported) {
                 q->reported = 1;
-                klog(KLOG_WARN, "raw",
-                     "rx: the queue is full, dropping datagrams");
+                klog(KLOG_WARN, "raw", "rx: the queue is full, dropping datagrams");
             }
             continue;
         }

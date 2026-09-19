@@ -15,33 +15,33 @@
  * down when its last descriptor closes.
  */
 
-#define SOCK_STREAM          1      /* TCP */
-#define SOCK_DGRAM           2      /* UDP */
+#define SOCK_STREAM         1 /* TCP */
+#define SOCK_DGRAM          2 /* UDP */
 /* A descriptor that accepts the interface ioctls and nothing else. A DHCP
  * client opens one to ask this machine about itself (busybox's
  * `udhcp_read_interface`); this stack has no raw IP path, so every other
  * operation on it is refused, not answered with silence. */
-#define SOCK_RAW             3
-#define AF_INET              2      /* IPv4 address family */
+#define SOCK_RAW            3
+#define AF_INET             2 /* IPv4 address family */
 /* Format: one datagram of the Ethernet MTU is the most UDP can carry here. */
-#define SOCK_RECV_BUF_SIZE   1500
+#define SOCK_RECV_BUF_SIZE  1500
 /* Policy: a listener holds fifteen accepted connections not yet taken by
  * `accept`, a ring of sixteen in the socket record with one place left
  * empty to tell full from empty; a power of two, since the ring's indexes
  * wrap by a mask. A SYN that arrives with the ring full is answered with a
  * reset before anything is allocated for it. */
-#define SOCK_ACCEPT_BACKLOG  16
+#define SOCK_ACCEPT_BACKLOG 16
 
 /* Returned by socket_try_recv when no datagram is waiting (Linux EAGAIN). */
-#define SOCK_EAGAIN  (-11)
+#define SOCK_EAGAIN (-11)
 
 struct tcb; /* defined in tcp/tcp.h */
 
 typedef struct socket {
-    struct socket *next;   /* the list of live sockets */
-    int      in_use;
-    int      refcount;        /* descriptors referencing this socket */
-    int      type;            /* SOCK_DGRAM, SOCK_STREAM or SOCK_RAW */
+    struct socket *next; /* the list of live sockets */
+    int in_use;
+    int refcount; /* descriptors referencing this socket */
+    int type;     /* SOCK_DGRAM, SOCK_STREAM or SOCK_RAW */
     /* AF_INET, or AF_PACKET for the tap above the Ethernet layer. Nearly every
      * path below is AF_INET's; the family is what the few that are not branch
      * on, not a second socket pool. */
@@ -58,7 +58,7 @@ typedef struct socket {
     /* The hop limit this socket's datagrams leave with. IP_TTL sets it, which
      * is the whole of what traceroute does to a socket, and it applies to a
      * UDP send and a raw send alike. */
-    uint8_t  ip_ttl;
+    uint8_t ip_ttl;
 
     /* Remote endpoint: a stream's peer, or the address a datagram socket was
      * connected to. A connected datagram socket sends there without being told
@@ -66,7 +66,7 @@ typedef struct socket {
      * UDP and what a DHCP client's renewal uses. */
     uint32_t remote_ip;
     uint16_t remote_port;
-    int      connected;
+    int connected;
 
     /* The three options a program really sets on a socket here. `broadcast` is
      * required before a datagram may go to a broadcast address, because a
@@ -74,9 +74,9 @@ typedef struct socket {
      * `reuseaddr` is recorded and reported and overrides nothing, since this
      * stack never refuses a bind for the reason the flag exists to override.
      * `bound_device` is one interface or none. */
-    int      broadcast;
-    int      reuseaddr;
-    int      bound_device;
+    int broadcast;
+    int reuseaddr;
+    int bound_device;
 
     /* TCP control block for SOCK_STREAM sockets (NULL for SOCK_DGRAM). */
     struct tcb *tcb;
@@ -115,9 +115,9 @@ typedef struct socket {
      * right socket, and then drop it at the last step, leaving a blocked
      * `recvfrom` blocked. So a read of this socket may return 0, which is a
      * datagram and not end of input. */
-    uint8_t  recv_buf[SOCK_RECV_BUF_SIZE];
+    uint8_t recv_buf[SOCK_RECV_BUF_SIZE];
     uint16_t recv_len;
-    int      recv_full;
+    int recv_full;
 
     /* Processes blocked waiting for data, a connection, or an accept. The
      * IRQ-side deliver/accept/connect/fin routines wake every waiter; each
@@ -143,17 +143,15 @@ void socket_ref(struct socket *sock);
 void socket_unref(struct socket *sock);
 
 /** Copy an incoming UDP payload into sock and wake any blocked recvfrom. */
-void socket_udp_deliver(struct socket *sock,
-                        uint32_t src_ip, uint16_t src_port,
+void socket_udp_deliver(struct socket *sock, uint32_t src_ip, uint16_t src_port,
                         const uint8_t *data, uint16_t len);
 
 /** Blocking UDP receive; returns the byte count or a negative errno. */
-int socket_recv(struct socket *sock, uint8_t *buf, int len,
-                uint32_t *src_ip, uint16_t *src_port);
+int socket_recv(struct socket *sock, uint8_t *buf, int len, uint32_t *src_ip, uint16_t *src_port);
 
 /** Non-blocking variant; SOCK_EAGAIN if no datagram is waiting. */
-int socket_try_recv(struct socket *sock, uint8_t *buf, int len,
-                    uint32_t *src_ip, uint16_t *src_port);
+int socket_try_recv(struct socket *sock, uint8_t *buf, int len, uint32_t *src_ip,
+                    uint16_t *src_port);
 
 /*
  * The same receive taken in three steps, for a caller with more than one
@@ -183,12 +181,10 @@ int socket_dgram_pending(struct socket *sock);
  * Copy up to `len` bytes of the waiting datagram from `offset` bytes into it,
  * leaving it in place. Returns the bytes copied, or -1 with no datagram.
  */
-int socket_dgram_peek(struct socket *sock, uint32_t offset, uint8_t *buf,
-                      int len);
+int socket_dgram_peek(struct socket *sock, uint32_t offset, uint8_t *buf, int len);
 
 /** Drop the waiting datagram, reporting its sender through the two pointers. */
-void socket_dgram_consume(struct socket *sock, uint32_t *src_ip,
-                          uint16_t *src_port);
+void socket_dgram_consume(struct socket *sock, uint32_t *src_ip, uint16_t *src_port);
 
 /* TCP-side helpers, implemented with the TCP layer. */
 void socket_tcp_accept(struct socket *listen_sock, struct socket *conn_sock);
@@ -196,14 +192,14 @@ void socket_tcp_connected(struct socket *sock);
 void socket_tcp_writable(struct socket *sock);
 /** Blocking stream send; SOCK_EAGAIN when nonblock and the send ring is
  * full. */
-int  socket_tcp_send(struct socket *sock, const uint8_t *buf, int len, int nonblock);
+int socket_tcp_send(struct socket *sock, const uint8_t *buf, int len, int nonblock);
 /** Copy in-order stream bytes into the recv ring; returns the count accepted
  * (less than `len` if the ring was nearly full, so the caller advances rcv_nxt
  * by only what fit and the peer retransmits the rest). */
 uint16_t socket_tcp_deliver(struct socket *sock, const uint8_t *data, uint16_t len);
-int  socket_tcp_recv(struct socket *sock, uint8_t *buf, int len);
+int socket_tcp_recv(struct socket *sock, uint8_t *buf, int len);
 /** Non-blocking variant; SOCK_EAGAIN if no data is buffered (MSG_DONTWAIT). */
-int  socket_tcp_try_recv(struct socket *sock, uint8_t *buf, int len);
+int socket_tcp_try_recv(struct socket *sock, uint8_t *buf, int len);
 void socket_tcp_fin(struct socket *sock);
 
 /** Map socket state to poll revents; sets *wq to the wait queue if non-NULL. */

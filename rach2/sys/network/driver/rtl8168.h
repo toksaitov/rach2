@@ -48,13 +48,13 @@
 #define R8168_INTR_TXOK       0x0004
 #define R8168_INTR_TXERR      0x0008
 #define R8168_INTR_LINKCHG    0x0020
-#define R8168_INTR_ENABLED    (R8168_INTR_RXOK | R8168_INTR_RXERR | R8168_INTR_TXOK | \
-                               R8168_INTR_TXERR | R8168_INTR_LINKCHG)
-#define R8168_TXCONFIG        0x40
+#define R8168_INTR_ENABLED \
+    (R8168_INTR_RXOK | R8168_INTR_RXERR | R8168_INTR_TXOK | R8168_INTR_TXERR | R8168_INTR_LINKCHG)
+#define R8168_TXCONFIG            0x40
 /* CounterAddrLow's command bits (reference: CounterReset, CounterDump); the
  * block's address takes the other 26, so the block is 64-byte aligned. */
-#define R8168_COUNTER_RESET   0x00000001u
-#define R8168_COUNTER_DUMP    0x00000008u
+#define R8168_COUNTER_RESET       0x00000001u
+#define R8168_COUNTER_DUMP        0x00000008u
 /* The chip clears the dump bit when it has written the block. The reference
  * waits 10 ms in steps of 10 us (rtl8169_do_counters). */
 #define R8168_COUNTERS_WAIT_STEPS 1000u

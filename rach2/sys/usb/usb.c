@@ -33,10 +33,10 @@
 /* The interface byte of a USB controller says which register interface it
  * presents. These are the four the standard defines, plus the value a USB
  * device on the bus reports. */
-#define USB_IF_UHCI   0x00
-#define USB_IF_OHCI   0x10
-#define USB_IF_EHCI   0x20
-#define USB_IF_XHCI   0x30
+#define USB_IF_UHCI 0x00
+#define USB_IF_OHCI 0x10
+#define USB_IF_EHCI 0x20
+#define USB_IF_XHCI 0x30
 
 /* Intel routes the USB2 and USB3 pins between the xHCI and its companion EHCI
  * through four registers in the xHCI's own configuration space. The mask
@@ -76,9 +76,9 @@ const char *usb_interface_name(uint8_t prog_if)
  */
 static void report_one(const pci_device_t *dev)
 {
-    klog(KLOG_INFO, "usb", "controller: %x:%x.%d %s interface 0x%x %x:%x bar0 0x%X",
-         (int)dev->bus, (int)dev->device, (int)dev->function, usb_interface_name(dev->prog_if),
-         (int)dev->prog_if, (int)dev->vendor_id, (int)dev->device_id, dev->bar[0]);
+    klog(KLOG_INFO, "usb", "controller: %x:%x.%d %s interface 0x%x %x:%x bar0 0x%X", (int)dev->bus,
+         (int)dev->device, (int)dev->function, usb_interface_name(dev->prog_if), (int)dev->prog_if,
+         (int)dev->vendor_id, (int)dev->device_id, dev->bar[0]);
 
     if (dev->vendor_id == PCI_VENDOR_INTEL && dev->prog_if == USB_IF_XHCI) {
         uint32_t pr, prm, ss, ssm;
@@ -87,8 +87,9 @@ static void report_one(const pci_device_t *dev)
         prm = pci_read_config32(dev->bus, dev->device, dev->function, INTEL_XUSB2PRM);
         ss = pci_read_config32(dev->bus, dev->device, dev->function, INTEL_USB3PSSEN);
         ssm = pci_read_config32(dev->bus, dev->device, dev->function, INTEL_USB3PRM);
-        klog(KLOG_INFO, "usb", "routing: usb2 0x%X of 0x%X, usb3 0x%X of 0x%X, as the firmware left it",
-             pr, prm, ss, ssm);
+        klog(KLOG_INFO, "usb",
+             "routing: usb2 0x%X of 0x%X, usb3 0x%X of 0x%X, as the firmware left it", pr, prm, ss,
+             ssm);
     }
 }
 
@@ -98,8 +99,8 @@ void usb_report_controllers(void)
     int have_prev = 0;
     int found = 0;
 
-    while (pci_find_device_skip(PCI_CLASS_SERIAL_BUS, PCI_SUBCLASS_USB,
-                                have_prev ? &prev : NULL, &dev)) {
+    while (pci_find_device_skip(PCI_CLASS_SERIAL_BUS, PCI_SUBCLASS_USB, have_prev ? &prev : NULL,
+                                &dev)) {
         report_one(&dev);
         prev = dev;
         have_prev = 1;
@@ -658,8 +659,8 @@ void usb_stamp_read(void)
     if (read_us - wake > 20000u) {
         return;
     }
-    klog(KLOG_INFO, "usb", "latency: msi %d, entry %d, wake %d, read %d, us from the drain",
-         by_msi, by_msi ? (int)(entry - event) : 0, (int)(wake - event), (int)(read_us - event));
+    klog(KLOG_INFO, "usb", "latency: msi %d, entry %d, wake %d, read %d, us from the drain", by_msi,
+         by_msi ? (int)(entry - event) : 0, (int)(wake - event), (int)(read_us - event));
 }
 
 int usb_stamp_recording(void)
@@ -677,5 +678,3 @@ void usb_stop(void)
         xhci_stop(xhci_controller(n));
     }
 }
-
-

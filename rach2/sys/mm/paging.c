@@ -24,7 +24,7 @@ page_dir_t *_kernel_dir;
 page_dir_t *_curr_dir;
 
 uint32_t *_frames;
-size_t    _frames_number;
+size_t _frames_number;
 /* The frames below the identity-mapped window, which `alloc_kernel_frame`
  * hands out: a frame the kernel reaches through its physical address. */
 static size_t _window_frames;
@@ -138,7 +138,8 @@ static page_table_t *alloc_page_table(void)
  */
 static void free_page_table(page_table_t *table)
 {
-    if (!table) return;
+    if (!table)
+        return;
     kfree_pages(table, 1);
 }
 
@@ -181,9 +182,7 @@ void init_paging(struct frame_map *map)
 {
     unsigned int frame;
 
-    uintptr_t tmp, phys_address,
-                   table_index,
-                   page_index;
+    uintptr_t tmp, phys_address, table_index, page_index;
 
     page_table_t *table;
 
@@ -198,10 +197,9 @@ void init_paging(struct frame_map *map)
      * usable gets the window, so a machine whose firmware says nothing still
      * boots as it did. */
     _frames_number = map->top_frame ? map->top_frame : (HARD_MEMORY_LIMIT / PAGE_SIZE);
-    _window_frames = _frames_number < HARD_MEMORY_LIMIT / PAGE_SIZE
-                         ? _frames_number
-                         : HARD_MEMORY_LIMIT / PAGE_SIZE;
-    _frames = (uint32_t *) mem_reserve(_frames_number * sizeof(uint32_t), true);
+    _window_frames = _frames_number < HARD_MEMORY_LIMIT / PAGE_SIZE ? _frames_number
+                                                                    : HARD_MEMORY_LIMIT / PAGE_SIZE;
+    _frames = (uint32_t *)mem_reserve(_frames_number * sizeof(uint32_t), true);
     if (_frames == NULL) {
         k_panic("init_paging: no reserved memory for the frame table");
     }
@@ -229,7 +227,7 @@ void init_paging(struct frame_map *map)
         }
     }
 
-    _kernel_dir = (page_dir_t *) mem_reserve(sizeof(page_dir_t), true);
+    _kernel_dir = (page_dir_t *)mem_reserve(sizeof(page_dir_t), true);
     if (_kernel_dir == NULL) {
         k_panic("init_paging: no reserved memory for the kernel page directory");
     }
@@ -247,7 +245,7 @@ void init_paging(struct frame_map *map)
         tmp = phys_address / PAGE_SIZE;
 
         table_index = tmp / 1024;
-        page_index  = tmp % 1024;
+        page_index = tmp % 1024;
 
         if (!(table = _curr_dir->logical_page_tables[table_index])) {
             tmp = mem_reserve(sizeof(page_table_t), true);
@@ -255,7 +253,7 @@ void init_paging(struct frame_map *map)
                 k_panic("init_paging: no reserved memory for an identity-map "
                         "page table");
             }
-            table = (page_table_t *) tmp;
+            table = (page_table_t *)tmp;
 
             k_memset(table, 0, sizeof(page_table_t));
 
@@ -365,8 +363,8 @@ static void _load_page_dir(page_dir_t *dir)
 {
     uint32_t cr0;
 
-    __asm__ __volatile__ ("mov %0, %%cr3" :: "r"(&dir->phys_page_tables));
-    __asm__ __volatile__ ("mov %%cr0, %0" : "=r"(cr0));
+    __asm__ __volatile__("mov %0, %%cr3" ::"r"(&dir->phys_page_tables));
+    __asm__ __volatile__("mov %%cr0, %0" : "=r"(cr0));
 
     /* Enable paging (PG, bit 31) and supervisor write-protect (WP, bit 16). WP
      * makes a ring-0 write to a read-only page fault instead of silently
@@ -378,14 +376,13 @@ static void _load_page_dir(page_dir_t *dir)
      * and writable, and the instruction retries. WP affects nothing else. */
     cr0 |= 0x80000000u | 0x00010000u;
 
-    __asm__ __volatile__ ("mov %0, %%cr0" :: "r"(cr0));
+    __asm__ __volatile__("mov %0, %%cr0" ::"r"(cr0));
 }
 
 /* Page-fault error-code bits (Intel SDM Vol. 3A, 4.7). */
 #define PF_ERR_PRESENT 0x1u /* 0 = not-present page, 1 = protection violation */
 #define PF_ERR_WRITE   0x2u /* 0 = read access, 1 = write access */
 #define PF_ERR_USER    0x4u /* 0 = supervisor mode, 1 = user mode */
-
 
 static int cow_fault(uint32_t addr);
 
@@ -642,8 +639,7 @@ static void _page_fault_handler(isr_params_t *params)
      * paging, since vm_resolve would see the page already present and loop. A
      * non-COW present-page write falls through (a genuine read-only region then
      * segfaults below). */
-    if (have_user_proc && write && in_user_range &&
-        (params->error_code & PF_ERR_PRESENT)) {
+    if (have_user_proc && write && in_user_range && (params->error_code & PF_ERR_PRESENT)) {
         if (cow_fault(fault_address)) {
             return; /* page is now private + writable; retry the instruction */
         }
@@ -669,8 +665,7 @@ static void _page_fault_handler(isr_params_t *params)
      * page the fill maps, or, with no disk backing, panic the kernel. The
      * poll-only fill is safe with IF=0. A fault past the backed size, or one
      * the fill cannot serve, is a real bug. */
-    if (!user_mode &&
-        fault_address >= PCWIN_BASE &&
+    if (!user_mode && fault_address >= PCWIN_BASE &&
         fault_address < PCWIN_BASE + pc_window_size()) {
         if (!current_proc) {
             k_panic("pagecache: window fault with no current process");
@@ -685,9 +680,8 @@ static void _page_fault_handler(isr_params_t *params)
      * just that process and survive; terminate_current_process schedules the
      * parent to collect the zombie, or panics if the dier was a real init. */
     if (user_mode && have_user_proc) {
-        klog(KLOG_WARN, "vm", "fault: killing pid %d: bad %s at 0x%x (err 0x%x)",
-             current_proc->pid, write ? "write" : "read", fault_address,
-             params->error_code);
+        klog(KLOG_WARN, "vm", "fault: killing pid %d: bad %s at 0x%x (err 0x%x)", current_proc->pid,
+             write ? "write" : "read", fault_address, params->error_code);
         terminate_current_process(SIGSEGV);
         return; /* child case: the parent was scheduled; nothing to retry */
     }
@@ -695,8 +689,8 @@ static void _page_fault_handler(isr_params_t *params)
     /* A fault in kernel mode (or with no user context) is a kernel bug. The
      * fault-aware usercopy path returns -EFAULT before the kernel ever touches
      * a bad user pointer, so reaching here means the kernel itself faulted. */
-    klog(KLOG_CRIT, "vm", "fault: in kernel mode at 0x%X (err 0x%X), eip 0x%X",
-         fault_address, params->error_code, params->eip);
+    klog(KLOG_CRIT, "vm", "fault: in kernel mode at 0x%X (err 0x%X), eip 0x%X", fault_address,
+         params->error_code, params->eip);
 
     k_panic("Unrecoverable error: page fault while in kernel mode.");
 }
@@ -720,8 +714,7 @@ uintptr_t map_mmio(uintptr_t phys_addr, size_t size)
      * would leave end_addr below start_page, map nothing, and falsely succeed.
      */
     if (size == 0 || end_addr < phys_addr) {
-        klog(KLOG_ERR, "vm", "map_mmio: bad region 0x%x, %d bytes", phys_addr,
-             size);
+        klog(KLOG_ERR, "vm", "map_mmio: bad region 0x%x, %d bytes", phys_addr, size);
         return 0;
     }
     pages = (end_addr - start_page + PAGE_SIZE - 1) / PAGE_SIZE;
@@ -740,11 +733,9 @@ uintptr_t map_mmio(uintptr_t phys_addr, size_t size)
     _mmio_next += pages * PAGE_SIZE;
 
     /* Flush TLB */
-    __asm__ __volatile__(
-        "movl %%cr3, %%eax\n\t"
-        "movl %%eax, %%cr3"
-        ::: "eax", "memory"
-    );
+    __asm__ __volatile__("movl %%cr3, %%eax\n\t"
+                         "movl %%eax, %%cr3" ::
+                             : "eax", "memory");
 
     return va + (phys_addr - start_page);
 }
@@ -1036,8 +1027,7 @@ void map_kernel_frame(uintptr_t va, uintptr_t phys, int writable)
     if (!table) {
         return;
     }
-    table->pages[page_index] =
-        (phys & ~(PAGE_SIZE - 1)) | (writable ? 0x3u : 0x1u);
+    table->pages[page_index] = (phys & ~(PAGE_SIZE - 1)) | (writable ? 0x3u : 0x1u);
     paging_flush_tlb(va);
 }
 
@@ -1071,10 +1061,12 @@ void paging_set_user(uintptr_t addr, bool user)
     uintptr_t page_index = page_num % 1024;
     page_table_t *table;
 
-    if (table_index >= 1024) return;
+    if (table_index >= 1024)
+        return;
 
     table = _curr_dir->logical_page_tables[table_index];
-    if (!table) return;
+    if (!table)
+        return;
 
     /* U/S is bit 2 (0x4): set in both the page table and directory entry. */
     if (user) {
@@ -1118,7 +1110,7 @@ void paging_set_writable(page_dir_t *dir, uintptr_t addr, bool writable)
 
 void paging_flush_tlb(uintptr_t addr)
 {
-    __asm__ __volatile__("invlpg (%0)" :: "r"(addr) : "memory");
+    __asm__ __volatile__("invlpg (%0)" ::"r"(addr) : "memory");
 }
 
 page_dir_t *clone_page_directory(void)
@@ -1160,7 +1152,7 @@ void switch_page_directory(page_dir_t *dir)
     }
 
     _curr_dir = dir;
-    __asm__ __volatile__("mov %0, %%cr3" :: "r"(get_page_dir_phys(dir)) : "memory");
+    __asm__ __volatile__("mov %0, %%cr3" ::"r"(get_page_dir_phys(dir)) : "memory");
 }
 
 void frame_ref(uintptr_t phys)
@@ -1214,8 +1206,7 @@ static page_table_t *ensure_user_table(page_dir_t *dir, uintptr_t table_index)
 {
     page_table_t *table = dir->logical_page_tables[table_index];
 
-    if (table && dir != _kernel_dir &&
-        table == _kernel_dir->logical_page_tables[table_index]) {
+    if (table && dir != _kernel_dir && table == _kernel_dir->logical_page_tables[table_index]) {
         page_table_t *new_table = alloc_page_table();
         uint32_t i;
 
@@ -1233,7 +1224,7 @@ static page_table_t *ensure_user_table(page_dir_t *dir, uintptr_t table_index)
         table = alloc_page_table();
         if (!table) {
             klog(KLOG_ERR, "vm", "user table: no table could be allocated for index %d",
-                          (int)table_index);
+                 (int)table_index);
             return NULL;
         }
         dir->phys_page_tables[table_index] = table_phys(table) | 0x7; /* P+RW+U */
@@ -1290,8 +1281,7 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
     page_index = page_num % 1024;
 
     if (table_index >= 1024) {
-        klog(KLOG_ERR, "vm", "user page: table index %d is past the directory",
-             (int)table_index);
+        klog(KLOG_ERR, "vm", "user page: table index %d is past the directory", (int)table_index);
         return 0;
     }
 
@@ -1339,16 +1329,17 @@ uintptr_t alloc_user_page(page_dir_t *dir, uintptr_t virt_addr)
         }
         user_used -= user_used < _kernel_frames_reserved ? user_used : _kernel_frames_reserved;
         klog(KLOG_ERR, "vm",
-             "user page: no free frames in %d: %d boot, %d kernel, %d user of which %d shared, pid %d",
+             "user page: no free frames in %d: %d boot, %d kernel, %d user of which %d shared, pid "
+             "%d",
              (int)_frames_number, (int)_user_frames_start, (int)_kernel_frames_reserved,
              (int)user_used, (int)user_shared, current_proc ? current_proc->pid : 0);
-        return 0;  /* No free frames */
+        return 0; /* No free frames */
     }
 
     phys_addr = frame * PAGE_SIZE;
 
     /* Map the page with present, rw, and user bits */
-    table->pages[page_index] = phys_addr | 0x7;  /* P + RW + U/S */
+    table->pages[page_index] = phys_addr | 0x7; /* P + RW + U/S */
 
     /* Flush TLB for this address if we're in the current directory */
     if (dir == _curr_dir) {

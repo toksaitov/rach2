@@ -119,7 +119,7 @@ static void check_timing(void);
 static void check_strings(void);
 void shell_loop(void);
 void shell_reset_input(void);
-void panic_init_died(uint32_t pid);  /* called from syscall.c too; never returns */
+void panic_init_died(uint32_t pid); /* called from syscall.c too; never returns */
 static void process_command(const char *cmd);
 static void timer_handler(isr_params_t *params);
 static void keyboard_handler(isr_params_t *params);
@@ -184,7 +184,12 @@ static void memory_map_line(char *buf, uint32_t buflen, uint64_t addr, uint64_t 
         }
     }
     if (pos + 12 < buflen) {
-        const char *name = type == 1 ? " available" : type == 2 ? " reserved" : type == 3 ? " acpi" : type == 4 ? " nvs" : type == 5 ? " bad" : " other";
+        const char *name = type == 1   ? " available"
+                           : type == 2 ? " reserved"
+                           : type == 3 ? " acpi"
+                           : type == 4 ? " nvs"
+                           : type == 5 ? " bad"
+                                       : " other";
 
         for (k = 0; name[k] && pos + 1 < buflen; k++) {
             buf[pos++] = name[k];
@@ -223,7 +228,7 @@ static void exec_program(int argc, char *argv[]);
  */
 static void timer_handler(isr_params_t *params)
 {
-    (void) params;
+    (void)params;
 
     ++kernel_ticks;
     /* The microsecond clock's periods are this tick's to count; see
@@ -329,12 +334,11 @@ void terminate_current_process(int32_t signo)
          * the debug shell is the supervisor (rescue, or the no-init test image)
          * does an exited init return to it. */
         if (!debug_shell_is_home) {
-            panic_init_died(pid);   /* never returns */
+            panic_init_died(pid); /* never returns */
         }
         /* Same resume path as when init exits normally; see sys_exit. */
         klog(KLOG_INFO, "terminate",
-             "init process %d killed by signal %d, returning to kernel shell",
-             pid, signo);
+             "init process %d killed by signal %d, returning to kernel shell", pid, signo);
         console_puts("Init process exited. Returning to kernel debug shell.");
 
         free_process(current_proc);
@@ -349,15 +353,12 @@ void terminate_current_process(int32_t signo)
 
         sched_disable();
 
-        __asm__ __volatile__(
-            "movl %0, %%esp\n\t"
-            "sti\n\t"
-            "jmp *%1\n\t"
-            :
-            : "r"((uint32_t)stack + KERNEL_STACK_SIZE),
-              "r"((uint32_t)shell_loop)
-            : "memory"
-        );
+        __asm__ __volatile__("movl %0, %%esp\n\t"
+                             "sti\n\t"
+                             "jmp *%1\n\t"
+                             :
+                             : "r"((uint32_t)stack + KERNEL_STACK_SIZE), "r"((uint32_t)shell_loop)
+                             : "memory");
     } else {
         schedule();
         k_panic("a dying process was scheduled again");
@@ -381,7 +382,7 @@ static void kill_foreground_process(void)
     if (console_tty.fg_pgid != 0) {
         tty_signal_group(console_tty.fg_pgid, SIGINT);
     } else if (current_proc && current_proc->cr3 != 0 &&
-               (int) current_proc->sid == console_tty.sid) {
+               (int)current_proc->sid == console_tty.sid) {
         signal_post(current_proc, SIGINT);
     }
 }
@@ -405,7 +406,7 @@ static void keyboard_handler(isr_params_t *params)
     uint32_t saved_cr3;
     bool switched_cr3 = false;
 
-    (void) params;
+    (void)params;
 
     scancode = inb(0x60);
 
@@ -482,7 +483,8 @@ void shell_input_char(char c)
 static bool str_equal(const char *a, const char *b)
 {
     while (*a && *b) {
-        if (*a != *b) return false;
+        if (*a != *b)
+            return false;
         ++a;
         ++b;
     }
@@ -492,7 +494,8 @@ static bool str_equal(const char *a, const char *b)
 static bool str_starts_with(const char *str, const char *prefix)
 {
     while (*prefix) {
-        if (*str != *prefix) return false;
+        if (*str != *prefix)
+            return false;
         ++str;
         ++prefix;
     }
@@ -665,16 +668,14 @@ static const char user_msg[] = "Hello from ring 3!\n";
 static void user_test_entry(void)
 {
     /* write(1, user_msg, 19) via int 0x80. */
-    __asm__ __volatile__(
-        "movl $4, %%eax\n\t"
-        "movl $1, %%ebx\n\t"
-        "movl %0, %%ecx\n\t"
-        "movl $19, %%edx\n\t"
-        "int $0x80\n\t"
-        :
-        : "r"(user_msg)
-        : "eax", "ebx", "ecx", "edx", "memory"
-    );
+    __asm__ __volatile__("movl $4, %%eax\n\t"
+                         "movl $1, %%ebx\n\t"
+                         "movl %0, %%ecx\n\t"
+                         "movl $19, %%edx\n\t"
+                         "int $0x80\n\t"
+                         :
+                         : "r"(user_msg)
+                         : "eax", "ebx", "ecx", "edx", "memory");
 
     for (;;) {
         __asm__ __volatile__("nop");
@@ -765,13 +766,13 @@ static void test_switch(void)
 
     stack_b = mem_reserve(KERNEL_STACK_SIZE, true);
     switch_proc_b->kernel_stack = stack_b + KERNEL_STACK_SIZE;
-    switch_proc_b->cr3 = 0;  /* shares the kernel page directory */
+    switch_proc_b->cr3 = 0; /* shares the kernel page directory */
     switch_proc_b->parent_pid = switch_proc_a->pid;
 
     setup_process_stack(switch_proc_b, proc_b_entry);
 
-    console_printf("Process B created: pid=%d stack=0x%X\n",
-                  switch_proc_b->pid, switch_proc_b->kernel_stack);
+    console_printf("Process B created: pid=%d stack=0x%X\n", switch_proc_b->pid,
+                   switch_proc_b->kernel_stack);
 
     switch_count = 0;
 
@@ -1132,8 +1133,7 @@ static void exec_program(int argc, char *argv[])
     /* Stream the segments straight from the file (no whole-file buffer, so
      * the binary size is unbounded); img records entry and auxv metadata. */
     if (elf_load_image(boot_ctx.ref.mnt ? boot_vfs_read : exec_krffs_read,
-                       boot_ctx.ref.mnt ? (void *)&boot_ctx : (void *)path, user_dir,
-                       &img) != 0) {
+                       boot_ctx.ref.mnt ? (void *)&boot_ctx : (void *)path, user_dir, &img) != 0) {
         boot_exec_done();
         console_puts("exec: Failed to load ELF segments");
         return;
@@ -1158,8 +1158,8 @@ static void exec_program(int argc, char *argv[])
      * arrays and the AT_NULL-terminated auxv, 16-byte-aligning the entry ESP.
      * The layout is verified host-side (tests/host/uimage_hosttest.c). */
     krandom_bytes(random16, 16);
-    user_esp = build_user_stack(user_stack_page, user_stack_vaddr, PAGE_SIZE,
-                                argc, argv, default_envp, &img, random16, 0);
+    user_esp = build_user_stack(user_stack_page, user_stack_vaddr, PAGE_SIZE, argc, argv,
+                                default_envp, &img, random16, 0);
     kunmap_temp(user_stack_page);
     if (user_esp == 0) {
         console_puts("exec: argv/env too large for the initial stack");
@@ -1266,8 +1266,9 @@ static void refuse_unmounted_root(void)
     klog(KLOG_WARN, "boot",
          "check the root this boot line asks for, or add rach2.rescue to ask "
          "for that shell deliberately");
-    klog(KLOG_WARN, "boot", "refused: no file system mounted and no rach2.rescue: "
-                  "the debug shell authenticates nobody\n");
+    klog(KLOG_WARN, "boot",
+         "refused: no file system mounted and no rach2.rescue: "
+         "the debug shell authenticates nobody\n");
     for (;;) {
         __asm__ __volatile__("cli; hlt");
     }
@@ -1311,9 +1312,10 @@ static void refuse_contradictory_boot_line(void)
     klog(KLOG_WARN, "boot",
          "drop one of the two, or add rach2.rescue to ask for that shell "
          "deliberately");
-    klog(KLOG_WARN, "boot", "refused: rach2.nodisk with rach2.fsdisk or "
-                  "rach2.root=disk and no rach2.rescue: nothing would mount "
-                  "and the debug shell authenticates nobody\n");
+    klog(KLOG_WARN, "boot",
+         "refused: rach2.nodisk with rach2.fsdisk or "
+         "rach2.root=disk and no rach2.rescue: nothing would mount "
+         "and the debug shell authenticates nobody\n");
     for (;;) {
         __asm__ __volatile__("cli; hlt");
     }
@@ -1331,9 +1333,10 @@ static void refuse_contradictory_boot_line(void)
  */
 void panic_init_died(uint32_t pid)
 {
-
-    klog(KLOG_CRIT, "panic", "init (pid %d) exited; halting "
-                  "(boot rach2.rescue for the debug shell)\n", (int)pid);
+    klog(KLOG_CRIT, "panic",
+         "init (pid %d) exited; halting "
+         "(boot rach2.rescue for the debug shell)\n",
+         (int)pid);
     sched_disable();
     for (;;) {
         __asm__ __volatile__("cli; hlt");
@@ -1364,8 +1367,7 @@ static void boot_init_process(void)
         struct vfs_ref ref;
 
         if (vfs_resolve(0, init_path, 0, &ref, 0, 0) != 0) {
-            klog(KLOG_WARN, "boot",
-                 "no /sbin/init in the root; falling back to the debug shell");
+            klog(KLOG_WARN, "boot", "no /sbin/init in the root; falling back to the debug shell");
             return;
         }
         vfs_ref_release(&ref);
@@ -1402,7 +1404,7 @@ static void boot_init_process(void)
      * whole harness were written against. */
     proc_reclaim_boot_pids();
 
-    init_argv[0] = (char *) init_path;
+    init_argv[0] = (char *)init_path;
     init_argv[1] = NULL;
     exec_program(1, init_argv);
 
@@ -1412,14 +1414,15 @@ static void boot_init_process(void)
      * genuinely init-less image (the test one) took the early return above
      * instead. */
 
-    klog(KLOG_CRIT, "panic", "%s present but failed to load; halting "
-                  "(boot rach2.rescue for the debug shell)\n", init_path);
+    klog(KLOG_CRIT, "panic",
+         "%s present but failed to load; halting "
+         "(boot rach2.rescue for the debug shell)\n",
+         init_path);
     sched_disable();
     for (;;) {
         __asm__ __volatile__("cli; hlt");
     }
 }
-
 
 /* RAM-disk stub backing for the page cache: with KRFFS mounted on the window,
    the file system reads and writes the module image through these page-grained
@@ -1432,8 +1435,7 @@ static int krffs_stub_read(uint32_t off, void *page)
 {
     uint32_t i;
     for (i = 0; i < PAGE_SIZE; ++i) {
-        ((uint8_t *) page)[i] =
-            (off + i < _krffs_stub_size) ? _krffs_stub_base[off + i] : 0;
+        ((uint8_t *)page)[i] = (off + i < _krffs_stub_size) ? _krffs_stub_base[off + i] : 0;
     }
     return 0;
 }
@@ -1443,7 +1445,7 @@ static int krffs_stub_write(uint32_t off, const void *page)
     uint32_t i;
     for (i = 0; i < PAGE_SIZE; ++i) {
         if (off + i < _krffs_stub_size) {
-            _krffs_stub_base[off + i] = ((const uint8_t *) page)[i];
+            _krffs_stub_base[off + i] = ((const uint8_t *)page)[i];
         }
     }
     return 0;
@@ -1461,14 +1463,13 @@ static int krffs_stub_write(uint32_t off, const void *page)
 static int init_krffs_window(uint8_t *disk_base, uint32_t disk_size)
 {
     if (disk_size > pc_window_size()) {
-        klog(KLOG_WARN, "krffs", "disk size %d exceeds window %d",
-                      disk_size, pc_window_size());
+        klog(KLOG_WARN, "krffs", "disk size %d exceeds window %d", disk_size, pc_window_size());
         return -1;
     }
     _krffs_stub_base = disk_base;
     _krffs_stub_size = disk_size;
     pc_set_backing(krffs_stub_read, krffs_stub_write, disk_size);
-    if (init_krffs((void *) PCWIN_BASE, disk_size) != 0) {
+    if (init_krffs((void *)PCWIN_BASE, disk_size) != 0) {
         /* Roll the backing back so a later fault cannot read stub data for a
          * file system that never mounted. */
         pc_set_backing(0, 0, 0);
@@ -1531,14 +1532,14 @@ static int krffs_disk_mark_clean(void)
     if (!_krffs_on_disk) {
         return -1;
     }
-    root = (krffs_node_t *) PCWIN_BASE;
+    root = (krffs_node_t *)PCWIN_BASE;
     mode = root->mode;
 
     if (pc_sync() != 0) {
         klog(KLOG_WARN, "krffs", "flush failed before the clear; image stays dirty");
         return -1;
     }
-    root->mode = (uint16_t) (mode & ~KRFFS_MODE_DIRTY);
+    root->mode = (uint16_t)(mode & ~KRFFS_MODE_DIRTY);
     if (pc_sync() != 0) {
         klog(KLOG_WARN, "krffs", "flush failed after the clear; image stays dirty");
         return -1;
@@ -1627,16 +1628,14 @@ void kernel_shutdown(int how)
 
 static int krffs_disk_read(uint32_t off, void *page)
 {
-    return _krffs_disk_part.device.read(
-               &_krffs_disk_part.device, off / BLOCK_SECTOR_SIZE,
-               PAGE_SIZE / BLOCK_SECTOR_SIZE, page);
+    return _krffs_disk_part.device.read(&_krffs_disk_part.device, off / BLOCK_SECTOR_SIZE,
+                                        PAGE_SIZE / BLOCK_SECTOR_SIZE, page);
 }
 
 static int krffs_disk_write(uint32_t off, const void *page)
 {
-    return _krffs_disk_part.device.write(
-               &_krffs_disk_part.device, off / BLOCK_SECTOR_SIZE,
-               PAGE_SIZE / BLOCK_SECTOR_SIZE, page);
+    return _krffs_disk_part.device.write(&_krffs_disk_part.device, off / BLOCK_SECTOR_SIZE,
+                                         PAGE_SIZE / BLOCK_SECTOR_SIZE, page);
 }
 
 /*
@@ -1704,8 +1703,7 @@ static block_device_t *choose_boot_disk(void)
 
     if (kcmdline_value("rach2.boot", spec, sizeof(spec))) {
         if (root_resolve(spec, &m) != 1) {
-            klog(KLOG_WARN, "block", "rach2.boot=%s names no one partition; no boot devices",
-                 spec);
+            klog(KLOG_WARN, "block", "rach2.boot=%s names no one partition; no boot devices", spec);
             return 0;
         }
         if (m.disk->table.kind != PART_MBR || m.disk->table.parts[m.slot].number != 1) {
@@ -1745,8 +1743,9 @@ static void discover_boot_devices(void)
     disc_table_ok = 1;
 
     if (mbr_gap_clear(disc_parts) != 0) {
-        klog(KLOG_INFO, "block", "a partition occupies the boot loader's gap; "
-                      "/dev/grubcore absent\n");
+        klog(KLOG_INFO, "block",
+             "a partition occupies the boot loader's gap; "
+             "/dev/grubcore absent\n");
     } else {
         devfs_grubcore_publish(disk);
     }
@@ -1755,13 +1754,13 @@ static void discover_boot_devices(void)
         klog(KLOG_WARN, "block", "entry 0 is not a boot partition; /dev/bootpart absent");
         return;
     }
-    devfs_bootpart_publish(block_lag_wrap(disk), disc_parts[0].start_lba, disc_parts[0].sector_count);
+    devfs_bootpart_publish(block_lag_wrap(disk), disc_parts[0].start_lba,
+                           disc_parts[0].sector_count);
 }
 
 static uint32_t sb_le32(const uint8_t *p)
 {
-    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) |
-           ((uint32_t)p[3] << 24);
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
 /**
@@ -1873,8 +1872,10 @@ static int init_ext2_root(void)
             continue;
         }
         if (at < 0) {
-            klog(KLOG_WARN, "ext2", "root: %s has the magic and features this driver "
-                                    "does not mount", path);
+            klog(KLOG_WARN, "ext2",
+                 "root: %s has the magic and features this driver "
+                 "does not mount",
+                 path);
             continue;
         }
         return ext2_root_mount(disk, disc_parts[i].start_lba, disc_parts[i].sector_count, path);
@@ -1882,7 +1883,6 @@ static int init_ext2_root(void)
     klog(KLOG_ERR, "ext2", "root: no ext2 partition on the disk");
     return -1;
 }
-
 
 /**
  * Mounts KRFFS from the real disk through the page-cache window.
@@ -1931,8 +1931,8 @@ static int init_krffs_disk(void)
        and accepting the first that has a real KRFFS root: the 16-bit magic,
        the root type, and a size that is non-zero and fits the partition.
        Checking the actual root tightens the weak 16-bit magic and works
-       whatever the MBR type byte says, so a GRUB-partitioned disk (boot partition first, KRFFS second)
-       still mounts. LBA 0 is never probed; it has the boot code. */
+       whatever the MBR type byte says, so a GRUB-partitioned disk (boot partition first, KRFFS
+       second) still mounts. LBA 0 is never probed; it has the boot code. */
     for (i = 0; i < MBR_PART_COUNT; ++i) {
         if (krffs_root_at(boot_disk_device ? boot_disk_device : block0, parts[i].start_lba,
                           parts[i].sector_count)) {
@@ -1977,12 +1977,12 @@ static int krffs_root_mount(block_device_t *disk, uint32_t start_lba, uint32_t s
 
     /* Reject a malformed partition before mounting, so a bad MBR fails cleanly
        instead of faulting past the disk or the window later: it must be
-       non-empty, a whole number of pages (the cache transfers a page at a time), lie within the disk, and fit the window (which also keeps sectors * 512
-       inside 32 bits, since the window is capped well below). */
-    if (sector_count == 0 ||
-        sector_count % (PAGE_SIZE / BLOCK_SECTOR_SIZE) != 0) {
+       non-empty, a whole number of pages (the cache transfers a page at a time), lie within the
+       disk, and fit the window (which also keeps sectors * 512 inside 32 bits, since the window is
+       capped well below). */
+    if (sector_count == 0 || sector_count % (PAGE_SIZE / BLOCK_SECTOR_SIZE) != 0) {
         klog(KLOG_WARN, "krffs", "partition is empty or not page-aligned (%d sectors)",
-                      sector_count);
+             sector_count);
         return -1;
     }
     if (start_lba > disk->sector_count || sector_count > disk->sector_count - start_lba) {
@@ -1990,8 +1990,7 @@ static int krffs_root_mount(block_device_t *disk, uint32_t start_lba, uint32_t s
         return -1;
     }
     if (sector_count > pc_window_size() / BLOCK_SECTOR_SIZE) {
-        klog(KLOG_WARN, "krffs", "partition %d sectors exceeds the window",
-                      sector_count);
+        klog(KLOG_WARN, "krffs", "partition %d sectors exceeds the window", sector_count);
         return -1;
     }
     part_bytes = sector_count * BLOCK_SECTOR_SIZE;
@@ -2006,7 +2005,7 @@ static int krffs_root_mount(block_device_t *disk, uint32_t start_lba, uint32_t s
 
     block_partition_init(&_krffs_disk_part, disk, start_lba, sector_count);
     pc_set_backing(krffs_disk_read, krffs_disk_write, part_bytes);
-    if (init_krffs((void *) PCWIN_BASE, part_bytes) != 0) {
+    if (init_krffs((void *)PCWIN_BASE, part_bytes) != 0) {
         pc_set_backing(0, 0, 0);
         return -1;
     }
@@ -2015,7 +2014,7 @@ static int krffs_root_mount(block_device_t *disk, uint32_t start_lba, uint32_t s
        the flag straight through to the disk (pc_sync), so a crash before the clean
        shutdown clears it leaves the evidence on the device for fsck.krffs. */
     {
-        krffs_node_t *root = (krffs_node_t *) PCWIN_BASE;
+        krffs_node_t *root = (krffs_node_t *)PCWIN_BASE;
         uint32_t reaped;
 
         if (root->mode & KRFFS_MODE_DIRTY) {
@@ -2024,10 +2023,10 @@ static int krffs_root_mount(block_device_t *disk, uint32_t start_lba, uint32_t s
         root->mode |= KRFFS_MODE_DIRTY;
         if (pc_sync() != 0) {
             /* The dirty flag never reached the platter, so a later crash would
-               leave an image fsck.krffs reads as clean. Fail the mount closed, not run on a filesystem whose crash evidence is missing.
-               init_krffs already published krffs_fs at the window, so unpublish
-               it before dropping the backing or a later path would dereference
-               the now-unbacked window. */
+               leave an image fsck.krffs reads as clean. Fail the mount closed, not run on a
+               filesystem whose crash evidence is missing. init_krffs already published krffs_fs at
+               the window, so unpublish it before dropping the backing or a later path would
+               dereference the now-unbacked window. */
             klog(KLOG_WARN, "krffs", "dirty flag did not reach the disk; mount aborted");
             krffs_fs = 0;
             pc_set_backing(0, 0, 0);
@@ -2050,8 +2049,7 @@ static int krffs_root_mount(block_device_t *disk, uint32_t start_lba, uint32_t s
            and gating would strand it the moment fsck.krffs cleared the flag. */
         reaped = krffs_reap_orphans();
         if (reaped != 0) {
-            klog(KLOG_INFO, "krffs", "reaped %d orphan(s) with no descriptor left",
-                          (int) reaped);
+            klog(KLOG_INFO, "krffs", "reaped %d orphan(s) with no descriptor left", (int)reaped);
             if (pc_sync() != 0) {
                 klog(KLOG_WARN, "krffs", "the orphan repair did not reach the disk");
             }
@@ -2281,8 +2279,7 @@ static int root_resolve(const char *spec, struct root_match *m)
     }
     part_node_path(a, first.disk, first.slot);
     part_node_path(b, second.disk, second.slot);
-    klog(KLOG_ERR, "root", "%s: ambiguous: %s and %s%s", spec, a, b,
-         found > 2 ? " and more" : "");
+    klog(KLOG_ERR, "root", "%s: ambiguous: %s and %s%s", spec, a, b, found > 2 ? " and more" : "");
     return -1;
 }
 
@@ -2332,8 +2329,8 @@ static int init_root_by_identity(const char *spec, int *krffs_mounted)
             return -1;
         }
         klog(KLOG_INFO, "root", "%s: %s, KRFFS", spec, path);
-        if (krffs_root_mount(m.disk->dev, (uint32_t)e->start_lba, (uint32_t)e->sector_count,
-                             -1) != 0) {
+        if (krffs_root_mount(m.disk->dev, (uint32_t)e->start_lba, (uint32_t)e->sector_count, -1) !=
+            0) {
             return -1;
         }
         k_strncpy(root_source, path, sizeof(root_source));
@@ -2345,7 +2342,9 @@ static int init_root_by_identity(const char *spec, int *krffs_mounted)
         return ext2_root_mount(m.disk->dev, e->start_lba, e->sector_count, path);
     }
     klog(KLOG_ERR, "root", "%s: %s has no %s file system this kernel mounts", spec, path,
-         want_krffs ? "KRFFS" : want_ext2 ? "ext2" : "root");
+         want_krffs  ? "KRFFS"
+         : want_ext2 ? "ext2"
+                     : "root");
     return -1;
 }
 
@@ -2437,7 +2436,7 @@ static void check_timing(void)
 static void check_strings(void)
 {
     static unsigned char pat[80], got[80];
-    static const unsigned char fills[2] = { 0xa5, 0x58 };
+    static const unsigned char fills[2] = {0xa5, 0x58};
     const char *what;
     size_t i;
     int len, sa, da, f, src, dst;
@@ -2560,7 +2559,7 @@ static void process_command(const char *cmd)
     } else if (str_equal(cmd, "info")) {
         console_printf("Memory pointer:  0x%X\n", mem_reserved_ptr);
         console_printf("Timer ticks:     %d\n", kernel_ticks);
-        console_printf("Kernel end:      0x%X\n", (uintptr_t) &_end);
+        console_printf("Kernel end:      0x%X\n", (uintptr_t)&_end);
         console_printf("Modules loaded:  %d\n", module_count);
     } else if (str_equal(cmd, "modules")) {
         uint32_t i;
@@ -2570,8 +2569,7 @@ static void process_command(const char *cmd)
             console_printf("Loaded modules: %d\n", module_count);
             for (i = 0; i < module_count; i++) {
                 module_info_t *m = get_module(i);
-                console_printf("  [%d] 0x%X - 0x%X (%d bytes)\n",
-                         i, m->start, m->end, m->size);
+                console_printf("  [%d] 0x%X - 0x%X (%d bytes)\n", i, m->start, m->end, m->size);
             }
         }
     } else if (str_equal(cmd, "disk")) {
@@ -2582,9 +2580,8 @@ static void process_command(const char *cmd)
         } else if (block_ready() != 0 || !block0) {
             console_printf("disk: no boot disk\n");
         } else {
-            console_printf("disk: block0: %d sectors, %d MiB\n",
-                          (uint32_t) block0->sector_count,
-                          (uint32_t) (block0->sector_count / 2048));
+            console_printf("disk: block0: %d sectors, %d MiB\n", (uint32_t)block0->sector_count,
+                           (uint32_t)(block0->sector_count / 2048));
 
             if (block0->read(block0, 0, 1, disk_sector) != 0) {
                 console_printf("disk: read of sector 0 failed\n");
@@ -2603,8 +2600,8 @@ static void process_command(const char *cmd)
                     }
                     console_putc('\n');
                 }
-                console_printf("disk: MBR signature %X%X (expect 55AA)\n",
-                              disk_sector[510], disk_sector[511]);
+                console_printf("disk: MBR signature %X%X (expect 55AA)\n", disk_sector[510],
+                               disk_sector[511]);
             }
         }
     } else if (str_equal(cmd, "disk write")) {
@@ -2624,7 +2621,7 @@ static void process_command(const char *cmd)
             uint32_t i;
 
             for (i = 0; i < BLOCK_SECTOR_SIZE; ++i) {
-                disk_scratch[i] = (uint8_t) (i ^ 0x5A);
+                disk_scratch[i] = (uint8_t)(i ^ 0x5A);
             }
             if (block0->write(block0, lba, 1, disk_scratch) != 0) {
                 console_printf("disk: write of the last sector failed\n");
@@ -2638,8 +2635,7 @@ static void process_command(const char *cmd)
                         break;
                     }
                 }
-                console_printf("disk: last-sector round-trip %s\n",
-                              ok ? "OK" : "MISMATCH");
+                console_printf("disk: last-sector round-trip %s\n", ok ? "OK" : "MISMATCH");
             }
         }
 #else
@@ -2685,8 +2681,7 @@ static void process_command(const char *cmd)
                    taken out of the namespace while a descriptor still held it.
                    No path reaches it, so no listing shows it either. */
                 if (node->type == KRFFS_RESERVED_NODE && node->name[0] != '\0') {
-                    console_printf("  %s  (%d bytes)\n",
-                             node->name, (uint32_t)node->data_size);
+                    console_printf("  %s  (%d bytes)\n", node->name, (uint32_t)node->data_size);
                     count++;
                 }
             } while ((node = krffs_get_next_node(krffs_fs, node)) != krffs_fs->node);
@@ -2719,7 +2714,7 @@ static void process_command(const char *cmd)
                 }
 
                 if (file_size > 0 && buffer[bytes_read > 0 ? bytes_read - 1 : 0] != '\n') {
-                    console_puts("");  /* terminate the last line if the file lacked one */
+                    console_puts(""); /* terminate the last line if the file lacked one */
                 }
                 console_puts("--- EOF ---");
             }
@@ -2765,9 +2760,9 @@ static void process_command(const char *cmd)
                             console_printf("    File size:     %d bytes\n", phdrs[i].p_filesz);
                             console_printf("    Memory size:   %d bytes\n", phdrs[i].p_memsz);
                             console_printf("    Flags:         %s%s%s\n",
-                                     (phdrs[i].p_flags & PF_R) ? "R" : "-",
-                                     (phdrs[i].p_flags & PF_W) ? "W" : "-",
-                                     (phdrs[i].p_flags & PF_X) ? "X" : "-");
+                                           (phdrs[i].p_flags & PF_R) ? "R" : "-",
+                                           (phdrs[i].p_flags & PF_W) ? "W" : "-",
+                                           (phdrs[i].p_flags & PF_X) ? "X" : "-");
                         }
                     }
                 }
@@ -2858,7 +2853,8 @@ static void process_command(const char *cmd)
 
         /* Split the old and new names at the first space. */
         for (i = 0; args[i] != '\0' && args[i] != ' '; i++) {
-            if (i < 63) old_buf[i] = args[i];
+            if (i < 63)
+                old_buf[i] = args[i];
         }
         old_buf[i < 63 ? i : 63] = '\0';
 
@@ -2880,9 +2876,8 @@ static void process_command(const char *cmd)
             krffs_node_t *source = krffs_resolve(old_buf);
             krffs_node_t *victim = krffs_resolve(new_name);
 
-            if (source && source != krffs_fs->node &&
-                !KRFFS_IS_DIR(source->mode) &&
-                victim && victim != source && fs_node_is_held(victim)) {
+            if (source && source != krffs_fs->node && !KRFFS_IS_DIR(source->mode) && victim &&
+                victim != source && fs_node_is_held(victim)) {
                 krffs_orphan_node(victim);
             }
             if (source && krffs_rename(old_buf, new_name) == 0) {
@@ -2899,7 +2894,8 @@ static void process_command(const char *cmd)
 
         /* Split the filename and data at the first space. */
         for (i = 0; args[i] != '\0' && args[i] != ' '; i++) {
-            if (i < 63) file_buf[i] = args[i];
+            if (i < 63)
+                file_buf[i] = args[i];
         }
         file_buf[i < 63 ? i : 63] = '\0';
 
@@ -2963,8 +2959,7 @@ static void process_command(const char *cmd)
         int rtt = icmp_ping(net_ip_gateway);
         if (rtt >= 0) {
             set_fore_color(light_green);
-            console_printf("ping 10.0.2.2: reply in %d ticks (%d ms)\n",
-                     rtt, rtt * 10);
+            console_printf("ping 10.0.2.2: reply in %d ticks (%d ms)\n", rtt, rtt * 10);
             console_printf("ping 10.0.2.2: reply in %d ticks\n", rtt);
         } else {
             set_fore_color(light_red);
@@ -2973,7 +2968,7 @@ static void process_command(const char *cmd)
         set_fore_color(light_grey);
     } else if (str_equal(cmd, "netbad")) {
         /* Ping an unreachable host on our subnet to exercise the timeout. */
-        int rtt = icmp_ping(0x0A000263UL);   /* 10.0.2.99 */
+        int rtt = icmp_ping(0x0A000263UL); /* 10.0.2.99 */
         if (rtt >= 0) {
             set_fore_color(light_red);
             console_printf("ping 10.0.2.99: unexpected reply (%d ticks)\n", rtt);
@@ -2984,7 +2979,7 @@ static void process_command(const char *cmd)
         }
         set_fore_color(light_grey);
     } else if (str_equal(cmd, "fault")) {
-        volatile uint32_t *bad_ptr = (volatile uint32_t *) 0xA0000000;
+        volatile uint32_t *bad_ptr = (volatile uint32_t *)0xA0000000;
         console_puts("Triggering page fault at 0xA0000000...");
         *bad_ptr = 0xDEADBEEF;
     } else if (str_equal(cmd, "halt")) {
@@ -3058,10 +3053,12 @@ void shell_loop(void)
 
         while (serial_data_available()) {
             int ch = serial_try_getc();
-            if (ch < 0) break;
+            if (ch < 0)
+                break;
 
             /* Terminals send CR on Enter. */
-            if (ch == '\r') ch = '\n';
+            if (ch == '\r')
+                ch = '\n';
 
             if (ch == '\n') {
                 if (k_scrollback_is_active()) {
@@ -3150,9 +3147,7 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
             }
         }
 
-        verdict = modlayout_check(ranges, nranges,
-                                  (uint32_t) (uintptr_t) &_end,
-                                  0xFFFFFFFFu, &bad);
+        verdict = modlayout_check(ranges, nranges, (uint32_t)(uintptr_t)&_end, 0xFFFFFFFFu, &bad);
         if (verdict != MODLAYOUT_OK) {
             /* The detail travels INTO the panic, not ahead of it: the
              * machine this check was written for has no serial port, and
@@ -3161,8 +3156,8 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
              * carries the text to the port and the wire. */
             static char verdict_msg[128];
 
-            modlayout_describe(verdict, bad, ranges[bad].start, ranges[bad].end,
-                               verdict_msg, (uint32_t) sizeof(verdict_msg));
+            modlayout_describe(verdict, bad, ranges[bad].start, ranges[bad].end, verdict_msg,
+                               (uint32_t)sizeof(verdict_msg));
             k_panic(verdict_msg);
         }
         if (modules_end > mem_reserved_ptr) {
@@ -3262,11 +3257,13 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
         }
         init_paging(&map);
         map_modules();
-        klog(KLOG_INFO, "memory", "usable %d KiB, unreachable %d KiB, reserved %d KiB, managed %d KiB",
+        klog(KLOG_INFO, "memory",
+             "usable %d KiB, unreachable %d KiB, reserved %d KiB, managed %d KiB",
              (int)(map.usable_bytes / 1024), (int)(map.unreachable_bytes / 1024),
              (int)(map.reserved_bytes / 1024), (int)(frame_total_count() * (PAGE_SIZE / 1024)));
         if (frame_total_count() * (PAGE_SIZE / 1024) < FRAME_MIN_MANAGED_KIB) {
-            klog(KLOG_ERR, "memory", "refused: %d KiB managed after the kernel's reservations, at least %d KiB needed",
+            klog(KLOG_ERR, "memory",
+                 "refused: %d KiB managed after the kernel's reservations, at least %d KiB needed",
                  (int)(frame_total_count() * (PAGE_SIZE / 1024)), (int)FRAME_MIN_MANAGED_KIB);
             k_panic("memory: too little for this kernel");
         }
@@ -3322,12 +3319,12 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
                 k_udelay(1000);
             }
             if (kernel_ticks == before) {
-                klog(KLOG_ERR, "lapic", "timer: still no tick; the 8259's interrupts are not arriving");
+                klog(KLOG_ERR, "lapic",
+                     "timer: still no tick; the 8259's interrupts are not arriving");
             }
         }
     }
     klog(KLOG_DEBUG, "boot", "timer: ready");
-
 
     rtc_init();
     if (rtc_is_anchored()) {
@@ -3335,7 +3332,6 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
     } else {
         klog(KLOG_WARN, "clock", "none: times run from the epoch");
     }
-
 
     krandom_seed();
     {
@@ -3347,8 +3343,7 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
                            : (src == KRANDOM_SRC_RDRAND) ? "RDRAND, trusted"
                                                          : "jitter, best-effort; "
                                                            "the crypto RNG fails closed";
-        klog(src == KRANDOM_SRC_JITTER ? KLOG_WARN : KLOG_INFO, "entropy",
-             "ready: %s", desc);
+        klog(src == KRANDOM_SRC_JITTER ? KLOG_WARN : KLOG_INFO, "entropy", "ready: %s", desc);
     }
     set_fore_color(light_grey);
 
@@ -3360,20 +3355,18 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
         const char *why = "";
         int verdict = board_init(&why);
 
-
         if (verdict == BOARD_FOUND) {
             klog(KLOG_INFO, "board", "ready: %s", board_name());
         } else if (verdict == BOARD_REFUSED) {
             klog(KLOG_WARN, "board", "refused: %s", why);
         } else {
-            klog(KLOG_WARN, "board",
-                 "none: no profile matched; poweroff will halt");
+            klog(KLOG_WARN, "board", "none: no profile matched; poweroff will halt");
         }
     }
 
     set_isr_handler(33, &keyboard_handler, "kbd"); /* install the IRQ 1 keyboard handler */
-    pic_unmask_irq(1); /* now safe to take keyboard interrupts (masked since init_pic) */
-    tty_console_init(); /* console_tty: VGA + serial, line discipline for fds 0/1/2 */
+    pic_unmask_irq(1);      /* now safe to take keyboard interrupts (masked since init_pic) */
+    tty_console_init();     /* console_tty: VGA + serial, line discipline for fds 0/1/2 */
     serial_enable_rx_irq(); /* COM1's bytes taken as they arrive, not at the tick */
     klog(KLOG_DEBUG, "boot", "keyboard: ready");
 
@@ -3389,7 +3382,6 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
         }
     }
 
-
     init_syscall();
     klog(KLOG_DEBUG, "boot", "syscall: ready");
 
@@ -3399,7 +3391,7 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
         process_t *proc0 = alloc_process();
         if (proc0) {
             proc0->state = PROC_RUNNING;
-            proc0->cr3 = 0;  /* shares the kernel page directory */
+            proc0->cr3 = 0; /* shares the kernel page directory */
             proc0->kernel_stack = (uint32_t)stack + KERNEL_STACK_SIZE;
             proc0->parent_pid = 0;
             proc_idle = proc0;
@@ -3428,10 +3420,8 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
      * log. A machine whose disk must not be written says so before it has
      * touched one, and the same string is what check_diskpolicy.sh reads
      * out of the artifact. */
-    klog(diskcmd_policy() == DISKCMD_READ_WRITE ? KLOG_INFO : KLOG_WARN, "disk",
-         "policy: %s",
+    klog(diskcmd_policy() == DISKCMD_READ_WRITE ? KLOG_INFO : KLOG_WARN, "disk", "policy: %s",
          diskcmd_policy() == DISKCMD_READ_WRITE ? "read-write" : "read-only");
-
 
     if (num_modules > 0) {
         module_info_t *ramdisk = get_ramdisk();
@@ -3439,8 +3429,7 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
         klog(KLOG_INFO, "modules", "found %d", num_modules);
         set_fore_color(light_grey);
         if (ramdisk) {
-            klog(KLOG_INFO, "modules", "ram disk: 0x%X, %d bytes",
-                     ramdisk->start, ramdisk->size);
+            klog(KLOG_INFO, "modules", "ram disk: 0x%X, %d bytes", ramdisk->start, ramdisk->size);
         }
     } else {
         set_fore_color(light_brown);
@@ -3493,13 +3482,12 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
         } else if (num_modules > 0) {
             module_info_t *ramdisk = get_ramdisk();
             if (ramdisk && kcmdline_has("rach2.fswindow")) {
-                mounted = init_krffs_window((uint8_t *) ramdisk->start,
-                                            ramdisk->size);
+                mounted = init_krffs_window((uint8_t *)ramdisk->start, ramdisk->size);
                 via = " (window)";
                 source = "module";
                 options = "rw,relatime,window";
             } else if (ramdisk) {
-                mounted = init_krffs((void *) ramdisk->start, ramdisk->size);
+                mounted = init_krffs((void *)ramdisk->start, ramdisk->size);
                 source = "module";
                 options = "rw,relatime";
             }
@@ -3511,11 +3499,10 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
             krffs_set_mount(source, options);
             vfs_init();
             set_fore_color(light_green);
-            klog(KLOG_INFO, "krffs", "mounted: %d files%s", krffs_count_files(),
-                 via);
+            klog(KLOG_INFO, "krffs", "mounted: %d files%s", krffs_count_files(), via);
             set_fore_color(light_grey);
-        } else if (kcmdline_has("rach2.fsdisk") ||
-                   kcmdline_has("rach2.root=disk") || num_modules > 0) {
+        } else if (kcmdline_has("rach2.fsdisk") || kcmdline_has("rach2.root=disk") ||
+                   num_modules > 0) {
             set_fore_color(light_red);
             klog(KLOG_ERR, "krffs", "refused: the image is not a KRFFS");
         } else {
@@ -3622,8 +3609,8 @@ void k_main(multiboot_uint32_t magic, multiboot_info_t *info)
 
     debug_shell_is_home = true;
     while (1) {
-        const char *banner = rescue_mode ? "Kernel debug shell active (rescue mode)."
-                                         : "Kernel debug shell active.";
+        const char *banner =
+            rescue_mode ? "Kernel debug shell active (rescue mode)." : "Kernel debug shell active.";
 
         console_puts("");
         console_puts(banner);

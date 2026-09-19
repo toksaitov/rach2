@@ -181,5 +181,5 @@ void netconsole_print_info(void)
     klog(KLOG_INFO, "netconsole",
          "broadcast, ethertype 0x%x, boot id 0x%x, "
          "%d frames, %d characters dropped",
-                  (int)NETCONSOLE_ETHERTYPE, (int)nc_boot_id, (int)nc_frames, (int)nc_dropped);
+         (int)NETCONSOLE_ETHERTYPE, (int)nc_boot_id, (int)nc_frames, (int)nc_dropped);
 }

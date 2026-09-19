@@ -44,13 +44,13 @@ struct loop_device {
     void *node;
     void *handle;
     int writable;
-    int in_flight;   /* transfers inside the file system holding the file */
+    int in_flight; /* transfers inside the file system holding the file */
     /* What the device owes its writes and what it has paid: every write is a
      * write of the file and a sync of it, and /proc/loop reports both so a
      * test can ask whether the second half happened. */
     uint32_t writes;
     uint32_t syncs;
-    int release_due; /* the medium went during a transfer: the last one out releases */
+    int release_due;          /* the medium went during a transfer: the last one out releases */
     char path[LOOP_PATH_MAX]; /* what it was called when it was attached */
 };
 
@@ -105,8 +105,8 @@ static int loop_read(block_device_t *device, uint64_t lba, uint32_t count, void 
     got = vfs_read(loop->mnt, loop->handle, buffer, bytes, lba * BLOCK_SECTOR_SIZE);
     loop_transfer_ended(loop);
     if (got < 0 || (uint32_t)got != bytes) {
-        klog(KLOG_WARN, "loop", "read: loop%d: sector %d: short by %d",
-             loop->index, (int)lba, (int)(bytes - (got < 0 ? 0 : (uint32_t)got)));
+        klog(KLOG_WARN, "loop", "read: loop%d: sector %d: short by %d", loop->index, (int)lba,
+             (int)(bytes - (got < 0 ? 0 : (uint32_t)got)));
         return -EIO;
     }
     return 0;
@@ -136,8 +136,8 @@ static int loop_write(block_device_t *device, uint64_t lba, uint32_t count, cons
     }
     loop_transfer_ended(loop);
     if (wrote < 0 || (uint32_t)wrote != bytes) {
-        klog(KLOG_WARN, "loop", "write: loop%d: sector %d: short by %d",
-             loop->index, (int)lba, (int)(bytes - (wrote < 0 ? 0 : (uint32_t)wrote)));
+        klog(KLOG_WARN, "loop", "write: loop%d: sector %d: short by %d", loop->index, (int)lba,
+             (int)(bytes - (wrote < 0 ? 0 : (uint32_t)wrote)));
         return -EIO;
     }
     /* The cache's promise is that a written block has reached the device, and
@@ -359,8 +359,7 @@ int loop_line(int index, char *buffer, uint32_t cap)
     at = put_text(buffer, at, cap, "loop");
     at = put_number(buffer, at, cap, (uint32_t)index);
     at = put_text(buffer, at, cap, " ");
-    at = put_number(buffer, at, cap,
-                    (uint32_t)(loop->dev.sector_count * BLOCK_SECTOR_SIZE));
+    at = put_number(buffer, at, cap, (uint32_t)(loop->dev.sector_count * BLOCK_SECTOR_SIZE));
     at = put_text(buffer, at, cap, loop->writable ? " rw " : " ro ");
     at = put_text(buffer, at, cap, "writes ");
     at = put_number(buffer, at, cap, loop->writes);
@@ -508,8 +507,8 @@ int loop_attach(int index, const char *path, int writable)
 
     /* The resolver's hold on the node is the attachment's; released at the
      * detach through the description. */
-    klog(KLOG_INFO, "loop", "loop%d: %s, %d bytes, %s", index, loop->path,
-         (int)st.size, loop->writable ? "read-write" : "read-only");
+    klog(KLOG_INFO, "loop", "loop%d: %s, %d bytes, %s", index, loop->path, (int)st.size,
+         loop->writable ? "read-write" : "read-only");
     return index;
 }
 

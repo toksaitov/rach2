@@ -91,8 +91,7 @@ static const uint8_t *find_anchor(void)
              * include the address. */
             return p;
         }
-        if (four_are(p, "_SM3") && p[4] == '_' && p[6] >= SMBIOS_EP64_LEN &&
-            sum_of(p, p[6]) == 0) {
+        if (four_are(p, "_SM3") && p[4] == '_' && p[6] >= SMBIOS_EP64_LEN && sum_of(p, p[6]) == 0) {
             return p;
         }
     }

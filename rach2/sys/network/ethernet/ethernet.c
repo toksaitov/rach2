@@ -104,7 +104,7 @@ void ethernet_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
  * oversize payload is dropped, not truncated.
  */
 int ethernet_tx(struct netdev *out, const uint8_t *dst_mac, uint16_t ethertype,
-                 const uint8_t *payload, uint16_t plen)
+                const uint8_t *payload, uint16_t plen)
 {
     uint16_t total;
 
@@ -113,8 +113,7 @@ int ethernet_tx(struct netdev *out, const uint8_t *dst_mac, uint16_t ethertype,
     }
 
     if (plen > 1500) {
-        klog(KLOG_WARN, "eth", "tx: payload of %d bytes is too large, dropped",
-                      (int)plen);
+        klog(KLOG_WARN, "eth", "tx: payload of %d bytes is too large, dropped", (int)plen);
         out->tx_dropped++;
         return ETHERNET_TX_TOOLONG;
     }
@@ -127,7 +126,7 @@ int ethernet_tx(struct netdev *out, const uint8_t *dst_mac, uint16_t ethertype,
         return NETDEV_TX_DROPPED;
     }
 
-    k_memcpy(eth_tx_frame,     dst_mac, 6);
+    k_memcpy(eth_tx_frame, dst_mac, 6);
     k_memcpy(eth_tx_frame + 6, out->mac, 6);
     eth_tx_frame[12] = (uint8_t)(ethertype >> 8);
     eth_tx_frame[13] = (uint8_t)(ethertype & 0xFF);

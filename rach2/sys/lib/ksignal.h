@@ -10,37 +10,37 @@
  * the user stack, and rt_sigreturn) lives in syscall.c and the ISR return path.
  * Standard signals only (1..64); no real-time queueing.
  */
-#define SIGHUP   1
-#define SIGINT   2  /* terminal interrupt (CTRL+C) */
-#define SIGQUIT  3
-#define SIGILL   4
-#define SIGTRAP  5
-#define SIGABRT  6  /* abort() */
-#define SIGBUS   7
-#define SIGFPE   8
-#define SIGKILL  9  /* uncatchable kill */
-#define SIGUSR1  10
-#define SIGSEGV  11 /* invalid memory reference */
-#define SIGUSR2  12
-#define SIGPIPE  13
-#define SIGALRM  14
-#define SIGTERM  15 /* termination */
+#define SIGHUP    1
+#define SIGINT    2 /* terminal interrupt (CTRL+C) */
+#define SIGQUIT   3
+#define SIGILL    4
+#define SIGTRAP   5
+#define SIGABRT   6 /* abort() */
+#define SIGBUS    7
+#define SIGFPE    8
+#define SIGKILL   9 /* uncatchable kill */
+#define SIGUSR1   10
+#define SIGSEGV   11 /* invalid memory reference */
+#define SIGUSR2   12
+#define SIGPIPE   13
+#define SIGALRM   14
+#define SIGTERM   15 /* termination */
 #define SIGSTKFLT 16
-#define SIGCHLD  17 /* child stopped or exited */
-#define SIGCONT  18
-#define SIGSTOP  19 /* uncatchable stop */
-#define SIGTSTP  20
-#define SIGTTIN  21
-#define SIGTTOU  22
-#define SIGURG   23
-#define SIGXCPU  24
-#define SIGXFSZ  25
+#define SIGCHLD   17 /* child stopped or exited */
+#define SIGCONT   18
+#define SIGSTOP   19 /* uncatchable stop */
+#define SIGTSTP   20
+#define SIGTTIN   21
+#define SIGTTOU   22
+#define SIGURG    23
+#define SIGXCPU   24
+#define SIGXFSZ   25
 #define SIGVTALRM 26
-#define SIGPROF  27
-#define SIGWINCH 28
-#define SIGIO    29
-#define SIGPWR   30
-#define SIGSYS   31
+#define SIGPROF   27
+#define SIGWINCH  28
+#define SIGIO     29
+#define SIGPWR    30
+#define SIGSYS    31
 
 #define KSIG_MAX 64 /* signals 1..64 are deliverable */
 

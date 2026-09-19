@@ -306,8 +306,8 @@ static struct vfs_mount *mount_covering(struct vfs_mount *mnt, void *node)
     int i;
 
     for (i = 1; i < mount_slots; i++) {
-        if (mounts[i] && mounts[i]->state != VFS_FREE && mounts[i]->parent == mnt && mounts[i]->covered &&
-            mounts[i]->covered == node) {
+        if (mounts[i] && mounts[i]->state != VFS_FREE && mounts[i]->parent == mnt &&
+            mounts[i]->covered && mounts[i]->covered == node) {
             return mounts[i]; /* a transitional mount answers EBUSY on entry */
         }
     }
@@ -328,8 +328,8 @@ static struct vfs_mount *mount_named(struct vfs_mount *mnt, void *node, const ch
     int i;
 
     for (i = 1; i < mount_slots; i++) {
-        if (mounts[i] && mounts[i]->state == VFS_ACTIVE && mounts[i]->parent == mnt && !mounts[i]->covered &&
-            node == mnt->root && streq(mounts[i]->covered_path + 1, name)) {
+        if (mounts[i] && mounts[i]->state == VFS_ACTIVE && mounts[i]->parent == mnt &&
+            !mounts[i]->covered && node == mnt->root && streq(mounts[i]->covered_path + 1, name)) {
             return mounts[i];
         }
     }
@@ -352,7 +352,8 @@ struct vfs_mount *vfs_leaf_mount(struct vfs_mount *mnt, void *node, const char *
      * still mounting, whose constructor may be asleep, as much as an
      * active one. The resolver crosses only into active mounts. */
     for (i = 1; i < mount_slots; i++) {
-        if (mounts[i] && mounts[i]->state != VFS_FREE && mounts[i]->parent == mnt && mounts[i]->covered == found) {
+        if (mounts[i] && mounts[i]->state != VFS_FREE && mounts[i]->parent == mnt &&
+            mounts[i]->covered == found) {
             m = mounts[i];
         }
     }
@@ -686,13 +687,12 @@ static int resolve_path(const struct vfs_ref *start, const char *path, int flags
     *out = cur;
     return 0;
 
-out_err:
-    {
-        struct vfs_mount *was = cur.mnt;
+out_err: {
+    struct vfs_mount *was = cur.mnt;
 
-        vfs_ref_put(&cur);
-        vfs_leave(was);
-    }
+    vfs_ref_put(&cur);
+    vfs_leave(was);
+}
     return rc;
 }
 
@@ -1409,7 +1409,7 @@ static const struct vfs_ops krffs_ops = {
     0,                           /* abort_unmount */
     0,                           /* unmount */
     0,                           /* path: KRFFS directories do not move */
-    0, /* symlink */
+    0,                           /* symlink */
 };
 
 static int kfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
@@ -1739,8 +1739,8 @@ int vfs_init_root(const struct vfs_type *type, struct block_device *dev, const c
 
 /* The types mount(2) accepts, by the name it spells; the permanent three
  * are not here because nothing mounts them by name. */
-static const struct vfs_type *const mount_types[] = {&vfs_vfat_type, &vfs_exfat_type, &vfs_ext2_type,
-                                                    &vfs_krffs_volume_type, 0};
+static const struct vfs_type *const mount_types[] = {&vfs_vfat_type, &vfs_exfat_type,
+                                                     &vfs_ext2_type, &vfs_krffs_volume_type, 0};
 
 /* The table's entries, its terminator apart. Counted, not written down twice:
  * a fifth type added to the list above and not to a number here is a type

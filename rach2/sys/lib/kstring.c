@@ -2,7 +2,10 @@
 
 size_t k_strlen(const char *str)
 {
-    const char *end; for (end = str; *end; ++end); return end - str;
+    const char *end;
+    for (end = str; *end; ++end)
+        ;
+    return end - str;
 }
 
 /**
@@ -21,13 +24,18 @@ void k_strreverse(char *str)
         return;
     }
     for (i = 0, j = len - 1; i < j; ++i, --j) {
-        c = str[i]; str[i] = str[j]; str[j] = c;
+        c = str[i];
+        str[i] = str[j];
+        str[j] = c;
     }
 }
 
 void k_strtoupper(char *str)
 {
-    while (*str) { *str = k_toupper(*str); ++str; }
+    while (*str) {
+        *str = k_toupper(*str);
+        ++str;
+    }
 }
 
 /*
@@ -46,14 +54,14 @@ void k_strtoupper(char *str)
 #define KSTRING_WORDS 1
 #endif
 
-void* k_memset(void *ptr, char c, size_t n)
+void *k_memset(void *ptr, char c, size_t n)
 {
-    char *str = (char *) ptr;
+    char *str = (char *)ptr;
 #ifdef KSTRING_WORDS
     size_t words = n >> 2;
 
     if (words) {
-        unsigned int fill = (unsigned char) c;
+        unsigned int fill = (unsigned char)c;
 
         fill |= fill << 8;
         fill |= fill << 16;
@@ -64,26 +72,27 @@ void* k_memset(void *ptr, char c, size_t n)
         n &= 3;
     }
 #endif
-    while (n--) { *str++ = c; }
+    while (n--) {
+        *str++ = c;
+    }
     return ptr;
 }
 
-void* k_memcpy(void *dest, const void *src, size_t n)
+void *k_memcpy(void *dest, const void *src, size_t n)
 {
-    char *d = (char *) dest;
-    const char *s = (const char *) src;
+    char *d = (char *)dest;
+    const char *s = (const char *)src;
 #ifdef KSTRING_WORDS
     size_t words = n >> 2;
 
     if (words) {
-        __asm__ __volatile__("cld; rep movsl"
-                             : "+S"(s), "+D"(d), "+c"(words)
-                             :
-                             : "memory", "cc");
+        __asm__ __volatile__("cld; rep movsl" : "+S"(s), "+D"(d), "+c"(words) : : "memory", "cc");
         n &= 3;
     }
 #endif
-    while (n--) { *d++ = *s++; }
+    while (n--) {
+        *d++ = *s++;
+    }
     return dest;
 }
 
@@ -94,12 +103,12 @@ void* k_memcpy(void *dest, const void *src, size_t n)
  * overwrite source bytes before they are read, so the copy runs backward
  * from the last byte. Every other arrangement copies forward.
  */
-void* k_memmove(void *dest, const void *src, size_t n)
+void *k_memmove(void *dest, const void *src, size_t n)
 {
-    char *d = (char *) dest;
-    const char *s = (const char *) src;
-    __SIZE_TYPE__ du = (__SIZE_TYPE__) dest;
-    __SIZE_TYPE__ su = (__SIZE_TYPE__) src;
+    char *d = (char *)dest;
+    const char *s = (const char *)src;
+    __SIZE_TYPE__ du = (__SIZE_TYPE__)dest;
+    __SIZE_TYPE__ su = (__SIZE_TYPE__)src;
 
     /* The overlap test compares addresses as integers, not as pointers: a
      * relational compare of pointers into two different objects is undefined
@@ -111,7 +120,9 @@ void* k_memmove(void *dest, const void *src, size_t n)
     if (du > su && du - su < n) {
         d += n;
         s += n;
-        while (n--) { *--d = *--s; }
+        while (n--) {
+            *--d = *--s;
+        }
         return dest;
     }
     /* A forward copy is safe with the destination below the source or apart
@@ -136,22 +147,22 @@ void* k_memmove(void *dest, const void *src, size_t n)
  * compiler's builtin prototype expects, which `-Werror` holds these
  * definitions to.
  */
-void* memset(void *ptr, int c, __SIZE_TYPE__ n)
+void *memset(void *ptr, int c, __SIZE_TYPE__ n)
 {
-    return k_memset(ptr, (char) c, (size_t) n);
+    return k_memset(ptr, (char)c, (size_t)n);
 }
 
-void* memcpy(void *dest, const void *src, __SIZE_TYPE__ n)
+void *memcpy(void *dest, const void *src, __SIZE_TYPE__ n)
 {
-    return k_memcpy(dest, src, (size_t) n);
+    return k_memcpy(dest, src, (size_t)n);
 }
 
-void* memmove(void *dest, const void *src, __SIZE_TYPE__ n)
+void *memmove(void *dest, const void *src, __SIZE_TYPE__ n)
 {
-    return k_memmove(dest, src, (size_t) n);
+    return k_memmove(dest, src, (size_t)n);
 }
 
-char* k_strncpy(char *dest, const char *src, size_t n)
+char *k_strncpy(char *dest, const char *src, size_t n)
 {
     size_t i;
     for (i = 0; i < n && src[i] != '\0'; i++) {

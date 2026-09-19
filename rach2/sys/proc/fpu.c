@@ -17,7 +17,7 @@
 #define CR4_OSXMMEXCPT 0x00000400u
 
 #define CPUID_EDX_FXSR (1u << 24)
-#define CPUID_EDX_SSE (1u << 25)
+#define CPUID_EDX_SSE  (1u << 25)
 
 /* The state a process starts with: written once at boot from the unit
  * itself after `fninit`, so the tag word, the opcode and the pointers are
@@ -26,7 +26,7 @@ static uint8_t initial_state[FPU_STATE_SIZE] __attribute__((aligned(16)));
 /* An aligned buffer for an area that is not: `fxsave` faults on one. */
 static uint8_t scratch[FPU_STATE_SIZE] __attribute__((aligned(16)));
 static int use_fxsr;
-static int have_sse; /* MXCSR and the XMM registers exist and are enabled */
+static int have_sse;                  /* MXCSR and the XMM registers exist and are enabled */
 static uint32_t mxcsr_mask = 0xFFBFu; /* what `fxsave` reports, or the default */
 
 static uint32_t irq_save(void)
@@ -123,8 +123,7 @@ void fpu_init(void)
     } else {
         __asm__ __volatile__("fnsave (%0); frstor (%0)" : : "r"(initial_state) : "memory");
     }
-    klog(KLOG_DEBUG, "fpu", "fxsr: %s, sse: %s", use_fxsr ? "on" : "off",
-         have_sse ? "on" : "off");
+    klog(KLOG_DEBUG, "fpu", "fxsr: %s, sse: %s", use_fxsr ? "on" : "off", have_sse ? "on" : "off");
 }
 
 int fpu_has_fxsr(void)

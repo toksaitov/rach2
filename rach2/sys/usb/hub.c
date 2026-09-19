@@ -96,16 +96,16 @@ static uint32_t hub_slow(void)
 #define C_BH_PORT_RESET     29 /* USB 3: a warm reset completed */
 
 /* The port status word (Table 11-21). */
-#define PORT_STAT_CONNECTION   0x0001
-#define PORT_STAT_ENABLE       0x0002
-#define PORT_STAT_OVER_CURRENT 0x0008
-#define PORT_STAT_RESET        0x0010
-#define PORT_STAT_POWER        0x0100
-#define PORT_STAT_LOW_SPEED    0x0200
-#define PORT_STAT_HIGH_SPEED   0x0400
+#define PORT_STAT_CONNECTION    0x0001
+#define PORT_STAT_ENABLE        0x0002
+#define PORT_STAT_OVER_CURRENT  0x0008
+#define PORT_STAT_RESET         0x0010
+#define PORT_STAT_POWER         0x0100
+#define PORT_STAT_LOW_SPEED     0x0200
+#define PORT_STAT_HIGH_SPEED    0x0400
 /* USB 3: bits 5 to 8 of the status word are the link state. */
 #define PORT_LINK_STATE(status) (((status) >> 5) & 0xFu)
-#define LINK_SS_INACTIVE       6
+#define LINK_SS_INACTIVE        6
 
 /* The power switching modes of wHubCharacteristics (Table 11-13). */
 #define LPSM_GANGED     0
@@ -194,8 +194,8 @@ struct hub_port {
 struct hub {
     int used;
     struct xhci_ctrl *hc; /* the controller this hub is on */
-    int index;  /* the core's device index */
-    int device; /* the controller's handle */
+    int index;            /* the core's device index */
+    int device;           /* the controller's handle */
     int interface;
     int protocol;
     int ep_dci; /* the change endpoint, read from phase 4 */
@@ -349,8 +349,8 @@ static void give_up(struct hub *h, const char *why)
     usb_core_hub_failed(index, why);
 }
 
-int hub_attach(struct xhci_ctrl *hc, int index, int device, int interface, int protocol,
-               int ep_dci, int depth, int super)
+int hub_attach(struct xhci_ctrl *hc, int index, int device, int interface, int protocol, int ep_dci,
+               int depth, int super)
 {
     int i;
     struct hub *h = 0;
@@ -501,8 +501,8 @@ static uint16_t change_mask(const struct hub *h)
         return C_PORT_CONNECTION_BIT | C_PORT_OVER_CURRENT_BIT | C_PORT_RESET_BIT |
                C_BH_PORT_RESET_BIT | C_PORT_LINK_STATE_BIT | C_PORT_CONFIG_ERROR_BIT;
     }
-    return C_PORT_CONNECTION_BIT | C_PORT_ENABLE_BIT | C_PORT_SUSPEND_BIT | C_PORT_OVER_CURRENT_BIT |
-           C_PORT_RESET_BIT;
+    return C_PORT_CONNECTION_BIT | C_PORT_ENABLE_BIT | C_PORT_SUSPEND_BIT |
+           C_PORT_OVER_CURRENT_BIT | C_PORT_RESET_BIT;
 }
 
 static void port_read(struct hub *h, int port)
@@ -562,8 +562,8 @@ static void port_read(struct hub *h, int port)
              port);
         usb_core_hub_port(h->index, port - 1, 0);
         p->warm = 1;
-        if (request(h, TYPE_CLASS_PORT_OUT, REQ_SET_FEATURE, BH_PORT_RESET, port, 0,
-                    REQ_WARM_RESET, port) != 0) {
+        if (request(h, TYPE_CLASS_PORT_OUT, REQ_SET_FEATURE, BH_PORT_RESET, port, 0, REQ_WARM_RESET,
+                    port) != 0) {
             p->warm = 0;
         }
     } else if (h->super && p->warm && (change & C_BH_PORT_RESET_BIT)) {
@@ -734,8 +734,9 @@ static void answered(struct hub *h, const struct usb_completion *c)
             /* The one retry after an over-current could not be made; the
              * port stays off, as it would after a second over-current. */
             h->port[port - 1].off = 1;
-            klog(KLOG_WARN, "usb", "hub: device %d port %d: could not be powered on again; left off",
-                 h->device, port);
+            klog(KLOG_WARN, "usb",
+                 "hub: device %d port %d: could not be powered on again; left off", h->device,
+                 port);
         }
         return;
     case REQ_HUB_CLEAR:
@@ -1085,14 +1086,14 @@ int hub_port_status(struct xhci_ctrl *hc, int owner, int port, struct usb_port_s
     if (!p->known) {
         return -1;
     }
-    out->connected = (p->status & PORT_STAT_CONNECTION) != 0 && !p->off && p->power_on_ms == 0 &&
-                     !p->warm;
+    out->connected =
+        (p->status & PORT_STAT_CONNECTION) != 0 && !p->off && p->power_on_ms == 0 && !p->warm;
     out->enabled = (p->status & PORT_STAT_ENABLE) != 0;
     out->changed = p->change != 0;
     /* A SuperSpeed hub's ports carry SuperSpeed devices and nothing else;
      * its status word's speed field says which SuperSpeed, which this
      * kernel does not distinguish. */
-    out->speed = h->super                              ? USB_SPEED_SUPER
+    out->speed = h->super                             ? USB_SPEED_SUPER
                  : (p->status & PORT_STAT_LOW_SPEED)  ? USB_SPEED_LOW
                  : (p->status & PORT_STAT_HIGH_SPEED) ? USB_SPEED_HIGH
                                                       : USB_SPEED_FULL;

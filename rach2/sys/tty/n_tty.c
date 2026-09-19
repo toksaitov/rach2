@@ -275,8 +275,9 @@ void n_tty_receive(struct n_tty *t, unsigned char c, n_tty_out_fn out, void *ctx
              * before the signal does not survive it (the default !NOFLSH
              * behaviour). */
             n_tty_flush(t);
-            *signo = (c == tio->c_cc[VINTR]) ? NTTY_SIGINT
-                                             : (c == tio->c_cc[VQUIT]) ? NTTY_SIGQUIT : NTTY_SIGTSTP;
+            *signo = (c == tio->c_cc[VINTR])   ? NTTY_SIGINT
+                     : (c == tio->c_cc[VQUIT]) ? NTTY_SIGQUIT
+                                               : NTTY_SIGTSTP;
             return;
         }
     }

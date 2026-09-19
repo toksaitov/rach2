@@ -191,18 +191,18 @@ static volatile uint8_t ahci_reset_fis[AHCI_RECV_FIS_SIZE] __attribute__((aligne
 /* Task-file status bits (PxTFD low byte) and the fatal port-interrupt bits. A
    command fails on a device error (PxTFD ERR or DF) or on a fatal PxIS bit (the
    task-file error or a host-bus or interface fault PxTFD never reflects). */
-#define AHCI_PxTFD_BSY  0x80u
-#define AHCI_PxTFD_DRQ  0x08u
-#define AHCI_PxTFD_DF   0x20u /* device fault, independent of ERR */
-#define AHCI_PxTFD_ERR  0x01u
-#define AHCI_PxIS_TFES  0x40000000u /* task file error status */
-#define AHCI_PxIS_HBFS  0x20000000u /* host bus fatal error */
-#define AHCI_PxIS_HBDS  0x10000000u /* host bus data error */
-#define AHCI_PxIS_IFS   0x08000000u /* interface fatal error */
-#define AHCI_PxIS_FATAL (AHCI_PxIS_TFES | AHCI_PxIS_HBFS | AHCI_PxIS_HBDS | AHCI_PxIS_IFS)
+#define AHCI_PxTFD_BSY   0x80u
+#define AHCI_PxTFD_DRQ   0x08u
+#define AHCI_PxTFD_DF    0x20u /* device fault, independent of ERR */
+#define AHCI_PxTFD_ERR   0x01u
+#define AHCI_PxIS_TFES   0x40000000u /* task file error status */
+#define AHCI_PxIS_HBFS   0x20000000u /* host bus fatal error */
+#define AHCI_PxIS_HBDS   0x10000000u /* host bus data error */
+#define AHCI_PxIS_IFS    0x08000000u /* interface fatal error */
+#define AHCI_PxIS_FATAL  (AHCI_PxIS_TFES | AHCI_PxIS_HBFS | AHCI_PxIS_HBDS | AHCI_PxIS_IFS)
 /* The port interrupts the driven path enables: a D2H register FIS, which
    every command ends with, and the fatal ones. */
-#define AHCI_PxIS_DHRS  0x00000001u
+#define AHCI_PxIS_DHRS   0x00000001u
 #define AHCI_PxIE_WANTED (AHCI_PxIS_DHRS | AHCI_PxIS_FATAL)
 
 /* The H2D Register FIS and the ATA commands the polled path issues. */
@@ -430,21 +430,19 @@ static int ahci_discover(void)
          * never visited it: the controller lives at function 2 of a
          * multi-function device, and reaching it depends on function 0
          * advertising its siblings. One direct read settles that in a line. */
-        klog(KLOG_DEBUG, "ahci",
-             "no match: 0:31.2 reads %X:%X class %X:%X prog-if %X",
-                      (unsigned)pci_read_config16(0, 31, 2, PCI_VENDOR_ID),
-                      (unsigned)pci_read_config16(0, 31, 2, PCI_DEVICE_ID),
-                      (unsigned)pci_read_config8(0, 31, 2, PCI_CLASS),
-                      (unsigned)pci_read_config8(0, 31, 2, PCI_SUBCLASS),
-                      (unsigned)pci_read_config8(0, 31, 2, PCI_PROG_IF));
+        klog(KLOG_DEBUG, "ahci", "no match: 0:31.2 reads %X:%X class %X:%X prog-if %X",
+             (unsigned)pci_read_config16(0, 31, 2, PCI_VENDOR_ID),
+             (unsigned)pci_read_config16(0, 31, 2, PCI_DEVICE_ID),
+             (unsigned)pci_read_config8(0, 31, 2, PCI_CLASS),
+             (unsigned)pci_read_config8(0, 31, 2, PCI_SUBCLASS),
+             (unsigned)pci_read_config8(0, 31, 2, PCI_PROG_IF));
         ahci_err = "no SATA controller in AHCI mode on the bus";
         return -1;
     }
 
     klog(KLOG_DEBUG, "ahci", "found: %X:%X at %d:%d.%d, prog-if %X, BAR5 %X",
-         (unsigned)dev.vendor_id, (unsigned)dev.device_id, (int)dev.bus,
-         (int)dev.device, (int)dev.function, (unsigned)dev.prog_if,
-         (unsigned)dev.bar[5]);
+         (unsigned)dev.vendor_id, (unsigned)dev.device_id, (int)dev.bus, (int)dev.device,
+         (int)dev.function, (unsigned)dev.prog_if, (unsigned)dev.bar[5]);
 
     /* ABAR is BAR5. Reject any BAR4 64-bit spill or invalid BAR5 type. */
     if (pci_bar_is_64bit(dev.bar[4]) || pci_bar_is_64bit(dev.bar[5]) ||
@@ -572,8 +570,8 @@ static int ahci_port_comreset(int port)
     klog(KLOG_DEBUG, "ahci",
          "port %d: no link after %d ms; SStatus 0x%X, DET %d (0 is nothing attached, "
          "1 is a device that did not negotiate)",
-         port, (int)((AHCI_LINK_STEPS * AHCI_RESET_POLL_US) / 1000u),
-         ahci_read32(ssts_off), (int)(ahci_read32(ssts_off) & AHCI_DET_MASK));
+         port, (int)((AHCI_LINK_STEPS * AHCI_RESET_POLL_US) / 1000u), ahci_read32(ssts_off),
+         (int)(ahci_read32(ssts_off) & AHCI_DET_MASK));
     return -1;
 }
 
@@ -601,8 +599,7 @@ static int ahci_hba_own(void)
     if (ahci_read32(AHCI_CAP2) & AHCI_CAP2_BOH) {
         ahci_write32(AHCI_BOHC, ahci_read32(AHCI_BOHC) | AHCI_BOHC_OOS);
         if (ahci_wait_clear(AHCI_BOHC, AHCI_BOHC_BOS) != 0) {
-            klog(KLOG_WARN, "ahci",
-                 "handoff: the firmware did not answer; continuing");
+            klog(KLOG_WARN, "ahci", "handoff: the firmware did not answer; continuing");
         }
     }
 
@@ -639,8 +636,8 @@ static int ahci_hba_own(void)
         if ((pcs & ports) != ports) {
             pci_write_config16(ahci_pci.bus, ahci_pci.device, ahci_pci.function, AHCI_INTEL_PCS,
                                (uint16_t)(pcs | ports));
-            klog(KLOG_DEBUG, "ahci", "pcs: enabled ports %X (was %X)",
-                 (unsigned)ports, (unsigned)pcs);
+            klog(KLOG_DEBUG, "ahci", "pcs: enabled ports %X (was %X)", (unsigned)ports,
+                 (unsigned)pcs);
         }
     }
     return 0;
@@ -773,21 +770,19 @@ static int ahci_select_port(void)
          * reset and posted its first FIS; read before that it is all ones,
          * which is not a signature but a port that has not answered yet. */
         if (ahci_port_ready(p) != 0) {
-            klog(KLOG_WARN, "ahci",
-                 "port %d: the device never became ready; skipped", p);
+            klog(KLOG_WARN, "ahci", "port %d: the device never became ready; skipped", p);
             (void)ahci_port_stop(p);
             continue;
         }
         sig = ahci_read32(ahci_port_off(p, AHCI_PxSIG));
         if (sig != AHCI_SIG_ATA) {
-            klog(KLOG_DEBUG, "ahci",
-                 "port %d: signature %X is not a disk; skipped", p, sig);
+            klog(KLOG_DEBUG, "ahci", "port %d: signature %X is not a disk; skipped", p, sig);
             (void)ahci_port_stop(p);
             continue;
         }
         if (ahci_ndisks >= AHCI_DISKS) {
-            klog(KLOG_WARN, "ahci", "port %d: a disk past the %d this driver publishes; skipped",
-                 p, AHCI_DISKS);
+            klog(KLOG_WARN, "ahci", "port %d: a disk past the %d this driver publishes; skipped", p,
+                 AHCI_DISKS);
             (void)ahci_port_stop(p);
             continue;
         }
@@ -1249,7 +1244,8 @@ static int ahci_submit(block_device_t *device, struct block_request *r)
     struct ahci_disk *d = (struct ahci_disk *)device->drvdata;
     uint32_t flags;
 
-    if (r->count == 0 || r->lba > device->sector_count || r->count > device->sector_count - r->lba) {
+    if (r->count == 0 || r->lba > device->sector_count ||
+        r->count > device->sector_count - r->lba) {
         return -EIO;
     }
     flags = kirq_save();
@@ -1409,8 +1405,8 @@ static int ahci_write(block_device_t *device, uint64_t lba, uint32_t count, cons
         count > AHCI_MAX_SECTORS_PER_CMD) {
         return -EIO;
     }
-    rc = ahci_run_command(d, ATA_WRITE_DMA_EXT, lba, count,
-                          (volatile uint8_t *)(uintptr_t)buffer, count * BLOCK_SECTOR_SIZE, 1);
+    rc = ahci_run_command(d, ATA_WRITE_DMA_EXT, lba, count, (volatile uint8_t *)(uintptr_t)buffer,
+                          count * BLOCK_SECTOR_SIZE, 1);
     if (rc != 0) {
         return rc;
     }
@@ -1506,19 +1502,19 @@ void ahci_dump(void)
     pi = ahci_read32(AHCI_PI);
     vs = ahci_read32(AHCI_VS);
     console_printf("ahci: CAP=%X GHC=%X PI=%X VS=%X ports=%d active=%d\n", cap, ghc, pi, vs,
-                  (int)((cap & AHCI_CAP_NP_MASK) + 1), ahci_port);
+                   (int)((cap & AHCI_CAP_NP_MASK) + 1), ahci_port);
     /* CAP2 says whether a handoff exists, BOHC how it went, and PCS whether
      * the Intel port PHYs are enabled at all; each is one of the named causes
      * of a machine that finds no disk, so the dump that decides between them
      * has to carry all three. */
     console_printf("ahci: CAP2=%X BOHC=%X PCS=%X\n", ahci_read32(AHCI_CAP2), ahci_read32(AHCI_BOHC),
-                  (unsigned)pci_read_config16(ahci_pci.bus, ahci_pci.device, ahci_pci.function,
-                                              AHCI_INTEL_PCS));
+                   (unsigned)pci_read_config16(ahci_pci.bus, ahci_pci.device, ahci_pci.function,
+                                               AHCI_INTEL_PCS));
     for (port = 0; port < ahci_ndisks; ++port) {
         console_printf("ahci: port %d dma cmdlist=%X fis=%X table=%X\n", ahci_disks[port].port,
-                      (uint32_t)(uintptr_t)ahci_disks[port].cmdlist,
-                      (uint32_t)(uintptr_t)ahci_disks[port].recv_fis,
-                      (uint32_t)(uintptr_t)ahci_disks[port].cmdtable);
+                       (uint32_t)(uintptr_t)ahci_disks[port].cmdlist,
+                       (uint32_t)(uintptr_t)ahci_disks[port].recv_fis,
+                       (uint32_t)(uintptr_t)ahci_disks[port].cmdtable);
     }
 
     for (port = 0; port < 32; ++port) {
@@ -1533,11 +1529,11 @@ void ahci_dump(void)
         cmd = ahci_read32(ahci_port_off(port, AHCI_PxCMD));
         clb = ahci_read32(ahci_port_off(port, AHCI_PxCLB));
         console_printf("ahci:  port %d: SSTS=%X (DET=%d) "
-                      "SIG=%X TFD=%X CMD=%X CLB=%X\n",
-                      port, ssts, (int)(ssts & AHCI_DET_MASK), sig, tfd, cmd, clb);
+                       "SIG=%X TFD=%X CMD=%X CLB=%X\n",
+                       port, ssts, (int)(ssts & AHCI_DET_MASK), sig, tfd, cmd, clb);
         console_printf("ahci:  port %d: SCTL=%X SERR=%X\n", port,
-                      ahci_read32(ahci_port_off(port, AHCI_PxSCTL)),
-                      ahci_read32(ahci_port_off(port, AHCI_PxSERR)));
+                       ahci_read32(ahci_port_off(port, AHCI_PxSCTL)),
+                       ahci_read32(ahci_port_off(port, AHCI_PxSERR)));
     }
 }
 

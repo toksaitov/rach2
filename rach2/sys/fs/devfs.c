@@ -772,8 +772,7 @@ static int32_t framefail_write(fd_entry_t *entry, const char *buffer, uint32_t c
 
 static const struct file_ops framefail_ops = {dev_eof_read, framefail_write, dev_poll, dev_ioctl,
                                               NULL};
-static const struct file_ops loopctl_ops = {dev_eof_read, loopctl_write, dev_poll, dev_ioctl,
-                                            NULL};
+static const struct file_ops loopctl_ops = {dev_eof_read, loopctl_write, dev_poll, dev_ioctl, NULL};
 
 static const struct file_ops null_ops = {dev_eof_read, dev_sink_write, dev_poll, dev_ioctl, NULL};
 static const struct file_ops zero_ops = {dev_zero_read, dev_sink_write, dev_poll, dev_ioctl, NULL};
@@ -1139,7 +1138,6 @@ void devfs_disk_part_nodes(struct disk *d)
         disk_node_name(node, d->number, k < d->table.count ? d->table.parts[k].number : node->part);
     }
 }
-
 
 /*
  * Claims: a mounted volume's sector range on the physical disk. Two ranges

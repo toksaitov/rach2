@@ -2,7 +2,7 @@
 #define _KDEF_H_
 
 /* NULL pointer */
-#define NULL ((void*) 0)
+#define NULL ((void *)0)
 
 /* Boolean data type */
 typedef int bool;

@@ -30,31 +30,31 @@ struct ktermios {
 
 /* c_cc indices (i386/asm-generic; verified against the vendored musl
  * headers). */
-#define VINTR 0
-#define VQUIT 1
-#define VERASE 2
-#define VKILL 3
-#define VEOF 4
-#define VTIME 5
-#define VMIN 6
-#define VSUSP 10
-#define VEOL 11
+#define VINTR   0
+#define VQUIT   1
+#define VERASE  2
+#define VKILL   3
+#define VEOF    4
+#define VTIME   5
+#define VMIN    6
+#define VSUSP   10
+#define VEOL    11
 #define VWERASE 14
 
 /* c_lflag bits. */
-#define ISIG 0000001
-#define ICANON 0000002
-#define ECHO 0000010
-#define ECHOE 0000020
-#define ECHOK 0000040
-#define TOSTOP 0000400
+#define ISIG    0000001
+#define ICANON  0000002
+#define ECHO    0000010
+#define ECHOE   0000020
+#define ECHOK   0000040
+#define TOSTOP  0000400
 #define ECHOCTL 0001000
 
 /* c_iflag bits. */
 #define ISTRIP 0000040
-#define INLCR 0000100
-#define IGNCR 0000200
-#define ICRNL 0000400
+#define INLCR  0000100
+#define IGNCR  0000200
+#define ICRNL  0000400
 
 /* c_oflag bits. */
 #define OPOST 0000001
@@ -63,7 +63,7 @@ struct ktermios {
 
 /* Signals the discipline recognizes from c_cc (Linux numbers); delivery to the
  * foreground group is the caller's job. */
-#define NTTY_SIGINT 2
+#define NTTY_SIGINT  2
 #define NTTY_SIGQUIT 3
 #define NTTY_SIGTSTP 20
 

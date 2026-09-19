@@ -52,7 +52,7 @@ static struct lag_entry queue[LAG_QUEUE];
 static uint32_t lag_ticks;
 static uint32_t lag_delay;
 static uint32_t lag_completions; /* answers delivered after their lag, for /proc/disk */
-static uint32_t fail_write_at; /* rach2.blockfail=N: the Nth write answers EIO */
+static uint32_t fail_write_at;   /* rach2.blockfail=N: the Nth write answers EIO */
 static uint32_t writes_seen;
 static block_device_t dead_device; /* rach2.blockdead=P: the partition's own device */
 static uint64_t dead_start;        /* where that partition starts, or 0 for none */
@@ -125,8 +125,7 @@ static int lag_submit(block_device_t *device, struct block_request *request)
     if (request->write && fail_write_at && ++writes_seen == fail_write_at) {
         e->status = -EIO; /* the write the boot option fails */
     } else if (request->write) {
-        e->status = lag_backing->write(lag_backing, request->lba, request->count,
-                                       request->page);
+        e->status = lag_backing->write(lag_backing, request->lba, request->count, request->page);
     } else {
         /* The page is scrubbed so a copy-out before the completion
          * returns this and not what the page held before. */
@@ -253,9 +252,8 @@ block_device_t *block_lag_wrap(block_device_t *backing)
     }
     if (kcmdline_value("rach2.blockdead", value, sizeof(value))) {
         uint8_t table[BLOCK_SECTOR_SIZE];
-        unsigned p = value[0] >= '1' && value[0] <= '4' && value[1] == '\0'
-                         ? (unsigned)(value[0] - '0')
-                         : 0;
+        unsigned p =
+            value[0] >= '1' && value[0] <= '4' && value[1] == '\0' ? (unsigned)(value[0] - '0') : 0;
 
         if (p == 0 || backing->read(backing, 0, 1, table) != 0) {
             klog(KLOG_WARN, "block", "rach2.blockdead: not an MBR entry of 1 to 4; ignored");

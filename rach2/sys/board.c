@@ -262,8 +262,8 @@ int board_init(const char **why)
             if (board_acpi_enable(p, board_port)) {
                 klog(KLOG_INFO, "board", "%s: ACPI enabled", p->name);
             } else {
-                klog(KLOG_WARN, "board",
-                     "%s: the firmware did not answer the ACPI enable", p->name);
+                klog(KLOG_WARN, "board", "%s: the firmware did not answer the ACPI enable",
+                     p->name);
             }
             pm1 = inw(board_port);
         }
@@ -282,8 +282,7 @@ int board_init(const char **why)
                 board_sci_irq(p, pci_read_config8(p->bus, p->device, p->function, p->sci_reg));
             if (board_sci >= 0) {
                 pic_mask_irq((uint8_t)board_sci);
-                klog(KLOG_INFO, "board", "%s: masked the SCI on IRQ %d", p->name,
-                     board_sci);
+                klog(KLOG_INFO, "board", "%s: masked the SCI on IRQ %d", p->name, board_sci);
             }
         }
 
@@ -305,8 +304,7 @@ int board_init(const char **why)
         unsigned c = (unsigned)pci_read_config8(0, 31, 0, PCI_CLASS);
         unsigned sc = (unsigned)pci_read_config8(0, 31, 0, PCI_SUBCLASS);
 
-        klog(KLOG_WARN, "board",
-             "no profile matched: 0:31.0 is %X:%X class %X:%X", v, d, c, sc);
+        klog(KLOG_WARN, "board", "no profile matched: 0:31.0 is %X:%X class %X:%X", v, d, c, sc);
     }
     if (forced) {
         *why = "the named board profile's chipset is not in this machine";

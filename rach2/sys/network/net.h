@@ -38,9 +38,9 @@
    nothing: QEMU's SLIRP tuple, which is what every test expects. The address
    actually in force lives in netconf.h (`net_ip_addr` and its two companions),
    because a real LAN needs a real address and the boot line can give one. */
-#define NET_IP_ADDR_DEFAULT     0x0A00020FUL  /* 10.0.2.15     */
-#define NET_IP_MASK_DEFAULT     0xFFFFFF00UL  /* 255.255.255.0 */
-#define NET_IP_GATEWAY_DEFAULT  0x0A000202UL  /* 10.0.2.2      */
+#define NET_IP_ADDR_DEFAULT    0x0A00020FUL /* 10.0.2.15     */
+#define NET_IP_MASK_DEFAULT    0xFFFFFF00UL /* 255.255.255.0 */
+#define NET_IP_GATEWAY_DEFAULT 0x0A000202UL /* 10.0.2.2      */
 
 /* Our hardware address, filled in by the bound NIC driver at init; the Ethernet
    and ARP layers read it. */

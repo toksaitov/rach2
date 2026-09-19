@@ -19,12 +19,12 @@
 /* struct ifreq: name at 0 (16 bytes), then the union. Inside the union a
  * sockaddr puts its family at 0 and an IPv4 address at 4; the flags are a
  * short at the union's start and the index an int there. */
-#define IFREQ_LEN       32
-#define IFREQ_NAME      0
-#define IFREQ_NAMESIZE  16
-#define IFREQ_UNION     16
-#define IFREQ_SA_ADDR   (IFREQ_UNION + 4)
-#define IFREQ_HW_ADDR   (IFREQ_UNION + 2)
+#define IFREQ_LEN      32
+#define IFREQ_NAME     0
+#define IFREQ_NAMESIZE 16
+#define IFREQ_UNION    16
+#define IFREQ_SA_ADDR  (IFREQ_UNION + 4)
+#define IFREQ_HW_ADDR  (IFREQ_UNION + 2)
 
 /* struct rtentry on i386, with the offset of each field this code reads: a pad
  * word, then three sockaddrs (destination, gateway, mask) of 16 bytes each at
@@ -57,8 +57,7 @@ int netif_is_up(void)
 /** The 32-bit big-endian address at `p`, as a host-order number. */
 static uint32_t be32(const uint8_t *p)
 {
-    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) |
-           (uint32_t)p[3];
+    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3];
 }
 
 static void put_be32(uint8_t *p, uint32_t v)
@@ -127,10 +126,10 @@ static int32_t ifreq_ioctl(uint32_t request, uint32_t arg)
     /* SIOCGIFNAME is the one that runs the other way: it takes an index in the
        union and answers with a name, so there is no name to check yet. */
     if (request == SIOCGIFNAME) {
-        int32_t index = (int32_t)((uint32_t)ifr[IFREQ_UNION] |
-                                  ((uint32_t)ifr[IFREQ_UNION + 1] << 8) |
-                                  ((uint32_t)ifr[IFREQ_UNION + 2] << 16) |
-                                  ((uint32_t)ifr[IFREQ_UNION + 3] << 24));
+        int32_t index =
+            (int32_t)((uint32_t)ifr[IFREQ_UNION] | ((uint32_t)ifr[IFREQ_UNION + 1] << 8) |
+                      ((uint32_t)ifr[IFREQ_UNION + 2] << 16) |
+                      ((uint32_t)ifr[IFREQ_UNION + 3] << 24));
 
         struct netdev *at;
 
@@ -154,8 +153,8 @@ static int32_t ifreq_ioctl(uint32_t request, uint32_t arg)
         return -ENODEV;
     }
 
-    setter = (request == SIOCSIFADDR || request == SIOCSIFNETMASK ||
-              request == SIOCSIFBRDADDR || request == SIOCSIFFLAGS);
+    setter = (request == SIOCSIFADDR || request == SIOCSIFNETMASK || request == SIOCSIFBRDADDR ||
+              request == SIOCSIFFLAGS);
     if (setter && (!current_proc || current_proc->euid != 0)) {
         return -EPERM;
     }
@@ -204,8 +203,8 @@ static int32_t ifreq_ioctl(uint32_t request, uint32_t arg)
         break;
     }
     case SIOCSIFFLAGS: {
-        uint16_t flags = (uint16_t)((uint16_t)ifr[IFREQ_UNION] |
-                                    ((uint16_t)ifr[IFREQ_UNION + 1] << 8));
+        uint16_t flags =
+            (uint16_t)((uint16_t)ifr[IFREQ_UNION] | ((uint16_t)ifr[IFREQ_UNION + 1] << 8));
 
         /* Returns here instead of falling through to the writeback: this
            request only reads its argument, and a copy back that failed would
@@ -278,8 +277,8 @@ static int32_t route_ioctl(uint32_t request, uint32_t arg)
            a caller whose name is five bytes long can run off the end of the
            page it sits in, and refusing that call would be refusing a correct
            program. */
-        int got = strncpy_from_user((char *)name, (const char __user *)dev,
-                                    (uint32_t)IFREQ_NAMESIZE);
+        int got =
+            strncpy_from_user((char *)name, (const char __user *)dev, (uint32_t)IFREQ_NAMESIZE);
 
         if (got < 0) {
             return got == -EFAULT ? -EFAULT : -ENODEV;
@@ -317,8 +316,8 @@ static int32_t route_ioctl(uint32_t request, uint32_t arg)
         }
         return -EINVAL;
     }
-    if (request == SIOCADDRT && nd->mask != 0 && dst == (nd->ip & nd->mask) &&
-        mask == nd->mask && gw == 0) {
+    if (request == SIOCADDRT && nd->mask != 0 && dst == (nd->ip & nd->mask) && mask == nd->mask &&
+        gw == 0) {
         /* The subnet is reachable already, by being on it, so adding that route
            asks for what is already true. Removing it is another matter: it
            cannot be removed while the address that implies it is in force, and

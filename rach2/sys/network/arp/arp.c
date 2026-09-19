@@ -26,8 +26,8 @@ typedef struct arp_entry {
      * learned on one says nothing about the other. */
     struct netdev *nd;
     uint32_t ip;
-    uint8_t  mac[6];
-    uint8_t  valid;   /* 0 = free slot */
+    uint8_t mac[6];
+    uint8_t valid; /* 0 = free slot */
     uint32_t used;
 } arp_entry_t;
 
@@ -206,12 +206,12 @@ static void arp_send_reply(struct netdev *nd, const uint8_t *dst_mac, uint32_t d
     if (!nd) {
         return;
     }
-    write16be(arp_reply_buf + 0,  0x0001);
-    write16be(arp_reply_buf + 2,  0x0800);
+    write16be(arp_reply_buf + 0, 0x0001);
+    write16be(arp_reply_buf + 2, 0x0800);
     arp_reply_buf[4] = 6;
     arp_reply_buf[5] = 4;
-    write16be(arp_reply_buf + 6,  ARP_OP_REPLY);
-    k_memcpy(arp_reply_buf + 8,  nd->mac, 6);
+    write16be(arp_reply_buf + 6, ARP_OP_REPLY);
+    k_memcpy(arp_reply_buf + 8, nd->mac, 6);
     write32be(arp_reply_buf + 14, nd->ip);
     k_memcpy(arp_reply_buf + 18, dst_mac, 6);
     write32be(arp_reply_buf + 24, dst_ip);
@@ -229,16 +229,16 @@ static void arp_send_reply(struct netdev *nd, const uint8_t *dst_mac, uint32_t d
 void arp_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
 {
     uint16_t hw_type, proto_type, op;
-    uint8_t  sender_mac[6];
+    uint8_t sender_mac[6];
     uint32_t sender_ip, target_ip;
 
     if (len < 28) {
         return;
     }
 
-    hw_type    = read16be(data + 0);
+    hw_type = read16be(data + 0);
     proto_type = read16be(data + 2);
-    op         = read16be(data + 6);
+    op = read16be(data + 6);
 
     /* We only handle Ethernet + IPv4 ARP. */
     if (hw_type != 0x0001 || proto_type != 0x0800) {
@@ -284,18 +284,18 @@ int arp_lookup(struct netdev *nd, uint32_t ip, uint8_t *mac_out)
  */
 void arp_request(struct netdev *nd, uint32_t target_ip)
 {
-    static const uint8_t broadcast[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
-    static const uint8_t zero_mac[6]  = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+    static const uint8_t broadcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    static const uint8_t zero_mac[6] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 
-    write16be(arp_req_buf + 0,  0x0001);
-    write16be(arp_req_buf + 2,  0x0800);
+    write16be(arp_req_buf + 0, 0x0001);
+    write16be(arp_req_buf + 2, 0x0800);
     arp_req_buf[4] = 6;
     arp_req_buf[5] = 4;
-    write16be(arp_req_buf + 6,  ARP_OP_REQUEST);
+    write16be(arp_req_buf + 6, ARP_OP_REQUEST);
     if (!nd) {
         return; /* no interface reaches that address */
     }
-    k_memcpy(arp_req_buf + 8,  nd->mac, 6);
+    k_memcpy(arp_req_buf + 8, nd->mac, 6);
     write32be(arp_req_buf + 14, nd->ip);
     k_memcpy(arp_req_buf + 18, zero_mac, 6);
     write32be(arp_req_buf + 24, target_ip);

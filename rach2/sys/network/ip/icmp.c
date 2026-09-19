@@ -50,25 +50,25 @@ static uint8_t icmp_reply_buf[1500];
 static uint8_t icmp_echo_buf[8];
 
 /* Identifier we stamp on our own echo requests. */
-#define ICMP_PING_ID    0x5243   /* 'RC' */
+#define ICMP_PING_ID 0x5243 /* 'RC' */
 
 /* Per-attempt timeout (ticks) and number of attempts. */
-#define ICMP_PING_WAIT      100  /* 1 s at 100 Hz */
-#define ICMP_PING_ATTEMPTS  4
+#define ICMP_PING_WAIT     100 /* 1 s at 100 Hz */
+#define ICMP_PING_ATTEMPTS 4
 
 /* The one in-flight ping, matched against incoming replies. `ping_owner` is the
  * process that claimed the slot, or NULL for the boot shell, which has none. */
-static volatile int      ping_active   = 0;
-static volatile int      ping_replied  = 0;
+static volatile int ping_active = 0;
+static volatile int ping_replied = 0;
 static volatile uint16_t ping_seq_wait = 0;
-static volatile uint32_t ping_peer_ip  = 0;
+static volatile uint32_t ping_peer_ip = 0;
 static volatile uint32_t ping_deadline = 0;
-static process_t        *ping_owner    = 0;
-static uint16_t          ping_seq      = 0;
+static process_t *ping_owner = 0;
+static uint16_t ping_seq = 0;
 
 /* Where a sleeping pinger waits, and what icmp_rx wakes. */
 static wait_queue_t ping_wq;
-static int          ping_wq_ready = 0;
+static int ping_wq_ready = 0;
 
 /* Kernel tick counter, for the timeout. */
 extern volatile uint32_t kernel_ticks;
@@ -101,10 +101,9 @@ void icmp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len)
         write16be(icmp_reply_buf + 2, ip_checksum(icmp_reply_buf, len));
         ip_tx(src_ip, IP_PROTO_ICMP, icmp_reply_buf, len, IP_TTL_DEFAULT);
     } else if (data[0] == ICMP_ECHO_REPLY) {
-        uint16_t id  = read16be(data + 4);
+        uint16_t id = read16be(data + 4);
         uint16_t seq = read16be(data + 6);
-        if (ping_active && src_ip == ping_peer_ip &&
-            id == ICMP_PING_ID && seq == ping_seq_wait) {
+        if (ping_active && src_ip == ping_peer_ip && id == ICMP_PING_ID && seq == ping_seq_wait) {
             ping_replied = 1;
             if (ping_wq_ready) {
                 wq_wake_all(&ping_wq);
@@ -202,10 +201,10 @@ int icmp_ping(uint32_t dst_ip)
         write16be(icmp_echo_buf + 6, seq);
         write16be(icmp_echo_buf + 2, ip_checksum(icmp_echo_buf, 8));
 
-        ping_peer_ip  = dst_ip;
+        ping_peer_ip = dst_ip;
         ping_seq_wait = seq;
-        ping_replied  = 0;
-        start         = kernel_ticks;
+        ping_replied = 0;
+        start = kernel_ticks;
         ping_deadline = start + ICMP_PING_WAIT;
         if (ping_deadline == 0) {
             /* 0 is `wakeup_tick`'s "not sleeping" sentinel, so a deadline that
@@ -233,8 +232,7 @@ int icmp_ping(uint32_t dst_ip)
                 return waited;
             }
         } else {
-            while (!ping_replied &&
-                   (int32_t)(kernel_ticks - ping_deadline) < 0) {
+            while (!ping_replied && (int32_t)(kernel_ticks - ping_deadline) < 0) {
                 idle_wait_irq_on();
             }
         }
@@ -254,4 +252,3 @@ int icmp_ping(uint32_t dst_ip)
 
     return rc;
 }
-

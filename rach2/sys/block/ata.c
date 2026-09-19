@@ -201,8 +201,8 @@ struct ata_channel {
     uint32_t irqs;           /* interrupts taken on this channel */
     int owner;               /* a sleeping caller holds the channel */
     int sleepers;            /* callers asleep for a command, for the tick's count */
-    int error_seen;          /* a caller without the channel found ERR or DF, which are the owner's */
-    uint16_t bm;             /* the bus master's registers, or 0 for none */
+    int error_seen; /* a caller without the channel found ERR or DF, which are the owner's */
+    uint16_t bm;    /* the bus master's registers, or 0 for none */
     /* The descriptor, aligned to its size, and the bounce buffer, aligned
        to its own so it lies in one 64 KiB region; both in .bss below the
        identity map's limit, so their addresses are their physical ones. */
@@ -447,8 +447,10 @@ static int ata_wait_for(struct ata_channel *ch, int want)
                 return rc;
             }
         }
-        klog(KLOG_ERR, "ata", "%s: no answer to a polled wait after %d reads: status 0x%X, bus master 0x%X, want %d",
-             ch->name, ATA_POLL_PLAIN + ATA_POLL_LIMIT, (unsigned)ata_io->in8(ch->io + ATA_REG_STATUS),
+        klog(KLOG_ERR, "ata",
+             "%s: no answer to a polled wait after %d reads: status 0x%X, bus master 0x%X, want %d",
+             ch->name, ATA_POLL_PLAIN + ATA_POLL_LIMIT,
+             (unsigned)ata_io->in8(ch->io + ATA_REG_STATUS),
              ch->bm ? (unsigned)ata_io->in8(ch->bm + ATA_BM_STATUS) : 0u, want);
         return -EIO;
     }
@@ -548,8 +550,9 @@ static uint8_t ata_program(const struct ata_drive *d, uint64_t lba, uint32_t cou
 
     if (lba + count <= ATA_LBA28_SECTORS) {
         ata_io->out8(ch->io + ATA_REG_DRIVE,
-             (uint8_t)(ATA_DRIVE_SELECT | ATA_DRIVE_LBA | slave | ((lba >> 24) & 0x0F)));
-        ata_io->out8(ch->io + ATA_REG_SECCOUNT, count == ATA_MAX_SECTORS_PER_CMD ? 0 : (uint8_t)count);
+                     (uint8_t)(ATA_DRIVE_SELECT | ATA_DRIVE_LBA | slave | ((lba >> 24) & 0x0F)));
+        ata_io->out8(ch->io + ATA_REG_SECCOUNT,
+                     count == ATA_MAX_SECTORS_PER_CMD ? 0 : (uint8_t)count);
         ata_io->out8(ch->io + ATA_REG_LBA_LOW, (uint8_t)lba);
         ata_io->out8(ch->io + ATA_REG_LBA_MID, (uint8_t)(lba >> 8));
         ata_io->out8(ch->io + ATA_REG_LBA_HIGH, (uint8_t)(lba >> 16));
@@ -819,7 +822,8 @@ static int ata_identify(struct ata_drive *d, uint16_t *identify)
     struct ata_channel *ch = d->channel;
     uint8_t status;
 
-    ata_io->out8(ch->io + ATA_REG_DRIVE, (uint8_t)(ATA_DRIVE_SELECT | (d->slave ? ATA_DRIVE_SLAVE : 0)));
+    ata_io->out8(ch->io + ATA_REG_DRIVE,
+                 (uint8_t)(ATA_DRIVE_SELECT | (d->slave ? ATA_DRIVE_SLAVE : 0)));
     ata_settle(ch);
     ata_io->out8(ch->io + ATA_REG_SECCOUNT, 0);
     ata_io->out8(ch->io + ATA_REG_LBA_LOW, 0);

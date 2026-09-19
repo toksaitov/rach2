@@ -32,9 +32,9 @@
  * node's own id is mix(parent_id, name), unique because sibling names are
  * unique, so parent_id references are unambiguous and survive node moves.
  */
-#define KRFFS_S_IFMT  0170000u  /* file-type mask within mode */
-#define KRFFS_S_IFDIR 0040000u  /* directory */
-#define KRFFS_S_IFREG 0100000u  /* regular file */
+#define KRFFS_S_IFMT  0170000u /* file-type mask within mode */
+#define KRFFS_S_IFDIR 0040000u /* directory */
+#define KRFFS_S_IFREG 0100000u /* regular file */
 
 /* Reserved bit in the root node's mode flagging a possibly-unclean mount. Set
  * write-through when a disk file system is mounted for writing, and cleared by
@@ -63,10 +63,10 @@
  * reading its mode, so the two can never be confused. The sticky bit is
  * enforced on a directory: with it set, only an entry's owner, the directory's
  * owner, or a privileged caller may remove or rename that entry away. */
-#define KRFFS_MODE_SUID   0004000u
-#define KRFFS_MODE_SGID   0002000u
-#define KRFFS_MODE_STICKY 0001000u
-#define KRFFS_ROOT_ID 0u        /* logical id of the root directory (host nodes zero parent_id) */
+#define KRFFS_MODE_SUID      0004000u
+#define KRFFS_MODE_SGID      0002000u
+#define KRFFS_MODE_STICKY    0001000u
+#define KRFFS_ROOT_ID        0u /* logical id of the root directory (host nodes zero parent_id) */
 #define KRFFS_PATH_MAX_DEPTH 64 /* max directory nesting krffs_node_path reconstructs */
 
 /* A directory's mode is S_IFDIR | 0755; a regular file is just its perm bits
@@ -76,9 +76,9 @@
 
 /* Node types in the file system. */
 typedef enum {
-    KRFFS_ROOT_NODE,      /* Root directory node */
-    KRFFS_FREE_NODE,      /* Free block (available for allocation) */
-    KRFFS_RESERVED_NODE   /* Reserved block (file data) */
+    KRFFS_ROOT_NODE,    /* Root directory node */
+    KRFFS_FREE_NODE,    /* Free block (available for allocation) */
+    KRFFS_RESERVED_NODE /* Reserved block (file data) */
 } krffs_node_type_t;
 
 /* Node timestamp, packed for on-disk compatibility. */
@@ -95,27 +95,27 @@ typedef struct {
  */
 #pragma pack(push, 1)
 typedef struct krffs_node {
-    uint16_t magic;                                  /* Magic number 0x4B52 "KR" */
-    uint8_t type;                                    /* Node type (see krffs_node_type_t) */
-    uint64_t id;                                     /* DJB hash of filename */
-    uint8_t name[KRFFS_FILE_NAME_BUFFER_SIZE];       /* Null-terminated filename */
-    uint16_t mode;                                   /* File permissions */
-    uint32_t uid;                                    /* Owner user ID */
-    uint32_t gid;                                    /* Owner group ID */
-    krffs_node_time_t access_time;                   /* Last access time */
-    krffs_node_time_t modification_time;             /* Last modification time */
-    krffs_node_time_t attribute_change_time;         /* Last attribute change time */
-    uint64_t size;                                   /* Total node size (header + data space) */
-    uint64_t previous_node_size;                     /* Size of previous node (for backward traversal) */
-    uint64_t data_size;                              /* Actual data bytes used */
-    uint64_t parent_id;                              /* id of the containing directory (KRFFS_ROOT_ID at the root) */
+    uint16_t magic;                            /* Magic number 0x4B52 "KR" */
+    uint8_t type;                              /* Node type (see krffs_node_type_t) */
+    uint64_t id;                               /* DJB hash of filename */
+    uint8_t name[KRFFS_FILE_NAME_BUFFER_SIZE]; /* Null-terminated filename */
+    uint16_t mode;                             /* File permissions */
+    uint32_t uid;                              /* Owner user ID */
+    uint32_t gid;                              /* Owner group ID */
+    krffs_node_time_t access_time;             /* Last access time */
+    krffs_node_time_t modification_time;       /* Last modification time */
+    krffs_node_time_t attribute_change_time;   /* Last attribute change time */
+    uint64_t size;                             /* Total node size (header + data space) */
+    uint64_t previous_node_size;               /* Size of previous node (for backward traversal) */
+    uint64_t data_size;                        /* Actual data bytes used */
+    uint64_t parent_id; /* id of the containing directory (KRFFS_ROOT_ID at the root) */
 } krffs_node_t;
 #pragma pack(pop)
 
 /* Mounted file system: the in-memory image and its extent. */
 typedef struct krffs_file_system {
-    krffs_node_t *node;    /* root node, the start of the file system */
-    uint32_t size;         /* total size of the file system in bytes */
+    krffs_node_t *node; /* root node, the start of the file system */
+    uint32_t size;      /* total size of the file system in bytes */
 } krffs_file_system_t;
 
 /*
@@ -215,47 +215,41 @@ int krffs_chain_is_walkable(krffs_mount_t *mount);
 #define KRFFS_SET_MTIME 2
 
 int krffs_set_mode_at(krffs_mount_t *mount, uint64_t offset, uint16_t mode);
-int krffs_set_owner_at(krffs_mount_t *mount, uint64_t offset, uint32_t uid,
-                       uint32_t gid, int which);
-int krffs_set_time_at(krffs_mount_t *mount, uint64_t offset, int which,
-                      int64_t seconds, int64_t nanoseconds);
+int krffs_set_owner_at(krffs_mount_t *mount, uint64_t offset, uint32_t uid, uint32_t gid,
+                       int which);
+int krffs_set_time_at(krffs_mount_t *mount, uint64_t offset, int which, int64_t seconds,
+                      int64_t nanoseconds);
 uint64_t krffs_max_steps(krffs_mount_t *mount);
-uint64_t krffs_next_offset(krffs_mount_t *mount, uint64_t offset,
-                           const krffs_node_t *head);
+uint64_t krffs_next_offset(krffs_mount_t *mount, uint64_t offset, const krffs_node_t *head);
 uint64_t krffs_walk(krffs_mount_t *mount, const char *path);
 uint64_t krffs_child_at(krffs_mount_t *mount, uint64_t dir, const char *name);
 uint64_t krffs_walk_err(krffs_mount_t *mount, const char *path, int *err);
 uint64_t krffs_parent_offset(krffs_mount_t *mount, uint64_t offset);
-int krffs_node_path_at(krffs_mount_t *mount, uint64_t offset, char *buf,
-                       uint32_t size);
-int krffs_read_at(krffs_mount_t *mount, uint64_t node, char *buffer,
-                  uint32_t size, uint32_t at);
-int krffs_write_at(krffs_mount_t *mount, uint64_t *node, const char *buffer,
-                   uint32_t size, uint32_t at);
+int krffs_node_path_at(krffs_mount_t *mount, uint64_t offset, char *buf, uint32_t size);
+int krffs_read_at(krffs_mount_t *mount, uint64_t node, char *buffer, uint32_t size, uint32_t at);
+int krffs_write_at(krffs_mount_t *mount, uint64_t *node, const char *buffer, uint32_t size,
+                   uint32_t at);
 int krffs_create_at(krffs_mount_t *mount, const char *path);
-int krffs_truncate_node_at(krffs_mount_t *mount, uint64_t node,
-                           uint32_t new_size, uint64_t *node_out);
-int krffs_truncate_at(krffs_mount_t *mount, const char *path,
-                      uint32_t new_size, uint64_t *node_out);
+int krffs_truncate_node_at(krffs_mount_t *mount, uint64_t node, uint32_t new_size,
+                           uint64_t *node_out);
+int krffs_truncate_at(krffs_mount_t *mount, const char *path, uint32_t new_size,
+                      uint64_t *node_out);
 int krffs_unlink_at(krffs_mount_t *mount, const char *path);
-int krffs_rename_at(krffs_mount_t *mount, const char *old_path,
-                    const char *new_path);
+int krffs_rename_at(krffs_mount_t *mount, const char *old_path, const char *new_path);
 int krffs_mkdir_at(krffs_mount_t *mount, const char *path);
 int krffs_rmdir_at(krffs_mount_t *mount, const char *path);
-int krffs_readdir_at(krffs_mount_t *mount, const char *path, uint32_t index,
-                     char *name_out, uint32_t buf_size, int *is_dir_out);
+int krffs_readdir_at(krffs_mount_t *mount, const char *path, uint32_t index, char *name_out,
+                     uint32_t buf_size, int *is_dir_out);
 void krffs_orphan_at(krffs_mount_t *mount, uint64_t offset);
 uint32_t krffs_reap_orphans_at(krffs_mount_t *mount);
 void krffs_stamp_at(krffs_mount_t *mount, uint64_t offset, int what);
-uint64_t krffs_allocate_at(krffs_mount_t *mount, uint64_t size,
-                           uint64_t original);
+uint64_t krffs_allocate_at(krffs_mount_t *mount, uint64_t size, uint64_t original);
 uint64_t krffs_resize_at(krffs_mount_t *mount, uint64_t offset, uint64_t size);
 int krffs_remove_at(krffs_mount_t *mount, uint64_t offset);
 uint32_t krffs_count_at(krffs_mount_t *mount);
 int krffs_set_dirty(krffs_mount_t *mount, int dirty);
 int krffs_is_dirty(krffs_mount_t *mount);
-int krffs_repair_at(krffs_mount_t *mount, uint32_t *links, uint32_t *orphans,
-                    uint32_t *doubles);
+int krffs_repair_at(krffs_mount_t *mount, uint32_t *links, uint32_t *orphans, uint32_t *doubles);
 uint32_t krffs_free_at(krffs_mount_t *mount);
 
 /* The mounted file system, or NULL before init_krffs. */
@@ -300,10 +294,8 @@ int krffs_node_path(krffs_node_t *node, char *buf, uint32_t size);
  * program is expected to handle, and the first is a fault in the caller. */
 #define KRFFS_EBAD     (-1)
 #define KRFFS_ENOSPACE (-2)
-int krffs_read_node(krffs_node_t *node, char *buffer, uint32_t size,
-                    uint32_t offset);
-int krffs_write_node(krffs_node_t **nodep, const char *buffer, uint32_t size,
-                     uint32_t offset);
+int krffs_read_node(krffs_node_t *node, char *buffer, uint32_t size, uint32_t offset);
+int krffs_write_node(krffs_node_t **nodep, const char *buffer, uint32_t size, uint32_t offset);
 
 /* Read operations by path. */
 int krffs_open(const char *path);
@@ -328,16 +320,19 @@ int krffs_rename(const char *old_path, const char *new_path);
  * children. */
 int krffs_mkdir(const char *path);
 int krffs_rmdir(const char *path);
-int krffs_readdir(const char *path, uint32_t index, char *name_out,
-                  uint32_t buf_size, int *is_dir_out);
+int krffs_readdir(const char *path, uint32_t index, char *name_out, uint32_t buf_size,
+                  int *is_dir_out);
 
 /* Node primitives (internal, exposed for testing). */
-krffs_node_t *krffs_initialize_free_node(krffs_node_t *node, uint64_t size, uint64_t previous_node_size);
+krffs_node_t *krffs_initialize_free_node(krffs_node_t *node, uint64_t size,
+                                         uint64_t previous_node_size);
 void krffs_set_reserved_node_name(krffs_node_t *node, const char *name);
 
 /* K&R first-fit allocator: allocate, resize, free a reserved node. */
-krffs_node_t *krffs_allocate_reserved_node(krffs_file_system_t *fs, uint64_t size, krffs_node_t *original);
-krffs_node_t *krffs_resize_reserved_node(krffs_file_system_t *fs, krffs_node_t *node, uint64_t size);
+krffs_node_t *krffs_allocate_reserved_node(krffs_file_system_t *fs, uint64_t size,
+                                           krffs_node_t *original);
+krffs_node_t *krffs_resize_reserved_node(krffs_file_system_t *fs, krffs_node_t *node,
+                                         uint64_t size);
 void krffs_remove_reserved_node(krffs_file_system_t *fs, krffs_node_t *node);
 
 /* DJB hash of a NUL-terminated name; the legacy id of a regular file. */

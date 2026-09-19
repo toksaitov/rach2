@@ -36,7 +36,6 @@
 #define PC_SLOTS 2048u
 #endif
 
-
 /*
  * The backing store, accessed one page at a time. `disk_off` is a page-aligned
  * byte offset into it. Both return 0 on success or a negative errno.

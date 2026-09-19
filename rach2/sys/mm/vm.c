@@ -243,8 +243,7 @@ int vm_grow_stack(vm_space_t *vm, uint32_t page, uint32_t as_limit)
              * region: a (possibly hostile) ELF segment or mmap inside the
              * growth window must not be swallowed by the stack. */
             for (j = 0; j < vm->count; j++) {
-                if (j != i && page < vm->vmas[j].end &&
-                    r->start > vm->vmas[j].start) {
+                if (j != i && page < vm->vmas[j].end && r->start > vm->vmas[j].start) {
                     return 0;
                 }
             }

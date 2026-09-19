@@ -40,7 +40,6 @@
  * `getdents64` reports.
  */
 
-
 extern const struct vfs_type vfs_vfat_type;
 
 #endif /* _FAT32_H_ */

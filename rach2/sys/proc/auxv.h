@@ -19,16 +19,16 @@
  * Auxiliary vector entry types (a_type). Only the subset marked "populated" is
  * emitted by the kernel today; the rest are listed for ABI completeness.
  */
-#define AT_NULL   0  /* End of vector                          (populated) */
+#define AT_NULL   0 /* End of vector                          (populated) */
 #define AT_IGNORE 1
 #define AT_EXECFD 2
-#define AT_PHDR   3  /* Address of the program header table    (populated) */
-#define AT_PHENT  4  /* Size in bytes of one program header    (populated) */
-#define AT_PHNUM  5  /* Number of program headers              (populated) */
-#define AT_PAGESZ 6  /* System page size                       (populated) */
+#define AT_PHDR   3 /* Address of the program header table    (populated) */
+#define AT_PHENT  4 /* Size in bytes of one program header    (populated) */
+#define AT_PHNUM  5 /* Number of program headers              (populated) */
+#define AT_PAGESZ 6 /* System page size                       (populated) */
 #define AT_BASE   7
 #define AT_FLAGS  8
-#define AT_ENTRY  9  /* Program entry point                    (populated) */
+#define AT_ENTRY  9 /* Program entry point                    (populated) */
 #define AT_NOTELF 10
 #define AT_UID    11
 #define AT_EUID   12

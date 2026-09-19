@@ -18,16 +18,16 @@
 
 /* Audio sample formats. */
 typedef enum {
-    AUDIO_U8,       /* unsigned 8-bit (SB16 8-bit mode, Doom native) */
-    AUDIO_S16LE     /* signed 16-bit little-endian (SB16 16-bit, HDA) */
+    AUDIO_U8,   /* unsigned 8-bit (SB16 8-bit mode, Doom native) */
+    AUDIO_S16LE /* signed 16-bit little-endian (SB16 16-bit, HDA) */
 } audio_format_t;
 
 /* Audio driver identity. */
 typedef enum {
     AUDIO_DRIVER_NONE,
-    AUDIO_DRIVER_SPEAKER,   /* PC speaker (beeps only) */
-    AUDIO_DRIVER_SB16,      /* Sound Blaster 16 */
-    AUDIO_DRIVER_HDA        /* Intel HD Audio */
+    AUDIO_DRIVER_SPEAKER, /* PC speaker (beeps only) */
+    AUDIO_DRIVER_SB16,    /* Sound Blaster 16 */
+    AUDIO_DRIVER_HDA      /* Intel HD Audio */
 } audio_driver_type_t;
 
 /*

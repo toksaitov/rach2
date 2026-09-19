@@ -19,7 +19,7 @@
 #include "../../serial.h"
 
 /* Our hardware address; the bound driver fills this in at init. */
-uint8_t net_mac[6] = { 0, 0, 0, 0, 0, 0 };
+uint8_t net_mac[6] = {0, 0, 0, 0, 0, 0};
 
 uint16_t read16be(const uint8_t *p)
 {
@@ -28,8 +28,7 @@ uint16_t read16be(const uint8_t *p)
 
 uint32_t read32be(const uint8_t *p)
 {
-    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
-           ((uint32_t)p[2] <<  8) |  (uint32_t)p[3];
+    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3];
 }
 
 void write16be(uint8_t *p, uint16_t value)
@@ -42,7 +41,7 @@ void write32be(uint8_t *p, uint32_t value)
 {
     p[0] = (uint8_t)(value >> 24);
     p[1] = (uint8_t)(value >> 16);
-    p[2] = (uint8_t)(value >>  8);
+    p[2] = (uint8_t)(value >> 8);
     p[3] = (uint8_t)(value & 0xFF);
 }
 
@@ -99,11 +98,11 @@ void net_print_info(void)
 
         klog(KLOG_INFO, "net", "%s: %s, station %X%X:%X%X:%X%X:%X%X:%X%X:%X%X", nd->name,
              netdev_name(nd), (unsigned)(nd->mac[0] >> 4), (unsigned)(nd->mac[0] & 0xF),
-             (unsigned)(nd->mac[1] >> 4), (unsigned)(nd->mac[1] & 0xF),
-             (unsigned)(nd->mac[2] >> 4), (unsigned)(nd->mac[2] & 0xF),
-             (unsigned)(nd->mac[3] >> 4), (unsigned)(nd->mac[3] & 0xF),
-             (unsigned)(nd->mac[4] >> 4), (unsigned)(nd->mac[4] & 0xF),
-             (unsigned)(nd->mac[5] >> 4), (unsigned)(nd->mac[5] & 0xF));
+             (unsigned)(nd->mac[1] >> 4), (unsigned)(nd->mac[1] & 0xF), (unsigned)(nd->mac[2] >> 4),
+             (unsigned)(nd->mac[2] & 0xF), (unsigned)(nd->mac[3] >> 4),
+             (unsigned)(nd->mac[3] & 0xF), (unsigned)(nd->mac[4] >> 4),
+             (unsigned)(nd->mac[4] & 0xF), (unsigned)(nd->mac[5] >> 4),
+             (unsigned)(nd->mac[5] & 0xF));
         netdev_print_info(nd);
         if (nd->ip == 0) {
             klog(KLOG_INFO, "net", "%s: no address", nd->name);
@@ -115,8 +114,8 @@ void net_print_info(void)
             klog(KLOG_INFO, "net", "%s: IPv4 %s/%d, gateway %s", nd->name, addr,
                  netconf_prefix_of(nd->mask), gw);
         } else {
-            klog(KLOG_INFO, "net", "%s: IPv4 %s/%d, no gateway: this subnet only", nd->name,
-                 addr, netconf_prefix_of(nd->mask));
+            klog(KLOG_INFO, "net", "%s: IPv4 %s/%d, no gateway: this subnet only", nd->name, addr,
+                 netconf_prefix_of(nd->mask));
         }
     }
     netconsole_print_info();

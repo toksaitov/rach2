@@ -19,54 +19,54 @@
 /* What a path resolves to. KRFFS is the ordinary case; the rest are
  * synthetic. */
 enum vnode_kind {
-    VNODE_KRFFS = 0,    /* not synthetic: resolve through KRFFS */
-    VNODE_DEV_DIR,      /* /dev */
-    VNODE_DEV,          /* /dev/<name>: a character device */
-    VNODE_PTS_DIR,      /* /dev/pts: the pty slave directory */
-    VNODE_PTS,          /* /dev/pts/N: a pty slave (pts_index = N) */
-    VNODE_PROC_DIR,     /* /proc */
-    VNODE_PROC_PID,     /* /proc/<pid> (or /proc/self) */
-    VNODE_PROC_FD_DIR,  /* /proc/<pid>/fd */
-    VNODE_PROC_FILE,    /* /proc/<pid>/{stat,cmdline} */
-    VNODE_PROC_FD_LINK, /* /proc/<pid>/fd/<n>: a magic symlink */
-    VNODE_PROC_CMDLINE, /* /proc/cmdline: the boot command line */
-    VNODE_PROC_DISK,    /* /proc/disk: what the disk says about itself */
-    VNODE_PROC_NET_DIR, /* /proc/net: the directory the interface file is in */
-    VNODE_PROC_NET_DEV, /* /proc/net/dev: the interface and what it carried */
-    VNODE_PROC_UPTIME,  /* /proc/uptime: seconds up, and seconds idle */
-    VNODE_PROC_STAT_SYS,/* /proc/stat: the machine's tick counters and btime */
-    VNODE_PROC_MEMINFO, /* /proc/meminfo: the physical frame pool */
-    VNODE_PROC_MOUNTS,  /* /proc/mounts: what was mounted, and how */
-    VNODE_PROC_USB,     /* /proc/usb: the USB devices this kernel enumerated */
-    VNODE_PROC_NET_ROUTE, /* /proc/net/route: the on-link subnet and gateway */
-    VNODE_PROC_NET_ARP, /* /proc/net/arp: the address cache */
-    VNODE_PROC_NET_TCP, /* /proc/net/tcp: the connection pool */
+    VNODE_KRFFS = 0,        /* not synthetic: resolve through KRFFS */
+    VNODE_DEV_DIR,          /* /dev */
+    VNODE_DEV,              /* /dev/<name>: a character device */
+    VNODE_PTS_DIR,          /* /dev/pts: the pty slave directory */
+    VNODE_PTS,              /* /dev/pts/N: a pty slave (pts_index = N) */
+    VNODE_PROC_DIR,         /* /proc */
+    VNODE_PROC_PID,         /* /proc/<pid> (or /proc/self) */
+    VNODE_PROC_FD_DIR,      /* /proc/<pid>/fd */
+    VNODE_PROC_FILE,        /* /proc/<pid>/{stat,cmdline} */
+    VNODE_PROC_FD_LINK,     /* /proc/<pid>/fd/<n>: a magic symlink */
+    VNODE_PROC_CMDLINE,     /* /proc/cmdline: the boot command line */
+    VNODE_PROC_DISK,        /* /proc/disk: what the disk says about itself */
+    VNODE_PROC_NET_DIR,     /* /proc/net: the directory the interface file is in */
+    VNODE_PROC_NET_DEV,     /* /proc/net/dev: the interface and what it carried */
+    VNODE_PROC_UPTIME,      /* /proc/uptime: seconds up, and seconds idle */
+    VNODE_PROC_STAT_SYS,    /* /proc/stat: the machine's tick counters and btime */
+    VNODE_PROC_MEMINFO,     /* /proc/meminfo: the physical frame pool */
+    VNODE_PROC_MOUNTS,      /* /proc/mounts: what was mounted, and how */
+    VNODE_PROC_USB,         /* /proc/usb: the USB devices this kernel enumerated */
+    VNODE_PROC_NET_ROUTE,   /* /proc/net/route: the on-link subnet and gateway */
+    VNODE_PROC_NET_ARP,     /* /proc/net/arp: the address cache */
+    VNODE_PROC_NET_TCP,     /* /proc/net/tcp: the connection pool */
     VNODE_PROC_FILESYSTEMS, /* /proc/filesystems: what mount(2) accepts */
     VNODE_PROC_LOOP,        /* /proc/loop: the files attached to devices */
-    VNODE_PROC_INTERRUPTS, /* /proc/interrupts: the count on each vector */
-    VNODE_PROC_CONSOLE, /* /proc/console: the serial receive path's counters */
-    VNODE_ENOENT,       /* under a synthetic mount, but no such entry */
-    VNODE_ENOTDIR       /* under a synthetic mount, a non-dir used as a directory */
+    VNODE_PROC_INTERRUPTS,  /* /proc/interrupts: the count on each vector */
+    VNODE_PROC_CONSOLE,     /* /proc/console: the serial receive path's counters */
+    VNODE_ENOENT,           /* under a synthetic mount, but no such entry */
+    VNODE_ENOTDIR           /* under a synthetic mount, a non-dir used as a directory */
 };
 
 /* /proc/<pid>/<file> kinds, and the global boot line (a procfs_file origin). */
-#define SYNTH_PROC_STAT     1
-#define SYNTH_PROC_CMDLINE  2
-#define SYNTH_PROC_BOOTLINE 3
-#define SYNTH_PROC_DISKINFO 4
-#define SYNTH_PROC_NETDEV   5
-#define SYNTH_PROC_UPTIME   6
-#define SYNTH_PROC_STATSYS  7
-#define SYNTH_PROC_MEMINFO  8
-#define SYNTH_PROC_MOUNTS   9
-#define SYNTH_PROC_NETROUTE 10
-#define SYNTH_PROC_NETARP   11
-#define SYNTH_PROC_NETTCP   12
-#define SYNTH_PROC_USB      13
+#define SYNTH_PROC_STAT        1
+#define SYNTH_PROC_CMDLINE     2
+#define SYNTH_PROC_BOOTLINE    3
+#define SYNTH_PROC_DISKINFO    4
+#define SYNTH_PROC_NETDEV      5
+#define SYNTH_PROC_UPTIME      6
+#define SYNTH_PROC_STATSYS     7
+#define SYNTH_PROC_MEMINFO     8
+#define SYNTH_PROC_MOUNTS      9
+#define SYNTH_PROC_NETROUTE    10
+#define SYNTH_PROC_NETARP      11
+#define SYNTH_PROC_NETTCP      12
+#define SYNTH_PROC_USB         13
 #define SYNTH_PROC_FILESYSTEMS 14
-#define SYNTH_PROC_LOOP     15
-#define SYNTH_PROC_INTERRUPTS 15
-#define SYNTH_PROC_CONSOLE 16
+#define SYNTH_PROC_LOOP        15
+#define SYNTH_PROC_INTERRUPTS  15
+#define SYNTH_PROC_CONSOLE     16
 
 /* PID sentinel meaning "the calling process" (/proc/self), resolved by the
  * glue. */

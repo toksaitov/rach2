@@ -27,12 +27,12 @@ typedef struct user_desc user_desc_t;
 /*
  * user_desc.flags bit layout (LSB first), as Linux defines it.
  */
-#define UD_SEG_32BIT       0x01u  /* bit 0    : 32-bit segment            */
-#define UD_CONTENTS_MASK   0x06u  /* bits 1-2 : 0 = data, !=0 = code/stack */
-#define UD_READ_EXEC_ONLY  0x08u  /* bit 3    : not writable              */
-#define UD_LIMIT_IN_PAGES  0x10u  /* bit 4    : limit is in 4 KB pages     */
-#define UD_SEG_NOT_PRESENT 0x20u  /* bit 5    : descriptor not present     */
-#define UD_USEABLE         0x40u  /* bit 6    : AVL bit                    */
+#define UD_SEG_32BIT       0x01u /* bit 0    : 32-bit segment            */
+#define UD_CONTENTS_MASK   0x06u /* bits 1-2 : 0 = data, !=0 = code/stack */
+#define UD_READ_EXEC_ONLY  0x08u /* bit 3    : not writable              */
+#define UD_LIMIT_IN_PAGES  0x10u /* bit 4    : limit is in 4 KB pages     */
+#define UD_SEG_NOT_PRESENT 0x20u /* bit 5    : descriptor not present     */
+#define UD_USEABLE         0x40u /* bit 6    : AVL bit                    */
 
 /** Validate a user_desc and output its TLS base; 0 ok, -1 if
  * unrepresentable. */

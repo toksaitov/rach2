@@ -33,10 +33,8 @@ bool elf_check(const void *data, uint32_t size)
         return false;
     }
 
-    if (ehdr->e_ident[EI_MAG0] != ELFMAG0 ||
-        ehdr->e_ident[EI_MAG1] != ELFMAG1 ||
-        ehdr->e_ident[EI_MAG2] != ELFMAG2 ||
-        ehdr->e_ident[EI_MAG3] != ELFMAG3) {
+    if (ehdr->e_ident[EI_MAG0] != ELFMAG0 || ehdr->e_ident[EI_MAG1] != ELFMAG1 ||
+        ehdr->e_ident[EI_MAG2] != ELFMAG2 || ehdr->e_ident[EI_MAG3] != ELFMAG3) {
         return false;
     }
 
@@ -161,10 +159,8 @@ int elf_load(const void *data, uint32_t size, page_dir_t *dir)
         vaddr = phdr->p_vaddr;
         vaddr_end = vaddr + phdr->p_memsz;
 
-        for (page_addr = (vaddr & ~(PAGE_SIZE - 1));
-             page_addr < vaddr_end;
+        for (page_addr = (vaddr & ~(PAGE_SIZE - 1)); page_addr < vaddr_end;
              page_addr += PAGE_SIZE) {
-
             uintptr_t phys_addr;
 
             phys_addr = alloc_user_page(dir, page_addr);
@@ -213,8 +209,7 @@ int elf_load(const void *data, uint32_t size, page_dir_t *dir)
                 if (!page) {
                     return -1;
                 }
-                k_memcpy(page + page_offset, file_data + file_offset + bytes_copied,
-                         chunk_size);
+                k_memcpy(page + page_offset, file_data + file_offset + bytes_copied, chunk_size);
                 kunmap_temp(page);
             }
 
@@ -277,8 +272,7 @@ uint32_t elf_phdr_vaddr(const Elf32_Phdr *phdrs, uint16_t phnum, uint32_t phoff)
          * loader can read. The subtractions run only after the bounds that keep
          * them from underflowing; `table_bytes` cannot overflow because `phnum`
          * is already capped at ELF_MAX_PHNUM. */
-        if (p->p_type == PT_LOAD && phoff >= p->p_offset &&
-            p->p_filesz >= table_bytes &&
+        if (p->p_type == PT_LOAD && phoff >= p->p_offset && p->p_filesz >= table_bytes &&
             phoff - p->p_offset <= p->p_filesz - table_bytes) {
             return p->p_vaddr + (phoff - p->p_offset);
         }
@@ -466,13 +460,12 @@ int elf_load_image(elf_read_fn readfn, void *ctx, page_dir_t *dir, elf_image_t *
             if (out->segs[si].flags & PF_W) {
                 continue;
             }
-            for (pg = out->segs[si].start; pg < out->segs[si].end;
-                 pg += PAGE_SIZE) {
+            for (pg = out->segs[si].start; pg < out->segs[si].end; pg += PAGE_SIZE) {
                 int writable = 0;
 
                 for (sj = 0; sj < out->nsegs; sj++) {
-                    if ((out->segs[sj].flags & PF_W) &&
-                        pg >= out->segs[sj].start && pg < out->segs[sj].end) {
+                    if ((out->segs[sj].flags & PF_W) && pg >= out->segs[sj].start &&
+                        pg < out->segs[sj].end) {
                         writable = 1;
                         break;
                     }
@@ -509,8 +502,8 @@ int elf_load_image(elf_read_fn readfn, void *ctx, page_dir_t *dir, elf_image_t *
  * 0, or -1 when a region could not be recorded, which is the heap having
  * no room for the array.
  */
-int elf_setup_vmas(struct vm_space *vm, const elf_image_t *img,
-                   uint32_t stack_top, uint32_t stack_growth)
+int elf_setup_vmas(struct vm_space *vm, const elf_image_t *img, uint32_t stack_top,
+                   uint32_t stack_growth)
 {
     int si;
 
@@ -548,6 +541,5 @@ int elf_setup_vmas(struct vm_space *vm, const elf_image_t *img,
     /* The stack: one page mapped at the top, growable downward to
      * stack_limit. */
     vm->stack_limit = stack_top - stack_growth;
-    return vm_insert(vm, stack_top, stack_top + PAGE_SIZE,
-                     VM_PROT_READ | VM_PROT_WRITE, VM_STACK);
+    return vm_insert(vm, stack_top, stack_top + PAGE_SIZE, VM_PROT_READ | VM_PROT_WRITE, VM_STACK);
 }

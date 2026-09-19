@@ -10,12 +10,10 @@ gdt_ptr_t gdt_address;
  * Writes `lgdt`, then reloads CS, DS, SS, ES, FS, and GS so the new
  * descriptors take effect. Implemented in gdt_handler.s.
  */
-extern void _load_gdt(gdt_ptr_t*);
+extern void _load_gdt(gdt_ptr_t *);
 
-static void _gdt_set_descriptor(size_t index, uint32_t base,
-                                              uint32_t limit,
-                                              uint8_t  access,
-                                              uint8_t  flags);
+static void _gdt_set_descriptor(size_t index, uint32_t base, uint32_t limit, uint8_t access,
+                                uint8_t flags);
 
 /**
  * Build the flat GDT and load it.
@@ -31,7 +29,7 @@ void init_gdt(void)
     uint32_t tss_base = (uint32_t)&kernel_tss;
     uint32_t tss_limit = sizeof(tss_t) - 1;
 
-    gdt_address.base  = (uintptr_t) &gdt_descriptors;
+    gdt_address.base = (uintptr_t)&gdt_descriptors;
     gdt_address.limit = sizeof(gdt_descriptor_t) * GDT_ENTRY_COUNT - 1;
 
     _gdt_set_descriptor(0, 0, 0, 0, 0);                /* Null descriptor */
@@ -62,9 +60,9 @@ void init_gdt(void)
  */
 void gdt_set_tls(uint32_t base)
 {
-    gdt_descriptors[GDT_TLS_ENTRY].base_low    = base & 0xFFFF;
+    gdt_descriptors[GDT_TLS_ENTRY].base_low = base & 0xFFFF;
     gdt_descriptors[GDT_TLS_ENTRY].base_middle = (base >> 16) & 0xFF;
-    gdt_descriptors[GDT_TLS_ENTRY].base_high   = (base >> 24) & 0xFF;
+    gdt_descriptors[GDT_TLS_ENTRY].base_high = (base >> 24) & 0xFF;
 }
 
 /**
@@ -75,14 +73,12 @@ void gdt_set_tls(uint32_t base)
  * `flags`. `access` is the full access byte (present/DPL/type); `flags` has
  * the granularity and size bits in its high nibble.
  */
-static void _gdt_set_descriptor(size_t index, uint32_t base,
-                                              uint32_t limit,
-                                              uint8_t access,
-                                              uint8_t flags)
+static void _gdt_set_descriptor(size_t index, uint32_t base, uint32_t limit, uint8_t access,
+                                uint8_t flags)
 {
-    gdt_descriptors[index].base_low    = base & 0xFFFF;
+    gdt_descriptors[index].base_low = base & 0xFFFF;
     gdt_descriptors[index].base_middle = (base >> 16) & 0xFF;
-    gdt_descriptors[index].base_high   = (base >> 24) & 0xFF;
+    gdt_descriptors[index].base_high = (base >> 24) & 0xFF;
 
     gdt_descriptors[index].limit_low = limit & 0xFFFF;
     gdt_descriptors[index].flags_and_limit_high = (limit >> 16) & 0x0F;

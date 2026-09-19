@@ -8,17 +8,17 @@
  * on a privilege change from ring 3 to ring 0 (a syscall or interrupt).
  */
 struct tss {
-    uint32_t prev_tss;   /* Previous TSS link (unused for software switching) */
-    uint32_t esp0;       /* Ring 0 stack pointer */
-    uint32_t ss0;        /* Ring 0 stack segment */
-    uint32_t esp1;       /* Ring 1 stack pointer (unused) */
-    uint32_t ss1;        /* Ring 1 stack segment (unused) */
-    uint32_t esp2;       /* Ring 2 stack pointer (unused) */
-    uint32_t ss2;        /* Ring 2 stack segment (unused) */
-    uint32_t cr3;        /* Page directory base (unused for our purposes) */
-    uint32_t eip;        /* Instruction pointer (unused) */
-    uint32_t eflags;     /* Flags register (unused) */
-    uint32_t eax;        /* General registers (unused) */
+    uint32_t prev_tss; /* Previous TSS link (unused for software switching) */
+    uint32_t esp0;     /* Ring 0 stack pointer */
+    uint32_t ss0;      /* Ring 0 stack segment */
+    uint32_t esp1;     /* Ring 1 stack pointer (unused) */
+    uint32_t ss1;      /* Ring 1 stack segment (unused) */
+    uint32_t esp2;     /* Ring 2 stack pointer (unused) */
+    uint32_t ss2;      /* Ring 2 stack segment (unused) */
+    uint32_t cr3;      /* Page directory base (unused for our purposes) */
+    uint32_t eip;      /* Instruction pointer (unused) */
+    uint32_t eflags;   /* Flags register (unused) */
+    uint32_t eax;      /* General registers (unused) */
     uint32_t ecx;
     uint32_t edx;
     uint32_t ebx;
@@ -26,7 +26,7 @@ struct tss {
     uint32_t ebp;
     uint32_t esi;
     uint32_t edi;
-    uint32_t es;         /* Segment selectors (unused) */
+    uint32_t es; /* Segment selectors (unused) */
     uint32_t cs;
     uint32_t ss;
     uint32_t ds;

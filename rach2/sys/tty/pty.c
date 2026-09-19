@@ -127,7 +127,7 @@ static struct pty *pty_alloc(void)
     p->locked = 1; /* unlockpt() (TIOCSPTLCK 0) must run before pts open */
     p->uid = current_proc ? current_proc->euid : 0;
     p->gid = current_proc ? current_proc->egid : 0;
-    p->mode = 0620; /* crw--w----, the Unix98 slave default */
+    p->mode = 0620;                         /* crw--w----, the Unix98 slave default */
     tty_init(&p->slave, pty_slave_sink, p); /* slave.pump stays NULL */
     wait_queue_init(&p->m_read_wq);
     wait_queue_init(&p->m_write_wq);
@@ -335,14 +335,13 @@ static int32_t ptm_ioctl(fd_entry_t *e, uint32_t request, uint32_t arg)
         return 0;
     }
     case TIOCGWINSZ:
-        if (copy_to_user((void __user *)arg, &p->slave.winsize,
-                         sizeof(p->slave.winsize)) != 0) {
+        if (copy_to_user((void __user *)arg, &p->slave.winsize, sizeof(p->slave.winsize)) != 0) {
             return -EFAULT;
         }
         return 0;
     case TIOCSWINSZ:
-        if (copy_from_user(&p->slave.winsize, (const void __user *)arg,
-                           sizeof(p->slave.winsize)) != 0) {
+        if (copy_from_user(&p->slave.winsize, (const void __user *)arg, sizeof(p->slave.winsize)) !=
+            0) {
             return -EFAULT;
         }
         /* A resize notifies the slave's foreground group (SIGWINCH). */
@@ -423,8 +422,7 @@ static int32_t pts_read(fd_entry_t *e, char __user *buf, uint32_t count)
      * console. An explicit TIOCSCTTY already claimed it, so this is then a
      * no-op. */
     if (p->slave.sid == 0 && (int)current_proc->sid == (int)current_proc->pid) {
-        tty_make_sole_ctty(&p->slave, (int)current_proc->sid,
-                           (int)current_proc->pgid);
+        tty_make_sole_ctty(&p->slave, (int)current_proc->sid, (int)current_proc->pgid);
     }
     if (tty_is_background(&p->slave, (int)current_proc->sid, (int)current_proc->pgid)) {
         if ((current_proc->sig_blocked & KSIG_BIT(SIGTTIN)) ||

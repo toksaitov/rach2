@@ -37,25 +37,25 @@
 struct pty {
     struct pty *next; /* the list of live ptys */
     int in_use;
-    int index;                  /* N in /dev/pts/N (the pool slot) */
-    struct tty slave;           /* the slave end: a full tty + N_TTY discipline */
+    int index;        /* N in /dev/pts/N (the pool slot) */
+    struct tty slave; /* the slave end: a full tty + N_TTY discipline */
 
     unsigned char m_buf[PTY_BUF_SIZE]; /* slave output + echo, read by the master */
-    uint32_t m_head;            /* bytes consumed by the master read end */
-    uint32_t m_tail;            /* bytes produced by the slave sink */
-    wait_queue_t m_read_wq;     /* master readers blocked for slave output */
-    wait_queue_t m_write_wq;    /* master writers blocked for the slave to read */
+    uint32_t m_head;                   /* bytes consumed by the master read end */
+    uint32_t m_tail;                   /* bytes produced by the slave sink */
+    wait_queue_t m_read_wq;            /* master readers blocked for slave output */
+    wait_queue_t m_write_wq;           /* master writers blocked for the slave to read */
 
-    int master_open;            /* the master descriptor is open */
-    int slave_opens;            /* count of open slave descriptions (distinct OFDs) */
-    int locked;                 /* TIOCSPTLCK: 1 until unlockpt() writes 0 */
+    int master_open; /* the master descriptor is open */
+    int slave_opens; /* count of open slave descriptions (distinct OFDs) */
+    int locked;      /* TIOCSPTLCK: 1 until unlockpt() writes 0 */
 
     /* Ownership of the slave (/dev/pts/N), the state a login server moves
      * with chown/chmod before handing the terminal to the user. Stamped from
      * the opener's effective ids at allocation; stat reports it. */
     uint32_t uid;
     uint32_t gid;
-    uint16_t mode;              /* permission bits only; the type is S_IFCHR */
+    uint16_t mode; /* permission bits only; the type is S_IFCHR */
 };
 
 /* Allocate the pty pool from kernel memory; called once from init. */

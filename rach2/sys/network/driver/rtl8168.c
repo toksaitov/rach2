@@ -131,16 +131,16 @@ static uint32_t r8168_tx_stalls;
  * polled; how many arrived; how many found nothing to do; and how many times
  * the handler's bound was reached with the status still set, after which the
  * sources are masked and the timer's pump alone drives the card. */
-static int      r8168_msi_vector = -1;
-static void     r8168_interrupts_enable(void);
+static int r8168_msi_vector = -1;
+static void r8168_interrupts_enable(void);
 static uint32_t r8168_msi_entries;
 static uint32_t r8168_msi_idle;
-static uint32_t r8168_msi_deferred; /* entries that left work to the tick */
+static uint32_t r8168_msi_deferred;  /* entries that left work to the tick */
 static uint32_t r8168_txerr_reports; /* messages with the transmit error source set */
 static uint32_t r8168_rxerr_reports; /* messages with the receive error source set */
 static uint32_t r8168_msi_storms;
-static uint32_t r8168_msi_stuck;    /* entries in a row: status left set, no work */
-static uint32_t r8168_tick_work;    /* frames the tick handled with messages on */
+static uint32_t r8168_msi_stuck; /* entries in a row: status left set, no work */
+static uint32_t r8168_tick_work; /* frames the tick handled with messages on */
 
 /*
  * The rings and their buffers, in .bss, which this kernel places below the
@@ -1327,7 +1327,7 @@ static void r8168_note_sources(uint16_t status)
  * may hand a ring's worth of frames up through the stack, so the bound is
  * what keeps the handler short; what is left goes to the tick or to the
  * next message. */
-#define R8168_ISR_ROUNDS 2
+#define R8168_ISR_ROUNDS    2
 /* How many entries in a row may find their status still set after the
  * acknowledgement, with nothing in the rings, before that is taken for a
  * storm. */
@@ -1465,8 +1465,7 @@ static const char *rtl8168_error(void)
  */
 static const char *r8168_pause_words(uint8_t st)
 {
-    if ((st & (R8168_PHY_TXFLOW | R8168_PHY_RXFLOW)) ==
-        (R8168_PHY_TXFLOW | R8168_PHY_RXFLOW)) {
+    if ((st & (R8168_PHY_TXFLOW | R8168_PHY_RXFLOW)) == (R8168_PHY_TXFLOW | R8168_PHY_RXFLOW)) {
         return "both ways";
     }
     if (st & R8168_PHY_TXFLOW) {
@@ -1538,8 +1537,7 @@ static int r8168_counters_dump(void)
     io->w32(R8168_COUNTERADDRHIGH, 0);
     (void)io->r32(R8168_COUNTERADDRHIGH);
     io->w32(R8168_COUNTERADDRLOW, (uint32_t)(uintptr_t)&r8168_counters);
-    io->w32(R8168_COUNTERADDRLOW,
-            (uint32_t)(uintptr_t)&r8168_counters | R8168_COUNTER_DUMP);
+    io->w32(R8168_COUNTERADDRLOW, (uint32_t)(uintptr_t)&r8168_counters | R8168_COUNTER_DUMP);
     for (i = 0; i < R8168_COUNTERS_WAIT_STEPS; i++) {
         if (!(io->r32(R8168_COUNTERADDRLOW) & R8168_COUNTER_DUMP)) {
             /* The block is read only after the chip says it wrote it. */
@@ -1565,13 +1563,13 @@ static int rtl8168_counters(void *dev, struct netdev_counters *out)
     if (!r8168_counters_dump()) {
         return 0;
     }
-    out->rx_missed     = r8168_counters.rx_missed;
-    out->rx_frame      = r8168_counters.align_errors;
-    out->rx_multicast  = r8168_counters.rx_multicast;
-    out->tx_errors     = r8168_counters.tx_errors_lo;
-    out->tx_fifo       = r8168_counters.tx_underrun;
+    out->rx_missed = r8168_counters.rx_missed;
+    out->rx_frame = r8168_counters.align_errors;
+    out->rx_multicast = r8168_counters.rx_multicast;
+    out->tx_errors = r8168_counters.tx_errors_lo;
+    out->tx_fifo = r8168_counters.tx_underrun;
     out->tx_collisions = r8168_counters.tx_one_collision + r8168_counters.tx_multi_collision;
-    out->tx_carrier    = r8168_counters.tx_aborted;
+    out->tx_carrier = r8168_counters.tx_aborted;
     return 1;
 }
 
@@ -1587,11 +1585,13 @@ static void rtl8168_print_info(void *dev)
     klog(KLOG_DEBUG, "rtl8168",
          "RTL8168GU: xid 0x%X, MMIO 0x%X, "
          "MAC %X%X:%X%X:%X%X:%X%X:%X%X:%X%X",
-        r8168_xid, (unsigned)(uintptr_t)r8168_mmio, (unsigned)(rtl8168_mac[0] >> 4),
-        (unsigned)(rtl8168_mac[0] & 0xF), (unsigned)(rtl8168_mac[1] >> 4), (unsigned)(rtl8168_mac[1] & 0xF),
-        (unsigned)(rtl8168_mac[2] >> 4), (unsigned)(rtl8168_mac[2] & 0xF), (unsigned)(rtl8168_mac[3] >> 4),
-        (unsigned)(rtl8168_mac[3] & 0xF), (unsigned)(rtl8168_mac[4] >> 4), (unsigned)(rtl8168_mac[4] & 0xF),
-        (unsigned)(rtl8168_mac[5] >> 4), (unsigned)(rtl8168_mac[5] & 0xF));
+         r8168_xid, (unsigned)(uintptr_t)r8168_mmio, (unsigned)(rtl8168_mac[0] >> 4),
+         (unsigned)(rtl8168_mac[0] & 0xF), (unsigned)(rtl8168_mac[1] >> 4),
+         (unsigned)(rtl8168_mac[1] & 0xF), (unsigned)(rtl8168_mac[2] >> 4),
+         (unsigned)(rtl8168_mac[2] & 0xF), (unsigned)(rtl8168_mac[3] >> 4),
+         (unsigned)(rtl8168_mac[3] & 0xF), (unsigned)(rtl8168_mac[4] >> 4),
+         (unsigned)(rtl8168_mac[4] & 0xF), (unsigned)(rtl8168_mac[5] >> 4),
+         (unsigned)(rtl8168_mac[5] & 0xF));
     if (rtl8168_link(0, &link) && link.up) {
         r8168_log_link();
     } else {
@@ -1609,12 +1609,13 @@ static void rtl8168_print_info(void *dev)
              r8168_tx_packets, r8168_tx_stalls, r8168_txerr_reports);
     }
     if (r8168_msi_vector >= 0 && r8168_msi_storms == 0 && r8168_msi_entries > 0) {
-        klog(KLOG_INFO, "rtl8168", "messages on vector %d: %d, %d idle, %d deferred, %d by the tick",
-             r8168_msi_vector, r8168_msi_entries, r8168_msi_idle, r8168_msi_deferred,
-             r8168_tick_work);
+        klog(KLOG_INFO, "rtl8168",
+             "messages on vector %d: %d, %d idle, %d deferred, %d by the tick", r8168_msi_vector,
+             r8168_msi_entries, r8168_msi_idle, r8168_msi_deferred, r8168_tick_work);
     } else if (r8168_msi_vector >= 0 && r8168_msi_storms > 0) {
         klog(KLOG_INFO, "rtl8168",
-             "messages on vector %d: %d, %d idle, %d deferred, masked after %d storm(s), %d by the tick",
+             "messages on vector %d: %d, %d idle, %d deferred, masked after %d storm(s), %d by the "
+             "tick",
              r8168_msi_vector, r8168_msi_entries, r8168_msi_idle, r8168_msi_deferred,
              r8168_msi_storms, r8168_tick_work);
     } else {
@@ -1682,7 +1683,6 @@ static void rtl8168_stop(void *dev)
     r8168_up = 0;
 }
 
-const struct netdev_ops rtl8168_netdev = {"RTL8168GU",   rtl8168_init,  rtl8168_tx,
-                                          rtl8168_poll,  rtl8168_stop,  rtl8168_link,
-                                          rtl8168_error, rtl8168_print_info,
-                                          rtl8168_counters};
+const struct netdev_ops rtl8168_netdev = {"RTL8168GU",   rtl8168_init,       rtl8168_tx,
+                                          rtl8168_poll,  rtl8168_stop,       rtl8168_link,
+                                          rtl8168_error, rtl8168_print_info, rtl8168_counters};

@@ -37,8 +37,7 @@ static int niface;
  * on a machine with no network to report it over. */
 static const char *probe_error = "no supported network card";
 
-static const struct netdev_ops *const drivers[] = {&rtl8139_netdev, &e1000_netdev,
-                                                   &rtl8168_netdev};
+static const struct netdev_ops *const drivers[] = {&rtl8139_netdev, &e1000_netdev, &rtl8168_netdev};
 
 #define NETDEV_COUNT ((int)(sizeof(drivers) / sizeof(drivers[0])))
 
@@ -83,8 +82,7 @@ struct netdev *netdev_route(uint32_t dst, uint32_t *via)
     for (i = 0; i < niface; i++) {
         struct netdev *nd = &ifaces[i];
 
-        if (nd->up && nd->ip != 0 && nd->mask != 0 &&
-            (dst & nd->mask) == (nd->ip & nd->mask)) {
+        if (nd->up && nd->ip != 0 && nd->mask != 0 && (dst & nd->mask) == (nd->ip & nd->mask)) {
             *via = dst;
             return nd;
         }

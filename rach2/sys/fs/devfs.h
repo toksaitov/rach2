@@ -74,7 +74,6 @@ int devfs_disk_claimed(struct disk *d);
 void devfs_bootpart_publish(struct block_device *backing, uint32_t start_lba,
                             uint32_t sector_count);
 
-
 /**
  * Publish /dev/grubcore over the post-MBR gap of `backing`.
  *
@@ -90,9 +89,8 @@ void devfs_grubcore_publish(struct block_device *backing);
  * on it. EINVAL for a device that is not a partition window, ENOENT for no
  * such device, which a window not published is as well.
  */
-int devfs_window_of(const char *path, struct block_device **view,
-                    struct block_device **backing, uint64_t *first,
-                    uint64_t *count);
+int devfs_window_of(const char *path, struct block_device **view, struct block_device **backing,
+                    uint64_t *first, uint64_t *count);
 
 /**
  * Claim `[first, last]` on `backing` for a mount; the claim's index, or
@@ -111,7 +109,7 @@ void devfs_grubcore_withdraw(void);
 /* Sectors carried by one driver call from a raw window, a mebibyte, the
  * block layer's whole request; a driver that takes less splits it. Reported
  * by /proc/disk beside the call count so the two can be compared. */
-#define DEVFS_RAW_BATCH_SECTORS 2048
+#define DEVFS_RAW_BATCH_SECTORS        2048
 /* The static buffer's sectors, the fallback when the heap has no batch. */
 #define DEVFS_RAW_BATCH_STATIC_SECTORS 64
 

@@ -60,11 +60,11 @@
 /** What the configuration descriptor said about the interface this kernel can
  *  drive, and about the endpoint it reports on. */
 struct usb_interface_info {
-    int found;        /* whether such an interface was there at all */
-    int kind;         /* one of the `USB_KIND_` values */
-    int number;       /* the interface's number, for SET_PROTOCOL and the
-                       * class requests a stick's transport is made of */
-    int class_code;   /* its class, subclass and protocol */
+    int found;      /* whether such an interface was there at all */
+    int kind;       /* one of the `USB_KIND_` values */
+    int number;     /* the interface's number, for SET_PROTOCOL and the
+                     * class requests a stick's transport is made of */
+    int class_code; /* its class, subclass and protocol */
     int subclass;
     int protocol;
     int ep_number; /* the interrupt IN endpoint a keyboard reports on, or

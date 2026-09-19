@@ -37,17 +37,17 @@
 #define PART_GPT_BAD 4 /* a protective MBR, and neither header checks */
 
 /* The MBR types that hold an extended partition. */
-#define PART_MBR_EXTENDED_CHS 0x05
-#define PART_MBR_EXTENDED_LBA 0x0F
+#define PART_MBR_EXTENDED_CHS   0x05
+#define PART_MBR_EXTENDED_LBA   0x0F
 #define PART_MBR_EXTENDED_LINUX 0x85
 
 struct part_entry {
-    int number;         /* 1 upward; MBR logical partitions from 5 */
+    int number; /* 1 upward; MBR logical partitions from 5 */
     uint64_t start_lba;
     uint64_t sector_count;
-    uint8_t mbr_type;   /* the type byte, MBR only */
+    uint8_t mbr_type; /* the type byte, MBR only */
     uint8_t type_guid[16];
-    uint8_t guid[16];   /* the partition's own GUID, GPT only */
+    uint8_t guid[16];                 /* the partition's own GUID, GPT only */
     char label[PART_LABEL_CHARS + 1]; /* the GPT name as ASCII, '?' elsewhere */
 };
 

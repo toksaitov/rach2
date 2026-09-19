@@ -15,9 +15,9 @@
  * One PS/2 movement packet, as exposed to userspace.
  */
 struct mouse_packet {
-    uint8_t buttons;  /* bit 0 left, bit 1 right, bit 2 middle */
-    int8_t  dx;       /* X movement delta */
-    int8_t  dy;       /* Y movement delta */
+    uint8_t buttons; /* bit 0 left, bit 1 right, bit 2 middle */
+    int8_t dx;       /* X movement delta */
+    int8_t dy;       /* Y movement delta */
 };
 
 /** Bring up the PS/2 mouse; 0 on success, -1 on failure. */

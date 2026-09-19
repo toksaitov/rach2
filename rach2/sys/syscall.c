@@ -12152,8 +12152,8 @@ static void _syscall_handler(isr_params_t *params)
                 _enosys_big_num = syscall_num;
                 _enosys_big_pid = pid;
                 klog(KLOG_WARN, "syscall",
-                     "%d: not implemented, and past the table (asked for by %s)",
-                     (int)syscall_num, who);
+                     "%d: not implemented, and past the table (asked for by %s)", (int)syscall_num,
+                     who);
             }
         } else if (_enosys_last_pid[syscall_num] != pid) {
             _enosys_last_pid[syscall_num] = pid;

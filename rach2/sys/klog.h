@@ -103,7 +103,6 @@ void klog_set_screen_level_from_cmdline(int level);
 /** Whether the boot line named the level. */
 int klog_screen_level_was_asked_for(void);
 
-
 /**
  * The debug shell's own output: the screen and the serial port, nothing else.
  *

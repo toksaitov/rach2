@@ -203,8 +203,7 @@ void socket_unref(struct socket *sock)
  * most SOCK_RECV_BUF_SIZE bytes; a longer payload is truncated. The source
  * address is recorded for a later recvfrom.
  */
-void socket_udp_deliver(struct socket *sock,
-                        uint32_t src_ip, uint16_t src_port,
+void socket_udp_deliver(struct socket *sock, uint32_t src_ip, uint16_t src_port,
                         const uint8_t *data, uint16_t len)
 {
     uint16_t copy_len = len;
@@ -221,9 +220,9 @@ void socket_udp_deliver(struct socket *sock,
     }
 
     k_memcpy(sock->recv_buf, data, copy_len);
-    sock->recv_len      = copy_len;
-    sock->recv_full     = 1;
-    sock->last_src_ip   = src_ip;
+    sock->recv_len = copy_len;
+    sock->recv_full = 1;
+    sock->last_src_ip = src_ip;
     sock->last_src_port = src_port;
 
     wq_wake_all(&sock->waiters);
@@ -252,9 +251,7 @@ static int tcp_recv_ready(void *arg)
     if (!tcb) {
         return 1; /* no control block: do not block, the caller reports the error */
     }
-    return (tcb->recv_tail - tcb->recv_head) != 0 ||
-           tcb->fin_received ||
-           tcb->state == TCP_CLOSED;
+    return (tcb->recv_tail - tcb->recv_head) != 0 || tcb->fin_received || tcb->state == TCP_CLOSED;
 }
 
 /**
@@ -303,8 +300,7 @@ int socket_dgram_pending(struct socket *sock)
  * it mid-copy, which would tear the payload. The caller prefaulted the user
  * buffer, so the copy cannot fault with interrupts off.
  */
-int socket_dgram_peek(struct socket *sock, uint32_t offset, uint8_t *buf,
-                      int len)
+int socket_dgram_peek(struct socket *sock, uint32_t offset, uint8_t *buf, int len)
 {
     int copy_len;
     uint32_t flags;
@@ -346,8 +342,7 @@ int socket_dgram_peek(struct socket *sock, uint32_t offset, uint8_t *buf,
  * Whatever of it a caller did not take is discarded here, which is what a
  * datagram read does: the message is the unit, and the next one is next.
  */
-void socket_dgram_consume(struct socket *sock, uint32_t *src_ip,
-                          uint16_t *src_port)
+void socket_dgram_consume(struct socket *sock, uint32_t *src_ip, uint16_t *src_port)
 {
     uint32_t flags;
 
@@ -385,7 +380,7 @@ void socket_dgram_consume(struct socket *sock, uint32_t *src_ip,
     if (src_port) {
         *src_port = sock->last_src_port;
     }
-    sock->recv_len  = 0;
+    sock->recv_len = 0;
     sock->recv_full = 0;
     net_unlock(flags);
 }
@@ -401,8 +396,7 @@ void socket_dgram_consume(struct socket *sock, uint32_t *src_ip,
  * @param src_port if non-NULL, receives the sender's port.
  * @return bytes copied, or a negative errno.
  */
-int socket_recv(struct socket *sock, uint8_t *buf, int len,
-                uint32_t *src_ip, uint16_t *src_port)
+int socket_recv(struct socket *sock, uint8_t *buf, int len, uint32_t *src_ip, uint16_t *src_port)
 {
     int copy_len;
     int rc;
@@ -434,8 +428,8 @@ int socket_recv(struct socket *sock, uint8_t *buf, int len,
  *
  * Same copy and source-address contract as socket_recv but never sleeps.
  */
-int socket_try_recv(struct socket *sock, uint8_t *buf, int len,
-                    uint32_t *src_ip, uint16_t *src_port)
+int socket_try_recv(struct socket *sock, uint8_t *buf, int len, uint32_t *src_ip,
+                    uint16_t *src_port)
 {
     int copy_len;
     uint32_t flags;
@@ -468,7 +462,8 @@ void socket_tcp_accept(struct socket *listen_sock, struct socket *conn_sock)
 {
     int next_tail;
 
-    if (!listen_sock || !conn_sock) return;
+    if (!listen_sock || !conn_sock)
+        return;
 
     next_tail = (listen_sock->accept_tail + 1) & (SOCK_ACCEPT_BACKLOG - 1);
     if (next_tail == listen_sock->accept_head) {
@@ -487,7 +482,8 @@ void socket_tcp_accept(struct socket *listen_sock, struct socket *conn_sock)
 
 void socket_tcp_connected(struct socket *sock)
 {
-    if (!sock) return;
+    if (!sock)
+        return;
 
     wq_wake_all(&sock->waiters);
 }
@@ -495,7 +491,8 @@ void socket_tcp_connected(struct socket *sock)
 /* Wake a writer or POLLOUT poller after an ACK frees send-ring space. */
 void socket_tcp_writable(struct socket *sock)
 {
-    if (!sock) return;
+    if (!sock)
+        return;
 
     wq_wake_all(&sock->waiters);
 }
@@ -505,7 +502,7 @@ void socket_tcp_writable(struct socket *sock)
 static int send_space_ready(void *arg)
 {
     struct socket *sock = (struct socket *)arg;
-    struct tcb    *tcb  = sock->tcb;
+    struct tcb *tcb = sock->tcb;
 
     if (!tcb || (tcb->state != TCP_ESTABLISHED && tcb->state != TCP_CLOSE_WAIT)) {
         return 1;
@@ -564,8 +561,8 @@ int socket_tcp_send(struct socket *sock, const uint8_t *buf, int len, int nonblo
             return sent; /* queued some, an error (< 0), or a 0-length request */
         }
         /* The ring is full and the request is nonzero. */
-        if (!sock->tcb || (sock->tcb->state != TCP_ESTABLISHED &&
-                           sock->tcb->state != TCP_CLOSE_WAIT)) {
+        if (!sock->tcb ||
+            (sock->tcb->state != TCP_ESTABLISHED && sock->tcb->state != TCP_CLOSE_WAIT)) {
             return tcp_dead_error(sock->tcb, -EPIPE);
         }
         if (nonblock) {
@@ -626,12 +623,14 @@ uint16_t socket_tcp_deliver(struct socket *sock, const uint8_t *data, uint16_t l
     struct tcb *tcb;
     uint32_t free_space, copy_len;
 
-    if (!sock || !sock->tcb) return 0;
+    if (!sock || !sock->tcb)
+        return 0;
     tcb = sock->tcb;
 
     free_space = TCP_RING_SIZE - (tcb->recv_tail - tcb->recv_head);
-    copy_len   = (uint32_t)len;
-    if (copy_len > free_space) copy_len = free_space;
+    copy_len = (uint32_t)len;
+    if (copy_len > free_space)
+        copy_len = free_space;
 
     recv_ring_put(tcb, tcb->recv_tail, data, copy_len);
     tcb->recv_tail += copy_len;
@@ -655,8 +654,10 @@ int socket_tcp_recv(struct socket *sock, uint8_t *buf, int len)
     uint32_t avail, copy_len;
     int rc;
 
-    if (!sock) return -1;
-    if (!sock->tcb) return sock->shut_down ? 0 : -ENOTCONN;
+    if (!sock)
+        return -1;
+    if (!sock->tcb)
+        return sock->shut_down ? 0 : -ENOTCONN;
 
     rc = wq_wait_event(&sock->waiters, tcp_recv_ready, sock);
     if (rc < 0) {
@@ -673,10 +674,12 @@ int socket_tcp_recv(struct socket *sock, uint8_t *buf, int len)
     if (avail == 0 && !tcb->fin_received && tcb->state == TCP_CLOSED) {
         return tcp_dead_error(tcb, -ECONNRESET); /* reset or closed with no data */
     }
-    if (avail == 0) return 0;   /* EOF (FIN, no buffered data) */
+    if (avail == 0)
+        return 0; /* EOF (FIN, no buffered data) */
 
     copy_len = avail;
-    if (copy_len > (uint32_t)len) copy_len = (uint32_t)len;
+    if (copy_len > (uint32_t)len)
+        copy_len = (uint32_t)len;
 
     recv_ring_get(buf, tcb, tcb->recv_head, copy_len);
     tcb->recv_head += copy_len;
@@ -698,19 +701,24 @@ int socket_tcp_try_recv(struct socket *sock, uint8_t *buf, int len)
     struct tcb *tcb;
     uint32_t avail, copy_len;
 
-    if (!sock) return -1;
-    if (!sock->tcb) return sock->shut_down ? 0 : -ENOTCONN;
+    if (!sock)
+        return -1;
+    if (!sock->tcb)
+        return sock->shut_down ? 0 : -ENOTCONN;
     tcb = sock->tcb;
 
     avail = tcb->recv_tail - tcb->recv_head;
     if (avail == 0) {
-        if (tcb->fin_received)        return 0;            /* EOF */
-        if (tcb->state == TCP_CLOSED) return tcp_dead_error(tcb, -ECONNRESET);
-        return SOCK_EAGAIN;                                /* no data yet */
+        if (tcb->fin_received)
+            return 0; /* EOF */
+        if (tcb->state == TCP_CLOSED)
+            return tcp_dead_error(tcb, -ECONNRESET);
+        return SOCK_EAGAIN; /* no data yet */
     }
 
     copy_len = avail;
-    if (copy_len > (uint32_t)len) copy_len = (uint32_t)len;
+    if (copy_len > (uint32_t)len)
+        copy_len = (uint32_t)len;
     recv_ring_get(buf, tcb, tcb->recv_head, copy_len);
     tcb->recv_head += copy_len;
 
@@ -720,7 +728,8 @@ int socket_tcp_try_recv(struct socket *sock, uint8_t *buf, int len)
 
 void socket_tcp_fin(struct socket *sock)
 {
-    if (!sock) return;
+    if (!sock)
+        return;
 
     wq_wake_all(&sock->waiters);
 }
@@ -761,9 +770,9 @@ short socket_poll(struct socket *sock, short events, struct wait_queue **wq)
            never touch `recv_full`, and this is the readiness their clients
            wait on: a DHCP client polls its socket and only then reads it, and
            so does `ping`. */
-        if (sock->family == AF_PACKET  ? packet_ready(sock)
-            : sock->type == SOCK_RAW   ? raw_ready(sock)
-                                       : sock->recv_full) {
+        if (sock->family == AF_PACKET ? packet_ready(sock)
+            : sock->type == SOCK_RAW  ? raw_ready(sock)
+                                      : sock->recv_full) {
             revents |= (short)(events & POLLIN);
         }
         revents |= (short)(events & POLLOUT); /* it can always send */

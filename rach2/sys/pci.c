@@ -354,7 +354,7 @@ void pci_enable_bus_master(pci_device_t *dev)
 void pci_disable_bus_master(pci_device_t *dev)
 {
     uint16_t cmd = pci_read_config16(dev->bus, dev->device, dev->function, PCI_COMMAND);
-    cmd &= (uint16_t) ~PCI_CMD_BUS_MASTER;
+    cmd &= (uint16_t)~PCI_CMD_BUS_MASTER;
     pci_write_config16(dev->bus, dev->device, dev->function, PCI_COMMAND, cmd);
 }
 

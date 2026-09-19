@@ -25,9 +25,8 @@
 #define PCI_SUBSYSTEM_VENDOR_ID 0x2C
 #define PCI_SUBSYSTEM_ID        0x2E
 
-
-#define PCI_CAP_ID_PM           0x01
-#define PCI_CAP_ID_MSI          0x05
+#define PCI_CAP_ID_PM  0x01
+#define PCI_CAP_ID_MSI 0x05
 
 /* PCI device info */
 static pci_device_t hda_pci;
@@ -52,13 +51,13 @@ static volatile bool dma_posbuf_use = false;
 /* Codec info */
 static uint8_t codec_addr = 0;
 static uint32_t codec_vendor_id = 0;
-static uint8_t audio_fg_nid = 0;        /* Audio function group node ID */
-static uint8_t dac_nid = 0;             /* DAC widget node ID */
-static uint8_t pin_nid = 0;             /* Output pin widget node ID */
-static uint8_t mixer_nid = 0;           /* Mixer widget in output path (if any) */
-static uint8_t hp_pin_nid = 0;          /* Headphone pin (for fallback) */
-static uint8_t hp_dac_nid = 0;          /* Headphone DAC */
-static uint8_t speaker_pin_nid = 0;     /* Speaker pin (for EAPD/BTL heuristics) */
+static uint8_t audio_fg_nid = 0;    /* Audio function group node ID */
+static uint8_t dac_nid = 0;         /* DAC widget node ID */
+static uint8_t pin_nid = 0;         /* Output pin widget node ID */
+static uint8_t mixer_nid = 0;       /* Mixer widget in output path (if any) */
+static uint8_t hp_pin_nid = 0;      /* Headphone pin (for fallback) */
+static uint8_t hp_dac_nid = 0;      /* Headphone DAC */
+static uint8_t speaker_pin_nid = 0; /* Speaker pin (for EAPD/BTL heuristics) */
 
 /* Output routing override (kernel debug). */
 #define HDA_OUTMODE_AUTO    0
@@ -76,7 +75,7 @@ static uint8_t pin_conn_sel_idx = 0;
 static uint8_t hp_conn_sel_idx = 0;
 
 /* Stream info */
-static uint16_t output_stream_index = 0;  /* Set during init based on GCAP */
+static uint16_t output_stream_index = 0; /* Set during init based on GCAP */
 static uint32_t stream_tag = 1;
 
 /* CORB/RIRB buffers (must be 128-byte aligned, volatile for DMA) */
@@ -93,13 +92,14 @@ static volatile uint16_t rirb_rp = 0;
  * period is large enough to tolerate occasional missed ticks. 16384 bytes
  * is about 85ms at 48kHz 16-bit stereo (4096 frames). Volatile for DMA.
  */
-#define HDA_BUFFER_SIZE     16384
-#define HDA_NUM_BUFFERS     2       /* Double-buffered like SB16 */
+#define HDA_BUFFER_SIZE 16384
+#define HDA_NUM_BUFFERS 2 /* Double-buffered like SB16 */
 static volatile hda_bdl_entry_t bdl[HDA_NUM_BUFFERS] __attribute__((aligned(1024)));
-static volatile uint8_t audio_buffer[HDA_BUFFER_SIZE * HDA_NUM_BUFFERS] __attribute__((aligned(128)));
+static volatile uint8_t audio_buffer[HDA_BUFFER_SIZE * HDA_NUM_BUFFERS]
+    __attribute__((aligned(128)));
 
 /* Ring buffer for the write() audio path (Doom). */
-#define HDA_RING_SIZE 8192  /* sized to tolerate bursty writes */
+#define HDA_RING_SIZE 8192 /* sized to tolerate bursty writes */
 static uint8_t hda_ring[HDA_RING_SIZE];
 static volatile uint32_t ring_read_ptr = 0;
 static volatile uint32_t ring_write_ptr = 0;
@@ -169,7 +169,7 @@ static uint32_t ring_write(const uint8_t *data, uint32_t count)
 
 /* Playback state */
 static bool playing = false;
-static bool stream_started = false;  /* True once hardware stream is running */
+static bool stream_started = false; /* True once hardware stream is running */
 static audio_callback_t user_callback = NULL;
 
 /* Requested format/rate from AUDIO_START (userspace). */
@@ -258,7 +258,7 @@ static void hda_dma_sync_range(const volatile void *addr, uint32_t size)
         end = (uintptr_t)addr + (uintptr_t)size;
         while (p < end) {
             /* clflush (%eax) as bytes 0f ae 38: tcc has no mnemonic for it. */
-            __asm__ __volatile__(".byte 0x0f, 0xae, 0x38" :: "a"(p) : "memory");
+            __asm__ __volatile__(".byte 0x0f, 0xae, 0x38" ::"a"(p) : "memory");
             p += line;
         }
         /* Full barrier (avoid SSE mfence). */
@@ -332,8 +332,8 @@ static void hda_trace_putc(char c)
         hda_trace_line[hda_trace_len] = '\0';
         /* Some fragments name the subsystem themselves, from when this went
            to the serial port unprefixed; the record already says it. */
-        if (hda_trace_len >= 5 && text[0] == 'H' && text[1] == 'D' &&
-            text[2] == 'A' && text[3] == ':' && text[4] == ' ') {
+        if (hda_trace_len >= 5 && text[0] == 'H' && text[1] == 'D' && text[2] == 'A' &&
+            text[3] == ':' && text[4] == ' ') {
             text += 5;
         }
         if (hda_trace_len > 0) {
@@ -453,10 +453,12 @@ static void ring_render_to_hw_buffer(int16_t *dest, uint32_t out_frames)
             sample16 = 0;
             underrun_samples += out_ch;
         } else if (current_format == AUDIO_S16LE) {
-            int16_t left = (int16_t)((uint16_t)hda_ring[rp] | ((uint16_t)hda_ring[(rp + 1) % HDA_RING_SIZE] << 8));
+            int16_t left = (int16_t)((uint16_t)hda_ring[rp] |
+                                     ((uint16_t)hda_ring[(rp + 1) % HDA_RING_SIZE] << 8));
             if (current_channels >= 2 && avail_bytes >= 4) {
                 uint32_t rp_r = (rp + 2) % HDA_RING_SIZE;
-                int16_t right = (int16_t)((uint16_t)hda_ring[rp_r] | ((uint16_t)hda_ring[(rp_r + 1) % HDA_RING_SIZE] << 8));
+                int16_t right = (int16_t)((uint16_t)hda_ring[rp_r] |
+                                          ((uint16_t)hda_ring[(rp_r + 1) % HDA_RING_SIZE] << 8));
                 sample16 = (int16_t)(((int32_t)left + (int32_t)right) / 2);
             } else {
                 sample16 = left;
@@ -582,7 +584,8 @@ static void hda_service_stream(void)
         hw_period_last = hw_period;
     }
 
-    current_buf = (HDA_BUFFER_SIZE != 0) ? ((int)(lpib_mod / HDA_BUFFER_SIZE) % HDA_NUM_BUFFERS) : 0;
+    current_buf =
+        (HDA_BUFFER_SIZE != 0) ? ((int)(lpib_mod / HDA_BUFFER_SIZE) % HDA_NUM_BUFFERS) : 0;
     next_buf = (current_buf + 1) % HDA_NUM_BUFFERS;
     next_buffer = audio_buffer + (next_buf * HDA_BUFFER_SIZE);
 
@@ -760,7 +763,7 @@ static void hda_delay_walclk_us(uint32_t us)
     /* 24 ticks per microsecond. */
     delta_ticks = us * 24u;
     start = hda_read32(HDA_WALCLK);
-    prev  = start;
+    prev = start;
     for (;;) {
         now = hda_read32(HDA_WALCLK);
         if ((uint32_t)(now - start) >= delta_ticks) {
@@ -773,11 +776,10 @@ static void hda_delay_walclk_us(uint32_t us)
             }
         } else {
             stalled = 0;
-            prev    = now;
+            prev = now;
         }
     }
 }
-
 
 /**
  * Force the controller into PCI power state D0.
@@ -814,7 +816,7 @@ static void hda_pci_force_d0(pci_device_t *dev)
     pci_write_config16(dev->bus, dev->device, dev->function, (uint8_t)(pmcap + 4), pmcsr);
 
     /* Give the device time to wake up */
-    hda_delay(200000);  /* ~200ms worst-case */
+    hda_delay(200000); /* ~200ms worst-case */
 
     pmcsr = pci_read_config16(dev->bus, dev->device, dev->function, (uint8_t)(pmcap + 4));
     hda_probe_log("HDA: PCI PMCSR now 0x%x (D%d)\n", pmcsr, (int)(pmcsr & 0x3));
@@ -866,13 +868,13 @@ static bool hda_reset(void)
         uint16_t sts;
 
         for (wait_count = 0; wait_count < 50; wait_count++) {
-            hda_delay(10000);  /* ~10ms per iteration, 500ms total max */
+            hda_delay(10000); /* ~10ms per iteration, 500ms total max */
             sts = hda_read16(HDA_STATESTS);
             if (sts != 0) {
                 break;
             }
         }
-        hda_delay(50000);  /* ~50ms settle */
+        hda_delay(50000); /* ~50ms settle */
     }
 
     return true;
@@ -898,7 +900,7 @@ static void hda_setup_corb(void)
     hda_write32(HDA_CORBLBASE, addr);
     hda_write32(HDA_CORBUBASE, 0);
 
-    hda_write8(HDA_CORBSIZE, 0x02);  /* 256 entries */
+    hda_write8(HDA_CORBSIZE, 0x02); /* 256 entries */
 
     /* Reset read pointer: set bit 15, wait for the controller to
      * acknowledge. */
@@ -918,7 +920,7 @@ static void hda_setup_corb(void)
     corb_wp = hda_read16(HDA_CORBRP) & 0xFF;
     hda_write16(HDA_CORBWP, corb_wp);
 
-    hda_write8(HDA_CORBCTL, 0x02);  /* CORBCTL.RUN */
+    hda_write8(HDA_CORBCTL, 0x02); /* CORBCTL.RUN */
 }
 
 /**
@@ -940,7 +942,7 @@ static void hda_setup_rirb(void)
     hda_write32(HDA_RIRBLBASE, addr);
     hda_write32(HDA_RIRBUBASE, 0);
 
-    hda_write8(HDA_RIRBSIZE, 0x02);  /* 256 entries */
+    hda_write8(HDA_RIRBSIZE, 0x02); /* 256 entries */
 
     /* Reset write pointer: set bit 15, wait for the controller to
      * acknowledge. */
@@ -952,9 +954,9 @@ static void hda_setup_rirb(void)
 
     rirb_rp = hda_read16(HDA_RIRBWP) & 0xFF;
 
-    hda_write16(HDA_RINTCNT, 1);  /* interrupt after 1 response */
+    hda_write16(HDA_RINTCNT, 1); /* interrupt after 1 response */
 
-    hda_write8(HDA_RIRBCTL, 0x02);  /* RIRBCTL.RUN */
+    hda_write8(HDA_RIRBCTL, 0x02); /* RIRBCTL.RUN */
 }
 
 /* Trace the first few verbs to the serial log; counts down to 0. */
@@ -990,11 +992,11 @@ static uint32_t hda_send_verb(uint8_t caddr, uint8_t nid, uint32_t verb)
         return 0;
     }
 
-    hda_write16(HDA_ICS, HDA_ICS_IRV);  /* IRV is write-1-to-clear */
+    hda_write16(HDA_ICS, HDA_ICS_IRV); /* IRV is write-1-to-clear */
 
     hda_write32(HDA_ICW, cmd);
 
-    hda_write16(HDA_ICS, HDA_ICS_ICB);  /* ICB starts the command */
+    hda_write16(HDA_ICS, HDA_ICS_ICB); /* ICB starts the command */
 
     timeout = 100000;
     while (timeout-- > 0) {
@@ -1112,8 +1114,7 @@ static bool is_hdmi_codec(uint32_t vendor_id)
 
     /* Intel HDMI codecs: vendor 0x8086, device 0x28xx or 0x29xx */
     if (vendor == 0x8086) {
-        if ((device >= 0x2800 && device < 0x2a00) ||
-            (device >= 0x2900 && device < 0x2b00)) {
+        if ((device >= 0x2800 && device < 0x2a00) || (device >= 0x2900 && device < 0x2b00)) {
             return true;
         }
     }
@@ -1151,11 +1152,11 @@ static bool hda_find_output(void)
     uint8_t start_nid, num_nodes;
     uint8_t fg_start, fg_count;
     uint8_t speaker_pin = 0, hp_pin = 0, line_out_pin = 0;
-    uint8_t fallback_pin = 0;  /* Any output-capable pin as fallback */
+    uint8_t fallback_pin = 0; /* Any output-capable pin as fallback */
     uint8_t first_dac = 0;
     uint8_t conn_list[16];
     int num_conn;
-    uint8_t analog_codec_addr = 0xFF;  /* Track preferred analog codec */
+    uint8_t analog_codec_addr = 0xFF; /* Track preferred analog codec */
     uint32_t analog_vendor = 0;
 
     statests = hda_read16(HDA_STATESTS);
@@ -1177,7 +1178,7 @@ static bool hda_find_output(void)
             vid = 0;
             for (retry = 0; retry < 3 && vid == 0; retry++) {
                 if (retry > 0) {
-                    hda_delay(50000);  /* 50ms between retries */
+                    hda_delay(50000); /* 50ms between retries */
                 }
                 vid = hda_send_verb(i, 0, HDA_VERB_GET_PARAM | HDA_PARAM_VENDOR_ID);
             }
@@ -1209,7 +1210,7 @@ static bool hda_find_output(void)
             if (statests & (1 << i)) {
                 uint32_t vid;
                 codec_addr = i;
-                hda_delay(100000);  /* Extra long delay */
+                hda_delay(100000); /* Extra long delay */
                 vid = hda_send_verb(i, 0, HDA_VERB_GET_PARAM | HDA_PARAM_VENDOR_ID);
                 if (vid != 0) {
                     analog_codec_addr = i;
@@ -1246,7 +1247,7 @@ static bool hda_find_output(void)
 
     for (i = 0; i < num_nodes; i++) {
         uint32_t func_type = hda_get_param(start_nid + i, HDA_PARAM_FUNC_GROUP);
-        if ((func_type & 0xFF) == 0x01) {  /* function group type 1 = audio */
+        if ((func_type & 0xFF) == 0x01) { /* function group type 1 = audio */
             audio_fg_nid = start_nid + i;
             break;
         }
@@ -1284,14 +1285,13 @@ static bool hda_find_output(void)
         if (widget_type == HDA_WIDGET_PIN) {
             uint32_t pin_caps = hda_get_param(nid, HDA_PARAM_PIN_CAPS);
 
-            if (pin_caps & 0x10) {  /* output capable */
-                uint32_t pin_cfg = hda_send_verb(codec_addr, nid,
-                                                  HDA_VERB_GET_CONFIG_DEF);
+            if (pin_caps & 0x10) { /* output capable */
+                uint32_t pin_cfg = hda_send_verb(codec_addr, nid, HDA_VERB_GET_CONFIG_DEF);
                 uint8_t def_dev = HDA_PIN_DEF_DEV(pin_cfg);
                 uint8_t port_conn = HDA_PIN_DEF_PORT(pin_cfg);
 
-                hda_probe_log("HDA: Pin 0x%x cfg=0x%x dev=%d port=%d\n",
-                              nid, pin_cfg, def_dev, port_conn);
+                hda_probe_log("HDA: Pin 0x%x cfg=0x%x dev=%d port=%d\n", nid, pin_cfg, def_dev,
+                              port_conn);
 
                 if (fallback_pin == 0) {
                     fallback_pin = nid;
@@ -1355,64 +1355,67 @@ static bool hda_find_output(void)
             pin_sel = 0;
         }
 
-	        /* Check each connection, but start with the selected one */
-	        for (pass = 0; pass < num_conn; pass++) {
-	            int idx;
+        /* Check each connection, but start with the selected one */
+        for (pass = 0; pass < num_conn; pass++) {
+            int idx;
 
-	            if (pass == 0) {
-	                idx = (int)pin_sel;
-	            } else {
-	                idx = pass - 1;
-	                if (idx >= (int)pin_sel) {
-	                    idx++;
-	                }
-	                if (idx >= num_conn) {
-	                    idx = (int)pin_sel;
-	                }
-	            }
-
-	            {
-	                uint8_t conn_nid = conn_list[idx];
-	            uint32_t caps = hda_get_param(conn_nid, HDA_PARAM_AUDIO_CAPS);
-            uint8_t wtype = (caps >> 20) & 0xF;
-
-            if (wtype == HDA_WIDGET_AUDIO_OUT) {
-                dac_nid = conn_nid;
-                pin_conn_sel_idx = (uint8_t)idx;
-                hda_probe_log("HDA: Pin connects directly to DAC 0x%x\n", dac_nid);
-                break;
-            } else if (wtype == HDA_WIDGET_AUDIO_MIX || wtype == HDA_WIDGET_AUDIO_SEL) {
-                uint8_t mix_conn[8];
-                int mix_num;
-                uint8_t mix_sel;
-
-                mixer_nid = conn_nid;
-                pin_conn_sel_idx = (uint8_t)idx;
-                hda_probe_log("HDA: Pin connects to mixer/sel 0x%x\n", mixer_nid);
-
-                mix_num = hda_get_connections(mixer_nid, mix_conn, 8);
-
-                /* Prefer currently selected source on selector widgets */
-                mix_sel = (uint8_t)(hda_send_verb(codec_addr, mixer_nid, HDA_VERB_GET_CONN_SEL) & 0xFF);
-                if (mix_sel < (uint8_t)mix_num) {
-                    uint32_t mcaps0 = hda_get_param(mix_conn[mix_sel], HDA_PARAM_AUDIO_CAPS);
-                    if (((mcaps0 >> 20) & 0xF) == HDA_WIDGET_AUDIO_OUT) {
-                        dac_nid = mix_conn[mix_sel];
-                        hda_probe_log("HDA: Mixer selected DAC 0x%x\n", dac_nid);
-                        break;
-                    }
+            if (pass == 0) {
+                idx = (int)pin_sel;
+            } else {
+                idx = pass - 1;
+                if (idx >= (int)pin_sel) {
+                    idx++;
                 }
-
-                for (j = 0; j < mix_num; j++) {
-                    uint32_t mcaps = hda_get_param(mix_conn[j], HDA_PARAM_AUDIO_CAPS);
-                    if (((mcaps >> 20) & 0xF) == HDA_WIDGET_AUDIO_OUT) {
-                        dac_nid = mix_conn[j];
-                        hda_probe_log("HDA: Mixer connects to DAC 0x%x\n", dac_nid);
-                        break;
-                    }
+                if (idx >= num_conn) {
+                    idx = (int)pin_sel;
                 }
-                if (dac_nid != 0) break;
             }
+
+            {
+                uint8_t conn_nid = conn_list[idx];
+                uint32_t caps = hda_get_param(conn_nid, HDA_PARAM_AUDIO_CAPS);
+                uint8_t wtype = (caps >> 20) & 0xF;
+
+                if (wtype == HDA_WIDGET_AUDIO_OUT) {
+                    dac_nid = conn_nid;
+                    pin_conn_sel_idx = (uint8_t)idx;
+                    hda_probe_log("HDA: Pin connects directly to DAC 0x%x\n", dac_nid);
+                    break;
+                } else if (wtype == HDA_WIDGET_AUDIO_MIX || wtype == HDA_WIDGET_AUDIO_SEL) {
+                    uint8_t mix_conn[8];
+                    int mix_num;
+                    uint8_t mix_sel;
+
+                    mixer_nid = conn_nid;
+                    pin_conn_sel_idx = (uint8_t)idx;
+                    hda_probe_log("HDA: Pin connects to mixer/sel 0x%x\n", mixer_nid);
+
+                    mix_num = hda_get_connections(mixer_nid, mix_conn, 8);
+
+                    /* Prefer currently selected source on selector widgets */
+                    mix_sel =
+                        (uint8_t)(hda_send_verb(codec_addr, mixer_nid, HDA_VERB_GET_CONN_SEL) &
+                                  0xFF);
+                    if (mix_sel < (uint8_t)mix_num) {
+                        uint32_t mcaps0 = hda_get_param(mix_conn[mix_sel], HDA_PARAM_AUDIO_CAPS);
+                        if (((mcaps0 >> 20) & 0xF) == HDA_WIDGET_AUDIO_OUT) {
+                            dac_nid = mix_conn[mix_sel];
+                            hda_probe_log("HDA: Mixer selected DAC 0x%x\n", dac_nid);
+                            break;
+                        }
+                    }
+
+                    for (j = 0; j < mix_num; j++) {
+                        uint32_t mcaps = hda_get_param(mix_conn[j], HDA_PARAM_AUDIO_CAPS);
+                        if (((mcaps >> 20) & 0xF) == HDA_WIDGET_AUDIO_OUT) {
+                            dac_nid = mix_conn[j];
+                            hda_probe_log("HDA: Mixer connects to DAC 0x%x\n", dac_nid);
+                            break;
+                        }
+                    }
+                    if (dac_nid != 0)
+                        break;
+                }
             }
         }
     }
@@ -1501,17 +1504,17 @@ static uint16_t hda_calc_format(uint32_t sample_rate, audio_format_t format, int
     /* Sample rate - find closest base/multiplier/divisor */
     /* Common rates: 8000, 11025, 16000, 22050, 44100, 48000 */
     if (sample_rate <= 8000) {
-        fmt |= HDA_FMT_BASE_48K | (0x05 << 8);  /* 48000 / 6 = 8000 */
+        fmt |= HDA_FMT_BASE_48K | (0x05 << 8); /* 48000 / 6 = 8000 */
     } else if (sample_rate <= 11025) {
-        fmt |= HDA_FMT_BASE_44K | (0x03 << 8);  /* 44100 / 4 = 11025 */
+        fmt |= HDA_FMT_BASE_44K | (0x03 << 8); /* 44100 / 4 = 11025 */
     } else if (sample_rate <= 16000) {
-        fmt |= HDA_FMT_BASE_48K | (0x02 << 8);  /* 48000 / 3 = 16000 */
+        fmt |= HDA_FMT_BASE_48K | (0x02 << 8); /* 48000 / 3 = 16000 */
     } else if (sample_rate <= 22050) {
-        fmt |= HDA_FMT_BASE_44K | (0x01 << 8);  /* 44100 / 2 = 22050 */
+        fmt |= HDA_FMT_BASE_44K | (0x01 << 8); /* 44100 / 2 = 22050 */
     } else if (sample_rate <= 44100) {
-        fmt |= HDA_FMT_BASE_44K;                 /* 44100 */
+        fmt |= HDA_FMT_BASE_44K; /* 44100 */
     } else {
-        fmt |= HDA_FMT_BASE_48K;                 /* 48000 */
+        fmt |= HDA_FMT_BASE_48K; /* 48000 */
     }
 
     return fmt;
@@ -1532,7 +1535,7 @@ static void hda_irq_handler(isr_params_t *params)
 
     intsts = hda_read32(HDA_INTSTS);
     if (!(intsts & (1 << output_stream_index))) {
-        return;  /* Not our interrupt */
+        return; /* Not our interrupt */
     }
 
     sd_sts = hda_read8(hda_sd_offset(output_stream_index) + HDA_SD_STS);
@@ -1556,7 +1559,7 @@ static void hda_irq_handler(isr_params_t *params)
  */
 static bool is_hdmi_controller(uint16_t vendor_id, uint16_t device_id)
 {
-    if (vendor_id == 0x8086) {  /* Intel */
+    if (vendor_id == 0x8086) { /* Intel */
         /* Intel HDMI audio device IDs:
          * 0x0a0c, 0x0c0c, 0x0d0c - Haswell
          * 0x160c - Broadwell
@@ -1572,7 +1575,7 @@ static bool is_hdmi_controller(uint16_t vendor_id, uint16_t device_id)
     /* Nvidia and AMD GPUs also have HDMI audio, but they have different
      * vendor IDs */
     if (vendor_id == 0x10de || vendor_id == 0x1002) {
-        return true;  /* Nvidia or AMD GPU audio */
+        return true; /* Nvidia or AMD GPU audio */
     }
     return false;
 }
@@ -1609,7 +1612,7 @@ static int hda_init(void)
 
         if (is_hdmi_controller(temp_pci.vendor_id, temp_pci.device_id)) {
             hda_probe_log(" (HDMI, skip)\n");
-            hda_pci = temp_pci;  /* Save for next skip */
+            hda_pci = temp_pci; /* Save for next skip */
             skip_dev = &hda_pci;
             continue;
         }
@@ -1637,9 +1640,8 @@ static int hda_init(void)
         while (pci_find_device_skip(PCI_CLASS_MULTIMEDIA, PCI_SUBCLASS_AUDIO, from, &other)) {
             if (other.bus != hda_pci.bus || other.device != hda_pci.device ||
                 other.function != hda_pci.function) {
-                klog(KLOG_INFO, "audio", "not driven: %x:%x at %02x:%02x.%d",
-                     (int)other.vendor_id, (int)other.device_id, (int)other.bus,
-                     (int)other.device, (int)other.function);
+                klog(KLOG_INFO, "audio", "not driven: %x:%x at %02x:%02x.%d", (int)other.vendor_id,
+                     (int)other.device_id, (int)other.bus, (int)other.device, (int)other.function);
             }
             seen = other;
             from = &seen;
@@ -1746,8 +1748,8 @@ static void hda_shutdown(void)
         hda_driver.stop();
     }
 
-    hda_write32(HDA_INTCTL, 0);  /* disable all interrupts */
-    hda_write32(HDA_GCTL, 0);    /* assert controller reset */
+    hda_write32(HDA_INTCTL, 0); /* disable all interrupts */
+    hda_write32(HDA_GCTL, 0);   /* assert controller reset */
 
     hda_base = NULL;
 }
@@ -1765,29 +1767,46 @@ static void hda_log(const char *format, ...)
 static const char *hda_widget_type_name(uint8_t type)
 {
     switch (type) {
-        case HDA_WIDGET_AUDIO_OUT: return "DAC";
-        case HDA_WIDGET_AUDIO_IN:  return "ADC";
-        case HDA_WIDGET_AUDIO_MIX: return "Mixer";
-        case HDA_WIDGET_AUDIO_SEL: return "Selector";
-        case HDA_WIDGET_PIN:       return "Pin";
-        case HDA_WIDGET_POWER:     return "Power";
-        case HDA_WIDGET_VOLUME:    return "Volume";
-        case HDA_WIDGET_BEEP:      return "Beep";
-        default:                   return "Unknown";
+    case HDA_WIDGET_AUDIO_OUT:
+        return "DAC";
+    case HDA_WIDGET_AUDIO_IN:
+        return "ADC";
+    case HDA_WIDGET_AUDIO_MIX:
+        return "Mixer";
+    case HDA_WIDGET_AUDIO_SEL:
+        return "Selector";
+    case HDA_WIDGET_PIN:
+        return "Pin";
+    case HDA_WIDGET_POWER:
+        return "Power";
+    case HDA_WIDGET_VOLUME:
+        return "Volume";
+    case HDA_WIDGET_BEEP:
+        return "Beep";
+    default:
+        return "Unknown";
     }
 }
 
 static const char *hda_pin_def_dev_name(uint8_t dev)
 {
     switch (dev) {
-        case HDA_DEF_DEV_LINE_OUT:  return "LineOut";
-        case HDA_DEF_DEV_SPEAKER:   return "Speaker";
-        case HDA_DEF_DEV_HP_OUT:    return "HP";
-        case HDA_DEF_DEV_SPDIF_OUT: return "SPDIF";
-        case HDA_DEF_DEV_DIG_OUT:   return "DigOut";
-        case HDA_DEF_DEV_LINE_IN:   return "LineIn";
-        case HDA_DEF_DEV_MIC_IN:    return "Mic";
-        default:                    return "Other";
+    case HDA_DEF_DEV_LINE_OUT:
+        return "LineOut";
+    case HDA_DEF_DEV_SPEAKER:
+        return "Speaker";
+    case HDA_DEF_DEV_HP_OUT:
+        return "HP";
+    case HDA_DEF_DEV_SPDIF_OUT:
+        return "SPDIF";
+    case HDA_DEF_DEV_DIG_OUT:
+        return "DigOut";
+    case HDA_DEF_DEV_LINE_IN:
+        return "LineIn";
+    case HDA_DEF_DEV_MIC_IN:
+        return "Mic";
+    default:
+        return "Other";
     }
 }
 
@@ -1798,30 +1817,50 @@ static void hda_dump_pcm_caps(uint8_t nid)
 
     hda_log("    PCM caps: 0x%x\n", pcm);
     hda_log("      rates:");
-    if (pcm & (1u << 0)) hda_log(" 8k");
-    if (pcm & (1u << 1)) hda_log(" 11k");
-    if (pcm & (1u << 2)) hda_log(" 16k");
-    if (pcm & (1u << 3)) hda_log(" 22k");
-    if (pcm & (1u << 4)) hda_log(" 32k");
-    if (pcm & (1u << 5)) hda_log(" 44k");
-    if (pcm & (1u << 6)) hda_log(" 48k");
-    if (pcm & (1u << 7)) hda_log(" 88k");
-    if (pcm & (1u << 8)) hda_log(" 96k");
-    if (pcm & (1u << 9)) hda_log(" 176k");
-    if (pcm & (1u << 10)) hda_log(" 192k");
-    if (pcm & (1u << 11)) hda_log(" 384k");
+    if (pcm & (1u << 0))
+        hda_log(" 8k");
+    if (pcm & (1u << 1))
+        hda_log(" 11k");
+    if (pcm & (1u << 2))
+        hda_log(" 16k");
+    if (pcm & (1u << 3))
+        hda_log(" 22k");
+    if (pcm & (1u << 4))
+        hda_log(" 32k");
+    if (pcm & (1u << 5))
+        hda_log(" 44k");
+    if (pcm & (1u << 6))
+        hda_log(" 48k");
+    if (pcm & (1u << 7))
+        hda_log(" 88k");
+    if (pcm & (1u << 8))
+        hda_log(" 96k");
+    if (pcm & (1u << 9))
+        hda_log(" 176k");
+    if (pcm & (1u << 10))
+        hda_log(" 192k");
+    if (pcm & (1u << 11))
+        hda_log(" 384k");
     hda_log("\n");
     hda_log("      bits:");
-    if (pcm & (1u << 16)) hda_log(" 8");
-    if (pcm & (1u << 17)) hda_log(" 16");
-    if (pcm & (1u << 18)) hda_log(" 20");
-    if (pcm & (1u << 19)) hda_log(" 24");
-    if (pcm & (1u << 20)) hda_log(" 32");
+    if (pcm & (1u << 16))
+        hda_log(" 8");
+    if (pcm & (1u << 17))
+        hda_log(" 16");
+    if (pcm & (1u << 18))
+        hda_log(" 20");
+    if (pcm & (1u << 19))
+        hda_log(" 24");
+    if (pcm & (1u << 20))
+        hda_log(" 32");
     hda_log("\n");
     hda_log("    Stream formats: 0x%x", fmt);
-    if (fmt & 0x1) hda_log(" PCM");
-    if (fmt & 0x2) hda_log(" FLOAT32");
-    if (fmt & 0x4) hda_log(" AC3");
+    if (fmt & 0x1)
+        hda_log(" PCM");
+    if (fmt & 0x2)
+        hda_log(" FLOAT32");
+    if (fmt & 0x4)
+        hda_log(" AC3");
     hda_log("\n");
 }
 
@@ -1855,19 +1894,45 @@ static bool hda_pcm_rate_supported(uint32_t pcm_caps, uint32_t rate)
     uint32_t bit = 0;
 
     switch (rate) {
-        case 8000:   bit = (1u << 0); break;
-        case 11025:  bit = (1u << 1); break;
-        case 16000:  bit = (1u << 2); break;
-        case 22050:  bit = (1u << 3); break;
-        case 32000:  bit = (1u << 4); break;
-        case 44100:  bit = (1u << 5); break;
-        case 48000:  bit = (1u << 6); break;
-        case 88200:  bit = (1u << 7); break;
-        case 96000:  bit = (1u << 8); break;
-        case 176400: bit = (1u << 9); break;
-        case 192000: bit = (1u << 10); break;
-        case 384000: bit = (1u << 11); break;
-        default:     bit = 0; break;
+    case 8000:
+        bit = (1u << 0);
+        break;
+    case 11025:
+        bit = (1u << 1);
+        break;
+    case 16000:
+        bit = (1u << 2);
+        break;
+    case 22050:
+        bit = (1u << 3);
+        break;
+    case 32000:
+        bit = (1u << 4);
+        break;
+    case 44100:
+        bit = (1u << 5);
+        break;
+    case 48000:
+        bit = (1u << 6);
+        break;
+    case 88200:
+        bit = (1u << 7);
+        break;
+    case 96000:
+        bit = (1u << 8);
+        break;
+    case 176400:
+        bit = (1u << 9);
+        break;
+    case 192000:
+        bit = (1u << 10);
+        break;
+    case 384000:
+        bit = (1u << 11);
+        break;
+    default:
+        bit = 0;
+        break;
     }
 
     if (bit == 0) {
@@ -1911,13 +1976,20 @@ static uint32_t hda_select_hw_rate(uint32_t req_rate)
     }
 
     /* Fall back to any supported rate (highest first). */
-    if (hda_pcm_rate_supported(pcm_caps, 192000)) return 192000;
-    if (hda_pcm_rate_supported(pcm_caps, 96000))  return 96000;
-    if (hda_pcm_rate_supported(pcm_caps, 32000))  return 32000;
-    if (hda_pcm_rate_supported(pcm_caps, 22050))  return 22050;
-    if (hda_pcm_rate_supported(pcm_caps, 16000))  return 16000;
-    if (hda_pcm_rate_supported(pcm_caps, 11025))  return 11025;
-    if (hda_pcm_rate_supported(pcm_caps, 8000))   return 8000;
+    if (hda_pcm_rate_supported(pcm_caps, 192000))
+        return 192000;
+    if (hda_pcm_rate_supported(pcm_caps, 96000))
+        return 96000;
+    if (hda_pcm_rate_supported(pcm_caps, 32000))
+        return 32000;
+    if (hda_pcm_rate_supported(pcm_caps, 22050))
+        return 22050;
+    if (hda_pcm_rate_supported(pcm_caps, 16000))
+        return 16000;
+    if (hda_pcm_rate_supported(pcm_caps, 11025))
+        return 11025;
+    if (hda_pcm_rate_supported(pcm_caps, 8000))
+        return 8000;
 
     return req_rate ? req_rate : 48000;
 }
@@ -1944,26 +2016,25 @@ void hda_debug_dump(void)
 
         cmd = pci_read_config16(hda_pci.bus, hda_pci.device, hda_pci.function, PCI_COMMAND);
         status = pci_read_config16(hda_pci.bus, hda_pci.device, hda_pci.function, PCI_STATUS);
-        subven = pci_read_config16(hda_pci.bus, hda_pci.device, hda_pci.function, PCI_SUBSYSTEM_VENDOR_ID);
+        subven = pci_read_config16(hda_pci.bus, hda_pci.device, hda_pci.function,
+                                   PCI_SUBSYSTEM_VENDOR_ID);
         subdev = pci_read_config16(hda_pci.bus, hda_pci.device, hda_pci.function, PCI_SUBSYSTEM_ID);
-        int_line = pci_read_config8(hda_pci.bus, hda_pci.device, hda_pci.function, PCI_INTERRUPT_LINE);
-        int_pin = pci_read_config8(hda_pci.bus, hda_pci.device, hda_pci.function, PCI_INTERRUPT_PIN);
+        int_line =
+            pci_read_config8(hda_pci.bus, hda_pci.device, hda_pci.function, PCI_INTERRUPT_LINE);
+        int_pin =
+            pci_read_config8(hda_pci.bus, hda_pci.device, hda_pci.function, PCI_INTERRUPT_PIN);
 
-        hda_log("  PCI: %x:%x.%d vid:did=%x:%x class=%x/%x prog=%x rev=%x\n",
-                hda_pci.bus, hda_pci.device, hda_pci.function,
-                hda_pci.vendor_id, hda_pci.device_id,
+        hda_log("  PCI: %x:%x.%d vid:did=%x:%x class=%x/%x prog=%x rev=%x\n", hda_pci.bus,
+                hda_pci.device, hda_pci.function, hda_pci.vendor_id, hda_pci.device_id,
                 hda_pci.class_code, hda_pci.subclass, hda_pci.prog_if, hda_pci.revision);
         hda_log("  PCI: irq line=%d pin=%d cmd=0x%x (io=%d mem=%d bm=%d intdis=%d) sts=0x%x\n",
-                int_line, int_pin, cmd,
-                (cmd & PCI_CMD_IO_SPACE) ? 1 : 0,
-                (cmd & PCI_CMD_MEMORY_SPACE) ? 1 : 0,
-                (cmd & PCI_CMD_BUS_MASTER) ? 1 : 0,
-                (cmd & PCI_CMD_INTERRUPT_DIS) ? 1 : 0,
-                status);
+                int_line, int_pin, cmd, (cmd & PCI_CMD_IO_SPACE) ? 1 : 0,
+                (cmd & PCI_CMD_MEMORY_SPACE) ? 1 : 0, (cmd & PCI_CMD_BUS_MASTER) ? 1 : 0,
+                (cmd & PCI_CMD_INTERRUPT_DIS) ? 1 : 0, status);
         hda_log("  PCI: ssid=%x:%x\n", subven, subdev);
         hda_log("  PCI: BAR0=0x%x BAR1=0x%x BAR2=0x%x BAR3=0x%x BAR4=0x%x BAR5=0x%x\n",
-                hda_pci.bar[0], hda_pci.bar[1], hda_pci.bar[2],
-                hda_pci.bar[3], hda_pci.bar[4], hda_pci.bar[5]);
+                hda_pci.bar[0], hda_pci.bar[1], hda_pci.bar[2], hda_pci.bar[3], hda_pci.bar[4],
+                hda_pci.bar[5]);
 
         if (status & PCI_STATUS_CAP_LIST) {
             cap_ptr = pci_read_config8(hda_pci.bus, hda_pci.device, hda_pci.function, PCI_CAP_PTR);
@@ -1973,22 +2044,29 @@ void hda_debug_dump(void)
             {
                 uint8_t off;
 
-                off = pci_find_capability(hda_pci.bus, hda_pci.device, hda_pci.function, PCI_CAP_ID_PM);
+                off = pci_find_capability(hda_pci.bus, hda_pci.device, hda_pci.function,
+                                          PCI_CAP_ID_PM);
                 if (off) {
-                    uint16_t pmcsr = pci_read_config16(hda_pci.bus, hda_pci.device, hda_pci.function, (uint8_t)(off + 4));
-                    hda_log("    PM:  cap@0x%x PMCSR=0x%x state=D%d\n", off, pmcsr, (int)(pmcsr & 0x3));
+                    uint16_t pmcsr = pci_read_config16(hda_pci.bus, hda_pci.device,
+                                                       hda_pci.function, (uint8_t)(off + 4));
+                    hda_log("    PM:  cap@0x%x PMCSR=0x%x state=D%d\n", off, pmcsr,
+                            (int)(pmcsr & 0x3));
                 }
 
-                off = pci_find_capability(hda_pci.bus, hda_pci.device, hda_pci.function, PCI_CAP_ID_MSI);
+                off = pci_find_capability(hda_pci.bus, hda_pci.device, hda_pci.function,
+                                          PCI_CAP_ID_MSI);
                 if (off) {
-                    uint16_t msi_ctl = pci_read_config16(hda_pci.bus, hda_pci.device, hda_pci.function, (uint8_t)(off + 2));
-                    hda_log("    MSI: cap@0x%x ctl=0x%x enabled=%d 64=%d\n",
-                            off, msi_ctl, (msi_ctl & 0x1) ? 1 : 0, (msi_ctl & 0x80) ? 1 : 0);
+                    uint16_t msi_ctl = pci_read_config16(hda_pci.bus, hda_pci.device,
+                                                         hda_pci.function, (uint8_t)(off + 2));
+                    hda_log("    MSI: cap@0x%x ctl=0x%x enabled=%d 64=%d\n", off, msi_ctl,
+                            (msi_ctl & 0x1) ? 1 : 0, (msi_ctl & 0x80) ? 1 : 0);
                 }
 
-                off = pci_find_capability(hda_pci.bus, hda_pci.device, hda_pci.function, PCI_CAP_ID_PCIE);
+                off = pci_find_capability(hda_pci.bus, hda_pci.device, hda_pci.function,
+                                          PCI_CAP_ID_PCIE);
                 if (off) {
-                    uint16_t pcie_flags = pci_read_config16(hda_pci.bus, hda_pci.device, hda_pci.function, (uint8_t)(off + 2));
+                    uint16_t pcie_flags = pci_read_config16(hda_pci.bus, hda_pci.device,
+                                                            hda_pci.function, (uint8_t)(off + 2));
                     hda_log("    PCIe: cap@0x%x flags=0x%x\n", off, pcie_flags);
                 }
             }
@@ -2014,82 +2092,66 @@ void hda_debug_dump(void)
     hda_log("  STATESTS: 0x%x\n", statests);
     hda_log("  INTCTL: 0x%x\n", intctl);
     hda_log("  INTSTS: 0x%x\n", intsts);
-    hda_log("  CORB: ctl=0x%x size=0x%x wp=0x%x rp=0x%x base=0x%x\n",
-             hda_read8(HDA_CORBCTL),
-             hda_read8(HDA_CORBSIZE),
-             hda_read16(HDA_CORBWP),
-             hda_read16(HDA_CORBRP),
-             hda_read32(HDA_CORBLBASE));
-    hda_log("  RIRB: ctl=0x%x size=0x%x wp=0x%x base=0x%x\n",
-             hda_read8(HDA_RIRBCTL),
-             hda_read8(HDA_RIRBSIZE),
-             hda_read16(HDA_RIRBWP),
-             hda_read32(HDA_RIRBLBASE));
+    hda_log("  CORB: ctl=0x%x size=0x%x wp=0x%x rp=0x%x base=0x%x\n", hda_read8(HDA_CORBCTL),
+            hda_read8(HDA_CORBSIZE), hda_read16(HDA_CORBWP), hda_read16(HDA_CORBRP),
+            hda_read32(HDA_CORBLBASE));
+    hda_log("  RIRB: ctl=0x%x size=0x%x wp=0x%x base=0x%x\n", hda_read8(HDA_RIRBCTL),
+            hda_read8(HDA_RIRBSIZE), hda_read16(HDA_RIRBWP), hda_read32(HDA_RIRBLBASE));
 
     hda_log("  Codec: addr=%d vendor=0x%x afg=0x%x\n", codec_addr, codec_vendor_id, audio_fg_nid);
     hda_log("  Path: pin=0x%x (idx=%d) dac=0x%x mixer=0x%x hp_pin=0x%x (idx=%d) hp_dac=0x%x\n",
-             pin_nid, pin_conn_sel_idx, dac_nid, mixer_nid,
-             hp_pin_nid, hp_conn_sel_idx, hp_dac_nid);
+            pin_nid, pin_conn_sel_idx, dac_nid, mixer_nid, hp_pin_nid, hp_conn_sel_idx, hp_dac_nid);
     hda_log("  Out mode: %d\n", (int)hda_output_mode);
     if (pin_nid != 0) {
         uint32_t sense = hda_send_verb(codec_addr, pin_nid, HDA_VERB_GET_PIN_SENSE);
-        uint8_t ctl = (uint8_t)(hda_send_verb(codec_addr, pin_nid, 0xF0700) & 0xFF); /* GET_PIN_WIDGET_CONTROL */
-        uint8_t eapd = (uint8_t)(hda_send_verb(codec_addr, pin_nid, 0xF0C00) & 0xFF); /* GET_EAPD_BTLENABLE */
+        uint8_t ctl = (uint8_t)(hda_send_verb(codec_addr, pin_nid, 0xF0700) &
+                                0xFF); /* GET_PIN_WIDGET_CONTROL */
+        uint8_t eapd =
+            (uint8_t)(hda_send_verb(codec_addr, pin_nid, 0xF0C00) & 0xFF); /* GET_EAPD_BTLENABLE */
         hda_log("  Out pin 0x%x: ctl=0x%x eapd=0x%x sense=0x%x\n", pin_nid, ctl, eapd, sense);
     }
     if (hp_pin_nid != 0 && hp_pin_nid != pin_nid) {
         uint32_t sense = hda_send_verb(codec_addr, hp_pin_nid, HDA_VERB_GET_PIN_SENSE);
-        uint8_t ctl = (uint8_t)(hda_send_verb(codec_addr, hp_pin_nid, 0xF0700) & 0xFF); /* GET_PIN_WIDGET_CONTROL */
-        uint8_t eapd = (uint8_t)(hda_send_verb(codec_addr, hp_pin_nid, 0xF0C00) & 0xFF); /* GET_EAPD_BTLENABLE */
+        uint8_t ctl = (uint8_t)(hda_send_verb(codec_addr, hp_pin_nid, 0xF0700) &
+                                0xFF); /* GET_PIN_WIDGET_CONTROL */
+        uint8_t eapd = (uint8_t)(hda_send_verb(codec_addr, hp_pin_nid, 0xF0C00) &
+                                 0xFF); /* GET_EAPD_BTLENABLE */
         hda_log("  HP  pin 0x%x: ctl=0x%x eapd=0x%x sense=0x%x\n", hp_pin_nid, ctl, eapd, sense);
     }
     hda_log("  State: playing=%d stream_started=%d irq=%d underruns=%d (%d samples)\n",
-             playing ? 1 : 0, stream_started ? 1 : 0,
-             irq_count, underrun_count, underrun_samples);
+            playing ? 1 : 0, stream_started ? 1 : 0, irq_count, underrun_count, underrun_samples);
     hda_log("  DMA: fills=%d wraps=%d lpib_last=%d\n", hw_fill_count, lpib_wraps, lpib_last);
-    hda_log("  Audio: req=%dHz fmt=%d ch=%d hw=%dHz fmt=%d ch=%d resample=%d step=0x%x frac=0x%x written=%d\n",
-             current_sample_rate,
-             (int)current_format,
-             current_channels,
-             current_hw_sample_rate,
-             (int)current_hw_format,
-             current_hw_channels,
-             resample_enabled ? 1 : 0,
-             resample_step_fp,
-             resample_frac_fp,
-             total_bytes_written);
+    hda_log("  Audio: req=%dHz fmt=%d ch=%d hw=%dHz fmt=%d ch=%d resample=%d step=0x%x frac=0x%x "
+            "written=%d\n",
+            current_sample_rate, (int)current_format, current_channels, current_hw_sample_rate,
+            (int)current_hw_format, current_hw_channels, resample_enabled ? 1 : 0, resample_step_fp,
+            resample_frac_fp, total_bytes_written);
     {
         uint32_t wal_now = hda_read32(HDA_WALCLK);
         uint32_t end = playing ? wal_now : walclk_end;
-        uint32_t delta = (end >= walclk_start) ? (end - walclk_start) : (end + (0xFFFFFFFFu - walclk_start) + 1u);
+        uint32_t delta = (end >= walclk_start) ? (end - walclk_start)
+                                               : (end + (0xFFFFFFFFu - walclk_start) + 1u);
         uint32_t ms = delta / 24000u; /* HDA wall clock is 24MHz */
         uint32_t bps = 0;
         if (ms != 0) {
             bps = (session_bytes_written / ms) * 1000;
         }
-        hda_log("  Session: %dms written=%d drop=%d ring_hi=%d bps=%d\n",
-                 ms,
-                 session_bytes_written,
-                 session_bytes_dropped,
-                 ring_high_water,
-                 bps);
+        hda_log("  Session: %dms written=%d drop=%d ring_hi=%d bps=%d\n", ms, session_bytes_written,
+                session_bytes_dropped, ring_high_water, bps);
     }
     hda_log("  Render: out_s16 min=%d max=%d\n", (int)out_min_s16, (int)out_max_s16);
     hda_log("  Ring: avail=%d free=%d\n", ring_available(), ring_free());
 
     stream = (int)output_stream_index;
     hda_log("  Stream index: %d (tag=%d)\n", stream, stream_tag);
-    hda_log("    CTL=0x%x STS=0x%x FMT=0x%x\n",
-             hda_sd_read32(stream, HDA_SD_CTL),
-             (uint32_t)hda_read8(hda_sd_offset(stream) + HDA_SD_STS),
-             (uint32_t)hda_read16(hda_sd_offset(stream) + HDA_SD_FORMAT));
-    hda_log("    CBL=%d LVI=%d LPIB=%d\n",
-             hda_sd_read32(stream, HDA_SD_CBL),
-             (uint32_t)hda_read16(hda_sd_offset(stream) + HDA_SD_LVI),
-             hda_sd_read32(stream, HDA_SD_LPIB));
-    hda_log("    BDL: BDPL=0x%x BDPU=0x%x\n",
-             hda_sd_read32(stream, HDA_SD_BDPL),
-             hda_sd_read32(stream, HDA_SD_BDPU));
+    hda_log("    CTL=0x%x STS=0x%x FMT=0x%x\n", hda_sd_read32(stream, HDA_SD_CTL),
+            (uint32_t)hda_read8(hda_sd_offset(stream) + HDA_SD_STS),
+            (uint32_t)hda_read16(hda_sd_offset(stream) + HDA_SD_FORMAT));
+    hda_log("    CBL=%d LVI=%d LPIB=%d\n", hda_sd_read32(stream, HDA_SD_CBL),
+            (uint32_t)hda_read16(hda_sd_offset(stream) + HDA_SD_LVI),
+            hda_sd_read32(stream, HDA_SD_LPIB));
+    hda_log("    BDL: BDPL=0x%x BDPU=0x%x\n", hda_sd_read32(stream, HDA_SD_BDPL),
+            hda_sd_read32(stream, HDA_SD_BDPU));
 }
 
 /**
@@ -2108,11 +2170,9 @@ void hda_debug_dump_codec(void)
     }
 
     hda_log("  Codec %d vendor=0x%x\n", codec_addr, codec_vendor_id);
-    hda_log("  AFG 0x%x widgets [%x..%x] (%d)\n",
-             audio_fg_nid,
-             afg_widget_start,
-             (uint8_t)(afg_widget_start + (afg_widget_count ? (afg_widget_count - 1) : 0)),
-             afg_widget_count);
+    hda_log("  AFG 0x%x widgets [%x..%x] (%d)\n", audio_fg_nid, afg_widget_start,
+            (uint8_t)(afg_widget_start + (afg_widget_count ? (afg_widget_count - 1) : 0)),
+            afg_widget_count);
 
     if (dac_nid) {
         uint32_t wcap = hda_get_param(dac_nid, HDA_PARAM_AUDIO_CAPS);
@@ -2123,8 +2183,8 @@ void hda_debug_dump_codec(void)
     if (mixer_nid) {
         uint32_t wcap = hda_get_param(mixer_nid, HDA_PARAM_AUDIO_CAPS);
         uint8_t sel = (uint8_t)(hda_send_verb(codec_addr, mixer_nid, HDA_VERB_GET_CONN_SEL) & 0xFF);
-        hda_log("  MIX 0x%x wcap=0x%x type=%s sel=%d\n",
-                 mixer_nid, wcap, hda_widget_type_name((wcap >> 20) & 0xF), sel);
+        hda_log("  MIX 0x%x wcap=0x%x type=%s sel=%d\n", mixer_nid, wcap,
+                hda_widget_type_name((wcap >> 20) & 0xF), sel);
         hda_log("    AMP in caps:  0x%x\n", hda_get_param(mixer_nid, 0x0D));
         hda_log("    AMP out caps: 0x%x\n", hda_get_param(mixer_nid, HDA_PARAM_OUTPUT_AMP));
     }
@@ -2143,21 +2203,22 @@ void hda_debug_dump_codec(void)
             uint32_t cfg = hda_send_verb(codec_addr, nid, HDA_VERB_GET_CONFIG_DEF);
             uint8_t dev = HDA_PIN_DEF_DEV(cfg);
             uint8_t port = HDA_PIN_DEF_PORT(cfg);
-            uint8_t conn_sel = (uint8_t)(hda_send_verb(codec_addr, nid, HDA_VERB_GET_CONN_SEL) & 0xFF);
+            uint8_t conn_sel =
+                (uint8_t)(hda_send_verb(codec_addr, nid, HDA_VERB_GET_CONN_SEL) & 0xFF);
             uint32_t conn_param = hda_get_param(nid, HDA_PARAM_CONN_LIST);
-            uint8_t pin_ctl = (uint8_t)(hda_send_verb(codec_addr, nid, 0xF0700) & 0xFF); /* GET_PIN_WIDGET_CONTROL */
-            uint8_t eapd = (uint8_t)(hda_send_verb(codec_addr, nid, 0xF0C00) & 0xFF);    /* GET_EAPD_BTLENABLE */
+            uint8_t pin_ctl = (uint8_t)(hda_send_verb(codec_addr, nid, 0xF0700) &
+                                        0xFF); /* GET_PIN_WIDGET_CONTROL */
+            uint8_t eapd =
+                (uint8_t)(hda_send_verb(codec_addr, nid, 0xF0C00) & 0xFF); /* GET_EAPD_BTLENABLE */
             uint8_t conn_list[16];
             int conn_num;
             int i;
 
             hda_log("  Pin 0x%x wcap=0x%x caps=0x%x cfg=0x%x dev=%s port=%d ctl=0x%x eapd=0x%x\n",
-                     nid, wcap, pin_caps, cfg, hda_pin_def_dev_name(dev), port, pin_ctl, eapd);
+                    nid, wcap, pin_caps, cfg, hda_pin_def_dev_name(dev), port, pin_ctl, eapd);
 
-            hda_log("    Conn: len=%d long=%d sel=%d\n",
-                     (int)(conn_param & 0x7F),
-                     (int)((conn_param >> 7) & 0x1),
-                     (int)conn_sel);
+            hda_log("    Conn: len=%d long=%d sel=%d\n", (int)(conn_param & 0x7F),
+                    (int)((conn_param >> 7) & 0x1), (int)conn_sel);
 
             conn_num = hda_get_connections(nid, conn_list, 16);
             if (conn_num > 0) {
@@ -2200,22 +2261,20 @@ void hda_debug_dump_pins(void)
 
     hda_log("  mode=%d (0=auto 1=primary 2=hp 3=both)\n", (int)hda_output_mode);
     hda_log("  dma: fills=%d wraps=%d lpib_last=%d\n", hw_fill_count, lpib_wraps, lpib_last);
-    hda_log("  path: out_pin=0x%x dac=0x%x hp_pin=0x%x hp_dac=0x%x\n",
-             pin_nid, dac_nid, hp_pin_nid, hp_dac_nid);
+    hda_log("  path: out_pin=0x%x dac=0x%x hp_pin=0x%x hp_dac=0x%x\n", pin_nid, dac_nid, hp_pin_nid,
+            hp_dac_nid);
 
     if (pin_nid != 0) {
         out_sense = hda_send_verb(codec_addr, pin_nid, HDA_VERB_GET_PIN_SENSE);
-        out_ctl = (uint8_t)(hda_send_verb(codec_addr, pin_nid, 0xF0700) & 0xFF); /* GET_PIN_WIDGET_CONTROL */
-        out_eapd = (uint8_t)(hda_send_verb(codec_addr, pin_nid, 0xF0C00) & 0xFF); /* GET_EAPD_BTLENABLE */
+        out_ctl = (uint8_t)(hda_send_verb(codec_addr, pin_nid, 0xF0700) &
+                            0xFF); /* GET_PIN_WIDGET_CONTROL */
+        out_eapd =
+            (uint8_t)(hda_send_verb(codec_addr, pin_nid, 0xF0C00) & 0xFF); /* GET_EAPD_BTLENABLE */
         out_sel = (uint8_t)(hda_send_verb(codec_addr, pin_nid, HDA_VERB_GET_CONN_SEL) & 0xFF);
         conn_num = hda_get_connections(pin_nid, conn_list, 16);
-        hda_log("  out 0x%x: sel=%d ctl=0x%x eapd=0x%x sense=0x%x present=%d\n",
-                 pin_nid,
-                 (int)out_sel,
-                 (uint32_t)out_ctl,
-                 (uint32_t)out_eapd,
-                 out_sense,
-                 (out_sense & 0x80000000u) ? 1 : 0);
+        hda_log("  out 0x%x: sel=%d ctl=0x%x eapd=0x%x sense=0x%x present=%d\n", pin_nid,
+                (int)out_sel, (uint32_t)out_ctl, (uint32_t)out_eapd, out_sense,
+                (out_sense & 0x80000000u) ? 1 : 0);
         if (conn_num > 0 && out_sel < (uint8_t)conn_num) {
             hda_log("    sel_nid=0x%x (of %d)\n", conn_list[out_sel], conn_num);
         }
@@ -2223,17 +2282,15 @@ void hda_debug_dump_pins(void)
 
     if (hp_pin_nid != 0 && hp_pin_nid != pin_nid) {
         hp_sense = hda_send_verb(codec_addr, hp_pin_nid, HDA_VERB_GET_PIN_SENSE);
-        hp_ctl = (uint8_t)(hda_send_verb(codec_addr, hp_pin_nid, 0xF0700) & 0xFF); /* GET_PIN_WIDGET_CONTROL */
-        hp_eapd = (uint8_t)(hda_send_verb(codec_addr, hp_pin_nid, 0xF0C00) & 0xFF); /* GET_EAPD_BTLENABLE */
+        hp_ctl = (uint8_t)(hda_send_verb(codec_addr, hp_pin_nid, 0xF0700) &
+                           0xFF); /* GET_PIN_WIDGET_CONTROL */
+        hp_eapd = (uint8_t)(hda_send_verb(codec_addr, hp_pin_nid, 0xF0C00) &
+                            0xFF); /* GET_EAPD_BTLENABLE */
         hp_sel = (uint8_t)(hda_send_verb(codec_addr, hp_pin_nid, HDA_VERB_GET_CONN_SEL) & 0xFF);
         conn_num = hda_get_connections(hp_pin_nid, conn_list, 16);
-        hda_log("  hp  0x%x: sel=%d ctl=0x%x eapd=0x%x sense=0x%x present=%d\n",
-                 hp_pin_nid,
-                 (int)hp_sel,
-                 (uint32_t)hp_ctl,
-                 (uint32_t)hp_eapd,
-                 hp_sense,
-                 (hp_sense & 0x80000000u) ? 1 : 0);
+        hda_log("  hp  0x%x: sel=%d ctl=0x%x eapd=0x%x sense=0x%x present=%d\n", hp_pin_nid,
+                (int)hp_sel, (uint32_t)hp_ctl, (uint32_t)hp_eapd, hp_sense,
+                (hp_sense & 0x80000000u) ? 1 : 0);
         if (conn_num > 0 && hp_sel < (uint8_t)conn_num) {
             hda_log("    sel_nid=0x%x (of %d)\n", conn_list[hp_sel], conn_num);
         }
@@ -2278,32 +2335,21 @@ void hda_debug_dump_stats(void)
 
     wal_now = hda_read32(HDA_WALCLK);
     end = playing ? wal_now : walclk_end;
-    delta = (end >= walclk_start) ? (end - walclk_start) : (end + (0xFFFFFFFFu - walclk_start) + 1u);
+    delta =
+        (end >= walclk_start) ? (end - walclk_start) : (end + (0xFFFFFFFFu - walclk_start) + 1u);
     ms = delta / 24000u; /* HDA wall clock is 24MHz */
     bps = 0;
     if (ms != 0) {
         bps = (session_bytes_written / ms) * 1000u;
     }
 
-    hda_log("  posbuf: enabled=%d use=%d pos=%d lpib=%d cbl=%d\n",
-            dma_posbuf_enabled ? 1 : 0,
-            dma_posbuf_use ? 1 : 0,
-            pos,
-            lpib,
-            cbl);
+    hda_log("  posbuf: enabled=%d use=%d pos=%d lpib=%d cbl=%d\n", dma_posbuf_enabled ? 1 : 0,
+            dma_posbuf_use ? 1 : 0, pos, lpib, cbl);
     hda_log("  state: playing=%d stream_started=%d irq=%d underruns=%d (%d samples)\n",
-            playing ? 1 : 0,
-            stream_started ? 1 : 0,
-            irq_count,
-            underrun_count,
-            underrun_samples);
+            playing ? 1 : 0, stream_started ? 1 : 0, irq_count, underrun_count, underrun_samples);
     hda_log("  dma: fills=%d wraps=%d lpib_last=%d\n", hw_fill_count, lpib_wraps, lpib_last);
-    hda_log("  session: %dms written=%d drop=%d ring_hi=%d bps=%d\n",
-            ms,
-            session_bytes_written,
-            session_bytes_dropped,
-            ring_high_water,
-            bps);
+    hda_log("  session: %dms written=%d drop=%d ring_hi=%d bps=%d\n", ms, session_bytes_written,
+            session_bytes_dropped, ring_high_water, bps);
     hda_log("  render: out_s16 min=%d max=%d\n", (int)out_min_s16, (int)out_max_s16);
     hda_log("  ring: avail=%d free=%d\n", ring_available(), ring_free());
     hda_log("  stream: ctl=0x%x sts=0x%x fmt=0x%x\n", ctl, (uint32_t)sts, (uint32_t)fmt);
@@ -2436,7 +2482,7 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
         bdl[i].addr_low = buf_addr + (i * HDA_BUFFER_SIZE);
         bdl[i].addr_high = 0;
         bdl[i].length = HDA_BUFFER_SIZE;
-        bdl[i].ioc = 1;  /* interrupt on completion */
+        bdl[i].ioc = 1; /* interrupt on completion */
     }
 
     if (user_callback) {
@@ -2457,8 +2503,7 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
     hda_sd_write16(stream, HDA_SD_LVI, HDA_NUM_BUFFERS - 1);
     hda_sd_write16(stream, HDA_SD_FORMAT, fmt);
 
-    hda_sd_write32(stream, HDA_SD_CTL,
-                   (stream_tag << 20) | HDA_SD_CTL_IOCE);
+    hda_sd_write32(stream, HDA_SD_CTL, (stream_tag << 20) | HDA_SD_CTL_IOCE);
 
     /* Configure the codec path in order: AFG power, DAC, [mixer], pin, EAPD. */
 
@@ -2674,7 +2719,8 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
             hda_send_verb(codec_addr, hp_pin_nid, HDA_VERB_SET_POWER | 0x00);
             /* Read current BIOS-selected connection and keep it for
              * Conexant. */
-            hp_conn_sel = (uint8_t)(hda_send_verb(codec_addr, hp_pin_nid, HDA_VERB_GET_CONN_SEL) & 0xFF);
+            hp_conn_sel =
+                (uint8_t)(hda_send_verb(codec_addr, hp_pin_nid, HDA_VERB_GET_CONN_SEL) & 0xFF);
             {
                 uint8_t hp_conn[16];
                 int hp_num;
@@ -2709,7 +2755,8 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
                 uint8_t max_gain_in = hda_get_in_amp_max(hp_pin_nid);
                 uint8_t gain_in = (max_gain_in != 0) ? max_gain_in : 0x7F;
                 hda_send_verb(codec_addr, hp_pin_nid,
-                              HDA_VERB_SET_AMP_GAIN | 0x7000 | ((uint32_t)hp_conn_sel << 8) | gain_in);
+                              HDA_VERB_SET_AMP_GAIN | 0x7000 | ((uint32_t)hp_conn_sel << 8) |
+                                  gain_in);
             }
             if (hp_wcap & 0x04) { /* AC_WCAP_OUT_AMP */
                 uint8_t max_gain_out = hda_get_out_amp_max(hp_pin_nid);
@@ -2775,7 +2822,8 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
             }
         }
 
-        hda_log("  DMA: LPIB %d->%d STS 0x%x->0x%x\n", lpib0, lpib1, (uint32_t)sts0, (uint32_t)sts1);
+        hda_log("  DMA: LPIB %d->%d STS 0x%x->0x%x\n", lpib0, lpib1, (uint32_t)sts0,
+                (uint32_t)sts1);
         if (lpib1 == lpib0) {
             hda_log("  DMA: WARNING: LPIB did not move (PCI BM/D0/IOMMU/BDL?)\n");
         }
@@ -2886,8 +2934,10 @@ static void hda_set_volume(int volume)
     uint32_t amp;
     uint8_t mute;
 
-    if (volume < 0) volume = 0;
-    if (volume > 100) volume = 100;
+    if (volume < 0)
+        volume = 0;
+    if (volume > 100)
+        volume = 100;
 
     mute = (volume == 0) ? 0x80 : 0x00;
 
@@ -2896,9 +2946,11 @@ static void hda_set_volume(int volume)
         uint32_t wcap = hda_get_param(dac_nid, HDA_PARAM_AUDIO_CAPS);
         if (wcap & 0x04) { /* AC_WCAP_OUT_AMP */
             uint8_t max_gain = hda_get_out_amp_max(dac_nid);
-            uint8_t gain = (max_gain != 0) ? (uint8_t)((volume * (int)max_gain) / 100) : (uint8_t)((volume * 127) / 100);
+            uint8_t gain = (max_gain != 0) ? (uint8_t)((volume * (int)max_gain) / 100)
+                                           : (uint8_t)((volume * 127) / 100);
             gain = hda_clamp_gain(gain, max_gain);
-            hda_send_verb(codec_addr, dac_nid, HDA_VERB_SET_AMP_GAIN | 0xB000 | (uint32_t)(mute | gain));
+            hda_send_verb(codec_addr, dac_nid,
+                          HDA_VERB_SET_AMP_GAIN | 0xB000 | (uint32_t)(mute | gain));
         }
     }
 
@@ -2907,15 +2959,19 @@ static void hda_set_volume(int volume)
         uint32_t wcap = hda_get_param(mixer_nid, HDA_PARAM_AUDIO_CAPS);
         if (wcap & 0x02) { /* AC_WCAP_IN_AMP */
             uint8_t max_gain = hda_get_in_amp_max(mixer_nid);
-            uint8_t gain = (max_gain != 0) ? (uint8_t)((volume * (int)max_gain) / 100) : (uint8_t)((volume * 127) / 100);
+            uint8_t gain = (max_gain != 0) ? (uint8_t)((volume * (int)max_gain) / 100)
+                                           : (uint8_t)((volume * 127) / 100);
             gain = hda_clamp_gain(gain, max_gain);
-            hda_send_verb(codec_addr, mixer_nid, HDA_VERB_SET_AMP_GAIN | 0x7000 | (uint32_t)(mute | gain));
+            hda_send_verb(codec_addr, mixer_nid,
+                          HDA_VERB_SET_AMP_GAIN | 0x7000 | (uint32_t)(mute | gain));
         }
         if (wcap & 0x04) { /* AC_WCAP_OUT_AMP */
             uint8_t max_gain = hda_get_out_amp_max(mixer_nid);
-            uint8_t gain = (max_gain != 0) ? (uint8_t)((volume * (int)max_gain) / 100) : (uint8_t)((volume * 127) / 100);
+            uint8_t gain = (max_gain != 0) ? (uint8_t)((volume * (int)max_gain) / 100)
+                                           : (uint8_t)((volume * 127) / 100);
             gain = hda_clamp_gain(gain, max_gain);
-            hda_send_verb(codec_addr, mixer_nid, HDA_VERB_SET_AMP_GAIN | 0xB000 | (uint32_t)(mute | gain));
+            hda_send_verb(codec_addr, mixer_nid,
+                          HDA_VERB_SET_AMP_GAIN | 0xB000 | (uint32_t)(mute | gain));
         }
     }
 
@@ -2924,7 +2980,8 @@ static void hda_set_volume(int volume)
         uint32_t wcap = hda_get_param(pin_nid, HDA_PARAM_AUDIO_CAPS);
         if (wcap & 0x04) { /* AC_WCAP_OUT_AMP */
             uint8_t max_gain = hda_get_out_amp_max(pin_nid);
-            uint8_t gain = (max_gain != 0) ? (uint8_t)((volume * (int)max_gain) / 100) : (uint8_t)((volume * 127) / 100);
+            uint8_t gain = (max_gain != 0) ? (uint8_t)((volume * (int)max_gain) / 100)
+                                           : (uint8_t)((volume * 127) / 100);
             gain = hda_clamp_gain(gain, max_gain);
             amp = 0xB000 | (uint32_t)(mute | gain);
             if (((codec_vendor_id >> 16) & 0xFFFF) == 0x14f1) {
@@ -2939,16 +2996,19 @@ static void hda_set_volume(int volume)
         uint32_t wcap = hda_get_param(hp_dac_nid, HDA_PARAM_AUDIO_CAPS);
         if (wcap & 0x04) { /* AC_WCAP_OUT_AMP */
             uint8_t max_gain = hda_get_out_amp_max(hp_dac_nid);
-            uint8_t gain = (max_gain != 0) ? (uint8_t)((volume * (int)max_gain) / 100) : (uint8_t)((volume * 127) / 100);
+            uint8_t gain = (max_gain != 0) ? (uint8_t)((volume * (int)max_gain) / 100)
+                                           : (uint8_t)((volume * 127) / 100);
             gain = hda_clamp_gain(gain, max_gain);
-            hda_send_verb(codec_addr, hp_dac_nid, HDA_VERB_SET_AMP_GAIN | 0xB000 | (uint32_t)(mute | gain));
+            hda_send_verb(codec_addr, hp_dac_nid,
+                          HDA_VERB_SET_AMP_GAIN | 0xB000 | (uint32_t)(mute | gain));
         }
     }
     if (hp_pin_nid != 0 && hp_pin_nid != pin_nid) {
         uint32_t wcap = hda_get_param(hp_pin_nid, HDA_PARAM_AUDIO_CAPS);
         if (wcap & 0x04) { /* AC_WCAP_OUT_AMP */
             uint8_t max_gain = hda_get_out_amp_max(hp_pin_nid);
-            uint8_t gain = (max_gain != 0) ? (uint8_t)((volume * (int)max_gain) / 100) : (uint8_t)((volume * 127) / 100);
+            uint8_t gain = (max_gain != 0) ? (uint8_t)((volume * (int)max_gain) / 100)
+                                           : (uint8_t)((volume * 127) / 100);
             gain = hda_clamp_gain(gain, max_gain);
             amp = 0xB000 | (uint32_t)(mute | gain);
             if (((codec_vendor_id >> 16) & 0xFFFF) == 0x14f1) {
@@ -2960,15 +3020,13 @@ static void hda_set_volume(int volume)
 }
 
 /* Dispatch table registered with the audio subsystem. */
-audio_driver_t hda_driver = {
-    .name = "Intel HD Audio",
-    .type = AUDIO_DRIVER_HDA,
-    .init = hda_init,
-    .shutdown = hda_shutdown,
-    .start = hda_start,
-    .stop = hda_stop,
-    .is_playing = hda_is_playing,
-    .set_callback = hda_set_callback,
-    .write = hda_write,
-    .set_volume = hda_set_volume
-};
+audio_driver_t hda_driver = {.name = "Intel HD Audio",
+                             .type = AUDIO_DRIVER_HDA,
+                             .init = hda_init,
+                             .shutdown = hda_shutdown,
+                             .start = hda_start,
+                             .stop = hda_stop,
+                             .is_playing = hda_is_playing,
+                             .set_callback = hda_set_callback,
+                             .write = hda_write,
+                             .set_volume = hda_set_volume};

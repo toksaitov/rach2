@@ -501,7 +501,6 @@ static uint32_t classful_mask(uint32_t ip)
     return 0xFFFFFF00u;
 }
 
-
 /*
  * Whether `nd` is the interface whose configuration is also the machine's.
  *

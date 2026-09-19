@@ -22,9 +22,9 @@
    one record from the heap per bound socket, on a list. */
 typedef struct udp_binding {
     struct udp_binding *next;
-    uint16_t       port;
+    uint16_t port;
     struct socket *sock;
-    uint32_t       owner;  /* the effective uid that bound it */
+    uint32_t owner; /* the effective uid that bound it */
 } udp_binding_t;
 
 static udp_binding_t *bindings;
@@ -75,8 +75,7 @@ int udp_bind(uint16_t port, struct socket *sock)
         int shared = sock && sock->reuseaddr;
 
         for (b = bindings; shared && b; b = b->next) {
-            if (b->port == port &&
-                (!b->sock || !b->sock->reuseaddr || b->owner != uid)) {
+            if (b->port == port && (!b->sock || !b->sock->reuseaddr || b->owner != uid)) {
                 shared = 0;
             }
         }
@@ -90,14 +89,13 @@ int udp_bind(uint16_t port, struct socket *sock)
     b = kzalloc(sizeof(*b));
     if (!b) {
         net_unlock(flags);
-        klog(KLOG_WARN, "udp", "bind: no memory for a binding, port %d refused",
-             (int)port);
+        klog(KLOG_WARN, "udp", "bind: no memory for a binding, port %d refused", (int)port);
         return -ENOMEM;
     }
-    b->port  = port;
-    b->sock  = sock;
+    b->port = port;
+    b->sock = sock;
     b->owner = current_proc ? current_proc->euid : 0;
-    b->next  = bindings;
+    b->next = bindings;
     bindings = b;
     net_unlock(flags);
     return 0;
@@ -119,7 +117,7 @@ uint16_t udp_bind_ephemeral(struct socket *sock)
 
     for (tries = 0; tries < 16384; tries++) {
         port = udp_next_ephemeral++;
-        if (udp_next_ephemeral < 49152) {  /* wrapped past 65535 */
+        if (udp_next_ephemeral < 49152) { /* wrapped past 65535 */
             udp_next_ephemeral = 49152;
         }
         if (!udp_port_in_use(port)) {
@@ -182,7 +180,7 @@ void udp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len)
     }
 
     dst_port = read16be(data + 2);
-    udp_len  = read16be(data + 4);
+    udp_len = read16be(data + 4);
 
     /*
      * Validate the on-wire length before trusting it: it must cover at least
@@ -212,8 +210,7 @@ void udp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len)
             }
             if (cand->connected) {
                 if (cand->remote_ip == src_ip && cand->remote_port == src_port) {
-                    socket_udp_deliver(cand, src_ip, src_port, data + UDP_HDR_SIZE,
-                                       payload_len);
+                    socket_udp_deliver(cand, src_ip, src_port, data + UDP_HDR_SIZE, payload_len);
                     return;
                 }
                 continue;
@@ -236,16 +233,15 @@ void udp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len)
  * "no checksum". The shared TX buffer is filled and queued under net_lock.
  * The return value is the contract in udp.h.
  */
-int udp_tx(uint16_t src_port, uint32_t dst_ip, uint16_t dst_port,
-           const uint8_t *payload, uint16_t plen, uint8_t ttl)
+int udp_tx(uint16_t src_port, uint32_t dst_ip, uint16_t dst_port, const uint8_t *payload,
+           uint16_t plen, uint8_t ttl)
 {
     uint16_t udp_len;
     uint32_t flags;
     int r;
 
     if (plen > 1500) {
-        klog(KLOG_WARN, "udp", "tx: payload of %d bytes is too large, refused",
-             (int)plen);
+        klog(KLOG_WARN, "udp", "tx: payload of %d bytes is too large, refused", (int)plen);
         return -EMSGSIZE;
     }
 
@@ -259,7 +255,7 @@ int udp_tx(uint16_t src_port, uint32_t dst_ip, uint16_t dst_port,
     write16be(udp_tx_buf + 0, src_port);
     write16be(udp_tx_buf + 2, dst_port);
     write16be(udp_tx_buf + 4, udp_len);
-    write16be(udp_tx_buf + 6, 0x0000);   /* checksum disabled */
+    write16be(udp_tx_buf + 6, 0x0000); /* checksum disabled */
     k_memcpy(udp_tx_buf + UDP_HDR_SIZE, payload, plen);
 
     r = ip_tx(dst_ip, IP_PROTO_UDP, udp_tx_buf, udp_len, ttl);

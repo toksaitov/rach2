@@ -10,25 +10,25 @@
  */
 
 /* TCP flag bits (segment byte 13). */
-#define TCP_FIN  0x01
-#define TCP_SYN  0x02
-#define TCP_RST  0x04
-#define TCP_PSH  0x08
-#define TCP_ACK  0x10
-#define TCP_URG  0x20
+#define TCP_FIN 0x01
+#define TCP_SYN 0x02
+#define TCP_RST 0x04
+#define TCP_PSH 0x08
+#define TCP_ACK 0x10
+#define TCP_URG 0x20
 
 /* Protocol constants. */
-#define TCP_HDR_SIZE     20
-#define TCP_MSS          1460
-#define TCP_INIT_CWND    (4 * TCP_MSS)  /* initial congestion window (RFC 6928) */
+#define TCP_HDR_SIZE            20
+#define TCP_MSS                 1460
+#define TCP_INIT_CWND           (4 * TCP_MSS) /* initial congestion window (RFC 6928) */
 /* Policy: a connection's send and receive rings are 64 KiB each, in the
  * control block, a power of two since the rings' indexes wrap by a mask,
  * and the largest an unscaled window can name, so that a link's round trip
  * and not the ring bounds what is in flight. The window offered is the
  * receive ring's free space clamped to the field's 65535, through
  * `tcp_rcv_window`, so that an empty ring never advertises zero. */
-#define TCP_WINDOW_SIZE  65535
-#define TCP_RING_SIZE    65536
+#define TCP_WINDOW_SIZE         65535
+#define TCP_RING_SIZE           65536
 /* How long queued bytes may wait from the first transmit the driver
  * refused to the last, with no segment sent between, before the connection
  * is given up, in ticks: 30 s, within the retransmission give-up. */
@@ -36,15 +36,15 @@
 /* How many connections with queued bytes the tick pumps, in rotation, so
  * that a full card does not hold the tick for every blocked connection's
  * wait and no connection waits behind the others for ever. */
-#define TCP_TICK_PUMPS 4
+#define TCP_TICK_PUMPS          4
 
 /* Reliability constants (100 Hz clock). */
-#define TCP_RTO_INIT    100     /* initial RTO  = 1 s (RFC 6298) */
-#define TCP_RTO_MIN     100     /* minimum RTO  = 1 s   */
-#define TCP_RTO_MAX     6000    /* maximum RTO  = 60 s  */
-#define TCP_2MSL_TICKS  200     /* TIME_WAIT    = 2 s (short: local network) */
+#define TCP_RTO_INIT        100  /* initial RTO  = 1 s (RFC 6298) */
+#define TCP_RTO_MIN         100  /* minimum RTO  = 1 s   */
+#define TCP_RTO_MAX         6000 /* maximum RTO  = 60 s  */
+#define TCP_2MSL_TICKS      200  /* TIME_WAIT    = 2 s (short: local network) */
 #define TCP_FIN_WAIT2_TICKS 1000 /* FIN_WAIT_2  = 10 s (peer-FIN backstop) */
-#define TCP_MAX_RETX    7       /* give up after this many retransmissions */
+#define TCP_MAX_RETX        7    /* give up after this many retransmissions */
 
 /* Loss recovery (RFC 5681, RFC 6582). The third duplicate acknowledgement
  * in a row means a segment was lost and the ones after it arrived. After a
@@ -75,7 +75,7 @@ struct socket; /* defined in socket/socket.h */
 /* Per-connection control block. */
 struct tcb {
     struct tcb *next; /* the list of live control blocks */
-    int         in_use;
+    int in_use;
     tcp_state_t state;
 
     /* Whether this block came from a passive open, meaning a listener made it
@@ -85,7 +85,7 @@ struct tcb {
      * must be woken as a completed `connect`, not queued on a listener
      * that does not exist, and never unref'd on a reset, since the descriptor
      * still has it. */
-    int         passive;
+    int passive;
 
     uint32_t local_ip;
     uint16_t local_port;
@@ -94,43 +94,43 @@ struct tcb {
 
     /* Send sequence space. */
     uint32_t iss;
-    uint32_t snd_una;   /* oldest unacknowledged sequence number  */
-    uint32_t snd_nxt;   /* next sequence number to send           */
-    uint16_t snd_wnd;   /* remote's advertised receive window     */
+    uint32_t snd_una; /* oldest unacknowledged sequence number  */
+    uint32_t snd_nxt; /* next sequence number to send           */
+    uint16_t snd_wnd; /* remote's advertised receive window     */
 
     /* Receive sequence space. */
     uint32_t irs;
-    uint32_t rcv_nxt;   /* next expected sequence number          */
-    uint16_t rcv_wnd;   /* our advertised receive window          */
+    uint32_t rcv_nxt; /* next expected sequence number          */
+    uint16_t rcv_wnd; /* our advertised receive window          */
 
     /*
      * Send and receive rings. head/tail are monotonic uint32_t; the buffer
      * index is the value masked with (TCP_RING_SIZE - 1), so unsigned
      * subtraction always yields the correct occupancy.
      */
-    uint8_t  send_buf[TCP_RING_SIZE];
+    uint8_t send_buf[TCP_RING_SIZE];
     uint32_t send_head, send_tail; /* head = next to send, tail = next to fill */
-    uint8_t  recv_buf[TCP_RING_SIZE];
+    uint8_t recv_buf[TCP_RING_SIZE];
     uint32_t recv_head, recv_tail; /* head = next to read, tail = next to fill */
 
-    int fin_received;   /* a FIN was received: signals EOF to recv */
-    int fin_pending;    /* close() requested: send FIN once data drains */
+    int fin_received; /* a FIN was received: signals EOF to recv */
+    int fin_pending;  /* close() requested: send FIN once data drains */
 
-    uint32_t so_error;  /* pending SO_ERROR (positive errno); 0 = none */
+    uint32_t so_error; /* pending SO_ERROR (positive errno); 0 = none */
 
     /* Retransmission and congestion control (RFC 6298 / RFC 5681). */
-    uint32_t rto;          /* current retransmit timeout (ticks)     */
-    uint32_t rto_timer;    /* countdown to next retransmit; 0 = off  */
-    uint32_t srtt;         /* smoothed RTT x 8 (fixed point)         */
-    uint32_t rttvar;       /* RTT variance x 4 (fixed point)         */
-    uint32_t rtt_start;    /* ticks+1 at RTT sample start; 0 = none  */
-    uint8_t  rto_backoff;  /* consecutive timeouts; retransmit count */
-    uint32_t cwnd;         /* congestion window (bytes)              */
-    uint32_t ssthresh;     /* slow-start threshold (bytes)           */
-    uint32_t send_ack;     /* send ring position of acknowledged data */
+    uint32_t rto;        /* current retransmit timeout (ticks)     */
+    uint32_t rto_timer;  /* countdown to next retransmit; 0 = off  */
+    uint32_t srtt;       /* smoothed RTT x 8 (fixed point)         */
+    uint32_t rttvar;     /* RTT variance x 4 (fixed point)         */
+    uint32_t rtt_start;  /* ticks+1 at RTT sample start; 0 = none  */
+    uint8_t rto_backoff; /* consecutive timeouts; retransmit count */
+    uint32_t cwnd;       /* congestion window (bytes)              */
+    uint32_t ssthresh;   /* slow-start threshold (bytes)           */
+    uint32_t send_ack;   /* send ring position of acknowledged data */
     uint32_t timewait_until;
-    uint32_t zwp_timer;    /* zero-window probe countdown; 0 = off   */
-    uint32_t tx_refused;   /* segments the driver would not take, kept */
+    uint32_t zwp_timer;     /* zero-window probe countdown; 0 = off   */
+    uint32_t tx_refused;    /* segments the driver would not take, kept */
     uint32_t refused_since; /* ticks+1 at the first refusal still unresolved; 0 = none */
 
     /* Loss recovery. `recover` is the end of the data sent when the loss
@@ -138,20 +138,20 @@ struct tcb {
      * it; after a timeout `retx_nxt` walks the unacknowledged data again.
      * `rtt_seq` is the end of the segment the round-trip sample was started
      * on: the sample ends at the acknowledgement that covers it. */
-    uint8_t  recovering;   /* 0, TCP_RECOVER_RTO or TCP_RECOVER_FAST  */
-    uint8_t  dup_acks;     /* duplicate acknowledgements in a row     */
-    uint8_t  fast_pending; /* a fast resend the driver refused, owed  */
-    uint32_t recover;      /* sequence number that ends the recovery  */
-    uint32_t retx_nxt;     /* next sequence number to send again      */
-    uint32_t rtt_seq;      /* the sample ends at an ACK covering this */
-    uint32_t retransmits;  /* segments sent again, for the report     */
+    uint8_t recovering;   /* 0, TCP_RECOVER_RTO or TCP_RECOVER_FAST  */
+    uint8_t dup_acks;     /* duplicate acknowledgements in a row     */
+    uint8_t fast_pending; /* a fast resend the driver refused, owed  */
+    uint32_t recover;     /* sequence number that ends the recovery  */
+    uint32_t retx_nxt;    /* next sequence number to send again      */
+    uint32_t rtt_seq;     /* the sample ends at an ACK covering this */
+    uint32_t retransmits; /* segments sent again, for the report     */
 
     /* Outstanding control segment to retransmit (SYN/SYN-ACK/FIN). */
-    uint8_t  retx_flags;   /* 0 = none, else the control flags       */
-    uint8_t  ack_owed;     /* a bare acknowledgement the ring refused  */
-    uint32_t retx_seq;     /* sequence number the control occupies   */
+    uint8_t retx_flags; /* 0 = none, else the control flags       */
+    uint8_t ack_owed;   /* a bare acknowledgement the ring refused  */
+    uint32_t retx_seq;  /* sequence number the control occupies   */
 
-    struct socket *sock;   /* owning socket (NULL once detached)     */
+    struct socket *sock; /* owning socket (NULL once detached)     */
 
     /*
      * The owner and the socket number, copied here rather than read through
@@ -237,9 +237,9 @@ struct tcp_row {
     uint16_t local_port;
     uint32_t remote_ip;
     uint16_t remote_port;
-    int      state;
-    uint32_t txq;   /* bytes queued to send, sent and unacknowledged included */
-    uint32_t rxq;   /* bytes queued to read */
+    int state;
+    uint32_t txq; /* bytes queued to send, sent and unacknowledged included */
+    uint32_t rxq; /* bytes queued to read */
     uint32_t uid;
     uint32_t inode;
     /* This stack's own view, after Linux's columns: the peer's window, the

@@ -1,5 +1,5 @@
-#ifndef  _KIO_H_
-#define  _KIO_H_
+#ifndef _KIO_H_
+#define _KIO_H_
 
 #include "display/vga_text.h"
 
@@ -52,7 +52,7 @@ void k_printf(const char *format, ...);
 /* Processor I/O */
 
 /** Write byte `val` to I/O port `port`. */
-void outb(uint16_t port, uint8_t  val);
+void outb(uint16_t port, uint8_t val);
 
 #ifdef RACH2_HARNESS
 /** Report a process exit status to QEMU's isa-debug-exit device (harness

@@ -44,14 +44,14 @@
  * A process holding one may take only what comes after it.
  */
 
-#define VFS_COVERED_PATH_MAX 64 /* a longer target answers ENAMETOOLONG */
-#define VFS_NAME_MAX 255        /* one component, NUL not counted */
+#define VFS_COVERED_PATH_MAX 64  /* a longer target answers ENAMETOOLONG */
+#define VFS_NAME_MAX         255 /* one component, NUL not counted */
 
 /* Mount states. A transient operation runs only on an active mount; the
  * mounting and unmounting states refuse new work with EBUSY. */
-#define VFS_FREE 0
-#define VFS_MOUNTING 1
-#define VFS_ACTIVE 2
+#define VFS_FREE       0
+#define VFS_MOUNTING   1
+#define VFS_ACTIVE     2
 #define VFS_UNMOUNTING 3
 
 /* The mount(2) flags this kernel honours or records, with Linux's values.
@@ -59,14 +59,14 @@
  * MS_NODEV is recorded and not enforced, since no type here has device
  * nodes; the atime group and MS_SILENT are recorded because nothing here
  * updates access times. Any other flag answers EINVAL. */
-#define VFS_MS_RDONLY 0x0001u
-#define VFS_MS_NOSUID 0x0002u
-#define VFS_MS_NODEV 0x0004u
-#define VFS_MS_NOEXEC 0x0008u
-#define VFS_MS_NOATIME 0x0400u
+#define VFS_MS_RDONLY     0x0001u
+#define VFS_MS_NOSUID     0x0002u
+#define VFS_MS_NODEV      0x0004u
+#define VFS_MS_NOEXEC     0x0008u
+#define VFS_MS_NOATIME    0x0400u
 #define VFS_MS_NODIRATIME 0x0800u
-#define VFS_MS_SILENT 0x8000u
-#define VFS_MS_RELATIME 0x200000u
+#define VFS_MS_SILENT     0x8000u
+#define VFS_MS_RELATIME   0x200000u
 
 /* What `lookup_rest` returns when `..` would climb above the mount root. */
 #define VFS_CLIMB 1
@@ -92,12 +92,12 @@ struct vfs_stat {
 };
 
 /* Which fields a setattr call is changing. */
-#define VFS_SET_MODE 0x01
-#define VFS_SET_UID 0x02
-#define VFS_SET_GID 0x04
+#define VFS_SET_MODE  0x01
+#define VFS_SET_UID   0x02
+#define VFS_SET_GID   0x04
 #define VFS_SET_ATIME 0x08
 #define VFS_SET_MTIME 0x10
-#define VFS_SET_SIZE 0x20
+#define VFS_SET_SIZE  0x20
 
 /* One directory entry, as readdir fills it. */
 struct vfs_dirent {
@@ -127,29 +127,26 @@ struct vfs_statfs {
 struct vfs_ops {
     /* One name in one directory, `..` included; `dir` NULL is the mount
      * root. The node comes back held. */
-    int (*lookup)(struct vfs_mount *mnt, void *dir, const char *name,
-                  void **node);
+    int (*lookup)(struct vfs_mount *mnt, void *dir, const char *name, void **node);
     /* The synthetic exception: the whole remaining path in one call.
      * Returns 0 with a held node, a negative errno, or VFS_CLIMB with
      * `*left` at the unconsumed remainder, and the resolver continues at
      * the covered node. */
-    int (*lookup_rest)(struct vfs_mount *mnt, const char *rest, void **node,
-                       const char **left);
+    int (*lookup_rest)(struct vfs_mount *mnt, const char *rest, void **node, const char **left);
     void (*hold)(struct vfs_mount *mnt, void *node);
     void (*put)(struct vfs_mount *mnt, void *node);
     int (*getattr)(struct vfs_mount *mnt, void *node, struct vfs_stat *st);
-    int (*setattr)(struct vfs_mount *mnt, void *node, int what,
-                   const struct vfs_stat *st);
+    int (*setattr)(struct vfs_mount *mnt, void *node, int what, const struct vfs_stat *st);
     /* Once per successful open(2); `release` once at the description's last
      * close. The handle is the per-open object; a type that needs none
      * returns its node. Every type counts opens and releases, and the
      * record written at unmount says both numbers. */
     int (*open)(struct vfs_mount *mnt, void *node, int flags, void **handle);
     void (*release)(struct vfs_mount *mnt, void *handle);
-    int32_t (*read)(struct vfs_mount *mnt, void *handle, void *buf,
-                    uint32_t count, uint64_t offset);
-    int32_t (*write)(struct vfs_mount *mnt, void *handle, const void *buf,
-                     uint32_t count, uint64_t offset);
+    int32_t (*read)(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count,
+                    uint64_t offset);
+    int32_t (*write)(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,
+                     uint64_t offset);
     int (*truncate)(struct vfs_mount *mnt, void *handle, uint64_t size);
     int (*fsync)(struct vfs_mount *mnt, void *handle);
     /* One directory entry at `*cursor`, a position whose meaning belongs
@@ -157,22 +154,17 @@ struct vfs_ops {
      * call advances it past the entry it returns. A caller stores it
      * between calls and never interprets it. 1 with the entry filled, 0 at
      * the end, or a negative errno. */
-    int (*readdir)(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
-                   struct vfs_dirent *ent);
+    int (*readdir)(struct vfs_mount *mnt, void *handle, uint32_t *cursor, struct vfs_dirent *ent);
     /* The namespace. `rename` is within one mount; the common layer answers
      * EXDEV across mounts. */
-    int (*create)(struct vfs_mount *mnt, void *dir, const char *name,
-                  uint32_t mode, void **node);
+    int (*create)(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode, void **node);
     int (*unlink)(struct vfs_mount *mnt, void *dir, const char *name);
-    int (*mkdir)(struct vfs_mount *mnt, void *dir, const char *name,
-                 uint32_t mode);
+    int (*mkdir)(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode);
     int (*rmdir)(struct vfs_mount *mnt, void *dir, const char *name);
-    int (*rename)(struct vfs_mount *mnt, void *olddir, const char *oldname,
-                  void *newdir, const char *newname);
-    int (*link)(struct vfs_mount *mnt, void *dir, const char *name,
-                void *node);
-    int (*readlink)(struct vfs_mount *mnt, void *node, char *buf,
-                    uint32_t cap);
+    int (*rename)(struct vfs_mount *mnt, void *olddir, const char *oldname, void *newdir,
+                  const char *newname);
+    int (*link)(struct vfs_mount *mnt, void *dir, const char *name, void *node);
+    int (*readlink)(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap);
     int (*statfs)(struct vfs_mount *mnt, struct vfs_statfs *st);
     int (*sync)(struct vfs_mount *mnt);
     /* The two halves of an unmount. The first writes the volume's last
@@ -193,8 +185,7 @@ struct vfs_ops {
     int (*path)(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap);
     /* A symbolic link `name` in `dir` to `target`; NULL on a type without
      * them, which the common layer answers with EPERM. */
-    int (*symlink)(struct vfs_mount *mnt, void *dir, const char *name,
-                   const char *target);
+    int (*symlink)(struct vfs_mount *mnt, void *dir, const char *name, const char *target);
 };
 
 /* One file-system kind: the name mount(2) and /proc/filesystems spell, the
@@ -203,8 +194,7 @@ struct vfs_ops {
  * fails leaves nothing behind. */
 struct vfs_type {
     const char *name;
-    int (*mount)(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
-                 const char *options);
+    int (*mount)(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags, const char *options);
     const struct vfs_ops *ops;
 };
 
@@ -233,8 +223,8 @@ struct vfs_mount {
     /* What the unmount record reports: every open matched by a release. */
     uint32_t opens;
     uint32_t releases;
-    int claim;        /* the devfs claim on the source's sectors, or -1 */
-    char source[32];  /* the source as mount(2) spelled it, for /proc/mounts */
+    int claim;       /* the devfs claim on the source's sectors, or -1 */
+    char source[32]; /* the source as mount(2) spelled it, for /proc/mounts */
 };
 
 /* A held place: one node on one mount. The resolver returns these; whoever
@@ -251,11 +241,11 @@ struct vfs_ref {
  * symbolic link at the last component as the link, for lstat, readlink,
  * unlink, rename, link and an open with O_NOFOLLOW or O_CREAT|O_EXCL; a
  * link earlier in the path is always followed. */
-#define VFS_WALK_PARENT 0x1
+#define VFS_WALK_PARENT   0x1
 #define VFS_WALK_REAL_IDS 0x2
 #define VFS_WALK_NOFOLLOW 0x4
 /* Symbolic links followed along one path before ELOOP. */
-#define VFS_LINK_MAX 40
+#define VFS_LINK_MAX      40
 /* The buffer a followed link's target and the rest of the path are joined
  * in, terminator included: 511 bytes of path, ENAMETOOLONG past that. */
 #define VFS_WALK_PATH_MAX 512
@@ -279,8 +269,8 @@ void vfs_init(void);
  * component, which may not exist yet, is copied into `leaf` (of `leafcap`
  * bytes; ENAMETOOLONG if it does not fit).
  */
-int vfs_resolve(const struct vfs_ref *start, const char *path, int flags,
-                struct vfs_ref *out, char *leaf, uint32_t leafcap);
+int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct vfs_ref *out,
+                char *leaf, uint32_t leafcap);
 
 /** Take another hold on `r`'s node. */
 void vfs_ref_hold(const struct vfs_ref *r);
@@ -364,8 +354,8 @@ void vfs_ns_unlock(struct vfs_mount *mnt);
  * The order of work and every error they answer are in the syscall's
  * contract; both require effective uid 0, checked by the caller.
  */
-int vfs_do_mount(const char *source, const char *target, const char *type,
-                 uint32_t flags, const char *options);
+int vfs_do_mount(const char *source, const char *target, const char *type, uint32_t flags,
+                 const char *options);
 int vfs_do_umount(const char *target);
 
 /**
@@ -406,28 +396,22 @@ void vfs_repoint(struct vfs_mount *mnt, void *from, void *to);
 /* The default-answer wrappers: each checks the mount flags and the NULL
  * operation and answers the contract's errno, so the rule exists once. The
  * write-side wrappers answer -EROFS on a read-only mount. */
-int32_t vfs_read(struct vfs_mount *mnt, void *handle, void *buf,
-                 uint32_t count, uint64_t offset);
-int32_t vfs_write(struct vfs_mount *mnt, void *handle, const void *buf,
-                  uint32_t count, uint64_t offset);
+int32_t vfs_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count, uint64_t offset);
+int32_t vfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,
+                  uint64_t offset);
 int vfs_truncate(struct vfs_mount *mnt, void *handle, uint64_t size);
 int vfs_fsync(struct vfs_mount *mnt, void *handle);
 int vfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st);
-int vfs_setattr(struct vfs_mount *mnt, void *node, int what,
-                const struct vfs_stat *st);
-int vfs_open_node(struct vfs_mount *mnt, void *node, int flags,
-                  void **handle);
+int vfs_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_stat *st);
+int vfs_open_node(struct vfs_mount *mnt, void *node, int flags, void **handle);
 void vfs_release(struct vfs_mount *mnt, void *handle);
-int vfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
-                struct vfs_dirent *ent);
-int vfs_create(struct vfs_mount *mnt, void *dir, const char *name,
-               uint32_t mode, void **node);
+int vfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor, struct vfs_dirent *ent);
+int vfs_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode, void **node);
 int vfs_unlink_name(struct vfs_mount *mnt, void *dir, const char *name);
-int vfs_mkdir(struct vfs_mount *mnt, void *dir, const char *name,
-              uint32_t mode);
+int vfs_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode);
 int vfs_rmdir(struct vfs_mount *mnt, void *dir, const char *name);
-int vfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname,
-               void *newdir, const char *newname);
+int vfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *newdir,
+               const char *newname);
 int vfs_link(struct vfs_mount *mnt, void *dir, const char *name, void *node);
 /** A symbolic link `name` in `dir` to `target`: EROFS on a read-only mount,
  * EPERM on a type without the operation. */
@@ -440,8 +424,7 @@ int vfs_statfs(struct vfs_mount *mnt, struct vfs_statfs *st);
  * own lookup cannot know: mkdir answers EEXIST for it, unlink and rmdir
  * and rename answer EBUSY.
  */
-struct vfs_mount *vfs_leaf_mount(struct vfs_mount *mnt, void *node,
-                                 const char *name);
+struct vfs_mount *vfs_leaf_mount(struct vfs_mount *mnt, void *node, const char *name);
 
 /** The classification stored in a synthetic node, or NULL when `mnt` is not
  * one of the two synthetic mounts. */

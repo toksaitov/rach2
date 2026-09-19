@@ -49,7 +49,7 @@ void krandom_bytes(void *buf, uint32_t n);
 #define KRANDOM_SRC_RDSEED 1
 #define KRANDOM_SRC_RDRAND 2
 
-int krandom_source(void);   /* KRANDOM_SRC_* used by the last krandom_seed() */
+int krandom_source(void);     /* KRANDOM_SRC_* used by the last krandom_seed() */
 int krandom_is_trusted(void); /* 1 iff the source is real hardware entropy */
 
 #endif /* _KRANDOM_H_ */

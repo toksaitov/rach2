@@ -123,7 +123,7 @@ static void audio_test_callback(uint8_t *buffer, size_t size)
     int16_t *out = (int16_t *)buffer;
     size_t samples16 = size / 2;
 
-    for (i = 0; i < samples16; ) {
+    for (i = 0; i < samples16;) {
         int16_t s = (_tone_phase < _tone_half_period) ? _tone_amp : (int16_t)(-_tone_amp);
         _tone_phase++;
         if (_tone_phase >= (_tone_half_period * 2u)) {
@@ -192,7 +192,7 @@ static void audio_run_scale_test(uint32_t duration_ms)
     int channels = 2;
     size_t n;
 
-    static const uint32_t freqs[] = { 262, 294, 330, 349, 392 };
+    static const uint32_t freqs[] = {262, 294, 330, 349, 392};
     const size_t num_notes = sizeof(freqs) / sizeof(freqs[0]);
 
     if (!audio) {
@@ -235,7 +235,8 @@ static void audio_run_scale_test(uint32_t duration_ms)
         audio->set_volume(80);
     }
 
-    console_printf("Playing scale test (%d ms) using %s...\n", duration_ms, audio_get_driver_name());
+    console_printf("Playing scale test (%d ms) using %s...\n", duration_ms,
+                   audio_get_driver_name());
 
     start_ticks = kernel_ticks;
     total_ticks = duration_ms / 10;
@@ -288,7 +289,7 @@ static void audio_run_write_test(uint32_t duration_ms)
     uint8_t buf[512];
     const uint8_t amp = 64;
 
-    static const uint32_t freqs[] = { 262, 294, 330, 349, 392 };
+    static const uint32_t freqs[] = {262, 294, 330, 349, 392};
     const size_t num_notes = sizeof(freqs) / sizeof(freqs[0]);
 
     if (!audio) {
@@ -311,7 +312,8 @@ static void audio_run_write_test(uint32_t duration_ms)
         audio->set_volume(80);
     }
 
-    console_printf("Playing write-based scale test (%d ms) using %s...\n", duration_ms, audio_get_driver_name());
+    console_printf("Playing write-based scale test (%d ms) using %s...\n", duration_ms,
+                   audio_get_driver_name());
 
     start_ticks = kernel_ticks;
     total_ticks = duration_ms / 10;
@@ -349,7 +351,8 @@ static void audio_run_write_test(uint32_t duration_ms)
             sample_acc %= 100u;
 
             while (to_write > 0) {
-                uint32_t chunk = (to_write > (uint32_t)sizeof(buf)) ? (uint32_t)sizeof(buf) : to_write;
+                uint32_t chunk =
+                    (to_write > (uint32_t)sizeof(buf)) ? (uint32_t)sizeof(buf) : to_write;
                 uint32_t i;
                 uint32_t off = 0;
 
@@ -471,22 +474,15 @@ static void audio_run_hda_watch(uint32_t freq_hz, uint32_t duration_ms, uint32_t
             if (hda_debug_get_stream_snapshot(&snapshot)) {
                 if (snapshot.cbl != 0) {
                     uint32_t delta = (snapshot.lpib >= last_lpib)
-                                   ? (snapshot.lpib - last_lpib)
-                                   : (snapshot.lpib + snapshot.cbl - last_lpib);
+                                         ? (snapshot.lpib - last_lpib)
+                                         : (snapshot.lpib + snapshot.cbl - last_lpib);
                     console_printf("t=%dms lpib=%d (+%d) ctl=0x%x sts=0x%x fmt=0x%x\n",
-                             (kernel_ticks - start_ticks) * 10u,
-                             snapshot.lpib,
-                             delta,
-                             snapshot.ctl,
-                             (uint32_t)snapshot.sts,
-                             (uint32_t)snapshot.fmt);
+                                   (kernel_ticks - start_ticks) * 10u, snapshot.lpib, delta,
+                                   snapshot.ctl, (uint32_t)snapshot.sts, (uint32_t)snapshot.fmt);
                 } else {
                     console_printf("t=%dms lpib=%d ctl=0x%x sts=0x%x fmt=0x%x\n",
-                             (kernel_ticks - start_ticks) * 10u,
-                             snapshot.lpib,
-                             snapshot.ctl,
-                             (uint32_t)snapshot.sts,
-                             (uint32_t)snapshot.fmt);
+                                   (kernel_ticks - start_ticks) * 10u, snapshot.lpib, snapshot.ctl,
+                                   (uint32_t)snapshot.sts, (uint32_t)snapshot.fmt);
                 }
                 last_lpib = snapshot.lpib;
             }

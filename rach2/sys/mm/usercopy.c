@@ -13,17 +13,14 @@
  */
 int user_range_ok(uint32_t addr, uint32_t len)
 {
-    if (len == 0)
-    {
-        return 1;  /* an empty range touches nothing */
+    if (len == 0) {
+        return 1; /* an empty range touches nothing */
     }
-    if (addr < USER_ADDR_MIN || addr >= USER_ADDR_MAX)
-    {
+    if (addr < USER_ADDR_MIN || addr >= USER_ADDR_MAX) {
         return 0;
     }
-    if (len > USER_ADDR_MAX - addr)
-    {
-        return 0;  /* spans past the end of user space (or overflows) */
+    if (len > USER_ADDR_MAX - addr) {
+        return 0; /* spans past the end of user space (or overflows) */
     }
     return 1;
 }
@@ -38,20 +35,17 @@ int copy_from_user(void *dst, const void __user *src, uint32_t n)
 {
     uint32_t addr = (uint32_t)(__force uintptr_t)src;
 
-    if (n == 0)
-    {
+    if (n == 0) {
         return 0;
     }
-    if (!user_range_ok(addr, n))
-    {
+    if (!user_range_ok(addr, n)) {
         return -EFAULT;
     }
     /* Back any demand-paged pages in the range before the kernel reads them, so
      * a not-yet-present (but valid) user page faults in here, not from
      * the raw k_memcpy below; a page outside every VMA returns -EFAULT, not a
      * panic. */
-    if (!vm_prefault_range(addr, n, 0))
-    {
+    if (!vm_prefault_range(addr, n, 0)) {
         return -EFAULT;
     }
     k_memcpy(dst, (const void __force *)src, n);
@@ -68,20 +62,17 @@ int copy_to_user(void __user *dst, const void *src, uint32_t n)
 {
     uint32_t addr = (uint32_t)(__force uintptr_t)dst;
 
-    if (n == 0)
-    {
+    if (n == 0) {
         return 0;
     }
-    if (!user_range_ok(addr, n))
-    {
+    if (!user_range_ok(addr, n)) {
         return -EFAULT;
     }
     /* Writing into user space: fault the pages in with write permission, so a
      * lazily-allocated heap/stack page is created here and a read-only or
      * unmapped destination yields -EFAULT instead of faulting in kernel mode.
      */
-    if (!vm_prefault_range(addr, n, 1))
-    {
+    if (!vm_prefault_range(addr, n, 1)) {
         return -EFAULT;
     }
     k_memcpy((void __force *)dst, src, n);
@@ -101,19 +92,16 @@ int strncpy_from_user(char *dst, const char __user *src, uint32_t n)
     const char *s = (const char __force *)src;
     uint32_t i;
 
-    if (n == 0)
-    {
+    if (n == 0) {
         return -EINVAL;
     }
-    for (i = 0; i < n; i++)
-    {
+    for (i = 0; i < n; i++) {
         uint32_t a = addr + i;
 
         /* Validate each byte's address before reading it. A short string near
          * the top of user space stays valid while an unterminated one cannot
          * walk off the end. */
-        if (!user_range_ok(a, 1))
-        {
+        if (!user_range_ok(a, 1)) {
             return -EFAULT;
         }
         /* Back the page before the read, once per page as we cross each
@@ -121,15 +109,13 @@ int strncpy_from_user(char *dst, const char __user *src, uint32_t n)
          * the string may terminate before a later (legitimately unmapped) page,
          * and faulting that page in would wrongly reject a valid short string.
          */
-        if ((i == 0 || (a & (PAGE_SIZE - 1)) == 0) && !vm_prefault_range(a, 1, 0))
-        {
+        if ((i == 0 || (a & (PAGE_SIZE - 1)) == 0) && !vm_prefault_range(a, 1, 0)) {
             return -EFAULT;
         }
         dst[i] = s[i];
-        if (s[i] == '\0')
-        {
+        if (s[i] == '\0') {
             return (int)i;
         }
     }
-    return -ENAMETOOLONG;  /* no NUL within n bytes */
+    return -ENAMETOOLONG; /* no NUL within n bytes */
 }

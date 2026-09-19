@@ -154,8 +154,7 @@ static void power_acpi_off(void)
         klog(KLOG_INFO, "poweroff", "powering off");
         outw(port, board_sleep_word(p));
         power_settle();
-        klog(KLOG_ERR, "poweroff",
-             "the platform did not power off; halting instead");
+        klog(KLOG_ERR, "poweroff", "the platform did not power off; halting instead");
         return;
     }
     {
@@ -168,24 +167,21 @@ static void power_acpi_off(void)
         uint16_t base;
 
         if (vendor != PIIX4_VENDOR || device != PIIX4_DEVICE_ID) {
-            klog(KLOG_ERR, "poweroff",
-                 "no PIIX4 power management; halting instead");
+            klog(KLOG_ERR, "poweroff", "no PIIX4 power management; halting instead");
             return;
         }
         misc = pci_read_config8(PIIX4_BUS, PIIX4_DEVICE, PIIX4_FUNCTION, PIIX4_CFG_PMREGMISC);
         pmba = pci_read_config32(PIIX4_BUS, PIIX4_DEVICE, PIIX4_FUNCTION, PIIX4_CFG_PMBA);
         base = (uint16_t)(pmba & 0xFFC0u);
         if ((misc & PIIX4_PMIOSE) == 0 || base == 0) {
-            klog(KLOG_ERR, "poweroff",
-                 "no PIIX4 power management; halting instead");
+            klog(KLOG_ERR, "poweroff", "no PIIX4 power management; halting instead");
             return;
         }
 
         klog(KLOG_INFO, "poweroff", "powering off");
         outw((uint16_t)(base + PM1A_CNT_OFFSET), PM1A_CNT_SLP_EN);
         power_settle();
-        klog(KLOG_ERR, "poweroff",
-             "the platform did not power off; halting instead");
+        klog(KLOG_ERR, "poweroff", "the platform did not power off; halting instead");
     }
 }
 

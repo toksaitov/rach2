@@ -39,37 +39,37 @@
  * once, a write of one takes one more under it, and a second process needs
  * the same. The most is half the caches' target, or what
  * `bcache_set_limit` says. */
-#define BCACHE_MIN_BUFFERS 16
+#define BCACHE_MIN_BUFFERS   16
 #define BCACHE_BLOCK_SECTORS 8u
-#define BCACHE_BLOCK_BYTES (BCACHE_BLOCK_SECTORS * BLOCK_SECTOR_SIZE)
-#define BCACHE_HOLD_MAX 4
+#define BCACHE_BLOCK_BYTES   (BCACHE_BLOCK_SECTORS * BLOCK_SECTOR_SIZE)
+#define BCACHE_HOLD_MAX      4
 /* A dirty buffer's place in its device's writeback: a `first` buffer reaches
  * the device before any `after` buffer of the device does, whichever path
  * writes; 0 is no place. The marks clear with the write. */
-#define BCACHE_ORDER_FIRST 1
-#define BCACHE_ORDER_AFTER 2
+#define BCACHE_ORDER_FIRST   1
+#define BCACHE_ORDER_AFTER   2
 
 struct bbuf {
-    struct bbuf *next;     /* the cache's list of buffers */
-    struct bbuf *hnext;    /* the next buffer in its hash bucket */
-    block_device_t *dev;   /* NULL: the buffer is empty */
-    uint64_t blk;          /* block index on dev, in 8-sector units */
-    uint8_t *data;         /* BCACHE_BLOCK_BYTES, only the tail sectors valid
-                            * on a short last block */
-    uint32_t bytes;        /* valid bytes: a whole block, or the short tail */
+    struct bbuf *next;   /* the cache's list of buffers */
+    struct bbuf *hnext;  /* the next buffer in its hash bucket */
+    block_device_t *dev; /* NULL: the buffer is empty */
+    uint64_t blk;        /* block index on dev, in 8-sector units */
+    uint8_t *data;       /* BCACHE_BLOCK_BYTES, only the tail sectors valid
+                          * on a short last block */
+    uint32_t bytes;      /* valid bytes: a whole block, or the short tail */
     int dirty;
     /* The device has gone while this buffer was held: it is dropped at the
      * release rather than at the removal, because a buffer cannot be reused
      * under the process that holds it. */
     int discard;
-    int holder;            /* pid holding it, or -1 */
-    uint32_t stamp;        /* last release, for least-recently-released */
-    int waiters;           /* processes waiting for the hold to end, woken or not */
-    int write_failed;      /* its last write failed: not a victim until one succeeds */
-    int order;             /* BCACHE_ORDER_FIRST, BCACHE_ORDER_AFTER or 0 */
-    wait_queue_t wq;       /* who waits for the hold to end */
-    struct bbuf *hold_next;  /* the next buffer its holder holds */
-    struct bbuf *lru_prev;   /* the keyed buffers in release order, oldest first */
+    int holder;             /* pid holding it, or -1 */
+    uint32_t stamp;         /* last release, for least-recently-released */
+    int waiters;            /* processes waiting for the hold to end, woken or not */
+    int write_failed;       /* its last write failed: not a victim until one succeeds */
+    int order;              /* BCACHE_ORDER_FIRST, BCACHE_ORDER_AFTER or 0 */
+    wait_queue_t wq;        /* who waits for the hold to end */
+    struct bbuf *hold_next; /* the next buffer its holder holds */
+    struct bbuf *lru_prev;  /* the keyed buffers in release order, oldest first */
     struct bbuf *lru_next;
     struct bbuf *empty_next; /* the next buffer keyed to nothing */
 };

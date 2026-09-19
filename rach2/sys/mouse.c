@@ -18,42 +18,42 @@
  */
 
 /* 8042 Controller Ports */
-#define PS2_DATA_PORT    0x60
-#define PS2_STATUS_PORT  0x64
-#define PS2_CMD_PORT     0x64
+#define PS2_DATA_PORT   0x60
+#define PS2_STATUS_PORT 0x64
+#define PS2_CMD_PORT    0x64
 
 /* Status Register Bits */
-#define PS2_STATUS_OUTPUT_FULL  0x01  /* Output buffer full (data ready) */
-#define PS2_STATUS_INPUT_FULL   0x02  /* Input buffer full (can't write) */
-#define PS2_STATUS_MOUSE_DATA   0x20  /* Data is from mouse, not keyboard */
+#define PS2_STATUS_OUTPUT_FULL 0x01 /* Output buffer full (data ready) */
+#define PS2_STATUS_INPUT_FULL  0x02 /* Input buffer full (can't write) */
+#define PS2_STATUS_MOUSE_DATA  0x20 /* Data is from mouse, not keyboard */
 
 /* 8042 Controller Commands (write to 0x64) */
-#define PS2_CMD_READ_CONFIG     0x20  /* Read command byte */
-#define PS2_CMD_WRITE_CONFIG    0x60  /* Write command byte */
-#define PS2_CMD_DISABLE_MOUSE   0xA7  /* Disable auxiliary port */
-#define PS2_CMD_ENABLE_MOUSE    0xA8  /* Enable auxiliary port */
-#define PS2_CMD_TEST_MOUSE      0xA9  /* Test auxiliary port */
-#define PS2_CMD_WRITE_MOUSE     0xD4  /* Write to auxiliary device */
+#define PS2_CMD_READ_CONFIG   0x20 /* Read command byte */
+#define PS2_CMD_WRITE_CONFIG  0x60 /* Write command byte */
+#define PS2_CMD_DISABLE_MOUSE 0xA7 /* Disable auxiliary port */
+#define PS2_CMD_ENABLE_MOUSE  0xA8 /* Enable auxiliary port */
+#define PS2_CMD_TEST_MOUSE    0xA9 /* Test auxiliary port */
+#define PS2_CMD_WRITE_MOUSE   0xD4 /* Write to auxiliary device */
 
 /* Mouse Commands (sent via PS2_CMD_WRITE_MOUSE) */
-#define MOUSE_CMD_RESET         0xFF  /* Reset mouse */
-#define MOUSE_CMD_RESEND        0xFE  /* Resend last packet */
-#define MOUSE_CMD_SET_DEFAULTS  0xF6  /* Set default settings */
-#define MOUSE_CMD_DISABLE       0xF5  /* Disable data reporting */
-#define MOUSE_CMD_ENABLE        0xF4  /* Enable data reporting */
-#define MOUSE_CMD_SET_RATE      0xF3  /* Set sample rate */
-#define MOUSE_CMD_GET_ID        0xF2  /* Get device ID */
+#define MOUSE_CMD_RESET        0xFF /* Reset mouse */
+#define MOUSE_CMD_RESEND       0xFE /* Resend last packet */
+#define MOUSE_CMD_SET_DEFAULTS 0xF6 /* Set default settings */
+#define MOUSE_CMD_DISABLE      0xF5 /* Disable data reporting */
+#define MOUSE_CMD_ENABLE       0xF4 /* Enable data reporting */
+#define MOUSE_CMD_SET_RATE     0xF3 /* Set sample rate */
+#define MOUSE_CMD_GET_ID       0xF2 /* Get device ID */
 
 /* Mouse Response Codes */
-#define MOUSE_ACK               0xFA  /* Command acknowledged */
-#define MOUSE_RESEND            0xFE  /* Resend request */
+#define MOUSE_ACK    0xFA /* Command acknowledged */
+#define MOUSE_RESEND 0xFE /* Resend request */
 
 /* Configuration byte bits */
-#define PS2_CONFIG_MOUSE_IRQ    0x02  /* Enable IRQ12 for mouse */
-#define PS2_CONFIG_MOUSE_CLK    0x20  /* Disable mouse clock (set=disabled) */
+#define PS2_CONFIG_MOUSE_IRQ 0x02 /* Enable IRQ12 for mouse */
+#define PS2_CONFIG_MOUSE_CLK 0x20 /* Disable mouse clock (set=disabled) */
 
 /* Timeout for waiting on 8042 controller (iterations) */
-#define PS2_TIMEOUT             100000
+#define PS2_TIMEOUT 100000
 
 /* Mouse packet ring buffer */
 #define MOUSE_BUF_SIZE 64
@@ -112,7 +112,8 @@ static int ps2_wait_output(void)
  */
 static int ps2_send_command(uint8_t cmd)
 {
-    if (ps2_wait_input() < 0) return -1;
+    if (ps2_wait_input() < 0)
+        return -1;
     outb(PS2_CMD_PORT, cmd);
     return 0;
 }
@@ -171,12 +172,16 @@ void mouse_push_packet(uint8_t buttons, int dx, int dy)
 {
     int next = (mouse_tail + 1) % MOUSE_BUF_SIZE;
     if (next != mouse_head) {
-        if (dx > 127) dx = 127;
-        if (dx < -128) dx = -128;
-        if (dy > 127) dy = 127;
-        if (dy < -128) dy = -128;
+        if (dx > 127)
+            dx = 127;
+        if (dx < -128)
+            dx = -128;
+        if (dy > 127)
+            dy = 127;
+        if (dy < -128)
+            dy = -128;
 
-        mouse_buf[mouse_tail].buttons = buttons & 0x07;  /* button bits 0-2 */
+        mouse_buf[mouse_tail].buttons = buttons & 0x07; /* button bits 0-2 */
         mouse_buf[mouse_tail].dx = (int8_t)dx;
         mouse_buf[mouse_tail].dy = (int8_t)dy;
         mouse_tail = next;
@@ -226,14 +231,14 @@ static void mouse_irq_handler(isr_params_t *params)
         int dx = packet_bytes[1];
         int dy = packet_bytes[2];
 
-        if (flags & 0x10) {  /* X sign bit: extend the 9th bit */
+        if (flags & 0x10) { /* X sign bit: extend the 9th bit */
             dx |= 0xFFFFFF00;
         }
-        if (flags & 0x20) {  /* Y sign bit: extend the 9th bit */
+        if (flags & 0x20) { /* Y sign bit: extend the 9th bit */
             dy |= 0xFFFFFF00;
         }
 
-        if (!(flags & 0xC0)) {  /* no X or Y overflow */
+        if (!(flags & 0xC0)) { /* no X or Y overflow */
             uint8_t buttons = flags & 0x07;
 
             /* PS/2 Y grows upward; negate so positive dy is forward. */
@@ -301,8 +306,8 @@ int init_mouse(void)
     }
     config = inb(PS2_DATA_PORT);
 
-    config |= PS2_CONFIG_MOUSE_IRQ;   /* enable IRQ12 */
-    config &= ~PS2_CONFIG_MOUSE_CLK;  /* clear the clock-disable bit */
+    config |= PS2_CONFIG_MOUSE_IRQ;  /* enable IRQ12 */
+    config &= ~PS2_CONFIG_MOUSE_CLK; /* clear the clock-disable bit */
 
     if (ps2_send_command(PS2_CMD_WRITE_CONFIG) < 0) {
         klog(KLOG_WARN, "mouse", "the configuration byte would not write");
@@ -322,10 +327,10 @@ int init_mouse(void)
     } else {
         /* Reset emits 0xAA (self-test pass) then 0x00 (device ID). */
         if (ps2_wait_output() == 0) {
-            inb(PS2_DATA_PORT);  /* 0xAA */
+            inb(PS2_DATA_PORT); /* 0xAA */
         }
         if (ps2_wait_output() == 0) {
-            inb(PS2_DATA_PORT);  /* 0x00 */
+            inb(PS2_DATA_PORT); /* 0x00 */
         }
     }
 

@@ -303,9 +303,8 @@ int diskinfo_probe(int mounted)
             devfs_disk_publish(d, diskinfo_window(d->dev->sector_count));
         }
     }
-    klog(KLOG_INFO, "disk", "%s: %d sectors, model %s", info.driver,
-         (uint32_t)info.sectors,
-                  info.model);
+    klog(KLOG_INFO, "disk", "%s: %d sectors, model %s", info.driver, (uint32_t)info.sectors,
+         info.model);
     return 0;
 }
 
@@ -346,11 +345,12 @@ int diskinfo_format_disks(char *buf, int cap)
         put_dec(buf, &n, cap, (uint64_t)d->location);
         put(buf, &n, cap, " ");
         put_dec(buf, &n, cap, d->dev->sector_count);
-        put(buf, &n, cap, d->table.kind == PART_MBR       ? " mbr "
-                          : d->table.kind == PART_GPT     ? " gpt "
-                          : d->table.kind == PART_GPT_BAD ? " gpt-bad "
-                          : d->table.kind == PART_NONE    ? " none "
-                                                          : " unread ");
+        put(buf, &n, cap,
+            d->table.kind == PART_MBR       ? " mbr "
+            : d->table.kind == PART_GPT     ? " gpt "
+            : d->table.kind == PART_GPT_BAD ? " gpt-bad "
+            : d->table.kind == PART_NONE    ? " none "
+                                            : " unread ");
         put(buf, &n, cap, d->model);
         put(buf, &n, cap, "\n");
         put(buf, &n, cap, "identity ");

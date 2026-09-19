@@ -35,19 +35,19 @@
  * File descriptor types
  */
 typedef enum {
-    FD_TYPE_NONE,         /* Slot is free */
-    FD_TYPE_CONSOLE,      /* Console (stdin/stdout/stderr) */
-    FD_TYPE_FILE,         /* Regular file from KRFFS */
-    FD_TYPE_DIR,          /* Directory (for getdents64) */
-    FD_TYPE_FRAMEBUFFER,  /* VGA framebuffer device */
-    FD_TYPE_MOUSE,        /* PS/2 mouse device */
-    FD_TYPE_SOCKET,       /* Network socket */
-    FD_TYPE_PIPE,         /* Pipe end (backed by file_ops + priv) */
-    FD_TYPE_DEVICE,       /* devfs character device (backed by file_ops + priv) */
-    FD_TYPE_PROC,         /* procfs file snapshot (backed by file_ops + priv) */
-    FD_TYPE_SYNTH_DIR,    /* synthetic directory (/dev, /proc, ...); priv encodes it */
-    FD_TYPE_PTM,          /* pty master (/dev/ptmx; file_ops + priv = struct pty) */
-    FD_TYPE_PTS           /* pty slave (/dev/pts/N; file_ops + priv = struct pty) */
+    FD_TYPE_NONE,        /* Slot is free */
+    FD_TYPE_CONSOLE,     /* Console (stdin/stdout/stderr) */
+    FD_TYPE_FILE,        /* Regular file from KRFFS */
+    FD_TYPE_DIR,         /* Directory (for getdents64) */
+    FD_TYPE_FRAMEBUFFER, /* VGA framebuffer device */
+    FD_TYPE_MOUSE,       /* PS/2 mouse device */
+    FD_TYPE_SOCKET,      /* Network socket */
+    FD_TYPE_PIPE,        /* Pipe end (backed by file_ops + priv) */
+    FD_TYPE_DEVICE,      /* devfs character device (backed by file_ops + priv) */
+    FD_TYPE_PROC,        /* procfs file snapshot (backed by file_ops + priv) */
+    FD_TYPE_SYNTH_DIR,   /* synthetic directory (/dev, /proc, ...); priv encodes it */
+    FD_TYPE_PTM,         /* pty master (/dev/ptmx; file_ops + priv = struct pty) */
+    FD_TYPE_PTS          /* pty slave (/dev/pts/N; file_ops + priv = struct pty) */
 } fd_type_t;
 
 /*
@@ -55,7 +55,7 @@ typedef enum {
  */
 #define FD_FLAG_READ    0x01
 #define FD_FLAG_WRITE   0x02
-#define FD_FLAG_CLOEXEC 0x08  /* close-on-exec (F_SETFD FD_CLOEXEC, O_CLOEXEC) */
+#define FD_FLAG_CLOEXEC 0x08 /* close-on-exec (F_SETFD FD_CLOEXEC, O_CLOEXEC) */
 /* O_APPEND/O_NONBLOCK are OFD status flags (OFD_* in struct open_file), not
  * per-descriptor flags; they are shared by dup/dup2/fork. */
 
@@ -66,8 +66,8 @@ typedef enum {
  * per-descriptor. The values are the Linux i386 O_* bits so fcntl passes
  * them straight through.
  */
-#define OFD_APPEND    02000     /* O_APPEND: every write goes to end-of-file */
-#define OFD_NONBLOCK  04000     /* O_NONBLOCK: a would-block returns -EAGAIN */
+#define OFD_APPEND   02000 /* O_APPEND: every write goes to end-of-file */
+#define OFD_NONBLOCK 04000 /* O_NONBLOCK: a would-block returns -EAGAIN */
 
 /*
  * Forward declarations for the types a descriptor can point at.
@@ -98,10 +98,10 @@ struct vfs_mount;
  * they must.
  */
 struct open_file {
-    uint32_t refcount;           /* Number of descriptors sharing this OFD */
-    uint64_t offset;             /* Shared read/write offset */
-    uint64_t raw_offset;         /* Shared offset for the raw disk windows */
-    uint32_t status_flags;       /* Shared O_APPEND/O_NONBLOCK (OFD_* above) */
+    uint32_t refcount;     /* Number of descriptors sharing this OFD */
+    uint64_t offset;       /* Shared read/write offset */
+    uint64_t raw_offset;   /* Shared offset for the raw disk windows */
+    uint32_t status_flags; /* Shared O_APPEND/O_NONBLOCK (OFD_* above) */
     /* A description on a mounted file system holds its mount, its node, and
      * the file system's per-open handle. The last unref releases all three
      * (fd.c calls vfs_desc_close), which is what makes the file system's
@@ -129,13 +129,13 @@ struct open_file {
  * through the open-file description ofd.
  */
 typedef struct fd_entry {
-    fd_type_t type;              /* Type of this fd (NONE, CONSOLE, FILE) */
-    struct krffs_node *node;     /* Pointer to KRFFS node (for FILE type) */
-    struct socket *sock;         /* Pointer to socket (for SOCKET type) */
-    struct open_file *ofd;       /* Shared open-file description (offset+flags) */
-    const struct file_ops *ops;  /* Backing ops (pipes/ttys/...); NULL = enum dispatch */
-    void *priv;                  /* Backing private object (e.g. a pipe end) */
-    uint32_t flags;              /* Per-fd flags (READ, WRITE, CLOEXEC) */
+    fd_type_t type;             /* Type of this fd (NONE, CONSOLE, FILE) */
+    struct krffs_node *node;    /* Pointer to KRFFS node (for FILE type) */
+    struct socket *sock;        /* Pointer to socket (for SOCKET type) */
+    struct open_file *ofd;      /* Shared open-file description (offset+flags) */
+    const struct file_ops *ops; /* Backing ops (pipes/ttys/...); NULL = enum dispatch */
+    void *priv;                 /* Backing private object (e.g. a pipe end) */
+    uint32_t flags;             /* Per-fd flags (READ, WRITE, CLOEXEC) */
 } fd_entry_t;
 
 /*

@@ -29,7 +29,7 @@
 
 /* The struct pollfd the user passes (matches musl's layout exactly). */
 struct kernel_pollfd {
-    int   fd;
+    int fd;
     short events;
     short revents;
 };

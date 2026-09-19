@@ -92,7 +92,7 @@ struct ex_mount {
     uint32_t frozen[EXFAT_FROZEN];
     int nfrozen;
     uint8_t setbuf[256 * 32]; /* one set, other writers' up to 255 secondaries */
-    struct ex_node *nodes; /* the nodes in memory, from the heap */
+    struct ex_node *nodes;    /* the nodes in memory, from the heap */
     /* The last cache block a directory entry was read from, kept so a scan
      * of a directory costs a cache get per block and not per 32 bytes; a
      * write of any byte of the block empties it. */
@@ -2877,7 +2877,7 @@ static int ex_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, v
         goto out;
     }
     if (dst_exists && dst.index >= index && dst.index < index + count) {
-rc = -EIO;
+        rc = -EIO;
         goto out; /* the room found lies inside the destination's set */
     }
     rc = set_store(em, nd, index, count, 0);
@@ -3474,7 +3474,8 @@ static int check_mark(struct check_state *w, uint32_t c)
         w->why = "a cluster reached twice";
         return -1;
     }
-    rc = object_read(w->em, w->em->bitmap_first, &w->em->bitmap_walk, (uint64_t)(c - 2) / 8, &byte, 1);
+    rc = object_read(w->em, w->em->bitmap_first, &w->em->bitmap_walk, (uint64_t)(c - 2) / 8, &byte,
+                     1);
     if (rc != 0) {
         w->why = "an unreadable bitmap";
         return -1;
@@ -3973,15 +3974,17 @@ static int ex_path(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
 }
 
 static const struct vfs_ops exfat_ops = {
-    ex_lookup, 0, /* lookup_rest */
-    ex_hold,   ex_put,   ex_getattr,         ex_setattr, ex_open,    ex_release,
-    ex_read,   ex_write, ex_truncate,        ex_fsync,   ex_readdir, ex_create,
-    ex_unlink, ex_mkdir, ex_rmdir,           ex_rename,  0, /* link */
-    0,                                                      /* readlink */
-    ex_statfs, ex_sync,  ex_prepare_unmount,
-    0, /* abort_unmount */
-    ex_unmount, ex_path,
-    0, /* symlink */
+    ex_lookup,  0, /* lookup_rest */
+    ex_hold,    ex_put,     ex_getattr,
+    ex_setattr, ex_open,    ex_release,
+    ex_read,    ex_write,   ex_truncate,
+    ex_fsync,   ex_readdir, ex_create,
+    ex_unlink,  ex_mkdir,   ex_rmdir,
+    ex_rename,  0, /* link */
+    0,             /* readlink */
+    ex_statfs,  ex_sync,    ex_prepare_unmount,
+    0,                         /* abort_unmount */
+    ex_unmount, ex_path,    0, /* symlink */
 };
 
 const struct vfs_type vfs_exfat_type = {"exfat", ex_mount, &exfat_ops};

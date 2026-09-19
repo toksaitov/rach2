@@ -3079,15 +3079,17 @@ static int fat_path(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
 }
 
 static const struct vfs_ops vfat_ops = {
-    fat_lookup, 0, /* lookup_rest */
-    fat_hold,   fat_put,   fat_getattr,         fat_setattr, fat_open,    fat_release,
-    fat_read,   fat_write, fat_truncate,        fat_fsync,   fat_readdir, fat_create,
-    fat_unlink, fat_mkdir, fat_rmdir,           fat_rename,  0, /* link */
-    0,                                                          /* readlink */
-    fat_statfs, fat_sync,  fat_prepare_unmount,
-    0, /* abort_unmount */
-    fat_unmount, fat_path,
-    0, /* symlink */
+    fat_lookup,  0, /* lookup_rest */
+    fat_hold,    fat_put,     fat_getattr,
+    fat_setattr, fat_open,    fat_release,
+    fat_read,    fat_write,   fat_truncate,
+    fat_fsync,   fat_readdir, fat_create,
+    fat_unlink,  fat_mkdir,   fat_rmdir,
+    fat_rename,  0, /* link */
+    0,              /* readlink */
+    fat_statfs,  fat_sync,    fat_prepare_unmount,
+    0,                           /* abort_unmount */
+    fat_unmount, fat_path,    0, /* symlink */
 };
 
 const struct vfs_type vfs_vfat_type = {"vfat", fat_mount, &vfat_ops};

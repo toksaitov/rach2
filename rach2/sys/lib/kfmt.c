@@ -45,16 +45,14 @@ void k_vprintf(putc_fn_t putc_fn, const char *format, char **args)
 
             switch (c) {
             case 'd':
-                k_itoa(*((unsigned int *)args++), buffer,
-                       _K_PRINTF_BUFFER_SIZE_, c, false);
+                k_itoa(*((unsigned int *)args++), buffer, _K_PRINTF_BUFFER_SIZE_, c, false);
                 str = buffer;
                 goto string;
             case 'b':
             case 'o':
             case 'x':
             case 'X':
-                k_itoa(*((int *)args++), buffer, _K_PRINTF_BUFFER_SIZE_, c,
-                       false);
+                k_itoa(*((int *)args++), buffer, _K_PRINTF_BUFFER_SIZE_, c, false);
                 str = buffer;
                 goto string;
 
@@ -63,20 +61,19 @@ void k_vprintf(putc_fn_t putc_fn, const char *format, char **args)
                 if (!str)
                     str = "(null)";
 
-            string:
-                {
-                    /* The pad is counted here rather than in `k_itoa`, so one
-                       rule covers every conversion and the converter keeps
-                       its own contract. */
-                    size_t len = 0;
+            string: {
+                /* The pad is counted here rather than in `k_itoa`, so one
+                   rule covers every conversion and the converter keeps
+                   its own contract. */
+                size_t len = 0;
 
-                    while (str[len])
-                        len++;
-                    while ((int)len < width) {
-                        putc_fn(fill);
-                        width--;
-                    }
+                while (str[len])
+                    len++;
+                while ((int)len < width) {
+                    putc_fn(fill);
+                    width--;
                 }
+            }
                 while (*str)
                     putc_fn(*str++);
                 break;

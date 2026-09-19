@@ -23,7 +23,6 @@
  * with the read-only attribute as the write bits, as vfat does.
  */
 
-
 extern const struct vfs_type vfs_exfat_type;
 
 #endif /* _EXFAT_H_ */

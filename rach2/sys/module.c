@@ -55,21 +55,20 @@ uint32_t init_modules(multiboot_uint32_t magic, multiboot_info_t *info)
         module_table[i].end = mods[i].mod_end;
         module_table[i].size = mods[i].mod_end - mods[i].mod_start;
         module_table[i].phys = mods[i].mod_start;
-        module_table[i].cmdline = (mods[i].cmdline != 0) ?
-                                  (const char *)mods[i].cmdline : NULL;
+        module_table[i].cmdline = (mods[i].cmdline != 0) ? (const char *)mods[i].cmdline : NULL;
 
         /* The empty brackets at the end of this line are a module with no
            command line, which is every module this loader is given. */
-        klog(KLOG_DEBUG, "module", "%d: 0x%X to 0x%X, %d bytes [%s]", i,
-             module_table[i].start, module_table[i].end, module_table[i].size,
+        klog(KLOG_DEBUG, "module", "%d: 0x%X to 0x%X, %d bytes [%s]", i, module_table[i].start,
+             module_table[i].end, module_table[i].size,
              module_table[i].cmdline ? module_table[i].cmdline : "");
 
         module_count++;
     }
 
     if (info->mods_count > MAX_MODULES) {
-        klog(KLOG_WARN, "module", "%d ignored: the table holds %d",
-             info->mods_count - MAX_MODULES, MAX_MODULES);
+        klog(KLOG_WARN, "module", "%d ignored: the table holds %d", info->mods_count - MAX_MODULES,
+             MAX_MODULES);
     }
 
     return module_count;

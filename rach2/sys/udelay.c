@@ -70,7 +70,7 @@ static uint16_t pit_count(void)
     lo = inb(0x40);
     hi = inb(0x40);
     kirq_restore(flags);
-    return (uint16_t) ((uint16_t) lo | ((uint16_t) hi << 8));
+    return (uint16_t)((uint16_t)lo | ((uint16_t)hi << 8));
 }
 
 /**
@@ -95,10 +95,10 @@ static void udelay_window(uint32_t usec)
         uint32_t step;
 
         if (now <= prev) {
-            step = (uint32_t) (prev - now);
+            step = (uint32_t)(prev - now);
         } else {
             /* The counter reloaded between the two samples. */
-            step = (uint32_t) prev + (pit_reload - (uint32_t) now);
+            step = (uint32_t)prev + (pit_reload - (uint32_t)now);
         }
         seen += step;
         prev = now;

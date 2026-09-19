@@ -25,32 +25,25 @@ typedef char tls_gdt_selector_matches_asm[(GDT_TLS_SELECTOR == 0x33) ? 1 : -1];
  */
 int tls_resolve_base(const user_desc_t *u, uint32_t *base_out)
 {
-    if (u == NULL || base_out == NULL)
-    {
+    if (u == NULL || base_out == NULL) {
         return -1;
     }
 
-    if (u->entry_number != (uint32_t)-1 &&
-        u->entry_number != (uint32_t)GDT_TLS_ENTRY)
-    {
+    if (u->entry_number != (uint32_t)-1 && u->entry_number != (uint32_t)GDT_TLS_ENTRY) {
         return -1;
     }
 
-    if (!(u->flags & UD_SEG_32BIT))
-    {
+    if (!(u->flags & UD_SEG_32BIT)) {
         return -1;
     }
-    if (u->flags & UD_CONTENTS_MASK)
-    {
-        return -1;  /* code/stack segment requested, not our data TLS slot */
+    if (u->flags & UD_CONTENTS_MASK) {
+        return -1; /* code/stack segment requested, not our data TLS slot */
     }
-    if (u->flags & UD_READ_EXEC_ONLY)
-    {
-        return -1;  /* TLS must be writable */
+    if (u->flags & UD_READ_EXEC_ONLY) {
+        return -1; /* TLS must be writable */
     }
-    if (u->flags & UD_SEG_NOT_PRESENT)
-    {
-        return -1;  /* we keep the TLS slot present */
+    if (u->flags & UD_SEG_NOT_PRESENT) {
+        return -1; /* we keep the TLS slot present */
     }
 
     *base_out = u->base_addr;

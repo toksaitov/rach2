@@ -10,12 +10,12 @@
  */
 
 /* Protocol numbers (the IP header's protocol field). */
-#define IP_PROTO_ICMP   1
-#define IP_PROTO_TCP    6
-#define IP_PROTO_UDP    17
+#define IP_PROTO_ICMP 1
+#define IP_PROTO_TCP  6
+#define IP_PROTO_UDP  17
 
 /* Fixed IPv4 header size (IHL = 5 words). */
-#define IP_HDR_SIZE     20
+#define IP_HDR_SIZE 20
 
 /** Validate one received IPv4 datagram and dispatch it by protocol.
  *  `from_loopback` is nonzero only for the loopback ring; a wire packet with a
@@ -39,8 +39,7 @@ void ip_rx(const uint8_t *data, uint16_t len, int from_loopback);
  * is full or the driver did not take the frame, and -EOPNOTSUPP for a
  * broadcast of anything but UDP.
  */
-int ip_tx(uint32_t dst_ip, uint8_t proto,
-          const uint8_t *payload, uint16_t plen, uint8_t ttl);
+int ip_tx(uint32_t dst_ip, uint8_t proto, const uint8_t *payload, uint16_t plen, uint8_t ttl);
 
 /** Deliver queued loopback datagrams; called from the timer IRQ each tick. */
 void ip_loop_drain(void);

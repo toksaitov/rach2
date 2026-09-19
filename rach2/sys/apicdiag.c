@@ -25,36 +25,39 @@
 
 #define IA32_APIC_BASE 0x1B
 
-#define LAPIC_ID 0x20
+#define LAPIC_ID      0x20
 #define LAPIC_VERSION 0x30
-#define LAPIC_TPR 0x80
-#define LAPIC_SVR 0xF0
-#define LAPIC_LINT0 0x350
-#define LAPIC_LINT1 0x360
+#define LAPIC_TPR     0x80
+#define LAPIC_SVR     0xF0
+#define LAPIC_LINT0   0x350
+#define LAPIC_LINT1   0x360
 
 /* The MSI and MSI-X capabilities of one device, printed as they are. */
 static void report_device(const char *what, const pci_device_t *dev)
 {
     uint8_t msi, msix;
 
-    klog(KLOG_INFO, "apicdiag", "%s: bus %x device %x function %d, vendor 0x%x device 0x%x, irq %d", what, dev->bus,
-         dev->device, dev->function, dev->vendor_id, dev->device_id, dev->irq);
+    klog(KLOG_INFO, "apicdiag", "%s: bus %x device %x function %d, vendor 0x%x device 0x%x, irq %d",
+         what, dev->bus, dev->device, dev->function, dev->vendor_id, dev->device_id, dev->irq);
     msi = pci_find_capability(dev->bus, dev->device, dev->function, PCI_CAP_ID_MSI);
     msix = pci_find_capability(dev->bus, dev->device, dev->function, PCI_CAP_ID_MSIX);
     if (msi) {
-        uint16_t control = pci_read_config16(dev->bus, dev->device, dev->function, (uint8_t)(msi + 2));
+        uint16_t control =
+            pci_read_config16(dev->bus, dev->device, dev->function, (uint8_t)(msi + 2));
 
-        klog(KLOG_INFO, "apicdiag", "%s: msi at 0x%x control 0x%x: %s, %d of %d vector(s), %s", what, msi,
-             control, (control & 1u) ? "enabled" : "disabled", 1 << ((control >> 4) & 7u),
-             1 << ((control >> 1) & 7u), (control & 0x80u) ? "64-bit address" : "32-bit address");
+        klog(KLOG_INFO, "apicdiag", "%s: msi at 0x%x control 0x%x: %s, %d of %d vector(s), %s",
+             what, msi, control, (control & 1u) ? "enabled" : "disabled",
+             1 << ((control >> 4) & 7u), 1 << ((control >> 1) & 7u),
+             (control & 0x80u) ? "64-bit address" : "32-bit address");
     } else {
         klog(KLOG_INFO, "apicdiag", "%s: no msi capability", what);
     }
     if (msix) {
-        uint16_t control = pci_read_config16(dev->bus, dev->device, dev->function, (uint8_t)(msix + 2));
+        uint16_t control =
+            pci_read_config16(dev->bus, dev->device, dev->function, (uint8_t)(msix + 2));
 
-        klog(KLOG_INFO, "apicdiag", "%s: msi-x at 0x%x control 0x%x: %s, %d vector(s)", what, msix, control,
-             (control & 0x8000u) ? "enabled" : "disabled", (control & 0x7FFu) + 1);
+        klog(KLOG_INFO, "apicdiag", "%s: msi-x at 0x%x control 0x%x: %s, %d vector(s)", what, msix,
+             control, (control & 0x8000u) ? "enabled" : "disabled", (control & 0x7FFu) + 1);
     } else {
         klog(KLOG_INFO, "apicdiag", "%s: no msi-x capability", what);
     }
@@ -76,9 +79,9 @@ void apic_diag_report(void)
         return;
     }
     kcpu_rdmsr(IA32_APIC_BASE, &lo, &hi);
-    klog(KLOG_INFO, "apicdiag", "IA32_APIC_BASE: hi 0x%x lo 0x%x: base 0x%x, %s%s%s", hi, lo, lo & 0xFFFFF000u,
-         (lo & (1u << 11)) ? "enabled" : "disabled", (lo & (1u << 10)) ? ", x2apic" : "",
-         (lo & (1u << 8)) ? ", bootstrap processor" : "");
+    klog(KLOG_INFO, "apicdiag", "IA32_APIC_BASE: hi 0x%x lo 0x%x: base 0x%x, %s%s%s", hi, lo,
+         lo & 0xFFFFF000u, (lo & (1u << 11)) ? "enabled" : "disabled",
+         (lo & (1u << 10)) ? ", x2apic" : "", (lo & (1u << 8)) ? ", bootstrap processor" : "");
     page = map_mmio((uintptr_t)(lo & 0xFFFFF000u), 0x1000);
     if (page == 0) {
         klog(KLOG_WARN, "apicdiag", "the apic page could not be mapped");
@@ -91,8 +94,8 @@ void apic_diag_report(void)
         uint32_t lint0 = apic[LAPIC_LINT0 / 4];
         uint32_t lint1 = apic[LAPIC_LINT1 / 4];
 
-        klog(KLOG_INFO, "apicdiag", "apic: id %d, version 0x%x, %d lvt entries", id >> 24, version & 0xFFu,
-             ((version >> 16) & 0xFFu) + 1);
+        klog(KLOG_INFO, "apicdiag", "apic: id %d, version 0x%x, %d lvt entries", id >> 24,
+             version & 0xFFu, ((version >> 16) & 0xFFu) + 1);
         klog(KLOG_INFO, "apicdiag", "apic: tpr 0x%x, svr 0x%x: %s, spurious vector %d",
              apic[LAPIC_TPR / 4], apic[LAPIC_SVR / 4],
              (apic[LAPIC_SVR / 4] & 0x100u) ? "software enabled" : "software disabled",

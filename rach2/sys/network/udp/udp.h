@@ -10,7 +10,7 @@
  * (disabled, legal over IPv4); incoming checksums are not verified.
  */
 
-#define UDP_HDR_SIZE        8
+#define UDP_HDR_SIZE 8
 
 struct socket;
 
@@ -24,8 +24,8 @@ void udp_rx(uint32_t src_ip, const uint8_t *data, uint16_t len);
  * want of an address the request for which has just gone out), and a negative
  * errno for the conditions the caller must hear about.
  */
-int udp_tx(uint16_t src_port, uint32_t dst_ip, uint16_t dst_port,
-           const uint8_t *payload, uint16_t plen, uint8_t ttl);
+int udp_tx(uint16_t src_port, uint32_t dst_ip, uint16_t dst_port, const uint8_t *payload,
+           uint16_t plen, uint8_t ttl);
 
 /** Bind sock to port; 0 on success, -1 if full or already bound. */
 int udp_bind(uint16_t port, struct socket *sock);

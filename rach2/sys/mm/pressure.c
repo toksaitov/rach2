@@ -64,8 +64,7 @@ static uint32_t high_mark(void)
 int mem_may_take(int user_page)
 {
     (void)user_page;
-    if (in_interrupt() || !current_proc || current_proc->euid == 0 ||
-        current_proc->reclaiming) {
+    if (in_interrupt() || !current_proc || current_proc->euid == 0 || current_proc->reclaiming) {
         return 1;
     }
     return frame_free_count() > mem_reserve_frames();
@@ -109,8 +108,9 @@ uint32_t mem_reclaim(void)
         current_proc->reclaiming--;
     }
     if (got) {
-        klog(KLOG_INFO, "memory", "reclaim: %d frames from the caches, %d written back, %d free before",
-             (int)got, (int)written, (int)before);
+        klog(KLOG_INFO, "memory",
+             "reclaim: %d frames from the caches, %d written back, %d free before", (int)got,
+             (int)written, (int)before);
     }
     return got;
 }

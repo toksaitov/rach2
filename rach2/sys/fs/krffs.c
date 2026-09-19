@@ -63,15 +63,13 @@ static void _krffs_strncpy(char *dest, const char *src, uint32_t n)
  * disk region the page-cache window maps, so neither read nor write can fault.
  */
 
-static int krffs_memory_read(void *ctx, uint64_t offset, void *buffer,
-                             uint32_t size)
+static int krffs_memory_read(void *ctx, uint64_t offset, void *buffer, uint32_t size)
 {
     _krffs_memcpy(buffer, (const char *)ctx + offset, size);
     return 0;
 }
 
-static int krffs_memory_write(void *ctx, uint64_t offset, const void *buffer,
-                              uint32_t size)
+static int krffs_memory_write(void *ctx, uint64_t offset, const void *buffer, uint32_t size)
 {
     _krffs_memcpy((char *)ctx + offset, buffer, size);
     return 0;
@@ -83,11 +81,8 @@ static int krffs_memory_sync(void *ctx)
     return 0;
 }
 
-static const krffs_backend_t krffs_memory_backend = {
-    krffs_memory_read,
-    krffs_memory_write,
-    krffs_memory_sync
-};
+static const krffs_backend_t krffs_memory_backend = {krffs_memory_read, krffs_memory_write,
+                                                     krffs_memory_sync};
 
 /* The root's mount, and the mount every facade function below works on. */
 static krffs_mount_t krffs_root_mount;
@@ -101,12 +96,10 @@ static krffs_mount_t krffs_root_mount;
  */
 int krffs_head(krffs_mount_t *mount, uint64_t offset, krffs_node_t *out)
 {
-    if (!mount || !out || offset > mount->size ||
-        mount->size - offset < sizeof(krffs_node_t)) {
+    if (!mount || !out || offset > mount->size || mount->size - offset < sizeof(krffs_node_t)) {
         return -1;
     }
-    return mount->backend->read(mount->ctx, offset, out,
-                                (uint32_t)sizeof(krffs_node_t));
+    return mount->backend->read(mount->ctx, offset, out, (uint32_t)sizeof(krffs_node_t));
 }
 
 /**
@@ -119,21 +112,17 @@ int krffs_head(krffs_mount_t *mount, uint64_t offset, krffs_node_t *out)
  *
  * Returns 0, or -1 if the header would not fit inside the region.
  */
-static int krffs_brief(krffs_mount_t *mount, uint64_t offset,
-                       krffs_brief_t *out)
+static int krffs_brief(krffs_mount_t *mount, uint64_t offset, krffs_brief_t *out)
 {
-    if (!mount || !out || offset > mount->size ||
-        mount->size - offset < sizeof(krffs_node_t)) {
+    if (!mount || !out || offset > mount->size || mount->size - offset < sizeof(krffs_node_t)) {
         return -1;
     }
     if (mount->backend->read(mount->ctx, offset + KRFFS_FIELD_TYPE, &out->type,
                              (uint32_t)(KRFFS_FIELD_NAME - KRFFS_FIELD_TYPE)) != 0) {
         return -1;
     }
-    return mount->backend->read(mount->ctx, offset + KRFFS_FIELD_MODE,
-                                &out->mode,
-                                (uint32_t)(sizeof(krffs_node_t) -
-                                           KRFFS_FIELD_MODE));
+    return mount->backend->read(mount->ctx, offset + KRFFS_FIELD_MODE, &out->mode,
+                                (uint32_t)(sizeof(krffs_node_t) - KRFFS_FIELD_MODE));
 }
 
 /**
@@ -142,8 +131,7 @@ static int krffs_brief(krffs_mount_t *mount, uint64_t offset,
  * Returns 1 if the name is exactly that component. The byte after it must be
  * the terminator, so len + 1 bytes decide it.
  */
-static int krffs_name_is(krffs_mount_t *mount, uint64_t offset,
-                         const char *comp, uint32_t len)
+static int krffs_name_is(krffs_mount_t *mount, uint64_t offset, const char *comp, uint32_t len)
 {
     uint8_t name[KRFFS_FILE_NAME_BUFFER_SIZE];
     uint32_t i;
@@ -151,8 +139,7 @@ static int krffs_name_is(krffs_mount_t *mount, uint64_t offset,
     if (len + 1 > KRFFS_FILE_NAME_BUFFER_SIZE) {
         return 0;
     }
-    if (mount->backend->read(mount->ctx, offset + KRFFS_FIELD_NAME, name,
-                             len + 1) != 0) {
+    if (mount->backend->read(mount->ctx, offset + KRFFS_FIELD_NAME, name, len + 1) != 0) {
         return 0;
     }
     for (i = 0; i < len; i++) {
@@ -170,8 +157,7 @@ static int krffs_has_name(krffs_mount_t *mount, uint64_t offset)
 {
     uint8_t first = 0;
 
-    if (mount->backend->read(mount->ctx, offset + KRFFS_FIELD_NAME, &first,
-                             1) != 0) {
+    if (mount->backend->read(mount->ctx, offset + KRFFS_FIELD_NAME, &first, 1) != 0) {
         /* A name the medium would not give up is not a name that is not
          * there: the callers free such a node, refuse to remove a directory
          * over it, or count it, and a read that failed must not be the
@@ -196,8 +182,7 @@ static int krffs_has_name(krffs_mount_t *mount, uint64_t offset)
  * before and after is written in two pieces that say the same thing in one
  * of them, and that is a write like any other.
  */
-static int krffs_write_is_whole(krffs_mount_t *mount, uint64_t at,
-                                const void *value, uint32_t size)
+static int krffs_write_is_whole(krffs_mount_t *mount, uint64_t at, const void *value, uint32_t size)
 {
     uint8_t old[16];
     const uint8_t *want = value;
@@ -233,22 +218,20 @@ static int krffs_write_is_whole(krffs_mount_t *mount, uint64_t at,
     return (base + first) / mount->grain == (base + last) / mount->grain;
 }
 
-static int krffs_put(krffs_mount_t *mount, uint64_t offset, uint32_t field,
-                     const void *value, uint32_t size)
+static int krffs_put(krffs_mount_t *mount, uint64_t offset, uint32_t field, const void *value,
+                     uint32_t size)
 {
     uint64_t at = offset + field;
 
     if (!krffs_write_is_whole(mount, at, value, size)) {
-        klog(KLOG_WARN, "krffs",
-             "refused: a field at %d would reach the medium in two pieces",
+        klog(KLOG_WARN, "krffs", "refused: a field at %d would reach the medium in two pieces",
              (int)at);
         return -1;
     }
     return mount->backend->write(mount->ctx, at, value, size);
 }
 
-static int krffs_put_u64(krffs_mount_t *mount, uint64_t offset, uint32_t field,
-                         uint64_t value)
+static int krffs_put_u64(krffs_mount_t *mount, uint64_t offset, uint32_t field, uint64_t value)
 {
     return krffs_put(mount, offset, field, &value, (uint32_t)sizeof(value));
 }
@@ -261,27 +244,22 @@ static int krffs_put_u64(krffs_mount_t *mount, uint64_t offset, uint32_t field,
  * rule that guards a live node does not apply. Without this a name whose
  * hash happened to land astride a unit could not be created.
  */
-static int krffs_put_new_u64(krffs_mount_t *mount, uint64_t offset, uint32_t field,
-                             uint64_t value)
+static int krffs_put_new_u64(krffs_mount_t *mount, uint64_t offset, uint32_t field, uint64_t value)
 {
-    return mount->backend->write(mount->ctx, offset + field, &value,
-                                 (uint32_t)sizeof(value));
+    return mount->backend->write(mount->ctx, offset + field, &value, (uint32_t)sizeof(value));
 }
 
-static int krffs_put_u32(krffs_mount_t *mount, uint64_t offset, uint32_t field,
-                         uint32_t value)
+static int krffs_put_u32(krffs_mount_t *mount, uint64_t offset, uint32_t field, uint32_t value)
 {
     return krffs_put(mount, offset, field, &value, (uint32_t)sizeof(value));
 }
 
-static int krffs_put_u16(krffs_mount_t *mount, uint64_t offset, uint32_t field,
-                         uint16_t value)
+static int krffs_put_u16(krffs_mount_t *mount, uint64_t offset, uint32_t field, uint16_t value)
 {
     return krffs_put(mount, offset, field, &value, (uint32_t)sizeof(value));
 }
 
-static int krffs_put_u8(krffs_mount_t *mount, uint64_t offset, uint32_t field,
-                        uint8_t value)
+static int krffs_put_u8(krffs_mount_t *mount, uint64_t offset, uint32_t field, uint8_t value)
 {
     return krffs_put(mount, offset, field, &value, (uint32_t)sizeof(value));
 }
@@ -289,20 +267,16 @@ static int krffs_put_u8(krffs_mount_t *mount, uint64_t offset, uint32_t field,
 /**
  * Read and write a node's data, `at` bytes into it.
  */
-static int krffs_data_read(krffs_mount_t *mount, uint64_t offset, uint64_t at,
-                           void *buffer, uint32_t size)
+static int krffs_data_read(krffs_mount_t *mount, uint64_t offset, uint64_t at, void *buffer,
+                           uint32_t size)
 {
-    return mount->backend->read(mount->ctx,
-                                offset + sizeof(krffs_node_t) + at,
-                                buffer, size);
+    return mount->backend->read(mount->ctx, offset + sizeof(krffs_node_t) + at, buffer, size);
 }
 
-static int krffs_data_write(krffs_mount_t *mount, uint64_t offset, uint64_t at,
-                            const void *buffer, uint32_t size)
+static int krffs_data_write(krffs_mount_t *mount, uint64_t offset, uint64_t at, const void *buffer,
+                            uint32_t size)
 {
-    return mount->backend->write(mount->ctx,
-                                 offset + sizeof(krffs_node_t) + at,
-                                 buffer, size);
+    return mount->backend->write(mount->ctx, offset + sizeof(krffs_node_t) + at, buffer, size);
 }
 
 /**
@@ -311,8 +285,8 @@ static int krffs_data_write(krffs_mount_t *mount, uint64_t offset, uint64_t at,
  * A hole left by a write past the end, and the growth a truncate makes, are
  * both zeroes nobody wrote, and the medium has whatever the space held before.
  */
-static int krffs_data_fill(krffs_mount_t *mount, uint64_t offset, uint64_t at,
-                           uint8_t value, uint64_t size)
+static int krffs_data_fill(krffs_mount_t *mount, uint64_t offset, uint64_t at, uint8_t value,
+                           uint64_t size)
 {
     uint8_t block[64];
     uint32_t i;
@@ -321,8 +295,7 @@ static int krffs_data_fill(krffs_mount_t *mount, uint64_t offset, uint64_t at,
         block[i] = value;
     }
     while (size > 0) {
-        uint32_t chunk = size > sizeof(block) ? (uint32_t)sizeof(block)
-                                              : (uint32_t)size;
+        uint32_t chunk = size > sizeof(block) ? (uint32_t)sizeof(block) : (uint32_t)size;
         if (krffs_data_write(mount, offset, at, block, chunk) != 0) {
             return -1;
         }
@@ -397,8 +370,7 @@ static uint64_t krffs_step(krffs_mount_t *mount, uint64_t offset, uint64_t size)
     return krffs_wrap_offset(mount, offset + size);
 }
 
-uint64_t krffs_next_offset(krffs_mount_t *mount, uint64_t offset,
-                           const krffs_node_t *head)
+uint64_t krffs_next_offset(krffs_mount_t *mount, uint64_t offset, const krffs_node_t *head)
 {
     return krffs_step(mount, offset, head->size);
 }
@@ -486,8 +458,8 @@ static uint64_t krffs_find_offset_by_id(krffs_mount_t *mount, uint64_t id)
 /**
  * Find the child named comp[0..len) directly inside directory `dir_id`.
  */
-static uint64_t krffs_find_child(krffs_mount_t *mount, uint64_t dir_id,
-                                 const char *comp, uint32_t len)
+static uint64_t krffs_find_child(krffs_mount_t *mount, uint64_t dir_id, const char *comp,
+                                 uint32_t len)
 {
     uint64_t offset = 0;
     uint64_t steps = 0;
@@ -515,8 +487,7 @@ static uint64_t krffs_find_child(krffs_mount_t *mount, uint64_t dir_id,
  * which can collide with same-named files in different directories; the
  * hierarchical walk below is the real path resolver.
  */
-static uint64_t krffs_find_offset_by_hash(krffs_mount_t *mount,
-                                          const char *name, int with_root)
+static uint64_t krffs_find_offset_by_hash(krffs_mount_t *mount, const char *name, int with_root)
 {
     uint64_t offset = 0;
     uint64_t steps = 0;
@@ -528,8 +499,7 @@ static uint64_t krffs_find_offset_by_hash(krffs_mount_t *mount,
         if (krffs_brief(mount, offset, &brief) != 0) {
             return KRFFS_NO_NODE;
         }
-        if ((brief.type == KRFFS_RESERVED_NODE ||
-             (with_root && brief.type == KRFFS_ROOT_NODE)) &&
+        if ((brief.type == KRFFS_RESERVED_NODE || (with_root && brief.type == KRFFS_ROOT_NODE)) &&
             brief.id == hash) {
             return offset;
         }
@@ -579,7 +549,7 @@ uint64_t krffs_child_at(krffs_mount_t *mount, uint64_t dir, const char *name)
 uint64_t krffs_walk_err(krffs_mount_t *mount, const char *path, int *err)
 {
     uint64_t cur_id = KRFFS_ROOT_ID;
-    uint64_t offset = 0;                /* current directory; the root is 0 */
+    uint64_t offset = 0; /* current directory; the root is 0 */
     const char *p = path ? path : "";
     krffs_brief_t brief;
 
@@ -719,9 +689,7 @@ static void krffs_split_path(const char *path, char *dir, char *base)
         comp = last_slash + 1;
     }
 
-    for (i = 0; i + 1 < KRFFS_FILE_NAME_BUFFER_SIZE && comp[i] != '\0' &&
-                comp[i] != '/';
-         i++) {
+    for (i = 0; i + 1 < KRFFS_FILE_NAME_BUFFER_SIZE && comp[i] != '\0' && comp[i] != '/'; i++) {
         base[i] = comp[i];
     }
     base[i] = '\0';
@@ -757,8 +725,7 @@ static uint64_t krffs_resolve_dir_id(krffs_mount_t *mount, const char *path)
  * The ancestors are collected as offsets and their names read one at a time,
  * since a name is 256 bytes and sixty-four of them are not a stack.
  */
-int krffs_node_path_at(krffs_mount_t *mount, uint64_t offset, char *buf,
-                              uint32_t size)
+int krffs_node_path_at(krffs_mount_t *mount, uint64_t offset, char *buf, uint32_t size)
 {
     uint64_t chain[KRFFS_PATH_MAX_DEPTH];
     int depth = 0;
@@ -813,8 +780,7 @@ int krffs_node_path_at(krffs_mount_t *mount, uint64_t offset, char *buf,
         if (krffs_head(mount, chain[i], &head) != 0) {
             return -1;
         }
-        for (n = 0; n < KRFFS_FILE_NAME_BUFFER_SIZE - 1 && head.name[n] != '\0';
-             n++) {
+        for (n = 0; n < KRFFS_FILE_NAME_BUFFER_SIZE - 1 && head.name[n] != '\0'; n++) {
             /* bounded: the field is 256 bytes and need not end in one */
         }
         if (pos + 1 + n + 1 > size) {
@@ -888,8 +854,8 @@ uint64_t krffs_parent_offset(krffs_mount_t *mount, uint64_t offset)
  * is what makes a split or a merge survive a machine that stops between the
  * two.
  */
-static int krffs_write_free_header(krffs_mount_t *mount, uint64_t offset,
-                                   uint64_t size, uint64_t previous_node_size)
+static int krffs_write_free_header(krffs_mount_t *mount, uint64_t offset, uint64_t size,
+                                   uint64_t previous_node_size)
 {
     krffs_node_t head;
     uint32_t i;
@@ -903,22 +869,20 @@ static int krffs_write_free_header(krffs_mount_t *mount, uint64_t offset,
     head.previous_node_size = previous_node_size;
     head.data_size = 0;
 
-    return mount->backend->write(mount->ctx, offset, &head,
-                                 (uint32_t)sizeof(head));
+    return mount->backend->write(mount->ctx, offset, &head, (uint32_t)sizeof(head));
 }
 
 /**
  * Copy `size` bytes of data from one node to another.
  */
-static int krffs_copy_data(krffs_mount_t *mount, uint64_t to, uint64_t from,
-                           uint64_t size)
+static int krffs_copy_data(krffs_mount_t *mount, uint64_t to, uint64_t from, uint64_t size)
 {
     uint8_t block[256];
     uint64_t at = 0;
 
     while (at < size) {
-        uint32_t chunk = size - at > sizeof(block) ? (uint32_t)sizeof(block)
-                                                   : (uint32_t)(size - at);
+        uint32_t chunk =
+            size - at > sizeof(block) ? (uint32_t)sizeof(block) : (uint32_t)(size - at);
         if (krffs_data_read(mount, from, at, block, chunk) != 0 ||
             krffs_data_write(mount, to, at, block, chunk) != 0) {
             return -1;
@@ -935,11 +899,9 @@ static int krffs_copy_data(krffs_mount_t *mount, uint64_t to, uint64_t from,
  * operation that changes a size fixes it afterwards; a machine that stops
  * before this leaves the one fault the check at the next mount can rebuild.
  */
-static void krffs_fix_backward_link(krffs_mount_t *mount, uint64_t offset,
-                                    uint64_t size)
+static void krffs_fix_backward_link(krffs_mount_t *mount, uint64_t offset, uint64_t size)
 {
-    krffs_put_u64(mount, krffs_wrap_offset(mount, offset + size),
-                  KRFFS_FIELD_PREVIOUS, size);
+    krffs_put_u64(mount, krffs_wrap_offset(mount, offset + size), KRFFS_FIELD_PREVIOUS, size);
 }
 
 /**
@@ -958,8 +920,7 @@ static void krffs_fix_backward_link(krffs_mount_t *mount, uint64_t offset,
  * leaves a chain a mount can walk. A node published without a name is one no
  * path reaches, and the check reclaims it; every caller names it next.
  */
-uint64_t krffs_allocate_at(krffs_mount_t *mount, uint64_t size,
-                                  uint64_t original)
+uint64_t krffs_allocate_at(krffs_mount_t *mount, uint64_t size, uint64_t original)
 {
     uint64_t size_with_header = sizeof(krffs_node_t) + size;
     uint64_t offset = 0;
@@ -987,21 +948,19 @@ uint64_t krffs_allocate_at(krffs_mount_t *mount, uint64_t size,
                 /* Split only if the tail can hold a node header of its own;
                  * otherwise leave the slack inside this node. */
                 if (second_half_size >= sizeof(krffs_node_t)) {
-                    uint64_t tail = krffs_wrap_offset(mount,
-                                                      offset + size_with_header);
+                    uint64_t tail = krffs_wrap_offset(mount, offset + size_with_header);
 
                     /* The tail's header must be on the medium before the size
                      * that reveals it. A backend that refused the header and
                      * accepted the size would leave the ring pointing at
                      * bytes nobody wrote, so the failure ends the
                      * allocation. */
-                    if (krffs_write_free_header(mount, tail, second_half_size,
-                                                size_with_header) != 0 ||
+                    if (krffs_write_free_header(mount, tail, second_half_size, size_with_header) !=
+                            0 ||
                         krffs_sync_point(mount) != 0) {
                         return KRFFS_NO_NODE;
                     }
-                    if (krffs_put_u64(mount, offset, KRFFS_FIELD_SIZE,
-                                      size_with_header) != 0) {
+                    if (krffs_put_u64(mount, offset, KRFFS_FIELD_SIZE, size_with_header) != 0) {
                         return KRFFS_NO_NODE;
                     }
                     krffs_fix_backward_link(mount, tail, second_half_size);
@@ -1019,26 +978,21 @@ uint64_t krffs_allocate_at(krffs_mount_t *mount, uint64_t size,
                                 KRFFS_FILE_NAME_BUFFER_SIZE);
                 rc |= krffs_put_new_u64(mount, offset, KRFFS_FIELD_ID, from.id);
                 /* keep its directory membership */
-                rc |= krffs_put_new_u64(mount, offset, KRFFS_FIELD_PARENT,
-                                        from.parent_id);
+                rc |= krffs_put_new_u64(mount, offset, KRFFS_FIELD_PARENT, from.parent_id);
                 rc |= krffs_put_u16(mount, offset, KRFFS_FIELD_MODE, from.mode);
                 rc |= krffs_put_u32(mount, offset, KRFFS_FIELD_UID, from.uid);
                 rc |= krffs_put_u32(mount, offset, KRFFS_FIELD_GID, from.gid);
-                rc |= krffs_put(mount, offset, KRFFS_FIELD_ATIME,
-                                &from.access_time,
+                rc |= krffs_put(mount, offset, KRFFS_FIELD_ATIME, &from.access_time,
                                 (uint32_t)sizeof(from.access_time));
-                rc |= krffs_put(mount, offset, KRFFS_FIELD_MTIME,
-                                &from.modification_time,
+                rc |= krffs_put(mount, offset, KRFFS_FIELD_MTIME, &from.modification_time,
                                 (uint32_t)sizeof(from.modification_time));
-                rc |= krffs_put(mount, offset, KRFFS_FIELD_CTIME,
-                                &from.attribute_change_time,
+                rc |= krffs_put(mount, offset, KRFFS_FIELD_CTIME, &from.attribute_change_time,
                                 (uint32_t)sizeof(from.attribute_change_time));
                 if (rc != 0) {
                     return KRFFS_NO_NODE;
                 }
                 if (from.data_size > 0 &&
-                    krffs_copy_data(mount, offset, original,
-                                    from.data_size) != 0) {
+                    krffs_copy_data(mount, offset, original, from.data_size) != 0) {
                     return KRFFS_NO_NODE;
                 }
                 data_size = from.data_size;
@@ -1061,13 +1015,11 @@ uint64_t krffs_allocate_at(krffs_mount_t *mount, uint64_t size,
             if (krffs_sync_point(mount) != 0) {
                 return KRFFS_NO_NODE;
             }
-            if (krffs_put_u64(mount, offset, KRFFS_FIELD_DATA_SIZE,
-                              data_size) != 0 ||
+            if (krffs_put_u64(mount, offset, KRFFS_FIELD_DATA_SIZE, data_size) != 0 ||
                 krffs_sync_point(mount) != 0) {
                 return KRFFS_NO_NODE;
             }
-            if (krffs_put_u8(mount, offset, KRFFS_FIELD_TYPE,
-                             KRFFS_RESERVED_NODE) != 0 ||
+            if (krffs_put_u8(mount, offset, KRFFS_FIELD_TYPE, KRFFS_RESERVED_NODE) != 0 ||
                 krffs_sync_point(mount) != 0) {
                 return KRFFS_NO_NODE;
             }
@@ -1116,17 +1068,14 @@ int krffs_remove_at(krffs_mount_t *mount, uint64_t offset)
 
     if (next != 0 && krffs_head(mount, next, &neighbour) == 0 &&
         neighbour.type == KRFFS_FREE_NODE) {
-        if (krffs_put_u64(mount, offset, KRFFS_FIELD_SIZE,
-                          size + neighbour.size) == 0) {
+        if (krffs_put_u64(mount, offset, KRFFS_FIELD_SIZE, size + neighbour.size) == 0) {
             size += neighbour.size;
             size_changed = 1;
         }
     }
-    if (previous != KRFFS_NO_NODE &&
-        krffs_head(mount, previous, &neighbour) == 0 &&
+    if (previous != KRFFS_NO_NODE && krffs_head(mount, previous, &neighbour) == 0 &&
         neighbour.type == KRFFS_FREE_NODE) {
-        if (krffs_put_u64(mount, previous, KRFFS_FIELD_SIZE,
-                          size + neighbour.size) == 0) {
+        if (krffs_put_u64(mount, previous, KRFFS_FIELD_SIZE, size + neighbour.size) == 0) {
             size += neighbour.size;
             offset = previous;
             size_changed = 1;
@@ -1155,8 +1104,7 @@ int krffs_remove_at(krffs_mount_t *mount, uint64_t offset)
  * written. A shrink publishes the shorter length first, since the bytes beyond
  * it stay inside the node until the size that frees them is written.
  */
-uint64_t krffs_resize_at(krffs_mount_t *mount, uint64_t offset,
-                                uint64_t size)
+uint64_t krffs_resize_at(krffs_mount_t *mount, uint64_t offset, uint64_t size)
 {
     uint64_t size_with_header = sizeof(krffs_node_t) + size;
     krffs_node_t head;
@@ -1183,8 +1131,7 @@ uint64_t krffs_resize_at(krffs_mount_t *mount, uint64_t offset,
     if (size_with_header > head.size) {
         uint64_t difference = size_with_header - head.size;
 
-        if (next != 0 && next_head.type == KRFFS_FREE_NODE &&
-            next_head.size >= difference) {
+        if (next != 0 && next_head.type == KRFFS_FREE_NODE && next_head.size >= difference) {
             uint64_t whole = head.size + next_head.size;
             uint64_t tail_size = whole - size_with_header;
 
@@ -1208,18 +1155,15 @@ uint64_t krffs_resize_at(krffs_mount_t *mount, uint64_t offset,
             }
 
             if (tail_size >= sizeof(krffs_node_t)) {
-                uint64_t tail = krffs_wrap_offset(mount,
-                                                  offset + size_with_header);
+                uint64_t tail = krffs_wrap_offset(mount, offset + size_with_header);
 
                 /* The node already holds what was asked. If the surplus
                  * cannot be written back as a free node, it stays inside the
                  * node: space nobody can allocate, and a sound chain, which
                  * is the better of the two answers. */
-                if (krffs_write_free_header(mount, tail, tail_size,
-                                            size_with_header) == 0 &&
+                if (krffs_write_free_header(mount, tail, tail_size, size_with_header) == 0 &&
                     krffs_sync_point(mount) == 0 &&
-                    krffs_put_u64(mount, offset, KRFFS_FIELD_SIZE,
-                                  size_with_header) == 0) {
+                    krffs_put_u64(mount, offset, KRFFS_FIELD_SIZE, size_with_header) == 0) {
                     krffs_fix_backward_link(mount, tail, tail_size);
                 }
             }
@@ -1241,8 +1185,7 @@ uint64_t krffs_resize_at(krffs_mount_t *mount, uint64_t offset,
              * check resolves at the next mount, but a running kernel would
              * walk to the old one and read what the file used to be, so the
              * caller is told this did not work. */
-            if (moved != KRFFS_NO_NODE &&
-                krffs_remove_at(mount, offset) != 0) {
+            if (moved != KRFFS_NO_NODE && krffs_remove_at(mount, offset) != 0) {
                 return KRFFS_NO_NODE;
             }
             return moved;
@@ -1268,18 +1211,15 @@ uint64_t krffs_resize_at(krffs_mount_t *mount, uint64_t offset,
 
         if (difference >= sizeof(krffs_node_t)) {
             uint64_t free_size = difference;
-            uint64_t surplus = krffs_wrap_offset(mount,
-                                                 offset + size_with_header);
+            uint64_t surplus = krffs_wrap_offset(mount, offset + size_with_header);
 
             if (next_head.type == KRFFS_FREE_NODE) {
                 /* Merge the surplus with the following free node. */
                 free_size += next_head.size;
             }
-            if (krffs_write_free_header(mount, surplus, free_size,
-                                        size_with_header) == 0 &&
+            if (krffs_write_free_header(mount, surplus, free_size, size_with_header) == 0 &&
                 krffs_sync_point(mount) == 0 &&
-                krffs_put_u64(mount, offset, KRFFS_FIELD_SIZE,
-                              size_with_header) == 0) {
+                krffs_put_u64(mount, offset, KRFFS_FIELD_SIZE, size_with_header) == 0) {
                 krffs_fix_backward_link(mount, surplus, free_size);
             }
         }
@@ -1295,13 +1235,11 @@ uint64_t krffs_resize_at(krffs_mount_t *mount, uint64_t offset,
  * Answers the number of bytes read (0 past the end of the file), or -1 on
  * error.
  */
-int krffs_read_at(krffs_mount_t *mount, uint64_t node, char *buffer,
-                         uint32_t size, uint32_t at)
+int krffs_read_at(krffs_mount_t *mount, uint64_t node, char *buffer, uint32_t size, uint32_t at)
 {
     krffs_node_t head;
 
-    if (node == KRFFS_NO_NODE || !buffer ||
-        krffs_head(mount, node, &head) != 0) {
+    if (node == KRFFS_NO_NODE || !buffer || krffs_head(mount, node, &head) != 0) {
         return -1;
     }
     /* A handle that named a file whose node has since been freed reads
@@ -1328,16 +1266,15 @@ int krffs_read_at(krffs_mount_t *mount, uint64_t node, char *buffer,
  * written, `KRFFS_EBAD` for an argument it cannot use, or `KRFFS_ENOSPACE`
  * when the file had to grow and the file system had no room.
  */
-int krffs_write_at(krffs_mount_t *mount, uint64_t *node,
-                          const char *buffer, uint32_t size, uint32_t at)
+int krffs_write_at(krffs_mount_t *mount, uint64_t *node, const char *buffer, uint32_t size,
+                   uint32_t at)
 {
     krffs_node_t head;
     uint64_t offset;
     uint64_t old_data_size;
     uint64_t new_size;
 
-    if (!node || *node == KRFFS_NO_NODE || !buffer ||
-        krffs_head(mount, *node, &head) != 0) {
+    if (!node || *node == KRFFS_NO_NODE || !buffer || krffs_head(mount, *node, &head) != 0) {
         return KRFFS_EBAD;
     }
     offset = *node;
@@ -1367,12 +1304,10 @@ int krffs_write_at(krffs_mount_t *mount, uint64_t *node,
      * cleared. `krffs_truncate` already zeroes what it grows; this is the same
      * rule for the other way a file grows. */
     if ((uint64_t)at > old_data_size &&
-        krffs_data_fill(mount, offset, old_data_size, 0,
-                        (uint64_t)at - old_data_size) != 0) {
+        krffs_data_fill(mount, offset, old_data_size, 0, (uint64_t)at - old_data_size) != 0) {
         return KRFFS_EBAD;
     }
-    if (krffs_data_write(mount, offset, at, buffer, size) != 0 ||
-        krffs_sync_point(mount) != 0) {
+    if (krffs_data_write(mount, offset, at, buffer, size) != 0 || krffs_sync_point(mount) != 0) {
         return KRFFS_EBAD;
     }
     if (krffs_head(mount, offset, &head) != 0) {
@@ -1423,8 +1358,7 @@ int krffs_create_at(krffs_mount_t *mount, const char *path)
 
     _krffs_strncpy((char *)name, base, KRFFS_FILE_NAME_BUFFER_SIZE);
     name[KRFFS_FILE_NAME_BUFFER_SIZE - 1] = '\0';
-    rc |= krffs_put_new_u64(mount, node, KRFFS_FIELD_ID,
-                            krffs_calculate_djb_hash(name));
+    rc |= krffs_put_new_u64(mount, node, KRFFS_FIELD_ID, krffs_calculate_djb_hash(name));
     rc |= krffs_put_new_u64(mount, node, KRFFS_FIELD_PARENT, parent_id);
     rc |= krffs_put_u16(mount, node, KRFFS_FIELD_MODE, 0644); /* rw-r--r-- */
     rc |= krffs_put_u32(mount, node, KRFFS_FIELD_UID, 0);
@@ -1434,8 +1368,7 @@ int krffs_create_at(krffs_mount_t *mount, const char *path)
      * moment it came into being, and a build tool compares against it. */
     krffs_stamp_at(mount, node, KRFFS_STAMP_DATA);
     if (krffs_head(mount, node, &head) == 0) {
-        rc |= krffs_put(mount, node, KRFFS_FIELD_ATIME,
-                        &head.modification_time,
+        rc |= krffs_put(mount, node, KRFFS_FIELD_ATIME, &head.modification_time,
                         (uint32_t)sizeof(head.modification_time));
     }
 
@@ -1444,8 +1377,7 @@ int krffs_create_at(krffs_mount_t *mount, const char *path)
      * owner it will be read with. A stop before the name leaves a node no
      * path reaches, and the check reclaims it. */
     if (rc != 0 || krffs_sync_point(mount) != 0 ||
-        krffs_put(mount, node, KRFFS_FIELD_NAME, name,
-                  KRFFS_FILE_NAME_BUFFER_SIZE) != 0 ||
+        krffs_put(mount, node, KRFFS_FIELD_NAME, name, KRFFS_FILE_NAME_BUFFER_SIZE) != 0 ||
         krffs_sync_point(mount) != 0) {
         return -1;
     }
@@ -1469,8 +1401,8 @@ int krffs_create_at(krffs_mount_t *mount, const char *path)
  * Returns 0 on success, `KRFFS_EBAD` if it is not a regular file and
  * `KRFFS_ENOSPACE` if there is no space to grow it.
  */
-int krffs_truncate_node_at(krffs_mount_t *mount, uint64_t node,
-                           uint32_t new_size, uint64_t *node_out)
+int krffs_truncate_node_at(krffs_mount_t *mount, uint64_t node, uint32_t new_size,
+                           uint64_t *node_out)
 {
     uint64_t old_data_size;
     krffs_node_t head;
@@ -1478,8 +1410,7 @@ int krffs_truncate_node_at(krffs_mount_t *mount, uint64_t node,
     if (node_out) {
         *node_out = node;
     }
-    if (node == KRFFS_NO_NODE || node == 0 ||
-        krffs_head(mount, node, &head) != 0 ||
+    if (node == KRFFS_NO_NODE || node == 0 || krffs_head(mount, node, &head) != 0 ||
         head.type != KRFFS_RESERVED_NODE || KRFFS_IS_DIR(head.mode)) {
         return KRFFS_EBAD;
     }
@@ -1502,8 +1433,7 @@ int krffs_truncate_node_at(krffs_mount_t *mount, uint64_t node,
     }
 
     if ((uint64_t)new_size > old_data_size &&
-        (krffs_data_fill(mount, node, old_data_size, 0,
-                         (uint64_t)new_size - old_data_size) != 0 ||
+        (krffs_data_fill(mount, node, old_data_size, 0, (uint64_t)new_size - old_data_size) != 0 ||
          krffs_sync_point(mount) != 0)) {
         return KRFFS_EBAD;
     }
@@ -1518,8 +1448,7 @@ int krffs_truncate_node_at(krffs_mount_t *mount, uint64_t node,
 /**
  * Resize the file at `path`, which is the same work reached by its name.
  */
-int krffs_truncate_at(krffs_mount_t *mount, const char *path,
-                      uint32_t new_size, uint64_t *node_out)
+int krffs_truncate_at(krffs_mount_t *mount, const char *path, uint32_t new_size, uint64_t *node_out)
 {
     uint64_t node = krffs_walk(mount, path);
     int rc = krffs_truncate_node_at(mount, node, new_size, node_out);
@@ -1568,8 +1497,8 @@ int krffs_unlink_at(krffs_mount_t *mount, const char *path)
     uint64_t node = krffs_walk(mount, path);
     krffs_node_t head;
 
-    if (node == KRFFS_NO_NODE || node == 0 ||
-        krffs_head(mount, node, &head) != 0 || KRFFS_IS_DIR(head.mode)) {
+    if (node == KRFFS_NO_NODE || node == 0 || krffs_head(mount, node, &head) != 0 ||
+        KRFFS_IS_DIR(head.mode)) {
         klog(KLOG_DEBUG, "krffs", "unlink: no such file: %s", path);
         return -1;
     }
@@ -1588,8 +1517,7 @@ int krffs_unlink_at(krffs_mount_t *mount, const char *path)
  * it to make room would orphan the whole subtree. Returns 0 on success, -1 on
  * error.
  */
-int krffs_rename_at(krffs_mount_t *mount, const char *old_path,
-                           const char *new_path)
+int krffs_rename_at(krffs_mount_t *mount, const char *old_path, const char *new_path)
 {
     uint64_t node;
     uint64_t existing;
@@ -1639,7 +1567,8 @@ int krffs_rename_at(krffs_mount_t *mount, const char *old_path,
     new_id = krffs_calculate_djb_hash(name);
     if (!krffs_write_is_whole(mount, node + KRFFS_FIELD_ID, &new_id, sizeof(new_id)) ||
         !krffs_write_is_whole(mount, node + KRFFS_FIELD_PARENT, &parent_id, sizeof(parent_id))) {
-        klog(KLOG_WARN, "krffs", "rename: refused: a field of the node at %d would reach the medium in two pieces",
+        klog(KLOG_WARN, "krffs",
+             "rename: refused: a field of the node at %d would reach the medium in two pieces",
              (int)node);
         return -1;
     }
@@ -1648,8 +1577,7 @@ int krffs_rename_at(krffs_mount_t *mount, const char *old_path,
     if (existing != KRFFS_NO_NODE) {
         krffs_node_t victim;
 
-        if (krffs_head(mount, existing, &victim) != 0 ||
-            KRFFS_IS_DIR(victim.mode)) {
+        if (krffs_head(mount, existing, &victim) != 0 || KRFFS_IS_DIR(victim.mode)) {
             return -1;
         }
         /* The name is about to be given to another node, so the one that has
@@ -1667,8 +1595,7 @@ int krffs_rename_at(krffs_mount_t *mount, const char *old_path,
     if (krffs_put_u64(mount, node, KRFFS_FIELD_ID, new_id) != 0 ||
         krffs_put_u64(mount, node, KRFFS_FIELD_PARENT, parent_id) != 0 ||
         krffs_sync_point(mount) != 0 ||
-        krffs_put(mount, node, KRFFS_FIELD_NAME, name,
-                  KRFFS_FILE_NAME_BUFFER_SIZE) != 0 ||
+        krffs_put(mount, node, KRFFS_FIELD_NAME, name, KRFFS_FILE_NAME_BUFFER_SIZE) != 0 ||
         krffs_sync_point(mount) != 0) {
         return -1;
     }
@@ -1717,21 +1644,17 @@ int krffs_mkdir_at(krffs_mount_t *mount, const char *path)
     _krffs_strncpy((char *)name, base, KRFFS_FILE_NAME_BUFFER_SIZE);
     name[KRFFS_FILE_NAME_BUFFER_SIZE - 1] = '\0';
     rc |= krffs_put_u64(mount, node, KRFFS_FIELD_PARENT, parent_id);
-    rc |= krffs_put_u64(mount, node, KRFFS_FIELD_ID,
-                        krffs_mix_id(parent_id, base));
-    rc |= krffs_put_u16(mount, node, KRFFS_FIELD_MODE,
-                        (uint16_t)(KRFFS_S_IFDIR | 0755));
+    rc |= krffs_put_u64(mount, node, KRFFS_FIELD_ID, krffs_mix_id(parent_id, base));
+    rc |= krffs_put_u16(mount, node, KRFFS_FIELD_MODE, (uint16_t)(KRFFS_S_IFDIR | 0755));
     rc |= krffs_put_u32(mount, node, KRFFS_FIELD_UID, 0);
     rc |= krffs_put_u32(mount, node, KRFFS_FIELD_GID, 0);
     krffs_stamp_at(mount, node, KRFFS_STAMP_DATA);
     if (krffs_head(mount, node, &head) == 0) {
-        rc |= krffs_put(mount, node, KRFFS_FIELD_ATIME,
-                        &head.modification_time,
+        rc |= krffs_put(mount, node, KRFFS_FIELD_ATIME, &head.modification_time,
                         (uint32_t)sizeof(head.modification_time));
     }
     if (rc != 0 || krffs_sync_point(mount) != 0 ||
-        krffs_put(mount, node, KRFFS_FIELD_NAME, name,
-                  KRFFS_FILE_NAME_BUFFER_SIZE) != 0 ||
+        krffs_put(mount, node, KRFFS_FIELD_NAME, name, KRFFS_FILE_NAME_BUFFER_SIZE) != 0 ||
         krffs_sync_point(mount) != 0) {
         return -1;
     }
@@ -1754,8 +1677,8 @@ int krffs_rmdir_at(krffs_mount_t *mount, const char *path)
     krffs_brief_t entry;
     uint64_t dir_id;
 
-    if (node == KRFFS_NO_NODE || node == 0 ||
-        krffs_brief(mount, node, &head) != 0 || !KRFFS_IS_DIR(head.mode)) {
+    if (node == KRFFS_NO_NODE || node == 0 || krffs_brief(mount, node, &head) != 0 ||
+        !KRFFS_IS_DIR(head.mode)) {
         return -1;
     }
     dir_id = head.id;
@@ -1787,9 +1710,8 @@ int krffs_rmdir_at(krffs_mount_t *mount, const char *path)
  * if a child was returned, 0 past the end, -1 on error. Each call rescans the
  * whole node list for the index, a teaching simplification.
  */
-int krffs_readdir_at(krffs_mount_t *mount, const char *path,
-                            uint32_t index, char *name_out, uint32_t buf_size,
-                            int *is_dir_out)
+int krffs_readdir_at(krffs_mount_t *mount, const char *path, uint32_t index, char *name_out,
+                     uint32_t buf_size, int *is_dir_out)
 {
     uint64_t node = krffs_walk(mount, path);
     uint64_t scan = 0;
@@ -1821,8 +1743,7 @@ int krffs_readdir_at(krffs_mount_t *mount, const char *path,
                 uint8_t name[KRFFS_FILE_NAME_BUFFER_SIZE];
                 uint32_t i;
 
-                if (mount->backend->read(mount->ctx, scan + KRFFS_FIELD_NAME,
-                                         name,
+                if (mount->backend->read(mount->ctx, scan + KRFFS_FIELD_NAME, name,
                                          KRFFS_FILE_NAME_BUFFER_SIZE) != 0) {
                     return -1;
                 }
@@ -1888,13 +1809,12 @@ uint32_t krffs_reap_orphans_at(krffs_mount_t *mount)
         if (head.type == KRFFS_RESERVED_NODE && !krffs_has_name(mount, node)) {
             uint64_t merged = node;
 
-            if (krffs_brief(mount, previous, &before) == 0 &&
-                before.type == KRFFS_FREE_NODE) {
+            if (krffs_brief(mount, previous, &before) == 0 && before.type == KRFFS_FREE_NODE) {
                 merged = previous;
             }
             krffs_remove_at(mount, node);
             reaped++;
-            node = merged;      /* free; the step below advances past it */
+            node = merged; /* free; the step below advances past it */
             if (krffs_brief(mount, node, &head) != 0) {
                 break;
             }
@@ -1982,8 +1902,7 @@ int krffs_is_dirty(krffs_mount_t *mount)
  * Answers 0, or -1 if a write was refused or the volume has more named nodes
  * than the pass compares.
  */
-int krffs_repair_at(krffs_mount_t *mount, uint32_t *links, uint32_t *orphans,
-                    uint32_t *doubles)
+int krffs_repair_at(krffs_mount_t *mount, uint32_t *links, uint32_t *orphans, uint32_t *doubles)
 {
     uint64_t offset = 0;
     uint64_t previous_size = 0;
@@ -2029,8 +1948,7 @@ int krffs_repair_at(krffs_mount_t *mount, uint32_t *links, uint32_t *orphans,
             return -1;
         }
         if (offset != 0 && head.previous_node_size != previous_size) {
-            if (krffs_put_u64(mount, offset, KRFFS_FIELD_PREVIOUS,
-                              previous_size) != 0) {
+            if (krffs_put_u64(mount, offset, KRFFS_FIELD_PREVIOUS, previous_size) != 0) {
                 return -1;
             }
             fixed_links++;
@@ -2042,8 +1960,7 @@ int krffs_repair_at(krffs_mount_t *mount, uint32_t *links, uint32_t *orphans,
         offset = krffs_step(mount, offset, head.size);
     } while (offset != 0 && ++steps < bound);
 
-    if (krffs_head(mount, 0, &head) == 0 &&
-        head.previous_node_size != previous_size) {
+    if (krffs_head(mount, 0, &head) == 0 && head.previous_node_size != previous_size) {
         if (krffs_put_u64(mount, 0, KRFFS_FIELD_PREVIOUS, previous_size) != 0) {
             return -1;
         }
@@ -2073,9 +1990,8 @@ int krffs_repair_at(krffs_mount_t *mount, uint32_t *links, uint32_t *orphans,
                 if (krffs_head(mount, scan, &other) != 0) {
                     return -1;
                 }
-                if (other.type == KRFFS_RESERVED_NODE &&
-                    other.parent_id == head.parent_id && other.name[0] != '\0' &&
-                    krffs_names_match(other.name, head.name)) {
+                if (other.type == KRFFS_RESERVED_NODE && other.parent_id == head.parent_id &&
+                    other.name[0] != '\0' && krffs_names_match(other.name, head.name)) {
                     /* The larger is the copy a move was making, since a
                      * move only ever makes a node larger. A directory is
                      * never the loser whatever the sizes say: its children
@@ -2092,8 +2008,7 @@ int krffs_repair_at(krffs_mount_t *mount, uint32_t *links, uint32_t *orphans,
                         loser = other.size > head.size ? offset : scan;
                     }
 
-                    if (krffs_put(mount, loser, KRFFS_FIELD_NAME, &empty, 1) !=
-                        0) {
+                    if (krffs_put(mount, loser, KRFFS_FIELD_NAME, &empty, 1) != 0) {
                         return -1;
                     }
                     fixed_doubles++;
@@ -2169,8 +2084,7 @@ static int krffs_chain_walk(krffs_mount_t *mount, int with_links)
             head.type != KRFFS_RESERVED_NODE) {
             return 0;
         }
-        if (head.size < sizeof(krffs_node_t) ||
-            head.size > mount->size - position) {
+        if (head.size < sizeof(krffs_node_t) || head.size > mount->size - position) {
             return 0;
         }
         /* Only a node that has data: a free node keeps whatever length the
@@ -2178,12 +2092,10 @@ static int krffs_chain_walk(krffs_mount_t *mount, int with_links)
          * size of a split before it writes the new length, so a free node
          * whose length is larger than it is is an ordinary state and not a
          * fault. */
-        if (head.type != KRFFS_FREE_NODE &&
-            head.data_size > head.size - sizeof(krffs_node_t)) {
+        if (head.type != KRFFS_FREE_NODE && head.data_size > head.size - sizeof(krffs_node_t)) {
             return 0;
         }
-        if (with_links && count > 1 &&
-            head.previous_node_size != previous_size) {
+        if (with_links && count > 1 && head.previous_node_size != previous_size) {
             return 0;
         }
         if (head.type == KRFFS_RESERVED_NODE) {
@@ -2250,12 +2162,10 @@ int krffs_set_mode_at(krffs_mount_t *mount, uint64_t offset, uint16_t mode)
         return -1;
     }
     return krffs_put_u16(mount, offset, KRFFS_FIELD_MODE,
-                         (uint16_t)((head.mode & KRFFS_S_IFMT) |
-                                    (mode & 07777u)));
+                         (uint16_t)((head.mode & KRFFS_S_IFMT) | (mode & 07777u)));
 }
 
-int krffs_set_owner_at(krffs_mount_t *mount, uint64_t offset, uint32_t uid,
-                       uint32_t gid, int which)
+int krffs_set_owner_at(krffs_mount_t *mount, uint64_t offset, uint32_t uid, uint32_t gid, int which)
 {
     int rc = 0;
 
@@ -2268,17 +2178,16 @@ int krffs_set_owner_at(krffs_mount_t *mount, uint64_t offset, uint32_t uid,
     return rc;
 }
 
-int krffs_set_time_at(krffs_mount_t *mount, uint64_t offset, int which,
-                      int64_t seconds, int64_t nanoseconds)
+int krffs_set_time_at(krffs_mount_t *mount, uint64_t offset, int which, int64_t seconds,
+                      int64_t nanoseconds)
 {
     krffs_node_time_t when;
 
     when.seconds = seconds;
     when.nanoseconds = nanoseconds;
     return krffs_put(mount, offset,
-                     which == KRFFS_SET_ATIME ? KRFFS_FIELD_ATIME
-                                              : KRFFS_FIELD_MTIME,
-                     &when, (uint32_t)sizeof(when));
+                     which == KRFFS_SET_ATIME ? KRFFS_FIELD_ATIME : KRFFS_FIELD_MTIME, &when,
+                     (uint32_t)sizeof(when));
 }
 
 /**
@@ -2298,8 +2207,7 @@ uint32_t krffs_count_at(krffs_mount_t *mount)
         }
         /* An orphan is not a file any more: no path names it, so counting it
          * would report a file the boot banner's reader cannot find. */
-        if (brief.type == KRFFS_RESERVED_NODE &&
-            krffs_has_name(mount, offset)) {
+        if (brief.type == KRFFS_RESERVED_NODE && krffs_has_name(mount, offset)) {
             count++;
         }
         offset = krffs_step(mount, offset, brief.size);
@@ -2328,8 +2236,7 @@ uint32_t krffs_free_at(krffs_mount_t *mount)
         if (krffs_brief(mount, offset, &brief) != 0) {
             break;
         }
-        if (brief.type == KRFFS_FREE_NODE &&
-            brief.size > sizeof(krffs_node_t)) {
+        if (brief.type == KRFFS_FREE_NODE && brief.size > sizeof(krffs_node_t)) {
             free_bytes += (uint32_t)(brief.size - sizeof(krffs_node_t));
         }
         offset = krffs_step(mount, offset, brief.size);
@@ -2415,10 +2322,8 @@ krffs_node_t *krffs_get_previous_node(krffs_file_system_t *fs, krffs_node_t *nod
         return NULL;
     }
 
-    return krffs_wrap_node_position(
-        fs,
-        (krffs_node_t *)(((char *)node) - node->previous_node_size)
-    );
+    return krffs_wrap_node_position(fs,
+                                    (krffs_node_t *)(((char *)node) - node->previous_node_size));
 }
 
 /**
@@ -2438,10 +2343,7 @@ krffs_node_t *krffs_get_next_node(krffs_file_system_t *fs, krffs_node_t *node)
         return fs->node;
     }
 
-    return krffs_wrap_node_position(
-        fs,
-        (krffs_node_t *)(((char *)node) + node->size)
-    );
+    return krffs_wrap_node_position(fs, (krffs_node_t *)(((char *)node) + node->size));
 }
 
 /**
@@ -2532,8 +2434,7 @@ int krffs_node_path(krffs_node_t *node, char *buf, uint32_t size)
     if (!krffs_fs || !node) {
         return -1;
     }
-    return krffs_node_path_at(&krffs_root_mount, krffs_offset_of(node), buf,
-                              size);
+    return krffs_node_path_at(&krffs_root_mount, krffs_offset_of(node), buf, size);
 }
 
 /**
@@ -2565,14 +2466,12 @@ int krffs_open(const char *path)
  * basename. Returns the number of bytes read (0 past end of file), or -1 on
  * error.
  */
-int krffs_read_node(krffs_node_t *node, char *buffer, uint32_t size,
-                    uint32_t offset)
+int krffs_read_node(krffs_node_t *node, char *buffer, uint32_t size, uint32_t offset)
 {
     if (!node || !buffer) {
         return -1;
     }
-    return krffs_read_at(&krffs_root_mount, krffs_offset_of(node), buffer, size,
-                         offset);
+    return krffs_read_at(&krffs_root_mount, krffs_offset_of(node), buffer, size, offset);
 }
 
 /**
@@ -2598,8 +2497,7 @@ int krffs_read(const char *path, char *buffer, uint32_t size, uint32_t offset)
  *
  * Updates *nodep if a grow relocated the node.
  */
-int krffs_write_node(krffs_node_t **nodep, const char *buffer, uint32_t size,
-                     uint32_t offset)
+int krffs_write_node(krffs_node_t **nodep, const char *buffer, uint32_t size, uint32_t offset)
 {
     uint64_t node;
     int written;
@@ -2663,10 +2561,7 @@ int krffs_truncate(const char *path, uint32_t new_size)
     if (!krffs_fs) {
         return -1;
     }
-    return krffs_truncate_at(&krffs_root_mount, path, new_size, (uint64_t *)0) ==
-                   0
-               ? 0
-               : -1;
+    return krffs_truncate_at(&krffs_root_mount, path, new_size, (uint64_t *)0) == 0 ? 0 : -1;
 }
 
 int krffs_create(const char *path)
@@ -2709,14 +2604,13 @@ int krffs_rmdir(const char *path)
     return krffs_rmdir_at(&krffs_root_mount, path);
 }
 
-int krffs_readdir(const char *path, uint32_t index, char *name_out,
-                  uint32_t buf_size, int *is_dir_out)
+int krffs_readdir(const char *path, uint32_t index, char *name_out, uint32_t buf_size,
+                  int *is_dir_out)
 {
     if (!krffs_fs) {
         return -1;
     }
-    return krffs_readdir_at(&krffs_root_mount, path, index, name_out, buf_size,
-                            is_dir_out);
+    return krffs_readdir_at(&krffs_root_mount, path, index, name_out, buf_size, is_dir_out);
 }
 
 void krffs_stamp(krffs_node_t *node, int what)
@@ -2739,8 +2633,7 @@ krffs_node_t *krffs_parent_node(krffs_node_t *node)
     if (!krffs_fs || !node) {
         return NULL;
     }
-    return krffs_node_of(krffs_parent_offset(&krffs_root_mount,
-                                             krffs_offset_of(node)));
+    return krffs_node_of(krffs_parent_offset(&krffs_root_mount, krffs_offset_of(node)));
 }
 
 void krffs_orphan_node(krffs_node_t *node)
@@ -2778,7 +2671,8 @@ uint32_t krffs_reap_orphans(void)
  * Stamp a node as free: the header primitive the tests and the allocator
  * share.
  */
-krffs_node_t *krffs_initialize_free_node(krffs_node_t *node, uint64_t size, uint64_t previous_node_size)
+krffs_node_t *krffs_initialize_free_node(krffs_node_t *node, uint64_t size,
+                                         uint64_t previous_node_size)
 {
     if (!node) {
         return NULL;
@@ -2811,14 +2705,14 @@ void krffs_set_reserved_node_name(krffs_node_t *node, const char *name)
     node->id = krffs_calculate_djb_hash(node->name);
 }
 
-krffs_node_t *krffs_allocate_reserved_node(krffs_file_system_t *fs, uint64_t size, krffs_node_t *original)
+krffs_node_t *krffs_allocate_reserved_node(krffs_file_system_t *fs, uint64_t size,
+                                           krffs_node_t *original)
 {
     if (fs != krffs_fs || !fs->node) {
         return NULL; /* the pointer interface is the root's */
     }
     return krffs_node_of(krffs_allocate_at(&krffs_root_mount, size,
-                                           original ? krffs_offset_of(original)
-                                                    : KRFFS_NO_NODE));
+                                           original ? krffs_offset_of(original) : KRFFS_NO_NODE));
 }
 
 krffs_node_t *krffs_resize_reserved_node(krffs_file_system_t *fs, krffs_node_t *node, uint64_t size)
@@ -2826,8 +2720,7 @@ krffs_node_t *krffs_resize_reserved_node(krffs_file_system_t *fs, krffs_node_t *
     if (fs != krffs_fs || !fs->node || !node) {
         return NULL; /* the pointer interface is the root's */
     }
-    return krffs_node_of(krffs_resize_at(&krffs_root_mount,
-                                         krffs_offset_of(node), size));
+    return krffs_node_of(krffs_resize_at(&krffs_root_mount, krffs_offset_of(node), size));
 }
 
 void krffs_remove_reserved_node(krffs_file_system_t *fs, krffs_node_t *node)
@@ -2912,8 +2805,7 @@ void krffs_list_files(void)
             break;
         }
         if (head.type == KRFFS_RESERVED_NODE && head.name[0] != '\0') {
-            console_printf("  [%d] %s (%d bytes)\n",
-                           count, head.name, (uint32_t)head.data_size);
+            console_printf("  [%d] %s (%d bytes)\n", count, head.name, (uint32_t)head.data_size);
             count++;
         }
         offset = krffs_step(&krffs_root_mount, offset, head.size);
@@ -2950,13 +2842,12 @@ int init_krffs(void *ramdisk_base, uint32_t ramdisk_size)
     root = (krffs_node_t *)ramdisk_base;
 
     if (root->magic != KRFFS_FILE_SYSTEM_MAGIC) {
-        klog(KLOG_ERR, "krffs", "mount: refused: magic 0x%X, expected 0x%X",
-             root->magic, KRFFS_FILE_SYSTEM_MAGIC);
+        klog(KLOG_ERR, "krffs", "mount: refused: magic 0x%X, expected 0x%X", root->magic,
+             KRFFS_FILE_SYSTEM_MAGIC);
         return -1;
     }
     if (root->type != KRFFS_ROOT_NODE) {
-        klog(KLOG_ERR, "krffs",
-             "mount: refused: first node is type %d, not the root", root->type);
+        klog(KLOG_ERR, "krffs", "mount: refused: first node is type %d, not the root", root->type);
         return -1;
     }
 

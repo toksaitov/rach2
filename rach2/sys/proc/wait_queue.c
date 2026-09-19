@@ -12,8 +12,14 @@
  * no-ops; the list logic exercised there is identical either way.
  */
 #ifdef WAIT_QUEUE_HOSTTEST
-static uint32_t irq_save(void) { return 0; }
-static void irq_restore(uint32_t flags) { (void)flags; }
+static uint32_t irq_save(void)
+{
+    return 0;
+}
+static void irq_restore(uint32_t flags)
+{
+    (void)flags;
+}
 #else
 static uint32_t irq_save(void)
 {

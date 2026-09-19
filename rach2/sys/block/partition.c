@@ -128,8 +128,8 @@ static void follow_logical(struct part_table *t, part_read_fn read, void *ctx,
          * record in the chain would sit inside an accepted range, so
          * writing the first would destroy the second. */
         if (e0[4] != 0 && le32(e0 + 12) != 0 && le32(e0 + 8) != 0) {
-            struct part_entry *e = take(t, number, ebr + le32(e0 + 8), le32(e0 + 12), ebr + 1,
-                                        ext_last);
+            struct part_entry *e =
+                take(t, number, ebr + le32(e0 + 8), le32(e0 + 12), ebr + 1, ext_last);
 
             if (e) {
                 e->mbr_type = e0[4];
@@ -311,7 +311,8 @@ int part_scan(struct part_table *t, part_read_fn read, void *ctx, uint64_t disk_
         if (scan_gpt_at(t, read, ctx, disk_sectors, 1, work) == 0) {
             return 0;
         }
-        if (disk_sectors > 1 && scan_gpt_at(t, read, ctx, disk_sectors, disk_sectors - 1, work) == 0) {
+        if (disk_sectors > 1 &&
+            scan_gpt_at(t, read, ctx, disk_sectors, disk_sectors - 1, work) == 0) {
             t->backup_used = 1;
             return 0;
         }

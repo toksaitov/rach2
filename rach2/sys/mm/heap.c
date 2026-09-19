@@ -14,7 +14,7 @@ uintptr_t mem_reserved_ptr;
  */
 void init_mm(void)
 {
-    uintptr_t kernel_end = (uintptr_t) &_end;
+    uintptr_t kernel_end = (uintptr_t)&_end;
 
     if (mem_reserved_ptr < kernel_end) {
         mem_reserved_ptr = kernel_end;
@@ -51,9 +51,8 @@ retry:
     new_ptr = mem_reserved_ptr + size;
 
     if (new_ptr > HARD_MEMORY_LIMIT) {
-        klog(KLOG_ERR, "mem",
-             "reserve: out of memory: at 0x%X, %d bytes, limit 0x%X",
-                      mem_reserved_ptr, size, HARD_MEMORY_LIMIT);
+        klog(KLOG_ERR, "mem", "reserve: out of memory: at 0x%X, %d bytes, limit 0x%X",
+             mem_reserved_ptr, size, HARD_MEMORY_LIMIT);
         return 0;
     }
 

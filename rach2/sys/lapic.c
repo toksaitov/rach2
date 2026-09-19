@@ -178,8 +178,7 @@ int lapic_pending(uint8_t vector)
     if (!ready) {
         return 0;
     }
-    return (apic_read(LAPIC_IRR + word) & bit) != 0 ||
-           (apic_read(LAPIC_ISR + word) & bit) != 0;
+    return (apic_read(LAPIC_IRR + word) & bit) != 0 || (apic_read(LAPIC_ISR + word) & bit) != 0;
 }
 
 int lapic_ready(void)

@@ -155,8 +155,7 @@ static void diag_eth_report(const struct diag_eth *e)
     }
 
     klog(KLOG_INFO, "diag", "ethernet: 10ec:8168 at %d:%d.%d", (uint32_t)e->bus,
-         (uint32_t)e->device,
-             (uint32_t)e->function);
+         (uint32_t)e->device, (uint32_t)e->function);
 
     if (e->state == DIAG_ETH_NO_DECODE) {
         diag_say("  ethernet: memory decoding is off; the chip id is not read");
@@ -171,8 +170,8 @@ static void diag_eth_report(const struct diag_eth *e)
         return;
     }
 
-    klog(KLOG_INFO, "diag", "ethernet: mmio 0x%X txconfig 0x%X xid 0x%X",
-         e->mmio, e->txconfig, e->xid);
+    klog(KLOG_INFO, "diag", "ethernet: mmio 0x%X txconfig 0x%X xid 0x%X", e->mmio, e->txconfig,
+         e->xid);
     if ((e->xid & DIAG_XID_FAMILY_MASK) == DIAG_XID_RTL8168GU) {
         diag_say("  ethernet: RTL8168GU, the chip this port targets");
     } else {
@@ -199,21 +198,19 @@ static void diag_summary(void)
 
     klog(KLOG_INFO, "diag", "board: %s", board_name());
 
-    klog(KLOG_INFO, "diag",
-         "network: %s, station %X%X:%X%X:%X%X:%X%X:%X%X:%X%X", netdev_name(netdev_first()),
-        (unsigned)(net_mac[0] >> 4), (unsigned)(net_mac[0] & 0xF), (unsigned)(net_mac[1] >> 4),
-        (unsigned)(net_mac[1] & 0xF), (unsigned)(net_mac[2] >> 4), (unsigned)(net_mac[2] & 0xF),
-        (unsigned)(net_mac[3] >> 4), (unsigned)(net_mac[3] & 0xF), (unsigned)(net_mac[4] >> 4),
-        (unsigned)(net_mac[4] & 0xF), (unsigned)(net_mac[5] >> 4), (unsigned)(net_mac[5] & 0xF));
+    klog(KLOG_INFO, "diag", "network: %s, station %X%X:%X%X:%X%X:%X%X:%X%X:%X%X",
+         netdev_name(netdev_first()), (unsigned)(net_mac[0] >> 4), (unsigned)(net_mac[0] & 0xF),
+         (unsigned)(net_mac[1] >> 4), (unsigned)(net_mac[1] & 0xF), (unsigned)(net_mac[2] >> 4),
+         (unsigned)(net_mac[2] & 0xF), (unsigned)(net_mac[3] >> 4), (unsigned)(net_mac[3] & 0xF),
+         (unsigned)(net_mac[4] >> 4), (unsigned)(net_mac[4] & 0xF), (unsigned)(net_mac[5] >> 4),
+         (unsigned)(net_mac[5] & 0xF));
 
     klog(KLOG_INFO, "diag", "disk policy: %s",
          diskcmd_policy() == DISKCMD_READ_WRITE ? "read-write" : "read-only");
 
-    klog(KLOG_INFO, "diag", "entropy: %s",
-         krandom_is_trusted() ? "trusted" : "not trusted");
+    klog(KLOG_INFO, "diag", "entropy: %s", krandom_is_trusted() ? "trusted" : "not trusted");
 
-    klog(KLOG_INFO, "diag", "file system: %d files",
-         (uint32_t)krffs_count_files());
+    klog(KLOG_INFO, "diag", "file system: %d files", (uint32_t)krffs_count_files());
 
     diag_say("===================================");
 }
@@ -277,12 +274,10 @@ void boot_diag_report(void)
     diag_say("");
     diag_say("======= Boot diagnostics (rach2.diag) =======");
 
-    klog(KLOG_INFO, "diag", "kernel ends 0x%X, reservation break 0x%X",
-         (uint32_t)(uintptr_t)&_end,
-             (uint32_t)mem_reserved_ptr);
-    klog(KLOG_INFO, "diag",
-         "direct map ends 0x%X, %d frames free after all reservations",
-             (uint32_t)HARD_MEMORY_LIMIT, frame_free_count());
+    klog(KLOG_INFO, "diag", "kernel ends 0x%X, reservation break 0x%X", (uint32_t)(uintptr_t)&_end,
+         (uint32_t)mem_reserved_ptr);
+    klog(KLOG_INFO, "diag", "direct map ends 0x%X, %d frames free after all reservations",
+         (uint32_t)HARD_MEMORY_LIMIT, frame_free_count());
 
     if (module_count == 0) {
         diag_say("  modules: none (the kernel booted alone)");
@@ -293,8 +288,8 @@ void boot_diag_report(void)
         if (!mod) {
             continue;
         }
-        klog(KLOG_INFO, "diag", "module %d: 0x%X to 0x%X, %d bytes", i,
-             mod->phys, mod->phys + mod->size, mod->size);
+        klog(KLOG_INFO, "diag", "module %d: 0x%X to 0x%X, %d bytes", i, mod->phys,
+             mod->phys + mod->size, mod->size);
     }
 
     diag_eth_report(&eth);

@@ -10,13 +10,13 @@
 #include "../serial.h"
 #include "../isr.h"
 
-#define SB16_BASE           0x220
-#define SB16_IRQ            5
-#define SB16_DMA_8BIT       1
-#define SB16_DMA_16BIT      5
+#define SB16_BASE      0x220
+#define SB16_IRQ       5
+#define SB16_DMA_8BIT  1
+#define SB16_DMA_16BIT 5
 
 /* PIC remaps the ISA IRQs to vectors 32..47, so IRQ 5 is vector 37. */
-#define SB16_IRQ_VECTOR     (32 + SB16_IRQ)
+#define SB16_IRQ_VECTOR (32 + SB16_IRQ)
 
 static uint16_t sb16_base = SB16_BASE;
 
@@ -35,7 +35,7 @@ static audio_callback_t user_callback = NULL;
  * requires the buffer to lie below 16MB and not cross a 64KB boundary.
  */
 static uint8_t dma_buffer[SB16_BUFFER_SIZE * 2] __attribute__((aligned(16)));
-static int current_buffer = 0;  /* half the DMA is currently playing */
+static int current_buffer = 0; /* half the DMA is currently playing */
 static volatile uint32_t irq_count = 0;
 
 /*
@@ -47,8 +47,8 @@ static volatile uint32_t irq_count = 0;
 #define RING_BUFFER_SIZE (SB16_BUFFER_SIZE * 8)
 
 static uint8_t ring_buffer[RING_BUFFER_SIZE];
-static volatile uint32_t ring_read_ptr = 0;   /* IRQ reads here */
-static volatile uint32_t ring_write_ptr = 0;  /* write() appends here */
+static volatile uint32_t ring_read_ptr = 0;  /* IRQ reads here */
+static volatile uint32_t ring_write_ptr = 0; /* write() appends here */
 
 static volatile uint32_t underrun_count = 0;
 static volatile uint32_t underrun_samples = 0;
@@ -301,16 +301,16 @@ static void sb16_start_auto_init(void)
     if (is_16bit) {
         dma_channel = SB16_DMA_16BIT;
         dsp_cmd = DSP_16BIT_OUT_AI;
-        mode = 0x10;  /* signed */
-        block_size = (SB16_BUFFER_SIZE / 2) - 1;  /* one half, in 16-bit words */
+        mode = 0x10;                             /* signed */
+        block_size = (SB16_BUFFER_SIZE / 2) - 1; /* one half, in 16-bit words */
     } else {
         dma_channel = SB16_DMA_8BIT;
         dsp_cmd = DSP_8BIT_OUT_AI;
-        mode = 0x00;  /* unsigned */
-        block_size = SB16_BUFFER_SIZE - 1;  /* one half, in bytes */
+        mode = 0x00;                       /* unsigned */
+        block_size = SB16_BUFFER_SIZE - 1; /* one half, in bytes */
     }
     if (current_channels == 2) {
-        mode |= 0x20;  /* stereo */
+        mode |= 0x20; /* stereo */
     }
 
     dma_start(dma_channel, addr, SB16_BUFFER_SIZE * 2,
@@ -383,8 +383,8 @@ bool sb16_probe(uint16_t base)
     dsp_version |= dsp_read();
 
     if ((dsp_version >> 8) < 4) {
-        klog(KLOG_INFO, "sb16", "found version %d.%d, which is not an SB16",
-                      dsp_version >> 8, dsp_version & 0xFF);
+        klog(KLOG_INFO, "sb16", "found version %d.%d, which is not an SB16", dsp_version >> 8,
+             dsp_version & 0xFF);
         return false;
     }
 
@@ -407,7 +407,7 @@ uint16_t sb16_get_version(void)
  */
 static int sb16_init(void)
 {
-    uint16_t bases[] = { 0x220, 0x240, 0x260, 0x280 };
+    uint16_t bases[] = {0x220, 0x240, 0x260, 0x280};
     int i;
     bool found = false;
 
@@ -583,8 +583,10 @@ static void sb16_set_volume(int volume)
 {
     uint8_t val;
 
-    if (volume < 0) volume = 0;
-    if (volume > 100) volume = 100;
+    if (volume < 0)
+        volume = 0;
+    if (volume > 100)
+        volume = 100;
 
     val = (uint8_t)((volume * 255) / 100);
 
@@ -592,15 +594,13 @@ static void sb16_set_volume(int volume)
     mixer_write(MIXER_VOICE_VOL, val);
 }
 
-audio_driver_t sb16_driver = {
-    .name = "Sound Blaster 16",
-    .type = AUDIO_DRIVER_SB16,
-    .init = sb16_init,
-    .shutdown = sb16_shutdown,
-    .start = sb16_start,
-    .stop = sb16_stop,
-    .is_playing = sb16_is_playing,
-    .set_callback = sb16_set_callback,
-    .write = sb16_write,
-    .set_volume = sb16_set_volume
-};
+audio_driver_t sb16_driver = {.name = "Sound Blaster 16",
+                              .type = AUDIO_DRIVER_SB16,
+                              .init = sb16_init,
+                              .shutdown = sb16_shutdown,
+                              .start = sb16_start,
+                              .stop = sb16_stop,
+                              .is_playing = sb16_is_playing,
+                              .set_callback = sb16_set_callback,
+                              .write = sb16_write,
+                              .set_volume = sb16_set_volume};

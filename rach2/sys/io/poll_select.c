@@ -20,8 +20,8 @@
  * @return the number of pollfds written, or -1 if the selected fds exceed
  *         max_pollfds.
  */
-int fdsets_to_pollfds(uint32_t nfds, const uint32_t *r, const uint32_t *w,
-                      const uint32_t *e, struct kernel_pollfd *fds, int max_pollfds)
+int fdsets_to_pollfds(uint32_t nfds, const uint32_t *r, const uint32_t *w, const uint32_t *e,
+                      struct kernel_pollfd *fds, int max_pollfds)
 {
     uint32_t fd;
     int n = 0;
@@ -94,8 +94,7 @@ int pollfd_select_ready(short events, short revents)
  * @return select()'s ready count: each direction set counts once, so an fd
  *         ready for both read and write contributes 2.
  */
-int pollfds_to_fdsets(const struct kernel_pollfd *fds, int n, uint32_t *r,
-                      uint32_t *w, uint32_t *e)
+int pollfds_to_fdsets(const struct kernel_pollfd *fds, int n, uint32_t *r, uint32_t *w, uint32_t *e)
 {
     int i;
     int count = 0;

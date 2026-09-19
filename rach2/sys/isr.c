@@ -55,16 +55,38 @@ void _irq_router(isr_params_t *params);
  * The architecturally-defined exception mnemonics, indexed by vector, for the
  * fault diagnostic. Vectors 22-31 are Intel-reserved.
  */
-static const char *const _exception_names[32] = {
-    "divide error", "debug", "non-maskable interrupt", "breakpoint",
-    "overflow", "BOUND range exceeded", "invalid opcode",
-    "device not available", "double fault", "coprocessor segment overrun",
-    "invalid TSS", "segment not present", "stack-segment fault",
-    "general protection", "page fault", "reserved", "x87 FPU error",
-    "alignment check", "machine check", "SIMD FP exception", "virtualization",
-    "control protection", "reserved", "reserved", "reserved", "reserved",
-    "reserved", "reserved", "reserved", "reserved", "reserved", "reserved"
-};
+static const char *const _exception_names[32] = {"divide error",
+                                                 "debug",
+                                                 "non-maskable interrupt",
+                                                 "breakpoint",
+                                                 "overflow",
+                                                 "BOUND range exceeded",
+                                                 "invalid opcode",
+                                                 "device not available",
+                                                 "double fault",
+                                                 "coprocessor segment overrun",
+                                                 "invalid TSS",
+                                                 "segment not present",
+                                                 "stack-segment fault",
+                                                 "general protection",
+                                                 "page fault",
+                                                 "reserved",
+                                                 "x87 FPU error",
+                                                 "alignment check",
+                                                 "machine check",
+                                                 "SIMD FP exception",
+                                                 "virtualization",
+                                                 "control protection",
+                                                 "reserved",
+                                                 "reserved",
+                                                 "reserved",
+                                                 "reserved",
+                                                 "reserved",
+                                                 "reserved",
+                                                 "reserved",
+                                                 "reserved",
+                                                 "reserved",
+                                                 "reserved"};
 
 /**
  * Map a CPU exception vector to the signal a faulting user process dies with.
@@ -75,16 +97,26 @@ static const char *const _exception_names[32] = {
 static int _exception_signal(uint32_t vector)
 {
     switch (vector) {
-    case 0:  return SIGFPE;  /* divide error */
-    case 1:  return SIGTRAP; /* debug */
-    case 3:  return SIGTRAP; /* breakpoint */
-    case 6:  return SIGILL;  /* invalid opcode */
-    case 11: return SIGBUS;  /* segment not present */
-    case 12: return SIGBUS;  /* stack-segment fault */
-    case 16: return SIGFPE;  /* x87 FPU error */
-    case 17: return SIGBUS;  /* alignment check */
-    case 19: return SIGFPE;  /* SIMD FP exception */
-    default: return SIGSEGV;
+    case 0:
+        return SIGFPE; /* divide error */
+    case 1:
+        return SIGTRAP; /* debug */
+    case 3:
+        return SIGTRAP; /* breakpoint */
+    case 6:
+        return SIGILL; /* invalid opcode */
+    case 11:
+        return SIGBUS; /* segment not present */
+    case 12:
+        return SIGBUS; /* stack-segment fault */
+    case 16:
+        return SIGFPE; /* x87 FPU error */
+    case 17:
+        return SIGBUS; /* alignment check */
+    case 19:
+        return SIGFPE; /* SIMD FP exception */
+    default:
+        return SIGSEGV;
     }
 }
 
@@ -101,21 +133,21 @@ static int _exception_signal(uint32_t vector)
  */
 static void _exception_handler(isr_params_t *params)
 {
-    const char *name = params->vector < 32
-                           ? _exception_names[params->vector]
-                           : "unknown";
+    const char *name = params->vector < 32 ? _exception_names[params->vector] : "unknown";
 
     if ((params->cs & 3) == 3) {
-        klog(KLOG_WARN, "isr", "user exception: %s (vector %d, err 0x%x, "
-                      "eip 0x%x): killing process\n",
-                      name, params->vector, params->error_code, params->eip);
+        klog(KLOG_WARN, "isr",
+             "user exception: %s (vector %d, err 0x%x, "
+             "eip 0x%x): killing process\n",
+             name, params->vector, params->error_code, params->eip);
         terminate_current_process(_exception_signal(params->vector));
         return;
     }
 
-    klog(KLOG_CRIT, "isr", "kernel exception: %s (vector %d, err 0x%x, "
-                  "eip 0x%x)\n",
-                  name, params->vector, params->error_code, params->eip);
+    klog(KLOG_CRIT, "isr",
+         "kernel exception: %s (vector %d, err 0x%x, "
+         "eip 0x%x)\n",
+         name, params->vector, params->error_code, params->eip);
     k_panic("unrecoverable CPU exception in kernel mode");
 }
 
@@ -135,11 +167,11 @@ void init_isr(void)
 
     for (vector = 0; vector < 32; vector++) {
         if (vector != 14) {
-            register_isr_handler((uint8_t) vector, &_exception_handler, "exception");
+            register_isr_handler((uint8_t)vector, &_exception_handler, "exception");
         }
     }
 
-    __asm__ __volatile__ ("sti"); /* Enable interrupt handling. */
+    __asm__ __volatile__("sti"); /* Enable interrupt handling. */
 }
 
 /**

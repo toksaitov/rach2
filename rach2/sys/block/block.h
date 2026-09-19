@@ -23,33 +23,33 @@ struct block_request;
  * off. ATA, AHCI and every partition view over them have it; a device that
  * sleeps its caller does not, and the page-cache window refuses such a device
  * as a backing store. */
-#define BLOCK_FAULT_SAFE 0x1u
+#define BLOCK_FAULT_SAFE   0x1u
 /* Set by the buffer cache when a write to the device failed; cleared when
  * the cache drops the device at unmount. */
 #define BLOCK_WRITE_FAILED 0x2u
 /* The medium refuses writes and says so: a stick with its switch across, or
  * a partition view over one. Every mount of it is read-only. */
-#define BLOCK_READ_ONLY 0x4u
+#define BLOCK_READ_ONLY    0x4u
 /* The device sleeps its caller and answers in the same call: a loop device
  * over a file, whose read is a read of that file through the file system
  * holding it. It is neither of the two above: it may sleep, so it cannot be
  * called with interrupts off, and it must not take a request slot, because
  * the device under it takes one from the same pool of sixteen while it
  * waits. It is called directly, in syscall context only. */
-#define BLOCK_CALLER_SYNC 0x10u
+#define BLOCK_CALLER_SYNC  0x10u
 /* The device has gone: a stick pulled out. Nothing can reach it again, so an
  * unmount writes nothing and only lets go of what it holds. Set by the cache
  * when the disk layer tells it, cleared when the device is published again. */
-#define BLOCK_GONE 0x8u
+#define BLOCK_GONE         0x8u
 /* The device answers a polled `read` or `write` from any context, its queue
  * drained first: a SATA disk on its interrupts. A caller that cannot sleep,
  * a page fault with interrupts off, takes that path instead of a request. */
-#define BLOCK_POLLABLE 0x40u
+#define BLOCK_POLLABLE     0x40u
 /* The device stopped answering: every slot of the request pool it held went
  * through its deadline periods unanswered. Its waiters were released with
  * `EIO` and a new request is refused with `EIO`, until a late answer clears
  * it. Set and cleared by the request pool. */
-#define BLOCK_STALLED 0x20u
+#define BLOCK_STALLED      0x20u
 
 struct block_device {
     uint32_t sector_size;
@@ -61,10 +61,8 @@ struct block_device {
                               * before it is given up; 0 means the default of
                               * four */
     uint32_t max_sectors;    /* the most one request may move; 0 means a page */
-    int (*read)(block_device_t *device, uint64_t lba, uint32_t count,
-                void *buffer);
-    int (*write)(block_device_t *device, uint64_t lba, uint32_t count,
-                 const void *buffer);
+    int (*read)(block_device_t *device, uint64_t lba, uint32_t count, void *buffer);
+    int (*write)(block_device_t *device, uint64_t lba, uint32_t count, const void *buffer);
     /* Start one request and return; the device reports the end through
      * `block_request_complete`, from whatever context it completes in. Only a
      * device without `BLOCK_FAULT_SAFE` has one. */
@@ -200,12 +198,8 @@ typedef struct block_partition {
  * Initializes `partition` as the `sector_count`-sector slice of `backing` that
  * starts at `start_lba`. After this, `&partition->device` is a usable device.
  */
-void block_partition_init(
-         block_partition_t *partition,
-         block_device_t *backing,
-         uint64_t start_lba,
-         uint64_t sector_count
-     );
+void block_partition_init(block_partition_t *partition, block_device_t *backing, uint64_t start_lba,
+                          uint64_t sector_count);
 
 /* How a request stands. A request the caller gave up on is quarantined with
  * its page until the device answers, late, so the answer has nowhere to land
@@ -232,27 +226,27 @@ void block_partition_init(
  * dropped with a record.
  */
 struct block_request {
-    struct block_request *next; /* the list of live requests */
+    struct block_request *next;   /* the list of live requests */
     struct block_request *queued; /* the device's own queue, oldest first */
     block_device_t *device;
     block_device_t *owner; /* the device the request is accounted to */
     int write;
     uint64_t lba;
-    uint32_t count;        /* sectors, at most the device's `max_sectors` */
-    uint8_t *page;         /* the request's buffer: one page in the window, or
-                            * `pages` heap pages for a larger transfer */
-    uint32_t pages;        /* pages of the buffer */
-    int status;            /* 0 or -errno, valid once done */
-    volatile int state;    /* BLOCK_REQ_* */
-    uint32_t generation;   /* unique to this request */
-    uint32_t deadline;     /* tick at which the next period ends */
-    uint32_t overdue;      /* periods passed unanswered */
-    int held_by_caller;    /* until the caller has read the answer or given up */
-    int held_by_device;    /* until the device has answered */
-    uint32_t taken_us;     /* when it was taken, for the completion's delay */
+    uint32_t count;      /* sectors, at most the device's `max_sectors` */
+    uint8_t *page;       /* the request's buffer: one page in the window, or
+                          * `pages` heap pages for a larger transfer */
+    uint32_t pages;      /* pages of the buffer */
+    int status;          /* 0 or -errno, valid once done */
+    volatile int state;  /* BLOCK_REQ_* */
+    uint32_t generation; /* unique to this request */
+    uint32_t deadline;   /* tick at which the next period ends */
+    uint32_t overdue;    /* periods passed unanswered */
+    int held_by_caller;  /* until the caller has read the answer or given up */
+    int held_by_device;  /* until the device has answered */
+    uint32_t taken_us;   /* when it was taken, for the completion's delay */
 };
 
-#define BLOCK_REQ_SECTORS 8u
+#define BLOCK_REQ_SECTORS     8u
 /* The most any device may take in one request: 1 MiB, 256 pages of a heap
  * buffer described page by page to the controller. Each driver declares
  * its own limit within this one, and `block_max_sectors` caps it here: the
@@ -278,8 +272,7 @@ uint32_t block_max_sectors(block_device_t *device);
  * Returns 0 or a negative errno; a request unanswered through its periods
  * is `-EIO` with the request quarantined, and so is a stalled device.
  */
-int block_request(block_device_t *device, int write, uint64_t lba,
-                  uint32_t count, void *buffer);
+int block_request(block_device_t *device, int write, uint64_t lba, uint32_t count, void *buffer);
 
 /**
  * Put what the device holds in a cache of its own on the medium.
@@ -325,8 +318,7 @@ int block_request_ended(struct block_request *r, uint32_t generation, void *buff
  * dropped with a record; one for a quarantined request lets go of it for the
  * device.
  */
-void block_request_complete(struct block_request *request, uint32_t generation,
-                            int status);
+void block_request_complete(struct block_request *request, uint32_t generation, int status);
 
 /**
  * How many requests are still the device's: in flight, or quarantined with

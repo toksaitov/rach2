@@ -41,7 +41,7 @@
 
 /* What a driver's `init` reports. */
 #define NETDEV_ABSENT 0
-#define NETDEV_UP 1
+#define NETDEV_UP     1
 #define NETDEV_FAILED (-1)
 
 /* What a driver's `tx` reports. Every driver here drops a frame under some
@@ -49,7 +49,7 @@
    card has not finished with. Until this verdict existed no layer above learned
    of it, and `/proc/net/dev` printed its drop columns as zero whatever had
    happened. */
-#define NETDEV_TX_OK 0
+#define NETDEV_TX_OK      0
 #define NETDEV_TX_DROPPED (-1)
 
 /**

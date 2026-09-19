@@ -9,25 +9,22 @@
  * there and as numbers here; a field added before one of them stops the
  * GNU build, and TinyCC's, which cannot fold an offset into an array size,
  * checks them at boot in `init_proc`. */
-#define PROC_OFF(field) ((uint32_t)&((process_t *)0)->field)
+#define PROC_OFF(field)       ((uint32_t)&((process_t *)0)->field)
 #define PROC_OFF_REGS_ESP     48u
 #define PROC_OFF_CR3          52u
 #define PROC_OFF_KERNEL_STACK 56u
 #define PROC_OFF_TLS_BASE     148u
 #define PROC_OFF_PAGE_DIR     2128u
 #ifndef __TINYC__
-typedef char process_offsets_fit[(__builtin_offsetof(struct process, regs) +
-                                          __builtin_offsetof(cpu_regs_t, esp) ==
-                                      PROC_OFF_REGS_ESP &&
-                                  __builtin_offsetof(struct process, cr3) == PROC_OFF_CR3 &&
-                                  __builtin_offsetof(struct process, kernel_stack) ==
-                                      PROC_OFF_KERNEL_STACK &&
-                                  __builtin_offsetof(struct process, tls_base) ==
-                                      PROC_OFF_TLS_BASE &&
-                                  __builtin_offsetof(struct process, page_dir) ==
-                                      PROC_OFF_PAGE_DIR)
-                                     ? 1
-                                     : -1];
+typedef char process_offsets_fit
+    [(__builtin_offsetof(struct process, regs) + __builtin_offsetof(cpu_regs_t, esp) ==
+          PROC_OFF_REGS_ESP &&
+      __builtin_offsetof(struct process, cr3) == PROC_OFF_CR3 &&
+      __builtin_offsetof(struct process, kernel_stack) == PROC_OFF_KERNEL_STACK &&
+      __builtin_offsetof(struct process, tls_base) == PROC_OFF_TLS_BASE &&
+      __builtin_offsetof(struct process, page_dir) == PROC_OFF_PAGE_DIR)
+         ? 1
+         : -1];
 #endif
 
 process_t *proc_list;
@@ -315,14 +312,13 @@ void setup_process_stack(process_t *proc, void (*entry_point)(void))
     *sp = (uint32_t)entry_point;
 
     --sp;
-    *sp = 0;  /* EBP */
+    *sp = 0; /* EBP */
     --sp;
-    *sp = 0;  /* EBX */
+    *sp = 0; /* EBX */
     --sp;
-    *sp = 0;  /* ESI */
+    *sp = 0; /* ESI */
     --sp;
-    *sp = 0;  /* EDI */
+    *sp = 0; /* EDI */
 
     proc->regs.esp = (uint32_t)sp;
 }
-

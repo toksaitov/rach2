@@ -73,18 +73,16 @@ static void speaker_set_volume(int volume)
     /* The PC speaker has no volume control. */
 }
 
-audio_driver_t speaker_driver = {
-    .name = "PC Speaker",
-    .type = AUDIO_DRIVER_SPEAKER,
-    .init = speaker_init,
-    .shutdown = speaker_shutdown,
-    .start = speaker_start,
-    .stop = speaker_stop,
-    .is_playing = speaker_is_playing,
-    .set_callback = speaker_set_callback,
-    .write = speaker_write,
-    .set_volume = speaker_set_volume
-};
+audio_driver_t speaker_driver = {.name = "PC Speaker",
+                                 .type = AUDIO_DRIVER_SPEAKER,
+                                 .init = speaker_init,
+                                 .shutdown = speaker_shutdown,
+                                 .start = speaker_start,
+                                 .stop = speaker_stop,
+                                 .is_playing = speaker_is_playing,
+                                 .set_callback = speaker_set_callback,
+                                 .write = speaker_write,
+                                 .set_volume = speaker_set_volume};
 
 /**
  * Detect and initialize the best available audio driver.
@@ -150,6 +148,7 @@ const char *audio_get_boot_status(void)
  */
 bool audio_has_real_output(void)
 {
-    if (!audio) return false;
+    if (!audio)
+        return false;
     return (audio->type == AUDIO_DRIVER_SB16 || audio->type == AUDIO_DRIVER_HDA);
 }
