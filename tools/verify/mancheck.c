@@ -319,8 +319,9 @@ static void read_applets(const char *path)
     fclose(f);
 }
 
-/* The calls the kernel registers, lowercased, and the socket operations. */
-static void read_syscalls(const char *header, const char *source)
+/* The calls the kernel registers, lowercased, and the socket operations,
+   read from one source file. */
+static void read_syscalls_from(const char *header, const char *source)
 {
     FILE *f = fopen(source, "r");
     char line[512];
@@ -373,6 +374,29 @@ static void read_syscalls(const char *header, const char *source)
         add(wanted, &nwanted, name, "2", NULL, source);
     }
     fclose(f);
+}
+
+/* `sources` names the files the table and the operations are in, joined
+   by colons: syscall.c registers the calls and syscall_net.c defines the
+   socket operations. */
+static void read_syscalls(const char *header, const char *sources)
+{
+    char one[512];
+    const char *p = sources;
+
+    while (*p != '\0') {
+        const char *q = strchr(p, ':');
+        size_t n = q ? (size_t)(q - p) : strlen(p);
+
+        if (n >= sizeof(one)) {
+            fail("%s: a source path is longer than this reads", sources, "");
+            return;
+        }
+        memcpy(one, p, n);
+        one[n] = '\0';
+        read_syscalls_from(header, one);
+        p = q ? q + 1 : p + n;
+    }
 }
 
 /* The pages the recovery image must carry, and their staging. */
@@ -431,7 +455,7 @@ int main(int argc, char **argv)
     int i, programs = 0, calls = 0;
 
     if (argc < 8) {
-        fprintf(stderr, "usage: mancheck MANDIR SYSCALL_H SYSCALL_C APPLETS PROGRAMS_MK "
+        fprintf(stderr, "usage: mancheck MANDIR SYSCALL_H SYSCALL_C[:SYSCALL_C...] APPLETS PROGRAMS_MK "
                         "RECOVERY_MANIFEST MANIFEST...\n");
         return 2;
     }

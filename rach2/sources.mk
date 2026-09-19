@@ -15,6 +15,9 @@ C_SRC = kernel.c \
         sys/klog.c \
         sys/serial.c \
         sys/syscall.c \
+        sys/syscall_proc.c \
+        sys/syscall_fs.c \
+        sys/syscall_net.c \
         sys/module.c \
         sys/cmdline.c \
         sys/isr.c \

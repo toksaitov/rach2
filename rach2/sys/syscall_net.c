@@ -1,0 +1,1661 @@
+/*
+ * The network arm of the system call layer: socketcall and its operations
+ * over the socket layer. Registered by syscall.c; what it shares with the
+ * other arms is in syscall_internal.h.
+ */
+#include "../kernel.h"
+#include "mm/kheap.h"
+#include "klog.h"
+#include "syscall.h"
+#include "power.h"
+#include "serial.h"
+#include "panic.h"
+#include "kio.h"
+#include "kbd.h"
+#include "input.h"
+#include "mouse.h"
+#include "proc/process.h"
+#include "proc/sched.h"
+#include "proc/elf.h"
+#include "proc/uimage.h"
+#include "proc/tls.h"
+#include "tables/gdt.h"
+#include "lib/krandom.h"
+#include "lib/kerrno.h"
+#include "lib/ksignal.h"
+#include "fs/fd.h"
+#include "fs/file.h"
+#include "ipc/pipe.h"
+#include "io/poll.h"
+#include "tty/tty.h"
+#include "tty/pty.h"
+#include "rtc.h"
+#include "block/loop.h"
+#include "fs/krffs.h"
+#include "fs/devfs.h"
+#include "fs/synthfs.h"
+#include "fs/vfs.h"
+#include "block/usbdisk.h"
+#include "fs/procfs.h"
+#include "mm/paging.h"
+#include "mm/pressure.h"
+#include "mm/pagecache.h"
+#include "mm/heap.h"
+#include "mm/usercopy.h"
+#include "mm/vm.h"
+#include "lib/kuser.h"
+#include "lib/kstring.h"
+#include "display/vga_gfx.h"
+#include "speaker.h"
+#include "audio/audio.h"
+#include "network/socket/socket.h"
+#include "network/socket/packet.h"
+#include "network/socket/raw.h"
+#include "network/ethernet/ethernet.h"
+#include "network/netif.h"
+#include "network/driver/netdev.h"
+#include "network/udp/udp.h"
+#include "network/tcp/tcp.h"
+#include "network/ip/ip.h"
+#include "network/ip/icmp.h"
+#include "network/net.h"
+#include "network/netconf.h" /* net_ip_addr for getsockname */
+#include "cmdline.h"         /* kcmdline_has, for the ENOSYS trace flag */
+#include "syscall_internal.h"
+
+/* Read and write the little-endian words of a caller's own structures (a
+ * msghdr's pointers and lengths), which are host order and not wire order. */
+#define SC_LE32(p)                                                            \
+    (((uint32_t)((uint8_t *)(p))[0]) | ((uint32_t)((uint8_t *)(p))[1] << 8) | \
+     ((uint32_t)((uint8_t *)(p))[2] << 16) | ((uint32_t)((uint8_t *)(p))[3] << 24))
+
+#define SC_WLE32(p, v)                              \
+    do {                                            \
+        ((uint8_t *)(p))[0] = (uint8_t)(v);         \
+        ((uint8_t *)(p))[1] = (uint8_t)((v) >> 8);  \
+        ((uint8_t *)(p))[2] = (uint8_t)((v) >> 16); \
+        ((uint8_t *)(p))[3] = (uint8_t)((v) >> 24); \
+    } while (0)
+
+/* Read and write big-endian sockaddr fields (sin_port, sin_addr). */
+#define SC_BE16(p) ((uint16_t)(((uint8_t *)(p))[0] << 8 | ((uint8_t *)(p))[1]))
+
+#define SC_BE32(p)                                                                   \
+    (((uint32_t)((uint8_t *)(p))[0] << 24) | ((uint32_t)((uint8_t *)(p))[1] << 16) | \
+     ((uint32_t)((uint8_t *)(p))[2] << 8) | ((uint32_t)((uint8_t *)(p))[3]))
+
+#define SC_WBE16(p, v)                             \
+    do {                                           \
+        ((uint8_t *)(p))[0] = (uint8_t)((v) >> 8); \
+        ((uint8_t *)(p))[1] = (uint8_t)(v);        \
+    } while (0)
+
+#define SC_WBE32(p, v)                              \
+    do {                                            \
+        ((uint8_t *)(p))[0] = (uint8_t)((v) >> 24); \
+        ((uint8_t *)(p))[1] = (uint8_t)((v) >> 16); \
+        ((uint8_t *)(p))[2] = (uint8_t)((v) >> 8);  \
+        ((uint8_t *)(p))[3] = (uint8_t)(v);         \
+    } while (0)
+
+/* socketcall sub-function numbers (Linux standard). */
+#define SC_SOCKET      1
+
+#define SC_BIND        2
+
+#define SC_CONNECT     3
+
+#define SC_LISTEN      4
+
+#define SC_ACCEPT      5
+
+#define SC_GETSOCKNAME 6
+
+#define SC_GETPEERNAME 7
+
+#define SC_SEND        9
+
+#define SC_RECV        10
+
+#define SC_SENDTO      11
+
+#define SC_RECVFROM    12
+
+#define SC_SHUTDOWN    13
+
+#define SC_SETSOCKOPT  14
+
+#define SC_GETSOCKOPT  15
+
+#define SC_RECVMSG     17
+
+/* Rach2's private ICMP-echo socketcall. RENUMBERED out of the BSD range (it
+ * used to squat on 15 == Linux getsockopt, which a real server needs).
+ * Userspace callers (utils/ping.c, tests/pingtest.c) use the same value. */
+#define SC_PING        0x1000
+
+/**
+ * Canonicalize a destination address at the socket boundary.
+ *
+ * The stack below the socket layer knows exactly one local address
+ * (`net_ip_addr`): every TCB stamps it, checksums verify against it, and
+ * `getsockname` reports it. 127/8 is therefore an alias for that one address,
+ * rewritten here before any connection state exists, so no lower layer ever
+ * sees a second local address and `getpeername` stays truthful.
+ */
+static uint32_t canonical_dst_ip(uint32_t ip)
+{
+    return (ip & 0xFF000000UL) == 0x7F000000UL ? net_ip_addr : ip;
+}
+
+/**
+ * Send one datagram, judging the destination first.
+ *
+ * A datagram to a broadcast address reaches every machine on the wire, so a
+ * socket must have asked for that with `SO_BROADCAST` before it can send one.
+ * A program that broadcasts by accident wakes the whole network, and the
+ * option exists so that it has to mean it.
+ */
+int32_t dgram_send(struct socket *sock, uint32_t dst_ip, uint16_t dst_port,
+                          const uint8_t *buf, uint16_t len)
+{
+    int r;
+
+    if (!sock->broadcast && netconf_is_broadcast(dst_ip)) {
+        return -EACCES;
+    }
+    /* One IPv4 datagram over Ethernet: 1500 bytes of frame, less the twenty of
+       the IP header and the eight of UDP's. A larger one is refused here rather
+       than dropped further down, where this call would have reported it sent. */
+    if (len > 1472) {
+        return -EMSGSIZE;
+    }
+    if (sock->local_port == 0 && udp_bind_ephemeral(sock) == 0) {
+        return -EAGAIN;
+    }
+    /* The hop limit is the socket's, which IP_TTL sets and traceroute counts
+       up. What the send layer refuses is reported here rather than counted as
+       bytes sent. */
+    r = udp_tx(sock->local_port, dst_ip, dst_port, buf, len, sock->ip_ttl);
+    if (r < 0) {
+        return r;
+    }
+    return (int32_t)len;
+}
+
+/* The raw send buffer: one MTU, filled from user space in syscall context.
+   Only syscall context touches it, and this kernel runs one process there at a
+   time, so it needs no lock of its own; what needs the lock is the send, which
+   goes through the transmit buffers an interrupt also builds in. */
+static uint8_t raw_send_buf[1500];
+
+/* recv flags: only MSG_DONTWAIT is honored. */
+#define MSG_DONTWAIT 0x40
+
+#define IPPROTO_RAW  255
+
+#define IPPROTO_ICMP 1
+
+/* setsockopt(2)/getsockopt(2) at the IP level: the hop limit a socket's
+ * datagrams leave with, and the option that would hand the caller the header,
+ * which this stack does not implement. */
+#define SOL_IP     0
+
+#define IP_TTL     2
+
+#define IP_HDRINCL 3
+
+/* setsockopt levels and the one packet option that is answered. */
+#define SOL_PACKET     263
+
+#define PACKET_AUXDATA 8
+
+/* We read sin_family/sin_port/sin_addr from the first 8 sockaddr bytes. */
+#define SOCKADDR_MIN 8
+
+/* The whole of a struct sockaddr_in: family (2), port (2), address (4), and
+ * eight bytes of padding. `SOCKADDR_MIN` above is only the part that is read.
+ */
+#define SOCKADDR_IN_LEN 16
+
+/* struct sockaddr_ll, the address a packet socket binds and sends to, with the
+ * offset of each field beside it: family 0 (2 bytes), protocol 2 (2), ifindex
+ * 4 (4), hatype 8 (2), pkttype 10 (1), halen 11 (1), addr 12 (8), for 20 in
+ * all. A caller declaring fewer bytes is refused, not read past. */
+#define SOCKADDR_LL_LEN      20
+
+#define SOCKADDR_LL_PROTOCOL 2
+
+#define SOCKADDR_LL_IFINDEX  4
+
+#define SOCKADDR_LL_HATYPE   8
+
+#define ARPHRD_ETHER         1 /* sll_hatype for an Ethernet interface */
+
+#define SOCKADDR_LL_HALEN    11
+
+#define SOCKADDR_LL_ADDR     12
+
+/**
+ * Write an AF_INET source/peer sockaddr back to a caller's (addr, addrlen)
+ * pair.
+ *
+ * Respects the caller's declared buffer capacity: read the in/out socklen,
+ * copy at most that many of the 16 sockaddr_in bytes, and report the true
+ * length (16), the recvfrom(2)/accept(2) truncation semantics. Returns 0 or
+ * -EFAULT.
+ */
+static int copy_sockaddr_to_user(uint32_t sa_ptr, uint32_t salen_ptr, uint16_t port, uint32_t ip)
+{
+    uint8_t sa[16];
+    uint32_t caller_len;
+    uint32_t copy_len;
+
+    if (!sa_ptr || !salen_ptr) {
+        return 0; /* caller does not want the address back */
+    }
+
+    if (copy_from_user(&caller_len, (const void __user *)salen_ptr, sizeof(caller_len)) != 0) {
+        return -EFAULT;
+    }
+
+    k_memset(sa, 0, sizeof(sa));
+    /* sin_family is in HOST byte order (little-endian on i386), NOT network
+     * order: a big-endian AF_INET would read back as 0x0200 and a peer-address
+     * consumer (dropbear's connection logging) rejects it as an unknown family.
+     * Only sin_port and sin_addr are network (big-endian). */
+    sa[0] = 2; /* AF_INET, low byte */
+    sa[1] = 0;
+    SC_WBE16(sa + 2, port);
+    SC_WBE32(sa + 4, ip);
+
+    copy_len = (caller_len < sizeof(sa)) ? caller_len : (uint32_t)sizeof(sa);
+    if (copy_len > 0 && copy_to_user((void __user *)sa_ptr, sa, copy_len) != 0) {
+        return -EFAULT;
+    }
+
+    /* Report the real sockaddr_in length even when the caller's buffer was
+     * shorter (and thus the address was truncated). */
+    caller_len = (uint32_t)sizeof(sa);
+    if (copy_to_user((void __user *)salen_ptr, &caller_len, sizeof(caller_len)) != 0) {
+        return -EFAULT;
+    }
+    return 0;
+}
+
+/* socket(2): AF_INET with SOCK_STREAM, SOCK_DGRAM or SOCK_RAW (ICMP, or the
+ * ioctl-only descriptor of IPPROTO_RAW), and AF_PACKET with SOCK_DGRAM; the
+ * raw and packet forms take effective uid 0. Returns a new socket fd or
+ * -errno. */
+static int32_t do_socket(int domain, int type, int protocol)
+{
+    struct socket *sock;
+    fd_entry_t *entry;
+    int fd;
+
+    /* IPv4, and the packet family the DHCP client needs to see replies that
+     * arrive before this machine owns an address. Any other family is refused,
+     * not made into a socket that cannot work. */
+    if (domain != AF_INET && domain != AF_PACKET) {
+        return -EAFNOSUPPORT;
+    }
+    /* The query descriptor. A DHCP client opens AF_INET/SOCK_RAW/IPPROTO_RAW
+     * and does nothing with it but ask the interface ioctls about the machine
+     * (busybox's `udhcp_read_interface`), so that is what it is here: a
+     * descriptor that accepts ioctls and closes, and refuses to send or
+     * receive, because this stack has no raw IP path to offer. Root's, like
+     * every raw socket. */
+    if (domain == AF_INET && type == SOCK_RAW) {
+        /* Two raw sockets, and the protocol tells them apart. IPPROTO_RAW is
+         * the query descriptor a DHCP client opens for the interface ioctls
+         * and nothing else; IPPROTO_ICMP is the one `ping` and `traceroute`
+         * send and receive on. Both are root's. */
+        if (protocol != IPPROTO_RAW && protocol != IPPROTO_ICMP) {
+            return -EPROTONOSUPPORT;
+        }
+        if (!current_proc || current_proc->euid != 0) {
+            return -EPERM;
+        }
+    } else if (type != SOCK_DGRAM && type != SOCK_STREAM) {
+        return -EINVAL;
+    }
+    if (domain == AF_PACKET) {
+        /* It reads every frame of its protocol the machine receives and sends
+         * frames the IP layer never saw, so it is root's. The protocol is in
+         * network byte order, as Linux takes it, and the two this stack has
+         * frames for are IPv4 and ARP. */
+        if (!current_proc || current_proc->euid != 0) {
+            return -EPERM;
+        }
+        if (type != SOCK_DGRAM) {
+            return -ESOCKTNOSUPPORT;
+        }
+        /* Zero is legal and means the socket has no protocol yet: `arping`
+         * opens one that way and names ARP in its bind. */
+        if ((uint16_t)protocol != 0 && (uint16_t)protocol != PACKET_PROTO_IP &&
+            (uint16_t)protocol != PACKET_PROTO_ARP) {
+            return -EINVAL;
+        }
+    }
+
+    sock = socket_alloc(type);
+    if (!sock) {
+        return -ENOMEM;
+    }
+    sock->family = (uint16_t)domain;
+    if (domain == AF_INET && type == SOCK_RAW && protocol == IPPROTO_ICMP) {
+        int reg;
+
+        sock->protocol = (uint16_t)protocol;
+        reg = raw_register(sock, (uint8_t)protocol);
+        if (reg != 0) {
+            socket_unref(sock);
+            return reg;
+        }
+    }
+    if (domain == AF_PACKET) {
+        /* The argument is in network order, as Linux takes it; the socket
+         * holds it in host order, which is what the wire comparison uses. */
+        sock->protocol =
+            (uint16_t)(((uint32_t)protocol & 0xffu) << 8 | (((uint32_t)protocol >> 8) & 0xffu));
+    }
+    sock->uid = current_proc->euid;
+
+    fd = fd_alloc(&current_proc->fds);
+    if (fd < 0) {
+        socket_unref(sock);
+        return -EMFILE;
+    }
+
+    entry = &current_proc->fds.entries[fd];
+    entry->type = FD_TYPE_SOCKET;
+    entry->sock = sock;
+    entry->node = NULL;
+    entry->ofd->offset = 0;
+    entry->flags = FD_FLAG_READ | FD_FLAG_WRITE;
+    return fd;
+}
+
+/* bind(2): record the local port from the sockaddr; a datagram socket also
+ * registers it with UDP (-EADDRINUSE if taken). */
+static int32_t do_bind(int fd, uint32_t sa_ptr, int addrlen)
+{
+    fd_entry_t *entry;
+    uint16_t port;
+    uint8_t sa[SOCKADDR_MIN];
+
+    /* The caller's declared sockaddr must be at least the header we read; a
+     * short or negative addrlen must not make us read past it. */
+    if (addrlen < SOCKADDR_MIN) {
+        return -EINVAL;
+    }
+
+    /* Copy the sockaddr header into a kernel buffer; the BE helpers below then
+     * operate on the kernel copy. */
+    if (copy_from_user(sa, (const void __user *)sa_ptr, SOCKADDR_MIN) != 0) {
+        return -EFAULT;
+    }
+
+    entry = fd_get(&current_proc->fds, fd);
+    if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
+        return -ENOTSOCK;
+    }
+
+    /* A packet socket binds to an interface, not to a port: the address is a
+     * sockaddr_ll and binding is what puts it in the delivery table. */
+    if (entry->sock->family == AF_PACKET) {
+        uint8_t sll[SOCKADDR_LL_LEN];
+        int32_t ifindex;
+        uint16_t proto;
+        int32_t r;
+
+        if (addrlen < SOCKADDR_LL_LEN) {
+            return -EINVAL;
+        }
+        if (copy_from_user(sll, (const void __user *)sa_ptr, SOCKADDR_LL_LEN) != 0) {
+            return -EFAULT;
+        }
+        ifindex = (int32_t)((uint32_t)sll[SOCKADDR_LL_IFINDEX] |
+                            ((uint32_t)sll[SOCKADDR_LL_IFINDEX + 1] << 8) |
+                            ((uint32_t)sll[SOCKADDR_LL_IFINDEX + 2] << 16) |
+                            ((uint32_t)sll[SOCKADDR_LL_IFINDEX + 3] << 24));
+        /* A protocol named here replaces the one `socket` was given, which is
+         * Linux's rule and is how a client that opened with 0 says what it
+         * wants. Naming none leaves the socket's own. The change is made only
+         * after the bind is accepted: a bind that fails must leave the socket
+         * receiving exactly what it received before. */
+        proto = SC_BE16(sll + SOCKADDR_LL_PROTOCOL);
+        if (proto != 0 && proto != ETH_TYPE_IP && proto != ETH_TYPE_ARP) {
+            return -EINVAL;
+        }
+        r = packet_bind(entry->sock, (int)ifindex);
+        if (r != 0) {
+            return r;
+        }
+        if (proto != 0 && proto != entry->sock->protocol) {
+            entry->sock->protocol = proto;
+            /* What is queued arrived under the old protocol. A reader would
+               be given it labelled with the new one, so it goes. */
+            packet_flush(entry->sock);
+        }
+        return 0;
+    }
+
+    /* A raw socket binds to an address, not to a port: it says which of the
+     * machine's addresses it wants datagrams for. `traceroute` binds its
+     * receive socket to the address its send socket ended up with, and dies if
+     * it cannot. This machine has one address, so the bind is a statement
+     * about which address it is, and an address the machine does not have is
+     * refused rather than accepted and quietly ignored. */
+    if (entry->sock->type == SOCK_RAW) {
+        uint32_t want;
+
+        if (sock_is_query(entry->sock)) {
+            return -EOPNOTSUPP;
+        }
+        want = SC_BE32(sa + 4);
+        if (want != 0 && want != (uint32_t)net_ip_addr && (want & 0xFF000000UL) != 0x7F000000UL) {
+            return -EADDRNOTAVAIL;
+        }
+        return 0;
+    }
+
+    port = SC_BE16(sa + 2);
+
+    /* A port below 1024 is a service's, and a service is root's. Without this
+     * any user could take the port a DHCP client or an SSH server answers on
+     * and be the one machines on the wire talk to. */
+    if (port != 0 && port < 1024 && (!current_proc || current_proc->euid != 0)) {
+        return -EACCES;
+    }
+
+    if (entry->sock->type == SOCK_DGRAM) {
+        /* A datagram send before bind auto-binds an ephemeral source port; drop
+         * that registration before claiming the requested one, or its
+         * port-table slot leaks for the socket's life. */
+        if (entry->sock->local_port != 0) {
+            udp_unbind(entry->sock);
+            entry->sock->local_port = 0;
+        }
+        if (port == 0) {
+            /* Port 0 means "any port": let the stack pick a free ephemeral and
+             * record it, the same path a send before bind takes. */
+            if (udp_bind_ephemeral(entry->sock) == 0) {
+                return -EADDRINUSE;
+            }
+            return 0;
+        }
+        if (udp_bind(port, entry->sock) < 0) {
+            return -EADDRINUSE;
+        }
+    }
+    if (entry->sock->type == SOCK_STREAM && port != 0 && tcp_port_listening(port)) {
+        /* Advisory, and where a server reports it: the invariant belongs to
+         * `tcp_listen`, since `bind` and `listen` are separate syscalls and any
+         * check made only here is bypassed by binding both sockets first. */
+        return -EADDRINUSE;
+    }
+    entry->sock->local_port = port;
+    return 0;
+}
+
+/* sendto(2): a stream socket ignores the destination and behaves like send; a
+ * datagram socket sends to the sockaddr, binding an ephemeral source port
+ * first. */
+static int32_t do_sendto(int fd, uint32_t buf_ptr, int len, int flags, uint32_t sa_ptr, int addrlen)
+{
+    fd_entry_t *entry;
+    uint16_t dst_port;
+    uint32_t dst_ip;
+    uint8_t sa[SOCKADDR_MIN];
+
+    if (len < 0 || !user_buffer_ok(buf_ptr, (uint32_t)len, 0)) {
+        return -EFAULT;
+    }
+
+    entry = fd_get(&current_proc->fds, fd);
+    if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
+        return -ENOTSOCK;
+    }
+
+    /* The query descriptor accepts ioctls and nothing else: it has no protocol
+     * to send under, and a caller that got silence here would be waiting for a
+     * datagram that cannot arrive. */
+    if (sock_is_query(entry->sock)) {
+        return -EOPNOTSUPP;
+    }
+
+    /* A raw socket sends the ICMP message the caller built, checksum included:
+     * this layer supplies the IPv4 header and rewrites nothing, since a
+     * program sending a wrong checksum on purpose is testing something. */
+    if (entry->sock->type == SOCK_RAW) {
+        uint8_t raw_sa[SOCKADDR_IN_LEN];
+        uint32_t raw_dst;
+        int r;
+
+        if (!sa_ptr || addrlen < SOCKADDR_MIN) {
+            return -EDESTADDRREQ;
+        }
+        k_memset(raw_sa, 0, sizeof(raw_sa));
+        if (copy_from_user(raw_sa, (const void __user *)sa_ptr, SOCKADDR_MIN) != 0) {
+            return -EFAULT;
+        }
+        if ((uint16_t)((uint16_t)raw_sa[0] | ((uint16_t)raw_sa[1] << 8)) != AF_INET) {
+            return -EAFNOSUPPORT;
+        }
+        if (len > (int)sizeof(raw_send_buf)) {
+            return -EMSGSIZE;
+        }
+        raw_dst = canonical_dst_ip(SC_BE32(raw_sa + 4));
+        /* The copy runs with interrupts on, since it may fault; the send is
+           then held against a receive interrupt that would build a datagram
+           through the same transmit buffers, which is the rule in net.h and
+           what udp_tx does for the same reason. */
+        if (copy_from_user(raw_send_buf, (const void __user *)buf_ptr, (uint32_t)len) != 0) {
+            return -EFAULT;
+        }
+        {
+            uint32_t netflags = net_lock();
+            r = ip_tx(raw_dst, (uint8_t)entry->sock->protocol, raw_send_buf, (uint16_t)len,
+                      entry->sock->ip_ttl);
+            net_unlock(netflags);
+        }
+        if (r < 0) {
+            return r;
+        }
+        return (int32_t)len;
+    }
+
+    /* On a connected stream socket, sendto with any (or no) destination behaves
+     * like send; the connection's peer is the destination, so the sockaddr is
+     * ignored (this is the path musl's send() takes: sendto with a NULL addr).
+     */
+    if (entry->sock->type == SOCK_STREAM) {
+        int nonblock =
+            (flags & MSG_DONTWAIT) || (entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
+        return (int32_t)socket_tcp_send(
+            entry->sock, (const uint8_t __force *)(const void __user *)buf_ptr, len, nonblock);
+    }
+
+    /* A packet socket sends an IP packet the caller built, to a MAC address it
+     * names: this layer adds the Ethernet header and nothing else. */
+    if (entry->sock->family == AF_PACKET) {
+        uint8_t sll[SOCKADDR_LL_LEN];
+        uint16_t proto;
+        int32_t ifindex;
+
+        if (len > 1500) {
+            return -EMSGSIZE;
+        }
+        if (addrlen < SOCKADDR_LL_LEN) {
+            return -EINVAL;
+        }
+        if (copy_from_user(sll, (const void __user *)sa_ptr, SOCKADDR_LL_LEN) != 0) {
+            return -EFAULT;
+        }
+        if (sll[SOCKADDR_LL_HALEN] != 6) {
+            return -EINVAL;
+        }
+        proto = SC_BE16(sll + SOCKADDR_LL_PROTOCOL);
+        if (proto == 0) {
+            proto = entry->sock->protocol;
+        }
+        /* An interface named here is the one the frame leaves by, which is
+           what the field is for; zero leaves the choice to the bind. */
+        ifindex = (int32_t)((uint32_t)sll[SOCKADDR_LL_IFINDEX] |
+                            ((uint32_t)sll[SOCKADDR_LL_IFINDEX + 1] << 8) |
+                            ((uint32_t)sll[SOCKADDR_LL_IFINDEX + 2] << 16) |
+                            ((uint32_t)sll[SOCKADDR_LL_IFINDEX + 3] << 24));
+        /* The payload is read where it lies, as the UDP path reads it: the
+           range above was validated, and __force strips __user at the call. */
+        return (int32_t)packet_send(entry->sock, (int)ifindex, sll + SOCKADDR_LL_ADDR, proto,
+                                    (const uint8_t __force *)(const void __user *)buf_ptr,
+                                    (uint16_t)len);
+    }
+
+    /* The payload must fit one unfragmented UDP packet (this stack does not
+     * fragment; udp_tx caps it at 1500). Reject an oversize datagram with
+     * -EMSGSIZE, not truncate it through the uint16_t wire length or let
+     * udp_tx silently drop it while this call reports a full send. */
+    if (len > 1500) {
+        return -EMSGSIZE;
+    }
+
+    /* A connected datagram socket needs no destination: `send` is `sendto`
+     * with none, which is what musl's send() issues. */
+    if (sa_ptr == 0 || addrlen == 0) {
+        if (!entry->sock->connected) {
+            return -EDESTADDRREQ;
+        }
+        return dgram_send(entry->sock, entry->sock->remote_ip, entry->sock->remote_port,
+                          (const uint8_t __force *)(const void __user *)buf_ptr, (uint16_t)len);
+    }
+
+    /* Datagram path: a real destination address is required. */
+    if (addrlen < SOCKADDR_MIN) {
+        return -EINVAL; /* declared sockaddr shorter than the header we read */
+    }
+    /* Copy the destination sockaddr into a kernel buffer for the BE helpers. */
+    if (copy_from_user(sa, (const void __user *)sa_ptr, SOCKADDR_MIN) != 0) {
+        return -EFAULT;
+    }
+
+    dst_port = SC_BE16(sa + 2);
+    dst_ip = canonical_dst_ip(SC_BE32(sa + 4));
+
+    /* One send path, so the broadcast permission and the ephemeral bind are
+     * the same here as they are for a write to a connected socket. udp_tx
+     * reads the payload itself; __force strips __user at the boundary. */
+    return dgram_send(entry->sock, dst_ip, dst_port,
+                      (const uint8_t __force *)(const void __user *)buf_ptr, (uint16_t)len);
+}
+
+/* recvfrom(2): a stream socket behaves like recv (no source writeback); a
+ * datagram socket reports the source address, truncated to the caller's
+ * capacity. Honors MSG_DONTWAIT and O_NONBLOCK. */
+static int32_t do_recvfrom(int fd, uint32_t buf_ptr, int len, int flags, uint32_t sa_ptr,
+                           uint32_t salen_ptr)
+{
+    fd_entry_t *entry;
+    uint32_t src_ip = 0;
+    uint16_t src_port = 0;
+    uint32_t addr_len = 0;
+    uint32_t addr_give = 0;
+    int want_addr;
+    int bytes;
+    int nonblock;
+
+    if (len < 0 || !user_buffer_ok(buf_ptr, (uint32_t)len, 1)) {
+        return -EFAULT;
+    }
+    entry = fd_get(&current_proc->fds, fd);
+    if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
+        return -ENOTSOCK;
+    }
+    /* Where the source address will land is settled here, before a datagram is
+     * taken: taking one destroys it, and a fault found afterwards would report
+     * an error for a message that no longer exists. The caller's capacity is
+     * read once and kept, so that a caller whose length word overlaps its own
+     * receive buffer cannot change it under the writeback. What is checked is
+     * what will actually be written: twenty bytes for a packet socket's
+     * sockaddr_ll, sixteen for an AF_INET sender. */
+    want_addr = (sa_ptr != 0 && salen_ptr != 0);
+    if (want_addr) {
+        uint32_t cap = 0;
+
+        if (!user_buffer_ok(salen_ptr, sizeof(cap), 1) ||
+            copy_from_user(&cap, (const void __user *)salen_ptr, sizeof(cap)) != 0) {
+            return -EFAULT;
+        }
+        addr_len = (entry->sock->family == AF_PACKET) ? (uint32_t)SOCKADDR_LL_LEN
+                                                      : (uint32_t)SOCKADDR_IN_LEN;
+        addr_give = cap < addr_len ? cap : addr_len;
+        if (addr_give > 0 && !user_buffer_ok(sa_ptr, addr_give, 1)) {
+            return -EFAULT;
+        }
+    }
+
+    /* The query descriptor accepts ioctls and nothing else: nothing is
+     * delivered to a descriptor with no protocol, and a caller that got
+     * silence here would be waiting for a datagram that cannot arrive. */
+    if (sock_is_query(entry->sock)) {
+        return -EOPNOTSUPP;
+    }
+
+    /* Receive without blocking when the caller asked per-call (MSG_DONTWAIT) or
+     * the descriptor is O_NONBLOCK (an OFD status flag, shared by dup/fork). */
+    nonblock = (flags & MSG_DONTWAIT) || (entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
+
+    /* On a connected stream socket, recvfrom behaves like recv; the peer is the
+     * connection's, so the optional source-address writeback is skipped and a
+     * NULL sockaddr is fine (this is the path musl's recv() takes: recvfrom
+     * with a NULL addr). */
+    if (entry->sock->type == SOCK_STREAM) {
+        if (nonblock) {
+            return (int32_t)socket_tcp_try_recv(entry->sock,
+                                                (uint8_t __force *)(void __user *)buf_ptr, len);
+        }
+        return (int32_t)socket_tcp_recv(entry->sock, (uint8_t __force *)(void __user *)buf_ptr,
+                                        len);
+    }
+
+    /* socket_recv/socket_try_recv write straight into the validated user
+     * buffer; __force strips __user at the boundary. */
+    if (nonblock) {
+        bytes = socket_try_recv(entry->sock, (uint8_t __force *)(void __user *)buf_ptr, len,
+                                &src_ip, &src_port);
+    } else {
+        bytes = socket_recv(entry->sock, (uint8_t __force *)(void __user *)buf_ptr, len, &src_ip,
+                            &src_port);
+    }
+
+    /* A receive that failed leaves the caller's address arguments alone: there
+     * is no sender to report, and the values that would be written are the ones
+     * this frame never set. */
+    if (bytes < 0) {
+        return bytes;
+    }
+
+    /* Report the source address, truncated to the capacity read before the
+     * datagram was taken. A packet socket reports the link address the frame
+     * came from, a sockaddr_ll; an AF_INET one reports the sender. */
+    if (want_addr) {
+        uint8_t sa[SOCKADDR_LL_LEN];
+
+        k_memset(sa, 0, sizeof(sa));
+        if (entry->sock->family == AF_PACKET) {
+            if (packet_last_addr(entry->sock, sa) == 0) {
+                addr_len = 0;
+                addr_give = 0;
+            }
+        } else {
+            sa[0] = (uint8_t)(AF_INET & 0xff);
+            SC_WBE16(sa + 2, src_port);
+            SC_WBE32(sa + 4, src_ip);
+        }
+        if (addr_give > 0 && copy_to_user((void __user *)sa_ptr, sa, addr_give) != 0) {
+            return -EFAULT;
+        }
+        if (copy_to_user((void __user *)salen_ptr, &addr_len, sizeof(addr_len)) != 0) {
+            return -EFAULT;
+        }
+    }
+    return bytes;
+}
+
+static int32_t do_ping(uint32_t dst_ip)
+{
+    return (int32_t)icmp_ping(canonical_dst_ip(dst_ip));
+}
+
+/* Wait predicate: a stream connect has finished its handshake one way or the
+ * other (established, or the TCB went away / reset). */
+static int connect_done(void *arg)
+{
+    struct socket *sock = (struct socket *)arg;
+    return sock->tcb == NULL || sock->tcb->state == TCP_ESTABLISHED ||
+           sock->tcb->state == TCP_CLOSED;
+}
+
+/* Wait predicate: a listening socket has a connection queued for accept. */
+static int accept_ready(void *arg)
+{
+    struct socket *sock = (struct socket *)arg;
+    return sock->accept_head != sock->accept_tail;
+}
+
+/* connect(2): start the TCP handshake to the sockaddr. A blocking socket waits
+ * it out (-EINTR on a signal); a non-blocking one returns 0 or -EINPROGRESS. */
+static int32_t do_connect(int fd, uint32_t sa_ptr, int addrlen)
+{
+    fd_entry_t *entry;
+    uint32_t dst_ip;
+    uint16_t dst_port;
+    uint16_t family;
+    uint8_t sa[SOCKADDR_MIN];
+    int rc;
+
+    /* The family is read first and on its own, because a disconnect is a
+     * family and nothing else: `connect(fd, &unspec, sizeof(sa_family_t))` is
+     * how a program lets go of a peer, and requiring a whole address for it
+     * would leave that program connected. */
+    /* The descriptor is resolved before its argument is read, so that a call on
+     * something that is not a socket says so instead of reporting whatever was
+     * wrong with an address it was never going to use. */
+    entry = fd_get(&current_proc->fds, fd);
+    if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
+        return -ENOTSOCK;
+    }
+    if (entry->sock->type == SOCK_RAW) {
+        return -EOPNOTSUPP;
+    }
+    /* A packet socket has no peer to connect to: it is bound to an interface
+     * and sends to a hardware address each time. Reaching the datagram arm
+     * below would put it in the UDP port table, which its teardown never
+     * unbinds from. */
+    if (entry->sock->family == AF_PACKET) {
+        return -EOPNOTSUPP;
+    }
+
+    k_memset(sa, 0, sizeof(sa));
+    if (addrlen < 2) {
+        return -EINVAL;
+    }
+    if (copy_from_user(sa, (const void __user *)sa_ptr, 2) != 0) {
+        return -EFAULT;
+    }
+    family = (uint16_t)((uint16_t)sa[0] | ((uint16_t)sa[1] << 8));
+    /* Two bytes are enough for a disconnect and only for a disconnect, and only
+     * a datagram socket has one to do: a stream's connection ends by closing
+     * it. Anything else must give a whole address, or the bytes past the family
+     * would be this function's stack. */
+    if (family == 0) {
+        if (entry->sock->type != SOCK_DGRAM) {
+            return -EAFNOSUPPORT;
+        }
+    } else {
+        if (addrlen < SOCKADDR_MIN) {
+            return -EINVAL; /* declared sockaddr shorter than the header we read */
+        }
+        if (copy_from_user(sa, (const void __user *)sa_ptr, SOCKADDR_MIN) != 0) {
+            return -EFAULT;
+        }
+    }
+    /* A datagram socket's connect records where it will send and who it will
+     * hear from; there is no handshake and nothing to wait for. AF_UNSPEC
+     * undoes it, which is how a program lets go of a peer. */
+    if (entry->sock->type == SOCK_DGRAM) {
+        uint32_t held;
+
+        if (family == 0) {
+            held = net_lock();
+            entry->sock->connected = 0;
+            entry->sock->remote_ip = 0;
+            entry->sock->remote_port = 0;
+            net_unlock(held);
+            return 0;
+        }
+        if (family != AF_INET) {
+            return -EAFNOSUPPORT;
+        }
+        /* Something must answer, so the socket needs a source port: the same
+         * ephemeral bind a send before bind would have taken. The bind and the
+         * peer are published together, under one hold. A bind that landed first
+         * would put the socket in the port table with no peer recorded, and a
+         * datagram arriving in that interval would be admitted from anyone; a
+         * reconnect that published a new port beside an old address would admit
+         * a sender that is neither the old peer nor the new one. */
+        held = net_lock();
+        if (entry->sock->local_port == 0 && udp_bind_ephemeral(entry->sock) == 0) {
+            net_unlock(held);
+            return -EAGAIN;
+        }
+        entry->sock->remote_port = SC_BE16(sa + 2);
+        entry->sock->remote_ip = canonical_dst_ip(SC_BE32(sa + 4));
+        entry->sock->connected = 1;
+        net_unlock(held);
+        return 0;
+    }
+    if (entry->sock->type != SOCK_STREAM) {
+        return -EOPNOTSUPP;
+    }
+    if (entry->sock->listening || entry->sock->tcb) {
+        /* A socket that is already listening, connecting, or connected keeps
+         * its TCB; a second tcp_connect would allocate another and leak the
+         * first, whose stale delivery could reach a since-reused socket. */
+        return (entry->sock->tcb && entry->sock->tcb->state == TCP_SYN_SENT) ? -EALREADY : -EISCONN;
+    }
+
+    dst_port = SC_BE16(sa + 2);
+    dst_ip = canonical_dst_ip(SC_BE32(sa + 4));
+
+    {
+        /* Verbatim: the refusal a closed port earns comes from the handshake,
+         * not from here, so collapsing a full pool or a duplicate pairing into
+         * ECONNREFUSED would report a local failure as the peer's answer. */
+        int opened = tcp_connect(entry->sock, dst_ip, dst_port);
+
+        if (opened < 0) {
+            return opened;
+        }
+    }
+
+    /* A non-blocking socket does not wait out the handshake: report it as
+     * in-progress (or already done) and let the caller poll for completion. */
+    if (entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK)) {
+        if (entry->sock->tcb && entry->sock->tcb->state == TCP_ESTABLISHED) {
+            return 0;
+        }
+        return -EINPROGRESS;
+    }
+
+    /* Block until the handshake completes, fails, or times out, yielding to
+     * other processes; a pending signal unwinds with -EINTR. */
+    rc = wq_wait_event(&entry->sock->waiters, connect_done, entry->sock);
+    if (rc < 0) {
+        return rc;
+    }
+
+    if (!entry->sock->tcb || entry->sock->tcb->state != TCP_ESTABLISHED) {
+        return -ECONNREFUSED;
+    }
+    return 0;
+}
+
+/* listen(2): mark a stream socket passive and open its LISTEN TCB. */
+static int32_t do_listen(int fd, int backlog)
+{
+    fd_entry_t *entry;
+
+    (void)backlog; /* a fixed-size accept queue is used */
+
+    entry = fd_get(&current_proc->fds, fd);
+    if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
+        return -ENOTSOCK;
+    }
+    if (entry->sock->type == SOCK_RAW) {
+        return -EOPNOTSUPP;
+    }
+    if (entry->sock->type != SOCK_STREAM) {
+        return -EOPNOTSUPP;
+    }
+    if (entry->sock->tcb || entry->sock->listening) {
+        return -EINVAL; /* already listening or connected: a fresh TCB would leak the old one */
+    }
+
+    {
+        int rc = tcp_listen(entry->sock, entry->sock->local_port);
+        if (rc == 0) {
+            entry->sock->listening = 1;
+        }
+        return rc;
+    }
+}
+
+/* accept(2): dequeue a completed connection (blocking, or -EAGAIN on a
+ * non-blocking listener), install a new fd for it, and report the peer address.
+ */
+static int32_t do_accept(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
+{
+    fd_entry_t *entry;
+    fd_entry_t *new_entry;
+    struct socket *listen_sock;
+    struct socket *conn_sock;
+    int new_fd;
+
+    /* The peer-address writeback is validated and truncated to the caller's
+     * declared length by copy_sockaddr_to_user below. */
+
+    entry = fd_get(&current_proc->fds, fd);
+    if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
+        return -ENOTSOCK;
+    }
+    if (entry->sock->type == SOCK_RAW) {
+        return -EOPNOTSUPP;
+    }
+    listen_sock = entry->sock;
+
+    /* A non-blocking listener returns immediately when nothing is queued. */
+    if (entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK) &&
+        listen_sock->accept_head == listen_sock->accept_tail) {
+        return -EAGAIN;
+    }
+
+    /* Block until a connection is queued, yielding to other processes; a
+     * pending signal unwinds with -EINTR. */
+    {
+        int rc = wq_wait_event(&listen_sock->waiters, accept_ready, listen_sock);
+        if (rc < 0) {
+            return rc;
+        }
+    }
+
+    conn_sock = listen_sock->accept_queue[listen_sock->accept_head];
+    listen_sock->accept_head = (listen_sock->accept_head + 1) & (SOCK_ACCEPT_BACKLOG - 1);
+
+    /* The queued socket already holds the reference created when tcp_rx
+     * accepted it; the new descriptor takes ownership of that reference. */
+    new_fd = fd_alloc(&current_proc->fds);
+    if (new_fd < 0) {
+        socket_unref(conn_sock);
+        return -EMFILE;
+    }
+    new_entry = &current_proc->fds.entries[new_fd];
+    new_entry->type = FD_TYPE_SOCKET;
+    new_entry->sock = conn_sock;
+    new_entry->node = NULL;
+    new_entry->ofd->offset = 0;
+    new_entry->flags = FD_FLAG_READ | FD_FLAG_WRITE;
+
+    /* Report the peer address, truncated to the caller's declared capacity. On
+     * a bad user pointer, tear down the descriptor we just installed (releasing
+     * its socket reference) instead of leaking the accepted fd and its socket.
+     */
+    if (copy_sockaddr_to_user(sa_ptr, salen_ptr, conn_sock->remote_port, conn_sock->remote_ip) !=
+        0) {
+        fd_release_backing(new_entry);
+        fd_free(&current_proc->fds, new_fd);
+        return -EFAULT;
+    }
+    return new_fd;
+}
+
+/* send(2): write to a connected stream socket (the peer is the
+ * connection's). */
+static int32_t do_send(int fd, uint32_t buf_ptr, int len, int flags)
+{
+    fd_entry_t *entry;
+    int nonblock;
+
+    if (len < 0 || !user_buffer_ok(buf_ptr, (uint32_t)len, 0)) {
+        return -EFAULT;
+    }
+
+    entry = fd_get(&current_proc->fds, fd);
+    if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
+        return -ENOTSOCK;
+    }
+    if (entry->sock->type == SOCK_RAW) {
+        return -EOPNOTSUPP;
+    }
+    if (entry->sock->type != SOCK_STREAM) {
+        return -EOPNOTSUPP;
+    }
+
+    /* socket_tcp_send copies the payload itself, blocking on send-ring space
+     * unless asked not to; __force strips __user at the boundary. */
+    nonblock = (flags & MSG_DONTWAIT) || (entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
+    return (int32_t)socket_tcp_send(
+        entry->sock, (const uint8_t __force *)(const void __user *)buf_ptr, len, nonblock);
+}
+
+/* recv(2): read from a connected stream socket. Honors MSG_DONTWAIT and
+ * O_NONBLOCK. */
+static int32_t do_recv(int fd, uint32_t buf_ptr, int len, int flags)
+{
+    fd_entry_t *entry;
+    int nonblock;
+
+    if (len < 0 || !user_buffer_ok(buf_ptr, (uint32_t)len, 1)) {
+        return -EFAULT;
+    }
+
+    entry = fd_get(&current_proc->fds, fd);
+    if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
+        return -ENOTSOCK;
+    }
+    if (entry->sock->type == SOCK_RAW) {
+        return -EOPNOTSUPP;
+    }
+    /* Don't block when the caller asked per-call (MSG_DONTWAIT) or the
+     * descriptor is O_NONBLOCK. socket_tcp_*recv write into the validated user
+     * buffer; __force strips __user at the boundary. */
+    nonblock = (flags & MSG_DONTWAIT) || (entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
+
+    /* A datagram socket reads one message with no sender reported, which is
+     * what `recv` is: `recvfrom` without the address. Refusing it here would
+     * leave one of the four ways of reading a socket disagreeing with the
+     * other three about whether the same queued datagram exists. */
+    if (entry->sock->type == SOCK_DGRAM) {
+        if (nonblock) {
+            return (int32_t)socket_try_recv(entry->sock, (uint8_t __force *)(void __user *)buf_ptr,
+                                            len, 0, 0);
+        }
+        return (int32_t)socket_recv(entry->sock, (uint8_t __force *)(void __user *)buf_ptr, len, 0,
+                                    0);
+    }
+    if (entry->sock->type != SOCK_STREAM) {
+        return -EOPNOTSUPP;
+    }
+    if (nonblock) {
+        return (int32_t)socket_tcp_try_recv(entry->sock, (uint8_t __force *)(void __user *)buf_ptr,
+                                            len);
+    }
+    return (int32_t)socket_tcp_recv(entry->sock, (uint8_t __force *)(void __user *)buf_ptr, len);
+}
+
+/* getsockname: the socket's local address: for an IPv4 socket the primary
+ * address (net_ip_addr) plus its bound or ephemeral port, for a packet socket
+ * a sockaddr_ll of the primary interface, index 1 and its hardware address,
+ * whatever interface the socket is bound to. */
+static int32_t do_getsockname(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
+{
+    fd_entry_t *entry = fd_get(&current_proc->fds, fd);
+
+    if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
+        return -ENOTSOCK;
+    }
+    if (entry->sock->type == SOCK_RAW) {
+        return -EOPNOTSUPP;
+    }
+    /* Unlike accept/recvfrom, getsockname requires the buffers
+     * (copy_sockaddr_to_user treats NULL as "no address wanted"). */
+    if (!sa_ptr || !salen_ptr) {
+        return -EFAULT;
+    }
+    /* A packet socket's own address is a sockaddr_ll: the interface it is
+     * bound to and the hardware address it sends from. `arping` reads the MAC
+     * back from here and refuses to run without one, so the fields are the
+     * machine's real ones and not a shape with zeroes in it. */
+    if (entry->sock->family == AF_PACKET) {
+        uint8_t sll[SOCKADDR_LL_LEN];
+        uint32_t caller_len, copy_len;
+        int i;
+
+        if (copy_from_user(&caller_len, (const void __user *)salen_ptr, sizeof(caller_len)) != 0) {
+            return -EFAULT;
+        }
+        k_memset(sll, 0, sizeof(sll));
+        sll[0] = (uint8_t)(AF_PACKET & 0xff);
+        sll[1] = (uint8_t)((AF_PACKET >> 8) & 0xff);
+        sll[SOCKADDR_LL_PROTOCOL] = (uint8_t)((entry->sock->protocol >> 8) & 0xff);
+        sll[SOCKADDR_LL_PROTOCOL + 1] = (uint8_t)(entry->sock->protocol & 0xff);
+        sll[SOCKADDR_LL_IFINDEX] = (uint8_t)NETDEV_IFINDEX;
+        sll[SOCKADDR_LL_HATYPE] = (uint8_t)ARPHRD_ETHER; /* the low byte of 1 */
+        sll[SOCKADDR_LL_HALEN] = 6;
+        for (i = 0; i < 6; i++) {
+            sll[SOCKADDR_LL_ADDR + i] = net_mac[i];
+        }
+        copy_len = caller_len < (uint32_t)SOCKADDR_LL_LEN ? caller_len : (uint32_t)SOCKADDR_LL_LEN;
+        if (copy_len > 0 && copy_to_user((void __user *)sa_ptr, sll, copy_len) != 0) {
+            return -EFAULT;
+        }
+        caller_len = (uint32_t)SOCKADDR_LL_LEN; /* the true length, as Linux reports */
+        if (copy_to_user((void __user *)salen_ptr, &caller_len, sizeof(caller_len)) != 0) {
+            return -EFAULT;
+        }
+        return 0;
+    }
+    return copy_sockaddr_to_user(sa_ptr, salen_ptr, entry->sock->local_port, (uint32_t)net_ip_addr);
+}
+
+/* getpeername: the connected peer's address (an established stream socket
+ * or a datagram socket that connect(2) gave a peer). */
+static int32_t do_getpeername(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
+{
+    fd_entry_t *entry = fd_get(&current_proc->fds, fd);
+
+    if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
+        return -ENOTSOCK;
+    }
+    if (entry->sock->type == SOCK_RAW) {
+        return -EOPNOTSUPP;
+    }
+    /* A peer exists once the TCP handshake completes (not a listener, not a
+     * still-connecting SYN_SENT, not a closed socket), or once a datagram
+     * socket has been connected to one, which is a peer with no handshake. */
+    if (entry->sock->type == SOCK_DGRAM) {
+        if (!entry->sock->connected) {
+            return -ENOTCONN;
+        }
+    } else if (!tcp_is_connected(entry->sock)) {
+        return -ENOTCONN;
+    }
+    if (!sa_ptr || !salen_ptr) {
+        return -EFAULT;
+    }
+    return copy_sockaddr_to_user(sa_ptr, salen_ptr, entry->sock->remote_port,
+                                 entry->sock->remote_ip);
+}
+
+/* shutdown(how): SHUT_RD(0)/SHUT_WR(1)/SHUT_RDWR(2). Any direction that
+ * includes the write side drives the TCP active close (a FIN, so the peer reads
+ * EOF); SHUT_RD alone is accepted as a no-op. We have no lingering half-open
+ * state, so a write-side shutdown sends the FIN exactly as close() would
+ * (documented). */
+#define SHUT_RD   0
+
+#define SHUT_WR   1
+
+#define SHUT_RDWR 2
+
+static int32_t do_shutdown(int fd, int how)
+{
+    fd_entry_t *entry = fd_get(&current_proc->fds, fd);
+
+    if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
+        return -ENOTSOCK;
+    }
+    if (entry->sock->type == SOCK_RAW) {
+        return -EOPNOTSUPP;
+    }
+    if (how < SHUT_RD || how > SHUT_RDWR) {
+        return -EINVAL;
+    }
+    /* Only a connected stream socket can be shut down, NOT a listener (which
+     * would free its LISTEN TCB and silently stop accepting), an unconnected,
+     * or a UDP socket. */
+    if (!tcp_is_connected(entry->sock)) {
+        return -ENOTCONN;
+    }
+    if (how == SHUT_WR || how == SHUT_RDWR) {
+        entry->sock->shut_down = 1;
+        tcp_close(entry->sock); /* send FIN; idempotent vs the later close() */
+    }
+    return 0;
+}
+
+/* Socket-option levels/names recognized by get/setsockopt. */
+#define SOL_SOCKET      1
+
+#define SO_REUSEADDR    2
+
+#define SO_TYPE         3
+
+#define SO_ERROR        4
+
+#define SO_BROADCAST    6
+
+#define SO_BINDTODEVICE 25
+
+#define IFNAMSIZ        16
+
+#define SO_KEEPALIVE    9
+
+#define IPPROTO_TCP     6
+
+#define TCP_NODELAY     1
+
+/* setsockopt: accept the boolean options a forking server sets (SO_REUSEADDR,
+ * TCP_NODELAY, SO_KEEPALIVE) so its setup succeeds. The stack already reuses
+ * listen ports and sends promptly, so these are honored-by-behavior or
+ * documented no-ops; an unknown option is accepted instead of failing a
+ * server's startup. */
+static int32_t do_setsockopt(int fd, int level, int optname, uint32_t optval_ptr, int optlen)
+{
+    fd_entry_t *entry = fd_get(&current_proc->fds, fd);
+    int val = 0;
+
+    if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
+        return -ENOTSOCK;
+    }
+    /* The one option this stack answers with a refusal, not a blanket
+     * success. A DHCP client asks a packet socket for PACKET_AUXDATA so that it
+     * can be told the kernel has not checked a datagram's UDP checksum; there
+     * is no such offload here and no ancillary data at all, and a success would
+     * promise data that never arrives. Refused, the client verifies the
+     * checksum itself, which is the outcome that is true. */
+    if (level == SOL_PACKET && optname == PACKET_AUXDATA) {
+        return -ENOPROTOOPT;
+    }
+    (void)optname;
+    /* SO_BINDTODEVICE's value is a name, not a number, and it is judged
+     * against the one interface this machine has. */
+    if (level == SOL_SOCKET && optname == SO_BINDTODEVICE) {
+        char name[IFNAMSIZ];
+        uint32_t take = (optlen < 0) ? 0u : (uint32_t)optlen;
+
+        /* The name is at the start of whatever the caller passed, and busybox
+         * passes a whole `struct ifreq` for it, 32 bytes on this machine. So
+         * only the name's worth is read and a larger buffer is not a refusal.
+         */
+        if (take == 0) {
+            return -EINVAL;
+        }
+        if (take > IFNAMSIZ) {
+            take = IFNAMSIZ;
+        }
+        k_memset(name, 0, sizeof(name));
+        if (!optval_ptr || copy_from_user(name, (const void __user *)optval_ptr, take) != 0) {
+            return -EFAULT;
+        }
+        name[IFNAMSIZ - 1] = '\0';
+        if (name[0] == '\0') {
+            entry->sock->bound_device = 0; /* an empty name unbinds */
+            return 0;
+        }
+        if (!netif_name_is_ours(name)) {
+            return -ENODEV;
+        }
+        entry->sock->bound_device = 1;
+        return 0;
+    }
+
+    /* A declared int-sized option with a NULL value is a bad pointer, not a
+     * silently-accepted no-op. */
+    if (optlen >= (int)sizeof(int)) {
+        if (!optval_ptr ||
+            copy_from_user(&val, (const void __user *)optval_ptr, sizeof(val)) != 0) {
+            return -EFAULT;
+        }
+    }
+
+    /* The hop limit is real, because traceroute is nothing but this option
+     * counted up: a stack that accepted it and sent every probe with the same
+     * limit would answer at the first hop every time and look like a machine
+     * one hop from everywhere. */
+    if (level == SOL_IP && optname == IP_TTL) {
+        if (optlen < (int)sizeof(int)) {
+            return -EINVAL;
+        }
+        if (val < 1 || val > 255) {
+            return -EINVAL;
+        }
+        entry->sock->ip_ttl = (uint8_t)val;
+        return 0;
+    }
+    /* And the option that would hand the caller the IP header to fill in is
+     * refused rather than accepted and ignored, which would send a datagram
+     * whose header the caller believes it wrote. */
+    if (level == SOL_IP && optname == IP_HDRINCL) {
+        return -ENOPROTOOPT;
+    }
+
+    /* The two flags this stack really keeps. Everything else is accepted and
+     * has no effect, which is what it has always done: refusing them would
+     * stop programs that set options a small stack has no use for. */
+    if (level == SOL_SOCKET && (optname == SO_BROADCAST || optname == SO_REUSEADDR)) {
+        /* A flag whose value was too short to read is not a flag set to zero:
+           the caller passed something this could not understand. */
+        if (optlen < (int)sizeof(int)) {
+            return -EINVAL;
+        }
+        if (optname == SO_BROADCAST) {
+            entry->sock->broadcast = val ? 1 : 0;
+        } else {
+            entry->sock->reuseaddr = val ? 1 : 0;
+        }
+    }
+    return 0;
+}
+
+/* getsockopt: report the options programs read at setup: SO_ERROR (the
+ * pending connection error, cleared by the read), SO_TYPE (the real socket
+ * type), SO_REUSEADDR and SO_BROADCAST as stored, and SO_BINDTODEVICE as the
+ * interface name. An int result is truncated to the caller's capacity, and
+ * the length written is what was copied. */
+static int32_t do_getsockopt(int fd, int level, int optname, uint32_t optval_ptr,
+                             uint32_t optlen_ptr)
+{
+    fd_entry_t *entry = fd_get(&current_proc->fds, fd);
+    int val = 0;
+    uint32_t olen;
+
+    if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
+        return -ENOTSOCK;
+    }
+    if (level == SOL_SOCKET && optname == SO_TYPE) {
+        val = entry->sock->type;
+    } else if (level == SOL_SOCKET && optname == SO_ERROR) {
+        /* Report and clear the connection's pending async error (the standard
+         * non-blocking-connect completion check). Read-and-clear under net_lock
+         * so the IRQ that sets it cannot race the clear. */
+        uint32_t flags = net_lock();
+        if (entry->sock->tcb) {
+            val = (int)entry->sock->tcb->so_error;
+            entry->sock->tcb->so_error = 0;
+        }
+        net_unlock(flags);
+    } else if (level == SOL_SOCKET && optname == SO_BINDTODEVICE) {
+        /* This one answers with a name, not a number. */
+        char name[IFNAMSIZ];
+        uint32_t give;
+
+        k_memset(name, 0, sizeof(name));
+        if (entry->sock->bound_device) {
+            k_strncpy(name, NETDEV_IFNAME, sizeof(name) - 1);
+        }
+        if (!optval_ptr || !optlen_ptr) {
+            return -EFAULT;
+        }
+        if (copy_from_user(&olen, (const void __user *)optlen_ptr, sizeof(olen)) != 0) {
+            return -EFAULT;
+        }
+        give = k_strlen(name) + 1u;
+        if (give > olen) {
+            give = olen;
+        }
+        if (give > 0 && copy_to_user((void __user *)optval_ptr, name, give) != 0) {
+            return -EFAULT;
+        }
+        if (copy_to_user((void __user *)optlen_ptr, &give, sizeof(give)) != 0) {
+            return -EFAULT;
+        }
+        return 0;
+    } else if (level == SOL_IP && optname == IP_TTL) {
+        val = (int)entry->sock->ip_ttl;
+    } else if (level == SOL_IP && optname == IP_HDRINCL) {
+        return -ENOPROTOOPT;
+    } else if (level == SOL_SOCKET && optname == SO_BROADCAST) {
+        val = entry->sock->broadcast;
+    } else if (level == SOL_SOCKET && optname == SO_REUSEADDR) {
+        val = entry->sock->reuseaddr;
+    } else {
+        val = 0; /* SO_KEEPALIVE / TCP_NODELAY and the rest: off/none */
+    }
+    if (!optval_ptr || !optlen_ptr) {
+        return -EFAULT;
+    }
+    if (copy_from_user(&olen, (const void __user *)optlen_ptr, sizeof(olen)) != 0) {
+        return -EFAULT;
+    }
+    if (olen > sizeof(val)) {
+        olen = (uint32_t)sizeof(val);
+    }
+    if (olen > 0 && copy_to_user((void __user *)optval_ptr, &val, olen) != 0) {
+        return -EFAULT;
+    }
+    /* The count actually written, which for a caller that offered less than an
+       int is less than an int: telling it four would be describing bytes that
+       were never put there. */
+    if (copy_to_user((void __user *)optlen_ptr, &olen, sizeof(olen)) != 0) {
+        return -EFAULT;
+    }
+    return 0;
+}
+
+/*
+ * struct msghdr on i386: name (4), namelen (4), iov (4), iovlen (4), control
+ * (4), controllen (4), flags (4). The offsets are the ABI and are written out,
+ * not modelled, because a struct here would have to match a layout
+ * this kernel does not otherwise depend on.
+ */
+#define MSGHDR_LEN        28
+
+#define MSGHDR_NAME       0
+
+#define MSGHDR_NAMELEN    4
+
+#define MSGHDR_IOV        8
+
+#define MSGHDR_IOVLEN     12
+
+#define MSGHDR_CONTROLLEN 20
+
+#define MSGHDR_FLAGS      24
+
+/**
+ * Receive one datagram into a scatter list (recvmsg, socketcall 17).
+ *
+ * The DHCP client is what needs this: it reads its packet socket through
+ * `recvmsg`, not `read` so that it can look for `PACKET_AUXDATA` in the
+ * control data, and finding none it verifies the UDP checksum itself. So the
+ * scatter half is the whole of the work here. The control buffer is answered
+ * with a length of zero, which is the true answer: this stack attaches no
+ * ancillary data to anything.
+ *
+ * The sender is reported through `msg_name`: a `sockaddr_in` for an AF_INET
+ * socket, and for a packet socket the `sockaddr_ll` the frame came from, with
+ * the sender's hardware address and who the frame was addressed to.
+ */
+static int32_t do_recvmsg(int fd, uint32_t msg_ptr, int flags)
+{
+    uint8_t hdr[MSGHDR_LEN];
+    fd_entry_t *entry;
+    uint32_t iov_user, name_ptr, namelen;
+    uint32_t addr_len, addr_give;
+    uint32_t iovlen;
+    uint32_t src_ip = 0;
+    uint16_t src_port = 0;
+    uint32_t i;
+    int32_t taken;
+
+    if (copy_from_user(hdr, (const void __user *)msg_ptr, MSGHDR_LEN) != 0) {
+        return -EFAULT;
+    }
+    entry = current_proc ? fd_get(&current_proc->fds, fd) : (fd_entry_t *)0;
+    if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
+        return -ENOTSOCK;
+    }
+    if (entry->sock->type != SOCK_DGRAM) {
+        return -EOPNOTSUPP;
+    }
+
+    name_ptr = SC_LE32(hdr + MSGHDR_NAME);
+    namelen = SC_LE32(hdr + MSGHDR_NAMELEN);
+    iov_user = SC_LE32(hdr + MSGHDR_IOV);
+    iovlen = SC_LE32(hdr + MSGHDR_IOVLEN);
+    if (iovlen > (uint32_t)IOV_MAX_LOCAL) {
+        return -EINVAL;
+    }
+
+    /* Every destination is checked before the datagram is taken, because
+       taking it is what destroys it: a fault discovered half way through the
+       copy would report an error for a message the machine no longer has.
+       This is the pass `sys_readv` makes for the same reason. */
+    if (!user_buffer_ok(msg_ptr, MSGHDR_LEN, 1)) {
+        return -EFAULT;
+    }
+    /* Only what will be written is checked, and it is settled here rather than
+       after the datagram is taken: a packet socket reports twenty bytes and an
+       AF_INET one sixteen, however much the caller declared. Validating the
+       whole declared capacity would refuse a call whose address fits
+       perfectly. */
+    addr_len =
+        (entry->sock->family == AF_PACKET) ? (uint32_t)SOCKADDR_LL_LEN : (uint32_t)SOCKADDR_IN_LEN;
+    addr_give = namelen < addr_len ? namelen : addr_len;
+    if (name_ptr && addr_give > 0 && !user_buffer_ok(name_ptr, addr_give, 1)) {
+        return -EFAULT;
+    }
+    for (i = 0; i < iovlen; i++) {
+        struct kernel_iovec iov;
+
+        if (copy_from_user(
+                &iov, (const void __user *)(iov_user + i * (uint32_t)sizeof(struct kernel_iovec)),
+                sizeof(iov)) != 0) {
+            return -EFAULT;
+        }
+        if (iov.iov_len == 0) {
+            continue;
+        }
+        if (iov.iov_len > 0x7FFFFFFFu || !user_buffer_ok(iov.iov_base, iov.iov_len, 1)) {
+            return -EFAULT;
+        }
+    }
+
+    if ((flags & MSG_DONTWAIT) && socket_dgram_pending(entry->sock) < 0) {
+        return -EAGAIN;
+    }
+
+    taken = readv_dgram(entry, iov_user, (int)iovlen, &src_ip, &src_port);
+    if (taken < 0) {
+        return taken;
+    }
+
+    /* A struct sockaddr_in is 16 bytes (family, port, address, and eight bytes
+       of padding a caller may compare against sizeof) and a sockaddr_ll is 20.
+       Either is written whole where it fits, truncated where the caller's
+       buffer is smaller, and the true length is reported either way, which is
+       what Linux does. */
+    if (name_ptr && addr_len > 0) {
+        uint8_t sa[SOCKADDR_LL_LEN];
+
+        k_memset(sa, 0, sizeof(sa));
+        if (entry->sock->family == AF_PACKET) {
+            if (packet_last_addr(entry->sock, sa) == 0) {
+                addr_len = 0;
+                addr_give = 0;
+            }
+        } else {
+            sa[0] = (uint8_t)(AF_INET & 0xff);
+            SC_WBE16(sa + 2, src_port);
+            SC_WBE32(sa + 4, src_ip);
+        }
+        if (addr_give > 0 && copy_to_user((void __user *)name_ptr, sa, addr_give) != 0) {
+            return -EFAULT;
+        }
+    }
+    /* The true length, whatever the caller's capacity was: that is how a caller
+       learns its buffer was too small. Zero for a packet socket, which has no
+       sender to report. */
+    SC_WLE32(hdr + MSGHDR_NAMELEN, name_ptr ? addr_len : 0u);
+    SC_WLE32(hdr + MSGHDR_CONTROLLEN, 0);
+    SC_WLE32(hdr + MSGHDR_FLAGS, 0);
+    if (copy_to_user((void __user *)msg_ptr, hdr, MSGHDR_LEN) != 0) {
+        return -EFAULT;
+    }
+    return taken;
+}
+
+/**
+ * Multiplexed socket syscall (socketcall, syscall 102).
+ *
+ * EBX is the SC_* sub-call number, ECX a user pointer to its argument array.
+ * Copies the right number of 32-bit args in one fault-checked read, then
+ * dispatches to the matching do_* helper. Returns its result, or -EINVAL for an
+ * unknown sub-call.
+ */
+int32_t sys_socketcall(isr_params_t *params)
+{
+    int call = (int)params->ebx;
+    uint32_t argp = params->ecx;
+    uint32_t args[6];
+    int nargs;
+
+    switch (call) {
+    case SC_PING:
+        nargs = 1;
+        break;
+    case SC_LISTEN:
+    case SC_SHUTDOWN:
+        nargs = 2;
+        break;
+    case SC_SOCKET:
+    case SC_BIND:
+    case SC_CONNECT:
+    case SC_ACCEPT:
+    case SC_GETSOCKNAME:
+    case SC_GETPEERNAME:
+        nargs = 3;
+        break;
+    case SC_RECVMSG:
+        nargs = 3;
+        break;
+    case SC_SEND:
+    case SC_RECV:
+        nargs = 4;
+        break;
+    case SC_SETSOCKOPT:
+    case SC_GETSOCKOPT:
+        nargs = 5;
+        break;
+    case SC_SENDTO:
+    case SC_RECVFROM:
+        nargs = 6;
+        break;
+    default:
+        return -EINVAL;
+    }
+
+    /* Pull the argument array out of user memory in one fault-checked copy. */
+    if (copy_from_user(args, (const void __user *)argp, (uint32_t)nargs * 4) != 0) {
+        return -EFAULT;
+    }
+
+    switch (call) {
+    case SC_SOCKET:
+        return do_socket((int)args[0], (int)args[1], (int)args[2]);
+    case SC_BIND:
+        return do_bind((int)args[0], args[1], (int)args[2]);
+    case SC_SENDTO:
+        return do_sendto((int)args[0], args[1], (int)args[2], (int)args[3], args[4], (int)args[5]);
+    case SC_RECVFROM:
+        return do_recvfrom((int)args[0], args[1], (int)args[2], (int)args[3], args[4], args[5]);
+    case SC_PING:
+        return do_ping(args[0]);
+    case SC_CONNECT:
+        return do_connect((int)args[0], args[1], (int)args[2]);
+    case SC_LISTEN:
+        return do_listen((int)args[0], (int)args[1]);
+    case SC_ACCEPT:
+        return do_accept((int)args[0], args[1], args[2]);
+    case SC_GETSOCKNAME:
+        return do_getsockname((int)args[0], args[1], args[2]);
+    case SC_GETPEERNAME:
+        return do_getpeername((int)args[0], args[1], args[2]);
+    case SC_SHUTDOWN:
+        return do_shutdown((int)args[0], (int)args[1]);
+    case SC_SETSOCKOPT:
+        return do_setsockopt((int)args[0], (int)args[1], (int)args[2], args[3], (int)args[4]);
+    case SC_GETSOCKOPT:
+        return do_getsockopt((int)args[0], (int)args[1], (int)args[2], args[3], args[4]);
+    case SC_SEND:
+        return do_send((int)args[0], args[1], (int)args[2], (int)args[3]);
+    case SC_RECV:
+        return do_recv((int)args[0], args[1], (int)args[2], (int)args[3]);
+    case SC_RECVMSG:
+        return do_recvmsg((int)args[0], args[1], (int)args[2]);
+    default:
+        return -EINVAL;
+    }
+}
