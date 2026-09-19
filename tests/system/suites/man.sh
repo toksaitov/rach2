@@ -2,13 +2,15 @@
 #
 # man.sh: the manual pages on the machine.
 #
-# Boots the os-real image, logs in as root and reads rach2(7) two ways. Through
-# a pipe, `man` must give the staged page byte for byte: BusyBox's `man` puts
-# its output through `col -b -p -x` when standard output is not a terminal,
-# and this system's `col` copies its input, since the pages had their
-# overstrikes removed on the host. On the console under the pager, the page's
-# first line and its last must appear, the last after the pager is sent to the
-# end. `man`'s exit status proves nothing: it ignores its pager's.
+# Boots the os-real image, logs in as root and reads the pages two ways.
+# Through a pipe, `man` must give every staged page byte for byte, each one
+# found by its name and section: BusyBox's `man` puts its output through
+# `col -b -p -x` when standard output is not a terminal, and this system's
+# `col` copies its input, since the pages had their overstrikes removed on the
+# host; a page `man` cannot find, or gives differently, is named as BAD and
+# fails the run. On the console under the pager, rach2(7)'s first line and its
+# last must appear, the last after the pager is sent to the end. `man`'s exit
+# status proves nothing: it ignores its pager's.
 #
 # Usage: man.sh KERNEL IMAGE HARNESS PASSWORD PAGE LOG
 #   PAGE is the rendered page on the host, build/man/cat7/rach2.7, whose first
@@ -26,13 +28,14 @@ first=$(head -1 "$PAGE" | sed 's/[][\.*^$()|+?{}]/\\&/g')
 last=$(tail -1 "$PAGE" | sed 's/[][\.*^$()|+?{}]/\\&/g')
 
 if "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" --qemu-arg=-cpu --qemu-arg=max \
-    --timeout 120 --steptmo 60 --ok "MANDONE" --log "$LOG" \
+    --timeout 600 --steptmo 480 --ok "MANDONE" --never "BAD /" --log "$LOG" \
     "expect=rach2 login:" "send=root" "expect=Password:" "send=$PASSWORD" \
-    "expect=# " "send=man rach2 > /tmp/rach2.7; cmp /tmp/rach2.7 /usr/share/man/cat7/rach2.7 && test -s /tmp/rach2.7 && echo MAN\"\"SAME" \
-    "expect=MANSAME" "send=man rach2" "expect=$first" "sendraw=G" "expect=$last" \
+    "expect=# " "send=n=0; for f in /usr/share/man/cat*/*; do b=\${f##*/}; man \${b##*.} \${b%.*} > /tmp/p; cmp -s /tmp/p \$f && test -s /tmp/p || echo BAD \$f; n=\$((n+1)); done; echo MAN\"\"ALL \$n" \
+    "expect=MANALL [1-9]" "send=man rach2" "expect=$first" "sendraw=G" "expect=$last" \
     "sendraw=q" "expect=# " "send=echo MAN\"\"DONE" "expect=MANDONE" > /dev/null 2>&1; then
-    echo "man-test: man rach2 through a pipe is the staged page byte for byte: OK"
-    echo "man-test: and on the console under the pager it shows its first line and its last: OK"
+    count=$(grep -a "MANALL [0-9]" "$LOG" | tail -1 | tr -d '\r' | sed 's/.*MANALL //')
+    echo "man-test: every staged page, $count of them, is what man gives through a pipe, byte for byte: OK"
+    echo "man-test: and rach2(7) on the console under the pager shows its first line and its last: OK"
 else
     grep -a "MAN\|man:\|RACH2\|less" "$LOG" | tr -d '\r' | tail -8 >&2 || true
     fail "the manual on the machine"
