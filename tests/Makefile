@@ -48,12 +48,11 @@ TARGETS = $(addprefix $(BUILD)/, $(PROGS))
 CONFIG_TEXT = $(CC) $(CFLAGS) $(MUSL_CC) $(MUSL_CFLAGS)
 CONFIG_PURGE = $(TARGETS) $(BUILD)/*.d
 include ../mk/fingerprint.mk
-$(TARGETS): | fingerprint
 
 .PHONY: all clean
 
 all: $(TARGETS)
-
+$(TARGETS): | fingerprint
 
 # Each probe is a single freestanding source compiled+linked in one step; -MMD
 # (from $(DEPFLAGS)) writes the deps, -MF puts that .d under $(BUILD), so

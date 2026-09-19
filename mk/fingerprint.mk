@@ -27,6 +27,12 @@ CONFIG_PURGE ?= $(BUILD)
 # The purge is deliberate where a timestamp prerequisite would not be: the
 # system make (GNU 3.81) compares whole seconds, and an object landing in the
 # fingerprint's second would survive as stale.
+# The first rule in a makefile names the default goal. This file is included
+# before a component's `all`, so the goal make had before the include is put
+# back after the step is defined; for the same reason a component writes its
+# `$(OBJECTS): | fingerprint` line after its `all` rule, or the first object
+# becomes the goal and `make` builds one file.
+_goal_before_fingerprint := $(.DEFAULT_GOAL)
 .PHONY: fingerprint
 fingerprint:
 	@mkdir -p $(BUILD); \
@@ -40,3 +46,4 @@ fingerprint:
 	    rm -rf $(CONFIG_PURGE); mkdir -p $(BUILD); \
 	    printf '%s\n' "$$new" > $(CONFIG); \
 	fi
+.DEFAULT_GOAL := $(_goal_before_fingerprint)
