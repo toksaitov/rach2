@@ -2715,7 +2715,10 @@ int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb
                 ((transfer->length != 0 && transfer->direction == USB_DIR_IN) ? 0u : TRB_DIR_IN),
             0, 0);
     } else {
-        for (i = 0; i < pieces; i++) {
+        /* At least one piece: a transfer with none was refused above, so
+         * the first block is put before the loop's condition is read. */
+        i = 0;
+        do {
             int last = i + 1 == pieces;
             uint32_t flags = TRB_TYPE_NORMAL << TRB_TYPE_SHIFT;
             uint32_t words; /* the length and, above it, the packets left */
@@ -2740,7 +2743,8 @@ int xhci_submit(struct xhci_ctrl *hc, int device, int endpoint, const struct usb
             if (i == 0) {
                 first = trb;
             }
-        }
+            i++;
+        } while (i < pieces);
     }
 
     /* Everything but the first block is visible; now the first block's

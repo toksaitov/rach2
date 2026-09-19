@@ -506,6 +506,14 @@ static const struct disk_node *disk_node_of(const struct devfs_entry *dev)
     return (const struct disk_node *)dev;
 }
 
+/* The node behind a descriptor open on a disk window: the descriptor's
+   operations are `diskwin_ops`, which is how the caller was reached, so
+   the entry is a node without a check. */
+static const struct disk_node *disk_node_of_fd(const fd_entry_t *e)
+{
+    return (const struct disk_node *)e->dev;
+}
+
 static struct disk_window *disk_node_window(const struct disk_node *node)
 {
     if (node->part == 0) {
@@ -519,7 +527,7 @@ static int32_t raw_window_read_bytes(struct disk_window *w, fd_entry_t *e, char 
 
 static int32_t dev_disk_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
-    const struct disk_node *node = disk_node_of(e->dev);
+    const struct disk_node *node = disk_node_of_fd(e);
     struct disk_window *w = disk_node_window(node);
 
     if (!w->present) {
@@ -535,7 +543,7 @@ static int32_t dev_disk_read(fd_entry_t *e, char __user *buf, uint32_t count)
  */
 static int32_t dev_disk_rescan(fd_entry_t *e)
 {
-    const struct disk_node *node = disk_node_of(e->dev);
+    const struct disk_node *node = disk_node_of_fd(e);
 
     if (!node || node->part != 0) {
         return -ENOTTY;
@@ -556,7 +564,7 @@ static int32_t dev_disk_rescan(fd_entry_t *e)
 #ifdef RACH2_RECOVERY
 static int32_t dev_disk_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
-    const struct disk_node *node = disk_node_of(e->dev);
+    const struct disk_node *node = disk_node_of_fd(e);
 
     return raw_window_write(disk_node_window(node), e, buf, count);
 }
@@ -708,7 +716,7 @@ static void dev_bootpart_close(fd_entry_t *e)
 
 static void dev_disk_close(fd_entry_t *e)
 {
-    const struct disk_node *node = disk_node_of(e->dev);
+    const struct disk_node *node = disk_node_of_fd(e);
 
     raw_close(e);
     node->disk->opens--;
