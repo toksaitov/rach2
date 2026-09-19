@@ -1,0 +1,11 @@
+# rescue-static(8)
+
+NAME: rescue-static - take the sealed disk's fixed address when no lease arrives. Source: krffs/rescue-static.script, krffs/manifests/rach2-recovery.manifest (the `post-up` line of /etc/network/interfaces), Makefile (SEALED_ADDRESS, SEALED_MASK, SEALED_GATEWAY), tools/inspect/cfgcheck.c (`sealednet`), dev-log/25-sealed/Readme.md.
+* A shell script staged as `/bin/rescue-static` on the recovery image only, started in the background by the recovery's `/etc/network/interfaces` (`post-up /bin/rescue-static &` under `iface eth0 inet dhcp`) once the DHCP client has been started for eth0. It takes no arguments.
+* What it does: sleeps 25 seconds; if eth0 then holds an address (anything but `addr:0.0.0.0` in `ifconfig eth0`), exits 0 without a word. Otherwise it says `rescue: no lease arrived; taking the fixed address` on standard error, stops the DHCP client recorded in `/var/run/udhcpc.eth0.pid` (SIGTERM, then up to ten seconds of waiting; a client that will not stop is `rescue: the DHCP client will not stop; leaving the address alone`, exit 1), then `ifconfig eth0 192.168.0.105 netmask 255.255.255.0` and `route add default gw 192.168.0.1`, each failure exit 1, and reports `rescue: eth0: 192.168.0.105 through 192.168.0.1`.
+* Why: a machine whose boot partition is damaged reaches recovery through the core image's own configuration, and on a network with no DHCP server nobody at a keyboard can choose an entry; the fixed address is the one the owner can still reach over SSH. The client is stopped first so a late lease cannot replace the address under a session just opened to it.
+* The address is the sealed disk's, set in the Makefile as SEALED_ADDRESS, SEALED_MASK and SEALED_GATEWAY; the sealed disk's build runs `cfgcheck sealednet` and refuses a disk whose script and settings disagree.
+* FILES: /etc/network/interfaces (recovery's, which starts it), /var/run/udhcpc.eth0.pid.
+* EXIT STATUS: 0 when a lease arrived or the address was taken; 1 when the client would not stop or the address or route could not be set.
+* EXAMPLE: `tests/run drill` boots the recovery image without a DHCP server and reaches it on the fixed address.
+* SEE ALSO: recovery(7), netup(8), dhcpc(8), busybox-networking(1).

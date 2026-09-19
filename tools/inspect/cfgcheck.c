@@ -21,12 +21,12 @@
  *
  * `cfgcheck sealednet ADDRESS PREFIX MASK GATEWAY SCRIPT` checks the
  * sealed disk's fixed address against the script that falls back to it.
- * The address is named twice, in two shapes: the two static menu entries
- * carry `rach2.ip=ADDRESS/PREFIX rach2.gateway=GATEWAY`, which the kernel
- * parses at boot, and krffs/rescue-static.script has the same address as a
- * dotted mask and applies it from userland when a recovery boot gets no
- * lease. Two shapes of one fact drift, and a machine whose menu and
- * fallback disagree is unreachable by whichever of the two is wrong. So
+ * The address is named twice, in two shapes: the Makefile's SEALED_ADDRESS,
+ * SEALED_PREFIX and SEALED_GATEWAY, which the disk's documentation and the
+ * host's procedures name, and krffs/rescue-static.script, which has the
+ * same address as a dotted mask and applies it from userland when a
+ * recovery boot gets no lease. Two shapes of one fact drift, and a machine
+ * whose record and fallback disagree is unreachable by the wrong one. So
  * they are held together before a disk is written: the prefix and the mask
  * must describe the same subnet, the address must be a host in it, the
  * gateway must be a different host in the same subnet, and the script must

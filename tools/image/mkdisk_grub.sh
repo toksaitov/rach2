@@ -57,13 +57,11 @@ OUT="${2:-$REPO/build/images/os-real-grub.disk}"
 # what this script always built so no existing caller changes: extra kernel
 # command-line tokens appended to every menu entry (a real
 # machine needs its address and its disk driver named; QEMU's defaults need
-# neither). The network tokens are separate from those, and in two sets: the
-# ordinary entries take one and the static-address entries take the other,
-# because the kernel refuses an address given twice, so a line carrying
-# `rach2.ip=none` cannot have a fixed address appended to it.
+# neither). The network tokens are separate from those, since the kernel
+# refuses an address given twice and a line carrying `rach2.ip=none` can
+# have no address appended to it.
 EXTRA_APPEND="${RACH2_DISK_APPEND:-}"
 DHCP_APPEND="${RACH2_DISK_DHCP_APPEND:-}"
-STATIC_APPEND="${RACH2_DISK_STATIC_APPEND:-}"
 
 # Three more for the sealed disk, each defaulting to what this script always
 # built. BOOT_MB is the FAT partition; CLUSTER is mformat's sectors-per-cluster
@@ -269,10 +267,9 @@ menuentry "Start Rach2 with the previous kernel" --id fallback {
 # this disk, which is what lets it rewrite the root; its title says so when the
 # two files are there and says they are not when they are not, since the entry
 # is defined either way (the numbers above are a contract and adding an entry
-# afterwards would move them). There are two of it, for the same reason the
-# ordinary entries come in pairs: a machine whose root will not mount has to be
-# reachable, and on a network with no DHCP server the first one is not. Both
-# carry `rach2.slot=recovery`, which is how `bootctl` running there knows it is
+# afterwards would move them). The core image's own configuration, below, has
+# a second one, for a boot partition that does not read. Both carry
+# `rach2.slot=recovery`, which is how `bootctl` running there knows it is
 # running from neither kernel slot and may therefore install into either.
 menuentry "RACH2_RECOVERY_TITLE" --id recovery {
     search --no-floppy --fs-uuid --set=root RACH2_RECOVERY_SERIAL
@@ -354,16 +351,15 @@ fi
 set timeout=3
 CFG
 
-# The per-machine tokens ride into the entries through three placeholders,
+# The per-machine tokens ride into the entries through two placeholders,
 # so the heredoc above stays quoted and GRUB's own ${...} variables never
-# reach the shell. Two separate network sets: the ordinary entries take the
-# DHCP set and the static ones take the fixed address, and neither line
-# ever has both, since the kernel refuses an address given twice and would
-# come up with no address at all. The values are escaped before sed sees
+# reach the shell. The network tokens are a set of their own, since the
+# kernel refuses an address given twice and would come up with no address
+# at all. The values are escaped before sed sees
 # them, because `&`, `\`, and the delimiter are replacement syntax and a
 # token containing one would silently change; a newline would end the sed
 # expression, so it is refused outright.
-for v in "$EXTRA_APPEND" "$DHCP_APPEND" "$STATIC_APPEND"; do
+for v in "$EXTRA_APPEND" "$DHCP_APPEND"; do
     if [ "$(printf '%s' "$v" | wc -l)" -gt 0 ]; then
         echo "mkdisk_grub: an append token set contains a newline" >&2
         exit 1
@@ -376,8 +372,7 @@ RECOVERY_TITLE="Start the Rach2 recovery system (not yet built)"
 if [ -n "$RECOVERY_KERNEL" ] && [ -n "$RECOVERY_IMAGE" ]; then
     RECOVERY_TITLE="Start the Rach2 recovery system"
 fi
-sed -e "s|RACH2_STATIC_TOKENS|$(sedq "$STATIC_APPEND")|" \
-    -e "s|RACH2_DHCP_TOKENS|$(sedq "$DHCP_APPEND")|" \
+sed -e "s|RACH2_DHCP_TOKENS|$(sedq "$DHCP_APPEND")|" \
     -e "s|RACH2_CANDIDATE_ROOT|$CANDIDATE_ROOT|" \
     -e "s|RACH2_FALLBACK_ROOT|$FALLBACK_ROOT|" \
     -e "s|RACH2_BOOT_PART|MBRID=$MBR_ID,1|" \
@@ -406,8 +401,7 @@ menuentry "Start the Rach2 recovery system (the boot partition does not read)" -
 
 RCFG
 
-sed -e "s|RACH2_STATIC_TOKENS|$(sedq "$STATIC_APPEND")|" \
-    -e "s|RACH2_DHCP_TOKENS|$(sedq "$DHCP_APPEND")|" \
+sed -e "s|RACH2_DHCP_TOKENS|$(sedq "$DHCP_APPEND")|" \
     -e "s|RACH2_BOOT_PART|MBRID=$MBR_ID,1|" \
     -e "s|RACH2_RECOVERY_SERIAL|$(fat_uuid $RECOVERY_SERIAL)|" \
     -e "s|RACH2_APPEND_TOKENS|$(sedq "$EXTRA_APPEND")|" \

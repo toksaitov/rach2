@@ -365,19 +365,6 @@ case "$OUT" in
     *) fail "a write past the end of the device was not refused: $OUT" ;;
 esac
 
-# And the record of a fixed address does not outlive the address. A machine
-# rescued on a network with no server can be put back on DHCP by hand, and the
-# lease script is where the address changes hands, so that is where the record
-# goes. The script is run directly on its `bound` case, not through a
-# client, for two reasons: the sequence needs a server, which the isolated leg
-# by definition has not got, and a real client begins by taking the address off,
-# which would end this session before it could look.
-OUT="$(machine 'echo 1.2.3.4 > /var/run/rescue-static; interface=eth0 ip=10.0.2.15 subnet=255.255.255.0 router=10.0.2.2 /usr/share/udhcpc/default.script bound > /dev/null 2>&1; test ! -f /var/run/rescue-static && echo MARKER""GONE' || true)"
-case "$OUT" in
-    *MARKERGONE*) ;;
-    *) fail "a lease did not clear the record of a fixed address: $OUT" ;;
-esac
-
 # The three windows are one disk, and one writer at a time covers all of them:
 # the boot partition and the loader's gap are inside the whole drive, so a
 # reflash and a kernel install can address the same sectors by different names.

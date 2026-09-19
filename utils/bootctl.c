@@ -94,9 +94,6 @@ static int dev_write(void *ctx, uint32_t lba, const void *buf)
     return write(devfd, buf, BOOTSLOT_SECTOR) == BOOTSLOT_SECTOR ? 0 : -1;
 }
 
-/* Where the recovery image records that it took the fixed address itself. */
-#define RESCUE_MARKER "/var/run/rescue-static"
-
 static char cmdline[512];
 static int cmdline_ready;
 
