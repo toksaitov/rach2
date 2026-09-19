@@ -38,24 +38,20 @@ int main(void)
 
     /* ~16 KB: several demand-paged heap pages via brk. */
     a = malloc(N * sizeof *a);
-    if (!a)
-    {
+    if (!a) {
         printf("MALLOC QSORT FAIL: malloc\n");
         return 1;
     }
 
-    for (i = 0; i < N; i++)
-    {
+    for (i = 0; i < N; i++) {
         seed = seed * 1103515245u + 12345u;
         a[i] = (int)(seed >> 8);
     }
 
     qsort(a, N, sizeof *a, cmp_int);
 
-    for (i = 1; i < N; i++)
-    {
-        if (a[i - 1] > a[i])
-        {
+    for (i = 1; i < N; i++) {
+        if (a[i - 1] > a[i]) {
             ok = 0;
             break;
         }
@@ -69,14 +65,12 @@ int main(void)
         size_t big = 256u * 1024u;
         unsigned char *p = malloc(big);
 
-        if (!p)
-        {
+        if (!p) {
             printf("MALLOC QSORT FAIL: big malloc\n");
             return 1;
         }
         memset(p, 0xAB, big);
-        if (p[0] != 0xAB || p[big - 1] != 0xAB)
-        {
+        if (p[0] != 0xAB || p[big - 1] != 0xAB) {
             printf("MALLOC QSORT FAIL: big buffer\n");
             free(p);
             return 1;
@@ -84,8 +78,7 @@ int main(void)
         free(p);
     }
 
-    if (ok)
-    {
+    if (ok) {
         printf("MALLOC QSORT OK (n=%d, lo=%d, hi=%d)\n", N, lo, hi);
         return 0;
     }

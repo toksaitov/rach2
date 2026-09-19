@@ -44,21 +44,18 @@ int main(void)
     sa.sa_handler = usr1_handler;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
-    if (sigaction(SIGUSR1, &sa, NULL) != 0)
-    {
+    if (sigaction(SIGUSR1, &sa, NULL) != 0) {
         printf("SIGMUSL FAIL: sigaction\n");
         return 1;
     }
 
     handler_ran = 0;
     handler_sig = 0;
-    if (raise(SIGUSR1) != 0)
-    {
+    if (raise(SIGUSR1) != 0) {
         printf("SIGMUSL FAIL: raise\n");
         return 1;
     }
-    if (handler_ran != 1 || handler_sig != SIGUSR1)
-    {
+    if (handler_ran != 1 || handler_sig != SIGUSR1) {
         printf("SIGMUSL FAIL: handler did not run (ran=%d sig=%d)\n", (int)handler_ran,
                (int)handler_sig);
         return 1;
@@ -67,26 +64,22 @@ int main(void)
     /* Blocked signal stays pending until unblocked. */
     sigemptyset(&mask);
     sigaddset(&mask, SIGUSR1);
-    if (sigprocmask(SIG_BLOCK, &mask, NULL) != 0)
-    {
+    if (sigprocmask(SIG_BLOCK, &mask, NULL) != 0) {
         printf("SIGMUSL FAIL: sigprocmask block\n");
         return 1;
     }
     handler_ran = 0;
     handler_sig = 0;
     raise(SIGUSR1);
-    if (handler_ran != 0)
-    {
+    if (handler_ran != 0) {
         printf("SIGMUSL FAIL: blocked signal delivered\n");
         return 1;
     }
-    if (sigprocmask(SIG_UNBLOCK, &mask, NULL) != 0)
-    {
+    if (sigprocmask(SIG_UNBLOCK, &mask, NULL) != 0) {
         printf("SIGMUSL FAIL: sigprocmask unblock\n");
         return 1;
     }
-    if (handler_ran != 1 || handler_sig != SIGUSR1)
-    {
+    if (handler_ran != 1 || handler_sig != SIGUSR1) {
         printf("SIGMUSL FAIL: pending signal not delivered on unblock (ran=%d sig=%d)\n",
                (int)handler_ran, (int)handler_sig);
         return 1;
@@ -94,24 +87,20 @@ int main(void)
 
     /* Default action terminates: an abort()ing child is killed by SIGABRT. */
     pid = fork();
-    if (pid < 0)
-    {
+    if (pid < 0) {
         printf("SIGMUSL FAIL: fork\n");
         return 1;
     }
-    if (pid == 0)
-    {
+    if (pid == 0) {
         abort();
         _exit(0); /* not reached */
     }
 
-    if (waitpid(pid, &status, 0) != pid)
-    {
+    if (waitpid(pid, &status, 0) != pid) {
         printf("SIGMUSL FAIL: waitpid\n");
         return 1;
     }
-    if (!WIFSIGNALED(status) || WTERMSIG(status) != SIGABRT)
-    {
+    if (!WIFSIGNALED(status) || WTERMSIG(status) != SIGABRT) {
         printf("SIGMUSL FAIL: child not killed by SIGABRT (status=0x%x)\n", status);
         return 1;
     }

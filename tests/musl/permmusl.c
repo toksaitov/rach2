@@ -65,8 +65,7 @@ int main(void)
         return 1;
     }
     if (stat("/hello.txt", &st) != 0 || (st.st_mode & 0777) != 0600) {
-        printf("PERMMUSL FAIL (chmod not reflected: 0%o)\n",
-               (unsigned)(st.st_mode & 0777));
+        printf("PERMMUSL FAIL (chmod not reflected: 0%o)\n", (unsigned)(st.st_mode & 0777));
         return 1;
     }
     if (chmod("/no_such_file", 0644) != -1 || errno != ENOENT) {
@@ -79,8 +78,8 @@ int main(void)
         printf("PERMMUSL FAIL (chown 0:0: %s)\n", strerror(errno));
         return 1;
     }
-    if (chown("/hello.txt", 1000, 1000) != 0 || stat("/hello.txt", &st) != 0 ||
-        st.st_uid != 1000 || st.st_gid != 1000) {
+    if (chown("/hello.txt", 1000, 1000) != 0 || stat("/hello.txt", &st) != 0 || st.st_uid != 1000 ||
+        st.st_gid != 1000) {
         printf("PERMMUSL FAIL (chown 1000:1000 round trip)\n");
         return 1;
     }
@@ -98,8 +97,7 @@ int main(void)
      * to pin; here just prove the excursion a file server runs under works
      * both ways for a root caller. */
     if (seteuid(0) != 0 || setegid(0) != 0 || setresuid(0, 0, 0) != 0) {
-        printf("PERMMUSL FAIL (seteuid/setegid/setresuid 0: %s)\n",
-               strerror(errno));
+        printf("PERMMUSL FAIL (seteuid/setegid/setresuid 0: %s)\n", strerror(errno));
         return 1;
     }
     if (seteuid(1) != 0 || geteuid() != 1 || seteuid(0) != 0) {
@@ -124,8 +122,7 @@ int main(void)
         printf("PERMMUSL FAIL (write 0644 as other not EACCES)\n");
         return 1;
     }
-    if (open("/denied.musl", O_CREAT | O_WRONLY, 0644) != -1 ||
-        errno != EACCES) {
+    if (open("/denied.musl", O_CREAT | O_WRONLY, 0644) != -1 || errno != EACCES) {
         printf("PERMMUSL FAIL (create in / not EACCES)\n");
         return 1;
     }

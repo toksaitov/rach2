@@ -13,14 +13,14 @@ typedef unsigned int size_t;
 #define STDERR_FILENO 2
 
 /* Syscall numbers (32-bit Linux / Rach2 compatible) */
-#define SYS_EXIT  1
-#define SYS_READ  3
-#define SYS_WRITE 4
-#define SYS_OPEN  5
-#define SYS_CLOSE 6
-#define SYS_CREAT 8
+#define SYS_EXIT   1
+#define SYS_READ   3
+#define SYS_WRITE  4
+#define SYS_OPEN   5
+#define SYS_CLOSE  6
+#define SYS_CREAT  8
 #define SYS_UNLINK 10
-#define SYS_DUP2  63
+#define SYS_DUP2   63
 
 /* Open flags */
 #define O_RDONLY 0
@@ -30,93 +30,70 @@ typedef unsigned int size_t;
 static int sys_write(int fd, const void *buf, size_t count)
 {
     int result;
-    __asm__ __volatile__ (
-        "int $0x80"
-        : "=a"(result)
-        : "0"(SYS_WRITE), "b"(fd), "c"(buf), "d"(count)
-        : "memory"
-    );
+    __asm__ __volatile__("int $0x80"
+                         : "=a"(result)
+                         : "0"(SYS_WRITE), "b"(fd), "c"(buf), "d"(count)
+                         : "memory");
     return result;
 }
 
 static int sys_read(int fd, void *buf, size_t count)
 {
     int result;
-    __asm__ __volatile__ (
-        "int $0x80"
-        : "=a"(result)
-        : "0"(SYS_READ), "b"(fd), "c"(buf), "d"(count)
-        : "memory"
-    );
+    __asm__ __volatile__("int $0x80"
+                         : "=a"(result)
+                         : "0"(SYS_READ), "b"(fd), "c"(buf), "d"(count)
+                         : "memory");
     return result;
 }
 
 static int sys_open(const char *path, int flags)
 {
     int result;
-    __asm__ __volatile__ (
-        "int $0x80"
-        : "=a"(result)
-        : "0"(SYS_OPEN), "b"(path), "c"(flags)
-        : "memory"
-    );
+    __asm__ __volatile__("int $0x80"
+                         : "=a"(result)
+                         : "0"(SYS_OPEN), "b"(path), "c"(flags)
+                         : "memory");
     return result;
 }
 
 static int sys_close(int fd)
 {
     int result;
-    __asm__ __volatile__ (
-        "int $0x80"
-        : "=a"(result)
-        : "0"(SYS_CLOSE), "b"(fd)
-    );
+    __asm__ __volatile__("int $0x80" : "=a"(result) : "0"(SYS_CLOSE), "b"(fd));
     return result;
 }
 
 static int sys_creat(const char *path, unsigned int mode)
 {
     int result;
-    __asm__ __volatile__ (
-        "int $0x80"
-        : "=a"(result)
-        : "0"(SYS_CREAT), "b"(path), "c"(mode)
-        : "memory"
-    );
+    __asm__ __volatile__("int $0x80"
+                         : "=a"(result)
+                         : "0"(SYS_CREAT), "b"(path), "c"(mode)
+                         : "memory");
     return result;
 }
 
 static int sys_unlink(const char *path)
 {
     int result;
-    __asm__ __volatile__ (
-        "int $0x80"
-        : "=a"(result)
-        : "0"(SYS_UNLINK), "b"(path)
-        : "memory"
-    );
+    __asm__ __volatile__("int $0x80" : "=a"(result) : "0"(SYS_UNLINK), "b"(path) : "memory");
     return result;
 }
 
 static int sys_dup2(int oldfd, int newfd)
 {
     int result;
-    __asm__ __volatile__ (
-        "int $0x80"
-        : "=a"(result)
-        : "0"(SYS_DUP2), "b"(oldfd), "c"(newfd)
-        : "memory"
-    );
+    __asm__ __volatile__("int $0x80"
+                         : "=a"(result)
+                         : "0"(SYS_DUP2), "b"(oldfd), "c"(newfd)
+                         : "memory");
     return result;
 }
 
 static void sys_exit(int status)
 {
-    __asm__ __volatile__ (
-        "int $0x80"
-        :
-        : "a"(SYS_EXIT), "b"(status)
-    );
+    __asm__ __volatile__("int $0x80" : : "a"(SYS_EXIT), "b"(status));
     __builtin_unreachable();
 }
 
@@ -145,15 +122,17 @@ static int strncmp(const char *s1, const char *s2, size_t n)
         s2++;
         n--;
     }
-    if (n == 0) return 0;
+    if (n == 0)
+        return 0;
     return *(unsigned char *)s1 - *(unsigned char *)s2;
 }
 
 /* Output goes to stderr, which the dup2 tests below leave untouched. */
-#define puts_stderr(s) do { \
-    sys_write(STDERR_FILENO, s, strlen(s)); \
-    sys_write(STDERR_FILENO, "\n", 1); \
-} while(0)
+#define puts_stderr(s)                          \
+    do {                                        \
+        sys_write(STDERR_FILENO, s, strlen(s)); \
+        sys_write(STDERR_FILENO, "\n", 1);      \
+    } while (0)
 
 #define print_stderr(s) sys_write(STDERR_FILENO, s, strlen(s))
 

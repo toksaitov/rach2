@@ -51,14 +51,11 @@
 /* One boot runs all of these, in order. See the header for the probes that
    have a suite of their own. */
 static const char *const PROBES[] = {
-    "hello", "filetest", "forktest", "shelltest", "dirtest", "stattest",
-    "touchtest",
-    "rmtest", "mvtest", "lstest", "dup2test", "auxvprobe", "tlsprobe",
-    "errnoprobe", "vmprobe", "forkro", "cowprobe", "cowregrant",
-    "usercopyfault",
-    "forkleak", "fdstale", "dirgrow", "dirprobe", "unlinkdirprobe",
-    "pathcanon", "vfsprobe", "timeprobe",
-    "sigprobe", "credprobe", "ownprobe", "permprobe", "sockettest",
+    "hello", "filetest", "forktest", "shelltest", "dirtest", "stattest", "touchtest", "rmtest",
+    "mvtest", "lstest", "dup2test", "auxvprobe", "tlsprobe", "errnoprobe", "vmprobe", "forkro",
+    "cowprobe", "cowregrant", "usercopyfault", "forkleak", "fdstale", "dirgrow", "dirprobe",
+    "unlinkdirprobe", "pathcanon", "vfsprobe", "timeprobe", "sigprobe", "credprobe", "ownprobe",
+    "permprobe", "sockettest",
     /* The four limits: the process table, a process's descriptors, the
        socket pool and the frames. Each fills the thing, requires the refusal
        the kernel documents, and then requires the resource back. */
@@ -68,17 +65,13 @@ static const char *const PROBES[] = {
     "limitprobe",
     /* Hermetic without `--live`, which this does not pass: the resolver's
        pure helpers and the crafted wire data, not the real internet. */
-    "dnstest",
-    "trapprobe", "ofdprobe", "waitprobe", "pipeprobe", "pollprobe",
-    "devprobe", "jobprobe", "miscprobe", "ptyprobe", "rngprobe",
-    "orphanprobe", "loopprobe", "zombieprobe", "survivorprobe", "procprobe",
-    "suidprobe", "sudoprobe", "modeprobe",
+    "dnstest", "trapprobe", "ofdprobe", "waitprobe", "pipeprobe", "pollprobe", "devprobe",
+    "jobprobe", "miscprobe", "ptyprobe", "rngprobe", "orphanprobe", "loopprobe", "zombieprobe",
+    "survivorprobe", "procprobe", "suidprobe", "sudoprobe", "modeprobe",
     /* The musl-linked identity and permission walks: prove the id family
        and the deny paths through the real libc syscall selection, not just
        raw int 0x80. */
-    "musl/authmusl",
-    "musl/permmusl",
-    "musl/suidmusl",
+    "musl/authmusl", "musl/permmusl", "musl/suidmusl",
     /* After those three, because it rewrites files they read and puts them
        back. It is also the slowest probe here by a wide margin, and
        deliberately so: it waits out the credential lock's real retry
@@ -87,16 +80,8 @@ static const char *const PROBES[] = {
     /* After it, and for the same reasons doubled: it drives the shipped
        setuid passwd, which takes the same lock and rewrites the same
        files, and it restores all three databases before it exits. */
-    "musl/passwdmusl",
-    "musl/addusermusl",
-    "musl/loginmusl",
-    "rebootprobe",
-    "musl/readvmusl",
-    "musl/timemusl",
-    "musl/clockmusl",
-    "musl/statmusl",
-    "musl/stampmusl",
-    "musl/execargmusl",
+    "musl/passwdmusl", "musl/addusermusl", "musl/loginmusl", "rebootprobe", "musl/readvmusl",
+    "musl/timemusl", "musl/clockmusl", "musl/statmusl", "musl/stampmusl", "musl/execargmusl",
     "musl/spawnmusl",
     /* How many mappings a process may hold, which the compiler found too
        few. */
@@ -113,9 +98,8 @@ static const char *const PROBES[] = {
     /* Beside it for the same reason: it mints a tree of its own inside the
        two staged directories of its sticky pair, and two more directories
        at the image root, and removes every one of them again. */
-    "stickyprobe"
-};
-#define N_PROBES (int) (sizeof(PROBES) / sizeof(PROBES[0]))
+    "stickyprobe"};
+#define N_PROBES (int)(sizeof(PROBES) / sizeof(PROBES[0]))
 
 /* The two markers that hand the debug shell back. Both kernel paths carry
    their own outcome on this line: sys_exit its exit status,
@@ -127,17 +111,16 @@ static const char *const PROBES[] = {
    crashes or hangs. Requiring the component prefix and the pid keeps the
    verdict the kernel's to give. */
 #define EXIT_HEAD "sys_exit: init process "
-#define EXIT_MID " exited with status "
+#define EXIT_MID  " exited with status "
 #define EXIT_TAIL ", returning to kernel shell"
 #define KILL_HEAD "terminate: init process "
-#define KILL_MID " killed by signal "
+#define KILL_MID  " killed by signal "
 #define KILL_TAIL ", returning to kernel shell"
 
 /* Match one marker at `at`. Fills `value` with the status or signal and
    returns the end offset, or -1. */
-static long marker_at(const unsigned char *text, size_t len, size_t at,
-                      const char *head, const char *mid, const char *tail,
-                      int signed_value, long *value)
+static long marker_at(const unsigned char *text, size_t len, size_t at, const char *head,
+                      const char *mid, const char *tail, int signed_value, long *value)
 {
     size_t i = at;
     size_t hlen = strlen(head), mlen = strlen(mid), tlen = strlen(tail);
@@ -169,7 +152,7 @@ static long marker_at(const unsigned char *text, size_t len, size_t at,
     if (digits == 0 || i + tlen > len || memcmp(text + i, tail, tlen) != 0)
         return -1;
     *value = sign * n;
-    return (long) (i + tlen);
+    return (long)(i + tlen);
 }
 
 /* Past a record's `<N>[seconds.hundredths] ` prefix, or `at` if there is no
@@ -196,8 +179,8 @@ static size_t past_prefix(const unsigned char *text, size_t len, size_t at)
    line, or to follow the record prefix that does, which is what makes the
    verdict the kernel's. Returns the end offset, or -1; `which` is 'e' for an
    exit and 'k' for a kill. */
-static long find_marker(const unsigned char *text, size_t len, size_t from,
-                        int line_start, char *which, long *value)
+static long find_marker(const unsigned char *text, size_t len, size_t from, int line_start,
+                        char *which, long *value)
 {
     size_t at;
 
@@ -210,14 +193,12 @@ static long find_marker(const unsigned char *text, size_t len, size_t from,
                 continue;
             start = past_prefix(text, len, at);
         }
-        end = marker_at(text, len, start, KILL_HEAD, KILL_MID, KILL_TAIL, 0,
-                        value);
+        end = marker_at(text, len, start, KILL_HEAD, KILL_MID, KILL_TAIL, 0, value);
         if (end >= 0) {
             *which = 'k';
             return end;
         }
-        end = marker_at(text, len, start, EXIT_HEAD, EXIT_MID, EXIT_TAIL, 1,
-                        value);
+        end = marker_at(text, len, start, EXIT_HEAD, EXIT_MID, EXIT_TAIL, 1, value);
         if (end >= 0) {
             *which = 'e';
             return end;
@@ -234,8 +215,7 @@ static long find_marker(const unsigned char *text, size_t len, size_t from,
    it, and a probe that reaps a clean child and then dies on a signal
    prints no status of its own at all, which is how a crash used to score
    as a pass. Fills `detail` and returns nonzero when the probe passed. */
-static int score_window(const unsigned char *window, size_t len, char *detail,
-                        size_t detail_len)
+static int score_window(const unsigned char *window, size_t len, char *detail, size_t detail_len)
 {
     size_t at;
     long value;
@@ -245,8 +225,8 @@ static int score_window(const unsigned char *window, size_t len, char *detail,
     for (at = 0; at < len; at++) {
         if (at != 0 && window[at - 1] != '\n')
             continue;
-        if (marker_at(window, len, past_prefix(window, len, at), KILL_HEAD,
-                      KILL_MID, KILL_TAIL, 0, &value) >= 0) {
+        if (marker_at(window, len, past_prefix(window, len, at), KILL_HEAD, KILL_MID, KILL_TAIL, 0,
+                      &value) >= 0) {
             snprintf(detail, detail_len, "killed by signal %ld", value);
             return 0;
         }
@@ -254,8 +234,8 @@ static int score_window(const unsigned char *window, size_t len, char *detail,
     for (at = 0; at < len; at++) {
         if (at != 0 && window[at - 1] != '\n')
             continue;
-        if (marker_at(window, len, past_prefix(window, len, at), EXIT_HEAD,
-                      EXIT_MID, EXIT_TAIL, 1, &value) >= 0) {
+        if (marker_at(window, len, past_prefix(window, len, at), EXIT_HEAD, EXIT_MID, EXIT_TAIL, 1,
+                      &value) >= 0) {
             snprintf(detail, detail_len, "status=%ld", value);
             return value == 0;
         }
@@ -270,8 +250,8 @@ static int score_window(const unsigned char *window, size_t len, char *detail,
    timestamp between them is not fixed text, and only at a line start, because
    a probe that printed the text of a record inside its own output must not
    count as one. */
-static long find_text(const unsigned char *hay, size_t len, size_t from,
-                      const char *head, const char *tail)
+static long find_text(const unsigned char *hay, size_t len, size_t from, const char *head,
+                      const char *tail)
 {
     size_t hlen = strlen(head), at;
 
@@ -280,14 +260,14 @@ static long find_text(const unsigned char *hay, size_t len, size_t from,
             continue;
         if (memcmp(hay + at, head, hlen) != 0)
             continue;
-        if (tail == (const char *) 0 || tail[0] == '\0')
-            return (long) at;
+        if (tail == (const char *)0 || tail[0] == '\0')
+            return (long)at;
         {
             size_t tlen = strlen(tail), p = at + hlen;
 
             while (p + tlen <= len && hay[p] != '\n') {
                 if (memcmp(hay + p, tail, tlen) == 0)
-                    return (long) at;
+                    return (long)at;
                 p++;
             }
         }
@@ -312,8 +292,7 @@ static long find_text(const unsigned char *hay, size_t len, size_t from,
  * this needed, to tell a failing check from a fault probe's own error record,
  * went with them.
  */
-static int score_kernel_timing(const unsigned char *buf, size_t buf_len,
-                               char *detail, size_t size)
+static int score_kernel_timing(const unsigned char *buf, size_t buf_len, char *detail, size_t size)
 {
     static const char *const MARK = "] timing: ";
     long said = find_text(buf, buf_len, 0, "<6>[", MARK);
@@ -328,13 +307,13 @@ static int score_kernel_timing(const unsigned char *buf, size_t buf_len,
         return 0;
     }
     {
-        const char *from = strstr((const char *) buf + said, MARK) + strlen(MARK);
+        const char *from = strstr((const char *)buf + said, MARK) + strlen(MARK);
         size_t n = 0;
 
         while (from[n] != '\0' && from[n] != '\n' && from[n] != '\r' && n + 1 < size) {
             n++;
         }
-        snprintf(detail, size, "%.*s", (int) n, from);
+        snprintf(detail, size, "%.*s", (int)n, from);
     }
     return ok;
 }
@@ -348,58 +327,59 @@ static int selftest(void)
         const char *window;
         const char *want_detail;
         int want_ok;
-    } cases[] = {
-        { "clean",
-          "<6>[1.20] process: exited with status 0\n"
-          "<6>[1.21] sys_exit: init process 4 exited with status 0, "
-          "returning to kernel shell\n", "status=0", 1 },
-        /* The same markers as the kernel wrote them before they were
-           records, which is what a capture from an older boot holds. */
-        { "clean, unprefixed",
-          "\nProcess exited with status 0\n"
-          "sys_exit: init process 4 exited with status 0, "
-          "returning to kernel shell\n", "status=0", 1 },
-        { "a probe forges the prefix as well",
-          "<6>[1.20] probe: sys_exit: init process 4 exited with status 0, "
-          "returning to kernel shell\n", "no exit reported", 0 },
-        { "clean child then signal death",
-          "\nProcess exited with status 0\n"
-          "terminate: init process 4 killed by signal 11, "
-          "returning to kernel shell\n", "killed by signal 11", 0 },
-        { "orphan exits after the parent",
-          "\nProcess exited with status 3\n"
-          "sys_exit: init process 4 exited with status 3, "
-          "returning to kernel shell\n"
-          "\nProcess exited with status 0\n", "status=3", 0 },
-        { "no status at all", "some unrelated serial chatter\n",
-          "no exit reported", 0 },
-        { "nonzero probe status",
-          "sys_exit: init process 4 exited with status 7, "
-          "returning to kernel shell\n", "status=7", 0 },
-        /* A probe shares the serial console with the kernel, so the phrase
-           alone must not be a verdict: this one prints it and then dies. */
-        { "probe forges the marker text, then is killed",
-          "probe: exited with status 0, returning to kernel shell\n"
-          "terminate: init process 4 killed by signal 11, "
-          "returning to kernel shell\n", "killed by signal 11", 0 },
-        { "probe forges the marker text and nothing else happens",
-          "probe: exited with status 0, returning to kernel shell\n",
-          "no exit reported", 0 }
-    };
+    } cases[] = {{"clean",
+                  "<6>[1.20] process: exited with status 0\n"
+                  "<6>[1.21] sys_exit: init process 4 exited with status 0, "
+                  "returning to kernel shell\n",
+                  "status=0", 1},
+                 /* The same markers as the kernel wrote them before they were
+                    records, which is what a capture from an older boot holds. */
+                 {"clean, unprefixed",
+                  "\nProcess exited with status 0\n"
+                  "sys_exit: init process 4 exited with status 0, "
+                  "returning to kernel shell\n",
+                  "status=0", 1},
+                 {"a probe forges the prefix as well",
+                  "<6>[1.20] probe: sys_exit: init process 4 exited with status 0, "
+                  "returning to kernel shell\n",
+                  "no exit reported", 0},
+                 {"clean child then signal death",
+                  "\nProcess exited with status 0\n"
+                  "terminate: init process 4 killed by signal 11, "
+                  "returning to kernel shell\n",
+                  "killed by signal 11", 0},
+                 {"orphan exits after the parent",
+                  "\nProcess exited with status 3\n"
+                  "sys_exit: init process 4 exited with status 3, "
+                  "returning to kernel shell\n"
+                  "\nProcess exited with status 0\n",
+                  "status=3", 0},
+                 {"no status at all", "some unrelated serial chatter\n", "no exit reported", 0},
+                 {"nonzero probe status",
+                  "sys_exit: init process 4 exited with status 7, "
+                  "returning to kernel shell\n",
+                  "status=7", 0},
+                 /* A probe shares the serial console with the kernel, so the phrase
+                    alone must not be a verdict: this one prints it and then dies. */
+                 {"probe forges the marker text, then is killed",
+                  "probe: exited with status 0, returning to kernel shell\n"
+                  "terminate: init process 4 killed by signal 11, "
+                  "returning to kernel shell\n",
+                  "killed by signal 11", 0},
+                 {"probe forges the marker text and nothing else happens",
+                  "probe: exited with status 0, returning to kernel shell\n", "no exit reported",
+                  0}};
     int bad = 0, i;
-    int n = (int) (sizeof(cases) / sizeof(cases[0]));
+    int n = (int)(sizeof(cases) / sizeof(cases[0]));
 
     for (i = 0; i < n; i++) {
         char detail[128];
-        int ok = score_window((const unsigned char *) cases[i].window,
-                              strlen(cases[i].window), detail,
-                              sizeof(detail));
+        int ok = score_window((const unsigned char *)cases[i].window, strlen(cases[i].window),
+                              detail, sizeof(detail));
 
-        if (ok != cases[i].want_ok ||
-            strcmp(detail, cases[i].want_detail) != 0) {
-            printf("  FAIL: %s: expected ('%s', %s), got ('%s', %s)\n",
-                   cases[i].name, cases[i].want_detail,
-                   cases[i].want_ok ? "True" : "False", detail,
+        if (ok != cases[i].want_ok || strcmp(detail, cases[i].want_detail) != 0) {
+            printf("  FAIL: %s: expected ('%s', %s), got ('%s', %s)\n", cases[i].name,
+                   cases[i].want_detail, cases[i].want_ok ? "True" : "False", detail,
                    ok ? "True" : "False");
             bad++;
         }
@@ -417,33 +397,33 @@ static int selftest(void)
             const char *text;
             int at_line_start;
             int want_found;
-        } scans[] = {
-            { "the kernel's marker on its own line",
-              "boot\nsys_exit: init process 4 exited with status 0, "
-              "returning to kernel shell\n", 1, 1 },
-            { "a marker after a probe's partial line, bounding the window",
-              "probe wrote thisterminate: init process 4 killed by signal "
-              "11, returning to kernel shell\n", 0, 1 },
-            { "that same marker under the scoring rule",
-              "probe wrote thisterminate: init process 4 killed by signal "
-              "11, returning to kernel shell\n", 1, 0 },
-            { "a pid of more digits than a long holds",
-              "\nsys_exit: init process 4 exited with status "
-              "999999999999999999999999, returning to kernel shell\n", 1, 0 }
-        };
-        int k, scan_n = (int) (sizeof(scans) / sizeof(scans[0]));
+        } scans[] = {{"the kernel's marker on its own line",
+                      "boot\nsys_exit: init process 4 exited with status 0, "
+                      "returning to kernel shell\n",
+                      1, 1},
+                     {"a marker after a probe's partial line, bounding the window",
+                      "probe wrote thisterminate: init process 4 killed by signal "
+                      "11, returning to kernel shell\n",
+                      0, 1},
+                     {"that same marker under the scoring rule",
+                      "probe wrote thisterminate: init process 4 killed by signal "
+                      "11, returning to kernel shell\n",
+                      1, 0},
+                     {"a pid of more digits than a long holds",
+                      "\nsys_exit: init process 4 exited with status "
+                      "999999999999999999999999, returning to kernel shell\n",
+                      1, 0}};
+        int k, scan_n = (int)(sizeof(scans) / sizeof(scans[0]));
 
         for (k = 0; k < scan_n; k++) {
             char which;
             long value;
-            long end = find_marker((const unsigned char *) scans[k].text,
-                                   strlen(scans[k].text), 0,
+            long end = find_marker((const unsigned char *)scans[k].text, strlen(scans[k].text), 0,
                                    scans[k].at_line_start, &which, &value);
 
             if ((end >= 0) != scans[k].want_found) {
                 printf("  FAIL: %s: expected %s, got %s\n", scans[k].name,
-                       scans[k].want_found ? "a marker" : "none",
-                       end >= 0 ? "a marker" : "none");
+                       scans[k].want_found ? "a marker" : "none", end >= 0 ? "a marker" : "none");
                 bad++;
             }
         }
@@ -459,35 +439,31 @@ static int selftest(void)
             const char *want_detail;
             int want_ok;
         } groups[] = {
-            { "the machine agrees with itself about time",
-              "<6>[0.51] timing: tick 100 Hz, 200 ms delay measured 200 ms, "
-              "2000 us wait measured 2001 us\n",
-              "tick 100 Hz, 200 ms delay measured 200 ms, 2000 us wait measured 2001 us", 1 },
-            { "a measurement that does not agree is an error record",
-              "<3>[0.51] timing: tick 100 Hz, 200 ms delay measured 200 ms, "
-              "2000 us wait measured 1361 us\n",
-              "tick 100 Hz, 200 ms delay measured 200 ms, 2000 us wait measured 1361 us", 0 },
-            { "the record is taken from this boot and not from a probe's text",
-              "<6>[1.20] probe: timing: tick 1 Hz, 200 ms delay measured 9 ms, "
-              "2000 us wait measured 9 us\n"
-              "<6>[1.21] timing: tick 100 Hz, 200 ms delay measured 200 ms, "
-              "2000 us wait measured 2001 us\n",
-              "tick 100 Hz, 200 ms delay measured 200 ms, 2000 us wait measured 2001 us", 1 },
-            { "nothing said at all", "boot\n", "the kernel said nothing about time", 0 }
-        };
-        int k, group_n = (int) (sizeof(groups) / sizeof(groups[0]));
+            {"the machine agrees with itself about time",
+             "<6>[0.51] timing: tick 100 Hz, 200 ms delay measured 200 ms, "
+             "2000 us wait measured 2001 us\n",
+             "tick 100 Hz, 200 ms delay measured 200 ms, 2000 us wait measured 2001 us", 1},
+            {"a measurement that does not agree is an error record",
+             "<3>[0.51] timing: tick 100 Hz, 200 ms delay measured 200 ms, "
+             "2000 us wait measured 1361 us\n",
+             "tick 100 Hz, 200 ms delay measured 200 ms, 2000 us wait measured 1361 us", 0},
+            {"the record is taken from this boot and not from a probe's text",
+             "<6>[1.20] probe: timing: tick 1 Hz, 200 ms delay measured 9 ms, "
+             "2000 us wait measured 9 us\n"
+             "<6>[1.21] timing: tick 100 Hz, 200 ms delay measured 200 ms, "
+             "2000 us wait measured 2001 us\n",
+             "tick 100 Hz, 200 ms delay measured 200 ms, 2000 us wait measured 2001 us", 1},
+            {"nothing said at all", "boot\n", "the kernel said nothing about time", 0}};
+        int k, group_n = (int)(sizeof(groups) / sizeof(groups[0]));
 
         for (k = 0; k < group_n; k++) {
             char detail[128];
-            int ok = score_kernel_timing((const unsigned char *) groups[k].log,
-                                           strlen(groups[k].log), detail,
-                                           sizeof(detail));
+            int ok = score_kernel_timing((const unsigned char *)groups[k].log,
+                                         strlen(groups[k].log), detail, sizeof(detail));
 
-            if (ok != groups[k].want_ok ||
-                strcmp(detail, groups[k].want_detail) != 0) {
-                printf("  FAIL: %s: expected ('%s', %s), got ('%s', %s)\n",
-                       groups[k].name, groups[k].want_detail,
-                       groups[k].want_ok ? "True" : "False", detail,
+            if (ok != groups[k].want_ok || strcmp(detail, groups[k].want_detail) != 0) {
+                printf("  FAIL: %s: expected ('%s', %s), got ('%s', %s)\n", groups[k].name,
+                       groups[k].want_detail, groups[k].want_ok ? "True" : "False", detail,
                        ok ? "True" : "False");
                 bad++;
             }
@@ -517,7 +493,7 @@ static double now(void)
     struct timeval tv;
 
     gettimeofday(&tv, NULL);
-    return (double) tv.tv_sec + (double) tv.tv_usec / 1e6;
+    return (double)tv.tv_sec + (double)tv.tv_usec / 1e6;
 }
 
 /* ---- the deadline factor ----
@@ -571,8 +547,8 @@ static int child_poll(void)
     got = waitpid(child_pid, &child_status, WNOHANG);
     if (got == child_pid) {
         child_reaped = 1;
-        child_status = WIFEXITED(child_status) ? WEXITSTATUS(child_status)
-                                               : 128 + WTERMSIG(child_status);
+        child_status =
+            WIFEXITED(child_status) ? WEXITSTATUS(child_status) : 128 + WTERMSIG(child_status);
         return child_status;
     }
     return -1;
@@ -593,9 +569,9 @@ static void pump(double until)
         if (select(child_out + 1, &r, NULL, NULL, &tv) > 0) {
             n = read(child_out, chunk, sizeof(chunk));
             if (n > 0) {
-                buf_add(chunk, (size_t) n);
+                buf_add(chunk, (size_t)n);
                 if (logf != NULL) {
-                    fwrite(chunk, 1, (size_t) n, logf);
+                    fwrite(chunk, 1, (size_t)n, logf);
                     fflush(logf);
                 }
             } else if (n == 0) {
@@ -620,7 +596,7 @@ static long expect_text(const char *what, double window)
         for (at = consumed; at + wlen <= buf_len; at++)
             if (memcmp(buf + at, what, wlen) == 0) {
                 consumed = at + wlen;
-                return (long) consumed;
+                return (long)consumed;
             }
         if (now() >= stop || child_poll() >= 0)
             return -1;
@@ -651,7 +627,7 @@ static long expect_marker(double window)
         long end = find_marker(buf, buf_len, consumed, 0, &which, &value);
 
         if (end >= 0) {
-            consumed = (size_t) end;
+            consumed = (size_t)end;
             return end;
         }
         if (now() >= stop || child_poll() >= 0)
@@ -664,8 +640,7 @@ static void send_line(const char *text)
 {
     if (child_in < 0)
         return;
-    if (write(child_in, text, strlen(text)) < 0 ||
-        write(child_in, "\n", 1) < 0) {
+    if (write(child_in, text, strlen(text)) < 0 || write(child_in, "\n", 1) < 0) {
         /* A closed pipe means the guest is gone; the caller notices. */
     }
 }
@@ -730,27 +705,27 @@ int main(int argc, char **argv)
        read), so a host configured for a local-time RTC would hand the
        guest a date wrong by its offset, and the clock check below would
        report it as our bug. */
-    qemu[nq++] = (char *) "qemu-system-i386";
-    qemu[nq++] = (char *) "-cpu";
-    qemu[nq++] = (char *) cpu;
-    qemu[nq++] = (char *) "-kernel";
-    qemu[nq++] = (char *) kernel;
-    qemu[nq++] = (char *) "-initrd";
-    qemu[nq++] = (char *) initrd;
-    qemu[nq++] = (char *) "-serial";
-    qemu[nq++] = (char *) "stdio";
-    qemu[nq++] = (char *) "-display";
-    qemu[nq++] = (char *) "none";
-    qemu[nq++] = (char *) "-rtc";
-    qemu[nq++] = (char *) "base=utc";
-    qemu[nq++] = (char *) "-no-reboot";
-    qemu[nq++] = (char *) "-netdev";
-    qemu[nq++] = (char *) "user,id=net0";
-    qemu[nq++] = (char *) "-device";
-    qemu[nq++] = (char *) device;
+    qemu[nq++] = (char *)"qemu-system-i386";
+    qemu[nq++] = (char *)"-cpu";
+    qemu[nq++] = (char *)cpu;
+    qemu[nq++] = (char *)"-kernel";
+    qemu[nq++] = (char *)kernel;
+    qemu[nq++] = (char *)"-initrd";
+    qemu[nq++] = (char *)initrd;
+    qemu[nq++] = (char *)"-serial";
+    qemu[nq++] = (char *)"stdio";
+    qemu[nq++] = (char *)"-display";
+    qemu[nq++] = (char *)"none";
+    qemu[nq++] = (char *)"-rtc";
+    qemu[nq++] = (char *)"base=utc";
+    qemu[nq++] = (char *)"-no-reboot";
+    qemu[nq++] = (char *)"-netdev";
+    qemu[nq++] = (char *)"user,id=net0";
+    qemu[nq++] = (char *)"-device";
+    qemu[nq++] = (char *)device;
     if (append != NULL) {
-        qemu[nq++] = (char *) "-append";
-        qemu[nq++] = (char *) append;
+        qemu[nq++] = (char *)"-append";
+        qemu[nq++] = (char *)append;
     }
     qemu[nq] = NULL;
 
@@ -781,16 +756,17 @@ int main(int argc, char **argv)
     if (log != NULL) {
         logf = fopen(log, "wb");
         if (logf == NULL)
-            fprintf(stderr, "runtests: cannot write %s: %s; the run "
-                    "continues without a transcript\n", log,
-                    strerror(errno));
+            fprintf(stderr,
+                    "runtests: cannot write %s: %s; the run "
+                    "continues without a transcript\n",
+                    log, strerror(errno));
     }
     deadline_factor_read();
     timeout = scaled(timeout);
     steptmo = scaled(steptmo);
     boottmo = scaled(boottmo);
     deadline = now() + timeout;
-    buf_add((const unsigned char *) "", 0);
+    buf_add((const unsigned char *)"", 0);
 
     if (expect_text("Type 'help'", boottmo) < 0) {
         fprintf(stderr, "runtests: kernel shell never appeared\n");
@@ -813,15 +789,16 @@ int main(int argc, char **argv)
            marker is on serial, so it survives a probe that left the
            console tty in raw mode (ttyprobe). */
         end = expect_marker(steptmo);
-        if (end >= 0 && (size_t) end < start) {
-            fprintf(stderr, "runtests: the marker for %s ends before its "
-                    "window begins; the scan is out of step\n", PROBES[i]);
+        if (end >= 0 && (size_t)end < start) {
+            fprintf(stderr,
+                    "runtests: the marker for %s ends before its "
+                    "window begins; the scan is out of step\n",
+                    PROBES[i]);
             return 2;
         }
         if (end < 0) {
             results[n_results].name = PROBES[i];
-            snprintf(results[n_results].detail,
-                     sizeof(results[n_results].detail),
+            snprintf(results[n_results].detail, sizeof(results[n_results].detail),
                      "no shell return (hang?)");
             results[n_results].ok = 0;
             n_results++;
@@ -829,8 +806,7 @@ int main(int argc, char **argv)
         }
         results[n_results].name = PROBES[i];
         results[n_results].ok =
-            score_window(buf + start, (size_t) end - start,
-                         results[n_results].detail,
+            score_window(buf + start, (size_t)end - start, results[n_results].detail,
                          sizeof(results[n_results].detail));
         n_results++;
         if (strcmp(PROBES[i], "musl/clockmusl") == 0) {
@@ -869,14 +845,13 @@ int main(int argc, char **argv)
 
         for (at = 0; at + wlen < buf_len; at++) {
             if (memcmp(buf + at, want, wlen) == 0) {
-                const char *p = (const char *) buf + at + wlen;
+                const char *p = (const char *)buf + at + wlen;
 
                 if (*p >= '0' && *p <= '9' && clock_seen_at != 0) {
                     long guest = strtol(p, NULL, 10);
-                    double skew = clock_seen_at - (double) guest;
+                    double skew = clock_seen_at - (double)guest;
 
-                    snprintf(clock_detail, sizeof(clock_detail),
-                             "%+d s vs the host", (int) skew);
+                    snprintf(clock_detail, sizeof(clock_detail), "%+d s vs the host", (int)skew);
                     clock_ok = skew >= -30 && skew <= 30;
                 }
                 break;
@@ -884,8 +859,7 @@ int main(int argc, char **argv)
         }
     }
 
-    selftest_ok = score_kernel_timing(buf, buf_len, selftest_detail,
-                                        sizeof(selftest_detail));
+    selftest_ok = score_kernel_timing(buf, buf_len, selftest_detail, sizeof(selftest_detail));
 
     for (i = 0; i < n_results; i++) {
         if (!results[i].ok)
@@ -913,10 +887,10 @@ int main(int argc, char **argv)
                 int want;
 
                 missing++;
-                want = snprintf(names + used, sizeof(names) - used, "%s%s",
-                                used ? " " : "", PROBES[i]);
-                if (want > 0 && (size_t) want < sizeof(names) - used)
-                    used += (size_t) want;
+                want = snprintf(names + used, sizeof(names) - used, "%s%s", used ? " " : "",
+                                PROBES[i]);
+                if (want > 0 && (size_t)want < sizeof(names) - used)
+                    used += (size_t)want;
                 else
                     used = sizeof(names) - 1;
             }
@@ -929,16 +903,13 @@ int main(int argc, char **argv)
 
     /* Reported beside the probes, not as one, so the count stays the count
        of probes. */
-    printf("  %-12s %-18s %s\n", "timing", selftest_detail,
-           selftest_ok ? "PASS" : "FAIL");
+    printf("  %-12s %-18s %s\n", "timing", selftest_detail, selftest_ok ? "PASS" : "FAIL");
     if (!selftest_ok)
         fails++;
-    printf("  %-12s %-18s %s\n", "clock", clock_detail,
-           clock_ok ? "PASS" : "FAIL");
+    printf("  %-12s %-18s %s\n", "clock", clock_detail, clock_ok ? "PASS" : "FAIL");
     if (!clock_ok)
         fails++;
 
-    printf("runtests: %d of %d probes, %d failures\n", n_results, N_PROBES,
-           fails);
+    printf("runtests: %d of %d probes, %d failures\n", n_results, N_PROBES, fails);
     return fails == 0 ? 0 : 1;
 }

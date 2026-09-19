@@ -96,7 +96,7 @@ void _start(void)
     int pid, status, i;
 
     for (i = 0; i < CYCLES; i++) {
-        unsigned base = 0x10000u + (unsigned) i;
+        unsigned base = 0x10000u + (unsigned)i;
 
         shared_val = base;
 

@@ -29,7 +29,7 @@ static double now(void)
     struct timespec ts;
 
     clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (double) ts.tv_sec + (double) ts.tv_nsec / 1e9;
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
 }
 
 int main(int argc, char **argv)
@@ -46,8 +46,7 @@ int main(int argc, char **argv)
     }
     limit = strtol(argv[1], &end, 10);
     if (*end != '\0' || limit <= 0) {
-        fprintf(stderr, "deadline: '%s' is not a positive second count\n",
-                argv[1]);
+        fprintf(stderr, "deadline: '%s' is not a positive second count\n", argv[1]);
         return 125;
     }
 
@@ -84,9 +83,8 @@ int main(int argc, char **argv)
             perror("deadline: waitpid");
             return 125;
         }
-        if (!killed && now() - start >= (double) limit) {
-            fprintf(stderr, "deadline: %lds passed; stopping the group\n",
-                    limit);
+        if (!killed && now() - start >= (double)limit) {
+            fprintf(stderr, "deadline: %lds passed; stopping the group\n", limit);
             kill(-child, SIGTERM);
             killed = 1;
             term_at = now();
@@ -94,7 +92,7 @@ int main(int argc, char **argv)
             kill(-child, SIGKILL);
         }
         {
-            struct timespec nap = { 0, 100000000L };
+            struct timespec nap = {0, 100000000L};
 
             nanosleep(&nap, NULL);
         }

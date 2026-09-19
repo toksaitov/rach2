@@ -5,8 +5,8 @@
  * pool exhausting or the kernel faulting. Freestanding; direct int 0x80.
  */
 
-typedef unsigned int   size_t;
-typedef unsigned int   uint32_t;
+typedef unsigned int size_t;
+typedef unsigned int uint32_t;
 
 #define STDOUT_FILENO 1
 
@@ -15,18 +15,20 @@ typedef unsigned int   uint32_t;
 #define SYS_WRITE      4
 #define SYS_CLOSE      6
 #define SYS_WAITPID    7
-#define SYS_DUP2      63
+#define SYS_DUP2       63
 #define SYS_SOCKETCALL 102
 
-#define SC_SOCKET    1
-#define AF_INET      2
-#define SOCK_DGRAM   2
+#define SC_SOCKET  1
+#define AF_INET    2
+#define SOCK_DGRAM 2
 
 static int sys_write(int fd, const void *buf, size_t count)
 {
     int r;
     __asm__ __volatile__("int $0x80"
-        : "=a"(r) : "0"(SYS_WRITE), "b"(fd), "c"(buf), "d"(count) : "memory");
+                         : "=a"(r)
+                         : "0"(SYS_WRITE), "b"(fd), "c"(buf), "d"(count)
+                         : "memory");
     return r;
 }
 
@@ -54,16 +56,16 @@ static int sys_waitpid(int pid, int *status, int options)
 {
     int r;
     __asm__ __volatile__("int $0x80"
-        : "=a"(r) : "0"(SYS_WAITPID), "b"(pid), "c"(status), "d"(options)
-        : "memory");
+                         : "=a"(r)
+                         : "0"(SYS_WAITPID), "b"(pid), "c"(status), "d"(options)
+                         : "memory");
     return r;
 }
 
 static int sys_dup2(int oldfd, int newfd)
 {
     int r;
-    __asm__ __volatile__("int $0x80"
-        : "=a"(r) : "0"(SYS_DUP2), "b"(oldfd), "c"(newfd) : "memory");
+    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_DUP2), "b"(oldfd), "c"(newfd) : "memory");
     return r;
 }
 
@@ -71,35 +73,56 @@ static int socketcall(int call, uint32_t *args)
 {
     int r;
     __asm__ __volatile__("int $0x80"
-        : "=a"(r) : "0"(SYS_SOCKETCALL), "b"(call), "c"(args) : "memory");
+                         : "=a"(r)
+                         : "0"(SYS_SOCKETCALL), "b"(call), "c"(args)
+                         : "memory");
     return r;
 }
 
 static size_t strlen(const char *s)
 {
     size_t n = 0;
-    while (s[n]) n++;
+    while (s[n])
+        n++;
     return n;
 }
 
-static void print(const char *s)  { sys_write(STDOUT_FILENO, s, strlen(s)); }
-static void puts(const char *s)   { print(s); sys_write(STDOUT_FILENO, "\n", 1); }
+static void print(const char *s)
+{
+    sys_write(STDOUT_FILENO, s, strlen(s));
+}
+static void puts(const char *s)
+{
+    print(s);
+    sys_write(STDOUT_FILENO, "\n", 1);
+}
 
 static void print_num(int n)
 {
     char buf[12];
     int i = 0, neg = 0;
-    if (n < 0) { neg = 1; n = -n; }
-    if (n == 0) buf[i++] = '0';
-    while (n > 0) { buf[i++] = (char)('0' + n % 10); n /= 10; }
-    if (neg) sys_write(STDOUT_FILENO, "-", 1);
-    while (i > 0) sys_write(STDOUT_FILENO, &buf[--i], 1);
+    if (n < 0) {
+        neg = 1;
+        n = -n;
+    }
+    if (n == 0)
+        buf[i++] = '0';
+    while (n > 0) {
+        buf[i++] = (char)('0' + n % 10);
+        n /= 10;
+    }
+    if (neg)
+        sys_write(STDOUT_FILENO, "-", 1);
+    while (i > 0)
+        sys_write(STDOUT_FILENO, &buf[--i], 1);
 }
 
 static int make_socket(void)
 {
     uint32_t args[3];
-    args[0] = AF_INET; args[1] = SOCK_DGRAM; args[2] = 0;
+    args[0] = AF_INET;
+    args[1] = SOCK_DGRAM;
+    args[2] = 0;
     return socketcall(SC_SOCKET, args);
 }
 
@@ -117,11 +140,21 @@ void _start(void)
         int ok = 1;
         for (i = 0; i < 30; i++) {
             fd = make_socket();
-            if (fd < 0) { ok = 0; break; }
+            if (fd < 0) {
+                ok = 0;
+                break;
+            }
             sys_close(fd);
         }
-        if (ok) { puts("OK"); passed++; }
-        else { print("FAILED (exhausted at "); print_num(i); puts(")"); failed++; }
+        if (ok) {
+            puts("OK");
+            passed++;
+        } else {
+            print("FAILED (exhausted at ");
+            print_num(i);
+            puts(")");
+            failed++;
+        }
     }
 
     /* Test 2: dup2 shares the socket; closing both releases it once. */
@@ -129,20 +162,30 @@ void _start(void)
     {
         int ok = 1;
         fd = make_socket();
-        if (fd < 0) ok = 0;
-        if (ok && sys_dup2(fd, 10) != 10) ok = 0;
+        if (fd < 0)
+            ok = 0;
+        if (ok && sys_dup2(fd, 10) != 10)
+            ok = 0;
         if (ok) {
-            sys_close(fd);    /* socket stays alive via the dup */
-            sys_close(10);    /* last reference, released here */
+            sys_close(fd); /* socket stays alive via the dup */
+            sys_close(10); /* last reference, released here */
             /* If the refcount were wrong the pool would now be short. */
             for (i = 0; i < 20; i++) {
                 fd2 = make_socket();
-                if (fd2 < 0) { ok = 0; break; }
+                if (fd2 < 0) {
+                    ok = 0;
+                    break;
+                }
                 sys_close(fd2);
             }
         }
-        if (ok) { puts("OK"); passed++; }
-        else { puts("FAILED"); failed++; }
+        if (ok) {
+            puts("OK");
+            passed++;
+        } else {
+            puts("FAILED");
+            failed++;
+        }
     }
 
     /* Test 3: fork shares the socket; parent and child each close it. */
@@ -150,7 +193,8 @@ void _start(void)
     {
         int ok = 1;
         fd = make_socket();
-        if (fd < 0) ok = 0;
+        if (fd < 0)
+            ok = 0;
         if (ok) {
             pid = sys_fork();
             if (pid == 0) {
@@ -158,14 +202,21 @@ void _start(void)
                 sys_exit(0);
             }
             sys_waitpid(pid, &status, 0);
-            sys_close(fd);    /* must not double-free the child's release */
+            sys_close(fd); /* must not double-free the child's release */
             /* Parent still healthy: pool intact. */
             fd2 = make_socket();
-            if (fd2 < 0) ok = 0;
-            else sys_close(fd2);
+            if (fd2 < 0)
+                ok = 0;
+            else
+                sys_close(fd2);
         }
-        if (ok) { puts("OK"); passed++; }
-        else { puts("FAILED"); failed++; }
+        if (ok) {
+            puts("OK");
+            passed++;
+        } else {
+            puts("FAILED");
+            failed++;
+        }
     }
 
     /* Test 4: a child that exits without closing must not leak its socket. */
@@ -176,18 +227,31 @@ void _start(void)
             pid = sys_fork();
             if (pid == 0) {
                 int s = make_socket();
-                sys_exit(s < 0 ? 1 : 0);   /* deliberately no close */
+                sys_exit(s < 0 ? 1 : 0); /* deliberately no close */
             }
             sys_waitpid(pid, &status, 0);
-            if (status != 0) { ok = 0; break; }
+            if (status != 0) {
+                ok = 0;
+                break;
+            }
         }
-        if (ok) { puts("OK"); passed++; }
-        else { print("FAILED (leak at "); print_num(i); puts(")"); failed++; }
+        if (ok) {
+            puts("OK");
+            passed++;
+        } else {
+            print("FAILED (leak at ");
+            print_num(i);
+            puts(")");
+            failed++;
+        }
     }
 
     puts("");
-    print("Results: "); print_num(passed); print(" passed, ");
-    print_num(failed); puts(" failed");
+    print("Results: ");
+    print_num(passed);
+    print(" passed, ");
+    print_num(failed);
+    puts(" failed");
 
     if (failed == 0) {
         puts("All socket tests passed!");

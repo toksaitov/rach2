@@ -25,8 +25,8 @@ typedef unsigned int size_t;
 #define EMFILE   24
 
 /* More than the limit, so the loop below always reaches the refusal. */
-#define TRIES  1040
-#define LIMIT  1024
+#define TRIES 1040
+#define LIMIT 1024
 
 static int syscall3(int n, int a, int b, int c)
 {

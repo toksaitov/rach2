@@ -28,98 +28,88 @@ typedef unsigned long long ino64_t;
 #define SYS_STAT64 195
 
 /* File type bits from mode */
-#define S_IFMT   0170000
-#define S_IFREG  0100000
-#define S_IFDIR  0040000
+#define S_IFMT  0170000
+#define S_IFREG 0100000
+#define S_IFDIR 0040000
 
 /* 32-bit Linux stat (used by ISH), filled by sys_stat (syscall 106). */
 struct stat {
-    unsigned long  st_dev;
-    unsigned long  st_ino;
+    unsigned long st_dev;
+    unsigned long st_ino;
     unsigned short st_mode;
     unsigned short st_nlink;
     unsigned short st_uid;
     unsigned short st_gid;
-    unsigned long  st_rdev;
-    unsigned long  st_size;
-    unsigned long  st_blksize;
-    unsigned long  st_blocks;
-    unsigned long  st_atime;
-    unsigned long  st_atime_nsec;
-    unsigned long  st_mtime;
-    unsigned long  st_mtime_nsec;
-    unsigned long  st_ctime;
-    unsigned long  st_ctime_nsec;
-    unsigned long  __unused4;
-    unsigned long  __unused5;
+    unsigned long st_rdev;
+    unsigned long st_size;
+    unsigned long st_blksize;
+    unsigned long st_blocks;
+    unsigned long st_atime;
+    unsigned long st_atime_nsec;
+    unsigned long st_mtime;
+    unsigned long st_mtime_nsec;
+    unsigned long st_ctime;
+    unsigned long st_ctime_nsec;
+    unsigned long __unused4;
+    unsigned long __unused5;
 };
 
 /* 32-bit Linux stat64, filled by sys_stat64 (syscall 195). */
 struct stat64 {
     unsigned long long st_dev;
-    unsigned char      __pad0[4];
-    unsigned long      __st_ino;
-    unsigned int       st_mode;
-    unsigned int       st_nlink;
-    unsigned long      st_uid;
-    unsigned long      st_gid;
+    unsigned char __pad0[4];
+    unsigned long __st_ino;
+    unsigned int st_mode;
+    unsigned int st_nlink;
+    unsigned long st_uid;
+    unsigned long st_gid;
     unsigned long long st_rdev;
-    unsigned char      __pad3[4];
-    long long          st_size;
-    unsigned long      st_blksize;
+    unsigned char __pad3[4];
+    long long st_size;
+    unsigned long st_blksize;
     unsigned long long st_blocks;
-    unsigned long      st_atime;
-    unsigned long      st_atime_nsec;
-    unsigned long      st_mtime;
-    unsigned long      st_mtime_nsec;
-    unsigned long      st_ctime;
-    unsigned long      st_ctime_nsec;
+    unsigned long st_atime;
+    unsigned long st_atime_nsec;
+    unsigned long st_mtime;
+    unsigned long st_mtime_nsec;
+    unsigned long st_ctime;
+    unsigned long st_ctime_nsec;
     unsigned long long st_ino;
 };
 
 static int sys_write(int fd, const void *buf, size_t count)
 {
     int result;
-    __asm__ __volatile__ (
-        "int $0x80"
-        : "=a"(result)
-        : "0"(SYS_WRITE), "b"(fd), "c"(buf), "d"(count)
-        : "memory"
-    );
+    __asm__ __volatile__("int $0x80"
+                         : "=a"(result)
+                         : "0"(SYS_WRITE), "b"(fd), "c"(buf), "d"(count)
+                         : "memory");
     return result;
 }
 
 static void sys_exit(int status)
 {
-    __asm__ __volatile__ (
-        "int $0x80"
-        :
-        : "a"(SYS_EXIT), "b"(status)
-    );
+    __asm__ __volatile__("int $0x80" : : "a"(SYS_EXIT), "b"(status));
     __builtin_unreachable();
 }
 
 static int sys_stat(const char *path, struct stat *buf)
 {
     int result;
-    __asm__ __volatile__ (
-        "int $0x80"
-        : "=a"(result)
-        : "0"(SYS_STAT), "b"(path), "c"(buf)
-        : "memory"
-    );
+    __asm__ __volatile__("int $0x80"
+                         : "=a"(result)
+                         : "0"(SYS_STAT), "b"(path), "c"(buf)
+                         : "memory");
     return result;
 }
 
 static int sys_stat64(const char *path, struct stat64 *buf)
 {
     int result;
-    __asm__ __volatile__ (
-        "int $0x80"
-        : "=a"(result)
-        : "0"(SYS_STAT64), "b"(path), "c"(buf)
-        : "memory"
-    );
+    __asm__ __volatile__("int $0x80"
+                         : "=a"(result)
+                         : "0"(SYS_STAT64), "b"(path), "c"(buf)
+                         : "memory");
     return result;
 }
 

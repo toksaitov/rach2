@@ -27,7 +27,7 @@
 
 int main(void)
 {
-    int sp[2];      /* listen + accepted socket, modelled as a connected pair */
+    int sp[2]; /* listen + accepted socket, modelled as a connected pair */
     int master = -1, slave = -1;
     pid_t pid;
     int status;
@@ -82,7 +82,8 @@ int main(void)
     }
 
     printf("BUDGET: session set = 2 sockets + pty master/slave + child stdio; "
-           "%d spare fds open\n", extra);
+           "%d spare fds open\n",
+           extra);
 
     if (master >= 0 && extra >= 4) {
         printf("BUDGETMUSL OK\n");

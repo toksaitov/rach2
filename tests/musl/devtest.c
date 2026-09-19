@@ -158,11 +158,9 @@ int main(void)
     check(access("/proc/self/stat", W_OK) < 0 && errno == EACCES,
           "access(/proc/self/stat, W_OK) -> EACCES");
     errno = 0;
-    check(access("/dev/nope", F_OK) < 0 && errno == ENOENT,
-          "access(/dev/nope) -> ENOENT");
+    check(access("/dev/nope", F_OK) < 0 && errno == ENOENT, "access(/dev/nope) -> ENOENT");
     errno = 0;
-    check(access("/proc", 8) < 0 && errno == EINVAL,
-          "access(/proc, bad mode) -> EINVAL");
+    check(access("/proc", 8) < 0 && errno == EINVAL, "access(/proc, bad mode) -> EINVAL");
 
     /* readlink("/proc/self"). */
     {
@@ -179,10 +177,8 @@ int main(void)
     /* Symlink follow semantics. */
     {
         struct stat ls, fs;
-        check(lstat("/proc/self", &ls) == 0 && S_ISLNK(ls.st_mode),
-              "lstat /proc/self -> symlink");
-        check(stat("/proc/self", &fs) == 0 && S_ISDIR(fs.st_mode),
-              "stat /proc/self -> directory");
+        check(lstat("/proc/self", &ls) == 0 && S_ISLNK(ls.st_mode), "lstat /proc/self -> symlink");
+        check(stat("/proc/self", &fs) == 0 && S_ISDIR(fs.st_mode), "stat /proc/self -> directory");
         check(stat("/proc/self/fd/0", &fs) == 0 && S_ISCHR(fs.st_mode),
               "stat /proc/self/fd/0 -> char device (followed to the console)");
     }

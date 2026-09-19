@@ -124,7 +124,7 @@ static int n_items;
 
 static void class_add(struct item *it, unsigned char c)
 {
-    it->set[c >> 3] |= (unsigned char) (1 << (c & 7));
+    it->set[c >> 3] |= (unsigned char)(1 << (c & 7));
 }
 
 static void compile_prompt(const char *pattern)
@@ -137,8 +137,10 @@ static void compile_prompt(const char *pattern)
             continue;
         }
         if (strchr("(){}|^$", *p) != NULL) {
-            fprintf(stderr, "ptydrive: the pattern '%s' uses '%c', which "
-                    "this matcher does not support\n", pattern, *p);
+            fprintf(stderr,
+                    "ptydrive: the pattern '%s' uses '%c', which "
+                    "this matcher does not support\n",
+                    pattern, *p);
             exit(2);
         }
     }
@@ -147,9 +149,11 @@ static void compile_prompt(const char *pattern)
         struct item *it = &items[n_items];
 
         if (n_items >= 64) {
-            fprintf(stderr, "ptydrive: the pattern '%s' has more than 64 "
+            fprintf(stderr,
+                    "ptydrive: the pattern '%s' has more than 64 "
                     "items; a matcher holding a prefix of it would answer "
-                    "a prompt the pattern does not name\n", pattern);
+                    "a prompt the pattern does not name\n",
+                    pattern);
             exit(2);
         }
         memset(it, 0, sizeof(*it));
@@ -173,16 +177,16 @@ static void compile_prompt(const char *pattern)
                 if (*p == '-' && p[1] != '\0' && p[1] != ']' && prev != 0) {
                     unsigned c;
 
-                    for (c = prev; c <= (unsigned char) p[1]; c++)
-                        class_add(it, (unsigned char) c);
+                    for (c = prev; c <= (unsigned char)p[1]; c++)
+                        class_add(it, (unsigned char)c);
                     p += 2;
                     prev = 0;
                     continue;
                 }
                 if (*p == '\\' && p[1] != '\0')
                     p++;
-                class_add(it, (unsigned char) *p);
-                prev = (unsigned char) *p;
+                class_add(it, (unsigned char)*p);
+                prev = (unsigned char)*p;
                 p++;
             }
             if (*p == ']')
@@ -204,13 +208,12 @@ static int item_matches(const struct item *it, unsigned char c)
 {
     switch (it->kind) {
     case LITERAL:
-        return (unsigned char) it->literal == c;
+        return (unsigned char)it->literal == c;
     case ANY:
         return c != '\n';
     case CLASS:
-        return it->negate
-            ? !((it->set[c >> 3] >> (c & 7)) & 1)
-            : ((it->set[c >> 3] >> (c & 7)) & 1);
+        return it->negate ? !((it->set[c >> 3] >> (c & 7)) & 1)
+                          : ((it->set[c >> 3] >> (c & 7)) & 1);
     }
     return 0;
 }
@@ -238,8 +241,7 @@ static int match_here(int k, const unsigned char *text, size_t len, size_t at)
         }
     }
     if (it->repeat == '?') {
-        if (at < len && item_matches(it, text[at]) &&
-            match_here(k + 1, text, len, at + 1))
+        if (at < len && item_matches(it, text[at]) && match_here(k + 1, text, len, at + 1))
             return 1;
         return match_here(k + 1, text, len, at);
     }
@@ -263,7 +265,7 @@ static double now(void)
     struct timeval tv;
 
     gettimeofday(&tv, NULL);
-    return (double) tv.tv_sec + (double) tv.tv_usec / 1e6;
+    return (double)tv.tv_sec + (double)tv.tv_usec / 1e6;
 }
 
 /* ---- the deadline factor ----
@@ -334,8 +336,8 @@ int main(int argc, char **argv)
     }
     if (command == NULL) {
         fprintf(stderr, "usage: ptydrive [--rows N] [--cols N] "
-                "[--timeout S] [--prompt-re RE] [--password-env NAME] "
-                "COMMAND ...\n");
+                        "[--timeout S] [--prompt-re RE] [--password-env NAME] "
+                        "COMMAND ...\n");
         return 2;
     }
     password = getenv(password_env);
@@ -359,8 +361,8 @@ int main(int argc, char **argv)
     }
     compile_prompt(prompt_re);
 
-    ws.ws_row = (unsigned short) rows;
-    ws.ws_col = (unsigned short) cols;
+    ws.ws_row = (unsigned short)rows;
+    ws.ws_col = (unsigned short)cols;
     ws.ws_xpixel = 0;
     ws.ws_ypixel = 0;
     pid = forkpty(&master, NULL, NULL, &ws);
@@ -392,9 +394,8 @@ int main(int argc, char **argv)
         }
         FD_ZERO(&r);
         FD_SET(master, &r);
-        tv.tv_sec = (long) (remaining < 1.0 ? remaining : 1.0);
-        tv.tv_usec = (long) (((remaining < 1.0 ? remaining : 1.0) -
-                              (double) tv.tv_sec) * 1e6);
+        tv.tv_sec = (long)(remaining < 1.0 ? remaining : 1.0);
+        tv.tv_usec = (long)(((remaining < 1.0 ? remaining : 1.0) - (double)tv.tv_sec) * 1e6);
         if (select(master + 1, &r, NULL, NULL, &tv) <= 0)
             continue;
         n = read(master, data, sizeof(data));
@@ -455,7 +456,7 @@ int main(int argc, char **argv)
                 until = now() + 5.0;
             } else if (now() >= until) {
                 fprintf(stderr, "ptydrive: the command survived SIGKILL; "
-                        "leaving it and reporting\n");
+                                "leaving it and reporting\n");
                 break;
             }
             usleep(50000);

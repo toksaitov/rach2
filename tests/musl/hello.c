@@ -19,8 +19,7 @@ int main(void)
 
     printf("hello, musl on Rach2\n");
 
-    if (uname(&u) == 0)
-    {
+    if (uname(&u) == 0) {
         printf("uname: %s %s %s\n", u.sysname, u.release, u.machine);
     }
 

@@ -21,14 +21,12 @@ int main(void)
 {
     pid_t pid = fork();
 
-    if (pid < 0)
-    {
+    if (pid < 0) {
         printf("COWFORK FAIL: fork\n");
         return 1;
     }
 
-    if (pid == 0)
-    {
+    if (pid == 0) {
         /* Child. */
         printf("child: pid %d, exiting 7\n", (int)getpid());
         return 7;
@@ -39,10 +37,9 @@ int main(void)
         /* musl wait() -> wait4(-1, &status, 0, 0). */
         pid_t reaped = wait(&status);
 
-        if (reaped == pid && WIFEXITED(status) && WEXITSTATUS(status) == 7)
-        {
-            printf("COWFORK OK (parent %d reaped child %d, exit %d)\n",
-                   (int)getpid(), (int)reaped, WEXITSTATUS(status));
+        if (reaped == pid && WIFEXITED(status) && WEXITSTATUS(status) == 7) {
+            printf("COWFORK OK (parent %d reaped child %d, exit %d)\n", (int)getpid(), (int)reaped,
+                   WEXITSTATUS(status));
             return 0;
         }
         printf("COWFORK FAIL: wait reaped=%d status=0x%x\n", (int)reaped, status);

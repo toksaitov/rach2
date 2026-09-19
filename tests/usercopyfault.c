@@ -63,10 +63,7 @@ static unsigned sys_mmap2_anon(unsigned len, int prot)
 static int sys_munmap(unsigned addr, unsigned len)
 {
     int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_MUNMAP), "b"(addr), "c"(len)
-                         : "memory");
+    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_MUNMAP), "b"(addr), "c"(len) : "memory");
     return r;
 }
 
@@ -114,15 +111,15 @@ void _start(void)
     }
 
     /* Back both pages, then drop the second so it becomes an unmapped hole. */
-    ((volatile char *) p)[0] = 'a';
-    ((volatile char *) p)[PAGE] = 'a';
+    ((volatile char *)p)[0] = 'a';
+    ((volatile char *)p)[PAGE] = 'a';
     if (sys_munmap(p + PAGE, PAGE) != 0) {
         fail("munmap the trailing page");
     }
 
     /* Eight non-NUL bytes ending exactly at the page boundary: the ninth byte
      * the copy would read sits in the now-unmapped page. */
-    path = (char *) (p + PAGE - 8);
+    path = (char *)(p + PAGE - 8);
     for (i = 0; i < 8; i++) {
         path[i] = 'A';
     }

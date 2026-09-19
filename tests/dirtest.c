@@ -19,34 +19,23 @@ typedef unsigned int size_t;
 static int sys_write(int fd, const void *buf, size_t count)
 {
     int result;
-    __asm__ __volatile__ (
-        "int $0x80"
-        : "=a"(result)
-        : "0"(SYS_WRITE), "b"(fd), "c"(buf), "d"(count)
-        : "memory"
-    );
+    __asm__ __volatile__("int $0x80"
+                         : "=a"(result)
+                         : "0"(SYS_WRITE), "b"(fd), "c"(buf), "d"(count)
+                         : "memory");
     return result;
 }
 
 static void sys_exit(int status)
 {
-    __asm__ __volatile__ (
-        "int $0x80"
-        :
-        : "a"(SYS_EXIT), "b"(status)
-    );
+    __asm__ __volatile__("int $0x80" : : "a"(SYS_EXIT), "b"(status));
     __builtin_unreachable();
 }
 
 static int sys_chdir(const char *path)
 {
     int result;
-    __asm__ __volatile__ (
-        "int $0x80"
-        : "=a"(result)
-        : "0"(SYS_CHDIR), "b"(path)
-        : "memory"
-    );
+    __asm__ __volatile__("int $0x80" : "=a"(result) : "0"(SYS_CHDIR), "b"(path) : "memory");
     return result;
 }
 
@@ -57,12 +46,10 @@ static int sys_chdir(const char *path)
 static int sys_getcwd(char *buf, size_t size)
 {
     int result;
-    __asm__ __volatile__ (
-        "int $0x80"
-        : "=a"(result)
-        : "0"(SYS_GETCWD), "b"(buf), "c"(size)
-        : "memory"
-    );
+    __asm__ __volatile__("int $0x80"
+                         : "=a"(result)
+                         : "0"(SYS_GETCWD), "b"(buf), "c"(size)
+                         : "memory");
     return result;
 }
 

@@ -23,8 +23,8 @@ typedef long time_t;
 
 /* Timespec structure for utimensat */
 struct timespec {
-    time_t tv_sec;   /* seconds */
-    long   tv_nsec;  /* nanoseconds */
+    time_t tv_sec; /* seconds */
+    long tv_nsec;  /* nanoseconds */
 };
 
 /* Special nsec value: set to current time */
@@ -44,69 +44,50 @@ struct timespec {
 static int sys_write(int fd, const void *buf, size_t count)
 {
     int result;
-    __asm__ __volatile__ (
-        "int $0x80"
-        : "=a"(result)
-        : "0"(SYS_WRITE), "b"(fd), "c"(buf), "d"(count)
-        : "memory"
-    );
+    __asm__ __volatile__("int $0x80"
+                         : "=a"(result)
+                         : "0"(SYS_WRITE), "b"(fd), "c"(buf), "d"(count)
+                         : "memory");
     return result;
 }
 
 static void sys_exit(int status)
 {
-    __asm__ __volatile__ (
-        "int $0x80"
-        :
-        : "a"(SYS_EXIT), "b"(status)
-    );
+    __asm__ __volatile__("int $0x80" : : "a"(SYS_EXIT), "b"(status));
     __builtin_unreachable();
 }
 
 static int sys_creat(const char *path, unsigned int mode)
 {
     int result;
-    __asm__ __volatile__ (
-        "int $0x80"
-        : "=a"(result)
-        : "0"(SYS_CREAT), "b"(path), "c"(mode)
-        : "memory"
-    );
+    __asm__ __volatile__("int $0x80"
+                         : "=a"(result)
+                         : "0"(SYS_CREAT), "b"(path), "c"(mode)
+                         : "memory");
     return result;
 }
 
 static int sys_open(const char *path, int flags)
 {
     int result;
-    __asm__ __volatile__ (
-        "int $0x80"
-        : "=a"(result)
-        : "0"(SYS_OPEN), "b"(path), "c"(flags)
-        : "memory"
-    );
+    __asm__ __volatile__("int $0x80"
+                         : "=a"(result)
+                         : "0"(SYS_OPEN), "b"(path), "c"(flags)
+                         : "memory");
     return result;
 }
 
 static int sys_close(int fd)
 {
     int result;
-    __asm__ __volatile__ (
-        "int $0x80"
-        : "=a"(result)
-        : "0"(SYS_CLOSE), "b"(fd)
-    );
+    __asm__ __volatile__("int $0x80" : "=a"(result) : "0"(SYS_CLOSE), "b"(fd));
     return result;
 }
 
 static int sys_unlink(const char *path)
 {
     int result;
-    __asm__ __volatile__ (
-        "int $0x80"
-        : "=a"(result)
-        : "0"(SYS_UNLINK), "b"(path)
-        : "memory"
-    );
+    __asm__ __volatile__("int $0x80" : "=a"(result) : "0"(SYS_UNLINK), "b"(path) : "memory");
     return result;
 }
 
@@ -120,16 +101,13 @@ static int sys_unlink(const char *path)
  * current time.
  * @param flags 0 or `AT_SYMLINK_NOFOLLOW`.
  */
-static int sys_utimensat(int dirfd, const char *pathname,
-                         const struct timespec *times, int flags)
+static int sys_utimensat(int dirfd, const char *pathname, const struct timespec *times, int flags)
 {
     int result;
-    __asm__ __volatile__ (
-        "int $0x80"
-        : "=a"(result)
-        : "0"(SYS_UTIMENSAT), "b"(dirfd), "c"(pathname), "d"(times), "S"(flags)
-        : "memory"
-    );
+    __asm__ __volatile__("int $0x80"
+                         : "=a"(result)
+                         : "0"(SYS_UTIMENSAT), "b"(dirfd), "c"(pathname), "d"(times), "S"(flags)
+                         : "memory");
     return result;
 }
 
@@ -239,9 +217,9 @@ void _start(void)
 
     /* Test 6: utimensat with specific times */
     print("Test 6: utimensat(\"touchtest.tmp\", {1234, 5678})... ");
-    times[0].tv_sec = 1234;  /* atime */
+    times[0].tv_sec = 1234; /* atime */
     times[0].tv_nsec = 0;
-    times[1].tv_sec = 5678;  /* mtime */
+    times[1].tv_sec = 5678; /* mtime */
     times[1].tv_nsec = 0;
     result = sys_utimensat(AT_FDCWD, "touchtest.tmp", times, 0);
     if (result == 0) {

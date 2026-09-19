@@ -56,8 +56,7 @@ int main(void)
         printf("tcsetattr(raw) failed\n");
         fails++;
     }
-    if (tcgetattr(STDIN_FILENO, &back) != 0 || (back.c_lflag & ICANON) ||
-        (back.c_lflag & ECHO)) {
+    if (tcgetattr(STDIN_FILENO, &back) != 0 || (back.c_lflag & ICANON) || (back.c_lflag & ECHO)) {
         printf("raw mode did not take (ICANON/ECHO still set)\n");
         fails++;
     }

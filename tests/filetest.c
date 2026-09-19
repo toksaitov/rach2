@@ -24,57 +24,43 @@ typedef unsigned int size_t;
 static int sys_write(int fd, const void *buf, size_t count)
 {
     int result;
-    __asm__ __volatile__ (
-        "int $0x80"
-        : "=a"(result)
-        : "0"(SYS_WRITE), "b"(fd), "c"(buf), "d"(count)
-        : "memory"
-    );
+    __asm__ __volatile__("int $0x80"
+                         : "=a"(result)
+                         : "0"(SYS_WRITE), "b"(fd), "c"(buf), "d"(count)
+                         : "memory");
     return result;
 }
 
 static int sys_read(int fd, void *buf, size_t count)
 {
     int result;
-    __asm__ __volatile__ (
-        "int $0x80"
-        : "=a"(result)
-        : "0"(SYS_READ), "b"(fd), "c"(buf), "d"(count)
-        : "memory"
-    );
+    __asm__ __volatile__("int $0x80"
+                         : "=a"(result)
+                         : "0"(SYS_READ), "b"(fd), "c"(buf), "d"(count)
+                         : "memory");
     return result;
 }
 
 static int sys_open(const char *path, int flags)
 {
     int result;
-    __asm__ __volatile__ (
-        "int $0x80"
-        : "=a"(result)
-        : "0"(SYS_OPEN), "b"(path), "c"(flags)
-        : "memory"
-    );
+    __asm__ __volatile__("int $0x80"
+                         : "=a"(result)
+                         : "0"(SYS_OPEN), "b"(path), "c"(flags)
+                         : "memory");
     return result;
 }
 
 static int sys_close(int fd)
 {
     int result;
-    __asm__ __volatile__ (
-        "int $0x80"
-        : "=a"(result)
-        : "0"(SYS_CLOSE), "b"(fd)
-    );
+    __asm__ __volatile__("int $0x80" : "=a"(result) : "0"(SYS_CLOSE), "b"(fd));
     return result;
 }
 
 static void sys_exit(int status)
 {
-    __asm__ __volatile__ (
-        "int $0x80"
-        :
-        : "a"(SYS_EXIT), "b"(status)
-    );
+    __asm__ __volatile__("int $0x80" : : "a"(SYS_EXIT), "b"(status));
     __builtin_unreachable();
 }
 

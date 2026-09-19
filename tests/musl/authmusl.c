@@ -70,8 +70,8 @@ int main(void)
         return 1;
     }
 
-    if (sethostname("rachtest", 8) != 0 ||
-        gethostname(host, sizeof(host)) != 0 || strcmp(host, "rachtest") != 0) {
+    if (sethostname("rachtest", 8) != 0 || gethostname(host, sizeof(host)) != 0 ||
+        strcmp(host, "rachtest") != 0) {
         printf("AUTHMUSL FAIL (hostname round-trip: %s)\n", host);
         return 1;
     }

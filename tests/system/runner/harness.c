@@ -1029,7 +1029,7 @@ static int too_many(const char *what, int limit)
  */
 static int step_tcp(int port)
 {
-        int sk = socket(AF_INET, SOCK_STREAM, 0);
+    int sk = socket(AF_INET, SOCK_STREAM, 0);
     struct sockaddr_in addr;
     struct timeval tv;
     double knock_until;

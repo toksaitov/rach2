@@ -42,7 +42,7 @@ static void fill_local(struct sockaddr_in *addr, long port)
 {
     memset(addr, 0, sizeof(*addr));
     addr->sin_family = AF_INET;
-    addr->sin_port = htons((unsigned short) port);
+    addr->sin_port = htons((unsigned short)port);
     addr->sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 }
 
@@ -56,12 +56,12 @@ static int hold(long port, long seconds)
         return 1;
     }
     fill_local(&addr, port);
-    if (connect(fd, (struct sockaddr *) &addr, sizeof(addr)) != 0) {
+    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
         perror("hostpeer: connect");
         close(fd);
         return 1;
     }
-    sleep((unsigned) seconds);
+    sleep((unsigned)seconds);
     close(fd);
     return 0;
 }
@@ -124,17 +124,15 @@ static int echo(long port, long seconds)
     }
     setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
     fill_local(&addr, port);
-    if (bind(listener, (struct sockaddr *) &addr, sizeof(addr)) != 0 ||
-        listen(listener, 4) != 0) {
+    if (bind(listener, (struct sockaddr *)&addr, sizeof(addr)) != 0 || listen(listener, 4) != 0) {
         perror("hostpeer: tcp bind");
         return 1;
     }
-    if (bind(dgram, (struct sockaddr *) &addr, sizeof(addr)) != 0) {
+    if (bind(dgram, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
         perror("hostpeer: udp bind");
         return 1;
     }
-    printf("hostpeer: echoing tcp and udp on 127.0.0.1:%ld for %lds\n",
-           port, seconds);
+    printf("hostpeer: echoing tcp and udp on 127.0.0.1:%ld for %lds\n", port, seconds);
     fflush(stdout);
 
     while (now() < deadline) {
@@ -163,11 +161,9 @@ static int echo(long port, long seconds)
         if (FD_ISSET(dgram, &rfds)) {
             socklen_t flen = sizeof(from);
 
-            n = recvfrom(dgram, buf, sizeof(buf), 0,
-                         (struct sockaddr *) &from, &flen);
+            n = recvfrom(dgram, buf, sizeof(buf), 0, (struct sockaddr *)&from, &flen);
             if (n > 0)
-                sendto(dgram, buf, (size_t) n, 0,
-                       (struct sockaddr *) &from, flen);
+                sendto(dgram, buf, (size_t)n, 0, (struct sockaddr *)&from, flen);
         }
         if (FD_ISSET(listener, &rfds) && conn < 0)
             conn = accept(listener, NULL, NULL);
@@ -180,7 +176,7 @@ static int echo(long port, long seconds)
                 ssize_t off = 0;
 
                 while (off < n) {
-                    ssize_t w = write(conn, buf + off, (size_t) (n - off));
+                    ssize_t w = write(conn, buf + off, (size_t)(n - off));
 
                     if (w <= 0)
                         break;
@@ -231,10 +227,10 @@ int main(int argc, char **argv)
         fprintf(stderr, "usage: hostpeer hold|echo PORT SECONDS\n");
         return 2;
     }
-    if (!whole_number(argv[2], &port) || !whole_number(argv[3], &seconds) ||
-        port <= 0 || port > 65535 || seconds < 0) {
+    if (!whole_number(argv[2], &port) || !whole_number(argv[3], &seconds) || port <= 0 ||
+        port > 65535 || seconds < 0) {
         fprintf(stderr, "hostpeer: a port in 1..65535 and a whole number "
-                "of seconds\n");
+                        "of seconds\n");
         return 2;
     }
     /* A lifetime covers the work of the machine that uses the peer, so

@@ -34,27 +34,26 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define SECTOR 512
-#define BOOT_PART_LBA 102400
+#define SECTOR            512
+#define BOOT_PART_LBA     102400
 #define BOOT_PART_SECTORS 1024
 
-#define GIB ((uint64_t) 1024 * 1024 * 1024)
+#define GIB       ((uint64_t)1024 * 1024 * 1024)
 #define WIDE_SIZE (260 * GIB)
 #define WIDE_NEAR (5 * GIB)
-#define WIDE_FAR (258 * GIB)
+#define WIDE_FAR  (258 * GIB)
 
 static void w32(unsigned char *p, uint32_t v)
 {
-    p[0] = (unsigned char) v;
-    p[1] = (unsigned char) (v >> 8);
-    p[2] = (unsigned char) (v >> 16);
-    p[3] = (unsigned char) (v >> 24);
+    p[0] = (unsigned char)v;
+    p[1] = (unsigned char)(v >> 8);
+    p[2] = (unsigned char)(v >> 16);
+    p[3] = (unsigned char)(v >> 24);
 }
 
 static uint32_t r32(const unsigned char *p)
 {
-    return (uint32_t) p[0] | (uint32_t) p[1] << 8 |
-           (uint32_t) p[2] << 16 | (uint32_t) p[3] << 24;
+    return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
 }
 
 static int make_boot(const char *path)
@@ -76,7 +75,7 @@ static int make_boot(const char *path)
     }
     if (r32(entry1 + 12) == 0) {
         fprintf(stderr, "mkbootfixture: entry 1 is empty; not a mkdisk "
-                "image\n");
+                        "image\n");
         fclose(f);
         return 1;
     }
@@ -92,14 +91,14 @@ static int make_boot(const char *path)
         fclose(f);
         return 1;
     }
-    if (fseek(f, (long) BOOT_PART_LBA * SECTOR, SEEK_SET) != 0) {
+    if (fseek(f, (long)BOOT_PART_LBA * SECTOR, SEEK_SET) != 0) {
         fprintf(stderr, "mkbootfixture: cannot seek to the partition\n");
         fclose(f);
         return 1;
     }
     for (k = 0; k < BOOT_PART_SECTORS; k++) {
         for (j = 0; j < SECTOR; j++)
-            sector[j] = (unsigned char) ((k * 7 + (unsigned long) j) & 0xFF);
+            sector[j] = (unsigned char)((k * 7 + (unsigned long)j) & 0xFF);
         if (fwrite(sector, 1, SECTOR, f) != SECTOR) {
             fprintf(stderr, "mkbootfixture: cannot write the pattern\n");
             fclose(f);
@@ -111,14 +110,15 @@ static int make_boot(const char *path)
         return 1;
     }
     printf("mkbootfixture: %s: FAT-typed partition 1 at LBA %d, %d sectors "
-           "of pattern\n", path, BOOT_PART_LBA, BOOT_PART_SECTORS);
+           "of pattern\n",
+           path, BOOT_PART_LBA, BOOT_PART_SECTORS);
     return 0;
 }
 
 static int make_wide(const char *path)
 {
     unsigned char marker[SECTOR];
-    const uint64_t at[2] = { WIDE_NEAR, WIDE_FAR };
+    const uint64_t at[2] = {WIDE_NEAR, WIDE_FAR};
     FILE *f = fopen(path, "wb");
     int i, j;
 
@@ -128,33 +128,30 @@ static int make_wide(const char *path)
     }
     /* The size comes from a seek past the end and one byte written there,
        which leaves the file sparse on every host this builds on. */
-    if (fseeko(f, (off_t) WIDE_SIZE - 1, SEEK_SET) != 0 ||
-        fputc(0, f) == EOF) {
+    if (fseeko(f, (off_t)WIDE_SIZE - 1, SEEK_SET) != 0 || fputc(0, f) == EOF) {
         fprintf(stderr, "mkwidefixture: cannot size %s\n", path);
         fclose(f);
         return 1;
     }
     for (i = 0; i < 2; i++) {
-        unsigned long tag = (unsigned long) (at[i] / GIB);
+        unsigned long tag = (unsigned long)(at[i] / GIB);
 
         for (j = 0; j < SECTOR; j++)
-            marker[j] = (unsigned char)
-                (((unsigned long) j * 7 + 3 + tag) & 0xFF);
-        if (fseeko(f, (off_t) at[i], SEEK_SET) != 0 ||
-            fwrite(marker, 1, SECTOR, f) != SECTOR) {
+            marker[j] = (unsigned char)(((unsigned long)j * 7 + 3 + tag) & 0xFF);
+        if (fseeko(f, (off_t)at[i], SEEK_SET) != 0 || fwrite(marker, 1, SECTOR, f) != SECTOR) {
             fprintf(stderr, "mkwidefixture: cannot write a marker\n");
             fclose(f);
             return 1;
         }
     }
-    if (fseeko(f, 510, SEEK_SET) != 0 || fputc(0x55, f) == EOF ||
-        fputc(0xAA, f) == EOF || fclose(f) != 0) {
+    if (fseeko(f, 510, SEEK_SET) != 0 || fputc(0x55, f) == EOF || fputc(0xAA, f) == EOF ||
+        fclose(f) != 0) {
         fprintf(stderr, "mkwidefixture: cannot write %s\n", path);
         return 1;
     }
-    printf("mkwidefixture: %s: %llu bytes, patterns at %llu and %llu\n",
-           path, (unsigned long long) WIDE_SIZE,
-           (unsigned long long) WIDE_NEAR, (unsigned long long) WIDE_FAR);
+    printf("mkwidefixture: %s: %llu bytes, patterns at %llu and %llu\n", path,
+           (unsigned long long)WIDE_SIZE, (unsigned long long)WIDE_NEAR,
+           (unsigned long long)WIDE_FAR);
     return 0;
 }
 

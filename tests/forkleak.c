@@ -26,7 +26,7 @@ typedef unsigned int size_t;
 #define CYCLES 120
 /* Tolerance (bytes): far below the ~1.6 MB a 120-cycle leak would cost, far
  * above any free-list jitter, so a real leak is unmistakable. */
-#define SLACK (64u * 1024u)
+#define SLACK  (64u * 1024u)
 
 /* The Linux i386 sysinfo struct, sized so the kernel's copy_to_user fits. */
 struct sysinfo {
@@ -82,10 +82,7 @@ static int sys_waitpid(int pid, int *status, int options)
 static int sys_sysinfo(struct sysinfo *si)
 {
     int r;
-    __asm__ __volatile__("int $0x80"
-                         : "=a"(r)
-                         : "0"(SYS_SYSINFO), "b"(si)
-                         : "memory");
+    __asm__ __volatile__("int $0x80" : "=a"(r) : "0"(SYS_SYSINFO), "b"(si) : "memory");
     return r;
 }
 

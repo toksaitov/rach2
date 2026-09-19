@@ -6,9 +6,9 @@
  * Freestanding; direct int 0x80.
  */
 
-typedef unsigned int   uint32_t;
+typedef unsigned int uint32_t;
 typedef unsigned short uint16_t;
-typedef unsigned char  uint8_t;
+typedef unsigned char uint8_t;
 typedef unsigned long long uint64_t;
 typedef long long int64_t;
 typedef unsigned int size_t;
@@ -16,15 +16,15 @@ typedef unsigned int size_t;
 #define STDOUT_FILENO 1
 
 /* Syscall numbers (32-bit Linux / Rach2 compatible) */
-#define SYS_EXIT      1
-#define SYS_WRITE     4
-#define SYS_OPEN      5
-#define SYS_CLOSE     6
+#define SYS_EXIT       1
+#define SYS_WRITE      4
+#define SYS_OPEN       5
+#define SYS_CLOSE      6
 #define SYS_GETDENTS64 220
 
 /* Open flags */
-#define O_RDONLY   0
-#define O_DIRECTORY 0200000  /* Must be a directory */
+#define O_RDONLY    0
+#define O_DIRECTORY 0200000 /* Must be a directory */
 
 /* Directory entry types (d_type values) */
 #define DT_UNKNOWN 0
@@ -39,68 +39,53 @@ typedef unsigned int size_t;
 
 /** The record format returned by getdents64. */
 struct linux_dirent64 {
-    uint64_t       d_ino;     /* 64-bit inode number */
-    int64_t        d_off;     /* 64-bit offset to next structure */
-    uint16_t       d_reclen;  /* Size of this dirent */
-    uint8_t        d_type;    /* File type */
-    char           d_name[];  /* Filename (null-terminated) */
+    uint64_t d_ino;    /* 64-bit inode number */
+    int64_t d_off;     /* 64-bit offset to next structure */
+    uint16_t d_reclen; /* Size of this dirent */
+    uint8_t d_type;    /* File type */
+    char d_name[];     /* Filename (null-terminated) */
 };
 
 static int sys_write(int fd, const void *buf, size_t count)
 {
     int result;
-    __asm__ __volatile__ (
-        "int $0x80"
-        : "=a"(result)
-        : "0"(SYS_WRITE), "b"(fd), "c"(buf), "d"(count)
-        : "memory"
-    );
+    __asm__ __volatile__("int $0x80"
+                         : "=a"(result)
+                         : "0"(SYS_WRITE), "b"(fd), "c"(buf), "d"(count)
+                         : "memory");
     return result;
 }
 
 static void sys_exit(int status)
 {
-    __asm__ __volatile__ (
-        "int $0x80"
-        :
-        : "a"(SYS_EXIT), "b"(status)
-    );
+    __asm__ __volatile__("int $0x80" : : "a"(SYS_EXIT), "b"(status));
     __builtin_unreachable();
 }
 
 static int sys_open(const char *pathname, int flags)
 {
     int result;
-    __asm__ __volatile__ (
-        "int $0x80"
-        : "=a"(result)
-        : "0"(SYS_OPEN), "b"(pathname), "c"(flags)
-        : "memory"
-    );
+    __asm__ __volatile__("int $0x80"
+                         : "=a"(result)
+                         : "0"(SYS_OPEN), "b"(pathname), "c"(flags)
+                         : "memory");
     return result;
 }
 
 static int sys_close(int fd)
 {
     int result;
-    __asm__ __volatile__ (
-        "int $0x80"
-        : "=a"(result)
-        : "0"(SYS_CLOSE), "b"(fd)
-        : "memory"
-    );
+    __asm__ __volatile__("int $0x80" : "=a"(result) : "0"(SYS_CLOSE), "b"(fd) : "memory");
     return result;
 }
 
 static int sys_getdents64(int fd, void *dirp, unsigned int count)
 {
     int result;
-    __asm__ __volatile__ (
-        "int $0x80"
-        : "=a"(result)
-        : "0"(SYS_GETDENTS64), "b"(fd), "c"(dirp), "d"(count)
-        : "memory"
-    );
+    __asm__ __volatile__("int $0x80"
+                         : "=a"(result)
+                         : "0"(SYS_GETDENTS64), "b"(fd), "c"(dirp), "d"(count)
+                         : "memory");
     return result;
 }
 
@@ -151,14 +136,22 @@ static void print_hex(uint32_t n)
 static const char *get_type_name(uint8_t d_type)
 {
     switch (d_type) {
-    case DT_REG:  return "REG";
-    case DT_DIR:  return "DIR";
-    case DT_LNK:  return "LNK";
-    case DT_CHR:  return "CHR";
-    case DT_BLK:  return "BLK";
-    case DT_FIFO: return "FIFO";
-    case DT_SOCK: return "SOCK";
-    default:      return "???";
+    case DT_REG:
+        return "REG";
+    case DT_DIR:
+        return "DIR";
+    case DT_LNK:
+        return "LNK";
+    case DT_CHR:
+        return "CHR";
+    case DT_BLK:
+        return "BLK";
+    case DT_FIFO:
+        return "FIFO";
+    case DT_SOCK:
+        return "SOCK";
+    default:
+        return "???";
     }
 }
 
@@ -169,7 +162,7 @@ static const char *get_type_name(uint8_t d_type)
  */
 void _start(void)
 {
-    char buf[1024];  /* Buffer for directory entries */
+    char buf[1024]; /* Buffer for directory entries */
     struct linux_dirent64 *d;
     int fd;
     int nread;
