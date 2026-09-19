@@ -88,15 +88,24 @@ elif ! sh "$REPO/tools/dev/gen_compile_commands.sh" >"$VDIR/analyze_db.log" 2>&1
     echo "  FAIL: the compilation databases were not generated; see $VDIR/analyze_db.log"; fail=1
 else
     res=$(clang -print-resource-dir 2>/dev/null)
+    # clang-tidy takes a directory and reads compile_commands.json in it; the
+    # kernel's own database goes there, so the host tests' commands for the
+    # same sources are not the ones it picks.
+    mkdir -p "$VDIR/tidy_db"
+    cp "$REPO/build/compile_commands/rach2.json" "$VDIR/tidy_db/compile_commands.json"
     : >"$VDIR/analyze_tidy.log"
+    # Left out: misc-include-cleaner (header hygiene, no fault), the swappable
+    # parameters check (every pair of integers), and the reserved identifier
+    # check, which names the _NAME_H_ guards the tree requires.
     for f in $(make -s -C "$REPO/rach2" print-c-src); do
-        clang-tidy -p "$REPO/build/compile_commands/rach2.json" \
-            --checks='-*,bugprone-*,misc-*,readability-function-cognitive-complexity' \
+        clang-tidy -p "$VDIR/tidy_db" \
+            --checks='-*,bugprone-*,misc-*,readability-function-cognitive-complexity,-misc-include-cleaner,-bugprone-easily-swappable-parameters,-bugprone-reserved-identifier' \
             --extra-arg=--target=i686-elf --extra-arg=-nostdinc --extra-arg="-isystem$res/include" \
+            --extra-arg=-Wno-unknown-warning-option \
             "$REPO/rach2/$f" >>"$VDIR/analyze_tidy.log" 2>&1
     done
     echo "  advisory: $(grep -c 'warning:' "$VDIR/analyze_tidy.log") finding(s); see $VDIR/analyze_tidy.log"
-    grep -o '\[[a-z-]*\.[a-zA-Z-]*\]$' "$VDIR/analyze_tidy.log" | sort | uniq -c | sort -rn | head -8 | sed 's/^/    /'
+    grep -o '\[[a-z]*-[a-zA-Z0-9.-]*\]$' "$VDIR/analyze_tidy.log" | sort | uniq -c | sort -rn | head -8 | sed 's/^/    /'
 fi
 
 hr "4/4 the linker's dead-code report (advisory)"
@@ -104,7 +113,7 @@ if make -C rach2 -B COMPONENT=rach2-gc KEXTRA="-ffunction-sections -fdata-sectio
         LDEXTRA="--gc-sections --print-gc-sections" >"$VDIR/analyze_gc.log" 2>&1; then
     n=$(grep -c "removing unused section" "$VDIR/analyze_gc.log")
     echo "  advisory: $n section(s) the linker dropped; see $VDIR/analyze_gc.log"
-    grep "removing unused section" "$VDIR/analyze_gc.log" | sed "s/.*'\(\.[a-z]*\.[^']*\)'.*/\1/" | head -12 | sed 's/^/    /'
+    grep "removing unused section" "$VDIR/analyze_gc.log" | sed "s/.*removing unused section '\([^']*\)' in file '[^']*\/\([^']*\)'.*/\2 \1/" | head -12 | sed 's/^/    /'
 else
     echo "  FAIL: the sectioned link failed; see $VDIR/analyze_gc.log"; fail=1
 fi
