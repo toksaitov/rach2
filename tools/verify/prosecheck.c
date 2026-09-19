@@ -823,7 +823,6 @@ static long words_of(const struct spans *s)
 
 struct width_ctx {
     long over, files;
-    int in_this_file;
 };
 
 /* The comment lines of one file, and which of them are too wide. What
@@ -1327,7 +1326,7 @@ static char *st_write(const char *name, const char *body)
 
 static void st_widths(const char *name, const char *body, int want_line)
 {
-    struct width_ctx w = { 0, 0, 0 };
+    struct width_ctx w = { 0, 0 };
     char path[512];
     char msg[256];
 
@@ -1612,7 +1611,7 @@ int main(int argc, char **argv)
         return selftest();
 
     if (argc >= 2 && strcmp(argv[1], "columns") == 0) {
-        struct width_ctx w = { 0, 0, 0 };
+        struct width_ctx w = { 0, 0 };
 
         if (argc > 2) {
             for (i = 2; i < argc; i++)
