@@ -1,0 +1,75 @@
+.Dd September 19, 2026
+.Dt PASSWD 1
+.Os
+.Sh NAME
+.Nm passwd
+.Nd change an account's password
+.Sh SYNOPSIS
+.Ss os-simple
+.Nm
+.Op Fl Fl
+.Op Ar user
+.Ss os-real
+.Nm
+.Op Fl a Ar algorithm
+.Op Fl dlu
+.Op Ar user
+.Sh DESCRIPTION
+On os-simple,
+.Nm
+is the project program, installed set-user-ID root.
+The account defaults to the caller's own account.
+Changing another account's password requires a real user ID of 0.
+Root need not supply the old password; other callers must prove the
+account's current password first.
+.Pp
+The new password is entered twice.
+Passwords are limited to 100 bytes.
+After the prompts,
+.Nm
+locks and rechecks the account records before replacing
+.Pa /etc/shadow .
+The lock, temporary file, and rename are described in
+.Xr passwd 5 .
+.Pp
+On os-real,
+.Nm
+is BusyBox's applet from the set-id build.
+It accepts the options below.
+.Sh OPTIONS
+The project program accepts
+.Fl Fl
+to end option processing before
+.Ar user .
+.Pp
+The BusyBox applet accepts:
+.Bl -tag -width "-a algorithm"
+.It Fl a Ar algorithm
+Select the crypt algorithm.
+.It Fl d
+Set an empty password.
+.It Fl l
+Lock the account.
+.It Fl u
+Unlock the account.
+.El
+.Sh FILES
+.Bl -tag -width /etc/shadow
+.It Pa /etc/passwd
+Account records.
+.It Pa /etc/shadow
+Password records.
+.El
+.Sh EXAMPLES
+.Dl passwd
+The
+.Ql tests/run account
+suite changes a password and logs in with it.
+.Sh SEE ALSO
+.Xr login 1 ,
+.Xr su 1 ,
+.Xr passwd 5 ,
+.Xr adduser 8
+.Sh HISTORY
+The BusyBox option descriptions are adapted from BusyBox documentation,
+licensed under GPL-2.0.

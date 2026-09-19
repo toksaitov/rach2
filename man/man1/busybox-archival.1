@@ -1,0 +1,397 @@
+.Dd September 19, 2026
+.Dt BUSYBOX-ARCHIVAL 1
+.Os
+.Sh NAME
+.Nm busybox-archival ,
+.Nm bunzip2 ,
+.Nm bzcat ,
+.Nm bzip2 ,
+.Nm cpio ,
+.Nm dpkg ,
+.Nm dpkg-deb ,
+.Nm gunzip ,
+.Nm gzip ,
+.Nm lzcat ,
+.Nm lzma ,
+.Nm lzop ,
+.Nm rpm ,
+.Nm rpm2cpio ,
+.Nm tar ,
+.Nm unlzma ,
+.Nm unxz ,
+.Nm unzip ,
+.Nm xz ,
+.Nm xzcat ,
+.Nm zcat
+.Nd BusyBox archivers and compressors
+.Sh SYNOPSIS
+.Nm bunzip2
+.Op Fl cfk
+.Oo Ar FILE Oc Ns ...
+.Nm bzcat
+.Oo Ar FILE Oc Ns ...
+.Nm bzip2
+.Op Fl cfkdt123456789
+.Oo Ar FILE Oc Ns ...
+.Nm cpio
+.Op Fl dmvu
+.Op Fl F Ar FILE
+.Op Fl R Ar USER Ns Op : Ns Ar GRP
+.Op Fl H Cm newc
+.Op Fl tio
+.Op Fl p Ar DIR
+.Oo Ar EXTR_FILE Oc Ns ...
+.Nm dpkg
+.Op Fl ilCPru
+.Op Fl F Ar OPT
+.Ar PACKAGE
+.Nm dpkg-deb
+.Op Fl cefxX
+.Ar FILE
+.Op Ar DIR
+.Nm gunzip
+.Op Fl cfkt
+.Oo Ar FILE Oc Ns ...
+.Nm gzip
+.Op Fl cfkdt
+.Oo Ar FILE Oc Ns ...
+.Nm lzcat
+.Oo Ar FILE Oc Ns ...
+.Nm lzma
+.Fl d
+.Op Fl cfk
+.Oo Ar FILE Oc Ns ...
+.Nm lzop
+.Op Fl cfUvd123456789CF
+.Oo Ar FILE Oc Ns ...
+.Nm rpm
+.Fl i Ar PACKAGE.rpm
+.Nm rpm
+.Fl qp Ns Op Cm ildc
+.Ar PACKAGE.rpm
+.Nm rpm2cpio
+.Ar PACKAGE.rpm
+.Nm tar
+.Cm c Ns | Ns Cm x Ns | Ns Cm t
+.Op Fl zJjahmvokO
+.Op Fl f Ar TARFILE
+.Op Fl C Ar DIR
+.Op Fl T Ar FILE
+.Op Fl X Ar FILE
+.Oo Ar LONGOPT Oc Ns ...
+.Oo Ar FILE Oc Ns ...
+.Nm unlzma
+.Op Fl cfk
+.Oo Ar FILE Oc Ns ...
+.Nm unxz
+.Op Fl cfk
+.Oo Ar FILE Oc Ns ...
+.Nm unzip
+.Op Fl lnojpqK
+.Ar FILE Ns Op .zip
+.Oo Ar FILE Oc Ns ...
+.Oo Fl x Ar FILE Oc Ns ...
+.Op Fl d Ar DIR
+.Nm xz
+.Fl d
+.Op Fl cfk
+.Oo Ar FILE Oc Ns ...
+.Nm xzcat
+.Oo Ar FILE Oc Ns ...
+.Nm zcat
+.Oo Ar FILE Oc Ns ...
+.Sh DESCRIPTION
+These are the archival applets of BusyBox 1.36.1 as configured for Rach2.
+.Bl -tag -width rpm2cpio
+.It Nm bunzip2
+Decompress bzip2 files, or standard input if no files are given.
+.It Nm bzcat
+Decompress bzip2 data to standard output.
+.It Nm bzip2
+Compress files or standard input with the bzip2 algorithm.
+It also decompresses with
+.Fl d .
+.It Nm cpio
+Extract or list files from a cpio archive.
+It can also read a file list from standard input to create an archive
+or copy the files to a directory.
+.It Nm dpkg
+Install, remove, and manage Debian packages.
+Rach2 images contain no dpkg package database.
+.It Nm dpkg-deb
+List or extract files and control information from Debian packages.
+.It Nm gunzip
+Decompress gzip files, or standard input if no files are given.
+.It Nm gzip
+Compress files or standard input.
+It also decompresses with
+.Fl d .
+.It Nm lzcat
+Decompress LZMA data to standard output.
+.It Nm lzma
+Decompress LZMA files or standard input with
+.Fl d .
+This applet does not compress.
+.It Nm lzop
+Compress files with lzop, or decompress them with
+.Fl d .
+.It Nm rpm
+Install or query RPM packages.
+Rach2 images contain no RPM package database.
+.It Nm rpm2cpio
+Write the cpio archive from an RPM package to standard output.
+.It Nm tar
+Create, extract, or list tar archives on the Rach2 file systems.
+.It Nm unlzma
+Decompress LZMA files, or standard input if no files are given.
+.It Nm unxz
+Decompress xz files, or standard input if no files are given.
+.It Nm unzip
+Extract selected files from a ZIP archive.
+.It Nm xz
+Decompress xz files or standard input with
+.Fl d .
+This applet does not compress.
+.It Nm xzcat
+Decompress xz data to standard output.
+.It Nm zcat
+Decompress gzip data to standard output.
+.El
+.Sh OPTIONS
+.Ss Compression and decompression
+The
+.Nm bunzip2 ,
+.Nm bzip2 ,
+.Nm gunzip ,
+.Nm gzip ,
+.Nm lzma ,
+.Nm unlzma ,
+.Nm unxz ,
+and
+.Nm xz
+applets accept:
+.Bl -tag -width Ds
+.It Fl c
+Write to standard output.
+.It Fl f
+Force the operation.
+.It Fl k
+Keep input files.
+.It Fl t
+Test integrity.
+.El
+.Pp
+.Nm bzip2
+also accepts
+.Fl 1
+through
+.Fl 9
+to select the compression level.
+.Fl d
+selects decompression for
+.Nm bzip2 ,
+.Nm gzip ,
+.Nm lzma ,
+and
+.Nm xz .
+.Pp
+.Nm lzop
+accepts:
+.Bl -tag -width Ds
+.It Fl 1 No through Fl 9
+Select the compression level.
+.It Fl d
+Decompress.
+.It Fl c
+Write to standard output.
+.It Fl f
+Force the operation.
+.It Fl U
+Delete input files.
+.It Fl v
+Produce verbose output.
+.It Fl C
+Also write a checksum of the compressed block.
+.It Fl F
+Do not store or verify checksums.
+.El
+.Ss cpio
+.Bl -tag -width "--renumber-inodes"
+.It Fl t
+List archive contents.
+.It Fl i
+Extract the named
+.Ar EXTR_FILE Ns s ,
+or all files if none are named.
+.It Fl o
+Create an archive from the file list on standard input.
+Requires
+.Fl H Cm newc .
+.It Fl p Ar DIR
+Copy the files to
+.Ar DIR .
+.It Fl H Cm newc
+Select the newc archive format.
+.It Fl d
+Create leading directories.
+.It Fl m
+Restore modification times.
+.It Fl v
+Produce verbose output.
+.It Fl u
+Overwrite files.
+.It Fl F Ar FILE
+Use
+.Ar FILE
+as input for
+.Fl t ,
+.Fl i ,
+or
+.Fl p ,
+or as output for
+.Fl o .
+.It Fl R Ar USER Ns Op : Ns Ar GRP
+Set the owner, and optionally group, of created files.
+.It Fl L
+Dereference symbolic links.
+.It Fl 0
+Read NUL-terminated input names.
+.It Fl Fl ignore-devno
+Write zero device numbers in the archive.
+.It Fl Fl renumber-inodes
+Renumber archive inodes.
+.El
+.Ss dpkg
+.Bl -tag -width "--force-confnew"
+.It Fl i , Fl Fl install
+Install the package.
+.It Fl l , Fl Fl list
+List installed packages.
+.It Fl C , Fl Fl configure
+Configure an unpacked package.
+.It Fl P , Fl Fl purge
+Remove all files of a package.
+.It Fl r , Fl Fl remove
+Remove all files except configuration files.
+.It Fl u , Fl Fl unpack
+Unpack a package without configuring it.
+.It Fl F Cm depends , Fl Fl force-depends
+Ignore dependency problems.
+.It Fl F Cm confnew , Fl Fl force-confnew
+Overwrite existing configuration files when installing.
+.It Fl F Cm confold , Fl Fl force-confold
+Keep existing configuration files when installing.
+.El
+.Ss dpkg-deb
+.Bl -tag -width Ds
+.It Fl c
+List files.
+.It Fl f
+Print control fields.
+.It Fl e
+Extract control files to
+.Ar DIR ,
+which defaults to
+.Pa ./DEBIAN .
+.It Fl x
+Extract files to
+.Ar DIR .
+There is no default directory.
+.It Fl X
+Extract files with verbose output.
+.El
+.Ss rpm
+.Bl -tag -width Ds
+.It Fl i
+Install the package.
+.It Fl qp
+Query the package.
+.It Fl qpi
+Show package information.
+.It Fl qpl
+List contents.
+.It Fl qpd
+List documents.
+.It Fl qpc
+List configuration files.
+.El
+.Ss tar
+.Bl -tag -width "-f TARFILE"
+.It Cm c
+Create an archive.
+.It Cm x
+Extract files.
+.It Cm t
+List files.
+.It Fl f Ar TARFILE
+Use the named archive.
+.Ql -
+means standard input or standard output.
+.It Fl C Ar DIR
+Change to
+.Ar DIR
+before the operation.
+.It Fl v
+Produce verbose output.
+.It Fl O
+Extract to standard output.
+.It Fl m
+Do not restore modification times.
+.It Fl o
+Do not restore user and group ownership.
+.It Fl k
+Do not replace existing files.
+.It Fl z
+Use gzip compression or decompression.
+.It Fl J
+Decompress xz archives.
+.It Fl j
+Use bzip2 compression or decompression.
+.It Fl a
+Select compression or decompression by the archive's extension.
+.It Fl h
+Follow symbolic links.
+.It Fl T Ar FILE
+Read names to include from
+.Ar FILE .
+.It Fl X Ar FILE
+Read exclusion patterns from
+.Ar FILE .
+.El
+.Ss unzip
+.Bl -tag -width "-d DIR"
+.It Fl l
+List contents; with
+.Fl q ,
+use the short form.
+.It Fl n
+Never overwrite files.
+The default is to ask.
+.It Fl o
+Overwrite files.
+.It Fl j
+Do not restore paths.
+.It Fl p
+Write to standard output.
+.It Fl t
+Test the archive.
+.It Fl q
+Produce less output.
+.It Fl K
+Do not clear the set-user-ID bit.
+.It Fl x Ar FILE
+Exclude the named files.
+.It Fl d Ar DIR
+Extract into
+.Ar DIR .
+.El
+.Sh EXAMPLES
+Extract a Debian package with verbose output:
+.Dl dpkg-deb -X ./busybox_0.48-1_i386.deb /tmp
+Decompress a gzip file:
+.Dl gunzip /tmp/BusyBox-0.43.tar.gz
+Compress a tar archive:
+.Dl gzip /tmp/busybox.tar
+.Sh HISTORY
+The applet descriptions and usage are adapted from BusyBox 1.36.1
+documentation, licensed under GPL-2.0.

@@ -1,0 +1,94 @@
+.Dd September 19, 2026
+.Dt BUSYBOX-E2FSPROGS 8
+.Os
+.Sh NAME
+.Nm busybox-e2fsprogs ,
+.Nm chattr ,
+.Nm fsck ,
+.Nm lsattr
+.Nd BusyBox file system attribute and check tools
+.Sh SYNOPSIS
+.Nm chattr
+.Op Fl R
+.Op Fl v Ar VERSION
+.Op Fl p Ar PROJID
+.Op Ar -+=AacDdijsStTu
+.Ar FILE ...
+.Nm fsck
+.Op Fl ANPRTV
+.Op Fl t Ar FSTYPE
+.Op Ar FS_OPTS
+.Op Ar BLOCKDEV
+.Ar ...
+.Nm lsattr
+.Op Fl Radlpv
+.Op Ar FILE
+.Ar ...
+.Sh DESCRIPTION
+These are the e2fsprogs applets of BusyBox 1.36.1 as built for Rach2.
+.Bl -tag -width chattr
+.It Nm chattr
+Change ext2 file attributes.
+Rach2 does not implement the ext2 attribute, generation, and project
+number ioctl requests this applet uses.
+.It Nm fsck
+Check and repair file systems by running
+.Pa fsck.TYPE
+for the selected file system type.
+The recovery system's ext2 checker is the separate e2fsprogs program
+.Xr e2fsck 8 .
+.It Nm lsattr
+List ext2 file attributes.
+Rach2 does not implement the ext2 attribute ioctl requests this applet uses.
+.El
+.Sh OPTIONS
+.Ss chattr
+.Bl -tag -width "-v NUM"
+.It Fl R
+Recurse into directories.
+.It Fl v Ar NUM
+Set the version or generation number.
+.It Fl p Ar NUM
+Set the project number.
+.El
+.Ss fsck
+.Bl -tag -width "-A"
+.It Fl A
+Read
+.Pa /etc/fstab
+and check all file systems.
+.It Fl N
+Show what would be done without executing checkers.
+.It Fl P
+With
+.Fl A ,
+check file systems in parallel.
+.It Fl R
+With
+.Fl A ,
+skip the root file system.
+.It Fl T
+Suppress the startup title.
+.It Fl V
+Produce verbose output.
+.El
+.Ss lsattr
+.Bl -tag -width "-R"
+.It Fl R
+Recurse into directories.
+.It Fl a
+Include names beginning with a period.
+.It Fl d
+List directory names instead of their contents.
+.El
+.Sh FILES
+.Bl -tag -width /etc/fstab
+.It Pa /etc/fstab
+File systems to check with
+.Nm fsck Fl A .
+.El
+.Sh SEE ALSO
+.Xr e2fsck 8
+.Sh HISTORY
+The applet descriptions are adapted from BusyBox 1.36.1 usage text,
+licensed under GPL-2.0.

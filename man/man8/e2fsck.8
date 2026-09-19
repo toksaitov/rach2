@@ -1,0 +1,282 @@
+.Dd September 19, 2026
+.Dt E2FSCK 8
+.Os
+.Sh NAME
+.Nm e2fsck
+.Nd check and repair an ext2 file system
+.Sh SYNOPSIS
+.Nm
+.Op Fl pacnyrdfkvtDFV
+.Op Fl b Ar superblock
+.Op Fl B Ar blocksize
+.Op Fl l Ns | Ns Fl L Ar bad_blocks_file
+.Op Fl C Ar fd
+.Op Fl E Ar extended_options
+.Op Fl z Ar undo_file
+.Ar device
+.Sh DESCRIPTION
+.Nm
+checks and repairs the ext2 file system on
+.Ar device ,
+a partition node such as
+.Pa /dev/disk0p3 .
+The volume must be unmounted.
+The recovery system mounts nothing from the disk it repairs.
+Rach2 volumes use ext2 without a journal, so journal recovery does not
+run on them.
+.Pp
+Rach2 uses e2fsprogs 1.47.4, linked statically against the ported musl.
+.Nm
+is installed only in the recovery image, at
+.Pa /sbin/e2fsck ;
+os-real and the installed root do not include it.
+The build includes libuuid and libblkid and disables NLS, thread-local
+storage, uuidd, fuse2fs, e2initrd-helper, e2image, e4defrag, debugfs,
+multi-mount protection, backtraces, and tdb.
+Only
+.Nm
+and
+.Xr resize2fs 8
+are built as guest e2fsprogs programs.
+No e2fsprogs volume formatter or manual editor is installed.
+.Pp
+The partition nodes provide raw sector access.
+The library uses whole 512-byte sectors at sector-aligned offsets,
+with a bounce buffer for partial-sector I/O, and obtains the device
+size through
+.Ql BLKGETSIZE64 .
+The recovery image's
+.Pa /etc/mtab
+is empty, so that file does not identify mounted volumes.
+Do not run
+.Nm
+on a mounted volume.
+.Pp
+The repair modes
+.Fl p
+.Pq or Fl a ,
+.Fl n ,
+and
+.Fl y
+are mutually exclusive.
+Without one of these modes,
+.Nm
+requires a terminal for interactive repairs.
+.Ss Use by recovery programs
+When the boot line includes
+.Ql rach2.fsck ,
+init runs
+.Ql e2fsck -p
+on each partition from
+.Pa /dev/disk0p1
+through
+.Pa /dev/disk0p4
+whose superblock has the ext2 magic number.
+It records the result as:
+.Dl init: e2fsck: /dev/disk0pN: status S
+See
+.Xr recovery 7 .
+.Pp
+Menu entry 2 of
+.Xr rach2-recover 8
+runs
+.Ql e2fsck -f -n DEVICE .
+On a nonzero status it reports
+.Ql e2fsck -f -p DEVICE
+as the repair command, without running it.
+.Pp
+.Xr growroot 8
+first runs
+.Ql e2fsck -f -n
+and stops on a nonzero status.
+It then runs
+.Ql e2fsck -f -p
+and accepts statuses 0, 1, and 2 before running
+.Xr resize2fs 8 .
+.Sh OPTIONS
+.Bl -tag -width Ds
+.It Fl a
+Same as
+.Fl p ;
+retained for compatibility.
+.It Fl b Ar superblock
+Use the specified backup superblock instead of the primary superblock.
+Its location depends on the block size, blocks per group, and file
+system features.
+Unless opened read-only, the primary superblock is updated when the
+check finishes.
+.It Fl B Ar blocksize
+Search for the superblock using only this block size.
+Failure to find it is a fatal error.
+.It Fl c
+Run badblocks to scan for bad blocks and add them to the bad block inode.
+One occurrence requests a read-only scan; two request a nondestructive
+read-write scan.
+No badblocks program is installed on Rach2, so this option fails to run it.
+.It Fl C Ar fd
+Write progress information to the specified descriptor.
+A negative value selects its absolute value and initially suppresses
+progress; SIGUSR1 enables it.
+.Fl C Cm 0
+displays a completion bar on the terminal.
+.It Fl d
+Print debugging output.
+.It Fl D
+Optimize all directories by re-indexing them, or by sorting and
+compressing linear directories.
+Also check for duplicate names within a directory.
+.It Fl E Ar extended_options
+Set comma-separated extended options.
+An option's argument follows an equals sign.
+.Bl -tag -width Ds
+.It Ql ea_ver=version
+Require extended attribute block version 1 or 2; the default is 2.
+.It Ql journal_only
+Replay the journal if needed, without further checks or repairs.
+Rach2 ext2 volumes have no journal.
+.It Ql fragcheck
+Report discontiguous file blocks during pass 1.
+.It Ql discard
+Attempt to discard free blocks and unused inode blocks after the full
+check, in pass 5, if the check finds no remaining errors.
+Discarding can prevent later manual recovery of undetected damage.
+.It Ql nodiscard
+Do not discard free blocks or unused inode blocks.
+This is the default.
+.It Ql no_optimize_extents
+Do not offer to reduce the width or depth of extent trees.
+.It Ql optimize_extents
+Offer to reduce the width or depth of extent trees.
+This is the default unless changed in
+.Pa /etc/e2fsck.conf .
+.It Ql inode_count_fullmap
+Use additional memory to speed checks of file systems with many hard
+links.
+Memory use is proportional to the inode count.
+.It Ql no_inode_count_fullmap
+Disable that optimization.
+This is the default unless changed in
+.Pa /etc/e2fsck.conf .
+.It Ql readahead_kb=value
+Use the specified number of KiB to prefetch metadata.
+Zero disables readahead.
+The default is the size of two block groups' inode tables;
+readahead is disabled if that exceeds 1/50 of physical memory.
+.It Ql bmap2extent
+Convert block-mapped files to extent-mapped files.
+.It Ql fixes_only
+Repair damaged metadata without optimizing directory indexes or
+compressing extent trees.
+Incompatible with
+.Fl D
+and
+.Fl E Cm bmap2extent .
+.It Ql check_encoding
+Verify encoded names in case-insensitive directories.
+This is the default when the file system's strict flag is set.
+.It Ql unshare_blocks
+Copy shared blocks and clear the shared-blocks read-only feature.
+Without that feature, this option has no effect.
+Insufficient free space causes failure without an offer to delete files.
+This option implies
+.Fl f .
+With
+.Fl n ,
+simulate the required allocation and return a nonzero status if it fails.
+.El
+.It Fl f
+Check even a file system marked clean.
+.It Fl F
+Flush the device's buffer cache before checking.
+.It Fl k
+With
+.Fl c ,
+retain the existing bad blocks list and add any newly found bad blocks.
+.It Fl l Ar bad_blocks_file
+Add the block numbers in the file to the bad blocks list.
+The file uses badblocks output format, with block numbers in units of
+the file system's block size.
+.It Fl L Ar bad_blocks_file
+Replace the bad blocks list with the block numbers in the file.
+.It Fl n
+Open read-only and answer no to every question.
+Nothing is written to the volume.
+.It Fl p
+Repair automatically what can be safely repaired without a person's
+intervention.
+Ask no questions.
+If further action is needed, describe the problem and include 4 in the
+exit status.
+.It Fl r
+Do nothing; retained for compatibility.
+.It Fl t
+Print timing statistics.
+Specify twice for statistics for each pass.
+.It Fl v
+Print verbose output.
+.It Fl V
+Print version information and exit.
+.It Fl y
+Answer yes to every question.
+.It Fl z Ar undo_file
+Save each block's old contents in an undo file before overwriting it.
+An empty argument selects
+.Pa e2fsck-device.e2undo
+in the directory specified by
+.Ev E2FSPROGS_UNDO_DIR ,
+with
+.Ql device
+replaced by the device name.
+The undo file cannot recover from a power failure or system crash.
+.El
+.Sh FILES
+.Bl -tag -width /etc/e2fsck.conf
+.It Pa /sbin/e2fsck
+The recovery image's checker.
+.It Pa /etc/mtab
+Empty mount table in the recovery image.
+.It Pa /etc/e2fsck.conf
+Configuration file; absent from the recovery image.
+.El
+.Sh EXIT STATUS
+The exit status is the sum of the applicable values:
+.Bl -tag -width 128 -compact
+.It 0
+No errors.
+.It 1
+File system errors corrected.
+.It 2
+File system errors corrected; the system should be rebooted.
+.It 4
+File system errors left uncorrected.
+.It 8
+Operational error.
+.It 16
+Usage or syntax error.
+.It 32
+Cancelled by the user.
+.It 128
+Shared library error; not applicable to the static Rach2 build.
+.El
+.Sh EXAMPLES
+Check the root partition without writing, from an SSH session on the
+recovery system:
+.Dl e2fsck -fn /dev/disk0p3
+.Pp
+In the source tree,
+.Ql tests/run grow
+runs the read-only and repairing checks through
+.Xr growroot 8 .
+.Sh DIAGNOSTICS
+Conflicting repair modes produce:
+.Dl Only one of the options -p/-a, -n or -y may be specified.
+An interactive run without a terminal reports:
+.Dl need terminal for interactive repairs
+.Sh SEE ALSO
+.Xr disk 7 ,
+.Xr recovery 7 ,
+.Xr growroot 8 ,
+.Xr rach2-recover 8 ,
+.Xr resize2fs 8
+.Sh HISTORY
+Adapted from the e2fsprogs 1.47.4 manual page, licensed under GPL-2.0.

@@ -1,0 +1,51 @@
+.Dd September 19, 2026
+.Dt DISKCTL 8
+.Os
+.Sh NAME
+.Nm diskctl
+.Nd reread a disk's partition table or print its identity
+.Sh SYNOPSIS
+.Nm
+.Cm reread Ar DEVICE
+.Nm
+.Cm id Ar DEVICE
+.Sh DESCRIPTION
+The
+.Nm
+command rereads a disk's partition table or prints its MBR signature.
+The commands are:
+.Bl -tag -width Ds
+.It Cm reread Ar DEVICE
+Issue
+.Dv BLKRRPART
+on the whole-disk node
+.Ar DEVICE
+to create nodes for partitions just written by a program.
+The kernel refuses the request with
+.Er EBUSY
+while a file system on the disk is mounted or another descriptor is open
+on the disk.
+This prevents a reread from changing the partition bounds used by a
+mounted file system.
+.It Cm id Ar DEVICE
+Print the disk's MBR signature as eight lowercase hexadecimal digits.
+The signature is the four bytes at offset 440 in the first sector.
+.Xr growroot 8
+and the boot command line use it to identify the disk.
+.El
+.Sh EXAMPLES
+.Dl diskctl id /dev/disk0
+.Pp
+The installer uses both commands.
+.Sh DIAGNOSTICS
+An invalid command or operand count prints:
+.Dl usage: diskctl reread DEVICE | diskctl id DEVICE
+Diagnostics identify the device.
+A reread refused with
+.Er EBUSY
+prints:
+.Dl diskctl: DEVICE is in use: unmount everything on it and close every program holding it
+.Sh SEE ALSO
+.Xr ioctl 2 ,
+.Xr disk 7 ,
+.Xr growroot 8

@@ -1,0 +1,22 @@
+.Dd September 19, 2026
+.Dt UPDATE 8
+.Os
+.Sh NAME
+.Nm update
+.Nd periodically synchronize cached writes
+.Sh SYNOPSIS
+.Nm
+.Sh DESCRIPTION
+.Nm
+takes no arguments.
+Init starts one instance at boot on every image and keeps it running.
+It repeatedly sleeps for thirty seconds and calls
+.Xr sync 2
+to write cached data to disk, whether or not another program calls
+.Xr sync 2 .
+.Pp
+The kernel does not perform this periodic sync itself: its timer
+cannot sleep, and it has no thread of its own for this work.
+.Sh SEE ALSO
+.Xr sync 2 ,
+.Xr init 8

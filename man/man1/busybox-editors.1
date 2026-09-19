@@ -1,0 +1,197 @@
+.Dd September 19, 2026
+.Dt BUSYBOX-EDITORS 1
+.Os
+.Sh NAME
+.Nm busybox-editors ,
+.Nm awk ,
+.Nm cmp ,
+.Nm diff ,
+.Nm ed ,
+.Nm patch ,
+.Nm sed ,
+.Nm vi
+.Nd BusyBox editors and text filters
+.Sh SYNOPSIS
+.Nm awk
+.Op Ar OPTIONS
+.Op Ar AWK_PROGRAM
+.Op Ar FILE
+.Ar ...
+.Nm cmp
+.Op Fl ls
+.Op Fl n Ar NUM
+.Ar FILE1
+.Op Ar FILE2 Op Ar SKIP1 Op Ar SKIP2
+.Nm diff
+.Op Fl abBdiNqrTstw
+.Op Fl L Ar LABEL
+.Op Fl S Ar FILE
+.Op Fl U Ar LINES
+.Ar FILE1 FILE2
+.Nm ed
+.Op Fl p Ar PROMPT
+.Op Fl s
+.Op Ar FILE
+.Nm patch
+.Op Fl RNE
+.Op Fl p Ar N
+.Op Fl i Ar DIFF
+.Op Ar ORIGFILE Op Ar PATCHFILE
+.Nm sed
+.Op Fl i Ns Op Ar SFX
+.Op Fl nrE
+.Op Fl f Ar FILE
+.Ar ...
+.Op Fl e Ar CMD
+.Ar ...
+.Op Ar FILE
+.Ar ...
+.Nm sed
+.Op Fl i Ns Op Ar SFX
+.Op Fl nrE
+.Ar CMD
+.Op Ar FILE
+.Ar ...
+.Nm vi
+.Op Fl c Ar CMD
+.Op Fl R
+.Op Fl H
+.Op Ar FILE
+.Ar ...
+.Sh DESCRIPTION
+These are the editor and text filter applets of BusyBox 1.36.1
+as built for Rach2.
+.Bl -tag -width patch
+.It Nm awk
+Process input files with an awk program.
+.It Nm cmp
+Compare
+.Ar FILE1
+with
+.Ar FILE2 ,
+or with standard input if the second file is omitted.
+.It Nm diff
+Compare files line by line and print their differences.
+Only unified diff output is supported.
+.It Nm ed
+Edit text a line at a time.
+.It Nm patch
+Apply changes from a patch file.
+.It Nm sed
+Execute editing commands on input files and write to standard output,
+or edit files in place with
+.Fl i .
+If no
+.Fl e
+or
+.Fl f
+is given, the first non-option argument is the command string;
+remaining arguments are input files, or standard input if none are given.
+.It Nm vi
+Edit files on a terminal.
+It requires raw terminal mode, which the Rach2 console and
+pseudoterminal slaves provide.
+.El
+.Sh OPTIONS
+.Ss awk
+.Bl -tag -width "-e AWK_PROGRAM"
+.It Fl v Ar VAR=VAL
+Set a variable.
+.It Fl F Ar SEP
+Set the field separator.
+.It Fl f Ar FILE
+Read the program from a file.
+.It Fl e Ar AWK_PROGRAM
+Supply the program as an argument.
+.El
+.Ss cmp
+.Bl -tag -width "-n NUM"
+.It Fl l
+Print the decimal byte number and octal values of every differing byte.
+.It Fl s
+Suppress output.
+.It Fl n Ar NUM
+Compare at most this many bytes.
+.El
+.Ss diff
+.Bl -tag -width "-L LABEL"
+.It Fl a
+Treat all files as text.
+.It Fl b
+Ignore changes in the amount of white space.
+.It Fl B
+Ignore changes consisting entirely of blank lines.
+.It Fl d
+Try to find a smaller set of changes.
+.It Fl i
+Ignore case differences.
+.It Fl L Ar LABEL
+Use the label instead of the file name in the unified diff header.
+.It Fl N
+Treat absent files as empty.
+.It Fl q
+Print only whether files differ.
+.It Fl r
+Recurse into directories.
+.It Fl S Ar FILE
+Start at this file when comparing directories.
+.It Fl T
+Prefix a tab when needed to align tabs.
+.It Fl s
+Report identical files.
+.It Fl t
+Expand tabs to spaces in output.
+.It Fl U Ar LINES
+Print this many lines of context.
+.It Fl w
+Ignore all white space.
+.El
+.Ss patch
+.Bl -tag -width "--dry-run"
+.It Fl p Ar N
+Strip this many leading file name components.
+.It Fl i Ar DIFF
+Read the patch from this file instead of standard input.
+.It Fl R
+Reverse the patch.
+.It Fl N
+Ignore patches already applied.
+.It Fl E
+Remove output files that become empty.
+.It Fl -dry-run
+Do not change files.
+.El
+.Ss sed
+.Bl -tag -width "-i[SFX]"
+.It Fl e Ar CMD
+Add a command to execute.
+.It Fl f Ar FILE
+Add the file's contents to the commands to execute.
+.It Fl i Ns Op Ar SFX
+Edit files in place.
+If a suffix is given, append it to the names of backup files.
+.It Fl n
+Suppress automatic printing of the pattern space.
+.It Fl r , Fl E
+Use extended regular expressions.
+.El
+.Ss vi
+.Bl -tag -width "-c CMD"
+.It Fl c Ar CMD
+Run an initial command.
+Initial commands may also be supplied through
+.Ev EXINIT
+and
+.Pa ~/.exrc .
+.It Fl R
+Read-only mode.
+.It Fl H
+List available features.
+.El
+.Sh EXAMPLES
+.Dl echo foo | sed -e 's/f[a-zA-Z]o/bar/g'
+.Sh SEE ALSO
+.Xr console 4
+.Sh HISTORY
+The applet descriptions are adapted from BusyBox 1.36.1 documentation,
+licensed under GPL-2.0.

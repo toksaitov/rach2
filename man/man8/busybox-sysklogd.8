@@ -1,0 +1,100 @@
+.Dd September 19, 2026
+.Dt BUSYBOX-SYSKLOGD 8
+.Os
+.Sh NAME
+.Nm busybox-sysklogd ,
+.Nm klogd ,
+.Nm logger ,
+.Nm logread ,
+.Nm syslogd
+.Nd BusyBox log tools
+.Sh SYNOPSIS
+.Nm klogd
+.Op Fl c Ar N
+.Op Fl n
+.Nm logger
+.Op Fl s
+.Op Fl t Ar TAG
+.Op Fl p Ar PRIO
+.Op Ar MESSAGE
+.Nm logread
+.Op Fl fF
+.Nm syslogd
+.Op Ar OPTIONS
+.Sh DESCRIPTION
+These are the sysklogd applets of BusyBox 1.36.1 as built for Rach2.
+The kernel's own log is
+.Pa /dev/bootlog ;
+see
+.Xr bootlog 4 .
+.Bl -tag -width syslogd
+.It Nm klogd
+Log kernel messages to syslog.
+It has no kernel messages to read on Rach2.
+.It Nm logger
+Write
+.Ar MESSAGE ,
+or standard input, to syslog.
+.It Nm logread
+Display messages in the circular buffer of
+.Nm syslogd .
+.It Nm syslogd
+Provide system logging.
+.El
+.Sh OPTIONS
+.Ss klogd
+.Bl -tag -width "-c N"
+.It Fl c Ar N
+Print messages more urgent than priority
+.Ar N
+to the console.
+The priority is from 1 to 8.
+.It Fl n
+Run in the foreground.
+.El
+.Ss logger
+.Bl -tag -width "-p PRIO"
+.It Fl s
+Log to standard error as well as the system log.
+.It Fl t Ar TAG
+Use the specified tag.
+The default is the user name.
+.It Fl p Ar PRIO
+Set the priority as a number or a
+.Ar FACILITY.LEVEL
+pair.
+.El
+.Ss logread
+.Bl -tag -width "-F"
+.It Fl f
+Output data as the log grows.
+.It Fl F
+Dump the buffer, then output data as the log grows.
+.El
+.Ss syslogd
+.Bl -tag -width "-R HOST[:PORT]"
+.It Fl n
+Run in the foreground.
+.It Fl R Ar HOST Ns Op : Ns Ar PORT
+Log to the specified host and port.
+The default port is 514.
+.It Fl L
+Log locally as well as over the network.
+With
+.Fl R ,
+the default is to log only over the network.
+.El
+.Sh FILES
+.Bl -tag -width /dev/bootlog
+.It Pa /dev/bootlog
+Rach2 kernel log.
+.It Pa /proc/kmsg
+Absent on Rach2.
+.El
+.Sh EXAMPLES
+.Dl logger "hello"
+.Sh SEE ALSO
+.Xr bootlog 4
+.Sh HISTORY
+The applet descriptions are adapted from BusyBox 1.36.1 usage text,
+licensed under GPL-2.0.

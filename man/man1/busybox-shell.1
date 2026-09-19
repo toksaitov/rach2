@@ -1,0 +1,70 @@
+.Dd September 19, 2026
+.Dt BUSYBOX-SHELL 1
+.Os
+.Sh NAME
+.Nm busybox-shell ,
+.Nm ash ,
+.Nm cttyhack ,
+.Nm hush ,
+.Nm "busybox sh"
+.Nd BusyBox shells and controlling terminal tool
+.Sh SYNOPSIS
+.Nm ash
+.Op Fl il
+.Op Fl |+Cabefmnuvx
+.Op Fl |+o Ar OPT
+.Ar ...
+.Oo
+.Fl c Ar 'SCRIPT' Op Ar ARG0 ARGS
+.No \&| Ar FILE ARGS
+.No \&| Fl s Ar ARGS
+.Oc
+.Nm cttyhack
+.Op Ar PROG ARGS
+.Nm hush
+.Op Fl enxl
+.Oo
+.Fl c Ar 'SCRIPT' Op Ar ARG0 ARGS
+.No \&| Ar FILE ARGS
+.No \&| Fl s Ar ARGS
+.Oc
+.Nm sh
+.Op Fl il
+.Op Fl |+Cabefmnuvx
+.Op Fl |+o Ar OPT
+.Ar ...
+.Oo
+.Fl c Ar 'SCRIPT' Op Ar ARG0 ARGS
+.No \&| Ar FILE ARGS
+.No \&| Fl s Ar ARGS
+.Oc
+.Sh DESCRIPTION
+These are the shell applets of BusyBox 1.36.1 as built for Rach2.
+.Bl -tag -width cttyhack
+.It Nm ash , sh
+Run the shell described in
+.Xr sh 1 .
+.It Nm cttyhack
+Give
+.Ar PROG
+a controlling terminal if possible.
+.It Nm hush
+Run the hush Unix shell interpreter.
+Rach2 builds it in addition to ash.
+.El
+.Sh EXAMPLES
+The BusyBox usage text gives this
+.Pa /etc/inittab
+entry for BusyBox init:
+.Dl ::respawn:/bin/cttyhack /bin/sh
+.Pp
+Give a shell running as process ID 1 a controlling terminal:
+.Dl exec cttyhack sh
+.Pp
+Start an interactive shell from a boot shell script:
+.Dl setsid cttyhack sh
+.Sh SEE ALSO
+.Xr sh 1
+.Sh HISTORY
+The applet descriptions are adapted from BusyBox 1.36.1 documentation,
+licensed under GPL-2.0.

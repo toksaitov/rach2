@@ -1,0 +1,288 @@
+.Dd September 19, 2026
+.Dt BUSYBOX-RUNIT 8
+.Os
+.Sh NAME
+.Nm busybox-runit ,
+.Nm chpst ,
+.Nm envdir ,
+.Nm envuidgid ,
+.Nm runsv ,
+.Nm runsvdir ,
+.Nm setuidgid ,
+.Nm softlimit ,
+.Nm sv ,
+.Nm svc ,
+.Nm svlogd ,
+.Nm svok
+.Nd BusyBox runit supervision tools
+.Sh SYNOPSIS
+.Nm chpst
+.Op Fl vP012
+.Op Fl u Ar USER Ns Op : Ns Ar GRP
+.Op Fl U Ar USER Ns Op : Ns Ar GRP
+.Op Fl e Ar DIR
+.Op Fl / Ar DIR
+.Op Fl n Ar NICE
+.Op Fl m Ar BYTES
+.Op Fl d Ar BYTES
+.Op Fl o Ar N
+.Op Fl p Ar N
+.Op Fl f Ar BYTES
+.Op Fl c Ar BYTES
+.Ar PROG ARGS
+.Nm envdir
+.Ar DIR PROG ARGS
+.Nm envuidgid
+.Ar USER PROG ARGS
+.Nm runsv
+.Ar DIR
+.Nm runsvdir
+.Op Fl P
+.Op Fl s Ar SCRIPT
+.Ar DIR
+.Nm setuidgid
+.Ar USER PROG ARGS
+.Nm softlimit
+.Op Fl a Ar BYTES
+.Op Fl m Ar BYTES
+.Op Fl d Ar BYTES
+.Op Fl s Ar BYTES
+.Op Fl l Ar BYTES
+.Op Fl f Ar BYTES
+.Op Fl c Ar BYTES
+.Op Fl r Ar BYTES
+.Op Fl o Ar N
+.Op Fl p Ar N
+.Op Fl t Ar N
+.Ar PROG ARGS
+.Nm sv
+.Op Fl v
+.Op Fl w Ar SEC
+.Ar CMD SERVICE_DIR ...
+.Nm svc
+.Op Fl udopchaitkx
+.Ar SERVICE_DIR ...
+.Nm svlogd
+.Op Fl tttv
+.Op Fl r Ar C
+.Op Fl R Ar CHARS
+.Op Fl l Ar MATCHLEN
+.Op Fl b Ar BUFLEN
+.Ar DIR ...
+.Nm svok
+.Ar SERVICE_DIR
+.Sh DESCRIPTION
+These are the runit applets of BusyBox 1.36.1 as built for Rach2.
+Nothing on the Rach2 images uses them.
+They run as BusyBox builds them.
+.Bl -tag -width setuidgid
+.It Nm chpst
+Change process state, then run
+.Ar PROG .
+.It Nm envdir
+Set environment variables from files in
+.Ar DIR ,
+then run
+.Ar PROG .
+.It Nm envuidgid
+Set
+.Ev UID
+and
+.Ev GID
+to the user and group IDs of
+.Ar USER ,
+then run
+.Ar PROG .
+.It Nm runsv
+Start and monitor a service and, optionally, its log service.
+.It Nm runsvdir
+Start a
+.Nm runsv
+process for each subdirectory of
+.Ar DIR .
+Restart each process when it exits.
+.It Nm setuidgid
+Set the user and group IDs to those of
+.Ar USER ,
+drop supplementary group IDs, and run
+.Ar PROG .
+.It Nm softlimit
+Set soft resource limits, then run
+.Ar PROG .
+.It Nm sv , svc
+Control services monitored by
+.Nm runsv .
+.It Nm svlogd
+Read log data from standard input and write rotated log files in
+.Ar DIR .
+.It Nm svok
+Check whether the
+.Nm runsv
+supervisor is running.
+.El
+.Ss sv commands
+Only the first character of a command is required.
+.Bl -tag -width interrupt
+.It Cm status
+Query service status.
+.It Cm up
+Start the service if it is not running; restart it if it stops.
+.It Cm once
+Start the service as for
+.Cm up ,
+but do not restart it if it stops.
+.It Cm down
+Send TERM and CONT to the service.
+If
+.Pa ./run
+exits, start
+.Pa ./finish
+if it exists.
+After it stops, do not restart the service.
+.It Cm exit
+Send TERM and CONT to the service and log service.
+When both exit,
+.Nm runsv
+exits too.
+.It Cm pause , cont , hup , alarm , interrupt , quit , 1 , 2 , term , kill
+Send STOP, CONT, HUP, ALRM, INT, QUIT, USR1, USR2, TERM, or KILL,
+respectively, to the service.
+.El
+.Sh OPTIONS
+.Ss chpst
+.Bl -tag -width "-U USER[:GRP]"
+.It Fl u Ar USER Ns Op : Ns Ar GRP
+Set the user and group IDs.
+.It Fl U Ar USER Ns Op : Ns Ar GRP
+Set
+.Ev UID
+and
+.Ev GID
+in the environment.
+.It Fl e Ar DIR
+Set environment variables from files in
+.Ar DIR .
+Each file name becomes a variable name; its first line becomes the value.
+.It Fl / Ar DIR
+Change the root directory to
+.Ar DIR .
+.It Fl n Ar NICE
+Add
+.Ar NICE
+to the nice value.
+.It Fl m Ar BYTES
+Set memory limits.
+.It Fl d Ar BYTES
+Limit the data segment.
+.It Fl o Ar N
+Limit open files per process.
+.It Fl p Ar N
+Limit processes per user ID.
+.It Fl f Ar BYTES
+Limit output file sizes.
+.It Fl c Ar BYTES
+Limit core file size.
+.It Fl v
+Produce verbose output.
+.It Fl P
+Create a process group.
+.It Fl 0 , 1 , 2
+Close standard input, standard output, or standard error, respectively.
+.El
+.Ss runsvdir
+.Bl -tag -width "-s SCRIPT"
+.It Fl P
+Put each
+.Nm runsv
+process in a new session.
+.It Fl s Ar SCRIPT
+Run
+.Ar SCRIPT
+with the signal number after processing a signal.
+.El
+.Ss softlimit
+.Bl -tag -width "-a BYTES"
+.It Fl a Ar BYTES
+Limit the total size of all segments.
+.It Fl m Ar BYTES
+Equivalent to
+.Fl d Ar BYTES Fl s Ar BYTES Fl l Ar BYTES Fl a Ar BYTES .
+.It Fl d Ar BYTES
+Limit the data segment.
+.It Fl s Ar BYTES
+Limit the stack segment.
+.It Fl l Ar BYTES
+Limit locked memory.
+.It Fl o Ar N
+Limit open files per process.
+.It Fl p Ar N
+Limit processes per user ID.
+.It Fl f Ar BYTES
+Limit output file sizes.
+.It Fl c Ar BYTES
+Limit core file size.
+.It Fl r Ar BYTES
+Limit resident set size.
+.It Fl t Ar N
+Limit CPU time; the process receives SIGXCPU after
+.Ar N
+seconds.
+.El
+.Ss svc
+.Bl -tag -width "-pchaitk"
+.It Fl u
+Start the service if it is not running; restart it if it stops.
+.It Fl d
+Send TERM and CONT if the service is running; do not restart it.
+.It Fl o
+Start the service if it is not running; do not restart it.
+.It Fl p , c , h , a , i , t , k
+Send STOP, CONT, HUP, ALRM, INT, TERM, or KILL, respectively, to the service.
+.It Fl x
+Make
+.Nm runsv
+exit as soon as the service is down.
+.El
+.Ss svlogd
+.Bl -tag -width "-R CHARS"
+.It Fl r Ar C
+Replace non-printable characters with
+.Ar C .
+.It Fl R Ar CHARS
+Also replace the characters in
+.Ar CHARS
+with
+.Ar C ,
+which defaults to
+.Ql _ .
+.It Fl t
+Timestamp with
+.Ql @tai64n .
+.It Fl tt
+Timestamp with
+.Ql yyyy-mm-dd_hh:mm:ss.sssss .
+.It Fl ttt
+Timestamp with
+.Ql yyyy-mm-ddThh:mm:ss.sssss .
+.It Fl v
+Produce verbose output.
+.El
+.Sh FILES
+.Bl -tag -width DIR/config
+.It Pa DIR/config
+Modify the behavior of
+.Nm svlogd .
+.Ql sSIZE
+sets the rotation size, default 1000000; 0 disables rotation.
+.Ql nNUM
+sets the number of files to retain.
+.El
+.Sh EXIT STATUS
+.Nm svok
+exits with 0 if the supervisor is running, 100 if it is not, or 111 with
+an error message if
+.Ar SERVICE_DIR
+does not exist.
+.Sh HISTORY
+The applet descriptions are adapted from BusyBox 1.36.1 documentation,
+licensed under GPL-2.0.

@@ -1,0 +1,80 @@
+.Dd September 19, 2026
+.Dt NETUP 8
+.Os
+.Sh NAME
+.Nm netup
+.Nd bring up interfaces from the network configuration file
+.Sh SYNOPSIS
+.Nm
+.Op Fl a
+.Op Ar interface ...
+.Sh DESCRIPTION
+.Nm
+reads
+.Pa /etc/network/interfaces
+in the
+.Ic ifup
+format and configures the selected interfaces.
+With no operands or with
+.Fl a ,
+it includes every interface named by an
+.Ic auto
+or
+.Ic allow-hotplug
+line.
+An interface named on the command line needs neither declaration.
+.Pp
+The supported declarations are:
+.Bl -tag -width Ds
+.It Ic auto Ar name
+Include the interface when no operands or
+.Fl a
+are given.
+.It Ic allow-hotplug Ar name
+Include the interface in the same way as
+.Ic auto .
+.It Ic iface Ar name Ic inet dhcp
+Run
+.Xr dhcpc 8
+for the interface.
+The client stays in the foreground until its first discovery round
+has completed.
+.It Ic iface Ar name Ic inet static
+Apply a static configuration.
+The stanza requires
+.Ic address
+and
+.Ic netmask
+entries; a
+.Ic gateway
+entry is optional.
+.El
+.Pp
+A static stanza is validated in full before any
+.Xr ioctl 2
+changes the interface.
+A live or incomplete DHCP claim prevents static configuration.
+.Pp
+On a boot with
+.Ql rach2.ip=none ,
+init-metal performs the same configuration job.
+On os-real, BusyBox's
+.Ic ifup
+performs this job.
+.Sh FILES
+.Bl -tag -width /etc/network/interfaces
+.It Pa /etc/network/interfaces
+Interface declarations and DHCP or static stanzas.
+.El
+.Sh EXAMPLES
+.Dl netup -a
+The
+.Ql tests/run netif
+suite exercises DHCP and static stanzas.
+.Sh DIAGNOSTICS
+An unknown option produces
+.Ql "usage: netup [-a] [interface ...]" .
+.Sh SEE ALSO
+.Xr busybox-networking 1 ,
+.Xr recovery 7 ,
+.Xr dhcpc 8

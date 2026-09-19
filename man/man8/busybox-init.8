@@ -1,0 +1,230 @@
+.Dd September 19, 2026
+.Dt BUSYBOX-INIT 8
+.Os
+.Sh NAME
+.Nm busybox-init ,
+.Nm bootchartd ,
+.Nm halt ,
+.Nm "busybox init" ,
+.Nm linuxrc ,
+.Nm poweroff ,
+.Nm reboot
+.Nd BusyBox startup and shutdown tools
+.Sh SYNOPSIS
+.Nm bootchartd
+.Cm start
+.Op Ar PROG ARGS
+.Nm bootchartd
+.Cm stop
+.Nm bootchartd
+.Cm init
+.Nm halt
+.Op Fl d Ar DELAY
+.Op Fl nfw
+.Nm init
+.Nm linuxrc
+.Nm poweroff
+.Op Fl d Ar DELAY
+.Op Fl nf
+.Nm reboot
+.Op Fl d Ar DELAY
+.Op Fl nf
+.Sh DESCRIPTION
+These are the init applets of BusyBox 1.36.1 as built for Rach2.
+.Pa /sbin/init
+is the project's
+.Xr init 8 ,
+not the BusyBox applet.
+On os-real,
+.Nm halt ,
+.Nm poweroff ,
+and
+.Nm reboot
+stop the machine through
+.Xr reboot 2 ;
+the standalone shell dispatches these applets before searching the file system.
+.Bl -tag -width bootchartd
+.It Nm bootchartd
+Collect boot chart data in
+.Pa /var/log/bootchart.tgz .
+This applet has no use on Rach2.
+.It Nm halt
+Halt the system.
+.It Nm init
+Run as the first process at boot, starting and restarting children according
+to
+.Pa /etc/inittab
+without exiting.
+Rach2 uses its own init instead.
+.It Nm linuxrc
+Run BusyBox init from an old-style Linux initrd without requiring process ID 1.
+This applet has no use on Rach2.
+.It Nm poweroff
+Halt the system and turn off power.
+.It Nm reboot
+Restart the system.
+.El
+.Ss bootchartd commands
+.Bl -tag -width start
+.It Cm start Op Ar PROG ARGS
+Start logging in the background.
+If
+.Ar PROG
+is given, run it, then stop logging with
+.Dv SIGUSR1 .
+.It Cm stop
+Send
+.Dv SIGUSR1
+to all bootchartd processes.
+.It Cm init
+Start logging in the background and stop when getty or xdm is seen.
+This form is for init scripts.
+.El
+.Pp
+As process ID 1,
+.Nm bootchartd
+logs as for
+.Cm init ,
+then executes the program specified by
+.Ev bootchart_init ,
+.Pa /init ,
+or
+.Pa /sbin/init .
+.Ss BusyBox init
+The following describes the unused BusyBox applet.
+It is intended to be started by the kernel.
+It does not support multiple runlevels.
+.Pp
+Signals control it as follows:
+.Bl -tag -width SIGTSTP
+.It Dv SIGHUP
+Reload
+.Pa /etc/inittab .
+.It Dv SIGTSTP
+Stop restarting children until
+.Dv SIGCONT .
+.It Dv SIGQUIT
+Execute another init.
+.It Dv SIGUSR1
+Halt.
+.It Dv SIGTERM
+Reboot.
+.It Dv SIGUSR2
+Power off.
+.It Dv SIGINT
+Run the Ctrl-Alt-Del action.
+.El
+.Pp
+An
+.Pa /etc/inittab
+entry has the form:
+.Dl id:runlevels:action:process
+.Bl -tag -width runlevels
+.It Ar id
+Controlling terminal, appended to
+.Pa /dev/ .
+An empty field uses init's standard input and output.
+The field need not be unique, though repeated terminal names may cause
+unexpected results.
+.It Ar runlevels
+Ignored.
+.It Ar action
+One of
+.Cm sysinit , respawn , askfirst , wait , once , restart , ctrlaltdel ,
+or
+.Cm shutdown .
+.It Ar process
+Program and command line to execute.
+.El
+.Pp
+The
+.Cm sysinit
+actions run first and must finish before the
+.Cm wait
+actions run.
+Each
+.Cm wait
+action must finish before init continues.
+The
+.Cm once
+actions run without waiting, followed by the
+.Cm respawn
+actions.
+A
+.Cm respawn
+action restarts whenever its process exits, without a restart rate limit.
+The
+.Cm askfirst
+action does the same, but prints
+.Ql Please press Enter to activate this console.
+and waits for Enter before starting the program.
+.Pp
+The
+.Cm restart
+action executes a replacement init, normally
+.Pa /sbin/init ;
+it may instead run a script.
+The
+.Cm ctrlaltdel
+actions run on Ctrl-Alt-Del, and the
+.Cm shutdown
+actions run when init is told to reboot.
+Within each action type, entries run in file order.
+Unknown actions produce an error message and are skipped.
+.Pp
+Without
+.Pa /etc/inittab ,
+BusyBox init uses these entries:
+.Bd -literal -offset indent
+::sysinit:/etc/init.d/rcS
+::askfirst:/bin/sh
+::ctrlaltdel:/sbin/reboot
+::shutdown:/sbin/swapoff -a
+::shutdown:/bin/umount -a -r
+::restart:/sbin/init
+tty2::askfirst:/bin/sh
+tty3::askfirst:/bin/sh
+tty4::askfirst:/bin/sh
+.Ed
+.Sh OPTIONS
+The following options apply to
+.Nm halt ,
+.Nm poweroff ,
+and
+.Nm reboot :
+.Bl -tag -width "-d SEC"
+.It Fl d Ar SEC
+Delay the action by
+.Ar SEC
+seconds.
+.It Fl n
+Do not call sync before the action.
+.It Fl f
+Call
+.Xr reboot 2
+directly instead of going through init.
+.El
+.Pp
+The
+.Nm halt
+usage also lists:
+.Bl -tag -width "-d SEC"
+.It Fl w
+Write a wtmp record only.
+.El
+.Sh FILES
+.Bl -tag -width /var/log/bootchart.tgz
+.It Pa /sbin/init
+The project's init program on Rach2.
+.It Pa /etc/inittab
+Configuration for BusyBox init.
+.It Pa /var/log/bootchart.tgz
+Boot chart data written by
+.Nm bootchartd .
+.El
+.Sh SEE ALSO
+.Xr reboot 2 ,
+.Xr init 8
+.Sh HISTORY
+The applet descriptions are adapted from BusyBox 1.36.1 documentation,
+licensed under GPL-2.0.

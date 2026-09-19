@@ -1,0 +1,63 @@
+.Dd September 19, 2026
+.Dt DOOM 1
+.Os
+.Sh NAME
+.Nm doom
+.Nd play Doom on the framebuffer
+.Sh SYNOPSIS
+.Nm
+.Sh DESCRIPTION
+.Nm
+is the doomgeneric engine with a Rach2 platform layer.
+The static executable
+.Pa /bin/doom
+uses its own small runtime over nine system calls and does not link musl.
+.Pp
+Graphics use VGA mode 13h through the framebuffer device.
+Frames are 320 by 200 palette indices.
+The 256-entry palette is set through
+.Dv FB_SETPALETTE .
+.Pp
+Keyboard input consists of PS/2 set 1 scan codes read from standard input.
+The port maps letters, digits, arrows, modifiers, function keys, Enter,
+Escape, Tab, and the Doom action keys.
+The input queue holds at most 31 unread key transitions.
+Mouse input uses three-byte packets when the mouse device opens;
+otherwise only keyboard input is used.
+.Pp
+Time is read with
+.Xr gettimeofday 2 .
+Sleep is a busy wait.
+The port provides PCM sound, PC speaker sound, and music synthesized
+with Nuked OPL3.
+.Pp
+A WAD game-data file is required.
+The build stages the shareware WAD at
+.Pa /demo/doom1.wad
+as an optional file when it is present at build time.
+.Sh FILES
+.Bl -tag -width /demo/doom1.wad
+.It Pa /bin/doom
+Static game executable.
+.It Pa /fb
+Framebuffer device.
+.It Pa /demo/doom1.wad
+Game data, supplied separately.
+.El
+.Sh EXAMPLES
+.Dl cd / && doom
+.Pp
+In the source tree,
+.Ql tests/run doom
+runs the game for ten seconds and counts its disk commands.
+.Sh SEE ALSO
+.Xr gettimeofday 2 ,
+.Xr console 4 ,
+.Xr rach2 7
+.Sh HISTORY
+The engine comes from doomgeneric and its Doom ancestry under GPL-2.0.
+The files
+.Pa midifile.c
+and
+.Pa mus2mid.c
+come from Chocolate Doom.

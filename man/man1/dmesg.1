@@ -1,0 +1,36 @@
+.Dd September 19, 2026
+.Dt DMESG 1
+.Os
+.Sh NAME
+.Nm dmesg
+.Nd print the kernel boot log
+.Sh SYNOPSIS
+.Nm
+.Sh DESCRIPTION
+The
+.Nm
+command prints
+.Pa /dev/bootlog ,
+which the kernel fills as it starts.
+Root may also read the log with any program that reads a file.
+.Pp
+.Nm
+accepts no arguments.
+Linux's options apply to a ring buffer that this kernel does not keep.
+Arguments are refused rather than ignored.
+The BusyBox dmesg applet is not built because it cannot read this kernel's log.
+.Sh FILES
+.Bl -tag -width /dev/bootlog
+.It Pa /bin/dmesg
+Script installed on os-real, metal, and recovery images.
+.It Pa /dev/bootlog
+Kernel boot log, readable by root.
+.El
+.Sh EXIT STATUS
+An invocation with any argument exits with status 1.
+.Sh DIAGNOSTICS
+An argument produces:
+.Dl dmesg: this machine's boot log is /dev/bootlog and takes no options
+.Sh SEE ALSO
+.Xr bootlog 4 ,
+.Xr rach2 7

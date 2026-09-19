@@ -1,0 +1,102 @@
+.Dd September 19, 2026
+.Dt HTTPD 8
+.Os
+.Sh NAME
+.Nm httpd
+.Nd serve an HTTP status page or files
+.Sh SYNOPSIS
+.Ss os-simple
+.Nm
+.Op Ar PORT
+.Ss os-real
+.Nm
+.Op Fl if
+.Op Fl v | Fl vv
+.Op Fl c Ar CONFFILE
+.Op Fl p Ar [IP:]PORT
+.Op Fl u Ar USER Ns Op Ar :GRP
+.Op Fl r Ar REALM
+.Op Fl h Ar HOME
+.Nm
+.Fl d Ar STRING
+.Nm
+.Fl e Ar STRING
+.Nm
+.Fl m Ar STRING
+.Sh DESCRIPTION
+On os-simple,
+.Nm
+is the project's HTTP/1.0 status server.
+It listens on all addresses, on port 80 unless
+.Ar PORT
+is given.
+A port below 1024 requires root privilege;
+.Ql httpd 8080
+runs on an unprivileged port.
+.Pp
+The server uses blocking socket calls and serves one connection at a time.
+It reads one request and answers with a generated status page.
+The page contains the client's address and port, the request line,
+User-Agent, uptime, per-connection counters, and the six most recent
+connections.
+The request line and User-Agent are HTML-escaped.
+It serves no files.
+.Pp
+On os-real,
+.Nm
+is the BusyBox file server.
+Its options follow.
+.Sh OPTIONS
+These options apply to the BusyBox applet on os-real.
+.Bl -tag -width Ds
+.It Fl c Ar CONFFILE
+Use the specified configuration file.
+The default is
+.Pa httpd.conf
+in
+.Pa /etc
+or the home directory selected with
+.Fl h .
+.It Fl d Ar STRING
+URL-decode
+.Ar STRING .
+.It Fl e Ar STRING
+HTML-encode
+.Ar STRING .
+.It Fl f
+Run in the foreground.
+.It Fl h Ar HOME
+Use
+.Ar HOME
+as the home directory.
+The default is the current directory.
+.It Fl i
+Use inetd mode.
+.It Fl m Ar STRING
+Apply MD5 crypt to
+.Ar STRING .
+.It Fl p Ar [IP:]PORT
+Bind to the given address and port.
+The default is all addresses on port 80.
+.It Fl r Ar REALM
+Set the realm for Basic Authentication.
+.It Fl u Ar USER Ns Op Ar :GRP
+Set the user and group IDs after binding to the port.
+.It Fl v , Fl vv
+Produce verbose output.
+.El
+.Sh EXAMPLES
+With QEMU forwarding configured as
+.Ql hostfwd=tcp::8080-:80 ,
+read the status page from the host:
+.Dl curl http://127.0.0.1:8080/
+.Sh SEE ALSO
+.Xr busybox-networking 1 ,
+.Xr socketcall 2
+.Sh HISTORY
+The BusyBox applet options are adapted from BusyBox documentation,
+licensed under GPL-2.0.
+.Sh BUGS
+The os-simple status page labels the server endpoint
+.Ql 10.0.2.15:80
+regardless of the selected port.

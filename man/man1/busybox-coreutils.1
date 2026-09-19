@@ -1,0 +1,2297 @@
+.Dd September 19, 2026
+.Dt BUSYBOX-COREUTILS 1
+.Os
+.Sh NAME
+.Nm busybox-coreutils ,
+.Nm arch ,
+.Nm base32 ,
+.Nm base64 ,
+.Nm basename ,
+.Nm cat ,
+.Nm chgrp ,
+.Nm chmod ,
+.Nm chown ,
+.Nm chroot ,
+.Nm cksum ,
+.Nm comm ,
+.Nm cp ,
+.Nm crc32 ,
+.Nm cut ,
+.Nm date ,
+.Nm dd ,
+.Nm df ,
+.Nm dirname ,
+.Nm dos2unix ,
+.Nm du ,
+.Nm echo ,
+.Nm env ,
+.Nm expand ,
+.Nm expr ,
+.Nm factor ,
+.Nm false ,
+.Nm fold ,
+.Nm fsync ,
+.Nm groups ,
+.Nm head ,
+.Nm hostid ,
+.Nm id ,
+.Nm install ,
+.Nm link ,
+.Nm ln ,
+.Nm logname ,
+.Nm ls ,
+.Nm md5sum ,
+.Nm mkdir ,
+.Nm mkfifo ,
+.Nm mknod ,
+.Nm mktemp ,
+.Nm mv ,
+.Nm nice ,
+.Nm nl ,
+.Nm nohup ,
+.Nm nproc ,
+.Nm od ,
+.Nm paste ,
+.Nm printenv ,
+.Nm printf ,
+.Nm pwd ,
+.Nm readlink ,
+.Nm realpath ,
+.Nm rm ,
+.Nm rmdir ,
+.Nm seq ,
+.Nm sha1sum ,
+.Nm sha256sum ,
+.Nm sha3sum ,
+.Nm sha512sum ,
+.Nm shred ,
+.Nm shuf ,
+.Nm sleep ,
+.Nm sort ,
+.Nm split ,
+.Nm stat ,
+.Nm stty ,
+.Nm sum ,
+.Nm sync ,
+.Nm tac ,
+.Nm tail ,
+.Nm tee ,
+.Nm test ,
+.Nm timeout ,
+.Nm touch ,
+.Nm tr ,
+.Nm true ,
+.Nm truncate ,
+.Nm tsort ,
+.Nm tty ,
+.Nm uname ,
+.Nm unexpand ,
+.Nm uniq ,
+.Nm unix2dos ,
+.Nm unlink ,
+.Nm users ,
+.Nm usleep ,
+.Nm uudecode ,
+.Nm uuencode ,
+.Nm w ,
+.Nm wc ,
+.Nm who ,
+.Nm whoami ,
+.Nm yes
+.Nd BusyBox file and text utilities
+.Sh SYNOPSIS
+.Nm arch
+.Nm base32
+.Oo
+.Fl d
+.Oc
+.Oo
+.Fl w
+.Ar "COL"
+.Oc
+.Oo
+.Ar "FILE"
+.Oc
+.Nm base64
+.Oo
+.Fl d
+.Oc
+.Oo
+.Fl w
+.Ar "COL"
+.Oc
+.Oo
+.Ar "FILE"
+.Oc
+.Nm basename
+.Ar "FILE"
+.Oo
+.Ar "SUFFIX"
+.Oc
+.No \&|
+.Fl a
+.Ar "FILE"
+.Ar ...
+.No \&|
+.Fl s
+.Ar "SUFFIX"
+.Ar "FILE"
+.Ar ...
+.Nm cat
+.Oo
+.Fl nbvteA
+.Oc
+.Oo
+.Ar "FILE"
+.Oc
+.Ar ...
+.Nm chgrp
+.Oo
+.Fl RhLHPcvf
+.Oc
+.Ar ...
+.Ar "GROUP"
+.Ar "FILE"
+.Ar ...
+.Nm chmod
+.Oo
+.Fl Rcvf
+.Oc
+.Ar "MODE[,MODE]"
+.Ar ...
+.Ar "FILE"
+.Ar ...
+.Nm chown
+.Oo
+.Fl RhLHPcvf
+.Oc
+.Ar ...
+.Ar "USER[:[GRP]]"
+.Ar "FILE"
+.Ar ...
+.Nm chroot
+.Ar "NEWROOT"
+.Oo
+.Ar "PROG"
+.Ar "ARGS"
+.Oc
+.Nm cksum
+.Ar "FILE"
+.Ar ...
+.Nm comm
+.Oo
+.Fl 123
+.Oc
+.Ar "FILE1"
+.Ar "FILE2"
+.Nm cp
+.Oo
+.Fl arPLHpfinlsTu
+.Oc
+.Ar "SOURCE"
+.Ar "DEST"
+.Nm cp
+.Oo
+.Fl arPLHpfinlsu
+.Oc
+.Ar "SOURCE"
+.Ar ...
+.Cm {
+.Fl t
+.Ar "DIRECTORY"
+.No \&|
+.Ar "DIRECTORY"
+.Cm }
+.Nm crc32
+.Ar "FILE"
+.Ar ...
+.Nm cut
+.Oo
+.Ar "OPTIONS"
+.Oc
+.Oo
+.Ar "FILE"
+.Oc
+.Ar ...
+.Nm date
+.Oo
+.Ar "OPTIONS"
+.Oc
+.Oo
+.Ar "+FMT"
+.Oc
+.Oo
+.Oo
+.Fl s
+.Oc
+.Ar "TIME"
+.Oc
+.Nm dd
+.Oo
+.Cm if Ns = Ns Ar "FILE"
+.Oc
+.Oo
+.Cm of Ns = Ns Ar "FILE"
+.Oc
+.Oo
+.Cm ibs Ns = Ns Ar "N"
+.Cm obs Ns = Ns Ar "N/bs=N"
+.Oc
+.Oo
+.Cm count Ns = Ns Ar "N"
+.Oc
+.Oo
+.Cm skip Ns = Ns Ar "N"
+.Oc
+.Oo
+.Cm seek Ns = Ns Ar "N"
+.Oc
+.Oo
+.Cm conv Ns = Ns Ar "notrunc|noerror|sync|fsync"
+.Oc
+.Oo
+.Cm iflag Ns = Ns Ar "skip_bytes|count_bytes|fullblock|direct"
+.Oc
+.Oo
+.Cm oflag Ns = Ns Ar "seek_bytes|append|direct"
+.Oc
+.Nm df
+.Oo
+.Fl PkmhTai
+.Oc
+.Oo
+.Fl B
+.Ar "SIZE"
+.Oc
+.Oo
+.Fl t
+.Ar "TYPE"
+.Oc
+.Oo
+.Ar "FILESYSTEM"
+.Oc
+.Ar ...
+.Nm dirname
+.Ar "FILENAME"
+.Nm dos2unix
+.Oo
+.Fl ud
+.Oc
+.Oo
+.Ar "FILE"
+.Oc
+.Nm du
+.Op Fl aHLclsxhmk
+.Op Fl d Ar N
+.Oo
+.Ar "FILE"
+.Oc
+.Ar ...
+.Nm echo
+.Oo
+.Fl neE
+.Oc
+.Oo
+.Ar "ARG"
+.Oc
+.Ar ...
+.Nm env
+.Oo
+.Fl i0
+.Oc
+.Oo
+.Fl u
+.Ar "NAME"
+.Oc
+.Ar ...
+.Oo
+.Fl ""
+.Oc
+.Oo
+.Ar "NAME=VALUE"
+.Oc
+.Ar ...
+.Oo
+.Ar "PROG"
+.Ar "ARGS"
+.Oc
+.Nm expand
+.Oo
+.Fl i
+.Oc
+.Oo
+.Fl t
+.Ar "N"
+.Oc
+.Oo
+.Ar "FILE"
+.Oc
+.Ar ...
+.Nm expr
+.Ar "EXPRESSION"
+.Nm factor
+.Oo
+.Ar "NUMBER"
+.Oc
+.Ar ...
+.Nm false
+.Nm fold
+.Oo
+.Fl bs
+.Oc
+.Oo
+.Fl w
+.Ar "WIDTH"
+.Oc
+.Oo
+.Ar "FILE"
+.Oc
+.Ar ...
+.Nm fsync
+.Oo
+.Fl d
+.Oc
+.Ar "FILE"
+.Ar ...
+.Nm groups
+.Oo
+.Ar "USER"
+.Oc
+.Nm head
+.Oo
+.Ar "OPTIONS"
+.Oc
+.Oo
+.Ar "FILE"
+.Oc
+.Ar ...
+.Nm hostid
+.Nm id
+.Oo
+.Fl ugGnr
+.Oc
+.Oo
+.Ar "USER"
+.Oc
+.Nm install
+.Oo
+.Fl cdDsp
+.Oc
+.Oo
+.Fl o
+.Ar "USER"
+.Oc
+.Oo
+.Fl g
+.Ar "GRP"
+.Oc
+.Oo
+.Fl m
+.Ar "MODE"
+.Oc
+.Oo
+.Fl t
+.Ar "DIR"
+.Oc
+.Oo
+.Ar "SOURCE"
+.Oc
+.Ar ...
+.Ar "DEST"
+.Nm link
+.Ar "FILE"
+.Ar "LINK"
+.Nm ln
+.Oo
+.Fl sfnbTv
+.Oc
+.Oo
+.Fl S
+.Ar "SUF"
+.Oc
+.Ar "TARGET"
+.Ar ...
+.Ar "LINK|DIR"
+.Nm logname
+.Nm ls
+.Oo
+.Fl 1AaCxdLHRFplinshrSXvctu
+.Oc
+.Oo
+.Fl w
+.Ar "WIDTH"
+.Oc
+.Oo
+.Ar "FILE"
+.Oc
+.Ar ...
+.Nm md5sum
+.Oo
+.Fl c[sw]
+.Oc
+.Oo
+.Ar "FILE"
+.Oc
+.Ar ...
+.Nm mkdir
+.Oo
+.Fl m
+.Ar "MODE"
+.Oc
+.Oo
+.Fl p
+.Oc
+.Ar "DIRECTORY"
+.Ar ...
+.Nm mkfifo
+.Oo
+.Fl m
+.Ar "MODE"
+.Oc
+.Ar "NAME"
+.Nm mknod
+.Oo
+.Fl m
+.Ar "MODE"
+.Oc
+.Ar "NAME"
+.Ar "TYPE"
+.Oo
+.Ar "MAJOR"
+.Ar "MINOR"
+.Oc
+.Nm mktemp
+.Oo
+.Fl dt
+.Oc
+.Oo
+.Fl p
+.Ar "DIR"
+.Oc
+.Oo
+.Ar "TEMPLATE"
+.Oc
+.Nm mv
+.Oo
+.Fl finT
+.Oc
+.Ar "SOURCE"
+.Ar "DEST"
+.Nm mv
+.Oo
+.Fl fin
+.Oc
+.Ar "SOURCE"
+.Ar ...
+.Cm {
+.Fl t
+.Ar "DIRECTORY"
+.No \&|
+.Ar "DIRECTORY"
+.Cm }
+.Nm nice
+.Oo
+.Fl n
+.Ar "ADJUST"
+.Oc
+.Oo
+.Ar "PROG"
+.Ar "ARGS"
+.Oc
+.Nm nl
+.Oo
+.Ar "OPTIONS"
+.Oc
+.Oo
+.Ar "FILE"
+.Oc
+.Ar ...
+.Nm nohup
+.Ar "PROG"
+.Ar "ARGS"
+.Nm nproc
+.Oo
+.Fl -all
+.Oc
+.Oo
+.Fl -ignore=N
+.Oc
+.Nm od
+.Oo
+.Fl abcdfhilovxs
+.Oc
+.Oo
+.Fl t
+.Ar "TYPE"
+.Oc
+.Oo
+.Fl A
+.Ar "RADIX"
+.Oc
+.Oo
+.Fl N
+.Ar "SIZE"
+.Oc
+.Oo
+.Fl j
+.Ar "SKIP"
+.Oc
+.Oo
+.Fl S
+.Ar "MINSTR"
+.Oc
+.Oo
+.Fl w
+.Ar "WIDTH"
+.Oc
+.Oo
+.Ar "FILE"
+.Oc
+.Ar ...
+.Nm paste
+.Oo
+.Fl d
+.Ar "LIST"
+.Oc
+.Oo
+.Fl s
+.Oc
+.Oo
+.Ar "FILE"
+.Oc
+.Ar ...
+.Nm printenv
+.Oo
+.Ar "VARIABLE"
+.Oc
+.Ar ...
+.Nm printf
+.Ar "FORMAT"
+.Oo
+.Ar "ARG"
+.Oc
+.Ar ...
+.Nm pwd
+.Nm readlink
+.Oo
+.Fl fnv
+.Oc
+.Ar "FILE"
+.Nm realpath
+.Ar "FILE"
+.Ar ...
+.Nm rm
+.Oo
+.Fl irf
+.Oc
+.Ar "FILE"
+.Ar ...
+.Nm rmdir
+.Oo
+.Fl p
+.Oc
+.Ar "DIRECTORY"
+.Ar ...
+.Nm seq
+.Oo
+.Fl w
+.Oc
+.Oo
+.Fl s
+.Ar "SEP"
+.Oc
+.Oo
+.Ar "FIRST"
+.Oo
+.Ar "INC"
+.Oc
+.Oc
+.Ar "LAST"
+.Nm sha1sum
+.Oo
+.Fl c[sw]
+.Oc
+.Oo
+.Ar "FILE"
+.Oc
+.Ar ...
+.Nm sha256sum
+.Oo
+.Fl c[sw]
+.Oc
+.Oo
+.Ar "FILE"
+.Oc
+.Ar ...
+.Nm sha3sum
+.Oo
+.Fl c[sw]
+.Oc
+.Oo
+.Fl a
+.Ar "BITS"
+.Oc
+.Oo
+.Ar "FILE"
+.Oc
+.Ar ...
+.Nm sha512sum
+.Oo
+.Fl c[sw]
+.Oc
+.Oo
+.Ar "FILE"
+.Oc
+.Ar ...
+.Nm shred
+.Oo
+.Fl fuz
+.Oc
+.Oo
+.Fl n
+.Ar "N"
+.Oc
+.Oo
+.Fl s
+.Ar "SIZE"
+.Oc
+.Ar "FILE"
+.Ar ...
+.Nm shuf
+.Oo
+.Fl n
+.Ar "NUM"
+.Oc
+.Oo
+.Fl o
+.Ar "FILE"
+.Oc
+.Oo
+.Fl z
+.Oc
+.Oo
+.Ar "FILE"
+.No \&|
+.Fl e
+.Oo
+.Ar "ARG"
+.Ar ...
+.Oc
+.No \&|
+.Fl i
+.Ar "L-H"
+.Oc
+.Nm sleep
+.Oo
+.Ar "N"
+.Oc
+.Ar ...
+.Nm sort
+.Op Fl nrughMcszbdfiokt
+.Op Fl o Ar FILE
+.Op Fl k Ar START[.OFS][OPTS][,END[.OFS][OPTS]]
+.Op Fl t Ar CHAR
+.Op Ar FILE
+.Ar ...
+.Nm split
+.Oo
+.Ar "OPTIONS"
+.Oc
+.Oo
+.Ar "INPUT"
+.Oo
+.Ar "PREFIX"
+.Oc
+.Oc
+.Nm stat
+.Oo
+.Fl Ltf
+.Oc
+.Oo
+.Fl c
+.Ar "FMT"
+.Oc
+.Ar "FILE"
+.Ar ...
+.Nm stty
+.Oo
+.Fl a|g
+.Oc
+.Oo
+.Fl F
+.Ar "DEVICE"
+.Oc
+.Oo
+.Ar "SETTING"
+.Oc
+.Ar ...
+.Nm sum
+.Oo
+.Fl rs
+.Oc
+.Oo
+.Ar "FILE"
+.Oc
+.Ar ...
+.Nm sync
+.Oo
+.Fl df
+.Oc
+.Oo
+.Ar "FILE"
+.Oc
+.Ar ...
+.Nm tac
+.Oo
+.Ar "FILE"
+.Oc
+.Ar ...
+.Nm tail
+.Oo
+.Ar "OPTIONS"
+.Oc
+.Oo
+.Ar "FILE"
+.Oc
+.Ar ...
+.Nm tee
+.Oo
+.Fl ai
+.Oc
+.Oo
+.Ar "FILE"
+.Oc
+.Ar ...
+.Nm test
+.Ar "EXPRESSION"
+.Nm timeout
+.Oo
+.Fl s
+.Ar "SIG"
+.Oc
+.Oo
+.Fl k
+.Ar "KILL_SECS"
+.Oc
+.Ar "SECS"
+.Ar "PROG"
+.Ar "ARGS"
+.Nm touch
+.Oo
+.Fl cham
+.Oc
+.Oo
+.Fl d
+.Ar "DATE"
+.Oc
+.Oo
+.Fl t
+.Ar "DATE"
+.Oc
+.Oo
+.Fl r
+.Ar "FILE"
+.Oc
+.Ar "FILE"
+.Ar ...
+.Nm tr
+.Oo
+.Fl cds
+.Oc
+.Ar "STRING1"
+.Oo
+.Ar "STRING2"
+.Oc
+.Nm true
+.Nm truncate
+.Oo
+.Fl c
+.Oc
+.Fl s
+.Ar "SIZE"
+.Ar "FILE"
+.Ar ...
+.Nm tsort
+.Oo
+.Ar "FILE"
+.Oc
+.Nm tty
+.Oo
+.Fl s
+.Oc
+.Nm uname
+.Oo
+.Fl amnrspvio
+.Oc
+.Nm unexpand
+.Oo
+.Fl fa
+.Oc
+.Oo
+.Fl t
+.Ar "N"
+.Oc
+.Oo
+.Ar "FILE"
+.Oc
+.Ar ...
+.Nm uniq
+.Oo
+.Fl cduiz
+.Oc
+.Oo
+.Fl f,s,w
+.Ar "N"
+.Oc
+.Oo
+.Ar "FILE"
+.Oo
+.Ar "OUTFILE"
+.Oc
+.Oc
+.Nm unix2dos
+.Oo
+.Fl ud
+.Oc
+.Oo
+.Ar "FILE"
+.Oc
+.Nm unlink
+.Ar "FILE"
+.Nm users
+.Nm usleep
+.Ar "N"
+.Nm uudecode
+.Oo
+.Fl o
+.Ar "OUTFILE"
+.Oc
+.Oo
+.Ar "INFILE"
+.Oc
+.Nm uuencode
+.Oo
+.Fl m
+.Oc
+.Oo
+.Ar "FILE"
+.Oc
+.Ar "STORED_FILENAME"
+.Nm w
+.Nm wc
+.Oo
+.Fl cmlwL
+.Oc
+.Oo
+.Ar "FILE"
+.Oc
+.Ar ...
+.Nm who
+.Oo
+.Fl aH
+.Oc
+.Nm whoami
+.Nm yes
+.Oo
+.Ar "STRING"
+.Oc
+.Sh DESCRIPTION
+These are the coreutils applets of BusyBox 1.36.1 as built for Rach2.
+The os-real image and installed root use these applets.
+.Pp
+The os-simple image instead uses the project's teaching implementations of
+.Nm true ,
+.Nm false ,
+.Nm echo ,
+.Nm yes ,
+.Nm cat ,
+.Nm pwd ,
+.Nm touch ,
+.Nm mkdir ,
+.Nm rm ,
+.Nm mv ,
+.Nm cp ,
+and
+.Nm ls .
+They parse no options except
+.Nm rm Fl r .
+That
+.Nm cat
+suppresses errors;
+.Nm ls
+lists one directory without calling
+.Fn stat .
+.Bl -tag -width sha256sum
+.It Nm arch
+Print the system architecture.
+.It Nm base32
+Encode or decode
+.Ar FILE
+as base32, writing to standard output.
+.It Nm base64
+Encode or decode
+.Ar FILE
+as base64, writing to standard output.
+.It Nm basename
+Remove the directory path and an optional
+.Ar SUFFIX
+from
+.Ar FILE .
+.It Nm cat
+Print files to standard output.
+.It Nm chgrp
+Change the group of files to
+.Ar GROUP .
+.It Nm chmod
+Change file modes.
+.Ar MODE
+is an octal number with bit pattern
+.Ql sstrwxrwxrwx ,
+or a symbolic mode of the form
+.Ql [ugoa]{+|-|=}[rwxXst] .
+.It Nm chown
+Change the owner or group of files to
+.Ar USER
+or
+.Ar GRP .
+.It Nm chroot
+Request a new root directory
+.Ar NEWROOT
+and run
+.Ar PROG .
+Rach2 does not implement the
+.Fn chroot
+system call.
+The applet fails before running the program.
+.It Nm cksum
+Calculate CRC32 checksums of files.
+.It Nm comm
+Compare
+.Ar FILE1
+with
+.Ar FILE2 .
+.It Nm cp
+Copy sources to
+.Ar DEST
+or
+.Ar DIRECTORY .
+.It Nm crc32
+Calculate CRC32 checksums of files.
+.It Nm cut
+Print selected fields from files to standard output.
+.It Nm date
+Display the time using
+.Ar +FMT ,
+or set the time.
+Rach2 does not implement the
+.Fn clock_settime
+system call, so setting the time fails.
+.It Nm dd
+Copy a file with conversion and formatting.
+.It Nm df
+Print file system usage statistics.
+.It Nm dirname
+Remove the last path component from
+.Ar FILENAME .
+.It Nm dos2unix
+Convert
+.Ar FILE
+in place from DOS to Unix text format.
+With no file, use standard input and standard output.
+.It Nm du
+Summarize the disk space used by files and directories.
+.It Nm echo
+Print arguments to standard output.
+.It Nm env
+Print the environment or run
+.Ar PROG
+with the specified environment.
+.It Nm expand
+Convert tabs to spaces and write to standard output.
+.It Nm expr
+Print the value of
+.Ar EXPRESSION .
+.It Nm factor
+Print prime factors.
+.It Nm false
+Return exit status 1.
+.It Nm fold
+Wrap lines from files or standard input and write to standard output.
+.It Nm fsync
+Write buffered file data to disk.
+The scope of the write is described in
+.Xr sync 2 .
+.It Nm groups
+Print the groups to which
+.Ar USER
+belongs.
+.It Nm head
+Print the first 10 lines of each file, or of standard input.
+With more than one file, precede each with a file name header.
+.It Nm hostid
+Print the machine's 32-bit host identifier.
+The musl implementation returns zero; this is not a unique machine identifier.
+.It Nm id
+Print information about
+.Ar USER ,
+or about the current user.
+.It Nm install
+Copy files and set their attributes.
+.It Nm link
+Create a hard link
+.Ar LINK
+to
+.Ar FILE .
+.It Nm ln
+Create
+.Ar LINK ,
+or a link in
+.Ar DIR ,
+to each
+.Ar TARGET .
+.It Nm logname
+Print the current user's name.
+.It Nm ls
+List directory contents.
+.It Nm md5sum
+Print or check MD5 checksums.
+.It Nm mkdir
+Create directories.
+.It Nm mkfifo
+Create a named pipe.
+Rach2 does not implement the required
+.Fn mknod
+system call, so creation fails.
+.It Nm mknod
+Create a block device, character device, or named pipe.
+Rach2 does not implement the required
+.Fn mknod
+system call, so creation fails.
+.It Nm mktemp
+Create a temporary file using
+.Ar TEMPLATE
+and print its name.
+The template must end in
+.Ql XXXXXX .
+Without a template,
+.Fl t Ar tmp.XXXXXX
+is assumed.
+The base directory is selected by
+.Fl p ,
+then
+.Ev TMPDIR ,
+then
+.Pa /tmp .
+.It Nm mv
+Rename
+.Ar SOURCE
+to
+.Ar DEST ,
+or move sources to
+.Ar DIRECTORY .
+.It Nm nice
+Request a scheduling priority adjustment and run
+.Ar PROG .
+Rach2 does not implement
+.Fn getpriority
+or
+.Fn setpriority .
+The failed priority change terminates the applet before it runs
+.Ar PROG .
+.It Nm nl
+Print files with line numbers.
+.It Nm nohup
+Run
+.Ar PROG
+with hangup signals ignored and output directed to a nonterminal.
+.It Nm nproc
+Print the number of available CPUs.
+.It Nm od
+Display file contents in the selected format.
+.It Nm paste
+Join lines from input files, separating them with tabs.
+.It Nm printenv
+Print the specified environment variables, or all variables if none are specified.
+.It Nm printf
+Format and print arguments according to
+.Ar FORMAT ,
+as in C printf.
+.It Nm pwd
+Print the full path of the current working directory.
+.It Nm readlink
+Print the value of a symbolic link.
+.It Nm realpath
+Print absolute paths of files.
+.It Nm rm
+Remove files.
+.It Nm rmdir
+Remove empty directories.
+.It Nm seq
+Print numbers from
+.Ar FIRST
+to
+.Ar LAST
+in steps of
+.Ar INC .
+.Ar FIRST
+and
+.Ar INC
+default to 1.
+.It Nm sha1sum
+Print or check SHA1 checksums.
+.It Nm sha256sum
+Print or check SHA256 checksums.
+.It Nm sha3sum
+Print or check SHA3 checksums.
+.It Nm sha512sum
+Print or check SHA512 checksums.
+.It Nm shred
+Overwrite or remove files.
+.It Nm shuf
+Randomly reorder lines.
+.It Nm sleep
+Sleep for the sum of the given times.
+Each argument may have a suffix s for seconds, m for minutes, h for hours, or d for days.
+Rach2 sleeps in ticks of 10 ms.
+.It Nm sort
+Sort lines of text.
+.It Nm split
+Split input into files with a common
+.Ar PREFIX .
+.It Nm stat
+Display file status, or file system status with
+.Fl f .
+Under
+.Pa /dev ,
+disk and partition nodes are block devices; boot devices are character
+devices, as described in
+.Xr disk 4 .
+The console, controlling terminal, and pseudoterminal multiplexer
+are character devices, as described in
+.Xr console 4 .
+.It Nm stty
+Set terminal attributes.
+With no arguments, print the baud rate, line discipline, and settings that differ from
+.Nm stty Cm sane .
+.It Nm sum
+Calculate checksums and count file blocks.
+.It Nm sync
+Write buffered file system data to disk.
+With no files, this calls
+.Xr sync 2 .
+.It Nm tac
+Concatenate files and print their lines in reverse order.
+.It Nm tail
+Print the last 10 lines of each file, or of standard input.
+With more than one file, precede each with a file name header.
+.It Nm tee
+Copy standard input to each
+.Ar FILE
+and to standard output.
+.It Nm test
+Check file types or compare values and return a status indicating the result.
+.It Nm timeout
+Run
+.Ar PROG
+and send it
+.Ar SIG
+if it has not exited after
+.Ar SECS
+seconds.
+.Ar SIG
+defaults to TERM; if the process remains after
+.Ar KILL_SECS
+more seconds, send KILL.
+.It Nm touch
+Update file modification times.
+.It Nm tr
+Translate, squeeze, or delete characters from standard input, writing to standard output.
+.It Nm true
+Return exit status 0.
+.It Nm truncate
+Set file lengths to
+.Ar SIZE .
+.It Nm tsort
+Perform a topological sort.
+.It Nm tty
+Print the file name of the terminal on standard input.
+.It Nm uname
+Print system information.
+.It Nm unexpand
+Convert spaces to tabs and write to standard output.
+.It Nm uniq
+Discard duplicate lines.
+.It Nm unix2dos
+Convert
+.Ar FILE
+in place from Unix to DOS text format.
+With no file, use standard input and standard output.
+.It Nm unlink
+Remove
+.Ar FILE
+by calling
+.Fn unlink .
+.It Nm users
+Print the users currently logged in.
+.It Nm usleep
+Sleep for
+.Ar N
+microseconds.
+Rach2 sleeps in ticks of 10 ms.
+.It Nm uudecode
+Decode a uuencoded file.
+Use the output name in the encoded input unless
+.Fl o
+supplies another name.
+.It Nm uuencode
+Encode
+.Ar FILE ,
+or standard input, and write to standard output.
+.It Nm w
+Show who is logged in.
+.It Nm wc
+Count lines, words, and bytes in files or standard input.
+.It Nm who
+Show who is logged in.
+.It Nm whoami
+Print the user name for the current effective user ID.
+.It Nm yes
+Repeatedly print a line containing
+.Ar STRING ,
+or y if no string is given.
+.El
+.Sh OPTIONS
+.Ss base32
+.Bl -tag -width Ds
+.It Fl d
+Decode data.
+.It Fl w Ar "COL"
+Wrap lines at
+.Ar COL
+(default 76, 0 disables).
+.El
+.Ss base64
+.Bl -tag -width Ds
+.It Fl d
+Decode data.
+.It Fl w Ar "COL"
+Wrap lines at
+.Ar COL
+(default 76, 0 disables).
+.El
+.Ss basename
+.Bl -tag -width Ds
+.It Fl a
+All arguments are files.
+.It Fl s Ar "SUFFIX"
+Remove
+.Ar SUFFIX
+(implies
+.Fl a ) .
+.El
+.Ss cat
+.Bl -tag -width Ds
+.It Fl n
+Number output lines.
+.It Fl b
+Number nonempty lines.
+.It Fl v
+Show nonprinting characters as
+.Ql ^x
+or
+.Ql M-x .
+.It Fl t
+Show nonprinting characters and tabs as
+.Ql ^I .
+.It Fl e
+Show nonprinting characters and mark line ends with
+.Ql $ .
+.It Fl A
+Same as
+.Fl vte .
+.El
+.Ss chgrp
+.Bl -tag -width Ds
+.It Fl h
+Affect symbolic links instead of symbolic link targets.
+.It Fl L
+Traverse all symbolic links to directories.
+.It Fl H
+Traverse symbolic links on command line only.
+.It Fl P
+Do not traverse symbolic links (default).
+.El
+.Ss chown
+.Bl -tag -width Ds
+.It Fl h
+Affect symbolic links instead of symbolic link targets.
+.It Fl L
+Traverse all symbolic links to directories.
+.It Fl H
+Traverse symbolic links on command line only.
+.It Fl P
+Do not traverse symbolic links (default).
+.El
+.Ss comm
+.Bl -tag -width Ds
+.It Fl 1
+Suppress lines unique to
+.Ar FILE1 .
+.It Fl 2
+Suppress lines unique to
+.Ar FILE2 .
+.It Fl 3
+Suppress lines common to both files.
+.El
+.Ss cp
+.Bl -tag -width Ds
+.It Fl a
+Same as
+.Fl dpR .
+.It Fl R , Fl r
+Recurse.
+.It Fl d , Fl P
+Preserve symbolic links (default if
+.Fl R ) .
+.It Fl L
+Follow all symbolic links.
+.It Fl H
+Follow symbolic links on command line.
+.It Fl p
+Preserve file attributes if possible.
+.It Fl f
+Overwrite.
+.It Fl i
+Prompt before overwrite.
+.It Fl n
+Do not overwrite.
+.It Fl l
+Create hard links.
+.It Fl s
+Create symbolic links.
+.It Fl T
+Refuse to copy if
+.Ar DEST
+is a directory.
+.It Fl t Ar "DIR"
+Copy all sources into
+.Ar DIR .
+.It Fl u
+Copy only newer files.
+.El
+.Ss cut
+.Bl -tag -width Ds
+.It Fl b Ar "LIST"
+Output only bytes from
+.Ar LIST .
+.It Fl c Ar "LIST"
+Output only characters from
+.Ar LIST .
+.It Fl d Ar "SEP"
+Field delimiter for input (default
+.Fl f
+TAB,
+.Fl F
+run of whitespace).
+.It Fl O Ar "SEP"
+Field delimiter for output (default =
+.Fl d
+for
+.Fl f ,
+one space for
+.Fl F ) .
+.It Fl D
+Do not sort or collate selected sections.
+With
+.Fl f
+or
+.Fl F ,
+do not match lines without a delimiter.
+.It Fl f Ar "LIST"
+Print the listed fields;
+.Fl d
+specifies a single delimiter character.
+.It Fl F Ar "LIST"
+Print the listed fields;
+.Fl d
+specifies a regular expression delimiter.
+.It Fl s
+Output only lines containing delimiter.
+.It Fl n
+Ignored.
+.El
+.Ss date
+.Bl -tag -width Ds
+.It Fl u
+Work in UTC (do not convert to local time).
+.It Oo Fl s Oc Ar TIME
+Set time to
+.Ar TIME .
+.It Fl d Ar "TIME"
+Display
+.Ar TIME
+instead of the current time.
+.It Fl D Ar "FMT"
+.Ar FMT
+(strptime format) for
+.Fl s
+and
+.Fl d Ar TIME
+conversion.
+.El
+.Ss dd
+.Bl -tag -width Ds
+.It Ql "if=FILE"
+Read from
+.Ar FILE
+instead of standard input.
+.It Ql "of=FILE"
+Write to
+.Ar FILE
+instead of standard output.
+.It Ql "bs=N"
+Read and write
+.Ar N
+bytes at a time.
+.It Ql "ibs=N"
+Read
+.Ar N
+bytes at a time.
+.It Ql "obs=N"
+Write
+.Ar N
+bytes at a time.
+.It Ql "count=N"
+Copy only
+.Ar N
+input blocks.
+.It Ql "skip=N"
+Skip
+.Ar N
+input blocks.
+.It Ql "seek=N"
+Skip
+.Ar N
+output blocks.
+.It Ql "conv=notrunc"
+Do not truncate output file.
+.It Ql "conv=noerror"
+Continue after read errors.
+.It Ql "conv=sync"
+Pad blocks with zeros.
+.It Ql "conv=fsync"
+Physically write data out before finishing.
+.It Ql "conv=swab"
+Swap every pair of bytes.
+.It Ql "iflag=skip_bytes"
+.Cm skip Ns = Ns Ar N
+is in bytes.
+.It Ql "iflag=count_bytes"
+.Cm count Ns = Ns Ar N
+is in bytes.
+.It Ql "oflag=seek_bytes"
+.Cm seek Ns = Ns Ar N
+is in bytes.
+.It Ql "iflag=direct"
+O_DIRECT input.
+.It Ql "oflag=direct"
+O_DIRECT output.
+.It Ql "iflag=fullblock"
+Read full blocks.
+.It Ql "oflag=append"
+Open output in append mode.
+.It Ql "status=noxfer"
+Suppress rate output.
+.It Ql "status=none"
+Suppress all output.
+.El
+.Pp
+The numeric suffixes are c (1), w (2), b (512), kB (1000),
+k (1024), MB, M, GB, and G.
+.Ss df
+.Bl -tag -width Ds
+.It Fl P
+POSIX output format.
+.It Fl k
+1024-byte blocks (default).
+.It Fl m
+1M-byte blocks.
+.It Fl h
+Print sizes with unit suffixes, such as 1K, 243M, or 2G.
+.It Fl T
+Print file system type.
+.It Fl t Ar "TYPE"
+Print only mounts of this type.
+.It Fl a
+Show all file systems.
+.It Fl i
+Report inode usage.
+.It Fl B Ar "SIZE"
+Set the block size.
+.El
+.Ss dos2unix
+.Bl -tag -width Ds
+.It Fl u
+Convert from DOS to Unix format.
+.It Fl d
+Convert from Unix to DOS format.
+.El
+.Ss du
+.Bl -tag -width Ds
+.It Fl a
+Show file sizes too.
+.It Fl b
+Apparent size (including holes).
+.It Fl L
+Follow all symbolic links.
+.It Fl H
+Follow symbolic links on command line.
+.It Fl d Ar "N"
+Limit output to directories, and files with
+.Fl a ,
+at depth no greater than
+.Ar N .
+.It Fl c
+Show grand total.
+.It Fl l
+Count sizes many times if hard linked.
+.It Fl s
+Display only a total for each argument.
+.It Fl x
+Skip directories on different file systems.
+.It Fl h
+Print sizes with unit suffixes, such as 1K, 243M, or 2G.
+.It Fl m
+Sizes in megabytes.
+.It Fl k
+Sizes in kilobytes (default).
+.El
+.Ss echo
+.Bl -tag -width Ds
+.It Fl n
+No trailing newline.
+.It Fl e
+Interpret backslash escapes, such as
+.Ql \et
+for a tab.
+.It Fl E
+Do not interpret backslash escapes (default).
+.El
+.Ss expand
+.Bl -tag -width Ds
+.It Fl i
+Do not convert tabs after nonblank characters.
+.It Fl t Ar N
+Tab stops every
+.Ar N
+characters.
+.El
+.Ss fold
+.Bl -tag -width Ds
+.It Fl b
+Count bytes rather than columns.
+.It Fl s
+Break at spaces.
+.It Fl w Ar "WIDTH"
+Use
+.Ar WIDTH
+columns instead of 80.
+.El
+.Ss fsync
+.Bl -tag -width Ds
+.It Fl d
+Request a data-only flush.
+On Rach2, fdatasync uses the same handler as fsync and also flushes metadata.
+.El
+.Ss head
+.Bl -tag -width Ds
+.It Fl n Ar "N[bkm]"
+Print first
+.Ar N
+lines.
+.It Fl n Ar "-N[bkm]"
+Print all except
+.Ar N
+last lines.
+.It Fl c Ar "[-]N[bkm]"
+Print first
+.Ar N
+bytes.
+.It Fl q
+Never print headers.
+.It Fl v
+Always print headers.
+.El
+.Pp
+The numeric suffixes b, k, and m multiply the count by 512, 1024,
+and 1048576, respectively.
+.Ss id
+.Bl -tag -width Ds
+.It Fl u
+User ID.
+.It Fl g
+Group ID.
+.It Fl G
+Supplementary group IDs.
+.It Fl n
+Print names instead of numbers.
+.It Fl r
+Print the real ID instead of the effective ID.
+.El
+.Ss install
+.Bl -tag -width Ds
+.It Fl c
+Just copy (default).
+.It Fl d
+Create directories.
+.It Fl D
+Create leading target directories.
+.It Fl s
+Strip symbol table.
+.It Fl p
+Preserve date.
+.It Fl o Ar "USER"
+Set ownership.
+.It Fl g Ar "GRP"
+Set group ownership.
+.It Fl m Ar "MODE"
+Set permissions.
+.It Fl t Ar "DIR"
+Install to
+.Ar DIR .
+.El
+.Ss ln
+.Bl -tag -width Ds
+.It Fl s
+Make symbolic links instead of hard links.
+.It Fl f
+Remove existing destinations.
+.It Fl n
+Treat symbolic links as ordinary files without following them.
+.It Fl b
+Make a backup of the target (if exists) before link operation.
+.It Fl S Ar "SUF"
+Use the suffix instead of
+.Ql ~
+for backup files.
+.It Fl T
+Treat
+.Ar LINK
+as a file, not
+.Ar DIR .
+.It Fl v
+Verbose.
+.El
+.Ss ls
+.Bl -tag -width Ds
+.It Fl 1
+Use one output column.
+.It Fl a
+Include names beginning with a period.
+.It Fl A
+Like
+.Fl a ,
+but exclude
+.Ql \&.
+and
+.Ql .. .
+.El
+.Ss md5sum
+.Bl -tag -width Ds
+.It Fl c
+Check sums against list in files.
+.It Fl s
+Do not output anything, status code shows success.
+.It Fl w
+Warn about improperly formatted checksum lines.
+.El
+.Ss mkdir
+.Bl -tag -width Ds
+.It Fl m Ar "MODE"
+Set the mode.
+.It Fl p
+Do not report an error if the directory exists.
+Create parent directories as needed.
+.El
+.Ss mkfifo
+.Bl -tag -width Ds
+.It Fl m Ar "MODE"
+Set the mode (default
+.Ql a=rw ) .
+.El
+.Ss mknod
+.Bl -tag -width Ds
+.It Fl m Ar "MODE"
+Set the creation mode (default
+.Ql a=rw ) .
+.It Ql "b"
+Block device.
+.It Ql "c or u"
+Character device.
+.It Ql "p"
+Named pipe; omit
+.Ar MAJOR
+and
+.Ar MINOR .
+.El
+.Ss mktemp
+.Bl -tag -width Ds
+.It Fl d
+Create a directory.
+.It Fl q
+Fail silently on errors.
+.It Fl t
+Prepend base directory name to
+.Ar TEMPLATE .
+.It Fl p Ar "DIR"
+Use
+.Ar DIR
+as a base directory (implies
+.Fl t ) .
+.It Fl u
+Do not create anything; print a name.
+.El
+.Ss mv
+.Bl -tag -width Ds
+.It Fl f
+Do not prompt before overwriting.
+.It Fl i
+Prompt before overwriting.
+.It Fl n
+Do not overwrite an existing file.
+.It Fl T
+Refuse to move if
+.Ar DEST
+is a directory.
+.It Fl t Ar "DIR"
+Move all sources into
+.Ar DIR .
+.El
+.Ss nice
+.Bl -tag -width Ds
+.It Fl n Ar "ADJUST"
+Request a priority adjustment of
+.Ar ADJUST .
+.El
+.Ss nl
+.Bl -tag -width Ds
+.It Fl b Ar "STYLE"
+Select lines to number:
+.Ql a
+for all,
+.Ql t
+for nonempty lines, or
+.Ql n
+for none.
+.El
+.Ss nproc
+.Bl -tag -width Ds
+.It Fl -all
+Print the number of installed CPUs.
+.It Fl -ignore Ns = Ns Ar N
+Exclude
+.Ar N
+CPUs.
+.El
+.Ss paste
+.Bl -tag -width Ds
+.It Fl s
+Process one file at a time.
+.It Fl d Ar "LIST"
+Use delimiters from
+.Ar LIST ,
+not tab.
+.El
+.Ss readlink
+.Bl -tag -width Ds
+.It Fl f
+Canonicalize by following all symbolic links.
+.It Fl n
+Do not add newline.
+.It Fl v
+Verbose.
+.El
+.Ss rm
+.Bl -tag -width Ds
+.It Fl i
+Always prompt before removing.
+.It Fl f
+Never prompt.
+.It Fl R , Fl r
+Recurse.
+.El
+.Ss rmdir
+.Bl -tag -width Ds
+.It Fl -ignore-fail-on-non-empty
+Ignore failures caused by nonempty directories.
+.It Fl p
+Include parents.
+.El
+.Ss seq
+.Bl -tag -width Ds
+.It Fl w
+Pad to last with leading zeros.
+.It Fl s Ar "SEP"
+String separator.
+.El
+.Ss sha1sum
+.Bl -tag -width Ds
+.It Fl c
+Check sums against list in files.
+.It Fl s
+Do not output anything, status code shows success.
+.It Fl w
+Warn about improperly formatted checksum lines.
+.El
+.Ss sha256sum
+.Bl -tag -width Ds
+.It Fl c
+Check sums against list in files.
+.It Fl s
+Do not output anything, status code shows success.
+.It Fl w
+Warn about improperly formatted checksum lines.
+.El
+.Ss sha3sum
+.Bl -tag -width Ds
+.It Fl c
+Check sums against list in files.
+.It Fl s
+Do not output anything, status code shows success.
+.It Fl w
+Warn about improperly formatted checksum lines.
+.It Fl a Ar "BITS"
+224 (default), 256, 384, 512.
+.El
+.Ss sha512sum
+.Bl -tag -width Ds
+.It Fl c
+Check sums against list in files.
+.It Fl s
+Do not output anything, status code shows success.
+.It Fl w
+Warn about improperly formatted checksum lines.
+.El
+.Ss shred
+.Bl -tag -width Ds
+.It Fl f
+Change file mode to ensure writability.
+.It Fl s Ar "SIZE"
+Size to write.
+.It Fl n Ar "N"
+Overwrite
+.Ar N
+times (default 3).
+.It Fl z
+Final overwrite with zeros.
+.It Fl u
+Remove file.
+.El
+.Ss shuf
+.Bl -tag -width Ds
+.It Fl n Ar "NUM"
+Output at most
+.Ar NUM
+lines.
+.It Fl o Ar "FILE"
+Write to
+.Ar FILE ,
+not standard output.
+.It Fl z
+Terminate output with NUL bytes.
+.It Fl e
+Treat arguments as lines.
+.It Fl i Ar "L-H"
+Treat the numbers from
+.Ar L
+through
+.Ar H
+as lines.
+.El
+.Ss sort
+.Bl -tag -width Ds
+.It Fl o Ar "FILE"
+Output to
+.Ar FILE .
+.It Fl c
+Check whether input is sorted.
+.It Fl b
+Ignore leading blanks.
+.It Fl f
+Ignore case.
+.It Fl i
+Ignore unprintable characters.
+.It Fl d
+Dictionary order (blank or alphanumeric only).
+.El
+.Ss split
+.Bl -tag -width Ds
+.It Fl b Ar "N[k|m]"
+Split by
+.Ar N
+(kilo|mega)bytes.
+.It Fl l Ar "N"
+Split by
+.Ar N
+lines.
+.It Fl a Ar "N"
+Use
+.Ar N
+letters as suffix.
+.El
+.Ss stat
+.Bl -tag -width Ds
+.It Fl c Ar "FMT"
+Use the specified format.
+.It Fl f
+Display file system status.
+.It Fl L
+Follow links.
+.It Fl t
+Terse display.
+.El
+.Ss stty
+.Bl -tag -width Ds
+.It Fl F Ar "DEVICE"
+Open device instead of standard input.
+.It Fl a
+Print all current settings in human-readable form.
+.It Fl g
+Print in stty-readable form.
+.El
+.Ss sum
+.Bl -tag -width Ds
+.It Fl r
+Use the BSD checksum algorithm with 1024-byte blocks.
+.It Fl s
+Use the System V checksum algorithm with 512-byte blocks.
+.El
+.Ss sync
+.Bl -tag -width Ds
+.It Fl d
+Request a data-only flush.
+On Rach2, fdatasync uses the same handler as fsync and also flushes metadata.
+.It Fl f
+Request a flush of the file systems containing the files.
+Rach2 has no syncfs system call; this option does not flush them, and the applet ignores the error.
+.El
+.Ss tail
+.Bl -tag -width Ds
+.It Fl c Ar "[+]N[bkm]"
+Print last
+.Ar N
+bytes.
+.It Fl n Ar "N[bkm]"
+Print last
+.Ar N
+lines.
+.It Fl n Ar "+N[bkm]"
+Start on Nth line and print the rest.
+.It Fl q
+Never print headers.
+.It Fl v
+Always print headers.
+.It Fl f
+Print data as file grows.
+.It Fl F
+Same as
+.Fl f ,
+but keep retrying.
+.It Fl s Ar "SECONDS"
+Wait
+.Ar SECONDS
+between reads with
+.Fl f .
+.El
+.Pp
+The numeric suffixes b, k, and m multiply the count by 512, 1024,
+and 1048576, respectively.
+.Ss tee
+.Bl -tag -width Ds
+.It Fl a
+Append to the given files, do not overwrite.
+.It Fl i
+Ignore interrupt signals (SIGINT).
+.El
+.Ss touch
+.Bl -tag -width Ds
+.It Fl c
+Do not create files.
+.It Fl h
+Do not follow links.
+.It Fl a
+Change only atime.
+.It Fl m
+Change only mtime.
+.It Fl d Ar "DT"
+Date/time to use.
+.It Fl t Ar "DT"
+Date/time to use.
+.It Fl r Ar "FILE"
+Use
+.Ar FILE Ns 's
+date and time.
+.El
+.Ss tr
+.Bl -tag -width Ds
+.It Fl c
+Take complement of
+.Ar STRING1 .
+.It Fl d
+Delete input characters coded
+.Ar STRING1 .
+.It Fl s
+Squeeze multiple output characters of
+.Ar STRING2
+into one character.
+.El
+.Ss truncate
+.Bl -tag -width Ds
+.It Fl c
+Do not create files.
+.It Fl s Ar "SIZE"
+Set the file length to
+.Ar SIZE .
+.El
+.Ss tty
+.Bl -tag -width Ds
+.It Fl s
+Print nothing, only return exit status.
+.El
+.Ss uname
+.Bl -tag -width Ds
+.It Fl a
+Print all information.
+.It Fl m
+Machine (hardware) type.
+.It Fl n
+Hostname.
+.It Fl r
+Kernel release.
+.It Fl s
+Kernel name (default).
+.It Fl p
+Processor type.
+.It Fl v
+Kernel version.
+.It Fl i
+Hardware platform.
+.It Fl o
+Operating system name.
+.El
+.Ss unexpand
+.Bl -tag -width Ds
+.It Fl a
+Convert all blanks.
+.It Fl f
+Convert only leading blanks.
+.It Fl t Ar "N"
+Tab stops every
+.Ar N
+characters.
+.El
+.Ss uniq
+.Bl -tag -width Ds
+.It Fl c
+Prefix lines by the number of occurrences.
+.It Fl d
+Only print duplicate lines.
+.It Fl u
+Only print unique lines.
+.It Fl i
+Ignore case.
+.It Fl z
+Terminate output with NUL bytes.
+.It Fl f Ar "N"
+Skip first
+.Ar N
+fields.
+.It Fl s Ar "N"
+Skip first
+.Ar N
+characters (after any skipped fields).
+.It Fl w Ar "N"
+Compare
+.Ar N
+characters in line.
+.El
+.Ss unix2dos
+.Bl -tag -width Ds
+.It Fl u
+Convert from DOS to Unix format.
+.It Fl d
+Convert from Unix to DOS format.
+.El
+.Ss uuencode
+.Bl -tag -width Ds
+.It Fl m
+Use base64 encoding per RFC1521.
+.El
+.Ss wc
+.Bl -tag -width Ds
+.It Fl c
+Count bytes.
+.It Fl m
+Count characters.
+.It Fl l
+Count newlines.
+.It Fl w
+Count words.
+.It Fl L
+Print longest line length.
+.El
+.Ss who
+.Bl -tag -width Ds
+.It Fl a
+Show all entries.
+.It Fl H
+Print column headers.
+.El
+.Ss expr expressions
+Many operators must be quoted or escaped for the shell.
+Comparisons are arithmetic when both operands are numbers and
+lexicographical otherwise.
+.Bl -tag -width Ds
+.It Ar ARG1 Cm \&| Ar ARG2
+Return ARG1 if it is neither null nor zero; otherwise return ARG2.
+.It Ar ARG1 Cm & Ar ARG2
+Return ARG1 if neither operand is null or zero; otherwise return zero.
+.It Ar ARG1 Cm < Ar ARG2
+Return 1 if ARG1 is less than ARG2, and 0 otherwise.
+The other comparisons are
+.Ql <= ,
+.Ql = ,
+.Ql != ,
+.Ql >= ,
+and
+.Ql > .
+.It Ar ARG1 Cm + Ar ARG2
+Add the operands.
+The other arithmetic operators are
+.Ql - ,
+.Ql * ,
+.Ql / ,
+and
+.Ql % .
+.It Ar STRING Cm \&: Ar REGEXP
+Match a regular expression at the beginning of STRING.
+.Ql match STRING REGEXP
+is equivalent.
+Return the text matched between
+.Ql \e(
+and
+.Ql \e) ,
+or null if it does not match.
+Without those delimiters, return the number of characters matched,
+or zero.
+.It Cm substr Ar STRING POS LEN
+Extract a substring; positions start at 1.
+.It Cm index Ar STRING CHARS
+Return the position of the first character from CHARS in STRING,
+or zero.
+.It Cm length Ar STRING
+Return the string length.
+.It Cm quote Ar TOKEN
+Treat TOKEN as a string even if it is an operator or keyword.
+.It Pq Ar EXPRESSION
+Evaluate the enclosed expression.
+.El
+.Ss stat formats
+The file format conversions are:
+.Bl -tag -width Ds
+.It Ql \&%a
+Access rights in octal.
+.It Ql \&%A
+Access rights in human readable form.
+.It Ql \&%b
+Number of blocks allocated;
+.Ql \&%B
+gives the block size.
+.It Ql \&%B
+Size in bytes of each block reported by %b.
+.It Ql \&%d
+Device number in decimal.
+.It Ql \&%D
+Device number in hex.
+.It Ql \&%f
+Raw mode in hex.
+.It Ql \&%F
+File type.
+.It Ql \&%g
+Group ID.
+.It Ql \&%G
+Group name.
+.It Ql \&%h
+Number of hard links.
+.It Ql \&%i
+Inode number.
+.It Ql \&%n
+File name.
+.It Ql \&%N
+File name, with ->
+.Ar TARGET
+if symbolic link.
+.It Ql \&%o
+I/O block size.
+.It Ql \&%s
+Total size in bytes.
+.It Ql \&%t
+Major device type in hex.
+.It Ql \&%T
+Minor device type in hex.
+.It Ql \&%u
+User ID.
+.It Ql \&%U
+User name.
+.It Ql \&%x
+Time of last access.
+.It Ql \&%X
+Time of last access as seconds since Epoch.
+.It Ql \&%y
+Time of last modification.
+.It Ql \&%Y
+Time of last modification as seconds since Epoch.
+.It Ql \&%z
+Time of last change.
+.It Ql \&%Z
+Time of last change as seconds since Epoch.
+.El
+.Pp
+File system format conversions:
+.Bl -tag -width Ds
+.It Ql \&%a
+Free blocks available to non-superuser.
+.It Ql \&%b
+Total data blocks.
+.It Ql \&%c
+Total file nodes.
+.It Ql \&%d
+Free file nodes.
+.It Ql \&%f
+Free blocks.
+.It Ql \&%i
+File system ID in hexadecimal.
+.It Ql \&%l
+Maximum length of file names.
+.It Ql \&%n
+File name.
+.It Ql \&%s
+Block size (for faster transfer).
+.It Ql \&%S
+Fundamental block size (for block counts).
+.It Ql \&%t
+Type in hex.
+.It Ql \&%T
+Type in human readable form.
+.El
+.Sh EXAMPLES
+.Dl basename /foo/bar.txt .txt
+.Dl head -n 2 /etc/passwd
+.Sh SEE ALSO
+.Xr sync 2 ,
+.Xr syscalls 2 ,
+.Xr console 4 ,
+.Xr disk 4
+.Sh HISTORY
+The applet descriptions are adapted from BusyBox 1.36.1 documentation,
+licensed under GPL-2.0.

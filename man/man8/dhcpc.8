@@ -1,0 +1,75 @@
+.Dd September 19, 2026
+.Dt DHCPC 8
+.Os
+.Sh NAME
+.Nm dhcpc
+.Nd acquire and maintain a DHCP lease
+.Sh SYNOPSIS
+.Nm
+.Op Fl i Ar INTERFACE
+.Op Fl b
+.Op Fl l Ar SECONDS
+.Nm
+.Fl i Ar INTERFACE
+.Fl k
+.Sh DESCRIPTION
+.Nm
+is the DHCP client for images without BusyBox.
+It validates the lease before applying the address, netmask, default route,
+and resolver configuration.
+A packet socket receives replies before the interface has an address.
+.Pp
+The client maintains the lease for as long as it runs.
+It renews at T1 and rebinds at T2.
+At expiry or on DHCPNAK, it removes the address and starts discovery again.
+Leases shorter than 10 seconds are ignored.
+Leases longer than one week, or the limit selected with
+.Fl l ,
+are capped.
+There is no configure-once mode.
+.Pp
+Only one client may hold an interface.
+The client creates
+.Pa /var/run/dhcpc.INTERFACE.pid
+with
+.Dv O_EXCL
+and records its process ID and configured address there.
+It does not use
+.Xr fcntl 2
+locks.
+.Pp
+On os-real, BusyBox's
+.Ic udhcpc
+performs this job through the same kernel interface; see
+.Xr busybox-networking 1 .
+.Sh OPTIONS
+.Bl -tag -width Ds
+.It Fl i Ar INTERFACE
+Use this interface.
+The default is
+.Ql eth0 .
+.It Fl b
+Enter the background after the first discovery round, which makes up to
+four requests, whether or not the interface was configured.
+.It Fl l Ar SECONDS
+Limit the lease to this many seconds.
+The accepted range is 10 through 604800.
+.It Fl k
+Stop the client recorded for the interface.
+.El
+.Sh FILES
+.Bl -tag -width Ds
+.It Pa /var/run/dhcpc.INTERFACE.pid
+The interface's client process ID and configured address.
+.It Pa /etc/resolv.conf
+Resolver configuration written from the lease.
+.El
+.Sh EXAMPLES
+Acquire and maintain a lease on eth0, entering the background after
+the first discovery round:
+.Dl dhcpc -b
+.Ql tests/run dhcp
+exercises lease acquisition, renewal, and expiry.
+.Sh SEE ALSO
+.Xr busybox-networking 1 ,
+.Xr netup 8

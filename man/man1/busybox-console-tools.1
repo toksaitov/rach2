@@ -1,0 +1,61 @@
+.Dd September 19, 2026
+.Dt BUSYBOX-CONSOLE-TOOLS 1
+.Os
+.Sh NAME
+.Nm busybox-console-tools ,
+.Nm clear ,
+.Nm reset ,
+.Nm resize ,
+.Nm setlogcons
+.Nd BusyBox console tools
+.Sh SYNOPSIS
+.Nm clear
+.Nm reset
+.Nm resize
+.Nm setlogcons
+.Op Ar N
+.Sh DESCRIPTION
+These are the console applets of BusyBox 1.36.1 as built for Rach2.
+.Bl -tag -width setlogcons
+.It Nm clear
+Clear the screen.
+The VGA console honors both emitted sequences:
+.Ql "ESC [H"
+moves the cursor home and
+.Ql "ESC [J"
+erases from the cursor to the end of the screen.
+.It Nm reset
+Reset the terminal display and restore terminal signal generation,
+line buffering, and echo.
+The VGA console honors the display reset
+.Pq Ql "ESC c" ,
+attribute reset
+.Pq Ql "ESC [m" ,
+and erase
+.Pq Ql "ESC [J" .
+It ignores the character set selection
+.Ql "ESC (B"
+and cursor visibility request
+.Ql "ESC [?25h" .
+.It Nm resize
+Query the terminal size and set its recorded window size.
+The VGA console honors the cursor save, move, and restore sequences,
+but ignores the scroll region request and does not answer the cursor
+position query
+.Ql "ESC [6n" .
+The applet waits for a reply that the VGA console does not supply;
+it does not resize that screen.
+.It Nm setlogcons
+Request that kernel output go to virtual console
+.Ar N ;
+the default, 0, requests no fixed virtual console.
+Rach2 does not provide the Linux virtual consoles or the
+.Dv TIOCLINUX
+request this applet requires.
+It cannot redirect kernel output.
+.El
+.Sh SEE ALSO
+.Xr console 4
+.Sh HISTORY
+The applet descriptions are adapted from BusyBox 1.36.1 usage text,
+licensed under GPL-2.0.

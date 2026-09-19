@@ -1,0 +1,76 @@
+.Dd September 19, 2026
+.Dt PING 1
+.Os
+.Sh NAME
+.Nm ping
+.Nd send ICMP echo requests
+.Sh SYNOPSIS
+.Nm
+.Op Ar host
+.Sh DESCRIPTION
+.Nm
+sends four ICMP echo requests to
+.Ar host .
+The default host is
+.Ql 10.0.2.2 ,
+QEMU's gateway.
+Root privilege is not required.
+.Pp
+The host may be an IPv4 address or a name.
+Names are looked up in
+.Pa /etc/hosts ,
+then through a DNS A query to the first valid
+.Ql nameserver
+in
+.Pa /etc/resolv.conf .
+The default DNS server is
+.Ql 10.0.2.3 .
+DNS retries last about six seconds.
+.Pp
+Each request uses the kernel's private
+.Dv SC_PING
+socket operation, described in
+.Xr ping 2 .
+The program issues a direct
+.Xr socketcall 2
+because musl has no wrapper for this operation.
+It prints each reply's round-trip time in milliseconds, measured in
+ticks of 10 ms, or reports a timeout.
+.Pp
+The kernel permits only one request in flight for the whole machine.
+If another request is in flight, the operation fails with
+.Er EBUSY
+and
+.Nm
+exits with a busy-request diagnostic rather than reporting a timeout.
+.Pp
+On os-real, this program is installed as
+.Pa /bin/ping .
+BusyBox's ping applet is not built.
+.Sh FILES
+.Bl -tag -width /etc/resolv.conf
+.It Pa /etc/hosts
+Host names and addresses.
+.It Pa /etc/resolv.conf
+DNS server configuration.
+.El
+.Sh EXIT STATUS
+.Nm
+returns 0 if at least one reply arrives and no request fails with
+.Er EBUSY .
+It returns 1 if no replies arrive, the host cannot be resolved, or
+another request is in flight.
+.Sh EXAMPLES
+.Dl ping 10.0.2.2
+The
+.Ql tests/run ping
+suite runs this command.
+.Sh DIAGNOSTICS
+.Bl -tag -width Ds
+.It Ql ping: another ping in flight
+Another request occupies the machine's single ICMP echo request.
+.El
+.Sh SEE ALSO
+.Xr busybox-networking 1 ,
+.Xr nc 1 ,
+.Xr ping 2

@@ -1,0 +1,119 @@
+.Dd September 19, 2026
+.Dt BUSYBOX-MAILUTILS 1
+.Os
+.Sh NAME
+.Nm busybox-mailutils ,
+.Nm makemime ,
+.Nm popmaildir ,
+.Nm reformime ,
+.Nm sendmail
+.Nd BusyBox mail tools
+.Sh SYNOPSIS
+.Nm makemime
+.Op Ar OPTIONS
+.Op Ar FILE
+.Ar ...
+.Nm popmaildir
+.Op Ar OPTIONS
+.Ar MAILDIR
+.Op Ar CONN_HELPER ARGS
+.Nm reformime
+.Op Ar OPTIONS
+.Nm sendmail
+.Op Fl tv
+.Op Fl f Ar SENDER
+.Oo
+.Fl amLOGIN No 4<user_pass.txt | Fl au Ns Ar USER Fl ap Ns Ar PASS
+.Oc
+.Op Fl w Ar SECS
+.Op Fl H Ar 'PROG ARGS' | Fl S Ar HOST
+.Op Ar RECIPIENT_EMAIL
+.Ar ...
+.Sh DESCRIPTION
+These are the mailutils applets of BusyBox 1.36.1 as built for Rach2.
+Rach2 has no mail system.
+.Bl -tag -width popmaildir
+.It Nm makemime
+Create a multipart MIME message from the specified files.
+It can create messages with attachments for
+.Nm sendmail .
+.It Nm popmaildir
+Fetch a remote mailbox into a local maildir.
+.It Nm reformime
+Parse a MIME message from standard input.
+.It Nm sendmail
+Read a message from standard input and send it.
+.El
+.Sh OPTIONS
+.Ss reformime
+.Bl -tag -width "-X PROG ARGS"
+.It Fl x Ar PREFIX
+Extract the contents of MIME sections to files.
+.It Fl X Ar PROG ARGS
+Filter the contents of MIME sections through
+.Ar PROG .
+This must be the last option.
+.El
+.Pp
+Other options are silently ignored.
+.Ss sendmail
+.Bl -tag -width "-S HOST[:PORT]"
+.It Fl t
+Read additional recipients from the message.
+.It Fl f Ar SENDER
+Use
+.Ar SENDER
+in
+.Ql MAIL FROM:<sender> .
+An empty string is permitted.
+The default is the user specified by
+.Fl au Ns Ar USER ,
+or the name of the current user ID.
+.It Fl o Ar OPTIONS
+Accept compatibility options.
+.Fl oi
+is implied; other values are ignored.
+.It Fl i
+A synonym for
+.Fl oi ;
+it is implied and ignored.
+.It Fl v
+Produce verbose output.
+.It Fl w Ar SECS
+Set the network timeout in seconds.
+.It Fl H Ar 'PROG ARGS'
+Run a connection helper.
+.Ev SMTP_ANTISPAM_DELAY
+specifies the seconds to wait after the helper connects.
+.It Fl S Ar HOST Ns Op : Ns Ar PORT
+Select the server.
+The default is
+.Ev SMTPHOST ,
+or
+.Ql 127.0.0.1 .
+.It Fl amLOGIN
+Authenticate with AUTH LOGIN.
+.It Fl amPLAIN
+Authenticate with AUTH PLAIN.
+.Fl amCRAM-MD5
+is not supported.
+.It Fl au Ns Ar USER
+Set the authentication user name.
+.It Fl ap Ns Ar PASS
+Set the authentication password.
+.El
+.Pp
+Without
+.Fl a
+options, no authentication is performed.
+With
+.Fl amLOGIN
+but no
+.Fl au
+or
+.Fl ap ,
+the user name and password are read from file descriptor 4.
+Other options are silently ignored.
+.Sh HISTORY
+The applet descriptions are adapted from BusyBox 1.36.1 usage text,
+licensed under GPL-2.0.

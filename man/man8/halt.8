@@ -1,0 +1,94 @@
+.Dd September 19, 2026
+.Dt HALT 8
+.Os
+.Sh NAME
+.Nm halt ,
+.Nm poweroff ,
+.Nm reboot
+.Nd stop or restart the machine
+.Sh SYNOPSIS
+.Ss os-simple
+.Nm halt
+.Op Fl p | Fl r
+.Ss os-real
+.Nm halt
+.Op Fl nfw
+.Op Fl d Ar SEC
+.Nm poweroff
+.Op Fl nf
+.Op Fl d Ar SEC
+.Nm reboot
+.Op Fl nf
+.Op Fl d Ar SEC
+.Sh DESCRIPTION
+On os-simple,
+.Nm halt
+is the project's program.
+It powers off the machine by default.
+It requires root privilege because it calls
+.Xr reboot 2 .
+It does not stop processes or services first.
+The kernel flushes the page cache and clears the dirty-mount flag
+inside the system call, with scheduling already disabled.
+.Pp
+On os-real, these names are BusyBox applets:
+.Nm halt
+halts the machine,
+.Nm poweroff
+turns off its power, and
+.Nm reboot
+restarts it.
+The standalone shell dispatches these applets before searching the
+file system; the project's program is not installed on os-real.
+.Pp
+The applets normally signal
+.Xr init 8 :
+.Dv SIGUSR1
+to halt,
+.Dv SIGUSR2
+to power off, and
+.Dv SIGTERM
+to restart.
+With
+.Fl f ,
+they call
+.Xr reboot 2
+directly.
+.Sh OPTIONS
+.Ss os-simple
+.Bl -tag -width Ds
+.It Fl p
+Power off the machine.
+This is the default.
+.It Fl r
+Restart the machine.
+.El
+.Ss os-real
+.Bl -tag -width Ds
+.It Fl d Ar SEC
+Delay the action by
+.Ar SEC
+seconds.
+.It Fl f
+Call
+.Xr reboot 2
+without going through init.
+.It Fl n
+Omit the applet's sync call.
+.It Fl w
+Only write a wtmp record.
+This option is listed for
+.Nm halt .
+.El
+.Sh EXAMPLES
+.Dl halt
+.Sh DIAGNOSTICS
+On os-simple, an invalid argument or more than one argument produces:
+.Dl usage: halt [-p|-r]
+.Sh SEE ALSO
+.Xr reboot 2 ,
+.Xr busybox-init 8 ,
+.Xr init 8
+.Sh HISTORY
+The BusyBox applet descriptions are adapted from BusyBox documentation,
+licensed under GPL-2.0.

@@ -1,0 +1,947 @@
+.Dd September 19, 2026
+.Dt BUSYBOX-NETWORKING 1
+.Os
+.Sh NAME
+.Nm busybox-networking ,
+.Nm arp ,
+.Nm arping ,
+.Nm dnsd ,
+.Nm dnsdomainname ,
+.Nm fakeidentd ,
+.Nm ftpd ,
+.Nm ftpget ,
+.Nm ftpput ,
+.Nm hostname ,
+.Nm httpd ,
+.Nm ifconfig ,
+.Nm ifdown ,
+.Nm ifup ,
+.Nm inetd ,
+.Nm ipcalc ,
+.Nm "busybox nc" ,
+.Nm netstat ,
+.Nm nslookup ,
+.Nm ntpd ,
+.Nm pscan ,
+.Nm route ,
+.Nm ssl_client ,
+.Nm tcpsvd ,
+.Nm telnet ,
+.Nm telnetd ,
+.Nm tftp ,
+.Nm tftpd ,
+.Nm traceroute ,
+.Nm udhcpc ,
+.Nm udpsvd ,
+.Nm vconfig ,
+.Nm wget ,
+.Nm whois
+.Nd BusyBox network tools
+.Sh SYNOPSIS
+.Nm arp
+.Op Fl vn
+.Op Fl H Ar HWTYPE
+.Op Fl i Ar IF
+.Fl a
+.Op Ar HOSTNAME
+.Nm arp
+.Op Fl v
+.Op Fl i Ar IF
+.Fl d Ar HOSTNAME
+.Op Cm pub
+.Nm arp
+.Op Fl v
+.Op Fl H Ar HWTYPE
+.Op Fl i Ar IF
+.Fl s Ar HOSTNAME HWADDR
+.Op Cm temp
+.Nm arp
+.Op Fl v
+.Op Fl H Ar HWTYPE
+.Op Fl i Ar IF
+.Fl s Ar HOSTNAME HWADDR
+.Op Cm netmask Ar MASK
+.Cm pub
+.Nm arp
+.Op Fl v
+.Op Fl H Ar HWTYPE
+.Op Fl i Ar IF
+.Fl Ds Ar HOSTNAME IFACE
+.Op Cm netmask Ar MASK
+.Cm pub
+.Nm arping
+.Op Fl fqbDUA
+.Op Fl c Ar CNT
+.Op Fl w Ar TIMEOUT
+.Op Fl I Ar IFACE
+.Op Fl s Ar SRC_IP
+.Ar DST_IP
+.Nm dnsd
+.Op Fl dvs
+.Op Fl c Ar CONFFILE
+.Op Fl t Ar TTL_SEC
+.Op Fl p Ar PORT
+.Op Fl i Ar ADDR
+.Nm dnsdomainname
+.Nm fakeidentd
+.Op Fl fiw
+.Op Fl b Ar ADDR
+.Op Ar STRING
+.Nm ftpd
+.Op Fl wvS
+.Op Fl a Ar USER
+.Op Fl t Ar SEC
+.Op Fl T Ar SEC
+.Op Ar DIR
+.Nm ftpget
+.Op Ar OPTIONS
+.Ar HOST
+.Op Ar LOCAL_FILE
+.Ar REMOTE_FILE
+.Nm ftpput
+.Op Ar OPTIONS
+.Ar HOST
+.Op Ar REMOTE_FILE
+.Ar LOCAL_FILE
+.Nm hostname
+.Op Fl sidf
+.Op Ar HOSTNAME | Fl F Ar FILE
+.Nm httpd
+.Op Fl ifv Ns Op v
+.Op Fl c Ar CONFFILE
+.Op Fl p Oo Ar IP : Oc Ns Ar PORT
+.Op Fl u Ar USER Ns Op : Ns Ar GRP
+.Op Fl r Ar REALM
+.Op Fl h Ar HOME
+.Nm httpd
+.Fl d | Fl e | Fl m
+.Ar STRING
+.Nm ifconfig
+.Op Fl a
+.Op Ar IFACE
+.Op Ar ADDRESS
+.Nm ifdown
+.Op Fl nmvf
+.Op Fl i Ar FILE
+.Fl a | Ar IFACE ...
+.Nm ifup
+.Op Fl nmvf
+.Op Fl i Ar FILE
+.Fl a | Ar IFACE ...
+.Nm inetd
+.Op Fl fe
+.Op Fl q Ar N
+.Op Fl R Ar N
+.Op Ar CONFFILE
+.Nm ipcalc
+.Op Fl bnmphs
+.Ar ADDRESS Ns Op / Ns Ar PREFIX
+.Op Ar NETMASK
+.Nm nc
+.Op Ar OPTIONS
+.Ar HOST PORT
+.Nm nc
+.Op Ar OPTIONS
+.Fl l
+.Fl p Ar PORT
+.Op Ar HOST
+.Op Ar PORT
+.Nm netstat
+.Op Fl ral
+.Op Fl tuwx
+.Op Fl enWp
+.Nm nslookup
+.Op Fl type= Ns Ar QUERY_TYPE
+.Op Fl debug
+.Ar HOST
+.Op Ar DNS_SERVER
+.Nm ntpd
+.Op Fl dnqNwl
+.Op Fl I Ar IFACE
+.Op Fl S Ar PROG
+.Op Fl k Ar KEYFILE
+.Op Fl p Oo Cm keyno: Ns Ar N : Oc Ns Ar PEER
+.Ar ...
+.Nm pscan
+.Op Fl cb
+.Op Fl p Ar MIN_PORT
+.Op Fl P Ar MAX_PORT
+.Op Fl t Ar TIMEOUT
+.Op Fl T Ar MIN_RTT
+.Ar HOST
+.Nm route
+.Op Fl ne
+.Op Fl A Cm inet Ns Op 6
+.Oo
+.Bro Cm add | del Brc
+.Op Fl net | Fl host
+.Ar TARGET
+.Op Cm netmask Ar MASK
+.Op Cm gw Ar GATEWAY
+.Op Cm metric Ar N
+.Op Cm mss Ar BYTES
+.Op Cm window Ar BYTES
+.Op Cm reject
+.Op Ar IFACE
+.Oc
+.Nm ssl_client
+.Op Fl e
+.Fl s Ar FD
+.Op Fl r Ar FD
+.Op Fl n Ar SNI
+.Nm tcpsvd
+.Op Fl hEv
+.Op Fl c Ar N
+.Op Fl C Ar N Ns Op : Ns Ar MSG
+.Op Fl b Ar N
+.Op Fl u Ar USER
+.Op Fl l Ar NAME
+.Ar IP PORT PROG
+.Nm telnet
+.Op Fl a
+.Op Fl l Ar USER
+.Ar HOST
+.Op Ar PORT
+.Nm telnetd
+.Op Ar OPTIONS
+.Nm tftp
+.Op Ar OPTIONS
+.Ar HOST
+.Op Ar PORT
+.Nm tftpd
+.Op Fl crl
+.Op Fl u Ar USER
+.Op Ar DIR
+.Nm traceroute
+.Op Fl Flnrv
+.Op Fl f Ar 1ST_TTL
+.Op Fl m Ar MAXTTL
+.Op Fl q Ar PROBES
+.Op Fl p Ar PORT
+.Op Fl t Ar TOS
+.Op Fl w Ar WAIT_SEC
+.Op Fl s Ar SRC_IP
+.Op Fl i Ar IFACE
+.Op Fl z Ar PAUSE_MSEC
+.Ar HOST
+.Op Ar BYTES
+.Nm udhcpc
+.Op Fl fbqRB
+.Op Fl t Ar N
+.Op Fl T Ar SEC
+.Op Fl A Ar SEC | Fl n
+.Op Fl i Ar IFACE
+.Op Fl s Ar PROG
+.Op Fl p Ar PIDFILE
+.Op Fl oC
+.Op Fl r Ar IP
+.Op Fl V Ar VENDOR
+.Op Fl F Ar NAME
+.Op Fl x Ar OPT:VAL
+.Ar ...
+.Op Fl O Ar OPT
+.Ar ...
+.Nm udpsvd
+.Op Fl hEv
+.Op Fl c Ar N
+.Op Fl u Ar USER
+.Op Fl l Ar NAME
+.Ar IP PORT PROG
+.Nm vconfig
+.Ar COMMAND
+.Op Ar OPTIONS
+.Nm wget
+.Op Fl cqS
+.Op Fl -spider
+.Op Fl O Ar FILE
+.Op Fl o Ar LOGFILE
+.Op Fl -header Ar STR
+.Op Fl -post-data Ar STR | Fl -post-file Ar FILE
+.Op Fl Y Cm on/off
+.Ar ...
+.Nm whois
+.Op Fl i
+.Op Fl h Ar SERVER
+.Op Fl p Ar PORT
+.Ar NAME ...
+.Sh DESCRIPTION
+These are the networking applets of BusyBox 1.36.1 as built for Rach2.
+They use the Rach2 network stack, which supports IPv4, TCP, UDP, and raw
+sockets for root.
+IPv6 options in the applets do not provide IPv6 on this kernel.
+See
+.Xr socketcall 2 .
+.Pp
+On os-real,
+.Xr ping 1
+is the project's program, not a BusyBox applet.
+The
+.Nm httpd
+and
+.Nm nc
+commands also have project implementations on os-simple; see
+.Xr nc 1
+and
+.Xr httpd 8 .
+.Bl -tag -width dnsdomainname
+.It Nm arp
+Display or change the ARP cache.
+.It Nm arping
+Send ARP requests or replies.
+.It Nm dnsd
+Run a small static DNS server.
+.It Nm dnsdomainname
+Display the DNS domain name.
+.It Nm fakeidentd
+Provide a fake ident authentication service.
+.It Nm ftpd
+Serve FTP requests as an inetd service.
+Change the root directory to
+.Ar DIR ;
+if this fails when run without root privilege, change the current directory
+to it instead.
+.It Nm ftpget
+Download a file through FTP using TCP.
+.It Nm ftpput
+Upload a file to an FTP server.
+.It Nm hostname
+Display or set the host name or DNS domain name.
+.It Nm httpd
+Listen for incoming HTTP requests.
+.It Nm ifconfig
+Configure a network interface through the interface ioctls supported by
+the kernel.
+.It Nm ifdown
+Deconfigure network interfaces.
+.It Nm ifup
+Configure network interfaces.
+.It Nm inetd
+Listen for network connections and start programs.
+.It Nm ipcalc
+Calculate and display network settings from an IP address.
+.It Nm nc
+Connect to a TCP server or listen for incoming connections.
+.It Nm netstat
+Display network information, reading
+.Pa /proc/net/tcp .
+.It Nm nslookup
+Query DNS about
+.Ar HOST ,
+using
+.Pa /etc/resolv.conf .
+.It Nm ntpd
+Run an NTP client or server.
+.It Nm pscan
+Scan
+.Ar HOST
+and print its open ports.
+.It Nm route
+Display or edit the kernel routing tables.
+.It Nm ssl_client
+Run the BusyBox SSL client.
+.It Nm tcpsvd
+Run
+.Ar PROG
+as a TCP service.
+.It Nm telnet
+Connect to a telnet server over TCP.
+.It Nm telnetd
+Handle incoming telnet connections.
+.It Nm tftp
+Transfer a file to or from a TFTP server.
+.It Nm tftpd
+Transfer files at the request of a TFTP client.
+It is an inetd service and can also run from
+.Nm udpsvd .
+.It Nm traceroute
+Trace the route to
+.Ar HOST .
+.It Nm udhcpc
+Obtain an address through DHCP.
+This is how os-real takes its address; the DHCP event script is
+.Pa /usr/share/udhcpc/default.script .
+.It Nm udpsvd
+Bind a UDP socket to
+.Ar IP : Ns Ar PORT
+and wait for packets.
+Run
+.Ar PROG
+for each packet, redirecting further packets from the same peer address
+and port to that program.
+.It Nm vconfig
+Create and remove virtual Ethernet devices.
+.It Nm wget
+Run the BusyBox wget TCP client.
+.It Nm whois
+Query WHOIS information about
+.Ar NAME .
+.El
+.Ss ifconfig arguments
+The BusyBox usage lists these additional interface settings:
+.Bl -tag -width "[[-]pointopoint [ADDRESS]]" -compact
+.It Cm add Ar ADDRESS Ns Op / Ns Ar PREFIXLEN
+.It Cm del Ar ADDRESS Ns Op / Ns Ar PREFIXLEN
+IPv6 address settings; Rach2 supports IPv4 only.
+.It Oo Fl Oc Ns Cm broadcast Op Ar ADDRESS
+.It Oo Fl Oc Ns Cm pointopoint Op Ar ADDRESS
+.It Cm netmask Ar ADDRESS
+.It Cm dstaddr Ar ADDRESS
+.It Cm hw Bro Cm ether | infiniband Brc Ar ADDRESS
+.It Cm metric Ar NN
+.It Cm mtu Ar NN
+.It Oo Fl Oc Ns Cm trailers
+.It Oo Fl Oc Ns Cm arp
+.It Oo Fl Oc Ns Cm allmulti
+.It Cm multicast
+.It Oo Fl Oc Ns Cm promisc
+.It Cm txqueuelen Ar NN
+.It Oo Fl Oc Ns Cm dynamic
+.It Cm up | down
+.El
+.Ss vconfig commands
+.Bl -tag -width "set_egress_map VLAN_NAME SKB_PRIO VLAN_QOS" -compact
+.It Cm add Ar IFACE VLAN_ID
+.It Cm rem Ar VLAN_NAME
+.It Cm set_flag Ar IFACE Cm 0|1 Ar VLAN_QOS
+.It Cm set_egress_map Ar VLAN_NAME SKB_PRIO VLAN_QOS
+.It Cm set_ingress_map Ar VLAN_NAME SKB_PRIO VLAN_QOS
+.It Cm set_name_type Ar NAME_TYPE
+.El
+.Sh OPTIONS
+.Ss arp
+.Bl -tag -width "-H HWTYPE"
+.It Fl a
+Display hosts.
+.It Fl d
+Delete an ARP entry.
+.It Fl s
+Set an entry.
+.It Fl v
+Produce verbose output.
+.It Fl n
+Do not resolve names.
+.It Fl i Ar IF
+Select the network interface.
+.It Fl D
+Read the hardware address from
+.Ar IFACE .
+.It Fl A Ar AF , Fl p Ar AF
+Select the protocol family.
+.It Fl H Ar HWTYPE
+Select the hardware address type.
+.El
+.Ss arping
+.Bl -tag -width "-w TIMEOUT"
+.It Fl f
+Quit on the first ARP reply.
+.It Fl q
+Use quiet output.
+.It Fl b
+Continue broadcasting rather than switching to unicast.
+.It Fl D
+Exit with status 1 if
+.Ar DST_IP
+replies.
+.It Fl U
+Use unsolicited ARP requests to update neighbours.
+.It Fl A
+Use ARP replies to update neighbours.
+.It Fl c Ar N
+Stop after sending
+.Ar N
+ARP requests.
+.It Fl w Ar TIMEOUT
+Wait this many seconds for an ARP reply.
+.El
+.Ss dnsd
+.Bl -tag -width "-c FILE"
+.It Fl c Ar FILE
+Select the configuration file.
+.It Fl t Ar SEC
+Set the time to live.
+.It Fl p Ar PORT
+Listen on
+.Ar PORT .
+.It Fl i Ar ADDR
+Listen on
+.Ar ADDR .
+.It Fl d
+Run as a daemon.
+.It Fl v
+Produce verbose output.
+.It Fl s
+Send only successful replies.
+This permits
+.Pa /etc/resolv.conf
+to list this server followed by a normal DNS server:
+.Bd -literal -offset indent
+nameserver DNSD_SERVER
+nameserver NORMAL_DNS_SERVER
+.Ed
+.El
+.Ss fakeidentd
+.Bl -tag -width "-b ADDR"
+.It Fl f
+Run in the foreground.
+.It Fl i
+Use inetd mode.
+.It Fl w
+Use inetd wait mode.
+.It Fl b Ar ADDR
+Bind to
+.Ar ADDR .
+.El
+.Pp
+.Ar STRING
+is the ident answer string; the default is
+.Ql nobody .
+.Ss ftpd
+.Bl -tag -width "-w"
+.It Fl w
+Allow uploads.
+.It Fl A
+Require no login; client access uses the user ID of
+.Nm ftpd .
+.El
+.Ss ftpget, ftpput
+.Bl -tag -width "-u USER"
+.It Fl c
+For
+.Nm ftpget ,
+continue a previous transfer.
+.It Fl v
+Produce verbose output.
+.It Fl u Ar USER
+Set the user name.
+.It Fl p Ar PASS
+Set the password.
+.It Fl P Ar PORT
+Select the port.
+.El
+.Ss hostname
+.Bl -tag -width "-F FILE"
+.It Fl s
+Display the short name.
+.It Fl i
+Display addresses for the host name.
+.It Fl d
+Display the DNS domain name.
+.It Fl f
+Display the fully qualified domain name.
+.It Fl F Ar FILE
+Use the contents of
+.Ar FILE
+as the host name.
+.El
+.Ss httpd
+.Bl -tag -width "-u USER[:GRP]"
+.It Fl i
+Use inetd mode.
+.It Fl f
+Run in the foreground.
+.It Fl v , vv
+Produce verbose output.
+.It Fl p Oo Ar IP : Oc Ns Ar PORT
+Bind to the specified address and port.
+The default is
+.Ql *:80 .
+.It Fl u Ar USER Ns Op : Ns Ar GRP
+Set the user and group IDs after binding the port.
+.It Fl r Ar REALM
+Set the realm for Basic Authentication.
+.It Fl h Ar HOME
+Set the home directory.
+The default is the current directory.
+.It Fl c Ar FILE
+Select the configuration file, default
+.Pa /etc/httpd.conf
+or
+.Pa HOME/httpd.conf .
+.It Fl m Ar STRING
+Compute the MD5 crypt hash of
+.Ar STRING .
+.It Fl e Ar STRING
+HTML-encode
+.Ar STRING .
+.It Fl d Ar STRING
+URL-decode
+.Ar STRING .
+.El
+.Ss ifup, ifdown
+.Bl -tag -width "-i FILE"
+.It Fl a
+Configure all interfaces with
+.Nm ifup ,
+or deconfigure all interfaces with
+.Nm ifdown .
+.It Fl i Ar FILE
+Use
+.Ar FILE
+instead of
+.Pa /etc/network/interfaces .
+.It Fl n
+Perform a dry run.
+Mappings still run.
+.It Fl m
+Do not run mappings.
+.It Fl v
+Print each action before performing it.
+.It Fl f
+Force the operation.
+.El
+.Ss inetd
+.Bl -tag -width "-q N"
+.It Fl f
+Run in the foreground.
+.It Fl e
+Log to standard error.
+.It Fl q Ar N
+Set the socket listen queue length, default 128.
+.It Fl R Ar N
+Pause services after
+.Ar N
+connections per minute.
+The default is 0, which disables the limit.
+.El
+.Pp
+The default
+.Ar CONFFILE
+is
+.Pa /etc/inetd.conf .
+.Ss ipcalc
+.Bl -tag -width "-b"
+.It Fl b
+Display the broadcast address.
+.It Fl n
+Display the network address.
+.It Fl m
+Display the default netmask for the IP address.
+.It Fl p
+Display the prefix for the IP address and netmask.
+.It Fl h
+Display the resolved host name.
+.It Fl s
+Suppress error messages.
+.El
+.Ss nc
+.Bl -tag -width "-e PROG"
+.It Fl e Ar PROG
+Run
+.Ar PROG
+after connecting.
+This must be the last option.
+.It Fl l
+Listen for incoming connections.
+.It Fl lk
+With
+.Fl e ,
+provide a persistent server.
+.El
+.Ss netstat
+.Bl -tag -width "-r"
+.It Fl r
+Display the routing table.
+.It Fl a
+Display all sockets.
+.It Fl l
+Display listening sockets.
+Without
+.Fl a
+or
+.Fl l ,
+display connected sockets.
+.It Fl t , u , w , x
+Select TCP, UDP, raw, or Unix sockets, respectively.
+Without these options, select all socket types.
+.It Fl e
+Display additional information.
+.It Fl n
+Do not resolve names.
+.It Fl W
+Use a wide display.
+.It Fl p
+Display process IDs and program names for sockets.
+.El
+.Ss nslookup
+.Ar QUERY_TYPE
+is one of
+.Cm soa , ns , a , aaaa , cname , mx , txt , ptr , srv , any .
+.Ss ntpd
+.Bl -tag -width "-p [keyno:NUM:]PEER"
+.It Fl d , dd
+Produce verbose output.
+.It Fl n
+Run in the foreground.
+.It Fl q
+Quit after setting the clock.
+.It Fl N
+Run at high priority.
+.It Fl w
+Query peers without setting the time; implies
+.Fl n .
+.It Fl S Ar PROG
+Run
+.Ar PROG
+after stepping the time, after a stratum change, and every 11 minutes.
+.It Fl k Ar FILE
+Use an ntp.keys-compatible key file.
+.It Fl p Oo Cm keyno: Ns Ar NUM : Oc Ns Ar PEER
+Obtain time from
+.Ar PEER ,
+using key
+.Ar NUM
+for authentication when specified.
+This option may be repeated.
+Without
+.Fl p ,
+use
+.Ql server HOST
+lines from
+.Pa /etc/ntp.conf .
+.It Fl l
+Also serve NTP on port 123.
+.It Fl I Ar IFACE
+Bind the server to
+.Ar IFACE ;
+implies
+.Fl l .
+.El
+.Ss pscan
+.Bl -tag -width "-P PORT"
+.It Fl c
+Display closed ports too.
+.It Fl b
+Display blocked ports too.
+.It Fl p Ar PORT
+Start scanning at this port, default 1.
+.It Fl P Ar PORT
+Scan through this port, default 1024.
+.It Fl t Ar MS
+Set the timeout in milliseconds, default 5000.
+.It Fl T Ar MS
+Set the minimum round-trip time in milliseconds, default 5.
+.El
+.Ss route
+.Bl -tag -width "-A inet[6]"
+.It Fl n
+Do not resolve names.
+.It Fl e
+Display additional information.
+.It Fl A Cm inet Ns Op 6
+Select the address family.
+.El
+.Ss telnet
+.Bl -tag -width "-l USER"
+.It Fl a
+Log in automatically using
+.Ev USER .
+.It Fl l Ar USER
+Log in automatically as
+.Ar USER .
+.El
+.Ss telnetd
+.Bl -tag -width "-f ISSUE_FILE"
+.It Fl l Ar LOGIN
+Execute
+.Ar LOGIN
+on connection.
+.It Fl f Ar ISSUE_FILE
+Display
+.Ar ISSUE_FILE
+instead of
+.Pa /etc/issue .
+.It Fl K
+Close the connection as soon as login exits.
+Normally the server waits until all programs close the slave terminal.
+.It Fl p Ar PORT
+Listen on this port, default 23.
+.It Fl b Ar ADDR Ns Op : Ns Ar PORT
+Bind to this address and port.
+.It Fl F
+Run in the foreground.
+.It Fl i
+Use inetd mode.
+.It Fl w Ar SEC
+Use inetd wait mode with a linger time of
+.Ar SEC
+seconds.
+.It Fl S
+Log to syslog.
+This is implied by
+.Fl i
+or by running without
+.Fl F
+and
+.Fl w .
+.El
+.Ss tftp
+.Bl -tag -width "-b SIZE"
+.It Fl l Ar FILE
+Select the local file.
+.It Fl r Ar FILE
+Select the remote file.
+.It Fl g
+Get a file.
+.It Fl p
+Put a file.
+.It Fl b Ar SIZE
+Set the transfer block size in bytes.
+.El
+.Ss tftpd
+.Bl -tag -width "-u USER"
+.It Fl r
+Prohibit uploads.
+.It Fl c
+Allow file creation through uploads.
+.It Fl u Ar USER
+Access files as
+.Ar USER .
+.It Fl l
+Log to syslog; required in inetd mode.
+.El
+.Ss traceroute
+.Bl -tag -width "-F"
+.It Fl F
+Set the do-not-fragment bit.
+.It Fl l
+Display the time-to-live value of the returned packet.
+.El
+.Ss udhcpc
+.Bl -tag -width "-x OPT:VAL"
+.It Fl i Ar IFACE
+Select the interface.
+The configured default is an empty string.
+.It Fl s Ar PROG
+Run
+.Ar PROG
+at DHCP events.
+The default is
+.Pa /usr/share/udhcpc/default.script .
+.It Fl p Ar FILE
+Create a process ID file.
+.It Fl B
+Request broadcast replies.
+.It Fl t Ar N
+Send up to
+.Ar N
+discover packets, default 3.
+.It Fl T Ar SEC
+Pause this many seconds between packets, default 3.
+.It Fl A Ar SEC
+Wait this many seconds if no lease is obtained, default 20.
+.It Fl b
+Run in the background if no lease is obtained.
+.It Fl n
+Exit if no lease is obtained.
+.It Fl q
+Exit after obtaining a lease.
+.It Fl R
+Release the address on exit.
+.It Fl f
+Run in the foreground.
+.It Fl S
+Log to syslog too.
+.It Fl r Ar IP
+Request this IP address.
+.It Fl o
+Request no options unless
+.Fl O
+is given.
+.It Fl O Ar OPT
+Request option
+.Ar OPT
+from the server.
+This option is cumulative.
+.It Fl x Ar OPT:VAL
+Include the option and value in sent packets.
+This option is cumulative.
+Examples are
+.Ql hostname:bbox
+for option 12,
+.Ql lease:3600
+for option 51 (lease time),
+.Ql 0x3d:0100BEEFC0FFEE
+for option 61 (client ID), and the shell-quoted
+.Ql 14:'"dumpfile"'
+for option 14.
+.It Fl F Ar NAME
+Ask the server to update the DNS mapping for
+.Ar NAME .
+.It Fl V Ar VENDOR
+Set the vendor identifier, default
+.Ql udhcp 1.36.1 .
+.It Fl C
+Do not send the MAC address as the client identifier.
+.El
+.Pp
+USR1 renews the lease; USR2 releases it.
+.Ss udpsvd
+.Bl -tag -width "-u USER[:GRP]"
+.It Fl u Ar USER Ns Op : Ns Ar GRP
+Change the user and group after binding the socket.
+.It Fl c Ar N
+Allow up to
+.Ar N
+simultaneous connections, default 30.
+.It Fl E
+Do not set up the environment.
+.It Fl h
+Look up the peer's host name.
+.It Fl l Ar NAME
+Set the local host name.
+Otherwise, look it up in DNS.
+.It Fl v
+Produce verbose output.
+.El
+.Pp
+Without
+.Fl E ,
+the environment includes
+.Ev PROTO
+set to
+.Ql UDP ,
+and
+.Ev UDPREMOTEADDR
+and
+.Ev UDPLOCALADDR
+set to the remote and local
+.Ql ip:port
+pairs.
+With
+.Fl h ,
+.Ev UDPLOCALHOST
+and
+.Ev UDPREMOTEHOST
+contain the host names;
+.Fl l Ar NAME
+supplies the local name when specified.
+.Ss whois
+.Bl -tag -width "-h SERVER"
+.It Fl i
+Display redirect results too.
+.It Fl h Ar SERVER
+Select the server to query.
+.It Fl p Ar PORT
+Select the server port.
+.El
+.Sh EXAMPLES
+The BusyBox usage text gives these inetd configuration entries:
+.Bd -literal -offset indent
+21 stream tcp nowait root ftpd ftpd /files/to/serve
+23 stream tcp wait root telnetd telnetd -w10
+69 dgram udp nowait root tftpd tftpd -l /files/to/serve
+.Ed
+.Pp
+It also gives these commands:
+.Dl tcpsvd -vE 0.0.0.0 21 ftpd /files/to/serve
+.Dl udpsvd -vE 0.0.0.0 69 tftpd /files/to/serve
+.Dl hostname
+.Dl nslookup localhost
+.Sh SEE ALSO
+.Xr nc 1 ,
+.Xr ping 1 ,
+.Xr socketcall 2 ,
+.Xr httpd 8
+.Sh HISTORY
+The applet descriptions are adapted from BusyBox 1.36.1 documentation,
+licensed under GPL-2.0.

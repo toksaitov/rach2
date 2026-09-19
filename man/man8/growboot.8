@@ -1,0 +1,45 @@
+.Dd September 19, 2026
+.Dt GROWBOOT 8
+.Os
+.Sh NAME
+.Nm growboot
+.Nd prepare a recovery environment from a boot-partition backup
+.Sh SYNOPSIS
+.Nm
+.Ar BOOT.IMG ENV.IMG
+.Sh DESCRIPTION
+.Nm
+reads a complete 64 MiB boot-partition backup from
+.Ar BOOT.IMG
+through the boot-slot library.
+The saved 1024-byte GRUB environment must occupy one cluster.
+.Pp
+The editor makes recovery the saved boot entry and removes the trial
+entry in a two-sector memory copy.
+No write reaches
+.Ar BOOT.IMG .
+The resulting environment is written to
+.Ar ENV.IMG ,
+which is created exclusively.
+An existing output path is refused, including the input path itself.
+Standard output reports the environment's partition-relative sector.
+.Pp
+Recovery's 4 MiB RAM file system cannot hold the complete boot image.
+.Nm
+therefore prepares only the environment.
+.Sh EXAMPLES
+.Dl growboot boot.img env.img
+.Pp
+In the source tree,
+.Ql tests/run grow
+exercises this command.
+.Sh DIAGNOSTICS
+An environment that does not occupy one cluster is reported as:
+.Dl growboot: the saved environment must occupy one cluster
+Failure to create a new output file is reported with
+.Ql growboot: creating the new environment file
+and the system error.
+.Sh SEE ALSO
+.Xr recovery 7 ,
+.Xr bootctl 8 ,
+.Xr growroot 8

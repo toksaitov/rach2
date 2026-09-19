@@ -1,0 +1,96 @@
+.Dd September 19, 2026
+.Dt NC 1
+.Os
+.Sh NAME
+.Nm nc
+.Nd TCP client
+.Sh SYNOPSIS
+.Ss os-simple
+.Nm
+.Ar host port
+.Ss os-real
+.Nm
+.Op Ar options
+.Ar host port
+.Nm
+.Op Ar options
+.Fl l
+.Fl p Ar port
+.Op Ar host
+.Op Ar port
+.Sh DESCRIPTION
+On os-simple,
+.Nm
+is the project's TCP client.
+It connects to
+.Ar host
+at
+.Ar port ,
+writes one chunk of standard input to the socket, reads one reply chunk,
+and writes that reply to standard output.
+It repeats until end of input or an error.
+Transfer is half duplex: each input chunk is followed by one reply chunk.
+.Pp
+The host is an IPv4 address or a name resolved as described in
+.Xr ping 1 .
+The port parser accepts a positive decimal prefix and narrows it to
+16 bits; it does not check the whole argument or enforce the port range.
+.Pp
+On os-real,
+.Nm
+is BusyBox's applet, with the options below.
+.Sh OPTIONS
+These options apply to the BusyBox applet on os-real:
+.Bl -tag -width "-e program"
+.It Fl b
+Allow broadcasts.
+.It Fl e Ar program
+Run the program after connecting.
+This option must be last.
+.It Fl i Ar seconds
+Delay this many seconds between lines sent.
+.It Fl k
+With
+.Fl l
+and
+.Fl e ,
+provide a persistent server.
+.It Fl l
+Listen for incoming connections.
+.It Fl n
+Do not resolve names through DNS.
+.It Fl o Ar file
+Write a hexadecimal dump of traffic to the file.
+.It Fl p Ar port
+Use this local port.
+.It Fl s Ar address
+Use this local address.
+.It Fl u
+Use UDP.
+.It Fl v
+Produce verbose output.
+.It Fl w Ar seconds
+Set the timeout for connections and final network reads.
+.It Fl z
+Use zero-I/O mode for scanning.
+.El
+.Sh EXAMPLES
+.Dl nc 10.0.2.2 80
+The
+.Ql tests/run socket
+and
+.Ql tests/run tcp
+suites use the project client with their hostpeer server.
+.Sh DIAGNOSTICS
+The project client prints
+.Ql "usage: nc <host> <port>"
+when a host or port operand is missing.
+A port whose parsed value is not positive produces
+.Ql "nc: invalid port" .
+.Sh SEE ALSO
+.Xr busybox-networking 1 ,
+.Xr ping 1 ,
+.Xr socketcall 2
+.Sh HISTORY
+The BusyBox option descriptions are adapted from BusyBox documentation,
+licensed under GPL-2.0.

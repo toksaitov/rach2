@@ -1,0 +1,128 @@
+.Dd September 19, 2026
+.Dt BUSYBOX-DEBIANUTILS 1
+.Os
+.Sh NAME
+.Nm busybox-debianutils ,
+.Nm pipe_progress ,
+.Nm run-parts ,
+.Nm start-stop-daemon ,
+.Nm which
+.Nd BusyBox script and process utilities
+.Sh SYNOPSIS
+.Nm pipe_progress
+.Nm run-parts
+.Op Fl a Ar ARG
+.Ar ...
+.Op Fl u Ar UMASK
+.Op Fl -reverse
+.Op Fl -test
+.Op Fl -exit-on-error
+.Op Fl -list
+.Ar DIRECTORY
+.Nm start-stop-daemon
+.Op Ar OPTIONS
+.Op Fl S | Fl K
+.Ar ...
+.Op Fl - Ar ARGS ...
+.Nm which
+.Op Fl a
+.Ar COMMAND ...
+.Sh DESCRIPTION
+These are the debianutils applets of BusyBox 1.36.1 as built for Rach2.
+.Bl -tag -width start-stop-daemon
+.It Nm pipe_progress
+Copy standard input to standard output, writing dots to standard error
+to indicate activity.
+.It Nm run-parts
+Run scripts in
+.Ar DIRECTORY .
+.It Nm start-stop-daemon
+Search for processes matching all specified conditions.
+With
+.Fl K ,
+stop matching processes; with
+.Fl S ,
+start a process unless a match is found.
+.It Nm which
+Locate each
+.Ar COMMAND .
+With
+.Fl a ,
+show all matches.
+.El
+.Sh OPTIONS
+.Ss run-parts
+.Bl -tag -width "--exit-on-error"
+.It Fl a Ar ARG
+Pass an argument to each script; may be repeated.
+.It Fl u Ar UMASK
+Set the file creation mask before running scripts.
+.It Fl -reverse
+Reverse execution order.
+.It Fl -test
+Show what would run without executing scripts.
+.It Fl -exit-on-error
+Exit if a script returns a nonzero status.
+.It Fl -list
+Print matching file names, including files that are not executable.
+.El
+.Ss start-stop-daemon
+Process matching options:
+.Bl -tag -width "-u USERNAME|UID"
+.It Fl u Ar USERNAME|UID
+Match only this user's processes.
+.It Fl n Ar NAME
+Match the command name in
+.Pa /proc/PID/stat .
+.It Fl x Ar EXECUTABLE
+Match the command in
+.Pa /proc/PID/cmdline .
+.It Fl p Ar FILE
+Match the process ID read from
+.Ar FILE .
+.El
+.Pp
+Options for starting a process with
+.Fl S :
+.Bl -tag -width "-x EXECUTABLE"
+.It Fl x Ar EXECUTABLE
+Program to run.
+.It Fl a Ar NAME
+Zeroth argument.
+.It Fl b
+Run in the background.
+.It Fl N Ar N
+Request a change in nice level.
+Rach2 has no
+.Fn setpriority
+system call; this option fails before starting the program.
+.It Fl c Ar USER Ns Op : Ns Op Ar GRP
+Change user and, if specified, group.
+.It Fl m
+Write the process ID to the file specified by
+.Fl p .
+.El
+.Pp
+Options for stopping processes with
+.Fl K :
+.Bl -tag -width "-s SIG"
+.It Fl s Ar SIG
+Signal to send.
+.It Fl t
+Only match processes; return status 0 if a match is found.
+.El
+.Pp
+Other options:
+.Bl -tag -width "-o"
+.It Fl o
+Return status 0 if nothing is done.
+.It Fl v
+Produce verbose output.
+.It Fl q
+Suppress output.
+.El
+.Sh EXAMPLES
+.Dl which login
+.Sh HISTORY
+The applet descriptions are adapted from BusyBox 1.36.1 documentation,
+licensed under GPL-2.0.

@@ -1,0 +1,58 @@
+.Dd September 19, 2026
+.Dt SUDO 8
+.Os
+.Sh NAME
+.Nm sudo
+.Nd run a command as root if the real user is permitted
+.Sh SYNOPSIS
+.Nm
+.Ar COMMAND
+.Op Ar ARG ...
+.Sh DESCRIPTION
+.Nm
+is the reference implementation of a coursework exercise.
+It is installed set-user-ID root only in the test image, where
+.Nm sudoprobe
+tests it.
+The os-real image provides
+.Xr su 1
+and leaves
+.Nm
+for the student to write.
+.Pp
+.Nm
+reads
+.Pa /etc/sudoers ,
+which lists permitted numeric user IDs, one per line.
+Blank lines and lines beginning with
+.Ql #
+are ignored.
+The check uses the caller's real user ID, which the caller cannot forge.
+A missing or unreadable file permits no one.
+.Pp
+For a permitted caller,
+.Nm
+assumes full root identity through its saved ID and executes
+.Ar COMMAND
+by its explicit path, passing the remaining arguments to it.
+The command receives a clean environment containing only
+.Ev PATH
+and
+.Ev HOME .
+Other callers are refused.
+.Pp
+Per-command rules, password prompting, and terminal handling are left
+for the exercise.
+.Sh FILES
+.Bl -tag -width /etc/sudoers
+.It Pa /etc/sudoers
+Numeric user IDs permitted to run commands as root.
+.El
+.Sh DIAGNOSTICS
+Without a command,
+.Nm
+prints:
+.Dl usage: sudo <command> [args...]
+.Sh SEE ALSO
+.Xr su 1 ,
+.Xr passwd 5

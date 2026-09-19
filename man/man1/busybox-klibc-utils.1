@@ -1,0 +1,20 @@
+.Dd September 19, 2026
+.Dt BUSYBOX-KLIBC-UTILS 1
+.Os
+.Sh NAME
+.Nm busybox-klibc-utils ,
+.Nm resume
+.Nd BusyBox suspend-to-disk restoration tool
+.Sh SYNOPSIS
+.Nm resume
+.Ar BLOCKDEV
+.Op Ar OFFSET
+.Sh DESCRIPTION
+.Nm resume
+is the klibc-utils applet of BusyBox 1.36.1 as built for Rach2.
+It restores system state from suspend-to-disk data in
+.Ar BLOCKDEV .
+Rach2 has no swap, so this applet has no use here.
+.Sh HISTORY
+The applet description is adapted from BusyBox 1.36.1 usage text,
+licensed under GPL-2.0.

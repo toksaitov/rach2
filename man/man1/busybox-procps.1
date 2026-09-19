@@ -1,0 +1,427 @@
+.Dd September 19, 2026
+.Dt BUSYBOX-PROCPS 1
+.Os
+.Sh NAME
+.Nm busybox-procps ,
+.Nm free ,
+.Nm fuser ,
+.Nm iostat ,
+.Nm kill ,
+.Nm killall ,
+.Nm killall5 ,
+.Nm lsof ,
+.Nm mpstat ,
+.Nm nmeter ,
+.Nm pgrep ,
+.Nm pidof ,
+.Nm pkill ,
+.Nm pmap ,
+.Nm powertop ,
+.Nm ps ,
+.Nm pstree ,
+.Nm pwdx ,
+.Nm smemcap ,
+.Nm sysctl ,
+.Nm top ,
+.Nm uptime ,
+.Nm watch
+.Nd BusyBox process tools
+.Sh SYNOPSIS
+.Nm free
+.Op Fl bkmgh
+.Nm fuser
+.Op Fl msk46
+.Op Fl Ar SIGNAL
+.Ar FILE
+.Nm fuser
+.Op Fl msk46
+.Op Fl Ar SIGNAL
+.Ar PORT/PROTO
+.Nm iostat
+.Op Fl c
+.Op Fl d
+.Op Fl t
+.Op Fl z
+.Op Fl k | Fl m
+.Op Cm ALL | Ar BLOCKDEV ...
+.Op Ar INTERVAL Op Ar COUNT
+.Nm kill
+.Op Fl l
+.Op Fl Ar SIG
+.Ar PID ...
+.Nm killall
+.Op Fl lq
+.Op Fl Ar SIG
+.Ar PROCESS_NAME ...
+.Nm killall5
+.Op Fl l
+.Op Fl Ar SIG
+.Op Fl o Ar PID
+.Ar ...
+.Nm lsof
+.Nm mpstat
+.Op Fl A
+.Op Fl I Cm SUM|CPU|ALL|SCPU
+.Op Fl u
+.Op Fl P Ar num Ns No \&| Ns Cm ALL
+.Op Ar INTERVAL Op Ar COUNT
+.Nm nmeter
+.Op Fl d Ar MSEC
+.Ar FORMAT_STRING
+.Nm pgrep
+.Op Fl flanovx
+.Op Fl s Ar SID | Fl P Ar PPID | Ar PATTERN
+.Nm pidof
+.Op Fl s
+.Op Fl o Ar PID
+.Op Ar NAME
+.Ar ...
+.Nm pkill
+.Op Fl l | Fl Ar SIGNAL
+.Op Fl xfvnoe
+.Op Fl s Ar SID | Fl P Ar PPID | Ar PATTERN
+.Nm pmap
+.Op Fl xq
+.Ar PID ...
+.Nm powertop
+.Nm ps
+.Op Fl o Ar COL1,COL2=HEADER
+.Op Fl T
+.Nm pstree
+.Op Fl p
+.Op Ar PID | Ar USER
+.Nm pwdx
+.Ar PID ...
+.Nm smemcap
+.No > Ns Ar SMEMDATA.TAR
+.Nm sysctl
+.Op Fl enq
+.Bro
+.Fl a |
+.Fl p Op Ar FILE
+.Ar ...
+.No \&| Op Fl w
+.Op Ar KEY Ns Op = Ns Ar VALUE
+.Ar ...
+.Brc
+.Nm top
+.Op Fl bmH
+.Op Fl n Ar COUNT
+.Op Fl d Ar SECONDS
+.Nm uptime
+.Nm watch
+.Op Fl n Ar SEC
+.Op Fl t
+.Ar PROG ARGS
+.Sh DESCRIPTION
+These are the procps applets of BusyBox 1.36.1 as built for Rach2.
+Rach2 has no
+.Pa /proc/PID/status
+or
+.Pa /proc/PID/maps .
+.Bl -tag -width killall5
+.It Nm free
+Display free and used memory.
+It reads
+.Pa /proc/meminfo .
+.It Nm fuser
+Find processes using files or ports.
+.It Nm iostat
+Report CPU and I/O statistics.
+.It Nm kill
+Send a signal to the specified process IDs through
+.Xr kill 2 .
+The default signal is TERM.
+.It Nm killall
+Send a signal to the named processes through
+.Xr kill 2 .
+The default signal is TERM.
+.It Nm killall5
+Send a signal to all processes outside the current session.
+The default signal is TERM.
+.It Nm lsof
+Display all open files.
+.It Nm mpstat
+Report statistics for each processor.
+.It Nm nmeter
+Monitor the system in real time using
+.Ar FORMAT_STRING .
+.It Nm pgrep
+Display processes selected by the regular expression
+.Ar PATTERN .
+.It Nm pidof
+List the process IDs of all processes whose names match
+.Ar NAME .
+.It Nm pkill
+Send a signal through
+.Xr kill 2
+to processes selected by the regular expression
+.Ar PATTERN .
+.It Nm pmap
+Display process memory usage.
+.It Nm powertop
+Analyze power consumption on Intel laptops.
+.It Nm ps
+List processes, reading
+.Pa /proc/PID/stat
+and
+.Pa /proc/PID/cmdline .
+.It Nm pstree
+Display the process tree, optionally starting from
+.Ar USER
+or
+.Ar PID .
+.It Nm pwdx
+Display the current directory of each specified process.
+.It Nm smemcap
+Collect memory usage data from
+.Pa /proc
+and write it to standard output.
+.It Nm sysctl
+Display or set kernel parameters.
+Rach2 has no
+.Pa /proc/sys
+for it to read.
+.It Nm top
+Display process activity, reading
+.Pa /proc/PID/stat
+and
+.Pa /proc/PID/cmdline .
+It reads the process status every
+.Ar SECONDS
+seconds and displays a screenful of processes.
+.It Nm uptime
+Display the time since the last boot.
+.It Nm watch
+Run
+.Ar PROG
+periodically.
+.El
+.Ss nmeter format
+.Bl -tag -width "%[nINTERFACE]"
+.It Xo
+.Ql %Nc
+.No or
+.Ql %[cN]
+.Xc
+Display CPU use with a bar of size
+.Ar N ,
+default 10.
+The letters S, U, N, D, I, and i denote system, user, niced, I/O wait,
+interrupt, and software interrupt time, respectively.
+.It Ql %[nINTERFACE]
+Monitor the network interface
+.Ar INTERFACE .
+.It Ql %m
+Allocated memory.
+.It Ql %[md]
+Dirty file-backed memory.
+.It Ql %[mw]
+Memory being written to storage.
+.It Ql %[mf]
+Free memory.
+.It Ql %[mt]
+Total memory.
+.It Ql %s
+Allocated swap.
+.It Ql %f
+Number of file descriptors in use.
+.It Ql %Ni
+Total or specific interrupt rate.
+.It Ql %x
+Context switch rate.
+.It Ql %p
+Forks.
+.It Ql %[pn]
+Number of processes.
+.It Ql %b
+Block I/O.
+.It Ql %Nt
+Time with
+.Ar N
+decimal places.
+.It Ql %NT
+Zero-based timestamp with
+.Ar N
+decimal places.
+.It Ql %r
+End lines with carriage return instead of line feed.
+.El
+.Ss top keys
+.Bl -tag -width "N, M, P, T"
+.It Ic N , M , P , T
+Display CPU use and sort by process ID, memory, CPU use, or time,
+respectively.
+.It Ic S
+Display memory.
+.It Ic R
+Reverse the sort order.
+.It Ic H
+Toggle thread display.
+.It Ic 1
+Toggle the multiprocessor display.
+.It Ic Q , No Ctrl-C
+Exit.
+.El
+.Sh OPTIONS
+.Ss fuser
+.Bl -tag -width "-SIGNAL"
+.It Fl m
+Find processes using the same file system as the specified files.
+.It Fl 4 , 6
+Search only IPv4 or IPv6, respectively.
+.It Fl s
+Do not display process IDs.
+.It Fl k
+Kill the processes found.
+.It Fl Ar SIGNAL
+Send the specified signal; the default is KILL.
+.El
+.Ss iostat
+.Bl -tag -width "-c"
+.It Fl c
+Display CPU utilization.
+.It Fl d
+Display device utilization.
+.It Fl t
+Print the current time.
+.It Fl z
+Omit devices with no activity.
+.It Fl k , m
+Use kilobytes or megabytes per second, respectively.
+.El
+.Ss kill, killall, killall5
+.Bl -tag -width "-o PID"
+.It Fl l
+List all signal names and numbers.
+.It Fl o Ar PID
+For
+.Nm killall5 ,
+do not signal this process ID.
+.El
+.Ss mpstat
+.Bl -tag -width "-I SUM|CPU|ALL|SCPU"
+.It Fl A
+Equivalent to
+.Fl I Cm ALL Fl u Fl P Cm ALL .
+.It Fl I Cm SUM|CPU|ALL|SCPU
+Report interrupt statistics.
+.It Fl P Ar num Ns No \&| Ns Cm ALL
+Select the processor to monitor.
+.It Fl u
+Report CPU utilization.
+.El
+.Ss nmeter
+.Bl -tag -width "-d MSEC"
+.It Fl d Ar MSEC
+Set the interval between updates in milliseconds.
+The default is 1000; -1 specifies no delay.
+.El
+.Ss pgrep, pkill
+.Bl -tag -width "-P PPID"
+.It Fl f
+Match the entire command line.
+.It Fl n
+Select only the newest process.
+.It Fl o
+Select only the oldest process.
+.It Fl v
+Negate the match.
+.It Fl x
+Match the whole name rather than a substring.
+.It Fl s Ar SID
+Match the session ID; 0 denotes the current session.
+.It Fl P Ar PPID
+Match the parent process ID.
+.It Fl l
+For
+.Nm pgrep ,
+display the command name too.
+For
+.Nm pkill ,
+list all signals.
+.It Fl a
+For
+.Nm pgrep ,
+display the command line too.
+.It Fl e
+For
+.Nm pkill ,
+display the name and process ID of each process being killed.
+.El
+.Ss pidof
+.Bl -tag -width "-o PID"
+.It Fl s
+Display only one process ID.
+.It Fl o Ar PID
+Omit the specified process ID.
+Use
+.Ql %PPID
+to omit the parent of
+.Nm pidof .
+.El
+.Ss pmap
+.Bl -tag -width "-x"
+.It Fl x
+Display details.
+.It Fl q
+Use quiet output.
+.El
+.Ss ps
+.Bl -tag -width "-o COL1,COL2=HEADER"
+.It Fl o Ar COL1,COL2=HEADER
+Select the columns to display.
+.It Fl T
+Display threads.
+.El
+.Ss pstree
+.Bl -tag -width "-p"
+.It Fl p
+Display process IDs.
+.El
+.Ss sysctl
+.Bl -tag -width "-e"
+.It Fl e
+Do not warn about unknown keys.
+.It Fl n
+Do not display key names.
+.It Fl q
+Use quiet output.
+.It Fl a
+Display all values.
+.El
+.Ss top
+.Bl -tag -width "-d SEC"
+.It Fl b
+Use batch mode.
+.It Fl n Ar N
+Exit after
+.Ar N
+iterations.
+.It Fl d Ar SEC
+Set the delay between updates.
+.It Fl m
+Display memory, as with the memory display key.
+.It Fl H
+Display threads.
+.El
+.Ss watch
+.Bl -tag -width "-n SEC"
+.It Fl n Ar SEC
+Set the period in seconds, default 2.
+.It Fl t
+Do not print the header.
+.El
+.Sh EXAMPLES
+.Dl free
+.Dl pidof init
+.Dl pidof /bin/sh
+.Dl pidof /bin/sh -o %PPID
+.Dl ps
+.Dl uptime
+.Dl watch date
+.Sh SEE ALSO
+.Xr kill 2
+.Sh HISTORY
+The applet descriptions are adapted from BusyBox 1.36.1 documentation,
+licensed under GPL-2.0.

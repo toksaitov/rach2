@@ -1,0 +1,186 @@
+.Dd September 19, 2026
+.Dt BUSYBOX-LOGINUTILS 8
+.Os
+.Sh NAME
+.Nm busybox-loginutils ,
+.Nm add-shell ,
+.Nm addgroup ,
+.Nm adduser ,
+.Nm chpasswd ,
+.Nm cryptpw ,
+.Nm delgroup ,
+.Nm deluser ,
+.Nm mkpasswd ,
+.Nm remove-shell
+.Nd BusyBox account tools
+.Sh SYNOPSIS
+.Nm add-shell
+.Ar SHELL ...
+.Nm addgroup
+.Op Fl g Ar GID
+.Op Fl S
+.Op Ar USER
+.Ar GROUP
+.Nm adduser
+.Op Ar OPTIONS
+.Ar USER
+.Op Ar GROUP
+.Nm chpasswd
+.Op Fl me
+.Op Fl c Ar ALG
+.Op Fl R Ar DIR
+.Nm cryptpw
+.Op Fl P Ar FD
+.Op Fl m Ar TYPE
+.Op Fl S Ar SALT
+.Op Ar PASSWORD
+.Op Ar SALT
+.Nm delgroup
+.Op Ar USER
+.Ar GROUP
+.Nm deluser
+.Op Fl -remove-home
+.Ar USER
+.Nm mkpasswd
+.Op Fl P Ar FD
+.Op Fl m Ar TYPE
+.Op Fl S Ar SALT
+.Op Ar PASSWORD
+.Op Ar SALT
+.Nm remove-shell
+.Ar SHELL ...
+.Sh DESCRIPTION
+These are the account tools of BusyBox 1.36.1 as built for Rach2.
+On os-real,
+.Xr login 1 ,
+.Xr su 1 ,
+and
+.Xr passwd 1
+are set-id applets from a second BusyBox build.
+The credential files are described in
+.Xr passwd 5 .
+There is no PAM support and no
+.Pa login.defs .
+.Bl -tag -width remove-shell
+.It Nm add-shell
+Add the specified shells to
+.Pa /etc/shells .
+.It Nm addgroup
+Create
+.Ar GROUP ,
+or add
+.Ar USER
+to an existing group.
+.It Nm adduser
+Create
+.Ar USER ,
+or add that user to
+.Ar GROUP .
+.It Nm chpasswd
+Read
+.Ql user:password
+lines from standard input and update
+.Pa /etc/passwd .
+.It Nm cryptpw
+Print a password hash.
+.It Nm delgroup
+Delete
+.Ar GROUP ,
+or remove
+.Ar USER
+from that group.
+.It Nm deluser
+Delete
+.Ar USER .
+.It Nm mkpasswd
+An alias for
+.Nm cryptpw .
+.It Nm remove-shell
+Remove the specified shells from
+.Pa /etc/shells .
+.El
+.Sh OPTIONS
+.Ss addgroup
+.Bl -tag -width "-g GID"
+.It Fl g Ar GID
+Set the group ID.
+.It Fl S
+Create a system group.
+.El
+.Ss adduser
+.Bl -tag -width "-s SHELL"
+.It Fl h Ar DIR
+Set the home directory.
+.It Fl g Ar GECOS
+Set the GECOS field.
+.It Fl s Ar SHELL
+Set the login shell.
+.It Fl G Ar GRP
+Set the group.
+.It Fl S
+Create a system user.
+.It Fl D
+Do not assign a password.
+.It Fl H
+Do not create the home directory.
+.It Fl u Ar UID
+Set the user ID.
+.It Fl k Ar SKEL
+Use
+.Ar SKEL
+as the skeleton directory; the default is
+.Pa /etc/skel .
+.El
+.Ss chpasswd
+.Bl -tag -width "-c ALG"
+.It Fl e
+Read passwords already in encrypted form.
+.It Fl m
+Use MD5 encryption.
+.It Fl c Ar ALG
+Select
+.Ql des ,
+.Ql md5 ,
+.Ql sha256 ,
+or
+.Ql sha512 .
+The default is
+.Ql sha512 .
+.It Fl R Ar DIR
+Change the root directory to
+.Ar DIR .
+.El
+.Ss cryptpw and mkpasswd
+.Bl -tag -width "-S SALT"
+.It Fl P Ar FD
+Read the password from file descriptor
+.Ar FD .
+.It Fl m Ar TYPE
+Select the password hash algorithm.
+.It Fl S Ar SALT
+Use the specified salt.
+.El
+.Ss deluser
+.Bl -tag -width "--remove-home"
+.It Fl -remove-home
+Remove the home directory.
+.El
+.Sh FILES
+.Bl -tag -width /etc/shells
+.It Pa /etc/shells
+Shell list changed by
+.Nm add-shell
+and
+.Nm remove-shell .
+.It Pa /etc/skel
+Default skeleton directory for
+.Nm adduser .
+.El
+.Sh SEE ALSO
+.Xr login 1 ,
+.Xr passwd 1 ,
+.Xr su 1 ,
+.Xr passwd 5
+.Sh HISTORY
+The applet descriptions are adapted from BusyBox 1.36.1 documentation,
+licensed under GPL-2.0.

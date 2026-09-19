@@ -1,0 +1,295 @@
+.Dd September 19, 2026
+.Dt BUSYBOX-FINDUTILS 1
+.Os
+.Sh NAME
+.Nm busybox-findutils ,
+.Nm egrep ,
+.Nm fgrep ,
+.Nm find ,
+.Nm grep ,
+.Nm xargs
+.Nd BusyBox file search and argument utilities
+.Sh SYNOPSIS
+.Nm egrep
+.Op Ar OPTIONS
+.Brq Ar PATTERN | Fl e Ar PATTERN ... | Fl f Ar FILE ...
+.Op Ar FILE
+.Ar ...
+.Nm fgrep
+.Op Ar OPTIONS
+.Brq Ar PATTERN | Fl e Ar PATTERN ... | Fl f Ar FILE ...
+.Op Ar FILE
+.Ar ...
+.Nm find
+.Op Fl HL
+.Op Ar PATH
+.Ar ...
+.Op Ar OPTIONS
+.Op Ar ACTIONS
+.Nm grep
+.Op Fl HhnlLoqvsrRiwFE
+.Op Fl m Ar N
+.Op Fl A | Fl B | Fl C Ar N
+.Brq Ar PATTERN | Fl e Ar PATTERN ... | Fl f Ar FILE ...
+.Op Ar FILE
+.Ar ...
+.Nm xargs
+.Op Ar OPTIONS
+.Op Ar PROG ARGS
+.Sh DESCRIPTION
+These are the findutils applets of BusyBox 1.36.1 as built for Rach2.
+.Bl -tag -width xargs
+.It Nm egrep
+Run
+.Nm grep
+with extended regular expressions, as with
+.Fl E .
+.It Nm fgrep
+Run
+.Nm grep
+with literal patterns, as with
+.Fl F .
+.It Nm find
+Search for files and perform actions on them.
+The default path is the current directory; the default action is
+.Fl print .
+Actions are combined as described below.
+.It Nm grep
+Search files, or standard input, for a pattern.
+.It Nm xargs
+Run
+.Ar PROG
+on items read from standard input.
+.El
+.Sh OPTIONS
+.Ss find traversal
+.Bl -tag -width "-maxdepth N"
+.It Fl L , Fl follow
+Follow symbolic links.
+.It Fl H
+Follow only symbolic links given on the command line.
+.It Fl xdev
+Do not descend into directories on other file systems.
+.It Fl maxdepth Ar N
+Descend at most this many levels.
+Zero applies actions only to command line arguments.
+.It Fl mindepth Ar N
+Do not act on the first
+.Ar N
+levels.
+.It Fl depth
+Act on a directory after traversing its contents.
+.El
+.Ss find actions
+Adjacent actions are joined by an implicit
+.Fl a .
+With
+.Fl a ,
+a failed action stops evaluation of that conjunction for the current file;
+with
+.Fl o ,
+a successful action stops evaluation of that disjunction.
+The
+.Fl a
+operator has higher precedence than
+.Fl o .
+Parentheses group actions, and
+.Ql \&!
+inverts an action's success or failure.
+.Bl -tag -width "-name PATTERN"
+.It Fl name Ar PATTERN
+Match the file name without its directory part.
+.It Fl iname Ar PATTERN
+Like
+.Fl name ,
+ignoring case.
+.It Fl path Ar PATTERN
+Match the path.
+.It Fl ipath Ar PATTERN
+Like
+.Fl path ,
+ignoring case.
+.It Fl regex Ar PATTERN
+Match the path against a regular expression.
+.It Fl type Ar X
+Match file type
+.Ar X :
+one of
+.Ql f ,
+.Ql d ,
+.Ql l ,
+.Ql b ,
+.Ql c ,
+.Ql s ,
+or
+.Ql p .
+.It Fl executable
+Match executable files.
+.It Fl perm Ar MASK
+Match exactly the specified mode bits.
+A leading plus requires at least one mask bit; a leading minus requires
+all mask bits.
+.It Fl mtime Ar DAYS
+Match a modification time exactly
+.Ar N
+days in the past, more than
+.Ar N
+with
+.Ar +N ,
+or less than
+.Ar N
+with
+.Ar -N .
+.It Fl atime Ar DAYS
+Apply the same day comparison to access time.
+.It Fl ctime Ar DAYS
+Apply the same day comparison to status change time.
+.It Fl mmin Ar MINS
+Compare modification time in minutes using the same
+.Ar +N ,
+.Ar -N ,
+or
+.Ar N
+forms.
+.It Fl amin Ar MINS
+Compare access time in minutes.
+.It Fl cmin Ar MINS
+Compare status change time in minutes.
+.It Fl newer Ar FILE
+Match modification times later than that of
+.Ar FILE .
+.It Fl inum Ar N
+Match an inode number.
+.It Fl samefile Ar FILE
+Match the same file as
+.Ar FILE .
+.It Fl user Ar NAME/ID
+Match the given owner.
+.It Fl group Ar NAME/ID
+Match the given group.
+.It Fl size Ar N Ns Op Cm bck
+Match size
+.Ar N .
+The suffix c selects bytes, k selects kilobytes, and b selects 512-byte
+units, the default.
+A leading plus matches larger files; a leading minus matches smaller files.
+.It Fl links Ar N
+Match exactly this many links, more with
+.Ar +N ,
+or fewer with
+.Ar -N .
+.It Fl empty
+Match empty files or directories.
+.It Fl prune
+Do not descend into the current directory.
+.El
+.Pp
+If none of the following actions is specified,
+.Fl print
+is assumed:
+.Bl -tag -width "-exec CMD ARG +"
+.It Fl print
+Print the file name.
+.It Fl print0
+Print the file name followed by a NUL byte.
+.It Fl exec Ar CMD ARG Cm \&;
+Run the command with each occurrence of
+.Ql {}
+replaced by the file name.
+The action fails if the command returns a nonzero status.
+.It Fl exec Ar CMD ARG Cm +
+Run the command with
+.Ql {}
+replaced by a list of file names.
+.It Fl delete
+Delete the current file or directory.
+This enables
+.Fl depth .
+.It Fl quit
+Exit.
+.El
+.Ss grep, egrep, fgrep
+.Bl -tag -width "-e PATTERN"
+.It Fl H
+Prefix output with the file name and a colon.
+.It Fl h
+Omit the file name prefix.
+.It Fl n
+Prefix output with the line number and a colon.
+.It Fl l
+Print only names of matching files.
+.It Fl L
+Print only names of files without a match.
+.It Fl c
+Print only the count of matching lines.
+.It Fl o
+Print only the matching part of a line.
+.It Fl q
+Suppress output; return 0 if a pattern is found, 1 otherwise.
+.It Fl v
+Select lines that do not match.
+.It Fl s
+Suppress open and read errors.
+.It Fl r
+Recurse into directories.
+.It Fl R
+Recurse into directories and follow symbolic links.
+.It Fl i
+Ignore case.
+.It Fl w
+Match whole words.
+.It Fl x
+Match whole lines.
+.It Fl F
+Treat patterns as literal strings.
+.It Fl E
+Use extended regular expressions.
+.It Fl m Ar N
+Match at most this many times per file.
+.It Fl A Ar N
+Print this many lines of trailing context.
+.It Fl B Ar N
+Print this many lines of leading context.
+.It Fl C Ar N
+Print this many lines of leading and trailing context.
+.It Fl e Ar PATTERN
+Specify a pattern to match.
+.It Fl f Ar FILE
+Read patterns from a file.
+.El
+.Ss xargs
+.Bl -tag -width "-E STR, -e[STR]"
+.It Fl 0
+Read NUL-terminated items.
+.It Fl a Ar FILE
+Read items from a file instead of standard input.
+.It Fl o
+Reopen standard input as
+.Pa /dev/tty .
+.It Fl r
+Do not run a command when input is empty.
+.It Fl t
+Print each command to standard error before executing it.
+.It Fl p
+Ask whether to run each command.
+.It Fl E Ar STR , Fl e Ns Op Ar STR
+Stop processing input at
+.Ar STR .
+.It Fl I Ar STR
+Replace occurrences of
+.Ar STR
+in the command and arguments with the input line.
+.It Fl n Ar N
+Pass at most this many arguments to the command.
+.It Fl s Ar N
+Limit the command line to this many bytes.
+.It Fl P Ar N
+Run at most this many commands in parallel.
+.It Fl x
+Exit if the size limit is exceeded.
+.El
+.Sh EXAMPLES
+.Dl find / -name passwd
+.Sh HISTORY
+The applet descriptions are adapted from BusyBox 1.36.1 documentation,
+licensed under GPL-2.0.

@@ -1,0 +1,84 @@
+.Dd September 19, 2026
+.Dt RESCUE-STATIC 8
+.Os
+.Sh NAME
+.Nm rescue-static
+.Nd take the sealed disk's fixed address when no lease arrives
+.Sh SYNOPSIS
+.Nm
+.Sh DESCRIPTION
+.Nm
+is a shell script installed only in the recovery image, at
+.Pa /bin/rescue-static .
+It takes no arguments.
+The recovery system's
+.Pa /etc/network/interfaces
+starts it in the background after starting the DHCP client for eth0,
+with
+.Ql post-up /bin/rescue-static &
+under
+.Ql iface eth0 inet dhcp .
+.Pp
+The script sleeps 25 seconds, then examines
+.Ql ifconfig eth0 .
+If the output does not contain
+.Ql addr:0.0.0.0 ,
+it exits with status 0 and no message.
+Otherwise it reports:
+.Dl rescue: no lease arrived; taking the fixed address
+It reads the DHCP client's process ID from
+.Pa /var/run/udhcpc.eth0.pid ,
+sends SIGTERM, and waits up to ten seconds for the client to stop.
+If the client does not stop, it reports:
+.Dl rescue: the DHCP client will not stop; leaving the address alone
+and exits with status 1.
+.Pp
+After the client stops, the script sets the address and default route:
+.Dl ifconfig eth0 192.168.0.105 netmask 255.255.255.0
+.Dl route add default gw 192.168.0.1
+Failure of either command causes exit status 1.
+On success it reports:
+.Dl rescue: eth0: 192.168.0.105 through 192.168.0.1
+All these messages go to standard error.
+.Pp
+A damaged boot partition can cause the machine to enter recovery
+through the GRUB core image's own configuration.
+On a network without DHCP, the fixed address permits SSH access
+without someone choosing a menu entry at the keyboard.
+The script stops the DHCP client first so a late lease cannot replace
+the address during an SSH session.
+.Pp
+The address, mask, and gateway are the sealed disk's settings,
+.Ql SEALED_ADDRESS ,
+.Ql SEALED_MASK ,
+and
+.Ql SEALED_GATEWAY
+in the source tree's
+.Pa Makefile .
+The sealed disk build runs
+.Ql cfgcheck sealednet
+and refuses to build a disk if the script and settings disagree.
+.Sh FILES
+.Bl -tag -width /var/run/udhcpc.eth0.pid
+.It Pa /etc/network/interfaces
+Recovery's interface configuration, which starts the script.
+.It Pa /var/run/udhcpc.eth0.pid
+DHCP client's process ID.
+.El
+.Sh EXIT STATUS
+.Bl -tag -width 1 -compact
+.It 0
+An address was already assigned, or the fixed address and route were set.
+.It 1
+The DHCP client would not stop, or the address or route could not be set.
+.El
+.Sh EXAMPLES
+In the source tree:
+.Dl tests/run drill
+The suite boots recovery without a DHCP server and checks that eth0
+has the fixed address and the DHCP client has stopped.
+.Sh SEE ALSO
+.Xr busybox-networking 1 ,
+.Xr recovery 7 ,
+.Xr dhcpc 8 ,
+.Xr netup 8

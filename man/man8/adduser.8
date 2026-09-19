@@ -1,0 +1,146 @@
+.Dd September 19, 2026
+.Dt ADDUSER 8
+.Os
+.Sh NAME
+.Nm adduser
+.Nd create an account
+.Sh SYNOPSIS
+.Ss os-simple
+.Nm
+.Op Fl u Ar UID
+.Op Fl s Ar SHELL
+.Ar NAME
+.Ss os-real
+.Nm
+.Op Ar OPTIONS
+.Ar USER
+.Op Ar GROUP
+.Sh DESCRIPTION
+On os-simple,
+.Nm
+creates an account using this project's account databases.
+The caller's real user ID must be 0.
+The program is not set-id and refuses other callers before opening any file.
+.Pp
+Unless
+.Fl u
+is given, the program chooses the lowest number from 1000 through 60000
+that is unused as both a user ID and a group ID.
+The login shell defaults to
+.Pa /bin/sh ;
+its existence is not checked.
+.Pp
+One credential transaction protects the account checks, number selection,
+and four publications, in this order:
+.Bl -enum -compact
+.It
+A shadow entry with the locked password field
+.Ql \&! .
+.It
+A group entry.
+.It
+A home directory with mode 0700.
+.It
+A passwd entry.
+.El
+.Pp
+This order prevents an interruption from leaving a visible account
+without a locked shadow record.
+After releasing the credential lock,
+.Nm
+runs
+.Ql passwd NAME .
+The account remains locked until its password is set.
+A failure reports the entries already published and does not remove them.
+.Pp
+On os-real,
+.Nm
+is the BusyBox applet.
+It creates
+.Ar USER ,
+or adds an existing
+.Ar USER
+to
+.Ar GROUP .
+Its options differ from those of the os-simple program.
+.Sh OPTIONS
+.Ss os-simple
+.Bl -tag -width Ds
+.It Fl u Ar UID
+Use this number for the user and group IDs.
+It must be unused in both databases.
+.It Fl s Ar SHELL
+Use this login shell instead of
+.Pa /bin/sh .
+.El
+.Ss os-real
+.Bl -tag -width Ds
+.It Fl h Ar DIR
+Use this home directory.
+.It Fl g Ar GECOS
+Set the GECOS field.
+.It Fl s Ar SHELL
+Use this login shell.
+.It Fl G Ar GRP
+Use this group.
+.It Fl S
+Create a system user.
+.It Fl D
+Do not assign a password.
+.It Fl H
+Do not create a home directory.
+.It Fl u Ar UID
+Use this user ID.
+.It Fl k Ar SKEL
+Use this skeleton directory instead of
+.Pa /etc/skel .
+.El
+.Sh FILES
+The os-simple program updates:
+.Bl -tag -width /home/NAME
+.It Pa /etc/shadow
+Locked password entry.
+.It Pa /etc/group
+Group entry.
+.It Pa /home/NAME
+Home directory.
+.It Pa /etc/passwd
+Account entry.
+.El
+.Sh EXAMPLES
+As root, run:
+.Dl adduser alice
+Then answer the password prompts.
+.Ql tests/run account
+exercises account creation on both images.
+.Sh DIAGNOSTICS
+The following diagnostics are from the os-simple program.
+.Bl -tag -width Ds
+.It Ql adduser: only root may create an account
+The caller's real user ID is not 0.
+.It Ql adduser: NAME already exists
+The name occurs in all three account databases.
+.It Ql adduser: NAME is in FILES but not FILE; remove the leftover lines and retry
+The name occurs in only some of the databases.
+The message identifies them; the program neither resumes nor removes
+the partial account.
+.It Ql adduser: failed after writing FILES; nothing was rolled back
+A failure occurred after one or more publications.
+The message lists the published files and, if created, the home directory.
+.It Ql adduser: /etc/shadow was not written; nothing was changed
+The first publication failed.
+.It Ql adduser: what was written is live but may not survive a power cut
+A published credential file could not be flushed.
+No further account entries are published.
+.It Ql adduser: NAME exists; the transaction did not end cleanly
+The account was published, but releasing the credential transaction failed.
+.It Ql adduser: NAME exists and cannot be entered; run passwd NAME
+The account was published, but the password program could not be executed.
+.El
+.Sh SEE ALSO
+.Xr passwd 1 ,
+.Xr passwd 5 ,
+.Xr busybox-loginutils 8
+.Sh HISTORY
+The os-real option descriptions are adapted from BusyBox documentation
+under the GPL-2.0 licence.

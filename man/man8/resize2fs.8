@@ -1,0 +1,167 @@
+.Dd September 19, 2026
+.Dt RESIZE2FS 8
+.Os
+.Sh NAME
+.Nm resize2fs
+.Nd grow or shrink an ext2 file system
+.Sh SYNOPSIS
+.Nm
+.Op Fl fFpPMbs
+.Op Fl d Ar debug-flags
+.Op Fl S Ar RAID-stride
+.Op Fl z Ar undo_file
+.Ar device
+.Op Ar size
+.Sh DESCRIPTION
+.Nm
+grows or shrinks the ext2 file system on
+.Ar device .
+Rach2 uses e2fsprogs 1.47.4, built with the resizer enabled and linked
+statically against the ported musl.
+The program is installed only in the recovery image, at
+.Pa /sbin/resize2fs .
+.Pp
+The volume must be unmounted.
+Rach2 has no on-line resize support.
+The recovery system mounts nothing from the disk it works on.
+Its
+.Pa /etc/mtab
+is empty, so the mounted-volume check finds nothing there.
+.Pp
+Run
+.Ql e2fsck -f
+before resizing.
+Unless
+.Fl f
+is given,
+.Nm
+refuses to resize a volume not checked since its last mount.
+.Pp
+.Ar size
+is the requested size in file system blocks.
+Suffixes
+.Ql K ,
+.Ql M ,
+.Ql G ,
+and
+.Ql T
+specify powers-of-two kilobytes, megabytes, gigabytes, and terabytes;
+.Ql s
+specifies 512-byte sectors.
+Without
+.Ar size ,
+the program uses the partition size reported by the kernel through
+.Ql BLKGETSIZE64 .
+The requested size must not exceed the partition.
+.Pp
+The partition nodes provide raw sector access.
+As with
+.Xr e2fsck 8 ,
+the library uses whole-sector I/O and a bounce buffer for partial-sector
+requests.
+.Nm
+keeps the volume's bitmaps in memory.
+.Xr growroot 8
+refuses to run it when
+.Ql MemTotal
+is less than 7 MiB.
+.Pp
+.Xr growroot 8
+enlarges the partition, runs its two file system checks, and invokes
+.Ql resize2fs DEVICE
+to grow the file system to the partition size.
+If an interrupted resize leaves errors, run
+.Ql e2fsck -f -p
+to repair the volume.
+After repair, run
+.Xr growroot 8
+again to finish the grow.
+The
+.Ql rach2-install
+installer uses growroot when the person agrees to grow the root.
+.Sh OPTIONS
+.Bl -tag -width Ds
+.It Fl b
+Enable the 64bit feature, resize group descriptors, and move other
+metadata as needed.
+Changing the 64bit feature cannot be combined with resizing the file
+system.
+.It Fl d Ar debug-flags
+Enable debugging features compiled into the program.
+Add the desired values:
+.Bl -tag -width 32 -compact
+.It 2
+Block relocations.
+.It 4
+Inode relocations.
+.It 8
+Inode table moves.
+.It 16
+Timing information.
+.It 32
+Minimum size calculation for
+.Fl M .
+.El
+.It Fl f
+Force the resize, overriding some safety checks.
+.It Fl F
+Flush the device's buffer cache before resizing.
+.It Fl M
+Shrink to the smallest size permitted by the stored files.
+.It Fl p
+Print percentage completion bars for each stage of an off-line resize.
+Very fast operations may display no progress bar.
+.It Fl P
+Print an estimate of the size, in file system blocks, that
+.Fl M
+would produce, then exit without resizing.
+.It Fl s
+Disable the 64bit feature and free blocks no longer needed.
+Changing the feature cannot be combined with resizing the file system.
+.It Fl S Ar RAID-stride
+Use the specified RAID stride instead of the value inferred from the
+file system.
+.It Fl z Ar undo_file
+Save each block's old contents in an undo file before overwriting it.
+An empty argument selects
+.Pa resize2fs-device.e2undo
+in the directory specified by
+.Ev E2FSPROGS_UNDO_DIR ,
+with
+.Ql device
+replaced by the device name.
+The undo file cannot recover from a power failure or system crash.
+.El
+.Sh FILES
+.Bl -tag -width /sbin/resize2fs
+.It Pa /sbin/resize2fs
+The recovery image's resizer.
+.El
+.Sh EXIT STATUS
+.Nm
+returns 0 on success and a nonzero status on failure, with the reason
+on standard error.
+Growroot reports a failure as
+.Ql resize2fs status N .
+.Sh EXAMPLES
+From the recovery system, check the unmounted root partition and grow
+it to the partition size:
+.Dl e2fsck -f /dev/disk0p3 && resize2fs /dev/disk0p3
+.Pp
+Growroot changes the partition table first, then checks and grows the
+file system:
+.Dl growroot MBRID=ID,3
+.Pp
+In the source tree,
+.Ql tests/run grow
+exercises a resize interrupted and completed by a second growroot run.
+.Sh DIAGNOSTICS
+A volume that needs checking before a resize produces:
+.Dl Please run 'e2fsck -f DEVICE' first.
+.Sh SEE ALSO
+.Xr disk 7 ,
+.Xr recovery 7 ,
+.Xr e2fsck 8 ,
+.Xr growroot 8
+.Sh HISTORY
+Adapted from the e2fsprogs 1.47.4 manual page, licensed under GPL-2.0.

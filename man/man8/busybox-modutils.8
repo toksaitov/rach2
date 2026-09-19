@@ -1,0 +1,83 @@
+.Dd September 19, 2026
+.Dt BUSYBOX-MODUTILS 8
+.Os
+.Sh NAME
+.Nm busybox-modutils ,
+.Nm depmod ,
+.Nm insmod ,
+.Nm lsmod ,
+.Nm modinfo ,
+.Nm modprobe ,
+.Nm rmmod
+.Nd BusyBox module tools
+.Sh SYNOPSIS
+.Nm depmod
+.Op Fl n
+.Nm insmod
+.Ar FILE
+.Op Ar SYMBOL=VALUE
+.Ar ...
+.Nm lsmod
+.Nm modinfo
+.Op Fl adlpn0
+.Op Fl F Ar keyword
+.Ar MODULE
+.Nm modprobe
+.Op Fl rq
+.Ar MODULE
+.Op Ar SYMBOL=VALUE
+.Ar ...
+.Nm rmmod
+.Ar MODULE ...
+.Sh DESCRIPTION
+These are the modutils applets of BusyBox 1.36.1 as built for Rach2.
+Rach2 has no loadable kernel modules; these applets have no Rach2 modules
+to operate on.
+They report errors for unavailable module files or operations.
+.Bl -tag -width modprobe
+.It Nm depmod
+Generate the module dependency file
+.Pa modules.dep.bb .
+.It Nm insmod
+Load a kernel module.
+.It Nm lsmod
+List loaded kernel modules.
+.It Nm modinfo
+Display information about a kernel module.
+.It Nm modprobe
+Load a kernel module, or remove it with
+.Fl r .
+.It Nm rmmod
+Unload kernel modules.
+.El
+.Sh OPTIONS
+.Ss depmod
+.Bl -tag -width "-n"
+.It Fl n
+Print the dependency file to standard output without writing it.
+.El
+.Ss modinfo
+.Bl -tag -width "-F description"
+.It Fl a
+Equivalent to
+.Fl F Cm author .
+.It Fl d
+Equivalent to
+.Fl F Cm description .
+.It Fl l
+Equivalent to
+.Fl F Cm license .
+.It Fl p
+Equivalent to
+.Fl F Cm parm .
+.El
+.Ss modprobe
+.Bl -tag -width "-r"
+.It Fl r
+Remove the module.
+.It Fl q
+Suppress diagnostics.
+.El
+.Sh HISTORY
+The applet descriptions are adapted from BusyBox 1.36.1 documentation,
+licensed under GPL-2.0.

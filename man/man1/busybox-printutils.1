@@ -1,0 +1,67 @@
+.Dd September 19, 2026
+.Dt BUSYBOX-PRINTUTILS 1
+.Os
+.Sh NAME
+.Nm busybox-printutils ,
+.Nm lpd ,
+.Nm lpq ,
+.Nm lpr
+.Nd BusyBox print tools
+.Sh SYNOPSIS
+.Nm lpd
+.Ar SPOOLDIR
+.Op Ar HELPER Op Ar ARGS
+.Nm lpq
+.Op Fl P Ar queue Ns Op @ Ns Ar host Ns Op : Ns Ar port
+.Op Fl U Ar USERNAME
+.Op Fl d Ar JOBID
+.Ar ...
+.Op Fl fs
+.Nm lpr
+.Fl P Ar queue Ns Op @ Ns Ar host Ns Op : Ns Ar port
+.Fl U Ar USERNAME
+.Fl J Ar TITLE
+.Fl Vmh
+.Op Ar FILE
+.Ar ...
+.Sh DESCRIPTION
+These are the printutils applets of BusyBox 1.36.1 as built for Rach2.
+Rach2 has no printer.
+.Bl -tag -width lpd
+.It Nm lpd
+Receive print jobs for queues in
+.Ar SPOOLDIR .
+That directory must contain device nodes, directories, or symbolic links
+to them, with names matching the print queues.
+Jobs for a device node are sent directly to the device.
+Other jobs are stored in the queue directory and
+.Ar HELPER
+is called with the file name in the
+.Ev DATAFILE
+environment variable.
+.It Nm lpq
+Display or control queued print jobs.
+.It Nm lpr
+Submit files for printing.
+.El
+.Sh OPTIONS
+The following options apply to
+.Nm lpq :
+.Bl -tag -width "-U USERNAME"
+.It Fl P Ar queue Ns Op @ Ns Ar host Ns Op : Ns Ar port
+Select the print service.
+Without this option, use
+.Ev PRINTER .
+.It Fl d Ar JOBID
+Delete jobs.
+.It Fl f
+Force a waiting job to be printed.
+.It Fl s
+Use a short display.
+.El
+.Sh EXAMPLES
+The BusyBox usage text gives this server command:
+.Dl tcpsvd -E 0 515 softlimit -m 999999 lpd /var/spool ./print
+.Sh HISTORY
+The applet descriptions are adapted from BusyBox 1.36.1 usage text,
+licensed under GPL-2.0.
