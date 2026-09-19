@@ -1356,10 +1356,12 @@ $(MKGPT): tools/image/mkgpt.c
 	@mkdir -p $(dir $@)
 	$(HOST_LINK)
 # The grow set (tools/inspect/growset.c), for `tests/run grow`: the sectors
-# a grow writes, checked against what the grow in QEMU changed.
+# a grow writes, checked against what the grow in QEMU changed. The tool
+# includes utils/growset.c, so that file is a dependency and not a link
+# input.
 $(GROWSET): tools/inspect/growset.c utils/growset.c
 	@mkdir -p $(dir $@)
-	$(HOST_LINK)
+	$(HOSTCC) $(HOSTCFLAGS) -o $@ $<
 # A stick of the same shape carrying a 138 MiB disk instead of the sealed one,
 # so the rows that install do not each write a gibibyte and a half. The image
 # it carries has the shape the sealed disk has, a boot partition,
