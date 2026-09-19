@@ -4,7 +4,9 @@
 #
 # Boots the os-real image, logs in as root and reads the pages two ways.
 # Through a pipe, `man` must give every staged page byte for byte, each one
-# found by its name and section: BusyBox's `man` puts its output through
+# found by its name and section, an alias's gzipped copy decompressed first,
+# since `man` opens a page by its signature: BusyBox's `man` puts its output
+# through
 # `col -b -p -x` when standard output is not a terminal, and this system's
 # `col` copies its input, since the pages had their overstrikes removed on the
 # host; a page `man` cannot find, or gives differently, is named as BAD and
@@ -24,7 +26,7 @@
 set -u
 KERNEL=$1; IMAGE=$2; HARNESS=$3; PASSWORD=$4; PAGE=$5; LOG=$6; RKERNEL=$7; RIMAGE=$8
 fail() { echo "man-test: FAIL: $1" >&2; exit 1; }
-READALL="n=0; for f in /usr/share/man/cat*/*; do b=\${f##*/}; man \${b##*.} \${b%.*} > /tmp/p; cmp -s /tmp/p \$f && test -s /tmp/p || echo BAD \$f; n=\$((n+1)); done; echo MAN\"\"ALL \$n"
+READALL="n=0; for f in /usr/share/man/cat*/*; do b=\${f##*/}; man \${b##*.} \${b%.*} > /tmp/p; if gunzip -t \$f 2>/dev/null; then gunzip -c \$f > /tmp/q; else cp \$f /tmp/q; fi; cmp -s /tmp/p /tmp/q && test -s /tmp/p || echo BAD \$f; n=\$((n+1)); done; echo MAN\"\"ALL \$n"
 
 [ -s "$PAGE" ] || fail "the rendered page $PAGE is missing or empty"
 # The lines are matched as fixed text: the harness's expect takes a regular

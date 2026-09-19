@@ -557,7 +557,7 @@ $(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_
 # each when absent; the check targets ensure the busybox/dropbear binaries are
 # real.
 $(OS_REAL_IMAGE): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) $(IMAGE_TOOLS) $(MAN_ALL) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom
-	$(MKIMAGE) krffs/manifests/os-real.manifest $@ 16
+	$(MKIMAGE) krffs/manifests/os-real.manifest $@ 24
 
 # The same manifest as an ext2 volume, the sealed disk's fourth partition and
 # the root `rach2.root=ext2` mounts: 1 GiB, the partition's size, sparse on
