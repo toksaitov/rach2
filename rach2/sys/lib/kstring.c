@@ -54,7 +54,7 @@ void k_strtoupper(char *str)
 #define KSTRING_WORDS 1
 #endif
 
-void *k_memset(void *ptr, char c, size_t n)
+void *k_memset(void *ptr, int c, size_t n)
 {
     char *str = (char *)ptr;
 #ifdef KSTRING_WORDS
@@ -149,7 +149,7 @@ void *k_memmove(void *dest, const void *src, size_t n)
  */
 void *memset(void *ptr, int c, __SIZE_TYPE__ n)
 {
-    return k_memset(ptr, (char)c, (size_t)n);
+    return k_memset(ptr, c, (size_t)n);
 }
 
 void *memcpy(void *dest, const void *src, __SIZE_TYPE__ n)

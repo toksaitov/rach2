@@ -395,7 +395,7 @@ static void m_udelay(unsigned usec)
 
 /* Two of the kernel's own, which the driver reaches and this test does not
  * build: a fill, and the nth card of an identity on the bus. */
-void *k_memset(void *ptr, char c, size_t n)
+void *k_memset(void *ptr, int c, size_t n)
 {
     unsigned char *q = (unsigned char *)ptr;
 

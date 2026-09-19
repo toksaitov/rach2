@@ -13,8 +13,9 @@ void k_strreverse(char *str);
 /** Upper-cases the letters of the null-terminated string `str` in place. */
 void k_strtoupper(char *str);
 
-/** Writes `n` bytes of `c` to `ptr` and returns `ptr`. */
-void *k_memset(void *ptr, char c, size_t n);
+/** Writes `n` bytes of `c`, taken as an unsigned char like memset's, to
+    `ptr` and returns `ptr`. */
+void *k_memset(void *ptr, int c, size_t n);
 
 /**
  * Copies `n` bytes from `src` to `dest` and returns `dest`. The regions

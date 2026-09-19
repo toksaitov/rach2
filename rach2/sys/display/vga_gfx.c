@@ -11,13 +11,9 @@
 bool vga_graphics_mode = false;
 
 /* Live framebuffer state, updated on entry to and exit from graphics mode. */
-gfx_info_t gfx_current = {.mode = GFX_MODE_NONE,
-                          .width = 0,
-                          .height = 0,
-                          .bpp = 0,
-                          .pitch = 0,
-                          .framebuffer = NULL,
-                          .size = 0};
+/* The gfx_info_t fields, in the order fb.h declares them: mode, width,
+   height, bpp, pitch, framebuffer, size. */
+gfx_info_t gfx_current = {GFX_MODE_NONE, 0, 0, 0, 0, NULL, 0};
 
 /* 8x16 text font (256 chars * 16 bytes), saved before Mode 13h, restored on
  * exit. */

@@ -264,7 +264,7 @@ void klog(int level, const char *subsystem, const char *format, ...)
 }
 
 /* The kernel's fill, which the walk reaches and this test does not build. */
-void *k_memset(void *ptr, char c, size_t n)
+void *k_memset(void *ptr, int c, size_t n)
 {
     unsigned char *q = (unsigned char *)ptr;
 

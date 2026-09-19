@@ -57,7 +57,7 @@ void klog(int level, const char *subsystem, const char *format, ...)
 
 #include "../../rach2/sys/lib/kstring.h"
 
-void *k_memset(void *dst, char value, size_t length)
+void *k_memset(void *dst, int value, size_t length)
 {
     unsigned char *p = (unsigned char *)dst;
     size_t i;

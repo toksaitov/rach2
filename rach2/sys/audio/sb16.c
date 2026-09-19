@@ -594,13 +594,7 @@ static void sb16_set_volume(int volume)
     mixer_write(MIXER_VOICE_VOL, val);
 }
 
-audio_driver_t sb16_driver = {.name = "Sound Blaster 16",
-                              .type = AUDIO_DRIVER_SB16,
-                              .init = sb16_init,
-                              .shutdown = sb16_shutdown,
-                              .start = sb16_start,
-                              .stop = sb16_stop,
-                              .is_playing = sb16_is_playing,
-                              .set_callback = sb16_set_callback,
-                              .write = sb16_write,
-                              .set_volume = sb16_set_volume};
+/* The audio_driver_t fields, in the order audio.h declares them: name,
+   type, init, shutdown, start, stop, is_playing, set_callback, write,
+   set_volume. */
+audio_driver_t sb16_driver = {"Sound Blaster 16", AUDIO_DRIVER_SB16, sb16_init, sb16_shutdown, sb16_start, sb16_stop, sb16_is_playing, sb16_set_callback, sb16_write, sb16_set_volume};

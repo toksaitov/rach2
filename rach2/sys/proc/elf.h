@@ -144,7 +144,6 @@ Elf32_Phdr *elf_program_headers(const void *data);
 uint16_t elf_program_header_count(const void *data);
 
 struct page_dir;
-typedef struct page_dir page_dir_t;
 
 /* Maximum program headers the segment loader accepts; bounds the phdr buffer.
  * Static binaries we target have far fewer. */
@@ -192,7 +191,7 @@ uint32_t elf_phdr_vaddr(const Elf32_Phdr *phdrs, uint16_t phnum, uint32_t phoff)
 
 /** Stream an ELF into `dir` via `read`, recording layout in `out`; 0 ok, -1
  * on error. */
-int elf_load_image(elf_read_fn read, void *ctx, page_dir_t *dir, elf_image_t *out);
+int elf_load_image(elf_read_fn read, void *ctx, struct page_dir *dir, elf_image_t *out);
 
 struct vm_space; /* mm/vm.h */
 
@@ -202,6 +201,6 @@ int elf_setup_vmas(struct vm_space *vm, const elf_image_t *img, uint32_t stack_t
 
 /** Load PT_LOAD segments of an in-memory image into `dir`; 0 ok, -1 on
  * error. */
-int elf_load(const void *data, uint32_t size, page_dir_t *dir);
+int elf_load(const void *data, uint32_t size, struct page_dir *dir);
 
 #endif /* _ELF_H_ */

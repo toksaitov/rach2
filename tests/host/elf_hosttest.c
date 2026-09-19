@@ -96,7 +96,7 @@ int vm_insert(vm_space_t *vm, uint32_t start, uint32_t end, uint32_t prot, vm_ty
     return 0;
 }
 
-void *k_memset(void *ptr, char c, size_t n)
+void *k_memset(void *ptr, int c, size_t n)
 {
     unsigned char *d = ptr;
     while (n--) {

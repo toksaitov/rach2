@@ -3020,13 +3020,7 @@ static void hda_set_volume(int volume)
 }
 
 /* Dispatch table registered with the audio subsystem. */
-audio_driver_t hda_driver = {.name = "Intel HD Audio",
-                             .type = AUDIO_DRIVER_HDA,
-                             .init = hda_init,
-                             .shutdown = hda_shutdown,
-                             .start = hda_start,
-                             .stop = hda_stop,
-                             .is_playing = hda_is_playing,
-                             .set_callback = hda_set_callback,
-                             .write = hda_write,
-                             .set_volume = hda_set_volume};
+/* The audio_driver_t fields, in the order audio.h declares them: name,
+   type, init, shutdown, start, stop, is_playing, set_callback, write,
+   set_volume. */
+audio_driver_t hda_driver = {"Intel HD Audio", AUDIO_DRIVER_HDA, hda_init, hda_shutdown, hda_start, hda_stop, hda_is_playing, hda_set_callback, hda_write, hda_set_volume};

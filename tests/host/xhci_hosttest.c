@@ -636,7 +636,7 @@ void kfree(void *p)
 
 /* Two of the kernel's own, which the driver reaches and this test does not
  * build: a fill, and the name of a controller's register interface. */
-void *k_memset(void *ptr, char c, size_t n)
+void *k_memset(void *ptr, int c, size_t n)
 {
     unsigned char *p = (unsigned char *)ptr;
 

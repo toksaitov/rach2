@@ -73,16 +73,10 @@ static void speaker_set_volume(int volume)
     /* The PC speaker has no volume control. */
 }
 
-audio_driver_t speaker_driver = {.name = "PC Speaker",
-                                 .type = AUDIO_DRIVER_SPEAKER,
-                                 .init = speaker_init,
-                                 .shutdown = speaker_shutdown,
-                                 .start = speaker_start,
-                                 .stop = speaker_stop,
-                                 .is_playing = speaker_is_playing,
-                                 .set_callback = speaker_set_callback,
-                                 .write = speaker_write,
-                                 .set_volume = speaker_set_volume};
+/* The audio_driver_t fields, in the order audio.h declares them: name,
+   type, init, shutdown, start, stop, is_playing, set_callback, write,
+   set_volume. */
+audio_driver_t speaker_driver = {"PC Speaker", AUDIO_DRIVER_SPEAKER, speaker_init, speaker_shutdown, speaker_start, speaker_stop, speaker_is_playing, speaker_set_callback, speaker_write, speaker_set_volume};
 
 /**
  * Detect and initialize the best available audio driver.
