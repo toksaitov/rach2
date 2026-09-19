@@ -3,47 +3,51 @@
 # A Makefile sets CONFIG_TEXT to the resolved flags that shape its objects
 # (compiler name, CFLAGS, link flags) and includes this file after build.mk.
 # The fingerprint $(CONFIG) under $(BUILD) records that text plus the
-# compiler binary's identity. When the recorded configuration differs from
-# the current one, the `fingerprint` step below removes the $(BUILD) tree, so
-# a flag change or a reinstalled compiler rebuilds the component from
-# nothing and one tree can never mix objects from two option sets. This
-# replaces the old kernel `kflags` stamp, which refused such a tree instead
-# of rebuilding it.
+# compiler binary's identity, and every object depends on it, so a flag
+# change or a reinstalled compiler rebuilds the component and one tree can
+# never mix objects from two option sets. This replaces the old kernel
+# `kflags` stamp, which refused such a tree instead of rebuilding it.
 CONFIG = $(BUILD)/.config
 
+# The first rule in a makefile names the default goal. This file is included
+# before a component's `all`, so the goal make had before the include is put
+# back after the rule is defined.
+_goal_before_fingerprint := $(.DEFAULT_GOAL)
 # What a configuration change removes. The default is the whole $(BUILD)
 # tree; a component whose directory is shared with another build (the musl
 # test programs live under build/tests/musl) narrows this to its own
 # products so a parallel sibling is not deleted mid-compile.
 CONFIG_PURGE ?= $(BUILD)
 
-# The step a build runs before its first object: `fingerprint` reads the
-# current configuration, compares it with the recorded one and, on a change,
-# removes what a stale configuration would leave behind and records the new
-# text. A first run records without purging. Every object and program of the
-# component lists this step as an order-only prerequisite, so it runs before
-# any compile in the same make, once per invocation; a dry run prints the
-# step and removes nothing, since a recipe is the only place the purge lives.
-# The purge is deliberate where a timestamp prerequisite would not be: the
-# system make (GNU 3.81) compares whole seconds, and an object landing in the
-# fingerprint's second would survive as stale.
-# The first rule in a makefile names the default goal. This file is included
-# before a component's `all`, so the goal make had before the include is put
-# back after the step is defined; for the same reason a component writes its
-# `$(OBJECTS): | fingerprint` line after its `all` rule, or the first object
-# becomes the goal and `make` builds one file.
-_goal_before_fingerprint := $(.DEFAULT_GOAL)
-.PHONY: fingerprint
-fingerprint:
+# The fingerprint file is a regular prerequisite of every object and
+# program of the component, and its recipe runs on every make: it reads the
+# current configuration, and when the file is missing or differs it removes
+# what a stale configuration would leave behind and writes the file, so the
+# objects are gone and the file is newer than any that a shared directory
+# kept. Make then decides each object by its date, after this recipe, which
+# is what an earlier form got wrong: it removed the tree from an order-only
+# step, and under `make -j` the objects make had already looked at vanished
+# under it, so a link asked for files that were gone. The purge is kept for
+# the system make (GNU 3.81), which compares whole seconds: an object
+# compiled in the same second the file was written would otherwise survive
+# as stale. A dry run does not run the recipe and leaves the file out of the
+# decision, so `make -n` prints what the recorded configuration would build
+# and removes nothing.
+ifeq ($(findstring n,$(firstword -$(MAKEFLAGS))),)
+$(CONFIG): FORCE
+endif
+$(CONFIG):
 	@mkdir -p $(BUILD); \
 	new=$$( { command -v $(firstword $(CC)); \
 	          ls -ln "$$(command -v $(firstword $(CC)))" 2>/dev/null; \
 	          printf '%s\n' "$(CONFIG_TEXT)"; } 2>/dev/null ); \
-	if [ ! -f $(CONFIG) ]; then \
-	    printf '%s\n' "$$new" > $(CONFIG); \
-	elif [ "$$new" != "$$(cat $(CONFIG))" ]; then \
-	    echo "$(COMPONENT): configuration changed: rebuilding from nothing"; \
-	    rm -rf $(CONFIG_PURGE); mkdir -p $(BUILD); \
-	    printf '%s\n' "$$new" > $(CONFIG); \
+	if [ ! -f $@ ] || [ "$$new" != "$$(cat $@)" ]; then \
+	    if [ -f $@ ]; then \
+	        echo "$(COMPONENT): configuration changed: rebuilding from nothing"; \
+	        rm -rf $(CONFIG_PURGE); mkdir -p $(BUILD); \
+	    fi; \
+	    printf '%s\n' "$$new" > $@; \
 	fi
+FORCE:
+.PHONY: FORCE
 .DEFAULT_GOAL := $(_goal_before_fingerprint)

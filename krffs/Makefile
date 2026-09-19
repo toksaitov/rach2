@@ -54,7 +54,7 @@ include ../mk/fingerprint.mk
 
 .PHONY : all mount libc-check fuse-check
 all : $(TARGETS)
-$(OBJECTS): | fingerprint
+$(OBJECTS): $(CONFIG)
 
 # The FUSE mount tool is not part of the default build: staging and checking
 # images never mounts one, and FUSE is the one host library the other tools do

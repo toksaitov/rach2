@@ -94,7 +94,7 @@ $(KERNEL_BIN) : $(ASM_OBJECTS) $(C_OBJECTS)
 # for the read-only one).
 CONFIG_TEXT = $(CC) $(CFLAGS) $(LD) $(LDFLAGS)
 include ../mk/fingerprint.mk
-$(ASM_OBJECTS) $(C_OBJECTS): | fingerprint
+$(ASM_OBJECTS) $(C_OBJECTS): $(CONFIG)
 
 
 $(ASM_OBJECTS) : $(BUILD)/%.o : %.s

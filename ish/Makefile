@@ -28,7 +28,7 @@ include ../mk/fingerprint.mk
 .PHONY: all clean
 
 all: $(TARGET)
-$(OBJECTS): | fingerprint
+$(OBJECTS): $(CONFIG)
 
 $(TARGET): $(OBJECTS)
 	@mkdir -p $(dir $@)

@@ -59,7 +59,7 @@ include ../mk/fingerprint.mk
 .PHONY: all clean libc-check prune-stale
 
 all: prune-stale $(TARGETS) $(SBIN_TARGETS)
-$(TARGETS) $(SBIN_TARGETS): | fingerprint
+$(TARGETS) $(SBIN_TARGETS): $(CONFIG)
 
 $(TARGETS) $(SBIN_TARGETS): | libc-check
 

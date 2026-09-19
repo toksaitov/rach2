@@ -52,7 +52,7 @@ include ../mk/fingerprint.mk
 .PHONY: all clean
 
 all: $(TARGETS)
-$(TARGETS): | fingerprint
+$(TARGETS): $(CONFIG)
 
 # Each probe is a single freestanding source compiled+linked in one step; -MMD
 # (from $(DEPFLAGS)) writes the deps, -MF puts that .d under $(BUILD), so
