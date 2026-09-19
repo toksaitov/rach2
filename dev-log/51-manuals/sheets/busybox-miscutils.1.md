@@ -2,7 +2,7 @@
 
 NAME: busybox-miscutils - the miscellaneous tools: the BusyBox applets of its `miscutils` directory as built for Rach2 (BusyBox 1.36.1, vendor/busybox/rach2.config), one family page with an alias for each applet.
 
-The page: NAME lists every applet with .Nm; SYNOPSIS gives each applet's usage line as BusyBox states it; DESCRIPTION says in a sentence or two per applet what it does, adapted from BusyBox's usage text below (GPL-2.0; say so in a trailing paragraph), and what it does not do on this kernel where that differs from Linux. The aliases are already in man/aliases. Facts on this kernel: `man` and `less` have pages of their own (man(1)); `bc`, `dc`, `strings`, `time`, `crond`, `setserial`, `devmem` (reads physical memory through /dev/mem, which does not exist here: say so), `hexedit`, `tree`, `ascii`, `microcom`.
+The page: NAME lists every applet with .Nm; SYNOPSIS gives each applet's usage line as BusyBox states it; DESCRIPTION says in a sentence or two per applet what it does, adapted from BusyBox's usage text below (GPL-2.0; say so in a trailing paragraph), and what it does not do on this kernel where that differs from Linux. The aliases are already in man/aliases. Facts on this kernel: `man` has a page of its own (man(1)); `less` is described here, as its alias says; `bc`, `dc`, `strings`, `time`, `crond`, `setserial`, `devmem` (reads physical memory through /dev/mem, which does not exist here: say so), `hexedit`, `tree`, `ascii`, `microcom`. Found at the writing: `makedevs` is built in its table form only (rach2.config), so the page describes that form and not the argument form the usage text also shows.
 
 
 The usage text BusyBox carries, per applet:
