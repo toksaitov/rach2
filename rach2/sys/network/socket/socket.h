@@ -86,6 +86,11 @@ typedef struct socket {
     int accept_head, accept_tail;
     int listening;
 
+    /* Set by shutdown(2), which detaches the block: a read of the socket
+     * afterwards is the end of input, where a stream that never connected
+     * has no block either and answers ENOTCONN. */
+    int shut_down;
+
     /*
      * Identity, for the files that report sockets.
      *

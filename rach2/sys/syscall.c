@@ -4119,7 +4119,8 @@ static int32_t sys_statfs64(isr_params_t *params)
 
 /**
  * fstatfs64(2): the same numbers, named by an open descriptor; a /proc
- * descriptor answers proc's and a device's answers devfs's.
+ * file's descriptor answers proc's, and a device's or a synthetic
+ * directory's, /proc and /proc/PID among them, answers devfs's.
  *
  * EBX is the descriptor, ECX the caller's size, EDX the buffer.
  */
@@ -6099,9 +6100,10 @@ static int32_t exec_shebang(struct exec_state *s, int *argc,
  *
  * EBX = path, ECX = argv[], EDX = envp[]. Does not return on success. Copies
  * the path, argv, and envp into the process's exec workspace, allocated at
- * its first exec, and validates the ELF header BEFORE tearing the old image
- * down (so an executable that is not an ELF leaves the caller intact), then
- * frees the old user pages, streams the new program in, builds the SysV/i386
+ * its first exec, resolves a `#!` script to its interpreter, and validates
+ * the ELF header BEFORE tearing the old image down (so a format the loader
+ * does not take leaves the caller intact), then frees the old user pages,
+ * streams the new program in, builds the SysV/i386
  * initial stack, and redirects the iret frame to the entry point. A failure
  * after the old image is gone, a segment that does not load, routes to
  * exec_fail_destroyed, which ends the process.
@@ -7351,8 +7353,9 @@ static int32_t sys_rmdir(isr_params_t *params)
  * As in `unlink`, every refusal is decided here, because `krffs_rename`
  * answers all of them with a bare -1, which the wrapper reports as `EIO`.
  * The two directory cases are the ones POSIX separates and the memory root
- * does not (a mounted KRFFS volume answers `EIO` for both, and ext2 moves
- * directories): a directory SOURCE is `-EPERM`, since a directory's children
+ * does not (a mounted KRFFS volume answers `EIO` for both, except `EISDIR`
+ * for a directory destination that is open, and ext2 moves directories): a
+ * directory SOURCE is `-EPERM`, since a directory's children
  * reference its id and a move would orphan them, so the rename cannot be
  * performed at all; a directory DESTINATION under a plain source is
  * `-EISDIR`, the case that errno is reserved for. The rest follow the
@@ -10491,7 +10494,8 @@ static int32_t do_recv(int fd, uint32_t buf_ptr, int len, int flags)
 
 /* getsockname: the socket's local address: for an IPv4 socket the primary
  * address (net_ip_addr) plus its bound or ephemeral port, for a packet socket
- * the sockaddr_ll of its interface. */
+ * a sockaddr_ll of the primary interface, index 1 and its hardware address,
+ * whatever interface the socket is bound to. */
 static int32_t do_getsockname(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
 {
     fd_entry_t *entry = fd_get(&current_proc->fds, fd);
@@ -10600,6 +10604,7 @@ static int32_t do_shutdown(int fd, int how)
         return -ENOTCONN;
     }
     if (how == SHUT_WR || how == SHUT_RDWR) {
+        entry->sock->shut_down = 1;
         tcp_close(entry->sock); /* send FIN; idempotent vs the later close() */
     }
     return 0;

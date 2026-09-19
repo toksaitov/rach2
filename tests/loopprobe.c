@@ -77,6 +77,7 @@ typedef unsigned char uint8_t;
 
 #define EADDRINUSE  98
 #define EPIPE       32
+#define ENOTCONN    107
 #define EINPROGRESS 115
 #define EISCONN     106
 
@@ -892,6 +893,50 @@ static void tcp_refused(void)
 }
 
 /*
+ * A stream this end shut down has no connection to send on and no reason
+ * recorded for it: the send is EPIPE, as POSIX names it, and a read, blocking
+ * or not, is the end of input, not the bare refusal that reads as EPERM. A
+ * stream that never connected has no connection either, and its read is
+ * ENOTCONN. `cs` is a connected client; `sa` is scratch space of a byte.
+ */
+static void shutdown_rows(int cs, uint8_t *sa)
+{
+    uint32_t args[6];
+    int fresh;
+
+    args[0] = (uint32_t)cs;
+    args[1] = 1; /* SHUT_WR */
+    if (socketcall(SC_SHUTDOWN, args) != 0)
+        fail("shutdown of the client");
+    args[0] = (uint32_t)cs;
+    args[1] = (uint32_t)"x";
+    args[2] = 1;
+    args[3] = 0;
+    args[4] = 0;
+    args[5] = 0;
+    if (socketcall(SC_SENDTO, args) != -EPIPE)
+        fail("a send after shutdown is not EPIPE");
+    if (sys_read(cs, sa, 1) != 0)
+        fail("a blocking read after shutdown is not the end of input");
+    if (sys_fcntl(cs, F_SETFL, O_NONBLOCK) != 0)
+        fail("nonblocking after shutdown");
+    if (sys_read(cs, sa, 1) != 0)
+        fail("a nonblocking read after shutdown is not the end of input");
+
+    args[0] = AF_INET;
+    args[1] = SOCK_STREAM;
+    args[2] = 0;
+    fresh = socketcall(SC_SOCKET, args);
+    if (fresh < 0)
+        fail("fresh stream socket");
+    if (sys_fcntl(fresh, F_SETFL, O_NONBLOCK) != 0)
+        fail("nonblocking on the fresh socket");
+    if (sys_read(fresh, sa, 1) != -ENOTCONN)
+        fail("a read of a stream that never connected is not ENOTCONN");
+    sys_close(fresh);
+}
+
+/*
  * The local port a client bound, and the exclusivity a listener has.
  *
  * `bind` before `connect` is how a client pins its source port, and a
@@ -1065,25 +1110,7 @@ static void tcp_ports(void)
         fail("a repeated local-remote pairing was not refused");
     sys_close(second);
 
-    /* A stream this end shut down has no connection to send on and no reason
-     * recorded for it: the send is EPIPE, as POSIX names it, and a read is
-     * the end of input, not the bare refusal that reads as EPERM. */
-    args[0] = (uint32_t)cs;
-    args[1] = 1; /* SHUT_WR */
-    if (socketcall(SC_SHUTDOWN, args) != 0)
-        fail("shutdown of the client");
-    args[0] = (uint32_t)cs;
-    args[1] = (uint32_t)"x";
-    args[2] = 1;
-    args[3] = 0;
-    args[4] = 0;
-    args[5] = 0;
-    if (socketcall(SC_SENDTO, args) != -EPIPE)
-        fail("a send after shutdown is not EPIPE");
-    if (sys_fcntl(cs, F_SETFL, O_NONBLOCK) != 0)
-        fail("nonblocking after shutdown");
-    if (sys_read(cs, sa, 1) != 0)
-        fail("a read after shutdown is not the end of input");
+    shutdown_rows(cs, sa);
 
     sys_close(as);
     sys_close(cs);

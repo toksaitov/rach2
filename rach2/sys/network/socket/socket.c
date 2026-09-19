@@ -517,13 +517,14 @@ static int send_space_ready(void *arg)
  * The reason a connection ended, as a negative errno, or `fallback` when
  * none was recorded.
  *
- * A read or a write of a connection that is gone used to answer a bare -1,
- * which the C library reads as `EPERM`: a program woken because this machine's
- * address changed under it was told it lacked permission. The reason is in the
- * block already, put there by whatever ended the connection, so it is what the
- * call returns; a connection that ended without one, shut down by this end,
- * answers what POSIX names for it, `-EPIPE` to a sender and `-ECONNRESET` to
- * a reader.
+ * The reason is in the block, put there by whatever ended the connection,
+ * and a reader or a writer of a connection that is gone is given it (a
+ * bare -1, which the C library reads as `EPERM`, told a program woken
+ * because this machine's address changed that it lacked permission). A
+ * block that holds no reason answers `fallback`, the errno the caller
+ * names for its own case: `-EPIPE` for a sender, `-ECONNRESET` for a
+ * reader. A block a shutdown detached never reaches here; the entry checks
+ * answer for it.
  */
 static int tcp_dead_error(struct tcb *tcb, int fallback)
 {
@@ -544,8 +545,8 @@ static int tcp_dead_error(struct tcb *tcb, int fallback)
  * send-ring space (woken by socket_tcp_writable when an ACK frees room) and
  * a non-blocking one returns -EAGAIN. A nonzero request thus never returns
  * 0, which a caller would misread as EOF. Returns the bytes queued,
- * SOCK_EAGAIN, -EINTR, or -1 on a connection that is no longer in a sending
- * state.
+ * SOCK_EAGAIN, -EINTR, or, on a connection that is no longer in a sending
+ * state, its recorded error or -EPIPE.
  */
 int socket_tcp_send(struct socket *sock, const uint8_t *buf, int len, int nonblock)
 {
@@ -644,8 +645,9 @@ uint16_t socket_tcp_deliver(struct socket *sock, const uint8_t *data, uint16_t l
  *
  * Sleeps until data arrives, a FIN signals EOF, or the connection resets; a
  * pending signal unwinds with -EINTR. Returns the byte count on data, 0 at EOF
- * (FIN with no buffered data), and -1 on a reset/closed connection with no
- * data.
+ * (FIN with no buffered data, or a block a shutdown detached), and on a
+ * reset or closed connection with no data its recorded error or
+ * -ECONNRESET; a stream that never connected is -ENOTCONN.
  */
 int socket_tcp_recv(struct socket *sock, uint8_t *buf, int len)
 {
@@ -653,7 +655,8 @@ int socket_tcp_recv(struct socket *sock, uint8_t *buf, int len)
     uint32_t avail, copy_len;
     int rc;
 
-    if (!sock || !sock->tcb) return -1;
+    if (!sock) return -1;
+    if (!sock->tcb) return sock->shut_down ? 0 : -ENOTCONN;
 
     rc = wq_wait_event(&sock->waiters, tcp_recv_ready, sock);
     if (rc < 0) {
@@ -685,8 +688,10 @@ int socket_tcp_recv(struct socket *sock, uint8_t *buf, int len)
 /**
  * Non-blocking stream receive: drain the ring, else report status.
  *
- * Never sleeps. With no buffered data: 0 on a half-closed peer (FIN), -1 on a
- * reset/closed connection, and SOCK_EAGAIN otherwise.
+ * Never sleeps. With no buffered data: 0 on a half-closed peer (FIN) or a
+ * block a shutdown detached, the recorded error or -ECONNRESET on a reset or
+ * closed connection, -ENOTCONN on a stream that never connected, and
+ * SOCK_EAGAIN otherwise.
  */
 int socket_tcp_try_recv(struct socket *sock, uint8_t *buf, int len)
 {
@@ -694,7 +699,7 @@ int socket_tcp_try_recv(struct socket *sock, uint8_t *buf, int len)
     uint32_t avail, copy_len;
 
     if (!sock) return -1;
-    if (!sock->tcb) return 0; /* detached by a shutdown: end of input, as the blocking read says */
+    if (!sock->tcb) return sock->shut_down ? 0 : -ENOTCONN;
     tcb = sock->tcb;
 
     avail = tcb->recv_tail - tcb->recv_head;
