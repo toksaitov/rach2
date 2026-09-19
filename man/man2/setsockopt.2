@@ -42,8 +42,9 @@ The following options use
 .Bl -tag -width SO_BINDTODEVICE
 .It Dv SO_REUSEADDR
 Set or get a boolean stored on the socket.
-UDP sockets may share a port only when both have this option set and
-have the same effective user ID.
+A UDP bind may reuse a port only when every socket already bound to it
+and the new socket have this option set, and the binding processes had
+the same effective user ID at bind time.
 TCP listener ports can be reused after the listener closes without
 this option, but two live listeners cannot share a port.
 .It Dv SO_BROADCAST
@@ -64,8 +65,8 @@ The value is an interface-name string.
 A nonempty name must identify a registered interface; an empty string
 clears the setting.
 A positive length is required.
-At most 16 bytes are read, and the last byte of that buffer is forced
-to zero.
+The kernel copies at most 16 bytes into a zero-filled 16-byte buffer and
+sets its byte 15 to zero.
 Larger input buffers are accepted.
 The kernel stores only whether the setting is nonempty.
 Getting it returns
@@ -124,7 +125,11 @@ and return integer zero through
 Except for the interface-name and
 .Dv PACKET_AUXDATA
 cases, setting an option with a declared length of at least four
-bytes reads the first integer even if the option is ignored.
+bytes reads the first integer even if the option is ignored; the length
+is taken as a signed 32-bit value, so one above 2147483647 reads no
+integer, and an option that needs one then gives
+.Er EINVAL
+while an ignored option still succeeds.
 Shorter values are ignored unless the option explicitly requires an
 integer.
 .Pp

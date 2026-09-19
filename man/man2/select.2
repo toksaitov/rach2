@@ -47,7 +47,8 @@ are cleared.
 .Bl -tag -width exceptfds
 .It Fa readfds
 Input is available, or the descriptor reports a hangup or error.
-End of input counts as readable.
+End of input counts as readable while the connection record is still
+attached.
 .It Fa writefds
 Output can proceed, or the descriptor reports an error.
 A hangup alone does not count as writable.
@@ -63,14 +64,15 @@ Terminals use the line discipline's input state; pseudoterminals also
 report peer hangup.
 Console readiness is restricted to the descriptor's read and write modes.
 .Pp
-Datagram, packet, and protocol-bearing raw sockets are readable when a
-packet is queued and are always writable.
+Datagram, packet, and raw ICMP sockets are readable when a packet is
+queued and are always writable.
 A listening stream is readable when a connection awaits acceptance.
 A connected stream is readable with buffered input or a received FIN,
 and writable in the established or close-wait state while its send
 buffer has space.
 A pending connection error counts as read and write readiness in the
-requested sets; a closed stream counts as readable.
+requested sets; a closed stream counts as readable while its control
+block remains attached, and reports no readiness once it is detached.
 An ioctl-only socket reports an error and thus counts as ready in either
 requested read or write set.
 .Pp

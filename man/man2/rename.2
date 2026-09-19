@@ -43,12 +43,23 @@ A mounted KRFFS volume also refuses directory renames, generally with
 an open directory destination gives
 .Er EISDIR .
 Ext2, FAT32, and exFAT can rename directories.
-A directory destination must be empty and not held open, and a directory
-cannot be moved into itself or below itself.
+When replacing a different directory, the destination must be empty and
+not held open, and a directory cannot be moved into itself or below
+itself.
 A directory and a nondirectory cannot replace each other.
 .Pp
-Either path naming the root is refused with
-.Er EINVAL .
+Either path normalized to the root without resolving
+.Ql ..
+is refused with
+.Er EINVAL ;
+the code keeps
+.Ql .. ,
+so on the KRFFS boot root
+.Pa /..
+as the source gives
+.Er EPERM
+and as the destination of a regular file
+.Er EISDIR .
 Mount points cannot be renamed or replaced.
 The synthetic
 .Pa /dev
@@ -91,7 +102,7 @@ A path cannot be read from user memory, or there is no current process.
 An ext2 directory cannot grow further or a required block exceeds the
 file system's addressing limit.
 .It Er EINVAL
-Either path names the root, a destination has no leaf component, a
+Either path normalizes to the root, a destination has no leaf component, a
 directory would move into itself or below itself, or a file system
 rejects the name or cannot supply required attributes.
 .It Er EIO

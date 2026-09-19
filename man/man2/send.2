@@ -50,8 +50,8 @@ A signal can interrupt the wait.
 .Pp
 A stream must be in the established or close-wait state.
 If it cannot send, a pending TCP error is returned and cleared.
-With no pending error, for a stream this end shut down, the call fails
-with
+If the stream is outside those states and has no pending TCP error, the
+call fails with
 .Er EPIPE .
 No SIGPIPE is generated.
 .Ss Datagrams

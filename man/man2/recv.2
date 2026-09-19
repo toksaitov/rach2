@@ -70,13 +70,15 @@ If receiving the data fails, no source address or length is written.
 .Pp
 An IPv4 socket returns a 16-byte
 .Vt sockaddr_in
-with its sender's address and port in network byte order.
+with its sender's address and port in network byte order; a raw ICMP
+receive reports the address with the port zero.
 A packet socket returns a 20-byte
 .Vt sockaddr_ll
 with the sender's hardware address, protocol, interface, hardware type,
 and packet type.
 Packet-socket data omits the Ethernet header.
-A protocol-bearing raw ICMP socket returns the whole IPv4 datagram.
+A raw ICMP receive includes the IPv4 header; the receive queue keeps at
+most 1500 bytes of a datagram.
 An ioctl-only raw socket has no receive operation.
 .Ss Scatter receives
 .Fn recvmsg
@@ -154,7 +156,8 @@ No message or stream data is available for a nonblocking receive.
 .It Er ECONNREFUSED
 A stream connection was refused.
 .It Er ECONNRESET
-A stream connection was reset.
+A stream connection was reset, or a closed stream with no buffered data,
+no received FIN and no recorded error was read.
 .It Er EFAULT
 The socketcall arguments, data buffers, message header, vector list,
 or address buffers cannot be accessed as required.
@@ -175,8 +178,8 @@ A raw socket was passed to kernel operation 10, an ioctl-only socket
 was passed to recvfrom, or a socket other than
 .Dv SOCK_DGRAM
 was passed to recvmsg.
-.It Er ECONNRESET
-A closed stream has no recorded error to report.
+.It Er ENOTCONN
+The stream has no TCP control block and has not been shut down.
 .It Er ETIMEDOUT
 A stream connection timed out.
 .El
