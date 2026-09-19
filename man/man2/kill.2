@@ -94,7 +94,7 @@ The default suite's
 places a child in its own process group, sends
 .Dv SIGTERM
 with
-.Li kill(-cpid, SIGTERM) ,
+.Ql "kill(-cpid, SIGTERM)" ,
 and checks that the child's wait status reports that signal.
 .Sh ERRORS
 .Bl -tag -width "[EINVAL]"

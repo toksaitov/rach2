@@ -114,10 +114,10 @@ The default suite's
 .Pa tests/fdstale.c
 opens a file, unlinks its name, and reads the original contents through
 the descriptor.
-It checks that seeking to the end still returns the file's size and
-that opening the removed name returns
-.Er ENOENT ,
-both before and after the last close.
+It checks that seeking to the end returns the file's size.
+Opening the removed name returns
+.Er ENOENT
+before and after the last close.
 .Sh ERRORS
 .Bl -tag -width "[ENAMETOOLONG]"
 .It Bq Er EACCES

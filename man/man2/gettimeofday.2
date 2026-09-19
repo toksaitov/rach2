@@ -44,7 +44,8 @@ The same real time reported by
 .Fn gettimeofday .
 .It Dv CLOCK_MONOTONIC
 ID 1.
-Time since boot, computed from the kernel's 32-bit tick counter.
+Time since boot, computed from the kernel's 32-bit tick counter, which
+wraps after about 497 days.
 .El
 .Pp
 Both clocks have 10 ms resolution.
@@ -52,7 +53,8 @@ The PIT microsecond clock used for kernel diagnostics reads the counter
 within a tick; these system calls do not expose that finer clock.
 .Pp
 .Fn times
-returns the monotonic tick count in units of 1/100 second.
+returns the monotonic tick count in units of 1/100 second, as a signed
+32-bit value that goes negative after about 249 days.
 Per-process CPU time is not tracked.
 If
 .Fa buf
@@ -112,7 +114,8 @@ Timestamp changes are supported on KRFFS, ext2, FAT32, and exFAT,
 subject to the file system's stored precision.
 On KRFFS, FAT32, and exFAT, a successful request on the volume's root
 directory leaves its timestamps unchanged.
-The KRFFS boot root accepts these requests without checking ownership.
+The root directory of the KRFFS boot file system accepts these requests
+without checking ownership; its other nodes undergo the checks above.
 Synthetic files under
 .Pa /dev
 and
@@ -130,7 +133,7 @@ The i386 system call numbers are 78 for
 and 320 for
 .Fn utimensat .
 The time structures in this kernel interface have 32-bit seconds fields.
-Real time in this ABI ends in 2038.
+The signed 32-bit seconds field overflows in 2038.
 .Pp
 musl first tries
 .Fn clock_gettime64
@@ -155,9 +158,14 @@ and
 return 0 on success.
 .Fn times
 returns the tick count.
-Kernel failures return a negative error number; system call wrappers
+Kernel failures return a negative error number; the system call wrappers
 return -1 and set
-.Va errno .
+.Va errno ,
+except musl's
+.Fn times ,
+which returns the kernel's result as it is: an invalid buffer gives the
+raw -14 of
+.Er EFAULT .
 musl's
 .Fn gettimeofday
 returns 0 and writes its result in user space.

@@ -408,3 +408,16 @@ dropbearmulti 8 dropbear
 col 1 man
 [ 1 busybox-coreutils
 [[ 1 busybox-coreutils
+geteuid 2 getuid
+getgid 2 getuid
+getegid 2 getuid
+getresuid 2 getuid
+getresgid 2 getuid
+getgroups 2 getuid
+pselect 2 select
+setgid 2 setuid
+setgroups 2 setuid
+setregid 2 setuid
+setresgid 2 setuid
+setresuid 2 setuid
+setreuid 2 setuid

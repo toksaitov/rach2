@@ -62,9 +62,8 @@ Write an
 count of immediately readable bytes through
 .Fa arg .
 The input source is drained first.
-Canonical mode reports a complete cooked line; raw mode reports the
-queued byte count.
-A pending end-of-file reports zero.
+Both modes report the bytes queued for reading, uncommitted canonical
+input excluded; a pending end-of-file does not make the count zero.
 .It Dv TIOCGWINSZ , TIOCSWINSZ
 Read or replace the terminal's
 .Vt "struct winsize"
@@ -224,8 +223,10 @@ or change the interface's
 state.
 Other flag bits are ignored by the setter.
 An address set without its mask uses a provisional classful mask until
-the separate netmask request; an address that is not a host under that
-mask waits unconfigured for the netmask.
+the separate netmask request.
+If the address is a network or broadcast address under the provisional
+mask, the interface remains unconfigured until a valid netmask is
+supplied.
 Repeating the existing configured address leaves its mask unchanged.
 .Pp
 .Dv SIOCADDRT
