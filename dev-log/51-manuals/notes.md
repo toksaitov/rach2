@@ -2,7 +2,7 @@
 
 ## Where the work stands
 
-In progress on 2026-09-19.
+Accepted on 2026-09-19 at the commit that adds the Readme, from source `d33aafdd`; the Readme records the sets, the hashes and the judges.
 
 ## Phase 1: the reader and the pipeline
 
