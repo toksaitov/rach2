@@ -452,7 +452,7 @@ int main(int argc, char **argv)
             static char scratchpad[SCRATCHPAD_BUFFER_SIZE];
 
             node = file_system.node;
-            struct krffs_node *next_node = node;
+            struct krffs_node *next_node;
             do {
                 next_node =
                     krffs_get_next_node(
