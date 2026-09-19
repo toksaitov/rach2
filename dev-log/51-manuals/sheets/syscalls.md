@@ -1594,14 +1594,15 @@ non-blocking listener), install a new fd for it, and report the peer address.
 
 ### SC_GETSOCKNAME = 6 -> do_getsockname
 
-getsockname: the socket's local address, the single NIC IP (net_ip_addr) plus
-its bound or ephemeral port. */
+getsockname: the socket's local address: for an IPv4 socket the primary
+address (net_ip_addr) plus its bound or ephemeral port, for a packet socket
+the sockaddr_ll of its interface. */
 
 
 ### SC_GETPEERNAME = 7 -> do_getpeername
 
-getpeername: the connected peer's address (a connected stream socket
-only). */
+getpeername: the connected peer's address (an established stream socket
+or a datagram socket that connect(2) gave a peer). */
 
 
 ### SC_SEND = 9 -> do_send

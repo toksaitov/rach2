@@ -10478,8 +10478,9 @@ static int32_t do_recv(int fd, uint32_t buf_ptr, int len, int flags)
     return (int32_t)socket_tcp_recv(entry->sock, (uint8_t __force *)(void __user *)buf_ptr, len);
 }
 
-/* getsockname: the socket's local address, the single NIC IP (net_ip_addr) plus
- * its bound or ephemeral port. */
+/* getsockname: the socket's local address: for an IPv4 socket the primary
+ * address (net_ip_addr) plus its bound or ephemeral port, for a packet socket
+ * the sockaddr_ll of its interface. */
 static int32_t do_getsockname(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
 {
     fd_entry_t *entry = fd_get(&current_proc->fds, fd);
@@ -10531,8 +10532,8 @@ static int32_t do_getsockname(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
     return copy_sockaddr_to_user(sa_ptr, salen_ptr, entry->sock->local_port, (uint32_t)net_ip_addr);
 }
 
-/* getpeername: the connected peer's address (a connected stream socket
- * only). */
+/* getpeername: the connected peer's address (an established stream socket
+ * or a datagram socket that connect(2) gave a peer). */
 static int32_t do_getpeername(int fd, uint32_t sa_ptr, uint32_t salen_ptr)
 {
     fd_entry_t *entry = fd_get(&current_proc->fds, fd);
