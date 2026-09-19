@@ -50,3 +50,21 @@ unusedStructMember:*tests/musl/stampmusl.c
 # main's argv is the ABI's, not ours: cppcheck asks for `const char *argv[]`,
 # which is not the signature a hosted C program's main has.
 constParameter:*tests/musl/execargmusl.c
+
+# --- The host programs: tools/, tests/system/ and krffs/ ---
+
+# The vendored terminal library fsviz includes is not this project's code.
+*:*krffs/vendor/*
+
+# The on-disk node and file system layouts, and the fixture's copy of the
+# kernel's VFS structures for the source it compiles: members the tools read
+# in other translation units, or that the layout requires, are the format,
+# not dead code.
+unusedStructMember:*krffs/krffs_node.h
+unusedStructMember:*krffs/krffs_file_system.h
+unusedStructMember:*tests/system/fixtures/vfs_unmount.c
+
+# The index entries are a `char [][128]` array; C does not convert a pointer
+# to such an array to one with `const` inside, so the parameter cppcheck asks
+# for would need a cast at every call.
+constParameter:*tools/verify/prosecheck.c

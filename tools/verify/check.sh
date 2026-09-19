@@ -9,7 +9,8 @@
 #
 #   0. a tool-presence check (a missing tool is a hard FAILURE, never a silent
 #   skip) 1. the kernel build with -Werror (the zero-warning policy, enforced)
-#   2. cppcheck (c89, warning+style) with tools/verify/cppcheck.suppress
+#   2. cppcheck (c89, warning+style) with tools/verify/cppcheck.suppress, and
+#      the host programs (tools/, tests/system/, krffs/) at c99
 #   (--error-exitcode) 3. shellcheck on the in-house shell scripts
 #   4. the convention grep (no // comments, ASCII only, _NAME_H_ guards)
 #   5. clang-format: HARD on new-code dirs (tools/ libc/ tests/host, *probe.c)
@@ -95,6 +96,9 @@ inhouse_ch()
     # tests).
     find krffs utils ish tests -path '*/vendor' -prune -o -path '*/vs-dokany' -prune \
          -o \( -name '*.c' -o -name '*.h' \) -print 2>/dev/null
+    # The host programs under tools/: the image builders, the inspectors,
+    # the setup checks and the verifiers.
+    find tools \( -name '*.c' -o -name '*.h' \) 2>/dev/null
 }
 
 # New code the port introduces; must be clang-format clean (unlike the legacy
@@ -176,6 +180,22 @@ if cppcheck --std=c89 --platform=unix32 --enable=warning,style --error-exitcode=
     echo "  PASS (0 findings)"
 else
     echo "  FAIL: see $VDIR/verify_cppcheck.log"; fail=1
+fi
+# The host programs, in their own dialect and on a 64-bit host: the tools,
+# the runner, the checkers and the fixtures under tests/system, and the KRFFS
+# tools without their vendored terminal library.
+{
+    find "$REPO/tools" -name '*.c' -o -name '*.h'
+    find "$REPO/tests/system" "$REPO/krffs" -path '*/vendor' -prune -o -path '*/vs-dokany' -prune \
+         -o \( -name '*.c' -o -name '*.h' \) -print
+} 2>/dev/null | sort >"$VDIR/_hostsrcs.txt"
+if cppcheck --std=c99 --platform=unix64 --enable=warning,style --error-exitcode=2 \
+      --suppress=missingInclude --suppress=missingIncludeSystem \
+      --suppressions-list="$REPO/tools/verify/cppcheck.suppress" \
+      --file-list="$VDIR/_hostsrcs.txt" >"$VDIR/verify_cppcheck_host.log" 2>&1; then
+    echo "  PASS (host programs: 0 findings)"
+else
+    echo "  FAIL: see $VDIR/verify_cppcheck_host.log"; fail=1
 fi
 
 # 3. shellcheck. New in-house scripts (tools/, vendor/*/build_*.sh) are STRICT;
