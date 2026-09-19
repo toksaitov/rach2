@@ -1284,8 +1284,7 @@ int xhci_command_issue(struct xhci_ctrl *hc, uint32_t type, uint64_t parameter, 
             return -1;
         }
         hc->command_aborting = 0;
-        op_w32(hc, XHCI_CRCR,
-               trb_addr(trb_at(hc->cmd_ring, hc->cmd_enqueue)) | hc->cmd_cycle);
+        op_w32(hc, XHCI_CRCR, trb_addr(trb_at(hc->cmd_ring, hc->cmd_enqueue)) | hc->cmd_cycle);
         op_w32(hc, XHCI_CRCR + 4, 0);
     }
 
