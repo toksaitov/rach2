@@ -2461,7 +2461,6 @@ static int k_memcmp_bytes(const uint8_t *a, const uint8_t *b, uint32_t n)
     return 0;
 }
 
-
 /* ---- the check of a dirty volume at mount ----
  *
  * A volume whose dirty flag is set was written by something that did not

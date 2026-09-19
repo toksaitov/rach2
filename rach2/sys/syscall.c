@@ -8382,7 +8382,6 @@ static int32_t sys_getrandom(isr_params_t *params)
  * return-to-user via a frame on the user stack, and rt_sigreturn.
  * ======================================================================== */
 
-
 /* The default action for a signal whose disposition is SIG_DFL. */
 static enum ksig_default ksig_default_action(int signo)
 {
