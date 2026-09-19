@@ -1,0 +1,464 @@
+.Dd September 19, 2026
+.Dt BUSYBOX-MISCUTILS 1
+.Os
+.Sh NAME
+.Nm busybox-miscutils ,
+.Nm adjtimex ,
+.Nm ascii ,
+.Nm bc ,
+.Nm chat ,
+.Nm crond ,
+.Nm dc ,
+.Nm devmem ,
+.Nm hexedit ,
+.Nm less ,
+.Nm lsscsi ,
+.Nm makedevs ,
+.Nm "busybox man" ,
+.Nm microcom ,
+.Nm mim ,
+.Nm mt ,
+.Nm readahead ,
+.Nm runlevel ,
+.Nm rx ,
+.Nm setfattr ,
+.Nm setserial ,
+.Nm strings ,
+.Nm time ,
+.Nm tree ,
+.Nm ts ,
+.Nm ttysize ,
+.Nm volname
+.Nd miscellaneous BusyBox tools
+.Sh SYNOPSIS
+.Nm adjtimex
+.Op Fl q
+.Op Fl o Ar OFS
+.Op Fl f Ar FREQ
+.Op Fl p Ar TCONST
+.Op Fl t Ar TICK
+.Nm ascii
+.Nm bc
+.Op Fl sqlw
+.Op Ar FILE
+.Ar ...
+.Nm chat
+.Ar EXPECT
+.Op Ar SEND Op Ar EXPECT Op Ar SEND
+.Ar ...
+.Nm crond
+.Op Fl fbS
+.Op Fl l Ar N
+.Op Fl d Ar N
+.Op Fl L Ar LOGFILE
+.Op Fl c Ar DIR
+.Nm dc
+.Op Fl x
+.Op Fl e Ns Ar SCRIPT
+.Ar ...
+.Op Fl f Ns Ar FILE
+.Ar ...
+.Op Ar FILE
+.Ar ...
+.Nm devmem
+.Ar ADDRESS
+.Op Ar WIDTH Op Ar VALUE
+.Nm hexedit
+.Ar FILE
+.Nm less
+.Op Fl EFIMmNSRh~
+.Op Ar FILE
+.Ar ...
+.Nm lsscsi
+.Nm makedevs
+.Op Fl d Ar device_table
+.Ar rootdir
+.Nm man
+.Op Fl aw
+.Op Ar SECTION
+.Ar MANPAGE Ns Op .SECTION
+.Ar ...
+.Nm microcom
+.Op Fl d Ar DELAY_MS
+.Op Fl t Ar TIMEOUT_MS
+.Op Fl s Ar SPEED
+.Op Fl X
+.Ar TTY
+.Nm mim
+.Op Fl f Ar FILE
+.Op Ar SHELL_OPTIONS
+.Op Ar TARGET
+.Ar ...
+.Nm mt
+.Op Fl f Ar DEVICE
+.Ar OPCODE VALUE
+.Nm readahead
+.Op Ar FILE
+.Ar ...
+.Nm runlevel
+.Op Ar FILE
+.Nm rx
+.Ar FILE
+.Nm setfattr
+.Op Fl h
+.Fl n Ns | Ns Fl x Ar ATTR
+.Op Fl v Ar VALUE
+.Ar FILE ...
+.Nm setserial
+.Op Fl abGvz
+.Ar DEVICE
+.Op Ar PARAMETER Op Ar ARG
+.Ar ...
+.Nm setserial
+.Op Fl abGvz
+.Fl g Ar DEVICE ...
+.Nm strings
+.Op Fl fo
+.Op Fl t Cm o Ns | Ns Cm d Ns | Ns Cm x
+.Op Fl n Ar LEN
+.Op Ar FILE
+.Ar ...
+.Nm time
+.Op Fl vpa
+.Op Fl o Ar FILE
+.Ar PROG ARGS
+.Nm tree
+.Op Ar DIRECTORY ...
+.Nm ts
+.Op Fl is
+.Op Ar STRFTIME
+.Nm ttysize
+.Op Cm w
+.Op Cm h
+.Nm volname
+.Op Ar DEVICE
+.Sh DESCRIPTION
+These are the miscutils applets of BusyBox 1.36.1 as built for Rach2.
+.Bl -tag -width readahead
+.It Nm adjtimex
+Read or set kernel time variables.
+Rach2 does not implement the
+.Fn adjtimex
+system call, so the applet fails.
+.It Nm ascii
+Print an ASCII table.
+.It Nm bc
+Calculate with arbitrary precision.
+.It Nm chat
+Exchange expect-send argument pairs with a modem on standard input and output.
+.It Nm crond
+Run scheduled commands from crontabs.
+.It Nm dc
+Calculate using reverse Polish notation, with operands before operators.
+Arithmetic operators are
+.Ql + ,
+.Ql - ,
+.Ql * ,
+.Ql / ,
+.Ql % ,
+and
+.Ql ^ ;
+.Ql ~
+divides with remainder,
+.Ql |
+performs modular exponentiation, and
+.Ql v
+computes the square root.
+.It Nm devmem
+Read or write a physical address through
+.Pa /dev/mem .
+Rach2 has no
+.Pa /dev/mem ,
+so this applet cannot access physical memory here.
+.It Nm hexedit
+Edit a file in hexadecimal.
+.It Nm less
+View files, or standard input, one screen at a time.
+.It Nm lsscsi
+Display SCSI bus and device information from
+.Pa /sys/bus/scsi/devices .
+.It Nm makedevs
+Create files specified in a device table under
+.Ar rootdir .
+.It Nm man
+Display manual pages; see
+.Xr man 1 .
+.It Nm microcom
+Copy bytes from standard input to
+.Ar TTY
+and from
+.Ar TTY
+to standard output.
+.It Nm mim
+Run a script from a specification file with Makefile-like syntax.
+.It Nm mt
+Control a magnetic tape drive.
+.It Nm readahead
+Preload files into RAM.
+.It Nm runlevel
+Find the previous and current system runlevels.
+Print
+.Ql unknown
+if the utmp file does not exist or contains no runlevel record.
+.It Nm rx
+Receive a file using the XMODEM protocol.
+.It Nm setfattr
+Set or remove extended file attributes.
+.It Nm setserial
+Print or set serial port parameters.
+.It Nm strings
+Display printable strings in binary files.
+.It Nm time
+Run
+.Ar PROG
+and display its resource usage when it exits.
+.It Nm tree
+List files and directories in a tree structure.
+.It Nm ts
+Copy standard input to standard output, adding a timestamp to each line.
+.It Nm ttysize
+Print the dimensions of the terminal on standard input, or 80 by 24.
+.It Nm volname
+Show the CD volume name of
+.Ar DEVICE ;
+the default device is
+.Pa /dev/cdrom .
+.El
+.Sh OPTIONS
+.Ss adjtimex
+.Bl -tag -width "-f FREQ"
+.It Fl q
+Suppress output.
+.It Fl o Ar OFF
+Set the time offset in microseconds.
+.It Fl f Ar FREQ
+Set the frequency adjustment in integer kernel units; 65536 is one
+part per million.
+.It Fl t Ar TICK
+Set the microseconds per tick, usually 10000.
+Positive
+.Fl t
+or
+.Fl f
+values make the clock run faster.
+.El
+.Ss crond
+.Bl -tag -width "-L FILE"
+.It Fl f
+Run in the foreground.
+.It Fl b
+Run in the background; this is the default.
+.It Fl S
+Log to syslog; this is the default.
+.It Fl l Ar N
+Set the log level.
+Level 0 is most verbose; the default is 8.
+.It Fl d Ar N
+Set the log level and log to standard error.
+.It Fl L Ar FILE
+Log to
+.Ar FILE .
+.It Fl c Ar DIR
+Use
+.Ar DIR
+for crontabs; the default is
+.Pa /var/spool/cron/crontabs .
+.El
+.Ss devmem
+.Ar ADDRESS
+is the physical address to access.
+.Ar WIDTH
+is the width in bits, such as 8 or 16.
+If
+.Ar VALUE
+is given, write that value.
+.Ss less
+.Bl -tag -width "-M, -m"
+.It Fl E
+Quit when the end of a file is reached.
+.It Fl F
+Quit if the whole file fits on the first screen.
+.It Fl I
+Ignore case in all searches.
+.It Fl M , Fl m
+Display a status line with line numbers and the percentage through the file.
+.It Fl N
+Prefix each line with its number.
+.It Fl S
+Truncate long lines.
+.It Fl R
+Remove color escape codes from input.
+.It Fl ~
+Suppress tildes displayed past the end of the file.
+.El
+.Ss makedevs
+.Fl d Ar device_table
+selects the device table.
+Each entry has the form:
+.Dl name type mode uid gid major minor start inc count
+.Ar name
+is the file name;
+.Ar uid
+and
+.Ar gid
+are its user and group IDs.
+The
+.Ar type
+field is one of:
+.Bl -tag -width f -compact
+.It Cm f
+Regular file.
+.It Cm d
+Directory.
+.It Cm c
+Character device.
+.It Cm b
+Block device.
+.It Cm p
+FIFO, or named pipe.
+.El
+.Pp
+The
+.Ar major , minor , start , inc ,
+and
+.Ar count
+fields apply to device special files.
+A
+.Ql -
+may be used for a blank field.
+.Ss man
+.Bl -tag -width "-a"
+.It Fl a
+Display all matching pages.
+.It Fl w
+Show page locations.
+.El
+.Pp
+.Ev COLUMNS
+overrides the output width.
+.Ss microcom
+.Bl -tag -width "-t TIMEOUT"
+.It Fl d Ar DELAY
+Before sending each next byte, wait up to
+.Ar DELAY
+milliseconds for terminal output.
+.It Fl t Ar TIMEOUT
+Exit if both standard input and the terminal are silent for
+.Ar TIMEOUT
+milliseconds.
+.It Fl s Ar SPEED
+Set the serial line speed.
+.It Fl X
+Disable the special meanings of NUL and Ctrl-X from standard input.
+.El
+.Ss mim
+.Fl f Ar FILE
+selects the specification file; the default is
+.Pa Mimfile .
+.Ss mt
+.Fl f Ar DEVICE
+selects the tape device.
+The operation codes are:
+.Bd -literal -offset indent
+bsf bsfm bsr bss datacompression drvbuffer eof eom erase
+fsf fsfm fsr fss load lock mkpart nop offline ras1 ras2
+ras3 reset retension rewind rewoffline seek setblk setdensity
+setpart tell unload unlock weof wset
+.Ed
+.Ss setfattr
+.Bl -tag -width "-v VALUE"
+.It Fl h
+Do not follow symbolic links.
+.It Fl x Ar ATTR
+Remove the attribute.
+.It Fl n Ar ATTR
+Set the attribute to
+.Ar VALUE .
+.It Fl v Ar VALUE
+Specify the value; the default is an empty value.
+.El
+.Ss setserial
+.Bl -tag -width "-a"
+.It Fl a
+Print all parameters.
+.It Fl b
+Print a summary.
+.It Fl G
+Print parameters in a form accepted by
+.Nm setserial .
+.It Fl v
+Produce verbose output.
+.It Fl z
+Clear serial flags before setting them.
+.It Fl g
+Treat all operands as device names.
+.El
+.Pp
+The following parameters take an argument:
+.Bd -literal -offset indent
+port irq divisor uart baud_base close_delay closing_wait
+.Ed
+.Pp
+The following flags can be disabled by prefixing the name with
+.Ql ^ :
+.Bd -literal -offset indent
+fourport auto_irq skip_test sak session_lockout pgrp_lockout
+callout_nohup split_termios hup_notify low_latency
+.Ed
+.Pp
+Other parameters are:
+.Bd -literal -offset indent
+autoconfig spd_normal spd_hi spd_vhi spd_shi spd_warp spd_cust
+.Ed
+.Pp
+The argument to
+.Cm uart
+is one of:
+.Bd -literal -offset indent
+unknown 8250 16450 16550 16550A Cirrus 16650 16650V2 16750
+16950 16954 16654 16850 RSA NS16550A XSCALE RM9000 OCTEON AR7
+U6_16550A
+.Ed
+.Ss time
+.Bl -tag -width "-o FILE"
+.It Fl v
+Produce verbose output.
+.It Fl p
+Use POSIX output format.
+.It Fl f Ar FMT
+Use a custom output format.
+.It Fl o Ar FILE
+Write the result to
+.Ar FILE .
+.It Fl a
+Append the result instead of overwriting the output file.
+.El
+.Ss ts
+.Bl -tag -width "-s"
+.It Fl s
+Print time since startup.
+.It Fl i
+Print time since the previous line.
+.El
+.Sh FILES
+.Bl -tag -width /var/spool/cron/crontabs
+.It Pa /var/spool/cron/crontabs
+Default crontab directory for
+.Nm crond .
+.It Pa Mimfile
+Default specification file for
+.Nm mim .
+.It Pa /dev/mem
+Physical memory device used by
+.Nm devmem ;
+absent on Rach2.
+.It Pa /dev/cdrom
+Default device for
+.Nm volname .
+.El
+.Sh SEE ALSO
+.Xr man 1 ,
+.Xr adjtimex 2
+.Sh HISTORY
+The applet descriptions are adapted from BusyBox 1.36.1 documentation,
+licensed under GPL-2.0.

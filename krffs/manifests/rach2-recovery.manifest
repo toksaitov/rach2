@@ -167,6 +167,9 @@ file 0644 /usr/share/man/cat8/reflash.8 build/man/cat8/reflash.8
 file 0644 /usr/share/man/cat8/bootctl.8 build/man/cat8/bootctl.8
 file 0644 /usr/share/man/cat8/growroot.8 build/man/cat8/growroot.8
 file 0644 /usr/share/man/cat8/mount.8 build/man/cat8/mount.8
+file 0644 /usr/share/man/cat8/netup.8 build/man/cat8/netup.8
+dir 0755 /usr/share/man/cat1
+file 0644 /usr/share/man/cat1/man.1 build/man/cat1/man.1
 
 
 dir 1777 /tmp

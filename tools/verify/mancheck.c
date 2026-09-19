@@ -318,10 +318,25 @@ static void read_syscalls(const char *header, const char *source)
             p += strlen("_syscall_table[SYS_");
             q = strchr(p, ']');
         } else if (strncmp(line, "#define SC_", 11) == 0) {
+            /* A socket operation is `#define SC_NAME NUMBER`; the helper
+             * macros beside them, `SC_BE16(p)` and the like, are not. */
+            const char *r;
+
             p = line + 11;
             q = p;
             while (*q && !isspace((unsigned char)*q)) {
                 q++;
+            }
+            r = q;
+            while (isspace((unsigned char)*r)) {
+                r++;
+            }
+            if (strchr(p, '(') < q || !isdigit((unsigned char)*r)) {
+                continue;
+            }
+            (void)strtoul(r, (char **)&r, 0);
+            if (!isspace((unsigned char)*r)) {
+                continue; /* a constant with a suffix, such as SC_ID_KEEP */
             }
         } else {
             continue;

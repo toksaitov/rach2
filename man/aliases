@@ -398,3 +398,11 @@ xz 1 busybox-archival
 xzcat 1 busybox-archival
 yes 1 busybox-coreutils
 zcat 1 busybox-archival
+busybox 1 sh
+shadow 5 passwd
+group 5 passwd
+mmap 2 brk
+umount 8 mount
+cc 1 tcc
+dropbearmulti 8 dropbear
+col 1 man
