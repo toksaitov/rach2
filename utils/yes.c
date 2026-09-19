@@ -1,4 +1,6 @@
-/** Print a line forever: the joined arguments, or `y`. */
+/** Print a line forever: the joined arguments, or `y`. The loop ends when
+    the output does: a write that fails, as when the reader has gone, is
+    the one way out, and the status says so. */
 
 #include <stdio.h>
 
@@ -9,15 +11,15 @@ int main(int argc, char *argv[])
     if (argc > 1) {
         for (;;) {
             for (i = 1; i < argc; ++i) {
-                fputs(argv[i], stdout);
-                putchar(i < argc - 1 ? ' ' : '\n');
+                if (fputs(argv[i], stdout) == EOF || putchar(i < argc - 1 ? ' ' : '\n') == EOF) {
+                    return 1;
+                }
             }
         }
-    } else {
-        for (;;) {
-            fputs("y\n", stdout);
+    }
+    for (;;) {
+        if (fputs("y\n", stdout) == EOF) {
+            return 1;
         }
     }
-
-    return 0;
 }
