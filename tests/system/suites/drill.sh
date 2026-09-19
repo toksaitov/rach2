@@ -8,25 +8,25 @@
 # can write a partition nothing is mounting is a kernel that boots from
 # somewhere else. That is what partition 2 has: the recovery build, which is
 # the only one whose /dev/disk0 accepts a write, and a RAM image with an SSH
-# server and two tools in it.
+# server and the repair tools in it.
 #
 # Five boots of one disk. The first is the machine as it shipped, and it proves
 # the everyday kernel cannot write its own disk: `reflash` is refused, a shell
-# redirect into the device opens and its first write is refused, and the image
-# is compared byte for byte afterwards so the refusal is shown to have written
-# nothing, not merely to have printed something. Then the root's first sector
-# is destroyed from the host, with the machine stopped, and the second boot
-# must fail to mount rather than answer anything. The third arms the recovery
-# entry in the environment block and boots it: recovery comes up on partition
-# 3, takes an address, and answers SSH with nothing typed at the console. The
-# whole root partition then arrives through one `ssh` pipe, and the region is
-# read back through the same device and hashed on the machine against the hash
-# the host computed. The last boot is the ordinary entry again, which must
-# mount and offer a login.
+# redirect into the device opens and its first write is refused, and the
+# disk's first sector is compared byte for byte afterwards so the refusal is
+# shown to have written nothing, not merely to have printed something. Then
+# the root's first sector is destroyed from the host, with the machine
+# stopped, and the second boot must fail to mount rather than answer
+# anything. The third arms the recovery entry in the environment block and
+# boots it: recovery comes up on partition 2, takes an address, and answers
+# SSH with nothing typed at the console. The whole root partition then
+# arrives through one `ssh` pipe, and the host hashes what it sent against
+# what the machine reports written. The last boot is the ordinary entry
+# again, which must mount and offer a login.
 #
 # Usage: drill_test.sh <grub-disk> <root password> <ssh port>
 #
-# fourth partition and the candidate entries boot it: the root destroyed,
+# third partition and the candidate entries boot it: the root destroyed,
 # refused and rewritten is that one, the boot that must fail says so in the
 # ext2 driver's words, and the saved default stays the candidate through the
 # repair, so the last boot mounts the ext2 root again.

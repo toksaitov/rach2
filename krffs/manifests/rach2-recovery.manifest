@@ -1,16 +1,17 @@
-# The recovery profile: the image partition 3 holds, for the day the machine's
+# The recovery profile: the image partition 2 holds, for the day the machine's
 # own root will not mount.
 #
-# It is the metal profile with two more programs and one fewer assumption. The
+# It is the metal profile with the repair tools and one fewer assumption. The
 # kernel it boots with is the recovery build, the only one that may write the
 # whole disk; this image mounts nothing from that disk, which is what lets it
-# rewrite the root from underneath. Everything it needs arrives over SSH, so
-# what it carries is a shell, a server, the account files, the keys, and the two
-# programs that repair a disk: `reflash` for the raw device and `bootctl` for
-# the boot partition.
-#
-# The account files are os-real's, so one password opens either image, and the
-# authorized keys are the same pair the SSH capstone uses.
+# rewrite the root from underneath. Everything it needs arrives over SSH or is
+# typed at its console, so what it carries is a shell on the console, a
+# server, account files that authenticate nobody, the key it was built with
+# when it was built with one, the programs that repair a disk (`reflash` for
+# the raw device, `bootctl` for the boot partition, `rach2-install` and
+# `rach2-recover` for the root, `growroot` with `e2fsck` and `resize2fs` for
+# the file system, and `diskctl`, `growset` and `growboot` beside them), and
+# the pages of this manual that describe them.
 
 dir 0755 /bin
 file 0755 /bin/busybox build/vendor/busybox/busybox

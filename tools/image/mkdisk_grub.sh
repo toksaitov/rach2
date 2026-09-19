@@ -267,8 +267,10 @@ menuentry "Start Rach2 with the previous kernel" --id fallback {
 # this disk, which is what lets it rewrite the root; its title says so when the
 # two files are there and says they are not when they are not, since the entry
 # is defined either way (the numbers above are a contract and adding an entry
-# afterwards would move them). The core image's own configuration, below, has
-# a second one, for a boot partition that does not read. Both carry
+# afterwards would move them). `/boot/grub/recovery.cfg` on the recovery
+# partition, written from the heredoc below, has a second one, which the
+# core image's embedded configuration loads when the boot partition does
+# not read. Both carry
 # `rach2.slot=recovery`, which is how `bootctl` running there knows it is
 # running from neither kernel slot and may therefore install into either.
 menuentry "RACH2_RECOVERY_TITLE" --id recovery {
@@ -351,10 +353,11 @@ fi
 set timeout=3
 CFG
 
-# The per-machine tokens ride into the entries through two placeholders,
-# so the heredoc above stays quoted and GRUB's own ${...} variables never
-# reach the shell. The network tokens are a set of their own, since the
-# kernel refuses an address given twice and would come up with no address
+# The script substitutes the per-machine tokens into the entries through
+# two placeholders, so the heredoc above stays quoted and GRUB's own ${...}
+# variables never reach the shell. The network tokens are a set of their
+# own, since the kernel refuses an address given twice and would come up
+# with no address
 # at all. The values are escaped before sed sees
 # them, because `&`, `\`, and the delimiter are replacement syntax and a
 # token containing one would silently change; a newline would end the sed

@@ -489,9 +489,9 @@ int main(int argc, char **argv)
         }
         from_prefix = (uint32_t) (0xFFFFFFFFul << (32 - prefix));
         if (from_prefix != (uint32_t) mask) {
-            fprintf(stderr, "check-sealednet: /%ld is not %s; the menu and "
-                    "the recovery script would put this machine on two "
-                    "different subnets\n", prefix, mask_s);
+            fprintf(stderr, "check-sealednet: /%ld is not %s; the configured "
+                    "prefix and the recovery script would put this machine "
+                    "on two different subnets\n", prefix, mask_s);
             return 1;
         }
         inverted = ~(uint32_t) mask;
@@ -511,7 +511,7 @@ int main(int argc, char **argv)
             (uint32_t) gateway == ((uint32_t) gateway & (uint32_t) mask) ||
             (uint32_t) gateway == ((uint32_t) gateway | inverted)) {
             fprintf(stderr, "check-sealednet: %s is not a host on %s/%ld, "
-                    "so the kernel would refuse the static entries\n",
+                    "so the kernel would refuse the configured gateway\n",
                     gateway_s, address_s, prefix);
             return 1;
         }

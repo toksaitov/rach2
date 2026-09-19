@@ -100,11 +100,10 @@ static int cmdline_ready;
 /**
  * Read `/proc/cmdline` once; everything that asks about it asks this copy.
  *
- * Once, because a second read can fail where the first succeeded: a process
- * here has sixteen descriptors, and the slot device is open across most of
- * this program. A caller that read that failure as "the token is not there"
- * would install the wrong menu entries on the one machine that could not spare
- * a descriptor.
+ * Once, because every question this program asks of the boot line is asked
+ * of the same text, and a second read that failed where the first succeeded,
+ * on a machine short of memory, would otherwise be taken for a token that is
+ * not there.
  *
  * @return 0 when the copy is there to read.
  */
@@ -242,7 +241,7 @@ static void print_env(const uint8_t *env, const char *key, int trial_marker)
 /**
  * Report the slot this boot came from, which is menu text, not a kernel flag.
  *
- * `recovery` is the third answer: that kernel comes off partition 3 and runs
+ * `recovery` is the third answer: that kernel comes off partition 2 and runs
  * neither slot, which is what makes installing into the candidate safe from
  * there. Committing is still the running candidate's alone.
  */
@@ -356,7 +355,7 @@ static const char *const ENV_KEYS[] = {"saved_entry", "next_entry"};
 /* The menu ids `trial` may arm. Every one of these is an entry the stub both
  * defines and consumes a trial for; a value the stub does not consume would
  * stay in the block forever, arming nothing and blocking every later commit.
- * `recovery` is here now that partition 3 has the kernel and the RAM image it
+ * `recovery` is here now that partition 2 has the kernel and the RAM image it
  * names: arming it is how a machine that still boots is sent to the image that
  * can rewrite its root, which is the only way in when the root is damaged but
  * the machine is not yet stopped. A disk built without those files still

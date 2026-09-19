@@ -5,8 +5,8 @@
 # moment it has booted; and /demo carries a file system of each kind this
 # kernel mounts, for a person at the console to attach, mount and write.
 # Everything else, /src and the compilers included, is os-real's by
-# construction, and tools/inspect/check_setid.py derives its profile from
-# os-real's the same way.
+# construction, and tools/inspect/setidcheck.c checks its set-id entries
+# against setid.allow the same way.
 dir 0755 /bin
 # This busybox stays unprivileged. A setuid one would run every one of its
 # BB_SUID_REQUIRE and BB_SUID_MAYBE applets as root unless a config file
@@ -24,8 +24,9 @@ file 0755 /bin/sh build/vendor/busybox/busybox
 file 04755:0:0 /bin/su build/vendor/busybox/busybox-suid
 file 04755:0:0 /bin/passwd build/vendor/busybox/busybox-suid
 file 04755:0:0 /bin/login build/vendor/busybox/busybox-suid
-# Ours, and reachable as a bare `ping` only because busybox's applet is gone:
-# that one wants SOCK_RAW, which this kernel's socket layer does not offer.
+# Ours, and reachable as a bare `ping` only because busybox's applet is not
+# built: that one wants a raw socket, which this kernel gives root alone,
+# where ours works for anyone through the kernel's own ping operation.
 file 0755 /bin/ping build/utils/ping
 # The boot log, under the name a person expects. This machine has no
 # console to watch it scroll past, so reading it afterwards is the only
