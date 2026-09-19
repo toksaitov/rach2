@@ -32,8 +32,9 @@ here since musl issues the 16-bit chown on i386. */
 
 ## fchown: number 95, handler sys_fchown
 
-fchown(fd, uid, gid): the descriptor form. Only the root identity exists, so
-the id policy is enforced and the call is otherwise a no-op. */
+fchown(fd, uid, gid): the descriptor form, under the same ownership rule
+as the path forms, on the node or the mounted volume the descriptor is
+open on. */
 
 ### helper krffs_chown_node
 

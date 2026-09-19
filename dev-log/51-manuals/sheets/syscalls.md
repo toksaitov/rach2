@@ -180,9 +180,9 @@ enters a permission answer.
 
 Replace the current process image with a new program (execve(2)).
 EBX = path, ECX = argv[], EDX = envp[]. Does not return on success. Copies
-the path, argv, and envp into static buffers, validates the ELF header
-BEFORE tearing the old image down (so a bad executable leaves the caller
-intact), then frees the old user pages, streams the new program in, builds
+the path, argv, and envp into the process's exec workspace, allocated at
+its first exec, and validates the ELF header BEFORE tearing the old image
+down (so an executable that is not an ELF leaves the caller intact), then frees the old user pages, streams the new program in, builds
 the SysV/i386 initial stack, and redirects the iret frame to the entry
 point. A failure after the old image is gone routes to
 exec_fail_destroyed.
@@ -727,8 +727,9 @@ matches. */
 
 ## 95 fchown -> sys_fchown
 
-fchown(fd, uid, gid): the descriptor form. Only the root identity exists, so
-the id policy is enforced and the call is otherwise a no-op. */
+fchown(fd, uid, gid): the descriptor form, under the same ownership rule
+as the path forms, on the node or the mounted volume the descriptor is
+open on. */
 
 ### helper krffs_chown_node
 
@@ -1305,7 +1306,8 @@ Descriptor control (fcntl64, syscall 221).
 EBX=fd, ECX=cmd, EDX=arg. Supports the descriptor-flag and status-flag
 round-trips libc needs: F_DUPFD(_CLOEXEC), F_GETFD/F_SETFD (the
 close-on-exec bit), and F_GETFL/F_SETFL (access + O_NONBLOCK/O_APPEND,
-stored, not enforced).
+on the shared open-file description, which the write and socket paths
+read).
 
 
 ## 238 tkill -> sys_tkill

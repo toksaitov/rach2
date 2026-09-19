@@ -4886,8 +4886,9 @@ static int32_t sys_fchownat(isr_params_t *params)
     return do_chown(name, uid, gid);
 }
 
-/* fchown(fd, uid, gid): the descriptor form. Only the root identity exists, so
- * the id policy is enforced and the call is otherwise a no-op. */
+/* fchown(fd, uid, gid): the descriptor form, under the same ownership rule
+ * as the path forms, on the node or the mounted volume the descriptor is
+ * open on. */
 static int32_t sys_fchown(isr_params_t *params)
 {
     int fd = (int)params->ebx;
@@ -5360,8 +5361,8 @@ static int32_t sys__llseek(isr_params_t *params)
  *
  * EBX=fd, ECX=cmd, EDX=arg. Supports the descriptor-flag and status-flag
  * round-trips libc needs: F_DUPFD(_CLOEXEC), F_GETFD/F_SETFD (the
- * close-on-exec bit), and F_GETFL/F_SETFL (access + O_NONBLOCK/O_APPEND,
- * stored, not enforced).
+ * close-on-exec bit), and F_GETFL/F_SETFL (access + O_NONBLOCK/O_APPEND on
+ * the shared open-file description, which the write and socket paths read).
  */
 static int32_t sys_fcntl64(isr_params_t *params)
 {
@@ -6088,12 +6089,13 @@ static int32_t exec_shebang(struct exec_state *s, int *argc,
  * Replace the current process image with a new program (execve(2)).
  *
  * EBX = path, ECX = argv[], EDX = envp[]. Does not return on success. Copies
- * the path, argv, and envp into static buffers, validates the ELF header
- * BEFORE tearing the old image down (so a bad executable leaves the caller
- * intact), then frees the old user pages, streams the new program in, builds
- * the SysV/i386 initial stack, and redirects the iret frame to the entry
- * point. A failure after the old image is gone routes to
- * exec_fail_destroyed.
+ * the path, argv, and envp into the process's exec workspace, allocated at
+ * its first exec, and validates the ELF header BEFORE tearing the old image
+ * down (so an executable that is not an ELF leaves the caller intact), then
+ * frees the old user pages, streams the new program in, builds the SysV/i386
+ * initial stack, and redirects the iret frame to the entry point. A failure
+ * after the old image is gone, a segment that does not load, routes to
+ * exec_fail_destroyed, which ends the process.
  */
 static int32_t sys_execve(isr_params_t *params)
 {

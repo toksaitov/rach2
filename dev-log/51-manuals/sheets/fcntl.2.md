@@ -15,4 +15,5 @@ Descriptor control (fcntl64, syscall 221).
 EBX=fd, ECX=cmd, EDX=arg. Supports the descriptor-flag and status-flag
 round-trips libc needs: F_DUPFD(_CLOEXEC), F_GETFD/F_SETFD (the
 close-on-exec bit), and F_GETFL/F_SETFL (access + O_NONBLOCK/O_APPEND,
-stored, not enforced).
+on the shared open-file description, which the write and socket paths
+read).

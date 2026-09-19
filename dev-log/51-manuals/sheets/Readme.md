@@ -9,3 +9,5 @@ The pages' conventions, for the writer:
 * Cross-references with `.Xr NAME SECTION`; paths with `.Pa`; flags with `.Fl`; arguments with `.Ar`; literal text with `.Ql` or `.Dl`; a command line in EXAMPLES with `.Dl`.
 * A page must pass `mandoc -T lint -W warning`.
 * A page adapted from another project's documentation says so in a HISTORY or a trailing paragraph, naming the project and its licence: BusyBox (GPL-2.0), TinyCC (LGPL-2.1), pdpmake (public domain).
+
+A section 2 sheet asks for each member's prototype as musl declares it. Where musl declares no function for a member, the `*32` numbers, `fcntl64`, `exit_group`, the page names the kernel number and the musl function that issues it, and gives no prototype of its own.

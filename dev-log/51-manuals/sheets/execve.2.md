@@ -13,9 +13,9 @@ Sources: the handler comments below, extracted from rach2/sys/syscall.c (read th
 
 Replace the current process image with a new program (execve(2)).
 EBX = path, ECX = argv[], EDX = envp[]. Does not return on success. Copies
-the path, argv, and envp into static buffers, validates the ELF header
-BEFORE tearing the old image down (so a bad executable leaves the caller
-intact), then frees the old user pages, streams the new program in, builds
+the path, argv, and envp into the process's exec workspace, allocated at
+its first exec, and validates the ELF header BEFORE tearing the old image
+down (so an executable that is not an ELF leaves the caller intact), then frees the old user pages, streams the new program in, builds
 the SysV/i386 initial stack, and redirects the iret frame to the entry
 point. A failure after the old image is gone routes to
 exec_fail_destroyed.
