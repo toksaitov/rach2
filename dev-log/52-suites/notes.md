@@ -2,7 +2,7 @@
 
 ## Where the work stands
 
-In progress on 2026-09-18. The counters, the kernel faults the two accelerators showed, the runner, the harness, the checker and the suites' waits are written and committed. The first green full set under KVM came in round 15, 87 suites in 22 minutes at a timeout factor of four; the emulator's last full set, round 10, passed 83 with the three failures since fixed. The self-build suite's second copy failed once under KVM in the loaded pool after the channel fix, in round 14, with `No space left on device` on a disk that du says is half free and no kernel record before it; it passed in round 15. The suite prints df at its size steps and keeps its disk on a failure now, for the KRFFS checker on the host. The remaining rounds of the three-times proof are where that fault is caught or cleared.
+Accepted on 2026-09-19, at the commit that adds the Readme, from source `8c206859`. The six closing `tests/run all` sets, a1, a2 and a3 under KVM and a1, a2 and a3 under TCG, alternated on the testing host after a clean build; all 87 suites passed in every set. The first Codex review round covered 13 units on 2026-09-18. The rescue round identified the lag-slot race, the orphan exit that halted with interrupts disabled, and the timing walk affected by host scheduling. The second review round covered four units on 2026-09-19, with 18 findings: 16 fixed and two rejected with reasons below. The closing sets include the fixes from both review rounds and the rescue round. [Readme.md](Readme.md) records the accepted build, artifacts, counts and costs.
 
 ## Phase 1: the counters and the kernel faults
 
