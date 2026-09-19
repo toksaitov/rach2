@@ -6,16 +6,15 @@
  * The wrapper runs each transfer in the caller's context and answers it
  * from the timer a few ticks later. The driver under it can put the caller
  * to sleep, and a second caller then enters the wrapper while the first
- * transfer is unfinished. The queue's slot must be claimed before the
- * transfer, or the second caller finds the same slot free, takes it, and
- * one of the two requests is never answered: the request layer quarantines
- * it five seconds later and the device is declared stalled, which is how
- * the fatwrite suite's writers row failed once the mount lock's release
- * yielded. The fake backing device here enters the wrapper again from
- * inside its own write, which is what a switch during the transfer looks
- * like to the queue, and the rows require every request answered once with
- * its status and once more with the duplicate's error. Returns the failed
- * check count.
+ * transfer is unfinished; the timer can run meanwhile as well. The rows
+ * require: a claimed slot whose transfer has not returned is not delivered
+ * by the tick; two requests whose transfers overlap are each answered once
+ * after the lag and once more with the duplicate's error; a read's page is
+ * scrubbed until its answer comes and holds the bytes then; a flush takes a
+ * slot the same way; and every slot is free at the end. The fake backing
+ * device enters the wrapper again, or runs the timer, from inside its own
+ * write, which is what a sleeping transfer looks like to the queue.
+ * Returns the failed check count.
  */
 
 extern int printf(const char *fmt, ...);
@@ -108,11 +107,14 @@ static int fails;
 
 static uint8_t pages[REQUESTS][BLOCK_SECTOR_SIZE];
 
-/* The backing device. Its first write enters the wrapper again with the
-   next request, the way a caller that slept in the driver is overtaken by
-   another; every later transfer is plain. */
+/* The backing device. A write enters the wrapper again with another
+   request, or runs the timer past the lag, when asked to, the way a caller
+   that slept in the driver is overtaken by another or by the tick. */
 static int reenter_with = -1;
+static int tick_inside = -1; /* the request whose transfer the timer runs under */
 static int backing_writes;
+
+static void ticks(int n);
 
 static int backing_write(block_device_t *device, uint64_t lba, uint32_t count, const void *buffer)
 {
@@ -121,6 +123,14 @@ static int backing_write(block_device_t *device, uint64_t lba, uint32_t count, c
     (void)count;
     (void)buffer;
     backing_writes++;
+    if (tick_inside >= 0) {
+        int mine = tick_inside;
+
+        tick_inside = -1;
+        ticks((int)lag_delay + 3);
+        CHECK(answered[mine] == 0 && duplicated[mine] == 0,
+              "a claimed slot whose transfer has not returned is not delivered");
+    }
     if (reenter_with >= 0) {
         int inner = reenter_with;
 
@@ -141,6 +151,11 @@ static int backing_read(block_device_t *device, uint64_t lba, uint32_t count, vo
 
 static block_device_t backing;
 
+static uint32_t generations = 100;
+
+/* A request made afresh: a generation of its own, so an answer meant for
+   the request that used the slot before it is a stale one, and its counts
+   at zero. */
 static void request_init(int i, int write)
 {
     k_memset(&reqs[i], 0, sizeof(reqs[i]));
@@ -148,8 +163,10 @@ static void request_init(int i, int write)
     reqs[i].lba = (uint64_t)i;
     reqs[i].count = 1;
     reqs[i].page = pages[i];
-    reqs[i].generation = 100u + (uint32_t)i;
+    reqs[i].generation = ++generations;
     reqs[i].state = BLOCK_REQ_IN_FLIGHT;
+    answered[i] = 0;
+    duplicated[i] = 0;
 }
 
 static void ticks(int n)
@@ -171,10 +188,19 @@ int main(void)
     CHECK(lag == &lag_device, "the wrapper installs over the backing");
     CHECK(lag_delay == 3, "the lag is the three ticks the option named");
 
-    /* Two writers, the second entering while the first transfer runs. */
     for (i = 0; i < REQUESTS; i++) {
         request_init(i, 1);
     }
+    /* The timer runs under a transfer: the claimed slot waits. */
+    tick_inside = 0;
+    CHECK(lag_submit(lag, &reqs[0]) == 0, "a submit under which the timer ran is taken");
+    ticks(3);
+    CHECK(answered[0] == 1, "and is answered after its own lag");
+    ticks(2);
+    CHECK(duplicated[0] == 1, "and its duplicate carries the error");
+    request_init(0, 1);
+    backing_writes = 0;
+    /* Two writers, the second entering while the first transfer runs. */
     reenter_with = 1;
     CHECK(lag_submit(lag, &reqs[0]) == 0, "the outer submit is taken");
     CHECK(reenter_with < 0, "the backing entered the wrapper again from the transfer");
