@@ -13,6 +13,11 @@ runner=0
 sentinel=0
 machine_test=0
 
+
+# The runner's own tests boot nothing on another kernel: the trees they
+# copy have no such target, so the name a caller set is dropped here.
+RACH2_KERNEL=""
+export RACH2_KERNEL
 # Stop test processes before restoring the private source. PID files are
 # used only here, after verdict assertions; the runner never reads them.
 # shellcheck disable=SC2329

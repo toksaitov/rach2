@@ -14,6 +14,14 @@
 #
 set -u
 
+# RACH2_KERNEL=NAME boots every suite on build/rach2-NAME/kernel, built by
+# the NAME-kernel target of tests/system/suites.mk (ubsan, o2) after the
+# preparation; unset, the suites boot build/rach2/kernel.
+KERNEL_VAR=""
+if [ -n "${RACH2_KERNEL:-}" ]; then
+    KERNEL_VAR="BOOT_KERNEL=build/rach2-${RACH2_KERNEL}/kernel"
+fi
+
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 # Compile the host helper in private scratch before making a process group.
 # No product or shared build file is written by this bootstrap.
@@ -366,7 +374,8 @@ check_machines() {
 # command ends while one runs in the foreground: a signal then stops the run
 # at once, and the group kill takes the make and what it started.
 run_make() {
-    "$RACH2_RUN_UTIL" group make -C "$REPO" --no-print-directory "$@" &
+    # shellcheck disable=SC2086
+    "$RACH2_RUN_UTIL" group make -C "$REPO" --no-print-directory $KERNEL_VAR "$@" &
     make_pid=$!
     echo "$make_pid" >> "$WORK/build.groups"
     echo "$make_pid" >> "$WORK/run.jobs"
@@ -376,8 +385,9 @@ run_make() {
 # A suite has the same supervisor in every scheduling position. Its output
 # and its machines' output reset only its own silence clock.
 suite_make() {
+    # shellcheck disable=SC2086
     "$RACH2_RUN_UTIL" suite "$1" "$IDLE_SECONDS" "$RACH2_QEMU_LEDGER" \
-        make -C "$REPO" --no-print-directory "run-$1" &
+        make -C "$REPO" --no-print-directory $KERNEL_VAR "run-$1" &
     suite_pid=$!
     echo "$suite_pid" >> "$WORK/run.jobs"
     wait "$suite_pid"
@@ -614,6 +624,13 @@ build_components() {
 }
 prepare() {
     echo "run: preparing"
+    # The named kernel first: the disks and sticks the preparation makes
+    # carry it, so it must exist before they are built.
+    if [ -n "$KERNEL_VAR" ]; then
+        run_make "${RACH2_KERNEL}-kernel" || {
+            echo "run: result: refused: the $RACH2_KERNEL kernel did not build" >&2; exit 1
+        }
+    fi
     run_make -j prepare-all || {
         echo "run: result: refused: preparation failed" >&2; exit 1
     }

@@ -13,6 +13,11 @@
 # build.
 #
 set -u
+
+# The runner's own tests boot nothing on another kernel: the trees they
+# copy have no such target, so the name a caller set is dropped here.
+RACH2_KERNEL=""
+export RACH2_KERNEL
 unset RACH2_TIMEOUT_FACTOR RACH2_IDLE_TIMEOUT RACH2_STOP_ON_FAIL
 
 REPO=$(cd "$(dirname "$0")/../.." && pwd)

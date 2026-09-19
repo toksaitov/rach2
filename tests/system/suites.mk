@@ -19,6 +19,14 @@
 # `prepare-all` names it. A suite target names only its own fixtures and the
 # tools it invokes.
 
+# The kernel every suite boots directly; tests/run points it at another
+# component's kernel under RACH2_KERNEL (see ubsan-kernel below). Not
+# KERNEL, which rach2/Makefile uses for its own output name and a sub-make
+# would inherit. The disks the suites make carry build/rach2/kernel: a
+# checked kernel does not fit the disk's kernel slot, and what a disk suite
+# proves is the boot path.
+BOOT_KERNEL ?= build/rach2/kernel
+
 # No file is named `run-<suite>`, so every suite target is phony. The names are
 # read from the registry rather than written out again: `tests/run style`
 # already requires the registry and the targets in this file to name the same
@@ -148,7 +156,7 @@ $(RUNUTIL): tests/system/runner/runutil.c
 # run nothing. The default suite's build-and-run target. `make test` and
 # `tests/run default` both land here; the registry in tests/registry names it.
 run-default: rach2 test-image $(RUNTESTS)
-	$(RUNTESTS) $(NIC_DEV) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+	$(RUNTESTS) $(NIC_DEV) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
 	    --timeout 300 --steptmo 60 --log $(IMAGES_DIR)/default-test.log
 # Everything every suite needs, in one target, so `tests/run all` can build once
 # through one Make and then run the suites at the same time. Two suites each
@@ -193,7 +201,7 @@ prepare-all: components
 ADDRESSED_PCAP = $(IMAGES_DIR)/addressed$(NIC_TAG).pcap
 run-addressed: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
 	@rm -f $(ADDRESSED_PCAP)
-	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
+	$(HARNESS) $(NIC_DEV) --kernel $(BOOT_KERNEL) \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --append "rach2.ip=10.0.2.77/24 rach2.gateway=10.0.2.2" \
 	    --qemu-arg=-object \
@@ -212,11 +220,11 @@ run-addressed: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
 # were. The harness passes no -cpu of its own, so the passthrough is the only
 # one on the command line.
 run-noentropy: rach2 test-image $(HARNESS)
-	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
 	    --qemu-arg=-cpu --qemu-arg=qemu64 \
 	    --timeout 90 --ok "SALTNOENT OK" \
 	    "expect=Type 'help'" "send=exec /musl/saltnoent" until=20
-	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
 	    --qemu-arg=-cpu --qemu-arg=qemu64 \
 	    --timeout 180 --ok "PASSWDMUSL OK (fail-closed)" \
 	    "expect=Type 'help'" "send=exec /musl/passwdmusl" until=60
@@ -226,12 +234,12 @@ run-noentropy: rach2 test-image $(HARNESS)
 # state is saved by `fnsave` and an SSE instruction is an invalid opcode, so
 # the probe's x87 branch runs alone.
 run-fpu: rach2 tests krffs test-image $(HARNESS)
-	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
 	    --qemu-arg=-cpu --qemu-arg=max --append "rach2.rescue" \
 	    --timeout 90 --steptmo 30 --ok "FPUPROBE OK" --never "FPUPROBE FAIL" \
 	    --log $(IMAGES_DIR)/fpu-test.log \
 	    "expect=fpu: fxsr: on" "expect=Type 'help'" "send=exec /fpuprobe" "expect=FPUPROBE"
-	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
 	    --qemu-arg=-cpu --qemu-arg=max --append "rach2.rescue rach2.nofxsr" \
 	    --timeout 90 --steptmo 30 --ok "FPUPROBE OK" --never "FPUPROBE FAIL" \
 	    --log $(IMAGES_DIR)/fpu-test.x87.log \
@@ -239,13 +247,13 @@ run-fpu: rach2 tests krffs test-image $(HARNESS)
 # `tests/run memory`: the kernel's account of physical memory at five sizes
 # (see tests/system/suites/memory.sh).
 run-memory: rach2 rach2-recovery tests krffs test-image $(RECOVERY_IMAGE) $(HARNESS)
-	sh tests/system/suites/memory.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) \
+	sh tests/system/suites/memory.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) \
 	    $(RECOVERY_KERNEL) $(RECOVERY_IMAGE)
 # `tests/run pools`: the objects that were pools, past the count each pool
 # had, and the heap where it started after a thousand of each (see
 # tests/poolprobe.c).
 run-pools: rach2 tests krffs test-image $(HARNESS)
-	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
 	    --qemu-arg=-cpu --qemu-arg=max --append "rach2.rescue" \
 	    --timeout 120 --steptmo 60 --ok "POOLPROBE OK" --never "POOLPROBE FAIL" \
 	    --log $(IMAGES_DIR)/pools-test.log \
@@ -261,7 +269,7 @@ run-pools: rach2 tests krffs test-image $(HARNESS)
 # the shared probe boot, which scores a probe by its exit status; a probe that
 # is killed has none.
 run-fault: rach2 tests krffs test-image $(HARNESS)
-	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
 	    --qemu-arg=-cpu --qemu-arg=max \
 	    --timeout 120 --ok "Hello from ELF!" --never "ERROR still alive" \
 	    "expect=Type 'help'" \
@@ -285,7 +293,7 @@ run-fault: rach2 tests krffs test-image $(HARNESS)
 # in it while the console is cooked, then one byte with no newline once the
 # probe has switched the console to raw. `sendraw` is what delivers both.
 run-console: rach2 tests krffs test-image $(HARNESS)
-	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
 	    --qemu-arg=-cpu --qemu-arg=max \
 	    --timeout 120 --ok "All stdin syscalls passed!" \
 	    "expect=Type 'help'" "send=exec /stdintest" \
@@ -295,7 +303,7 @@ run-console: rach2 tests krffs test-image $(HARNESS)
 	    'expect=Read 10 bytes: "bravo line"' \
 	    "expect=Test 3: small buffer read" "send=charlie-delta" \
 	    'expect=Read 5 bytes: "charl"'
-	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
 	    --qemu-arg=-cpu --qemu-arg=max \
 	    --timeout 120 --ok "TTYPROBE OK" --never "TTYPROBE FAIL" \
 	    "expect=Type 'help'" "send=exec /ttyprobe" \
@@ -319,7 +327,7 @@ AUDIO_WAV = $(IMAGES_DIR)/audio-scale.wav
 AUDIO_LOG = $(IMAGES_DIR)/audio-scale.log
 run-audio: rach2 tests krffs test-image $(HARNESS) $(WAVCHECK)
 	@rm -f $(AUDIO_WAV) $(AUDIO_LOG)
-	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
 	    --qemu-arg=-cpu --qemu-arg=max \
 	    --qemu-arg=-device --qemu-arg=intel-hda \
 	    --qemu-arg=-device --qemu-arg=hda-duplex,audiodev=au0 \
@@ -345,14 +353,14 @@ run-audio: rach2 tests krffs test-image $(HARNESS) $(WAVCHECK)
 # to return for a full disk, removes the file and writes again. It has a boot of
 # its own because it fills the image every other probe is staged in.
 run-diskfull: rach2 tests krffs test-image $(HARNESS)
-	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
 	    --qemu-arg=-cpu --qemu-arg=max \
 	    --timeout 180 --ok "DISKFULL OK" --never "DISKFULL FAIL" \
 	    "expect=Type 'help'" "send=exec /diskfull" "expect=DISKFULL"
 # `tests/run socket`: the guest opening connections of its own, checked by a
 # host that answers (see tests/system/suites/socket.sh).
 run-socket: rach2 tests krffs test-image $(HARNESS) $(HOSTPEER) $(RUNUTIL)
-	sh tests/system/suites/socket.sh build/rach2/kernel $(TEST_IMAGE) \
+	sh tests/system/suites/socket.sh $(BOOT_KERNEL) $(TEST_IMAGE) \
 	    $(HARNESS) $(HOSTPEER)
 # `tests/run disk`: the disk-backed page-cache integrity check. Builds a disk
 # image holding blockprobe, boots disk-only with KRFFS on the real ATA disk
@@ -363,7 +371,7 @@ run-socket: rach2 tests krffs test-image $(HARNESS) $(HOSTPEER) $(RUNUTIL)
 DISK_TEST_IMAGE = $(IMAGES_DIR)/disk-test.disk
 run-disk: rach2 tests krffs $(HARNESS)
 	$(MKDISK) krffs/manifests/disk-test.manifest $(DISK_TEST_IMAGE) 64 48
-	$(HARNESS) --kernel build/rach2/kernel \
+	$(HARNESS) --kernel $(BOOT_KERNEL) \
 	    --append "rach2.fsdisk rach2.rescue" \
 	    --drive "file=$(DISK_TEST_IMAGE),format=raw,if=ide,index=0,media=disk" \
 	    --timeout 120 --steptmo 90 --ok "BLOCKPROBE OK" --log $(DISK_TEST_IMAGE).log probe=blockprobe
@@ -387,21 +395,21 @@ BOOTPART_TEST_IMAGE = $(IMAGES_DIR)/bootpart-test.disk
 WIDE_TEST_IMAGE = $(IMAGES_DIR)/wide-test.disk
 run-bootpart: rach2 tests krffs test-image $(MKFIXTURE) $(HARNESS)
 	$(MKDISK) krffs/manifests/disk-test.manifest $(BOOTPART_TEST_IMAGE) 64 48
-	$(HARNESS) --kernel build/rach2/kernel \
+	$(HARNESS) --kernel $(BOOT_KERNEL) \
 	    --append "rach2.fsdisk rach2.rescue" \
 	    --drive "file=$(BOOTPART_TEST_IMAGE),format=raw,if=ide,index=0,media=disk" \
 	    --timeout 90 --ok "BOOTPROBE ABSENT OK" probe=bootprobe
 	$(MKFIXTURE) boot $(BOOTPART_TEST_IMAGE)
-	$(HARNESS) --kernel build/rach2/kernel \
+	$(HARNESS) --kernel $(BOOT_KERNEL) \
 	    --append "rach2.fsdisk rach2.rescue rach2.bootprobe=fixture" \
 	    --drive "file=$(BOOTPART_TEST_IMAGE),format=raw,if=ide,index=0,media=disk" \
 	    --timeout 90 --ok "BOOTPROBE OK" probe=bootprobe
-	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
 	    --append "rach2.rescue rach2.bootprobe=ramroot" \
 	    --drive "file=$(BOOTPART_TEST_IMAGE),format=raw,if=ide,index=0,media=disk" \
 	    --timeout 90 --ok "BOOTPROBE RAMROOT OK" probe=bootprobe
 	$(MKFIXTURE) wide $(WIDE_TEST_IMAGE)
-	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
 	    --append "rach2.disk=ahci rach2.rescue rach2.diskdiag rach2.bootprobe=wide" \
 	    --drive "file=$(WIDE_TEST_IMAGE),format=raw,if=none,id=drv0" \
 	    $(AHCI_ATTACH) \
@@ -457,7 +465,7 @@ run-grub: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krffs $(
 # disk holding nothing, booted by the firmware, its root found as disk 1.
 BOOTORDER_DISK = $(IMAGES_DIR)/bootorder-test.disk
 run-bootorder: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krffs $(GRUB_TEST_EXT2) check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(HARNESS)
-	sh tests/system/suites/bootorder.sh build/rach2/kernel $(HARNESS) $(BOOTORDER_DISK)
+	sh tests/system/suites/bootorder.sh $(BOOT_KERNEL) $(HARNESS) $(BOOTORDER_DISK)
 # `tests/run menu`: the boot menu that can be rewritten, and the stub that
 # cannot. Four boots of one GRUB disk: a two-entry menu staged through `bootctl
 # config` with a grubenv key round-tripped and the candidate kernel corrupted; a
@@ -494,9 +502,9 @@ run-menu: $(DEMO_CREDS) rach2 utils krffs $(OS_REAL_SMALL_EXT2) check-busybox ch
 AUTH_TEST_IMAGE = $(IMAGES_DIR)/auth-test.disk
 run-authority: rach2 rach2-recovery tests krffs test-image $(MKFIXTURE) $(HARNESS)
 	$(MKFIXTURE) wide $(AUTH_TEST_IMAGE)
-	sh tools/inspect/check_recovery.sh build/rach2/kernel ordinary
+	sh tools/inspect/check_recovery.sh $(BOOT_KERNEL) ordinary
 	sh tools/inspect/check_recovery.sh $(RECOVERY_KERNEL) recovery
-	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
 	    --append "rach2.disk=ahci rach2.rescue rach2.diskdiag rach2.bootprobe=auth-ordinary" \
 	    --drive "file=$(AUTH_TEST_IMAGE),format=raw,if=none,id=drv0" \
 	    $(AHCI_ATTACH) \
@@ -591,11 +599,11 @@ run-drill: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krffs c
 PERSIST_DISK = $(IMAGES_DIR)/persist-test.disk
 run-persist: rach2 tests krffs $(HARNESS)
 	$(MKDISK) krffs/manifests/persist-test.manifest $(PERSIST_DISK) 64 48
-	$(HARNESS) --kernel build/rach2/kernel \
+	$(HARNESS) --kernel $(BOOT_KERNEL) \
 	    --append "rach2.fsdisk rach2.rescue" \
 	    --drive "file=$(PERSIST_DISK),format=raw,if=ide,index=0,media=disk" \
 	    --timeout 60 --ok "PERSISTPROBE OK (wrote)" probe=persistprobe
-	$(HARNESS) --kernel build/rach2/kernel \
+	$(HARNESS) --kernel $(BOOT_KERNEL) \
 	    --append "rach2.fsdisk rach2.rescue" \
 	    --drive "file=$(PERSIST_DISK),format=raw,if=ide,index=0,media=disk" \
 	    --timeout 60 --ok "PERSISTPROBE OK (read back)" probe=persistprobe
@@ -611,17 +619,17 @@ run-persist: rach2 tests krffs $(HARNESS)
 CRED_PERSIST_DISK = $(IMAGES_DIR)/cred-persist-test.disk
 run-cred-persist: rach2 musl-programs krffs $(HARNESS)
 	$(MKDISK) krffs/manifests/cred-persist-test.manifest $(CRED_PERSIST_DISK) 64 48
-	$(HARNESS) --kernel build/rach2/kernel \
+	$(HARNESS) --kernel $(BOOT_KERNEL) \
 	    --append "rach2.fsdisk rach2.rescue" \
 	    --drive "file=$(CRED_PERSIST_DISK),format=raw,if=ide,index=0,media=disk" \
 	    --timeout 60 --ok "CREDDISK OK (wrote)" \
 	    "expect=Type 'help'" "send=exec /creddisk" until=15
-	$(HARNESS) --kernel build/rach2/kernel \
+	$(HARNESS) --kernel $(BOOT_KERNEL) \
 	    --append "rach2.fsdisk rach2.rescue" \
 	    --drive "file=$(CRED_PERSIST_DISK),format=raw,if=ide,index=0,media=disk" \
 	    --timeout 60 --ok "CREDDISK OK (released)" \
 	    "expect=Type 'help'" "send=exec /creddisk" until=15
-	$(HARNESS) --kernel build/rach2/kernel \
+	$(HARNESS) --kernel $(BOOT_KERNEL) \
 	    --append "rach2.fsdisk rach2.rescue" \
 	    --drive "file=$(CRED_PERSIST_DISK),format=raw,if=ide,index=0,media=disk" \
 	    --timeout 60 --ok "CREDDISK OK (read back)" \
@@ -643,7 +651,7 @@ BOOTLINE_TEST_IMAGE = $(IMAGES_DIR)/bootline-test.disk
 # forks lives three to eight, so without it the token would arrive after QEMU
 # was dead.
 run-ping: rach2 tests krffs test-image $(HARNESS)
-	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
+	$(HARNESS) $(NIC_DEV) --kernel $(BOOT_KERNEL) \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --timeout 120 --ok "PINGTEST OK" \
 	    "expect=Type 'help'" "send=exec /pingtest" until=60
@@ -652,7 +660,7 @@ run-ping: rach2 tests krffs test-image $(HARNESS)
 # probe in the suite, for the reason `tests/run ping` is: it needs the
 # network to answer, and the suite's probes must not.
 run-packet: rach2 tests krffs test-image $(HARNESS)
-	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
+	$(HARNESS) $(NIC_DEV) --kernel $(BOOT_KERNEL) \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --timeout 120 --ok "PACKETPROBE OK" \
 	    "expect=Type 'help'" "send=exec /packetprobe" until=60
@@ -664,7 +672,7 @@ run-packet: rach2 tests krffs test-image $(HARNESS)
 # no shell was reached after it.
 run-bootline: rach2 tests krffs $(RUNUTIL)
 	$(MKDISK) krffs/manifests/disk-test.manifest $(BOOTLINE_TEST_IMAGE) 64 48
-	sh tests/system/suites/bootline.sh build/rach2/kernel $(BOOTLINE_TEST_IMAGE)
+	sh tests/system/suites/bootline.sh $(BOOT_KERNEL) $(BOOTLINE_TEST_IMAGE)
 # `tests/run raw`: the raw ICMP socket, which is what `ping` and `traceroute`
 # are. Three boots, because the three things it must show cannot be shown in
 # one: the probe with the network answering, the same probe with an address and
@@ -675,7 +683,7 @@ run-bootline: rach2 tests krffs $(RUNUTIL)
 run-raw: raw-stack
 raw-card: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(PCAPCHECK) $(HARNESS)
 	@rm -f $(RAW_PCAP)
-	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
+	$(HARNESS) $(NIC_DEV) --kernel $(BOOT_KERNEL) \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --qemu-arg=-object \
 	    --qemu-arg=filter-dump,id=rw0,netdev=net0,file=$(RAW_PCAP) \
@@ -687,7 +695,7 @@ raw-stack: raw-card
 	@echo "raw-test: the rows above the driver, the route that is not there, traceroute and the user's ping, are skipped here; tests/run raw covers them on the first card"
 else
 raw-stack: raw-card
-	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
+	$(HARNESS) $(NIC_DEV) --kernel $(BOOT_KERNEL) \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --append "rach2.ip=10.0.2.15/24" \
 	    --timeout 200 --ok "RAWPROBE OK" --log $(IMAGES_DIR)/raw-test.static.log \
@@ -698,7 +706,7 @@ raw-stack: raw-card
 	# not retry, so a cold cache costs it its first answer. What is asserted is the
 	# first hop, which is the gateway answering a hop limit of one, and that is the
 	# whole mechanism.
-	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
+	$(HARNESS) $(NIC_DEV) --kernel $(BOOT_KERNEL) \
 	    --initrd $(OS_REAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --timeout 300 --steptmo 90 --ok "TRACEDONE" \
 	    "expect=rach2 login:" "send=root" "expect=Password:" \
@@ -708,7 +716,7 @@ raw-stack: raw-card
 	    "expect= 1  10.0.2.2" "send=echo TRACE\"\"DONE" "expect=TRACEDONE"
 	# The in-house ping is still the one an ordinary account runs: busybox's needs
 	# a raw socket, which is root's, and is not built for that reason.
-	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
+	$(HARNESS) $(NIC_DEV) --kernel $(BOOT_KERNEL) \
 	    --initrd $(OS_REAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --timeout 300 --steptmo 90 --ok "USERPINGOK" \
 	    "expect=rach2 login:" "send=test" "expect=Password:" \
@@ -725,14 +733,14 @@ MIXNIC_LOG = $(IMAGES_DIR)/netif-test.mixnic$(NIC_TAG).log
 NICFAIL_LOG = $(IMAGES_DIR)/netif-test.nicfail$(NIC_TAG).log
 run-netif: netif-stack
 netif-card: rach2 tests krffs test-image $(HARNESS)
-	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
+	$(HARNESS) $(NIC_DEV) --kernel $(BOOT_KERNEL) \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --net "user,id=net0,hostfwd=udp::$(NETIF_PORT)-:9999" \
 	    --timeout 180 --ok "NETIFPROBE OK" \
 	    "expect=Type 'help'" "send=exec /netifprobe" \
 	    "expect=NETIFPROBE DOWN" "udp=$(NETIF_PORT):down" \
 	    "expect=NETIFPROBE UP" "udp=$(NETIF_PORT):up" until=60
-	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
+	$(HARNESS) $(NIC_DEV) --kernel $(BOOT_KERNEL) \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --append "rach2.ip=none" \
 	    --timeout 120 --ok "NETIFPROBE OK" \
@@ -747,7 +755,7 @@ netif-stack: netif-card
 # `/proc/net/dev`. The first still carries the traffic, which is what says the
 # second did not take the stack over.
 	@rm -f $(TWONIC_LOG)
-	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
 	    --qemu-arg=-cpu --qemu-arg=max \
 	    --net "user,id=net0" --device "e1000,netdev=net0" \
 	    --qemu-arg=-netdev --qemu-arg=user,id=net1,net=10.0.3.0/24 \
@@ -780,7 +788,7 @@ netif-stack: netif-card
 # by the second card, which is the one on the network the gateway is on, while
 # the first is up and configured on another.
 	@rm -f $(MIXNIC_LOG)
-	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
 	    --qemu-arg=-cpu --qemu-arg=max \
 	    --net "user,id=net0" --device "e1000,netdev=net0,mac=52:54:00:12:34:56" \
 	    --qemu-arg=-netdev --qemu-arg=user,id=net1,net=10.0.3.0/24 \
@@ -804,7 +812,7 @@ leaves by the one that reaches the gateway: OK"'
 # The first card refused at its bring-up: the second still comes up, takes the
 # one interface there is, and carries the traffic.
 	@rm -f $(NICFAIL_LOG)
-	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
 	    --qemu-arg=-cpu --qemu-arg=max \
 	    --net "user,id=net0" --device "e1000,netdev=net0" \
 	    --qemu-arg=-netdev --qemu-arg=user,id=net1 \
@@ -829,7 +837,7 @@ endif
 DGRAM_PCAP = $(IMAGES_DIR)/dgram$(NIC_TAG).pcap
 run-dgram: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
 	@rm -f $(DGRAM_PCAP)
-	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
+	$(HARNESS) $(NIC_DEV) --kernel $(BOOT_KERNEL) \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --net "user,id=net0,hostfwd=udp::$(DGRAM_PORT)-:7502" \
 	    --qemu-arg=-object \
@@ -857,7 +865,7 @@ SIMPLE_NET = user,id=net0,net=10.90.0.0/16,host=10.90.0.2,dhcpstart=10.90.0.20,d
 run-dhcp: dhcp-stack
 dhcp-card: $(DEMO_CREDS) rach2 utils busybox krffs os-real-image os-simple-image rach2-metal-image $(PCAPCHECK) $(HARNESS)
 	@rm -f $(DHCP_PCAP)
-	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
+	$(HARNESS) $(NIC_DEV) --kernel $(BOOT_KERNEL) \
 	    --initrd $(OS_REAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --net "$(DHCP_NET)" \
 	    --qemu-arg=-object \
@@ -895,7 +903,7 @@ dhcp-stack: dhcp-card
 	# Init empties that directory, and this is what says so: two boots of one disk,
 	# each of which must reach a lease.
 	$(MKDISK) krffs/manifests/os-real.manifest $(DHCP_DISK) 64 48
-	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
+	$(HARNESS) $(NIC_DEV) --kernel $(BOOT_KERNEL) \
 	    --append "rach2.fsdisk rach2.ip=none" \
 	    --drive "file=$(DHCP_DISK),format=raw,if=ide,index=0,media=disk" \
 	    --qemu-arg=-cpu --qemu-arg=max --net "$(DHCP_NET)" \
@@ -906,7 +914,7 @@ dhcp-stack: dhcp-card
 	    "expect=lease of 192.168.90.20 obtained" "expect=net: eth0: IPv4 192.168.90.20/" \
 	    "send=ifconfig eth0 | grep -q 'addr:192.168.90.20' && echo FIRST\"\"LEASE" \
 	    "expect=FIRSTLEASE" "send=poweroff -f" until=15 --must-exit
-	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
+	$(HARNESS) $(NIC_DEV) --kernel $(BOOT_KERNEL) \
 	    --append "rach2.fsdisk rach2.ip=none" \
 	    --drive "file=$(DHCP_DISK),format=raw,if=ide,index=0,media=disk" \
 	    --qemu-arg=-cpu --qemu-arg=max --net "$(DHCP_NET)" \
@@ -921,7 +929,7 @@ dhcp-stack: dhcp-card
 	# all. The metal init runs `ifup -a` itself, after the console login and before
 	# the SSH server, so the lease must arrive with no console session in it.
 	@rm -f $(METAL_PCAP)
-	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
+	$(HARNESS) $(NIC_DEV) --kernel $(BOOT_KERNEL) \
 	    --initrd $(METAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --net "$(DHCP_NET),hostfwd=tcp::$(DHCP_SSH_PORT)-:22" \
 	    --qemu-arg=-object \
@@ -958,7 +966,7 @@ dhcp-stack: dhcp-card
 	# below requires that packet to have gone to the gateway instead, which only a
 	# machine holding the leased /16 does.
 	@rm -f $(SIMPLE_PCAP)
-	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
+	$(HARNESS) $(NIC_DEV) --kernel $(BOOT_KERNEL) \
 	    --initrd $(OS_SIMPLE_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --net "$(SIMPLE_NET)" \
 	    --qemu-arg=-object \
@@ -1001,7 +1009,7 @@ dhcp-stack: dhcp-card
 	# must then be applied and work. os-simple copies the stanza it stages, since
 	# it has no editor; os-real writes one with its shell.
 	@rm -f $(STATIC_PCAP)
-	$(HARNESS) --kernel build/rach2/kernel \
+	$(HARNESS) --kernel $(BOOT_KERNEL) \
 	    --initrd $(OS_SIMPLE_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --net "$(SIMPLE_NET)" \
 	    --qemu-arg=-object \
@@ -1031,7 +1039,7 @@ dhcp-stack: dhcp-card
 	# derive anyway, so skipping the netmask directive entirely would look
 	# identical. Here it does not.
 	@rm -f $(RSTATIC_PCAP)
-	$(HARNESS) --kernel build/rach2/kernel \
+	$(HARNESS) --kernel $(BOOT_KERNEL) \
 	    --initrd $(OS_REAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --net "$(SIMPLE_NET)" \
 	    --qemu-arg=-object \
@@ -1054,7 +1062,7 @@ dhcp-stack: dhcp-card
 	# due ten seconds in, and the run must see the lease applied more than once.
 	# Without that cap nothing here could reach the renewal path at all, and a
 	# client that renewed wrongly would ship green.
-	$(HARNESS) --kernel build/rach2/kernel \
+	$(HARNESS) --kernel $(BOOT_KERNEL) \
 	    --initrd $(OS_SIMPLE_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --net "$(SIMPLE_NET)" --append "rach2.ip=none" \
 	    --timeout 180 --steptmo 90 --log $(SIMPLE_LOG) \
@@ -1085,7 +1093,7 @@ dhcp-stack: dhcp-card
 	# asked at the console rather than read off the wire, because what is being
 	# tested is that nothing happened.
 # interval: the machine is asked every second until init has started SSH
-	$(HARNESS) --kernel build/rach2/kernel \
+	$(HARNESS) --kernel $(BOOT_KERNEL) \
 	    --initrd $(METAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --net "$(DHCP_NET)" \
 	    --append "rach2.ip=192.168.90.50/24 rach2.gateway=192.168.90.2" \
@@ -1096,7 +1104,7 @@ dhcp-stack: dhcp-card
 	    "send=until pidof dropbearmulti > /dev/null; do sleep 1; done; ifconfig eth0 | grep -q 'addr:192.168.90.50' && echo STATIC\"\"KEPT" \
 	    "expect=STATICKEPT"
 # interval: the service log is read every second until the client gives up
-	$(HARNESS) --kernel build/rach2/kernel \
+	$(HARNESS) --kernel $(BOOT_KERNEL) \
 	    --initrd $(METAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --net "hubport,id=net0,hubid=1" --append "rach2.ip=none" \
 	    --timeout 180 --steptmo 90 --ok "NOLEASEOK" \
@@ -1125,7 +1133,7 @@ dhcp-stack: dhcp-card
 	# connection to the second card was answered from the first card's address
 	# and no capture held a packet from the second's.
 	@rm -f $(TWONET_PCAP_A) $(TWONET_PCAP_B)
-	$(HARNESS) --kernel build/rach2/kernel \
+	$(HARNESS) --kernel $(BOOT_KERNEL) \
 	    --initrd $(OS_REAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --net "$(DHCP_NET),hostfwd=tcp::$(DHCP_TWO_PORT_A)-:22" \
 	    --device "e1000,netdev=net0" \
@@ -1186,7 +1194,7 @@ NETCONSOLE_PCAP = $(IMAGES_DIR)/netconsole$(NIC_TAG).pcap
 NETCONSOLE_STOP_PCAP = $(IMAGES_DIR)/netconsole-stop$(NIC_TAG).pcap
 run-netconsole: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
 	@rm -f $(NETCONSOLE_PCAP)
-	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
+	$(HARNESS) $(NIC_DEV) --kernel $(BOOT_KERNEL) \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --qemu-arg=-object \
 	    --qemu-arg=filter-dump,id=nc0,netdev=net0,file=$(NETCONSOLE_PCAP) \
@@ -1204,7 +1212,7 @@ run-netconsole: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
 # `power_stop` prints after it does, which only a capture can show: a line that
 # was never sent and a line that was sent and missed look the same from inside.
 	@rm -f $(NETCONSOLE_STOP_PCAP)
-	$(HARNESS) $(NIC_DEV) --kernel build/rach2/kernel \
+	$(HARNESS) $(NIC_DEV) --kernel $(BOOT_KERNEL) \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --qemu-arg=-object \
 	    --qemu-arg=filter-dump,id=nc1,netdev=net0,file=$(NETCONSOLE_STOP_PCAP) \
@@ -1242,17 +1250,17 @@ run-e1000: rach2 tests krffs test-image $(HARNESS)
 # summary, because the summary names the card in parentheses and the harness
 # matcher takes no parenthesis. Only the bound driver prints a detail line, so
 # the line is the binding.
-	$(HARNESS) --kernel build/rach2/kernel --initrd $(TEST_IMAGE) \
+	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
 	    --qemu-arg=-cpu --qemu-arg=max \
 	    --qemu-arg=-netdev --qemu-arg=user,id=net1 \
 	    --qemu-arg=-device --qemu-arg=e1000,netdev=net1 \
 	    --timeout 90 --ok "Type 'help'" \
 	    "expect=rtl8139: IRQ" "expect=Type 'help'"
-	$(HARNESS) --device e1000,netdev=net0 --kernel build/rach2/kernel \
+	$(HARNESS) --device e1000,netdev=net0 --kernel $(BOOT_KERNEL) \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --timeout 90 --ok "Type 'help'" \
 	    "expect=e1000: 82540EM" "expect=Type 'help'"
-	$(HARNESS) --device e1000e,netdev=net0 --kernel build/rach2/kernel \
+	$(HARNESS) --device e1000e,netdev=net0 --kernel $(BOOT_KERNEL) \
 	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
 	    --timeout 90 --ok "Type 'help'" \
 	    "expect=no supported network card" \
@@ -1264,7 +1272,7 @@ run-e1000: rach2 tests krffs test-image $(HARNESS)
 # machine they were written for refuses to restart. So each is booted with the
 # ones before it left out, and each must still restart the machine.
 run-reset: rach2 tests krffs test-image $(HARNESS)
-	sh tests/system/suites/reset.sh build/rach2/kernel $(TEST_IMAGE)
+	sh tests/system/suites/reset.sh $(BOOT_KERNEL) $(TEST_IMAGE)
 # `tests/run diskdiag`: a disk read without being mounted and without being
 # written. Three boots of one freshly built image: the ordinary kernel mounting
 # it, which must change it (otherwise the comparisons below prove nothing); the
@@ -1272,7 +1280,7 @@ run-reset: rach2 tests krffs test-image $(HARNESS)
 # every sector hashed on the machine must equal the same offset hashed here; and
 # the same kernel with no drive at all.
 run-diskdiag: rach2 rach2-metal rach2-metal-image $(HARNESS) $(SHA256TOOL) $(RUNUTIL)
-	sh tests/system/suites/diskdiag.sh build/rach2/kernel $(METAL_KERNEL) $(METAL_IMAGE) \
+	sh tests/system/suites/diskdiag.sh $(BOOT_KERNEL) $(METAL_KERNEL) $(METAL_IMAGE) \
 	    $(DISKDIAG_PORT)
 # `tests/run subset`: each optional device probe left out, and proved left out
 # `tests/run usb`: the USB stack, in five boots. Three of them take the 8042
@@ -1284,28 +1292,28 @@ run-diskdiag: rach2 rach2-metal rach2-metal-image $(HARNESS) $(SHA256TOOL) $(RUN
 # with a FAT32 partition added at 49 MiB by mkmbr and mtools.
 MOUNT_DISK = build/images/mount-test.disk
 run-mount: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(MKFIXTURE) $(MKMBR) $(HARNESS)
-	sh tests/system/suites/mount.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(MOUNT_DISK) \
+	sh tests/system/suites/mount.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(MOUNT_DISK) \
 	    $(OS_REAL_IMAGE) "`cat krffs/rach2_demo_password`"
 
 # `tests/run load`: the machine under load for twenty seconds and the
 # longest delays it saw, from `/proc/stat`, within their bounds.
 LOAD_DISK = $(IMAGES_DIR)/load-test.disk
 run-load: rach2 tests krffs test-image $(MKMBR) $(HARNESS)
-	sh tests/system/suites/load.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(LOAD_DISK)
+	sh tests/system/suites/load.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(LOAD_DISK)
 
 # `tests/run conload`: every line typed at the console under load arrives,
 # numbered and checksummed, with the reader parked, as type-ahead, after an
 # interrupt character to a foreground child, and across an exec.
 CONLOAD_DISK = $(IMAGES_DIR)/conload-test.disk
 run-conload: rach2 tests krffs test-image $(MKMBR) $(HARNESS)
-	sh tests/system/suites/conload.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(CONLOAD_DISK)
+	sh tests/system/suites/conload.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(CONLOAD_DISK)
 
 # `tests/run fatwrite`: FAT32 written from a program, read back after a
 # reboot, judged by the host's walk and mtools, taken through a crash and its
 # repair, written from BusyBox, and written by two processes under the lag.
 FATWRITE_DISK = $(IMAGES_DIR)/fatwrite-test.disk
 run-fatwrite: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(MKFATFIXTURE) $(MKMBR) $(HARNESS)
-	sh tests/system/suites/fatwrite.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(FATWRITE_DISK) \
+	sh tests/system/suites/fatwrite.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(FATWRITE_DISK) \
 	    $(OS_REAL_IMAGE) "`cat krffs/rach2_demo_password`" $(MKFATFIXTURE)
 
 # `tests/run loopdev`: a file system in a file, through a loop device: a FAT32
@@ -1313,14 +1321,14 @@ run-fatwrite: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(MKFATFI
 # back, and everything an attachment refuses.
 LOOPDEV_DISK = $(IMAGES_DIR)/loopdev-test.disk
 run-loopdev: rach2 tests krffs test-image $(HARNESS) $(MKMBR)
-	sh tests/system/suites/loopdev.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) \
+	sh tests/system/suites/loopdev.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) \
 	    $(LOOPDEV_DISK)
 
 # `tests/run krffsmount`: a KRFFS volume placed by mount(2), read through to
 # its last byte and unmounted, and the three volumes the kernel refuses.
 KRFFSMOUNT_DISK = $(IMAGES_DIR)/krffsmount-test.disk
 run-krffsmount: rach2 tests krffs test-image $(HARNESS) $(MKMBR)
-	sh tests/system/suites/krffsmount.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) \
+	sh tests/system/suites/krffsmount.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) \
 	    $(KRFFSMOUNT_DISK) build/krffs/fsck.krffs
 
 # `tests/run ext2`: the ext2 driver booted over a fixture disk the host's
@@ -1329,7 +1337,7 @@ EXT2_DISK = $(IMAGES_DIR)/ext2-test.disk
 run-ext2: $(DEMO_CREDS) rach2 tests krffs test-image $(HARNESS) $(MKMBR) \
           utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom \
           rach2-recovery $(RECOVERY_IMAGE)
-	sh tests/system/suites/ext2.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(EXT2_DISK) \
+	sh tests/system/suites/ext2.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(EXT2_DISK) \
 	    build/tools/image/mkmbr $(RECOVERY_KERNEL) $(RECOVERY_IMAGE)
 
 # `tests/run exfat`: exFAT written from a program, read back after a reboot,
@@ -1338,7 +1346,7 @@ run-ext2: $(DEMO_CREDS) rach2 tests krffs test-image $(HARNESS) $(MKMBR) \
 # written by two processes under the lag.
 EXFAT_DISK = $(IMAGES_DIR)/exfat-test.disk
 run-exfat: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(MKEXFATFIXTURE) $(MKMBR) $(HARNESS)
-	sh tests/system/suites/exfat.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(EXFAT_DISK) \
+	sh tests/system/suites/exfat.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(EXFAT_DISK) \
 	    $(OS_REAL_IMAGE) "`cat krffs/rach2_demo_password`" $(MKEXFATFIXTURE)
 
 # `tests/run diskrate`: the storage paths timed in the machine and held under
@@ -1346,7 +1354,7 @@ run-exfat: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(MKEXFATFIX
 # hundred small files, and a raw read piped into a hash.
 DISKRATE_DIR = $(IMAGES_DIR)/diskrate
 run-diskrate: $(DEMO_CREDS) rach2 tests krffs os-real-image test-image $(MKEXFATFIXTURE) $(MKMBR) $(HARNESS) rach2-recovery $(RECOVERY_IMAGE)
-	sh tests/system/suites/diskrate.sh build/rach2/kernel $(OS_REAL_IMAGE) $(HARNESS) $(DISKRATE_DIR) \
+	sh tests/system/suites/diskrate.sh $(BOOT_KERNEL) $(OS_REAL_IMAGE) $(HARNESS) $(DISKRATE_DIR) \
 	    "`cat krffs/rach2_demo_password`" $(MKEXFATFIXTURE) $(MKMBR) $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) \
 	    $(TEST_IMAGE)
 
@@ -1431,7 +1439,7 @@ run-installer-repair: $(DEMO_CREDS) $(INSTALL_STICK) $(INSTALL_TEST_STICK) $(PTY
 # of a stick nobody opened, BusyBox mounting by label, and a throughput line.
 USBDISK_DIR = $(IMAGES_DIR)/usbdisk
 run-usbdisk: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(MKEXFATFIXTURE) $(MKGPT) $(MKMBR) $(HARNESS) $(STICK_IMAGE) rach2-recovery $(RECOVERY_IMAGE)
-	sh tests/system/suites/usbdisk.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(USBDISK_DIR) \
+	sh tests/system/suites/usbdisk.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(USBDISK_DIR) \
 	    $(OS_REAL_IMAGE) "`cat krffs/rach2_demo_password`" $(MKEXFATFIXTURE) $(STICK_IMAGE) \
 	    $(RECOVERY_KERNEL) $(RECOVERY_IMAGE)
 
@@ -1439,14 +1447,14 @@ run-usb: rach2 tests krffs test-image $(HARNESS) $(MKMBR) harness-kernel
 	sh tests/system/suites/usb.sh $(HARNESS_KERNEL) $(TEST_IMAGE) $(HARNESS)
 # (see tests/system/suites/subset.sh).
 run-subset: rach2 tests krffs test-image $(HARNESS)
-	sh tests/system/suites/subset.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS)
+	sh tests/system/suites/subset.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS)
 # `tests/run diskpolicy`: the read-only kernel does not write the disk, shown on
 # the bytes rather than on a return value. The same disk is booted with each
 # kernel; the ordinary one must change it, which is what makes the other half
 # mean anything, and the metal one must refuse a command by name and leave the
 # image untouched.
 run-diskpolicy: rach2 rach2-metal $(HARNESS)
-	sh tests/system/suites/diskpolicy.sh build/rach2/kernel $(METAL_KERNEL)
+	sh tests/system/suites/diskpolicy.sh $(BOOT_KERNEL) $(METAL_KERNEL)
 # `tests/run metal`: the metal image reached over SSH with nobody at its
 # console. This is the rehearsal for the Lenovo: the machine is given power and
 # an address on its command line, and nothing is typed at it. What that proves
@@ -1468,9 +1476,9 @@ run-metal: rach2-metal rach2-metal-image $(MKMBR) $(PTYDRIVE) $(RUNUTIL)
 ACCOUNT_TEST_DISK = $(IMAGES_DIR)/account-test.disk
 run-account: $(DEMO_CREDS) rach2 utils krffs busybox ish check-tcc check-pdpmake os-simple-image $(HARNESS) $(RUNUTIL)
 	$(MKDISK) krffs/manifests/os-real.manifest $(ACCOUNT_TEST_DISK) 64 48
-	sh tests/system/suites/account.sh build/rach2/kernel $(ACCOUNT_TEST_DISK) \
+	sh tests/system/suites/account.sh $(BOOT_KERNEL) $(ACCOUNT_TEST_DISK) \
 	    "`cat krffs/rach2_demo_password`" real
-	sh tests/system/suites/account.sh build/rach2/kernel $(OS_SIMPLE_IMAGE) \
+	sh tests/system/suites/account.sh $(BOOT_KERNEL) $(OS_SIMPLE_IMAGE) \
 	    "`cat krffs/rach2_demo_password`" simple
 # `tests/run tcc`: the machine compiling a program on itself. Boots os-real from
 # a disk as the unprivileged `test` account, writes a C file at the prompt,
@@ -1485,11 +1493,11 @@ TCC_TEST_DISK = $(IMAGES_DIR)/tcc-test.disk
 DOOM_TEST_DISK = $(IMAGES_DIR)/doom-test.disk
 run-doom: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(HARNESS)
 	$(MKDISK) krffs/manifests/os-real.manifest $(DOOM_TEST_DISK) 64 48
-	sh tests/system/suites/doom.sh build/rach2/kernel $(DOOM_TEST_DISK) $(HARNESS) \
+	sh tests/system/suites/doom.sh $(BOOT_KERNEL) $(DOOM_TEST_DISK) $(HARNESS) \
 	    "`cat krffs/rach2_demo_password`"
 run-tcc: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(RUNUTIL)
 	$(MKDISK) krffs/manifests/os-real.manifest $(TCC_TEST_DISK) 64 48
-	sh tests/system/suites/tcc.sh build/rach2/kernel $(TCC_TEST_DISK) \
+	sh tests/system/suites/tcc.sh $(BOOT_KERNEL) $(TCC_TEST_DISK) \
 	    "`cat krffs/rach2_demo_password`" "`cat krffs/rach2_test_password`"
 # `tests/run make`: the machine building a program on itself, and the claim a
 # compiler alone cannot make: that a second build does nothing, that touching
@@ -1499,7 +1507,7 @@ MAKE_TEST_DISK = $(IMAGES_DIR)/make-test.disk
 run-make: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(RUNUTIL)
 	@mkdir -p $(IMAGES_DIR)
 	$(MKDISK) krffs/manifests/os-real.manifest $(MAKE_TEST_DISK) 64 48
-	sh tests/system/suites/make.sh build/rach2/kernel $(MAKE_TEST_DISK) \
+	sh tests/system/suites/make.sh $(BOOT_KERNEL) $(MAKE_TEST_DISK) \
 	    "`cat krffs/rach2_test_password`"
 # `tests/run selfbuild`: the machine builds its own kernel. Boots os-real from a
 # disk copy as the unprivileged test account, copies /src/rach2 home, and runs
@@ -1510,7 +1518,7 @@ SELFBUILD_DISK = $(IMAGES_DIR)/selfbuild-test.disk
 run-selfbuild: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krffs test-image $(OS_SIMPLE_EXT2) check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(ELFCHECK) $(RUNTESTS) $(RUNUTIL)
 	@mkdir -p $(IMAGES_DIR)
 	$(MKDISK) krffs/manifests/os-real.manifest $(SELFBUILD_DISK) 64 48
-	sh tests/system/suites/selfbuild.sh build/rach2/kernel $(SELFBUILD_DISK) \
+	sh tests/system/suites/selfbuild.sh $(BOOT_KERNEL) $(SELFBUILD_DISK) \
 	    "`cat krffs/rach2_test_password`" "`cat krffs/rach2_demo_password`"
 # `tests/run selfbuild-ext2`: the self-build on an ext2 root, the os-real
 # system at 48 MiB on a partition at LBA 2048 as the KRFFS disk has it, booted
@@ -1527,7 +1535,7 @@ run-selfbuild-ext2: $(DEMO_CREDS) rach2 utils krffs test-image check-busybox che
 	{ dd if=/dev/zero bs=1048576 count=1 2>/dev/null; cat $(SELFBUILD_EXT2_VOL); \
 	  dd if=/dev/zero bs=1048576 count=15 2>/dev/null; } > $(SELFBUILD_EXT2_DISK)
 	build/tools/image/mkmbr --lba $(SELFBUILD_EXT2_DISK) 2048:98304:83 > /dev/null
-	SELFBUILD_ROOT=ext2 sh tests/system/suites/selfbuild.sh build/rach2/kernel $(SELFBUILD_EXT2_DISK) \
+	SELFBUILD_ROOT=ext2 sh tests/system/suites/selfbuild.sh $(BOOT_KERNEL) $(SELFBUILD_EXT2_DISK) \
 	    "`cat krffs/rach2_test_password`" "`cat krffs/rach2_demo_password`"
 # `tests/run ssh`: the SSH capstone with nobody at the keyboard. Boots os-real
 # from a disk with the port forwarded, starts dropbear from the console session
@@ -1537,7 +1545,7 @@ run-selfbuild-ext2: $(DEMO_CREDS) rach2 utils krffs test-image check-busybox che
 SSH_TEST_DISK = $(IMAGES_DIR)/ssh-test$(NIC_TAG).disk
 run-ssh: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti ports/doom $(PTYDRIVE)
 	$(MKDISK) krffs/manifests/os-real.manifest $(SSH_TEST_DISK) 64 48
-	sh tests/system/suites/ssh.sh build/rach2/kernel $(SSH_TEST_DISK) \
+	sh tests/system/suites/ssh.sh $(BOOT_KERNEL) $(SSH_TEST_DISK) \
 	    "`cat krffs/rach2_demo_password`" "`cat krffs/rach2_test_password`" \
 	    $(SSH_TEST_PORT) $(NIC)
 # `tests/run shutdown`: userland stopping the machine, on a disk fixture, with
@@ -1546,7 +1554,7 @@ run-ssh: $(DEMO_CREDS) rach2 utils krffs check-busybox check-tcc check-pdpmake c
 SHUTDOWN_TEST_DISK = $(IMAGES_DIR)/shutdown-test.disk
 run-shutdown: $(DEMO_CREDS) rach2 utils krffs busybox $(RUNUTIL)
 	$(MKDISK) krffs/manifests/shutdown-test.manifest $(SHUTDOWN_TEST_DISK) 64 48
-	sh tests/system/suites/shutdown.sh build/rach2/kernel $(SHUTDOWN_TEST_DISK) \
+	sh tests/system/suites/shutdown.sh $(BOOT_KERNEL) $(SHUTDOWN_TEST_DISK) \
 	    build/krffs/fsck.krffs "`cat krffs/rach2_demo_password`"
 # `tests/run login`: prove the console cannot fall back to an unauthenticated
 # shell. Two images differing only in the init they declare, neither staging
@@ -1557,14 +1565,14 @@ LOGIN_TEST_SHELL  = $(IMAGES_DIR)/login-test-shell.krffs
 run-login: $(DEMO_CREDS) rach2 utils krffs busybox os-real-image $(RUNUTIL)
 	$(MKIMAGE) krffs/manifests/login-test-strict.manifest $(LOGIN_TEST_STRICT) 10
 	$(MKIMAGE) krffs/manifests/login-test-shell.manifest $(LOGIN_TEST_SHELL) 10
-	sh tests/system/suites/login.sh build/rach2/kernel $(LOGIN_TEST_STRICT) \
+	sh tests/system/suites/login.sh $(BOOT_KERNEL) $(LOGIN_TEST_STRICT) \
 	    $(LOGIN_TEST_SHELL) $(OS_REAL_IMAGE) root "`cat krffs/rach2_demo_password`"
 # `tests/run man`: the manual pages on the machine. Boots os-real, logs in and
 # reads rach2(7) through a pipe, which must be the staged page byte for byte,
 # and on the console under the pager, whose first and last lines must appear;
 # `man`'s exit status proves nothing, since it ignores its pager's.
 run-man: $(DEMO_CREDS) rach2 rach2-recovery krffs busybox os-real-image rach2-recovery-image $(HARNESS)
-	sh tests/system/suites/man.sh build/rach2/kernel $(OS_REAL_IMAGE) $(HARNESS) \
+	sh tests/system/suites/man.sh $(BOOT_KERNEL) $(OS_REAL_IMAGE) $(HARNESS) \
 	    "`cat krffs/rach2_demo_password`" build/man/cat7/rach2.7 $(IMAGES_DIR)/man-test.log \
 	    $(RECOVERY_KERNEL) $(RECOVERY_IMAGE)
 # `tests/run procfiles`: the machine's own /proc files, on the boots that differ
@@ -1574,7 +1582,7 @@ run-man: $(DEMO_CREDS) rach2 rach2-recovery krffs busybox os-real-image rach2-re
 PROCFILES_DISK = $(IMAGES_DIR)/procfiles-test.disk
 run-procfiles: $(DEMO_CREDS) rach2 tests utils krffs busybox os-real-image test-image $(HOSTPEER) $(RUNUTIL)
 	$(MKDISK) krffs/manifests/disk-test.manifest $(PROCFILES_DISK) 64 48
-	sh tests/system/suites/procfiles.sh build/rach2/kernel $(TEST_IMAGE) \
+	sh tests/system/suites/procfiles.sh $(BOOT_KERNEL) $(TEST_IMAGE) \
 	    $(PROCFILES_DISK) $(OS_REAL_IMAGE) root "`cat krffs/rach2_demo_password`" 18 \
 	    $(PROCFILES_PORT)
 # `tests/run exitline`: the plain process-exit line is printed under the debug
@@ -1583,6 +1591,18 @@ run-procfiles: $(DEMO_CREDS) rach2 tests utils krffs busybox os-real-image test-
 # probe, a killed probe whose dedicated marker must survive, and a the harness
 # run with no token, which has only the plain line to read.
 HARNESS_KERNEL = build/rach2-harness/kernel
+
+# The kernels a tier can be run on instead of the default one, each a
+# component of its own beside the harness kernel: the UBSan-trap kernel,
+# in which undefined behaviour is a `ud2` the fault handler panics on with
+# the address, and the -O2 kernel, which the close boots once through the
+# core tier. `tests/run` builds the one `RACH2_KERNEL` names and passes its
+# path as BOOT_KERNEL, which every suite recipe boots.
+.PHONY: ubsan-kernel o2-kernel
+ubsan-kernel:
+	$(MAKE) -C rach2 COMPONENT=rach2-ubsan KEXTRA="-fsanitize=undefined -fsanitize-undefined-trap-on-error"
+o2-kernel:
+	$(MAKE) -C rach2 COMPONENT=rach2-o2 KEXTRA=-O2
 
 # The kernel built with the harness exit port, which two suites boot. It is a
 # prerequisite of those two and of `prepare-all`, never a step of a recipe: a
@@ -1594,12 +1614,12 @@ harness-kernel:
 	$(MAKE) -C rach2 COMPONENT=rach2-harness HARNESS=1
 
 run-exitline: $(DEMO_CREDS) rach2 tests utils krffs busybox os-real-image test-image $(HARNESS) harness-kernel $(RUNUTIL)
-	sh tests/system/suites/exitline.sh build/rach2/kernel $(TEST_IMAGE) \
+	sh tests/system/suites/exitline.sh $(BOOT_KERNEL) $(TEST_IMAGE) \
 	    $(OS_REAL_IMAGE) root "`cat krffs/rach2_demo_password`" \
 	    $(HARNESS_KERNEL)
 run-crash: rach2 tests krffs $(RUNUTIL)
 	$(MKDISK) krffs/manifests/disk-test.manifest $(CRASH_TEST_IMAGE) 64 48
-	sh tests/system/suites/crash.sh build/rach2/kernel $(CRASH_TEST_IMAGE) build/krffs/fsck.krffs
+	sh tests/system/suites/crash.sh $(BOOT_KERNEL) $(CRASH_TEST_IMAGE) build/krffs/fsck.krffs
 # `tests/run stress`: prove an on-disk KRFFS larger than physical RAM works.
 # Boots a 64 MB disk with a 48 MB partition and runs stressprobe, which writes
 # and re-reads 33 MiB (past the 32 MiB RAM cap) through the 4 MiB cache. The
@@ -1610,7 +1630,7 @@ run-crash: rach2 tests krffs $(RUNUTIL)
 STRESS_DISK = $(IMAGES_DIR)/stress-test.disk
 run-stress: rach2 tests krffs $(HARNESS)
 	$(MKDISK) krffs/manifests/stress-test.manifest $(STRESS_DISK) 64 48
-	$(HARNESS) --kernel build/rach2/kernel \
+	$(HARNESS) --kernel $(BOOT_KERNEL) \
 	    --append "rach2.fsdisk rach2.rescue" \
 	    --drive "file=$(STRESS_DISK),format=raw,if=ide,index=0,media=disk" \
 	    --timeout 900 --steptmo 800 --ok "STRESSPROBE OK" --never "STRESSPROBE FAIL" \
@@ -1634,7 +1654,7 @@ PERSIST_AHCI_DISK    = $(IMAGES_DIR)/persist-test-ahci.disk
 STRESS_AHCI_DISK     = $(IMAGES_DIR)/stress-test-ahci.disk
 run-disk-ahci: rach2 tests krffs $(HARNESS)
 	$(MKDISK) krffs/manifests/disk-test.manifest $(DISK_TEST_AHCI_IMAGE) 64 48
-	$(HARNESS) --kernel build/rach2/kernel \
+	$(HARNESS) --kernel $(BOOT_KERNEL) \
 	    --append "rach2.disk=ahci rach2.fsdisk rach2.rescue" \
 	    --drive "file=$(DISK_TEST_AHCI_IMAGE),format=raw,if=none,id=drv0" \
 	    $(AHCI_ATTACH) \
@@ -1647,7 +1667,7 @@ run-disk-ahci: rach2 tests krffs $(HARNESS)
 # real machine.
 run-disk-q35: rach2 tests krffs $(HARNESS)
 	$(MKDISK) krffs/manifests/disk-test.manifest $(DISK_TEST_Q35_IMAGE) 64 48
-	$(HARNESS) --kernel build/rach2/kernel \
+	$(HARNESS) --kernel $(BOOT_KERNEL) \
 	    --append "rach2.disk=ahci rach2.fsdisk rach2.rescue" \
 	    --drive "file=$(DISK_TEST_Q35_IMAGE),format=raw,if=none,id=drv0" \
 	    --qemu-arg=-machine --qemu-arg=q35 --qemu-arg=-cpu --qemu-arg=max \
@@ -1660,27 +1680,27 @@ run-disk-q35: rach2 tests krffs $(HARNESS)
 DISKS_DISK0 = $(IMAGES_DIR)/disks-test-0.disk
 DISKS_DISK1 = $(IMAGES_DIR)/disks-test-1.disk
 run-disks: rach2 tests krffs test-image $(MKMBR) $(HARNESS)
-	sh tests/system/suites/disks.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(DISKS_DISK0) $(DISKS_DISK1)
+	sh tests/system/suites/disks.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(DISKS_DISK0) $(DISKS_DISK1)
 # `tests/run parts`: four tables on four AHCI disks (an MBR with logical
 # partitions, a GPT, a GPT read from its backup, a blank disk), the nodes
 # as the tables number them, the table read again, and the root chosen by
 # identity: found when the disks are swapped, refused when two disks have it.
 PARTS_DIR = $(IMAGES_DIR)/parts
 run-parts: rach2 tests krffs test-image $(MKMBR) $(MKGPT) $(OS_SIMPLE_EXT2) $(HARNESS)
-	sh tests/system/suites/parts.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(MKMBR) $(MKGPT) \
+	sh tests/system/suites/parts.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(MKMBR) $(MKGPT) \
 	    $(OS_SIMPLE_EXT2) $(PARTS_DIR)
 # `tests/run bus`: four IDE drives on both channels, an AHCI and an IDE disk
 # together with the root on each in turn, and a disk past 128 GiB.
 BUS_DIR = $(IMAGES_DIR)/bus
 run-bus: rach2 tests krffs test-image $(MKMBR) $(HARNESS)
-	sh tests/system/suites/bus.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(MKMBR) $(BUS_DIR)
+	sh tests/system/suites/bus.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(MKMBR) $(BUS_DIR)
 # `tests/run large`: a file past 4 GiB on ext2 and on exFAT, written, read
 # back after a remount, sought, sized, truncated, appended and shared
 # between two descriptors, and a write past each format's limit refused by
 # name. The exFAT volume comes from the host's own formatter.
 LARGE_DIR = $(IMAGES_DIR)/large
 run-large: rach2 tests krffs test-image $(MKMBR) $(HARNESS)
-	sh tests/system/suites/large.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(MKMBR) $(LARGE_DIR)
+	sh tests/system/suites/large.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(MKMBR) $(LARGE_DIR)
 # `tests/run grow`: a 1 GiB ext2 root grown by `growroot` on the recovery
 # system to a partition the size of the installed machine's disk, its
 # writes checked against the grow set, a grow killed and repaired, one
@@ -1701,22 +1721,22 @@ run-grow: $(DEMO_CREDS) rach2 tests krffs test-image $(MKMBR) $(GROWSET) $(HARNE
 # beside a fast one, and the fallback root's faults beside the queue.
 QUEUE_DIR = $(IMAGES_DIR)/queue
 run-queue: rach2 tests krffs test-image $(MKMBR) $(HARNESS)
-	sh tests/system/suites/queue.sh build/rach2/kernel $(TEST_IMAGE) $(HARNESS) $(MKMBR) $(QUEUE_DIR)
+	sh tests/system/suites/queue.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(MKMBR) $(QUEUE_DIR)
 run-persist-ahci: rach2 tests krffs $(HARNESS)
 	$(MKDISK) krffs/manifests/persist-test.manifest $(PERSIST_AHCI_DISK) 64 48
-	$(HARNESS) --kernel build/rach2/kernel \
+	$(HARNESS) --kernel $(BOOT_KERNEL) \
 	    --append "rach2.disk=ahci rach2.fsdisk rach2.rescue" \
 	    --drive "file=$(PERSIST_AHCI_DISK),format=raw,if=none,id=drv0" \
 	    $(AHCI_ATTACH) \
 	    --timeout 60 --ok "PERSISTPROBE OK (wrote)" probe=persistprobe
-	$(HARNESS) --kernel build/rach2/kernel \
+	$(HARNESS) --kernel $(BOOT_KERNEL) \
 	    --append "rach2.disk=ahci rach2.fsdisk rach2.rescue" \
 	    --drive "file=$(PERSIST_AHCI_DISK),format=raw,if=none,id=drv0" \
 	    $(AHCI_ATTACH) \
 	    --timeout 60 --ok "PERSISTPROBE OK (read back)" probe=persistprobe
 run-stress-ahci: rach2 tests krffs $(HARNESS)
 	$(MKDISK) krffs/manifests/stress-test.manifest $(STRESS_AHCI_DISK) 64 48
-	$(HARNESS) --kernel build/rach2/kernel \
+	$(HARNESS) --kernel $(BOOT_KERNEL) \
 	    --append "rach2.disk=ahci rach2.fsdisk rach2.rescue" \
 	    --drive "file=$(STRESS_AHCI_DISK),format=raw,if=none,id=drv0" \
 	    $(AHCI_ATTACH) \
