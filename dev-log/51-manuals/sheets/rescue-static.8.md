@@ -7,5 +7,5 @@ NAME: rescue-static - take the sealed disk's fixed address when no lease arrives
 * The address is the sealed disk's, set in the Makefile as SEALED_ADDRESS, SEALED_MASK and SEALED_GATEWAY; the sealed disk's build runs `cfgcheck sealednet` and refuses a disk whose script and settings disagree.
 * FILES: /etc/network/interfaces (recovery's, which starts it), /var/run/udhcpc.eth0.pid.
 * EXIT STATUS: 0 when a lease arrived or the address was taken; 1 when the client would not stop or the address or route could not be set.
-* EXAMPLE: `tests/run drill` boots the recovery image without a DHCP server and reaches it on the fixed address.
+* EXAMPLE: `tests/run drill` boots the recovery image without a DHCP server and reads on the console that the fixed address was taken and the client stopped.
 * SEE ALSO: recovery(7), netup(8), dhcpc(8), busybox-networking(1).
