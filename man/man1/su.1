@@ -1,0 +1,132 @@
+.Dd September 19, 2026
+.Dt SU 1
+.Os
+.Sh NAME
+.Nm su
+.Nd become another user
+.Sh SYNOPSIS
+.Ss os-real and installed root
+.Nm
+.Op Fl lmp
+.Op Fl s Ar shell
+.Op Fl
+.Oo Ar user
+.Oo Ar file args | Fl c Ar command Op Ar arg0 args
+.Oc
+.Oc
+.Ss os-simple
+.Nm
+.Op Fl
+.Op Fl l | Fl -login
+.Op Ar user
+.Op Fl c Ar command
+.Sh DESCRIPTION
+The
+.Nm
+command runs a shell as another user.
+The default user is root.
+Both implementations are installed set-user-ID root as
+.Pa /bin/su
+and authenticate against
+.Pa /etc/shadow
+unless the caller is root.
+.Ss BusyBox su
+On os-real and the installed root,
+.Nm
+is the BusyBox applet from
+.Ql busybox-suid .
+.Bl -tag -width "-s shell"
+.It Fl , Fl l
+Clear the environment, enter the target user's home directory,
+and run a login shell.
+.It Fl m , Fl p
+Preserve the environment.
+.It Fl s Ar shell
+Run the specified shell.
+.It Fl c Ar command
+Pass the command to the shell with
+.Fl c .
+.El
+.Ss Project su
+On os-simple,
+.Nm
+is the project program.
+The options
+.Fl ,
+.Fl l ,
+and
+.Fl -login
+select login mode.
+.Fl c Ar command
+runs the target shell as
+.Ql "SHELL -c command" .
+An unrecognized option or a second user operand is a usage error.
+.Pp
+A non-root caller is prompted with
+.Ql "Password: " ;
+the password is read without echo.
+An incorrect password or a locked account produces
+.Ql "su: authentication failure" .
+An unknown user produces
+.Ql "su: unknown user NAME" .
+The program holds no credential lock.
+.Pp
+After authentication,
+.Nm
+closes descriptors 3 through 63, clears supplementary groups,
+sets the group ID, and sets the user ID, in that order.
+In login mode it then enters the target's home directory;
+a failure is fatal.
+.Pp
+In both modes it builds an environment containing only
+.Ev PATH ,
+set to
+.Ql /bin:/usr/bin ,
+and
+.Ev HOME ,
+.Ev SHELL ,
+.Ev USER ,
+and
+.Ev LOGNAME
+from the account record.
+It then executes the target's shell.
+In login mode,
+.Ql argv[0]
+is
+.Ql -
+followed by the shell's base name.
+.Sh EXIT STATUS
+The project
+.Nm
+exits with status 1 on authentication, identity, directory, or execution
+failure, and 2 on a usage error.
+.Sh EXAMPLES
+Enter the test account's password when prompted:
+.Dl su - test -c pwd
+The command prints
+.Pa /home/test .
+.Sh DIAGNOSTICS
+The project
+.Nm
+reports:
+.Bl -tag -width Ds
+.It Ql usage: su [-] [-l|--login] [user] [-c command]
+Invalid command syntax.
+.It Ql su: authentication failure
+The password was not accepted or the account is locked.
+.It Ql su: unknown user NAME
+The account does not exist.
+.It Ql su: cannot assume the target identity
+Changing the supplementary groups, group ID, or user ID failed.
+.It Ql su: cannot enter DIR
+The home directory could not be entered in login mode.
+.It Ql su: cannot exec SHELL
+The target shell could not be executed.
+.El
+.Sh SEE ALSO
+.Xr login 1 ,
+.Xr passwd 1 ,
+.Xr shadow 5
+.Sh HISTORY
+The BusyBox description is adapted from BusyBox documentation,
+licensed under GPL-2.0.

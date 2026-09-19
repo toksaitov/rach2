@@ -1,0 +1,200 @@
+.Dd September 19, 2026
+.Dt BOOTCTL 8
+.Os
+.Sh NAME
+.Nm bootctl
+.Nd manage boot kernels, menus, and defaults
+.Sh SYNOPSIS
+.Nm
+.Cm status
+.Nm
+.Cm kernel Ar FILE
+.Nm
+.Cm config Ar FILE
+.Nm
+.Cm grub Ar FILE
+.Nm
+.Cm commit
+.Nm
+.Cm trial Ar ENTRY
+.Nm
+.Cm cancel
+.Nm
+.Cm fallback
+.Nm
+.Cm env Ar KEY Op Ar VALUE
+.Nm
+.Fl -target Ar PARTITION COMMAND
+.Ar ...
+.Sh DESCRIPTION
+The
+.Nm
+command manages the boot partition's kernel slots, menu, and saved and
+trial boot entries.
+It normally uses
+.Pa /dev/bootpart ,
+which only root may open.
+The
+.Fl -target Ar PARTITION
+option selects a named boot partition, such as
+.Pa /dev/disk0p1 .
+The
+.Cm grub
+and
+.Cm commit
+commands do not accept this option because they act on the booted disk.
+Each command requires the operand count shown in the synopsis.
+.Pp
+Boot-partition commands read
+.Pa /proc/cmdline .
+Installing a kernel requires a
+.Ql rach2.slot=
+token identifying a candidate, fallback, or recovery boot.
+Committing requires
+.Ql rach2.slot=candidate .
+.Pp
+The commands are:
+.Bl -tag -width Ds
+.It Cm status
+Report the installed files, saved default, next boot, and current boot.
+Sector extents for the candidate, fallback, environment block, and menu
+are reported in this field order:
+.Dl bootctl: NAME: first sector N, N sectors in N clusters, N bytes
+The names are
+.Ql candidate ,
+.Ql fallback ,
+.Ql grubenv ,
+and
+.Ql boot.cfg .
+A disk built before the menu slot existed reports:
+.Dl bootctl: boot.cfg: absent (a disk built before the menu slot existed)
+.Pp
+The
+.Ql saved_entry
+and
+.Ql next_entry
+lines give the value,
+.Ql empty ,
+or
+.Ql absent .
+An empty
+.Ql next_entry
+is reported as
+.Ql empty (a trial was consumed) .
+.Pp
+The
+.Ql bootctl: booted:
+line reports
+.Ql candidate ,
+.Ql fallback ,
+.Ql recovery, from the recovery partition and neither slot ,
+or
+.Ql not from a slot (no rach2.slot= on /proc/cmdline) .
+.It Cm kernel Ar FILE
+Validate the file and the fallback kernel.
+Set
+.Ql saved_entry=fallback ,
+write the candidate slot, read it back byte for byte, and set
+.Ql next_entry=candidate .
+Exactly one reboot tries the new kernel.
+A power cycle after a crash returns to the fallback.
+After installation, the command reports:
+.Dl bootctl: installed: N bytes in the candidate slot; the next boot tries it once, and a failure falls back
+.Dl bootctl: run `bootctl commit` after the new kernel boots
+.It Cm commit
+Make the booted candidate trial the saved default.
+Only a machine running the candidate may commit it.
+Success is reported as:
+.Dl bootctl: committed: the candidate is the saved default
+.It Cm trial Ar ENTRY
+Arm one boot of
+.Ql candidate ,
+.Ql fallback ,
+or
+.Ql recovery .
+Other entry names are refused.
+.It Cm cancel
+Remove
+.Ql next_entry
+so that the next boot uses the saved default.
+The key is removed rather than set to the empty value left by a consumed trial.
+Success is reported as:
+.Dl bootctl: cancelled: the next boot takes the saved default
+.It Cm fallback
+Copy the committed candidate into the fallback slot and read it back.
+The command then prints:
+.Dl bootctl: run `bootctl trial fallback` to boot it once
+.It Cm config Ar FILE
+Write and verify the fixed menu slot.
+GRUB reads this file after defining its stub entries.
+The stub defines every required entry before reading the staged file,
+so a damaged menu leaves the machine bootable.
+An empty file, a file larger than the slot, or a disk without a menu
+slot is refused.
+.It Cm grub Ar FILE
+Replace the i386-pc GRUB core image through
+.Pa /dev/grubcore .
+The image must be 2 through 1024 sectors long.
+Write and verify the inactive gap tail, then switch LBA 1 to the new tail.
+Sector 0 is never written.
+.It Cm env Ar KEY Op Ar VALUE
+Read or set
+.Ql saved_entry
+or
+.Ql next_entry .
+No other keys are accepted.
+Without
+.Ar VALUE ,
+report the key's value or absence.
+Values may not contain control characters and must be
+.Ql candidate ,
+.Ql fallback ,
+or
+.Ql recovery .
+An empty value is refused because an empty
+.Ql next_entry
+is the marker left by a trial boot.
+.El
+.Sh EXAMPLES
+Install a kernel from the running system, reboot to try it, then inspect
+and commit it:
+.Dl bootctl kernel /tmp/kernel
+.Dl reboot
+.Dl bootctl status && bootctl commit
+.Sh DIAGNOSTICS
+A kernel file that cannot be opened or read is reported as
+.Ql bootctl: cannot open 'FILE'
+or
+.Ql bootctl: reading 'FILE' failed .
+A file too large for any slot is reported as
+.Ql bootctl: 'FILE' is larger than any slot .
+Without a recognized boot slot, installation reports:
+.Dl bootctl: this boot did not come from a kernel slot (no rach2.slot= on /proc/cmdline)
+A commit from another boot reports:
+.Dl bootctl: only a machine running the candidate may commit it (rach2.slot=candidate is not on /proc/cmdline)
+.Pp
+An unsupported trial entry is reported as
+.Ql bootctl: not a menu entry this disk has: 'ENTRY' .
+An unsupported environment key is reported as
+.Ql bootctl: not a key this tool writes: 'KEY' .
+.Pp
+Menu refusals include
+.Ql bootctl: 'FILE' is empty ,
+.Ql bootctl: 'FILE' is N bytes and the menu slot has N ,
+and
+.Ql bootctl: this disk has no menu slot; it was built before one existed .
+An unavailable GRUB window is reported as:
+.Dl bootctl: this machine has no boot loader window (no /dev/grubcore)
+.Pp
+A partition that cannot be read as a boot partition is reported with
+its path and the reason: its first sector could not be read, or that
+sector has no FAT signature.
+For such a refusal with
+.Fl -target ,
+the command also reports
+.Pa /dev/bootpart
+as the machine's own boot partition.
+.Sh SEE ALSO
+.Xr disk 7 ,
+.Xr recovery 7 ,
+.Xr rach2-install 8

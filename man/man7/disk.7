@@ -1,0 +1,166 @@
+.Dd September 19, 2026
+.Dt DISK 7
+.Os
+.Sh NAME
+.Nm disk
+.Nd disks, partitions, device nodes and identities
+.Sh DESCRIPTION
+Rach2 uses 512-byte sectors.
+The disk probe tries AHCI before ATA; USB sticks also register as disks.
+The registry has eight records, numbered in registration order.
+A new disk reuses the lowest released number.
+.Ss Device nodes
+.Bl -tag -width /dev/diskNpM
+.It Pa /dev/diskN
+The whole disk numbered
+.Ar N .
+The node is owned by root, with mode 0400.
+Whole-disk nodes are published for every disk by a recovery kernel or with
+.Ql rach2.diskdiag
+on the boot line.
+A USB stick's whole-disk node is always published.
+.It Pa /dev/diskNpM
+Partition
+.Ar M
+of disk
+.Ar N ,
+with mode 0400.
+MBR primary partitions use their table positions, 1 through 4.
+Logical partitions are numbered from 5 in extended-chain order;
+the extended entry itself has no node.
+GPT partitions use their array positions, counted from 1.
+.It Pa /dev/bootpart
+MBR entry 1 when it is a FAT32 partition starting at or after LBA 2048,
+smaller than 2 GiB and overlapping no other partition.
+The node has mode 0600.
+.It Pa /dev/grubcore
+The range from LBA 1 through 2047, published when no partition overlaps it.
+The node has mode 0600.
+.El
+.Pp
+The stat interface reports whole-disk and partition nodes as block devices.
+It reports
+.Pa /dev/bootpart
+and
+.Pa /dev/grubcore
+as character devices.
+.Ss Partition tables
+The partition service reads MBR tables with one extended chain, or GPT.
+For GPT it tries the primary header and then the backup if necessary.
+Out-of-range and overlapping entries are refused and counted.
+At most fifteen partitions are accepted per disk.
+.Ss Partition identities
+The boot-line settings
+.Ql rach2.root=SPEC
+and
+.Ql rach2.boot=SPEC
+select partitions by identity.
+The forms of
+.Ar SPEC
+are:
+.Bl -tag -width MBRID=XXXXXXXX,M
+.It Ql PARTUUID=GUID
+A GPT partition GUID.
+.It Ql MBRID=XXXXXXXX,M
+An eight-digit hexadecimal MBR disk identifier and partition number.
+.It Ql UUID=UUID
+An ext2 volume UUID.
+.It Ql LABEL=NAME
+A GPT partition name or ext2 volume label.
+.It Pa /dev/diskNpM
+A partition node.
+.El
+.Pp
+Exactly one partition must match.
+A root identity that matches none or more than one mounts no root and
+produces a diagnostic.
+.Xr growroot 8
+uses the
+.Ql MBRID=XXXXXXXX,M
+form to identify its partition.
+.Ss Reads and writes
+Whole-disk and partition nodes accept reads of any byte range.
+Raw writes and boot-window reads require sector-aligned offsets and lengths.
+At most eight transfers have separate buffers at once.
+.Pp
+Only one write-capable descriptor may be open per disk across its nodes.
+A second write-capable open returns
+.Er EBUSY .
+A mount claims its sector range.
+A write-capable open over a claimed range returns
+.Er EBUSY ,
+as does a mount over an open writer's range.
+.Pp
+The ordinary kernel returns
+.Er EPERM
+for writes through whole-disk and partition nodes.
+The recovery kernel permits root to write them.
+The metal kernel's ATA and AHCI driver policy permits only reads.
+A raw write to a write-protected USB stick returns
+.Er EIO .
+.Pp
+.Dv BLKRRPART
+on a whole-disk node rereads the partition table.
+It returns
+.Er EBUSY
+while a partition is mounted or another descriptor is open on the disk.
+.Ss Disk information
+.Pa /proc/disk
+reports the probe state, driver policy and counters for commands, flushes,
+polls, wait ticks, requests in flight, overlaps, quarantines and releases.
+The detailed record describes disk 0, including its model, serial and
+firmware, with
+.Ql part1
+through
+.Ql part4
+lines.
+It is followed by a line per disk in the form
+.Dl disk N TRANSPORT LOCATION SECTORS TABLE MODEL
+with an
+.Ql identity N ...
+line for its serial and a
+.Ql part N ...
+line for each partition.
+.Ss Sealed disk
+The sealed disk has three partitions:
+.Bl -enum
+.It
+The FAT32 boot partition: GRUB, the kernel slots, the menu and the
+environment block.
+.It
+The recovery system's image.
+.It
+The ext2 root.
+.El
+.Pp
+The GRUB core image occupies the gap before partition 1.
+.Ss Loop devices
+.Pa /dev/loop0
+through
+.Pa /dev/loop3
+provide block devices over regular files.
+See
+.Xr loopctl 8 .
+.Sh FILES
+.Bl -tag -width /dev/diskNpM
+.It Pa /dev/diskN
+Whole-disk nodes.
+.It Pa /dev/diskNpM
+Partition nodes.
+.It Pa /dev/bootpart
+Boot-partition window.
+.It Pa /dev/grubcore
+GRUB core-image window.
+.It Pa /dev/loop0 , /dev/loop1 , /dev/loop2 , /dev/loop3
+Devices over regular files.
+.It Pa /proc/disk
+Disk records and counters.
+.El
+.Sh SEE ALSO
+.Xr recovery 7 ,
+.Xr bootctl 8 ,
+.Xr growroot 8 ,
+.Xr loopctl 8 ,
+.Xr mount 8 ,
+.Xr rach2-install 8 ,
+.Xr reflash 8

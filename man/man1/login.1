@@ -1,0 +1,141 @@
+.Dd September 19, 2026
+.Dt LOGIN 1
+.Os
+.Sh NAME
+.Nm login
+.Nd authenticate at the console and begin a session
+.Sh SYNOPSIS
+.Ss os-real and installed root
+.Nm
+.Op Fl p
+.Op Fl h Ar host
+.Op Oo Fl f Oc Ar user
+.Ss os-simple
+.Nm
+.Sh DESCRIPTION
+The console uses
+.Nm
+to authenticate an account before starting its shell.
+On both os-simple and os-real, init provides no unauthenticated shell
+when
+.Pa /bin/login
+is absent.
+.Ss BusyBox login
+On os-real and the installed root,
+.Pa /bin/login
+is the BusyBox 1.36.1 applet from the set-id
+.Ql busybox-suid
+build.
+Init's session child starts it.
+.Pp
+The options are:
+.Bl -tag -width "-h host"
+.It Fl f
+Do not authenticate the specified user.
+.It Fl h Ar host
+Record the host the user came from.
+.It Fl p
+Preserve the environment.
+.El
+.Pp
+The
+.Ev LOGIN_TIMEOUT
+environment variable gives the timeout in seconds.
+The default is 60; 0 disables the timeout.
+.Pp
+This build uses shadow passwords and BusyBox's SHA crypt support.
+The securetty check, login scripts, and nologin feature are disabled.
+The login shell reads
+.Pa /etc/profile .
+.Ss Project login
+On os-simple,
+.Pa /bin/login
+is the project program, started as root by init-login.
+It has no set-id bit.
+Before prompting, it resets the terminal to canonical mode with echo
+and discards pending input.
+It does not create a session or claim the terminal; init's child has
+already done both.
+.Pp
+The prompt is
+.Ql "rach2 login: " .
+The credential library reads the password without echo and verifies it
+against
+.Pa /etc/shadow .
+An unknown name and an incorrect password produce the same diagnostic,
+.Ql "login: incorrect" .
+There is a two-second pause between failed attempts.
+After three failed attempts,
+.Nm
+prints
+.Ql "login: too many tries"
+and exits; init starts it again.
+A bare newline does not count as an attempt.
+Names longer than 63 characters are not accepted.
+.Pp
+After authentication,
+.Nm
+clears supplementary groups, sets the group ID, then sets the user ID.
+A failure is fatal.
+It enters the account's home directory, or falls back to
+.Pa /
+if that fails, and prints
+.Pa /etc/motd .
+.Pp
+The new environment contains only
+.Ev PATH ,
+set to
+.Ql /bin:/usr/bin ,
+and
+.Ev HOME ,
+.Ev SHELL ,
+.Ev USER ,
+and
+.Ev LOGNAME
+from the account record.
+The account's shell replaces
+.Nm
+as a login shell, with
+.Ql -
+followed by the shell's base name as
+.Ql argv[0] .
+.Sh FILES
+.Bl -tag -width /etc/profile
+.It Pa /etc/passwd
+Account records.
+.It Pa /etc/shadow
+Password records.
+.It Pa /etc/motd
+Message of the day.
+.It Pa /etc/profile
+Read by the BusyBox login shell.
+The project login does not read it.
+.El
+.Sh EXAMPLES
+At the os-simple console prompt, enter
+.Ql root
+and then the account's password:
+.Dl rach2 login: root
+.Sh DIAGNOSTICS
+The project login reports:
+.Bl -tag -width Ds
+.It Ql login: incorrect
+The name or password was not accepted.
+.It Ql login: too many tries
+Three attempts failed.
+.It Ql login: cannot become NAME: ERROR
+Changing the supplementary groups, group ID, or user ID failed.
+.It Ql login: DIR: ERROR; using /
+The home directory could not be entered.
+.It Ql login: cannot exec SHELL: ERROR
+The account's shell could not be executed.
+.El
+.Sh SEE ALSO
+.Xr passwd 1 ,
+.Xr sh 1 ,
+.Xr su 1 ,
+.Xr passwd 5 ,
+.Xr shadow 5
+.Sh HISTORY
+The BusyBox description is adapted from BusyBox documentation,
+licensed under GPL-2.0.

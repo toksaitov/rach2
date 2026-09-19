@@ -1,0 +1,97 @@
+.Dd September 19, 2026
+.Dt SH 1
+.Os
+.Sh NAME
+.Nm sh
+.Nd BusyBox ash shell
+.Sh SYNOPSIS
+.Nm
+.Op Fl il
+.Op Fl Cabefmnuvx | Cm +Cabefmnuvx
+.Op Fl o Ar option | Cm +o Ar option
+.Ar ...
+.Oo
+.Fl c Ar script Op Ar arg0 args
+.No \&| Ar file args
+.No \&| Fl s Ar args
+.Oc
+.Sh DESCRIPTION
+This page describes BusyBox 1.36.1 ash as built for Rach2.
+On os-real,
+.Pa /bin/sh
+and
+.Pa /bin/busybox
+contain the same program.
+.Pp
+The shell is a login shell when
+.Ql argv[0]
+begins with
+.Ql - ,
+as arranged by
+.Xr login 1
+and login-mode
+.Xr su 1 .
+A login shell reads
+.Pa /etc/profile .
+The staged profile exports
+.Ev PATH
+as
+.Ql /bin:/usr/bin ,
+defaults
+.Ev HOME
+to
+.Pa /root ,
+and changes directory with
+.Ql cd \(dq$HOME\(dq .
+.Pp
+This build includes job control, aliases,
+.Ev RANDOM ,
+prompt expansion, the
+.Ev TMOUT
+idle timeout, mail checking, and the builtins
+.Ic echo ,
+.Ic printf ,
+.Ic test ,
+.Ic sleep ,
+.Ic help ,
+.Ic getopts ,
+and
+.Ic command .
+The
+.Ic sleep
+builtin accepts fractional seconds.
+Arithmetic is 64-bit and supports bases.
+The build also includes some bash compatibility, a command-not-found
+hook, history with a size limit, and embedded scripts.
+.Pp
+Standalone shell support allows an applet to run by name without an
+entry in
+.Pa /bin .
+This is how most BusyBox commands are reached on os-real, whose
+.Pa /bin
+contains only programs selected by the image manifest.
+.Pp
+The kernel's lack of threads and dynamic linking does not restrict the
+shell's operation.
+The
+.Ic ulimit
+builtin uses the kernel's three resource limits:
+.Ql nproc ,
+.Ql nofile ,
+and
+.Ql as .
+See
+.Xr limits 7 .
+.Sh FILES
+.Bl -tag -width /etc/profile
+.It Pa /etc/profile
+System login profile.
+.El
+.Sh EXAMPLES
+.Dl sh -c 'echo $((1 + 2))'
+.Sh SEE ALSO
+.Xr busybox 1 ,
+.Xr login 1 ,
+.Xr limits 7
+.Sh HISTORY
+Adapted from BusyBox documentation, licensed under GPL-2.0.

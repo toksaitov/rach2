@@ -1,0 +1,352 @@
+.Dd September 19, 2026
+.Dt MAKE 1
+.Os
+.Sh NAME
+.Nm make
+.Nd maintain targets from makefile rules
+.Sh SYNOPSIS
+.Nm
+.Op Fl -posix
+.Op Fl ehiknpqrSst
+.Op Fl C Ar dir
+.Op Fl f Ar file
+.Op Fl j Ar num_jobs
+.Op Fl x Ar pragma
+.Op Ar macro Ns Li "[:[:[:]]]=\&" Ns Ar value ...
+.Op Ar target ...
+.Sh DESCRIPTION
+.Nm
+creates or updates files according to rules in makefiles.
+Each file to be updated is a target.
+A rule gives its prerequisites and the commands needed to build it.
+Prerequisites may themselves be targets and are built first.
+Rules may be explicit or inferred.
+.Pp
+Rach2 installs pdpmake 2.0.4 as the static i386 executable
+.Pa /bin/make .
+The built-in macros are
+.Ql CC=tcc
+and
+.Ql LDFLAGS=-static
+in extension, POSIX.1-2024 and POSIX.1-2017 modes.
+The image has
+.Nm tcc
+and
+.Nm cc ,
+but no
+.Nm c99
+or
+.Nm c17 .
+Every program must be linked statically.
+.Pp
+The staged kernel, utility and ISH sources are under
+.Pa /src/rach2 ,
+.Pa /src/utils
+and
+.Pa /src/ish .
+Each has a
+.Pa guest.mk
+written for pdpmake.
+.Ss Input files
+Without
+.Fl f ,
+.Nm
+searches the working directory for
+.Pa PDPmakefile ,
+.Pa makefile
+and
+.Pa Makefile ,
+in that order, and uses the first one found.
+The filename
+.Ql -
+means standard input.
+.Sh OPTIONS
+.Bl -tag -width Ds
+.It Fl -posix
+Enable strict POSIX mode.
+This must be the first command-line option.
+.It Fl C Ar dir
+Change to
+.Ar dir
+before execution.
+Repeated options are relative to the preceding directory;
+.Ql -C / -C etc
+is equivalent to
+.Ql -C /etc .
+.It Fl e
+Let environment variables override macro assignments.
+.It Fl f Ar file
+Read the makefile
+.Ar file .
+Repeated options read the files in the order given.
+.It Fl h
+Print help.
+.It Fl i
+Ignore unsuccessful command exits and continue.
+This is equivalent to the special target
+.Ql .IGNORE
+without prerequisites.
+.It Fl j Ar num_jobs
+Ignored.
+Accepted for compatibility with other make implementations.
+Recipes run serially.
+.It Fl k
+Continue processing after an error.
+Do not execute recipes for targets that depend on failed targets.
+.It Fl n
+Print commands without executing them, except commands prefixed with
+.Ql + .
+.It Fl p
+Print macro definitions and rules during execution.
+.It Fl q
+Execute no rules.
+Exit successfully if the requested targets are up to date, or with status 1
+otherwise.
+.It Fl r
+Do not use built-in rules; clear the suffix list.
+.It Fl S
+Stop after an error.
+This is the default and reverses
+.Fl k .
+.It Fl s
+Do not print commands as they execute.
+This is equivalent to the special target
+.Ql .SILENT
+without prerequisites.
+.It Fl t
+Touch target files instead of executing rules.
+Ignore targets that are up to date or have no rules.
+.It Fl x Ar pragma
+Enable an extension in strict POSIX mode.
+May be repeated.
+The pragmas are listed below.
+.It Ar macro Ns Li "[:[:[:]]]=\&" Ns Ar value
+Assign
+.Ar value
+to
+.Ar macro ,
+overriding its definition in the input.
+Assignments and targets may be mixed on the command line;
+assignments are processed first.
+.El
+.Ss Pragmas
+Pragmas selectively enable extensions in strict POSIX mode.
+.Bl -tag -width command_comment
+.It Ql macro_name
+Allow
+.Ql -
+in macro names.
+.It Ql target_name
+Allow
+.Ql -
+and
+.Ql /
+in target names.
+.It Ql command_comment
+Do not treat
+.Ql #
+as a comment introducer in commands or target and inference rules.
+.It Ql empty_suffix
+Allow an empty suffix in macro expansions, as in
+.Ql $(VAR:=.c) .
+.It Ql posix_2017
+Enforce POSIX.1-2017.
+.It Ql posix_2024
+Enforce POSIX.1-2024.
+This standard permits the characters enabled by
+.Ql macro_name
+and
+.Ql target_name
+without those pragmas.
+.It Ql posix_202x
+An alias for
+.Ql posix_2024 .
+.It Ql windows
+Allow Windows paths as target names.
+This may also require
+.Ql target_name .
+.El
+.Sh FILES
+.Bl -tag -width /src/rach2/guest.mk
+.It Pa /bin/make
+The pdpmake executable.
+.It Pa PDPmakefile , makefile , Makefile
+Default input makefiles, in search order.
+.It Pa /src/rach2/guest.mk
+Kernel makefile.
+.It Pa /src/utils/guest.mk
+Utility makefile.
+.It Pa /src/ish/guest.mk
+ISH makefile.
+.El
+.Sh EXAMPLES
+.Dl cd /src/rach2 && make -f guest.mk
+.Pp
+In the source tree,
+.Ql tests/run selfbuild
+builds the kernel twice on Rach2 and compares the hashes.
+.Sh SEE ALSO
+.Xr sh 1 ,
+.Xr tcc 1
+.Sh STANDARDS
+.Nm
+follows the POSIX.1-2024 Utility Syntax Guidelines, section 12.2, and
+implements the make utility with extensions.
+All extensions are enabled by default.
+Strict POSIX mode can be selected in any of these ways:
+.Bl -bullet
+.It
+Put the special target
+.Ql .POSIX
+on the first non-comment line of the first input file.
+This is the standard method.
+.It
+Give
+.Fl -posix
+as the first command-line option.
+This method is specific to pdpmake.
+.It
+Set the environment variable
+.Ev PDPMAKE_POSIXLY_CORRECT
+to any value.
+This method is specific to pdpmake.
+.El
+.Ss Extensions
+.Bl -bullet
+.It
+.Fl C
+changes the working directory.
+.It
+Double-colon rules are accepted.
+.It
+The conditional keywords are
+.Ql ifdef ,
+.Ql ifndef ,
+.Ql ifeq ,
+.Ql ifneq ,
+.Ql else
+and
+.Ql endif .
+.It
+Archive members may be written as
+.Ql lib.a(mem1.o mem2.o...) .
+.It
+The macro assignment operator
+.Ql :=
+is equivalent to the POSIX operator
+.Ql ::= .
+.It
+Inference-rule suffixes may contain any number of periods, including none.
+.It
+Inference rules may be chained.
+Given rules
+.Ql .p.q
+and
+.Ql .q.r
+and a file
+.Pa thing.p ,
+.Nm
+can infer how to build
+.Pa thing.r .
+.It
+The wildcards
+.Ql * ,
+.Ql \&?
+and
+.Ql []
+may occur in targets and prerequisites of target rules.
+.It
+A
+.Ql #
+in a command line or macro expansion does not start a comment.
+Elsewhere it may be escaped with a backslash.
+.It
+Expansion of
+.Ql $?
+removes duplicate prerequisites.
+.It
+An
+.Ql include
+line with no files is ignored.
+At least one blank must follow
+.Ql include .
+.It
+When errors are not being ignored, the shell that processes build commands
+is not started with
+.Fl e .
+.It
+Command-line macro definitions and targets may be mixed;
+definitions are processed first.
+.It
+The internal macros
+.Ql $<
+and
+.Ql $*
+have values in target rules.
+.It
+A target is removed when its build command receives a signal.
+.It
+Inference rules and
+.Ql .DEFAULT
+are not used for phony targets.
+.It
+Pragmas propagate to recursive invocations of
+.Nm .
+.El
+.Ss POSIX.1-2024 features
+The following apply to POSIX.1-2024 mode:
+.Bl -bullet
+.It
+Macro expansions may be nested, as in
+.Ql $(FOO$(BAR)) .
+.It
+Prerequisites of
+.Ql .PHONY
+are always considered out of date.
+.It
+An include line may name more than one file.
+.It
+.Ql -include file
+ignores a missing include file.
+.It
+Missing or out-of-date include files are rebuilt when a suitable rule exists.
+.It
+.Ql $^
+and
+.Ql $+
+expand to all prerequisites of the current target, whereas
+.Ql $?
+lists only those out of date.
+.Ql $^
+removes duplicates;
+.Ql $+
+retains them.
+.It
+If the environment has no
+.Ev MAKE
+variable, the
+.Ql MAKE
+macro is initialized from
+.Ql argv[0] ,
+converting a relative path to an absolute one.
+.It
+The macro assignment operators
+.Ql ::= ,
+.Ql :::= ,
+.Ql += ,
+.Ql ?=
+and
+.Ql !=
+are accepted.
+.It
+Pattern macros extend suffix substitution to allow prefix changes.
+.It
+An escaped newline within a macro expansion in a rule becomes a space.
+.It
+The
+.Ql CURDIR
+macro is set to the current directory at startup.
+.El
+.Sh HISTORY
+This page is adapted from the pdpmake 2.0.4 manual.
+pdpmake is released into the public domain.

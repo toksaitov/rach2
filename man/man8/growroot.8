@@ -1,0 +1,123 @@
+.Dd September 19, 2026
+.Dt GROWROOT 8
+.Os
+.Sh NAME
+.Nm growroot
+.Nd grow a root partition and its ext2 file system
+.Sh SYNOPSIS
+.Nm
+.Ar MBRID=ID,N
+.Op Fl -measure
+.Sh DESCRIPTION
+The
+.Nm
+command grows a primary root partition and its ext2 file system into
+the free space after it.
+The operand identifies the disk by its hexadecimal MBR signature
+.Ar ID
+and the partition by entry number
+.Ar N ,
+as in the kernel's
+.Ql rach2.root=
+operand.
+The entry must be numbered 1 through 4.
+Exactly one disk must have the signature.
+.Pp
+Growth is limited by the next partition's start, the end of the disk,
+or the MBR limit of 2^32 sectors, whichever comes first.
+A logical partition after the entry stops the growth, because its
+records lie where the grown entry would write.
+An entry already at that size is left unchanged.
+Nothing is moved and no other partition is changed.
+.Pp
+The steps are:
+.Bl -enum
+.It
+Rewrite the partition entry with the new sector count.
+Writing a whole-disk node requires the recovery kernel.
+.It
+Ask the kernel to read the table again with
+.Dv BLKRRPART .
+The request is refused while the disk is in use.
+Check that the table now reports the new size.
+.It
+Run
+.Ql e2fsck -f -n
+on the volume.
+This check writes nothing.
+A nonzero status stops the run and requests repair first.
+.It
+Run
+.Ql e2fsck -f -p .
+A status other than 0, 1 or 2 stops the run before the file system is
+grown.
+.It
+Run
+.Ql resize2fs
+to grow the file system to the partition's size.
+.El
+.Pp
+The table change is announced as
+.Ql growroot: entry: ,
+the checks as
+.Ql growroot: check:
+and the resize as
+.Ql growroot: grow: .
+A run stopped after changing the entry can be started again;
+it finds the entry already at its new size and continues with the checks
+and resize.
+A damaged volume is not repaired by this tool.
+The read-only check stops the run and requests repair first.
+.Pp
+Before reading the disks,
+.Nm
+refuses a machine whose
+.Ql MemTotal
+is less than 7 MiB.
+The file system checker and resizer keep the bitmaps in memory.
+.Pp
+The
+.Fl -measure
+option records monotonic microseconds and the command and flush counts
+from
+.Pa /proc/disk
+around the table change and resize.
+.Sh EXIT STATUS
+Refusals and failed operations exit with status 1.
+Invalid syntax exits with status 2 and prints:
+.Dl usage: growroot MBRID=ID,N [--measure]
+.Sh EXAMPLES
+Grow primary entry 3 on the disk with MBR signature 1acef00d:
+.Dl growroot MBRID=1acef00d,3
+The installer invokes this command when root growth is requested.
+.Sh DIAGNOSTICS
+Refusals are written to standard error as
+.Ql growroot: WHAT: DETAIL .
+Reported details include:
+.Bl -tag -width Ds
+.It Ql the entry is not a primary one; only entries 1 to 4 grow
+The entry number is outside the primary table.
+.It Ql not found on any of N disks
+No disk has the requested signature.
+.It Ql ambiguous: more than one disk has that signature
+The signature does not identify one disk.
+.It Ql N MiB of memory; growing a root needs 7 MiB
+The machine has insufficient memory.
+.It Ql the table write was refused; only the recovery kernel writes a whole disk
+The kernel refused the table write.
+.It Ql the table was written but not read again: the disk is in use
+The kernel refused to reread the table.
+.It Ql the table read again does not show the new size
+The reread table does not report the new sector count.
+.It Ql e2fsck -fn status N; repair it first, since a repair writes outside the saved set
+The read-only check failed.
+.It Ql e2fsck status N; the volume is not grown
+The subsequent check failed.
+.It Ql resize2fs status N
+The resize failed.
+.El
+.Sh SEE ALSO
+.Xr disk 7 ,
+.Xr e2fsck 8 ,
+.Xr rach2-install 8 ,
+.Xr resize2fs 8

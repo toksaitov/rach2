@@ -1,0 +1,140 @@
+.Dd September 19, 2026
+.Dt RECOVERY 7
+.Os
+.Sh NAME
+.Nm recovery
+.Nd recovery system and repair procedures
+.Sh DESCRIPTION
+The recovery system runs from a RAM root.
+It boots from the install stick's first partition or the disk's recovery
+entry.
+To select the latter from the running system, use
+.Ql bootctl trial recovery
+and reboot.
+.Pp
+The recovery kernel permits root to write
+.Pa /dev/diskN
+and uses the read-write driver policy.
+The recovery system mounts nothing from the disk it repairs.
+.Ss Startup
+The recovery system's init is
+.Pa init-recovery .
+It starts a shell on the console without a login: the image has no
+accounts of the machine's to check against.
+It starts the SSH server only when a key was built into the image, and
+reports which on the console:
+.Dl init: a key was built into this recovery image, so SSH is on
+.Dl init: no key was built into this recovery image, so SSH is off
+With
+.Ql rach2.fsck
+on the boot line, init first runs
+.Ql e2fsck -p
+on each of
+.Pa /dev/disk0p1
+through
+.Pa /dev/disk0p4
+whose superblock has the ext2 magic, and reports
+.Dl init: e2fsck: /dev/disk0pN: status S
+Status 0 means clean, 1 repaired, 4 faults left and 8 an error.
+Without the token a recovery boot repairs nothing.
+The network is configured by the kernel from the
+.Ql rach2.ip=
+boot setting, or by DHCP when that setting is
+.Ql none .
+.Ss Programs
+The recovery image includes
+.Nm rach2-install ,
+.Nm rach2-recover ,
+.Nm reflash ,
+.Nm bootctl ,
+.Nm growroot ,
+.Nm growset ,
+.Nm growboot ,
+.Nm diskctl ,
+.Nm e2fsck ,
+.Nm resize2fs ,
+.Nm update ,
+.Nm rescue-static ,
+.Nm ping ,
+.Nm dmesg
+and the BusyBox tools.
+.Ss Update procedures
+The procedure depends on what is being replaced:
+.Bl -tag -width Ds
+.It Kernel
+From the running system, run
+.Ql bootctl kernel FILE ,
+reboot, read
+.Ql bootctl status
+and run
+.Ql bootctl commit .
+.It Root file system
+From recovery, run
+.Ql rach2-install --update IMAGE /dev/diskN .
+This preserves accounts, SSH policy and host keys.
+Recovery remains the saved default until the trial root has been verified;
+then run
+.Ql bootctl commit .
+.It Recovery partition
+Use
+.Xr reflash 8
+from the disk's recovery entry.
+The partition being written is not mounted.
+The saved default remains the candidate for this write.
+A torn write is repaired from the install stick.
+.El
+.Pp
+The machine's disk stays in its bay.
+These procedures run over SSH or at the console.
+Do not make a write that cannot be undone from the stick.
+.Ss Recovery menu
+.Xr rach2-recover 8
+offers these choices:
+.Bl -enum
+.It
+List the machine's disks, with model, serial, size in bytes, partition table
+and partitions.
+.It
+Check a file system.
+.It
+Put a saved image back on a disk.
+.It
+Install a kernel on a boot partition.
+.It
+Start a shell.
+.It
+Leave.
+.El
+.Pp
+Each step can be left without taking action and reports its result in one
+line.
+.Ss Kernel debug shell
+The boot option
+.Ql rach2.rescue
+skips init and enters the kernel debug shell.
+Its
+.Ql exec PROGRAM
+command runs a program from the root.
+The console belongs to the shell.
+.Sh FILES
+.Bl -tag -width /root/.ssh/authorized_keys
+.It Pa /etc/rach2/sshd.conf
+SSH policy, including the
+.Ql root-password-login
+setting.
+.It Pa /root/.ssh/authorized_keys
+Root's SSH authorized keys.
+.It Pa /proc/disk
+Disk records.
+.It Pa /proc/cmdline
+The boot command line.
+.It Pa /dev/bootlog
+The boot log.
+.El
+.Sh SEE ALSO
+.Xr disk 7 ,
+.Xr bootctl 8 ,
+.Xr growroot 8 ,
+.Xr rach2-install 8 ,
+.Xr rach2-recover 8 ,
+.Xr reflash 8

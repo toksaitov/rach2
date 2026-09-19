@@ -1,0 +1,93 @@
+.Dd September 19, 2026
+.Dt LIMITS 7
+.Os
+.Sh NAME
+.Nm limits
+.Nd process resource limits
+.Sh DESCRIPTION
+Each process has three resource limits.
+Each has an enforced soft value and a hard value that bounds the soft value.
+.Xr prlimit64 2
+maintains them;
+.Fn getrlimit ,
+.Fn setrlimit
+and
+.Fn ugetrlimit
+use the same table.
+Fork inherits both values and exec preserves them.
+.Bl -tag -width RLIMIT_NOFILE
+.It Dv RLIMIT_NPROC
+The number of processes with the same real user ID across the machine.
+Fork returns
+.Er EAGAIN
+when the soft limit is reached.
+Real user ID 0 is exempt.
+A setuid operation that changes the real user ID moves the process to the
+new user's count.
+.It Dv RLIMIT_NOFILE
+One greater than the highest descriptor number the process may be given,
+at most 1024.
+Open returns
+.Er EMFILE
+when no descriptor below the soft limit is free.
+Dup2 returns
+.Er EBADF
+for a destination at or above the soft limit.
+The descriptor table starts at sixteen entries and grows to 1024.
+.It Dv RLIMIT_AS
+The bytes covered by the process's virtual memory regions.
+Growth past the soft limit makes mmap return
+.Er ENOMEM
+and leaves the break unchanged when brk fails.
+.El
+.Ss Initial limits
+Init reads
+.Pa /etc/rach2/limits
+at boot and sets its own limits before starting children.
+Every session inherits these limits.
+A missing file leaves the kernel defaults.
+.Pp
+Each line has a name,
+.Ql nproc ,
+.Ql nofile
+or
+.Ql as ,
+followed by the soft and hard values.
+Values are decimal numbers or
+.Ql unlimited .
+Address-space values are bytes.
+The os-real image supplies:
+.Bd -literal -offset indent
+nproc 256 512
+nofile 1024 1024
+as unlimited unlimited
+.Ed
+.Pp
+The
+.Ic ulimit
+built-in in
+.Xr sh 1
+reads and lowers limits.
+.Ss Other limits
+Process records are allocated from the kernel heap.
+A fork that the heap cannot serve returns
+.Er ENOMEM .
+Sockets and TCP control blocks also come from the heap.
+These allocations are outside the resource-limit table.
+Other fixed capacities are the loopback ring, 48 frames;
+the USB table, twelve entries; and the disk registry, eight records.
+.Sh FILES
+.Bl -tag -width /etc/rach2/limits
+.It Pa /etc/rach2/limits
+Initial soft and hard limits read by init.
+.El
+.Sh EXAMPLES
+.Dl cat /etc/rach2/limits
+.Pp
+The default test suite's
+.Nm limitprobe
+checks the refusals for all three limits by name.
+.Sh SEE ALSO
+.Xr sh 1 ,
+.Xr prlimit64 2 ,
+.Xr memory 7

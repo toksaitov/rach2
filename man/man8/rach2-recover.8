@@ -1,0 +1,115 @@
+.Dd September 19, 2026
+.Dt RACH2-RECOVER 8
+.Os
+.Sh NAME
+.Nm rach2-recover
+.Nd recovery menu for a machine that will not boot
+.Sh SYNOPSIS
+.Nm
+.Sh DESCRIPTION
+The
+.Nm
+command lists disks, checks a file system, restores a saved disk image,
+installs a kernel, or starts a shell.
+It takes no options.
+It runs from the recovery system, which mounts nothing from the disk
+being repaired.
+A root that cannot be mounted can therefore still be overwritten.
+Each operation can be cancelled before it writes.
+The menu reports results and refusals with the prefix
+.Ql rach2-recover: .
+.Pp
+The menu entries are:
+.Bl -tag -width Ds
+.It 1: what this machine has
+List disks and their partitions from
+.Pa /proc/disk .
+Each disk is reported in this form:
+.Dl rach2-recover: /dev/diskN: MODEL, serial S, BYTES bytes, TRANSPORT, table T
+Its partition records follow.
+.It 2: check a file system
+Ask for a partition, for example
+.Pa /dev/disk0p3 .
+An empty answer returns to the menu.
+A nonexistent path is reported as
+.Ql DEVICE is not a device of this machine .
+Run
+.Ql e2fsck -f -n
+without writing to the volume.
+Report a clean file system on success.
+Otherwise report faults and show
+.Ql e2fsck -f -p DEVICE
+as the repair command.
+The menu does not run that repair.
+.It 3: put a saved image back on a disk
+Ask for a whole disk, such as
+.Pa /dev/disk0 .
+The node must be a disk listed by this machine.
+A partition is refused because the image begins with a partition table.
+An empty answer returns to the menu.
+.Pp
+Look for the install stick by mounting removable exFAT partitions under
+.Pa /mnt/recover
+and checking for
+.Pa rach2-install.manifest .
+When found, offer the image named by that manifest.
+Otherwise ask for an image with a hash in
+.Pa IMAGE.sha256 .
+An empty answer selects the offered image, or returns to the menu if
+none was offered.
+.Pp
+The image must be a file.
+Its expected hash is read from
+.Pa IMAGE.sha256
+or, if that file is absent, from a manifest beside the image that names it.
+An absent hash or an unreadable image length stops the operation.
+Display the image length and disk identity, then require the disk's node
+name to be typed back.
+Any other answer cancels without writing.
+.Pp
+Read and hash the image before writing.
+A mismatch with the expected hash stops the operation.
+Write the image at offset 0 with
+.Ql reflash -p ,
+then read it back with
+.Ql reflash --verify .
+A write failure or differing readback hash is reported.
+Ask the kernel to read the new partition table.
+If it cannot, report that the image was written and verified and that
+the machine must be rebooted before anything on that disk is mounted.
+On success, report that the disk was restored and read back.
+.It 4: install a kernel on a boot partition
+Ask for a boot partition, for example
+.Pa /dev/disk0p1 ,
+then a kernel file.
+An empty answer returns to the menu.
+A nonexistent device path or a kernel that is not a file is refused.
+Run
+.Ql bootctl --target PARTITION kernel FILE .
+Report whether the kernel was installed as the candidate and can be
+booted once to try it.
+.It 5: a shell
+Start a shell.
+Use
+.Ql exit
+to return to the menu.
+.It 6: leave
+Leave the menu.
+.El
+.Pp
+An interrupt, termination, or hangup signal ends the run and unmounts
+the volume the menu mounted under
+.Pa /mnt/recover .
+.Sh FILES
+.Bl -tag -width /mnt/recover
+.It Pa /proc/disk
+Disk identities and partition records.
+.It Pa /mnt/recover
+Mount point used to find the install image.
+.El
+.Sh SEE ALSO
+.Xr recovery 7 ,
+.Xr bootctl 8 ,
+.Xr e2fsck 8 ,
+.Xr rach2-install 8 ,
+.Xr reflash 8

@@ -1,0 +1,127 @@
+.Dd September 19, 2026
+.Dt LOOPCTL 8
+.Os
+.Sh NAME
+.Nm loopctl
+.Nd attach, detach, or list loop devices
+.Sh SYNOPSIS
+.Nm
+.Nm
+.Cm attach
+.Op Fl r
+.Op Ar N
+.Ar file
+.Nm
+.Cm detach
+.Ar N
+.Sh DESCRIPTION
+The
+.Nm
+command attaches a regular file to a loop device, detaches a device,
+or lists attachments.
+The four devices are
+.Pa /dev/loop0
+through
+.Pa /dev/loop3 .
+A file system in an attached file can be mounted using the loop device
+as the source for
+.Xr mount 8 .
+.Pp
+With no arguments,
+.Nm
+prints
+.Pa /proc/loop .
+Each attached device has one line giving its name, size in bytes,
+whether it accepts writes, write count, sync count, and the path used
+to attach the file.
+.Pp
+The commands are:
+.Bl -tag -width Ds
+.It Cm attach Oo Fl r Oc Oo Ar N Oc Ar file
+Attach the file to device
+.Ar N ,
+or to the first free device when
+.Ar N
+is omitted.
+The
+.Fl r
+option makes the device read-only.
+Every mount of that device is read-only, regardless of the requested options.
+.It Cm detach Ar N
+Detach device
+.Ar N .
+.El
+.Pp
+Only root can attach files.
+The program writes one command at a time to
+.Pa /dev/loop-control :
+.Ql attach N /path ,
+.Ql attach - /path ,
+.Ql attach ro N /path ,
+or
+.Ql detach N .
+The control node is owned by root with mode 0600.
+The loop nodes are reported as character devices by stat;
+only
+.Xr mount 2
+accesses their contents.
+.Pp
+An attached file cannot be written or truncated; these operations fail with
+.Er EBUSY .
+The volume containing the file cannot be unmounted until the device is
+detached.
+Removing a USB stick also removes loop devices attached to files on it.
+.Sh FILES
+.Bl -tag -width /dev/loop-control
+.It Pa /dev/loop-control
+Control node.
+.It Pa /dev/loop0 No through Pa /dev/loop3
+Loop devices.
+.It Pa /proc/loop
+Attached devices and their counters.
+.El
+.Sh EXIT STATUS
+The exit status is 0 on success, 1 on an error, and 2 on invalid syntax.
+.Sh EXAMPLES
+With device 0 free,
+.Dl loopctl attach /demo/ext2.img
+prints nothing.
+.Dl loopctl
+lists loop0.
+Mount the file system, then unmount it before detaching:
+.Dl mount -t ext2 /dev/loop0 /mnt
+.Dl umount /mnt
+.Dl loopctl detach 0
+.Sh DIAGNOSTICS
+Invalid syntax prints the following on standard error:
+.Dl usage: loopctl [attach [-r] [N] FILE | detach N]
+Kernel errors are reported as
+.Ql loopctl: /dev/loop-control: ERROR
+when the control node cannot be opened, or
+.Ql loopctl: ERROR
+when a command fails.
+Failure to open
+.Pa /proc/loop
+is reported as
+.Ql loopctl: /proc/loop: ERROR .
+.Pp
+Errors include:
+.Bl -tag -width EACCES
+.It Er EACCES
+The caller is not root.
+.It Er EBUSY
+The file is already attached, even through another hard link;
+the device has a mount or a held buffer;
+or a detach was attempted while an attachment was in progress.
+.It Er ELOOP
+The file is on a loop-mounted volume.
+A chain may contain only one loop device.
+.It Er EINVAL
+The file length is not a whole number of sectors,
+the device number is outside 0 through 3,
+or the file is not regular.
+.El
+.Sh SEE ALSO
+.Xr mount 2 ,
+.Xr disk 7 ,
+.Xr mount 8

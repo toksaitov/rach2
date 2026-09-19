@@ -1,0 +1,190 @@
+.Dd September 19, 2026
+.Dt MOUNT 8
+.Os
+.Sh NAME
+.Nm mount ,
+.Nm umount
+.Nd attach and detach a file system
+.Sh SYNOPSIS
+.Nm mount
+.Nm mount
+.Op Ar options
+.Op Fl o Ar option
+.Ar device directory
+.Nm umount
+.Op Ar options
+.Ar filesystem Ns | Ns Ar directory
+.Sh DESCRIPTION
+The
+.Nm mount
+and
+.Nm umount
+commands are BusyBox applets using this kernel's mount interfaces.
+With no arguments,
+.Nm mount
+lists mounts from
+.Pa /proc/mounts .
+Mounting requires effective user ID 0.
+.Pp
+The kernel accepts the types
+.Ql vfat ,
+.Ql exfat ,
+.Ql ext2 ,
+and
+.Ql krffs .
+The kernel places the synthetic
+.Ql devfs
+and
+.Ql proc
+mounts itself.
+The target must be a directory other than the root directory or an
+existing mount point.
+.Pp
+The source can be a partition node
+.Pa /dev/diskNpM ,
+a whole disk
+.Pa /dev/diskN
+containing a volume without a partition table,
+a loop device
+.Pa /dev/loopN ,
+or
+.Pa /dev/bootpart .
+The source's sector range is reserved for the life of the mount.
+Another mount on that range, or an open descriptor that permits writes
+to a window over it, prevents the mount.
+.Pp
+BusyBox can resolve
+.Ql LABEL=
+and
+.Ql UUID=
+sources through blkid.
+This build has no mount helpers, mtab support, or
+.Fl o Cm loop
+support.
+To mount a regular file, first attach it with
+.Xr loopctl 8 .
+A loop device attached with
+.Fl r
+is mounted read-only regardless of the requested options.
+.Pp
+The kernel honours or records only
+.Ql ro ,
+.Ql nosuid ,
+.Ql nodev ,
+.Ql noexec ,
+.Ql noatime ,
+.Ql nodiratime ,
+.Ql relatime ,
+and
+.Ql silent
+flags.
+Other flags are rejected, including those requested by
+.Ql remount ,
+.Ql bind ,
+and
+.Ql move .
+The options honoured are recorded in
+.Pa /proc/mounts ,
+with six fields in fstab format.
+.Pp
+The
+.Nm umount
+command detaches a file system.
+The kernel waits for operations in progress to finish before detaching.
+An open file on the volume, or a loop device attached to a file on it,
+prevents unmounting.
+A mounted USB stick that has been removed can be unmounted;
+buffers that can no longer be written are discarded.
+.Sh OPTIONS
+The
+.Nm mount
+options are:
+.Bl -tag -width "-t fstype"
+.It Fl a
+Mount all file systems in
+.Pa /etc/fstab .
+.It Fl f
+Perform a dry run.
+.It Fl v
+Produce verbose output.
+.It Fl r
+Mount read-only.
+.It Fl t Ar fstype
+Select the file-system type.
+.It Fl T Ar file
+Read the specified table instead of
+.Pa /etc/fstab .
+.It Fl O Ar option
+With
+.Fl a ,
+mount only file systems with the specified option.
+.It Fl o Ar option
+Specify mount options.
+BusyBox recognizes
+.Ql sync ,
+.Ql async ,
+.Ql atime ,
+.Ql noatime ,
+.Ql diratime ,
+.Ql nodiratime ,
+.Ql relatime ,
+.Ql norelatime ,
+.Ql dev ,
+.Ql nodev ,
+.Ql exec ,
+.Ql noexec ,
+.Ql suid ,
+.Ql nosuid ,
+.Ql ro ,
+.Ql rw ,
+.Ql remount ,
+.Ql bind ,
+.Ql rbind ,
+.Ql move ,
+.Ql shared ,
+.Ql rshared ,
+.Ql slave ,
+.Ql rslave ,
+.Ql private ,
+.Ql rprivate ,
+and
+.Ql unbindable .
+Recognition by BusyBox does not imply kernel support;
+the accepted kernel flags are listed above.
+.El
+.Sh FILES
+.Bl -tag -width /proc/mounts
+.It Pa /etc/fstab
+File-system table.
+.It Pa /proc/mounts
+Current mounts and their options.
+.El
+.Sh EXAMPLES
+.Dl mount -t vfat /dev/disk0p1 /mnt
+.Dl umount /mnt
+After attaching an ext2 image to loop device 0:
+.Dl mount -t ext2 /dev/loop0 /mnt
+.Dl umount /mnt
+.Sh DIAGNOSTICS
+The kernel reports these errors:
+.Bl -tag -width ENAMETOOLONG
+.It Er ENODEV
+The file-system type is unknown.
+.It Er EINVAL
+A mount flag is unsupported, or the target is the root of the root file system.
+.It Er ENOTDIR
+The target is not a directory.
+.It Er EBUSY
+The target is already a mount point; the source range is mounted or has
+an open descriptor permitting writes; or an unmount was attempted while
+a file or loop device still referred to the volume.
+.It Er ENAMETOOLONG
+The target path is 256 bytes or longer.
+.El
+.Sh SEE ALSO
+.Xr mount 2 ,
+.Xr proc 5 ,
+.Xr disk 7 ,
+.Xr loopctl 8
+.Sh HISTORY
+Adapted from BusyBox documentation, licensed under GPL-2.0.

@@ -1,0 +1,305 @@
+.Dd September 19, 2026
+.Dt TCC 1
+.Os
+.Sh NAME
+.Nm tcc ,
+.Nm cc
+.Nd Tiny C Compiler
+.Sh SYNOPSIS
+.Nm tcc
+.Op Ar options
+.Op Ar file ...
+.Nm cc
+.Op Ar options
+.Op Ar file ...
+.Sh DESCRIPTION
+.Nm
+is TinyCC 0.9.27, installed as a static i386 executable.
+It includes an assembler and a linker; the machine has no binutils.
+It compiles C89 with the C99 features implemented by TinyCC.
+The C library is musl.
+.Pp
+Executables must be linked with
+.Fl static
+and must use ELF format.
+Rach2 has no dynamic linker.
+Running compiled code from memory with
+.Fl run
+and producing shared libraries with
+.Fl shared
+are errors.
+Bounds checking with
+.Fl b
+is not built because musl lacks the required hooks.
+.Pp
+The system header search order is
+.Pa /lib/tcc/include ,
+then
+.Pa /include .
+The compiler searches
+.Pa /lib/tcc
+for its runtime archive and
+.Pa /lib
+for the C library and startup objects.
+.Sh OPTIONS
+.Ss General options
+.Bl -tag -width Ds
+.It Fl c
+Generate an object file.
+.It Fl o Ar file
+Write the output to
+.Ar file .
+.It Fl run Ar source Op Ar args ...
+Request compilation and execution from memory.
+This is an error on Rach2.
+.It Fl v
+Print the compiler version.
+.It Fl vv
+Show included files.
+Used alone, print search directories.
+.Fl vvv
+also shows files tried during the search.
+.It Fl bench
+Print compilation statistics.
+.El
+.Ss Preprocessor options
+.Bl -tag -width Ds
+.It Fl I Ar dir
+Add a header search directory.
+Directories are searched in the order given, before the system directories.
+.It Fl D Ar sym Ns Op = Ns Ar val
+Define a preprocessor symbol.
+The value defaults to 1.
+Function-like macros may also be defined, as in
+.Ql -DF(a)=a+1 .
+.It Fl U Ar sym
+Undefine a preprocessor symbol.
+.It Fl E
+Preprocess only.
+Write to standard output, or to the file selected by
+.Fl o .
+.El
+.Ss Compilation options
+The following
+.Fl f
+options have negative forms beginning with
+.Ql -fno- .
+.Bl -tag -width Ds
+.It Fl funsigned-char
+Make plain
+.Vt char
+unsigned.
+.It Fl fsigned-char
+Make plain
+.Vt char
+signed.
+.It Fl fno-common
+Do not generate common symbols for uninitialized data.
+.It Fl fleading-underscore
+Prefix C symbols with an underscore.
+.It Fl fms-extensions
+Treat a nested named structure declaration without an identifier as an
+unnamed structure.
+.It Fl fdollars-in-identifiers
+Allow dollar signs in identifiers.
+.It Fl O Ns Op Ar level
+Ignored.
+Unsupported GCC
+.Fl f
+and
+.Fl m
+options are also ignored.
+.El
+.Ss Warning options
+.Bl -tag -width Ds
+.It Fl w
+Disable all warnings.
+.It Fl Wimplicit-function-declaration
+Warn about implicit function declarations.
+.It Fl Wunsupported
+Warn about unsupported GCC features that the compiler ignores.
+.It Fl Wwrite-strings
+Give string constants type
+.Vt const char *
+instead of
+.Vt char * .
+.It Fl Werror
+Stop compilation if warnings are issued.
+.It Fl Wall
+Enable all warnings except
+.Fl Werror ,
+.Fl Wunsupported
+and
+.Fl Wwrite-strings .
+.El
+.Pp
+The
+.Fl W
+options have negative forms beginning with
+.Ql -Wno- .
+.Ss Linker options
+.Bl -tag -width Ds
+.It Fl L Ar dir
+Add a library search directory for
+.Fl l .
+.It Fl l Ar lib
+Link with the library
+.Pa lib Ns Ar lib Ns Pa .a
+for a static link.
+Directories given by
+.Fl L
+are searched before those in
+.Ev LIBRARY_PATH .
+.It Fl B Ar dir
+Set the directory for compiler libraries and headers.
+The default is
+.Pa /lib/tcc .
+.It Fl static
+Link a static executable.
+Required for an executable on Rach2.
+.It Fl shared
+Request a shared library.
+This is an error on Rach2.
+.It Fl soname Ar name
+Set a shared library's runtime name.
+Shared-library output is unavailable on Rach2.
+.It Fl rdynamic
+Export global symbols to a dynamic linker.
+Rach2 has no dynamic linker.
+.It Fl r
+Combine the input files into one object file.
+.It Fl Wl, Ns Ar option Ns Op , Ns Ar option ...
+Pass options to the linker, as listed below.
+.El
+.Pp
+Linker options include:
+.Bl -tag -width Ds
+.It Fl Wl,-rpath= Ns Ar path
+Record a search path for dynamic libraries.
+Rach2 has no dynamic linker.
+.It Fl Wl,--enable-new-dtags
+Use
+.Dv DT_RUNPATH
+instead of
+.Dv DT_RPATH
+for a dynamic-library search path.
+.It Fl Wl,--oformat= Ns Ar format
+Select the output format.
+The default is
+.Ql elf32-i386 .
+Non-ELF executable output, including
+.Ql binary ,
+is refused on Rach2.
+The upstream
+.Ql coff
+format is for the TMS320C67xx target only.
+.It Fl Wl,-Ttext= Ns Ar address
+Set the text address in the executable layout.
+.It Fl Wl,-section-alignment= Ns Ar value
+Set section alignment in the executable layout.
+.It Fl Wl,-file-alignment= Ns Ar value
+Set file alignment in the executable layout.
+.It Fl Wl,-image-base= Ns Ar address
+Set the image base in the executable layout.
+.It Fl Wl,-stack= Ns Ar size
+Set the stack size in the executable layout.
+.It Fl Wl,-subsystem= Ns Ar subsystem
+Select a subsystem for PE executables, such as
+.Ql console ,
+.Ql gui
+or
+.Ql wince .
+This is an option for the Windows target.
+.It Fl Wl,-Bsymbolic
+Set the
+.Dv DT_SYMBOLIC
+tag.
+.It Fl Wl,-whole-archive
+Link every object in archives.
+.It Fl Wl,-no-whole-archive
+Turn off linking every object in archives.
+.El
+.Ss Debugging options
+.Bl -tag -width Ds
+.It Fl g
+Generate debugging information.
+.It Fl b
+Request allocation and array or pointer bounds checks.
+This option is not built on Rach2.
+.It Fl bt Ar n
+Set the number of callers displayed in stack traces.
+.El
+.Ss Other options
+.Bl -tag -width Ds
+.It Fl MD
+Generate a makefile fragment containing dependencies.
+.It Fl MF Ar file
+Write the dependencies from
+.Fl MD
+to
+.Ar file .
+.It Fl print-search-dirs
+Print the configured installation, library and include directories.
+.It Fl dumpversion
+Print the compiler version.
+.It Fl mms-bitfields
+Use MSVC bit-field alignment instead of GCC alignment.
+.It Fl mfloat-abi Ar abi
+Select
+.Ql softfp
+or
+.Ql hard
+floating-point ABI on the ARM target.
+.It Fl mno-sse
+Disable SSE registers on the x86_64 target.
+.It Fl m32 , Fl m64
+Pass the command line to the i386 or x86_64 cross compiler.
+.El
+.Sh FILES
+.Bl -tag -width /lib/tcc/libtcc1.a
+.It Pa /bin/tcc , /bin/cc
+Two regular files containing the same compiler bytes.
+KRFFS has no symbolic links.
+.It Pa /lib/tcc/include
+The compiler's five headers.
+.It Pa /include
+The musl headers.
+.It Pa /lib/tcc/libtcc1.a
+The compiler runtime archive.
+.It Pa /lib/libc.a
+The musl C library.
+.It Pa /lib/crt1.o , /lib/crti.o , /lib/crtn.o
+Startup objects.
+.El
+.Sh EXAMPLES
+.Dl tcc -static -o hello hello.c && ./hello
+.Pp
+In the source tree,
+.Ql tests/run tcc
+compiles and runs a program on os-real.
+.Ql tests/run selfbuild
+builds the kernel through
+.Xr make 1 .
+.Sh DIAGNOSTICS
+The output-policy errors are:
+.Bl -item
+.It
+.Ql -run is not available on Rach2: running from memory needs mprotect(2), which this kernel does not have. Compile to a file and run that.
+.It
+.Ql -shared is not available on Rach2: there is no dynamic linker to load a shared object.
+.It
+.Ql a program for Rach2 must be linked with -static: there is no dynamic linker, and the kernel does not refuse a dynamic executable, it loads one and jumps into it unrelocated.
+.It
+.Ql a program for Rach2 must be an ELF: -Wl,-oformat asks for a raw image, and exec reads a program header table.
+.El
+.Pp
+The unavailable
+.Fl b
+option produces
+.Ql invalid option -- '-b' .
+.Sh SEE ALSO
+.Xr make 1 ,
+.Xr rach2 7
+.Sh HISTORY
+The option descriptions are adapted from the TinyCC 0.9.27 documentation,
+licensed under LGPL-2.1.

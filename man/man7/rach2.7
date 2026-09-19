@@ -5,32 +5,149 @@
 .Nm rach2
 .Nd an educational operating system for the 32-bit PC
 .Sh DESCRIPTION
-Rach2 is a kernel and a small userland for the 32-bit x86 PC, written to be
-read.
-The kernel is freestanding C89; the userland is the ported musl C library,
-the BusyBox shell and tools, the Dropbear SSH server, the TinyCC compiler
-and the pdpmake
-.Xr make 1 ,
-so the system can rebuild its own kernel.
+Rach2 is an educational operating system for the 32-bit x86 PC.
+Its kernel is freestanding C89 and uses no libgcc.
+The userland includes the ported musl C library, BusyBox shell and tools,
+Dropbear SSH server, TinyCC compiler, pdpmake, and project programs
+described in sections 1 and 8 of this manual.
+TinyCC is installed as
+.Pa /bin/tcc
+and
+.Pa /bin/cc ;
+pdpmake is installed as
+.Pa /bin/make .
 .Pp
-The system boots from a KRFFS image in memory or from an ext2 root on a
-disk, mounts FAT32, exFAT, ext2 and KRFFS volumes, drives ATA and AHCI
-disks, USB keyboards and sticks, and RTL8139, e1000 and RTL8168 network
-cards, and answers SSH.
+The system can rebuild its own kernel.
+Images with the compiler include
+.Pa /src/rach2 ,
+.Pa /src/utils ,
+and
+.Pa /src/ish ,
+each with a
+.Pa guest.mk
+for pdpmake.
+.Ss Boot
+Rach2 boots through Multiboot1, using QEMU's
+.Fl kernel
+option or GRUB from a disk or USB stick.
+The test, os-simple, os-real, and recovery images use a KRFFS root in memory.
+A disk root is a KRFFS or ext2 partition, selected by identity with
+.Ql rach2.root=
+on the kernel command line.
+See
+.Xr disk 7
+for identities and
+.Pa rach2/Readme.md
+in the source tree for the kernel command line.
+.Ql rach2.rescue
+starts the kernel debug shell instead of
+.Pa /sbin/init .
+.Ss File systems and devices
+Rach2 reads and writes FAT32, exFAT, ext2, and KRFFS, its native file
+system.
+ext2 supports hard and symbolic links.
+A file system in a regular file can be mounted using the devices
+.Pa /dev/loop0
+through
+.Pa /dev/loop3 ;
+see
+.Xr loopctl 8
+and
+.Xr mount 8 .
+.Pp
+Supported devices include ATA and AHCI disks; USB keyboards, mice, and
+flash drives through xHCI, on root ports or behind hubs; RTL8139,
+e1000 (Intel 82540EM), and RTL8168 network cards; PS/2 keyboards and mice;
+VGA text and mode 13h graphics; COM1 serial; Sound Blaster 16,
+Intel HDA, and the PC speaker.
+.Pp
+Rach2 does not implement UEFI, Multiboot2, SMP, threads, swap,
+dynamic linking, IPv6, or VESA graphics.
+Every program is statically linked.
+.Ss Images
+.Bl -tag -width rach2-metal-disk
+.It test
+Guest probes.
+.It os-simple
+The project's init, login, su, passwd, and adduser programs.
+.It os-real
+BusyBox shell, login, and su, Dropbear, the compiler, and project sources.
+.It rach2-metal-disk
+os-real for an installed disk, with init-metal supervising Dropbear.
+.It recovery
+A RAM system with the installer and repair tools.
+.El
+.Ss The manual
+The sections are:
+.Bl -tag -width 2n -compact
+.It 1
+Programs.
+.It 2
+System calls.
+.It 4
+Devices.
+.It 5
+File formats.
+.It 7
+Overviews:
+.Xr disk 7 ,
+.Xr limits 7 ,
+.Xr memory 7 ,
+and
+.Xr recovery 7 .
+.It 8
+Administration:
+.Xr bootctl 8 ,
+.Xr growroot 8 ,
+.Xr loopctl 8 ,
+.Xr mount 8 ,
+.Xr rach2-install 8 ,
+.Xr rach2-recover 8 ,
+and
+.Xr reflash 8 .
+.El
+.Pp
+Use
+.Xr man 1
+to read the manual.
+Pages are plain text under
+.Pa /usr/share/man/catN ,
+where
+.Ar N
+is the section number.
+See
+.Xr proc 5
+for the kernel's files under
+.Pa /proc .
 .Sh FILES
-.Bl -tag -width /usr/share/man
+.Bl -tag -width /var/log/services
 .It Pa /usr/share/man
-The manual pages, as plain text under
-.Pa catN .
+Manual pages.
 .It Pa /src
-The kernel, shell and utility sources, on the images that carry a compiler.
+Kernel, utility, and shell sources on images with a compiler.
 .It Pa /proc
-The kernel's counters and tables, one file each.
+Kernel counters and tables.
+.It Pa /dev
+Device nodes.
+.It Pa /etc/rach2
+System configuration, including
+.Pa limits
+and
+.Pa sshd.conf .
+.It Pa /var/log/services
+Output from init's services.
+.It Pa /dev/bootlog
+This boot's kernel log, readable by root.
 .El
 .Sh SEE ALSO
 .Xr man 1 ,
-.Xr sh 1
+.Xr sh 1 ,
+.Xr proc 5 ,
+.Xr disk 7 ,
+.Xr limits 7 ,
+.Xr memory 7 ,
+.Xr recovery 7
 .Sh HISTORY
-Rach2 is developed as a teaching system; its milestones are recorded in the
-source tree under
+Rach2 is developed as a teaching system.
+Its milestones are recorded in the source tree under
 .Pa dev-log .

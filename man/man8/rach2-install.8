@@ -1,0 +1,187 @@
+.Dd September 19, 2026
+.Dt RACH2-INSTALL 8
+.Os
+.Sh NAME
+.Nm rach2-install
+.Nd install Rach2 on a disk or update an installed root
+.Sh SYNOPSIS
+.Nm
+.Op Fl -source Ar DIR
+.Nm
+.Fl -update Ar IMAGE DISK
+.Sh DESCRIPTION
+The
+.Nm
+command installs Rach2 on a disk of the running machine.
+It runs from the recovery system on the install stick.
+The stick contains a whole disk image and a manifest giving its name,
+length, and SHA-256.
+The manifest identifies the stick, regardless of its position among
+the machine's disks.
+The
+.Fl -source Ar DIR
+option reads the image and manifest from an already mounted directory.
+.Pp
+All questions precede the first write.
+The final question confirms the disk to overwrite.
+Invalid disk, password, account name, and key-file answers are explained
+and requested again.
+The questions are:
+.Bl -tag -width Ds
+.It Which disk
+A disk is offered if it is fixed, has no mounted partitions, uses
+512-byte sectors, is not the source stick, and is at least as large
+as the image.
+Eligible disks are numbered.
+Other disks follow, each with the reason it was excluded.
+Enter a number from the list or the corresponding node,
+.Pa /dev/diskN .
+.It Root's password
+Enter the password twice, with terminal echo disabled.
+An empty password or a pair that differs is requested again.
+.It First account name
+The name must start with a lowercase letter and contain only lowercase
+letters, digits, hyphens, and underscores.
+It may contain at most 32 characters and may not be
+.Ql root .
+An invalid name is reported with the rule it violates.
+.It Account password
+Enter it twice, as for root.
+.It Account keys
+Key files found on the stick and in the recovery system are listed.
+Enter a listed number, another file's path, or an empty answer for no keys.
+A path that is not a file is requested again.
+The selected file is copied to the account's
+.Pa ~/.ssh/authorized_keys .
+.It Root size
+Choose whether to grow the root into the whole disk.
+An empty answer,
+.Ql y
+or
+.Ql yes
+grows it; any other answer leaves the root at the image's size.
+.It Confirmation
+The disk's identity, account, keys, and choice of root size are displayed.
+Type the disk's node name to proceed.
+The words
+.Ql stop ,
+.Ql STOP ,
+.Ql Stop ,
+.Ql quit
+and
+.Ql q
+end the run without writing.
+An invalid answer repeats the confirmation question without discarding
+the earlier answers.
+.El
+.Pp
+After confirmation, the installer performs these steps in order:
+.Bl -enum
+.It
+Read the source image and compare its SHA-256 with the manifest.
+A mismatch stops the install before the disk is written.
+.It
+Write the image with
+.Ql reflash -p ,
+which reports progress every sixteen mebibytes.
+.It
+Read the written range back and compare its hash with the image's hash.
+.It
+Ask the kernel to read the new partition table.
+.It
+Write
+.Pa /etc/passwd ,
+.Pa /etc/group ,
+and
+.Pa /etc/shadow
+into the ext2 root.
+Each file is written under a separate name and renamed into place.
+Create the account's home directory and install its keys.
+.It
+Write
+.Ql root-password-login yes
+to
+.Pa /etc/rach2/sshd.conf .
+This makes init start Dropbear without
+.Fl g ,
+permitting root to log in over SSH with a password.
+.It
+Grow the root into the free space after it, if requested.
+.El
+.Pp
+The three account files and the SSH policy are also archived on the
+recovery partition.
+Passwords are stored as hashes.
+The archive preserves the accounts for an update when the root cannot
+be read.
+The installed root's demonstration accounts and keys are removed.
+The recovery partition keeps its own accounts and keys so that it can
+be used when the installed root will not boot.
+.Pp
+With
+.Fl -update Ar IMAGE DISK ,
+.Nm
+writes a root file system image into an installed machine's root partition.
+The partition table is changed only to grow that partition into the
+free space after it.
+The disk must have a first partition that
+.Xr bootctl 8
+can read as a boot partition and an installed root containing
+.Pa /etc/rach2 .
+.Pp
+Before replacing a readable root, the installer copies its account files,
+SSH policy, server host keys, and account keys, including root's keys.
+These are restored after the write, preserving passwords changed since
+installation.
+The absence of account keys is preserved too.
+If the root cannot be read, the account files and policy are taken from
+the recovery partition's archive and the last ext2 partition is replaced.
+When the root and archive can both be read but differ, each differing
+configuration file is reported and the root's copy is kept.
+.Pp
+Before the root is written, the archive is refreshed from the retained
+configuration and marked as an update in progress.
+After the accounts are restored, the archive is written again without
+the mark.
+An update interrupted after writing the image and before restoring the
+accounts leaves the image's accounts on the root.
+The next update uses the marked archive.
+The recovery partition is mounted so that only root can read the archive.
+The image's home directories and their keys are removed whether or not
+the old homes were retained.
+.Pp
+The image is checked before the old root is overwritten.
+Its length must be a whole number of sectors and fit the partition.
+It must begin with an ext2 file system.
+If
+.Pa IMAGE.sha256
+exists, the image's SHA-256 must match it.
+.Pp
+Before writing, the installer sets the saved boot entry to
+.Ql recovery
+and cancels any armed trial.
+Both kernel entries boot the same root; recovery runs from RAM.
+After the update, the new root is armed for one trial boot.
+A failed trial or an interrupted write returns the machine to recovery.
+After trying the new root,
+.Ql bootctl commit
+makes it the saved default.
+.Sh EXIT STATUS
+The exit status is 0 when the disk contains the installed system or,
+for an update, when the new root is on disk and armed for a trial boot.
+Other statuses indicate failure, with the reason on standard error.
+A failure before the image write stops the run without starting that write.
+.Sh EXAMPLES
+Boot the install stick, log in at the console as root, and run:
+.Dl rach2-install
+.Pp
+From a host, update a machine running its own recovery entry, with the
+new image already at
+.Pa /tmp/root.ext2 :
+.Dl ssh -i $RKEY root@ADDRESS 'rach2-install --update /tmp/root.ext2 /dev/disk0'
+.Sh SEE ALSO
+.Xr disk 7 ,
+.Xr recovery 7 ,
+.Xr bootctl 8 ,
+.Xr growroot 8 ,
+.Xr reflash 8

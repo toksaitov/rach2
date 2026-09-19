@@ -1,0 +1,101 @@
+.Dd September 19, 2026
+.Dt REFLASH 8
+.Os
+.Sh NAME
+.Nm reflash
+.Nd write a stream to a raw device or hash a device range
+.Sh SYNOPSIS
+.Nm
+.Op Fl p
+.Op Fl -verify
+.Ar DEVICE OFFSET BYTES
+.Sh DESCRIPTION
+The
+.Nm
+command copies an image from standard input to a raw device.
+The
+.Ar OFFSET
+and
+.Ar BYTES
+operands give the starting offset and declared length in bytes.
+Use the partition start and sector count reported by the machine in
+.Pa /proc/disk ,
+multiplied by 512.
+The range is checked before any input is read.
+.Pp
+The length must be nonzero.
+The offset and length must be whole numbers of sectors, and the range
+must fit the device.
+Offset 0 is permitted for a whole-disk write.
+The input must contain exactly the declared number of bytes.
+An early end or data beyond that length is a transfer failure.
+Input is gathered into batches of 2048 sectors before writing.
+.Pp
+The
+.Fl p
+option prints progress on standard error every sixteen mebibytes and
+at the end:
+.Dl reflash: N of N bytes, P%
+.Pp
+The
+.Fl -verify
+option writes nothing.
+It reads the specified device range and prints its SHA-256 on standard
+output:
+.Dl reflash: sha256 HEX of N bytes at OFFSET
+Failure to read the complete range is an error.
+With
+.Fl p ,
+read progress is reported as:
+.Dl reflash: read N of N bytes, P%
+.Pp
+Only a kernel built for recovery permits writes to whole-disk or
+partition nodes.
+Other kernels refuse the device write with
+.Er EPERM .
+The refusal is reported without a partial write.
+.Sh EXIT STATUS
+The exit status is 0 on success, 1 for a refusal or failed transfer,
+and 2 for a usage error.
+.Sh EXAMPLES
+The sealed disk layout has a 64 MiB FAT boot partition at byte 1048576,
+a 64 MiB recovery partition at byte 68157440 (sector 133120), and
+a 1 GiB ext2 root image at byte 136314880.
+Use the offsets reported by the machine for the disk being written.
+.Pp
+To rewrite the recovery partition while running the disk's recovery
+entry, first extract its image on the host:
+.Dl dd if=build/images/rach2-sealed.disk of=recovery.img bs=512 skip=133120 count=131072
+Send it over SSH:
+.Dl gzip -c recovery.img | ssh -i $KEY root@ADDRESS 'gunzip | reflash -p /dev/disk0 68157440 67108864'
+On the recovery system, read back and hash the same range:
+.Dl reflash --verify /dev/disk0 68157440 67108864
+.Sh DIAGNOSTICS
+An incorrect operand count prints:
+.Dl usage: reflash [-p] [--verify] DEVICE OFFSET BYTES
+A nonnumeric offset or length is reported as
+.Ql reflash: 'X' is not an offset
+or
+.Ql reflash: 'X' is not a length .
+.Pp
+A zero length is refused with
+.Ql a length of zero writes nothing .
+An unaligned offset or length, or a range past the device's end, is
+refused before input is read.
+Bounds errors include the device size as
+.Ql (DEVICE has N bytes) .
+.Pp
+Device errors are reported as
+.Ql reflash: cannot open DEVICE: ERROR ,
+.Ql reflash: cannot measure DEVICE: ERROR ,
+.Ql reflash: cannot seek DEVICE to OFFSET: ERROR ,
+or
+.Ql reflash: DEVICE did not close cleanly: ERROR .
+A failed transfer reports the amount written as
+.Ql (N of N bytes written at OFFSET) .
+An incomplete verification reports:
+.Dl reflash: DEVICE stopped answering after N of N bytes
+.Sh SEE ALSO
+.Xr disk 7 ,
+.Xr recovery 7 ,
+.Xr rach2-install 8
