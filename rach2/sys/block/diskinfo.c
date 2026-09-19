@@ -358,7 +358,7 @@ int diskinfo_format_disks(char *buf, int cap)
         put(buf, &n, cap, " ");
         put_dec(buf, &n, cap, (uint64_t)d->dev->sector_size);
         put(buf, &n, cap, d->removable ? " removable" : " fixed");
-        put(buf, &n, cap, devfs_disk_claimed((struct disk *)d) ? " mounted " : " free ");
+        put(buf, &n, cap, devfs_disk_claimed(d) ? " mounted " : " free ");
         put(buf, &n, cap, d->serial);
         put(buf, &n, cap, "\n");
         for (k = 0; k < d->table.count; k++) {

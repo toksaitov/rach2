@@ -92,7 +92,7 @@ int fd_node_busy(struct vfs_mount *mnt, void *node)
     return 0;
 }
 
-void fd_ofd_repoint(struct vfs_mount *mnt, void *from, void *to)
+void fd_ofd_repoint(struct vfs_mount *mnt, const void *from, void *to)
 {
     struct ofd_rec *rec;
 

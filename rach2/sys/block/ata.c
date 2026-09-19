@@ -586,9 +586,10 @@ static uint8_t ata_program(const struct ata_drive *d, uint64_t lba, uint32_t cou
  * Returns 0, or `-EIO` for a transfer the drive or the bus master
  * reported failed. `count` is at most ATA_REQ_SECTORS, the bounce's size.
  */
-static int ata_dma_transfer(struct ata_drive *d, uint64_t lba, uint32_t count, void *buffer,
-                            int write)
+static int ata_dma_transfer(struct ata_drive *d, uint64_t lba, uint32_t count, const void *src,
+                            void *dst)
 {
+    int write = src != NULL;
     struct ata_channel *ch = d->channel;
     uint32_t bytes = count * BLOCK_SECTOR_SIZE;
     uint32_t flags;
@@ -599,7 +600,7 @@ static int ata_dma_transfer(struct ata_drive *d, uint64_t lba, uint32_t count, v
         return -EIO;
     }
     if (write) {
-        k_memcpy(ch->bounce, buffer, bytes);
+        k_memcpy(ch->bounce, src, bytes);
     }
     ch->prd.phys = (uint32_t)(uintptr_t)ch->bounce;
     ch->prd.bytes = (uint16_t)bytes;
@@ -635,7 +636,7 @@ static int ata_dma_transfer(struct ata_drive *d, uint64_t lba, uint32_t count, v
         return -EIO;
     }
     if (!write) {
-        k_memcpy(buffer, ch->bounce, bytes);
+        k_memcpy(dst, ch->bounce, bytes);
     }
     return 0;
 }
@@ -656,7 +657,7 @@ static int ata_read_on(struct ata_drive *d, uint64_t lba, uint32_t count, void *
             if (chunk > ATA_REQ_SECTORS) {
                 chunk = ATA_REQ_SECTORS;
             }
-            rc = ata_dma_transfer(d, lba, chunk, out, 0);
+            rc = ata_dma_transfer(d, lba, chunk, NULL, out);
 
             if (rc != 0) {
                 return rc;
@@ -728,7 +729,7 @@ static int ata_write_on(struct ata_drive *d, uint64_t lba, uint32_t count, const
             if (chunk > ATA_REQ_SECTORS) {
                 chunk = ATA_REQ_SECTORS;
             }
-            rc = ata_dma_transfer(d, lba, chunk, (void *)in, 1);
+            rc = ata_dma_transfer(d, lba, chunk, in, NULL);
 
             if (rc != 0) {
                 return rc;

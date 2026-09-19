@@ -200,7 +200,7 @@ static void vga_set_mode(uint8_t misc, const uint8_t *seq, size_t seq_count, con
 static void vga_save_font(void)
 {
     volatile uint8_t *font_mem = (volatile uint8_t *)0xA0000;
-    int i;
+    int i, j;
 
     outb(VGA_SEQ_INDEX, 0x02); /* Map Mask */
     outb(VGA_SEQ_DATA, 0x04);  /* enable plane 2 only */
@@ -218,7 +218,9 @@ static void vga_save_font(void)
     outb(VGA_GC_DATA, 0x04);  /* map at A0000-AFFFF (64K) */
 
     for (i = 0; i < 256; i++) {
-        k_memcpy(&saved_font[i * 16], (void *)(font_mem + i * 32), 16);
+        for (j = 0; j < 16; j++) {
+            saved_font[i * 16 + j] = font_mem[i * 32 + j];
+        }
     }
 }
 
@@ -233,7 +235,7 @@ static void vga_save_font(void)
 static void vga_restore_font(void)
 {
     volatile uint8_t *font_mem = (volatile uint8_t *)0xA0000;
-    int i;
+    int i, j;
 
     outb(VGA_SEQ_INDEX, 0x02); /* Map Mask */
     outb(VGA_SEQ_DATA, 0x04);  /* enable plane 2 only */
@@ -251,7 +253,9 @@ static void vga_restore_font(void)
     outb(VGA_GC_DATA, 0x04);  /* map at A0000-AFFFF (64K) */
 
     for (i = 0; i < 256; i++) {
-        k_memcpy((void *)(font_mem + i * 32), &saved_font[i * 16], 16);
+        for (j = 0; j < 16; j++) {
+            font_mem[i * 32 + j] = saved_font[i * 16 + j];
+        }
     }
 
     outb(VGA_SEQ_INDEX, 0x02);

@@ -95,7 +95,7 @@ static volatile uint16_t rirb_rp = 0;
 #define HDA_BUFFER_SIZE 16384
 #define HDA_NUM_BUFFERS 2 /* Double-buffered like SB16 */
 static volatile hda_bdl_entry_t bdl[HDA_NUM_BUFFERS] __attribute__((aligned(1024)));
-static volatile uint8_t audio_buffer[HDA_BUFFER_SIZE * HDA_NUM_BUFFERS]
+static uint8_t audio_buffer[HDA_BUFFER_SIZE * HDA_NUM_BUFFERS]
     __attribute__((aligned(128)));
 
 /* Ring buffer for the write() audio path (Doom). */
@@ -281,13 +281,16 @@ static void hda_setup_dma_posbuf(void)
 {
     uint32_t addr;
     uint32_t dpl;
+    uint32_t i;
 
     /* DPLBASE must not be written while any DMA engine is running. */
     if (!hda_base) {
         return;
     }
 
-    k_memset((void *)dma_posbuf, 0, sizeof(dma_posbuf));
+    for (i = 0; i < HDA_MAX_STREAMS * 2; i++) {
+        dma_posbuf[i] = 0;
+    }
 
     addr = (uint32_t)(uintptr_t)dma_posbuf;
     addr &= ~0x7Fu; /* 128-byte aligned base */
@@ -545,7 +548,7 @@ static void hda_service_stream(void)
     uint32_t lpib_mod;
     uint32_t hw_period;
     int current_buf, next_buf;
-    volatile uint8_t *next_buffer;
+    uint8_t *next_buffer;
 
     if (!playing || !stream_started || !hda_base) {
         return;
@@ -591,7 +594,7 @@ static void hda_service_stream(void)
     next_buffer = audio_buffer + (next_buf * HDA_BUFFER_SIZE);
 
     if (user_callback) {
-        user_callback((uint8_t *)next_buffer, HDA_BUFFER_SIZE);
+        user_callback(next_buffer, HDA_BUFFER_SIZE);
     } else {
         uint32_t out_ch = (current_hw_channels > 0) ? (uint32_t)current_hw_channels : 1;
         uint32_t frames = HDA_BUFFER_SIZE / (2u * out_ch);
@@ -2486,7 +2489,7 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
 
     if (user_callback) {
         for (i = 0; i < HDA_NUM_BUFFERS; i++) {
-            user_callback((uint8_t *)(audio_buffer + (i * HDA_BUFFER_SIZE)), HDA_BUFFER_SIZE);
+            user_callback(audio_buffer + (i * HDA_BUFFER_SIZE), HDA_BUFFER_SIZE);
         }
     } else {
         /* Write path silence is signed 16-bit zeros. */

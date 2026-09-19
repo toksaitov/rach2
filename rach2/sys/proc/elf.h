@@ -138,7 +138,7 @@ bool elf_check(const void *data, uint32_t size);
 uint32_t elf_entry_point(const void *data);
 
 /** Pointer to the program header table, or NULL if there is none. */
-Elf32_Phdr *elf_program_headers(const void *data);
+const Elf32_Phdr *elf_program_headers(const void *data);
 
 /** Number of program headers (`e_phnum`). */
 uint16_t elf_program_header_count(const void *data);
@@ -156,6 +156,11 @@ struct page_dir;
  * into one buffer.
  */
 typedef int (*elf_read_fn)(void *ctx, void *dst, uint32_t count, uint32_t off);
+
+/** The context of a reader of a program on the KRFFS root: its name. */
+struct exec_krffs_ctx {
+    const char *name;
+};
 
 /* Maximum PT_LOAD segments recorded per image. */
 #define ELF_MAX_SEGS 8

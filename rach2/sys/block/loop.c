@@ -175,7 +175,7 @@ block_device_t *loop_device_at(int index)
  * An attachment names its file by its mount and its node, and the VFS owns
  * the sweep over every other holder; this is the loop devices' part of it.
  */
-void loop_repoint(struct vfs_mount *mnt, void *from, void *to)
+void loop_repoint(struct vfs_mount *mnt, const void *from, void *to)
 {
     int i;
 

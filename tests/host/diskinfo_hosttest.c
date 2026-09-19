@@ -115,7 +115,7 @@ static block_device_t fake_dev[2];
 static int fake_count;
 static int fake_claimed;
 
-int devfs_disk_claimed(struct disk *d)
+int devfs_disk_claimed(const struct disk *d)
 {
     /* The second disk is the one with something mounted from it. */
     return fake_claimed && d == &fake[1];

@@ -519,7 +519,7 @@ static int32_t raw_window_read_bytes(struct disk_window *w, fd_entry_t *e, char 
 
 static int32_t dev_disk_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
-    const struct disk_node *node = disk_node_of((const struct devfs_entry *)e->priv);
+    const struct disk_node *node = disk_node_of(e->dev);
     struct disk_window *w = disk_node_window(node);
 
     if (!w->present) {
@@ -535,7 +535,7 @@ static int32_t dev_disk_read(fd_entry_t *e, char __user *buf, uint32_t count)
  */
 static int32_t dev_disk_rescan(fd_entry_t *e)
 {
-    const struct disk_node *node = disk_node_of((const struct devfs_entry *)e->priv);
+    const struct disk_node *node = disk_node_of(e->dev);
 
     if (!node || node->part != 0) {
         return -ENOTTY;
@@ -556,7 +556,7 @@ static int32_t dev_disk_rescan(fd_entry_t *e)
 #ifdef RACH2_RECOVERY
 static int32_t dev_disk_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
-    const struct disk_node *node = disk_node_of((const struct devfs_entry *)e->priv);
+    const struct disk_node *node = disk_node_of(e->dev);
 
     return raw_window_write(disk_node_window(node), e, buf, count);
 }
@@ -673,7 +673,7 @@ static struct disk *window_disk(const struct devfs_entry *dev);
 static void raw_close(fd_entry_t *e)
 {
     if (e->flags & FD_FLAG_WRITE) {
-        struct disk *d = window_disk((const struct devfs_entry *)e->priv);
+        struct disk *d = window_disk(e->dev);
 
         if (d) {
             d->writer_held = 0;
@@ -708,7 +708,7 @@ static void dev_bootpart_close(fd_entry_t *e)
 
 static void dev_disk_close(fd_entry_t *e)
 {
-    const struct disk_node *node = disk_node_of((const struct devfs_entry *)e->priv);
+    const struct disk_node *node = disk_node_of(e->dev);
 
     raw_close(e);
     node->disk->opens--;
@@ -1202,7 +1202,7 @@ void devfs_release_claim(int claim)
     }
 }
 
-int devfs_disk_claimed(struct disk *d)
+int devfs_disk_claimed(const struct disk *d)
 {
     int i;
 
@@ -1389,7 +1389,7 @@ int devfs_open(const char *name, int flags)
     if (dev->ops) {
         e->type = FD_TYPE_DEVICE;
         e->ops = dev->ops;
-        e->priv = (void *)dev;
+        e->dev = dev;
     } else {
         /* /dev/console and /dev/tty reuse the kernel console (enum
          * dispatch). */
@@ -1479,7 +1479,7 @@ uint32_t devfs_rdev(struct fd_entry *e)
     if (!e || e->type != FD_TYPE_DEVICE || !e->priv) {
         return 0;
     }
-    dev = (const struct devfs_entry *)e->priv;
+    dev = e->dev;
     return ((uint32_t)dev->major << 8) | (uint32_t)dev->minor;
 }
 
@@ -1490,7 +1490,7 @@ uint32_t devfs_fd_ino(struct fd_entry *e)
     if (!e || e->type != FD_TYPE_DEVICE || !e->priv) {
         return 0;
     }
-    dev = (const struct devfs_entry *)e->priv;
+    dev = e->dev;
     return DEVFS_INO(entry_index(dev));
 }
 
@@ -1501,7 +1501,7 @@ int devfs_lseek_zero(struct fd_entry *e)
     if (!e || e->type != FD_TYPE_DEVICE || !e->priv) {
         return 0;
     }
-    dev = (const struct devfs_entry *)e->priv;
+    dev = e->dev;
     return dev->lseek_zero ? 1 : 0;
 }
 
@@ -1512,7 +1512,7 @@ const char *devfs_fd_name(struct fd_entry *e)
     if (!e || e->type != FD_TYPE_DEVICE || !e->priv) {
         return "?";
     }
-    dev = (const struct devfs_entry *)e->priv;
+    dev = e->dev;
     return dev->name;
 }
 
@@ -1570,7 +1570,7 @@ uint32_t devfs_fd_mode(struct fd_entry *e)
     if (!e || e->type != FD_TYPE_DEVICE || !e->priv) {
         return 0;
     }
-    dev = (const struct devfs_entry *)e->priv;
+    dev = e->dev;
     return devfs_type_bits(dev) | (uint32_t)dev->mode;
 }
 
@@ -1620,7 +1620,7 @@ int devfs_fd_log_size(struct fd_entry *e, uint32_t *size)
     if (!e || e->type != FD_TYPE_DEVICE || !e->priv) {
         return 0;
     }
-    dev = (const struct devfs_entry *)e->priv;
+    dev = e->dev;
     if (dev->ops == &bootlog_ops) {
         if (size) {
             *size = klog_len();
@@ -1710,7 +1710,7 @@ int devfs_fd_is_raw(struct fd_entry *e)
     if (!e || e->type != FD_TYPE_DEVICE || !e->priv) {
         return 0;
     }
-    dev = (const struct devfs_entry *)e->priv;
+    dev = e->dev;
     return dev->ops == &bootpart_ops || dev->ops == &grubcore_ops || dev->ops == &diskwin_ops;
 }
 
@@ -1722,7 +1722,7 @@ int devfs_fd_raw_size(struct fd_entry *e, uint64_t *size)
     if (!e || e->type != FD_TYPE_DEVICE || !e->priv) {
         return 0;
     }
-    dev = (const struct devfs_entry *)e->priv;
+    dev = e->dev;
     w = raw_window_of(dev);
     if (!w || !w->present) {
         return 0;

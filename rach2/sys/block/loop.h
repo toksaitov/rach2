@@ -49,7 +49,7 @@ int loop_backs(struct vfs_mount *mnt, void *node);
 
 /** Follow a node the file system moved, for `vfs_repoint`, which owns that
  * sweep. */
-void loop_repoint(struct vfs_mount *mnt, void *from, void *to);
+void loop_repoint(struct vfs_mount *mnt, const void *from, void *to);
 
 /** Whether `mnt` holds the file of any loop device. */
 int loop_holds_mount(struct vfs_mount *mnt);

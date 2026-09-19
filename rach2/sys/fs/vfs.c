@@ -734,7 +734,7 @@ void vfs_desc_close(struct vfs_mount *mnt, void *node, void *handle)
 
 /* ---- repointing, for a KRFFS relocation ---- */
 
-void vfs_repoint(struct vfs_mount *mnt, void *from, void *to)
+void vfs_repoint(struct vfs_mount *mnt, const void *from, void *to)
 {
     process_t *pr;
     int i, j;

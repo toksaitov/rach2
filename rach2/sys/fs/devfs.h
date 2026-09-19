@@ -70,7 +70,7 @@ void devfs_disk_nodes(struct disk *d);
 void devfs_disk_part_nodes(struct disk *d);
 
 /** Whether a mount holds a claim on any range of `d`. */
-int devfs_disk_claimed(struct disk *d);
+int devfs_disk_claimed(const struct disk *d);
 void devfs_bootpart_publish(struct block_device *backing, uint32_t start_lba,
                             uint32_t sector_count);
 

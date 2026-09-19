@@ -166,7 +166,7 @@ void fs_node_moved(const krffs_node_t *from, krffs_node_t *to)
     if (!from || from == to) {
         return;
     }
-    vfs_repoint(vfs_root_mount(), (void *)(krffs_node_t *)from, to);
+    vfs_repoint(vfs_root_mount(), from, to);
 }
 
 /**
@@ -3102,6 +3102,7 @@ static int32_t sys_dup(isr_params_t *params)
     dst->sock = entry->sock;
     dst->ops = entry->ops; /* a dup shares the same backing object + vtable */
     dst->priv = entry->priv;
+    dst->dev = entry->dev;
     dst->ofd = entry->ofd;
     fd_ofd_ref(dst->ofd);
     dst->flags = entry->flags & ~(uint32_t)FD_FLAG_CLOEXEC;
@@ -3157,6 +3158,7 @@ static int32_t sys_dup2(isr_params_t *params)
     new_entry->sock = old_entry->sock;
     new_entry->ops = old_entry->ops; /* share the backing object + vtable */
     new_entry->priv = old_entry->priv;
+    new_entry->dev = old_entry->dev;
     new_entry->ofd = old_entry->ofd;
     fd_ofd_ref(new_entry->ofd);
     new_entry->flags = old_entry->flags & ~(uint32_t)FD_FLAG_CLOEXEC;
@@ -5463,6 +5465,7 @@ static int32_t sys_fcntl64(isr_params_t *params)
         dst->sock = entry->sock;
         dst->ops = entry->ops; /* share the backing object + vtable */
         dst->priv = entry->priv;
+        dst->dev = entry->dev;
         dst->ofd = entry->ofd;
         fd_ofd_ref(dst->ofd);
         dst->flags = entry->flags;
@@ -5777,7 +5780,9 @@ static void close_cloexec_fds(void)
  * the ELF header, program headers, and each PT_LOAD straight from the file. */
 static int exec_krffs_read(void *ctx, void *dst, uint32_t count, uint32_t off)
 {
-    return krffs_read((const char *)ctx, (char *)dst, count, off);
+    const struct exec_krffs_ctx *c = ctx;
+
+    return krffs_read(c->name, (char *)dst, count, off);
 }
 
 /* A program on a mount that is not the root is read through the mount: the
@@ -6109,6 +6114,7 @@ static int32_t sys_execve(isr_params_t *params)
     const char __user *user_path = (const char __user *)params->ebx;
     char *const __user *user_argv = (char *const __user *)params->ecx;
     char *const __user *user_envp = (char *const __user *)params->edx;
+    struct exec_krffs_ctx kctx;
 
     int argc = 0;
     int envc = 0;
@@ -6260,6 +6266,8 @@ static int32_t sys_execve(isr_params_t *params)
     }
 
     name = s->path;
+
+    kctx.name = name;
     if (name[0] == '/') {
         name++;
     }
@@ -6387,10 +6395,13 @@ checked:
                 }
                 script = 1;
             }
-        } else if (exec_krffs_read((void *)name, &ehdr, sizeof(ehdr), 0) != (int)sizeof(ehdr) ||
+        } else if (exec_krffs_read(&kctx, &ehdr, sizeof(ehdr), 0) != (int)sizeof(ehdr) ||
                    !elf_valid_exec(&ehdr, sizeof(ehdr))) {
-            int32_t sb = exec_shebang(s, &argc, exec_krffs_read,
-                                      (void *)(s->path + (s->path[0] == '/' ? 1 : 0)));
+            struct exec_krffs_ctx sctx;
+            int32_t sb;
+
+            sctx.name = s->path + (s->path[0] == '/' ? 1 : 0);
+            sb = exec_shebang(s, &argc, exec_krffs_read, &sctx);
 
             if (sb < 0) {
                 return sb;
@@ -6410,6 +6421,8 @@ checked:
             file_gid = 0;
 
             name = s->path;
+
+            kctx.name = name;
             if (name[0] == '/') {
                 name++;
             }
@@ -6456,7 +6469,7 @@ checked:
                     return rc;
                 }
             }
-            if (exec_krffs_read((void *)name, &ehdr, sizeof(ehdr), 0) != (int)sizeof(ehdr) ||
+            if (exec_krffs_read(&kctx, &ehdr, sizeof(ehdr), 0) != (int)sizeof(ehdr) ||
                 !elf_valid_exec(&ehdr, sizeof(ehdr))) {
                 /* One level only: an interpreter that is itself a script. */
                 return -ENOEXEC;
@@ -6527,7 +6540,7 @@ checked:
     free_user_pages(proc_dir);
 
     if (elf_load_image(s->vfs.ref.mnt ? exec_vfs_read : exec_krffs_read,
-                       s->vfs.ref.mnt ? (void *)&s->vfs : (void *)name, proc_dir, &img) != 0) {
+                       s->vfs.ref.mnt ? (void *)&s->vfs : (void *)&kctx, proc_dir, &img) != 0) {
         exec_vfs_done(&s->vfs);
         exec_fail_destroyed(1);
     }

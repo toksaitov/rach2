@@ -231,7 +231,7 @@ void devfs_disk_publish(struct disk *d, uint64_t window_sectors)
     published++;
 }
 
-int devfs_disk_claimed(struct disk *d)
+int devfs_disk_claimed(const struct disk *d)
 {
     (void)d;
     return mount_holds != 0;

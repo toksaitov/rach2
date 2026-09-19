@@ -87,7 +87,7 @@ uint32_t elf_entry_point(const void *data)
 /**
  * Return a pointer to the program header table, or NULL if there is none.
  */
-Elf32_Phdr *elf_program_headers(const void *data)
+const Elf32_Phdr *elf_program_headers(const void *data)
 {
     const Elf32_Ehdr *ehdr = (const Elf32_Ehdr *)data;
 
@@ -95,7 +95,7 @@ Elf32_Phdr *elf_program_headers(const void *data)
         return NULL;
     }
 
-    return (Elf32_Phdr *)((uint8_t *)data + ehdr->e_phoff);
+    return (const Elf32_Phdr *)((const uint8_t *)data + ehdr->e_phoff);
 }
 
 uint16_t elf_program_header_count(const void *data)
@@ -123,7 +123,7 @@ uint16_t elf_program_header_count(const void *data)
  */
 int elf_load(const void *data, uint32_t size, page_dir_t *dir)
 {
-    Elf32_Phdr *phdrs;
+    const Elf32_Phdr *phdrs;
     uint16_t phdr_count;
     uint16_t i;
     const uint8_t *file_data = (const uint8_t *)data;
@@ -140,7 +140,7 @@ int elf_load(const void *data, uint32_t size, page_dir_t *dir)
     }
 
     for (i = 0; i < phdr_count; i++) {
-        Elf32_Phdr *phdr = &phdrs[i];
+        const Elf32_Phdr *phdr = &phdrs[i];
         uint32_t vaddr, vaddr_end, page_addr;
         uint32_t bytes_copied, bytes_to_copy;
         uint32_t file_offset;
@@ -331,7 +331,7 @@ int elf_load_image(elf_read_fn readfn, void *ctx, page_dir_t *dir, elf_image_t *
     }
 
     for (i = 0; i < ehdr.e_phnum; i++) {
-        Elf32_Phdr *ph = &phdrs[i];
+        const Elf32_Phdr *ph = &phdrs[i];
         uint32_t vaddr, vaddr_end, page_addr;
         uint32_t file_offset, copied, to_copy;
 

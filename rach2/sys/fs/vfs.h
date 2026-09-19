@@ -391,7 +391,7 @@ void vfs_desc_close(struct vfs_mount *mnt, void *node, void *handle);
  * directories, directory descriptors and covering mounts. KRFFS calls it
  * when a relocation moves a node.
  */
-void vfs_repoint(struct vfs_mount *mnt, void *from, void *to);
+void vfs_repoint(struct vfs_mount *mnt, const void *from, void *to);
 
 /* The default-answer wrappers: each checks the mount flags and the NULL
  * operation and answers the contract's errno, so the rule exists once. The

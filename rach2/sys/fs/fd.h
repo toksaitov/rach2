@@ -128,6 +128,8 @@ struct open_file {
  * per descriptor) live here; the seek offset and status flags are shared
  * through the open-file description ofd.
  */
+struct devfs_entry;
+
 typedef struct fd_entry {
     fd_type_t type;             /* Type of this fd (NONE, CONSOLE, FILE) */
     struct krffs_node *node;    /* Pointer to KRFFS node (for FILE type) */
@@ -135,6 +137,7 @@ typedef struct fd_entry {
     struct open_file *ofd;      /* Shared open-file description (offset+flags) */
     const struct file_ops *ops; /* Backing ops (pipes/ttys/...); NULL = enum dispatch */
     void *priv;                 /* Backing private object (e.g. a pipe end) */
+    const struct devfs_entry *dev; /* The device table row, for a DEVICE fd */
     uint32_t flags;             /* Per-fd flags (READ, WRITE, CLOEXEC) */
 } fd_entry_t;
 
@@ -211,7 +214,7 @@ void fd_ofd_unlock(struct open_file *ofd);
 
 /** Repoint every description field naming `from` at `to`, after a KRFFS
  * relocation moved a node. Called by vfs_repoint, which owns the sweep. */
-void fd_ofd_repoint(struct vfs_mount *mnt, void *from, void *to);
+void fd_ofd_repoint(struct vfs_mount *mnt, const void *from, void *to);
 
 /** Whether a description of (`mnt`, `node`) is inside an operation now. */
 int fd_node_busy(struct vfs_mount *mnt, void *node);

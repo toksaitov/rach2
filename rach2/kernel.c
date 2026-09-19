@@ -1034,7 +1034,9 @@ static bool test_isolation(void)
  * loader. */
 static int exec_krffs_read(void *ctx, void *dst, uint32_t count, uint32_t off)
 {
-    return krffs_read((const char *)ctx, (char *)dst, count, off);
+    const struct exec_krffs_ctx *c = ctx;
+
+    return krffs_read(c->name, (char *)dst, count, off);
 }
 
 /**
@@ -1088,6 +1090,7 @@ static void exec_program(int argc, char *argv[])
     uint32_t user_esp;
     uint8_t random16[16];
     int init_is_starting;
+    struct exec_krffs_ctx kctx;
     static char env_path[] = "PATH=/bin:/usr/bin:/";
     static char env_home[] = "HOME=/";
     static char env_term[] = "TERM=rach2";
@@ -1136,8 +1139,9 @@ static void exec_program(int argc, char *argv[])
 
     /* Stream the segments straight from the file (no whole-file buffer, so
      * the binary size is unbounded); img records entry and auxv metadata. */
+    kctx.name = path;
     if (elf_load_image(boot_ctx.ref.mnt ? boot_vfs_read : exec_krffs_read,
-                       boot_ctx.ref.mnt ? (void *)&boot_ctx : (void *)path, user_dir, &img) != 0) {
+                       boot_ctx.ref.mnt ? (void *)&boot_ctx : (void *)&kctx, user_dir, &img) != 0) {
         boot_exec_done();
         console_puts("exec: Failed to load ELF segments");
         return;
@@ -1359,7 +1363,7 @@ void panic_init_died(uint32_t pid)
  */
 static void boot_init_process(void)
 {
-    static const char *const init_path = "/sbin/init";
+    static char init_path[] = "/sbin/init";
     char *init_argv[2];
 
     if (!vfs_root_mounted()) {
@@ -1408,7 +1412,7 @@ static void boot_init_process(void)
      * whole harness were written against. */
     proc_reclaim_boot_pids();
 
-    init_argv[0] = (char *)init_path;
+    init_argv[0] = init_path;
     init_argv[1] = NULL;
     exec_program(1, init_argv);
 
@@ -2730,7 +2734,7 @@ static void process_command(const char *cmd)
         uint32_t file_size;
         uint32_t entry_point;
         uint16_t phdr_count;
-        Elf32_Phdr *phdrs;
+        const Elf32_Phdr *phdrs;
         uint16_t i;
 
         if (!krffs_fs) {
