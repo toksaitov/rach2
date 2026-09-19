@@ -15,6 +15,7 @@
 dir 0755 /bin
 file 0755 /bin/busybox build/vendor/busybox/busybox
 file 0755 /bin/sh build/vendor/busybox/busybox
+file 0755 /bin/col krffs/col.script
 
 # Two of the set-id applets come from busybox's second build, which holds only
 # login, passwd and su. `login` is not staged: this system says it has no login
@@ -154,6 +155,18 @@ dir 0755 /usr
 dir 0755 /usr/share
 dir 0755 /usr/share/udhcpc
 file 0755 /usr/share/udhcpc/default.script krffs/udhcpc-default.script
+# The pages man/recovery lists: what the installer and the recovery menu direct
+# a person to, readable here with man(1) through col. mancheck requires each.
+dir 0755 /usr/share/man
+dir 0755 /usr/share/man/cat7
+dir 0755 /usr/share/man/cat8
+file 0644 /usr/share/man/cat7/recovery.7 build/man/cat7/recovery.7
+file 0644 /usr/share/man/cat8/rach2-install.8 build/man/cat8/rach2-install.8
+file 0644 /usr/share/man/cat8/rach2-recover.8 build/man/cat8/rach2-recover.8
+file 0644 /usr/share/man/cat8/reflash.8 build/man/cat8/reflash.8
+file 0644 /usr/share/man/cat8/bootctl.8 build/man/cat8/bootctl.8
+file 0644 /usr/share/man/cat8/growroot.8 build/man/cat8/growroot.8
+file 0644 /usr/share/man/cat8/mount.8 build/man/cat8/mount.8
 
 
 dir 1777 /tmp
