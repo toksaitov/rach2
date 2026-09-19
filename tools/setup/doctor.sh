@@ -51,9 +51,11 @@ row() { printf '  %-10s %-18s %s\n' "$1" "$2" "$3"; }
 
 # req NAME HINTKEY: a tool the build/run needs. It must both EXIST and RUN (a
 # bare `command -v` would PASS a broken Xcode shim that has no real Command Line
-# Tools), so it is probed with --version. Absence/breakage is a failure.
+# Tools), so it is probed with --version. Absence/breakage is a failure. The
+# probe's input is closed: bzip2 prints its version and then compresses its
+# standard input, which held this report until its input ended.
 req() {
-    if command -v "$1" >/dev/null 2>&1 && "$1" --version >/dev/null 2>&1; then
+    if command -v "$1" >/dev/null 2>&1 && "$1" --version </dev/null >/dev/null 2>&1; then
         row "[PASS]" "$1" "$(command -v "$1")"
     else
         row "[MISSING]" "$1" "$(hint "$2")"
