@@ -164,6 +164,35 @@ for t in tests/host/*_hosttest.c; do
     fi
 done
 
+# The programs that decide verdicts carry their own selftests, run by the
+# style suite on the binaries the build made. Here each is compiled again
+# under the sanitizers and its selftest run, so a bounds or overflow fault in
+# a checker is found by the cases the checker already has.
+for t in tools/inspect/elfcheck.c tools/inspect/cfgcheck.c tools/inspect/setidcheck.c \
+         tools/verify/prosecheck.c tests/system/runner/runtests.c tests/system/runner/harness.c; do
+    base=$(basename "$t" .c)
+    out="$VDIR/${base}_selftest"
+    if [ -n "${HOST_PRINT_COMMANDS:-}" ]; then
+        echo "$CC -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 $SAN -g -O1 -Wall -Wextra -Werror -o $out $t"
+        continue
+    fi
+    any=1
+    # shellcheck disable=SC2086
+    if $CC -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 $SAN -g -O1 -Wall -Wextra -Werror -o "$out" "$t" \
+         >"$VDIR/$base.clog" 2>&1; then
+        # shellcheck disable=SC2086
+        $WATCHDOG "$out" --selftest >"$VDIR/$base.rlog" 2>&1
+        rc=$?
+        if [ "$rc" -eq 0 ]; then
+            echo "  PASS: $base selftest under the sanitizers"
+        else
+            echo "  FAIL (selftest; see $VDIR/$base.rlog): $base"; fail=1
+        fi
+    else
+        echo "  FAIL (compile; see $VDIR/$base.clog): $base"; fail=1
+    fi
+done
+
 # Zero discovered tests is a failure, not a quiet pass: the glob breaking or the
 # directory moving would otherwise turn verify-host into a silent green.
 if [ "$any" -eq 0 ]; then
