@@ -29,3 +29,8 @@ KWARN = -Wpedantic -Wno-long-long \
 # -Wconversion -Wsign-conversion: 108 sites in 25 files on 2026-09-19, each
 #   an arithmetic narrowing whose only fix is a cast that says nothing the
 #   type does not; a cast at every one hides the few that matter.
+# -Wunused-macros: 48 sites on 2026-09-19, register maps and ABI constants
+#   defined beside the ones a driver or a system call uses, so the reader
+#   has the datasheet's or the interface's whole set; the flag would have
+#   them removed or moved into headers, which is where a warning stops and
+#   nothing is gained.
