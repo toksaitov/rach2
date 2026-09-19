@@ -35,7 +35,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#define FD_LIMIT 16
+#define FD_LIMIT    16
 #define FD_RESERVED 4 /* stdin, stdout, stderr, and the output file */
 
 /* The kernel's execve budget is 3072 bytes across the argv and environment
@@ -43,7 +43,7 @@
    plus the build environment, so each recipe is expanded the way pdpmake
    will and the result held under the budget minus this allowance for the
    environment a login shell exports. */
-#define EXEC_BUDGET 3072
+#define EXEC_BUDGET   3072
 #define ENV_ALLOWANCE 500
 
 #define MAX_TEXT (1024 * 1024)
@@ -74,20 +74,19 @@ static void fail(const char *fmt, ...)
  * makefile is reading one that is not on disk. `what` names the buffer in
  * the diagnostic.
  */
-static void appendf(char *out, size_t out_len, size_t *used, const char *what,
-                    const char *fmt, ...)
+static void appendf(char *out, size_t out_len, size_t *used, const char *what, const char *fmt, ...)
 {
     va_list ap;
     int want;
 
     if (*used >= out_len)
-        fail("%s does not fit in %lu bytes", what, (unsigned long) out_len);
+        fail("%s does not fit in %lu bytes", what, (unsigned long)out_len);
     va_start(ap, fmt);
     want = vsnprintf(out + *used, out_len - *used, fmt, ap);
     va_end(ap);
-    if (want < 0 || (size_t) want >= out_len - *used)
-        fail("%s does not fit in %lu bytes", what, (unsigned long) out_len);
-    *used += (size_t) want;
+    if (want < 0 || (size_t)want >= out_len - *used)
+        fail("%s does not fit in %lu bytes", what, (unsigned long)out_len);
+    *used += (size_t)want;
 }
 
 /* ---- a list of strings ---- */
@@ -118,7 +117,7 @@ static void push(struct list *l, const char *s)
 {
     if (l->n == l->cap) {
         l->cap = l->cap ? l->cap * 2 : 32;
-        l->item = realloc(l->item, (size_t) l->cap * sizeof(char *));
+        l->item = realloc(l->item, (size_t)l->cap * sizeof(char *));
         if (l->item == NULL)
             fail("out of memory");
     }
@@ -148,7 +147,7 @@ static int has(const struct list *l, const char *s)
 
 static int cmp_str(const void *a, const void *b)
 {
-    return strcmp(*(char *const *) a, *(char *const *) b);
+    return strcmp(*(char *const *)a, *(char *const *)b);
 }
 
 /* Sorts a list's items; an empty list has no array to hand to qsort,
@@ -156,7 +155,7 @@ static int cmp_str(const void *a, const void *b)
 static void list_sort(struct list *l)
 {
     if (l->n > 0)
-        qsort(l->item, (size_t) l->n, sizeof(char *), cmp_str);
+        qsort(l->item, (size_t)l->n, sizeof(char *), cmp_str);
 }
 
 /* Whitespace-split `text` onto `out`. */
@@ -172,8 +171,8 @@ static void split_into(struct list *out, const char *text)
             p++;
         if (*p == '\0')
             break;
-        while (*p != '\0' && *p != ' ' && *p != '\t' && *p != '\n' &&
-               *p != '\r' && n + 1 < sizeof(buf))
+        while (*p != '\0' && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r' &&
+               n + 1 < sizeof(buf))
             buf[n++] = *p++;
         buf[n] = '\0';
         push(out, buf);
@@ -187,8 +186,7 @@ static void join_into(char *out, size_t out_len, const struct list *l)
 
     out[0] = '\0';
     for (i = 0; i < l->n; i++)
-        appendf(out, out_len, &used, "a joined list", "%s%s",
-                i ? " " : "", l->item[i]);
+        appendf(out, out_len, &used, "a joined list", "%s%s", i ? " " : "", l->item[i]);
 }
 
 /* ---- reading makefiles ---- */
@@ -201,13 +199,13 @@ static char *read_file(const char *path)
 
     if (f == NULL)
         return NULL;
-    if (fseek(f, 0, SEEK_END) != 0 || (n = ftell(f)) < 0 ||
-        fseek(f, 0, SEEK_SET) != 0 || n > MAX_TEXT) {
+    if (fseek(f, 0, SEEK_END) != 0 || (n = ftell(f)) < 0 || fseek(f, 0, SEEK_SET) != 0 ||
+        n > MAX_TEXT) {
         fclose(f);
         return NULL;
     }
-    buf = xalloc((size_t) n + 1);
-    if (fread(buf, 1, (size_t) n, f) != (size_t) n) {
+    buf = xalloc((size_t)n + 1);
+    if (fread(buf, 1, (size_t)n, f) != (size_t)n) {
         free(buf);
         fclose(f);
         return NULL;
@@ -241,13 +239,13 @@ static char *guest_text(const char *name)
     p = text;
     while (*p != '\0') {
         const char *end = strchr(p, '\n');
-        size_t len = end != NULL ? (size_t) (end - p) : strlen(p);
+        size_t len = end != NULL ? (size_t)(end - p) : strlen(p);
         char line[MAX_LINE];
 
         if (len >= sizeof(line))
             fail("a line of %lu bytes, past the %lu this reads; the rest of "
                  "it would be parsed as a shorter line",
-                 (unsigned long) len, (unsigned long) sizeof(line) - 1);
+                 (unsigned long)len, (unsigned long)sizeof(line) - 1);
         memcpy(line, p, len);
         line[len] = '\0';
         if (strncmp(line, "include ", 8) == 0) {
@@ -257,15 +255,14 @@ static char *guest_text(const char *name)
 
             while (*what == ' ' || *what == '\t')
                 what++;
-            if (snprintf(sub, sizeof(sub), "%s/%s", dir, what) >=
-                (int) sizeof(sub))
+            if (snprintf(sub, sizeof(sub), "%s/%s", dir, what) >= (int)sizeof(sub))
                 fail("the path of %s, included by %s, is longer than this "
-                     "reads", what, name);
+                     "reads",
+                     what, name);
             subtext = read_file(sub);
             if (subtext == NULL)
                 fail("cannot read %s, included by %s", what, name);
-            appendf(out, MAX_TEXT, &used, "the included makefile text",
-                    "%s\n", subtext);
+            appendf(out, MAX_TEXT, &used, "the included makefile text", "%s\n", subtext);
             free(subtext);
         } else {
             appendf(out, MAX_TEXT, &used, "the makefile text", "%s\n", line);
@@ -287,7 +284,7 @@ static int read_macro(const char *text, const char *name, struct list *out)
 
     while (*p != '\0') {
         const char *end = strchr(p, '\n');
-        size_t len = end != NULL ? (size_t) (end - p) : strlen(p);
+        size_t len = end != NULL ? (size_t)(end - p) : strlen(p);
 
         if (strncmp(p, name, nlen) == 0) {
             const char *q = p + nlen;
@@ -298,15 +295,14 @@ static int read_macro(const char *text, const char *name, struct list *out)
                 /* The value, following its backslash continuations. */
                 for (;;) {
                     char piece[MAX_LINE];
-                    size_t plen = (size_t) ((p + len) - q);
+                    size_t plen = (size_t)((p + len) - q);
                     int continued;
 
                     if (plen >= sizeof(piece))
                         plen = sizeof(piece) - 1;
                     memcpy(piece, q, plen);
                     piece[plen] = '\0';
-                    while (plen > 0 && (piece[plen - 1] == ' ' ||
-                                        piece[plen - 1] == '\t' ||
+                    while (plen > 0 && (piece[plen - 1] == ' ' || piece[plen - 1] == '\t' ||
                                         piece[plen - 1] == '\r'))
                         piece[--plen] = '\0';
                     continued = plen > 0 && piece[plen - 1] == '\\';
@@ -317,7 +313,7 @@ static int read_macro(const char *text, const char *name, struct list *out)
                         return 1;
                     p = end + 1;
                     end = strchr(p, '\n');
-                    len = end != NULL ? (size_t) (end - p) : strlen(p);
+                    len = end != NULL ? (size_t)(end - p) : strlen(p);
                     q = p;
                     while (*q == ' ' || *q == '\t')
                         q++;
@@ -350,11 +346,11 @@ static void macros_of(const char *text, struct macros *m)
     memset(m, 0, sizeof(*m));
     while (*p != '\0') {
         const char *end = strchr(p, '\n');
-        size_t len = end != NULL ? (size_t) (end - p) : strlen(p);
+        size_t len = end != NULL ? (size_t)(end - p) : strlen(p);
         size_t i = 0;
         char name[256];
 
-        while (i < len && (isalnum((unsigned char) p[i]) || p[i] == '_'))
+        while (i < len && (isalnum((unsigned char)p[i]) || p[i] == '_'))
             i++;
         if (i > 0 && i < sizeof(name)) {
             size_t j = i;
@@ -362,7 +358,7 @@ static void macros_of(const char *text, struct macros *m)
             while (j < len && (p[j] == ' ' || p[j] == '\t'))
                 j++;
             if (j < len && p[j] == '=') {
-                struct list value = { NULL, 0, 0 };
+                struct list value = {NULL, 0, 0};
                 char joined[MAX_LINE];
 
                 memcpy(name, p, i);
@@ -406,7 +402,7 @@ static size_t subst_ref_at(const char *p, char *name, char *old, char *new_)
     if (p[0] != '$' || p[1] != '(')
         return 0;
     i = 2;
-    while (isalnum((unsigned char) p[i]) || p[i] == '_') {
+    while (isalnum((unsigned char)p[i]) || p[i] == '_') {
         if (n + 1 >= 64)
             return 0;
         name[n++] = p[i++];
@@ -417,7 +413,7 @@ static size_t subst_ref_at(const char *p, char *name, char *old, char *new_)
     i++;
     n = 0;
     old[n++] = p[i++];
-    while (isalnum((unsigned char) p[i]) || p[i] == '_') {
+    while (isalnum((unsigned char)p[i]) || p[i] == '_') {
         if (n + 1 >= 16)
             return 0;
         old[n++] = p[i++];
@@ -428,7 +424,7 @@ static size_t subst_ref_at(const char *p, char *name, char *old, char *new_)
     i++;
     n = 0;
     new_[n++] = p[i++];
-    while (isalnum((unsigned char) p[i]) || p[i] == '_') {
+    while (isalnum((unsigned char)p[i]) || p[i] == '_') {
         if (n + 1 >= 16)
             return 0;
         new_[n++] = p[i++];
@@ -440,13 +436,13 @@ static size_t subst_ref_at(const char *p, char *name, char *old, char *new_)
 }
 
 /* Replace one word's suffix, the way a substitution reference does. */
-static void swap_suffix(char *out, size_t out_len, const char *word,
-                        const char *old, const char *new_)
+static void swap_suffix(char *out, size_t out_len, const char *word, const char *old,
+                        const char *new_)
 {
     size_t wl = strlen(word), ol = strlen(old);
 
     if (wl >= ol && strcmp(word + wl - ol, old) == 0)
-        snprintf(out, out_len, "%.*s%s", (int) (wl - ol), word, new_);
+        snprintf(out, out_len, "%.*s%s", (int)(wl - ol), word, new_);
     else
         snprintf(out, out_len, "%s", word);
 }
@@ -454,15 +450,14 @@ static void swap_suffix(char *out, size_t out_len, const char *word,
 /* Expand `$(VAR:.a=.b)` tokens against the text's macros: a whole token
    that is one reference becomes the macro's words with their suffixes
    swapped. */
-static void expand_tokens(const char *text, const struct list *tokens,
-                          struct list *out)
+static void expand_tokens(const char *text, const struct list *tokens, struct list *out)
 {
     int i;
 
     for (i = 0; i < tokens->n; i++) {
         char name[64], old[16], new_[16];
         size_t len = subst_ref_at(tokens->item[i], name, old, new_);
-        struct list value = { NULL, 0, 0 };
+        struct list value = {NULL, 0, 0};
         int j;
 
         if (len == 0 || len != strlen(tokens->item[i])) {
@@ -501,7 +496,7 @@ static void subst_refs(char *line, size_t line_len, const struct macros *m)
             continue;
         }
         {
-            struct list words = { NULL, 0, 0 };
+            struct list words = {NULL, 0, 0};
             int j;
 
             split_into(&words, macro_value(m, name));
@@ -509,8 +504,8 @@ static void subst_refs(char *line, size_t line_len, const struct macros *m)
                 char word[512];
 
                 swap_suffix(word, sizeof(word), words.item[j], old, new_);
-                appendf(out, sizeof(out), &used, "an expanded word list",
-                        "%s%s", j ? " " : "", word);
+                appendf(out, sizeof(out), &used, "an expanded word list", "%s%s", j ? " " : "",
+                        word);
             }
             list_free(&words);
         }
@@ -537,13 +532,12 @@ static void expand_line(char *line, size_t line_len, const struct macros *m)
             snprintf(want, sizeof(want), "$(%s)", m->name.item[i]);
             out[0] = '\0';
             while ((at = strstr(p, want)) != NULL) {
-                appendf(out, sizeof(out), &used, "a substitution reference",
-                        "%.*s%s", (int) (at - p), p, m->value.item[i]);
+                appendf(out, sizeof(out), &used, "a substitution reference", "%.*s%s",
+                        (int)(at - p), p, m->value.item[i]);
                 p = at + strlen(want);
             }
             if (used > 0) {
-                appendf(out, sizeof(out), &used, "a substitution reference",
-                        "%s", p);
+                appendf(out, sizeof(out), &used, "a substitution reference", "%s", p);
                 snprintf(line, line_len, "%s", out);
             }
         }
@@ -583,26 +577,25 @@ static void rules_of(const char *text, struct rules *out)
     memset(out, 0, sizeof(*out));
     while (*p != '\0') {
         const char *end = strchr(p, '\n');
-        size_t len = end != NULL ? (size_t) (end - p) : strlen(p);
+        size_t len = end != NULL ? (size_t)(end - p) : strlen(p);
         char line[MAX_LINE];
         const char *colon;
 
         if (len >= sizeof(line))
             fail("a line of %lu bytes, past the %lu this reads; the rest of "
                  "it would be parsed as a shorter line",
-                 (unsigned long) len, (unsigned long) sizeof(line) - 1);
+                 (unsigned long)len, (unsigned long)sizeof(line) - 1);
         memcpy(line, p, len);
         line[len] = '\0';
         colon = strchr(line, ':');
         if (len > 0 && line[0] != '\t' && line[0] != '#' && colon != NULL &&
-            memchr(line, '=', (size_t) (colon - line)) == NULL) {
+            memchr(line, '=', (size_t)(colon - line)) == NULL) {
             struct rule r;
             char target[256];
-            size_t tlen = (size_t) (colon - line);
+            size_t tlen = (size_t)(colon - line);
             const char *q;
 
-            while (tlen > 0 && (line[tlen - 1] == ' ' ||
-                                line[tlen - 1] == '\t'))
+            while (tlen > 0 && (line[tlen - 1] == ' ' || line[tlen - 1] == '\t'))
                 tlen--;
             if (tlen >= sizeof(target))
                 tlen = sizeof(target) - 1;
@@ -616,7 +609,7 @@ static void rules_of(const char *text, struct rules *out)
             q = end != NULL ? end + 1 : NULL;
             while (q != NULL && *q != '\0') {
                 const char *rend = strchr(q, '\n');
-                size_t rlen = rend != NULL ? (size_t) (rend - q) : strlen(q);
+                size_t rlen = rend != NULL ? (size_t)(rend - q) : strlen(q);
                 char rline[MAX_LINE];
 
                 if (rlen > 0 && q[0] != '\t')
@@ -637,9 +630,7 @@ static void rules_of(const char *text, struct rules *out)
             if (target[0] != '.') {
                 if (out->n == out->cap) {
                     out->cap = out->cap ? out->cap * 2 : 32;
-                    out->item = realloc(out->item,
-                                        (size_t) out->cap *
-                                        sizeof(struct rule));
+                    out->item = realloc(out->item, (size_t)out->cap * sizeof(struct rule));
                     if (out->item == NULL)
                         fail("out of memory");
                 }
@@ -684,8 +675,7 @@ static void make_list(const char *target, struct list *out)
     FILE *pipe;
     size_t n;
 
-    snprintf(cmd, sizeof(cmd), "make -s -C '%s/rach2' %s 2>/dev/null", repo,
-             target);
+    snprintf(cmd, sizeof(cmd), "make -s -C '%s/rach2' %s 2>/dev/null", repo, target);
     pipe = popen(cmd, "r");
     if (pipe == NULL)
         fail("cannot run make %s", target);
@@ -710,7 +700,7 @@ static int file_has_line(const char *path, const char *want)
     p = text;
     while (*p != '\0') {
         const char *end = strchr(p, '\n');
-        size_t len = end != NULL ? (size_t) (end - p) : strlen(p);
+        size_t len = end != NULL ? (size_t)(end - p) : strlen(p);
 
         if (len == strlen(want) && strncmp(p, want, len) == 0)
             found = 1;
@@ -724,19 +714,18 @@ static int file_has_line(const char *path, const char *want)
 
 static int check_kernel_lists(void)
 {
-    struct list sources = { NULL, 0, 0 };
-    struct list expected = { NULL, 0, 0 };
-    struct list objs_raw = { NULL, 0, 0 };
-    struct list objs = { NULL, 0, 0 };
+    struct list sources = {NULL, 0, 0};
+    struct list expected = {NULL, 0, 0};
+    struct list objs_raw = {NULL, 0, 0};
+    struct list objs = {NULL, 0, 0};
     struct rules rules;
     struct rule *r;
     char *text;
     char link[MAX_LINE];
     int i, count;
     static const char *const link_needs[] = {
-        "@kernel.objs", "-Wl,-Ttext=0x100074", "/lib/tcc/libtcc1.a",
-        "-nostdlib", "-static", "-o kernel.new", "mv kernel.new kernel"
-    };
+        "@kernel.objs", "-Wl,-Ttext=0x100074", "/lib/tcc/libtcc1.a",  "-nostdlib",
+        "-static",      "-o kernel.new",       "mv kernel.new kernel"};
 
     make_list("print-asm-src", &sources);
     make_list("print-c-src", &sources);
@@ -746,8 +735,7 @@ static int check_kernel_lists(void)
 
         if (len > 2 && (strcmp(sources.item[i] + len - 2, ".c") == 0 ||
                         strcmp(sources.item[i] + len - 2, ".s") == 0))
-            snprintf(obj, sizeof(obj), "%.*s.o", (int) (len - 2),
-                     sources.item[i]);
+            snprintf(obj, sizeof(obj), "%.*s.o", (int)(len - 2), sources.item[i]);
         else
             snprintf(obj, sizeof(obj), "%s", sources.item[i]);
         push(&expected, obj);
@@ -762,13 +750,14 @@ static int check_kernel_lists(void)
     expand_tokens(text, &objs_raw, &objs);
     if (objs.n != expected.n) {
         fail("rach2/guest.mk OBJS differs from the host list (the host has "
-             "%d objects and the guest has %d)", expected.n, objs.n);
+             "%d objects and the guest has %d)",
+             expected.n, objs.n);
     }
     for (i = 0; i < objs.n; i++)
         if (strcmp(objs.item[i], expected.item[i]) != 0)
             fail("rach2/guest.mk OBJS differs from the host list (entry %d "
-                 "is %s and the host has %s; or the order differs)", i + 1,
-                 objs.item[i], expected.item[i]);
+                 "is %s and the host has %s; or the order differs)",
+                 i + 1, objs.item[i], expected.item[i]);
 
     rules_of(text, &rules);
     r = rule_find(&rules, "kernel.objs");
@@ -778,8 +767,7 @@ static int check_kernel_lists(void)
         fail("kernel.objs does not depend on guest.mk and sources.mk, so an "
              "edited object list would link through the stale response file");
     if (r->recipe.n != 2 ||
-        strcmp(r->recipe.item[0],
-               "printf '%s\\n' $(OBJS) > kernel.objs.new") != 0 ||
+        strcmp(r->recipe.item[0], "printf '%s\\n' $(OBJS) > kernel.objs.new") != 0 ||
         strcmp(r->recipe.item[1], "mv kernel.objs.new kernel.objs") != 0)
         fail("kernel.objs must write $(OBJS) whole through the temporary "
              "file and publish it by rename");
@@ -797,7 +785,7 @@ static int check_kernel_lists(void)
     link[0] = '\0';
     if (r != NULL)
         join_into(link, sizeof(link), &r->recipe);
-    for (i = 0; i < (int) (sizeof(link_needs) / sizeof(link_needs[0])); i++)
+    for (i = 0; i < (int)(sizeof(link_needs) / sizeof(link_needs[0])); i++)
         if (strstr(link, link_needs[i]) == NULL)
             fail("the kernel link line lacks %s", link_needs[i]);
 
@@ -823,7 +811,7 @@ static void host_utils_map(struct progmap *map)
     char *text;
     struct macros m;
     struct rules rules;
-    struct list programs = { NULL, 0, 0 };
+    struct list programs = {NULL, 0, 0};
     int i, j;
 
     if (!file_has_line("utils/Makefile", "include programs.mk"))
@@ -837,21 +825,19 @@ static void host_utils_map(struct progmap *map)
     memset(map, 0, sizeof(*map));
 
     for (i = 0; i < programs.n; i++) {
-        struct list found = { NULL, 0, 0 };
+        struct list found = {NULL, 0, 0};
         char joined[MAX_LINE];
         int matched = 0;
 
         for (j = 0; j < rules.n && !matched; j++) {
             char want_a[512], want_b[512];
 
-            snprintf(want_a, sizeof(want_a), "$(BUILD)/%s",
-                     programs.item[i]);
-            snprintf(want_b, sizeof(want_b), "$(BUILD)/sbin/%s",
-                     programs.item[i]);
+            snprintf(want_a, sizeof(want_a), "$(BUILD)/%s", programs.item[i]);
+            snprintf(want_b, sizeof(want_b), "$(BUILD)/sbin/%s", programs.item[i]);
             if (strcmp(rules.item[j].target, want_a) == 0 ||
                 strcmp(rules.item[j].target, want_b) == 0) {
                 char line[MAX_LINE];
-                struct list words = { NULL, 0, 0 };
+                struct list words = {NULL, 0, 0};
                 int k;
 
                 join_into(line, sizeof(line), &rules.item[j].prereqs);
@@ -893,8 +879,7 @@ static void host_utils_map(struct progmap *map)
  * prefixed with make's `-`, which would carry a failed link on to the
  * rename; a program with no rule is a fault of the makefile.
  */
-static void check_links_through_temporary(const char *file, const struct rule *r,
-                                          const char *name)
+static void check_links_through_temporary(const char *file, const struct rule *r, const char *name)
 {
     char temp[256], mv[600];
 
@@ -904,10 +889,11 @@ static void check_links_through_temporary(const char *file, const struct rule *r
     }
     snprintf(temp, sizeof(temp), "-o %s.new ", name);
     snprintf(mv, sizeof(mv), "mv %s.new %s", name, name);
-    if (r->recipe.n != 2 || r->recipe.item[0][0] == '-' || strstr(r->recipe.item[0], temp) == NULL
-        || strcmp(r->recipe.item[1], mv) != 0)
+    if (r->recipe.n != 2 || r->recipe.item[0][0] == '-' ||
+        strstr(r->recipe.item[0], temp) == NULL || strcmp(r->recipe.item[1], mv) != 0)
         fail("%s %s does not link to %s.new and rename it, so a link stopped "
-             "part way would look built", file, name, name);
+             "part way would look built",
+             file, name, name);
 }
 
 static int check_utils(void)
@@ -916,15 +902,13 @@ static int check_utils(void)
     char *text;
     struct macros m;
     struct rules rules;
-    struct list progs = { NULL, 0, 0 };
+    struct list progs = {NULL, 0, 0};
     int i, count;
     static const struct {
         const char *program;
         const char *define;
-    } defines[] = {
-        { "init-login", "-DINIT_CONSOLE_LOGIN" },
-        { "adduser-crash", "-DADDUSER_CRASH_POINT" }
-    };
+    } defines[] = {{"init-login", "-DINIT_CONSOLE_LOGIN"},
+                   {"adduser-crash", "-DADDUSER_CRASH_POINT"}};
 
     host_utils_map(&map);
     text = guest_text("utils/guest.mk");
@@ -934,12 +918,13 @@ static int check_utils(void)
     need_macro(text, "SBIN_PROGS", &progs);
     if (progs.n != map.program.n)
         fail("utils/guest.mk program list differs from the host list (host "
-             "has %d, guest has %d)", map.program.n, progs.n);
+             "has %d, guest has %d)",
+             map.program.n, progs.n);
 
     for (i = 0; i < map.program.n; i++) {
         struct rule *r = rule_find(&rules, map.program.item[i]);
-        struct list words = { NULL, 0, 0 };
-        struct list found = { NULL, 0, 0 };
+        struct list words = {NULL, 0, 0};
+        struct list found = {NULL, 0, 0};
         char line[MAX_LINE], joined[MAX_LINE];
         int k;
 
@@ -957,8 +942,8 @@ static int check_utils(void)
         list_sort(&found);
         join_into(joined, sizeof(joined), &found);
         if (strcmp(joined, map.sources.item[i]) != 0)
-            fail("utils/guest.mk %s builds from %s; the host builds from %s",
-                 map.program.item[i], joined, map.sources.item[i]);
+            fail("utils/guest.mk %s builds from %s; the host builds from %s", map.program.item[i],
+                 joined, map.sources.item[i]);
         list_free(&words);
         list_free(&found);
 
@@ -978,8 +963,8 @@ static int check_utils(void)
         join_into(joined, sizeof(joined), &found);
         if (strcmp(joined, map.sources.item[i]) != 0)
             fail("utils/guest.mk %s compiles %s in its recipe; the host "
-                 "compiles %s", map.program.item[i],
-                 joined[0] ? joined : "nothing", map.sources.item[i]);
+                 "compiles %s",
+                 map.program.item[i], joined[0] ? joined : "nothing", map.sources.item[i]);
         list_free(&words);
         list_free(&found);
     }
@@ -993,13 +978,11 @@ static int check_utils(void)
         join_into(line, sizeof(line), &r->recipe);
         expand_line(line, sizeof(line), &m);
         if (strstr(line, defines[i].define) == NULL)
-            fail("utils/guest.mk %s lacks %s", defines[i].program,
-                 defines[i].define);
+            fail("utils/guest.mk %s lacks %s", defines[i].program, defines[i].define);
     }
 
     for (i = 0; i < map.program.n; i++)
-        check_links_through_temporary("utils/guest.mk",
-                                      rule_find(&rules, map.program.item[i]),
+        check_links_through_temporary("utils/guest.mk", rule_find(&rules, map.program.item[i]),
                                       map.program.item[i]);
 
     count = map.program.n;
@@ -1016,10 +999,10 @@ static int check_ish(void)
 {
     char *host, hostpath[1200];
     char *text;
-    struct list src = { NULL, 0, 0 };
-    struct list expected = { NULL, 0, 0 };
-    struct list objs_raw = { NULL, 0, 0 };
-    struct list objs = { NULL, 0, 0 };
+    struct list src = {NULL, 0, 0};
+    struct list expected = {NULL, 0, 0};
+    struct list objs_raw = {NULL, 0, 0};
+    struct list objs = {NULL, 0, 0};
     int i, count;
 
     if (!file_has_line("ish/Makefile", "include sources.mk"))
@@ -1029,8 +1012,7 @@ static int check_ish(void)
     host = read_file(hostpath);
     if (host == NULL)
         fail("cannot read ish/Makefile");
-    if (strstr(host, "OBJECTS = $(addprefix $(BUILD)/, $(ISH_SRC:.c=.o))")
-        == NULL)
+    if (strstr(host, "OBJECTS = $(addprefix $(BUILD)/, $(ISH_SRC:.c=.o))") == NULL)
         fail("ish/Makefile does not derive OBJECTS from ISH_SRC");
     free(host);
 
@@ -1045,7 +1027,7 @@ static int check_ish(void)
     need_macro(text, "OBJS", &objs_raw);
     expand_tokens(text, &objs_raw, &objs);
     {
-        struct rules rules = { NULL, 0, 0 };
+        struct rules rules = {NULL, 0, 0};
 
         rules_of(text, &rules);
         check_links_through_temporary("ish/guest.mk", rule_find(&rules, "ish"), "ish");
@@ -1071,7 +1053,7 @@ static int check_ish(void)
 struct node {
     char path[1024];
     struct list includes;
-    int depth;   /* 0 until computed */
+    int depth; /* 0 until computed */
     int visiting;
     int is_c;
 };
@@ -1105,7 +1087,7 @@ static void normalize_path(char *path)
         size_t plen;
 
         slash = strchr(p, '/');
-        plen = slash != NULL ? (size_t) (slash - p) : strlen(p);
+        plen = slash != NULL ? (size_t)(slash - p) : strlen(p);
         if (slash != NULL)
             *slash = '\0';
         if (plen == 0 || (plen == 1 && p[0] == '.')) {
@@ -1120,8 +1102,8 @@ static void normalize_path(char *path)
     }
     out[0] = '\0';
     for (i = 0; i < n; i++)
-        appendf(out, sizeof(out), &used, "a normalised path", "%s%s",
-                (i || absolute) ? "/" : "", parts[i]);
+        appendf(out, sizeof(out), &used, "a normalised path", "%s%s", (i || absolute) ? "/" : "",
+                parts[i]);
     snprintf(path, 1024, "%s", out);
 }
 
@@ -1143,7 +1125,8 @@ static void scan_includes(struct graph *g, const char *dir)
        deepest include chain, so an omission reads as a build that fits. */
     if (d == NULL)
         fail("cannot read the directory %s; the include graph would be "
-             "missing whatever is under it", dir);
+             "missing whatever is under it",
+             dir);
     while ((ent = readdir(d)) != NULL) {
         char full[1024];
         struct stat st;
@@ -1153,15 +1136,13 @@ static void scan_includes(struct graph *g, const char *dir)
             continue;
         snprintf(full, sizeof(full), "%s/%s", dir, ent->d_name);
         if (stat(full, &st) != 0)
-            fail("cannot read %s; the include graph would be missing it",
-                 full);
+            fail("cannot read %s; the include graph would be missing it", full);
         if (S_ISDIR(st.st_mode)) {
             scan_includes(g, full);
             continue;
         }
         len = strlen(full);
-        if (len < 3 || (strcmp(full + len - 2, ".c") != 0 &&
-                        strcmp(full + len - 2, ".h") != 0))
+        if (len < 3 || (strcmp(full + len - 2, ".c") != 0 && strcmp(full + len - 2, ".h") != 0))
             continue;
         {
             char *text = read_file(full);
@@ -1170,7 +1151,8 @@ static void scan_includes(struct graph *g, const char *dir)
 
             if (text == NULL)
                 fail("cannot read %s; the include graph would be missing "
-                     "it", full);
+                     "it",
+                     full);
             memset(&node, 0, sizeof(node));
             snprintf(node.path, sizeof(node.path), "%s", full);
             normalize_path(node.path);
@@ -1178,14 +1160,13 @@ static void scan_includes(struct graph *g, const char *dir)
             p = text;
             while (*p != '\0') {
                 const char *end = strchr(p, '\n');
-                size_t l = end != NULL ? (size_t) (end - p) : strlen(p);
+                size_t l = end != NULL ? (size_t)(end - p) : strlen(p);
                 const char *e = p + l;
                 const char *q = skip_blanks(p, e);
 
                 if (q < e && *q == '#') {
                     q = skip_blanks(q + 1, e);
-                    if ((size_t) (e - q) > 8 &&
-                        strncmp(q, "include", 7) == 0) {
+                    if ((size_t)(e - q) > 8 && strncmp(q, "include", 7) == 0) {
                         q = skip_blanks(q + 7, e);
                         if (q < e && *q == '"') {
                             const char *close = ++q;
@@ -1194,13 +1175,12 @@ static void scan_includes(struct graph *g, const char *dir)
                             while (close < e && *close != '"')
                                 close++;
                             if (close < e) {
-                                snprintf(rel, sizeof(rel), "%.*s",
-                                         (int) (close - q), q);
-                                if (snprintf(resolved, sizeof(resolved),
-                                             "%s/%s", dir, rel) >=
-                                    (int) sizeof(resolved))
+                                snprintf(rel, sizeof(rel), "%.*s", (int)(close - q), q);
+                                if (snprintf(resolved, sizeof(resolved), "%s/%s", dir, rel) >=
+                                    (int)sizeof(resolved))
                                     fail("the path of %s under %s is longer "
-                                         "than this reads", rel, dir);
+                                         "than this reads",
+                                         rel, dir);
                                 normalize_path(resolved);
                                 push(&node.includes, resolved);
                             }
@@ -1214,8 +1194,7 @@ static void scan_includes(struct graph *g, const char *dir)
             free(text);
             if (g->n == g->cap) {
                 g->cap = g->cap ? g->cap * 2 : 128;
-                g->item = realloc(g->item,
-                                  (size_t) g->cap * sizeof(struct node));
+                g->item = realloc(g->item, (size_t)g->cap * sizeof(struct node));
                 if (g->item == NULL)
                     fail("out of memory");
             }
@@ -1277,13 +1256,13 @@ static int check_limits(void)
 {
     int depth = include_depth();
     int f;
-    static const char *const names[] = { "rach2/guest.mk", "utils/guest.mk",
-                                         "ish/guest.mk" };
+    static const char *const names[] = {"rach2/guest.mk", "utils/guest.mk", "ish/guest.mk"};
 
     if (depth + FD_RESERVED > FD_LIMIT)
         fail("the deepest kernel include chain is %d files; with the %d "
              "descriptors a compile has besides its includes that exceeds "
-             "the %d-descriptor table", depth, FD_RESERVED, FD_LIMIT);
+             "the %d-descriptor table",
+             depth, FD_RESERVED, FD_LIMIT);
 
     for (f = 0; f < 3; f++) {
         char *text = guest_text(names[f]);
@@ -1301,41 +1280,35 @@ static int check_limits(void)
                 size_t used = 0, len;
                 const char *p;
 
-                snprintf(line, sizeof(line), "%s",
-                         rules.item[i].recipe.item[j]);
+                snprintf(line, sizeof(line), "%s", rules.item[i].recipe.item[j]);
                 expand_line(line, sizeof(line), &m);
                 /* `$@` and `$<`, the two automatic variables these
                    recipes use. */
                 out[0] = '\0';
                 p = line;
                 while ((at = strstr(p, "$@")) != NULL) {
-                    appendf(out, sizeof(out), &used, "an expanded recipe",
-                            "%.*s%s", (int) (at - p), p,
-                            rules.item[i].target);
+                    appendf(out, sizeof(out), &used, "an expanded recipe", "%.*s%s", (int)(at - p),
+                            p, rules.item[i].target);
                     p = at + 2;
                 }
-                appendf(out, sizeof(out), &used, "an expanded recipe",
-                        "%s", p);
+                appendf(out, sizeof(out), &used, "an expanded recipe", "%s", p);
                 snprintf(line, sizeof(line), "%s", out);
                 out[0] = '\0';
                 used = 0;
                 p = line;
                 while ((at = strstr(p, "$<")) != NULL) {
-                    appendf(out, sizeof(out), &used, "an expanded recipe",
-                            "%.*s%s", (int) (at - p), p,
-                            rules.item[i].prereqs.n > 0
-                                ? rules.item[i].prereqs.item[0] : "");
+                    appendf(out, sizeof(out), &used, "an expanded recipe", "%.*s%s", (int)(at - p),
+                            p, rules.item[i].prereqs.n > 0 ? rules.item[i].prereqs.item[0] : "");
                     p = at + 2;
                 }
-                appendf(out, sizeof(out), &used, "an expanded recipe",
-                        "%s", p);
+                appendf(out, sizeof(out), &used, "an expanded recipe", "%s", p);
                 len = strlen(out);
                 if (len + ENV_ALLOWANCE > EXEC_BUDGET)
                     fail("%s: the %s recipe expands to %lu bytes, which with "
                          "the %d-byte environment allowance exceeds the "
-                         "%d-byte exec budget", names[f],
-                         rules.item[i].target, (unsigned long) len,
-                         ENV_ALLOWANCE, EXEC_BUDGET);
+                         "%d-byte exec budget",
+                         names[f], rules.item[i].target, (unsigned long)len, ENV_ALLOWANCE,
+                         EXEC_BUDGET);
             }
         }
         rules_free(&rules);
@@ -1350,16 +1323,12 @@ static void check_staging(void)
     char path[1200];
     char *text;
     const char *p;
-    static const char *const want[] = {
-        "tree 0644 /src/rach2 rach2",
-        "tree 0644 /src/utils utils",
-        "tree 0644 /src/ish ish"
-    };
-    static const char *const dirs_ok[] = {
-        "dir 0755 /src", "dir 0755 /src/utils", "dir 0755 /src/rach2",
-        "dir 0755 /src/rach2/sys", "dir 0755 /src/ish"
-    };
-    int seen[3] = { 0, 0, 0 };
+    static const char *const want[] = {"tree 0644 /src/rach2 rach2", "tree 0644 /src/utils utils",
+                                       "tree 0644 /src/ish ish"};
+    static const char *const dirs_ok[] = {"dir 0755 /src", "dir 0755 /src/utils",
+                                          "dir 0755 /src/rach2", "dir 0755 /src/rach2/sys",
+                                          "dir 0755 /src/ish"};
+    int seen[3] = {0, 0, 0};
     int i;
 
     snprintf(path, sizeof(path), "%s/krffs/manifests/os-real.manifest", repo);
@@ -1369,15 +1338,15 @@ static void check_staging(void)
     p = text;
     while (*p != '\0') {
         const char *end = strchr(p, '\n');
-        size_t len = end != NULL ? (size_t) (end - p) : strlen(p);
+        size_t len = end != NULL ? (size_t)(end - p) : strlen(p);
         char line[MAX_LINE];
         char *hash;
-        struct list fields = { NULL, 0, 0 };
+        struct list fields = {NULL, 0, 0};
 
         if (len >= sizeof(line))
             fail("a line of %lu bytes, past the %lu this reads; the rest of "
                  "it would be parsed as a shorter line",
-                 (unsigned long) len, (unsigned long) sizeof(line) - 1);
+                 (unsigned long)len, (unsigned long)sizeof(line) - 1);
         memcpy(line, p, len);
         line[len] = '\0';
         hash = strchr(line, '#');
@@ -1386,14 +1355,12 @@ static void check_staging(void)
         {
             size_t l = strlen(line);
 
-            while (l > 0 && (line[l - 1] == ' ' || line[l - 1] == '\t' ||
-                             line[l - 1] == '\r'))
+            while (l > 0 && (line[l - 1] == ' ' || line[l - 1] == '\t' || line[l - 1] == '\r'))
                 line[--l] = '\0';
         }
         split_into(&fields, line);
         if (fields.n >= 3 &&
-            (strcmp(fields.item[2], "/src") == 0 ||
-             strncmp(fields.item[2], "/src/", 5) == 0)) {
+            (strcmp(fields.item[2], "/src") == 0 || strncmp(fields.item[2], "/src/", 5) == 0)) {
             int known = 0;
 
             for (i = 0; i < 3; i++)
@@ -1408,7 +1375,8 @@ static void check_staging(void)
                 fail("os-real.manifest directive '%s' touches /src; only "
                      "the three root-owned read-only source trees may live "
                      "there, or a later line could hand the shared source "
-                     "to another owner", line);
+                     "to another owner",
+                     line);
         }
         list_free(&fields);
         if (end == NULL)
@@ -1418,16 +1386,16 @@ static void check_staging(void)
     free(text);
     for (i = 0; i < 3; i++)
         if (!seen[i])
-            fail("os-real.manifest does not stage '%s' (root-owned, 0644)",
-                 want[i]);
+            fail("os-real.manifest does not stage '%s' (root-owned, 0644)", want[i]);
     for (i = 0; i < 3; i++) {
-        static const char *const trees[] = { "rach2", "utils", "ish" };
+        static const char *const trees[] = {"rach2", "utils", "ish"};
         struct stat st;
 
         snprintf(path, sizeof(path), "%s/%s/guest.mk", repo, trees[i]);
         if (stat(path, &st) != 0 || !S_ISREG(st.st_mode))
             fail("%s/guest.mk is missing or not a regular file, so the "
-                 "staged tree could not be built in the guest", trees[i]);
+                 "staged tree could not be built in the guest",
+                 trees[i]);
     }
 }
 

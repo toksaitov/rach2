@@ -54,17 +54,16 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#define LIMIT 80
+#define LIMIT    80
 #define MAX_FILE (4 * 1024 * 1024)
 
 /* The root Makefile is named here because it is the build's entry point and
    sits in no walked directory. */
-static const char *const ROOTS[] = { "rach2", "utils", "ish", "krffs",
-                                     "tests", "tools", "mk", "ports/doom",
-                                     "Makefile" };
-static const char *const TOP_MD[] = { "CLAUDE.md", "AGENTS.md", "Readme.md" };
-static const char *const SKIP_DIRS[] = { "vendor", "build", ".git" };
-static const char *const SKIP_PATHS[] = { "ports/doom/src" };
+static const char *const ROOTS[] = {"rach2", "utils", "ish",        "krffs",   "tests",
+                                    "tools", "mk",    "ports/doom", "Makefile"};
+static const char *const TOP_MD[] = {"CLAUDE.md", "AGENTS.md", "Readme.md"};
+static const char *const SKIP_DIRS[] = {"vendor", "build", ".git"};
+static const char *const SKIP_PATHS[] = {"ports/doom/src"};
 
 /* Wrong at any frequency. Every one of these was either named in the
    register rule or named by a reader outside this project who had never
@@ -74,26 +73,24 @@ static const char *const SKIP_PATHS[] = { "ports/doom/src" };
    gates at port 0x61, "surface" with an attack surface, and "era" with
    ordinary English. Of the seven shorthand nouns the rule lists, only
    "seam" and "timebox" have no legitimate use in this tree. */
-static const char *const BANNED[] = {
-    "load-bearing", "load bearing", "worth stating plainly", "worth noting",
-    "blast radius", "tripwire", "timebox", "full stop", "seam"
-};
-#define N_BANNED (int) (sizeof(BANNED) / sizeof(BANNED[0]))
+static const char *const BANNED[] = {"load-bearing", "load bearing", "worth stating plainly",
+                                     "worth noting", "blast radius", "tripwire",
+                                     "timebox",      "full stop",    "seam"};
+#define N_BANNED (int)(sizeof(BANNED) / sizeof(BANNED[0]))
 
 /* Ordinary phrases, measured and never gated. The last two are the forms
    milestone 26 recast `rather than` into, watched for the obvious reason:
    a cure that concentrates in one phrase is the same fault wearing
    different words. */
-static const char *const WATCH[] = {
-    "carries", "holds", "rather than", "which is", "not a", "honest",
-    "the point", "in practice", "worth", "note that", ", not", "instead of"
-};
-#define N_WATCH (int) (sizeof(WATCH) / sizeof(WATCH[0]))
+static const char *const WATCH[] = {"carries", "holds",     "rather than", "which is",
+                                    "not a",   "honest",    "the point",   "in practice",
+                                    "worth",   "note that", ", not",       "instead of"};
+#define N_WATCH (int)(sizeof(WATCH) / sizeof(WATCH[0]))
 
 /* This file names what it bans; CLAUDE.md states the rule in one section
    and the rest of that file is checked normally. */
-static const char *const EXEMPT_FILES[] = { "tools/verify/prosecheck.c" };
-#define EXEMPT_MD "CLAUDE.md"
+static const char *const EXEMPT_FILES[] = {"tools/verify/prosecheck.c"};
+#define EXEMPT_MD      "CLAUDE.md"
 #define EXEMPT_HEADING "### Register rule"
 
 static char repo[1024];
@@ -120,7 +117,7 @@ static void spans_push(struct spans *s, char *text)
 {
     if (s->n == s->cap) {
         s->cap = s->cap ? s->cap * 2 : 64;
-        s->item = realloc(s->item, (size_t) s->cap * sizeof(char *));
+        s->item = realloc(s->item, (size_t)s->cap * sizeof(char *));
         if (s->item == NULL)
             exit(2);
     }
@@ -201,8 +198,7 @@ static char *normalize(const char *text, size_t len)
 
 enum span_kind { SPAN_COMMENT, SPAN_STRING };
 
-typedef void (*span_fn)(void *ctx, enum span_kind kind, int line,
-                        const char *body, size_t len);
+typedef void (*span_fn)(void *ctx, enum span_kind kind, int line, const char *body, size_t len);
 
 /* Every comment and string in C source. One state machine, so a `/ *`
    inside a string and a quote inside a comment are both read correctly. */
@@ -304,13 +300,12 @@ static void c_spans(const char *text, size_t n, span_fn emit, void *ctx)
    first and skipped; without that, a fixture holding a deliberately
    over-width `#` line reads as a comment. Fills `mark[]`, one byte per
    line, 1-based. */
-static void hash_comment_lines(const char *text, size_t n, char *mark,
-                               int max_lines)
+static void hash_comment_lines(const char *text, size_t n, char *mark, int max_lines)
 {
     int line = 1, depth = 0;
     size_t i = 0;
 
-    memset(mark, 0, (size_t) max_lines + 2);
+    memset(mark, 0, (size_t)max_lines + 2);
     /* Pass one: the lines inside a triple-quoted string. */
     while (i < n && line <= max_lines) {
         size_t end = i;
@@ -321,8 +316,7 @@ static void hash_comment_lines(const char *text, size_t n, char *mark,
             end++;
         for (j = i; j + 2 < end; j++)
             if ((text[j] == '"' && text[j + 1] == '"' && text[j + 2] == '"') ||
-                (text[j] == '\'' && text[j + 1] == '\'' &&
-                 text[j + 2] == '\'')) {
+                (text[j] == '\'' && text[j + 1] == '\'' && text[j + 2] == '\'')) {
                 marks++;
                 j += 2;
             }
@@ -383,30 +377,31 @@ static char *read_text(const char *path, size_t *len)
     long n;
 
     if (f == NULL) {
-        fprintf(stderr, "prosecheck: %s: %s; it was not checked\n", path,
-                strerror(errno));
+        fprintf(stderr, "prosecheck: %s: %s; it was not checked\n", path, strerror(errno));
         unread++;
         return NULL;
     }
-    if (fseek(f, 0, SEEK_END) != 0 || (n = ftell(f)) < 0 ||
-        fseek(f, 0, SEEK_SET) != 0) {
-        fprintf(stderr, "prosecheck: %s: cannot be measured; it was not "
-                "checked\n", path);
+    if (fseek(f, 0, SEEK_END) != 0 || (n = ftell(f)) < 0 || fseek(f, 0, SEEK_SET) != 0) {
+        fprintf(stderr,
+                "prosecheck: %s: cannot be measured; it was not "
+                "checked\n",
+                path);
         unread++;
         fclose(f);
         return NULL;
     }
     if (n > MAX_FILE) {
-        fprintf(stderr, "prosecheck: %s: %ld bytes, past the %d this tool "
-                "reads; it was not checked\n", path, n, MAX_FILE);
+        fprintf(stderr,
+                "prosecheck: %s: %ld bytes, past the %d this tool "
+                "reads; it was not checked\n",
+                path, n, MAX_FILE);
         unread++;
         fclose(f);
         return NULL;
     }
-    buf = xalloc((size_t) n + 1);
-    if (fread(buf, 1, (size_t) n, f) != (size_t) n) {
-        fprintf(stderr, "prosecheck: %s: short read; it was not checked\n",
-                path);
+    buf = xalloc((size_t)n + 1);
+    if (fread(buf, 1, (size_t)n, f) != (size_t)n) {
+        fprintf(stderr, "prosecheck: %s: short read; it was not checked\n", path);
         unread++;
         free(buf);
         fclose(f);
@@ -414,7 +409,7 @@ static char *read_text(const char *path, size_t *len)
     }
     fclose(f);
     buf[n] = '\0';
-    *len = (size_t) n;
+    *len = (size_t)n;
     return buf;
 }
 
@@ -434,9 +429,8 @@ static enum lang lang_of(const char *path)
     /* A makefile is hash-commented like a shell script, and the build's own
        files answer to the same 80-column rule as the code they build. Named
        explicitly because they carry no extension. */
-    if (ends_with(path, ".sh") || ends_with(path, ".mk") ||
-        ends_with(path, ".py") || ends_with(path, "/Makefile") ||
-        strcmp(path, "Makefile") == 0)
+    if (ends_with(path, ".sh") || ends_with(path, ".mk") || ends_with(path, ".py") ||
+        ends_with(path, "/Makefile") || strcmp(path, "Makefile") == 0)
         return LANG_HASH;
     if (ends_with(path, ".md"))
         return LANG_MD;
@@ -459,18 +453,19 @@ typedef void (*file_fn)(void *ctx, const char *path);
    as descendants, not as roots: `ports/doom/src` is upstream Doom and is
    left out of this project's prose, and it is also the corpus the report
    reads, which it asks for by name. */
-static void walk_at(const char *root, file_fn visit, void *ctx, int md_too,
-                    int is_top)
+static void walk_at(const char *root, file_fn visit, void *ctx, int md_too, int is_top)
 {
     DIR *dir;
     struct dirent *ent;
     struct stat st;
-    struct spans names = { NULL, 0, 0 };
+    struct spans names = {NULL, 0, 0};
     int i;
 
     if (stat(root, &st) != 0) {
-        fprintf(stderr, "prosecheck: %s: %s; nothing under it was "
-                "checked\n", root, strerror(errno));
+        fprintf(stderr,
+                "prosecheck: %s: %s; nothing under it was "
+                "checked\n",
+                root, strerror(errno));
         unread++;
         return;
     }
@@ -479,14 +474,15 @@ static void walk_at(const char *root, file_fn visit, void *ctx, int md_too,
         return;
     }
     if (!is_top)
-        for (i = 0; i < (int) (sizeof(SKIP_PATHS) / sizeof(SKIP_PATHS[0]));
-             i++)
+        for (i = 0; i < (int)(sizeof(SKIP_PATHS) / sizeof(SKIP_PATHS[0])); i++)
             if (strstr(root, SKIP_PATHS[i]) != NULL)
                 return;
     dir = opendir(root);
     if (dir == NULL) {
-        fprintf(stderr, "prosecheck: %s: %s; nothing under it was "
-                "checked\n", root, strerror(errno));
+        fprintf(stderr,
+                "prosecheck: %s: %s; nothing under it was "
+                "checked\n",
+                root, strerror(errno));
         unread++;
         return;
     }
@@ -496,16 +492,16 @@ static void walk_at(const char *root, file_fn visit, void *ctx, int md_too,
 
         if (ent->d_name[0] == '.')
             continue;
-        for (i = 0; i < (int) (sizeof(SKIP_DIRS) / sizeof(SKIP_DIRS[0])); i++)
+        for (i = 0; i < (int)(sizeof(SKIP_DIRS) / sizeof(SKIP_DIRS[0])); i++)
             if (strcmp(ent->d_name, SKIP_DIRS[i]) == 0)
                 skip = 1;
         if (skip)
             continue;
-        if ((size_t) snprintf(full, sizeof(full), "%s/%s", root,
-                              ent->d_name) >= sizeof(full)) {
-            fprintf(stderr, "prosecheck: the path under %s named %s is "
-                    "longer than %lu bytes; it was not checked\n", root,
-                    ent->d_name, (unsigned long) sizeof(full));
+        if ((size_t)snprintf(full, sizeof(full), "%s/%s", root, ent->d_name) >= sizeof(full)) {
+            fprintf(stderr,
+                    "prosecheck: the path under %s named %s is "
+                    "longer than %lu bytes; it was not checked\n",
+                    root, ent->d_name, (unsigned long)sizeof(full));
             unread++;
             continue;
         }
@@ -528,14 +524,16 @@ static void walk_at(const char *root, file_fn visit, void *ctx, int md_too,
            would walk the tree again and again. There are none in this
            tree, so one that appears is reported rather than followed. */
         if (lstat(names.item[i], &st) != 0) {
-            fprintf(stderr, "prosecheck: %s: %s; it was not checked\n",
-                    names.item[i], strerror(errno));
+            fprintf(stderr, "prosecheck: %s: %s; it was not checked\n", names.item[i],
+                    strerror(errno));
             unread++;
             continue;
         }
         if (S_ISLNK(st.st_mode)) {
-            fprintf(stderr, "prosecheck: %s is a symbolic link; it was not "
-                    "checked\n", names.item[i]);
+            fprintf(stderr,
+                    "prosecheck: %s is a symbolic link; it was not "
+                    "checked\n",
+                    names.item[i]);
             unread++;
         } else if (S_ISDIR(st.st_mode))
             walk_at(names.item[i], visit, ctx, md_too, 0);
@@ -561,13 +559,12 @@ struct collect {
     int want_strings;
 };
 
-static void collect_span(void *ctx, enum span_kind kind, int line,
-                         const char *body, size_t len)
+static void collect_span(void *ctx, enum span_kind kind, int line, const char *body, size_t len)
 {
     struct collect *c = ctx;
     char *text;
 
-    (void) line;
+    (void)line;
     if (kind == SPAN_STRING && !c->want_strings)
         return;
     text = normalize(body, len);
@@ -587,7 +584,7 @@ static void hash_spans(const char *text, size_t n, span_fn emit, void *ctx)
     for (i = 0; i < n; i++)
         if (text[i] == '\n')
             max_lines++;
-    mark = xalloc((size_t) max_lines + 2);
+    mark = xalloc((size_t)max_lines + 2);
     hash_comment_lines(text, n, mark, max_lines);
     i = 0;
     while (i < n) {
@@ -630,8 +627,7 @@ static void hash_spans(const char *text, size_t n, span_fn emit, void *ctx)
    Markdown allows up to three spaces before a `#`, so a heading matched by
    its first column alone could be indented by one space and the exemption
    would then run to the end of the file. */
-static void md_spans(const char *text, size_t n, const char *path,
-                     span_fn emit, void *ctx)
+static void md_spans(const char *text, size_t n, const char *path, span_fn emit, void *ctx)
 {
     const char *skip_heading = NULL;
     int skip_level = 0, fenced = 0, exempt = 0;
@@ -678,13 +674,11 @@ static void md_spans(const char *text, size_t n, const char *path,
             }
             while (p[level] == '#')
                 level++;
-            if (level >= 1 && level <= 6 && (p[level] == ' ' ||
-                                             p[level] == '\t'))
+            if (level >= 1 && level <= 6 && (p[level] == ' ' || p[level] == '\t'))
                 is_heading = 1;
 
             if (skip_heading != NULL) {
-                if (strncmp(trimmed, skip_heading,
-                            strlen(skip_heading)) == 0) {
+                if (strncmp(trimmed, skip_heading, strlen(skip_heading)) == 0) {
                     exempt = 1;
                     i = end + 1;
                     continue;
@@ -719,8 +713,7 @@ static void md_spans(const char *text, size_t n, const char *path,
 }
 
 /* The normalized prose of one file, by language. */
-static void prose_of(const char *path, const char *text, size_t n,
-                     int strings, struct spans *out)
+static void prose_of(const char *path, const char *text, size_t n, int strings, struct spans *out)
 {
     struct collect c;
 
@@ -748,7 +741,7 @@ static void prose_of(const char *path, const char *text, size_t n,
 
 static int is_word(int c)
 {
-    return isalnum((unsigned char) c) || c == '_';
+    return isalnum((unsigned char)c) || c == '_';
 }
 
 /* A word boundary at `at` in `text`, the way a regular expression's `\b`
@@ -776,8 +769,7 @@ static long count_in(const char *span, const char *phrase)
         size_t j;
 
         for (j = 0; j < plen; j++)
-            if (tolower((unsigned char) span[i + j]) !=
-                tolower((unsigned char) phrase[j]))
+            if (tolower((unsigned char)span[i + j]) != tolower((unsigned char)phrase[j]))
                 break;
         if (j < plen)
             continue;
@@ -834,8 +826,8 @@ struct marks {
     int max;
 };
 
-static void mark_comment_lines(void *ctx, enum span_kind kind, int line,
-                               const char *body, size_t len)
+static void mark_comment_lines(void *ctx, enum span_kind kind, int line, const char *body,
+                               size_t len)
 {
     struct marks *m = ctx;
     size_t i;
@@ -869,9 +861,9 @@ static void check_width(void *ctx, const char *path)
     for (i = 0; i < n; i++)
         if (text[i] == '\n')
             max_lines++;
-    m.line = xalloc((size_t) max_lines + 2);
+    m.line = xalloc((size_t)max_lines + 2);
     m.max = max_lines;
-    memset(m.line, 0, (size_t) max_lines + 2);
+    memset(m.line, 0, (size_t)max_lines + 2);
     if (l == LANG_C) {
         c_spans(text, n, mark_comment_lines, &m);
     } else {
@@ -889,12 +881,10 @@ static void check_width(void *ctx, const char *path)
             p = text + i;
             while (p < text + end && (*p == ' ' || *p == '\t'))
                 p++;
-            if ((l == LANG_C &&
-                 (p[0] == '*' || (p[0] == '/' && (p[1] == '*' ||
-                                                  p[1] == '/')))) ||
+            if ((l == LANG_C && (p[0] == '*' || (p[0] == '/' && (p[1] == '*' || p[1] == '/')))) ||
                 (l == LANG_HASH && p[0] == '#')) {
-                fprintf(stderr, "%s:%d: comment line is %lu columns\n",
-                        relpath(path), line, (unsigned long) width);
+                fprintf(stderr, "%s:%d: comment line is %lu columns\n", relpath(path), line,
+                        (unsigned long)width);
                 w->over++;
                 reported = 1;
             }
@@ -917,12 +907,12 @@ struct banned_ctx {
 static void check_banned(void *ctx, const char *path)
 {
     struct banned_ctx *b = ctx;
-    struct spans prose = { NULL, 0, 0 };
+    struct spans prose = {NULL, 0, 0};
     size_t n;
     char *text;
     int i;
 
-    for (i = 0; i < (int) (sizeof(EXEMPT_FILES) / sizeof(EXEMPT_FILES[0])); i++)
+    for (i = 0; i < (int)(sizeof(EXEMPT_FILES) / sizeof(EXEMPT_FILES[0])); i++)
         if (strcmp(relpath(path), EXEMPT_FILES[i]) == 0)
             return;
     text = read_text(path, &n);
@@ -933,8 +923,7 @@ static void check_banned(void *ctx, const char *path)
         long uses = count_spans(&prose, BANNED[i]);
 
         if (uses > 0) {
-            printf("%s: %ld use(s) of \"%s\"\n", relpath(path), uses,
-                   BANNED[i]);
+            printf("%s: %ld use(s) of \"%s\"\n", relpath(path), uses, BANNED[i]);
             b->findings += uses;
         }
     }
@@ -962,7 +951,7 @@ static void collect_file(void *ctx, const char *path)
        well as of the ban: its word totals are the rule's own text, and
        counting them would move the rates every phrase is measured
        against. */
-    for (i = 0; i < (int) (sizeof(EXEMPT_FILES) / sizeof(EXEMPT_FILES[0])); i++)
+    for (i = 0; i < (int)(sizeof(EXEMPT_FILES) / sizeof(EXEMPT_FILES[0])); i++)
         if (strcmp(relpath(path), EXEMPT_FILES[i]) == 0)
             return;
     text = read_text(path, &n);
@@ -982,10 +971,9 @@ struct milestone {
 
 /* Writes `a/b` followed by `tail` to `dst`, or exits when the path does
    not fit: a shorter path would name another file. */
-static void join_path(char *dst, size_t cap, const char *a, const char *b,
-                      const char *tail)
+static void join_path(char *dst, size_t cap, const char *a, const char *b, const char *tail)
 {
-    if (snprintf(dst, cap, "%s/%s%s", a, b, tail) >= (int) cap) {
+    if (snprintf(dst, cap, "%s/%s%s", a, b, tail) >= (int)cap) {
         fprintf(stderr, "prosecheck: path too long: %s/%s%s\n", a, b, tail);
         exit(2);
     }
@@ -1006,12 +994,11 @@ static int read_milestones(const char *devlog, struct milestone *out, int max)
         int ok = 1;
 
         /* A milestone directory: two digits, a dash, a lowercase name. */
-        if (!isdigit((unsigned char) p[0]) || !isdigit((unsigned char) p[1]) ||
-            p[2] != '-' || p[3] == '\0')
+        if (!isdigit((unsigned char)p[0]) || !isdigit((unsigned char)p[1]) || p[2] != '-' ||
+            p[3] == '\0')
             continue;
         for (i = 3; p[i] != '\0'; i++)
-            if (!islower((unsigned char) p[i]) &&
-                !isdigit((unsigned char) p[i]) && p[i] != '-')
+            if (!islower((unsigned char)p[i]) && !isdigit((unsigned char)p[i]) && p[i] != '-')
                 ok = 0;
         if (!ok)
             continue;
@@ -1019,13 +1006,17 @@ static int read_milestones(const char *devlog, struct milestone *out, int max)
         if (stat(full, &st) != 0 || !S_ISDIR(st.st_mode))
             continue;
         if (n == max) {
-            fprintf(stderr, "prosecheck: more than %d milestone "
-                    "directories; the rest would go unchecked\n", max);
+            fprintf(stderr,
+                    "prosecheck: more than %d milestone "
+                    "directories; the rest would go unchecked\n",
+                    max);
             exit(2);
         }
         if (strlen(ent->d_name) >= sizeof(out[n].name)) {
-            fprintf(stderr, "prosecheck: milestone directory name too long: "
-                    "%s\n", ent->d_name);
+            fprintf(stderr,
+                    "prosecheck: milestone directory name too long: "
+                    "%s\n",
+                    ent->d_name);
             exit(2);
         }
         strcpy(out[n].name, ent->d_name);
@@ -1057,8 +1048,7 @@ static int read_milestones(const char *devlog, struct milestone *out, int max)
    An entry is `* `NN-name`: ...` at the left margin: an indented bullet is
    a sub-item, and a name without the colon is prose that mentions a
    milestone. */
-static int read_entries(const char *text, size_t n, char names[][128],
-                        int max)
+static int read_entries(const char *text, size_t n, char names[][128], int max)
 {
     size_t i = 0;
     int count = 0, fenced = 0;
@@ -1073,9 +1063,8 @@ static int read_entries(const char *text, size_t n, char names[][128],
         t = p;
         while (t < text + end && (*t == ' ' || *t == '\t'))
             t++;
-        if ((t + 2 < text + end) &&
-            ((t[0] == '`' && t[1] == '`' && t[2] == '`') ||
-             (t[0] == '~' && t[1] == '~' && t[2] == '~'))) {
+        if ((t + 2 < text + end) && ((t[0] == '`' && t[1] == '`' && t[2] == '`') ||
+                                     (t[0] == '~' && t[1] == '~' && t[2] == '~'))) {
             fenced = !fenced;
             i = end + 1;
             continue;
@@ -1096,16 +1085,16 @@ static int read_entries(const char *text, size_t n, char names[][128],
                     q++;
                 if (q < text + end && *q == '`') {
                     const char *after = q + 1;
-                    size_t len = (size_t) (q - name);
+                    size_t len = (size_t)(q - name);
 
-                    while (after < text + end &&
-                           (*after == ' ' || *after == '\t'))
+                    while (after < text + end && (*after == ' ' || *after == '\t'))
                         after++;
-                    if (after < text + end && *after == ':' && len > 3 &&
-                        len < 128 && isdigit((unsigned char) name[0]) &&
-                        isdigit((unsigned char) name[1]) && name[2] == '-') {
+                    if (after < text + end && *after == ':' && len > 3 && len < 128 &&
+                        isdigit((unsigned char)name[0]) && isdigit((unsigned char)name[1]) &&
+                        name[2] == '-') {
                         if (count == max) {
-                            fprintf(stderr, "prosecheck: more than %d index "
+                            fprintf(stderr,
+                                    "prosecheck: more than %d index "
                                     "entries; the rest would go unread\n",
                                     max);
                             exit(2);
@@ -1123,8 +1112,7 @@ static int read_entries(const char *text, size_t n, char names[][128],
 }
 
 /* The complaints about one index; returns how many were printed. */
-static int judge_devlog(struct milestone *dirs, int n_dirs,
-                        char entries[][128], int n_entries,
+static int judge_devlog(struct milestone *dirs, int n_dirs, char entries[][128], int n_entries,
                         struct spans *problems)
 {
     char expected[256][128];
@@ -1144,15 +1132,19 @@ static int judge_devlog(struct milestone *dirs, int n_dirs,
         if (known < 0) {
             char msg[512];
 
-            snprintf(msg, sizeof(msg), "the index names %s, which is not a "
-                     "directory", entries[i]);
+            snprintf(msg, sizeof(msg),
+                     "the index names %s, which is not a "
+                     "directory",
+                     entries[i]);
             spans_push(problems, strdup(msg));
         } else if (!dirs[known].finished) {
             char msg[512];
 
-            snprintf(msg, sizeof(msg), "the index names %s, which has a plan "
+            snprintf(msg, sizeof(msg),
+                     "the index names %s, which has a plan "
                      "and no record, so the work is not done and the entry "
-                     "states that it is", entries[i]);
+                     "states that it is",
+                     entries[i]);
             spans_push(problems, strdup(msg));
         }
     }
@@ -1161,8 +1153,10 @@ static int judge_devlog(struct milestone *dirs, int n_dirs,
             if (strcmp(entries[i], entries[j]) == 0) {
                 char msg[512];
 
-                snprintf(msg, sizeof(msg), "the index names %s more than "
-                         "once", entries[i]);
+                snprintf(msg, sizeof(msg),
+                         "the index names %s more than "
+                         "once",
+                         entries[i]);
                 spans_push(problems, strdup(msg));
                 break;
             }
@@ -1175,8 +1169,10 @@ static int judge_devlog(struct milestone *dirs, int n_dirs,
         if (!seen) {
             char msg[512];
 
-            snprintf(msg, sizeof(msg), "dev-log/%.127s is finished and has "
-                     "no entry in the index", expected[i]);
+            snprintf(msg, sizeof(msg),
+                     "dev-log/%.127s is finished and has "
+                     "no entry in the index",
+                     expected[i]);
             spans_push(problems, strdup(msg));
         }
     }
@@ -1197,7 +1193,8 @@ static int judge_devlog(struct milestone *dirs, int n_dirs,
                 if (strcmp(entries[i], expected[i]) != 0) {
                     char msg[512];
 
-                    snprintf(msg, sizeof(msg), "the index's entry %d is "
+                    snprintf(msg, sizeof(msg),
+                             "the index's entry %d is "
                              "%.127s where the directories give %.127s; the "
                              "entries must "
                              "be in the milestones' numeric order, because a "
@@ -1210,9 +1207,10 @@ static int judge_devlog(struct milestone *dirs, int n_dirs,
             if (!found) {
                 char msg[512];
 
-                snprintf(msg, sizeof(msg), "the index lists %d entries and "
-                         "there are %d finished milestones", n_entries,
-                         n_expected);
+                snprintf(msg, sizeof(msg),
+                         "the index lists %d entries and "
+                         "there are %d finished milestones",
+                         n_entries, n_expected);
                 spans_push(problems, strdup(msg));
             }
         }
@@ -1254,27 +1252,24 @@ static const char SELFTEST_SH[] =
     "echo 'a # inside single quotes is not a comment either, padded past "
     "eighty ......'\n";
 
-static const char PROSE_C[] =
-    "/* a comment naming a load-bearing thing */\n"
-    "const char *s = \"the seam was reached\";\n"
-    "int x = 1;  /* plain */\n"
-    "/* a phrase broken by a line break: rather\n"
-    " * than counting it, an unnormalized scan misses it\n"
-    " */\n"
-    "/* ends with rather */\n"
-    "/* than begins the next one */\n";
+static const char PROSE_C[] = "/* a comment naming a load-bearing thing */\n"
+                              "const char *s = \"the seam was reached\";\n"
+                              "int x = 1;  /* plain */\n"
+                              "/* a phrase broken by a line break: rather\n"
+                              " * than counting it, an unnormalized scan misses it\n"
+                              " */\n"
+                              "/* ends with rather */\n"
+                              "/* than begins the next one */\n";
 
-static const char PROSE_SH[] =
-    "#!/bin/sh\n"
-    "# an ordinary comment\n"
-    "echo \"the seam failed\"          # a message a person reads\n";
+static const char PROSE_SH[] = "#!/bin/sh\n"
+                               "# an ordinary comment\n"
+                               "echo \"the seam failed\"          # a message a person reads\n";
 
-static const char PROSE_MD[] =
-    "# Doc\n\n"
-    "A sentence with worth noting in it.\n\n"
-    "```\n"
-    "a fenced block with load-bearing inside\n"
-    "```\n";
+static const char PROSE_MD[] = "# Doc\n\n"
+                               "A sentence with worth noting in it.\n\n"
+                               "```\n"
+                               "a fenced block with load-bearing inside\n"
+                               "```\n";
 
 static int any_span_has(const struct spans *s, const char *needle)
 {
@@ -1299,8 +1294,7 @@ static void st_clean(void)
         while ((ent = readdir(dir)) != NULL) {
             char path[512];
 
-            if (strcmp(ent->d_name, ".") == 0 ||
-                strcmp(ent->d_name, "..") == 0)
+            if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
                 continue;
             snprintf(path, sizeof(path), "%s/%s", st_dir, ent->d_name);
             unlink(path);
@@ -1326,7 +1320,7 @@ static char *st_write(const char *name, const char *body)
 
 static void st_widths(const char *name, const char *body, int want_line)
 {
-    struct width_ctx w = { 0, 0 };
+    struct width_ctx w = {0, 0};
     char path[512];
     char msg[256];
 
@@ -1334,16 +1328,18 @@ static void st_widths(const char *name, const char *body, int want_line)
     /* The findings go to stderr; what is asserted is the count, which is
        one over-width comment line in each fixture. */
     check_width(&w, path);
-    snprintf(msg, sizeof(msg), "%s: expected 1 over-width comment line, got "
-             "%ld", name, w.over);
+    snprintf(msg, sizeof(msg),
+             "%s: expected 1 over-width comment line, got "
+             "%ld",
+             name, w.over);
     st_check(w.over == 1, msg);
-    (void) want_line;
+    (void)want_line;
 }
 
 static int selftest(void)
 {
-    struct spans only = { NULL, 0, 0 }, both = { NULL, 0, 0 };
-    struct spans sh = { NULL, 0, 0 }, md = { NULL, 0, 0 };
+    struct spans only = {NULL, 0, 0}, both = {NULL, 0, 0};
+    struct spans sh = {NULL, 0, 0}, md = {NULL, 0, 0};
     char *path;
     size_t n;
     char *text;
@@ -1376,23 +1372,19 @@ static int selftest(void)
     text = read_text(path, &n);
     prose_of(path, text, n, 0, &only);
     prose_of(path, text, n, 1, &both);
-    st_check(!any_span_has(&only, "seam"),
-             "a string literal leaked into comment prose");
-    st_check(any_span_has(&only, "load-bearing"),
-             "missed a banned term in a comment");
-    st_check(any_span_has(&both, "seam"),
-             "a string literal was not scanned for the banned terms");
+    st_check(!any_span_has(&only, "seam"), "a string literal leaked into comment prose");
+    st_check(any_span_has(&only, "load-bearing"), "missed a banned term in a comment");
+    st_check(any_span_has(&both, "seam"), "a string literal was not scanned for the banned terms");
     st_check(count_spans(&only, "rather than") == 1,
              "a phrase broken across lines was not counted once");
     st_check(count_spans(&only, "than begins") == 1 &&
-             count_spans(&only, "rather than begins") == 0,
+                 count_spans(&only, "rather than begins") == 0,
              "a phrase was matched across two separate comments");
     {
         int i, bare = 0;
 
         for (i = 0; i < only.n; i++)
-            if (strcmp(only.item[i], "*") == 0 ||
-                strcmp(only.item[i], "//") == 0 ||
+            if (strcmp(only.item[i], "*") == 0 || strcmp(only.item[i], "//") == 0 ||
                 strcmp(only.item[i], "#") == 0)
                 bare = 1;
         st_check(!bare, "comment decoration was counted as a word");
@@ -1402,23 +1394,20 @@ static int selftest(void)
     path = st_write("p.sh", PROSE_SH);
     text = read_text(path, &n);
     prose_of(path, text, n, 1, &sh);
-    st_check(any_span_has(&sh, "seam"),
-             "a shell string a person reads was not scanned");
+    st_check(any_span_has(&sh, "seam"), "a shell string a person reads was not scanned");
     free(text);
 
     path = st_write("p.md", PROSE_MD);
     text = read_text(path, &n);
     prose_of(path, text, n, 0, &md);
-    st_check(!any_span_has(&md, "load-bearing"),
-             "a fenced block counted as Markdown prose");
-    st_check(any_span_has(&md, "worth noting"),
-             "missed a banned term in Markdown");
+    st_check(!any_span_has(&md, "load-bearing"), "a fenced block counted as Markdown prose");
+    st_check(any_span_has(&md, "worth noting"), "missed a banned term in Markdown");
     free(text);
 
     /* The register rule may name what it bans; nothing else may. */
     {
         char claude[1024];
-        struct spans body = { NULL, 0, 0 };
+        struct spans body = {NULL, 0, 0};
 
         join_path(claude, sizeof(claude), repo, "CLAUDE.md", "");
         text = read_text(claude, &n);
@@ -1437,10 +1426,9 @@ static int selftest(void)
                 if (at != NULL) {
                     FILE *f;
                     char doctored[1024];
-                    size_t head = (size_t) (at - text) + 1;
+                    size_t head = (size_t)(at - text) + 1;
 
-                    snprintf(doctored, sizeof(doctored), "%s/CLAUDE.md",
-                             st_dir);
+                    snprintf(doctored, sizeof(doctored), "%s/CLAUDE.md", st_dir);
                     f = fopen(doctored, "wb");
                     if (f != NULL) {
                         fwrite(text, 1, head, f);
@@ -1451,7 +1439,7 @@ static int selftest(void)
                     {
                         size_t dn;
                         char *dtext = read_text(doctored, &dn);
-                        struct spans dbody = { NULL, 0, 0 };
+                        struct spans dbody = {NULL, 0, 0};
 
                         if (dtext != NULL) {
                             prose_of(doctored, dtext, dn, 0, &dbody);
@@ -1476,55 +1464,47 @@ static int selftest(void)
             int n_dirs;
             const char *want;
         } cases[] = {
-            { "a current index",
-              "* `24-metal`: a sentence.\n* `25-sealed`: a sentence.\n", 3,
-              NULL },
-            { "the newest finished milestone missing",
-              "* `24-metal`: a sentence.\n", 3,
-              "dev-log/25-sealed is finished and has no entry" },
-            { "an in-flight milestone indexed as done",
-              "* `24-metal`: a sentence.\n* `25-sealed`: a sentence.\n"
-              "* `26-portable`: a sentence.\n", 3,
-              "which has a plan and no record" },
-            { "entries out of order",
-              "* `25-sealed`: a sentence.\n* `24-metal`: a sentence.\n", 3,
-              "the index's entry 1 is 25-sealed" },
-            { "an entry for a directory that is gone",
-              "* `24-metal`: a sentence.\n* `25-sealed`: a sentence.\n"
-              "* `27-polish`: a sentence.\n", 3,
-              "which is not a directory" },
-            { "a milestone named twice",
-              "* `24-metal`: a sentence.\n* `25-sealed`: a sentence.\n"
-              "* `25-sealed`: a sentence.\n", 3,
-              "more than once" },
-            { "a decoy entry inside a fenced block",
-              "* `24-metal`: a sentence.\n```\n* `25-sealed`: a sentence.\n"
-              "```\n", 3,
-              "dev-log/25-sealed is finished and has no entry" },
-            { "a fenced example does not satisfy the order rule",
-              "* `24-metal`: a sentence.\n* `25-sealed`: a sentence.\n"
-              "```\n* `26-portable`: a sentence.\n```\n", 3, NULL }
-        };
+            {"a current index", "* `24-metal`: a sentence.\n* `25-sealed`: a sentence.\n", 3, NULL},
+            {"the newest finished milestone missing", "* `24-metal`: a sentence.\n", 3,
+             "dev-log/25-sealed is finished and has no entry"},
+            {"an in-flight milestone indexed as done",
+             "* `24-metal`: a sentence.\n* `25-sealed`: a sentence.\n"
+             "* `26-portable`: a sentence.\n",
+             3, "which has a plan and no record"},
+            {"entries out of order", "* `25-sealed`: a sentence.\n* `24-metal`: a sentence.\n", 3,
+             "the index's entry 1 is 25-sealed"},
+            {"an entry for a directory that is gone",
+             "* `24-metal`: a sentence.\n* `25-sealed`: a sentence.\n"
+             "* `27-polish`: a sentence.\n",
+             3, "which is not a directory"},
+            {"a milestone named twice",
+             "* `24-metal`: a sentence.\n* `25-sealed`: a sentence.\n"
+             "* `25-sealed`: a sentence.\n",
+             3, "more than once"},
+            {"a decoy entry inside a fenced block",
+             "* `24-metal`: a sentence.\n```\n* `25-sealed`: a sentence.\n"
+             "```\n",
+             3, "dev-log/25-sealed is finished and has no entry"},
+            {"a fenced example does not satisfy the order rule",
+             "* `24-metal`: a sentence.\n* `25-sealed`: a sentence.\n"
+             "```\n* `26-portable`: a sentence.\n```\n",
+             3, NULL}};
         struct milestone dirs[3] = {
-            { "24-metal", 24, 1 }, { "25-sealed", 25, 1 }, { "26-portable", 26, 0 }
-        };
+            {"24-metal", 24, 1}, {"25-sealed", 25, 1}, {"26-portable", 26, 0}};
         char entries[64][128];
         int i;
 
-        for (i = 0; i < (int) (sizeof(cases) / sizeof(cases[0])); i++) {
-            struct spans problems = { NULL, 0, 0 };
-            int n_entries = read_entries(cases[i].index,
-                                         strlen(cases[i].index), entries, 64);
+        for (i = 0; i < (int)(sizeof(cases) / sizeof(cases[0])); i++) {
+            struct spans problems = {NULL, 0, 0};
+            int n_entries = read_entries(cases[i].index, strlen(cases[i].index), entries, 64);
             char msg[256];
 
-            judge_devlog(dirs, cases[i].n_dirs, entries, n_entries,
-                         &problems);
+            judge_devlog(dirs, cases[i].n_dirs, entries, n_entries, &problems);
             snprintf(msg, sizeof(msg), "devlog: %s", cases[i].name);
             if (cases[i].want == NULL)
                 st_check(problems.n == 0, msg);
             else
-                st_check(problems.n > 0 &&
-                         strstr(problems.item[0], cases[i].want) != NULL, msg);
+                st_check(problems.n > 0 && strstr(problems.item[0], cases[i].want) != NULL, msg);
             spans_free(&problems);
         }
 
@@ -1532,16 +1512,14 @@ static int selftest(void)
            without backticks or without the colon is prose, and a tilde
            fence hides its contents too. */
         {
-            static const char sample[] =
-                "* `25-sealed`: an entry.\n"
-                "  * `24-metal`: indented, so a sub-item.\n"
-                "* not-a-milestone: no backticks.\n"
-                "* `26-portable` no colon after the name.\n"
-                "~~~\n* `07-init`: fenced with tildes.\n~~~\n";
+            static const char sample[] = "* `25-sealed`: an entry.\n"
+                                         "  * `24-metal`: indented, so a sub-item.\n"
+                                         "* not-a-milestone: no backticks.\n"
+                                         "* `26-portable` no colon after the name.\n"
+                                         "~~~\n* `07-init`: fenced with tildes.\n~~~\n";
             int n_entries = read_entries(sample, sizeof(sample) - 1, entries, 64);
 
-            st_check(n_entries == 1 &&
-                     strcmp(entries[0], "25-sealed") == 0,
+            st_check(n_entries == 1 && strcmp(entries[0], "25-sealed") == 0,
                      "devlog: the entry pattern read more than the one entry");
         }
     }
@@ -1571,8 +1549,10 @@ static void set_repo(void)
     char started_at[1100];
 
     if (getcwd(repo, sizeof(repo)) == NULL) {
-        fprintf(stderr, "prosecheck: cannot read the working directory: "
-                "%s\n", strerror(errno));
+        fprintf(stderr,
+                "prosecheck: cannot read the working directory: "
+                "%s\n",
+                strerror(errno));
         exit(2);
     }
     snprintf(started_at, sizeof(started_at), "%s", repo);
@@ -1588,8 +1568,10 @@ static void set_repo(void)
             break;
         *slash = '\0';
     }
-    fprintf(stderr, "prosecheck: no CLAUDE.md at or above %s, so there is "
-            "no tree to check; run this from the repository\n", started_at);
+    fprintf(stderr,
+            "prosecheck: no CLAUDE.md at or above %s, so there is "
+            "no tree to check; run this from the repository\n",
+            started_at);
     exit(2);
 }
 
@@ -1603,13 +1585,13 @@ int main(int argc, char **argv)
         return selftest();
 
     if (argc >= 2 && strcmp(argv[1], "columns") == 0) {
-        struct width_ctx w = { 0, 0 };
+        struct width_ctx w = {0, 0};
 
         if (argc > 2) {
             for (i = 2; i < argc; i++)
                 walk(argv[i], check_width, &w, 0);
         } else {
-            for (i = 0; i < (int) (sizeof(ROOTS) / sizeof(ROOTS[0])); i++) {
+            for (i = 0; i < (int)(sizeof(ROOTS) / sizeof(ROOTS[0])); i++) {
                 char full[1100];
 
                 snprintf(full, sizeof(full), "%s/%s", repo, ROOTS[i]);
@@ -1617,13 +1599,17 @@ int main(int argc, char **argv)
             }
         }
         if (w.over > 0) {
-            fprintf(stderr, "prosecheck: %ld comment line(s) over %d columns "
-                    "in %ld file(s)\n", w.over, LIMIT, w.files);
+            fprintf(stderr,
+                    "prosecheck: %ld comment line(s) over %d columns "
+                    "in %ld file(s)\n",
+                    w.over, LIMIT, w.files);
             return 1;
         }
         if (unread > 0) {
-            fprintf(stderr, "prosecheck: %ld file(s) could not be read, so "
-                    "this proved nothing about them\n", unread);
+            fprintf(stderr,
+                    "prosecheck: %ld file(s) could not be read, so "
+                    "this proved nothing about them\n",
+                    unread);
             return 1;
         }
         printf("prosecheck: OK (no comment line over %d columns)\n", LIMIT);
@@ -1631,7 +1617,7 @@ int main(int argc, char **argv)
     }
 
     if (argc >= 2 && strcmp(argv[1], "banned") == 0) {
-        struct banned_ctx b = { 0 };
+        struct banned_ctx b = {0};
 
         if (argc > 2) {
             for (i = 2; i < argc; i++) {
@@ -1644,13 +1630,13 @@ int main(int argc, char **argv)
                 walk(argv[i], check_banned, &b, 1);
             }
         } else {
-            for (i = 0; i < (int) (sizeof(ROOTS) / sizeof(ROOTS[0])); i++) {
+            for (i = 0; i < (int)(sizeof(ROOTS) / sizeof(ROOTS[0])); i++) {
                 char full[1100];
 
                 snprintf(full, sizeof(full), "%s/%s", repo, ROOTS[i]);
                 walk(full, check_banned, &b, 1);
             }
-            for (i = 0; i < (int) (sizeof(TOP_MD) / sizeof(TOP_MD[0])); i++) {
+            for (i = 0; i < (int)(sizeof(TOP_MD) / sizeof(TOP_MD[0])); i++) {
                 char full[1100];
 
                 snprintf(full, sizeof(full), "%s/%s", repo, TOP_MD[i]);
@@ -1658,13 +1644,14 @@ int main(int argc, char **argv)
             }
         }
         if (b.findings > 0) {
-            fprintf(stderr, "prosecheck: %ld banned term use(s)\n",
-                    b.findings);
+            fprintf(stderr, "prosecheck: %ld banned term use(s)\n", b.findings);
             return 1;
         }
         if (unread > 0) {
-            fprintf(stderr, "prosecheck: %ld file(s) could not be read, so "
-                    "this proved nothing about them\n", unread);
+            fprintf(stderr,
+                    "prosecheck: %ld file(s) could not be read, so "
+                    "this proved nothing about them\n",
+                    unread);
             return 1;
         }
         printf("prosecheck: OK (no banned term in the in-house prose)\n");
@@ -1677,9 +1664,10 @@ int main(int argc, char **argv)
         c.prose.item = NULL;
         c.prose.n = 0;
         c.prose.cap = 0;
-        c.want = strcmp(argv[2], "c") == 0 ? LANG_C
-            : strcmp(argv[2], "hash") == 0 ? LANG_HASH
-            : strcmp(argv[2], "md") == 0 ? LANG_MD : LANG_NONE;
+        c.want = strcmp(argv[2], "c") == 0      ? LANG_C
+                 : strcmp(argv[2], "hash") == 0 ? LANG_HASH
+                 : strcmp(argv[2], "md") == 0   ? LANG_MD
+                                                : LANG_NONE;
         if (c.want == LANG_NONE && strcmp(argv[2], "all") != 0) {
             fprintf(stderr, "prosecheck: count takes c, hash, md or all\n");
             return 2;
@@ -1693,8 +1681,10 @@ int main(int argc, char **argv)
             printf("phrase %ld\n", count_spans(&c.prose, WATCH[i]));
         spans_free(&c.prose);
         if (unread > 0) {
-            fprintf(stderr, "prosecheck: %ld file(s) could not be read, so "
-                    "these counts are over less than the tree\n", unread);
+            fprintf(stderr,
+                    "prosecheck: %ld file(s) could not be read, so "
+                    "these counts are over less than the tree\n",
+                    unread);
             return 1;
         }
         return 0;
@@ -1720,7 +1710,7 @@ int main(int argc, char **argv)
         char index[1200];
         struct milestone dirs[256];
         char entries[256][128];
-        struct spans problems = { NULL, 0, 0 };
+        struct spans problems = {NULL, 0, 0};
         int n_dirs, n_entries, done = 0, planned = 0;
         const char *newest = "none";
         size_t n;
@@ -1767,8 +1757,8 @@ int main(int argc, char **argv)
     }
 
     fprintf(stderr, "usage: prosecheck columns [PATH ...] | prosecheck "
-            "banned [PATH ...] | prosecheck count {c|hash|md|all} FILE ... | "
-            "prosecheck watchlist | prosecheck devlog [DIR] | "
-            "prosecheck --selftest\n");
+                    "banned [PATH ...] | prosecheck count {c|hash|md|all} FILE ... | "
+                    "prosecheck watchlist | prosecheck devlog [DIR] | "
+                    "prosecheck --selftest\n");
     return 2;
 }

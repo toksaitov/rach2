@@ -29,27 +29,29 @@
 #include <string.h>
 
 #define ELF_MAX_PHNUM 32
-#define ELF_MAX_SEGS 8
-#define ELF_USER_MIN 0x02000000u
-#define ELF_USER_MAX 0xBFFFF000u
-#define PAGE 0x1000u
+#define ELF_MAX_SEGS  8
+#define ELF_USER_MIN  0x02000000u
+#define ELF_USER_MAX  0xBFFFF000u
+#define PAGE          0x1000u
 
 #define MULTIBOOT_MAGIC 0x1BADB002u
 #define MULTIBOOT_FLAGS 0x3u
-#define LOAD_FLOOR 0x100000u
-#define SEARCH_END (8192 - 48)
+#define LOAD_FLOOR      0x100000u
+#define SEARCH_END      (8192 - 48)
 
-#define ET_EXEC 2
-#define EM_386 3
-#define PT_LOAD 1
+#define ET_EXEC    2
+#define EM_386     3
+#define PT_LOAD    1
 #define PT_DYNAMIC 2
-#define PT_INTERP 3
+#define PT_INTERP  3
 
-static uint32_t r16(const unsigned char *p) { return p[0] | p[1] << 8; }
+static uint32_t r16(const unsigned char *p)
+{
+    return p[0] | p[1] << 8;
+}
 static uint32_t r32(const unsigned char *p)
 {
-    return (uint32_t) p[0] | (uint32_t) p[1] << 8 |
-           (uint32_t) p[2] << 16 | (uint32_t) p[3] << 24;
+    return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
 }
 
 /* ---- the user-executable checker (check_elf semantics) ---- */
@@ -70,8 +72,7 @@ static void problem(const char *name, const char *fmt, ...)
 
 /* Returns the number of findings; `quiet` suppresses the report so the
    selftest can count without printing. */
-static int user_check(const char *name, const unsigned char *d, size_t n,
-                      int quiet)
+static int user_check(const char *name, const unsigned char *d, size_t n, int quiet)
 {
     uint32_t e_type, e_machine, e_entry, e_phoff, e_phentsize, e_phnum;
     uint32_t i, end, loads, phdr_covered;
@@ -90,7 +91,10 @@ static int user_check(const char *name, const unsigned char *d, size_t n,
         problem(name, "shorter than an ELF header");
         goto out;
     }
-    if (memcmp(d, "\x7f" "ELF", 4) != 0) {
+    if (memcmp(d,
+               "\x7f"
+               "ELF",
+               4) != 0) {
         problem(name, "no ELF signature");
         goto out;
     }
@@ -107,8 +111,10 @@ static int user_check(const char *name, const unsigned char *d, size_t n,
     e_phentsize = r16(d + 42);
     e_phnum = r16(d + 44);
     if (e_type != ET_EXEC)
-        problem(name, "e_type is %u, not ET_EXEC; this kernel loads no "
-                "other kind", e_type);
+        problem(name,
+                "e_type is %u, not ET_EXEC; this kernel loads no "
+                "other kind",
+                e_type);
     if (e_machine != EM_386)
         problem(name, "e_machine is %u, not EM_386", e_machine);
     if (e_phoff == 0 || e_phnum == 0) {
@@ -120,9 +126,11 @@ static int user_check(const char *name, const unsigned char *d, size_t n,
         goto out;
     }
     if (e_phnum > ELF_MAX_PHNUM)
-        problem(name, "%u program headers, more than the %u this kernel "
-                "reads", e_phnum, ELF_MAX_PHNUM);
-    if ((uint64_t) e_phoff + (uint64_t) e_phnum * 32 > n) {
+        problem(name,
+                "%u program headers, more than the %u this kernel "
+                "reads",
+                e_phnum, ELF_MAX_PHNUM);
+    if ((uint64_t)e_phoff + (uint64_t)e_phnum * 32 > n) {
         problem(name, "the program header table runs past the file");
         goto out;
     }
@@ -139,11 +147,11 @@ static int user_check(const char *name, const unsigned char *d, size_t n,
 
         if (p_type == PT_INTERP)
             problem(name, "has a PT_INTERP, so it wants a dynamic linker; "
-                    "this system has none and the loader does not refuse "
-                    "it, it ignores it");
+                          "this system has none and the loader does not refuse "
+                          "it, it ignores it");
         if (p_type == PT_DYNAMIC)
             problem(name, "has a PT_DYNAMIC, so it expects relocation "
-                    "nobody here performs");
+                          "nobody here performs");
         if (p_type != PT_LOAD)
             continue;
         loads++;
@@ -152,26 +160,25 @@ static int user_check(const char *name, const unsigned char *d, size_t n,
         }
         if (p_filesz > p_memsz)
             problem(name, "a segment's file size exceeds its memory size");
-        if ((uint64_t) p_offset + p_filesz > 0xFFFFFFFFull ||
-            (uint64_t) p_vaddr + p_memsz > 0xFFFFFFFFull) {
+        if ((uint64_t)p_offset + p_filesz > 0xFFFFFFFFull ||
+            (uint64_t)p_vaddr + p_memsz > 0xFFFFFFFFull) {
             problem(name, "a segment wraps the 32-bit address space");
             continue;
         }
-        if ((uint64_t) p_offset + p_filesz > n)
+        if ((uint64_t)p_offset + p_filesz > n)
             problem(name, "a segment runs past the file");
-        if (p_vaddr < ELF_USER_MIN ||
-            (uint64_t) p_vaddr + p_memsz > ELF_USER_MAX)
-            problem(name, "a segment lies outside the window exec loads "
-                    "into, [0x%08x, 0x%08x)", ELF_USER_MIN, ELF_USER_MAX);
+        if (p_vaddr < ELF_USER_MIN || (uint64_t)p_vaddr + p_memsz > ELF_USER_MAX)
+            problem(name,
+                    "a segment lies outside the window exec loads "
+                    "into, [0x%08x, 0x%08x)",
+                    ELF_USER_MIN, ELF_USER_MAX);
         page_start = p_vaddr & ~(PAGE - 1);
         if (page_start < end)
             problem(name, "the PT_LOAD segments are not ascending and "
-                    "page-disjoint");
-        end = (uint32_t) (((uint64_t) p_vaddr + p_memsz + PAGE - 1) &
-                          ~(uint64_t) (PAGE - 1));
+                          "page-disjoint");
+        end = (uint32_t)(((uint64_t)p_vaddr + p_memsz + PAGE - 1) & ~(uint64_t)(PAGE - 1));
         if (p_offset <= e_phoff &&
-            (uint64_t) e_phoff + (uint64_t) e_phnum * 32 <=
-                (uint64_t) p_offset + p_filesz)
+            (uint64_t)e_phoff + (uint64_t)e_phnum * 32 <= (uint64_t)p_offset + p_filesz)
             phdr_covered = 1;
     }
     if (loads == 0) {
@@ -179,14 +186,16 @@ static int user_check(const char *name, const unsigned char *d, size_t n,
         goto out;
     }
     if (loads > ELF_MAX_SEGS)
-        problem(name, "%u PT_LOAD segments, more than the %u this kernel "
-                "has slots for", loads, ELF_MAX_SEGS);
+        problem(name,
+                "%u PT_LOAD segments, more than the %u this kernel "
+                "has slots for",
+                loads, ELF_MAX_SEGS);
     if (!phdr_covered)
         problem(name, "the program header table lies outside every "
-                "PT_LOAD, so AT_PHDR would name nothing");
+                      "PT_LOAD, so AT_PHDR would name nothing");
     if (e_entry < ELF_USER_MIN || e_entry >= ELF_USER_MAX)
         problem(name, "the entry point is outside the window exec loads "
-                "into");
+                      "into");
 out:
     if (hold != NULL) {
         fclose(stderr);
@@ -221,13 +230,12 @@ struct load {
  * well as at a NUL. A truncated or malformed table then reads as a name
  * that does not match rather than as a read past the buffer.
  */
-static int name_is(const unsigned char *d, size_t n, uint64_t off,
-                   const char *want)
+static int name_is(const unsigned char *d, size_t n, uint64_t off, const char *want)
 {
     size_t k;
 
     for (k = 0; want[k] != '\0'; k++) {
-        if (off + k >= n || d[off + k] != (unsigned char) want[k])
+        if (off + k >= n || d[off + k] != (unsigned char)want[k])
             return 0;
     }
     return off + k < n && d[off + k] == '\0';
@@ -235,8 +243,7 @@ static int name_is(const unsigned char *d, size_t n, uint64_t off,
 
 /* Returns 0 and fills `detail` on success; nonzero with `kfail` set on
    the first violation. */
-static int kernel_check(const unsigned char *d, size_t n, int tcc,
-                        char *detail, size_t detail_len)
+static int kernel_check(const unsigned char *d, size_t n, int tcc, char *detail, size_t detail_len)
 {
     uint32_t e_type, e_machine, e_entry, e_phoff, e_phentsize, e_phnum;
     uint32_t shoff, e_shentsize, e_shnum;
@@ -250,7 +257,10 @@ static int kernel_check(const unsigned char *d, size_t n, int tcc,
     int entry_found = 0;
     struct load tmp;
 
-    if (n < 52 || memcmp(d, "\x7f" "ELF", 4) != 0)
+    if (n < 52 || memcmp(d,
+                         "\x7f"
+                         "ELF",
+                         4) != 0)
         return kf("not an ELF file");
     if (d[4] != 1 || d[5] != 1)
         return kf("not a 32-bit little-endian ELF");
@@ -269,7 +279,7 @@ static int kernel_check(const unsigned char *d, size_t n, int tcc,
         return kf("machine is %u, not EM_386", e_machine);
     if (e_phentsize != 32)
         return kf("program header entry size is %u, not 32", e_phentsize);
-    if ((uint64_t) e_phoff + (uint64_t) e_phnum * 32 > n)
+    if ((uint64_t)e_phoff + (uint64_t)e_phnum * 32 > n)
         return kf("truncated or malformed ELF headers");
     for (i = 0; i < e_phnum; i++) {
         const unsigned char *p = d + e_phoff + 32 * i;
@@ -294,21 +304,25 @@ static int kernel_check(const unsigned char *d, size_t n, int tcc,
 
         if (l->paddr != l->vaddr)
             return kf("load at 0x%x has p_paddr 0x%x; the loaders place "
-                      "segments at the physical address", l->vaddr, l->paddr);
+                      "segments at the physical address",
+                      l->vaddr, l->paddr);
         if (l->vaddr < LOAD_FLOOR)
             return kf("load at 0x%x is below 0x%x", l->vaddr, LOAD_FLOOR);
         if (l->filesz > l->memsz)
-            return kf("load at 0x%x has p_filesz 0x%x > p_memsz 0x%x",
-                      l->vaddr, l->filesz, l->memsz);
-        if ((uint64_t) l->vaddr + l->memsz > 0xFFFFFFFFu)
+            return kf("load at 0x%x has p_filesz 0x%x > p_memsz 0x%x", l->vaddr, l->filesz,
+                      l->memsz);
+        if ((uint64_t)l->vaddr + l->memsz > 0xFFFFFFFFu)
             return kf("load at 0x%x: 0x%x bytes run past the end of the "
-                      "32-bit address space", l->vaddr, l->memsz);
-        if ((uint64_t) l->off + l->filesz > n)
+                      "32-bit address space",
+                      l->vaddr, l->memsz);
+        if ((uint64_t)l->off + l->filesz > n)
             return kf("load at 0x%x: file range 0x%x+0x%x runs past the end "
-                      "of the file", l->vaddr, l->off, l->filesz);
+                      "of the file",
+                      l->vaddr, l->off, l->filesz);
         if (l->align > 1 && (l->off % l->align) != (l->vaddr % l->align))
             return kf("load at 0x%x: offset 0x%x not congruent to the "
-                      "address modulo 0x%x", l->vaddr, l->off, l->align);
+                      "address modulo 0x%x",
+                      l->vaddr, l->off, l->align);
     }
     if (loads[1].vaddr < loads[0].vaddr) {
         tmp = loads[0];
@@ -316,8 +330,7 @@ static int kernel_check(const unsigned char *d, size_t n, int tcc,
         loads[1] = tmp;
     }
     if (loads[1].vaddr < loads[0].vaddr + loads[0].memsz)
-        return kf("loads overlap: 0x%x < 0x%x", loads[1].vaddr,
-                  loads[0].vaddr + loads[0].memsz);
+        return kf("loads overlap: 0x%x < 0x%x", loads[1].vaddr, loads[0].vaddr + loads[0].memsz);
 
     for (i = 0; i + 12 <= n && i < SEARCH_END; i += 4) {
         if (r32(d + i) == MULTIBOOT_MAGIC) {
@@ -336,16 +349,18 @@ static int kernel_check(const unsigned char *d, size_t n, int tcc,
                   "loader's search window");
     if (mb_flags != MULTIBOOT_FLAGS)
         return kf("the first valid multiboot header (file offset 0x%x) has "
-                  "flags 0x%x, not 0x%x", mb_off, mb_flags, MULTIBOOT_FLAGS);
+                  "flags 0x%x, not 0x%x",
+                  mb_off, mb_flags, MULTIBOOT_FLAGS);
 
     if (shoff != 0 && e_shentsize != 0) {
         if (e_shentsize < 40)
             return kf("section header entry size is %u, under the 40 bytes "
-                      "of an ELF32 section header", e_shentsize);
-        if ((uint64_t) shoff + (uint64_t) e_shentsize * e_shnum > n)
+                      "of an ELF32 section header",
+                      e_shentsize);
+        if ((uint64_t)shoff + (uint64_t)e_shentsize * e_shnum > n)
             return kf("truncated or malformed symbol table");
         for (i = 0; i < e_shnum; i++) {
-            const unsigned char *sh = d + shoff + (uint64_t) e_shentsize * i;
+            const unsigned char *sh = d + shoff + (uint64_t)e_shentsize * i;
             uint32_t sh_type = r32(sh + 4), sh_offset = r32(sh + 16);
             uint32_t sh_size = r32(sh + 20), sh_link = r32(sh + 24);
             uint32_t sh_entsize = r32(sh + 36);
@@ -356,23 +371,20 @@ static int kernel_check(const unsigned char *d, size_t n, int tcc,
             have_symtab = 1;
             if (sh_link >= e_shnum || sh_entsize < 16)
                 return kf("truncated or malformed symbol table");
-            if ((uint64_t) sh_offset + sh_size > n)
+            if ((uint64_t)sh_offset + sh_size > n)
                 return kf("truncated or malformed symbol table");
-            str_offset = r32(d + shoff + (uint64_t) e_shentsize * sh_link + 16);
+            str_offset = r32(d + shoff + (uint64_t)e_shentsize * sh_link + 16);
             if (str_offset >= n)
                 return kf("truncated or malformed symbol table");
             count = sh_size / sh_entsize;
             for (j = 0; j < count; j++) {
-                const unsigned char *sym = d + sh_offset +
-                                           (uint64_t) sh_entsize * j;
+                const unsigned char *sym = d + sh_offset + (uint64_t)sh_entsize * j;
                 uint32_t name_off = r32(sym), value = r32(sym + 4);
 
-                if (name_is(d, n, (uint64_t) str_offset + name_off,
-                            "_start")) {
+                if (name_is(d, n, (uint64_t)str_offset + name_off, "_start")) {
                     have_start = 1;
                     start_val = value;
-                } else if (name_is(d, n, (uint64_t) str_offset + name_off,
-                                   "_end")) {
+                } else if (name_is(d, n, (uint64_t)str_offset + name_off, "_end")) {
                     have_end = 1;
                     end_val = value;
                 }
@@ -388,8 +400,7 @@ static int kernel_check(const unsigned char *d, size_t n, int tcc,
             return kf("entry 0x%x is not _start 0x%x", e_entry, start_val);
     }
     for (i = 0; i < 2; i++) {
-        if (loads[i].vaddr <= e_entry &&
-            e_entry < loads[i].vaddr + loads[i].memsz) {
+        if (loads[i].vaddr <= e_entry && e_entry < loads[i].vaddr + loads[i].memsz) {
             entry_found = 1;
             entry_vaddr = loads[i].vaddr;
             entry_filesz = loads[i].filesz;
@@ -399,7 +410,8 @@ static int kernel_check(const unsigned char *d, size_t n, int tcc,
         return kf("entry 0x%x is outside every load", e_entry);
     if (e_entry >= entry_vaddr + entry_filesz)
         return kf("entry 0x%x is in the zero-fill of its load, not in "
-                  "file-backed bytes", e_entry);
+                  "file-backed bytes",
+                  e_entry);
 
     image_end = loads[0].vaddr + loads[0].memsz;
     if (loads[1].vaddr + loads[1].memsz > image_end)
@@ -408,21 +420,18 @@ static int kernel_check(const unsigned char *d, size_t n, int tcc,
         if (!have_end)
             return kf("no _end symbol");
         if (end_val != image_end)
-            return kf("_end 0x%x is not the image end 0x%x", end_val,
-                      image_end);
+            return kf("_end 0x%x is not the image end 0x%x", end_val, image_end);
     }
     if (tcc) {
         if (loads[0].off != 0)
-            return kf("tcc profile: first load file offset is 0x%x, not 0",
-                      loads[0].off);
+            return kf("tcc profile: first load file offset is 0x%x, not 0", loads[0].off);
         if (loads[0].vaddr != LOAD_FLOOR)
-            return kf("tcc profile: first load at 0x%x, not 0x%x",
-                      loads[0].vaddr, LOAD_FLOOR);
+            return kf("tcc profile: first load at 0x%x, not 0x%x", loads[0].vaddr, LOAD_FLOOR);
     }
     snprintf(detail, detail_len,
              "%s: 2 loads, entry 0x%x, _end 0x%x, multiboot header at file "
-             "offset 0x%x", tcc ? "tcc profile" : "common profile", e_entry,
-             image_end, mb_off);
+             "offset 0x%x",
+             tcc ? "tcc profile" : "common profile", e_entry, image_end, mb_off);
     return 0;
 }
 
@@ -430,26 +439,28 @@ static int kernel_check(const unsigned char *d, size_t n, int tcc,
 
 static void w32(unsigned char *p, uint32_t v)
 {
-    p[0] = (unsigned char) v;
-    p[1] = (unsigned char) (v >> 8);
-    p[2] = (unsigned char) (v >> 16);
-    p[3] = (unsigned char) (v >> 24);
+    p[0] = (unsigned char)v;
+    p[1] = (unsigned char)(v >> 8);
+    p[2] = (unsigned char)(v >> 16);
+    p[3] = (unsigned char)(v >> 24);
 }
 static void w16(unsigned char *p, uint32_t v)
 {
-    p[0] = (unsigned char) v;
-    p[1] = (unsigned char) (v >> 8);
+    p[0] = (unsigned char)v;
+    p[1] = (unsigned char)(v >> 8);
 }
 
 /* One PT_LOAD user image with the header table inside it, for the window
    boundary cases. */
-static size_t craft_user(unsigned char *b, uint32_t entry, uint32_t vaddr,
-                         uint32_t memsz)
+static size_t craft_user(unsigned char *b, uint32_t entry, uint32_t vaddr, uint32_t memsz)
 {
     uint32_t filesz = 52 + 32;
 
     memset(b, 0, 52 + 32);
-    memcpy(b, "\x7f" "ELF\x01\x01\x01", 7);
+    memcpy(b,
+           "\x7f"
+           "ELF\x01\x01\x01",
+           7);
     w16(b + 16, ET_EXEC);
     w16(b + 18, EM_386);
     w32(b + 20, 1);
@@ -472,8 +483,7 @@ static size_t craft_user(unsigned char *b, uint32_t entry, uint32_t vaddr,
 /* A minimal kernel-shaped fixture: a text load at 1 MiB, a data+bss load
    after it, one multiboot header, and a symtab with `_start` and `_end`.
    `first_off` 0 models the tcc layout. */
-static size_t craft_kernel(unsigned char *b, uint32_t first_off,
-                           uint32_t mb_at, uint32_t text_size)
+static size_t craft_kernel(unsigned char *b, uint32_t first_off, uint32_t mb_at, uint32_t text_size)
 {
     uint32_t hdr_size = 52 + 2 * 32;
     uint32_t text_off, first_file_start, first_filesz, text_base;
@@ -505,7 +515,10 @@ static size_t craft_kernel(unsigned char *b, uint32_t first_off,
     shoff = str_off + strtab_len;
 
     memset(b, 0, shoff + 3 * 40);
-    memcpy(b, "\x7f" "ELF\x01\x01\x01", 7);
+    memcpy(b,
+           "\x7f"
+           "ELF\x01\x01\x01",
+           7);
     w16(b + 16, 2);
     w16(b + 18, 3);
     w32(b + 20, 1);
@@ -538,7 +551,7 @@ static size_t craft_kernel(unsigned char *b, uint32_t first_off,
     pos = text_off + mb_at;
     w32(b + pos, MULTIBOOT_MAGIC);
     w32(b + pos + 4, MULTIBOOT_FLAGS);
-    w32(b + pos + 8, (uint32_t) (0 - (MULTIBOOT_MAGIC + MULTIBOOT_FLAGS)));
+    w32(b + pos + 8, (uint32_t)(0 - (MULTIBOOT_MAGIC + MULTIBOOT_FLAGS)));
     b[text_off + entry_at] = 0xF4;
     b[text_off + entry_at + 1] = 0xEB;
     b[text_off + entry_at + 2] = 0xFD;
@@ -570,8 +583,8 @@ static size_t craft_kernel(unsigned char *b, uint32_t first_off,
 
 static int st_bad;
 
-static void st_expect_kernel(const unsigned char *d, size_t n, int tcc,
-                             const char *why, const char *want)
+static void st_expect_kernel(const unsigned char *d, size_t n, int tcc, const char *why,
+                             const char *want)
 {
     char detail[160];
 
@@ -579,8 +592,10 @@ static void st_expect_kernel(const unsigned char *d, size_t n, int tcc,
         fprintf(stderr, "elfcheck: selftest: accepted %s\n", why);
         st_bad++;
     } else if (strstr(kfail, want) == NULL) {
-        fprintf(stderr, "elfcheck: selftest: %s: refused for the wrong "
-                "rule: %s\n", why, kfail);
+        fprintf(stderr,
+                "elfcheck: selftest: %s: refused for the wrong "
+                "rule: %s\n",
+                why, kfail);
         st_bad++;
     }
 }
@@ -592,26 +607,16 @@ static int selftest(void)
         uint32_t entry, vaddr, memsz;
         int want_ok;
     } cases[] = {
-        { "a segment ending exactly at the ceiling",
-          0x08048000, 0xBFFFE000, 0x1000, 1 },
-        { "a segment ending one byte past the ceiling",
-          0x08048000, 0xBFFFE000, 0x1001, 0 },
-        { "a segment inside the page exec leaves out",
-          0x08048000, 0xBFFFF000, 0x1000, 0 },
-        { "an entry point at the ceiling", 0xBFFFF000, 0x08048000,
-          0x1000, 0 },
-        { "an entry point one byte below it", 0xBFFFEFFF, 0x08048000,
-          0x1000, 1 },
-        { "a segment starting below the floor", 0x08048000, 0x01FFF000,
-          0x1000, 0 },
-        { "a segment starting exactly at the floor", 0x02000000,
-          0x02000000, 0x1000, 1 },
-        { "a segment starting one page below the floor", 0x08048000,
-          0x01FFF000, 0x2000, 0 },
-        { "an entry point exactly at the floor", 0x02000000, 0x02000000,
-          0x1000, 1 },
-        { "an entry point one byte below the floor", 0x01FFFFFF,
-          0x02000000, 0x1000, 0 },
+        {"a segment ending exactly at the ceiling", 0x08048000, 0xBFFFE000, 0x1000, 1},
+        {"a segment ending one byte past the ceiling", 0x08048000, 0xBFFFE000, 0x1001, 0},
+        {"a segment inside the page exec leaves out", 0x08048000, 0xBFFFF000, 0x1000, 0},
+        {"an entry point at the ceiling", 0xBFFFF000, 0x08048000, 0x1000, 0},
+        {"an entry point one byte below it", 0xBFFFEFFF, 0x08048000, 0x1000, 1},
+        {"a segment starting below the floor", 0x08048000, 0x01FFF000, 0x1000, 0},
+        {"a segment starting exactly at the floor", 0x02000000, 0x02000000, 0x1000, 1},
+        {"a segment starting one page below the floor", 0x08048000, 0x01FFF000, 0x2000, 0},
+        {"an entry point exactly at the floor", 0x02000000, 0x02000000, 0x1000, 1},
+        {"an entry point one byte below the floor", 0x01FFFFFF, 0x02000000, 0x1000, 0},
     };
     unsigned char user[128];
     unsigned char good[16384], gnu[16384], mut[16384], big[32768];
@@ -622,17 +627,17 @@ static int selftest(void)
 
     st_bad = 0;
     for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
-        size_t n = craft_user(user, cases[i].entry, cases[i].vaddr,
-                              cases[i].memsz);
+        size_t n = craft_user(user, cases[i].entry, cases[i].vaddr, cases[i].memsz);
         int got = user_check("case", user, n, 1);
 
         if (cases[i].want_ok && got) {
-            fprintf(stderr, "elfcheck: selftest: %s: expected a clean run\n",
-                    cases[i].name);
+            fprintf(stderr, "elfcheck: selftest: %s: expected a clean run\n", cases[i].name);
             st_bad++;
         } else if (!cases[i].want_ok && !got) {
-            fprintf(stderr, "elfcheck: selftest: %s: expected a finding, "
-                    "the run was clean\n", cases[i].name);
+            fprintf(stderr,
+                    "elfcheck: selftest: %s: expected a finding, "
+                    "the run was clean\n",
+                    cases[i].name);
             st_bad++;
         }
     }
@@ -640,77 +645,78 @@ static int selftest(void)
     goodn = craft_kernel(good, 0, 16, 0x100);
     if (kernel_check(good, goodn, 1, detail, sizeof(detail)) != 0 ||
         kernel_check(good, goodn, 0, detail, sizeof(detail)) != 0) {
-        fprintf(stderr, "elfcheck: selftest: the good fixture was "
-                "refused: %s\n", kfail);
+        fprintf(stderr,
+                "elfcheck: selftest: the good fixture was "
+                "refused: %s\n",
+                kfail);
         st_bad++;
     }
     gnun = craft_kernel(gnu, 0x1000, 16, 0x100);
     if (kernel_check(gnu, gnun, 0, detail, sizeof(detail)) != 0) {
-        fprintf(stderr, "elfcheck: selftest: the GNU-shaped fixture was "
-                "refused: %s\n", kfail);
+        fprintf(stderr,
+                "elfcheck: selftest: the GNU-shaped fixture was "
+                "refused: %s\n",
+                kfail);
         st_bad++;
     }
 
     memcpy(mut, good, goodn);
     w32(mut + mb + 8, 0);
-    st_expect_kernel(mut, goodn, 0, "a corrupted multiboot checksum",
-                     "no multiboot header");
+    st_expect_kernel(mut, goodn, 0, "a corrupted multiboot checksum", "no multiboot header");
     memcpy(mut, good, goodn);
     w32(mut + 24, 0x90000);
-    st_expect_kernel(mut, goodn, 0, "an entry that is not _start",
-                     "is not _start");
+    st_expect_kernel(mut, goodn, 0, "an entry that is not _start", "is not _start");
     memcpy(mut, good, goodn);
     w32(mut + 52 + 12, 0);
     st_expect_kernel(mut, goodn, 0, "a zero physical address", "p_paddr");
     memcpy(mut, good, goodn);
-    w32(mut + 52 + 32 + 4, (uint32_t) goodn);
-    st_expect_kernel(mut, goodn, 0, "a load past the end of the file",
-                     "past the end");
+    w32(mut + 52 + 32 + 4, (uint32_t)goodn);
+    st_expect_kernel(mut, goodn, 0, "a load past the end of the file", "past the end");
     memcpy(mut, good, goodn);
     w32(mut + 52 + 16, mb);
-    st_expect_kernel(mut, goodn, 0, "an entry in its load's zero-fill",
-                     "zero-fill");
+    st_expect_kernel(mut, goodn, 0, "an entry in its load's zero-fill", "zero-fill");
     memcpy(mut, good, goodn);
     w32(mut + mb + 4, 0x10003);
-    w32(mut + mb + 8, (uint32_t) (0 - (MULTIBOOT_MAGIC + 0x10003)));
-    st_expect_kernel(mut, goodn, 0, "an address-override multiboot header",
-                     "flags");
+    w32(mut + mb + 8, (uint32_t)(0 - (MULTIBOOT_MAGIC + 0x10003)));
+    st_expect_kernel(mut, goodn, 0, "an address-override multiboot header", "flags");
     memcpy(mut, good, goodn);
     w32(mut + hdr, MULTIBOOT_MAGIC);
     w32(mut + hdr + 4, 0x10000);
-    w32(mut + hdr + 8, (uint32_t) (0 - (MULTIBOOT_MAGIC + 0x10000)));
-    st_expect_kernel(mut, goodn, 0,
-                     "an earlier valid header with foreign flags", "flags");
+    w32(mut + hdr + 8, (uint32_t)(0 - (MULTIBOOT_MAGIC + 0x10000)));
+    st_expect_kernel(mut, goodn, 0, "an earlier valid header with foreign flags", "flags");
 
     last = SEARCH_END - 4;
     bign = craft_kernel(big, 0, last - hdr, 0x2000);
     if (kernel_check(big, bign, 1, detail, sizeof(detail)) != 0) {
-        fprintf(stderr, "elfcheck: selftest: a header at the last searched "
-                "offset was refused: %s\n", kfail);
+        fprintf(stderr,
+                "elfcheck: selftest: a header at the last searched "
+                "offset was refused: %s\n",
+                kfail);
         st_bad++;
     }
     bign = craft_kernel(big, 0, (last + 4) - hdr, 0x2000);
     st_expect_kernel(big, bign, 1, "a header past the loader's search bound",
                      "no multiboot header");
 
-    st_expect_kernel(gnu, gnun, 1, "the GNU layout under the tcc profile",
-                     "file offset");
+    st_expect_kernel(gnu, gnun, 1, "the GNU layout under the tcc profile", "file offset");
 
     memcpy(mut, good, goodn);
     w32(mut + 32, 0);
     if (kernel_check(mut, goodn, 1, detail, sizeof(detail)) != 0) {
-        fprintf(stderr, "elfcheck: selftest: the symbol-free fixture was "
-                "refused under the tcc profile: %s\n", kfail);
+        fprintf(stderr,
+                "elfcheck: selftest: the symbol-free fixture was "
+                "refused under the tcc profile: %s\n",
+                kfail);
         st_bad++;
     }
     st_expect_kernel(mut, goodn, 0,
                      "a kernel without a symbol table under the common "
-                     "profile", "no symbol table");
+                     "profile",
+                     "no symbol table");
 
     memcpy(mut, good, goodn);
     w32(mut + 52 + 20, 0xFFF00000u);
-    st_expect_kernel(mut, goodn, 0, "a load that wraps the address space",
-                     "32-bit address space");
+    st_expect_kernel(mut, goodn, 0, "a load that wraps the address space", "32-bit address space");
     memcpy(mut, good, goodn);
     w16(mut + 46, 20);
     st_expect_kernel(mut, goodn, 0, "a short section header entry size",
@@ -720,12 +726,11 @@ static int selftest(void)
         uint32_t symtab = shoff_of + 40, strtab = shoff_of + 80;
 
         memcpy(mut, good, goodn);
-        w32(mut + strtab + 16, (uint32_t) goodn);
+        w32(mut + strtab + 16, (uint32_t)goodn);
         w32(mut + r32(good + symtab + 16) + 16, 0);
         memcpy(mut + goodn, "_start", 6);
         mut[goodn + 6] = 0;
-        st_expect_kernel(mut, goodn + 6, 0,
-                         "a symbol name unterminated at the end of the file",
+        st_expect_kernel(mut, goodn + 6, 0, "a symbol name unterminated at the end of the file",
                          "no _start symbol");
     }
 
@@ -748,19 +753,18 @@ static unsigned char *read_file(const char *path, size_t *n)
 
     if (f == NULL)
         return NULL;
-    if (fseek(f, 0, SEEK_END) != 0 || (len = ftell(f)) < 0 ||
-        fseek(f, 0, SEEK_SET) != 0) {
+    if (fseek(f, 0, SEEK_END) != 0 || (len = ftell(f)) < 0 || fseek(f, 0, SEEK_SET) != 0) {
         fclose(f);
         return NULL;
     }
-    buf = malloc((size_t) len + 1);
-    if (buf == NULL || fread(buf, 1, (size_t) len, f) != (size_t) len) {
+    buf = malloc((size_t)len + 1);
+    if (buf == NULL || fread(buf, 1, (size_t)len, f) != (size_t)len) {
         free(buf);
         fclose(f);
         return NULL;
     }
     fclose(f);
-    *n = (size_t) len;
+    *n = (size_t)len;
     return buf;
 }
 
@@ -780,7 +784,7 @@ int main(int argc, char **argv)
     }
     if (first >= argc) {
         fprintf(stderr, "usage: elfcheck FILE... | elfcheck --kernel "
-                "[--tcc] KERNEL | elfcheck --selftest\n");
+                        "[--tcc] KERNEL | elfcheck --selftest\n");
         return 2;
     }
     if (kernel_mode) {
@@ -789,8 +793,10 @@ int main(int argc, char **argv)
         char detail[160];
 
         if (first != argc - 1) {
-            fprintf(stderr, "check-kernel: --kernel takes one kernel, not "
-                    "%d\n", argc - first);
+            fprintf(stderr,
+                    "check-kernel: --kernel takes one kernel, not "
+                    "%d\n",
+                    argc - first);
             return 2;
         }
         d = read_file(argv[first], &n);

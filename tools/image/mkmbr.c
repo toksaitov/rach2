@@ -54,9 +54,9 @@ static void chs(unsigned long lba, unsigned char *out)
         head = 3;
         sec = 32;
     }
-    out[0] = (unsigned char) head;
-    out[1] = (unsigned char) (((cyl >> 8) << 6) | sec);
-    out[2] = (unsigned char) cyl;
+    out[0] = (unsigned char)head;
+    out[1] = (unsigned char)(((cyl >> 8) << 6) | sec);
+    out[2] = (unsigned char)cyl;
 }
 
 /* Parse one unsigned field strictly: at least one digit, no sign, no
@@ -107,12 +107,10 @@ static int list_table(const char *path)
     }
     for (i = 0; i < 4; i++) {
         const unsigned char *e = sector + 0x1be + 16 * i;
-        unsigned long start = (unsigned long) e[8] |
-            (unsigned long) e[9] << 8 | (unsigned long) e[10] << 16 |
-            (unsigned long) e[11] << 24;
-        unsigned long count = (unsigned long) e[12] |
-            (unsigned long) e[13] << 8 | (unsigned long) e[14] << 16 |
-            (unsigned long) e[15] << 24;
+        unsigned long start = (unsigned long)e[8] | (unsigned long)e[9] << 8 |
+                              (unsigned long)e[10] << 16 | (unsigned long)e[11] << 24;
+        unsigned long count = (unsigned long)e[12] | (unsigned long)e[13] << 8 |
+                              (unsigned long)e[14] << 16 | (unsigned long)e[15] << 24;
 
         if (start == 0 || count == 0)
             continue;
@@ -133,21 +131,25 @@ static void put_entry(unsigned char *e, int lba_units, unsigned long lba, unsign
     e[0] = boot ? 0x80 : 0x00;
     if (lba_units) {
         /* The "use the LBA" sentinel in both CHS fields. */
-        e[1] = 0xFE; e[2] = 0xFF; e[3] = 0xFF;
-        e[5] = 0xFE; e[6] = 0xFF; e[7] = 0xFF;
+        e[1] = 0xFE;
+        e[2] = 0xFF;
+        e[3] = 0xFF;
+        e[5] = 0xFE;
+        e[6] = 0xFF;
+        e[7] = 0xFF;
     } else {
         chs(lba, e + 1);
         chs(lba + count - 1, e + 5);
     }
-    e[4] = (unsigned char) type;
-    e[8] = (unsigned char) lba;
-    e[9] = (unsigned char) (lba >> 8);
-    e[10] = (unsigned char) (lba >> 16);
-    e[11] = (unsigned char) (lba >> 24);
-    e[12] = (unsigned char) count;
-    e[13] = (unsigned char) (count >> 8);
-    e[14] = (unsigned char) (count >> 16);
-    e[15] = (unsigned char) (count >> 24);
+    e[4] = (unsigned char)type;
+    e[8] = (unsigned char)lba;
+    e[9] = (unsigned char)(lba >> 8);
+    e[10] = (unsigned char)(lba >> 16);
+    e[11] = (unsigned char)(lba >> 24);
+    e[12] = (unsigned char)count;
+    e[13] = (unsigned char)(count >> 8);
+    e[14] = (unsigned char)(count >> 16);
+    e[15] = (unsigned char)(count >> 24);
 }
 
 /**
@@ -204,7 +206,7 @@ int main(int argc, char **argv)
     unsigned long ends[4], starts[4];
     unsigned long disk_sectors;
     unsigned long disk_id = 0, ext_lba = 0, ext_count = 0;
-    struct logical log[16] = { { 0, 0, 0 } };
+    struct logical log[16] = {{0, 0, 0}};
     long disk_bytes;
     FILE *f;
     int i, active = 0, lba_units = 0, have_id = 0, primaries = 0, logicals = 0;
@@ -240,13 +242,12 @@ int main(int argc, char **argv)
         fprintf(stderr, "mkmbr: cannot open %s\n", argv[1]);
         return 1;
     }
-    if (fseek(f, 0, SEEK_END) != 0 || (disk_bytes = ftell(f)) < 0 ||
-        fseek(f, 0, SEEK_SET) != 0) {
+    if (fseek(f, 0, SEEK_END) != 0 || (disk_bytes = ftell(f)) < 0 || fseek(f, 0, SEEK_SET) != 0) {
         fprintf(stderr, "mkmbr: cannot size %s\n", argv[1]);
         fclose(f);
         return 1;
     }
-    disk_sectors = (unsigned long) disk_bytes / 512;
+    disk_sectors = (unsigned long)disk_bytes / 512;
     if (fread(sector, 1, sizeof(sector), f) != sizeof(sector)) {
         fprintf(stderr, "mkmbr: %s is shorter than one sector\n", argv[1]);
         fclose(f);
@@ -254,10 +255,10 @@ int main(int argc, char **argv)
     }
     memset(sector + 0x1be, 0, 64);
     if (have_id) {
-        sector[440] = (unsigned char) disk_id;
-        sector[441] = (unsigned char) (disk_id >> 8);
-        sector[442] = (unsigned char) (disk_id >> 16);
-        sector[443] = (unsigned char) (disk_id >> 24);
+        sector[440] = (unsigned char)disk_id;
+        sector[441] = (unsigned char)(disk_id >> 8);
+        sector[442] = (unsigned char)(disk_id >> 16);
+        sector[443] = (unsigned char)(disk_id >> 24);
     }
     for (i = 2; i < argc; i++) {
         unsigned long start_mib, size_mib, type;
@@ -266,10 +267,8 @@ int main(int argc, char **argv)
         const char *p = argv[i];
         int boot = 0, logical = 0, j;
 
-        if (!field(&p, 10, &start_mib) || !colon(&p) ||
-            !field(&p, 10, &size_mib) || !colon(&p) ||
-            !field(&p, 16, &type) ||
-            type > 0xff || size_mib == 0 ||
+        if (!field(&p, 10, &start_mib) || !colon(&p) || !field(&p, 10, &size_mib) || !colon(&p) ||
+            !field(&p, 16, &type) || type > 0xff || size_mib == 0 ||
             (*p != '\0' && strcmp(p, ":boot") != 0 && strcmp(p, ":logical") != 0)) {
             fprintf(stderr, "mkmbr: bad partition '%s'\n", argv[i]);
             fclose(f);
@@ -294,8 +293,10 @@ int main(int argc, char **argv)
             count = size_mib;
         } else {
             if (start_mib > 0x1FFFFFul || size_mib > 0x200000ul) {
-                fprintf(stderr, "mkmbr: partition '%s' runs past the image "
-                        "(%lu sectors)\n", argv[i], disk_sectors);
+                fprintf(stderr,
+                        "mkmbr: partition '%s' runs past the image "
+                        "(%lu sectors)\n",
+                        argv[i], disk_sectors);
                 fclose(f);
                 return 2;
             }
@@ -303,8 +304,10 @@ int main(int argc, char **argv)
             count = size_mib * 2048;
         }
         if (lba > 0xFFFFFFFFul - count || lba + count > disk_sectors) {
-            fprintf(stderr, "mkmbr: partition '%s' runs past the image "
-                    "(%lu sectors)\n", argv[i], disk_sectors);
+            fprintf(stderr,
+                    "mkmbr: partition '%s' runs past the image "
+                    "(%lu sectors)\n",
+                    argv[i], disk_sectors);
             fclose(f);
             return 2;
         }
@@ -319,8 +322,7 @@ int main(int argc, char **argv)
         ends[primaries] = lba + count;
         for (j = 0; j < primaries; j++) {
             if (lba < ends[j] && starts[j] < lba + count) {
-                fprintf(stderr, "mkmbr: partition '%s' overlaps entry %d\n",
-                        argv[i], j + 1);
+                fprintf(stderr, "mkmbr: partition '%s' overlaps entry %d\n", argv[i], j + 1);
                 fclose(f);
                 return 2;
             }
@@ -343,8 +345,7 @@ int main(int argc, char **argv)
     }
     sector[510] = 0x55;
     sector[511] = 0xaa;
-    if (fseek(f, 0, SEEK_SET) != 0 ||
-        fwrite(sector, 1, sizeof(sector), f) != sizeof(sector)) {
+    if (fseek(f, 0, SEEK_SET) != 0 || fwrite(sector, 1, sizeof(sector), f) != sizeof(sector)) {
         fprintf(stderr, "mkmbr: cannot write the table back\n");
         fclose(f);
         return 1;

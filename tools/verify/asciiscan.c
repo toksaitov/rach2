@@ -16,8 +16,7 @@
 
 static int allowed(int byte)
 {
-    return byte == '\t' || byte == '\n' || byte == '\r' ||
-           (byte >= 0x20 && byte <= 0x7e);
+    return byte == '\t' || byte == '\n' || byte == '\r' || (byte >= 0x20 && byte <= 0x7e);
 }
 
 int main(int argc, char **argv)

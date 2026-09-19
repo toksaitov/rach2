@@ -39,12 +39,12 @@ static long find_in(FILE *f, const char *needle, size_t need)
         for (i = 0; i + need <= total; i++) {
             if (memcmp(buf + i, needle, need) == 0) {
                 free(buf);
-                return base + (long) i;
+                return base + (long)i;
             }
         }
         keep = need - 1 < total ? need - 1 : total;
         memmove(buf, buf + total - keep, keep);
-        base += (long) (total - keep);
+        base += (long)(total - keep);
     }
     free(buf);
     return -1;
@@ -67,10 +67,11 @@ int main(int argc, char **argv)
         needle = argv[2];
         path = argv[4];
         if (strlen(argv[3]) != strlen(needle)) {
-            fprintf(stderr, "binfind: the replacement is %lu bytes and the "
+            fprintf(stderr,
+                    "binfind: the replacement is %lu bytes and the "
                     "string is %lu; an in-place edit cannot change a "
-                    "length\n", (unsigned long) strlen(argv[3]),
-                    (unsigned long) strlen(needle));
+                    "length\n",
+                    (unsigned long)strlen(argv[3]), (unsigned long)strlen(needle));
             return 2;
         }
     } else if (argc == 3) {
@@ -78,7 +79,7 @@ int main(int argc, char **argv)
         path = argv[2];
     } else {
         fprintf(stderr, "usage: binfind [--offset] STRING FILE | "
-                "binfind --replace OLD NEW FILE\n");
+                        "binfind --replace OLD NEW FILE\n");
         return 2;
     }
     need = strlen(needle);
@@ -103,8 +104,7 @@ int main(int argc, char **argv)
     if (offset_mode)
         printf("%ld\n", at);
     if (replace_mode) {
-        if (fseek(f, at, SEEK_SET) != 0 ||
-            fwrite(argv[3], 1, need, f) != need || fclose(f) != 0) {
+        if (fseek(f, at, SEEK_SET) != 0 || fwrite(argv[3], 1, need, f) != need || fclose(f) != 0) {
             fprintf(stderr, "binfind: cannot write %s\n", path);
             return 2;
         }

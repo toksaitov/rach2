@@ -33,14 +33,14 @@
 #include <string.h>
 #include <sys/stat.h>
 
-#define NAMES 4096
+#define NAMES        4096
 #define NAME_MAX_LEN 64
 
 struct name {
     char text[NAME_MAX_LEN];
-    char section[4];   /* the section a page or alias is in */
+    char section[4]; /* the section a page or alias is in */
     char target[NAME_MAX_LEN];
-    const char *from;  /* where the inventory got it */
+    const char *from; /* where the inventory got it */
 };
 
 static struct name pages[NAMES], aliases[NAMES], wanted[NAMES];
@@ -57,8 +57,8 @@ static void fail(const char *fmt, const char *a, const char *b)
 }
 
 /* Adds a name to a list; returns 0 when the list had it already. */
-static int add(struct name *list, int *n, const char *text, const char *section,
-               const char *target, const char *from)
+static int add(struct name *list, int *n, const char *text, const char *section, const char *target,
+               const char *from)
 {
     int i;
 
@@ -353,8 +353,7 @@ static void read_syscalls(const char *header, const char *source)
             while (isspace((unsigned char)*r)) {
                 r++;
             }
-            if ((strchr(p, '(') != NULL && strchr(p, '(') < q) ||
-                !isdigit((unsigned char)*r)) {
+            if ((strchr(p, '(') != NULL && strchr(p, '(') < q) || !isdigit((unsigned char)*r)) {
                 continue;
             }
             (void)strtoul(r, (char **)&r, 0);
@@ -414,8 +413,7 @@ static void check_recovery(const char *listpath, const char *manifest)
                 sscanf(mline, "%31s %31s %255s %511s", kind, mode, guest, host) != 4) {
                 continue;
             }
-            if (strcmp(kind, "file") == 0 && strcmp(guest, want) == 0 &&
-                strcmp(host, from) == 0) {
+            if (strcmp(kind, "file") == 0 && strcmp(guest, want) == 0 && strcmp(host, from) == 0) {
                 staged = 1;
             }
         }
@@ -433,9 +431,8 @@ int main(int argc, char **argv)
     int i, programs = 0, calls = 0;
 
     if (argc < 8) {
-        fprintf(stderr,
-                "usage: mancheck MANDIR SYSCALL_H SYSCALL_C APPLETS PROGRAMS_MK "
-                "RECOVERY_MANIFEST MANIFEST...\n");
+        fprintf(stderr, "usage: mancheck MANDIR SYSCALL_H SYSCALL_C APPLETS PROGRAMS_MK "
+                        "RECOVERY_MANIFEST MANIFEST...\n");
         return 2;
     }
     read_pages(argv[1]);
@@ -479,8 +476,7 @@ int main(int argc, char **argv)
         } else {
             programs++;
             if (!has_page(wanted[i].text, "1") && !has_page(wanted[i].text, "8")) {
-                fail("%s has no page in section 1 or 8 (from %s)", wanted[i].text,
-                     wanted[i].from);
+                fail("%s has no page in section 1 or 8 (from %s)", wanted[i].text, wanted[i].from);
             }
         }
     }
@@ -490,7 +486,8 @@ int main(int argc, char **argv)
         fail("%s: no registered call was read", argv[3], "");
     }
     if (failures) {
-        fprintf(stderr, "mancheck: %d names without a page or a fault, over %d pages and %d aliases\n",
+        fprintf(stderr,
+                "mancheck: %d names without a page or a fault, over %d pages and %d aliases\n",
                 failures, npages, naliases);
         return 1;
     }

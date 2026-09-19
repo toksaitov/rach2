@@ -49,11 +49,9 @@
 
 #define GRUB_LINES 4
 static const char *const GRUB_WANT[GRUB_LINES] = {
-    "search --no-floppy --label RACH2BOOT --set=root",
-    "configfile ($root)/boot/grub/grub.cfg",
+    "search --no-floppy --label RACH2BOOT --set=root", "configfile ($root)/boot/grub/grub.cfg",
     "search --no-floppy --label RACH2RECOV --set=root",
-    "configfile ($root)/boot/grub/recovery.cfg"
-};
+    "configfile ($root)/boot/grub/recovery.cfg"};
 
 static char why[512];
 
@@ -73,8 +71,7 @@ static char *trim(char *s)
     while (*s == ' ' || *s == '\t')
         s++;
     end = s + strlen(s);
-    while (end > s && (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\r' ||
-                       end[-1] == '\n'))
+    while (end > s && (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\r' || end[-1] == '\n'))
         *--end = '\0';
     return s;
 }
@@ -94,8 +91,7 @@ static int grub_ok(const char *text)
         return 0;
     }
     strcpy(buf, text);
-    for (line = strtok_r(buf, "\n", &save); line != NULL;
-         line = strtok_r(NULL, "\n", &save)) {
+    for (line = strtok_r(buf, "\n", &save); line != NULL; line = strtok_r(NULL, "\n", &save)) {
         char *cmd = trim(line);
 
         if (*cmd == '\0' || *cmd == '#')
@@ -108,8 +104,8 @@ static int grub_ok(const char *text)
         n++;
     }
     if (n != GRUB_LINES) {
-        say("the commands are not exactly '%s', '%s', '%s' then '%s'", GRUB_WANT[0],
-            GRUB_WANT[1], GRUB_WANT[2], GRUB_WANT[3]);
+        say("the commands are not exactly '%s', '%s', '%s' then '%s'", GRUB_WANT[0], GRUB_WANT[1],
+            GRUB_WANT[2], GRUB_WANT[3]);
         return 0;
     }
     return 1;
@@ -127,8 +123,8 @@ static long quad(const char *text)
         unsigned long n = 0;
         int digits = 0;
 
-        while (isdigit((unsigned char) *text)) {
-            n = n * 10 + (unsigned long) (*text++ - '0');
+        while (isdigit((unsigned char)*text)) {
+            n = n * 10 + (unsigned long)(*text++ - '0');
             if (++digits > 3)
                 return -1;
         }
@@ -142,7 +138,7 @@ static long quad(const char *text)
             text++;
         }
     }
-    return *text == '\0' ? (long) value : -1;
+    return *text == '\0' ? (long)value : -1;
 }
 
 /* Split a segment into whitespace tokens, with `(){}` and backticks read
@@ -187,10 +183,9 @@ static int same_tokens(char **got, int n, const char *const *want, int wn)
    machine is supposed to run, in order. Every segment of every uncommented
    line is read, not the first of each: a line can carry more than one
    command. Returns nonzero when the script agrees. */
-static int script_ok(const char *text, const char *address, const char *mask,
-                     const char *gateway)
+static int script_ok(const char *text, const char *address, const char *mask, const char *gateway)
 {
-    static const char *read_form[2] = { "ifconfig", "eth0" };
+    static const char *read_form[2] = {"ifconfig", "eth0"};
     const char *want0[5], *want1[5];
     char buf[MAX_TEXT];
     char *line, *lsave;
@@ -212,8 +207,7 @@ static int script_ok(const char *text, const char *address, const char *mask,
         return 0;
     }
     strcpy(buf, text);
-    for (line = strtok_r(buf, "\n", &lsave); line != NULL;
-         line = strtok_r(NULL, "\n", &lsave)) {
+    for (line = strtok_r(buf, "\n", &lsave); line != NULL; line = strtok_r(NULL, "\n", &lsave)) {
         char *cmd = trim(line);
         char *seg = cmd;
 
@@ -224,9 +218,7 @@ static int script_ok(const char *text, const char *address, const char *mask,
            script's grammar. */
         while (seg != NULL && *seg != '\0') {
             char *cut = NULL, *at;
-            static const char *const seps[] = { "||", "&&", ";", "|",
-                                                " then ", " else ",
-                                                " do " };
+            static const char *const seps[] = {"||", "&&", ";", "|", " then ", " else ", " do "};
             char *tok[16];
             int n, i, mentions;
             size_t seplen = 0;
@@ -248,8 +240,7 @@ static int script_ok(const char *text, const char *address, const char *mask,
                with no network command in it at all. */
             mentions = 0;
             for (i = 0; i < n; i++)
-                if (strstr(tok[i], "ifconfig") != NULL ||
-                    strstr(tok[i], "route") != NULL)
+                if (strstr(tok[i], "ifconfig") != NULL || strstr(tok[i], "route") != NULL)
                     mentions = 1;
             if (mentions) {
                 if (same_tokens(tok, n, read_form, 2)) {
@@ -270,7 +261,8 @@ static int script_ok(const char *text, const char *address, const char *mask,
     }
     if (matched != 2) {
         say("does not run exactly 'ifconfig eth0 %s netmask %s' and then "
-            "'route add default gw %s'", address, mask, gateway);
+            "'route add default gw %s'",
+            address, mask, gateway);
         return 0;
     }
     return 1;
@@ -322,90 +314,109 @@ static int selftest(void)
             "search --no-floppy --label RACH2BOOT --set=root\n"
             "configfile ($root)/boot/grub/grub.cfg\n"
             "# search --no-floppy --label RACH2RECOV --set=root\n"
-            "# configfile ($root)/boot/grub/recovery.cfg\n", 0);
+            "# configfile ($root)/boot/grub/recovery.cfg\n",
+            0);
     st_grub("the recovery pair missing",
             "search --no-floppy --label RACH2BOOT --set=root\n"
-            "configfile ($root)/boot/grub/grub.cfg\n", 0);
+            "configfile ($root)/boot/grub/grub.cfg\n",
+            0);
     st_grub("the two pairs the other way round",
             "search --no-floppy --label RACH2RECOV --set=root\n"
             "configfile ($root)/boot/grub/recovery.cfg\n"
             "search --no-floppy --label RACH2BOOT --set=root\n"
-            "configfile ($root)/boot/grub/grub.cfg\n", 0);
+            "configfile ($root)/boot/grub/grub.cfg\n",
+            0);
     st_grub("the old fixed paths",
             "configfile (hd0,msdos1)/boot/grub/grub.cfg\n"
-            "configfile (hd0,msdos3)/boot/grub/recovery.cfg\n", 0);
+            "configfile (hd0,msdos3)/boot/grub/recovery.cfg\n",
+            0);
     st_grub("a search without its configfile",
             "search --no-floppy --label RACH2BOOT --set=root\n"
             "search --no-floppy --label RACH2RECOV --set=root\n"
             "configfile ($root)/boot/grub/grub.cfg\n"
-            "configfile ($root)/boot/grub/recovery.cfg\n", 0);
+            "configfile ($root)/boot/grub/recovery.cfg\n",
+            0);
     st_grub("a fifth command",
             "search --no-floppy --label RACH2BOOT --set=root\n"
             "configfile ($root)/boot/grub/grub.cfg\n"
             "search --no-floppy --label RACH2RECOV --set=root\n"
             "configfile ($root)/boot/grub/recovery.cfg\n"
-            "configfile (hd0,msdos2)/x.cfg\n", 0);
+            "configfile (hd0,msdos2)/x.cfg\n",
+            0);
     st_grub("a command before them",
             "echo hello\nsearch --no-floppy --label RACH2BOOT --set=root\n"
             "configfile ($root)/boot/grub/grub.cfg\n"
             "search --no-floppy --label RACH2RECOV --set=root\n"
-            "configfile ($root)/boot/grub/recovery.cfg\n", 0);
+            "configfile ($root)/boot/grub/recovery.cfg\n",
+            0);
     st_grub("a command hidden behind a semicolon",
             "echo hello; search --no-floppy --label RACH2BOOT --set=root\n"
             "configfile ($root)/boot/grub/grub.cfg\n"
             "search --no-floppy --label RACH2RECOV --set=root\n"
-            "configfile ($root)/boot/grub/recovery.cfg\n", 0);
+            "configfile ($root)/boot/grub/recovery.cfg\n",
+            0);
     st_grub("nothing at all", "", 0);
 
     st_net("the script as it is",
            "ifconfig eth0 10.0.0.5 netmask 255.0.0.0 || exit 1\n"
-           "route add default gw 10.0.0.1 || exit 1\n", 1);
+           "route add default gw 10.0.0.1 || exit 1\n",
+           1);
     st_net("comments and a pipeline around it",
            "# a comment\nifconfig eth0 | grep -q x || exit 0\n"
            "ifconfig eth0 10.0.0.5 netmask 255.0.0.0 || exit 1\n"
-           "route add default gw 10.0.0.1 || exit 1\n", 1);
+           "route add default gw 10.0.0.1 || exit 1\n",
+           1);
     st_net("a second command after a semicolon",
            "ifconfig eth0 10.0.0.5 netmask 255.0.0.0; "
            "ifconfig eth0 10.0.0.6 netmask 255.0.0.0\n"
-           "route add default gw 10.0.0.1 || exit 1\n", 0);
+           "route add default gw 10.0.0.1 || exit 1\n",
+           0);
     st_net("a second command after &&",
            "ifconfig eth0 10.0.0.5 netmask 255.0.0.0 && "
            "ifconfig eth0 10.0.0.6 netmask 255.0.0.0\n"
-           "route add default gw 10.0.0.1 || exit 1\n", 0);
+           "route add default gw 10.0.0.1 || exit 1\n",
+           0);
     st_net("the address commented out",
            "# ifconfig eth0 10.0.0.5 netmask 255.0.0.0\n"
-           "route add default gw 10.0.0.1 || exit 1\n", 0);
+           "route add default gw 10.0.0.1 || exit 1\n",
+           0);
     st_net("a different live gateway",
            "ifconfig eth0 10.0.0.5 netmask 255.0.0.0\n"
-           "route add default gw 10.0.0.2\n", 0);
+           "route add default gw 10.0.0.2\n",
+           0);
     st_net("a trailing token",
            "ifconfig eth0 10.0.0.5 netmask 255.0.0.0 mtu 1400\n"
-           "route add default gw 10.0.0.1\n", 0);
+           "route add default gw 10.0.0.1\n",
+           0);
     st_net("a route removed as well",
            "ifconfig eth0 10.0.0.5 netmask 255.0.0.0\n"
            "route add default gw 10.0.0.1\n"
-           "route del default gw 10.0.0.1\n", 0);
+           "route del default gw 10.0.0.1\n",
+           0);
     st_net("a command hidden behind `command`",
            "ifconfig eth0 10.0.0.5 netmask 255.0.0.0\n"
            "route add default gw 10.0.0.1\n"
-           "command ifconfig eth0 10.0.0.6 netmask 255.0.0.0\n", 0);
+           "command ifconfig eth0 10.0.0.6 netmask 255.0.0.0\n",
+           0);
     st_net("a command in a subshell",
            "ifconfig eth0 10.0.0.5 netmask 255.0.0.0\n"
            "route add default gw 10.0.0.1\n"
-           "(ifconfig eth0 10.0.0.6 netmask 255.0.0.0)\n", 0);
+           "(ifconfig eth0 10.0.0.6 netmask 255.0.0.0)\n",
+           0);
     st_net("a command through eval",
            "ifconfig eth0 10.0.0.5 netmask 255.0.0.0\n"
            "route add default gw 10.0.0.1\n"
-           "eval ifconfig eth0 10.0.0.6 netmask 255.0.0.0\n", 0);
+           "eval ifconfig eth0 10.0.0.6 netmask 255.0.0.0\n",
+           0);
     st_net("a command in backticks",
            "ifconfig eth0 10.0.0.5 netmask 255.0.0.0\n"
            "route add default gw 10.0.0.1\n"
-           "X=`ifconfig eth0 10.0.0.6 netmask 255.0.0.0`\n", 0);
+           "X=`ifconfig eth0 10.0.0.6 netmask 255.0.0.0`\n",
+           0);
     st_net("nothing at all", "", 0);
 
     if (st_bad) {
-        fprintf(stderr, "cfgcheck: selftest: %d of %d cases failed\n",
-                st_bad, st_ran);
+        fprintf(stderr, "cfgcheck: selftest: %d of %d cases failed\n", st_bad, st_ran);
         return 1;
     }
     printf("cfgcheck: selftest: ok: %d cases, both checkers\n", st_ran);
@@ -420,13 +431,12 @@ static char *read_text(const char *path)
 
     if (f == NULL)
         return NULL;
-    if (fseek(f, 0, SEEK_END) != 0 || (len = ftell(f)) < 0 ||
-        fseek(f, 0, SEEK_SET) != 0) {
+    if (fseek(f, 0, SEEK_END) != 0 || (len = ftell(f)) < 0 || fseek(f, 0, SEEK_SET) != 0) {
         fclose(f);
         return NULL;
     }
-    buf = malloc((size_t) len + 1);
-    if (buf == NULL || fread(buf, 1, (size_t) len, f) != (size_t) len) {
+    buf = malloc((size_t)len + 1);
+    if (buf == NULL || fread(buf, 1, (size_t)len, f) != (size_t)len) {
         free(buf);
         fclose(f);
         return NULL;
@@ -453,7 +463,8 @@ int main(int argc, char **argv)
             return 1;
         }
         printf("check-grubembed: OK (%s reaches partition 1 and then "
-               "partition 3)\n", argv[2]);
+               "partition 3)\n",
+               argv[2]);
         free(text);
         return 0;
     }
@@ -468,8 +479,7 @@ int main(int argc, char **argv)
         char *end, *text;
 
         if (address < 0) {
-            fprintf(stderr, "check-sealednet: %s is not an address\n",
-                    address_s);
+            fprintf(stderr, "check-sealednet: %s is not an address\n", address_s);
             return 1;
         }
         if (mask < 0) {
@@ -477,40 +487,45 @@ int main(int argc, char **argv)
             return 1;
         }
         if (gateway < 0) {
-            fprintf(stderr, "check-sealednet: %s is not an address\n",
-                    gateway_s);
+            fprintf(stderr, "check-sealednet: %s is not an address\n", gateway_s);
             return 1;
         }
         prefix = strtol(prefix_s, &end, 10);
         if (*end != '\0' || prefix < 1 || prefix > 30) {
-            fprintf(stderr, "check-sealednet: %s is not a usable prefix "
-                    "length\n", prefix_s);
+            fprintf(stderr,
+                    "check-sealednet: %s is not a usable prefix "
+                    "length\n",
+                    prefix_s);
             return 1;
         }
-        from_prefix = (uint32_t) (0xFFFFFFFFul << (32 - prefix));
-        if (from_prefix != (uint32_t) mask) {
-            fprintf(stderr, "check-sealednet: /%ld is not %s; the configured "
+        from_prefix = (uint32_t)(0xFFFFFFFFul << (32 - prefix));
+        if (from_prefix != (uint32_t)mask) {
+            fprintf(stderr,
+                    "check-sealednet: /%ld is not %s; the configured "
                     "prefix and the recovery script would put this machine "
-                    "on two different subnets\n", prefix, mask_s);
+                    "on two different subnets\n",
+                    prefix, mask_s);
             return 1;
         }
-        inverted = ~(uint32_t) mask;
-        if ((uint32_t) address == ((uint32_t) address & (uint32_t) mask) ||
-            (uint32_t) address == ((uint32_t) address | inverted)) {
-            fprintf(stderr, "check-sealednet: %s is this subnet's network "
-                    "or broadcast address\n", address_s);
+        inverted = ~(uint32_t)mask;
+        if ((uint32_t)address == ((uint32_t)address & (uint32_t)mask) ||
+            (uint32_t)address == ((uint32_t)address | inverted)) {
+            fprintf(stderr,
+                    "check-sealednet: %s is this subnet's network "
+                    "or broadcast address\n",
+                    address_s);
             return 1;
         }
         if (gateway == address) {
             fprintf(stderr, "check-sealednet: the gateway is the machine's "
-                    "own address\n");
+                            "own address\n");
             return 1;
         }
-        if (((uint32_t) gateway & (uint32_t) mask) !=
-                ((uint32_t) address & (uint32_t) mask) ||
-            (uint32_t) gateway == ((uint32_t) gateway & (uint32_t) mask) ||
-            (uint32_t) gateway == ((uint32_t) gateway | inverted)) {
-            fprintf(stderr, "check-sealednet: %s is not a host on %s/%ld, "
+        if (((uint32_t)gateway & (uint32_t)mask) != ((uint32_t)address & (uint32_t)mask) ||
+            (uint32_t)gateway == ((uint32_t)gateway & (uint32_t)mask) ||
+            (uint32_t)gateway == ((uint32_t)gateway | inverted)) {
+            fprintf(stderr,
+                    "check-sealednet: %s is not a host on %s/%ld, "
                     "so the kernel would refuse the configured gateway\n",
                     gateway_s, address_s, prefix);
             return 1;
@@ -525,12 +540,13 @@ int main(int argc, char **argv)
             return 1;
         }
         printf("check-sealednet: OK (%s/%ld through %s, and %s says the "
-               "same)\n", address_s, prefix, gateway_s, path);
+               "same)\n",
+               address_s, prefix, gateway_s, path);
         free(text);
         return 0;
     }
 
     fprintf(stderr, "usage: cfgcheck grubembed CONFIG | cfgcheck sealednet "
-            "ADDRESS PREFIX MASK GATEWAY SCRIPT | cfgcheck --selftest\n");
+                    "ADDRESS PREFIX MASK GATEWAY SCRIPT | cfgcheck --selftest\n");
     return 2;
 }

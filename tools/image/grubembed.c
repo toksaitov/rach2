@@ -28,7 +28,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define SECTOR 512
+#define SECTOR            512
 #define MAX_IMAGE_SECTORS 1024
 
 static unsigned char *read_file(const char *path, size_t *n)
@@ -39,20 +39,19 @@ static unsigned char *read_file(const char *path, size_t *n)
 
     if (f == NULL)
         return NULL;
-    if (fseek(f, 0, SEEK_END) != 0 || (len = ftell(f)) < 0 ||
-        fseek(f, 0, SEEK_SET) != 0) {
+    if (fseek(f, 0, SEEK_END) != 0 || (len = ftell(f)) < 0 || fseek(f, 0, SEEK_SET) != 0) {
         fclose(f);
         return NULL;
     }
     /* One spare sector so the caller can pad in place. */
-    buf = malloc((size_t) len + SECTOR);
-    if (buf == NULL || fread(buf, 1, (size_t) len, f) != (size_t) len) {
+    buf = malloc((size_t)len + SECTOR);
+    if (buf == NULL || fread(buf, 1, (size_t)len, f) != (size_t)len) {
         free(buf);
         fclose(f);
         return NULL;
     }
     fclose(f);
-    *n = (size_t) len;
+    *n = (size_t)len;
     return buf;
 }
 
@@ -60,10 +59,10 @@ static void w64(unsigned char *p, uint32_t lo)
 {
     int i;
 
-    p[0] = (unsigned char) lo;
-    p[1] = (unsigned char) (lo >> 8);
-    p[2] = (unsigned char) (lo >> 16);
-    p[3] = (unsigned char) (lo >> 24);
+    p[0] = (unsigned char)lo;
+    p[1] = (unsigned char)(lo >> 8);
+    p[2] = (unsigned char)(lo >> 16);
+    p[3] = (unsigned char)(lo >> 24);
     for (i = 4; i < 8; i++)
         p[i] = 0;
 }
@@ -83,8 +82,7 @@ int main(int argc, char **argv)
     }
     boot = read_file(argv[2], &boot_len);
     if (boot == NULL || boot_len < SECTOR) {
-        fprintf(stderr, "grub_embed: cannot read a full sector from %s\n",
-                argv[2]);
+        fprintf(stderr, "grub_embed: cannot read a full sector from %s\n", argv[2]);
         return 1;
     }
     core = read_file(argv[3], &core_len);
@@ -103,22 +101,25 @@ int main(int argc, char **argv)
 
     for (i = 0; i < 4; i++) {
         const unsigned char *e = mbr + 0x1be + 16 * i + 8;
-        unsigned long start = (unsigned long) e[0] | (unsigned long) e[1] << 8 |
-            (unsigned long) e[2] << 16 | (unsigned long) e[3] << 24;
+        unsigned long start = (unsigned long)e[0] | (unsigned long)e[1] << 8 |
+                              (unsigned long)e[2] << 16 | (unsigned long)e[3] << 24;
 
         if (start != 0 && (first_lba == 0 || start < first_lba))
             first_lba = start;
     }
     if (first_lba != 0 && core_sectors >= first_lba) {
-        fprintf(stderr, "grub_embed: core.img needs %lu sectors but the gap "
-                "before LBA %lu has only %lu\n", core_sectors, first_lba,
-                first_lba - 1);
+        fprintf(stderr,
+                "grub_embed: core.img needs %lu sectors but the gap "
+                "before LBA %lu has only %lu\n",
+                core_sectors, first_lba, first_lba - 1);
         return 1;
     }
     if (core_sectors > MAX_IMAGE_SECTORS) {
-        fprintf(stderr, "grub_embed: core.img is %lu sectors and a tail slot "
+        fprintf(stderr,
+                "grub_embed: core.img is %lu sectors and a tail slot "
                 "has %d; the disk would boot but could not have its boot "
-                "loader replaced\n", core_sectors, MAX_IMAGE_SECTORS - 1);
+                "loader replaced\n",
+                core_sectors, MAX_IMAGE_SECTORS - 1);
         return 1;
     }
 
@@ -128,13 +129,12 @@ int main(int argc, char **argv)
     w64(boot + 0x5c, 1);
     boot[0x64] = 0xff;
     w64(core + 0x1f4, 2);
-    core[0x1fc] = (unsigned char) (core_sectors - 1);
-    core[0x1fd] = (unsigned char) ((core_sectors - 1) >> 8);
+    core[0x1fc] = (unsigned char)(core_sectors - 1);
+    core[0x1fd] = (unsigned char)((core_sectors - 1) >> 8);
 
     if (fseek(f, 0, SEEK_SET) != 0 || fwrite(boot, 1, 440, f) != 440 ||
         fseek(f, SECTOR, SEEK_SET) != 0 ||
-        fwrite(core, 1, core_sectors * SECTOR, f) != core_sectors * SECTOR ||
-        fclose(f) != 0) {
+        fwrite(core, 1, core_sectors * SECTOR, f) != core_sectors * SECTOR || fclose(f) != 0) {
         fprintf(stderr, "grub_embed: cannot write %s\n", argv[1]);
         return 1;
     }
